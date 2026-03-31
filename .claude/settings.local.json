@@ -21,5 +21,18 @@
       "Skill(update-config)",
       "Skill(update-config:*)"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /home/howardchen/masterthesis && git add -A && git diff --cached --quiet || git commit -m \"Auto-update: $(date +%Y-%m-%d\\ %H:%M)\" && git push 2>/dev/null || true",
+            "statusMessage": "Syncing to GitHub..."
+          }
+        ]
+      }
+    ]
   }
 }
