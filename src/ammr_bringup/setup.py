@@ -19,6 +19,8 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     entry_points={
-        'console_scripts': [],
+        'console_scripts': [
+            'map_publisher = ammr_bringup.map_publisher:main',
+        ],
     },
 )
