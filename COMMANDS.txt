@@ -1,0 +1,38 @@
+===== AMMR 常用指令 =====
+
+【每次開始前都要 source】
+cd ~/masterthesis
+source install/setup.bash
+
+-----------------------------------------
+【Gazebo 模擬】
+ros2 launch ammr_bringup gazebo.launch.py
+
+【RViz 視覺化】
+ros2 launch ammr_bringup rviz.launch.py
+
+【鍵盤控制機器人（按住才動）】
+ros2 run ammr_bringup teleop
+  W/↑  前進
+  S/↓  後退
+  A/←  左轉
+  D/→  右轉
+
+【只看地圖】
+ros2 launch ammr_bringup view_map.launch.py
+
+-----------------------------------------
+【Build】
+colcon build --packages-select ammr_bringup
+source install/setup.bash
+
+【全部 build】
+colcon build
+source install/setup.bash
+
+-----------------------------------------
+【Debug 用】
+ros2 topic list                        # 看所有 topic
+ros2 topic echo /odom                  # 看 odom 資料
+ros2 topic echo /scan --no-arr         # 看 laser scan
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}}"  # 手動發速度
