@@ -55,6 +55,13 @@ def generate_launch_description():
             arguments=[map_file],
         ),
 
+        # static TF: map -> odom（之後換成 AMCL）
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
+        ),
+
         # 5. Spawn robot（延遲 3 秒等 Gazebo 啟動）
         TimerAction(
             period=3.0,
