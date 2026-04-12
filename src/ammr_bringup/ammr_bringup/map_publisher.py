@@ -62,10 +62,12 @@ class MapPublisher(Node):
         self.msg.data = occ.flatten().tolist()
 
         self.get_logger().info(f'Map loaded: {w}x{h} @ {resolution} m/cell')
+        # 預先設好固定 stamp（map 是靜態的，不需要跟 sim time 同步）
+        self.msg.header.stamp.sec = 0
+        self.msg.header.stamp.nanosec = 0
         self.timer = self.create_timer(1.0, self.publish_map)
 
     def publish_map(self):
-        self.msg.header.stamp = self.get_clock().now().to_msg()
         self.pub.publish(self.msg)
 
 
