@@ -61,9 +61,4 @@ def generate_launch_description():
             )],
         ),
 
-        # 5. RViz2
-        Node(
-            package='rviz2',
-            executable='rviz2',
-        ),
     ])
