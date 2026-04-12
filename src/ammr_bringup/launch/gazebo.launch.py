@@ -62,11 +62,12 @@ def generate_launch_description():
             arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
         ),
 
-        # static TF: lidar_link -> ammr_base/base_footprint/lidar
+        # static TF: base_footprint -> ammr_base/base_footprint/lidar
+        # lidar 在 base_footprint 上方 0.19m (wheel 0.08 + body 0.06 + lidar 0.05)
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0', '0', '0', '0', '0', '0', 'lidar_link', 'ammr_base/base_footprint/lidar'],
+            arguments=['0', '0', '0.19', '0', '0', '0', 'base_footprint', 'ammr_base/base_footprint/lidar'],
         ),
 
         # 5. Spawn robot（延遲 3 秒等 Gazebo 啟動）
