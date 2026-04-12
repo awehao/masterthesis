@@ -11,8 +11,6 @@ def generate_launch_description():
         Node(
             package='rviz2',
             executable='rviz2',
-            arguments=['-d', os.path.join(pkg, 'rviz', 'nav2.rviz')]
-                if os.path.exists(os.path.join(pkg, 'rviz', 'nav2.rviz'))
-                else [],
+            arguments=['-d', os.path.join(pkg, 'rviz', 'default.rviz')],
         ),
     ])

@@ -12,6 +12,7 @@ def generate_launch_description():
     pkg = get_package_share_directory('ammr_bringup')
     world_file = os.path.join(pkg, 'worlds', 'simple_room.sdf')
     urdf_file  = os.path.join(pkg, 'urdf', 'ammr_base.urdf.xacro')
+    map_file   = os.path.join(pkg, 'maps', 'simple_room.yaml')
 
     robot_description = ParameterValue(
         Command(['xacro ', urdf_file]), value_type=str
@@ -47,7 +48,14 @@ def generate_launch_description():
                          'use_sim_time': True}],
         ),
 
-        # 4. Spawn robot（延遲 3 秒等 Gazebo 啟動）
+        # 4. 地圖發布
+        Node(
+            package='ammr_bringup',
+            executable='map_publisher',
+            arguments=[map_file],
+        ),
+
+        # 5. Spawn robot（延遲 3 秒等 Gazebo 啟動）
         TimerAction(
             period=3.0,
             actions=[Node(

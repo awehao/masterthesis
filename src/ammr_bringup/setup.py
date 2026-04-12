@@ -16,6 +16,7 @@ setup(
         (os.path.join('share', package_name, 'maps'),    glob.glob('maps/*')),
         (os.path.join('share', package_name, 'config'),  glob.glob('config/*')),
         (os.path.join('share', package_name, 'worlds'),  glob.glob('worlds/*')),
+        (os.path.join('share', package_name, 'rviz'),    glob.glob('rviz/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
