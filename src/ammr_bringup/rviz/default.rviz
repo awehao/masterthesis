@@ -5,7 +5,7 @@ Panels:
     Name: Views
 Visualization Manager:
   Global Options:
-    Fixed Frame: odom
+    Fixed Frame: map
     Background Color: 48; 48; 48
     Frame Rate: 30
   Displays:
@@ -18,9 +18,41 @@ Visualization Manager:
       Topic:
         Value: /map
       Alpha: 0.7
+    - Class: rviz_default_plugins/Map
+      Name: Global Costmap
+      Enabled: true
+      Topic:
+        Value: /global_costmap/costmap
+      Alpha: 0.4
+      Color Scheme: costmap
+    - Class: rviz_default_plugins/Map
+      Name: Local Costmap
+      Enabled: true
+      Topic:
+        Value: /local_costmap/costmap
+      Alpha: 0.5
+      Color Scheme: costmap
+    - Class: rviz_default_plugins/Path
+      Name: Global Plan
+      Enabled: true
+      Topic:
+        Value: /plan
+      Color:
+        R: 0
+        G: 255
+        B: 0
+    - Class: rviz_default_plugins/Path
+      Name: Local Plan
+      Enabled: true
+      Topic:
+        Value: /local_plan
+      Color:
+        R: 0
+        G: 128
+        B: 255
     - Class: rviz_default_plugins/TF
       Name: TF
-      Enabled: true
+      Enabled: false
       Show Axes: true
       Show Names: false
     - Class: rviz_default_plugins/LaserScan
@@ -28,14 +60,28 @@ Visualization Manager:
       Enabled: true
       Topic:
         Value: /scan
-      Size (m): 0.15
-      Color: 255; 0; 0
+      Size (m): 0.05
+      Color: 255; 50; 50
+    - Class: rviz_default_plugins/PoseWithCovariance
+      Name: AMCL Pose
+      Enabled: true
+      Topic:
+        Value: /amcl_pose
+    - Class: rviz_default_plugins/PoseArray
+      Name: AMCL Particles
+      Enabled: true
+      Topic:
+        Value: /particle_cloud
+      Color:
+        R: 0
+        G: 255
+        B: 255
     - Class: rviz_default_plugins/Odometry
       Name: Odometry
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /odom
   Views:
     Current:
       Class: rviz_default_plugins/TopDownOrtho
-      Scale: 50
+      Scale: 40

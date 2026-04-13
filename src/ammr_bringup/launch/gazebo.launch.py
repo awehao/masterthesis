@@ -10,9 +10,9 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     pkg = get_package_share_directory('ammr_bringup')
-    world_file = os.path.join(pkg, 'worlds', 'simple_room.sdf')
+    world_file = os.path.join(pkg, 'worlds', 'random_room.sdf')
     urdf_file  = os.path.join(pkg, 'urdf', 'ammr_base.urdf.xacro')
-    map_file   = os.path.join(pkg, 'maps', 'simple_room.yaml')
+    map_file   = os.path.join(pkg, 'maps', 'random_room.yaml')
 
     robot_description = ParameterValue(
         Command(['xacro ', urdf_file]), value_type=str
