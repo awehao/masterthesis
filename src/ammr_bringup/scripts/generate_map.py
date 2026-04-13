@@ -177,7 +177,7 @@ def save_sdf(obstacles, path):
         <scene>scene</scene>
         <ambient_light>0.4 0.4 0.4</ambient_light>
         <background_color>0.3 0.3 0.3</background_color>
-        <camera_pose>0 0 28 0 1.5708 1.5708</camera_pose>
+        <camera_pose>0 0 28 0 1.5 1.5708</camera_pose>
       </plugin>
       <plugin filename="GzSceneManager" name="Scene Manager">
         <gz-gui>
