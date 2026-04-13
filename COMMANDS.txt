@@ -36,6 +36,16 @@ ros2 launch ammr_bringup bringup.launch.py
   RViz 開啟後用「SetGoal」點地圖上的目標點
 
 -----------------------------------------
+【重新生成地圖】
+  1. 編輯 src/ammr_bringup/scripts/generate_map.py
+       SEED = 42        ← 改數字換布局
+       N_OBSTACLES = 35 ← 障礙物數量
+       W, H = 400, 400  ← 地圖大小 (px，1px=0.05m)
+  2. cd ~/masterthesis/src/ammr_bringup && python3 scripts/generate_map.py
+  3. cd ~/masterthesis && colcon build --packages-select ammr_bringup
+  4. 重啟 bringup
+
+-----------------------------------------
 【Build】
 colcon build --packages-select ammr_bringup
 source install/setup.bash
