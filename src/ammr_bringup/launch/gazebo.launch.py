@@ -55,6 +55,13 @@ def generate_launch_description():
             arguments=[map_file],
         ),
 
+        # odom -> ammr_base/base_footprint TF（從 /odom 發布，確保時間戳一致）
+        Node(
+            package='ammr_bringup',
+            executable='odom_tf_broadcaster',
+            parameters=[{'use_sim_time': True}],
+        ),
+
         # static TF: ammr_base/base_footprint -> ammr_base/base_footprint/lidar
         Node(
             package='tf2_ros',

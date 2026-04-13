@@ -24,6 +24,7 @@ setup(
         'console_scripts': [
             'map_publisher = ammr_bringup.map_publisher:main',
             'teleop = ammr_bringup.teleop:main',
+            'odom_tf_broadcaster = ammr_bringup.odom_tf_broadcaster:main',
         ],
     },
 )
