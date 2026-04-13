@@ -55,14 +55,6 @@ def generate_launch_description():
             arguments=[map_file],
         ),
 
-        # static TF: map -> odom（之後換成 AMCL）
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
-            parameters=[{'use_sim_time': True}],
-        ),
-
         # static TF: ammr_base/base_footprint -> ammr_base/base_footprint/lidar
         Node(
             package='tf2_ros',
