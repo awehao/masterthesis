@@ -18,10 +18,11 @@ def generate_launch_description():
                 os.path.join(nav2_pkg, 'launch', 'bringup_launch.py')
             ),
             launch_arguments={
-                'map':          map_file,
-                'params_file':  params_file,
-                'use_sim_time': 'true',
-                'autostart':    'true',
+                'map':                   map_file,
+                'params_file':           params_file,
+                'use_sim_time':          'true',
+                'autostart':             'true',
+                'use_collision_monitor': 'false',
             }.items(),
         ),
     ])
