@@ -46,6 +46,23 @@ ros2 launch ammr_bringup bringup.launch.py
   4. 重啟 bringup
 
 -----------------------------------------
+【區域規劃器切換（MPC ↔ MPPI）】
+  檔案：src/ammr_navigation/config/nav2_params.yaml
+  → 搜尋 FollowPath:
+  → 切換為 MPC（目前預設）：plugin: ammr_navigation::MPCController
+  → 切換回 MPPI：把上方 MPC 區段注釋掉，解除 MPPI 備用設定的 #
+  → 修改後重新 build：
+      colcon build --packages-select ammr_navigation
+      source install/setup.bash
+
+  MPC 可調參數（同 yaml 檔）：
+    horizon   ← 預測步數（預設 10）
+    dt        ← 控制週期秒數（需與 controller_frequency 一致，預設 0.1）
+    v_max/v_min/w_max  ← 速度限制
+    a_max/az_max       ← 加速度限制
+    Q_pos/Q_theta/R_v/R_w  ← 成本權重
+
+-----------------------------------------
 【Build】
 colcon build --packages-select ammr_bringup
 source install/setup.bash

@@ -65,84 +65,48 @@ controller_server:
       plugin: nav2_controller::SimpleGoalChecker
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
+    # ── 自訂 MPC 區域規劃器 ─────────────────────────────────────────────────
+    # 論文實作：線性化單輪車模型 + OSQP QP 求解 + 反應式安全層
+    # 切回 MPPI：將下方 FollowPath 整段換成 MPPI_BACKUP 區段
     FollowPath:
-      plugin: nav2_mppi_controller::MPPIController
-      time_steps: 56
-      model_dt: 0.05
-      batch_size: 2000
-      vx_std: 0.2
-      vy_std: 0.0
-      wz_std: 0.4
-      vx_max: 0.4
-      vx_min: -0.1
-      vy_max: 0.0
-      wz_max: 1.0
-      ax_max: 3.0
-      ax_min: -3.0
-      az_max: 3.2
-      iteration_count: 1
-      prune_distance: 1.7
-      transform_tolerance: 0.1
-      temperature: 0.3
-      gamma: 0.015
-      motion_model: DiffDrive
-      visualize: true
-      critics:
-        - GoalCritic
-        - GoalAngleCritic
-        - ObstaclesCritic
-        - PathAlignCritic
-        - PathFollowCritic
-        - PathAngleCritic
-        - PreferForwardCritic
-      GoalCritic:
-        enabled: true
-        cost_weight: 5.0
-        cost_power: 1
-        threshold_to_consider: 1.4
-      GoalAngleCritic:
-        enabled: true
-        cost_weight: 3.0
-        cost_power: 1
-        threshold_to_consider: 0.4
-      ObstaclesCritic:
-        enabled: true
-        cost_weight: 1.0
-        cost_power: 2
-        repulsion_weight: 1.5
-        critical_weight: 20.0
-        consider_footprint: false
-        collision_cost: 10000.0
-        collision_margin_distance: 0.15
-        near_goal_distance: 0.5
-      PathAlignCritic:
-        enabled: true
-        cost_weight: 14.0
-        cost_power: 1
-        max_path_occupancy_ratio: 0.05
-        trajectory_point_step: 3
-        threshold_to_consider: 0.4
-        offset_from_furthest: 20
-        use_path_orientations: false
-      PathFollowCritic:
-        enabled: true
-        cost_weight: 5.0
-        cost_power: 1
-        offset_from_furthest: 5
-        threshold_to_consider: 1.4
-      PathAngleCritic:
-        enabled: true
-        cost_weight: 2.0
-        cost_power: 1
-        offset_from_furthest: 4
-        threshold_to_consider: 0.4
-        max_angle_to_furthest: 1.0
-        mode: 0
-      PreferForwardCritic:
-        enabled: true
-        cost_weight: 5.0
-        cost_power: 1
-        threshold_to_consider: 0.4
+      plugin: ammr_navigation::MPCController
+      horizon: 10          # 預測時域步數 N
+      dt: 0.1              # 控制週期 (s)；需與 controller_frequency 一致
+      v_max: 0.4           # 最大線速度 (m/s)
+      v_min: -0.1          # 最小線速度（允許微量倒退）
+      w_max: 1.0           # 最大角速度 (rad/s)
+      a_max: 1.5           # 最大線加速度 (m/s²)
+      az_max: 2.5          # 最大角加速度 (rad/s²)
+      Q_pos: 15.0          # 位置誤差權重
+      Q_theta: 8.0         # 航向誤差權重
+      R_v: 0.1             # 線速度控制代價
+      R_w: 0.1             # 角速度控制代價
+
+    # ── MPPI 備用設定（切換時取消 FollowPath 行的 # 並注釋上方區段） ────────
+    # FollowPath:
+    #   plugin: nav2_mppi_controller::MPPIController
+    #   time_steps: 56
+    #   model_dt: 0.05
+    #   batch_size: 2000
+    #   vx_std: 0.2
+    #   vy_std: 0.0
+    #   wz_std: 0.4
+    #   vx_max: 0.4
+    #   vx_min: -0.1
+    #   vy_max: 0.0
+    #   wz_max: 1.0
+    #   ax_max: 3.0
+    #   ax_min: -3.0
+    #   az_max: 3.2
+    #   iteration_count: 1
+    #   prune_distance: 1.7
+    #   transform_tolerance: 0.1
+    #   temperature: 0.3
+    #   gamma: 0.015
+    #   motion_model: DiffDrive
+    #   visualize: true
+    #   critics: [GoalCritic, GoalAngleCritic, ObstaclesCritic,
+    #             PathAlignCritic, PathFollowCritic, PathAngleCritic, PreferForwardCritic]
 
 local_costmap:
   local_costmap:
