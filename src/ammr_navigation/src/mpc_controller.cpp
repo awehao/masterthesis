@@ -258,7 +258,9 @@ std::vector<geometry_msgs::msg::PoseStamped> MPCController::getLocalReference(
   std::vector<geometry_msgs::msg::PoseStamped> ref;
   ref.reserve(horizon);
 
-  const double step_dist = std::max(v_max_ * dt_, 0.05);
+  // 每個參考點間距：固定 0.25m，確保 MPC 有足夠位置誤差驅動速度輸出
+  // （若用 v_max*dt≈0.04m，cost 中控制代價會壓過位置代價，導致近零速度）
+  const double step_dist = 0.25;
   size_t idx = closest;
 
   for (int k = 0; k < horizon; ++k) {
