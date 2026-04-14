@@ -515,17 +515,20 @@ double MPCController::computeSafeSpeedLimit(
   auto * costmap = costmap_ros_->getCostmap();
   if (!costmap) {return v_max_;}
 
-  const double check_radius  = 0.8;   // 偵測半徑
-  const double stop_radius   = 0.25;  // 小於此距離 → 緊急停止
-  const int    n_ray         = 24;
-  const double r_step        = 0.04;
+  // 只偵測機器人前方 ±90° 的障礙物（後方不限速）
+  const double check_radius = 0.6;
+  const int    n_ray        = 12;    // 前方半圓，每 15°
+  const double r_step       = 0.05;
 
-  const double rx = robot_pose.pose.position.x;
-  const double ry = robot_pose.pose.position.y;
+  const double rx      = robot_pose.pose.position.x;
+  const double ry      = robot_pose.pose.position.y;
+  const double heading = tf2::getYaw(robot_pose.pose.orientation);
+
   double min_obs_dist = check_radius;
 
   for (int ray = 0; ray < n_ray; ++ray) {
-    const double angle = 2.0 * M_PI * ray / n_ray;
+    // 前方 ±90°：從 heading-π/2 到 heading+π/2
+    const double angle = heading - M_PI_2 + M_PI * ray / (n_ray - 1);
     for (double r = r_step; r <= check_radius; r += r_step) {
       const double wx = rx + r * std::cos(angle);
       const double wy = ry + r * std::sin(angle);
@@ -538,13 +541,8 @@ double MPCController::computeSafeSpeedLimit(
     }
   }
 
-  if (min_obs_dist <= stop_radius) {
-    return 0.0;  // 緊急停止
-  }
-
-  // 線性映射：stop_radius → 0，check_radius → v_max
-  const double ratio = std::clamp(
-    (min_obs_dist - stop_radius) / (check_radius - stop_radius), 0.0, 1.0);
+  // 平滑限速：check_radius 以外全速，接近 0 才趨近 0
+  const double ratio = std::clamp(min_obs_dist / check_radius, 0.0, 1.0);
   return ratio * v_max_;
 }
 
