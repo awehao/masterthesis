@@ -24,6 +24,7 @@
 #include "nav2_util/node_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/utils.h"
+#include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 PLUGINLIB_EXPORT_CLASS(ammr_navigation::MPCController, nav2_core::Controller)
@@ -193,6 +194,15 @@ geometry_msgs::msg::TwistStamped MPCController::computeVelocityCommands(
   twist.linear.x  = std::clamp(twist.linear.x,  v_min_, safe_v);
   twist.angular.z = std::clamp(twist.angular.z, -w_max_, w_max_);
 
+  // Debug log（1Hz）
+  RCLCPP_INFO_THROTTLE(logger_, *rclcpp::Clock::make_shared(), 1000,
+    "[MPC] pose=(%.2f,%.2f,%.2f°) ref0=(%.2f,%.2f,%.2f°) cmd v=%.3f w=%.3f safe_v=%.3f",
+    pose.pose.position.x, pose.pose.position.y,
+    tf2::getYaw(pose.pose.orientation) * 180.0 / M_PI,
+    reference[0].pose.position.x, reference[0].pose.position.y,
+    tf2::getYaw(reference[0].pose.orientation) * 180.0 / M_PI,
+    twist.linear.x, twist.angular.z, safe_v);
+
   cmd.twist = twist;
   return cmd;
 }
@@ -212,9 +222,9 @@ std::vector<geometry_msgs::msg::PoseStamped> MPCController::getLocalReference(
   const double rx = robot_pose.pose.position.x;
   const double ry = robot_pose.pose.position.y;
 
-  // 找最近路徑點
-  size_t closest = 0;
+  // ── 找最近路徑點（向前搜尋，避免選到身後點）──────────────────────────────
   double min_dist_sq = std::numeric_limits<double>::max();
+  size_t closest = 0;
   for (size_t k = 0; k < global_plan_.poses.size(); ++k) {
     double dx = global_plan_.poses[k].pose.position.x - rx;
     double dy = global_plan_.poses[k].pose.position.y - ry;
@@ -225,7 +235,8 @@ std::vector<geometry_msgs::msg::PoseStamped> MPCController::getLocalReference(
     }
   }
 
-  // 沿路徑以固定弧長間隔取 N 個參考點
+  // ── 沿路徑以固定弧長間隔取 N 個參考點 ────────────────────────────────────
+  // 每步前進距離 step_dist；idx 只往前走，不倒退
   std::vector<geometry_msgs::msg::PoseStamped> ref;
   ref.reserve(horizon);
 
@@ -233,23 +244,43 @@ std::vector<geometry_msgs::msg::PoseStamped> MPCController::getLocalReference(
   size_t idx = closest;
 
   for (int k = 0; k < horizon; ++k) {
-    double accumulated = 0.0;
-    while (idx + 1 < global_plan_.poses.size()) {
+    // 前進 step_dist 弧長
+    double remaining = step_dist;
+    while (remaining > 1e-6 && idx + 1 < global_plan_.poses.size()) {
       const auto & cur  = global_plan_.poses[idx];
       const auto & next = global_plan_.poses[idx + 1];
       double dx = next.pose.position.x - cur.pose.position.x;
       double dy = next.pose.position.y - cur.pose.position.y;
       double d  = std::sqrt(dx * dx + dy * dy);
-      if (accumulated + d >= step_dist) {break;}
-      accumulated += d;
-      ++idx;
+      if (d <= remaining) {
+        remaining -= d;
+        ++idx;
+      } else {
+        break;  // 剩餘距離不足一個 segment
+      }
     }
     ref.push_back(global_plan_.poses[idx]);
-    if (idx + 1 < global_plan_.poses.size()) {++idx;}
   }
 
+  // 不足則以終點填補
   while (static_cast<int>(ref.size()) < horizon) {
     ref.push_back(global_plan_.poses.back());
+  }
+
+  // ── 從路徑方向計算參考 yaw（NavFn 不設置 waypoint orientation）────────────
+  // 使用相鄰參考點的方向向量，讓 MPC 追蹤正確航向
+  for (int k = 0; k + 1 < static_cast<int>(ref.size()); ++k) {
+    double dx = ref[k + 1].pose.position.x - ref[k].pose.position.x;
+    double dy = ref[k + 1].pose.position.y - ref[k].pose.position.y;
+    if (dx * dx + dy * dy > 1e-6) {
+      tf2::Quaternion q;
+      q.setRPY(0.0, 0.0, std::atan2(dy, dx));
+      ref[k].pose.orientation = tf2::toMsg(q);
+    }
+  }
+  // 最後一點繼承倒數第二點的 yaw
+  if (ref.size() >= 2) {
+    ref.back().pose.orientation = ref[ref.size() - 2].pose.orientation;
   }
 
   return ref;
@@ -466,9 +497,10 @@ double MPCController::computeSafeSpeedLimit(
   auto * costmap = costmap_ros_->getCostmap();
   if (!costmap) {return v_max_;}
 
-  const double check_radius = 0.8;
-  const int    n_ray        = 16;
-  const double r_step       = 0.05;
+  const double check_radius  = 0.8;   // 偵測半徑
+  const double stop_radius   = 0.25;  // 小於此距離 → 緊急停止
+  const int    n_ray         = 24;
+  const double r_step        = 0.04;
 
   const double rx = robot_pose.pose.position.x;
   const double ry = robot_pose.pose.position.y;
@@ -488,7 +520,13 @@ double MPCController::computeSafeSpeedLimit(
     }
   }
 
-  const double ratio = std::clamp(min_obs_dist / check_radius, 0.0, 1.0);
+  if (min_obs_dist <= stop_radius) {
+    return 0.0;  // 緊急停止
+  }
+
+  // 線性映射：stop_radius → 0，check_radius → v_max
+  const double ratio = std::clamp(
+    (min_obs_dist - stop_radius) / (check_radius - stop_radius), 0.0, 1.0);
   return ratio * v_max_;
 }
 
