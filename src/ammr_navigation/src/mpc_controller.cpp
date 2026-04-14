@@ -515,21 +515,22 @@ double MPCController::computeSafeSpeedLimit(
   auto * costmap = costmap_ros_->getCostmap();
   if (!costmap) {return v_max_;}
 
-  // 只偵測機器人前方 ±90° 的障礙物（後方不限速）
-  const double check_radius = 0.6;
-  const int    n_ray        = 12;    // 前方半圓，每 15°
-  const double r_step       = 0.05;
+  // 只在前方極近距離（< stop_dist）才限速，其餘全速
+  const double stop_dist = 0.15;   // 實際幾乎快碰才停
+  const double slow_dist = 0.30;   // 低速區
+  const int    n_ray     = 8;      // 前方 ±45°，每 12.5°
+  const double r_step    = 0.05;
 
   const double rx      = robot_pose.pose.position.x;
   const double ry      = robot_pose.pose.position.y;
   const double heading = tf2::getYaw(robot_pose.pose.orientation);
 
-  double min_obs_dist = check_radius;
+  double min_obs_dist = slow_dist;  // 預設為全速
 
   for (int ray = 0; ray < n_ray; ++ray) {
-    // 前方 ±90°：從 heading-π/2 到 heading+π/2
-    const double angle = heading - M_PI_2 + M_PI * ray / (n_ray - 1);
-    for (double r = r_step; r <= check_radius; r += r_step) {
+    // 前方 ±45°
+    const double angle = heading - M_PI / 4.0 + (M_PI / 2.0) * ray / (n_ray - 1);
+    for (double r = r_step; r <= slow_dist; r += r_step) {
       const double wx = rx + r * std::cos(angle);
       const double wy = ry + r * std::sin(angle);
       unsigned int mx, my;
@@ -541,8 +542,11 @@ double MPCController::computeSafeSpeedLimit(
     }
   }
 
-  // 平滑限速：check_radius 以外全速，接近 0 才趨近 0
-  const double ratio = std::clamp(min_obs_dist / check_radius, 0.0, 1.0);
+  if (min_obs_dist >= slow_dist) {return v_max_;}  // 全速
+
+  // stop_dist ~ slow_dist 之間線性降速
+  const double ratio = std::clamp(
+    (min_obs_dist - stop_dist) / (slow_dist - stop_dist), 0.0, 1.0);
   return ratio * v_max_;
 }
 
