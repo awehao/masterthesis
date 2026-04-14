@@ -65,48 +65,46 @@ controller_server:
       plugin: nav2_controller::SimpleGoalChecker
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
-    # ── 自訂 MPC 區域規劃器 ─────────────────────────────────────────────────
-    # 論文實作：線性化單輪車模型 + OSQP QP 求解 + 反應式安全層
-    # 切回 MPPI：將下方 FollowPath 整段換成 MPPI_BACKUP 區段
+    # ── MPPI（目前使用）──────────────────────────────────────────────────────
     FollowPath:
-      plugin: ammr_navigation::MPCController
-      horizon: 10          # 預測時域步數 N
-      dt: 0.1              # 控制週期 (s)；需與 controller_frequency 一致
-      v_max: 0.4           # 最大線速度 (m/s)
-      v_min: -0.1          # 最小線速度（允許微量倒退）
-      w_max: 1.0           # 最大角速度 (rad/s)
-      a_max: 1.5           # 最大線加速度 (m/s²)
-      az_max: 2.5          # 最大角加速度 (rad/s²)
-      Q_pos: 10.0          # 位置誤差權重
-      Q_theta: 5.0         # 航向誤差權重
-      R_v: 0.01            # 線速度控制代價（小 → MPC 不怕輸出大速度）
-      R_w: 0.05            # 角速度控制代價
+      plugin: nav2_mppi_controller::MPPIController
+      time_steps: 56
+      model_dt: 0.05
+      batch_size: 2000
+      vx_std: 0.2
+      vy_std: 0.0
+      wz_std: 0.4
+      vx_max: 0.4
+      vx_min: -0.1
+      vy_max: 0.0
+      wz_max: 1.0
+      ax_max: 3.0
+      ax_min: -3.0
+      az_max: 3.2
+      iteration_count: 1
+      prune_distance: 1.7
+      transform_tolerance: 0.1
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: DiffDrive
+      visualize: true
+      critics: [GoalCritic, GoalAngleCritic, ObstaclesCritic,
+                PathAlignCritic, PathFollowCritic, PathAngleCritic, PreferForwardCritic]
 
-    # ── MPPI 備用設定（切換時取消 FollowPath 行的 # 並注釋上方區段） ────────
+    # ── 自訂 MPC（開發中，切換時取消下方注釋並注釋上方 MPPI 區段） ──────────
     # FollowPath:
-    #   plugin: nav2_mppi_controller::MPPIController
-    #   time_steps: 56
-    #   model_dt: 0.05
-    #   batch_size: 2000
-    #   vx_std: 0.2
-    #   vy_std: 0.0
-    #   wz_std: 0.4
-    #   vx_max: 0.4
-    #   vx_min: -0.1
-    #   vy_max: 0.0
-    #   wz_max: 1.0
-    #   ax_max: 3.0
-    #   ax_min: -3.0
-    #   az_max: 3.2
-    #   iteration_count: 1
-    #   prune_distance: 1.7
-    #   transform_tolerance: 0.1
-    #   temperature: 0.3
-    #   gamma: 0.015
-    #   motion_model: DiffDrive
-    #   visualize: true
-    #   critics: [GoalCritic, GoalAngleCritic, ObstaclesCritic,
-    #             PathAlignCritic, PathFollowCritic, PathAngleCritic, PreferForwardCritic]
+    #   plugin: ammr_navigation::MPCController
+    #   horizon: 10
+    #   dt: 0.1
+    #   v_max: 0.4
+    #   v_min: -0.1
+    #   w_max: 1.0
+    #   a_max: 1.5
+    #   az_max: 2.5
+    #   Q_pos: 10.0
+    #   Q_theta: 5.0
+    #   R_v: 0.01
+    #   R_w: 0.05
 
 local_costmap:
   local_costmap:
