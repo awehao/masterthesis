@@ -12,11 +12,11 @@ import yaml
 from pathlib import Path
 
 # ===== 設定 =====
-SEED        = 42
+SEED        = 70
 RESOLUTION  = 0.05   # m/pixel
-W, H        = 400, 400  # pixels → 20m x 20m
+W, H        = 400 , 400  # pixels → 20m x 20m（400*400
 WALL_PX     = 4         # 外牆厚度 (pixels)
-N_OBSTACLES = 35        # 障礙物數量
+N_OBSTACLES = 120        # 障礙物數量
 WALL_H      = 1.2       # Gazebo 牆高度 (m)
 ORIGIN_X    = -W * RESOLUTION / 2  # -10.0
 ORIGIN_Y    = -H * RESOLUTION / 2  # -10.0
