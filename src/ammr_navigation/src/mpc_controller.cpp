@@ -179,16 +179,33 @@ geometry_msgs::msg::TwistStamped MPCController::computeVelocityCommands(
   cmd.header.frame_id = "base_footprint";
   cmd.header.stamp    = pose.header.stamp;
 
-  auto reference = getLocalReference(pose, horizon_);
+  // ── 轉換 pose 到全域路徑所在的 frame（通常 map）────────────────────────────
+  // Controller server 給的 pose 是 local costmap 的 global_frame（odom），
+  // 而全域路徑是 map frame，必須轉換後才能比較座標。
+  geometry_msgs::msg::PoseStamped pose_in_plan_frame = pose;
+  if (!global_plan_.poses.empty() &&
+      global_plan_.header.frame_id != pose.header.frame_id)
+  {
+    try {
+      tf_->transform(pose, pose_in_plan_frame,
+                     global_plan_.header.frame_id,
+                     tf2::Duration(std::chrono::milliseconds(100)));
+    } catch (tf2::TransformException & ex) {
+      RCLCPP_WARN(logger_, "[MPC] TF transform failed: %s", ex.what());
+      return cmd;
+    }
+  }
+
+  auto reference = getLocalReference(pose_in_plan_frame, horizon_);
   if (reference.empty()) {
     RCLCPP_WARN(logger_, "[MPC] 參考軌跡為空，輸出零速度");
     return cmd;
   }
 
-  auto twist = solveQP(pose, velocity, reference);
+  auto twist = solveQP(pose_in_plan_frame, velocity, reference);
 
-  // 反應式安全層
-  double safe_v = computeSafeSpeedLimit(pose);
+  // 反應式安全層（用已轉換的 pose，或直接用原始 pose 也可因為只查 costmap 距離）
+  double safe_v = computeSafeSpeedLimit(pose_in_plan_frame);
   safe_v = std::min(safe_v, v_max_ * speed_limit_);
 
   twist.linear.x  = std::clamp(twist.linear.x,  v_min_, safe_v);
@@ -196,9 +213,10 @@ geometry_msgs::msg::TwistStamped MPCController::computeVelocityCommands(
 
   // Debug log（1Hz）
   RCLCPP_INFO_THROTTLE(logger_, *rclcpp::Clock::make_shared(), 1000,
-    "[MPC] pose=(%.2f,%.2f,%.2f°) ref0=(%.2f,%.2f,%.2f°) cmd v=%.3f w=%.3f safe_v=%.3f",
-    pose.pose.position.x, pose.pose.position.y,
-    tf2::getYaw(pose.pose.orientation) * 180.0 / M_PI,
+    "[MPC] pose[%s]=(%.2f,%.2f,%.2f°) ref0=(%.2f,%.2f,%.2f°) cmd v=%.3f w=%.3f safe_v=%.3f",
+    pose_in_plan_frame.header.frame_id.c_str(),
+    pose_in_plan_frame.pose.position.x, pose_in_plan_frame.pose.position.y,
+    tf2::getYaw(pose_in_plan_frame.pose.orientation) * 180.0 / M_PI,
     reference[0].pose.position.x, reference[0].pose.position.y,
     tf2::getYaw(reference[0].pose.orientation) * 180.0 / M_PI,
     twist.linear.x, twist.angular.z, safe_v);
