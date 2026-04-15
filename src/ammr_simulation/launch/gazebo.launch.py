@@ -62,6 +62,15 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
         ),
 
+        # Bridge: connect Gazebo-scoped frame to URDF frame for robot_state_publisher
+        # ammr_base/base_footprint (Gazebo) == base_footprint (URDF) — zero offset
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=['0', '0', '0', '0', '0', '0', 'ammr_base/base_footprint', 'base_footprint'],
+            parameters=[{'use_sim_time': True}],
+        ),
+
         # 5. Spawn robot（延遲 3 秒等 Gazebo 啟動）
         TimerAction(
             period=3.0,
