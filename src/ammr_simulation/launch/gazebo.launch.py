@@ -61,11 +61,12 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
         ),
 
-        # static TF: ammr_base/base_footprint -> ammr_base/base_footprint/lidar
+        # static TF: ammr_base/base_footprint -> ammr_base/lidar_link
+        # Gazebo scopes the sensor frame_id as "<model>/<link>", i.e. ammr_base/lidar_link
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0', '0', '0.19', '0', '0', '0', 'ammr_base/base_footprint', 'ammr_base/base_footprint/lidar'],
+            arguments=['0', '0', '0.19', '0', '0', '0', 'ammr_base/base_footprint', 'ammr_base/lidar_link'],
             parameters=[{'use_sim_time': True}],
         ),
 
