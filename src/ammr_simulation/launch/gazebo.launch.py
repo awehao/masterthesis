@@ -53,21 +53,12 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
         ),
 
-        # static TF: ammr_base/base_footprint -> ammr_base/base_footprint/lidar
-        # Gazebo Harmonic scopes sensor frame_id as "<model>/<parent_link>/<sensor_name>"
+        # static TF: base_footprint -> ammr_base/base_footprint/lidar
+        # Gazebo names the scan frame as <model>/<link>/<sensor>, so we bridge it here
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0', '0', '0.19', '0', '0', '0', 'ammr_base/base_footprint', 'ammr_base/base_footprint/lidar'],
-            parameters=[{'use_sim_time': True}],
-        ),
-
-        # Bridge: connect Gazebo-scoped frame to URDF frame for robot_state_publisher
-        # ammr_base/base_footprint (Gazebo) == base_footprint (URDF) — zero offset
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            arguments=['0', '0', '0', '0', '0', '0', 'ammr_base/base_footprint', 'base_footprint'],
+            arguments=['0', '0', '0.19', '0', '0', '0', 'base_footprint', 'ammr_base/base_footprint/lidar'],
             parameters=[{'use_sim_time': True}],
         ),
 
