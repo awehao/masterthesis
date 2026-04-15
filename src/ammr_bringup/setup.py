@@ -25,9 +25,6 @@ setup(
             'map_publisher = ammr_bringup.map_publisher:main',
             'teleop = ammr_bringup.teleop:main',
             'odom_tf_broadcaster = ammr_bringup.odom_tf_broadcaster:main',
-            'send_goal = ammr_bringup.send_goal:main',
-            'dynamic_obstacle_mover = ammr_bringup.dynamic_obstacle_mover:main',
-            'omni_drive_controller = ammr_bringup.omni_drive_controller:main',
         ],
     },
 )

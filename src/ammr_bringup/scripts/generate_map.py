@@ -21,12 +21,6 @@ WALL_H      = 1.2       # Gazebo 牆高度 (m)
 ORIGIN_X    = -W * RESOLUTION / 2  # -10.0
 ORIGIN_Y    = -H * RESOLUTION / 2  # -10.0
 
-# ===== 動態障礙物設定 =====
-# 每個障礙物：(顏色, [(x1,y1,t1), (x2,y2,t2), ...])
-# 座標會自動被限制在地圖範圍內
-# 速度約 = 距離 / 時間差（建議 0.3~0.6 m/s）
-DYNAMIC_OBSTACLES = []  # 無動態障礙物
-
 
 def px_to_world(px, py):
     """Pixel → Gazebo world coords（Y 軸翻轉）"""
@@ -119,33 +113,6 @@ def box_sdf(name, x, y, z, sx, sy, sz, ambient, diffuse):
     </model>"""
 
 
-def dynamic_model_sdf(name, color, waypoints):
-    wps = ''.join(
-        f'\n          <waypoint><time>{t}</time><pose>{x:.2f} {y:.2f} 0 0 0 0</pose></waypoint>'
-        for x, y, t in waypoints
-    )
-    x0, y0 = waypoints[0][0], waypoints[0][1]
-    return f"""
-    <actor name="{name}">
-      <pose>{x0:.2f} {y0:.2f} 0 0 0 0</pose>
-      <link name="body">
-        <collision name="c">
-          <geometry><box><size>0.6 0.6 1.2</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.6 0.6 1.2</size></box></geometry>
-          <material><ambient>{color}</ambient><diffuse>{color}</diffuse></material>
-        </visual>
-      </link>
-      <script>
-        <loop>true</loop>
-        <auto_start>true</auto_start>
-        <trajectory id="0" type="__default__">{wps}
-        </trajectory>
-      </script>
-    </actor>"""
-
-
 def save_sdf(obstacles, path):
     room = W * RESOLUTION   # 20.0
     wt   = WALL_PX * RESOLUTION  # wall thickness in meters
@@ -179,10 +146,6 @@ def save_sdf(obstacles, path):
     oc = '0.8 0.2 0.2 1'
     for i, (cx, cy, sw, sh) in enumerate(obstacles):
         models += box_sdf(f'obs_{i}', cx, cy, WALL_H/2, sw, sh, WALL_H, oc, oc)
-
-    # 動態障礙物
-    for i, (color, waypoints) in enumerate(DYNAMIC_OBSTACLES):
-        models += dynamic_model_sdf(f'dynamic_obs_{i+1}', color, waypoints)
 
     sdf = f"""<?xml version="1.0"?>
 <sdf version="1.8">

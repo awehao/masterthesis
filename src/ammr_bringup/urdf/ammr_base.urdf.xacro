@@ -1,13 +1,12 @@
 <?xml version="1.0"?>
 <robot name="ammr_base" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- Properties：60cm 直徑圓形底盤 + 4 輪（左右主動差速、前後被動隨動）-->
-  <xacro:property name="base_radius"  value="0.30"/>   <!-- 60cm 直徑 -->
+  <!-- Properties -->
+  <xacro:property name="base_size"    value="0.4"/>
   <xacro:property name="base_height"  value="0.12"/>
   <xacro:property name="wheel_radius" value="0.08"/>
-  <xacro:property name="wheel_width"  value="0.05"/>
-  <xacro:property name="wheel_x"      value="0.26"/>   <!-- 前後輪距中心距離（貼近邊緣）-->
-  <xacro:property name="wheel_y"      value="0.26"/>   <!-- 左右輪距中心距離（貼近邊緣）-->
+  <xacro:property name="wheel_width"  value="0.04"/>
+  <xacro:property name="wheel_offset" value="0.22"/>  <!-- distance from center to wheel -->
 
   <!-- base_footprint -->
   <link name="base_footprint"/>
@@ -18,11 +17,11 @@
     <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
   </joint>
 
-  <!-- 圓形底盤本體 -->
+  <!-- Body -->
   <link name="base_link">
     <visual>
       <geometry>
-        <cylinder radius="${base_radius}" length="${base_height}"/>
+        <box size="${base_size} ${base_size} ${base_height}"/>
       </geometry>
       <material name="blue">
         <color rgba="0.2 0.4 0.8 1.0"/>
@@ -30,54 +29,130 @@
     </visual>
     <collision>
       <geometry>
-        <cylinder radius="${base_radius}" length="${base_height}"/>
+        <box size="${base_size} ${base_size} ${base_height}"/>
       </geometry>
     </collision>
     <inertial>
-      <mass value="15.0"/>
-      <!-- 實心圓柱慣性矩 -->
-      <inertia ixx="0.356" ixy="0.0" ixz="0.0"
-                           iyy="0.356" iyz="0.0"
-                                       izz="0.675"/>
+      <mass value="8.0"/>
+      <inertia ixx="0.13" ixy="0.0" ixz="0.0"
+                           iyy="0.13" iyz="0.0"
+                                      izz="0.22"/>
     </inertial>
   </link>
 
-  <!-- ===== 輪子 xacro macro ===== -->
-  <xacro:macro name="wheel" params="name x y">
-    <joint name="${name}_joint" type="continuous">
-      <parent link="base_link"/>
-      <child  link="${name}"/>
-      <origin xyz="${x} ${y} ${-base_height/2}" rpy="${-pi/2} 0 0"/>
-      <axis xyz="0 0 1"/>
-    </joint>
-    <link name="${name}">
-      <visual>
-        <geometry>
-          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
-        </geometry>
-        <material name="dark">
-          <color rgba="0.1 0.1 0.1 1.0"/>
-        </material>
-      </visual>
-      <collision>
-        <geometry>
-          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
-        </geometry>
-      </collision>
-      <inertial>
-        <mass value="0.8"/>
-        <inertia ixx="0.002" ixy="0.0" ixz="0.0"
-                             iyy="0.002" iyz="0.0"
-                                         izz="0.003"/>
-      </inertial>
-    </link>
-  </xacro:macro>
+  <!-- ===== LEFT wheel (active, diff-drive) ===== -->
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child  link="left_wheel"/>
+    <origin xyz="0 ${wheel_offset} ${-base_height/2}" rpy="${-pi/2} 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
 
-  <!-- 四個差速輪 -->
-  <xacro:wheel name="front_left_wheel"  x="${ wheel_x}" y="${ wheel_y}"/>
-  <xacro:wheel name="front_right_wheel" x="${ wheel_x}" y="${-wheel_y}"/>
-  <xacro:wheel name="rear_left_wheel"   x="${-wheel_x}" y="${ wheel_y}"/>
-  <xacro:wheel name="rear_right_wheel"  x="${-wheel_x}" y="${-wheel_y}"/>
+  <link name="left_wheel">
+    <visual>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+      <material name="dark">
+        <color rgba="0.1 0.1 0.1 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.5"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0"
+                           iyy="0.001" iyz="0.0"
+                                       izz="0.002"/>
+    </inertial>
+  </link>
+
+  <!-- ===== RIGHT wheel (active, diff-drive) ===== -->
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child  link="right_wheel"/>
+    <origin xyz="0 ${-wheel_offset} ${-base_height/2}" rpy="${-pi/2} 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+
+  <link name="right_wheel">
+    <visual>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+      <material name="dark"/>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.5"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0"
+                           iyy="0.001" iyz="0.0"
+                                       izz="0.002"/>
+    </inertial>
+  </link>
+
+  <!-- ===== FRONT caster (passive) ===== -->
+  <joint name="front_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="front_caster"/>
+    <origin xyz="${wheel_offset} 0 ${-base_height/2 - wheel_radius/2}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="front_caster">
+    <visual>
+      <geometry>
+        <sphere radius="${wheel_radius/2}"/>
+      </geometry>
+      <material name="grey">
+        <color rgba="0.5 0.5 0.5 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius="${wheel_radius/2}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0.0" ixz="0.0"
+                            iyy="0.0001" iyz="0.0"
+                                         izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <!-- ===== BACK caster (passive) ===== -->
+  <joint name="back_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="back_caster"/>
+    <origin xyz="${-wheel_offset} 0 ${-base_height/2 - wheel_radius/2}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="back_caster">
+    <visual>
+      <geometry>
+        <sphere radius="${wheel_radius/2}"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius="${wheel_radius/2}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0.0" ixz="0.0"
+                            iyy="0.0001" iyz="0.0"
+                                         izz="0.0001"/>
+    </inertial>
+  </link>
 
   <!-- ===== LiDAR link ===== -->
   <joint name="lidar_joint" type="fixed">
@@ -124,15 +199,13 @@
     </sensor>
   </gazebo>
 
-  <!-- ===== Gazebo diff-drive plugin（4輪）===== -->
+  <!-- ===== Gazebo diff-drive plugin ===== -->
   <gazebo>
     <plugin filename="gz-sim-diff-drive-system"
             name="gz::sim::systems::DiffDrive">
-      <left_joint>front_left_wheel_joint</left_joint>
-      <left_joint>rear_left_wheel_joint</left_joint>
-      <right_joint>front_right_wheel_joint</right_joint>
-      <right_joint>rear_right_wheel_joint</right_joint>
-      <wheel_separation>${wheel_y * 2}</wheel_separation>
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>${wheel_offset * 2}</wheel_separation>
       <wheel_radius>${wheel_radius}</wheel_radius>
       <topic>/cmd_vel</topic>
       <odom_topic>/odom</odom_topic>
@@ -141,10 +214,14 @@
     </plugin>
   </gazebo>
 
-  <!-- 四輪摩擦力設定 -->
-  <gazebo reference="front_left_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="front_right_wheel"> <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="rear_left_wheel">   <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="rear_right_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <!-- Gazebo: zero friction for casters -->
+  <gazebo reference="front_caster">
+    <mu1>0.0</mu1>
+    <mu2>0.0</mu2>
+  </gazebo>
+  <gazebo reference="back_caster">
+    <mu1>0.0</mu1>
+    <mu2>0.0</mu2>
+  </gazebo>
 
 </robot>
