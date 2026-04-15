@@ -19,7 +19,7 @@ def generate_launch_description():
 
     # Nav2 延遲 5 秒，等 Gazebo 和機器人完全起來
     nav2 = TimerAction(
-        period=5.0,
+        period=10.0,
         actions=[IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(nav_pkg, 'launch', 'nav2.launch.py')
@@ -29,7 +29,7 @@ def generate_launch_description():
 
     # RViz 延遲 6 秒
     rviz = TimerAction(
-        period=6.0,
+        period=12.0,
         actions=[Node(
             package='rviz2',
             executable='rviz2',
