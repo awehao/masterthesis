@@ -38,4 +38,13 @@ def generate_launch_description():
         )]
     )
 
-    return LaunchDescription([gazebo, nav2, rviz])
+    # 動態障礙物控制節點，延遲 8 秒等 Gazebo 完全啟動
+    dynamic_obs = TimerAction(
+        period=8.0,
+        actions=[Node(
+            package='ammr_bringup',
+            executable='dynamic_obstacle_mover',
+        )]
+    )
+
+    return LaunchDescription([gazebo, nav2, rviz, dynamic_obs])
