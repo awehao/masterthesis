@@ -61,15 +61,6 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
         ),
 
-        # ros_gz_bridge auto-publishes ammr_base/base_footprint -> ammr_base/base_footprint/lidar
-        # to /tf_static when bridging LaserScan. Connect it to our tree to avoid orphan subtree.
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            arguments=['0', '0', '0', '0', '0', '0', 'base_footprint', 'ammr_base/base_footprint'],
-            parameters=[{'use_sim_time': True}],
-        ),
-
         # 5. Spawn robot（延遲 3 秒等 Gazebo 啟動）
         TimerAction(
             period=3.0,
