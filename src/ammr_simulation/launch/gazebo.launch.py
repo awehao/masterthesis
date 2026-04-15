@@ -53,13 +53,13 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
         ),
 
-        # static TF: base_footprint -> ammr_base/base_footprint/lidar
-        # scan frame_id is ammr_base/base_footprint/lidar (Gazebo naming)
-        # this links it into the clean tree rooted at base_footprint
+        # static TF: lidar_link -> ammr_base/base_footprint/lidar (zero offset)
+        # Gazebo forces scan frame_id = ammr_base/base_footprint/lidar
+        # this bridges it to lidar_link so scan transforms correctly through the URDF tree
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0', '0', '0.19', '0', '0', '0', 'base_footprint', 'ammr_base/base_footprint/lidar'],
+            arguments=['0', '0', '0', '0', '0', '0', 'lidar_link', 'ammr_base/base_footprint/lidar'],
             parameters=[{'use_sim_time': True}],
         ),
 
