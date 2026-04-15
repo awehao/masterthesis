@@ -1,13 +1,12 @@
 <?xml version="1.0"?>
 <robot name="ammr_base" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- Properties：60cm 直徑圓形底盤 + 4 差速輪 -->
+  <!-- Properties：60cm 直徑圓形底盤 + 4 輪（左右主動差速、前後被動隨動）-->
   <xacro:property name="base_radius"  value="0.30"/>   <!-- 60cm 直徑 -->
   <xacro:property name="base_height"  value="0.12"/>
   <xacro:property name="wheel_radius" value="0.08"/>
   <xacro:property name="wheel_width"  value="0.05"/>
-  <xacro:property name="wheel_x"      value="0.13"/>   <!-- 前後輪距中心距離 -->
-  <xacro:property name="wheel_y"      value="0.24"/>   <!-- 左右輪距中心距離 -->
+  <xacro:property name="wheel_dist"   value="0.26"/>   <!-- 各輪距底盤中心距離 -->
 
   <!-- base_footprint -->
   <link name="base_footprint"/>
@@ -42,8 +41,8 @@
     </inertial>
   </link>
 
-  <!-- ===== 輪子 xacro macro ===== -->
-  <xacro:macro name="wheel" params="name x y">
+  <!-- ===== 左/右輪 macro（圓面朝外，軸沿 Y 方向）===== -->
+  <xacro:macro name="lr_wheel" params="name x y">
     <joint name="${name}_joint" type="continuous">
       <parent link="base_link"/>
       <child  link="${name}"/>
@@ -73,11 +72,42 @@
     </link>
   </xacro:macro>
 
-  <!-- 四個差速輪 -->
-  <xacro:wheel name="front_left_wheel"  x="${ wheel_x}" y="${ wheel_y}"/>
-  <xacro:wheel name="front_right_wheel" x="${ wheel_x}" y="${-wheel_y}"/>
-  <xacro:wheel name="rear_left_wheel"   x="${-wheel_x}" y="${ wheel_y}"/>
-  <xacro:wheel name="rear_right_wheel"  x="${-wheel_x}" y="${-wheel_y}"/>
+  <!-- ===== 前/後輪 macro（圓面朝外，軸沿 X 方向）===== -->
+  <xacro:macro name="fb_wheel" params="name x y">
+    <joint name="${name}_joint" type="continuous">
+      <parent link="base_link"/>
+      <child  link="${name}"/>
+      <origin xyz="${x} ${y} ${-base_height/2}" rpy="0 ${pi/2} 0"/>
+      <axis xyz="0 0 1"/>
+    </joint>
+    <link name="${name}">
+      <visual>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+        <material name="dark">
+          <color rgba="0.1 0.1 0.1 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.8"/>
+        <inertia ixx="0.002" ixy="0.0" ixz="0.0"
+                             iyy="0.002" iyz="0.0"
+                                         izz="0.003"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <!-- 四個差速輪（左、右主動；前、後被動）-->
+  <xacro:lr_wheel name="left_wheel"  x="0"              y="${ wheel_dist}"/>
+  <xacro:lr_wheel name="right_wheel" x="0"              y="${-wheel_dist}"/>
+  <xacro:fb_wheel name="front_wheel" x="${ wheel_dist}"  y="0"/>
+  <xacro:fb_wheel name="back_wheel"  x="${-wheel_dist}"  y="0"/>
 
   <!-- ===== LiDAR link ===== -->
   <joint name="lidar_joint" type="fixed">
@@ -124,15 +154,16 @@
     </sensor>
   </gazebo>
 
-  <!-- ===== Gazebo diff-drive plugin（4輪）===== -->
+  <!-- ===== Gazebo diff-drive plugin（四輪全驅）===== -->
+  <!-- 左右輪主導差速；前輪歸左組、後輪歸右組，使轉向力矩對稱 -->
   <gazebo>
     <plugin filename="gz-sim-diff-drive-system"
             name="gz::sim::systems::DiffDrive">
-      <left_joint>front_left_wheel_joint</left_joint>
-      <left_joint>rear_left_wheel_joint</left_joint>
-      <right_joint>front_right_wheel_joint</right_joint>
-      <right_joint>rear_right_wheel_joint</right_joint>
-      <wheel_separation>${wheel_y * 2}</wheel_separation>
+      <left_joint>left_wheel_joint</left_joint>
+      <left_joint>front_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <right_joint>back_wheel_joint</right_joint>
+      <wheel_separation>${wheel_dist * 2}</wheel_separation>
       <wheel_radius>${wheel_radius}</wheel_radius>
       <topic>/cmd_vel</topic>
       <odom_topic>/odom</odom_topic>
@@ -142,9 +173,9 @@
   </gazebo>
 
   <!-- 四輪摩擦力設定 -->
-  <gazebo reference="front_left_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="front_right_wheel"> <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="rear_left_wheel">   <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="rear_right_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="left_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="right_wheel"> <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="front_wheel"> <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="back_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
 
 </robot>
