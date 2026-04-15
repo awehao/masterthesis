@@ -1,15 +1,13 @@
 <?xml version="1.0"?>
 <robot name="ammr_base" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- Properties：60cm 直徑圓形底盤 + 4 全向輪（四角落 mecanum 佈局）-->
-  <xacro:property name="base_radius"  value="0.30"/>   <!-- 60cm 直徑 -->
+  <!-- Properties：60cm 直徑圓形底盤 + 4 全向輪（十字形：前後左右）-->
+  <xacro:property name="base_radius"  value="0.30"/>
   <xacro:property name="base_height"  value="0.12"/>
   <xacro:property name="wheel_radius" value="0.08"/>
   <xacro:property name="wheel_width"  value="0.05"/>
-  <xacro:property name="wheel_x"      value="0.20"/>   <!-- 前後軸距 (m) -->
-  <xacro:property name="wheel_y"      value="0.20"/>   <!-- 左右輪距 (m) -->
+  <xacro:property name="wheel_dist"   value="0.26"/>   <!-- 輪心距底盤中心 -->
 
-  <!-- base_footprint -->
   <link name="base_footprint"/>
 
   <joint name="base_joint" type="fixed">
@@ -41,8 +39,8 @@
     </inertial>
   </link>
 
-  <!-- ===== 全向輪 macro（軸沿 Y，四角落）===== -->
-  <xacro:macro name="omni_wheel" params="name x y">
+  <!-- ===== 左/右輪 macro（軸沿 Y，圓面朝左/右）===== -->
+  <xacro:macro name="lr_wheel" params="name x y">
     <joint name="${name}_joint" type="continuous">
       <parent link="base_link"/>
       <child  link="${name}"/>
@@ -54,9 +52,7 @@
         <geometry>
           <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
         </geometry>
-        <material name="dark">
-          <color rgba="0.1 0.1 0.1 1.0"/>
-        </material>
+        <material name="dark"><color rgba="0.1 0.1 0.1 1.0"/></material>
       </visual>
       <collision>
         <geometry>
@@ -72,11 +68,40 @@
     </link>
   </xacro:macro>
 
-  <!-- 四個全向輪（四角落）-->
-  <xacro:omni_wheel name="front_left_wheel"  x="${ wheel_x}" y="${ wheel_y}"/>
-  <xacro:omni_wheel name="front_right_wheel" x="${ wheel_x}" y="${-wheel_y}"/>
-  <xacro:omni_wheel name="rear_left_wheel"   x="${-wheel_x}" y="${ wheel_y}"/>
-  <xacro:omni_wheel name="rear_right_wheel"  x="${-wheel_x}" y="${-wheel_y}"/>
+  <!-- ===== 前/後輪 macro（軸沿 X，圓面朝前/後）===== -->
+  <xacro:macro name="fb_wheel" params="name x y">
+    <joint name="${name}_joint" type="continuous">
+      <parent link="base_link"/>
+      <child  link="${name}"/>
+      <origin xyz="${x} ${y} ${-base_height/2}" rpy="0 ${pi/2} 0"/>
+      <axis xyz="0 0 1"/>
+    </joint>
+    <link name="${name}">
+      <visual>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+        <material name="dark"><color rgba="0.1 0.1 0.1 1.0"/></material>
+      </visual>
+      <collision>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.8"/>
+        <inertia ixx="0.002" ixy="0.0" ixz="0.0"
+                             iyy="0.002" iyz="0.0"
+                                         izz="0.003"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <!-- 十字形佈局：左右輪沿 Y 軸，前後輪沿 X 軸 -->
+  <xacro:lr_wheel name="left_wheel"  x="0"              y="${ wheel_dist}"/>
+  <xacro:lr_wheel name="right_wheel" x="0"              y="${-wheel_dist}"/>
+  <xacro:fb_wheel name="front_wheel" x="${ wheel_dist}"  y="0"/>
+  <xacro:fb_wheel name="back_wheel"  x="${-wheel_dist}"  y="0"/>
 
   <!-- ===== LiDAR link ===== -->
   <joint name="lidar_joint" type="fixed">
@@ -123,28 +148,50 @@
     </sensor>
   </gazebo>
 
-  <!-- ===== Gazebo Mecanum Drive plugin（全向驅動）===== -->
+  <!-- ===== 各輪獨立 Joint Velocity Controller ===== -->
   <gazebo>
-    <plugin filename="gz-sim-mecanum-drive-system"
-            name="gz::sim::systems::MecanumDrive">
-      <front_left_joint>front_left_wheel_joint</front_left_joint>
-      <front_right_joint>front_right_wheel_joint</front_right_joint>
-      <back_left_joint>rear_left_wheel_joint</back_left_joint>
-      <back_right_joint>rear_right_wheel_joint</back_right_joint>
-      <wheel_separation>${wheel_y * 2}</wheel_separation>
-      <wheelbase>${wheel_x * 2}</wheelbase>
-      <wheel_radius>${wheel_radius}</wheel_radius>
-      <topic>/cmd_vel</topic>
-      <odom_topic>/odom</odom_topic>
-      <frame_id>odom</frame_id>
-      <child_frame_id>base_footprint</child_frame_id>
+    <plugin filename="gz-sim-joint-controller-system"
+            name="gz::sim::systems::JointController">
+      <joint_name>left_wheel_joint</joint_name>
+      <topic>/gz/left_wheel_vel</topic>
+      <use_force_commands>false</use_force_commands>
+    </plugin>
+  </gazebo>
+  <gazebo>
+    <plugin filename="gz-sim-joint-controller-system"
+            name="gz::sim::systems::JointController">
+      <joint_name>right_wheel_joint</joint_name>
+      <topic>/gz/right_wheel_vel</topic>
+      <use_force_commands>false</use_force_commands>
+    </plugin>
+  </gazebo>
+  <gazebo>
+    <plugin filename="gz-sim-joint-controller-system"
+            name="gz::sim::systems::JointController">
+      <joint_name>front_wheel_joint</joint_name>
+      <topic>/gz/front_wheel_vel</topic>
+      <use_force_commands>false</use_force_commands>
+    </plugin>
+  </gazebo>
+  <gazebo>
+    <plugin filename="gz-sim-joint-controller-system"
+            name="gz::sim::systems::JointController">
+      <joint_name>back_wheel_joint</joint_name>
+      <topic>/gz/back_wheel_vel</topic>
+      <use_force_commands>false</use_force_commands>
     </plugin>
   </gazebo>
 
+  <!-- Joint state publisher（供 odometry 使用）-->
+  <gazebo>
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher"/>
+  </gazebo>
+
   <!-- 四輪摩擦力設定 -->
-  <gazebo reference="front_left_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="front_right_wheel"> <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="rear_left_wheel">   <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="rear_right_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="left_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="right_wheel"> <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="front_wheel"> <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="back_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
 
 </robot>
