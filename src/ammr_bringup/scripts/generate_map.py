@@ -150,8 +150,8 @@ def save_sdf(obstacles, path):
     sdf = f"""<?xml version="1.0"?>
 <sdf version="1.8">
   <world name="random_room">
-    <physics name="1ms" type="ignored">
-      <max_step_size>0.001</max_step_size>
+    <physics name="10ms" type="ignored">
+      <max_step_size>0.01</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
     <plugin filename="gz-sim-physics-system"          name="gz::sim::systems::Physics"/>
