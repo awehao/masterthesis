@@ -53,11 +53,41 @@ class OmniDriveController(Node):
         self._x   = 0.0
         self._y   = 0.0
         self._yaw = 0.0
-        self._last_t = self.get_clock().now()
+        self._last_t = None   # 等第一個 clock 才初始化
 
         # 20 Hz odometry timer
         self.create_timer(0.05, self._odom_cb)
+
+        # 訂閱 /clock，收到第一個就發布初始 TF 確保 odom frame 存在
+        from rosgraph_msgs.msg import Clock
+        self._clock_ready = False
+        self.create_subscription(Clock, '/clock', self._clock_cb, 1)
+
         self.get_logger().info('OmniDriveController started')
+
+    # ------------------------------------------------------------------
+    def _clock_cb(self, msg):
+        if not self._clock_ready:
+            self._clock_ready = True
+            self._last_t = self.get_clock().now()
+            self._publish_tf_odom()   # 立刻發布一次確保 odom frame 存在
+            self.get_logger().info('Clock received, odom TF initialized')
+
+    def _publish_tf_odom(self):
+        """發布目前位姿的 TF（odom → ammr_base/base_footprint）"""
+        q_z = math.sin(self._yaw / 2.0)
+        q_w = math.cos(self._yaw / 2.0)
+        stamp = self.get_clock().now().to_msg()
+        t = TransformStamped()
+        t.header.stamp    = stamp
+        t.header.frame_id = 'odom'
+        t.child_frame_id  = 'ammr_base/base_footprint'
+        t.transform.translation.x = self._x
+        t.transform.translation.y = self._y
+        t.transform.translation.z = 0.0
+        t.transform.rotation.z    = q_z
+        t.transform.rotation.w    = q_w
+        self.tf_br.sendTransform(t)
 
     # ------------------------------------------------------------------
     def _cmd_cb(self, msg: Twist):
@@ -85,7 +115,14 @@ class OmniDriveController(Node):
     # ------------------------------------------------------------------
     def _odom_cb(self):
         now = self.get_clock().now()
-        dt  = (now - self._last_t).nanoseconds * 1e-9
+        if self._last_t is None:
+            # clock 還沒來，用 wall time 暫時發布
+            self._last_t = now
+            self._publish_tf_odom()
+            return
+        dt = (now - self._last_t).nanoseconds * 1e-9
+        if dt <= 0.0:
+            return
         self._last_t = now
 
         # Dead-reckoning（世界座標系積分）
@@ -113,17 +150,7 @@ class OmniDriveController(Node):
         odom.twist.twist.angular.z   = self._wz
         self.odom_pub.publish(odom)
 
-        # TF: odom → ammr_base/base_footprint
-        t = TransformStamped()
-        t.header.stamp    = stamp
-        t.header.frame_id = 'odom'
-        t.child_frame_id  = 'ammr_base/base_footprint'
-        t.transform.translation.x = self._x
-        t.transform.translation.y = self._y
-        t.transform.translation.z = 0.0
-        t.transform.rotation.z    = q_z
-        t.transform.rotation.w    = q_w
-        self.tf_br.sendTransform(t)
+        self._publish_tf_odom()
 
 
 def main():
