@@ -130,6 +130,9 @@ local_costmap:
       always_send_full_costmap: true
 
 global_costmap:
+# global costmap 的 obstacle_layer 只做 raytrace 清除，不標記新障礙物
+# 這樣動態障礙物只出現在 local costmap，由 MPPI 負責迴避
+# NavFn 只看靜態地圖，不因動態障礙物重新規劃
   global_costmap:
     ros__parameters:
       use_sim_time: true
@@ -152,7 +155,7 @@ global_costmap:
           topic: /scan
           max_obstacle_height: 2.0
           clearing: true
-          marking: true
+          marking: false      # 不標記新障礙物，只做 raytrace 清除
           data_type: LaserScan
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
