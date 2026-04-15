@@ -32,7 +32,7 @@ def generate_launch_description():
             arguments=[
                 '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
                 '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
-                '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+                '/odom_raw@nav_msgs/msg/Odometry[gz.msgs.Odometry',
                 '/scan_raw@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
             ],
             output='screen',

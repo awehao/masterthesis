@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-訂閱 /odom，發布 odom -> ammr_base/base_footprint 的 TF。
-確保時間戳與 odom 完全一致，避免 AMCL Message Filter 掉包。
+訂閱 /odom_raw（直接從 Gazebo bridge），做兩件事：
+1. 發布 odom -> base_footprint 的 TF（覆蓋 Gazebo 的命名）
+2. Relay /odom_raw -> /odom（讓 Nav2 拿到正確的 odometry）
+
+原本讓 ros_gz_bridge 直接橋 /odom 會導致 bridge 自動發出
+odom -> ammr_base/base_footprint 的 TF，造成 TF 樹汙染。
+改由這個節點自己 relay，只發我們想要的 TF。
 """
 import rclpy
 from rclpy.node import Node
@@ -22,7 +27,8 @@ class OdomTfBroadcaster(Node):
         super().__init__('odom_tf_broadcaster')
         self.br = TransformBroadcaster(self)
         self._last_stamp = None
-        self.create_subscription(Odometry, '/odom', self.odom_cb, BEST_EFFORT_QOS)
+        self.odom_pub = self.create_publisher(Odometry, '/odom', BEST_EFFORT_QOS)
+        self.create_subscription(Odometry, '/odom_raw', self.odom_cb, BEST_EFFORT_QOS)
 
     def odom_cb(self, msg: Odometry):
         stamp = msg.header.stamp
@@ -34,6 +40,12 @@ class OdomTfBroadcaster(Node):
                 return
         self._last_stamp = stamp
 
+        # Relay odom message with corrected frame info
+        msg.header.frame_id = 'odom'
+        msg.child_frame_id = 'base_footprint'
+        self.odom_pub.publish(msg)
+
+        # Publish TF
         t = TransformStamped()
         t.header.stamp = stamp
         t.header.frame_id = 'odom'
