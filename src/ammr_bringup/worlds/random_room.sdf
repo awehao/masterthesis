@@ -815,5 +815,57 @@
         </visual>
       </link>
     </model>
+    <!-- 動態障礙物 1：左右來回移動 -->
+    <actor name="dynamic_obs_1">
+      <pose>0 -2 0.5 0 0 0</pose>
+      <link name="body">
+        <collision name="c">
+          <geometry><box><size>0.6 0.6 1.0</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.6 0.6 1.0</size></box></geometry>
+          <material>
+            <ambient>0.0 0.5 1.0 1</ambient>
+            <diffuse>0.0 0.5 1.0 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <script>
+        <loop>true</loop>
+        <auto_start>true</auto_start>
+        <trajectory id="0" type="__default__">
+          <waypoint><time>0</time><pose>-4 -2 0.5 0 0 0</pose></waypoint>
+          <waypoint><time>8</time><pose>4 -2 0.5 0 0 0</pose></waypoint>
+          <waypoint><time>16</time><pose>-4 -2 0.5 0 0 0</pose></waypoint>
+        </trajectory>
+      </script>
+    </actor>
+
+    <!-- 動態障礙物 2：上下來回移動 -->
+    <actor name="dynamic_obs_2">
+      <pose>2 0 0.5 0 0 0</pose>
+      <link name="body">
+        <collision name="c">
+          <geometry><box><size>0.6 0.6 1.0</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.6 0.6 1.0</size></box></geometry>
+          <material>
+            <ambient>0.0 1.0 0.5 1</ambient>
+            <diffuse>0.0 1.0 0.5 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <script>
+        <loop>true</loop>
+        <auto_start>true</auto_start>
+        <trajectory id="0" type="__default__">
+          <waypoint><time>0</time><pose>2 -5 0.5 0 0 0</pose></waypoint>
+          <waypoint><time>8</time><pose>2 5 0.5 0 0 0</pose></waypoint>
+          <waypoint><time>16</time><pose>2 -5 0.5 0 0 0</pose></waypoint>
+        </trajectory>
+      </script>
+    </actor>
+
   </world>
 </sdf>
