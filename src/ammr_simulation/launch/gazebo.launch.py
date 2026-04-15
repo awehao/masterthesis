@@ -35,8 +35,8 @@ def generate_launch_description():
             arguments=[
                 '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
                 '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
-                '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
                 '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+                # /tf 不從 Gazebo bridge（Gazebo 的 world pose 會跟 omni_drive_controller 的 odom TF 衝突）
                 # 四輪速度（ROS → Gazebo JointController）
                 '/gz/left_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
                 '/gz/right_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
