@@ -25,6 +25,7 @@ setup(
             'map_publisher = ammr_bringup.map_publisher:main',
             'teleop = ammr_bringup.teleop:main',
             'odom_tf_broadcaster = ammr_bringup.odom_tf_broadcaster:main',
+            'scan_relay = ammr_bringup.scan_relay:main',
         ],
     },
 )

@@ -33,7 +33,7 @@ def generate_launch_description():
                 '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
                 '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
                 '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
-                '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+                '/scan_raw@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
             ],
             output='screen',
         ),
@@ -53,13 +53,11 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
         ),
 
-        # static TF: lidar_link -> ammr_base/base_footprint/lidar (zero offset)
-        # Gazebo forces scan frame_id = ammr_base/base_footprint/lidar
-        # this bridges it to lidar_link so scan transforms correctly through the URDF tree
+        # scan relay: Gazebo publishes /scan_raw with frame_id=ammr_base/base_footprint/lidar
+        # scan_relay republishes as /scan with frame_id=lidar_link
         Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            arguments=['0', '0', '0', '0', '0', '0', 'lidar_link', 'ammr_base/base_footprint/lidar'],
+            package='ammr_bringup',
+            executable='scan_relay',
             parameters=[{'use_sim_time': True}],
         ),
 
