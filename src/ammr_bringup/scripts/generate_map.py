@@ -21,6 +21,24 @@ WALL_H      = 1.2       # Gazebo 牆高度 (m)
 ORIGIN_X    = -W * RESOLUTION / 2  # -10.0
 ORIGIN_Y    = -H * RESOLUTION / 2  # -10.0
 
+# ===== 動態障礙物設定 =====
+# 每個障礙物：(顏色, [(x1,y1,t1), (x2,y2,t2), ...])
+# 座標會自動被限制在地圖範圍內
+# 速度約 = 距離 / 時間差（建議 0.3~0.6 m/s）
+_B = W * RESOLUTION / 2 - 2.0   # 安全邊界（離牆 2m）
+DYNAMIC_OBSTACLES = [
+    ('0.0 0.5 1.0 1', [(-_B*0.4, -_B*0.2, 0), (_B*0.4, -_B*0.2, 16), (-_B*0.4, -_B*0.2, 32)]),  # 藍：左右
+    ('0.0 1.0 0.5 1', [(_B*0.2, -_B*0.5, 0), (_B*0.2,  _B*0.5, 16), (_B*0.2, -_B*0.5, 32)]),    # 綠：上下
+    ('1.0 0.5 0.0 1', [(-_B*0.5, _B*0.3, 0), (_B*0.3, -_B*0.3, 20), (-_B*0.5, _B*0.3, 40)]),   # 橘：斜向
+    ('1.0 0.0 0.5 1', [(-_B*0.3, _B*0.5, 0), (_B*0.5,  _B*0.5, 16), (-_B*0.3, _B*0.5, 32)]),   # 粉：上方左右
+    ('0.8 0.8 0.0 1', [(-_B*0.6, -_B*0.4, 0), (-_B*0.6, _B*0.4, 16), (-_B*0.6, -_B*0.4, 32)]), # 黃：左側上下
+    ('0.5 0.0 1.0 1', [(_B*0.6, -_B*0.6, 0), (_B*0.6, _B*0.6, 16), (_B*0.6, -_B*0.6, 32)]),    # 紫：右側上下
+    ('0.0 0.8 0.8 1', [(-_B*0.7, -_B*0.6, 0), (_B*0.7, -_B*0.6, 16), (-_B*0.7, -_B*0.6, 32)]), # 青：下方左右
+    ('1.0 0.2 0.2 1', [(-_B*0.6, -_B*0.6, 0), (_B*0.6, _B*0.6, 20), (-_B*0.6, -_B*0.6, 40)]),  # 紅：對角
+    ('0.9 0.6 0.1 1', [(-_B*0.7, _B*0.7, 0), (_B*0.7, _B*0.7, 14), (-_B*0.7, _B*0.7, 28)]),    # 橙：上方
+    ('0.2 0.9 0.2 1', [(-_B*0.7, _B*0.6, 0), (_B*0.5, -_B*0.6, 18), (-_B*0.7, _B*0.6, 36)]),   # 草綠：斜反向
+]
+
 
 def px_to_world(px, py):
     """Pixel → Gazebo world coords（Y 軸翻轉）"""
@@ -113,6 +131,32 @@ def box_sdf(name, x, y, z, sx, sy, sz, ambient, diffuse):
     </model>"""
 
 
+def actor_sdf(name, color, waypoints):
+    wps = ''.join(
+        f'\n          <waypoint><time>{t}</time><pose>{x:.2f} {y:.2f} 0 0 0 0</pose></waypoint>'
+        for x, y, t in waypoints
+    )
+    return f"""
+    <actor name="{name}">
+      <pose>{waypoints[0][0]:.2f} {waypoints[0][1]:.2f} 0 0 0 0</pose>
+      <link name="body">
+        <collision name="c">
+          <geometry><box><size>0.6 0.6 1.2</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.6 0.6 1.2</size></box></geometry>
+          <material><ambient>{color}</ambient><diffuse>{color}</diffuse></material>
+        </visual>
+      </link>
+      <script>
+        <loop>true</loop>
+        <auto_start>true</auto_start>
+        <trajectory id="0" type="__default__">{wps}
+        </trajectory>
+      </script>
+    </actor>"""
+
+
 def save_sdf(obstacles, path):
     room = W * RESOLUTION   # 20.0
     wt   = WALL_PX * RESOLUTION  # wall thickness in meters
@@ -146,6 +190,10 @@ def save_sdf(obstacles, path):
     oc = '0.8 0.2 0.2 1'
     for i, (cx, cy, sw, sh) in enumerate(obstacles):
         models += box_sdf(f'obs_{i}', cx, cy, WALL_H/2, sw, sh, WALL_H, oc, oc)
+
+    # 動態障礙物
+    for i, (color, waypoints) in enumerate(DYNAMIC_OBSTACLES):
+        models += actor_sdf(f'dynamic_obs_{i+1}', color, waypoints)
 
     sdf = f"""<?xml version="1.0"?>
 <sdf version="1.8">
