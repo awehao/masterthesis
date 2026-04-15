@@ -38,4 +38,14 @@ def generate_launch_description():
         )]
     )
 
-    return LaunchDescription([gazebo, nav2, rviz])
+    # 自動發送目標點 (8.5, 8.5)，延遲 15 秒等 Nav2 完全啟動
+    send_goal = TimerAction(
+        period=15.0,
+        actions=[Node(
+            package='ammr_bringup',
+            executable='send_goal',
+            parameters=[{'use_sim_time': True}],
+        )]
+    )
+
+    return LaunchDescription([gazebo, nav2, rviz, send_goal])
