@@ -31,7 +31,7 @@ WHEEL_RADIUS = 0.08   # 輪半徑 (m)
 class OmniDriveController(Node):
     def __init__(self):
         super().__init__('omni_drive_controller')
-        self.declare_parameter('use_sim_time', True)
+        # use_sim_time 由 launch 透過 parameters 傳入，不在此重複 declare
 
         # 發布各輪速度到 Gazebo JointController
         self.pub_left  = self.create_publisher(Float64, '/gz/left_wheel_vel',  10)
