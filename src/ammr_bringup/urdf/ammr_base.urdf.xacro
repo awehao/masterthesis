@@ -188,10 +188,27 @@
             name="gz::sim::systems::JointStatePublisher"/>
   </gazebo>
 
-  <!-- 四輪摩擦力設定 -->
-  <gazebo reference="left_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="right_wheel"> <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="front_wheel"> <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
-  <gazebo reference="back_wheel">  <mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <!-- 四輪摩擦力設定
+       mu1 = 主驅動方向摩擦（高，提供推力）
+       mu2 = 側向摩擦（0，模擬全向輪滾子可自由滑動）
+       fdir1 = 指定 mu1 方向（世界座標）
+       左右輪驅動方向：X (1 0 0)
+       前後輪驅動方向：Y (0 1 0) -->
+  <gazebo reference="left_wheel">
+    <mu1>1.0</mu1><mu2>0.0</mu2>
+    <fdir1>1 0 0</fdir1>
+  </gazebo>
+  <gazebo reference="right_wheel">
+    <mu1>1.0</mu1><mu2>0.0</mu2>
+    <fdir1>1 0 0</fdir1>
+  </gazebo>
+  <gazebo reference="front_wheel">
+    <mu1>1.0</mu1><mu2>0.0</mu2>
+    <fdir1>0 1 0</fdir1>
+  </gazebo>
+  <gazebo reference="back_wheel">
+    <mu1>1.0</mu1><mu2>0.0</mu2>
+    <fdir1>0 1 0</fdir1>
+  </gazebo>
 
 </robot>
