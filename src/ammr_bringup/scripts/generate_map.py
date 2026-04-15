@@ -132,17 +132,15 @@ def box_sdf(name, x, y, z, sx, sy, sz, ambient, diffuse):
 
 
 def dynamic_model_sdf(name, color, waypoints):
+    wps = ''.join(
+        f'\n          <waypoint><time>{t}</time><pose>{x:.2f} {y:.2f} 0 0 0 0</pose></waypoint>'
+        for x, y, t in waypoints
+    )
     x0, y0 = waypoints[0][0], waypoints[0][1]
     return f"""
-    <model name="{name}">
-      <static>false</static>
-      <pose>{x0:.2f} {y0:.2f} 0.6 0 0 0</pose>
+    <actor name="{name}">
+      <pose>{x0:.2f} {y0:.2f} 0 0 0 0</pose>
       <link name="body">
-        <gravity>false</gravity>
-        <inertial>
-          <mass>100.0</mass>
-          <inertia><ixx>1</ixx><iyy>1</iyy><izz>1</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
-        </inertial>
         <collision name="c">
           <geometry><box><size>0.6 0.6 1.2</size></box></geometry>
         </collision>
@@ -151,7 +149,13 @@ def dynamic_model_sdf(name, color, waypoints):
           <material><ambient>{color}</ambient><diffuse>{color}</diffuse></material>
         </visual>
       </link>
-    </model>"""
+      <script>
+        <loop>true</loop>
+        <auto_start>true</auto_start>
+        <trajectory id="0" type="__default__">{wps}
+        </trajectory>
+      </script>
+    </actor>"""
 
 
 def save_sdf(obstacles, path):
