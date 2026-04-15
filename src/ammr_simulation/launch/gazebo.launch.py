@@ -53,12 +53,13 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
         ),
 
-        # static TF: base_footprint -> ammr_base/base_footprint/lidar
-        # Gazebo names the scan frame as <model>/<link>/<sensor>, so we bridge it here
+        # Bridge: ammr_base/base_footprint (Gazebo) -> base_footprint (URDF)
+        # Connects robot_state_publisher's kinematic tree to the Nav2/Gazebo tree
+        # Gazebo already publishes ammr_base/base_footprint -> ammr_base/base_footprint/lidar
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0', '0', '0.19', '0', '0', '0', 'base_footprint', 'ammr_base/base_footprint/lidar'],
+            arguments=['0', '0', '0', '0', '0', '0', 'ammr_base/base_footprint', 'base_footprint'],
             parameters=[{'use_sim_time': True}],
         ),
 
