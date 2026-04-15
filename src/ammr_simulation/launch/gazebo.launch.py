@@ -12,7 +12,6 @@ def generate_launch_description():
     pkg = get_package_share_directory('ammr_bringup')
     world_file = os.path.join(pkg, 'worlds', 'random_room.sdf')
     urdf_file  = os.path.join(pkg, 'urdf', 'ammr_base.urdf.xacro')
-    map_file   = os.path.join(pkg, 'maps', 'random_room.yaml')
 
     robot_description = ParameterValue(
         Command(['xacro ', urdf_file]), value_type=str
@@ -45,13 +44,6 @@ def generate_launch_description():
             executable='robot_state_publisher',
             parameters=[{'robot_description': robot_description,
                          'use_sim_time': True}],
-        ),
-
-        # 4. 地圖發布
-        Node(
-            package='ammr_bringup',
-            executable='map_publisher',
-            arguments=[map_file],
         ),
 
         # odom -> ammr_base/base_footprint TF（從 /odom 發布，確保時間戳一致）
