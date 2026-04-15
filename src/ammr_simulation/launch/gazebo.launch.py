@@ -26,22 +26,16 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # 2. ROS2 <-> Gazebo bridge
-        #    /odom 由 omni_drive_controller 自行計算並發布，不從 Gazebo bridge
-        #    四輪速度指令：ROS Float64 → gz msgs Double
+        # 2. ROS2 <-> Gazebo bridge（tf、clock、cmd_vel、odom）
         Node(
             package='ros_gz_bridge',
             executable='parameter_bridge',
             arguments=[
                 '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
                 '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
+                '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+                '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
                 '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
-                # /tf 不從 Gazebo bridge（Gazebo 的 world pose 會跟 omni_drive_controller 的 odom TF 衝突）
-                # 四輪速度（ROS → Gazebo JointController）
-                '/gz/left_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
-                '/gz/right_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
-                '/gz/front_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
-                '/gz/back_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
             ],
             output='screen',
         ),
@@ -61,24 +55,22 @@ def generate_launch_description():
             arguments=[map_file],
         ),
 
-        # 5. 全向輪 Omni Drive Controller（cmd_vel → 四輪速度 + /odom + TF）
+        # odom -> ammr_base/base_footprint TF
         Node(
             package='ammr_bringup',
-            executable='omni_drive_controller',
+            executable='odom_tf_broadcaster',
             parameters=[{'use_sim_time': True}],
-            output='screen',
         ),
 
         # static TF: ammr_base/base_footprint -> ammr_base/base_footprint/lidar
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0', '0', '0.19', '0', '0', '0',
-                       'ammr_base/base_footprint', 'ammr_base/base_footprint/lidar'],
+            arguments=['0', '0', '0.19', '0', '0', '0', 'ammr_base/base_footprint', 'ammr_base/base_footprint/lidar'],
             parameters=[{'use_sim_time': True}],
         ),
 
-        # 6. Spawn robot（延遲 3 秒等 Gazebo 啟動）
+        # 5. Spawn robot（延遲 3 秒等 Gazebo 啟動）
         TimerAction(
             period=3.0,
             actions=[Node(
