@@ -18,8 +18,10 @@ W, H        = 400 , 400  # pixels → 20m x 20m（400*400
 WALL_PX     = 4         # 外牆厚度 (pixels)
 N_OBSTACLES = 45        # 障礙物數量
 WALL_H      = 1.2       # Gazebo 牆高度 (m)
-ORIGIN_X    = -W * RESOLUTION / 2  # -10.0
-ORIGIN_Y    = -H * RESOLUTION / 2  # -10.0
+ORIGIN_X    = 0.0   # bottom-left corner = (0, 0)
+ORIGIN_Y    = 0.0   # bottom-left corner = (0, 0)
+SPAWN_X     = 1.5   # robot spawn world X
+SPAWN_Y     = 1.5   # robot spawn world Y
 
 
 def px_to_world(px, py):
@@ -51,12 +53,12 @@ def generate():
             px = random.randint(margin, W - pw - margin)
             py = random.randint(margin, H - ph - margin)
 
-            # 確保不會蓋到起點（中心附近）
+            # 確保不會蓋到起點（左下角附近）
             cx_px = px + pw // 2
             cy_px = py + ph // 2
-            center_px = W // 2
-            center_py = H // 2
-            if abs(cx_px - center_px) < 40 and abs(cy_px - center_py) < 40:
+            spawn_px = int(SPAWN_X / RESOLUTION)          # 30
+            spawn_py = int(H - SPAWN_Y / RESOLUTION)      # 370
+            if abs(cx_px - spawn_px) < 40 and abs(cy_px - spawn_py) < 40:
                 continue
 
             img[py:py+ph, px:px+pw] = 0
@@ -134,13 +136,13 @@ def save_sdf(obstacles, path):
       </link>
     </model>"""
 
-    # 外牆
+    # 外牆（座標原點在左下角，範圍 0..20）
     wc = '1.0 1.0 1.0 1'
     half = room / 2
-    models += box_sdf('wall_north',  0,     half,  WALL_H/2, room, wt,   WALL_H, wc, wc)
-    models += box_sdf('wall_south',  0,    -half,  WALL_H/2, room, wt,   WALL_H, wc, wc)
-    models += box_sdf('wall_east',   half,  0,     WALL_H/2, wt,   room, WALL_H, wc, wc)
-    models += box_sdf('wall_west',  -half,  0,     WALL_H/2, wt,   room, WALL_H, wc, wc)
+    models += box_sdf('wall_north',  half,  room,  WALL_H/2, room, wt,   WALL_H, wc, wc)
+    models += box_sdf('wall_south',  half,  0,     WALL_H/2, room, wt,   WALL_H, wc, wc)
+    models += box_sdf('wall_east',   room,  half,  WALL_H/2, wt,   room, WALL_H, wc, wc)
+    models += box_sdf('wall_west',   0,     half,  WALL_H/2, wt,   room, WALL_H, wc, wc)
 
     # 障礙物（紅色）
     oc = '0.8 0.2 0.2 1'
