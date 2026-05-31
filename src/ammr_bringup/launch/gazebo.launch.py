@@ -26,7 +26,7 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # 2. ROS2 <-> Gazebo bridge（tf、clock、cmd_vel、odom）
+        # 2. ROS2 <-> Gazebo bridge（clock、cmd_vel、odom、scan — /tf intentionally excluded）
         Node(
             package='ros_gz_bridge',
             executable='parameter_bridge',
@@ -34,7 +34,6 @@ def generate_launch_description():
                 '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
                 '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
                 '/odom_raw@nav_msgs/msg/Odometry[gz.msgs.Odometry',
-                '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
                 '/scan_raw@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
             ],
             output='screen',
@@ -62,11 +61,11 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
         ),
 
-        # static TF: ammr_base/base_footprint -> ammr_base/base_footprint/lidar
+        # static TF: base_link -> lidar_link (connects URDF chain to scan frame)
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0', '0', '0.19', '0', '0', '0', 'ammr_base/base_footprint', 'ammr_base/base_footprint/lidar'],
+            arguments=['0', '0', '0.19', '0', '0', '0', 'base_link', 'lidar_link'],
             parameters=[{'use_sim_time': True}],
         ),
 
