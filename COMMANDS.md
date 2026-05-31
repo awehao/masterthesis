@@ -9,6 +9,21 @@ source install/setup.bash
 
 ---
 
+## Foxglove 連線
+
+```bash
+# 安裝（只需要一次）
+sudo apt install ros-jazzy-foxglove-bridge
+
+# 每次啟動（另開 terminal）
+source /opt/ros/jazzy/setup.bash
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+```
+
+Foxglove → Open Connection → Foxglove WebSocket → `ws://localhost:8765`
+
+---
+
 ## Build
 
 ```bash
