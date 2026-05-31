@@ -69,9 +69,9 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
         ),
 
-        # 5. Spawn robot（延遲 3 秒等 Gazebo 啟動）
+        # 5. Spawn robot（延遲 6 秒等 Gazebo 啟動 + robot_description 就緒）
         TimerAction(
-            period=3.0,
+            period=6.0,
             actions=[Node(
                 package='ros_gz_sim',
                 executable='create',
