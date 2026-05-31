@@ -18,10 +18,10 @@ W, H        = 400 , 400  # pixels → 20m x 20m（400*400
 WALL_PX     = 4         # 外牆厚度 (pixels)
 N_OBSTACLES = 45        # 障礙物數量
 WALL_H      = 1.2       # Gazebo 牆高度 (m)
-ORIGIN_X    = -W * RESOLUTION / 2  # -10.0
-ORIGIN_Y    = -H * RESOLUTION / 2  # -10.0
-SPAWN_X     = -8.5  # robot spawn world X (1.5m from corner)
-SPAWN_Y     = -8.5  # robot spawn world Y (1.5m from corner)
+ORIGIN_X    = -1.5  # world(-1.5,-1.5) = map image bottom-left corner
+ORIGIN_Y    = -1.5  # spawn at (0,0) = map frame = 1.5m inside room
+SPAWN_X     = 0.0
+SPAWN_Y     = 0.0
 
 
 def px_to_world(px, py):
@@ -136,13 +136,14 @@ def save_sdf(obstacles, path):
       </link>
     </model>"""
 
-    # 外牆（房間以 world origin 為中心）
+    # 外牆（位置由 ORIGIN_X/Y 決定，自動對齊地圖）
     wc = '1.0 1.0 1.0 1'
-    half = room / 2
-    models += box_sdf('wall_north',  0,     half,  WALL_H/2, room, wt,   WALL_H, wc, wc)
-    models += box_sdf('wall_south',  0,    -half,  WALL_H/2, room, wt,   WALL_H, wc, wc)
-    models += box_sdf('wall_east',   half,  0,     WALL_H/2, wt,   room, WALL_H, wc, wc)
-    models += box_sdf('wall_west',  -half,  0,     WALL_H/2, wt,   room, WALL_H, wc, wc)
+    cx = ORIGIN_X + room / 2
+    cy = ORIGIN_Y + room / 2
+    models += box_sdf('wall_north',  cx,              ORIGIN_Y + room, WALL_H/2, room, wt,   WALL_H, wc, wc)
+    models += box_sdf('wall_south',  cx,              ORIGIN_Y,        WALL_H/2, room, wt,   WALL_H, wc, wc)
+    models += box_sdf('wall_east',   ORIGIN_X + room, cy,              WALL_H/2, wt,   room, WALL_H, wc, wc)
+    models += box_sdf('wall_west',   ORIGIN_X,        cy,              WALL_H/2, wt,   room, WALL_H, wc, wc)
 
     # 障礙物（紅色）
     oc = '0.8 0.2 0.2 1'
