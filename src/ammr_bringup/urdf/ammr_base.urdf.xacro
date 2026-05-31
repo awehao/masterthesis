@@ -6,7 +6,7 @@
   <xacro:property name="base_height"  value="0.12"/>
   <xacro:property name="wheel_radius" value="0.08"/>
   <xacro:property name="wheel_width"  value="0.04"/>
-  <xacro:property name="wheel_offset" value="0.22"/>  <!-- distance from center to wheel -->
+  <xacro:property name="wheel_offset" value="0.22"/>
 
   <!-- base_footprint (root, on ground) -->
   <link name="base_footprint">
@@ -45,7 +45,7 @@
     </inertial>
   </link>
 
-  <!-- ===== LEFT wheel (active, diff-drive) ===== -->
+  <!-- ===== LEFT wheel  (+Y, axis Y, rolls along X) ===== -->
   <joint name="left_wheel_joint" type="continuous">
     <parent link="base_link"/>
     <child  link="left_wheel"/>
@@ -55,17 +55,11 @@
 
   <link name="left_wheel">
     <visual>
-      <geometry>
-        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
-      </geometry>
-      <material name="dark">
-        <color rgba="0.1 0.1 0.1 1.0"/>
-      </material>
+      <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      <material name="dark"><color rgba="0.1 0.1 0.1 1.0"/></material>
     </visual>
     <collision>
-      <geometry>
-        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
-      </geometry>
+      <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
     </collision>
     <inertial>
       <mass value="0.5"/>
@@ -75,7 +69,7 @@
     </inertial>
   </link>
 
-  <!-- ===== RIGHT wheel (active, diff-drive) ===== -->
+  <!-- ===== RIGHT wheel (-Y, axis Y, rolls along X) ===== -->
   <joint name="right_wheel_joint" type="continuous">
     <parent link="base_link"/>
     <child  link="right_wheel"/>
@@ -85,15 +79,11 @@
 
   <link name="right_wheel">
     <visual>
-      <geometry>
-        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
-      </geometry>
+      <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
       <material name="dark"/>
     </visual>
     <collision>
-      <geometry>
-        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
-      </geometry>
+      <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
     </collision>
     <inertial>
       <mass value="0.5"/>
@@ -103,59 +93,51 @@
     </inertial>
   </link>
 
-  <!-- ===== FRONT caster (passive) ===== -->
-  <joint name="front_caster_joint" type="fixed">
+  <!-- ===== FRONT wheel (+X, axis X, rolls along Y) ===== -->
+  <joint name="front_wheel_joint" type="continuous">
     <parent link="base_link"/>
-    <child  link="front_caster"/>
-    <origin xyz="${wheel_offset} 0 ${-base_height/2 - wheel_radius/2}" rpy="0 0 0"/>
+    <child  link="front_wheel"/>
+    <origin xyz="${wheel_offset} 0 ${-base_height/2}" rpy="0 ${-pi/2} 0"/>
+    <axis xyz="0 0 1"/>
   </joint>
 
-  <link name="front_caster">
+  <link name="front_wheel">
     <visual>
-      <geometry>
-        <sphere radius="${wheel_radius/2}"/>
-      </geometry>
-      <material name="grey">
-        <color rgba="0.5 0.5 0.5 1.0"/>
-      </material>
+      <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      <material name="dark"/>
     </visual>
     <collision>
-      <geometry>
-        <sphere radius="${wheel_radius/2}"/>
-      </geometry>
+      <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
     </collision>
     <inertial>
-      <mass value="0.1"/>
-      <inertia ixx="0.0001" ixy="0.0" ixz="0.0"
-                            iyy="0.0001" iyz="0.0"
-                                         izz="0.0001"/>
+      <mass value="0.5"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0"
+                           iyy="0.001" iyz="0.0"
+                                       izz="0.002"/>
     </inertial>
   </link>
 
-  <!-- ===== BACK caster (passive) ===== -->
-  <joint name="back_caster_joint" type="fixed">
+  <!-- ===== BACK wheel (-X, axis X, rolls along Y) ===== -->
+  <joint name="back_wheel_joint" type="continuous">
     <parent link="base_link"/>
-    <child  link="back_caster"/>
-    <origin xyz="${-wheel_offset} 0 ${-base_height/2 - wheel_radius/2}" rpy="0 0 0"/>
+    <child  link="back_wheel"/>
+    <origin xyz="${-wheel_offset} 0 ${-base_height/2}" rpy="0 ${-pi/2} 0"/>
+    <axis xyz="0 0 1"/>
   </joint>
 
-  <link name="back_caster">
+  <link name="back_wheel">
     <visual>
-      <geometry>
-        <sphere radius="${wheel_radius/2}"/>
-      </geometry>
-      <material name="grey"/>
+      <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      <material name="dark"/>
     </visual>
     <collision>
-      <geometry>
-        <sphere radius="${wheel_radius/2}"/>
-      </geometry>
+      <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
     </collision>
     <inertial>
-      <mass value="0.1"/>
-      <inertia ixx="0.0001" ixy="0.0" ixz="0.0"
-                            iyy="0.0001" iyz="0.0"
-                                         izz="0.0001"/>
+      <mass value="0.5"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0"
+                           iyy="0.001" iyz="0.0"
+                                       izz="0.002"/>
     </inertial>
   </link>
 
@@ -204,29 +186,63 @@
     </sensor>
   </gazebo>
 
-  <!-- ===== Gazebo diff-drive plugin ===== -->
+  <!-- ===== Base velocity control (omni: applies Twist directly to base) =====
+       Approximates omni-wheel motion by directly driving the base velocity.
+       Wheel friction is set to zero so spinning wheels don't fight base motion.
+  -->
   <gazebo>
-    <plugin filename="gz-sim-diff-drive-system"
-            name="gz::sim::systems::DiffDrive">
-      <left_joint>left_wheel_joint</left_joint>
-      <right_joint>right_wheel_joint</right_joint>
-      <wheel_separation>${wheel_offset * 2}</wheel_separation>
-      <wheel_radius>${wheel_radius}</wheel_radius>
+    <plugin filename="gz-sim-velocity-control-system"
+            name="gz::sim::systems::VelocityControl">
       <topic>/cmd_vel</topic>
-      <odom_topic>/odom_raw</odom_topic>
-      <frame_id>odom</frame_id>
-      <child_frame_id>base_footprint</child_frame_id>
     </plugin>
   </gazebo>
 
-  <!-- Gazebo: zero friction for casters -->
-  <gazebo reference="front_caster">
-    <mu1>0.0</mu1>
-    <mu2>0.0</mu2>
+  <!-- ===== Per-wheel velocity controllers (visual spinning) ===== -->
+  <gazebo>
+    <plugin filename="gz-sim-joint-controller-system"
+            name="gz::sim::systems::JointController">
+      <joint_name>left_wheel_joint</joint_name>
+      <topic>/gz/left_wheel_vel</topic>
+      <use_force_commands>false</use_force_commands>
+    </plugin>
   </gazebo>
-  <gazebo reference="back_caster">
-    <mu1>0.0</mu1>
-    <mu2>0.0</mu2>
+  <gazebo>
+    <plugin filename="gz-sim-joint-controller-system"
+            name="gz::sim::systems::JointController">
+      <joint_name>right_wheel_joint</joint_name>
+      <topic>/gz/right_wheel_vel</topic>
+      <use_force_commands>false</use_force_commands>
+    </plugin>
+  </gazebo>
+  <gazebo>
+    <plugin filename="gz-sim-joint-controller-system"
+            name="gz::sim::systems::JointController">
+      <joint_name>front_wheel_joint</joint_name>
+      <topic>/gz/front_wheel_vel</topic>
+      <use_force_commands>false</use_force_commands>
+    </plugin>
+  </gazebo>
+  <gazebo>
+    <plugin filename="gz-sim-joint-controller-system"
+            name="gz::sim::systems::JointController">
+      <joint_name>back_wheel_joint</joint_name>
+      <topic>/gz/back_wheel_vel</topic>
+      <use_force_commands>false</use_force_commands>
+    </plugin>
+  </gazebo>
+
+  <!-- Zero wheel friction: base motion comes from VelocityControl, not wheel torque -->
+  <gazebo reference="left_wheel">
+    <mu1>0.0</mu1><mu2>0.0</mu2>
+  </gazebo>
+  <gazebo reference="right_wheel">
+    <mu1>0.0</mu1><mu2>0.0</mu2>
+  </gazebo>
+  <gazebo reference="front_wheel">
+    <mu1>0.0</mu1><mu2>0.0</mu2>
+  </gazebo>
+  <gazebo reference="back_wheel">
+    <mu1>0.0</mu1><mu2>0.0</mu2>
   </gazebo>
 
 </robot>

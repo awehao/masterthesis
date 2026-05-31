@@ -26,15 +26,22 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # 2. ROS2 <-> Gazebo bridge（clock、cmd_vel、odom、scan — /tf intentionally excluded）
+        # 2. ROS2 <-> Gazebo bridge
+        #    - /cmd_vel        : ROS -> GZ (VelocityControl 接收)
+        #    - /scan_raw       : GZ -> ROS
+        #    - /clock          : GZ -> ROS
+        #    - /gz/*_wheel_vel : ROS -> GZ (JointController 接收 std_msgs/Float64 <-> gz.msgs.Double)
         Node(
             package='ros_gz_bridge',
             executable='parameter_bridge',
             arguments=[
                 '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
                 '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
-                '/odom_raw@nav_msgs/msg/Odometry[gz.msgs.Odometry',
                 '/scan_raw@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+                '/gz/left_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
+                '/gz/right_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
+                '/gz/front_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
+                '/gz/back_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
             ],
             output='screen',
         ),
@@ -54,11 +61,12 @@ def generate_launch_description():
             arguments=[map_file],
         ),
 
-        # odom -> ammr_base/base_footprint TF（從 /odom 發布，確保時間戳一致）
+        # Omni-drive controller：訂閱 /cmd_vel → 發布每輪速度 + /odom + TF
         Node(
             package='ammr_bringup',
-            executable='odom_tf_broadcaster',
+            executable='omni_drive_controller',
             parameters=[{'use_sim_time': True}],
+            output='screen',
         ),
 
         # static TF: base_link -> lidar_link (connects URDF chain to scan frame)

@@ -24,7 +24,7 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import Float64
 from tf2_ros import TransformBroadcaster
 
-WHEEL_DIST   = 0.26   # 輪心距底盤中心 (m)
+WHEEL_DIST   = 0.22   # 輪心距底盤中心 (m) — 必須與 URDF 的 wheel_offset 一致
 WHEEL_RADIUS = 0.08   # 輪半徑 (m)
 
 
@@ -74,14 +74,14 @@ class OmniDriveController(Node):
             self.get_logger().info('Clock received, odom TF initialized')
 
     def _publish_tf_odom(self):
-        """發布目前位姿的 TF（odom → ammr_base/base_footprint）"""
+        """發布目前位姿的 TF（odom → base_footprint）"""
         q_z = math.sin(self._yaw / 2.0)
         q_w = math.cos(self._yaw / 2.0)
         stamp = self.get_clock().now().to_msg()
         t = TransformStamped()
         t.header.stamp    = stamp
         t.header.frame_id = 'odom'
-        t.child_frame_id  = 'ammr_base/base_footprint'
+        t.child_frame_id  = 'base_footprint'
         t.transform.translation.x = self._x
         t.transform.translation.y = self._y
         t.transform.translation.z = 0.0
@@ -140,7 +140,7 @@ class OmniDriveController(Node):
         odom = Odometry()
         odom.header.stamp    = stamp
         odom.header.frame_id = 'odom'
-        odom.child_frame_id  = 'ammr_base/base_footprint'
+        odom.child_frame_id  = 'base_footprint'
         odom.pose.pose.position.x    = self._x
         odom.pose.pose.position.y    = self._y
         odom.pose.pose.orientation.z = q_z
