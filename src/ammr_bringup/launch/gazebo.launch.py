@@ -35,7 +35,7 @@ def generate_launch_description():
                 '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
                 '/odom_raw@nav_msgs/msg/Odometry[gz.msgs.Odometry',
                 '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
-                '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+                '/scan_raw@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
             ],
             output='screen',
         ),
@@ -83,6 +83,14 @@ def generate_launch_description():
                 ],
                 output='screen',
             )],
+        ),
+
+        # scan_raw → /scan relay（修正 frame_id 並統一 topic 名稱）
+        Node(
+            package='ammr_bringup',
+            executable='scan_relay',
+            parameters=[{'use_sim_time': True}],
+            output='screen',
         ),
 
     ])
