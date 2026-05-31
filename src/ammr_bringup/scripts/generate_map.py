@@ -121,10 +121,13 @@ def save_sdf(obstacles, path):
 
     models = ''
 
-    # 地板
+    # 地板（pose 對齊房間中心）
+    gx = ORIGIN_X + room / 2
+    gy = ORIGIN_Y + room / 2
     models += f"""
     <model name="ground_plane">
       <static>true</static>
+      <pose>{gx:.4f} {gy:.4f} 0 0 0 0</pose>
       <link name="link">
         <collision name="c">
           <geometry><plane><normal>0 0 1</normal><size>{room} {room}</size></plane></geometry>
