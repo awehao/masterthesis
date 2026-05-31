@@ -15,7 +15,7 @@ amcl:
     max_beams: 60
     max_particles: 5000
     min_particles: 1000
-    robot_model_type: nav2_amcl::DifferentialMotionModel
+    robot_model_type: nav2_amcl::OmniMotionModel   # FIX: was DifferentialMotionModel
     scan_topic: /scan
     tf_broadcast: true
     transform_tolerance: 3.0
@@ -50,7 +50,7 @@ controller_server:
     use_sim_time: true
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.5
+    min_y_velocity_threshold: 0.001   # FIX: was 0.5, effectively disabled vy progress detection
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugins: ["progress_checker"]
@@ -71,54 +71,60 @@ controller_server:
       model_dt: 0.05
       batch_size: 2000
       vx_std: 0.2
-      vy_std: 0.0
+      vy_std: 0.2                  # FIX: was 0.0 — must be >0 for Omni lateral sampling
       wz_std: 0.4
-      vx_max: 0.4
-      vx_min: -0.1
-      vy_max: 0.0
-      wz_max: 1.0
-      ax_max: 3.0
-      ax_min: -3.0
-      az_max: 3.2
+      vx_max: 0.35
+      vx_min: -0.20
+      vy_max: 0.25                 # FIX: was 0.0 — must be >0 for Omni lateral motion
+      wz_max: 0.8
+      ax_max: 1.5
+      ax_min: -1.5
+      ay_max: 1.0                  # FIX: added for Omni lateral acceleration limit
+      az_max: 2.0
       iteration_count: 1
       prune_distance: 1.7
       transform_tolerance: 2.0
       temperature: 0.3
       gamma: 0.015
-      motion_model: DiffDrive
+      motion_model: "Omni"         # FIX: was DiffDrive
       visualize: true
       critics:
+        - ConstraintCritic
+        - ObstaclesCritic
         - GoalCritic
         - GoalAngleCritic
-        - ObstaclesCritic
         - PathAlignCritic
         - PathFollowCritic
         - PathAngleCritic
-        - PreferForwardCritic
-      GoalCritic:
+        # PreferForwardCritic removed: penalises lateral motion, unsuitable for holonomic base
+      ConstraintCritic:
         enabled: true
-        cost_weight: 5.0
         cost_power: 1
-        threshold_to_consider: 1.4
-      GoalAngleCritic:
-        enabled: true
-        cost_weight: 3.0
-        cost_power: 1
-        threshold_to_consider: 0.4
+        cost_weight: 4.0
       ObstaclesCritic:
         enabled: true
-        cost_weight: 1.0
-        cost_power: 2
+        cost_power: 1
+        cost_weight: 2.0
         repulsion_weight: 1.5
         critical_weight: 20.0
         consider_footprint: false
         collision_cost: 10000.0
         collision_margin_distance: 0.15
         near_goal_distance: 0.5
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.4
       PathAlignCritic:
         enabled: true
-        cost_weight: 14.0
         cost_power: 1
+        cost_weight: 14.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 3
         threshold_to_consider: 0.4
@@ -126,23 +132,18 @@ controller_server:
         use_path_orientations: false
       PathFollowCritic:
         enabled: true
-        cost_weight: 5.0
         cost_power: 1
+        cost_weight: 5.0
         offset_from_furthest: 5
         threshold_to_consider: 1.4
       PathAngleCritic:
         enabled: true
-        cost_weight: 2.0
         cost_power: 1
+        cost_weight: 2.0
         offset_from_furthest: 4
         threshold_to_consider: 0.4
         max_angle_to_furthest: 1.0
         mode: 0
-      PreferForwardCritic:
-        enabled: true
-        cost_weight: 5.0
-        cost_power: 1
-        threshold_to_consider: 0.4
 
 local_costmap:
   local_costmap:
@@ -221,12 +222,25 @@ map_server:
 planner_server:
   ros__parameters:
     use_sim_time: true
+    expected_planner_frequency: 5.0
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: nav2_navfn_planner::NavfnPlanner
-      tolerance: 0.5
-      use_astar: true
+      plugin: "nav2_smac_planner::SmacPlanner2D"   # Stage 1+: holonomic 2D A*
+      tolerance: 0.125
+      downsample_costmap: false
+      downsampling_factor: 1
       allow_unknown: true
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      cost_travel_multiplier: 2.0
+      use_final_approach_orientation: false
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1.0e-10
+        do_refinement: true
 
 smoother_server:
   ros__parameters:
@@ -279,10 +293,10 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: OPEN_LOOP
-    max_velocity: [0.4, 0.0, 1.0]
-    min_velocity: [-0.4, 0.0, -1.0]
-    max_accel: [2.5, 0.0, 3.2]
-    max_decel: [-2.5, 0.0, -3.2]
+    max_velocity: [0.35,  0.25,  0.8]   # FIX: was [0.4, 0.0, 1.0] — vy=0 blocked all lateral motion
+    min_velocity: [-0.20, -0.25, -0.8]  # FIX: was [-0.4, 0.0, -1.0]
+    max_accel:    [1.5,   1.0,   2.0]   # FIX: was [2.5, 0.0, 3.2]
+    max_decel:    [-1.5,  -1.0,  -2.0]  # FIX: was [-2.5, 0.0, -3.2]
     odom_topic: /odom
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
