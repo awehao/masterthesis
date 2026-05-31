@@ -78,7 +78,7 @@ def generate_launch_description():
                 arguments=[
                     '-name', 'ammr_base',
                     '-topic', 'robot_description',
-                    '-x', '0', '-y', '0', '-z', '0.06',
+                    '-x', '0', '-y', '0', '-z', '0.14',
                 ],
                 output='screen',
             )],

@@ -8,16 +8,7 @@
   <xacro:property name="wheel_width"  value="0.04"/>
   <xacro:property name="wheel_offset" value="0.22"/>  <!-- distance from center to wheel -->
 
-  <!-- base_footprint -->
-  <link name="base_footprint"/>
-
-  <joint name="base_joint" type="fixed">
-    <parent link="base_footprint"/>
-    <child  link="base_link"/>
-    <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
-  </joint>
-
-  <!-- Body -->
+  <!-- Body (root link) -->
   <link name="base_link">
     <visual>
       <geometry>
@@ -39,6 +30,14 @@
                                       izz="0.22"/>
     </inertial>
   </link>
+
+  <!-- base_footprint (frame on ground, child of base_link) -->
+  <link name="base_footprint"/>
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="base_footprint"/>
+    <origin xyz="0 0 ${-(base_height/2 + wheel_radius)}" rpy="0 0 0"/>
+  </joint>
 
   <!-- ===== LEFT wheel (active, diff-drive) ===== -->
   <joint name="left_wheel_joint" type="continuous">
