@@ -7,8 +7,8 @@
 對每個障礙物：
   - 發布 /model/<name>/cmd_vel (geometry_msgs/Twist) → 經 ros_gz_bridge → Gazebo
     Gazebo 端的 VelocityControl plugin 直接把這個速度套用到 model pose
-  - 內部以相同 dt 積分維持 ground-truth pose
-    (因為 VelocityControl 是 kinematic，內部積分 ≡ GZ 實際狀態)
+  - 訂閱 /model/<name>/pose (PoseStamped, 來自 GZ PosePublisher 經 bridge)
+    用真實位置作為控制依據與 ground truth，避免內部積分與 GZ spawn 時序錯位
 
 額外發布：
   - /dynamic_obstacles/ground_truth (PoseArray, map frame) — 給 Kalman Filter 對比評估用
@@ -17,10 +17,11 @@
 
 import math
 import yaml
+from functools import partial
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist, PoseArray, Pose
+from geometry_msgs.msg import Twist, PoseArray, Pose, PoseStamped, Point
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
 
@@ -53,13 +54,19 @@ class DynamicObstacleDriver(Node):
                 'speed' : float(d['speed']),
                 'radius': float(d['radius']),
                 'height': float(d['height']),
-                # internal state
+                # latest known pose（先用 start fallback，pose subscriber 收到後覆蓋）
                 'pos'        : [float(d['start'][0]), float(d['start'][1])],
+                'has_pose'   : False,
                 'target_idx' : 1,   # 1 = heading toward end, 0 = heading toward start
-                # publisher (Gazebo VelocityControl 預設訂閱 /model/<name>/cmd_vel)
+                # publisher: VelocityControl 預設訂閱 /model/<name>/cmd_vel
                 'pub' : self.create_publisher(
                     Twist, f'/model/{d["name"]}/cmd_vel', 10),
             }
+            # subscriber: 從 GZ PosePublisher 取得真實位置（經 ros_gz_bridge）
+            ob['sub'] = self.create_subscription(
+                PoseStamped, f'/model/{d["name"]}/pose',
+                partial(self._pose_cb, ob), 10,
+            )
             self.obstacles.append(ob)
             self.get_logger().info(
                 f'Loaded {ob["name"]}: {ob["start"]} <-> {ob["end"]} '
@@ -82,12 +89,14 @@ class DynamicObstacleDriver(Node):
             f'{RATE_HZ:.0f} Hz)')
 
     # ------------------------------------------------------------------
+    def _pose_cb(self, ob, msg: PoseStamped):
+        ob['pos'][0]   = msg.pose.position.x
+        ob['pos'][1]   = msg.pose.position.y
+        ob['has_pose'] = True
+
+    # ------------------------------------------------------------------
     def _step(self):
         now = self.get_clock().now()
-        dt  = (now - self.last_t).nanoseconds * 1e-9
-        # clamp dt to handle sim_time jumps / first tick
-        if dt <= 0.0 or dt > 0.5:
-            dt = self.dt
         self.last_t = now
 
         stamp = now.to_msg()
@@ -117,17 +126,15 @@ class DynamicObstacleDriver(Node):
                 vx = 0.0
                 vy = 0.0
 
-            # 內部積分 ground truth
-            ob['pos'][0] += vx * dt
-            ob['pos'][1] += vy * dt
-
             # 發布 cmd_vel → Gazebo VelocityControl
             cmd = Twist()
             cmd.linear.x = vx
             cmd.linear.y = vy
             ob['pub'].publish(cmd)
 
-            # PoseArray (ground truth)
+            # Ground truth：直接用 Gazebo 回報的真實 pose（pose 還沒到時跳過該筆）
+            if not ob['has_pose']:
+                continue
             p = Pose()
             p.position.x    = ob['pos'][0]
             p.position.y    = ob['pos'][1]
@@ -162,7 +169,6 @@ class DynamicObstacleDriver(Node):
             arrow.scale.y = 0.10   # head diameter
             arrow.scale.z = 0.15   # head length
             arrow.color   = ColorRGBA(r=1.0, g=0.6, b=0.0, a=1.0)
-            from geometry_msgs.msg import Point
             tip = Point(x=ob['pos'][0] + vx,
                         y=ob['pos'][1] + vy,
                         z=ob['height'])

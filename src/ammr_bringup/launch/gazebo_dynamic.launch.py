@@ -50,11 +50,16 @@ def generate_launch_description():
         '/gz/back_wheel_vel@std_msgs/msg/Float64]gz.msgs.Double',
     ]
 
-    # 動態障礙物 bridge：ROS → GZ cmd_vel
+    # 動態障礙物 bridge：
+    #   ROS → GZ cmd_vel (Twist) ：driver 命令 VelocityControl 改變圓柱速度
+    #   GZ → ROS pose (PoseStamped) ：driver 取得真實位置 + 給 KF 評估 ground truth
     dyn_names = _load_dyn_names(traj_file)
     for name in dyn_names:
         bridge_args.append(
             f'/model/{name}/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist'
+        )
+        bridge_args.append(
+            f'/model/{name}/pose@geometry_msgs/msg/PoseStamped[gz.msgs.Pose'
         )
 
     return LaunchDescription([
