@@ -1,0 +1,828 @@
+# 純底盤階段性研究計畫
+
+## Four-Wheel Omni Chassis Navigation and GMPC-CBF Roadmap
+
+## 研究主軸
+
+本階段先聚焦於四輪十字型 Omni-wheel 全向底盤，不納入機械臂與 Whole-body MPC。研究目標是先建立正確的 holonomic 底盤模型與 Nav2 baseline，接著發展 SE(2) 幾何模型預測控制，最後結合 CBF 與動態障礙物預測，完成純底盤的安全預測導航控制。
+
+整體路線如下：
+
+```text
+四輪 Omni 底盤模型修正
+        ↓
+Nav2 Holonomic Baseline
+        ↓
+SmacPlanner2D + MPPI Omni
+        ↓
+SE(2) GMPC 軌跡追蹤
+        ↓
+CBF Safety Filter
+        ↓
+Kalman Filter 動態障礙物預測
+        ↓
+GMPC-CBF 動態避障導航
+        ↓
+與 MPPI Omni 量化比較
+```
+
+---
+
+# Phase 0：四輪 Omni 底盤模型修正
+
+## 目標
+
+確認系統不再使用差速底盤模型，而是採用四輪 Omni 全向底盤模型。
+
+原本錯誤假設：
+
+```text
+Differential Drive
+u = [vx, wz]
+vy = 0
+```
+
+正確模型：
+
+```text
+Holonomic Omni Base
+u = [vx, vy, wz]
+```
+
+其中：
+
+```text
+vx：車體 x 方向速度，前後移動
+vy：車體 y 方向速度，左右平移
+wz：車體 z 軸角速度，原地旋轉
+```
+
+底盤運動模型：
+
+```text
+x_dot = vx cos(theta) - vy sin(theta)
+y_dot = vx sin(theta) + vy cos(theta)
+theta_dot = wz
+```
+
+## 目前需要修正的問題
+
+原本 Nav2 設定中有幾個地方會讓 Omni 底盤無法側移：
+
+```text
+1. MPPI motion_model 使用 DiffDrive
+2. MPPI vy_max = 0
+3. MPPI vy_std = 0
+4. velocity_smoother 的 y 方向速度上限為 0
+5. AMCL 使用 DifferentialMotionModel
+6. min_y_velocity_threshold 設太大
+```
+
+因此即使底盤硬體支援側移，Nav2 仍然不會輸出或保留 `linear.y`。這些問題在你目前設定檔檢查中已經被指出，尤其是 `velocity_smoother.max_velocity` 把 y 方向設成 0，會直接把 MPPI 輸出的 `vy` 截斷。
+
+## 驗證項目
+
+### 1. 手動測試側移
+
+```bash
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
+"{linear: {x: 0.0, y: 0.15, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" \
+--rate 10
+```
+
+觀察：
+
+```text
+車子是否純側移？
+方向是否正確？
+是否伴隨不正常旋轉？
+```
+
+### 2. 檢查 odometry
+
+```bash
+ros2 topic echo /odom | grep -A8 "twist:"
+```
+
+確認：
+
+```text
+linear.x 有值
+linear.y 有值
+angular.z 有值
+```
+
+### 3. 檢查 velocity smoother
+
+```bash
+ros2 topic echo /cmd_vel_nav
+ros2 topic echo /cmd_vel
+```
+
+確認：
+
+```text
+/cmd_vel_nav 有 linear.y
+/cmd_vel 也保留 linear.y
+```
+
+## Phase 0 產出
+
+```text
+1. 四輪 Omni 底盤配置圖
+2. cmd_vel linear.y 測試影片
+3. odom linear.y 驗證截圖
+4. DiffDrive 與 Omni model 差異說明
+5. 修正後 holonomic model 說明
+```
+
+---
+
+# Phase 1：建立 Nav2 Holonomic Baseline
+
+## 目標
+
+建立符合四輪 Omni 底盤的 Nav2 baseline。
+
+保留原 baseline：
+
+```text
+Baseline A：NavFn + RPP
+用途：第一次進度報告延續，作為最低階基準
+```
+
+新增 Omni baseline：
+
+```text
+Baseline B：SmacPlanner2D + MPPI Omni
+用途：符合四輪 Omni 底盤，作為後續 GMPC-CBF 的比較基準
+```
+
+## 建議架構
+
+```text
+Map / Costmap
+        ↓
+SmacPlanner2D
+        ↓
+Global Path
+        ↓
+MPPI Controller, motion_model = Omni
+        ↓
+cmd_vel [vx, vy, wz]
+        ↓
+velocity_smoother
+        ↓
+Omni chassis
+```
+
+## Planner 選擇
+
+```text
+NavFn：
+可保留為基本 baseline。
+
+SmacPlanner2D：
+適合 2D holonomic global planning，建議作為主力 global planner。
+
+SmacPlannerHybrid：
+不建議。它主要適合 Ackermann 或 car-like robot，需要考慮 minimum turning radius，但四輪 Omni 底盤沒有這個限制。
+```
+
+## Controller 選擇
+
+```text
+RPP：
+可作為基本 baseline，但主要偏 vx + wz，不容易發揮 lateral motion。
+
+MPPI Omni：
+建議作為第二階段主力 baseline，可輸出 vx、vy、wz。
+
+自訂 GMPC-CBF：
+作為論文核心方法，在 MPPI Omni 穩定後再開始。
+```
+
+## Phase 1 測試
+
+```text
+Test 1：前進目標
+預期主要輸出 linear.x
+
+Test 2：側向目標
+預期 linear.y 明顯出現
+
+Test 3：斜向目標
+預期 linear.x 與 linear.y 同時出現
+
+Test 4：保持姿態平移
+預期底盤可以不大幅轉向，直接平移或斜移
+```
+
+## Phase 1 產出
+
+```text
+1. NavFn + RPP 導航結果
+2. SmacPlanner2D + MPPI Omni 導航結果
+3. /cmd_vel linear.x、linear.y、angular.z 曲線
+4. RPP vs MPPI Omni 路徑比較
+5. Omni 側移能力驗證
+```
+
+---
+
+# Phase 2：建立純底盤評估系統
+
+## 目標
+
+建立統一的量化評估方法，用來比較：
+
+```text
+NavFn + RPP
+SmacPlanner2D + MPPI Omni
+SE(2) GMPC
+GMPC-CBF
+```
+
+## 記錄 topic
+
+```bash
+ros2 bag record \
+/odom \
+/cmd_vel \
+/cmd_vel_nav \
+/plan \
+/scan \
+/tf
+```
+
+未來加入動態障礙物後，增加：
+
+```bash
+ros2 bag record \
+/obstacle_states \
+/predicted_obstacles \
+/obstacle_markers
+```
+
+## 評估指標
+
+```text
+1. Success Rate
+是否成功到達目標。
+
+2. Arrival Time
+從起點到目標點所需時間。
+
+3. Path Length
+實際行走距離。
+
+4. Tracking RMSE
+實際路徑與參考路徑的誤差。
+
+5. Minimum Obstacle Distance
+導航過程中與障礙物的最小距離。
+
+6. Collision Rate
+碰撞次數 / 總測試次數。
+
+7. Control Smoothness
+速度指令變化量。
+
+8. Jerk
+控制輸出的二階差分，用來評估震盪程度。
+
+9. Freeze Count
+機器人未到達目標，但速度長時間接近 0 的次數。
+
+10. Solve Time
+GMPC / CBF / QP solver 的求解時間。
+```
+
+## CSV 欄位建議
+
+```text
+method,
+scenario,
+seed,
+success,
+collision,
+arrival_time,
+path_length,
+tracking_rmse,
+min_obstacle_distance,
+smoothness,
+jerk,
+freeze_count,
+mean_solve_time,
+max_solve_time
+```
+
+## Phase 2 產出
+
+```text
+1. rosbag 記錄流程
+2. Python 分析腳本
+3. 自動產生 CSV
+4. 自動產生圖表
+5. baseline 指標表
+```
+
+---
+
+# Phase 3：SE(2) GMPC 純追蹤控制
+
+## 目標
+
+先實作無障礙物的 SE(2) Geometric MPC，用於四輪 Omni 底盤軌跡追蹤。
+
+這一階段不要加入 CBF，也不要加入動態障礙物。
+
+## 控制架構
+
+```text
+Reference Trajectory
+        ↓
+SE(2) Geometric Error
+        ↓
+QP-based GMPC
+        ↓
+cmd_vel [vx, vy, wz]
+        ↓
+Omni Chassis
+```
+
+## 狀態表示
+
+機器人姿態：
+
+```text
+X ∈ SE(2)
+```
+
+矩陣形式：
+
+```text
+X =
+[ R(theta)   p ]
+[    0       1 ]
+```
+
+其中：
+
+```text
+p = [x, y]^T
+R(theta) ∈ SO(2)
+```
+
+## 幾何誤差
+
+```text
+E = X_ref^{-1} X
+e = log(E)^vee
+```
+
+其中：
+
+```text
+e = [e_x, e_y, e_theta]^T
+```
+
+這種誤差定義比直接使用：
+
+```text
+[x - x_ref, y - y_ref, theta - theta_ref]
+```
+
+更適合處理姿態誤差與角度 wrap-around 問題。
+
+## 成本函數
+
+```text
+min Σ e_k^T Q e_k
+  + Σ u_k^T R u_k
+  + Σ Δu_k^T Rd Δu_k
+  + e_N^T Qf e_N
+```
+
+控制輸入：
+
+```text
+u = [vx, vy, wz]^T
+```
+
+## 約束
+
+```text
+vx_min ≤ vx ≤ vx_max
+vy_min ≤ vy ≤ vy_max
+wz_min ≤ wz ≤ wz_max
+
+ax_min ≤ Δvx / dt ≤ ax_max
+ay_min ≤ Δvy / dt ≤ ay_max
+aw_min ≤ Δwz / dt ≤ aw_max
+```
+
+## 建議實作順序
+
+```text
+Step 1：Python offline simulation
+先不接 ROS2，只測 GMPC 數學是否正確。
+
+Step 2：ROS2 standalone node
+subscribe /odom 與 /reference_trajectory，publish /cmd_vel。
+
+Step 3：接 Nav2 /plan
+將 global path resample 成 reference trajectory。
+
+Step 4：再考慮 Nav2 controller plugin
+不要一開始就寫 plugin，避免卡在 Nav2 lifecycle 與 controller interface。
+```
+
+## 測試項目
+
+```text
+1. 直線追蹤
+2. 側向追蹤
+3. 斜向追蹤
+4. S curve 追蹤
+5. yaw wrap-around 測試
+```
+
+## Phase 3 產出
+
+```text
+1. Python GMPC simulation
+2. ROS2 GMPC node
+3. GMPC vs MPPI Omni 無障礙比較
+4. Tracking RMSE
+5. Control smoothness
+6. Solve time
+```
+
+---
+
+# Phase 4：CBF Safety Filter
+
+## 目標
+
+先將 CBF 做成 safety filter，不直接整合進整個 MPC horizon。
+
+## 架構
+
+```text
+Nominal Controller
+MPPI Omni 或 GMPC
+        ↓
+u_nominal
+        ↓
+CBF Safety Filter
+        ↓
+u_safe
+        ↓
+Omni Chassis
+```
+
+## QP Safety Filter
+
+```text
+u_safe = argmin ||u - u_nominal||^2 + rho s^2
+```
+
+subject to：
+
+```text
+h_dot + gamma h + s ≥ 0
+s ≥ 0
+u_min ≤ u ≤ u_max
+```
+
+其中：
+
+```text
+s：slack variable，用來避免 QP infeasible
+rho：slack penalty
+```
+
+## 障礙物安全函數
+
+```text
+h(p, p_o) = ||p - p_o||^2 - d_safe^2
+```
+
+安全條件：
+
+```text
+h(p, p_o) ≥ 0
+```
+
+CBF 條件：
+
+```text
+h_dot + gamma h ≥ 0
+```
+
+## Phase 4 測試
+
+```text
+1. 單一靜態障礙物
+2. 障礙物靠近路徑邊緣
+3. 狹窄或不可行場景
+4. hard CBF vs soft CBF
+```
+
+## Phase 4 產出
+
+```text
+1. CBF safety filter node
+2. u_nominal vs u_safe 比較
+3. 安全半徑 visualization
+4. min obstacle distance 統計
+5. slack usage 統計
+```
+
+---
+
+# Phase 5：動態障礙物預測
+
+## 目標
+
+建立動態障礙物 tracking 與 prediction node。
+
+## 障礙物狀態
+
+```text
+x_o = [p_x, p_y, v_x, v_y]^T
+```
+
+Constant velocity model：
+
+```text
+p_x(k+1) = p_x(k) + v_x(k) dt
+p_y(k+1) = p_y(k) + v_y(k) dt
+v_x(k+1) = v_x(k)
+v_y(k+1) = v_y(k)
+```
+
+## Node 架構
+
+```text
+obstacle_tracking_node
+```
+
+Subscribe：
+
+```text
+/gazebo/model_states
+或
+/obstacle_detections
+```
+
+Publish：
+
+```text
+/obstacle_states
+/predicted_obstacles
+/obstacle_markers
+```
+
+## 預測設定
+
+```text
+prediction_time = 2.0 s
+dt = 0.1 s
+steps = 20
+```
+
+## RViz Marker
+
+```text
+目前位置：circle
+速度方向：arrow
+預測軌跡：line strip
+安全半徑：transparent circle
+```
+
+## 動態場景
+
+```text
+Scene 1：Crossing obstacle
+障礙物橫向穿越 robot path。
+
+Scene 2：Opposite-direction obstacle
+障礙物迎面接近 robot。
+
+Scene 3：Narrow passage obstacle
+障礙物在狹窄通道中移動。
+```
+
+## Phase 5 產出
+
+```text
+1. Gazebo 動態障礙物場景
+2. Kalman Filter tracking node
+3. predicted trajectory marker
+4. prediction error 統計
+5. 動態障礙物測試影片
+```
+
+---
+
+# Phase 6：GMPC-CBF 整合
+
+## 目標
+
+將 SE(2) GMPC、CBF safety constraint、動態障礙物預測整合成純底盤 dynamic navigation controller。
+
+## 第一版整合
+
+先做 cascaded version：
+
+```text
+GMPC output u_nominal
+        ↓
+CBF Safety Filter
+        ↓
+u_safe
+```
+
+這一版比較容易實作與 debug。
+
+## 第二版整合
+
+再做完整 horizon GMPC-CBF：
+
+```text
+min Σ e_k^T Q e_k
+  + Σ u_k^T R u_k
+  + Σ Δu_k^T Rd Δu_k
+  + Σ rho s_k^2
+```
+
+subject to：
+
+```text
+velocity limits
+acceleration limits
+CBF constraints
+slack constraints
+```
+
+## Phase 6 測試
+
+```text
+1. GMPC vs MPPI Omni
+無障礙物追蹤比較。
+
+2. GMPC-CBF vs MPPI Omni
+單一動態障礙物比較。
+
+3. 多動態障礙物測試
+2~5 個 moving obstacles。
+
+4. 擁擠場景
+測試 freezing、infeasibility、slack usage。
+```
+
+## Phase 6 產出
+
+```text
+1. GMPC-CBF ROS2 node
+2. 動態避障測試影片
+3. MPPI Omni vs GMPC-CBF 比較表
+4. collision rate
+5. minimum obstacle distance
+6. control smoothness
+7. solve time
+```
+
+---
+
+# Phase 7：Benchmark 實驗
+
+## 目標
+
+用相同地圖、相同 seed、相同障礙物設定，比較不同方法。
+
+## 比較方法
+
+```text
+Method A：NavFn + RPP
+Method B：SmacPlanner2D + MPPI Omni
+Method C：SmacPlanner2D + GMPC-CBF
+```
+
+## 測試場景
+
+```text
+1. Static random map
+2. Crossing obstacle
+3. Opposite-direction obstacle
+4. Narrow passage
+5. Crowded dynamic scene
+```
+
+## 實驗規模
+
+初期：
+
+```text
+3 scenarios × 5 seeds × 2 methods = 30 trials
+```
+
+正式論文：
+
+```text
+5 scenarios × 20 seeds × 3 methods = 300 trials
+```
+
+## 評估指標
+
+```text
+1. Success Rate
+2. Collision Rate
+3. Arrival Time
+4. Path Length
+5. Tracking RMSE
+6. Minimum Obstacle Distance
+7. Control Smoothness
+8. Jerk
+9. Freeze Count
+10. Solve Time
+11. CPU Usage
+```
+
+## Phase 7 產出
+
+```text
+1. benchmark script
+2. 統一測試場景
+3. 實驗結果 CSV
+4. 統計圖表
+5. 方法比較表
+```
+
+---
+
+# 近期實作順序
+
+目前先不要做完整 GMPC-CBF。近期請照這個順序：
+
+```text
+1. 確認手動 /cmd_vel.linear.y 是否有效
+2. 修正 velocity_smoother，讓 vy 不被截掉
+3. MPPI 設為 motion_model: Omni
+4. 建立 SmacPlanner2D + MPPI Omni launch
+5. 做四種簡單導航測試：
+   前進、側移、斜移、保持姿態平移
+6. 記錄 /cmd_vel、/odom、/plan
+7. 畫出 RPP vs MPPI Omni 的第一版比較圖
+8. 再開始規劃 SE(2) GMPC prototype
+```
+
+---
+
+# 第二次進度報告建議主軸
+
+建議題目：
+
+```text
+四輪 Omni 全向底盤之 Holonomic Navigation Baseline 與 SE(2) GMPC-CBF 控制規劃
+```
+
+## 簡報架構
+
+```text
+1. 第一次進度回顧
+2. 目前核心問題：原架構仍偏 DiffDrive
+3. 四輪 Omni 底盤模型
+4. Nav2 baseline 修正
+5. SmacPlanner2D + MPPI Omni 架構
+6. linear.y 與 odom 驗證方法
+7. RPP vs MPPI Omni 初步比較
+8. Proposed Method：SE(2) GMPC-CBF
+9. Benchmark 實驗設計
+10. 下一階段工作
+```
+
+---
+
+# 最終結論
+
+純底盤部分可以整理成三個層次：
+
+```text
+短期：
+修正四輪 Omni 底盤模型。
+完成 SmacPlanner2D + MPPI Omni baseline。
+確認 linear.y 能正確輸出與執行。
+
+中期：
+建立 SE(2) GMPC 軌跡追蹤控制器。
+加入 CBF safety filter。
+建立動態障礙物預測模組。
+
+長期：
+完成 GMPC-CBF 動態避障導航。
+與 MPPI Omni 進行量化比較。
+用結果支撐後續 Whole-body MPC 與受約束操作延伸。
+```

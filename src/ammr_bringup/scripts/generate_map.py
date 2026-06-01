@@ -3,6 +3,12 @@
 隨機地圖生成器 - 同時產生 PGM/YAML（Nav2 用）和 SDF（Gazebo 用）
 兩邊使用完全相同的障礙物資料，保證同步。
 
+輸出：
+  maps/random_room.pgm/.yaml   - Nav2 靜態地圖（只含靜態障礙物 + 牆）
+  worlds/random_room.sdf       - Gazebo 靜態世界（baseline 比較用）
+  worlds/random_room_dynamic.sdf       - Gazebo 動態世界（靜態 + 移動障礙物）
+  config/dynamic_trajectories.yaml     - 移動障礙物軌跡 (start/end/speed)
+
 Usage:
     python3 generate_map.py
 """
@@ -11,7 +17,7 @@ import random
 import yaml
 from pathlib import Path
 
-# ===== 設定 =====
+# ===== 靜態設定 =====
 SEED        = 20
 RESOLUTION  = 0.05   # m/pixel
 W, H        = 400 , 400  # pixels → 20m x 20m（400*400
@@ -22,6 +28,16 @@ ORIGIN_X    = -1.5  # world(-1.5,-1.5) = map image bottom-left corner
 ORIGIN_Y    = -1.5  # spawn at (0,0) = map frame = 1.5m inside room
 SPAWN_X     = 0.0
 SPAWN_Y     = 0.0
+
+# ===== 動態障礙物設定 =====
+N_DYNAMIC      = 3       # 動態障礙物數量
+DYN_RADIUS     = 0.25    # 圓柱半徑 (m)
+DYN_HEIGHT     = 1.0     # 圓柱高度 (m)
+DYN_SPEED      = 0.4     # 移動速度 (m/s)
+DYN_CLEAR_M    = 0.8     # 起點與終點需保留的淨空 (m)
+DYN_MIN_TRAJ_M = 2.5     # 最短軌跡長度 (m)
+DYN_MAX_TRAJ_M = 6.0     # 最長軌跡長度 (m)
+DYN_AVOID_SPAWN_M = 2.0  # 不可放置在距離 spawn 多近的範圍
 
 
 def px_to_world(px, py):
@@ -95,6 +111,98 @@ def save_yaml(path, pgm_name):
     print(f'  YAML: {path}')
 
 
+def is_clear(img, px, py, clear_px):
+    """檢查以 (px, py) 為中心、半徑 clear_px 的方形範圍是否全為自由空間（254）。"""
+    h, w = img.shape
+    if px < 0 or py < 0 or px >= w or py >= h:
+        return False
+    x0 = max(0, px - clear_px)
+    x1 = min(w, px + clear_px + 1)
+    y0 = max(0, py - clear_px)
+    y1 = min(h, py + clear_px + 1)
+    return int(img[y0:y1, x0:x1].min()) >= 200  # 254 = free, 0 = obstacle
+
+
+def place_dynamic_obstacles(img, n):
+    """在地圖自由區掃描 n 個合法起點與直線軌跡。
+
+    每個動態障礙物在 8 個方向中選最長無碰撞直線作為軌跡 (ping-pong)。
+    """
+    clear_px    = int(DYN_CLEAR_M    / RESOLUTION)
+    min_traj_px = int(DYN_MIN_TRAJ_M / RESOLUTION)
+    max_traj_px = int(DYN_MAX_TRAJ_M / RESOLUTION)
+    h, w = img.shape
+    margin = max(clear_px + 2, 25)
+
+    spawn_px = int((SPAWN_X - ORIGIN_X) / RESOLUTION)
+    spawn_py = int(h - (SPAWN_Y - ORIGIN_Y) / RESOLUTION)
+    avoid_spawn_px = int(DYN_AVOID_SPAWN_M / RESOLUTION)
+
+    dynamics = []
+    directions = [(1, 0), (-1, 0), (0, 1), (0, -1),
+                  (1, 1), (-1, 1), (1, -1), (-1, -1)]
+
+    for _ in range(500):
+        if len(dynamics) >= n:
+            break
+        px = random.randint(margin, w - margin - 1)
+        py = random.randint(margin, h - margin - 1)
+
+        # 避開機器人 spawn 周圍
+        if (px - spawn_px) ** 2 + (py - spawn_py) ** 2 < avoid_spawn_px ** 2:
+            continue
+        # 起點需有淨空
+        if not is_clear(img, px, py, clear_px):
+            continue
+        # 避開已放置的動態起點 (世界座標距離 > 2 m)
+        sx_w, sy_w = px_to_world(px, py)
+        too_close = any(
+            (sx_w - d['start'][0]) ** 2 + (sy_w - d['start'][1]) ** 2 < 2.0 ** 2
+            for d in dynamics
+        )
+        if too_close:
+            continue
+
+        # 8 方向找最長無碰撞直線
+        best_len_px = 0
+        best_end_px = (px, py)
+        for dpx, dpy in directions:
+            tx, ty = px, py
+            step = 4
+            while True:
+                tx_n = tx + dpx * step
+                ty_n = ty + dpy * step
+                if not is_clear(img, tx_n, ty_n, clear_px):
+                    break
+                if tx_n < margin or tx_n >= w - margin:
+                    break
+                if ty_n < margin or ty_n >= h - margin:
+                    break
+                tx, ty = tx_n, ty_n
+                cur = abs(tx - px) + abs(ty - py)
+                if cur >= max_traj_px:
+                    break
+            cur_len = abs(tx - px) + abs(ty - py)
+            if cur_len > best_len_px:
+                best_len_px = cur_len
+                best_end_px = (tx, ty)
+
+        if best_len_px < min_traj_px:
+            continue
+
+        ex_w, ey_w = px_to_world(*best_end_px)
+        dynamics.append({
+            'name'  : f'dyn_obs_{len(dynamics)}',
+            'start' : [round(sx_w, 4), round(sy_w, 4)],
+            'end'   : [round(ex_w, 4), round(ey_w, 4)],
+            'speed' : DYN_SPEED,
+            'radius': DYN_RADIUS,
+            'height': DYN_HEIGHT,
+        })
+
+    return dynamics
+
+
 def box_sdf(name, x, y, z, sx, sy, sz, ambient, diffuse):
     return f"""
     <model name="{name}">
@@ -115,7 +223,43 @@ def box_sdf(name, x, y, z, sx, sy, sz, ambient, diffuse):
     </model>"""
 
 
-def save_sdf(obstacles, path):
+def dyn_model_sdf(name, x, y, radius, height):
+    """產生動態圓柱障礙物 SDF（含 VelocityControl + PosePublisher plugin）。"""
+    return f"""
+    <model name="{name}">
+      <pose>{x:.4f} {y:.4f} {height/2:.4f} 0 0 0</pose>
+      <link name="link">
+        <inertial>
+          <mass>5.0</mass>
+          <inertia>
+            <ixx>1.0</ixx><iyy>1.0</iyy><izz>1.0</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="c">
+          <geometry><cylinder><radius>{radius}</radius><length>{height}</length></cylinder></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><cylinder><radius>{radius}</radius><length>{height}</length></cylinder></geometry>
+          <material>
+            <ambient>0.2 0.4 0.9 1</ambient>
+            <diffuse>0.2 0.4 0.9 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system"
+              name="gz::sim::systems::VelocityControl"/>
+      <plugin filename="gz-sim-pose-publisher-system"
+              name="gz::sim::systems::PosePublisher">
+        <publish_link_pose>false</publish_link_pose>
+        <publish_model_pose>true</publish_model_pose>
+        <use_pose_vector_msg>false</use_pose_vector_msg>
+        <update_frequency>20</update_frequency>
+      </plugin>
+    </model>"""
+
+
+def save_sdf(obstacles, path, dynamics=None):
     room = W * RESOLUTION   # 20.0
     wt   = WALL_PX * RESOLUTION  # wall thickness in meters
 
@@ -153,6 +297,15 @@ def save_sdf(obstacles, path):
     for i, (cx, cy, sw, sh) in enumerate(obstacles):
         models += box_sdf(f'obs_{i}', cx, cy, WALL_H/2, sw, sh, WALL_H, oc, oc)
 
+    # 動態障礙物（藍色圓柱，VelocityControl + PosePublisher）
+    if dynamics:
+        for d in dynamics:
+            models += dyn_model_sdf(
+                d['name'],
+                d['start'][0], d['start'][1],
+                d['radius'], d['height'],
+            )
+
     sdf = f"""<?xml version="1.0"?>
 <sdf version="1.8">
   <world name="random_room">
@@ -182,12 +335,21 @@ def save_sdf(obstacles, path):
     print(f'  SDF:  {path}')
 
 
+def save_trajectories_yaml(dynamics, path):
+    cfg = {'dynamic_obstacles': dynamics}
+    with open(path, 'w') as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+    print(f'  YAML: {path}')
+
+
 if __name__ == '__main__':
     base = Path(__file__).parent.parent
     maps_dir   = base / 'maps'
     worlds_dir = base / 'worlds'
+    config_dir = base / 'config'
     maps_dir.mkdir(exist_ok=True)
     worlds_dir.mkdir(exist_ok=True)
+    config_dir.mkdir(exist_ok=True)
 
     print(f'Generating {N_OBSTACLES} obstacles, {W*RESOLUTION:.0f}x{H*RESOLUTION:.0f}m room...')
     img, obstacles = generate()
@@ -195,4 +357,15 @@ if __name__ == '__main__':
     save_pgm(img,  maps_dir   / 'random_room.pgm')
     save_yaml(     maps_dir   / 'random_room.yaml', 'random_room.pgm')
     save_sdf(obstacles, worlds_dir / 'random_room.sdf')
-    print(f'Done. {len(obstacles)} obstacles placed.')
+    print(f'  Static obstacles: {len(obstacles)}')
+
+    # 動態障礙物：在自由區放 N_DYNAMIC 個圓柱 + 直線軌跡
+    print(f'Placing {N_DYNAMIC} dynamic obstacles...')
+    dynamics = place_dynamic_obstacles(img, N_DYNAMIC)
+    if len(dynamics) < N_DYNAMIC:
+        print(f'  WARN: only placed {len(dynamics)}/{N_DYNAMIC} '
+              f'(map too cluttered? lower N_OBSTACLES or N_DYNAMIC)')
+
+    save_sdf(obstacles, worlds_dir / 'random_room_dynamic.sdf', dynamics=dynamics)
+    save_trajectories_yaml(dynamics, config_dir / 'dynamic_trajectories.yaml')
+    print(f'Done. Static: {len(obstacles)}  Dynamic: {len(dynamics)}')
