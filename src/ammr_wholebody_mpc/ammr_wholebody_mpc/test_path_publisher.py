@@ -21,7 +21,7 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg      import Path
@@ -90,12 +90,13 @@ class TestPathPublisher(Node):
         self._frame = frame
         self._xy    = xy
 
-        # Transient-local QoS so a late subscriber still gets the path
+        # VOLATILE: when this publisher dies the message goes away.
+        # (Previous TRANSIENT_LOCAL version was a footgun — leftover processes
+        # kept stale plans alive across test runs and drove the robot away.)
         qos = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
             history    =QoSHistoryPolicy.KEEP_LAST,
             depth      =1,
-            durability =QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.pub = self.create_publisher(Path, topic, qos)
         self.create_timer(period, self._tick)
