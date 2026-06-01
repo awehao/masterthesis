@@ -39,11 +39,16 @@ echo "Recording for $DURATION s into $OUT_DIR"
 echo "Topics: /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static"
 echo "Press Ctrl+C earlier if the robot reaches goal sooner."
 
-# `-d` would stop after DURATION but old ros2 bag versions take it differently.
-# Using timeout is portable.
-timeout "${DURATION}s" ros2 bag record \
-    -o "$OUT_DIR" \
-    --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static || true
+# Forward SIGINT (Ctrl+C) to ros2 bag record so it closes the bag cleanly;
+# escalate to SIGKILL 5s after the duration if it refuses to die.
+#   --foreground   : pass SIGINT from this shell straight through
+#   --signal=INT   : after DURATION, send SIGINT (not SIGTERM) — lets rosbag2 flush
+#   --kill-after=5 : if rosbag2 still alive 5s later, SIGKILL it
+timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
+    ros2 bag record \
+        -o "$OUT_DIR" \
+        --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
+    || true
 
 echo "Done. Now analyse with:"
 echo "  python3 ${HERE}/analyze.py $OUT_DIR --method $METHOD --run $RUN_TAG"
