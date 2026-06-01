@@ -45,9 +45,9 @@ VEL_MIN = np.array([-0.20, -0.25, -0.80])
 VEL_MAX = np.array([ 0.35,  0.25,  0.80])
 ACC_MAX = np.array([ 1.5,   1.0,   2.0])
 
-Q_DIAG  = np.array([10.0, 10.0,  5.0])   # state weight (e_vx, e_vy, e_ω)
-R_DIAG  = np.array([ 0.5,  0.5,  0.2])   # input deviation weight
-QF_DIAG = np.array([50.0, 50.0, 25.0])   # terminal
+Q_DIAG  = np.array([  10.0,   10.0,    5.0])   # state weight (e_vx, e_vy, e_ω)
+R_DIAG  = np.array([   0.5,    0.5,    0.2])   # input deviation weight
+QF_DIAG = np.array([1000.0, 1000.0,  500.0])   # terminal = 100·Q (Tang 2024 ratio)
 
 
 # ---------------------------------------------------------------------------
