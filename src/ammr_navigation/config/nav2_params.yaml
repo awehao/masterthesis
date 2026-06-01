@@ -1,3 +1,20 @@
+# ====================================================================
+# Baseline A — NavFn (global) + RPP (local) on Omni chassis
+# ====================================================================
+# Purpose: legacy comparison baseline for evaluation against MPPI Omni
+#          (nav2_params_mppi.yaml) and the upcoming SE(2) GMPC controller.
+#
+# Design notes (kept intentionally — do NOT "fix"):
+#   - AMCL uses OmniMotionModel (chassis IS omnidirectional).
+#   - RPP is a Pure-Pursuit controller; it ONLY outputs (vx, wz).
+#     Even though the base accepts vy, RPP never produces it. So:
+#       velocity_smoother.{max,min,accel,decel}[1] = 0.0   (vy disabled)
+#     This is correct, not a bug. The whole point of Baseline A is to
+#     show how an omni base behaves when forced to non-holonomic motion.
+#   - For lateral / diagonal / pose-keeping motions, use Baseline B
+#     (nav2_params_mppi.yaml) which sets motion_model: Omni.
+# ====================================================================
+
 amcl:
   ros__parameters:
     use_sim_time: true
