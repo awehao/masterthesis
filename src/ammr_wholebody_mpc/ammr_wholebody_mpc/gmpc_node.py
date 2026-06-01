@@ -1,0 +1,230 @@
+"""ROS2 standalone GMPC controller node.
+
+Subscribes  : /plan  (nav_msgs/Path)            in `global_frame`
+Publishes   : /cmd_vel (geometry_msgs/Twist)    body-frame command for the omni base
+TF needed   : `global_frame` → `robot_base_frame`   (e.g. map → base_footprint)
+
+Control loop runs at `control_frequency` Hz:
+  1. Look up the current robot pose in `global_frame` via tf2.
+  2. Build a horizon reference (X_ref_win, xi_ref_win) by arclength sampling
+     the latest /plan starting from the projection of the robot.
+  3. Solve the SE(2) GMPC QP (see ammr_wholebody_mpc.gmpc).
+  4. Publish the optimal body twist as /cmd_vel.
+
+If no plan has been received, the node publishes zero twist.
+If the robot is within `goal_tolerance_xy` of the path end, the node holds zero.
+If TF lookup fails, the node publishes zero and warns (throttled).
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
+
+from geometry_msgs.msg import Twist, TransformStamped
+from nav_msgs.msg      import Path
+
+import tf2_ros
+
+from .gmpc           import GMPC, GMPCConfig
+from .se2            import from_xytheta
+from .path_processor import (path_msg_to_xyth,
+                             build_reference_window,
+                             quaternion_to_yaw)
+
+
+class GMPCNode(Node):
+
+    def __init__(self):
+        super().__init__('gmpc_controller')
+
+        # ---- Parameters ---------------------------------------------------
+        self.declare_parameter('control_frequency', 20.0)
+        self.declare_parameter('horizon',           20)
+        self.declare_parameter('v_nominal',         0.30)
+
+        self.declare_parameter('vx_min', -0.20)
+        self.declare_parameter('vx_max',  0.35)
+        self.declare_parameter('vy_min', -0.25)
+        self.declare_parameter('vy_max',  0.25)
+        self.declare_parameter('wz_min', -0.80)
+        self.declare_parameter('wz_max',  0.80)
+        self.declare_parameter('ax_max',  1.5)
+        self.declare_parameter('ay_max',  1.0)
+        self.declare_parameter('az_max',  2.0)
+
+        self.declare_parameter('Q_xy',    10.0)
+        self.declare_parameter('Q_yaw',    5.0)
+        self.declare_parameter('R_vx',     0.5)
+        self.declare_parameter('R_vy',     0.5)
+        self.declare_parameter('R_w',      0.2)
+        self.declare_parameter('Qf_mult',  5.0)
+
+        self.declare_parameter('global_frame',     'map')
+        self.declare_parameter('robot_base_frame', 'base_footprint')
+        self.declare_parameter('plan_topic',       '/plan')
+        self.declare_parameter('cmd_vel_topic',    '/cmd_vel')
+        self.declare_parameter('goal_tolerance_xy', 0.20)
+        self.declare_parameter('tf_timeout',        0.10)
+
+        # Read into instance state
+        f       = float(self.get_parameter('control_frequency').value)
+        N       = int(  self.get_parameter('horizon').value)
+        self.dt = 1.0 / f
+        self.v_nom = float(self.get_parameter('v_nominal').value)
+
+        self.global_frame     = str(self.get_parameter('global_frame').value)
+        self.base_frame       = str(self.get_parameter('robot_base_frame').value)
+        self.goal_tol_xy      = float(self.get_parameter('goal_tolerance_xy').value)
+        self.tf_timeout_s     = float(self.get_parameter('tf_timeout').value)
+
+        Qxy  = float(self.get_parameter('Q_xy').value)
+        Qyaw = float(self.get_parameter('Q_yaw').value)
+        Qf_m = float(self.get_parameter('Qf_mult').value)
+
+        cfg = GMPCConfig(
+            N=N, dt=self.dt,
+            u_min=np.array([float(self.get_parameter('vx_min').value),
+                            float(self.get_parameter('vy_min').value),
+                            float(self.get_parameter('wz_min').value)]),
+            u_max=np.array([float(self.get_parameter('vx_max').value),
+                            float(self.get_parameter('vy_max').value),
+                            float(self.get_parameter('wz_max').value)]),
+            a_max=np.array([float(self.get_parameter('ax_max').value),
+                            float(self.get_parameter('ay_max').value),
+                            float(self.get_parameter('az_max').value)]),
+            Q =np.diag([Qxy, Qxy, Qyaw]),
+            R =np.diag([float(self.get_parameter('R_vx').value),
+                        float(self.get_parameter('R_vy').value),
+                        float(self.get_parameter('R_w').value)]),
+            Qf=np.diag([Qxy * Qf_m, Qxy * Qf_m, Qyaw * Qf_m]),
+        )
+        self.mpc = GMPC(cfg)
+        self.N   = cfg.N
+
+        # ---- State --------------------------------------------------------
+        self.latest_path = None
+        self.xi_prev     = np.zeros(3)
+
+        # ---- TF + I/O -----------------------------------------------------
+        self.tf_buffer   = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        plan_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history    =QoSHistoryPolicy.KEEP_LAST,
+            depth      =1,
+        )
+        self.create_subscription(
+            Path,
+            str(self.get_parameter('plan_topic').value),
+            self._plan_cb, plan_qos,
+        )
+        self.cmd_pub = self.create_publisher(
+            Twist,
+            str(self.get_parameter('cmd_vel_topic').value),
+            10,
+        )
+
+        self.create_timer(self.dt, self._control_step)
+
+        self.get_logger().info(
+            f'GMPC controller up: N={cfg.N}, dt={self.dt:.3f}s, v_nom={self.v_nom:.2f} m/s, '
+            f'frame {self.global_frame}->{self.base_frame}'
+        )
+
+    # ----------------------------------------------------------------------
+    def _plan_cb(self, msg: Path):
+        if len(msg.poses) == 0:
+            self.get_logger().warn('Received empty plan')
+        self.latest_path = msg
+
+    def _publish_zero(self):
+        self.cmd_pub.publish(Twist())
+        self.xi_prev = np.zeros(3)
+
+    @staticmethod
+    def _tf_to_xyth(tf: TransformStamped) -> np.ndarray:
+        t = tf.transform.translation
+        r = tf.transform.rotation
+        return np.array([t.x, t.y, quaternion_to_yaw(r.x, r.y, r.z, r.w)])
+
+    def _lookup_robot_pose(self):
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                self.global_frame, self.base_frame,
+                rclpy.time.Time(),
+                rclpy.duration.Duration(seconds=self.tf_timeout_s),
+            )
+        except (tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException) as e:
+            self.get_logger().warn(
+                f'TF {self.global_frame}->{self.base_frame} failed: {e}',
+                throttle_duration_sec=2.0)
+            return None
+        return self._tf_to_xyth(tf)
+
+    # ----------------------------------------------------------------------
+    def _control_step(self):
+        # 0. Need a plan
+        if self.latest_path is None or len(self.latest_path.poses) < 2:
+            self._publish_zero()
+            return
+
+        # 1. Robot pose in global_frame
+        robot_xyth = self._lookup_robot_pose()
+        if robot_xyth is None:
+            self._publish_zero()
+            return
+
+        # 2. Distance-to-goal check (just hold zero when there)
+        goal_xy = np.array([self.latest_path.poses[-1].pose.position.x,
+                            self.latest_path.poses[-1].pose.position.y])
+        if np.linalg.norm(goal_xy - robot_xyth[:2]) < self.goal_tol_xy:
+            self._publish_zero()
+            return
+
+        # 3. Build horizon reference from latest /plan
+        path_xyth = path_msg_to_xyth(self.latest_path)
+        X_ref_win, xi_ref_win = build_reference_window(
+            path_xyth, robot_xyth,
+            N=self.N, dt=self.dt, v_nom=self.v_nom,
+        )
+
+        # 4. Solve
+        X_now  = from_xytheta(*robot_xyth)
+        result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev)
+
+        # 5. Publish (saturate one more time as a belt-and-braces safety)
+        u = result.u_opt
+        twist = Twist()
+        twist.linear.x  = float(u[0])
+        twist.linear.y  = float(u[1])
+        twist.angular.z = float(u[2])
+        self.cmd_pub.publish(twist)
+        self.xi_prev = u
+
+        if result.status not in ('solved', 'solved inaccurate'):
+            self.get_logger().warn(
+                f'OSQP status={result.status}, holding fallback u=0',
+                throttle_duration_sec=1.0)
+
+
+def main():
+    rclpy.init()
+    node = GMPCNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

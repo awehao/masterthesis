@@ -1,0 +1,39 @@
+# Default parameters for the SE(2) GMPC controller node.
+# Matches the offline_prototype/run.py setup so the ROS2 behaviour reproduces
+# the validated benchmark numbers.
+
+gmpc_controller:
+  ros__parameters:
+    use_sim_time:        true
+
+    # ---- Sample timing ----------------------------------------------------
+    control_frequency:   20.0          # Hz  -> dt = 0.05s
+    horizon:             20            # steps -> 1.0s lookahead
+    v_nominal:           0.30          # m/s, arclength sampling speed
+
+    # ---- Chassis limits (must match Baseline B / nav2_params_mppi.yaml) ---
+    vx_min:             -0.20
+    vx_max:              0.35
+    vy_min:             -0.25
+    vy_max:              0.25
+    wz_min:             -0.80
+    wz_max:              0.80
+    ax_max:              1.5
+    ay_max:              1.0
+    az_max:              2.0
+
+    # ---- MPC weights (same as offline_prototype/run.py) ------------------
+    Q_xy:               10.0
+    Q_yaw:               5.0
+    R_vx:                0.5
+    R_vy:                0.5
+    R_w:                 0.2
+    Qf_mult:             5.0
+
+    # ---- Frames / topics --------------------------------------------------
+    global_frame:        map
+    robot_base_frame:    base_footprint
+    plan_topic:          /plan
+    cmd_vel_topic:       /cmd_vel
+    goal_tolerance_xy:   0.20
+    tf_timeout:          0.10
