@@ -40,14 +40,14 @@ ros2 launch ammr_navigation nav2.launch.py
 ### T3 — 錄製(120 秒上限)
 ```bash
 cd ~/masterthesis/evaluation
-./record.sh rpp corner_goal 120
+./record.sh rpp corner_goal 150
 ```
 等 `Recording for 120 s into ...` 出現後**再等 3 秒**確保 record 真的啟動。
 
 ### T4 — 送 goal
 ```bash
 ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped \
-  "{header: {frame_id: 'map'}, pose: {position: {x: 17.0, y: 17.0}, orientation: {w: 1.0}}}" --once
+  "{header: {frame_id: 'map'}, pose: {position: {x: 17.0, y: 17.0}, orientation: {w: 1.0}}}" 
 ```
 
 ### 等待 + 清場
