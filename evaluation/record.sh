@@ -43,7 +43,7 @@ echo "Press Ctrl+C earlier if the robot reaches goal sooner."
 # Using timeout is portable.
 timeout "${DURATION}s" ros2 bag record \
     -o "$OUT_DIR" \
-    /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static || true
+    --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static || true
 
 echo "Done. Now analyse with:"
 echo "  python3 ${HERE}/analyze.py $OUT_DIR --method $METHOD --run $RUN_TAG"
