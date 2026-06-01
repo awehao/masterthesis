@@ -224,15 +224,26 @@ def box_sdf(name, x, y, z, sx, sy, sz, ambient, diffuse):
 
 
 def dyn_model_sdf(name, x, y, radius, height):
-    """產生動態圓柱障礙物 SDF（含 VelocityControl + PosePublisher plugin）。"""
+    """產生動態圓柱障礙物 SDF。
+
+    設計要點：
+      - <kinematic>true</kinematic>：link 不參與動力學積分，外力推不動、不會被
+        撞翻 → 由 VelocityControl 直接設定速度，pose 嚴格按指令演進
+      - <gravity>false</gravity>：保險再加一層，移除重力
+      - 仍保留 collision → LiDAR 看得到，機器人視為實心障礙
+      - VelocityControl 在 world frame 套用 linear velocity
+      - PosePublisher 發布 model pose（GZ → ROS bridge → /model/<name>/pose）
+    """
     return f"""
     <model name="{name}">
       <pose>{x:.4f} {y:.4f} {height/2:.4f} 0 0 0</pose>
       <link name="link">
+        <kinematic>true</kinematic>
+        <gravity>false</gravity>
         <inertial>
-          <mass>5.0</mass>
+          <mass>1.0</mass>
           <inertia>
-            <ixx>1.0</ixx><iyy>1.0</iyy><izz>1.0</izz>
+            <ixx>0.1</ixx><iyy>0.1</iyy><izz>0.1</izz>
             <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
           </inertia>
         </inertial>
