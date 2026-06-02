@@ -54,11 +54,17 @@ class GoalToPlanRelay(Node):
         self.declare_parameter('plan_topic',       '/plan')
         self.declare_parameter('goal_topic',       '/goal_pose')
         self.declare_parameter('server_timeout',   5.0)
+        # Continuous replanning so the GMPC controller always sees a fresh
+        # /plan, matching nav2 BT navigator behaviour. Disable with period<=0.
+        self.declare_parameter('replan_period',         1.0)   # seconds
+        self.declare_parameter('replan_goal_tolerance', 0.30)  # metres
 
         self.global_frame = str(self.get_parameter('global_frame').value)
         self.base_frame   = str(self.get_parameter('robot_base_frame').value)
         self.planner_id   = str(self.get_parameter('planner_id').value)
         self.srv_timeout  = float(self.get_parameter('server_timeout').value)
+        self.replan_period = float(self.get_parameter('replan_period').value)
+        self.replan_tol    = float(self.get_parameter('replan_goal_tolerance').value)
 
         self.tf_buffer   = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -85,9 +91,15 @@ class GoalToPlanRelay(Node):
             self._goal_cb, 10,
         )
 
+        # State for continuous replanning
+        self._active_goal: PoseStamped | None = None
+        if self.replan_period > 0.0:
+            self.create_timer(self.replan_period, self._replan_tick)
+
         self.get_logger().info(
             f'goal_to_plan_relay up: planner_id={self.planner_id!r}, '
-            f'frame {self.global_frame}->{self.base_frame}'
+            f'frame {self.global_frame}->{self.base_frame}, '
+            f'replan_period={self.replan_period:.1f}s, tol={self.replan_tol:.2f}m'
         )
 
     # ----------------------------------------------------------------------
@@ -112,7 +124,8 @@ class GoalToPlanRelay(Node):
         ps.pose.orientation     = tf.transform.rotation
         return ps
 
-    def _goal_cb(self, msg: PoseStamped):
+    def _request_plan(self, goal: PoseStamped, log_prefix: str = 'Plan request'):
+        """Send one ComputePathToPose action call for the given goal."""
         if not self.action_client.wait_for_server(timeout_sec=self.srv_timeout):
             self.get_logger().error(
                 'ComputePathToPose action server unavailable — '
@@ -126,17 +139,43 @@ class GoalToPlanRelay(Node):
 
         req = ComputePathToPose.Goal()
         req.start      = start
-        req.goal       = msg
+        req.goal       = goal
         req.use_start  = True
         req.planner_id = self.planner_id
 
         self.get_logger().info(
-            f'Plan request: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f}) '
-            f'-> ({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f})'
+            f'{log_prefix}: ({start.pose.position.x:.2f}, {start.pose.position.y:.2f}) '
+            f'-> ({goal.pose.position.x:.2f}, {goal.pose.position.y:.2f})'
         )
 
         send_future = self.action_client.send_goal_async(req)
         send_future.add_done_callback(self._goal_response_cb)
+
+    def _goal_cb(self, msg: PoseStamped):
+        # Store + trigger immediate plan; the replan timer will keep refreshing.
+        self._active_goal = msg
+        self._request_plan(msg, log_prefix='Plan request (new goal)')
+
+    def _replan_tick(self):
+        """Replan periodically while a goal is active and not yet reached."""
+        if self._active_goal is None:
+            return
+        start = self._current_pose_as_stamped()
+        if start is None:
+            return
+        gx = self._active_goal.pose.position.x
+        gy = self._active_goal.pose.position.y
+        dx = gx - start.pose.position.x
+        dy = gy - start.pose.position.y
+        dist = (dx * dx + dy * dy) ** 0.5
+        if dist < self.replan_tol:
+            self.get_logger().info(
+                f'Goal reached ({dist:.2f} m within {self.replan_tol:.2f} m tol), '
+                f'stopping replan'
+            )
+            self._active_goal = None
+            return
+        self._request_plan(self._active_goal, log_prefix='Plan request (replan)')
 
     def _goal_response_cb(self, future):
         gh = future.result()

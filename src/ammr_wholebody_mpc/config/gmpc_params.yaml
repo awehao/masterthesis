@@ -18,16 +18,19 @@ gmpc_controller:
     vy_max:              0.25
     wz_min:             -0.80
     wz_max:              0.80
-    ax_max:              1.5
-    ay_max:              1.0
-    az_max:              2.0
+    # Tightened (v2 → v3): heavier acceleration penalty to reduce jerk
+    ax_max:              0.8
+    ay_max:              0.6
+    az_max:              1.2
 
-    # ---- MPC weights (same as offline_prototype/run.py) ------------------
+    # ---- MPC weights (v3: stronger input penalty to damp the controller) -
+    # Q stays at the same magnitude as the offline prototype.
+    # R bumped 6x to make the QP value control smoothness over tight tracking.
     Q_xy:               10.0
     Q_yaw:               5.0
-    R_vx:                0.5
-    R_vy:                0.5
-    R_w:                 0.2
+    R_vx:                3.0     # v2 was 0.5
+    R_vy:                3.0     # v2 was 0.5
+    R_w:                 1.5     # v2 was 0.2
     Qf_mult:             5.0
 
     # ---- Frames / topics --------------------------------------------------
