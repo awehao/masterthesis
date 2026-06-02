@@ -76,12 +76,12 @@ def generate_launch_description():
              name='gmpc_controller', output='screen',
              parameters=[
                  gmpc_params,
-                 # Aggressive CBF: earlier reaction, sharper response.
-                 # Trades arrival time for clearance margin.
+                 # Balanced CBF: earlier reaction but small enough margin that
+                 # the path through 6 cylinders (~3.5 m apart) stays feasible.
                  {'cbf_enable':       True,
-                  'cbf_alpha':        5.0,        # was 2.0
-                  'cbf_safe_margin':  0.60,       # was 0.30
-                  'cbf_slack_weight': 1.0e5,      # was 1.0e4
+                  'cbf_alpha':        5.0,
+                  'cbf_safe_margin':  0.35,       # was 0.60 — narrower so robot can squeeze between
+                  'cbf_slack_weight': 1.0e5,
                   'obstacles_topic':  '/gmpc/obstacles'},
              ]),
     ])
