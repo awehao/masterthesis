@@ -115,14 +115,19 @@ class GMPCNode(Node):
                         float(self.get_parameter('R_vy').value),
                         float(self.get_parameter('R_w').value)]),
             Qf=np.diag([Qxy * Qf_m, Qxy * Qf_m, Qyaw * Qf_m]),
+            cbf_alpha       =float(self.get_parameter('cbf_alpha').value),
+            cbf_safe_margin =float(self.get_parameter('cbf_safe_margin').value),
+            cbf_slack_weight=float(self.get_parameter('cbf_slack_weight').value),
         )
         self.mpc = GMPC(cfg)
         self.N   = cfg.N
+        self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
 
         # ---- State --------------------------------------------------------
         self.latest_path  = None
         self.xi_prev      = np.zeros(3)
-        self._arrived     = False   # edge-trigger flag for "Goal reached" log
+        self._arrived     = False
+        self._obstacles   = []           # list of dict {x, y, radius}
 
         # ---- TF + I/O -----------------------------------------------------
         self.tf_buffer   = tf2_ros.Buffer()
@@ -144,11 +149,31 @@ class GMPCNode(Node):
             10,
         )
 
+        # Diagnostic publishers (for analyze.py + Foxglove visualisation)
+        self.solve_time_pub = self.create_publisher(
+            Float32, str(self.get_parameter('solve_time_topic').value), 10)
+        self.min_h_pub      = self.create_publisher(
+            Float32, str(self.get_parameter('min_h_topic').value), 10)
+        self.cbf_zone_pub   = self.create_publisher(
+            MarkerArray, str(self.get_parameter('cbf_zone_topic').value), 10)
+
+        # Obstacles: subscribe to a Float32MultiArray that the aggregator publishes.
+        # Layout: [x1, y1, r1, x2, y2, r2, ...] flat array, length = 3*N_obs.
+        if self.cbf_enable:
+            self.create_subscription(
+                Float32MultiArray,
+                str(self.get_parameter('obstacles_topic').value),
+                self._obstacles_cb, 10,
+            )
+
         self.create_timer(self.dt, self._control_step)
 
         self.get_logger().info(
             f'GMPC controller up: N={cfg.N}, dt={self.dt:.3f}s, v_nom={self.v_nom:.2f} m/s, '
-            f'frame {self.global_frame}->{self.base_frame}'
+            f'frame {self.global_frame}->{self.base_frame}, '
+            f'CBF={"ON" if self.cbf_enable else "OFF"}'
+            + (f' (α={cfg.cbf_alpha:.1f}, margin={cfg.cbf_safe_margin:.2f}m)'
+               if self.cbf_enable else '')
         )
 
     # ----------------------------------------------------------------------
@@ -159,6 +184,17 @@ class GMPCNode(Node):
         # New plan means a new goal (or continuous replan) — re-arm the arrival
         # detector so the next arrival also gets logged.
         self._arrived = False
+
+    def _obstacles_cb(self, msg: Float32MultiArray):
+        """Flat [x1, y1, r1, x2, y2, r2, ...] in the global frame."""
+        data = list(msg.data)
+        n = len(data) // 3
+        self._obstacles = [
+            {'x': float(data[3*i]),
+             'y': float(data[3*i + 1]),
+             'radius': float(data[3*i + 2])}
+            for i in range(n)
+        ]
 
     def _publish_zero(self):
         self.cmd_pub.publish(Twist())
