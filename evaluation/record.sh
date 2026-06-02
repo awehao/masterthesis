@@ -36,7 +36,8 @@ if [[ -e "$OUT_DIR" ]]; then
 fi
 
 echo "Recording for $DURATION s into $OUT_DIR"
-echo "Topics: /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static"
+echo "Topics: /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \\"
+echo "        /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h"
 echo "Press Ctrl+C earlier if the robot reaches goal sooner."
 
 # Forward SIGINT (Ctrl+C) to ros2 bag record so it closes the bag cleanly;
