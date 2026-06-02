@@ -12,8 +12,9 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, TimerAction
-from launch.substitutions import Command
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
+from launch.conditions import IfCondition
+from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -134,8 +135,15 @@ def generate_launch_description():
         ),
 
         # 9. 動態障礙物驅動節點（延遲 8 秒等 Gazebo 完全 spawn dyn_obs_X）
+        #    可用  `dynamic:=false`  關掉,圓柱會留在 SDF 的 spawn pose 不動。
+        DeclareLaunchArgument(
+            'dynamic', default_value='true',
+            description='If false, dynamic_obstacle_driver is NOT launched '
+                        '(obstacles stay at their SDF spawn pose).',
+        ),
         TimerAction(
             period=8.0,
+            condition=IfCondition(LaunchConfiguration('dynamic')),
             actions=[Node(
                 package='ammr_bringup',
                 executable='dynamic_obstacle_driver',

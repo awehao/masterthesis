@@ -1,61 +1,57 @@
-# Dynamic obstacle trajectories for the GMPC-CBF dynamic benchmark.
+# Dynamic obstacle trajectories for the GMPC-CBF benchmark.
 #
 # Convention
-#   start, end : world-frame [x, y] in metres
-#   speed      : magnitude of constant velocity ping-pong [m/s]
+#   start, end : world-frame [x, y] in metres (driver pings between these)
+#   speed      : ping-pong speed [m/s]
 #   radius     : cylinder radius [m]  — also fed to obstacle_aggregator -> CBF
 #   height     : visual cylinder height [m]
 #
-# Placement notes (revised 2026-06-02)
-#   - Robot spawns at (0, 0). All obstacles stay > 4 m from spawn so they
-#     don't sit on top of the robot at startup.
-#   - Goal is typically at (17, 17). Obstacles are placed along the diagonal
-#     so the robot must actually negotiate them.
-#   - Together they exercise three regions of the path:
-#       dyn_obs_1  early   (after the robot ramps up)
-#       dyn_obs_2  middle  (forces a side-slip)
-#       dyn_obs_0  late    (last guard near the goal corridor)
+# Placement (revised 2026-06-02)
+#   All 6 obstacles sit on the (0,0) → (17,17) diagonal at 2.5 m intervals,
+#   so the controller must zig-zag through them.
+#   For STATIC testing  use `gazebo_dynamic.launch.py dynamic:=false`
+#   For DYNAMIC testing use `gazebo_dynamic.launch.py`     (default)
 
 dynamic_obstacles:
 
-  - name:   dyn_obs_1                     # vertical sweeper on spawn column
-    start:  [0.0, 5.55]
-    end:    [0.0, 1.05]                   # closest approach to spawn = 1.05 m
+  - name:   dyn_obs_1
+    start:  [2.5,  2.5]
+    end:    [2.5,  4.0]                   # 1.5 m sweep when driver is ON
     speed:  0.4
     radius: 0.25
     height: 1.0
 
-  - name:   dyn_obs_2                     # middle section, diagonal crossing
-    start:  [10.3, 9.1]
-    end:    [12.3, 7.1]
+  - name:   dyn_obs_2
+    start:  [5.0,  5.0]
+    end:    [5.0,  6.5]
     speed:  0.4
     radius: 0.25
     height: 1.0
 
-  - name:   dyn_obs_0                     # late section, guarding goal corridor
-    start:  [14.1, 7.1]
-    end:    [17.1, 7.1]
+  - name:   dyn_obs_3
+    start:  [7.5,  7.5]
+    end:    [7.5,  9.0]
     speed:  0.4
     radius: 0.25
     height: 1.0
 
-  - name:   dyn_obs_3                     # early diagonal, low-y crossing
-    start:  [4.5, 2.5]
-    end:    [4.5, 5.5]
+  - name:   dyn_obs_4
+    start:  [10.0, 10.0]
+    end:    [10.0, 11.5]
     speed:  0.4
     radius: 0.25
     height: 1.0
 
-  - name:   dyn_obs_4                     # mid-path, slow lateral block
-    start:  [8.0, 6.5]
-    end:    [10.0, 8.5]
-    speed:  0.35
+  - name:   dyn_obs_5
+    start:  [12.5, 12.5]
+    end:    [12.5, 14.0]
+    speed:  0.4
     radius: 0.25
     height: 1.0
 
-  - name:   dyn_obs_5                     # high-x guard, sweep across y
-    start:  [15.5, 4.5]
-    end:    [15.5, 11.0]
+  - name:   dyn_obs_0
+    start:  [15.0, 15.0]
+    end:    [15.0, 16.5]
     speed:  0.4
     radius: 0.25
     height: 1.0
