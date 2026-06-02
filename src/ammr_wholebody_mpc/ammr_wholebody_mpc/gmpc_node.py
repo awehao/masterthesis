@@ -24,8 +24,10 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
-from geometry_msgs.msg import Twist, TransformStamped
+from geometry_msgs.msg import Twist, TransformStamped, Point
 from nav_msgs.msg      import Path
+from std_msgs.msg      import Float32, Float32MultiArray
+from visualization_msgs.msg import MarkerArray, Marker
 
 import tf2_ros
 
@@ -69,6 +71,18 @@ class GMPCNode(Node):
         self.declare_parameter('cmd_vel_topic',    '/cmd_vel')
         self.declare_parameter('goal_tolerance_xy', 0.20)
         self.declare_parameter('tf_timeout',        0.10)
+
+        # ---- CBF safety filter ------------------------------------------
+        self.declare_parameter('cbf_enable',         False)   # off by default
+        self.declare_parameter('cbf_alpha',          2.0)
+        self.declare_parameter('cbf_safe_margin',    0.30)
+        self.declare_parameter('cbf_slack_weight',   1.0e4)
+        self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
+
+        # ---- Diagnostic topics ------------------------------------------
+        self.declare_parameter('solve_time_topic',   '/gmpc/solve_time_ms')
+        self.declare_parameter('min_h_topic',        '/gmpc/min_h')
+        self.declare_parameter('cbf_zone_topic',     '/gmpc/cbf_zones')
 
         # Read into instance state
         f       = float(self.get_parameter('control_frequency').value)
