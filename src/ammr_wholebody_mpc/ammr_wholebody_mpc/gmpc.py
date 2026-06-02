@@ -75,6 +75,7 @@ class GMPCConfig:
     cbf_alpha        : float = 1.0        # decay rate α in  ḣ + α·h ≥ 0
     cbf_safe_margin  : float = 0.30       # extra clearance added to obstacle radius [m]
     cbf_slack_weight : float = 1.0e4      # ρ in cost ρ·ε² ; large = CBF near-hard
+    cbf_eps0_scale   : float = 100.0      # ε_0 penalty multiplier (near-hard at k=0)
     # ---- Gain scheduling (danger-aware Q/slack) ----------------------------
     # When min_h is small (robot close to an obstacle's safety zone), we
     #   • drop Q (tracking) so the controller stops fighting safety
@@ -309,9 +310,11 @@ def _build_cbf_horizon(cfg          : GMPCConfig,
 
             row = i * N + k
             A[row, 3*k:3*k + 3] = A_row_3
-            # Slack column (only k ≥ 1 — k = 0 stays hard)
-            if k >= 1:
-                A[row, Nm + (k - 1)] = 1.0
+            # Slack column — every step gets its own ε_k (including k=0).
+            # ε_0 has a 100× higher penalty in the cost (set in solve()), so
+            # it behaves "near-hard" but the QP stays feasible even when the
+            # robot has accidentally drifted into the safety zone.
+            A[row, Nm + k] = 1.0
 
             # Lower bound from rearranged CBF inequality
             l_vec[row] = (
@@ -400,19 +403,19 @@ class GMPC:
 
         # 5b. Full-horizon CBF safety filter — receding QP with per-step slack.
         #
-        #     z = [δξ_0, δξ_1, ..., δξ_{N-1},  ε_1, ε_2, ..., ε_{N-1}]
+        #     z = [δξ_0, δξ_1, ..., δξ_{N-1},  ε_0, ε_1, ..., ε_{N-1}]
         #                                       ^^^^^^^^^^^^^^^^^^^^^^^^^
-        #     ε_0 is implicitly 0 → CBF at the *current* step is HARD (no
-        #     compromise on safety right now). The k ≥ 1 slacks let the
-        #     receding window stay feasible when the predicted trajectory
-        #     would otherwise be blocked; they carry an L2 penalty ρ·ε² so
-        #     the QP only uses them when no clean solution exists.
+        #     ε_0 has 100× higher penalty (cbf_eps0_scale × slack_weight_eff)
+        #     so the QP treats it as "near-hard". This lets the solver still
+        #     find a solution when the robot is already inside the safety
+        #     zone (avoiding primal-infeasible crashes that would otherwise
+        #     freeze the robot forever).
         Nm          = N * n
         cbf_active  = 0
         min_h       = float('inf')
         n_slack     = 0
         if obstacles:
-            n_slack = N - 1                     # one slack per future step
+            n_slack = N                         # one slack per step including k=0
             A_cbf, l_cbf, u_cbf, h_now = _build_cbf_horizon(
                 cfg, X_now, X_ref_win, xi_ref_win, obstacles, n_slack,
             )
@@ -421,11 +424,13 @@ class GMPC:
                 min_h      = float(np.min(h_now))
 
                 # P,q augmented with slack block (diagonal L2 penalty).
-                # slack_weight_eff includes the danger-aware multiplier so the
-                # CBF becomes effectively hard the closer we are to a boundary.
+                # Step k=0 gets cbf_eps0_scale × the nominal penalty so that
+                # the "now" CBF is effectively hard, while k ≥ 1 use the
+                # standard danger-aware slack weight.
                 P_aug = np.zeros((Nm + n_slack, Nm + n_slack))
                 P_aug[:Nm, :Nm] = P_dense
-                for s in range(n_slack):
+                P_aug[Nm, Nm] = 2.0 * slack_weight_eff * cfg.cbf_eps0_scale
+                for s in range(1, n_slack):
                     P_aug[Nm + s, Nm + s] = 2.0 * slack_weight_eff
                 P_dense = P_aug
                 q_vec   = np.concatenate([q_vec, np.zeros(n_slack)])
@@ -454,19 +459,22 @@ class GMPC:
         prob = osqp.OSQP()
         prob.setup(P=P_sp, q=q_vec, A=A_total, l=lb_total, u=ub_total,
                    verbose=False,
-                   eps_abs=1e-6, eps_rel=1e-6,
-                   polish=False, max_iter=4000)
+                   eps_abs=1e-5, eps_rel=1e-5,        # looser tolerance for speed
+                   polish=False, max_iter=8000)        # more iter for hard cases
         import time
         t0 = time.perf_counter()
         res = prob.solve()
         solve_time = time.perf_counter() - t0
 
         status = res.info.status
-        if status not in ('solved', 'solved inaccurate'):
-            # Safer fallback: emergency brake (u=0) instead of full ref twist,
-            # because if QP failed near an obstacle, blindly following ref will crash.
+        # 'maximum iterations reached' often returns a usable (sub-optimal) solution.
+        # We accept it rather than emergency-braking, which would freeze the robot.
+        # Only true infeasibility falls through to brake.
+        usable = status in ('solved', 'solved inaccurate',
+                            'maximum iterations reached')
+        if not usable:
             delta = np.zeros((N, n))
-            delta[0] = -xi_ref_win[0]                        # u_0 = ξ_ref + δ = 0
+            delta[0] = -xi_ref_win[0]
         else:
             sol = np.asarray(res.x)
             delta = sol[:Nm].reshape(N, n)

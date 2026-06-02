@@ -77,6 +77,7 @@ class GMPCNode(Node):
         self.declare_parameter('cbf_alpha',          2.0)
         self.declare_parameter('cbf_safe_margin',    0.30)
         self.declare_parameter('cbf_slack_weight',   1.0e4)
+        self.declare_parameter('cbf_eps0_scale',     100.0)
         # Gain scheduling — when robot enters the danger zone (h < threshold)
         # the QP downweights tracking and upweights slack penalty.
         self.declare_parameter('cbf_danger_thresh',   0.5)
@@ -123,6 +124,7 @@ class GMPCNode(Node):
             cbf_alpha         =float(self.get_parameter('cbf_alpha').value),
             cbf_safe_margin   =float(self.get_parameter('cbf_safe_margin').value),
             cbf_slack_weight  =float(self.get_parameter('cbf_slack_weight').value),
+            cbf_eps0_scale    =float(self.get_parameter('cbf_eps0_scale').value),
             cbf_danger_thresh =float(self.get_parameter('cbf_danger_thresh').value),
             cbf_Q_min_scale   =float(self.get_parameter('cbf_Q_min_scale').value),
             cbf_slack_max_scale=float(self.get_parameter('cbf_slack_max_scale').value),
