@@ -50,7 +50,7 @@ timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
         -o "$OUT_DIR" \
         --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
                  /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h \
-    || true
+    < /dev/null || true
 
 echo "Done. Now analyse with:"
 echo "  python3 ${HERE}/analyze.py $OUT_DIR --method $METHOD --run $RUN_TAG"
