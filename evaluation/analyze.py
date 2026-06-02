@@ -52,10 +52,23 @@ TOPICS_OF_INTEREST = {'/odom', '/cmd_vel', '/cmd_vel_nav', '/plan'}
 # Bag reading
 # ---------------------------------------------------------------------------
 
+def _detect_storage_id(bag_path: str) -> str:
+    """Auto-detect rosbag2 storage backend from the file extensions present.
+
+    Jazzy default is MCAP; older bags use SQLite3. Falls back to mcap.
+    """
+    p = Path(bag_path)
+    if any(p.glob('*.mcap')):
+        return 'mcap'
+    if any(p.glob('*.db3')):
+        return 'sqlite3'
+    return 'mcap'
+
+
 def read_bag(bag_path: str) -> dict[str, list[tuple[int, object]]]:
     """Return {topic: [(timestamp_ns, msg), ...]} for topics we care about."""
     reader = SequentialReader()
-    storage   = StorageOptions(uri=bag_path, storage_id='sqlite3')
+    storage   = StorageOptions(uri=bag_path, storage_id=_detect_storage_id(bag_path))
     converter = ConverterOptions(input_serialization_format='cdr',
                                  output_serialization_format='cdr')
     reader.open(storage, converter)
