@@ -123,9 +123,12 @@ def generate_launch_description():
                     #   over "u=0 forever".
                     'cbf_slack_weight':     5.0e2,   # was 1e4 — 20x cheaper
                     'cbf_eps0_scale':       30.0,    # ε_0 30x "near-hard" but solvable
-                    'cbf_danger_thresh':    0.15,
-                    'cbf_Q_min_scale':      0.85,    # was 0.7 — keep MORE tracking pressure
-                    'cbf_slack_max_scale':  20.0,    # was 5  — ramp slack only when truly dangerous
+                    # When obstacle catches up, drop Q hard so the robot stops
+                    # obsessing about the path and uses lateral evasion (vy is
+                    # NOT constrained by a longitudinal CBF row).
+                    'cbf_danger_thresh':    0.4,     # enter "panic" earlier
+                    'cbf_Q_min_scale':      0.20,    # at full danger, only 20% tracking
+                    'cbf_slack_max_scale':  20.0,
                     'obstacles_topic':      '/gmpc/obstacles',
                 },
             ],
