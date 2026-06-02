@@ -1,31 +1,40 @@
+# Dynamic obstacle trajectories for the GMPC-CBF dynamic benchmark.
+#
+# Convention
+#   start, end : world-frame [x, y] in metres
+#   speed      : magnitude of constant velocity ping-pong [m/s]
+#   radius     : cylinder radius [m]  — also fed to obstacle_aggregator -> CBF
+#   height     : visual cylinder height [m]
+#
+# Placement notes (revised 2026-06-02)
+#   - Robot spawns at (0, 0). All obstacles stay > 4 m from spawn so they
+#     don't sit on top of the robot at startup.
+#   - Goal is typically at (17, 17). Obstacles are placed along the diagonal
+#     so the robot must actually negotiate them.
+#   - Together they exercise three regions of the path:
+#       dyn_obs_1  early   (after the robot ramps up)
+#       dyn_obs_2  middle  (forces a side-slip)
+#       dyn_obs_0  late    (last guard near the goal corridor)
+
 dynamic_obstacles:
-- name: dyn_obs_0
-  start:
-  - 14.1
-  - 7.1
-  end:
-  - 17.1
-  - 7.1
-  speed: 0.4
-  radius: 0.25
-  height: 1.0
-- name: dyn_obs_1
-  start:
-  - -0.2
-  - 5.55
-  end:
-  - -0.2
-  - -0.05
-  speed: 0.4
-  radius: 0.25
-  height: 1.0
-- name: dyn_obs_2
-  start:
-  - 12.3
-  - 9.1
-  end:
-  - 10.3
-  - 7.1
-  speed: 0.4
-  radius: 0.25
-  height: 1.0
+
+  - name:   dyn_obs_1                     # early section, on diagonal path
+    start:  [3.0, 5.0]
+    end:    [6.0, 5.0]
+    speed:  0.4
+    radius: 0.25
+    height: 1.0
+
+  - name:   dyn_obs_2                     # middle section, diagonal crossing
+    start:  [10.3, 9.1]
+    end:    [12.3, 7.1]
+    speed:  0.4
+    radius: 0.25
+    height: 1.0
+
+  - name:   dyn_obs_0                     # late section, guarding goal corridor
+    start:  [14.1, 7.1]
+    end:    [17.1, 7.1]
+    speed:  0.4
+    radius: 0.25
+    height: 1.0
