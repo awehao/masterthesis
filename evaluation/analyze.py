@@ -155,17 +155,22 @@ def extract_float32_series(messages, topic: str):
 def extract_obstacles(messages, topic='/gmpc/obstacles'):
     """Time-series of obstacle snapshots from a Float32MultiArray topic.
 
-    Each message has flat data [x1, y1, r1, x2, y2, r2, ...].
+    Wire format (5 floats per obstacle):
+        [x1, y1, r1, vx1, vy1, x2, y2, r2, vx2, vy2, ...]
     Returns list of (t_seconds, np.ndarray of shape (N, 3) with cols x, y, radius).
+    The velocity components are kept on the wire for the CBF predictor but
+    aren't needed by analyze.py — we drop them here.
     """
     if topic not in messages:
         return []
     out = []
     for t_ns, m in messages[topic]:
         data = np.asarray(m.data, dtype=float)
-        if data.size == 0 or data.size % 3 != 0:
+        if data.size == 0 or data.size % 5 != 0:
             continue
-        out.append((t_ns / 1e9, data.reshape(-1, 3)))
+        full = data.reshape(-1, 5)        # (N, [x, y, r, vx, vy])
+        xy_r = full[:, :3]                # keep x, y, r only
+        out.append((t_ns / 1e9, xy_r))
     return out
 
 
