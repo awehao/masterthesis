@@ -73,10 +73,15 @@ class GMPCNode(Node):
         self.declare_parameter('tf_timeout',        0.10)
 
         # ---- CBF safety filter ------------------------------------------
-        self.declare_parameter('cbf_enable',         False)   # off by default
+        self.declare_parameter('cbf_enable',         False)
         self.declare_parameter('cbf_alpha',          2.0)
         self.declare_parameter('cbf_safe_margin',    0.30)
         self.declare_parameter('cbf_slack_weight',   1.0e4)
+        # Gain scheduling — when robot enters the danger zone (h < threshold)
+        # the QP downweights tracking and upweights slack penalty.
+        self.declare_parameter('cbf_danger_thresh',   0.5)
+        self.declare_parameter('cbf_Q_min_scale',     0.2)
+        self.declare_parameter('cbf_slack_max_scale', 100.0)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
 
         # ---- Diagnostic topics ------------------------------------------
@@ -115,9 +120,12 @@ class GMPCNode(Node):
                         float(self.get_parameter('R_vy').value),
                         float(self.get_parameter('R_w').value)]),
             Qf=np.diag([Qxy * Qf_m, Qxy * Qf_m, Qyaw * Qf_m]),
-            cbf_alpha       =float(self.get_parameter('cbf_alpha').value),
-            cbf_safe_margin =float(self.get_parameter('cbf_safe_margin').value),
-            cbf_slack_weight=float(self.get_parameter('cbf_slack_weight').value),
+            cbf_alpha         =float(self.get_parameter('cbf_alpha').value),
+            cbf_safe_margin   =float(self.get_parameter('cbf_safe_margin').value),
+            cbf_slack_weight  =float(self.get_parameter('cbf_slack_weight').value),
+            cbf_danger_thresh =float(self.get_parameter('cbf_danger_thresh').value),
+            cbf_Q_min_scale   =float(self.get_parameter('cbf_Q_min_scale').value),
+            cbf_slack_max_scale=float(self.get_parameter('cbf_slack_max_scale').value),
         )
         self.mpc = GMPC(cfg)
         self.N   = cfg.N

@@ -104,12 +104,17 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 gmpc_params,                       # base config from yaml
-                {                                  # CBF overrides (aggressive)
-                    'cbf_enable':       True,
-                    'cbf_alpha':        5.0,       # was 2.0 — sharper near boundary
-                    'cbf_safe_margin':  0.60,      # was 0.30 — earlier reaction
-                    'cbf_slack_weight': 1.0e5,     # was 1e4 — slack is harder
-                    'obstacles_topic':  '/gmpc/obstacles',
+                {
+                    'cbf_enable':           True,
+                    'cbf_alpha':            5.0,
+                    'cbf_safe_margin':      0.60,
+                    'cbf_slack_weight':     1.0e4,   # nominal slack weight
+                    # Gain scheduling: when robot enters danger zone (min_h < 0.5),
+                    # tracking drops to 20% and slack ramps up 30x → CBF near-hard.
+                    'cbf_danger_thresh':    0.5,
+                    'cbf_Q_min_scale':      0.2,
+                    'cbf_slack_max_scale':  30.0,
+                    'obstacles_topic':      '/gmpc/obstacles',
                 },
             ],
         ),

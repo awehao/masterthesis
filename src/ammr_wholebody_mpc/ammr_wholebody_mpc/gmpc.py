@@ -75,6 +75,14 @@ class GMPCConfig:
     cbf_alpha        : float = 1.0        # decay rate α in  ḣ + α·h ≥ 0
     cbf_safe_margin  : float = 0.30       # extra clearance added to obstacle radius [m]
     cbf_slack_weight : float = 1.0e4      # ρ in cost ρ·ε² ; large = CBF near-hard
+    # ---- Gain scheduling (danger-aware Q/slack) ----------------------------
+    # When min_h is small (robot close to an obstacle's safety zone), we
+    #   • drop Q (tracking) so the controller stops fighting safety
+    #   • multiply the slack penalty so CBF becomes effectively hard
+    # When min_h is large, weights stay at their nominal values.
+    cbf_danger_thresh : float = 0.5       # h above this → no scaling
+    cbf_Q_min_scale   : float = 0.2       # Q is multiplied by this when fully danger
+    cbf_slack_max_scale : float = 100.0   # slack penalty multiplied by this when danger
 
 
 @dataclass
@@ -356,8 +364,30 @@ class GMPC:
         # 3. Prediction
         Phi, Gamma = _build_prediction(A_d, dt)
 
-        # 4. Cost weights
-        Q_bar = _build_Q_bar(cfg.Q, cfg.Qf, N)
+        # 4. Cost weights — with danger-aware gain scheduling.
+        #    Compute min_h NOW (cheap loop over obstacles, no QP needed) and
+        #    interpolate between nominal and "panic" weights.
+        danger = 0.0                            # 0 = safe, 1 = at boundary
+        if obstacles:
+            p_now = X_now[:2, 2]
+            h_min_for_scaling = float('inf')
+            for obs in obstacles:
+                diff = p_now - np.array([float(obs['x']), float(obs['y'])])
+                r_eff = float(obs['radius']) + cfg.cbf_safe_margin
+                h_i = float(diff @ diff - r_eff * r_eff)
+                if h_i < h_min_for_scaling:
+                    h_min_for_scaling = h_i
+            if h_min_for_scaling < cfg.cbf_danger_thresh:
+                # ramp from 0 (h = thresh) to 1 (h ≤ 0)
+                danger = max(0.0, 1.0 - max(0.0, h_min_for_scaling) / cfg.cbf_danger_thresh)
+
+        Q_scale     = 1.0 - (1.0 - cfg.cbf_Q_min_scale)   * danger
+        slack_scale = 1.0 + (cfg.cbf_slack_max_scale - 1.0) * danger
+        slack_weight_eff = cfg.cbf_slack_weight * slack_scale
+        Q_eff   = Q_scale * cfg.Q
+        Qf_eff  = Q_scale * cfg.Qf
+
+        Q_bar = _build_Q_bar(Q_eff, Qf_eff, N)
         R_bar = _build_R_bar(cfg.R, N)
 
         P_dense = 2.0 * (Gamma.T @ Q_bar @ Gamma + R_bar)
@@ -390,11 +420,13 @@ class GMPC:
                 cbf_active = A_cbf.shape[0]
                 min_h      = float(np.min(h_now))
 
-                # P,q augmented with slack block (diagonal L2 penalty)
+                # P,q augmented with slack block (diagonal L2 penalty).
+                # slack_weight_eff includes the danger-aware multiplier so the
+                # CBF becomes effectively hard the closer we are to a boundary.
                 P_aug = np.zeros((Nm + n_slack, Nm + n_slack))
                 P_aug[:Nm, :Nm] = P_dense
                 for s in range(n_slack):
-                    P_aug[Nm + s, Nm + s] = 2.0 * cfg.cbf_slack_weight
+                    P_aug[Nm + s, Nm + s] = 2.0 * slack_weight_eff
                 P_dense = P_aug
                 q_vec   = np.concatenate([q_vec, np.zeros(n_slack)])
 

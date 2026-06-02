@@ -33,7 +33,7 @@ import yaml
 import rclpy
 from rclpy.node import Node
 
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg      import Float32MultiArray
 
 
@@ -65,13 +65,26 @@ class ObstacleAggregator(Node):
         win = int(self.get_parameter('vel_window').value)
         self._history = {name: deque(maxlen=win) for name in self._radius}
 
+        # Ground-truth velocity from Gazebo's /model/<name>/cmd_vel topic.
+        # The dynamic_obstacle_driver publishes Twist commands here, and because
+        # the cylinders are <kinematic>true</kinematic> in the SDF, that command
+        # IS their actual velocity (no physics lag). This bypasses the 250 ms
+        # LSQ window so the CBF predictor reacts instantly when the obstacle
+        # reverses direction at a ping-pong endpoint.
+        self._vel_gt = {name: (0.0, 0.0) for name in self._radius}
+        self._vel_gt_seen = set()
+
         self._max_age_ns = int(float(self.get_parameter('vel_max_age_s').value) * 1e9)
 
         for name in self._radius:
-            topic = f'/model/{name}/pose'
             self.create_subscription(
-                PoseStamped, topic,
+                PoseStamped, f'/model/{name}/pose',
                 lambda msg, n=name: self._pose_cb(n, msg),
+                10,
+            )
+            self.create_subscription(
+                Twist, f'/model/{name}/cmd_vel',
+                lambda msg, n=name: self._vel_cb(n, msg),
                 10,
             )
 
@@ -104,6 +117,14 @@ class ObstacleAggregator(Node):
         y = float(msg.pose.position.y)
         self._history[name].append((t_ns, x, y))
 
+    def _vel_cb(self, name: str, msg: Twist):
+        self._vel_gt[name] = (float(msg.linear.x), float(msg.linear.y))
+        if name not in self._vel_gt_seen:
+            self._vel_gt_seen.add(name)
+            self.get_logger().info(
+                f'Ground-truth velocity stream established for {name}'
+            )
+
     def _estimate_velocity(self, name: str) -> tuple[float, float]:
         """Least-squares slope of recent samples; 0 if insufficient."""
         h = self._history[name]
@@ -134,7 +155,12 @@ class ObstacleAggregator(Node):
             if not h:
                 continue
             x, y = h[-1][1], h[-1][2]
-            vx, vy = self._estimate_velocity(name)
+            # Prefer Gazebo ground-truth velocity (zero lag). Fall back to LSQ
+            # only if no cmd_vel has been seen yet for this obstacle.
+            if name in self._vel_gt_seen:
+                vx, vy = self._vel_gt[name]
+            else:
+                vx, vy = self._estimate_velocity(name)
             flat.extend([x, y, r, vx, vy])
         out.data = flat
         self.pub.publish(out)

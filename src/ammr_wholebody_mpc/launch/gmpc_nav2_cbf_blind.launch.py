@@ -76,12 +76,15 @@ def generate_launch_description():
              name='gmpc_controller', output='screen',
              parameters=[
                  gmpc_params,
-                 # Balanced CBF: earlier reaction but small enough margin that
-                 # the path through 6 cylinders (~3.5 m apart) stays feasible.
-                 {'cbf_enable':       True,
-                  'cbf_alpha':        5.0,
-                  'cbf_safe_margin':  0.35,       # was 0.60 — narrower so robot can squeeze between
-                  'cbf_slack_weight': 1.0e5,
-                  'obstacles_topic':  '/gmpc/obstacles'},
+                 # CBF with gain scheduling (FIX-2):
+                 # Q drops to 20% and slack 30x when robot enters danger zone.
+                 {'cbf_enable':           True,
+                  'cbf_alpha':            5.0,
+                  'cbf_safe_margin':      0.35,
+                  'cbf_slack_weight':     1.0e4,
+                  'cbf_danger_thresh':    0.5,
+                  'cbf_Q_min_scale':      0.2,
+                  'cbf_slack_max_scale':  30.0,
+                  'obstacles_topic':      '/gmpc/obstacles'},
              ]),
     ])
