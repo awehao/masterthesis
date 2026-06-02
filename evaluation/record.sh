@@ -14,7 +14,7 @@ set -e
 
 if [[ $# -lt 2 ]]; then
     echo "usage: $0 METHOD RUN_TAG [DURATION_S]" >&2
-    echo "  METHOD = rpp | mppi | gmpc" >&2
+    echo "  METHOD = rpp | mppi | gmpc | gmpc_cbf" >&2
     exit 1
 fi
 
@@ -23,8 +23,8 @@ RUN_TAG="$2"
 DURATION="${3:-60}"
 
 case "$METHOD" in
-    rpp|mppi|gmpc) ;;
-    *) echo "ERROR: METHOD must be one of rpp | mppi | gmpc"; exit 1 ;;
+    rpp|mppi|gmpc|gmpc_cbf) ;;
+    *) echo "ERROR: METHOD must be one of rpp | mppi | gmpc | gmpc_cbf"; exit 1 ;;
 esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
