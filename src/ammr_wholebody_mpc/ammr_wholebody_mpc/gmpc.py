@@ -230,7 +230,7 @@ class GMPC:
         prob.setup(P=P_sp, q=q_vec, A=A_total, l=lb_total, u=ub_total,
                    verbose=False,
                    eps_abs=1e-6, eps_rel=1e-6,
-                   polish=True, max_iter=4000)
+                   polish=False, max_iter=4000)
         import time
         t0 = time.perf_counter()
         res = prob.solve()
