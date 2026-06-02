@@ -107,13 +107,14 @@ def generate_launch_description():
                 {
                     'cbf_enable':           True,
                     'cbf_alpha':            5.0,
-                    'cbf_safe_margin':      0.60,
-                    'cbf_slack_weight':     1.0e4,   # nominal slack weight
-                    # Gain scheduling: when robot enters danger zone (min_h < 0.5),
-                    # tracking drops to 20% and slack ramps up 30x → CBF near-hard.
-                    'cbf_danger_thresh':    0.5,
-                    'cbf_Q_min_scale':      0.2,
-                    'cbf_slack_max_scale':  30.0,
+                    'cbf_safe_margin':      0.40,    # was 0.60 — narrower so robot can move
+                    'cbf_slack_weight':     1.0e4,
+                    # SOFTER gain scheduling: don't choke off progress when an
+                    # obstacle merely *passes* near the robot. We only ramp
+                    # weights when truly inside the danger zone (h < 0.2 m²).
+                    'cbf_danger_thresh':    0.2,     # was 0.5 — tighter danger zone
+                    'cbf_Q_min_scale':      0.7,     # was 0.2 — keep most of tracking
+                    'cbf_slack_max_scale':  5.0,     # was 30  — slack only 5x near boundary
                     'obstacles_topic':      '/gmpc/obstacles',
                 },
             ],
