@@ -260,9 +260,11 @@ class GMPCNode(Node):
 
         # 4. Solve
         X_now  = from_xytheta(*robot_xyth)
-        result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev)
+        obstacles = self._obstacles if self.cbf_enable else None
+        result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,
+                                obstacles=obstacles)
 
-        # 5. Publish (saturate one more time as a belt-and-braces safety)
+        # 5. Publish cmd_vel (saturate one more time as a belt-and-braces safety)
         u = result.u_opt
         twist = Twist()
         twist.linear.x  = float(u[0])
@@ -271,10 +273,44 @@ class GMPCNode(Node):
         self.cmd_pub.publish(twist)
         self.xi_prev = u
 
+        # 6. Diagnostic topics (for analyze.py + Foxglove)
+        m = Float32(); m.data = float(result.solve_time_s * 1e3)
+        self.solve_time_pub.publish(m)
+        if self.cbf_enable and result.cbf_active > 0:
+            mh = Float32(); mh.data = float(result.min_h)
+            self.min_h_pub.publish(mh)
+            self._publish_cbf_zones()
+
         if result.status not in ('solved', 'solved inaccurate'):
             self.get_logger().warn(
-                f'OSQP status={result.status}, holding fallback u=0',
+                f'OSQP status={result.status}, emergency-braking',
                 throttle_duration_sec=1.0)
+
+    def _publish_cbf_zones(self):
+        """Visualise CBF safety zones as MarkerArray for Foxglove."""
+        ma = MarkerArray()
+        for i, obs in enumerate(self._obstacles):
+            mk = Marker()
+            mk.header.frame_id = self.global_frame
+            mk.header.stamp    = self.get_clock().now().to_msg()
+            mk.ns       = 'cbf_zone'
+            mk.id       = i
+            mk.type     = Marker.CYLINDER
+            mk.action   = Marker.ADD
+            r = obs['radius'] + self.mpc.cfg.cbf_safe_margin
+            mk.scale.x = 2.0 * r
+            mk.scale.y = 2.0 * r
+            mk.scale.z = 0.02
+            mk.pose.position.x = obs['x']
+            mk.pose.position.y = obs['y']
+            mk.pose.position.z = 0.01
+            mk.pose.orientation.w = 1.0
+            mk.color.r = 1.0
+            mk.color.g = 0.5
+            mk.color.b = 0.0
+            mk.color.a = 0.25            # translucent orange ring
+            ma.markers.append(mk)
+        self.cbf_zone_pub.publish(ma)
 
 
 def main():

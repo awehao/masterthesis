@@ -48,6 +48,7 @@ timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
     ros2 bag record \
         -o "$OUT_DIR" \
         --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
+                 /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h \
     || true
 
 echo "Done. Now analyse with:"

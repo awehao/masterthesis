@@ -54,25 +54,31 @@ def _by_method(cols: dict, metric: str, method: str) -> np.ndarray:
     return np.array([v for v in vals if isinstance(v, float) and not np.isnan(v)])
 
 
-METHOD_ORDER  = ['rpp', 'mppi', 'gmpc']
+METHOD_ORDER  = ['rpp', 'mppi', 'gmpc', 'gmpc_cbf']
 METHOD_LABEL  = {'rpp': 'NavFn + RPP',
                  'mppi': 'Smac + MPPI Omni',
-                 'gmpc': 'SE(2) GMPC (ours)'}
+                 'gmpc': 'SE(2) GMPC (ours)',
+                 'gmpc_cbf': 'SE(2) GMPC + CBF (ours)'}
 METHOD_COLOR  = {'rpp': '#888888',
                  'mppi': '#1f77b4',
-                 'gmpc': '#d62728'}
+                 'gmpc': '#d62728',
+                 'gmpc_cbf': '#2ca02c'}
 
 # (metric, axis-label, lower-is-better?)
 METRICS = [
-    ('arrival_time_s',  'arrival time [s]',           True),
-    ('path_length_m',   'path length [m]',            True),
-    ('tracking_rmse_m', 'tracking RMSE [m]',          True),
-    ('smooth_vx',       'σ(v_x) [m/s]',               True),
-    ('smooth_vy',       'σ(v_y) [m/s]',               True),
-    ('smooth_wz',       'σ(ω_z) [rad/s]',             True),
-    ('jerk_vx',         'σ(a_x) [m/s²]',              True),
-    ('jerk_vy',         'σ(a_y) [m/s²]',              True),
-    ('jerk_wz',         'σ(α_z) [rad/s²]',            True),
+    ('arrival_time_s',     'arrival time [s]',           True),
+    ('path_length_m',      'path length [m]',            True),
+    ('tracking_rmse_m',    'tracking RMSE [m]',          True),
+    ('min_clearance_m',    'min obstacle clearance [m]', False),    # higher = safer
+    ('collision_count',    'collisions',                 True),
+    ('solve_time_mean_ms', 'solve time mean [ms]',       True),
+    ('solve_time_p95_ms',  'solve time p95 [ms]',        True),
+    ('smooth_vx',          'σ(v_x) [m/s]',               True),
+    ('smooth_vy',          'σ(v_y) [m/s]',               True),
+    ('smooth_wz',          'σ(ω_z) [rad/s]',             True),
+    ('jerk_vx',            'σ(a_x) [m/s²]',              True),
+    ('jerk_vy',            'σ(a_y) [m/s²]',              True),
+    ('jerk_wz',            'σ(α_z) [rad/s²]',            True),
 ]
 
 

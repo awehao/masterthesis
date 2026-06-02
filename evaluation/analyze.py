@@ -45,7 +45,17 @@ except ImportError as e:
 
 
 GOAL_TOLERANCE_M = 0.25
-TOPICS_OF_INTEREST = {'/odom', '/cmd_vel', '/cmd_vel_nav', '/plan'}
+
+# Topics we care about. The GMPC stack publishes:
+#   /gmpc/solve_time_ms : std_msgs/Float32 — per-step OSQP wall time
+#   /gmpc/obstacles     : std_msgs/Float32MultiArray — flat [x,y,r,...] ground truth
+#   /gmpc/min_h         : std_msgs/Float32 — smallest CBF barrier value
+TOPICS_OF_INTEREST = {
+    '/odom', '/cmd_vel', '/cmd_vel_nav', '/plan',
+    '/gmpc/solve_time_ms', '/gmpc/obstacles', '/gmpc/min_h',
+}
+
+COLLISION_BUFFER_M = 0.0   # treat distance < radius as collision
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +141,34 @@ def extract_plans(messages):
     return out
 
 
+def extract_float32_series(messages, topic: str):
+    """Return arrays (ts, vals) from a std_msgs/Float32 topic, or empty if absent."""
+    if topic not in messages:
+        return np.zeros(0), np.zeros(0)
+    ts, vals = [], []
+    for t_ns, m in messages[topic]:
+        ts.append(t_ns / 1e9)
+        vals.append(float(m.data))
+    return np.array(ts), np.array(vals)
+
+
+def extract_obstacles(messages, topic='/gmpc/obstacles'):
+    """Time-series of obstacle snapshots from a Float32MultiArray topic.
+
+    Each message has flat data [x1, y1, r1, x2, y2, r2, ...].
+    Returns list of (t_seconds, np.ndarray of shape (N, 3) with cols x, y, radius).
+    """
+    if topic not in messages:
+        return []
+    out = []
+    for t_ns, m in messages[topic]:
+        data = np.asarray(m.data, dtype=float)
+        if data.size == 0 or data.size % 3 != 0:
+            continue
+        out.append((t_ns / 1e9, data.reshape(-1, 3)))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
@@ -139,6 +177,8 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
     odom_t,  odom_xyth = extract_odom(messages)
     cmd_t,   cmd_vec   = extract_cmd(messages, '/cmd_vel')
     plans              = extract_plans(messages)
+    obs_series         = extract_obstacles(messages)
+    st_t, st_vals      = extract_float32_series(messages, '/gmpc/solve_time_ms')
 
     out = {
         'success'       : False,
@@ -152,9 +192,18 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
         'jerk_vx'       : float('nan'),
         'jerk_vy'       : float('nan'),
         'jerk_wz'       : float('nan'),
+        # Safety / timing
+        'min_clearance_m'   : float('nan'),
+        'collision_count'   : 0,
+        'collided'          : False,
+        'solve_time_mean_ms': float('nan'),
+        'solve_time_p95_ms' : float('nan'),
+        'solve_time_max_ms' : float('nan'),
         'n_odom'        : len(odom_t),
         'n_cmd'         : len(cmd_t),
         'n_plan'        : len(plans),
+        'n_obstacles'   : len(obs_series),
+        'n_solve_time'  : len(st_vals),
     }
     if len(odom_t) < 2 or not plans:
         return out
@@ -206,6 +255,42 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
             out['jerk_vy'] = float(np.std(accel[:, 1]))
             out['jerk_wz'] = float(np.std(accel[:, 2]))
 
+    # ------- safety: per-odom min distance to any (time-aligned) obstacle ----
+    # If /gmpc/obstacles is missing (RPP/MPPI bags), the bag won't have it.
+    # In that case the safety metrics stay NaN — the user should record with
+    # obstacle_aggregator running so all baselines share the same ground truth.
+    if obs_series:
+        obs_ts = np.array([t for t, _ in obs_series])
+        clearances = []
+        n_coll = 0
+        in_collision = False
+        for i in np.where(in_run)[0]:
+            t = odom_t[i]
+            j = int(np.searchsorted(obs_ts, t, side='right') - 1)
+            j = max(0, min(j, len(obs_series) - 1))
+            obs_xy_r = obs_series[j][1]                    # (M, 3)
+            d_centres = np.linalg.norm(obs_xy_r[:, :2] - odom_xyth[i, :2], axis=1)
+            d_surfaces = d_centres - obs_xy_r[:, 2]        # subtract radius
+            d_min = float(np.min(d_surfaces))
+            clearances.append(d_min)
+            # Edge-trigger collision count when crossing zero
+            if d_min < COLLISION_BUFFER_M:
+                if not in_collision:
+                    n_coll += 1
+                in_collision = True
+            else:
+                in_collision = False
+        if clearances:
+            out['min_clearance_m'] = float(np.min(clearances))
+            out['collision_count'] = int(n_coll)
+            out['collided']        = bool(n_coll > 0)
+
+    # ------- solve time stats (GMPC only — empty for RPP/MPPI bags) ---------
+    if len(st_vals):
+        out['solve_time_mean_ms'] = float(np.mean(st_vals))
+        out['solve_time_p95_ms']  = float(np.percentile(st_vals, 95))
+        out['solve_time_max_ms']  = float(np.max(st_vals))
+
     return out
 
 
@@ -219,7 +304,9 @@ CSV_HEADER = [
     'tracking_rmse_m',
     'smooth_vx', 'smooth_vy', 'smooth_wz',
     'jerk_vx',   'jerk_vy',   'jerk_wz',
-    'n_odom', 'n_cmd', 'n_plan',
+    'min_clearance_m', 'collision_count', 'collided',
+    'solve_time_mean_ms', 'solve_time_p95_ms', 'solve_time_max_ms',
+    'n_odom', 'n_cmd', 'n_plan', 'n_obstacles', 'n_solve_time',
     'bag',
 ]
 
@@ -238,7 +325,8 @@ def main():
     here = Path(__file__).parent
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('bag',     help='Path to rosbag directory (contains metadata.yaml + .db3)')
-    ap.add_argument('--method', required=True, choices=['rpp', 'mppi', 'gmpc'],
+    ap.add_argument('--method', required=True,
+                    choices=['rpp', 'mppi', 'gmpc', 'gmpc_cbf'],
                     help='Controller used in this run')
     ap.add_argument('--run',    required=True, help='Run identifier (e.g. seed42_run1)')
     ap.add_argument('--out',    default=str(here / 'results' / 'runs.csv'),
