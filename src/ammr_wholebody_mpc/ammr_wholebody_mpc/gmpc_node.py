@@ -106,8 +106,9 @@ class GMPCNode(Node):
         self.N   = cfg.N
 
         # ---- State --------------------------------------------------------
-        self.latest_path = None
-        self.xi_prev     = np.zeros(3)
+        self.latest_path  = None
+        self.xi_prev      = np.zeros(3)
+        self._arrived     = False   # edge-trigger flag for "Goal reached" log
 
         # ---- TF + I/O -----------------------------------------------------
         self.tf_buffer   = tf2_ros.Buffer()
@@ -141,6 +142,9 @@ class GMPCNode(Node):
         if len(msg.poses) == 0:
             self.get_logger().warn('Received empty plan')
         self.latest_path = msg
+        # New plan means a new goal (or continuous replan) — re-arm the arrival
+        # detector so the next arrival also gets logged.
+        self._arrived = False
 
     def _publish_zero(self):
         self.cmd_pub.publish(Twist())
@@ -184,7 +188,16 @@ class GMPCNode(Node):
         # 2. Distance-to-goal check (just hold zero when there)
         goal_xy = np.array([self.latest_path.poses[-1].pose.position.x,
                             self.latest_path.poses[-1].pose.position.y])
-        if np.linalg.norm(goal_xy - robot_xyth[:2]) < self.goal_tol_xy:
+        dist_to_goal = float(np.linalg.norm(goal_xy - robot_xyth[:2]))
+        if dist_to_goal < self.goal_tol_xy:
+            if not self._arrived:
+                self.get_logger().info(
+                    f'\033[1;32mGoal reached\033[0m '
+                    f'(within {dist_to_goal:.3f} m of '
+                    f'({goal_xy[0]:.2f}, {goal_xy[1]:.2f}), tol={self.goal_tol_xy:.2f} m) '
+                    f'-- holding zero twist'
+                )
+                self._arrived = True
             self._publish_zero()
             return
 
