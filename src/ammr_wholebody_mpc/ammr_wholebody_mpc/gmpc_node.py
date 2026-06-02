@@ -186,13 +186,16 @@ class GMPCNode(Node):
         self._arrived = False
 
     def _obstacles_cb(self, msg: Float32MultiArray):
-        """Flat [x1, y1, r1, x2, y2, r2, ...] in the global frame."""
+        """Flat [x, y, r, vx, vy, ...] (5 floats per obstacle) in global frame."""
         data = list(msg.data)
-        n = len(data) // 3
+        stride = 5
+        n = len(data) // stride
         self._obstacles = [
-            {'x': float(data[3*i]),
-             'y': float(data[3*i + 1]),
-             'radius': float(data[3*i + 2])}
+            {'x':      float(data[stride*i + 0]),
+             'y':      float(data[stride*i + 1]),
+             'radius': float(data[stride*i + 2]),
+             'vx':     float(data[stride*i + 3]),
+             'vy':     float(data[stride*i + 4])}
             for i in range(n)
         ]
 

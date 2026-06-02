@@ -204,59 +204,115 @@ def _build_constraints(cfg: GMPCConfig,
 
 
 # ---------------------------------------------------------------------------
-# CBF row builder
+# CBF row builder — full-horizon receding CBF with per-step soft slack
 # ---------------------------------------------------------------------------
+#
+# For each obstacle i and each prediction step k = 0, 1, ..., N-1:
+#
+#   Predicted obstacle position (constant-velocity assumption):
+#       o_i(k) = o_i(0) + v_i · k · dt
+#
+#   Robot linearisation point:
+#       k = 0  → use X_now (the actual current pose)
+#       k ≥ 1  → use X_ref_win[k] (the reference path nominal pose)
+#
+#   Barrier value at step k:
+#       h_i(k) = ‖ p(k) − o_i(k) ‖² − ( r_i + d_safe )²
+#
+#   Velocity-layer CBF (continuous form):
+#       ḣ_i(k) + α · h_i(k)  ≥  −ε_k
+#       where  ḣ_i(k) = 2 (p(k) − o_i(k))ᵀ ( R(θ(k)) · v_body(k) − v_obs(k) )
+#
+#   Substituting  v_body(k) = ξ_ref(k) + δξ_k  and rearranging into the form
+#       [grad_body(k)] · δξ_k  +  ε_k  ≥  b(k)
+#   we obtain a *linear* row in (δξ_k, ε_k):
+#
+#       grad_body(k) = 2 (p(k) − o_i(k))ᵀ · R(θ(k))      ∈ R^{1×2}
+#       b(k)         = 2 (p(k) − o_i(k))ᵀ · v_obs(k)
+#                    − α · h_i(k)
+#                    − [grad_body(k), 0] · ξ_ref(k)
+#
+# ε_0 is **hard-wired to 0**:  the first step is the safety-critical "now"
+# step; allowing any slack there would let the controller crash in the next
+# 50 ms tick. ε_k for k ≥ 1 carry an L2 penalty  ρ · ε_k²  so the QP only uses
+# them when the look-ahead horizon is genuinely infeasible.
 
-def _build_cbf_constraints(cfg: GMPCConfig,
-                           X_now: np.ndarray,
-                           xi_ref_0: np.ndarray,
-                           obstacles):
-    """Build CBF inequality rows on the *first* input δξ_0.
+def _build_cbf_horizon(cfg          : GMPCConfig,
+                       X_now        : np.ndarray,
+                       X_ref_win    : np.ndarray,
+                       xi_ref_win   : np.ndarray,
+                       obstacles    ,
+                       slack_dim    : int):
+    """Build full-horizon CBF rows for the augmented decision
 
-    obstacles : iterable of dicts with keys
-        x, y     : world-frame obstacle centre
-        radius   : obstacle radius [m]   (the safe-margin from cfg is added)
+        z = [δξ_0, δξ_1, ..., δξ_{N-1}, ε_1, ε_2, ..., ε_{N-1}]
+
+    where the ε's live in columns [Nm : Nm + slack_dim], slack_dim = N − 1.
 
     Returns
     -------
-    A_rows : (n_obs, 3*N) sparse rows — non-zero only in first 3 columns
-    l      : (n_obs,)  per-obstacle lower bounds
-    u      : (n_obs,)  per-obstacle upper bounds (= +inf)
-    h_vals : (n_obs,)  current barrier values, for diagnostics
+    A_cbf  : sparse (n_obs · N, Nm + slack_dim)
+    l_cbf  : (n_obs · N,)
+    u_cbf  : (n_obs · N,)   all +∞
+    h_now  : (n_obs,)       current-step barrier values (for /gmpc/min_h)
     """
     n_obs = len(obstacles)
     N     = cfg.N
     Nm    = N * 3
+    dt    = cfg.dt
     if n_obs == 0:
-        return (sparse.csr_matrix((0, Nm)),
+        return (sparse.csr_matrix((0, Nm + slack_dim)),
                 np.zeros(0), np.zeros(0), np.zeros(0))
 
-    # World pose
-    R   = X_now[:2, :2]
-    p   = X_now[:2, 2]
-
-    A_dense = np.zeros((n_obs, Nm))
-    l_vec   = np.zeros(n_obs)
-    u_vec   = np.full(n_obs, np.inf)
-    h_vec   = np.zeros(n_obs)
+    n_rows = n_obs * N
+    A      = np.zeros((n_rows, Nm + slack_dim))
+    l_vec  = np.zeros(n_rows)
+    u_vec  = np.full(n_rows, np.inf)
+    h_now  = np.zeros(n_obs)
 
     for i, obs in enumerate(obstacles):
-        o_xy   = np.array([float(obs['x']), float(obs['y'])])
-        radius = float(obs['radius']) + cfg.cbf_safe_margin
-        diff   = p - o_xy
-        h_i    = float(diff @ diff - radius * radius)
-        h_vec[i] = h_i
-        # ∂h/∂p_world = 2·diff  →  ∂h/∂(vx,vy)_body = 2·diff · R
-        grad_body = 2.0 * (diff @ R)                  # shape (2,)
-        # Constraint  [grad_body, 0] · u_0  ≥  -α·h
-        # u_0 = ξ_ref(0) + δξ_0
-        # so   [grad_body, 0] · δξ_0  ≥  -α·h - [grad_body, 0] · ξ_ref(0)
-        A_row_3 = np.array([grad_body[0], grad_body[1], 0.0])
-        A_dense[i, 0:3] = A_row_3
-        l_vec[i] = -cfg.cbf_alpha * h_i - A_row_3 @ xi_ref_0
-        # u_vec[i] already +inf
+        ox, oy = float(obs['x']),   float(obs['y'])
+        vox    = float(obs.get('vx', 0.0))
+        voy    = float(obs.get('vy', 0.0))
+        r_eff  = float(obs['radius']) + cfg.cbf_safe_margin
 
-    return sparse.csr_matrix(A_dense), l_vec, u_vec, h_vec
+        for k in range(N):
+            # Robot linearisation pose at step k
+            if k == 0:
+                X_k = X_now
+            else:
+                X_k = X_ref_win[k]
+            R_k = X_k[:2, :2]
+            p_k = X_k[:2, 2]
+
+            # Predicted obstacle position at step k (constant velocity)
+            ox_k = ox + vox * k * dt
+            oy_k = oy + voy * k * dt
+            diff = p_k - np.array([ox_k, oy_k])
+
+            # Barrier value
+            h_k = float(diff @ diff - r_eff * r_eff)
+            if k == 0:
+                h_now[i] = h_k
+
+            # Linearised CBF row on δξ_k
+            grad_body = 2.0 * (diff @ R_k)                # shape (2,)
+            A_row_3   = np.array([grad_body[0], grad_body[1], 0.0])
+
+            row = i * N + k
+            A[row, 3*k:3*k + 3] = A_row_3
+            # Slack column (only k ≥ 1 — k = 0 stays hard)
+            if k >= 1:
+                A[row, Nm + (k - 1)] = 1.0
+
+            # Lower bound from rearranged CBF inequality
+            l_vec[row] = (
+                2.0 * (diff[0] * vox + diff[1] * voy)
+                - cfg.cbf_alpha * h_k
+                - A_row_3 @ xi_ref_win[k]
+            )
+
+    return sparse.csr_matrix(A), l_vec, u_vec, h_now
 
 
 # ---------------------------------------------------------------------------
@@ -312,43 +368,54 @@ class GMPC:
         # 5. Constraints (velocity + acceleration)
         A_total, lb_total, ub_total = _build_constraints(cfg, xi_ref_win, xi_prev)
 
-        # 5b. CBF safety constraints — augment with ONE global slack ε ≥ 0 so the
-        #     QP stays feasible even when CBF + acc constraints would conflict.
-        #     Cost adds ρ·ε² (large ρ → near-hard).
+        # 5b. Full-horizon CBF safety filter — receding QP with per-step slack.
+        #
+        #     z = [δξ_0, δξ_1, ..., δξ_{N-1},  ε_1, ε_2, ..., ε_{N-1}]
+        #                                       ^^^^^^^^^^^^^^^^^^^^^^^^^
+        #     ε_0 is implicitly 0 → CBF at the *current* step is HARD (no
+        #     compromise on safety right now). The k ≥ 1 slacks let the
+        #     receding window stay feasible when the predicted trajectory
+        #     would otherwise be blocked; they carry an L2 penalty ρ·ε² so
+        #     the QP only uses them when no clean solution exists.
+        Nm          = N * n
         cbf_active  = 0
         min_h       = float('inf')
         n_slack     = 0
-        Nm = N * n
         if obstacles:
-            A_cbf, l_cbf, u_cbf, h_vec = _build_cbf_constraints(
-                cfg, X_now, xi_ref_win[0], obstacles,
+            n_slack = N - 1                     # one slack per future step
+            A_cbf, l_cbf, u_cbf, h_now = _build_cbf_horizon(
+                cfg, X_now, X_ref_win, xi_ref_win, obstacles, n_slack,
             )
             if A_cbf.shape[0] > 0:
-                n_slack    = 1
                 cbf_active = A_cbf.shape[0]
-                min_h      = float(np.min(h_vec))
-                # Augment P,q with the slack column / row (cost ρ·ε²)
-                P_aug = np.zeros((Nm + 1, Nm + 1))
+                min_h      = float(np.min(h_now))
+
+                # P,q augmented with slack block (diagonal L2 penalty)
+                P_aug = np.zeros((Nm + n_slack, Nm + n_slack))
                 P_aug[:Nm, :Nm] = P_dense
-                P_aug[Nm,  Nm]  = 2.0 * cfg.cbf_slack_weight
+                for s in range(n_slack):
+                    P_aug[Nm + s, Nm + s] = 2.0 * cfg.cbf_slack_weight
                 P_dense = P_aug
-                q_vec   = np.concatenate([q_vec, [0.0]])
-                # Extend existing constraint columns with zero (slack untouched)
-                z_pad   = sparse.csc_matrix((A_total.shape[0], 1))
-                A_total = sparse.hstack([A_total, z_pad], format='csc')
-                # CBF rows: A_cbf in first 3 cols + (+1) in slack col → ε relaxes
-                cbf_slack_col = np.ones((A_cbf.shape[0], 1))
-                A_cbf_aug = sparse.hstack(
-                    [A_cbf, sparse.csr_matrix(cbf_slack_col)], format='csr')
-                A_total  = sparse.vstack([A_total, A_cbf_aug], format='csc')
+                q_vec   = np.concatenate([q_vec, np.zeros(n_slack)])
+
+                # Pad existing constraint rows with zeros for slack columns
+                A_total = sparse.hstack(
+                    [A_total, sparse.csc_matrix((A_total.shape[0], n_slack))],
+                    format='csc',
+                )
+
+                # CBF rows (already shaped to Nm + n_slack columns)
+                A_total  = sparse.vstack([A_total, A_cbf], format='csc')
                 lb_total = np.concatenate([lb_total, l_cbf])
                 ub_total = np.concatenate([ub_total, u_cbf])
-                # ε ≥ 0 row
-                eps_row  = sparse.csr_matrix(
-                    ([1.0], ([0], [Nm])), shape=(1, Nm + 1))
-                A_total  = sparse.vstack([A_total, eps_row], format='csc')
-                lb_total = np.concatenate([lb_total, [0.0]])
-                ub_total = np.concatenate([ub_total, [np.inf]])
+
+                # ε_k ≥ 0  for k = 1..N-1
+                eps_rows = sparse.lil_matrix((n_slack, Nm + n_slack))
+                for s in range(n_slack):
+                    eps_rows[s, Nm + s] = 1.0
+                A_total  = sparse.vstack([A_total, eps_rows.tocsr()], format='csc')
+                lb_total = np.concatenate([lb_total, np.zeros(n_slack)])
+                ub_total = np.concatenate([ub_total, np.full(n_slack, np.inf)])
 
         # 6. OSQP solve
         P_sp = sparse.csc_matrix(P_dense)
