@@ -79,6 +79,9 @@ def generate_launch_description():
                 'global_frame':     'map',
                 'robot_base_frame': 'base_footprint',
                 'planner_id':       'GridBased',
+                # ANTI-FREEZE: slower replan so tracking error has time to
+                # accumulate and push the QP toward forward motion.
+                'replan_period':    3.0,           # was 1.0 s
             }],
         ),
 
@@ -106,15 +109,15 @@ def generate_launch_description():
                 gmpc_params,                       # base config from yaml
                 {
                     'cbf_enable':           True,
-                    'cbf_alpha':            5.0,
-                    'cbf_safe_margin':      0.40,    # was 0.60 — narrower so robot can move
-                    'cbf_slack_weight':     1.0e4,
-                    # SOFTER gain scheduling: don't choke off progress when an
-                    # obstacle merely *passes* near the robot. We only ramp
-                    # weights when truly inside the danger zone (h < 0.2 m²).
-                    'cbf_danger_thresh':    0.2,     # was 0.5 — tighter danger zone
-                    'cbf_Q_min_scale':      0.7,     # was 0.2 — keep most of tracking
-                    'cbf_slack_max_scale':  5.0,     # was 30  — slack only 5x near boundary
+                    'cbf_alpha':            3.0,     # was 5.0 — looser
+                    'cbf_safe_margin':      0.30,    # was 0.40 — robot can pass closer
+                    # ★ ANTI-FREEZE: cheaper slack so QP prefers
+                    #   "small violation of predicted future safety + keep moving"
+                    #   over "u=0 forever".
+                    'cbf_slack_weight':     5.0e2,   # was 1e4 — 20x cheaper
+                    'cbf_danger_thresh':    0.15,
+                    'cbf_Q_min_scale':      0.85,    # was 0.7 — keep MORE tracking pressure
+                    'cbf_slack_max_scale':  20.0,    # was 5  — ramp slack only when truly dangerous
                     'obstacles_topic':      '/gmpc/obstacles',
                 },
             ],
