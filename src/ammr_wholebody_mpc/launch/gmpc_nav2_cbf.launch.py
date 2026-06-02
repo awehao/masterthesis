@@ -104,11 +104,11 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 gmpc_params,                       # base config from yaml
-                {                                  # CBF overrides
+                {                                  # CBF overrides (aggressive)
                     'cbf_enable':       True,
-                    'cbf_alpha':        2.0,
-                    'cbf_safe_margin':  0.30,
-                    'cbf_slack_weight': 1.0e4,
+                    'cbf_alpha':        5.0,       # was 2.0 — sharper near boundary
+                    'cbf_safe_margin':  0.60,      # was 0.30 — earlier reaction
+                    'cbf_slack_weight': 1.0e5,     # was 1e4 — slack is harder
                     'obstacles_topic':  '/gmpc/obstacles',
                 },
             ],

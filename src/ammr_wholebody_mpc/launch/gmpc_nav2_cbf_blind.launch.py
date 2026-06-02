@@ -76,10 +76,12 @@ def generate_launch_description():
              name='gmpc_controller', output='screen',
              parameters=[
                  gmpc_params,
-                 {'cbf_enable': True,
-                  'cbf_alpha': 2.0,
-                  'cbf_safe_margin': 0.30,
-                  'cbf_slack_weight': 1.0e4,
-                  'obstacles_topic': '/gmpc/obstacles'},
+                 # Aggressive CBF: earlier reaction, sharper response.
+                 # Trades arrival time for clearance margin.
+                 {'cbf_enable':       True,
+                  'cbf_alpha':        5.0,        # was 2.0
+                  'cbf_safe_margin':  0.60,       # was 0.30
+                  'cbf_slack_weight': 1.0e5,      # was 1.0e4
+                  'obstacles_topic':  '/gmpc/obstacles'},
              ]),
     ])
