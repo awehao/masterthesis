@@ -26,13 +26,13 @@ gmpc_controller:
     # ---- MPC weights (v3: stronger input penalty to damp the controller) -
     # Q stays at the same magnitude as the offline prototype.
     # R bumped 6x to make the QP value control smoothness over tight tracking.
-    # ANTI-FREEZE: bigger Q gives the QP a stronger incentive to MOVE
-    # along the path; small R lets it actually act on that incentive.
-    Q_xy:               25.0     # was 10
-    Q_yaw:              10.0     # was 5
-    R_vx:                1.0     # was 3.0 — easier to deviate from ξ_ref
-    R_vy:                1.0     # was 3.0
-    R_w:                 0.5     # was 1.5
+    # Balanced Q/R: enough Q to motivate progress, enough R to damp chatter
+    # caused by KF estimate jitter on dynamic obstacle velocity.
+    Q_xy:               15.0     # was 25 — less aggressive tracking
+    Q_yaw:               7.0     # was 10
+    R_vx:                2.0     # was 1.0 — more input damping
+    R_vy:                2.0
+    R_w:                 1.0
     Qf_mult:             5.0
 
     # ---- Frames / topics --------------------------------------------------

@@ -96,6 +96,13 @@ def generate_launch_description():
                 'trajectories_file':  traj_file,
                 'publish_rate':       20.0,
                 'output_topic':       '/gmpc/obstacles',
+                # SMOOTHER KF — measurement noise inflated, velocity process
+                # noise reduced so the filter ignores small jitters that would
+                # otherwise leak into the CBF prediction and chatter the cmd.
+                'kf_sigma_meas':      0.05,   # was 0.01 (5× more meas noise)
+                'kf_sigma_vel':       0.4,    # was 1.5 (smoother velocity)
+                'kf_sigma_pos':       0.01,   # was 0.005
+                'kf_init_vel_var':    1.0,
             }],
         ),
 
