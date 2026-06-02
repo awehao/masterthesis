@@ -71,6 +71,10 @@ class GMPCConfig:
     Q      : np.ndarray                   # (3,3) running state weight
     R      : np.ndarray                   # (3,3) input deviation weight
     Qf     : np.ndarray                   # (3,3) terminal state weight
+    # ---- Control Barrier Function safety filter ----------------------------
+    cbf_alpha        : float = 1.0        # decay rate α in  ḣ + α·h ≥ 0
+    cbf_safe_margin  : float = 0.30       # extra clearance added to obstacle radius [m]
+    cbf_slack_weight : float = 1.0e4      # ρ in cost ρ·ε² ; large = CBF near-hard
 
 
 @dataclass
@@ -80,6 +84,29 @@ class GMPCResult:
     e0             : np.ndarray           # (3,) current geodesic error
     solve_time_s   : float                # wall-time of OSQP solve()
     status         : str                  # OSQP status string
+    cbf_active     : int   = 0            # number of CBF constraints applied (info)
+    min_h          : float = float('inf') # smallest barrier value across obstacles
+
+
+# ---------------------------------------------------------------------------
+# CBF: single-step velocity-layer Control Barrier Function for circular obstacles
+# ---------------------------------------------------------------------------
+# For each circular obstacle i at world position (ox, oy) with radius r_i, define
+#     h_i(p) = ||p - o_i||² - (r_i + d_safe)²
+# with the chassis at world position p = (px, py), body orientation θ.
+# Because the chassis is a velocity-layer holonomic system,
+#     ṗ_world = R(θ) · v_body,         v_body = (vx, vy)
+# so
+#     ḣ_i = 2 (p - o_i)ᵀ · R(θ) · v_body
+# (h does NOT depend on θ for a point-mass obstacle, so the row for ω is zero.)
+#
+# Velocity CBF condition  ḣ + α·h ≥ 0  becomes a linear inequality in u_0:
+#     [ 2 (p - o_i)ᵀ R(θ),  0 ] · u_0  ≥  -α · h_i
+# We apply this to the *first* input  u_0 = ξ_ref(0) + δξ_0  only, which is the
+# standard single-step CBF-QP "safety filter" (Ames et al. 2017). Receding-horizon
+# re-solving every dt keeps the chassis safe at every control step. The constraint
+# row touches only the first 3 columns of the decision vector z.
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +204,62 @@ def _build_constraints(cfg: GMPCConfig,
 
 
 # ---------------------------------------------------------------------------
+# CBF row builder
+# ---------------------------------------------------------------------------
+
+def _build_cbf_constraints(cfg: GMPCConfig,
+                           X_now: np.ndarray,
+                           xi_ref_0: np.ndarray,
+                           obstacles):
+    """Build CBF inequality rows on the *first* input δξ_0.
+
+    obstacles : iterable of dicts with keys
+        x, y     : world-frame obstacle centre
+        radius   : obstacle radius [m]   (the safe-margin from cfg is added)
+
+    Returns
+    -------
+    A_rows : (n_obs, 3*N) sparse rows — non-zero only in first 3 columns
+    l      : (n_obs,)  per-obstacle lower bounds
+    u      : (n_obs,)  per-obstacle upper bounds (= +inf)
+    h_vals : (n_obs,)  current barrier values, for diagnostics
+    """
+    n_obs = len(obstacles)
+    N     = cfg.N
+    Nm    = N * 3
+    if n_obs == 0:
+        return (sparse.csr_matrix((0, Nm)),
+                np.zeros(0), np.zeros(0), np.zeros(0))
+
+    # World pose
+    R   = X_now[:2, :2]
+    p   = X_now[:2, 2]
+
+    A_dense = np.zeros((n_obs, Nm))
+    l_vec   = np.zeros(n_obs)
+    u_vec   = np.full(n_obs, np.inf)
+    h_vec   = np.zeros(n_obs)
+
+    for i, obs in enumerate(obstacles):
+        o_xy   = np.array([float(obs['x']), float(obs['y'])])
+        radius = float(obs['radius']) + cfg.cbf_safe_margin
+        diff   = p - o_xy
+        h_i    = float(diff @ diff - radius * radius)
+        h_vec[i] = h_i
+        # ∂h/∂p_world = 2·diff  →  ∂h/∂(vx,vy)_body = 2·diff · R
+        grad_body = 2.0 * (diff @ R)                  # shape (2,)
+        # Constraint  [grad_body, 0] · u_0  ≥  -α·h
+        # u_0 = ξ_ref(0) + δξ_0
+        # so   [grad_body, 0] · δξ_0  ≥  -α·h - [grad_body, 0] · ξ_ref(0)
+        A_row_3 = np.array([grad_body[0], grad_body[1], 0.0])
+        A_dense[i, 0:3] = A_row_3
+        l_vec[i] = -cfg.cbf_alpha * h_i - A_row_3 @ xi_ref_0
+        # u_vec[i] already +inf
+
+    return sparse.csr_matrix(A_dense), l_vec, u_vec, h_vec
+
+
+# ---------------------------------------------------------------------------
 # Top-level solver class
 # ---------------------------------------------------------------------------
 
@@ -195,7 +278,12 @@ class GMPC:
               X_ref_win  : np.ndarray,
               xi_ref_win : np.ndarray,
               xi_prev    : np.ndarray,
+              obstacles  : list | None = None,
               ) -> GMPCResult:
+        """
+        obstacles : optional list of dicts {x, y, radius} in world frame.
+                    If non-empty, a CBF inequality is added per obstacle on δξ_0.
+        """
         cfg = self.cfg
         N, dt = cfg.N, cfg.dt
         n = 3
@@ -221,8 +309,46 @@ class GMPC:
         P_dense = 0.5 * (P_dense + P_dense.T)
         q_vec   = 2.0 * Gamma.T @ Q_bar @ Phi @ e0
 
-        # 5. Constraints
+        # 5. Constraints (velocity + acceleration)
         A_total, lb_total, ub_total = _build_constraints(cfg, xi_ref_win, xi_prev)
+
+        # 5b. CBF safety constraints — augment with ONE global slack ε ≥ 0 so the
+        #     QP stays feasible even when CBF + acc constraints would conflict.
+        #     Cost adds ρ·ε² (large ρ → near-hard).
+        cbf_active  = 0
+        min_h       = float('inf')
+        n_slack     = 0
+        Nm = N * n
+        if obstacles:
+            A_cbf, l_cbf, u_cbf, h_vec = _build_cbf_constraints(
+                cfg, X_now, xi_ref_win[0], obstacles,
+            )
+            if A_cbf.shape[0] > 0:
+                n_slack    = 1
+                cbf_active = A_cbf.shape[0]
+                min_h      = float(np.min(h_vec))
+                # Augment P,q with the slack column / row (cost ρ·ε²)
+                P_aug = np.zeros((Nm + 1, Nm + 1))
+                P_aug[:Nm, :Nm] = P_dense
+                P_aug[Nm,  Nm]  = 2.0 * cfg.cbf_slack_weight
+                P_dense = P_aug
+                q_vec   = np.concatenate([q_vec, [0.0]])
+                # Extend existing constraint columns with zero (slack untouched)
+                z_pad   = sparse.csc_matrix((A_total.shape[0], 1))
+                A_total = sparse.hstack([A_total, z_pad], format='csc')
+                # CBF rows: A_cbf in first 3 cols + (+1) in slack col → ε relaxes
+                cbf_slack_col = np.ones((A_cbf.shape[0], 1))
+                A_cbf_aug = sparse.hstack(
+                    [A_cbf, sparse.csr_matrix(cbf_slack_col)], format='csr')
+                A_total  = sparse.vstack([A_total, A_cbf_aug], format='csc')
+                lb_total = np.concatenate([lb_total, l_cbf])
+                ub_total = np.concatenate([ub_total, u_cbf])
+                # ε ≥ 0 row
+                eps_row  = sparse.csr_matrix(
+                    ([1.0], ([0], [Nm])), shape=(1, Nm + 1))
+                A_total  = sparse.vstack([A_total, eps_row], format='csc')
+                lb_total = np.concatenate([lb_total, [0.0]])
+                ub_total = np.concatenate([ub_total, [np.inf]])
 
         # 6. OSQP solve
         P_sp = sparse.csc_matrix(P_dense)
@@ -238,16 +364,20 @@ class GMPC:
 
         status = res.info.status
         if status not in ('solved', 'solved inaccurate'):
-            # Fall back to reference twist (no correction) — flag in status
+            # Safer fallback: emergency brake (u=0) instead of full ref twist,
+            # because if QP failed near an obstacle, blindly following ref will crash.
             delta = np.zeros((N, n))
+            delta[0] = -xi_ref_win[0]                        # u_0 = ξ_ref + δ = 0
         else:
-            delta = np.asarray(res.x).reshape(N, n)
+            sol = np.asarray(res.x)
+            delta = sol[:Nm].reshape(N, n)
 
         u_opt = xi_ref_win[0] + delta[0]
         u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
 
         return GMPCResult(u_opt=u_opt, delta_xi_all=delta,
-                          e0=e0, solve_time_s=solve_time, status=status)
+                          e0=e0, solve_time_s=solve_time, status=status,
+                          cbf_active=cbf_active, min_h=min_h)
 
 
 # ---------------------------------------------------------------------------
