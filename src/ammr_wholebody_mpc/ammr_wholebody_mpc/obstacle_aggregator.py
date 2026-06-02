@@ -1,33 +1,33 @@
-"""Subscribe to each /model/dyn_obs_*/pose from the Gazebo bridge, estimate
-each obstacle's velocity by finite-differencing its pose history, and republish
-the whole set as a single std_msgs/Float32MultiArray on /gmpc/obstacles for
-the GMPC + CBF controller to consume.
+"""Aggregate dynamic obstacle state for the GMPC + horizon CBF controller.
 
-Wire format (Float32MultiArray.data) — flat array of 5 numbers per obstacle:
+For each obstacle named in the trajectories YAML:
+  - Subscribe to  /model/<name>/pose      (the Gazebo bridge ground-truth pose)
+  - Subscribe to  /model/<name>/cmd_vel   (logged for diagnostics only)
+  - Run a 4-state Kalman Filter (CV model) over the pose stream to produce a
+    smooth (px, py, vx, vy) estimate
+  - Republish all current estimates as a single Float32MultiArray on
+    /gmpc/obstacles
+
+Wire format (Float32MultiArray.data) — 5 numbers per obstacle, flat:
     [x1, y1, r1, vx1, vy1,
      x2, y2, r2, vx2, vy2,
      ...]
-in the global frame. Length = 5 × n_obstacles.
 
-Velocity estimate
------------------
-Each pose callback stores (t, x, y). The published velocity is the slope of
-the last `window` samples computed by least-squares. window=5 at 20 Hz gives
-~0.25 s averaging — enough to suppress noise but short enough to track 0.4 m/s
-ping-pong motion.
-
-This is the *ground-truth* obstacle channel (Gazebo provides perfect poses).
-Future work: replace with a /scan-based clusterer + Kalman tracker so the
-pipeline doesn't depend on simulation ground truth.
+Why a Kalman filter rather than the previous LSQ slope or cmd_vel ground truth?
+  1. Realism: cmd_vel ground truth is a *cheat* — a real robot has no such
+     channel. The KF only ingests pose measurements, so the same pipeline
+     transfers directly to /scan-based detection (DBSCAN cluster centroids).
+  2. Smoothness: LSQ slope over a fixed window has jagged transitions at
+     ping-pong endpoints. The KF naturally interpolates with bounded noise.
+  3. Calibrated uncertainty: P is available for future fusion with /scan
+     or more sophisticated motion models.
 """
 
 from __future__ import annotations
 
 import os
-from collections import deque
 from typing import List
 
-import numpy as np
 import yaml
 
 import rclpy
@@ -35,6 +35,8 @@ from rclpy.node import Node
 
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg      import Float32MultiArray
+
+from .kalman_tracker import KalmanTracker2D
 
 
 class ObstacleAggregator(Node):
@@ -47,8 +49,12 @@ class ObstacleAggregator(Node):
         self.declare_parameter('trajectories_file', '')
         self.declare_parameter('publish_rate',      20.0)
         self.declare_parameter('output_topic',      '/gmpc/obstacles')
-        self.declare_parameter('vel_window',        5)      # samples for LSQ slope
-        self.declare_parameter('vel_max_age_s',     0.50)   # drop samples older
+
+        # KF tuning — exposed so we can dial it from the launch file if needed.
+        self.declare_parameter('kf_sigma_pos',   0.005)   # process σ pos [m/√s]
+        self.declare_parameter('kf_sigma_vel',   1.5)     # process σ vel [m/s²]
+        self.declare_parameter('kf_sigma_meas',  0.01)    # meas σ pos [m]
+        self.declare_parameter('kf_init_vel_var', 1.0)    # initial P_vv
 
         traj_file = str(self.get_parameter('trajectories_file').value)
         if not traj_file or not os.path.isfile(traj_file):
@@ -62,30 +68,29 @@ class ObstacleAggregator(Node):
         entries = cfg.get('dynamic_obstacles', [])
         self._radius = {e['name']: float(e.get('radius', 0.25)) for e in entries}
 
-        win = int(self.get_parameter('vel_window').value)
-        self._history = {name: deque(maxlen=win) for name in self._radius}
+        sigma_pos    = float(self.get_parameter('kf_sigma_pos').value)
+        sigma_vel    = float(self.get_parameter('kf_sigma_vel').value)
+        sigma_meas   = float(self.get_parameter('kf_sigma_meas').value)
+        init_vel_var = float(self.get_parameter('kf_init_vel_var').value)
 
-        # Ground-truth velocity from Gazebo's /model/<name>/cmd_vel topic.
-        # The dynamic_obstacle_driver publishes Twist commands here, and because
-        # the cylinders are <kinematic>true</kinematic> in the SDF, that command
-        # IS their actual velocity (no physics lag). This bypasses the 250 ms
-        # LSQ window so the CBF predictor reacts instantly when the obstacle
-        # reverses direction at a ping-pong endpoint.
-        self._vel_gt = {name: (0.0, 0.0) for name in self._radius}
-        self._vel_gt_seen = set()
+        self._kf: dict[str, KalmanTracker2D | None] = {n: None for n in self._radius}
+        self._kf_kwargs = dict(
+            sigma_pos=sigma_pos, sigma_vel=sigma_vel,
+            sigma_meas=sigma_meas, init_vel_var=init_vel_var,
+        )
 
-        self._max_age_ns = int(float(self.get_parameter('vel_max_age_s').value) * 1e9)
+        # Logged for sanity-checking the KF estimate (kept off the wire).
+        self._cmd_vel_gt = {n: (0.0, 0.0) for n in self._radius}
+        self._cmd_vel_seen = set()
 
         for name in self._radius:
             self.create_subscription(
                 PoseStamped, f'/model/{name}/pose',
-                lambda msg, n=name: self._pose_cb(n, msg),
-                10,
+                lambda msg, n=name: self._pose_cb(n, msg), 10,
             )
             self.create_subscription(
                 Twist, f'/model/{name}/cmd_vel',
-                lambda msg, n=name: self._vel_cb(n, msg),
-                10,
+                lambda msg, n=name: self._vel_cb(n, msg), 10,
             )
 
         self.pub = self.create_publisher(
@@ -99,8 +104,9 @@ class ObstacleAggregator(Node):
 
         self.get_logger().info(
             f'obstacle_aggregator up: tracking {len(self._radius)} obstacles '
-            f'@ {rate:.1f} Hz with velocity window {win} samples '
-            f'-> {self.get_parameter("output_topic").value}'
+            f'with Kalman filter (σ_p={sigma_pos:.3f}, σ_v={sigma_vel:.2f}, '
+            f'σ_meas={sigma_meas:.3f}) @ {rate:.1f} Hz -> '
+            f'{self.get_parameter("output_topic").value}'
         )
 
     # ------------------------------------------------------------------
@@ -111,57 +117,36 @@ class ObstacleAggregator(Node):
     def _pose_cb(self, name: str, msg: PoseStamped):
         t_ns = self._stamp_to_ns(msg)
         if t_ns == 0:
-            # Bridge sometimes emits zero stamps; fall back to wall-clock now()
             t_ns = self.get_clock().now().nanoseconds
         x = float(msg.pose.position.x)
         y = float(msg.pose.position.y)
-        self._history[name].append((t_ns, x, y))
+        kf = self._kf[name]
+        if kf is None:
+            self._kf[name] = KalmanTracker2D(init_xy=(x, y), **self._kf_kwargs)
+            self.get_logger().info(f'KF initialised for {name} at ({x:.2f}, {y:.2f})')
+        else:
+            kf.step(t_ns=t_ns, y_xy=(x, y))
 
     def _vel_cb(self, name: str, msg: Twist):
-        self._vel_gt[name] = (float(msg.linear.x), float(msg.linear.y))
-        if name not in self._vel_gt_seen:
-            self._vel_gt_seen.add(name)
+        self._cmd_vel_gt[name] = (float(msg.linear.x), float(msg.linear.y))
+        if name not in self._cmd_vel_seen:
+            self._cmd_vel_seen.add(name)
             self.get_logger().info(
-                f'Ground-truth velocity stream established for {name}'
+                f'cmd_vel ground-truth stream seen for {name} '
+                f'(KF is using pose measurements only)'
             )
 
-    def _estimate_velocity(self, name: str) -> tuple[float, float]:
-        """Least-squares slope of recent samples; 0 if insufficient."""
-        h = self._history[name]
-        if len(h) < 2:
-            return 0.0, 0.0
-        # Drop samples older than max_age_s relative to newest
-        t_newest = h[-1][0]
-        pts = [(t, x, y) for (t, x, y) in h if (t_newest - t) <= self._max_age_ns]
-        if len(pts) < 2:
-            return 0.0, 0.0
-        ts = np.array([p[0] for p in pts], dtype=float) * 1e-9
-        xs = np.array([p[1] for p in pts])
-        ys = np.array([p[2] for p in pts])
-        t_mean = ts.mean()
-        dt = ts - t_mean
-        denom = float(np.sum(dt * dt))
-        if denom < 1e-9:
-            return 0.0, 0.0
-        vx = float(np.sum(dt * (xs - xs.mean())) / denom)
-        vy = float(np.sum(dt * (ys - ys.mean())) / denom)
-        return vx, vy
-
+    # ------------------------------------------------------------------
     def _tick(self):
         out = Float32MultiArray()
         flat: List[float] = []
         for name, r in self._radius.items():
-            h = self._history[name]
-            if not h:
+            kf = self._kf[name]
+            if kf is None:
                 continue
-            x, y = h[-1][1], h[-1][2]
-            # Prefer Gazebo ground-truth velocity (zero lag). Fall back to LSQ
-            # only if no cmd_vel has been seen yet for this obstacle.
-            if name in self._vel_gt_seen:
-                vx, vy = self._vel_gt[name]
-            else:
-                vx, vy = self._estimate_velocity(name)
-            flat.extend([x, y, r, vx, vy])
+            px, py = kf.position
+            vx, vy = kf.velocity
+            flat.extend([px, py, r, vx, vy])
         out.data = flat
         self.pub.publish(out)
 
