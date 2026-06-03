@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -117,6 +118,66 @@ def extract_odom(messages):
         ts.append(t_ns / 1e9)
         xyth.append((p.x, p.y, quaternion_to_yaw(o.x, o.y, o.z, o.w)))
     return np.array(ts), np.array(xyth)
+
+
+def parse_trial_log_for_goal(log_path: Path) -> dict:
+    """Parse run_one_trial.sh's per-trial log for the controller's own
+    authoritative goal-reached signal.
+
+    Why this exists: rosbag2 samples /tf at the publisher's rate (~1 Hz for
+    AMCL's map→odom updates). When AMCL re-converges briefly close to goal
+    and then drifts back, the bag may miss the in-tolerance window, and the
+    bag-based success check fails even though the controller itself logged
+    'Goal reached'. The controller has access to the live TF buffer at the
+    full controller rate and is therefore the more authoritative source.
+
+    Returns dict with possibly-missing keys:
+        'controller_goal_reached'   : bool
+        'controller_arrival_dist_m' : float    (distance reported in the log)
+        'controller_arrival_time_s' : float    (Goal-reached − first-plan timestamp)
+    """
+    out = {'controller_goal_reached': False}
+    if not log_path.is_file():
+        return out
+
+    # Example lines (ROS2 launch prefixes each child's stdout with the node tag):
+    #   [gmpc_node-7] [INFO] [1780501339.596244635] [gmpc_controller]: Goal reached (within 0.191 m of (17.00, 17.00), tol=0.20 m) -- holding zero twist
+    #   [goal_to_plan_relay-5] [INFO] [1780501023.298733212] [goal_to_plan_relay]: Plan request (new goal): (0.00, 0.00) -> (17.00, 17.00)
+    goal_re = re.compile(
+        r'\[(\d+\.\d+)\].*?gmpc_controller.*?Goal reached.*?within\s+([\d.]+)\s+m'
+    )
+    plan_re = re.compile(
+        r'\[(\d+\.\d+)\].*?goal_to_plan_relay.*?Plan request \(new goal\)'
+    )
+
+    plan_t = None
+    goal_t = None
+    goal_d = None
+    try:
+        with open(log_path, errors='replace') as f:
+            for line in f:
+                if plan_t is None:
+                    m = plan_re.search(line)
+                    if m:
+                        plan_t = float(m.group(1))
+                m = goal_re.search(line)
+                if m:
+                    # Take the FIRST Goal-reached event (subsequent log lines
+                    # may re-print when the controller is in hold-state).
+                    goal_t = float(m.group(1))
+                    goal_d = float(m.group(2))
+                    break
+    except OSError:
+        return out
+
+    if goal_t is None:
+        return out
+
+    out['controller_goal_reached']   = True
+    out['controller_arrival_dist_m'] = goal_d
+    if plan_t is not None:
+        out['controller_arrival_time_s'] = goal_t - plan_t
+    return out
 
 
 def extract_robot_map_pose(messages):
@@ -403,6 +464,7 @@ CSV_HEADER = [
     'solve_time_mean_ms', 'solve_time_p95_ms', 'solve_time_max_ms',
     'goal_xy_x', 'goal_xy_y', 'final_dist_to_goal_m', 'min_dist_to_goal_m',
     'pose_source',
+    'success_source', 'controller_arrival_dist_m',
     'n_odom', 'n_cmd', 'n_plan', 'n_obstacles', 'n_solve_time',
     'bag',
 ]
@@ -433,6 +495,34 @@ def main():
     bag_path = str(Path(args.bag).expanduser().resolve())
     messages = read_bag(bag_path)
     metrics  = compute_metrics(messages)
+
+    # ----- log-based ground truth (authoritative for GMPC stacks) -----
+    # Try to find the matching run_one_trial.sh log next to the bag, e.g.
+    # bags/gmpc_cbf__seed3/ → logs/gmpc_cbf__seed3.log. The bag-based check
+    # can falsely fail when AMCL pose-converges briefly close to goal in
+    # between published /tf messages (the live controller sees it, but the
+    # bag does not). When the controller node itself logged 'Goal reached',
+    # we take that as ground truth and override `success`.
+    bag_dir = Path(bag_path)
+    log_path = bag_dir.parent.parent / 'logs' / f'{bag_dir.name}.log'
+    log_info = parse_trial_log_for_goal(log_path)
+
+    if log_info.get('controller_goal_reached'):
+        metrics['success']      = True
+        metrics['success_source'] = 'controller_log'
+        # Prefer log-derived arrival time only if bag couldn't measure one.
+        if (isinstance(metrics.get('arrival_time_s'), float)
+                and np.isnan(metrics['arrival_time_s'])
+                and 'controller_arrival_time_s' in log_info):
+            metrics['arrival_time_s'] = log_info['controller_arrival_time_s']
+    else:
+        metrics['success_source'] = (
+            'bag_pose' if metrics.get('success') else 'none'
+        )
+    # Carry the controller-reported distance through for transparency.
+    metrics['controller_arrival_dist_m'] = log_info.get(
+        'controller_arrival_dist_m', float('nan')
+    )
 
     row = {
         'method': args.method,
