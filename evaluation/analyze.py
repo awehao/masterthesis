@@ -53,6 +53,7 @@ GOAL_TOLERANCE_M = 0.25
 TOPICS_OF_INTEREST = {
     '/odom', '/cmd_vel', '/cmd_vel_nav', '/plan',
     '/gmpc/solve_time_ms', '/gmpc/obstacles', '/gmpc/min_h',
+    '/tf', '/tf_static',
 }
 
 COLLISION_BUFFER_M = 0.0   # treat distance < radius as collision
@@ -118,6 +119,70 @@ def extract_odom(messages):
     return np.array(ts), np.array(xyth)
 
 
+def extract_robot_map_pose(messages):
+    """Reconstruct robot pose in **map** frame by composing map→odom (from
+    AMCL) with odom→base_footprint (from the chassis controller) along the
+    /tf stream.
+
+    Returns (ts, xyth) where xyth is the robot's (x, y, yaw) in map frame at
+    each timestamp where a /tf update covers both halves of the chain.
+    Empty arrays if /tf is missing or chain incomplete.
+
+    Why this is needed: /odom is in the *odom* frame (dead-reckoning).
+    AMCL corrects drift via the map→odom transform. The controller uses
+    map-frame pose (via TF lookup) for its goal check, so analyze.py must
+    do the same to agree with the runtime "Goal reached" decision.
+    """
+    if '/tf' not in messages:
+        return np.zeros(0), np.zeros((0, 3))
+
+    mo_t, mo_xyth = [], []      # map → odom
+    ob_t, ob_xyth = [], []      # odom → base_footprint
+
+    for t_ns, msg in messages['/tf']:
+        for tf in msg.transforms:
+            tr = tf.transform
+            r  = tr.rotation
+            x  = float(tr.translation.x)
+            y  = float(tr.translation.y)
+            yaw = quaternion_to_yaw(r.x, r.y, r.z, r.w)
+            t = int(t_ns) / 1e9
+            if tf.header.frame_id == 'map' and tf.child_frame_id == 'odom':
+                mo_t.append(t); mo_xyth.append((x, y, yaw))
+            elif (tf.header.frame_id == 'odom'
+                  and tf.child_frame_id == 'base_footprint'):
+                ob_t.append(t); ob_xyth.append((x, y, yaw))
+
+    if not mo_t or not ob_t:
+        return np.zeros(0), np.zeros((0, 3))
+
+    mo_t    = np.array(mo_t)
+    mo_xyth = np.array(mo_xyth)
+    ob_t    = np.array(ob_t)
+    ob_xyth = np.array(ob_xyth)
+    order   = np.argsort(mo_t); mo_t = mo_t[order]; mo_xyth = mo_xyth[order]
+    order   = np.argsort(ob_t); ob_t = ob_t[order]; ob_xyth = ob_xyth[order]
+
+    # Sample on the odom→base stream (high rate) and look up latest map→odom.
+    out_t, out_xyth = [], []
+    for i in range(len(ob_t)):
+        t = ob_t[i]
+        j = int(np.searchsorted(mo_t, t, side='right') - 1)
+        if j < 0:
+            continue                                     # no map→odom yet
+        mo_x, mo_y, mo_yaw = mo_xyth[j]
+        ob_x, ob_y, ob_yaw = ob_xyth[i]
+        c, s = np.cos(mo_yaw), np.sin(mo_yaw)
+        # Compose: map_T_base = map_T_odom * odom_T_base
+        x_map = mo_x + c * ob_x - s * ob_y
+        y_map = mo_y + s * ob_x + c * ob_y
+        yaw_map = mo_yaw + ob_yaw
+        out_t.append(t)
+        out_xyth.append((x_map, y_map, yaw_map))
+
+    return np.array(out_t), np.array(out_xyth)
+
+
 def extract_cmd(messages, topic='/cmd_vel'):
     if topic not in messages:
         return np.zeros(0), np.zeros((0, 3))
@@ -179,7 +244,15 @@ def extract_obstacles(messages, topic='/gmpc/obstacles'):
 # ---------------------------------------------------------------------------
 
 def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
-    odom_t,  odom_xyth = extract_odom(messages)
+    odom_t_raw, odom_xyth_raw = extract_odom(messages)
+    map_t, map_xyth           = extract_robot_map_pose(messages)
+    # Goals, plans, and obstacles all live in the *map* frame, so when the
+    # bag has /tf we must compare against the AMCL-corrected robot pose, not
+    # the dead-reckoned /odom (which drifts and was the cause of the bogus
+    # success=False even after gmpc_node logged "Goal reached within 0.192m").
+    pose_in_map = len(map_t) >= 2
+    odom_t   = map_t   if pose_in_map else odom_t_raw
+    odom_xyth = map_xyth if pose_in_map else odom_xyth_raw
     cmd_t,   cmd_vec   = extract_cmd(messages, '/cmd_vel')
     plans              = extract_plans(messages)
     obs_series         = extract_obstacles(messages)
@@ -209,6 +282,7 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
         'goal_xy_y'          : float('nan'),
         'final_dist_to_goal_m': float('nan'),
         'min_dist_to_goal_m'  : float('nan'),
+        'pose_source'   : 'map_tf' if pose_in_map else 'odom_raw',
         'n_odom'        : len(odom_t),
         'n_cmd'         : len(cmd_t),
         'n_plan'        : len(plans),
@@ -328,6 +402,7 @@ CSV_HEADER = [
     'min_clearance_m', 'collision_count', 'collided',
     'solve_time_mean_ms', 'solve_time_p95_ms', 'solve_time_max_ms',
     'goal_xy_x', 'goal_xy_y', 'final_dist_to_goal_m', 'min_dist_to_goal_m',
+    'pose_source',
     'n_odom', 'n_cmd', 'n_plan', 'n_obstacles', 'n_solve_time',
     'bag',
 ]
