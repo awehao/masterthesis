@@ -27,6 +27,12 @@ for bag in "${HERE}"/bags/*/; do
     fi
     METHOD="${name%%__*}"
     RUN_TAG="${name#*__}"
+    # Skip legacy ad-hoc bags (corner_goal_*, horizon_*, etc.) so the CSV
+    # only contains the controlled batch trials (seed0 .. seed9).
+    if [[ "$RUN_TAG" != seed* ]]; then
+        echo "[skip ] $METHOD / $RUN_TAG (not a seed* run)"
+        continue
+    fi
     echo "[analyze] $METHOD / $RUN_TAG"
     if python3 "${HERE}/analyze.py" "$bag" \
             --method "$METHOD" --run "$RUN_TAG" \
