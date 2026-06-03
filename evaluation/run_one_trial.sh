@@ -27,6 +27,20 @@
 #   - The script is designed so multiple invocations DO NOT bleed state
 #     into one another: every ROS node is killed before exit.
 
+# --------------------------------------------------------------------- source ROS
+# MUST happen *before* `set -u` because /opt/ros/jazzy/setup.bash references
+# AMENT_TRACE_SETUP_FILES without first defaulting it, which trips nounset.
+#
+# Sub-shells launched by nohup / cron don't inherit a sourced workspace; we
+# must explicitly bring in /opt/ros + this project's install tree, otherwise
+# `ros2 launch ammr_bringup ...` cannot locate the packages and Gazebo
+# silently never starts (root cause of the first smoke-test failure).
+WS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source /opt/ros/jazzy/setup.bash
+# shellcheck disable=SC1091
+source "${WS_ROOT}/install/setup.bash"
+
 set -u   # don't  set -e  -- we want cleanup to run even after failures.
 
 # --------------------------------------------------------------------- args
