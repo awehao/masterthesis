@@ -120,6 +120,49 @@ def plot_individual(cols: dict, out_dir: Path):
         plt.close(fig)
 
 
+def plot_success_rate(cols: dict, out_dir: Path):
+    """Standalone bar chart for success rate (%) per method.
+
+    success_rate isn't in METRICS because it's a percentage of a boolean
+    column, not a mean of a continuous metric -- it doesn't fit the
+    `_bar(mean ± std)` machinery cleanly. We do it explicitly here.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    present = set(cols.get('method', []))
+    methods = [m for m in METHOD_ORDER if m in present]
+
+    rates = []
+    counts = []
+    for m in methods:
+        succ_per_method = [
+            s for s, mm in zip(cols.get('success', []), cols['method']) if mm == m
+        ]
+        n      = len(succ_per_method)
+        n_ok   = int(sum(succ_per_method))
+        rates.append(100.0 * n_ok / max(n, 1))
+        counts.append((n_ok, n))
+
+    fig, ax = plt.subplots(figsize=(6.0, 4.2))
+    x = np.arange(len(methods))
+    bars = ax.bar(x, rates,
+                  color=[METHOD_COLOR[m] for m in methods],
+                  edgecolor='black', linewidth=0.8)
+    for bar, (n_ok, n) in zip(bars, counts):
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 1.5,
+                f'{n_ok}/{n}',
+                ha='center', va='bottom', fontsize=10, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels([METHOD_LABEL[m] for m in methods], rotation=15, ha='right')
+    ax.set_ylabel('success rate [%]')
+    ax.set_ylim(0, 109)                      # leave headroom for the n_ok/n labels
+    ax.grid(alpha=0.3, axis='y')
+    ax.set_title('success_rate', fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out_dir / 'success_rate.png', dpi=130)
+    plt.close(fig)
+
+
 def plot_summary(cols: dict, out_dir: Path):
     out_dir.mkdir(parents=True, exist_ok=True)
     ncols = 3
@@ -175,9 +218,10 @@ def main():
     if not cols or not cols.get('method'):
         print(f'no rows in {args.csv}'); return
 
-    plot_individual(cols, Path(args.out))
-    plot_summary  (cols, Path(args.out))
-    print_table   (cols)
+    plot_individual  (cols, Path(args.out))
+    plot_success_rate(cols, Path(args.out))
+    plot_summary     (cols, Path(args.out))
+    print_table      (cols)
 
 
 if __name__ == '__main__':
