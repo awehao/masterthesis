@@ -114,7 +114,7 @@ ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
 sleep 3
 
 # --------------------------------------------------------------------- 4. Recording
-echo "[$(date +%T)] [4/6] starting rosbag2 recording for ${DURATION}s ..."
+echo "[$(date +%T)] [4/7] starting rosbag2 recording (timeout ${DURATION}s) ..."
 "${HERE}/record.sh" "$METHOD" "$RUN_TAG" "$DURATION" \
     >> "$LOG_FILE" 2>&1 < /dev/null &
 REC_PID=$!
@@ -122,14 +122,41 @@ PIDS+=( $REC_PID )
 sleep 3
 
 # --------------------------------------------------------------------- 5. Publish goal
-echo "[$(date +%T)] [5/6] publishing goal (${GOAL_X}, ${GOAL_Y}) ..."
+echo "[$(date +%T)] [5/7] publishing goal (${GOAL_X}, ${GOAL_Y}) ..."
 ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
     "{ header: { frame_id: 'map' }, pose: { position: { x: $GOAL_X, y: $GOAL_Y, z: 0.0 }, orientation: { w: 1.0 } } }" \
     >> "$LOG_FILE" 2>&1 || true
 
-# --------------------------------------------------------------------- 6. Wait
-echo "[$(date +%T)] [6/6] waiting for recording to finish ..."
-wait $REC_PID 2>/dev/null || true
+# --------------------------------------------------------------------- 6. Goal watcher (race)
+# Watcher exits 0 the moment robot enters goal tolerance in MAP frame; we
+# then SIGINT the recorder so the bag is flushed cleanly instead of waiting
+# out the full DURATION budget.
+echo "[$(date +%T)] [6/7] starting goal watcher (tol=0.25 m) ..."
+python3 "${HERE}/goal_watcher.py" \
+    --goal-x "$GOAL_X" --goal-y "$GOAL_Y" \
+    --tol 0.25 --timeout "$DURATION" \
+    >> "$LOG_FILE" 2>&1 < /dev/null &
+WATCH_PID=$!
+PIDS+=( $WATCH_PID )
+
+# --------------------------------------------------------------------- 7. Wait — whichever ends first
+echo "[$(date +%T)] [7/7] racing record vs goal_watcher ..."
+# Bash 4.3+: -n waits for ANY listed PID.
+wait -n $REC_PID $WATCH_PID 2>/dev/null || true
+
+# If watcher won (goal reached), tell recorder to flush and exit early.
+if kill -0 $WATCH_PID 2>/dev/null; then
+    # watcher still alive → recorder must have ended first (timeout / crash)
+    echo "[$(date +%T)] recorder ended first (timeout or error) — stopping watcher"
+    kill -INT $WATCH_PID 2>/dev/null || true
+else
+    echo "[$(date +%T)] watcher signalled GOAL — flushing recorder"
+    kill -INT $REC_PID 2>/dev/null || true
+fi
+
+# Make sure both have actually terminated before we tear the stack down.
+wait $REC_PID   2>/dev/null || true
+wait $WATCH_PID 2>/dev/null || true
 
 echo "[$(date +%T)] === trial done: $METHOD seed=$SEED ==="
 echo "[$(date +%T)]     bag : ${HERE}/bags/${METHOD}__${RUN_TAG}"
