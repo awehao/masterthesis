@@ -70,6 +70,13 @@ METHOD_COLOR  = {'rpp': '#888888',
 # and analyze.py defaults collision_count to 0 for them. A side-by-side bar
 # would falsely imply 'all methods have 0 collisions'. Add it back only after
 # instrumenting baselines with the same obstacle ground-truth channel.
+#
+# NOTE: jerk_{vx,vy,wz} also excluded — these are σ(Δu)/Δt computed from
+# /cmd_vel, but the AMCL pose jumps observed during the smoke test inflate
+# the underlying velocity differences (the controller's emergency-brake on
+# infeasible QP also produces spike Δu's that are not 'real' jerk). To be
+# revisited once we either filter AMCL jumps or compute jerk from /odom
+# command stream with a low-pass first.
 METRICS = [
     ('arrival_time_s',     'arrival time [s]',           True),
     ('path_length_m',      'path length [m]',            True),
@@ -80,9 +87,6 @@ METRICS = [
     ('smooth_vx',          'σ(v_x) [m/s]',               True),
     ('smooth_vy',          'σ(v_y) [m/s]',               True),
     ('smooth_wz',          'σ(ω_z) [rad/s]',             True),
-    ('jerk_vx',            'σ(a_x) [m/s²]',              True),
-    ('jerk_vy',            'σ(a_y) [m/s²]',              True),
-    ('jerk_wz',            'σ(α_z) [rad/s²]',            True),
 ]
 
 
