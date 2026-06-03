@@ -157,6 +157,24 @@ PIDS+=( $REC_PID )
 sleep 3
 
 # --------------------------------------------------------------------- 5. Publish goal
+# Race fix (was the dominant apparatus failure in batch_cbf_400s.log):
+# `ros2 topic pub --once` publishes once and exits with default QoS
+# DURABILITY=VOLATILE, so any subscriber that hasn't completed DDS
+# discovery yet silently misses the message. We saw seeds 7/8/9 fail this
+# way -- goal was published but goal_to_plan_relay never received it.
+# Wait until /goal_pose has >= 2 subscribers (rosbag2_recorder + relay)
+# before publishing, with a 30-second cap so we still degrade gracefully.
+echo "[$(date +%T)] [5/7] waiting for /goal_pose subscribers (rosbag + relay) ..."
+for i in $(seq 1 30); do
+    count=$(ros2 topic info /goal_pose 2>/dev/null \
+            | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
+    count=${count:-0}
+    if [ "$count" -ge 2 ]; then
+        echo "[$(date +%T)] [5/7]   /goal_pose subscribers=$count after ${i}s, ok to publish"
+        break
+    fi
+    sleep 1
+done
 echo "[$(date +%T)] [5/7] publishing goal (${GOAL_X}, ${GOAL_Y}) — 15s timeout ..."
 timeout 15 ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
     "{ header: { frame_id: 'map' }, pose: { position: { x: $GOAL_X, y: $GOAL_Y, z: 0.0 }, orientation: { w: 1.0 } } }" \
