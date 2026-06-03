@@ -214,7 +214,17 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
         return out
 
     first_plan_t = plans[0][0]
-    goal_xy = plans[-1][1][-1]                       # endpoint of latest /plan
+
+    # ------- robust goal detection -------
+    # Bug fix: the *last* plan's endpoint may be a short residual path emitted
+    # while goal_to_plan_relay was already inside `replan_goal_tolerance` and
+    # winding down. Instead, take the endpoint that lies FURTHEST from the
+    # start pose across all plans — that is the original (user-supplied) goal,
+    # which every full-length replan also targets.
+    start_xy = odom_xyth[0, :2]
+    plan_endpoints = np.array([p[1][-1] for p in plans])
+    dists_from_start = np.linalg.norm(plan_endpoints - start_xy, axis=1)
+    goal_xy = plan_endpoints[int(np.argmax(dists_from_start))]
 
     # ------- arrival time / success -------
     arrival_t = None
