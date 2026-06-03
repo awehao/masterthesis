@@ -14,7 +14,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
 from launch.conditions import IfCondition
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -63,11 +63,31 @@ def generate_launch_description():
             f'/model/{name}/pose@geometry_msgs/msg/PoseStamped[gz.msgs.Pose'
         )
 
+    # ---- Headless 開關:對應背景批次 trial 跑用 -------------------------
+    #   gui:=false  →  gz sim -s -r world.sdf  (server-only, 無 GUI、無 GPU 渲染)
+    #   gui:=true   →  gz sim    -r world.sdf  (預設,開 GUI)
+    gui_arg = DeclareLaunchArgument(
+        'gui', default_value='true',
+        description='If false, run Gazebo headless (gz sim -s) for batch trials.',
+    )
+
     return LaunchDescription([
 
-        # 1. Gazebo
+        gui_arg,
+
+        # 1a. Gazebo - GUI mode
         ExecuteProcess(
+            condition=IfCondition(LaunchConfiguration('gui')),
             cmd=['gz', 'sim', '-r', world_file],
+            output='screen',
+        ),
+
+        # 1b. Gazebo - headless (server-only)
+        ExecuteProcess(
+            condition=IfCondition(
+                PythonExpression(["'", LaunchConfiguration('gui'), "' == 'false'"])
+            ),
+            cmd=['gz', 'sim', '-s', '-r', world_file],
             output='screen',
         ),
 
