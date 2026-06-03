@@ -83,7 +83,7 @@ METRICS = [
     ('tracking_rmse_m',    'tracking RMSE [m]',          True),
     ('min_clearance_m',    'min obstacle clearance [m]', False),    # higher = safer
     ('solve_time_mean_ms', 'solve time mean [ms]',       True),
-    ('solve_time_p95_ms',  'solve time p95 [ms]',        True),
+    ('success_rate',       'success rate [%]',           False),    # higher = better
     ('smooth_vx',          'σ(v_x) [m/s]',               True),
     ('smooth_vy',          'σ(v_y) [m/s]',               True),
     ('smooth_wz',          'σ(ω_z) [rad/s]',             True),
@@ -111,6 +111,8 @@ def _bar(ax, cols: dict, metric: str, ylabel: str):
 def plot_individual(cols: dict, out_dir: Path):
     out_dir.mkdir(parents=True, exist_ok=True)
     for metric, ylabel, _ in METRICS:
+        if metric == 'success_rate':
+            continue                          # written by plot_success_rate
         if metric not in cols: continue
         fig, ax = plt.subplots(figsize=(5.5, 4))
         _bar(ax, cols, metric, ylabel)
@@ -120,29 +122,24 @@ def plot_individual(cols: dict, out_dir: Path):
         plt.close(fig)
 
 
-def plot_success_rate(cols: dict, out_dir: Path):
-    """Standalone bar chart for success rate (%) per method.
+def _bar_success(ax, cols, ylabel='success rate [%]'):
+    """Draw a success-rate bar (per method) into the given axes.
 
-    success_rate isn't in METRICS because it's a percentage of a boolean
-    column, not a mean of a continuous metric -- it doesn't fit the
-    `_bar(mean ± std)` machinery cleanly. We do it explicitly here.
+    Pulled out as a helper so plot_summary can render it as one of its
+    panels in place of solve_time_p95_ms.
     """
-    out_dir.mkdir(parents=True, exist_ok=True)
     present = set(cols.get('method', []))
     methods = [m for m in METHOD_ORDER if m in present]
 
-    rates = []
+    rates  = []
     counts = []
     for m in methods:
-        succ_per_method = [
-            s for s, mm in zip(cols.get('success', []), cols['method']) if mm == m
-        ]
-        n      = len(succ_per_method)
-        n_ok   = int(sum(succ_per_method))
+        succ = [s for s, mm in zip(cols.get('success', []), cols['method']) if mm == m]
+        n    = len(succ)
+        n_ok = int(sum(succ))
         rates.append(100.0 * n_ok / max(n, 1))
         counts.append((n_ok, n))
 
-    fig, ax = plt.subplots(figsize=(6.0, 4.2))
     x = np.arange(len(methods))
     bars = ax.bar(x, rates,
                   color=[METHOD_COLOR[m] for m in methods],
@@ -151,12 +148,20 @@ def plot_success_rate(cols: dict, out_dir: Path):
         ax.text(bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + 1.5,
                 f'{n_ok}/{n}',
-                ha='center', va='bottom', fontsize=10, fontweight='bold')
+                ha='center', va='bottom', fontsize=9, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels([METHOD_LABEL[m] for m in methods], rotation=15, ha='right')
-    ax.set_ylabel('success rate [%]')
-    ax.set_ylim(0, 109)                      # leave headroom for the n_ok/n labels
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(0, 109)
     ax.grid(alpha=0.3, axis='y')
+
+
+def plot_success_rate(cols: dict, out_dir: Path):
+    """Standalone success-rate figure (used by main, in addition to the
+    success_rate panel in summary.png)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6.0, 4.2))
+    _bar_success(ax, cols)
     ax.set_title('success_rate', fontsize=10)
     fig.tight_layout()
     fig.savefig(out_dir / 'success_rate.png', dpi=130)
@@ -171,7 +176,10 @@ def plot_summary(cols: dict, out_dir: Path):
     axes = axes.flatten()
     for i, (metric, ylabel, _) in enumerate(METRICS):
         ax = axes[i]
-        if metric in cols:
+        if metric == 'success_rate':
+            _bar_success(ax, cols, ylabel)
+            ax.set_title(metric, fontsize=10)
+        elif metric in cols:
             _bar(ax, cols, metric, ylabel)
             ax.set_title(metric, fontsize=10)
         else:
