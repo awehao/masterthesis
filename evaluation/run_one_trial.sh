@@ -76,28 +76,43 @@ GOAL_Y="17.0"
 PIDS=()
 
 # --------------------------------------------------------------------- cleanup
+# The orphan-node problem is real: when we kill `ros2 launch`, its launched
+# executables (amcl, map_server, gz sim, parameter_bridge, ...) usually do
+# NOT die because they are spawned without forming a process group with the
+# launcher.  So we must enumerate every known executable and pattern-kill it.
+# This list must cover *all four* baseline stacks (RPP / MPPI / GMPC / CBF)
+# plus the gazebo_dynamic.launch.py children.
+NODE_PAT='gz sim'
+NODE_PAT+='|ros2 launch|ros2 bag|ros2 topic pub'
+NODE_PAT+='|nav2_map_server|nav2_amcl|nav2_planner|nav2_controller'
+NODE_PAT+='|nav2_smoother|nav2_behaviors|nav2_bt_navigator|nav2_waypoint_follower'
+NODE_PAT+='|nav2_velocity_smoother|nav2_lifecycle_manager'
+NODE_PAT+='|map_server|map_publisher|amcl'
+NODE_PAT+='|planner_server|controller_server|behavior_server|bt_navigator'
+NODE_PAT+='|waypoint_follower|velocity_smoother|smoother_server|lifecycle_manager'
+NODE_PAT+='|goal_to_plan_relay|obstacle_aggregator|dynamic_obstacle_driver'
+NODE_PAT+='|gmpc_node|scan_relay|omni_drive_controller'
+NODE_PAT+='|parameter_bridge|robot_state_publisher|static_transform_publisher'
+NODE_PAT+='|goal_watcher.py|record.sh'
+
 cleanup() {
     echo "[$(date +%T)] [trial] cleanup ..."
+    # Polite first: SIGINT the tracked PIDs and their direct children.
     for pid in "${PIDS[@]}"; do
-        kill -INT  "$pid" 2>/dev/null || true
+        pkill -INT -P "$pid" 2>/dev/null || true   # kill children too
+        kill  -INT     "$pid" 2>/dev/null || true
     done
     sleep 3
-    for pid in "${PIDS[@]}"; do
-        kill -TERM "$pid" 2>/dev/null || true
-    done
-    sleep 2
-    # Belt-and-braces:  ros2 launch spawns many children that don't always
-    # die when the parent gets SIGTERM, so we also pattern-kill.
-    pkill -INT  -f 'gz sim'        2>/dev/null || true
-    pkill -INT  -f 'ros2 launch'   2>/dev/null || true
-    pkill -INT  -f 'ros2 bag'      2>/dev/null || true
+    pkill -INT -f "$NODE_PAT" 2>/dev/null || true
     sleep 3
-    pkill -KILL -f 'gz sim'        2>/dev/null || true
-    pkill -KILL -f 'ros2 launch'   2>/dev/null || true
-    pkill -KILL -f 'ros2 bag'      2>/dev/null || true
-    pkill -KILL -f 'parameter_bridge' 2>/dev/null || true
-    pkill -KILL -f 'gmpc_node'     2>/dev/null || true
-    pkill -KILL -f 'controller_server' 2>/dev/null || true
+    # Hard kill anything still standing.
+    pkill -KILL -f "$NODE_PAT" 2>/dev/null || true
+    sleep 1
+    # The ros2 daemon caches stale node registrations; without this restart
+    # the next trial sees ghost nodes from the previous run.
+    ros2 daemon stop  > /dev/null 2>&1 || true
+    sleep 1
+    ros2 daemon start > /dev/null 2>&1 || true
     sleep 2
     echo "[$(date +%T)] [trial] cleanup done"
 }
@@ -165,13 +180,19 @@ echo "[$(date +%T)] [7/7] racing record vs goal_watcher ..."
 wait -n $REC_PID $WATCH_PID 2>/dev/null || true
 
 # If watcher won (goal reached), tell recorder to flush and exit early.
+# Killing only $REC_PID (the bash wrapping record.sh) doesn't reliably
+# propagate SIGINT to the inner `timeout` + `ros2 bag record` grandchild,
+# which is why the previous smoke test's bag ran the full 200 s after the
+# watcher fired at t=71 s. Pkill the descendants too.
 if kill -0 $WATCH_PID 2>/dev/null; then
     # watcher still alive → recorder must have ended first (timeout / crash)
     echo "[$(date +%T)] recorder ended first (timeout or error) — stopping watcher"
-    kill -INT $WATCH_PID 2>/dev/null || true
+    pkill -INT -P $WATCH_PID 2>/dev/null || true
+    kill  -INT    $WATCH_PID 2>/dev/null || true
 else
     echo "[$(date +%T)] watcher signalled GOAL — flushing recorder"
-    kill -INT $REC_PID 2>/dev/null || true
+    pkill -INT -P $REC_PID 2>/dev/null || true
+    kill  -INT    $REC_PID 2>/dev/null || true
 fi
 
 # Make sure both have actually terminated before we tear the stack down.
