@@ -175,8 +175,13 @@ for i in $(seq 1 30); do
     fi
     sleep 1
 done
-echo "[$(date +%T)] [5/7] publishing goal (${GOAL_X}, ${GOAL_Y}) — 15s timeout ..."
-timeout 15 ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
+echo "[$(date +%T)] [5/7] publishing goal (${GOAL_X}, ${GOAL_Y}) — 5 times @ 1 Hz ..."
+# Multi-publish: -t 5 -r 1 emits the message 5 times at 1 Hz over 5 seconds,
+# which gives goal_to_plan_relay and rosbag2_recorder a 5-second window to
+# complete their DDS subscription discovery and catch at least one of the
+# emissions. Fixes the goal-drop race observed in seeds 4/5/7/8/9 where the
+# single --once publish raced ahead of the late subscriber.
+timeout 15 ros2 topic pub -t 5 -r 1 /goal_pose geometry_msgs/msg/PoseStamped \
     "{ header: { frame_id: 'map' }, pose: { position: { x: $GOAL_X, y: $GOAL_Y, z: 0.0 }, orientation: { w: 1.0 } } }" \
     >> "$LOG_FILE" 2>&1 || echo "[$(date +%T)] [5/7] goal_pose pub timed out (continuing)"
 
