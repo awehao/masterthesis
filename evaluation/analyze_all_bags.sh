@@ -33,6 +33,27 @@ for bag in "${HERE}"/bags/*/; do
         echo "[skip ] $METHOD / $RUN_TAG (not a seed* run)"
         continue
     fi
+    # Skip apparatus failures (test-harness bugs, not algorithm). Standard
+    # scientific practice: bag retained as evidence, excluded from stats.
+    # ALGO_FAIL trials (e.g. gmpc_cbf seed 4 Start-occupied lockout) are
+    # NOT skipped because they are real algorithmic outcomes already
+    # documented as a known limitation in the report.
+    #
+    # Only apply this filter to GMPC+CBF runs -- classify_failures.py uses
+    # patterns specific to that stack (gmpc_controller / goal_to_plan_relay
+    # / scan_relay log strings) and would mis-classify RPP/MPPI logs.
+    if [[ "$METHOD" == "gmpc_cbf" && -f "${HERE}/logs/${name}.log" ]]; then
+        cat=$(python3 -c "
+import sys; sys.path.insert(0, '${HERE}')
+from classify_failures import classify_log
+from pathlib import Path
+print(classify_log(Path('${HERE}/logs/${name}.log'))[0])
+" 2>/dev/null)
+        if [[ "$cat" == "APPARATUS_FAIL" ]]; then
+            echo "[skip ] $METHOD / $RUN_TAG (APPARATUS_FAIL excluded)"
+            continue
+        fi
+    fi
     echo "[analyze] $METHOD / $RUN_TAG"
     if python3 "${HERE}/analyze.py" "$bag" \
             --method "$METHOD" --run "$RUN_TAG" \
