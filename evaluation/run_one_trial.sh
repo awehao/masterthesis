@@ -106,11 +106,14 @@ ros2 launch $STACK_LAUNCH \
 PIDS+=( $! )
 sleep 12
 
-# --------------------------------------------------------------------- 3. Reset AMCL
-echo "[$(date +%T)] [3/6] resetting AMCL pose to (0,0,0) ..."
-ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
+# --------------------------------------------------------------------- 3. Reset AMCL (best-effort)
+# AMCL may not have any subscriber on /initialpose yet (lifecycle takes a
+# while). Wrap in timeout so the trial doesn't hang forever; if AMCL is
+# late, robot still starts at (0,0) in Gazebo and AMCL will self-converge.
+echo "[$(date +%T)] [3/7] resetting AMCL pose (best-effort, 8s timeout) ..."
+timeout 8 ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
     "{ header: { frame_id: 'map' }, pose: { pose: { position: { x: 0.0, y: 0.0, z: 0.0 }, orientation: { w: 1.0 } } } }" \
-    >> "$LOG_FILE" 2>&1 || true
+    >> "$LOG_FILE" 2>&1 || echo "[$(date +%T)] [3/7] initialpose pub timed out (continuing)"
 sleep 3
 
 # --------------------------------------------------------------------- 4. Recording
@@ -122,10 +125,10 @@ PIDS+=( $REC_PID )
 sleep 3
 
 # --------------------------------------------------------------------- 5. Publish goal
-echo "[$(date +%T)] [5/7] publishing goal (${GOAL_X}, ${GOAL_Y}) ..."
-ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
+echo "[$(date +%T)] [5/7] publishing goal (${GOAL_X}, ${GOAL_Y}) — 15s timeout ..."
+timeout 15 ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
     "{ header: { frame_id: 'map' }, pose: { position: { x: $GOAL_X, y: $GOAL_Y, z: 0.0 }, orientation: { w: 1.0 } } }" \
-    >> "$LOG_FILE" 2>&1 || true
+    >> "$LOG_FILE" 2>&1 || echo "[$(date +%T)] [5/7] goal_pose pub timed out (continuing)"
 
 # --------------------------------------------------------------------- 6. Goal watcher (race)
 # Watcher exits 0 the moment robot enters goal tolerance in MAP frame; we
