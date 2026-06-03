@@ -107,18 +107,21 @@ echo "[$(date +%T)] === trial start: METHOD=$METHOD SEED=$SEED DURATION=${DURATI
 echo "[$(date +%T)] log: $LOG_FILE"
 
 # --------------------------------------------------------------------- 1. Gazebo
-echo "[$(date +%T)] [1/6] launching Gazebo headless ..."
+echo "[$(date +%T)] [1/7] launching Gazebo headless ..."
 ros2 launch ammr_bringup gazebo_dynamic.launch.py gui:=false \
     >> "$LOG_FILE" 2>&1 < /dev/null &
 PIDS+=( $! )
 sleep 20  # Gazebo + bridges + spawn robot take ~15s; extra cushion
 
 # --------------------------------------------------------------------- 2. Controller stack
-echo "[$(date +%T)] [2/6] launching $METHOD stack ($STACK_LAUNCH) ..."
+echo "[$(date +%T)] [2/7] launching $METHOD stack ($STACK_LAUNCH) ..."
 ros2 launch $STACK_LAUNCH \
     >> "$LOG_FILE" 2>&1 < /dev/null &
 PIDS+=( $! )
-sleep 12
+# Give AMCL ≥20s of /scan to settle before sending the goal — early goals
+# trigger plans from a pre-convergence pose, then AMCL jumps mid-run and
+# breaks the global plan. (See smoke test where AMCL jumped 12 m at t=17s.)
+sleep 20
 
 # --------------------------------------------------------------------- 3. Reset AMCL (best-effort)
 # AMCL may not have any subscriber on /initialpose yet (lifecycle takes a
