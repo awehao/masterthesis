@@ -327,6 +327,7 @@ CSV_HEADER = [
     'jerk_vx',   'jerk_vy',   'jerk_wz',
     'min_clearance_m', 'collision_count', 'collided',
     'solve_time_mean_ms', 'solve_time_p95_ms', 'solve_time_max_ms',
+    'goal_xy_x', 'goal_xy_y', 'final_dist_to_goal_m', 'min_dist_to_goal_m',
     'n_odom', 'n_cmd', 'n_plan', 'n_obstacles', 'n_solve_time',
     'bag',
 ]
