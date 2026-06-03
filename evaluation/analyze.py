@@ -204,6 +204,11 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
         'solve_time_mean_ms': float('nan'),
         'solve_time_p95_ms' : float('nan'),
         'solve_time_max_ms' : float('nan'),
+        # Goal diagnostics (for debugging "didn't arrive" claims)
+        'goal_xy_x'          : float('nan'),
+        'goal_xy_y'          : float('nan'),
+        'final_dist_to_goal_m': float('nan'),
+        'min_dist_to_goal_m'  : float('nan'),
         'n_odom'        : len(odom_t),
         'n_cmd'         : len(cmd_t),
         'n_plan'        : len(plans),
@@ -216,19 +221,20 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
     first_plan_t = plans[0][0]
 
     # ------- robust goal detection -------
-    # Bug fix: the *last* plan's endpoint may be a short residual path emitted
-    # while goal_to_plan_relay was already inside `replan_goal_tolerance` and
-    # winding down. Instead, take the endpoint that lies FURTHEST from the
-    # start pose across all plans — that is the original (user-supplied) goal,
-    # which every full-length replan also targets.
-    start_xy = odom_xyth[0, :2]
-    plan_endpoints = np.array([p[1][-1] for p in plans])
-    dists_from_start = np.linalg.norm(plan_endpoints - start_xy, axis=1)
-    goal_xy = plan_endpoints[int(np.argmax(dists_from_start))]
+    # The very first plan's endpoint is the most reliable: the planner was
+    # invoked right after the user published /goal_pose, so plans[0]'s last
+    # pose IS the user-supplied goal. Later replans can be short residuals
+    # near goal_tolerance, so we don't trust them.
+    goal_xy = plans[0][1][-1]
+    out['goal_xy_x'] = float(goal_xy[0])
+    out['goal_xy_y'] = float(goal_xy[1])
 
     # ------- arrival time / success -------
     arrival_t = None
     in_run = odom_t >= first_plan_t
+    dists_to_goal = np.linalg.norm(odom_xyth[in_run, :2] - goal_xy, axis=1)
+    out['final_dist_to_goal_m'] = float(dists_to_goal[-1])
+    out['min_dist_to_goal_m']   = float(np.min(dists_to_goal))
     for i in np.where(in_run)[0]:
         if np.linalg.norm(odom_xyth[i, :2] - goal_xy) < goal_tol_m:
             arrival_t = odom_t[i] - first_plan_t
