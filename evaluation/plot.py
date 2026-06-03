@@ -65,12 +65,16 @@ METHOD_COLOR  = {'rpp': '#888888',
                  'gmpc_cbf': '#2ca02c'}
 
 # (metric, axis-label, lower-is-better?)
+# NOTE: collision_count intentionally excluded — only the GMPC+CBF stack
+# launches obstacle_aggregator, so RPP/MPPI/GMPC bags lack /gmpc/obstacles
+# and analyze.py defaults collision_count to 0 for them. A side-by-side bar
+# would falsely imply 'all methods have 0 collisions'. Add it back only after
+# instrumenting baselines with the same obstacle ground-truth channel.
 METRICS = [
     ('arrival_time_s',     'arrival time [s]',           True),
     ('path_length_m',      'path length [m]',            True),
     ('tracking_rmse_m',    'tracking RMSE [m]',          True),
     ('min_clearance_m',    'min obstacle clearance [m]', False),    # higher = safer
-    ('collision_count',    'collisions',                 True),
     ('solve_time_mean_ms', 'solve time mean [ms]',       True),
     ('solve_time_p95_ms',  'solve time p95 [ms]',        True),
     ('smooth_vx',          'σ(v_x) [m/s]',               True),
