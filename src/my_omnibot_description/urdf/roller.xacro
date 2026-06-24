@@ -1,0 +1,30 @@
+<?xml version='1.0'?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    Single omni-wheel roller.
+    PORT NOTE (ROS1 Gazebo-Classic -> ROS2 gz Harmonic):
+      Rollers are kept VISUAL-ONLY. The base is driven kinematically at the
+      /cmd_vel level by the gz VelocityControl system and supported by 4 hidden
+      zero-friction wheels (see omni_bot.urdf.xacro), exactly like the verified
+      ammr_base. So roller contact physics are not needed and are removed to keep
+      the simulation light/stable; the meshes are retained purely for appearance.
+  -->
+  <xacro:macro name="roller" params="name parent xyz rpy">
+    <link name="roller_${name}_rim_${parent}_link">
+      <inertial>
+        <inertia ixx="1e-5" ixy="0.0" ixz="0.0" iyy="1e-5" iyz="0.0" izz="1e-6"/>
+        <mass value="0.020"/>
+      </inertial>
+      <visual>
+        <geometry>
+          <mesh filename="package://my_omnibot_description/meshes/roller_omni_wheel.stl" scale="1 1 1"/>
+        </geometry>
+      </visual>
+    </link>
+    <joint name="roller_${name}_rim_${parent}_joint" type="fixed">
+      <parent link="rim_${parent}_link"/>
+      <child link="roller_${name}_rim_${parent}_link"/>
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+    </joint>
+  </xacro:macro>
+</robot>

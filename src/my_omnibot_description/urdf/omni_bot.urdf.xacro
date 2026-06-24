@@ -1,0 +1,108 @@
+<?xml version='1.0'?>
+<robot name="omni_bot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="use_camera" default="true"/>
+
+  <xacro:include filename="$(find my_omnibot_description)/urdf/rim.xacro"/>
+  <xacro:include filename="$(find my_omnibot_description)/urdf/lidar.xacro"/>
+
+  <!-- ===================================================================
+       Kinematics / physics port (ROS1 Gazebo-Classic -> ROS2 gz Harmonic):
+       - Base moves at the /cmd_vel (body twist) level via gz VelocityControl,
+         reusing ammr_bringup/omni_drive_controller for /odom + TF.
+       - Omni wheels (rim + rollers) are VISUAL ONLY.
+       - The robot rests on 4 hidden, zero-friction spherical "wheels" so the
+         base glides under VelocityControl (mirrors the verified ammr_base).
+       Effective wheel radius ~0.05 m -> base_link sits 0.05 m above ground.
+       =================================================================== -->
+
+  <xacro:property name="wheel_r"   value="0.05"/>
+  <xacro:property name="wheel_off" value="0.245"/>
+
+  <!-- base_footprint: root, on the ground (odom child frame) -->
+  <link name="base_footprint">
+    <inertial>
+      <mass value="0.001"/>
+      <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+    </inertial>
+  </link>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${wheel_r}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Chassis body (visual = original mesh, collision = simple raised box) -->
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0.14" rpy="0 0 0"/>
+      <mass value="18.0"/>
+      <inertia ixx="0.5229" ixy="0.0" ixz="0.0" iyy="0.5229" iyz="0.0" izz="0.81"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://my_omnibot_description/meshes/chassis_frame.stl" scale="1 1 1"/>
+      </geometry>
+      <material name="chassis_gray"><color rgba="0.55 0.55 0.58 1.0"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.14" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.45 0.45 0.18"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- ===== Omni wheels (visual decoration) ===== -->
+  <xacro:rim name="a" parent="base_link" xyz="0.245 0 0"  rpy="0 -1.57 0"  color="0.2 0.7 0.2 1"/>
+  <xacro:rim name="b" parent="base_link" xyz="0 0.245 0"  rpy="1.57 1.57 0" color="0.2 0.4 0.8 1"/>
+  <xacro:rim name="c" parent="base_link" xyz="-0.245 0 0" rpy="0 1.57 0"   color="0.85 0.75 0.2 1"/>
+  <xacro:rim name="d" parent="base_link" xyz="0 -0.245 0" rpy="-1.57 -1.57 0" color="0.8 0.2 0.2 1"/>
+
+  <!-- ===== Hidden zero-friction support wheels (collision only) ===== -->
+  <xacro:macro name="support" params="name x y">
+    <link name="support_${name}">
+      <inertial>
+        <mass value="0.1"/>
+        <inertia ixx="1e-4" ixy="0" ixz="0" iyy="1e-4" iyz="0" izz="1e-4"/>
+      </inertial>
+      <collision>
+        <geometry><sphere radius="${wheel_r}"/></geometry>
+      </collision>
+    </link>
+    <joint name="support_${name}_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="support_${name}"/>
+      <origin xyz="${x} ${y} ${-wheel_r}" rpy="0 0 0"/>
+    </joint>
+    <gazebo reference="support_${name}">
+      <mu1>0.0</mu1><mu2>0.0</mu2>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:support name="fx" x="${wheel_off}"  y="0"/>
+  <xacro:support name="bx" x="${-wheel_off}" y="0"/>
+  <xacro:support name="ly" x="0" y="${wheel_off}"/>
+  <xacro:support name="ry" x="0" y="${-wheel_off}"/>
+
+  <!-- ===== Sensors ===== -->
+  <xacro:lidar parent="base_link" xyz="0 0 0.2152" rpy="0 0 0"/>
+
+  <xacro:if value="$(arg use_camera)">
+    <xacro:include filename="$(find my_omnibot_description)/urdf/camera.xacro"/>
+    <xacro:rs_camera parent="base_link" name="base_camera">
+      <origin xyz="0.25 0 0.3" rpy="0 0 0"/>
+    </xacro:rs_camera>
+  </xacro:if>
+
+  <!-- ===== Base velocity control: applies /cmd_vel Twist directly to base ===== -->
+  <gazebo>
+    <plugin filename="gz-sim-velocity-control-system"
+            name="gz::sim::systems::VelocityControl">
+      <topic>/cmd_vel</topic>
+    </plugin>
+  </gazebo>
+
+</robot>

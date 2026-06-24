@@ -1,0 +1,53 @@
+<?xml version='1.0'?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find my_omnibot_description)/urdf/roller.xacro"/>
+
+  <!--
+    Omni wheel = rim + 18 rollers (visual decoration). See roller.xacro port note:
+    the wheel is VISUAL-ONLY; the base is moved by gz VelocityControl. Rim joint is
+    therefore "fixed" (no transmission / ros2_control on this port).
+  -->
+  <xacro:macro name="rim" params="name parent xyz rpy color">
+    <link name="rim_${name}_link">
+      <inertial>
+        <mass value="0.50"/>
+        <inertia ixx="0.000131905" ixy="0.0" ixz="0.0" iyy="0.000131905" iyz="0.0" izz="0.000203"/>
+      </inertial>
+      <visual>
+        <geometry>
+          <cylinder radius="0.0285" length="0.027"/>
+        </geometry>
+        <material name="rim_${name}_mat">
+          <color rgba="${color}"/>
+        </material>
+      </visual>
+    </link>
+
+    <joint name="${parent}_rim_${name}_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="rim_${name}_link"/>
+      <axis xyz="0 0 1"/>
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+    </joint>
+
+    <xacro:roller name="1"  parent="${name}" xyz="0.039551 0.0 0.01"        rpy="0 0 ${pi/2}"/>
+    <xacro:roller name="2"  parent="${name}" xyz="0.030181 -0.025561 0.01"  rpy="0 0 ${pi/2-pi*2/9}"/>
+    <xacro:roller name="3"  parent="${name}" xyz="0.006690 -0.038981 0.01"  rpy="0 0 ${pi/2-pi*4/9}"/>
+    <xacro:roller name="4"  parent="${name}" xyz="-0.019932 -0.034161 0.01" rpy="0 0 ${pi/2-pi*6/9}"/>
+    <xacro:roller name="5"  parent="${name}" xyz="-0.037227 -0.013357 0.01" rpy="0 0 ${pi/2-pi*8/9}"/>
+    <xacro:roller name="6"  parent="${name}" xyz="-0.037104 0.013697 0.01"  rpy="0 0 ${pi/2-pi*10/9}"/>
+    <xacro:roller name="7"  parent="${name}" xyz="-0.019619 0.034342 0.01"  rpy="0 0 ${pi/2-pi*12/9}"/>
+    <xacro:roller name="8"  parent="${name}" xyz="0.007046 0.038918 0.01"   rpy="0 0 ${pi/2-pi*14/9}"/>
+    <xacro:roller name="9"  parent="${name}" xyz="0.030414 0.025284 0.01"   rpy="0 0 ${pi/2-pi*16/9}"/>
+
+    <xacro:roller name="10" parent="${name}" xyz="0.037227 -0.013357 -0.01" rpy="0 0 ${pi/2-pi*1/9}"/>
+    <xacro:roller name="11" parent="${name}" xyz="0.019932 -0.034161 -0.01" rpy="0 0 ${pi/2-pi*3/9}"/>
+    <xacro:roller name="12" parent="${name}" xyz="-0.006690 -0.038981 -0.01" rpy="0 0 ${pi/2-pi*5/9}"/>
+    <xacro:roller name="13" parent="${name}" xyz="-0.030181 -0.025561 -0.01" rpy="0 0 ${pi/2-pi*7/9}"/>
+    <xacro:roller name="14" parent="${name}" xyz="-0.039551 0.0 -0.01"      rpy="0 0 ${pi/2-pi*9/9}"/>
+    <xacro:roller name="15" parent="${name}" xyz="-0.030414 0.025284 -0.01" rpy="0 0 ${pi/2-pi*11/9}"/>
+    <xacro:roller name="16" parent="${name}" xyz="-0.007046 0.038918 -0.01" rpy="0 0 ${pi/2-pi*13/9}"/>
+    <xacro:roller name="17" parent="${name}" xyz="0.019619 0.034342 -0.01"  rpy="0 0 ${pi/2-pi*15/9}"/>
+    <xacro:roller name="18" parent="${name}" xyz="0.037104 0.013697 -0.01"  rpy="0 0 ${pi/2-pi*17/9}"/>
+  </xacro:macro>
+</robot>

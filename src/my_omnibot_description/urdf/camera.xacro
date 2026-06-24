@@ -1,0 +1,52 @@
+<?xml version='1.0'?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    Intel RealSense D435i depth camera.
+    Geometry/frames come from the EXTERNAL realsense2_description package
+    (apt: ros-jazzy-realsense2-description).
+    PORT NOTE: original used Gazebo-Classic librealsense_gazebo_plugin.so.
+    Replaced with a gz Harmonic <sensor type="rgbd_camera"> attached to the
+    realsense depth optical frame, publishing color + depth + points.
+  -->
+  <xacro:include filename="$(find realsense2_description)/urdf/_d435.urdf.xacro"/>
+
+  <xacro:macro name="rs_camera" params="parent *origin name:=base_camera">
+    <xacro:sensor_d435 parent="${parent}" name="${name}"
+                       use_nominal_extrinsics="true" add_plug="false" use_mesh="true">
+      <xacro:insert_block name="origin"/>
+    </xacro:sensor_d435>
+
+    <gazebo reference="${name}_depth_optical_frame">
+      <sensor name="${name}_rgbd" type="rgbd_camera">
+        <topic>${name}</topic>
+        <gz_frame_id>${name}_depth_optical_frame</gz_frame_id>
+        <update_rate>10</update_rate>
+        <always_on>true</always_on>
+        <visualize>false</visualize>
+        <camera name="${name}">
+          <horizontal_fov>1.518</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>10.0</far>
+          </clip>
+          <depth_camera>
+            <clip>
+              <near>0.3</near>
+              <far>8.0</far>
+            </clip>
+          </depth_camera>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+</robot>
