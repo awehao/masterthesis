@@ -26,6 +26,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -45,6 +46,7 @@ def generate_launch_description():
     use_camera   = LaunchConfiguration('use_camera')
     robot_radius = LaunchConfiguration('robot_radius')
     inflation    = LaunchConfiguration('inflation')
+    gui          = LaunchConfiguration('gui')
 
     # Override map path + costmap sizing for the bigger chassis, without
     # touching the shared baseline file.
@@ -62,7 +64,8 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(desc_pkg, 'launch', 'omni_bot_gazebo.launch.py')
         ),
-        launch_arguments={'with_map': 'false', 'use_camera': use_camera}.items(),
+        launch_arguments={'with_map': 'false', 'use_camera': use_camera,
+                          'gui': gui}.items(),
     )
 
     nav_nodes = TimerAction(period=10.0, actions=[
@@ -85,10 +88,12 @@ def generate_launch_description():
              name='gmpc_controller', output='screen', parameters=[gmpc_params]),
     ])
 
+    # Foxglove only when interactive (skip for headless batch trials)
     foxglove = TimerAction(period=8.0, actions=[Node(
         package='foxglove_bridge', executable='foxglove_bridge',
         name='foxglove_bridge', output='screen',
         parameters=[{'use_sim_time': True, 'port': 8765}],
+        condition=IfCondition(gui),
     )])
 
     return LaunchDescription([
@@ -98,6 +103,8 @@ def generate_launch_description():
                               description='Costmap robot radius for the ported chassis'),
         DeclareLaunchArgument('inflation', default_value='0.45',
                               description='Costmap inflation radius'),
+        DeclareLaunchArgument('gui', default_value='true',
+                              description='GUI + Foxglove. Set false for headless batch.'),
         gazebo,
         foxglove,
         nav_nodes,

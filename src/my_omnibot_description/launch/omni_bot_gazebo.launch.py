@@ -2,7 +2,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, SetEnvironmentVariable, TimerAction
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -19,6 +19,7 @@ def generate_launch_description():
 
     use_camera = LaunchConfiguration('use_camera')
     with_map   = LaunchConfiguration('with_map')
+    gui        = LaunchConfiguration('gui')
 
     robot_description = ParameterValue(
         Command(['xacro ', urdf_file, ' use_camera:=', use_camera]),
@@ -43,9 +44,15 @@ def generate_launch_description():
         DeclareLaunchArgument('with_map', default_value='true',
                               description='Publish /map via ammr_bringup map_publisher. '
                                           'Set false when a Nav2 map_server provides /map.'),
+        DeclareLaunchArgument('gui', default_value='true',
+                              description='Run gz with GUI. Set false for headless batch '
+                                          '(gz sim -s) so trials can run in the background.'),
 
-        # 1. Gazebo Sim (Harmonic)
-        ExecuteProcess(cmd=['gz', 'sim', '-r', world_file], output='screen'),
+        # 1. Gazebo Sim (Harmonic) — GUI when gui:=true, headless (-s) otherwise
+        ExecuteProcess(cmd=['gz', 'sim', '-r', world_file], output='screen',
+                       condition=IfCondition(gui)),
+        ExecuteProcess(cmd=['gz', 'sim', '-s', '-r', world_file], output='screen',
+                       condition=UnlessCondition(gui)),
 
         # 2. ROS2 <-> gz bridge
         Node(
