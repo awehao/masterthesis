@@ -1,16 +1,16 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
-from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, SetEnvironmentVariable, TimerAction
+from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     desc_pkg = get_package_share_directory('my_omnibot_description')
     bringup  = get_package_share_directory('ammr_bringup')
+    realsense = get_package_share_directory('realsense2_description')
 
     urdf_file  = os.path.join(desc_pkg, 'urdf', 'omni_bot.urdf.xacro')
     world_file = os.path.join(bringup, 'worlds', 'random_room.sdf')
@@ -23,7 +23,19 @@ def generate_launch_description():
         value_type=str,
     )
 
+    # Let gz resolve package:// mesh URIs (chassis/roller + realsense D435 meshes).
+    # GZ searches each path for "<pkg>/meshes/...", so we add the *parents* of the
+    # package share dirs.
+    resource_paths = os.pathsep.join([
+        os.path.dirname(desc_pkg),    # .../install/my_omnibot_description/share
+        os.path.dirname(realsense),   # .../opt/ros/jazzy/share
+    ])
+    prev_rp = os.environ.get('GZ_SIM_RESOURCE_PATH', '')
+    if prev_rp:
+        resource_paths = resource_paths + os.pathsep + prev_rp
+
     return LaunchDescription([
+        SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', resource_paths),
         DeclareLaunchArgument('use_camera', default_value='true',
                               description='Spawn the RealSense D435i RGBD camera'),
 
