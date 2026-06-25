@@ -32,15 +32,18 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Single-instance lock: two overlapping batches share the cleanup pkill pattern
-# and would kill each other's gz/record processes (corrupting bags). Refuse to
-# start a second one.
-exec 9>"/tmp/omnibot_static.lock"
-if ! flock -n 9; then
-    echo "ERROR: another run_omnibot_static.sh is already running (holds /tmp/omnibot_static.lock)."
+# Single-instance guard (pidfile). Two overlapping batches share the cleanup
+# pkill pattern and would kill each other's gz/record processes (corrupting
+# bags). Pidfile (not flock) because an flock fd is inherited by every child
+# process (gz, nav nodes, recorder), so a single orphan would hold the lock
+# forever after a hard kill. A pidfile is robust to kill -9 (stale pid → dead).
+LOCKFILE="/tmp/omnibot_static.pid"
+if [ -f "$LOCKFILE" ] && kill -0 "$(cat "$LOCKFILE" 2>/dev/null)" 2>/dev/null; then
+    echo "ERROR: another run_omnibot_static.sh is already running (pid $(cat "$LOCKFILE"))."
     echo "       Stop it first:  pkill -TERM -f run_omnibot_static.sh"
     exit 1
 fi
+echo $$ > "$LOCKFILE"
 
 N_TRIALS="${1:-3}"
 DURATION="${2:-180}"
@@ -80,7 +83,7 @@ cleanup() {
 # cleanup but fell through, so `pkill -TERM` could not stop the batch and two
 # runs could overlap and kill each other's processes).
 trap 'echo "[$(date +%T)] interrupted -> stopping batch"; cleanup; exit 130' INT TERM
-trap cleanup EXIT
+trap 'cleanup; rm -f "$LOCKFILE"' EXIT
 
 run_trial() {
     local seed="$1"
@@ -113,7 +116,8 @@ run_trial() {
         /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
         /gmpc/solve_time_ms /gmpc/min_h /gmpc/obstacles \
         >> "$log_file" 2>&1 < /dev/null &
-    PIDS+=( $! )
+    REC_PID=$!
+    PIDS+=( $REC_PID )
     sleep 3
 
     # 4. publish goal once >=2 subscribers (DDS late-subscriber race fix)
@@ -128,9 +132,27 @@ run_trial() {
         "{ header: { frame_id: 'map' }, pose: { position: { x: ${GOAL_X}, y: ${GOAL_Y}, z: 0.0 }, orientation: { w: 1.0 } } }" \
         >> "$log_file" 2>&1 || true
 
-    # 5. let it run, then tear down
-    echo "[$(date +%T)] [5/5] running for ${DURATION}s ..."
-    sleep "$DURATION"
+    # 5. wait until goal reached (exit 0) OR DURATION timeout (safety cap),
+    #    then tear down -> immediately on to the next trial.
+    echo "[$(date +%T)] [5/5] waiting for goal (tol=0.25 m, cap ${DURATION}s) ..."
+    if python3 "${HERE}/goal_watcher.py" \
+            --goal-x "$GOAL_X" --goal-y "$GOAL_Y" \
+            --tol 0.25 --timeout "$DURATION" \
+            >> "$log_file" 2>&1 < /dev/null; then
+        echo "[$(date +%T)]     goal reached -> ending trial early"
+    else
+        echo "[$(date +%T)]     ${DURATION}s cap hit without reaching goal"
+    fi
+    sleep 2   # short tail so the bag captures the stop / zero-twist
+
+    # Stop the recorder cleanly FIRST so the sqlite bag is flushed/finalized.
+    # Killing it mid-write (as the general cleanup does) truncates the .db3 and
+    # makes analyze.py fail with "disk I/O error / could not open database".
+    echo "[$(date +%T)]     finalizing rosbag (SIGINT, wait up to 20s) ..."
+    kill -INT "$REC_PID" 2>/dev/null || true
+    for _ in $(seq 1 20); do kill -0 "$REC_PID" 2>/dev/null || break; sleep 1; done
+    kill -0 "$REC_PID" 2>/dev/null && echo "[$(date +%T)]     WARN recorder still up after 20s"
+
     cleanup
 
     # analyze this trial
