@@ -101,18 +101,15 @@ def generate_launch_description():
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
              name='gmpc_controller', output='screen', parameters=[gmpc_params],
              condition=UnlessCondition(cbf)),
-        # GMPC + CBF (cbf:=true): CBF-enabled controller + obstacle aggregator
+        # GMPC + CBF (cbf:=true): CBF-enabled controller. No obstacle_aggregator
+        # here: the static world has none of its 3 expected dynamic obstacles, so
+        # it would crash on missing poses. gmpc_node subscribes /gmpc/obstacles
+        # (no publisher -> empty) so the CBF rows stay inactive. Dynamic + CBF
+        # (with obstacle_aggregator) is a separate dynamic-world launch.
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
              name='gmpc_controller', output='screen',
              parameters=[gmpc_params, cbf_overrides],
              condition=IfCondition(cbf)),
-        Node(package='ammr_wholebody_mpc', executable='obstacle_aggregator',
-             name='obstacle_aggregator', output='screen',
-             condition=IfCondition(cbf),
-             parameters=[{'use_sim_time': True, 'trajectories_file': traj_file,
-                          'publish_rate': 20.0, 'output_topic': '/gmpc/obstacles',
-                          'kf_sigma_meas': 0.05, 'kf_sigma_vel': 0.4,
-                          'kf_sigma_pos': 0.01, 'kf_init_vel_var': 1.0}]),
     ])
 
     # Foxglove only when interactive (skip for headless batch trials)
