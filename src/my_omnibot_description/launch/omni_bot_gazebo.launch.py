@@ -88,9 +88,14 @@ def generate_launch_description():
         Node(package='ammr_bringup', executable='odom_tf_broadcaster',
              parameters=[{'use_sim_time': True}], output='screen'),
 
-        # 6. scan_raw -> /scan relay (reused from ammr_bringup)
+        # 6. scan_raw -> /scan relay, masking the 4 diagonal chassis posts that
+        #    sit in the LiDAR plane (~45/135/225/315 deg, body frame) and would
+        #    otherwise feed AMCL phantom 0.24 m returns.
         Node(package='ammr_bringup', executable='scan_relay',
-             parameters=[{'use_sim_time': True}], output='screen'),
+             parameters=[{'use_sim_time': True,
+                          'blocked_centers_deg': [45.0, 135.0, 225.0, 315.0],
+                          'blocked_halfwidth_deg': 15.0}],
+             output='screen'),
 
         # 7. Spawn robot (wait for gz + robot_description)
         TimerAction(period=6.0, actions=[Node(
