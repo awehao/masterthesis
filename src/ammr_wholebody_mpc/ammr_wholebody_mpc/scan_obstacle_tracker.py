@@ -1,0 +1,332 @@
+"""Detect & track UNKNOWN dynamic obstacles from /scan (no ground truth).
+
+Pipeline (drop-in replacement for obstacle_aggregator, same wire format):
+
+  /scan (LaserScan, lidar_link)
+    -> transform hits to the global frame (map) via TF
+    -> static background subtraction against the known /map
+       (drop points that fall on / near a known-occupied cell = walls)
+    -> cluster the remaining (dynamic) points by angular adjacency
+       (the laser-scan equivalent of DBSCAN; sklearn-free)
+    -> reject clusters that are too small / too large (walls, noise)
+    -> associate cluster centroids to existing tracks (Hungarian, gated)
+    -> one constant-velocity Kalman filter per track -> (x, y, vx, vy)
+    -> publish /gmpc/obstacles : Float32MultiArray [x,y,r,vx,vy, ...]
+
+This is the Sprint-B "real perception" path: it never reads obstacle ground
+truth, so it covers obstacles that are NOT in any predefined list. The GMPC +
+horizon-CBF controller consumes /gmpc/obstacles unchanged.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import List, Tuple
+
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+
+import tf2_ros
+from geometry_msgs.msg import TransformStamped
+from nav_msgs.msg import OccupancyGrid
+from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Float32MultiArray
+from visualization_msgs.msg import Marker, MarkerArray
+
+from .kalman_tracker import KalmanTracker2D
+
+try:
+    from scipy.ndimage import binary_dilation
+    _HAVE_NDIMAGE = True
+except Exception:                       # pragma: no cover
+    _HAVE_NDIMAGE = False
+
+
+# ---------------------------------------------------------------------------
+# Pure-python core (unit-testable without ROS)
+# ---------------------------------------------------------------------------
+def cluster_adjacent(pts: np.ndarray, gap: float,
+                     min_pts: int, max_radius: float
+                     ) -> List[Tuple[float, float, float, int]]:
+    """Cluster an ORDERED set of 2D points (by laser bearing) into compact
+    blobs: start a new cluster whenever the Euclidean step between consecutive
+    points exceeds `gap`. Returns [(cx, cy, radius, n_pts), ...] for clusters
+    that pass the size gates.
+
+    `pts` is (N,2), already ordered by scan angle and already background-
+    subtracted (only dynamic candidate points).
+    """
+    out: List[Tuple[float, float, float, int]] = []
+    if len(pts) == 0:
+        return out
+
+    start = 0
+    for i in range(1, len(pts) + 1):
+        split = (i == len(pts)) or (
+            math.hypot(pts[i, 0] - pts[i - 1, 0],
+                       pts[i, 1] - pts[i - 1, 1]) > gap)
+        if split:
+            seg = pts[start:i]
+            start = i
+            if len(seg) < min_pts:
+                continue
+            cx, cy = float(seg[:, 0].mean()), float(seg[:, 1].mean())
+            radius = float(np.max(np.hypot(seg[:, 0] - cx, seg[:, 1] - cy)))
+            if radius > max_radius:
+                continue                # too big -> a wall segment, not an obstacle
+            out.append((cx, cy, radius, len(seg)))
+    return out
+
+
+def associate(cluster_xy: np.ndarray, track_xy: np.ndarray, gate: float
+              ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
+    """Hungarian assignment between clusters and tracks under a distance gate.
+
+    Returns (matches, unmatched_clusters, unmatched_tracks) where matches is a
+    list of (cluster_idx, track_idx).
+    """
+    nc, nt = len(cluster_xy), len(track_xy)
+    if nc == 0 or nt == 0:
+        return [], list(range(nc)), list(range(nt))
+
+    cost = np.hypot(
+        cluster_xy[:, None, 0] - track_xy[None, :, 0],
+        cluster_xy[:, None, 1] - track_xy[None, :, 1])
+    rows, cols = linear_sum_assignment(cost)
+
+    matches, um_c, um_t = [], set(range(nc)), set(range(nt))
+    for r, c in zip(rows, cols):
+        if cost[r, c] <= gate:
+            matches.append((int(r), int(c)))
+            um_c.discard(int(r))
+            um_t.discard(int(c))
+    return matches, sorted(um_c), sorted(um_t)
+
+
+@dataclass
+class Track:
+    tid: int
+    kf: KalmanTracker2D
+    radius: float
+    last_t_ns: int
+    age: int = 1                 # number of successful updates
+    misses: int = 0
+
+
+# ---------------------------------------------------------------------------
+class ScanObstacleTracker(Node):
+
+    def __init__(self):
+        super().__init__('scan_obstacle_tracker')
+
+        p = self.declare_parameter
+        p('scan_topic', '/scan')
+        p('map_topic', '/map')
+        p('output_topic', '/gmpc/obstacles')
+        p('global_frame', 'map')
+        p('cluster_gap', 0.30)            # m, split clusters on bigger jump
+        p('min_cluster_pts', 2)
+        p('max_cluster_radius', 0.60)     # m, reject bigger blobs (walls)
+        p('default_radius', 0.25)         # m, inflate cluster radius up to this
+        p('static_inflation', 0.30)       # m, drop hits within this of a wall
+        p('assoc_gate', 0.80)             # m, max cluster<->track distance
+        p('track_timeout', 0.60)          # s, drop track unseen this long
+        p('min_track_age', 3)             # publish only after this many updates
+        # KF tuning (meas noise inflated vs ground-truth: cluster centroids jitter)
+        p('kf_sigma_pos', 0.01)
+        p('kf_sigma_vel', 0.40)
+        p('kf_sigma_meas', 0.05)
+        p('kf_init_vel_var', 1.0)
+        p('publish_markers', True)
+
+        g = lambda n: self.get_parameter(n).value
+        self.global_frame   = str(g('global_frame'))
+        self.cluster_gap    = float(g('cluster_gap'))
+        self.min_pts        = int(g('min_cluster_pts'))
+        self.max_radius     = float(g('max_cluster_radius'))
+        self.default_radius = float(g('default_radius'))
+        self.static_infl    = float(g('static_inflation'))
+        self.assoc_gate     = float(g('assoc_gate'))
+        self.track_timeout  = float(g('track_timeout'))
+        self.min_age        = int(g('min_track_age'))
+        self._kf_kwargs = dict(
+            sigma_pos=float(g('kf_sigma_pos')), sigma_vel=float(g('kf_sigma_vel')),
+            sigma_meas=float(g('kf_sigma_meas')), init_vel_var=float(g('kf_init_vel_var')))
+
+        self._tracks: List[Track] = []
+        self._next_id = 0
+        self._occ: np.ndarray | None = None   # inflated occupied mask (row,col)
+        self._map_info = None
+
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                             durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(OccupancyGrid, str(g('map_topic')),
+                                 self._map_cb, map_qos)
+        scan_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
+                              durability=DurabilityPolicy.VOLATILE)
+        self.create_subscription(LaserScan, str(g('scan_topic')),
+                                 self._scan_cb, scan_qos)
+
+        self.pub = self.create_publisher(Float32MultiArray, str(g('output_topic')), 10)
+        self.publish_markers = bool(g('publish_markers'))
+        self.mpub = self.create_publisher(MarkerArray, '/gmpc/scan_obstacles_viz', 10) \
+            if self.publish_markers else None
+
+        self.get_logger().info(
+            f'scan_obstacle_tracker up: /scan -> static-subtract({self.static_infl} m) '
+            f'-> cluster(gap={self.cluster_gap}) -> KF -> '
+            f'{g("output_topic")} (frame {self.global_frame})')
+
+    # ------------------------------------------------------------------
+    def _map_cb(self, msg: OccupancyGrid):
+        info = msg.info
+        w, h = info.width, info.height
+        grid = np.array(msg.data, dtype=np.int16).reshape(h, w)
+        occ = grid >= 50                      # occupied cells
+        if _HAVE_NDIMAGE and self.static_infl > 0.0:
+            rad = max(1, int(round(self.static_infl / info.resolution)))
+            # square structuring element of half-width `rad`
+            occ = binary_dilation(occ, iterations=rad)
+        self._occ = occ
+        self._map_info = info
+        self.get_logger().info(
+            f'map received: {w}x{h} @ {info.resolution:.3f} m, '
+            f'inflated occupied cells = {int(occ.sum())}')
+
+    def _is_static(self, mx: float, my: float) -> bool:
+        """True if the map-frame point falls on an (inflated) occupied cell."""
+        if self._occ is None:
+            return False                      # no map yet -> keep everything
+        info = self._map_info
+        col = int((mx - info.origin.position.x) / info.resolution)
+        row = int((my - info.origin.position.y) / info.resolution)
+        h, w = self._occ.shape
+        if 0 <= row < h and 0 <= col < w:
+            return bool(self._occ[row, col])
+        return False                          # outside map -> treat as dynamic
+
+    # ------------------------------------------------------------------
+    def _scan_cb(self, scan: LaserScan):
+        # TF lidar -> global at the scan stamp (fall back to latest).
+        try:
+            tf: TransformStamped = self.tf_buffer.lookup_transform(
+                self.global_frame, scan.header.frame_id, scan.header.stamp,
+                timeout=rclpy.duration.Duration(seconds=0.05))
+        except Exception:
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    self.global_frame, scan.header.frame_id, rclpy.time.Time())
+            except Exception:
+                return
+        tx = tf.transform.translation.x
+        ty = tf.transform.translation.y
+        q = tf.transform.rotation
+        yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        cyaw, syaw = math.cos(yaw), math.sin(yaw)
+
+        # Build dynamic (non-static) map-frame points, in scan order.
+        dyn = []
+        a = scan.angle_min
+        rmin, rmax = scan.range_min, scan.range_max
+        for r in scan.ranges:
+            if math.isfinite(r) and rmin < r < rmax:
+                lx, ly = r * math.cos(a), r * math.sin(a)
+                mx = tx + cyaw * lx - syaw * ly
+                my = ty + syaw * lx + cyaw * ly
+                if not self._is_static(mx, my):
+                    dyn.append((mx, my))
+            a += scan.angle_increment
+        dyn = np.array(dyn, dtype=float) if dyn else np.empty((0, 2))
+
+        clusters = cluster_adjacent(dyn, self.cluster_gap, self.min_pts, self.max_radius)
+
+        t_ns = (int(scan.header.stamp.sec) * 1_000_000_000
+                + int(scan.header.stamp.nanosec)) or self.get_clock().now().nanoseconds
+        self._update_tracks(clusters, t_ns)
+        self._publish(t_ns, scan.header.stamp)
+
+    # ------------------------------------------------------------------
+    def _update_tracks(self, clusters, t_ns: int):
+        cl_xy = np.array([[c[0], c[1]] for c in clusters], dtype=float) \
+            if clusters else np.empty((0, 2))
+        tr_xy = np.array([[t.kf.position[0], t.kf.position[1]] for t in self._tracks],
+                         dtype=float) if self._tracks else np.empty((0, 2))
+
+        matches, um_c, um_t = associate(cl_xy, tr_xy, self.assoc_gate)
+
+        for ci, ti in matches:
+            tr = self._tracks[ti]
+            tr.kf.step(t_ns=t_ns, y_xy=(clusters[ci][0], clusters[ci][1]))
+            tr.radius = max(self.default_radius, clusters[ci][2])
+            tr.last_t_ns = t_ns
+            tr.age += 1
+            tr.misses = 0
+
+        for ci in um_c:                       # new track
+            kf = KalmanTracker2D(init_xy=(clusters[ci][0], clusters[ci][1]),
+                                 **self._kf_kwargs)
+            self._tracks.append(Track(
+                tid=self._next_id, kf=kf,
+                radius=max(self.default_radius, clusters[ci][2]), last_t_ns=t_ns))
+            self._next_id += 1
+
+        for ti in um_t:
+            self._tracks[ti].misses += 1
+
+        # Age out stale tracks.
+        keep = []
+        for tr in self._tracks:
+            if (t_ns - tr.last_t_ns) * 1e-9 <= self.track_timeout:
+                keep.append(tr)
+        self._tracks = keep
+
+    # ------------------------------------------------------------------
+    def _publish(self, t_ns: int, stamp):
+        flat: List[float] = []
+        confirmed = [t for t in self._tracks if t.age >= self.min_age]
+        for tr in confirmed:
+            px, py = tr.kf.position
+            vx, vy = tr.kf.velocity
+            flat.extend([px, py, tr.radius, vx, vy])
+        msg = Float32MultiArray(); msg.data = flat
+        self.pub.publish(msg)
+
+        if self.mpub is not None:
+            ma = MarkerArray()
+            for i, tr in enumerate(confirmed):
+                px, py = tr.kf.position
+                m = Marker()
+                m.header.frame_id = self.global_frame
+                m.header.stamp = stamp
+                m.ns = 'scan_obs'; m.id = i; m.type = Marker.CYLINDER
+                m.action = Marker.ADD
+                m.pose.position.x = px; m.pose.position.y = py; m.pose.position.z = 0.5
+                m.pose.orientation.w = 1.0
+                m.scale.x = m.scale.y = 2 * tr.radius; m.scale.z = 1.0
+                m.color.r = 1.0; m.color.g = 0.3; m.color.b = 0.0; m.color.a = 0.5
+                ma.markers.append(m)
+            self.mpub.publish(ma)
+
+
+def main():
+    rclpy.init()
+    node = ScanObstacleTracker()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

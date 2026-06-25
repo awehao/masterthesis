@@ -1,0 +1,178 @@
+"""omni_bot + dynamic obstacles + GMPC-CBF, obstacles detected from /scan.
+
+This is the Sprint-B integration: instead of obstacle_aggregator (which reads
+Gazebo ground-truth poses), it runs scan_obstacle_tracker, which detects and
+tracks UNKNOWN dynamic obstacles purely from /scan (static-map subtraction +
+clustering + per-track Kalman filter) and publishes /gmpc/obstacles. The
+GMPC + horizon-CBF controller consumes /gmpc/obstacles unchanged.
+
+  obstacle_source:=scan   (default) -> scan_obstacle_tracker  (real perception)
+  obstacle_source:=truth            -> obstacle_aggregator     (ground-truth baseline)
+
+Run (GUI):
+  ros2 launch my_omnibot_description omni_bot_dynamic.launch.py
+Headless batch:
+  ros2 launch my_omnibot_description omni_bot_dynamic.launch.py gui:=false
+Send a goal:
+  ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped \
+    "{header: {frame_id: 'map'}, pose: {position: {x: 17.0, y: 17.0}, orientation: {w: 1.0}}}" --once
+"""
+
+import os
+import yaml
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
+                            SetEnvironmentVariable, TimerAction)
+from launch.conditions import IfCondition, UnlessCondition
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+from nav2_common.launch import RewrittenYaml
+
+
+def _dyn_names(traj_file):
+    try:
+        with open(traj_file) as f:
+            cfg = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return []
+    return [d['name'] for d in cfg.get('dynamic_obstacles', [])]
+
+
+def generate_launch_description():
+    desc_pkg  = get_package_share_directory('my_omnibot_description')
+    bringup   = get_package_share_directory('ammr_bringup')
+    nav_pkg   = get_package_share_directory('ammr_navigation')
+    wbmpc_pkg = get_package_share_directory('ammr_wholebody_mpc')
+
+    urdf_file  = os.path.join(desc_pkg, 'urdf',   'omni_bot.urdf.xacro')
+    world_file = os.path.join(bringup,  'worlds', 'random_room_dynamic.sdf')
+    map_file   = os.path.join(bringup,  'maps',   'random_room.yaml')
+    nav_params = os.path.join(nav_pkg,  'config', 'nav2_params_mppi.yaml')
+    gmpc_params= os.path.join(wbmpc_pkg,'config', 'gmpc_params.yaml')
+    traj_file  = os.path.join(bringup,  'config', 'dynamic_trajectories.yaml')
+
+    gui          = LaunchConfiguration('gui')
+    cbf          = LaunchConfiguration('cbf')
+    robot_radius = LaunchConfiguration('robot_radius')
+    inflation    = LaunchConfiguration('inflation')
+    use_scan     = PythonExpression(["'", LaunchConfiguration('obstacle_source'), "' == 'scan'"])
+    use_truth    = PythonExpression(["'", LaunchConfiguration('obstacle_source'), "' == 'truth'"])
+
+    robot_description = ParameterValue(
+        Command(['xacro ', urdf_file, ' use_camera:=false']), value_type=str)
+
+    configured_nav_params = RewrittenYaml(
+        source_file=nav_params,
+        param_rewrites={'yaml_filename': map_file,
+                        'robot_radius': robot_radius,
+                        'inflation_radius': inflation},
+        convert_types=True)
+
+    # gz mesh resolution for the chassis/roller STLs (see omni_bot_gazebo.launch)
+    rp = os.pathsep.join([os.path.dirname(desc_pkg)])
+    prev = os.environ.get('GZ_SIM_RESOURCE_PATH', '')
+    if prev:
+        rp = rp + os.pathsep + prev
+
+    # one bridge: robot topics + per-obstacle cmd_vel (driver -> gz)
+    bridge_args = [
+        '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
+        '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
+        '/odom_raw@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+        '/scan_raw@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+    ]
+    for name in _dyn_names(traj_file):
+        bridge_args.append(f'/model/{name}/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist')
+
+    cbf_overrides = {
+        'cbf_enable': True, 'cbf_alpha': 3.0, 'cbf_safe_margin': 0.30,
+        'cbf_slack_weight': 5.0e2, 'cbf_eps0_scale': 30.0,
+        'cbf_danger_thresh': 0.4, 'cbf_Q_min_scale': 0.20,
+        'cbf_slack_max_scale': 20.0, 'obstacles_topic': '/gmpc/obstacles',
+    }
+
+    nav_nodes = [
+        Node(package='nav2_map_server', executable='map_server', name='map_server',
+             output='screen', parameters=[configured_nav_params]),
+        Node(package='nav2_amcl', executable='amcl', name='amcl',
+             output='screen', parameters=[configured_nav_params]),
+        Node(package='nav2_planner', executable='planner_server', name='planner_server',
+             output='screen', parameters=[configured_nav_params]),
+        Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
+             name='lifecycle_manager_navigation', output='screen',
+             parameters=[{'use_sim_time': True, 'autostart': True,
+                          'node_names': ['map_server', 'amcl', 'planner_server']}]),
+        Node(package='ammr_wholebody_mpc', executable='goal_to_plan_relay',
+             name='goal_to_plan_relay', output='screen',
+             parameters=[{'use_sim_time': True, 'global_frame': 'map',
+                          'robot_base_frame': 'base_footprint',
+                          'planner_id': 'GridBased', 'replan_period': 3.0}]),
+        # GMPC + CBF (cbf:=true) or plain GMPC (cbf:=false)
+        Node(package='ammr_wholebody_mpc', executable='gmpc_node',
+             name='gmpc_controller', output='screen',
+             parameters=[gmpc_params, cbf_overrides], condition=IfCondition(cbf)),
+        Node(package='ammr_wholebody_mpc', executable='gmpc_node',
+             name='gmpc_controller', output='screen',
+             parameters=[gmpc_params], condition=UnlessCondition(cbf)),
+        # Perception: scan-based (real) OR ground-truth aggregator (baseline)
+        Node(package='ammr_wholebody_mpc', executable='scan_obstacle_tracker',
+             name='scan_obstacle_tracker', output='screen',
+             condition=IfCondition(use_scan),
+             parameters=[{'use_sim_time': True}]),
+        Node(package='ammr_wholebody_mpc', executable='obstacle_aggregator',
+             name='obstacle_aggregator', output='screen',
+             condition=IfCondition(use_truth),
+             parameters=[{'use_sim_time': True, 'trajectories_file': traj_file,
+                          'publish_rate': 20.0, 'output_topic': '/gmpc/obstacles',
+                          'kf_sigma_meas': 0.05, 'kf_sigma_vel': 0.4,
+                          'kf_sigma_pos': 0.01, 'kf_init_vel_var': 1.0}]),
+    ]
+
+    return LaunchDescription([
+        SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', rp),
+        DeclareLaunchArgument('gui', default_value='true'),
+        DeclareLaunchArgument('cbf', default_value='true'),
+        DeclareLaunchArgument('obstacle_source', default_value='scan',
+                              description='scan = real /scan perception; truth = ground-truth'),
+        DeclareLaunchArgument('robot_radius', default_value='0.33'),
+        DeclareLaunchArgument('inflation', default_value='0.45'),
+
+        ExecuteProcess(cmd=['gz', 'sim', '-r', world_file], output='screen',
+                       condition=IfCondition(gui)),
+        ExecuteProcess(cmd=['gz', 'sim', '-s', '-r', world_file], output='screen',
+                       condition=UnlessCondition(gui)),
+
+        Node(package='ros_gz_bridge', executable='parameter_bridge',
+             arguments=bridge_args, output='screen'),
+        Node(package='robot_state_publisher', executable='robot_state_publisher',
+             parameters=[{'robot_description': robot_description, 'use_sim_time': True}]),
+        Node(package='ammr_bringup', executable='odom_tf_broadcaster',
+             parameters=[{'use_sim_time': True}], output='screen'),
+        Node(package='ammr_bringup', executable='scan_relay',
+             parameters=[{'use_sim_time': True,
+                          'blocked_centers_deg': '45,135,225,315',
+                          'blocked_halfwidth_deg': 15.0}], output='screen'),
+
+        TimerAction(period=6.0, actions=[Node(
+            package='ros_gz_sim', executable='create',
+            arguments=['-name', 'omni_bot', '-topic', 'robot_description',
+                       '-x', '0.0', '-y', '0.0', '-z', '0.05'], output='screen')]),
+
+        # move the obstacles (ping-pong)
+        TimerAction(period=8.0, actions=[Node(
+            package='ammr_bringup', executable='dynamic_obstacle_driver',
+            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],
+            output='screen')]),
+
+        # nav + control + perception (wait for gz/robot/TF)
+        TimerAction(period=10.0, actions=nav_nodes),
+
+        TimerAction(period=8.0, actions=[Node(
+            package='foxglove_bridge', executable='foxglove_bridge',
+            name='foxglove_bridge', output='screen',
+            parameters=[{'use_sim_time': True, 'port': 8765}],
+            condition=IfCondition(gui))]),
+    ])
