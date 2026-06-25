@@ -1,0 +1,46 @@
+# Global EKF (robot_localization): fuse smooth /odom + absolute /amcl_pose into
+# a stable map->odom transform, so AMCL jumps (from unmapped obstacles) get
+# rejected/smoothed instead of teleporting the robot.
+#
+# Chain:  /odom (velocity, smooth) ── predict ──┐
+#         /amcl_pose (x,y,yaw, jumps) ─ correct ─┴─► fused map->base ─► map->odom TF
+#
+# AMCL must NOT publish map->odom (tf_broadcast:=false); this EKF owns it.
+# Real-world valid: with a real (drifting) /odom the EKF still works — AMCL
+# slowly corrects the drift while odom keeps it smooth between corrections.
+
+ekf_global:
+  ros__parameters:
+    use_sim_time: true
+    frequency: 30.0
+    sensor_timeout: 0.2
+    two_d_mode: true                 # planar robot
+    publish_tf: true
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_footprint
+    world_frame: map                 # GLOBAL EKF -> publishes map->odom
+
+    # /odom: fuse VELOCITY (vx, vy, vyaw) for smooth dead-reckoning prediction.
+    odom0: /odom
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  true,  false,
+                   false, false, true,
+                   false, false, false]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 10
+
+    # /amcl_pose: fuse ABSOLUTE x, y, yaw for map-frame correction.
+    # rejection_threshold (Mahalanobis) drops AMCL outlier jumps -> stable.
+    pose0: /amcl_pose
+    pose0_config: [true,  true,  false,
+                   false, false, true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    pose0_differential: false
+    pose0_relative: false
+    pose0_queue_size: 5
+    pose0_rejection_threshold: 2.5   # lower -> reject AMCL jumps harder (tune)

@@ -53,6 +53,7 @@ def generate_launch_description():
     nav_params = os.path.join(nav_pkg,  'config', 'nav2_params_mppi.yaml')
     gmpc_params= os.path.join(wbmpc_pkg,'config', 'gmpc_params.yaml')
     traj_file  = os.path.join(bringup,  'config', 'dynamic_trajectories.yaml')
+    ekf_config = os.path.join(desc_pkg, 'config', 'ekf_fusion.yaml')
 
     gui          = LaunchConfiguration('gui')
     cbf          = LaunchConfiguration('cbf')
@@ -68,7 +69,10 @@ def generate_launch_description():
         source_file=nav_params,
         param_rewrites={'yaml_filename': map_file,
                         'robot_radius': robot_radius,
-                        'inflation_radius': inflation},
+                        'inflation_radius': inflation,
+                        # EKF (ekf_global) owns map->odom; AMCL only publishes
+                        # /amcl_pose so the EKF can fuse + reject its jumps.
+                        'tf_broadcast': 'false'},
         convert_types=True)
 
     # gz mesh resolution for the chassis/roller STLs (see omni_bot_gazebo.launch)

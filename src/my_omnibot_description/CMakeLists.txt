@@ -4,7 +4,7 @@ project(my_omnibot_description)
 find_package(ament_cmake REQUIRED)
 
 install(
-  DIRECTORY urdf meshes launch rviz
+  DIRECTORY urdf meshes launch rviz config
   DESTINATION share/${PROJECT_NAME}
 )
 
