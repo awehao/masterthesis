@@ -2,6 +2,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, SetEnvironmentVariable, TimerAction
+from launch.conditions import IfCondition
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -17,6 +18,7 @@ def generate_launch_description():
     map_file   = os.path.join(bringup, 'maps', 'random_room.yaml')
 
     use_camera = LaunchConfiguration('use_camera')
+    with_map   = LaunchConfiguration('with_map')
 
     robot_description = ParameterValue(
         Command(['xacro ', urdf_file, ' use_camera:=', use_camera]),
@@ -38,6 +40,9 @@ def generate_launch_description():
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', resource_paths),
         DeclareLaunchArgument('use_camera', default_value='true',
                               description='Spawn the RealSense D435i RGBD camera'),
+        DeclareLaunchArgument('with_map', default_value='true',
+                              description='Publish /map via ammr_bringup map_publisher. '
+                                          'Set false when a Nav2 map_server provides /map.'),
 
         # 1. Gazebo Sim (Harmonic)
         ExecuteProcess(cmd=['gz', 'sim', '-r', world_file], output='screen'),
@@ -66,8 +71,9 @@ def generate_launch_description():
             parameters=[{'robot_description': robot_description, 'use_sim_time': True}],
         ),
 
-        # 4. Map publisher (reused from ammr_bringup)
-        Node(package='ammr_bringup', executable='map_publisher', arguments=[map_file]),
+        # 4. Map publisher (reused from ammr_bringup) — off when Nav2 owns /map
+        Node(package='ammr_bringup', executable='map_publisher', arguments=[map_file],
+             condition=IfCondition(with_map)),
 
         # 5. Omni-drive controller: /cmd_vel -> /odom + TF (reused from ammr_bringup)
         Node(package='ammr_bringup', executable='omni_drive_controller',
