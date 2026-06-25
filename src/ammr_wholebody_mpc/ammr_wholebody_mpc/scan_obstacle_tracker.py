@@ -130,7 +130,16 @@ class ScanObstacleTracker(Node):
         p('scan_topic', '/scan')
         p('map_topic', '/map')
         p('output_topic', '/gmpc/obstacles')
-        p('global_frame', 'map')
+        # Track in the SMOOTH odom frame, not map: AMCL (map) jumps make static
+        # walls look like they move, defeating the velocity gate. Our gz ground-
+        # truth odom is drift-free, so static geometry is truly stationary in
+        # odom (v~=0) and only real dynamic obstacles move (v~=0.3). Obstacles
+        # are then transformed to publish_frame (map) so the GMPC consumes them
+        # in the same frame as the robot pose -- the AMCL offset cancels in the
+        # relative distance the CBF actually uses.
+        p('global_frame', 'odom')         # frame to cluster + track in (smooth)
+        p('publish_frame', 'map')         # frame to publish obstacles in (GMPC's)
+        p('use_map_subtraction', False)   # odom-frame velocity gate replaces it
         p('cluster_gap', 0.30)            # m, split clusters on bigger jump
         p('min_cluster_pts', 2)
         p('max_cluster_radius', 0.60)     # m, reject bigger blobs (walls)
@@ -153,6 +162,8 @@ class ScanObstacleTracker(Node):
 
         g = lambda n: self.get_parameter(n).value
         self.global_frame   = str(g('global_frame'))
+        self.publish_frame  = str(g('publish_frame'))
+        self.use_map        = bool(g('use_map_subtraction'))
         self.cluster_gap    = float(g('cluster_gap'))
         self.min_pts        = int(g('min_cluster_pts'))
         self.max_radius     = float(g('max_cluster_radius'))
@@ -189,9 +200,10 @@ class ScanObstacleTracker(Node):
             if self.publish_markers else None
 
         self.get_logger().info(
-            f'scan_obstacle_tracker up: /scan -> static-subtract({self.static_infl} m) '
-            f'-> cluster(gap={self.cluster_gap}) -> KF -> '
-            f'{g("output_topic")} (frame {self.global_frame})')
+            f'scan_obstacle_tracker up: /scan -> track in {self.global_frame} '
+            f'(map_subtraction={self.use_map}) -> cluster(gap={self.cluster_gap}) '
+            f'-> KF -> velocity gate(>={self.min_speed} m/s) -> '
+            f'{g("output_topic")} in {self.publish_frame}')
 
     # ------------------------------------------------------------------
     def _map_cb(self, msg: OccupancyGrid):
@@ -242,7 +254,8 @@ class ScanObstacleTracker(Node):
         yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
         cyaw, syaw = math.cos(yaw), math.sin(yaw)
 
-        # Build dynamic (non-static) map-frame points, in scan order.
+        # Build points in the tracking (odom) frame, in scan order. Optional
+        # map subtraction only makes sense if we track in the map frame.
         dyn = []
         a = scan.angle_min
         rmin, rmax = scan.range_min, scan.range_max
@@ -251,7 +264,7 @@ class ScanObstacleTracker(Node):
                 lx, ly = r * math.cos(a), r * math.sin(a)
                 mx = tx + cyaw * lx - syaw * ly
                 my = ty + syaw * lx + cyaw * ly
-                if not self._is_static(mx, my):
+                if not (self.use_map and self._is_static(mx, my)):
                     dyn.append((mx, my))
             a += scan.angle_increment
         dyn = np.array(dyn, dtype=float) if dyn else np.empty((0, 2))
@@ -300,31 +313,59 @@ class ScanObstacleTracker(Node):
 
     # ------------------------------------------------------------------
     def _publish(self, t_ns: int, stamp):
-        flat: List[float] = []
-        # Publish only sufficiently-aged AND moving tracks: a track that the KF
-        # estimates as near-stationary is almost always a static-map-subtraction
-        # leak (a wall mis-registered due to small AMCL error), not a dynamic
-        # obstacle. Static geometry is already handled by the costmap/planner.
+        # Publish only sufficiently-aged AND moving tracks. In the smooth odom
+        # frame, static geometry (walls) is genuinely stationary (v~=0) and only
+        # real dynamic obstacles move (v~=0.3), so the velocity gate cleanly
+        # rejects wall clusters without any map/AMCL dependence.
         confirmed = [t for t in self._tracks
                      if t.age >= self.min_age
                      and math.hypot(*t.kf.velocity) >= self.min_speed]
+
+        # Transform tracking-frame (odom) tracks into publish_frame (map) so the
+        # GMPC sees them in the same frame as the robot pose; the AMCL map<-odom
+        # offset cancels in the relative distance the CBF uses.
+        tfm = None
+        if self.publish_frame != self.global_frame:
+            try:
+                t = self.tf_buffer.lookup_transform(
+                    self.publish_frame, self.global_frame, Time())
+                q = t.transform.rotation
+                yaw = math.atan2(2 * (q.w * q.z + q.x * q.y),
+                                 1 - 2 * (q.y * q.y + q.z * q.z))
+                tfm = (t.transform.translation.x, t.transform.translation.y,
+                       math.cos(yaw), math.sin(yaw))
+            except Exception:
+                tfm = None
+        out_frame = self.publish_frame if tfm is not None else self.global_frame
+
+        def to_pub(px, py, vx, vy):
+            if tfm is None:
+                return px, py, vx, vy
+            tx, ty, c, s = tfm
+            return (tx + c * px - s * py, ty + s * px + c * py,
+                    c * vx - s * vy, s * vx + c * vy)
+
+        flat: List[float] = []
+        pub_xy: List[tuple] = []
         for tr in confirmed:
             px, py = tr.kf.position
             vx, vy = tr.kf.velocity
-            flat.extend([px, py, tr.radius, vx, vy])
+            PX, PY, VX, VY = to_pub(px, py, vx, vy)
+            flat.extend([PX, PY, tr.radius, VX, VY])
+            pub_xy.append((PX, PY))
         msg = Float32MultiArray(); msg.data = flat
         self.pub.publish(msg)
 
         if self.mpub is not None:
             ma = MarkerArray()
             for i, tr in enumerate(confirmed):
-                px, py = tr.kf.position
+                PX, PY = pub_xy[i]
                 m = Marker()
-                m.header.frame_id = self.global_frame
+                m.header.frame_id = out_frame
                 m.header.stamp = stamp
                 m.ns = 'scan_obs'; m.id = i; m.type = Marker.CYLINDER
                 m.action = Marker.ADD
-                m.pose.position.x = px; m.pose.position.y = py; m.pose.position.z = 0.5
+                m.pose.position.x = PX; m.pose.position.y = PY; m.pose.position.z = 0.5
                 m.pose.orientation.w = 1.0
                 m.scale.x = m.scale.y = 2 * tr.radius; m.scale.z = 1.0
                 m.color.r = 1.0; m.color.g = 0.3; m.color.b = 0.0; m.color.a = 0.5
