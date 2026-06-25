@@ -137,9 +137,9 @@ class ScanObstacleTracker(Node):
         # are then transformed to publish_frame (map) so the GMPC consumes them
         # in the same frame as the robot pose -- the AMCL offset cancels in the
         # relative distance the CBF actually uses.
-        p('global_frame', 'odom')         # frame to cluster + track in (smooth)
+        p('global_frame', 'map')          # frame to cluster + track in (AMCL)
         p('publish_frame', 'map')         # frame to publish obstacles in (GMPC's)
-        p('use_map_subtraction', False)   # odom-frame velocity gate replaces it
+        p('use_map_subtraction', True)    # subtract static walls against /map
         p('cluster_gap', 0.30)            # m, split clusters on bigger jump
         p('min_cluster_pts', 2)
         p('max_cluster_radius', 0.60)     # m, reject bigger blobs (walls)
