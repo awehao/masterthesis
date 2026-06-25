@@ -135,10 +135,15 @@ class ScanObstacleTracker(Node):
         p('min_cluster_pts', 2)
         p('max_cluster_radius', 0.60)     # m, reject bigger blobs (walls)
         p('default_radius', 0.25)         # m, inflate cluster radius up to this
-        p('static_inflation', 0.30)       # m, drop hits within this of a wall
+        p('static_inflation', 0.50)       # m, drop hits within this of a wall
+                                          # (>= worst-case AMCL error so walls
+                                          # shifted into "free" cells are caught)
         p('assoc_gate', 0.80)             # m, max cluster<->track distance
         p('track_timeout', 0.60)          # s, drop track unseen this long
         p('min_track_age', 3)             # publish only after this many updates
+        p('min_track_speed', 0.10)        # m/s, publish only MOVING tracks ->
+                                          # rejects static map-subtraction leaks
+                                          # (walls handled by costmap/planner).
         # KF tuning (meas noise inflated vs ground-truth: cluster centroids jitter)
         p('kf_sigma_pos', 0.01)
         p('kf_sigma_vel', 0.40)
@@ -156,6 +161,7 @@ class ScanObstacleTracker(Node):
         self.assoc_gate     = float(g('assoc_gate'))
         self.track_timeout  = float(g('track_timeout'))
         self.min_age        = int(g('min_track_age'))
+        self.min_speed      = float(g('min_track_speed'))
         self._kf_kwargs = dict(
             sigma_pos=float(g('kf_sigma_pos')), sigma_vel=float(g('kf_sigma_vel')),
             sigma_meas=float(g('kf_sigma_meas')), init_vel_var=float(g('kf_init_vel_var')))
@@ -213,7 +219,9 @@ class ScanObstacleTracker(Node):
         h, w = self._occ.shape
         if 0 <= row < h and 0 <= col < w:
             return bool(self._occ[row, col])
-        return False                          # outside map -> treat as dynamic
+        return True                           # outside the known map -> a wall /
+                                              # mis-registered hit, never a real
+                                              # dynamic obstacle -> reject
 
     # ------------------------------------------------------------------
     def _scan_cb(self, scan: LaserScan):
@@ -293,7 +301,13 @@ class ScanObstacleTracker(Node):
     # ------------------------------------------------------------------
     def _publish(self, t_ns: int, stamp):
         flat: List[float] = []
-        confirmed = [t for t in self._tracks if t.age >= self.min_age]
+        # Publish only sufficiently-aged AND moving tracks: a track that the KF
+        # estimates as near-stationary is almost always a static-map-subtraction
+        # leak (a wall mis-registered due to small AMCL error), not a dynamic
+        # obstacle. Static geometry is already handled by the costmap/planner.
+        confirmed = [t for t in self._tracks
+                     if t.age >= self.min_age
+                     and math.hypot(*t.kf.velocity) >= self.min_speed]
         for tr in confirmed:
             px, py = tr.kf.position
             vx, vy = tr.kf.velocity
