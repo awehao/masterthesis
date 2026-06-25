@@ -93,7 +93,7 @@ def generate_launch_description():
         #    otherwise feed AMCL phantom 0.24 m returns.
         Node(package='ammr_bringup', executable='scan_relay',
              parameters=[{'use_sim_time': True,
-                          'blocked_centers_deg': [45.0, 135.0, 225.0, 315.0],
+                          'blocked_centers_deg': '45,135,225,315',
                           'blocked_halfwidth_deg': 15.0}],
              output='screen'),
 
