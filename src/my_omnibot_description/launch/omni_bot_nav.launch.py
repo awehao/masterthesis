@@ -7,9 +7,10 @@ Brings up, in order:
   2. Stripped Nav2 + SE(2) GMPC controller            (ammr_wholebody_mpc
      gmpc_nav2.launch.py: map_server + amcl + planner + goal_to_plan_relay +
      gmpc_node)
-  3. RViz                                             (ammr_bringup default)
+  3. foxglove_bridge                                  (ws://localhost:8765)
 
-Send a goal from RViz "2D Goal Pose", or:
+Connect Foxglove Studio to ws://localhost:8765, then send a goal with a
+Foxglove "Publish" panel on /goal_pose, or from a shell:
     ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped \
       "{header: {frame_id: 'map'}, pose: {position: {x: 5.0, y: 5.0}, \
         orientation: {w: 1.0}}}" --once
@@ -26,7 +27,6 @@ from launch_ros.actions import Node
 def generate_launch_description():
     desc_pkg    = get_package_share_directory('my_omnibot_description')
     wbmpc_pkg   = get_package_share_directory('ammr_wholebody_mpc')
-    bringup_pkg = get_package_share_directory('ammr_bringup')
 
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -42,10 +42,11 @@ def generate_launch_description():
         )
     )])
 
-    rviz = TimerAction(period=12.0, actions=[Node(
-        package='rviz2', executable='rviz2',
-        arguments=['-d', os.path.join(bringup_pkg, 'rviz', 'default.rviz')],
-        parameters=[{'use_sim_time': True}],
+    # Foxglove bridge: connect Foxglove Studio to ws://localhost:8765
+    foxglove = TimerAction(period=8.0, actions=[Node(
+        package='foxglove_bridge', executable='foxglove_bridge',
+        name='foxglove_bridge', output='screen',
+        parameters=[{'use_sim_time': True, 'port': 8765}],
     )])
 
-    return LaunchDescription([gazebo, nav, rviz])
+    return LaunchDescription([gazebo, nav, foxglove])
