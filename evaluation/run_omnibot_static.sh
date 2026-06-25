@@ -31,6 +31,17 @@ source "${WS_ROOT}/install/setup.bash"
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Single-instance lock: two overlapping batches share the cleanup pkill pattern
+# and would kill each other's gz/record processes (corrupting bags). Refuse to
+# start a second one.
+exec 9>"/tmp/omnibot_static.lock"
+if ! flock -n 9; then
+    echo "ERROR: another run_omnibot_static.sh is already running (holds /tmp/omnibot_static.lock)."
+    echo "       Stop it first:  pkill -TERM -f run_omnibot_static.sh"
+    exit 1
+fi
+
 N_TRIALS="${1:-3}"
 DURATION="${2:-180}"
 GOAL_X="${3:-17.0}"
@@ -65,7 +76,11 @@ cleanup() {
     sleep 2
     PIDS=()
 }
-trap cleanup EXIT INT TERM
+# On Ctrl-C / SIGTERM: clean up AND actually exit (previously the handler ran
+# cleanup but fell through, so `pkill -TERM` could not stop the batch and two
+# runs could overlap and kill each other's processes).
+trap 'echo "[$(date +%T)] interrupted -> stopping batch"; cleanup; exit 130' INT TERM
+trap cleanup EXIT
 
 run_trial() {
     local seed="$1"
@@ -94,7 +109,7 @@ run_trial() {
 
     # 3. record (includes GMPC diagnostics so analyze.py gets solve_time/min_h)
     echo "[$(date +%T)] [3/5] start rosbag -> ${bag_dir}"
-    ros2 bag record -o "$bag_dir" \
+    ros2 bag record -s sqlite3 -o "$bag_dir" \
         /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
         /gmpc/solve_time_ms /gmpc/min_h /gmpc/obstacles \
         >> "$log_file" 2>&1 < /dev/null &
