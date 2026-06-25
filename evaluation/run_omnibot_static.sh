@@ -13,9 +13,9 @@
 #
 # Usage:
 #   ./run_omnibot_static.sh [N_TRIALS] [DURATION_S] [GOAL_X] [GOAL_Y]
-# Example (default 3 trials, 120 s each, goal (5,5)):
+# Example (default 3 trials, 180 s each, goal (17,17) — same as the benchmark):
 #   ./run_omnibot_static.sh
-#   ./run_omnibot_static.sh 5 150 6.0 4.0
+#   ./run_omnibot_static.sh 5 200 17.0 17.0
 #
 # Output:
 #   bags/gmpc__seed<i>/                 (rosbag per trial)
@@ -32,9 +32,9 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 N_TRIALS="${1:-3}"
-DURATION="${2:-120}"
-GOAL_X="${3:-5.0}"
-GOAL_Y="${4:-5.0}"
+DURATION="${2:-180}"
+GOAL_X="${3:-17.0}"
+GOAL_Y="${4:-17.0}"
 
 METHOD="gmpc"
 OUT_CSV="${HERE}/results/omnibot_static.csv"
