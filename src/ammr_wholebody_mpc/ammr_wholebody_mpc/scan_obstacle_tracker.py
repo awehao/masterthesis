@@ -30,6 +30,8 @@ from scipy.optimize import linear_sum_assignment
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.duration import Duration
+from rclpy.time import Time
 
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
@@ -219,11 +221,11 @@ class ScanObstacleTracker(Node):
         try:
             tf: TransformStamped = self.tf_buffer.lookup_transform(
                 self.global_frame, scan.header.frame_id, scan.header.stamp,
-                timeout=rclpy.duration.Duration(seconds=0.05))
+                timeout=Duration(seconds=0.05))
         except Exception:
             try:
                 tf = self.tf_buffer.lookup_transform(
-                    self.global_frame, scan.header.frame_id, rclpy.time.Time())
+                    self.global_frame, scan.header.frame_id, Time())
             except Exception:
                 return
         tx = tf.transform.translation.x
