@@ -86,6 +86,11 @@ def generate_launch_description():
     ]
     for name in _dyn_names(traj_file):
         bridge_args.append(f'/model/{name}/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist')
+        # pose feedback is for the DRIVER's closed-loop ping-pong (sim
+        # infrastructure), NOT for perception — scan_obstacle_tracker only uses
+        # /scan. Without it the driver never detects "reached" and the obstacle
+        # drives straight through the robot.
+        bridge_args.append(f'/model/{name}/pose@geometry_msgs/msg/PoseStamped[gz.msgs.Pose')
 
     cbf_overrides = {
         'cbf_enable': True, 'cbf_alpha': 3.0, 'cbf_safe_margin': 0.30,
