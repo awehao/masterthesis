@@ -123,7 +123,10 @@ run_trial() {
         [ "$count" -ge 2 ] && break
         sleep 1
     done
-    ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
+    # publish the goal 5x at 1 Hz (not --once): a single VOLATILE publish is
+    # easily missed by goal_to_plan_relay if its subscription isn't ready ->
+    # plan_requests=0 -> robot never moves. Repeating fixes the DDS race.
+    timeout 15 ros2 topic pub -t 5 -r 1 /goal_pose geometry_msgs/msg/PoseStamped \
         "{ header: { frame_id: 'map' }, pose: { position: { x: ${GOAL_X}, y: ${GOAL_Y}, z: 0.0 }, orientation: { w: 1.0 } } }" \
         >> "$log_file" 2>&1 || true
 
