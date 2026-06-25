@@ -17,6 +17,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from sensor_msgs.msg import LaserScan
 
 BEST_EFFORT_QOS = QoSProfile(
@@ -36,7 +37,11 @@ class ScanRelay(Node):
     def __init__(self):
         super().__init__('scan_relay')
 
-        self.declare_parameter('blocked_centers_deg', [])
+        # Explicit DOUBLE_ARRAY type: an empty-list default would otherwise be
+        # inferred as BYTE_ARRAY and reject the float overrides from the launch.
+        self.declare_parameter(
+            'blocked_centers_deg', [],
+            ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE_ARRAY))
         self.declare_parameter('blocked_halfwidth_deg', 0.0)
         self.centers = [float(c) for c in
                         self.get_parameter('blocked_centers_deg').value]
