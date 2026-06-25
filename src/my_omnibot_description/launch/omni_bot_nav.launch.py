@@ -26,7 +26,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -42,11 +42,24 @@ def generate_launch_description():
     map_file    = os.path.join(bringup_pkg, 'maps',   'random_room.yaml')
     nav_params  = os.path.join(nav_pkg,     'config', 'nav2_params_mppi.yaml')
     gmpc_params = os.path.join(wbmpc_pkg,   'config', 'gmpc_params.yaml')
+    traj_file   = os.path.join(bringup_pkg, 'config', 'dynamic_trajectories.yaml')
 
     use_camera   = LaunchConfiguration('use_camera')
     robot_radius = LaunchConfiguration('robot_radius')
     inflation    = LaunchConfiguration('inflation')
     gui          = LaunchConfiguration('gui')
+    cbf          = LaunchConfiguration('cbf')
+
+    # CBF param overrides (same values as gmpc_nav2_cbf.launch.py). On a static
+    # world obstacle_aggregator finds no dynamic obstacles, so /gmpc/obstacles is
+    # empty and the CBF rows are inactive -> behaves like plain GMPC, but the full
+    # CBF stack is exercised.
+    cbf_overrides = {
+        'cbf_enable': True, 'cbf_alpha': 3.0, 'cbf_safe_margin': 0.30,
+        'cbf_slack_weight': 5.0e2, 'cbf_eps0_scale': 30.0,
+        'cbf_danger_thresh': 0.4, 'cbf_Q_min_scale': 0.20,
+        'cbf_slack_max_scale': 20.0, 'obstacles_topic': '/gmpc/obstacles',
+    }
 
     # Override map path + costmap sizing for the bigger chassis, without
     # touching the shared baseline file.
@@ -84,8 +97,22 @@ def generate_launch_description():
              parameters=[{'use_sim_time': True, 'global_frame': 'map',
                           'robot_base_frame': 'base_footprint',
                           'planner_id': 'GridBased'}]),
+        # plain GMPC (cbf:=false)
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
-             name='gmpc_controller', output='screen', parameters=[gmpc_params]),
+             name='gmpc_controller', output='screen', parameters=[gmpc_params],
+             condition=UnlessCondition(cbf)),
+        # GMPC + CBF (cbf:=true): CBF-enabled controller + obstacle aggregator
+        Node(package='ammr_wholebody_mpc', executable='gmpc_node',
+             name='gmpc_controller', output='screen',
+             parameters=[gmpc_params, cbf_overrides],
+             condition=IfCondition(cbf)),
+        Node(package='ammr_wholebody_mpc', executable='obstacle_aggregator',
+             name='obstacle_aggregator', output='screen',
+             condition=IfCondition(cbf),
+             parameters=[{'use_sim_time': True, 'trajectories_file': traj_file,
+                          'publish_rate': 20.0, 'output_topic': '/gmpc/obstacles',
+                          'kf_sigma_meas': 0.05, 'kf_sigma_vel': 0.4,
+                          'kf_sigma_pos': 0.01, 'kf_init_vel_var': 1.0}]),
     ])
 
     # Foxglove only when interactive (skip for headless batch trials)
@@ -105,6 +132,8 @@ def generate_launch_description():
                               description='Costmap inflation radius'),
         DeclareLaunchArgument('gui', default_value='true',
                               description='GUI + Foxglove. Set false for headless batch.'),
+        DeclareLaunchArgument('cbf', default_value='false',
+                              description='Enable GMPC+CBF (CBF controller + obstacle_aggregator).'),
         gazebo,
         foxglove,
         nav_nodes,

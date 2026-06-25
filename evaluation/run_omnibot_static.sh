@@ -49,9 +49,15 @@ N_TRIALS="${1:-3}"
 DURATION="${2:-180}"
 GOAL_X="${3:-17.0}"
 GOAL_Y="${4:-17.0}"
+METHOD="${5:-gmpc}"          # gmpc | gmpc_cbf
 
-METHOD="gmpc"
-OUT_CSV="${HERE}/results/omnibot_static.csv"
+case "$METHOD" in
+    gmpc)     CBF_FLAG="false" ;;
+    gmpc_cbf) CBF_FLAG="true"  ;;
+    *) echo "ERROR: METHOD (arg 5) must be gmpc | gmpc_cbf"; exit 1 ;;
+esac
+
+OUT_CSV="${HERE}/results/omnibot_static_${METHOD}.csv"
 mkdir -p "${HERE}/bags" "${HERE}/logs" "${HERE}/results"
 rm -f "$OUT_CSV"   # fresh batch
 
@@ -99,7 +105,7 @@ run_trial() {
 
     # 1. headless gz + robot + Nav2 + GMPC (single launch)
     echo "[$(date +%T)] [1/5] launch omni_bot_nav (headless) ..."
-    ros2 launch my_omnibot_description omni_bot_nav.launch.py gui:=false \
+    ros2 launch my_omnibot_description omni_bot_nav.launch.py gui:=false cbf:="$CBF_FLAG" \
         >> "$log_file" 2>&1 < /dev/null &
     PIDS+=( $! )
     sleep 28   # gz spawn (~15s) + Nav2 lifecycle + amcl
@@ -167,7 +173,7 @@ run_trial() {
         || echo "    analyze.py failed for ${run_tag}"
 }
 
-echo "[$(date +%T)] === omni_bot static batch: N=${N_TRIALS}, dur=${DURATION}s, goal=(${GOAL_X},${GOAL_Y}) ==="
+echo "[$(date +%T)] === omni_bot static batch: METHOD=${METHOD} (cbf=${CBF_FLAG}) N=${N_TRIALS}, dur=${DURATION}s, goal=(${GOAL_X},${GOAL_Y}) ==="
 for s in $(seq 1 "$N_TRIALS"); do
     run_trial "$s"
 done
