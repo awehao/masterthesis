@@ -91,6 +91,7 @@ run_trial() {
     local log_file="${HERE}/logs/${METHOD}__${run_tag}.log"
     local bag_dir="${HERE}/bags/${METHOD}__${run_tag}"
     rm -rf "$bag_dir"
+    rm -f  "$log_file"   # fresh log per trial (analyze.py parses it for goal-reached)
 
     echo "=========================================================="
     echo "[$(date +%T)] TRIAL ${seed}/${N_TRIALS}  goal=(${GOAL_X},${GOAL_Y})  dur=${DURATION}s"
@@ -110,11 +111,11 @@ run_trial() {
         >> "$log_file" 2>&1 || echo "    initialpose timed out (continuing)"
     sleep 3
 
-    # 3. record (includes GMPC diagnostics so analyze.py gets solve_time/min_h)
-    echo "[$(date +%T)] [3/5] start rosbag -> ${bag_dir}"
-    ros2 bag record -s sqlite3 -o "$bag_dir" \
-        /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
-        /gmpc/solve_time_ms /gmpc/min_h /gmpc/obstacles \
+    # 3. record via record.sh — proven `timeout --signal=INT --kill-after=5`
+    #    finalize (background `&` makes a raw recorder ignore SIGINT, which is
+    #    why the inline version corrupted bags). record.sh also captures /gmpc/*.
+    echo "[$(date +%T)] [3/5] start recording -> ${bag_dir}"
+    "${HERE}/record.sh" "$METHOD" "$run_tag" "$DURATION" \
         >> "$log_file" 2>&1 < /dev/null &
     REC_PID=$!
     PIDS+=( $REC_PID )
@@ -132,26 +133,31 @@ run_trial() {
         "{ header: { frame_id: 'map' }, pose: { position: { x: ${GOAL_X}, y: ${GOAL_Y}, z: 0.0 }, orientation: { w: 1.0 } } }" \
         >> "$log_file" 2>&1 || true
 
-    # 5. wait until goal reached (exit 0) OR DURATION timeout (safety cap),
-    #    then tear down -> immediately on to the next trial.
+    # 5. goal_watcher races the recorder. Whichever ends first wins:
+    #    goal reached -> stop recorder early; else recorder hits DURATION cap.
     echo "[$(date +%T)] [5/5] waiting for goal (tol=0.25 m, cap ${DURATION}s) ..."
-    if python3 "${HERE}/goal_watcher.py" \
-            --goal-x "$GOAL_X" --goal-y "$GOAL_Y" \
-            --tol 0.25 --timeout "$DURATION" \
-            >> "$log_file" 2>&1 < /dev/null; then
-        echo "[$(date +%T)]     goal reached -> ending trial early"
-    else
-        echo "[$(date +%T)]     ${DURATION}s cap hit without reaching goal"
-    fi
-    sleep 2   # short tail so the bag captures the stop / zero-twist
+    python3 "${HERE}/goal_watcher.py" \
+        --goal-x "$GOAL_X" --goal-y "$GOAL_Y" --tol 0.25 --timeout "$DURATION" \
+        >> "$log_file" 2>&1 < /dev/null &
+    WATCH_PID=$!
+    PIDS+=( $WATCH_PID )
+    wait -n "$REC_PID" "$WATCH_PID" 2>/dev/null || true
 
-    # Stop the recorder cleanly FIRST so the sqlite bag is flushed/finalized.
-    # Killing it mid-write (as the general cleanup does) truncates the .db3 and
-    # makes analyze.py fail with "disk I/O error / could not open database".
-    echo "[$(date +%T)]     finalizing rosbag (SIGINT, wait up to 20s) ..."
-    kill -INT "$REC_PID" 2>/dev/null || true
-    for _ in $(seq 1 20); do kill -0 "$REC_PID" 2>/dev/null || break; sleep 1; done
-    kill -0 "$REC_PID" 2>/dev/null && echo "[$(date +%T)]     WARN recorder still up after 20s"
+    if kill -0 "$WATCH_PID" 2>/dev/null; then
+        # watcher still alive -> recorder hit the DURATION cap first
+        echo "[$(date +%T)]     ${DURATION}s cap hit without reaching goal"
+        pkill -INT -P "$WATCH_PID" 2>/dev/null || true
+        kill  -INT    "$WATCH_PID" 2>/dev/null || true
+    else
+        # watcher exited 0 -> goal reached; flush the recorder. SIGINT must reach
+        # record.sh's `timeout`/`ros2 bag` grandchild, so pkill the descendants.
+        echo "[$(date +%T)]     goal reached -> flushing recorder"
+        sleep 2   # tail so the bag captures the stop / zero-twist
+        pkill -INT -P "$REC_PID" 2>/dev/null || true
+        kill  -INT    "$REC_PID" 2>/dev/null || true
+    fi
+    # let record.sh finish finalizing the bag before the violent cleanup
+    for _ in $(seq 1 15); do kill -0 "$REC_PID" 2>/dev/null || break; sleep 1; done
 
     cleanup
 

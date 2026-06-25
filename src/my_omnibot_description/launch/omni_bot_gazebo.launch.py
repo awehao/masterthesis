@@ -61,6 +61,7 @@ def generate_launch_description():
             arguments=[
                 '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
                 '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
+                '/odom_raw@nav_msgs/msg/Odometry[gz.msgs.Odometry',
                 '/scan_raw@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
                 # RealSense D435i (gz rgbd_camera, topic prefix "base_camera")
                 '/base_camera/image@sensor_msgs/msg/Image[gz.msgs.Image',
@@ -82,8 +83,9 @@ def generate_launch_description():
         Node(package='ammr_bringup', executable='map_publisher', arguments=[map_file],
              condition=IfCondition(with_map)),
 
-        # 5. Omni-drive controller: /cmd_vel -> /odom + TF (reused from ammr_bringup)
-        Node(package='ammr_bringup', executable='omni_drive_controller',
+        # 5. Ground-truth odom: /odom_raw (gz, bridged) -> /odom + odom->base TF
+        #    (replaces the dead-reckoning omni_drive_controller; reused from ammr_bringup)
+        Node(package='ammr_bringup', executable='odom_tf_broadcaster',
              parameters=[{'use_sim_time': True}], output='screen'),
 
         # 6. scan_raw -> /scan relay (reused from ammr_bringup)

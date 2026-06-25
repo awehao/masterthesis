@@ -105,4 +105,21 @@
     </plugin>
   </gazebo>
 
+  <!-- ===== Ground-truth odometry (drift-free, from the sim's true pose) =====
+       Replaces dead-reckoning: on this heavier / high-CoM model, integrating the
+       commanded /cmd_vel diverged badly (odom ended ~40 m from truth -> AMCL made
+       up-to-16 m jump corrections -> the robot wandered). OdometryPublisher emits
+       the true pose-derived odometry on /odom_raw; odom_tf_broadcaster relays it
+       to /odom and the odom->base_footprint TF. -->
+  <gazebo>
+    <plugin filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>odom</odom_frame>
+      <robot_base_frame>base_footprint</robot_base_frame>
+      <odom_publish_frequency>30</odom_publish_frequency>
+      <odom_topic>odom_raw</odom_topic>
+      <dimensions>2</dimensions>
+    </plugin>
+  </gazebo>
+
 </robot>
