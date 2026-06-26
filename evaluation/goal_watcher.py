@@ -63,7 +63,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--goal-x', type=float, required=True)
     p.add_argument('--goal-y', type=float, required=True)
-    p.add_argument('--tol',     type=float, default=0.25,
+    p.add_argument('--tol',     type=float, default=0.15,
                    help='map-frame distance to declare success [m]')
     p.add_argument('--timeout', type=float, default=250.0,
                    help='give up after this many wall-clock seconds')

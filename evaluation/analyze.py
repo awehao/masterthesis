@@ -45,7 +45,7 @@ except ImportError as e:
     raise
 
 
-GOAL_TOLERANCE_M = 0.25
+GOAL_TOLERANCE_M = 0.15
 
 # Topics we care about. The GMPC stack publishes:
 #   /gmpc/solve_time_ms : std_msgs/Float32 — per-step OSQP wall time
