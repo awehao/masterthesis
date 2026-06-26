@@ -146,6 +146,16 @@ def generate_launch_description():
 
     return LaunchDescription([
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', rp),
+        # Force gz/OGRE to render on the NVIDIA dGPU. This machine is hybrid
+        # (NVIDIA RTX + AMD iGPU) in PRIME on-demand mode, so by default gz's
+        # EGL is routed to Mesa, which can't drive the NVIDIA card ->
+        # "libEGL ... driver (null) ... failed to create dri2 screen" and a
+        # flickering/software-rendered viewport. These three vars select the
+        # NVIDIA EGL vendor + PRIME offload so the lidar/camera render correctly.
+        SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
+        SetEnvironmentVariable('__GLX_VENDOR_LIBRARY_NAME', 'nvidia'),
+        SetEnvironmentVariable('__EGL_VENDOR_LIBRARY_FILENAMES',
+                               '/usr/share/glvnd/egl_vendor.d/10_nvidia.json'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('cbf', default_value='true'),
         DeclareLaunchArgument('obstacle_source', default_value='scan',

@@ -132,6 +132,12 @@ def generate_launch_description():
 
     return LaunchDescription([
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', rp),
+        # Force gz/OGRE onto the NVIDIA dGPU (hybrid PRIME on-demand machine);
+        # otherwise EGL routes to Mesa -> "driver (null)" + flickering viewport.
+        SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
+        SetEnvironmentVariable('__GLX_VENDOR_LIBRARY_NAME', 'nvidia'),
+        SetEnvironmentVariable('__EGL_VENDOR_LIBRARY_FILENAMES',
+                               '/usr/share/glvnd/egl_vendor.d/10_nvidia.json'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('method', default_value='mppi',
                               description='mppi | rpp'),
