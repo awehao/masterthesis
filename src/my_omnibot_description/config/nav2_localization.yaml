@@ -81,7 +81,8 @@ local_costmap:
         enabled: true
         observation_sources: scan
         scan:
-          topic: /scan
+          topic: /scan_filtered   # dynamic obstacles masked out -> planner sees
+                                   # static only (no start-occupied lockout)
           max_obstacle_height: 2.0
           clearing: true
           marking: true
@@ -116,7 +117,8 @@ global_costmap:
         enabled: true
         observation_sources: scan
         scan:
-          topic: /scan
+          topic: /scan_filtered   # dynamic obstacles masked out -> planner sees
+                                   # static only (no start-occupied lockout)
           max_obstacle_height: 2.0
           clearing: true
           marking: true

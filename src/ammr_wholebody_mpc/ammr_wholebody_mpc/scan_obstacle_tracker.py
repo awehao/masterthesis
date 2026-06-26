@@ -195,6 +195,12 @@ class ScanObstacleTracker(Node):
                                  self._scan_cb, scan_qos)
 
         self.pub = self.create_publisher(Float32MultiArray, str(g('output_topic')), 10)
+        # /scan_filtered: the input scan with DYNAMIC-obstacle rays removed, for
+        # the global costmap. Keeps the planner seeing only static geometry
+        # (walls + unknown static) so a passing dynamic obstacle never makes the
+        # robot's start cell "occupied" -> no SmacPlanner start-occupied lockout.
+        self.scan_mask_margin = 0.20
+        self.filtered_pub = self.create_publisher(LaserScan, '/scan_filtered', scan_qos)
         self.publish_markers = bool(g('publish_markers'))
         self.mpub = self.create_publisher(MarkerArray, '/gmpc/scan_obstacles_viz', 10) \
             if self.publish_markers else None
@@ -275,6 +281,44 @@ class ScanObstacleTracker(Node):
                 + int(scan.header.stamp.nanosec)) or self.get_clock().now().nanoseconds
         self._update_tracks(clusters, t_ns)
         self._publish(t_ns, scan.header.stamp)
+        self._publish_filtered_scan(scan, tx, ty, cyaw, syaw)
+
+    # ------------------------------------------------------------------
+    def _publish_filtered_scan(self, scan, tx, ty, cyaw, syaw):
+        """Republish the scan with rays hitting confirmed MOVING obstacles set
+        to +inf, so the global costmap (planner) sees static geometry only."""
+        moving = [t for t in self._tracks
+                  if t.age >= self.min_age
+                  and math.hypot(*t.kf.velocity) >= self.min_speed]
+        out = LaserScan()
+        out.header = scan.header
+        out.angle_min = scan.angle_min
+        out.angle_max = scan.angle_max
+        out.angle_increment = scan.angle_increment
+        out.time_increment = scan.time_increment
+        out.scan_time = scan.scan_time
+        out.range_min = scan.range_min
+        out.range_max = scan.range_max
+        out.intensities = scan.intensities
+        if not moving:
+            out.ranges = scan.ranges
+            self.filtered_pub.publish(out)
+            return
+        ranges = list(scan.ranges)
+        a = scan.angle_min
+        for i, r in enumerate(scan.ranges):
+            if math.isfinite(r) and scan.range_min < r < scan.range_max:
+                lx, ly = r * math.cos(a), r * math.sin(a)
+                mx = tx + cyaw * lx - syaw * ly
+                my = ty + syaw * lx + cyaw * ly
+                for tr in moving:
+                    px, py = tr.kf.position
+                    if math.hypot(mx - px, my - py) <= tr.radius + self.scan_mask_margin:
+                        ranges[i] = float('inf')
+                        break
+            a += scan.angle_increment
+        out.ranges = ranges
+        self.filtered_pub.publish(out)
 
     # ------------------------------------------------------------------
     def _update_tracks(self, clusters, t_ns: int):

@@ -110,6 +110,11 @@ def generate_launch_description():
              name='gmpc_controller', output='screen',
              parameters=[gmpc_params, cbf_overrides],
              condition=IfCondition(cbf)),
+        # publishes /scan_filtered (= /scan here, no dynamic obstacles) which the
+        # costmaps subscribe to; keeps this static launch consistent with dynamic.
+        Node(package='ammr_wholebody_mpc', executable='scan_obstacle_tracker',
+             name='scan_obstacle_tracker', output='screen',
+             parameters=[{'use_sim_time': True}]),
     ])
 
     # Foxglove only when interactive (skip for headless batch trials)
