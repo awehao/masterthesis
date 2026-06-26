@@ -9,15 +9,19 @@
 # -> goal_watcher races recorder -> clean finalize -> analyze.py.
 #
 # Usage:
-#   ./run_omnibot_dynamic.sh [N_TRIALS] [DURATION_S] [GOAL_X] [GOAL_Y] [SOURCE]
-#     SOURCE = scan (default) | truth
+#   ./run_omnibot_dynamic.sh [N_TRIALS] [DURATION_S] [GOAL_X] [GOAL_Y] [METHOD]
+#     METHOD = gmpc_scan (default) | gmpc_truth | mppi | rpp
+#       gmpc_scan  = our GMPC+CBF, obstacles from /scan (real perception)
+#       gmpc_truth = our GMPC+CBF, obstacles from ground truth (ablation)
+#       mppi       = Nav2 controller_server + MPPIController baseline
+#       rpp        = Nav2 controller_server + RegulatedPurePursuit baseline
 # Examples:
-#   ./run_omnibot_dynamic.sh 10 250 17 17 scan
-#   ./run_omnibot_dynamic.sh 10 250 17 17 truth
+#   ./run_omnibot_dynamic.sh 15 250 17 17 gmpc_scan
+#   ./run_omnibot_dynamic.sh 15 250 17 17 mppi
 #
-# Output (SOURCE kept separate so scan vs truth don't overwrite):
-#   bags/gmpc_cbf__<SOURCE>_seed<i>/    logs/gmpc_cbf__<SOURCE>_seed<i>.log
-#   results/omnibot_dynamic_<SOURCE>.csv
+# Output (METHOD kept separate so runs don't overwrite):
+#   bags/<analyze_method>__<tag>_seed<i>/   logs/<analyze_method>__<tag>_seed<i>.log
+#   results/omnibot_dynamic_<METHOD>.csv
 
 WS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
@@ -40,15 +44,17 @@ N_TRIALS="${1:-5}"
 DURATION="${2:-250}"
 GOAL_X="${3:-17.0}"
 GOAL_Y="${4:-17.0}"
-SOURCE="${5:-scan}"          # scan | truth
+METHOD="${5:-gmpc_scan}"     # gmpc_scan | gmpc_truth | mppi | rpp
 
-case "$SOURCE" in
-    scan|truth) ;;
-    *) echo "ERROR: SOURCE (arg 5) must be scan | truth"; exit 1 ;;
+case "$METHOD" in
+  gmpc_scan)  LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=scan";  AMETHOD="gmpc_cbf"; TAG="scan"  ;;
+  gmpc_truth) LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=truth"; AMETHOD="gmpc_cbf"; TAG="truth" ;;
+  mppi)       LAUNCH_ARGS="omni_bot_baseline.launch.py gui:=false method:=mppi";          AMETHOD="mppi";     TAG="mppi"  ;;
+  rpp)        LAUNCH_ARGS="omni_bot_baseline.launch.py gui:=false method:=rpp";            AMETHOD="rpp";      TAG="rpp"   ;;
+  *) echo "ERROR: METHOD (arg 5) = gmpc_scan | gmpc_truth | mppi | rpp"; exit 1 ;;
 esac
 
-METHOD="gmpc_cbf"            # analyze.py method (CBF stack); SOURCE tags the run
-OUT_CSV="${HERE}/results/omnibot_dynamic_${SOURCE}.csv"
+OUT_CSV="${HERE}/results/omnibot_dynamic_${METHOD}.csv"
 mkdir -p "${HERE}/bags" "${HERE}/logs" "${HERE}/results"
 rm -f "$OUT_CSV"
 
@@ -59,6 +65,8 @@ NODE_PAT+='|goal_to_plan_relay|gmpc_node|scan_relay|odom_tf_broadcaster'
 NODE_PAT+='|scan_obstacle_tracker|obstacle_aggregator|dynamic_obstacle_driver'
 NODE_PAT+='|parameter_bridge|robot_state_publisher|foxglove_bridge'
 NODE_PAT+='|ekf_node|ekf_global|robot_localization'
+NODE_PAT+='|controller_server|smoother_server|behavior_server'
+NODE_PAT+='|bt_navigator|waypoint_follower|velocity_smoother'
 
 PIDS=()
 cleanup() {
@@ -83,20 +91,19 @@ trap 'cleanup; rm -f "$LOCKFILE"' EXIT
 
 run_trial() {
     local seed="$1"
-    local run_tag="${SOURCE}_seed${seed}"
-    local log_file="${HERE}/logs/${METHOD}__${run_tag}.log"
-    local bag_dir="${HERE}/bags/${METHOD}__${run_tag}"
+    local run_tag="${TAG}_seed${seed}"
+    local log_file="${HERE}/logs/${AMETHOD}__${run_tag}.log"
+    local bag_dir="${HERE}/bags/${AMETHOD}__${run_tag}"
     rm -rf "$bag_dir"
     rm -f  "$log_file"
 
     echo "=========================================================="
-    echo "[$(date +%T)] TRIAL ${seed}/${N_TRIALS}  src=${SOURCE}  goal=(${GOAL_X},${GOAL_Y})  dur=${DURATION}s"
+    echo "[$(date +%T)] TRIAL ${seed}/${N_TRIALS}  method=${METHOD}  goal=(${GOAL_X},${GOAL_Y})  dur=${DURATION}s"
     echo "=========================================================="
 
-    # 1. headless dynamic world + omni_bot + GMPC-CBF + perception
-    echo "[$(date +%T)] [1/5] launch omni_bot_dynamic (headless, source=${SOURCE}) ..."
-    ros2 launch my_omnibot_description omni_bot_dynamic.launch.py \
-        gui:=false obstacle_source:="$SOURCE" \
+    # 1. headless dynamic world + omni_bot + (GMPC-CBF | MPPI | RPP) + perception
+    echo "[$(date +%T)] [1/5] launch (headless, method=${METHOD}) ..."
+    ros2 launch my_omnibot_description $LAUNCH_ARGS \
         >> "$log_file" 2>&1 < /dev/null &
     PIDS+=( $! )
     sleep 32   # gz dynamic world spawn + obstacle driver + Nav2 lifecycle + amcl
@@ -110,7 +117,7 @@ run_trial() {
 
     # 3. record (record.sh already captures /gmpc/obstacles + diagnostics)
     echo "[$(date +%T)] [3/5] start recording -> ${bag_dir}"
-    "${HERE}/record.sh" "$METHOD" "$run_tag" "$DURATION" \
+    "${HERE}/record.sh" "$AMETHOD" "$run_tag" "$DURATION" \
         >> "$log_file" 2>&1 < /dev/null &
     REC_PID=$!
     PIDS+=( $REC_PID )
@@ -155,11 +162,11 @@ run_trial() {
     cleanup
 
     echo "[$(date +%T)] analyze ${run_tag} ..."
-    python3 "${HERE}/analyze.py" "$bag_dir" --method "$METHOD" --run "$run_tag" --out "$OUT_CSV" \
+    python3 "${HERE}/analyze.py" "$bag_dir" --method "$AMETHOD" --run "$run_tag" --out "$OUT_CSV" \
         || echo "    analyze.py failed for ${run_tag}"
 }
 
-echo "[$(date +%T)] === omni_bot DYNAMIC batch: src=${SOURCE} N=${N_TRIALS}, dur=${DURATION}s, goal=(${GOAL_X},${GOAL_Y}) ==="
+echo "[$(date +%T)] === omni_bot DYNAMIC batch: method=${METHOD} N=${N_TRIALS}, dur=${DURATION}s, goal=(${GOAL_X},${GOAL_Y}) ==="
 for s in $(seq 1 "$N_TRIALS"); do
     run_trial "$s"
 done
