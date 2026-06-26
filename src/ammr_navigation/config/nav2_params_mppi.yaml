@@ -9,10 +9,21 @@ amcl:
     base_frame_id: base_footprint
     global_frame_id: map
     odom_frame_id: odom
-    laser_model_type: likelihood_field
+    laser_model_type: likelihood_field_prob   # prob model enables beam skipping
     laser_max_range: 9.0
     laser_min_range: -1.0
-    max_beams: 60
+    max_beams: 120                            # more beams -> redundancy when some skipped
+    # Beam skipping: ignore laser beams that disagree with the map across
+    # particles (i.e. beams hitting UNMAPPED obstacles — dynamic or unknown
+    # static). AMCL then localises only on beams that match the static map ->
+    # robust to unmapped obstacles without switching to SLAM.
+    do_beamskip: true
+    beam_skip_distance: 0.5
+    beam_skip_threshold: 0.3
+    beam_skip_error_threshold: 0.9
+    z_hit: 0.5
+    z_rand: 0.5
+    sigma_hit: 0.2
     max_particles: 5000
     min_particles: 1000
     robot_model_type: nav2_amcl::OmniMotionModel   # FIX: was DifferentialMotionModel

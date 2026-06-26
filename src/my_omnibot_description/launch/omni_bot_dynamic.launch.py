@@ -69,10 +69,7 @@ def generate_launch_description():
         source_file=nav_params,
         param_rewrites={'yaml_filename': map_file,
                         'robot_radius': robot_radius,
-                        'inflation_radius': inflation,
-                        # EKF (ekf_global) owns map->odom; AMCL only publishes
-                        # /amcl_pose so the EKF can fuse + reject its jumps.
-                        'tf_broadcast': 'false'},
+                        'inflation_radius': inflation},
         convert_types=True)
 
     # gz mesh resolution for the chassis/roller STLs (see omni_bot_gazebo.launch)
@@ -108,10 +105,6 @@ def generate_launch_description():
              output='screen', parameters=[configured_nav_params]),
         Node(package='nav2_amcl', executable='amcl', name='amcl',
              output='screen', parameters=[configured_nav_params]),
-        # EKF fusion: /odom (smooth) + /amcl_pose (absolute, jumps rejected)
-        # -> stable map->odom. Owns the transform (amcl tf_broadcast=false).
-        Node(package='robot_localization', executable='ekf_node', name='ekf_global',
-             output='screen', parameters=[ekf_config]),
         Node(package='nav2_planner', executable='planner_server', name='planner_server',
              output='screen', parameters=[configured_nav_params]),
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
