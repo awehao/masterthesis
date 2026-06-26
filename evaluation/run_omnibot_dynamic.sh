@@ -58,6 +58,7 @@ NODE_PAT+='|map_server|amcl|planner_server|lifecycle_manager'
 NODE_PAT+='|goal_to_plan_relay|gmpc_node|scan_relay|odom_tf_broadcaster'
 NODE_PAT+='|scan_obstacle_tracker|obstacle_aggregator|dynamic_obstacle_driver'
 NODE_PAT+='|parameter_bridge|robot_state_publisher|foxglove_bridge'
+NODE_PAT+='|ekf_node|ekf_global|robot_localization'
 
 PIDS=()
 cleanup() {
