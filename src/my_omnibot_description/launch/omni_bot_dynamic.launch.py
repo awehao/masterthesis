@@ -61,7 +61,6 @@ def generate_launch_description():
     inflation    = LaunchConfiguration('inflation')
     use_scan     = PythonExpression(["'", LaunchConfiguration('obstacle_source'), "' == 'scan'"])
     use_truth    = PythonExpression(["'", LaunchConfiguration('obstacle_source'), "' == 'truth'"])
-    speed_scale  = LaunchConfiguration('obstacle_speed_scale')   # L1 difficulty knob
 
     robot_description = ParameterValue(
         Command(['xacro ', urdf_file, ' use_camera:=false']), value_type=str)
@@ -146,25 +145,12 @@ def generate_launch_description():
 
     return LaunchDescription([
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', rp),
-        # Force gz/OGRE to render on the NVIDIA dGPU. This machine is hybrid
-        # (NVIDIA RTX + AMD iGPU) in PRIME on-demand mode, so by default gz's
-        # EGL is routed to Mesa, which can't drive the NVIDIA card ->
-        # "libEGL ... driver (null) ... failed to create dri2 screen" and a
-        # flickering/software-rendered viewport. These three vars select the
-        # NVIDIA EGL vendor + PRIME offload so the lidar/camera render correctly.
-        SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
-        SetEnvironmentVariable('__GLX_VENDOR_LIBRARY_NAME', 'nvidia'),
-        SetEnvironmentVariable('__EGL_VENDOR_LIBRARY_FILENAMES',
-                               '/usr/share/glvnd/egl_vendor.d/10_nvidia.json'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('cbf', default_value='true'),
         DeclareLaunchArgument('obstacle_source', default_value='scan',
                               description='scan = real /scan perception; truth = ground-truth'),
         DeclareLaunchArgument('robot_radius', default_value='0.33'),
         DeclareLaunchArgument('inflation', default_value='0.45'),
-        DeclareLaunchArgument('obstacle_speed_scale', default_value='1.0',
-                              description='L1: scale dyn-obstacle speed (1.0=0.3m/s, '
-                                          '2.0=0.6, 3.33=1.0)'),
 
         ExecuteProcess(cmd=['gz', 'sim', '-r', world_file], output='screen',
                        condition=IfCondition(gui)),
@@ -190,8 +176,7 @@ def generate_launch_description():
         # move the obstacles (ping-pong)
         TimerAction(period=8.0, actions=[Node(
             package='ammr_bringup', executable='dynamic_obstacle_driver',
-            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file},
-                        {'speed_scale': ParameterValue(speed_scale, value_type=float)}],
+            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],
             output='screen')]),
 
         # nav + control + perception (wait for gz/robot/TF)

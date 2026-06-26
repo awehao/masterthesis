@@ -49,7 +49,6 @@ def generate_launch_description():
 
     gui    = LaunchConfiguration('gui')
     method = LaunchConfiguration('method')          # mppi | rpp
-    speed_scale = LaunchConfiguration('obstacle_speed_scale')   # L1 difficulty knob
     is_mppi = PythonExpression(["'", method, "' == 'mppi'"])
     is_rpp  = PythonExpression(["'", method, "' == 'rpp'"])
 
@@ -132,18 +131,9 @@ def generate_launch_description():
 
     return LaunchDescription([
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', rp),
-        # Force gz/OGRE onto the NVIDIA dGPU (hybrid PRIME on-demand machine);
-        # otherwise EGL routes to Mesa -> "driver (null)" + flickering viewport.
-        SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
-        SetEnvironmentVariable('__GLX_VENDOR_LIBRARY_NAME', 'nvidia'),
-        SetEnvironmentVariable('__EGL_VENDOR_LIBRARY_FILENAMES',
-                               '/usr/share/glvnd/egl_vendor.d/10_nvidia.json'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('method', default_value='mppi',
                               description='mppi | rpp'),
-        DeclareLaunchArgument('obstacle_speed_scale', default_value='1.0',
-                              description='L1: scale dyn-obstacle speed (1.0=0.3m/s, '
-                                          '2.0=0.6, 3.33=1.0)'),
 
         ExecuteProcess(cmd=['gz', 'sim', '-r', world_file], output='screen',
                        condition=IfCondition(gui)),
@@ -167,8 +157,7 @@ def generate_launch_description():
                        '-x', '0.0', '-y', '0.0', '-z', '0.05'], output='screen')]),
         TimerAction(period=8.0, actions=[Node(
             package='ammr_bringup', executable='dynamic_obstacle_driver',
-            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file},
-                        {'speed_scale': ParameterValue(speed_scale, value_type=float)}],
+            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],
             output='screen')]),
         TimerAction(period=10.0, actions=nav_nodes),
 
