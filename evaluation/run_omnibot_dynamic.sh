@@ -16,8 +16,8 @@
 #       mppi       = Nav2 controller_server + MPPIController baseline
 #       rpp        = Nav2 controller_server + RegulatedPurePursuit baseline
 # Examples:
-#   ./run_omnibot_dynamic.sh 15 250 17 17 gmpc_scan
-#   ./run_omnibot_dynamic.sh 15 250 17 17 mppi
+#   ./run_omnibot_dynamic.sh 15 200 17 17 gmpc_scan
+#   ./run_omnibot_dynamic.sh 15 200 17 17 mppi
 #
 # Output (METHOD kept separate so runs don't overwrite):
 #   bags/<analyze_method>__<tag>_seed<i>/   logs/<analyze_method>__<tag>_seed<i>.log
@@ -41,7 +41,7 @@ fi
 echo $$ > "$LOCKFILE"
 
 N_TRIALS="${1:-5}"
-DURATION="${2:-250}"
+DURATION="${2:-200}"
 GOAL_X="${3:-17.0}"
 GOAL_Y="${4:-17.0}"
 METHOD="${5:-gmpc_scan}"     # gmpc_scan | gmpc_truth | mppi | rpp
