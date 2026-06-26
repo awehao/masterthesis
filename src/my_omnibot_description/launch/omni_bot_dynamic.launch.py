@@ -50,7 +50,7 @@ def generate_launch_description():
     urdf_file  = os.path.join(desc_pkg, 'urdf',   'omni_bot.urdf.xacro')
     world_file = os.path.join(bringup,  'worlds', 'random_room_dynamic.sdf')
     map_file   = os.path.join(bringup,  'maps',   'random_room.yaml')
-    nav_params = os.path.join(nav_pkg,  'config', 'nav2_params_mppi.yaml')
+    nav_params = os.path.join(desc_pkg, 'config', 'nav2_localization.yaml')
     gmpc_params= os.path.join(wbmpc_pkg,'config', 'gmpc_params.yaml')
     traj_file  = os.path.join(bringup,  'config', 'dynamic_trajectories.yaml')
     ekf_config = os.path.join(desc_pkg, 'config', 'ekf_fusion.yaml')
@@ -69,7 +69,9 @@ def generate_launch_description():
         source_file=nav_params,
         param_rewrites={'yaml_filename': map_file,
                         'robot_radius': robot_radius,
-                        'inflation_radius': inflation},
+                        'inflation_radius': inflation,
+                        # EKF owns map->odom; AMCL (beam-skip) only emits /amcl_pose
+                        'tf_broadcast': 'false'},
         convert_types=True)
 
     # gz mesh resolution for the chassis/roller STLs (see omni_bot_gazebo.launch)
@@ -105,6 +107,10 @@ def generate_launch_description():
              output='screen', parameters=[configured_nav_params]),
         Node(package='nav2_amcl', executable='amcl', name='amcl',
              output='screen', parameters=[configured_nav_params]),
+        # EKF: fuse /odom (smooth) + /amcl_pose (beam-skip, jumps rejected)
+        # -> stable map->odom. beam-skip cleans AMCL's input, EKF smooths output.
+        Node(package='robot_localization', executable='ekf_node', name='ekf_global',
+             output='screen', parameters=[ekf_config]),
         Node(package='nav2_planner', executable='planner_server', name='planner_server',
              output='screen', parameters=[configured_nav_params]),
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',

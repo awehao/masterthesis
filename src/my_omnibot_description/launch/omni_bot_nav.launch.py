@@ -40,7 +40,7 @@ def generate_launch_description():
     wbmpc_pkg   = get_package_share_directory('ammr_wholebody_mpc')
 
     map_file    = os.path.join(bringup_pkg, 'maps',   'random_room.yaml')
-    nav_params  = os.path.join(nav_pkg,     'config', 'nav2_params_mppi.yaml')
+    nav_params  = os.path.join(desc_pkg,    'config', 'nav2_localization.yaml')
     gmpc_params = os.path.join(wbmpc_pkg,   'config', 'gmpc_params.yaml')
     traj_file   = os.path.join(bringup_pkg, 'config', 'dynamic_trajectories.yaml')
 
