@@ -9,19 +9,22 @@
 # -> goal_watcher races recorder -> clean finalize -> analyze.py.
 #
 # Usage:
-#   ./run_omnibot_dynamic.sh [N_TRIALS] [DURATION_S] [GOAL_X] [GOAL_Y] [METHOD]
+#   ./run_omnibot_dynamic.sh [N_TRIALS] [DURATION_S] [GOAL_X] [GOAL_Y] [METHOD] [SPEED]
 #     METHOD = gmpc_scan (default) | gmpc_truth | mppi | rpp
 #       gmpc_scan  = our GMPC+CBF, obstacles from /scan (real perception)
 #       gmpc_truth = our GMPC+CBF, obstacles from ground truth (ablation)
 #       mppi       = Nav2 controller_server + MPPIController baseline
 #       rpp        = Nav2 controller_server + RegulatedPurePursuit baseline
+#     SPEED  = L1 obstacle speed scale (default 1.0). 1.0=0.3m/s, 2.0=0.6, 3.33=1.0
+#              SPEED!=1.0 tags output with spNN so difficulty levels don't overwrite.
 # Examples:
-#   ./run_omnibot_dynamic.sh 15 200 17 17 gmpc_scan
-#   ./run_omnibot_dynamic.sh 15 200 17 17 mppi
+#   ./run_omnibot_dynamic.sh 15 200 17 17 gmpc_scan          # L0 baseline speed
+#   ./run_omnibot_dynamic.sh 15 200 17 17 mppi      2.0      # L1 obstacles @0.6 m/s
+#   ./run_omnibot_dynamic.sh 15 200 17 17 gmpc_scan 3.33     # L1 obstacles @1.0 m/s
 #
-# Output (METHOD kept separate so runs don't overwrite):
+# Output (METHOD + SPEED kept separate so runs don't overwrite):
 #   bags/<analyze_method>__<tag>_seed<i>/   logs/<analyze_method>__<tag>_seed<i>.log
-#   results/omnibot_dynamic_<METHOD>.csv
+#   results/omnibot_dynamic_<METHOD>[_spNN].csv
 
 WS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
@@ -45,6 +48,8 @@ DURATION="${2:-200}"
 GOAL_X="${3:-17.0}"
 GOAL_Y="${4:-17.0}"
 METHOD="${5:-gmpc_scan}"     # gmpc_scan | gmpc_truth | mppi | rpp
+SPEED="${6:-1.0}"            # L1 obstacle speed scale: 1.0=0.3m/s, 2.0=0.6, 3.33=1.0
+SPLABEL="sp$(awk "BEGIN{printf \"%02d\", $SPEED*10}")"   # 1.0->sp10, 2.0->sp20, 3.33->sp33
 
 case "$METHOD" in
   gmpc_scan)  LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=scan";  AMETHOD="gmpc_cbf"; TAG="scan"  ;;
@@ -53,8 +58,13 @@ case "$METHOD" in
   rpp)        LAUNCH_ARGS="omni_bot_baseline.launch.py gui:=false method:=rpp";            AMETHOD="rpp";      TAG="rpp"   ;;
   *) echo "ERROR: METHOD (arg 5) = gmpc_scan | gmpc_truth | mppi | rpp"; exit 1 ;;
 esac
+# L1: append the speed-scale launch arg + fold speed into tags so different
+# speeds land in separate bags/CSVs (sp10 omitted from tag to keep the default
+# baseline runs backward-compatible with the existing scan_seed* layout).
+LAUNCH_ARGS="${LAUNCH_ARGS} obstacle_speed_scale:=${SPEED}"
+if [ "$SPLABEL" != "sp10" ]; then TAG="${TAG}_${SPLABEL}"; fi
 
-OUT_CSV="${HERE}/results/omnibot_dynamic_${METHOD}.csv"
+OUT_CSV="${HERE}/results/omnibot_dynamic_${METHOD}$([ "$SPLABEL" != "sp10" ] && echo "_${SPLABEL}").csv"
 mkdir -p "${HERE}/bags" "${HERE}/logs" "${HERE}/results"
 rm -f "$OUT_CSV"
 

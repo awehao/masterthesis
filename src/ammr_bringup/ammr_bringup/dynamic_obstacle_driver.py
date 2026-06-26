@@ -35,6 +35,14 @@ class DynamicObstacleDriver(Node):
         super().__init__('dynamic_obstacle_driver')
 
         self.declare_parameter('trajectories_file', '')
+        # L1 difficulty knob: scale every obstacle's speed by this factor.
+        # 1.0 = baseline (0.3 m/s), 2.0 -> 0.6 m/s, 3.33 -> 1.0 m/s. Lets us
+        # sweep "collision rate vs obstacle speed" without duplicating yamls.
+        self.declare_parameter('speed_scale', 1.0)
+        speed_scale = float(self.get_parameter('speed_scale')
+                                .get_parameter_value().double_value)
+        if speed_scale <= 0.0:
+            speed_scale = 1.0
 
         traj_file = self.get_parameter('trajectories_file') \
                         .get_parameter_value().string_value
@@ -51,7 +59,7 @@ class DynamicObstacleDriver(Node):
                 'name'  : d['name'],
                 'start' : [float(d['start'][0]), float(d['start'][1])],
                 'end'   : [float(d['end'][0]),   float(d['end'][1])],
-                'speed' : float(d['speed']),
+                'speed' : float(d['speed']) * speed_scale,
                 'radius': float(d['radius']),
                 'height': float(d['height']),
                 # latest known pose（先用 start fallback，pose subscriber 收到後覆蓋）
@@ -86,7 +94,7 @@ class DynamicObstacleDriver(Node):
 
         self.get_logger().info(
             f'DynamicObstacleDriver started ({len(self.obstacles)} obstacles, '
-            f'{RATE_HZ:.0f} Hz)')
+            f'{RATE_HZ:.0f} Hz, speed_scale={speed_scale:.2f})')
 
     # ------------------------------------------------------------------
     def _pose_cb(self, ob, msg: PoseStamped):
