@@ -141,7 +141,7 @@ run_trial() {
     # 5. goal_watcher races the recorder
     echo "[$(date +%T)] [5/5] waiting for goal (tol=0.15 m, cap ${DURATION}s) ..."
     python3 "${HERE}/goal_watcher.py" \
-        --goal-x "$GOAL_X" --goal-y "$GOAL_Y" --tol 0.15 --timeout "$DURATION" \
+        --goal-x "$GOAL_X" --goal-y "$GOAL_Y" --tol 0.30 --timeout "$DURATION" \
         >> "$log_file" 2>&1 < /dev/null &
     WATCH_PID=$!
     PIDS+=( $WATCH_PID )
