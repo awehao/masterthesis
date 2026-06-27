@@ -55,9 +55,19 @@ TOPICS_OF_INTEREST = {
     '/odom', '/cmd_vel', '/cmd_vel_nav', '/plan',
     '/gmpc/solve_time_ms', '/gmpc/obstacles', '/gmpc/min_h',
     '/tf', '/tf_static',
+    # Ground-truth dynamic-obstacle poses (published by the gz bridge in EVERY
+    # launch, controller-agnostic). These drive the fair clearance/collision
+    # metric so MPPI/RPP baselines aren't NaN just because they don't publish
+    # /gmpc/obstacles. See extract_gt_obstacles().
+    '/model/dyn_obs_0/pose', '/model/dyn_obs_1/pose', '/model/dyn_obs_2/pose',
 }
 
-COLLISION_BUFFER_M = 0.0   # treat distance < radius as collision
+# True-geometry clearance is measured surface-to-surface:
+#   clearance = dist(robot_centre, obstacle_centre) - OBSTACLE_RADIUS - ROBOT_RADIUS
+# Collision when clearance < 0 (the two footprints overlap).
+ROBOT_RADIUS_M     = 0.30   # circumscribed radius of the 0.45 m-square chassis
+OBSTACLE_RADIUS_M  = 0.25   # dyn_obs cylinder radius (dynamic_trajectories.yaml)
+COLLISION_BUFFER_M = 0.0    # clearance < this (m) counts as a collision
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +310,33 @@ def extract_obstacles(messages, topic='/gmpc/obstacles'):
     return out
 
 
+def extract_gt_obstacles(messages):
+    """Per-obstacle ground-truth pose tracks from /model/<name>/pose topics.
+
+    The gz bridge publishes a geometry_msgs/PoseStamped for every dynamic
+    obstacle in EVERY launch (GMPC and the MPPI/RPP baselines alike), so this
+    is the controller-agnostic source for the fair clearance/collision metric.
+
+    Returns list of (ts: (K,) array, xy: (K,2) array), one entry per obstacle
+    that actually published. Empty list if no pose topics were recorded
+    (e.g. an old bag captured before record.sh added them).
+    """
+    tracks = []
+    for topic, msgs in messages.items():
+        if not (topic.startswith('/model/') and topic.endswith('/pose')):
+            continue
+        ts, xy = [], []
+        for t_ns, m in msgs:
+            p = m.pose.position
+            ts.append(int(t_ns) / 1e9)
+            xy.append((float(p.x), float(p.y)))
+        if len(ts) >= 1:
+            ts = np.array(ts); xy = np.array(xy)
+            order = np.argsort(ts)
+            tracks.append((ts[order], xy[order]))
+    return tracks
+
+
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
@@ -316,7 +353,8 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
     odom_xyth = map_xyth if pose_in_map else odom_xyth_raw
     cmd_t,   cmd_vec   = extract_cmd(messages, '/cmd_vel')
     plans              = extract_plans(messages)
-    obs_series         = extract_obstacles(messages)
+    obs_series         = extract_obstacles(messages)        # GMPC tracked obstacles (diagnostic)
+    gt_tracks          = extract_gt_obstacles(messages)     # ground-truth poses (fair metric)
     st_t, st_vals      = extract_float32_series(messages, '/gmpc/solve_time_ms')
 
     out = {
@@ -335,6 +373,7 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
         'min_clearance_m'   : float('nan'),
         'collision_count'   : 0,
         'collided'          : False,
+        'clearance_source'  : 'none',
         'solve_time_mean_ms': float('nan'),
         'solve_time_p95_ms' : float('nan'),
         'solve_time_max_ms' : float('nan'),
@@ -411,14 +450,41 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
             out['jerk_vy'] = float(np.std(accel[:, 1]))
             out['jerk_wz'] = float(np.std(accel[:, 2]))
 
-    # ------- safety: per-odom min distance to any (time-aligned) obstacle ----
-    # If /gmpc/obstacles is missing (RPP/MPPI bags), the bag won't have it.
-    # In that case the safety metrics stay NaN — the user should record with
-    # obstacle_aggregator running so all baselines share the same ground truth.
-    if obs_series:
+    # ------- safety: controller-agnostic clearance vs ground-truth obstacles --
+    # Preferred source: /model/<name>/pose (recorded in EVERY launch, so MPPI
+    # and RPP get a real number instead of NaN). Each obstacle is the true
+    # 0.25 m cylinder; clearance is surface-to-surface (both radii subtracted),
+    # so it's directly comparable across all four methods. Falls back to the
+    # GMPC /gmpc/obstacles stream only for legacy bags with no pose topics.
+    clearances = None
+    if gt_tracks:
+        out['clearance_source'] = 'gt_pose'
+        clearances, n_coll = [], 0
+        in_collision = False
+        for i in np.where(in_run)[0]:
+            t = odom_t[i]
+            rx, ry = odom_xyth[i, 0], odom_xyth[i, 1]
+            d_surfaces = []
+            for ots, oxy in gt_tracks:
+                j = int(np.searchsorted(ots, t, side='right') - 1)
+                j = max(0, min(j, len(ots) - 1))
+                ox, oy = oxy[j]
+                d = math.hypot(ox - rx, oy - ry) - OBSTACLE_RADIUS_M - ROBOT_RADIUS_M
+                d_surfaces.append(d)
+            d_min = float(np.min(d_surfaces))
+            clearances.append(d_min)
+            if d_min < COLLISION_BUFFER_M:
+                if not in_collision:
+                    n_coll += 1
+                in_collision = True
+            else:
+                in_collision = False
+    elif obs_series:
+        # Legacy fallback: GMPC tracked obstacles (radius already in the wire,
+        # no robot radius subtracted -> not comparable to baselines, GMPC-only).
+        out['clearance_source'] = 'gmpc_obstacles'
         obs_ts = np.array([t for t, _ in obs_series])
-        clearances = []
-        n_coll = 0
+        clearances, n_coll = [], 0
         in_collision = False
         for i in np.where(in_run)[0]:
             t = odom_t[i]
@@ -426,20 +492,19 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
             j = max(0, min(j, len(obs_series) - 1))
             obs_xy_r = obs_series[j][1]                    # (M, 3)
             d_centres = np.linalg.norm(obs_xy_r[:, :2] - odom_xyth[i, :2], axis=1)
-            d_surfaces = d_centres - obs_xy_r[:, 2]        # subtract radius
-            d_min = float(np.min(d_surfaces))
+            d_min = float(np.min(d_centres - obs_xy_r[:, 2]))
             clearances.append(d_min)
-            # Edge-trigger collision count when crossing zero
             if d_min < COLLISION_BUFFER_M:
                 if not in_collision:
                     n_coll += 1
                 in_collision = True
             else:
                 in_collision = False
-        if clearances:
-            out['min_clearance_m'] = float(np.min(clearances))
-            out['collision_count'] = int(n_coll)
-            out['collided']        = bool(n_coll > 0)
+
+    if clearances:
+        out['min_clearance_m'] = float(np.min(clearances))
+        out['collision_count'] = int(n_coll)
+        out['collided']        = bool(n_coll > 0)
 
     # ------- solve time stats (GMPC only — empty for RPP/MPPI bags) ---------
     if len(st_vals):
@@ -460,7 +525,7 @@ CSV_HEADER = [
     'tracking_rmse_m',
     'smooth_vx', 'smooth_vy', 'smooth_wz',
     'jerk_vx',   'jerk_vy',   'jerk_wz',
-    'min_clearance_m', 'collision_count', 'collided',
+    'min_clearance_m', 'collision_count', 'collided', 'clearance_source',
     'solve_time_mean_ms', 'solve_time_p95_ms', 'solve_time_max_ms',
     'goal_xy_x', 'goal_xy_y', 'final_dist_to_goal_m', 'min_dist_to_goal_m',
     'pose_source',

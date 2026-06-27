@@ -37,7 +37,8 @@ fi
 
 echo "Recording for $DURATION s into $OUT_DIR"
 echo "Topics: /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \\"
-echo "        /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h"
+echo "        /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h \\"
+echo "        /model/dyn_obs_{0,1,2}/pose  (ground-truth obstacle poses, all methods)"
 echo "Press Ctrl+C earlier if the robot reaches goal sooner."
 
 # Forward SIGINT (Ctrl+C) to ros2 bag record so it closes the bag cleanly;
@@ -50,6 +51,7 @@ timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
         -o "$OUT_DIR" \
         --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
                  /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h \
+                 /model/dyn_obs_0/pose /model/dyn_obs_1/pose /model/dyn_obs_2/pose \
     < /dev/null || true
 
 echo "Done. Now analyse with:"
