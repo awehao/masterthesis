@@ -97,7 +97,7 @@ class GMPCNode(Node):
         # the omni base side-slips into free space instead of right-hugging the
         # wall toward the goal. Pure upstream reference shift: CBF + cost
         # weights untouched. vy_ref += sigma * k * tanh(Δd / dscale).
-        self.declare_parameter('ref_bias_enable', True)
+        self.declare_parameter('ref_bias_enable', False)  # governor OFF by default
         self.declare_parameter('ref_bias_shift',  0.40)   # max lateral PATH shift [m]
         self.declare_parameter('ref_bias_danger', 0.80)   # dyn clearance to start [m]
         self.declare_parameter('ref_bias_dscale', 0.30)   # tanh scale [m]
