@@ -98,14 +98,19 @@ def read_bag(bag_path: str) -> dict[str, list[tuple[int, object]]]:
     type_map = {t.name: t.type for t in reader.get_all_topics_and_types()}
     bucket = {topic: [] for topic in type_map}
 
+    def _want(t):
+        # any dynamic-obstacle ground-truth pose, plus the fixed set, so adding
+        # obstacles never needs editing this list.
+        return t in TOPICS_OF_INTEREST or (t.startswith('/model/') and t.endswith('/pose'))
+
     while reader.has_next():
         topic, data, t_ns = reader.read_next()
-        if topic not in TOPICS_OF_INTEREST:
+        if not _want(topic):
             continue
         msg = deserialize_message(data, get_message(type_map[topic]))
         bucket[topic].append((int(t_ns), msg))
 
-    return {t: bucket[t] for t in bucket if t in TOPICS_OF_INTEREST}
+    return {t: bucket[t] for t in bucket if _want(t)}
 
 
 # ---------------------------------------------------------------------------
