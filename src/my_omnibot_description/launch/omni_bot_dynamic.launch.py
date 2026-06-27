@@ -96,7 +96,12 @@ def generate_launch_description():
         bridge_args.append(f'/model/{name}/pose@geometry_msgs/msg/PoseStamped[gz.msgs.Pose')
 
     cbf_overrides = {
-        'cbf_enable': True, 'cbf_alpha': 3.0, 'cbf_safe_margin': 0.30,
+        # safe_margin 0.38 = robot radius 0.30 + 0.08 m buffer. At exactly the
+        # robot radius (old 0.30) the CBF target was "edge just grazes surface",
+        # so any QP slack / scan-tracking latency penetrated the obstacle
+        # (measured up to 7 cm). 0.08 m buffer keeps clearance >= 0 while still
+        # fitting the map's ~0.9 m narrow passages (static keep-out 0.05+0.38).
+        'cbf_enable': True, 'cbf_alpha': 3.0, 'cbf_safe_margin': 0.38,
         'cbf_slack_weight': 5.0e2, 'cbf_eps0_scale': 30.0,
         'cbf_danger_thresh': 0.4, 'cbf_Q_min_scale': 0.20,
         'cbf_slack_max_scale': 20.0, 'obstacles_topic': '/gmpc/obstacles',
