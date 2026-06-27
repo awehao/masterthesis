@@ -84,6 +84,9 @@ class GMPCNode(Node):
         self.declare_parameter('cbf_Q_min_scale',     0.2)
         self.declare_parameter('cbf_slack_max_scale', 100.0)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
+        # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
+        # repels from known static geometry and won't dodge into walls.
+        self.declare_parameter('static_obstacles_topic', '/gmpc/static_obstacles')
 
         # ---- Diagnostic topics ------------------------------------------
         self.declare_parameter('solve_time_topic',   '/gmpc/solve_time_ms')
@@ -137,7 +140,8 @@ class GMPCNode(Node):
         self.latest_path  = None
         self.xi_prev      = np.zeros(3)
         self._arrived     = False
-        self._obstacles   = []           # list of dict {x, y, radius}
+        self._obstacles   = []           # dynamic: list of dict {x, y, radius, vx, vy}
+        self._static_obstacles = []      # static walls (v=0) for the CBF
 
         # ---- TF + I/O -----------------------------------------------------
         self.tf_buffer   = tf2_ros.Buffer()
@@ -175,6 +179,11 @@ class GMPCNode(Node):
                 str(self.get_parameter('obstacles_topic').value),
                 self._obstacles_cb, 10,
             )
+            self.create_subscription(
+                Float32MultiArray,
+                str(self.get_parameter('static_obstacles_topic').value),
+                self._static_obstacles_cb, 10,
+            )
 
         self.create_timer(self.dt, self._control_step)
 
@@ -206,6 +215,22 @@ class GMPCNode(Node):
              'radius': float(data[stride*i + 2]),
              'vx':     float(data[stride*i + 3]),
              'vy':     float(data[stride*i + 4])}
+            for i in range(n)
+        ]
+
+    def _static_obstacles_cb(self, msg: Float32MultiArray):
+        """Nearest WALL points (v=0) from the tracker. Same wire format as the
+        dynamic obstacles; merged into the CBF set so the controller doesn't
+        dodge a moving obstacle straight into static geometry."""
+        data = list(msg.data)
+        stride = 5
+        n = len(data) // stride
+        self._static_obstacles = [
+            {'x':      float(data[stride*i + 0]),
+             'y':      float(data[stride*i + 1]),
+             'radius': float(data[stride*i + 2]),
+             'vx':     0.0,
+             'vy':     0.0}
             for i in range(n)
         ]
 
@@ -273,7 +298,7 @@ class GMPCNode(Node):
 
         # 4. Solve
         X_now  = from_xytheta(*robot_xyth)
-        obstacles = self._obstacles if self.cbf_enable else None
+        obstacles = (self._obstacles + self._static_obstacles) if self.cbf_enable else None
         result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,
                                 obstacles=obstacles)
 
