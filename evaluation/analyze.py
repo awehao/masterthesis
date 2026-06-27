@@ -65,8 +65,10 @@ TOPICS_OF_INTEREST = {
 # True-geometry clearance is measured surface-to-surface:
 #   clearance = dist(robot_centre, obstacle_centre) - OBSTACLE_RADIUS - ROBOT_RADIUS
 # Collision when clearance < 0 (the two footprints overlap).
-ROBOT_RADIUS_M     = 0.25   # robot is a DISC (circular omni base); single
-                            # collision radius, no orientation dependence.
+ROBOT_RADIUS_M     = 0.30   # robot collision DISC radius = 0.6 m diameter / 2
+                            # (user-confirmed). Matches CBF cbf_safe_margin=0.30
+                            # and costmap robot_radius=0.33 -> metric is
+                            # consistent with what the avoidance enforces.
 OBSTACLE_RADIUS_M  = 0.25   # dyn_obs cylinder radius (dynamic_trajectories.yaml)
 COLLISION_BUFFER_M = 0.0    # clearance < this (m) counts as a collision
 
@@ -506,6 +508,18 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
     # 0.25 m cylinder; clearance is surface-to-surface (both radii subtracted),
     # so it's directly comparable across all four methods. Falls back to the
     # GMPC /gmpc/obstacles stream only for legacy bags with no pose topics.
+    # Physical collision is measured against the GROUND-TRUTH robot pose, i.e.
+    # raw /odom — which here is gz's drift-free true-pose odometry, not dead
+    # reckoning (see omni_bot.urdf.xacro OdometryPublisher). We deliberately do
+    # NOT use the AMCL-corrected map pose: AMCL adds up to ~1.3 m of localisation
+    # error (mean ~3 cm), the same scale as the clearances we measure, so it
+    # would turn estimator noise into fake collisions. Obstacles are ground truth
+    # too (/model/*/pose), making this pure geometry and an identical standard
+    # for all four methods.
+    safe_t    = odom_t_raw   if len(odom_t_raw) >= 2 else odom_t
+    safe_xyth = odom_xyth_raw if len(odom_t_raw) >= 2 else odom_xyth
+    safe_in_run = safe_t >= first_plan_t
+
     clearances = None
     static_clr = load_static_clearance()        # map walls/boxes + unknown_obs
     if gt_tracks or static_clr is not None:
@@ -513,9 +527,9 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
         out['clearance_source'] = '+'.join(srcs)
         clearances, n_coll = [], 0
         in_collision = False
-        for i in np.where(in_run)[0]:
-            t = odom_t[i]
-            rx, ry = odom_xyth[i, 0], odom_xyth[i, 1]
+        for i in np.where(safe_in_run)[0]:
+            t = safe_t[i]
+            rx, ry = safe_xyth[i, 0], safe_xyth[i, 1]
             d_min = 9.9
             # dynamic obstacles (bridged ground-truth poses)
             for ots, oxy in gt_tracks:
