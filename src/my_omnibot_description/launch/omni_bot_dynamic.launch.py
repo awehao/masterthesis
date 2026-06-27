@@ -61,6 +61,13 @@ def generate_launch_description():
     inflation    = LaunchConfiguration('inflation')
     use_scan     = PythonExpression(["'", LaunchConfiguration('obstacle_source'), "' == 'scan'"])
     use_truth    = PythonExpression(["'", LaunchConfiguration('obstacle_source'), "' == 'truth'"])
+    use_smoother = LaunchConfiguration('use_smoother')
+    # When the velocity_smoother is ON, GMPC publishes to cmd_vel_nav and the
+    # smoother rate-limits it onto /cmd_vel. When OFF, GMPC drives /cmd_vel
+    # directly (one fewer lifecycle dependency -> fewer launch flakes; jerk is
+    # already handled by gmpc.py's accept-suboptimal-OSQP-solution path).
+    gmpc_cmd_topic = PythonExpression(
+        ["'cmd_vel_nav' if '", use_smoother, "' == 'true' else 'cmd_vel'"])
 
     robot_description = ParameterValue(
         Command(['xacro ', urdf_file, ' use_camera:=false']), value_type=str)
@@ -118,18 +125,28 @@ def generate_launch_description():
              output='screen', parameters=[ekf_config]),
         Node(package='nav2_planner', executable='planner_server', name='planner_server',
              output='screen', parameters=[configured_nav_params]),
+        # lifecycle manager: two variants so the smoother isn't a managed node
+        # when it's disabled (otherwise the manager blocks waiting for a node
+        # that never appears -> whole nav stack fails to activate).
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
              name='lifecycle_manager_navigation', output='screen',
              parameters=[{'use_sim_time': True, 'autostart': True,
                           'node_names': ['map_server', 'amcl', 'planner_server',
-                                         'velocity_smoother']}]),
-        # velocity_smoother: rate-limit GMPC output before the base.
-        # gmpc -> cmd_vel_nav -> [smoother] -> /cmd_vel -> bridge -> gz.
+                                         'velocity_smoother']}],
+             condition=IfCondition(use_smoother)),
+        Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
+             name='lifecycle_manager_navigation', output='screen',
+             parameters=[{'use_sim_time': True, 'autostart': True,
+                          'node_names': ['map_server', 'amcl', 'planner_server']}],
+             condition=UnlessCondition(use_smoother)),
+        # velocity_smoother (only when use_smoother:=true): rate-limit GMPC
+        # output. gmpc -> cmd_vel_nav -> [smoother] -> /cmd_vel -> bridge -> gz.
         Node(package='nav2_velocity_smoother', executable='velocity_smoother',
              name='velocity_smoother', output='screen',
              parameters=[configured_nav_params],
              remappings=[('cmd_vel', 'cmd_vel_nav'),
-                         ('cmd_vel_smoothed', 'cmd_vel')]),
+                         ('cmd_vel_smoothed', 'cmd_vel')],
+             condition=IfCondition(use_smoother)),
         Node(package='ammr_wholebody_mpc', executable='goal_to_plan_relay',
              name='goal_to_plan_relay', output='screen',
              parameters=[{'use_sim_time': True, 'global_frame': 'map',
@@ -139,11 +156,11 @@ def generate_launch_description():
         # cmd_vel_nav so velocity_smoother (above) can rate-limit it.
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
              name='gmpc_controller', output='screen',
-             parameters=[gmpc_params, cbf_overrides, {'cmd_vel_topic': 'cmd_vel_nav'}],
+             parameters=[gmpc_params, cbf_overrides, {'cmd_vel_topic': gmpc_cmd_topic}],
              condition=IfCondition(cbf)),
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
              name='gmpc_controller', output='screen',
-             parameters=[gmpc_params, {'cmd_vel_topic': 'cmd_vel_nav'}],
+             parameters=[gmpc_params, {'cmd_vel_topic': gmpc_cmd_topic}],
              condition=UnlessCondition(cbf)),
         # Perception (scan mode): real /scan -> dynamic /gmpc/obstacles + static
         # wall points /gmpc/static_obstacles.
@@ -177,6 +194,9 @@ def generate_launch_description():
                               description='scan = real /scan perception; truth = ground-truth'),
         DeclareLaunchArgument('robot_radius', default_value='0.33'),
         DeclareLaunchArgument('inflation', default_value='0.45'),
+        DeclareLaunchArgument('use_smoother', default_value='true',
+                              description='true = GMPC->cmd_vel_nav->velocity_smoother->/cmd_vel; '
+                                          'false = GMPC drives /cmd_vel directly'),
 
         ExecuteProcess(cmd=['gz', 'sim', '-r', world_file], output='screen',
                        condition=IfCondition(gui)),

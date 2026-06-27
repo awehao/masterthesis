@@ -10,11 +10,12 @@
 #
 # Usage:
 #   ./run_omnibot_dynamic.sh [N_TRIALS] [DURATION_S] [GOAL_X] [GOAL_Y] [METHOD]
-#     METHOD = gmpc_scan (default) | gmpc_truth | mppi | rpp
-#       gmpc_scan  = our GMPC+CBF, obstacles from /scan (real perception)
-#       gmpc_truth = our GMPC+CBF, obstacles from ground truth (ablation)
-#       mppi       = Nav2 controller_server + MPPIController baseline
-#       rpp        = Nav2 controller_server + RegulatedPurePursuit baseline
+#     METHOD = gmpc_scan (default) | gmpc_scan_nosm | gmpc_truth | mppi | rpp
+#       gmpc_scan      = our GMPC+CBF, obstacles from /scan (real perception)
+#       gmpc_scan_nosm = gmpc_scan but velocity_smoother OFF (smoother ablation)
+#       gmpc_truth     = our GMPC+CBF, obstacles from ground truth (ablation)
+#       mppi           = Nav2 controller_server + MPPIController baseline
+#       rpp            = Nav2 controller_server + RegulatedPurePursuit baseline
 # Examples:
 #   ./run_omnibot_dynamic.sh 15 200 17 17 gmpc_scan
 #   ./run_omnibot_dynamic.sh 15 200 17 17 mppi
@@ -47,11 +48,12 @@ GOAL_Y="${4:-17.0}"
 METHOD="${5:-gmpc_scan}"     # gmpc_scan | gmpc_truth | mppi | rpp
 
 case "$METHOD" in
-  gmpc_scan)  LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=scan";  AMETHOD="gmpc_cbf"; TAG="scan"  ;;
-  gmpc_truth) LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=truth"; AMETHOD="gmpc_cbf"; TAG="truth" ;;
-  mppi)       LAUNCH_ARGS="omni_bot_baseline.launch.py gui:=false method:=mppi";          AMETHOD="mppi";     TAG="mppi"  ;;
-  rpp)        LAUNCH_ARGS="omni_bot_baseline.launch.py gui:=false method:=rpp";            AMETHOD="rpp";      TAG="rpp"   ;;
-  *) echo "ERROR: METHOD (arg 5) = gmpc_scan | gmpc_truth | mppi | rpp"; exit 1 ;;
+  gmpc_scan)      LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=scan";                    AMETHOD="gmpc_cbf"; TAG="scan"      ;;
+  gmpc_scan_nosm) LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=scan use_smoother:=false"; AMETHOD="gmpc_cbf"; TAG="scan_nosm" ;;
+  gmpc_truth)     LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=truth";                   AMETHOD="gmpc_cbf"; TAG="truth"     ;;
+  mppi)           LAUNCH_ARGS="omni_bot_baseline.launch.py gui:=false method:=mppi";                            AMETHOD="mppi";     TAG="mppi"      ;;
+  rpp)            LAUNCH_ARGS="omni_bot_baseline.launch.py gui:=false method:=rpp";                             AMETHOD="rpp";      TAG="rpp"       ;;
+  *) echo "ERROR: METHOD (arg 5) = gmpc_scan | gmpc_scan_nosm | gmpc_truth | mppi | rpp"; exit 1 ;;
 esac
 
 OUT_CSV="${HERE}/results/omnibot_dynamic_${METHOD}.csv"
@@ -139,7 +141,7 @@ run_trial() {
         >> "$log_file" 2>&1 || true
 
     # 5. goal_watcher races the recorder
-    echo "[$(date +%T)] [5/5] waiting for goal (tol=0.15 m, cap ${DURATION}s) ..."
+    echo "[$(date +%T)] [5/5] waiting for goal (tol=0.30 m, cap ${DURATION}s) ..."
     python3 "${HERE}/goal_watcher.py" \
         --goal-x "$GOAL_X" --goal-y "$GOAL_Y" --tol 0.30 --timeout "$DURATION" \
         >> "$log_file" 2>&1 < /dev/null &
