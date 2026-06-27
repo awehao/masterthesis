@@ -168,10 +168,12 @@ class ScanObstacleTracker(Node):
         # (no chattering); v=0 makes them immune to localization jitter.
         p('static_cbf_enable', True)
         p('static_cbf_topic', '/gmpc/static_obstacles')
-        p('static_cbf_range', 1.5)        # m, only walls within this matter
-        p('static_cbf_sectors', 12)       # nearest wall point per 30-deg sector
-        p('static_cbf_max', 6)            # cap total static points (QP size)
-        p('static_cbf_radius', 0.10)      # m, point radius (extra margin buffer)
+        p('static_cbf_range', 1.2)        # m, only walls within this matter
+        p('static_cbf_sectors', 8)        # nearest wall point per 45-deg sector
+        p('static_cbf_max', 4)            # cap total static points (QP size)
+        p('static_cbf_radius', 0.05)      # m, point radius (small; margin does work)
+        p('static_cbf_snap', 0.15)        # m, snap wall points to this grid ->
+                                          # stable anchor, kills per-frame jitter
 
         g = lambda n: self.get_parameter(n).value
         self.global_frame   = str(g('global_frame'))
@@ -191,6 +193,7 @@ class ScanObstacleTracker(Node):
         self.static_sectors = int(g('static_cbf_sectors'))
         self.static_max     = int(g('static_cbf_max'))
         self.static_radius  = float(g('static_cbf_radius'))
+        self.static_snap    = float(g('static_cbf_snap'))
         self._kf_kwargs = dict(
             sigma_pos=float(g('kf_sigma_pos')), sigma_vel=float(g('kf_sigma_vel')),
             sigma_meas=float(g('kf_sigma_meas')), init_vel_var=float(g('kf_init_vel_var')))
@@ -305,29 +308,38 @@ class ScanObstacleTracker(Node):
         self._update_tracks(clusters, t_ns)
         self._publish(t_ns, scan.header.stamp)
         self._publish_filtered_scan(scan, tx, ty, cyaw, syaw)
-        self._publish_static_obstacles(static_hits)
+        self._publish_static_obstacles(static_hits, tx, ty)
 
     # ------------------------------------------------------------------
-    def _publish_static_obstacles(self, static_hits):
+    def _publish_static_obstacles(self, static_hits, rx, ry):
         """Solution-1 static-CBF: from the rays that hit KNOWN walls, keep the
-        nearest point per angular sector (within range, capped) and publish them
-        as zero-velocity obstacles. The GMPC merges these into its CBF set so it
-        also repels from walls -> won't dodge a dynamic obstacle into static
-        geometry. v=0 -> immune to localization jitter. Always publishes (an
-        empty array clears the controller's static set when disabled / open)."""
+        nearest point per angular sector and publish them as zero-velocity
+        obstacles. The GMPC merges these into its CBF set so it won't dodge a
+        dynamic obstacle into a wall. Two anti-chatter measures: (1) sector by
+        MAP-frame bearing (yaw-invariant -> a wall doesn't change sector when the
+        omni base rotates); (2) snap the point to a coarse grid (stable anchor ->
+        no per-frame scan-noise jitter). v=0 -> immune to localization jitter.
+        Always publishes (empty array clears the controller's static set)."""
         arr = Float32MultiArray()
         if self.static_cbf_en and static_hits:
             best = {}                                  # sector -> (range, mx, my)
             two_pi = 2.0 * math.pi
+            q = self.static_snap
             for (r, a, mx, my) in static_hits:
-                if r > self.static_range:
+                d = math.hypot(mx - rx, my - ry)
+                if d > self.static_range:
                     continue
-                sec = int((a + math.pi) / two_pi * self.static_sectors) % self.static_sectors
-                if sec not in best or r < best[sec][0]:
-                    best[sec] = (r, mx, my)
+                # snap to grid (stable anchor)
+                sx = round(mx / q) * q if q > 0 else mx
+                sy = round(my / q) * q if q > 0 else my
+                # sector by MAP-frame bearing from robot (yaw-invariant)
+                bearing = math.atan2(sy - ry, sx - rx)
+                sec = int((bearing + math.pi) / two_pi * self.static_sectors) % self.static_sectors
+                if sec not in best or d < best[sec][0]:
+                    best[sec] = (d, sx, sy)
             data = []
-            for (r, mx, my) in sorted(best.values())[:self.static_max]:  # nearest first
-                data.extend((mx, my, self.static_radius, 0.0, 0.0))
+            for (d, sx, sy) in sorted(best.values())[:self.static_max]:  # nearest first
+                data.extend((sx, sy, self.static_radius, 0.0, 0.0))
             arr.data = data
         self.static_pub.publish(arr)
 

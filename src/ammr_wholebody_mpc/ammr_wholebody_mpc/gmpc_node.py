@@ -87,6 +87,10 @@ class GMPCNode(Node):
         # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
         # repels from known static geometry and won't dodge into walls.
         self.declare_parameter('static_obstacles_topic', '/gmpc/static_obstacles')
+        # drop static-CBF points within this distance of the goal: the goal can
+        # hug a wall, and the planner's path already handles the (static-safe)
+        # final approach -> don't let the wall-CBF block reaching the goal.
+        self.declare_parameter('static_goal_clear', 0.6)
 
         # ---- Diagnostic topics ------------------------------------------
         self.declare_parameter('solve_time_topic',   '/gmpc/solve_time_ms')
@@ -135,6 +139,7 @@ class GMPCNode(Node):
         self.mpc = GMPC(cfg)
         self.N   = cfg.N
         self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
+        self.static_goal_clear = float(self.get_parameter('static_goal_clear').value)
 
         # ---- State --------------------------------------------------------
         self.latest_path  = None
@@ -298,7 +303,14 @@ class GMPCNode(Node):
 
         # 4. Solve
         X_now  = from_xytheta(*robot_xyth)
-        obstacles = (self._obstacles + self._static_obstacles) if self.cbf_enable else None
+        if self.cbf_enable:
+            obstacles = list(self._obstacles)                     # dynamic
+            for s in self._static_obstacles:                      # walls (v=0),
+                if np.hypot(s['x'] - goal_xy[0],                  # but not the
+                            s['y'] - goal_xy[1]) > self.static_goal_clear:
+                    obstacles.append(s)                           # ones near goal
+        else:
+            obstacles = None
         result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,
                                 obstacles=obstacles)
 
