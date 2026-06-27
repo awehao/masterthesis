@@ -91,6 +91,17 @@ class GMPCNode(Node):
         # hug a wall, and the planner's path already handles the (static-safe)
         # final approach -> don't let the wall-CBF block reaching the goal.
         self.declare_parameter('static_goal_clear', 0.6)
+        # ---- Environment-aware reference governor (lateral bias) ----------
+        # When a dynamic obstacle is close, shift the lateral velocity
+        # reference toward the more-OPEN side (from the static wall points) so
+        # the omni base side-slips into free space instead of right-hugging the
+        # wall toward the goal. Pure upstream reference shift: CBF + cost
+        # weights untouched. vy_ref += sigma * k * tanh(Δd / dscale).
+        self.declare_parameter('ref_bias_enable', True)
+        self.declare_parameter('ref_bias_k',      0.20)   # max lateral bias [m/s]
+        self.declare_parameter('ref_bias_danger', 0.80)   # dyn clearance to start [m]
+        self.declare_parameter('ref_bias_dscale', 0.30)   # tanh scale on Δd [m]
+        self.declare_parameter('ref_bias_open',   1.50)   # default open clearance [m]
 
         # ---- Diagnostic topics ------------------------------------------
         self.declare_parameter('solve_time_topic',   '/gmpc/solve_time_ms')
@@ -140,6 +151,11 @@ class GMPCNode(Node):
         self.N   = cfg.N
         self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
         self.static_goal_clear = float(self.get_parameter('static_goal_clear').value)
+        self.ref_bias_en     = bool(self.get_parameter('ref_bias_enable').value)
+        self.ref_bias_k      = float(self.get_parameter('ref_bias_k').value)
+        self.ref_bias_danger = float(self.get_parameter('ref_bias_danger').value)
+        self.ref_bias_dscale = float(self.get_parameter('ref_bias_dscale').value)
+        self.ref_bias_open   = float(self.get_parameter('ref_bias_open').value)
 
         # ---- State --------------------------------------------------------
         self.latest_path  = None
@@ -311,6 +327,33 @@ class GMPCNode(Node):
                     obstacles.append(s)                           # ones near goal
         else:
             obstacles = None
+
+        # 3b. Environment-aware reference governor: a dynamic obstacle nearby
+        # nudges the lateral velocity reference toward the more-OPEN side (from
+        # the static wall points) -> the omni base side-slips into free space
+        # instead of right-hugging the wall. Smooth (tanh) so Δd~=0 doesn't
+        # flip-chatter; sigma ramps with how close the obstacle is; the path
+        # tracking pulls the robot back once it passes.
+        if self.cbf_enable and self.ref_bias_en and self._obstacles:
+            rx, ry, ryaw = robot_xyth
+            d_dyn = min(float(np.hypot(o['x'] - rx, o['y'] - ry) - o['radius'])
+                        for o in self._obstacles)
+            if d_dyn < self.ref_bias_danger:
+                sigma = float(np.clip(
+                    (self.ref_bias_danger - d_dyn) / self.ref_bias_danger, 0.0, 1.0))
+                c, s = np.cos(ryaw), np.sin(ryaw)
+                d_left = d_right = self.ref_bias_open
+                for w in self._static_obstacles:
+                    dx, dy = w['x'] - rx, w['y'] - ry
+                    body_y = -s * dx + c * dy                 # +left / -right
+                    d = float(np.hypot(dx, dy)) - w['radius']
+                    if body_y >= 0.0:
+                        d_left = min(d_left, d)
+                    else:
+                        d_right = min(d_right, d)
+                bias_dir = float(np.tanh((d_left - d_right) / self.ref_bias_dscale))
+                xi_ref_win[:, 1] += sigma * self.ref_bias_k * bias_dir
+
         result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,
                                 obstacles=obstacles)
 
