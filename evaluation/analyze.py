@@ -343,6 +343,50 @@ def extract_gt_obstacles(messages):
 
 
 # ---------------------------------------------------------------------------
+# Static geometry: known map (walls + red boxes) + unknown_obs cylinders
+# (yellow, "unknown" -> NOT in the map). Lets the collision metric cover EVERY
+# obstacle, not just the bridged dynamic ones.
+# ---------------------------------------------------------------------------
+def load_static_clearance():
+    """Return clr(x, y) = robot-CENTRE distance [m] to the nearest static
+    surface (map occupied cell OR an unknown_obs cylinder), or None if the
+    map/world can't be read."""
+    import re
+    try:
+        from scipy import ndimage
+        import yaml
+        share = (Path(__file__).resolve().parents[1]
+                 / 'install' / 'ammr_bringup' / 'share' / 'ammr_bringup')
+        my = yaml.safe_load(open(share / 'maps' / 'random_room.yaml'))
+        res = my['resolution']; ox, oy = my['origin'][0], my['origin'][1]
+        th = my['occupied_thresh']
+        with open(share / 'maps' / 'random_room.pgm', 'rb') as f:
+            assert f.readline().strip() == b'P5'
+            line = f.readline()
+            while line.startswith(b'#'):
+                line = f.readline()
+            w, h = map(int, line.split()); int(f.readline())
+            img = np.frombuffer(f.read(), np.uint8).reshape(h, w)
+        occ = ((255 - img.astype(float)) / 255.0) > th        # walls + red boxes
+        dist = ndimage.distance_transform_edt(~occ) * res
+        sdf = (share / 'worlds' / 'random_room_dynamic.sdf').read_text()
+        unk = [(float(p.split()[0]), float(p.split()[1]), float(r))
+               for p, r in re.findall(
+                   r'<model name="unknown_obs_\d+">.*?<pose>([-\d. ]+)</pose>'
+                   r'.*?<radius>([\d.]+)</radius>', sdf, re.DOTALL)]
+
+        def clr(x, y):
+            c = int((x - ox) / res); r = int(h - 1 - (y - oy) / res)
+            d = float(dist[r, c]) if (0 <= r < h and 0 <= c < w) else 9.9
+            for ux, uy, ur in unk:
+                d = min(d, math.hypot(x - ux, y - uy) - ur)
+            return d
+        return clr
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
 
@@ -462,22 +506,27 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
     # so it's directly comparable across all four methods. Falls back to the
     # GMPC /gmpc/obstacles stream only for legacy bags with no pose topics.
     clearances = None
-    if gt_tracks:
-        out['clearance_source'] = 'gt_pose'
+    static_clr = load_static_clearance()        # map walls/boxes + unknown_obs
+    if gt_tracks or static_clr is not None:
+        srcs = (['gt_pose'] if gt_tracks else []) + (['static'] if static_clr else [])
+        out['clearance_source'] = '+'.join(srcs)
         clearances, n_coll = [], 0
         in_collision = False
         for i in np.where(in_run)[0]:
             t = odom_t[i]
             rx, ry = odom_xyth[i, 0], odom_xyth[i, 1]
-            d_surfaces = []
+            d_min = 9.9
+            # dynamic obstacles (bridged ground-truth poses)
             for ots, oxy in gt_tracks:
                 j = int(np.searchsorted(ots, t, side='right') - 1)
                 j = max(0, min(j, len(ots) - 1))
                 ox, oy = oxy[j]
-                d = math.hypot(ox - rx, oy - ry) - OBSTACLE_RADIUS_M - ROBOT_RADIUS_M
-                d_surfaces.append(d)
-            d_min = float(np.min(d_surfaces))
-            clearances.append(d_min)
+                d_min = min(d_min,
+                            math.hypot(ox - rx, oy - ry) - OBSTACLE_RADIUS_M - ROBOT_RADIUS_M)
+            # ALL static geometry (map + unknown_obs): robot EDGE to surface
+            if static_clr is not None:
+                d_min = min(d_min, static_clr(rx, ry) - ROBOT_RADIUS_M)
+            clearances.append(float(d_min))
             if d_min < COLLISION_BUFFER_M:
                 if not in_collision:
                     n_coll += 1
