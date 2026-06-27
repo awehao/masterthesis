@@ -91,6 +91,13 @@ class GMPCNode(Node):
         # hug a wall, and the planner's path already handles the (static-safe)
         # final approach -> don't let the wall-CBF block reaching the goal.
         self.declare_parameter('static_goal_clear', 0.6)
+        # Static obstacles get their OWN (smaller) CBF margin: the moving
+        # obstacles in open space can afford the full cbf_safe_margin, but the
+        # same keep-out applied to wall points boxes the robot in narrow
+        # passages. Static walls are already routed around by the planner, so
+        # the static-CBF is only a backstop -> a tighter margin keeps narrow
+        # passages drivable while still preventing dodge-into-wall.
+        self.declare_parameter('static_cbf_safe_margin', 0.33)
 
         # ---- Diagnostic topics ------------------------------------------
         self.declare_parameter('solve_time_topic',   '/gmpc/solve_time_ms')
@@ -140,6 +147,7 @@ class GMPCNode(Node):
         self.N   = cfg.N
         self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
         self.static_goal_clear = float(self.get_parameter('static_goal_clear').value)
+        self.static_cbf_safe_margin = float(self.get_parameter('static_cbf_safe_margin').value)
 
         # ---- State --------------------------------------------------------
         self.latest_path  = None
@@ -308,7 +316,9 @@ class GMPCNode(Node):
             for s in self._static_obstacles:                      # walls (v=0),
                 if np.hypot(s['x'] - goal_xy[0],                  # but not the
                             s['y'] - goal_xy[1]) > self.static_goal_clear:
-                    obstacles.append(s)                           # ones near goal
+                    # smaller keep-out for walls (see static_cbf_safe_margin)
+                    obstacles.append({**s, 'margin': self.static_cbf_safe_margin})
+
         else:
             obstacles = None
         result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,

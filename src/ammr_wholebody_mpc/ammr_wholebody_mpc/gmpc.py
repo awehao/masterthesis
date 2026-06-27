@@ -283,7 +283,11 @@ def _build_cbf_horizon(cfg          : GMPCConfig,
         ox, oy = float(obs['x']),   float(obs['y'])
         vox    = float(obs.get('vx', 0.0))
         voy    = float(obs.get('vy', 0.0))
-        r_eff  = float(obs['radius']) + cfg.cbf_safe_margin
+        # Per-obstacle safety margin: static wall points carry a smaller margin
+        # ('margin' key) than dynamic obstacles so the robot can thread narrow
+        # passages without the static keep-out boxing it in. Falls back to the
+        # global cfg.cbf_safe_margin when no per-obstacle margin is given.
+        r_eff  = float(obs['radius']) + float(obs.get('margin', cfg.cbf_safe_margin))
 
         for k in range(N):
             # Robot linearisation pose at step k
@@ -376,7 +380,7 @@ class GMPC:
             h_min_for_scaling = float('inf')
             for obs in obstacles:
                 diff = p_now - np.array([float(obs['x']), float(obs['y'])])
-                r_eff = float(obs['radius']) + cfg.cbf_safe_margin
+                r_eff = float(obs['radius']) + float(obs.get('margin', cfg.cbf_safe_margin))
                 h_i = float(diff @ diff - r_eff * r_eff)
                 if h_i < h_min_for_scaling:
                     h_min_for_scaling = h_i
