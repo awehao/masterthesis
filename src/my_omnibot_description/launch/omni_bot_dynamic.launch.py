@@ -116,31 +116,19 @@ def generate_launch_description():
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
              name='lifecycle_manager_navigation', output='screen',
              parameters=[{'use_sim_time': True, 'autostart': True,
-                          'node_names': ['map_server', 'amcl', 'planner_server',
-                                         'velocity_smoother']}]),
-        # velocity_smoother: rate-limit the GMPC output before the base.
-        # gmpc -> cmd_vel_nav -> [smoother] -> /cmd_vel -> bridge -> gz.
-        # Same node the MPPI/RPP baselines use -> fair smoothness comparison.
-        Node(package='nav2_velocity_smoother', executable='velocity_smoother',
-             name='velocity_smoother', output='screen',
-             parameters=[configured_nav_params],
-             remappings=[('cmd_vel', 'cmd_vel_nav'),
-                         ('cmd_vel_smoothed', 'cmd_vel')]),
+                          'node_names': ['map_server', 'amcl', 'planner_server']}]),
         Node(package='ammr_wholebody_mpc', executable='goal_to_plan_relay',
              name='goal_to_plan_relay', output='screen',
              parameters=[{'use_sim_time': True, 'global_frame': 'map',
                           'robot_base_frame': 'base_footprint',
                           'planner_id': 'GridBased', 'replan_period': 3.0}]),
-        # GMPC + CBF (cbf:=true) or plain GMPC (cbf:=false). Publishes to
-        # cmd_vel_nav so the velocity_smoother (above) can rate-limit it.
+        # GMPC + CBF (cbf:=true) or plain GMPC (cbf:=false)
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
              name='gmpc_controller', output='screen',
-             parameters=[gmpc_params, cbf_overrides, {'cmd_vel_topic': 'cmd_vel_nav'}],
-             condition=IfCondition(cbf)),
+             parameters=[gmpc_params, cbf_overrides], condition=IfCondition(cbf)),
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
              name='gmpc_controller', output='screen',
-             parameters=[gmpc_params, {'cmd_vel_topic': 'cmd_vel_nav'}],
-             condition=UnlessCondition(cbf)),
+             parameters=[gmpc_params], condition=UnlessCondition(cbf)),
         # Perception: scan-based (real) OR ground-truth aggregator (baseline)
         Node(package='ammr_wholebody_mpc', executable='scan_obstacle_tracker',
              name='scan_obstacle_tracker', output='screen',

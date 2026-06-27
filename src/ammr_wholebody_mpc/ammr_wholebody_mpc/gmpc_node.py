@@ -84,24 +84,6 @@ class GMPCNode(Node):
         self.declare_parameter('cbf_Q_min_scale',     0.2)
         self.declare_parameter('cbf_slack_max_scale', 100.0)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
-        # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
-        # repels from known static geometry and won't dodge into walls.
-        self.declare_parameter('static_obstacles_topic', '/gmpc/static_obstacles')
-        # drop static-CBF points within this distance of the goal: the goal can
-        # hug a wall, and the planner's path already handles the (static-safe)
-        # final approach -> don't let the wall-CBF block reaching the goal.
-        self.declare_parameter('static_goal_clear', 0.6)
-        # ---- Environment-aware reference governor (lateral bias) ----------
-        # When a dynamic obstacle is close, shift the lateral velocity
-        # reference toward the more-OPEN side (from the static wall points) so
-        # the omni base side-slips into free space instead of right-hugging the
-        # wall toward the goal. Pure upstream reference shift: CBF + cost
-        # weights untouched. vy_ref += sigma * k * tanh(Δd / dscale).
-        self.declare_parameter('ref_bias_enable', False)  # governor OFF by default
-        self.declare_parameter('ref_bias_shift',  0.40)   # max lateral PATH shift [m]
-        self.declare_parameter('ref_bias_danger', 0.80)   # dyn clearance to start [m]
-        self.declare_parameter('ref_bias_dscale', 0.30)   # tanh scale [m]
-        self.declare_parameter('ref_bias_open',   1.50)   # default open clearance [m]
 
         # ---- Diagnostic topics ------------------------------------------
         self.declare_parameter('solve_time_topic',   '/gmpc/solve_time_ms')
@@ -150,19 +132,12 @@ class GMPCNode(Node):
         self.mpc = GMPC(cfg)
         self.N   = cfg.N
         self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
-        self.static_goal_clear = float(self.get_parameter('static_goal_clear').value)
-        self.ref_bias_en     = bool(self.get_parameter('ref_bias_enable').value)
-        self.ref_bias_shift  = float(self.get_parameter('ref_bias_shift').value)
-        self.ref_bias_danger = float(self.get_parameter('ref_bias_danger').value)
-        self.ref_bias_dscale = float(self.get_parameter('ref_bias_dscale').value)
-        self.ref_bias_open   = float(self.get_parameter('ref_bias_open').value)
 
         # ---- State --------------------------------------------------------
         self.latest_path  = None
         self.xi_prev      = np.zeros(3)
         self._arrived     = False
-        self._obstacles   = []           # dynamic: list of dict {x, y, radius, vx, vy}
-        self._static_obstacles = []      # static walls (v=0) for the CBF
+        self._obstacles   = []           # list of dict {x, y, radius}
 
         # ---- TF + I/O -----------------------------------------------------
         self.tf_buffer   = tf2_ros.Buffer()
@@ -200,11 +175,6 @@ class GMPCNode(Node):
                 str(self.get_parameter('obstacles_topic').value),
                 self._obstacles_cb, 10,
             )
-            self.create_subscription(
-                Float32MultiArray,
-                str(self.get_parameter('static_obstacles_topic').value),
-                self._static_obstacles_cb, 10,
-            )
 
         self.create_timer(self.dt, self._control_step)
 
@@ -236,22 +206,6 @@ class GMPCNode(Node):
              'radius': float(data[stride*i + 2]),
              'vx':     float(data[stride*i + 3]),
              'vy':     float(data[stride*i + 4])}
-            for i in range(n)
-        ]
-
-    def _static_obstacles_cb(self, msg: Float32MultiArray):
-        """Nearest WALL points (v=0) from the tracker. Same wire format as the
-        dynamic obstacles; merged into the CBF set so the controller doesn't
-        dodge a moving obstacle straight into static geometry."""
-        data = list(msg.data)
-        stride = 5
-        n = len(data) // stride
-        self._static_obstacles = [
-            {'x':      float(data[stride*i + 0]),
-             'y':      float(data[stride*i + 1]),
-             'radius': float(data[stride*i + 2]),
-             'vx':     0.0,
-             'vy':     0.0}
             for i in range(n)
         ]
 
@@ -319,53 +273,7 @@ class GMPCNode(Node):
 
         # 4. Solve
         X_now  = from_xytheta(*robot_xyth)
-        if self.cbf_enable:
-            obstacles = list(self._obstacles)                     # dynamic
-            for s in self._static_obstacles:                      # walls (v=0),
-                if np.hypot(s['x'] - goal_xy[0],                  # but not the
-                            s['y'] - goal_xy[1]) > self.static_goal_clear:
-                    obstacles.append(s)                           # ones near goal
-        else:
-            obstacles = None
-
-        # 3b. Environment-aware reference governor: when a dynamic obstacle is
-        # close, shift the REFERENCE PATH laterally toward the side that is both
-        # (i) AWAY from the obstacle and (ii) more OPEN of walls. We shift the
-        # POSITION reference (not just velocity) because Q (tracking) >> R, so a
-        # velocity nudge gets crushed -- shifting X_ref lets the dominant
-        # tracking term actually do the side-slip. sigma fades as the obstacle
-        # passes, so the robot returns to its route.
-        if self.cbf_enable and self.ref_bias_en and self._obstacles:
-            rx, ry, ryaw = robot_xyth
-            c, s = np.cos(ryaw), np.sin(ryaw)
-            near = min(self._obstacles,
-                       key=lambda o: np.hypot(o['x'] - rx, o['y'] - ry) - o['radius'])
-            d_dyn = float(np.hypot(near['x'] - rx, near['y'] - ry) - near['radius'])
-            if d_dyn < self.ref_bias_danger:
-                sigma = float(np.clip(
-                    (self.ref_bias_danger - d_dyn) / self.ref_bias_danger, 0.0, 1.0))
-                # (1) away from the dynamic obstacle (its body-frame lateral pos)
-                obs_by = -s * (near['x'] - rx) + c * (near['y'] - ry)
-                away = float(-np.tanh(obs_by / self.ref_bias_dscale))
-                # (2) toward the more-open WALL side (body frame: +y = left)
-                d_left = d_right = self.ref_bias_open
-                for w in self._static_obstacles:
-                    by = -s * (w['x'] - rx) + c * (w['y'] - ry)
-                    d = float(np.hypot(w['x'] - rx, w['y'] - ry)) - w['radius']
-                    if by >= 0.0:
-                        d_left = min(d_left, d)
-                    else:
-                        d_right = min(d_right, d)
-                wall = float(np.tanh((d_left - d_right) / self.ref_bias_dscale))
-                bias_dir = float(np.clip(away + wall, -1.0, 1.0))   # squeeze -> ~0
-                shift = sigma * self.ref_bias_shift * bias_dir      # m, body-left
-                X_ref_win[:, 0, 2] += -s * shift                    # world dx
-                X_ref_win[:, 1, 2] +=  c * shift                    # world dy
-                self.get_logger().info(
-                    f'ref-gov: sigma={sigma:.2f} away={away:+.2f} wall={wall:+.2f}'
-                    f' -> shift={shift:+.2f}m ({"LEFT" if shift > 0 else "right"})',
-                    throttle_duration_sec=1.0)
-
+        obstacles = self._obstacles if self.cbf_enable else None
         result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,
                                 obstacles=obstacles)
 
