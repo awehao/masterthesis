@@ -171,16 +171,14 @@ class ScanObstacleTracker(Node):
         p('static_cbf_range', 1.2)        # m, only walls within this matter
         p('static_cbf_sectors', 8)        # nearest wall point per 45-deg sector
         p('static_cbf_max', 4)            # cap total static points (QP size)
-        # d_safe MUST include the robot's own half-extent: the CBF treats the
-        # robot as a POINT (r_eff = obstacle_radius + cbf_safe_margin), so the
-        # robot's 0.45 m chassis (half-width 0.225 m) is otherwise ignored ->
-        # the body grazes the wall. Encode it here:
-        #   robot center keep-out = static_cbf_radius + cbf_safe_margin(0.30)
-        #   = 0.20 + 0.30 = 0.50 m  -> robot SIDE (0.225) clears wall by ~0.275 m
-        # (0.20 = robot half-width ~0.225 folded with a small per-point gap; the
-        #  0.30 margin then becomes real clearance instead of standing in for the
-        #  body.)
-        p('static_cbf_radius', 0.20)
+        # d_safe geometry: robot center keep-out = static_cbf_radius +
+        # cbf_safe_margin(0.30). The 0.30 margin already ~= the robot's body
+        # radius (0.45 m chassis -> 0.318 m corner / 0.225 m half-width), so we
+        # only need a SMALL static_cbf_radius to clear the corner + a hair of
+        # gap. 0.05 -> r_eff 0.35 m > 0.318 corner (clears in any orientation)
+        # and is navigable. (Bigger, e.g. 0.20 -> r_eff 0.50, double-counts the
+        # body and boxes the robot out of <1 m passages -> it gets stuck.)
+        p('static_cbf_radius', 0.05)
         p('static_cbf_snap', 0.15)        # m, snap wall points to this grid ->
                                           # stable anchor, kills per-frame jitter
 
