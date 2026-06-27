@@ -65,10 +65,8 @@ TOPICS_OF_INTEREST = {
 # True-geometry clearance is measured surface-to-surface:
 #   clearance = dist(robot_centre, obstacle_centre) - OBSTACLE_RADIUS - ROBOT_RADIUS
 # Collision when clearance < 0 (the two footprints overlap).
-ROBOT_RADIUS_M     = 0.225  # robot HALF-WIDTH of the 0.45 m square (face-on);
-                            # collision = obstacle within the body, not the
-                            # circumscribed circle -> no false "wall graze" in
-                            # normal corridor driving (costmap keeps centre ~0.28)
+ROBOT_RADIUS_M     = 0.25   # robot is a DISC (circular omni base); single
+                            # collision radius, no orientation dependence.
 OBSTACLE_RADIUS_M  = 0.25   # dyn_obs cylinder radius (dynamic_trajectories.yaml)
 COLLISION_BUFFER_M = 0.0    # clearance < this (m) counts as a collision
 
