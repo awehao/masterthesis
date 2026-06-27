@@ -140,11 +140,21 @@ def generate_launch_description():
              name='gmpc_controller', output='screen',
              parameters=[gmpc_params, {'cmd_vel_topic': 'cmd_vel_nav'}],
              condition=UnlessCondition(cbf)),
-        # Perception: scan-based (real) OR ground-truth aggregator (baseline)
+        # Perception (scan mode): real /scan -> dynamic /gmpc/obstacles + static
+        # wall points /gmpc/static_obstacles.
         Node(package='ammr_wholebody_mpc', executable='scan_obstacle_tracker',
              name='scan_obstacle_tracker', output='screen',
              condition=IfCondition(use_scan),
              parameters=[{'use_sim_time': True}]),
+        # Truth mode: obstacle_aggregator gives the DYNAMIC obstacles from ground
+        # truth; we ALSO run scan_obstacle_tracker purely for the STATIC wall
+        # points (its dynamic output is dumped to an unused topic) so gmpc_truth
+        # gets the SAME static-CBF as gmpc_scan -> fair perception ablation.
+        Node(package='ammr_wholebody_mpc', executable='scan_obstacle_tracker',
+             name='scan_obstacle_tracker_static', output='screen',
+             condition=IfCondition(use_truth),
+             parameters=[{'use_sim_time': True,
+                          'output_topic': '/gmpc/_scan_dyn_unused'}]),
         Node(package='ammr_wholebody_mpc', executable='obstacle_aggregator',
              name='obstacle_aggregator', output='screen',
              condition=IfCondition(use_truth),
