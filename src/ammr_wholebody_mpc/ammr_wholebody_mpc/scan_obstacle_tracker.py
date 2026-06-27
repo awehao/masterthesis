@@ -159,6 +159,21 @@ class ScanObstacleTracker(Node):
         p('kf_sigma_meas', 0.05)
         p('kf_init_vel_var', 1.0)
         p('publish_markers', True)
+        # --- static-CBF (Solution 1) ---------------------------------------
+        # map_subtraction leaves the CBF blind to walls, so dodging a dynamic
+        # obstacle can push the robot INTO static geometry. Fix: from the rays
+        # that hit known walls, keep the NEAREST point per angular sector and
+        # feed them to the GMPC as zero-velocity obstacles on a separate topic.
+        # Sector selection (not global-nearest) keeps the constraints stable
+        # (no chattering); v=0 makes them immune to localization jitter.
+        p('static_cbf_enable', True)
+        p('static_cbf_topic', '/gmpc/static_obstacles')
+        p('static_cbf_range', 1.2)        # m, only walls within this matter
+        p('static_cbf_sectors', 8)        # nearest wall point per 45-deg sector
+        p('static_cbf_max', 4)            # cap total static points (QP size)
+        p('static_cbf_radius', 0.05)      # m, point radius (small; margin does work)
+        p('static_cbf_snap', 0.15)        # m, snap wall points to this grid ->
+                                          # stable anchor, kills per-frame jitter
 
         g = lambda n: self.get_parameter(n).value
         self.global_frame   = str(g('global_frame'))
@@ -173,6 +188,12 @@ class ScanObstacleTracker(Node):
         self.track_timeout  = float(g('track_timeout'))
         self.min_age        = int(g('min_track_age'))
         self.min_speed      = float(g('min_track_speed'))
+        self.static_cbf_en  = bool(g('static_cbf_enable'))
+        self.static_range   = float(g('static_cbf_range'))
+        self.static_sectors = int(g('static_cbf_sectors'))
+        self.static_max     = int(g('static_cbf_max'))
+        self.static_radius  = float(g('static_cbf_radius'))
+        self.static_snap    = float(g('static_cbf_snap'))
         self._kf_kwargs = dict(
             sigma_pos=float(g('kf_sigma_pos')), sigma_vel=float(g('kf_sigma_vel')),
             sigma_meas=float(g('kf_sigma_meas')), init_vel_var=float(g('kf_init_vel_var')))
@@ -201,6 +222,8 @@ class ScanObstacleTracker(Node):
         # robot's start cell "occupied" -> no SmacPlanner start-occupied lockout.
         self.scan_mask_margin = 0.20
         self.filtered_pub = self.create_publisher(LaserScan, '/scan_filtered', scan_qos)
+        self.static_pub = self.create_publisher(
+            Float32MultiArray, str(g('static_cbf_topic')), 10)
         self.publish_markers = bool(g('publish_markers'))
         self.mpub = self.create_publisher(MarkerArray, '/gmpc/scan_obstacles_viz', 10) \
             if self.publish_markers else None
@@ -263,6 +286,7 @@ class ScanObstacleTracker(Node):
         # Build points in the tracking (odom) frame, in scan order. Optional
         # map subtraction only makes sense if we track in the map frame.
         dyn = []
+        static_hits = []          # (range, angle, mx, my) on known walls -> static-CBF
         a = scan.angle_min
         rmin, rmax = scan.range_min, scan.range_max
         for r in scan.ranges:
@@ -270,7 +294,9 @@ class ScanObstacleTracker(Node):
                 lx, ly = r * math.cos(a), r * math.sin(a)
                 mx = tx + cyaw * lx - syaw * ly
                 my = ty + syaw * lx + cyaw * ly
-                if not (self.use_map and self._is_static(mx, my)):
+                if self.use_map and self._is_static(mx, my):
+                    static_hits.append((r, a, mx, my))   # wall: feed CBF (v=0)
+                else:
                     dyn.append((mx, my))
             a += scan.angle_increment
         dyn = np.array(dyn, dtype=float) if dyn else np.empty((0, 2))
@@ -282,6 +308,40 @@ class ScanObstacleTracker(Node):
         self._update_tracks(clusters, t_ns)
         self._publish(t_ns, scan.header.stamp)
         self._publish_filtered_scan(scan, tx, ty, cyaw, syaw)
+        self._publish_static_obstacles(static_hits, tx, ty)
+
+    # ------------------------------------------------------------------
+    def _publish_static_obstacles(self, static_hits, rx, ry):
+        """Solution-1 static-CBF: from the rays that hit KNOWN walls, keep the
+        nearest point per angular sector and publish them as zero-velocity
+        obstacles. The GMPC merges these into its CBF set so it won't dodge a
+        dynamic obstacle into a wall. Two anti-chatter measures: (1) sector by
+        MAP-frame bearing (yaw-invariant -> a wall doesn't change sector when the
+        omni base rotates); (2) snap the point to a coarse grid (stable anchor ->
+        no per-frame scan-noise jitter). v=0 -> immune to localization jitter.
+        Always publishes (empty array clears the controller's static set)."""
+        arr = Float32MultiArray()
+        if self.static_cbf_en and static_hits:
+            best = {}                                  # sector -> (range, mx, my)
+            two_pi = 2.0 * math.pi
+            q = self.static_snap
+            for (r, a, mx, my) in static_hits:
+                d = math.hypot(mx - rx, my - ry)
+                if d > self.static_range:
+                    continue
+                # snap to grid (stable anchor)
+                sx = round(mx / q) * q if q > 0 else mx
+                sy = round(my / q) * q if q > 0 else my
+                # sector by MAP-frame bearing from robot (yaw-invariant)
+                bearing = math.atan2(sy - ry, sx - rx)
+                sec = int((bearing + math.pi) / two_pi * self.static_sectors) % self.static_sectors
+                if sec not in best or d < best[sec][0]:
+                    best[sec] = (d, sx, sy)
+            data = []
+            for (d, sx, sy) in sorted(best.values())[:self.static_max]:  # nearest first
+                data.extend((sx, sy, self.static_radius, 0.0, 0.0))
+            arr.data = data
+        self.static_pub.publish(arr)
 
     # ------------------------------------------------------------------
     def _publish_filtered_scan(self, scan, tx, ty, cyaw, syaw):
