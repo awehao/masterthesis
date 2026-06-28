@@ -494,13 +494,21 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
         out['smooth_wz'] = float(np.std(cmd_vec[:, 2]))
     if len(cmd_vec) > 1:
         dt = np.diff(cmd_t)
-        ok = dt > 1e-6
+        # Drop bogus sample gaps: DDS occasionally double-delivers cmd_vel with
+        # dt ~ 0.03 ms (not a real control step at the 20 Hz / 50 ms rate). A
+        # tiny dt makes accel = Δv/dt explode (e.g. 0.04 m/s / 0.03 ms = 1300
+        # m/s²), which dominated std and produced phantom "jerk spikes" even
+        # though the true per-step Δv was identical to clean trials. Keep only
+        # samples within a physical window around the nominal control period.
+        nominal = np.median(dt)
+        ok = dt > 0.5 * nominal
         if np.any(ok):
-            accel = np.diff(cmd_vec, axis=0)
-            accel = accel[ok] / dt[ok, None]
-            out['jerk_vx'] = float(np.std(accel[:, 0]))
-            out['jerk_vy'] = float(np.std(accel[:, 1]))
-            out['jerk_wz'] = float(np.std(accel[:, 2]))
+            accel = np.diff(cmd_vec, axis=0)[ok] / dt[ok, None]
+            # Report p95 of |accel| — a robust smoothness measure insensitive to
+            # the few residual DDS-timing outliers (std was outlier-dominated).
+            out['jerk_vx'] = float(np.percentile(np.abs(accel[:, 0]), 95))
+            out['jerk_vy'] = float(np.percentile(np.abs(accel[:, 1]), 95))
+            out['jerk_wz'] = float(np.percentile(np.abs(accel[:, 2]), 95))
 
     # ------- safety: controller-agnostic clearance vs ground-truth obstacles --
     # Preferred source: /model/<name>/pose (recorded in EVERY launch, so MPPI
