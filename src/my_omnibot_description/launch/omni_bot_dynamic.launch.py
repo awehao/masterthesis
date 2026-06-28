@@ -193,7 +193,7 @@ def generate_launch_description():
         DeclareLaunchArgument('obstacle_source', default_value='scan',
                               description='scan = real /scan perception; truth = ground-truth'),
         DeclareLaunchArgument('robot_radius', default_value='0.33'),
-        DeclareLaunchArgument('inflation', default_value='0.55'),
+        DeclareLaunchArgument('inflation', default_value='0.45'),
         DeclareLaunchArgument('use_smoother', default_value='true',
                               description='true = GMPC->cmd_vel_nav->velocity_smoother->/cmd_vel; '
                                           'false = GMPC drives /cmd_vel directly'),
