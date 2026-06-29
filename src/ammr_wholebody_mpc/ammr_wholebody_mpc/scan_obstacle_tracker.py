@@ -167,7 +167,7 @@ class ScanObstacleTracker(Node):
         # `min_net_speed`. Static objects jitter in place -> ~0 net displacement
         # -> dropped here, left to the local costmap/planner (their proper owner).
         p('static_window_s', 0.8)         # s, window for the net-displacement test
-        p('min_net_speed',   0.08)        # m/s, min AVERAGE speed over the window
+        p('min_net_speed',   0.0)        # m/s, min AVERAGE speed over the window
         # KF tuning (meas noise inflated vs ground-truth: cluster centroids jitter)
         p('kf_sigma_pos', 0.01)
         p('kf_sigma_vel', 0.40)
