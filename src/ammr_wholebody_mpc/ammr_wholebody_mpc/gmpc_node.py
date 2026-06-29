@@ -64,6 +64,11 @@ class GMPCNode(Node):
         self.declare_parameter('R_vy',     0.5)
         self.declare_parameter('R_w',      0.2)
         self.declare_parameter('Qf_mult',  5.0)
+        # Input-increment (Δu) smoothness weights S (penalise control jerk).
+        # 0 = off. Larger -> smoother cruising, CBF still allowed to burst.
+        self.declare_parameter('S_vx',     0.0)
+        self.declare_parameter('S_vy',     0.0)
+        self.declare_parameter('S_w',      0.0)
 
         self.declare_parameter('global_frame',     'map')
         self.declare_parameter('robot_base_frame', 'base_footprint')
@@ -134,6 +139,9 @@ class GMPCNode(Node):
             R =np.diag([float(self.get_parameter('R_vx').value),
                         float(self.get_parameter('R_vy').value),
                         float(self.get_parameter('R_w').value)]),
+            S =np.diag([float(self.get_parameter('S_vx').value),
+                        float(self.get_parameter('S_vy').value),
+                        float(self.get_parameter('S_w').value)]),
             Qf=np.diag([Qxy * Qf_m, Qxy * Qf_m, Qyaw * Qf_m]),
             cbf_alpha         =float(self.get_parameter('cbf_alpha').value),
             cbf_safe_margin   =float(self.get_parameter('cbf_safe_margin').value),

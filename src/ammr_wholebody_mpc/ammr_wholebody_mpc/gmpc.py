@@ -47,7 +47,7 @@ Stacked into OSQP standard form  l ≤ A_total z ≤ u.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import numpy as np
@@ -71,6 +71,11 @@ class GMPCConfig:
     Q      : np.ndarray                   # (3,3) running state weight
     R      : np.ndarray                   # (3,3) input deviation weight
     Qf     : np.ndarray                   # (3,3) terminal state weight
+    # Input-increment (Δu) smoothness weight. Penalises Δu_k = u_k - u_{k-1} in
+    # the cost: Σ Δu_k^T S Δu_k. A SOFT cost -> silky-smooth cruising, yet the
+    # optimiser will still accept a hard acceleration burst when the CBF demands
+    # it (safety preserved). Default 0 = disabled (identical to old behaviour).
+    S      : np.ndarray = field(default_factory=lambda: np.zeros((3, 3)))
     # ---- Control Barrier Function safety filter ----------------------------
     cbf_alpha        : float = 1.0        # decay rate α in  ḣ + α·h ≥ 0
     cbf_safe_margin  : float = 0.30       # extra clearance added to obstacle radius [m]
@@ -164,6 +169,35 @@ def _build_R_bar(R: np.ndarray, N: int) -> np.ndarray:
     for k in range(N):
         Rb[k*m:(k+1)*m, k*m:(k+1)*m] = R
     return Rb
+
+
+def _build_smoothness_terms(S: np.ndarray, xi_ref_win: np.ndarray,
+                            xi_prev: np.ndarray, N: int):
+    """P/q additions for the input-increment cost  Σ_{k=0}^{N-1} Δu_k^T S Δu_k.
+
+    With u_k = ξ_ref(k) + δξ_k and the decision vector z = [δξ_0,…,δξ_{N-1}]:
+        Δu_0 = δξ_0           + (ξ_ref(0) - ξ_prev)        (u_{-1} = ξ_prev)
+        Δu_k = δξ_k - δξ_{k-1}+ (ξ_ref(k) - ξ_ref(k-1)),  k ≥ 1
+    Stack as  Δu = D·z + c, so the cost = (Dz+c)^T S̄ (Dz+c) contributes
+        P += 2·Dᵀ S̄ D ,   q += 2·Dᵀ S̄ c        (OSQP form ½zᵀPz + qᵀz).
+    The reference-difference offset c also smooths the FIRST step from the
+    robot's actually-applied velocity ξ_prev (no jump at the seam).
+    """
+    m = S.shape[0]
+    D = np.zeros((N * m, N * m))
+    c = np.zeros(N * m)
+    for k in range(N):
+        D[k*m:(k+1)*m, k*m:(k+1)*m] = np.eye(m)
+        if k == 0:
+            c[0:m] = xi_ref_win[0] - xi_prev
+        else:
+            D[k*m:(k+1)*m, (k-1)*m:k*m] = -np.eye(m)
+            c[k*m:(k+1)*m] = xi_ref_win[k] - xi_ref_win[k-1]
+    S_bar = np.zeros((N * m, N * m))
+    for k in range(N):
+        S_bar[k*m:(k+1)*m, k*m:(k+1)*m] = S
+    DtS = D.T @ S_bar
+    return 2.0 * (DtS @ D), 2.0 * (DtS @ c)
 
 
 # ---------------------------------------------------------------------------
@@ -398,9 +432,14 @@ class GMPC:
         R_bar = _build_R_bar(cfg.R, N)
 
         P_dense = 2.0 * (Gamma.T @ Q_bar @ Gamma + R_bar)
+        q_vec   = 2.0 * Gamma.T @ Q_bar @ Phi @ e0
+        # Input-increment (Δu) smoothness cost — soft penalty on control jerk.
+        if np.any(cfg.S):
+            P_s, q_s = _build_smoothness_terms(cfg.S, xi_ref_win, xi_prev, N)
+            P_dense = P_dense + P_s
+            q_vec   = q_vec + q_s
         # Symmetrise to absorb floating-point asymmetry (OSQP wants symmetric P)
         P_dense = 0.5 * (P_dense + P_dense.T)
-        q_vec   = 2.0 * Gamma.T @ Q_bar @ Phi @ e0
 
         # 5. Constraints (velocity + acceleration)
         A_total, lb_total, ub_total = _build_constraints(cfg, xi_ref_win, xi_prev)
