@@ -58,8 +58,13 @@ class GMPCNode(Node):
         self.declare_parameter('ay_max',  1.0)
         self.declare_parameter('az_max',  2.0)
 
-        self.declare_parameter('Q_xy',    10.0)
+        self.declare_parameter('Q_xy',    10.0)   # forward (body-x) tracking weight
         self.declare_parameter('Q_yaw',    5.0)
+        # Lateral (body-y) tracking weight, separate from forward. Relaxing it
+        # lets the robot, after the CBF pushes it off-path to dodge, merge back
+        # to the global plan along a GENTLE arc instead of snapping the heading
+        # hard (which shows up as xy-path zig-zag). <=0 -> use Q_xy (isotropic).
+        self.declare_parameter('Q_y',      0.0)
         self.declare_parameter('R_vx',     0.5)
         self.declare_parameter('R_vy',     0.5)
         self.declare_parameter('R_w',      0.2)
@@ -139,6 +144,9 @@ class GMPCNode(Node):
 
         Qxy  = float(self.get_parameter('Q_xy').value)
         Qyaw = float(self.get_parameter('Q_yaw').value)
+        Qy   = float(self.get_parameter('Q_y').value)
+        if Qy <= 0.0:
+            Qy = Qxy                                   # default: isotropic xy
         Qf_m = float(self.get_parameter('Qf_mult').value)
 
         cfg = GMPCConfig(
@@ -152,7 +160,7 @@ class GMPCNode(Node):
             a_max=np.array([float(self.get_parameter('ax_max').value),
                             float(self.get_parameter('ay_max').value),
                             float(self.get_parameter('az_max').value)]),
-            Q =np.diag([Qxy, Qxy, Qyaw]),
+            Q =np.diag([Qxy, Qy, Qyaw]),
             R =np.diag([float(self.get_parameter('R_vx').value),
                         float(self.get_parameter('R_vy').value),
                         float(self.get_parameter('R_w').value)]),
