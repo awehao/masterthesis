@@ -111,6 +111,13 @@ class GMPCNode(Node):
         # the static-CBF is only a backstop -> a tighter margin keeps narrow
         # passages drivable while still preventing dodge-into-wall.
         self.declare_parameter('static_cbf_safe_margin', 0.33)
+        # Static-CBF is a BACKSTOP for "don't dodge a dynamic obstacle into a
+        # wall" — only engage it when a dynamic obstacle is within this range of
+        # the robot. With no dynamic threat nearby the robot just tracks the
+        # (smooth) global plan through gaps, instead of the two-sided wall CBF
+        # constraints squeezing it into a left-right zig-zag in a passage.
+        # 0 = always on (old behaviour).
+        self.declare_parameter('static_activate_range', 2.0)
 
         # ---- Diagnostic topics ------------------------------------------
         self.declare_parameter('solve_time_topic',   '/gmpc/solve_time_ms')
@@ -166,6 +173,7 @@ class GMPCNode(Node):
         self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
         self.static_goal_clear = float(self.get_parameter('static_goal_clear').value)
         self.static_cbf_safe_margin = float(self.get_parameter('static_cbf_safe_margin').value)
+        self.static_activate_range = float(self.get_parameter('static_activate_range').value)
 
         # ---- State --------------------------------------------------------
         self.latest_path  = None
@@ -344,12 +352,19 @@ class GMPCNode(Node):
         X_now  = from_xytheta(*robot_xyth)
         if self.cbf_enable:
             obstacles = list(self._obstacles)                     # dynamic
-            for s in self._static_obstacles:                      # walls (v=0),
-                if np.hypot(s['x'] - goal_xy[0],                  # but not the
-                            s['y'] - goal_xy[1]) > self.static_goal_clear:
-                    # smaller keep-out for walls (see static_cbf_safe_margin)
-                    obstacles.append({**s, 'margin': self.static_cbf_safe_margin})
-
+            # Engage the static-CBF (wall backstop) only while a dynamic obstacle
+            # is actually nearby; otherwise let the smooth plan carry the robot
+            # through gaps without two-sided wall constraints zig-zagging it.
+            rx, ry = robot_xyth[0], robot_xyth[1]
+            dyn_near = (self.static_activate_range <= 0.0) or any(
+                np.hypot(o['x'] - rx, o['y'] - ry) < self.static_activate_range
+                for o in self._obstacles)
+            if dyn_near:
+                for s in self._static_obstacles:                  # walls (v=0),
+                    if np.hypot(s['x'] - goal_xy[0],              # but not the
+                                s['y'] - goal_xy[1]) > self.static_goal_clear:
+                        # smaller keep-out for walls (see static_cbf_safe_margin)
+                        obstacles.append({**s, 'margin': self.static_cbf_safe_margin})
         else:
             obstacles = None
         result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,
