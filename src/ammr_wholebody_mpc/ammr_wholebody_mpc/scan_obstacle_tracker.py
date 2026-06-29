@@ -43,7 +43,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from .kalman_tracker import KalmanTracker2D
 
 try:
-    from scipy.ndimage import binary_dilation
+    from scipy.ndimage import binary_dilation, distance_transform_edt
     _HAVE_NDIMAGE = True
 except Exception:                       # pragma: no cover
     _HAVE_NDIMAGE = False
@@ -202,6 +202,13 @@ class ScanObstacleTracker(Node):
         self._next_id = 0
         self._occ: np.ndarray | None = None   # inflated occupied mask (row,col)
         self._map_info = None
+        # Stable nearest-wall-point field (from the KNOWN map, precomputed once):
+        # for every free cell, the (row,col) of the closest occupied cell. The
+        # static-CBF reads this instead of per-frame scan hits, so the wall
+        # anchors move SMOOTHLY with the robot (no chattering near walls).
+        self._wall_dist = None                 # (H,W) distance-to-wall in cells
+        self._wall_nn_row = None
+        self._wall_nn_col = None
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -246,6 +253,17 @@ class ScanObstacleTracker(Node):
             occ = binary_dilation(occ, iterations=rad)
         self._occ = occ
         self._map_info = info
+        # Precompute the stable nearest-wall-point field from the RAW (un-inflated)
+        # walls -> the static-CBF anchor is the true wall surface (margin adds the
+        # safety distance) and moves smoothly as the robot drives, eliminating the
+        # per-frame scan-point flicker that chattered the controller near walls.
+        if _HAVE_NDIMAGE:
+            raw_occ = grid >= 50
+            if raw_occ.any():
+                dist, idx = distance_transform_edt(~raw_occ, return_indices=True)
+                self._wall_dist   = dist
+                self._wall_nn_row = idx[0]
+                self._wall_nn_col = idx[1]
         self.get_logger().info(
             f'map received: {w}x{h} @ {info.resolution:.3f} m, '
             f'inflated occupied cells = {int(occ.sum())}')
@@ -308,38 +326,45 @@ class ScanObstacleTracker(Node):
         self._update_tracks(clusters, t_ns)
         self._publish(t_ns, scan.header.stamp)
         self._publish_filtered_scan(scan, tx, ty, cyaw, syaw)
-        self._publish_static_obstacles(static_hits, tx, ty)
+        self._publish_static_obstacles(tx, ty)   # map-based, stable (no scan flicker)
 
     # ------------------------------------------------------------------
-    def _publish_static_obstacles(self, static_hits, rx, ry):
-        """Solution-1 static-CBF: from the rays that hit KNOWN walls, keep the
-        nearest point per angular sector and publish them as zero-velocity
-        obstacles. The GMPC merges these into its CBF set so it won't dodge a
-        dynamic obstacle into a wall. Two anti-chatter measures: (1) sector by
-        MAP-frame bearing (yaw-invariant -> a wall doesn't change sector when the
-        omni base rotates); (2) snap the point to a coarse grid (stable anchor ->
-        no per-frame scan-noise jitter). v=0 -> immune to localization jitter.
-        Always publishes (empty array clears the controller's static set)."""
+    def _publish_static_obstacles(self, rx, ry):
+        """Solution-1 static-CBF, MAP-BASED (stable). For the robot pose and a few
+        small offsets (to catch walls on several sides in a corridor), look up the
+        precomputed nearest-wall cell from the KNOWN map and publish those points
+        as zero-velocity obstacles. The GMPC merges them into its CBF set so it
+        won't dodge a dynamic obstacle into a wall.
+
+        Why map-based: the old version re-picked nearest points from the per-frame
+        /scan, so the anchors jumped (grid snap, sector reassignment, ray hits
+        appearing/disappearing) -> the near-hard CBF chased a flickering constraint
+        -> the controller chattered whenever it drove close to a wall. The map is
+        stationary and known, so its nearest-wall point is a SMOOTH function of the
+        robot position: no flicker, no chatter. Falls back to nothing if scipy is
+        unavailable. Always publishes (empty array clears the controller's set)."""
         arr = Float32MultiArray()
-        if self.static_cbf_en and static_hits:
-            best = {}                                  # sector -> (range, mx, my)
-            two_pi = 2.0 * math.pi
-            q = self.static_snap
-            for (r, a, mx, my) in static_hits:
-                d = math.hypot(mx - rx, my - ry)
-                if d > self.static_range:
+        if self.static_cbf_en and self._wall_nn_row is not None:
+            info = self._map_info
+            res  = info.resolution
+            ax, ay = info.origin.position.x, info.origin.position.y
+            h, w = self._wall_dist.shape
+            pts = {}
+            # robot cell + 4 lateral probes (~robot radius) -> surrounding walls
+            for dx, dy in ((0.0, 0.0), (0.3, 0.0), (-0.3, 0.0), (0.0, 0.3), (0.0, -0.3)):
+                col = int((rx + dx - ax) / res)
+                row = int((ry + dy - ay) / res)
+                if not (0 <= row < h and 0 <= col < w):
                     continue
-                # snap to grid (stable anchor)
-                sx = round(mx / q) * q if q > 0 else mx
-                sy = round(my / q) * q if q > 0 else my
-                # sector by MAP-frame bearing from robot (yaw-invariant)
-                bearing = math.atan2(sy - ry, sx - rx)
-                sec = int((bearing + math.pi) / two_pi * self.static_sectors) % self.static_sectors
-                if sec not in best or d < best[sec][0]:
-                    best[sec] = (d, sx, sy)
+                wx = ax + (int(self._wall_nn_col[row, col]) + 0.5) * res
+                wy = ay + (int(self._wall_nn_row[row, col]) + 0.5) * res
+                if math.hypot(wx - rx, wy - ry) > self.static_range:
+                    continue
+                pts[(round(wx / res), round(wy / res))] = (wx, wy)   # dedupe
             data = []
-            for (d, sx, sy) in sorted(best.values())[:self.static_max]:  # nearest first
-                data.extend((sx, sy, self.static_radius, 0.0, 0.0))
+            for (wx, wy) in sorted(pts.values(),
+                                   key=lambda p: math.hypot(p[0]-rx, p[1]-ry))[:self.static_max]:
+                data.extend((wx, wy, self.static_radius, 0.0, 0.0))
             arr.data = data
         self.static_pub.publish(arr)
 
