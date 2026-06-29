@@ -21,6 +21,7 @@ horizon-CBF controller consumes /gmpc/obstacles unchanged.
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
@@ -118,6 +119,12 @@ class Track:
     last_t_ns: int
     age: int = 1                 # number of successful updates
     misses: int = 0
+    # (t_ns, x, y) history -> net-displacement test that separates true MOVERS
+    # from static objects whose apparent KF velocity is inflated by occlusion /
+    # centroid shift / cluster merging (measured up to 2 m/s on a stationary
+    # cylinder). A static object jitters in place -> ~0 net displacement; a
+    # mover translates. Instantaneous speed alone cannot tell them apart.
+    hist: deque = field(default_factory=lambda: deque(maxlen=128))
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +160,14 @@ class ScanObstacleTracker(Node):
         p('min_track_speed', 0.10)        # m/s, publish only MOVING tracks ->
                                           # rejects static map-subtraction leaks
                                           # (walls handled by costmap/planner).
+        # Net-displacement gate (separates true movers from static objects whose
+        # apparent KF velocity is inflated by occlusion/centroid-shift). A track
+        # is only published to the dynamic CBF if its AVERAGE speed over the last
+        # `static_window_s` (= net displacement / elapsed) also exceeds
+        # `min_net_speed`. Static objects jitter in place -> ~0 net displacement
+        # -> dropped here, left to the local costmap/planner (their proper owner).
+        p('static_window_s', 0.8)         # s, window for the net-displacement test
+        p('min_net_speed',   0.08)        # m/s, min AVERAGE speed over the window
         # KF tuning (meas noise inflated vs ground-truth: cluster centroids jitter)
         p('kf_sigma_pos', 0.01)
         p('kf_sigma_vel', 0.40)
@@ -188,6 +203,8 @@ class ScanObstacleTracker(Node):
         self.track_timeout  = float(g('track_timeout'))
         self.min_age        = int(g('min_track_age'))
         self.min_speed      = float(g('min_track_speed'))
+        self.static_window_s = float(g('static_window_s'))
+        self.min_net_speed   = float(g('min_net_speed'))
         self.static_cbf_en  = bool(g('static_cbf_enable'))
         self.static_range   = float(g('static_cbf_range'))
         self.static_sectors = int(g('static_cbf_sectors'))
@@ -421,13 +438,15 @@ class ScanObstacleTracker(Node):
             tr.last_t_ns = t_ns
             tr.age += 1
             tr.misses = 0
+            tr.hist.append((t_ns, tr.kf.position[0], tr.kf.position[1]))
 
         for ci in um_c:                       # new track
             kf = KalmanTracker2D(init_xy=(clusters[ci][0], clusters[ci][1]),
                                  **self._kf_kwargs)
-            self._tracks.append(Track(
-                tid=self._next_id, kf=kf,
-                radius=max(self.default_radius, clusters[ci][2]), last_t_ns=t_ns))
+            nt = Track(tid=self._next_id, kf=kf,
+                       radius=max(self.default_radius, clusters[ci][2]), last_t_ns=t_ns)
+            nt.hist.append((t_ns, kf.position[0], kf.position[1]))
+            self._tracks.append(nt)
             self._next_id += 1
 
         for ti in um_t:
@@ -440,15 +459,38 @@ class ScanObstacleTracker(Node):
                 keep.append(tr)
         self._tracks = keep
 
+    def _is_mover(self, tr, now_ns) -> bool:
+        """True if a track is a genuine DYNAMIC obstacle for the CBF: aged,
+        instantaneously moving, AND actually net-displaced over the window.
+        The net-displacement test rejects static objects (unknown cylinders,
+        map-subtraction leaks) whose apparent KF velocity is inflated by
+        occlusion / centroid shift -> they jitter in place but don't translate.
+        Such statics stay out of the CBF and are handled by the costmap/planner
+        (which sees the raw /scan)."""
+        if tr.age < self.min_age:
+            return False
+        if math.hypot(*tr.kf.velocity) < self.min_speed:
+            return False
+        if self.min_net_speed > 0.0 and tr.hist:
+            cx, cy = tr.kf.position
+            ot, ox, oy = tr.hist[0]
+            for (t, x, y) in tr.hist:           # oldest entry within the window
+                if (now_ns - t) * 1e-9 <= self.static_window_s:
+                    ot, ox, oy = t, x, y
+                    break
+            elapsed = (now_ns - ot) * 1e-9
+            if elapsed >= 0.3:                  # enough history to judge motion
+                if math.hypot(cx - ox, cy - oy) / elapsed < self.min_net_speed:
+                    return False                # jitters in place -> static
+        return True
+
     # ------------------------------------------------------------------
     def _publish(self, t_ns: int, stamp):
-        # Publish only sufficiently-aged AND moving tracks. In the smooth odom
-        # frame, static geometry (walls) is genuinely stationary (v~=0) and only
-        # real dynamic obstacles move (v~=0.3), so the velocity gate cleanly
-        # rejects wall clusters without any map/AMCL dependence.
-        confirmed = [t for t in self._tracks
-                     if t.age >= self.min_age
-                     and math.hypot(*t.kf.velocity) >= self.min_speed]
+        # Publish only genuine dynamic obstacles (aged + instantaneously moving +
+        # net-displaced). The net-displacement test (see _is_mover) keeps static
+        # objects with inflated apparent velocity out of the CBF; the costmap
+        # (raw /scan) still routes the planner around them.
+        confirmed = [t for t in self._tracks if self._is_mover(t, t_ns)]
 
         # Transform tracking-frame (odom) tracks into publish_frame (map) so the
         # GMPC sees them in the same frame as the robot pose; the AMCL map<-odom
