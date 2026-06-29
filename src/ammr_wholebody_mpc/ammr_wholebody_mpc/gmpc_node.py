@@ -122,7 +122,7 @@ class GMPCNode(Node):
         # (smooth) global plan through gaps, instead of the two-sided wall CBF
         # constraints squeezing it into a left-right zig-zag in a passage.
         # 0 = always on (old behaviour).
-        self.declare_parameter('static_activate_range', 2.0)
+        self.declare_parameter('static_activate_range', 0.0)
 
         # ---- Diagnostic topics ------------------------------------------
         self.declare_parameter('solve_time_topic',   '/gmpc/solve_time_ms')

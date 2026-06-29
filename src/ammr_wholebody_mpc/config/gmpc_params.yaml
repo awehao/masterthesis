@@ -30,16 +30,16 @@ gmpc_controller:
     # caused by KF estimate jitter on dynamic obstacle velocity.
     Q_xy:               15.0     # was 25 — less aggressive tracking
     Q_yaw:               7.0     # was 10
-    Q_y:                 5.0     # lateral tracking relaxed (gentle merge after dodge)
+    Q_y:                 0.0     # 0 = isotropic (reverted, experiment didn't help wiggle)
     R_vx:                2.0     # was 1.0 — more input damping
     R_vy:                2.0
     R_w:                 1.0
     Qf_mult:             5.0
     # Input-increment (Δu) smoothness cost: Σ Δu_k^T S Δu_k. Soft penalty on
     # control jerk -> smooth cruising; CBF can still burst when in danger.
-    S_vx:               15.0
-    S_vy:               15.0
-    S_w:                 8.0
+    S_vx:                0.0
+    S_vy:                0.0
+    S_w:                 0.0
 
     # ---- Frames / topics --------------------------------------------------
     global_frame:        map
