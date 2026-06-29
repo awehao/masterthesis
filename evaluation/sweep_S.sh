@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sweep the input-smoothness weight S over {0,8,15,22,30}, 5 gmpc_scan trials
+# Sweep the input-smoothness weight S over {0,5,10,15,20,25,30}, 5 gmpc_scan trials
 # each, to find the S that minimises arrival time / path length while keeping
 # success + smoothness. For each S: edit gmpc_params -> rebuild -> run 5 ->
 # save results to evaluation/results/sweep/S_<val>.csv. Restores S=15/15/8 at end.
@@ -28,7 +28,7 @@ set_S () {   # $1 = S value; S_w kept at 0.53*S (matches the 15->8 standard rati
           s/^    S_w:.*/    S_w:                ${sw}/" "$PARAMS"
 }
 
-for S in 0 8 15 22 30; do
+for S in 0 5 10 15 20 25 30; do
   echo "========================= S = $S ========================="
   set_S "$S"
   colcon build --packages-select ammr_wholebody_mpc 2>&1 | tail -1
@@ -43,4 +43,4 @@ sed -i "s/^    S_vx:.*/    S_vx:               15.0/;
         s/^    S_vy:.*/    S_vy:               15.0/;
         s/^    S_w:.*/    S_w:                 8.0/" "$PARAMS"
 colcon build --packages-select ammr_wholebody_mpc 2>&1 | tail -1
-echo "DONE. swept S in {0,8,15,22,30} -> $OUT/S_*.csv ; restored S=15/15/8"
+echo "DONE. swept S in {0,5,10,15,20,25,30} -> $OUT/S_*.csv ; restored S=15/15/8"
