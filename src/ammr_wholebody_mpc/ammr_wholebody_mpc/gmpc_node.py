@@ -72,6 +72,14 @@ class GMPCNode(Node):
 
         self.declare_parameter('global_frame',     'map')
         self.declare_parameter('robot_base_frame', 'base_footprint')
+        # Pose low-pass filter: EMA on the (map-frame) robot pose before it feeds
+        # the controller/CBF. AMCL injects ~3-5 cm/cycle jitter into the pose;
+        # the near-hard CBF chases that jitter -> the xy path zig-zags near walls.
+        # Smoothing the INPUT (not the output) is the right fix: filtering the
+        # control output instead makes the reactive loop sluggish and oscillate
+        # MORE. alpha in [0,1): 0 = off, higher = smoother (more lag). ~0.7 ->
+        # ~0.12 s time constant (a few cm lag, absorbed by the CBF margin).
+        self.declare_parameter('pose_lpf_alpha', 0.0)
         self.declare_parameter('plan_topic',       '/plan')
         self.declare_parameter('cmd_vel_topic',    '/cmd_vel')
         self.declare_parameter('goal_tolerance_xy', 0.20)
@@ -117,6 +125,8 @@ class GMPCNode(Node):
 
         self.global_frame     = str(self.get_parameter('global_frame').value)
         self.base_frame       = str(self.get_parameter('robot_base_frame').value)
+        self.pose_lpf_alpha   = float(self.get_parameter('pose_lpf_alpha').value)
+        self._pose_filt       = None        # EMA state for the robot pose
         self.goal_tol_xy      = float(self.get_parameter('goal_tolerance_xy').value)
         self.tf_timeout_s     = float(self.get_parameter('tf_timeout').value)
 
@@ -279,7 +289,20 @@ class GMPCNode(Node):
                 f'TF {self.global_frame}->{self.base_frame} failed: {e}',
                 throttle_duration_sec=2.0)
             return None
-        return self._tf_to_xyth(tf)
+        pose = self._tf_to_xyth(tf)
+        a = self.pose_lpf_alpha
+        if a > 0.0:
+            if self._pose_filt is None:
+                self._pose_filt = pose.copy()
+            else:
+                f = self._pose_filt
+                f[0] = a * f[0] + (1.0 - a) * pose[0]
+                f[1] = a * f[1] + (1.0 - a) * pose[1]
+                # yaw via shortest-angle increment (avoid ±pi wrap artefacts)
+                dyaw = np.arctan2(np.sin(pose[2] - f[2]), np.cos(pose[2] - f[2]))
+                f[2] = f[2] + (1.0 - a) * dyaw
+            pose = self._pose_filt.copy()
+        return pose
 
     # ----------------------------------------------------------------------
     def _control_step(self):
