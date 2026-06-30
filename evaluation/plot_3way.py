@@ -56,7 +56,7 @@ for name,f in FILES.items():
 names=list(FILES.keys())
 def vals(k): return [agg[n][k] for n in names]
 
-fig,axes=plt.subplots(2,3,figsize=(13,7.5))
+fig,axes=plt.subplots(3,2,figsize=(9.5,12.5))
 fig.suptitle('動態避障 三方比較 (N=40)  —  GMPC+CBF vs MPPI vs RPP', fontsize=15, fontweight='bold')
 
 panels=[
