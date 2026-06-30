@@ -61,10 +61,10 @@ fig.suptitle('動態避障 三方比較 (N=40)  —  GMPC+CBF vs MPPI vs RPP', f
 
 panels=[
  ('成功率 (%)',      'succ_pct', None,      '%.0f%%', False),
- ('路徑長 (m)  ↓越短越好','path','path_sd', '%.1f',  True),
- ('到達時間 (s)  ↓',  'arr','arr_sd',       '%.0f',  True),
- ('控制平滑度 std(cmd)  ↓越低越平滑','SMOOTH', None, '%.2f', False),
- ('最小間距 (m)  ↑越大越安全','clr',None,    '%+.2f', False),
+ ('路徑長 (m)','path','path_sd', '%.1f',  True),
+ ('到達時間 (s)',  'arr','arr_sd',       '%.0f',  True),
+ ('控制平滑度 std(cmd)','SMOOTH', None, '%.2f', False),
+ ('最小間距 (m)','clr',None,    '%+.2f', False),
  ('追蹤 RMSE (m)',    'rmse',None,          '%.3f',  False),
 ]
 for ax,(title,key,sdk,fmt,_) in zip(axes.flat,panels):
