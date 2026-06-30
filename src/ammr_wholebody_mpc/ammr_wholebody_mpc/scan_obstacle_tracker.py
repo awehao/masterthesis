@@ -184,11 +184,8 @@ class ScanObstacleTracker(Node):
         p('static_cbf_enable', True)
         p('static_cbf_topic', '/gmpc/static_obstacles')
         p('static_cbf_range', 1.2)        # m, only walls within this matter
-        p('static_cbf_sectors', 8)        # nearest wall point per 45-deg sector
         p('static_cbf_max', 4)            # cap total static points (QP size)
         p('static_cbf_radius', 0.05)      # m, point radius (small; margin does work)
-        p('static_cbf_snap', 0.15)        # m, snap wall points to this grid ->
-                                          # stable anchor, kills per-frame jitter
 
         g = lambda n: self.get_parameter(n).value
         self.global_frame   = str(g('global_frame'))
@@ -207,10 +204,8 @@ class ScanObstacleTracker(Node):
         self.min_net_speed   = float(g('min_net_speed'))
         self.static_cbf_en  = bool(g('static_cbf_enable'))
         self.static_range   = float(g('static_cbf_range'))
-        self.static_sectors = int(g('static_cbf_sectors'))
         self.static_max     = int(g('static_cbf_max'))
         self.static_radius  = float(g('static_cbf_radius'))
-        self.static_snap    = float(g('static_cbf_snap'))
         self._kf_kwargs = dict(
             sigma_pos=float(g('kf_sigma_pos')), sigma_vel=float(g('kf_sigma_vel')),
             sigma_meas=float(g('kf_sigma_meas')), init_vel_var=float(g('kf_init_vel_var')))
@@ -321,7 +316,6 @@ class ScanObstacleTracker(Node):
         # Build points in the tracking (odom) frame, in scan order. Optional
         # map subtraction only makes sense if we track in the map frame.
         dyn = []
-        static_hits = []          # (range, angle, mx, my) on known walls -> static-CBF
         a = scan.angle_min
         rmin, rmax = scan.range_min, scan.range_max
         for r in scan.ranges:
@@ -329,9 +323,10 @@ class ScanObstacleTracker(Node):
                 lx, ly = r * math.cos(a), r * math.sin(a)
                 mx = tx + cyaw * lx - syaw * ly
                 my = ty + syaw * lx + cyaw * ly
-                if self.use_map and self._is_static(mx, my):
-                    static_hits.append((r, a, mx, my))   # wall: feed CBF (v=0)
-                else:
+                # Background subtraction: drop hits on known (inflated) walls; the
+                # rest are dynamic-obstacle candidates. Walls are owned by the
+                # costmap/planner and (for the CBF) by the map-based static-CBF.
+                if not (self.use_map and self._is_static(mx, my)):
                     dyn.append((mx, my))
             a += scan.angle_increment
         dyn = np.array(dyn, dtype=float) if dyn else np.empty((0, 2))
