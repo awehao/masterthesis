@@ -40,7 +40,9 @@ for name,f in FILES.items():
         succ_lbl = f"{len(succ)}/{N}",
         path = m('path_length_m', succ), path_sd = sd('path_length_m', succ),
         arr  = m('arrival_time_s', succ), arr_sd = sd('arrival_time_s', succ),
-        jerk = m('jerk_vx', succ),  # mean over successful runs (report method)
+        smooth_vx = m('smooth_vx', succ),  # std of /cmd_vel (lower=smoother)
+        smooth_vy = m('smooth_vy', succ),
+        smooth_wz = m('smooth_wz', succ),
         clr  = m('min_clearance_m', valid_clr),
         rmse = m('tracking_rmse_m', succ),
         coll = sum(1 for r in rows if str(r.get('collided','')).lower() in ('true','1')),
@@ -48,7 +50,8 @@ for name,f in FILES.items():
     )
     a=agg[name]
     print(f"{name.splitlines()[0]:9s} succ={a['succ_lbl']}({a['succ_pct']:.0f}%) path={a['path']:.1f} "
-          f"arr={a['arr']:.0f} jerk_vx={a['jerk']:.2f} minclr={a['clr']:+.3f} rmse={a['rmse']:.3f} coll={a['coll']}")
+          f"arr={a['arr']:.0f} smooth(vx/vy/wz)={a['smooth_vx']:.3f}/{a['smooth_vy']:.3f}/{a['smooth_wz']:.3f} "
+          f"minclr={a['clr']:+.3f} rmse={a['rmse']:.3f} coll={a['coll']}")
 
 names=list(FILES.keys())
 def vals(k): return [agg[n][k] for n in names]
@@ -60,17 +63,39 @@ panels=[
  ('成功率 (%)',      'succ_pct', None,      '%.0f%%', False),
  ('路徑長 (m)  ↓越短越好','path','path_sd', '%.1f',  True),
  ('到達時間 (s)  ↓',  'arr','arr_sd',       '%.0f',  True),
- ('平滑度 jerk_vx (m/s²)  ↓','jerk',None,    '%.2f',  False),
+ ('控制平滑度 std(cmd)  ↓越低越平滑','SMOOTH', None, '%.2f', False),
  ('最小間距 (m)  ↑越大越安全','clr',None,    '%+.2f', False),
  ('追蹤 RMSE (m)',    'rmse',None,          '%.3f',  False),
 ]
 for ax,(title,key,sdk,fmt,_) in zip(axes.flat,panels):
+    ax.set_title(title, fontsize=11.5, fontweight='bold')
+    ax.grid(axis='y', alpha=0.3)
+
+    if key=='SMOOTH':
+        # grouped bars: 3 methods × 3 axes (vx/vy/wz). Honest: GMPC steadier vx
+        # but more active vy/wz (sideways + steering for active avoidance).
+        axkeys=['smooth_vx','smooth_vy','smooth_wz']; axlbl=['v_x','v_y','ω_z']
+        x=np.arange(3); w=0.25
+        for j,ak in enumerate(axkeys):
+            vv=[agg[n][ak] for n in names]
+            b=ax.bar(x+(j-1)*w, vv, w, color=COLORS, edgecolor='black',
+                     linewidth=0.5, alpha=[1.0,0.7,0.45][j])
+            for i,bb in enumerate(b):
+                ax.annotate('%.2f'%bb.get_height(),(bb.get_x()+bb.get_width()/2,bb.get_height()),
+                            ha='center',va='bottom',fontsize=7,xytext=(0,1),textcoords='offset points')
+        ax.set_xticks(x); ax.set_xticklabels([n.replace('\n',' ') for n in names], fontsize=9)
+        # axis legend (shade = which axis)
+        from matplotlib.patches import Patch
+        ax.legend([Patch(facecolor='gray',alpha=a) for a in (1.0,0.7,0.45)],
+                  axlbl, fontsize=8, ncol=3, loc='upper right', title='軸')
+        allv=[agg[n][ak] for n in names for ak in axkeys]
+        ax.set_ylim(0, max(allv)*1.25)
+        continue
+
     v=vals(key); err=vals(sdk) if sdk else None
     bars=ax.bar(range(3), v, yerr=err, color=COLORS, capsize=4,
                 edgecolor='black', linewidth=0.6, width=0.6)
-    ax.set_title(title, fontsize=11.5, fontweight='bold')
     ax.set_xticks(range(3)); ax.set_xticklabels([n.replace('\n',' ') for n in names], fontsize=9)
-    ax.grid(axis='y', alpha=0.3)
     if key=='clr': ax.axhline(0, color='red', lw=1, ls='--', alpha=0.7)
     for i,b in enumerate(bars):
         h=b.get_height()
