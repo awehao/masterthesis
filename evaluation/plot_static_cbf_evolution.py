@@ -26,8 +26,7 @@ scene(ax[0])
 py=1.15+0.95*np.exp(-((px-4)/1.1)**2)
 ax[0].plot(px,py,'-',color='#2e7d32',lw=2.3)
 ax[0].plot(px[np.argmax(py)],py.max(),'x',color='#c62828',ms=15,mew=3)
-ax[0].text(px[np.argmax(py)],py.max()+0.16,'撞牆!',color='#c62828',ha='center',fontsize=11,fontweight='bold')
-ax[0].set_title('① 沒有 static-CBF\nCBF 對牆全盲 → 側移撞牆',fontsize=11.5,fontweight='bold')
+ax[0].set_title('① 沒有 static-CBF',fontsize=13,fontweight='bold')
 
 # 2) scan-based -> 不撞但抖 (flicker/chatter)
 scene(ax[1])
@@ -37,8 +36,7 @@ for X,Y in zip(wx,wy): ax[1].add_patch(Circle((X,Y),0.30,fill=False,ec='#c62828'
 base=1.02+0.5*np.exp(-((px-4)/1.0)**2)
 chat=base+ (np.abs(px-4)<1.4)*0.09*np.sin(px*11)   # jitter near wall
 ax[1].plot(px,chat,'-',color='#2e7d32',lw=2.3)
-ax[1].text(4,1.75,'牆點跳動→抖',color='#c62828',ha='center',fontsize=9,fontweight='bold')
-ax[1].set_title('② scan-based static-CBF\n牆點每幀跳動 → 不撞但 chatter',fontsize=11.5,fontweight='bold')
+ax[1].set_title('② scan-based static-CBF',fontsize=13,fontweight='bold')
 
 # 3) map-based -> 平滑
 scene(ax[2])
@@ -47,11 +45,18 @@ ax[2].plot(wx3,wy3,'x',color='#c62828',ms=8,mew=2,ls='')
 for X,Y in zip(wx3,wy3): ax[2].add_patch(Circle((X,Y),0.30,fill=False,ec='#c62828',ls=':',lw=1.1,alpha=.7))
 py3=1.02+0.5*np.exp(-((px-4)/1.0)**2)
 ax[2].plot(px,py3,'-',color='#2e7d32',lw=2.3)
-ax[2].text(6.5,1.35,'✓ 平滑\n不抖不撞',color='#2e7d32',ha='center',fontsize=10,fontweight='bold')
-ax[2].set_title('③ map-based static-CBF（定案）\n地圖 EDT 最近牆點 → 平滑',fontsize=11.5,fontweight='bold')
+ax[2].set_title('③ map-based static-CBF',fontsize=13,fontweight='bold')
 
 fig.suptitle('靜態 CBF 的演進：沒有 → scan-based → map-based（示意）',fontsize=14,fontweight='bold')
-fig.text(0.5,0.02,'綠=機器人軌跡   紅色叉 / 虛圈 = CBF 用的牆點與 keep-out',ha='center',fontsize=9,color='#555')
-plt.tight_layout(rect=[0,0.03,1,0.93])
+
+# 顏色圖例(標在圖下方)
+from matplotlib.lines import Line2D
+handles=[Line2D([0],[0],color='#2e7d32',lw=2.5,label='機器人軌跡'),
+         Line2D([0],[0],marker='x',color='#c62828',ls='',ms=9,mew=2,label='CBF 用的牆點'),
+         Line2D([0],[0],marker='o',color='#c62828',mfc='none',ls=':',ms=12,mew=1.4,label='keep-out'),
+         Line2D([0],[0],marker='o',color='#37474f',ls='',ms=11,label='動態障礙')]
+fig.legend(handles=handles,loc='lower center',ncol=4,fontsize=10,frameon=False,
+           bbox_to_anchor=(0.5,0.0))
+plt.tight_layout(rect=[0,0.06,1,0.93])
 out='evaluation/results/figs/static_cbf_evolution.png'
 plt.savefig(out,dpi=155,bbox_inches='tight'); print('saved ->',out)
