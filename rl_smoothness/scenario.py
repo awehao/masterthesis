@@ -115,7 +115,7 @@ if __name__ == '__main__':
     sc = Scenario()
     fig, ax = plt.subplots(figsize=(8, 8))
     ext = [ORIGIN[0], ORIGIN[0] + sc.W * RES, ORIGIN[1], ORIGIN[1] + sc.H * RES]
-    ax.imshow(sc.occ, cmap='Greys', origin='lower', extent=ext, alpha=0.85)
+    ax.imshow(sc.occ, cmap='Greys', origin='upper', extent=ext, alpha=0.85)
     ax.plot(sc.path[:, 0], sc.path[:, 1], '-', color='#1565c0', lw=2, label='A* 全域路徑')
     ax.plot(*START, 'o', color='green', ms=12, label='起點')
     ax.plot(*GOAL, '*', color='red', ms=20, label='終點')
