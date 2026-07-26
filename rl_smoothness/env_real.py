@@ -51,12 +51,17 @@ class RealAvoidEnv:
                             self.sc.occ_with_pillars(self.known_pillars))
         return self.sc.smooth_path(raw)                  # = SmacPlanner2D + SimpleSmoother
 
-    def __init__(self, obs_noise_pos=0.05, obs_noise_vel=0.20, max_steps=3000, seed=0):
+    def __init__(self, obs_noise_pos=0.05, obs_noise_vel=0.20, max_steps=3000, seed=0,
+                 lag_beta=0.0):
         self.sc = Scenario()
         self.cfg = _mk_cfg()
         self.gmpc = GMPC(self.cfg)
         self.dt = self.cfg.dt
         self.npos, self.nvel = obs_noise_pos, obs_noise_vel
+        # first-order lag: lumps gz's velocity_smoother + mass/inertia + motor lag
+        # (a natural low-pass the pure-kinematic 2D sim lacks). u_app = b*u_app + (1-b)*u.
+        # Calibrate b so the 2D wiggle matches the gz benchmark (~85 deg/m).
+        self.lag_beta = float(lag_beta)
         self.max_steps = max_steps
         self.rng = np.random.default_rng(seed)
         self.act_dim = 3
@@ -68,6 +73,7 @@ class RealAvoidEnv:
             self.rng = np.random.default_rng(seed)
         self.pose = np.array([START[0], START[1], np.deg2rad(45)])   # x,y,theta
         self.xi_prev = np.zeros(3)
+        self.u_app = np.zeros(3)
         self.t = 0
         self.phase = self.rng.uniform(0, 20, size=len(DYN))          # random dyn phase
         self.known_pillars = []
@@ -150,7 +156,9 @@ class RealAvoidEnv:
             u = self._cbf_refilter(u_res, obstacles)
             interv = float(np.linalg.norm(u - u_res))
 
-        # integrate SE(2)
+        # first-order lag (gz velocity_smoother + physics), then integrate SE(2)
+        self.u_app = self.lag_beta * self.u_app + (1 - self.lag_beta) * u
+        u = self.u_app
         self.pose = se2.to_xytheta(X_now @ se2.exp_(u * self.dt))
         self.xi_prev = u.copy(); self.t += 1
 
