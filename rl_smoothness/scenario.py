@@ -63,9 +63,22 @@ class Scenario:
         wr = int(self.wall_nn[0, row, col]); wc = int(self.wall_nn[1, row, col])
         return self.cell_to_world(wr, wc), float(self.wall_dist[row, col])
 
+    def occ_with_pillars(self, pillars):
+        """Wall-inflated occupancy PLUS discovered static pillars stamped in
+        (robot-radius inflated). Dynamic obstacles are NOT included -> mimics the
+        real /scan_filtered costmap the SmacPlanner sees."""
+        occ = self.occ_infl.copy()
+        for (x, y, r) in pillars:
+            rc = int(round((r + ROBOT_R + 0.10) / RES))
+            row, col = self.world_to_cell((x, y))
+            r0, r1 = max(0, row - rc), min(self.H, row + rc + 1)
+            c0, c1 = max(0, col - rc), min(self.W, col + rc + 1)
+            occ[r0:r1, c0:c1] = True
+        return occ
+
     # --- A* on the inflated grid (8-connectivity) ---
-    def astar(self, start_w, goal_w):
-        occ = self.occ_infl
+    def astar(self, start_w, goal_w, occ=None):
+        occ = self.occ_infl if occ is None else occ
         s = self.world_to_cell(start_w); g = self.world_to_cell(goal_w)
         def h(a, b): return np.hypot(a[0] - b[0], a[1] - b[1])
         openq = [(h(s, g), 0.0, s, None)]
@@ -90,6 +103,23 @@ class Scenario:
         while c is not None:
             path.append(self.cell_to_world(*c)); c = came[c]
         return np.array(path[::-1])
+
+    @staticmethod
+    def smooth_path(path, ds=0.15, w_data=0.2, w_smooth=0.25, iters=150):
+        """Resample by arc length then gradient-descent smooth (= nav2 SimpleSmoother):
+        minimise w_data*||p-orig||^2 + w_smooth*||p_{i-1}-2p_i+p_{i+1}||^2.
+        Turns the jagged 8-connected A* staircase into a smooth reference path.
+        Stability needs w_data + 2*w_smooth <= 1 (else the diffusion term diverges)."""
+        seg = np.linalg.norm(np.diff(path, axis=0), axis=1)
+        s = np.concatenate([[0], np.cumsum(seg)])
+        n = max(2, int(s[-1] / ds))
+        tgt = np.linspace(0, s[-1], n)
+        rs = np.stack([np.interp(tgt, s, path[:, 0]), np.interp(tgt, s, path[:, 1])], 1)
+        p = rs.copy(); orig = rs.copy()
+        for _ in range(iters):
+            p[1:-1] += (w_data * (orig[1:-1] - p[1:-1]) +
+                        w_smooth * (p[:-2] + p[2:] - 2 * p[1:-1]))
+        return p
 
     # --- dynamic obstacle position at time t (ping-pong) ---
     @staticmethod
