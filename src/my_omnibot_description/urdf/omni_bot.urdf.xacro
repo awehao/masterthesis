@@ -139,7 +139,11 @@
          file is pulled in from INSIDE a macro; included at robot level it
          raises "'dict' object has no attribute '_setitem'". Declaring them
          here directly is equivalent. -->
-    <xacro:property name="is_ros2" value="true"/>
+    <!-- is_ros2=false makes lite6_robot SKIP its own ros2_control block; we
+         supply lite6_ros2_control_gz.xacro instead, which is identical except
+         that it sets initial_value on the position state interfaces so the arm
+         spawns already tucked instead of at all-zeros. -->
+    <xacro:property name="is_ros2" value="false"/>
     <xacro:property name="use_xacro_load_yaml" value="true"/>
     <xacro:property name="use_len" value="true"/>
     <!-- shared link/material/gazebo helpers the lite6 macros call into
@@ -160,6 +164,10 @@
       prefix=""
       ros2_control_plugin="$(arg arm_ros2_control_plugin)"
       kinematics_params_filename="$(find xarm_description)/config/kinematics/default/lite6_default_kinematics.yaml"/>
+
+    <xacro:include filename="$(find my_omnibot_description)/urdf/lite6_ros2_control_gz.xacro"/>
+    <xacro:lite6_ros2_control_gz prefix=""
+      ros2_control_plugin="$(arg arm_ros2_control_plugin)"/>
 
     <!-- arm base bolted to the top of the mast plate -->
     <joint name="arm_base_joint" type="fixed">

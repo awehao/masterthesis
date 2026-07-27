@@ -1,7 +1,7 @@
 """Phase 2 bring-up: omni_bot WITH the UFACTORY Lite 6 arm, in gz Harmonic.
 
 Spawns the combined robot (base + mast + 6-DOF arm), starts the ros2_control
-controllers for the arm, and (optionally) RViz. The base is still driven by gz
+controllers for the arm, and the Foxglove bridge. The base is still driven by gz
 VelocityControl on /cmd_vel exactly as in the validated navigation stack -- only
 the arm goes through ros2_control -- so nothing about the 98% navigation result
 changes.
@@ -10,7 +10,7 @@ changes.
 
 Arguments
     gui:=false        headless (gz sim -s)
-    rviz:=false       do not start RViz
+    foxglove:=false   do not start the Foxglove bridge (ws://localhost:8765)
     world:=<file>     use a different world (default: the benchmark room)
 
 Check that the arm did not blind the LiDAR:
@@ -46,7 +46,7 @@ def generate_launch_description():
     map_file = os.path.join(bringup, 'maps', 'random_room.yaml')
 
     gui = LaunchConfiguration('gui')
-    rviz = LaunchConfiguration('rviz')
+    foxglove = LaunchConfiguration('foxglove')
     world = LaunchConfiguration('world')
 
     robot_description = ParameterValue(
@@ -90,7 +90,7 @@ def generate_launch_description():
     return LaunchDescription([
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', resource_paths),
         DeclareLaunchArgument('gui', default_value='true'),
-        DeclareLaunchArgument('rviz', default_value='true'),
+        DeclareLaunchArgument('foxglove', default_value='true'),
         DeclareLaunchArgument('world', default_value=default_world),
 
         ExecuteProcess(cmd=['gz', 'sim', '-r', world], output='screen',
@@ -138,8 +138,11 @@ def generate_launch_description():
         RegisterEventHandler(OnProcessExit(target_action=load_jsb,
                                            on_exit=[load_traj])),
 
-        TimerAction(period=10.0, actions=[Node(
-            package='rviz2', executable='rviz2', name='rviz2',
-            parameters=[{'use_sim_time': True}],
-            output='screen', condition=IfCondition(rviz))]),
+        # Foxglove (ws://localhost:8765) is the visualiser used in this project,
+        # not RViz.
+        TimerAction(period=8.0, actions=[Node(
+            package='foxglove_bridge', executable='foxglove_bridge',
+            name='foxglove_bridge',
+            parameters=[{'use_sim_time': True, 'port': 8765}],
+            output='screen', condition=IfCondition(foxglove))]),
     ])

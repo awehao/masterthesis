@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<!--
+  ros2_control block for the Lite 6 under gz_ros2_control, with a TUCK start
+  pose.
+
+  Why not upstream's lite6.ros2_control.xacro: it declares
+  <state_interface name="position"/> with no initial_value, so gz starts every
+  joint at 0. The official "home" in the xArm SRDF is also all zeros, which is
+  fine for a bench-mounted arm but on a mobile base it leaves the arm unfolded
+  and hanging over the chassis. gz_ros2_control reads
+  <param name="initial_value"> on the position state interface, so declaring the
+  block here lets the robot spawn already tucked.
+
+  TUCK pose (found by searching the joint space with FK, see the reasoning in
+  the progress notes):
+      joint2 -2.418, joint3 +4.953, joint5 -1.964, rest 0
+  It satisfies, simultaneously:
+      * every link origin stays >= 0.40 m, i.e. >0.12 m above the chassis top
+        (0.28 m) so the arm never rests on the base,
+      * horizontal radius 0.133 m, well inside the 0.30 m base radius, so the
+        arm does not stick out past the footprint the costmap plans with,
+      * >= 0.20 rad away from every joint limit, so the controller is not
+        starting against a hard stop.
+  Compare with all-zeros: radius 0.087 m but z 0.490..0.780, i.e. the arm stands
+  tall and folds back over itself.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:property name="tuck_j1" value="0.0"/>
+  <xacro:property name="tuck_j2" value="-2.418"/>
+  <xacro:property name="tuck_j3" value="4.953"/>
+  <xacro:property name="tuck_j4" value="0.0"/>
+  <xacro:property name="tuck_j5" value="-1.964"/>
+  <xacro:property name="tuck_j6" value="0.0"/>
+
+  <xacro:macro name="lite6_ros2_control_gz"
+               params="prefix:='' ros2_control_plugin:='gz_ros2_control/GazeboSimSystem'">
+
+    <ros2_control name="${prefix}lite6_gz" type="system">
+      <hardware>
+        <plugin>${ros2_control_plugin}</plugin>
+      </hardware>
+
+      <xacro:macro name="arm_joint" params="num lower upper initial">
+        <joint name="${prefix}joint${num}">
+          <command_interface name="position">
+            <param name="min">${lower}</param>
+            <param name="max">${upper}</param>
+          </command_interface>
+          <command_interface name="velocity">
+            <param name="min">-3.14</param>
+            <param name="max">3.14</param>
+          </command_interface>
+          <state_interface name="position">
+            <param name="initial_value">${initial}</param>
+          </state_interface>
+          <state_interface name="velocity"/>
+          <state_interface name="effort"/>
+        </joint>
+      </xacro:macro>
+
+      <xacro:arm_joint num="1" lower="${-2.0*pi}"  upper="${2.0*pi}"  initial="${tuck_j1}"/>
+      <xacro:arm_joint num="2" lower="-2.61799"    upper="2.61799"    initial="${tuck_j2}"/>
+      <xacro:arm_joint num="3" lower="-0.061087"   upper="5.235988"   initial="${tuck_j3}"/>
+      <xacro:arm_joint num="4" lower="${-2.0*pi}"  upper="${2.0*pi}"  initial="${tuck_j4}"/>
+      <xacro:arm_joint num="5" lower="-2.1642"     upper="2.1642"     initial="${tuck_j5}"/>
+      <xacro:arm_joint num="6" lower="${-2.0*pi}"  upper="${2.0*pi}"  initial="${tuck_j6}"/>
+    </ros2_control>
+
+  </xacro:macro>
+
+</robot>
