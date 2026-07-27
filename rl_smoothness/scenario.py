@@ -8,6 +8,7 @@ here transfers back.
 """
 from __future__ import annotations
 import heapq
+import math
 import numpy as np
 from PIL import Image
 from scipy.ndimage import binary_dilation, distance_transform_edt
@@ -80,23 +81,31 @@ class Scenario:
     def astar(self, start_w, goal_w, occ=None):
         occ = self.occ_infl if occ is None else occ
         s = self.world_to_cell(start_w); g = self.world_to_cell(goal_w)
-        def h(a, b): return np.hypot(a[0] - b[0], a[1] - b[1])
-        openq = [(h(s, g), 0.0, s, None)]
+        # math.hypot on scalars (np.hypot pays numpy-scalar overhead ~1e6 times
+        # per plan); neighbour step costs are precomputed (1 or sqrt(2)).
+        hyp = math.hypot
+        gr, gc_ = g
+        H, W = self.H, self.W
+        nbrs = ((-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
+                (-1, -1, 1.4142135623730951), (-1, 1, 1.4142135623730951),
+                (1, -1, 1.4142135623730951), (1, 1, 1.4142135623730951))
+        openq = [(hyp(s[0] - gr, s[1] - gc_), 0.0, s, None)]
         came = {}; gscore = {s: 0.0}
-        nbrs = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
         while openq:
             _, gc, cur, par = heapq.heappop(openq)
             if cur in came: continue
             came[cur] = par
             if cur == g: break
-            for dr, dc in nbrs:
-                nr, nc = cur[0] + dr, cur[1] + dc
-                if not (0 <= nr < self.H and 0 <= nc < self.W): continue
+            cr, cc = cur
+            for dr, dc, step in nbrs:
+                nr, nc = cr + dr, cc + dc
+                if not (0 <= nr < H and 0 <= nc < W): continue
                 if occ[nr, nc]: continue
-                ng = gc + h(cur, (nr, nc))
-                if ng < gscore.get((nr, nc), 1e18):
-                    gscore[(nr, nc)] = ng
-                    heapq.heappush(openq, (ng + h((nr, nc), g), ng, (nr, nc), cur))
+                ng = gc + step
+                key = (nr, nc)
+                if ng < gscore.get(key, 1e18):
+                    gscore[key] = ng
+                    heapq.heappush(openq, (ng + hyp(nr - gr, nc - gc_), ng, key, cur))
         if g not in came:
             return np.array([start_w, goal_w])              # fallback straight line
         path = []; c = g

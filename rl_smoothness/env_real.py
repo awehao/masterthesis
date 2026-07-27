@@ -22,6 +22,9 @@ import numpy as np
 sys.path.insert(0, '/home/howardchen/masterthesis/src/ammr_wholebody_mpc')
 from ammr_wholebody_mpc.gmpc import GMPC, GMPCConfig            # noqa: E402
 from ammr_wholebody_mpc import se2                              # noqa: E402
+import gmpc_fast                                                # noqa: E402,F401
+# ^ training-only patch: rebuilds the GMPC constraint matrix directly in CSC
+#   instead of scipy lil per-block assignment (bit-identical, ~500x faster).
 
 from scenario import Scenario, DYN, PILLARS, START, GOAL, ROBOT_R   # noqa: E402
 
