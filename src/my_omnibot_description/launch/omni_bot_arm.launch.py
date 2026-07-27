@@ -65,6 +65,14 @@ def generate_launch_description():
     if prev:
         resource_paths += os.pathsep + prev
 
+    # gz loads <plugin filename="gz_ros2_control-system"> from this path only.
+    # Without it the plugin is silently skipped, no controller_manager ever
+    # starts, the spawners hang forever, and with no controller holding the
+    # joints the arm simply collapses under gravity.
+    plugin_paths = os.pathsep.join(
+        [p for p in ['/opt/ros/jazzy/lib',
+                     os.environ.get('GZ_SIM_SYSTEM_PLUGIN_PATH', '')] if p])
+
     spawn = Node(
         package='ros_gz_sim', executable='create',
         arguments=['-name', 'omni_bot', '-topic', 'robot_description',
@@ -77,18 +85,19 @@ def generate_launch_description():
     load_jsb = Node(
         package='controller_manager', executable='spawner',
         arguments=['joint_state_broadcaster', '--controller-manager',
-                   '/controller_manager'],
+                   '/controller_manager', '--controller-manager-timeout', '60'],
         output='screen',
     )
     load_traj = Node(
         package='controller_manager', executable='spawner',
         arguments=['lite6_traj_controller', '--controller-manager',
-                   '/controller_manager'],
+                   '/controller_manager', '--controller-manager-timeout', '60'],
         output='screen',
     )
 
     return LaunchDescription([
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', resource_paths),
+        SetEnvironmentVariable('GZ_SIM_SYSTEM_PLUGIN_PATH', plugin_paths),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('foxglove', default_value='true'),
         DeclareLaunchArgument('world', default_value=default_world),
