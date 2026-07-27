@@ -47,12 +47,19 @@ GOAL_X="${3:-17.0}"
 GOAL_Y="${4:-17.0}"
 METHOD="${5:-gmpc_scan}"     # gmpc_scan | gmpc_truth | mppi | rpp
 
+# GUI=1 runs the very same sequence with the gz window open, so a run can be
+# WATCHED under exactly the benchmark conditions (same waits, same AMCL reset,
+# same goal handshake). Default stays headless: that is how the N=40 numbers
+# were recorded, and rendering steals time from the gpu_lidar.
+GUI="${GUI:-0}"
+if [ "$GUI" = "1" ]; then GUI_ARG="gui:=true"; else GUI_ARG="gui:=false"; fi
+
 case "$METHOD" in
-  gmpc_scan)      LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=scan";                    AMETHOD="gmpc_cbf"; TAG="scan"      ;;
-  gmpc_scan_nosm) LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=scan use_smoother:=false"; AMETHOD="gmpc_cbf"; TAG="scan_nosm" ;;
-  gmpc_truth)     LAUNCH_ARGS="omni_bot_dynamic.launch.py gui:=false obstacle_source:=truth";                   AMETHOD="gmpc_cbf"; TAG="truth"     ;;
-  mppi)           LAUNCH_ARGS="omni_bot_baseline.launch.py gui:=false method:=mppi";                            AMETHOD="mppi";     TAG="mppi"      ;;
-  rpp)            LAUNCH_ARGS="omni_bot_baseline.launch.py gui:=false method:=rpp";                             AMETHOD="rpp";      TAG="rpp"       ;;
+  gmpc_scan)      LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan";                    AMETHOD="gmpc_cbf"; TAG="scan"      ;;
+  gmpc_scan_nosm) LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan use_smoother:=false"; AMETHOD="gmpc_cbf"; TAG="scan_nosm" ;;
+  gmpc_truth)     LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=truth";                   AMETHOD="gmpc_cbf"; TAG="truth"     ;;
+  mppi)           LAUNCH_ARGS="omni_bot_baseline.launch.py $GUI_ARG method:=mppi";                            AMETHOD="mppi";     TAG="mppi"      ;;
+  rpp)            LAUNCH_ARGS="omni_bot_baseline.launch.py $GUI_ARG method:=rpp";                             AMETHOD="rpp";      TAG="rpp"       ;;
   *) echo "ERROR: METHOD (arg 5) = gmpc_scan | gmpc_scan_nosm | gmpc_truth | mppi | rpp"; exit 1 ;;
 esac
 
