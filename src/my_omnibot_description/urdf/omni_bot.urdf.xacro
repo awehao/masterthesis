@@ -167,6 +167,16 @@
       <child link="link_base"/>
       <origin xyz="0 0 0.006" rpy="0 0 0"/>
     </joint>
+
+    <!-- runs a controller_manager inside gz so the 6 arm joints are simulated
+         at the physics rate. The base keeps using gz VelocityControl on
+         /cmd_vel, so the validated navigation stack is untouched. -->
+    <gazebo>
+      <plugin filename="gz_ros2_control-system"
+              name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+        <parameters>$(find my_omnibot_description)/config/lite6_controllers.yaml</parameters>
+      </plugin>
+    </gazebo>
   </xacro:if>
 
 </robot>

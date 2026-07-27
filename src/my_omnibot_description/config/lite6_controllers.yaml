@@ -1,0 +1,43 @@
+# ros2_control controllers for the Lite 6 arm mounted on omni_bot.
+# Loaded by the gz_ros2_control system plugin (see omni_bot.urdf.xacro), which
+# runs a controller_manager INSIDE gz so the arm joints are simulated at the
+# physics rate.
+#
+# Base motion is NOT here: the chassis is driven by gz VelocityControl on
+# /cmd_vel (unchanged from the validated navigation stack). Only the 6 arm
+# joints go through ros2_control.
+controller_manager:
+  ros__parameters:
+    update_rate: 150  # Hz
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    lite6_traj_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+lite6_traj_controller:
+  ros__parameters:
+    joints:
+      - joint1
+      - joint2
+      - joint3
+      - joint4
+      - joint5
+      - joint6
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    constraints:
+      goal_time: 0.5
+      stopped_velocity_tolerance: 0.0
+      joint1: {trajectory: 1.0, goal: 0.01}
+      joint2: {trajectory: 1.0, goal: 0.01}
+      joint3: {trajectory: 1.0, goal: 0.01}
+      joint4: {trajectory: 1.0, goal: 0.01}
+      joint5: {trajectory: 1.0, goal: 0.01}
+      joint6: {trajectory: 1.0, goal: 0.01}
+    state_publish_rate: 25.0
+    action_monitor_rate: 10.0
