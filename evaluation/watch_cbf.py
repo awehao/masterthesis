@@ -42,7 +42,11 @@ class Watch(Node):
         self.odom = self.stat = self.dyn = self.mh = self.cmd = None
         self.wall_dist = None
         self.info = None
-        self.create_subscription(Odometry, '/odom', self._odom, 10)
+        # /odom is published BEST_EFFORT (sensor-style) -> match it or we get
+        # "incompatible QoS ... No messages will be received".
+        sensor_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
+                                durability=DurabilityPolicy.VOLATILE)
+        self.create_subscription(Odometry, '/odom', self._odom, sensor_qos)
         self.create_subscription(Float32MultiArray, '/gmpc/static_obstacles',
                                  lambda m: setattr(self, 'stat', list(m.data)), 10)
         self.create_subscription(Float32MultiArray, '/gmpc/obstacles',
