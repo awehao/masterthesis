@@ -34,7 +34,8 @@ def evaluate(model, n_ep, lag_beta, seed0=10_000):
     from rl_env import ResidualSmoothEnv
     out = {}
     for tag in ('baseline', 'policy'):
-        env = ResidualSmoothEnv(seed=seed0, lag_beta=lag_beta, randomize_seed=False)
+        env = ResidualSmoothEnv(seed=seed0, lag_beta=lag_beta, randomize_seed=False,
+                                train_mode=False)      # full run from START
         dpm, jerk, succ, coll, interv = [], [], 0, 0, []
         for e in range(n_ep):
             obs, _ = env.reset(seed=seed0 + e)

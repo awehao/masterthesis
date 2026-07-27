@@ -71,7 +71,11 @@ class RealAvoidEnv:
         self.reset(seed)
 
     # ------------------------------------------------------------------
-    def reset(self, seed=None):
+    def reset(self, seed=None, start_frac=0.0):
+        """start_frac > 0 spawns the robot that fraction along the planned route
+        (heading along the path tangent) instead of always at START. Training
+        needs this: a full run is ~3000 steps, so fixed-start episodes give very
+        few episodes and almost no state diversity. Evaluation keeps frac=0."""
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         self.pose = np.array([START[0], START[1], np.deg2rad(45)])   # x,y,theta
@@ -82,6 +86,14 @@ class RealAvoidEnv:
         self.known_pillars = []
         self._discover()
         self.path = self._plan()
+        if start_frac > 0.0:
+            idx = int(np.clip(start_frac, 0.0, 0.92) * (len(self.path) - 1))
+            p = self.path[idx]
+            nxt = self.path[min(idx + 3, len(self.path) - 1)]
+            th = float(np.arctan2(nxt[1] - p[1], nxt[0] - p[0]))
+            self.pose = np.array([p[0], p[1], th])
+            self._discover()                     # pillars visible from the new spot
+            self.path = self._plan()             # replan from here
         self.log = dict(u=[], clr=[], interv=[], xy=[])
         return self._obs()
 

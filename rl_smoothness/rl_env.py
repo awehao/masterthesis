@@ -62,16 +62,28 @@ class ResidualSmoothEnv(gym.Env):
 
     metadata = {'render_modes': []}
 
-    def __init__(self, seed=0, lag_beta=0.5, max_steps=3000,
+    def __init__(self, seed=0, lag_beta=0.5, max_steps=5000,
                  w_prog=1.0, w_dsmooth=0.15, w_yaw=0.05, w_interv=0.30,
-                 r_collision=-20.0, r_reached=20.0, randomize_seed=True):
+                 r_collision=-20.0, r_reached=20.0, randomize_seed=True,
+                 train_mode=True, frag_steps=400):
+        """train_mode: short fragments from a random point along the route.
+
+        A full run is ~3000 steps and can even hit the cap, so fixed-start
+        full-length episodes would give only ~170 episodes per 500k steps (far
+        too few for SAC) and would show the policy the same opening every time.
+        Fragments give ~10x more episodes AND cover the whole route. Evaluation
+        uses train_mode=False -> full run from START, directly comparable to the
+        gz benchmark.
+        """
         self.core = RealAvoidEnv(max_steps=max_steps, seed=seed, lag_beta=lag_beta)
         self.w_prog, self.w_dsmooth = w_prog, w_dsmooth
         self.w_yaw, self.w_interv = w_yaw, w_interv
         self.r_collision, self.r_reached = r_collision, r_reached
         self.randomize_seed = randomize_seed
+        self.train_mode, self.frag_steps = train_mode, frag_steps
         self._rng = np.random.default_rng(seed)
         self._u_prev = np.zeros(3)
+        self._ep_steps = 0
 
         obs_dim = self._observe().size
         self.observation_space = spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32)
@@ -96,8 +108,10 @@ class ResidualSmoothEnv(gym.Env):
     def reset(self, seed=None, options=None):
         if seed is None and self.randomize_seed:
             seed = int(self._rng.integers(0, 1_000_000))
-        self.core.reset(seed)
+        frac = float(self._rng.uniform(0.0, 0.9)) if self.train_mode else 0.0
+        self.core.reset(seed, start_frac=frac)
         self._u_prev = np.zeros(3)
+        self._ep_steps = 0
         return self._observe(), {}
 
     def step(self, action):
@@ -127,8 +141,10 @@ class ResidualSmoothEnv(gym.Env):
         if info['reached']:
             reward += self.r_reached
 
+        self._ep_steps += 1
         terminated = bool(info['collided'] or info['reached'])
-        truncated = bool(done_core and not terminated)
+        truncated = bool((done_core and not terminated)
+                         or (self.train_mode and self._ep_steps >= self.frag_steps))
         info = dict(info, interv=interv, progress=progress)
         return self._observe(), float(reward), terminated, truncated, info
 
@@ -140,11 +156,11 @@ class ResidualSmoothEnv(gym.Env):
 if __name__ == '__main__':
     import time
     print(f"gymnasium available: {_HAVE_GYM}")
-    env = ResidualSmoothEnv(seed=0, lag_beta=0.5)
+    env = ResidualSmoothEnv(seed=0, lag_beta=0.5, train_mode=False)
     obs, _ = env.reset(seed=0)
     print(f"obs_dim={obs.size}  act_dim=3  ACT_LIM=±{ACT_LIM}")
 
-    # 1) zero-residual must reproduce the GMPC baseline behaviour
+    # 1) zero-residual, EVAL mode: must reproduce the GMPC baseline behaviour
     t0 = time.time(); n = 0; term = trunc = False
     total_r = 0.0
     while not (term or trunc) and n < 6000:
@@ -157,8 +173,8 @@ if __name__ == '__main__':
           f"deg/m={m.get('deg_per_m', 0):.1f} jerk={m.get('jerk_p95', 0):.2f} "
           f"return={total_r:.1f}")
 
-    # 2) random residual: should still be SAFE (CBF shield) though less smooth
-    env2 = ResidualSmoothEnv(seed=1, lag_beta=0.5)
+    # 2) random residual, EVAL mode: should still be SAFE (CBF shield)
+    env2 = ResidualSmoothEnv(seed=1, lag_beta=0.5, train_mode=False)
     env2.reset(seed=1)
     rng = np.random.default_rng(0)
     term = trunc = False; n = 0; rr = 0.0
@@ -169,3 +185,23 @@ if __name__ == '__main__':
     print(f"random-residual episode: reached={info['reached']} collided={info['collided']} "
           f"deg/m={m2.get('deg_per_m', 0):.1f} return={rr:.1f}")
     print("  (CBF shield should keep collided=False even with random actions)")
+
+    # 3) TRAIN mode: short fragments from varied points along the route
+    print(f"\ntrain_mode fragments (frag_steps={400}):")
+    env3 = ResidualSmoothEnv(seed=7, lag_beta=0.5, train_mode=True, frag_steps=400)
+    lens, starts = [], []
+    t0 = time.time()
+    for ep in range(6):
+        env3.reset()
+        starts.append(env3.core.pose[:2].copy())
+        term = trunc = False; n = 0
+        while not (term or trunc):
+            _, _, term, trunc, info = env3.step(np.zeros(3))
+            n += 1
+        lens.append(n)
+        print(f"  ep{ep}: start=({starts[-1][0]:5.1f},{starts[-1][1]:5.1f}) "
+              f"steps={n:4d} coll={info['collided']} reached={info['reached']}")
+    el = time.time() - t0
+    print(f"  mean {np.mean(lens):.0f} steps/ep, {el/6:.1f}s/ep -> "
+          f"{60*6/el:.0f} ep/min (1 proc); starts spread "
+          f"{np.ptp([s[0] for s in starts]):.1f}x{np.ptp([s[1] for s in starts]):.1f} m")
