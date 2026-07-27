@@ -98,6 +98,15 @@ def generate_launch_description():
     return LaunchDescription([
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', resource_paths),
         SetEnvironmentVariable('GZ_SIM_SYSTEM_PLUGIN_PATH', plugin_paths),
+        # Hybrid-graphics (PRIME on-demand) machine: without these, gz/OGRE's EGL
+        # is routed to Mesa, which cannot drive the NVIDIA card, giving
+        # "failed to create dri2 screen", a software-rendered viewport and a
+        # gpu_lidar that produces no /scan_raw. Same three variables the
+        # navigation launches use.
+        SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
+        SetEnvironmentVariable('__GLX_VENDOR_LIBRARY_NAME', 'nvidia'),
+        SetEnvironmentVariable('__EGL_VENDOR_LIBRARY_FILENAMES',
+                               '/usr/share/glvnd/egl_vendor.d/10_nvidia.json'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('foxglove', default_value='true'),
         DeclareLaunchArgument('world', default_value=default_world),
