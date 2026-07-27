@@ -2,6 +2,11 @@
 <robot name="omni_bot" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <xacro:arg name="use_camera" default="true"/>
+  <!-- Phase 2: UFACTORY Lite 6 arm on a mast above the LiDAR. Default OFF so
+       every existing navigation launch/benchmark keeps the exact validated
+       robot; turn on with  use_arm:=true . -->
+  <xacro:arg name="use_arm" default="false"/>
+  <xacro:arg name="arm_ros2_control_plugin" default="gz_ros2_control/GazeboSimSystem"/>
 
   <xacro:include filename="$(find my_omnibot_description)/urdf/rim.xacro"/>
   <xacro:include filename="$(find my_omnibot_description)/urdf/lidar.xacro"/>
@@ -121,5 +126,47 @@
       <dimensions>2</dimensions>
     </plugin>
   </gazebo>
+
+  <!-- ===== Phase 2: manipulator (UFACTORY Lite 6, 6-DOF) ================
+       Mounted on a mast ABOVE the LiDAR (see arm_mount.xacro for why).
+       Base 3 DOF (x, y, theta) + arm 6 DOF = 9 DOF against a 6-DOF SE(3)
+       end-effector task -> 3 redundant DOF for whole-body coordination.
+       ===================================================================== -->
+  <xacro:if value="$(arg use_arm)">
+    <xacro:include filename="$(find my_omnibot_description)/urdf/arm_mount.xacro"/>
+    <!-- xarm_description expects these three globals. Upstream sets them in
+         _private_macro.xacro with scope="parent", which only works when that
+         file is pulled in from INSIDE a macro; included at robot level it
+         raises "'dict' object has no attribute '_setitem'". Declaring them
+         here directly is equivalent. -->
+    <xacro:property name="is_ros2" value="true"/>
+    <xacro:property name="use_xacro_load_yaml" value="true"/>
+    <xacro:property name="use_len" value="true"/>
+    <!-- shared link/material/gazebo helpers the lite6 macros call into
+         (upstream pulls these in from xarm_device_macro.xacro) -->
+    <xacro:include filename="$(find xarm_description)/urdf/common/common.material.xacro"/>
+    <xacro:common_material prefix=""/>
+    <!-- Absolute file:// path, because gz Harmonic cannot resolve package://
+         (the same fix the omni_bot chassis and roller meshes needed). -->
+    <xacro:property name="mesh_path" value="file://$(find xarm_description)/meshes"/>
+    <xacro:property name="mesh_suffix" value="stl"/>
+    <xacro:include filename="$(find xarm_description)/urdf/common/common.link.xacro"/>
+    <xacro:include filename="$(find xarm_description)/urdf/common/common.gazebo.xacro"/>
+    <xacro:include filename="$(find xarm_description)/urdf/lite6/lite6_robot_macro.xacro"/>
+
+    <xacro:arm_mount parent="base_link"/>
+
+    <xacro:lite6_robot
+      prefix=""
+      ros2_control_plugin="$(arg arm_ros2_control_plugin)"
+      kinematics_params_filename="$(find xarm_description)/config/kinematics/default/lite6_default_kinematics.yaml"/>
+
+    <!-- arm base bolted to the top of the mast plate -->
+    <joint name="arm_base_joint" type="fixed">
+      <parent link="arm_mount_link"/>
+      <child link="link_base"/>
+      <origin xyz="0 0 0.006" rpy="0 0 0"/>
+    </joint>
+  </xacro:if>
 
 </robot>

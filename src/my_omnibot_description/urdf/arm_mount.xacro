@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<!--
+  Mast + plate that carries the UFACTORY Lite 6 arm ABOVE the 2D LiDAR.
+
+  Why a mast instead of bolting the arm to the chassis top:
+    the LiDAR sits at base_link z = 0.2152 (cylinder r 0.036, so it occupies
+    z 0.193..0.237) and scans 360 deg in that plane. An arm base at chassis
+    height would sit inside the scan plane and blind the robot, the same
+    self-occlusion problem the 4 diagonal chassis struts already cause.
+
+  Two design rules keep the LiDAR usable:
+    1. the plate starts ABOVE the LiDAR (z >= 0.245), so nothing of the arm
+       base intersects the scan plane;
+    2. the four risers are placed at bearings 45/135/225/315 deg, exactly the
+       sectors scan_relay ALREADY masks for the chassis struts, and are thin
+       enough (r 0.012 at radius 0.09 gives +-7.7 deg) to stay inside the
+       existing +-15 deg mask. So the arm mount adds NO new blind sector.
+
+  Resulting geometry (base_link frame; base_footprint is 0.05 m lower):
+    plate top / arm base  z = 0.29     -> 0.34 m above ground
+    arm shoulder (joint1) z = 0.5335   -> 0.58 m above ground
+    reach from shoulder   0.44 m       -> works to ~1.0 m high (door handles,
+                                          drawer fronts) and down to ~0.14 m
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="arm_mount" params="parent plate_z:=0.28 plate_r:=0.075
+                                        riser_r:=0.012 riser_pitch:=0.09">
+
+    <!-- plate the arm bolts onto -->
+    <link name="arm_mount_link">
+      <inertial>
+        <mass value="0.6"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="0.0012" iyy="0.0012" izz="0.0022"
+                 ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+      <visual>
+        <geometry><cylinder radius="${plate_r}" length="0.012"/></geometry>
+        <material name="mount_grey"><color rgba="0.35 0.35 0.38 1.0"/></material>
+      </visual>
+      <collision>
+        <geometry><cylinder radius="${plate_r}" length="0.012"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="arm_mount_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="arm_mount_link"/>
+      <origin xyz="0 0 ${plate_z}" rpy="0 0 0"/>
+    </joint>
+
+    <!-- four risers, on the bearings scan_relay already masks -->
+    <xacro:macro name="riser" params="name bearing_deg">
+      <xacro:property name="b" value="${bearing_deg * pi / 180.0}"/>
+      <link name="arm_riser_${name}">
+        <inertial>
+          <mass value="0.05"/>
+          <inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" ixz="0" iyz="0"/>
+        </inertial>
+        <visual>
+          <geometry><cylinder radius="${riser_r}" length="0.06"/></geometry>
+          <material name="riser_grey"><color rgba="0.3 0.3 0.32 1.0"/></material>
+        </visual>
+        <collision>
+          <geometry><cylinder radius="${riser_r}" length="0.06"/></geometry>
+        </collision>
+      </link>
+      <joint name="arm_riser_${name}_joint" type="fixed">
+        <parent link="${parent}"/>
+        <child link="arm_riser_${name}"/>
+        <origin xyz="${riser_pitch * cos(b)} ${riser_pitch * sin(b)} ${plate_z - 0.036}"
+                rpy="0 0 0"/>
+      </joint>
+    </xacro:macro>
+
+    <xacro:riser name="ne" bearing_deg="45"/>
+    <xacro:riser name="nw" bearing_deg="135"/>
+    <xacro:riser name="sw" bearing_deg="225"/>
+    <xacro:riser name="se" bearing_deg="315"/>
+
+  </xacro:macro>
+
+</robot>
