@@ -11,26 +11,30 @@
   <param name="initial_value"> on the position state interface, so declaring the
   block here lets the robot spawn already tucked.
 
-  TUCK pose (found by searching the joint space with FK, see the reasoning in
-  the progress notes):
-      joint2 -2.418, joint3 +4.953, joint5 -1.964, rest 0
-  It satisfies, simultaneously:
-      * every link origin stays >= 0.40 m, i.e. >0.12 m above the chassis top
-        (0.28 m) so the arm never rests on the base,
-      * horizontal radius 0.133 m, well inside the 0.30 m base radius, so the
-        arm does not stick out past the footprint the costmap plans with,
-      * >= 0.20 rad away from every joint limit, so the controller is not
-        starting against a hard stop.
-  Compare with all-zeros: radius 0.087 m but z 0.490..0.780, i.e. the arm stands
-  tall and folds back over itself.
+  TUCK pose, chosen with the real collision meshes (not just joint frames):
+      joint2 -0.082, joint3 +0.089, joint5 +1.679, rest 0
+
+  The problem it fixes: at the official all-zeros "home" the wrist (link6) bottoms
+  out at z = 0.490 while the arm's own base housing (link_base) tops out at
+  0.509, so the hand hangs 2 cm BELOW the base and reads as "inside" the mount.
+  Rotating joint5 lifts the wrist clear.
+
+  Verified with src/my_omnibot_description/scripts/find_tuck_pose.py:
+      lowest moving link  0.527 m  (+0.018 above the arm base top)
+      horizontal radius   0.155 m  (inside the 0.30 m chassis radius, so the
+                                    costmap footprint used for navigation still
+                                    covers the arm)
+      highest point       0.828 m
+  All-zeros for comparison: 0.490 / 0.143 / 0.820, i.e. the same envelope but
+  dipping below the base.
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <xacro:property name="tuck_j1" value="0.0"/>
-  <xacro:property name="tuck_j2" value="-2.418"/>
-  <xacro:property name="tuck_j3" value="4.953"/>
+  <xacro:property name="tuck_j2" value="-0.082"/>
+  <xacro:property name="tuck_j3" value="0.089"/>
   <xacro:property name="tuck_j4" value="0.0"/>
-  <xacro:property name="tuck_j5" value="-1.964"/>
+  <xacro:property name="tuck_j5" value="1.679"/>
   <xacro:property name="tuck_j6" value="0.0"/>
 
   <xacro:macro name="lite6_ros2_control_gz"
