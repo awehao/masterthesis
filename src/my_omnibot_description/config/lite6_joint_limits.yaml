@@ -1,0 +1,61 @@
+# Motion limits for the UFACTORY Lite 6, taken from the official user manual
+# (Lite6-User-Manual-V2.0.0, "Motion Parameters", Tables 1.1 and 1.2).
+#
+#   Table 1.1 working range   J1 +-360 deg, J2 +-150 deg, J3 -3.5..300 deg,
+#                             J4 +-360 deg, J5 +-124 deg, J6 +-360 deg
+#   Table 1.2 joint motion    speed        0..180 deg/s   = 3.1416 rad/s
+#                             acceleration 0..1145 deg/s2 = 19.983 rad/s2
+#                             jerk         0..28647 deg/s3 = 499.99 rad/s3
+#
+# Position, velocity and effort already come from the xarm_description URDF and
+# were verified against Table 1.1 / 1.2 (they match exactly). What the URDF does
+# NOT carry is the acceleration and jerk ceiling, so a trajectory could be
+# commanded that the real controller would reject. Declaring them here lets
+# joint_trajectory_controller enforce the manual's envelope in simulation too,
+# which keeps sim-to-real honest.
+#
+# Note the arm is rated for a 0.6 kg payload; nothing here enforces that, it is a
+# design constraint on what the end effector may carry.
+joint_limits:
+  joint1: &j_fast
+    has_position_limits: true
+    has_velocity_limits: true
+    max_velocity: 3.1416          # rad/s   (180 deg/s)
+    has_acceleration_limits: true
+    max_acceleration: 19.9840     # rad/s^2 (1145 deg/s^2)
+    has_jerk_limits: true
+    max_jerk: 499.9845          # rad/s^3 (28647 deg/s^3)
+    has_effort_limits: true
+    min_position: -6.2832         # -360 deg
+    max_position: 6.2832          # +360 deg
+    max_effort: 50.0
+
+  joint2:
+    <<: *j_fast
+    min_position: -2.6180         # -150 deg
+    max_position: 2.6180          # +150 deg
+    max_effort: 50.0
+
+  joint3:
+    <<: *j_fast
+    min_position: -0.0611         # -3.5 deg
+    max_position: 5.2360          # +300 deg
+    max_effort: 32.0
+
+  joint4:
+    <<: *j_fast
+    min_position: -6.2832
+    max_position: 6.2832
+    max_effort: 32.0
+
+  joint5:
+    <<: *j_fast
+    min_position: -2.1642         # -124 deg
+    max_position: 2.1642          # +124 deg
+    max_effort: 32.0
+
+  joint6:
+    <<: *j_fast
+    min_position: -6.2832
+    max_position: 6.2832
+    max_effort: 20.0
