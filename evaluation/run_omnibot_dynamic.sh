@@ -54,6 +54,11 @@ METHOD="${5:-gmpc_scan}"     # gmpc_scan | gmpc_truth | mppi | rpp
 GUI="${GUI:-0}"
 if [ "$GUI" = "1" ]; then GUI_ARG="gui:=true"; else GUI_ARG="gui:=false"; fi
 
+# ARM=1 mounts the Lite 6 for the run (Phase 2 check: does carrying the arm
+# change navigation?). Default 0 = the exact robot the N=40 numbers came from.
+ARM="${ARM:-0}"
+if [ "$ARM" = "1" ]; then GUI_ARG="$GUI_ARG use_arm:=true"; fi
+
 case "$METHOD" in
   gmpc_scan)      LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan";                    AMETHOD="gmpc_cbf"; TAG="scan"      ;;
   gmpc_scan_nosm) LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan use_smoother:=false"; AMETHOD="gmpc_cbf"; TAG="scan_nosm" ;;

@@ -48,9 +48,10 @@ def generate_launch_description():
     gui = LaunchConfiguration('gui')
     foxglove = LaunchConfiguration('foxglove')
     world = LaunchConfiguration('world')
+    use_arm = LaunchConfiguration('use_arm')
 
     robot_description = ParameterValue(
-        Command(['xacro ', urdf_file, ' use_arm:=true use_camera:=true']),
+        Command(['xacro ', urdf_file, ' use_arm:=', use_arm, ' use_camera:=true']),
         value_type=str,
     )
 
@@ -110,6 +111,9 @@ def generate_launch_description():
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('foxglove', default_value='true'),
         DeclareLaunchArgument('world', default_value=default_world),
+        # use_arm:=false spawns the plain navigation robot through this same
+        # launch, which is what makes an arm / no-arm A-B comparison fair.
+        DeclareLaunchArgument('use_arm', default_value='true'),
 
         ExecuteProcess(cmd=['gz', 'sim', '-r', world], output='screen',
                        condition=IfCondition(gui)),

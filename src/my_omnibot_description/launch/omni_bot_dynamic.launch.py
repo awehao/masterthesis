@@ -69,8 +69,10 @@ def generate_launch_description():
     gmpc_cmd_topic = PythonExpression(
         ["'cmd_vel_nav' if '", use_smoother, "' == 'true' else 'cmd_vel'"])
 
+    use_arm = LaunchConfiguration('use_arm')
     robot_description = ParameterValue(
-        Command(['xacro ', urdf_file, ' use_camera:=false']), value_type=str)
+        Command(['xacro ', urdf_file, ' use_camera:=false use_arm:=', use_arm]),
+        value_type=str)
 
     configured_nav_params = RewrittenYaml(
         source_file=nav_params,
@@ -82,10 +84,16 @@ def generate_launch_description():
         convert_types=True)
 
     # gz mesh resolution for the chassis/roller STLs (see omni_bot_gazebo.launch)
-    rp = os.pathsep.join([os.path.dirname(desc_pkg)])
+    rp = os.pathsep.join([os.path.dirname(desc_pkg),
+                          os.path.dirname(get_package_share_directory('xarm_description'))])
     prev = os.environ.get('GZ_SIM_RESOURCE_PATH', '')
     if prev:
         rp = rp + os.pathsep + prev
+    # gz_ros2_control-system lives here; without this path gz silently skips the
+    # plugin, no controller_manager starts and the arm joints go limp.
+    plugin_paths = os.pathsep.join(
+        [q for q in ['/opt/ros/jazzy/lib',
+                     os.environ.get('GZ_SIM_SYSTEM_PLUGIN_PATH', '')] if q])
 
     # one bridge: robot topics + per-obstacle cmd_vel (driver -> gz)
     bridge_args = [
@@ -188,7 +196,11 @@ def generate_launch_description():
 
     return LaunchDescription([
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', rp),
+        SetEnvironmentVariable('GZ_SIM_SYSTEM_PLUGIN_PATH', plugin_paths),
         DeclareLaunchArgument('gui', default_value='true'),
+        # Phase 2: mount the Lite 6. Default false so the benchmark robot and
+        # the recorded N=40 results stay exactly as validated.
+        DeclareLaunchArgument('use_arm', default_value='false'),
         DeclareLaunchArgument('cbf', default_value='true'),
         DeclareLaunchArgument('obstacle_source', default_value='scan',
                               description='scan = real /scan perception; truth = ground-truth'),
