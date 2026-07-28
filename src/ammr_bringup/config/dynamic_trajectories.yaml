@@ -6,10 +6,16 @@
 
 dynamic_obstacles:
 
+  # Slowest sweeper, and the first one the robot meets leaving the spawn column.
+  # FLOOR: scan_obstacle_tracker only forwards a track to the dynamic CBF once
+  # its estimated speed exceeds min_track_speed = 0.10 m/s. Below roughly 0.12
+  # the KF estimate dips under that gate on some frames and this obstacle stops
+  # being seen as dynamic at all, so do not slow it further without also
+  # lowering min_track_speed.
   - name:   dyn_obs_1
     start:  [0.0, 5.55]
     end:    [0.0, 3.0]
-    speed:  0.15
+    speed:  0.13
     radius: 0.25
     height: 1.0
 

@@ -25,7 +25,7 @@ PILLARS = [(4.0, 3.0, 0.30), (9.0, 8.0, 0.30), (14.0, 13.0, 0.30), (2.2, 6.5, 0.
 
 # dynamic obstacles: ping-pong start<->end at speed, radius 0.25
 DYN = [
-    dict(name='dyn_obs_1', start=(0.0, 5.55), end=(0.0, 3.0),  speed=0.15, r=0.25),
+    dict(name='dyn_obs_1', start=(0.0, 5.55), end=(0.0, 3.0),  speed=0.13, r=0.25),
     dict(name='dyn_obs_2', start=(10.3, 8.4), end=(11.9, 7.5), speed=0.30, r=0.25),
     dict(name='dyn_obs_0', start=(14.1, 7.1), end=(17.1, 7.1), speed=0.30, r=0.25),
     dict(name='dyn_obs_5', start=(5.0, 8.2),  end=(5.0, 9.8),  speed=0.30, r=0.25),
