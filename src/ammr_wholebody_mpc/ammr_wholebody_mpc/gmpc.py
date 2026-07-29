@@ -670,36 +670,29 @@ class GMPC:
         # Only true infeasibility falls through to brake.
         usable = status in ('solved', 'solved inaccurate',
                             'maximum iterations reached')
-        # 'maximum iterations reached' usually still carries a usable sub-optimal
-        # point, but it is NOT guaranteed feasible. Adding the spatio-temporal
-        # cost field made that concrete: an ill-conditioned P drove OSQP into its
-        # iteration cap and the returned point violated even the acceleration box
-        # (measured |du/dt| = 1.07 against a_max = 0.80), so the chassis got a
-        # step change in command. Whatever comes out of a non-converged solve is
-        # therefore checked against the physical limits before it is trusted; if
-        # it fails, hold the previous command rather than emit a jump. A
-        # converged solve satisfied the constraints by construction and skips
-        # the check.
-        if usable and status != 'solved':
-            cand = xi_ref_win[0] + np.asarray(res.x)[:n]
-            cand = np.clip(cand, cfg.u_min, cfg.u_max)
-            if np.any(np.abs(cand - xi_prev) > cfg.a_max * dt + 1e-6):
-                usable = False
-                status = status + ' (rejected: violates a_max)'
         if not usable:
-            # hold the last command; decelerating toward the reference is what
-            # the acceleration box would allow anyway
             delta = np.zeros((N, n))
-            delta[0] = np.clip(xi_prev, cfg.u_min, cfg.u_max) - xi_ref_win[0]
+            delta[0] = -xi_ref_win[0]
         else:
             sol = np.asarray(res.x)
             delta = sol[:Nm].reshape(N, n)
 
         u_opt = xi_ref_win[0] + delta[0]
         u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
-        # final guard: never emit a step the chassis cannot physically follow
-        u_opt = np.clip(u_opt, xi_prev - cfg.a_max * dt, xi_prev + cfg.a_max * dt)
-        u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
+        # Final feasibility guard, applied ONLY to solutions the solver did not
+        # fully converge on. 'maximum iterations reached' usually carries a
+        # usable sub-optimal point, but it is not guaranteed feasible: with the
+        # spatio-temporal cost field an ill-conditioned P pushed OSQP to its
+        # iteration cap and the point it returned violated the acceleration box
+        # (|du/dt| = 1.07 against a_max = 0.80), so the chassis received a step
+        # change. A converged solve already satisfies the box by construction, and
+        # the emergency-brake path deliberately commands zero, so neither is
+        # touched here -- keeping this narrow is what stops the guard from
+        # altering the validated behaviour.
+        if usable and status != 'solved':
+            u_opt = np.clip(u_opt, xi_prev - cfg.a_max * dt,
+                            xi_prev + cfg.a_max * dt)
+            u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
 
         return GMPCResult(u_opt=u_opt, delta_xi_all=delta,
                           e0=e0, solve_time_s=solve_time, status=status,
