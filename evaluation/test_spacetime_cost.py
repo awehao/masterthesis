@@ -113,6 +113,40 @@ def main():
     print('   (vy_cmd should move AWAY from where the obstacle is heading,')
     print('    and grow with W, while solve time stays ~2 ms)')
 
+    # ---- 5. the checks the first version MISSED --------------------------
+    # Verifying "the answer looks sensible" is not enough: the first attempt
+    # passed convexity and the single-step response test, then wrecked the QP's
+    # conditioning in closed loop. OSQP hit its iteration cap and returned a
+    # point violating the acceleration box, which only showed up as a failed
+    # benchmark. So: assert convergence, and assert the emitted command respects
+    # a_max, across the whole range of distances a run actually visits.
+    print('\n5) convergence and acceleration feasibility across the workspace')
+    print(f'   {"W":>6} {"solved":>9} {"maxiter":>9} {"other":>7} '
+          f'{"worst |du/dt| / a_max":>24}')
+    a_max = np.array([0.8, 0.6, 1.2])
+    for W in (0.0, 30.0, 100.0, 300.0):
+        cfg = make(W)
+        solver = GMPC(cfg)
+        n_ok = n_iter = n_bad = 0
+        worst = 0.0
+        for d in np.linspace(0.25, 3.0, 24):
+            for off in (-0.5, -0.2, 0.0, 0.2, 0.5):
+                for vy in (-0.3, 0.0, 0.3):
+                    X_now, X_ref, xi_ref, obs = scene(off, vy, obs_x=d)
+                    r = solver.solve(X_now, X_ref, xi_ref, xi_prev, obs)
+                    if r.status == 'solved':
+                        n_ok += 1
+                    elif 'maximum iterations' in r.status:
+                        n_iter += 1
+                    else:
+                        n_bad += 1
+                    worst = max(worst, float(
+                        np.max(np.abs(r.u_opt - xi_prev) / (a_max * DT))))
+        tot = n_ok + n_iter + n_bad
+        print(f'   {W:>6.0f} {100*n_ok/tot:>8.1f}% {100*n_iter/tot:>8.1f}% '
+              f'{100*n_bad/tot:>6.1f}% {worst:>24.3f}')
+    print('   (worst ratio must stay <= 1.000, else the chassis gets a jump)')
+
 
 if __name__ == '__main__':
     main()

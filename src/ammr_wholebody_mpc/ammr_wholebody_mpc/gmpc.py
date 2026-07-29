@@ -333,6 +333,20 @@ def _build_spacetime_cost(cfg: GMPCConfig, X_ref_win, Phi, Gamma, e0, obstacles)
     if not obstacles or cfg.st_weight <= 0.0:
         return P_add, q_add
 
+    # (1) SCALE NORMALISATION. The raw Gaussian has curvature ~ W / sigma^2, so
+    # at sigma 0.6 a weight of 100 injects a Hessian of order 278 into a P built
+    # from Q=15, R=2, S=15, i.e. order 10. That wrecked the conditioning: OSQP
+    # hit its 8000-iteration cap and returned a point violating even the
+    # acceleration box (measured jerk 1.07 against a_max 0.80). Anchoring the
+    # weight to sigma^2 * trace(Q)/2 keeps the injected curvature at the same
+    # order as the tracking term no matter how W or sigma are tuned, so st_weight
+    # becomes a dimensionless "how hard relative to tracking" knob.
+    q_scale = float(np.trace(cfg.Q)) / 2.0
+    # (2) CURVATURE CLAMP. Even normalised, the Gaussian is steepest as d -> 0,
+    # so a perception spike or a very close pass can still spike one step's
+    # Hessian. Cap each step's contribution at half the tracking weight.
+    h_cap = 0.5 * float(np.max(np.abs(cfg.Q)))
+
     b_all = Phi @ e0                                   # (Nm,)
     for k in range(N):
         rows = slice(k * m, k * m + 2)                 # xy part of block k
@@ -348,7 +362,7 @@ def _build_spacetime_cost(cfg: GMPCConfig, X_ref_win, Phi, Gamma, e0, obstacles)
             o = np.array([float(obs['x']) + float(obs.get('vx', 0.0)) * k * dt,
                           float(obs['y']) + float(obs.get('vy', 0.0)) * k * dt])
             d = p_ref - o
-            c = cfg.st_weight * math.exp(-float(d @ d) / (2.0 * s2))
+            c = cfg.st_weight * q_scale * s2 * math.exp(-float(d @ d) / (2.0 * s2))
             if c < 1e-9:                               # negligible this far out
                 continue
             g_tot += c * (-d / s2)
@@ -356,6 +370,9 @@ def _build_spacetime_cost(cfg: GMPCConfig, X_ref_win, Phi, Gamma, e0, obstacles)
         if not H_tot.any() and not g_tot.any():
             continue
         H_psd = _psd_project_2x2(0.5 * (H_tot + H_tot.T))
+        nrm = float(np.linalg.norm(H_psd, 2))
+        if nrm > h_cap:                                # clamp, keep direction
+            H_psd *= h_cap / nrm
         P_add += A_k.T @ H_psd @ A_k
         q_add += A_k.T @ (g_tot + H_psd @ b_k)
     return P_add, q_add
@@ -653,14 +670,35 @@ class GMPC:
         # Only true infeasibility falls through to brake.
         usable = status in ('solved', 'solved inaccurate',
                             'maximum iterations reached')
+        # 'maximum iterations reached' usually still carries a usable sub-optimal
+        # point, but it is NOT guaranteed feasible. Adding the spatio-temporal
+        # cost field made that concrete: an ill-conditioned P drove OSQP into its
+        # iteration cap and the returned point violated even the acceleration box
+        # (measured |du/dt| = 1.07 against a_max = 0.80), so the chassis got a
+        # step change in command. Whatever comes out of a non-converged solve is
+        # therefore checked against the physical limits before it is trusted; if
+        # it fails, hold the previous command rather than emit a jump. A
+        # converged solve satisfied the constraints by construction and skips
+        # the check.
+        if usable and status != 'solved':
+            cand = xi_ref_win[0] + np.asarray(res.x)[:n]
+            cand = np.clip(cand, cfg.u_min, cfg.u_max)
+            if np.any(np.abs(cand - xi_prev) > cfg.a_max * dt + 1e-6):
+                usable = False
+                status = status + ' (rejected: violates a_max)'
         if not usable:
+            # hold the last command; decelerating toward the reference is what
+            # the acceleration box would allow anyway
             delta = np.zeros((N, n))
-            delta[0] = -xi_ref_win[0]
+            delta[0] = np.clip(xi_prev, cfg.u_min, cfg.u_max) - xi_ref_win[0]
         else:
             sol = np.asarray(res.x)
             delta = sol[:Nm].reshape(N, n)
 
         u_opt = xi_ref_win[0] + delta[0]
+        u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
+        # final guard: never emit a step the chassis cannot physically follow
+        u_opt = np.clip(u_opt, xi_prev - cfg.a_max * dt, xi_prev + cfg.a_max * dt)
         u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
 
         return GMPCResult(u_opt=u_opt, delta_xi_all=delta,
