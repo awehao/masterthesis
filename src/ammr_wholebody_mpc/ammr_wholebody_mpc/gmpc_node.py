@@ -106,6 +106,13 @@ class GMPCNode(Node):
         # dynamic clearance (0.08 m of buffer) instead of wall clearance
         # (0.03 m). 1.0 = the original single shared slack.
         self.declare_parameter('cbf_static_slack_scale', 1.0)
+        # Spatio-temporal cost field: soft Gaussian barrier on the PREDICTED
+        # obstacle positions across the horizon. 0 = off (identical to the
+        # validated configuration); independent of cbf_enable so the two can be
+        # switched separately for A/B.
+        self.declare_parameter('st_weight', 0.0)
+        self.declare_parameter('st_sigma0', 0.6)
+        self.declare_parameter('st_growth', 0.02)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
         # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
         # repels from known static geometry and won't dodge into walls.
@@ -182,6 +189,9 @@ class GMPCNode(Node):
             cbf_slack_max_scale=float(self.get_parameter('cbf_slack_max_scale').value),
             cbf_static_slack_scale=float(
                 self.get_parameter('cbf_static_slack_scale').value),
+            st_weight=float(self.get_parameter('st_weight').value),
+            st_sigma0=float(self.get_parameter('st_sigma0').value),
+            st_growth=float(self.get_parameter('st_growth').value),
         )
         self.mpc = GMPC(cfg)
         self.N   = cfg.N

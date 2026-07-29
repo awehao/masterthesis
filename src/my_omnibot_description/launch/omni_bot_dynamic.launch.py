@@ -132,7 +132,14 @@ def generate_launch_description():
         'ax_max': float(os.environ.get('AX_MAX', '0.8')),
         'ay_max': float(os.environ.get('AY_MAX', '0.6')),
         'az_max': float(os.environ.get('AZ_MAX', '1.2')),
+        # Spatio-temporal cost field (proactive detour). ST_WEIGHT=0 is the
+        # validated configuration. CBF_ENABLE is separate so all four
+        # combinations of {CBF, ST} can be benchmarked.
+        'st_weight': float(os.environ.get('ST_WEIGHT', '0.0')),
+        'st_sigma0': float(os.environ.get('ST_SIGMA0', '0.6')),
+        'st_growth': float(os.environ.get('ST_GROWTH', '0.02')),
     }
+    cbf_overrides['cbf_enable'] = os.environ.get('CBF_ENABLE', '1') == '1'
 
     nav_nodes = [
         Node(package='nav2_map_server', executable='map_server', name='map_server',
