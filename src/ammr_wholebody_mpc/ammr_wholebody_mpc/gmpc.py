@@ -333,27 +333,50 @@ def _build_spacetime_cost(cfg: GMPCConfig, X_ref_win, Phi, Gamma, e0, obstacles)
     if not obstacles or cfg.st_weight <= 0.0:
         return P_add, q_add
 
-    # (1) SCALE NORMALISATION. The raw Gaussian has curvature ~ W / sigma^2, so
-    # at sigma 0.6 a weight of 100 injects a Hessian of order 278 into a P built
-    # from Q=15, R=2, S=15, i.e. order 10. That wrecked the conditioning: OSQP
-    # hit its 8000-iteration cap and returned a point violating even the
-    # acceleration box (measured jerk 1.07 against a_max 0.80). Anchoring the
-    # weight to sigma^2 * trace(Q)/2 keeps the injected curvature at the same
-    # order as the tracking term no matter how W or sigma are tuned, so st_weight
-    # becomes a dimensionless "how hard relative to tracking" knob.
-    q_scale = float(np.trace(cfg.Q)) / 2.0
-    # (2) CURVATURE CLAMP. Even normalised, the Gaussian is steepest as d -> 0,
-    # so a perception spike or a very close pass can still spike one step's
-    # Hessian. Cap each step's contribution at half the tracking weight.
-    h_cap = 0.5 * float(np.max(np.abs(cfg.Q)))
+    # (1) SCALE. st_weight IS the peak cost of one obstacle's bump, directly
+    # comparable to the per-step tracking cost e^T Q e. That reference is small:
+    # a 0.1 m deviation against Q = 15 costs only 0.15, so a sensible st_weight
+    # is order 1, not order 100.
+    #
+    # An earlier version multiplied by sigma^2 * trace(Q)/2 to "anchor it to the
+    # tracking weight", which put W = 30 at an effective 200 -- three orders of
+    # magnitude above the cost it was meant to sit beside. The field then simply
+    # overrode tracking: in the 2D sandbox the robot swung wide (path 27.6 ->
+    # 48.9 m, clearance +0.45 m) and never reached the goal, and clamping only
+    # the gradient turned that into oscillation instead (5226 deg/m). Scale
+    # first, clamp second.
+    # (2) CLAMPS on both derivatives. Clamping only the Hessian is not enough:
+    # the GRADIENT lands in q, which is what actually drives the solution. With
+    # W=30 the normalised weight reaches ~200, so |grad| peaks near 200 while the
+    # tracking q is single digits -- the field then dominates completely and the
+    # robot behaves like a pure repulsive-field escaper. Measured in the 2D
+    # sandbox: clearance ballooned to +0.45 m, path length went 27.6 -> 48.9 m,
+    # heading change 192 -> 1389 deg/m, and it never reached the goal. Capping
+    # both derivatives at the tracking scale keeps the field an INFLUENCE rather
+    # than an override, which is the whole point of layering it under the CBF.
+    # Clamp each step's derivatives at the scale of the tracking term evaluated
+    # at a typical 0.1 m deviation, so one very close obstacle cannot swamp the
+    # objective even if st_weight is set too high.
+    q_ref = float(np.max(np.abs(cfg.Q))) * 0.01
+    h_cap = 2.0 * q_ref
+    g_cap = 2.0 * q_ref
 
     b_all = Phi @ e0                                   # (Nm,)
     for k in range(N):
         rows = slice(k * m, k * m + 2)                 # xy part of block k
         R_k = X_ref_win[k][:2, :2]
-        p_ref = X_ref_win[k][:2, 2]
         A_k = R_k @ Gamma[rows, :]                     # (2, Nm)
-        b_k = R_k @ b_all[rows]                        # (2,)
+        # Linearise about the PREDICTED position, not the reference position.
+        # p(k) = p_ref(k) + R_k (Phi e0 + Gamma z)_xy = p_lin(k) + A_k z, so
+        # expanding about p_lin absorbs the offset exactly and leaves no b term.
+        # Expanding about p_ref instead evaluates the gradient wherever the
+        # REFERENCE is, which is fine while the robot tracks it but wrong as soon
+        # as it deviates -- and it deviates most while avoiding. Measured in
+        # closed loop, the push direction was correct 94.7% of the time at
+        # 1.2-1.8 m but only 47.5% at under 0.8 m, i.e. a coin flip exactly when
+        # it matters, because the reference there sits on the far side of the
+        # obstacle from the robot.
+        p_lin = X_ref_win[k][:2, 2] + R_k @ b_all[rows]
         sig = cfg.st_sigma0 * (1.0 + cfg.st_growth * k)
         s2 = sig * sig
         g_tot = np.zeros(2)
@@ -361,20 +384,23 @@ def _build_spacetime_cost(cfg: GMPCConfig, X_ref_win, Phi, Gamma, e0, obstacles)
         for obs in obstacles:
             o = np.array([float(obs['x']) + float(obs.get('vx', 0.0)) * k * dt,
                           float(obs['y']) + float(obs.get('vy', 0.0)) * k * dt])
-            d = p_ref - o
-            c = cfg.st_weight * q_scale * s2 * math.exp(-float(d @ d) / (2.0 * s2))
+            d = p_lin - o
+            c = cfg.st_weight * math.exp(-float(d @ d) / (2.0 * s2))
             if c < 1e-9:                               # negligible this far out
                 continue
             g_tot += c * (-d / s2)
             H_tot += c * (np.outer(d, d) / (s2 * s2) - np.eye(2) / s2)
         if not H_tot.any() and not g_tot.any():
             continue
+        gn = float(np.linalg.norm(g_tot))
+        if gn > g_cap:                                 # clamp, keep direction
+            g_tot = g_tot * (g_cap / gn)
         H_psd = _psd_project_2x2(0.5 * (H_tot + H_tot.T))
         nrm = float(np.linalg.norm(H_psd, 2))
-        if nrm > h_cap:                                # clamp, keep direction
+        if nrm > h_cap:
             H_psd *= h_cap / nrm
         P_add += A_k.T @ H_psd @ A_k
-        q_add += A_k.T @ (g_tot + H_psd @ b_k)
+        q_add += A_k.T @ g_tot
     return P_add, q_add
 
 
