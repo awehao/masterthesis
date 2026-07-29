@@ -178,7 +178,13 @@ def generate_launch_description():
         Node(package='ammr_wholebody_mpc', executable='scan_obstacle_tracker',
              name='scan_obstacle_tracker', output='screen',
              condition=IfCondition(use_scan),
-             parameters=[{'use_sim_time': True}]),
+             parameters=[{'use_sim_time': True,
+                          # A/B knobs; defaults reproduce the single-threshold
+                          # gate the N=40 benchmark ran with.
+                          'release_track_speed': float(
+                              os.environ.get('TRACK_RELEASE_SPEED', '0.10')),
+                          'track_release_frames': int(
+                              os.environ.get('TRACK_RELEASE_FRAMES', '0'))}]),
         # Truth mode: obstacle_aggregator gives the DYNAMIC obstacles from ground
         # truth; we ALSO run scan_obstacle_tracker purely for the STATIC wall
         # points (its dynamic output is dumped to an unused topic) so gmpc_truth

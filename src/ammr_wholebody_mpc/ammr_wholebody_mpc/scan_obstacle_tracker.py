@@ -174,8 +174,12 @@ class ScanObstacleTracker(Node):
         # admitted but only drops out below release_track_speed, then is held
         # for track_release_frames more cycles. Set release == min and frames 0
         # to get the original single-threshold behaviour back.
-        p('release_track_speed', 0.06)    # m/s, exit threshold (<= min_track_speed)
-        p('track_release_frames', 5)      # cycles to keep publishing after exit
+        # Defaults reproduce the original single-threshold behaviour so the
+        # validated configuration is unchanged; the A/B harness turns hysteresis
+        # on explicitly (release 0.06 / 5 frames were the values verified to
+        # remove the flicker).
+        p('release_track_speed', 0.10)    # m/s, exit threshold (<= min_track_speed)
+        p('track_release_frames', 0)      # cycles to keep publishing after exit
         # Net-displacement gate (separates true movers from static objects whose
         # apparent KF velocity is inflated by occlusion/centroid-shift). A track
         # is only published to the dynamic CBF if its AVERAGE speed over the last
