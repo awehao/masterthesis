@@ -47,6 +47,7 @@ Stacked into OSQP standard form  l ≤ A_total z ≤ u.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
@@ -98,6 +99,22 @@ class GMPCConfig:
     # 1.0 reproduces the old shared-slack behaviour exactly (same weight for
     # both blocks), so this is a strict generalisation.
     cbf_static_slack_scale : float = 1.0
+    # ---- Spatio-temporal cost field (proactive detour) ---------------------
+    # Soft Gaussian barrier evaluated at the PREDICTED obstacle position for
+    # every horizon step, added to the QP cost. Where the hard CBF only reacts
+    # once the barrier is about to be violated, this puts a gradient on the cost
+    # metres before the encounter, so the controller drifts aside early instead
+    # of correcting hard and late.
+    #
+    #   C_k(p) = W * exp(-||p(k) - o_i(k)||^2 / (2 sigma_k^2))
+    #   o_i(k) = o_i(0) + v_i * k * dt          (same CV prediction the CBF uses)
+    #   sigma_k = sigma0 * (1 + growth * k)     (prediction gets less certain)
+    #
+    # st_weight = 0 disables it and reproduces the previous solver bit-for-bit,
+    # so it can be A/B'd against (and combined with) the CBF independently.
+    st_weight  : float = 0.0      # W; 0 = off
+    st_sigma0  : float = 0.6      # m, ~ robot radius + obstacle radius
+    st_growth  : float = 0.02     # sigma grows this fraction per horizon step
     # ---- Gain scheduling (danger-aware Q/slack) ----------------------------
     # When min_h is small (robot close to an obstacle's safety zone), we
     #   • drop Q (tracking) so the controller stops fighting safety
@@ -261,6 +278,87 @@ def _build_constraints(cfg: GMPCConfig,
     lb_total = np.concatenate([lb_vel, lb_acc])
     ub_total = np.concatenate([ub_vel, ub_acc])
     return A_total, lb_total, ub_total
+
+
+def _psd_project_2x2(H: np.ndarray) -> np.ndarray:
+    """Clip the eigenvalues of a symmetric 2x2 matrix at zero.
+
+    A Gaussian bump is CONCAVE near its peak, so its Hessian is negative
+    definite there and only turns positive in the radial direction beyond one
+    sigma. Adding it raw to P makes the QP non-convex and OSQP either fails or
+    returns nonsense. Projecting onto the PSD cone (the Gauss-Newton style
+    approximation used throughout nonlinear MPC) keeps the exact gradient while
+    guaranteeing the quadratic term can only ever help convexity. Closed form
+    for 2x2, so the cost is negligible.
+    """
+    a, b, d = H[0, 0], H[0, 1], H[1, 1]
+    tr, det = a + d, a * d - b * b
+    disc = max(0.0, tr * tr / 4.0 - det) ** 0.5
+    l1, l2 = tr / 2.0 + disc, tr / 2.0 - disc
+    if l1 <= 0.0:
+        return np.zeros((2, 2))
+    if l2 >= 0.0:
+        return H
+    # keep only the positive eigenpair
+    if abs(b) > 1e-12:
+        v = np.array([l1 - d, b])
+    else:
+        v = np.array([1.0, 0.0]) if a >= d else np.array([0.0, 1.0])
+    v = v / np.linalg.norm(v)
+    return l1 * np.outer(v, v)
+
+
+def _build_spacetime_cost(cfg: GMPCConfig, X_ref_win, Phi, Gamma, e0, obstacles):
+    """Quadratic model of the spatio-temporal cost field, in OSQP form.
+
+    The horizon position is p(k) = p_ref(k) + R_ref(k) e_xy(k), and the geodesic
+    error follows e = Phi e0 + Gamma z, so the world-frame deviation is affine
+    in the decision variable:
+
+        dp_k = A_k z + b_k ,   A_k = R_ref(k) S_k Gamma ,  b_k = R_ref(k) S_k Phi e0
+
+    Expanding C_k to second order about p_ref(k) and substituting gives a rank-2
+    update per step, so nothing is added to the decision dimension:
+
+        P += sum_k A_k^T H_k A_k ,   q += sum_k A_k^T (g_k + H_k b_k)
+
+    Note e_xy is expressed in the REFERENCE frame, hence the R_ref rotation;
+    dropping it would put the gradient in the wrong direction whenever the
+    reference heading is not zero.
+    """
+    N, dt, m = cfg.N, cfg.dt, 3
+    Nm = N * m
+    P_add = np.zeros((Nm, Nm))
+    q_add = np.zeros(Nm)
+    if not obstacles or cfg.st_weight <= 0.0:
+        return P_add, q_add
+
+    b_all = Phi @ e0                                   # (Nm,)
+    for k in range(N):
+        rows = slice(k * m, k * m + 2)                 # xy part of block k
+        R_k = X_ref_win[k][:2, :2]
+        p_ref = X_ref_win[k][:2, 2]
+        A_k = R_k @ Gamma[rows, :]                     # (2, Nm)
+        b_k = R_k @ b_all[rows]                        # (2,)
+        sig = cfg.st_sigma0 * (1.0 + cfg.st_growth * k)
+        s2 = sig * sig
+        g_tot = np.zeros(2)
+        H_tot = np.zeros((2, 2))
+        for obs in obstacles:
+            o = np.array([float(obs['x']) + float(obs.get('vx', 0.0)) * k * dt,
+                          float(obs['y']) + float(obs.get('vy', 0.0)) * k * dt])
+            d = p_ref - o
+            c = cfg.st_weight * math.exp(-float(d @ d) / (2.0 * s2))
+            if c < 1e-9:                               # negligible this far out
+                continue
+            g_tot += c * (-d / s2)
+            H_tot += c * (np.outer(d, d) / (s2 * s2) - np.eye(2) / s2)
+        if not H_tot.any() and not g_tot.any():
+            continue
+        H_psd = _psd_project_2x2(0.5 * (H_tot + H_tot.T))
+        P_add += A_k.T @ H_psd @ A_k
+        q_add += A_k.T @ (g_tot + H_psd @ b_k)
+    return P_add, q_add
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +554,13 @@ class GMPC:
 
         P_dense = 2.0 * (Gamma.T @ Q_bar @ Gamma + R_bar)
         q_vec   = 2.0 * Gamma.T @ Q_bar @ Phi @ e0
+        # Spatio-temporal cost field — proactive, soft, and independent of the
+        # hard CBF so the two can be switched on and off separately.
+        if cfg.st_weight > 0.0 and obstacles:
+            P_st, q_st = _build_spacetime_cost(
+                cfg, X_ref_win, Phi, Gamma, e0, obstacles)
+            P_dense = P_dense + P_st
+            q_vec   = q_vec + q_st
         # Input-increment (Δu) smoothness cost — soft penalty on control jerk.
         if np.any(cfg.S):
             P_s, q_s = _build_smoothness_terms(cfg.S, xi_ref_win, xi_prev, N)
