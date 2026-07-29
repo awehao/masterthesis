@@ -81,6 +81,23 @@ class GMPCConfig:
     cbf_safe_margin  : float = 0.30       # extra clearance added to obstacle radius [m]
     cbf_slack_weight : float = 1.0e4      # ρ in cost ρ·ε² ; large = CBF near-hard
     cbf_eps0_scale   : float = 100.0      # ε_0 penalty multiplier (near-hard at k=0)
+    # Separate slack for STATIC (wall) constraints, penalised this many times
+    # harder than the dynamic slack.
+    #
+    # Why: with a single ε_k per step, every obstacle at that step shares one
+    # relaxation, so when the robot is pinched between a moving obstacle and a
+    # wall the QP can only relax BOTH by the same amount -- it cannot express
+    # "rather give up dynamic clearance than touch the wall". The two buffers are
+    # not equivalent: a dynamic obstacle carries margin 0.38 against a 0.30 m
+    # robot (0.08 m of give) while a wall point carries 0.33 (only 0.03 m), so an
+    # equal 0.05 m relaxation is still safe on the dynamic side but 0.02 m INTO
+    # the wall. Giving the static rows their own, much more expensive slack makes
+    # the QP eat the dynamic buffer first, which is what stops the controller
+    # squeezing itself against walls while dodging.
+    #
+    # 1.0 reproduces the old shared-slack behaviour exactly (same weight for
+    # both blocks), so this is a strict generalisation.
+    cbf_static_slack_scale : float = 1.0
     # ---- Gain scheduling (danger-aware Q/slack) ----------------------------
     # When min_h is small (robot close to an obstacle's safety zone), we
     #   • drop Q (tracking) so the controller stops fighting safety
@@ -312,6 +329,9 @@ def _build_cbf_horizon(cfg          : GMPCConfig,
     l_vec  = np.zeros(n_rows)
     u_vec  = np.full(n_rows, np.inf)
     h_now  = np.zeros(n_obs)
+    # gmpc_node tags wall points from the map-based static-CBF with their own
+    # (smaller) 'margin'; everything else is a tracked dynamic obstacle.
+    is_static = [bool(o.get('static', 'margin' in o)) for o in obstacles]
 
     for i, obs in enumerate(obstacles):
         ox, oy = float(obs['x']),   float(obs['y'])
@@ -348,11 +368,14 @@ def _build_cbf_horizon(cfg          : GMPCConfig,
 
             row = i * N + k
             A[row, 3*k:3*k + 3] = A_row_3
-            # Slack column — every step gets its own ε_k (including k=0).
-            # ε_0 has a 100× higher penalty in the cost (set in solve()), so
-            # it behaves "near-hard" but the QP stays feasible even when the
-            # robot has accidentally drifted into the safety zone.
-            A[row, Nm + k] = 1.0
+            # Slack column. Each step has its own ε_k (including k=0, whose
+            # penalty is 100x higher so the "now" constraint is near-hard while
+            # the QP stays feasible if the robot has drifted inside the zone).
+            # When slack_dim == 2N the step's slacks are split in two blocks:
+            # [0:N] for dynamic obstacles, [N:2N] for static wall points, the
+            # latter penalised cbf_static_slack_scale times harder so a pinched
+            # robot gives up dynamic clearance instead of hitting the wall.
+            A[row, Nm + k + (N if (is_static[i] and slack_dim >= 2 * N) else 0)] = 1.0
 
             # Lower bound from rearranged CBF inequality
             l_vec[row] = (
@@ -458,7 +481,11 @@ class GMPC:
         min_h       = float('inf')
         n_slack     = 0
         if obstacles:
-            n_slack = N                         # one slack per step including k=0
+            # One slack per step for dynamic rows, and (when the static block is
+            # priced differently) a second per-step slack for the wall rows.
+            split_slack = cfg.cbf_static_slack_scale != 1.0 and \
+                any(o.get('static', 'margin' in o) for o in obstacles)
+            n_slack = 2 * N if split_slack else N
             A_cbf, l_cbf, u_cbf, h_now = _build_cbf_horizon(
                 cfg, X_now, X_ref_win, xi_ref_win, obstacles, n_slack,
             )
@@ -472,9 +499,15 @@ class GMPC:
                 # standard danger-aware slack weight.
                 P_aug = np.zeros((Nm + n_slack, Nm + n_slack))
                 P_aug[:Nm, :Nm] = P_dense
-                P_aug[Nm, Nm] = 2.0 * slack_weight_eff * cfg.cbf_eps0_scale
-                for s in range(1, n_slack):
-                    P_aug[Nm + s, Nm + s] = 2.0 * slack_weight_eff
+                # Block 0 (dynamic) at the nominal weight, block 1 (static walls,
+                # only present when split_slack) scaled up so relaxing a wall
+                # constraint costs far more than relaxing a dynamic one.
+                for blk in range(n_slack // N):
+                    w = slack_weight_eff * (cfg.cbf_static_slack_scale if blk else 1.0)
+                    base = Nm + blk * N
+                    P_aug[base, base] = 2.0 * w * cfg.cbf_eps0_scale
+                    for s in range(1, N):
+                        P_aug[base + s, base + s] = 2.0 * w
                 P_dense = P_aug
                 q_vec   = np.concatenate([q_vec, np.zeros(n_slack)])
 

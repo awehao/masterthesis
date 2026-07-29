@@ -101,6 +101,11 @@ class GMPCNode(Node):
         self.declare_parameter('cbf_danger_thresh',   0.5)
         self.declare_parameter('cbf_Q_min_scale',     0.2)
         self.declare_parameter('cbf_slack_max_scale', 100.0)
+        # Price wall-constraint relaxation this many times higher than dynamic
+        # relaxation, so a robot pinched between a mover and a wall gives up
+        # dynamic clearance (0.08 m of buffer) instead of wall clearance
+        # (0.03 m). 1.0 = the original single shared slack.
+        self.declare_parameter('cbf_static_slack_scale', 1.0)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
         # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
         # repels from known static geometry and won't dodge into walls.
@@ -175,6 +180,8 @@ class GMPCNode(Node):
             cbf_danger_thresh =float(self.get_parameter('cbf_danger_thresh').value),
             cbf_Q_min_scale   =float(self.get_parameter('cbf_Q_min_scale').value),
             cbf_slack_max_scale=float(self.get_parameter('cbf_slack_max_scale').value),
+            cbf_static_slack_scale=float(
+                self.get_parameter('cbf_static_slack_scale').value),
         )
         self.mpc = GMPC(cfg)
         self.N   = cfg.N

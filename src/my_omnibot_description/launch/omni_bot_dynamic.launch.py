@@ -120,6 +120,9 @@ def generate_launch_description():
         'cbf_slack_weight': 5.0e2, 'cbf_eps0_scale': 30.0,
         'cbf_danger_thresh': 0.4, 'cbf_Q_min_scale': 0.20,
         'cbf_slack_max_scale': 20.0, 'obstacles_topic': '/gmpc/obstacles',
+        # Wall-vs-dynamic slack pricing; overridable from the harness for A/B.
+        'cbf_static_slack_scale': float(
+            os.environ.get('CBF_STATIC_SLACK_SCALE', '1.0')),
     }
 
     nav_nodes = [
