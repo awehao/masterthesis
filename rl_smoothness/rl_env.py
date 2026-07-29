@@ -62,7 +62,12 @@ class ResidualSmoothEnv(gym.Env):
 
     metadata = {'render_modes': []}
 
-    def __init__(self, seed=0, lag_beta=0.5, max_steps=5000,
+    # lag_beta MUST stay 0 for smoothness work: the first-order lag was added to
+    # bring the 2D wiggle number closer to gz, but measured on the fixed sandbox
+    # it is a cliff -- beta 0 saturates the acceleration limit 25.3% of the time
+    # (the real system does 17.8%), while beta 0.2 already drops that to 0.1%.
+    # Training with any lag therefore optimises jerk in a world that has none.
+    def __init__(self, seed=0, lag_beta=0.0, max_steps=5000,
                  w_prog=1.0, w_dsmooth=0.15, w_yaw=0.05, w_interv=0.30,
                  r_collision=-20.0, r_reached=20.0, randomize_seed=True,
                  train_mode=True, frag_steps=400):

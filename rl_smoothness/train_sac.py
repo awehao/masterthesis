@@ -64,7 +64,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--steps', type=int, default=200_000)
     ap.add_argument('--n-envs', type=int, default=4)
-    ap.add_argument('--lag-beta', type=float, default=0.5)
+    ap.add_argument('--lag-beta', type=float, default=0.0)  # see ResidualSmoothEnv
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--eval-ep', type=int, default=5)
     ap.add_argument('--out', default='rl_smoothness/runs/sac_residual')
