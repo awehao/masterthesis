@@ -22,6 +22,34 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
+class ShapingMonitor:
+    """Log the three quantities the reward is actually trying to move.
+
+    Without these the only visible signal is ep_rew_mean, which cannot tell a
+    policy that got smoother from one that simply travelled further. The run
+    that failed showed ep_rew_mean ~84 while heading change was 7x worse."""
+
+    def __init__(self):
+        from stable_baselines3.common.callbacks import BaseCallback
+
+        class _CB(BaseCallback):
+            def _on_step(self) -> bool:
+                iv = [i.get('interv') for i in self.locals.get('infos', [])
+                      if i.get('interv') is not None]
+                yr = [i.get('yaw_rate') for i in self.locals.get('infos', [])
+                      if i.get('yaw_rate') is not None]
+                rs = [i.get('residual') for i in self.locals.get('infos', [])
+                      if i.get('residual') is not None]
+                if iv:
+                    self.logger.record('shaping/cbf_interv_mean', float(np.mean(iv)))
+                if yr:
+                    self.logger.record('shaping/yaw_rate_mean', float(np.mean(yr)))
+                if rs:
+                    self.logger.record('shaping/residual_sq_mean', float(np.mean(rs)))
+                return True
+        self.cb = _CB()
+
+
 def make_env(seed, lag_beta, rank=0):
     def _init():
         from rl_env import ResidualSmoothEnv
@@ -63,7 +91,7 @@ def evaluate(model, n_ep, lag_beta, seed0=10_000):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--steps', type=int, default=200_000)
-    ap.add_argument('--n-envs', type=int, default=4)
+    ap.add_argument('--n-envs', type=int, default=8)
     ap.add_argument('--lag-beta', type=float, default=0.0)  # see ResidualSmoothEnv
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--eval-ep', type=int, default=5)
@@ -83,14 +111,15 @@ def main():
     venv = VecMonitor(venv)
 
     model = SAC('MlpPolicy', venv, verbose=1, device=args.device, seed=args.seed,
-                learning_rate=3e-4, buffer_size=300_000, batch_size=256,
+                learning_rate=1e-4, buffer_size=100_000, batch_size=256,
                 tau=0.005, gamma=0.99, train_freq=1, gradient_steps=1,
                 learning_starts=5_000, policy_kwargs=dict(net_arch=[256, 256]),
                 tensorboard_log=os.path.join(args.out, 'tb'))
 
     os.makedirs(args.out, exist_ok=True)
     t0 = time.time()
-    model.learn(total_timesteps=args.steps, progress_bar=False)
+    model.learn(total_timesteps=args.steps, progress_bar=False,
+                callback=ShapingMonitor().cb)
     print(f"training done in {(time.time()-t0)/60:.1f} min")
     model.save(os.path.join(args.out, 'model'))
     venv.close()

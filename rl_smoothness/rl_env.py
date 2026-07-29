@@ -9,12 +9,20 @@ Control flow per step (the "RL 管平滑, CBF 保命" architecture):
 The policy can only nudge the baseline (small ACT_LIM), so it cannot destroy the
 navigation competence it starts from; safety is never delegated to the network.
 
-REWARD -- what we actually want is "same success, less wiggle":
-    + w_prog * progress          along the goal direction (keep it moving)
-    - w_dsmooth * ||Δu||         control-increment penalty (jerk)
-    - w_yaw * |ω|                yaw-rate penalty (the direct wiggle source)
-    - w_interv * ||u_safe-u_nom||^2   CBF INTERVENTION penalty  <-- key term
-    - collision / + reached      hard terminal signals
+REWARD:
+    + c_prog * (d_goal_prev - d_goal_now)   potential-based progress
+    - w_res  * ||du_RL||^2                  keep the residual small
+    - w_yaw  * |omega|                      yaw-rate penalty (wiggle)
+    - w_interv * ||u_safe - u_nom||^2       CBF INTERVENTION penalty  <-- key
+    - collision / + reached                 terminal signals
+
+Progress MUST be potential-based. A first attempt rewarded the velocity
+projected on the goal direction, which pays out every single step with no upper
+bound: over a 400-step fragment it accumulated to about +80 while every
+smoothness term stayed below 5, so the policy learned to thrash sideways as long
+as it kept inching forward. Measured result: heading change went from 135 deg/m
+to 932 deg/m, i.e. +589%. The telescoping form here sums to the distance
+actually covered (~4 m per fragment), which cannot outrun the shaping terms.
 
 The intervention term is the important one: it teaches the agent to PREDICT the
 CBF boundary and steer smoothly around obstacles *before* the shield has to fire.
@@ -68,7 +76,7 @@ class ResidualSmoothEnv(gym.Env):
     # (the real system does 17.8%), while beta 0.2 already drops that to 0.1%.
     # Training with any lag therefore optimises jerk in a world that has none.
     def __init__(self, seed=0, lag_beta=0.0, max_steps=5000,
-                 w_prog=1.0, w_dsmooth=0.15, w_yaw=0.05, w_interv=0.30,
+                 c_prog=5.0, w_res=2.0, w_yaw=0.05, w_interv=0.30,
                  r_collision=-20.0, r_reached=20.0, randomize_seed=True,
                  train_mode=True, frag_steps=400):
         """train_mode: short fragments from a random point along the route.
@@ -81,7 +89,7 @@ class ResidualSmoothEnv(gym.Env):
         gz benchmark.
         """
         self.core = RealAvoidEnv(max_steps=max_steps, seed=seed, lag_beta=lag_beta)
-        self.w_prog, self.w_dsmooth = w_prog, w_dsmooth
+        self.c_prog, self.w_res = c_prog, w_res
         self.w_yaw, self.w_interv = w_yaw, w_interv
         self.r_collision, self.r_reached = r_collision, r_reached
         self.randomize_seed = randomize_seed
@@ -117,6 +125,7 @@ class ResidualSmoothEnv(gym.Env):
         self.core.reset(seed, start_frac=frac)
         self._u_prev = np.zeros(3)
         self._ep_steps = 0
+        self._d_prev = float(np.linalg.norm(np.array(GOAL) - self.core.pose[:2]))
         return self._observe(), {}
 
     def step(self, action):
@@ -124,21 +133,17 @@ class ResidualSmoothEnv(gym.Env):
         _, _, done_core, info = self.core.step(a)
 
         u = self.core.xi_prev                           # command actually applied
-        du = u - self._u_prev
         self._u_prev = u.copy()
 
-        p = self.core.pose[:2]
-        gvec = np.array(GOAL) - p
-        gdist = np.linalg.norm(gvec) + 1e-6
-        th = self.core.pose[2]
-        R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
-        progress = float(gvec @ (R @ u[:2])) / gdist    # m/s toward the goal
+        d_now = float(np.linalg.norm(np.array(GOAL) - self.core.pose[:2]))
+        progress = self._d_prev - d_now                 # metres closed this step
+        self._d_prev = d_now
 
         interv = float(info.get('interv', self.core.log['interv'][-1]
                                 if self.core.log['interv'] else 0.0))
 
-        reward = (self.w_prog * progress
-                  - self.w_dsmooth * float(np.linalg.norm(du)) / self.core.dt * 0.1
+        reward = (self.c_prog * progress
+                  - self.w_res * float(a @ a)           # keep the residual small
                   - self.w_yaw * abs(float(u[2]))
                   - self.w_interv * interv ** 2)       # squared: predict the shield
         if info['collided']:
@@ -150,7 +155,8 @@ class ResidualSmoothEnv(gym.Env):
         terminated = bool(info['collided'] or info['reached'])
         truncated = bool((done_core and not terminated)
                          or (self.train_mode and self._ep_steps >= self.frag_steps))
-        info = dict(info, interv=interv, progress=progress)
+        info = dict(info, interv=interv, progress=progress,
+                    yaw_rate=abs(float(u[2])), residual=float(a @ a))
         return self._observe(), float(reward), terminated, truncated, info
 
     def metrics(self):
