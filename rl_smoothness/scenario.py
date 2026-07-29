@@ -42,9 +42,17 @@ class Scenario:
         dist, idx = distance_transform_edt(~self.occ, return_indices=True)
         self.wall_dist = dist * RES                         # metres
         self.wall_nn = idx                                  # [0]=row, [1]=col of nearest wall
-        # inflated occupancy for A* (keep robot radius clear)
-        rad = int(round((ROBOT_R + 0.10) / RES))
-        self.occ_infl = binary_dilation(self.occ, iterations=rad)
+        # Inflated occupancy for A* (keep robot radius clear).
+        #
+        # This used to be binary_dilation(occ, iterations=8). scipy's default
+        # structuring element is the 4-connected cross, so N iterations grow the
+        # obstacle by N cells in L1, i.e. a DIAMOND: 0.40 m along the axes but
+        # only 0.40/sqrt(2) = 0.283 m diagonally. Measured on this map the A*
+        # path came within 0.283 m of a wall, 0.017 m inside the 0.30 m robot,
+        # and the smoother then cut that to 0.250 m. Thresholding the exact
+        # Euclidean distance transform gives a true disc inflation instead.
+        self.infl_radius = ROBOT_R + 0.10
+        self.occ_infl = self.wall_dist < self.infl_radius
         self.path = self.astar(START, GOAL)
 
     # --- coordinate transforms (ROS map convention, y flipped) ---
@@ -64,17 +72,36 @@ class Scenario:
         wr = int(self.wall_nn[0, row, col]); wc = int(self.wall_nn[1, row, col])
         return self.cell_to_world(wr, wc), float(self.wall_dist[row, col])
 
+    def nearest_wall_batch(self, pts):
+        """Vectorised nearest_wall for an (M,2) array -> (wall_pts (M,2), dist (M,))."""
+        pts = np.asarray(pts, float)
+        col = np.clip(((pts[:, 0] - ORIGIN[0]) / RES).astype(int), 0, self.W - 1)
+        row = np.clip((self.H - 1 - (pts[:, 1] - ORIGIN[1]) / RES).astype(int),
+                      0, self.H - 1)
+        wr = self.wall_nn[0, row, col]
+        wc = self.wall_nn[1, row, col]
+        wx = ORIGIN[0] + (wc + 0.5) * RES
+        wy = ORIGIN[1] + (self.H - 1 - wr + 0.5) * RES
+        return np.stack([wx, wy], 1), self.wall_dist[row, col]
+
     def occ_with_pillars(self, pillars):
         """Wall-inflated occupancy PLUS discovered static pillars stamped in
         (robot-radius inflated). Dynamic obstacles are NOT included -> mimics the
         real /scan_filtered costmap the SmacPlanner sees."""
         occ = self.occ_infl.copy()
         for (x, y, r) in pillars:
-            rc = int(round((r + ROBOT_R + 0.10) / RES))
+            # circular stamp; a square one (the previous version) over-inflates
+            # by sqrt(2) at the corners, which can wall off passages the robot
+            # actually fits through and push the plan somewhere it need not go
+            need = r + self.infl_radius
+            rc = int(np.ceil(need / RES))
             row, col = self.world_to_cell((x, y))
             r0, r1 = max(0, row - rc), min(self.H, row + rc + 1)
             c0, c1 = max(0, col - rc), min(self.W, col + rc + 1)
-            occ[r0:r1, c0:c1] = True
+            rr, cc = np.ogrid[r0:r1, c0:c1]
+            wx = ORIGIN[0] + (cc + 0.5) * RES
+            wy = ORIGIN[1] + (self.H - 1 - rr + 0.5) * RES
+            occ[r0:r1, c0:c1] |= (np.hypot(wx - x, wy - y) < need)
         return occ
 
     # --- A* on the inflated grid (8-connectivity) ---
@@ -113,12 +140,29 @@ class Scenario:
             path.append(self.cell_to_world(*c)); c = came[c]
         return np.array(path[::-1])
 
-    @staticmethod
-    def smooth_path(path, ds=0.15, w_data=0.2, w_smooth=0.25, iters=150):
+    def smooth_path(self, path, ds=0.15, w_data=0.2, w_smooth=0.25, iters=150,
+                    min_clearance=None, w_obs=0.6):
         """Resample by arc length then gradient-descent smooth (= nav2 SimpleSmoother):
         minimise w_data*||p-orig||^2 + w_smooth*||p_{i-1}-2p_i+p_{i+1}||^2.
         Turns the jagged 8-connected A* staircase into a smooth reference path.
-        Stability needs w_data + 2*w_smooth <= 1 (else the diffusion term diverges)."""
+        Stability needs w_data + 2*w_smooth <= 1 (else the diffusion term diverges).
+
+        The pure smoother CUTS CORNERS, and a corner cut across a doorway lands
+        inside the wall: measured on this map it produced paths whose closest
+        approach was 0.250 m from a wall, i.e. 0.05 m INSIDE the 0.30 m robot,
+        with 12.6% of points inside the static-CBF keep-out. Real nav2 does not
+        do that (min 0.350 m, 0% inside), so the 2D sandbox was handing the
+        controller a reference no real planner would emit, and the CBF spent the
+        whole run fighting it. Any conclusion drawn from that sandbox about
+        smoothness was therefore measuring the wrong thing.
+
+        Fix: after each smoothing step, push any point that came closer than
+        `min_clearance` back out along the direction away from its nearest wall
+        cell. `min_clearance` defaults to the robot radius plus the same 0.05 m
+        real nav2 leaves."""
+        # default: do not erode the clearance A* already guaranteed
+        if min_clearance is None:
+            min_clearance = self.infl_radius
         seg = np.linalg.norm(np.diff(path, axis=0), axis=1)
         s = np.concatenate([[0], np.cumsum(seg)])
         n = max(2, int(s[-1] / ds))
@@ -128,6 +172,22 @@ class Scenario:
         for _ in range(iters):
             p[1:-1] += (w_data * (orig[1:-1] - p[1:-1]) +
                         w_smooth * (p[:-2] + p[2:] - 2 * p[1:-1]))
+            if min_clearance > 0.0 and len(p) > 2:
+                wall, d = self.nearest_wall_batch(p[1:-1])
+                too_close = d < min_clearance
+                if too_close.any():
+                    away = p[1:-1][too_close] - wall[too_close]
+                    nrm = np.linalg.norm(away, axis=1, keepdims=True)
+                    # a point sitting exactly on a wall cell has no direction to
+                    # escape along; nudge it back toward its pre-smoothing spot
+                    degenerate = nrm[:, 0] < 1e-9
+                    if degenerate.any():
+                        alt = orig[1:-1][too_close][degenerate] - wall[too_close][degenerate]
+                        away[degenerate] = alt
+                        nrm[degenerate, 0] = np.maximum(
+                            np.linalg.norm(alt, axis=1), 1e-9)
+                    push = (min_clearance - d[too_close])[:, None] * away / nrm
+                    p[1:-1][too_close] += w_obs * push
         return p
 
     # --- dynamic obstacle position at time t (ping-pong) ---
