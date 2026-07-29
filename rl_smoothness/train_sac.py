@@ -34,14 +34,14 @@ class ShapingMonitor:
 
         class _CB(BaseCallback):
             def _on_step(self) -> bool:
-                iv = [i.get('interv') for i in self.locals.get('infos', [])
-                      if i.get('interv') is not None]
+                iv = [i.get('h_depth') for i in self.locals.get('infos', [])
+                      if i.get('h_depth') is not None]
                 yr = [i.get('yaw_rate') for i in self.locals.get('infos', [])
                       if i.get('yaw_rate') is not None]
                 rs = [i.get('residual') for i in self.locals.get('infos', [])
                       if i.get('residual') is not None]
                 if iv:
-                    self.logger.record('shaping/cbf_interv_mean', float(np.mean(iv)))
+                    self.logger.record('shaping/h_depth_mean', float(np.mean(iv)))
                 if yr:
                     self.logger.record('shaping/yaw_rate_mean', float(np.mean(yr)))
                 if rs:

@@ -13,8 +13,20 @@ REWARD:
     + c_prog * (d_goal_prev - d_goal_now)   potential-based progress
     - w_res  * ||du_RL||^2                  keep the residual small
     - w_yaw  * |omega|                      yaw-rate penalty (wiggle)
-    - w_interv * ||u_safe - u_nom||^2       CBF INTERVENTION penalty  <-- key
+    - w_h * max(0, h_danger - min_h)^2      distance to the CBF boundary <-- key
     - collision / + reached                 terminal signals
+
+The boundary term replaces the "CBF intervention penalty" the residual-RL
+literature uses. That formulation assumes the CBF lives ONLY in a shield sitting
+after a safety-agnostic nominal controller, so ||u_safe - u_nom|| is large and
+carries a gradient. Here the full-horizon CBF is already inside the GMPC QP, so
+u_opt is feasible before the shield ever sees it and ||u_safe - u_nom|| is
+IDENTICALLY ZERO at zero residual -- the term contributed nothing to learning.
+Measuring the real intervention, ||u_with_CBF - u_without_CBF||, shows the CBF
+does shape the command 60.5% of the time (median 0.005, p95 0.069), but getting
+it costs a second QP solve per step. min_h is already returned by the solver and
+is below the 0.4 danger threshold 63.9% of the time, so penalising depth into
+that band gives the same "keep the barrier inactive" pressure for free.
 
 Progress MUST be potential-based. A first attempt rewarded the velocity
 projected on the goal direction, which pays out every single step with no upper
@@ -76,7 +88,7 @@ class ResidualSmoothEnv(gym.Env):
     # (the real system does 17.8%), while beta 0.2 already drops that to 0.1%.
     # Training with any lag therefore optimises jerk in a world that has none.
     def __init__(self, seed=0, lag_beta=0.0, max_steps=5000,
-                 c_prog=5.0, w_res=2.0, w_yaw=0.05, w_interv=0.30,
+                 c_prog=5.0, w_res=2.0, w_yaw=0.05, w_h=0.3, h_danger=0.4,
                  r_collision=-20.0, r_reached=20.0, randomize_seed=True,
                  train_mode=True, frag_steps=400):
         """train_mode: short fragments from a random point along the route.
@@ -90,7 +102,7 @@ class ResidualSmoothEnv(gym.Env):
         """
         self.core = RealAvoidEnv(max_steps=max_steps, seed=seed, lag_beta=lag_beta)
         self.c_prog, self.w_res = c_prog, w_res
-        self.w_yaw, self.w_interv = w_yaw, w_interv
+        self.w_yaw, self.w_h, self.h_danger = w_yaw, w_h, h_danger
         self.r_collision, self.r_reached = r_collision, r_reached
         self.randomize_seed = randomize_seed
         self.train_mode, self.frag_steps = train_mode, frag_steps
@@ -142,10 +154,12 @@ class ResidualSmoothEnv(gym.Env):
         interv = float(info.get('interv', self.core.log['interv'][-1]
                                 if self.core.log['interv'] else 0.0))
 
+        min_h = float(info.get('min_h', np.inf))
+        depth = max(0.0, self.h_danger - min_h) if np.isfinite(min_h) else 0.0
         reward = (self.c_prog * progress
                   - self.w_res * float(a @ a)           # keep the residual small
                   - self.w_yaw * abs(float(u[2]))
-                  - self.w_interv * interv ** 2)       # squared: predict the shield
+                  - self.w_h * depth ** 2)              # stay off the CBF boundary
         if info['collided']:
             reward += self.r_collision
         if info['reached']:
@@ -156,7 +170,8 @@ class ResidualSmoothEnv(gym.Env):
         truncated = bool((done_core and not terminated)
                          or (self.train_mode and self._ep_steps >= self.frag_steps))
         info = dict(info, interv=interv, progress=progress,
-                    yaw_rate=abs(float(u[2])), residual=float(a @ a))
+                    yaw_rate=abs(float(u[2])), residual=float(a @ a),
+                    h_depth=depth)
         return self._observe(), float(reward), terminated, truncated, info
 
     def metrics(self):
