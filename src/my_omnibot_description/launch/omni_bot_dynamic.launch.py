@@ -123,6 +123,15 @@ def generate_launch_description():
         # Wall-vs-dynamic slack pricing; overridable from the harness for A/B.
         'cbf_static_slack_scale': float(
             os.environ.get('CBF_STATIC_SLACK_SCALE', '1.0')),
+        # Acceleration ceiling, overridable for the a_max study. jerk p95 comes
+        # out EXACTLY at these numbers on every axis and every configuration
+        # tested, which means the acceleration box is the binding constraint
+        # more than 5% of the time; the sweep asks whether the reported jerk is
+        # a controller defect or simply the limit the controller was given.
+        # MPPI for comparison runs 1.5 / 1.0 / 2.0 and uses about 13% of it.
+        'ax_max': float(os.environ.get('AX_MAX', '0.8')),
+        'ay_max': float(os.environ.get('AY_MAX', '0.6')),
+        'az_max': float(os.environ.get('AZ_MAX', '1.2')),
     }
 
     nav_nodes = [
