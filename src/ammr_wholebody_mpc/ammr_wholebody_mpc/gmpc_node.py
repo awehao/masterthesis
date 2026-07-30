@@ -116,6 +116,9 @@ class GMPCNode(Node):
         # Grow the CBF keep-out with the horizon step to discount far-future
         # constant-velocity predictions. 0 = the validated constant margin.
         self.declare_parameter('cbf_margin_growth', 0.0)
+        # Prefer giving way FORWARD rather than backward when the CBF pushes the
+        # robot off the reference. 0 = no preference (validated behaviour).
+        self.declare_parameter('prog_weight', 0.0)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
         # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
         # repels from known static geometry and won't dodge into walls.
@@ -197,6 +200,7 @@ class GMPCNode(Node):
             st_growth=float(self.get_parameter('st_growth').value),
             cbf_margin_growth=float(
                 self.get_parameter('cbf_margin_growth').value),
+            prog_weight=float(self.get_parameter('prog_weight').value),
         )
         self.mpc = GMPC(cfg)
         self.N   = cfg.N

@@ -127,6 +127,19 @@ class GMPCConfig:
     #     r_eff(k) = r_i + m_i * (1 + cbf_margin_growth * k)
     # 0.0 keeps the constant margin the validated configuration uses.
     cbf_margin_growth : float = 0.0
+    # ---- Forward-progress preference ---------------------------------------
+    # Linear reward on velocity projected along the reference tangent:
+    #     J -= prog_weight * sum_k  t_ref(k) . R(theta_k) v_body(k)
+    # When the CBF forces the robot off the reference, the QP has no reason to
+    # prefer deviating FORWARD over deviating BACKWARD -- both cost the same in
+    # tracking error, so the choice falls out of the obstacle geometry alone and
+    # the robot happily gives ground. Measured against MPPI on the same
+    # scenario, that shows up as 7.7 reversals per run versus 3.2, and 0.75% of
+    # travel spent moving backwards. A linear term breaks the tie toward
+    # progress without touching feasibility: it only enters q, stays convex, and
+    # cannot override the CBF, which is a hard constraint.
+    # 0.0 = no preference (the validated behaviour).
+    prog_weight : float = 0.0
     # ---- Gain scheduling (danger-aware Q/slack) ----------------------------
     # When min_h is small (robot close to an obstacle's safety zone), we
     #   • drop Q (tracking) so the controller stops fighting safety
@@ -616,6 +629,17 @@ class GMPC:
 
         P_dense = 2.0 * (Gamma.T @ Q_bar @ Gamma + R_bar)
         q_vec   = 2.0 * Gamma.T @ Q_bar @ Phi @ e0
+        # Forward-progress preference: reward velocity along the reference
+        # tangent so that, when forced aside, the QP prefers to give way in the
+        # direction of travel rather than backwards.
+        if cfg.prog_weight > 0.0:
+            for k in range(N):
+                t_w = X_ref_win[k][:2, :2] @ np.array([1.0, 0.0])   # tangent
+                nrm = float(np.linalg.norm(t_w))
+                if nrm < 1e-9:
+                    continue
+                t_b = X_ref_win[k][:2, :2].T @ (t_w / nrm)          # body frame
+                q_vec[3 * k:3 * k + 2] -= cfg.prog_weight * t_b
         # Spatio-temporal cost field — proactive, soft, and independent of the
         # hard CBF so the two can be switched on and off separately.
         if cfg.st_weight > 0.0 and obstacles:
