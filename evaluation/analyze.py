@@ -342,7 +342,8 @@ def extract_gt_obstacles(messages):
         if len(ts) >= 1:
             ts = np.array(ts); xy = np.array(xy)
             order = np.argsort(ts)
-            tracks.append((ts[order], xy[order]))
+            # keep the model name: a box must not be scored as a cylinder
+            tracks.append((ts[order], xy[order], topic.split('/')[2]))
     return tracks
 
 
@@ -382,6 +383,19 @@ def load_static_clearance():
         occ = ((255 - img.astype(float)) / 255.0) > th        # walls + red boxes
         dist = ndimage.distance_transform_edt(~occ) * res
         sdf = (share / 'worlds' / _world).read_text()
+        # Dynamic obstacle geometry, so a box is not scored as a 0.25 m cylinder.
+        # The arena carries a 0.7x0.4 box and a 1.2x0.3 cart precisely because
+        # the perception stack fits circles; measuring their clearance with a
+        # circle too would hide whatever the covering discs do or fail to do.
+        globals()['DYN_GEOM'] = {}
+        for m in re.finditer(r'<model name="(dyn_obs_\d+)">(.*?)</model>', sdf, re.DOTALL):
+            body = m.group(2)
+            bx = re.search(r'<box><size>([\d.]+) ([\d.]+)', body)
+            cy = re.search(r'<cylinder><radius>([\d.]+)', body)
+            if bx:
+                DYN_GEOM[m.group(1)] = ('box', float(bx.group(1)), float(bx.group(2)))
+            elif cy:
+                DYN_GEOM[m.group(1)] = ('cyl', float(cy.group(1)), float(cy.group(1)))
         unk = [(float(p.split()[0]), float(p.split()[1]), float(r))
                for p, r in re.findall(
                    r'<model name="unknown_obs_\d+">.*?<pose>([-\d. ]+)</pose>'
@@ -549,12 +563,23 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
             rx, ry = safe_xyth[i, 0], safe_xyth[i, 1]
             d_min = 9.9
             # dynamic obstacles (bridged ground-truth poses)
-            for ots, oxy in gt_tracks:
+            for ots, oxy, oname in gt_tracks:
                 j = int(np.searchsorted(ots, t, side='right') - 1)
                 j = max(0, min(j, len(ots) - 1))
                 ox, oy = oxy[j]
-                d_min = min(d_min,
-                            math.hypot(ox - rx, oy - ry) - OBSTACLE_RADIUS_M - ROBOT_RADIUS_M)
+                # Surface distance for the obstacle's ACTUAL shape. The movers
+                # keep their spawn orientation (VelocityControl is given linear
+                # velocity only), so a box stays axis-aligned and the distance
+                # is the standard point-to-rectangle form.
+                g = globals().get('DYN_GEOM', {}).get(oname)
+                if g and g[0] == 'box':
+                    dx = max(abs(ox - rx) - g[1] / 2.0, 0.0)
+                    dy = max(abs(oy - ry) - g[2] / 2.0, 0.0)
+                    surf = math.hypot(dx, dy)
+                else:
+                    r_o = g[1] if g else OBSTACLE_RADIUS_M
+                    surf = math.hypot(ox - rx, oy - ry) - r_o
+                d_min = min(d_min, surf - ROBOT_RADIUS_M)
             # ALL static geometry (map + unknown_obs): robot EDGE to surface
             if static_clr is not None:
                 d_min = min(d_min, static_clr(rx, ry) - ROBOT_RADIUS_M)

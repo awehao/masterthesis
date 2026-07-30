@@ -95,6 +95,16 @@ def main():
           'A slower mover going the SAME way through the right gap: _blocking '
           'requires fx > 0, so the detour was never designed for this.')
 
+    # non-circular movers: the perception stack fits circles, so this is the
+    # only scenario that can tell whether the multi-disc covering earns its keep
+    write('shapes',
+          ob('dyn_obs_1', (1.2, 1.8), (7.6, 1.8), 0.25) +
+          ob('dyn_obs_2', (7.6, 6.8), (1.2, 6.8), 0.25),
+          'A 0.7x0.4 box and a 1.2x0.3 cart, one each side of the divider. '
+          'Circle fitting degenerates on a flat face and a single lidar view '
+          'cannot see an object\'s depth, so this is where the covering discs '
+          'are actually tested.')
+
     # stationary "mover" past the right gap
     write('parked',
           ob('dyn_obs_0', (RIGHT_GAP + 0.2, 5.4), (RIGHT_GAP + 0.2, 5.4), 0.0),

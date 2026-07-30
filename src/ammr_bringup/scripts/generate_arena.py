@@ -173,6 +173,49 @@ def cyl(name, x, y, r, h, colour, kinematic=False):
     </model>"""
 
 
+# The perception stack fits a circle to each cluster, so a world of nothing but
+# cylinders can never test what happens to a body that is not one. A single
+# lidar view sees only the NEAR FACE of an object -- its depth is unobservable
+# -- and for a flat face the circle fit degenerates. These give the multi-disc
+# covering something real to be measured against.
+DYN_SHAPES = [('dyn_obs_0', 'cylinder', (0.25, 0.25)),
+              ('dyn_obs_1', 'box',      (0.70, 0.40)),
+              ('dyn_obs_2', 'box',      (1.20, 0.30))]
+
+
+def mover(name, x, y, shape, size):
+    if shape == 'cylinder':
+        geom = (f'<cylinder><radius>{size[0]:.3f}</radius>'
+                f'<length>1.0</length></cylinder>')
+    else:
+        geom = f'<box><size>{size[0]:.3f} {size[1]:.3f} 1.000</size></box>'
+    return f"""
+    <model name="{name}">
+      <pose>{x:.3f} {y:.3f} 0.500 0 0 0</pose>
+      <link name="link">
+        <kinematic>true</kinematic>
+        <gravity>false</gravity>
+        <inertial><mass>1.0</mass><inertia><ixx>0.1</ixx><iyy>0.1</iyy>
+          <izz>0.1</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry>{geom}</geometry></collision>
+        <visual name="v">
+          <geometry>{geom}</geometry>
+          <material><ambient>0.05 0.05 0.05 1</ambient>
+                    <diffuse>0.05 0.05 0.05 1</diffuse></material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system"
+              name="gz::sim::systems::VelocityControl"/>
+      <plugin filename="gz-sim-pose-publisher-system"
+              name="gz::sim::systems::PosePublisher">
+        <publish_link_pose>false</publish_link_pose>
+        <publish_model_pose>true</publish_model_pose>
+        <use_pose_vector_msg>false</use_pose_vector_msg>
+        <update_frequency>20</update_frequency>
+      </plugin>
+    </model>"""
+
+
 def save_world(walls, n_dyn=3):
     parts = [box(f'wall_{i}', cx, cy, sx, sy, '0.4 0.4 0.4 1')
              for i, (cx, cy, sx, sy) in enumerate(walls)]
@@ -180,9 +223,8 @@ def save_world(walls, n_dyn=3):
         parts.append(cyl(f'unknown_obs_{i}', x, y, r, WALL_H, '0.9 0.7 0.1 1'))
     # Movers are parked off to one side; the driver commands them onto their
     # scenario segment as soon as it starts.
-    for i in range(n_dyn):
-        parts.append(cyl(f'dyn_obs_{i}', 0.9 + 0.6 * i, 0.9, 0.25, 1.0,
-                         '0.05 0.05 0.05 1', kinematic=True))
+    for i, (nm, shape, size) in enumerate(DYN_SHAPES[:n_dyn]):
+        parts.append(mover(nm, 0.9 + 0.8 * i, 0.9, shape, size))
     sdf = f"""<?xml version="1.0"?>
 <sdf version="1.8">
   <world name="arena">
@@ -220,8 +262,9 @@ def save_world(walls, n_dyn=3):
 """
     p = ROOT / 'worlds' / 'arena.sdf'
     p.write_text(sdf)
+    shapes = ', '.join(f'{n}={s}{tuple(z)}' for n, s, z in DYN_SHAPES[:n_dyn])
     print(f'  worlds/arena.sdf  {len(walls)} walls, {len(UNKNOWN_STATIC)} unknown '
-          f'static, {n_dyn} mover slots')
+          f'static\n                    movers: {shapes}')
 
 
 def main():
