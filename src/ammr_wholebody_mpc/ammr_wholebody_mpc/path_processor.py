@@ -54,11 +54,23 @@ def path_msg_to_xyth(path_msg) -> np.ndarray:
 # Main builder
 # ---------------------------------------------------------------------------
 
+def _interp_xy(path_xyth, cum_s, s):
+    """Position on the path at arclength `s`, linearly interpolated."""
+    M = int(path_xyth.shape[0])
+    j = int(np.searchsorted(cum_s, s) - 1)
+    j = max(0, min(j, M - 2))
+    s0, s1 = cum_s[j], cum_s[j + 1]
+    t = 0.0 if (s1 - s0) < 1e-9 else max(0.0, min(1.0, float((s - s0) / (s1 - s0))))
+    return ((1.0 - t) * path_xyth[j, 0] + t * path_xyth[j + 1, 0],
+            (1.0 - t) * path_xyth[j, 1] + t * path_xyth[j + 1, 1])
+
+
 def build_reference_window(path_xyth : np.ndarray,
                            robot_xyth: np.ndarray,
                            N         : int,
                            dt        : float,
-                           v_nom     : float
+                           v_nom     : float,
+                           yaw_lookahead: float = 0.0
                            ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Parameters
@@ -80,9 +92,17 @@ def build_reference_window(path_xyth : np.ndarray,
       (robot brakes in place).
     * If the path is shorter than the horizon, later samples saturate at the
       goal and ξ_ref decays to zero — equivalent to a "stop at goal" plan.
-    * Yaw is taken from the local path tangent (atan2 of segment direction),
-      not the per-pose orientations in the message. This keeps the reference
-      smooth even when the planner emits identity quaternions.
+    * Yaw is taken from the path itself, not the per-pose orientations in the
+      message, which keeps the reference usable even when the planner emits
+      identity quaternions.
+
+      `yaw_lookahead` (metres) chooses HOW: 0 uses the local segment tangent,
+      and anything positive uses the chord from s to s + yaw_lookahead. The
+      smoother resamples at about 0.15 m, so a single-segment tangent is a
+      direction estimated over 0.15 m of path -- it inherits every wiggle the
+      planner leaves behind, and the robot is asked to rotate for all of them.
+      A chord averages the same wiggles out while still pointing along the path.
+      0 reproduces the validated configuration exactly.
     """
     M = int(path_xyth.shape[0])
     if M == 0:
@@ -127,9 +147,22 @@ def build_reference_window(path_xyth : np.ndarray,
         sample_xyth[k, 0] = (1.0 - t) * path_xyth[j, 0] + t * path_xyth[j + 1, 0]
         sample_xyth[k, 1] = (1.0 - t) * path_xyth[j, 1] + t * path_xyth[j + 1, 1]
 
-        # Yaw from path tangent
-        dx = path_xyth[j + 1, 0] - path_xyth[j, 0]
-        dy = path_xyth[j + 1, 1] - path_xyth[j, 1]
+        # Yaw from the path: local tangent, or a look-ahead chord (see docstring)
+        if yaw_lookahead > 1e-6:
+            ax, ay = _interp_xy(path_xyth, cum_s, s)
+            bx, by = _interp_xy(path_xyth, cum_s,
+                                min(s + yaw_lookahead, total_s))
+            dx, dy = bx - ax, by - ay
+            if dx * dx + dy * dy < 1e-9:
+                # at (or past) the end of the path the chord collapses; fall
+                # back to the chord BEHIND us so the goal approach keeps a
+                # sensible heading instead of snapping to the last tangent
+                ax, ay = _interp_xy(path_xyth, cum_s,
+                                    max(0.0, total_s - yaw_lookahead))
+                dx, dy = bx - ax, by - ay
+        else:
+            dx = path_xyth[j + 1, 0] - path_xyth[j, 0]
+            dy = path_xyth[j + 1, 1] - path_xyth[j, 1]
         if dx * dx + dy * dy > 1e-9:
             sample_xyth[k, 2] = float(np.arctan2(dy, dx))
         else:

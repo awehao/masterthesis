@@ -147,6 +147,8 @@ def generate_launch_description():
         'detour_vx_floor': float(os.environ.get('DETOUR_VX_FLOOR', '0.0')),
         'detour_clear_ref': os.environ.get('DETOUR_CLEAR_REF', '1') == '1',
         'detour_clear_pad': float(os.environ.get('DETOUR_CLEAR_PAD', '0.05')),
+        # Reference heading from a look-ahead chord; 0 = validated tangent.
+        'ref_yaw_lookahead': float(os.environ.get('YAW_LOOKAHEAD', '0.0')),
     }
     cbf_overrides['cbf_enable'] = os.environ.get('CBF_ENABLE', '1') == '1'
 

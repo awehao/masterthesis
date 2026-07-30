@@ -89,6 +89,9 @@ class GMPCNode(Node):
         self.declare_parameter('pose_lpf_alpha', 0.0)
         self.declare_parameter('plan_topic',       '/plan')
         self.declare_parameter('cmd_vel_topic',    '/cmd_vel')
+        # Reference heading from a look-ahead chord instead of the local path
+        # segment (metres). 0 = the validated single-segment tangent.
+        self.declare_parameter('ref_yaw_lookahead', 0.0)
         self.declare_parameter('goal_tolerance_xy', 0.20)
         self.declare_parameter('tf_timeout',        0.10)
 
@@ -172,6 +175,8 @@ class GMPCNode(Node):
         self.pose_lpf_alpha   = float(self.get_parameter('pose_lpf_alpha').value)
         self._pose_filt       = None        # EMA state for the robot pose
         self.goal_tol_xy      = float(self.get_parameter('goal_tolerance_xy').value)
+        self.ref_yaw_lookahead = float(
+            self.get_parameter('ref_yaw_lookahead').value)
         self.tf_timeout_s     = float(self.get_parameter('tf_timeout').value)
 
         Qxy  = float(self.get_parameter('Q_xy').value)
@@ -406,6 +411,7 @@ class GMPCNode(Node):
         X_ref_win, xi_ref_win = build_reference_window(
             path_xyth, robot_xyth,
             N=self.N, dt=self.dt, v_nom=self.v_nom,
+            yaw_lookahead=self.ref_yaw_lookahead,
         )
 
         # 4. Solve
