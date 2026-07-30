@@ -248,7 +248,13 @@ def blend_reference(X_old, xi_old, X_new, xi_new, alpha):
     otherwise. Spreading the same change over a second removes the step without
     discarding the new plan.
     """
+    # smoothstep, not linear. A linear fade has a VELOCITY step at both ends of
+    # the window -- it removes the position jump but hands the controller two
+    # smaller acceleration transients instead. 3t^2 - 2t^3 is C1 at 0 and 1, so
+    # the reference leaves the old plan and arrives at the new one with zero
+    # rate of change.
     a = float(np.clip(alpha, 0.0, 1.0))
+    a = a * a * (3.0 - 2.0 * a)
     n = min(len(X_old), len(X_new))
     out = np.empty((n, 3, 3))
     for k in range(n):

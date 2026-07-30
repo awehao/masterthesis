@@ -429,12 +429,22 @@ class ScanObstacleTracker(Node):
         # even consider dynamic -- unknown static cylinders leaked through it
         # 10-32% of frames and the robot then hit one at -0.036 m.
         movers = [tr for tr in self._tracks if self._is_mover(tr, t_ns)]
+        mv = set(id(tr) for tr in movers)
+        # Tracked clusters that are NOT movers are unknown STATIC objects: real
+        # obstacles that are absent from the map, so the map-based static-CBF
+        # cannot see them, and not dynamic, so the dynamic CBF ignores them.
+        # Until now they were simply dropped and left to the planner's costmap --
+        # which works only while the planner reads the raw scan. Decoupling the
+        # planner removed that owner and the robot hit one (pillar at (9,8),
+        # -0.036 m). They belong in the static-CBF set, at v = 0.
+        statics = [tr for tr in self._tracks
+                   if id(tr) not in mv and tr.age >= self.min_age]
         self._publish(t_ns, scan.header.stamp, movers)
         self._publish_filtered_scan(scan, tx, ty, cyaw, syaw, movers)
-        self._publish_static_obstacles(tx, ty)   # map-based, stable (no scan flicker)
+        self._publish_static_obstacles(tx, ty, statics)
 
     # ------------------------------------------------------------------
-    def _publish_static_obstacles(self, rx, ry):
+    def _publish_static_obstacles(self, rx, ry, statics=()):
         """Solution-1 static-CBF, MAP-BASED (stable). For the robot pose and a few
         small offsets (to catch walls on several sides in a corridor), look up the
         precomputed nearest-wall cell from the KNOWN map and publish those points
@@ -471,6 +481,21 @@ class ScanObstacleTracker(Node):
                                    key=lambda p: math.hypot(p[0]-rx, p[1]-ry))[:self.static_max]:
                 data.extend((wx, wy, self.static_radius, 0.0, 0.0))
             arr.data = data
+        else:
+            arr.data = []
+        # Unknown static objects, appended at their FITTED radius rather than
+        # the small wall-point radius: a pillar is an extended body, and the
+        # circle fit already estimates how extended (0.283-0.313 m measured on
+        # the 0.30 m cylinders). v = 0, so no prediction is involved.
+        data = list(arr.data)
+        for tr in sorted(statics,
+                         key=lambda z: math.hypot(z.kf.position[0]-rx,
+                                                  z.kf.position[1]-ry))[:self.static_max]:
+            sx, sy = tr.kf.position
+            if math.hypot(sx - rx, sy - ry) > self.static_range:
+                continue
+            data.extend((float(sx), float(sy), float(tr.radius), 0.0, 0.0))
+        arr.data = data
         self.static_pub.publish(arr)
 
     # ------------------------------------------------------------------

@@ -145,7 +145,12 @@ def generate_launch_description():
         # threshold ~48% of a run and the acceleration box saturates 21% of the
         # time, which is the "constant jitter" -- not any one event.
         'cbf_alpha': float(os.environ.get('CBF_ALPHA', '3.0')),
-        'cbf_slack_weight': 5.0e2, 'cbf_eps0_scale': 30.0,
+        # How hard the QP is punished for relaxing a CBF constraint, relative to
+        # tracking. At 5e2 the measured wall clearance settles at +0.044 m against
+        # a +0.08 m target -- the QP is choosing to give up clearance to stay on
+        # the path. Raising this shifts that trade towards clearance.
+        'cbf_slack_weight': float(os.environ.get('CBF_SLACK_W', '5.0e2')),
+        'cbf_eps0_scale': 30.0,
         'cbf_danger_thresh': 0.4, 'cbf_Q_min_scale': 0.20,
         'cbf_slack_max_scale': 20.0, 'obstacles_topic': '/gmpc/obstacles',
         # Wall-vs-dynamic slack pricing; overridable from the harness for A/B.
