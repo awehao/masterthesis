@@ -118,6 +118,18 @@ run_trial() {
     # 1. headless dynamic world + omni_bot + (GMPC-CBF | MPPI | RPP) + perception
     echo "[$(date +%T)] [1/5] launch ($([ "$GUI" = "1" ] && echo "GUI" || echo "headless")\
 $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"), method=${METHOD}) ..."
+    # Record the configuration INTO the log. Without this a bag cannot be
+    # attributed to a configuration after the fact, which already led to a
+    # figure being labelled with settings that were never verified.
+    {
+      echo "### CONFIG $(date +%T)"
+      echo "###   launch: $LAUNCH_ARGS"
+      for v in GUI ARM DETOUR DETOUR_OFFSET DETOUR_VX_FLOOR DETOUR_CLEAR_REF \
+               DETOUR_CLEAR_PAD PLAN_BLEND YAW_LOOKAHEAD ST_WEIGHT PROG_WEIGHT \
+               CBF_MARGIN_GROWTH AX_MAX AY_MAX AZ_MAX; do
+        echo "###   $v=${!v-<unset>}"
+      done
+    } >> "$log_file"
     ros2 launch my_omnibot_description $LAUNCH_ARGS \
         >> "$log_file" 2>&1 < /dev/null &
     PIDS+=( $! )
