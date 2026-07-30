@@ -52,7 +52,14 @@ def generate_launch_description():
     map_file   = os.path.join(bringup,  'maps',   'random_room.yaml')
     nav_params = os.path.join(desc_pkg, 'config', 'nav2_localization.yaml')
     gmpc_params= os.path.join(wbmpc_pkg,'config', 'gmpc_params.yaml')
-    traj_file  = os.path.join(bringup,  'config', 'dynamic_trajectories.yaml')
+    # Scenario selection. Every scenario is just a trajectories YAML -- the world
+    # provides four dynamic model slots and four unknown static cylinders, so a
+    # new encounter geometry costs a file, not a world edit.
+    # TRAJ=crossing -> config/dynamic_trajectories_crossing.yaml
+    _traj = os.environ.get('TRAJ', '')
+    traj_file  = os.path.join(
+        bringup, 'config',
+        f'dynamic_trajectories_{_traj}.yaml' if _traj else 'dynamic_trajectories.yaml')
     ekf_config = os.path.join(desc_pkg, 'config', 'ekf_fusion.yaml')
 
     gui          = LaunchConfiguration('gui')
