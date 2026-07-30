@@ -79,6 +79,28 @@ def generate_launch_description():
         param_rewrites={'yaml_filename': map_file,
                         'robot_radius': robot_radius,
                         'inflation_radius': inflation,
+                        # Which scan the PLANNER's costmap marks from.
+                        # /scan          -> it sees movers at their CURRENT position,
+                        #                   so the plan is re-routed around a target
+                        #                   that has moved by the time we get there:
+                        #                   measured 24% of replans shifting the path
+                        #                   ahead of the robot by >0.25 m (max 1.82 m,
+                        #                   heading up to 63 deg), and in the 0.3 s
+                        #                   after such a jump the controller sits at
+                        #                   0.96 of a_max, saturating 88.5% of the
+                        #                   time against 13.5% otherwise.
+                        # /scan_filtered -> movers masked out (the tracker already
+                        #                   publishes this); the planner sees only
+                        #                   static geometry, so its cost field stops
+                        #                   changing and the plan stops flipping.
+                        #                   Dynamic avoidance is then entirely the
+                        #                   CBF's job. NOTE this also means the plan
+                        #                   will route straight down a corridor a
+                        #                   mover sweeps -- see the envelope layer
+                        #                   discussion; the two are complementary.
+                        # Only the GLOBAL costmap is affected here: this launch runs
+                        # no controller_server, so the local costmap block is inert.
+                        'topic': os.environ.get('PLANNER_SCAN', '/scan'),
                         # EKF owns map->odom; AMCL (beam-skip) only emits /amcl_pose
                         'tf_broadcast': 'false'},
         convert_types=True)
