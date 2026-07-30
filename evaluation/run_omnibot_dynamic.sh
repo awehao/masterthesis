@@ -116,7 +116,8 @@ run_trial() {
     echo "=========================================================="
 
     # 1. headless dynamic world + omni_bot + (GMPC-CBF | MPPI | RPP) + perception
-    echo "[$(date +%T)] [1/5] launch (headless, method=${METHOD}) ..."
+    echo "[$(date +%T)] [1/5] launch ($([ "$GUI" = "1" ] && echo "GUI" || echo "headless")\
+$([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"), method=${METHOD}) ..."
     ros2 launch my_omnibot_description $LAUNCH_ARGS \
         >> "$log_file" 2>&1 < /dev/null &
     PIDS+=( $! )
