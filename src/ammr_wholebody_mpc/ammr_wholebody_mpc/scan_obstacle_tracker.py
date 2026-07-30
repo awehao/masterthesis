@@ -104,8 +104,56 @@ def fit_circle(seg: np.ndarray, sensor_xy, r_prior: float, r_max: float):
                     return float(cx), float(cy), float(max(r, ext))
         except np.linalg.LinAlgError:
             pass
+    # Fallback: a flat or very short arc has no circle to fit (the algebraic fit
+    # returns an enormous radius and is rejected above), which happens for every
+    # box-like obstacle seen face-on. Push the arc mean away from the sensor by
+    # the prior radius to guess a centre, then apply the SAME extent floor as
+    # the fitted branch. Without that floor this path returned r_prior alone and
+    # the disc did not even cover the visible face -- measured 14% of the
+    # returned points inside it for a 0.7 x 0.4 m box.
     c = mean + r_prior * away
-    return float(c[0]), float(c[1]), float(r_prior)
+    ext = float(np.max(np.hypot(seg[:, 0] - c[0], seg[:, 1] - c[1])))
+    return float(c[0]), float(c[1]), float(max(r_prior, ext))
+
+
+def cover_discs(seg: np.ndarray, cx: float, cy: float, r_fit: float,
+                r_min: float, aspect: float = 1.8):
+    """Approximate a cluster by a few overlapping discs, in place of one.
+
+    A single disc has to be the CIRCUMSCRIBED circle to stay safe, which for a
+    long body is mostly empty space: a 1.2 x 0.3 m cart needs r = 0.65 m, and
+    with the 0.38 m margin that is a 1.03 m keep-out -- wider than gaps it would
+    physically fit through. Worse, its fitted CENTRE is not viewpoint-invariant
+    for an elongated shape (measured 0.36 m of drift as the viewing angle
+    changes, i.e. a fake 0.12 m/s that clears the 0.10 m/s mover gate).
+
+    Covering the cluster with discs along its principal axis keeps the CBF
+    exactly as it is -- h_j = ||p - o_j||^2 - r_eff_j^2, one per disc, still
+    quadratic, still convex -- while following the actual outline. Returns
+    offsets from (cx, cy) so a moving object carries its shape with it.
+
+    A compact cluster returns a single disc, so round obstacles cost nothing.
+    """
+    if len(seg) < 4:
+        return [(0.0, 0.0, max(r_fit, r_min))]
+    c = seg - np.array([cx, cy])
+    # principal axis of the observed points
+    u, s, vt = np.linalg.svd(c - c.mean(axis=0), full_matrices=False)
+    axis = vt[0]
+    along = c @ axis
+    across = c @ np.array([-axis[1], axis[0]])
+    L, W = float(along.max() - along.min()), float(np.abs(across).max() * 2.0)
+    W = max(W, 2.0 * r_min)
+    if L <= aspect * W:
+        return [(0.0, 0.0, max(r_fit, r_min))]
+    n = int(np.ceil(L / W))
+    rad = max(r_min, W / 2.0 * 1.15)          # overlap so the union has no gaps
+    lo, hi = float(along.min()), float(along.max())
+    out = []
+    for i in range(n):
+        t_i = lo + (hi - lo) * (i + 0.5) / n
+        out.append((float(axis[0] * t_i), float(axis[1] * t_i), rad))
+    return out
 
 
 def cluster_adjacent(pts: np.ndarray, gap: float,
@@ -146,7 +194,8 @@ def cluster_adjacent(pts: np.ndarray, gap: float,
             if extent > max_radius:
                 continue                # too big -> a wall segment, not an obstacle
             cx, cy, radius = fit_circle(seg, sensor_xy, r_prior, max_radius)
-            out.append((cx, cy, radius, len(seg)))
+            discs = cover_discs(seg, cx, cy, radius, r_prior)
+            out.append((cx, cy, radius, len(seg), discs))
     return out
 
 
@@ -198,6 +247,9 @@ class Track:
     # time within 0.2 s of such a change versus 10% elsewhere. Latching the
     # decision removes that churn without weakening the filter.
     is_mover: bool = False
+    # Covering discs as (dx, dy, r) offsets from the tracked centre, refreshed
+    # from the current observation each cycle so the shape follows the object.
+    discs: list = field(default_factory=list)
     release: int = 0
 
 
@@ -560,6 +612,7 @@ class ScanObstacleTracker(Node):
             tr = self._tracks[ti]
             tr.kf.step(t_ns=t_ns, y_xy=(clusters[ci][0], clusters[ci][1]))
             tr.radius = max(self.default_radius, clusters[ci][2])
+            tr.discs = clusters[ci][4]
             tr.last_t_ns = t_ns
             tr.age += 1
             tr.misses = 0
@@ -569,7 +622,8 @@ class ScanObstacleTracker(Node):
             kf = KalmanTracker2D(init_xy=(clusters[ci][0], clusters[ci][1]),
                                  **self._kf_kwargs)
             nt = Track(tid=self._next_id, kf=kf,
-                       radius=max(self.default_radius, clusters[ci][2]), last_t_ns=t_ns)
+                       radius=max(self.default_radius, clusters[ci][2]),
+                       last_t_ns=t_ns, discs=clusters[ci][4])
             nt.hist.append((t_ns, kf.position[0], kf.position[1]))
             self._tracks.append(nt)
             self._next_id += 1
@@ -665,9 +719,18 @@ class ScanObstacleTracker(Node):
         for tr in confirmed:
             px, py = tr.kf.position
             vx, vy = tr.kf.velocity
-            PX, PY, VX, VY = to_pub(px, py, vx, vy)
-            flat.extend([PX, PY, tr.radius, VX, VY])
-            pub_xy.append((PX, PY))
+            # One entry per covering disc. The CBF form is unchanged -- each is
+            # still h = ||p - o||^2 - r_eff^2 -- so the QP stays convex and the
+            # only cost is a few more rows. A compact obstacle yields exactly
+            # one disc, so round obstacles pay nothing; an elongated one is
+            # followed by its outline instead of by a circumscribed circle that
+            # would be mostly empty space (a 1.2 x 0.3 m cart needs r = 0.65,
+            # which with the margin is a 1.03 m keep-out -- wider than gaps it
+            # physically fits through).
+            for dx, dy, rr in (tr.discs or [(0.0, 0.0, tr.radius)]):
+                PX, PY, VX, VY = to_pub(px + dx, py + dy, vx, vy)
+                flat.extend([PX, PY, max(rr, self.default_radius), VX, VY])
+                pub_xy.append((PX, PY))
         msg = Float32MultiArray(); msg.data = flat
         self.pub.publish(msg)
 
