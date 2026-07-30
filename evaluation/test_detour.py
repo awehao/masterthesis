@@ -1,12 +1,13 @@
 """Checks the committed detour before it goes near a benchmark.
 
-The first gz round showed the mechanism works -- reversals 7.7 -> 3.6 per run,
-matching MPPI's 3.2 -- but collided into walls four times in ten trials, because
-the side choice picked "whichever side the obstacle is not on" with no check
-that the side had room. These tests pin the fixes for that, and for two defects
-that the scenario never exercised: in ten trials, 99% of the frames where the
-detour was active had exactly ONE obstacle in the cone, so nothing multi-obstacle
-was tested at all.
+The mechanism works -- reversals 7.7 -> 3.6 per run against MPPI's 3.2 -- but
+grazed movers in half the trials. The cause was geometric: the CBF keep-out is
+r_obs + margin = 0.63 m while the horizon can only ask for vy_max * T = 0.25 m of
+lateral swing, so the bent reference sat INSIDE the keep-out and the tracking
+cost pulled towards points the CBF forbids. These tests pin that fix, the side
+checks, and two defects the scenario never exercised: in ten trials, 99% of the
+frames where the detour was active had exactly ONE obstacle in the cone, so
+nothing multi-obstacle was tested at all.
 
 Run against the source tree (no build needed):
     python3 evaluation/test_detour.py

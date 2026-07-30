@@ -66,6 +66,13 @@ class DetourConfig:
                                    # deciding whether a side is clear
     assoc_gate: float = 0.5        # m, nearest-neighbour gate for re-finding the
                                    # obstacle we committed against
+    clear_pad: float = 0.18        # m, how far OUTSIDE the keep-out to place a
+                                   # projected reference point. 0.05 puts it
+                                   # exactly on the boundary, so any tracking
+                                   # error dips inside: measured min clearance
+                                   # then sat at -0.04..+0.08 m with 5 of 10
+                                   # trials grazing. The pad is the room the
+                                   # tracker is allowed to be wrong by.
 
 
 class DetourState:
@@ -141,9 +148,12 @@ class DetourState:
 
         * **Walls.** Without this the state machine happily picks the side an
           obstacle is not on -- which, next to a wall-hugging mover, is the wall.
-          Measured: with no side check at all, every one of the four collisions
-          in a 10-trial run was into a wall, three of them in the same corridor
-          where dyn_obs_1 runs along x = 0.
+          (This did NOT turn out to be what was causing the collisions: measured
+          properly, all nine grazes across two rounds were against movers, with
+          minimum wall distance never below the 0.30 m robot radius. The check is
+          kept because dodging into a wall is a real failure mode the geometry
+          permits, not because it was the observed one -- see clear_reference for
+          what actually caused them.)
         * **Other movers**, at their PREDICTED positions over the next
           `side_lookahead_s`. Dodging one obstacle into another is the same
           mistake as dodging into a wall, and a mover that is clear right now can
@@ -262,7 +272,7 @@ def apply_offset(X_ref_win, offset, max_offset):
     return out
 
 
-def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.05):
+def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.18):
     """Push reference points out of the CBF's keep-out discs.
 
     This is what makes the detour safe rather than merely committed. The keep-out
