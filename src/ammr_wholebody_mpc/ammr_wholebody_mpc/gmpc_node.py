@@ -128,11 +128,11 @@ class GMPCNode(Node):
         self.declare_parameter('detour_cone_deg', 30.0)
         self.declare_parameter('detour_max_offset', 0.60)
         self.declare_parameter('detour_offset_rate', 0.08)
-        self.declare_parameter('detour_vx_floor', 0.10)
+        self.declare_parameter('detour_vx_floor', 0.0)
         # Keep the tracked reference out of the CBF's keep-out discs. Without
         # it Q pulls towards points the CBF forbids (see clear_reference).
         self.declare_parameter('detour_clear_ref', True)
-        self.declare_parameter('detour_clear_pad', 0.18)
+        self.declare_parameter('detour_clear_pad', 0.05)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
         # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
         # repels from known static geometry and won't dodge into walls.

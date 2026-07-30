@@ -28,12 +28,12 @@ fi
 # Overridable per experiment: e.g. DETOUR_VX_FLOOR=0 ./run_detour_ab.sh noFloor
 DETOUR=1 \
   DETOUR_OFFSET="${DETOUR_OFFSET:-0.35}" \
-  DETOUR_VX_FLOOR="${DETOUR_VX_FLOOR:-0.10}" \
+  DETOUR_VX_FLOOR="${DETOUR_VX_FLOOR:-0.0}" \
   DETOUR_CLEAR_REF="${DETOUR_CLEAR_REF:-1}" \
-  DETOUR_CLEAR_PAD="${DETOUR_CLEAR_PAD:-0.18}" \
+  DETOUR_CLEAR_PAD="${DETOUR_CLEAR_PAD:-0.05}" \
   ./evaluation/run_omnibot_dynamic.sh 10 250 17 17 gmpc_scan
-echo "config: offset=${DETOUR_OFFSET:-0.35} vx_floor=${DETOUR_VX_FLOOR:-0.10}" \
-     "clear_ref=${DETOUR_CLEAR_REF:-1} pad=${DETOUR_CLEAR_PAD:-0.18}" 
+echo "config: offset=${DETOUR_OFFSET:-0.35} vx_floor=${DETOUR_VX_FLOOR:-0.0}" \
+     "clear_ref=${DETOUR_CLEAR_REF:-1} pad=${DETOUR_CLEAR_PAD:-0.05}" 
 
 cp "$R/omnibot_dynamic_gmpc_scan.csv" "$R/final_$TAG.csv"
 mkdir -p "$B/archive_$TAG"

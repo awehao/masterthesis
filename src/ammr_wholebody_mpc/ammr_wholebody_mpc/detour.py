@@ -32,11 +32,26 @@ GMPC is asked to track:
    obstacle instead of resisting the CBF's push -- the detour becomes the thing
    being tracked, not a deviation from it.
 
-3. **Keep moving.** A floor on forward speed while detouring removes "stop and
-   wait" from the solution space.
+3. **Keep the bent reference out of the CBF's keep-out.** The keep-out radius is
+   r_obs + margin = 0.63 m while a one-second horizon can only ask for
+   vy_max * T = 0.25 m of lateral swing, so bending alone leaves the reference
+   INSIDE the barrier: Q then pulls towards points the CBF forbids, the two
+   fight, and the QP pays slack to ride the boundary. Projecting each reference
+   point out to the boundary makes the two agree (`clear_reference`).
+
+A fourth idea, a floor on forward speed to remove "stop and wait" from the
+solution space, was tried and is OFF: as a hard bound on u it also removes
+slowing down, which is the CBF's main lever, so the QP could only answer by
+violating the barrier. Measured over ten trials, dropping the floor took mean
+clearance from +0.001 to +0.037 m and grazes from 5 to 2 while leaving reversals
+unchanged -- the smoothness comes from the side lock alone.
 
 Everything is off when `enable` is false, and the offset decays to zero when the
 state machine is FREE, so the tracked reference is then exactly the planner's.
+
+Validated configuration (10 gz trials each, against the same 10-trial baseline):
+reversals 7.7 -> 4.1, deg/m 90.5 -> 82.4, backward travel 0.75% -> 0.52%, path
+-8.1%, time -8.8%, mean minimum clearance +0.030 -> +0.037 m.
 """
 from __future__ import annotations
 
@@ -56,7 +71,18 @@ class DetourConfig:
     release_behind: float = -0.3   # m, release once it is this far behind
     max_offset: float = 0.60       # m, peak lateral shift of the reference
     offset_rate: float = 0.08      # m per control step, ramp in/out
-    vx_floor: float = 0.10         # m/s, forward speed floor while detouring
+    vx_floor: float = 0.0          # m/s, forward speed floor while detouring.
+                                   # OFF, and it must stay off: as a hard bound
+                                   # on u it removes SLOWING DOWN from the QP's
+                                   # options, so whenever the CBF needs less
+                                   # than this to hold clearance the only
+                                   # feasible answer left is to pay slack and
+                                   # violate the barrier. Measured over 10
+                                   # trials, floor 0.10 -> 0: mean clearance
+                                   # +0.001 -> +0.037 m and grazes 5 -> 2, with
+                                   # reversals UNCHANGED at 4.4 -> 4.1. The
+                                   # smoothness comes entirely from the side
+                                   # lock; the floor was pure cost.
     side_clear: float = 0.33       # m, keep-out from wall points on the chosen
                                    # side (matches static_cbf_safe_margin; the
                                    # robot is a point, so this includes radius)
@@ -66,13 +92,15 @@ class DetourConfig:
                                    # deciding whether a side is clear
     assoc_gate: float = 0.5        # m, nearest-neighbour gate for re-finding the
                                    # obstacle we committed against
-    clear_pad: float = 0.18        # m, how far OUTSIDE the keep-out to place a
-                                   # projected reference point. 0.05 puts it
-                                   # exactly on the boundary, so any tracking
-                                   # error dips inside: measured min clearance
-                                   # then sat at -0.04..+0.08 m with 5 of 10
-                                   # trials grazing. The pad is the room the
-                                   # tracker is allowed to be wrong by.
+    clear_pad: float = 0.05        # m, how far OUTSIDE the keep-out to place a
+                                   # projected reference point. Raising it to
+                                   # 0.18 was tried on the theory that the
+                                   # reference sat too close to the boundary for
+                                   # tracking error to be absorbed; it made
+                                   # clearance slightly WORSE (+0.011 ->
+                                   # +0.001 m), which is what ruled out the
+                                   # reference position as the cause and pointed
+                                   # at vx_floor instead.
 
 
 class DetourState:
@@ -272,7 +300,7 @@ def apply_offset(X_ref_win, offset, max_offset):
     return out
 
 
-def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.18):
+def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.05):
     """Push reference points out of the CBF's keep-out discs.
 
     This is what makes the detour safe rather than merely committed. The keep-out
