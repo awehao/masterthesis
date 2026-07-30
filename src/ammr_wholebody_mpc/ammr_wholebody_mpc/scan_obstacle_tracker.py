@@ -53,16 +53,67 @@ except Exception:                       # pragma: no cover
 # ---------------------------------------------------------------------------
 # Pure-python core (unit-testable without ROS)
 # ---------------------------------------------------------------------------
+def fit_circle(seg: np.ndarray, sensor_xy, r_prior: float, r_max: float):
+    """Centre of the object a laser ARC belongs to, not the centre of the arc.
+
+    A lidar only ever sees the near face of a cylinder, so the mean of the
+    returned points sits ON THE SURFACE, offset towards the sensor by most of
+    the radius -- and as the robot drives past, the visible arc rotates and that
+    mean SLIDES AROUND THE SURFACE. Measured on the four stationary 0.30 m
+    cylinders in this world: the tracked position sat 0.26-0.29 m from the true
+    centre and the KF read 0.16-0.25 m/s (peak 2.1) off objects that never
+    moved. That is above the 0.10 m/s mover gate, so stationary pillars were
+    published as dynamic obstacles in 10-32% of frames -- and the net-
+    displacement gate cannot reject them, because the centroid genuinely does
+    translate.
+
+    An algebraic (Kasa) fit recovers the circle the arc lies on, which is
+    viewpoint-invariant. It is ill-conditioned for a short, nearly straight arc,
+    so the radius is sanity-checked and the fallback is the geometrically honest
+    one: push the arc mean directly away from the sensor by the prior radius.
+    """
+    n = len(seg)
+    mean = seg.mean(axis=0)
+    away = mean - np.asarray(sensor_xy, dtype=float)
+    d = float(np.linalg.norm(away))
+    away = away / d if d > 1e-9 else np.array([1.0, 0.0])
+    if n >= 4:
+        # (x^2+y^2) + D x + E y + F = 0  ->  centre (-D/2, -E/2)
+        c = seg - mean                       # centre the data for conditioning
+        A = np.column_stack([c[:, 0], c[:, 1], np.ones(n)])
+        b = c[:, 0] ** 2 + c[:, 1] ** 2
+        try:
+            sol, *_ = np.linalg.lstsq(A, b, rcond=None)
+            cx, cy = mean[0] + sol[0] / 2.0, mean[1] + sol[1] / 2.0
+            r = math.sqrt(max(sol[2] + (sol[0] ** 2 + sol[1] ** 2) / 4.0, 0.0))
+            # A flat arc fits an enormous circle; a spurious one fits a tiny one.
+            if 0.05 <= r <= 2.0 * r_max:
+                # the fitted centre must be on the far side of the arc, never
+                # between the arc and the sensor
+                if float((np.array([cx, cy]) - mean) @ away) > -1e-3:
+                    return float(cx), float(cy), float(r)
+        except np.linalg.LinAlgError:
+            pass
+    c = mean + r_prior * away
+    return float(c[0]), float(c[1]), float(r_prior)
+
+
 def cluster_adjacent(pts: np.ndarray, gap: float,
-                     min_pts: int, max_radius: float
+                     min_pts: int, max_radius: float,
+                     sensor_xy=(0.0, 0.0), r_prior: float = 0.25
                      ) -> List[Tuple[float, float, float, int]]:
     """Cluster an ORDERED set of 2D points (by laser bearing) into compact
     blobs: start a new cluster whenever the Euclidean step between consecutive
     points exceeds `gap`. Returns [(cx, cy, radius, n_pts), ...] for clusters
     that pass the size gates.
 
+    The reported (cx, cy) is the fitted OBJECT centre, not the arc mean -- see
+    fit_circle for why that distinction is what keeps stationary cylinders out
+    of the dynamic set.
+
     `pts` is (N,2), already ordered by scan angle and already background-
-    subtracted (only dynamic candidate points).
+    subtracted (only dynamic candidate points), in the same frame as
+    `sensor_xy`.
     """
     out: List[Tuple[float, float, float, int]] = []
     if len(pts) == 0:
@@ -78,10 +129,13 @@ def cluster_adjacent(pts: np.ndarray, gap: float,
             start = i
             if len(seg) < min_pts:
                 continue
-            cx, cy = float(seg[:, 0].mean()), float(seg[:, 1].mean())
-            radius = float(np.max(np.hypot(seg[:, 0] - cx, seg[:, 1] - cy)))
-            if radius > max_radius:
+            # extent of the ARC decides whether this is an object or a wall;
+            # the fitted circle decides WHERE it is
+            am = seg.mean(axis=0)
+            extent = float(np.max(np.hypot(seg[:, 0] - am[0], seg[:, 1] - am[1])))
+            if extent > max_radius:
                 continue                # too big -> a wall segment, not an obstacle
+            cx, cy, radius = fit_circle(seg, sensor_xy, r_prior, max_radius)
             out.append((cx, cy, radius, len(seg)))
     return out
 
@@ -361,7 +415,9 @@ class ScanObstacleTracker(Node):
             a += scan.angle_increment
         dyn = np.array(dyn, dtype=float) if dyn else np.empty((0, 2))
 
-        clusters = cluster_adjacent(dyn, self.cluster_gap, self.min_pts, self.max_radius)
+        clusters = cluster_adjacent(dyn, self.cluster_gap, self.min_pts,
+                                    self.max_radius, sensor_xy=(tx, ty),
+                                    r_prior=self.default_radius)
 
         t_ns = (int(scan.header.stamp.sec) * 1_000_000_000
                 + int(scan.header.stamp.nanosec)) or self.get_clock().now().nanoseconds
