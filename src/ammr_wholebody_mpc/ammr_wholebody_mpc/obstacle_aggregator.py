@@ -65,7 +65,9 @@ class ObstacleAggregator(Node):
 
         with open(traj_file, 'r') as f:
             cfg = yaml.safe_load(f) or {}
-        entries = cfg.get('dynamic_obstacles', [])
+        # `or []`: an empty 'dynamic_obstacles:' key parses to None, and the
+        # get() default only applies when the key is MISSING.
+        entries = cfg.get('dynamic_obstacles') or []
         self._radius = {e['name']: float(e.get('radius', 0.25)) for e in entries}
 
         sigma_pos    = float(self.get_parameter('kf_sigma_pos').value)

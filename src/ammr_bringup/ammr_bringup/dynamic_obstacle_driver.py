@@ -46,7 +46,9 @@ class DynamicObstacleDriver(Node):
             cfg = yaml.safe_load(f) or {}
 
         self.obstacles = []
-        for d in cfg.get('dynamic_obstacles', []):
+        # `or []`: an empty 'dynamic_obstacles:' key parses to None, and the
+        # get() default only covers a MISSING key (see the launch file).
+        for d in (cfg.get('dynamic_obstacles') or []):
             ob = {
                 'name'  : d['name'],
                 'start' : [float(d['start'][0]), float(d['start'][1])],

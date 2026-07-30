@@ -180,10 +180,51 @@ def cyl(name, x, y, r, h, colour, kinematic=False):
 # covering something real to be measured against.
 DYN_SHAPES = [('dyn_obs_0', 'cylinder', (0.25, 0.25)),
               ('dyn_obs_1', 'box',      (0.70, 0.40)),
-              ('dyn_obs_2', 'box',      (1.20, 0.30))]
+              ('dyn_obs_2', 'box',      (1.20, 0.30)),
+              # A small body sits near the clustering floor: min_pts points have
+              # to fall on it, and at range a 0.15 m object subtends few beams,
+              # so it can vanish entirely rather than be seen inaccurately.
+              ('dyn_obs_3', 'cylinder', (0.15, 0.15)),
+              # L-shape, built from two boxes sharing a link. Every covering
+              # method here assumes a convex body; an L is the cheapest thing
+              # that is not, and its convex hull contains a large empty notch.
+              ('dyn_obs_4', 'ell',      (0.80, 0.25))]
 
 
 def mover(name, x, y, shape, size):
+    if shape == 'ell':
+        a, b = size                      # arm length, arm width
+        return f"""
+    <model name="{name}">
+      <pose>{x:.3f} {y:.3f} 0.500 0 0 0</pose>
+      <link name="link">
+        <kinematic>true</kinematic>
+        <gravity>false</gravity>
+        <inertial><mass>1.0</mass><inertia><ixx>0.1</ixx><iyy>0.1</iyy>
+          <izz>0.1</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c1"><pose>0 0 0 0 0 0</pose>
+          <geometry><box><size>{a:.3f} {b:.3f} 1.000</size></box></geometry></collision>
+        <visual name="v1"><pose>0 0 0 0 0 0</pose>
+          <geometry><box><size>{a:.3f} {b:.3f} 1.000</size></box></geometry>
+          <material><ambient>0.05 0.05 0.05 1</ambient>
+                    <diffuse>0.05 0.05 0.05 1</diffuse></material></visual>
+        <collision name="c2"><pose>{(a-b)/2:.3f} {(a-b)/2:.3f} 0 0 0 0</pose>
+          <geometry><box><size>{b:.3f} {a:.3f} 1.000</size></box></geometry></collision>
+        <visual name="v2"><pose>{(a-b)/2:.3f} {(a-b)/2:.3f} 0 0 0 0</pose>
+          <geometry><box><size>{b:.3f} {a:.3f} 1.000</size></box></geometry>
+          <material><ambient>0.05 0.05 0.05 1</ambient>
+                    <diffuse>0.05 0.05 0.05 1</diffuse></material></visual>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system"
+              name="gz::sim::systems::VelocityControl"/>
+      <plugin filename="gz-sim-pose-publisher-system"
+              name="gz::sim::systems::PosePublisher">
+        <publish_link_pose>false</publish_link_pose>
+        <publish_model_pose>true</publish_model_pose>
+        <use_pose_vector_msg>false</use_pose_vector_msg>
+        <update_frequency>20</update_frequency>
+      </plugin>
+    </model>"""
     if shape == 'cylinder':
         geom = (f'<cylinder><radius>{size[0]:.3f}</radius>'
                 f'<length>1.0</length></cylinder>')
@@ -216,7 +257,7 @@ def mover(name, x, y, shape, size):
     </model>"""
 
 
-def save_world(walls, n_dyn=3):
+def save_world(walls, n_dyn=5):
     parts = [box(f'wall_{i}', cx, cy, sx, sy, '0.4 0.4 0.4 1')
              for i, (cx, cy, sx, sy) in enumerate(walls)]
     for i, (x, y, r) in enumerate(UNKNOWN_STATIC):

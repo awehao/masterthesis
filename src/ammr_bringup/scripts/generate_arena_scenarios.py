@@ -105,6 +105,44 @@ def main():
           'cannot see an object\'s depth, so this is where the covering discs '
           'are actually tested.')
 
+    # OCCLUSION: the mover starts hidden behind the divider and emerges into
+    # the right gap just as the robot arrives. Every scenario so far has assumed
+    # the obstacle is visible the whole time; this is the one where perception
+    # itself fails first, and the 1.0 s CBF horizon is all the warning there is.
+    write('occlude',
+          ob('dyn_obs_0', (RIGHT_GAP + 1.6, DIVIDER_Y + 0.45),
+                          (RIGHT_GAP - 0.2, DIVIDER_Y + 0.45), 0.35),
+          'Mover hidden behind the divider, emerging into the right gap. '
+          'Tests what happens when the obstacle is simply not observable until '
+          'it is close -- the case a 1.0 s horizon has least room for.')
+
+    # STOP-AND-GO: violates the constant-velocity model the CBF and the whole
+    # prediction chain are built on. A short segment at speed means the mover
+    # reverses often, so the extrapolation is wrong a large fraction of the time.
+    write('stopgo',
+          ob('dyn_obs_0', (RIGHT_GAP, 2.6), (RIGHT_GAP, 3.4), 0.35),
+          'Short, fast sweep across the approach: the mover reverses every ~2 s, '
+          'so constant-velocity extrapolation is wrong most of the time.')
+
+    # SMALL: a 0.15 m body, near the clustering floor
+    write('small',
+          ob('dyn_obs_3', (1.2, 1.8), (7.6, 1.8), 0.25),
+          'A 0.15 m mover: few laser returns, so it may be clustered away '
+          'entirely rather than merely localised badly.')
+
+    # NON-CONVEX: an L, whose convex hull contains a large empty notch
+    write('ell',
+          ob('dyn_obs_4', (1.2, 1.8), (7.6, 1.8), 0.25),
+          'An L-shaped mover: every covering scheme here assumes convexity.')
+
+    # THREE at once, mixed shapes and speeds
+    write('dense',
+          ob('dyn_obs_0', (1.2, 1.8), (7.6, 1.8), 0.30) +
+          ob('dyn_obs_1', (7.6, 6.8), (1.2, 6.8), 0.25) +
+          ob('dyn_obs_3', (RIGHT_GAP, 2.4), (RIGHT_GAP, 3.8), 0.20),
+          'Three movers of different size and speed at once -- the arena has '
+          'only ever been asked to handle two.')
+
     # stationary "mover" past the right gap
     write('parked',
           ob('dyn_obs_0', (RIGHT_GAP + 0.2, 5.4), (RIGHT_GAP + 0.2, 5.4), 0.0),

@@ -38,7 +38,11 @@ def _dyn_names(traj_file):
             cfg = yaml.safe_load(f) or {}
     except FileNotFoundError:
         return []
-    return [d['name'] for d in cfg.get('dynamic_obstacles', [])]
+    # `or []` and not just the get() default: a YAML with the key present
+    # but empty ('dynamic_obstacles:' and nothing under it) parses to None,
+    # and the default only applies when the key is MISSING. That made the
+    # no-movers control scenario fail bring-up on all ten trials.
+    return [d['name'] for d in (cfg.get('dynamic_obstacles') or [])]
 
 
 def generate_launch_description():

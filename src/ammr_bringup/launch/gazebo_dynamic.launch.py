@@ -26,7 +26,8 @@ def _load_dyn_names(traj_file):
             cfg = yaml.safe_load(f) or {}
     except FileNotFoundError:
         return []
-    return [d['name'] for d in cfg.get('dynamic_obstacles', [])]
+    # `or []`: see omni_bot_dynamic.launch.py -- an empty key parses to None.
+    return [d['name'] for d in (cfg.get('dynamic_obstacles') or [])]
 
 
 def generate_launch_description():
