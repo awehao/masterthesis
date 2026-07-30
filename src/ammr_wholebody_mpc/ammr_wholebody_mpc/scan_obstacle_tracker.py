@@ -186,8 +186,16 @@ class ScanObstacleTracker(Node):
         # `static_window_s` (= net displacement / elapsed) also exceeds
         # `min_net_speed`. Static objects jitter in place -> ~0 net displacement
         # -> dropped here, left to the local costmap/planner (their proper owner).
-        p('static_window_s', 0.8)         # s, window for the net-displacement test
-        p('min_net_speed',   0.0)        # m/s, min AVERAGE speed over the window
+        # 0.8 s is too short: the observed centroid of an unknown cylinder
+        # shifts as the viewing arc changes, which reads as net displacement over
+        # a short window. Over 2 s that shift is bounded by the cylinder radius
+        # while a real mover keeps accumulating.
+        p('static_window_s', 2.0)         # s, window for the net-displacement test
+        # Was 0.0, which SKIPPED the test entirely (the code guards on > 0.0).
+        # With it off, static cylinders reached /gmpc/obstacles in 10-32% of
+        # frames and -- once the planner was switched to the filtered scan --
+        # were masked out of its costmap too, so nothing owned them.
+        p('min_net_speed',   0.05)        # m/s, min AVERAGE speed over the window
         # KF tuning (meas noise inflated vs ground-truth: cluster centroids jitter)
         p('kf_sigma_pos', 0.01)
         p('kf_sigma_vel', 0.40)
@@ -358,8 +366,15 @@ class ScanObstacleTracker(Node):
         t_ns = (int(scan.header.stamp.sec) * 1_000_000_000
                 + int(scan.header.stamp.nanosec)) or self.get_clock().now().nanoseconds
         self._update_tracks(clusters, t_ns)
-        self._publish(t_ns, scan.header.stamp)
-        self._publish_filtered_scan(scan, tx, ty, cyaw, syaw)
+        # ONE decision per cycle, shared by both consumers. _is_mover mutates the
+        # track's hysteresis state, so it must not be evaluated twice; and the
+        # scan mask previously used its OWN, laxer test (instantaneous KF speed
+        # only), which meant the planner was blinded to objects the CBF did not
+        # even consider dynamic -- unknown static cylinders leaked through it
+        # 10-32% of frames and the robot then hit one at -0.036 m.
+        movers = [tr for tr in self._tracks if self._is_mover(tr, t_ns)]
+        self._publish(t_ns, scan.header.stamp, movers)
+        self._publish_filtered_scan(scan, tx, ty, cyaw, syaw, movers)
         self._publish_static_obstacles(tx, ty)   # map-based, stable (no scan flicker)
 
     # ------------------------------------------------------------------
@@ -403,12 +418,14 @@ class ScanObstacleTracker(Node):
         self.static_pub.publish(arr)
 
     # ------------------------------------------------------------------
-    def _publish_filtered_scan(self, scan, tx, ty, cyaw, syaw):
+    def _publish_filtered_scan(self, scan, tx, ty, cyaw, syaw, moving):
         """Republish the scan with rays hitting confirmed MOVING obstacles set
-        to +inf, so the global costmap (planner) sees static geometry only."""
-        moving = [t for t in self._tracks
-                  if t.age >= self.min_age
-                  and math.hypot(*t.kf.velocity) >= self.min_speed]
+        to +inf, so the global costmap (planner) sees static geometry only.
+
+        `moving` is the SAME set published to the dynamic CBF. Masking a ray the
+        CBF is not protecting against would leave that object owned by nobody:
+        invisible to the planner and only intermittently seen by the controller.
+        """
         out = LaserScan()
         out.header = scan.header
         out.angle_min = scan.angle_min
@@ -523,12 +540,10 @@ class ScanObstacleTracker(Node):
         return True
 
     # ------------------------------------------------------------------
-    def _publish(self, t_ns: int, stamp):
-        # Publish only genuine dynamic obstacles (aged + instantaneously moving +
-        # net-displaced). The net-displacement test (see _is_mover) keeps static
-        # objects with inflated apparent velocity out of the CBF; the costmap
-        # (raw /scan) still routes the planner around them.
-        confirmed = [t for t in self._tracks if self._is_mover(t, t_ns)]
+    def _publish(self, t_ns: int, stamp, confirmed):
+        # `confirmed` is decided once per cycle by the caller (see _scan_cb) and
+        # shared with the scan mask, so the planner is blinded to exactly the
+        # objects the CBF has taken responsibility for -- no more, no less.
 
         # Transform tracking-frame (odom) tracks into publish_frame (map) so the
         # GMPC sees them in the same frame as the robot pose; the AMCL map<-odom
