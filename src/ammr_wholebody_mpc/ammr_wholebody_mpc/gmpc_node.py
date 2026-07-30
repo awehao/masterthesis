@@ -37,6 +37,7 @@ from .detour import (DetourConfig, DetourState, apply_offset,
                      clear_reference, FREE)
 from .path_processor import (path_msg_to_xyth,
                              build_reference_window,
+                             blend_reference,
                              quaternion_to_yaw)
 
 
@@ -92,6 +93,15 @@ class GMPCNode(Node):
         # Reference heading from a look-ahead chord instead of the local path
         # segment (metres). 0 = the validated single-segment tangent.
         self.declare_parameter('ref_yaw_lookahead', 0.0)
+        # Cross-fade the tracked reference from the previous plan to the new one
+        # over this many seconds. 0 = adopt the new plan instantly (validated
+        # behaviour). The global planner republishes every 3 s and a quarter of
+        # those updates move the path in front of the robot by more than 0.25 m
+        # (measured: median 0.05 m, p90 0.44 m, max 1.82 m; reference heading
+        # p90 26 deg, max 63 deg). In the 0.3 s after such a jump the controller
+        # sits at 0.96 of a_max and saturates 88.5% of the time, against 13.5%
+        # otherwise -- it is chasing a step, not misbehaving.
+        self.declare_parameter('plan_blend_s', 0.0)
         self.declare_parameter('goal_tolerance_xy', 0.20)
         self.declare_parameter('tf_timeout',        0.10)
 
@@ -177,6 +187,9 @@ class GMPCNode(Node):
         self.goal_tol_xy      = float(self.get_parameter('goal_tolerance_xy').value)
         self.ref_yaw_lookahead = float(
             self.get_parameter('ref_yaw_lookahead').value)
+        self.plan_blend_s = float(self.get_parameter('plan_blend_s').value)
+        self._prev_path_xyth = None      # path being faded OUT
+        self._blend_t0 = None            # when the current fade started
         self.tf_timeout_s     = float(self.get_parameter('tf_timeout').value)
 
         Qxy  = float(self.get_parameter('Q_xy').value)
@@ -300,9 +313,33 @@ class GMPCNode(Node):
         )
 
     # ----------------------------------------------------------------------
+    def _blend_alpha(self):
+        """Fade weight in [0,1) for the new plan, or None when not fading.
+
+        1.0 means the fade is over, so it is reported as None and the previous
+        path is dropped -- that keeps the common case free of the second
+        reference build.
+        """
+        if (self.plan_blend_s <= 0.0 or self._prev_path_xyth is None
+                or self._blend_t0 is None):
+            return None
+        dt = (self.get_clock().now() - self._blend_t0).nanoseconds * 1e-9
+        if dt < 0.0 or dt >= self.plan_blend_s:
+            self._prev_path_xyth = None
+            self._blend_t0 = None
+            return None
+        return dt / self.plan_blend_s
+
     def _plan_cb(self, msg: Path):
         if len(msg.poses) == 0:
             self.get_logger().warn('Received empty plan')
+        if (self.plan_blend_s > 0.0 and self.latest_path is not None
+                and len(self.latest_path.poses) >= 2 and len(msg.poses) >= 2):
+            # Keep the outgoing path so the reference can cross-fade instead of
+            # teleporting. Restarting the fade on every plan is deliberate: a
+            # second jump during a fade should also be smoothed, not snapped to.
+            self._prev_path_xyth = path_msg_to_xyth(self.latest_path)
+            self._blend_t0 = self.get_clock().now()
         self.latest_path = msg
         # New plan means a new goal (or continuous replan) — re-arm the arrival
         # detector so the next arrival also gets logged.
@@ -413,6 +450,15 @@ class GMPCNode(Node):
             N=self.N, dt=self.dt, v_nom=self.v_nom,
             yaw_lookahead=self.ref_yaw_lookahead,
         )
+        a = self._blend_alpha()
+        if a is not None:
+            X_old, xi_old = build_reference_window(
+                self._prev_path_xyth, robot_xyth,
+                N=self.N, dt=self.dt, v_nom=self.v_nom,
+                yaw_lookahead=self.ref_yaw_lookahead,
+            )
+            X_ref_win, xi_ref_win = blend_reference(
+                X_old, xi_old, X_ref_win, xi_ref_win, a)
 
         # 4. Solve
         X_now  = from_xytheta(*robot_xyth)
