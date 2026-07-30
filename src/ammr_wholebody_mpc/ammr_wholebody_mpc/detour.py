@@ -60,7 +60,12 @@ class DetourConfig:
     side_clear: float = 0.33       # m, keep-out from wall points on the chosen
                                    # side (matches static_cbf_safe_margin; the
                                    # robot is a point, so this includes radius)
-    side_ahead: float = 1.0        # m, how far ahead to look for wall points
+    side_clear_dyn: float = 0.38   # m, same for other movers (dynamic margin)
+    side_ahead: float = 1.0        # m, how far ahead to look for blockers
+    side_lookahead_s: float = 1.5  # s, how far to extrapolate other movers when
+                                   # deciding whether a side is clear
+    assoc_gate: float = 0.5        # m, nearest-neighbour gate for re-finding the
+                                   # obstacle we committed against
 
 
 class DetourState:
@@ -70,16 +75,45 @@ class DetourState:
         self.cfg = cfg
         self.side = FREE
         self.offset = 0.0          # metres, signed along the reference normal
-        self.locked_id = None      # which obstacle we committed against
+        # Which obstacle we committed against, held as its last known POSITION
+        # rather than a Python object identity. The obstacle messages carry no
+        # id (the wire format is a flat [x, y, r, vx, vy]) and the node rebuilds
+        # the dicts on every callback, so id() cannot survive a control step --
+        # worse, CPython recycles the freed addresses, so it matches every other
+        # cycle by coincidence and, with several obstacles in view, can match the
+        # WRONG one. Nearest-neighbour association within a gate is honest about
+        # what is actually available.
+        self.locked_pos = None
 
     # -- geometry helpers -------------------------------------------------
     @staticmethod
-    def _relative(robot_xyth, obs):
-        """Obstacle position in the robot's body frame: +x ahead, +y left."""
+    def _relative_xy(robot_xyth, x, y):
+        """Map-frame point in the robot's body frame: +x ahead, +y left."""
         c, s = math.cos(robot_xyth[2]), math.sin(robot_xyth[2])
-        dx = float(obs['x']) - robot_xyth[0]
-        dy = float(obs['y']) - robot_xyth[1]
+        dx, dy = float(x) - robot_xyth[0], float(y) - robot_xyth[1]
         return c * dx + s * dy, -s * dx + c * dy
+
+    @classmethod
+    def _relative(cls, robot_xyth, obs):
+        return cls._relative_xy(robot_xyth, obs['x'], obs['y'])
+
+    def _reacquire(self, obstacles):
+        """The mover we locked against, re-found by position. None if it is gone.
+
+        Obstacles move at most a couple of centimetres per control step, so plain
+        nearest-neighbour inside `assoc_gate` is enough; no prediction needed.
+        """
+        if self.locked_pos is None:
+            return None
+        best, best_d = None, self.cfg.assoc_gate
+        for o in obstacles:
+            if o.get('static'):
+                continue
+            d = math.hypot(float(o['x']) - self.locked_pos[0],
+                           float(o['y']) - self.locked_pos[1])
+            if d < best_d:
+                best, best_d = o, d
+        return best
 
     def _blocking(self, robot_xyth, obstacles):
         """Nearest obstacle inside the cone ahead, or None."""
@@ -100,29 +134,51 @@ class DetourState:
                 best, best_d = o, d
         return best
 
-    def _side_free(self, robot_xyth, obstacles, side):
-        """Is there room to swing `side` by max_offset without hitting geometry?
+    def _side_free(self, robot_xyth, obstacles, side, ignore=None):
+        """Is there room to swing `side` by max_offset without hitting anything?
 
-        Without this the state machine happily picks the side an obstacle is not
-        on -- which, next to a wall-hugging mover, is the wall. Measured: with
-        the side check absent, all four collisions in a 10-trial run were into
-        walls, three of them in the same corridor where dyn_obs_1 runs along
-        x = 0. "Do not dodge into the wall" has to be a hard precondition of the
-        commitment, not something the CBF is left to clean up afterwards, because
-        the forward-speed floor has by then removed braking from the options.
+        Two kinds of blocker, and both are needed:
+
+        * **Walls.** Without this the state machine happily picks the side an
+          obstacle is not on -- which, next to a wall-hugging mover, is the wall.
+          Measured: with no side check at all, every one of the four collisions
+          in a 10-trial run was into a wall, three of them in the same corridor
+          where dyn_obs_1 runs along x = 0.
+        * **Other movers**, at their PREDICTED positions over the next
+          `side_lookahead_s`. Dodging one obstacle into another is the same
+          mistake as dodging into a wall, and a mover that is clear right now can
+          be in the way by the time the swing completes.
+
+        "Do not dodge into something" has to be a precondition of the commitment
+        rather than something the CBF cleans up afterwards, because the
+        forward-speed floor has by then removed braking from the options.
+
+        `ignore` is the obstacle being detoured around: it is on the other side
+        by construction, and the CBF is what keeps the pass safe.
         """
         cfg = self.cfg
         lo, hi = min(0.0, -0.2), cfg.side_ahead
         for o in obstacles:
-            if not o.get('static'):
+            if o is ignore:
                 continue
-            fx, fy = self._relative(robot_xyth, o)
-            if not (lo <= fx <= hi):
-                continue
-            if side * fy <= 0.0:          # wall point is on the other side
-                continue
-            if abs(fy) < cfg.max_offset + cfg.side_clear:
-                return False
+            if o.get('static'):
+                samples = ((float(o['x']), float(o['y'])),)
+                clear = cfg.side_clear
+            else:
+                vx, vy = float(o.get('vx', 0.0)), float(o.get('vy', 0.0))
+                n = max(1, int(cfg.side_lookahead_s / 0.25))
+                samples = tuple((float(o['x']) + vx * 0.25 * i,
+                                 float(o['y']) + vy * 0.25 * i)
+                                for i in range(n + 1))
+                clear = cfg.side_clear_dyn
+            for (px, py) in samples:
+                fx, fy = self._relative_xy(robot_xyth, px, py)
+                if not (lo <= fx <= hi):
+                    continue
+                if side * fy <= 0.0:      # blocker is on the other side
+                    continue
+                if abs(fy) < cfg.max_offset + clear:
+                    return False
         return True
 
     # -- state machine ----------------------------------------------------
@@ -134,26 +190,21 @@ class DetourState:
 
         if self.side != FREE:
             # Hold the commitment until the obstacle we locked against is behind.
-            still = None
-            for o in obstacles:
-                if o.get('static'):
-                    continue
-                if self.locked_id is not None and id(o) == self.locked_id:
-                    still = o
-                    break
+            still = self._reacquire(obstacles)
             if still is None:
                 still = self._blocking(robot_xyth, obstacles)
             release = True
             if still is not None:
+                self.locked_pos = (float(still['x']), float(still['y']))
                 fx, _ = self._relative(robot_xyth, still)
                 release = fx < cfg.release_behind
             # Commitment is about not wavering between two viable sides; it is
-            # not a licence to drive into geometry that has since come into
+            # not a licence to drive into something that has since come into
             # view. A side that stops being clear releases immediately.
-            if not self._side_free(robot_xyth, obstacles, self.side):
+            if not self._side_free(robot_xyth, obstacles, self.side, ignore=still):
                 release = True
             if release:
-                self.side, self.locked_id = FREE, None
+                self.side, self.locked_pos = FREE, None
         else:
             blk = self._blocking(robot_xyth, obstacles)
             if blk is not None:
@@ -172,14 +223,14 @@ class DetourState:
                 # mover is still guarded by the CBF, whereas swinging into a
                 # wall is not. If neither side has room, do not commit at all
                 # and leave the CBF to handle it as before.
-                if self._side_free(robot_xyth, obstacles, want):
+                if self._side_free(robot_xyth, obstacles, want, ignore=blk):
                     self.side = want
-                elif self._side_free(robot_xyth, obstacles, -want):
+                elif self._side_free(robot_xyth, obstacles, -want, ignore=blk):
                     self.side = -want
                 else:
                     self.side = FREE
                 if self.side != FREE:
-                    self.locked_id = id(blk)
+                    self.locked_pos = (float(blk['x']), float(blk['y']))
 
         target = self.side * cfg.max_offset
         step = cfg.offset_rate
