@@ -493,7 +493,7 @@ class GMPCNode(Node):
                 X_ref_win = clear_reference(
                     X_ref_win, obstacles or [], self.dt,
                     default_margin=self._cfg.cbf_safe_margin,
-                    pad=self.detour_clear_pad)
+                    pad=self.detour_clear_pad, side=side)
         # While detouring, floor the forward speed so "stop and wait" leaves the
         # solution space; restore the nominal limit as soon as we are free.
         floor = self.detour.cfg.vx_floor if (

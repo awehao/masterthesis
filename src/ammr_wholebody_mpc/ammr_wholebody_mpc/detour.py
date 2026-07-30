@@ -300,7 +300,8 @@ def apply_offset(X_ref_win, offset, max_offset):
     return out
 
 
-def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.05):
+def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.05,
+                    side=FREE):
     """Push reference points out of the CBF's keep-out discs.
 
     This is what makes the detour safe rather than merely committed. The keep-out
@@ -322,10 +323,24 @@ def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.05):
     uses, so the reference is cleared of where each obstacle WILL be at step k.
     Static points are left alone: pushing out of a wall and out of a mover can
     disagree, and the planner already routes around known geometry.
+
+    DIRECTION matters as much as distance. Pushing radially -- straight away
+    from the obstacle centre -- is wrong exactly when it matters most: with the
+    obstacle dead ahead on the path, "away from its centre" IS backwards, so the
+    projection quietly rewrites the reference into a retreat. Measured in the
+    spawn corridor: the robot followed the mover up, the mover reversed, and the
+    robot backed 1.8 m down the corridor with vx negative for nine seconds,
+    covering 9.8 m of travel for 3.15 m of progress over 47 s.
+
+    So when a side is committed, push ALONG that side instead: the reference
+    leaves the keep-out by going around, which is the whole point of committing
+    to a side. Radial is kept as the fallback for when nothing is committed.
     """
     out = X_ref_win.copy()
     for k in range(len(out)):
         p = out[k][:2, 2].astype(float).copy()
+        # +y of the reference frame at this step = the committed detour side
+        nrm = out[k][:2, :2] @ np.array([0.0, 1.0])
         for o in obstacles:
             if o.get('static'):
                 continue
@@ -334,7 +349,21 @@ def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.05):
             r = float(o['radius']) + float(o.get('margin', default_margin)) + pad
             d = p - c
             n = float(np.linalg.norm(d))
-            if 1e-9 < n < r:
-                p = c + d * (r / n)
+            if not (1e-9 < n < r):
+                continue
+            if side != FREE:
+                # Move along the side normal to the keep-out boundary:
+                # |d + t*nrm| = r, taking the root that goes the committed way.
+                b = float(d @ nrm)
+                disc = b * b - (n * n - r * r)
+                if disc >= 0.0:
+                    s = math.sqrt(disc)
+                    t_pos, t_neg = -b + s, -b - s
+                    t_go = t_pos if side > 0 else t_neg
+                    p = p + t_go * nrm
+                    continue
+                # No real root means the obstacle is not reachable sideways
+                # within this geometry; fall through to radial.
+            p = c + d * (r / n)
         out[k][:2, 2] = p
     return out
