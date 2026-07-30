@@ -138,6 +138,7 @@ def generate_launch_description():
         'st_weight': float(os.environ.get('ST_WEIGHT', '0.0')),
         'st_sigma0': float(os.environ.get('ST_SIGMA0', '0.6')),
         'st_growth': float(os.environ.get('ST_GROWTH', '0.02')),
+        'cbf_margin_growth': float(os.environ.get('CBF_MARGIN_GROWTH', '0.0')),
     }
     cbf_overrides['cbf_enable'] = os.environ.get('CBF_ENABLE', '1') == '1'
 

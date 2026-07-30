@@ -113,6 +113,9 @@ class GMPCNode(Node):
         self.declare_parameter('st_weight', 0.0)
         self.declare_parameter('st_sigma0', 0.6)
         self.declare_parameter('st_growth', 0.02)
+        # Grow the CBF keep-out with the horizon step to discount far-future
+        # constant-velocity predictions. 0 = the validated constant margin.
+        self.declare_parameter('cbf_margin_growth', 0.0)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
         # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
         # repels from known static geometry and won't dodge into walls.
@@ -192,6 +195,8 @@ class GMPCNode(Node):
             st_weight=float(self.get_parameter('st_weight').value),
             st_sigma0=float(self.get_parameter('st_sigma0').value),
             st_growth=float(self.get_parameter('st_growth').value),
+            cbf_margin_growth=float(
+                self.get_parameter('cbf_margin_growth').value),
         )
         self.mpc = GMPC(cfg)
         self.N   = cfg.N
