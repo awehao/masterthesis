@@ -301,7 +301,7 @@ def apply_offset(X_ref_win, offset, max_offset):
 
 
 def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.05,
-                    side=FREE):
+                    side=FREE, sideways=True):
     """Push reference points out of the CBF's keep-out discs.
 
     This is what makes the detour safe rather than merely committed. The keep-out
@@ -351,7 +351,7 @@ def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.05,
             n = float(np.linalg.norm(d))
             if not (1e-9 < n < r):
                 continue
-            if side != FREE:
+            if side != FREE and sideways:
                 # Move along the side normal to the keep-out boundary:
                 # |d + t*nrm| = r, taking the root that goes the committed way.
                 b = float(d @ nrm)

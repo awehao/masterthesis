@@ -146,6 +146,13 @@ class GMPCNode(Node):
         # it Q pulls towards points the CBF forbids (see clear_reference).
         self.declare_parameter('detour_clear_ref', True)
         self.declare_parameter('detour_clear_pad', 0.05)
+        # Push a blocked reference point out ALONG the committed side rather
+        # than radially. Radial is "away from the obstacle centre", which with
+        # the obstacle dead ahead means BACKWARDS -- measured 0.235 m of
+        # backward reference shift, and the robot answered by retreating 1.8 m
+        # down the spawn corridor. False restores the radial behaviour so the
+        # two can be compared.
+        self.declare_parameter('detour_side_proj', True)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
         # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
         # repels from known static geometry and won't dodge into walls.
@@ -246,6 +253,8 @@ class GMPCNode(Node):
             self.get_parameter('detour_clear_ref').value)
         self.detour_clear_pad = float(
             self.get_parameter('detour_clear_pad').value)
+        self.detour_side_proj = bool(
+            self.get_parameter('detour_side_proj').value)
         self._cfg = cfg
         self.N   = cfg.N
         self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
@@ -493,7 +502,8 @@ class GMPCNode(Node):
                 X_ref_win = clear_reference(
                     X_ref_win, obstacles or [], self.dt,
                     default_margin=self._cfg.cbf_safe_margin,
-                    pad=self.detour_clear_pad, side=side)
+                    pad=self.detour_clear_pad, side=side,
+                    sideways=self.detour_side_proj)
         # While detouring, floor the forward speed so "stop and wait" leaves the
         # solution space; restore the nominal limit as soon as we are free.
         floor = self.detour.cfg.vx_floor if (

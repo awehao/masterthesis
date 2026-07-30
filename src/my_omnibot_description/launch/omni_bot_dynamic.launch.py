@@ -148,11 +148,14 @@ def generate_launch_description():
         'prog_weight': float(os.environ.get('PROG_WEIGHT', '0.0')),
         # Committed detour (detour.py): DETOUR=1 to enable.
         'detour_enable': os.environ.get('DETOUR', '0') == '1',
-        'detour_max_offset': float(os.environ.get('DETOUR_OFFSET', '0.60')),
+        # 0.35, the value the five validation rounds actually used. The
+        # dataclass default of 0.60 was never validated end to end.
+        'detour_max_offset': float(os.environ.get('DETOUR_OFFSET', '0.35')),
         'detour_trigger_range': float(os.environ.get('DETOUR_RANGE', '2.0')),
         'detour_vx_floor': float(os.environ.get('DETOUR_VX_FLOOR', '0.0')),
         'detour_clear_ref': os.environ.get('DETOUR_CLEAR_REF', '1') == '1',
         'detour_clear_pad': float(os.environ.get('DETOUR_CLEAR_PAD', '0.05')),
+        'detour_side_proj': os.environ.get('DETOUR_SIDE_PROJ', '1') == '1',
         # Reference heading from a look-ahead chord; 0 = validated tangent.
         'ref_yaw_lookahead': float(os.environ.get('YAW_LOOKAHEAD', '0.0')),
         # Cross-fade seconds when a new /plan arrives; 0 = adopt instantly.
