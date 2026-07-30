@@ -33,6 +33,7 @@ import tf2_ros
 
 from .gmpc           import GMPC, GMPCConfig
 from .se2            import from_xytheta
+from .detour import DetourConfig, DetourState, apply_offset, FREE
 from .path_processor import (path_msg_to_xyth,
                              build_reference_window,
                              quaternion_to_yaw)
@@ -119,6 +120,14 @@ class GMPCNode(Node):
         # Prefer giving way FORWARD rather than backward when the CBF pushes the
         # robot off the reference. 0 = no preference (validated behaviour).
         self.declare_parameter('prog_weight', 0.0)
+        # Committed detour (see detour.py): lock a side, bend the reference
+        # around the obstacle, keep a forward-speed floor. Off by default.
+        self.declare_parameter('detour_enable', False)
+        self.declare_parameter('detour_trigger_range', 2.0)
+        self.declare_parameter('detour_cone_deg', 30.0)
+        self.declare_parameter('detour_max_offset', 0.60)
+        self.declare_parameter('detour_offset_rate', 0.08)
+        self.declare_parameter('detour_vx_floor', 0.10)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
         # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
         # repels from known static geometry and won't dodge into walls.
@@ -203,6 +212,14 @@ class GMPCNode(Node):
             prog_weight=float(self.get_parameter('prog_weight').value),
         )
         self.mpc = GMPC(cfg)
+        self.detour = DetourState(DetourConfig(
+            enable=bool(self.get_parameter('detour_enable').value),
+            trigger_range=float(self.get_parameter('detour_trigger_range').value),
+            trigger_cone_deg=float(self.get_parameter('detour_cone_deg').value),
+            max_offset=float(self.get_parameter('detour_max_offset').value),
+            offset_rate=float(self.get_parameter('detour_offset_rate').value),
+            vx_floor=float(self.get_parameter('detour_vx_floor').value)))
+        self._cfg = cfg
         self.N   = cfg.N
         self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
         self.static_goal_clear = float(self.get_parameter('static_goal_clear').value)
@@ -397,12 +414,32 @@ class GMPCNode(Node):
                 for s in self._static_obstacles:                  # walls (v=0),
                     if np.hypot(s['x'] - goal_xy[0],              # but not the
                                 s['y'] - goal_xy[1]) > self.static_goal_clear:
-                        # smaller keep-out for walls (see static_cbf_safe_margin)
-                        obstacles.append({**s, 'margin': self.static_cbf_safe_margin})
+                        # smaller keep-out for walls (see static_cbf_safe_margin).
+                        # 'static' tags these as geometry to route AROUND rather
+                        # than movers to commit a detour against -- detour.py
+                        # must never lock a side against a wall point.
+                        obstacles.append({**s, 'static': True,
+                                          'margin': self.static_cbf_safe_margin})
         else:
             obstacles = None
-        result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,
-                                obstacles=obstacles)
+        # Committed detour: pick a side once, then bend the horizon reference
+        # around the obstacle so the tracking cost pulls the robot AROUND it
+        # instead of resisting the CBF's sideways push. See detour.py.
+        side, off = self.detour.update(robot_xyth, obstacles or [])
+        if abs(off) > 1e-6:
+            X_ref_win = apply_offset(X_ref_win, off, self.detour.cfg.max_offset)
+        # While detouring, floor the forward speed so "stop and wait" leaves the
+        # solution space; restore the nominal limit as soon as we are free.
+        floor = self.detour.cfg.vx_floor if (
+            side != FREE and self.detour.cfg.enable) else None
+        u_min_saved = self._cfg.u_min
+        if floor is not None and floor > self._cfg.u_min[0]:
+            self._cfg.u_min = np.array([floor, u_min_saved[1], u_min_saved[2]])
+        try:
+            result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,
+                                    obstacles=obstacles)
+        finally:
+            self._cfg.u_min = u_min_saved
 
         # 5. Publish cmd_vel (saturate one more time as a belt-and-braces safety)
         u = result.u_opt

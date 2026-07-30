@@ -140,6 +140,11 @@ def generate_launch_description():
         'st_growth': float(os.environ.get('ST_GROWTH', '0.02')),
         'cbf_margin_growth': float(os.environ.get('CBF_MARGIN_GROWTH', '0.0')),
         'prog_weight': float(os.environ.get('PROG_WEIGHT', '0.0')),
+        # Committed detour (detour.py): DETOUR=1 to enable.
+        'detour_enable': os.environ.get('DETOUR', '0') == '1',
+        'detour_max_offset': float(os.environ.get('DETOUR_OFFSET', '0.60')),
+        'detour_trigger_range': float(os.environ.get('DETOUR_RANGE', '2.0')),
+        'detour_vx_floor': float(os.environ.get('DETOUR_VX_FLOOR', '0.10')),
     }
     cbf_overrides['cbf_enable'] = os.environ.get('CBF_ENABLE', '1') == '1'
 

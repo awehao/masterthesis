@@ -5,7 +5,8 @@ answerable by looking, not only by reading a number. Every heading change above
 the reversal threshold is circled, so a path that doubles back shows up
 immediately even if its deg/m happens to look reasonable.
 
-    python3 evaluation/plot_traj_compare.py archive_w0 archive_w5 [out.png]
+    python3 evaluation/plot_traj_compare.py archive_w0 archive_w5 [out.png] \
+        [--names 基準 承諾式繞行] [--title ...]
 """
 import os
 import sys
@@ -88,18 +89,24 @@ def panel(ax, occ, ext, bags, title):
 
 
 def main():
-    a_dir, b_dir = sys.argv[1], sys.argv[2]
-    out = sys.argv[3] if len(sys.argv) > 3 else \
-        'evaluation/results/figs/traj_spacetime.png'
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('a'); ap.add_argument('b')
+    ap.add_argument('out', nargs='?',
+                    default='evaluation/results/figs/traj_spacetime.png')
+    ap.add_argument('--names', nargs=2, default=['ST 關閉 (W=0)', 'ST 開啟 (W=5)'])
+    ap.add_argument('--title',
+                    default='時空代價場對軌跡平滑度的影響   紅圈 = >90° 急轉(折返)')
+    args = ap.parse_args()
+    a_dir, b_dir, out = args.a, args.b, args.out
     root = 'evaluation/bags'
     bags = lambda d: [f'{root}/{d}/gmpc_cbf__scan_seed{i}' for i in range(1, 11)
                       if os.path.isdir(f'{root}/{d}/gmpc_cbf__scan_seed{i}')]
     occ, ext = load_map()
     fig, axes = plt.subplots(1, 2, figsize=(13, 6.8))
-    wa, ra = panel(axes[0], occ, ext, bags(a_dir), 'ST 關閉 (W=0)')
-    wb, rb = panel(axes[1], occ, ext, bags(b_dir), 'ST 開啟 (W=5)')
-    fig.suptitle('時空代價場對軌跡平滑度的影響   紅圈 = >90° 急轉(折返)',
-                 fontsize=14, fontweight='bold')
+    wa, ra = panel(axes[0], occ, ext, bags(a_dir), args.names[0])
+    wb, rb = panel(axes[1], occ, ext, bags(b_dir), args.names[1])
+    fig.suptitle(args.title, fontsize=14, fontweight='bold')
     fig.text(0.5, 0.02,
              f'deg/m {wa:.1f} → {wb:.1f} ({100*(wb-wa)/wa:+.1f}%)     '
              f'折返 {ra:.1f} → {rb:.1f} 次/趟 ({100*(rb-ra)/max(ra,1e-9):+.1f}%)',
