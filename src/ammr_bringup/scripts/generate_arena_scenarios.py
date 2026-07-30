@@ -145,6 +145,66 @@ def main():
           'Three movers of different size and speed at once -- the arena has '
           'only ever been asked to handle two.')
 
+    # --- geometry the first thirteen never presented -----------------------
+
+    # DIAGONAL: neither perpendicular to the route nor along it. Both of those
+    # are special cases; an oblique closing angle is the general one, and the
+    # detour's cone test (+-30 deg ahead) is angle-dependent.
+    write('diagonal',
+          ob('dyn_obs_0', (0.4, 2.6), (5.4, 0.2), 0.28),
+          'Oblique crossing: the general closing angle, between the '
+          'perpendicular and parallel cases already covered.')
+
+    # HEADON: straight down the robot's own line, towards it. The corridor
+    # scenario sweeps ACROSS that line; this one comes along it, so the
+    # relative velocity is the sum of both speeds and closing is fastest.
+    write('headon',
+          ob('dyn_obs_0', (RIGHT_GAP - 0.4, 5.2), (RIGHT_GAP + 0.2, 1.2), 0.30),
+          'Mover coming down the approach to the right gap towards the robot: '
+          'closing speed is the sum of both, the shortest warning of any '
+          'geometry here. Routed through the gap because the diagonal between '
+          'the two openings is solid wall.')
+
+    # BOTHGAPS: one mover in each opening. Neither can be passed, so there is no
+    # route at all until one clears -- the only correct answer is to wait, and
+    # nothing in the stack has ever had to conclude that.
+    write('bothgaps',
+          ob('dyn_obs_0', (LEFT_GAP, DIVIDER_Y - 0.8), (LEFT_GAP, DIVIDER_Y + 0.8), 0.20) +
+          ob('dyn_obs_6', (RIGHT_GAP, DIVIDER_Y + 0.8), (RIGHT_GAP, DIVIDER_Y - 0.8), 0.20),
+          'Both openings patrolled at once: no route exists until one clears, '
+          'so waiting is the only correct answer.')
+
+    # FAST: 0.55 m/s, 2.5x the robot. The detour triggers at 2.0 m, which at
+    # that closing rate is under 4 s, and the CBF horizon is 1.0 s.
+    write('fast',
+          ob('dyn_obs_0', (0.0, 1.0), (6.6, 1.0), 0.55),
+          'Crossing at 0.55 m/s, 2.5x robot speed: the 2.0 m detour trigger '
+          'leaves under 4 s and the CBF horizon is 1.0 s.')
+
+    # CHASE: overtaking the robot from BEHIND. _blocking requires fx > 0, so the
+    # detour is blind to it by construction and only the CBF can respond.
+    write('chase',
+          ob('dyn_obs_0', (RIGHT_GAP + 0.2, 1.2), (RIGHT_GAP - 0.4, 5.2), 0.34),
+          'Faster mover overtaking from behind up the same approach: _blocking '
+          'needs fx > 0, so the detour cannot see it at all and only the CBF '
+          'answers. Routed through the gap -- the straight diagonal is wall.')
+
+    # MERGE: two bodies travelling close enough that the clustering joins them
+    # into a single blob with a much larger fitted extent, and the tracker then
+    # follows a centroid that belongs to neither.
+    write('merge',
+          ob('dyn_obs_0', (0.0, 1.0), (6.6, 1.0), 0.26) +
+          ob('dyn_obs_6', (0.0, 1.5), (6.6, 1.5), 0.26),
+          'Two movers 0.5 m apart: close enough that clustering may join them '
+          'into one blob whose centre belongs to neither.')
+
+    # WIDE: 1.6 m across, wider than either 1.4 m gap. It cannot pass through
+    # one, so the geometry is only solvable while it is elsewhere.
+    write('wide',
+          ob('dyn_obs_5', (0.6, 1.2), (5.4, 1.2), 0.22),
+          'A 1.6 m body, wider than either opening: it can never be in a gap '
+          'and be passed, so timing is the whole problem.')
+
     # stationary "mover" past the right gap
     write('parked',
           ob('dyn_obs_0', (RIGHT_GAP + 0.2, 4.6), (RIGHT_GAP + 0.2, 4.6), 0.0),

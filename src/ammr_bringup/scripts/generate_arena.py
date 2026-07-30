@@ -195,7 +195,14 @@ DYN_SHAPES = [('dyn_obs_0', 'cylinder', (0.25, 0.25)),
               # L-shape, built from two boxes sharing a link. Every covering
               # method here assumes a convex body; an L is the cheapest thing
               # that is not, and its convex hull contains a large empty notch.
-              ('dyn_obs_4', 'ell',      (0.80, 0.25))]
+              ('dyn_obs_4', 'ell',      (0.80, 0.25)),
+              # Wider than either 1.4 m gap, so it physically cannot pass
+              # through one. The robot has to recognise that waiting for it to
+              # clear is the only option, rather than searching for a way round.
+              ('dyn_obs_5', 'box',      (1.60, 0.40)),
+              # A second small cylinder, for the pair that perception merges
+              # into one cluster when they travel close together.
+              ('dyn_obs_6', 'cylinder', (0.25, 0.25))]
 
 
 def mover(name, x, y, shape, size):
@@ -264,7 +271,7 @@ def mover(name, x, y, shape, size):
     </model>"""
 
 
-def save_world(walls, n_dyn=5):
+def save_world(walls, n_dyn=7):
     parts = [box(f'wall_{i}', cx, cy, sx, sy, '0.4 0.4 0.4 1')
              for i, (cx, cy, sx, sy) in enumerate(walls)]
     for i, (x, y, r) in enumerate(UNKNOWN_STATIC):
