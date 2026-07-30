@@ -37,13 +37,20 @@ import yaml
 
 RES = 0.05
 SIZE_M = 9.0                       # square arena, metres
-ORIGIN = (-0.5, -0.5)              # world coords of the map image corner
+# The robot spawn is hardcoded to (0, 0) in the launch, so the arena has to be
+# placed AROUND that point rather than the other way round. With the corner at
+# -0.5 and 0.20 m walls the inner face sat at -0.30, exactly the robot radius:
+# every trial then reported a minimum clearance of precisely +0.000 taken at
+# t = 0, which drowned out whatever happened during the run. -1.3 leaves 1.1 m
+# at the spawn, so the metric measures avoidance instead of parking.
+ORIGIN = (-1.3, -1.3)              # world coords of the map image corner
 N = int(SIZE_M / RES)
 WALL_T = 0.20                      # wall thickness, metres
 WALL_H = 1.2
-START = (0.6, 0.6)
-GOAL = (7.5, 7.5)          # 0.8 m of wall clearance, so the 0.30 m goal
-                           # tolerance cannot put the robot against a wall
+START = (0.0, 0.0)         # the launch spawns here; not configurable from
+                           # this file, so the arena is placed around it
+GOAL = (6.6, 6.6)          # keeps >0.7 m of wall clearance, so the 0.30 m goal
+                           # tolerance cannot park the robot against a wall
 
 # Interior wall at y = 4.2 with two gaps, so the route has a real choice.
 # Gaps are 1.4 m -> 0.70 m of half-width. That is comfortably passable by the
@@ -52,16 +59,16 @@ GOAL = (7.5, 7.5)          # 0.8 m of wall clearance, so the 0.30 m goal
 # gap the answer. That is a genuine homotopy decision rather than a local dodge.
 # The right gap is the direct route; the left one costs distance and passes the
 # unknown static cylinder, so choosing it has to be worth something.
-DIVIDER_Y = 4.2
-GAPS = [(1.6, 3.0), (5.2, 6.6)]    # (x_from, x_to)
+DIVIDER_Y = 3.4
+GAPS = [(0.8, 2.2), (4.4, 5.8)]    # (x_from, x_to)
 
 # Unknown static cylinders: in the world, NOT in the map.
 # Both sit ON a plausible route, which is the point -- an unknown obstacle the
 # robot never reaches tests nothing. They are kept clear of the mover lanes in
 # generate_arena_scenarios.py so a scenario cannot accidentally drive a mover
 # through one.
-UNKNOWN_STATIC = [(2.3, 5.6, 0.30),   # just past the LEFT gap
-                  (4.2, 3.2, 0.30)]   # on the diagonal approach to the RIGHT gap
+UNKNOWN_STATIC = [(1.5, 4.8, 0.30),   # just past the LEFT gap
+                  (3.4, 2.4, 0.30)]   # on the diagonal approach to the RIGHT gap
 
 ROOT = Path(__file__).resolve().parents[1]
 

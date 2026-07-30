@@ -35,8 +35,10 @@ parked    a mover with speed 0 sitting past the right gap: a pure test of the
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DIVIDER_Y = 4.2
-LEFT_GAP, RIGHT_GAP = 2.3, 5.9        # gap centres
+# Must track generate_arena.py: the arena was moved so the hardcoded (0, 0)
+# spawn sits well inside it rather than exactly at the robot radius from a wall.
+DIVIDER_Y = 3.4
+LEFT_GAP, RIGHT_GAP = 1.5, 5.1        # gap centres
 
 
 def ob(name, a, b, speed):
@@ -66,7 +68,7 @@ def main():
 
     # across the lower room, met head-on with room to both sides
     write('crossing',
-          ob('dyn_obs_0', (1.2, 1.8), (7.6, 1.8), 0.30),
+          ob('dyn_obs_0', (0.0, 1.0), (6.6, 1.0), 0.30),
           'Mover crossing the lower room -- constant-velocity prediction valid, '
           'room to pass on either side.')
 
@@ -78,28 +80,28 @@ def main():
 
     # sweeping along the robot's own direction of travel into the right gap
     write('corridor',
-          ob('dyn_obs_0', (RIGHT_GAP, 1.6), (RIGHT_GAP, 3.9), 0.15),
+          ob('dyn_obs_0', (RIGHT_GAP, 0.9), (RIGHT_GAP, 3.1), 0.15),
           'Mover sweeping ALONG the approach to the right gap: the shared-'
           'corridor geometry, where there is nothing to go around.')
 
     # two movers, opposite sides, same stretch
     write('converge',
-          ob('dyn_obs_0', (1.2, 1.8), (7.6, 1.8), 0.28) +
-          ob('dyn_obs_1', (7.6, 6.8), (1.2, 6.8), 0.28),
+          ob('dyn_obs_0', (0.0, 1.0), (6.6, 1.0), 0.28) +
+          ob('dyn_obs_1', (6.6, 6.0), (0.0, 6.0), 0.28),
           'Two movers meeting the robot on both sides of the divider -- the '
           'multi-obstacle path, exercised in 0.09% of frames so far.')
 
     # slower mover going the same way through the right gap
     write('overtake',
-          ob('dyn_obs_0', (RIGHT_GAP, 2.2), (RIGHT_GAP, 6.4), 0.10),
+          ob('dyn_obs_0', (RIGHT_GAP, 1.4), (RIGHT_GAP, 5.6), 0.10),
           'A slower mover going the SAME way through the right gap: _blocking '
           'requires fx > 0, so the detour was never designed for this.')
 
     # non-circular movers: the perception stack fits circles, so this is the
     # only scenario that can tell whether the multi-disc covering earns its keep
     write('shapes',
-          ob('dyn_obs_1', (1.2, 1.8), (7.6, 1.8), 0.25) +
-          ob('dyn_obs_2', (7.6, 6.8), (1.2, 6.8), 0.25),
+          ob('dyn_obs_1', (0.0, 1.0), (6.6, 1.0), 0.25) +
+          ob('dyn_obs_2', (6.6, 6.0), (0.0, 6.0), 0.25),
           'A 0.7x0.4 box and a 1.2x0.3 cart, one each side of the divider. '
           'Circle fitting degenerates on a flat face and a single lidar view '
           'cannot see an object\'s depth, so this is where the covering discs '
@@ -110,7 +112,7 @@ def main():
     # the obstacle is visible the whole time; this is the one where perception
     # itself fails first, and the 1.0 s CBF horizon is all the warning there is.
     write('occlude',
-          ob('dyn_obs_0', (RIGHT_GAP + 1.6, DIVIDER_Y + 0.45),
+          ob('dyn_obs_0', (RIGHT_GAP + 1.5, DIVIDER_Y + 0.45),
                           (RIGHT_GAP - 0.2, DIVIDER_Y + 0.45), 0.35),
           'Mover hidden behind the divider, emerging into the right gap. '
           'Tests what happens when the obstacle is simply not observable until '
@@ -120,32 +122,32 @@ def main():
     # prediction chain are built on. A short segment at speed means the mover
     # reverses often, so the extrapolation is wrong a large fraction of the time.
     write('stopgo',
-          ob('dyn_obs_0', (RIGHT_GAP, 2.6), (RIGHT_GAP, 3.4), 0.35),
+          ob('dyn_obs_0', (RIGHT_GAP, 1.9), (RIGHT_GAP, 2.7), 0.35),
           'Short, fast sweep across the approach: the mover reverses every ~2 s, '
           'so constant-velocity extrapolation is wrong most of the time.')
 
     # SMALL: a 0.15 m body, near the clustering floor
     write('small',
-          ob('dyn_obs_3', (1.2, 1.8), (7.6, 1.8), 0.25),
+          ob('dyn_obs_3', (0.0, 1.0), (6.6, 1.0), 0.25),
           'A 0.15 m mover: few laser returns, so it may be clustered away '
           'entirely rather than merely localised badly.')
 
     # NON-CONVEX: an L, whose convex hull contains a large empty notch
     write('ell',
-          ob('dyn_obs_4', (1.2, 1.8), (7.6, 1.8), 0.25),
+          ob('dyn_obs_4', (0.0, 1.0), (6.6, 1.0), 0.25),
           'An L-shaped mover: every covering scheme here assumes convexity.')
 
     # THREE at once, mixed shapes and speeds
     write('dense',
-          ob('dyn_obs_0', (1.2, 1.8), (7.6, 1.8), 0.30) +
-          ob('dyn_obs_1', (7.6, 6.8), (1.2, 6.8), 0.25) +
-          ob('dyn_obs_3', (RIGHT_GAP, 2.4), (RIGHT_GAP, 3.8), 0.20),
+          ob('dyn_obs_0', (0.0, 1.0), (6.6, 1.0), 0.30) +
+          ob('dyn_obs_1', (6.6, 6.0), (0.0, 6.0), 0.25) +
+          ob('dyn_obs_3', (RIGHT_GAP, 1.7), (RIGHT_GAP, 3.1), 0.20),
           'Three movers of different size and speed at once -- the arena has '
           'only ever been asked to handle two.')
 
     # stationary "mover" past the right gap
     write('parked',
-          ob('dyn_obs_0', (RIGHT_GAP + 0.2, 5.4), (RIGHT_GAP + 0.2, 5.4), 0.0),
+          ob('dyn_obs_0', (RIGHT_GAP + 0.2, 4.6), (RIGHT_GAP + 0.2, 4.6), 0.0),
           'A stationary mover: tests the static/dynamic split directly.')
     print('\nvalidate: python3 evaluation/check_arena.py')
 
