@@ -121,14 +121,18 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
     ros2 launch my_omnibot_description $LAUNCH_ARGS \
         >> "$log_file" 2>&1 < /dev/null &
     PIDS+=( $! )
-    sleep 32   # gz dynamic world spawn + obstacle driver + Nav2 lifecycle + amcl
-
-    # 2. reset AMCL (best effort)
-    echo "[$(date +%T)] [2/5] reset AMCL pose ..."
-    timeout 8 ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
-        "{ header: { frame_id: 'map' }, pose: { pose: { position: { x: 0.0, y: 0.0, z: 0.0 }, orientation: { w: 1.0 } } } }" \
-        >> "$log_file" 2>&1 || echo "    initialpose timed out (continuing)"
-    sleep 3
+    # Wait on real readiness signals rather than a flat sleep sized for the
+    # worst case; see trial_start.py. Costs ~87 s of the old shell version.
+    echo "[$(date +%T)] [2/5] wait for stack + reset AMCL ..."
+    # PIPESTATUS, not the pipeline's status: that would be tee's, which always
+    # succeeds, so a failed bring-up would sail through and record a dead trial.
+    python3 "${HERE}/trial_start.py" --phase prepare \
+        --goal-x "$GOAL_X" --goal-y "$GOAL_Y" 2>&1 | tee -a "$log_file"
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+        echo "[$(date +%T)]     bring-up failed -- skipping trial ${seed}"
+        cleanup
+        return 1
+    fi
 
     # 3. record (record.sh already captures /gmpc/obstacles + diagnostics)
     echo "[$(date +%T)] [3/5] start recording -> ${bag_dir}"
@@ -136,22 +140,16 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
         >> "$log_file" 2>&1 < /dev/null &
     REC_PID=$!
     PIDS+=( $REC_PID )
-    sleep 3
 
-    # 4. publish goal once >=2 subscribers
-    echo "[$(date +%T)] [4/5] wait for /goal_pose subscribers, then publish ..."
-    for i in $(seq 1 30); do
-        count=$(ros2 topic info /goal_pose 2>/dev/null | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
-        count=${count:-0}
-        [ "$count" -ge 2 ] && break
-        sleep 1
-    done
-    # publish the goal 5x at 1 Hz (not --once): a single VOLATILE publish is
-    # easily missed by goal_to_plan_relay if its subscription isn't ready ->
-    # plan_requests=0 -> robot never moves. Repeating fixes the DDS race.
-    timeout 15 ros2 topic pub -t 5 -r 1 /goal_pose geometry_msgs/msg/PoseStamped \
-        "{ header: { frame_id: 'map' }, pose: { position: { x: ${GOAL_X}, y: ${GOAL_Y}, z: 0.0 }, orientation: { w: 1.0 } } }" \
-        >> "$log_file" 2>&1 || true
+    # 4. publish the goal, retrying until /plan comes back
+    echo "[$(date +%T)] [4/5] publish goal, wait for /plan ..."
+    python3 "${HERE}/trial_start.py" --phase goal \
+        --goal-x "$GOAL_X" --goal-y "$GOAL_Y" 2>&1 | tee -a "$log_file"
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+        echo "[$(date +%T)]     no plan -- skipping trial ${seed}"
+        cleanup
+        return 1
+    fi
 
     # 5. goal_watcher races the recorder
     echo "[$(date +%T)] [5/5] waiting for goal (tol=0.30 m, cap ${DURATION}s) ..."
@@ -183,7 +181,7 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
 
 echo "[$(date +%T)] === omni_bot DYNAMIC batch: method=${METHOD} N=${N_TRIALS}, dur=${DURATION}s, goal=(${GOAL_X},${GOAL_Y}) ==="
 for s in $(seq 1 "$N_TRIALS"); do
-    run_trial "$s"
+    run_trial "$s" || echo "[$(date +%T)] trial ${s} skipped"
 done
 
 echo
