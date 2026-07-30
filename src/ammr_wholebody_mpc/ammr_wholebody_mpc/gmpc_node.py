@@ -33,7 +33,8 @@ import tf2_ros
 
 from .gmpc           import GMPC, GMPCConfig
 from .se2            import from_xytheta
-from .detour import DetourConfig, DetourState, apply_offset, FREE
+from .detour import (DetourConfig, DetourState, apply_offset,
+                     clear_reference, FREE)
 from .path_processor import (path_msg_to_xyth,
                              build_reference_window,
                              quaternion_to_yaw)
@@ -128,6 +129,9 @@ class GMPCNode(Node):
         self.declare_parameter('detour_max_offset', 0.60)
         self.declare_parameter('detour_offset_rate', 0.08)
         self.declare_parameter('detour_vx_floor', 0.10)
+        # Keep the tracked reference out of the CBF's keep-out discs. Without
+        # it Q pulls towards points the CBF forbids (see clear_reference).
+        self.declare_parameter('detour_clear_ref', True)
         self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
         # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
         # repels from known static geometry and won't dodge into walls.
@@ -219,6 +223,8 @@ class GMPCNode(Node):
             max_offset=float(self.get_parameter('detour_max_offset').value),
             offset_rate=float(self.get_parameter('detour_offset_rate').value),
             vx_floor=float(self.get_parameter('detour_vx_floor').value)))
+        self.detour_clear_ref = bool(
+            self.get_parameter('detour_clear_ref').value)
         self._cfg = cfg
         self.N   = cfg.N
         self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
@@ -428,6 +434,10 @@ class GMPCNode(Node):
         side, off = self.detour.update(robot_xyth, obstacles or [])
         if abs(off) > 1e-6:
             X_ref_win = apply_offset(X_ref_win, off, self.detour.cfg.max_offset)
+            if self.detour_clear_ref:
+                X_ref_win = clear_reference(
+                    X_ref_win, obstacles or [], self.dt,
+                    default_margin=self._cfg.cbf_safe_margin)
         # While detouring, floor the forward speed so "stop and wait" leaves the
         # solution space; restore the nominal limit as soon as we are free.
         floor = self.detour.cfg.vx_floor if (

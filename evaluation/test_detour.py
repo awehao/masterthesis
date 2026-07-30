@@ -19,7 +19,9 @@ import numpy as np
 sys.path.insert(0, '/home/howardchen/masterthesis/src/ammr_wholebody_mpc')
 
 from ammr_wholebody_mpc.detour import (            # noqa: E402
-    DetourConfig, DetourState, apply_offset, FREE, LOCK_LEFT, LOCK_RIGHT)
+    DetourConfig, DetourState, apply_offset, clear_reference,
+    FREE, LOCK_LEFT, LOCK_RIGHT)
+from ammr_wholebody_mpc import se2                # noqa: E402
 
 NAME = {FREE: 'FREE', LOCK_LEFT: 'LEFT', LOCK_RIGHT: 'RIGHT'}
 R0 = (0.0, 0.0, 0.0)                    # robot at the origin, heading +x
@@ -57,10 +59,13 @@ def main():
                        NAME[s.update(R0, [mover(1.2, -0.5)])[0]], 'LEFT')
 
     print('\n-- walls ------------------------------------------------------')
+    # Falling back to the OTHER side means bending the reference towards the
+    # obstacle being avoided. Measured over ten trials: mean clearance
+    # +0.008 -> -0.086 m, 4 -> 5 grazes. With no room, do not commit.
     s = DetourState(cfg())
-    fails += not check('wall on the preferred side -> take the other side',
+    fails += not check('wall on the preferred side -> do not commit',
                        NAME[s.update(R0, [mover(1.2, +0.5),
-                                          wall(0.6, -0.5)])[0]], 'LEFT')
+                                          wall(0.6, -0.5)])[0]], 'FREE')
     s = DetourState(cfg())
     fails += not check('walls both sides -> do not commit',
                        NAME[s.update(R0, [mover(1.2, 0.0), wall(0.6, -0.5),
@@ -78,14 +83,14 @@ def main():
     s = DetourState(cfg())
     fails += not check('second mover parked on the preferred side',
                        NAME[s.update(R0, [mover(1.2, +0.5),
-                                          mover(0.5, -0.5)])[0]], 'LEFT')
+                                          mover(0.5, -0.5)])[0]], 'FREE')
     # Currently 1.5 m clear on the right, but closing at 0.6 m/s: within the
     # 1.5 s lookahead it is at -0.6 m, inside 0.35 + 0.38. A check on present
     # positions alone would wrongly commit right and swing into it.
     s = DetourState(cfg())
     late = mover(0.5, -1.5, vy=+0.6)
     fails += not check('second mover ARRIVING on the preferred side',
-                       NAME[s.update(R0, [mover(1.2, +0.5), late])[0]], 'LEFT')
+                       NAME[s.update(R0, [mover(1.2, +0.5), late])[0]], 'FREE')
     s = DetourState(cfg())
     fails += not check('  ...and it is genuinely clear right now',
                        abs(late['y']) > OFF + s.cfg.side_clear_dyn, True)
@@ -145,6 +150,25 @@ def main():
     fails += not check('enable=False leaves the reference untouched',
                        (NAME[sd], off, np.allclose(apply_offset(X, off, OFF), X)),
                        ('FREE', 0.0, True))
+
+    print('\n-- reference must not be pulled into the CBF keep-out ---------')
+    # r_eff = 0.25 + 0.38 = 0.63 m, but the horizon can only ask for
+    # vy_max * T = 0.25 * 1.0 = 0.25 m of lateral swing, so a bent reference
+    # still lies inside the keep-out and Q fights the CBF over it.
+    DT, NH, V = 0.05, 20, 0.30
+    Xr = np.stack([se2.from_xytheta(V * DT * k, 0.0, 0.0) for k in range(NH)])
+    blk = mover(0.30, 0.0)
+    near = lambda X: min(float(np.linalg.norm(X[k][:2, 2] -
+                         np.array([blk['x'], blk['y']]))) for k in range(NH))
+    bent = apply_offset(Xr, -OFF, OFF)
+    fails += not check('bent reference alone sits inside the keep-out',
+                       near(bent) < 0.63, True)
+    cleared = clear_reference(bent, [blk], DT, default_margin=0.38)
+    fails += not check('after projection it is outside', near(cleared) >= 0.63,
+                       True)
+    fails += not check('projection is a no-op with no movers',
+                       np.allclose(clear_reference(Xr, [wall(0.5, 0.3)], DT), Xr),
+                       True)
 
     print(f'\n{"ALL PASS" if fails == 0 else f"{fails} FAILED"}\n')
     return 1 if fails else 0

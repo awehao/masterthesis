@@ -223,10 +223,14 @@ class DetourState:
                 # mover is still guarded by the CBF, whereas swinging into a
                 # wall is not. If neither side has room, do not commit at all
                 # and leave the CBF to handle it as before.
+                # Commit only if the side away from the obstacle has room.
+                # An earlier version fell back to the OTHER side when it did not
+                # -- that is the side the obstacle is on, so it bent the
+                # reference towards the thing being avoided. Measured over ten
+                # trials: mean clearance +0.008 -> -0.086 m and 4 -> 5 grazes.
+                # With no room, the right answer is not to commit at all.
                 if self._side_free(robot_xyth, obstacles, want, ignore=blk):
                     self.side = want
-                elif self._side_free(robot_xyth, obstacles, -want, ignore=blk):
-                    self.side = -want
                 else:
                     self.side = FREE
                 if self.side != FREE:
@@ -255,4 +259,44 @@ def apply_offset(X_ref_win, offset, max_offset):
         shape = math.sin(math.pi * (k + 1) / N) ** 2      # 0 .. 1 .. 0
         n_body = out[k][:2, :2] @ np.array([0.0, 1.0])    # +y of the reference
         out[k][:2, 2] = out[k][:2, 2] + offset * shape * n_body
+    return out
+
+
+def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.05):
+    """Push reference points out of the CBF's keep-out discs.
+
+    This is what makes the detour safe rather than merely committed. The keep-out
+    radius is r_obs + margin = 0.25 + 0.38 = 0.63 m, while the lateral swing the
+    reference can ask for is bounded by vy_max * horizon = 0.25 * 1.0 = 0.25 m.
+    So a bent reference STILL LIES INSIDE the keep-out zone: the tracking cost Q
+    pulls the robot towards a point the CBF forbids, the two fight, and the
+    result rides the constraint boundary until the slack lets it through.
+    Measured over two ten-trial rounds, every collision was a graze past a mover
+    (0.18-0.32 m centre distance against a 0.55 m contact distance) -- not, as I
+    first reported, a wall.
+
+    Projecting each reference point radially out to the keep-out boundary makes Q
+    and the CBF agree instead of fight, which no amount of offset tuning can do:
+    the geometry above says the offset needed is larger than the offset
+    reachable.
+
+    Obstacles are advanced at constant velocity, the same prediction the CBF
+    uses, so the reference is cleared of where each obstacle WILL be at step k.
+    Static points are left alone: pushing out of a wall and out of a mover can
+    disagree, and the planner already routes around known geometry.
+    """
+    out = X_ref_win.copy()
+    for k in range(len(out)):
+        p = out[k][:2, 2].astype(float).copy()
+        for o in obstacles:
+            if o.get('static'):
+                continue
+            c = np.array([float(o['x']) + float(o.get('vx', 0.0)) * k * dt,
+                          float(o['y']) + float(o.get('vy', 0.0)) * k * dt])
+            r = float(o['radius']) + float(o.get('margin', default_margin)) + pad
+            d = p - c
+            n = float(np.linalg.norm(d))
+            if 1e-9 < n < r:
+                p = c + d * (r / n)
+        out[k][:2, 2] = p
     return out

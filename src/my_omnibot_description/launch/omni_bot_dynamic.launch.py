@@ -145,6 +145,7 @@ def generate_launch_description():
         'detour_max_offset': float(os.environ.get('DETOUR_OFFSET', '0.60')),
         'detour_trigger_range': float(os.environ.get('DETOUR_RANGE', '2.0')),
         'detour_vx_floor': float(os.environ.get('DETOUR_VX_FLOOR', '0.10')),
+        'detour_clear_ref': os.environ.get('DETOUR_CLEAR_REF', '1') == '1',
     }
     cbf_overrides['cbf_enable'] = os.environ.get('CBF_ENABLE', '1') == '1'
 
