@@ -31,9 +31,10 @@ DETOUR=1 \
   DETOUR_VX_FLOOR="${DETOUR_VX_FLOOR:-0.0}" \
   DETOUR_CLEAR_REF="${DETOUR_CLEAR_REF:-1}" \
   DETOUR_CLEAR_PAD="${DETOUR_CLEAR_PAD:-0.05}" \
+  DETOUR_SIDE_PROJ="${DETOUR_SIDE_PROJ:-1}" \
   ./evaluation/run_omnibot_dynamic.sh 10 250 17 17 gmpc_scan
 echo "config: offset=${DETOUR_OFFSET:-0.35} vx_floor=${DETOUR_VX_FLOOR:-0.0}" \
-     "clear_ref=${DETOUR_CLEAR_REF:-1} pad=${DETOUR_CLEAR_PAD:-0.05}" 
+     "clear_ref=${DETOUR_CLEAR_REF:-1} pad=${DETOUR_CLEAR_PAD:-0.05}" "side_proj=${DETOUR_SIDE_PROJ:-1}" 
 
 cp "$R/omnibot_dynamic_gmpc_scan.csv" "$R/final_$TAG.csv"
 mkdir -p "$B/archive_$TAG"
