@@ -124,7 +124,7 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
     {
       echo "### CONFIG $(date +%T)"
       echo "###   launch: $LAUNCH_ARGS"
-      for v in TRAJ GUI ARM DETOUR DETOUR_OFFSET DETOUR_VX_FLOOR DETOUR_CLEAR_REF \
+      for v in ARENA TRAJ GUI ARM DETOUR DETOUR_OFFSET DETOUR_VX_FLOOR DETOUR_CLEAR_REF \
                DETOUR_CLEAR_PAD DETOUR_SIDE_PROJ PLAN_BLEND YAW_LOOKAHEAD \
                ST_WEIGHT PROG_WEIGHT CBF_ALPHA CBF_SAFE_MARGIN PLANNER_SCAN CBF_SLACK_W \
                CBF_MARGIN_GROWTH AX_MAX AY_MAX AZ_MAX; do

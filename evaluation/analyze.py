@@ -25,6 +25,7 @@ Each call appends one row to the output CSV (creates header if file is new).
 
 from __future__ import annotations
 
+import os
 import argparse
 import csv
 import math
@@ -360,10 +361,18 @@ def load_static_clearance():
         import yaml
         share = (Path(__file__).resolve().parents[1]
                  / 'install' / 'ammr_bringup' / 'share' / 'ammr_bringup')
-        my = yaml.safe_load(open(share / 'maps' / 'random_room.yaml'))
+        # The map and world must match the run. These were hardcoded to
+        # random_room, so a trial in the 9 m arena was scored against the 20 m
+        # room's occupancy grid -- the robot's true position landed on an
+        # unrelated occupied cell and every trial reported a -0.300 m wall
+        # collision that never happened.
+        _arena = os.environ.get('ARENA', '0') == '1'
+        _map = 'arena' if _arena else 'random_room'
+        _world = 'arena.sdf' if _arena else 'random_room_dynamic.sdf'
+        my = yaml.safe_load(open(share / 'maps' / f'{_map}.yaml'))
         res = my['resolution']; ox, oy = my['origin'][0], my['origin'][1]
         th = my['occupied_thresh']
-        with open(share / 'maps' / 'random_room.pgm', 'rb') as f:
+        with open(share / 'maps' / f'{_map}.pgm', 'rb') as f:
             assert f.readline().strip() == b'P5'
             line = f.readline()
             while line.startswith(b'#'):
@@ -372,7 +381,7 @@ def load_static_clearance():
             img = np.frombuffer(f.read(), np.uint8).reshape(h, w)
         occ = ((255 - img.astype(float)) / 255.0) > th        # walls + red boxes
         dist = ndimage.distance_transform_edt(~occ) * res
-        sdf = (share / 'worlds' / 'random_room_dynamic.sdf').read_text()
+        sdf = (share / 'worlds' / _world).read_text()
         unk = [(float(p.split()[0]), float(p.split()[1]), float(r))
                for p, r in re.findall(
                    r'<model name="unknown_obs_\d+">.*?<pose>([-\d. ]+)</pose>'

@@ -48,8 +48,17 @@ def generate_launch_description():
     wbmpc_pkg = get_package_share_directory('ammr_wholebody_mpc')
 
     urdf_file  = os.path.join(desc_pkg, 'urdf',   'omni_bot.urdf.xacro')
-    world_file = os.path.join(bringup,  'worlds', 'random_room_dynamic.sdf')
-    map_file   = os.path.join(bringup,  'maps',   'random_room.yaml')
+    # ARENA=1 swaps the 20 m random room for the 9 m purpose-built arena: known
+    # walls, unknown static cylinders, unknown movers, and a divider with two
+    # gaps so route choice is a real decision. A trial there costs ~45 s instead
+    # of ~170 s, which is the cheapest way to buy the statistical power that
+    # collision rate needs -- at n=10 its 95% interval spans 20-30 points.
+    if os.environ.get('ARENA', '0') == '1':
+        world_file = os.path.join(bringup, 'worlds', 'arena.sdf')
+        map_file   = os.path.join(bringup, 'maps',   'arena.yaml')
+    else:
+        world_file = os.path.join(bringup,  'worlds', 'random_room_dynamic.sdf')
+        map_file   = os.path.join(bringup,  'maps',   'random_room.yaml')
     nav_params = os.path.join(desc_pkg, 'config', 'nav2_localization.yaml')
     gmpc_params= os.path.join(wbmpc_pkg,'config', 'gmpc_params.yaml')
     # Scenario selection. Every scenario is just a trajectories YAML -- the world

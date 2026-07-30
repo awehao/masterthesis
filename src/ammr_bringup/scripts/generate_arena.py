@@ -56,8 +56,12 @@ DIVIDER_Y = 4.2
 GAPS = [(1.6, 3.0), (5.2, 6.6)]    # (x_from, x_to)
 
 # Unknown static cylinders: in the world, NOT in the map.
-UNKNOWN_STATIC = [(2.3, 5.6, 0.30),   # just past the left gap, on the route
-                  (6.4, 2.7, 0.30)]   # in the lower open area
+# Both sit ON a plausible route, which is the point -- an unknown obstacle the
+# robot never reaches tests nothing. They are kept clear of the mover lanes in
+# generate_arena_scenarios.py so a scenario cannot accidentally drive a mover
+# through one.
+UNKNOWN_STATIC = [(2.3, 5.6, 0.30),   # just past the LEFT gap
+                  (4.2, 3.2, 0.30)]   # on the diagonal approach to the RIGHT gap
 
 ROOT = Path(__file__).resolve().parents[1]
 
