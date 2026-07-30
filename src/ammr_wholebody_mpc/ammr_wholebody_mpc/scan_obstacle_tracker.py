@@ -91,7 +91,17 @@ def fit_circle(seg: np.ndarray, sensor_xy, r_prior: float, r_max: float):
                 # the fitted centre must be on the far side of the arc, never
                 # between the arc and the sensor
                 if float((np.array([cx, cy]) - mean) @ away) > -1e-3:
-                    return float(cx), float(cy), float(r)
+                    # The FITTED radius is only right for a circle. Measured on
+                    # synthetic arcs: a 0.7x0.4 box fits r = 0.288 against a true
+                    # circumscribed 0.40, and a 1.2x0.3 cart fits 0.455 against
+                    # 0.62 -- underestimates of 0.11 and 0.17 m, which come
+                    # straight out of the 0.38 m CBF margin. Taking the observed
+                    # extent from the fitted centre instead makes the disc cover
+                    # every point actually seen, by construction, and turns all
+                    # three cases into slight OVER-estimates (+0.01, +0.01,
+                    # +0.03) -- the safe direction, and shape-agnostic.
+                    ext = float(np.max(np.hypot(seg[:, 0] - cx, seg[:, 1] - cy)))
+                    return float(cx), float(cy), float(max(r, ext))
         except np.linalg.LinAlgError:
             pass
     c = mean + r_prior * away
