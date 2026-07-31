@@ -207,6 +207,11 @@ def generate_launch_description():
         'ref_yaw_lookahead': float(os.environ.get('YAW_LOOKAHEAD', '0.0')),
         # Cross-fade seconds when a new /plan arrives; 0 = adopt instantly.
         'plan_blend_s': float(os.environ.get('PLAN_BLEND', '0.0')),
+        # Hold still when blocked instead of pushing a reference that insists
+        # the way is clear. 0 = off, which is what every result so far used.
+        'stuck_window_s': float(os.environ.get('STUCK_WINDOW', '0.0')),
+        'stuck_progress_m': float(os.environ.get('STUCK_PROGRESS', '0.15')),
+        'stuck_release_h': float(os.environ.get('STUCK_RELEASE_H', '0.6')),
     }
     cbf_overrides['cbf_enable'] = os.environ.get('CBF_ENABLE', '1') == '1'
 

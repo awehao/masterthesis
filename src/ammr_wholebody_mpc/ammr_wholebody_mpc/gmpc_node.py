@@ -31,6 +31,8 @@ from visualization_msgs.msg import MarkerArray, Marker
 
 import tf2_ros
 
+from collections import deque
+
 from .gmpc           import GMPC, GMPCConfig
 from .se2            import from_xytheta
 from .detour import (DetourConfig, DetourState, apply_offset,
@@ -102,6 +104,21 @@ class GMPCNode(Node):
         # sits at 0.96 of a_max and saturates 88.5% of the time, against 13.5%
         # otherwise -- it is chasing a step, not misbehaving.
         self.declare_parameter('plan_blend_s', 0.0)
+        # Hold still when there is demonstrably no way forward, instead of
+        # tracking a reference that insists there is. With the planner decoupled
+        # from the movers it cannot know an opening is blocked, so it keeps
+        # routing through one; the CBF stops the robot, the plan flips to the
+        # other opening three seconds later, and the robot turns around. In the
+        # both-gaps-patrolled scenario that produced 8 left/right plan flips in
+        # 29 replans, 10.9 reversals per run, 12.7% of commands in reverse, and
+        # the robot never once reached the divider in 88 s -- 2 of 10 trials
+        # arrived and 9 collided. Waiting is the correct answer there and
+        # nothing in the stack could express it.
+        # 0 disables (the behaviour every result so far was measured with).
+        self.declare_parameter('stuck_window_s', 0.0)
+        self.declare_parameter('stuck_progress_m', 0.15)
+        self.declare_parameter('stuck_release_h', 0.6)
+        self.declare_parameter('stuck_max_hold_s', 25.0)
         self.declare_parameter('goal_tolerance_xy', 0.20)
         self.declare_parameter('tf_timeout',        0.10)
 
@@ -195,6 +212,17 @@ class GMPCNode(Node):
         self.ref_yaw_lookahead = float(
             self.get_parameter('ref_yaw_lookahead').value)
         self.plan_blend_s = float(self.get_parameter('plan_blend_s').value)
+        self.stuck_window_s = float(self.get_parameter('stuck_window_s').value)
+        self.stuck_progress_m = float(self.get_parameter('stuck_progress_m').value)
+        self.stuck_release_h = float(self.get_parameter('stuck_release_h').value)
+        self.stuck_max_hold_s = float(self.get_parameter('stuck_max_hold_s').value)
+        self._goal_hist = deque(maxlen=2000)   # (t, distance to goal)
+        self._holding_since = None
+        self._last_min_h = None
+        # "the CBF is doing something" -- the same threshold gain scheduling
+        # uses, so being blocked and being in the danger zone mean the same thing
+        self.cbf_danger_hold = float(
+            self.get_parameter('cbf_danger_thresh').value)
         self._prev_path_xyth = None      # path being faded OUT
         self._blend_t0 = None            # when the current fade started
         self.tf_timeout_s     = float(self.get_parameter('tf_timeout').value)
@@ -339,6 +367,54 @@ class GMPCNode(Node):
             return None
         return dt / self.plan_blend_s
 
+    def _hold_if_stuck(self, dist_to_goal) -> bool:
+        """Stop and wait when the route is blocked, rather than keep pushing.
+
+        Detection is deliberately about OUTCOME, not cause: if the distance to
+        the goal has not fallen over a whole window, the robot is not getting
+        anywhere, whatever the reason. It only counts as blocked when the CBF is
+        also active -- otherwise a robot that is simply slow, or circling a wide
+        detour, would be mistaken for a stuck one.
+
+        Holding releases as soon as min_h recovers, which for a patrolling
+        obstacle happens on its own, and is capped so a permanent blockage does
+        not become a permanent stop: after the cap the robot resumes and the
+        detector starts again from scratch.
+
+        Returns True if the caller should publish zero and skip this step.
+        """
+        if self.stuck_window_s <= 0.0:
+            return False
+        now = self.get_clock().now().nanoseconds * 1e-9
+        self._goal_hist.append((now, dist_to_goal))
+        while self._goal_hist and now - self._goal_hist[0][0] > self.stuck_window_s:
+            self._goal_hist.popleft()
+
+        h = self._last_min_h if self._last_min_h is not None else 9.9
+        if self._holding_since is not None:
+            held = now - self._holding_since
+            if h > self.stuck_release_h or held > self.stuck_max_hold_s:
+                self.get_logger().info(
+                    f'\033[1;32mresuming\033[0m after holding {held:.1f} s '
+                    f'(min_h={h:.2f})')
+                self._holding_since = None
+                self._goal_hist.clear()
+                return False
+            self._publish_zero()
+            return True
+
+        if (len(self._goal_hist) > 10
+                and now - self._goal_hist[0][0] >= self.stuck_window_s * 0.95):
+            progress = self._goal_hist[0][1] - dist_to_goal
+            if progress < self.stuck_progress_m and h < self.cbf_danger_hold:
+                self.get_logger().warn(
+                    f'\033[1;33mblocked\033[0m: {progress:+.2f} m of progress in '
+                    f'{self.stuck_window_s:.0f} s with min_h={h:.2f} -- holding')
+                self._holding_since = now
+                self._publish_zero()
+                return True
+        return False
+
     def _plan_cb(self, msg: Path):
         if len(msg.poses) == 0:
             self.get_logger().warn('Received empty plan')
@@ -440,6 +516,8 @@ class GMPCNode(Node):
         goal_xy = np.array([self.latest_path.poses[-1].pose.position.x,
                             self.latest_path.poses[-1].pose.position.y])
         dist_to_goal = float(np.linalg.norm(goal_xy - robot_xyth[:2]))
+        if self._hold_if_stuck(dist_to_goal):
+            return
         if dist_to_goal < self.goal_tol_xy:
             if not self._arrived:
                 self.get_logger().info(
@@ -532,6 +610,8 @@ class GMPCNode(Node):
         if self.cbf_enable and result.cbf_active > 0:
             mh = Float32(); mh.data = float(result.min_h)
             self.min_h_pub.publish(mh)
+            # kept for the stuck detector: how close the barrier came this step
+            self._last_min_h = float(result.min_h)
             self._publish_cbf_zones()
 
         if result.status not in ('solved', 'solved inaccurate'):
