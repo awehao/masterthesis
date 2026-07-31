@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# All 14 arena scenarios under plan3, on the repositioned arena.
+# All 14 arena scenarios under hm_bigroom, on the repositioned arena.
 #
 # The first attempt had to be discarded: the launch spawns the robot at a
 # hardcoded (0, 0), and the arena's corner sat at -0.5 with 0.20 m walls, so the

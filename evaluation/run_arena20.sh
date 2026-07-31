@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# All 20 arena scenarios under plan3.
+# All 20 arena scenarios under hm_bigroom.
 #
-# plan3 = circle-fit tracker + three-way perception split + 1.0 s smoothstep
+# hm_bigroom = circle-fit tracker + three-way perception split + 1.0 s smoothstep
 # reference blending + cbf_alpha 1.5. In the 20 m room it was the first
 # configuration with zero collisions of either kind (dynamic 0/10, unknown
 # static 0/10, 10/10 arrivals, 42 s faster than baseline).

@@ -13,10 +13,10 @@ cd /home/howardchen/masterthesis
 rm -f /tmp/omnibot_dynamic.pid
 PLANNER_SCAN=/scan_filtered DETOUR=0 PLAN_BLEND=1.0 CBF_ALPHA=1.5 \
   ./evaluation/run_omnibot_dynamic.sh 10 250 17 17 gmpc_scan
-cp evaluation/results/omnibot_dynamic_gmpc_scan.csv evaluation/results/final_plan3.csv
-mkdir -p evaluation/bags/archive_plan3
+cp evaluation/results/omnibot_dynamic_gmpc_scan.csv evaluation/results/final_hm_bigroom.csv
+mkdir -p evaluation/bags/archive_hm_bigroom
 for i in $(seq 1 10); do
   [ -d "evaluation/bags/gmpc_cbf__scan_seed$i" ] && \
-    cp -r "evaluation/bags/gmpc_cbf__scan_seed$i" evaluation/bags/archive_plan3/
+    cp -r "evaluation/bags/gmpc_cbf__scan_seed$i" evaluation/bags/archive_hm_bigroom/
 done
-echo "=== PLAN3 DONE ==="
+echo "=== HM_BIGROOM DONE ==="

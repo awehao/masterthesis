@@ -636,7 +636,11 @@ SE(2) 上的幾何 MPC（李群測地誤差），CBF 約束施加在 `k = 0…N`
 
 ## 標籤對應
 
-先前批次標籤 `plan3` = 架構完整啟用的配置，之後改稱 **`hm-full`**：
+先前批次標籤 `plan3` = 架構完整啟用的配置，現已改稱 **`hm-full`**。
+腳本與圖表已改名（`run_hm_bigroom.sh` 等）；既有的資料檔與 archive 目錄
+沿用 `plan3` / `plan3b` 舊名以免與已產出的分析對不上，對應關係為
+`archive_plan3` = hm-full 初版、`archive_plan3b` = 感知修正後重跑。
+配置內容：
 
 ```
 PLANNER_SCAN=/scan_filtered   動態障礙不進規劃器

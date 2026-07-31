@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The arena suite under the plan3 configuration.
+# The arena suite under the hm_bigroom configuration.
 #
-# plan3 = three-way perception split + reference blending + cbf_alpha 1.5, on
+# hm_bigroom = three-way perception split + reference blending + cbf_alpha 1.5, on
 # top of the circle-fit tracker. In the 20 m room it was the first configuration
 # all night with zero collisions of either kind (dynamic 0/10, unknown static
 # 0/10, arrival 10/10), 42 s faster than the baseline with 58% less time stuck
