@@ -130,7 +130,7 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
       echo "###   launch: $LAUNCH_ARGS"
       for v in ARENA TRAJ GUI ARM DETOUR DETOUR_OFFSET DETOUR_VX_FLOOR DETOUR_CLEAR_REF \
                DETOUR_CLEAR_PAD DETOUR_SIDE_PROJ PLAN_BLEND YAW_LOOKAHEAD YAW_RATE_MAX \
-               ST_WEIGHT PROG_WEIGHT CBF_ALPHA CBF_SAFE_MARGIN PLANNER_SCAN CBF_SLACK_W STUCK_WINDOW STUCK_PROGRESS STATIC_MARGIN \
+               GOAL_DELAY_MIN GOAL_DELAY_MAX ST_WEIGHT PROG_WEIGHT CBF_ALPHA CBF_SAFE_MARGIN PLANNER_SCAN CBF_SLACK_W STUCK_WINDOW STUCK_PROGRESS STATIC_MARGIN \
                CBF_MARGIN_GROWTH AX_MAX AY_MAX AZ_MAX; do
         echo "###   $v=${!v-<unset>}"
       done
@@ -160,8 +160,13 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
 
     # 4. publish the goal, retrying until /plan comes back
     echo "[$(date +%T)] [4/5] publish goal, wait for /plan ..."
+    # --seed makes the release-to-goal delay reproducible per trial: the
+    # obstacles wait on their start points, so this delay is the only thing
+    # setting their phase when the robot sets off.
     python3 "${HERE}/trial_start.py" --phase goal \
-        --goal-x "$GOAL_X" --goal-y "$GOAL_Y" 2>&1 | tee -a "$log_file"
+        --goal-x "$GOAL_X" --goal-y "$GOAL_Y" --seed "$seed" \
+        --goal-delay-min "${GOAL_DELAY_MIN:-1.0}" \
+        --goal-delay-max "${GOAL_DELAY_MAX:-5.0}" 2>&1 | tee -a "$log_file"
     if [ "${PIPESTATUS[0]}" -ne 0 ]; then
         echo "[$(date +%T)]     no plan -- skipping trial ${seed}"
         cleanup

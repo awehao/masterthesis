@@ -302,6 +302,17 @@ def generate_launch_description():
     return LaunchDescription([
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', rp),
         SetEnvironmentVariable('GZ_SIM_SYSTEM_PLUGIN_PATH', plugin_paths),
+        # Hybrid-graphics (PRIME on-demand) machine: without these, gz/OGRE's
+        # EGL is routed to Mesa, which cannot drive the NVIDIA card. The log
+        # then carries "failed to create dri2 screen" and the viewport renders
+        # nothing -- the robot is simulated and driving, but not drawn.
+        # omni_bot_arm.launch.py sets the same three and claims the navigation
+        # launches do too; this one did not, which is why GUI runs here showed
+        # an empty world.
+        SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
+        SetEnvironmentVariable('__GLX_VENDOR_LIBRARY_NAME', 'nvidia'),
+        SetEnvironmentVariable('__EGL_VENDOR_LIBRARY_FILENAMES',
+                               '/usr/share/glvnd/egl_vendor.d/10_nvidia.json'),
         DeclareLaunchArgument('gui', default_value='true'),
         # Phase 2: mount the Lite 6. Default false so the benchmark robot and
         # the recorded N=40 results stay exactly as validated.
@@ -339,7 +350,13 @@ def generate_launch_description():
         # move the obstacles (ping-pong)
         TimerAction(period=8.0, actions=[Node(
             package='ammr_bringup', executable='dynamic_obstacle_driver',
-            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],
+            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file},
+                        # Park the obstacles on their start points until
+                        # trial_start.py releases them, so every trial begins
+                        # from the same obstacle configuration. Empty = the old
+                        # "start moving as soon as this node comes up".
+                        {'start_topic': os.environ.get(
+                            'OBS_START_TOPIC', '/dynamic_obstacles/start')}],
             output='screen')]),
 
         # nav + control + perception (wait for gz/robot/TF)

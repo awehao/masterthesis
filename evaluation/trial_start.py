@@ -31,6 +31,7 @@ than record a run that was never going to move.
     python3 evaluation/trial_start.py --goal-x 17 --goal-y 17
 """
 import argparse
+import random
 import sys
 import time
 
@@ -41,6 +42,7 @@ from rclpy.qos import (QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy,
 
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import Path
+from std_msgs.msg import Empty
 from rosgraph_msgs.msg import Clock
 
 
@@ -65,6 +67,9 @@ class Starter(Node):
         self.goal_pub = self.create_publisher(PoseStamped, '/goal_pose', LATCH)
         self.init_pub = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10)
+        # LATCH so the driver still gets the release even if it subscribes late.
+        self.release_pub = self.create_publisher(
+            Empty, '/dynamic_obstacles/start', LATCH)
 
     # NB: not `_clock`/`_logger`/etc -- rclpy.node.Node sets instance attributes
     # of those names in __init__, which shadow same-named methods and make the
@@ -98,6 +103,26 @@ class Starter(Node):
         return g
 
 
+def release_obstacles(n, delay_min, delay_max, seed):
+    """Start the obstacles, then wait a seeded random delay before the goal.
+
+    The obstacles are parked on their start points until this fires, so the
+    delay is the ONLY thing that decides where each one is when the robot sets
+    off. Previously that was set by how long bring-up happened to take, which
+    is neither controlled nor recorded -- two runs of the same scenario met the
+    obstacles at different phases and the difference showed up as unexplained
+    run-to-run variance. Drawing it from the trial seed keeps the variety while
+    making each trial reproducible and the phase a number we can report.
+    """
+    d = random.Random(seed).uniform(delay_min, delay_max)
+    n.release_pub.publish(Empty())
+    print(f'OBSTACLES RELEASED, goal in {d:.2f} s (seed {seed})', flush=True)
+    end = time.time() + d
+    while time.time() < end:
+        rclpy.spin_once(n, timeout_sec=min(0.05, max(0.0, end - time.time())))
+    return d
+
+
 def publish_goal(n, left, t0):
     """Publish the goal, republishing until a plan comes back.
 
@@ -128,6 +153,11 @@ def main():
     # Recording has to start after the stack is up but BEFORE the robot moves,
     # so the caller runs `prepare`, starts the recorder, then runs `goal`.
     ap.add_argument('--phase', choices=('prepare', 'goal', 'all'), default='all')
+    # Obstacles are released, then the goal follows after a delay drawn from
+    # --seed. Set --goal-delay-max 0 to release and go in the same instant.
+    ap.add_argument('--goal-delay-min', type=float, default=1.0)
+    ap.add_argument('--goal-delay-max', type=float, default=5.0)
+    ap.add_argument('--seed', type=int, default=0)
     a = ap.parse_args()
 
     rclpy.init()
@@ -136,6 +166,7 @@ def main():
     left = lambda: max(5.0, a.timeout - (time.time() - t0))
     try:
         if a.phase == 'goal':
+            release_obstacles(n, a.goal_delay_min, a.goal_delay_max, a.seed)
             return publish_goal(n, left, t0)
 
         if not n.wait(lambda: n.clock_t is not None and n.clock_t > 1.0,
@@ -166,6 +197,7 @@ def main():
         if a.phase == 'prepare':
             print(f'PREPARED in {time.time() - t0:.1f} s', flush=True)
             return 0
+        release_obstacles(n, a.goal_delay_min, a.goal_delay_max, a.seed)
         return publish_goal(n, left, t0)
     finally:
         n.destroy_node()
