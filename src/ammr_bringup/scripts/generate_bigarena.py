@@ -210,29 +210,38 @@ SHAPE = {'dyn_obs_0': '圓柱 r0.25', 'dyn_obs_1': '方形 0.7×0.4',
 ENDPOINT_CLEAR = 0.55
 
 
-def _seg_dist(p1, p2, q1, q2, n=40):
-    """Closest approach between two segments (sampled -- exact is overkill)."""
-    A = p1 + (p2 - p1) * np.linspace(0, 1, n)[:, None]
-    B = q1 + (q2 - q1) * np.linspace(0, 1, n)[:, None]
-    return float(np.min(np.linalg.norm(A[:, None, :] - B[None, :, :], axis=2)))
+def _walk(a, b, speed, t):
+    """Where a ping-pong body is at time t, given it starts at `a` heading to `b`."""
+    L = float(np.linalg.norm(b - a))
+    if L < 1e-6 or speed < 1e-6:
+        return np.repeat(a[None, :], len(t), axis=0)
+    u = np.mod(speed * t, 2 * L)
+    s = np.where(u <= L, u, 2 * L - u)            # triangle wave along the lane
+    return a[None, :] + (b - a)[None, :] * (s / L)[:, None]
 
 
-def _angle(p1, p2, q1, q2):
-    u, v = p2 - p1, q2 - q1
-    u = u / max(np.linalg.norm(u), 1e-9)
-    v = v / max(np.linalg.norm(v), 1e-9)
-    return float(np.degrees(np.arccos(np.clip(abs(u @ v), 0, 1))))
+def _min_sep(a1, b1, v1, a2, b2, v2, horizon=600.0, dt=0.2):
+    """Closest the two bodies ever actually get, over a long run.
+
+    An earlier rule only asked whether the LANES came close, and allowed it when
+    they crossed at an angle -- on the theory that a crossing is a coincidence
+    the bodies pass through. They do not: these are kinematic, so they do not
+    collide, they interpenetrate, and two of them met and sat inside each other
+    on screen. But ping-pong is fully determined by (start, end, speed) and they
+    now spawn on their own start points, so there is nothing to theorise about:
+    walk both bodies forward and take the minimum.
+    """
+    t = np.arange(0.0, horizon, dt)
+    return float(np.min(np.linalg.norm(_walk(a1, b1, v1, t)
+                                       - _walk(a2, b2, v2, t), axis=1)))
 
 
-def traversal(rng, dm_all, r, min_len, placed, tries=30000):
+def traversal(rng, dm_all, r, speed, min_len, placed, tries=30000):
     """Longest clear straight traversal for a body of this radius.
 
-    Routes are allowed to CROSS -- that is what traffic does, and a crossing is
-    a brief coincidence the two bodies pass through. What is rejected is two
-    routes running along each other: these bodies are kinematic, so an overlap
-    is not a near miss, it is one walking through the other, which looks wrong
-    on screen and merges into a single cluster in perception. So a close
-    approach is only allowed when the routes actually cross at an angle.
+    Routes may cross; the bodies may not. Crossing lanes are what traffic looks
+    like and they are kept, but the pair is only accepted once the two bodies
+    have been walked forward together and shown never to meet -- see _min_sep.
     """
     best, best_L = None, 0.0
     for _ in range(tries):
@@ -250,19 +259,8 @@ def traversal(rng, dm_all, r, min_len, placed, tries=30000):
                 for g in (START, GOAL))
         if d - r < ENDPOINT_CLEAR:
             continue
-        bad = False
-        for (qa, qb, qr) in placed:
-            # Endpoints are where a body turns round and lingers; two of them
-            # in the same spot is a guaranteed overlap rather than a chance one.
-            if min(np.linalg.norm(a - qa), np.linalg.norm(a - qb),
-                   np.linalg.norm(b - qa), np.linalg.norm(b - qb)) < r + qr + 1.0:
-                bad = True
-                break
-            if (_seg_dist(a, b, qa, qb) < r + qr + 0.30
-                    and _angle(a, b, qa, qb) < 30.0):
-                bad = True
-                break
-        if bad:
+        if any(_min_sep(a, b, speed, qa, qb, qv) < r + qr + 0.35
+               for (qa, qb, qv, qr) in placed):
             continue
         best, best_L = (a, b), L
     return best
@@ -350,8 +348,13 @@ def mover_sdf(name, x, y, shape, size):
 WORLD = """<?xml version="1.0"?>
 <sdf version="1.8">
   <world name="bigarena">
-    <physics name="1ms" type="ignored">
-      <max_step_size>0.001</max_step_size>
+    <!-- 100 Hz, matching random_room_dynamic, which is the other 20 m world
+         and runs near real time. This started at 0.001 s, inherited from the
+         9 m arena where it was affordable because that world has 18 collision
+         bodies; this one has 53, and 1000 Hz physics against them dropped the
+         real-time factor to 0.27 -- the simulator crawling, not the robot. -->
+    <physics name="10ms" type="ignored">
+      <max_step_size>0.01</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
@@ -432,15 +435,15 @@ def main():
     placed, rows, ybody, spawn_at = [], [], '', {}
     for name, speed, min_len in plan:
         r = R_OBS[name]
-        got = traversal(rng, dm_all, r, min_len, placed)
+        got = traversal(rng, dm_all, r, speed, min_len, placed)
         while got is None and min_len > 4.0:
             min_len -= 1.0
-            got = traversal(rng, dm_all, r, min_len, placed)
+            got = traversal(rng, dm_all, r, speed, min_len, placed)
         if got is None:
             print(f'  SKIP {name}: no traversal for a {r:.2f} m body')
             continue
         a, b = got
-        placed.append((a, b, r))
+        placed.append((a, b, speed, r))
         spawn_at[name] = a
         L = float(np.linalg.norm(b - a))
         rows.append((name, SHAPE[name], r, speed, L, 2 * L / speed))
