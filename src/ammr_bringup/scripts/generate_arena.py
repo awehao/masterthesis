@@ -67,8 +67,13 @@ GAPS = [(0.8, 2.2), (4.4, 5.8)]    # (x_from, x_to)
 # robot never reaches tests nothing. They are kept clear of the mover lanes in
 # generate_arena_scenarios.py so a scenario cannot accidentally drive a mover
 # through one.
-UNKNOWN_STATIC = [(1.5, 4.8, 0.30),   # just past the LEFT gap
-                  (3.4, 2.4, 0.30)]   # on the diagonal approach to the RIGHT gap
+# Positions taken from a recorded unobstructed run: each sits about 0.75 m to
+# the side of the route, so the robot meets it but has room to go round, and
+# both are clear of the gap the movers patrol -- an earlier pair sat directly
+# above the left gap, 1.4 m from it, so any mover patrolling that gap drove
+# through one.
+UNKNOWN_STATIC = [(1.75, 4.90, 0.30),   # past the gap, on the upper approach
+                  (5.00, 5.30, 0.30)]   # on the final diagonal
 
 ROOT = Path(__file__).resolve().parents[1]
 
