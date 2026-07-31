@@ -103,8 +103,26 @@ cleanup() {
 trap 'echo "[$(date +%T)] interrupted -> stopping batch"; cleanup; exit 130' INT TERM
 trap 'cleanup; rm -f "$LOCKFILE"' EXIT
 
+# POSES_CSV=<file> draws this trial's start AND goal from that file's row for
+# the seed, so a long batch covers many different traverses instead of
+# repeating one. Without it the fixed GOAL_X/GOAL_Y and a (0,0) spawn are used,
+# which is what every earlier result did.
+pose_for_seed() {
+    local seed="$1"
+    [ -z "${POSES_CSV:-}" ] && return 1
+    [ -f "$POSES_CSV" ]     || { echo "    POSES_CSV not found: $POSES_CSV"; return 1; }
+    local row
+    row="$(awk -F, -v s="$seed" 'NR>1 && $1==s {print; exit}' "$POSES_CSV")"
+    [ -n "$row" ] || return 1
+    SPAWN_X="$(echo "$row" | cut -d, -f2)"; SPAWN_Y="$(echo "$row" | cut -d, -f3)"
+    GOAL_X="$(echo  "$row" | cut -d, -f4)"; GOAL_Y="$(echo  "$row" | cut -d, -f5)"
+    export SPAWN_X SPAWN_Y
+    return 0
+}
+
 run_trial() {
     local seed="$1"
+    pose_for_seed "$seed" || true
     local run_tag="${TAG}_seed${seed}"
     local log_file="${HERE}/logs/${AMETHOD}__${run_tag}.log"
     local bag_dir="${HERE}/bags/${AMETHOD}__${run_tag}"
@@ -116,7 +134,7 @@ run_trial() {
     rm -f  "$log_file"
 
     echo "=========================================================="
-    echo "[$(date +%T)] TRIAL ${seed}/${N_TRIALS}  method=${METHOD}  goal=(${GOAL_X},${GOAL_Y})  dur=${DURATION}s"
+    echo "[$(date +%T)] TRIAL ${seed}/${N_TRIALS}  method=${METHOD}  start=(${SPAWN_X:-0.0},${SPAWN_Y:-0.0})  goal=(${GOAL_X},${GOAL_Y})  dur=${DURATION}s"
     echo "=========================================================="
 
     # 1. headless dynamic world + omni_bot + (GMPC-CBF | MPPI | RPP) + perception
@@ -128,9 +146,10 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
     {
       echo "### CONFIG $(date +%T)"
       echo "###   launch: $LAUNCH_ARGS"
+      echo "###   traverse: (${SPAWN_X:-0.0},${SPAWN_Y:-0.0}) -> (${GOAL_X},${GOAL_Y})"
       for v in BIGARENA ARENA TRAJ GUI ARM DETOUR DETOUR_OFFSET DETOUR_VX_FLOOR DETOUR_CLEAR_REF \
                DETOUR_CLEAR_PAD DETOUR_SIDE_PROJ PLAN_BLEND YAW_LOOKAHEAD YAW_RATE_MAX \
-               GOAL_DELAY_MIN GOAL_DELAY_MAX INFLATION ST_WEIGHT PROG_WEIGHT CBF_ALPHA CBF_SAFE_MARGIN PLANNER_SCAN CBF_SLACK_W STUCK_WINDOW STUCK_PROGRESS STATIC_MARGIN \
+               SPAWN_X SPAWN_Y POSES_CSV GOAL_DELAY_MIN GOAL_DELAY_MAX INFLATION ST_WEIGHT PROG_WEIGHT CBF_ALPHA CBF_SAFE_MARGIN PLANNER_SCAN CBF_SLACK_W STUCK_WINDOW STUCK_PROGRESS STATIC_MARGIN \
                CBF_MARGIN_GROWTH AX_MAX AY_MAX AZ_MAX; do
         echo "###   $v=${!v-<unset>}"
       done
@@ -144,7 +163,8 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
     # PIPESTATUS, not the pipeline's status: that would be tee's, which always
     # succeeds, so a failed bring-up would sail through and record a dead trial.
     python3 "${HERE}/trial_start.py" --phase prepare \
-        --goal-x "$GOAL_X" --goal-y "$GOAL_Y" 2>&1 | tee -a "$log_file"
+        --goal-x "$GOAL_X" --goal-y "$GOAL_Y" \
+        --start-x "${SPAWN_X:-0.0}" --start-y "${SPAWN_Y:-0.0}" 2>&1 | tee -a "$log_file"
     if [ "${PIPESTATUS[0]}" -ne 0 ]; then
         echo "[$(date +%T)]     bring-up failed -- skipping trial ${seed}"
         cleanup

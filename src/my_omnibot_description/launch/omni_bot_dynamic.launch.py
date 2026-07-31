@@ -373,7 +373,12 @@ def generate_launch_description():
         TimerAction(period=6.0, actions=[Node(
             package='ros_gz_sim', executable='create',
             arguments=['-name', 'omni_bot', '-topic', 'robot_description',
-                       '-x', '0.0', '-y', '0.0', '-z', '0.05'], output='screen')]),
+                       # Spawn pose, so a batch can randomise where a traverse
+                       # begins instead of repeating one route. Defaults to the
+                       # origin, which is what every recorded result used.
+                       '-x', os.environ.get('SPAWN_X', '0.0'),
+                       '-y', os.environ.get('SPAWN_Y', '0.0'),
+                       '-z', '0.05'], output='screen')]),
 
         # move the obstacles (ping-pong)
         TimerAction(period=8.0, actions=[Node(
