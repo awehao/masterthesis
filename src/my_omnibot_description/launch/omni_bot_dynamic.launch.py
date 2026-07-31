@@ -207,6 +207,10 @@ def generate_launch_description():
         'detour_side_proj': os.environ.get('DETOUR_SIDE_PROJ', '1') == '1',
         # Reference heading from a look-ahead chord; 0 = validated tangent.
         'ref_yaw_lookahead': float(os.environ.get('YAW_LOOKAHEAD', '0.0')),
+        # Cap the reference heading's slew rate [rad/s]; 0 = uncapped, which is
+        # what every result so far used. Replaying recorded runs shows the
+        # uncapped reference demanding up to 26 rad/s against wz_max = 0.80.
+        'ref_yaw_rate_max': float(os.environ.get('YAW_RATE_MAX', '0.0')),
         # Cross-fade seconds when a new /plan arrives; 0 = adopt instantly.
         'plan_blend_s': float(os.environ.get('PLAN_BLEND', '0.0')),
         # Hold still when blocked instead of pushing a reference that insists

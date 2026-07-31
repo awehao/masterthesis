@@ -34,7 +34,7 @@ import tf2_ros
 from collections import deque
 
 from .gmpc           import GMPC, GMPCConfig
-from .se2            import from_xytheta
+from .se2            import from_xytheta, to_xytheta
 from .detour import (DetourConfig, DetourState, apply_offset,
                      clear_reference, FREE)
 from .path_processor import (path_msg_to_xyth,
@@ -95,6 +95,23 @@ class GMPCNode(Node):
         # Reference heading from a look-ahead chord instead of the local path
         # segment (metres). 0 = the validated single-segment tangent.
         self.declare_parameter('ref_yaw_lookahead', 0.0)
+        # Cap on how fast the REFERENCE heading may move [rad/s]; 0 = no cap.
+        #
+        # The heading reference is a path direction, and nothing in its
+        # construction knows what the base can actually do. Replaying recorded
+        # runs through build_reference_window at the control rate shows it
+        # demanding up to 26 rad/s against a wz_max of 0.80 -- 33x the limit --
+        # in 6.4% of cycles, and asking for 805 deg of total rotation on a run
+        # that needs about 200. The base answers at saturation and cannot
+        # arrive before the next step lands, which is the in-place spinning
+        # seen on screen: it is present in every run and only sometimes
+        # compounds into a sustained one.
+        #
+        # Capping the reference at what the actuator can deliver makes the
+        # demand trackable by construction. The cap applies both along the
+        # horizon and BETWEEN cycles, since it is the cycle-to-cycle step that
+        # the robot chases.
+        self.declare_parameter('ref_yaw_rate_max', 0.0)
         # Cross-fade the tracked reference from the previous plan to the new one
         # over this many seconds. 0 = adopt the new plan instantly (validated
         # behaviour). The global planner republishes every 3 s and a quarter of
@@ -223,6 +240,10 @@ class GMPCNode(Node):
         self.goal_tol_xy      = float(self.get_parameter('goal_tolerance_xy').value)
         self.ref_yaw_lookahead = float(
             self.get_parameter('ref_yaw_lookahead').value)
+        self.ref_yaw_rate_max = float(
+            self.get_parameter('ref_yaw_rate_max').value)
+        self._ref_yaw_prev   = None      # last heading actually asked for
+        self._ref_yaw_prev_t = None
         self.plan_blend_s = float(self.get_parameter('plan_blend_s').value)
         self.stuck_window_s = float(self.get_parameter('stuck_window_s').value)
         self.stuck_progress_m = float(self.get_parameter('stuck_progress_m').value)
@@ -362,6 +383,55 @@ class GMPCNode(Node):
         )
 
     # ----------------------------------------------------------------------
+    def _limit_ref_yaw_rate(self, X_ref, xi_ref):
+        """Slew-limit the reference heading to something the base can follow.
+
+        Two limits, because two different things go wrong without them:
+
+        * BETWEEN cycles -- the reference is rebuilt from scratch every 50 ms
+          against the live pose, so it can step by any amount from one cycle to
+          the next. That step is what the robot chases at saturation, and the
+          measured demand reaches 26 rad/s against a 0.80 rad/s base.
+        * ALONG the horizon -- a reference that rotates faster than wz_max is
+          infeasible for the QP, which then spends its authority on yaw and
+          tracks the position worse.
+
+        The positions are untouched: only the heading column is re-shaped, and
+        xi_ref's yaw rate is rebuilt from the limited sequence so the feed-
+        forward stays consistent with it.
+        """
+        if self.ref_yaw_rate_max <= 0.0:
+            return X_ref, xi_ref
+
+        def wrap(a):
+            return (a + np.pi) % (2.0 * np.pi) - np.pi
+
+        xyth = np.array([to_xytheta(X) for X in X_ref])       # (N+1, 3)
+        th = xyth[:, 2].copy()
+        now = self.get_clock().now().nanoseconds * 1e-9
+
+        if self._ref_yaw_prev is not None:
+            # Elapsed time, but never credit more than a few cycles: after a
+            # stall the robot has not been turning, so it must not be handed a
+            # correspondingly large jump.
+            elapsed = min(max(now - self._ref_yaw_prev_t, 0.0), 5.0 * self.dt)
+            cap = self.ref_yaw_rate_max * elapsed
+            th[0] = self._ref_yaw_prev + np.clip(
+                wrap(th[0] - self._ref_yaw_prev), -cap, cap)
+
+        step = self.ref_yaw_rate_max * self.dt
+        for k in range(1, th.shape[0]):
+            th[k] = th[k - 1] + np.clip(wrap(th[k] - th[k - 1]), -step, step)
+
+        self._ref_yaw_prev, self._ref_yaw_prev_t = float(th[0]), now
+
+        X_out = np.stack([from_xytheta(xyth[k, 0], xyth[k, 1], th[k])
+                          for k in range(th.shape[0])])
+        xi_out = xi_ref.copy()
+        xi_out[:-1, 2] = np.diff(th) / self.dt
+        xi_out[-1, 2] = xi_out[-2, 2]
+        return X_out, xi_out
+
     def _blend_alpha(self):
         """Fade weight in [0,1) for the new plan, or None when not fading.
 
@@ -544,6 +614,7 @@ class GMPCNode(Node):
 
         # 3. Build horizon reference from latest /plan
         path_xyth = path_msg_to_xyth(self.latest_path)
+        # (reference yaw is rate-limited after blending; see step 3b below)
         X_ref_win, xi_ref_win = build_reference_window(
             path_xyth, robot_xyth,
             N=self.N, dt=self.dt, v_nom=self.v_nom,
@@ -558,6 +629,7 @@ class GMPCNode(Node):
             )
             X_ref_win, xi_ref_win = blend_reference(
                 X_old, xi_old, X_ref_win, xi_ref_win, a)
+        X_ref_win, xi_ref_win = self._limit_ref_yaw_rate(X_ref_win, xi_ref_win)
 
         # 4. Solve
         X_now  = from_xytheta(*robot_xyth)
