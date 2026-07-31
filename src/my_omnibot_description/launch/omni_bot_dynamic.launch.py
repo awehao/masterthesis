@@ -358,14 +358,7 @@ def generate_launch_description():
         # move the obstacles (ping-pong)
         TimerAction(period=8.0, actions=[Node(
             package='ammr_bringup', executable='dynamic_obstacle_driver',
-            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file},
-                        # Empty (the default) = obstacles ping-pong from the
-                        # moment this node comes up, independent of the robot,
-                        # which is how every result so far was recorded.
-                        # Setting OBS_START_TOPIC=/dynamic_obstacles/start
-                        # instead parks them on their start points until
-                        # trial_start.py releases them.
-                        {'start_topic': os.environ.get('OBS_START_TOPIC', '')}],
+            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],
             output='screen')]),
 
         # nav + control + perception (wait for gz/robot/TF)

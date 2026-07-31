@@ -429,7 +429,7 @@ def main():
             ('dyn_obs_1', 0.30,  9.0), ('dyn_obs_7', 0.26,  9.0),
             ('dyn_obs_0', 0.32, 10.0), ('dyn_obs_6', 0.28, 10.0),
             ('dyn_obs_9', 0.38, 11.0), ('dyn_obs_3', 0.45, 12.0)]
-    placed, rows, ybody = [], [], ''
+    placed, rows, ybody, spawn_at = [], [], '', {}
     for name, speed, min_len in plan:
         r = R_OBS[name]
         got = traversal(rng, dm_all, r, min_len, placed)
@@ -441,6 +441,7 @@ def main():
             continue
         a, b = got
         placed.append((a, b, r))
+        spawn_at[name] = a
         L = float(np.linalg.norm(b - a))
         rows.append((name, SHAPE[name], r, speed, L, 2 * L / speed))
         ybody += (f'  - name:   {name}\n'
@@ -465,8 +466,20 @@ def main():
               for i, (x, y, sx, sy) in enumerate(known)]
     parts += [box_sdf(f'unknown_obs_{i}', x, y, sx, sy, '0.9 0.7 0.1 1', 1.0)
               for i, (x, y, sx, sy) in enumerate(unknown)]
-    for i, (nm, shape, size) in enumerate(DYN_SHAPES):
-        parts.append(mover_sdf(nm, 1.0 + 1.0 * i, -0.9, shape, size))
+    # Spawn each mover ON its own route start, not in a parking row.
+    #
+    # generate_arena.py parks them off to one side and lets the driver bring
+    # them in, which works there because the arena is one open space. Here it
+    # does not: these bodies are kinematic, so they do not collide with
+    # anything -- the transit from a parking row to a route runs them straight
+    # THROUGH the partition walls, in full view. The row also landed a body
+    # inside a wall (x = 7.0 is the vertical partition) and put another 1.4 m
+    # from the robot's spawn.
+    for nm, shape, size in DYN_SHAPES:
+        if nm not in spawn_at:
+            continue                       # no route was found for this body
+        parts.append(mover_sdf(nm, spawn_at[nm][0], spawn_at[nm][1],
+                               shape, size))
     (ROOT / 'worlds' / 'bigarena.sdf').write_text(WORLD % ''.join(parts))
     print(f'  worlds/bigarena.sdf  {len(walls)} 牆, {len(known)} 已知雜物, '
           f'{len(unknown)} 未知雜物, {len(DYN_SHAPES)} 移動障礙')

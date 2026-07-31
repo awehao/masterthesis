@@ -23,11 +23,10 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, PoseArray, Pose, PoseStamped, Point
 from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import ColorRGBA, Empty
+from std_msgs.msg import ColorRGBA
 
 
 REACH_TOL = 0.20  # m，距離小於此值就切換 target (ping-pong)
-PARK_TOL  = 0.02  # m，待命時停在 start 的容差
 RATE_HZ   = 20.0
 
 
@@ -36,21 +35,6 @@ class DynamicObstacleDriver(Node):
         super().__init__('dynamic_obstacle_driver')
 
         self.declare_parameter('trajectories_file', '')
-        # Hold every obstacle ON its `start` point until a go signal arrives.
-        #
-        # Without this the obstacles begin their ping-pong the moment this node
-        # comes up, while the robot's goal is sent whenever bring-up happens to
-        # finish. Bring-up is condition-based and varies by seconds, so the
-        # phase of every obstacle at the instant the robot starts differs from
-        # trial to trial -- two runs of the "same" scenario are not the same
-        # experiment. Parking them on `start` makes the initial condition
-        # identical every time; trial_start.py then releases them and gives the
-        # robot its goal a chosen delay later, so the encounter phase is a
-        # controlled, recorded quantity instead of whatever bring-up produced.
-        #
-        # Empty (the default) starts immediately, which is what every result
-        # recorded so far used.
-        self.declare_parameter('start_topic', '')
 
         traj_file = self.get_parameter('trajectories_file') \
                         .get_parameter_value().string_value
@@ -98,27 +82,13 @@ class DynamicObstacleDriver(Node):
         self.marker_pub = self.create_publisher(
             MarkerArray, '/dynamic_obstacles/markers', 10)
 
-        start_topic = self.get_parameter('start_topic') \
-                          .get_parameter_value().string_value
-        self.released = not start_topic
-        if start_topic:
-            self.create_subscription(Empty, start_topic, self._on_start, 10)
-
         self.dt = 1.0 / RATE_HZ
         self.last_t = self.get_clock().now()
         self.create_timer(self.dt, self._step)
 
         self.get_logger().info(
             f'DynamicObstacleDriver started ({len(self.obstacles)} obstacles, '
-            f'{RATE_HZ:.0f} Hz)'
-            + ('' if self.released else f', parked until {start_topic}'))
-
-    # ------------------------------------------------------------------
-    def _on_start(self, _msg):
-        if self.released:
-            return
-        self.released = True
-        self.get_logger().info('go signal received -- obstacles released')
+            f'{RATE_HZ:.0f} Hz)')
 
     # ------------------------------------------------------------------
     def _pose_cb(self, ob, msg: PoseStamped):
@@ -138,38 +108,25 @@ class DynamicObstacleDriver(Node):
         markers = MarkerArray()
 
         for i, ob in enumerate(self.obstacles):
-            if not self.released:
-                # 未放行：開回自己的 start 停著（不 ping-pong）。不論 GZ 把它
-                # spawn 在哪、bring-up 花了多久，放行瞬間的初始狀態都相同。
-                dx = ob['start'][0] - ob['pos'][0]
-                dy = ob['start'][1] - ob['pos'][1]
-                dist = math.hypot(dx, dy)
-                if dist > PARK_TOL:
-                    # 最後一步不要衝過頭，否則會在 start 附近來回抖。
-                    s = min(ob['speed'], dist / self.dt)
-                    vx, vy = s * dx / dist, s * dy / dist
-                else:
-                    vx = vy = 0.0
-            else:
+            target = ob['end'] if ob['target_idx'] == 1 else ob['start']
+            dx = target[0] - ob['pos'][0]
+            dy = target[1] - ob['pos'][1]
+            dist = math.hypot(dx, dy)
+
+            # 到目標 → 切換 (ping-pong)
+            if dist < REACH_TOL:
+                ob['target_idx'] = 0 if ob['target_idx'] == 1 else 1
                 target = ob['end'] if ob['target_idx'] == 1 else ob['start']
                 dx = target[0] - ob['pos'][0]
                 dy = target[1] - ob['pos'][1]
                 dist = math.hypot(dx, dy)
 
-                # 到目標 → 切換 (ping-pong)
-                if dist < REACH_TOL:
-                    ob['target_idx'] = 0 if ob['target_idx'] == 1 else 1
-                    target = ob['end'] if ob['target_idx'] == 1 else ob['start']
-                    dx = target[0] - ob['pos'][0]
-                    dy = target[1] - ob['pos'][1]
-                    dist = math.hypot(dx, dy)
-
-                if dist > 1e-4:
-                    vx = ob['speed'] * dx / dist
-                    vy = ob['speed'] * dy / dist
-                else:
-                    vx = 0.0
-                    vy = 0.0
+            if dist > 1e-4:
+                vx = ob['speed'] * dx / dist
+                vy = ob['speed'] * dy / dist
+            else:
+                vx = 0.0
+                vy = 0.0
 
             # 發布 cmd_vel → Gazebo VelocityControl
             cmd = Twist()
