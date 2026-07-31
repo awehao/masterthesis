@@ -192,8 +192,11 @@ class GMPCNode(Node):
         # distance. Measured across 187 arena trials, EVERY collision was a
         # graze of an unknown static pillar, at -0.006 to +0.011 m -- exactly
         # that 3 cm target minus slack -- while walls and movers were never
-        # touched.
-        self.declare_parameter('static_cbf_safe_margin', 0.33)
+        # touched. Measured at 0.38 against 0.33, ten trials each: shapes 8 -> 3
+        # collisions, stopgo 2 -> 0 and 14 s faster, crossing's worst-case
+        # clearance +0.070 -> +0.327, with arrival time and path length
+        # unchanged on the scenarios that already passed.
+        self.declare_parameter('static_cbf_safe_margin', 0.38)
         # Static-CBF is a BACKSTOP for "don't dodge a dynamic obstacle into a
         # wall" — only engage it when a dynamic obstacle is within this range of
         # the robot. With no dynamic threat nearby the robot just tracks the
