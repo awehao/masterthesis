@@ -53,109 +53,6 @@ except Exception:                       # pragma: no cover
 # ---------------------------------------------------------------------------
 # Pure-python core (unit-testable without ROS)
 # ---------------------------------------------------------------------------
-def fit_circle(seg: np.ndarray, sensor_xy, r_prior: float, r_max: float):
-    """Centre of the object a laser ARC belongs to, not the centre of the arc.
-
-    A lidar only ever sees the near face of a cylinder, so the mean of the
-    returned points sits ON THE SURFACE, offset towards the sensor by most of
-    the radius -- and as the robot drives past, the visible arc rotates and that
-    mean SLIDES AROUND THE SURFACE. Measured on the four stationary 0.30 m
-    cylinders in this world: the tracked position sat 0.26-0.29 m from the true
-    centre and the KF read 0.16-0.25 m/s (peak 2.1) off objects that never
-    moved. That is above the 0.10 m/s mover gate, so stationary pillars were
-    published as dynamic obstacles in 10-32% of frames -- and the net-
-    displacement gate cannot reject them, because the centroid genuinely does
-    translate.
-
-    An algebraic (Kasa) fit recovers the circle the arc lies on, which is
-    viewpoint-invariant. It is ill-conditioned for a short, nearly straight arc,
-    so the radius is sanity-checked and the fallback is the geometrically honest
-    one: push the arc mean directly away from the sensor by the prior radius.
-    """
-    n = len(seg)
-    mean = seg.mean(axis=0)
-    away = mean - np.asarray(sensor_xy, dtype=float)
-    d = float(np.linalg.norm(away))
-    away = away / d if d > 1e-9 else np.array([1.0, 0.0])
-    if n >= 4:
-        # (x^2+y^2) + D x + E y + F = 0  ->  centre (-D/2, -E/2)
-        c = seg - mean                       # centre the data for conditioning
-        A = np.column_stack([c[:, 0], c[:, 1], np.ones(n)])
-        b = c[:, 0] ** 2 + c[:, 1] ** 2
-        try:
-            sol, *_ = np.linalg.lstsq(A, b, rcond=None)
-            cx, cy = mean[0] + sol[0] / 2.0, mean[1] + sol[1] / 2.0
-            r = math.sqrt(max(sol[2] + (sol[0] ** 2 + sol[1] ** 2) / 4.0, 0.0))
-            # A flat arc fits an enormous circle; a spurious one fits a tiny one.
-            if 0.05 <= r <= 2.0 * r_max:
-                # the fitted centre must be on the far side of the arc, never
-                # between the arc and the sensor
-                if float((np.array([cx, cy]) - mean) @ away) > -1e-3:
-                    # The FITTED radius is only right for a circle. Measured on
-                    # synthetic arcs: a 0.7x0.4 box fits r = 0.288 against a true
-                    # circumscribed 0.40, and a 1.2x0.3 cart fits 0.455 against
-                    # 0.62 -- underestimates of 0.11 and 0.17 m, which come
-                    # straight out of the 0.38 m CBF margin. Taking the observed
-                    # extent from the fitted centre instead makes the disc cover
-                    # every point actually seen, by construction, and turns all
-                    # three cases into slight OVER-estimates (+0.01, +0.01,
-                    # +0.03) -- the safe direction, and shape-agnostic.
-                    ext = float(np.max(np.hypot(seg[:, 0] - cx, seg[:, 1] - cy)))
-                    return float(cx), float(cy), float(max(r, ext))
-        except np.linalg.LinAlgError:
-            pass
-    # Fallback: a flat or very short arc has no circle to fit (the algebraic fit
-    # returns an enormous radius and is rejected above), which happens for every
-    # box-like obstacle seen face-on. Push the arc mean away from the sensor by
-    # the prior radius to guess a centre, then apply the SAME extent floor as
-    # the fitted branch. Without that floor this path returned r_prior alone and
-    # the disc did not even cover the visible face -- measured 14% of the
-    # returned points inside it for a 0.7 x 0.4 m box.
-    c = mean + r_prior * away
-    ext = float(np.max(np.hypot(seg[:, 0] - c[0], seg[:, 1] - c[1])))
-    return float(c[0]), float(c[1]), float(max(r_prior, ext))
-
-
-def cover_discs(seg: np.ndarray, cx: float, cy: float, r_fit: float,
-                r_min: float, aspect: float = 1.8):
-    """Approximate a cluster by a few overlapping discs, in place of one.
-
-    A single disc has to be the CIRCUMSCRIBED circle to stay safe, which for a
-    long body is mostly empty space: a 1.2 x 0.3 m cart needs r = 0.65 m, and
-    with the 0.38 m margin that is a 1.03 m keep-out -- wider than gaps it would
-    physically fit through. Worse, its fitted CENTRE is not viewpoint-invariant
-    for an elongated shape (measured 0.36 m of drift as the viewing angle
-    changes, i.e. a fake 0.12 m/s that clears the 0.10 m/s mover gate).
-
-    Covering the cluster with discs along its principal axis keeps the CBF
-    exactly as it is -- h_j = ||p - o_j||^2 - r_eff_j^2, one per disc, still
-    quadratic, still convex -- while following the actual outline. Returns
-    offsets from (cx, cy) so a moving object carries its shape with it.
-
-    A compact cluster returns a single disc, so round obstacles cost nothing.
-    """
-    if len(seg) < 4:
-        return [(0.0, 0.0, max(r_fit, r_min))]
-    c = seg - np.array([cx, cy])
-    # principal axis of the observed points
-    u, s, vt = np.linalg.svd(c - c.mean(axis=0), full_matrices=False)
-    axis = vt[0]
-    along = c @ axis
-    across = c @ np.array([-axis[1], axis[0]])
-    L, W = float(along.max() - along.min()), float(np.abs(across).max() * 2.0)
-    W = max(W, 2.0 * r_min)
-    if L <= aspect * W:
-        return [(0.0, 0.0, max(r_fit, r_min))]
-    n = int(np.ceil(L / W))
-    rad = max(r_min, W / 2.0 * 1.15)          # overlap so the union has no gaps
-    lo, hi = float(along.min()), float(along.max())
-    out = []
-    for i in range(n):
-        t_i = lo + (hi - lo) * (i + 0.5) / n
-        out.append((float(axis[0] * t_i), float(axis[1] * t_i), rad))
-    return out
-
-
 def cluster_adjacent(pts: np.ndarray, gap: float,
                      min_pts: int, max_radius: float,
                      sensor_xy=(0.0, 0.0), r_prior: float = 0.25
@@ -166,7 +63,7 @@ def cluster_adjacent(pts: np.ndarray, gap: float,
     that pass the size gates.
 
     The reported (cx, cy) is the fitted OBJECT centre, not the arc mean -- see
-    fit_circle for why that distinction is what keeps stationary cylinders out
+    the surface-point representation for why no shape is fitted at all
     of the dynamic set.
 
     `pts` is (N,2), already ordered by scan angle and already background-
@@ -193,9 +90,12 @@ def cluster_adjacent(pts: np.ndarray, gap: float,
             extent = float(np.max(np.hypot(seg[:, 0] - am[0], seg[:, 1] - am[1])))
             if extent > max_radius:
                 continue                # too big -> a wall segment, not an obstacle
-            cx, cy, radius = fit_circle(seg, sensor_xy, r_prior, max_radius)
-            discs = cover_discs(seg, cx, cy, radius, r_prior)
-            out.append((cx, cy, radius, len(seg), discs))
+            # The centroid is kept ONLY for data association -- it is biased
+            # towards the sensor and slides along the surface as the viewing
+            # angle changes, which is fine for matching a track frame to frame
+            # and useless as a geometric reference. The geometry the CBF sees is
+            # the RETURNED POINTS themselves; nothing is fitted to them.
+            out.append((float(am[0]), float(am[1]), extent, len(seg), seg.copy()))
     return out
 
 
@@ -247,9 +147,12 @@ class Track:
     # time within 0.2 s of such a change versus 10% elsewhere. Latching the
     # decision removes that churn without weakening the filter.
     is_mover: bool = False
-    # Covering discs as (dx, dy, r) offsets from the tracked centre, refreshed
-    # from the current observation each cycle so the shape follows the object.
-    discs: list = field(default_factory=list)
+    # The cluster's laser returns, in the map frame, refreshed every cycle.
+    # These ARE the obstacle as far as the CBF is concerned: a lidar return is a
+    # point on the surface, which is the only thing actually observed. Fitting a
+    # shape to them adds an assumption (and, for anything longer than about 2:1,
+    # an error larger than the bias it removes) without adding information.
+    pts: np.ndarray = field(default_factory=lambda: np.empty((0, 2)))
     release: int = 0
 
 
@@ -329,7 +232,16 @@ class ScanObstacleTracker(Node):
         p('static_cbf_topic', '/gmpc/static_obstacles')
         p('static_cbf_range', 1.2)        # m, only walls within this matter
         p('static_cbf_max', 4)            # cap total static points (QP size)
-        p('static_cbf_radius', 0.05)      # m, point radius (small; margin does work)
+        p('static_cbf_radius', 0.05)
+        # Surface-point CBF: how many of a cluster's own laser returns to hand
+        # the controller, and how close they have to be to matter. A lidar
+        # return IS a point on the obstacle's surface, so no shape is assumed --
+        # a pillar, a wall corner, a person and an L-shaped cart are all just
+        # point sets. The cap keeps the QP small: each point becomes one
+        # constraint per horizon step.
+        p('surf_pts_max', 4)              # per cluster
+        p('surf_pts_range', 2.5)          # m, ignore points further than this
+        p('surf_pts_min_sep', 0.20)       # m, thin them out so they spread      # m, point radius (small; margin does work)
 
         g = lambda n: self.get_parameter(n).value
         self.global_frame   = str(g('global_frame'))
@@ -352,6 +264,9 @@ class ScanObstacleTracker(Node):
         self.static_range   = float(g('static_cbf_range'))
         self.static_max     = int(g('static_cbf_max'))
         self.static_radius  = float(g('static_cbf_radius'))
+        self.surf_max       = int(g('surf_pts_max'))
+        self.surf_range     = float(g('surf_pts_range'))
+        self.surf_min_sep   = float(g('surf_pts_min_sep'))
         self._kf_kwargs = dict(
             sigma_pos=float(g('kf_sigma_pos')), sigma_vel=float(g('kf_sigma_vel')),
             sigma_meas=float(g('kf_sigma_meas')), init_vel_var=float(g('kf_init_vel_var')))
@@ -501,7 +416,7 @@ class ScanObstacleTracker(Node):
         # -0.036 m). They belong in the static-CBF set, at v = 0.
         statics = [tr for tr in self._tracks
                    if id(tr) not in mv and tr.age >= self.min_age]
-        self._publish(t_ns, scan.header.stamp, movers)
+        self._publish(t_ns, scan.header.stamp, movers, tx, ty)
         self._publish_filtered_scan(scan, tx, ty, cyaw, syaw, movers)
         self._publish_static_obstacles(tx, ty, statics)
 
@@ -550,13 +465,18 @@ class ScanObstacleTracker(Node):
         # circle fit already estimates how extended (0.283-0.313 m measured on
         # the 0.30 m cylinders). v = 0, so no prediction is involved.
         data = list(arr.data)
+        # Unknown statics go in as SURFACE POINTS too, at v = 0 -- same
+        # representation as the movers and as the map-based wall points, so the
+        # controller sees one kind of thing throughout and no shape is assumed
+        # anywhere in the pipeline.
         for tr in sorted(statics,
                          key=lambda z: math.hypot(z.kf.position[0]-rx,
                                                   z.kf.position[1]-ry))[:self.static_max]:
-            sx, sy = tr.kf.position
-            if math.hypot(sx - rx, sy - ry) > self.static_range:
+            if math.hypot(tr.kf.position[0] - rx,
+                          tr.kf.position[1] - ry) > self.static_range + 1.0:
                 continue
-            data.extend((float(sx), float(sy), float(tr.radius), 0.0, 0.0))
+            for sx, sy in self._surface_points(tr, rx, ry):
+                data.extend((float(sx), float(sy), 0.0, 0.0, 0.0))
         arr.data = data
         self.static_pub.publish(arr)
 
@@ -612,7 +532,7 @@ class ScanObstacleTracker(Node):
             tr = self._tracks[ti]
             tr.kf.step(t_ns=t_ns, y_xy=(clusters[ci][0], clusters[ci][1]))
             tr.radius = max(self.default_radius, clusters[ci][2])
-            tr.discs = clusters[ci][4]
+            tr.pts = clusters[ci][4]
             tr.last_t_ns = t_ns
             tr.age += 1
             tr.misses = 0
@@ -623,7 +543,7 @@ class ScanObstacleTracker(Node):
                                  **self._kf_kwargs)
             nt = Track(tid=self._next_id, kf=kf,
                        radius=max(self.default_radius, clusters[ci][2]),
-                       last_t_ns=t_ns, discs=clusters[ci][4])
+                       last_t_ns=t_ns, pts=clusters[ci][4])
             nt.hist.append((t_ns, kf.position[0], kf.position[1]))
             self._tracks.append(nt)
             self._next_id += 1
@@ -685,7 +605,36 @@ class ScanObstacleTracker(Node):
         return True
 
     # ------------------------------------------------------------------
-    def _publish(self, t_ns: int, stamp, confirmed):
+    def _surface_points(self, tr, rx, ry):
+        """The cluster's own returns, nearest first, thinned and capped.
+
+        Only the near ones can be violated, and two returns 2 cm apart carry the
+        same constraint twice, so they are thinned by `surf_pts_min_sep` before
+        the cap is applied -- otherwise the cap would spend itself on a single
+        patch of surface and leave the rest of the object unconstrained.
+
+        Falls back to the tracked centre if a track has no points this cycle
+        (it was coasted through a miss), which is the old behaviour.
+        """
+        P = getattr(tr, 'pts', None)
+        if P is None or len(P) == 0:
+            cx, cy = tr.kf.position
+            return [(float(cx), float(cy))]
+        d = np.hypot(P[:, 0] - rx, P[:, 1] - ry)
+        keep = d <= self.surf_range
+        if not np.any(keep):
+            keep = d <= np.min(d) + 1e-6
+        Q = P[keep][np.argsort(d[keep])]
+        out = []
+        for q in Q:
+            if len(out) >= self.surf_max:
+                break
+            if all(math.hypot(q[0] - o[0], q[1] - o[1]) >= self.surf_min_sep
+                   for o in out):
+                out.append((float(q[0]), float(q[1])))
+        return out or [(float(Q[0][0]), float(Q[0][1]))]
+
+    def _publish(self, t_ns: int, stamp, confirmed, rx=0.0, ry=0.0):
         # `confirmed` is decided once per cycle by the caller (see _scan_cb) and
         # shared with the scan mask, so the planner is blinded to exactly the
         # objects the CBF has taken responsibility for -- no more, no less.
@@ -727,9 +676,12 @@ class ScanObstacleTracker(Node):
             # would be mostly empty space (a 1.2 x 0.3 m cart needs r = 0.65,
             # which with the margin is a 1.03 m keep-out -- wider than gaps it
             # physically fits through).
-            for dx, dy, rr in (tr.discs or [(0.0, 0.0, tr.radius)]):
-                PX, PY, VX, VY = to_pub(px + dx, py + dy, vx, vy)
-                flat.extend([PX, PY, max(rr, self.default_radius), VX, VY])
+            for sx, sy in self._surface_points(tr, rx, ry):
+                PX, PY, VX, VY = to_pub(sx, sy, vx, vy)
+                # radius 0: the point is ON the surface already, so the whole
+                # keep-out comes from the margin, exactly as it does for the
+                # map-based wall points that have run all along.
+                flat.extend([PX, PY, 0.0, VX, VY])
                 pub_xy.append((PX, PY))
         msg = Float32MultiArray(); msg.data = flat
         self.pub.publish(msg)
