@@ -38,8 +38,9 @@ plt.rcParams.update({'font.family': ['Noto Sans CJK JP'],
 ROOT = '/home/howardchen/masterthesis'
 SHARE = f'{ROOT}/src/ammr_bringup'
 ORIGIN, RES = (-1.3, -1.3), 0.05
-UNKNOWN_STATIC = [(1.5, 4.8, 0.30), (3.4, 2.4, 0.30)]
+UNKNOWN_STATIC = [(1.75, 4.90, 0.30), (5.00, 5.30, 0.30)]
 START, GOAL = (0.0, 0.0), (6.6, 6.6)
+PREFIX = 's20'
 
 ORDER = ['none', 'crossing', 'gapblock', 'corridor', 'converge', 'overtake',
          'parked', 'shapes', 'occlude', 'stopgo', 'small', 'ell', 'dense',
@@ -73,7 +74,7 @@ def scenario_movers(name):
 
 def trial_rows(name):
     import csv
-    f = f'{ROOT}/evaluation/results/final_arena_{name}.csv'
+    f = f'{ROOT}/evaluation/results/final_{PREFIX}_{name}.csv'
     if not os.path.isfile(f):
         return []
     return list(csv.DictReader(open(f)))
@@ -111,7 +112,7 @@ def draw(ax, name, occ, extent, geo):
     rows = trial_rows(name)
     n_rev, n_hit, clr = 0, 0, []
     for r in rows:
-        bag = f"{ROOT}/evaluation/bags/archive_arena_{name}/gmpc_cbf__{r['run']}"
+        bag = f"{ROOT}/evaluation/bags/archive_{PREFIX}_{name}/gmpc_cbf__{r['run']}"
         if not os.path.isdir(bag):
             continue
         try:
@@ -149,7 +150,7 @@ def main():
     extent = [ORIGIN[0], ORIGIN[0] + w * RES, ORIGIN[1], ORIGIN[1] + h * RES]
     geo = mover_geometry()
     have = [n for n in ORDER
-            if os.path.isfile(f'{ROOT}/evaluation/results/final_arena_{n}.csv')]
+            if os.path.isfile(f'{ROOT}/evaluation/results/final_{PREFIX}_{n}.csv')]
     if not have:
         print('no scenario results yet')
         return 1
@@ -162,7 +163,7 @@ def main():
     for i, name in enumerate(have):
         axes[i].axis('on')
         draw(axes[i], name, occ, extent, geo)
-    fig.suptitle('9×9 m 非結構化競技場：plan3 逐場景軌跡（每格 10 趟）\n'
+    fig.suptitle('9×9 m 非結構化競技場：表面點 CBF 逐場景軌跡（每格 10 趟）\n'
                  '綠 = 無接觸，紅 = 有接觸，紅圈 = >90° 折返；'
                  '黃 = 未知靜態柱，深灰/紅/紫 = 圓柱/方形/L 型移動障礙',
                  fontsize=13, fontweight='bold')
