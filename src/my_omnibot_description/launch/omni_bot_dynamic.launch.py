@@ -166,7 +166,16 @@ def generate_launch_description():
         # so any QP slack / scan-tracking latency penetrated the obstacle
         # (measured up to 7 cm). 0.08 m buffer keeps clearance >= 0 while still
         # fitting the map's ~0.9 m narrow passages (static keep-out 0.05+0.38).
-        'cbf_enable': True, 'cbf_safe_margin': 0.38,
+        # The surface points carry radius 0 and the CBF treats the robot as a
+        # point, so the robot's own 0.30 m lives INSIDE this number: 0.38 buys
+        # 0.08 m of real buffer. One control period at a 0.5 m/s closing speed
+        # is already 0.025 m, so 0.08 leaves almost nothing for perception
+        # latency -- the measured graze stopped at exactly 0.300 m, i.e. exactly
+        # touching. Env-overridable so the trade against passage width can be
+        # tested; the default is unchanged, which is what the recorded results
+        # used.
+        'cbf_enable': True,
+        'cbf_safe_margin': float(os.environ.get('CBF_SAFE_MARGIN', '0.38')),
         # CBF class-K gain: h_dot >= -alpha*h. Smaller = the barrier engages
         # EARLIER and more gently, instead of waiting until it must spend the
         # whole acceleration budget. Measured at 3.0: min_h is under the danger

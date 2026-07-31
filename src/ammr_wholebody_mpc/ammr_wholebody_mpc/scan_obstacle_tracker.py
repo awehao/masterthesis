@@ -186,6 +186,9 @@ class ScanObstacleTracker(Node):
         p('assoc_gate', 0.80)             # m, max cluster<->track distance
         p('track_timeout', 0.60)          # s, drop track unseen this long
         p('min_track_age', 3)             # publish only after this many updates
+        # ... EXCEPT inside this range, where a young track is published as a
+        # stationary surface rather than not at all (see _scan_cb).
+        p('young_track_range', 2.5)       # m
         p('min_track_speed', 0.10)        # m/s, publish only MOVING tracks ->
                                           # rejects static map-subtraction leaks
                                           # (walls handled by costmap/planner).
@@ -255,6 +258,7 @@ class ScanObstacleTracker(Node):
         self.assoc_gate     = float(g('assoc_gate'))
         self.track_timeout  = float(g('track_timeout'))
         self.min_age        = int(g('min_track_age'))
+        self.young_range    = float(g('young_track_range'))
         self.min_speed      = float(g('min_track_speed'))
         self.release_speed  = min(float(g('release_track_speed')), self.min_speed)
         self.release_frames = int(g('track_release_frames'))
@@ -414,8 +418,28 @@ class ScanObstacleTracker(Node):
         # which works only while the planner reads the raw scan. Decoupling the
         # planner removed that owner and the robot hit one (pillar at (9,8),
         # -0.036 m). They belong in the static-CBF set, at v = 0.
+        #
+        # A track YOUNGER than min_age used to be published nowhere at all: it
+        # is not a mover (_is_mover refuses on age) and it failed the age test
+        # here. That is 3 cycles = 0.3 s in which a real object is invisible to
+        # the CBF, and the frames it costs are not random ones. Association runs
+        # on the cluster CENTROID, which slides along the surface as the viewing
+        # angle changes -- fastest when the robot is closest. A slide past
+        # assoc_gate breaks the track, a fresh one starts at age 1, and the
+        # object goes dark for 0.3 s at the exact moment the barrier is needed.
+        # Measured: dyn_obs_1 vanished for exactly 3 frames while closing from
+        # 0.34 m to 0.31 m, and the robot touched it at -0.000 m.
+        #
+        # The age gate is about trusting a VELOCITY estimate, not about whether
+        # geometry exists. A young track within `young_track_range` is therefore
+        # published as a stationary surface, which is the conservative reading
+        # of an object whose motion is not yet known. Beyond that range the
+        # 0.3 s wait costs nothing, so the noise filter is kept.
         statics = [tr for tr in self._tracks
-                   if id(tr) not in mv and tr.age >= self.min_age]
+                   if id(tr) not in mv and (
+                       tr.age >= self.min_age
+                       or math.hypot(tr.kf.position[0] - tx,
+                                     tr.kf.position[1] - ty) <= self.young_range)]
         self._publish(t_ns, scan.header.stamp, movers, tx, ty)
         self._publish_filtered_scan(scan, tx, ty, cyaw, syaw, movers)
         self._publish_static_obstacles(tx, ty, statics)
