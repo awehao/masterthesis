@@ -38,7 +38,13 @@ fi
 echo "Recording for $DURATION s into $OUT_DIR"
 echo "Topics: /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \\"
 echo "        /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h \\"
-echo "        /model/dyn_obs_{0,1,2}/pose  (ground-truth obstacle poses, all methods)"
+echo "        /model/dyn_obs_{0..6}/pose   (ground-truth obstacle poses, all methods)"
+# The list must cover EVERY mover the world defines, not the three the original
+# scenario used. It did not: dyn_obs_3, 4 and 6 went unrecorded, so analyze.py
+# -- which takes its dynamic clearance from /model/*/pose -- could not see them
+# at all. The scenarios built around exactly those movers (small, ell, merge,
+# and one of the two in bothgaps and dense) reported zero collisions while
+# measuring nothing but the walls.
 echo "Press Ctrl+C earlier if the robot reaches goal sooner."
 
 # Forward SIGINT (Ctrl+C) to ros2 bag record so it closes the bag cleanly;
@@ -52,7 +58,8 @@ timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
         --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
                  /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h \
                  /model/dyn_obs_0/pose /model/dyn_obs_1/pose /model/dyn_obs_2/pose \
-                 /model/dyn_obs_5/pose \
+                 /model/dyn_obs_3/pose /model/dyn_obs_4/pose /model/dyn_obs_5/pose \
+                 /model/dyn_obs_6/pose \
     < /dev/null || true
 
 echo "Done. Now analyse with:"
