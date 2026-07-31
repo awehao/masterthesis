@@ -78,9 +78,9 @@ def route():
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else \
-        f'{ROOT}/evaluation/results/figs/arena_messy.png'
+        f'{ROOT}/evaluation/results/figs/arena_traffic.png'
     obs = yaml.safe_load(
-        open(f'{SHARE}/config/dynamic_trajectories_arena_messy.yaml')
+        open(f'{SHARE}/config/dynamic_trajectories_arena_traffic.yaml')
     ).get('dynamic_obstacles') or []
     fp = footprints()
 
@@ -122,7 +122,7 @@ def main():
                     fontweight='bold', zorder=9,
                     xytext=(6, 6), textcoords='offset points')
         ax.plot([], [], '-', color=col, lw=2.4,
-                label=f"{o['name']}  v={o['speed']}  巡邏 {L:.1f} m  "
+                label=f"{o['name']}  v={o['speed']}  穿越 {L:.1f} m  "
                       f"週期 {2*L/max(o['speed'],1e-6):.0f} s")
 
     ax.plot(*START, '^', color='#1565c0', ms=15, zorder=10)
@@ -137,9 +137,9 @@ def main():
     ax.set_aspect('equal')
     ax.set_xlabel('x [m]')
     ax.set_ylabel('y [m]')
-    ax.set_title('arena_messy：七個移動障礙同時上場\n'
+    ax.set_title('arena_traffic：行人式交通流（七條長距離穿越）\n'
                  '灰 = 已知牆（在地圖上）  黃 = 未知靜態柱  '
-                 '彩色 = 移動障礙的真實外形與巡邏線（× 為另一端）',
+                 '彩色 = 移動障礙的真實外形與穿越路線（× 為另一端）',
                  fontsize=12, fontweight='bold')
     ax.legend(loc='upper left', fontsize=8, framealpha=0.92)
     os.makedirs(os.path.dirname(out), exist_ok=True)
