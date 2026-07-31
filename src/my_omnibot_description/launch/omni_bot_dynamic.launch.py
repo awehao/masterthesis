@@ -57,7 +57,15 @@ def generate_launch_description():
     # gaps so route choice is a real decision. A trial there costs ~45 s instead
     # of ~170 s, which is the cheapest way to buy the statistical power that
     # collision rate needs -- at n=10 its 95% interval spans 20-30 points.
-    if os.environ.get('ARENA', '0') == '1':
+    # BIGARENA=1 is the 20 x 20 m floor: eight bays joined by staggered 2.0-2.5 m
+    # doorways, known and unknown clutter placed by rejection sampling, and
+    # traffic making long traversals. The 9 m arena has essentially one route,
+    # so anything put on it is a roadblock; this one has alternatives, which is
+    # what makes route choice a decision rather than a formality.
+    if os.environ.get('BIGARENA', '0') == '1':
+        world_file = os.path.join(bringup, 'worlds', 'bigarena.sdf')
+        map_file   = os.path.join(bringup, 'maps',   'bigarena.yaml')
+    elif os.environ.get('ARENA', '0') == '1':
         world_file = os.path.join(bringup, 'worlds', 'arena.sdf')
         map_file   = os.path.join(bringup, 'maps',   'arena.yaml')
     else:

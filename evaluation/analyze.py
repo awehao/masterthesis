@@ -367,9 +367,12 @@ def load_static_clearance():
         # room's occupancy grid -- the robot's true position landed on an
         # unrelated occupied cell and every trial reported a -0.300 m wall
         # collision that never happened.
-        _arena = os.environ.get('ARENA', '0') == '1'
-        _map = 'arena' if _arena else 'random_room'
-        _world = 'arena.sdf' if _arena else 'random_room_dynamic.sdf'
+        if os.environ.get('BIGARENA', '0') == '1':
+            _map, _world = 'bigarena', 'bigarena.sdf'
+        elif os.environ.get('ARENA', '0') == '1':
+            _map, _world = 'arena', 'arena.sdf'
+        else:
+            _map, _world = 'random_room', 'random_room_dynamic.sdf'
         my = yaml.safe_load(open(share / 'maps' / f'{_map}.yaml'))
         res = my['resolution']; ox, oy = my['origin'][0], my['origin'][1]
         th = my['occupied_thresh']
