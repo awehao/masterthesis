@@ -174,6 +174,8 @@ def generate_launch_description():
         'cbf_danger_thresh': 0.4, 'cbf_Q_min_scale': 0.20,
         'cbf_slack_max_scale': 20.0, 'obstacles_topic': '/gmpc/obstacles',
         # Wall-vs-dynamic slack pricing; overridable from the harness for A/B.
+        'static_cbf_safe_margin': float(
+            os.environ.get('STATIC_MARGIN', '0.33')),
         'cbf_static_slack_scale': float(
             os.environ.get('CBF_STATIC_SLACK_SCALE', '1.0')),
         # Acceleration ceiling, overridable for the a_max study. jerk p95 comes

@@ -184,6 +184,15 @@ class GMPCNode(Node):
         # passages. Static walls are already routed around by the planner, so
         # the static-CBF is only a backstop -> a tighter margin keeps narrow
         # passages drivable while still preventing dodge-into-wall.
+        # NOTE the 0.30 m robot radius is INSIDE this number -- the CBF treats
+        # the robot as a point -- so 0.33 buys only 3 cm of true buffer, against
+        # the 8 cm the dynamic margin (0.38) buys. That difference is invisible
+        # for wall points, whose own radius is 0.05, but not for an unknown
+        # cylinder of radius 0.30: keep-out 0.63 against a 0.60 m contact
+        # distance. Measured across 187 arena trials, EVERY collision was a
+        # graze of an unknown static pillar, at -0.006 to +0.011 m -- exactly
+        # that 3 cm target minus slack -- while walls and movers were never
+        # touched.
         self.declare_parameter('static_cbf_safe_margin', 0.33)
         # Static-CBF is a BACKSTOP for "don't dodge a dynamic obstacle into a
         # wall" — only engage it when a dynamic obstacle is within this range of
