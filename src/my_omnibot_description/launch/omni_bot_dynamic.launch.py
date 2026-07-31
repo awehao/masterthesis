@@ -338,7 +338,18 @@ def generate_launch_description():
         DeclareLaunchArgument('obstacle_source', default_value='scan',
                               description='scan = real /scan perception; truth = ground-truth'),
         DeclareLaunchArgument('robot_radius', default_value='0.33'),
-        DeclareLaunchArgument('inflation', default_value='0.45'),
+        # The planner's clearance must be strictly LARGER than the CBF's
+        # keep-out, or the two layers fight: measured in the 20 m floor, the
+        # plan passed 0.43 m from a known box while the CBF's keep-out was
+        # 0.45 m, so the reference pulled the robot into a region its own
+        # barrier forbade. The result was three seconds of full-rate yaw
+        # reversal and a -0.02 m touch on a KNOWN obstacle -- the "drunk"
+        # weaving. 0.45 was tuned for the 20 m random room, whose obstacles
+        # sit well off the route; it was never enough once clutter sits beside
+        # the path. Env-overridable so the trade against doorway width can be
+        # tested: at 0.70 a 2.0 m doorway still leaves 0.6 m of zero-cost centre.
+        DeclareLaunchArgument(
+            'inflation', default_value=os.environ.get('INFLATION', '0.70')),
         DeclareLaunchArgument('use_smoother', default_value='true',
                               description='true = GMPC->cmd_vel_nav->velocity_smoother->/cmd_vel; '
                                           'false = GMPC drives /cmd_vel directly'),
