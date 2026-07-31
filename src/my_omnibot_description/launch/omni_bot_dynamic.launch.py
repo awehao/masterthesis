@@ -174,6 +174,22 @@ def generate_launch_description():
         # touching. Env-overridable so the trade against passage width can be
         # tested; the default is unchanged, which is what the recorded results
         # used.
+        # YAW_TRACK=0 stops the controller steering the heading at all.
+        #
+        # The base is omnidirectional and the lidar is 360 deg, so nothing about
+        # the task needs the robot to face where it is going: vx and vy do the
+        # driving. Slaving yaw to the path therefore buys nothing, while giving
+        # the QP a nearly free degree of freedom -- and whenever the CBF tightens
+        # the position constraints it spends that freedom on rotation. Measured
+        # on a failing traverse: the heading reference asked for 1355 deg of
+        # rotation over 100 s and the robot turned 4981 deg, with wz saturated
+        # 58% of the time, while making no progress at all.
+        #
+        # 0 zeroes the heading weight AND the yaw rate limit, so the degree of
+        # freedom is removed rather than merely discouraged. 1 (the default) is
+        # the behaviour every recorded result used.
+        **({} if os.environ.get('YAW_TRACK', '1') == '1' else
+           {'Q_yaw': 0.0, 'wz_max': 0.0, 'wz_min': 0.0}),
         'cbf_enable': True,
         'cbf_safe_margin': float(os.environ.get('CBF_SAFE_MARGIN', '0.38')),
         # CBF class-K gain: h_dot >= -alpha*h. Smaller = the barrier engages
