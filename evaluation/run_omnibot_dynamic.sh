@@ -108,7 +108,11 @@ run_trial() {
     local run_tag="${TAG}_seed${seed}"
     local log_file="${HERE}/logs/${AMETHOD}__${run_tag}.log"
     local bag_dir="${HERE}/bags/${AMETHOD}__${run_tag}"
-    rm -rf "$bag_dir"
+    # Move aside rather than delete: an anomaly worth analysing was lost once
+    # because the next batch reused this directory. Old copies accumulate under
+    # __prev_<time> and can be cleared by hand when no longer wanted.
+    [ -d "$bag_dir" ] && mv "$bag_dir" "${bag_dir}__prev_$(date +%H%M%S)" 2>/dev/null
+    true
     rm -f  "$log_file"
 
     echo "=========================================================="
