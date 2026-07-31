@@ -52,14 +52,16 @@ echo "Press Ctrl+C earlier if the robot reaches goal sooner."
 #   --foreground   : pass SIGINT from this shell straight through
 #   --signal=INT   : after DURATION, send SIGINT (not SIGTERM) — lets rosbag2 flush
 #   --kill-after=5 : if rosbag2 still alive 5s later, SIGKILL it
+# Never silently overwrite: an anomaly worth analysing was destroyed once
+# because the next batch reused the same seed directory. Anything already there
+# is moved aside with a timestamp rather than lost. This has to sit BEFORE the
+# timeout command -- putting it after the line-continuation backslash split the
+# command in half and the recorder never started, which cost two more runs.
+if [ -d "$OUT_DIR" ]; then
+    mv "$OUT_DIR" "${OUT_DIR}__prev_$(date +%H%M%S)" 2>/dev/null || true
+fi
+
 timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
-    # Never silently overwrite: an anomaly worth analysing was destroyed once
-    # because the next batch reused the same seed directory. The caller removes
-    # the directory deliberately when it wants a fresh run; anything already
-    # there is moved aside with a timestamp instead of being lost.
-    if [ -d "$OUT_DIR" ]; then
-        mv "$OUT_DIR" "${OUT_DIR}__prev_$(date +%H%M%S)" 2>/dev/null || true
-    fi
     ros2 bag record \
         -o "$OUT_DIR" \
         --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
