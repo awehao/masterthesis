@@ -1,0 +1,305 @@
+"""One validated analyser for every batch, with the checks that were missing.
+
+Written after a day in which eight separate conclusions had to be retracted.
+Every one of them came from the same mistake -- reading a number without first
+establishing what it measured:
+
+  * the robot was treated as a 0.30 m circle. Its collision body is a
+    0.45 x 0.45 box that rotates with the base, so the true boundary is 0.225 m
+    at a face and 0.318 m at a corner. Contacts were over-reported threefold.
+  * solve time was judged by its median (0.18 ms) while its p99 was 425 ms and
+    9% of cycles overran the 50 ms control period.
+  * localisation error was computed against the LAST received sample. When
+    /amcl_pose stopped (which nav2_amcl does when the robot stops moving) the
+    error froze at a small number and the trial looked healthy.
+  * "the robot was pushed into" was inferred from a stationary robot without
+    checking whether the controller had commanded zero (a freeze) or commanded
+    motion that did not happen (wedged) -- two different failures.
+
+So every quantity here carries a validity check, and the tool refuses to report
+a number it cannot stand behind:
+
+  geometry   robot footprint read from the URDF, obstacle shapes from the world
+             SDF, signed distance between the ROTATED robot box and each body
+  alignment  an obstacle sample is used only if an /odom sample exists within
+             ALIGN_TOL; the coverage is reported, and a trial with poor
+             coverage is flagged rather than averaged
+  liveness   per-topic coverage as a fraction of the trial. A topic that stops
+             early invalidates anything derived from it
+  outcome    arrived / timeout-while-moving / frozen (cmd ~ 0) / wedged
+             (cmd > 0 but no displacement), decided from commands AND motion
+
+    python3 evaluation/analyze_trials.py <bag_dir> [<bag_dir> ...]
+    python3 evaluation/analyze_trials.py evaluation/results/randA --label randA
+"""
+import argparse
+import glob
+import math
+import os
+import re
+import sys
+
+import numpy as np
+
+ALIGN_TOL = 0.05        # s, obstacle sample to odom sample
+STALL_V = 0.05          # m/s, below this the command counts as "no demand"
+STALL_D = 0.30          # m, displacement over the window below this = not moving
+WINDOW = 20.0           # s, window for the stuck/frozen test
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def robot_footprint(urdf=None):
+    """Half-extents of the base collision box, from the URDF rather than memory.
+
+    The number that caused the worst error of the day was a 0.30 m radius that
+    was never checked against anything.
+    """
+    urdf = urdf or f'{ROOT}/src/my_omnibot_description/urdf/omni_bot.urdf.xacro'
+    txt = open(urdf).read()
+    m = re.search(r'<collision.*?<box size="([\d.]+) ([\d.]+)', txt, re.S)
+    if not m:
+        raise SystemExit(f'no base collision box found in {urdf}')
+    return float(m.group(1)) / 2.0, float(m.group(2)) / 2.0
+
+
+def mover_shapes(world):
+    """Each mover's collision primitives, in its own body frame."""
+    sdf = open(world).read()
+    out = {}
+    for m in re.finditer(r'<model name="(dyn_obs_\d+)">(.*?)</model>', sdf, re.S):
+        parts = []
+        for c in re.finditer(r'<collision[^>]*>(.*?)</collision>', m.group(2), re.S):
+            cb = c.group(1)
+            po = re.search(r'<pose>([-\d.eE+ ]+)</pose>', cb)
+            px, py = ((float(po.group(1).split()[0]),
+                       float(po.group(1).split()[1])) if po else (0.0, 0.0))
+            bx = re.search(r'<box><size>([\d.]+) ([\d.]+)', cb)
+            cy = re.search(r'<cylinder><radius>([\d.]+)', cb)
+            if bx:
+                parts.append(('box', px, py,
+                              float(bx.group(1)), float(bx.group(2))))
+            elif cy:
+                parts.append(('cyl', px, py, float(cy.group(1)), 0.0))
+        if parts:
+            out[m.group(1)] = parts
+    return out
+
+
+def outline(parts, n=32):
+    """Points along a body's boundary. Sampling can only OVERestimate the
+    clearance (the true nearest point may fall between samples), so a negative
+    reading is never an artefact of the sampling -- it is a real overlap."""
+    pts = []
+    for kind, px, py, a, b in parts:
+        if kind == 'box':
+            t = np.linspace(0, 1, n)
+            for x0, y0, x1, y1 in ((-a/2, -b/2, a/2, -b/2), (a/2, -b/2, a/2, b/2),
+                                   (a/2, b/2, -a/2, b/2), (-a/2, b/2, -a/2, -b/2)):
+                pts.append(np.stack([px + x0 + (x1-x0)*t,
+                                     py + y0 + (y1-y0)*t], 1))
+        else:
+            th = np.linspace(0, 2*np.pi, 4*n, endpoint=False)
+            pts.append(np.stack([px + a*np.cos(th), py + a*np.sin(th)], 1))
+    return np.concatenate(pts, 0)
+
+
+def signed_clearance(P, ox, oy, rx, ry, rt, hx, hy):
+    """Signed distance from a body's outline to the ROTATED robot box.
+
+    Negative is a real penetration DEPTH, not a flag: an earlier version filled
+    a constant -0.01 whenever anything overlapped, which made fifteen different
+    trials report an identical number and hid how bad each one was.
+    """
+    c, s = np.cos(-rt), np.sin(-rt)
+    dx = (ox[:, None] + P[None, :, 0]) - rx[:, None]
+    dy = (oy[:, None] + P[None, :, 1]) - ry[:, None]
+    lx = c[:, None]*dx - s[:, None]*dy
+    ly = s[:, None]*dx + c[:, None]*dy
+    ax, ay = np.abs(lx), np.abs(ly)
+    outside = np.hypot(np.maximum(ax - hx, 0.0), np.maximum(ay - hy, 0.0))
+    inside = -np.minimum(hx - ax, hy - ay)          # depth, negative
+    return np.where((ax <= hx) & (ay <= hy), inside, outside).min(axis=1)
+
+
+def read_bag(path):
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    from nav_msgs.msg import Odometry
+    from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped
+    from std_msgs.msg import Float32
+    sr = rosbag2_py.SequentialReader()
+    sr.open(rosbag2_py.StorageOptions(uri=path, storage_id='mcap'),
+            rosbag2_py.ConverterOptions('', ''))
+
+    def yaw(q):
+        return math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y*q.y + q.z*q.z))
+
+    O, U, S, A, F, D = [], [], [], [], [], {}
+    while sr.has_next():
+        t, d, ts = sr.read_next()
+        s = ts * 1e-9
+        if t == '/odom':
+            m = deserialize_message(d, Odometry)
+            O.append((s, m.pose.pose.position.x, m.pose.pose.position.y,
+                      yaw(m.pose.pose.orientation)))
+        elif t == '/cmd_vel':
+            m = deserialize_message(d, Twist)
+            U.append((s, math.hypot(m.linear.x, m.linear.y), m.angular.z))
+        elif t == '/gmpc/solve_time_ms':
+            S.append((s, deserialize_message(d, Float32).data))
+        elif t == '/amcl_pose':
+            m = deserialize_message(d, PoseWithCovarianceStamped)
+            A.append((s, m.pose.pose.position.x, m.pose.pose.position.y))
+        elif t == '/odometry/filtered':
+            m = deserialize_message(d, Odometry)
+            F.append((s, m.pose.pose.position.x, m.pose.pose.position.y))
+        elif t.startswith('/model/') and t.endswith('/pose'):
+            m = deserialize_message(d, PoseStamped)
+            D.setdefault(t.split('/')[2], []).append(
+                (s, m.pose.position.x, m.pose.position.y))
+    return (np.array(O), np.array(U), np.array(S), np.array(A), np.array(F),
+            {k: np.array(v) for k, v in D.items()})
+
+
+def outcome(O, U, goal, tol=0.35):
+    """arrived / timeout-moving / frozen / wedged, from commands AND motion.
+
+    Distinguishing the last two matters: a controller that commands zero has
+    given up, and a controller commanding 0.19 m/s while the robot does not
+    move is jammed against something. Both look like "stopped" in a plot.
+    """
+    if goal is not None and np.linalg.norm(O[-1, 1:3] - goal) < tol:
+        return 'arrived'
+    t0 = O[0, 0]
+    tail = O[(O[:, 0] - t0) >= (O[-1, 0] - t0 - WINDOW)]
+    utail = U[(U[:, 0] - t0) >= (U[-1, 0] - t0 - WINDOW)] if len(U) else U
+    moved = (np.linalg.norm(np.diff(tail[:, 1:3], axis=0), axis=1).sum()
+             if len(tail) > 1 else 0.0)
+    demand = np.median(utail[:, 1]) if len(utail) else 0.0
+    if moved >= STALL_D:
+        return 'timeout-moving'
+    return 'frozen' if demand < STALL_V else 'wedged'
+
+
+def analyse(path, world, goal, hx, hy):
+    O, U, S, A, F, D = read_bag(path)
+    if len(O) < 50:
+        return None
+    dur = O[-1, 0] - O[0, 0]
+    shapes = mover_shapes(world)
+    OUT = {k: outline(v) for k, v in shapes.items()}
+
+    worst, worst_who, cover = 1e9, None, []
+    for name, Aa in D.items():
+        if name not in OUT or len(Aa) < 5:
+            continue
+        idx = np.searchsorted(O[:, 0], Aa[:, 0]).clip(0, len(O) - 1)
+        ok = np.abs(O[idx, 0] - Aa[:, 0]) <= ALIGN_TOL
+        cover.append(ok.mean())
+        if not ok.any():
+            continue
+        v = signed_clearance(OUT[name], Aa[ok, 1], Aa[ok, 2],
+                             O[idx[ok], 1], O[idx[ok], 2], O[idx[ok], 3], hx, hy)
+        if v.min() < worst:
+            worst, worst_who = v.min(), name
+
+    def live(X):
+        return (X[-1, 0] - O[0, 0]) / dur if len(X) > 2 else 0.0
+
+    return dict(
+        run=os.path.basename(path).replace('gmpc_cbf__scan_', ''),
+        outcome=outcome(O, U, goal),
+        dur=dur,
+        path_m=float(np.linalg.norm(np.diff(O[:, 1:3], axis=0), axis=1).sum()),
+        clearance=float(worst) if worst < 1e8 else float('nan'),
+        who=worst_who,
+        align=float(np.min(cover)) if cover else 0.0,
+        spin=float(np.degrees(np.abs(np.diff(O[:, 3])).sum())),
+        sat=100.0 * float(np.mean(np.abs(U[:, 2]) >= 0.78)) if len(U) else float('nan'),
+        solve_p99=float(np.percentile(S[:, 1], 99)) if len(S) else float('nan'),
+        solve_over=100.0 * float(np.mean(S[:, 1] > 50)) if len(S) else float('nan'),
+        amcl_live=live(A),
+        ekf_live=live(F),
+    )
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('dirs', nargs='+')
+    ap.add_argument('--world', default=f'{ROOT}/src/ammr_bringup/worlds/bigarena.sdf')
+    ap.add_argument('--goal', nargs=2, type=float, default=None,
+                    help='fixed goal; omit when the batch used random goals')
+    ap.add_argument('--poses', default=None,
+                    help='CSV of per-seed start/goal for random-pose batches')
+    a = ap.parse_args()
+
+    hx, hy = robot_footprint()
+    print(f'robot collision box: {2*hx:.2f} x {2*hy:.2f} m '
+          f'(face {min(hx,hy):.3f} m, corner {math.hypot(hx,hy):.3f} m)')
+    print(f'world: {os.path.basename(a.world)}   alignment tolerance: {ALIGN_TOL}s\n')
+
+    goals = {}
+    if a.poses:
+        import csv
+        for r in csv.DictReader(open(a.poses)):
+            goals[f"seed{r['seed']}"] = np.array([float(r['goal_x']),
+                                                  float(r['goal_y'])])
+
+    for d in a.dirs:
+        bags = sorted(glob.glob(os.path.join(d, 'gmpc_cbf__scan_seed*')))
+        rows = []
+        for b in bags:
+            seed = os.path.basename(b).replace('gmpc_cbf__scan_', '')
+            g = goals.get(seed, np.array(a.goal) if a.goal else None)
+            try:
+                r = analyse(b, a.world, g, hx, hy)
+            except Exception as e:
+                print(f'  {seed}: FAILED to read ({e})')
+                continue
+            if r:
+                rows.append(r)
+        if not rows:
+            print(f'{d}: no readable bags\n')
+            continue
+
+        print(f'=== {d}  ({len(rows)} trials) ===')
+        bad = [r for r in rows if r['align'] < 0.9 or r['ekf_live'] < 0.9]
+        if bad:
+            print(f'  ! {len(bad)} trials have degraded data '
+                  f'(alignment or EKF coverage < 90%) -- listed but excluded '
+                  f'from the aggregates')
+        good = [r for r in rows if r not in bad]
+        from collections import Counter
+        oc = Counter(r['outcome'] for r in good)
+        print('  outcome: ' + '  '.join(f'{k} {v}' for k, v in oc.most_common()))
+        cl = np.array([r['clearance'] for r in good])
+        cl = cl[~np.isnan(cl)]
+        if len(cl):
+            print(f'  clearance   median {np.median(cl):+.3f}   '
+                  f'q1-q3 {np.percentile(cl,25):+.3f}..{np.percentile(cl,75):+.3f}   '
+                  f'min {cl.min():+.3f}')
+            print(f'  contacts (<0)  {int((cl<0).sum())}/{len(cl)}     '
+                  f'within 5 cm  {int((cl<0.05).sum())}/{len(cl)}')
+        sp = np.array([r['spin'] for r in good])
+        pm = np.array([r['path_m'] for r in good])
+        print(f'  spin  median {np.median(sp):.0f} deg   '
+              f'path median {np.median(pm):.1f} m')
+        so = np.array([r['solve_over'] for r in good])
+        so = so[~np.isnan(so)]
+        if len(so):
+            print(f'  solve over 50 ms: median {np.median(so):.1f}% of cycles')
+        print()
+        hdr = (f"  {'run':<10}{'outcome':<16}{'clear':>8}{'who':>12}"
+               f"{'align':>7}{'amcl':>6}{'ekf':>6}{'spin':>7}{'path':>7}")
+        print(hdr)
+        for r in sorted(rows, key=lambda z: z['clearance']):
+            flag = ' !' if (r['align'] < 0.9 or r['ekf_live'] < 0.9) else ''
+            print(f"  {r['run']:<10}{r['outcome']:<16}{r['clearance']:>+8.3f}"
+                  f"{str(r['who']):>12}{r['align']:>7.2f}{r['amcl_live']:>6.2f}"
+                  f"{r['ekf_live']:>6.2f}{r['spin']:>7.0f}{r['path_m']:>7.1f}{flag}")
+        print()
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
