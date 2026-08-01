@@ -46,7 +46,7 @@ from rclpy.duration import Duration
 import tf2_ros
 
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
-from nav_msgs.msg import Path
+from nav_msgs.msg import Odometry, Path
 from rosgraph_msgs.msg import Clock
 
 
@@ -70,10 +70,19 @@ class Starter(Node):
         self.clock_t = None
         self.amcl = None
         self.plan = False
+        self.fused = None
         self.create_subscription(Clock, '/clock', self._on_clock, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose',
                                  self._on_amcl, 10)
         self.create_subscription(Path, '/plan', self._on_plan, 10)
+        # The EKF's OWN output. Checking TF instead has a race: before the EKF
+        # starts publishing map->odom the transform is identity, and since /odom
+        # is already in world coordinates the lookup then returns the correct
+        # pose -- the check passes on a filter that is not even running yet.
+        # Measured: the check cleared in 0.1 s, then the EKF came up with its
+        # state still at the origin and sat 17.3 m out for the whole run.
+        self.create_subscription(Odometry, '/odometry/filtered',
+                                 self._on_fused, 10)
         # map -> base_footprint is what the PLANNER reads. Checking AMCL alone
         # is not enough: with a spawn away from the origin AMCL was correct and
         # the planner still believed the robot was at (0, 0), because the EKF
@@ -107,6 +116,9 @@ class Starter(Node):
     def _on_plan(self, m):
         if len(m.poses) > 1:
             self.plan = True
+
+    def _on_fused(self, m):
+        self.fused = (m.pose.pose.position.x, m.pose.pose.position.y)
 
     def wait(self, cond, timeout, label):
         t0 = time.time()
@@ -211,9 +223,16 @@ def main():
         p.pose.pose.position.x = a.start_x
         p.pose.pose.position.y = a.start_y
         p.pose.pose.orientation.w = 1.0
+        # Do not reset anything until the EKF is actually alive, or the reset
+        # goes to a node that has not subscribed yet and is silently dropped.
+        if math.hypot(a.start_x, a.start_y) > 0.05:
+            if not n.wait(lambda: n.fused is not None, min(20.0, left()),
+                          'EKF publishing'):
+                print('  /odometry/filtered never appeared', flush=True)
+                return 1
         n.amcl = None
         tf_seen = [None]
-        for _ in range(4):
+        for _ in range(6):
             p.header.stamp = n.get_clock().now().to_msg()
             n.init_pub.publish(p)          # AMCL's particle cloud
             # Only when the spawn is NOT the origin: the EKF already starts
@@ -244,16 +263,25 @@ def main():
                     return False
                 q = n.robot_xy()
                 tf_seen[0] = q
-                return (q is not None and abs(q[0] - a.start_x) < 0.5
-                        and abs(q[1] - a.start_y) < 0.5)
+                if q is None or (abs(q[0] - a.start_x) > 0.5
+                                 or abs(q[1] - a.start_y) > 0.5):
+                    return False
+                # And the EKF's own estimate, which is what publishes map->odom.
+                f = n.fused
+                if math.hypot(a.start_x, a.start_y) > 0.05:
+                    return (f is not None and abs(f[0] - a.start_x) < 0.5
+                            and abs(f[1] - a.start_y) < 0.5)
+                return True
 
-            if n.wait(agrees, min(6.0, left()), 'AMCL + TF agree with the spawn'):
+            if n.wait(agrees, min(6.0, left()), 'AMCL + TF + EKF agree'):
                 break
         else:
             am = ('(%.2f, %.2f)' % n.amcl) if n.amcl else 'none'
             tf = ('(%.2f, %.2f)' % tf_seen[0]) if tf_seen[0] else 'none'
+            fu = ('(%.2f, %.2f)' % n.fused) if n.fused else 'none'
             print(f'  localisation never reached the spawn '
-                  f'({a.start_x:.2f}, {a.start_y:.2f}): amcl={am} map->base={tf}',
+                  f'({a.start_x:.2f}, {a.start_y:.2f}): '
+                  f'amcl={am} map->base={tf} ekf={fu}',
                   flush=True)
             return 1
 
