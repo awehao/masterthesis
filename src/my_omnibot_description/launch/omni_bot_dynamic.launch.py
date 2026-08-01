@@ -186,9 +186,21 @@ def generate_launch_description():
         # 58% of the time, while making no progress at all.
         #
         # 0 zeroes the heading weight AND the yaw rate limit, so the degree of
-        # freedom is removed rather than merely discouraged. 1 (the default) is
-        # the behaviour every recorded result used.
-        **({} if os.environ.get('YAW_TRACK', '1') == '1' else
+        # freedom is removed rather than merely discouraged.
+        #
+        # DEFAULT IS NOW 0. On the fixed (0,0)->(17,17) traverse the two arms
+        # looked like a trade -- 146 paired trials gave 632 deg of rotation with
+        # tracking versus 0 without, faster without but with more contacts. On
+        # RANDOM traverses, which turn more and pass more doorways, tracking
+        # collapses: 3375 deg median over the first five trials and 13990 deg on
+        # one of them, thirty-nine full revolutions in 52 m, and the two trials
+        # that failed to arrive were the two that turned most. The fixed route
+        # is nearly a straight diagonal, so it never exposed this.
+        #
+        # Nothing in the task needs a heading: the base is omnidirectional and
+        # the lidar is 360 deg. Set YAW_TRACK=1 to restore the old behaviour for
+        # comparison against results recorded before this change.
+        **({} if os.environ.get('YAW_TRACK', '0') == '1' else
            {'Q_yaw': 0.0, 'wz_max': 0.0, 'wz_min': 0.0}),
         # HORIZON: how far ahead the barrier can see, in control steps of dt.
         #
