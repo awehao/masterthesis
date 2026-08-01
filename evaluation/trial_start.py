@@ -204,6 +204,18 @@ def main():
         p.pose.pose.position.x = a.start_x
         p.pose.pose.position.y = a.start_y
         p.pose.pose.orientation.w = 1.0
+        # A covariance MUST be set. robot_localization's set_pose writes the
+        # message's covariance straight into the filter's state covariance, and
+        # the message default is all zeros -- "this estimate has no uncertainty
+        # at all". The filter then stops accepting corrections: measured over a
+        # 249 s run, the robot's believed pose stayed at (0.00, 0.00) while it
+        # actually drove to (1.5, 2.1), (0.9, 3.8) and (-0.8, 2.2), with
+        # map->odom swinging through +-180 deg to cancel the odometry. The
+        # controller was steering from a pose that never moved, and turned
+        # 16274 deg doing it. These are the values rviz's 2D Pose Estimate uses.
+        p.pose.covariance[0] = 0.25        # x
+        p.pose.covariance[7] = 0.25        # y
+        p.pose.covariance[35] = 0.0685     # yaw
         n.amcl = None
         n.fused = None
         for _ in range(4):
