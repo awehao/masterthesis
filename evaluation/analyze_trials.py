@@ -161,14 +161,26 @@ def read_bag(path):
             {k: np.array(v) for k, v in D.items()})
 
 
-def outcome(O, U, goal, tol=0.35):
+def outcome(O, U, goal, arrived_csv=None, tol=0.30):
     """arrived / timeout-moving / frozen / wedged, from commands AND motion.
 
     Distinguishing the last two matters: a controller that commands zero has
     given up, and a controller commanding 0.19 m/s while the robot does not
     move is jammed against something. Both look like "stopped" in a plot.
+
+    ARRIVAL comes from the batch's own goal_watcher when the CSV is available,
+    because that is the decision the run actually made, in the map frame, at
+    the time. Reconstructing it here got it wrong twice: the last odom sample
+    is several seconds after the watcher fired and the robot has coasted past
+    (seed1 came within 0.05 m, ended 0.41 m out), and odom is not the frame the
+    watcher read (seed2's closest odom approach was 0.49 m against a 0.30 m
+    tolerance, yet the watcher had already fired). The fallback below therefore
+    uses the CLOSEST approach over the whole run, never the final sample.
     """
-    if goal is not None and np.linalg.norm(O[-1, 1:3] - goal) < tol:
+    if arrived_csv is not None:
+        if arrived_csv:
+            return 'arrived'
+    elif goal is not None and np.linalg.norm(O[:, 1:3] - goal, axis=1).min() < tol:
         return 'arrived'
     t0 = O[0, 0]
     tail = O[(O[:, 0] - t0) >= (O[-1, 0] - t0 - WINDOW)]
@@ -181,7 +193,7 @@ def outcome(O, U, goal, tol=0.35):
     return 'frozen' if demand < STALL_V else 'wedged'
 
 
-def analyse(path, world, goal, hx, hy):
+def analyse(path, world, goal, hx, hy, arrived_csv=None):
     O, U, S, A, F, D = read_bag(path)
     if len(O) < 50:
         return None
@@ -208,7 +220,7 @@ def analyse(path, world, goal, hx, hy):
 
     return dict(
         run=os.path.basename(path).replace('gmpc_cbf__scan_', ''),
-        outcome=outcome(O, U, goal),
+        outcome=outcome(O, U, goal, arrived_csv),
         dur=dur,
         path_m=float(np.linalg.norm(np.diff(O[:, 1:3], axis=0), axis=1).sum()),
         clearance=float(worst) if worst < 1e8 else float('nan'),
@@ -238,6 +250,17 @@ def main():
           f'(face {min(hx,hy):.3f} m, corner {math.hypot(hx,hy):.3f} m)')
     print(f'world: {os.path.basename(a.world)}   alignment tolerance: {ALIGN_TOL}s\n')
 
+    # The batch's own live verdict, recorded by goal_watcher.
+    arrived = {}
+    import csv as _csv
+    for d in list(a.dirs) + [os.path.join(ROOT, 'evaluation', 'results')]:
+        for cand in (os.path.join(d, 'results.csv'),
+                     os.path.join(d, 'omnibot_dynamic_gmpc_scan.csv')):
+            if os.path.isfile(cand):
+                for r in _csv.DictReader(open(cand)):
+                    arrived[r['run'].replace('scan_', '')] = (
+                        r['success'].strip().lower() == 'true')
+
     goals = {}
     if a.poses:
         import csv
@@ -252,7 +275,7 @@ def main():
             seed = os.path.basename(b).replace('gmpc_cbf__scan_', '')
             g = goals.get(seed, np.array(a.goal) if a.goal else None)
             try:
-                r = analyse(b, a.world, g, hx, hy)
+                r = analyse(b, a.world, g, hx, hy, arrived.get(seed))
             except Exception as e:
                 print(f'  {seed}: FAILED to read ({e})')
                 continue
