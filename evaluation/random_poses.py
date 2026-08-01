@@ -55,13 +55,52 @@ def load_grid():
         f.readline()
         img = np.frombuffer(f.read(), np.uint8).reshape(h, w)
     occ = ((255 - img.astype(float)) / 255.0) > my['occupied_thresh']
+    # The map holds what the ROBOT knows: walls and the clutter that was baked
+    # into it. The unknown clutter is deliberately absent -- that is what makes
+    # it unknown -- so sampling spawns against the map alone cannot see seven
+    # 1 m boxes that are physically there. Measured: 6 of the first 30 pairs put
+    # the spawn within 0.35 m of one (robot half-width 0.225), and one landed
+    # dead inside it, where the robot commanded 0.385 m/s and never moved for
+    # the whole 250 s. Placement must use the WORLD, not the map.
+    for cx, cy, sx, sy in world_boxes():
+        c0 = int(round((cx - sx / 2 - ox) / res))
+        c1 = int(round((cx + sx / 2 - ox) / res))
+        r0 = int(round(h - (cy + sy / 2 - oy) / res))
+        r1 = int(round(h - (cy - sy / 2 - oy) / res))
+        occ[max(0, r0):min(h, r1), max(0, c0):min(w, c1)] = True
     from scipy.ndimage import distance_transform_edt
     return occ, distance_transform_edt(~occ) * res, res, ox, oy, h, w
+
+
+def world_boxes(world=None):
+    """Every static collision box in the WORLD, including the unknown clutter."""
+    import re
+    world = world or (SHARE / 'worlds' / 'bigarena.sdf')
+    sdf = open(world).read()
+    out = []
+    for m in re.finditer(
+            r'<model name="((?:wall_|known_obs_|unknown_obs_)[^"]*)">\s*'
+            r'<static>true</static>\s*<pose>([-\d.eE+ ]+)</pose>.*?'
+            r'<box><size>([\d.]+) ([\d.]+)', sdf, re.S):
+        v = m.group(2).split()
+        out.append((float(v[0]), float(v[1]),
+                    float(m.group(3)), float(m.group(4))))
+    return out
 
 
 def movers():
     f = SHARE / 'config' / 'dynamic_trajectories_bigarena_traffic.yaml'
     return yaml.safe_load(open(f)).get('dynamic_obstacles') or []
+
+
+def mover_spawns():
+    """Where the movers actually START, which is where they sit at t=0.
+
+    Clearing the LANE is not the same as clearing the spawn: a robot placed
+    0.6 m from a lane can still be next to the body that is parked on that
+    lane's first point when the trial begins.
+    """
+    return [(np.array(o['start'], float), float(o['radius'])) for o in movers()]
 
 
 def main():
@@ -113,6 +152,12 @@ def main():
                     q.append((rr, cc))
         return False
 
+    spawns = mover_spawns()
+
+    def mover_spawn_clear(x, y):
+        return min((math.hypot(x - p[0], y - p[1]) - r for p, r in spawns),
+                   default=9.9)
+
     rng = random.Random(a.seed)
     lo, hi = ox + 0.8, ox + W * res - 0.8
     rows, tries = [], 0
@@ -120,6 +165,8 @@ def main():
         tries += 1
         s = (round(rng.uniform(lo, hi), 2), round(rng.uniform(lo, hi), 2))
         if free(*s) < INFLATE + 0.10 or lane_clear(*s) < MOVER_CLEAR:
+            continue
+        if mover_spawn_clear(*s) < MOVER_CLEAR:
             continue
         g = (round(rng.uniform(lo, hi), 2), round(rng.uniform(lo, hi), 2))
         if free(*g) < INFLATE + 0.10:
