@@ -200,8 +200,16 @@ def generate_launch_description():
         # Nothing in the task needs a heading: the base is omnidirectional and
         # the lidar is 360 deg. Set YAW_TRACK=1 to restore the old behaviour for
         # comparison against results recorded before this change.
-        **({} if os.environ.get('YAW_TRACK', '0') == '1' else
-           {'Q_yaw': 0.0, 'wz_max': 0.0, 'wz_min': 0.0}),
+        # Q_yaw ONLY. An earlier version also zeroed wz_max/wz_min, which does
+        # not mean "stop steering the heading" -- it means "forbid rotation".
+        # The robot then kept whatever heading it spawned with, so its velocity
+        # envelope (vx +0.30 / -0.20, vy +-0.25) was frozen in the WORLD frame,
+        # and a goal behind it could only be approached in reverse at 0.20 m/s
+        # while sideways was 0.25. Measured: 190 s inside a 0.9 x 1.4 m box with
+        # vy chattering between +-0.25 and no progress. Leaving wz free lets the
+        # QP turn when turning helps; the zero weight only stops the path
+        # tangent from dragging the heading around.
+        **({} if os.environ.get('YAW_TRACK', '0') == '1' else {'Q_yaw': 0.0}),
         # HORIZON: how far ahead the barrier can see, in control steps of dt.
         #
         # At 20 steps x 0.05 s the CBF sees 1.0 s. Against a mover closing at
