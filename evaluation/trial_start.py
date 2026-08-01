@@ -31,6 +31,7 @@ than record a run that was never going to move.
     python3 evaluation/trial_start.py --goal-x 17 --goal-y 17
 """
 import argparse
+import math
 import random
 import sys
 import time
@@ -221,7 +222,14 @@ def main():
         for _ in range(4):
             p.header.stamp = n.get_clock().now().to_msg()
             n.init_pub.publish(p)       # AMCL's particle cloud
-            n.setpose_pub.publish(p)    # the EKF's state
+            # The EKF initialises its state at the origin, so a spawn AT the
+            # origin needs no reset -- and resetting it there is not free:
+            # set_pose also overwrites the state covariance, which is how a
+            # zero-covariance message froze the filter. Touching it only when
+            # the spawn is somewhere else keeps the origin case on exactly the
+            # code path that was working before random spawns were added.
+            if math.hypot(a.start_x, a.start_y) > 0.05:
+                n.setpose_pub.publish(p)
             # BOTH have to agree with the spawn. Checking only AMCL is what let
             # a whole batch run with the planner convinced the robot was at the
             # origin: AMCL was right, the EKF was not, and the EKF owns the
