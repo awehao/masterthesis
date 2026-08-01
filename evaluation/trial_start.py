@@ -220,7 +220,21 @@ def main():
             # there, and set_pose also overwrites its covariance, so touching it
             # needlessly changes the case that every recorded result used.
             if math.hypot(a.start_x, a.start_y) > 0.05:
-                n.setpose_pub.publish(p)
+                # A SEPARATE message: /initialpose keeps the zero covariance
+                # every recorded result used, while set_pose needs a real one.
+                # robot_localization writes the message covariance straight into
+                # the filter's state covariance, and an all-zero matrix makes
+                # that update degenerate -- measured, the filter stayed at the
+                # origin and map->odom was 8.7 m out (median) while AMCL was
+                # correct to 0.043 m. These are rviz's 2D Pose Estimate values.
+                sp = PoseWithCovarianceStamped()
+                sp.header.frame_id = 'map'
+                sp.header.stamp = p.header.stamp
+                sp.pose.pose = p.pose.pose
+                sp.pose.covariance[0] = 0.25
+                sp.pose.covariance[7] = 0.25
+                sp.pose.covariance[35] = 0.0685
+                n.setpose_pub.publish(sp)
 
             def agrees():
                 if n.amcl is None:
