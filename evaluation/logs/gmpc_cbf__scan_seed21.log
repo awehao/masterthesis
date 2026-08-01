@@ -1,6 +1,6 @@
-### CONFIG 13:04:40
+### CONFIG 22:25:54
 ###   launch: omni_bot_dynamic.launch.py gui:=false obstacle_source:=scan
-###   traverse: (0.0,0.0) -> (17,17)
+###   traverse: (1.22,-0.46) -> (12.03,15.9)
 ###   BIGARENA=1
 ###   ARENA=<unset>
 ###   TRAJ=bigarena_traffic
@@ -14,11 +14,12 @@
 ###   DETOUR_SIDE_PROJ=<unset>
 ###   PLAN_BLEND=1.0
 ###   YAW_LOOKAHEAD=1.2
-###   YAW_RATE_MAX=<unset>
-###   YAW_TRACK=0
-###   SPAWN_X=<unset>
-###   SPAWN_Y=<unset>
-###   POSES_CSV=<unset>
+###   YAW_RATE_MAX=0.8
+###   HORIZON=<unset>
+###   YAW_TRACK=<unset>
+###   SPAWN_X=1.22
+###   SPAWN_Y=-0.46
+###   POSES_CSV=/home/howardchen/masterthesis/evaluation/results/bigarena_poses.csv
 ###   GOAL_DELAY_MIN=<unset>
 ###   GOAL_DELAY_MAX=<unset>
 ###   INFLATION=<unset>
@@ -35,380 +36,421 @@
 ###   AX_MAX=<unset>
 ###   AY_MAX=<unset>
 ###   AZ_MAX=<unset>
-[INFO] [launch]: All log files can be found below /home/howardchen/.ros/log/2026-08-01-13-04-40-497994-msi-1057263
+[INFO] [launch]: All log files can be found below /home/howardchen/.ros/log/2026-08-01-22-25-55-023184-msi-1196227
 [INFO] [launch]: Default logging verbosity is set to INFO
-[INFO] [gz-1]: process started with pid [1057289]
-[INFO] [parameter_bridge-2]: process started with pid [1057290]
-[INFO] [robot_state_publisher-3]: process started with pid [1057291]
-[INFO] [odom_tf_broadcaster-4]: process started with pid [1057292]
-[INFO] [scan_relay-5]: process started with pid [1057293]
-[robot_state_publisher-3] [WARN] [1785560680.759596416] [kdl_parser]: The root link base_footprint has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.
-[robot_state_publisher-3] [INFO] [1785560680.759968498] [robot_state_publisher]: Robot initialized
-[parameter_bridge-2] [INFO] [1785560680.771592417] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/clock (gz.msgs.Clock) -> /clock (rosgraph_msgs/msg/Clock)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.772610888] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/cmd_vel (geometry_msgs/msg/Twist) -> /cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.773904758] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/odom_raw (gz.msgs.Odometry) -> /odom_raw (nav_msgs/msg/Odometry)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.774997745] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/scan_raw (gz.msgs.LaserScan) -> /scan_raw (sensor_msgs/msg/LaserScan)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.776140822] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_5/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_5/cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.776411938] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_5/pose (gz.msgs.Pose) -> /model/dyn_obs_5/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.776732835] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_4/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_4/cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.776950221] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_4/pose (gz.msgs.Pose) -> /model/dyn_obs_4/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.777147536] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_2/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_2/cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.777351531] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_2/pose (gz.msgs.Pose) -> /model/dyn_obs_2/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.777557172] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_8/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_8/cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.777745332] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_8/pose (gz.msgs.Pose) -> /model/dyn_obs_8/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.777952955] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_1/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_1/cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.778147349] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_1/pose (gz.msgs.Pose) -> /model/dyn_obs_1/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.778324967] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_7/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_7/cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.778509006] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_7/pose (gz.msgs.Pose) -> /model/dyn_obs_7/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.778688698] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_0/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_0/cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.778890282] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_0/pose (gz.msgs.Pose) -> /model/dyn_obs_0/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.779082187] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_6/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_6/cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.779289180] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_6/pose (gz.msgs.Pose) -> /model/dyn_obs_6/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.779491144] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_9/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_9/cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.779688034] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_9/pose (gz.msgs.Pose) -> /model/dyn_obs_9/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.779881593] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_3/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_3/cmd_vel (gz.msgs.Twist)] (Lazy 0)
-[parameter_bridge-2] [INFO] [1785560680.780075962] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_3/pose (gz.msgs.Pose) -> /model/dyn_obs_3/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
-[scan_relay-5] [INFO] [1785560681.012512016] [scan_relay]: self-occlusion filter ON: centers=[45.0, 135.0, 225.0, 315.0] ±15.0deg
-  gz clock stepping: 3.3 s
-[INFO] [create-6]: process started with pid [1057403]
-[create-6] [INFO] [1785560686.766302490] [ros_gz_sim]: Requesting list of world names.
-[create-6] [INFO] [1785560687.198724447] [ros_gz_sim]: Waiting messages on topic [robot_description].
-[create-6] [INFO] [1785560687.211018099] [ros_gz_sim]: Entity creation successful.
-[INFO] [create-6]: process has finished cleanly [pid 1057403]
+[INFO] [gz-1]: process started with pid [1196275]
+[INFO] [parameter_bridge-2]: process started with pid [1196276]
+[INFO] [robot_state_publisher-3]: process started with pid [1196277]
+[INFO] [odom_tf_broadcaster-4]: process started with pid [1196278]
+[INFO] [scan_relay-5]: process started with pid [1196279]
+[robot_state_publisher-3] [WARN] [1785594355.290429586] [kdl_parser]: The root link base_footprint has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.
+[robot_state_publisher-3] [INFO] [1785594355.290646971] [robot_state_publisher]: Robot initialized
+[parameter_bridge-2] [INFO] [1785594355.301571794] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/clock (gz.msgs.Clock) -> /clock (rosgraph_msgs/msg/Clock)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.302846278] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/cmd_vel (geometry_msgs/msg/Twist) -> /cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.304467838] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/odom_raw (gz.msgs.Odometry) -> /odom_raw (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.306101149] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/scan_raw (gz.msgs.LaserScan) -> /scan_raw (sensor_msgs/msg/LaserScan)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.307378436] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_5/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_5/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.307681491] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_5/pose (gz.msgs.Pose) -> /model/dyn_obs_5/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.308146878] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_4/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_4/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.308467633] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_4/pose (gz.msgs.Pose) -> /model/dyn_obs_4/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.308734794] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_2/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_2/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.309362316] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_2/pose (gz.msgs.Pose) -> /model/dyn_obs_2/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.309637931] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_8/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_8/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.309896512] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_8/pose (gz.msgs.Pose) -> /model/dyn_obs_8/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.310130987] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_1/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_1/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.310376456] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_1/pose (gz.msgs.Pose) -> /model/dyn_obs_1/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.310602940] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_7/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_7/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.310859523] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_7/pose (gz.msgs.Pose) -> /model/dyn_obs_7/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.311085291] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_0/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_0/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.311305581] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_0/pose (gz.msgs.Pose) -> /model/dyn_obs_0/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.311515620] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_6/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_6/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.311734687] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_6/pose (gz.msgs.Pose) -> /model/dyn_obs_6/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.311966766] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_9/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_9/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.312208397] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_9/pose (gz.msgs.Pose) -> /model/dyn_obs_9/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.312439388] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/model/dyn_obs_3/cmd_vel (geometry_msgs/msg/Twist) -> /model/dyn_obs_3/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-2] [INFO] [1785594355.312658962] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/model/dyn_obs_3/pose (gz.msgs.Pose) -> /model/dyn_obs_3/pose (geometry_msgs/msg/PoseStamped)] (Lazy 0)
+[scan_relay-5] [INFO] [1785594355.584650683] [scan_relay]: self-occlusion filter ON: centers=[45.0, 135.0, 225.0, 315.0] ±15.0deg
+  gz clock stepping: 3.2 s
+[INFO] [create-6]: process started with pid [1196423]
+[create-6] [INFO] [1785594361.296461198] [ros_gz_sim]: Requesting list of world names.
+[create-6] [INFO] [1785594361.498789727] [ros_gz_sim]: Waiting messages on topic [robot_description].
+[create-6] [INFO] [1785594361.510500962] [ros_gz_sim]: Entity creation successful.
+[INFO] [create-6]: process has finished cleanly [pid 1196423]
 [gz-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="omni_bot"]/link[@name="base_footprint"]/sensor[@name="lidar"]/frame_id:<urdf-string>:L0]: XML Element[frame_id], child of element[sensor], not defined in SDF. Copying[frame_id] as children of [sensor].
-[scan_relay-5] [INFO] [1785560687.605028893] [scan_relay]: masked 120/360 rays as self-occlusion
-[INFO] [dynamic_obstacle_driver-7]: process started with pid [1057470]
-[dynamic_obstacle_driver-7] [INFO] [1785560689.070682909] [dynamic_obstacle_driver]: Loaded dyn_obs_5: [-0.29, 10.48] <-> [7.16, 10.15] @ 0.2 m/s
-[dynamic_obstacle_driver-7] [INFO] [1785560689.071940802] [dynamic_obstacle_driver]: Loaded dyn_obs_4: [14.7, 17.44] <-> [14.16, 6.6] @ 0.24 m/s
-[dynamic_obstacle_driver-7] [INFO] [1785560689.072826025] [dynamic_obstacle_driver]: Loaded dyn_obs_2: [10.24, 6.88] <-> [0.53, 6.36] @ 0.18 m/s
-[dynamic_obstacle_driver-7] [INFO] [1785560689.073460315] [dynamic_obstacle_driver]: Loaded dyn_obs_8: [5.17, 12.31] <-> [15.07, 12.34] @ 0.22 m/s
-[dynamic_obstacle_driver-7] [INFO] [1785560689.074046510] [dynamic_obstacle_driver]: Loaded dyn_obs_1: [-0.57, 4.63] <-> [8.42, 2.27] @ 0.3 m/s
-[dynamic_obstacle_driver-7] [INFO] [1785560689.074660043] [dynamic_obstacle_driver]: Loaded dyn_obs_7: [0.5, 14.44] <-> [12.2, 12.72] @ 0.26 m/s
-[dynamic_obstacle_driver-7] [INFO] [1785560689.076040804] [dynamic_obstacle_driver]: Loaded dyn_obs_0: [5.28, 1.57] <-> [15.33, 3.02] @ 0.32 m/s
-[dynamic_obstacle_driver-7] [INFO] [1785560689.076920436] [dynamic_obstacle_driver]: Loaded dyn_obs_6: [3.55, 17.46] <-> [16.46, 17.68] @ 0.28 m/s
-[dynamic_obstacle_driver-7] [INFO] [1785560689.077655073] [dynamic_obstacle_driver]: Loaded dyn_obs_9: [6.22, 16.31] <-> [14.59, 14.68] @ 0.38 m/s
-[dynamic_obstacle_driver-7] [INFO] [1785560689.078366398] [dynamic_obstacle_driver]: Loaded dyn_obs_3: [7.61, 0.35] <-> [17.03, -0.49] @ 0.45 m/s
-[dynamic_obstacle_driver-7] [INFO] [1785560689.118525658] [dynamic_obstacle_driver]: DynamicObstacleDriver started (10 obstacles, 20 Hz)
-[parameter_bridge-2] [INFO] [1785560689.460967323] [ros_gz_bridge]: Passing message from ROS geometry_msgs/msg/Twist to Gazebo gz.msgs.Twist (showing msg only once per type)
-[INFO] [map_server-8]: process started with pid [1057501]
-[INFO] [amcl-9]: process started with pid [1057502]
-[INFO] [ekf_node-10]: process started with pid [1057503]
-[INFO] [planner_server-11]: process started with pid [1057504]
-[INFO] [lifecycle_manager-12]: process started with pid [1057505]
-[INFO] [velocity_smoother-13]: process started with pid [1057506]
-[INFO] [goal_to_plan_relay-14]: process started with pid [1057507]
-[INFO] [gmpc_node-15]: process started with pid [1057508]
-[INFO] [scan_obstacle_tracker-16]: process started with pid [1057509]
-[planner_server-11] [INFO] [1785560690.856989641] [planner_server]: 
+[scan_relay-5] [INFO] [1785594362.090708981] [scan_relay]: masked 120/360 rays as self-occlusion
+[INFO] [dynamic_obstacle_driver-7]: process started with pid [1196491]
+[dynamic_obstacle_driver-7] [INFO] [1785594363.614711525] [dynamic_obstacle_driver]: Loaded dyn_obs_5: [-0.29, 10.48] <-> [7.16, 10.15] @ 0.2 m/s
+[dynamic_obstacle_driver-7] [INFO] [1785594363.615756832] [dynamic_obstacle_driver]: Loaded dyn_obs_4: [14.7, 17.44] <-> [14.16, 6.6] @ 0.24 m/s
+[dynamic_obstacle_driver-7] [INFO] [1785594363.616444020] [dynamic_obstacle_driver]: Loaded dyn_obs_2: [10.24, 6.88] <-> [0.53, 6.36] @ 0.18 m/s
+[dynamic_obstacle_driver-7] [INFO] [1785594363.617071911] [dynamic_obstacle_driver]: Loaded dyn_obs_8: [5.17, 12.31] <-> [15.07, 12.34] @ 0.22 m/s
+[dynamic_obstacle_driver-7] [INFO] [1785594363.617684605] [dynamic_obstacle_driver]: Loaded dyn_obs_1: [-0.57, 4.63] <-> [8.42, 2.27] @ 0.3 m/s
+[dynamic_obstacle_driver-7] [INFO] [1785594363.618275809] [dynamic_obstacle_driver]: Loaded dyn_obs_7: [0.5, 14.44] <-> [12.2, 12.72] @ 0.26 m/s
+[dynamic_obstacle_driver-7] [INFO] [1785594363.618863942] [dynamic_obstacle_driver]: Loaded dyn_obs_0: [5.28, 1.57] <-> [15.33, 3.02] @ 0.32 m/s
+[dynamic_obstacle_driver-7] [INFO] [1785594363.619431100] [dynamic_obstacle_driver]: Loaded dyn_obs_6: [3.55, 17.46] <-> [16.46, 17.68] @ 0.28 m/s
+[dynamic_obstacle_driver-7] [INFO] [1785594363.619989576] [dynamic_obstacle_driver]: Loaded dyn_obs_9: [6.22, 16.31] <-> [14.59, 14.68] @ 0.38 m/s
+[dynamic_obstacle_driver-7] [INFO] [1785594363.620647403] [dynamic_obstacle_driver]: Loaded dyn_obs_3: [7.61, 0.35] <-> [17.03, -0.49] @ 0.45 m/s
+[dynamic_obstacle_driver-7] [INFO] [1785594363.660785083] [dynamic_obstacle_driver]: DynamicObstacleDriver started (10 obstacles, 20 Hz)
+[parameter_bridge-2] [INFO] [1785594363.791098639] [ros_gz_bridge]: Passing message from ROS geometry_msgs/msg/Twist to Gazebo gz.msgs.Twist (showing msg only once per type)
+[INFO] [map_server-8]: process started with pid [1196548]
+[INFO] [amcl-9]: process started with pid [1196549]
+[INFO] [ekf_node-10]: process started with pid [1196550]
+[INFO] [planner_server-11]: process started with pid [1196551]
+[INFO] [lifecycle_manager-12]: process started with pid [1196552]
+[INFO] [velocity_smoother-13]: process started with pid [1196553]
+[INFO] [goal_to_plan_relay-14]: process started with pid [1196554]
+[INFO] [gmpc_node-15]: process started with pid [1196555]
+[INFO] [scan_obstacle_tracker-16]: process started with pid [1196556]
+[planner_server-11] [INFO] [1785594365.366147086] [planner_server]: 
 [planner_server-11] 	planner_server lifecycle node launched. 
 [planner_server-11] 	Waiting on external lifecycle transitions to activate
 [planner_server-11] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
-[lifecycle_manager-12] [INFO] [1785560690.857617548] [lifecycle_manager_navigation]: Creating
-[planner_server-11] [INFO] [1785560690.859121619] [planner_server]: Creating
-[lifecycle_manager-12] [INFO] [1785560690.861178613] [lifecycle_manager_navigation]: [34m[1mCreating and initializing lifecycle service clients[0m[0m
-[ekf_node-10] [INFO] [1785560690.866839295] [ekf_global]: Waiting for clock to start...
-[planner_server-11] [INFO] [1785560690.867044607] [global_costmap.global_costmap]: 
-[planner_server-11] 	global_costmap lifecycle node launched. 
-[planner_server-11] 	Waiting on external lifecycle transitions to activate
-[planner_server-11] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
-[amcl-9] [INFO] [1785560690.867381847] [amcl]: 
-[amcl-9] 	amcl lifecycle node launched. 
-[amcl-9] 	Waiting on external lifecycle transitions to activate
-[amcl-9] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
-[planner_server-11] [INFO] [1785560690.867609824] [global_costmap.global_costmap]: Creating Costmap
-[amcl-9] [INFO] [1785560690.867832584] [amcl]: Creating
-[velocity_smoother-13] [INFO] [1785560690.867865598] [velocity_smoother]: 
+[velocity_smoother-13] [INFO] [1785594365.367174061] [velocity_smoother]: 
 [velocity_smoother-13] 	velocity_smoother lifecycle node launched. 
 [velocity_smoother-13] 	Waiting on external lifecycle transitions to activate
 [velocity_smoother-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
-[map_server-8] [INFO] [1785560690.880321339] [map_server]: 
+[planner_server-11] [INFO] [1785594365.367698874] [planner_server]: Creating
+[planner_server-11] [INFO] [1785594365.374584352] [global_costmap.global_costmap]: 
+[planner_server-11] 	global_costmap lifecycle node launched. 
+[planner_server-11] 	Waiting on external lifecycle transitions to activate
+[planner_server-11] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[planner_server-11] [INFO] [1785594365.375092401] [global_costmap.global_costmap]: Creating Costmap
+[lifecycle_manager-12] [INFO] [1785594365.386156987] [lifecycle_manager_navigation]: Creating
+[ekf_node-10] [INFO] [1785594365.386294908] [ekf_global]: Waiting for clock to start...
+[amcl-9] [INFO] [1785594365.390794469] [amcl]: 
+[amcl-9] 	amcl lifecycle node launched. 
+[amcl-9] 	Waiting on external lifecycle transitions to activate
+[amcl-9] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[amcl-9] [INFO] [1785594365.391254169] [amcl]: Creating
+[map_server-8] [INFO] [1785594365.391465356] [map_server]: 
 [map_server-8] 	map_server lifecycle node launched. 
 [map_server-8] 	Waiting on external lifecycle transitions to activate
 [map_server-8] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
-[map_server-8] [INFO] [1785560690.880441438] [map_server]: Creating
-[lifecycle_manager-12] [INFO] [1785560691.082365692] [lifecycle_manager_navigation]: [34m[1mStarting managed nodes bringup...[0m[0m
-[lifecycle_manager-12] [INFO] [1785560691.082411928] [lifecycle_manager_navigation]: [34m[1mConfiguring map_server[0m[0m
-[map_server-8] [INFO] [1785560691.305009326] [map_server]: Configuring
-[map_server-8] [INFO] [1785560691.305090494] [map_io]: Loading yaml file: /home/howardchen/masterthesis/install/ammr_bringup/share/ammr_bringup/maps/bigarena.yaml
-[map_server-8] [INFO] [1785560691.305394453] [map_io]: resolution: 0.05
-[map_server-8] [INFO] [1785560691.305408346] [map_io]: origin[0]: -1.5
-[map_server-8] [INFO] [1785560691.305415704] [map_io]: origin[1]: -1.5
-[map_server-8] [INFO] [1785560691.305421175] [map_io]: origin[2]: 0
-[map_server-8] [INFO] [1785560691.305426906] [map_io]: free_thresh: 0.196
-[map_server-8] [INFO] [1785560691.305432396] [map_io]: occupied_thresh: 0.65
-[map_server-8] [INFO] [1785560691.305439031] [map_io]: mode: trinary
-[map_server-8] [INFO] [1785560691.305444681] [map_io]: negate: 0
-[map_server-8] [INFO] [1785560691.305637517] [map_io]: Loading image_file: /home/howardchen/masterthesis/install/ammr_bringup/share/ammr_bringup/maps/bigarena.pgm
-[map_server-8] [INFO] [1785560691.309169064] [map_io]: Read map /home/howardchen/masterthesis/install/ammr_bringup/share/ammr_bringup/maps/bigarena.pgm: 400 X 400 map @ 0.05 m/cell
-[lifecycle_manager-12] [INFO] [1785560691.316383508] [lifecycle_manager_navigation]: [34m[1mConfiguring amcl[0m[0m
-[amcl-9] [INFO] [1785560691.316607771] [amcl]: Configuring
-[amcl-9] [INFO] [1785560691.316721771] [amcl]: initTransforms
-[amcl-9] [INFO] [1785560691.324760403] [amcl]: initPubSub
-[amcl-9] [INFO] [1785560691.334078208] [amcl]: Subscribed to map topic.
-[lifecycle_manager-12] [INFO] [1785560691.337617630] [lifecycle_manager_navigation]: [34m[1mConfiguring planner_server[0m[0m
-[planner_server-11] [INFO] [1785560691.337839640] [planner_server]: Configuring
-[planner_server-11] [INFO] [1785560691.337865023] [global_costmap.global_costmap]: Configuring
-[planner_server-11] [INFO] [1785560691.341879179] [global_costmap.global_costmap]: Using plugin "static_layer"
-[planner_server-11] [INFO] [1785560691.344429162] [global_costmap.global_costmap]: Subscribing to the map topic (/map) with transient local durability
-[planner_server-11] [INFO] [1785560691.345835923] [global_costmap.global_costmap]: Initialized plugin "static_layer"
-[planner_server-11] [INFO] [1785560691.345860516] [global_costmap.global_costmap]: Using plugin "obstacle_layer"
-[planner_server-11] [INFO] [1785560691.346101430] [global_costmap.global_costmap]: Subscribed to Topics: scan
-[planner_server-11] [INFO] [1785560691.348058905] [global_costmap.global_costmap]: Initialized plugin "obstacle_layer"
-[planner_server-11] [INFO] [1785560691.348078065] [global_costmap.global_costmap]: Using plugin "inflation_layer"
-[planner_server-11] [INFO] [1785560691.348351602] [global_costmap.global_costmap]: Initialized plugin "inflation_layer"
-[planner_server-11] [INFO] [1785560691.364290418] [planner_server]: Created global planner plugin GridBased of type nav2_smac_planner::SmacPlanner2D
-[planner_server-11] [INFO] [1785560691.364355071] [planner_server]: Configuring GridBased of type SmacPlanner2D
-[planner_server-11] [ERROR] [1785560691.365235153] [planner_server]: Inflation layer either not found or inflation is not set sufficiently for optimized non-circular collision checking capabilities. It is HIGHLY recommended to set the inflation radius to be at MINIMUM half of the robot's largest cross-section. See github.com/ros-planning/navigation2/tree/main/nav2_smac_planner#potential-fields for full instructions. This will substantially impact run-time performance.
-[planner_server-11] [INFO] [1785560691.366645183] [planner_server]: Configured plugin GridBased of type SmacPlanner2D with tolerance 0.12, maximum iterations 1000000, max on approach iterations 1000, and allowing unknown traversal.
-[planner_server-11] [INFO] [1785560691.366684131] [planner_server]: Planner Server has GridBased  planners available.
-[lifecycle_manager-12] [INFO] [1785560691.372860794] [lifecycle_manager_navigation]: [34m[1mConfiguring velocity_smoother[0m[0m
-[velocity_smoother-13] [INFO] [1785560691.373026999] [velocity_smoother]: Configuring velocity smoother
-[lifecycle_manager-12] [INFO] [1785560691.376847718] [lifecycle_manager_navigation]: [34m[1mActivating map_server[0m[0m
-[map_server-8] [INFO] [1785560691.377256935] [map_server]: Activating
-[map_server-8] [INFO] [1785560691.377595752] [map_server]: Creating bond (map_server) to lifecycle manager.
-[planner_server-11] [INFO] [1785560691.378224349] [global_costmap.global_costmap]: StaticLayer: Resizing costmap to 400 X 400 at 0.050000 m/pix
-[gmpc_node-15] [INFO] [1785560691.386298417] [gmpc_controller]: GMPC controller up: N=20, dt=0.050s, v_nom=0.22 m/s, frame map->base_footprint, CBF=ON (α=1.5, margin=0.45m)
-[goal_to_plan_relay-14] [INFO] [1785560691.407242342] [goal_to_plan_relay]: goal_to_plan_relay up: planner_id='GridBased', frame map->base_footprint, replan_period=3.0s, tol=0.30m
-[amcl-9] [INFO] [1785560691.426233920] [amcl]: Received a 400 X 400 map @ 0.050 m/pix
-[scan_obstacle_tracker-16] [INFO] [1785560691.429347875] [scan_obstacle_tracker]: scan_obstacle_tracker up: /scan -> track in map (map_subtraction=True) -> cluster(gap=0.3) -> KF -> velocity gate(>=0.1 m/s) -> /gmpc/obstacles in map
-[scan_obstacle_tracker-16] [INFO] [1785560691.450687676] [scan_obstacle_tracker]: map received: 400x400 @ 0.050 m, inflated occupied cells = 64260
-[lifecycle_manager-12] [INFO] [1785560691.482384281] [lifecycle_manager_navigation]: Server map_server connected with bond.
-[lifecycle_manager-12] [INFO] [1785560691.482422537] [lifecycle_manager_navigation]: [34m[1mActivating amcl[0m[0m
-[amcl-9] [INFO] [1785560691.482709377] [amcl]: Activating
-[amcl-9] [INFO] [1785560691.482752833] [amcl]: initialPoseReceived
-[amcl-9] [INFO] [1785560691.482842889] [amcl]: Setting pose (0.000000): 0.000 0.000 0.000
-[amcl-9] [INFO] [1785560691.484480980] [amcl]: Creating bond (amcl) to lifecycle manager.
-[lifecycle_manager-12] [INFO] [1785560691.586966602] [lifecycle_manager_navigation]: Server amcl connected with bond.
-[lifecycle_manager-12] [INFO] [1785560691.587002702] [lifecycle_manager_navigation]: [34m[1mActivating planner_server[0m[0m
-[planner_server-11] [INFO] [1785560691.587190402] [planner_server]: Activating
-[planner_server-11] [INFO] [1785560691.587217177] [global_costmap.global_costmap]: Activating
-[planner_server-11] [INFO] [1785560691.587221639] [global_costmap.global_costmap]: Checking transform
-[planner_server-11] [INFO] [1785560691.587247042] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
-[planner_server-11] [INFO] [1785560692.087306826] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
-[planner_server-11] [INFO] [1785560692.587348207] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
-[planner_server-11] [INFO] [1785560693.087331499] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
-[planner_server-11] [INFO] [1785560693.587294814] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
-[amcl-9] [INFO] [1785560694.020588682] [amcl]: createLaserObject
-  /amcl_pose alive: 10.2 s
-[amcl-9] [INFO] [1785560694.073982047] [amcl]: initialPoseReceived
-[amcl-9] [INFO] [1785560694.074078303] [amcl]: Setting pose (10.790000): 0.000 0.000 0.000
-[planner_server-11] [INFO] [1785560694.087420533] [global_costmap.global_costmap]: start
-  AMCL reset acknowledged: 0.0 s
-PREPARED in 13.5 s
+[map_server-8] [INFO] [1785594365.391549458] [map_server]: Creating
+[lifecycle_manager-12] [INFO] [1785594365.392831319] [lifecycle_manager_navigation]: [34m[1mCreating and initializing lifecycle service clients[0m[0m
+[lifecycle_manager-12] [INFO] [1785594365.480443865] [lifecycle_manager_navigation]: [34m[1mStarting managed nodes bringup...[0m[0m
+[lifecycle_manager-12] [INFO] [1785594365.480482193] [lifecycle_manager_navigation]: [34m[1mConfiguring map_server[0m[0m
+[map_server-8] [INFO] [1785594365.480746983] [map_server]: Configuring
+[map_server-8] [INFO] [1785594365.480791878] [map_io]: Loading yaml file: /home/howardchen/masterthesis/install/ammr_bringup/share/ammr_bringup/maps/bigarena.yaml
+[map_server-8] [INFO] [1785594365.480978896] [map_io]: resolution: 0.05
+[map_server-8] [INFO] [1785594365.480983966] [map_io]: origin[0]: -1.5
+[map_server-8] [INFO] [1785594365.480986853] [map_io]: origin[1]: -1.5
+[map_server-8] [INFO] [1785594365.480988628] [map_io]: origin[2]: 0
+[map_server-8] [INFO] [1785594365.480990592] [map_io]: free_thresh: 0.196
+[map_server-8] [INFO] [1785594365.480992523] [map_io]: occupied_thresh: 0.65
+[map_server-8] [INFO] [1785594365.480995112] [map_io]: mode: trinary
+[map_server-8] [INFO] [1785594365.480997597] [map_io]: negate: 0
+[map_server-8] [INFO] [1785594365.481113009] [map_io]: Loading image_file: /home/howardchen/masterthesis/install/ammr_bringup/share/ammr_bringup/maps/bigarena.pgm
+[map_server-8] [INFO] [1785594365.483156864] [map_io]: Read map /home/howardchen/masterthesis/install/ammr_bringup/share/ammr_bringup/maps/bigarena.pgm: 400 X 400 map @ 0.05 m/cell
+[lifecycle_manager-12] [INFO] [1785594365.490369729] [lifecycle_manager_navigation]: [34m[1mConfiguring amcl[0m[0m
+[amcl-9] [INFO] [1785594365.490551971] [amcl]: Configuring
+[amcl-9] [INFO] [1785594365.490626430] [amcl]: initTransforms
+[amcl-9] [INFO] [1785594365.496539237] [amcl]: initPubSub
+[amcl-9] [INFO] [1785594365.502274494] [amcl]: Subscribed to map topic.
+[lifecycle_manager-12] [INFO] [1785594365.504591449] [lifecycle_manager_navigation]: [34m[1mConfiguring planner_server[0m[0m
+[planner_server-11] [INFO] [1785594365.504856193] [planner_server]: Configuring
+[planner_server-11] [INFO] [1785594365.504895095] [global_costmap.global_costmap]: Configuring
+[planner_server-11] [INFO] [1785594365.509185309] [global_costmap.global_costmap]: Using plugin "static_layer"
+[planner_server-11] [INFO] [1785594365.512145584] [global_costmap.global_costmap]: Subscribing to the map topic (/map) with transient local durability
+[planner_server-11] [INFO] [1785594365.513703707] [global_costmap.global_costmap]: Initialized plugin "static_layer"
+[planner_server-11] [INFO] [1785594365.513745237] [global_costmap.global_costmap]: Using plugin "obstacle_layer"
+[planner_server-11] [INFO] [1785594365.514149024] [global_costmap.global_costmap]: Subscribed to Topics: scan
+[planner_server-11] [INFO] [1785594365.517322473] [global_costmap.global_costmap]: Initialized plugin "obstacle_layer"
+[planner_server-11] [INFO] [1785594365.517346255] [global_costmap.global_costmap]: Using plugin "inflation_layer"
+[planner_server-11] [INFO] [1785594365.517619763] [global_costmap.global_costmap]: Initialized plugin "inflation_layer"
+[planner_server-11] [INFO] [1785594365.535148055] [planner_server]: Created global planner plugin GridBased of type nav2_smac_planner::SmacPlanner2D
+[planner_server-11] [INFO] [1785594365.535191665] [planner_server]: Configuring GridBased of type SmacPlanner2D
+[planner_server-11] [ERROR] [1785594365.535776532] [planner_server]: Inflation layer either not found or inflation is not set sufficiently for optimized non-circular collision checking capabilities. It is HIGHLY recommended to set the inflation radius to be at MINIMUM half of the robot's largest cross-section. See github.com/ros-planning/navigation2/tree/main/nav2_smac_planner#potential-fields for full instructions. This will substantially impact run-time performance.
+[planner_server-11] [INFO] [1785594365.537180932] [planner_server]: Configured plugin GridBased of type SmacPlanner2D with tolerance 0.12, maximum iterations 1000000, max on approach iterations 1000, and allowing unknown traversal.
+[planner_server-11] [INFO] [1785594365.537221475] [planner_server]: Planner Server has GridBased  planners available.
+[lifecycle_manager-12] [INFO] [1785594365.547367206] [lifecycle_manager_navigation]: [34m[1mConfiguring velocity_smoother[0m[0m
+[velocity_smoother-13] [INFO] [1785594365.547566514] [velocity_smoother]: Configuring velocity smoother
+[lifecycle_manager-12] [INFO] [1785594365.549890885] [lifecycle_manager_navigation]: [34m[1mActivating map_server[0m[0m
+[map_server-8] [INFO] [1785594365.550046550] [map_server]: Activating
+[map_server-8] [INFO] [1785594365.550352380] [map_server]: Creating bond (map_server) to lifecycle manager.
+[planner_server-11] [INFO] [1785594365.550710765] [global_costmap.global_costmap]: StaticLayer: Resizing costmap to 400 X 400 at 0.050000 m/pix
+[amcl-9] [INFO] [1785594365.551022471] [amcl]: Received a 400 X 400 map @ 0.050 m/pix
+[lifecycle_manager-12] [INFO] [1785594365.653643759] [lifecycle_manager_navigation]: Server map_server connected with bond.
+[lifecycle_manager-12] [INFO] [1785594365.653686209] [lifecycle_manager_navigation]: [34m[1mActivating amcl[0m[0m
+[amcl-9] [INFO] [1785594365.653958607] [amcl]: Activating
+[amcl-9] [INFO] [1785594365.653985693] [amcl]: initialPoseReceived
+[amcl-9] [INFO] [1785594365.654039527] [amcl]: Setting pose (7.660000): 0.000 0.000 0.000
+[amcl-9] [INFO] [1785594365.654694402] [amcl]: Creating bond (amcl) to lifecycle manager.
+[amcl-9] [INFO] [1785594365.721612771] [amcl]: createLaserObject
+[lifecycle_manager-12] [INFO] [1785594365.757202234] [lifecycle_manager_navigation]: Server amcl connected with bond.
+[lifecycle_manager-12] [INFO] [1785594365.757258132] [lifecycle_manager_navigation]: [34m[1mActivating planner_server[0m[0m
+[planner_server-11] [INFO] [1785594365.757542315] [planner_server]: Activating
+[planner_server-11] [INFO] [1785594365.757574970] [global_costmap.global_costmap]: Activating
+[planner_server-11] [INFO] [1785594365.757581202] [global_costmap.global_costmap]: Checking transform
+[planner_server-11] [INFO] [1785594365.757614485] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
+  /amcl_pose alive: 7.4 s
+[gmpc_node-15] [INFO] [1785594365.894977908] [gmpc_controller]: GMPC controller up: N=20, dt=0.050s, v_nom=0.22 m/s, frame map->base_footprint, CBF=ON (α=1.5, margin=0.45m)
+[scan_obstacle_tracker-16] [INFO] [1785594365.965951805] [scan_obstacle_tracker]: scan_obstacle_tracker up: /scan -> track in map (map_subtraction=True) -> cluster(gap=0.3) -> KF -> velocity gate(>=0.1 m/s) -> /gmpc/obstacles in map
+[goal_to_plan_relay-14] [INFO] [1785594365.989861652] [goal_to_plan_relay]: goal_to_plan_relay up: planner_id='GridBased', frame map->base_footprint, replan_period=3.0s, tol=0.30m
+[scan_obstacle_tracker-16] [INFO] [1785594366.128725401] [scan_obstacle_tracker]: map received: 400x400 @ 0.050 m, inflated occupied cells = 64260
+[planner_server-11] [INFO] [1785594366.257680521] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
+[planner_server-11] [INFO] [1785594366.757698208] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
+[planner_server-11] [INFO] [1785594367.257676650] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
+[planner_server-11] [INFO] [1785594367.757666846] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
+[planner_server-11] [INFO] [1785594368.257665169] [global_costmap.global_costmap]: Timed out waiting for transform from base_footprint to map to become available, tf error: Invalid frame ID "map" passed to canTransform argument target_frame - frame does not exist
+  EKF publishing: 2.6 s
+[amcl-9] [INFO] [1785594368.351352080] [amcl]: initialPoseReceived
+[ekf_node-10] [INFO] [1785594368.351371008] [ekf_global]: Received set_pose request with value
+[ekf_node-10] header:
+[ekf_node-10]   stamp:
+[ekf_node-10]     sec: 10
+[ekf_node-10]     nanosec: 360000000
+[ekf_node-10]   frame_id: "map"
+[ekf_node-10] pose:
+[ekf_node-10]   pose:
+[ekf_node-10]     position:
+[ekf_node-10]       x: 1.22000
+[ekf_node-10]       y: -0.460000
+[ekf_node-10]       z: 0.00000
+[ekf_node-10]     orientation:
+[ekf_node-10]       x: 0.00000
+[ekf_node-10]       y: 0.00000
+[ekf_node-10]       z: 0.00000
+[ekf_node-10]       w: 1.00000
+[ekf_node-10]   covariance:
+[ekf_node-10]   - 0.250000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.250000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.00000
+[ekf_node-10]   - 0.0685000
+[ekf_node-10] 
+[amcl-9] [INFO] [1785594368.351444763] [amcl]: Setting pose (10.360000): 1.220 -0.460 0.000
+  AMCL + TF + EKF agree: 0.1 s
+PREPARED in 13.2 s
+[amcl-9] [INFO] [1785594368.499971563] [amcl]: Message Filter dropping message: frame 'lidar_link' at time 7.500 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
 Recording for 250 s into /home/howardchen/masterthesis/evaluation/bags/gmpc_cbf__scan_seed21
 Topics: /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
         /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h \
         /model/dyn_obs_{0..9}/pose   (ground-truth obstacle poses, all methods)
 Press Ctrl+C earlier if the robot reaches goal sooner.
+[planner_server-11] [INFO] [1785594368.757766658] [global_costmap.global_costmap]: start
+stdin is not a terminal device. Keyboard handling disabled.[INFO] [1785594368.959595679] [rosbag2_recorder]: Press SPACE for pausing/resuming
+[INFO] [1785594368.959605259] [rosbag2_recorder]: Event publisher thread: Started
+[INFO] [1785594368.962751719] [rosbag2_recorder]: Starting recording to '/home/howardchen/masterthesis/evaluation/bags/gmpc_cbf__scan_seed21'
+[INFO] [1785594368.963921434] [rosbag2_recorder]: Listening for topics...
+[INFO] [1785594368.963944417] [rosbag2_recorder]: Recording...
+[INFO] [1785594368.963976968] [rosbag2_recorder]: Topics discovery started.
 HOLDING GOAL 1.66 s (seed 21)
-stdin is not a terminal device. Keyboard handling disabled.[INFO] [1785560694.641378734] [rosbag2_recorder]: Press SPACE for pausing/resuming
-[INFO] [1785560694.641393655] [rosbag2_recorder]: Event publisher thread: Started
-[INFO] [1785560694.645596444] [rosbag2_recorder]: Starting recording to '/home/howardchen/masterthesis/evaluation/bags/gmpc_cbf__scan_seed21'
-[INFO] [1785560694.646944005] [rosbag2_recorder]: Listening for topics...
-[INFO] [1785560694.646974548] [rosbag2_recorder]: Recording...
-[INFO] [1785560694.646986298] [rosbag2_recorder]: Topics discovery started.
-[INFO] [1785560694.658339592] [rosbag2_recorder]: Subscribed to topic '/goal_pose'
-[INFO] [1785560694.660147111] [rosbag2_recorder]: Subscribed to topic '/cmd_vel'
-[INFO] [1785560694.662299988] [rosbag2_recorder]: Subscribed to topic '/gmpc/solve_time_ms'
-[INFO] [1785560694.663083650] [rosbag2_recorder]: Subscribed to topic '/cmd_vel_nav'
-[INFO] [1785560694.663803715] [rosbag2_recorder]: Subscribed to topic '/gmpc/min_h'
-[INFO] [1785560694.770161107] [rosbag2_recorder]: Subscribed to topic '/amcl_pose'
-[INFO] [1785560695.104723877] [rosbag2_recorder]: Subscribed to topic '/tf'
-[INFO] [1785560695.107914901] [rosbag2_recorder]: Subscribed to topic '/odometry/filtered'
-[INFO] [1785560695.109149394] [rosbag2_recorder]: Subscribed to topic '/odom'
-[planner_server-11] [INFO] [1785560695.138498173] [planner_server]: Activating plugin GridBased of type SmacPlanner2D
-[planner_server-11] [INFO] [1785560695.139412989] [planner_server]: Creating bond (planner_server) to lifecycle manager.
-[INFO] [1785560695.209316211] [rosbag2_recorder]: Subscribed to topic '/tf_static'
-[INFO] [1785560695.210972480] [rosbag2_recorder]: Subscribed to topic '/plan'
-[planner_server-11] [WARN] [1785560695.211032367] [planner_server]: New subscription discovered on topic '/plan', requesting incompatible QoS. No messages will be sent to it. Last incompatible policy: DURABILITY_QOS_POLICY
-[INFO] [1785560695.218271166] [rosbag2_recorder]: Subscribed to topic '/gmpc/obstacles'
-[lifecycle_manager-12] [INFO] [1785560695.242254407] [lifecycle_manager_navigation]: Server planner_server connected with bond.
-[lifecycle_manager-12] [INFO] [1785560695.242300486] [lifecycle_manager_navigation]: [34m[1mActivating velocity_smoother[0m[0m
-[velocity_smoother-13] [INFO] [1785560695.242612818] [velocity_smoother]: Activating
-[velocity_smoother-13] [INFO] [1785560695.242689678] [velocity_smoother]: Creating bond (velocity_smoother) to lifecycle manager.
-[lifecycle_manager-12] [INFO] [1785560695.348031331] [lifecycle_manager_navigation]: Server velocity_smoother connected with bond.
-[lifecycle_manager-12] [INFO] [1785560695.348078364] [lifecycle_manager_navigation]: [34m[1mManaged nodes are active[0m[0m
-[lifecycle_manager-12] [INFO] [1785560695.348091525] [lifecycle_manager_navigation]: [34m[1mCreating bond timer...[0m[0m
-[INFO] [1785560695.658072840] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_7/pose'
-[INFO] [1785560695.659175786] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_6/pose'
-[INFO] [1785560695.660122037] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_5/pose'
-[INFO] [1785560695.661048910] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_4/pose'
-[INFO] [1785560695.661994956] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_9/pose'
-[INFO] [1785560695.663071507] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_8/pose'
-[INFO] [1785560695.666422276] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_3/pose'
-[INFO] [1785560695.667205427] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_2/pose'
-[INFO] [1785560695.667951727] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_0/pose'
-[INFO] [1785560695.668896889] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_1/pose'
-[INFO] [1785560695.668932530] [rosbag2_recorder]: All requested topics are subscribed. Stopping discovery...
-[INFO] [1785560695.668953941] [rosbag2_recorder]: Topics discovery stopped.
-[WARN] [1785560695.946067754] [rosbag2_recorder]: New publisher discovered on topic '/plan', offering incompatible QoS. No messages will be sent to it. Last incompatible policy: DURABILITY_QOS_POLICY
-[goal_to_plan_relay-14] [INFO] [1785560696.277179287] [goal_to_plan_relay]: Plan request (new goal): (0.00, 0.00) -> (17.00, 17.00)
+[INFO] [1785594369.168153014] [rosbag2_recorder]: Subscribed to topic '/goal_pose'
+[INFO] [1785594369.494801152] [rosbag2_recorder]: Subscribed to topic '/cmd_vel_nav'
+[INFO] [1785594369.495559064] [rosbag2_recorder]: Subscribed to topic '/gmpc/min_h'
+[INFO] [1785594369.496428050] [rosbag2_recorder]: Subscribed to topic '/gmpc/solve_time_ms'
+[INFO] [1785594369.551647942] [rosbag2_recorder]: Subscribed to topic '/gmpc/obstacles'
+[planner_server-11] [INFO] [1785594369.808859831] [planner_server]: Activating plugin GridBased of type SmacPlanner2D
+[planner_server-11] [INFO] [1785594369.812634920] [planner_server]: Creating bond (planner_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785594369.925288617] [lifecycle_manager_navigation]: Server planner_server connected with bond.
+[lifecycle_manager-12] [INFO] [1785594369.925334800] [lifecycle_manager_navigation]: [34m[1mActivating velocity_smoother[0m[0m
+[velocity_smoother-13] [INFO] [1785594369.925675075] [velocity_smoother]: Activating
+[velocity_smoother-13] [INFO] [1785594369.925742079] [velocity_smoother]: Creating bond (velocity_smoother) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785594370.030493619] [lifecycle_manager_navigation]: Server velocity_smoother connected with bond.
+[lifecycle_manager-12] [INFO] [1785594370.030564158] [lifecycle_manager_navigation]: [34m[1mManaged nodes are active[0m[0m
+[lifecycle_manager-12] [INFO] [1785594370.030575744] [lifecycle_manager_navigation]: [34m[1mCreating bond timer...[0m[0m
+[INFO] [1785594370.383278528] [rosbag2_recorder]: Subscribed to topic '/plan'
+[goal_to_plan_relay-14] [INFO] [1785594370.706123683] [goal_to_plan_relay]: Plan request (new goal): (1.22, -0.46) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594370.731779397] [goal_to_plan_relay]: Path published: 376 poses
   /plan received (goal publish #1): 0.0 s
 GOAL ACCEPTED in 1.7 s
-[goal_to_plan_relay-14] [INFO] [1785560696.321892267] [goal_to_plan_relay]: Path published: 451 poses
+[ekf_node-10] [ERROR] [1785594371.221444764] [ekf_global]: Failed to meet update rate! Took 0.040000000000000000833seconds. Try decreasing the rate, limiting sensor output frequency, or limiting the number of sensors.
+[INFO] [1785594371.227727550] [rosbag2_recorder]: Subscribed to topic '/tf_static'
+[INFO] [1785594371.228288893] [rosbag2_recorder]: Subscribed to topic '/tf'
+[INFO] [1785594371.229694956] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_6/pose'
+[INFO] [1785594371.230439065] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_5/pose'
+[INFO] [1785594371.230954032] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_4/pose'
+[INFO] [1785594371.231436963] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_3/pose'
+[INFO] [1785594371.231892128] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_7/pose'
+[INFO] [1785594371.232334938] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_2/pose'
+[INFO] [1785594371.232766453] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_0/pose'
+[INFO] [1785594371.233264621] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_9/pose'
+[INFO] [1785594371.233746211] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_8/pose'
+[INFO] [1785594371.234215459] [rosbag2_recorder]: Subscribed to topic '/model/dyn_obs_1/pose'
+[INFO] [1785594371.324541531] [rosbag2_recorder]: Subscribed to topic '/odom'
 [amcl-9] Reallocing temp weights 5000 - 120
-[goal_to_plan_relay-14] [INFO] [1785560698.275725412] [goal_to_plan_relay]: Plan request (replan): (0.33, -0.01) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560698.312898398] [goal_to_plan_relay]: Path published: 445 poses
-[goal_to_plan_relay-14] [INFO] [1785560701.276187114] [goal_to_plan_relay]: Plan request (replan): (0.96, -0.27) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560701.314576839] [goal_to_plan_relay]: Path published: 432 poses
-[goal_to_plan_relay-14] [INFO] [1785560704.275562790] [goal_to_plan_relay]: Plan request (replan): (1.63, -0.40) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560704.300348543] [goal_to_plan_relay]: Path published: 419 poses
-[goal_to_plan_relay-14] [INFO] [1785560707.276401311] [goal_to_plan_relay]: Plan request (replan): (2.38, -0.15) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560707.309338456] [goal_to_plan_relay]: Path published: 404 poses
-[goal_to_plan_relay-14] [INFO] [1785560710.275925535] [goal_to_plan_relay]: Plan request (replan): (3.00, 0.42) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560710.300767554] [goal_to_plan_relay]: Path published: 392 poses
-[goal_to_plan_relay-14] [INFO] [1785560713.275356412] [goal_to_plan_relay]: Plan request (replan): (3.60, 1.02) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560713.300165484] [goal_to_plan_relay]: Path published: 381 poses
-[goal_to_plan_relay-14] [INFO] [1785560716.275496961] [goal_to_plan_relay]: Plan request (replan): (4.17, 1.64) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560716.291513498] [goal_to_plan_relay]: Path published: 369 poses
-[goal_to_plan_relay-14] [INFO] [1785560719.276277464] [goal_to_plan_relay]: Plan request (replan): (4.68, 2.17) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560719.299782098] [goal_to_plan_relay]: Path published: 358 poses
-[goal_to_plan_relay-14] [INFO] [1785560722.275652548] [goal_to_plan_relay]: Plan request (replan): (5.28, 2.37) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560722.291027440] [goal_to_plan_relay]: Path published: 346 poses
-[goal_to_plan_relay-14] [INFO] [1785560725.275523432] [goal_to_plan_relay]: Plan request (replan): (5.85, 2.41) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560725.296071249] [goal_to_plan_relay]: Path published: 335 poses
-[gmpc_node-15] [WARN] [1785560726.327204684] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
-[goal_to_plan_relay-14] [INFO] [1785560728.275912650] [goal_to_plan_relay]: Plan request (replan): (5.68, 1.98) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560728.293243235] [goal_to_plan_relay]: Path published: 341 poses
-[goal_to_plan_relay-14] [INFO] [1785560731.275631332] [goal_to_plan_relay]: Plan request (replan): (6.37, 1.81) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560731.290295367] [goal_to_plan_relay]: Path published: 327 poses
-[goal_to_plan_relay-14] [INFO] [1785560734.275988447] [goal_to_plan_relay]: Plan request (replan): (7.10, 1.92) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560734.291338465] [goal_to_plan_relay]: Path published: 320 poses
-[goal_to_plan_relay-14] [INFO] [1785560737.275634012] [goal_to_plan_relay]: Plan request (replan): (7.58, 2.60) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560737.337556274] [goal_to_plan_relay]: Path published: 307 poses
-[gmpc_node-15] [WARN] [1785560738.523935212] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
-[gmpc_node-15] [WARN] [1785560739.974498322] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
-[goal_to_plan_relay-14] [INFO] [1785560740.275413052] [goal_to_plan_relay]: Plan request (replan): (8.02, 3.31) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560740.293339282] [goal_to_plan_relay]: Path published: 306 poses
-[goal_to_plan_relay-14] [INFO] [1785560743.276042865] [goal_to_plan_relay]: Plan request (replan): (8.02, 3.98) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560743.290103732] [goal_to_plan_relay]: Path published: 293 poses
-[gmpc_node-15] [WARN] [1785560744.833197473] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
-[gmpc_node-15] [WARN] [1785560745.990091695] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
-[goal_to_plan_relay-14] [INFO] [1785560746.275663307] [goal_to_plan_relay]: Plan request (replan): (8.45, 4.51) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560746.293172086] [goal_to_plan_relay]: Path published: 282 poses
-[goal_to_plan_relay-14] [INFO] [1785560749.276045705] [goal_to_plan_relay]: Plan request (replan): (9.13, 4.62) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560749.296856224] [goal_to_plan_relay]: Path published: 269 poses
-[goal_to_plan_relay-14] [INFO] [1785560752.275452402] [goal_to_plan_relay]: Plan request (replan): (9.88, 4.82) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560752.286763262] [goal_to_plan_relay]: Path published: 254 poses
-[goal_to_plan_relay-14] [INFO] [1785560755.275826369] [goal_to_plan_relay]: Plan request (replan): (10.50, 5.41) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560755.289408394] [goal_to_plan_relay]: Path published: 242 poses
-[goal_to_plan_relay-14] [INFO] [1785560758.275308851] [goal_to_plan_relay]: Plan request (replan): (11.16, 6.06) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560758.288678945] [goal_to_plan_relay]: Path published: 229 poses
-[goal_to_plan_relay-14] [INFO] [1785560761.275529927] [goal_to_plan_relay]: Plan request (replan): (11.76, 6.81) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560761.284745402] [goal_to_plan_relay]: Path published: 214 poses
-[goal_to_plan_relay-14] [INFO] [1785560764.276131550] [goal_to_plan_relay]: Plan request (replan): (11.78, 7.56) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560764.285528815] [goal_to_plan_relay]: Path published: 199 poses
-[goal_to_plan_relay-14] [INFO] [1785560767.275789572] [goal_to_plan_relay]: Plan request (replan): (12.30, 8.21) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560767.284589152] [goal_to_plan_relay]: Path published: 186 poses
-[goal_to_plan_relay-14] [INFO] [1785560770.275428040] [goal_to_plan_relay]: Plan request (replan): (12.91, 8.83) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560770.286051863] [goal_to_plan_relay]: Path published: 174 poses
-[goal_to_plan_relay-14] [INFO] [1785560773.275997484] [goal_to_plan_relay]: Plan request (replan): (13.59, 9.44) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560773.285073660] [goal_to_plan_relay]: Path published: 162 poses
-[goal_to_plan_relay-14] [INFO] [1785560776.275337687] [goal_to_plan_relay]: Plan request (replan): (14.29, 10.07) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560776.284914810] [goal_to_plan_relay]: Path published: 149 poses
-[goal_to_plan_relay-14] [INFO] [1785560779.275334563] [goal_to_plan_relay]: Plan request (replan): (14.87, 10.83) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560779.281778024] [goal_to_plan_relay]: Path published: 134 poses
-[goal_to_plan_relay-14] [INFO] [1785560782.275712703] [goal_to_plan_relay]: Plan request (replan): (15.05, 11.57) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560782.280559501] [goal_to_plan_relay]: Path published: 120 poses
-[goal_to_plan_relay-14] [INFO] [1785560785.275298944] [goal_to_plan_relay]: Plan request (replan): (15.59, 12.12) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560785.279515361] [goal_to_plan_relay]: Path published: 111 poses
-[goal_to_plan_relay-14] [INFO] [1785560788.275088892] [goal_to_plan_relay]: Plan request (replan): (16.32, 12.39) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560788.279046022] [goal_to_plan_relay]: Path published: 95 poses
-[goal_to_plan_relay-14] [INFO] [1785560791.275987108] [goal_to_plan_relay]: Plan request (replan): (17.03, 13.06) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560791.279114087] [goal_to_plan_relay]: Path published: 80 poses
-[goal_to_plan_relay-14] [INFO] [1785560794.275998567] [goal_to_plan_relay]: Plan request (replan): (17.13, 13.81) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560794.278639890] [goal_to_plan_relay]: Path published: 65 poses
-[goal_to_plan_relay-14] [INFO] [1785560797.275921980] [goal_to_plan_relay]: Plan request (replan): (17.24, 14.57) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560797.278798101] [goal_to_plan_relay]: Path published: 50 poses
-[goal_to_plan_relay-14] [INFO] [1785560800.275289538] [goal_to_plan_relay]: Plan request (replan): (17.38, 15.32) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560800.278475081] [goal_to_plan_relay]: Path published: 35 poses
-[goal_to_plan_relay-14] [INFO] [1785560803.275837899] [goal_to_plan_relay]: Plan request (replan): (17.57, 16.07) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560803.284460915] [goal_to_plan_relay]: Path published: 20 poses
-[goal_to_plan_relay-14] [INFO] [1785560806.275793854] [goal_to_plan_relay]: Plan request (replan): (17.25, 16.84) -> (17.00, 17.00)
-[goal_to_plan_relay-14] [INFO] [1785560806.278400910] [goal_to_plan_relay]: Path published: 6 poses
-[gmpc_node-15] [INFO] [1785560806.325403285] [gmpc_controller]: [1;32mGoal reached[0m (within 0.291 m of (17.00, 17.00), tol=0.30 m) -- holding zero twist
-[INFO] [1785560806.792888928] [goal_watcher]: [goal_watcher] REACHED: dist=0.244 m  at (17.23, 16.91)
-[INFO] [1785560808.958945422] [rosbag2_recorder]: Pausing recording.
-[INFO] [1785560808.959020097] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while
-[INFO] [1785560808.970711876] [rosbag2_recorder]: Recording stopped
-[INFO] [1785560808.979608557] [rosbag2_recorder]: Event publisher thread: Exited
+[planner_server-11] [WARN] [1785594371.974129860] [planner_server]: New subscription discovered on topic '/plan', requesting incompatible QoS. No messages will be sent to it. Last incompatible policy: DURABILITY_QOS_POLICY
+[INFO] [1785594372.037039472] [rosbag2_recorder]: Subscribed to topic '/cmd_vel'
+[WARN] [1785594372.039913614] [rosbag2_recorder]: New publisher discovered on topic '/plan', offering incompatible QoS. No messages will be sent to it. Last incompatible policy: DURABILITY_QOS_POLICY
+[WARN] [1785594372.041716933] [rosbag2_recorder]: A new publisher for subscribed topic /plan was found offering RMW_QOS_POLICY_DURABILITY_VOLATILE, but rosbag2 already subscribed requesting RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL. Messages from this new publisher will not be recorded.
+[INFO] [1785594372.142553450] [rosbag2_recorder]: Subscribed to topic '/odometry/filtered'
+[INFO] [1785594372.144392961] [rosbag2_recorder]: Subscribed to topic '/amcl_pose'
+[INFO] [1785594372.144446499] [rosbag2_recorder]: All requested topics are subscribed. Stopping discovery...
+[INFO] [1785594372.144459368] [rosbag2_recorder]: Topics discovery stopped.
+[goal_to_plan_relay-14] [INFO] [1785594372.991274436] [goal_to_plan_relay]: Plan request (replan): (0.97, -0.16) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594373.019378436] [goal_to_plan_relay]: Path published: 373 poses
+[goal_to_plan_relay-14] [INFO] [1785594375.991819788] [goal_to_plan_relay]: Plan request (replan): (0.58, 0.30) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594376.014386053] [goal_to_plan_relay]: Path published: 360 poses
+[goal_to_plan_relay-14] [INFO] [1785594378.991089961] [goal_to_plan_relay]: Plan request (replan): (0.56, 0.96) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594379.013684433] [goal_to_plan_relay]: Path published: 348 poses
+[goal_to_plan_relay-14] [INFO] [1785594381.991184506] [goal_to_plan_relay]: Plan request (replan): (0.73, 1.60) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594382.023066226] [goal_to_plan_relay]: Path published: 335 poses
+[goal_to_plan_relay-14] [INFO] [1785594384.991929322] [goal_to_plan_relay]: Plan request (replan): (1.26, 1.99) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594385.006749436] [goal_to_plan_relay]: Path published: 324 poses
+[goal_to_plan_relay-14] [INFO] [1785594387.991167378] [goal_to_plan_relay]: Plan request (replan): (1.75, 2.46) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594388.009091602] [goal_to_plan_relay]: Path published: 313 poses
+[goal_to_plan_relay-14] [INFO] [1785594390.991123958] [goal_to_plan_relay]: Plan request (replan): (2.08, 3.05) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594391.005018026] [goal_to_plan_relay]: Path published: 302 poses
+[goal_to_plan_relay-14] [INFO] [1785594393.991860707] [goal_to_plan_relay]: Plan request (replan): (2.43, 3.60) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594394.009043572] [goal_to_plan_relay]: Path published: 290 poses
+[goal_to_plan_relay-14] [INFO] [1785594396.992082359] [goal_to_plan_relay]: Plan request (replan): (2.64, 4.22) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594397.021779429] [goal_to_plan_relay]: Path published: 278 poses
+[goal_to_plan_relay-14] [INFO] [1785594399.991519581] [goal_to_plan_relay]: Plan request (replan): (2.70, 4.88) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594400.008153240] [goal_to_plan_relay]: Path published: 265 poses
+[goal_to_plan_relay-14] [INFO] [1785594402.995520150] [goal_to_plan_relay]: Plan request (replan): (2.71, 5.50) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594403.064408861] [goal_to_plan_relay]: Path published: 259 poses
+[goal_to_plan_relay-14] [INFO] [1785594405.991256514] [goal_to_plan_relay]: Plan request (replan): (2.23, 5.78) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594406.001750918] [goal_to_plan_relay]: Path published: 250 poses
+[goal_to_plan_relay-14] [INFO] [1785594408.991276272] [goal_to_plan_relay]: Plan request (replan): (1.95, 5.77) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594409.005698932] [goal_to_plan_relay]: Path published: 279 poses
+[gmpc_node-15] [WARN] [1785594409.661540809] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
+[gmpc_node-15] [WARN] [1785594410.692695198] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
+[goal_to_plan_relay-14] [INFO] [1785594411.991827884] [goal_to_plan_relay]: Plan request (replan): (1.54, 5.78) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594412.006405884] [goal_to_plan_relay]: Path published: 272 poses
+[gmpc_node-15] [WARN] [1785594412.339300169] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
+[gmpc_node-15] [WARN] [1785594413.397828839] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
+[goal_to_plan_relay-14] [INFO] [1785594414.991497233] [goal_to_plan_relay]: Plan request (replan): (1.57, 5.64) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594415.008564953] [goal_to_plan_relay]: Path published: 264 poses
+[goal_to_plan_relay-14] [INFO] [1785594417.991250801] [goal_to_plan_relay]: Plan request (replan): (2.17, 5.55) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594418.006894269] [goal_to_plan_relay]: Path published: 251 poses
+[goal_to_plan_relay-14] [INFO] [1785594420.991053687] [goal_to_plan_relay]: Plan request (replan): (2.62, 6.03) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594421.005280243] [goal_to_plan_relay]: Path published: 242 poses
+[goal_to_plan_relay-14] [INFO] [1785594423.991007439] [goal_to_plan_relay]: Plan request (replan): (3.07, 6.48) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594424.001379513] [goal_to_plan_relay]: Path published: 233 poses
+[goal_to_plan_relay-14] [INFO] [1785594426.991628735] [goal_to_plan_relay]: Plan request (replan): (3.42, 7.02) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594427.005177106] [goal_to_plan_relay]: Path published: 222 poses
+[goal_to_plan_relay-14] [INFO] [1785594429.991772523] [goal_to_plan_relay]: Plan request (replan): (3.70, 7.67) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594430.001022974] [goal_to_plan_relay]: Path published: 209 poses
+[goal_to_plan_relay-14] [INFO] [1785594432.991435692] [goal_to_plan_relay]: Plan request (replan): (3.79, 8.30) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594433.001425862] [goal_to_plan_relay]: Path published: 196 poses
+[goal_to_plan_relay-14] [INFO] [1785594435.991585879] [goal_to_plan_relay]: Plan request (replan): (4.09, 8.88) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594436.003285121] [goal_to_plan_relay]: Path published: 185 poses
+[goal_to_plan_relay-14] [INFO] [1785594438.991249921] [goal_to_plan_relay]: Plan request (replan): (4.51, 9.36) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594439.004551813] [goal_to_plan_relay]: Path published: 175 poses
+[goal_to_plan_relay-14] [INFO] [1785594441.991667294] [goal_to_plan_relay]: Plan request (replan): (4.98, 9.83) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594442.001681936] [goal_to_plan_relay]: Path published: 166 poses
+[goal_to_plan_relay-14] [INFO] [1785594444.991609537] [goal_to_plan_relay]: Plan request (replan): (5.34, 10.35) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594444.999436817] [goal_to_plan_relay]: Path published: 158 poses
+[goal_to_plan_relay-14] [INFO] [1785594447.991134525] [goal_to_plan_relay]: Plan request (replan): (5.64, 10.89) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594448.000524304] [goal_to_plan_relay]: Path published: 151 poses
+[gmpc_node-15] [WARN] [1785594450.840199108] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
+[goal_to_plan_relay-14] [INFO] [1785594450.992117120] [goal_to_plan_relay]: Plan request (replan): (5.75, 11.58) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594451.002451727] [goal_to_plan_relay]: Path published: 139 poses
+[gmpc_node-15] [WARN] [1785594451.847424662] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
+[goal_to_plan_relay-14] [INFO] [1785594453.991521781] [goal_to_plan_relay]: Plan request (replan): (6.08, 11.53) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594454.001089663] [goal_to_plan_relay]: Path published: 135 poses
+[gmpc_node-15] [WARN] [1785594454.149043522] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
+[goal_to_plan_relay-14] [INFO] [1785594456.991701677] [goal_to_plan_relay]: Plan request (replan): (6.10, 11.62) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594456.998620119] [goal_to_plan_relay]: Path published: 160 poses
+[gmpc_node-15] [WARN] [1785594458.444977036] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
+[goal_to_plan_relay-14] [INFO] [1785594459.991437778] [goal_to_plan_relay]: Plan request (replan): (5.80, 11.52) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594459.998884211] [goal_to_plan_relay]: Path published: 149 poses
+[gmpc_node-15] [WARN] [1785594460.358078220] [gmpc_controller]: OSQP status=maximum iterations reached, emergency-braking
+[goal_to_plan_relay-14] [INFO] [1785594462.991550258] [goal_to_plan_relay]: Plan request (replan): (5.50, 12.08) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594462.999538015] [goal_to_plan_relay]: Path published: 136 poses
+[goal_to_plan_relay-14] [INFO] [1785594465.991034367] [goal_to_plan_relay]: Plan request (replan): (5.85, 12.63) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594465.996100364] [goal_to_plan_relay]: Path published: 124 poses
+[goal_to_plan_relay-14] [INFO] [1785594468.995217736] [goal_to_plan_relay]: Plan request (replan): (6.40, 12.97) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594469.012085428] [goal_to_plan_relay]: Path published: 113 poses
+[goal_to_plan_relay-14] [INFO] [1785594471.991763597] [goal_to_plan_relay]: Plan request (replan): (7.00, 13.31) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594471.997274055] [goal_to_plan_relay]: Path published: 102 poses
+[goal_to_plan_relay-14] [INFO] [1785594474.991332943] [goal_to_plan_relay]: Plan request (replan): (7.65, 13.39) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594474.996396999] [goal_to_plan_relay]: Path published: 88 poses
+[goal_to_plan_relay-14] [INFO] [1785594477.991304637] [goal_to_plan_relay]: Plan request (replan): (8.19, 13.70) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594477.999267428] [goal_to_plan_relay]: Path published: 78 poses
+[goal_to_plan_relay-14] [INFO] [1785594480.991085819] [goal_to_plan_relay]: Plan request (replan): (8.68, 14.18) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594480.994365689] [goal_to_plan_relay]: Path published: 68 poses
+[goal_to_plan_relay-14] [INFO] [1785594483.991101519] [goal_to_plan_relay]: Plan request (replan): (9.25, 14.55) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594483.993902708] [goal_to_plan_relay]: Path published: 57 poses
+[goal_to_plan_relay-14] [INFO] [1785594486.992171489] [goal_to_plan_relay]: Plan request (replan): (9.83, 14.90) -> (12.03, 15.90)
+[goal_to_plan_relay-14] [INFO] [1785594487.012090859] [goal_to_plan_relay]: Path published: 45 poses
+[goal_to_plan_relay-14] [INFO] [1785594489.990920975] [goal_to_plan_relay]: Plan request (replan): (10.41, 15.10) -> (12.03, 15.90)
+[planner_server-11] [WARN] [1785594490.032711835] [planner_server]: GridBased plugin failed to plan from (10.41, 15.10) to (12.03, 15.90): "no valid path found"
+[planner_server-11] [WARN] [1785594490.032756522] [planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[goal_to_plan_relay-14] [WARN] [1785594490.033713134] [goal_to_plan_relay]: Planner returned empty path (error_code=208, msg='')
+[goal_to_plan_relay-14] [INFO] [1785594492.991153980] [goal_to_plan_relay]: Plan request (replan): (10.94, 15.47) -> (12.03, 15.90)
+[planner_server-11] [WARN] [1785594493.040008534] [planner_server]: GridBased plugin failed to plan from (10.94, 15.47) to (12.03, 15.90): "no valid path found"
+[planner_server-11] [WARN] [1785594493.040070337] [planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[goal_to_plan_relay-14] [WARN] [1785594493.041188086] [goal_to_plan_relay]: Planner returned empty path (error_code=208, msg='')
+[goal_to_plan_relay-14] [INFO] [1785594495.991130320] [goal_to_plan_relay]: Plan request (replan): (11.56, 15.70) -> (12.03, 15.90)
+[planner_server-11] [WARN] [1785594496.038801045] [planner_server]: GridBased plugin failed to plan from (11.56, 15.70) to (12.03, 15.90): "no valid path found"
+[planner_server-11] [WARN] [1785594496.038872596] [planner_server]: [compute_path_to_pose] [ActionServer] Aborting handle.
+[goal_to_plan_relay-14] [WARN] [1785594496.039694509] [goal_to_plan_relay]: Planner returned empty path (error_code=208, msg='')
+[gmpc_node-15] [INFO] [1785594496.841345359] [gmpc_controller]: [1;32mGoal reached[0m (within 0.298 m of (12.00, 15.90), tol=0.30 m) -- holding zero twist
+[INFO] [1785594497.512588758] [goal_watcher]: [goal_watcher] REACHED: dist=0.279 m  at (11.77, 15.79)
+[goal_to_plan_relay-14] [INFO] [1785594498.991193497] [goal_to_plan_relay]: Goal reached (0.28 m within 0.30 m tol), stopping replan
+[INFO] [1785594499.681240309] [rosbag2_recorder]: Pausing recording.
+[INFO] [1785594499.681316383] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while
+[INFO] [1785594499.690476383] [rosbag2_recorder]: Recording stopped
+[INFO] [1785594499.691470455] [rosbag2_recorder]: Event publisher thread: Exited
 Done. Now analyse with:
   python3 /home/howardchen/masterthesis/evaluation/analyze.py /home/howardchen/masterthesis/evaluation/bags/gmpc_cbf__scan_seed21 --method gmpc_cbf --run scan_seed21
-[goal_to_plan_relay-14] [INFO] [1785560809.275090682] [goal_to_plan_relay]: Goal reached (0.24 m within 0.30 m tol), stopping replan
-[lifecycle_manager-12] [INFO] [1785560809.980250099] [rclcpp]: signal_handler(SIGINT/SIGTERM)
-[map_server-8] [INFO] [1785560809.980249520] [rclcpp]: signal_handler(SIGINT/SIGTERM)
-[map_server-8] [INFO] [1785560809.980311811] [map_server]: Running Nav2 LifecycleNode rcl preshutdown (map_server)
-[robot_state_publisher-3] [INFO] [1785560809.980249136] [rclcpp]: signal_handler(SIGINT/SIGTERM)
-[ekf_node-10] [INFO] [1785560809.980249168] [rclcpp]: signal_handler(SIGINT/SIGTERM)
-[lifecycle_manager-12] [INFO] [1785560809.980314011] [lifecycle_manager_navigation]: Running Nav2 LifecycleManager rcl preshutdown (lifecycle_manager_navigation)
-[lifecycle_manager-12] [INFO] [1785560809.980339835] [lifecycle_manager_navigation]: [34m[1mTerminating bond timer...[0m[0m
-[planner_server-11] [INFO] [1785560809.980253178] [rclcpp]: signal_handler(SIGINT/SIGTERM)
-[planner_server-11] [INFO] [1785560809.980303140] [planner_server]: Running Nav2 LifecycleNode rcl preshutdown (planner_server)
-[planner_server-11] [INFO] [1785560809.980364234] [planner_server]: Deactivating
-[velocity_smoother-13] [INFO] [1785560809.980249834] [rclcpp]: signal_handler(SIGINT/SIGTERM)
-[velocity_smoother-13] [INFO] [1785560809.980311842] [velocity_smoother]: Running Nav2 LifecycleNode rcl preshutdown (velocity_smoother)
-[velocity_smoother-13] [INFO] [1785560809.980359916] [velocity_smoother]: Deactivating
-[velocity_smoother-13] [INFO] [1785560809.980376087] [velocity_smoother]: Destroying bond (velocity_smoother) to lifecycle manager.
-[map_server-8] [INFO] [1785560809.980360094] [map_server]: Deactivating
-[map_server-8] [INFO] [1785560809.980370998] [map_server]: Destroying bond (map_server) to lifecycle manager.
-[amcl-9] [INFO] [1785560809.980363818] [rclcpp]: signal_handler(SIGINT/SIGTERM)
-[amcl-9] [INFO] [1785560809.980411755] [amcl]: Running Nav2 LifecycleNode rcl preshutdown (amcl)
-[amcl-9] [INFO] [1785560809.980449139] [amcl]: Deactivating
-[amcl-9] [INFO] [1785560809.980462034] [amcl]: Destroying bond (amcl) to lifecycle manager.
-[planner_server-11] [INFO] [1785560809.980399468] [global_costmap.global_costmap]: Deactivating
-[parameter_bridge-2] [INFO] [1785560809.980661665] [rclcpp]: signal_handler(SIGINT/SIGTERM)
-[velocity_smoother-13] [INFO] [1785560809.990616327] [velocity_smoother]: Cleaning up
-[amcl-9] [INFO] [1785560809.990688657] [amcl]: Cleaning up
-[map_server-8] [INFO] [1785560809.990876805] [map_server]: Cleaning up
-[map_server-8] [INFO] [1785560809.990913213] [map_server]: Destroying bond (map_server) to lifecycle manager.
-[velocity_smoother-13] [INFO] [1785560809.991785915] [velocity_smoother]: Destroying bond (velocity_smoother) to lifecycle manager.
-[velocity_smoother-13] [INFO] [1785560809.995882885] [velocity_smoother]: Destroying
-[amcl-9] [INFO] [1785560809.997015789] [amcl]: Destroying bond (amcl) to lifecycle manager.
-[map_server-8] [INFO] [1785560809.998430773] [map_server]: Destroying
-[amcl-9] [INFO] [1785560810.004501545] [amcl]: Destroying
-[lifecycle_manager-12] [INFO] [1785560810.029983491] [lifecycle_manager_navigation]: Destroying lifecycle_manager_navigation
-[odom_tf_broadcaster-4] Traceback (most recent call last):
-[odom_tf_broadcaster-4]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/odom_tf_broadcaster", line 33, in <module>
-[odom_tf_broadcaster-4]     sys.exit(load_entry_point('ammr-bringup==0.0.1', 'console_scripts', 'odom_tf_broadcaster')())
-[odom_tf_broadcaster-4]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[odom_tf_broadcaster-4]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/python3.12/site-packages/ammr_bringup/odom_tf_broadcaster.py", line 62, in main
-[odom_tf_broadcaster-4]     rclpy.spin(OdomTfBroadcaster())
-[odom_tf_broadcaster-4]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
-[odom_tf_broadcaster-4]     executor.spin_once()
-[odom_tf_broadcaster-4]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
-[odom_tf_broadcaster-4]     self._spin_once_impl(timeout_sec)
-[odom_tf_broadcaster-4]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
-[odom_tf_broadcaster-4]     handler, entity, node = self.wait_for_ready_callbacks(
-[odom_tf_broadcaster-4]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[odom_tf_broadcaster-4]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
-[odom_tf_broadcaster-4]     return next(self._cb_iter)
-[scan_relay-5] Traceback (most recent call last):
-[scan_relay-5]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/scan_relay", line 33, in <module>
-[scan_relay-5]     sys.exit(load_entry_point('ammr-bringup==0.0.1', 'console_scripts', 'scan_relay')())
-[scan_relay-5]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[odom_tf_broadcaster-4]            ^^^^^^^^^^^^^^^^^^^
-[odom_tf_broadcaster-4]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
-[odom_tf_broadcaster-4]     raise ExternalShutdownException()
-[scan_relay-5]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/python3.12/site-packages/ammr_bringup/scan_relay.py", line 86, in main
-[scan_relay-5]     rclpy.spin(ScanRelay())
-[scan_relay-5]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
-[odom_tf_broadcaster-4] rclpy.executors.ExternalShutdownException
-[scan_relay-5]     executor.spin_once()
-[scan_relay-5]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
-[scan_relay-5]     self._spin_once_impl(timeout_sec)
-[scan_relay-5]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
-[scan_relay-5]     handler, entity, node = self.wait_for_ready_callbacks(
-[scan_relay-5]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[scan_relay-5]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+[amcl-9] [INFO] [1785594500.700587037] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[amcl-9] [INFO] [1785594500.700664751] [amcl]: Running Nav2 LifecycleNode rcl preshutdown (amcl)
+[amcl-9] [INFO] [1785594500.700750105] [amcl]: Deactivating
+[amcl-9] [INFO] [1785594500.700773637] [amcl]: Destroying bond (amcl) to lifecycle manager.
+[ekf_node-10] [INFO] [1785594500.700586496] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[map_server-8] [INFO] [1785594500.700589732] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[map_server-8] [INFO] [1785594500.700668450] [map_server]: Running Nav2 LifecycleNode rcl preshutdown (map_server)
+[map_server-8] [INFO] [1785594500.700737576] [map_server]: Deactivating
+[map_server-8] [INFO] [1785594500.700751370] [map_server]: Destroying bond (map_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1785594500.700613981] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[lifecycle_manager-12] [INFO] [1785594500.700676785] [lifecycle_manager_navigation]: Running Nav2 LifecycleManager rcl preshutdown (lifecycle_manager_navigation)
+[lifecycle_manager-12] [INFO] [1785594500.700715972] [lifecycle_manager_navigation]: [34m[1mTerminating bond timer...[0m[0m
+[velocity_smoother-13] [INFO] [1785594500.700632581] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[velocity_smoother-13] [INFO] [1785594500.700693287] [velocity_smoother]: Running Nav2 LifecycleNode rcl preshutdown (velocity_smoother)
+[velocity_smoother-13] [INFO] [1785594500.700751910] [velocity_smoother]: Deactivating
+[velocity_smoother-13] [INFO] [1785594500.700772009] [velocity_smoother]: Destroying bond (velocity_smoother) to lifecycle manager.
+[parameter_bridge-2] [INFO] [1785594500.700704173] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[planner_server-11] [INFO] [1785594500.701678846] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[planner_server-11] [INFO] [1785594500.701721065] [planner_server]: Running Nav2 LifecycleNode rcl preshutdown (planner_server)
+[planner_server-11] [INFO] [1785594500.701768533] [planner_server]: Deactivating
+[planner_server-11] [INFO] [1785594500.701791108] [global_costmap.global_costmap]: Deactivating
+[robot_state_publisher-3] [INFO] [1785594500.701864241] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[velocity_smoother-13] [INFO] [1785594500.711213174] [velocity_smoother]: Cleaning up
+[velocity_smoother-13] [INFO] [1785594500.711264576] [velocity_smoother]: Destroying bond (velocity_smoother) to lifecycle manager.
+[amcl-9] [INFO] [1785594500.711560140] [amcl]: Cleaning up
+[map_server-8] [INFO] [1785594500.713071277] [map_server]: Cleaning up
+[map_server-8] [INFO] [1785594500.713126599] [map_server]: Destroying bond (map_server) to lifecycle manager.
+[velocity_smoother-13] [INFO] [1785594500.717658563] [velocity_smoother]: Destroying
+[amcl-9] [INFO] [1785594500.718535536] [amcl]: Destroying bond (amcl) to lifecycle manager.
+[map_server-8] [INFO] [1785594500.721374917] [map_server]: Destroying
+[amcl-9] [INFO] [1785594500.726554399] [amcl]: Destroying
 [dynamic_obstacle_driver-7] Traceback (most recent call last):
 [dynamic_obstacle_driver-7]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/python3.12/site-packages/ammr_bringup/dynamic_obstacle_driver.py", line 191, in main
 [dynamic_obstacle_driver-7]     rclpy.spin(node)
 [dynamic_obstacle_driver-7]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
-[scan_relay-5]     return next(self._cb_iter)
-[scan_relay-5]            ^^^^^^^^^^^^^^^^^^^
-[scan_relay-5]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
-[scan_relay-5]     raise ExternalShutdownException()
-[scan_relay-5] rclpy.executors.ExternalShutdownException
 [dynamic_obstacle_driver-7]     executor.spin_once()
 [dynamic_obstacle_driver-7]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
 [dynamic_obstacle_driver-7]     self._spin_once_impl(timeout_sec)
@@ -418,9 +460,10 @@ Done. Now analyse with:
 [dynamic_obstacle_driver-7]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
 [dynamic_obstacle_driver-7]     return next(self._cb_iter)
 [dynamic_obstacle_driver-7]            ^^^^^^^^^^^^^^^^^^^
-[dynamic_obstacle_driver-7]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
-[dynamic_obstacle_driver-7]     raise ExternalShutdownException()
-[dynamic_obstacle_driver-7] rclpy.executors.ExternalShutdownException
+[dynamic_obstacle_driver-7]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 757, in _wait_for_ready_callbacks
+[dynamic_obstacle_driver-7]     wait_set = _rclpy.WaitSet(
+[dynamic_obstacle_driver-7]                ^^^^^^^^^^^^^^^
+[dynamic_obstacle_driver-7] rclpy._rclpy_pybind11.RCLError: failed to initialize wait set: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/wait.c:130
 [dynamic_obstacle_driver-7] 
 [dynamic_obstacle_driver-7] During handling of the above exception, another exception occurred:
 [dynamic_obstacle_driver-7] 
@@ -437,70 +480,48 @@ Done. Now analyse with:
 [dynamic_obstacle_driver-7]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
 [dynamic_obstacle_driver-7]     self.__context.shutdown()
 [dynamic_obstacle_driver-7] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
-[scan_obstacle_tracker-16] Traceback (most recent call last):
-[scan_obstacle_tracker-16]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/scan_obstacle_tracker.py", line 734, in main
-[scan_obstacle_tracker-16]     rclpy.spin(node)
-[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
-[scan_obstacle_tracker-16]     executor.spin_once()
-[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
-[scan_obstacle_tracker-16]     self._spin_once_impl(timeout_sec)
-[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
-[scan_obstacle_tracker-16]     handler, entity, node = self.wait_for_ready_callbacks(
-[scan_obstacle_tracker-16]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
-[scan_obstacle_tracker-16]     return next(self._cb_iter)
-[scan_obstacle_tracker-16]            ^^^^^^^^^^^^^^^^^^^
-[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
-[scan_obstacle_tracker-16]     raise ExternalShutdownException()
-[scan_obstacle_tracker-16] rclpy.executors.ExternalShutdownException
-[scan_obstacle_tracker-16] 
-[scan_obstacle_tracker-16] During handling of the above exception, another exception occurred:
-[scan_obstacle_tracker-16] 
-[scan_obstacle_tracker-16] Traceback (most recent call last):
-[scan_obstacle_tracker-16]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/scan_obstacle_tracker", line 33, in <module>
-[scan_obstacle_tracker-16]     sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'scan_obstacle_tracker')())
-[scan_obstacle_tracker-16]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[scan_obstacle_tracker-16]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/scan_obstacle_tracker.py", line 739, in main
-[scan_obstacle_tracker-16]     rclpy.shutdown()
-[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
-[scan_obstacle_tracker-16]     _shutdown(context=context)
-[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
-[scan_obstacle_tracker-16]     context.shutdown()
-[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
-[scan_obstacle_tracker-16]     self.__context.shutdown()
-[scan_obstacle_tracker-16] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
-[gmpc_node-15] Traceback (most recent call last):
-[gmpc_node-15]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/gmpc_node.py", line 737, in main
-[gmpc_node-15]     rclpy.spin(node)
-[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
-[gmpc_node-15]     executor.spin_once()
-[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
-[gmpc_node-15]     self._spin_once_impl(timeout_sec)
-[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
-[gmpc_node-15]     handler, entity, node = self.wait_for_ready_callbacks(
-[gmpc_node-15]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
-[gmpc_node-15]     return next(self._cb_iter)
-[gmpc_node-15]            ^^^^^^^^^^^^^^^^^^^
-[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
-[gmpc_node-15]     raise ExternalShutdownException()
-[gmpc_node-15] rclpy.executors.ExternalShutdownException
-[gmpc_node-15] 
-[gmpc_node-15] During handling of the above exception, another exception occurred:
-[gmpc_node-15] 
-[gmpc_node-15] Traceback (most recent call last):
-[gmpc_node-15]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/gmpc_node", line 33, in <module>
-[gmpc_node-15]     sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'gmpc_node')())
-[gmpc_node-15]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[gmpc_node-15]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/gmpc_node.py", line 742, in main
-[gmpc_node-15]     rclpy.shutdown()
-[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
-[gmpc_node-15]     _shutdown(context=context)
-[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
-[gmpc_node-15]     context.shutdown()
-[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
-[gmpc_node-15]     self.__context.shutdown()
-[gmpc_node-15] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
+[scan_relay-5] Traceback (most recent call last):
+[scan_relay-5]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/scan_relay", line 33, in <module>
+[scan_relay-5]     sys.exit(load_entry_point('ammr-bringup==0.0.1', 'console_scripts', 'scan_relay')())
+[scan_relay-5]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[scan_relay-5]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/python3.12/site-packages/ammr_bringup/scan_relay.py", line 86, in main
+[scan_relay-5]     rclpy.spin(ScanRelay())
+[scan_relay-5]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+[scan_relay-5]     executor.spin_once()
+[scan_relay-5]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+[scan_relay-5]     self._spin_once_impl(timeout_sec)
+[scan_relay-5]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+[scan_relay-5]     handler, entity, node = self.wait_for_ready_callbacks(
+[scan_relay-5]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[scan_relay-5]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+[scan_relay-5]     return next(self._cb_iter)
+[scan_relay-5]            ^^^^^^^^^^^^^^^^^^^
+[scan_relay-5]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 757, in _wait_for_ready_callbacks
+[scan_relay-5]     wait_set = _rclpy.WaitSet(
+[scan_relay-5]                ^^^^^^^^^^^^^^^
+[scan_relay-5] rclpy._rclpy_pybind11.RCLError: failed to initialize wait set: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/wait.c:130
+[lifecycle_manager-12] [INFO] [1785594500.754049083] [lifecycle_manager_navigation]: Destroying lifecycle_manager_navigation
+[odom_tf_broadcaster-4] Traceback (most recent call last):
+[odom_tf_broadcaster-4]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/odom_tf_broadcaster", line 33, in <module>
+[odom_tf_broadcaster-4]     sys.exit(load_entry_point('ammr-bringup==0.0.1', 'console_scripts', 'odom_tf_broadcaster')())
+[odom_tf_broadcaster-4]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[odom_tf_broadcaster-4]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/python3.12/site-packages/ammr_bringup/odom_tf_broadcaster.py", line 62, in main
+[odom_tf_broadcaster-4]     rclpy.spin(OdomTfBroadcaster())
+[odom_tf_broadcaster-4]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+[odom_tf_broadcaster-4]     executor.spin_once()
+[odom_tf_broadcaster-4]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+[odom_tf_broadcaster-4]     self._spin_once_impl(timeout_sec)
+[odom_tf_broadcaster-4]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+[odom_tf_broadcaster-4]     handler, entity, node = self.wait_for_ready_callbacks(
+[odom_tf_broadcaster-4]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[odom_tf_broadcaster-4]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+[odom_tf_broadcaster-4]     return next(self._cb_iter)
+[odom_tf_broadcaster-4]            ^^^^^^^^^^^^^^^^^^^
+[odom_tf_broadcaster-4]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+[odom_tf_broadcaster-4]     raise ExternalShutdownException()
+[odom_tf_broadcaster-4] rclpy.executors.ExternalShutdownException
+[planner_server-11] [INFO] [1785594500.758093855] [planner_server]: Deactivating plugin GridBased of type SmacPlanner2D
+[planner_server-11] [INFO] [1785594500.758138191] [planner_server]: Destroying bond (planner_server) to lifecycle manager.
 [goal_to_plan_relay-14] Traceback (most recent call last):
 [goal_to_plan_relay-14]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/goal_to_plan_relay.py", line 205, in main
 [goal_to_plan_relay-14]     rclpy.spin(node)
@@ -514,9 +535,10 @@ Done. Now analyse with:
 [goal_to_plan_relay-14]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
 [goal_to_plan_relay-14]     return next(self._cb_iter)
 [goal_to_plan_relay-14]            ^^^^^^^^^^^^^^^^^^^
-[goal_to_plan_relay-14]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
-[goal_to_plan_relay-14]     raise ExternalShutdownException()
-[goal_to_plan_relay-14] rclpy.executors.ExternalShutdownException
+[goal_to_plan_relay-14]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 757, in _wait_for_ready_callbacks
+[goal_to_plan_relay-14]     wait_set = _rclpy.WaitSet(
+[goal_to_plan_relay-14]                ^^^^^^^^^^^^^^^
+[goal_to_plan_relay-14] rclpy._rclpy_pybind11.RCLError: failed to initialize wait set: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/wait.c:130
 [goal_to_plan_relay-14] 
 [goal_to_plan_relay-14] During handling of the above exception, another exception occurred:
 [goal_to_plan_relay-14] 
@@ -533,27 +555,100 @@ Done. Now analyse with:
 [goal_to_plan_relay-14]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
 [goal_to_plan_relay-14]     self.__context.shutdown()
 [goal_to_plan_relay-14] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
-[planner_server-11] [INFO] [1785560810.087712031] [planner_server]: Deactivating plugin GridBased of type SmacPlanner2D
-[planner_server-11] [INFO] [1785560810.087770685] [planner_server]: Destroying bond (planner_server) to lifecycle manager.
-[planner_server-11] [INFO] [1785560810.097987383] [planner_server]: Cleaning up
-[INFO] [robot_state_publisher-3]: process has finished cleanly [pid 1057291]
-[planner_server-11] [INFO] [1785560810.103653223] [global_costmap.global_costmap]: Cleaning up
-[planner_server-11] [INFO] [1785560810.106451618] [planner_server]: Cleaning up plugin GridBased of type SmacPlanner2D
-[planner_server-11] [INFO] [1785560810.106728792] [planner_server]: Destroying plugin GridBased of type SmacPlanner2D
-[INFO] [parameter_bridge-2]: process has finished cleanly [pid 1057290]
-[planner_server-11] [INFO] [1785560810.113035479] [planner_server]: Destroying bond (planner_server) to lifecycle manager.
-[INFO] [ekf_node-10]: process has finished cleanly [pid 1057503]
-[planner_server-11] [INFO] [1785560810.115803897] [global_costmap.global_costmap]: Destroying
-[planner_server-11] [INFO] [1785560810.118400719] [planner_server]: Destroying
-[INFO] [velocity_smoother-13]: process has finished cleanly [pid 1057506]
-[INFO] [map_server-8]: process has finished cleanly [pid 1057501]
-[INFO] [amcl-9]: process has finished cleanly [pid 1057502]
-[INFO] [lifecycle_manager-12]: process has finished cleanly [pid 1057505]
-[ERROR] [scan_relay-5]: process has died [pid 1057293, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/scan_relay --ros-args --params-file /tmp/launch_params_h2g8p02h'].
-[INFO] [planner_server-11]: process has finished cleanly [pid 1057504]
-[ERROR] [odom_tf_broadcaster-4]: process has died [pid 1057292, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/odom_tf_broadcaster --ros-args --params-file /tmp/launch_params_denncw32'].
-[ERROR] [dynamic_obstacle_driver-7]: process has died [pid 1057470, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/dynamic_obstacle_driver --ros-args --params-file /tmp/launch_params_lzxiyofa --params-file /tmp/launch_params_gzan0mi6'].
-[ERROR] [goal_to_plan_relay-14]: process has died [pid 1057507, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/goal_to_plan_relay --ros-args -r __node:=goal_to_plan_relay --params-file /tmp/launch_params__q218d3_'].
-[ERROR] [scan_obstacle_tracker-16]: process has died [pid 1057509, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/scan_obstacle_tracker --ros-args -r __node:=scan_obstacle_tracker --params-file /tmp/launch_params_mszc1_nq'].
-[ERROR] [gmpc_node-15]: process has died [pid 1057508, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/gmpc_node --ros-args -r __node:=gmpc_controller --params-file /home/howardchen/masterthesis/install/ammr_wholebody_mpc/share/ammr_wholebody_mpc/config/gmpc_params.yaml --params-file /tmp/launch_params_65caw560 --params-file /tmp/launch_params_n0n5zyo0'].
-[INFO] [gz-1]: process has finished cleanly [pid 1057289]
+[planner_server-11] [INFO] [1785594500.768382751] [planner_server]: Cleaning up
+[gmpc_node-15] Traceback (most recent call last):
+[gmpc_node-15]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/gmpc_node.py", line 737, in main
+[gmpc_node-15]     rclpy.spin(node)
+[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+[gmpc_node-15]     executor.spin_once()
+[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+[gmpc_node-15]     self._spin_once_impl(timeout_sec)
+[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+[gmpc_node-15]     handler, entity, node = self.wait_for_ready_callbacks(
+[gmpc_node-15]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+[gmpc_node-15]     return next(self._cb_iter)
+[gmpc_node-15]            ^^^^^^^^^^^^^^^^^^^
+[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 757, in _wait_for_ready_callbacks
+[gmpc_node-15]     wait_set = _rclpy.WaitSet(
+[gmpc_node-15]                ^^^^^^^^^^^^^^^
+[gmpc_node-15] rclpy._rclpy_pybind11.RCLError: failed to initialize wait set: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/wait.c:130
+[gmpc_node-15] 
+[gmpc_node-15] During handling of the above exception, another exception occurred:
+[gmpc_node-15] 
+[gmpc_node-15] Traceback (most recent call last):
+[gmpc_node-15]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/gmpc_node", line 33, in <module>
+[gmpc_node-15]     sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'gmpc_node')())
+[gmpc_node-15]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[gmpc_node-15]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/gmpc_node.py", line 742, in main
+[gmpc_node-15]     rclpy.shutdown()
+[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+[gmpc_node-15]     _shutdown(context=context)
+[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+[gmpc_node-15]     context.shutdown()
+[gmpc_node-15]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+[gmpc_node-15]     self.__context.shutdown()
+[gmpc_node-15] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
+[planner_server-11] [INFO] [1785594500.774715673] [global_costmap.global_costmap]: Cleaning up
+[planner_server-11] [INFO] [1785594500.777536791] [planner_server]: Cleaning up plugin GridBased of type SmacPlanner2D
+[planner_server-11] [INFO] [1785594500.780031778] [planner_server]: Destroying plugin GridBased of type SmacPlanner2D
+[planner_server-11] [INFO] [1785594500.789526165] [planner_server]: Destroying bond (planner_server) to lifecycle manager.
+[planner_server-11] [INFO] [1785594500.792781571] [global_costmap.global_costmap]: Destroying
+[planner_server-11] [INFO] [1785594500.797724960] [planner_server]: Destroying
+[scan_obstacle_tracker-16] Traceback (most recent call last):
+[scan_obstacle_tracker-16]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/scan_obstacle_tracker.py", line 734, in main
+[scan_obstacle_tracker-16]     rclpy.spin(node)
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+[scan_obstacle_tracker-16]     executor.spin_once()
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+[scan_obstacle_tracker-16]     self._spin_once_impl(timeout_sec)
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 918, in _spin_once_impl
+[scan_obstacle_tracker-16]     raise handler.exception()
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/task.py", line 286, in _execute_coroutine_step
+[scan_obstacle_tracker-16]     result = coro.send(None)
+[scan_obstacle_tracker-16]              ^^^^^^^^^^^^^^^
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 592, in handler
+[scan_obstacle_tracker-16]     await call_coroutine()
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 480, in _execute
+[scan_obstacle_tracker-16]     await await_or_execute(sub.callback, *msg_tuple)
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 115, in await_or_execute
+[scan_obstacle_tracker-16]     return callback(*args)
+[scan_obstacle_tracker-16]            ^^^^^^^^^^^^^^^
+[scan_obstacle_tracker-16]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/scan_obstacle_tracker.py", line 443, in _scan_cb
+[scan_obstacle_tracker-16]     self._publish(t_ns, scan.header.stamp, movers, tx, ty)
+[scan_obstacle_tracker-16]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/scan_obstacle_tracker.py", line 711, in _publish
+[scan_obstacle_tracker-16]     self.pub.publish(msg)
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/publisher.py", line 70, in publish
+[scan_obstacle_tracker-16]     self.__publisher.publish(msg)
+[scan_obstacle_tracker-16] rclpy._rclpy_pybind11.RCLError: Failed to publish: publisher's context is invalid, at ./src/rcl/publisher.c:423
+[scan_obstacle_tracker-16] 
+[scan_obstacle_tracker-16] During handling of the above exception, another exception occurred:
+[scan_obstacle_tracker-16] 
+[scan_obstacle_tracker-16] Traceback (most recent call last):
+[scan_obstacle_tracker-16]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/scan_obstacle_tracker", line 33, in <module>
+[scan_obstacle_tracker-16]     sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'scan_obstacle_tracker')())
+[scan_obstacle_tracker-16]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[scan_obstacle_tracker-16]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/scan_obstacle_tracker.py", line 739, in main
+[scan_obstacle_tracker-16]     rclpy.shutdown()
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+[scan_obstacle_tracker-16]     _shutdown(context=context)
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+[scan_obstacle_tracker-16]     context.shutdown()
+[scan_obstacle_tracker-16]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+[scan_obstacle_tracker-16]     self.__context.shutdown()
+[scan_obstacle_tracker-16] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
+[INFO] [parameter_bridge-2]: process has finished cleanly [pid 1196276]
+[INFO] [robot_state_publisher-3]: process has finished cleanly [pid 1196277]
+[INFO] [ekf_node-10]: process has finished cleanly [pid 1196550]
+[INFO] [map_server-8]: process has finished cleanly [pid 1196548]
+[INFO] [velocity_smoother-13]: process has finished cleanly [pid 1196553]
+[INFO] [amcl-9]: process has finished cleanly [pid 1196549]
+[INFO] [lifecycle_manager-12]: process has finished cleanly [pid 1196552]
+[INFO] [planner_server-11]: process has finished cleanly [pid 1196551]
+[ERROR] [scan_relay-5]: process has died [pid 1196279, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/scan_relay --ros-args --params-file /tmp/launch_params_gjppx9y1'].
+[ERROR] [dynamic_obstacle_driver-7]: process has died [pid 1196491, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/dynamic_obstacle_driver --ros-args --params-file /tmp/launch_params_4hp4jq6x --params-file /tmp/launch_params_ggin9rve'].
+[ERROR] [odom_tf_broadcaster-4]: process has died [pid 1196278, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/odom_tf_broadcaster --ros-args --params-file /tmp/launch_params_s9igx5_8'].
+[ERROR] [goal_to_plan_relay-14]: process has died [pid 1196554, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/goal_to_plan_relay --ros-args -r __node:=goal_to_plan_relay --params-file /tmp/launch_params_vidb95gx'].
+[INFO] [gz-1]: process has finished cleanly [pid 1196275]
+[ERROR] [gmpc_node-15]: process has died [pid 1196555, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/gmpc_node --ros-args -r __node:=gmpc_controller --params-file /home/howardchen/masterthesis/install/ammr_wholebody_mpc/share/ammr_wholebody_mpc/config/gmpc_params.yaml --params-file /tmp/launch_params_whjdrjs3 --params-file /tmp/launch_params_t4g7hewo'].
+[ERROR] [scan_obstacle_tracker-16]: process has died [pid 1196556, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/scan_obstacle_tracker --ros-args -r __node:=scan_obstacle_tracker --params-file /tmp/launch_params_s6uztdg7'].
