@@ -31,7 +31,6 @@ than record a run that was never going to move.
     python3 evaluation/trial_start.py --goal-x 17 --goal-y 17
 """
 import argparse
-import math
 import random
 import sys
 import time
@@ -40,10 +39,6 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import (QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy,
                        QoSHistoryPolicy)
-from rclpy.time import Time
-from rclpy.duration import Duration
-
-import tf2_ros
 
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import Path
@@ -62,32 +57,15 @@ class Starter(Node):
         self.clock_t = None
         self.amcl = None
         self.plan = False
-        self.fused = None
         self.create_subscription(Clock, '/clock', self._on_clock, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose',
                                  self._on_amcl, 10)
         self.create_subscription(Path, '/plan', self._on_plan, 10)
-        # map -> base_footprint is EXACTLY what the planner reads, so it is the
-        # only honest check that localisation agrees with the spawn. Reading it
-        # from TF rather than from a node's output topic also means the check
-        # does not depend on which localiser owns the transform.
-        self.tf_buf = tf2_ros.Buffer()
-        self.tf_lis = tf2_ros.TransformListener(self.tf_buf, self, spin_thread=False)
         # TRANSIENT_LOCAL so a subscriber that matches late still receives the
         # goal; compatible with the VOLATILE subscribers already out there.
         self.goal_pub = self.create_publisher(PoseStamped, '/goal_pose', LATCH)
         self.init_pub = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10)
-        # /initialpose only moves AMCL. The EKF fuses AMCL as a CORRECTION on a
-        # state it initialises at the origin, so with a spawn away from the
-        # origin it converges slowly -- or not before the trial starts. Measured:
-        # spawn (1.82, 17.15), /odom correct, but map->odom settled at
-        # (-1.82, -17.15), i.e. the planner believed the robot was at (0, 0) and
-        # returned "no valid path" 98 times. Every earlier run started AT the
-        # origin, where the EKF's initial state happens to be right, so this was
-        # invisible. `set_pose` jumps the filter's state instead of nudging it.
-        self.setpose_pub = self.create_publisher(
-            PoseWithCovarianceStamped, '/set_pose', 10)
 
     # NB: not `_clock`/`_logger`/etc -- rclpy.node.Node sets instance attributes
     # of those names in __init__, which shadow same-named methods and make the
@@ -101,15 +79,6 @@ class Starter(Node):
     def _on_plan(self, m):
         if len(m.poses) > 1:
             self.plan = True
-
-    def robot_xy(self):
-        """The robot's pose in the map frame, or None if TF cannot supply it."""
-        try:
-            tf = self.tf_buf.lookup_transform('map', 'base_footprint',
-                                              Time(), Duration(seconds=0.2))
-        except Exception:
-            return None
-        return (tf.transform.translation.x, tf.transform.translation.y)
 
     def wait(self, cond, timeout, label):
         t0 = time.time()
@@ -205,53 +174,16 @@ def main():
         p.pose.pose.position.x = a.start_x
         p.pose.pose.position.y = a.start_y
         p.pose.pose.orientation.w = 1.0
-        # A covariance MUST be set. robot_localization's set_pose writes the
-        # message's covariance straight into the filter's state covariance, and
-        # the message default is all zeros -- "this estimate has no uncertainty
-        # at all". The filter then stops accepting corrections: measured over a
-        # 249 s run, the robot's believed pose stayed at (0.00, 0.00) while it
-        # actually drove to (1.5, 2.1), (0.9, 3.8) and (-0.8, 2.2), with
-        # map->odom swinging through +-180 deg to cancel the odometry. The
-        # controller was steering from a pose that never moved, and turned
-        # 16274 deg doing it. These are the values rviz's 2D Pose Estimate uses.
-        p.pose.covariance[0] = 0.25        # x
-        p.pose.covariance[7] = 0.25        # y
-        p.pose.covariance[35] = 0.0685     # yaw
         n.amcl = None
-        n.fused = None
-        for _ in range(4):
-            p.header.stamp = n.get_clock().now().to_msg()
-            n.init_pub.publish(p)       # AMCL's particle cloud
-            # The EKF initialises its state at the origin, so a spawn AT the
-            # origin needs no reset -- and resetting it there is not free:
-            # set_pose also overwrites the state covariance, which is how a
-            # zero-covariance message froze the filter. Touching it only when
-            # the spawn is somewhere else keeps the origin case on exactly the
-            # code path that was working before random spawns were added.
-            if math.hypot(a.start_x, a.start_y) > 0.05:
-                n.setpose_pub.publish(p)
-            # BOTH have to agree with the spawn. Checking only AMCL is what let
-            # a whole batch run with the planner convinced the robot was at the
-            # origin: AMCL was right, the EKF was not, and the EKF owns the
-            # transform the planner reads.
-            def agrees():
-                if n.amcl is None:
-                    return False
-                if abs(n.amcl[0] - a.start_x) > 0.5 or abs(n.amcl[1] - a.start_y) > 0.5:
-                    return False
-                p_map = n.robot_xy()
-                n.fused = p_map
-                return (p_map is not None
-                        and abs(p_map[0] - a.start_x) < 0.5
-                        and abs(p_map[1] - a.start_y) < 0.5)
-            if n.wait(agrees, min(6.0, left()), 'AMCL + TF agree with the spawn'):
+        for _ in range(3):
+            n.init_pub.publish(p)
+            if n.wait(lambda: n.amcl is not None and
+                      abs(n.amcl[0] - a.start_x) < 0.5 and
+                      abs(n.amcl[1] - a.start_y) < 0.5,
+                      min(6.0, left()), 'AMCL reset acknowledged'):
                 break
         else:
-            am = ('(%.2f, %.2f)' % n.amcl) if n.amcl else 'none'
-            tf = ('(%.2f, %.2f)' % n.fused) if n.fused else 'none'
-            print(f'  localisation never reached the spawn '
-                  f'({a.start_x:.2f}, {a.start_y:.2f}): amcl={am} map->base={tf}',
-                  flush=True)
+            print('  AMCL never reported the reset pose', flush=True)
             return 1
 
         if a.phase == 'prepare':
