@@ -49,17 +49,53 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def robot_footprint(urdf=None):
-    """Half-extents of the base collision box, from the URDF rather than memory.
+    """Half-extents of the REAL chassis, taken from the visual mesh.
 
-    The number that caused the worst error of the day was a 0.30 m radius that
-    was never checked against anything.
+    Not the URDF's <collision> box. That box is 0.45 x 0.45 while the chassis
+    mesh it stands in for is 0.60 x 0.60 -- a 7.5 cm shrink per side, made so
+    the physics engine has a simple convex body to work with. Scoring against
+    it answers "what did gazebo's solver do", which is not the question: the
+    robot that would actually hit something is 0.60 m wide. Using the box made
+    four of nine trials read as clear when the real chassis would have been in
+    contact.
+
+    Falls back to the collision box only if the mesh cannot be read, and says so.
     """
     urdf = urdf or f'{ROOT}/src/my_omnibot_description/urdf/omni_bot.urdf.xacro'
     txt = open(urdf).read()
+    m = re.search(r'<visual>.*?<mesh filename="[^"]*/meshes/([^"/]+)"', txt, re.S)
+    if m:
+        path = f'{ROOT}/src/my_omnibot_description/meshes/{m.group(1)}'
+        try:
+            v = _stl_bounds(path)
+            return (v[0][1] - v[0][0]) / 2.0, (v[1][1] - v[1][0]) / 2.0
+        except Exception as e:
+            print(f'  ! could not read {m.group(1)} ({e}); '
+                  f'falling back to the collision box, which is SMALLER than '
+                  f'the real chassis')
     m = re.search(r'<collision.*?<box size="([\d.]+) ([\d.]+)', txt, re.S)
     if not m:
         raise SystemExit(f'no base collision box found in {urdf}')
     return float(m.group(1)) / 2.0, float(m.group(2)) / 2.0
+
+
+def _stl_bounds(path):
+    """(x_min,x_max),(y_min,y_max) of an ASCII or binary STL."""
+    import struct
+    d = open(path, 'rb').read()
+    if d[:5].lower() == b'solid' and b'facet' in d[:2000]:
+        pts = [[float(x) for x in ln.split()[1:]]
+               for ln in d.decode('ascii', 'ignore').splitlines()
+               if ln.split()[:1] == ['vertex']]
+        V = np.array(pts)
+    else:
+        n = struct.unpack('<I', d[80:84])[0]
+        V = np.zeros((n * 3, 3))
+        for i in range(n):
+            o = 84 + i * 50 + 12
+            for j in range(3):
+                V[i * 3 + j] = struct.unpack('<3f', d[o + j * 12:o + j * 12 + 12])
+    return ((V[:, 0].min(), V[:, 0].max()), (V[:, 1].min(), V[:, 1].max()))
 
 
 def mover_shapes(world):
@@ -246,7 +282,7 @@ def main():
     a = ap.parse_args()
 
     hx, hy = robot_footprint()
-    print(f'robot collision box: {2*hx:.2f} x {2*hy:.2f} m '
+    print(f'robot chassis (visual mesh): {2*hx:.2f} x {2*hy:.2f} m '
           f'(face {min(hx,hy):.3f} m, corner {math.hypot(hx,hy):.3f} m)')
     print(f'world: {os.path.basename(a.world)}   alignment tolerance: {ALIGN_TOL}s\n')
 
