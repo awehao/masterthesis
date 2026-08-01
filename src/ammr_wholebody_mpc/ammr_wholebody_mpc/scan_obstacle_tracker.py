@@ -178,7 +178,22 @@ class ScanObstacleTracker(Node):
         p('use_map_subtraction', True)    # subtract static walls against /map
         p('cluster_gap', 0.30)            # m, split clusters on bigger jump
         p('min_cluster_pts', 2)
-        p('max_cluster_radius', 0.60)     # m, reject bigger blobs (walls)
+        # Reject blobs wider than this as wall segments. 0.60 was chosen when
+        # every mover was a 0.25 m cylinder; it silently deletes the big ones.
+        # `extent` is the furthest return from the cluster's own centroid, so a
+        # body seen broadside contributes half its length:
+        #     dyn_obs_2  1.2 x 0.3  -> 0.60   exactly at the threshold
+        #     dyn_obs_5  1.6 x 0.4  -> 0.80   always discarded
+        # Measured on two contacts with dyn_obs_2: at the closest approach the
+        # CBF had received ZERO surface points for it -- not few, none. The
+        # fixed (0,0)->(17,17) route only ever meets dyn_obs_1 (0.35), which is
+        # why this never showed there. The same filter also deletes the unknown
+        # static clutter, whose boxes run to 2.2 m.
+        #
+        # Walls are already removed upstream by map subtraction with a 0.50 m
+        # inflation, so this is a second line of defence that now costs more
+        # than it saves. 1.2 admits the 1.6 m bar broadside.
+        p('max_cluster_radius', 1.20)     # m, reject bigger blobs (walls)
         p('default_radius', 0.25)         # m, inflate cluster radius up to this
         p('static_inflation', 0.50)       # m, drop hits within this of a wall
                                           # (>= worst-case AMCL error so walls
