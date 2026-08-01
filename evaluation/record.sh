@@ -71,6 +71,7 @@ timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
                  /model/dyn_obs_6/pose \
                  /model/dyn_obs_7/pose /model/dyn_obs_8/pose \
                  /model/dyn_obs_9/pose \
+                 /amcl_pose /odometry/filtered \
     < /dev/null || true
 
 echo "Done. Now analyse with:"
