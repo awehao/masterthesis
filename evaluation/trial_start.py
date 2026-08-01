@@ -31,6 +31,7 @@ than record a run that was never going to move.
     python3 evaluation/trial_start.py --goal-x 17 --goal-y 17
 """
 import argparse
+import math
 import random
 import sys
 import time
@@ -39,6 +40,10 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import (QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy,
                        QoSHistoryPolicy)
+from rclpy.time import Time
+from rclpy.duration import Duration
+
+import tf2_ros
 
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import Path
@@ -53,6 +58,14 @@ LATCH = QoSProfile(depth=1, history=QoSHistoryPolicy.KEEP_LAST,
 class Starter(Node):
     def __init__(self, goal_x, goal_y):
         super().__init__('trial_start')
+        # Everything else in the stack runs on sim time, and tf2's Buffer judges
+        # a transform against the NODE's clock. On wall time the stamps are
+        # decades apart and lookup_transform never returns anything: measured,
+        # AMCL reported the spawn correctly while map->base_footprint came back
+        # as None for 24 s straight, so the spawn check failed on a stack that
+        # was actually localised.
+        self.set_parameters([rclpy.parameter.Parameter(
+            'use_sim_time', rclpy.Parameter.Type.BOOL, True)])
         self.goal = (float(goal_x), float(goal_y))
         self.clock_t = None
         self.amcl = None
@@ -61,11 +74,26 @@ class Starter(Node):
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose',
                                  self._on_amcl, 10)
         self.create_subscription(Path, '/plan', self._on_plan, 10)
+        # map -> base_footprint is what the PLANNER reads. Checking AMCL alone
+        # is not enough: with a spawn away from the origin AMCL was correct and
+        # the planner still believed the robot was at (0, 0), because the EKF
+        # owns that transform and AMCL only nudges it. The whole batch ran and
+        # looked normal while every plan request came from the wrong place.
+        self.tf_buf = tf2_ros.Buffer()
+        self.tf_lis = tf2_ros.TransformListener(self.tf_buf, self,
+                                                spin_thread=False)
         # TRANSIENT_LOCAL so a subscriber that matches late still receives the
         # goal; compatible with the VOLATILE subscribers already out there.
         self.goal_pub = self.create_publisher(PoseStamped, '/goal_pose', LATCH)
         self.init_pub = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10)
+        # The EKF initialises its state at the origin and treats /amcl_pose as a
+        # correction, so a spawn elsewhere converges slowly or not at all before
+        # the trial starts. Measured: spawn (1.82, 17.15), /odom correct, but
+        # map->odom settled at (-1.82, -17.15) and the planner returned "no valid
+        # path" 98 times. set_pose jumps the filter instead of nudging it.
+        self.setpose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, '/set_pose', 10)
 
     # NB: not `_clock`/`_logger`/etc -- rclpy.node.Node sets instance attributes
     # of those names in __init__, which shadow same-named methods and make the
@@ -89,6 +117,15 @@ class Starter(Node):
                 return True
         print(f'  {label}: TIMEOUT after {timeout:.0f} s', flush=True)
         return False
+
+    def robot_xy(self):
+        """The robot's pose in the map frame, or None if TF cannot supply it."""
+        try:
+            tf = self.tf_buf.lookup_transform('map', 'base_footprint',
+                                              Time(), Duration(seconds=0.2))
+        except Exception:
+            return None
+        return (tf.transform.translation.x, tf.transform.translation.y)
 
     def goal_msg(self):
         g = PoseStamped()
@@ -175,15 +212,35 @@ def main():
         p.pose.pose.position.y = a.start_y
         p.pose.pose.orientation.w = 1.0
         n.amcl = None
-        for _ in range(3):
-            n.init_pub.publish(p)
-            if n.wait(lambda: n.amcl is not None and
-                      abs(n.amcl[0] - a.start_x) < 0.5 and
-                      abs(n.amcl[1] - a.start_y) < 0.5,
-                      min(6.0, left()), 'AMCL reset acknowledged'):
+        tf_seen = [None]
+        for _ in range(4):
+            p.header.stamp = n.get_clock().now().to_msg()
+            n.init_pub.publish(p)          # AMCL's particle cloud
+            # Only when the spawn is NOT the origin: the EKF already starts
+            # there, and set_pose also overwrites its covariance, so touching it
+            # needlessly changes the case that every recorded result used.
+            if math.hypot(a.start_x, a.start_y) > 0.05:
+                n.setpose_pub.publish(p)
+
+            def agrees():
+                if n.amcl is None:
+                    return False
+                if (abs(n.amcl[0] - a.start_x) > 0.5
+                        or abs(n.amcl[1] - a.start_y) > 0.5):
+                    return False
+                q = n.robot_xy()
+                tf_seen[0] = q
+                return (q is not None and abs(q[0] - a.start_x) < 0.5
+                        and abs(q[1] - a.start_y) < 0.5)
+
+            if n.wait(agrees, min(6.0, left()), 'AMCL + TF agree with the spawn'):
                 break
         else:
-            print('  AMCL never reported the reset pose', flush=True)
+            am = ('(%.2f, %.2f)' % n.amcl) if n.amcl else 'none'
+            tf = ('(%.2f, %.2f)' % tf_seen[0]) if tf_seen[0] else 'none'
+            print(f'  localisation never reached the spawn '
+                  f'({a.start_x:.2f}, {a.start_y:.2f}): amcl={am} map->base={tf}',
+                  flush=True)
             return 1
 
         if a.phase == 'prepare':
