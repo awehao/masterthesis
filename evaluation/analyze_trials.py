@@ -49,7 +49,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def robot_footprint(urdf=None):
-    """Half-extents of the REAL chassis, taken from the visual mesh.
+    """The REAL chassis, taken from the visual mesh: (radius, is_circle).
 
     Not the URDF's <collision> box. That box is 0.45 x 0.45 while the chassis
     mesh it stands in for is 0.60 x 0.60 -- a 7.5 cm shrink per side, made so
@@ -67,8 +67,7 @@ def robot_footprint(urdf=None):
     if m:
         path = f'{ROOT}/src/my_omnibot_description/meshes/{m.group(1)}'
         try:
-            v = _stl_bounds(path)
-            return (v[0][1] - v[0][0]) / 2.0, (v[1][1] - v[1][0]) / 2.0
+            return _stl_radial(path)
         except Exception as e:
             print(f'  ! could not read {m.group(1)} ({e}); '
                   f'falling back to the collision box, which is SMALLER than '
@@ -79,8 +78,29 @@ def robot_footprint(urdf=None):
     return float(m.group(1)) / 2.0, float(m.group(2)) / 2.0
 
 
+def _stl_radial(path):
+    """(radius, is_circle) from an STL's xy cross-section.
+
+    Checking the SHAPE matters, not just the bounding box: a 0.6 m circle and a
+    0.6 m square have identical bounds, and modelling this chassis as a square
+    added 0.124 m in the corner directions (0.300 -> 0.424), which turned
+    clear passes into reported contacts. Every 30-degree sector of this mesh
+    reaches exactly 0.300, so it is a disc.
+    """
+    (x0, x1), (y0, y1), V = _stl_bounds(path)
+    r = np.hypot(V[:, 0], V[:, 1])
+    th = np.degrees(np.arctan2(V[:, 1], V[:, 0]))
+    peaks = [r[(th >= a) & (th < a + 30)].max()
+             for a in range(-180, 180, 30) if ((th >= a) & (th < a + 30)).any()]
+    rad = float(max(peaks))
+    circle = (max(peaks) - min(peaks)) / rad < 0.05
+    if not circle:
+        raise SystemExit('chassis mesh is not a disc; the analyser assumes one')
+    return rad, True
+
+
 def _stl_bounds(path):
-    """(x_min,x_max),(y_min,y_max) of an ASCII or binary STL."""
+    """(x_min,x_max),(y_min,y_max),vertices of an ASCII or binary STL."""
     import struct
     d = open(path, 'rb').read()
     if d[:5].lower() == b'solid' and b'facet' in d[:2000]:
@@ -95,7 +115,8 @@ def _stl_bounds(path):
             o = 84 + i * 50 + 12
             for j in range(3):
                 V[i * 3 + j] = struct.unpack('<3f', d[o + j * 12:o + j * 12 + 12])
-    return ((V[:, 0].min(), V[:, 0].max()), (V[:, 1].min(), V[:, 1].max()))
+    return ((V[:, 0].min(), V[:, 0].max()),
+            (V[:, 1].min(), V[:, 1].max()), V)
 
 
 def mover_shapes(world):
@@ -139,22 +160,19 @@ def outline(parts, n=32):
     return np.concatenate(pts, 0)
 
 
-def signed_clearance(P, ox, oy, rx, ry, rt, hx, hy):
-    """Signed distance from a body's outline to the ROTATED robot box.
+def signed_clearance(P, ox, oy, rx, ry, rt, R, _unused=None):
+    """Signed distance from a body's outline to the robot DISC of radius R.
 
-    Negative is a real penetration DEPTH, not a flag: an earlier version filled
-    a constant -0.01 whenever anything overlapped, which made fifteen different
-    trials report an identical number and hid how bad each one was.
+    The chassis is a disc (every 30-degree sector of the mesh reaches exactly
+    0.300 m), so the heading does not enter: a disc presents the same profile
+    whichever way it faces. Modelling it as a box added up to 0.124 m in the
+    corner directions and reported contacts that never happened.
+
+    Negative is a real penetration DEPTH, not a flag.
     """
-    c, s = np.cos(-rt), np.sin(-rt)
     dx = (ox[:, None] + P[None, :, 0]) - rx[:, None]
     dy = (oy[:, None] + P[None, :, 1]) - ry[:, None]
-    lx = c[:, None]*dx - s[:, None]*dy
-    ly = s[:, None]*dx + c[:, None]*dy
-    ax, ay = np.abs(lx), np.abs(ly)
-    outside = np.hypot(np.maximum(ax - hx, 0.0), np.maximum(ay - hy, 0.0))
-    inside = -np.minimum(hx - ax, hy - ay)          # depth, negative
-    return np.where((ax <= hx) & (ay <= hy), inside, outside).min(axis=1)
+    return (np.hypot(dx, dy) - R).min(axis=1)
 
 
 def read_bag(path):
@@ -282,8 +300,7 @@ def main():
     a = ap.parse_args()
 
     hx, hy = robot_footprint()
-    print(f'robot chassis (visual mesh): {2*hx:.2f} x {2*hy:.2f} m '
-          f'(face {min(hx,hy):.3f} m, corner {math.hypot(hx,hy):.3f} m)')
+    print(f'robot chassis (visual mesh): disc, radius {hx:.3f} m')
     print(f'world: {os.path.basename(a.world)}   alignment tolerance: {ALIGN_TOL}s\n')
 
     # The batch's own live verdict, recorded by goal_watcher.
