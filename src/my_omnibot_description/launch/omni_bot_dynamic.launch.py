@@ -190,6 +190,19 @@ def generate_launch_description():
         # the behaviour every recorded result used.
         **({} if os.environ.get('YAW_TRACK', '1') == '1' else
            {'Q_yaw': 0.0, 'wz_max': 0.0, 'wz_min': 0.0}),
+        # HORIZON: how far ahead the barrier can see, in control steps of dt.
+        #
+        # At 20 steps x 0.05 s the CBF sees 1.0 s. Against a mover closing at
+        # 0.30 + 0.22 = 0.52 m/s that is 0.52 m of approach, so a 0.45 m
+        # keep-out only becomes active when the obstacle is ~0.97 m away --
+        # 1.3 s before contact. In 1.3 s the only thing the robot can do is
+        # stop, and stopping does not work against something that is still
+        # moving: of 24 contacts measured over 146 trials, 23 were with the
+        # fastest mover and the robot was doing 0.03-0.09 m/s at the moment of
+        # contact while the obstacle did 0.30. It was not cutting a corner --
+        # it had braked, and been driven into. Seeing the whole encounter needs
+        # 2-3 s. The QP grows with N, but there is room: solve time is 0.18 ms.
+        'horizon': int(os.environ.get('HORIZON', '20')),
         'cbf_enable': True,
         'cbf_safe_margin': float(os.environ.get('CBF_SAFE_MARGIN', '0.38')),
         # CBF class-K gain: h_dot >= -alpha*h. Smaller = the barrier engages
