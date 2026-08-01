@@ -160,19 +160,33 @@ def outline(parts, n=32):
     return np.concatenate(pts, 0)
 
 
-def signed_clearance(P, ox, oy, rx, ry, rt, R, _unused=None):
-    """Signed distance from a body's outline to the robot DISC of radius R.
+def signed_clearance(parts, ox, oy, rx, ry, R):
+    """Exact signed distance from the robot DISC to a body, no sampling.
 
-    The chassis is a disc (every 30-degree sector of the mesh reaches exactly
-    0.300 m), so the heading does not enter: a disc presents the same profile
-    whichever way it faces. Modelling it as a box added up to 0.124 m in the
-    corner directions and reported contacts that never happened.
+    The previous version sampled the body's outline and took the nearest point
+    minus R. That is correct only while the robot's CENTRE is outside the body:
+    once it is inside, |centre_dist - r_obs| flips sign and the penetration is
+    under-reported. Cross-checked against a hand calculation on dyn_obs_0
+    (r = 0.25, centre distance 0.233 -> the centre is INSIDE): the sampled
+    version said -0.283, the true value is 0.233 - 0.25 - 0.30 = -0.317.
 
-    Negative is a real penetration DEPTH, not a flag.
+    Each primitive gets its analytic distance field instead -- exact, signed,
+    and faster than sampling. The movers never rotate, so their boxes stay
+    axis-aligned, and the chassis is a disc, so its heading does not enter.
     """
-    dx = (ox[:, None] + P[None, :, 0]) - rx[:, None]
-    dy = (oy[:, None] + P[None, :, 1]) - ry[:, None]
-    return (np.hypot(dx, dy) - R).min(axis=1)
+    best = None
+    for kind, px, py, a, b in parts:
+        dx = (ox + px) - rx
+        dy = (oy + py) - ry
+        if kind == 'cyl':
+            d = np.hypot(dx, dy) - a
+        else:
+            qx = np.abs(dx) - a / 2.0
+            qy = np.abs(dy) - b / 2.0
+            d = (np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0))
+                 + np.minimum(np.maximum(qx, qy), 0.0))
+        best = d if best is None else np.minimum(best, d)
+    return best - R
 
 
 def read_bag(path):
@@ -253,19 +267,18 @@ def analyse(path, world, goal, hx, hy, arrived_csv=None):
         return None
     dur = O[-1, 0] - O[0, 0]
     shapes = mover_shapes(world)
-    OUT = {k: outline(v) for k, v in shapes.items()}
 
     worst, worst_who, cover = 1e9, None, []
     for name, Aa in D.items():
-        if name not in OUT or len(Aa) < 5:
+        if name not in shapes or len(Aa) < 5:
             continue
         idx = np.searchsorted(O[:, 0], Aa[:, 0]).clip(0, len(O) - 1)
         ok = np.abs(O[idx, 0] - Aa[:, 0]) <= ALIGN_TOL
         cover.append(ok.mean())
         if not ok.any():
             continue
-        v = signed_clearance(OUT[name], Aa[ok, 1], Aa[ok, 2],
-                             O[idx[ok], 1], O[idx[ok], 2], O[idx[ok], 3], hx, hy)
+        v = signed_clearance(shapes[name], Aa[ok, 1], Aa[ok, 2],
+                             O[idx[ok], 1], O[idx[ok], 2], hx)
         if v.min() < worst:
             worst, worst_who = v.min(), name
 
