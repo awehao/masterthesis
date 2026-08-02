@@ -1095,3 +1095,34 @@ nav2_amcl 的正常行為(位移未達門檻就不更新),不是定位失效。
 
 **LiDAR 是 360°**(360 束,±π),不是 180°。側後方盲區無法解釋那 1/6 覆蓋率為 0
 的接觸,成因仍未知。
+
+---
+
+## 架構稽核(對照原始碼 + 向執行中節點實查)
+
+不是憑印象複述,是 `ros2 param get` 問正在跑批次 K 的 `/gmpc_controller`、
+`/scan_obstacle_tracker`、`/global_costmap`、`/velocity_smoother`,再回頭比對檔案。
+查出五處我先前的敘述與實際不符:
+
+| 先前敘述 | 實際 | 後果 |
+|---|---|---|
+| `vx_max = 0.30` | **0.35** | 逃逸速度被低估 0.05 m/s,CBF 可行域邊界的估計偏保守 |
+| `r_eff = R + 0.60`(全部) | 動態 0.60、**靜態牆 0.38** | 兩類障礙物 keep-out 不同,先前當成同一個 |
+| 車體 = 圓盤 r=0.300 | 分析器是;**gz 物理碰撞體是 0.45×0.45 方盒** | 見下 |
+| GMPC → `/cmd_vel` | 中間有 **velocity_smoother** | 速度上限同,加速度上限更鬆(1.5/1.0/2.0),行為上直通 |
+| `Q_yaw` 來自 yaml | yaml 是 7.0,launch 覆寫為 0.0 | 有效值無誤,來源記錯 |
+
+其餘全部核對相符:horizon 20 @ 20 Hz、Q_xy 15、R 1.0、α 0.5、剪枝 1.2/6/2、
+vel_margin 0、yaw_lookahead 1.2、plan_blend 1.0、st/detour/stuck 皆關;
+tracker 全部參數;規劃 `robot_radius 0.33` / `inflation 0.70` / `/scan_filtered` /
+重規劃 3.0 s(由 `goal_to_plan_relay` 直接呼叫 planner —— 本 launch 沒有
+bt_navigator 也沒有 controller_server,所以 nav2 預設 BT 的 1 Hz replan 與
+local_costmap 設定都是死的);場景 18 已知 + 7 未知 + 10 移動體,速度 0.10–0.18。
+
+### 待處理:碰撞體與量測不一致
+
+gz 用 0.45×0.45 方盒(半邊 0.225),分析器用真實車體 0.300 m 圓盤。方盒半邊小於
+圓盤半徑,所以**報表上的部分「接觸」在模擬物理裡並未真的碰撞**,是以真車尺寸重新
+判定出來的。對論文而言用真車是正確的;但要讓物理與量測一致,URDF 的 collision
+應改為 r=0.300 的圓柱。**現在不能改**:改了之後先前所有批次都不可比。等 α 對照
+做完再一併處理,並重跑基準。
