@@ -164,6 +164,8 @@ class GMPCNode(Node):
         self.declare_parameter('st_growth', 0.02)
         # Grow the CBF keep-out with the horizon step to discount far-future
         # constant-velocity predictions. 0 = the validated constant margin.
+        # See gmpc.py: keep-out that grows with the closing rate.
+        self.declare_parameter('cbf_vel_margin_gain', 0.0)
         self.declare_parameter('cbf_margin_growth', 0.0)
         # Prefer giving way FORWARD rather than backward when the CBF pushes the
         # robot off the reference. 0 = no preference (validated behaviour).
@@ -300,6 +302,8 @@ class GMPCNode(Node):
             st_growth=float(self.get_parameter('st_growth').value),
             cbf_margin_growth=float(
                 self.get_parameter('cbf_margin_growth').value),
+            cbf_vel_margin_gain=float(
+                self.get_parameter('cbf_vel_margin_gain').value),
             prog_weight=float(self.get_parameter('prog_weight').value),
         )
         self.mpc = GMPC(cfg)

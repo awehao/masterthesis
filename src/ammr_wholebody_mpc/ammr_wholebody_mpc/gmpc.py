@@ -127,6 +127,15 @@ class GMPCConfig:
     #     r_eff(k) = r_i + m_i * (1 + cbf_margin_growth * k)
     # 0.0 keeps the constant margin the validated configuration uses.
     cbf_margin_growth : float = 0.0
+    # Extra keep-out proportional to how fast the gap is CLOSING [s]:
+    #     r_eff += cbf_vel_margin_gain * max(0, closing_rate)
+    # A fixed margin has to be sized for the worst approach and then costs that
+    # width everywhere; at 0.75 m the doorways became infeasible and contacts
+    # went UP. This spends the margin only when something is actually coming at
+    # the robot. Braking distance sets the scale: 0.52 m/s against a_y = 0.6
+    # needs 0.225 m, and the perception path adds ~0.3 s of lag. 0.0 reproduces
+    # the fixed-margin behaviour every earlier result used.
+    cbf_vel_margin_gain : float = 0.0
     # ---- Forward-progress preference ---------------------------------------
     # Linear reward on velocity projected along the reference tangent:
     #     J -= prog_weight * sum_k  t_ref(k) . R(theta_k) v_body(k)
@@ -529,6 +538,34 @@ def _build_cbf_horizon(cfg          : GMPCConfig,
             # extrapolation error and inflating it would just squeeze corridors.
             r_eff = float(obs['radius']) + m_i * (
                 1.0 if static_i else 1.0 + cfg.cbf_margin_growth * k)
+
+            # ... and grows again with how fast the gap is CLOSING.
+            #
+            # A fixed keep-out has to be sized for the worst approach, which
+            # then squeezes every corridor: at 0.75 m measured arrival dropped
+            # and contacts rose, because a 2.0 m doorway leaves only 0.5 m of
+            # feasible corridor and the QP falls back on slack. Sizing it by
+            # the closing rate instead spends the margin only where it is
+            # needed. The amount comes from braking distance: at a_y = 0.6 and
+            # a closing rate of 0.52 m/s that is 0.52^2/(2*0.6) = 0.225 m, and
+            # the perception path adds about 0.3 s of lag = 0.16 m. Measured
+            # over 18 contacts, acceleration sat at its limit for 26% of the
+            # 1.5 s before impact (83% in the worst trial) -- the barrier was
+            # not being ignored, it was being asked for more deceleration than
+            # the base can produce.
+            #
+            # Only the CLOSING component counts: an obstacle crossing sideways
+            # needs no extra room, and inflating it would cost corridor width
+            # for nothing. Static points are excluded for the same reason the
+            # horizon growth excludes them.
+            if not static_i and cfg.cbf_vel_margin_gain > 0.0:
+                n2 = float(diff @ diff)
+                if n2 > 1e-9:
+                    u = diff / math.sqrt(n2)          # obstacle -> robot
+                    v_rob = R_k @ xi_ref_win[k][:2]   # reference twist, world
+                    closing = float((np.array([vox, voy]) - v_rob) @ u)
+                    if closing > 0.0:
+                        r_eff += cfg.cbf_vel_margin_gain * closing
 
             # Barrier value
             h_k = float(diff @ diff - r_eff * r_eff)

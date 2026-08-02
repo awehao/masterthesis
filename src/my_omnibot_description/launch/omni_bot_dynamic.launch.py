@@ -260,6 +260,11 @@ def generate_launch_description():
         'st_sigma0': float(os.environ.get('ST_SIGMA0', '0.6')),
         'st_growth': float(os.environ.get('ST_GROWTH', '0.02')),
         'cbf_margin_growth': float(os.environ.get('CBF_MARGIN_GROWTH', '0.0')),
+        # Extra keep-out proportional to the closing rate [s]. A fixed margin
+        # must be sized for the worst approach and then costs that width in
+        # every corridor: at 0.75 m arrival fell and contacts rose, because a
+        # 2.0 m doorway leaves only 0.5 m of feasible corridor. 0 = fixed.
+        'cbf_vel_margin_gain': float(os.environ.get('CBF_VEL_MARGIN', '0.0')),
         'prog_weight': float(os.environ.get('PROG_WEIGHT', '0.0')),
         # Committed detour (detour.py): DETOUR=1 to enable.
         'detour_enable': os.environ.get('DETOUR', '0') == '1',
