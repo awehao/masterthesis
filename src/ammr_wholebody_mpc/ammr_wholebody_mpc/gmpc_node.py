@@ -95,6 +95,14 @@ class GMPCNode(Node):
         # Reference heading from a look-ahead chord instead of the local path
         # segment (metres). 0 = the validated single-segment tangent.
         self.declare_parameter('ref_yaw_lookahead', 0.0)
+        # Drop the heading reference entirely: every horizon sample keeps the
+        # robot's current heading, so the reference twist's yaw rate is exactly
+        # zero and nothing is fed forward. Supersedes ref_yaw_lookahead and
+        # ref_yaw_rate_max, both of which only shape a rotation that is still
+        # commanded. Q_yaw = 0 does not do this -- see path_processor.
+        # wz stays free: the QP may still rotate when rotation helps the
+        # barrier, it is just never asked to track a path direction.
+        self.declare_parameter('ref_yaw_hold', False)
         # Cap on how fast the REFERENCE heading may move [rad/s]; 0 = no cap.
         #
         # The heading reference is a path direction, and nothing in its
@@ -248,6 +256,7 @@ class GMPCNode(Node):
             self.get_parameter('ref_yaw_lookahead').value)
         self.ref_yaw_rate_max = float(
             self.get_parameter('ref_yaw_rate_max').value)
+        self.ref_yaw_hold = bool(self.get_parameter('ref_yaw_hold').value)
         self._ref_yaw_prev   = None      # last heading actually asked for
         self._ref_yaw_prev_t = None
         self.plan_blend_s = float(self.get_parameter('plan_blend_s').value)
@@ -631,6 +640,7 @@ class GMPCNode(Node):
             path_xyth, robot_xyth,
             N=self.N, dt=self.dt, v_nom=self.v_nom,
             yaw_lookahead=self.ref_yaw_lookahead,
+            yaw_hold=self.ref_yaw_hold,
         )
         a = self._blend_alpha()
         if a is not None:
@@ -638,6 +648,7 @@ class GMPCNode(Node):
                 self._prev_path_xyth, robot_xyth,
                 N=self.N, dt=self.dt, v_nom=self.v_nom,
                 yaw_lookahead=self.ref_yaw_lookahead,
+                yaw_hold=self.ref_yaw_hold,
             )
             X_ref_win, xi_ref_win = blend_reference(
                 X_old, xi_old, X_ref_win, xi_ref_win, a)

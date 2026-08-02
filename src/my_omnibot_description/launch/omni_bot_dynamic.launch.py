@@ -286,6 +286,13 @@ def generate_launch_description():
         'detour_side_proj': os.environ.get('DETOUR_SIDE_PROJ', '1') == '1',
         # Reference heading from a look-ahead chord; 0 = validated tangent.
         'ref_yaw_lookahead': float(os.environ.get('YAW_LOOKAHEAD', '0.0')),
+        # YAW_HOLD=1 removes the heading reference outright: no path direction
+        # is ever tracked and the reference yaw rate is exactly zero, so nothing
+        # rotational is fed forward. This is NOT what Q_yaw=0 did -- that only
+        # dropped the penalty, while the solver kept emitting xi_ref's yaw rate,
+        # and batch K span a median 2387 deg per trial because of it. Rotation
+        # itself stays available to the QP; it is simply never demanded.
+        'ref_yaw_hold': os.environ.get('YAW_HOLD', '0') == '1',
         # Cap the reference heading's slew rate [rad/s]; 0 = uncapped, which is
         # what every result so far used. Replaying recorded runs shows the
         # uncapped reference demanding up to 26 rad/s against wz_max = 0.80.

@@ -72,7 +72,8 @@ def build_reference_window(path_xyth : np.ndarray,
                            N         : int,
                            dt        : float,
                            v_nom     : float,
-                           yaw_lookahead: float = 0.0
+                           yaw_lookahead: float = 0.0,
+                           yaw_hold     : bool  = False
                            ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Parameters
@@ -150,7 +151,22 @@ def build_reference_window(path_xyth : np.ndarray,
         sample_xyth[k, 1] = (1.0 - t) * path_xyth[j, 1] + t * path_xyth[j + 1, 1]
 
         # Yaw from the path: local tangent, or a look-ahead chord (see docstring)
-        if yaw_lookahead > 1e-6:
+        #
+        # yaw_hold overrides both: every sample keeps the robot's CURRENT
+        # heading, so consecutive X_ref differ by a pure translation and the
+        # third component of xi_ref is identically zero.
+        #
+        # Q_yaw = 0 does NOT achieve this. It removes the PENALTY on heading
+        # error, but the solver returns u = xi_ref[0] + delta, so whatever
+        # angular rate the path's heading implies is fed straight to the base.
+        # Measured on a gentle 3 m arc: 0.100 rad/s with a 1.2 m look-ahead
+        # chord and 0.158 rad/s peak from raw grid tangents -- neither is zero,
+        # which is why batch K span a median of 2387 deg per trial with the
+        # heading weight already at zero. The base is omnidirectional and the
+        # lidar is 360 deg, so no part of the task needs a heading at all.
+        if yaw_hold:
+            dx = dy = 0.0
+        elif yaw_lookahead > 1e-6:
             ax, ay = _interp_xy(path_xyth, cum_s, s)
             bx, by = _interp_xy(path_xyth, cum_s,
                                 min(s + yaw_lookahead, total_s))
@@ -165,7 +181,9 @@ def build_reference_window(path_xyth : np.ndarray,
         else:
             dx = path_xyth[j + 1, 0] - path_xyth[j, 0]
             dy = path_xyth[j + 1, 1] - path_xyth[j, 1]
-        if dx * dx + dy * dy > 1e-9:
+        if yaw_hold:
+            sample_xyth[k, 2] = float(robot_xyth[2])
+        elif dx * dx + dy * dy > 1e-9:
             sample_xyth[k, 2] = float(np.arctan2(dy, dx))
         else:
             sample_xyth[k, 2] = path_xyth[j, 2]
