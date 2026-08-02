@@ -171,45 +171,6 @@ def generate_launch_description():
         # 0.08 m of real buffer. One control period at a 0.5 m/s closing speed
         # is already 0.025 m, so 0.08 leaves almost nothing for perception
         # latency -- the measured graze stopped at exactly 0.300 m, i.e. exactly
-        # touching. Env-overridable so the trade against passage width can be
-        # tested; the default is unchanged, which is what the recorded results
-        # used.
-        # YAW_TRACK=0 stops the controller steering the heading at all.
-        #
-        # The base is omnidirectional and the lidar is 360 deg, so nothing about
-        # the task needs the robot to face where it is going: vx and vy do the
-        # driving. Slaving yaw to the path therefore buys nothing, while giving
-        # the QP a nearly free degree of freedom -- and whenever the CBF tightens
-        # the position constraints it spends that freedom on rotation. Measured
-        # on a failing traverse: the heading reference asked for 1355 deg of
-        # rotation over 100 s and the robot turned 4981 deg, with wz saturated
-        # 58% of the time, while making no progress at all.
-        #
-        # 0 zeroes the heading weight AND the yaw rate limit, so the degree of
-        # freedom is removed rather than merely discouraged.
-        #
-        # DEFAULT IS NOW 0. On the fixed (0,0)->(17,17) traverse the two arms
-        # looked like a trade -- 146 paired trials gave 632 deg of rotation with
-        # tracking versus 0 without, faster without but with more contacts. On
-        # RANDOM traverses, which turn more and pass more doorways, tracking
-        # collapses: 3375 deg median over the first five trials and 13990 deg on
-        # one of them, thirty-nine full revolutions in 52 m, and the two trials
-        # that failed to arrive were the two that turned most. The fixed route
-        # is nearly a straight diagonal, so it never exposed this.
-        #
-        # Nothing in the task needs a heading: the base is omnidirectional and
-        # the lidar is 360 deg. Set YAW_TRACK=1 to restore the old behaviour for
-        # comparison against results recorded before this change.
-        # Q_yaw ONLY. An earlier version also zeroed wz_max/wz_min, which does
-        # not mean "stop steering the heading" -- it means "forbid rotation".
-        # The robot then kept whatever heading it spawned with, so its velocity
-        # envelope (vx +0.30 / -0.20, vy +-0.25) was frozen in the WORLD frame,
-        # and a goal behind it could only be approached in reverse at 0.20 m/s
-        # while sideways was 0.25. Measured: 190 s inside a 0.9 x 1.4 m box with
-        # vy chattering between +-0.25 and no progress. Leaving wz free lets the
-        # QP turn when turning helps; the zero weight only stops the path
-        # tangent from dragging the heading around.
-        **({} if os.environ.get('YAW_TRACK', '0') == '1' else {'Q_yaw': 0.0}),
         # HORIZON: how far ahead the barrier can see, in control steps of dt.
         #
         # At 20 steps x 0.05 s the CBF sees 1.0 s. Against a mover closing at
@@ -285,18 +246,6 @@ def generate_launch_description():
         'detour_clear_pad': float(os.environ.get('DETOUR_CLEAR_PAD', '0.05')),
         'detour_side_proj': os.environ.get('DETOUR_SIDE_PROJ', '1') == '1',
         # Reference heading from a look-ahead chord; 0 = validated tangent.
-        'ref_yaw_lookahead': float(os.environ.get('YAW_LOOKAHEAD', '0.0')),
-        # YAW_HOLD=1 removes the heading reference outright: no path direction
-        # is ever tracked and the reference yaw rate is exactly zero, so nothing
-        # rotational is fed forward. This is NOT what Q_yaw=0 did -- that only
-        # dropped the penalty, while the solver kept emitting xi_ref's yaw rate,
-        # and batch K span a median 2387 deg per trial because of it. Rotation
-        # itself stays available to the QP; it is simply never demanded.
-        'ref_yaw_hold': os.environ.get('YAW_HOLD', '0') == '1',
-        # Cap the reference heading's slew rate [rad/s]; 0 = uncapped, which is
-        # what every result so far used. Replaying recorded runs shows the
-        # uncapped reference demanding up to 26 rad/s against wz_max = 0.80.
-        'ref_yaw_rate_max': float(os.environ.get('YAW_RATE_MAX', '0.0')),
         # Cross-fade seconds when a new /plan arrives; 0 = adopt instantly.
         'plan_blend_s': float(os.environ.get('PLAN_BLEND', '0.0')),
         # Hold still when blocked instead of pushing a reference that insists

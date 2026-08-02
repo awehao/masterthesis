@@ -2,7 +2,7 @@
 # Scan the CBF class-K gain on the 20 m floor: how EARLY does the barrier act?
 #
 # (run_alpha_sweep.sh is the older 20 m random-room version, held at the detour
-# config with PLAN_BLEND and YAW_LOOKAHEAD off. This one uses the bigarena
+# config with PLAN_BLEND off. This one uses the bigarena
 # configuration and is not comparable with it.)
 #
 # Why alpha and not a longer horizon. Of 23 contacts measured over 146 trials,
@@ -43,7 +43,7 @@ for A in 1.5 0.9 0.5 0.3; do
   mkdir -p "$out"
   export BIGARENA=1 TRAJ=bigarena_traffic GUI=0
   export PLANNER_SCAN=/scan_filtered PLAN_BLEND=1.0
-  export YAW_LOOKAHEAD=1.2 YAW_RATE_MAX=0.8 CBF_SAFE_MARGIN=0.45
+  export CBF_SAFE_MARGIN=0.45
   export CBF_ALPHA="$A"
   "${HERE}/run_omnibot_dynamic.sh" "$N" "$DUR" 17 17 gmpc_scan
   cp "$CSV" "${out}/results.csv" 2>/dev/null

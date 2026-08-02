@@ -31,7 +31,7 @@ for W in 500 1500 5000 15000 50000; do
   mkdir -p "$out"
   export BIGARENA=1 TRAJ=bigarena_traffic GUI=0
   export PLANNER_SCAN=/scan_filtered PLAN_BLEND=1.0 CBF_ALPHA=1.5
-  export YAW_LOOKAHEAD=1.2 YAW_RATE_MAX=0.8 CBF_SAFE_MARGIN=0.45
+  export CBF_SAFE_MARGIN=0.45
   export CBF_SLACK_W="$W"
   "${HERE}/run_omnibot_dynamic.sh" "$N" "$DUR" 17 17 gmpc_scan
   cp "$CSV" "${out}/results.csv" 2>/dev/null

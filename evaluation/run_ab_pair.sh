@@ -8,5 +8,5 @@ echo "=== GROUP A: detour only (baseline at dyn_obs_1=0.15) ==="
 DETOUR=1 ./evaluation/run_detour_ab.sh ab_A
 rm -f /tmp/omnibot_dynamic.pid
 echo "=== GROUP B: + plan blend 1.0 s + yaw lookahead 0.7 m ==="
-DETOUR=1 PLAN_BLEND=1.0 YAW_LOOKAHEAD=0.7 ./evaluation/run_detour_ab.sh ab_B
+DETOUR=1 PLAN_BLEND=1.0 ./evaluation/run_detour_ab.sh ab_B
 echo "=== BOTH DONE ==="

@@ -64,7 +64,6 @@ class GMPCNode(Node):
         self.declare_parameter('az_max',  2.0)
 
         self.declare_parameter('Q_xy',    10.0)   # forward (body-x) tracking weight
-        self.declare_parameter('Q_yaw',    5.0)
         # Lateral (body-y) tracking weight, separate from forward. Relaxing it
         # lets the robot, after the CBF pushes it off-path to dodge, merge back
         # to the global plan along a GENTLE arc instead of snapping the heading
@@ -92,34 +91,6 @@ class GMPCNode(Node):
         self.declare_parameter('pose_lpf_alpha', 0.0)
         self.declare_parameter('plan_topic',       '/plan')
         self.declare_parameter('cmd_vel_topic',    '/cmd_vel')
-        # Reference heading from a look-ahead chord instead of the local path
-        # segment (metres). 0 = the validated single-segment tangent.
-        self.declare_parameter('ref_yaw_lookahead', 0.0)
-        # Drop the heading reference entirely: every horizon sample keeps the
-        # robot's current heading, so the reference twist's yaw rate is exactly
-        # zero and nothing is fed forward. Supersedes ref_yaw_lookahead and
-        # ref_yaw_rate_max, both of which only shape a rotation that is still
-        # commanded. Q_yaw = 0 does not do this -- see path_processor.
-        # wz stays free: the QP may still rotate when rotation helps the
-        # barrier, it is just never asked to track a path direction.
-        self.declare_parameter('ref_yaw_hold', False)
-        # Cap on how fast the REFERENCE heading may move [rad/s]; 0 = no cap.
-        #
-        # The heading reference is a path direction, and nothing in its
-        # construction knows what the base can actually do. Replaying recorded
-        # runs through build_reference_window at the control rate shows it
-        # demanding up to 26 rad/s against a wz_max of 0.80 -- 33x the limit --
-        # in 6.4% of cycles, and asking for 805 deg of total rotation on a run
-        # that needs about 200. The base answers at saturation and cannot
-        # arrive before the next step lands, which is the in-place spinning
-        # seen on screen: it is present in every run and only sometimes
-        # compounds into a sustained one.
-        #
-        # Capping the reference at what the actuator can deliver makes the
-        # demand trackable by construction. The cap applies both along the
-        # horizon and BETWEEN cycles, since it is the cycle-to-cycle step that
-        # the robot chases.
-        self.declare_parameter('ref_yaw_rate_max', 0.0)
         # Cross-fade the tracked reference from the previous plan to the new one
         # over this many seconds. 0 = adopt the new plan instantly (validated
         # behaviour). The global planner republishes every 3 s and a quarter of
@@ -252,13 +223,6 @@ class GMPCNode(Node):
         self.pose_lpf_alpha   = float(self.get_parameter('pose_lpf_alpha').value)
         self._pose_filt       = None        # EMA state for the robot pose
         self.goal_tol_xy      = float(self.get_parameter('goal_tolerance_xy').value)
-        self.ref_yaw_lookahead = float(
-            self.get_parameter('ref_yaw_lookahead').value)
-        self.ref_yaw_rate_max = float(
-            self.get_parameter('ref_yaw_rate_max').value)
-        self.ref_yaw_hold = bool(self.get_parameter('ref_yaw_hold').value)
-        self._ref_yaw_prev   = None      # last heading actually asked for
-        self._ref_yaw_prev_t = None
         self.plan_blend_s = float(self.get_parameter('plan_blend_s').value)
         self.stuck_window_s = float(self.get_parameter('stuck_window_s').value)
         self.stuck_progress_m = float(self.get_parameter('stuck_progress_m').value)
@@ -276,7 +240,10 @@ class GMPCNode(Node):
         self.tf_timeout_s     = float(self.get_parameter('tf_timeout').value)
 
         Qxy  = float(self.get_parameter('Q_xy').value)
-        Qyaw = float(self.get_parameter('Q_yaw').value)
+        # No heading is ever referenced (see path_processor), so heading error
+        # is not a tracking objective and carries no weight. Kept as an explicit
+        # zero rather than deleted: Q stays the 3x3 the SE(2) formulation needs.
+        Qyaw = 0.0
         Qy   = float(self.get_parameter('Q_y').value)
         if Qy <= 0.0:
             Qy = Qxy                                   # default: isotropic xy
@@ -404,205 +371,6 @@ class GMPCNode(Node):
         )
 
     # ----------------------------------------------------------------------
-    def _limit_ref_yaw_rate(self, X_ref, xi_ref):
-        """Slew-limit the reference heading to something the base can follow.
-
-        Two limits, because two different things go wrong without them:
-
-        * BETWEEN cycles -- the reference is rebuilt from scratch every 50 ms
-          against the live pose, so it can step by any amount from one cycle to
-          the next. That step is what the robot chases at saturation, and the
-          measured demand reaches 26 rad/s against a 0.80 rad/s base.
-        * ALONG the horizon -- a reference that rotates faster than wz_max is
-          infeasible for the QP, which then spends its authority on yaw and
-          tracks the position worse.
-
-        The positions are untouched: only the heading column is re-shaped, and
-        xi_ref's yaw rate is rebuilt from the limited sequence so the feed-
-        forward stays consistent with it.
-        """
-        if self.ref_yaw_rate_max <= 0.0:
-            return X_ref, xi_ref
-
-        def wrap(a):
-            return (a + np.pi) % (2.0 * np.pi) - np.pi
-
-        xyth = np.array([to_xytheta(X) for X in X_ref])       # (N+1, 3)
-        th = xyth[:, 2].copy()
-        now = self.get_clock().now().nanoseconds * 1e-9
-
-        if self._ref_yaw_prev is not None:
-            # Elapsed time, but never credit more than a few cycles: after a
-            # stall the robot has not been turning, so it must not be handed a
-            # correspondingly large jump.
-            elapsed = min(max(now - self._ref_yaw_prev_t, 0.0), 5.0 * self.dt)
-            cap = self.ref_yaw_rate_max * elapsed
-            th[0] = self._ref_yaw_prev + np.clip(
-                wrap(th[0] - self._ref_yaw_prev), -cap, cap)
-
-        step = self.ref_yaw_rate_max * self.dt
-        for k in range(1, th.shape[0]):
-            th[k] = th[k - 1] + np.clip(wrap(th[k] - th[k - 1]), -step, step)
-
-        self._ref_yaw_prev, self._ref_yaw_prev_t = float(th[0]), now
-
-        X_out = np.stack([from_xytheta(xyth[k, 0], xyth[k, 1], th[k])
-                          for k in range(th.shape[0])])
-        xi_out = xi_ref.copy()
-        xi_out[:-1, 2] = np.diff(th) / self.dt
-        xi_out[-1, 2] = xi_out[-2, 2]
-        return X_out, xi_out
-
-    def _blend_alpha(self):
-        """Fade weight in [0,1) for the new plan, or None when not fading.
-
-        1.0 means the fade is over, so it is reported as None and the previous
-        path is dropped -- that keeps the common case free of the second
-        reference build.
-        """
-        if (self.plan_blend_s <= 0.0 or self._prev_path_xyth is None
-                or self._blend_t0 is None):
-            return None
-        dt = (self.get_clock().now() - self._blend_t0).nanoseconds * 1e-9
-        if dt < 0.0 or dt >= self.plan_blend_s:
-            self._prev_path_xyth = None
-            self._blend_t0 = None
-            return None
-        return dt / self.plan_blend_s
-
-    def _hold_if_stuck(self, dist_to_goal) -> bool:
-        """Stop and wait when the route is blocked, rather than keep pushing.
-
-        Detection is deliberately about OUTCOME, not cause: if the distance to
-        the goal has not fallen over a whole window, the robot is not getting
-        anywhere, whatever the reason. It only counts as blocked when the CBF is
-        also active -- otherwise a robot that is simply slow, or circling a wide
-        detour, would be mistaken for a stuck one.
-
-        Holding releases as soon as min_h recovers, which for a patrolling
-        obstacle happens on its own, and is capped so a permanent blockage does
-        not become a permanent stop: after the cap the robot resumes and the
-        detector starts again from scratch.
-
-        Returns True if the caller should publish zero and skip this step.
-        """
-        if self.stuck_window_s <= 0.0:
-            return False
-        now = self.get_clock().now().nanoseconds * 1e-9
-        self._goal_hist.append((now, dist_to_goal))
-        while self._goal_hist and now - self._goal_hist[0][0] > self.stuck_window_s:
-            self._goal_hist.popleft()
-
-        h = self._last_min_h if self._last_min_h is not None else 9.9
-        if self._holding_since is not None:
-            held = now - self._holding_since
-            if h > self.stuck_release_h or held > self.stuck_max_hold_s:
-                self.get_logger().info(
-                    f'\033[1;32mresuming\033[0m after holding {held:.1f} s '
-                    f'(min_h={h:.2f})')
-                self._holding_since = None
-                self._goal_hist.clear()
-                return False
-            self._publish_zero()
-            return True
-
-        if (len(self._goal_hist) > 10
-                and now - self._goal_hist[0][0] >= self.stuck_window_s * 0.95):
-            progress = self._goal_hist[0][1] - dist_to_goal
-            if progress < self.stuck_progress_m and h < self.cbf_danger_hold:
-                self.get_logger().warn(
-                    f'\033[1;33mblocked\033[0m: {progress:+.2f} m of progress in '
-                    f'{self.stuck_window_s:.0f} s with min_h={h:.2f} -- holding')
-                self._holding_since = now
-                self._publish_zero()
-                return True
-        return False
-
-    def _plan_cb(self, msg: Path):
-        if len(msg.poses) == 0:
-            self.get_logger().warn('Received empty plan')
-        if (self.plan_blend_s > 0.0 and self.latest_path is not None
-                and len(self.latest_path.poses) >= 2 and len(msg.poses) >= 2):
-            # Keep the outgoing path so the reference can cross-fade instead of
-            # teleporting. Restarting the fade on every plan is deliberate: a
-            # second jump during a fade should also be smoothed, not snapped to.
-            self._prev_path_xyth = path_msg_to_xyth(self.latest_path)
-            self._blend_t0 = self.get_clock().now()
-        self.latest_path = msg
-        # New plan means a new goal (or continuous replan) — re-arm the arrival
-        # detector so the next arrival also gets logged.
-        self._arrived = False
-
-    def _obstacles_cb(self, msg: Float32MultiArray):
-        """Flat [x, y, r, vx, vy, ...] (5 floats per obstacle) in global frame."""
-        data = list(msg.data)
-        stride = 5
-        n = len(data) // stride
-        self._obstacles = [
-            {'x':      float(data[stride*i + 0]),
-             'y':      float(data[stride*i + 1]),
-             'radius': float(data[stride*i + 2]),
-             'vx':     float(data[stride*i + 3]),
-             'vy':     float(data[stride*i + 4])}
-            for i in range(n)
-        ]
-
-    def _static_obstacles_cb(self, msg: Float32MultiArray):
-        """Nearest WALL points (v=0) from the tracker. Same wire format as the
-        dynamic obstacles; merged into the CBF set so the controller doesn't
-        dodge a moving obstacle straight into static geometry."""
-        data = list(msg.data)
-        stride = 5
-        n = len(data) // stride
-        self._static_obstacles = [
-            {'x':      float(data[stride*i + 0]),
-             'y':      float(data[stride*i + 1]),
-             'radius': float(data[stride*i + 2]),
-             'vx':     0.0,
-             'vy':     0.0}
-            for i in range(n)
-        ]
-
-    def _publish_zero(self):
-        self.cmd_pub.publish(Twist())
-        self.xi_prev = np.zeros(3)
-
-    @staticmethod
-    def _tf_to_xyth(tf: TransformStamped) -> np.ndarray:
-        t = tf.transform.translation
-        r = tf.transform.rotation
-        return np.array([t.x, t.y, quaternion_to_yaw(r.x, r.y, r.z, r.w)])
-
-    def _lookup_robot_pose(self):
-        try:
-            tf = self.tf_buffer.lookup_transform(
-                self.global_frame, self.base_frame,
-                rclpy.time.Time(),
-                rclpy.duration.Duration(seconds=self.tf_timeout_s),
-            )
-        except (tf2_ros.LookupException,
-                tf2_ros.ConnectivityException,
-                tf2_ros.ExtrapolationException) as e:
-            self.get_logger().warn(
-                f'TF {self.global_frame}->{self.base_frame} failed: {e}',
-                throttle_duration_sec=2.0)
-            return None
-        pose = self._tf_to_xyth(tf)
-        a = self.pose_lpf_alpha
-        if a > 0.0:
-            if self._pose_filt is None:
-                self._pose_filt = pose.copy()
-            else:
-                f = self._pose_filt
-                f[0] = a * f[0] + (1.0 - a) * pose[0]
-                f[1] = a * f[1] + (1.0 - a) * pose[1]
-                # yaw via shortest-angle increment (avoid ±pi wrap artefacts)
-                dyaw = np.arctan2(np.sin(pose[2] - f[2]), np.cos(pose[2] - f[2]))
-                f[2] = f[2] + (1.0 - a) * dyaw
-            pose = self._pose_filt.copy()
-        return pose
-
-    # ----------------------------------------------------------------------
     def _control_step(self):
         # 0. Need a plan
         if self.latest_path is None or len(self.latest_path.poses) < 2:
@@ -639,20 +407,15 @@ class GMPCNode(Node):
         X_ref_win, xi_ref_win = build_reference_window(
             path_xyth, robot_xyth,
             N=self.N, dt=self.dt, v_nom=self.v_nom,
-            yaw_lookahead=self.ref_yaw_lookahead,
-            yaw_hold=self.ref_yaw_hold,
         )
         a = self._blend_alpha()
         if a is not None:
             X_old, xi_old = build_reference_window(
                 self._prev_path_xyth, robot_xyth,
                 N=self.N, dt=self.dt, v_nom=self.v_nom,
-                yaw_lookahead=self.ref_yaw_lookahead,
-                yaw_hold=self.ref_yaw_hold,
             )
             X_ref_win, xi_ref_win = blend_reference(
                 X_old, xi_old, X_ref_win, xi_ref_win, a)
-        X_ref_win, xi_ref_win = self._limit_ref_yaw_rate(X_ref_win, xi_ref_win)
 
         # 4. Solve
         X_now  = from_xytheta(*robot_xyth)

@@ -8,9 +8,8 @@ trajectory by:
   1. Finding the path point closest to the robot (projection).
   2. Walking forward along the path, sampling at arclength step  v_nom · dt
      for  N+1  samples.
-  3. Replacing each sample's yaw with the path direction at that point
-     (more stable than trusting the planner's per-pose orientations, which
-     NavFn sets to identity).
+  3. Setting every sample's yaw to the robot's CURRENT heading, so the
+     reference is a pure translation and never asks the base to rotate.
   4. Computing the body-frame reference twist between consecutive samples
      via the SE(2) log map:   ξ_ref(k) = log(X_k⁻¹ · X_{k+1}) / dt.
 
@@ -56,24 +55,11 @@ def path_msg_to_xyth(path_msg) -> np.ndarray:
 # Main builder
 # ---------------------------------------------------------------------------
 
-def _interp_xy(path_xyth, cum_s, s):
-    """Position on the path at arclength `s`, linearly interpolated."""
-    M = int(path_xyth.shape[0])
-    j = int(np.searchsorted(cum_s, s) - 1)
-    j = max(0, min(j, M - 2))
-    s0, s1 = cum_s[j], cum_s[j + 1]
-    t = 0.0 if (s1 - s0) < 1e-9 else max(0.0, min(1.0, float((s - s0) / (s1 - s0))))
-    return ((1.0 - t) * path_xyth[j, 0] + t * path_xyth[j + 1, 0],
-            (1.0 - t) * path_xyth[j, 1] + t * path_xyth[j + 1, 1])
-
-
 def build_reference_window(path_xyth : np.ndarray,
                            robot_xyth: np.ndarray,
                            N         : int,
                            dt        : float,
                            v_nom     : float,
-                           yaw_lookahead: float = 0.0,
-                           yaw_hold     : bool  = False
                            ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Parameters
@@ -95,17 +81,24 @@ def build_reference_window(path_xyth : np.ndarray,
       (robot brakes in place).
     * If the path is shorter than the horizon, later samples saturate at the
       goal and ξ_ref decays to zero — equivalent to a "stop at goal" plan.
-    * Yaw is taken from the path itself, not the per-pose orientations in the
-      message, which keeps the reference usable even when the planner emits
-      identity quaternions.
+    * THE REFERENCE CARRIES NO HEADING. Every sample keeps the robot's current
+      yaw, so consecutive X_ref differ by a pure translation and xi_ref's third
+      component is identically zero. Nothing rotational is ever fed forward.
 
-      `yaw_lookahead` (metres) chooses HOW: 0 uses the local segment tangent,
-      and anything positive uses the chord from s to s + yaw_lookahead. The
-      smoother resamples at about 0.15 m, so a single-segment tangent is a
-      direction estimated over 0.15 m of path -- it inherits every wiggle the
-      planner leaves behind, and the robot is asked to rotate for all of them.
-      A chord averages the same wiggles out while still pointing along the path.
-      0 reproduces the validated configuration exactly.
+      The base is omnidirectional and the lidar is 360 deg, so no part of the
+      task needs the robot to face any particular way; a heading reference only
+      ever converted planner wiggle into rotation. Every variant of deriving one
+      from the path was tried and none of them is zero: the local segment
+      tangent peaks at 0.158 rad/s across the horizon on a gentle 3 m arc
+      (nav2's grid paths are jagged at the 0.15 m resample spacing), and a
+      1.2 m look-ahead chord still feeds forward 0.100 rad/s. Zeroing the
+      heading WEIGHT does not help either -- the solver returns
+      u = xi_ref[0] + delta, so the reference's yaw rate goes to the base
+      regardless of what it costs. Batch K ran with the heading weight at zero
+      and still span a median of 2387 deg per trial.
+
+      Rotation is not forbidden: wz remains a free input and the QP may use it
+      whenever rotating helps. It is simply never demanded.
     """
     M = int(path_xyth.shape[0])
     if M == 0:
@@ -150,43 +143,8 @@ def build_reference_window(path_xyth : np.ndarray,
         sample_xyth[k, 0] = (1.0 - t) * path_xyth[j, 0] + t * path_xyth[j + 1, 0]
         sample_xyth[k, 1] = (1.0 - t) * path_xyth[j, 1] + t * path_xyth[j + 1, 1]
 
-        # Yaw from the path: local tangent, or a look-ahead chord (see docstring)
-        #
-        # yaw_hold overrides both: every sample keeps the robot's CURRENT
-        # heading, so consecutive X_ref differ by a pure translation and the
-        # third component of xi_ref is identically zero.
-        #
-        # Q_yaw = 0 does NOT achieve this. It removes the PENALTY on heading
-        # error, but the solver returns u = xi_ref[0] + delta, so whatever
-        # angular rate the path's heading implies is fed straight to the base.
-        # Measured on a gentle 3 m arc: 0.100 rad/s with a 1.2 m look-ahead
-        # chord and 0.158 rad/s peak from raw grid tangents -- neither is zero,
-        # which is why batch K span a median of 2387 deg per trial with the
-        # heading weight already at zero. The base is omnidirectional and the
-        # lidar is 360 deg, so no part of the task needs a heading at all.
-        if yaw_hold:
-            dx = dy = 0.0
-        elif yaw_lookahead > 1e-6:
-            ax, ay = _interp_xy(path_xyth, cum_s, s)
-            bx, by = _interp_xy(path_xyth, cum_s,
-                                min(s + yaw_lookahead, total_s))
-            dx, dy = bx - ax, by - ay
-            if dx * dx + dy * dy < 1e-9:
-                # at (or past) the end of the path the chord collapses; fall
-                # back to the chord BEHIND us so the goal approach keeps a
-                # sensible heading instead of snapping to the last tangent
-                ax, ay = _interp_xy(path_xyth, cum_s,
-                                    max(0.0, total_s - yaw_lookahead))
-                dx, dy = bx - ax, by - ay
-        else:
-            dx = path_xyth[j + 1, 0] - path_xyth[j, 0]
-            dy = path_xyth[j + 1, 1] - path_xyth[j, 1]
-        if yaw_hold:
-            sample_xyth[k, 2] = float(robot_xyth[2])
-        elif dx * dx + dy * dy > 1e-9:
-            sample_xyth[k, 2] = float(np.arctan2(dy, dx))
-        else:
-            sample_xyth[k, 2] = path_xyth[j, 2]
+        # No heading reference: hold the robot's current yaw (see docstring).
+        sample_xyth[k, 2] = float(robot_xyth[2])
 
     # Build SE(2) matrices
     X_ref_win = np.array([from_xytheta(*p) for p in sample_xyth])    # (N+1, 3, 3)

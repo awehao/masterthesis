@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cbf_alpha sweep. Everything else is held at the validated detour config --
-# in particular PLAN_BLEND and YAW_LOOKAHEAD stay off, because those are not
+# in particular PLAN_BLEND stays off, because those are not
 # validated yet and would confound the one variable being swept.
 #
 # alpha is the class-K gain in h_dot >= -alpha*h. Smaller engages the barrier
