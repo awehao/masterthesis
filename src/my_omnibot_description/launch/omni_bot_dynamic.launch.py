@@ -315,7 +315,20 @@ def generate_launch_description():
                           'release_track_speed': float(
                               os.environ.get('TRACK_RELEASE_SPEED', '0.10')),
                           'track_release_frames': int(
-                              os.environ.get('TRACK_RELEASE_FRAMES', '0'))}]),
+                              os.environ.get('TRACK_RELEASE_FRAMES', '0')),
+                          # Static/dynamic routing. The net-displacement gate
+                          # asks for min_net_speed averaged over static_window_s,
+                          # i.e. 0.10 m over 2 s at the defaults. A 0.10 m/s
+                          # mover covers 0.20 m -- only 2x the threshold, so
+                          # occlusion tips it either way, and measured on batch N
+                          # the two slowest movers were called static at 2 of
+                          # their closest approaches each.
+                          'static_window_s': float(
+                              os.environ.get('STATIC_WINDOW', '2.0')),
+                          'min_net_speed': float(
+                              os.environ.get('MIN_NET_SPEED', '0.05')),
+                          'static_keep_velocity':
+                              os.environ.get('STATIC_KEEP_VEL', '0') == '1'}]),
         # Truth mode: obstacle_aggregator gives the DYNAMIC obstacles from ground
         # truth; we ALSO run scan_obstacle_tracker purely for the STATIC wall
         # points (its dynamic output is dumped to an unused topic) so gmpc_truth

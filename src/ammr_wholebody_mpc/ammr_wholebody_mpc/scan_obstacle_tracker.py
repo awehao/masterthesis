@@ -233,6 +233,10 @@ class ScanObstacleTracker(Node):
         # frames and -- once the planner was switched to the filtered scan --
         # were masked out of its costmap too, so nothing owned them.
         p('min_net_speed',   0.05)        # m/s, min AVERAGE speed over the window
+        # Publish static-routed TRACKS with their KF velocity instead of zero,
+        # so a misclassified slow mover is still predicted. Map wall points are
+        # unaffected -- they are appended earlier and are genuinely still.
+        p('static_keep_velocity', False)
         # KF tuning (meas noise inflated vs ground-truth: cluster centroids jitter)
         p('kf_sigma_pos', 0.01)
         p('kf_sigma_vel', 0.40)
@@ -279,6 +283,7 @@ class ScanObstacleTracker(Node):
         self.release_frames = int(g('track_release_frames'))
         self.static_window_s = float(g('static_window_s'))
         self.min_net_speed   = float(g('min_net_speed'))
+        self.static_keep_velocity = bool(g('static_keep_velocity'))
         self.static_cbf_en  = bool(g('static_cbf_enable'))
         self.static_range   = float(g('static_cbf_range'))
         self.static_max     = int(g('static_cbf_max'))
@@ -514,8 +519,25 @@ class ScanObstacleTracker(Node):
             if math.hypot(tr.kf.position[0] - rx,
                           tr.kf.position[1] - ry) > self.static_range + 1.0:
                 continue
+            # A track routed here is not necessarily still: the net-displacement
+            # gate misclassifies the SLOWEST movers, because 0.10 m/s over the
+            # 2 s window is 0.20 m against a 0.10 m threshold -- only 2x, so
+            # occlusion or partial visibility tips it either way. Measured on
+            # batch N: dyn_obs_2 and dyn_obs_8 (0.10-0.11 m/s) were called
+            # static at 2 of their closest approaches each. Publishing them at
+            # v = 0 tells the CBF they will not move, and over a 1 s horizon
+            # that is a 0.10 m position error -- the same order as the residual
+            # contacts (-0.019, -0.039, -0.063 m).
+            #
+            # static_keep_velocity carries the KF estimate through instead, so
+            # a misclassification costs nothing: both routes then predict the
+            # same motion and only the ownership differs.
+            if self.static_keep_velocity:
+                vx, vy = float(tr.kf.velocity[0]), float(tr.kf.velocity[1])
+            else:
+                vx = vy = 0.0
             for sx, sy in self._surface_points(tr, rx, ry):
-                data.extend((float(sx), float(sy), 0.0, 0.0, 0.0))
+                data.extend((float(sx), float(sy), 0.0, vx, vy))
         arr.data = data
         self.static_pub.publish(arr)
 
