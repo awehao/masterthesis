@@ -427,11 +427,27 @@ def main():
     # the ones already down -- so whatever is placed last gets the scraps. Run
     # small-to-large and the 0.82 m bar finds nowhere left to go at all, which
     # is exactly what happened: it and the L were both dropped.
-    plan = [('dyn_obs_5', 0.20,  6.0), ('dyn_obs_4', 0.24,  6.0),
-            ('dyn_obs_2', 0.18,  7.0), ('dyn_obs_8', 0.22,  8.0),
-            ('dyn_obs_1', 0.30,  9.0), ('dyn_obs_7', 0.26,  9.0),
-            ('dyn_obs_0', 0.32, 10.0), ('dyn_obs_6', 0.28, 10.0),
-            ('dyn_obs_9', 0.38, 11.0), ('dyn_obs_3', 0.45, 12.0)]
+    # Speeds are capped at 0.18 m/s, and the cap is not a convenience.
+    #
+    # The base can do vx +0.30 / -0.20 and vy +-0.25, so against an obstacle
+    # closing faster than that it cannot open the gap at all: h_dot cannot be
+    # made positive, `h_dot + alpha*h >= 0` has NO solution anywhere inside the
+    # keep-out, and no controller -- whatever its margin, slack weight or
+    # horizon -- can be safe. At the original speeds four of these ten ran at
+    # 0.30-0.45 and were in exactly that regime, while the other six had
+    # recovery windows of 1-8 cm. Eight of fifteen measured contacts were with
+    # the four unescapable ones. The scenario could not measure the method
+    # because it was not winnable.
+    #
+    # Capped, the worst separation rate is 0.25 - 0.18 = 0.07 m/s sideways and
+    # 0.20 - 0.18 = 0.02 m/s in reverse, so the geometry still bites when the
+    # goal is behind the robot -- deliberately: the point is a scenario that is
+    # hard but solvable, not one that is impossible.
+    plan = [('dyn_obs_5', 0.10,  6.0), ('dyn_obs_4', 0.12,  6.0),
+            ('dyn_obs_2', 0.10,  6.0), ('dyn_obs_8', 0.11,  8.0),
+            ('dyn_obs_1', 0.14,  8.0), ('dyn_obs_7', 0.12,  9.0),
+            ('dyn_obs_0', 0.15, 10.0), ('dyn_obs_6', 0.13, 10.0),
+            ('dyn_obs_9', 0.16, 11.0), ('dyn_obs_3', 0.18, 12.0)]
     placed, rows, ybody, spawn_at = [], [], '', {}
     for name, speed, min_len in plan:
         r = R_OBS[name]
