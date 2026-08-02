@@ -136,6 +136,28 @@ class GMPCConfig:
     # needs 0.225 m, and the perception path adds ~0.3 s of lag. 0.0 reproduces
     # the fixed-margin behaviour every earlier result used.
     cbf_vel_margin_gain : float = 0.0
+    # ---- Constraint pruning -------------------------------------------------
+    # The row count is n_obs x N and n_obs is the number of SURFACE POINTS, not
+    # objects: measured on the 20 m floor it runs 8 points (160 rows) at the
+    # median and 40 points (800 rows) at the peak. OSQP is a first-order ADMM
+    # solver, and at those sizes -- with gain scheduling swinging the cost
+    # matrix as the robot closes in -- its p99 solve time reaches 425 ms against
+    # a 50 ms control period, overrunning in 9% of cycles.
+    #
+    # Most of those rows carry no information. A point 3 m away cannot be
+    # violated within a 1 s horizon, and the far half of the horizon is
+    # predicted with constant velocity, so its precision is spurious anyway.
+    #
+    #   cbf_prune_range   drop a point whose closest approach to the reference
+    #                     over the whole horizon exceeds this [m]. 0 = keep all.
+    #   cbf_near_steps    steps from 0 that always keep every point.
+    #   cbf_far_stride    beyond that, keep only every n-th step. 1 = keep all.
+    #
+    # k = 0 is never dropped: it is the only row that constrains the command
+    # actually about to be sent.
+    cbf_prune_range : float = 0.0
+    cbf_near_steps  : int   = 6
+    cbf_far_stride  : int   = 1
     # ---- Forward-progress preference ---------------------------------------
     # Linear reward on velocity projected along the reference tangent:
     #     J -= prog_weight * sum_k  t_ref(k) . R(theta_k) v_body(k)
@@ -499,11 +521,19 @@ def _build_cbf_horizon(cfg          : GMPCConfig,
         return (sparse.csr_matrix((0, Nm + slack_dim)),
                 np.zeros(0), np.zeros(0), np.zeros(0))
 
-    n_rows = n_obs * N
+    # Which horizon steps to emit rows for. k=0 always; near steps always;
+    # beyond that, every cbf_far_stride-th step.
+    stride = max(1, int(cfg.cbf_far_stride))
+    steps = [k for k in range(N)
+             if k <= cfg.cbf_near_steps or (k - cfg.cbf_near_steps) % stride == 0]
+    rows_per_obs = len(steps)
+
+    n_rows = n_obs * rows_per_obs
     A      = np.zeros((n_rows, Nm + slack_dim))
     l_vec  = np.zeros(n_rows)
     u_vec  = np.full(n_rows, np.inf)
     h_now  = np.zeros(n_obs)
+    keep_rows = []          # rows actually filled, after the distance gate
     # gmpc_node tags wall points from the map-based static-CBF with their own
     # (smaller) 'margin'; everything else is a tracked dynamic obstacle.
     is_static = [bool(o.get('static', 'margin' in o)) for o in obstacles]
@@ -519,7 +549,25 @@ def _build_cbf_horizon(cfg          : GMPCConfig,
         m_i = float(obs.get('margin', cfg.cbf_safe_margin))
         static_i = is_static[i]
 
-        for k in range(N):
+        # Distance gate: the closest this point comes to the reference over the
+        # whole horizon. Beyond cbf_prune_range it cannot be violated, so its
+        # rows are pure cost. h_now is still computed below, so /gmpc/min_h and
+        # the danger gain-scheduling see every point regardless.
+        if cfg.cbf_prune_range > 0.0:
+            far = True
+            for k in range(0, N, 4):
+                p_k = (X_now if k == 0 else X_ref_win[k])[:2, 2]
+                if (math.hypot(p_k[0] - (ox + vox * k * dt),
+                               p_k[1] - (oy + voy * k * dt))
+                        <= cfg.cbf_prune_range):
+                    far = False
+                    break
+        else:
+            far = False
+
+        for j, k in enumerate(steps):
+            if far and k != 0:
+                continue
             # Robot linearisation pose at step k
             if k == 0:
                 X_k = X_now
@@ -576,7 +624,8 @@ def _build_cbf_horizon(cfg          : GMPCConfig,
             grad_body = 2.0 * (diff @ R_k)                # shape (2,)
             A_row_3   = np.array([grad_body[0], grad_body[1], 0.0])
 
-            row = i * N + k
+            row = i * rows_per_obs + j
+            keep_rows.append(row)
             A[row, 3*k:3*k + 3] = A_row_3
             # Slack column. Each step has its own ε_k (including k=0, whose
             # penalty is 100x higher so the "now" constraint is near-hard while
@@ -594,6 +643,9 @@ def _build_cbf_horizon(cfg          : GMPCConfig,
                 - A_row_3 @ xi_ref_win[k]
             )
 
+    if cfg.cbf_prune_range > 0.0 and len(keep_rows) < n_rows:
+        idx = np.array(sorted(keep_rows), dtype=int)
+        A, l_vec, u_vec = A[idx], l_vec[idx], u_vec[idx]
     return sparse.csr_matrix(A), l_vec, u_vec, h_now
 
 
