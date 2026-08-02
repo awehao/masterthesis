@@ -12,7 +12,12 @@ set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE/.."
 
-if pgrep -f "run_omnibot_dynamic.sh" >/dev/null; then
+# Use the lock run_omnibot_dynamic.sh already maintains, NOT pgrep -f. Any shell
+# whose command line merely mentions the script name -- a monitor, an editor, an
+# agent's own check -- matches pgrep -f and looks like a running batch. This
+# blocked two legitimate launches before the lockfile was used instead.
+LOCKFILE=/tmp/omnibot_dynamic.pid
+if [ -f "$LOCKFILE" ] && kill -0 "$(cat "$LOCKFILE" 2>/dev/null)" 2>/dev/null; then
     echo "ERROR: a batch is already running. Refusing to start a second one." >&2
     echo "       (Two concurrent batches have contaminated results before.)" >&2
     exit 1
