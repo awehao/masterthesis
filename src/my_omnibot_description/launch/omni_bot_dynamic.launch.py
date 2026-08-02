@@ -265,6 +265,14 @@ def generate_launch_description():
         # every corridor: at 0.75 m arrival fell and contacts rose, because a
         # 2.0 m doorway leaves only 0.5 m of feasible corridor. 0 = fixed.
         'cbf_vel_margin_gain': float(os.environ.get('CBF_VEL_MARGIN', '0.0')),
+        # Constraint pruning. Rows are n_obs x N and n_obs counts SURFACE
+        # POINTS: measured 8 at the median (160 rows) and 40 at the peak (800),
+        # with OSQP's p99 solve time at 425 ms against a 50 ms period. A point
+        # 3 m away cannot be violated inside a 1 s horizon, and the far half of
+        # the horizon is constant-velocity extrapolation anyway. 0 = keep all.
+        'cbf_prune_range': float(os.environ.get('CBF_PRUNE_RANGE', '0.0')),
+        'cbf_near_steps': int(os.environ.get('CBF_NEAR_STEPS', '6')),
+        'cbf_far_stride': int(os.environ.get('CBF_FAR_STRIDE', '1')),
         'prog_weight': float(os.environ.get('PROG_WEIGHT', '0.0')),
         # Committed detour (detour.py): DETOUR=1 to enable.
         'detour_enable': os.environ.get('DETOUR', '0') == '1',

@@ -166,6 +166,10 @@ class GMPCNode(Node):
         # constant-velocity predictions. 0 = the validated constant margin.
         # See gmpc.py: keep-out that grows with the closing rate.
         self.declare_parameter('cbf_vel_margin_gain', 0.0)
+        # See gmpc.py: drop CBF rows that cannot bind (far points, far steps).
+        self.declare_parameter('cbf_prune_range', 0.0)
+        self.declare_parameter('cbf_near_steps', 6)
+        self.declare_parameter('cbf_far_stride', 1)
         self.declare_parameter('cbf_margin_growth', 0.0)
         # Prefer giving way FORWARD rather than backward when the CBF pushes the
         # robot off the reference. 0 = no preference (validated behaviour).
@@ -304,6 +308,10 @@ class GMPCNode(Node):
                 self.get_parameter('cbf_margin_growth').value),
             cbf_vel_margin_gain=float(
                 self.get_parameter('cbf_vel_margin_gain').value),
+            cbf_prune_range=float(
+                self.get_parameter('cbf_prune_range').value),
+            cbf_near_steps=int(self.get_parameter('cbf_near_steps').value),
+            cbf_far_stride=int(self.get_parameter('cbf_far_stride').value),
             prog_weight=float(self.get_parameter('prog_weight').value),
         )
         self.mpc = GMPC(cfg)
