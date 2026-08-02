@@ -41,9 +41,23 @@ def generate_launch_description():
     bringup  = get_package_share_directory('ammr_bringup')
 
     urdf_file  = os.path.join(desc_pkg, 'urdf',   'omni_bot.urdf.xacro')
-    world_file = os.path.join(bringup,  'worlds', 'random_room_dynamic.sdf')
-    map_file   = os.path.join(bringup,  'maps',   'random_room.yaml')
-    traj_file  = os.path.join(bringup,  'config', 'dynamic_trajectories.yaml')
+    # Same world/scenario selection as omni_bot_dynamic.launch.py. Without this
+    # the baselines could only run on random_room, so the GMPC numbers on
+    # bigarena had nothing to be compared against -- the comparison table would
+    # have mixed two different scenarios.
+    if os.environ.get('BIGARENA', '0') == '1':
+        world_file = os.path.join(bringup, 'worlds', 'bigarena.sdf')
+        map_file   = os.path.join(bringup, 'maps',   'bigarena.yaml')
+    elif os.environ.get('ARENA', '0') == '1':
+        world_file = os.path.join(bringup, 'worlds', 'arena.sdf')
+        map_file   = os.path.join(bringup, 'maps',   'arena.yaml')
+    else:
+        world_file = os.path.join(bringup,  'worlds', 'random_room_dynamic.sdf')
+        map_file   = os.path.join(bringup,  'maps',   'random_room.yaml')
+    _traj = os.environ.get('TRAJ', '')
+    traj_file  = os.path.join(
+        bringup, 'config',
+        f'dynamic_trajectories_{_traj}.yaml' if _traj else 'dynamic_trajectories.yaml')
     ekf_config = os.path.join(desc_pkg, 'config', 'ekf_fusion.yaml')
     mppi_cfg   = os.path.join(desc_pkg, 'config', 'nav2_baseline_mppi.yaml')
     rpp_cfg    = os.path.join(desc_pkg, 'config', 'nav2_baseline_rpp.yaml')
@@ -132,6 +146,14 @@ def generate_launch_description():
 
     return LaunchDescription([
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', rp),
+        # Hybrid-graphics (PRIME on-demand) machine: without these, gz/OGRE's
+        # EGL is routed to Mesa, which cannot drive the NVIDIA card -- the sim
+        # runs but the gpu_lidar returns nothing usable. The dynamic launch
+        # carries the same three.
+        SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
+        SetEnvironmentVariable('__GLX_VENDOR_LIBRARY_NAME', 'nvidia'),
+        SetEnvironmentVariable('__EGL_VENDOR_LIBRARY_FILENAMES',
+                               '/usr/share/glvnd/egl_vendor.d/10_nvidia.json'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('method', default_value='mppi',
                               description='mppi | rpp'),
@@ -155,7 +177,12 @@ def generate_launch_description():
         TimerAction(period=6.0, actions=[Node(
             package='ros_gz_sim', executable='create',
             arguments=['-name', 'omni_bot', '-topic', 'robot_description',
-                       '-x', '0.0', '-y', '0.0', '-z', '0.05'], output='screen')]),
+                       # Random-pose batches drive the spawn per trial, exactly
+                       # as omni_bot_dynamic.launch.py does; the batch harness
+                       # exports these from its POSES_CSV row.
+                       '-x', os.environ.get('SPAWN_X', '0.0'),
+                       '-y', os.environ.get('SPAWN_Y', '0.0'),
+                       '-z', '0.05'], output='screen')]),
         TimerAction(period=8.0, actions=[Node(
             package='ammr_bringup', executable='dynamic_obstacle_driver',
             parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],
