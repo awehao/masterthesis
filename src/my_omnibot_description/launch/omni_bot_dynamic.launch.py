@@ -328,7 +328,21 @@ def generate_launch_description():
                           'min_net_speed': float(
                               os.environ.get('MIN_NET_SPEED', '0.05')),
                           'static_keep_velocity':
-                              os.environ.get('STATIC_KEEP_VEL', '0') == '1'}]),
+                              os.environ.get('STATIC_KEEP_VEL', '0') == '1',
+                          # Smallest cluster that becomes a track. At 2 returns
+                          # a 0.15 m body is invisible past ~2 m: the lidar is
+                          # 360 beams over 360 deg, so beams are 5.2 cm apart at
+                          # 3 m and such a body subtends about 5.7 deg head-on
+                          # and less obliquely. Measured over 3 s before closest
+                          # approach, dyn_obs_3 (r = 0.15) sits in the CBF's
+                          # constraint set only 83% of the time (q1 75%), while
+                          # every body of r >= 0.25 is at 100%. It is also 4 of
+                          # the 8 contacts in 172 trials. Allowing single-return
+                          # clusters trades that against noise, which
+                          # min_track_age = 3 and the association gate still have
+                          # to pass.
+                          'min_cluster_pts': int(
+                              os.environ.get('MIN_CLUSTER_PTS', '2'))}]),
         # Truth mode: obstacle_aggregator gives the DYNAMIC obstacles from ground
         # truth; we ALSO run scan_obstacle_tracker purely for the STATIC wall
         # points (its dynamic output is dumped to an unused topic) so gmpc_truth
