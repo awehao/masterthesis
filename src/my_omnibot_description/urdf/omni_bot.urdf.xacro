@@ -54,8 +54,20 @@
     </visual>
     <collision>
       <origin xyz="0 0 0.14" rpy="0 0 0"/>
+      <!-- The chassis is a DISC of radius 0.300 m: that is what the visual mesh
+           measures (chassis_frame.stl reaches 0.300 in every 30 deg sector) and
+           it is what the analysis uses to judge clearance. The collision body
+           used to be a 0.45 x 0.45 box, half-extent 0.225, so the simulated
+           robot was 7.5 cm smaller than the real one along its axes, and a
+           reported contact shallower than 7.5 cm had not physically happened in
+           gz at all. Over ~230 trials of the final configuration, 15 events
+           were reported as contacts but only 4 were deeper than that gap, so
+           the two measures disagreed about 11 of them.
+           Note this makes the robot LARGER on its axes (0.300 vs 0.225) and
+           slightly smaller on its diagonals (0.300 vs 0.225*sqrt(2) = 0.318),
+           so earlier batches are not comparable to anything run after it. -->
       <geometry>
-        <box size="0.45 0.45 0.18"/>
+        <cylinder radius="0.300" length="0.18"/>
       </geometry>
     </collision>
   </link>
