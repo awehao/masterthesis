@@ -43,4 +43,21 @@ ekf_global:
     pose0_differential: false
     pose0_relative: false
     pose0_queue_size: 5
-    pose0_rejection_threshold: 2.5   # lower -> reject AMCL jumps harder (tune)
+    # Mahalanobis gate on /amcl_pose, effectively OFF.
+    #
+    # At 2.5 the filter locks itself out of its own corrections: once its
+    # estimate drifts, every correct AMCL pose looks like an outlier and is
+    # discarded, so it drifts further. Caught on a watched run -- the EKF
+    # reached 2.49 m while AMCL stayed within 0.07 m and kept publishing 13-20
+    # poses per 10 s. Across 175 trials the EKF exceeded 0.5 m in 25 of them
+    # (14%), worst 8.35 m, while AMCL's worst over the same trials was 0.31 m.
+    #
+    # The gate was there to reject AMCL jumps near unknown obstacles. Those
+    # jumps do not occur in the measurements, so it was trading a risk that
+    # never materialised for a failure that does.
+    #
+    # 10 trials each at 2.5 / 10.0 / off: medians identical (0.039-0.041),
+    # off had the best p99 (0.108 vs 0.128) and the best max (0.200 vs 0.296).
+    # None of the three diverged, so this shows off is not WORSE; at a 14% base
+    # rate, 9 trials cannot show that it is better. EKF_REJECT overrides.
+    pose0_rejection_threshold: 1.0e9
