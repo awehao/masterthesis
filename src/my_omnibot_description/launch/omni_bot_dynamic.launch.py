@@ -305,7 +305,18 @@ def generate_launch_description():
              name='goal_to_plan_relay', output='screen',
              parameters=[{'use_sim_time': True, 'global_frame': 'map',
                           'robot_base_frame': 'base_footprint',
-                          'planner_id': 'GridBased', 'replan_period': 3.0}]),
+                          'planner_id': 'GridBased',
+                          # 3 s dates from when the planner marked its costmap
+                          # from the raw /scan: it re-routed around movers at
+                          # their CURRENT position, so the path flipped every
+                          # replan and slowing the rate was the fix. The planner
+                          # now reads /scan_filtered with movers masked out, so
+                          # its cost field no longer changes as they pass and
+                          # the reason for the delay is gone. nav2's own BT
+                          # replans at 1 Hz, which is what MPPI and RPP get --
+                          # three times our rate, on the same scenario.
+                          'replan_period': float(
+                              os.environ.get('REPLAN', '3.0'))}]),
         # GMPC + CBF (cbf:=true) or plain GMPC (cbf:=false). Publishes to
         # cmd_vel_nav so velocity_smoother (above) can rate-limit it.
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
