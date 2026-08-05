@@ -311,7 +311,8 @@ def analyse(path, world, goal, hx, hy, arrived_csv=None, arrival_s=None):
         return (X[-1, 0] - O[0, 0]) / dur if len(X) > 2 else 0.0
 
     return dict(
-        run=os.path.basename(path).replace('gmpc_cbf__scan_', ''),
+        run=(re.search(r'(seed\d+)$', os.path.basename(path)) or
+             re.search(r'(.*)', os.path.basename(path))).group(1),
         outcome=outcome(O, U, goal, arrived_csv),
         dur=dur,
         path_m=float(np.linalg.norm(np.diff(O[:, 1:3], axis=0), axis=1).sum()),
@@ -345,18 +346,30 @@ def main():
     # The batch's own live verdict, recorded by goal_watcher.
     arrived = {}
     arrival_t = {}
+    csv_seeds = set()
     import csv as _csv
-    for d in list(a.dirs) + [os.path.join(ROOT, 'evaluation', 'results')]:
-        for cand in (os.path.join(d, 'results.csv'),
-                     os.path.join(d, 'omnibot_dynamic_gmpc_scan.csv')):
-            if os.path.isfile(cand):
-                for r in _csv.DictReader(open(cand)):
-                    key = r['run'].replace('scan_', '')
-                    arrived[key] = (r['success'].strip().lower() == 'true')
-                    try:
-                        arrival_t[key] = float(r['arrival_time_s'])
-                    except (KeyError, TypeError, ValueError):
-                        pass
+    # STOP at the first CSV found. The shared evaluation/results/ file is only a
+    # last resort: it belongs to whatever batch ran most recently, and reading it
+    # AFTER the bag directory's own results.csv silently overwrote the correct
+    # arrival times with another batch's. That is what made discA's median
+    # clearance move from +0.146 to +0.162 between two runs over identical bags,
+    # and it inflated the timeout/frozen counts across every batch.
+    sources = [os.path.join(d, 'results.csv') for d in a.dirs]
+    sources += [os.path.join(ROOT, 'evaluation', 'results',
+                             'omnibot_dynamic_gmpc_scan.csv')]
+    for cand in sources:
+        if os.path.isfile(cand):
+            print(f'  arrival verdicts from: {os.path.relpath(cand, ROOT)}')
+            for r in _csv.DictReader(open(cand)):
+                km = re.search(r'(seed\d+)$', r['run'])
+                key = km.group(1) if km else r['run']
+                arrived[key] = (r['success'].strip().lower() == 'true')
+                csv_seeds.add(key)
+                try:
+                    arrival_t[key] = float(r['arrival_time_s'])
+                except (KeyError, TypeError, ValueError):
+                    pass
+            break
 
     goals = {}
     if a.poses:
@@ -366,10 +379,26 @@ def main():
                                                   float(r['goal_y'])])
 
     for d in a.dirs:
-        bags = sorted(glob.glob(os.path.join(d, 'gmpc_cbf__scan_seed*')))
+        # Any batch, not just gmpc_cbf__scan_*: the baselines write
+        # mppi__mppi_seed<N> and rpp__rpp_seed<N>. Everything downstream keys on
+        # the trailing seed number, so the method prefix is irrelevant here.
+        bags = sorted(glob.glob(os.path.join(d, '*_seed*')))
+        # Only seeds the batch's own CSV recorded. A bag directory can outlive
+        # the batch that wrote it: pose set A was run twice for MPPI, and the
+        # archive copy picked up 36 directories for a batch of 25 trials, mixing
+        # two runs. The CSV is the record of what this batch actually did.
+        if csv_seeds:
+            bags = [b for b in bags
+                    if (re.search(r'(seed\d+)$', os.path.basename(b)) or
+                        [None])[0] and
+                    re.search(r'(seed\d+)$', os.path.basename(b)).group(1)
+                    in csv_seeds]
         rows = []
         for b in bags:
-            seed = os.path.basename(b).replace('gmpc_cbf__scan_', '')
+            sm = re.search(r'(seed\d+)$', os.path.basename(b))
+            if not sm:
+                continue
+            seed = sm.group(1)
             g = goals.get(seed, np.array(a.goal) if a.goal else None)
             try:
                 r = analyse(b, a.world, g, hx, hy, arrived.get(seed),
