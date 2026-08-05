@@ -261,14 +261,36 @@ def outcome(O, U, goal, arrived_csv=None, tol=0.30):
     return 'frozen' if demand < STALL_V else 'wedged'
 
 
-def analyse(path, world, goal, hx, hy, arrived_csv=None):
+def analyse(path, world, goal, hx, hy, arrived_csv=None, arrival_s=None):
     O, U, S, A, F, D = read_bag(path)
     if len(O) < 50:
         return None
     dur = O[-1, 0] - O[0, 0]
     shapes = mover_shapes(world)
 
+    # Clearance is scored only up to ARRIVAL. Recording continues after the
+    # robot reaches the goal and parks there, and a mover is free to drive into
+    # a stationary robot -- which is exactly what produced both of the two deep
+    # penetrations: discC seed27 arrived at 161 s and was struck at ~223 s after
+    # sitting for 61 s, discE seed27 arrived at 94 s and sat for 151 s. Those
+    # are not avoidance failures; the mission was already complete. Contacts
+    # after arrival are reported separately, because a deployed robot should
+    # still yield while parked, but they do not belong in a navigation metric.
+    # Prefer the batch's own goal_watcher timestamp: it is the same live verdict
+    # the arrived/not classification already trusts. Re-deriving arrival from
+    # odom disagreed with it on the trials where /amcl_pose went quiet (discE
+    # seed27: goal_watcher said 94 s, the odom test never triggered), and those
+    # are exactly the trials where the distinction matters.
+    t_end = O[-1, 0]
+    if arrival_s is not None and np.isfinite(arrival_s):
+        t_end = O[0, 0] + float(arrival_s)
+    elif goal is not None:
+        reach = np.nonzero(np.linalg.norm(O[:, 1:3] - goal, axis=1) < 0.30)[0]
+        if len(reach):
+            t_end = O[reach[0], 0]
+
     worst, worst_who, cover = 1e9, None, []
+    worst_after = 1e9
     for name, Aa in D.items():
         if name not in shapes or len(Aa) < 5:
             continue
@@ -279,8 +301,11 @@ def analyse(path, world, goal, hx, hy, arrived_csv=None):
             continue
         v = signed_clearance(shapes[name], Aa[ok, 1], Aa[ok, 2],
                              O[idx[ok], 1], O[idx[ok], 2], hx)
-        if v.min() < worst:
-            worst, worst_who = v.min(), name
+        before = Aa[ok, 0] <= t_end
+        if before.any() and v[before].min() < worst:
+            worst, worst_who = v[before].min(), name
+        if (~before).any():
+            worst_after = min(worst_after, v[~before].min())
 
     def live(X):
         return (X[-1, 0] - O[0, 0]) / dur if len(X) > 2 else 0.0
@@ -291,6 +316,7 @@ def analyse(path, world, goal, hx, hy, arrived_csv=None):
         dur=dur,
         path_m=float(np.linalg.norm(np.diff(O[:, 1:3], axis=0), axis=1).sum()),
         clearance=float(worst) if worst < 1e8 else float('nan'),
+        clearance_parked=float(worst_after) if worst_after < 1e8 else float('nan'),
         who=worst_who,
         align=float(np.min(cover)) if cover else 0.0,
         spin=float(np.degrees(np.abs(np.diff(O[:, 3])).sum())),
@@ -318,14 +344,19 @@ def main():
 
     # The batch's own live verdict, recorded by goal_watcher.
     arrived = {}
+    arrival_t = {}
     import csv as _csv
     for d in list(a.dirs) + [os.path.join(ROOT, 'evaluation', 'results')]:
         for cand in (os.path.join(d, 'results.csv'),
                      os.path.join(d, 'omnibot_dynamic_gmpc_scan.csv')):
             if os.path.isfile(cand):
                 for r in _csv.DictReader(open(cand)):
-                    arrived[r['run'].replace('scan_', '')] = (
-                        r['success'].strip().lower() == 'true')
+                    key = r['run'].replace('scan_', '')
+                    arrived[key] = (r['success'].strip().lower() == 'true')
+                    try:
+                        arrival_t[key] = float(r['arrival_time_s'])
+                    except (KeyError, TypeError, ValueError):
+                        pass
 
     goals = {}
     if a.poses:
@@ -341,7 +372,8 @@ def main():
             seed = os.path.basename(b).replace('gmpc_cbf__scan_', '')
             g = goals.get(seed, np.array(a.goal) if a.goal else None)
             try:
-                r = analyse(b, a.world, g, hx, hy, arrived.get(seed))
+                r = analyse(b, a.world, g, hx, hy, arrived.get(seed),
+                            arrival_t.get(seed))
             except Exception as e:
                 print(f'  {seed}: FAILED to read ({e})')
                 continue
