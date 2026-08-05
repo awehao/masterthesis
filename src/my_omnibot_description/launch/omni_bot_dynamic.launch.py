@@ -412,7 +412,17 @@ def generate_launch_description():
              parameters=[{'use_sim_time': True}], output='screen'),
         Node(package='ammr_bringup', executable='scan_relay',
              parameters=[{'use_sim_time': True,
-                          'blocked_centers_deg': '45,135,225,315',
+                          # Measured from 194 frames of /scan_raw, not assumed:
+                          # the self-occluded sectors are narrow near +-45 and
+                          # +-135 (8-9 deg) plus a 34 deg block near -69 deg.
+                          # The old 45/135/225/315 +-15 masked 120 rays while
+                          # only 68 are occluded -- 78 good rays discarded (22%
+                          # of the lidar) -- and missed the -69 block entirely,
+                          # so 26 rays of self-return kept reaching AMCL. These
+                          # sectors, with 1.5 deg of margin for rotation and
+                          # beam discretisation, leave 0 missed and 14 wasted.
+                          'blocked_centers_deg': '45.1,135.0,-45.1,-135.0,-69.2',
+                          'blocked_halfwidths_deg': '5.5,6.0,5.5,6.0,18.5',
                           'blocked_halfwidth_deg': 15.0}], output='screen'),
 
         TimerAction(period=6.0, actions=[Node(

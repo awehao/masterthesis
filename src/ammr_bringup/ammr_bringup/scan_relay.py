@@ -41,15 +41,31 @@ class ScanRelay(Node):
         # rejects float-array overrides. A string default '' has no such issue.
         self.declare_parameter('blocked_centers_deg', '')
         self.declare_parameter('blocked_halfwidth_deg', 0.0)
+        # Per-sector half-widths, comma-separated, aligned with the centres.
+        # One shared half-width was wrong in both directions: measured against
+        # 194 frames of /scan_raw, the four +-15 deg sectors masked 120 rays
+        # while only 68 are genuinely self-occluded -- 78 good rays thrown away
+        # (22% of the lidar) -- and they missed a 34 deg block near -69 deg
+        # entirely, so 26 rays of self-return kept feeding AMCL. The real
+        # sectors are narrow near +-45 and +-135 (8-9 deg) and wide near -69.
+        # Empty -> fall back to blocked_halfwidth_deg for every centre.
+        self.declare_parameter('blocked_halfwidths_deg', '')
         centers_str = str(self.get_parameter('blocked_centers_deg').value)
         self.centers = [float(x) for x in centers_str.split(',') if x.strip()]
         self.halfwidth = float(self.get_parameter('blocked_halfwidth_deg').value)
+        hw_str = str(self.get_parameter('blocked_halfwidths_deg').value)
+        hws = [float(x) for x in hw_str.split(',') if x.strip()]
+        if hws and len(hws) != len(self.centers):
+            raise ValueError(
+                f'blocked_halfwidths_deg has {len(hws)} entries for '
+                f'{len(self.centers)} centres')
+        self.halfwidths = hws or [self.halfwidth] * len(self.centers)
 
         self._mask = None  # built lazily once we know the scan geometry
-        if self.centers and self.halfwidth > 0.0:
-            self.get_logger().info(
-                f'self-occlusion filter ON: centers={self.centers} '
-                f'±{self.halfwidth}deg')
+        if self.centers and any(h > 0.0 for h in self.halfwidths):
+            pairs = ', '.join(f'{c:+.1f}+-{h:.1f}'
+                              for c, h in zip(self.centers, self.halfwidths))
+            self.get_logger().info(f'self-occlusion filter ON: {pairs} deg')
 
         self.pub = self.create_publisher(LaserScan, '/scan', BEST_EFFORT_QOS)
         self.create_subscription(LaserScan, '/scan_raw', self.cb, BEST_EFFORT_QOS)
@@ -57,12 +73,13 @@ class ScanRelay(Node):
     def _build_mask(self, msg: LaserScan):
         n = len(msg.ranges)
         mask = [False] * n
-        if not (self.centers and self.halfwidth > 0.0):
+        if not (self.centers and any(h > 0.0 for h in self.halfwidths)):
             self._mask = mask
             return
         for i in range(n):
             bearing = math.degrees(msg.angle_min + i * msg.angle_increment) % 360.0
-            if any(_ang_diff_deg(bearing, c) <= self.halfwidth for c in self.centers):
+            if any(_ang_diff_deg(bearing, c) <= h
+                   for c, h in zip(self.centers, self.halfwidths)):
                 mask[i] = True
         self._mask = mask
         self.get_logger().info(
