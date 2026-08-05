@@ -40,8 +40,6 @@ LOCKFILE=/tmp/omnibot_dynamic.pid
 Y=src/ammr_wholebody_mpc/config/gmpc_params.yaml
 R=evaluation/run_omnibot_dynamic.sh
 
-echo "[$(date +%T)] waiting for the final benchmark ..."
-while ! grep -qE "final benchmark complete|ABORTED" evaluation/logs/chainFinal.log 2>/dev/null; do sleep 120; done
 while [ -f "$LOCKFILE" ] && kill -0 "$(cat "$LOCKFILE" 2>/dev/null)" 2>/dev/null; do sleep 60; done
 sleep 30
 
@@ -62,7 +60,11 @@ rebuild () {
     source /opt/ros/jazzy/setup.bash
     colcon build --packages-select ammr_wholebody_mpc > evaluation/logs/build_fair.log 2>&1
     for pair in "$@"; do
-        grep -q "$pair" install/ammr_wholebody_mpc/share/ammr_wholebody_mpc/config/gmpc_params.yaml \
+        # grep -- : the patterns start with '-' (e.g. -0.35) and would otherwise
+        # be parsed as options. The previous version passed a bare '--' as a
+        # pattern instead, which never matches, and stage 2 died on its own
+        # guard.
+        grep -q -- "$pair" install/ammr_wholebody_mpc/share/ammr_wholebody_mpc/config/gmpc_params.yaml \
             || { echo "FATAL: install/ missing $pair"; exit 1; }
     done
     echo "[$(date +%T)] build verified"
@@ -100,7 +102,7 @@ PB=evaluation/results/bigarena_poses_b.csv
 
 # --- stage 2: symmetric vx -------------------------------------------------
 edit_yaml vx_min '\-0\.20' '-0.35'
-rebuild -- '-0.35'
+rebuild '-0.35'
 run_one s2_vx_A "$PA" gmpc_scan
 run_one s2_vx_B "$PB" gmpc_scan
 
