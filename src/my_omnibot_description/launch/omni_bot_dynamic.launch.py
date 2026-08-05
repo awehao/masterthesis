@@ -264,7 +264,19 @@ def generate_launch_description():
         # EKF: fuse /odom (smooth) + /amcl_pose (beam-skip, jumps rejected)
         # -> stable map->odom. beam-skip cleans AMCL's input, EKF smooths output.
         Node(package='robot_localization', executable='ekf_node', name='ekf_global',
-             output='screen', parameters=[ekf_config]),
+             output='screen',
+             # EKF_REJECT overrides pose0_rejection_threshold (Mahalanobis gate
+             # on /amcl_pose). At 2.5 the filter locks itself out: once its own
+             # estimate drifts, correct AMCL poses look like outliers and are
+             # discarded, so it drifts further. Measured on one trial, the EKF
+             # reached 2.49 m of error while AMCL stayed within 0.07 m and kept
+             # publishing 13-20 times per 10 s -- the correction was available
+             # and refused. Across 89 trials, 13 had EKF peaks over 0.5 m and
+             # three exceeded 8 m. Empty keeps the file's value.
+             parameters=[ekf_config] + (
+                 [{'pose0_rejection_threshold':
+                   float(os.environ['EKF_REJECT'])}]
+                 if os.environ.get('EKF_REJECT') else [])),
         Node(package='nav2_planner', executable='planner_server', name='planner_server',
              output='screen', parameters=[configured_nav_params]),
         # lifecycle manager: two variants so the smoother isn't a managed node
