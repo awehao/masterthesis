@@ -71,9 +71,19 @@ def generate_launch_description():
         Command(['xacro ', urdf_file, ' use_camera:=false']), value_type=str)
 
     def params(cfg):
+        rw = {'yaml_filename': map_file,
+              'tf_broadcast': 'false'}          # EKF owns map->odom
+        # BASE_ACCEL=1 clamps the baseline's acceleration to the same box the
+        # GMPC runs in (0.8 / 0.6 / 1.2). MPPI ships with 1.5 / 1.0 / 2.0 --
+        # nearly double the authority on the same chassis. Acceleration is a
+        # property of the robot, so the comparison should hold it fixed; the
+        # horizon is not (MPPI sees 2.8 s to the GMPC's 1.0 s because sampling
+        # tolerates prediction error that hard CBF constraints do not), so that
+        # difference is left alone as part of each method's design.
+        if os.environ.get('BASE_ACCEL') == '1':
+            rw.update({'ax_max': '0.8', 'ay_max': '0.6', 'az_max': '1.2'})
         return RewrittenYaml(source_file=cfg, convert_types=True,
-                             param_rewrites={'yaml_filename': map_file,
-                                             'tf_broadcast': 'false'})  # EKF owns map->odom
+                             param_rewrites=rw)
     mppi_params = params(mppi_cfg)
     rpp_params  = params(rpp_cfg)
 
