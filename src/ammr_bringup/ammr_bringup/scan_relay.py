@@ -41,6 +41,9 @@ class ScanRelay(Node):
         # rejects float-array overrides. A string default '' has no such issue.
         self.declare_parameter('blocked_centers_deg', '')
         self.declare_parameter('blocked_halfwidth_deg', 0.0)
+        centers_str = str(self.get_parameter('blocked_centers_deg').value)
+        self.centers = [float(x) for x in centers_str.split(',') if x.strip()]
+        self.halfwidth = float(self.get_parameter('blocked_halfwidth_deg').value)
 
         self._mask = None  # built lazily once we know the scan geometry
         if self.centers and self.halfwidth > 0.0:
