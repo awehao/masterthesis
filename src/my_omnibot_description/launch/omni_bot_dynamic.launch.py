@@ -315,8 +315,12 @@ def generate_launch_description():
                           # the reason for the delay is gone. nav2's own BT
                           # replans at 1 Hz, which is what MPPI and RPP get --
                           # three times our rate, on the same scenario.
+                          #
+                          # Measured at 1 Hz, paired over the same 30 routes:
+                          # contacts 3 -> 1, worst penetration -0.313 -> -0.053,
+                          # arrival 97 s -> 85 s. Nothing traded away for it.
                           'replan_period': float(
-                              os.environ.get('REPLAN', '3.0'))}]),
+                              os.environ.get('REPLAN', '1.0'))}]),
         # GMPC + CBF (cbf:=true) or plain GMPC (cbf:=false). Publishes to
         # cmd_vel_nav so velocity_smoother (above) can rate-limit it.
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
