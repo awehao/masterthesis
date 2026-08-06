@@ -231,6 +231,13 @@ def generate_launch_description():
         # with OSQP's p99 solve time at 425 ms against a 50 ms period. A point
         # 3 m away cannot be violated inside a 1 s horizon, and the far half of
         # the horizon is constant-velocity extrapolation anyway. 0 = keep all.
+        # MARGIN_MODE=derived sizes each keep-out from what it has to absorb
+        # (localisation error + braking distance + one control step, plus the
+        # obstacle's own travel during the perception lag) instead of the tuned
+        # 0.38 / 0.60. It collapses as the robot slows, which is what lets it
+        # settle on a goal near a wall -- the fixed 0.68 m keep-out put such a
+        # goal inside the barrier and the robot ground along the wall instead.
+        'margin_mode': os.environ.get('MARGIN_MODE', 'fixed'),
         'cbf_prune_range': float(os.environ.get('CBF_PRUNE_RANGE', '0.0')),
         'cbf_near_steps': int(os.environ.get('CBF_NEAR_STEPS', '6')),
         'cbf_far_stride': int(os.environ.get('CBF_FAR_STRIDE', '1')),

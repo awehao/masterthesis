@@ -207,6 +207,29 @@ class GMPCNode(Node):
         # 0 = always on (old behaviour).
         self.declare_parameter('static_activate_range', 0.0)
 
+        # DERIVED margins. 'fixed' keeps cbf_safe_margin / static_cbf_safe_margin
+        # exactly as they are; 'derived' computes each obstacle's keep-out from
+        # what it physically has to absorb:
+        #
+        #   static   loc_err + v^2/(2 a) + v dt
+        #   dynamic  the same, plus v_obs * percep_lag + obs_pos_err
+        #
+        # The fixed values have no derivation behind them -- 0.38 and 0.60 were
+        # tuned, and the measurements say they are far larger than needed. At the
+        # wall graze of C_seed22 the robot was doing 0.254 m/s, for which the
+        # terms above sum to 0.094 m against a margin of 0.380. Oversizing is not
+        # free: the goal there sat 0.55 m from a wall, inside a 0.68 m keep-out,
+        # so the barrier pushed the robot off its own goal and it ground along
+        # the wall for two seconds before converging.
+        #
+        # A speed-scaled margin also removes the need to tune static_goal_clear:
+        # the keep-out shrinks as the robot slows into the goal.
+        self.declare_parameter('margin_mode', 'fixed')      # fixed | derived
+        self.declare_parameter('margin_loc_err', 0.06)      # localisation p90 [m]
+        self.declare_parameter('margin_percep_lag', 0.30)   # min_track_age/rate [s]
+        self.declare_parameter('margin_obs_pos_err', 0.05)  # surface-point error [m]
+        self.declare_parameter('margin_floor', 0.08)        # never below this [m]
+
         # ---- Diagnostic topics ------------------------------------------
         self.declare_parameter('solve_time_topic',   '/gmpc/solve_time_ms')
         self.declare_parameter('min_h_topic',        '/gmpc/min_h')
@@ -291,6 +314,7 @@ class GMPCNode(Node):
             prog_weight=float(self.get_parameter('prog_weight').value),
         )
         self.mpc = GMPC(cfg)
+        self.cfg = cfg        # derived margins read a_max from here
         self.detour = DetourState(DetourConfig(
             enable=bool(self.get_parameter('detour_enable').value),
             trigger_range=float(self.get_parameter('detour_trigger_range').value),
@@ -309,6 +333,11 @@ class GMPCNode(Node):
         self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
         self.static_goal_clear = float(self.get_parameter('static_goal_clear').value)
         self.static_cbf_safe_margin = float(self.get_parameter('static_cbf_safe_margin').value)
+        self.margin_mode        = str(self.get_parameter('margin_mode').value)
+        self.margin_loc_err     = float(self.get_parameter('margin_loc_err').value)
+        self.margin_percep_lag  = float(self.get_parameter('margin_percep_lag').value)
+        self.margin_obs_pos_err = float(self.get_parameter('margin_obs_pos_err').value)
+        self.margin_floor       = float(self.get_parameter('margin_floor').value)
         self.static_activate_range = float(self.get_parameter('static_activate_range').value)
 
         # ---- State --------------------------------------------------------
@@ -568,8 +597,28 @@ class GMPCNode(Node):
 
         # 4. Solve
         X_now  = from_xytheta(*robot_xyth)
+        # Derived keep-outs, sized from what each obstacle actually has to
+        # absorb rather than from a tuned constant. v is the last commanded
+        # body speed, so the margin collapses as the robot slows -- which is
+        # what lets it settle on a goal that sits close to a wall.
+        v_rob = float(np.hypot(self.xi_prev[0], self.xi_prev[1]))
+        if self.margin_mode == 'derived':
+            a_brake = max(1e-3, min(self.cfg.a_max[0], self.cfg.a_max[1]))
+            m_base = (self.margin_loc_err
+                      + v_rob * v_rob / (2.0 * a_brake)
+                      + v_rob * self.dt)
+            m_static = max(self.margin_floor, m_base)
+        else:
+            m_base = m_static = None
         if self.cbf_enable:
             obstacles = list(self._obstacles)                     # dynamic
+            if m_base is not None:
+                for o in obstacles:
+                    v_obs = float(np.hypot(o.get('vx', 0.0), o.get('vy', 0.0)))
+                    o['margin'] = max(
+                        self.margin_floor,
+                        m_base + v_obs * self.margin_percep_lag
+                        + self.margin_obs_pos_err)
             # Engage the static-CBF (wall backstop) only while a dynamic obstacle
             # is actually nearby; otherwise let the smooth plan carry the robot
             # through gaps without two-sided wall constraints zig-zagging it.
@@ -585,8 +634,10 @@ class GMPCNode(Node):
                         # 'static' tags these as geometry to route AROUND rather
                         # than movers to commit a detour against -- detour.py
                         # must never lock a side against a wall point.
-                        obstacles.append({**s, 'static': True,
-                                          'margin': self.static_cbf_safe_margin})
+                        obstacles.append({
+                            **s, 'static': True,
+                            'margin': (m_static if m_static is not None
+                                       else self.static_cbf_safe_margin)})
         else:
             obstacles = None
         # Committed detour: pick a side once, then bend the horizon reference
