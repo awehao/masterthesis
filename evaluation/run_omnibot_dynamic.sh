@@ -10,7 +10,7 @@
 #
 # Usage:
 #   ./run_omnibot_dynamic.sh [N_TRIALS] [DURATION_S] [GOAL_X] [GOAL_Y] [METHOD]
-#     METHOD = gmpc_scan (default) | gmpc_scan_nosm | gmpc_truth | mppi | rpp
+#     METHOD = gmpc_scan (default) | gmpc_scan_nosm | gmpc_nocbf | gmpc_truth | mppi | rpp
 #       gmpc_scan      = our GMPC+CBF, obstacles from /scan (real perception)
 #       gmpc_scan_nosm = gmpc_scan but velocity_smoother OFF (smoother ablation)
 #       gmpc_truth     = our GMPC+CBF, obstacles from ground truth (ablation)
@@ -63,9 +63,10 @@ case "$METHOD" in
   gmpc_scan)      LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan";                    AMETHOD="gmpc_cbf"; TAG="scan"      ;;
   gmpc_scan_nosm) LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan use_smoother:=false"; AMETHOD="gmpc_cbf"; TAG="scan_nosm" ;;
   gmpc_truth)     LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=truth";                   AMETHOD="gmpc_cbf"; TAG="truth"     ;;
+  gmpc_nocbf)     LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan cbf:=false";    AMETHOD="gmpc_cbf"; TAG="nocbf"     ;;
   mppi)           LAUNCH_ARGS="omni_bot_baseline.launch.py $GUI_ARG method:=mppi";                            AMETHOD="mppi";     TAG="mppi"      ;;
   rpp)            LAUNCH_ARGS="omni_bot_baseline.launch.py $GUI_ARG method:=rpp";                             AMETHOD="rpp";      TAG="rpp"       ;;
-  *) echo "ERROR: METHOD (arg 5) = gmpc_scan | gmpc_scan_nosm | gmpc_truth | mppi | rpp"; exit 1 ;;
+  *) echo "ERROR: METHOD (arg 5) = gmpc_scan | gmpc_scan_nosm | gmpc_nocbf | gmpc_truth | mppi | rpp"; exit 1 ;;
 esac
 
 OUT_CSV="${HERE}/results/omnibot_dynamic_${METHOD}.csv"
