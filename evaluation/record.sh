@@ -36,6 +36,12 @@ if [[ -e "$OUT_DIR" ]]; then
 fi
 
 echo "Recording for $DURATION s into $OUT_DIR"
+# /scan, /scan_raw and /scan_filtered were added when the dynamic contacts were
+# traced to the tracker dropping LARGE movers at 0.5-1.5 m (coverage 31-53% for
+# r=0.62 and r=0.82, against 82-100% for the small ones). Without the raw beams
+# there is no way to tell whether the returns are missing, merged into the wall
+# by background subtraction, or clustered and then rejected -- three different
+# fixes. About 4 MB per trial at 10 Hz.
 echo "Topics: /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \\"
 echo "        /gmpc/solve_time_ms /gmpc/obstacles /gmpc/static_obstacles /gmpc/min_h \\"
 echo "        /model/dyn_obs_{0..9}/pose   (ground-truth obstacle poses, all methods)"
@@ -73,6 +79,7 @@ timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
                  /model/dyn_obs_7/pose /model/dyn_obs_8/pose \
                  /model/dyn_obs_9/pose \
                  /amcl_pose /odometry/filtered \
+                 /scan /scan_raw /scan_filtered \
     < /dev/null || true
 
 echo "Done. Now analyse with:"
