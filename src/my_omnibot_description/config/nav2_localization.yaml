@@ -212,10 +212,15 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: OPEN_LOOP
-    max_velocity: [0.35,  0.25,  0.8]   # FIX: was [0.4, 0.0, 1.0] — vy=0 blocked all lateral motion
-    min_velocity: [-0.20, -0.25, -0.8]  # FIX: was [-0.4, 0.0, -1.0]
-    max_accel:    [1.5,   1.0,   2.0]   # FIX: was [2.5, 0.0, 3.2]
-    max_decel:    [-1.5,  -1.0,  -2.0]  # FIX: was [-2.5, 0.0, -3.2]
+    # Hardware limits; see gmpc_params.yaml for the derivation from the wheel
+    # Jacobian. This node sits between the GMPC and the base, so whatever it
+    # clamps is what the chassis receives: min_velocity was -0.20 in x, which
+    # capped reverse below what the MPC was allowed to command, and raising
+    # vx_min to -0.35 upstream therefore changed nothing at the wheels.
+    max_velocity: [0.2775,  0.2775,  1.1327]
+    min_velocity: [-0.2775, -0.2775, -1.1327]
+    max_accel:    [6.25,    6.25,    25.51]
+    max_decel:    [-6.25,   -6.25,   -25.51]
     odom_topic: /odom
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]

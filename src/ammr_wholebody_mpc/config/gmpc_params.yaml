@@ -2,6 +2,19 @@
 # Matches the offline_prototype/run.py setup so the ROS2 behaviour reproduces
 # the validated benchmark numbers.
 
+# Chassis limits derived from the measured hardware, not chosen:
+#   4 omni wheels, r = 0.05 m, L = 0.245 m, wheel omega_max 5.55 rad/s (at max
+#   efficiency), wheel alpha_max 125 rad/s^2. The base Jacobian gives
+#     v_x = r/2 (w_d - w_b)   v_y = r/2 (w_a - w_c)   phi = r/4L sum(w)
+#   so the two translation axes use DIFFERENT wheel pairs and saturate
+#   independently: v_x,max = v_y,max = r*w_max = 0.2775 m/s, and the diagonal
+#   reaches sqrt(2)*0.2775 = 0.3924 m/s. Rotation shares all four wheels, so
+#   phi_dot_max = r/L * w_max = 1.1327 rad/s only with zero translation.
+#   Accelerations follow the same relations from alpha_max: 6.25 m/s^2 per axis
+#   and 25.51 rad/s^2.
+#
+# The previous vx = +-0.35 EXCEEDED the hardware by 26% -- every escape-speed
+# and feasibility-boundary figure computed with it was optimistic.
 gmpc_controller:
   ros__parameters:
     use_sim_time:        true
@@ -12,16 +25,16 @@ gmpc_controller:
     v_nominal:           0.22          # m/s — slightly faster than 0.18, still under obstacle 0.30
 
     # ---- Chassis limits (must match Baseline B / nav2_params_mppi.yaml) ---
-    vx_min:             -0.35
-    vx_max:              0.35
-    vy_min:             -0.25
-    vy_max:              0.25
-    wz_min:             -0.80
-    wz_max:              0.80
+    vx_min:             -0.2775
+    vx_max:              0.2775
+    vy_min:             -0.2775
+    vy_max:              0.2775
+    wz_min:             -1.1327
+    wz_max:              1.1327
     # Tightened (v2 → v3): heavier acceleration penalty to reduce jerk
-    ax_max:              1.5
-    ay_max:              1.0
-    az_max:              2.0
+    ax_max:              6.25
+    ay_max:              6.25
+    az_max:              25.51
 
     # ---- MPC weights (v3: stronger input penalty to damp the controller) -
     # Q stays at the same magnitude as the offline prototype.

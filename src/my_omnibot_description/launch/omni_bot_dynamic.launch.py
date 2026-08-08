@@ -213,9 +213,15 @@ def generate_launch_description():
         # more than 5% of the time; the sweep asks whether the reported jerk is
         # a controller defect or simply the limit the controller was given.
         # MPPI for comparison runs 1.5 / 1.0 / 2.0 and uses about 13% of it.
-        'ax_max': float(os.environ.get('AX_MAX', '0.8')),
-        'ay_max': float(os.environ.get('AY_MAX', '0.6')),
-        'az_max': float(os.environ.get('AZ_MAX', '1.2')),
+        # Defaults now match gmpc_params.yaml, which carries the hardware-derived
+        # limits (wheel alpha_max 125 rad/s^2 -> 6.25 m/s^2 per axis). The old
+        # 0.8/0.6/1.2 silently overrode the yaml -- they are applied AFTER it --
+        # so every result before this ran at an eighth of the chassis's actual
+        # acceleration, and the "stage 4: full acceleration" comparison measured
+        # nothing.
+        'ax_max': float(os.environ.get('AX_MAX', '6.25')),
+        'ay_max': float(os.environ.get('AY_MAX', '6.25')),
+        'az_max': float(os.environ.get('AZ_MAX', '25.51')),
         # Spatio-temporal cost field (proactive detour). ST_WEIGHT=0 is the
         # validated configuration. CBF_ENABLE is separate so all four
         # combinations of {CBF, ST} can be benchmarked.
