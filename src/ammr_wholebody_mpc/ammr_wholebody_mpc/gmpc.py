@@ -118,6 +118,18 @@ class GMPCConfig:
     # 1.0 reproduces the old shared-slack behaviour exactly (same weight for
     # both blocks), so this is a strict generalisation.
     cbf_static_slack_scale : float = 1.0
+    # Hard barrier at k = 0 for KNOWN STATIC geometry only.
+    #
+    # The earlier cbf_hard_k0 pinned the step-0 slack outright, but the slack is
+    # SHARED across every obstacle at that step, so it hardened the dynamic rows
+    # too -- including surface points that can appear the instant perception
+    # resolves them. That gave 13-31 'primal infeasible' events per trial. Walls
+    # are different: they come from a stationary occupancy map, need no velocity
+    # prediction, cannot appear suddenly, and the residual contacts measured on
+    # bigarena are entirely door posts. Hardening only that class keeps the
+    # dynamic side recoverable. Forces the slack split so the two classes stop
+    # sharing one epsilon.
+    cbf_hard_k0_static : bool = False
     # ---- Spatio-temporal cost field (proactive detour) ---------------------
     # Soft Gaussian barrier evaluated at the PREDICTED obstacle position for
     # every horizon step, added to the QP cost. Where the hard CBF only reacts
@@ -219,6 +231,10 @@ class GMPCResult:
     n_static_in    : int   = 0            # of those, tagged static (wall points)
     min_h_static   : float = float('inf') # min h at k=0 over static obstacles
     min_h_dynamic  : float = float('inf') # min h at k=0 over dynamic obstacles
+    # Barrier-condition audit (see the post-solve block in solve()).
+    eps0              : float = 0.0            # slack actually used at k = 0
+    cbf_resid_noslack : float = float('inf')   # min over rows of  A z - l
+    cbf_resid_slack   : float = float('inf')   # min over rows of  A z + eps - l
 
 
 # ---------------------------------------------------------------------------
@@ -833,11 +849,15 @@ class GMPC:
         min_h       = float('inf')
         n_obs_in = n_static_in = 0
         min_h_static = min_h_dynamic = float('inf')
+        A_cbf_keep = l_cbf_keep = None
+        eps0 = 0.0
+        resid_noslack = resid_slack = float('inf')
         n_slack     = 0
         if obstacles:
             # One slack per step for dynamic rows, and (when the static block is
             # priced differently) a second per-step slack for the wall rows.
-            split_slack = cfg.cbf_static_slack_scale != 1.0 and \
+            split_slack = (cfg.cbf_static_slack_scale != 1.0
+                           or cfg.cbf_hard_k0_static) and \
                 any(o.get('static', 'margin' in o) for o in obstacles)
             n_slack = 2 * N if split_slack else N
             A_cbf, l_cbf, u_cbf, h_now = _build_cbf_horizon(
@@ -857,6 +877,11 @@ class GMPC:
             if A_cbf.shape[0] > 0:
                 cbf_active = A_cbf.shape[0]
                 min_h      = float(np.min(h_now))
+                # Kept for the post-solve audit: h < 0 only says the robot is
+                # inside the keep-out, NOT that the CBF inequality was broken --
+                # it can be recovering. Proving the slack let it through needs
+                # the row residual with and without epsilon.
+                A_cbf_keep, l_cbf_keep = A_cbf, l_cbf
 
                 # P,q augmented with slack block (diagonal L2 penalty).
                 # Step k=0 gets cbf_eps0_scale × the nominal penalty so that
@@ -913,6 +938,11 @@ class GMPC:
                     eps_ub[0] = 0.0                       # dynamic block, k = 0
                     if n_slack >= 2 * N:
                         eps_ub[N] = 0.0                   # static block, k = 0
+                elif cfg.cbf_hard_k0_static and n_slack >= 2 * N:
+                    # Walls only. The dynamic block keeps its slack, so a mover
+                    # the perception has only just resolved can still be given
+                    # way to rather than making the whole QP infeasible.
+                    eps_ub[N] = 0.0
                 ub_total = np.concatenate([ub_total, eps_ub])
 
         # 6. OSQP solve
@@ -939,6 +969,25 @@ class GMPC:
         else:
             sol = np.asarray(res.x)
             delta = sol[:Nm].reshape(N, n)
+            # Post-solve audit of the CBF rows. h < 0 only says the robot is
+            # inside the keep-out; it does NOT say the barrier condition was
+            # broken, because a robot already inside but moving out still
+            # satisfies h_dot + alpha h >= 0. What proves the slack let it
+            # through is the row residual: A z - l < 0 without epsilon while
+            # A z + eps - l >= 0 with it.
+            if A_cbf_keep is not None and A_cbf_keep.shape[0] > 0:
+                z_full = np.zeros(Nm + n_slack)
+                z_full[:len(sol)] = sol[:Nm + n_slack]
+                r_slack = A_cbf_keep @ z_full - l_cbf_keep
+                r_none  = A_cbf_keep[:, :Nm] @ z_full[:Nm] - l_cbf_keep
+                resid_slack   = float(np.min(r_slack))
+                resid_noslack = float(np.min(r_none))
+                if len(sol) >= Nm + n_slack:
+                    eps_v = sol[Nm:Nm + n_slack]
+                    # eps_0 is the step-0 slack; with split_slack there is one
+                    # per block and the larger of the two is what mattered.
+                    eps0 = float(max(eps_v[0], eps_v[N]) if n_slack >= 2 * N
+                                 else eps_v[0])
 
         u_opt = xi_ref_win[0] + delta[0]
         u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
@@ -961,7 +1010,9 @@ class GMPC:
                           e0=e0, solve_time_s=solve_time, status=status,
                           cbf_active=cbf_active, min_h=min_h,
                           n_obs_in=n_obs_in, n_static_in=n_static_in,
-                          min_h_static=min_h_static, min_h_dynamic=min_h_dynamic)
+                          min_h_static=min_h_static, min_h_dynamic=min_h_dynamic,
+                          eps0=eps0, cbf_resid_noslack=resid_noslack,
+                          cbf_resid_slack=resid_slack)
 
 
 # ---------------------------------------------------------------------------

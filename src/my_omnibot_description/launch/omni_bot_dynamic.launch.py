@@ -253,6 +253,9 @@ def generate_launch_description():
         # against an approaching mover is not obviously better. Measured, not
         # assumed.
         'cbf_hard_k0': os.environ.get('HARD_K0', '0') == '1',
+        # Walls only, and only at k = 0. Separate knob from HARD_K0
+        # because that one hardens the dynamic rows too (shared slack).
+        'cbf_hard_k0_static': os.environ.get('HARD_K0_STATIC', '0') == '1',
         'cbf_prune_range': float(os.environ.get('CBF_PRUNE_RANGE', '0.0')),
         'cbf_near_steps': int(os.environ.get('CBF_NEAR_STEPS', '6')),
         'cbf_far_stride': int(os.environ.get('CBF_FAR_STRIDE', '1')),

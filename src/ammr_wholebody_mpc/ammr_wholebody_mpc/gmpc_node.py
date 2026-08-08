@@ -151,6 +151,7 @@ class GMPCNode(Node):
         self.declare_parameter('cbf_near_steps', 6)
         self.declare_parameter('cbf_far_stride', 1)
         self.declare_parameter('cbf_hard_k0', False)
+        self.declare_parameter('cbf_hard_k0_static', False)
         # Wheel-speed coupling. The box in vx/vy/wz cannot express that rotation
         # borrows authority from both translation axes; see GMPCConfig.
         self.declare_parameter('wheel_coupling', True)
@@ -321,6 +322,8 @@ class GMPCNode(Node):
             cbf_near_steps=int(self.get_parameter('cbf_near_steps').value),
             cbf_far_stride=int(self.get_parameter('cbf_far_stride').value),
             cbf_hard_k0=bool(self.get_parameter('cbf_hard_k0').value),
+            cbf_hard_k0_static=bool(
+                self.get_parameter('cbf_hard_k0_static').value),
             wheel_coupling=bool(self.get_parameter('wheel_coupling').value),
             wheel_radius=float(self.get_parameter('wheel_radius').value),
             wheel_base_L=float(self.get_parameter('wheel_base_L').value),
@@ -734,6 +737,11 @@ class GMPCNode(Node):
         #   5  static held        13  result.min_h (as published)
         #   6  static appended    14  cbf_active rows
         #   7  nearest static d   15  age of last static msg [s]
+        #  16  eps_0 actually used
+        #  17  min CBF row residual WITHOUT slack   (A z - l)
+        #  18  min CBF row residual WITH slack      (A z + eps - l)
+        # 17 < 0 while 18 >= 0 and 16 > 0 is the proof that the command broke
+        # the barrier condition and only the slack kept the QP feasible.
         self._cycle_id += 1
         now_s = self.get_clock().now().nanoseconds * 1e-9
         d = Float32MultiArray()
@@ -741,7 +749,8 @@ class GMPCNode(Node):
             self._cycle_id, rx_d, ry_d, self._stat_rx_seq, self._stat_rx_n,
             n_stat_held, len(stat_in), near_d, near_r, near_m,
             min_h_stat_entry, result.min_h_static, result.min_h_dynamic,
-            result.min_h, result.cbf_active, now_s - self._stat_rx_t)]
+            result.min_h, result.cbf_active, now_s - self._stat_rx_t,
+            result.eps0, result.cbf_resid_noslack, result.cbf_resid_slack)]
         self.diag_pub.publish(d)
         m = Float32(); m.data = float(result.solve_time_s * 1e3)
         self.solve_time_pub.publish(m)
