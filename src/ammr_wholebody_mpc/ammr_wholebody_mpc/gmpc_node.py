@@ -150,6 +150,13 @@ class GMPCNode(Node):
         self.declare_parameter('cbf_near_steps', 6)
         self.declare_parameter('cbf_far_stride', 1)
         self.declare_parameter('cbf_hard_k0', False)
+        # Wheel-speed coupling. The box in vx/vy/wz cannot express that rotation
+        # borrows authority from both translation axes; see GMPCConfig.
+        self.declare_parameter('wheel_coupling', True)
+        self.declare_parameter('wheel_radius', 0.05)
+        self.declare_parameter('wheel_base_L', 0.245)
+        self.declare_parameter('wheel_w_max', 5.55)
+        self.declare_parameter('wheel_a_max', 125.0)
         self.declare_parameter('cbf_margin_growth', 0.0)
         # Prefer giving way FORWARD rather than backward when the CBF pushes the
         # robot off the reference. 0 = no preference (validated behaviour).
@@ -313,6 +320,11 @@ class GMPCNode(Node):
             cbf_near_steps=int(self.get_parameter('cbf_near_steps').value),
             cbf_far_stride=int(self.get_parameter('cbf_far_stride').value),
             cbf_hard_k0=bool(self.get_parameter('cbf_hard_k0').value),
+            wheel_coupling=bool(self.get_parameter('wheel_coupling').value),
+            wheel_radius=float(self.get_parameter('wheel_radius').value),
+            wheel_base_L=float(self.get_parameter('wheel_base_L').value),
+            wheel_w_max=float(self.get_parameter('wheel_w_max').value),
+            wheel_a_max=float(self.get_parameter('wheel_a_max').value),
             prog_weight=float(self.get_parameter('prog_weight').value),
         )
         self.mpc = GMPC(cfg)

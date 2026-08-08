@@ -77,6 +77,25 @@ class GMPCConfig:
     # optimiser will still accept a hard acceleration burst when the CBF demands
     # it (safety preserved). Default 0 = disabled (identical to old behaviour).
     S      : np.ndarray = field(default_factory=lambda: np.zeros((3, 3)))
+    # ---- Wheel-speed coupling ---------------------------------------------
+    # u_min/u_max/a_max form an axis-aligned BOX, but the chassis's feasible set
+    # is not a box: the two translation axes drive different wheel pairs and so
+    # saturate independently, while rotation drives all four and competes with
+    # both. Inverting the omni Jacobian gives r·ω = W·u with
+    #
+    #     W = [[0, 1, L], [-1, 0, L], [0, -1, L], [1, 0, L]]
+    #
+    # so |v_x ± L·φ̇| ≤ r·ω_max and |v_y ± L·φ̇| ≤ r·ω_max. With L·φ̇_max exactly
+    # equal to r·ω_max, spinning at full rate leaves ZERO translation authority
+    # -- a fact the box cannot express. Measured on a 19-trial batch, 7.4% of
+    # control cycles asked for wheel speeds beyond the hardware, worst case 2.0x,
+    # and gz's VelocityControl executes them anyway because it has no actuator
+    # model. Those results did not represent the robot.
+    wheel_coupling : bool  = False        # off = old box-only behaviour
+    wheel_radius   : float = 0.05         # r   [m]
+    wheel_base_L   : float = 0.245        # L   [m]
+    wheel_w_max    : float = 5.55         # ω_max [rad/s]
+    wheel_a_max    : float = 125.0        # α_max [rad/s²]
     # ---- Control Barrier Function safety filter ----------------------------
     cbf_alpha        : float = 1.0        # decay rate α in  ḣ + α·h ≥ 0
     cbf_safe_margin  : float = 0.30       # extra clearance added to obstacle radius [m]
@@ -332,9 +351,52 @@ def _build_constraints(cfg: GMPCConfig,
         lb_acc[k*m:(k+1)*m] = -cfg.a_max * dt - xi_ref_win[k] + xi_ref_win[k-1]
         ub_acc[k*m:(k+1)*m] =  cfg.a_max * dt - xi_ref_win[k] + xi_ref_win[k-1]
 
-    A_total  = sparse.vstack([A_vel, A_acc.tocsr()], format='csc')
-    lb_total = np.concatenate([lb_vel, lb_acc])
-    ub_total = np.concatenate([ub_vel, ub_acc])
+    blocks = [A_vel, A_acc.tocsr()]
+    lbs    = [lb_vel, lb_acc]
+    ubs    = [ub_vel, ub_acc]
+
+    # ---- Wheel-speed coupling: 4 rows per step, on top of the box ---------
+    # r·ω = W·u, so |W·u_k| ≤ r·ω_max and |W·(u_k - u_{k-1})| ≤ r·α_max·dt.
+    # These do not replace the box -- the box still carries per-axis limits the
+    # user may set tighter than the wheels allow -- they cut the corners off it.
+    if cfg.wheel_coupling:
+        L = cfg.wheel_base_L
+        W = np.array([[0.0,  1.0, L],
+                      [-1.0, 0.0, L],
+                      [0.0, -1.0, L],
+                      [1.0,  0.0, L]])
+        w_lim = cfg.wheel_radius * cfg.wheel_w_max          # r·ω_max  [m/s]
+        a_lim = cfg.wheel_radius * cfg.wheel_a_max * dt     # r·α_max·dt
+
+        nw = 4
+        A_wv = sparse.lil_matrix((N * nw, Nm))
+        lb_wv = np.zeros(N * nw); ub_wv = np.zeros(N * nw)
+        A_wa = sparse.lil_matrix((N * nw, Nm))
+        lb_wa = np.zeros(N * nw); ub_wa = np.zeros(N * nw)
+
+        for k in range(N):
+            r0, r1 = k * nw, (k + 1) * nw
+            A_wv[r0:r1, k*m:(k+1)*m] = W
+            off = W @ xi_ref_win[k]
+            lb_wv[r0:r1] = -w_lim - off
+            ub_wv[r0:r1] =  w_lim - off
+
+            A_wa[r0:r1, k*m:(k+1)*m] = W
+            if k == 0:
+                d_ref = W @ (xi_ref_win[0] - xi_prev)
+            else:
+                A_wa[r0:r1, (k-1)*m:k*m] = -W
+                d_ref = W @ (xi_ref_win[k] - xi_ref_win[k-1])
+            lb_wa[r0:r1] = -a_lim - d_ref
+            ub_wa[r0:r1] =  a_lim - d_ref
+
+        blocks += [A_wv.tocsr(), A_wa.tocsr()]
+        lbs    += [lb_wv, lb_wa]
+        ubs    += [ub_wv, ub_wa]
+
+    A_total  = sparse.vstack(blocks, format='csc')
+    lb_total = np.concatenate(lbs)
+    ub_total = np.concatenate(ubs)
     return A_total, lb_total, ub_total
 
 
