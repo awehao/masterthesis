@@ -446,8 +446,29 @@ def generate_launch_description():
              parameters=[{'use_sim_time': True}], output='screen'),
         Node(package='ammr_bringup', executable='scan_relay',
              parameters=[{'use_sim_time': True,
+                          # Centres are exact: 21 trials at different positions
+                          # all show the same four body-fixed sectors at +-45
+                          # and +-135, 8-9 deg wide, 34 beams total. The
+                          # half-width was not -- 15 deg masked 120 of 360
+                          # beams, discarding a quarter of the lidar.
+                          #
+                          # Over-masking did more than cost beams. The clear
+                          # gaps between sectors were only 60 deg, and a mover
+                          # of radius 0.82 m at 0.5 m subtends 60.8 deg, so its
+                          # visible arc straddled a masked sector and split into
+                          # two clusters; the centroid then jumped past the
+                          # 0.80 m association gate and the track was rebuilt,
+                          # invisible for min_track_age frames. Measured: 47 of
+                          # 60 close encounters with the large movers had their
+                          # arc cut by the mask, and their CBF coverage at
+                          # 0.5-1.5 m was 31-53% against 82-100% for the small
+                          # ones. At 10 deg the gaps widen to 70 deg and neither
+                          # large mover straddles them inside 1 m.
                           'blocked_centers_deg': '45,135,225,315',
-                          'blocked_halfwidth_deg': 15.0}], output='screen'),
+                          # MASK_HW=15 restores the old width for A/B testing.
+                          'blocked_halfwidth_deg': float(
+                              os.environ.get('MASK_HW', '10.0'))}],
+             output='screen'),
 
         TimerAction(period=6.0, actions=[Node(
             package='ros_gz_sim', executable='create',
