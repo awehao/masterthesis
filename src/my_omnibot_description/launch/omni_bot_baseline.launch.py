@@ -80,8 +80,13 @@ def generate_launch_description():
         # horizon is not (MPPI sees 2.8 s to the GMPC's 1.0 s because sampling
         # tolerates prediction error that hard CBF constraints do not), so that
         # difference is left alone as part of each method's design.
+        # BASE_ACCEL is obsolete: the baseline yamls now carry the same
+        # hardware-derived limits as the GMPC (0.2775 m/s per axis, 6.25 m/s^2,
+        # 1.1327 rad/s), so there is nothing left to clamp. The flag existed
+        # when the GMPC was self-limited to 0.8/0.6/1.2 and the baselines were
+        # not; both sides were wrong, and both are now the chassis's real box.
         if os.environ.get('BASE_ACCEL') == '1':
-            rw.update({'ax_max': '0.8', 'ay_max': '0.6', 'az_max': '1.2'})
+            rw.update({'ax_max': '6.25', 'ay_max': '6.25', 'az_max': '25.51'})
         return RewrittenYaml(source_file=cfg, convert_types=True,
                              param_rewrites=rw)
     mppi_params = params(mppi_cfg)

@@ -83,14 +83,14 @@ controller_server:
       vx_std: 0.2
       vy_std: 0.2                  # FIX: was 0.0 — must be >0 for Omni lateral sampling
       wz_std: 0.4
-      vx_max: 0.35
-      vx_min: -0.20
-      vy_max: 0.25                 # FIX: was 0.0 — must be >0 for Omni lateral motion
-      wz_max: 0.8
-      ax_max: 1.5
+      vx_max: 0.2775
+      vx_min: -0.2775
+      vy_max: 0.2775                 # FIX: was 0.0 — must be >0 for Omni lateral motion
+      wz_max: 1.1327
+      ax_max: 6.25
       ax_min: -1.5
-      ay_max: 1.0                  # FIX: added for Omni lateral acceleration limit
-      az_max: 2.0
+      ay_max: 6.25                  # FIX: added for Omni lateral acceleration limit
+      az_max: 25.51
       iteration_count: 1
       prune_distance: 1.7
       transform_tolerance: 2.0
@@ -303,10 +303,10 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: OPEN_LOOP
-    max_velocity: [0.35,  0.25,  0.8]   # FIX: was [0.4, 0.0, 1.0] — vy=0 blocked all lateral motion
-    min_velocity: [-0.20, -0.25, -0.8]  # FIX: was [-0.4, 0.0, -1.0]
-    max_accel:    [1.5,   1.0,   2.0]   # FIX: was [2.5, 0.0, 3.2]
-    max_decel:    [-1.5,  -1.0,  -2.0]  # FIX: was [-2.5, 0.0, -3.2]
+    max_velocity: [0.2775, 0.2775, 1.1327]   # FIX: was [0.4, 0.0, 1.0] — vy=0 blocked all lateral motion
+    min_velocity: [-0.2775, -0.2775, -1.1327]  # FIX: was [-0.4, 0.0, -1.0]
+    max_accel:    [6.25, 6.25, 25.51]   # FIX: was [2.5, 0.0, 3.2]
+    max_decel:    [-6.25, -6.25, -25.51]  # FIX: was [-2.5, 0.0, -3.2]
     odom_topic: /odom
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
