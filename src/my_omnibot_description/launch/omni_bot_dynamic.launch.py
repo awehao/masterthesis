@@ -97,6 +97,8 @@ def generate_launch_description():
     gmpc_cmd_topic = PythonExpression(
         ["'cmd_vel_nav' if '", use_smoother, "' == 'true' else 'cmd_vel'"])
 
+    truth_pose = PythonExpression(
+        ["'", str(os.environ.get('TRUTH_POSE', '0')), "' == '1'"])
     use_arm = LaunchConfiguration('use_arm')
     robot_description = ParameterValue(
         Command(['xacro ', urdf_file, ' use_camera:=false use_arm:=', use_arm]),
@@ -283,7 +285,25 @@ def generate_launch_description():
              parameters=[ekf_config] + (
                  [{'pose0_rejection_threshold':
                    float(os.environ['EKF_REJECT'])}]
-                 if os.environ.get('EKF_REJECT') else [])),
+                 if os.environ.get('EKF_REJECT') else []),
+             condition=UnlessCondition(truth_pose)),
+        # TRUTH_POSE=1: replace the whole localisation stack with a perfect one.
+        # /odom already carries gz's true pose IN MAP COORDINATES (verified:
+        # seed1 starts at 17.10,14.80 against a spawn of 17.1,14.8), and
+        # odom_tf_broadcaster publishes odom->base_footprint from it, so an
+        # identity map->odom makes TF map->base_footprint exactly the truth.
+        #
+        # This isolates how much of the contact rate is localisation error. It
+        # matters because 43 of 48 contacts are shallower than AMCL's own p90
+        # (0.076 m) -- the barrier may be satisfied in the frame it can see
+        # while the true body grazes. Without this ablation that is a hypothesis;
+        # with it, it is a number.
+        Node(package='tf2_ros', executable='static_transform_publisher',
+             name='truth_map_odom', output='screen',
+             arguments=['--x', '0', '--y', '0', '--z', '0',
+                        '--roll', '0', '--pitch', '0', '--yaw', '0',
+                        '--frame-id', 'map', '--child-frame-id', 'odom'],
+             condition=IfCondition(truth_pose)),
         Node(package='nav2_planner', executable='planner_server', name='planner_server',
              output='screen', parameters=[configured_nav_params]),
         # lifecycle manager: two variants so the smoother isn't a managed node

@@ -32,6 +32,7 @@ than record a run that was never going to move.
 """
 import argparse
 import math
+import os
 import random
 import sys
 import time
@@ -225,7 +226,11 @@ def main():
         p.pose.pose.orientation.w = 1.0
         # Do not reset anything until the EKF is actually alive, or the reset
         # goes to a node that has not subscribed yet and is silently dropped.
-        if math.hypot(a.start_x, a.start_y) > 0.05:
+        # TRUTH_POSE=1 removes the EKF entirely: map->odom is a static identity
+        # and TF already carries the true pose, so there is nothing to reset and
+        # nothing publishing /odometry/filtered to wait for.
+        truth_pose = os.environ.get('TRUTH_POSE', '0') == '1'
+        if math.hypot(a.start_x, a.start_y) > 0.05 and not truth_pose:
             if not n.wait(lambda: n.fused is not None, min(20.0, left()),
                           'EKF publishing'):
                 print('  /odometry/filtered never appeared', flush=True)
@@ -267,8 +272,10 @@ def main():
                                  or abs(q[1] - a.start_y) > 0.5):
                     return False
                 # And the EKF's own estimate, which is what publishes map->odom.
+                # Under TRUTH_POSE there is no EKF: map->odom is a static
+                # identity, so the TF check above is already the whole story.
                 f = n.fused
-                if math.hypot(a.start_x, a.start_y) > 0.05:
+                if math.hypot(a.start_x, a.start_y) > 0.05 and not truth_pose:
                     return (f is not None and abs(f[0] - a.start_x) < 0.5
                             and abs(f[1] - a.start_y) < 0.5)
                 return True
