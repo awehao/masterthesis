@@ -18,6 +18,7 @@ If TF lookup fails, the node publishes zero and warns (throttled).
 
 from __future__ import annotations
 
+import math
 import numpy as np
 
 import rclpy
@@ -360,6 +361,10 @@ class GMPCNode(Node):
         self._arrived     = False
         self._obstacles   = []           # dynamic: list of dict {x, y, radius, vx, vy}
         self._static_obstacles = []      # static walls (v=0) for the CBF
+        self._stat_rx_t   = 0.0          # arrival time of the last static msg
+        self._stat_rx_n   = 0            # points in it
+        self._stat_rx_seq = 0            # messages received (DDS liveness)
+        self._cycle_id    = 0            # ties every diagnostic to one solve
 
         # ---- TF + I/O -----------------------------------------------------
         self.tf_buffer   = tf2_ros.Buffer()
@@ -386,6 +391,11 @@ class GMPCNode(Node):
             Float32, str(self.get_parameter('solve_time_topic').value), 10)
         self.min_h_pub      = self.create_publisher(
             Float32, str(self.get_parameter('min_h_topic').value), 10)
+        # One row per control step, published unconditionally (unlike min_h,
+        # which is skipped when cbf_active == 0 and therefore goes stale in a
+        # bag). Layout is documented at the publish site.
+        self.diag_pub       = self.create_publisher(
+            Float32MultiArray, '/gmpc/diag', 10)
         self.cbf_zone_pub   = self.create_publisher(
             MarkerArray, str(self.get_parameter('cbf_zone_topic').value), 10)
 
@@ -508,6 +518,13 @@ class GMPCNode(Node):
         ]
 
     def _static_obstacles_cb(self, msg: Float32MultiArray):
+        # Position 1 of the entry diagnostic: what actually crossed DDS, stamped
+        # on arrival. Float32MultiArray carries no header, so a bag can only
+        # align this topic with /gmpc/min_h by record time -- which is exactly
+        # the ambiguity the per-cycle diagnostic removes.
+        self._stat_rx_t = self.get_clock().now().nanoseconds * 1e-9
+        self._stat_rx_n = len(msg.data) // 5
+        self._stat_rx_seq += 1
         """Nearest WALL points (v=0) from the tracker. Same wire format as the
         dynamic obstacles; merged into the CBF set so the controller doesn't
         dodge a moving obstacle straight into static geometry."""
@@ -673,6 +690,23 @@ class GMPCNode(Node):
         u_min_saved = self._cfg.u_min
         if floor is not None and floor > self._cfg.u_min[0]:
             self._cfg.u_min = np.array([floor, u_min_saved[1], u_min_saved[2]])
+        # Position 2 of the entry diagnostic: the set as it stands at the call,
+        # measured against the SAME robot_xyth the solver linearises about.
+        # A count alone is not enough -- four points can be present and still
+        # exclude the door post -- so the nearest static point and its own
+        # barrier value are recorded too.
+        rx_d, ry_d = robot_xyth[0], robot_xyth[1]
+        n_dyn_in = len(self._obstacles)
+        n_stat_held = len(self._static_obstacles)
+        stat_in = [o for o in (obstacles or []) if o.get('static', False)]
+        near_d = near_r = near_m = float('nan')
+        min_h_stat_entry = float('inf')
+        for o in stat_in:
+            d = math.hypot(o['x'] - rx_d, o['y'] - ry_d)
+            r_eff = float(o['radius']) + float(o.get('margin', 0.0))
+            h_i = d * d - r_eff * r_eff
+            if h_i < min_h_stat_entry:
+                min_h_stat_entry, near_d, near_r, near_m = h_i, d, o['radius'], o.get('margin', float('nan'))
         try:
             result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,
                                     obstacles=obstacles)
@@ -689,6 +723,26 @@ class GMPCNode(Node):
         self.xi_prev = u
 
         # 6. Diagnostic topics (for analyze.py + Foxglove)
+        # Per-cycle entry diagnostic. Every field below comes from THIS call, so
+        # "the point was published" and "the point reached the barrier" can be
+        # told apart without cross-topic time alignment.
+        #   0  cycle_id            8  nearest static radius
+        #   1  robot x             9  nearest static margin
+        #   2  robot y            10  min h over static AT ENTRY
+        #   3  static msgs rx     11  min h over static IN BUILDER
+        #   4  points in last msg 12  min h over dynamic IN BUILDER
+        #   5  static held        13  result.min_h (as published)
+        #   6  static appended    14  cbf_active rows
+        #   7  nearest static d   15  age of last static msg [s]
+        self._cycle_id += 1
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+        d = Float32MultiArray()
+        d.data = [float(v) for v in (
+            self._cycle_id, rx_d, ry_d, self._stat_rx_seq, self._stat_rx_n,
+            n_stat_held, len(stat_in), near_d, near_r, near_m,
+            min_h_stat_entry, result.min_h_static, result.min_h_dynamic,
+            result.min_h, result.cbf_active, now_s - self._stat_rx_t)]
+        self.diag_pub.publish(d)
         m = Float32(); m.data = float(result.solve_time_s * 1e3)
         self.solve_time_pub.publish(m)
         if self.cbf_enable and result.cbf_active > 0:

@@ -211,6 +211,14 @@ class GMPCResult:
     status         : str                  # OSQP status string
     cbf_active     : int   = 0            # number of CBF constraints applied (info)
     min_h          : float = float('inf') # smallest barrier value across obstacles
+    # Entry diagnostics. min_h alone cannot say whether a constraint was absent
+    # or merely satisfied, and it is published only when cbf_active > 0, so a
+    # bag can hold a stale value from an earlier cycle. These are computed from
+    # the SAME obstacle list and pose the QP used, in the same call.
+    n_obs_in       : int   = 0            # obstacles handed to solve()
+    n_static_in    : int   = 0            # of those, tagged static (wall points)
+    min_h_static   : float = float('inf') # min h at k=0 over static obstacles
+    min_h_dynamic  : float = float('inf') # min h at k=0 over dynamic obstacles
 
 
 # ---------------------------------------------------------------------------
@@ -823,6 +831,8 @@ class GMPC:
         Nm          = N * n
         cbf_active  = 0
         min_h       = float('inf')
+        n_obs_in = n_static_in = 0
+        min_h_static = min_h_dynamic = float('inf')
         n_slack     = 0
         if obstacles:
             # One slack per step for dynamic rows, and (when the static block is
@@ -833,6 +843,17 @@ class GMPC:
             A_cbf, l_cbf, u_cbf, h_now = _build_cbf_horizon(
                 cfg, X_now, X_ref_win, xi_ref_win, obstacles, n_slack,
             )
+            # Same static/dynamic split _build_cbf_horizon uses, so the entry
+            # diagnostic and the rows cannot disagree about what a point is.
+            stat_mask = np.array(
+                [bool(o.get('static', 'margin' in o)) for o in obstacles], bool)
+            n_obs_in    = len(obstacles)
+            n_static_in = int(stat_mask.sum())
+            if len(h_now):
+                if stat_mask.any():
+                    min_h_static = float(np.min(h_now[stat_mask]))
+                if (~stat_mask).any():
+                    min_h_dynamic = float(np.min(h_now[~stat_mask]))
             if A_cbf.shape[0] > 0:
                 cbf_active = A_cbf.shape[0]
                 min_h      = float(np.min(h_now))
@@ -938,7 +959,9 @@ class GMPC:
 
         return GMPCResult(u_opt=u_opt, delta_xi_all=delta,
                           e0=e0, solve_time_s=solve_time, status=status,
-                          cbf_active=cbf_active, min_h=min_h)
+                          cbf_active=cbf_active, min_h=min_h,
+                          n_obs_in=n_obs_in, n_static_in=n_static_in,
+                          min_h_static=min_h_static, min_h_dynamic=min_h_dynamic)
 
 
 # ---------------------------------------------------------------------------
