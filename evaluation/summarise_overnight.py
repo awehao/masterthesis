@@ -15,11 +15,13 @@ ARMS = [('slackA', 'A/B: soft slack (old movers)'),
         ('slackB', 'A/B: hard static k0 (old movers)'),
         ('hardC',  'hard static k0 + mover cap 0.14'),
         ('softD',  'soft slack + mover cap 0.14'),
-        ('repE',   'replicate of the cleaner arm')]
+        ('repE',   'replicate of the cleaner arm'),
+        ('poseF',  'soft slack + pose from EKF topic (no TF composition)')]
 
 F = ['cycle', 'rx', 'ry', 'rx_seq', 'rx_n', 'held', 'appended', 'near_d',
      'near_r', 'near_m', 'h_entry', 'h_build_stat', 'h_build_dyn', 'min_h',
-     'rows', 'msg_age', 'eps0', 'resid_noslack', 'resid_slack']
+     'rows', 'msg_age', 'eps0', 'resid_noslack', 'resid_slack',
+     'pose_gap', 'pose_src', 'fallbacks']
 
 
 def csv_stats(path):
@@ -53,6 +55,7 @@ def barrier_audit(archive):
         return f"(rosbag unavailable: {e})"
     tot = viol = slack_saved = held_not_app = 0
     worst = 0.0
+    gaps = []
     for bag in sorted(glob.glob(f'{archive}/gmpc_cbf__scan_seed*')):
         if not os.path.exists(f'{bag}/metadata.yaml'):
             continue
@@ -68,13 +71,18 @@ def barrier_audit(archive):
         while rd.has_next():
             _, buf, _ = rd.read_next()
             d = list(deserialize_message(buf, Float32MultiArray).data)
-            if len(d) < len(F):
+            # Arms recorded before the pose diagnostic existed publish 19
+            # fields, not 22. Requiring the full width would silently skip every
+            # row from those arms and report "no diag recorded".
+            if len(d) < 19:
                 continue
             v = dict(zip(F, d))
             tot += 1
             if v['held'] > 0 and v['appended'] == 0:
                 held_not_app += 1
             rn, rs, e0 = v['resid_noslack'], v['resid_slack'], v['eps0']
+            if len(d) > 19 and math.isfinite(d[19]):
+                gaps.append(d[19])
             if math.isfinite(rn) and rn < -1e-6:
                 viol += 1
                 worst = min(worst, rn)
@@ -82,9 +90,15 @@ def barrier_audit(archive):
                     slack_saved += 1
     if not tot:
         return "(no /gmpc/diag recorded)"
+    g = ""
+    if gaps:
+        import numpy as _np
+        g = (f", TF-vs-EKF pose gap median {_np.median(gaps):.3f} "
+             f"p95 {_np.percentile(gaps, 95):.3f} max {max(gaps):.3f} m")
     return (f"cycles {tot}, wall points dropped before solve {held_not_app}, "
             f"barrier broken without slack {viol} ({viol/tot:.2%}), "
-            f"of which slack kept feasible {slack_saved}, worst residual {worst:+.4f}")
+            f"of which slack kept feasible {slack_saved}, "
+            f"worst residual {worst:+.4f}{g}")
 
 
 print("# Overnight results\n")

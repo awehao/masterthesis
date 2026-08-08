@@ -252,6 +252,9 @@ def generate_launch_description():
         # path (u = 0) -- so this trades a shallow violation for stopping, which
         # against an approaching mover is not obviously better. Measured, not
         # assumed.
+        # POSE_SOURCE=odom takes map->base_footprint from the EKF topic
+        # instead of composing it through TF. See gmpc_node's pose_source.
+        'pose_source': os.environ.get('POSE_SOURCE', 'tf'),
         'cbf_hard_k0': os.environ.get('HARD_K0', '0') == '1',
         # Walls only, and only at k = 0. Separate knob from HARD_K0
         # because that one hardens the dynamic rows too (shared slack).

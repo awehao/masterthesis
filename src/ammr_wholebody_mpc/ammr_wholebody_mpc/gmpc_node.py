@@ -26,7 +26,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
 from geometry_msgs.msg import Twist, TransformStamped, Point
-from nav_msgs.msg      import Path
+from nav_msgs.msg      import Odometry, Path
 from std_msgs.msg      import Float32, Float32MultiArray
 from visualization_msgs.msg import MarkerArray, Marker
 
@@ -118,6 +118,28 @@ class GMPCNode(Node):
         self.declare_parameter('stuck_max_hold_s', 25.0)
         self.declare_parameter('goal_tolerance_xy', 0.20)
         self.declare_parameter('tf_timeout',        0.10)
+        # Where the controller's pose comes from.
+        #
+        #   'tf'     lookup_transform(map, base_footprint, Time()) -- the latest
+        #            COMMON time across map->odom and odom->base_footprint. tf2
+        #            is free to compose two different instants, and when one leg
+        #            stalls the composed pose is wrong by whatever the robot
+        #            moved in between. Measured on hardC/seed1: the composed
+        #            pose sat a median 0.176 m and a peak 0.826 m from
+        #            /odometry/filtered, while five neighbouring trials agreed
+        #            to a median of 0.000 m -- an intermittent fault, not a bias.
+        #            The CBF then placed a wall 1.02 m away that was really at
+        #            0.25 m, so a HARD barrier was satisfied and the robot still
+        #            grazed the door post.
+        #
+        #   'odom'   take map->base_footprint straight off the EKF's
+        #            /odometry/filtered, which publishes exactly that pair. No
+        #            composition, no common-time search.
+        self.declare_parameter('pose_source', 'tf')      # 'tf' | 'odom'
+        self.declare_parameter('pose_odom_topic', '/odometry/filtered')
+        # Reject a pose this much older than now; a stale pose is worse than
+        # none because the CBF would linearise about a place the robot has left.
+        self.declare_parameter('pose_max_age', 0.30)
 
         # ---- CBF safety filter ------------------------------------------
         self.declare_parameter('cbf_enable',         False)
@@ -254,6 +276,11 @@ class GMPCNode(Node):
         self.global_frame     = str(self.get_parameter('global_frame').value)
         self.base_frame       = str(self.get_parameter('robot_base_frame').value)
         self.pose_lpf_alpha   = float(self.get_parameter('pose_lpf_alpha').value)
+        self.pose_source      = str(self.get_parameter('pose_source').value)
+        self.pose_max_age     = float(self.get_parameter('pose_max_age').value)
+        self._odom_pose       = None      # (t, x, y, yaw) from the EKF topic
+        self._pose_fallbacks  = 0         # times 'odom' had to fall back to TF
+        self._tf_pose_last    = None      # TF pose, kept for the diagnostic
         self._pose_filt       = None        # EMA state for the robot pose
         self.goal_tol_xy      = float(self.get_parameter('goal_tolerance_xy').value)
         self.plan_blend_s = float(self.get_parameter('plan_blend_s').value)
@@ -382,6 +409,14 @@ class GMPCNode(Node):
             Path,
             str(self.get_parameter('plan_topic').value),
             self._plan_cb, plan_qos,
+        )
+        # Always subscribe, even when pose_source is 'tf': the diagnostic logs
+        # both poses every cycle, so a run can show how far the TF composition
+        # drifted without having to switch the controller over to find out.
+        self.create_subscription(
+            Odometry,
+            str(self.get_parameter('pose_odom_topic').value),
+            self._pose_odom_cb, 10,
         )
         self.cmd_pub = self.create_publisher(
             Twist,
@@ -520,6 +555,25 @@ class GMPCNode(Node):
             for i in range(n)
         ]
 
+    def _pose_gap(self):
+        """How far the TF composition sits from the EKF's own pose. Zero when
+        the two legs are in step; on hardC/seed1 it ran to 0.83 m."""
+        tf_p, op = self._tf_pose_last, self._odom_pose
+        if tf_p is None or op is None:
+            return float('nan')
+        return float(math.hypot(tf_p[0] - op[1], tf_p[1] - op[2]))
+
+    def _pose_odom_cb(self, msg: Odometry):
+        """map -> base_footprint straight from the EKF (frame_id 'map',
+        child_frame_id 'base_footprint'), i.e. the same pair the TF lookup
+        composes, but as one message from one instant."""
+        p = msg.pose.pose.position
+        o = msg.pose.pose.orientation
+        yaw = math.atan2(2.0 * (o.w * o.z + o.x * o.y),
+                         1.0 - 2.0 * (o.y * o.y + o.z * o.z))
+        ts = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self._odom_pose = (ts, float(p.x), float(p.y), float(yaw))
+
     def _static_obstacles_cb(self, msg: Float32MultiArray):
         # Position 1 of the entry diagnostic: what actually crossed DDS, stamped
         # on arrival. Float32MultiArray carries no header, so a bag can only
@@ -553,7 +607,9 @@ class GMPCNode(Node):
         r = tf.transform.rotation
         return np.array([t.x, t.y, quaternion_to_yaw(r.x, r.y, r.z, r.w)])
 
-    def _lookup_robot_pose(self):
+    def _tf_robot_pose(self):
+        """map -> base_footprint via TF composition. Kept as the fallback and,
+        whatever the active source, as the diagnostic reference."""
         try:
             tf = self.tf_buffer.lookup_transform(
                 self.global_frame, self.base_frame,
@@ -567,7 +623,26 @@ class GMPCNode(Node):
                 f'TF {self.global_frame}->{self.base_frame} failed: {e}',
                 throttle_duration_sec=2.0)
             return None
-        pose = self._tf_to_xyth(tf)
+        return self._tf_to_xyth(tf)
+
+    def _lookup_robot_pose(self):
+        tf_pose = self._tf_robot_pose()
+        self._tf_pose_last = tf_pose            # for the per-cycle diagnostic
+        pose = tf_pose
+        if self.pose_source == 'odom':
+            op = self._odom_pose
+            now = self.get_clock().now().nanoseconds * 1e-9
+            if op is not None and (now - op[0]) <= self.pose_max_age:
+                pose = np.array([op[1], op[2], op[3]])
+            else:
+                # No fresh EKF pose: fall back rather than steer on a stale one.
+                self._pose_fallbacks += 1
+                self.get_logger().warn(
+                    'pose_source=odom but /odometry/filtered is stale '
+                    f'({"none" if op is None else f"{now - op[0]:.2f}s"}); using TF',
+                    throttle_duration_sec=2.0)
+        if pose is None:
+            return None
         a = self.pose_lpf_alpha
         if a > 0.0:
             if self._pose_filt is None:
@@ -740,6 +815,10 @@ class GMPCNode(Node):
         #  16  eps_0 actually used
         #  17  min CBF row residual WITHOUT slack   (A z - l)
         #  18  min CBF row residual WITH slack      (A z + eps - l)
+        #  19  |TF pose - EKF pose|  [m]     20  pose source (0 tf, 1 odom)
+        #  21  fallbacks so far
+        # 19 is logged whichever source is active, so one run shows both how far
+        # the TF composition drifted and whether it mattered.
         # 17 < 0 while 18 >= 0 and 16 > 0 is the proof that the command broke
         # the barrier condition and only the slack kept the QP feasible.
         self._cycle_id += 1
@@ -750,7 +829,9 @@ class GMPCNode(Node):
             n_stat_held, len(stat_in), near_d, near_r, near_m,
             min_h_stat_entry, result.min_h_static, result.min_h_dynamic,
             result.min_h, result.cbf_active, now_s - self._stat_rx_t,
-            result.eps0, result.cbf_resid_noslack, result.cbf_resid_slack)]
+            result.eps0, result.cbf_resid_noslack, result.cbf_resid_slack,
+            self._pose_gap(), 1.0 if self.pose_source == 'odom' else 0.0,
+            self._pose_fallbacks)]
         self.diag_pub.publish(d)
         m = Float32(); m.data = float(result.solve_time_s * 1e3)
         self.solve_time_pub.publish(m)
