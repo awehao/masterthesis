@@ -149,6 +149,7 @@ class GMPCNode(Node):
         self.declare_parameter('cbf_prune_range', 0.0)
         self.declare_parameter('cbf_near_steps', 6)
         self.declare_parameter('cbf_far_stride', 1)
+        self.declare_parameter('cbf_hard_k0', False)
         self.declare_parameter('cbf_margin_growth', 0.0)
         # Prefer giving way FORWARD rather than backward when the CBF pushes the
         # robot off the reference. 0 = no preference (validated behaviour).
@@ -311,6 +312,7 @@ class GMPCNode(Node):
                 self.get_parameter('cbf_prune_range').value),
             cbf_near_steps=int(self.get_parameter('cbf_near_steps').value),
             cbf_far_stride=int(self.get_parameter('cbf_far_stride').value),
+            cbf_hard_k0=bool(self.get_parameter('cbf_hard_k0').value),
             prog_weight=float(self.get_parameter('prog_weight').value),
         )
         self.mpc = GMPC(cfg)

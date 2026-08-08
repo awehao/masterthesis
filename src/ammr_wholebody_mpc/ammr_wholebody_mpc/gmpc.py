@@ -158,6 +158,8 @@ class GMPCConfig:
     cbf_prune_range : float = 0.0
     cbf_near_steps  : int   = 6
     cbf_far_stride  : int   = 1
+    # Pin the k = 0 slack to zero -> hard barrier at the current state.
+    cbf_hard_k0     : bool  = False
     # ---- Forward-progress preference ---------------------------------------
     # Linear reward on velocity projected along the reference tangent:
     #     J -= prog_weight * sum_k  t_ref(k) . R(theta_k) v_body(k)
@@ -808,7 +810,27 @@ class GMPC:
                     eps_rows[s, Nm + s] = 1.0
                 A_total  = sparse.vstack([A_total, eps_rows.tocsr()], format='csc')
                 lb_total = np.concatenate([lb_total, np.zeros(n_slack)])
-                ub_total = np.concatenate([ub_total, np.full(n_slack, np.inf)])
+                eps_ub = np.full(n_slack, np.inf)
+                # cbf_hard_k0: forbid ANY relaxation of the k = 0 constraint by
+                # pinning its slack to zero, making the barrier hard at the
+                # current state. k >= 1 keeps its slack, because those rows are
+                # linearised about the REFERENCE trajectory (see the X_k
+                # selection above) and pinning a constraint built at a pose the
+                # robot will not occupy would refuse feasible commands.
+                #
+                # The cost is defined and unavoidable: when the barrier cannot
+                # be satisfied at all -- which the feasibility boundary says
+                # happens once an obstacle closes faster than the chassis can
+                # retreat -- OSQP reports primal infeasible and the solver falls
+                # through to the emergency-brake path (u = 0). Against a mover
+                # still approaching, stopping is not a solution. So this trades
+                # "shallow violation" for "stop and be hit", and only a
+                # measurement can say which is better here.
+                if cfg.cbf_hard_k0:
+                    eps_ub[0] = 0.0                       # dynamic block, k = 0
+                    if n_slack >= 2 * N:
+                        eps_ub[N] = 0.0                   # static block, k = 0
+                ub_total = np.concatenate([ub_total, eps_ub])
 
         # 6. OSQP solve
         P_sp = sparse.csc_matrix(P_dense)

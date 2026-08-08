@@ -240,6 +240,13 @@ def generate_launch_description():
         # settle on a goal near a wall -- the fixed 0.68 m keep-out put such a
         # goal inside the barrier and the robot ground along the wall instead.
         'margin_mode': os.environ.get('MARGIN_MODE', 'fixed'),
+        # HARD_K0=1 pins the k=0 slack to zero: the barrier becomes a hard
+        # constraint at the current state. When it cannot be met the QP is
+        # primal infeasible and gmpc.py falls through to the emergency-brake
+        # path (u = 0) -- so this trades a shallow violation for stopping, which
+        # against an approaching mover is not obviously better. Measured, not
+        # assumed.
+        'cbf_hard_k0': os.environ.get('HARD_K0', '0') == '1',
         'cbf_prune_range': float(os.environ.get('CBF_PRUNE_RANGE', '0.0')),
         'cbf_near_steps': int(os.environ.get('CBF_NEAR_STEPS', '6')),
         'cbf_far_stride': int(os.environ.get('CBF_FAR_STRIDE', '1')),
