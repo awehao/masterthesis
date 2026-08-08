@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# OBSOLETE (2026-08-08): this batch ran under motion limits that do not match
+# the hardware -- vx +-0.35 exceeds the chassis by 26%, acceleration was 1/8 of
+# what the wheels allow, and velocity_smoother clamped reverse to 0.20 so the
+# vx_min arm measured nothing. Kept for provenance; its numbers are void and it
+# must not be re-run as written. See the fourth report, section 0.
+#
 # Four stages closing the gaps that currently favour the baselines, 15 trials
 # per pose set (A and B) = 30 per stage.
 #

@@ -34,7 +34,10 @@ CSV=evaluation/results/omnibot_dynamic_gmpc_truth.csv
 out=truth40
 mkdir -p "evaluation/results/$out"; rm -rf "evaluation/bags/archive_$out"
 echo "[$(date +%T)] === $out ==="
-env MASK_HW=10.0 AX_MAX=1.5 AY_MAX=1.0 AZ_MAX=2.0 \
+# No AX_MAX/AY_MAX/AZ_MAX override: the launch now defaults to the
+# hardware limits (6.25 / 6.25 / 25.51). Overriding here is what made the
+# earlier 'accel' arm measure a number nobody had derived from the robot.
+env MASK_HW=10.0 \
     POSES_CSV="$PWD/evaluation/results/bigarena_poses_big.csv" \
     BIGARENA=1 TRAJ=bigarena_traffic GUI=0 \
     MARGIN_MODE=fixed CBF_SAFE_MARGIN=0.60 \
