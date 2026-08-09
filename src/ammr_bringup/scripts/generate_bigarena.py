@@ -33,6 +33,10 @@ start-to-goal path at robot inflation before anything is written.
         ./evaluation/run_omnibot_dynamic.sh 1 400 17 17 gmpc_scan
 """
 import random
+
+# Output basename, overridden by --name so a family of scenes can share this
+# generator. All four artefacts (pgm, yaml, sdf, trajectories) follow it.
+NAME = 'bigarena'
 from collections import deque
 from pathlib import Path
 
@@ -388,8 +392,19 @@ WORLD = """<?xml version="1.0"?>
 
 
 def main():
-    rng = random.Random(11)
-    print('generating bigarena:')
+    # Scene seed and output name are arguments so a family of arenas can be
+    # generated for generalisation testing. Seed 11 with the name 'bigarena'
+    # reproduces the development scene byte for byte, so nothing that was tuned
+    # on it moves.
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--seed', type=int, default=11)
+    ap.add_argument('--name', default='bigarena')
+    args = ap.parse_args()
+    global NAME
+    NAME = args.name
+    rng = random.Random(args.seed)
+    print(f'generating {NAME} (seed {args.seed}):')
 
     walls = build_walls()
     doors = doorway_centres()
@@ -413,14 +428,14 @@ def main():
     # what makes it unknown and what the perception split has to cope with.
     img = np.full((N, N), 254, dtype=np.uint8)
     img[rasterise(walls + known)] = 0
-    (ROOT / 'maps' / 'bigarena.pgm').write_bytes(
+    (ROOT / 'maps' / f'{NAME}.pgm').write_bytes(
         b'P5\n%d %d\n255\n' % (N, N) + img.tobytes())
-    yaml.safe_dump({'image': 'bigarena.pgm', 'resolution': RES,
+    yaml.safe_dump({'image': f'{NAME}.pgm', 'resolution': RES,
                     'origin': [ORIGIN[0], ORIGIN[1], 0.0], 'negate': 0,
                     'occupied_thresh': 0.65, 'free_thresh': 0.196},
-                   open(ROOT / 'maps' / 'bigarena.yaml', 'w'),
+                   open(ROOT / 'maps' / f'{NAME}.yaml', 'w'),
                    default_flow_style=False)
-    print(f'  maps/bigarena.pgm  {N}x{N} @ {RES} m  ({SIZE_M} x {SIZE_M} m)')
+    print(f'  maps/{NAME}.pgm  {N}x{N} @ {RES} m  ({SIZE_M} x {SIZE_M} m)')
 
     # ---- movers: long traversals across the finished floor
     # WIDEST body first. The search is greedy -- each route also has to avoid
@@ -470,7 +485,7 @@ def main():
                   f'    radius: {r:.2f}\n'
                   f'    height: 1.0\n')
 
-    (ROOT / 'config' / 'dynamic_trajectories_bigarena_traffic.yaml').write_text(
+    (ROOT / 'config' / f'dynamic_trajectories_{NAME}_traffic.yaml').write_text(
         '# Traffic across the 20 x 20 m floor: long traversals on crossing\n'
         '# routes, none aimed at the robot. Encounters are decided by timing,\n'
         '# so they vary between trials -- read this over several runs.\n'
@@ -499,8 +514,8 @@ def main():
             continue                       # no route was found for this body
         parts.append(mover_sdf(nm, spawn_at[nm][0], spawn_at[nm][1],
                                shape, size))
-    (ROOT / 'worlds' / 'bigarena.sdf').write_text(WORLD % ''.join(parts))
-    print(f'  worlds/bigarena.sdf  {len(walls)} 牆, {len(known)} 已知雜物, '
+    (ROOT / 'worlds' / f'{NAME}.sdf').write_text(WORLD % ''.join(parts))
+    print(f'  worlds/{NAME}.sdf  {len(walls)} 牆, {len(known)} 已知雜物, '
           f'{len(unknown)} 未知雜物, {len(DYN_SHAPES)} 移動障礙')
 
     print(f'\n{"障礙":<12}{"形狀":<14}{"外接r":>7}{"速度":>7}{"穿越長":>8}{"週期s":>7}')

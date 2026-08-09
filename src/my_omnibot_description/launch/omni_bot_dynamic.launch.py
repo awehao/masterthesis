@@ -63,8 +63,12 @@ def generate_launch_description():
     # so anything put on it is a roadblock; this one has alternatives, which is
     # what makes route choice a decision rather than a formality.
     if os.environ.get('BIGARENA', '0') == '1':
-        world_file = os.path.join(bringup, 'worlds', 'bigarena.sdf')
-        map_file   = os.path.join(bringup, 'maps',   'bigarena.yaml')
+        # SCENE names a member of the bigarena family: same generator, same
+        # rules, different seed. Defaults to the development scene, so every
+        # earlier result is reproduced unchanged.
+        _scene = os.environ.get('SCENE', 'bigarena')
+        world_file = os.path.join(bringup, 'worlds', f'{_scene}.sdf')
+        map_file   = os.path.join(bringup, 'maps',   f'{_scene}.yaml')
     elif os.environ.get('ARENA', '0') == '1':
         world_file = os.path.join(bringup, 'worlds', 'arena.sdf')
         map_file   = os.path.join(bringup, 'maps',   'arena.yaml')
@@ -78,6 +82,8 @@ def generate_launch_description():
     # new encounter geometry costs a file, not a world edit.
     # TRAJ=crossing -> config/dynamic_trajectories_crossing.yaml
     _traj = os.environ.get('TRAJ', '')
+    if os.environ.get('BIGARENA', '0') == '1' and not _traj:
+        _traj = f'{_scene}_traffic'
     traj_file  = os.path.join(
         bringup, 'config',
         f'dynamic_trajectories_{_traj}.yaml' if _traj else 'dynamic_trajectories.yaml')

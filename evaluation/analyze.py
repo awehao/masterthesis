@@ -368,7 +368,12 @@ def load_static_clearance():
         # unrelated occupied cell and every trial reported a -0.300 m wall
         # collision that never happened.
         if os.environ.get('BIGARENA', '0') == '1':
-            _map, _world = 'bigarena', 'bigarena.sdf'
+            # Must follow the same SCENE the trial ran, or clearance is
+            # scored against another arena's occupancy grid -- which silently
+            # reports -0.300 (the robot radius, i.e. centre on an occupied
+            # cell) for trials that never touched anything.
+            _s = os.environ.get('SCENE', 'bigarena')
+            _map, _world = _s, f'{_s}.sdf'
         elif os.environ.get('ARENA', '0') == '1':
             _map, _world = 'arena', 'arena.sdf'
         else:
