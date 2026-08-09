@@ -91,6 +91,45 @@ class KalmanTracker2D:
         self._last_t_ns = t_ns
 
     # -----------------------------------------------------------------
+    def predict_only(self, dt: float):
+        """Predicted measurement and its covariance at +dt, WITHOUT mutating.
+
+        Association has to compare a new cluster against where the track is NOW,
+        not where it was when last updated: a 0.12 m/s mover moves 0.6 cm per
+        scan, but a track coasting through a 1.5 s dropout is over 0.18 m away
+        from its last fix, which is a quarter of the fixed 0.80 m gate spent on
+        nothing but elapsed time.
+
+        Returning S as well lets the gate be a Mahalanobis distance, so an
+        occlusion that inflates P widens the gate on its own instead of needing
+        a hand-tuned metric radius that is too loose in traffic and too tight
+        after a dropout.
+        """
+        F = self._F(dt)
+        x = F @ self.x
+        P = F @ self.P @ F.T + self._Q(dt)
+        S = self.H @ P @ self.H.T + self.R
+        return x[:2].copy(), S
+
+    def coast_to(self, t_ns: int) -> bool:
+        """Advance the state to t_ns with no measurement, keeping the internal
+        clock consistent so the next real update does not double-count the gap.
+
+        Needed because the net-displacement test compares the CURRENT position
+        against the oldest one in the window: a track frozen through a dropout
+        shows a shrinking apparent speed and is reclassified as static exactly
+        when it is least safe to drop it.
+        """
+        if self._last_t_ns is None:
+            self._last_t_ns = t_ns
+            return False
+        dt = (t_ns - self._last_t_ns) * 1e-9
+        if dt <= 0.0 or dt > 2.0:
+            return False
+        self.predict(dt)
+        self._last_t_ns = t_ns
+        return True
+
     @property
     def position(self) -> tuple[float, float]:
         return float(self.x[0]), float(self.x[1])

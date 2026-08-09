@@ -415,7 +415,20 @@ def generate_launch_description():
                           # min_track_age = 3 and the association gate still have
                           # to pass.
                           'min_cluster_pts': int(
-                              os.environ.get('MIN_CLUSTER_PTS', '2'))}]),
+                              os.environ.get('MIN_CLUSTER_PTS', '2')),
+                          # Close-range fragmentation recovery. Each part is a
+                          # separate switch so seed27 can be replayed with one
+                          # change at a time; all default to the old behaviour.
+                          'assoc_predict':
+                              os.environ.get('ASSOC_PREDICT', '0') == '1',
+                          'assoc_maha':
+                              os.environ.get('ASSOC_MAHA', '0') == '1',
+                          'fragment_merge':
+                              os.environ.get('FRAG_MERGE', '0') == '1',
+                          'coast_publish_s': float(
+                              os.environ.get('COAST_S', '0.0')),
+                          'coast_radius_growth': float(
+                              os.environ.get('COAST_GROWTH', '0.0'))}]),
         # Truth mode: obstacle_aggregator gives the DYNAMIC obstacles from ground
         # truth; we ALSO run scan_obstacle_tracker purely for the STATIC wall
         # points (its dynamic output is dumped to an unused topic) so gmpc_truth

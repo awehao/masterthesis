@@ -23,7 +23,7 @@ from __future__ import annotations
 import math
 from collections import deque
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -99,28 +99,61 @@ def cluster_adjacent(pts: np.ndarray, gap: float,
     return out
 
 
-def associate(cluster_xy: np.ndarray, track_xy: np.ndarray, gate: float
+def associate(cluster_xy: np.ndarray, track_xy: np.ndarray, gate: float,
+              track_S: Optional[List[np.ndarray]] = None,
+              chi2: float = 0.0, gate_max: float = 0.0
               ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
-    """Hungarian assignment between clusters and tracks under a distance gate.
+    """Hungarian assignment between clusters and tracks.
 
-    Returns (matches, unmatched_clusters, unmatched_tracks) where matches is a
-    list of (cluster_idx, track_idx).
+    `track_xy` should be the PREDICTED position at the measurement time, not the
+    last posterior -- see KalmanTracker2D.predict_only.
+
+    Two gating modes:
+      metric       cost <= gate, the original behaviour.
+      Mahalanobis  d^2 = (z - z_hat)' S^-1 (z - z_hat) <= chi2, enabled by
+                   passing track_S and chi2 > 0. A track that has been coasting
+                   has a larger S, so its gate opens by itself; one being
+                   observed every scan keeps a tight gate and does not steal a
+                   neighbour's cluster. `gate_max` still caps the metric
+                   distance, because a badly diverged P would otherwise let a
+                   track claim anything on the scan.
+
+    Returns (matches, unmatched_clusters, unmatched_tracks).
     """
     nc, nt = len(cluster_xy), len(track_xy)
     if nc == 0 or nt == 0:
         return [], list(range(nc)), list(range(nt))
 
-    cost = np.hypot(
+    d_metric = np.hypot(
         cluster_xy[:, None, 0] - track_xy[None, :, 0],
         cluster_xy[:, None, 1] - track_xy[None, :, 1])
-    rows, cols = linear_sum_assignment(cost)
 
+    use_maha = track_S is not None and chi2 > 0.0
+    if use_maha:
+        cost = np.empty((nc, nt))
+        for j in range(nt):
+            try:
+                Sinv = np.linalg.inv(track_S[j])
+            except np.linalg.LinAlgError:
+                cost[:, j] = d_metric[:, j] ** 2
+                continue
+            dz = cluster_xy - track_xy[j]
+            cost[:, j] = np.einsum('ij,jk,ik->i', dz, Sinv, dz)
+        limit = chi2
+    else:
+        cost = d_metric
+        limit = gate
+
+    rows, cols = linear_sum_assignment(cost)
     matches, um_c, um_t = [], set(range(nc)), set(range(nt))
     for r, c in zip(rows, cols):
-        if cost[r, c] <= gate:
-            matches.append((int(r), int(c)))
-            um_c.discard(int(r))
-            um_t.discard(int(c))
+        if cost[r, c] > limit:
+            continue
+        if use_maha and gate_max > 0.0 and d_metric[r, c] > gate_max:
+            continue
+        matches.append((int(r), int(c)))
+        um_c.discard(int(r))
+        um_t.discard(int(c))
     return matches, sorted(um_c), sorted(um_t)
 
 
@@ -132,6 +165,8 @@ class Track:
     last_t_ns: int
     age: int = 1                 # number of successful updates
     misses: int = 0
+    n_frag: int = 1              # clusters fused into the last update
+    last_obs_t_ns: int = 0       # last time a CLUSTER updated this track
     # (t_ns, x, y) history -> net-displacement test that separates true MOVERS
     # from static objects whose apparent KF velocity is inflated by occlusion /
     # centroid shift / cluster merging (measured up to 2 m/s on a stationary
@@ -201,6 +236,17 @@ class ScanObstacleTracker(Node):
         p('assoc_gate', 0.80)             # m, max cluster<->track distance
         p('track_timeout', 0.60)          # s, drop track unseen this long
         p('min_track_age', 3)             # publish only after this many updates
+        # --- close-range fragmentation recovery (see _update_tracks) ---------
+        # All default to the previous behaviour so each part can be turned on
+        # one at a time against the same seed.
+        p('assoc_predict', False)         # associate against the predicted pose
+        p('assoc_maha', False)            # Mahalanobis gate instead of metric
+        p('assoc_chi2', 9.21)             # 99% for 2 DOF
+        p('assoc_gate_max', 1.20)         # m, hard cap even under Mahalanobis
+        p('fragment_merge', False)        # one track may absorb several clusters
+        p('fragment_gate', 1.00)          # m, how far a fragment may sit
+        p('coast_publish_s', 0.0)         # s, keep publishing an unobserved track
+        p('coast_radius_growth', 0.0)     # m/s of coasting added to the radius
         # ... EXCEPT inside this range, where a young track is published as a
         # stationary surface rather than not at all (see _scan_cb).
         p('young_track_range', 2.5)       # m
@@ -277,6 +323,14 @@ class ScanObstacleTracker(Node):
         self.assoc_gate     = float(g('assoc_gate'))
         self.track_timeout  = float(g('track_timeout'))
         self.min_age        = int(g('min_track_age'))
+        self.assoc_predict  = bool(g('assoc_predict'))
+        self.assoc_maha     = bool(g('assoc_maha'))
+        self.assoc_chi2     = float(g('assoc_chi2'))
+        self.assoc_gate_max = float(g('assoc_gate_max'))
+        self.fragment_merge = bool(g('fragment_merge'))
+        self.fragment_gate  = float(g('fragment_gate'))
+        self.coast_publish_s = float(g('coast_publish_s'))
+        self.coast_radius_growth = float(g('coast_radius_growth'))
         self.young_range    = float(g('young_track_range'))
         self.min_speed      = float(g('min_track_speed'))
         self.release_speed  = min(float(g('release_track_speed')), self.min_speed)
@@ -584,19 +638,79 @@ class ScanObstacleTracker(Node):
     def _update_tracks(self, clusters, t_ns: int):
         cl_xy = np.array([[c[0], c[1]] for c in clusters], dtype=float) \
             if clusters else np.empty((0, 2))
-        tr_xy = np.array([[t.kf.position[0], t.kf.position[1]] for t in self._tracks],
-                         dtype=float) if self._tracks else np.empty((0, 2))
 
-        matches, um_c, um_t = associate(cl_xy, tr_xy, self.assoc_gate)
+        # Associate against the track PREDICTED to this scan's time, not its
+        # last posterior. See KalmanTracker2D.predict_only for why.
+        tr_S = None
+        if self._tracks:
+            if self.assoc_predict:
+                pred, Ss = [], []
+                for tr in self._tracks:
+                    dt = max(0.0, (t_ns - tr.last_t_ns) * 1e-9)
+                    z, S = tr.kf.predict_only(min(dt, 2.0))
+                    pred.append(z)
+                    Ss.append(S)
+                tr_xy = np.array(pred, dtype=float)
+                if self.assoc_maha:
+                    tr_S = Ss
+            else:
+                tr_xy = np.array([[t.kf.position[0], t.kf.position[1]]
+                                  for t in self._tracks], dtype=float)
+        else:
+            tr_xy = np.empty((0, 2))
+
+        matches, um_c, um_t = associate(
+            cl_xy, tr_xy, self.assoc_gate,
+            track_S=tr_S, chi2=self.assoc_chi2 if tr_S else 0.0,
+            gate_max=self.assoc_gate_max)
+
+        # A track may absorb SEVERAL clusters. An elongated body seen from close
+        # range is cut into pieces by the self-occlusion mask -- seed27 put a
+        # 1.6 m box at a centre distance of 0.62 m, inside its own half-length,
+        # so the visible arc spanned every masked sector and produced 7
+        # fragments. One-to-one assignment keeps at most one of them on the
+        # track and spawns six new ones, all below min_track_age, so the object
+        # vanished from the CBF for 1.5 s while it drove into the robot.
+        # Object layer: one motion state. Geometry layer: all the fragments.
+        extra = {ti: [] for _, ti in matches}
+        if self.fragment_merge and matches and len(um_c):
+            claimed = []
+            for ci in um_c:
+                best_ti, best_d = None, self.fragment_gate
+                for _, ti in matches:
+                    d = math.hypot(cl_xy[ci, 0] - tr_xy[ti, 0],
+                                   cl_xy[ci, 1] - tr_xy[ti, 1])
+                    if d < best_d:
+                        best_ti, best_d = ti, d
+                if best_ti is not None:
+                    extra[best_ti].append(ci)
+                    claimed.append(ci)
+            um_c = [ci for ci in um_c if ci not in claimed]
 
         for ci, ti in matches:
             tr = self._tracks[ti]
-            tr.kf.step(t_ns=t_ns, y_xy=(clusters[ci][0], clusters[ci][1]))
-            tr.radius = max(self.default_radius, clusters[ci][2])
-            tr.pts = clusters[ci][4]
+            frags = [ci] + extra.get(ti, [])
+            if len(frags) > 1:
+                # Weight the fused centroid by point count: the biggest visible
+                # piece is the best evidence of where the body is.
+                w = np.array([float(clusters[f][3]) for f in frags])
+                w = w / w.sum()
+                mx = float(np.dot(w, [clusters[f][0] for f in frags]))
+                my = float(np.dot(w, [clusters[f][1] for f in frags]))
+                pts = np.vstack([clusters[f][4] for f in frags])
+                rad = max(clusters[f][2] for f in frags)
+            else:
+                mx, my = clusters[ci][0], clusters[ci][1]
+                pts = clusters[ci][4]
+                rad = clusters[ci][2]
+            tr.kf.step(t_ns=t_ns, y_xy=(mx, my))
+            tr.radius = max(self.default_radius, rad)
+            tr.pts = pts
             tr.last_t_ns = t_ns
+            tr.last_obs_t_ns = t_ns
             tr.age += 1
             tr.misses = 0
+            tr.n_frag = len(frags)
             tr.hist.append((t_ns, tr.kf.position[0], tr.kf.position[1]))
 
         for ci in um_c:                       # new track
@@ -604,20 +718,33 @@ class ScanObstacleTracker(Node):
                                  **self._kf_kwargs)
             nt = Track(tid=self._next_id, kf=kf,
                        radius=max(self.default_radius, clusters[ci][2]),
-                       last_t_ns=t_ns, pts=clusters[ci][4])
+                       last_t_ns=t_ns, last_obs_t_ns=t_ns, pts=clusters[ci][4])
             nt.hist.append((t_ns, kf.position[0], kf.position[1]))
             self._tracks.append(nt)
             self._next_id += 1
 
         for ti in um_t:
-            self._tracks[ti].misses += 1
+            tr = self._tracks[ti]
+            tr.misses += 1
+            # Coast: keep the estimate alive rather than freezing it. Without
+            # this the position stops advancing while the history window keeps
+            # growing, so the net-displacement test sees the apparent speed
+            # decay and reclassifies a real mover as static mid-dropout.
+            if self.coast_publish_s > 0.0:
+                age_s = (t_ns - (tr.last_obs_t_ns or tr.last_t_ns)) * 1e-9
+                if age_s <= self.coast_publish_s and tr.kf.coast_to(t_ns):
+                    tr.hist.append((t_ns, tr.kf.position[0], tr.kf.position[1]))
+                    tr.last_t_ns = t_ns
 
-        # Age out stale tracks.
-        keep = []
-        for tr in self._tracks:
-            if (t_ns - tr.last_t_ns) * 1e-9 <= self.track_timeout:
-                keep.append(tr)
-        self._tracks = keep
+        # Age out stale tracks. coast_publish_s extends the life of a track that
+        # is merely unobserved -- 0.60 s could not span seed27's 1.5 s dropout,
+        # and a track that dies takes its velocity estimate with it, so the
+        # replacement starts at age 1 and is not publishable for three more
+        # scans even once the object reappears.
+        horizon = max(self.track_timeout, self.coast_publish_s)
+        self._tracks = [
+            tr for tr in self._tracks
+            if (t_ns - (tr.last_obs_t_ns or tr.last_t_ns)) * 1e-9 <= horizon]
 
     def _is_mover(self, tr, now_ns) -> bool:
         """True if a track is a genuine DYNAMIC obstacle for the CBF: aged,
@@ -729,6 +856,14 @@ class ScanObstacleTracker(Node):
         for tr in confirmed:
             px, py = tr.kf.position
             vx, vy = tr.kf.velocity
+            # A coasted track is a prediction, not an observation, so widen its
+            # keep-out with how long it has gone unseen. This is what makes
+            # publishing through a dropout safe rather than merely optimistic:
+            # the CBF is told both where the object probably is AND that the
+            # estimate has aged.
+            coast_s = 0.0
+            if self.coast_radius_growth > 0.0:
+                coast_s = max(0.0, (t_ns - (tr.last_obs_t_ns or t_ns)) * 1e-9)
             # One entry per covering disc. The CBF form is unchanged -- each is
             # still h = ||p - o||^2 - r_eff^2 -- so the QP stays convex and the
             # only cost is a few more rows. A compact obstacle yields exactly
@@ -741,8 +876,11 @@ class ScanObstacleTracker(Node):
                 PX, PY, VX, VY = to_pub(sx, sy, vx, vy)
                 # radius 0: the point is ON the surface already, so the whole
                 # keep-out comes from the margin, exactly as it does for the
-                # map-based wall points that have run all along.
-                flat.extend([PX, PY, 0.0, VX, VY])
+                # map-based wall points that have run all along. A coasted
+                # track is the exception -- it carries the growth term as a
+                # radius so the CBF keeps further away from a stale estimate.
+                flat.extend([PX, PY, coast_s * self.coast_radius_growth,
+                             VX, VY])
                 pub_xy.append((PX, PY))
         msg = Float32MultiArray(); msg.data = flat
         self.pub.publish(msg)
