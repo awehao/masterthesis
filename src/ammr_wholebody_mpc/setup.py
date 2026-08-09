@@ -24,6 +24,7 @@ setup(
             'goal_to_plan_relay  = ammr_wholebody_mpc.goal_to_plan_relay:main',
             'obstacle_aggregator = ammr_wholebody_mpc.obstacle_aggregator:main',
             'scan_obstacle_tracker = ammr_wholebody_mpc.scan_obstacle_tracker:main',
+            'scan_safety_shield  = ammr_wholebody_mpc.scan_safety_shield:main',
         ],
     },
 )

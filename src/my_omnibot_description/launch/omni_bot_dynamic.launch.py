@@ -97,6 +97,9 @@ def generate_launch_description():
     gmpc_cmd_topic = PythonExpression(
         ["'cmd_vel_nav' if '", use_smoother, "' == 'true' else 'cmd_vel'"])
 
+    # Read once: the smoother's output topic depends on it, and a launch-time
+    # substitution cannot be used to pick a remapping.
+    _shield = os.environ.get('SHIELD', '0') == '1'
     truth_pose = PythonExpression(
         ["'", str(os.environ.get('TRUTH_POSE', '0')), "' == '1'"])
     use_arm = LaunchConfiguration('use_arm')
@@ -341,12 +344,34 @@ def generate_launch_description():
              condition=UnlessCondition(use_smoother)),
         # velocity_smoother (only when use_smoother:=true): rate-limit GMPC
         # output. gmpc -> cmd_vel_nav -> [smoother] -> /cmd_vel -> bridge -> gz.
+        # SHIELD=1 inserts the raw-scan safety layer between the smoother and
+        # the chassis, so it constrains the command that is actually executed --
+        # anything upstream of the smoother could still be reshaped afterwards.
+        # Every command path goes through it; there is no bypass topic.
         Node(package='nav2_velocity_smoother', executable='velocity_smoother',
              name='velocity_smoother', output='screen',
              parameters=[configured_nav_params],
              remappings=[('cmd_vel', 'cmd_vel_nav'),
-                         ('cmd_vel_smoothed', 'cmd_vel')],
+                         ('cmd_vel_smoothed',
+                          'cmd_vel_pre_shield' if _shield else 'cmd_vel')],
              condition=IfCondition(use_smoother)),
+        Node(package='ammr_wholebody_mpc', executable='scan_safety_shield',
+             name='scan_safety_shield', output='screen',
+             parameters=[{'use_sim_time': True,
+                          'enable': True,
+                          # RAW /scan, not /scan_filtered: the filtered stream
+                          # has the confirmed movers masked out, which is
+                          # exactly the set this layer must not depend on.
+                          'scan_topic': '/scan',
+                          'cmd_in_topic': '/cmd_vel_pre_shield',
+                          'cmd_out_topic': '/cmd_vel',
+                          'robot_radius': 0.30,
+                          'alpha': float(os.environ.get('SHIELD_ALPHA', '2.0')),
+                          'a_brake': 6.25,
+                          'tau': float(os.environ.get('SHIELD_TAU', '0.15')),
+                          'vx_max': 0.2775, 'vy_max': 0.2775,
+                          'wz_max': 1.1327}],
+             condition=IfCondition(str(int(_shield)))),
         Node(package='ammr_wholebody_mpc', executable='goal_to_plan_relay',
              name='goal_to_plan_relay', output='screen',
              parameters=[{'use_sim_time': True, 'global_frame': 'map',
