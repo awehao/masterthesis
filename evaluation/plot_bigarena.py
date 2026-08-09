@@ -103,24 +103,35 @@ def main():
                 label=f"{o['name']}  v={o['speed']}  穿越 {L:.1f} m  "
                       f"週期 {2*L/max(o['speed'],1e-6):.0f} s")
 
-    ax.plot([START[0], GOAL[0]], [START[1], GOAL[1]], ':', color='#1565c0',
-            lw=1.4, alpha=0.6, zorder=4, label='起點→終點直線 24.0 m')
-    ax.plot(*START, '^', color='#1565c0', ms=16, zorder=10)
-    ax.annotate('起點', START, xytext=(12, -20), textcoords='offset points',
-                fontsize=12, fontweight='bold', color='#1565c0')
-    ax.plot(*GOAL, '*', color='#2e7d32', ms=26, zorder=10)
-    ax.annotate('終點', GOAL, xytext=(-42, 12), textcoords='offset points',
-                fontsize=12, fontweight='bold', color='#2e7d32')
+    # No fixed start/goal pair is drawn. The batches sample a new traverse per
+    # trial from bigarena_poses_big.csv, so a single (0,0) -> (17,17) diagonal
+    # would suggest the routes are one repeated corridor when they are 300
+    # different ones. A sample of them is drawn instead, faintly, to show the
+    # spread without implying any particular run.
+    try:
+        import csv as _csv
+        rts = [r for r in _csv.DictReader(open(f'{ROOT}/evaluation/results/'
+                                               'bigarena_poses_big.csv'))]
+        for r in rts[:40]:
+            ax.plot([float(r['start_x']), float(r['goal_x'])],
+                    [float(r['start_y']), float(r['goal_y'])],
+                    '-', color='#1565c0', lw=0.7, alpha=0.16, zorder=3)
+        ax.plot([], [], '-', color='#1565c0', lw=1.4, alpha=0.5,
+                label=f'隨機起訖點（示意 40 / 共 {len(rts)} 條）')
+    except Exception:
+        pass
 
     ax.set_xlim(-1.7, 18.7)
     ax.set_ylim(-1.7, 18.7)
     ax.set_aspect('equal')
     ax.set_xlabel('x [m]')
     ax.set_ylabel('y [m]')
-    ax.set_title('bigarena：20×20 m,八個區塊、錯開的門口、交通流\n'
-                 '交錯的長距離穿越,沒有一條瞄準機器人',
-                 fontsize=13, fontweight='bold')
-    ax.legend(loc='lower right', fontsize=8.5, framealpha=0.93)
+    ax.set_title('實驗場景', fontsize=15, fontweight='bold')
+    # Outside the axes: at 'lower right' the box sat on top of an unknown
+    # static and the end of dyn_obs_0's traverse, hiding scene content in the
+    # one figure whose job is to show all of it.
+    ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), fontsize=9,
+              framealpha=0.95, borderaxespad=0)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     plt.tight_layout()
     plt.savefig(out, dpi=125, bbox_inches='tight')
