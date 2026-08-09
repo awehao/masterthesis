@@ -9,7 +9,7 @@ Scenario: bigarena, 40 random routes, GMPC+CBF, mask 10 deg, fixed margins 0.60/
 | hard static k0 + mover cap 0.14 | 38 | 38 | **5** | +0.199 | -0.130 | 99 s | 0.520 | 2.1 ms |
 | soft slack + mover cap 0.14 | 38 | 37 | **6** | +0.180 | -0.181 | 101 s | 0.537 | 2.5 ms |
 | replicate of the cleaner arm | 39 | 39 | **4** | +0.213 | -0.129 | 101 s | 0.521 | 2.2 ms |
-| soft slack + pose from EKF topic (no TF composition) | - | - | (not run) | | | | | |
+| soft slack + pose from EKF topic (no TF composition) | 35 | 35 | **6** | +0.145 | -0.300 | 104 s | 0.543 | 2.5 ms |
 
 ## Barrier audit (per control cycle)
 
@@ -20,6 +20,7 @@ Scenario: bigarena, 40 random routes, GMPC+CBF, mask 10 deg, fixed margins 0.60/
 - **hard static k0 + mover cap 0.14**: cycles 75673, wall points dropped before solve 0, barrier broken without slack 26394 (34.88%), of which slack kept feasible 5655, worst residual -12.5982
 - **soft slack + mover cap 0.14**: cycles 79286, wall points dropped before solve 0, barrier broken without slack 27903 (35.19%), of which slack kept feasible 8355, worst residual -22.3783
 - **replicate of the cleaner arm**: cycles 83124, wall points dropped before solve 0, barrier broken without slack 29720 (35.75%), of which slack kept feasible 6435, worst residual -20.6391
+- **soft slack + pose from EKF topic (no TF composition)**: cycles 73477, wall points dropped before solve 0, barrier broken without slack 26485 (36.05%), of which slack kept feasible 7667, worst residual -13.2172, TF-vs-EKF pose gap median 0.000 p95 0.000 max 0.717 m
 
 ## Paired on the same 36 routes
 
