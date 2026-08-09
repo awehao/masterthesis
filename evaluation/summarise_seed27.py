@@ -30,7 +30,10 @@ ARMS = [('T0', 'as-is'),
         ('T1', '+ predicted association, Mahalanobis gate'),
         ('T2', '+ fragment merge (geometry only)'),
         ('T3', '+ coast publish, points translated with the centre')]
-MOVER = 5
+# Which mover produces the closest approach is decided per run, not fixed:
+# obstacle phase differs between replays, so hard-coding dyn_obs_5 would score
+# coverage of a body that was never the threat and report +9.9 m as the "worst
+# depth". Whichever one comes closest is the one whose coverage matters.
 TRK = ['tid', 'x', 'y', 'vx', 'vy', 'age', 'misses', 'n_frag',
        'coast_s', 'innov', 'confirmed']
 A.load_static_clearance()
@@ -40,8 +43,9 @@ NEAR = 1.2          # m, a track this close to the mover's true centre is it
 
 
 def one_run(bag):
-    T = {'/odom': Odometry, '/gmpc/tracks_debug': Float32MultiArray,
-         f'/model/dyn_obs_{MOVER}/pose': PoseStamped}
+    T = {'/odom': Odometry, '/gmpc/tracks_debug': Float32MultiArray}
+    for _i in range(10):
+        T[f'/model/dyn_obs_{_i}/pose'] = PoseStamped
     s = {k: [] for k in T}
     rd = rosbag2_py.SequentialReader()
     try:
@@ -56,22 +60,32 @@ def one_run(bag):
         s[tp].append((t * 1e-9, deserialize_message(buf, T[tp])))
 
     ot = np.array([t for t, _ in s['/odom']])
-    ser = s.get(f'/model/dyn_obs_{MOVER}/pose') or []
-    if len(ot) < 10 or not ser:
+    if len(ot) < 10:
         return None
     oxy = np.array([[m.pose.pose.position.x, m.pose.pose.position.y]
                     for _, m in s['/odom']])
-    ts = np.array([t for t, _ in ser])
-    pxy = np.array([[m.pose.position.x, m.pose.position.y] for _, m in ser])
-    j = np.clip(np.searchsorted(ts, ot) - 1, 0, len(ts) - 1)
-    g = GEOM.get(f'dyn_obs_{MOVER}')
-    if g and g[0] == 'box':
-        dx = np.maximum(np.abs(pxy[j, 0] - oxy[:, 0]) - g[1] / 2, 0)
-        dy = np.maximum(np.abs(pxy[j, 1] - oxy[:, 1]) - g[2] / 2, 0)
-        surf = np.hypot(dx, dy)
-    else:
-        surf = np.hypot(pxy[j, 0] - oxy[:, 0], pxy[j, 1] - oxy[:, 1]) - 0.25
-    clr = surf - R
+    best = None
+    for mi in range(10):
+        ser = s.get(f'/model/dyn_obs_{mi}/pose') or []
+        if not ser:
+            continue
+        ts = np.array([t for t, _ in ser])
+        p = np.array([[m.pose.position.x, m.pose.position.y] for _, m in ser])
+        jj = np.clip(np.searchsorted(ts, ot) - 1, 0, len(ts) - 1)
+        g = GEOM.get(f'dyn_obs_{mi}')
+        if g and g[0] == 'box':
+            dx = np.maximum(np.abs(p[jj, 0] - oxy[:, 0]) - g[1] / 2, 0)
+            dy = np.maximum(np.abs(p[jj, 1] - oxy[:, 1]) - g[2] / 2, 0)
+            surf = np.hypot(dx, dy)
+        else:
+            surf = np.hypot(p[jj, 0] - oxy[:, 0],
+                            p[jj, 1] - oxy[:, 1]) - (g[1] if g else 0.25)
+        c = surf - R
+        if best is None or c.min() < best[0].min():
+            best = (c, p, jj, mi)
+    if best is None:
+        return None
+    clr, pxy, j, mover = best
     k = int(np.argmin(clr))
     t0 = ot[k]
 
@@ -111,7 +125,8 @@ def one_run(bag):
                 worst = max(worst, tw[i] - tw[i - n_run + 1])
     switches = sum(1 for a, b in zip(ids, ids[1:]) if a != b)
     return dict(depth=float(clr[k]), cov=cov, dropout=worst,
-                switches=switches,
+                switches=switches, mover=mover,
+                goal_d=float(np.hypot(oxy[-1, 0] - 0.79, oxy[-1, 1] - 10.37)),
                 frag=st.mean(frag) if frag else 0.0,
                 innov_p95=float(np.percentile(innov, 95)) if innov else float('nan'),
                 vel_sd=float(np.std(vels)) if len(vels) > 1 else float('nan'),
@@ -124,9 +139,9 @@ print("Route 27 only, ten replays per arm, fresh obstacle phase each time. The "
       "final approach the centre distance falls inside the box's own 0.80 m "
       "half-length, so the visible arc spans every masked sector and the "
       "cluster breaks up.\n")
-print("| arm | runs | contacts | worst | median | coverage | longest dropout | "
-      "frag/cycle | ID switches | innov p95 | speed SD |")
-print("|---|---|---|---|---|---|---|---|---|---|---|")
+print("| arm | runs | reached | contacts | worst | median | coverage | "
+      "longest dropout | frag/cycle | ID switches | innov p95 | speed SD |")
+print("|---|---|---|---|---|---|---|---|---|---|---|---|")
 for key, label in ARMS:
     runs = [one_run(b) for b in sorted(glob.glob(f'evaluation/bags/archive_{key}/rep*'))]
     runs = [r for r in runs if r]
@@ -137,7 +152,9 @@ for key, label in ARMS:
     cov = [r['cov'] for r in runs if not math.isnan(r['cov'])]
     iv = [r['innov_p95'] for r in runs if not math.isnan(r['innov_p95'])]
     vs = [r['vel_sd'] for r in runs if not math.isnan(r['vel_sd'])]
-    print(f"| {label} | {len(runs)} | **{sum(1 for x in d if x < 0)}/{len(runs)}** | "
+    reached = sum(1 for r in runs if r['goal_d'] < 0.35)
+    print(f"| {label} | {len(runs)} | {reached}/{len(runs)} | "
+          f"**{sum(1 for x in d if x < 0)}/{len(runs)}** | "
           f"{min(d):+.3f} | {st.median(d):+.3f} | "
           f"{(st.mean(cov)*100 if cov else float('nan')):.0f}% | "
           f"{max(r['dropout'] for r in runs):.2f} s | "

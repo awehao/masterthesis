@@ -39,10 +39,16 @@ say () { echo "[$(date +%H:%M:%S)] $*"; }
 # one-row file replayed REPS times gives the same route with fresh obstacle
 # phase each run -- which is the point: the mechanism must survive phase, not
 # be a single lucky alignment.
+# pose_for_seed() matches column 1 against the TRIAL index, which is always 1
+# here, so route 27's row has to be relabelled. Left as 27 the lookup misses,
+# the script silently falls back to a (0,0) spawn and a (0,0) goal, and the
+# robot never leaves the start -- which is exactly what the first attempt did.
 P27=evaluation/results/poses_seed27.csv
 head -1 evaluation/results/bigarena_poses_big.csv > "$P27"
-awk 'NR==28' evaluation/results/bigarena_poses_big.csv >> "$P27"
-say "route file: $(wc -l < "$P27") lines"
+awk -F, -v OFS=, 'NR>1 && $1==27 {$1=1; print}' \
+    evaluation/results/bigarena_poses_big.csv >> "$P27"
+say "route file:"; cat "$P27" | sed 's/^/    /'
+grep -q '^1,' "$P27" || { say "FATAL: route row not relabelled"; exit 1; }
 
 run_arm () {
     local out="$1"; shift
@@ -58,6 +64,10 @@ run_arm () {
             POSE_SOURCE=odom \
             ./evaluation/run_omnibot_dynamic.sh 1 250 0 0 gmpc_scan \
             >> "evaluation/logs/${out}.log" 2>&1
+        # Ten back-to-back launches in one arm hit /amcl_pose timeouts on 3 of
+        # them; the previous trial's gz and DDS participants need time to go
+        # away before the next AMCL can come up.
+        sleep 15
         local ad="evaluation/bags/archive_$out"; mkdir -p "$ad"
         for d in evaluation/bags/gmpc_cbf__scan_seed1; do
             [ -f "$d/metadata.yaml" ] || continue
