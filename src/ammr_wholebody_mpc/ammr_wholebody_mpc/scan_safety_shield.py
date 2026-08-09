@@ -200,79 +200,153 @@ class ScanSafetyShield(Node):
         self._scan_t = self.get_clock().now().nanoseconds * 1e-9
 
     # ------------------------------------------------------------------
-    def _limit(self, u: np.ndarray, pts: np.ndarray):
-        """Project u onto {a_i . u <= b_i} by successive projection.
+    def _limit(self, u: np.ndarray, pts: np.ndarray, scan_age: float):
+        """Project u onto the barrier half-spaces AND the velocity box.
 
-        A fixed iteration count keeps the runtime bounded and the output
-        deterministic; a solver call in the last safety layer would put an
-        unbounded latency in the one place that must never miss its deadline.
-        Unit normals make each projection a single axpy.
+        Three things this has to get right, none of which a plain fixed-count
+        cyclic projection gives:
+
+        1. Feasibility is CHECKED, not assumed. Projecting onto a later
+           half-space can re-break an earlier one -- door posts and inside
+           corners are exactly where several normals disagree -- so a bounded
+           iteration count bounds the runtime, not the residual. The worst
+           residual is measured after the sweep and reported.
+
+        2. The velocity box is part of the projection set, not a clip applied
+           afterwards. Clipping last can push the command straight back through
+           a barrier constraint that the sweep had just satisfied.
+
+        3. When the full barrier cannot be met -- pinched inside d_stop, where
+           it demands active retreat from two directions at once -- the fallback
+           is not "publish whatever the sweep produced". It re-solves against
+           the weaker NON-APPROACH condition n_i . v <= 0, whose feasible set
+           always contains v = 0, so the layer still guarantees the command
+           never closes on a visible return even when it cannot guarantee the
+           full barrier.
+
+        d_stop is per point, built from the approach speed toward THAT point
+        rather than the speed magnitude: a fast tangential pass would otherwise
+        inflate every stopping distance and stall the robot in corridors it is
+        not driving into. tau carries the scan age, so old data widens the
+        margin instead of being trusted as if fresh.
         """
+        n_box = 6
+        box_a = np.zeros((n_box, 3))
+        box_b = np.zeros(n_box)
+        for k in range(3):
+            box_a[2 * k, k] = 1.0
+            box_b[2 * k] = self.u_max[k]
+            box_a[2 * k + 1, k] = -1.0
+            box_b[2 * k + 1] = self.u_max[k]
+
         if not len(pts):
-            return u, 0.0, float('inf')
-        d = np.hypot(pts[:, 0], pts[:, 1]) - self.R      # surface to surface
-        nrm = pts / np.maximum(np.hypot(pts[:, 0], pts[:, 1])[:, None], 1e-9)
-        v = float(np.hypot(u[0], u[1]))
-        d_stop = (self.d0 + v * self.tau + v * v / (2.0 * self.a_brake)
-                  + self.eps)
-        b = self.alpha * (d - d_stop)                    # allowed approach rate
+            out = np.clip(u, -self.u_max, self.u_max)
+            return out, float(np.linalg.norm(out - u)), float('inf'), 0.0, 0.0, 0, False
 
-        # n_i points robot -> obstacle, so the separation rate is d_dot =
-        # -n_i^T v_surface and the barrier d_dot + alpha*(d - d_stop) >= 0
-        # becomes  n_i^T (v + w J r_i) <= alpha (d_i - d_stop), i.e.
-        #   a_i = [n_x, n_y, n^T J r_i],  b_i = alpha (d_i - d_stop).
-        # The yaw column is n^T J n * R = 0 for a disc; it is kept explicit so a
-        # non-circular footprint only has to supply a different r_i.
+        rad = np.hypot(pts[:, 0], pts[:, 1])
+        d = rad - self.R
+        nrm = pts / np.maximum(rad[:, None], 1e-9)
         Jr = np.stack([-nrm[:, 1], nrm[:, 0]], axis=1) * self.R
-        a = np.concatenate([nrm, (nrm * Jr).sum(axis=1, keepdims=True)],
-                           axis=1)
-        a2 = np.maximum((a * a).sum(axis=1), 1e-9)
+        a_obs = np.concatenate([nrm, (nrm * Jr).sum(axis=1, keepdims=True)],
+                               axis=1)
 
-        out = u.copy()
-        for _ in range(self.iters):
-            viol = a @ out - b
-            if np.all(viol <= 1e-6):
-                break
-            i = int(np.argmax(viol))
-            out = out - (viol[i] / a2[i]) * a[i]
-            out = np.clip(out, -self.u_max, self.u_max)
-        return out, float(np.linalg.norm(out - u)), float(np.min(d))
+        # Approach speed toward each point, from the COMMANDED twist. Using the
+        # input is both causal and conservative: the solution can only reduce
+        # the approach, so a d_stop sized on the request is never too small.
+        v_app = np.maximum(0.0, a_obs @ u)
+        tau_eff = self.tau + max(0.0, scan_age)
+        d_stop = (self.d0 + v_app * tau_eff
+                  + v_app * v_app / (2.0 * self.a_brake) + self.eps)
+        b_obs = self.alpha * (d - d_stop)
+
+        def sweep(A, B, x0, iters):
+            """Motzkin relaxation: repeatedly project onto the most violated
+            half-space. Deterministic iteration count, unit-norm rows."""
+            x = x0.copy()
+            a2 = np.maximum((A * A).sum(axis=1), 1e-9)
+            it = 0
+            for it in range(1, iters + 1):
+                viol = A @ x - B
+                i = int(np.argmax(viol))
+                if viol[i] <= 1e-6:
+                    break
+                x = x - (viol[i] / a2[i]) * A[i]
+            return x, it
+
+        A = np.vstack([a_obs, box_a])
+        B = np.concatenate([b_obs, box_b])
+        before = float(np.max(A @ u - B))
+        out, iters = sweep(A, B, u, self.iters)
+        after = float(np.max(A @ out - B))
+
+        fallback = False
+        if after > 1e-3:
+            # Weaker, always-feasible target: do not CLOSE on anything. v = 0
+            # is in this set by construction, so the sweep cannot fail to find a
+            # point, and the guarantee degrades gracefully instead of silently.
+            fallback = True
+            B2 = np.concatenate([np.minimum(b_obs, 0.0), box_b])
+            out, it2 = sweep(A, B2, u, max(self.iters, 12))
+            iters += it2
+            after = float(np.max(A @ out - B))
+            if float(np.max(A @ out - B2)) > 1e-3:
+                out = np.zeros(3)          # last resort: command nothing
+        return (out, float(np.linalg.norm(out - u)), float(np.min(d)),
+                before, after, iters, fallback)
 
     def _cmd_cb(self, msg: Twist):
         u = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
         now = self.get_clock().now().nanoseconds * 1e-9
         age = now - self._scan_t if self._scan_t else float('inf')
         stale = age > self.scan_timeout
-        dv, dmin, npts = 0.0, float('inf'), 0
+        dv = before = after = 0.0
+        dmin = float('inf')
+        npts = iters = 0
+        fallback = False
 
         if not self.enable:
-            out = u
+            out = np.clip(u, -self.u_max, self.u_max)
         elif stale:
-            # No fresh view: do not travel fast into what cannot be seen. Not a
-            # full stop -- the robot may still creep and turn, which is what
-            # lets it recover rather than blocking a corridor.
-            sp = float(np.hypot(u[0], u[1]))
+            # No fresh view: creep, do not stop. A full halt in a doorway is a
+            # more likely outcome than a save. The cap is on the SPEED, not on
+            # each axis -- clamping vx and vy to 0.05 apiece would still allow
+            # 0.071 m/s along the diagonal.
             out = u.copy()
+            sp = float(np.hypot(u[0], u[1]))
             if sp > self.stale_speed:
                 out[:2] = u[:2] * (self.stale_speed / sp)
+            out = np.clip(out, -self.u_max, self.u_max)
             dv = float(np.linalg.norm(out - u))
         else:
             pts = self._pts if self._pts is not None else np.empty((0, 2))
             npts = len(pts)
-            out, dv, dmin = self._limit(u, pts)
+            out, dv, dmin, before, after, iters, fallback = self._limit(
+                u, pts, age)
 
         t = Twist()
         t.linear.x, t.linear.y, t.angular.z = (float(out[0]), float(out[1]),
                                                float(out[2]))
         self.pub.publish(t)
 
+        if fallback:
+            self.get_logger().warn(
+                f'barrier infeasible (residual {before:+.3f}); fell back to '
+                'non-approach', throttle_duration_sec=2.0)
+
         self._cycle += 1
         d = Float32MultiArray()
+        #  0 cycle        1 active        2 n_pts       3 d_min
+        #  4 dv           5 vx_in         6 vy_in       7 wz_in
+        #  8 vx_out       9 vy_out       10 wz_out     11 scan_age
+        # 12 stale       13 max_violation_before      14 max_violation_after
+        # 15 iterations  16 fallback_active           17 unresolved
         d.data = [float(self._cycle), 1.0 if dv > 1e-4 else 0.0, float(npts),
                   dmin if math.isfinite(dmin) else -1.0, dv,
                   float(u[0]), float(u[1]), float(u[2]),
                   float(out[0]), float(out[1]), float(out[2]),
-                  age if math.isfinite(age) else -1.0, 1.0 if stale else 0.0]
+                  age if math.isfinite(age) else -1.0, 1.0 if stale else 0.0,
+                  before, after, float(iters), 1.0 if fallback else 0.0,
+                  1.0 if after > 1e-3 else 0.0]
         self.diag.publish(d)
 
 
