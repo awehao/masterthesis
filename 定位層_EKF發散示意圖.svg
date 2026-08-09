@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#ffffff"/>
+  <text x="90" y="80" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="42" font-weight="700" fill="#17365d">AMCL 正常，但 EKF 因觀測拒絕而發散</text>
+  <text x="90" y="125" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="23" fill="#666666">代表性單趟｜每 10 秒區間定位誤差</text>
+
+  <!-- Plot background -->
+  <rect x="125" y="180" width="965" height="540" rx="8" fill="#fbfcfe" stroke="#d9e2f3" stroke-width="2"/>
+  <rect x="510" y="180" width="385" height="540" fill="#fce4d6" opacity="0.72"/>
+  <text x="702" y="215" text-anchor="middle" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="22" font-weight="700" fill="#c00000">EKF 發散區間</text>
+
+  <!-- Grid -->
+  <g stroke="#d9d9d9" stroke-width="1">
+    <line x1="125" y1="720" x2="1090" y2="720"/>
+    <line x1="125" y1="616" x2="1090" y2="616"/>
+    <line x1="125" y1="512" x2="1090" y2="512"/>
+    <line x1="125" y1="408" x2="1090" y2="408"/>
+    <line x1="125" y1="304" x2="1090" y2="304"/>
+    <line x1="125" y1="200" x2="1090" y2="200"/>
+  </g>
+
+  <!-- Axes labels -->
+  <g font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="20" fill="#555555">
+    <text x="105" y="727" text-anchor="end">0.0</text>
+    <text x="105" y="623" text-anchor="end">0.5</text>
+    <text x="105" y="519" text-anchor="end">1.0</text>
+    <text x="105" y="415" text-anchor="end">1.5</text>
+    <text x="105" y="311" text-anchor="end">2.0</text>
+    <text x="105" y="207" text-anchor="end">2.5</text>
+    <text x="220" y="760" text-anchor="middle">30–40 s</text>
+    <text x="470" y="760" text-anchor="middle">40–50 s</text>
+    <text x="720" y="760" text-anchor="middle">50–60 s</text>
+    <text x="970" y="760" text-anchor="middle">60–70 s</text>
+    <text x="610" y="815" text-anchor="middle" font-size="22">時間區間</text>
+    <text x="34" y="460" text-anchor="middle" transform="rotate(-90 34 460)" font-size="22">定位誤差（m）</text>
+  </g>
+
+  <!-- AMCL line: 0.046, 0.066, 0.046, 0.040 -->
+  <polyline points="220,710.4 470,706.3 720,710.4 970,711.7" fill="none" stroke="#2f75b5" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+  <g fill="#2f75b5" stroke="#ffffff" stroke-width="3">
+    <circle cx="220" cy="710.4" r="9"/><circle cx="470" cy="706.3" r="9"/><circle cx="720" cy="710.4" r="9"/><circle cx="970" cy="711.7" r="9"/>
+  </g>
+
+  <!-- EKF line: 0.047, 0.560, 2.313, 0.038 -->
+  <polyline points="220,710.2 470,603.5 720,238.9 970,712.1" fill="none" stroke="#ed7d31" stroke-width="8" stroke-linejoin="round" stroke-linecap="round"/>
+  <g fill="#ed7d31" stroke="#ffffff" stroke-width="3">
+    <circle cx="220" cy="710.2" r="10"/><circle cx="470" cy="603.5" r="10"/><circle cx="720" cy="238.9" r="10"/><circle cx="970" cy="712.1" r="10"/>
+  </g>
+  <text x="735" y="270" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="25" font-weight="700" fill="#c00000">2.313 m</text>
+
+  <!-- Legend -->
+  <line x1="160" y1="850" x2="225" y2="850" stroke="#2f75b5" stroke-width="7"/>
+  <text x="240" y="858" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="23" fill="#333333">AMCL 誤差</text>
+  <line x1="410" y1="850" x2="475" y2="850" stroke="#ed7d31" stroke-width="7"/>
+  <text x="490" y="858" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="23" fill="#333333">EKF 誤差</text>
+
+  <!-- Explanation card -->
+  <rect x="1140" y="180" width="390" height="540" rx="18" fill="#eef5fb" stroke="#9dc3e6" stroke-width="3"/>
+  <text x="1180" y="240" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="28" font-weight="700" fill="#17365d">診斷結果</text>
+  <text x="1180" y="300" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="23" fill="#333333">
+    <tspan x="1180" dy="0">AMCL 持續提供正確位姿</tspan>
+    <tspan x="1180" dy="50">EKF 卻拒絕觀測修正</tspan>
+  </text>
+  <path d="M1335 385 L1335 485" stroke="#c00000" stroke-width="7" marker-end="url(#arrow)"/>
+  <text x="1335" y="370" text-anchor="middle" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="22" fill="#c00000">誤差增大</text>
+  <text x="1335" y="535" text-anchor="middle" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="24" font-weight="700" fill="#c00000">發散鎖死</text>
+  <line x1="1180" y1="575" x2="1490" y2="575" stroke="#9dc3e6" stroke-width="2"/>
+  <text x="1180" y="625" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="22" font-weight="700" fill="#548235">修正</text>
+  <text x="1180" y="670" font-family="Noto Sans CJK TC, Microsoft JhengHei, sans-serif" font-size="21" fill="#333333">拒絕門檻 2.5 → 10⁹</text>
+
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#c00000"/>
+    </marker>
+  </defs>
+</svg>
