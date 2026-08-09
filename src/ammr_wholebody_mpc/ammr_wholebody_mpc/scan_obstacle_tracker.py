@@ -167,6 +167,14 @@ class Track:
     misses: int = 0
     n_frag: int = 1              # clusters fused into the last update
     last_obs_t_ns: int = 0       # last time a CLUSTER updated this track
+    # KF centre AT that observation. The surface points stored in `pts` are in
+    # the frame of that instant, so coasting the centre without translating them
+    # would hand the CBF last-seen geometry carrying a freshly-predicted
+    # velocity -- the barrier would be built where the object WAS while its
+    # predicted motion says it is somewhere else.
+    obs_cx: float = 0.0
+    obs_cy: float = 0.0
+    innov: float = 0.0           # |measurement - prediction| at the last update
     # (t_ns, x, y) history -> net-displacement test that separates true MOVERS
     # from static objects whose apparent KF velocity is inflated by occlusion /
     # centroid shift / cluster merging (measured up to 2 m/s on a stationary
@@ -374,6 +382,15 @@ class ScanObstacleTracker(Node):
                                  self._scan_cb, scan_qos)
 
         self.pub = self.create_publisher(Float32MultiArray, str(g('output_topic')), 10)
+        # Per-track debug. /gmpc/obstacles carries surface points with no
+        # identity, so "was the mover covered" can only be asked as "was
+        # anything published within 1.2 m of it" -- which a neighbour satisfies
+        # just as well. Without ids an association change and a genuine
+        # detection look identical in a bag.
+        #   per track: tid, x, y, vx, vy, age, misses, n_frag,
+        #              coast_age_s, innovation, is_mover
+        self.track_pub = self.create_publisher(
+            Float32MultiArray, '/gmpc/tracks_debug', 10)
         # /scan_filtered: the input scan with DYNAMIC-obstacle rays removed, for
         # the global costmap. Keeps the planner seeing only static geometry
         # (walls + unknown static) so a passing dynamic obstacle never makes the
@@ -690,24 +707,36 @@ class ScanObstacleTracker(Node):
         for ci, ti in matches:
             tr = self._tracks[ti]
             frags = [ci] + extra.get(ti, [])
+            # The MOTION state is updated from the Hungarian match alone. A
+            # fused centroid moves whenever the visible split changes -- the
+            # mask cuts a body differently as the bearing shifts -- and the KF
+            # would read that as velocity, which is the one quantity the CBF
+            # extrapolates over the whole horizon. The fragments contribute
+            # GEOMETRY only: their returns join the surface-point set so the
+            # barrier covers the whole body.
+            mx, my = clusters[ci][0], clusters[ci][1]
             if len(frags) > 1:
-                # Weight the fused centroid by point count: the biggest visible
-                # piece is the best evidence of where the body is.
-                w = np.array([float(clusters[f][3]) for f in frags])
-                w = w / w.sum()
-                mx = float(np.dot(w, [clusters[f][0] for f in frags]))
-                my = float(np.dot(w, [clusters[f][1] for f in frags]))
                 pts = np.vstack([clusters[f][4] for f in frags])
                 rad = max(clusters[f][2] for f in frags)
             else:
-                mx, my = clusters[ci][0], clusters[ci][1]
                 pts = clusters[ci][4]
                 rad = clusters[ci][2]
+            # Innovation BEFORE the update: how far the measurement fell from
+            # the prediction. A jump here without a track id change is the
+            # signature of a fragment swap; a small one says the association was
+            # the same physical surface.
+            zx, zy = tr.kf.position
+            if self.assoc_predict:
+                dtp = max(0.0, (t_ns - tr.last_t_ns) * 1e-9)
+                zp, _ = tr.kf.predict_only(min(dtp, 2.0))
+                zx, zy = float(zp[0]), float(zp[1])
+            tr.innov = math.hypot(mx - zx, my - zy)
             tr.kf.step(t_ns=t_ns, y_xy=(mx, my))
             tr.radius = max(self.default_radius, rad)
             tr.pts = pts
             tr.last_t_ns = t_ns
             tr.last_obs_t_ns = t_ns
+            tr.obs_cx, tr.obs_cy = tr.kf.position
             tr.age += 1
             tr.misses = 0
             tr.n_frag = len(frags)
@@ -720,6 +749,7 @@ class ScanObstacleTracker(Node):
                        radius=max(self.default_radius, clusters[ci][2]),
                        last_t_ns=t_ns, last_obs_t_ns=t_ns, pts=clusters[ci][4])
             nt.hist.append((t_ns, kf.position[0], kf.position[1]))
+            nt.obs_cx, nt.obs_cy = kf.position
             self._tracks.append(nt)
             self._next_id += 1
 
@@ -801,13 +831,30 @@ class ScanObstacleTracker(Node):
         the cap is applied -- otherwise the cap would spend itself on a single
         patch of surface and leave the rest of the object unconstrained.
 
-        Falls back to the tracked centre if a track has no points this cycle
-        (it was coasted through a miss), which is the old behaviour.
+        While a track is coasting the stored points belong to the last
+        observation, so they are rigidly translated by how far the estimated
+        centre has moved since:
+
+            p_i(t) = p_i(t_obs) + (c_hat(t) - c(t_obs))
+
+        Without this the CBF gets geometry from one instant and velocity from
+        another, and any improvement from coasting could just be the radius
+        growth happening to cover the error rather than the prediction being
+        right. Rigid translation assumes the body does not rotate over the coast
+        window, which for a 1 s coast of a 0.12 m/s mover is the same constant-
+        velocity assumption the barrier already makes.
+
+        Falls back to the tracked centre if a track has no points at all.
         """
         P = getattr(tr, 'pts', None)
         if P is None or len(P) == 0:
             cx, cy = tr.kf.position
             return [(float(cx), float(cy))]
+        cx, cy = tr.kf.position
+        ox = cx - tr.obs_cx
+        oy = cy - tr.obs_cy
+        if abs(ox) > 1e-6 or abs(oy) > 1e-6:
+            P = P + np.array([ox, oy])
         d = np.hypot(P[:, 0] - rx, P[:, 1] - ry)
         keep = d <= self.surf_range
         if not np.any(keep):
@@ -884,6 +931,18 @@ class ScanObstacleTracker(Node):
                 pub_xy.append((PX, PY))
         msg = Float32MultiArray(); msg.data = flat
         self.pub.publish(msg)
+
+        dbg: List[float] = []
+        conf_ids = {id(tr) for tr in confirmed}
+        for tr in self._tracks:
+            cx, cy = tr.kf.position
+            vx2, vy2 = tr.kf.velocity
+            age_s = max(0.0, (t_ns - (tr.last_obs_t_ns or t_ns)) * 1e-9)
+            dbg.extend([float(tr.tid), cx, cy, vx2, vy2, float(tr.age),
+                        float(tr.misses), float(tr.n_frag), age_s,
+                        float(tr.innov), 1.0 if id(tr) in conf_ids else 0.0])
+        dm = Float32MultiArray(); dm.data = dbg
+        self.track_pub.publish(dm)
 
         if self.mpub is not None:
             ma = MarkerArray()
