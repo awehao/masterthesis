@@ -419,6 +419,17 @@ def generate_launch_description():
                           # Close-range fragmentation recovery. Each part is a
                           # separate switch so seed27 can be replayed with one
                           # change at a time; all default to the old behaviour.
+                          # min_track_speed 0.10 sits exactly on dyn_obs_5 and
+                          # dyn_obs_2, whose configured speed IS 0.10 m/s, so
+                          # measurement noise decides each cycle whether they
+                          # are movers at all. The net-displacement gate does
+                          # the same job more reliably (0.10 m/s over a 2 s
+                          # window is 0.20 m of travel, far above its 0.05
+                          # threshold), which is why it was added.
+                          'min_track_speed': float(
+                              os.environ.get('MIN_TRACK_SPEED', '0.10')),
+                          'release_track_speed': float(
+                              os.environ.get('RELEASE_TRACK_SPEED', '0.10')),
                           'assoc_predict':
                               os.environ.get('ASSOC_PREDICT', '0') == '1',
                           'assoc_maha':

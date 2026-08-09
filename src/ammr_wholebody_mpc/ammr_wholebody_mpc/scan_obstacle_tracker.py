@@ -175,6 +175,12 @@ class Track:
     obs_cx: float = 0.0
     obs_cy: float = 0.0
     innov: float = 0.0           # |measurement - prediction| at the last update
+    # Why _is_mover said no. Without this, "the object was excluded" and "the
+    # object was never tracked" look identical in a bag, and the two have
+    # opposite fixes -- the seed27 hunt spent three arms on the second before
+    # the data showed it was the first.
+    #   0 published   1 too young   2 instantaneous speed   3 net displacement
+    reject: int = 0
     # (t_ns, x, y) history -> net-displacement test that separates true MOVERS
     # from static objects whose apparent KF velocity is inflated by occlusion /
     # centroid shift / cluster merging (measured up to 2 m/s on a stationary
@@ -388,7 +394,7 @@ class ScanObstacleTracker(Node):
         # just as well. Without ids an association change and a genuine
         # detection look identical in a bag.
         #   per track: tid, x, y, vx, vy, age, misses, n_frag,
-        #              coast_age_s, innovation, is_mover
+        #              coast_age_s, innovation, is_mover, reject_reason
         self.track_pub = self.create_publisher(
             Float32MultiArray, '/gmpc/tracks_debug', 10)
         # /scan_filtered: the input scan with DYNAMIC-obstacle rays removed, for
@@ -796,6 +802,7 @@ class ScanObstacleTracker(Node):
         centroid drift -- all the more reason not to threshold it sharply.
         """
         if tr.age < self.min_age:
+            tr.reject = 1
             return False
         speed = math.hypot(*tr.kf.velocity)
         gate = self.release_speed if tr.is_mover else self.min_speed
@@ -804,6 +811,7 @@ class ScanObstacleTracker(Node):
                 tr.release += 1          # hold the old decision a little longer
                 return True
             tr.is_mover = False
+            tr.reject = 2
             tr.release = 0
             return False
         tr.release = 0
@@ -818,8 +826,10 @@ class ScanObstacleTracker(Node):
             if elapsed >= 0.3:                  # enough history to judge motion
                 if math.hypot(cx - ox, cy - oy) / elapsed < self.min_net_speed:
                     tr.is_mover = False
+                    tr.reject = 3
                     return False                # jitters in place -> static
         tr.is_mover = True
+        tr.reject = 0
         return True
 
     # ------------------------------------------------------------------
@@ -940,7 +950,8 @@ class ScanObstacleTracker(Node):
             age_s = max(0.0, (t_ns - (tr.last_obs_t_ns or t_ns)) * 1e-9)
             dbg.extend([float(tr.tid), cx, cy, vx2, vy2, float(tr.age),
                         float(tr.misses), float(tr.n_frag), age_s,
-                        float(tr.innov), 1.0 if id(tr) in conf_ids else 0.0])
+                        float(tr.innov), 1.0 if id(tr) in conf_ids else 0.0,
+                        float(tr.reject)])
         dm = Float32MultiArray(); dm.data = dbg
         self.track_pub.publish(dm)
 
