@@ -73,6 +73,7 @@ timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
         --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
                  /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h \
                  /gmpc/static_obstacles /gmpc/diag /gmpc/tracks_debug \
+                 /shield/diag /cmd_vel_pre_shield \
                  /model/dyn_obs_0/pose /model/dyn_obs_1/pose /model/dyn_obs_2/pose \
                  /model/dyn_obs_3/pose /model/dyn_obs_4/pose /model/dyn_obs_5/pose \
                  /model/dyn_obs_6/pose \
