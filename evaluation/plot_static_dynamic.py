@@ -1,15 +1,17 @@
 """Instantaneous KF speed against net-displacement speed, per track per cycle.
 
-The claim the net-displacement gate rests on is that instantaneous speed cannot
-separate a static object from a mover, while displacement over a window can.
-Plotting both axes at once shows that directly: a stationary body scatters
-widely along x -- occlusion and centroid slide inflate its apparent velocity --
-yet stays pinned near zero on y, because it does not translate.
+The net-displacement gate exists because instantaneous KF speed cannot separate
+a stationary object from a mover: occlusion and centroid slide inflate a static
+body's apparent velocity. Plotting both axes at once tests that claim rather
+than asserting it -- if the gate works, the static cloud spreads along x but
+stays pinned near zero on y.
 
-Tracks are labelled from Gazebo ground truth, which the controller never sees:
-a track within MATCH_M of a mover's true position is a mover, one that sits near
-a known unknown_obs is static, and the rest (map-subtraction leaks off walls)
-are static too.
+Labelled from Gazebo ground truth, which the controller never sees, and ONLY
+where the label is unambiguous: a track within MATCH_M of a mover is a mover,
+one sitting on a known unknown_obs is static, and everything else is dropped.
+Counting "not a mover" as static would sweep in map-subtraction leaks off
+walls, which jitter by construction and would make both gates look worse than
+they are.
 
     python3 evaluation/plot_static_dynamic.py [out.png]
 """
@@ -154,7 +156,7 @@ fp_both = int((~is_m & (vi >= V_INST) & (vn >= V_NET)).sum())
 n_s = max(int((~is_m).sum()), 1)
 ax.set_xlabel('瞬時 KF 速度  $\\|\\hat v_i\\|$   [m/s]')
 ax.set_ylabel('滑動窗淨位移速度  $\\bar v_{net,i}$   [m/s]')
-ax.set_title('靜態／動態分流：瞬時速度分不開，淨位移分得開',
+ax.set_title('靜態／動態分流：兩道門檻各自能分開多少',
              fontsize=13, fontweight='bold')
 ax.set_xlim(0, min(0.6, float(np.percentile(vi, 99.5))))
 ax.set_ylim(0, min(0.5, float(np.percentile(vn, 99.5))))
