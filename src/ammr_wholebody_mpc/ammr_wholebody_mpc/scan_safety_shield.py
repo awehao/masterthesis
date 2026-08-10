@@ -285,8 +285,18 @@ class ScanSafetyShield(Node):
             # is in this set by construction, so the sweep cannot fail to find a
             # point, and the guarantee degrades gracefully instead of silently.
             fallback = True
-            B2 = np.concatenate([np.minimum(b_obs, 0.0), box_b])
-            out, it2 = sweep(A, B2, u, max(self.iters, 12))
+            # RELAX the violated rows to "do not close", and leave the rest
+            # alone. np.minimum here was a sign error: for a return 2 m away
+            # b_i is about +3.8, and clamping that DOWN to 0 forbids moving
+            # toward anything at all. With 215 returns surrounding the robot --
+            # the norm when hugging a wall or passing a door -- the feasible set
+            # collapsed to the origin, the sweep could not converge inside its
+            # budget, and the last-resort zero fired. Measured on seed70, that
+            # turned a GMPC retreat command of (-0.14, +0.09) into a dead stop
+            # while a mover closed on it. np.maximum keeps distant rows
+            # permissive and still contains v = 0, so the set is never empty.
+            B2 = np.concatenate([np.maximum(b_obs, 0.0), box_b])
+            out, it2 = sweep(A, B2, u, max(self.iters, 30))
             iters += it2
             after = float(np.max(A @ out - B))
             if float(np.max(A @ out - B2)) > 1e-3:
