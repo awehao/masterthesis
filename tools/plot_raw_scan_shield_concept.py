@@ -44,7 +44,7 @@ for x1, x2 in [(1.75, 2.05), (3.25, 3.55), (4.75, 5.05), (6.25, 6.55)]:
 # Broken edge after speed classification.
 ax.plot([7.92, 8.18], [4.92, 4.68], color="#c00000", linewidth=4)
 ax.plot([7.92, 8.18], [4.68, 4.92], color="#c00000", linewidth=4)
-ax.text(7.95, 4.30, "Gate 未通過\n→ CBF 沒有該約束", ha="center",
+ax.text(8.05, 4.18, "Gate 未通過 → CBF 缺少該障礙約束", ha="center",
         fontproperties=fp, fontsize=11.5, color="#c00000", fontweight="bold")
 
 # Controller/smoother/shield final command chain.
@@ -64,9 +64,10 @@ ax.annotate("", xy=(11.80, 4.80), xytext=(11.55, 4.80),
             arrowprops=dict(arrowstyle="-|>", lw=1.8, color="#7f8c8d"))
 
 # Raw scan bypass into shield.
-ax.annotate("", xy=(12.37, 4.40), xytext=(1.15, 4.05),
-            arrowprops=dict(arrowstyle="-|>", lw=3, color="#ed7d31",
-                            connectionstyle="angle3,angleA=-90,angleB=90"))
+ax.plot([1.15, 1.15, 12.37], [4.45, 3.95, 3.95],
+        color="#ed7d31", linewidth=3)
+ax.annotate("", xy=(12.37, 4.40), xytext=(12.37, 3.95),
+            arrowprops=dict(arrowstyle="-|>", lw=3, color="#ed7d31"))
 ax.text(5.65, 3.72, "Raw /scan 直接旁路高階分類", fontproperties=fp,
         fontsize=13, color="#ed7d31", fontweight="bold")
 
@@ -100,7 +101,7 @@ ax.text(5.42, 2.65, "可見障礙物", ha="center", fontproperties=fp,
 surface = np.array([cx+R, cy])
 ax.annotate("", xy=pi, xytext=surface,
             arrowprops=dict(arrowstyle="-|>", lw=2, color="#7030a0"))
-ax.text(4.43, 1.72, "$n_i,\ d_i$", color="#7030a0", fontsize=13)
+ax.text(4.43, 1.72, r"$n_i,\ d_i$", color="#7030a0", fontsize=13)
 
 # Dynamic stopping boundary (schematic, centred on robot).
 dstop = 0.78
@@ -111,15 +112,17 @@ ax.text(2.18, 2.48, "$R+d_{stop,i}$", color="#c00000", fontsize=12)
 # Input command toward obstacle, output command tangent/upward.
 ax.annotate("", xy=(4.57, 1.60), xytext=(cx, cy),
             arrowprops=dict(arrowstyle="-|>", lw=5, color="#c00000"))
-ax.text(3.75, 1.36, "$u_{in}$：朝障礙物", color="#c00000", fontsize=12)
+ax.text(3.75, 1.36, "u_in：朝障礙物", color="#c00000", fontsize=12,
+        fontproperties=fp)
 ax.annotate("", xy=(3.45, 2.72), xytext=(cx, cy),
             arrowprops=dict(arrowstyle="-|>", lw=5, color="#548235"))
-ax.text(3.54, 2.72, "$u_{out}$：保留切向", color="#548235", fontsize=12)
+ax.text(3.54, 2.72, "u_out：保留切向", color="#548235", fontsize=12,
+        fontproperties=fp)
 
 # Simple explanation cards on right.
 cards = [
     (7.05, 2.42, "1  讀取有效回波", "不需要 cluster、track、age 或速度分類"),
-    (7.05, 1.52, "2  檢查接近速度", "$n_i^T(v+\omega Jr_i)\leq\alpha(d_i-d_{stop,i})$"),
+    (7.05, 1.52, "2  檢查接近速度", r"$n_i^T(v+\omega Jr_i)\leq\alpha(d_i-d_{stop,i})$"),
     (7.05, 0.62, "3  投影最終命令", "削減靠近分量，保留切向與遠離能力"),
 ]
 for x, y, head, body in cards:
