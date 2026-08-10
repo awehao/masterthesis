@@ -274,10 +274,16 @@ def generate_launch_description():
         'prog_weight': float(os.environ.get('PROG_WEIGHT', '0.0')),
         # Committed detour (detour.py): DETOUR=1 to enable.
         'detour_enable': os.environ.get('DETOUR', '0') == '1',
-        # 0.35, the value the five validation rounds actually used. The
-        # dataclass default of 0.60 was never validated end to end.
-        'detour_max_offset': float(os.environ.get('DETOUR_OFFSET', '0.35')),
-        'detour_trigger_range': float(os.environ.get('DETOUR_RANGE', '2.0')),
+        # The lateral lane the detour aims for must clear the keep-out, which
+        # is the mover's radius plus cbf_safe_margin = 0.25 + 0.60 = 0.85 m. The
+        # old 0.35 was chosen when the margin was 0.38 (keep-out 0.63) and never
+        # revisited, so the offset reference stayed inside the barrier and the
+        # detour could not resolve anything.
+        'detour_max_offset': float(os.environ.get('DETOUR_OFFSET', '0.90')),
+        # Far enough that the ramp finishes before the encounter: 0.9 m at
+        # 0.01 m/step is 90 steps = 4.5 s, and 2.5 m of approach at
+        # 0.28 m/s gives about 9 s.
+        'detour_trigger_range': float(os.environ.get('DETOUR_RANGE', '2.5')),
         'detour_vx_floor': float(os.environ.get('DETOUR_VX_FLOOR', '0.0')),
         'detour_clear_ref': os.environ.get('DETOUR_CLEAR_REF', '1') == '1',
         'detour_clear_pad': float(os.environ.get('DETOUR_CLEAR_PAD', '0.05')),

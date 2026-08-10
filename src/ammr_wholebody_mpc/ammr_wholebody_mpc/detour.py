@@ -70,7 +70,14 @@ class DetourConfig:
     trigger_cone_deg: float = 30.0  # and within this half-angle ahead
     release_behind: float = -0.3   # m, release once it is this far behind
     max_offset: float = 0.60       # m, peak lateral shift of the reference
-    offset_rate: float = 0.08      # m per control step, ramp in/out
+    # The reference may not slide sideways faster than the chassis can follow.
+    # 0.08 m per step at 20 Hz is 1.6 m/s, against a lateral limit of 0.2775 --
+    # the reference runs away, tracking error grows every cycle, and the QP
+    # answers by saturating v_y. Measured with max_offset 0.9: v_y swung the
+    # full +-0.278 range, reversed 30 times in 18 s (~1.7 Hz) and |dv_y/dt| sat
+    # at the 6.25 acceleration limit. At 0.01 m per step (0.2 m/s) the ramp
+    # stays inside what the base can actually track.
+    offset_rate: float = 0.01      # m per control step, ramp in/out
     vx_floor: float = 0.0          # m/s, forward speed floor while detouring.
                                    # OFF, and it must stay off: as a hard bound
                                    # on u it removes SLOWING DOWN from the QP's
@@ -86,7 +93,11 @@ class DetourConfig:
     side_clear: float = 0.33       # m, keep-out from wall points on the chosen
                                    # side (matches static_cbf_safe_margin; the
                                    # robot is a point, so this includes radius)
-    side_clear_dyn: float = 0.38   # m, same for other movers (dynamic margin)
+    # Must track cbf_safe_margin. It was 0.38 when the detour was validated and
+    # is 0.60 now; leaving the constant behind made the detour aim for a lane
+    # that is still inside the keep-out, so the CBF kept pushing and the
+    # tracking cost kept pulling -- the oscillation this module exists to end.
+    side_clear_dyn: float = 0.60   # m, same for other movers (dynamic margin)
     side_ahead: float = 1.0        # m, how far ahead to look for blockers
     side_lookahead_s: float = 1.5  # s, how far to extrapolate other movers when
                                    # deciding whether a side is clear
@@ -300,7 +311,7 @@ def apply_offset(X_ref_win, offset, max_offset):
     return out
 
 
-def clear_reference(X_ref_win, obstacles, dt, default_margin=0.38, pad=0.05,
+def clear_reference(X_ref_win, obstacles, dt, default_margin=0.60, pad=0.05,
                     side=FREE, sideways=True):
     """Push reference points out of the CBF's keep-out discs.
 
