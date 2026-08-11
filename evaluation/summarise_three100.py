@@ -21,9 +21,12 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
 import analyze as A
 
-ARMS = [('gmpc100', 'GMPC + CBF + shield'),
-        ('mppi100', 'nav2 MPPI'),
-        ('rpp100', 'nav2 RPP  ($v_y=0$)')]
+# (results dir, label, bag prefix). The prefix matters: the archives were
+# filled by a glob that also captured other batches' bags, so the analysis has
+# to select rather than trust the directory.
+ARMS = [('gmpc100', 'GMPC + CBF + shield', 'gmpc_cbf__scan_seed'),
+        ('mppi100', 'nav2 MPPI', 'mppi__mppi_seed'),
+        ('rpp100', 'nav2 RPP  ($v_y=0$)', 'rpp__rpp_seed')]
 sc = A.load_static_clearance()
 GEOM = A.__dict__.get('DYN_GEOM', {})
 R = A.ROBOT_RADIUS_M
@@ -36,7 +39,7 @@ def rows(path):
             for x in csv.DictReader(open(path)) if x.get('min_clearance_m')}
 
 
-def split(archive):
+def split(archive, prefix):
     """static/dynamic minimum clearance per trial, from gz truth, UP TO ARRIVAL.
 
     The window matters more than the geometry here. A robot that has reached its
@@ -47,7 +50,7 @@ def split(archive):
     shows 1, because it was counting the parked period.
     """
     out = {}
-    for bag in sorted(glob.glob(f'{archive}/*seed*')):
+    for bag in sorted(glob.glob(f'{archive}/{prefix}*')):
         if not os.path.exists(f'{bag}/metadata.yaml'):
             continue
         try:
@@ -117,13 +120,13 @@ print("| 方法 | n | 到達 | 碰撞 | 碰撞率 | 靜態碰撞 | 動態碰撞 
       "到達時間 | 路徑 |")
 print("|---|---|---|---|---|---|---|---|---|---|---|")
 store = {}
-for key, label in ARMS:
+for key, label, pref in ARMS:
     r = rows(f'evaluation/results/{key}/batch.csv')
     store[key] = r
     if not r:
         print(f"| {label} | - | | (未跑) | | | | | | | |")
         continue
-    sp = split(f'evaluation/bags/archive_{key}')
+    sp = split(f'evaluation/bags/archive_{key}', pref)
     clr = [float(v['min_clearance_m']) for v in r.values()]
     n = len(r)
     neg = sum(1 for c in clr if c < 0)
@@ -147,7 +150,7 @@ for key, label in ARMS:
 
 # do the baselines look safe only because they stopped short?
 print("\n## 未到達的趟數在哪裡停下\n")
-for key, label in ARMS:
+for key, label, pref in ARMS:
     r = store.get(key) or {}
     fail = [v for v in r.values() if v['success'] != 'True']
     ok = [v for v in r.values() if v['success'] == 'True']
@@ -163,13 +166,13 @@ for key, label in ARMS:
           f"（{pf/max(po,1e-6):.0%}）")
 
 # paired, on the routes every arm completed
-common = sorted(set.intersection(*[set(store[k]) for k, _ in ARMS if store.get(k)])) \
-    if all(store.get(k) for k, _ in ARMS) else []
+common = sorted(set.intersection(*[set(store[k]) for k, _, _ in ARMS if store.get(k)])) \
+    if all(store.get(k) for k, _, _ in ARMS) else []
 if common:
     print(f"\n## 配對（三組都跑完的 {len(common)} 條）\n")
     print("| 方法 | 碰撞 | 到達 | 間距中位 |")
     print("|---|---|---|---|")
-    for key, label in ARMS:
+    for key, label, pref in ARMS:
         r = store[key]
         c = [float(r[k]['min_clearance_m']) for k in common]
         print(f"| {label} | {sum(1 for x in c if x < 0)} | "

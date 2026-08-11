@@ -30,8 +30,8 @@ N=100
 POSES="$PWD/evaluation/results/bigarena_poses_big.csv"
 say () { echo "[$(date +%H:%M:%S)] $*"; }
 
-run_arm () {                       # $1 outdir  $2 method  $3 csv-tag  $4.. env
-    local out="$1" method="$2" tag="$3"; shift 3
+run_arm () {              # $1 outdir  $2 method  $3 csv-tag  $4 bag-prefix  $5.. env
+    local out="$1" method="$2" tag="$3" prefix="$4"; shift 4
     local csv="evaluation/results/omnibot_dynamic_${tag}.csv"
     mkdir -p "evaluation/results/$out"; rm -rf "evaluation/bags/archive_$out"
     rm -f "$csv"
@@ -50,7 +50,12 @@ run_arm () {                       # $1 outdir  $2 method  $3 csv-tag  $4.. env
     wait $bpid
     cp "$csv" "evaluation/results/$out/batch.csv"
     local ad="evaluation/bags/archive_$out"; mkdir -p "$ad"
-    for d in evaluation/bags/*seed*; do
+    # Only this arm's own bags. `evaluation/bags/*seed*` sweeps in every batch
+    # still sitting in that directory -- nocbf, truth, nosm and the other two
+    # methods -- and any of them recorded in a different scenario is then scored
+    # against the wrong occupancy grid, which reports -0.300 (the robot radius,
+    # i.e. centre on an occupied cell) for a trial that touched nothing.
+    for d in evaluation/bags/${prefix}seed*; do
         case "$d" in *__prev_*) continue;; esac
         [ -f "$d/metadata.yaml" ] || continue
         local s; s=$(basename "$d" | sed 's/.*seed//'); [ "$s" -le "$N" ] || continue
@@ -62,9 +67,9 @@ run_arm () {                       # $1 outdir  $2 method  $3 csv-tag  $4.. env
     say "$out done: $(( $(wc -l < "$csv") - 1 )) trials, $neg negative"
 }
 
-run_arm gmpc100 gmpc_scan gmpc_scan SHIELD=1
-run_arm mppi100 mppi       mppi
-run_arm rpp100  rpp        rpp
+run_arm gmpc100 gmpc_scan gmpc_scan 'gmpc_cbf__scan_' SHIELD=1
+run_arm mppi100 mppi mppi 'mppi__mppi_'
+run_arm rpp100  rpp  rpp  'rpp__rpp_'
 
 say "analysing"
 python3 evaluation/summarise_three100.py > evaluation/results/THREE100_SUMMARY.md 2>&1
