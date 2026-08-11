@@ -28,7 +28,7 @@ LOCKFILE=/tmp/omnibot_dynamic.pid
 if [ -f "$LOCKFILE" ] && kill -0 "$(cat "$LOCKFILE" 2>/dev/null)" 2>/dev/null; then
     echo "ERROR: a batch is already running."; exit 1
 fi
-N=100
+N=30
 POSES="$PWD/evaluation/results/bigarena_poses_big.csv"
 say () { echo "[$(date +%H:%M:%S)] $*"; }
 
