@@ -32,9 +32,13 @@ N=30
 POSES="$PWD/evaluation/results/bigarena_poses_big.csv"
 say () { echo "[$(date +%H:%M:%S)] $*"; }
 
-run_arm () {              # $1 outdir  $2 method  $3 csv-tag  $4 prefix  $5.. env
-    local out="$1" method="$2" tag="$3" prefix="$4"; shift 4
-    local csv="evaluation/results/omnibot_dynamic_${tag}.csv"
+run_arm () {                     # $1 outdir  $2 method  $3 prefix  $4.. env
+    local out="$1" method="$2" prefix="$3"; shift 3
+    # run_omnibot_dynamic.sh names the CSV after the METHOD, not after the tag
+    # its case statement uses internally: gmpc_nocbf writes
+    # omnibot_dynamic_gmpc_nocbf.csv. Passing the tag looked for a file that
+    # never existed, so two arms ran to completion and neither copied a result.
+    local csv="evaluation/results/omnibot_dynamic_${method}.csv"
     mkdir -p "evaluation/results/$out"; rm -rf "evaluation/bags/archive_$out"
     rm -f "$csv"
     # Clear this arm's bag pattern BEFORE running. A and C share the
@@ -75,9 +79,9 @@ run_arm () {              # $1 outdir  $2 method  $3 csv-tag  $4 prefix  $5.. en
 }
 
 # A and C use gmpc_nocbf (cbf:=false); they differ only in SHIELD.
-run_arm ablA gmpc_nocbf nocbf 'gmpc_cbf__nocbf_' SHIELD=0
-run_arm ablC gmpc_nocbf nocbf 'gmpc_cbf__nocbf_' SHIELD=1
-run_arm ablB gmpc_scan  gmpc_scan 'gmpc_cbf__scan_' SHIELD=0
+run_arm ablA gmpc_nocbf 'gmpc_cbf__nocbf_' SHIELD=0
+run_arm ablC gmpc_nocbf 'gmpc_cbf__nocbf_' SHIELD=1
+run_arm ablB gmpc_scan 'gmpc_cbf__scan_' SHIELD=0
 
 say "analysing"
 python3 evaluation/summarise_ablation2x2.py > evaluation/results/ABLATION2X2_SUMMARY.md 2>&1
