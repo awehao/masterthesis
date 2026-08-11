@@ -37,7 +37,15 @@ def rows(path):
 
 
 def split(archive):
-    """static/dynamic minimum clearance per trial, from gz truth."""
+    """static/dynamic minimum clearance per trial, from gz truth, UP TO ARRIVAL.
+
+    The window matters more than the geometry here. A robot that has reached its
+    goal sits there while the recording runs on, and a mover crossing the goal
+    area then drives into a stationary machine -- a contact that says nothing
+    about navigation and that analyze.py already excludes (report S8.2). Without
+    the same truncation this function reported 21 contacts for an arm whose CSV
+    shows 1, because it was counting the parked period.
+    """
     out = {}
     for bag in sorted(glob.glob(f'{archive}/*seed*')):
         if not os.path.exists(f'{bag}/metadata.yaml'):
@@ -46,7 +54,7 @@ def split(archive):
             seed = int(bag.split('seed')[-1])
         except ValueError:
             continue
-        T = {'/odom': Odometry}
+        T = {'/odom': Odometry, '/goal_pose': PoseStamped}
         for i in range(10):
             T[f'/model/dyn_obs_{i}/pose'] = PoseStamped
         s = {k: [] for k in T}
@@ -66,6 +74,15 @@ def split(archive):
             continue
         oxy = np.array([[m.pose.pose.position.x, m.pose.pose.position.y]
                         for _, m in s['/odom']])
+        # Truncate at the first arrival, matching analyze.py's window.
+        g = s.get('/goal_pose') or []
+        if g:
+            gx = g[-1][1].pose.position.x
+            gy = g[-1][1].pose.position.y
+            near = np.hypot(oxy[:, 0] - gx, oxy[:, 1] - gy) < 0.30
+            if near.any():
+                k_end = int(np.argmax(near)) + 1
+                ot, oxy = ot[:k_end], oxy[:k_end]
         cs = np.array([sc(x, y) - R for x, y in oxy])
         cd = np.full(len(ot), 9.9)
         for i in range(10):
