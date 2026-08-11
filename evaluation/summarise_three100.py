@@ -96,7 +96,7 @@ def ub(n):
 print("# 三方對照：統一硬體上限，100 條路線\n")
 print("所有方法使用相同的運動上限（0.2775 m/s / 軸、6.25 m/s²、1.1327 rad/s）與"
       "相同路線。RPP 的 $v_y$ 維持 0：純追蹤法不產生側移指令，屬演算法特性。\n")
-print("| 方法 | n | 到達 | 碰撞 | 碰撞率 | 靜態 | 動態 | 間距中位 | 最差 | "
+print("| 方法 | n | 到達 | 碰撞 | 碰撞率 | 靜態碰撞 | 動態碰撞 | 間距中位 | 最差 | "
       "到達時間 | 路徑 |")
 print("|---|---|---|---|---|---|---|---|---|---|---|")
 store = {}
@@ -111,8 +111,15 @@ for key, label in ARMS:
     n = len(r)
     neg = sum(1 for c in clr if c < 0)
     arr = sum(1 for v in r.values() if v['success'] == 'True')
-    ns = sum(1 for a, b in sp.values() if min(a, b) < 0 and a < b)
-    nd = sum(1 for a, b in sp.values() if min(a, b) < 0 and b <= a)
+    # Count only trials that actually CONTACTED, and attribute each to the
+    # surface it hit. The earlier version classified every trial by which class
+    # its minimum happened to belong to, contact or not, so an arm with one
+    # contact could report nine "static" -- a number that reads as nine static
+    # contacts and is not.
+    ns = sum(1 for a, b in sp.values() if a < 0 and a <= b)
+    nd = sum(1 for a, b in sp.values() if b < 0 and b < a)
+    # Arrival time is over ARRIVING trials only, so a method that abandons its
+    # hard routes looks fast. Read it against the arrival column, never alone.
     t = [float(v['arrival_time_s']) for v in r.values()
          if v['success'] == 'True' and v['arrival_time_s']]
     pl = [float(v['path_length_m']) for v in r.values()]
@@ -153,7 +160,8 @@ if common:
               f"{st.median(c):+.3f} |")
 
 print("""
-**讀法**：碰撞數必須和到達率一起看。基線若有大量未到達，其低碰撞有一部分來自
+**讀法**：到達時間只統計「有到達」的趟，放棄困難路線的方法會顯得快 —— 必須與
+到達欄一起讀。碰撞數同理。基線若有大量未到達，其低碰撞有一部分來自
 沒有走完全程；「未到達的趟數在哪裡停下」那節就是為了讓這件事無法被忽略。
 零事件的 95% 上界約為 3/N，100 趟為 3%。
 """)
