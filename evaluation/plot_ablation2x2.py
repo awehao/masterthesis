@@ -8,7 +8,9 @@ Three panels, because the interesting result is not in the contact count alone.
           interchangeable: the CBF lifts the whole distribution because it
           avoids early, while the shield leaves it low and merely keeps the tail
           out of contact.
-  right   the cost, in arrival time.
+  right   worst penetration -- the depth that separates a graze from a
+          collision, and the only panel where D is qualitatively different
+          rather than merely better.
 
 C was expected to be safe but clumsy -- braking late, detouring badly, getting
 stuck. It is not: C arrives on every route, faster than B and by a shorter path.
@@ -96,15 +98,28 @@ axs[1].grid(axis='y', alpha=0.25)
 axs[1].spines[['top', 'right']].set_visible(False)
 
 # ------------------------------------------------------------- panel 3
+# Worst penetration rather than arrival time. The time cost is real (79 -> 104 s)
+# and stays in the results table; it just does not need a third of the headline
+# figure, where the safety story is what the panels are for.
 med = [float(np.median(t)) if t else float('nan') for t in tarr]
-axs[2].bar(x, med, 0.55, color=cols, alpha=0.9)
-for xx, v in zip(x, med):
-    axs[2].text(xx, v + 1.5, f'{v:.0f} s', ha='center', fontsize=13,
-                fontweight='bold')
+pen = [max(0.0, -w) for w in worst]
+bar_c = ['#c00000' if p > 0 else '#548235' for p in pen]
+axs[2].bar(x, pen, 0.55, color=cols, alpha=0.9,
+           edgecolor=bar_c, linewidth=2.2)
+for xx, p, w in zip(x, pen, worst):
+    if p > 0:
+        axs[2].text(xx, p + 0.012, f'{p*100:.1f} cm', ha='center', fontsize=13,
+                    fontweight='bold')
+    else:
+        axs[2].text(xx, 0.012, f'無接觸\n（最差 {w:+.3f} m）', ha='center',
+                    fontsize=11.5, fontweight='bold', color='#548235')
+axs[2].axhline(0.30, color='#c00000', lw=1.3, ls=':')
+axs[2].text(3.45, 0.308, '車體半徑 0.30 m', color='#c00000', fontsize=10,
+            ha='right')
 axs[2].set_xticks(x); axs[2].set_xticklabels(labels, fontsize=11)
-axs[2].set_ylabel('到達時間中位 [s]', fontsize=12)
-axs[2].set_ylim(0, max(med) * 1.22)
-axs[2].set_title('代價：到達時間（四組皆 28/28 到達）',
+axs[2].set_ylabel('最深穿透 [m]', fontsize=12)
+axs[2].set_ylim(0, max(max(pen) * 1.25, 0.36))
+axs[2].set_title('最深穿透（四組皆 28/28 到達）',
                  fontsize=12.5, fontweight='bold')
 axs[2].grid(axis='y', alpha=0.25)
 axs[2].spines[['top', 'right']].set_visible(False)
