@@ -38,8 +38,7 @@
   <xacro:property name="tuck_j6" value="0.0"/>
 
   <xacro:macro name="lite6_ros2_control_gz"
-               params="prefix:='' ros2_control_plugin:='gz_ros2_control/GazeboSimSystem'
-                       add_gripper:=false">
+               params="prefix:='' ros2_control_plugin:='gz_ros2_control/GazeboSimSystem'">
 
     <ros2_control name="${prefix}lite6_gz" type="system">
       <hardware>
@@ -70,29 +69,6 @@
       <xacro:arm_joint num="4" lower="${-2.0*pi}"  upper="${2.0*pi}"  initial="${tuck_j4}"/>
       <xacro:arm_joint num="5" lower="-2.1642"     upper="2.1642"     initial="${tuck_j5}"/>
       <xacro:arm_joint num="6" lower="${-2.0*pi}"  upper="${2.0*pi}"  initial="${tuck_j6}"/>
-
-      <!-- UFACTORY Lite 6 factory gripper. Only finger_joint1 is commanded:
-           finger_joint2 carries a <mimic> tag in uflite_gripper.urdf.xacro and
-           gz_ros2_control follows it from the URDF, so declaring it here as
-           well would give two writers for one joint.
-
-           Upstream's uflite_gripper.ros2_control.xacro is not reused because it
-           opens a SECOND <ros2_control> system. Two systems means two hardware
-           components in one gz world, and the arm and the gripper then come up
-           independently: the gripper can be live while the arm is not. One
-           system keeps them in step. -->
-      <xacro:if value="${add_gripper}">
-        <joint name="${prefix}finger_joint1">
-          <command_interface name="position">
-            <param name="min">0.0</param>
-            <param name="max">0.0089</param>
-          </command_interface>
-          <state_interface name="position">
-            <param name="initial_value">0.0</param>
-          </state_interface>
-          <state_interface name="velocity"/>
-        </joint>
-      </xacro:if>
     </ros2_control>
 
   </xacro:macro>
