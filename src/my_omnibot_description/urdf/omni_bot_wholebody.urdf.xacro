@@ -11,7 +11,7 @@
             [base_y     prismatic Y] -> base_y_link
             [base_theta revolute  Z] -> base_theta_link
             [fixed, z + 0.05]        -> base_link
-            [arm_mount + fixed]      -> link_base -> joint1..6 -> link_eef
+            [fixed, 0.11 0 0.28]     -> link_base -> joint1..6 -> link_eef
 
   so a standard kinematics library (KDL, Pinocchio, MoveIt) sees a 9-DOF arm
   and gives the whole-body Jacobian directly, with no hand-written base/arm
@@ -121,14 +121,9 @@
   <xacro:chassis_body/>
 
   <!-- ================= arm, on the real mount ===================== -->
-  <!-- The ROS 1 model bolted the arm straight to base_link at 0.11 0 0.28.
-       We keep our own mount instead: centred, on a mast whose risers sit in
-       the LiDAR sectors scan_relay already masks. Using a different attach
-       point here than in simulation would make the solver plan for a robot
-       that does not exist, so this MUST stay in step with omni_bot.urdf.xacro. -->
-  <xacro:include filename="$(find my_omnibot_description)/urdf/arm_mount.xacro"/>
-  <xacro:arm_mount parent="base_link"/>
-
+  <!-- The attach point MUST stay in step with omni_bot.urdf.xacro: a solver
+       that placed the arm somewhere the simulator does not would plan for a
+       robot that has never been run. -->
   <xacro:property name="is_ros2" value="false"/>
   <xacro:property name="use_xacro_load_yaml" value="true"/>
   <xacro:property name="use_len" value="true"/>
@@ -145,10 +140,21 @@
     ros2_control_plugin=""
     kinematics_params_filename="$(find xarm_description)/config/kinematics/default/lite6_default_kinematics.yaml"/>
 
+  <!-- Arm attach point, verbatim from the real robot: base_link + (0.11, 0,
+       0.28). Same values as mobile_manipulator.xacro (attach_xyz default) and
+       fake_mobile_manipulator_modified.urdf (base_link_to_link_base) in the
+       MastersThesis_ros tree.
+
+       No mount structure is modelled, matching that reference, which bolts
+       the arm straight to base_link. An earlier version of this file put the
+       arm on a centred mast whose risers hid in the LiDAR sectors scan_relay
+       already masks; that geometry does not survive the 0.11 m offset (the
+       masked sectors stop intersecting the plate footprint), and the real
+       bracket is not measured, so nothing is invented in its place. -->
   <joint name="arm_base_joint" type="fixed">
-    <parent link="arm_mount_link"/>
+    <parent link="base_link"/>
     <child link="link_base"/>
-    <origin xyz="0 0 0.006" rpy="0 0 0"/>
+    <origin xyz="0.11 0 0.28" rpy="0 0 0"/>
   </joint>
 
   <!-- ================= factory gripper + TCP ====================== -->

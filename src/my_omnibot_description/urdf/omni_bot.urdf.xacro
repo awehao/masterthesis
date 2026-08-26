@@ -108,12 +108,11 @@
   </gazebo>
 
   <!-- ===== Phase 2: manipulator (UFACTORY Lite 6, 6-DOF) ================
-       Mounted on a mast ABOVE the LiDAR (see arm_mount.xacro for why).
+       Attached at the real robot's mounting point, base_link + (0.11, 0, 0.28).
        Base 3 DOF (x, y, theta) + arm 6 DOF = 9 DOF against a 6-DOF SE(3)
        end-effector task -> 3 redundant DOF for whole-body coordination.
        ===================================================================== -->
   <xacro:if value="$(arg use_arm)">
-    <xacro:include filename="$(find my_omnibot_description)/urdf/arm_mount.xacro"/>
     <!-- xarm_description expects these three globals. Upstream sets them in
          _private_macro.xacro with scope="parent", which only works when that
          file is pulled in from INSIDE a macro; included at robot level it
@@ -137,8 +136,6 @@
     <xacro:include filename="$(find xarm_description)/urdf/common/common.link.xacro"/>
     <xacro:include filename="$(find xarm_description)/urdf/common/common.gazebo.xacro"/>
     <xacro:include filename="$(find xarm_description)/urdf/lite6/lite6_robot_macro.xacro"/>
-
-    <xacro:arm_mount parent="base_link"/>
 
     <xacro:lite6_robot
       prefix=""
@@ -167,11 +164,21 @@
       <xacro:uflite_gripper_urdf prefix="" attach_to="link_eef"/>
     </xacro:if>
 
-    <!-- arm base bolted to the top of the mast plate -->
+    <!-- Arm attach point, verbatim from the real robot: base_link + (0.11, 0,
+         0.28). Same values as mobile_manipulator.xacro (attach_xyz default) and
+         fake_mobile_manipulator_modified.urdf (base_link_to_link_base) in the
+         MastersThesis_ros tree.
+
+         No mount structure is modelled, matching that reference, which bolts
+         the arm straight to base_link. An earlier version of this file put the
+         arm on a centred mast whose risers hid in the LiDAR sectors scan_relay
+         already masks; that geometry does not survive the 0.11 m offset (the
+         masked sectors stop intersecting the plate footprint), and the real
+         bracket is not measured, so nothing is invented in its place. -->
     <joint name="arm_base_joint" type="fixed">
-      <parent link="arm_mount_link"/>
+      <parent link="base_link"/>
       <child link="link_base"/>
-      <origin xyz="0 0 0.006" rpy="0 0 0"/>
+      <origin xyz="0.11 0 0.28" rpy="0 0 0"/>
     </joint>
 
     <!-- Observation frames for arm avoidance. Massless and geometry-free, so
