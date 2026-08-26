@@ -188,6 +188,14 @@
       <origin xyz="0 0 0.006" rpy="0 0 0"/>
     </joint>
 
+    <!-- Observation frames for arm avoidance. Massless and geometry-free, so
+         gz lumps them into the parent link and physics is unchanged; they exist
+         only so robot_state_publisher puts them on TF for
+         ammr_wholebody_mpc/arm_detection_points.py. Shared with
+         omni_bot_wholebody.urdf.xacro so both models agree by construction. -->
+    <xacro:include filename="$(find my_omnibot_description)/urdf/arm_detect_points.xacro"/>
+    <xacro:arm_detect_points/>
+
     <!-- runs a controller_manager inside gz so the 6 arm joints are simulated
          at the physics rate. The base keeps using gz VelocityControl on
          /cmd_vel, so the validated navigation stack is untouched. -->

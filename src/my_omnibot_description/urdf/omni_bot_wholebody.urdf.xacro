@@ -1,0 +1,175 @@
+<?xml version="1.0"?>
+<!--
+  Kinematics-only whole-body model: omni base + Lite 6 as ONE chain.
+
+  This is the docking scheme from fake_mobile_manipulator_modified.urdf in the
+  ROS 1 MastersThesis_ros tree. The chassis is not a floating body here; its
+  three planar degrees of freedom are real URDF joints:
+
+      world -> virtual_base
+            [base_x     prismatic X] -> base_x_link
+            [base_y     prismatic Y] -> base_y_link
+            [base_theta revolute  Z] -> base_theta_link
+            [fixed, z + 0.05]        -> base_link
+            [arm_mount + fixed]      -> link_base -> joint1..6 -> link_eef
+
+  so a standard kinematics library (KDL, Pinocchio, MoveIt) sees a 9-DOF arm
+  and gives the whole-body Jacobian directly, with no hand-written base/arm
+  composition. That is the entire reason this file exists, and it is what makes
+  base and arm solvable in one QP rather than two stacked controllers.
+
+  NOT a simulation model. Every link is massless, there are no wheels, no
+  rollers, no sensors and no gz plugins. gz keeps using omni_bot.urdf.xacro;
+  this one is for the solver only. The ROS 1 file called itself "fake" for the
+  same reason.
+
+  Two numbers deliberately differ from the ROS 1 original:
+
+    base_x / base_y velocity   the original allowed 0.3 m/s per axis. Our
+                               measured per-axis limit is 0.2775 m/s (wheel
+                               radius 0.05, w_max 5.55, L 0.245), and the
+                               whole-body solver has to obey the same envelope
+                               the chassis controller does, so 0.2775 it is.
+
+    base_theta velocity        the original's 1.12766 rad/s is within rounding
+                               of our derived 1.1327; we use ours for the same
+                               reason.
+
+  The the 5 m wide prismatic range is a LOCAL window, not a map extent: `world` here
+  is an anchor the solver re-bases periodically, not the map origin. Widening
+  it does not buy reach, it only lets the QP drift further from the linearisation
+  point it was built around.
+-->
+<robot name="omni_bot_wholebody" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="base_xy_range" default="2.5"/>
+  <xacro:arg name="base_xy_vel"   default="0.2775"/>
+  <xacro:arg name="base_wz_vel"   default="1.1327"/>
+
+  <xacro:property name="XY"  value="$(arg base_xy_range)"/>
+  <xacro:property name="VXY" value="$(arg base_xy_vel)"/>
+  <xacro:property name="VWZ" value="$(arg base_wz_vel)"/>
+
+  <!-- massless placeholder: a URDF link with no inertial is rejected by some
+       parsers, and a link with real mass would make the virtual joints fight
+       the solver -->
+  <xacro:macro name="ghost_link" params="name">
+    <link name="${name}">
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="1e-6"/>
+        <inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <!-- ================= virtual planar base: 3 DOF ================= -->
+  <link name="world"/>
+  <joint name="fixed_to_world" type="fixed">
+    <parent link="world"/>
+    <child link="virtual_base"/>
+  </joint>
+  <xacro:ghost_link name="virtual_base"/>
+
+  <joint name="base_x" type="prismatic">
+    <parent link="virtual_base"/>
+    <child link="base_x_link"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="100.0" lower="${-XY}" upper="${XY}" velocity="${VXY}"/>
+    <dynamics damping="0.3" friction="0.3"/>
+  </joint>
+  <xacro:ghost_link name="base_x_link"/>
+
+  <joint name="base_y" type="prismatic">
+    <parent link="base_x_link"/>
+    <child link="base_y_link"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="100.0" lower="${-XY}" upper="${XY}" velocity="${VXY}"/>
+    <dynamics damping="0.3" friction="0.3"/>
+  </joint>
+  <xacro:ghost_link name="base_y_link"/>
+
+  <!-- continuous would be the honest type, but a revolute with a wide range
+       keeps the joint inside the box constraints a QP expects -->
+  <joint name="base_theta" type="revolute">
+    <parent link="base_y_link"/>
+    <child link="base_theta_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="100.0" lower="-62.832" upper="62.832" velocity="${VWZ}"/>
+    <dynamics damping="0.3" friction="0.3"/>
+  </joint>
+  <xacro:ghost_link name="base_theta_link"/>
+
+  <!-- base_theta_link is at ground level, i.e. base_footprint. The 0.05 lift
+       to base_link is the same offset the simulation model uses. -->
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_theta_link"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+  </joint>
+  <xacro:ghost_link name="base_link"/>
+
+  <!-- ================= arm, on the real mount ===================== -->
+  <!-- The ROS 1 model bolted the arm straight to base_link at 0.11 0 0.28.
+       We keep our own mount instead: centred, on a mast whose risers sit in
+       the LiDAR sectors scan_relay already masks. Using a different attach
+       point here than in simulation would make the solver plan for a robot
+       that does not exist, so this MUST stay in step with omni_bot.urdf.xacro. -->
+  <xacro:include filename="$(find my_omnibot_description)/urdf/arm_mount.xacro"/>
+  <xacro:arm_mount parent="base_link"/>
+
+  <xacro:property name="is_ros2" value="false"/>
+  <xacro:property name="use_xacro_load_yaml" value="true"/>
+  <xacro:property name="use_len" value="true"/>
+  <xacro:include filename="$(find xarm_description)/urdf/common/common.material.xacro"/>
+  <xacro:common_material prefix=""/>
+  <xacro:property name="mesh_path" value="file://$(find xarm_description)/meshes"/>
+  <xacro:property name="mesh_suffix" value="stl"/>
+  <xacro:include filename="$(find xarm_description)/urdf/common/common.link.xacro"/>
+  <xacro:include filename="$(find xarm_description)/urdf/common/common.gazebo.xacro"/>
+  <xacro:include filename="$(find xarm_description)/urdf/lite6/lite6_robot_macro.xacro"/>
+
+  <xacro:lite6_robot
+    prefix=""
+    ros2_control_plugin=""
+    kinematics_params_filename="$(find xarm_description)/config/kinematics/default/lite6_default_kinematics.yaml"/>
+
+  <joint name="arm_base_joint" type="fixed">
+    <parent link="arm_mount_link"/>
+    <child link="link_base"/>
+    <origin xyz="0 0 0.006" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ================= factory gripper + TCP ====================== -->
+  <!-- mobile_manipulator.xacro runs with add_gripper="true", so the reference
+       robot ends at link_tcp, not at link6. The chain there is
+       link6 -> link_eef -> uflite_gripper_link -> link_tcp (+0.0836 z), and
+       that last 8.36 cm is the whole point: a whole-body task frame at link6
+       plans the WRIST to the target and drives the fingers through it.
+
+       link_eef has to be declared here. Upstream defines it in
+       xarm_device_macro.xacro, which we do not include (we call
+       lite6_robot_macro directly), and lite6.urdf.xacro has its copy commented
+       out, so calling the gripper macro without this would attach it to a
+       link that does not exist.
+
+       Only the URDF half of the gripper macro is pulled in. The full
+       uflite_gripper_macro also drags in ros2_control, transmissions, a gazebo
+       block and a mimic-joint plugin, none of which mean anything in a
+       kinematics-only model. -->
+  <link name="link_eef"/>
+  <joint name="joint_eef" type="fixed">
+    <parent link="link6"/>
+    <child link="link_eef"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <xacro:include filename="$(find xarm_description)/urdf/gripper/uflite_gripper.urdf.xacro"/>
+  <xacro:uflite_gripper_urdf prefix="" attach_to="link_eef"/>
+
+  <!-- ================= observation frames ========================= -->
+  <xacro:include filename="$(find my_omnibot_description)/urdf/arm_detect_points.xacro"/>
+  <xacro:arm_detect_points/>
+
+</robot>

@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<!--
+  Twelve sample points on the arm links, used as the closest-obstacle
+  observation for arm avoidance (see ammr_wholebody_mpc/arm_detection_points.py).
+
+  Offsets are taken verbatim from detection_points_tf.launch in the ROS 1
+  MastersThesis_ros tree, where they were published by twelve
+  static_transform_publisher nodes because that xacro had no detection points.
+  Ours does, so the frames come out of the model instead: one source of truth,
+  and they move with the arm through robot_state_publisher rather than through
+  twelve extra processes.
+
+  The offsets and the ORDER are fixed by the policy that consumes them. The
+  ROS 1 launch spells this out: the TF relations have to match the ones used at
+  training time. Do not tidy, reorder, or "improve" these numbers.
+
+  Massless and geometry-free on purpose. These are reference frames, not parts:
+  giving them the collision spheres the ROS 1 model had would make the arm
+  collide with its own observation points. gz lumps fixed massless links into
+  the parent, so they cost nothing in simulation.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="arm_detect_point" params="name parent x y z">
+    <link name="${name}">
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="1e-6"/>
+        <inertia ixx="1e-9" iyy="1e-9" izz="1e-9" ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+    </link>
+    <joint name="${name}_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${name}"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="arm_detect_points" params="prefix:=''">
+    <xacro:arm_detect_point name="detect0_1" parent="${prefix}link_base" x="0.0"  y="0.0"   z="0.15"/>
+    <xacro:arm_detect_point name="detect0_2" parent="${prefix}link_base" x="0.0"  y="0.0"   z="0.05"/>
+    <xacro:arm_detect_point name="detect1"   parent="${prefix}link1"     x="0.0"  y="0.0"   z="0.0"/>
+    <xacro:arm_detect_point name="detect2_1" parent="${prefix}link2"     x="0.1"  y="0.0"   z="0.1"/>
+    <xacro:arm_detect_point name="detect2_2" parent="${prefix}link2"     x="0.0"  y="0.0"   z="0.1"/>
+    <xacro:arm_detect_point name="detect2_3" parent="${prefix}link2"     x="0.2"  y="0.0"   z="0.1"/>
+    <xacro:arm_detect_point name="detect3_1" parent="${prefix}link3"     x="0.0"  y="0.0"   z="0.0"/>
+    <xacro:arm_detect_point name="detect3_2" parent="${prefix}link3"     x="0.08" y="0.0"   z="0.0"/>
+    <xacro:arm_detect_point name="detect4_1" parent="${prefix}link4"     x="0.0"  y="0.0"   z="-0.1"/>
+    <xacro:arm_detect_point name="detect4_2" parent="${prefix}link4"     x="0.0"  y="-0.05" z="-0.05"/>
+    <xacro:arm_detect_point name="detect5"   parent="${prefix}link5"     x="0.0"  y="0.0"   z="0.0"/>
+    <xacro:arm_detect_point name="detect6"   parent="${prefix}link6"     x="0.0"  y="0.0"   z="0.025"/>
+  </xacro:macro>
+
+</robot>
