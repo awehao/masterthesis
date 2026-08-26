@@ -18,10 +18,13 @@
   composition. That is the entire reason this file exists, and it is what makes
   base and arm solvable in one QP rather than two stacked controllers.
 
-  NOT a simulation model. Every link is massless, there are no wheels, no
-  rollers, no sensors and no gz plugins. gz keeps using omni_bot.urdf.xacro;
-  this one is for the solver only. The ROS 1 file called itself "fake" for the
-  same reason.
+  NOT a simulation model: no sensors, no gz plugins, no controllers, and the
+  three virtual base links carry only token inertia. It does carry the real
+  chassis and wheels, because the solver has to know what the arm can hit and
+  because a model without them is not recognisable in Foxglove. gz keeps using
+  omni_bot.urdf.xacro; this one is for the solver only. The ROS 1 file called
+  itself "fake" for the same reason, and it went further, dropping the wheels
+  as well.
 
   Two numbers deliberately differ from the ROS 1 original:
 
@@ -108,7 +111,14 @@
     <child link="base_link"/>
     <origin xyz="0 0 0.05" rpy="0 0 0"/>
   </joint>
-  <xacro:ghost_link name="base_link"/>
+
+  <!-- The real chassis: mesh visual, the 0.300 m collision cylinder every
+       clearance number is measured against, and the four omni wheels. Shared
+       with the simulation model, so the solver checks the arm against the same
+       body gz simulates. Without it the arm could plan straight through its own
+       base and the model would look like a floating arm in Foxglove. -->
+  <xacro:include filename="$(find my_omnibot_description)/urdf/chassis_body.xacro"/>
+  <xacro:chassis_body/>
 
   <!-- ================= arm, on the real mount ===================== -->
   <!-- The ROS 1 model bolted the arm straight to base_link at 0.11 0 0.28.

@@ -16,6 +16,13 @@ controller_manager:
     lite6_traj_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
+    # Only spawned when the model is built with add_gripper:=true. Loading a
+    # controller whose joint is absent from the hardware makes the whole
+    # controller_manager fail to configure, so the spawner is conditional in
+    # the launch rather than this list being conditional.
+    lite6_gripper_controller:
+      type: parallel_gripper_action_controller/GripperActionController
+
 lite6_traj_controller:
   ros__parameters:
     joints:
@@ -41,3 +48,19 @@ lite6_traj_controller:
       joint6: {trajectory: 1.0, goal: 0.01}
     state_publish_rate: 25.0
     action_monitor_rate: 10.0
+
+lite6_gripper_controller:
+  ros__parameters:
+    # finger_joint2 mimics this one through the URDF <mimic> tag, so only one
+    # joint is commanded. Travel is 0 .. 0.0089 m per finger.
+    #
+    # parallel_gripper_action_controller, not position_controllers: the latter
+    # loads and works but logs a deprecation on every start and is scheduled to
+    # go away.
+    joint: finger_joint1
+    action_monitor_rate: 20.0
+    goal_tolerance: 0.002
+    max_effort: 5.0
+    allow_stalling: true
+    stall_velocity_threshold: 0.001
+    stall_timeout: 0.5

@@ -49,9 +49,11 @@ def generate_launch_description():
     foxglove = LaunchConfiguration('foxglove')
     world = LaunchConfiguration('world')
     use_arm = LaunchConfiguration('use_arm')
+    add_gripper = LaunchConfiguration('add_gripper')
 
     robot_description = ParameterValue(
-        Command(['xacro ', urdf_file, ' use_arm:=', use_arm, ' use_camera:=true']),
+        Command(['xacro ', urdf_file, ' use_arm:=', use_arm,
+                 ' add_gripper:=', add_gripper, ' use_camera:=true']),
         value_type=str,
     )
 
@@ -96,7 +98,19 @@ def generate_launch_description():
         output='screen',
     )
 
+    # Conditional, not listed unconditionally: configuring a controller whose
+    # joint the hardware does not expose fails the whole controller_manager, so
+    # without the gripper in the model this must not be spawned at all.
+    load_gripper = Node(
+        package='controller_manager', executable='spawner',
+        arguments=['lite6_gripper_controller', '--controller-manager',
+                   '/controller_manager', '--controller-manager-timeout', '60'],
+        condition=IfCondition(add_gripper),
+        output='screen',
+    )
+
     return LaunchDescription([
+        DeclareLaunchArgument('add_gripper', default_value='false'),
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', resource_paths),
         SetEnvironmentVariable('GZ_SIM_SYSTEM_PLUGIN_PATH', plugin_paths),
         # Hybrid-graphics (PRIME on-demand) machine: without these, gz/OGRE's EGL
@@ -159,6 +173,8 @@ def generate_launch_description():
                                            on_exit=[load_jsb])),
         RegisterEventHandler(OnProcessExit(target_action=load_jsb,
                                            on_exit=[load_traj])),
+        RegisterEventHandler(OnProcessExit(target_action=load_traj,
+                                           on_exit=[load_gripper])),
 
         # Foxglove (ws://localhost:8765) is the visualiser used in this project,
         # not RViz.

@@ -6,9 +6,12 @@
        every existing navigation launch/benchmark keeps the exact validated
        robot; turn on with  use_arm:=true . -->
   <xacro:arg name="use_arm" default="false"/>
+  <!-- Factory gripper on the arm. Default false: it adds a commanded joint and
+       a mimic joint, and every existing navigation benchmark must keep running
+       the exact robot it was validated on. -->
+  <xacro:arg name="add_gripper" default="false"/>
   <xacro:arg name="arm_ros2_control_plugin" default="gz_ros2_control/GazeboSimSystem"/>
 
-  <xacro:include filename="$(find my_omnibot_description)/urdf/rim.xacro"/>
   <xacro:include filename="$(find my_omnibot_description)/urdf/lidar.xacro"/>
 
   <!-- ===================================================================
@@ -38,45 +41,10 @@
     <origin xyz="0 0 ${wheel_r}" rpy="0 0 0"/>
   </joint>
 
-  <!-- Chassis body (visual = original mesh, collision = simple raised box) -->
-  <link name="base_link">
-    <inertial>
-      <origin xyz="0 0 0.14" rpy="0 0 0"/>
-      <mass value="18.0"/>
-      <inertia ixx="0.5229" ixy="0.0" ixz="0.0" iyy="0.5229" iyz="0.0" izz="0.81"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file://$(find my_omnibot_description)/meshes/chassis_frame.stl" scale="1 1 1"/>
-      </geometry>
-      <material name="chassis_blue"><color rgba="0.15 0.45 0.85 1.0"/></material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0.14" rpy="0 0 0"/>
-      <!-- The chassis is a DISC of radius 0.300 m: that is what the visual mesh
-           measures (chassis_frame.stl reaches 0.300 in every 30 deg sector) and
-           it is what the analysis uses to judge clearance. The collision body
-           used to be a 0.45 x 0.45 box, half-extent 0.225, so the simulated
-           robot was 7.5 cm smaller than the real one along its axes, and a
-           reported contact shallower than 7.5 cm had not physically happened in
-           gz at all. Over ~230 trials of the final configuration, 15 events
-           were reported as contacts but only 4 were deeper than that gap, so
-           the two measures disagreed about 11 of them.
-           Note this makes the robot LARGER on its axes (0.300 vs 0.225) and
-           slightly smaller on its diagonals (0.300 vs 0.225*sqrt(2) = 0.318),
-           so earlier batches are not comparable to anything run after it. -->
-      <geometry>
-        <cylinder radius="0.300" length="0.18"/>
-      </geometry>
-    </collision>
-  </link>
-
-  <!-- ===== Omni wheels (visual decoration) ===== -->
-  <xacro:rim name="a" parent="base_link" xyz="0.245 0 0"  rpy="0 -1.57 0"  color="0.2 0.7 0.2 1"/>
-  <xacro:rim name="b" parent="base_link" xyz="0 0.245 0"  rpy="1.57 1.57 0" color="0.2 0.4 0.8 1"/>
-  <xacro:rim name="c" parent="base_link" xyz="-0.245 0 0" rpy="0 1.57 0"   color="0.85 0.75 0.2 1"/>
-  <xacro:rim name="d" parent="base_link" xyz="0 -0.245 0" rpy="-1.57 -1.57 0" color="0.8 0.2 0.2 1"/>
+  <!-- Chassis body + the four omni wheels. Extracted to chassis_body.xacro so
+       the whole-body kinematics model uses the same geometry; see that file. -->
+  <xacro:include filename="$(find my_omnibot_description)/urdf/chassis_body.xacro"/>
+  <xacro:chassis_body/>
 
   <!-- ===== Hidden zero-friction support wheels (collision only) ===== -->
   <xacro:macro name="support" params="name x y">
@@ -179,7 +147,25 @@
 
     <xacro:include filename="$(find my_omnibot_description)/urdf/lite6_ros2_control_gz.xacro"/>
     <xacro:lite6_ros2_control_gz prefix=""
-      ros2_control_plugin="$(arg arm_ros2_control_plugin)"/>
+      ros2_control_plugin="$(arg arm_ros2_control_plugin)"
+      add_gripper="$(arg add_gripper)"/>
+
+    <!-- Factory gripper. link_eef has to be declared here: upstream puts it in
+         xarm_device_macro.xacro, which we do not include, and lite6.urdf.xacro
+         has its copy commented out. Only the URDF half of the gripper is
+         pulled in; the full uflite_gripper_macro also drags in its own
+         ros2_control system, transmissions and a gazebo grasp-fix plugin, and
+         the finger joint is already declared in our single ros2_control block. -->
+    <xacro:if value="$(arg add_gripper)">
+      <link name="link_eef"/>
+      <joint name="joint_eef" type="fixed">
+        <parent link="link6"/>
+        <child link="link_eef"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+      </joint>
+      <xacro:include filename="$(find xarm_description)/urdf/gripper/uflite_gripper.urdf.xacro"/>
+      <xacro:uflite_gripper_urdf prefix="" attach_to="link_eef"/>
+    </xacro:if>
 
     <!-- arm base bolted to the top of the mast plate -->
     <joint name="arm_base_joint" type="fixed">
