@@ -133,12 +133,39 @@
   <xacro:property name="mesh_suffix" value="stl"/>
   <xacro:include filename="$(find xarm_description)/urdf/common/common.link.xacro"/>
   <xacro:include filename="$(find xarm_description)/urdf/common/common.gazebo.xacro"/>
-  <xacro:include filename="$(find xarm_description)/urdf/lite6/lite6_robot_macro.xacro"/>
 
-  <xacro:lite6_robot
-    prefix=""
-    ros2_control_plugin=""
+  <!-- Joint limits exactly as the real robot runs them.
+
+       We call lite6_urdf directly instead of lite6_robot, because lite6_robot
+       only offers a boolean `limited` and does not pass per-joint limits
+       through. limited="true" gets to +-pi*0.99 = 2.935644, which is the
+       value sitting COMMENTED OUT in fake_mobile_manipulator_modified.urdf.
+       The active line there is 0.174533 rad, exactly 10 deg, tighter again:
+       a margin applied by hand on top of the vendor envelope, on every joint.
+
+       The trim is not uniform relative to the FULL envelope: joint2 and joint5
+       lose 10 deg per side, while joint1/4/6 fall from +-360 to +-168 deg and
+       joint3 from 300 to 168. Planning against anything wider hands back
+       configurations the real controller rejects.
+
+       lite6_robot would also have added lite6_transmission (ROS 1 transmission
+       tags, meaningless under gz_ros2_control) and lite6_gazebo, which is
+       called separately below. -->
+  <xacro:property name="j_lim" value="2.935643802"/>
+  <xacro:property name="j2_lim" value="2.443457075"/>
+  <xacro:property name="j5_lim" value="1.989667075"/>
+
+  <xacro:include filename="$(find xarm_description)/urdf/lite6/lite6.urdf.xacro"/>
+  <xacro:include filename="$(find xarm_description)/urdf/lite6/lite6.gazebo.xacro"/>
+  <xacro:lite6_urdf prefix=""
+    joint1_lower_limit="${-j_lim}"  joint1_upper_limit="${j_lim}"
+    joint2_lower_limit="${-j2_lim}" joint2_upper_limit="${j2_lim}"
+    joint3_lower_limit="-0.061087"  joint3_upper_limit="${j_lim}"
+    joint4_lower_limit="${-j_lim}"  joint4_upper_limit="${j_lim}"
+    joint5_lower_limit="${-j5_lim}" joint5_upper_limit="${j5_lim}"
+    joint6_lower_limit="${-j_lim}"  joint6_upper_limit="${j_lim}"
     kinematics_params_filename="$(find xarm_description)/config/kinematics/default/lite6_default_kinematics.yaml"/>
+  <xacro:lite6_gazebo prefix=""/>
 
   <!-- Arm attach point, verbatim from the real robot: base_link + (0.11, 0,
        0.28). Same values as mobile_manipulator.xacro (attach_xyz default) and
@@ -157,24 +184,19 @@
     <origin xyz="0.11 0 0.28" rpy="0 0 0"/>
   </joint>
 
-  <!-- ================= factory gripper + TCP ====================== -->
-  <!-- mobile_manipulator.xacro runs with add_gripper="true", so the reference
-       robot ends at link_tcp, not at link6. The chain there is
-       link6 -> link_eef -> uflite_gripper_link -> link_tcp (+0.0836 z), and
-       that last 8.36 cm is the whole point: a whole-body task frame at link6
-       plans the WRIST to the target and drives the fingers through it.
+  <!-- ================= wrist camera, gripper, TCP ================= -->
+  <!-- mobile_manipulator.xacro runs with add_realsense_d435i=true and
+       add_gripper=true, so the reference robot ends at link_tcp, 8.36 cm past
+       link6, and carries a wrist D435i. Both are here; a task frame at link6
+       would plan the WRIST to the target and push the fingers through it.
 
-       link_eef has to be declared here. Upstream defines it in
-       xarm_device_macro.xacro, which we do not include (we call
-       lite6_robot_macro directly), and lite6.urdf.xacro has its copy commented
-       out, so calling the gripper macro without this would attach it to a
-       link that does not exist.
-
-       Only the URDF half of the gripper macro is pulled in. The full
-       uflite_gripper_macro also drags in ros2_control, transmissions, a gazebo
-       block and a mimic-joint plugin, none of which mean anything in a
+       d435i_urdf declares link_eef itself, so link_eef is never declared
+       separately. Only the URDF half of each macro is used: ros2_control,
+       transmissions, grasp-fix and gazebo sensor blocks mean nothing in a
        kinematics-only model. -->
-  <link name="link_eef"/>
+  <xacro:include filename="$(find xarm_description)/urdf/camera/realsense_d435i.urdf.xacro"/>
+  <xacro:d435i_urdf prefix="" add_d435i_links="true"/>
+
   <joint name="joint_eef" type="fixed">
     <parent link="link6"/>
     <child link="link_eef"/>
