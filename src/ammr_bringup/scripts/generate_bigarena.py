@@ -458,11 +458,17 @@ def main():
     # 0.20 - 0.18 = 0.02 m/s in reverse, so the geometry still bites when the
     # goal is behind the robot -- deliberately: the point is a scenario that is
     # hard but solvable, not one that is impossible.
+    # These match dynamic_trajectories_bigarena_traffic.yaml, which is what the
+    # 100-run batch actually ran: measuring /model/dyn_obs_*/pose displacement in
+    # the archived bags gives exactly these ten speeds. The plan used to top out
+    # at 0.18 while the YAML said 0.14, so regenerating the world would have
+    # silently sped four movers up and made the new scenario harder than the one
+    # every published number came from. Keep the two in step.
     plan = [('dyn_obs_5', 0.10,  6.0), ('dyn_obs_4', 0.12,  6.0),
             ('dyn_obs_2', 0.10,  6.0), ('dyn_obs_8', 0.11,  8.0),
             ('dyn_obs_1', 0.14,  8.0), ('dyn_obs_7', 0.12,  9.0),
-            ('dyn_obs_0', 0.15, 10.0), ('dyn_obs_6', 0.13, 10.0),
-            ('dyn_obs_9', 0.16, 11.0), ('dyn_obs_3', 0.18, 12.0)]
+            ('dyn_obs_0', 0.14, 10.0), ('dyn_obs_6', 0.13, 10.0),
+            ('dyn_obs_9', 0.14, 11.0), ('dyn_obs_3', 0.14, 12.0)]
     placed, rows, ybody, spawn_at = [], [], '', {}
     for name, speed, min_len in plan:
         r = R_OBS[name]

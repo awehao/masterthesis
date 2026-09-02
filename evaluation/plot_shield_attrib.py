@@ -30,22 +30,32 @@ fm.fontManager.addfont('/usr/share/fonts/opentype/noto/NotoSansCJK-Medium.ttc')
 plt.rcParams.update({'font.family': ['Noto Sans CJK JP'],
                      'axes.unicode_minus': False})
 
-# Measured over the 96-run batch (evaluation/bags/archive_shield100).
-TOTAL      = 236689
-CBF_ROWS   = 212964
-CBF_DANGER = 116968
-CBF_HNEG   = 18619
-SH_ACTIVE  = 4195      # every cycle the shield changed the command
-SH_BOTH    = 2896      # shield acted while the CBF also had h < 0
-SH_ALONE   = 1134      # shield acted while the CBF thought all was well
-# SH_BOTH + SH_ALONE = 4030, NOT 4195: 165 shield cycles carry no CBF diag
-# value that can be aligned to them, so they fall into neither group. The
-# 71.9 / 28.1 split is therefore over 4030, and the figure must say so --
-# labelling it "of 4195 interventions" over-counts the denominator.
-SH_CLASSIFIED = SH_BOTH + SH_ALONE      # 4030
-SH_DV_MED  = 0.030     # m/s
-SH_D_MED   = 0.106     # m, clearance when it acted
+# Measured over the gmpc100 batch, 96 runs.
+# Every number below comes from shield_attribution.json, produced by
+# summarise_shield_attribution.py straight off the bags. NOTHING is hand-copied
+# here any more: the constants that used to sit at this spot had drifted so far
+# that they no longer reproduced (they said 4195 / 2896 / 1134 and a 28.1%
+# split; recomputing over the same 96 runs gives 3695 / 1683 / 1777 and 51.4%),
+# and the figure captioned the split with the wrong denominator on top of that.
+import json
+_J = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                  'results', 'shield_attribution.json')
+with open(_J) as _f:
+    A = json.load(_f)
 
+TOTAL         = A['total_cycles']
+CBF_ROWS      = A['cbf_rows_cycles']
+CBF_DANGER    = A['cbf_danger_cycles']
+CBF_HNEG      = A['cbf_hneg_cycles']
+SH_ACTIVE     = A['shield_active']
+SH_BOTH       = A['shield_with_h_negative']
+SH_ALONE      = A['shield_with_h_nonnegative']
+SH_CLASSIFIED = A['shield_cbf_classifiable']
+SH_UNCLASS    = A['shield_unclassified']
+SH_D_MED      = A['shield_distance']['median_m']
+SH_DV_MED     = A['shield_dv_median_mps']
+N_RUNS        = A['n_runs']
+DANGER_H      = A['danger_threshold_h']
 # Shield parameters, as configured.
 ALPHA, D0, TAU, ABRAKE, EPS = 2.0, 0.05, 0.15, 6.25, 0.05
 
@@ -53,7 +63,7 @@ fig, (axL, axR) = plt.subplots(1, 2, figsize=(15.0, 6.2),
                                gridspec_kw={'width_ratios': [1.15, 1.0]})
 
 # ---------------------------------------------------------------- left panel
-labels = ['CBF 建立約束', 'CBF 進入 danger 區\n($h < 0.4$)',
+labels = ['CBF 建立約束', f'CBF 進入 danger 區\n($h < {DANGER_H}$)',
           'CBF $h < 0$', 'shield 介入']
 vals = [CBF_ROWS, CBF_DANGER, CBF_HNEG, SH_ACTIVE]
 cols = ['#2f75b5', '#5b9bd5', '#9dc3e6', '#ed7d31']
@@ -67,7 +77,7 @@ axL.set_yticklabels(labels, fontsize=12)
 axL.set_xlim(0, TOTAL * 1.32)
 axL.set_ylim(y[-1] - 1.15, y[0] + 0.55)
 axL.set_xlabel(f'控制週期數（總計 {TOTAL:,}）', fontsize=12)
-axL.set_title('誰在工作：96 趟、23.7 萬個控制週期',
+axL.set_title(f'誰在工作：{N_RUNS} 趟、{TOTAL:,} 個控制週期',
               fontsize=14, fontweight='bold')
 axL.grid(axis='x', alpha=0.25)
 axL.spines[['top', 'right']].set_visible(False)
