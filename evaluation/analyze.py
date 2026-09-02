@@ -500,6 +500,24 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
     out['arrival_time_s'] = float(arrival_t) if arrival_t is not None else float('nan')
     out['total_time_s']   = float(odom_t[-1] - first_plan_t)
 
+    # ONE window for every navigation metric: first plan -> arrival, or the
+    # whole run when the goal is never reached.
+    #
+    # These metrics used to disagree about when the trial ended. arrival_time_s
+    # stopped at the goal while path_length_m and min_clearance_m ran to the end
+    # of the bag, so the robot's post-arrival life -- sitting on the goal while
+    # traffic keeps moving around it -- leaked into both. Two consequences, both
+    # observed: path_length_m / arrival_time_s gave MPPI a 0.504 m/s "average
+    # speed", above its physical ceiling of 0.392; and one trial's worst
+    # clearance was -0.292 m from a contact that happened 2711 samples AFTER it
+    # had arrived, against -0.165 m during the drive itself.
+    #
+    # Navigation performance is what the robot does on the way to the goal. What
+    # happens to a parked robot afterwards is a different question and does not
+    # belong in the same number.
+    run_end_t = (first_plan_t + arrival_t) if arrival_t is not None else float('inf')
+    in_run = in_run & (odom_t <= run_end_t)
+
     # ------- path length -------
     out['path_length_m'] = float(np.sum(
         np.linalg.norm(np.diff(odom_xyth[in_run, :2], axis=0), axis=1)
@@ -557,7 +575,8 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
     # for all four methods.
     safe_t    = odom_t_raw   if len(odom_t_raw) >= 2 else odom_t
     safe_xyth = odom_xyth_raw if len(odom_t_raw) >= 2 else odom_xyth
-    safe_in_run = safe_t >= first_plan_t
+    # Same window as every other navigation metric; see run_end_t above.
+    safe_in_run = (safe_t >= first_plan_t) & (safe_t <= run_end_t)
 
     clearances = None
     static_clr = load_static_clearance()        # map walls/boxes + unknown_obs
