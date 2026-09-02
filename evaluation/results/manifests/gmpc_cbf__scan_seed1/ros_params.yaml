@@ -1,0 +1,215 @@
+/gmpc_controller:
+  ros__parameters:
+    Q_xy: 15.0
+    Q_y: 0.0
+    Qf_mult: 5.0
+    R_vx: 2.0
+    R_vy: 2.0
+    R_w: 1.0
+    S_vx: 15.0
+    S_vy: 15.0
+    S_w: 8.0
+    ax_max: 6.25
+    ay_max: 6.25
+    az_max: 25.51
+    cbf_Q_min_scale: 0.2
+    cbf_alpha: 0.5
+    cbf_danger_thresh: 0.4
+    cbf_enable: true
+    cbf_eps0_scale: 30.0
+    cbf_far_stride: 2
+    cbf_hard_k0: false
+    cbf_hard_k0_static: false
+    cbf_margin_growth: 0.0
+    cbf_near_steps: 6
+    cbf_prune_range: 1.2
+    cbf_safe_margin: 0.6
+    cbf_slack_max_scale: 20.0
+    cbf_slack_weight: 500.0
+    cbf_static_slack_scale: 1.0
+    cbf_vel_margin_gain: 0.0
+    cbf_zone_topic: /gmpc/cbf_zones
+    cmd_vel_topic: cmd_vel_nav
+    control_frequency: 20.0
+    detour_clear_pad: 0.05
+    detour_clear_ref: true
+    detour_cone_deg: 30.0
+    detour_enable: false
+    detour_max_offset: 0.35
+    detour_offset_rate: 0.08
+    detour_side_proj: true
+    detour_trigger_range: 2.0
+    detour_vx_floor: 0.0
+    global_frame: map
+    goal_tolerance_xy: 0.3
+    horizon: 20
+    margin_floor: 0.08
+    margin_loc_err: 0.06
+    margin_mode: fixed
+    margin_obs_pos_err: 0.05
+    margin_percep_lag: 0.3
+    min_h_topic: /gmpc/min_h
+    obstacles_topic: /gmpc/obstacles
+    plan_blend_s: 0.0
+    plan_topic: /plan
+    pose_lpf_alpha: 0.0
+    pose_max_age: 0.3
+    pose_odom_topic: /odometry/filtered
+    pose_source: odom
+    prog_weight: 0.0
+    robot_base_frame: base_footprint
+    solve_time_topic: /gmpc/solve_time_ms
+    st_growth: 0.02
+    st_sigma0: 0.6
+    st_weight: 0.0
+    start_type_description_service: true
+    static_activate_range: 0.0
+    static_cbf_safe_margin: 0.38
+    static_goal_clear: 0.6
+    static_obstacles_topic: /gmpc/static_obstacles
+    stuck_max_hold_s: 25.0
+    stuck_progress_m: 0.15
+    stuck_release_h: 0.6
+    stuck_window_s: 0.0
+    tf_timeout: 0.1
+    use_sim_time: true
+    v_nominal: 0.22
+    vx_max: 0.2775
+    vx_min: -0.2775
+    vy_max: 0.2775
+    vy_min: -0.2775
+    wheel_a_max: 125.0
+    wheel_base_L: 0.245
+    wheel_coupling: true
+    wheel_radius: 0.05
+    wheel_w_max: 5.55
+    wz_max: 1.1327
+    wz_min: -1.1327
+
+
+/scan_obstacle_tracker:
+  ros__parameters:
+    assoc_chi2: 9.21
+    assoc_gate: 0.8
+    assoc_gate_max: 1.2
+    assoc_maha: false
+    assoc_predict: false
+    cluster_gap: 0.3
+    coast_publish_s: 0.0
+    coast_radius_growth: 0.0
+    default_radius: 0.25
+    fragment_gate: 1.0
+    fragment_merge: false
+    global_frame: map
+    kf_init_vel_var: 1.0
+    kf_sigma_meas: 0.05
+    kf_sigma_pos: 0.01
+    kf_sigma_vel: 0.4
+    map_topic: /map
+    max_cluster_radius: 1.2
+    min_cluster_pts: 2
+    min_net_speed: 0.05
+    min_track_age: 3
+    min_track_speed: 0.1
+    output_topic: /gmpc/obstacles
+    publish_frame: map
+    publish_markers: true
+    release_track_speed: 0.1
+    scan_topic: /scan
+    start_type_description_service: true
+    static_cbf_enable: true
+    static_cbf_max: 4
+    static_cbf_radius: 0.05
+    static_cbf_range: 1.2
+    static_cbf_topic: /gmpc/static_obstacles
+    static_inflation: 0.5
+    static_keep_velocity: false
+    static_window_s: 2.0
+    surf_pts_max: 4
+    surf_pts_min_sep: 0.2
+    surf_pts_range: 2.5
+    track_release_frames: 0
+    track_timeout: 0.6
+    use_map_subtraction: true
+    use_sim_time: true
+    young_track_range: 2.5
+
+
+/scan_safety_shield:
+  ros__parameters:
+    a_brake: 6.25
+    alpha: 2.0
+    base_frame: base_footprint
+    cmd_in_topic: /cmd_vel_pre_shield
+    cmd_out_topic: /cmd_vel
+    d0: 0.05
+    emergency_d: 0.15
+    enable: true
+    eps_footprint: 0.02
+    eps_scan: 0.03
+    max_points: 360
+    neighbour_consistency: true
+    proj_iters: 6
+    range_of_interest: 2.0
+    robot_radius: 0.3
+    scan_timeout: 0.5
+    scan_topic: /scan
+    self_return_m: 0.02
+    stale_speed: 0.05
+    start_type_description_service: true
+    tau: 0.15
+    use_sim_time: true
+    vx_max: 0.2775
+    vy_max: 0.2775
+    wz_max: 1.1327
+
+
+/velocity_smoother:
+  ros__parameters:
+    /bond_disable_heartbeat_timeout: true
+    autostart_node: false
+    bond_heartbeat_period: 0.1
+    deadband_velocity:
+    - 0.0
+    - 0.0
+    - 0.0
+    enable_stamped_cmd_vel: false
+    feedback: OPEN_LOOP
+    max_accel:
+    - 6.25
+    - 6.25
+    - 25.51
+    max_decel:
+    - -6.25
+    - -6.25
+    - -25.51
+    max_velocity:
+    - 0.2775
+    - 0.2775
+    - 1.1327
+    min_velocity:
+    - -0.2775
+    - -0.2775
+    - -1.1327
+    odom_duration: 0.1
+    odom_topic: /odom
+    qos_overrides:
+      /clock:
+        subscription:
+          depth: 1
+          durability: volatile
+          history: keep_last
+          reliability: best_effort
+    scale_velocities: false
+    smoothing_frequency: 20.0
+    stamp_smoothed_velocity_with_smoothing_time: false
+    start_type_description_service: true
+    use_realtime_priority: false
+    use_sim_time: true
+    velocity_timeout: 1.0
+
+
+# controller_server: not_running
+
+# obstacle_aggregator: not_running
+

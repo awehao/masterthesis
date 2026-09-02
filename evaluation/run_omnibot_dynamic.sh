@@ -84,6 +84,7 @@ NODE_PAT+='|controller_server|smoother_server|behavior_server'
 NODE_PAT+='|bt_navigator|waypoint_follower|velocity_smoother'
 
 PIDS=()
+MANIFEST_ID=""
 cleanup() {
     echo "[$(date +%T)] [trial] cleanup ..."
     for pid in "${PIDS[@]}"; do
@@ -101,7 +102,11 @@ cleanup() {
     sleep 2
     PIDS=()
 }
-trap 'echo "[$(date +%T)] interrupted -> stopping batch"; cleanup; exit 130' INT TERM
+# Ctrl-C must not leave a manifest stuck at "starting": a half-written trial
+# has to be visibly aborted, not silently indistinguishable from a good one.
+trap 'echo "[$(date +%T)] interrupted -> stopping batch";
+      [ -n "${MANIFEST_ID:-}" ] && "${HERE}/archive_experiment_manifest.sh" finalize "$MANIFEST_ID" aborted 130 || true;
+      cleanup; exit 130' INT TERM
 trap 'cleanup; rm -f "$LOCKFILE"' EXIT
 
 # POSES_CSV=<file> draws this trial's start AND goal from that file's row for
@@ -133,6 +138,22 @@ run_trial() {
     [ -d "$bag_dir" ] && mv "$bag_dir" "${bag_dir}__prev_$(date +%H%M%S)" 2>/dev/null
     true
     rm -f  "$log_file"
+
+    # Provenance BEFORE anything runs: code state, the actual input files and
+    # their hashes. A bag without one of these cannot be attributed later, and
+    # that is exactly how a figure ended up labelled with settings nobody could
+    # confirm. ALLOW_UNARCHIVED=1 downgrades this to a warning for scratch runs;
+    # a real batch must fail closed rather than mint anonymous data.
+    if ! METHOD="$METHOD" SEED="$seed" "${HERE}/archive_experiment_manifest.sh" \
+            prepare "${AMETHOD}__${run_tag}" "$METHOD" "$seed" "$bag_dir"; then
+        if [ "${ALLOW_UNARCHIVED:-0}" = "1" ]; then
+            echo "[$(date +%T)]     WARNING: manifest failed, continuing (ALLOW_UNARCHIVED=1)"
+        else
+            echo "[$(date +%T)]     manifest failed -- refusing to run un-archived trial ${seed}"
+            return 1
+        fi
+    fi
+    MANIFEST_ID="${AMETHOD}__${run_tag}"
 
     echo "=========================================================="
     echo "[$(date +%T)] TRIAL ${seed}/${N_TRIALS}  method=${METHOD}  start=(${SPAWN_X:-0.0},${SPAWN_Y:-0.0})  goal=(${GOAL_X},${GOAL_Y})  dur=${DURATION}s"
@@ -169,6 +190,7 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
         --start-x "${SPAWN_X:-0.0}" --start-y "${SPAWN_Y:-0.0}" 2>&1 | tee -a "$log_file"
     if [ "${PIPESTATUS[0]}" -ne 0 ]; then
         echo "[$(date +%T)]     bring-up failed -- skipping trial ${seed}"
+        "${HERE}/archive_experiment_manifest.sh" finalize "$MANIFEST_ID" failed 1 || true
         cleanup
         return 1
     fi
@@ -191,6 +213,7 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
         --goal-delay-max "${GOAL_DELAY_MAX:-5.0}" 2>&1 | tee -a "$log_file"
     if [ "${PIPESTATUS[0]}" -ne 0 ]; then
         echo "[$(date +%T)]     no plan -- skipping trial ${seed}"
+        "${HERE}/archive_experiment_manifest.sh" finalize "$MANIFEST_ID" failed 1 || true
         cleanup
         return 1
     fi
@@ -216,7 +239,24 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
     fi
     for _ in $(seq 1 15); do kill -0 "$REC_PID" 2>/dev/null || break; sleep 1; done
 
+    # Parameters as the NODES received them, not as the YAML meant them -- the
+    # only record that can settle "was the shield actually on, and with which
+    # alpha" after the fact.
+    #
+    # Captured HERE, after the run and before cleanup kills the nodes, and not
+    # between bring-up and the goal. The dynamic obstacles start moving the
+    # moment their driver node starts (dynamic_obstacle_driver creates its timer
+    # in __init__, with no release gate), so everything between launch and the
+    # goal handshake sets their phase when the robot sets off. Putting a ~10 s
+    # parameter dump there silently changed which obstacles the robot met: the
+    # same route ran 22.0 m one way and 30.0 m the other. The nodes are still
+    # alive at this point, so the evidence is identical and the trial is not
+    # perturbed.
+    "${HERE}/archive_experiment_manifest.sh" params "$MANIFEST_ID" || true
+
     cleanup
+
+    "${HERE}/archive_experiment_manifest.sh" finalize "$MANIFEST_ID" completed 0 || true
 
     echo "[$(date +%T)] analyze ${run_tag} ..."
     python3 "${HERE}/analyze.py" "$bag_dir" --method "$AMETHOD" --run "$run_tag" --out "$OUT_CSV" \

@@ -1,0 +1,68 @@
+# Default parameters for the SE(2) GMPC controller node.
+# Matches the offline_prototype/run.py setup so the ROS2 behaviour reproduces
+# the validated benchmark numbers.
+
+# Chassis limits derived from the measured hardware, not chosen:
+#   4 omni wheels, r = 0.05 m, L = 0.245 m, wheel omega_max 5.55 rad/s (at max
+#   efficiency), wheel alpha_max 125 rad/s^2. The base Jacobian gives
+#     v_x = r/2 (w_d - w_b)   v_y = r/2 (w_a - w_c)   phi = r/4L sum(w)
+#   so the two translation axes use DIFFERENT wheel pairs and saturate
+#   independently: v_x,max = v_y,max = r*w_max = 0.2775 m/s, and the diagonal
+#   reaches sqrt(2)*0.2775 = 0.3924 m/s. Rotation shares all four wheels, so
+#   phi_dot_max = r/L * w_max = 1.1327 rad/s only with zero translation.
+#   Accelerations follow the same relations from alpha_max: 6.25 m/s^2 per axis
+#   and 25.51 rad/s^2.
+#
+# The previous vx = +-0.35 EXCEEDED the hardware by 26% -- every escape-speed
+# and feasibility-boundary figure computed with it was optimistic.
+gmpc_controller:
+  ros__parameters:
+    use_sim_time:        true
+
+    # ---- Sample timing ----------------------------------------------------
+    control_frequency:   20.0          # Hz  -> dt = 0.05s
+    horizon:             20            # steps -> 1.0s lookahead
+    # 0.22 is below the 0.2775 per-axis chassis limit. The old note said "under
+    # obstacle 0.30", which does not describe bigarena: the ten movers run at
+    # 0.10-0.14 m/s (measured from /model/dyn_obs_*/pose in the archived bags,
+    # matching dynamic_trajectories_bigarena_traffic.yaml), so the robot's
+    # nominal speed is ABOVE every one of them, not below.
+    v_nominal:           0.22          # m/s
+
+    # ---- Chassis limits (must match Baseline B / nav2_params_mppi.yaml) ---
+    vx_min:             -0.2775
+    vx_max:              0.2775
+    vy_min:             -0.2775
+    vy_max:              0.2775
+    wz_min:             -1.1327
+    wz_max:              1.1327
+    # Tightened (v2 → v3): heavier acceleration penalty to reduce jerk
+    ax_max:              6.25
+    ay_max:              6.25
+    az_max:              25.51
+
+    # ---- MPC weights (v3: stronger input penalty to damp the controller) -
+    # Q stays at the same magnitude as the offline prototype.
+    # R bumped 6x to make the QP value control smoothness over tight tracking.
+    # Balanced Q/R: enough Q to motivate progress, enough R to damp chatter
+    # caused by KF estimate jitter on dynamic obstacle velocity.
+    Q_xy:               15.0     # was 25 — less aggressive tracking
+    Q_y:                 0.0     # 0 = isotropic (reverted, experiment didn't help wiggle)
+    R_vx:                2.0     # was 1.0 — more input damping
+    R_vy:                2.0
+    R_w:                 1.0
+    Qf_mult:             5.0
+    # Input-increment (Δu) smoothness cost: Σ Δu_k^T S Δu_k. Soft penalty on
+    # control jerk -> smooth cruising; CBF can still burst when in danger.
+    S_vx:               15.0
+    S_vy:               15.0
+    S_w:                 8.0
+
+    # ---- Frames / topics --------------------------------------------------
+    global_frame:        map
+    robot_base_frame:    base_footprint
+    plan_topic:          /plan
+    cmd_vel_topic:       /cmd_vel
+    goal_tolerance_xy:   0.30
+    pose_lpf_alpha:      0.0     # off (filtering added lag -> worse)
+    tf_timeout:          0.10
