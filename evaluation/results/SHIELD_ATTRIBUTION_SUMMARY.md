@@ -5,9 +5,9 @@
 **本檔與圖表、報告中的所有歸因數字皆來自同一份 `shield_attribution.json`。**
 
 bag 前綴 `gmpc_cbf__scan_seed`，比對到 97 個。
-commit `e1d822e6af72`（工作區有未提交變更）
+commit `8c6ece1cd208`（工作區有未提交變更）
 
-> ⚠ 此 archive 另含其他實驗組的 bag，已排除：`{'gmpc__': 8, 'gmpc_cbf__': 10, 'gmpc_cbf__nocbf_': 14, 'gmpc_cbf__scan_nosm_': 29, 'gmpc_cbf__truth_': 40, 'mppi__': 10, 'mppi__mppi_': 36, 'rpp__': 10, 'rpp__rpp_': 39}`
+
 
 ## 誰在工作
 
