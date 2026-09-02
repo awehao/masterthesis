@@ -22,7 +22,11 @@ gmpc_controller:
     # ---- Sample timing ----------------------------------------------------
     control_frequency:   20.0          # Hz  -> dt = 0.05s
     horizon:             20            # steps -> 1.0s lookahead
-    v_nominal:           0.22          # m/s — slightly faster than 0.18, still under obstacle 0.30
+    # 0.22 is below the 0.2775 per-axis chassis limit. The old note said "under
+    # obstacle 0.30", which no longer describes bigarena: generate_bigarena.py
+    # caps the ten movers at 0.10-0.18 m/s, so the robot's nominal speed is
+    # ABOVE every one of them, not below.
+    v_nominal:           0.22          # m/s
 
     # ---- Chassis limits (must match Baseline B / nav2_params_mppi.yaml) ---
     vx_min:             -0.2775

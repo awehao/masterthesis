@@ -35,9 +35,14 @@ TOTAL      = 236689
 CBF_ROWS   = 212964
 CBF_DANGER = 116968
 CBF_HNEG   = 18619
-SH_ACTIVE  = 4195
+SH_ACTIVE  = 4195      # every cycle the shield changed the command
 SH_BOTH    = 2896      # shield acted while the CBF also had h < 0
 SH_ALONE   = 1134      # shield acted while the CBF thought all was well
+# SH_BOTH + SH_ALONE = 4030, NOT 4195: 165 shield cycles carry no CBF diag
+# value that can be aligned to them, so they fall into neither group. The
+# 71.9 / 28.1 split is therefore over 4030, and the figure must say so --
+# labelling it "of 4195 interventions" over-counts the denominator.
+SH_CLASSIFIED = SH_BOTH + SH_ALONE      # 4030
 SH_DV_MED  = 0.030     # m/s
 SH_D_MED   = 0.106     # m, clearance when it acted
 
@@ -73,14 +78,15 @@ axL.spines[['top', 'right']].set_visible(False)
 bx, by, bw, bh = TOTAL * 0.30, y[-1] - 0.92, TOTAL * 0.68, 0.95
 axL.add_patch(Rectangle((bx, by), bw, bh, fc='#fdf0e6', ec='#ed7d31',
                         lw=1.6, zorder=3))
-frac = SH_ALONE / (SH_ALONE + SH_BOTH)
-axL.text(bx + bw * 0.03, by + bh * 0.74, 'shield 的 4,195 次介入中',
+frac = SH_ALONE / SH_CLASSIFIED
+axL.text(bx + bw * 0.03, by + bh * 0.74,
+         f'shield 介入 {SH_ACTIVE:,} 次，其中 {SH_CLASSIFIED:,} 次可對齊 CBF 診斷',
          fontsize=11.5, fontweight='bold', color='#7f3f10', zorder=4)
 axL.text(bx + bw * 0.03, by + bh * 0.44,
          f'CBF 也在救（$h<0$）　{SH_BOTH:,}　{1-frac:.1%}',
          fontsize=11, color='#7f3f10', zorder=4)
 axL.text(bx + bw * 0.03, by + bh * 0.14,
-         f'CBF 認為安全　　　　{SH_ALONE:,}　{frac:.1%}　← 不可替代',
+         f'CBF 未判定為危險　　{SH_ALONE:,}　{frac:.1%}　← 兩層判定不重合',
          fontsize=11, fontweight='bold', color='#c00000', zorder=4)
 
 # --------------------------------------------------------------- right panel
