@@ -205,6 +205,21 @@ def main() -> int:
     rclpy.init()
     h = H()
     h.spin(5.0)
+
+    # A second copy of a node left over from an earlier run publishes to the
+    # same topics, and the two streams interleave: during development cmd_out
+    # came from the new node while diag came from the stale one, which made the
+    # filter look broken when it was not. `kill` on a `ros2 run` wrapper does
+    # not reap the python child, so this is easy to do by accident. Refuse to
+    # measure anything until each topic has exactly one publisher.
+    for topic in ('/wholebody_safety/cmd_out', '/wholebody_safety/diag',
+                  '/arm_link_distance/points'):
+        n_pub = h.count_publishers(topic)
+        if n_pub != 1:
+            print(f'  ★ {topic} 有 {n_pub} 個 publisher（應為 1）—— '
+                  f'先清乾淨舊節點再測，否則診斷資料會跨執行污染',
+                  file=sys.stderr)
+            return 2
     if h.pts is None or h.q_arm() is None:
         print('  missing /arm_link_distance/points or /joint_states',
               file=sys.stderr)
@@ -351,13 +366,24 @@ def main() -> int:
 
     # ------------------------------------------------------- stage 6
     print('\n  [階段 6] 端到端量測')
+    # Residual is LHS - RHS, so <= 0 means satisfied and the WORST case is the
+    # value closest to zero, not the most negative one. Reporting a large
+    # negative number as "max residual" reads as if the constraint were badly
+    # violated when it is in fact comfortably satisfied -- it is a margin, and
+    # is labelled as one.
     for label, st, mind in stats:
+        worst = st["res"].max()
         print(f'      {label:8} 端到端延遲 中位 {np.median(st["lat"])*1e3:5.1f} ms'
               f'  p95 {np.percentile(st["lat"],95)*1e3:5.1f} ms'
               f'  節點耗時 p95 {np.percentile(st["rt"],95):4.2f} ms'
-              f'  殘差最大 {st["res"].max():.2e}'
+              f'  最差殘差 {worst:+.2e}'
+              f'  餘裕 {-worst:+.3f}'
               f'  降級 {100*st["fb"]/st["n"]:4.1f}%'
               f'  最小間距 {mind:.3f} m')
+    gw = max(st["res"].max() for _, st, _ in stats) if stats else 0.0
+    lp95 = max(np.percentile(st["lat"], 95) for _, st, _ in stats) if stats else 0.0
+    print(f'      全測試最差殘差 {gw:+.2e}（<=0 為滿足）   '
+          f'延遲 p95 最高 {lp95*1e3:.1f} ms')
     print(f'      碰撞：最小間距皆 > 0 '
           f'{"✓" if all(m > 0 for _, _, m in stats) else "✗"}')
 

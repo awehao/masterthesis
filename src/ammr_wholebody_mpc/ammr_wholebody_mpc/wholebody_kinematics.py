@@ -179,16 +179,24 @@ class WholeBodyKinematics:
         return T
 
     # ----------------------------------------------------------- Jacobian
-    def jacobian(self, q: np.ndarray, link: str) -> np.ndarray:
+    def jacobian(self, q: np.ndarray, link: str,
+                 offset: np.ndarray | None = None) -> np.ndarray:
         """Geometric Jacobian, 6 x n, in world axes: [v; omega] = J q_dot.
 
         Built in one forward pass: at each movable joint the axis is taken in
         world orientation BEFORE applying that joint's own displacement, which
         is what makes the revolute column r x (p_e - p_j) rather than something
         that silently rotates with the joint it belongs to.
+
+        `offset` moves the reference point to somewhere else on the same rigid
+        link, expressed in that link's own frame. Needed for centre-of-mass
+        Jacobians -- gravity acts at the COM, not at the link origin, and the
+        two differ by up to 18 cm on this arm.
         """
         n = len(self.dof_names)
-        p_e = self.fk(q, link)[:3, 3]
+        T_l = self.fk(q, link)
+        p_e = T_l[:3, 3] if offset is None else (
+            T_l[:3, :3] @ np.asarray(offset, dtype=float) + T_l[:3, 3])
         J = np.zeros((6, n))
         T = np.eye(4)
         for jn in self.chain(link):
