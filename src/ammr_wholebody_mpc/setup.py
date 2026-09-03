@@ -27,6 +27,7 @@ setup(
             'scan_safety_shield  = ammr_wholebody_mpc.scan_safety_shield:main',
             'arm_detection_points = ammr_wholebody_mpc.arm_detection_points:main',
             'arm_scan_self_filter = ammr_wholebody_mpc.arm_scan_self_filter:main',
+            'arm_link_distance = ammr_wholebody_mpc.arm_link_distance:main',
         ],
     },
 )

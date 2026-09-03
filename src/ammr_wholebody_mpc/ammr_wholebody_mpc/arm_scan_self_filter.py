@@ -144,6 +144,13 @@ class ArmScanSelfFilter(Node):
         self.pub = self.create_publisher(LaserScan, str(g('scan_out')), BEST_EFFORT)
         self.diag = self.create_publisher(Float32MultiArray,
                                           '/scan_self_filter/diag', 10)
+        # Which bearings the arm is standing in front of. Removing the arm's
+        # own returns leaves those directions with NO data -- the wall behind
+        # the arm was never measured. Anything downstream that treats an empty
+        # bearing as free space would be reading the removal as clearance, so
+        # the occluded set is published explicitly rather than left implicit.
+        self.occl = self.create_publisher(Float32MultiArray,
+                                          '/scan_self_filter/occluded', 10)
         self.create_subscription(LaserScan, str(g('scan_in')), self._on_scan,
                                  BEST_EFFORT)
         self.get_logger().info(
@@ -217,6 +224,7 @@ class ArmScanSelfFilter(Node):
             r = np.asarray(msg.ranges, dtype=float)
             fin = np.isfinite(r) & (r >= msg.range_min) & (r <= msg.range_max)
             nearest_kept = float(r[fin].min()) if fin.any() else float('inf')
+            drop = np.zeros(len(r), dtype=bool)
             self.pub.publish(msg)
         else:
             r = np.asarray(msg.ranges, dtype=float)
@@ -245,6 +253,16 @@ class ArmScanSelfFilter(Node):
             m2.ranges = out
             m2.intensities = msg.intensities
             self.pub.publish(m2)
+
+        # Occluded bearings, as [angle_min, angle_increment, n, i0, i1, ...]:
+        # the indices whose return was the arm itself. Published every cycle,
+        # empty list included, so a consumer can tell "nothing occluded" from
+        # "no message yet".
+        o = Float32MultiArray()
+        o.data = ([float(msg.angle_min), float(msg.angle_increment),
+                   float(len(msg.ranges))]
+                  + [float(i) for i in (np.where(drop)[0] if n_drop else [])])
+        self.occl.publish(o)
 
         d = Float32MultiArray()
         #  0 cycle  1 n_arm_pts_in_plane  2 n_dropped  3 nearest_kept
