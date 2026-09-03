@@ -161,11 +161,31 @@ def generate_launch_description():
 
         # same LiDAR mask as the navigation stack; the arm risers sit inside
         # these already-blocked sectors on purpose (see arm_mount.xacro)
+        # scan_relay masks the FIXED strut bearings. With the arm mounted it
+        # publishes to /scan_base instead, and arm_scan_self_filter removes the
+        # arm's own returns before anything sees /scan -- the arm moves, so no
+        # static sector can cover it. Without the arm the relay keeps
+        # publishing /scan directly and the chain is unchanged.
         Node(package='ammr_bringup', executable='scan_relay',
              parameters=[{'use_sim_time': True,
                           'blocked_centers_deg': '45,135,225,315',
                           'blocked_halfwidth_deg': 15.0}],
+             remappings=[('/scan', '/scan_base')],
+             condition=IfCondition(use_arm),
              output='screen'),
+        Node(package='ammr_bringup', executable='scan_relay',
+             parameters=[{'use_sim_time': True,
+                          'blocked_centers_deg': '45,135,225,315',
+                          'blocked_halfwidth_deg': 15.0}],
+             condition=UnlessCondition(use_arm),
+             output='screen'),
+        Node(package='ammr_wholebody_mpc', executable='arm_scan_self_filter',
+             name='arm_scan_self_filter', output='screen',
+             parameters=[{'use_sim_time': True,
+                          'scan_in': '/scan_base', 'scan_out': '/scan',
+                          'lidar_frame': 'lidar_link',
+                          'tolerance': 0.030, 'z_band': 0.030}],
+             condition=IfCondition(use_arm)),
 
         TimerAction(period=6.0, actions=[spawn]),
 
