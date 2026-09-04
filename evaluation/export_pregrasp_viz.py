@@ -318,40 +318,17 @@ def main() -> int:
               String(data=urdf_viz), t)
 
     def emit(t, qf, pts, r, extra):
-        # TF as the real parent -> child chain, not world -> every link.
+        # No /tf.
         #
-        # The flat version is arithmetically identical and looked harmless, but
-        # Foxglove draws a line from each frame to its parent, so 114 frames
-        # parented to a world origin 22 m away drew 114 long parallel lines
-        # straight through the scene. The kinematic tree keeps every one of
-        # those lines the length of an actual link.
-        # The virtual base chain is skipped and base_link is parented straight
-        # to world. Those joints are prismatic in the 9-DOF solver model, so
-        # base_x_link sits 17.35 m from its parent and base_y_link 14.25 m from
-        # its -- two more lines across the scene, for frames that exist to give
-        # the base real joint variables rather than to be looked at.
-        skip = {'virtual_base', 'base_x_link', 'base_y_link', 'base_theta_link'}
-        tf = TFMessage()
-        for nm in link_names:
-            if nm in skip:
-                continue
-            jn = K.parent_of.get(nm)
-            try:
-                if jn is None or K.joints[jn].parent in skip:
-                    parent, T = WORLD, K.fk(qf, nm)
-                else:
-                    parent = K.joints[jn].parent
-                    T = np.linalg.inv(K.fk(qf, parent)) @ K.fk(qf, nm)
-            except Exception:
-                continue
-            ts = TransformStamped()
-            ts.header = Header(stamp=stamp(t), frame_id=parent)
-            ts.child_frame_id = nm
-            ts.transform.translation = Vector3(
-                x=float(T[0, 3]), y=float(T[1, 3]), z=float(T[2, 3]))
-            ts.transform.rotation = quat_from_R(T[:3, :3])
-            tf.transforms.append(ts)
-        bag.write('/tf', 'tf2_msgs/msg/TFMessage', tf, t)
+        # Every marker below is already in the world frame, so transforms add
+        # nothing to the picture -- and they cost two rounds of confusion. The
+        # first version published a flat world -> every link tree, which drew a
+        # line from each of 114 frames back to a world origin 22 m away. The
+        # second published the real chain; the frames it dropped
+        # (base_x_link, base_y_link, base_theta_link) were still selected as
+        # the display frame in an already-open Foxglove, which then rendered
+        # the whole scene through a frame that no longer existed. With one
+        # frame in the file there is nothing left to select wrongly.
 
         js = JointState()
         js.header = Header(stamp=stamp(t), frame_id=WORLD)
@@ -504,10 +481,22 @@ def main() -> int:
         t += a.gap
 
     del bag
+
+    # Self-check, because two exports in a row looked right in one renderer and
+    # wrong in another. The chassis is a 0.60 x 0.60 x 0.28 drum standing flat:
+    # if its world bounding box ever comes back taller than it is wide, the
+    # thing is on its side and the file should not be handed over.
+    q_chk = np.zeros(n)
+    q_chk[:3] = q_base
+    T_chk = K.fk(q_chk, 'base_link')
+    up = T_chk[:3, 2]
+    print(f'  自我檢查：base_link 的 +z 軸 = {np.round(up, 4)}'
+          f'  {"OK 直立" if abs(up[2] - 1.0) < 1e-6 else "★ 底盤傾倒"}')
+
     sz = sum(os.path.getsize(os.path.join(dp, f))
              for dp, _, fs in os.walk(a.out) for f in fs) / 1e6
     print(f'\n  已寫入 {a.out}  ({n_written} 個週期, {t:.1f} s, {sz:.1f} MB)')
-    print(f'  Foxglove：開啟 → 檔案 → 選 {a.out}/')
+    print(f'  Foxglove：開啟本機檔案 → {a.out}/{os.path.basename(a.out)}_0.mcap')
     return 0
 
 
