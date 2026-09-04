@@ -140,12 +140,23 @@ class ArmLimits:
 # outer envelope produces trajectories that look fine in simulation and are
 # rejected by the real controller -- which is the whole reason the two sets are
 # kept separate instead of one being quietly overwritten by the other.
-_SAFE_POSITION_DEG = [(-168.2, 168.2),
-                      (-140.0, 140.0),
-                      (-3.5, 168.2),
-                      (-168.2, 168.2),
-                      (-114.0, 114.0),
-                      (-168.2, 168.2)]
+# Stored in RADIANS, exactly as the reference model and our URDF carry them.
+#
+# They were first written as round degrees (168.2, 140.0, 114.0) and converted
+# back, which is not the same number: 140.0 deg is 2.4434609528 rad while the
+# model says 2.443457075. The 3.9e-6 rad gap made the filter clamp to a limit
+# marginally WIDER than the URDF's, so a joint driven to the stop ended up
+# fractionally outside it and an acceptance check failed for a reason that had
+# nothing to do with the logic being tested.
+#
+# Degrees are for reading; radians are what both the URDF and the controller
+# use, so radians are what is stored. One source, no conversion, no drift.
+_SAFE_POSITION_RAD = [(-2.935643802, 2.935643802),
+                      (-2.443457075, 2.443457075),
+                      (-0.061087000, 2.935643802),
+                      (-2.935643802, 2.935643802),
+                      (-1.989667075, 1.989667075),
+                      (-2.935643802, 2.935643802)]
 
 LITE6 = ArmLimits(
     name='UFACTORY Lite 6 (manual envelope)',
@@ -160,8 +171,8 @@ LITE6 = ArmLimits(
 
 LITE6_SAFE = ArmLimits(
     name='UFACTORY Lite 6 (machine safe limits)',
-    lower=np.array([lo * DEG for lo, _ in _SAFE_POSITION_DEG]),
-    upper=np.array([hi * DEG for _, hi in _SAFE_POSITION_DEG]),
+    lower=np.array([lo for lo, _ in _SAFE_POSITION_RAD]),
+    upper=np.array([hi for _, hi in _SAFE_POSITION_RAD]),
     max_velocity=np.full(6, _MAX_VEL_DEG * DEG),
     max_acceleration=np.full(6, _MAX_ACC_DEG * DEG),
     max_jerk=np.full(6, _MAX_JERK_DEG * DEG),

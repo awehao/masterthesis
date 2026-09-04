@@ -29,7 +29,7 @@ from ammr_wholebody_mpc.wholebody_kinematics import (  # noqa: E402
     DOF_NAMES, WholeBodyKinematics)
 from ammr_wholebody_mpc.wholebody_safety_filter import (  # noqa: E402
     STATUS_NODATA, STATUS_OK, STATUS_STALE, DetectionPoint, SafetyConfig,
-    filter_velocity)
+    _brake_along, filter_velocity)
 
 FRAMES = ['detect0_1', 'detect0_2', 'detect1', 'detect2_1', 'detect2_2',
           'detect2_3', 'detect3_1', 'detect3_2', 'detect4_1', 'detect4_2',
@@ -88,13 +88,20 @@ def main() -> int:
     print('\n  [2][3][4] 接近受限 / 切向與遠離不受阻')
     print(f'      {"指令":10}{"輸入接近速度":>14}{"輸出接近速度":>14}{"實際上限":>12}  結果')
 
-    def rhs(d, v):
-        """The RHS the filter actually uses: d_stop carries the velocity terms,
-        evaluated from the INPUT command. Quoting the zero-speed value instead
-        understates how tight the bound is -- at 0.20 m/s it is 0.14, not the
-        0.24 that d0+eps alone suggests."""
-        a = max(0.0, approach(K, q0, pt, v))
-        ds = (cfg.d0 + a * cfg.tau + a * a / (2 * cfg.a_brake) + cfg.eps)
+    def rhs(d, v, q=None, p=None):
+        """The RHS the filter actually uses.
+
+        d_stop carries the velocity terms evaluated from the INPUT command, and
+        the braking term uses the SAME Jacobian-derived deceleration the filter
+        computes -- not the fixed fallback. Hard-coding cfg.a_brake here made
+        this test disagree with the implementation the moment the brake model
+        became pose-dependent."""
+        q = q0 if q is None else q
+        p = pt if p is None else p
+        a = max(0.0, approach(K, q, p, v))
+        row = p.n @ K.jacobian(q, p.frame)[:3]
+        a_br = max(_brake_along(row, cfg, len(row)), cfg.brake_floor)
+        ds = (cfg.d0 + a * cfg.tau + a * a / (2 * a_br) + cfg.eps)
         return cfg.alpha * (d - ds)
 
     lim = rhs(0.20, v_app)
@@ -117,9 +124,9 @@ def main() -> int:
     pt_close = mk(K, q0, 'detect6', 0.02, [1, 0, 0])       # inside d_stop
     r = filter_velocity(K, q0, v_app, [pt_close], cfg)
     a_out = approach(K, q0, pt_close, r.v)
+    rhs5 = rhs(0.02, v_app, p=pt_close)
     a_in5 = max(0.0, approach(K, q0, pt_close, v_app))
-    d_stop5 = cfg.d0 + a_in5 * cfg.tau + a_in5 ** 2 / (2 * cfg.a_brake) + cfg.eps
-    rhs5 = cfg.alpha * (0.02 - d_stop5)
+    d_stop5 = 0.02 - rhs5 / cfg.alpha
     ok5 = a_out < 0 and a_out <= rhs5 + 1e-6
     print(f'      d=0.020  d_stop={d_stop5:.3f}  上限 {rhs5:+.4f} (負值=必須退離)')
     print(f'      輸出接近速度 {a_out:+.4f} m/s   {"✓ 退離" if ok5 else "✗"}')
@@ -168,7 +175,7 @@ def main() -> int:
     q_next = q_lim + r8.v * cfg.dt
     within = q_next[4] <= hi[4] + 1e-6
     a8 = approach(K, q_lim, pt, r8.v)
-    ok8 = within and a8 <= cfg.alpha * (0.20 - (cfg.d0 + cfg.eps)) + 1e-6
+    ok8 = within and a8 <= rhs(0.20, v_push, q=q_lim) + 1e-6
     print(f'      joint2 {math.degrees(q_lim[4]):+.2f}° → {math.degrees(q_next[4]):+.2f}° '
           f'(上限 {math.degrees(hi[4]):+.2f}°)   接近 {a8:.4f}   {"✓" if ok8 else "✗"}')
     if not ok8:

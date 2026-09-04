@@ -72,7 +72,16 @@ class SafetyConfig:
     alpha: float = 2.0           # 1/s, barrier relaxation
     d0: float = 0.05             # m, standoff at zero speed
     tau: float = 0.15            # s, sense + control + actuation latency
-    a_brake: float = 1.0         # m/s^2 at the link point (see note below)
+    # Fallback only. The real value is computed per point from the Jacobian
+    # (see _brake_along), because the deceleration available at a link point is
+    # a property of the pose, not a constant: the same joint acceleration limit
+    # buys very different linear braking depending on the arm's configuration
+    # and the direction concerned. A fixed 1.0 m/s^2 made d_stop = 0.13 m at
+    # only 0.2 m/s, which is larger than a 0.12 m pre-grasp standoff -- the
+    # safety layer demanded retreat from a pose the task requires.
+    a_brake: float = 1.0         # m/s^2, used only if the Jacobian bound fails
+    use_jacobian_brake: bool = True
+    brake_floor: float = 0.5     # m/s^2, never trust less than this
     eps: float = 0.03            # m, geometry + measurement allowance
     dt: float = 0.05             # s, control period
 
@@ -128,6 +137,20 @@ class SafetyResult:
     safety_override: bool = False
 
 
+def _brake_along(row, cfg, n):
+    """Deceleration available along one barrier direction, from the joint box.
+
+        a_along = max over |qdd_k| <= amax_k  of  row . qdd
+                = sum_k |row_k| amax_k
+
+    Exact for a box on joint acceleration, and the quantity d_stop actually
+    needs: how hard this point can be slowed along THIS direction from THIS
+    pose. Section 8.3 of the plan asks for exactly this rather than reusing the
+    chassis figure.
+    """
+    return float(np.abs(row[:n]) @ cfg.amax[:n])
+
+
 def _rows_from_points(K, q, pts, cfg, v_in):
     """Barrier rows A v <= b, plus the per-row bookkeeping."""
     A, b = [], []
@@ -145,8 +168,10 @@ def _rows_from_points(K, q, pts, cfg, v_in):
             d_eff = pt.d - pt.age * cfg.stale_obstacle_speed
             cap = min(cap, cfg.stale_speed_cap)
         v_app = max(0.0, float(row @ v_in))
+        a_br = (max(_brake_along(row, cfg, len(row)), cfg.brake_floor)
+                if cfg.use_jacobian_brake else cfg.a_brake)
         d_stop = (cfg.d0 + v_app * cfg.tau
-                  + v_app * v_app / (2.0 * max(cfg.a_brake, 1e-3)) + cfg.eps)
+                  + v_app * v_app / (2.0 * max(a_br, 1e-3)) + cfg.eps)
         A.append(row)
         b.append(cfg.alpha * (d_eff - d_stop))
         if pt.occluded:
