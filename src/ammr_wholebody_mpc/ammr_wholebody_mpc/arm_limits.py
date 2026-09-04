@@ -172,9 +172,10 @@ LITE6_SAFE = ArmLimits(
 # provenance is not stated tends to get quoted as fact later.
 SOURCES = {
     'position': 'reference model / URDF (machine safe limits, tighter than manual)',
-    'velocity': 'Hardware Manual V2.6.0 Preface (180 deg/s) — VERIFIED',
-    'acceleration': 'Hardware Manual V2.6.0 Preface (1145 deg/s^2) — VERIFIED',
-    'jerk': 'Hardware Manual V2.6.0 Preface (28647 deg/s^3) — VERIFIED',
+    'velocity': 'Hardware Manual V2.6.0 Preface (180 deg/s) — VERIFIED, hard',
+    'acceleration': 'Hardware Manual V2.6.0 Preface (1145 deg/s^2) — VERIFIED, hard',
+    'jerk': 'Hardware Manual V2.6.0 Preface (28647 deg/s^3) — VERIFIED, '
+            'enforced as a SOFT limit (the safety barrier may override it)',
     'effort': 'xarm_description URDF — NOT in the Hardware Manual, meaning unconfirmed',
     'payload': 'UNVERIFIED; adopted as a conservative task limit, not a rated spec',
 }

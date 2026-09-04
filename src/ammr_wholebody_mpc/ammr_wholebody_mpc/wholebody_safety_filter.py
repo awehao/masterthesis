@@ -100,6 +100,12 @@ class SafetyConfig:
     amax: np.ndarray = field(default_factory=lambda: np.concatenate(
         [[6.25, 6.25, 25.51], LITE6_SAFE.max_acceleration]))
 
+    # Jerk box, |a - a_prev| <= jmax * dt, i.e. a box on v around
+    # v_prev + a_prev*dt. Manual-verified at 28647 deg/s^3.
+    jmax: np.ndarray = field(default_factory=lambda: np.concatenate(
+        [[50.0, 50.0, 200.0], LITE6_SAFE.max_jerk]))
+    enforce_jerk: bool = True
+
     # Joint POSITION limits used for planning. The URDF carries the same values,
     # but reading them from arm_limits keeps one documented source with a stated
     # provenance instead of two that can drift apart.
@@ -118,6 +124,8 @@ class SafetyResult:
     unresolved: bool
     speed_cap: float             # inf when no cap was applied
     runtime_s: float
+    # True when the jerk box had to be dropped for the barrier to be satisfiable.
+    safety_override: bool = False
 
 
 def _rows_from_points(K, q, pts, cfg, v_in):
@@ -168,13 +176,20 @@ def _joint_limit_rows(K, q, cfg):
     return A, b
 
 
-def _box_rows(cfg, n, cap, v_prev=None):
+def _box_rows(cfg, n, cap, v_prev=None, dt=None):
+    """Velocity and acceleration box. HARDWARE ABSOLUTES -- never relaxed.
+
+    Velocity and acceleration correspond directly to motor speed and torque, so
+    exceeding them is not a smoothness question, it is a command the hardware
+    cannot execute. Jerk is different and is built separately.
+    """
     A, b = [], []
+    dt = cfg.dt if dt is None else dt
     vmax = np.minimum(cfg.vmax[:n], cap if np.isfinite(cap) else cfg.vmax[:n])
     if v_prev is not None:
         # Acceleration is a box AROUND the previous command, so it tightens the
         # velocity box asymmetrically rather than replacing it.
-        step = cfg.amax[:n] * cfg.dt
+        step = cfg.amax[:n] * dt
         hi = np.minimum(vmax, v_prev[:n] + step)
         lo = np.maximum(-vmax, v_prev[:n] - step)
     else:
@@ -184,6 +199,34 @@ def _box_rows(cfg, n, cap, v_prev=None):
         e[i] = 1.0
         A.append(e.copy()); b.append(float(hi[i]))
         A.append(-e);       b.append(float(-lo[i]))
+    return A, b
+
+
+def _jerk_rows(cfg, n, v_prev, a_prev, dt):
+    """|a - a_prev| <= jmax*dt, written as a box on v.
+
+    a = (v - v_prev)/dt, so the bound becomes
+        v in v_prev + a_prev*dt  +-  jmax*dt^2.
+
+    SOFT, unlike velocity and acceleration: this is the one limit the barrier
+    may override. Jerk bounds smoothness and mechanism wear; refusing to break
+    it while a link is penetrating an obstacle would trade a real collision for
+    a comfort constraint. The override is recorded rather than silent.
+
+    Returns no rows when there is no history -- on the first cycle after start
+    or restart there is no a_prev to be smooth relative to, and inventing one
+    (typically zero) would clamp the first command for no reason.
+    """
+    if v_prev is None or a_prev is None:
+        return [], []
+    centre = v_prev[:n] + a_prev[:n] * dt
+    half = cfg.jmax[:n] * dt * dt
+    A, b = [], []
+    for i in range(n):
+        e = np.zeros(n)
+        e[i] = 1.0
+        A.append(e.copy()); b.append(float(centre[i] + half[i]))
+        A.append(-e);       b.append(float(-(centre[i] - half[i])))
     return A, b
 
 
@@ -210,29 +253,50 @@ def _project(A, b, v, iters):
     return v, used
 
 
-def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None) -> SafetyResult:
+def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
+                    dt=None) -> SafetyResult:
     t0 = time.perf_counter()
     cfg = cfg or SafetyConfig()
     n = len(K.dof_names)
     v_in = np.asarray(v_in, dtype=float).copy()
 
+    dt = cfg.dt if dt is None else float(dt)
     Ab, bb, cap = _rows_from_points(K, q, pts, cfg, v_in)
     Aj, bj = _joint_limit_rows(K, q, cfg)
-    Ax, bx = _box_rows(cfg, n, cap, v_prev)
+    Ax, bx = _box_rows(cfg, n, cap, v_prev, dt)
+    Ak, bk = (_jerk_rows(cfg, n, v_prev, a_prev, dt)
+              if cfg.enforce_jerk else ([], []))
 
-    A = np.array(Ab + Aj + Ax) if (Ab or Aj or Ax) else np.zeros((0, n))
-    b = np.array(bb + bj + bx) if len(A) else np.zeros(0)
+    # Hard set first, jerk appended last so it can be dropped as one block.
+    A_hard = Ab + Aj + Ax
+    b_hard = bb + bj + bx
+    A = np.array(A_hard + Ak) if (A_hard or Ak) else np.zeros((0, n))
+    b = np.array(b_hard + bk) if len(A) else np.zeros(0)
+    n_hard = len(A_hard)
 
     if len(A) == 0:
         return SafetyResult(v_in, 0, 0, 0.0, 0.0, 0, False, False, cap,
-                            time.perf_counter() - t0)
+                            time.perf_counter() - t0, False)
 
     r0 = A @ v_in - b
     n_active = int((r0 > 1e-9).sum())
     v, used = _project(A, b, v_in.copy(), cfg.proj_iters)
 
-    fallback = False
+    override = False
     resid = float((A @ v - b).max())
+    if resid > 1e-6 and len(Ak):
+        # The barrier and the jerk box disagree. Jerk yields: keeping it would
+        # mean declining to brake or retreat because the command would be too
+        # abrupt.
+        A2 = np.array(A_hard)
+        b2 = np.array(b_hard)
+        v2, used2 = _project(A2, b2, v_in.copy(), cfg.proj_iters)
+        r2 = float((A2 @ v2 - b2).max())
+        if r2 <= resid:
+            v, used, resid, override = v2, used + used2, r2, True
+            A, b, n_hard = A2, b2, len(A_hard)
+
+    fallback = False
     if resid > 1e-6:
         # Weaker but always-feasible set: do not APPROACH any further. Zero is
         # inside it, so this cannot be infeasible the way the full set can.
@@ -247,4 +311,5 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None) -> SafetyResult:
             resid = float((A @ v - b2).max())
 
     return SafetyResult(v, len(A), n_active, float(r0.max()), resid, used,
-                        fallback, resid > 1e-3, cap, time.perf_counter() - t0)
+                        fallback, resid > 1e-3, cap, time.perf_counter() - t0,
+                        override)
