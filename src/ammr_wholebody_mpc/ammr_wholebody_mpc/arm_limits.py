@@ -1,20 +1,41 @@
-"""Official Lite 6 motion envelope, loaded from config and checkable.
+"""Lite 6 motion envelope, and an explicit account of where each number is from.
 
-Source: UFACTORY "Lite6 User Manual V2.0.0", section *Motion Parameters*.
+VERIFIED against UFACTORY "Lite 6 Hardware Manual V2.6.0", Preface:
 
-    Table 1.1  working range   J1 +-360, J2 +-150, J3 -3.5..300,
-                               J4 +-360, J5 +-124, J6 +-360   [deg]
-    Table 1.2  joint motion    speed        0..180    deg/s
-                               acceleration 0..1145   deg/s^2
-                               jerk         0..28647  deg/s^3
+    Joint Range     J1 +-360, J2 +-150, J3 -3.5..300,
+                    J4 +-360, J5 +-124, J6 +-360        [deg]
+    Joint Motion    speed        0..180    deg/s
+                    acceleration 0..1145   deg/s^2
+                    jerk         0..28647  deg/s^3
 
-The point of having this in code rather than only in a YAML is that the
-whole-body controller has to respect the same envelope the real arm enforces.
-A trajectory that looks fine in simulation but exceeds 1145 deg/s^2 would be
-rejected by the physical controller, so violations should be caught here first.
+NOT in that manual, and therefore NOT verified:
+
+    joint torque    The [50, 50, 32, 32, 32, 20] N.m below comes from the
+                    <limit effort=...> fields of UFACTORY's published
+                    xarm_description URDF. Hardware Manual V2.6.0 contains no
+                    joint torque table at all -- its only N.m figure is the
+                    20 N.m tightening torque for the base bolts, which is
+                    unrelated. Whether the URDF effort means peak, continuous,
+                    or a value chosen for simulation is UNKNOWN, so it must not
+                    be promoted to a verified hardware torque limit.
+
+    payload         0.6 kg is widely quoted for this arm but appears NOWHERE in
+                    Hardware Manual V2.6.0, whose Technical Specifications list
+                    weight, speed, repeatability, power and reach and stop
+                    there. SOURCE UNVERIFIED. It is also unknown whether the
+                    figure is measured at the flange or at the tool, and
+                    therefore whether the 0.25 kg gripper comes out of it --
+                    leaving the graspable mass somewhere between 0.35 and
+                    0.6 kg. Neither number may be written as settled.
+
+An earlier version of this header cited "User Manual V2.0.0" with table
+numbers, and claimed the effort values "match the datasheet". The manual is a
+different document with a different version, and no datasheet was ever
+consulted. Both claims are removed rather than corrected, because a citation
+nobody can check is worse than none.
 
     from ammr_wholebody_mpc.arm_limits import LITE6
-    LITE6.clip_position(q)            # nearest feasible configuration
+    LITE6.clip_position(q)              # nearest feasible configuration
     LITE6.check_trajectory(q_traj, dt)  # -> list of violations (empty = OK)
 """
 from __future__ import annotations
@@ -28,7 +49,7 @@ import numpy as np
 
 DEG = math.pi / 180.0
 
-# Manual Table 1.1, in the joint order used by the URDF.
+# Hardware Manual V2.6.0, Preface "Joint Range". VERIFIED.
 _POSITION_DEG = [(-360.0, 360.0),
                  (-150.0, 150.0),
                  (-3.5, 300.0),
@@ -36,15 +57,20 @@ _POSITION_DEG = [(-360.0, 360.0),
                  (-124.0, 124.0),
                  (-360.0, 360.0)]
 
-# Manual Table 1.2 (shared by every joint).
+# Hardware Manual V2.6.0, Preface "Motion Parameters". VERIFIED.
 _MAX_VEL_DEG = 180.0
 _MAX_ACC_DEG = 1145.0
 _MAX_JERK_DEG = 28647.0
 
-# From the URDF <limit effort=...>, which matches the datasheet.
+# From the xarm_description URDF <limit effort=...>. NOT in the Hardware
+# Manual; physical meaning (peak / continuous / simulation-only) unconfirmed.
 _MAX_EFFORT = [50.0, 50.0, 32.0, 32.0, 32.0, 20.0]
 
-PAYLOAD_KG = 0.6        # rated payload; NOT enforced here, a design constraint
+# SOURCE UNVERIFIED: absent from Hardware Manual V2.6.0. Also unknown whether
+# it is measured at the flange or the tool, i.e. whether the 0.25 kg gripper is
+# inside or outside it. Kept as a TASK-level hard limit, never widened by model
+# results.
+PAYLOAD_KG = 0.6
 REACH_M = 0.440
 
 

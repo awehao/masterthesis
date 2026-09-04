@@ -28,9 +28,12 @@ and reuses the same Jacobian code, so a Jacobian error would show up in the
 kinematics tests rather than hiding here.
 
 Inertia comes from the URDF, which is UFACTORY's published model, not a
-measurement of this arm. Everything downstream inherits that: friction, gearbox
-efficiency and joint elasticity are absent, so the torque here is a lower bound
-on what the real motors must supply. It is a screening tool, not a prediction.
+measurement of this arm, and the torque limits it is compared against come from
+the same URDF rather than from any hardware document -- Hardware Manual V2.6.0
+has no torque table. Friction, gearbox efficiency and joint elasticity are
+absent as well, so the torque here is a lower bound on what the real motors
+must supply. A screening tool, not a prediction, and not evidence about
+what the arm can carry.
 
     from ammr_wholebody_mpc.arm_dynamics import ArmDynamics
     D = ArmDynamics.from_urdf_string(xml)

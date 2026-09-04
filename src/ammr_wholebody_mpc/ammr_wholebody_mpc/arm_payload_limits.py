@@ -1,6 +1,6 @@
 """Turn the 600 g payload rating into constraints something can check.
 
-"Payload 600 g" is a number on a datasheet. On its own it constrains nothing:
+"Payload 600 g" is a number people quote. On its own it constrains nothing:
 it does not say which poses are reachable while holding 600 g, nor what happens
 at 400 g with the arm fully extended. What actually limits the arm is joint
 torque, and torque depends on the pose. This module computes it.
@@ -22,9 +22,11 @@ reported is therefore an upper bound on what is available for acceleration, not
 a certificate that any trajectory through the pose is feasible.
 
 The link masses and centres of mass come from the URDF, which is UFACTORY's
-published model rather than a measurement of the arm on the bench. Friction,
-gearbox efficiency and payload eccentricity are all absent. Treat the numbers
-as a screening tool with a margin, not as a torque prediction.
+published model rather than a measurement of the arm on the bench. So are the
+joint torque limits, and Hardware Manual V2.6.0 does not confirm them: it has
+no torque table. Friction, gearbox efficiency and payload eccentricity are all
+absent too. Treat the numbers as a screening tool with a margin, not as a
+torque prediction, and never as evidence about what the hardware can carry.
 
     from ammr_wholebody_mpc.arm_payload_limits import PayloadModel
     P = PayloadModel.from_urdf_string(xml)
@@ -43,8 +45,18 @@ from .wholebody_kinematics import WholeBodyKinematics
 
 G = np.array([0.0, 0.0, -9.80665])
 ARM_JOINTS = [f'joint{i}' for i in range(1, 7)]
-# From the URDF <limit effort=...>, which matches the Lite 6 datasheet.
+# Source: UFACTORY's published xarm_description URDF, <limit effort=...>.
+# NOT from the Hardware Manual V2.6.0, which contains no joint-torque table --
+# its only N.m figure is the 20 N.m base-bolt tightening torque. Whether these
+# are peak, continuous, or simulation-only values is UNCONFIRMED, so every
+# result computed against them inherits that uncertainty and none of them may
+# be stated as a hardware capability.
 EFFORT_NM = np.array([50.0, 50.0, 32.0, 32.0, 32.0, 20.0])
+# SOURCE UNVERIFIED: 0.6 kg appears nowhere in Hardware Manual V2.6.0. It is
+# also undefined whether it is measured at the flange or the tool, so whether
+# the 0.25 kg gripper is inside it -- and thus whether a grasped object may be
+# 0.6 kg or 0.35 kg -- is unknown. Treated as a TASK-level hard limit; the
+# model must never be used to widen it.
 RATED_PAYLOAD_KG = 0.6
 # Where a grasped object hangs: the tool centre point.
 PAYLOAD_LINK = 'link_tcp'
