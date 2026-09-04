@@ -193,6 +193,9 @@ def main() -> int:
     n_steps_tot = 0
     worst_resid = -math.inf
     n_override = 0
+    R = {k: -math.inf for k in ('barrier','position','velbox','jerk','pre_fb')}
+    n_unres = 0
+    n_fb = 0
     osc = []
     starts = [np.array(TUCK)] + [rng.uniform(lo6 * 0.5, hi6 * 0.5)
                                  for _ in range(a.n - 1)]
@@ -234,7 +237,14 @@ def main() -> int:
             r = filter_velocity(K, qf, v_in, pts, cfg, v_prev=v_prev,
                                 a_prev=a_prev, dt=cfg.dt)
             n_override += int(r.safety_override)
+            n_unres += int(r.unresolved)
+            n_fb += int(r.fallback)
             worst_resid = max(worst_resid, r.max_resid_after)
+            R['barrier'] = max(R['barrier'], r.resid_barrier)
+            R['position'] = max(R['position'], r.resid_position)
+            R['velbox'] = max(R['velbox'], r.resid_velbox)
+            R['jerk'] = max(R['jerk'], r.resid_jerk)
+            R['pre_fb'] = max(R['pre_fb'], r.resid_before_fallback)
             qc = qc + r.v[idx] * cfg.dt
             traj.append((qc.copy(), r.v[idx].copy()))
             v_prev2 = v_prev
@@ -283,7 +293,13 @@ def main() -> int:
     print(f'  最小自碰撞間距    {minself:.4f} m')
     print(f'  違反率（{n_steps_tot} 步）位置 {p_bad}  速度 {v_bad}  加速度 {a_bad}')
     print(f'  最大約束殘差      {worst_resid:+.2e}')
-    print(f'  safety_override   {n_override}')
+    print(f'  ── 依類別拆分（<=0 為滿足）')
+    for k, lab in (('barrier','屏障'),('position','關節位置'),
+                   ('velbox','速度／加速度盒'),('jerk','jerk'),
+                   ('pre_fb','fallback 前')):
+        print(f'     {lab:16} {R[k]:+.3e}')
+    print(f'  fallback {n_fb}   unresolved {n_unres}   '
+          f'safety_override {n_override}')
     return 0
 
 

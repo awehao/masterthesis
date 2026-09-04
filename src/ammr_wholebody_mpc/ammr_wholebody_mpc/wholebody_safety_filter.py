@@ -135,6 +135,17 @@ class SafetyResult:
     runtime_s: float
     # True when the jerk box had to be dropped for the barrier to be satisfiable.
     safety_override: bool = False
+    # Residual per constraint CLASS, after the solve. A single aggregate number
+    # cannot distinguish "the barrier is violated" from "a velocity box is off
+    # by a rounding error", and the two mean completely different things: one
+    # is a safety failure, the other is noise. Reported separately so a large
+    # value can be attributed instead of guessed at.
+    resid_barrier: float = 0.0
+    resid_position: float = 0.0
+    resid_velbox: float = 0.0
+    resid_accbox: float = 0.0
+    resid_jerk: float = 0.0
+    resid_before_fallback: float = 0.0
 
 
 def _brake_along(row, cfg, n):
@@ -199,6 +210,17 @@ def _joint_limit_rows(K, q, cfg):
         A.append(-e)
         b.append(max(0.0, (q[i] - lo[i]) / cfg.dt))
     return A, b
+
+
+def _split_residual(A, b, v, spans):
+    """Worst residual within each named block of rows."""
+    out = {}
+    if not len(A):
+        return {k: 0.0 for k in spans}
+    r = A @ v - b
+    for name, (lo, hi) in spans.items():
+        out[name] = float(r[lo:hi].max()) if hi > lo else 0.0
+    return out
 
 
 def _box_rows(cfg, n, cap, v_prev=None, dt=None):
@@ -298,6 +320,15 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
     A = np.array(A_hard + Ak) if (A_hard or Ak) else np.zeros((0, n))
     b = np.array(b_hard + bk) if len(A) else np.zeros(0)
     n_hard = len(A_hard)
+    # Row provenance. _box_rows emits the velocity box and the acceleration box
+    # as one interleaved block, so they are reported together as 'velbox' when
+    # v_prev is absent and split is impossible; with v_prev the same rows carry
+    # both bounds and the tighter one is what shows.
+    n_b, n_j, n_x = len(Ab), len(Aj), len(Ax)
+    spans = {'barrier': (0, n_b),
+             'position': (n_b, n_b + n_j),
+             'velbox': (n_b + n_j, n_b + n_j + n_x),
+             'jerk': (n_hard, n_hard + len(Ak))}
 
     if len(A) == 0:
         return SafetyResult(v_in, 0, 0, 0.0, 0.0, 0, False, False, cap,
@@ -309,6 +340,7 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
 
     override = False
     resid = float((A @ v - b).max())
+    resid_pre_fb = resid
     if resid > 1e-6 and len(Ak):
         # The barrier and the jerk box disagree. Jerk yields: keeping it would
         # mean declining to brake or retreat because the command would be too
@@ -320,6 +352,8 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
         if r2 <= resid:
             v, used, resid, override = v2, used + used2, r2, True
             A, b, n_hard = A2, b2, len(A_hard)
+            spans = {k: sp for k, sp in spans.items() if k != 'jerk'}
+            spans['jerk'] = (0, 0)
 
     fallback = False
     if resid > 1e-6:
@@ -332,9 +366,31 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
         used += used2
         resid = float((A @ v - b2).max())
         if resid > 1e-3:
-            v = np.zeros(n)
+            # Last resort: brake as hard as the hardware allows, NOT jump to
+            # zero.
+            #
+            # Zero looks like the safe answer and is not a reachable one. The
+            # acceleration box is centred on v_prev, so with v_prev around
+            # 3 rad/s and a_max*dt = 0.999, zero sits 2.0 outside it -- and the
+            # filter then violated by 2.01 the very limit it calls hard. The
+            # feasible stop is zero PROJECTED onto that box: full deceleration
+            # this cycle, zero over the next few.
+            if v_prev is not None:
+                step = cfg.amax[:n] * dt
+                v = np.clip(np.zeros(n), v_prev[:n] - step, v_prev[:n] + step)
+                v = np.clip(v, -cfg.vmax[:n], cfg.vmax[:n])
+            else:
+                v = np.zeros(n)
             resid = float((A @ v - b2).max())
+            b = b2
 
+    sp = _split_residual(A, b, v, spans)
     return SafetyResult(v, len(A), n_active, float(r0.max()), resid, used,
                         fallback, resid > 1e-3, cap, time.perf_counter() - t0,
-                        override)
+                        override,
+                        resid_barrier=sp.get('barrier', 0.0),
+                        resid_position=sp.get('position', 0.0),
+                        resid_velbox=sp.get('velbox', 0.0),
+                        resid_accbox=sp.get('velbox', 0.0),
+                        resid_jerk=sp.get('jerk', 0.0),
+                        resid_before_fallback=resid_pre_fb)
