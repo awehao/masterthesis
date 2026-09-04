@@ -57,6 +57,8 @@ from ammr_wholebody_mpc.wholebody_safety_filter import (  # noqa: E402
     STATUS_OK, DetectionPoint, SafetyConfig, filter_velocity)
 import verify_pregrasp as VP  # noqa: E402
 import verify_self_collision as VSC  # noqa: E402
+from ammr_wholebody_mpc.arm_detection_points import _iso, _rpy_to_rot  # noqa: E402
+import xml.etree.ElementTree as ET  # noqa: E402
 
 WORLD = 'world'
 
@@ -116,6 +118,49 @@ def rewrite_mesh_paths(xml, prefixes):
     return re.sub(r'package://([^/]+)/([^"\']+)', sub, xml)
 
 
+def visuals_from_urdf(xml):
+    """Every <visual> as (link, kind, payload, T_link_visual).
+
+    Foxglove has a URDF layer, but getting it to resolve a robot out of a
+    std_msgs/String topic depends on schema details that vary between versions,
+    and when it fails it fails silently -- an empty 3D panel with no error. A
+    MarkerArray of MESH_RESOURCE markers renders the same geometry through the
+    ordinary marker path, which is version-stable and can be checked by
+    counting messages. The pose comes from the same FK the filter uses, so what
+    is drawn is what was computed, not a second kinematic chain that could
+    disagree with the first.
+    """
+    out = []
+    for link in ET.fromstring(xml).findall('link'):
+        name = link.get('name')
+        for vis in link.findall('visual'):
+            g = vis.find('geometry')
+            if g is None:
+                continue
+            o = vis.find('origin')
+            xyz = [float(x) for x in (o.get('xyz', '0 0 0') if o is not None
+                                      else '0 0 0').split()]
+            rpy = [float(x) for x in (o.get('rpy', '0 0 0') if o is not None
+                                      else '0 0 0').split()]
+            T = _iso(_rpy_to_rot(*rpy), np.array(xyz))
+            mesh = g.find('mesh')
+            cyl = g.find('cylinder')
+            box = g.find('box')
+            sph = g.find('sphere')
+            if mesh is not None:
+                sc = [float(x) for x in mesh.get('scale', '1 1 1').split()]
+                out.append((name, 'mesh', (mesh.get('filename'), sc), T))
+            elif cyl is not None:
+                out.append((name, 'cylinder',
+                            (float(cyl.get('radius')), float(cyl.get('length'))), T))
+            elif box is not None:
+                out.append((name, 'box',
+                            [float(x) for x in box.get('size').split()], T))
+            elif sph is not None:
+                out.append((name, 'sphere', float(sph.get('radius')), T))
+    return out
+
+
 class Bag:
     def __init__(self, path):
         if os.path.exists(path):
@@ -144,9 +189,20 @@ class Bag:
         self.w.write(name, serialize_message(msg), int(t * 1e9))
 
 
-def obstacle_markers(obs, t):
+def obstacle_markers(obs, t, near=None, radius=3.0):
+    """Scene obstacles, optionally only those within radius of a point.
+
+    The world holds 45 boxes over 17 m; the pre-grasp run involves one of them
+    and moves the arm through about 0.3 m. Drawing all 45 puts the thing being
+    looked at into one corner of a room-sized view, which is not a picture of
+    the experiment.
+    """
     ma = MarkerArray()
     for i, o in enumerate(obs):
+        if near is not None:
+            c = o.T_world_link[:3, 3]
+            if float(np.linalg.norm(c[:2] - np.asarray(near)[:2])) > radius:
+                continue
         m = Marker()
         m.header = Header(stamp=stamp(t), frame_id=WORLD)
         m.ns, m.id, m.action = 'obstacles', i, Marker.ADD
@@ -189,6 +245,9 @@ def main() -> int:
     prefixes = [os.path.join(os.getcwd(), 'install', d)
                 for d in os.listdir('install')] if os.path.isdir('install') else []
     urdf_viz = rewrite_mesh_paths(xml, prefixes + ['/opt/ros/jazzy'])
+    visuals = visuals_from_urdf(urdf_viz)
+    print(f'  URDF visual 元素 {len(visuals)} 個'
+          f'（mesh {sum(1 for v in visuals if v[1] == "mesh")}）')
 
     # Scene setup, identical to the acceptance.
     adj, rigid = set(), {}
@@ -311,7 +370,44 @@ def main() -> int:
             ma.markers.append(arr)
         bag.write('/detection', 'visualization_msgs/msg/MarkerArray', ma, t)
         bag.write('/obstacles', 'visualization_msgs/msg/MarkerArray',
-                  obstacle_markers(obs, t), t)
+                  obstacle_markers(obs, t, near=qf[:2], radius=3.0), t)
+
+        rm = MarkerArray()
+        for i, (lnk, kind, payload, Tlv) in enumerate(visuals):
+            try:
+                T = K.fk(qf, lnk) @ Tlv
+            except Exception:
+                continue
+            mk = Marker()
+            mk.header = Header(stamp=stamp(t), frame_id=WORLD)
+            mk.ns, mk.id, mk.action = 'robot', i, Marker.ADD
+            mk.pose.position = Point(x=float(T[0, 3]), y=float(T[1, 3]),
+                                     z=float(T[2, 3]))
+            mk.pose.orientation = quat_from_R(T[:3, :3])
+            if kind == 'mesh':
+                uri, sc = payload
+                mk.type = Marker.MESH_RESOURCE
+                mk.mesh_resource = uri
+                mk.mesh_use_embedded_materials = False
+                mk.scale = Vector3(x=float(sc[0]), y=float(sc[1]), z=float(sc[2]))
+            elif kind == 'cylinder':
+                rad, ln = payload
+                mk.type = Marker.CYLINDER
+                mk.scale = Vector3(x=float(2 * rad), y=float(2 * rad), z=float(ln))
+            elif kind == 'box':
+                mk.type = Marker.CUBE
+                mk.scale = Vector3(x=float(payload[0]), y=float(payload[1]),
+                                   z=float(payload[2]))
+            else:
+                mk.type = Marker.SPHERE
+                mk.scale = Vector3(x=float(2 * payload), y=float(2 * payload),
+                                   z=float(2 * payload))
+            # arm links warm, chassis cool, so the two are told apart at a glance
+            arm = lnk.startswith('link') or 'uflite' in lnk or 'gripper' in lnk
+            mk.color = (ColorRGBA(r=0.95, g=0.72, b=0.25, a=1.0) if arm
+                        else ColorRGBA(r=0.35, g=0.55, b=0.85, a=1.0))
+            rm.markers.append(mk)
+        bag.write('/robot', 'visualization_msgs/msg/MarkerArray', rm, t)
 
         tm = Marker()
         tm.header = Header(stamp=stamp(t), frame_id=WORLD)
@@ -319,7 +415,7 @@ def main() -> int:
         tm.pose.position = Point(x=float(T_des[0, 3]), y=float(T_des[1, 3]),
                                  z=float(T_des[2, 3]))
         tm.pose.orientation = quat_from_R(T_des[:3, :3])
-        tm.scale = Vector3(x=0.12, y=0.02, z=0.02)
+        tm.scale = Vector3(x=0.10, y=0.012, z=0.012)
         tm.color = ColorRGBA(r=1.0, g=0.9, b=0.1, a=1.0)
         ta = MarkerArray()
         ta.markers.append(tm)
