@@ -318,16 +318,34 @@ def main() -> int:
               String(data=urdf_viz), t)
 
     def emit(t, qf, pts, r, extra):
-        # TF: world -> every link, flat. Foxglove composes nothing itself, and
-        # a flat tree is unambiguous.
+        # TF as the real parent -> child chain, not world -> every link.
+        #
+        # The flat version is arithmetically identical and looked harmless, but
+        # Foxglove draws a line from each frame to its parent, so 114 frames
+        # parented to a world origin 22 m away drew 114 long parallel lines
+        # straight through the scene. The kinematic tree keeps every one of
+        # those lines the length of an actual link.
+        # The virtual base chain is skipped and base_link is parented straight
+        # to world. Those joints are prismatic in the 9-DOF solver model, so
+        # base_x_link sits 17.35 m from its parent and base_y_link 14.25 m from
+        # its -- two more lines across the scene, for frames that exist to give
+        # the base real joint variables rather than to be looked at.
+        skip = {'virtual_base', 'base_x_link', 'base_y_link', 'base_theta_link'}
         tf = TFMessage()
         for nm in link_names:
+            if nm in skip:
+                continue
+            jn = K.parent_of.get(nm)
             try:
-                T = K.fk(qf, nm)
+                if jn is None or K.joints[jn].parent in skip:
+                    parent, T = WORLD, K.fk(qf, nm)
+                else:
+                    parent = K.joints[jn].parent
+                    T = np.linalg.inv(K.fk(qf, parent)) @ K.fk(qf, nm)
             except Exception:
                 continue
             ts = TransformStamped()
-            ts.header = Header(stamp=stamp(t), frame_id=WORLD)
+            ts.header = Header(stamp=stamp(t), frame_id=parent)
             ts.child_frame_id = nm
             ts.transform.translation = Vector3(
                 x=float(T[0, 3]), y=float(T[1, 3]), z=float(T[2, 3]))
