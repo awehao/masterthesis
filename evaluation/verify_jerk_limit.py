@@ -46,16 +46,29 @@ def main() -> int:
     jmax = LITE6_SAFE.max_jerk[0]
     amax = LITE6_SAFE.max_acceleration[0]
     fails = []
-    # Jerk binds only when j*dt^2 < a*dt, i.e. dt < a/j. With the manual values
-    # that crossover is 19.98/500 = 0.0400 s, so at the 20 Hz control rate the
-    # ACCELERATION limit is always the tighter of the two and jerk never acts.
-    # Tests that need to see jerk must therefore run below that period; testing
-    # at 0.05 s would "pass" a completely unimplemented jerk limit.
+    # Which box is tighter depends on the PREVIOUS acceleration, because the
+    # two are not centred alike:
+    #
+    #     jerk          dv in a_prev*dt  +-  j*dt^2
+    #     acceleration  dv in            +-  a*dt
+    #
+    # With a_prev = 0 the centres coincide and the comparison reduces to
+    # j*dt^2 vs a*dt, crossing over at dt = a/j = 0.0400 s. So a step FROM REST
+    # at 20 Hz is bounded by acceleration, and a test built on that case would
+    # pass even if jerk were never implemented -- which is why the step and
+    # restart tests below drop to 0.02 s.
+    #
+    # It does NOT follow that jerk is inert at 20 Hz. Once a_prev is non-zero
+    # the jerk box shifts with it, and on the deceleration side it becomes the
+    # tighter bound: at a_prev = 10 rad/s^2 the jerk floor is v_prev + 0.250
+    # while acceleration would allow v_prev - 0.999. Braking and reversing are
+    # exactly where jerk acts at the real control rate.
     dt_cross = amax / jmax
     dt_j = 0.02                      # comfortably inside the jerk-bound regime
     print(f'  jerk 上限 {jmax:.1f} rad/s³   加速度上限 {amax:.2f} rad/s²')
-    print(f'  jerk 綁定的條件 dt < a/j = {dt_cross:.4f} s；'
-          f'控制週期 {cfg.dt:.3f} s 時由加速度綁定')
+    print(f'  a_prev = 0 時，兩盒同心，交叉點 dt = a/j = {dt_cross:.4f} s：'
+          f'控制週期 {cfg.dt:.3f} s 的階躍由加速度綁定')
+    print(f'  a_prev ≠ 0 時 jerk 盒偏移，減速側可能更緊 —— 20 Hz 下 jerk 仍會作用')
     print(f'  以下需要看到 jerk 作用的測試使用 dt = {dt_j:.3f} s')
 
     # ---------------------------------------------------------------- 1

@@ -20,9 +20,16 @@ not have, and every one of those decisions fails toward stopping:
                                       already degrades to a speed cap
     joints older than max_joint_age   output zero: without q there is no
                                       Jacobian, so nothing can be constrained
-    TF missing                        base DOF are held at zero and the arm is
-                                      still filtered, rather than dropping the
-                                      whole command
+    TF missing                        output zero. NOT "zero the base and keep
+                                      filtering the arm", which is what this
+                                      did at first: the detection points arrive
+                                      in the report frame, and the arm columns
+                                      of J_p(q) rotate with the base heading, so
+                                      without the base pose n^T J is evaluated
+                                      in the wrong frame. Holding the base still
+                                      does not repair the ARM rows -- it leaves
+                                      a constraint that looks satisfied while
+                                      pointing the wrong way.
 
 Publishing zero on missing data is the only defensible default here. Passing
 the command through unfiltered would mean the safety layer silently disappears
@@ -203,7 +210,7 @@ class WholeBodySafetyNode(Node):
         now = self._now()
         out = np.zeros(9)
         reason = 0.0        # 0 ok, 1 no cmd, 2 stale cmd, 3 stale joints,
-                            # 4 no kinematics, 5 no points
+                            # 4 no kinematics, 5 no points, 6 no TF
         res = SafetyLike()
 
         if self.K is None:
@@ -219,16 +226,19 @@ class WholeBodySafetyNode(Node):
             q = np.zeros(9)
             q[3:] = self.q_arm
             base = self._base_q() if self.use_base else None
-            if base is not None:
-                q[:3] = base
             v_in = self.cmd.copy()
-            if base is None:
-                v_in[:3] = 0.0          # cannot reason about a base we cannot locate
-
-            pts = self._points(now)
-            if pts is None:
-                reason = 5.0
+            pts = None
+            if self.use_base and base is None:
+                # No base pose -> no valid whole-body Jacobian in the report
+                # frame -> no row can be trusted. Stop.
+                reason = 6.0
             else:
+                if base is not None:
+                    q[:3] = base
+                pts = self._points(now)
+            if reason == 0.0 and pts is None:
+                reason = 5.0
+            if reason == 0.0:
                 # Real elapsed time, not the nominal period. A 20 Hz timer that
                 # actually fires at 47 or 62 ms would make every acceleration
                 # and jerk bound wrong by the same ratio, and the jitter is

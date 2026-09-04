@@ -24,12 +24,13 @@ Three properties the safety layer depends on, none of them free:
                           not, once the base moves, and the constraint would
                           need extra terms nobody would remember to add.
 
-  occlusion is not free   space Where the arm blocks the LiDAR, removing its own
-                          returns leaves NO measurement. A point whose nearest
-                          surface lies in an occluded bearing is marked UNKNOWN,
-                          never FREE. Reading the removal as clearance is
-                          exactly the failure the self-filter would otherwise
-                          introduce.
+  occlusion is never      Where the arm blocks the LiDAR, removing its own
+  free space              returns leaves NO measurement, so a point whose
+                          nearest surface lies in an occluded bearing is flagged
+                          occluded, never clear. The same applies when the check
+                          cannot be run at all: if the sensor transform is
+                          missing, observability is unknown and is reported as
+                          occluded rather than defaulting to clear.
 
   staleness is visible    Every point carries the age of the data behind it, and
                           the message carries the worst age. A consumer that
@@ -256,7 +257,8 @@ class ArmLinkDistance(Node):
 
             if best_v is None or best_d > self.max_range:
                 rows.append(list(p) + [0.0, 0.0, 0.0, self.max_range,
-                                       STATUS_NODATA, -1.0, 0.0])
+                                       STATUS_NODATA, -1.0,
+                                       1.0 if T_rl is None else 0.0])
                 n_nodata += 1
                 continue
 
@@ -267,11 +269,20 @@ class ArmLinkDistance(Node):
                 n_stale += 1
             else:
                 n_ok += 1
-            occ = 0.0
-            if T_rl is not None:
+            # Observability defaults to UNKNOWN, not to clear.
+            #
+            # This used to read `if T_rl is not None:` with occ left at 0.0
+            # otherwise, so a missing report_frame -> lidar_frame transform
+            # reported every direction as observed. The occlusion test itself
+            # fails closed; being unable to run it was the hole. Not knowing
+            # where the sensor is means not knowing what it can see.
+            if T_rl is None:
+                occ = 1.0
+                n_unk += 1
+            else:
                 p_l = (_inv(T_rl) @ np.append(p + best_v, 1.0))[:3]
-                if self._occluded(p_l):
-                    occ = 1.0
+                occ = 1.0 if self._occluded(p_l) else 0.0
+                if occ:
                     n_unk += 1
             worst_age = max(worst_age, best_age)
             rows.append(list(p) + list(n_hat) + [best_d, status, best_age, occ])
