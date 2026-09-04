@@ -314,8 +314,14 @@ def main() -> int:
 
     bag = Bag(a.out)
     t = 1.0
-    bag.write('/robot_description', 'std_msgs/msg/String',
-              String(data=urdf_viz), t)
+    # No /robot_description either.
+    #
+    # Foxglove's 3D panel builds a URDF layer from that topic, and a URDF layer
+    # places each link by its TF frame. With TF gone every link of THAT robot
+    # falls back to identity, so the file rendered a second, exploded robot on
+    # top of the correct one -- an arm detached from the chassis, wheels off
+    # the body. The markers on /robot already carry the full geometry at the
+    # poses the filter computed. One robot, one representation.
 
     def emit(t, qf, pts, r, extra):
         # No /tf.
