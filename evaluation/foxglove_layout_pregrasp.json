@@ -1,0 +1,114 @@
+{
+  "configById": {
+    "3D!scene": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 3.2,
+        "phi": 62,
+        "thetaOffset": 40,
+        "targetOffset": [16.75, 14.25, 0.45],
+        "target": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followMode": "follow-none",
+      "followTf": "world",
+      "scene": {
+        "enableStats": false,
+        "transforms": { "showLabel": false, "axisScale": 0.15 }
+      },
+      "transforms": {},
+      "topics": {
+        "/detection": { "visible": true },
+        "/obstacles": { "visible": true },
+        "/target": { "visible": true },
+        "/tf": { "visible": true }
+      },
+      "layers": {
+        "urdf": {
+          "instanceId": "urdf",
+          "layerId": "foxglove.Urdf",
+          "label": "URDF",
+          "order": 1,
+          "visible": true,
+          "sourceType": "topic",
+          "topicName": "/robot_description",
+          "framePrefix": "",
+          "fallbackColor": "#b0b8c4",
+          "displayMode": "auto"
+        }
+      },
+      "publish": { "type": "point" },
+      "imageMode": {}
+    },
+    "Plot!resid": {
+      "title": "約束殘差（<=0 為滿足）",
+      "paths": [
+        { "value": "/safety/resid_barrier.data", "label": "屏障", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/resid_position.data", "label": "關節位置", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/resid_velbox.data", "label": "速度盒", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/resid_accbox.data", "label": "加速度盒", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/resid_jerk.data", "label": "jerk", "enabled": true, "timestampMethod": "receiveTime" }
+      ],
+      "showLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Plot!solver": {
+      "title": "求解器行為",
+      "paths": [
+        { "value": "/safety/n_active.data", "label": "違反的列數", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/iters.data", "label": "投影次數", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/fallback.data", "label": "fallback", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/override.data", "label": "override", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/unresolved.data", "label": "unresolved", "enabled": true, "timestampMethod": "receiveTime" }
+      ],
+      "showLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Plot!task": {
+      "title": "任務與間距",
+      "paths": [
+        { "value": "/safety/min_d.data", "label": "最近障礙物距離 m", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/tcp_err_mm.data", "label": "TCP 誤差 mm", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/v_norm.data", "label": "輸出速度範數", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/v_in_norm.data", "label": "輸入速度範數", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/safety/start.data", "label": "起始姿態編號", "enabled": true, "timestampMethod": "receiveTime" }
+      ],
+      "showLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 0.5 },
+  "layout": {
+    "direction": "row",
+    "first": "3D!scene",
+    "second": {
+      "direction": "column",
+      "first": "Plot!resid",
+      "second": {
+        "direction": "column",
+        "first": "Plot!solver",
+        "second": "Plot!task",
+        "splitPercentage": 50
+      },
+      "splitPercentage": 34
+    },
+    "splitPercentage": 55
+  }
+}
