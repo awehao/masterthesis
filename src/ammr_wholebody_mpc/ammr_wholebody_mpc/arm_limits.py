@@ -50,6 +50,7 @@ import numpy as np
 DEG = math.pi / 180.0
 
 # Hardware Manual V2.6.0, Preface "Joint Range". VERIFIED.
+# This is the manufacturer's OUTER envelope, not what the machine is run at.
 _POSITION_DEG = [(-360.0, 360.0),
                  (-150.0, 150.0),
                  (-3.5, 300.0),
@@ -130,8 +131,24 @@ class ArmLimits:
         return out
 
 
+# The limits the machine is actually operated within, taken from Howard's
+# reference model (fake_mobile_manipulator_modified.urdf) and now carried by our
+# URDF. Tighter than the manual envelope on EVERY joint, and not by a uniform
+# amount: joint3 loses only its upper end, the rest close in on both sides.
+#
+# Control must plan against THESE, not the manual values. Planning against the
+# outer envelope produces trajectories that look fine in simulation and are
+# rejected by the real controller -- which is the whole reason the two sets are
+# kept separate instead of one being quietly overwritten by the other.
+_SAFE_POSITION_DEG = [(-168.2, 168.2),
+                      (-140.0, 140.0),
+                      (-3.5, 168.2),
+                      (-168.2, 168.2),
+                      (-114.0, 114.0),
+                      (-168.2, 168.2)]
+
 LITE6 = ArmLimits(
-    name='UFACTORY Lite 6',
+    name='UFACTORY Lite 6 (manual envelope)',
     lower=np.array([lo * DEG for lo, _ in _POSITION_DEG]),
     upper=np.array([hi * DEG for _, hi in _POSITION_DEG]),
     max_velocity=np.full(6, _MAX_VEL_DEG * DEG),
@@ -139,6 +156,41 @@ LITE6 = ArmLimits(
     max_jerk=np.full(6, _MAX_JERK_DEG * DEG),
     max_effort=np.array(_MAX_EFFORT),
 )
+
+
+LITE6_SAFE = ArmLimits(
+    name='UFACTORY Lite 6 (machine safe limits)',
+    lower=np.array([lo * DEG for lo, _ in _SAFE_POSITION_DEG]),
+    upper=np.array([hi * DEG for _, hi in _SAFE_POSITION_DEG]),
+    max_velocity=np.full(6, _MAX_VEL_DEG * DEG),
+    max_acceleration=np.full(6, _MAX_ACC_DEG * DEG),
+    max_jerk=np.full(6, _MAX_JERK_DEG * DEG),
+    max_effort=np.array(_MAX_EFFORT),
+)
+
+# Where each limit came from, so a node can print it at startup. A limit whose
+# provenance is not stated tends to get quoted as fact later.
+SOURCES = {
+    'position': 'reference model / URDF (machine safe limits, tighter than manual)',
+    'velocity': 'Hardware Manual V2.6.0 Preface (180 deg/s) — VERIFIED',
+    'acceleration': 'Hardware Manual V2.6.0 Preface (1145 deg/s^2) — VERIFIED',
+    'jerk': 'Hardware Manual V2.6.0 Preface (28647 deg/s^3) — VERIFIED',
+    'effort': 'xarm_description URDF — NOT in the Hardware Manual, meaning unconfirmed',
+    'payload': 'UNVERIFIED; adopted as a conservative task limit, not a rated spec',
+}
+
+
+def describe(lim: ArmLimits = LITE6_SAFE) -> list[str]:
+    """Human-readable resolved limits with provenance, for startup logging."""
+    out = [f'{lim.name}:']
+    for i in range(lim.n):
+        out.append(
+            f'  joint{i+1}  pos [{lim.lower[i]/DEG:+7.2f}, {lim.upper[i]/DEG:+7.2f}] deg'
+            f'   vel {lim.max_velocity[i]:.4f} rad/s'
+            f'   acc {lim.max_acceleration[i]:.2f} rad/s^2')
+    for k, v in SOURCES.items():
+        out.append(f'  source[{k}] = {v}')
+    return out
 
 
 def load_yaml(path: str | None = None) -> ArmLimits:
