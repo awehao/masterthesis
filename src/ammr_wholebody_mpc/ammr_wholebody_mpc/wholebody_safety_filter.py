@@ -91,8 +91,13 @@ class SafetyConfig:
     nodata_speed_cap: float = 0.05       # m/s cap while any row has no distance
     blind_approach_cap: float = 0.03     # m/s toward an occluded direction
 
-    proj_iters: int = 8
-    fallback_iters: int = 30
+    # Budgets. Measured cost of the projection on the 5B problem size (66 rows
+    # x 9 columns) is 0.095 ms at 30 iterations and 1.16 ms at 500, against a
+    # 50 ms control period, so the old 8 / 30 was not buying anything that
+    # mattered and was well short of what convergence needs.
+    proj_iters: int = 60
+    fallback_iters: int = 200
+    relax: float = 1.7           # Agmon-Motzkin relaxation, see _project
 
     # Generalised velocity box, |v_k| <= vmax_k, in the DOF order of the
     # kinematics object. Base from the wheel Jacobian; arm from
@@ -277,27 +282,46 @@ def _jerk_rows(cfg, n, v_prev, a_prev, dt):
     return A, b
 
 
-def _project(A, b, v, iters):
+def _project(A, b, v, iters, lam=1.7):
     """Successive projection onto the most-violated half-space.
 
     Bounded iterations give a bounded runtime, not a guarantee that every
     constraint holds at the end -- projecting onto one row can re-break
     another. The caller measures the residual and degrades if it is still
     positive, exactly as the Phase 1 shield does.
+
+    lam is the relaxation factor of the Agmon-Motzkin step: lam = 1 lands
+    exactly on the violated half-space boundary, lam > 1 steps past it. Any
+    lam in (0, 2) converges on a consistent system, and on these problems the
+    plain lam = 1 converges far too slowly to be run online -- the three
+    unresolved 5B cycles needed 361, 390 and 422 iterations against a budget of
+    8 + 30, so the filter fell through to its last resort on problems that were
+    feasible all along. At lam = 1.7 the same three take 12, 16 and 15.
+
+    The best iterate seen is what gets returned, not the last one. Over-
+    relaxation is not monotone: a step can overshoot into a worse point than
+    the one before it, and without this the acceleration would sometimes be
+    paid for with a worse answer.
     """
     used = 0
+    best_v = v
+    best_r = float((A @ v - b).max())
     for _ in range(iters):
         r = A @ v - b
         k = int(np.argmax(r))
         if r[k] <= 1e-9:
+            best_v, best_r = v, r[k]
             break
         a = A[k]
         nn = float(a @ a)
         if nn < 1e-12:
             break
-        v = v - (r[k] / nn) * a
+        v = v - lam * (r[k] / nn) * a
         used += 1
-    return v, used
+        rv = float((A @ v - b).max())
+        if rv < best_r:
+            best_v, best_r = v, rv
+    return best_v, used
 
 
 def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
@@ -336,7 +360,7 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
 
     r0 = A @ v_in - b
     n_active = int((r0 > 1e-9).sum())
-    v, used = _project(A, b, v_in.copy(), cfg.proj_iters)
+    v, used = _project(A, b, v_in.copy(), cfg.proj_iters, cfg.relax)
 
     override = False
     resid = float((A @ v - b).max())
@@ -347,9 +371,15 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
         # abrupt.
         A2 = np.array(A_hard)
         b2 = np.array(b_hard)
-        v2, used2 = _project(A2, b2, v_in.copy(), cfg.proj_iters)
+        v2, used2 = _project(A2, b2, v_in.copy(), cfg.proj_iters, cfg.relax)
         r2 = float((A2 @ v2 - b2).max())
-        if r2 <= resid:
+        # Strictly better, not merely no worse. With <=, a cycle where jerk was
+        # never binding still recorded an override, because dropping an
+        # inactive block leaves the residual exactly where it was. That made
+        # safety_override fire on 115 of 211 cycles of the 5B run while the
+        # jerk box was in fact satisfied throughout -- a diagnostic that
+        # reports a safety trade-off which did not happen is worse than none.
+        if r2 < resid - 1e-9:
             v, used, resid, override = v2, used + used2, r2, True
             A, b, n_hard = A2, b2, len(A_hard)
             spans = {k: sp for k, sp in spans.items() if k != 'jerk'}
@@ -362,7 +392,7 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
         fallback = True
         b2 = b.copy()
         b2[:len(bb)] = np.maximum(b[:len(bb)], 0.0)
-        v, used2 = _project(A, b2, v_in.copy(), cfg.fallback_iters)
+        v, used2 = _project(A, b2, v_in.copy(), cfg.fallback_iters, cfg.relax)
         used += used2
         resid = float((A @ v - b2).max())
         if resid > 1e-3:
@@ -377,20 +407,44 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
             # this cycle, zero over the next few.
             if v_prev is not None:
                 step = cfg.amax[:n] * dt
-                v = np.clip(np.zeros(n), v_prev[:n] - step, v_prev[:n] + step)
-                v = np.clip(v, -cfg.vmax[:n], cfg.vmax[:n])
+                v_br = np.clip(np.zeros(n), v_prev[:n] - step, v_prev[:n] + step)
+                v_br = np.clip(v_br, -cfg.vmax[:n], cfg.vmax[:n])
             else:
-                v = np.zeros(n)
-            resid = float((A @ v - b2).max())
+                v_br = np.zeros(n)
+            # Braking is the INTENT here, not the answer. Full deceleration in
+            # JOINT space does not mean a link stops approaching a surface in
+            # TASK space: the two are related by the Jacobian, and a brake that
+            # ignores the barrier can drive a point further into it. Taking the
+            # brake raw is what produced the 5B residual of +4.22e-02 -- and it
+            # was worse than the projection result it discarded (+8.0e-03),
+            # while an independent LP showed the constraint set was feasible.
+            # So the brake is used as a starting point and projected, and
+            # whichever candidate ends up with the smallest residual is the one
+            # returned. A last resort must not be allowed to make things worse.
+            v_bp, used3 = _project(A, b2, v_br.copy(), cfg.fallback_iters,
+                                   cfg.relax)
+            used += used3
+            cands = [(float((A @ v_bp - b2).max()), v_bp),
+                     (float((A @ v_br - b2).max()), v_br),
+                     (resid, v)]
+            resid, v = min(cands, key=lambda t: t[0])
             b = b2
 
     sp = _split_residual(A, b, v, spans)
+    # Velocity and acceleration are measured on the output directly rather than
+    # read off the row block. _box_rows folds both into one row per DOF, whose
+    # bound is min(vmax, v_prev + amax dt), so a row residual cannot say which
+    # of the two was exceeded -- and the previous code simply reported the
+    # velocity figure twice under both names.
+    r_vel = float((np.abs(v) - cfg.vmax[:n]).max())
+    r_acc = (float((np.abs(v - v_prev[:n]) - cfg.amax[:n] * dt).max())
+             if v_prev is not None else 0.0)
     return SafetyResult(v, len(A), n_active, float(r0.max()), resid, used,
                         fallback, resid > 1e-3, cap, time.perf_counter() - t0,
                         override,
                         resid_barrier=sp.get('barrier', 0.0),
                         resid_position=sp.get('position', 0.0),
-                        resid_velbox=sp.get('velbox', 0.0),
-                        resid_accbox=sp.get('velbox', 0.0),
+                        resid_velbox=r_vel,
+                        resid_accbox=r_acc,
                         resid_jerk=sp.get('jerk', 0.0),
                         resid_before_fallback=resid_pre_fb)
