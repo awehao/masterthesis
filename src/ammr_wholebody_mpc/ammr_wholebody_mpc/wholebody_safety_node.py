@@ -106,6 +106,25 @@ class WholeBodySafetyNode(Node):
         self.pts_t = 0.0
         self._cycle = 0
 
+        # Command history, needed for the acceleration and jerk boxes. Without
+        # it filter_velocity has no v_prev or a_prev and BOTH limits silently do
+        # nothing -- they were verified offline while the ROS path ran with them
+        # inert. The history is of the ACTUAL OUTPUT, not the input: the limits
+        # bound what the hardware is asked to do, and the input may have been
+        # clipped.
+        # v_prev starts at ZERO, not None. The robot is at rest when this node
+        # starts, so zero is the truth, not a fabrication -- and leaving it None
+        # let the very first cycle escape the acceleration box entirely, publish
+        # the full command, and then record THAT as the history. The ramp never
+        # happened: every later cycle saw "we were already at full speed".
+        #
+        # a_prev is different and stays None: it needs two prior outputs, and
+        # inventing zero would clamp the first real command for no reason.
+        self._v_prev = np.zeros(9)
+        self._v_prev2 = None
+        self._dt_prev = None
+        self._tick_t = None
+
         from std_msgs.msg import String
         from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy,
                                QoSProfile, QoSReliabilityPolicy)
@@ -210,9 +229,36 @@ class WholeBodySafetyNode(Node):
             if pts is None:
                 reason = 5.0
             else:
-                r = filter_velocity(self.K, q, v_in, pts, self.cfg)
+                # Real elapsed time, not the nominal period. A 20 Hz timer that
+                # actually fires at 47 or 62 ms would make every acceleration
+                # and jerk bound wrong by the same ratio, and the jitter is
+                # exactly what has never been measured on this node.
+                dt = (now - self._tick_t) if self._tick_t is not None else self.cfg.dt
+                dt = float(min(max(dt, 1e-3), 10.0 * self.cfg.dt))
+                a_prev = None
+                if self._v_prev is not None and self._v_prev2 is not None \
+                        and self._dt_prev:
+                    a_prev = (self._v_prev - self._v_prev2) / self._dt_prev
+                r = filter_velocity(self.K, q, v_in, pts, self.cfg,
+                                    v_prev=self._v_prev, a_prev=a_prev, dt=dt)
                 out = r.v
                 res = r
+                self._v_prev2 = self._v_prev
+                self._v_prev = out.copy()
+                self._dt_prev = dt
+
+        if reason != 0.0:
+            # Continuity is broken: the output was forced to zero for a
+            # fail-safe reason, or nothing was computed at all. Carrying the
+            # old history across that gap would bound the next real command
+            # against a velocity the robot is no longer executing, and after a
+            # long stall it would also divide by a meaningless dt. Reset to
+            # rest, which is what the node has just been publishing.
+            self._v_prev = np.zeros(9)
+            self._v_prev2 = None
+            self._dt_prev = None
+
+        self._tick_t = now
 
         m = Float64MultiArray()
         m.data = [float(v) for v in out]
@@ -222,6 +268,7 @@ class WholeBodySafetyNode(Node):
         #  0 cycle 1 reason 2 n_rows 3 n_active 4 resid_before 5 resid_after
         #  6 iters 7 fallback 8 unresolved 9 runtime_ms 10 speed_cap
         # 11 min_d 12 n_stale 13 n_nodata 14 n_occluded
+        # 15 safety_override 16 dt_actual_ms 17 has_history
         d.data = [float(self._cycle), reason, float(res.n_rows),
                   float(res.n_active), float(res.max_resid_before),
                   float(res.max_resid_after), float(res.iters),
@@ -230,7 +277,10 @@ class WholeBodySafetyNode(Node):
                   float(res.runtime_s * 1e3),
                   float(res.speed_cap if np.isfinite(res.speed_cap) else -1.0),
                   float(self._min_d), float(self._n_stale),
-                  float(self._n_nodata), float(self._n_occl)]
+                  float(self._n_nodata), float(self._n_occl),
+                  1.0 if getattr(res, 'safety_override', False) else 0.0,
+                  float((self._dt_prev or 0.0) * 1e3),
+                  1.0 if self._v_prev2 is not None else 0.0]
         self.diag.publish(d)
 
     _min_d = -1.0
@@ -284,6 +334,7 @@ class SafetyLike:
     unresolved = False
     speed_cap = float('inf')
     runtime_s = 0.0
+    safety_override = False
 
 
 def main() -> None:
