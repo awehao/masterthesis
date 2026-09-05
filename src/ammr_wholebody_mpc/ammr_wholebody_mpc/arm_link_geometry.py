@@ -193,11 +193,16 @@ def certified_covering_radius(tris: np.ndarray, S: np.ndarray,
 
     For a triangle T with centroid c, every x in T satisfies
 
-        d_S(x)  <=  d_S(c) + max_{v in T} |v - c|
+        d_S(x)  <=  d_S(c) + |x - c|  <=  d_S(c) + r_T,
+        r_T = max over x in T of |x - c|
 
-    since d_S is 1-Lipschitz, and the farthest point of a convex set from c is
-    a vertex. That is an upper bound for the whole triangle from ONE distance
-    query. d_S evaluated at any point of T is a lower bound on the maximum. So
+    The first step is the 1-Lipschitz property of d_S. The second is that r_T
+    is attained at a vertex, because the quantity being maximised there is the
+    distance to the FIXED point c, which is convex, so its maximum over the
+    triangle sits at an extreme point. That argument is about |x - c| and not
+    about d_S: the distance to a finite point set is a minimum of cones and is
+    not convex, so it must not be the thing said to attain its maximum at a
+    vertex. One distance query then bounds the whole triangle. d_S evaluated at any point of T is a lower bound on the maximum. So
     each node carries an interval, the node with the largest upper bound is the
     only one that can still move the answer, and splitting it at the edge
     midpoints shrinks r_T by half. Iterating until the largest upper bound and
@@ -535,4 +540,198 @@ def sample_links_certified(xml: str, rho_target: float = 0.015,
             cert_tol=float(c['tol']), worst=np.asarray(c['worst']),
             mesh_sha=mesh_sha,
             sample_sha=hashlib.sha256(np.ascontiguousarray(P).tobytes()).hexdigest()[:16])
+    return out
+
+
+# ------------------------------------------------- analytic closest point
+@dataclass
+class ContactPoint:
+    """The true closest point between one link's mesh and one obstacle."""
+    link: str
+    obstacle: str
+    local: np.ndarray             # p* on the link, in the link frame
+    world: np.ndarray             # p* in world
+    surface: np.ndarray           # s* on the obstacle, in world
+    d: float                      # signed: negative when the link penetrates
+    n: np.ndarray                 # approach direction, n = -grad sdf
+    tri: int                      # which triangle p* came from
+    lower: float                  # certified lower bound on the true minimum
+    tol: float
+    certified: bool
+
+
+def primitive_sdf(o: Obstacle, P: np.ndarray):
+    """Signed distance to one primitive, and the closest surface point.
+
+    Negative inside. Returns (sdf, surface_point, approach_dir) where the
+    approach direction is -grad(sdf), so that n.v > 0 always means "the signed
+    distance is falling" -- closing in from outside, or driving deeper from
+    inside. One meaning, both regimes; getting this uniform is what removed the
+    penetration sign error.
+    """
+    T = o.T_world_link @ o.T_link_collision
+    Ti = _inv(T)
+    loc = (P @ Ti[:3, :3].T) + Ti[:3, 3]
+    surf_loc = _closest_local_batch(o, loc)
+    surf = (surf_loc @ T[:3, :3].T) + T[:3, 3]
+    diff = surf - P
+    dist = np.linalg.norm(diff, axis=1)
+    ins = _inside(o, loc)
+    sdf = np.where(ins, -dist, dist)
+    safe = np.maximum(dist, 1e-12)[:, None]
+    # outside: approach is toward the surface. inside: away from the nearest
+    # face, i.e. further in.
+    n = np.where(ins[:, None], -diff / safe, diff / safe)
+    return sdf, surf, n
+
+
+def _bb_min_sdf(tris, o, tol, max_nodes, ub0=np.inf):
+    """Branch and bound for min sdf over a triangle set. Returns (ub, lb, pt, src)."""
+    import heapq
+    c = tris.mean(axis=1)
+    sdf_c, _, _ = primitive_sdf(o, c)
+    r = np.linalg.norm(tris - c[:, None, :], axis=2).max(axis=1)
+    sdf_v, _, _ = primitive_sdf(o, tris.reshape(-1, 3))
+    best_ub = float(min(sdf_c.min(), sdf_v.min(), ub0))
+    kk = int(np.argmin(sdf_v))
+    best_pt = tris.reshape(-1, 3)[kk].copy()
+    best_src = kk // 3
+    if float(sdf_c.min()) < float(sdf_v.min()):
+        j = int(np.argmin(sdf_c)); best_pt = c[j].copy(); best_src = j
+    heap = [(float(sdf_c[i] - r[i]), int(i), int(i)) for i in range(len(tris))]
+    heapq.heapify(heap)
+    store = {int(i): tris[i] for i in range(len(tris))}
+    nxt, nodes = len(tris), len(tris)
+    while heap:
+        low = heap[0][0]
+        if best_ub - low <= tol or nodes >= max_nodes:
+            break
+        low, i, src = heapq.heappop(heap)
+        if low >= best_ub:                      # cannot contain the minimum
+            store.pop(i, None)
+            continue
+        T = store.pop(i)
+        a, b_, c_ = T
+        m0, m1, m2 = 0.5 * (b_ + c_), 0.5 * (c_ + a), 0.5 * (a + b_)
+        kids = np.array([[a, m2, m1], [m2, b_, m0], [m1, m0, c_], [m0, m1, m2]])
+        cc = kids.mean(axis=1)
+        s_c, _, _ = primitive_sdf(o, cc)
+        rr = np.linalg.norm(kids - cc[:, None, :], axis=2).max(axis=1)
+        j = int(np.argmin(s_c))
+        if s_c[j] < best_ub:
+            best_ub, best_pt, best_src = float(s_c[j]), cc[j].copy(), src
+        for t in range(4):
+            store[nxt] = kids[t]
+            heapq.heappush(heap, (float(s_c[t] - rr[t]), nxt, src))
+            nxt += 1
+        nodes += 4
+    lb = heap[0][0] if heap else best_ub
+    return best_ub, float(min(lb, best_ub)), best_pt, int(best_src), nodes
+
+
+def closest_link_to_obstacle(tris: np.ndarray, o: Obstacle,
+                             tol: float = 0.0005,
+                             eps_face: float = 0.001,
+                             max_nodes: int = 200000) -> dict:
+    """Minimum signed distance from a triangle set to one primitive, certified,
+    together with every triangle that is within eps_face of that minimum.
+
+    The same branch and bound as certified_covering_radius with the objective
+    swapped: the signed distance field of a convex primitive is 1-Lipschitz
+    too, so for a sub-triangle with centroid c and vertex radius r_T
+
+        min over x in T of sdf(x)  >=  sdf(c) - r_T
+
+    which lower-bounds a whole triangle from one evaluation, while sdf at any
+    point of T upper-bounds the minimum. Splitting the node with the smallest
+    lower bound halves r_T and closes the interval.
+
+    Handling separation and penetration with one objective is the point. GJK
+    gives the separated case and then needs EPA for the other, so the case that
+    matters most would run through the code path that gets exercised least.
+
+    The active set is found in a second pass rather than read off the search.
+    Reading the leftover queue looked like it would work and did not: by the
+    time the bound closes, a triangle that is genuinely tied for closest has
+    usually been pruned, and a test with two near-equidistant triangles
+    returned only one of them. Each candidate is certified on its own instead.
+    """
+    d, lower, pt, tri_id, nodes = _bb_min_sdf(tris, o, tol, max_nodes)
+
+    # Second pass: which triangles actually reach within eps_face of it?
+    c = tris.mean(axis=1)
+    sdf_c, _, _ = primitive_sdf(o, c)
+    r = np.linalg.norm(tris - c[:, None, :], axis=2).max(axis=1)
+    cand = np.nonzero(sdf_c - r <= d + eps_face)[0]
+    active = []
+    for i in cand:
+        if int(i) == tri_id:
+            active.append(int(i))
+            continue
+        ub_i, lb_i, _, _, n_i = _bb_min_sdf(tris[i:i + 1], o, tol,
+                                            max_nodes // 8, ub0=np.inf)
+        nodes += n_i
+        if lb_i <= d + eps_face:
+            active.append(int(i))
+    sdf_p, surf_p, n_p = primitive_sdf(o, pt.reshape(1, 3))
+    return dict(d=d, lower=lower, gap=d - lower, point=pt, surface=surf_p[0],
+                n=n_p[0], tri=tri_id, active=sorted(active), nodes=nodes,
+                certified=bool(d - lower <= tol))
+
+
+def analytic_contacts(K, q: np.ndarray, obs: list[Obstacle],
+                      tris_by_link: dict[str, np.ndarray],
+                      tol: float = 0.0005, eps_face: float = 0.001,
+                      max_active: int = 8,
+                      reach: float = 1.0) -> list[ContactPoint]:
+    """One certified contact per link per obstacle in range, plus the ties.
+
+    The link's triangles are taken to world and minimised against each
+    primitive's signed distance field. Two cheap culls come first, because the
+    arm carries about 29,000 collision triangles and evaluating all of them
+    against every obstacle every cycle is not affordable:
+
+      by link      a bounding sphere of the link against the obstacle's own
+                   bounding sphere, widened by `reach`; a link two metres away
+                   cannot produce the minimum
+      by triangle  the same sdf(c) - r_T lower bound the search uses, applied
+                   once before any subdivision
+
+    max_active caps how many tied triangles become rows. Ties happen on a box
+    edge, where two faces are equidistant and choosing one gives a normal that
+    flips between cycles; keeping them all is what stops the flip.
+    """
+    out = []
+    for name, tris_local in tris_by_link.items():
+        try:
+            T = K.fk(q, name)
+        except Exception:
+            continue
+        W = (tris_local @ T[:3, :3].T) + T[:3, 3]
+        ctr = W.reshape(-1, 3).mean(axis=0)
+        rad = float(np.linalg.norm(W.reshape(-1, 3) - ctr, axis=1).max())
+        Rt = T[:3, :3].T
+        for o in obs:
+            oc = (o.T_world_link @ o.T_link_collision)[:3, 3]
+            orad = (float(np.linalg.norm(o.size)) * 0.5 if o.kind == 'box'
+                    else float(o.radius + 0.5 * o.height))
+            if np.linalg.norm(oc - ctr) > rad + orad + reach:
+                continue
+            r = closest_link_to_obstacle(W, o, tol=tol, eps_face=eps_face)
+            act = r['active'][:max_active]
+            for ti in act:
+                if ti == r['tri']:
+                    pw, dv, nv = r['point'], r['d'], r['n']
+                else:
+                    tw = W[ti]
+                    sdf_t, _, _ = primitive_sdf(o, tw.mean(axis=0).reshape(1, 3))
+                    pw = tw.mean(axis=0)
+                    dv, nv = float(sdf_t[0]), primitive_sdf(o, pw.reshape(1, 3))[2][0]
+                out.append(ContactPoint(
+                    link=name, obstacle=o.name,
+                    local=Rt @ (pw - T[:3, 3]), world=pw,
+                    surface=primitive_sdf(o, pw.reshape(1, 3))[1][0],
+                    d=float(dv), n=nv, tri=int(ti),
+                    lower=float(r['lower']), tol=float(tol),
+                    certified=bool(r['certified'])))
     return out
