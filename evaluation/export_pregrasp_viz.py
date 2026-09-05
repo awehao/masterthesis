@@ -254,6 +254,11 @@ def main() -> int:
                     help='seconds of blank timeline between starting poses')
     ap.add_argument('--robot', choices=('mesh', 'box'), default='mesh',
                     help='which single representation of the robot to record')
+    ap.add_argument('--mesh-fix', dest='mesh_fix', default='none',
+                    choices=('none', 'rx90', 'rx-90', 'ry90', 'ry-90'),
+                    help='correction folded into every mesh marker orientation, '
+                         'for a viewer that rotates meshes on load; pick the '
+                         'letter that came out upright in make_mesh_probe.py')
     a = ap.parse_args()
 
     xml = open(a.urdf).read()
@@ -264,6 +269,20 @@ def main() -> int:
     cfg = SafetyConfig()
     rng = np.random.default_rng(0)
     n = len(K.dof_names)
+
+    # Applied on the RIGHT of the link rotation, i.e. in the mesh's own frame,
+    # because whatever the viewer is doing happens to the loaded geometry
+    # before the marker pose. Cancelling it there leaves the pose itself -- the
+    # part that comes from the filter -- untouched.
+    def _rot(axis, deg):
+        a = math.radians(deg); c, s_ = math.cos(a), math.sin(a)
+        if axis == 'x': return np.array([[1,0,0],[0,c,-s_],[0,s_,c]], float)
+        if axis == 'y': return np.array([[c,0,s_],[0,1,0],[-s_,0,c]], float)
+        return np.array([[c,-s_,0],[s_,c,0],[0,0,1]], float)
+    MESH_FIX = {'none': np.eye(3), 'rx90': _rot('x', 90), 'rx-90': _rot('x', -90),
+                'ry90': _rot('y', 90), 'ry-90': _rot('y', -90)}[a.mesh_fix]
+    if a.mesh_fix != 'none':
+        print(f'  mesh 方向補償: {a.mesh_fix}')
 
     prefixes = [os.path.join(os.getcwd(), 'install', d)
                 for d in os.listdir('install')] if os.path.isdir('install') else []
@@ -432,7 +451,8 @@ def main() -> int:
             mk.ns, mk.id, mk.action = 'robot', i, Marker.ADD
             mk.pose.position = Point(x=float(T[0, 3]), y=float(T[1, 3]),
                                      z=float(T[2, 3]))
-            mk.pose.orientation = quat_from_R(T[:3, :3])
+            mk.pose.orientation = quat_from_R(
+                T[:3, :3] @ MESH_FIX if kind == 'mesh' else T[:3, :3])
             if kind == 'mesh':
                 uri, sc = payload
                 mk.type = Marker.MESH_RESOURCE
