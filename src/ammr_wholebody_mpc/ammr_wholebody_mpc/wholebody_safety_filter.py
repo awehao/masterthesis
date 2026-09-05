@@ -101,6 +101,33 @@ class SafetyConfig:
     eps: float = 0.03            # m, geometry + measurement allowance
     dt: float = 0.05             # s, control period
 
+    # Velocity allowance for the representative-point approximation, m/s.
+    # Deliberately NOT folded into a distance term: rho is a length and this is
+    # a speed, and hiding one inside the other would make both unreadable.
+    #
+    # It is computed per row rather than fixed. The row is built at a sampled
+    # surface point, and the band selection in arm_link_geometry guarantees one
+    # of the constrained samples lies within rho of the TRUE closest point. Two
+    # points that close on a rigid link differ in velocity by at most
+    #
+    #     |omega_link| * rho
+    #
+    # so that product is the allowance, taken with omega evaluated from the
+    # INPUT command -- the same linearisation d_stop already uses, and for the
+    # same reason: omega depends on the velocity being solved for, so using the
+    # solution would make the constraint nonlinear.
+    #
+    # A fitted constant was tried first, at the 0.0165 m/s measured over 800
+    # rows. Held-out poses broke it: 37.9 mm/s on a seed that took no part in
+    # the fit. A measured maximum over a finite sample is not a bound, and the
+    # fix was the structure, not a bigger number.
+    #
+    # What this still does NOT cover: the two points also see different surface
+    # NORMALS, and on a curved surface that difference is not bounded by rho.
+    # The residual is measured, not claimed.
+    use_omega_rho_margin: bool = True
+    velocity_error_margin: float = 0.0     # extra flat allowance, m/s
+
     # Degradation
     stale_obstacle_speed: float = 0.30   # m/s an unseen obstacle may close at
     stale_speed_cap: float = 0.05        # m/s cap while any row is stale
@@ -183,15 +210,50 @@ def _brake_along(row, cfg, n):
     return float(np.abs(row[:n]) @ cfg.amax[:n])
 
 
+def _link_jacobians(K, q, pts):
+    """One Jacobian per LINK, not one per row.
+
+    Every row on a link needs the Jacobian at its own point, and computing each
+    from scratch walks the kinematic chain again: with the band selection that
+    was 179 rows, two chain walks each, and 68 ms of a 50 ms period. It is not
+    necessary. For a point p on a rigid link,
+
+        J_v(p) = J_v(origin) - [R offset]_x J_omega
+
+    for every column, revolute or prismatic, because a prismatic column has
+    J_omega = 0 and is unaffected while a revolute column is axis x (p - p_j)
+    and shifting p by a constant shifts it by axis x that constant. So one
+    Jacobian and one 3x3 skew per row replaces the walk.
+    """
+    out = {}
+    for pt in pts:
+        if pt.frame not in out:
+            out[pt.frame] = (K.jacobian(q, pt.frame), K.fk(q, pt.frame)[:3, :3])
+    return out
+
+
+def _row_at(J6, R, offset):
+    """Linear-velocity Jacobian at a point on the link, from the link's own."""
+    if offset is None:
+        return J6[:3]
+    r = R @ np.asarray(offset, dtype=float)
+    skew = np.array([[0.0, -r[2], r[1]],
+                     [r[2], 0.0, -r[0]],
+                     [-r[1], r[0], 0.0]])
+    return J6[:3] - skew @ J6[3:]
+
+
 def _rows_from_points(K, q, pts, cfg, v_in):
     """Barrier rows A v <= b, plus the per-row bookkeeping."""
     A, b = [], []
     cap = np.inf
+    JL = _link_jacobians(K, q, pts)
     for pt in pts:
         if pt.status == STATUS_NODATA:
             cap = min(cap, cfg.nodata_speed_cap)
             continue
-        J = K.jacobian(q, pt.frame, offset=pt.offset)[:3]   # 3 x n, linear part
+        J6, R = JL[pt.frame]
+        J = _row_at(J6, R, pt.offset)             # 3 x n, linear part
         row = pt.n @ J                            # 1 x n, approach speed
         d_eff = pt.d - pt.rho
         if pt.status == STATUS_STALE:
@@ -205,7 +267,16 @@ def _rows_from_points(K, q, pts, cfg, v_in):
         d_stop = (cfg.d0 + v_app * cfg.tau
                   + v_app * v_app / (2.0 * max(a_br, 1e-3)) + cfg.eps)
         A.append(row)
-        b.append(cfg.alpha * (d_eff - d_stop))
+        rhs = cfg.alpha * (d_eff - d_stop)
+        if pt.offset is not None:
+            # Only the sampled representation carries the representative-point
+            # approximation these allowances cover. A row pinned to a fixed lug
+            # has a different and much larger error, which no margin fixes.
+            if cfg.use_omega_rho_margin and pt.rho > 0.0:
+                # omega does not depend on where on the link it is measured
+                rhs -= pt.rho * float(np.linalg.norm(J6[3:] @ v_in))
+            rhs -= cfg.velocity_error_margin
+        b.append(rhs)
         if pt.occluded:
             # Keep the model row above; add a tighter cap on approaching into
             # a direction nothing has actually observed.

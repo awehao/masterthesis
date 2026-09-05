@@ -76,6 +76,11 @@ class NearestPoint:
     n: np.ndarray                 # unit vector from the point toward that surface
     rho: float                    # discretisation allowance for this link
     obstacle: str = ''
+    # True when the whole [d_min, d_min + rho] band fitted under the cap, i.e.
+    # when the selection provably contains a sample within rho of the true
+    # closest point. False means the cap bit and the guarantee is a measurement
+    # again.
+    band_full: bool = False
 
 
 # ------------------------------------------------------------------ meshes
@@ -131,7 +136,7 @@ def _fps(P: np.ndarray, k: int, rng) -> np.ndarray:
 
 
 def sample_links(xml: str, rho_target: float = 0.015, links=ARM_LINKS,
-                 n_ref: int = 20000, seed: int = 0,
+                 n_ref: int = 120000, seed: int = 0,
                  cap: int = 640) -> dict[str, LinkSamples]:
     """Surface samples per link, each dense enough for its own covering radius
     to reach rho_target.
@@ -139,6 +144,15 @@ def sample_links(xml: str, rho_target: float = 0.015, links=ARM_LINKS,
     The count is chosen per link rather than shared: the fingers reach 7 mm with
     twenty points while link_base needs about three hundred, and one number for
     all of them would either waste rows on the fingers or leave the base coarse.
+
+    rho is measured against a reference cloud, so it is an estimate of the
+    covering radius and not the covering radius itself: a surface point the
+    reference happened to miss can be farther from every sample than rho says.
+    That is not academic. Measuring against 20,000 reference points and then
+    validating against 60,000 put the reported distance ON THE WRONG SIDE of the
+    true one on about 4 per cent of rows, by up to 4.2 mm -- the reference had
+    simply not looked where the gap was. n_ref is high for that reason, and a
+    validation run should still use a denser reference than this one.
     """
     root = ET.fromstring(re.sub(r'<!--.*?-->', '', xml, flags=re.S))
     rng = np.random.default_rng(seed)
@@ -234,11 +248,37 @@ def _closest_local_batch(o: Obstacle, P: np.ndarray) -> np.ndarray:
     return P
 
 
-def obstacle_distances(P: np.ndarray, obs: list[Obstacle]) -> tuple[np.ndarray, np.ndarray, list]:
-    """Distance and outward vector from each of P to the nearest obstacle.
+def _inside(o: Obstacle, P: np.ndarray) -> np.ndarray:
+    """Which of P are inside this primitive, in its own frame."""
+    if o.kind == 'box':
+        return np.all(np.abs(P) <= 0.5 * o.size, axis=1)
+    if o.kind == 'cylinder':
+        return ((np.linalg.norm(P[:, :2], axis=1) <= o.radius)
+                & (np.abs(P[:, 2]) <= 0.5 * o.height))
+    if o.kind == 'sphere':
+        return np.linalg.norm(P, axis=1) <= o.radius
+    return np.zeros(len(P), dtype=bool)
 
-    Returns (d, vec, which): vec points FROM the query point TO the closest
-    surface point, so n = vec / d is the direction the barrier calls approach.
+
+def obstacle_distances(P: np.ndarray, obs: list[Obstacle]) -> tuple[np.ndarray, np.ndarray, list]:
+    """SIGNED distance and approach direction from each of P to the nearest
+    obstacle.
+
+    Returns (d, vec, which). d is negative by the penetration depth when the
+    point is inside a primitive. vec always points along what the barrier calls
+    APPROACH, so that n = vec / |d| has one meaning everywhere:
+
+        outside   the closest surface point is ahead, so approach is toward it
+        inside    the closest surface point is the way OUT, so approach is the
+                  other way
+
+    Getting this wrong is not a small error. With the unsigned version a
+    penetrating point produced a vector pointing outward, the row read it as an
+    approach and so constrained the escape: the arm was held IN. It showed up
+    as exactly two rows out of four hundred where the true approach rate beat
+    the constrained one by up to 269 mm/s, both at d < 0.4 mm and both with the
+    two normals exactly antiparallel -- a normal difference of 2.000 is not
+    ill-conditioning, it is a sign.
     """
     best_d = np.full(len(P), np.inf)
     best_v = np.zeros((len(P), 3))
@@ -250,8 +290,11 @@ def obstacle_distances(P: np.ndarray, obs: list[Obstacle]) -> tuple[np.ndarray, 
         surf_loc = _closest_local_batch(o, loc)
         surf = (surf_loc @ T[:3, :3].T) + T[:3, 3]
         v = surf - P
-        d = np.linalg.norm(v, axis=1)
-        m = d < best_d
+        dist = np.linalg.norm(v, axis=1)
+        ins = _inside(o, loc)
+        d = np.where(ins, -dist, dist)          # signed
+        v = np.where(ins[:, None], -v, v)       # approach direction, either way
+        m = d < best_d                          # a penetration beats any clearance
         best_d[m], best_v[m] = d[m], v[m]
         for i in np.nonzero(m)[0]:
             which[i] = o.name
@@ -260,20 +303,34 @@ def obstacle_distances(P: np.ndarray, obs: list[Obstacle]) -> tuple[np.ndarray, 
 
 def nearest_points(K, q: np.ndarray, obs: list[Obstacle],
                    samples: dict[str, LinkSamples],
-                   k_per_link: int = 3) -> list[NearestPoint]:
-    """The k closest sampled surface points of every link, with their normals.
+                   k_per_link: int = 6, band: bool = True,
+                   k_max: int = 60) -> list[NearestPoint]:
+    """The sampled points of every link that could be the true closest one.
 
-    One row per link is not enough. rho bounds the DISTANCE error but says
-    nothing about how far the winning sample sits from the true closest point:
-    the two can be at opposite ends of the link, and then the row constrains a
-    point whose velocity has little to do with the one that matters. Measured
-    over 600 rows, a single point per link left the true approach rate above
-    the constrained one on 45 per cent of them.
+    One row per link is not enough, and "the k nearest" is a guess. There is a
+    rule that is not:
 
-    Taking the k nearest instead puts rows on the whole neighbourhood of the
-    minimum, so whichever sample is closest to the true closest point is
-    constrained too. k = 3 is the default because it removes most of that gap
-    for three times the rows on a block that is small to begin with.
+        let x* be the true closest point of the link, and s_j the sample
+        nearest to it, so |s_j - x*| <= rho by the covering property. Then
+
+            d(s_j) <= d(x*) + rho <= d_min + rho
+
+        because d(x*) is the minimum over the whole surface and d_min the
+        minimum over a subset of it.
+
+    So constraining every sample whose distance falls in [d_min, d_min + rho]
+    is guaranteed to constrain a point within rho of the true closest one --
+    which is exactly what the |omega| rho velocity bound needs, and what taking
+    the k nearest cannot promise. Held-out testing of the k-nearest rule found
+    the true approach rate exceeding the constrained one by 37.9 mm/s where the
+    fitted allowance was 16.5 mm/s.
+
+    k_max caps the band, because a link running parallel to a flat face has
+    many samples at nearly the same distance and all of them would qualify. The
+    cap is a cost limit and it BREAKS the guarantee when it bites, so
+    band_full records whether it did. Measured over 400 rows the band holds 10
+    samples at the median, 31 at the 95th percentile and 41 at the worst, so 60
+    leaves it intact everywhere seen; at 14 it bit on a third of them.
     """
     out = []
     for name, S in samples.items():
@@ -283,11 +340,19 @@ def nearest_points(K, q: np.ndarray, obs: list[Obstacle],
             continue
         W = (S.points @ T[:3, :3].T) + T[:3, 3]
         d, v, which = obstacle_distances(W, obs)
-        order = np.argsort(d)[:max(1, k_per_link)]
-        for k in order:
+        if band:
+            dmin = float(d.min())
+            sel = np.nonzero(d <= dmin + S.rho)[0]
+            full = len(sel) <= k_max
+            if not full:
+                sel = sel[np.argsort(d[sel])[:k_max]]
+        else:
+            sel = np.argsort(d)[:max(1, k_per_link)]
+            full = False
+        for k in sel:
             dk = float(d[k])
             out.append(NearestPoint(link=name, local=S.points[k].copy(),
                                     world=W[k], d=dk,
-                                    n=v[k] / max(dk, 1e-9), rho=S.rho,
-                                    obstacle=which[k]))
+                                    n=v[k] / max(abs(dk), 1e-9), rho=S.rho,
+                                    obstacle=which[k], band_full=bool(full)))
     return out

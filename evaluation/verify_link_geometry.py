@@ -63,7 +63,7 @@ def dense_reference(xml, rho_ref=0.004):
     left the distance claim undecided exactly where it mattered. The cap is
     lifted here so the reference is finer than the margin being checked.
     """
-    return sample_links(xml, rho_target=rho_ref, n_ref=60000, seed=11, cap=3000)
+    return sample_links(xml, rho_target=rho_ref, n_ref=200000, seed=11, cap=3000)
 
 
 def main() -> int:
@@ -72,8 +72,15 @@ def main() -> int:
     ap.add_argument('--world', default='src/ammr_bringup/worlds/random_room.sdf')
     ap.add_argument('--n', type=int, default=400)
     ap.add_argument('--rho', type=float, default=0.015)
-    ap.add_argument('--k', type=int, default=3,
+    ap.add_argument('--k', type=int, default=6,
                     help='sampled points constrained per link')
+    ap.add_argument('--seed', type=int, default=0,
+                    help='draws poses, obstacle directions and velocities; use '
+                         'a seed that took no part in fitting the margin')
+    ap.add_argument('--knn', action='store_true',
+                    help='use the old k-nearest selection instead of the band')
+    ap.add_argument('--ev', type=float, default=0.0165,
+                    help='empirical velocity error margin being checked, m/s')
     a = ap.parse_args()
 
     xml = open(a.urdf).read()
@@ -90,7 +97,7 @@ def main() -> int:
     print(f'    參考取樣 {sum(len(s.points) for s in R.values())} 點，'
           f'最大 rho {max(s.rho for s in R.values())*1000:.2f} mm\n')
 
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(a.seed)
     lo6, hi6 = LITE6_SAFE.lower, LITE6_SAFE.upper
     vmax6 = LITE6_SAFE.max_velocity
 
@@ -123,7 +130,7 @@ def main() -> int:
             continue
 
         # ---- distance -------------------------------------------------
-        NP = nearest_points(K, q, near, S, k_per_link=a.k)
+        NP = nearest_points(K, q, near, S, k_per_link=a.k, band=not a.knn)
         by_link = {}
         for np_ in NP:
             by_link.setdefault(np_.link, []).append(np_)
@@ -134,7 +141,7 @@ def main() -> int:
             d_ref, v_ref, _ = obstacle_distances(W, near)
             k_ref = int(np.argmin(d_ref))
             d_true = float(d_ref[k_ref])
-            slack = d_true - (np_.d - np_.rho)
+            slack = d_true - (np_.d - np_.rho)   # signed on both sides
             dist_slack.append(slack)
             if slack < -1e-9:
                 dist_viol += 1
@@ -144,11 +151,16 @@ def main() -> int:
             v[idx] = rng.uniform(-1, 1, 6) * vmax6
             # the binding row is whichever of this link's rows constrains the
             # approach rate most tightly, since all of them are imposed
-            rate_row = max(float(g.n @ (K.jacobian(q, g.link, offset=g.local)[:3] @ v))
-                           for g in group)
+            # each row also carries an |omega| rho allowance, so the rate it
+            # actually permits is the constrained rate plus that allowance
+            rate_row = max(
+                float(g.n @ (K.jacobian(q, g.link, offset=g.local)[:3] @ v))
+                + g.rho * float(np.linalg.norm(
+                    K.jacobian(q, g.link, offset=g.local)[3:] @ v))
+                for g in group)
             x_true_local = R[np_.link].points[k_ref]
             Jt = K.jacobian(q, np_.link, offset=x_true_local)[:3]
-            n_true = v_ref[k_ref] / max(d_true, 1e-9)
+            n_true = v_ref[k_ref] / max(abs(d_true), 1e-9)
             rate_true = float(n_true @ (Jt @ v))        # what actually happens
             gap = rate_true - rate_row
             vel_gap.append(gap)
@@ -204,6 +216,16 @@ def main() -> int:
         g_ = vg[m]
         print(f'     {lab:34} {int((g_ > 1e-9).sum()):>4}/{int(m.sum()):<4} '
               f'最大 {g_.max()*1000:+8.2f} mm/s   p95 {np.percentile(g_,95)*1000:+7.2f}')
+    far = vd > 0.020
+    if far.sum():
+        gf = vg[far]
+        ok = gf.max() <= a.ev + 1e-12
+        print()
+        print(f'  ── 對照經驗速度誤差餘裕 e_v = {a.ev*1000:.1f} mm/s'
+              f'（seed {a.seed}，未參與估計）')
+        print(f'     d > 20 mm 的最大樂觀量 {gf.max()*1000:+8.2f} mm/s   '
+              f'{"<= e_v ✓" if ok else "★ 超過 e_v"}')
+        print(f'     超過 e_v 的列數        {int((gf > a.ev).sum())} / {int(far.sum())}')
     if worst:
         g, lk, dt, dsp, sep, om = worst
         print(f'     最壞：{lk}  真實距離 {dt:.4f} m  取樣報 {dsp:.4f} m')
