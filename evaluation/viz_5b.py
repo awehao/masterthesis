@@ -45,9 +45,11 @@ sys.path.insert(0, 'evaluation')
 
 import rosbag2_py  # noqa: E402
 from builtin_interfaces.msg import Time as TimeMsg  # noqa: E402
-from geometry_msgs.msg import Point, Quaternion, Vector3  # noqa: E402
+from geometry_msgs.msg import (Point, Quaternion, TransformStamped,  # noqa: E402
+                               Vector3)
 from rclpy.serialization import serialize_message  # noqa: E402
-from std_msgs.msg import ColorRGBA, Float64, Header  # noqa: E402
+from std_msgs.msg import ColorRGBA, Float64, Header, String  # noqa: E402
+from tf2_msgs.msg import TFMessage  # noqa: E402
 from visualization_msgs.msg import Marker, MarkerArray  # noqa: E402
 
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE  # noqa: E402
@@ -181,6 +183,23 @@ def robot_parts(urdf_path):
 
 
 # ------------------------------------------------------------------- bag
+def quat_xyzw(R):
+    t = R[0, 0] + R[1, 1] + R[2, 2]
+    if t > 0:
+        s_ = math.sqrt(t + 1.0) * 2
+        w, x, y, z = 0.25*s_, (R[2,1]-R[1,2])/s_, (R[0,2]-R[2,0])/s_, (R[1,0]-R[0,1])/s_
+    elif R[0,0] > R[1,1] and R[0,0] > R[2,2]:
+        s_ = math.sqrt(1.0 + R[0,0] - R[1,1] - R[2,2]) * 2
+        w, x, y, z = (R[2,1]-R[1,2])/s_, 0.25*s_, (R[0,1]+R[1,0])/s_, (R[0,2]+R[2,0])/s_
+    elif R[1,1] > R[2,2]:
+        s_ = math.sqrt(1.0 + R[1,1] - R[0,0] - R[2,2]) * 2
+        w, x, y, z = (R[0,2]-R[2,0])/s_, (R[0,1]+R[1,0])/s_, 0.25*s_, (R[1,2]+R[2,1])/s_
+    else:
+        s_ = math.sqrt(1.0 + R[2,2] - R[0,0] - R[1,1]) * 2
+        w, x, y, z = (R[1,0]-R[0,1])/s_, (R[0,2]+R[2,0])/s_, (R[1,2]+R[2,1])/s_, 0.25*s_
+    return Quaternion(x=float(x), y=float(y), z=float(z), w=float(w))
+
+
 def stamp(t):
     return TimeMsg(sec=int(t), nanosec=int(round((t - int(t)) * 1e9)))
 
@@ -226,6 +245,12 @@ def main() -> int:
     ap.add_argument('--n', type=int, default=8)
     ap.add_argument('--out', default='evaluation/bags/viz_5b')
     ap.add_argument('--gap', type=float, default=1.0)
+    ap.add_argument('--mode', choices=('tri', 'urdf'), default='tri',
+                    help="tri: the robot as TRIANGLE_LIST in world coordinates, "
+                         "which the viewer cannot place wrongly. urdf: the URDF "
+                         "on /robot_description plus a complete /tf, which is "
+                         "the normal way and gives full mesh detail -- if the "
+                         "viewer assembles it correctly.")
     a = ap.parse_args()
 
     xml = open(a.urdf).read()
@@ -236,9 +261,28 @@ def main() -> int:
     cfg = SafetyConfig()
     n = len(K.dof_names)
 
-    parts = robot_parts(a.urdf)
-    ntri = sum(len(p[1]) for p in parts)
-    print(f'  幾何：{len(parts)} 個 visual，{ntri} 個三角形')
+    if a.mode == 'tri':
+        parts = robot_parts(a.urdf)
+        print(f'  幾何：{len(parts)} 個 visual，'
+              f'{sum(len(p[1]) for p in parts)} 個三角形（TRIANGLE_LIST）')
+    else:
+        parts = []
+        # package:// would not resolve without an ament index, so the mesh URIs
+        # are rewritten to absolute file:// paths the viewer can open directly.
+        import re as _re
+        share = {}
+        for pref in [os.path.join(os.getcwd(), 'install', d)
+                     for d in os.listdir('install')]:
+            d_ = os.path.join(pref, 'share')
+            if os.path.isdir(d_):
+                for pkg in os.listdir(d_):
+                    share.setdefault(pkg, os.path.join(d_, pkg))
+        urdf_viz = _re.sub(
+            r'package://([^/]+)/([^"\']+)',
+            lambda m: (f'file://{share[m.group(1)]}/{m.group(2)}'
+                       if m.group(1) in share else m.group(0)), xml)
+        print(f'  模式 urdf：發布 /robot_description（{len(urdf_viz)} bytes）'
+              f' 與完整 /tf，檔案裡沒有任何 marker 機器人')
 
     adj, rigid = set(), {}
 
@@ -326,14 +370,35 @@ def main() -> int:
             r = filter_velocity(K, qf, v_in, pts, cfg, v_prev=v_prev,
                                 a_prev=a_prev, dt=cfg.dt)
 
-            ch, ar = [], []
-            for lnk, tri, is_arm in parts:
-                Tw = K.fk(qf, lnk)
-                (ar if is_arm else ch).append((tri @ Tw[:3, :3].T) + Tw[:3, 3])
-            rm = MarkerArray()
-            rm.markers.append(tri_marker(t, 'chassis', np.concatenate(ch), CHASSIS))
-            rm.markers.append(tri_marker(t, 'arm', np.concatenate(ar), ARM))
-            bag.write('/robot', 'visualization_msgs/msg/MarkerArray', rm, t)
+            if a.mode == 'tri':
+                ch, ar = [], []
+                for lnk, tri, is_arm in parts:
+                    Tw = K.fk(qf, lnk)
+                    (ar if is_arm else ch).append((tri @ Tw[:3, :3].T) + Tw[:3, 3])
+                rm = MarkerArray()
+                rm.markers.append(tri_marker(t, 'chassis', np.concatenate(ch), CHASSIS))
+                rm.markers.append(tri_marker(t, 'arm', np.concatenate(ar), ARM))
+                bag.write('/robot', 'visualization_msgs/msg/MarkerArray', rm, t)
+            else:
+                # Repeated, not latched once: a viewer that starts playback in
+                # the middle never sees a message published only at the start,
+                # and then the URDF layer has nothing to build from.
+                if int(round(t / cfg.dt)) % 20 == 0:
+                    bag.write('/robot_description', 'std_msgs/msg/String',
+                              String(data=urdf_viz), t)
+                tfm = TFMessage()
+                for lnk in K.parent_of:
+                    jn = K.parent_of[lnk]
+                    par = K.joints[jn].parent
+                    Tl = np.linalg.inv(K.fk(qf, par)) @ K.fk(qf, lnk)
+                    ts_ = TransformStamped()
+                    ts_.header = Header(stamp=stamp(t), frame_id=par)
+                    ts_.child_frame_id = lnk
+                    ts_.transform.translation = Vector3(
+                        x=float(Tl[0, 3]), y=float(Tl[1, 3]), z=float(Tl[2, 3]))
+                    ts_.transform.rotation = quat_xyzw(Tl[:3, :3])
+                    tfm.transforms.append(ts_)
+                bag.write('/tf', 'tf2_msgs/msg/TFMessage', tfm, t)
 
             om = MarkerArray()
             for i, o in enumerate(near):
@@ -415,8 +480,12 @@ def main() -> int:
     del bag
     f = f'{a.out}/{os.path.basename(a.out)}_0.mcap'
     print(f'\n  已寫入 {f}  ({os.path.getsize(f)/1e6:.1f} MB, {nw} 個週期, {t:.1f} s)')
-    print('  topic: /robot /obstacles /detection /target /safety/*')
-    print('  沒有 TF、沒有 robot_description、沒有第二種機器人表示法')
+    if a.mode == 'tri':
+        print('  topic: /robot /obstacles /detection /target /safety/*')
+        print('  沒有 TF、沒有 robot_description')
+    else:
+        print('  topic: /robot_description /tf /obstacles /detection /target /safety/*')
+        print('  沒有任何 marker 機器人')
     return 0
 
 
