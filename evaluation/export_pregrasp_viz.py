@@ -118,6 +118,27 @@ def rewrite_mesh_paths(xml, prefixes):
     return re.sub(r'package://([^/]+)/([^"\']+)', sub, xml)
 
 
+def stl_bounds(path):
+    """Local axis-aligned bounds of one STL, as (min, max)."""
+    import struct
+    with open(path, 'rb') as f:
+        head = f.read(84)
+        if head[:5] == b'solid' and b'facet' in head:
+            f.seek(0)
+            v = []
+            for line in f:
+                w = line.split()
+                if w and w[0] == b'vertex':
+                    v.append([float(x) for x in w[1:4]])
+            V = np.array(v) if v else np.zeros((1, 3))
+        else:
+            cnt = struct.unpack('<I', head[80:84])[0]
+            data = f.read(50 * cnt)
+            a = np.frombuffer(data, dtype=np.uint8).reshape(cnt, 50)
+            V = a[:, 12:48].copy().view('<f4').reshape(-1, 3).astype(float)
+    return V.min(0), V.max(0)
+
+
 def visuals_from_urdf(xml):
     """Every <visual> as (link, kind, payload, T_link_visual).
 
@@ -248,6 +269,34 @@ def main() -> int:
     visuals = visuals_from_urdf(urdf_viz)
     print(f'  URDF visual 元素 {len(visuals)} 個'
           f'（mesh {sum(1 for v in visuals if v[1] == "mesh")}）')
+
+    # A second, mesh-free rendering of the same robot: each visual as the
+    # oriented box of its own geometry, placed by the same FK. Foxglove renders
+    # MESH_RESOURCE markers rotated 90 degrees here -- the STL files are Z-up
+    # and something in the loader is not converting -- so the mesh version is
+    # unusable no matter how correct the poses are. Boxes are primitives: there
+    # is no file to load and no up-axis to get wrong, so this shows exactly the
+    # transforms the filter computed.
+    boxes = []
+    for lnk, kind, payload, Tlv in visuals:
+        if kind == 'mesh':
+            uri, sc = payload
+            try:
+                lo, hi = stl_bounds(uri.replace('file://', ''))
+            except Exception:
+                continue
+            lo, hi = lo * np.array(sc), hi * np.array(sc)
+        elif kind == 'cylinder':
+            rad, ln = payload
+            lo = np.array([-rad, -rad, -ln / 2]); hi = -lo
+        elif kind == 'box':
+            hi = np.array(payload) / 2.0; lo = -hi
+        else:
+            hi = np.full(3, float(payload)); lo = -hi
+        ctr = (lo + hi) / 2.0
+        size = np.maximum(hi - lo, 1e-4)
+        boxes.append((lnk, Tlv @ _iso(np.eye(3), ctr), size))
+    print(f'  無 mesh 的盒子版本 {len(boxes)} 個')
 
     # Scene setup, identical to the acceptance.
     adj, rigid = set(), {}
@@ -409,6 +458,55 @@ def main() -> int:
                         else ColorRGBA(r=0.35, g=0.55, b=0.85, a=1.0))
             rm.markers.append(mk)
         bag.write('/robot', 'visualization_msgs/msg/MarkerArray', rm, t)
+
+        bm = MarkerArray()
+        for i, (lnk, Tlb, size) in enumerate(boxes):
+            try:
+                T = K.fk(qf, lnk) @ Tlb
+            except Exception:
+                continue
+            mk = Marker()
+            mk.header = Header(stamp=stamp(t), frame_id=WORLD)
+            mk.ns, mk.id, mk.type, mk.action = 'box', i, Marker.CUBE, Marker.ADD
+            mk.pose.position = Point(x=float(T[0, 3]), y=float(T[1, 3]),
+                                     z=float(T[2, 3]))
+            mk.pose.orientation = quat_from_R(T[:3, :3])
+            mk.scale = Vector3(x=float(size[0]), y=float(size[1]),
+                               z=float(size[2]))
+            arm = lnk.startswith('link') or 'uflite' in lnk or 'gripper' in lnk
+            mk.color = (ColorRGBA(r=0.95, g=0.72, b=0.25, a=0.9) if arm
+                        else ColorRGBA(r=0.35, g=0.55, b=0.85, a=0.9))
+            bm.markers.append(mk)
+        bag.write('/robot_box', 'visualization_msgs/msg/MarkerArray', bm, t)
+
+        # Three axes and a deliberately lopsided box at the chassis origin.
+        # If these come out right while the meshes do not, the fault is in mesh
+        # handling and nothing else; if these are wrong too, it is the marker
+        # transform itself. One look settles which.
+        dm = MarkerArray()
+        for j, (vec, col) in enumerate(((np.array([0.4, 0, 0]), (1.0, 0.1, 0.1)),
+                                        (np.array([0, 0.4, 0]), (0.1, 0.9, 0.1)),
+                                        (np.array([0, 0, 0.4]), (0.2, 0.4, 1.0)))):
+            o = np.array([q_base[0], q_base[1], 0.05])
+            ar = Marker()
+            ar.header = Header(stamp=stamp(t), frame_id=WORLD)
+            ar.ns, ar.id, ar.type, ar.action = 'axes', j, Marker.ARROW, Marker.ADD
+            ar.points = [Point(x=float(o[0]), y=float(o[1]), z=float(o[2])),
+                         Point(x=float(o[0] + vec[0]), y=float(o[1] + vec[1]),
+                               z=float(o[2] + vec[2]))]
+            ar.scale = Vector3(x=0.012, y=0.026, z=0.02)
+            ar.pose.orientation = Quaternion(w=1.0)
+            ar.color = ColorRGBA(r=col[0], g=col[1], b=col[2], a=1.0)
+            dm.markers.append(ar)
+        lop = Marker()
+        lop.header = Header(stamp=stamp(t), frame_id=WORLD)
+        lop.ns, lop.id, lop.type, lop.action = 'lopsided', 0, Marker.CUBE, Marker.ADD
+        lop.pose.position = Point(x=float(q_base[0]), y=float(q_base[1]), z=0.65)
+        lop.pose.orientation = Quaternion(w=1.0)
+        lop.scale = Vector3(x=0.40, y=0.20, z=0.10)   # long in x, flat in z
+        lop.color = ColorRGBA(r=0.9, g=0.2, b=0.9, a=0.85)
+        dm.markers.append(lop)
+        bag.write('/debug_frame', 'visualization_msgs/msg/MarkerArray', dm, t)
 
         tm = Marker()
         tm.header = Header(stamp=stamp(t), frame_id=WORLD)
