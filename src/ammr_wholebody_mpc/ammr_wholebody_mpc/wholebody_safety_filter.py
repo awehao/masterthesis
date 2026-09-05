@@ -57,7 +57,21 @@ STATUS_OK, STATUS_UNKNOWN, STATUS_STALE, STATUS_NODATA = 0, 1, 2, 3
 
 @dataclass
 class DetectionPoint:
-    """One row's worth of input, matching arm_link_distance's PointCloud2."""
+    """One row's worth of input.
+
+    `frame` names the link the row is attached to. With `offset` left None the
+    row sits at that frame's origin, which is what the twelve fixed detection
+    points did. With `offset` set, the row sits at that point in the link's own
+    frame and the Jacobian is taken there -- which is how the whole-link
+    representation puts the row where the link is actually closest to something
+    rather than at a fixed lug that may be facing the other way.
+
+    `rho` is the sampling covering radius, subtracted from the distance so the
+    row bounds the whole surface and not just the sampled point. Zero for a
+    fixed point, whose own covering error is not a sampling artefact but the
+    entire uncovered link -- measured at up to 0.238 m, which is why the fixed
+    points are no longer used.
+    """
     frame: str
     p: np.ndarray                # position, report frame
     n: np.ndarray                # unit vector toward the nearest surface
@@ -65,6 +79,8 @@ class DetectionPoint:
     status: int = STATUS_OK
     age: float = 0.0
     occluded: bool = False
+    offset: np.ndarray | None = None   # point on the link, in the link frame
+    rho: float = 0.0                   # sampling covering radius, m
 
 
 @dataclass
@@ -175,9 +191,9 @@ def _rows_from_points(K, q, pts, cfg, v_in):
         if pt.status == STATUS_NODATA:
             cap = min(cap, cfg.nodata_speed_cap)
             continue
-        J = K.jacobian(q, pt.frame)[:3]          # 3 x n, linear part
+        J = K.jacobian(q, pt.frame, offset=pt.offset)[:3]   # 3 x n, linear part
         row = pt.n @ J                            # 1 x n, approach speed
-        d_eff = pt.d
+        d_eff = pt.d - pt.rho
         if pt.status == STATUS_STALE:
             # The obstacle could have closed in during the gap. Shrink the
             # distance by that much rather than trusting a stale number.

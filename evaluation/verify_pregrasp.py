@@ -36,6 +36,8 @@ from ammr_wholebody_mpc.arm_detection_points import (  # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
 from ammr_wholebody_mpc.wholebody_safety_filter import (  # noqa: E402
     STATUS_OK, DetectionPoint, SafetyConfig, filter_velocity)
+from ammr_wholebody_mpc.arm_link_geometry import (  # noqa: E402
+    nearest_points, sample_links)
 import verify_self_collision as VSC  # noqa: E402
 
 FRAMES = ['detect0_1', 'detect0_2', 'detect1', 'detect2_1', 'detect2_2',
@@ -90,6 +92,14 @@ def main() -> int:
     ap.add_argument('--n', type=int, default=12)
     ap.add_argument('--stand', type=float, default=0.12,
                     help='pre-grasp standoff from the box face, m')
+    ap.add_argument('--geom', choices=('points', 'links'), default='links',
+                    help="points: the twelve fixed detection points. links: the "
+                         "sampled whole-link representation, which constrains "
+                         "where each link is actually closest to an obstacle")
+    ap.add_argument('--rho', type=float, default=0.015,
+                    help='sampling covering radius target, m')
+    ap.add_argument('--kpl', type=int, default=6,
+                    help='sampled points constrained per link')
     a = ap.parse_args()
 
     xml = open(a.urdf).read()
@@ -100,6 +110,12 @@ def main() -> int:
     cfg = SafetyConfig()
     rng = np.random.default_rng(0)
     n = len(K.dof_names)
+    SAMP = None
+    if a.geom == 'links':
+        SAMP = sample_links(xml, rho_target=a.rho)
+        print(f'  連桿取樣 {sum(len(s.points) for s in SAMP.values())} 點，'
+              f'最大 rho {max(s.rho for s in SAMP.values())*1000:.2f} mm，'
+              f'每連桿取 {a.kpl} 點 -> {len(SAMP)*a.kpl} 條屏障列')
 
     # Rigid groups / adjacency, as in the self-collision acceptance.
     adj, rigid = set(), {}
@@ -237,11 +253,19 @@ def main() -> int:
             qf = np.zeros(n)
             qf[:3] = q_base
             qf[idx] = qc
-            pts = []
-            for fr in FRAMES:
-                p = K.fk(qf, fr)[:3, 3]
-                d, vv = nearest(obs, p)
-                pts.append(DetectionPoint(fr, p, vv / max(d, 1e-9), d, STATUS_OK))
+            if SAMP is None:
+                pts = []
+                for fr in FRAMES:
+                    p = K.fk(qf, fr)[:3, 3]
+                    d, vv = nearest(obs, p)
+                    pts.append(DetectionPoint(fr, p, vv / max(d, 1e-9), d,
+                                              STATUS_OK))
+            else:
+                pts = [DetectionPoint(frame=np_.link, p=np_.world, n=np_.n,
+                                      d=np_.d, status=STATUS_OK,
+                                      offset=np_.local, rho=np_.rho)
+                       for np_ in nearest_points(K, qf, obs, SAMP,
+                                                 k_per_link=a.kpl)]
             a_prev = ((v_prev - v_prev2) / cfg.dt) if v_prev2 is not None else None
             r = filter_velocity(K, qf, v_in, pts, cfg, v_prev=v_prev,
                                 a_prev=a_prev, dt=cfg.dt)
