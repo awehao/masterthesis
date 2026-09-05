@@ -363,7 +363,14 @@ def main() -> int:
 
     bag = Bag(a.out)
     t = 1.0
-    # No /robot_description either.
+    bag.write('/robot_description', 'std_msgs/msg/String',
+              String(data=urdf_viz), t)
+    # /robot_description is back, together with the full transform tree below,
+    # so Foxglove's URDF layer can be tried: it is a different code path from
+    # the marker mesh renderer that puts every STL on its side here. The layer
+    # ships switched OFF -- /robot_box is what the layout shows -- so this can
+    # be toggled on to test without breaking the view if it fails.
+    # Historic note on what NOT to repeat.
     #
     # Foxglove's 3D panel builds a URDF layer from that topic, and a URDF layer
     # places each link by its TF frame. With TF gone every link of THAT robot
@@ -373,17 +380,33 @@ def main() -> int:
     # poses the filter computed. One robot, one representation.
 
     def emit(t, qf, pts, r, extra):
-        # No /tf.
+        # Full transform tree, parent -> child, every link included.
         #
-        # Every marker below is already in the world frame, so transforms add
-        # nothing to the picture -- and they cost two rounds of confusion. The
-        # first version published a flat world -> every link tree, which drew a
-        # line from each of 114 frames back to a world origin 22 m away. The
-        # second published the real chain; the frames it dropped
-        # (base_x_link, base_y_link, base_theta_link) were still selected as
-        # the display frame in an already-open Foxglove, which then rendered
-        # the whole scene through a frame that no longer existed. With one
-        # frame in the file there is nothing left to select wrongly.
+        # The URDF layer places each link by its frame, so a frame that is
+        # missing leaves that link stranded -- which is what happened when an
+        # earlier version dropped the virtual base joints. Nothing is dropped
+        # now. The long world -> base_link line is unavoidable (the world origin
+        # is 22 m from the robot) so the layout switches frame display off
+        # rather than dropping frames from the file.
+        tf = TFMessage()
+        for nm in link_names:
+            jn = K.parent_of.get(nm)
+            try:
+                if jn is None:
+                    parent, T = WORLD, K.fk(qf, nm)
+                else:
+                    parent = K.joints[jn].parent
+                    T = np.linalg.inv(K.fk(qf, parent)) @ K.fk(qf, nm)
+            except Exception:
+                continue
+            ts = TransformStamped()
+            ts.header = Header(stamp=stamp(t), frame_id=parent)
+            ts.child_frame_id = nm
+            ts.transform.translation = Vector3(
+                x=float(T[0, 3]), y=float(T[1, 3]), z=float(T[2, 3]))
+            ts.transform.rotation = quat_from_R(T[:3, :3])
+            tf.transforms.append(ts)
+        bag.write('/tf', 'tf2_msgs/msg/TFMessage', tf, t)
 
         js = JointState()
         js.header = Header(stamp=stamp(t), frame_id=WORLD)
@@ -498,14 +521,10 @@ def main() -> int:
             ar.pose.orientation = Quaternion(w=1.0)
             ar.color = ColorRGBA(r=col[0], g=col[1], b=col[2], a=1.0)
             dm.markers.append(ar)
-        lop = Marker()
-        lop.header = Header(stamp=stamp(t), frame_id=WORLD)
-        lop.ns, lop.id, lop.type, lop.action = 'lopsided', 0, Marker.CUBE, Marker.ADD
-        lop.pose.position = Point(x=float(q_base[0]), y=float(q_base[1]), z=0.65)
-        lop.pose.orientation = Quaternion(w=1.0)
-        lop.scale = Vector3(x=0.40, y=0.20, z=0.10)   # long in x, flat in z
-        lop.color = ColorRGBA(r=0.9, g=0.2, b=0.9, a=0.85)
-        dm.markers.append(lop)
+        # The lopsided test box is gone. It did its job -- it came out 0.40 long
+        # in x and 0.10 flat in z, which is how we know primitives are placed
+        # correctly and the fault is in mesh handling alone -- and it sat right
+        # in the arm's workspace, which is no place for a permanent marker.
         bag.write('/debug_frame', 'visualization_msgs/msg/MarkerArray', dm, t)
 
         tm = Marker()
