@@ -84,7 +84,20 @@ BEST_EFFORT = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=1,
 # marked every point UNKNOWN the moment the arm crossed the beam, discarding
 # distances that were perfectly good. Separated, item 3 can use d_i normally
 # and additionally refuse to treat an occluded direction as clear.
-FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded']
+# link / ox / oy / oz / rho carry the whole-link representation: which link the
+# row belongs to, where on that link the row sits in its own frame so the
+# Jacobian can be taken there, and the certified covering radius to subtract.
+# The first ten fields are unchanged, so a reader of only those still works.
+FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded',
+          'link', 'ox', 'oy', 'oz', 'rho']
+
+
+
+def _expand(path: str) -> str:
+    """Read a URDF, expanding it first if it is still a .xacro."""
+    import subprocess
+    return (subprocess.check_output(['xacro', path], text=True)
+            if path.endswith('.xacro') else open(path).read())
 
 
 class ArmLinkDistance(Node):
@@ -103,6 +116,15 @@ class ArmLinkDistance(Node):
         p('report_frame', 'odom')
         p('lidar_frame', 'lidar_link')
         p('obstacles', [''])
+        # 'points' keeps the twelve fixed detection frames, retained only so the
+        # old behaviour can be reproduced; measured against the link meshes they
+        # understate clearance by up to 0.238 m. 'links' is the certified
+        # sampling representation.
+        p('geometry', 'links')
+        p('wholebody_urdf', '')
+        p('rho_target', 0.015)
+        p('cert_tol', 0.001)
+        p('max_rows_per_link', 8)
         p('publish_rate', 30.0)
         p('pose_timeout', 0.5)      # s, obstacle pose older than this is stale
         p('occl_timeout', 0.5)      # s, occlusion info older than this is unusable
@@ -124,6 +146,29 @@ class ArmLinkDistance(Node):
         self.max_range = float(g('max_range'))
 
         self.obstacles = self._parse([s for s in g('obstacles') if s.strip()])
+        self.geometry = str(g('geometry'))
+        self.max_rows_per_link = int(g('max_rows_per_link'))
+        self.samples = None
+        self.link_names = []
+        if self.geometry == 'links':
+            from .arm_link_geometry import (arm_link_names,
+                                            sample_links_certified)
+            src = str(g('wholebody_urdf'))
+            if not src:
+                raise RuntimeError(
+                    'geometry:=links needs wholebody_urdf: the barrier is built '
+                    'from the collision meshes of the 9-DOF model, not from the '
+                    'gz description this node would otherwise reach for')
+            self.samples = sample_links_certified(
+                _expand(src), rho_target=float(g('rho_target')),
+                tol=float(g('cert_tol')))
+            self.link_names = arm_link_names(_expand(src))
+            assert self.link_names == list(self.samples), (
+                'link order disagreement between sampler and name list')
+            self.get_logger().info(
+                'arm_link_distance: certified sampling -- '
+                + ', '.join(f'{k} {len(v.points)}pt rho {v.rho*1000:.1f}mm'
+                            for k, v in self.samples.items()))
         self._stamp: dict[str, float] = {}
         self._occl = None            # (angle_min, inc, n, set(indices))
         self._occl_t = 0.0
@@ -234,10 +279,33 @@ class ArmLinkDistance(Node):
         worst_age = 0.0
         n_ok = n_unk = n_stale = n_nodata = 0
 
+        if self.geometry == 'links':
+            rows, n_ok, n_unk, n_stale, n_nodata, worst_age = \
+                self._rows_links(now, T_rl)
+        else:
+            rows, n_ok, n_unk, n_stale, n_nodata, worst_age = \
+                self._rows_points(now, T_rl)
+
+        self._publish(rows)
+        d = Float32MultiArray()
+        #  0 n_points 1 ok 2 occluded 3 stale 4 nodata 5 worst_age 6 min_d
+        finite = [r[6] for r in rows if r[7] == STATUS_OK]
+        d.data = [float(len(rows)), float(n_ok), float(n_unk), float(n_stale),
+                  float(n_nodata), float(worst_age),
+                  float(min(finite)) if finite else -1.0]
+        self.diag.publish(d)
+
+
+    def _rows_points(self, now, T_rl):
+        """The twelve fixed detection frames. Regression path only."""
+        rows = []
+        worst_age = 0.0
+        n_ok = n_unk = n_stale = n_nodata = 0
         for fr in self.frames:
             T = self._tf(self.report_frame, fr)
             if T is None:
-                rows.append([0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 0.0])
+                rows.append([0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 0.0]
+                            + [0.0, 0.0, 0.0, 0.0, 0.0])
                 n_nodata += 1
                 continue
             p = T[:3, 3]
@@ -258,7 +326,8 @@ class ArmLinkDistance(Node):
             if best_v is None or best_d > self.max_range:
                 rows.append(list(p) + [0.0, 0.0, 0.0, self.max_range,
                                        STATUS_NODATA, -1.0,
-                                       1.0 if T_rl is None else 0.0])
+                                       1.0 if T_rl is None else 0.0]
+                            + [0.0, 0.0, 0.0, 0.0, 0.0])
                 n_nodata += 1
                 continue
 
@@ -285,16 +354,70 @@ class ArmLinkDistance(Node):
                 if occ:
                     n_unk += 1
             worst_age = max(worst_age, best_age)
-            rows.append(list(p) + list(n_hat) + [best_d, status, best_age, occ])
+            rows.append(list(p) + list(n_hat) + [best_d, status, best_age, occ]
+                        + [0.0, 0.0, 0.0, 0.0, 0.0])
 
-        self._publish(rows)
-        d = Float32MultiArray()
-        #  0 n_points 1 ok 2 occluded 3 stale 4 nodata 5 worst_age 6 min_d
-        finite = [r[6] for r in rows if r[7] == STATUS_OK]
-        d.data = [float(len(rows)), float(n_ok), float(n_unk), float(n_stale),
-                  float(n_nodata), float(worst_age),
-                  float(min(finite)) if finite else -1.0]
-        self.diag.publish(d)
+        return rows, n_ok, n_unk, n_stale, n_nodata, worst_age
+
+
+    def _rows_links(self, now, T_rl):
+        """One row per band-selected sample on every arm link.
+
+        Each link's certified samples go to the report frame through TF, get
+        signed distances to every live obstacle, and the band
+        [d_min, d_min + rho] is kept. That band provably contains a sample
+        within rho of the link's true closest point, which is the property the
+        |omega| rho velocity allowance in the filter rests on; taking only the
+        nearest sample does not provide it, and held-out testing of that version
+        found the true approach rate beating the constrained one by 37.9 mm/s.
+        """
+        from .arm_link_geometry import obstacle_distances
+        rows = []
+        worst_age = 0.0
+        n_ok = n_unk = n_stale = n_nodata = 0
+        live = [o for o in self.obstacles if o.T_world_link is not None]
+        for li, name in enumerate(self.link_names):
+            T = self._tf(self.report_frame, name)
+            S = self.samples[name]
+            blank = [float(li), 0.0, 0.0, 0.0, float(S.rho)]
+            if T is None or not live:
+                rows.append([0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 1.0] + blank)
+                n_nodata += 1
+                continue
+            W = (S.points @ T[:3, :3].T) + T[:3, 3]
+            d, v, _ = obstacle_distances(W, live)
+            age = max((0.0 if not o.model else now - self._stamp.get(o.model, 0.0))
+                      for o in live)
+            worst_age = max(worst_age, age)
+            status = STATUS_STALE if age > self.pose_timeout else STATUS_OK
+            dmin = float(d.min())
+            if dmin > self.max_range:
+                rows.append(list(T[:3, 3]) + [0.0, 0.0, 0.0, self.max_range,
+                                              STATUS_NODATA, -1.0,
+                                              1.0 if T_rl is None else 0.0]
+                            + blank)
+                n_nodata += 1
+                continue
+            sel = np.nonzero(d <= dmin + S.rho)[0]
+            sel = sel[np.argsort(d[sel])][:self.max_rows_per_link]
+            for k in sel:
+                p_w = W[k]
+                n_hat = v[k] / max(abs(float(d[k])), 1e-9)
+                if T_rl is None:
+                    occ = 1.0
+                    n_unk += 1
+                else:
+                    p_l = (_inv(T_rl) @ np.append(p_w + v[k], 1.0))[:3]
+                    occ = 1.0 if self._occluded(p_l) else 0.0
+                    n_unk += int(occ)
+                if status == STATUS_OK:
+                    n_ok += 1
+                else:
+                    n_stale += 1
+                rows.append(list(p_w) + list(n_hat)
+                            + [float(d[k]), float(status), age, occ,
+                               float(li)] + list(S.points[k]) + [float(S.rho)])
+        return rows, n_ok, n_unk, n_stale, n_nodata, worst_age
 
     def _publish(self, rows: list[list[float]]) -> None:
         msg = PointCloud2()

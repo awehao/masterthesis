@@ -95,6 +95,11 @@ class WholeBodySafetyNode(Node):
                                 dt=1.0 / max(1.0, float(g('control_rate'))))
 
         self.K: WholeBodyKinematics | None = None
+        # Same order the distance node derives, from the same description. The
+        # wire carries a link INDEX, so a disagreement here would attach every
+        # row to the wrong link -- silently, and with a plausible-looking
+        # residual.
+        self.link_names: list[str] = []
         path = str(g('wholebody_urdf'))
         if path:
             try:
@@ -102,7 +107,12 @@ class WholeBodySafetyNode(Node):
                 xml = (subprocess.check_output(['xacro', path], text=True)
                        if path.endswith('.xacro') else open(path).read())
                 self.K = WholeBodyKinematics.from_urdf_string(xml)
-                self.get_logger().info(f'kinematics loaded from {path}')
+                from .arm_link_geometry import arm_link_names
+                self.link_names = arm_link_names(xml)
+                self.get_logger().info(
+                    f'kinematics loaded from {path}; '
+                    f'{len(self.link_names)} arm links: '
+                    + ' '.join(self.link_names))
             except Exception as exc:                            # noqa: BLE001
                 self.get_logger().error(f'cannot load {path}: {exc}')
         self.q_arm = np.zeros(6)
@@ -299,13 +309,24 @@ class WholeBodySafetyNode(Node):
     _n_occl = 0
 
     def _points(self, now: float):
+        """Turn the distance feed into barrier rows.
+
+        Two formats are accepted. Ten fields is the old fixed-detection-point
+        message; fifteen adds the link index, the point's offset in that link's
+        frame, and the certified covering radius, which is what lets the row be
+        built where the link is actually closest instead of at a fixed lug.
+        The old format is still read so a recording made before the change can
+        be replayed.
+        """
         if self.pts_raw is None:
             return None
         stale_feed = (now - self.pts_t) > self.max_points_age
+        wide = self.pts_raw.shape[1] >= 15
         pts, mind = [], np.inf
         self._n_stale = self._n_nodata = self._n_occl = 0
-        for i, row in enumerate(self.pts_raw[:len(FRAMES)]):
-            x, y, z, nx, ny, nz, dd, st, age, occ = row
+        rows = self.pts_raw if wide else self.pts_raw[:len(FRAMES)]
+        for i, row in enumerate(rows):
+            x, y, z, nx, ny, nz, dd, st, age, occ = row[:10]
             st = int(st)
             if stale_feed:
                 # The whole feed is late: no row may be trusted as current.
@@ -318,15 +339,23 @@ class WholeBodySafetyNode(Node):
                 self._n_occl += 1
             nvec = np.array([nx, ny, nz])
             nn = float(np.linalg.norm(nvec))
-            if nn < 1e-6:
-                nvec = np.array([1.0, 0.0, 0.0])
-            else:
-                nvec = nvec / nn
+            nvec = np.array([1.0, 0.0, 0.0]) if nn < 1e-6 else nvec / nn
             if st == 0:
                 mind = min(mind, dd)
-            pts.append(DetectionPoint(FRAMES[i], np.array([x, y, z]), nvec,
-                                      float(dd), st, float(max(age, 0.0)),
-                                      occ >= 0.5))
+            if wide:
+                li = int(row[10])
+                if li < 0 or li >= len(self.link_names):
+                    self._n_nodata += 1
+                    continue
+                pts.append(DetectionPoint(
+                    self.link_names[li], np.array([x, y, z]), nvec, float(dd),
+                    st, float(max(age, 0.0)), occ >= 0.5,
+                    offset=np.array(row[11:14], dtype=float),
+                    rho=float(row[14])))
+            else:
+                pts.append(DetectionPoint(
+                    FRAMES[i], np.array([x, y, z]), nvec, float(dd), st,
+                    float(max(age, 0.0)), occ >= 0.5))
         self._min_d = mind if np.isfinite(mind) else -1.0
         return pts
 

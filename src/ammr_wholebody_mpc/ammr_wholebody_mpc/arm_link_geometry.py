@@ -142,6 +142,26 @@ def _fps(P: np.ndarray, k: int, rng) -> np.ndarray:
     return sel
 
 
+def arm_link_names(xml: str, links=ARM_LINKS) -> list[str]:
+    """The ordered link list both ends of the wire have to agree on.
+
+    The distance node sends a link INDEX, not a name -- five floats per row is
+    already more wire than the old format -- so the two nodes must derive the
+    same order from the same description. Reading it from the URDF rather than
+    hard-coding it means adding a link cannot silently shift the mapping.
+    """
+    root = ET.fromstring(re.sub(r'<!--.*?-->', '', xml, flags=re.S))
+    out = []
+    for link in root.findall('link'):
+        name = link.get('name')
+        if name in links and any(
+                (c.find('geometry') is not None
+                 and c.find('geometry').find('mesh') is not None)
+                for c in link.findall('collision')):
+            out.append(name)
+    return out
+
+
 def link_collision_tris(xml: str, links=ARM_LINKS) -> dict[str, np.ndarray]:
     """Collision triangles of each link, in that link's own frame."""
     root = ET.fromstring(re.sub(r'<!--.*?-->', '', xml, flags=re.S))
