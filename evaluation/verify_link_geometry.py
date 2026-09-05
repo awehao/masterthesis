@@ -39,8 +39,8 @@ sys.path.insert(0, 'evaluation')
 
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE  # noqa: E402
 from ammr_wholebody_mpc.arm_link_geometry import (  # noqa: E402
-    ARM_LINKS, _fps, _load_stl_tris, _surface_points, nearest_points,
-    obstacle_distances, sample_links)
+    ARM_LINKS, _fps, _load_stl_tris, _surface_points, link_collision_tris,
+    nearest_points, obstacle_distances, sample_links, sample_links_certified)
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
 import verify_pregrasp as VP  # noqa: E402
 
@@ -53,17 +53,24 @@ OWNER = {'detect0_1': 'link_base', 'detect0_2': 'link_base', 'detect1': 'link1',
          'detect4_2': 'link4', 'detect5': 'link5', 'detect6': 'uflite_gripper_link'}
 
 
-def dense_reference(xml, rho_ref=0.004):
-    """A much finer sampling than the barrier uses, standing in for the true
-    surface.
+class _Ref:
+    def __init__(self, pts):
+        self.points = pts
 
-    Its own covering radius matters: a sampled minimum OVER-estimates the true
-    one by at most rho_ref, so a slack smaller than rho_ref proves nothing. The
-    first run capped out at 9.22 mm while the smallest slack was 4.53 mm, which
-    left the distance claim undecided exactly where it mattered. The cap is
-    lifted here so the reference is finer than the margin being checked.
+
+def dense_reference(xml, n=60000, seed=4242):
+    """A dense RANDOM surface cloud, drawn with a seed the barrier never saw.
+
+    Not a farthest-point subset: that is the construction the barrier itself
+    uses, and testing one against the other measures how two similar procedures
+    agree rather than whether the bound holds. rho is now certified by branch
+    and bound over the triangles, so this cloud has no part in defining it --
+    its only job is to catch coding errors, which is what a regression test is
+    for.
     """
-    return sample_links(xml, rho_target=rho_ref, n_ref=200000, seed=11, cap=3000)
+    rng = np.random.default_rng(seed)
+    return {k: _Ref(_surface_points(v, n, rng))
+            for k, v in link_collision_tris(xml).items()}
 
 
 def main() -> int:
@@ -90,12 +97,14 @@ def main() -> int:
     idx = [K.dof_names.index(f'joint{i}') for i in range(1, 7)]
 
     print('  建立取樣…')
-    S = sample_links(xml, rho_target=a.rho)
+    S = sample_links_certified(xml, rho_target=a.rho, tol=0.001)
     R = dense_reference(xml)
     print(f'    屏障取樣 {sum(len(s.points) for s in S.values())} 點，'
-          f'最大 rho {max(s.rho for s in S.values())*1000:.2f} mm')
-    print(f'    參考取樣 {sum(len(s.points) for s in R.values())} 點，'
-          f'最大 rho {max(s.rho for s in R.values())*1000:.2f} mm\n')
+          f'最大認證 rho {max(s.rho for s in S.values())*1000:.2f} mm')
+    print(f'    參考雲   {sum(len(s.points) for s in R.values())} 個隨機表面點'
+          f'（seed 4242，未參與取樣或認證）')
+    print(f'    全部認證 {all(s.certified for s in S.values())}，'
+          f'容差 {max(s.cert_tol for s in S.values())*1000:.1f} mm\n')
 
     rng = np.random.default_rng(a.seed)
     lo6, hi6 = LITE6_SAFE.lower, LITE6_SAFE.upper
