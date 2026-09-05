@@ -252,6 +252,8 @@ def main() -> int:
     ap.add_argument('--out', default='evaluation/bags/viz_pregrasp')
     ap.add_argument('--gap', type=float, default=1.0,
                     help='seconds of blank timeline between starting poses')
+    ap.add_argument('--robot', choices=('mesh', 'box'), default='mesh',
+                    help='which single representation of the robot to record')
     a = ap.parse_args()
 
     xml = open(a.urdf).read()
@@ -363,8 +365,15 @@ def main() -> int:
 
     bag = Bag(a.out)
     t = 1.0
-    bag.write('/robot_description', 'std_msgs/msg/String',
-              String(data=urdf_viz), t)
+    # Nothing but ONE robot goes in the file.
+    #
+    # The layouts in this viewer are account-synced, so deleting a stale one
+    # locally does not stick, and a topic a layout does not list is shown by
+    # default. Eight same-named layouts had accumulated, several of them
+    # turning on the mesh robot, the box robot and a URDF layer at once -- three
+    # robots drawn on top of each other, which is what "the parts are separated"
+    # actually was. A file that offers only one of them cannot be displayed
+    # that way by any layout, old or new.
     # /robot_description is back, together with the full transform tree below,
     # so Foxglove's URDF layer can be tried: it is a different code path from
     # the marker mesh renderer that puts every STL on its side here. The layer
@@ -380,40 +389,7 @@ def main() -> int:
     # poses the filter computed. One robot, one representation.
 
     def emit(t, qf, pts, r, extra):
-        # Full transform tree, parent -> child, every link included.
-        #
-        # The URDF layer places each link by its frame, so a frame that is
-        # missing leaves that link stranded -- which is what happened when an
-        # earlier version dropped the virtual base joints. Nothing is dropped
-        # now. The long world -> base_link line is unavoidable (the world origin
-        # is 22 m from the robot) so the layout switches frame display off
-        # rather than dropping frames from the file.
-        tf = TFMessage()
-        for nm in link_names:
-            jn = K.parent_of.get(nm)
-            try:
-                if jn is None:
-                    parent, T = WORLD, K.fk(qf, nm)
-                else:
-                    parent = K.joints[jn].parent
-                    T = np.linalg.inv(K.fk(qf, parent)) @ K.fk(qf, nm)
-            except Exception:
-                continue
-            ts = TransformStamped()
-            ts.header = Header(stamp=stamp(t), frame_id=parent)
-            ts.child_frame_id = nm
-            ts.transform.translation = Vector3(
-                x=float(T[0, 3]), y=float(T[1, 3]), z=float(T[2, 3]))
-            ts.transform.rotation = quat_from_R(T[:3, :3])
-            tf.transforms.append(ts)
-        bag.write('/tf', 'tf2_msgs/msg/TFMessage', tf, t)
 
-        js = JointState()
-        js.header = Header(stamp=stamp(t), frame_id=WORLD)
-        js.name = list(K.dof_names)
-        js.position = [float(x) for x in qf]
-        js.velocity = [float(x) for x in r.v]
-        bag.write('/joint_states', 'sensor_msgs/msg/JointState', js, t)
 
         ma = MarkerArray()
         for i, pt in enumerate(pts):
@@ -480,7 +456,8 @@ def main() -> int:
             mk.color = (ColorRGBA(r=0.95, g=0.72, b=0.25, a=1.0) if arm
                         else ColorRGBA(r=0.35, g=0.55, b=0.85, a=1.0))
             rm.markers.append(mk)
-        bag.write('/robot', 'visualization_msgs/msg/MarkerArray', rm, t)
+        if a.robot == 'mesh':
+            bag.write('/robot', 'visualization_msgs/msg/MarkerArray', rm, t)
 
         bm = MarkerArray()
         for i, (lnk, Tlb, size) in enumerate(boxes):
@@ -500,7 +477,8 @@ def main() -> int:
             mk.color = (ColorRGBA(r=0.95, g=0.72, b=0.25, a=0.9) if arm
                         else ColorRGBA(r=0.35, g=0.55, b=0.85, a=0.9))
             bm.markers.append(mk)
-        bag.write('/robot_box', 'visualization_msgs/msg/MarkerArray', bm, t)
+        if a.robot == 'box':
+            bag.write('/robot_box', 'visualization_msgs/msg/MarkerArray', bm, t)
 
         # Three axes and a deliberately lopsided box at the chassis origin.
         # If these come out right while the meshes do not, the fault is in mesh
