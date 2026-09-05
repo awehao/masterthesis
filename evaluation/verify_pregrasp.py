@@ -88,6 +88,8 @@ def main() -> int:
     ap.add_argument('urdf')
     ap.add_argument('--world', default='src/ammr_bringup/worlds/random_room.sdf')
     ap.add_argument('--n', type=int, default=12)
+    ap.add_argument('--stand', type=float, default=0.12,
+                    help='pre-grasp standoff from the box face, m')
     a = ap.parse_args()
 
     xml = open(a.urdf).read()
@@ -154,15 +156,22 @@ def main() -> int:
     face = (np.array([1.0, 0.0, 0.0]) if box.size[0] <= box.size[1]
             else np.array([0.0, 1.0, 0.0]))
     half = 0.5 * float(box.size @ np.abs(face))
-    stand = 0.12
+    stand = a.stand
     # Standoff chosen from the measured workspace, not guessed. The shoulder
-    # sits 0.11 m ahead of the base origin, so this puts the target ~0.32 m from
-    # it. A sweep of the reachable set shows position-plus-orientation IK
-    # converging from 0.25 m outward and failing at 0.20 m -- the arm cannot
-    # fold that tightly while also pointing the tool at the face. The first
-    # attempt used 0.42 m, which left the target 0.19 m away, and all eight
-    # plans failed for that reason alone.
-    base_off = 0.55                      # base origin to face
+    # sits 0.11 m ahead of the base origin, so a 0.12 m standoff puts the target
+    # ~0.32 m from it. A sweep of the reachable set shows position-plus-
+    # orientation IK converging from 0.25 m outward and failing at 0.20 m -- the
+    # arm cannot fold that tightly while also pointing the tool at the face. The
+    # first attempt used 0.42 m, which left the target 0.19 m away, and all
+    # eight plans failed for that reason alone.
+    #
+    # So the base retreats by exactly as much as the standoff grows. Moving the
+    # pre-grasp point away from the BOX while leaving the base put would move it
+    # TOWARD the shoulder -- 0.20 m of standoff would leave 0.241 m of reach,
+    # back in the region where IK stops converging, and the re-run would fail
+    # for a reason that has nothing to do with the safety layer it is meant to
+    # test. Holding shoulder-to-target fixed keeps the two questions separate.
+    base_off = 0.55 + (stand - 0.12)     # base origin to face
     p_base = c + face * (half + base_off)
     yaw = math.atan2(-face[1], -face[0])  # face the box
     q_base = np.array([p_base[0], p_base[1], yaw])
