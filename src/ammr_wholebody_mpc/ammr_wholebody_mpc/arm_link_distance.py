@@ -303,10 +303,12 @@ class ArmLinkDistance(Node):
         self._publish(rows)
         d = Float32MultiArray()
         #  0 n_points 1 ok 2 occluded 3 stale 4 nodata 5 worst_age 6 min_d
+        #  7 rows dropped by max_rows_per_link this cycle
         finite = [r[6] for r in rows if r[7] == STATUS_OK]
         d.data = [float(len(rows)), float(n_ok), float(n_unk), float(n_stale),
                   float(n_nodata), float(worst_age),
-                  float(min(finite)) if finite else -1.0]
+                  float(min(finite)) if finite else -1.0,
+                  float(getattr(self, '_dropped', 0))]
         self.diag.publish(d)
 
 
@@ -389,6 +391,7 @@ class ArmLinkDistance(Node):
         rows = []
         worst_age = 0.0
         n_ok = n_unk = n_stale = n_nodata = 0
+        self._dropped = 0
         live = [o for o in self.obstacles if o.T_world_link is not None]
         for li, name in enumerate(self.link_names):
             T = self._tf(self.report_frame, name)
@@ -413,7 +416,13 @@ class ArmLinkDistance(Node):
                 n_nodata += 1
                 continue
             sel = np.nonzero(d <= dmin + S.rho)[0]
-            sel = sel[np.argsort(d[sel])][:self.max_rows_per_link]
+            sel = sel[np.argsort(d[sel])]
+            # Truncation breaks the covering argument the |omega| rho allowance
+            # rests on, so how much of it was thrown away is published rather
+            # than assumed to be nothing. A cap that never bites is the only
+            # cap the band guarantee survives.
+            self._dropped += max(0, len(sel) - self.max_rows_per_link)
+            sel = sel[:self.max_rows_per_link]
             for k in sel:
                 p_w = W[k]
                 n_hat = v[k] / max(abs(float(d[k])), 1e-9)
