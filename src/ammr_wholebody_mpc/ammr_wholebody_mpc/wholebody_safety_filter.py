@@ -163,6 +163,17 @@ class SafetyConfig:
         [[50.0, 50.0, 200.0], LITE6_SAFE.max_jerk]))
     enforce_jerk: bool = True
 
+    # Hold the base still INSIDE the solve, not by discarding its output.
+    #
+    # 5B fixes the base, and in the simulation only the arm is actuated. If the
+    # solver still believes the base can move, it can satisfy a barrier row by
+    # backing the chassis away -- a solution that is never executed. The filter
+    # would report the barrier satisfied while the arm carried on at the
+    # unfiltered speed. Zeroing v[0:3] afterwards does not help either: by then
+    # the arm's share has already been chosen on the assumption the base was
+    # helping.
+    fix_base: bool = False
+
     # Joint POSITION limits used for planning. The URDF carries the same values,
     # but reading them from arm_limits keeps one documented source with a stated
     # provenance instead of two that can drift apart.
@@ -325,6 +336,9 @@ def _box_rows(cfg, n, cap, v_prev=None, dt=None):
     A, b = [], []
     dt = cfg.dt if dt is None else dt
     vmax = np.minimum(cfg.vmax[:n], cap if np.isfinite(cap) else cfg.vmax[:n])
+    if cfg.fix_base and n >= 3:
+        vmax = vmax.copy()
+        vmax[:3] = 0.0
     if v_prev is not None:
         # Acceleration is a box AROUND the previous command, so it tightens the
         # velocity box asymmetrically rather than replacing it.

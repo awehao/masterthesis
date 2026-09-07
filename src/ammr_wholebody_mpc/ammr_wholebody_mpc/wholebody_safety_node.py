@@ -61,6 +61,7 @@ class WholeBodySafetyNode(Node):
     def __init__(self) -> None:
         super().__init__('wholebody_safety')
         p = self.declare_parameter
+        _ = p('fix_base', False)
         # The SOLVER's model, not the simulator's. /robot_description carries
         # the gz robot, whose base is a floating body with no base_x/base_y/
         # base_theta joints, so a 9-DOF Jacobian cannot be built from it. The
@@ -92,7 +93,8 @@ class WholeBodySafetyNode(Node):
         self.cfg = SafetyConfig(alpha=float(g('alpha')), d0=float(g('d0')),
                                 tau=float(g('tau')), a_brake=float(g('a_brake')),
                                 eps=float(g('eps')),
-                                dt=1.0 / max(1.0, float(g('control_rate'))))
+                                dt=1.0 / max(1.0, float(g('control_rate'))),
+                                fix_base=bool(g('fix_base')))
 
         self.K: WholeBodyKinematics | None = None
         # Same order the distance node derives, from the same description. The
