@@ -87,7 +87,13 @@ BEST_EFFORT = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=1,
 # link / ox / oy / oz / rho carry the whole-link representation: which link the
 # row belongs to, where on that link the row sits in its own frame so the
 # Jacobian can be taken there, and the certified covering radius to subtract.
-# The first ten fields are unchanged, so a reader of only those still works.
+#
+# NOT backward compatible, despite the first ten fields keeping their meaning
+# and offsets. A consumer that reads the message by FIELD NAME still works. One
+# that assumes the width -- reshape(msg.width, 10), which is what the previous
+# consumer in this package did -- gets a shape error, and a subscriber that
+# indexes rows by a fixed stride reads garbage. Both ends of this wire were
+# updated together; anything else reading it has to be updated too.
 FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded',
           'link', 'ox', 'oy', 'oz', 'rho']
 
@@ -124,7 +130,15 @@ class ArmLinkDistance(Node):
         p('wholebody_urdf', '')
         p('rho_target', 0.015)
         p('cert_tol', 0.001)
-        p('max_rows_per_link', 8)
+        # 60, not a smaller number that looks cheap. Measured over 100 random
+        # poses and commanded velocities, a cap of 8 left the solution up to
+        # 32.98 mm/s worse against the full row set on 12 cycles and moved the
+        # output by 1.786 rad/s; 20 still broke 8 rows that the full set held;
+        # 40 broke none but moved the output by 2.9e-03; 60 reproduces the
+        # uncapped solution exactly. A sample further from the obstacle can
+        # still bind, because the row is n^T J v and both the normal and the
+        # Jacobian change from point to point.
+        p('max_rows_per_link', 60)
         p('publish_rate', 30.0)
         p('pose_timeout', 0.5)      # s, obstacle pose older than this is stale
         p('occl_timeout', 0.5)      # s, occlusion info older than this is unusable
