@@ -190,8 +190,21 @@ class WholeBodySafetyNode(Node):
         self.q_arm_t = self._now()
 
     def _on_pts(self, msg: PointCloud2) -> None:
+        """Take the row width from the MESSAGE, not from a constant here.
+
+        This read `len(PC_FIELDS)` -- ten -- and the publisher grew to fifteen
+        when the rows started carrying the link index, the point's offset in
+        that link's frame and the covering radius. The node then died on the
+        first message with "cannot reshape array of size 3540 into shape
+        (236,10)", which is the same trap this package documents for anyone
+        else consuming the topic: the field NAMES and their offsets are stable,
+        the width is not.
+        """
+        nf = len(msg.fields) if msg.fields else len(PC_FIELDS)
+        if msg.point_step:
+            nf = msg.point_step // 4
         self.pts_raw = np.frombuffer(msg.data, dtype=np.float32).reshape(
-            msg.width, len(PC_FIELDS)).astype(float)
+            msg.width, nf).astype(float)
         self.pts_t = self._now()
 
     def _on_cmd(self, msg: Float64MultiArray) -> None:
