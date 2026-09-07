@@ -29,6 +29,7 @@ from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -64,7 +65,10 @@ def generate_launch_description():
              output='screen'),
 
         Node(package='robot_state_publisher', executable='robot_state_publisher',
-             parameters=[{'robot_description': robot_desc,
+             # value_type=str, or launch tries to parse the URDF as YAML and
+             # dies on the first colon in the XML.
+             parameters=[{'robot_description': ParameterValue(robot_desc,
+                                                              value_type=str),
                           'use_sim_time': True}],
              output='screen'),
 
