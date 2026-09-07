@@ -1,0 +1,50 @@
+# Velocity control for the Lite 6, for the safety-layer in-loop test ONLY.
+#
+# Separate from lite6_controllers.yaml, which stays exactly as 5B validated it.
+# The reason for a second file rather than an extra controller in the first is
+# that both would claim the same joint command interfaces: ros2_control lets a
+# command interface be claimed once, so loading both and activating the wrong
+# one is a silent way to end up commanding nothing. The launch that uses this
+# file deactivates the trajectory controller before activating this one.
+#
+# Why velocity at all: the safety filter's output IS a velocity. Sending it
+# through a position controller means integrating it somewhere, and the
+# integrator that was written for that carried its own 20 Hz step and a 0.25 s
+# stale-command hold -- two dynamics between the filter and the arm that the
+# measurement would then be attributing to the filter.
+controller_manager:
+  ros__parameters:
+    update_rate: 150  # Hz
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    lite6_vel_controller:
+      type: velocity_controllers/JointGroupVelocityController
+
+    lite6_gripper_controller:
+      type: parallel_gripper_action_controller/GripperActionController
+
+lite6_vel_controller:
+  ros__parameters:
+    # Order matters and is checked at runtime by the adapter: the safety filter
+    # publishes a 9-vector whose last six are the arm in the URDF's dof order,
+    # and a mismatch here would drive the wrong joints with a plausible-looking
+    # residual.
+    joints:
+      - joint1
+      - joint2
+      - joint3
+      - joint4
+      - joint5
+      - joint6
+
+lite6_gripper_controller:
+  ros__parameters:
+    joint: finger_joint1
+    action_monitor_rate: 20.0
+    goal_tolerance: 0.002
+    max_effort: 5.0
+    allow_stalling: true
+    stall_velocity_threshold: 0.001
+    stall_timeout: 0.5

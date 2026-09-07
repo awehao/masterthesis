@@ -1,0 +1,71 @@
+<?xml version="1.0" ?>
+<!-- Purpose-built scene for the link safety layer, NOT a navigation world.
+
+     One box, its pose written here and nowhere else. The distance node's
+     obstacle list is generated from this same file, so the geometry the
+     simulator uses and the geometry the safety layer reasons about agree by
+     construction rather than by runtime synchronisation. An earlier attempt
+     moved a box with gz's set_pose while the node kept the pose baked into a
+     static parameter, and the two ends were looking at different scenes.
+
+     The box position was chosen AFTER the arm motion, so that the run starts
+     clearly outside the barrier's reach (0.251 m of link clearance) and enters
+     it about 85 percent of the way along (0.022 m at the end), with a rise in
+     the middle ; the arm swings out before it extends. A monotone approach
+     cannot distinguish slowing down early from a last-moment fallback.
+-->
+<sdf version="1.8">
+  <world name="arm_barrier_test">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+          <material>
+            <ambient>0.75 0.75 0.75 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="obs_0">
+      <static>true</static>
+      <pose>0.7400 0.0000 0.6000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.4000 1.0000 1.2000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4000 1.0000 1.2000</size></box></geometry>
+          <material>
+            <ambient>0.45 0.45 0.5 1</ambient>
+            <diffuse>0.55 0.55 0.6 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>
