@@ -1,11 +1,14 @@
 # Velocity control for the Lite 6, for the safety-layer in-loop test ONLY.
 #
 # Separate from lite6_controllers.yaml, which stays exactly as 5B validated it.
-# The reason for a second file rather than an extra controller in the first is
-# that both would claim the same joint command interfaces: ros2_control lets a
-# command interface be claimed once, so loading both and activating the wrong
-# one is a silent way to end up commanding nothing. The launch that uses this
-# file deactivates the trajectory controller before activating this one.
+#
+# A command interface can be claimed by only one ACTIVE controller, so exactly
+# one arm command controller is activated here. Whether the position and the
+# velocity interfaces of this hardware are mutually exclusive is a property of
+# the hardware component's mode switching, not something to assume: this file
+# simply never activates two. If a trajectory controller is already active when
+# this one starts, the launch deactivates it first and confirms the interface
+# was released.
 #
 # Why velocity at all: the safety filter's output IS a velocity. Sending it
 # through a position controller means integrating it somewhere, and the

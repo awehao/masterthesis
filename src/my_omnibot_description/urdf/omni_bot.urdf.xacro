@@ -1,6 +1,12 @@
 <?xml version='1.0'?>
 <robot name="omni_bot" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
+  <!-- Which ros2_control controller set the in-gz controller_manager loads.
+     Defaults to the position trajectory set that 5B was validated against;
+     the safety in-loop test passes the velocity set instead. Parameterised
+     rather than edited so the two never diverge by accident. -->
+  <xacro:arg name="controllers_yaml" default="lite6_controllers.yaml"/>
+
   <xacro:arg name="use_camera" default="true"/>
   <!-- Phase 2: UFACTORY Lite 6 arm on a mast above the LiDAR. Default OFF so
        every existing navigation launch/benchmark keeps the exact validated
@@ -242,7 +248,7 @@
     <gazebo>
       <plugin filename="gz_ros2_control-system"
               name="gz_ros2_control::GazeboSimROS2ControlPlugin">
-        <parameters>$(find my_omnibot_description)/config/lite6_controllers.yaml</parameters>
+        <parameters>$(find my_omnibot_description)/config/$(arg controllers_yaml)</parameters>
       </plugin>
     </gazebo>
   </xacro:if>
