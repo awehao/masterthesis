@@ -1,3 +1,5 @@
+> **舊模型版本（2026-09-08 模型高度修正之前）。** 支撐球比輪子低一個輪半徑，整台車比修正後高 0.05 m，`MODEL_Z = 0.05`。本檔數值保留作為當時的紀錄，**不可與新模型結果混算**；新模型見 `evaluation/results/model_height_and_staleness_20260908.md`。
+
 # 預抓取動作交付（Gazebo 實際執行）
 
 日期：2026-09-08。腳本 `evaluation/pregrasp_demo.py`，影片

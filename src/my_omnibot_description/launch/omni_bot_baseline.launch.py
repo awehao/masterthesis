@@ -197,7 +197,7 @@ def generate_launch_description():
                        # exports these from its POSES_CSV row.
                        '-x', os.environ.get('SPAWN_X', '0.0'),
                        '-y', os.environ.get('SPAWN_Y', '0.0'),
-                       '-z', '0.05'], output='screen')]),
+                       '-z', '0.0'], output='screen')]),
         TimerAction(period=8.0, actions=[Node(
             package='ammr_bringup', executable='dynamic_obstacle_driver',
             parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],

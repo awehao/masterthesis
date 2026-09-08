@@ -579,7 +579,7 @@ def generate_launch_description():
                        # origin, which is what every recorded result used.
                        '-x', os.environ.get('SPAWN_X', '0.0'),
                        '-y', os.environ.get('SPAWN_Y', '0.0'),
-                       '-z', '0.05'], output='screen')]),
+                       '-z', '0.0'], output='screen')]),
 
         # move the obstacles (ping-pong)
         TimerAction(period=8.0, actions=[Node(

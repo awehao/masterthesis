@@ -13,7 +13,7 @@ derived from the true pose rather than dead-reckoned. That makes this a
 GROUND-TRUTH pose feed: it is legitimate for testing the whole-body motion and
 the safety layer, and it means this test says nothing about localisation.
 
-    python3 evaluation/base_tf_bridge.py [--z 0.05]
+    python3 evaluation/base_tf_bridge.py [--z 0.0]
 """
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def main() -> int:
     ap.add_argument('--odom', default='/odom')
     ap.add_argument('--frame', default='world')
     ap.add_argument('--child', default='base_footprint')
-    ap.add_argument('--z', type=float, default=0.05)
+    ap.add_argument('--z', type=float, default=0.0)
     a = ap.parse_args()
     rclpy.init()
     n = BaseTF(a)

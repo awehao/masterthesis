@@ -18,6 +18,11 @@ not have, and every one of those decisions fails toward stopping:
                                       request to keep moving
     points older than max_points_age  every row becomes NODATA, which the filter
                                       already degrades to a speed cap
+    base TF older than max_tf_age     output zero: a Jacobian built about a
+                                      base pose that stopped updating is wrong
+                                      everywhere, and the command watchdog
+                                      downstream cannot see it because commands
+                                      keep arriving
     joints older than max_joint_age   output zero: without q there is no
                                       Jacobian, so nothing can be constrained
     TF missing                        output zero. NOT "zero the base and keep
@@ -75,6 +80,10 @@ class WholeBodySafetyNode(Node):
         p('max_cmd_age', 0.25)
         p('max_points_age', 0.30)
         p('max_joint_age', 0.30)
+        # Base pose from TF. Separate from the joint age because it is a
+        # separate feed that fails separately, and because nothing else in
+        # the chain notices when it stops.
+        p('max_tf_age', 0.30)
         p('use_base_dof', True)
         p('alpha', 2.0)
         p('d0', 0.05)
@@ -88,6 +97,8 @@ class WholeBodySafetyNode(Node):
         self.max_cmd_age = float(g('max_cmd_age'))
         self.max_points_age = float(g('max_points_age'))
         self.max_joint_age = float(g('max_joint_age'))
+        self.max_tf_age = float(g('max_tf_age'))
+        self._tf_age = -1.0
         self.use_base = bool(g('use_base_dof'))
 
         self.cfg = SafetyConfig(alpha=float(g('alpha')), d0=float(g('d0')),
@@ -227,11 +238,27 @@ class WholeBodySafetyNode(Node):
 
     # -------------------------------------------------------------- loop
     def _base_q(self):
+        """Base pose from TF, refused when the transform has gone stale.
+
+        The age check is the point. lookup_transform at Time() asks for the
+        LATEST available transform and keeps returning the last one forever
+        once the publisher stops -- no exception, no warning. Without this the
+        node would keep building nine-column Jacobians about a base pose that
+        stopped updating, and every barrier row would be evaluated at a place
+        the robot has left, with residuals that still look perfectly healthy.
+        The command watchdog downstream cannot catch this either: it measures
+        how long since a COMMAND arrived, and commands would keep arriving.
+        """
         try:
             t = self.tf_buffer.lookup_transform(self.report_frame,
                                                 self.base_frame,
                                                 rclpy.time.Time())
         except Exception:
+            self._tf_age = -1.0
+            return None
+        stamp = t.header.stamp.sec + t.header.stamp.nanosec * 1e-9
+        self._tf_age = self._now() - stamp
+        if self._tf_age > self.max_tf_age:
             return None
         q, tr = t.transform.rotation, t.transform.translation
         R = _quat_to_rot(q.x, q.y, q.z, q.w)
@@ -310,7 +337,7 @@ class WholeBodySafetyNode(Node):
         #  0 cycle 1 reason 2 n_rows 3 n_active 4 resid_before 5 resid_after
         #  6 iters 7 fallback 8 unresolved 9 runtime_ms 10 speed_cap
         # 11 min_d 12 n_stale 13 n_nodata 14 n_occluded
-        # 15 safety_override 16 dt_actual_ms 17 has_history
+        # 15 safety_override 16 dt_actual_ms 17 has_history 18 tf_age_s
         d.data = [float(self._cycle), reason, float(res.n_rows),
                   float(res.n_active), float(res.max_resid_before),
                   float(res.max_resid_after), float(res.iters),
@@ -322,7 +349,8 @@ class WholeBodySafetyNode(Node):
                   float(self._n_nodata), float(self._n_occl),
                   1.0 if getattr(res, 'safety_override', False) else 0.0,
                   float((self._dt_prev or 0.0) * 1e3),
-                  1.0 if self._v_prev2 is not None else 0.0]
+                  1.0 if self._v_prev2 is not None else 0.0,
+                  float(self._tf_age)]
         self.diag.publish(d)
 
         bm = Float32MultiArray()

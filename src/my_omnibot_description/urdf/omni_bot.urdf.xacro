@@ -70,7 +70,21 @@
     <joint name="support_${name}_joint" type="fixed">
       <parent link="base_link"/>
       <child link="support_${name}"/>
-      <origin xyz="${x} ${y} ${-wheel_r}" rpy="0 0 0"/>
+      <!-- Sphere CENTRE level with the rim centres, so its lowest point is
+           the wheel contact line. It used to sit at -wheel_r with radius
+           wheel_r, i.e. reaching 2*wheel_r below base_link while the rims
+           reached only wheel_r: the spheres hung exactly one wheel radius
+           below the wheels, so gz rested the model on the spheres and the
+           visible wheels floated 0.05 m off the ground at every spawn height.
+           base_footprint is defined as the ground contact frame, and with this
+           origin the spheres span base_link [-0.05, +0.05] = base_footprint
+           [0.00, 0.10], touching the ground exactly where the wheels do.
+           The wheels remain VISUAL ONLY: contact is still four frictionless
+           spheres and the base is still driven by VelocityControl, so this
+           corrects ride height and nothing else. It does NOT make this a
+           wheel-ground contact model, and says nothing about slip, traction
+           or real braking. -->
+      <origin xyz="${x} ${y} 0" rpy="0 0 0"/>
     </joint>
     <gazebo reference="support_${name}">
       <mu1>0.0</mu1><mu2>0.0</mu2>

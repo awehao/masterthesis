@@ -60,14 +60,24 @@ test_start:
   joint6: 0.0
 
 # Preferred arm configuration for the whole-body solver's posture term. This is
-# an OUTPUT, not a choice: it is the IK solution for the pre-grasp pose 0.24 m
-# in front of the box face, whose path was checked in section 10.14. Recorded
-# here rather than retyped, but it belongs to that target -- change the target
-# and this has to be recomputed, not edited.
+# an OUTPUT, not a choice: the IK solution for the pre-grasp pose 0.24 m in
+# front of the box face, base parked at x = -0.15, path checked as in section
+# 10.14. It belongs to that target AND to this robot geometry, and has to be
+# recomputed rather than edited when either changes.
+#
+# Recomputed 2026-09-08 after the support-sphere height fix dropped the whole
+# robot by 0.05 m. The previous value, [0, 0.6518, 0.5886, 0, -1.634, 0], was
+# the IK solution for the old ride height; kept as the posture reference on the
+# corrected model it no longer placed the tool on the target, so the posture
+# term and the task term balanced and the solve stalled 47.4 mm short with
+# every velocity at zero. Nothing was wrong with the solver -- it was being
+# asked to hold an arm shape that no longer reached.
+#
+# IK residual on the corrected model: 0.000 mm, 0.000 deg.
 pregrasp_reference:
   joint1: 0.0
-  joint2: 0.6518
-  joint3: 0.5886
+  joint2: 0.3641
+  joint3: 0.5263
   joint4: 0.0
-  joint5: -1.634
+  joint5: -1.4086
   joint6: 0.0

@@ -57,11 +57,15 @@ import verify_pregrasp as VP                                    # noqa: E402
 from arm_poses import pose as named_pose                        # noqa: E402
 import verify_self_collision as VSC                             # noqa: E402
 
-# The simulator spawns the model root 0.05 m above the world origin, so the
-# kinematic model's frame and the world frame differ by exactly this. Every
-# target given in world coordinates is shifted once, here, rather than at each
-# use -- a translation leaves Jacobians untouched but not positions.
-MODEL_Z = 0.05
+# World z of the model root (base_footprint). base_footprint is DEFINED as the
+# ground contact frame, so this is zero -- and it stayed zero only after the
+# support spheres were corrected. They used to reach one wheel radius below
+# base_footprint, so gz settled the model with base_footprint 0.05 m up and the
+# wheels floating; the spawn height, this constant and the static TF all carried
+# a matching 0.05 to compensate, and the compensation was invisible because all
+# three agreed. Changing the model without changing all of them would have left
+# the controller working in the old frame.
+MODEL_Z = 0.0
 
 
 def _expand(path):

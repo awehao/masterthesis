@@ -83,7 +83,7 @@ def main() -> int:
     ap.add_argument('--world', default=WORLD)
     ap.add_argument('--urdf', default=WHOLEBODY)
     ap.add_argument('--report-frame', default='world')
-    ap.add_argument('--spawn-z', type=float, default=0.05,
+    ap.add_argument('--spawn-z', type=float, default=0.0,
                     help='z of the model root in the world, from `gz model -p`')
     # The base is fixed but not necessarily at the origin: 5B parks it at a
     # standoff so the pre-grasp point lands inside the arm's workspace. Read
@@ -101,6 +101,9 @@ def main() -> int:
                     help='whole-body: base is part of the solution, world TF '
                          'comes live from odometry, /cmd_vel is bridged')
     ap.add_argument('--gate-timeout', type=float, default=0.15)
+    ap.add_argument('--max-tf-age', type=float, default=0.30,
+                    help='safety node base-TF staleness limit; set absurdly '
+                         'high only to reproduce the pre-fix behaviour')
     ap.add_argument('--rate', type=float, default=20.0)
     ap.add_argument('--max-rows-per-link', type=int, default=60)
     ap.add_argument('--no-foxglove', action='store_true')
@@ -186,6 +189,7 @@ def main() -> int:
             '-p', 'use_sim_time:=true',
             '-p', f'report_frame:={a.report_frame}',
             '-p', 'base_frame:=base_link',
+            '-p', f'max_tf_age:={a.max_tf_age}',
             '-p', f'wholebody_urdf:={urdf}',
             '-p', f'fix_base:={"true" if a.fix_base else "false"}',
             '-p', f'control_rate:={a.rate}'])

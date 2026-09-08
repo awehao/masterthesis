@@ -89,7 +89,7 @@ def generate_launch_description():
         TimerAction(period=6.0, actions=[
             Node(package='ros_gz_sim', executable='create',
                  arguments=['-name', 'omni_bot', '-topic', 'robot_description',
-                            '-x', '0.0', '-y', '0.0', '-z', '0.05'],
+                            '-x', '0.0', '-y', '0.0', '-z', '0.0'],
                  output='screen')]),
 
         TimerAction(period=10.0, actions=[
