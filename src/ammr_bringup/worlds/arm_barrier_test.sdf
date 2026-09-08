@@ -27,6 +27,48 @@
       <render_engine>ogre2</render_engine>
     </plugin>
 
+    <!-- obs_1: an obstacle for the CHASSIS. obs_0, the target box, is not
+         moved, because moving it would change the task as well as the
+         constraint.
+
+         Placed by search. The first placement tried was an intrusion on the
+         straight line between the base start (x = -0.70) and the parking spot
+         the unobstructed whole-body solve chooses (x = -0.15). That does not
+         exist: the path is 0.55 m and the chassis effective radius is 0.328 m
+         (0.300 plus the 28 mm certified covering radius), so the two endpoints'
+         clearance disks overlap along the whole path. Requiring 30 mm of model
+         clearance at the start left a maximum intrusion of 8.1 mm, which is
+         not a constraint, it is noise; requiring 35 mm left none at all. A
+         mid-path intrusion would need a path of at least 2 x 0.328 = 0.656 m.
+
+         So the obstacle constrains the DESTINATION instead, which asks the
+         sharper question anyway: the base cannot stop where it wants, so does
+         the whole-body solve find another place to stop and let the arm make up
+         the difference?
+
+           base start (-0.70, 0)         +124.0 mm   run starts cleanly
+           nominal parking (-0.15, 0)    -108.1 mm   blocked
+           offset      (-0.15, +0.15)     +41.9 mm   feasible
+           offset      (-0.15, +0.20)     +91.9 mm   feasible
+
+         Twelve base poses offset in +y were checked offline and all admit IK
+         and a clear path to the same pre-grasp target, so if the run stops
+         short that is a shortfall in coordination, not an impossible task. -->
+    <model name="obs_1">
+      <static>true</static>
+      <pose>-0.2250 -0.3200 0.3000 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><box><size>0.1600 0.2000 0.6000</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.1600 0.2000 0.6000</size></box></geometry>
+          <material><ambient>0.75 0.35 0.15 1</ambient>
+                    <diffuse>0.75 0.35 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
     <!-- Demo camera, inside the simulator on purpose.
          Screen recording of the Gazebo window cannot be made safe on this
          machine: x11grab captures whatever is composited at that screen

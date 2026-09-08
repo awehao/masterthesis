@@ -69,6 +69,11 @@ from .arm_detection_points import (Obstacle, _closest_local, _inv, _iso,
                                    _quat_to_rot, _rpy_to_rot)
 
 STATUS_OK, STATUS_UNKNOWN, STATUS_STALE, STATUS_NODATA = 0.0, 1.0, 2.0, 3.0
+# Emitted when the band had to be truncated to stay inside a row limit.
+# It rides in the cloud rather than in the diagnostic because the safety
+# node reads the cloud: a fact the consumer must act on has to travel on
+# the channel the consumer reads.
+STATUS_OVERFLOW = 4.0
 
 BEST_EFFORT = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=1,
                          reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -130,6 +135,13 @@ class ArmLinkDistance(Node):
         p('wholebody_urdf', '')
         p('rho_target', 0.015)
         p('cert_tol', 0.001)
+        # History of this number, kept because the reasoning matters more than
+        # the value: it was 60 when only the arm was in the barrier, and the
+        # chassis pushed the largest band to 90, so a cap of 60 silently dropped
+        # up to 30 rows per cycle while the coverage claim went on being made.
+        # The answer is not a bigger cap, it is no cap plus an error when one is
+        # imposed. The measurement below stands as the cost record.
+        #
         # 100 since the chassis joined the barrier. Measured over a whole-body
         # run with the cap raised to 400 so it could not bite, the largest band
         # any link produced was base_link with 90 rows (link2 77, link4 62,
@@ -154,7 +166,9 @@ class ArmLinkDistance(Node):
         # uncapped solution exactly. A sample further from the obstacle can
         # still bind, because the row is n^T J v and both the normal and the
         # Jacobian change from point to point.
-        p('max_rows_per_link', 100)
+        # 0 = no cap, which is the default. The full band is what the covering
+        # argument is stated over, so it is what gets published.
+        p('max_rows_per_link', 0)
         p('publish_rate', 30.0)
         p('pose_timeout', 0.5)      # s, obstacle pose older than this is stale
         p('occl_timeout', 0.5)      # s, occlusion info older than this is unusable
@@ -316,6 +330,10 @@ class ArmLinkDistance(Node):
             rows, n_ok, n_unk, n_stale, n_nodata, worst_age = \
                 self._rows_points(now, T_rl)
 
+        if getattr(self, '_overflow', False) and rows:
+            blank = list(rows[0])
+            blank[7] = STATUS_OVERFLOW
+            rows = rows + [blank]
         self._publish(rows)
         d = Float32MultiArray()
         #  0 n_points 1 ok 2 occluded 3 stale 4 nodata 5 worst_age 6 min_d
@@ -408,6 +426,7 @@ class ArmLinkDistance(Node):
         worst_age = 0.0
         n_ok = n_unk = n_stale = n_nodata = 0
         self._dropped = 0
+        self._overflow = False
         live = [o for o in self.obstacles if o.T_world_link is not None]
         for li, name in enumerate(self.link_names):
             T = self._tf(self.report_frame, name)
@@ -433,12 +452,22 @@ class ArmLinkDistance(Node):
                 continue
             sel = np.nonzero(d <= dmin + S.rho)[0]
             sel = sel[np.argsort(d[sel])]
+            self._band_max = max(getattr(self, '_band_max', 0), len(sel))
             # Truncation breaks the covering argument the |omega| rho allowance
             # rests on, so how much of it was thrown away is published rather
             # than assumed to be nothing. A cap that never bites is the only
             # cap the band guarantee survives.
-            self._dropped += max(0, len(sel) - self.max_rows_per_link)
-            sel = sel[:self.max_rows_per_link]
+            # Truncation is now an ERROR, not a silent economy. The covering
+            # argument the barrier rests on is over the WHOLE band; keeping the
+            # nearest N of it and carrying on reports a coverage that no longer
+            # holds. A cap of 0 means no cap, which is the default: the full band
+            # is published. If a cap is set and would bite, the rows go out
+            # flagged STATUS_OVERFLOW so the safety node stops, rather than the
+            # rows quietly going missing.
+            if self.max_rows_per_link and len(sel) > self.max_rows_per_link:
+                self._dropped += len(sel) - self.max_rows_per_link
+                self._overflow = True
+                sel = sel[:self.max_rows_per_link]
             for k in sel:
                 p_w = W[k]
                 n_hat = v[k] / max(abs(float(d[k])), 1e-9)

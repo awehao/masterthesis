@@ -125,15 +125,24 @@ def build_scene(xml, world):
     return K, obs, self_clear, env_clear, pairs
 
 
-def target_pose(obs, stand):
-    """Pre-grasp pose in front of the box's near face, in MODEL coordinates.
+def target_pose(obs, stand, name='obs_0'):
+    """Pre-grasp pose in front of the named box's near face, in MODEL coordinates.
+
+    The box is chosen BY NAME. It used to be "the box with the lowest centre",
+    which was unambiguous while the world held exactly one box and silently
+    wrong the moment a second was added: the chassis obstacle sits lower than
+    the target, so every offline check quietly re-aimed at the obstacle and
+    reported a 1006 mm error for a run that had actually stopped 226 mm short.
 
     The face chosen is the one the arm is on: the box is approached from -x,
     where the base sits, so the pre-grasp point is at (face_x - stand) and the
     tool +z axis points at +x, into the face.
     """
-    box = min((o for o in obs if o.kind == 'box'),
-              key=lambda o: float(o.T_world_link[2, 3]))
+    named = [o for o in obs if o.name == name and o.kind == 'box']
+    if not named:
+        raise KeyError(f'{name!r} 不在世界檔的 box 障礙中：'
+                       + ', '.join(o.name for o in obs))
+    box = named[0]
     c = box.T_world_link[:3, 3]
     face_x = float(c[0]) - 0.5 * float(box.size[0])
     p_world = np.array([face_x - stand, float(c[1]), 0.55])
@@ -151,7 +160,7 @@ def offline(a):
     K, obs, self_clear, env_clear, pairs = build_scene(xml, a.world)
     n = len(K.dof_names)
     idx = [K.dof_names.index(j) for j in ARM_JOINTS]
-    box, face_x, p_world, T_des = target_pose(obs, a.stand)
+    box, face_x, p_world, T_des = target_pose(obs, a.stand, a.target_box)
 
     # base_x / base_y / base_theta are REAL joints in the whole-body model, so
     # parking the base is a change to q, not a change to the model. 5B fixes the
@@ -368,6 +377,8 @@ def main() -> int:
     # uflite_gripper_link instead reported an 83.6 mm "error" that was purely
     # the fixed offset between the two frames.
     ap.add_argument('--tcp', default='link_tcp')
+    ap.add_argument('--target-box', default='obs_0',
+                    help='which obs_* in the world is the TARGET, by name')
     ap.add_argument('--stand', type=float, default=0.24,
                     help='pre-grasp standoff from the box face, m')
     ap.add_argument('--start', nargs=6, type=float,

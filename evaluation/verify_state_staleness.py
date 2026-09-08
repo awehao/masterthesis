@@ -33,6 +33,7 @@ cuts exactly one thing and records what the controller topics do.
 from __future__ import annotations
 
 import argparse
+import math
 import subprocess
 import sys
 import time
@@ -74,6 +75,10 @@ class Tester(Node):
         self.js_t = self.odom_t = None
         self.stopped = []
         self.t_resume = None
+        self.base_xy = None
+        self.q = None
+        self.base_stamp = None
+        self.js_stamp = None
         self.create_subscription(Float64MultiArray,
                                  '/lite6_vel_controller/commands',
                                  self._on_arm, 20, callback_group=self.cbg)
@@ -100,9 +105,17 @@ class Tester(Node):
 
     def _on_js(self, m):
         self.js_t = time.monotonic()
+        ix = {n: i for i, n in enumerate(m.name)}
+        a = [f'joint{i}' for i in range(1, 7)]
+        if all(j in ix for j in a) and len(m.position) > max(ix[j] for j in a):
+            self.q = [float(m.position[ix[j]]) for j in a]
+        self.js_stamp = (m.header.stamp.sec + m.header.stamp.nanosec * 1e-9)
 
     def _on_odom(self, m):
         self.odom_t = time.monotonic()
+        p = m.pose.pose.position
+        self.base_xy = (float(p.x), float(p.y))
+        self.base_stamp = (m.header.stamp.sec + m.header.stamp.nanosec * 1e-9)
 
     def inject(self):
         """Fire the fault WITHOUT blocking the publishing loop.
@@ -170,6 +183,8 @@ class Tester(Node):
                 min_d=None if self.diag is None else self.diag[11],
                 tf_age=None if (self.diag is None or len(self.diag) < 19)
                        else self.diag[18],
+                base_xy=self.base_xy, q=self.q,
+                base_stamp=self.base_stamp, js_stamp=self.js_stamp,
                 js_age=None if self.js_t is None else time.monotonic() - self.js_t,
                 odom_age=None if self.odom_t is None
                          else time.monotonic() - self.odom_t))
@@ -253,6 +268,36 @@ def main() -> int:
         print(f"  故障後 安全節點 reason：{[REASON.get(x, x) for x in rs]}")
         last = rel[-1]
         print(f"  結束時 手臂命令 {last['arm']}  底盤命令 {last['base']}")
+        # Command zero and ACTUAL stop are different events, and the distance
+        # between them is what a stop is worth. Measured from the feeds' own
+        # timestamps, never from the loop clock.
+        def motion_stop(t_from):
+            seq = [r for r in R if r['t'] >= t_from and r['base_xy']
+                   and r['q'] and r['base_stamp']]
+            for i in range(4, len(seq)):
+                a_, b_ = seq[i - 4], seq[i]
+                dt_ = b_['base_stamp'] - a_['base_stamp']
+                dj = b_['js_stamp'] - a_['js_stamp']
+                if dt_ <= 0 or dj <= 0:
+                    continue
+                vb_ = math.hypot(b_['base_xy'][0] - a_['base_xy'][0],
+                                 b_['base_xy'][1] - a_['base_xy'][1]) / dt_
+                vq = max(abs(x - y) for x, y in zip(b_['q'], a_['q'])) / dj
+                if vb_ < 2e-3 and vq < 2e-3:
+                    return b_['t'], b_['base_xy'], b_['q']
+            return None, None, None
+        if za is not None:
+            t_zero = a.pre_s + za
+            r0 = next((r for r in R if r['t'] >= t_zero and r['base_xy']), None)
+            t_stop, xy_stop, q_stop = motion_stop(t_zero)
+            if r0 and t_stop is not None:
+                dxy = math.hypot(xy_stop[0] - r0['base_xy'][0],
+                                 xy_stop[1] - r0['base_xy'][1])
+                dq = max(abs(x - y) for x, y in zip(q_stop, r0['q']))
+                print(f"  命令歸零 → 實際停止 {(t_stop - t_zero)*1e3:.0f} ms"
+                      f"；期間底盤位移 {dxy*1000:.1f} mm，最大關節位移 {dq*1e3:.1f} mrad")
+            else:
+                print('  命令歸零後未觀察到明確靜止（窗口不足或仍在動）')
         mv = [max(abs(x) for x in r['arm']) for r in rel if r['arm']]
         if mv:
             print(f"  故障後 手臂命令絕對值 中位 {np.median(mv):.4f} 最大 {max(mv):.4f}")

@@ -16,6 +16,12 @@ not have, and every one of those decisions fails toward stopping:
     no cmd yet            output zero
     cmd older than max_cmd_age        output zero -- a stale command is not a
                                       request to keep moving
+    distance feed wholly stale       output zero (reason 7). Not a speed cap:
+                                      with no obstacle distance, no speed is
+                                      defensible, and the cap measured LOOSER
+                                      than the task's own command
+    band truncated by the row limit  output zero (reason 8). The covering
+                                      argument is over the whole band
     points older than max_points_age  every row becomes NODATA, which the filter
                                       already degrades to a speed cap
     base TF older than max_tf_age     output zero: a Jacobian built about a
@@ -269,7 +275,8 @@ class WholeBodySafetyNode(Node):
         now = self._now()
         out = np.zeros(9)
         reason = 0.0        # 0 ok, 1 no cmd, 2 stale cmd, 3 stale joints,
-                            # 4 no kinematics, 5 no points, 6 no TF
+                            # 4 no kinematics, 5 no points, 6 no/stale TF,
+                            # 7 distance feed stale, 8 band truncated
         res = SafetyLike()
 
         if self.K is None:
@@ -297,6 +304,22 @@ class WholeBodySafetyNode(Node):
                 pts = self._points(now)
             if reason == 0.0 and pts is None:
                 reason = 5.0
+            # A distance feed that has gone wholly stale used to turn every row
+            # into NODATA, which the filter answered with a 0.05 speed cap. That
+            # is a DEGRADATION and it is not conservative: measured over a 6 s
+            # outage the base command's median rose from 0.0135 to 0.0465 m/s,
+            # i.e. the robot moved FASTER once it stopped knowing where anything
+            # was, because the cap was looser than what the task happened to be
+            # asking for. With no obstacle distance at all, no speed is
+            # defensible. Stop, and say which feed did it.
+            if reason == 0.0 and getattr(self, '_pts_stale', False):
+                reason = 7.0
+            # Rows the distance node had to drop to stay inside a row limit.
+            # The covering argument the barrier rests on is over the WHOLE band;
+            # a truncated band does not support it. Dropping rows quietly and
+            # carrying on would keep reporting coverage that no longer holds.
+            if reason == 0.0 and getattr(self, '_pts_overflow', False):
+                reason = 8.0
             if reason == 0.0:
                 # Real elapsed time, not the nominal period. A 20 Hz timer that
                 # actually fires at 47 or 62 ms would make every acceleration
@@ -364,6 +387,8 @@ class WholeBodySafetyNode(Node):
     _n_nodata = 0
     _n_occl = 0
 
+    STATUS_OVERFLOW = 4
+
     def _points(self, now: float):
         """Turn the distance feed into barrier rows.
 
@@ -377,6 +402,9 @@ class WholeBodySafetyNode(Node):
         if self.pts_raw is None:
             return None
         stale_feed = (now - self.pts_t) > self.max_points_age
+        self._pts_stale = bool(stale_feed)
+        self._pts_overflow = bool(
+            (self.pts_raw[:, 7] == self.STATUS_OVERFLOW).any())
         wide = self.pts_raw.shape[1] >= 15
         pts, mind = [], np.inf
         self._n_stale = self._n_nodata = self._n_occl = 0
