@@ -23,7 +23,28 @@ reset)  # 終端 3：每次執行前復位。中止時 sim 會保留當下姿態
           --reqtype gz.msgs.Pose --reptype gz.msgs.Boolean --timeout 5000 \
           --req 'name: "omni_bot", position: {x: -0.70, y: 0.0, z: 0.05},
                  orientation: {x:0, y:0, z:0, w:1}'
-        sleep 5
+        # A teleport stalls /joint_states for a few hundred ms. Homing straight
+        # afterwards trips its own 300 ms freshness guard and the arm is left
+        # wherever the last run stopped -- which then silently becomes the next
+        # run's start pose. Wait for the feed to be steady, not just alive.
+        python3 - <<'WAIT'
+import time, rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+rclpy.init(); n=Node('wait_steady'); T=[]
+n.create_subscription(JointState, '/joint_states', lambda m: T.append(time.monotonic()), 50)
+t0=time.monotonic(); ok=0
+while time.monotonic()-t0 < 30:
+    rclpy.spin_once(n, timeout_sec=0.05)
+    if len(T) > 40:
+        gap=max(b-a for a,b in zip(T[-40:], T[-39:]))
+        ok = ok+1 if gap < 0.1 else 0
+        if ok > 60:
+            print(f'  /joint_states 已穩定（最大間隔 {gap*1e3:.1f} ms）'); break
+else:
+    print('  /joint_states 未達穩定')
+rclpy.shutdown()
+WAIT
         exec python3 evaluation/barrier_probe.py --home 0 0 0.30 0 0 0 --home-only \
              --out /tmp/wb_home.json
         ;;

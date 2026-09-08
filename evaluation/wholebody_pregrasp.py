@@ -291,8 +291,8 @@ class WholeBody(Node):
     def run(self, T_des):
         a = self.a
         self.base0 = self.base.copy()
-        self.q_pref = (np.array(a.posture, dtype=float) if a.posture
-                       else self.q_arm.copy())
+        self.n_stall = 0
+        self.q_pref = np.array(a.posture, dtype=float)
         q0 = self.q9()
         print(f'  起始 底盤 ({self.base[0]:+.3f}, {self.base[1]:+.3f}, '
               f'{math.degrees(self.base[2]):+.1f}°)  手臂 '
@@ -318,6 +318,23 @@ class WholeBody(Node):
                 return False
             v, T, ep, er = self.solve(T_des)
             done = ep < a.tol_p and er < a.tol_r
+            # A solve that stops moving while the error is still large is a
+            # different failure from running out of time, and reporting it as a
+            # timeout hides which one happened. The velocities go to zero at a
+            # stationary point of the weighted least squares -- typically the
+            # posture term balancing the task -- and no amount of extra time
+            # changes anything after that.
+            if not done and float(np.abs(v).max()) < a.stall_v:
+                self.n_stall += 1
+                if self.n_stall > a.stall_cycles:
+                    self.stop()
+                    print(f'  停滯：命令已連續 {self.n_stall} 週期低於 '
+                          f'{a.stall_v:.4f}，但位置誤差仍 {ep*1000:.1f} mm、'
+                          f'姿態誤差 {math.degrees(er):.2f}°。'
+                          f'解算收斂到非目標的駐點，不是時間不夠。', flush=True)
+                    return False
+            else:
+                self.n_stall = 0
             if done and settle is None:
                 settle = t
             if settle is not None and t - settle > a.settle_s:
@@ -365,14 +382,22 @@ def main() -> int:
                     help='weight of the posture term against the task')
     ap.add_argument('--kp-post', type=float, default=1.2,
                     help='null-space pull back toward the preferred posture')
-    ap.add_argument('--posture', nargs=6, type=float, default=None,
-                    help='preferred arm configuration; defaults to the pose the '
-                         'run starts from, which is the one that was checked')
+    # The checked pre-grasp arm configuration from section 10.14, NOT the start
+    # pose. Defaulting to the start pose looks harmless and is not: the posture
+    # term then pulls toward "stay folded up" while the task pulls toward the
+    # box, and the solve settles where the two gradients cancel. That happened
+    # -- the run stopped dead at 131 mm and 22 degrees with every velocity at
+    # zero, the barrier never involved, and only the timeout to show for it.
+    ap.add_argument('--posture', nargs=6, type=float,
+                    default=[0.0, 0.6518, 0.5886, 0.0, -1.634, 0.0],
+                    help='preferred arm configuration (null-space reference)')
     ap.add_argument('--damping', type=float, default=0.06)
     ap.add_argument('--tol-p', type=float, default=0.005)
     ap.add_argument('--tol-r', type=float, default=0.02)
     ap.add_argument('--settle-s', type=float, default=2.0)
     ap.add_argument('--timeout-s', type=float, default=60.0)
+    ap.add_argument('--stall-v', type=float, default=2e-3)
+    ap.add_argument('--stall-cycles', type=int, default=40)
     ap.add_argument('--abort-d', type=float, default=0.02)
     ap.add_argument('--max-base-travel', type=float, default=1.2)
     ap.add_argument('--out', default='evaluation/results/wholebody_pregrasp.json')
