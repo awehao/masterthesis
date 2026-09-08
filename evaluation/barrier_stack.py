@@ -93,6 +93,13 @@ def main() -> int:
     ap.add_argument('--base-x', type=float, default=0.0)
     ap.add_argument('--base-y', type=float, default=0.0)
     ap.add_argument('--base-yaw', type=float, default=0.0)
+    ap.add_argument('--fix-base', dest='fix_base', action='store_true',
+                    default=True,
+                    help='hold the chassis: static world TF, base velocities '
+                         'forced to zero INSIDE the solve')
+    ap.add_argument('--free-base', dest='fix_base', action='store_false',
+                    help='whole-body: base is part of the solution, world TF '
+                         'comes live from odometry, /cmd_vel is bridged')
     ap.add_argument('--gate-timeout', type=float, default=0.15)
     ap.add_argument('--rate', type=float, default=20.0)
     ap.add_argument('--max-rows-per-link', type=int, default=60)
@@ -133,14 +140,31 @@ def main() -> int:
         return p
 
     try:
-        # world -> model root. The sim reports the model pose; nothing derives
-        # it from the spawn arguments, which can differ once physics settles.
-        spawn('static_tf', [
-            'ros2', 'run', 'tf2_ros', 'static_transform_publisher',
-            '--x', str(a.base_x), '--y', str(a.base_y), '--z', str(a.spawn_z),
-            '--yaw', str(a.base_yaw),
-            '--frame-id', a.report_frame, '--child-frame-id', 'base_footprint'])
-        time.sleep(1.0)
+        # world -> model root. Static ONLY when the base is held fixed; once
+        # the base is part of the solution a static transform tells the safety
+        # filter the robot never left the start, and every barrier row is then
+        # built about the wrong place with a residual that still looks healthy.
+        if a.fix_base:
+            spawn('static_tf', [
+                'ros2', 'run', 'tf2_ros', 'static_transform_publisher',
+                '--x', str(a.base_x), '--y', str(a.base_y),
+                '--z', str(a.spawn_z), '--yaw', str(a.base_yaw),
+                '--frame-id', a.report_frame,
+                '--child-frame-id', 'base_footprint'])
+        else:
+            spawn('odom_bridge', [
+                'ros2', 'run', 'ros_gz_bridge', 'parameter_bridge',
+                '/odom_raw@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+                '--ros-args', '-r', '/odom_raw:=/odom',
+                '-p', 'use_sim_time:=true'])
+            spawn('cmd_vel_bridge', [
+                'ros2', 'run', 'ros_gz_bridge', 'parameter_bridge',
+                '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
+                '--ros-args', '-p', 'use_sim_time:=true'])
+            spawn('base_tf', [
+                sys.executable, os.path.join(HERE, 'base_tf_bridge.py'),
+                '--frame', a.report_frame, '--z', str(a.spawn_z)])
+        time.sleep(2.0)
 
         spawn('arm_link_distance', [
             'ros2', 'run', 'ammr_wholebody_mpc', 'arm_link_distance',
@@ -163,7 +187,7 @@ def main() -> int:
             '-p', f'report_frame:={a.report_frame}',
             '-p', 'base_frame:=base_link',
             '-p', f'wholebody_urdf:={urdf}',
-            '-p', 'fix_base:=true',
+            '-p', f'fix_base:={"true" if a.fix_base else "false"}',
             '-p', f'control_rate:={a.rate}'])
 
         spawn('arm_vel_adapter',

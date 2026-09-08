@@ -5,15 +5,30 @@ smoothing, no filtering -- anything this node did to the numbers would be
 attributed to the safety layer by the measurement downstream.
 
     /wholebody_safety/cmd_out   Float64MultiArray, 9
-        [base_x, base_y, base_theta, joint1 .. joint6]
-                    |   take the last six
+        [base_x, base_y, base_theta, joint1 .. joint6]   base in the WORLD frame
+                    |   rotate the base pair into the body frame
                     v
-    /arm_vel_cmd                Float64MultiArray, 6      <- NOT the controller
+    /wb_vel_cmd                 Float64MultiArray, 9      <- NOT the controller
+        [vx_body, vy_body, wz, joint1 .. joint6]
+
+ONE message, not two. The base part and the arm part come from a single
+whole-body solve, and if they were published separately the gate downstream
+could forward one and zero the other -- at which point the robot is executing a
+command that no solver produced and that satisfies no constraint set. Keeping
+them in one message makes them share a timestamp and a single staleness
+decision.
+
+The only arithmetic here is a planar rotation of the base velocity pair from
+the world frame the filter solves in into the body frame the chassis plugin
+takes. A rotation is exactly invertible and preserves magnitude: it changes the
+representation, not the command. Nothing is clipped, smoothed or re-limited --
+anything this node did to the numbers would be attributed to the safety layer
+by the measurement downstream.
 
 The controller is fed by the gate (arm_vel_gate.py), which is the only
-publisher on the controller's command topic. Two publishers on that topic --
-this one forwarding a live command while a watchdog sends zero -- race, and the
-arm does whichever arrived last.
+publisher on the controller's command topic and on /cmd_vel. Two publishers on
+either -- this one forwarding a live command while a watchdog sends zero --
+race, and the robot does whichever arrived last.
 
 It publishes ONLY when a new cmd_out arrives. Re-sending the last value on a
 timer would make a dead safety node look alive to the gate, and the gate's
@@ -23,6 +38,7 @@ timeout would never fire. Staleness has to propagate, not be papered over.
 """
 from __future__ import annotations
 
+import math
 import sys
 import time
 
@@ -32,7 +48,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, Float64MultiArray
 
 ARM = [f'joint{i}' for i in range(1, 7)]
-OUT = '/arm_vel_cmd'
+OUT = '/wb_vel_cmd'
 CTRL = '/lite6_vel_controller'
 
 
@@ -41,12 +57,24 @@ class Adapter(Node):
         super().__init__('arm_vel_adapter')
         self.n_in = self.n_out = self.n_bad = 0
         self.last_in = 0.0
+        self.yaw = None
+        self.yaw_t = 0.0
         self.order_ok = self.check_order()
+        from nav_msgs.msg import Odometry
+        from rclpy.qos import qos_profile_sensor_data
+        self.create_subscription(Odometry, '/odom', self.on_odom,
+                                 qos_profile_sensor_data)
         self.create_subscription(Float64MultiArray,
                                  '/wholebody_safety/cmd_out', self.on_cmd, 10)
         self.pub = self.create_publisher(Float64MultiArray, OUT, 10)
         self.diag = self.create_publisher(Float32MultiArray, '~/diag', 10)
         self.create_timer(0.5, self.report)
+
+    def on_odom(self, m):
+        q = m.pose.pose.orientation
+        self.yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                              1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self.yaw_t = time.monotonic()
 
     def check_order(self) -> bool:
         """Ask the controller which joints it drives, in which order.
@@ -82,11 +110,21 @@ class Adapter(Node):
     def on_cmd(self, msg):
         self.n_in += 1
         d = np.asarray(msg.data, dtype=float)
-        if len(d) < 9 or not np.all(np.isfinite(d[3:9])) or not self.order_ok:
+        if len(d) < 9 or not np.all(np.isfinite(d[:9])) or not self.order_ok:
             self.n_bad += 1
             return
+        # No base yaw means no way to express the base command in the frame the
+        # chassis takes. Dropping the base half and forwarding the arm half
+        # would execute half of a whole-body solution, which satisfies nothing.
+        if self.yaw is None or time.monotonic() - self.yaw_t > 0.3:
+            self.n_bad += 1
+            return
+        c, s_ = math.cos(self.yaw), math.sin(self.yaw)
+        vx, vy = float(d[0]), float(d[1])
         out = Float64MultiArray()
-        out.data = [float(x) for x in d[3:9]]
+        out.data = [c * vx + s_ * vy,          # world -> body, a pure rotation
+                    -s_ * vx + c * vy,
+                    float(d[2])] + [float(x) for x in d[3:9]]
         self.pub.publish(out)
         self.n_out += 1
         self.last_in = time.monotonic()

@@ -71,6 +71,26 @@ def _quat_to_rot(x, y, z, w):
         [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
 
 
+def wait_fresh(node, getters, timeout=20.0, fresh=0.08):
+    """Spin until every feed is not just present but CURRENT.
+
+    Waiting for "has arrived at least once" let a run begin with a joint state
+    that was 335 ms old, because the wait loop exited the moment the LAST feed
+    appeared while the first one had gone quiet during startup contention. The
+    guard then fired on its first check and the run aborted before commanding
+    anything. Freshness is the property the guard tests, so it is the property
+    to wait for.
+    """
+    import time as _t
+    t0 = _t.monotonic()
+    while _t.monotonic() - t0 < timeout:
+        rclpy.spin_once(node, timeout_sec=0.02)
+        ages = [g() for g in getters]
+        if all(a is not None and a < fresh for a in ages):
+            return True
+    return False
+
+
 class Probe(Node):
 
     def __init__(self, a) -> None:
@@ -378,6 +398,12 @@ def main() -> int:
     t0 = time.monotonic()
     while time.monotonic() - t0 < 15 and (p.q is None or p.rows is None):
         rclpy.spin_once(p, timeout_sec=0.1)
+    if p.q is not None and not wait_fresh(
+            p, [lambda: time.monotonic() - p.q_t if p.q is not None else None]):
+        print('  JointState 一直不新鮮，不下命令。', file=sys.stderr)
+        p._stop()
+        rclpy.try_shutdown()
+        return 1
     if p.q is None or p.rows is None:
         print(f'  沒有等到資料（q={p.q is not None}, rows={p.rows is not None}）'
               '：堆疊沒起來，不下命令。', file=sys.stderr)

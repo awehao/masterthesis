@@ -1,10 +1,19 @@
-"""Output gate and watchdog: the ONLY publisher on the arm controller's command
-topic.
+"""Output gate and watchdog: the ONLY publisher on BOTH command topics.
 
-    /arm_vel_cmd  ->  [ freshness + validity ]  ->  /lite6_vel_controller/commands
+    /wb_vel_cmd  ->  [ freshness + validity ]  -+->  /lite6_vel_controller/commands
+                                                +->  /cmd_vel  (base body twist)
 
 Forwards a command only if it is fresh and finite. Otherwise it sends zero, at
 a fixed rate, for as long as the fault lasts.
+
+One decision covers both outputs
+--------------------------------
+Base and arm arrive in a single message and leave in the same tick, forwarded
+together or zeroed together. If they were gated separately the robot could end
+up driving the base from a live whole-body solution while the arm was being
+held at zero by a watchdog -- a combination no solver produced, and one that
+satisfies no constraint set, while every residual upstream still reports the
+original solution as feasible.
 
 Why a separate process, and why the only publisher
 --------------------------------------------------
@@ -41,31 +50,43 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, Float64MultiArray
 
 CTRL_CMD = '/lite6_vel_controller/commands'
-N = 6
+BASE_CMD = '/cmd_vel'
+N = 9                       # 3 base (body frame) + 6 arm
+N_BASE, N_ARM = 3, 6
 
 
 class Gate(Node):
-    def __init__(self, timeout: float, rate: float, vmax: float):
+    def __init__(self, timeout: float, rate: float, vmax: float,
+                 base_vmax: float):
         super().__init__('arm_vel_gate')
         self.timeout = timeout
         self.vmax = vmax
+        self.base_vmax = base_vmax
         self.v = np.zeros(N)
         self.t_cmd = 0.0                    # monotonic, 0 = never received
         self.zeroing = True
         self.t_fault = None                 # when the gate started sending zero
         self.n_fwd = self.n_zero = self.n_rej = 0
-        self.create_subscription(Float64MultiArray, '/arm_vel_cmd',
+        self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
                                  self.on_cmd, 10)
         self.pub = self.create_publisher(Float64MultiArray, CTRL_CMD, 10)
+        from geometry_msgs.msg import Twist
+        self._Twist = Twist
+        self.pub_base = self.create_publisher(Twist, BASE_CMD, 10)
         self.diag = self.create_publisher(Float32MultiArray, '~/diag', 10)
         self.create_timer(1.0 / rate, self.tick)
         self.get_logger().info(
-            f'gate: sole publisher on {CTRL_CMD}, timeout {timeout*1e3:.0f} ms '
-            f'(monotonic), |v| cap {vmax:.2f} rad/s')
+            f'gate: sole publisher on {CTRL_CMD} and {BASE_CMD}, '
+            f'timeout {timeout*1e3:.0f} ms (monotonic), '
+            f'arm cap {vmax:.2f} rad/s, base cap {base_vmax:.2f}')
 
     def on_cmd(self, msg):
         d = np.asarray(msg.data, dtype=float)
-        if len(d) != N or not np.all(np.isfinite(d)) or np.abs(d).max() > self.vmax:
+        # Rejection is all-or-nothing for the same reason the gate is: half a
+        # whole-body command is not a smaller command, it is a different one.
+        if (len(d) != N or not np.all(np.isfinite(d))
+                or np.abs(d[N_BASE:]).max() > self.vmax
+                or np.abs(d[:N_BASE]).max() > self.base_vmax):
             self.n_rej += 1
             return
         self.v = d
@@ -82,8 +103,12 @@ class Gate(Node):
             self.get_logger().info('command fresh again: forwarding')
         self.zeroing = stale
         m = Float64MultiArray()
-        m.data = [float(x) for x in out]
+        m.data = [float(x) for x in out[N_BASE:]]
         self.pub.publish(m)
+        t = self._Twist()
+        t.linear.x, t.linear.y = float(out[0]), float(out[1])
+        t.angular.z = float(out[2])
+        self.pub_base.publish(t)
         if stale:
             self.n_zero += 1
         else:
@@ -102,19 +127,23 @@ def main():
     ap.add_argument('--timeout', type=float, default=0.15)
     ap.add_argument('--rate', type=float, default=50.0)
     ap.add_argument('--vmax', type=float, default=3.2,
-                    help='reject anything above this, rad/s')
+                    help='reject any ARM component above this, rad/s')
+    ap.add_argument('--base-vmax', type=float, default=1.2,
+                    help='reject any BASE component above this, m/s or rad/s')
     a = ap.parse_args()
     rclpy.init()
-    nd = Gate(a.timeout, a.rate, a.vmax)
+    nd = Gate(a.timeout, a.rate, a.vmax, a.base_vmax)
     try:
         rclpy.spin(nd)
     except KeyboardInterrupt:
         pass
     # Best effort: leave the arm with a zero command rather than the last speed.
     try:
-        m = Float64MultiArray(); m.data = [0.0] * N
+        m = Float64MultiArray(); m.data = [0.0] * N_ARM
+        t = nd._Twist()
         for _ in range(5):
             nd.pub.publish(m)
+            nd.pub_base.publish(t)
             time.sleep(0.01)
     except Exception:
         pass
