@@ -179,6 +179,11 @@ class SafetyConfig:
     # provenance instead of two that can drift apart.
     use_arm_limits_positions: bool = True
 
+    # Commands stop this far short of a joint's position limit. Not a comfort
+    # setting: a joint that reached its URDF limit exactly could not be
+    # commanded off it again in this simulator. See _joint_limit_rows.
+    joint_limit_margin: float = 0.02        # rad
+
 
 @dataclass
 class SafetyResult:
@@ -315,21 +320,39 @@ def _rows_from_points(K, q, pts, cfg, v_in):
 
 
 def _joint_limit_rows(K, q, cfg):
-    """Do not command a joint past its position limit within one step."""
+    """Do not command a joint past its position limit within one step.
+
+    The bound stops a MARGIN short of the limit rather than at it. Allowing a
+    joint to arrive exactly on hi was correct in the sense that it never
+    exceeded it, and it turned out to be a trap: in this simulator a joint
+    driven precisely onto its URDF upper limit then would not come back. With
+    joint2 sitting at 2.443457075, a -0.30 rad/s command was received by the
+    controller for eight seconds (529 messages), the reported joint velocity
+    stayed at exactly 0.00000 and the position did not change, while joint3
+    commanded the same way moved -0.5874 rad. Only the joint on its limit was
+    stuck, so the arm was not frozen; the underlying cause is not identified
+    and is tracked separately. Until it is, the margin keeps commands off the
+    exact boundary.
+
+    A joint already inside the margin is not trapped by this: the bound toward
+    the limit clamps to zero, while the row in the other direction stays wide
+    open, so retreating is always allowed.
+    """
     lo, hi = K.joint_limits()
     n = len(K.dof_names)
     if cfg.use_arm_limits_positions and n >= 9:
         # Arm joints are the last six of the generalised coordinate vector.
         lo = np.concatenate([lo[:n - 6], LITE6_SAFE.lower])
         hi = np.concatenate([hi[:n - 6], LITE6_SAFE.upper])
+    m = cfg.joint_limit_margin
     A, b = [], []
     for i in range(n):
         e = np.zeros(n)
         e[i] = 1.0
         A.append(e.copy())
-        b.append(max(0.0, (hi[i] - q[i]) / cfg.dt))
+        b.append(max(0.0, (hi[i] - m - q[i]) / cfg.dt))
         A.append(-e)
-        b.append(max(0.0, (q[i] - lo[i]) / cfg.dt))
+        b.append(max(0.0, (q[i] - lo[i] - m) / cfg.dt))
     return A, b
 
 

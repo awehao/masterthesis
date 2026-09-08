@@ -329,13 +329,16 @@ class WholeBody(Node):
             # unconstrained solution above is kept as the linearisation point
             # for d_stop, so both architectures see the same constraint set.
             A, b, nb = self._constraints(q, v)
-            if A is not None:
-                vq = self._solve_qp(H, -g, A, b)
-                if vq is not None:
-                    self.n_bar_rows = nb
-                    v = vq
-                else:
-                    self.n_qp_fail += 1
+            if len(A) == 0:
+                raise RuntimeError('QP: 約束集合為空')
+            vq = self._solve_qp(H, -g, A, b)
+            if vq is None:
+                # A solve that did not converge is also not a licence to send
+                # the unconstrained answer.
+                self.n_qp_fail += 1
+                raise RuntimeError('QP: 求解未收斂')
+            self.n_bar_rows = nb
+            v = vq
         return v, T, float(np.linalg.norm(T_des[:3, 3] - T[:3, 3])), \
             float(np.linalg.norm(rot_error(T[:3, :3], T_des[:3, :3])))
 
@@ -348,8 +351,18 @@ class WholeBody(Node):
         the difference under test is where the constraints enter the solve, not
         which constraints they are.
         """
-        if self.rows is None or self.K is None:
-            return None, None, 0
+        # fail closed. An empty constraint set is not "no constraints", it is a
+        # solver running blind, and the first version of this returned None
+        # here, the QP branch fell through to the unconstrained answer, and the
+        # run reported success while reproducing the two-stage result exactly.
+        # Anything that leaves this function without a real constraint set now
+        # stops the run.
+        if self.K is None:
+            raise RuntimeError('QP: 沒有運動學模型')
+        if self.rows is None:
+            raise RuntimeError('QP: 沒有距離資料')
+        if not self.link_names:
+            raise RuntimeError('QP: 連桿名單為空，列的連桿索引無法解讀')
         pts = []
         R = self.rows
         for r in R:
@@ -364,7 +377,9 @@ class WholeBody(Node):
                 age=float(r[8]), occluded=bool(r[9] >= 0.5),
                 offset=np.asarray(r[11:14], float), rho=float(r[14])))
         if not pts:
-            return None, None, 0
+            raise RuntimeError(
+                f'QP: {len(R)} 列距離資料中沒有一列可用（狀態或連桿索引不符），'
+                '約束集合為空')
         cfg = self.cfg
         Ab, bb, cap, _ = _rows_from_points(self.K, q, pts, cfg, v_lin)
         Aj, bj = _joint_limit_rows(self.K, q, cfg)
@@ -380,7 +395,7 @@ class WholeBody(Node):
         m = osqp.OSQP()
         m.setup(P=P, q=g, A=sparse.csc_matrix(A),
                 l=np.full(len(b), -np.inf), u=b, verbose=False,
-                eps_abs=1e-7, eps_rel=1e-7, max_iter=8000, polish=True)
+                eps_abs=1e-7, eps_rel=1e-7, max_iter=8000, polish=False)
         r = m.solve()
         if r.info.status_val not in (1, 2):
             return None
@@ -422,7 +437,12 @@ class WholeBody(Node):
                 self.stop()
                 print(f'  逾時 {a.timeout_s:.0f} s', flush=True)
                 return False
-            v, T, ep, er = self.solve(T_des)
+            try:
+                v, T, ep, er = self.solve(T_des)
+            except RuntimeError as exc:
+                self.stop()
+                print(f'  中止（fail closed）：{exc}', flush=True)
+                return False
             done = ep < a.tol_p and er < a.tol_r
             # A solve that stops moving while the error is still large is a
             # different failure from running out of time, and reporting it as a
