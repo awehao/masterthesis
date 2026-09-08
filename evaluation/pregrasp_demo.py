@@ -54,6 +54,7 @@ from ammr_wholebody_mpc.arm_pregrasp import (                   # noqa: E402
     ARM_JOINTS, min_jerk, plan_pregrasp, rot_error)
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
 import verify_pregrasp as VP                                    # noqa: E402
+from arm_poses import pose as named_pose                        # noqa: E402
 import verify_self_collision as VSC                             # noqa: E402
 
 # The simulator spawns the model root 0.05 m above the world origin, so the
@@ -365,7 +366,9 @@ def main() -> int:
     ap.add_argument('--tcp', default='link_tcp')
     ap.add_argument('--stand', type=float, default=0.24,
                     help='pre-grasp standoff from the box face, m')
-    ap.add_argument('--start', nargs=6, type=float, default=[0, 0, 0.30, 0, 0, 0])
+    ap.add_argument('--start', nargs=6, type=float,
+                    default=named_pose('test_start'),
+                    help='defaults to test_start in config/arm_initial_pose.yaml')
     ap.add_argument('--base-x', type=float, default=0.0)
     ap.add_argument('--base-y', type=float, default=0.0)
     ap.add_argument('--base-yaw', type=float, default=0.0)

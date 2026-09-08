@@ -45,7 +45,9 @@ else:
     print('  /joint_states 未達穩定')
 rclpy.shutdown()
 WAIT
-        exec python3 evaluation/barrier_probe.py --home 0 0 0.30 0 0 0 --home-only \
+        HOME_Q=$(python3 evaluation/arm_poses.py test_start)
+        echo "  歸位目標（來自 config/arm_initial_pose.yaml）：$HOME_Q"
+        exec python3 evaluation/barrier_probe.py --home $HOME_Q --home-only \
              --out /tmp/wb_home.json
         ;;
 

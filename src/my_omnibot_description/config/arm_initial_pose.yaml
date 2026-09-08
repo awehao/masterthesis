@@ -22,3 +22,45 @@ joint3: 0.0
 joint4: 0.0
 joint5: 0.0
 joint6: 0.0
+
+# ---------------------------------------------------------------------------
+# Named poses used by the evaluation scripts. Neither xacro nor the launch
+# reads these -- both index joint1..joint6 above by name -- but they live here
+# so that all of the arm's fixed configurations are in ONE file. They were
+# hard-coded separately in run_wholebody_demo.sh, pregrasp_demo.py and
+# wholebody_pregrasp.py, which is the exact failure this file was created to
+# stop: the same number written out in several places with nothing linking them.
+
+# Where a RUN starts. Not the same as the spawn pose above, for two reasons.
+#
+# Clearance: all zeros clears everything, but it stands on a slope. Sampled
+# self-clearance is 9.09 mm at joint3 = 0, 4.28 mm at -0.02 and 3.11 mm at
+# -0.05; from +0.05 upward it flattens at 19.66 mm because the closest pair
+# becomes link4/link6, which does not depend on joint3 at all.
+#
+# Limit headroom, which is what picks 0.30 over 0.05: joint3's safe range is
+# [-0.0611, +2.9356] -- one-sided. All zeros sits 0.0611 rad above the bottom,
+# and a run's own guard aborts at bottom + 0.05 = -0.0111, leaving 0.011 rad.
+# A solver that dips joint3 slightly negative kills the run before it starts,
+# which is what happened twice to the whole-body attempts. 0.30 leaves 0.361,
+# and is the angle the actuation self-test already drove to and measured.
+test_start:
+  joint1: 0.0
+  joint2: 0.0
+  joint3: 0.30
+  joint4: 0.0
+  joint5: 0.0
+  joint6: 0.0
+
+# Preferred arm configuration for the whole-body solver's posture term. This is
+# an OUTPUT, not a choice: it is the IK solution for the pre-grasp pose 0.24 m
+# in front of the box face, whose path was checked in section 10.14. Recorded
+# here rather than retyped, but it belongs to that target -- change the target
+# and this has to be recomputed, not edited.
+pregrasp_reference:
+  joint1: 0.0
+  joint2: 0.6518
+  joint3: 0.5886
+  joint4: 0.0
+  joint5: -1.634
+  joint6: 0.0

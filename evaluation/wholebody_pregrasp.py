@@ -78,6 +78,7 @@ sys.path.insert(0, _HERE)
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE                # noqa: E402
 from ammr_wholebody_mpc.arm_pregrasp import ARM_JOINTS, rot_error   # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
+from arm_poses import pose as named_pose                            # noqa: E402
 
 MODEL_Z = 0.05
 STATUS_OK = 0.0
@@ -389,8 +390,9 @@ def main() -> int:
     # -- the run stopped dead at 131 mm and 22 degrees with every velocity at
     # zero, the barrier never involved, and only the timeout to show for it.
     ap.add_argument('--posture', nargs=6, type=float,
-                    default=[0.0, 0.6518, 0.5886, 0.0, -1.634, 0.0],
-                    help='preferred arm configuration (null-space reference)')
+                    default=named_pose('pregrasp_reference'),
+                    help='preferred arm configuration; defaults to '
+                         'pregrasp_reference in config/arm_initial_pose.yaml')
     ap.add_argument('--damping', type=float, default=0.06)
     ap.add_argument('--tol-p', type=float, default=0.005)
     ap.add_argument('--tol-r', type=float, default=0.02)
