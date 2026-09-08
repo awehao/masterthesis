@@ -30,11 +30,21 @@
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
+  <!-- All zeros, not the previous tuck.
+       The tuck pose (0, -0.082, 0.089, 0, 1.679, 0) is in self-collision, and
+       not marginally: exact triangle tests put link1 against the gripper shell
+       and against finger2 at 0.000 m, i.e. actually intersecting, with finger1
+       at 1.6 mm. Sampled point clouds had reported 1 to 3 mm there for months
+       because they never landed on the pair of triangles that cross.
+       All zeros clears every non-excluded pair, with link_base to link5 the
+       tightest at 8.79 mm. That is not a lot: joint3 going NEGATIVE from here
+       reaches intersection within 0.05 rad, so any motion starting from this
+       pose needs its direction checked first. -->
   <xacro:property name="tuck_j1" value="0.0"/>
-  <xacro:property name="tuck_j2" value="-0.082"/>
-  <xacro:property name="tuck_j3" value="0.089"/>
+  <xacro:property name="tuck_j2" value="0.0"/>
+  <xacro:property name="tuck_j3" value="0.0"/>
   <xacro:property name="tuck_j4" value="0.0"/>
-  <xacro:property name="tuck_j5" value="1.679"/>
+  <xacro:property name="tuck_j5" value="0.0"/>
   <xacro:property name="tuck_j6" value="0.0"/>
 
   <xacro:macro name="lite6_ros2_control_gz"
