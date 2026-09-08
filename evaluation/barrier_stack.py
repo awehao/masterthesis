@@ -105,7 +105,12 @@ def main() -> int:
                     help='safety node base-TF staleness limit; set absurdly '
                          'high only to reproduce the pre-fix behaviour')
     ap.add_argument('--rate', type=float, default=20.0)
-    ap.add_argument('--max-rows-per-link', type=int, default=60)
+    # Defaults to None so the NODE's own value applies. It used to default to
+    # 60 and pass it unconditionally, which silently overrode the node's number
+    # -- so raising the node's cap to 100 after the chassis joined the barrier
+    # changed nothing, and rows kept being dropped. A launcher that repeats a
+    # default is a second place for it to be wrong.
+    ap.add_argument('--max-rows-per-link', type=int, default=None)
     ap.add_argument('--no-foxglove', action='store_true')
     ap.add_argument('--camera-topic', default='/demo_cam',
                     help='bridge this gz camera to ROS for recording; empty to skip')
@@ -176,7 +181,8 @@ def main() -> int:
             '-p', f'report_frame:={a.report_frame}',
             '-p', 'geometry:=links',
             '-p', f'wholebody_urdf:={urdf}',
-            '-p', f'max_rows_per_link:={a.max_rows_per_link}',
+            *(['-p', f'max_rows_per_link:={a.max_rows_per_link}']
+              if a.max_rows_per_link is not None else []),
             '-p', 'require_occlusion_feed:=false',
             # Quoted. The override is parsed as YAML, so an unquoted
             # obs_0::box:0.4,1,1.2:... inside a flow sequence is read as a

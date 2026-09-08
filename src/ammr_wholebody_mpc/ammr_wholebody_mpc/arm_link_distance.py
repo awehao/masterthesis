@@ -130,6 +130,22 @@ class ArmLinkDistance(Node):
         p('wholebody_urdf', '')
         p('rho_target', 0.015)
         p('cert_tol', 0.001)
+        # 100 since the chassis joined the barrier. Measured over a whole-body
+        # run with the cap raised to 400 so it could not bite, the largest band
+        # any link produced was base_link with 90 rows (link2 77, link4 62,
+        # link1 48); total rows peaked at 392 with zero dropped. 100 sits above
+        # the observed maximum, which is the only kind of cap the band argument
+        # survives -- a cap that bites throws away rows the covering guarantee
+        # depends on. It is an observed maximum over one scenario, not a proof
+        # for every pose, which is why the dropped count is published every
+        # cycle: if it is ever non-zero the guarantee is void for that cycle and
+        # it says so rather than being assumed away.
+        #
+        # Cost: the safety solve went from p50 10.85 / p95 11.75 ms at 179 rows
+        # to p50 13.31 / p95 27.44 / max 42.17 ms at 392, against a 50 ms
+        # period. The deadline margin is now thin and is a known issue.
+        #
+        # The earlier reasoning for 60, from when only the arm was in:
         # 60, not a smaller number that looks cheap. Measured over 100 random
         # poses and commanded velocities, a cap of 8 left the solution up to
         # 32.98 mm/s worse against the full row set on 12 cycles and moved the
@@ -138,7 +154,7 @@ class ArmLinkDistance(Node):
         # uncapped solution exactly. A sample further from the obstacle can
         # still bind, because the row is n^T J v and both the normal and the
         # Jacobian change from point to point.
-        p('max_rows_per_link', 60)
+        p('max_rows_per_link', 100)
         p('publish_rate', 30.0)
         p('pose_timeout', 0.5)      # s, obstacle pose older than this is stale
         p('occl_timeout', 0.5)      # s, occlusion info older than this is unusable

@@ -54,7 +54,14 @@ from scipy.spatial import cKDTree
 
 from .arm_detection_points import Obstacle, _closest_local, _inv, _iso, _rpy_to_rot
 
-ARM_LINKS = ('link_base', 'link1', 'link2', 'link3', 'link4', 'link5', 'link6',
+# base_link is FIRST because it is the chassis, and until now it was not in
+# this list at all: the barrier constrained ten arm links and left the vehicle
+# itself geometrically unconstrained. That was invisible while the base was
+# held fixed, and it stops being invisible the moment the base is part of the
+# solution -- the chassis could drive into an obstacle with every barrier
+# residual reporting satisfaction, because no row described the chassis.
+ARM_LINKS = ('base_link',
+             'link_base', 'link1', 'link2', 'link3', 'link4', 'link5', 'link6',
              'uflite_gripper_link', 'uflite_finger1', 'uflite_finger2')
 
 
@@ -142,28 +149,67 @@ def _fps(P: np.ndarray, k: int, rng) -> np.ndarray:
     return sel
 
 
-def arm_link_names(xml: str, links=ARM_LINKS) -> list[str]:
-    """The ordered link list both ends of the wire have to agree on.
+def _primitive_tris(g, seg: int = 32) -> np.ndarray | None:
+    """Triangulate a URDF collision primitive, CIRCUMSCRIBING the true shape.
 
-    The distance node sends a link INDEX, not a name -- five floats per row is
-    already more wire than the old format -- so the two nodes must derive the
-    same order from the same description. Reading it from the URDF rather than
-    hard-coding it means adding a link cannot silently shift the mapping.
+    The polygon is scaled by 1/cos(pi/seg) so it CONTAINS the cylinder or
+    sphere rather than being inscribed in it. An inscribed polygon is smaller
+    than the body it stands for, so every distance computed from it would be
+    larger than the truth -- optimistic, in the one direction a safety model
+    must never be. At seg=32 the price is 0.5% of the radius.
     """
-    root = ET.fromstring(re.sub(r'<!--.*?-->', '', xml, flags=re.S))
-    out = []
-    for link in root.findall('link'):
-        name = link.get('name')
-        if name in links and any(
-                (c.find('geometry') is not None
-                 and c.find('geometry').find('mesh') is not None)
-                for c in link.findall('collision')):
-            out.append(name)
-    return out
+    cyl, box, sph = g.find('cylinder'), g.find('box'), g.find('sphere')
+    k = 1.0 / math.cos(math.pi / seg)
+    if cyl is not None:
+        r = float(cyl.get('radius')) * k
+        h = float(cyl.get('length'))
+        a = np.linspace(0.0, 2.0 * math.pi, seg, endpoint=False)
+        ring = np.stack([r * np.cos(a), r * np.sin(a)], axis=1)
+        lo = np.column_stack([ring, np.full(seg, -h / 2)])
+        hi = np.column_stack([ring, np.full(seg, +h / 2)])
+        T = []
+        for i in range(seg):
+            j = (i + 1) % seg
+            T += [[lo[i], lo[j], hi[j]], [lo[i], hi[j], hi[i]]]        # side
+            T += [[np.array([0, 0, -h / 2]), lo[j], lo[i]]]            # caps
+            T += [[np.array([0, 0, +h / 2]), hi[i], hi[j]]]
+        return np.array(T, dtype=float)
+    if box is not None:
+        sx, sy, sz = (float(v) / 2 for v in box.get('size').split())
+        c = np.array([[x, y, z] for x in (-sx, sx)
+                      for y in (-sy, sy) for z in (-sz, sz)], dtype=float)
+        f = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1),
+             (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+        T = []
+        for a_, b_, c_, d_ in f:
+            T += [[c[a_], c[b_], c[c_]], [c[a_], c[c_], c[d_]]]
+        return np.array(T, dtype=float)
+    if sph is not None:
+        r = float(sph.get('radius')) * k
+        u = np.linspace(0, math.pi, seg // 2 + 1)
+        v = np.linspace(0, 2 * math.pi, seg, endpoint=False)
+        P = np.array([[r * math.sin(a) * math.cos(b), r * math.sin(a) * math.sin(b),
+                       r * math.cos(a)] for a in u for b in v])
+        n = len(v)
+        T = []
+        for i in range(len(u) - 1):
+            for j in range(n):
+                a_, b_ = i * n + j, i * n + (j + 1) % n
+                c_, d_ = a_ + n, b_ + n
+                T += [[P[a_], P[b_], P[c_]], [P[b_], P[d_], P[c_]]]
+        return np.array(T, dtype=float)
+    return None
 
 
 def link_collision_tris(xml: str, links=ARM_LINKS) -> dict[str, np.ndarray]:
-    """Collision triangles of each link, in that link's own frame."""
+    """Collision triangles of each link, in that link's own frame.
+
+    Meshes AND primitives. Primitives used to be skipped silently, so a link
+    whose collision is a cylinder -- the chassis is one -- produced no
+    triangles and simply vanished from the barrier without any error. The
+    simulator, the distance computation and the safety check have to be looking
+    at the same bodies, and that means reading the same collision geometry.
+    """
     root = ET.fromstring(re.sub(r'<!--.*?-->', '', xml, flags=re.S))
     out = {}
     for link in root.findall('link'):
@@ -173,16 +219,21 @@ def link_collision_tris(xml: str, links=ARM_LINKS) -> dict[str, np.ndarray]:
         tris = []
         for col in link.findall('collision'):
             g = col.find('geometry')
-            m = g.find('mesh') if g is not None else None
-            if m is None:
+            if g is None:
                 continue
-            p = m.get('filename', '').replace('file://', '')
-            if not os.path.exists(p):
-                continue
-            V = _load_stl_tris(p)
-            sc = m.get('scale')
-            if sc:
-                V = V * np.array([float(x) for x in sc.split()])
+            m = g.find('mesh')
+            if m is not None:
+                p = m.get('filename', '').replace('file://', '')
+                if not os.path.exists(p):
+                    continue
+                V = _load_stl_tris(p)
+                sc = m.get('scale')
+                if sc:
+                    V = V * np.array([float(x) for x in sc.split()])
+            else:
+                V = _primitive_tris(g)
+                if V is None:
+                    continue
             o = col.find('origin')
 
             def gx(k, d, o=o):
@@ -193,6 +244,24 @@ def link_collision_tris(xml: str, links=ARM_LINKS) -> dict[str, np.ndarray]:
         if tris:
             out[name] = np.concatenate(tris)
     return out
+
+
+def arm_link_names(xml: str, links=ARM_LINKS) -> list[str]:
+    """The ordered link list both ends of the wire have to agree on.
+
+    The distance node sends a link INDEX, not a name -- five floats per row is
+    already more wire than the old format -- so the two nodes must derive the
+    same order from the same description. Reading it from the URDF rather than
+    hard-coding it means adding a link cannot silently shift the mapping.
+    """
+    # Derived from link_collision_tris, not re-implemented alongside it. The
+    # two used to decide independently which links count, and when the chassis
+    # arrived -- collision geometry a cylinder, not a mesh -- the sampler took
+    # it and this did not. The result was an order mismatch caught only by an
+    # assertion at startup; had the two lists happened to be the same LENGTH it
+    # would have gone through and attached every row to the wrong link. One
+    # function decides, both ends read its answer.
+    return list(link_collision_tris(xml, links))
 
 
 def certified_covering_radius(tris: np.ndarray, S: np.ndarray,
@@ -314,16 +383,21 @@ def sample_links(xml: str, rho_target: float = 0.015, links=ARM_LINKS,
         tris = []
         for col in link.findall('collision'):
             g = col.find('geometry')
-            m = g.find('mesh') if g is not None else None
-            if m is None:
+            if g is None:
                 continue
-            p = m.get('filename', '').replace('file://', '')
-            if not os.path.exists(p):
-                continue
-            V = _load_stl_tris(p)
-            sc = m.get('scale')
-            if sc:
-                V = V * np.array([float(x) for x in sc.split()])
+            m = g.find('mesh')
+            if m is not None:
+                p = m.get('filename', '').replace('file://', '')
+                if not os.path.exists(p):
+                    continue
+                V = _load_stl_tris(p)
+                sc = m.get('scale')
+                if sc:
+                    V = V * np.array([float(x) for x in sc.split()])
+            else:
+                V = _primitive_tris(g)
+                if V is None:
+                    continue
             o = col.find('origin')
 
             def gx(k, d, o=o):

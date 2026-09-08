@@ -21,6 +21,15 @@
   <link name="base_link">
     <inertial>
       <origin xyz="0 0 0.14" rpy="0 0 0"/>
+      <!-- Length 0.28, not 0.18. The visual mesh spans z 0.000 to 0.280 in this
+           frame and reaches the full 0.300 radius at BOTH ends: a wide bottom
+           disc over z 0.000-0.080 and a wide top plate over z 0.260-0.280, with
+           only the narrow column at z 0.180-0.200 (r 0.110) in between. A
+           0.18-long cylinder centred at 0.14 covered z 0.050-0.230 and left
+           1386 of the mesh's 2688 vertices, 51.6%, outside the collision body
+           entirely — including both full-radius ends. Filling the column
+           region out to 0.300 over-approximates that one band, which is the
+           conservative direction; leaving the ends uncovered was not. -->
       <mass value="18.0"/>
       <inertia ixx="0.5229" ixy="0.0" ixz="0.0" iyy="0.5229" iyz="0.0" izz="0.81"/>
     </inertial>
@@ -33,6 +42,15 @@
     </visual>
     <collision>
       <origin xyz="0 0 0.14" rpy="0 0 0"/>
+      <!-- Length 0.28, not 0.18. The visual mesh spans z 0.000 to 0.280 in this
+           frame and reaches the full 0.300 radius at BOTH ends: a wide bottom
+           disc over z 0.000-0.080 and a wide top plate over z 0.260-0.280, with
+           only the narrow column at z 0.180-0.200 (r 0.110) in between. A
+           0.18-long cylinder centred at 0.14 covered z 0.050-0.230 and left
+           1386 of the mesh's 2688 vertices, 51.6%, outside the collision body
+           entirely — including both full-radius ends. Filling the column
+           region out to 0.300 over-approximates that one band, which is the
+           conservative direction; leaving the ends uncovered was not. -->
       <!-- The chassis is a DISC of radius 0.300 m: that is what the visual mesh
            measures (chassis_frame.stl reaches 0.300 in every 30 deg sector) and
            it is what the analysis uses to judge clearance. The collision body
@@ -46,7 +64,7 @@
            slightly smaller on its diagonals (0.300 vs 0.225*sqrt(2) = 0.318),
            so earlier batches are not comparable to anything run after it. -->
       <geometry>
-        <cylinder radius="0.300" length="0.18"/>
+        <cylinder radius="0.300" length="0.28"/>
       </geometry>
     </collision>
   </link>

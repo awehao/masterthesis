@@ -18,8 +18,15 @@ cuts exactly one thing and records what the controller topics do.
   tf          kills base_tf_bridge, so world -> base_footprint stops while
               /odom keeps flowing: the only consumer that notices is whatever
               checks the TRANSFORM's age
-  odom        kills the /odom bridge, which stops both /odom and, downstream of
-              it, the TF that is derived from it
+  odom        freezes the /odom bridge, which stops both /odom and, downstream
+              of it, the TF that is derived from it
+  distance    freezes arm_link_distance while JointState and TF stay live. This
+              one is expected NOT to stop: stale points turn every row into
+              NODATA and the filter applies a speed cap. That is a DEGRADATION,
+              not a stop, and low speed is not by itself evidence of safety --
+              with the obstacle distance unknown, slow is still enough to hit
+              something. The test records what actually comes out, whether the
+              robot keeps moving, and whether it recovers when the feed returns.
 
     python3 evaluation/verify_state_staleness.py --fault tf
 """
@@ -66,6 +73,7 @@ class Tester(Node):
         self.diag = None
         self.js_t = self.odom_t = None
         self.stopped = []
+        self.t_resume = None
         self.create_subscription(Float64MultiArray,
                                  '/lite6_vel_controller/commands',
                                  self._on_arm, 20, callback_group=self.cbg)
@@ -125,8 +133,9 @@ class Tester(Node):
         # process so it stops publishing while still existing, which is the
         # fault this is meant to inject: a feed that goes quiet, with everything
         # else running.
-        needle = ('base_tf_bridge.py' if f == 'tf'
-                  else 'parameter_bridge /odom_raw')
+        needle = {'tf': 'base_tf_bridge.py',
+                  'odom': 'parameter_bridge /odom_raw',
+                  'distance': 'ammr_wholebody_mpc/arm_link_distance'}[f]
         ps = pids_matching(needle)
         for p in ps:
             subprocess.run(['kill', '-STOP', str(p)])
@@ -157,12 +166,20 @@ class Tester(Node):
                 base=None if self.base_twist is None
                      else [float(x) for x in self.base_twist],
                 reason=None if self.diag is None else self.diag[1],
+                n_nodata=None if self.diag is None else self.diag[13],
+                min_d=None if self.diag is None else self.diag[11],
                 tf_age=None if (self.diag is None or len(self.diag) < 19)
                        else self.diag[18],
                 js_age=None if self.js_t is None else time.monotonic() - self.js_t,
                 odom_age=None if self.odom_t is None
                          else time.monotonic() - self.odom_t))
-            if t > a.pre_s + a.post_s:
+            if (a.recover_s > 0 and self.stopped
+                    and self.t_resume is None and t > a.pre_s + a.post_s):
+                for p_ in self.stopped:
+                    subprocess.run(['kill', '-CONT', str(p_)])
+                self.t_resume = time.monotonic()
+                print(f'  t={t:5.2f}s 恢復：SIGCONT {self.stopped}', flush=True)
+            if t > a.pre_s + a.post_s + a.recover_s:
                 break
         for p in self.stopped:
             subprocess.run(['kill', '-CONT', str(p)])
@@ -179,12 +196,15 @@ class Tester(Node):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--fault', default='none',
-                    choices=['none', 'jointstate', 'tf', 'odom'])
+                    choices=['none', 'jointstate', 'tf', 'odom', 'distance'])
     ap.add_argument('--cmd', nargs=9, type=float,
                     default=[0.05, 0, 0, 0, 0.05, 0, 0, 0, 0])
     ap.add_argument('--rate', type=float, default=20.0)
     ap.add_argument('--pre-s', type=float, default=4.0)
     ap.add_argument('--post-s', type=float, default=6.0)
+    ap.add_argument('--recover-s', type=float, default=0.0,
+                    help='after post-s, resume the frozen feed and watch this '
+                         'much longer')
     a = ap.parse_args()
 
     rclpy.init()
@@ -233,6 +253,30 @@ def main() -> int:
         print(f"  故障後 安全節點 reason：{[REASON.get(x, x) for x in rs]}")
         last = rel[-1]
         print(f"  結束時 手臂命令 {last['arm']}  底盤命令 {last['base']}")
+        mv = [max(abs(x) for x in r['arm']) for r in rel if r['arm']]
+        if mv:
+            print(f"  故障後 手臂命令絕對值 中位 {np.median(mv):.4f} 最大 {max(mv):.4f}")
+        bv = [max(abs(x) for x in r['base']) for r in rel if r['base']]
+        if bv:
+            print(f"  故障後 底盤命令絕對值 中位 {np.median(bv):.4f} 最大 {max(bv):.4f}")
+        pre = [r for r in R if r['t'] < a.pre_s]
+        for lab, seg in (('故障前', pre), ('故障後', rel)):
+            av = [max(abs(x) for x in r['arm']) for r in seg if r['arm']]
+            bb = [max(abs(x) for x in r['base']) for r in seg if r['base']]
+            nd = [r['n_nodata'] for r in seg if r.get('n_nodata') is not None]
+            if av and bb:
+                print(f"  {lab}：手臂 {np.median(av):.4f}  底盤 {np.median(bb):.4f}"
+                      f"  NODATA 列數 中位 {np.median(nd):.0f}" if nd else
+                      f"  {lab}：手臂 {np.median(av):.4f}  底盤 {np.median(bb):.4f}")
+        if n.t_resume is not None:
+            t_rel = n.t_resume - n.t_fault + a.pre_s
+            after = [r for r in R if r['t'] >= t_rel]
+            back = next((r['t'] - t_rel for r in after
+                         if r['arm'] and max(abs(x) for x in r['arm']) > 1e-9), None)
+            rs = sorted({int(r['reason']) for r in after if r['reason'] is not None})
+            print(f"  恢復後 → 命令再度非零 "
+                  f"{('%.0f ms' % (back*1e3)) if back is not None else '未恢復'}"
+                  f"；reason {[REASON.get(x, x) for x in rs]}")
         for k, lab in (('js_age', 'JointState'), ('odom_age', 'odom'),
                        ('tf_age', 'TF(安全節點回報)')):
             v = [r[k] for r in rel if r[k] is not None]
