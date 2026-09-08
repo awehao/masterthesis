@@ -81,7 +81,30 @@ def metrics(path: str) -> dict:
         n_bar_rows=int(L[-1].get('n_bar_rows', 0)),
         n_qp_fail=int(L[-1].get('n_qp_fail', 0)),
         qp_status=L[-1].get('qp_status', {}),
-        qp_iter_max=int(L[-1].get('qp_iter_max', 0)))
+        qp_iter_max=int(L[-1].get('qp_iter_max', 0)),
+        **_timing(L, 1.0 / json.load(open(path))['args']['rate']))
+
+
+def _timing(L, period):
+    tq = np.array([r.get('t_qp', np.nan) for r in L], float)
+    ts = np.array([r.get('t_solve', np.nan) for r in L], float)
+    dp = np.array([r.get('dt_pub', np.nan) for r in L], float)
+    dp = dp[np.isfinite(dp)]
+    out = dict(period=period)
+    for nm, v in (('t_qp', tq), ('t_solve', ts)):
+        v = v[np.isfinite(v)]
+        if len(v):
+            out[nm + '_p50'] = float(np.percentile(v, 50))
+            out[nm + '_p95'] = float(np.percentile(v, 95))
+            out[nm + '_max'] = float(v.max())
+    if len(dp):
+        out['dt_pub_p50'] = float(np.percentile(dp, 50))
+        out['dt_pub_p95'] = float(np.percentile(dp, 95))
+        out['dt_pub_max'] = float(dp.max())
+        # Overrun: the loop failed to publish within the period it promised.
+        out['overrun_n'] = int((dp > period * 1.05).sum())
+        out['overrun_frac'] = float((dp > period * 1.05).mean())
+    return out
 
 
 def main() -> int:

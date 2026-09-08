@@ -195,6 +195,9 @@ class WholeBody(Node):
         self.qp_status = {}
         self.qp_iter_max = 0
         self.qp_last_status = ''
+        self.t_qp = 0.0
+        self.t_solve = 0.0
+        self.t_pub_prev = None
         self.log = []
 
     # ---------------------------------------------------------------- inputs
@@ -412,6 +415,7 @@ class WholeBody(Node):
         import io
         import osqp
         from scipy import sparse
+        _t0 = time.monotonic()
         P = sparse.csc_matrix((H + H.T) / 2.0)
         m = osqp.OSQP()
         with contextlib.redirect_stdout(io.StringIO()):
@@ -419,6 +423,7 @@ class WholeBody(Node):
                     l=np.full(len(b), -np.inf), u=b, verbose=False,
                     eps_abs=1e-6, eps_rel=1e-6, max_iter=50000, polish=True)
             r = m.solve()
+        self.t_qp = time.monotonic() - _t0
         st = str(r.info.status)
         self.qp_status[st] = self.qp_status.get(st, 0) + 1
         self.qp_iter_max = max(self.qp_iter_max, int(r.info.iter))
@@ -464,7 +469,10 @@ class WholeBody(Node):
                 print(f'  逾時 {a.timeout_s:.0f} s', flush=True)
                 return False
             try:
+                _ts = time.monotonic()
+                self.t_qp = 0.0
                 v, T, ep, er = self.solve(T_des)
+                self.t_solve = time.monotonic() - _ts
             except RuntimeError as exc:
                 self.stop()
                 print(f'  中止（fail closed）：{exc}', flush=True)
@@ -494,11 +502,20 @@ class WholeBody(Node):
                 break
             m = Float64MultiArray()
             m.data = [float(x) for x in v]
+            _now = time.monotonic()
+            dt_pub = (_now - self.t_pub_prev) if self.t_pub_prev else float('nan')
+            self.t_pub_prev = _now
             self.pub.publish(m)
             self.v_prev = v.copy()
             self.log.append(dict(
                 n_bar_rows=int(self.n_bar_rows), n_qp_fail=int(self.n_qp_fail),
                 qp_status=dict(self.qp_status), qp_iter_max=int(self.qp_iter_max),
+                # Wall time inside the QP, wall time for the whole solve, and
+                # the interval actually achieved between published commands.
+                # Iteration counts are not a schedule: 25900 iterations says
+                # nothing about whether a 50 ms period was met.
+                t_qp=float(self.t_qp), t_solve=float(self.t_solve),
+                dt_pub=float(dt_pub),
                 t=t, base=[float(x) for x in self.base],
                 base_stamp=self.base_stamp,
                 q=[float(x) for x in self.q_arm],
