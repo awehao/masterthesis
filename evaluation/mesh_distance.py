@@ -165,7 +165,12 @@ def _inside(point, tris, votes=3):
                      [-0.7213, 0.2891, 0.6293],
                      [0.5119, -0.7749, 0.3699]])[:votes]
     hits = [_ray_parity(point, tris, u / np.linalg.norm(u)) for u in dirs]
-    return sum(hits) * 2 > len(hits)
+    agree = all(h == hits[0] for h in hits)
+    # Disagreement means at least one ray met an edge or a vertex, or the mesh
+    # is not watertight. Returning the majority would turn that into a silent
+    # "no collision"; it is reported as undecided instead. Majority voting is a
+    # robustness improvement, not a proof.
+    return (hits[0] if agree else False), (not agree)
 
 
 def _ray_parity(point, tris, d):
@@ -184,42 +189,75 @@ def _ray_parity(point, tris, d):
     return bool(hit.sum() % 2 == 1)
 
 
-def mesh_pair(TA, TB, prefilter=6):
+def mesh_pair(TA, TB, seed_k=4, tol=1e-9):
     """Distance, witnesses, intersection and containment for two triangle sets.
 
-    The candidate set is narrowed by triangle centroids before any exact work:
-    a KD-tree gives the nearest few centroids of B for each of A, which bounds
-    the search without an AABB tree while staying honest -- the prefilter is
-    widened by the largest circumradius on each side so it cannot discard the
-    true closest pair.
+    Pruning rule
+    ------------
+    A pair may be discarded only when a LOWER BOUND on its distance already
+    exceeds the best distance found so far. Centroid distance is not that
+    bound: a large triangle's centroid can be far away while one of its edges
+    is touching. What is a bound is
+
+        |c_i - c_j| - r_i - r_j        r = circumradius about the centroid
+
+    so the candidate set is every pair whose centroid separation is within
+    (best + r_max_A + r_max_B), then filtered by the per-triangle radii. The
+    first version kept the k nearest centroids of B for each triangle of A,
+    which is an ordering, not a bound, and could drop the true closest pair
+    outright.
+
+    A few nearest-centroid pairs are evaluated first only to seed `best`, so
+    the radius query has something to shrink around.
     """
     ca, cb = TA.mean(1), TB.mean(1)
-    ra = np.linalg.norm(TA - ca[:, None, :], axis=2).max()
-    rb = np.linalg.norm(TB - cb[:, None, :], axis=2).max()
-    tree = cKDTree(cb)
-    k = min(prefilter, len(cb))
-    dd, jj = tree.query(ca, k=k)
+    ra = np.linalg.norm(TA - ca[:, None, :], axis=2).max(axis=1)
+    rb = np.linalg.norm(TB - cb[:, None, :], axis=2).max(axis=1)
+    ta, tb = cKDTree(ca), cKDTree(cb)
+
+    # seed an upper bound from a handful of nearest-centroid pairs
+    k = min(seed_k, len(cb))
+    dd, jj = tb.query(ca, k=k)
     dd = np.atleast_2d(dd.T).T
     jj = np.atleast_2d(jj.T).T
-    # any centroid pair beyond (best centroid distance + ra + rb) cannot win
-    cut = dd[:, 0].min() + ra + rb
-    ia, jb = np.nonzero(dd <= cut)
-    if len(ia) == 0:
-        ia = np.arange(len(ca)); jb = np.zeros(len(ca), dtype=int)
-    A = TA[ia]
-    B = TB[jj[ia, jb]]
-    hit = _tri_intersect(A, B)
-    d, wa, wb = tri_tri_distance(A, B)
-    # The edge/vertex enumeration gives the distance only for triangles that do
-    # NOT cross. Two that pass through each other have their closest features
-    # somewhere in the interiors, and the enumeration returns a positive number
-    # for a pair that is already interpenetrating -- 0.2 m on the first test
-    # case. Intersection is decided separately and overrides.
-    d = np.where(hit, 0.0, d)
-    k0 = int(np.argmin(d))
-    contained = None
-    if not hit.any():
-        contained = (_inside(TA[0, 0], TB), _inside(TB[0, 0], TA))
-    return dict(d=float(d[k0]), pa=wa[k0], pb=wb[k0],
-                intersect=bool(hit.any()),
-                contained=contained, checked=int(len(A)))
+    sel = np.argsort(dd[:, 0])[:200]
+    A0 = np.repeat(TA[sel], k, axis=0)
+    B0 = TB[jj[sel].ravel()]
+    d0, wa0, wb0 = tri_tri_distance(A0, B0)
+    hit0 = _tri_intersect(A0, B0)
+    d0 = np.where(hit0, 0.0, d0)
+    k0 = int(np.argmin(d0))
+    best, pa, pb = float(d0[k0]), wa0[k0], wb0[k0]
+    intersect = bool(hit0.any())
+
+    if not intersect and best > tol:
+        # complete candidate set under the bound above
+        R = best + ra.max() + rb.max()
+        pairs = ta.query_ball_tree(tb, R)
+        ia, jb = [], []
+        for i, js in enumerate(pairs):
+            for j in js:
+                if np.linalg.norm(ca[i] - cb[j]) - ra[i] - rb[j] <= best:
+                    ia.append(i); jb.append(j)
+        if ia:
+            A1, B1 = TA[ia], TB[jb]
+            hit1 = _tri_intersect(A1, B1)
+            d1, wa1, wb1 = tri_tri_distance(A1, B1)
+            d1 = np.where(hit1, 0.0, d1)
+            k1 = int(np.argmin(d1))
+            if d1[k1] < best:
+                best, pa, pb = float(d1[k1]), wa1[k1], wb1[k1]
+            intersect = bool(hit1.any())
+        n_checked = len(ia) + len(A0)
+    else:
+        n_checked = len(A0)
+
+    contained, undecided = (False, False), False
+    if not intersect:
+        ra_, ua = _inside(TA[0, 0], TB)
+        rb_, ub = _inside(TB[0, 0], TA)
+        contained = (ra_, rb_)
+        undecided = ua or ub
+    return dict(d=best, pa=pa, pb=pb, intersect=intersect,
+                contained=contained, undecided=undecided,
+                checked=int(n_checked), tol=tol)
