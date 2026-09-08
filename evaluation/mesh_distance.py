@@ -261,3 +261,61 @@ def mesh_pair(TA, TB, seed_k=4, tol=1e-9):
     return dict(d=best, pa=pa, pb=pb, intersect=intersect,
                 contained=contained, undecided=undecided,
                 checked=int(n_checked), tol=tol)
+
+
+def aabb_gap(TA, TB):
+    """Distance between the axis-aligned boxes of two triangle sets.
+
+    A lower bound on every triangle pair between them, computed from six
+    numbers per side. Whole link pairs metres apart are settled by this before
+    a single triangle is touched.
+    """
+    lo_a, hi_a = TA.reshape(-1, 3).min(0), TA.reshape(-1, 3).max(0)
+    lo_b, hi_b = TB.reshape(-1, 3).min(0), TB.reshape(-1, 3).max(0)
+    gap = np.maximum(np.maximum(lo_a - hi_b, lo_b - hi_a), 0.0)
+    return float(np.linalg.norm(gap))
+
+
+def clears(TA, TB, thresh, tol=1e-9):
+    """Is every triangle pair at least `thresh` apart?
+
+    Answers the question the pose check actually asks, which is cheaper than
+    the distance it was asking for. Three stages, each ending the work when it
+    can:
+
+      1  the link AABBs are already `thresh` apart          -> clear
+      2  per-triangle AABB lower bounds prune to a candidate set; empty -> clear
+      3  exact triangle distance on what survives, stopping at the first pair
+         below the threshold
+
+    Returns (clear, d_min_or_bound, n_exact). d is exact only when the answer
+    came from stage 3; otherwise it is the lower bound that settled it.
+    """
+    g = aabb_gap(TA, TB)
+    if g >= thresh:
+        return True, g, 0
+    la = TA.min(1); ha = TA.max(1)
+    lb = TB.min(1); hb = TB.max(1)
+    ca, cb = TA.mean(1), TB.mean(1)
+    ra = np.linalg.norm(TA - ca[:, None, :], axis=2).max(axis=1)
+    rb = np.linalg.norm(TB - cb[:, None, :], axis=2).max(axis=1)
+    tb_ = cKDTree(cb)
+    ia, jb = [], []
+    # radius per triangle of A, not one global radius: a single large triangle
+    # otherwise widens the query for every small one and drags in thousands of
+    # pairs that its own bound would have rejected.
+    rbmax = rb.max()
+    for i in range(len(ca)):
+        for j in tb_.query_ball_point(ca[i], thresh + ra[i] + rbmax):
+            d_lo = np.linalg.norm(
+                np.maximum(np.maximum(la[i] - hb[j], lb[j] - ha[i]), 0.0))
+            if d_lo < thresh:
+                ia.append(i); jb.append(j)
+    if not ia:
+        return True, thresh, 0
+    A, B = TA[ia], TB[jb]
+    hit = _tri_intersect(A, B)
+    d, _, _ = tri_tri_distance(A, B)
+    d = np.where(hit, 0.0, d)
+    dmin = float(d.min())
+    return bool(dmin >= thresh), dmin, len(ia)
