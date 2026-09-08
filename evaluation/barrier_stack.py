@@ -110,8 +110,15 @@ def main() -> int:
     procs: list[tuple[str, subprocess.Popen]] = []
 
     def spawn(label, cmd):
+        # Own process group per child. `ros2 run X Y` execs a WRAPPER that
+        # spawns the real node as a grandchild: signalling the wrapper alone
+        # left the node running, reparented and invisible to this script. Three
+        # restarts that way accumulated six orphaned nodes at ~80% CPU each,
+        # all still publishing on the same topics as the live stack -- load
+        # average 19, /joint_states gaps of 337 ms, and every safety topic
+        # carrying messages from four different publishers. Signal the GROUP.
         print(f'  啟動 {label}', flush=True)
-        p = subprocess.Popen(cmd, cwd=ROOT, start_new_session=False)
+        p = subprocess.Popen(cmd, cwd=ROOT, start_new_session=True)
         procs.append((label, p))
         return p
 
@@ -133,7 +140,10 @@ def main() -> int:
             '-p', f'wholebody_urdf:={urdf}',
             '-p', f'max_rows_per_link:={a.max_rows_per_link}',
             '-p', 'require_occlusion_feed:=false',
-            '-p', f'obstacles:=[{",".join(specs)}]'])
+            # Quoted. The override is parsed as YAML, so an unquoted
+            # obs_0::box:0.4,1,1.2:... inside a flow sequence is read as a
+            # mixed float/integer list and rcl refuses the whole argument.
+            '-p', 'obstacles:=[' + ','.join(f'"{x}"' for x in specs) + ']'])
 
         spawn('wholebody_safety', [
             'ros2', 'run', 'ammr_wholebody_mpc', 'wholebody_safety',
@@ -181,16 +191,39 @@ def main() -> int:
         print('\n收拾中…', flush=True)
         # Gate last: while anything upstream is still alive it must keep
         # publishing, and its own shutdown leaves a zero command behind.
+        def sig(p, s):
+            try:
+                os.killpg(os.getpgid(p.pid), s)
+            except (ProcessLookupError, PermissionError):
+                pass
+
         for label, p in reversed(procs):
             if p.poll() is None:
-                p.send_signal(signal.SIGINT)
+                sig(p, signal.SIGINT)
         t0 = time.time()
         for label, p in reversed(procs):
             try:
-                p.wait(timeout=max(0.5, 6.0 - (time.time() - t0)))
+                p.wait(timeout=max(0.5, 8.0 - (time.time() - t0)))
             except subprocess.TimeoutExpired:
                 print(f'   {label} 未回應 SIGINT，改用 SIGKILL', file=sys.stderr)
-                p.kill()
+                sig(p, signal.SIGKILL)
+                try:
+                    p.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    pass
+        # Nothing from this stack may outlive it. A survivor keeps publishing on
+        # the same topics as the next run and silently doubles every feed.
+        left = []
+        for label, p in procs:
+            try:
+                os.killpg(os.getpgid(p.pid), 0)
+                left.append(label)
+            except (ProcessLookupError, PermissionError):
+                pass
+        if left:
+            print(f'   !! 這些程序群組仍在: {left}', file=sys.stderr)
+        else:
+            print('   所有程序群組已結束')
         try:
             os.unlink(urdf)
         except OSError:

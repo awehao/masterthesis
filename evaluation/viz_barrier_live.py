@@ -18,10 +18,26 @@ so all three are published separately and never merged:
                  be too large, so this is an UPPER bound on the true clearance.
 
   Together they bracket it:  min_d_model <= d_true <= clearance_ub. The gap
-  between them is the price of discretisation, published as `conservatism`. If
-  min_d_model ever rose ABOVE clearance_ub the safety model would be proven
-  optimistic -- that is the falsification this trace exists to catch, and it is
-  published as `bound_violation` so it cannot be missed by eye.
+  between them is the price of discretisation, published as `conservatism`.
+
+  The two are sampled at different rates -- the model bound at the distance
+  node's rate, the independent bound at `indep_rate` -- so comparing them
+  instant by instant is only well posed when the arm is nearly still. While a
+  link moves at v, a bound held for `age` seconds is behind by up to v*age, and
+  a retreating arm makes the held upper bound too small: a 48 mm/s retreat with
+  a 320 ms hold produced a clean +10 mm saw-tooth that is entirely skew.
+  `clearance_ub_age` is published so a comparison can subtract v*age; without
+  it the raw difference is not evidence of anything during motion.
+
+  The two directions are NOT symmetric, and reading them as if they were is the
+  mistake this paragraph exists to prevent. `bound_violation = min_d_model -
+  clearance_ub` going POSITIVE proves something: the enforced lower bound has
+  passed an upper bound on the truth, so either the distance model or the data
+  alignment is wrong. It going non-positive proves nothing about the lower
+  bound, because the bracket can stay open while the lower bound is wrong
+  anywhere inside it. The lower bound's credibility comes from the certified
+  covering radius of section 10.11 and the conditions that certification holds
+  under -- this plot is an online cross-check, not the argument.
 
   Neither is the exact mesh distance. The exact triangle-to-triangle check is
   evaluation/mesh_distance.py, which is far too slow for a 10 Hz loop; it is run
@@ -156,7 +172,7 @@ class BarrierViz(Node):
             + f'  (seed {int(g("indep_seed"))}, not the sampler\'s)')
 
         self.tf_buffer = Buffer()
-        TransformListener(self.tf_buffer, self)
+        TransformListener(self.tf_buffer, self, spin_thread=True)
 
         self.rows = None            # (m, nf) float32, latest cloud
         self.binding = set()        # detection point indices with r_in > 0
@@ -180,12 +196,14 @@ class BarrierViz(Node):
         self.mk = self.create_publisher(MarkerArray, '/barrier_viz/markers', 10)
         self.scal = {k: self.create_publisher(Float32, f'/barrier_viz/{k}', 10)
                      for k in ('min_d_model', 'clearance_ub', 'conservatism',
-                               'bound_violation', 'resid_in', 'resid_out',
+                               'bound_violation', 'clearance_ub_age',
+                               'resid_in', 'resid_out',
                                'n_binding', 'tcp_speed_in', 'tcp_speed_out')}
 
         self.create_timer(1.0 / float(g('marker_rate')), self._draw)
         self.create_timer(1.0 / float(g('indep_rate')), self._independent)
         self._ub = float('nan')
+        self._ub_t = None
 
     # ---------------------------------------------------------------- inputs
     def _on_pts(self, msg: PointCloud2) -> None:
@@ -262,6 +280,7 @@ class BarrierViz(Node):
             d, _, _ = obstacle_distances(W, live)
             best = min(best, float(d.min()))
         self._ub = best if np.isfinite(best) else float('nan')
+        self._ub_t = time.monotonic()
 
     # ------------------------------------------------------------------ draw
     def _draw(self) -> None:
@@ -356,7 +375,14 @@ class BarrierViz(Node):
                'conservatism': cons,
                # Positive means the enforced lower bound exceeded an upper
                # bound on the truth, which cannot happen if the model is sound.
+               # Non-positive is NOT the converse: it does not certify the
+               # lower bound, it only fails to refute it.
                'bound_violation': (min_model - ub) if np.isfinite(cons) else float('nan'),
+               # Seconds since the independent bound was computed. Subtract
+               # age * link speed before reading any positive bound_violation
+               # as a finding.
+               'clearance_ub_age': (time.monotonic() - self._ub_t
+                                    if self._ub_t else float('nan')),
                'resid_in': self.r_in, 'resid_out': self.r_out,
                'n_binding': float(n_bind),
                'tcp_speed_in': s_in, 'tcp_speed_out': s_out}

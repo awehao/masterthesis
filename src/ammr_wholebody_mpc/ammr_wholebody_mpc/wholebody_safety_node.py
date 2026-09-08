@@ -402,6 +402,13 @@ class SafetyLike:
     speed_cap = float('inf')
     runtime_s = 0.0
     safety_override = False
+    # Same fields the real result carries. A stand-in that is missing one does
+    # not degrade gracefully -- it raises inside the timer callback and takes
+    # the node down on the first cycle where nothing was computed, which is
+    # exactly the cycle this class exists to survive.
+    barrier_owner = np.zeros(0, int)
+    barrier_r_in = np.zeros(0)
+    barrier_r_out = np.zeros(0)
 
 
 def main() -> None:

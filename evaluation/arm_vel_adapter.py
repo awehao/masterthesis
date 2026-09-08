@@ -110,7 +110,7 @@ def main():
     except KeyboardInterrupt:
         pass
     nd.destroy_node()
-    rclpy.shutdown()
+    rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

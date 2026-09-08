@@ -89,12 +89,13 @@ class Probe(Node):
         self.cmd_out = None
         self.min_d = float('nan')
         self.ub = float('nan')
+        self.ub_age = float('nan')
         self.tcp_prev = None
         self.tcp_prev_t = None
         self.tcp_speed = 0.0
 
         self.tf_buffer = Buffer()
-        TransformListener(self.tf_buffer, self)
+        TransformListener(self.tf_buffer, self, spin_thread=True)
         self.create_subscription(JointState, '/joint_states', self._on_js, 10)
         self.create_subscription(PointCloud2, '/arm_link_distance/points',
                                  self._on_pts, 10)
@@ -104,6 +105,8 @@ class Probe(Node):
                                  self._on_out, 10)
         self.create_subscription(Float32, '/barrier_viz/clearance_ub',
                                  self._on_ub, 10)
+        self.create_subscription(Float32, '/barrier_viz/clearance_ub_age',
+                                 self._on_ub_age, 10)
         self.pub = self.create_publisher(Float64MultiArray,
                                          '/wholebody_safety/cmd_in', 10)
         self.log = []
@@ -138,25 +141,38 @@ class Probe(Node):
     def _on_ub(self, m):
         self.ub = float(m.data)
 
+    def _on_ub_age(self, m):
+        self.ub_age = float(m.data)
+
     # ------------------------------------------------------------------ util
     def _tcp(self):
+        """TCP position and the TRANSFORM'S OWN timestamp.
+
+        Differencing against wall-clock receipt time made this measurement a
+        property of how often the probe span its executor rather than of how
+        fast the arm moved: consecutive lookups returned the same cached
+        transform (speed exactly 0) and then jumped (speed 300 mm/s) as the
+        backlog cleared. The transform carries the time it describes; use that.
+        """
         try:
             t = self.tf_buffer.lookup_transform(self.a.report_frame, self.a.tcp,
                                                 rclpy.time.Time())
         except Exception:
-            return None
+            return None, None
         r = t.transform.translation
-        return np.array([r.x, r.y, r.z])
+        stamp = t.header.stamp.sec + t.header.stamp.nanosec * 1e-9
+        return np.array([r.x, r.y, r.z]), stamp
 
     def _measure_tcp(self):
-        p = self._tcp()
-        now = time.monotonic()
+        p, stamp = self._tcp()
         if p is None:
             return
-        if self.tcp_prev is not None and now > self.tcp_prev_t + 1e-3:
+        if self.tcp_prev is not None and stamp > self.tcp_prev_t + 1e-4:
             self.tcp_speed = float(np.linalg.norm(p - self.tcp_prev)
-                                   / (now - self.tcp_prev_t))
-        self.tcp_prev, self.tcp_prev_t = p, now
+                                   / (stamp - self.tcp_prev_t))
+        elif self.tcp_prev is not None and stamp <= self.tcp_prev_t:
+            return          # no new transform yet: keep the last measurement
+        self.tcp_prev, self.tcp_prev_t = p, stamp
 
     def _q9(self):
         q = np.zeros(self.n)
@@ -185,9 +201,61 @@ class Probe(Node):
         out[self.idx] = dq
         return out
 
+    def home(self, target, tol=0.01, timeout=40.0):
+        """Servo the arm to a named joint configuration through the safety chain.
+
+        Open-loop retreat is not a way back to a start pose. Driving the TCP at
+        -x from a pose where the TCP has passed behind the shoulder makes the
+        damped inverse swing joint1 right around; three such resets left the arm
+        at joint1 = 2.50 rad, pointing away from the box, where the nearest link
+        to the obstacle is the FIXED mount and the reported clearance is a
+        constant that no arm motion can change. Every run has to start from a
+        configuration that was chosen, not from wherever the last one ended.
+
+        The command still goes through cmd_in, so the barrier and every box
+        constraint apply to the homing motion exactly as they do to the test.
+        """
+        target = np.asarray(target, dtype=float)
+        print(f'\n── home ── 目標 {np.round(target, 4).tolist()}', flush=True)
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            deadline = time.monotonic() + 1.0 / self.a.rate
+            while time.monotonic() < deadline:
+                rclpy.spin_once(self, timeout_sec=0.002)
+            why = self._guard()
+            if why:
+                self._stop()
+                print(f'  中止：{why}', flush=True)
+                return False
+            self._measure_tcp()
+            err = target - self.q
+            if float(np.abs(err).max()) < tol:
+                self._stop()
+                print(f'  到位，殘差 {np.abs(err).max()*1e3:.1f} mrad，'
+                      f'耗時 {time.monotonic()-t0:.1f} s', flush=True)
+                return True
+            dq = np.clip(self.a.home_kp * err, -self.a.joint_vmax,
+                         self.a.joint_vmax)
+            v = np.zeros(self.n)
+            v[self.idx] = dq
+            m = Float64MultiArray()
+            m.data = [float(x) for x in v]
+            self.pub.publish(m)
+            self._record('home', v)
+        self._stop()
+        print(f'  逾時，殘差 {np.abs(target-self.q).max()*1e3:.1f} mrad', flush=True)
+        return False
+
     def _guard(self):
-        if self.q is None or time.monotonic() - self.q_t > 0.3:
-            return 'JointState 超過 0.3 s 未更新'
+        # /tf carries 8 transforms at 143 Hz. Sharing one executor thread with
+        # it starved the JointState callback until this guard fired on a robot
+        # that was moving perfectly well, so the TF listener now spins on its
+        # own thread. The age is reported rather than just the verdict: a guard
+        # that says only "stale" cannot be told apart from a guard that is
+        # wrong about being stale.
+        age = time.monotonic() - self.q_t if self.q is not None else float('inf')
+        if self.q is None or age > 0.3:
+            return f'JointState 已 {age*1e3:.0f} ms 未更新（門檻 300 ms）'
         lo, hi = LITE6_SAFE.lower, LITE6_SAFE.upper
         if np.any(self.q < lo + 0.05) or np.any(self.q > hi - 0.05):
             return f'關節接近安全位置限位: {np.round(self.q, 3).tolist()}'
@@ -216,7 +284,13 @@ class Probe(Node):
             print(f'\n── {phase} ── 方向 {dirs[phase].tolist()}', flush=True)
             t0 = time.monotonic()
             while time.monotonic() - t0 < a.phase_s:
-                rclpy.spin_once(self, timeout_sec=dt * 0.5)
+                # Drain, do not dip. One spin_once per 50 ms cycle handles one
+                # callback while /tf arrives at 143 Hz, so the TF buffer falls
+                # steadily further behind and every measurement taken from it
+                # is of a pose the arm left some time ago.
+                deadline = time.monotonic() + dt
+                while time.monotonic() < deadline:
+                    rclpy.spin_once(self, timeout_sec=0.002)
                 why = self._guard()
                 if why:
                     self._stop()
@@ -231,7 +305,6 @@ class Probe(Node):
                 m.data = [float(x) for x in v]
                 self.pub.publish(m)
                 self._record(phase, v)
-                time.sleep(max(0.0, dt - 0.002))
             self._stop()
             time.sleep(0.5)
         return True
@@ -251,6 +324,7 @@ class Probe(Node):
                'resid_in': self.r_in, 'resid_out': self.r_out,
                'n_binding': len(self.binding),
                'min_d_model': self.min_d, 'clearance_ub': self.ub,
+               'clearance_ub_age': self.ub_age,
                'tcp_speed_measured': self.tcp_speed,
                'q': None if self.q is None else [float(x) for x in self.q]}
         self.log.append(rec)
@@ -289,6 +363,12 @@ def main() -> int:
                     help='model min(d-rho) below this aborts the run')
     ap.add_argument('--phases', nargs='+',
                     default=['approach', 'tangential', 'retreat'])
+    ap.add_argument('--home', nargs=6, type=float, default=None,
+                    help='servo to these six joint angles before the phases, '
+                         'so a run starts from a chosen pose rather than from '
+                         'wherever the previous one ended')
+    ap.add_argument('--home-kp', type=float, default=1.2)
+    ap.add_argument('--home-only', action='store_true')
     ap.add_argument('--out', default='evaluation/results/barrier_probe.json')
     a = ap.parse_args()
 
@@ -306,6 +386,10 @@ def main() -> int:
         return 1
     ok = False
     try:
+        if a.home is not None:
+            ok = p.home(a.home)
+            if not ok or a.home_only:
+                raise KeyboardInterrupt
         ok = p.run()
     except KeyboardInterrupt:
         print('\n  中斷', flush=True)
