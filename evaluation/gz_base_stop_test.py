@@ -102,15 +102,20 @@ def analyse(n, a) -> dict:
     tv = st[1:]
     # resolution of the measurement itself
     d_stamp = np.diff(st)
-    step = np.abs(np.diff(x))
-    step = step[step > 0]
+    raw = np.hypot(np.diff(x), np.diff(y))
+    dup = int((raw == 0).sum())
+    step = raw[raw > 0]
     res = dict(
         odom_hz=float(len(st) / (st[-1] - st[0])),
         stamp_dt_p50=float(np.median(d_stamp)),
         stamp_dt_max=float(d_stamp.max()),
-        pos_min_step_mm=float(step.min() * 1000) if len(step) else None,
-        speed_floor_mm_s=float(step.min() / np.median(d_stamp) * 1000)
-        if len(step) else None)
+        # A third of /odom's messages repeat the previous pose unchanged, so
+        # these are reported as what they are and not converted into a
+        # resolution figure.
+        duplicate_pose_frac=float(dup / max(len(raw), 1)),
+        step_min_mm=float(step.min() * 1000) if len(step) else None,
+        step_p50_mm=float(np.median(step) * 1000) if len(step) else None,
+        step_max_mm=float(step.max() * 1000) if len(step) else None)
 
     # map wall-clock events onto the odom stamp axis
     def wall_to_stamp(w):
@@ -119,16 +124,16 @@ def analyse(n, a) -> dict:
     s_nz, i_nz = wall_to_stamp(n.t_last_nonzero)
     s_z, i_z = wall_to_stamp(n.t_zero)
     steady = v[(tv > s_nz - a.steady_s) & (tv < s_nz)]
-    # The threshold cannot be finer than what the feed can resolve. /odom here
-    # samples at ~30 Hz and quantises position at ~0.39 mm, so speeds below
-    # about 11.6 mm/s are indistinguishable from zero; asking whether the base
-    # crossed 2 mm/s is a question this measurement cannot answer, and a "stop"
-    # declared at that level would be an artefact. The threshold is therefore
-    # raised to the resolvable floor and reported as such.
-    floor = res['speed_floor_mm_s'] / 1000.0 if res['speed_floor_mm_s'] else 0.0
-    thr = max(a.stop_v, floor * a.floor_k)
-    out_thr = dict(requested=a.stop_v, floor=floor, used=thr,
-                   limited_by_resolution=bool(thr > a.stop_v))
+    # The threshold is NOT derived from the smallest observed step. That was
+    # wrong twice over: the smallest step is whatever increment happened to
+    # occur, not a quantiser (600 um smallest against a 3400 um median in the
+    # same record), and /odom republishes an unchanged pose on about a third of
+    # its messages, so differencing consecutive samples manufactures zeros that
+    # have nothing to do with the robot slowing down. The threshold is the one
+    # asked for; what the sampling can and cannot support is reported beside the
+    # result instead of being folded into it.
+    thr = a.stop_v
+    out_thr = dict(requested=a.stop_v, used=thr, derived_from_data=False)
     after = np.flatnonzero((tv >= s_z) & (v < thr))
     i_stop = int(after[0]) + 1 if len(after) else None
     out = dict(
@@ -161,8 +166,6 @@ def main() -> int:
     ap.add_argument('--watch-s', type=float, default=5.0)
     ap.add_argument('--steady-s', type=float, default=3.0)
     ap.add_argument('--stop-v', type=float, default=2e-3)
-    ap.add_argument('--floor-k', type=float, default=1.0,
-                    help='stop threshold = max(stop_v, floor_k x resolvable floor)')
     ap.add_argument('--world', default='arm_barrier_test')
     ap.add_argument('--start', nargs=3, type=float, default=[0.0, 0.0, 0.0])
     ap.add_argument('--out', default='evaluation/results/gz_base_stop')
@@ -196,22 +199,23 @@ def main() -> int:
           f"   追蹤率 {r['tracking']*100:.1f}%")
     print(f"  量測解析度：odom {r['resolution']['odom_hz']:.1f} Hz，"
           f"時間戳間隔中位 {r['resolution']['stamp_dt_p50']*1e3:.1f} ms，"
-          f"位置最小步進 {r['resolution']['pos_min_step_mm']:.4f} mm")
-    th = r['threshold']
-    print(f"                → 可分辨的最小速度約 "
-          f"{r['resolution']['speed_floor_mm_s']:.2f} mm/s")
-    print(f"  停止門檻：要求 {th['requested']*1000:.1f} mm/s，"
-          f"實際採用 {th['used']*1000:.2f} mm/s"
-          + ("（**受解析度限制而提高**）" if th['limited_by_resolution'] else ""))
+          f"重複位姿 {r['resolution']['duplicate_pose_frac']*100:.1f}%")
+    rs = r['resolution']
+    print(f"  重複位姿樣本 {rs['duplicate_pose_frac']*100:.1f}%"
+          f"（相鄰差分會因此產生假的零速度）")
+    print(f"  非零步進 min/p50/max = {rs['step_min_mm']:.3f} / "
+          f"{rs['step_p50_mm']:.3f} / {rs['step_max_mm']:.3f} mm"
+          f"  ——**最小步進不是量化解析度**")
+    print(f"  停止門檻 {r['threshold']['used']*1000:.1f} mm/s（採用要求值，未由資料推導）")
     print(f"\n  最後非零命令 t={r['t_last_nonzero']:.3f}")
     print(f"  零命令／停止發布 t={r['t_zero_cmd']:.3f}")
     if r['t_stop'] is not None:
-        print(f"  降到門檻以下 t={r['t_stop']:.3f}（零命令後 "
-              f"{r['zero_to_stop_s']*1e3:.0f} ms）"
-              + ("——在此取樣下與『停止』不可分辨"
-                 if r['threshold']['limited_by_resolution'] else ""))
-        print(f"  位移：零命令 → 停止 {r['disp_zero_to_stop_mm']:.2f} mm；"
-              f"最後非零命令 → 停止 {r['disp_nonzero_to_stop_mm']:.2f} mm")
+        print(f"  零命令 → 首次判定低於門檻 {r['zero_to_stop_s']*1e3:.0f} ms")
+        print(f"  該區間 odom 淨位移 {r['disp_zero_to_stop_mm']:.2f} mm"
+              f"（最後非零命令起算 {r['disp_nonzero_to_stop_mm']:.2f} mm）")
+        print(f"  **實際停止時間與距離仍受取樣限制**："
+              f"{rs['odom_hz']:.0f} Hz、{rs['duplicate_pose_frac']*100:.0f}% 重複樣本，"
+              f"取樣間未觀測到的運動無法排除")
     else:
         print(f"  觀測窗內未低於停止門檻")
     print(f"\n  逐筆命令與實測軌跡已存 {path}")
