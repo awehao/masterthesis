@@ -79,7 +79,9 @@ def metrics(path: str) -> dict:
         joint_path=[float(x) for x in joint_path],
         joint_path_sum=float(joint_path.sum()),
         n_bar_rows=int(L[-1].get('n_bar_rows', 0)),
-        n_qp_fail=int(L[-1].get('n_qp_fail', 0)))
+        n_qp_fail=int(L[-1].get('n_qp_fail', 0)),
+        qp_status=L[-1].get('qp_status', {}),
+        qp_iter_max=int(L[-1].get('qp_iter_max', 0)))
 
 
 def main() -> int:
@@ -136,6 +138,11 @@ def main() -> int:
               f"{m['resid_in_n']:6d} {m['diff_tail_med']:13.6f} "
               f"{m['min_d']*1000:10.1f} {m['joint_margin']:9.4f} "
               f"{m['base_path']:7.3f} {m['joint_path_sum']:8.3f}")
+        if m.get('qp_status'):
+            tot = sum(m['qp_status'].values())
+            bad = {k: v for k, v in m['qp_status'].items() if k != 'solved'}
+            print(f"{'':6} QP {tot} 次，迭代峰值 {m['qp_iter_max']}"
+                  + (f"；非 solved：{bad}" if bad else "；全部 solved"))
     js = os.path.join(a.outdir, 'summary.json')
     json.dump(rows, open(js, 'w'), ensure_ascii=False)
     print(f'\n  彙總寫入 {js}')

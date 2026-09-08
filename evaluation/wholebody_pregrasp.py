@@ -192,6 +192,9 @@ class WholeBody(Node):
         # run reproduced the two-stage result exactly while reporting success.
         self.n_bar_rows = 0
         self.n_qp_fail = 0
+        self.qp_status = {}
+        self.qp_iter_max = 0
+        self.qp_last_status = ''
         self.log = []
 
     # ---------------------------------------------------------------- inputs
@@ -336,7 +339,9 @@ class WholeBody(Node):
                 # A solve that did not converge is also not a licence to send
                 # the unconstrained answer.
                 self.n_qp_fail += 1
-                raise RuntimeError('QP: 求解未收斂')
+                raise RuntimeError(f'QP: 求解未收斂（OSQP 狀態 '
+                                   f'{self.qp_last_status}，'
+                                   f'迭代上限 {self.qp_iter_max}）')
             self.n_bar_rows = nb
             v = vq
         return v, T, float(np.linalg.norm(T_des[:3, 3] - T[:3, 3])), \
@@ -389,15 +394,36 @@ class WholeBody(Node):
         return A, b, len(Ab)
 
     def _solve_qp(self, H, g, A, b):
+        """Settings chosen from measurement, and the status is kept.
+
+        8000 iterations at eps 1e-7 was not enough: on a mid-run state it left
+        mu = 0.1 at "solved inaccurate" after burning the whole budget, and
+        online it failed outright on some cycles. The same problems converge in
+        at most 2575 iterations at eps 1e-6, so the tolerance was the thing
+        making it hard, not the weight. Recording the status counts matters as
+        much as the setting -- a sweep over mu must not report a numerical
+        failure as if it were a property of mu.
+
+        OSQP prints its polish note to stdout regardless of verbose, so stdout
+        is captured for the duration of the call rather than left to flood the
+        run's own output.
+        """
+        import contextlib
+        import io
         import osqp
         from scipy import sparse
         P = sparse.csc_matrix((H + H.T) / 2.0)
         m = osqp.OSQP()
-        m.setup(P=P, q=g, A=sparse.csc_matrix(A),
-                l=np.full(len(b), -np.inf), u=b, verbose=False,
-                eps_abs=1e-7, eps_rel=1e-7, max_iter=8000, polish=False)
-        r = m.solve()
+        with contextlib.redirect_stdout(io.StringIO()):
+            m.setup(P=P, q=g, A=sparse.csc_matrix(A),
+                    l=np.full(len(b), -np.inf), u=b, verbose=False,
+                    eps_abs=1e-6, eps_rel=1e-6, max_iter=50000, polish=True)
+            r = m.solve()
+        st = str(r.info.status)
+        self.qp_status[st] = self.qp_status.get(st, 0) + 1
+        self.qp_iter_max = max(self.qp_iter_max, int(r.info.iter))
         if r.info.status_val not in (1, 2):
+            self.qp_last_status = st
             return None
         return np.asarray(r.x, float)
 
@@ -472,6 +498,7 @@ class WholeBody(Node):
             self.v_prev = v.copy()
             self.log.append(dict(
                 n_bar_rows=int(self.n_bar_rows), n_qp_fail=int(self.n_qp_fail),
+                qp_status=dict(self.qp_status), qp_iter_max=int(self.qp_iter_max),
                 t=t, base=[float(x) for x in self.base],
                 base_stamp=self.base_stamp,
                 q=[float(x) for x in self.q_arm],
