@@ -101,7 +101,7 @@ def main() -> int:
         dv.append(float(np.abs(r_c.v - r_f.v).max()))
 
         # both solutions against the SAME full row set
-        A, b, _ = _rows_from_points(K, q, full, cfg, v_in)
+        A, b, _, _ = _rows_from_points(K, q, full, cfg, v_in)
         if A:
             A = np.array(A); b = np.array(b)
             res_c = A @ r_c.v - b

@@ -1,0 +1,203 @@
+"""Bring up the link-safety stack against an already-running Gazebo.
+
+Deliberately not a ros2 launch file. Two of the six processes -- the adapter and
+the watchdog gate -- have to be independent OS processes with the gate as the
+sole publisher on the controller's command topic, and the sim must be able to
+keep running while this stack is restarted. Starting it separately makes both
+true by construction rather than by configuration.
+
+One expansion, one description
+------------------------------
+The whole-body xacro is expanded ONCE here and the resulting file is handed to
+every node that needs it. The wire between the distance node and the safety node
+carries a link INDEX, not a name: if the two ends expanded the description
+separately and the file changed in between, every barrier row would attach to
+the wrong link, silently, with a residual that still looks plausible. The obstacle
+list is generated from the same world SDF the simulator loaded, for the same
+reason.
+
+What this configuration does NOT test
+-------------------------------------
+`require_occlusion_feed` is set false. The obstacle here is a static box read
+from the world file -- ground truth, not something the lidar perceived -- so
+there is no occlusion question to answer and no self-filter running to answer
+it. This run therefore says nothing about the perception path. With a perceived
+obstacle the flag must go back to true, because absence of the occlusion feed is
+not evidence of no occlusion.
+
+The base is fixed: `fix_base:=true` constrains the three base velocities to zero
+INSIDE the solve, so the barrier cannot quietly assume the chassis will move out
+of the way and then have that part of the answer thrown away downstream.
+
+    python3 evaluation/barrier_stack.py [--no-foxglove] [--gate-timeout 0.15]
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+WHOLEBODY = os.path.join(
+    ROOT, 'src/my_omnibot_description/urdf/omni_bot_wholebody.urdf.xacro')
+WORLD = os.path.join(ROOT, 'src/ammr_bringup/worlds/arm_barrier_test.sdf')
+
+
+def specs_from_world(path: str) -> list[str]:
+    """Distance-node obstacle specs, from the world the simulator loaded.
+
+    Format is name:model:kind:dims:xyz:rpy, and an empty model field means the
+    pose is the world pose of a static body -- which is what every obs_* in this
+    world is. Generated rather than typed so the two ends cannot drift apart.
+    """
+    sdf = open(path).read()
+    out = []
+    for m in re.finditer(r'<model name="(obs_\d+)">(.*?)</model>', sdf, re.S):
+        body = m.group(2)
+        pose = re.search(r'<pose>([-\d.eE\s]+)</pose>', body)
+        box = re.search(r'<box><size>([^<]+)</size>', body)
+        cyl = re.search(r'<cylinder><radius>([\d.]+)</radius>\s*<length>([\d.]+)',
+                        body)
+        if not pose:
+            continue
+        v = [float(x) for x in pose.group(1).split()]
+        xyz = ','.join(f'{x:g}' for x in v[:3])
+        rpy = ','.join(f'{x:g}' for x in v[3:6]) if len(v) >= 6 else '0,0,0'
+        if box:
+            dims = ','.join(f'{float(x):g}' for x in box.group(1).split())
+            out.append(f'{m.group(1)}::box:{dims}:{xyz}:{rpy}')
+        elif cyl:
+            out.append(f'{m.group(1)}::cylinder:{cyl.group(1)},{cyl.group(2)}'
+                       f':{xyz}:{rpy}')
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--world', default=WORLD)
+    ap.add_argument('--urdf', default=WHOLEBODY)
+    ap.add_argument('--report-frame', default='world')
+    ap.add_argument('--spawn-z', type=float, default=0.05,
+                    help='z of the model root in the world, from `gz model -p`')
+    ap.add_argument('--gate-timeout', type=float, default=0.15)
+    ap.add_argument('--rate', type=float, default=20.0)
+    ap.add_argument('--max-rows-per-link', type=int, default=60)
+    ap.add_argument('--no-foxglove', action='store_true')
+    ap.add_argument('--indep-n', type=int, default=10000)
+    a = ap.parse_args()
+
+    specs = specs_from_world(a.world)
+    if not specs:
+        print(f'no obs_* in {a.world}', file=sys.stderr)
+        return 1
+    print('障礙物規格（由世界檔產生）:')
+    for s in specs:
+        print('   ', s)
+
+    print('展開 whole-body 描述…', flush=True)
+    xml = subprocess.check_output(['xacro', a.urdf], text=True)
+    fd, urdf = tempfile.mkstemp(prefix='wholebody_', suffix='.urdf')
+    with os.fdopen(fd, 'w') as f:
+        f.write(xml)
+    print(f'   {urdf}  ({len(xml)} bytes) — 三個節點共用同一份')
+
+    procs: list[tuple[str, subprocess.Popen]] = []
+
+    def spawn(label, cmd):
+        print(f'  啟動 {label}', flush=True)
+        p = subprocess.Popen(cmd, cwd=ROOT, start_new_session=False)
+        procs.append((label, p))
+        return p
+
+    try:
+        # world -> model root. The sim reports the model pose; nothing derives
+        # it from the spawn arguments, which can differ once physics settles.
+        spawn('static_tf', [
+            'ros2', 'run', 'tf2_ros', 'static_transform_publisher',
+            '--x', '0', '--y', '0', '--z', str(a.spawn_z),
+            '--frame-id', a.report_frame, '--child-frame-id', 'base_footprint'])
+        time.sleep(1.0)
+
+        spawn('arm_link_distance', [
+            'ros2', 'run', 'ammr_wholebody_mpc', 'arm_link_distance',
+            '--ros-args',
+            '-p', 'use_sim_time:=true',
+            '-p', f'report_frame:={a.report_frame}',
+            '-p', 'geometry:=links',
+            '-p', f'wholebody_urdf:={urdf}',
+            '-p', f'max_rows_per_link:={a.max_rows_per_link}',
+            '-p', 'require_occlusion_feed:=false',
+            '-p', f'obstacles:=[{",".join(specs)}]'])
+
+        spawn('wholebody_safety', [
+            'ros2', 'run', 'ammr_wholebody_mpc', 'wholebody_safety',
+            '--ros-args',
+            '-p', 'use_sim_time:=true',
+            '-p', f'report_frame:={a.report_frame}',
+            '-p', 'base_frame:=base_link',
+            '-p', f'wholebody_urdf:={urdf}',
+            '-p', 'fix_base:=true',
+            '-p', f'control_rate:={a.rate}'])
+
+        spawn('arm_vel_adapter',
+              [sys.executable, os.path.join(HERE, 'arm_vel_adapter.py')])
+        spawn('arm_vel_gate',
+              [sys.executable, os.path.join(HERE, 'arm_vel_gate.py'),
+               '--timeout', str(a.gate_timeout)])
+
+        spawn('viz_barrier_live', [
+            sys.executable, os.path.join(HERE, 'viz_barrier_live.py'),
+            '--ros-args',
+            '-p', 'use_sim_time:=true',
+            '-p', f'report_frame:={a.report_frame}',
+            '-p', f'wholebody_urdf:={urdf}',
+            '-p', f'world_sdf:={a.world}',
+            '-p', f'indep_n:={a.indep_n}'])
+
+        if not a.no_foxglove:
+            spawn('foxglove_bridge', [
+                'ros2', 'run', 'foxglove_bridge', 'foxglove_bridge',
+                '--ros-args', '-p', 'port:=8765',
+                '-p', 'use_sim_time:=true'])
+
+        print('\n堆疊已啟動。Foxglove: ws://localhost:8765')
+        print('Ctrl-C 結束全部。手臂命令唯一發布端是 arm_vel_gate。\n', flush=True)
+        while True:
+            time.sleep(1.0)
+            for label, p in procs:
+                if p.poll() is not None:
+                    print(f'!! {label} 已結束，回傳碼 {p.returncode}',
+                          file=sys.stderr, flush=True)
+                    raise SystemExit(1)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        print('\n收拾中…', flush=True)
+        # Gate last: while anything upstream is still alive it must keep
+        # publishing, and its own shutdown leaves a zero command behind.
+        for label, p in reversed(procs):
+            if p.poll() is None:
+                p.send_signal(signal.SIGINT)
+        t0 = time.time()
+        for label, p in reversed(procs):
+            try:
+                p.wait(timeout=max(0.5, 6.0 - (time.time() - t0)))
+            except subprocess.TimeoutExpired:
+                print(f'   {label} 未回應 SIGINT，改用 SIGKILL', file=sys.stderr)
+                p.kill()
+        try:
+            os.unlink(urdf)
+        except OSError:
+            pass
+        print('已停止。')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

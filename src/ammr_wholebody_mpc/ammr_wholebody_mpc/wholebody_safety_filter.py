@@ -194,6 +194,14 @@ class SafetyResult:
     runtime_s: float
     # True when the jerk box had to be dropped for the barrier to be satisfiable.
     safety_override: bool = False
+    # Per-barrier-row provenance, so a consumer can name the binding sample
+    # rather than infer it. barrier_owner[r] indexes the detection point list;
+    # barrier_r_in / barrier_r_out are that row's residual before and after the
+    # solve, in the row's own units (m/s of approach). A row is BINDING when
+    # r_in > 0: the input command violated it and the output had to move.
+    barrier_owner: np.ndarray = field(default_factory=lambda: np.zeros(0, int))
+    barrier_r_in: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    barrier_r_out: np.ndarray = field(default_factory=lambda: np.zeros(0))
     # Residual per constraint CLASS, after the solve. A single aggregate number
     # cannot distinguish "the barrier is violated" from "a velocity box is off
     # by a rounding error", and the two mean completely different things: one
@@ -255,11 +263,19 @@ def _row_at(J6, R, offset):
 
 
 def _rows_from_points(K, q, pts, cfg, v_in):
-    """Barrier rows A v <= b, plus the per-row bookkeeping."""
-    A, b = [], []
+    """Barrier rows A v <= b, plus the per-row bookkeeping.
+
+    `owner[r]` is the index into `pts` that produced barrier row r. It is not
+    the identity: a NODATA point produces no row at all, and an occluded one
+    produces two. Anything that wants to say WHICH point a constraint came
+    from -- a visualiser colouring the binding samples, a snapshot naming the
+    binding link -- has to be told, because it cannot be recovered from the
+    row count.
+    """
+    A, b, owner = [], [], []
     cap = np.inf
     JL = _link_jacobians(K, q, pts)
-    for pt in pts:
+    for pi, pt in enumerate(pts):
         if pt.status == STATUS_NODATA:
             cap = min(cap, cfg.nodata_speed_cap)
             continue
@@ -278,6 +294,7 @@ def _rows_from_points(K, q, pts, cfg, v_in):
         d_stop = (cfg.d0 + v_app * cfg.tau
                   + v_app * v_app / (2.0 * max(a_br, 1e-3)) + cfg.eps)
         A.append(row)
+        owner.append(pi)
         rhs = cfg.alpha * (d_eff - d_stop)
         if pt.offset is not None:
             # Only the sampled representation carries the representative-point
@@ -292,8 +309,9 @@ def _rows_from_points(K, q, pts, cfg, v_in):
             # Keep the model row above; add a tighter cap on approaching into
             # a direction nothing has actually observed.
             A.append(row)
+            owner.append(pi)
             b.append(cfg.blind_approach_cap)
-    return A, b, cap
+    return A, b, cap, owner
 
 
 def _joint_limit_rows(K, q, cfg):
@@ -433,7 +451,7 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
     v_in = np.asarray(v_in, dtype=float).copy()
 
     dt = cfg.dt if dt is None else float(dt)
-    Ab, bb, cap = _rows_from_points(K, q, pts, cfg, v_in)
+    Ab, bb, cap, owner = _rows_from_points(K, q, pts, cfg, v_in)
     Aj, bj = _joint_limit_rows(K, q, cfg)
     Ax, bx = _box_rows(cfg, n, cap, v_prev, dt)
     Ak, bk = (_jerk_rows(cfg, n, v_prev, a_prev, dt)
@@ -540,9 +558,13 @@ def filter_velocity(K, q, v_in, pts, cfg=None, v_prev=None, a_prev=None,
     r_vel = float((np.abs(v) - cfg.vmax[:n]).max())
     r_acc = (float((np.abs(v - v_prev[:n]) - cfg.amax[:n] * dt).max())
              if v_prev is not None else 0.0)
+    r_out_all = A @ v - b
     return SafetyResult(v, len(A), n_active, float(r0.max()), resid, used,
                         fallback, resid > 1e-3, cap, time.perf_counter() - t0,
                         override,
+                        barrier_owner=np.asarray(owner, dtype=int),
+                        barrier_r_in=r0[:n_b].copy(),
+                        barrier_r_out=r_out_all[:n_b].copy(),
                         resid_barrier=sp.get('barrier', 0.0),
                         resid_position=sp.get('position', 0.0),
                         resid_velbox=r_vel,

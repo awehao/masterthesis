@@ -1,0 +1,194 @@
+{
+ "configById": {
+  "3D!bar": {
+   "cameraState": {
+    "perspective": true,
+    "distance": 2.2,
+    "phi": 62,
+    "thetaOffset": 42,
+    "targetOffset": [
+     0.35,
+     0.0,
+     0.45
+    ],
+    "target": [
+     0,
+     0,
+     0
+    ],
+    "targetOrientation": [
+     0,
+     0,
+     0,
+     1
+    ],
+    "fovy": 45,
+    "near": 0.01,
+    "far": 5000
+   },
+   "followMode": "follow-none",
+   "followTf": "world",
+   "scene": {
+    "enableStats": false,
+    "transforms": {
+     "showLabel": false,
+     "axisScale": 0.0,
+     "lineWidth": 0.0
+    }
+   },
+   "transforms": {},
+   "layers": {
+    "urdf": {
+     "instanceId": "urdf",
+     "layerId": "foxglove.Urdf",
+     "label": "URDF",
+     "order": 1,
+     "visible": true,
+     "sourceType": "topic",
+     "topicName": "/robot_description",
+     "framePrefix": "",
+     "fallbackColor": "#8a93a0",
+     "displayMode": "auto"
+    }
+   },
+   "topics": {
+    "/barrier_viz/markers": {
+     "visible": true
+    },
+    "/arm_link_distance/points": {
+     "visible": false
+    },
+    "/tf": {
+     "visible": false
+    },
+    "/tf_static": {
+     "visible": false
+    }
+   },
+   "publish": {
+    "type": "point"
+   },
+   "imageMode": {}
+  },
+  "Plot!clr": {
+   "title": "間距夾擠（m）：模型下界 ≤ 真實 ≤ 獨立上界",
+   "paths": [
+    {
+     "value": "/barrier_viz/min_d_model.data",
+     "label": "模型 min(d−ρ)（屏障實際執行的量，下界）",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    },
+    {
+     "value": "/barrier_viz/clearance_ub.data",
+     "label": "獨立取樣上界（seed 4242，屏障沒看過）",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    }
+   ],
+   "showLegend": true,
+   "isSynced": true,
+   "xAxisVal": "timestamp"
+  },
+  "Plot!bnd": {
+   "title": "夾擠是否成立（>0 即模型樂觀，應恆 ≤ 0）",
+   "paths": [
+    {
+     "value": "/barrier_viz/bound_violation.data",
+     "label": "下界 − 上界",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    },
+    {
+     "value": "/barrier_viz/conservatism.data",
+     "label": "離散化代價 = 上界 − 下界",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    }
+   ],
+   "showLegend": true,
+   "isSynced": true,
+   "xAxisVal": "timestamp"
+  },
+  "Plot!res": {
+   "title": "屏障殘差（m/s，>0 = 該列被違反）",
+   "paths": [
+    {
+     "value": "/barrier_viz/resid_in.data",
+     "label": "輸入命令的最大違反",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    },
+    {
+     "value": "/barrier_viz/resid_out.data",
+     "label": "輸出命令的最大違反（應 ≈ 0）",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    },
+    {
+     "value": "/barrier_viz/n_binding.data",
+     "label": "作用中列數",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    }
+   ],
+   "showLegend": true,
+   "isSynced": true,
+   "xAxisVal": "timestamp"
+  },
+  "Plot!spd": {
+   "title": "TCP 線速度（m/s）：屏障削掉多少",
+   "paths": [
+    {
+     "value": "/barrier_viz/tcp_speed_in.data",
+     "label": "濾波前",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    },
+    {
+     "value": "/barrier_viz/tcp_speed_out.data",
+     "label": "濾波後",
+     "enabled": true,
+     "timestampMethod": "receiveTime"
+    }
+   ],
+   "showLegend": true,
+   "isSynced": true,
+   "xAxisVal": "timestamp"
+  },
+  "RawMessages!diag": {
+   "topicPath": "/wholebody_safety/diag"
+  }
+ },
+ "globalVariables": {},
+ "userNodes": {},
+ "playbackConfig": {
+  "speed": 1.0
+ },
+ "layout": {
+  "direction": "row",
+  "first": "3D!bar",
+  "second": {
+   "direction": "column",
+   "first": "Plot!clr",
+   "second": {
+    "direction": "column",
+    "first": "Plot!bnd",
+    "second": {
+     "direction": "column",
+     "first": "Plot!res",
+     "second": {
+      "direction": "column",
+      "first": "Plot!spd",
+      "second": "RawMessages!diag",
+      "splitPercentage": 62
+     },
+     "splitPercentage": 50
+    },
+    "splitPercentage": 34
+   },
+   "splitPercentage": 26
+  },
+  "splitPercentage": 52
+ }
+}

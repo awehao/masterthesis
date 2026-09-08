@@ -158,6 +158,13 @@ class WholeBodySafetyNode(Node):
         self.create_subscription(Float64MultiArray, '~/cmd_in', self._on_cmd, 10)
         self.pub = self.create_publisher(Float64MultiArray, '~/cmd_out', 10)
         self.diag = self.create_publisher(Float32MultiArray, '~/diag', 10)
+        # Which barrier rows bound this cycle, and by how much. The diagnostic
+        # above carries counts; a count cannot tell a visualiser or a snapshot
+        # WHICH sample on WHICH link did the constraining, and that is the one
+        # thing needed to show the barrier acting rather than assert it.
+        # Layout: flat triples (detection point index, residual in, residual
+        # out), one per barrier row, in row order.
+        self.barrier = self.create_publisher(Float32MultiArray, '~/barrier', 10)
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -317,6 +324,12 @@ class WholeBodySafetyNode(Node):
                   float((self._dt_prev or 0.0) * 1e3),
                   1.0 if self._v_prev2 is not None else 0.0]
         self.diag.publish(d)
+
+        bm = Float32MultiArray()
+        bm.data = [float(x) for t in
+                   zip(res.barrier_owner, res.barrier_r_in, res.barrier_r_out)
+                   for x in t]
+        self.barrier.publish(bm)
 
     _min_d = -1.0
     _n_stale = 0
