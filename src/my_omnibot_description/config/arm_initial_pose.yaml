@@ -31,23 +31,30 @@ joint6: 0.0
 # wholebody_pregrasp.py, which is the exact failure this file was created to
 # stop: the same number written out in several places with nothing linking them.
 
-# Where a RUN starts. Not the same as the spawn pose above, for two reasons.
+# Where a RUN starts. Set to all zeros on 2026-09-08 at the user's instruction,
+# so that it matches the spawn pose above rather than differing from it.
 #
-# Clearance: all zeros clears everything, but it stands on a slope. Sampled
-# self-clearance is 9.09 mm at joint3 = 0, 4.28 mm at -0.02 and 3.11 mm at
-# -0.05; from +0.05 upward it flattens at 19.66 mm because the closest pair
-# becomes link4/link6, which does not depend on joint3 at all.
+# What that costs, measured rather than argued, so the next person reading a
+# failed run knows where to look first.
 #
-# Limit headroom, which is what picks 0.30 over 0.05: joint3's safe range is
-# [-0.0611, +2.9356] -- one-sided. All zeros sits 0.0611 rad above the bottom,
-# and a run's own guard aborts at bottom + 0.05 = -0.0111, leaving 0.011 rad.
-# A solver that dips joint3 slightly negative kills the run before it starts,
-# which is what happened twice to the whole-body attempts. 0.30 leaves 0.361,
-# and is the angle the actuation self-test already drove to and measured.
+# Clearance: all zeros clears every non-excluded pair, but it stands on a slope.
+# Sampled self-clearance is 9.09 mm at joint3 = 0, 4.28 mm at -0.02 and 3.11 mm
+# at -0.05; from +0.05 upward it flattens at 19.66 mm, because past that the
+# closest pair becomes link4/link6, which does not depend on joint3 at all.
+#
+# Limit headroom: joint3's safe range is [-0.0611, +2.9356] -- one-sided. All
+# zeros sits 0.0611 rad above the bottom, and a run's own guard aborts at
+# bottom + 0.05 = -0.0111. That leaves 0.011 rad. A solver that dips joint3
+# slightly negative aborts the run before it has gone anywhere, which is what
+# happened twice to the whole-body attempts from other start poses. The
+# whole-body solver's limit potential activates within 0.35 rad of a bound, so
+# from here it is pushing joint3 up from the first cycle.
+#
+# If a run aborts with "關節接近安全限位" and joint3 near -0.011, this is why.
 test_start:
   joint1: 0.0
   joint2: 0.0
-  joint3: 0.30
+  joint3: 0.0
   joint4: 0.0
   joint5: 0.0
   joint6: 0.0

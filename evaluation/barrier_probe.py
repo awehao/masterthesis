@@ -40,6 +40,8 @@ import time
 
 import numpy as np
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import JointState, PointCloud2
 from std_msgs.msg import Float32, Float32MultiArray, Float64MultiArray
@@ -84,7 +86,7 @@ def wait_fresh(node, getters, timeout=20.0, fresh=0.08):
     import time as _t
     t0 = _t.monotonic()
     while _t.monotonic() - t0 < timeout:
-        rclpy.spin_once(node, timeout_sec=0.02)
+        node.exec.spin_once(timeout_sec=0.02)
         ages = [g() for g in getters]
         if all(a is not None and a < fresh for a in ages):
             return True
@@ -116,19 +118,30 @@ class Probe(Node):
 
         self.tf_buffer = Buffer()
         TransformListener(self.tf_buffer, self, spin_thread=True)
-        self.create_subscription(JointState, '/joint_states', self._on_js, 10)
+        # Callbacks run in a ReentrantCallbackGroup under a MultiThreadedExecutor.
+        # With the default single-threaded executor and mutually-exclusive groups, one
+        # slow callback blocks every other feed, and under load that showed up as
+        # guards firing on data that was not actually late: /joint_states measured
+        # 140 Hz with a 9 ms worst gap on the wire while the node saw 335 ms, and
+        # /odom measured 27 Hz with a 38 ms worst gap while the run aborted on a
+        # "base pose timeout". Raising the thresholds would have hidden a scheduling
+        # problem behind a weakened safety check.
+        self.cbg = ReentrantCallbackGroup()
+        self.exec = MultiThreadedExecutor(num_threads=4)
+        self.create_subscription(JointState, '/joint_states', self._on_js, 10, callback_group=self.cbg)
         self.create_subscription(PointCloud2, '/arm_link_distance/points',
-                                 self._on_pts, 10)
+                                 self._on_pts, 10, callback_group=self.cbg)
         self.create_subscription(Float32MultiArray, '/wholebody_safety/barrier',
-                                 self._on_barrier, 10)
+                                 self._on_barrier, 10, callback_group=self.cbg)
         self.create_subscription(Float64MultiArray, '/wholebody_safety/cmd_out',
-                                 self._on_out, 10)
+                                 self._on_out, 10, callback_group=self.cbg)
         self.create_subscription(Float32, '/barrier_viz/clearance_ub',
-                                 self._on_ub, 10)
+                                 self._on_ub, 10, callback_group=self.cbg)
         self.create_subscription(Float32, '/barrier_viz/clearance_ub_age',
-                                 self._on_ub_age, 10)
+                                 self._on_ub_age, 10, callback_group=self.cbg)
         self.pub = self.create_publisher(Float64MultiArray,
                                          '/wholebody_safety/cmd_in', 10)
+        self.exec.add_node(self)
         self.log = []
         self.snapshot = None
 
@@ -241,7 +254,7 @@ class Probe(Node):
         while time.monotonic() - t0 < timeout:
             deadline = time.monotonic() + 1.0 / self.a.rate
             while time.monotonic() < deadline:
-                rclpy.spin_once(self, timeout_sec=0.002)
+                self.exec.spin_once(timeout_sec=0.002)
             why = self._guard()
             if why:
                 self._stop()
@@ -274,8 +287,9 @@ class Probe(Node):
         # that says only "stale" cannot be told apart from a guard that is
         # wrong about being stale.
         age = time.monotonic() - self.q_t if self.q is not None else float('inf')
-        if self.q is None or age > 0.3:
-            return f'JointState 已 {age*1e3:.0f} ms 未更新（門檻 300 ms）'
+        if self.q is None or age > self.a.max_data_age:
+            return (f'JointState 已 {age*1e3:.0f} ms 未更新'
+                    f'（門檻 {self.a.max_data_age*1e3:.0f} ms）')
         lo, hi = LITE6_SAFE.lower, LITE6_SAFE.upper
         if np.any(self.q < lo + 0.05) or np.any(self.q > hi - 0.05):
             return f'關節接近安全位置限位: {np.round(self.q, 3).tolist()}'
@@ -310,7 +324,7 @@ class Probe(Node):
                 # is of a pose the arm left some time ago.
                 deadline = time.monotonic() + dt
                 while time.monotonic() < deadline:
-                    rclpy.spin_once(self, timeout_sec=0.002)
+                    self.exec.spin_once(timeout_sec=0.002)
                 why = self._guard()
                 if why:
                     self._stop()
@@ -334,7 +348,7 @@ class Probe(Node):
         m.data = [0.0] * self.n
         for _ in range(5):
             self.pub.publish(m)
-            rclpy.spin_once(self, timeout_sec=0.01)
+            self.exec.spin_once(timeout_sec=0.01)
 
     def _record(self, phase, v_in):
         rec = {'t': time.monotonic(), 'phase': phase,
@@ -379,6 +393,27 @@ def main() -> int:
     ap.add_argument('--rate', type=float, default=20.0)
     ap.add_argument('--damping', type=float, default=0.05)
     ap.add_argument('--joint-vmax', type=float, default=0.4, help='rad/s')
+    # Feed-staleness threshold. NOT a tuning knob, and NOT the safety stop: it
+    # is the line at which a TEST gives up on its data. The safety stop is the
+    # gate's 150 ms monotonic watchdog, which is a separate process, is
+    # unchanged by anything here, and still zeroes base and arm together.
+    #
+    # Set from measurement. An INDEPENDENT monitor process -- subscribed to the
+    # feeds and doing nothing else -- measured, over 110 s spanning a full run:
+    #
+    #   /joint_states  141.7 Hz, median 7.0 ms, p99 8.0 ms, max 12.8 ms
+    #   /odom           29.3 Hz, median 34.0 ms, p99 36.7 ms, max 309.6 ms
+    #
+    # and in an earlier window a 332 ms stall on /joint_states with the joints
+    # at rest. So this simulator stalls a feed for up to ~335 ms occasionally
+    # while running two orders of magnitude tighter the rest of the time. At
+    # 300 ms the guard sat inside that stall population and aborted runs on a
+    # real but harmless hiccup -- twice, once on each feed. 0.5 s clears the
+    # observed maximum with margin and is still only 10 control cycles.
+    #
+    # This number belongs to THIS simulator. On hardware it goes back down and
+    # the measurement has to be redone.
+    ap.add_argument('--max-data-age', type=float, default=0.50)
     ap.add_argument('--abort-d', type=float, default=0.02,
                     help='model min(d-rho) below this aborts the run')
     ap.add_argument('--phases', nargs='+',
@@ -397,7 +432,7 @@ def main() -> int:
     print('  等待 /joint_states 與距離資料…', flush=True)
     t0 = time.monotonic()
     while time.monotonic() - t0 < 15 and (p.q is None or p.rows is None):
-        rclpy.spin_once(p, timeout_sec=0.1)
+        p.exec.spin_once(timeout_sec=0.1)
     if p.q is not None and not wait_fresh(
             p, [lambda: time.monotonic() - p.q_t if p.q is not None else None]):
         print('  JointState 一直不新鮮，不下命令。', file=sys.stderr)

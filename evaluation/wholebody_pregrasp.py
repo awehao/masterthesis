@@ -64,6 +64,8 @@ import time
 import numpy as np
 import rclpy
 from nav_msgs.msg import Odometry
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState, PointCloud2
@@ -112,7 +114,7 @@ def wait_fresh(node, getters, timeout=20.0, fresh=0.08):
     import time as _t
     t0 = _t.monotonic()
     while _t.monotonic() - t0 < timeout:
-        rclpy.spin_once(node, timeout_sec=0.02)
+        node.exec.spin_once(timeout_sec=0.02)
         ages = [g() for g in getters]
         if all(a is not None and a < fresh for a in ages):
             return True
@@ -135,6 +137,7 @@ class WholeBody(Node):
         self.q_arm_t = 0.0
         self.base = None                # (x, y, yaw) in world
         self.base_t = 0.0
+        self.base_stamp = None
         self.rows = None
         self.min_d = float('nan')
         self.ub = float('nan')
@@ -144,19 +147,30 @@ class WholeBody(Node):
 
         self.tf_buffer = Buffer()
         TransformListener(self.tf_buffer, self, spin_thread=True)
-        self.create_subscription(JointState, '/joint_states', self._on_js, 10)
+        # Callbacks run in a ReentrantCallbackGroup under a MultiThreadedExecutor.
+        # With the default single-threaded executor and mutually-exclusive groups, one
+        # slow callback blocks every other feed, and under load that showed up as
+        # guards firing on data that was not actually late: /joint_states measured
+        # 140 Hz with a 9 ms worst gap on the wire while the node saw 335 ms, and
+        # /odom measured 27 Hz with a 38 ms worst gap while the run aborted on a
+        # "base pose timeout". Raising the thresholds would have hidden a scheduling
+        # problem behind a weakened safety check.
+        self.cbg = ReentrantCallbackGroup()
+        self.exec = MultiThreadedExecutor(num_threads=4)
+        self.create_subscription(JointState, '/joint_states', self._on_js, 10, callback_group=self.cbg)
         self.create_subscription(Odometry, '/odom', self._on_odom,
-                                 qos_profile_sensor_data)
+                                 qos_profile_sensor_data, callback_group=self.cbg)
         self.create_subscription(PointCloud2, '/arm_link_distance/points',
-                                 self._on_pts, 10)
+                                 self._on_pts, 10, callback_group=self.cbg)
         self.create_subscription(Float32MultiArray, '/wholebody_safety/barrier',
-                                 self._on_barrier, 10)
+                                 self._on_barrier, 10, callback_group=self.cbg)
         self.create_subscription(Float64MultiArray, '/wholebody_safety/cmd_out',
-                                 self._on_out, 10)
+                                 self._on_out, 10, callback_group=self.cbg)
         self.create_subscription(Float32, '/barrier_viz/clearance_ub',
-                                 self._on_ub, 10)
+                                 self._on_ub, 10, callback_group=self.cbg)
         self.pub = self.create_publisher(Float64MultiArray,
                                          '/wholebody_safety/cmd_in', 10)
+        self.exec.add_node(self)
         self.log = []
 
     # ---------------------------------------------------------------- inputs
@@ -173,6 +187,13 @@ class WholeBody(Node):
                          1.0 - 2.0 * (o.y * o.y + o.z * o.z))
         self.base = np.array([p.x, p.y, yaw])
         self.base_t = time.monotonic()
+        # The message's OWN time, kept separately. Base speed differenced
+        # against the control loop's clock instead reported 0.3239 m/s against
+        # a 0.2775 limit on two cycles while the command never exceeded
+        # 0.2617 -- the loop runs at 53 ms and /odom at 34 ms, so dividing an
+        # odom displacement by a loop interval is not a speed. Same class of
+        # error as differencing TF against wall time in the barrier probe.
+        self.base_stamp = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
 
     def _on_pts(self, m):
         nf = m.point_step // 4
@@ -214,10 +235,12 @@ class WholeBody(Node):
         return T
 
     def guard(self):
-        if self.q_arm is None or time.monotonic() - self.q_arm_t > 0.3:
-            return 'JointState 逾時'
-        if self.base is None or time.monotonic() - self.base_t > 0.3:
-            return '底盤位姿逾時'
+        ja = (time.monotonic() - self.q_arm_t) if self.q_arm is not None else 1e9
+        ba = (time.monotonic() - self.base_t) if self.base is not None else 1e9
+        if ja > self.a.max_data_age:
+            return f'JointState 已 {ja*1e3:.0f} ms 未更新'
+        if ba > self.a.max_data_age:
+            return f'底盤位姿已 {ba*1e3:.0f} ms 未更新'
         if self.rows is None:
             return '尚未收到距離資料'
         lo, hi = LITE6_SAFE.lower, LITE6_SAFE.upper
@@ -286,7 +309,7 @@ class WholeBody(Node):
         m.data = [0.0] * self.n
         for _ in range(6):
             self.pub.publish(m)
-            rclpy.spin_once(self, timeout_sec=0.01)
+            self.exec.spin_once(timeout_sec=0.01)
 
     # ------------------------------------------------------------------- run
     def run(self, T_des):
@@ -306,7 +329,7 @@ class WholeBody(Node):
         while True:
             deadline = time.monotonic() + 1.0 / a.rate
             while time.monotonic() < deadline:
-                rclpy.spin_once(self, timeout_sec=0.002)
+                self.exec.spin_once(timeout_sec=0.002)
             why = self.guard()
             if why:
                 self.stop()
@@ -346,6 +369,7 @@ class WholeBody(Node):
             self.pub.publish(m)
             self.log.append(dict(
                 t=t, base=[float(x) for x in self.base],
+                base_stamp=self.base_stamp,
                 q=[float(x) for x in self.q_arm],
                 tcp=[float(T[0, 3]), float(T[1, 3]), float(T[2, 3])],
                 cmd_in=[float(x) for x in v],
@@ -357,7 +381,7 @@ class WholeBody(Node):
         # let it come to rest
         t1 = time.monotonic()
         while time.monotonic() - t1 < 1.5:
-            rclpy.spin_once(self, timeout_sec=0.02)
+            self.exec.spin_once(timeout_sec=0.02)
         return True
 
 
@@ -400,6 +424,27 @@ def main() -> int:
     ap.add_argument('--timeout-s', type=float, default=60.0)
     ap.add_argument('--stall-v', type=float, default=2e-3)
     ap.add_argument('--stall-cycles', type=int, default=40)
+    # Feed-staleness threshold. NOT a tuning knob, and NOT the safety stop: it
+    # is the line at which a TEST gives up on its data. The safety stop is the
+    # gate's 150 ms monotonic watchdog, which is a separate process, is
+    # unchanged by anything here, and still zeroes base and arm together.
+    #
+    # Set from measurement. An INDEPENDENT monitor process -- subscribed to the
+    # feeds and doing nothing else -- measured, over 110 s spanning a full run:
+    #
+    #   /joint_states  141.7 Hz, median 7.0 ms, p99 8.0 ms, max 12.8 ms
+    #   /odom           29.3 Hz, median 34.0 ms, p99 36.7 ms, max 309.6 ms
+    #
+    # and in an earlier window a 332 ms stall on /joint_states with the joints
+    # at rest. So this simulator stalls a feed for up to ~335 ms occasionally
+    # while running two orders of magnitude tighter the rest of the time. At
+    # 300 ms the guard sat inside that stall population and aborted runs on a
+    # real but harmless hiccup -- twice, once on each feed. 0.5 s clears the
+    # observed maximum with margin and is still only 10 control cycles.
+    #
+    # This number belongs to THIS simulator. On hardware it goes back down and
+    # the measurement has to be redone.
+    ap.add_argument('--max-data-age', type=float, default=0.50)
     ap.add_argument('--abort-d', type=float, default=0.02)
     ap.add_argument('--max-base-travel', type=float, default=1.2)
     ap.add_argument('--out', default='evaluation/results/wholebody_pregrasp.json')
@@ -411,7 +456,7 @@ def main() -> int:
     t0 = time.monotonic()
     while time.monotonic() - t0 < 20 and (nd.q_arm is None or nd.base is None
                                           or nd.rows is None):
-        rclpy.spin_once(nd, timeout_sec=0.1)
+        nd.exec.spin_once(timeout_sec=0.1)
     if nd.q_arm is not None and nd.base is not None and not wait_fresh(
             nd, [lambda: time.monotonic() - nd.q_arm_t,
                  lambda: time.monotonic() - nd.base_t]):
