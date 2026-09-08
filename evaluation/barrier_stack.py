@@ -85,10 +85,20 @@ def main() -> int:
     ap.add_argument('--report-frame', default='world')
     ap.add_argument('--spawn-z', type=float, default=0.05,
                     help='z of the model root in the world, from `gz model -p`')
+    # The base is fixed but not necessarily at the origin: 5B parks it at a
+    # standoff so the pre-grasp point lands inside the arm's workspace. Read
+    # these from `gz model -m omni_bot -p` after moving it, never from the
+    # value that was ASKED for -- the two differ once physics has settled, and
+    # the distance node would then be looking at a different scene.
+    ap.add_argument('--base-x', type=float, default=0.0)
+    ap.add_argument('--base-y', type=float, default=0.0)
+    ap.add_argument('--base-yaw', type=float, default=0.0)
     ap.add_argument('--gate-timeout', type=float, default=0.15)
     ap.add_argument('--rate', type=float, default=20.0)
     ap.add_argument('--max-rows-per-link', type=int, default=60)
     ap.add_argument('--no-foxglove', action='store_true')
+    ap.add_argument('--camera-topic', default='/demo_cam',
+                    help='bridge this gz camera to ROS for recording; empty to skip')
     ap.add_argument('--indep-n', type=int, default=10000)
     a = ap.parse_args()
 
@@ -127,7 +137,8 @@ def main() -> int:
         # it from the spawn arguments, which can differ once physics settles.
         spawn('static_tf', [
             'ros2', 'run', 'tf2_ros', 'static_transform_publisher',
-            '--x', '0', '--y', '0', '--z', str(a.spawn_z),
+            '--x', str(a.base_x), '--y', str(a.base_y), '--z', str(a.spawn_z),
+            '--yaw', str(a.base_yaw),
             '--frame-id', a.report_frame, '--child-frame-id', 'base_footprint'])
         time.sleep(1.0)
 
@@ -169,6 +180,12 @@ def main() -> int:
             '-p', f'wholebody_urdf:={urdf}',
             '-p', f'world_sdf:={a.world}',
             '-p', f'indep_n:={a.indep_n}'])
+
+        if a.camera_topic:
+            spawn('demo_cam_bridge', [
+                'ros2', 'run', 'ros_gz_bridge', 'parameter_bridge',
+                f'{a.camera_topic}@sensor_msgs/msg/Image[gz.msgs.Image',
+                '--ros-args', '-p', 'use_sim_time:=true'])
 
         if not a.no_foxglove:
             spawn('foxglove_bridge', [

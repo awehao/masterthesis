@@ -47,9 +47,20 @@ def generate_launch_description():
         p for p in (os.environ.get('GZ_SIM_RESOURCE_PATH', ''),
                     os.path.dirname(desc), os.path.dirname(bringup)) if p)
 
+    # gz loads <plugin filename="gz_ros2_control-system"> from this path only.
+    # It was missing here and the launch happened to work anyway, because the
+    # shell that first ran it already had the variable exported. Started from a
+    # clean environment the plugin is silently skipped, no controller_manager
+    # ever appears, every spawner retries until it gives up, and with nothing
+    # holding the joints the arm collapses under gravity.
+    plugin_paths = os.pathsep.join(
+        [p for p in ['/opt/ros/jazzy/lib',
+                     os.environ.get('GZ_SIM_SYSTEM_PLUGIN_PATH', '')] if p])
+
     return LaunchDescription([
         DeclareLaunchArgument('gui', default_value='true'),
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', resource),
+        SetEnvironmentVariable('GZ_SIM_SYSTEM_PLUGIN_PATH', plugin_paths),
         SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
         SetEnvironmentVariable('__GLX_VENDOR_LIBRARY_NAME', 'nvidia'),
         SetEnvironmentVariable('__EGL_VENDOR_LIBRARY_FILENAMES',

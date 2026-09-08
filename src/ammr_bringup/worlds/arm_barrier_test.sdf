@@ -27,6 +27,31 @@
       <render_engine>ogre2</render_engine>
     </plugin>
 
+    <!-- Demo camera, inside the simulator on purpose.
+         Screen recording of the Gazebo window cannot be made safe on this
+         machine: x11grab captures whatever is composited at that screen
+         region, so any window that happens to be in front is what lands in
+         the file. Twice it was a browser showing personal data. A camera
+         sensor can only ever see the simulated scene.
+         Aimed at the pre-grasp point, from the side, so the standoff between
+         gripper and box face is visible rather than foreshortened. -->
+    <model name="demo_camera">
+      <static>true</static>
+      <pose>0.15 -1.55 0.95 0 0.2506 1.4425</pose>
+      <link name="link">
+        <sensor name="demo_cam" type="camera">
+          <camera>
+            <horizontal_fov>1.05</horizontal_fov>
+            <image><width>800</width><height>600</height><format>R8G8B8</format></image>
+            <clip><near>0.05</near><far>20</far></clip>
+          </camera>
+          <always_on>1</always_on>
+          <update_rate>20</update_rate>
+          <topic>demo_cam</topic>
+        </sensor>
+      </link>
+    </model>
+
     <light type="directional" name="sun">
       <cast_shadows>true</cast_shadows>
       <pose>0 0 10 0 0 0</pose>
