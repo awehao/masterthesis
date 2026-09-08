@@ -1,0 +1,24 @@
+# The arm's initial joint angles. THE only place these six numbers live.
+#
+# Read by lite6_ros2_control_gz.xacro (what Gazebo spawns at) and by
+# omni_bot_wholebody.launch.py (what the kinematic visualisation shows). They
+# used to be written out separately in both, with no link between them, so a
+# change in one silently left the other behind -- and the arm on screen was not
+# the arm being checked.
+#
+# All zeros, chosen after the previous tuck pose was found to be in actual
+# self-collision. Exact triangle tests put link1 against the gripper shell and
+# against finger2 at 0.000 m, with finger1 at 1.6 mm; sampled point clouds had
+# reported 1 to 3 mm because they never landed on the crossing triangles.
+#
+# All zeros clears every non-excluded pair, tightest being link_base to link5
+# at 8.79 mm. That margin is small and it is not symmetric: joint3 moving
+# NEGATIVE from here intersects within 0.05 rad, while positive opens to 20 mm
+# by +0.05 and 88 mm by +0.45. Any motion starting here has to have its
+# direction checked, not just its endpoints.
+joint1: 0.0
+joint2: 0.0
+joint3: 0.0
+joint4: 0.0
+joint5: 0.0
+joint6: 0.0

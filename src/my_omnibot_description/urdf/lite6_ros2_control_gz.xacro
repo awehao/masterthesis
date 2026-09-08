@@ -30,22 +30,18 @@
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- All zeros, not the previous tuck.
-       The tuck pose (0, -0.082, 0.089, 0, 1.679, 0) is in self-collision, and
-       not marginally: exact triangle tests put link1 against the gripper shell
-       and against finger2 at 0.000 m, i.e. actually intersecting, with finger1
-       at 1.6 mm. Sampled point clouds had reported 1 to 3 mm there for months
-       because they never landed on the pair of triangles that cross.
-       All zeros clears every non-excluded pair, with link_base to link5 the
-       tightest at 8.79 mm. That is not a lot: joint3 going NEGATIVE from here
-       reaches intersection within 0.05 rad, so any motion starting from this
-       pose needs its direction checked first. -->
-  <xacro:property name="tuck_j1" value="0.0"/>
-  <xacro:property name="tuck_j2" value="0.0"/>
-  <xacro:property name="tuck_j3" value="0.0"/>
-  <xacro:property name="tuck_j4" value="0.0"/>
-  <xacro:property name="tuck_j5" value="0.0"/>
-  <xacro:property name="tuck_j6" value="0.0"/>
+  <!-- Initial joint angles come from config/arm_initial_pose.yaml, which is
+       the only place they are written. See that file for why they are zeros
+       and for the direction-dependent margin at this pose. -->
+  <xacro:property name="init_pose"
+                  value="${xacro.load_yaml(
+                      '$(find my_omnibot_description)/config/arm_initial_pose.yaml')}"/>
+  <xacro:property name="tuck_j1" value="${init_pose['joint1']}"/>
+  <xacro:property name="tuck_j2" value="${init_pose['joint2']}"/>
+  <xacro:property name="tuck_j3" value="${init_pose['joint3']}"/>
+  <xacro:property name="tuck_j4" value="${init_pose['joint4']}"/>
+  <xacro:property name="tuck_j5" value="${init_pose['joint5']}"/>
+  <xacro:property name="tuck_j6" value="${init_pose['joint6']}"/>
 
   <xacro:macro name="lite6_ros2_control_gz"
                params="prefix:='' ros2_control_plugin:='gz_ros2_control/GazeboSimSystem'

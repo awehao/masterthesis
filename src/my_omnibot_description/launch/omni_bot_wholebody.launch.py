@@ -61,9 +61,11 @@ def generate_launch_description() -> LaunchDescription:
              output='screen',
              parameters=[{'rate': 10,
                           'source_list': ['/joint_states_cmd'],
-                          'zeros': {'joint2': -0.082,
-                                    'joint3': 0.089,
-                                    'joint5': 1.679}}]),
+                          # Same six numbers Gazebo spawns at, from the same
+                          # file. Written out here independently before, which
+                          # meant the model on screen could differ from the one
+                          # in the simulator without anything saying so.
+                          'zeros': _initial_pose()}]),
 
         Node(package='foxglove_bridge', executable='foxglove_bridge',
              name='foxglove_bridge', output='screen',
