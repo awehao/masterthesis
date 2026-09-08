@@ -37,6 +37,7 @@ def main() -> int:
     ap.add_argument('--n', type=int, default=3)
     ap.add_argument('--target', nargs=3, type=float, default=[0.30, 0.0, 0.55])
     ap.add_argument('--outdir', default='evaluation/results/baseline_repeat')
+    ap.add_argument('--sched', default='deadline', choices=['deadline','legacy'])
     ap.add_argument('--timeout-s', type=float, default=60.0)
     a = ap.parse_args()
     os.makedirs(a.outdir, exist_ok=True)
@@ -45,6 +46,7 @@ def main() -> int:
                          capture_output=True, text=True).stdout.strip()
     dirty = subprocess.run(['git', 'status', '--porcelain'], cwd=_ROOT,
                            capture_output=True, text=True).stdout.strip()
+    print(f'  排程 {a.sched}')
     print(f'  程式版本 {rev[:12]}' + ('（工作區有未提交改動）' if dirty else '（乾淨）'))
 
     runs = []
@@ -59,7 +61,8 @@ def main() -> int:
             [sys.executable, os.path.join(_HERE, 'wholebody_pregrasp.py'),
              '--target', *[str(x) for x in a.target], '--solver', 'qp',
              '--mu-post', str(a.mu), '--timeout-s', str(a.timeout_s),
-             '--out', out], cwd=_ROOT, capture_output=True, text=True)
+             '--sched', a.sched, '--out', out],
+            cwd=_ROOT, capture_output=True, text=True)
         for line in r.stdout.strip().splitlines():
             if any(k in line for k in ('停滯', '中止', '逾時', '週期寫入')):
                 print('  ' + line.strip())
@@ -77,7 +80,8 @@ def main() -> int:
               f"{m['min_d']*1000:11.1f} "
               f"{m.get('t_qp_p50',0)*1e3:6.1f}/{m.get('t_qp_p95',0)*1e3:5.1f}/{m.get('t_qp_max',0)*1e3:5.1f} "
               f"{m.get('dt_pub_p95',0)*1e3:8.1f}/{m.get('dt_pub_max',0)*1e3:7.1f} "
-              f"{m.get('overrun_frac',0)*100:6.1f}%")
+              f"{m.get('overrun_frac',0)*100:6.1f}%"
+              f"  跳槽 {m.get('n_skipped',0)}  cfg_dt {m.get('cfg_dt_p50',0)*1e3:.1f} ms")
     if ok:
         def sp(k, f=1.0):
             v = np.array([m[k] for m in ok]) * f

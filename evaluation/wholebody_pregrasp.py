@@ -454,10 +454,18 @@ class WholeBody(Node):
               f'→ 目標 ({T_des[0,3]:.3f}, {T_des[1,3]:.3f}, {T_des[2,3]:.3f})')
         t0 = time.monotonic()
         settle = None
+        period = 1.0 / a.rate
+        slot = 0                      # deadline scheduling only
+        self.n_overrun = 0
+        self.n_skipped = 0
         while True:
-            deadline = time.monotonic() + 1.0 / a.rate
-            while time.monotonic() < deadline:
-                self.exec.spin_once(timeout_sec=0.002)
+            if a.sched == 'legacy':
+                # The frozen baseline's loop, kept so that version reproduces:
+                # drain a whole nominal period, THEN work, so the achieved
+                # period is always the nominal one plus the work.
+                deadline = time.monotonic() + period
+                while time.monotonic() < deadline:
+                    self.exec.spin_once(timeout_sec=0.002)
             why = self.guard()
             if why:
                 self.stop()
@@ -507,8 +515,36 @@ class WholeBody(Node):
             self.t_pub_prev = _now
             self.pub.publish(m)
             self.v_prev = v.copy()
+            # Measured interval, for the acceleration box. The bound is
+            # |v - v_prev| <= amax * dt, so a dt that is not the time actually
+            # elapsed makes the bound wrong by that ratio -- it was 50 ms
+            # nominal against a 61 ms achieved period, i.e. 18% tighter than the
+            # hardware would have allowed. The safety node downstream already
+            # uses its own measured elapsed time; this makes the constraint set
+            # rebuilt here agree with it.
+            if np.isfinite(dt_pub) and 0.2 * period < dt_pub < 5.0 * period:
+                self.cfg.dt = float(dt_pub)
+            if a.sched == 'deadline':
+                # Fixed deadlines from a single origin, so the period does not
+                # drift with the work. A missed slot is RECORDED AND SKIPPED,
+                # never made up: bursting the commands that were owed would put
+                # several cycles' worth of velocity on the wire back to back,
+                # which is a different trajectory from the one that was solved.
+                slot += 1
+                target = t0 + slot * period
+                now2 = time.monotonic()
+                if now2 >= target:
+                    self.n_overrun += 1
+                    miss = int((now2 - target) // period) + 1
+                    slot += miss
+                    self.n_skipped += miss
+                else:
+                    while time.monotonic() < t0 + slot * period:
+                        self.exec.spin_once(timeout_sec=0.002)
             self.log.append(dict(
                 n_bar_rows=int(self.n_bar_rows), n_qp_fail=int(self.n_qp_fail),
+                n_overrun=int(self.n_overrun), n_skipped=int(self.n_skipped),
+                cfg_dt=float(self.cfg.dt),
                 qp_status=dict(self.qp_status), qp_iter_max=int(self.qp_iter_max),
                 # Wall time inside the QP, wall time for the whole solve, and
                 # the interval actually achieved between published commands.
@@ -551,6 +587,12 @@ def main() -> int:
     ap.add_argument('--limit-margin', type=float, default=0.35,
                     help='joint-limit potential activates within this, rad')
     ap.add_argument('--k-limit', type=float, default=1.5)
+    ap.add_argument('--sched', default='deadline',
+                    choices=['deadline', 'legacy'],
+                    help="'deadline' = fixed deadlines, drain the REMAINING "
+                         "time, record and skip missed slots. 'legacy' = the "
+                         "frozen baseline's loop, which drains a whole period "
+                         "before working and so always overruns.")
     ap.add_argument('--solver', default='dls', choices=['dls', 'qp'],
                     help="'dls' = task solve then downstream projection (the "
                          "architecture as it runs). 'qp' = task, collision and "

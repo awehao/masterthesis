@@ -97,6 +97,13 @@ def _timing(L, period):
             out[nm + '_p50'] = float(np.percentile(v, 50))
             out[nm + '_p95'] = float(np.percentile(v, 95))
             out[nm + '_max'] = float(v.max())
+    out['n_overrun'] = int(L[-1].get('n_overrun', 0))
+    out['n_skipped'] = int(L[-1].get('n_skipped', 0))
+    cd = np.array([r.get('cfg_dt', np.nan) for r in L], float)
+    cd = cd[np.isfinite(cd)]
+    if len(cd):
+        out['cfg_dt_p50'] = float(np.percentile(cd, 50))
+        out['cfg_dt_max'] = float(cd.max())
     if len(dp):
         out['dt_pub_p50'] = float(np.percentile(dp, 50))
         out['dt_pub_p95'] = float(np.percentile(dp, 95))
