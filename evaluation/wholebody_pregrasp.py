@@ -80,6 +80,9 @@ sys.path.insert(0, _HERE)
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE                # noqa: E402
 from ammr_wholebody_mpc.arm_pregrasp import ARM_JOINTS, rot_error   # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
+from ammr_wholebody_mpc.wholebody_safety_filter import (            # noqa: E402
+    STATUS_OK as F_OK, DetectionPoint, SafetyConfig, _box_rows,
+    _joint_limit_rows, _rows_from_points)
 from arm_poses import pose as named_pose                            # noqa: E402
 
 # World z of the model root (base_footprint). base_footprint is DEFINED as the
@@ -138,6 +141,8 @@ class WholeBody(Node):
         self.K = WholeBodyKinematics.from_urdf_string(xml)
         self.n = len(self.K.dof_names)
         self.idx = [self.K.dof_names.index(j) for j in ARM_JOINTS]
+        from ammr_wholebody_mpc.arm_link_geometry import arm_link_names
+        self.link_names = arm_link_names(xml)
         if self.n < 9:
             raise RuntimeError('需要 9 自由度全身模型')
 
@@ -179,6 +184,14 @@ class WholeBody(Node):
         self.pub = self.create_publisher(Float64MultiArray,
                                          '/wholebody_safety/cmd_in', 10)
         self.exec.add_node(self)
+        self.cfg = SafetyConfig(dt=1.0 / a.rate)
+        self.v_prev = np.zeros(self.n)
+        # NOT reset here: link_names is set above from the description, and
+        # clearing it made every cloud row fail the link-index check, so the
+        # constraint set came out empty, the QP branch was skipped, and the
+        # run reproduced the two-stage result exactly while reporting success.
+        self.n_bar_rows = 0
+        self.n_qp_fail = 0
         self.log = []
 
     # ---------------------------------------------------------------- inputs
@@ -309,8 +322,69 @@ class WholeBody(Node):
         H = (J.T @ J + mu * mu * S + lam * lam * np.diag(1.0 / (w * w)))
         g = J.T @ e + mu * mu * (S @ v_post)
         v = np.linalg.solve(H, g)
+        self.n_qp_fail = getattr(self, 'n_qp_fail', 0)
+        if self.a.solver == 'qp':
+            # Same objective, same weights; the constraints now sit INSIDE the
+            # problem instead of being applied to its answer afterwards. The
+            # unconstrained solution above is kept as the linearisation point
+            # for d_stop, so both architectures see the same constraint set.
+            A, b, nb = self._constraints(q, v)
+            if A is not None:
+                vq = self._solve_qp(H, -g, A, b)
+                if vq is not None:
+                    self.n_bar_rows = nb
+                    v = vq
+                else:
+                    self.n_qp_fail += 1
         return v, T, float(np.linalg.norm(T_des[:3, 3] - T[:3, 3])), \
             float(np.linalg.norm(rot_error(T[:3, :3], T_des[:3, :3])))
+
+    def _constraints(self, q, v_lin):
+        """The constraint set the downstream filter would build, built here.
+
+        Same rows, same linearisation point: d_stop depends on the approach
+        speed, so it is evaluated at the SAME v_in the two-stage pipeline would
+        have handed the filter. That keeps the two architectures comparable --
+        the difference under test is where the constraints enter the solve, not
+        which constraints they are.
+        """
+        if self.rows is None or self.K is None:
+            return None, None, 0
+        pts = []
+        R = self.rows
+        for r in R:
+            if r[7] != F_OK:
+                continue
+            li = int(r[10])
+            if li >= len(self.link_names):
+                continue
+            pts.append(DetectionPoint(
+                frame=self.link_names[li], p=np.asarray(r[0:3], float),
+                n=np.asarray(r[3:6], float), d=float(r[6]), status=int(r[7]),
+                age=float(r[8]), occluded=bool(r[9] >= 0.5),
+                offset=np.asarray(r[11:14], float), rho=float(r[14])))
+        if not pts:
+            return None, None, 0
+        cfg = self.cfg
+        Ab, bb, cap, _ = _rows_from_points(self.K, q, pts, cfg, v_lin)
+        Aj, bj = _joint_limit_rows(self.K, q, cfg)
+        Ax, bx = _box_rows(cfg, self.n, cap, self.v_prev, cfg.dt)
+        A = np.array(Ab + Aj + Ax)
+        b = np.array(bb + bj + bx)
+        return A, b, len(Ab)
+
+    def _solve_qp(self, H, g, A, b):
+        import osqp
+        from scipy import sparse
+        P = sparse.csc_matrix((H + H.T) / 2.0)
+        m = osqp.OSQP()
+        m.setup(P=P, q=g, A=sparse.csc_matrix(A),
+                l=np.full(len(b), -np.inf), u=b, verbose=False,
+                eps_abs=1e-7, eps_rel=1e-7, max_iter=8000, polish=True)
+        r = m.solve()
+        if r.info.status_val not in (1, 2):
+            return None
+        return np.asarray(r.x, float)
 
     def stop(self):
         m = Float64MultiArray()
@@ -375,7 +449,9 @@ class WholeBody(Node):
             m = Float64MultiArray()
             m.data = [float(x) for x in v]
             self.pub.publish(m)
+            self.v_prev = v.copy()
             self.log.append(dict(
+                n_bar_rows=int(self.n_bar_rows), n_qp_fail=int(self.n_qp_fail),
                 t=t, base=[float(x) for x in self.base],
                 base_stamp=self.base_stamp,
                 q=[float(x) for x in self.q_arm],
@@ -411,6 +487,11 @@ def main() -> int:
     ap.add_argument('--limit-margin', type=float, default=0.35,
                     help='joint-limit potential activates within this, rad')
     ap.add_argument('--k-limit', type=float, default=1.5)
+    ap.add_argument('--solver', default='dls', choices=['dls', 'qp'],
+                    help="'dls' = task solve then downstream projection (the "
+                         "architecture as it runs). 'qp' = task, collision and "
+                         "hardware limits in ONE solve, posture demoted to a "
+                         "secondary objective by the same mu.")
     ap.add_argument('--mu-post', type=float, default=1.0,
                     help='weight of the posture term against the task')
     ap.add_argument('--kp-post', type=float, default=1.2,

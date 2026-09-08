@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import subprocess
 import sys
 import time
@@ -217,6 +218,9 @@ def main() -> int:
     ap.add_argument('--rate', type=float, default=20.0)
     ap.add_argument('--pre-s', type=float, default=4.0)
     ap.add_argument('--post-s', type=float, default=6.0)
+    ap.add_argument('--out', default='',
+                    help='save the per-cycle rows so the reason timeline can be '
+                         'read afterwards; attribution needs it')
     ap.add_argument('--recover-s', type=float, default=0.0,
                     help='after post-s, resume the frozen feed and watch this '
                          'much longer')
@@ -327,6 +331,12 @@ def main() -> int:
             v = [r[k] for r in rel if r[k] is not None]
             if v:
                 print(f"  {lab:18} 故障後最大年齡 {max(v)*1e3:7.0f} ms")
+    if a.out:
+        import json as _j
+        os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
+        _j.dump(dict(args=vars(a), t_fault=n.t_fault, t_resume=n.t_resume,
+                     rows=R), open(a.out, 'w'), ensure_ascii=False)
+        print(f'  逐週期資料寫入 {a.out}')
     n.destroy_node()
     rclpy.try_shutdown()
     return 0
