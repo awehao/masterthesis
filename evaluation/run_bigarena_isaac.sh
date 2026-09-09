@@ -157,9 +157,13 @@ wait_for 60 "clock 在前進" clock_moved
 for t in /scan /scan_raw /odom /odom_raw; do
     wait_for 40 "$t 有資料" has_data "$t"
 done
+# tf2_echo runs on wall time by default and cannot see a simulation-time TF
+# buffer at all; tf_ready_check.py runs with use_sim_time, looks up the latest
+# available transform, and separates a missing frame from an extrapolation.
 for pair in "map odom" "odom base_footprint" "map base_footprint"; do
     set -- $pair
-    wait_for 40 "TF $1 -> $2 可查" timeout 6 ros2 run tf2_ros tf2_echo "$1" "$2"
+    wait_for 60 "TF $1 -> $2 可查" \
+        python3 "${HERE}/tf_ready_check.py" "$1" "$2" --timeout 12
 done
 for n in /map_server /amcl /planner_server; do
     wait_for 60 "lifecycle $n active" lifecycle_active "$n"
