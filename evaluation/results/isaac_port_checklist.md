@@ -179,3 +179,33 @@ $|v_x| + 0.245|\omega| = 0.555 = 2S$ 的輪速。
 依既定拆解：**先在兩種限制共同允許的命令範圍內比較致動差異**（即使用率 ≤ 1 的區域，本批資料
 全部落在其中），**再單獨比較盒與多面體**。後者不需要打滑現象才成立——上面的 Jacobian 已經給出
 2 倍的樂觀上界。
+
+---
+
+## 六、Isaac 實測補充（2026-09-09，Gate 0／Gate 1 完成後回填）
+
+Isaac Sim 6.0.1 已安裝並實際執行。詳見 `isaac_gate0_20260909.md`、`isaac_gate1_20260909.md`。
+
+### 匯入時會靜默出錯的四處
+
+| 問題 | 症狀 | 處理 |
+| --- | --- | --- |
+| 變體選擇懸空 | 根層選 `Physics="physx"`，變體集只有 `none`/`physics`；物理完全沒組合進來，報 `did not match any articulations` | 匯入後明確 `SetVariantSelection('physics')` |
+| link 子樹 `instanceable` | `stage.Traverse()` 不下探，只掃到 5 個 link | 用 `Usd.TraverseInstanceProxies` |
+| 碰撞幾何 `purpose="guide"` | 預設 bbox cache 回空範圍，誤判「沒有碰撞幾何」 | 另建含 guide/proxy 的 `UsdGeom.BBoxCache` |
+| `<gazebo>` 標籤不被讀取 | `mu1=0` 遺失，PhysX 用預設摩擦，追蹤率掉到 37% | 在 Isaac 端建立零摩擦材質，**支撐球與地面都要綁** |
+
+### 幾何與根部（已驗）
+
+- base_link 碰撞圓柱：直徑 0.6000 m、高 0.2800 m，與 URDF 差 **0.00 mm**
+- 整機視覺 AABB 0.600×0.600×0.3291（z +0.0009…+0.3300）；
+  整機碰撞 AABB 0.600×0.600×0.3750（z 0…+0.3750，相機盒比視覺頂高 45 mm）
+- articulation root：`/World/omni_bot/Geometry/base_footprint`，`num_dof = 0`（浮動基座 6 DOF）
+- 84 剛體 / 83 fixed joint vs URDF 93 links / 92 joints：
+  差的 9 個是無幾何的相機座標框，被匯入器併除，**USD 裡沒有對應 prim**，
+  之後接相機不能直接用 URDF 的 frame 名稱定位
+
+### 底盤命令介面（已驗）
+
+- 直接速度控制在 mu=0 下追蹤率 100.0%（前進／橫移／旋轉），與 Gazebo 一致
+- 送零可停（殘餘 ≤0.001 mm/s）；**停止發布不會停**（4 s 滑行 398 mm，兩個模擬器皆無命令逾時）
