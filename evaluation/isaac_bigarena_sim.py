@@ -47,6 +47,8 @@ ap.add_argument('--method', default='gmpc_scan', help='記錄用，不影響模�
 ap.add_argument('--traj', default='bigarena_traffic', help='記錄用')
 ap.add_argument('--headless', default='false')
 ap.add_argument('--experience', default='')
+ap.add_argument('--cpu-threads', type=int, default=0,
+                help='>0 傳給 SimulationApp 的 limit_cpu_threads（官方效能設定）')
 ap.add_argument('--physics-dt', type=float, default=0.01)   # bigarena.sdf
 ap.add_argument('--rtf', type=float, default=1.0)           # bigarena.sdf
 ap.add_argument('--render-hz', type=float, default=15.0)
@@ -153,8 +155,14 @@ if _exp and not os.path.exists(_exp):
     sys.exit(1)
 if _exp:
     print(f'  GUI experience：{os.path.basename(_exp)}', flush=True)
-sim_app = SimulationApp({'headless': _headless, 'width': 1600, 'height': 900},
-                        experience=_exp)
+_cfg_app = {'headless': _headless, 'width': 1600, 'height': 900}
+if a.cpu_threads > 0:
+    # Official performance setting. 8 is a trial value for this machine, not a
+    # tuned one: whether it lowers the temperature at all is what this run
+    # measures. The resulting RTF is recorded alongside it.
+    _cfg_app['limit_cpu_threads'] = a.cpu_threads
+    print(f'  limit_cpu_threads = {a.cpu_threads}', flush=True)
+sim_app = SimulationApp(_cfg_app, experience=_exp)
 
 import numpy as np                                                # noqa: E402
 from isaacsim.core.api import World                               # noqa: E402
@@ -943,8 +951,15 @@ def main():
                 else:
                     nxt = time.monotonic()
 
-        rec['run'] = dict(stop_reason=stop_reason, log=log,
-                          sim_time=log[-1]['t'] if log else 0.0)
+        _wall = time.monotonic() - t_wall0
+        _sim = log[-1]['t'] if log else 0.0
+        rec['run'] = dict(stop_reason=stop_reason, log=log, sim_time=_sim,
+                          wall_time=_wall,
+                          rtf_measured=(_sim / _wall) if _wall > 0 else None,
+                          cpu_threads=a.cpu_threads)
+        print(f'    實際 RTF {_sim/max(_wall,1e-9):.3f}'
+              f'（模擬 {_sim:.1f} s / 實際 {_wall:.1f} s），'
+              f'limit_cpu_threads={a.cpu_threads or "未設"}')
         if log:
             L = log
             print(f'\n  ── 結束（{stop_reason}）──')

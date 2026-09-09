@@ -40,13 +40,25 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# 1. Isaac：GUI，場景與機器人就位
-echo "[$(date +%T)] [1/6] 啟動 Isaac（GUI）..."
+# 0. 溫度取樣：在 Isaac 之前就開始，用牆鐘每秒取樣
+THERM_CSV="${HERE}/results/${TAG}_thermal.csv"
+ISAAC_PIDFILE="${HERE}/logs/${TAG}.isaacpid"
+rm -f "$ISAAC_PIDFILE"
+"${HERE}/thermal_sampler.sh" "$THERM_CSV" "${CPU_LIMIT:-88}" "$ISAAC_PIDFILE" \
+    >> "$LOG" 2>&1 < /dev/null &
+THERM_PID=$!; PIDS+=( $THERM_PID )
+echo "[$(date +%T)] [0/6] 溫度取樣已啟動 -> $THERM_CSV（上限 ${CPU_LIMIT:-88} °C）"
+sleep 3
+
+# 1. Isaac
+HEADLESS="${HEADLESS:-true}"
+echo "[$(date +%T)] [1/6] 啟動 Isaac（headless=$HEADLESS, cpu_threads=${CPU_THREADS:-8}）..."
 "$ISAAC_PY" "${HERE}/isaac_bigarena_sim.py" --seed "$SEED" --method "$METHOD" \
-    --traj bigarena_traffic --headless false --duration "$((DURATION+60))" \
+    --traj bigarena_traffic --headless "$HEADLESS" --duration "$((DURATION+60))" \
     --render-hz "${RENDER_HZ:-12}" --cpu-limit "${CPU_LIMIT:-88}" \
+    --cpu-threads "${CPU_THREADS:-8}" \
     --out "${HERE}/results/${TAG}.json" >> "$LOG" 2>&1 < /dev/null &
-PIDS+=( $! )
+ISAAC_PID=$!; echo "$ISAAC_PID" > "$ISAAC_PIDFILE"; PIDS+=( $ISAAC_PID )
 # `ros2 topic echo --once` exits 0 even when it printed nothing, so the first
 # version of this wait passed after 5 s while Isaac was still loading -- the
 # navigation chain and the readiness gate then both ran before the simulator
@@ -54,6 +66,12 @@ PIDS+=( $! )
 echo "[$(date +%T)] [1/6] 等 /clock 真的在前進（最多 300 s）..."
 clock_ok=0
 for i in $(seq 1 100); do
+  if ! kill -0 "$ISAAC_PID" 2>/dev/null; then
+    echo "[$(date +%T)] [1/6] **Isaac 已退出，停止等待**"
+    echo "[$(date +%T)] [1/6]   最後幾行："; tail -6 "$LOG" | sed 's/^/      /'
+    grep -a "溫度中止\|thermal_abort\|Traceback" "$LOG" | tail -2 | sed 's/^/      /'
+    exit 3
+  fi
   s1=$(timeout 3 ros2 topic echo --once --field clock.sec /clock 2>/dev/null | head -1)
   if [ -n "${s1:-}" ]; then
     sleep 2
@@ -131,6 +149,10 @@ clock_moved() {
 has_data() { timeout 6 ros2 topic echo --once "$1" 2>/dev/null | grep -q . ; }
 lifecycle_active() { timeout 6 ros2 lifecycle get "$1" 2>/dev/null | grep -q active ; }
 
+isaac_alive() { kill -0 "$ISAAC_PID" 2>/dev/null; }
+if ! isaac_alive; then
+    mark "!! Isaac 在就緒檢查前已退出"; gate_fail=1
+fi
 wait_for 60 "clock 在前進" clock_moved
 for t in /scan /scan_raw /odom /odom_raw; do
     wait_for 40 "$t 有資料" has_data "$t"
