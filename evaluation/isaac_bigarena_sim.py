@@ -60,6 +60,10 @@ ap.add_argument('--kd', type=float, default=1.0e4)
 ap.add_argument('--markers', default='true')
 ap.add_argument('--static-scan', default='false',
                 help='true = 在起點做靜態掃描驗收後結束，不進導航')
+ap.add_argument('--near-target', default='',
+                help='r,bearing_deg：在遮罩外放一片薄板，驗證近距物件不會被略過')
+ap.add_argument('--publish-s', type=float, default=0.0,
+                help='靜態驗收後續發布 /clock 與 /scan_raw 的秒數，供 ROS 端取樣')
 ap.add_argument('--out', default=os.path.join(HERE, 'results/isaac_bigarena.json'))
 a = ap.parse_args()
 
@@ -243,42 +247,33 @@ def find_chassis_cylinder(stage, prim):
     return out
 
 
-def ray_range(query, origin, direction, max_range, excluded, eps=0.01,
-              max_steps=24, overlap_step=0.05):
-    """Nearest hit that is not an excluded shape.
+def ray_range(query, origin, direction, max_range, excluded):
+    """Nearest hit that is not an excluded shape, from the FULL hit set.
 
-    A beam that hits the excluded chassis cylinder is NOT turned into inf --
-    that would throw away whatever the beam would have reached. The origin is
-    advanced just past the excluded hit and the query repeats, so the
-    environment behind it is still found.
+    The first version stepped the origin past each excluded hit. That works but
+    is only as fine as its step: PhysX reports a ray starting inside a shape as
+    an overlap at distance 0, so the step had to be raised to 0.05 m to escape
+    the 0.30 m chassis cylinder at all -- and a 0.05 m step can jump over a thin
+    surface. raycast_all returns every intersection along the ray, so the
+    nearest non-excluded one is selected directly and nothing is skipped.
+
+    A beam whose only hits are excluded shapes still returns inf, but a beam
+    that passes through an excluded shape keeps whatever lies behind it.
     """
-    cur = list(origin)
-    travelled = 0.0
-    for _ in range(max_steps):
-        rem = max_range - travelled
-        if rem <= 0.0:
-            return float('inf'), None
-        h = query.raycast_closest(cur, direction, rem)
-        if not h or not h.get('hit'):
-            return float('inf'), None
-        d = float(h['distance'])
-        body = str(h.get('rigidBody', ''))
-        coll = str(h.get('collision', ''))
-        # match on either the shape path or its owning body, because the hit
-        # dict does not always carry both
-        skip = any(coll == e or (body and e.startswith(body + '/'))
-                   for e in excluded)
-        if skip:
-            # A ray that starts INSIDE a shape is reported by PhysX as an
-            # initial overlap at distance 0. Advancing by eps then crawls: the
-            # chassis cylinder is 0.30 m deep and 0.01 m steps never leave it
-            # within any sane step budget, so every beam came back inf. Step by
-            # a usable amount whenever the hit distance is degenerate.
-            travelled += (d + eps) if d > 1e-6 else overlap_step
-            cur = [origin[i] + direction[i] * travelled for i in range(3)]
-            continue
-        return travelled + d, (coll or body)
-    return float('inf'), None
+    best = [float('inf'), None]
+
+    def report(hit):
+        coll = str(getattr(hit, 'collision', '') or '')
+        body = str(getattr(hit, 'rigidBody', '') or '')
+        d = float(getattr(hit, 'distance', 0.0))
+        if any(coll == e or (body and e.startswith(body + '/')) for e in excluded):
+            return True                      # skip it, keep collecting
+        if 0.0 <= d < best[0]:
+            best[0], best[1] = d, (coll or body)
+        return True
+
+    query.raycast_all(origin, direction, max_range, report)
+    return best[0], best[1]
 
 
 def build_scene(stage):
@@ -402,8 +397,26 @@ def main():
         ArticulationAction(joint_positions=q))
     robot.set_world_pose(np.array([START[0], START[1], 0.0]),
                          np.array(q_yaw(0.0)))
-    print(f'  自由度 {robot.num_dof}，手臂已設定並以位置驅動保持；'
-          f'底盤置於起點 ({START[0]:.2f}, {START[1]:.2f})', flush=True)
+    # set_world_pose moves the physics body; the USD transforms only catch up
+    # after the scene is stepped. Every geometry query below reads USD, so
+    # without this the whole check runs at the world origin while the robot is
+    # actually at the spawn -- which is exactly what happened: the lidar origin
+    # read back as (0, 0, 0.2652) and the near-field test target was built
+    # around the origin, 22 m from the robot.
+    for _ in range(20):
+        world.step(render=False)
+    p_chk, _ = robot.get_world_pose()
+    _xf = UsdGeom.XformCache()
+    _t = _xf.GetLocalToWorldTransform(
+        stage.GetPrimAtPath(root)).ExtractTranslation()
+    _d = math.dist([float(p_chk[0]), float(p_chk[1])], [_t[0], _t[1]])
+    print(f'  自由度 {robot.num_dof}，手臂已設定並以位置驅動保持')
+    print(f'  底盤起點：articulation ({p_chk[0]:.4f}, {p_chk[1]:.4f})  '
+          f'USD ({_t[0]:.4f}, {_t[1]:.4f})  差 {_d*1000:.3f} mm → '
+          f'{"同步" if _d < 1e-3 else "**未同步，量測不可用**"}', flush=True)
+    if _d >= 1e-3:
+        print('  !! 位姿來源未同步，中止', file=sys.stderr)
+        return 1
 
     lidar_prim = None
     for pr in walk(stage, prim):
@@ -545,6 +558,47 @@ def main():
         return any(min(abs(b - c), 360.0 - abs(b - c)) <= MASK_HW
                    for c in MASK_CENTRES)
 
+    near_expect = None
+    if a.near_target:
+        from isaacsim.core.api.objects import FixedCuboid
+        rr, bb = [float(v) for v in a.near_target.split(',')]
+        p_now, q_now = robot.get_world_pose()
+        th = yaw_of(q_now) + math.radians(bb)
+        xf3 = UsdGeom.XformCache()
+        o3 = xf3.GetLocalToWorldTransform(lidar_prim).ExtractTranslation()
+        tx, ty = float(o3[0]) + rr * math.cos(th), float(o3[1]) + rr * math.sin(th)
+        # 2 cm thick, i.e. thinner than the 5 cm step the previous
+        # implementation used, so it would have been jumped over
+        FixedCuboid(prim_path='/World/near_target', name='near_target',
+                    position=np.array([tx, ty, float(o3[2])]),
+                    orientation=np.array(q_yaw(th)),
+                    scale=np.array([0.02, 0.60, 0.10]))
+        near_expect = (rr, bb)
+        # A collider added after world.reset() is not in the physics scene
+        # until it has been stepped: the first attempt created the plate and
+        # queried immediately, and the beam went straight through to the wall
+        # 4.79 m away.
+        for _ in range(5):
+            world.step(render=False)
+        tp = stage.GetPrimAtPath('/World/near_target')
+        gp = [x for x in walk(stage, '/World/near_target') if x.IsA(UsdGeom.Gprim)]
+        hasc = [x for x in walk(stage, '/World/near_target')
+                if x.HasAPI(UsdPhysics.CollisionAPI)]
+        _, gc2 = bbox_caches()
+        bb_ = gc2.ComputeWorldBound(tp).ComputeAlignedRange() if tp and tp.IsValid() else None
+        print(f'\n  近距薄板：距雷射 {rr:.3f} m、方位 {bb:+.1f}°，厚 0.02 m'
+              f'（小於舊實作的 0.05 m 步長）', flush=True)
+        print(f'    prim 存在={bool(tp and tp.IsValid())}  Gprim {len(gp)} 個  '
+              f'CollisionAPI {len(hasc)} 個')
+        print(f'    目標中心 ({tx:.4f}, {ty:.4f}, {float(o3[2]):.4f})')
+        if bb_ is not None and not bb_.IsEmpty():
+            print(f'    世界 AABB x[{bb_.GetMin()[0]:.4f},{bb_.GetMax()[0]:.4f}] '
+                  f'y[{bb_.GetMin()[1]:.4f},{bb_.GetMax()[1]:.4f}] '
+                  f'z[{bb_.GetMin()[2]:.4f},{bb_.GetMax()[2]:.4f}]')
+        else:
+            print('    !! 世界 AABB 為空')
+        print(f'    雷射原點 ({float(o3[0]):.4f}, {float(o3[1]):.4f}, {float(o3[2]):.4f})')
+
     excluded = find_chassis_cylinder(stage, prim)
     print(f'\n  ── 雷射查詢排除清單 ──')
     print(f'    {len(excluded)} 個：{excluded}')
@@ -634,6 +688,22 @@ def main():
                   f'中位差 {np.median(res)*1000:+.1f} mm，'
                   f'|差| p90 {np.percentile(np.abs(res), 90)*1000:.1f} mm')
             print(f'      → {"一致" if abs(np.median(res)) < 0.02 else "**不一致，需再查**"}')
+        if near_expect is not None:
+            rr, bb = near_expect
+            i_t = int(round((math.radians(bb) - SCAN_MIN) / SCAN_INC)) % SCAN_N
+            got = rngs[i_t]
+            for j in range(max(0, i_t - 4), min(SCAN_N, i_t + 5)):
+                bj = math.degrees(SCAN_MIN + j * SCAN_INC)
+                ow = owners[j].split('/')[-2:] if owners[j] else None
+                print(f'      beam {j} 方位 {bj:+7.2f}°  d='
+                      + (f'{rngs[j]:7.4f}' if np.isfinite(rngs[j]) else '    inf')
+                      + f'  {"/".join(ow) if ow else "-"}')
+            print(f'    近距薄板驗收：index {i_t}（{bb:+.1f}°）'
+                  f' 期望 {rr:.3f} m，量到 '
+                  + (f'{got:.4f} m，差 {(got-rr)*1000:+.1f} mm' if np.isfinite(got)
+                     else 'inf')
+                  + ' → ' + ('通過' if np.isfinite(got) and abs(got - rr) < 0.05
+                             else '**未通過：近距薄物件被略過或量錯**'))
         rec_scan = dict(yaw=float(yaw_now), origin=org,
                         ranges=[None if not np.isfinite(v) else float(v)
                                 for v in rngs],
@@ -655,6 +725,47 @@ def main():
     print(f'\n  已寫入 {a.out}', flush=True)
 
     if a.static_scan.lower() == 'true':
+        if a.publish_s > 0.0:
+            import time
+            rclpy.init()
+            node = Bridge(list(dyn))
+            print(f'\n  發布 /clock 與 /scan_raw {a.publish_s:.0f} s，供 ROS 端取樣',
+                  flush=True)
+            steps = int(a.publish_s / a.physics_dt)
+            se = max(1, int(round((1.0 / a.scan_rate) / a.physics_dt)))
+            xf4 = UsdGeom.XformCache()
+            w0 = time.monotonic()
+            for k in range(steps):
+                t = k * a.physics_dt
+                world.step(render=False)
+                node.publish_clock(t + a.physics_dt)
+                if k % se == 0:
+                    xf4.Clear()
+                    o4 = xf4.GetLocalToWorldTransform(lidar_prim).ExtractTranslation()
+                    p4, q4 = robot.get_world_pose()
+                    y4 = yaw_of(q4)
+                    m = LaserScan()
+                    m.header.stamp = node.stamp(t + a.physics_dt)
+                    m.header.frame_id = 'lidar_link'
+                    m.angle_min, m.angle_max = SCAN_MIN, SCAN_MAX
+                    m.angle_increment = SCAN_INC
+                    m.range_min, m.range_max = RANGE_MIN, RANGE_MAX
+                    rr_ = []
+                    for i in range(SCAN_N):
+                        th = y4 + SCAN_MIN + i * SCAN_INC
+                        d, _ = ray_range(query,
+                                         [float(o4[0]), float(o4[1]), float(o4[2])],
+                                         [math.cos(th), math.sin(th), 0.0],
+                                         RANGE_MAX, excluded)
+                        rr_.append(d)
+                    m.ranges = rr_
+                    node.scan_pub.publish(m)
+                tgt = w0 + (t + a.physics_dt) / max(a.rtf, 1e-9)
+                sl = tgt - time.monotonic()
+                if sl > 0:
+                    time.sleep(sl)
+            node.destroy_node()
+            rclpy.shutdown()
         print('\n  靜態驗收完成，結束（未進入導航）', flush=True)
         return 0
 
