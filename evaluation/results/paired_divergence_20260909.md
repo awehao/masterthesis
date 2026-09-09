@@ -1,5 +1,18 @@
 # 最小配對診斷：Gazebo 對 Isaac，同一案例的真值分歧
 
+> **任務身分標記（2026-09-09 補）**：本檔的所有結果來自
+> **`random_room_dynamic` 世界 ＋ `ammr_base` 機器人 ＋ `run_one_trial.sh`**。
+> 這**不是**第四次進度報告的原任務——該報告用的是 **`bigarena` ＋ `omni_bot` ＋
+> `run_omnibot_dynamic.sh` ＋ `TRAJ=bigarena_traffic` ＋ `POSES_CSV` 隨機起訖點**
+> （報告 §一、§95、§99、§654）。當初我沒有先核對報告與原始執行腳本就往下推進，
+> 選錯了移植目標。
+>
+> 這些資料**保留為「`random_room_dynamic + ammr_base` 移植診斷」**，
+> 不納入第四次報告的重現結果。其中通用的結論（匯入修正、零摩擦、
+> 雷射 raycast 驗證、RTF 節流、回呼飢餓、可重現障礙相位、`/odom` 是命令積分）
+> 可以沿用，但**都必須在正確任務上重新驗證**。
+
+
 日期：2026-09-09　案例：`gmpc_cbf` seed 0，250 s，目標 (17, 17)，初始定位 (0,0)
 資料：`evaluation/bags/gz_gmpc_cbf__seed0`、`evaluation/bags/isaac_gmpc_cbf__seed0`
 工具：`evaluation/diagnose_divergence.py`　CPU 全程 ≤79 °C

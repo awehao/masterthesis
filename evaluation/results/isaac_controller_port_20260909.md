@@ -1,5 +1,18 @@
 # Isaac Sim 接上第一階段控制器：端到端流程確認
 
+> **任務身分標記（2026-09-09 補）**：本檔的所有結果來自
+> **`random_room_dynamic` 世界 ＋ `ammr_base` 機器人 ＋ `run_one_trial.sh`**。
+> 這**不是**第四次進度報告的原任務——該報告用的是 **`bigarena` ＋ `omni_bot` ＋
+> `run_omnibot_dynamic.sh` ＋ `TRAJ=bigarena_traffic` ＋ `POSES_CSV` 隨機起訖點**
+> （報告 §一、§95、§99、§654）。當初我沒有先核對報告與原始執行腳本就往下推進，
+> 選錯了移植目標。
+>
+> 這些資料**保留為「`random_room_dynamic + ammr_base` 移植診斷」**，
+> 不納入第四次報告的重現結果。其中通用的結論（匯入修正、零摩擦、
+> 雷射 raycast 驗證、RTF 節流、回呼飢餓、可重現障礙相位、`/odom` 是命令積分）
+> 可以沿用，但**都必須在正確任務上重新驗證**。
+
+
 日期：2026-09-09　Isaac Sim 6.0.1，headless，GPU 39–41 °C
 
 ## 一、移植邊界：只換模擬器

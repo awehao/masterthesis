@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+<title>第一階段回顧：動態環境下的全向底盤預測導航</title>
+<desc>上方回顧前四次報告，下方呈現規劃、感知、定位、GMPC與CBF、平滑器、原始雷射安全層及底盤回授。</desc>
+<defs>
+<marker id="blue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#2879B9"/></marker>
+<marker id="teal" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#148579"/></marker>
+<marker id="orange" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#CB6B27"/></marker>
+<marker id="gray" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" fill="#607387"/></marker>
+</defs>
+<rect x="0" y="0" width="1920" height="1080" rx="0" fill="#FFFFFF" stroke="none" stroke-width="2"/>
+<rect x="0" y="0" width="14" height="1080" rx="0" fill="#163451" stroke="none" stroke-width="2"/>
+<text x="64" y="58" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#607387" text-anchor="start">第 5 次進度報告  /  進度回顧</text>
+<text x="64" y="113" font-family="Noto Sans CJK TC, sans-serif" font-size="43" font-weight="700" fill="#163451" text-anchor="start">第一階段：動態環境下的全向底盤預測導航</text>
+<text x="1854" y="58" font-family="Noto Sans CJK TC, sans-serif" font-size="21" font-weight="400" fill="#607387" text-anchor="end">ROS 2 Jazzy × Gazebo Harmonic</text>
+<rect x="64" y="145" width="428" height="130" rx="16" fill="#F5F8FB" stroke="none" stroke-width="2"/>
+<text x="82" y="182" font-family="Noto Sans CJK TC, sans-serif" font-size="28" font-weight="700" fill="#2879B9" text-anchor="start">01</text>
+<text x="134" y="182" font-family="Noto Sans CJK TC, sans-serif" font-size="26" font-weight="700" fill="#163451" text-anchor="start">平台與導航基礎</text>
+<text x="82" y="222" font-family="Noto Sans CJK TC, sans-serif" font-size="21" font-weight="400" fill="#23394D" text-anchor="start">ROS 2／Gazebo、TF、AMCL</text>
+<text x="82" y="254" font-family="Noto Sans CJK TC, sans-serif" font-size="21" font-weight="400" fill="#23394D" text-anchor="start">底盤模型與 Nav2 導航基準</text>
+<rect x="518" y="145" width="428" height="130" rx="16" fill="#F5F8FB" stroke="none" stroke-width="2"/>
+<text x="536" y="182" font-family="Noto Sans CJK TC, sans-serif" font-size="28" font-weight="700" fill="#2879B9" text-anchor="start">02</text>
+<text x="588" y="182" font-family="Noto Sans CJK TC, sans-serif" font-size="26" font-weight="700" fill="#163451" text-anchor="start">預測控制核心</text>
+<text x="536" y="222" font-family="Noto Sans CJK TC, sans-serif" font-size="21" font-weight="400" fill="#23394D" text-anchor="start">SE(2) GMPC＋KF 障礙物預測</text>
+<text x="536" y="254" font-family="Noto Sans CJK TC, sans-serif" font-size="21" font-weight="400" fill="#23394D" text-anchor="start">整合全時域 CBF，真值場景驗證</text>
+<rect x="972" y="145" width="428" height="130" rx="16" fill="#F5F8FB" stroke="none" stroke-width="2"/>
+<text x="990" y="182" font-family="Noto Sans CJK TC, sans-serif" font-size="28" font-weight="700" fill="#148579" text-anchor="start">03</text>
+<text x="1042" y="182" font-family="Noto Sans CJK TC, sans-serif" font-size="26" font-weight="700" fill="#163451" text-anchor="start">感測與控制整合</text>
+<text x="990" y="222" font-family="Noto Sans CJK TC, sans-serif" font-size="21" font-weight="400" fill="#23394D" text-anchor="start">omni_bot、LiDAR 追蹤、定位</text>
+<text x="990" y="254" font-family="Noto Sans CJK TC, sans-serif" font-size="21" font-weight="400" fill="#23394D" text-anchor="start">靜態 CBF、控制平滑與比較實驗</text>
+<rect x="1426" y="145" width="428" height="130" rx="16" fill="#F5F8FB" stroke="none" stroke-width="2"/>
+<text x="1444" y="182" font-family="Noto Sans CJK TC, sans-serif" font-size="28" font-weight="700" fill="#CB6B27" text-anchor="start">04</text>
+<text x="1496" y="182" font-family="Noto Sans CJK TC, sans-serif" font-size="26" font-weight="700" fill="#163451" text-anchor="start">系統補強與安全層</text>
+<text x="1444" y="222" font-family="Noto Sans CJK TC, sans-serif" font-size="21" font-weight="400" fill="#23394D" text-anchor="start">表面點／淨位移分流、輪系限制</text>
+<text x="1444" y="254" font-family="Noto Sans CJK TC, sans-serif" font-size="21" font-weight="400" fill="#23394D" text-anchor="start">Raw-scan Shield、隨機路線驗證</text>
+<text x="64" y="320" font-family="Noto Sans CJK TC, sans-serif" font-size="27" font-weight="700" fill="#163451" text-anchor="start">第一階段完成的系統資料流</text>
+<text x="1854" y="320" font-family="Noto Sans CJK TC, sans-serif" font-size="23" font-weight="600" fill="#CB6B27" text-anchor="end">預測避障＋近距離安全保護</text>
+<polyline points="344,445 420,445" fill="none" stroke="#2879B9" stroke-width="3" stroke-linejoin="round" marker-end="url(#blue)"/>
+<polyline points="820,445 930,445" fill="none" stroke="#2879B9" stroke-width="3" stroke-linejoin="round" marker-end="url(#blue)"/>
+<text x="842" y="429" font-family="Noto Sans CJK TC, sans-serif" font-size="19" font-weight="400" fill="#607387" text-anchor="start">參考路徑</text>
+<polyline points="344,634 420,634" fill="none" stroke="#148579" stroke-width="3" stroke-linejoin="round" marker-end="url(#teal)"/>
+<polyline points="820,624 930,624" fill="none" stroke="#148579" stroke-width="3" stroke-linejoin="round" marker-end="url(#teal)"/>
+<text x="841" y="607" font-family="Noto Sans CJK TC, sans-serif" font-size="18" font-weight="400" fill="#148579" text-anchor="start">位置／速度</text>
+<polyline points="344,828 420,828" fill="none" stroke="#2879B9" stroke-width="3" stroke-linejoin="round" marker-end="url(#blue)"/>
+<polyline points="820,828 873,828 873,764 930,764" fill="none" stroke="#2879B9" stroke-width="3" stroke-linejoin="round" marker-end="url(#blue)"/>
+<text x="830" y="862" font-family="Noto Sans CJK TC, sans-serif" font-size="19" font-weight="400" fill="#607387" text-anchor="start">底盤位姿</text>
+<polyline points="1300,476 1400,476" fill="none" stroke="#2879B9" stroke-width="3" stroke-linejoin="round" marker-end="url(#blue)"/>
+<text x="1314" y="457" font-family="Noto Sans CJK TC, sans-serif" font-size="18" font-weight="400" fill="#607387" text-anchor="start">速度命令</text>
+<polyline points="1550,524 1550,588" fill="none" stroke="#2879B9" stroke-width="3" stroke-linejoin="round" marker-end="url(#blue)"/>
+<polyline points="1550,720 1550,784" fill="none" stroke="#CB6B27" stroke-width="3" stroke-linejoin="round" marker-end="url(#orange)"/>
+<text x="1567" y="762" font-family="Noto Sans CJK TC, sans-serif" font-size="20" font-weight="400" fill="#CB6B27" text-anchor="start">/cmd_vel</text>
+<polyline points="344,586 374,586 374,361 1776,361 1776,650 1700,650" fill="none" stroke="#CB6B27" stroke-width="3" stroke-linejoin="round" stroke-dasharray="10 7" marker-end="url(#orange)"/>
+<rect x="870" y="344" width="660" height="33" rx="0" fill="#FFFFFF" stroke="none" stroke-width="2"/>
+<text x="888" y="368" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="600" fill="#CB6B27" text-anchor="start">原始 /scan：直接送入 Shield，不經動靜分類</text>
+<polyline points="1550,896 1550,929 204,929 204,882" fill="none" stroke="#607387" stroke-width="3" stroke-linejoin="round" stroke-dasharray="10 7" marker-end="url(#gray)"/>
+<rect x="740" y="911" width="360" height="36" rx="0" fill="#FFFFFF" stroke="none" stroke-width="2"/>
+<text x="758" y="937" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#607387" text-anchor="start">底盤運動 → 里程計回授</text>
+<rect x="64" y="393" width="280" height="104" rx="16" fill="#F1F7FC" stroke="#2879B9" stroke-width="2"/>
+<text x="86" y="433" font-family="Noto Sans CJK TC, sans-serif" font-size="25" font-weight="700" fill="#2879B9" text-anchor="start">目標點＋環境地圖</text>
+<text x="86" y="469" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">導航任務與靜態空間</text>
+<rect x="64" y="554" width="280" height="118" rx="16" fill="#EFF9F6" stroke="#148579" stroke-width="2"/>
+<text x="86" y="594" font-family="Noto Sans CJK TC, sans-serif" font-size="27" font-weight="700" fill="#148579" text-anchor="start">2D LiDAR</text>
+<text x="86" y="630" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">環境掃描 /scan</text>
+<rect x="64" y="774" width="280" height="108" rx="16" fill="#F1F7FC" stroke="#2879B9" stroke-width="2"/>
+<text x="86" y="814" font-family="Noto Sans CJK TC, sans-serif" font-size="27" font-weight="700" fill="#2879B9" text-anchor="start">里程計</text>
+<text x="86" y="850" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">底盤運動狀態</text>
+<rect x="420" y="393" width="400" height="104" rx="16" fill="#F1F7FC" stroke="#2879B9" stroke-width="2"/>
+<text x="442" y="433" font-family="Noto Sans CJK TC, sans-serif" font-size="27" font-weight="700" fill="#2879B9" text-anchor="start">Nav2 全域規劃</text>
+<text x="442" y="469" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">Costmap → 靜態繞行路徑</text>
+<rect x="420" y="548" width="400" height="176" rx="16" fill="#EFF9F6" stroke="#148579" stroke-width="2"/>
+<text x="442" y="588" font-family="Noto Sans CJK TC, sans-serif" font-size="26" font-weight="700" fill="#148579" text-anchor="start">雷射感知與障礙物追蹤</text>
+<text x="442" y="624" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">自體遮罩／地圖相減 → 群集</text>
+<text x="442" y="656" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">KF 追蹤 → 淨位移動靜分流</text>
+<text x="442" y="688" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">表面點表示 → 障礙物位置／速度</text>
+<rect x="420" y="772" width="400" height="124" rx="16" fill="#F1F7FC" stroke="#2879B9" stroke-width="2"/>
+<text x="442" y="812" font-family="Noto Sans CJK TC, sans-serif" font-size="26" font-weight="700" fill="#2879B9" text-anchor="start">定位：AMCL＋EKF</text>
+<text x="442" y="848" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">結合地圖、雷射與里程計</text>
+<text x="442" y="880" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">Beam-skip／融合與取值修正</text>
+<rect x="930" y="414" width="370" height="394" rx="16" fill="#EDF4FC" stroke="#2879B9" stroke-width="2"/>
+<text x="955" y="456" font-family="Noto Sans CJK TC, sans-serif" font-size="32" font-weight="700" fill="#2879B9" text-anchor="start">SE(2) GMPC</text>
+<text x="955" y="494" font-family="Noto Sans CJK TC, sans-serif" font-size="26" font-weight="600" fill="#163451" text-anchor="start">幾何模型預測控制</text>
+<text x="955" y="537" font-family="Noto Sans CJK TC, sans-serif" font-size="23" font-weight="400" fill="#23394D" text-anchor="start">參考追蹤＋速度增量平滑</text>
+<rect x="950" y="566" width="330" height="126" rx="12" fill="#FFFFFF" stroke="#BBD3E8" stroke-width="2"/>
+<text x="967" y="601" font-family="Noto Sans CJK TC, sans-serif" font-size="25" font-weight="700" fill="#2879B9" text-anchor="start">全時域預測式 CBF</text>
+<text x="967" y="638" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">動態位置外推＋靜態牆面</text>
+<text x="967" y="673" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">安全約束納入同一 QP</text>
+<text x="955" y="733" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">納入輪系速度／加速度限制</text>
+<text x="955" y="777" font-family="Noto Sans CJK TC, sans-serif" font-size="24" font-weight="600" fill="#2879B9" text-anchor="start">20 Hz 閉迴路求解</text>
+<rect x="1400" y="428" width="300" height="96" rx="16" fill="#F1F7FC" stroke="#2879B9" stroke-width="2"/>
+<text x="1422" y="468" font-family="Noto Sans CJK TC, sans-serif" font-size="27" font-weight="700" fill="#2879B9" text-anchor="start">速度平滑器</text>
+<text x="1422" y="504" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">velocity smoother</text>
+<rect x="1400" y="588" width="300" height="132" rx="16" fill="#FFF5EC" stroke="#CB6B27" stroke-width="2"/>
+<text x="1422" y="628" font-family="Noto Sans CJK TC, sans-serif" font-size="27" font-weight="700" fill="#CB6B27" text-anchor="start">近距離安全層</text>
+<text x="1422" y="664" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">Raw-scan Safety Shield</text>
+<text x="1422" y="696" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">限制朝障礙物的接近速度</text>
+<rect x="1400" y="784" width="300" height="112" rx="16" fill="#F1F7FC" stroke="#2879B9" stroke-width="2"/>
+<text x="1422" y="824" font-family="Noto Sans CJK TC, sans-serif" font-size="27" font-weight="700" fill="#2879B9" text-anchor="start">全向底盤執行</text>
+<text x="1422" y="860" font-family="Noto Sans CJK TC, sans-serif" font-size="22" font-weight="400" fill="#23394D" text-anchor="start">omni_bot 模擬平台</text>
+<rect x="64" y="975" width="1790" height="70" rx="16" fill="#163451" stroke="none" stroke-width="2"/>
+<text x="88" y="1005" font-family="Noto Sans CJK TC, sans-serif" font-size="23" font-weight="700" fill="#FFFFFF" text-anchor="start">階段成果</text>
+<text x="222" y="1005" font-family="Noto Sans CJK TC, sans-serif" font-size="24" font-weight="400" fill="#FFFFFF" text-anchor="start">完成感知—規劃—控制—安全的導航閉迴路，並以隨機路線與 MPPI／RPP 對照驗證。</text>
+<text x="222" y="1032" font-family="Noto Sans CJK TC, sans-serif" font-size="20" font-weight="400" fill="#CCDAE8" text-anchor="start">第一階段範圍：底盤導航模擬驗證；作為後續底盤與手臂協同控制的基礎。</text>
+</svg>
