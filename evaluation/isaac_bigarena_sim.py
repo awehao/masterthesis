@@ -363,7 +363,9 @@ class Bridge(Node):
         # The task clock starts when the goal is published, in SIMULATION time.
         # Recording starts earlier and covers start-up and the readiness gate,
         # so the two must not share one timer.
-        self.goal_sim_t = None
+        self.goal_sim_t = None        # sim time when THIS process received it
+        self.goal_stamp = None        # the message's own header stamp
+        self.goal_count = 0
         self.create_subscription(PoseStamped, '/goal_pose', self._goal, 10)
         # gz publishes this from gz-sim-odometry-publisher-system at 30 Hz:
         # true-pose derived, 2D, odom frame, child base_footprint, and already
@@ -378,9 +380,17 @@ class Bridge(Node):
     def _cmd(self, m):
         self.cmd = [m.linear.x, m.linear.y, m.angular.z]
 
-    def _goal(self, _m):
+    def _goal(self, m):
+        # The runner publishes the goal five times so a late subscriber cannot
+        # miss it. Only the FIRST arrival starts the task clock; a repeat must
+        # not push the start forward. The recorded start is the simulation time
+        # at which this process received the message -- the header stamp is
+        # kept beside it, since the two are not the same instant.
+        self.goal_count += 1
         if self.goal_sim_t is None:
             self.goal_sim_t = self.sim_t
+            self.goal_stamp = (m.header.stamp.sec
+                               + m.header.stamp.nanosec * 1e-9)
 
     def _dyn(self, n, m):
         self.dyn_cmd[n] = [m.linear.x, m.linear.y, m.angular.z]
@@ -990,9 +1000,21 @@ def main():
                 else:
                     nxt = time.monotonic()
 
-        # Zero the chassis and let it take effect BEFORE anything is saved, so
-        # the recorded last sample is the stopped state rather than whatever
-        # velocity happened to be latched when the loop broke.
+        # Two samples, not one. `at_trigger` is the state at the instant the
+        # stop fired and is what the arrival judgement and the completion time
+        # use; `after_stop` is taken once the chassis has been zeroed and
+        # stepped, and describes only the shutdown. Collapsing them would let
+        # the clean-up creep into the result.
+        p_trg, q_trg = robot.get_world_pose()
+        jp_trg = robot.get_joint_positions()
+        rr_t, pp_t = rpy2(q_trg)
+        at_trigger = dict(sim_t=(log[-1]['t'] if log else None),
+                          x=float(p_trg[0]), y=float(p_trg[1]),
+                          yaw=float(yaw_of(q_trg)), roll=rr_t, pitch=pp_t,
+                          arm_err=max(abs(float(jp_trg[idx[j]]) - ARM_TARGET[j])
+                                      for j in ARM_JOINTS),
+                          dist_goal=math.dist((float(p_trg[0]),
+                                               float(p_trg[1])), GOAL))
         robot.set_linear_velocity(np.array([0.0, 0.0, 0.0], dtype=np.float32))
         robot.set_angular_velocity(np.array([0.0, 0.0, 0.0], dtype=np.float32))
         for _ in range(20):
@@ -1000,7 +1022,8 @@ def main():
         p_end, q_end = robot.get_world_pose()
         jp_end = robot.get_joint_positions()
         rr_e, pp_e = rpy2(q_end)
-        final = dict(x=float(p_end[0]), y=float(p_end[1]),
+        final = dict(note='歸零並步進 20 步之後，僅描述停機階段',
+                     x=float(p_end[0]), y=float(p_end[1]),
                      yaw=float(yaw_of(q_end)), roll=rr_e, pitch=pp_e,
                      arm_err=max(abs(float(jp_end[idx[j]]) - ARM_TARGET[j])
                                  for j in ARM_JOINTS),
@@ -1008,8 +1031,10 @@ def main():
         _wall = time.monotonic() - t_wall0
         _sim = log[-1]['t'] if log else 0.0
         rec['run'] = dict(stop_reason=stop_reason, log=log, sim_time=_sim,
-                          final_sample=final,
+                          at_trigger=at_trigger, after_stop=final,
                           goal_sim_t=node.goal_sim_t,
+                          goal_stamp=node.goal_stamp,
+                          goal_msgs_received=node.goal_count,
                           task_elapsed_sim=(None if node.goal_sim_t is None
                                             else _sim - node.goal_sim_t),
                           task_limit=a.task_limit, wall_limit=a.wall_limit,
@@ -1031,11 +1056,17 @@ def main():
             if fin:
                 print(f'    與移動體最小間距 {min(fin):.3f} m')
         json.dump(rec, open(a.out, 'w'), ensure_ascii=False, indent=1)
-        print(f'  停止原因 {stop_reason}；'
-              + (f'任務歷時 {_sim - node.goal_sim_t:.1f} s（模擬，自目標發布）'
-                 if node.goal_sim_t is not None else '目標未發布')
-              + f'；最終真值 ({final["x"]:.3f}, {final["y"]:.3f})，'
-                f'距目標 {final["dist_goal"]:.3f} m', flush=True)
+        print(f'  停止原因 {stop_reason}')
+        if node.goal_sim_t is not None:
+            print(f'  任務起點：收到 /goal_pose 的模擬時間 {node.goal_sim_t:.2f} s'
+                  f'（訊息時間戳 {node.goal_stamp:.2f}，共收到 {node.goal_count} 則，'
+                  f'只採第一則）')
+            print(f'  任務歷時 {at_trigger["sim_t"] - node.goal_sim_t:.1f} s（模擬）'
+                  if at_trigger['sim_t'] else '  任務歷時：無取樣')
+        print(f'  觸發當下真值 ({at_trigger["x"]:.3f}, {at_trigger["y"]:.3f})，'
+              f'距目標 {at_trigger["dist_goal"]:.3f} m ← 到達判定用這筆')
+        print(f'  歸零步進後 ({final["x"]:.3f}, {final["y"]:.3f})，'
+              f'距目標 {final["dist_goal"]:.3f} m（僅描述停機）', flush=True)
         print(f'  已寫入 {a.out}', flush=True)
         ex.shutdown()
         node.destroy_node()
