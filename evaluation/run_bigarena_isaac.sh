@@ -47,12 +47,27 @@ echo "[$(date +%T)] [1/6] 啟動 Isaac（GUI）..."
     --render-hz "${RENDER_HZ:-12}" --cpu-limit "${CPU_LIMIT:-88}" \
     --out "${HERE}/results/${TAG}.json" >> "$LOG" 2>&1 < /dev/null &
 PIDS+=( $! )
-echo "[$(date +%T)] [1/6] 等 /clock（最多 300 s）..."
-for i in $(seq 1 300); do
-  timeout 2 ros2 topic echo --once /clock rosgraph_msgs/msg/Clock >/dev/null 2>&1 && \
-    { echo "[$(date +%T)] [1/6]   /clock 就緒（${i}s）"; break; }
+# `ros2 topic echo --once` exits 0 even when it printed nothing, so the first
+# version of this wait passed after 5 s while Isaac was still loading -- the
+# navigation chain and the readiness gate then both ran before the simulator
+# published anything. Require two clock samples that actually advance.
+echo "[$(date +%T)] [1/6] 等 /clock 真的在前進（最多 300 s）..."
+clock_ok=0
+for i in $(seq 1 100); do
+  s1=$(timeout 3 ros2 topic echo --once --field clock.sec /clock 2>/dev/null | head -1)
+  if [ -n "${s1:-}" ]; then
+    sleep 2
+    s2=$(timeout 3 ros2 topic echo --once --field clock.sec /clock 2>/dev/null | head -1)
+    if [ -n "${s2:-}" ] && [ "${s2}" -gt "${s1}" ] 2>/dev/null; then
+      echo "[$(date +%T)] [1/6]   /clock 前進中 ($s1 -> $s2)，用時約 $((i*3))s"
+      clock_ok=1; break
+    fi
+  fi
   sleep 1
 done
+if [ "$clock_ok" -ne 1 ]; then
+  echo "[$(date +%T)] [1/6] **/clock 未前進，中止**"; exit 1
+fi
 
 # 2. 導航鏈：同一支 launch，只跳過 gz 三個節點
 echo "[$(date +%T)] [2/6] 啟動導航鏈（NO_GZ=1, BIGARENA=1, TRAJ=bigarena_traffic）..."
@@ -81,14 +96,77 @@ timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
 REC=$!; PIDS+=( $REC )
 sleep 3
 
-# 5. 目標
+# 5. 就緒檢查：全部通過才發目標
+# The previous attempt published the goal on a fixed sleep and produced a bag
+# with two topics. Two causes were tangled there -- the run lasted 2 s, and
+# nothing had confirmed the interfaces were live -- so each is now checked
+# explicitly and its time recorded.
+READY_LOG="${HERE}/logs/${TAG}.ready"
+: > "$READY_LOG"
+mark() { echo "[$(date +%T)] [5/6]   $1"; echo "$(date +%s) $1" >> "$READY_LOG"; }
+gate_fail=0
+
+# Each condition is given time to come up rather than judged once: a node that
+# is 10 s from being ready is not the same as one that is broken.
+wait_for() {  # wait_for <秒數> <說明> <指令...>
+    local lim="$1" desc="$2"; shift 2
+    local t0=$SECONDS
+    while [ $((SECONDS - t0)) -lt "$lim" ]; do
+        if "$@" >/dev/null 2>&1; then
+            mark "$desc（$((SECONDS - t0))s）"; return 0
+        fi
+        sleep 2
+    done
+    mark "!! $desc 逾時 ${lim}s"; gate_fail=1; return 1
+}
+
+clock_moved() {
+    local x y
+    x=$(timeout 3 ros2 topic echo --once --field clock.sec /clock 2>/dev/null | head -1)
+    [ -n "${x:-}" ] || return 1
+    sleep 1
+    y=$(timeout 3 ros2 topic echo --once --field clock.sec /clock 2>/dev/null | head -1)
+    [ -n "${y:-}" ] && [ "$y" -gt "$x" ] 2>/dev/null
+}
+has_data() { timeout 6 ros2 topic echo --once "$1" 2>/dev/null | grep -q . ; }
+lifecycle_active() { timeout 6 ros2 lifecycle get "$1" 2>/dev/null | grep -q active ; }
+
+wait_for 60 "clock 在前進" clock_moved
+for t in /scan /scan_raw /odom /odom_raw; do
+    wait_for 40 "$t 有資料" has_data "$t"
+done
+for pair in "map odom" "odom base_footprint" "map base_footprint"; do
+    set -- $pair
+    wait_for 40 "TF $1 -> $2 可查" timeout 6 ros2 run tf2_ros tf2_echo "$1" "$2"
+done
+for n in /map_server /amcl /planner_server; do
+    wait_for 60 "lifecycle $n active" lifecycle_active "$n"
+done
+
+# (e) 錄製端確實訂閱了關鍵 topic（從 recorder 自己的日誌確認）
+for t in /scan /odom /cmd_vel /amcl_pose /model/omni_bot/pose /tf; do
+    if grep -aq "Subscribed to topic '${t}'" "$LOG" 2>/dev/null; then
+        mark "bag 已訂閱 $t"
+    else
+        mark "!! bag 未訂閱 $t"; gate_fail=1
+    fi
+done
+
+if [ "$gate_fail" -ne 0 ]; then
+    echo "[$(date +%T)] [5/6] **就緒檢查未通過，不發目標**（見 $READY_LOG）"
+    sleep 5
+    exit 2
+fi
+echo "[$(date +%T)] [5/6] 就緒檢查全部通過"
+
 echo "[$(date +%T)] [5/6] 等 /goal_pose 訂閱者後發布目標 ($GX, $GY) ..."
 for i in $(seq 1 30); do
   c=$(ros2 topic info /goal_pose 2>/dev/null | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
   [ "${c:-0}" -ge 2 ] && { echo "[$(date +%T)] [5/6]   訂閱者=$c（${i}s）"; break; }
   sleep 1
 done
-echo "[$(date +%T)] [5/6] 發布目標（時間點記錄於此）"
+echo "[$(date +%T)] [5/6] **案例開始時間 $(date +%T)**：發布目標"
+echo "$(date +%s) case_start_goal_published" >> "$READY_LOG"
 timeout 15 ros2 topic pub -t 5 -r 1 /goal_pose geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: 'map'}, pose: {position: {x: $GX, y: $GY, z: 0.0}, orientation: {w: 1.0}}}" \
   >> "$LOG" 2>&1 || true
