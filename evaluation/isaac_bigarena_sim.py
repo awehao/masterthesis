@@ -68,6 +68,9 @@ ap.add_argument('--kd', type=float, default=1.0e4)
 ap.add_argument('--self-drive-goal', type=float, default=0.0,
                 help='>0 時模擬器自行以該速度朝目標直線前進，用來單獨驗證'
                      '「到達即結束」的停止邏輯，不需要導航鏈')
+ap.add_argument('--cam-jpeg', default='true',
+                help='同時發布 .../image_raw/compressed（JPEG），原始 topic 不變')
+ap.add_argument('--cam-jpeg-q', type=int, default=80)
 ap.add_argument('--step-profile', default='false',
                 help='true = 記錄每個物理步的牆鐘耗時，用於定位卡頓來源')
 ap.add_argument('--arrive-tol', type=float, default=0.30,
@@ -215,7 +218,8 @@ from rosgraph_msgs.msg import Clock                               # noqa: E402
 from geometry_msgs.msg import PoseStamped, Twist                  # noqa: E402
 from nav_msgs.msg import Odometry                                 # noqa: E402
 from sensor_msgs.msg import JointState                            # noqa: E402
-from sensor_msgs.msg import CameraInfo, Image, LaserScan          # noqa: E402
+from sensor_msgs.msg import (CameraInfo, CompressedImage, Image,  # noqa: E402
+                             LaserScan)
 
 SCAN_N, SCAN_MIN, SCAN_MAX = 360, -3.14159, 3.14159
 SCAN_INC = (SCAN_MAX - SCAN_MIN) / (SCAN_N - 1)
@@ -413,6 +417,13 @@ class Bridge(Node):
             Image, '/base_camera/color/image_raw', be)
         self.info_pub = self.create_publisher(
             CameraInfo, '/base_camera/color/camera_info', be)
+        # Raw rgb8 is 900 KiB per frame; at 8 Hz that is 7.1 MB/s down a
+        # WebSocket whose send buffer holds about eleven frames, so a viewer
+        # that cannot keep up makes the bridge drop them and the stream looks
+        # like a slideshow. The compressed topic is published ALONGSIDE the raw
+        # one -- nothing is taken away -- and is roughly 18x smaller.
+        self.jpg_pub = self.create_publisher(
+            CompressedImage, '/base_camera/color/image_raw/compressed', be)
 
     def _cmd(self, m):
         self.cmd = [m.linear.x, m.linear.y, m.angular.z]
@@ -489,6 +500,19 @@ class Bridge(Node):
         ci.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
         ci.p = [K[0], 0.0, K[2], 0.0, 0.0, K[1], K[3], 0.0, 0.0, 0.0, 1.0, 0.0]
         self.info_pub.publish(ci)
+
+    def publish_jpeg(self, t, rgb, quality=80):
+        import io as _io
+        from PIL import Image as _PIL
+        buf = _io.BytesIO()
+        _PIL.fromarray(rgb[:, :, :3]).save(buf, format='JPEG', quality=quality)
+        m = CompressedImage()
+        m.header.stamp = self.stamp(t)
+        m.header.frame_id = self.CAM_FRAME
+        m.format = 'jpeg'
+        m.data = buf.getvalue()
+        self.jpg_pub.publish(m)
+        return len(m.data)
 
     def publish_clock(self, t):
         m = Clock()
@@ -1034,6 +1058,7 @@ def main():
         ce = max(1, int(round((1.0 / max(a.cam_hz, 0.1)) / dt)))
         cam_frames = 0
         cam_wall = []
+        cam_jpeg_bytes = []
         # Per-step wall timing, split by what the step actually did. The frame
         # interval is bimodal -- 88% at 110-130 ms, 11.6% at 150-200 ms, none
         # at the configured 100 ms -- and the camera's own cost (3.13 ms
@@ -1135,6 +1160,10 @@ def main():
                 _w1 = time.monotonic()
                 if rgba is not None and rgba.size:
                     node.publish_image(t + dt, rgba, cam_K)
+                    _w2 = time.monotonic()
+                    if a.cam_jpeg.lower() == 'true':
+                        _nb = node.publish_jpeg(t + dt, rgba, a.cam_jpeg_q)
+                        cam_jpeg_bytes.append(_nb)
                     _w2 = time.monotonic()
                     # wall-clock cost of producing vs publishing one frame,
                     # kept separate: a simulated-time interval says nothing
@@ -1273,7 +1302,14 @@ def main():
                                       measured_hz=(cam_frames / _sim
                                                    if _sim > 0 else None),
                                       K=list(cam_K) if cam_K else None,
-                                      wall=cam_wall),
+                                      wall=cam_wall,
+                                      jpeg=(dict(
+                                          n=len(cam_jpeg_bytes),
+                                          mean_kib=(sum(cam_jpeg_bytes)
+                                                    / max(len(cam_jpeg_bytes), 1)
+                                                    / 1024.0),
+                                          quality=a.cam_jpeg_q)
+                                          if cam_jpeg_bytes else None)),
                           step_profile=step_prof,
                           task_limit=a.task_limit, wall_limit=a.wall_limit,
                           wall_time=_wall,

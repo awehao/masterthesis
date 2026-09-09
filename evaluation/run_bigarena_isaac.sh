@@ -142,6 +142,7 @@ setsid timeout --foreground --signal=INT --kill-after=5 "${REC_CAP}s" \
   /cmd_vel /cmd_vel_nav /cmd_vel_pre_shield /scan /scan_raw /plan /goal_pose \
   /tf /tf_static /gmpc/solve_time_ms /gmpc/min_h /gmpc/diag /joint_states \
   /base_camera/color/image_raw /base_camera/color/camera_info \
+  /base_camera/color/image_raw/compressed \
   >> "$LOG" 2>&1 < /dev/null &
 REC=$!; PIDS+=( $REC )
 sleep 3
