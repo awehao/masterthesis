@@ -60,6 +60,7 @@ def build_reference_window(path_xyth : np.ndarray,
                            N         : int,
                            dt        : float,
                            v_nom     : float,
+                           desired_yaw: float | None = None,
                            ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Parameters
@@ -99,6 +100,14 @@ def build_reference_window(path_xyth : np.ndarray,
 
       Rotation is not forbidden: wz remains a free input and the QP may use it
       whenever rotating helps. It is simply never demanded.
+
+    * OPTIONAL heading objective (desired_yaw, default None = behaviour above).
+      When given, every sample in the window takes THAT yaw instead of the
+      robot's. The window is still rotation-free internally, so xi_ref stays
+      zero in its third component and no yaw rate is fed forward; what changes
+      is e0[2], the geodesic error the cost sees, and the body frame the
+      translational reference is expressed in -- which is what turns "move
+      north-east" into "drive forward" once the robot has turned.
     """
     M = int(path_xyth.shape[0])
     if M == 0:
@@ -143,8 +152,19 @@ def build_reference_window(path_xyth : np.ndarray,
         sample_xyth[k, 0] = (1.0 - t) * path_xyth[j, 0] + t * path_xyth[j + 1, 0]
         sample_xyth[k, 1] = (1.0 - t) * path_xyth[j, 1] + t * path_xyth[j + 1, 1]
 
-        # No heading reference: hold the robot's current yaw (see docstring).
-        sample_xyth[k, 2] = float(robot_xyth[2])
+        # One yaw for the WHOLE window -- either the robot's current one (the
+        # original behaviour, desired_yaw=None) or a requested heading.
+        #
+        # It is deliberately constant across k. Consecutive X_ref then still
+        # differ by a pure translation, so xi_ref's angular component comes out
+        # as exactly zero from the log map below -- structurally, not by being
+        # cleared afterwards. That is what keeps a heading OBJECTIVE separate
+        # from a rotational FEEDFORWARD: e0[2] becomes a real error the cost can
+        # act on, while nothing rotational is ever added to u = xi_ref[0] + du.
+        # A per-sample heading would instead reintroduce exactly the feed-forward
+        # this module's docstring documents as harmful.
+        sample_xyth[k, 2] = (float(robot_xyth[2]) if desired_yaw is None
+                             else float(desired_yaw))
 
     # Build SE(2) matrices
     X_ref_win = np.array([from_xytheta(*p) for p in sample_xyth])    # (N+1, 3, 3)

@@ -70,6 +70,25 @@ class GMPCNode(Node):
         # to the global plan along a GENTLE arc instead of snapping the heading
         # hard (which shows up as xy-path zig-zag). <=0 -> use Q_xy (isotropic).
         self.declare_parameter('Q_y',      0.0)
+        # ---- optional heading objective (default OFF = original behaviour) ---
+        # The base is omnidirectional and the original design deliberately
+        # references no heading at all (see path_processor). This adds the
+        # behaviour of facing along the path WITHOUT removing the ability to
+        # strafe: wz is still a free input and lateral motion is still allowed,
+        # the robot is simply also asked to point where it is going.
+        self.declare_parameter('heading_enable', False)
+        self.declare_parameter('heading_weight', 2.0)     # Q's yaw diagonal
+        # Direction is taken from a look-ahead point on the path, as ONE atan2
+        # of a chord -- never by differencing the path's own yaw, which is
+        # jagged at nav2's 0.15 m resample spacing.
+        self.declare_parameter('heading_lookahead_m', 1.2)
+        # Slew limit on the REFERENCE (not on wz). Distinguishes a sustained
+        # turn, which passes through, from high-frequency wobble, which does
+        # not. A smaller wz is not automatically better: corners need turning.
+        self.declare_parameter('heading_rate_max', 1.0)   # rad/s
+        # Fixed heading for testing the objective on its own, before any path
+        # derived direction is involved. NaN = use the path.
+        self.declare_parameter('heading_fixed', float('nan'))
         self.declare_parameter('R_vx',     0.5)
         self.declare_parameter('R_vy',     0.5)
         self.declare_parameter('R_w',      0.2)
@@ -303,7 +322,14 @@ class GMPCNode(Node):
         # No heading is ever referenced (see path_processor), so heading error
         # is not a tracking objective and carries no weight. An explicit zero
         # rather than a deletion: Q must stay the 3x3 the SE(2) cost needs.
-        Qyaw = 0.0
+        self.heading_enable = bool(self.get_parameter('heading_enable').value)
+        self.heading_w      = float(self.get_parameter('heading_weight').value)
+        self.heading_look   = float(self.get_parameter('heading_lookahead_m').value)
+        self.heading_rate   = float(self.get_parameter('heading_rate_max').value)
+        self.heading_fixed  = float(self.get_parameter('heading_fixed').value)
+        self._yaw_ref       = None      # rate-limited heading reference
+        self._yaw_ref_t     = None
+        Qyaw = self.heading_w if self.heading_enable else 0.0
         Qy   = float(self.get_parameter('Q_y').value)
         if Qy <= 0.0:
             Qy = Qxy                                   # default: isotropic xy
@@ -460,6 +486,55 @@ class GMPCNode(Node):
             + (f' (α={cfg.cbf_alpha:.1f}, margin={cfg.cbf_safe_margin:.2f}m)'
                if self.cbf_enable else '')
         )
+
+    @staticmethod
+    def _wrap(a: float) -> float:
+        return math.atan2(math.sin(a), math.cos(a))
+
+    def _desired_yaw(self, path_xyth, robot_xyth, now_s):
+        """Heading reference for this cycle, or None to keep current behaviour.
+
+        Direction is the chord from the robot to a look-ahead point along the
+        path -- one atan2, so ±pi wrapping never enters and the path's own
+        jagged yaw is never differenced. The result is then slew-limited, which
+        lets a sustained turn through while damping wobble; the limit is on the
+        REFERENCE, not on wz, so the QP can still rotate as fast as it needs.
+
+        Deliberately NOT gated on speed: a robot standing still facing away
+        from a goal on its left must still be told to turn. It holds the last
+        reference only when there is no usable direction -- no path, or the
+        remaining path is shorter than a few centimetres -- and never demands a
+        terminal heading, because the task carries no goal orientation.
+        """
+        if not self.heading_enable:
+            return None
+        if not math.isnan(self.heading_fixed):
+            return float(self.heading_fixed)          # fixed-reference test mode
+        if path_xyth is None or len(path_xyth) < 2:
+            return self._yaw_ref                      # hold
+        pts = path_xyth[:, :2]
+        d = np.linalg.norm(pts - robot_xyth[:2], axis=1)
+        i0 = int(np.argmin(d))
+        seg = np.linalg.norm(np.diff(pts[i0:], axis=0), axis=1)
+        if seg.size == 0:
+            return self._yaw_ref
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        j = int(np.searchsorted(cum, self.heading_look))
+        j = min(j, len(cum) - 1)
+        tgt = pts[i0 + j]
+        chord = tgt - robot_xyth[:2]
+        if float(chord @ chord) < 1e-4:               # 1 cm: no usable direction
+            return self._yaw_ref
+        raw = math.atan2(float(chord[1]), float(chord[0]))
+        if self._yaw_ref is None or self._yaw_ref_t is None:
+            self._yaw_ref, self._yaw_ref_t = raw, now_s
+            return raw
+        dt_ref = max(now_s - self._yaw_ref_t, 1e-3)
+        step = self._wrap(raw - self._yaw_ref)
+        lim = self.heading_rate * dt_ref
+        self._yaw_ref = self._wrap(self._yaw_ref + max(-lim, min(lim, step)))
+        self._yaw_ref_t = now_s
+        return self._yaw_ref
 
     def _blend_alpha(self):
         """Fade weight in [0,1) for the new plan, or None when not fading.
@@ -691,15 +766,19 @@ class GMPCNode(Node):
         # 3. Build horizon reference from latest /plan
         path_xyth = path_msg_to_xyth(self.latest_path)
         # (reference yaw is rate-limited after blending; see step 3b below)
+        yaw_des = self._desired_yaw(path_xyth, robot_xyth,
+                                    self.get_clock().now().nanoseconds * 1e-9)
         X_ref_win, xi_ref_win = build_reference_window(
             path_xyth, robot_xyth,
             N=self.N, dt=self.dt, v_nom=self.v_nom,
+            desired_yaw=yaw_des,
         )
         a = self._blend_alpha()
         if a is not None:
             X_old, xi_old = build_reference_window(
                 self._prev_path_xyth, robot_xyth,
                 N=self.N, dt=self.dt, v_nom=self.v_nom,
+                desired_yaw=yaw_des,
                 )
             X_ref_win, xi_ref_win = blend_reference(
                 X_old, xi_old, X_ref_win, xi_ref_win, a)

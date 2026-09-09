@@ -37,6 +37,9 @@ WS = os.path.dirname(HERE)
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--world', default=os.path.join(WS, 'src/ammr_bringup/worlds/bigarena.sdf'))
+ap.add_argument('--empty-world', default='false',
+                help='true = 忽略世界檔，只建地面。用於朝向控制的最小測試，'
+                     '不新增場景檔')
 ap.add_argument('--urdf', default='/tmp/omni_bot_wb.urdf')
 ap.add_argument('--pose-yaml', default=os.path.join(
     WS, 'src/my_omnibot_description/config/arm_initial_pose.yaml'))
@@ -174,10 +177,13 @@ def read_world(path):
     return out
 
 
-MODELS = read_world(a.world)
+MODELS = [] if a.empty_world.lower() == 'true' else read_world(a.world)
 DYN = [m['name'] for m in MODELS if m['kinematic']]
-print(f'\n  世界 {os.path.basename(a.world)}：{len(MODELS)} 個模型，'
-      f'動態 {len(DYN)} 個', flush=True)
+print(f'\n  世界 '
+      + ('**純地面（--empty-world）**，無任何障礙物'
+         if a.empty_world.lower() == 'true'
+         else f'{os.path.basename(a.world)}：{len(MODELS)} 個模型，動態 {len(DYN)} 個'),
+      flush=True)
 
 os.environ.setdefault('__NV_PRIME_RENDER_OFFLOAD', '1')
 os.environ.setdefault('__GLX_VENDOR_LIBRARY_NAME', 'nvidia')
