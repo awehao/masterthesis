@@ -61,7 +61,6 @@ for i, (num, title, l1, l2, c) in enumerate(cards):
     text(x + 18, 254, l2, 21)
 
 text(64, 320, '第一階段完成的系統資料流', 27, NAVY, 700)
-text(1854, 320, '預測避障＋近距離安全保護', 23, ORANGE, 600, 'end')
 
 # Draw connections before boxes so endpoints sit cleanly on the borders.
 arrow([(344, 445), (420, 445)])
@@ -80,9 +79,14 @@ arrow([(1550, 720), (1550, 784)], ORANGE, 'orange')
 label(1567, 762, '/cmd_vel', 20, ORANGE)
 
 # The shield's scan input deliberately bypasses perception and classification.
-arrow([(344, 586), (374, 586), (374, 361), (1776, 361), (1776, 650), (1700, 650)], ORANGE, 'orange', True)
-rect(870, 344, 660, 33, '#FFFFFF', radius=0)
-text(888, 368, '原始 /scan：直接送入 Shield，不經動靜分類', 22, ORANGE, 600)
+# Route around the left outside edge so this never crosses the planner input.
+# Keep the caption above the uninterrupted line, with rounded elbow geometry.
+s.append(f'<path d="M 64 586 H 48 Q 36 586 36 574 V 385 '
+         f'Q 36 373 48 373 H 1764 Q 1776 373 1776 385 '
+         f'V 638 Q 1776 650 1764 650 H 1703" fill="none" '
+         f'stroke="{ORANGE}" stroke-width="3" stroke-dasharray="10 7" '
+         f'stroke-linecap="round" stroke-linejoin="round" marker-end="url(#orange)"/>')
+text(888, 359, '原始 /scan：直接送入 Shield，不經動靜分類', 22, ORANGE, 600)
 
 # Closed-loop odometry feedback.
 arrow([(1550, 896), (1550, 929), (204, 929), (204, 882)], MUTED, 'gray', True)
@@ -97,6 +101,7 @@ box(420, 393, 400, 104, 'Nav2 全域規劃', ['Costmap → 靜態繞行路徑'])
 box(420, 548, 400, 176, '雷射感知與障礙物追蹤', ['自體遮罩／地圖相減 → 群集', 'KF 追蹤 → 淨位移動靜分流', '表面點表示 → 障礙物位置／速度'], TEAL, '#EFF9F6', 26)
 box(420, 772, 400, 124, '定位：AMCL＋EKF', ['結合地圖、雷射與里程計', 'Beam-skip／融合與取值修正'], title_size=26)
 
+text(1115, 403, '預測避障', 23, BLUE, 700, 'middle')
 rect(930, 414, 370, 394, '#EDF4FC', BLUE)
 text(955, 456, 'SE(2) GMPC', 32, BLUE, 700)
 text(955, 494, '幾何模型預測控制', 26, NAVY, 600)
@@ -109,6 +114,7 @@ text(955, 733, '納入輪系速度／加速度限制', 22)
 text(955, 777, '20 Hz 閉迴路求解', 24, BLUE, 600)
 
 box(1400, 428, 300, 96, '速度平滑器', ['velocity smoother'], title_size=27)
+text(1530, 574, '近距離安全保護', 22, ORANGE, 700, 'end')
 box(1400, 588, 300, 132, '近距離安全層', ['Raw-scan Safety Shield', '限制朝障礙物的接近速度'], ORANGE, '#FFF5EC', 27)
 box(1400, 784, 300, 112, '全向底盤執行', ['omni_bot 模擬平台'], title_size=27)
 

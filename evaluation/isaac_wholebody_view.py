@@ -33,6 +33,8 @@ ap.add_argument('--pose-key', default='',
                 help="'' = the top-level joint1..joint6 (spawn pose); "
                      "or a named block such as test_start / pregrasp_reference")
 ap.add_argument('--headless', default='false')
+ap.add_argument('--experience', default='',
+                help='kit experience 檔；留空且非 headless 時用 isaacsim.exp.full.kit')
 ap.add_argument('--physics-dt', type=float, default=1.0 / 200.0)
 ap.add_argument('--settle-s', type=float, default=3.0,
                 help='physics time to check droop / tipping / penetration over')
@@ -67,9 +69,25 @@ os.environ.setdefault('__GLX_VENDOR_LIBRARY_NAME', 'nvidia')
 os.environ.setdefault('__EGL_VENDOR_LIBRARY_FILENAMES',
                       '/usr/share/glvnd/egl_vendor.d/10_nvidia.json')
 
+import isaacsim as _isaacsim_pkg                                  # noqa: E402
 from isaacsim import SimulationApp                                # noqa: E402
-sim_app = SimulationApp({'headless': a.headless.lower() == 'true',
-                         'width': 1600, 'height': 900})
+
+# SimulationApp defaults to the isaacsim.exp.base.python experience, which has
+# NO viewport at all: passing headless=False to it changes nothing. The process
+# runs, every check prints, and there is simply no window anywhere on the
+# display -- which looks from the outside exactly like the GUI failing to draw.
+# The GUI experience has to be named explicitly.
+_APPS = os.path.join(os.path.dirname(_isaacsim_pkg.__file__), 'apps')
+_headless = a.headless.lower() == 'true'
+_exp = '' if _headless else (a.experience or os.path.join(
+    _APPS, 'isaacsim.exp.full.kit'))
+if _exp and not os.path.exists(_exp):
+    print(f'  !! 找不到 experience 檔：{_exp}', file=sys.stderr)
+    sys.exit(1)
+if _exp:
+    print(f'  GUI experience：{os.path.basename(_exp)}', flush=True)
+sim_app = SimulationApp({'headless': _headless,
+                         'width': 1600, 'height': 900}, experience=_exp)
 
 import numpy as np                                                # noqa: E402
 from isaacsim.core.api import World                               # noqa: E402
