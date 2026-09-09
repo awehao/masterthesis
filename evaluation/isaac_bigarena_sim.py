@@ -68,6 +68,8 @@ ap.add_argument('--kd', type=float, default=1.0e4)
 ap.add_argument('--self-drive-goal', type=float, default=0.0,
                 help='>0 時模擬器自行以該速度朝目標直線前進，用來單獨驗證'
                      '「到達即結束」的停止邏輯，不需要導航鏈')
+ap.add_argument('--step-profile', default='false',
+                help='true = 記錄每個物理步的牆鐘耗時，用於定位卡頓來源')
 ap.add_argument('--arrive-tol', type=float, default=0.30,
                 help='測試器的到達門檻（真值距目標，公尺）。v1=0.25、v2=0.30。'
                      '會在啟動時印出並存入結果檔。')
@@ -1032,6 +1034,12 @@ def main():
         ce = max(1, int(round((1.0 / max(a.cam_hz, 0.1)) / dt)))
         cam_frames = 0
         cam_wall = []
+        # Per-step wall timing, split by what the step actually did. The frame
+        # interval is bimodal -- 88% at 110-130 ms, 11.6% at 150-200 ms, none
+        # at the configured 100 ms -- and the camera's own cost (3.13 ms
+        # median) cannot account for the slow group, so the cost has to be
+        # attributed to the step itself rather than assumed.
+        step_prof = [] if a.step_profile.lower() == 'true' else None
         dyn_pose = {n: np.array(dyn[n].get_world_pose()[0], dtype=float)
                     for n in dyn}
         xf5 = UsdGeom.XformCache()
@@ -1098,7 +1106,11 @@ def main():
 
             # a camera tick needs a rendered frame, so it forces render even
             # when the viewport rate is lower
-            world.step(render=(k % re_ == 0 or (cam is not None and k % ce == 0)))
+            _did_render = (k % re_ == 0 or (cam is not None and k % ce == 0))
+            _did_cam = cam is not None and k % ce == 0
+            _s0 = time.monotonic()
+            world.step(render=_did_render)
+            _s1 = time.monotonic()
             node.publish_clock(t + dt)
             p_now, q_now = robot.get_world_pose()
 
@@ -1206,11 +1218,16 @@ def main():
                     break
             if a.rtf > 0:
                 nxt += dt
+                _b0 = time.monotonic()
                 sl = nxt - time.monotonic()
                 if sl > 0:
                     time.sleep(sl)
                 else:
                     nxt = time.monotonic()
+                _b1 = time.monotonic()
+                if step_prof is not None:
+                    step_prof.append((k, _s1 - _s0, max(sl, 0.0),
+                                      _b1 - _b0, int(_did_render), int(_did_cam)))
 
         # Two samples, not one. `at_trigger` is the state at the instant the
         # stop fired and is what the arrival judgement and the completion time
@@ -1257,6 +1274,7 @@ def main():
                                                    if _sim > 0 else None),
                                       K=list(cam_K) if cam_K else None,
                                       wall=cam_wall),
+                          step_profile=step_prof,
                           task_limit=a.task_limit, wall_limit=a.wall_limit,
                           wall_time=_wall,
                           rtf_measured=(_sim / _wall) if _wall > 0 else None,
