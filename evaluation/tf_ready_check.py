@@ -33,6 +33,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument('parent')
 ap.add_argument('child')
 ap.add_argument('--timeout', type=float, default=30.0)
+ap.add_argument('--max-age', type=float, default=2.0,
+                help='最新變換相對當前模擬時間的最大容許陳舊秒數')
 a = ap.parse_args()
 
 
@@ -51,13 +53,23 @@ def main():
         try:
             tr = buf.lookup_transform(a.parent, a.child, Time())
             s = tr.header.stamp.sec + tr.header.stamp.nanosec * 1e-9
-            print(f'OK {a.parent} -> {a.child}  stamp={s:.3f} (sim)  '
+            # Time() returns the LATEST transform, which says nothing about how
+            # old it is: a chain that stopped publishing still answers here.
+            # Compare it against the simulator's current time.
+            now = n.get_clock().now().nanoseconds * 1e-9
+            age = now - s
+            fresh = age <= a.max_age
+            print(f'{"OK" if fresh else "STALE"} {a.parent} -> {a.child}  '
+                  f'stamp={s:.3f} sim_now={now:.3f} age={age:.3f}s '
+                  f'(上限 {a.max_age:.1f}s)  '
                   f'xyz=({tr.transform.translation.x:.3f}, '
                   f'{tr.transform.translation.y:.3f}, '
                   f'{tr.transform.translation.z:.3f})')
-            n.destroy_node()
-            rclpy.shutdown()
-            return 0
+            if fresh:
+                n.destroy_node()
+                rclpy.shutdown()
+                return 0
+            last = f'STALE: age={age:.3f}s > {a.max_age:.1f}s'
         except ExtrapolationException as e:
             last = f'EXTRAPOLATION: {e}'
             frames_seen = True
@@ -72,6 +84,8 @@ def main():
     rclpy.shutdown()
     if not all_frames:
         return 3
+    if last.startswith('STALE'):
+        return 4
     return 2 if frames_seen else 1
 
 

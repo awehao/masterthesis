@@ -162,9 +162,18 @@ done
 # available transform, and separates a missing frame from an extrapolation.
 for pair in "map odom" "odom base_footprint" "map base_footprint"; do
     set -- $pair
-    wait_for 60 "TF $1 -> $2 可查" \
-        python3 "${HERE}/tf_ready_check.py" "$1" "$2" --timeout 12
+    wait_for 60 "TF $1 -> $2 可查且新鮮" \
+        python3 "${HERE}/tf_ready_check.py" "$1" "$2" --timeout 12 --max-age 2.0
 done
+# Evidence for WHY tf2_echo failed last time, rather than the inference that it
+# must have been the wall-clock/sim-time gap: run it once and keep its output.
+echo "--- tf2_echo(預設 wall time) 的原始輸出，供根因佐證 ---" >> "$READY_LOG"
+timeout 8 ros2 run tf2_ros tf2_echo odom base_footprint \
+    >> "$READY_LOG" 2>&1 || echo "  (tf2_echo 退出碼 $?)" >> "$READY_LOG"
+echo "--- tf2_echo(use_sim_time:=true) ---" >> "$READY_LOG"
+timeout 8 ros2 run tf2_ros tf2_echo odom base_footprint --ros-args \
+    -p use_sim_time:=true >> "$READY_LOG" 2>&1 || \
+    echo "  (退出碼 $?)" >> "$READY_LOG"
 for n in /map_server /amcl /planner_server; do
     wait_for 60 "lifecycle $n active" lifecycle_active "$n"
 done
