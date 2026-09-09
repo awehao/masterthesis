@@ -13,8 +13,11 @@ Computes (per run):
     path_length_m      : cumulative odom motion
     tracking_rmse_m    : RMS distance from odom pose to closest /plan point
                          (using the LATEST /plan available at each odom timestamp)
-    smooth_vx/vy/wz    : std of /cmd_vel components  (lower = smoother)
-    jerk_vx/vy/wz      : std of finite-difference accel             (lower = smoother)
+    smooth_vx/vy/wz    : std of /cmd_vel components -- COMMAND smoothness only,
+                         not how smoothly the robot actually moved
+    cmd_accel_p95_*    : p95 |first difference of /cmd_vel| [m/s^2, rad/s^2]
+                         (reported as "jerk p95" up to the phase-4 report)
+    cmd_jerk_p95_*     : p95 |second difference of /cmd_vel| [m/s^3, rad/s^3]
 
 Usage
 -----
@@ -449,9 +452,12 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
         'smooth_vx'     : float('nan'),
         'smooth_vy'     : float('nan'),
         'smooth_wz'     : float('nan'),
-        'jerk_vx'       : float('nan'),
-        'jerk_vy'       : float('nan'),
-        'jerk_wz'       : float('nan'),
+        'cmd_accel_p95_vx': float('nan'),
+        'cmd_accel_p95_vy': float('nan'),
+        'cmd_accel_p95_wz': float('nan'),
+        'cmd_jerk_p95_vx' : float('nan'),
+        'cmd_jerk_p95_vy' : float('nan'),
+        'cmd_jerk_p95_wz' : float('nan'),
         # Safety / timing
         'min_clearance_m'   : float('nan'),
         'collision_count'   : 0,
@@ -553,11 +559,24 @@ def compute_metrics(messages, goal_tol_m: float = GOAL_TOLERANCE_M) -> dict:
         ok = dt > 0.5 * nominal
         if np.any(ok):
             accel = np.diff(cmd_vec, axis=0)[ok] / dt[ok, None]
-            # Report p95 of |accel| — a robust smoothness measure insensitive to
-            # the few residual DDS-timing outliers (std was outlier-dominated).
-            out['jerk_vx'] = float(np.percentile(np.abs(accel[:, 0]), 95))
-            out['jerk_vy'] = float(np.percentile(np.abs(accel[:, 1]), 95))
-            out['jerk_wz'] = float(np.percentile(np.abs(accel[:, 2]), 95))
+            # p95 of |accel| — robust to the few residual DDS-timing outliers
+            # (std was outlier-dominated). This is a FIRST difference of the
+            # commanded velocity, i.e. command ACCELERATION in m/s^2 (vx, vy)
+            # and rad/s^2 (wz). It was published as "jerk p95" through the
+            # phase-4 report: the numbers are right, the name was not. Historic
+            # CSVs carry the old jerk_* header with identical meaning; readers
+            # accept both, so nothing has to be recomputed for the rename.
+            out['cmd_accel_p95_vx'] = float(np.percentile(np.abs(accel[:, 0]), 95))
+            out['cmd_accel_p95_vy'] = float(np.percentile(np.abs(accel[:, 1]), 95))
+            out['cmd_accel_p95_wz'] = float(np.percentile(np.abs(accel[:, 2]), 95))
+            # True jerk: second difference of the commanded velocity, m/s^3 and
+            # rad/s^3. A separate metric, never part of the phase-4 numbers.
+            if accel.shape[0] > 1:
+                dt_a = dt[ok][1:]
+                jerk = np.diff(accel, axis=0) / dt_a[:, None]
+                out['cmd_jerk_p95_vx'] = float(np.percentile(np.abs(jerk[:, 0]), 95))
+                out['cmd_jerk_p95_vy'] = float(np.percentile(np.abs(jerk[:, 1]), 95))
+                out['cmd_jerk_p95_wz'] = float(np.percentile(np.abs(jerk[:, 2]), 95))
 
     # ------- safety: controller-agnostic clearance vs ground-truth obstacles --
     # Preferred source: /model/<name>/pose (recorded in EVERY launch, so MPPI
@@ -662,7 +681,8 @@ CSV_HEADER = [
     'success', 'arrival_time_s', 'total_time_s', 'path_length_m',
     'tracking_rmse_m',
     'smooth_vx', 'smooth_vy', 'smooth_wz',
-    'jerk_vx',   'jerk_vy',   'jerk_wz',
+    'cmd_accel_p95_vx', 'cmd_accel_p95_vy', 'cmd_accel_p95_wz',
+    'cmd_jerk_p95_vx',  'cmd_jerk_p95_vy',  'cmd_jerk_p95_wz',
     'min_clearance_m', 'collision_count', 'collided', 'clearance_source',
     'solve_time_mean_ms', 'solve_time_p95_ms', 'solve_time_max_ms',
     'goal_xy_x', 'goal_xy_y', 'final_dist_to_goal_m', 'min_dist_to_goal_m',

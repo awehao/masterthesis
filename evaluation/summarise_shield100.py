@@ -97,9 +97,21 @@ arr = sum(1 for v in rows.values() if v['success'] == 'True')
 t = [float(v['arrival_time_s']) for v in rows.values()
      if v['success'] == 'True' and v['arrival_time_s']]
 pl = [float(v['path_length_m']) for v in rows.values()]
-jk = [float(v['jerk_vx']) for v in rows.values() if v.get('jerk_vx')]
+def _accel_p95(row):
+    """p95 |command acceleration| in vx.
 
-print(f"| n | arrived | contacts | rate | median clr | worst | arrival | path | jerk_vx |")
+    Written as cmd_accel_p95_vx since the phase-4 metric rename; CSVs recorded
+    before it carry the same number under the old, wrong name jerk_vx.
+    """
+    for k in ('cmd_accel_p95_vx', 'jerk_vx'):
+        v = row.get(k)
+        if v not in (None, ''):
+            return float(v)
+    return None
+
+jk = [x for x in (_accel_p95(v) for v in rows.values()) if x is not None]
+
+print(f"| n | arrived | contacts | rate | median clr | worst | arrival | path | cmd_accel_p95_vx |")
 print("|---|---|---|---|---|---|---|---|---|")
 print(f"| {n} | {arr}/{n} | **{neg}** | {neg/n:.1%} | {st.median(clr):+.3f} | "
       f"{min(clr):+.3f} | {(st.median(t) if t else float('nan')):.0f} s | "

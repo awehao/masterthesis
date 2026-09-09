@@ -22,9 +22,14 @@ METHOD="$1"
 RUN_TAG="$2"
 DURATION="${3:-60}"
 
-case "$METHOD" in
+# An "isaac_" prefix selects the same method running in Isaac Sim instead of
+# Gazebo; the bag keeps the prefix so the two never collide, but the allowlist
+# is checked on the method itself. Without this the Isaac trials died here
+# instantly under `set -e`, before recording a single message.
+case "${METHOD#isaac_}" in
     rpp|mppi|gmpc|gmpc_cbf) ;;
-    *) echo "ERROR: METHOD must be one of rpp | mppi | gmpc | gmpc_cbf"; exit 1 ;;
+    *) echo "ERROR: METHOD must be [isaac_]{rpp | mppi | gmpc | gmpc_cbf}, got '$METHOD'"
+       exit 1 ;;
 esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

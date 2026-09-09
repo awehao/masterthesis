@@ -71,7 +71,8 @@ METHOD_COLOR  = {'rpp': '#888888',
 # would falsely imply 'all methods have 0 collisions'. Add it back only after
 # instrumenting baselines with the same obstacle ground-truth channel.
 #
-# NOTE: jerk_{vx,vy,wz} also excluded — these are σ(Δu)/Δt computed from
+# NOTE: cmd_accel_p95_{vx,vy,wz} (formerly mis-named jerk_*) also excluded —
+# these are |Δu|/Δt computed from
 # /cmd_vel, but the AMCL pose jumps observed during the smoke test inflate
 # the underlying velocity differences (the controller's emergency-brake on
 # infeasible QP also produces spike Δu's that are not 'real' jerk). To be
@@ -84,7 +85,7 @@ METRICS = [
     ('min_clearance_m',    'min obstacle clearance [m]', False),    # higher = safer
     ('solve_time_mean_ms', 'solve time mean [ms]',       True),
     ('success_rate',       'success rate [%]',           False),    # higher = better
-    ('smooth_vx',          'σ(v_x) [m/s]',               True),
+    ('smooth_vx',          'σ(v_x) 命令 [m/s]',          True),
     ('smooth_vy',          'σ(v_y) [m/s]',               True),
     ('smooth_wz',          'σ(ω_z) [rad/s]',             True),
 ]

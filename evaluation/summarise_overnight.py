@@ -24,6 +24,20 @@ F = ['cycle', 'rx', 'ry', 'rx_seq', 'rx_n', 'held', 'appended', 'near_d',
      'pose_gap', 'pose_src', 'fallbacks']
 
 
+
+def _accel_p95(row):
+    """p95 |command acceleration| in vx.
+
+    Written as cmd_accel_p95_vx since the phase-4 metric rename; CSVs recorded
+    before it carry the same number under the old, wrong name jerk_vx.
+    """
+    for k in ('cmd_accel_p95_vx', 'jerk_vx'):
+        v = row.get(k)
+        if v not in (None, ''):
+            return float(v)
+    return None
+
+
 def csv_stats(path):
     if not os.path.exists(path):
         return None
@@ -34,7 +48,7 @@ def csv_stats(path):
     arr = sum(1 for r in rows if r['success'] == 'True')
     t = [float(r['arrival_time_s']) for r in rows
          if r['success'] == 'True' and r['arrival_time_s']]
-    j = [float(r['jerk_vx']) for r in rows if r.get('jerk_vx')]
+    j = [x for x in (_accel_p95(r) for r in rows) if x is not None]
     p95 = [float(r['solve_time_p95_ms']) for r in rows if r.get('solve_time_p95_ms')]
     return dict(n=len(rows), arrived=arr, neg=sum(1 for c in clr if c < 0),
                 med=st.median(clr), worst=min(clr),
@@ -105,7 +119,7 @@ print("# Overnight results\n")
 print("Scenario: bigarena, 40 random routes, GMPC+CBF, mask 10 deg, "
       "fixed margins 0.60/0.38, hardware motion limits with wheel-speed "
       "coupling.\n")
-print("| arm | n | arrived | contacts | median clr | worst | arrival | jerk_vx | p95 solve |")
+print("| arm | n | arrived | contacts | median clr | worst | arrival | cmd_accel_p95_vx | p95 solve |")
 print("|---|---|---|---|---|---|---|---|---|")
 stats = {}
 for key, label in ARMS:

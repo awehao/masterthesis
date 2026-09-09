@@ -40,7 +40,7 @@ for name,f in FILES.items():
         succ_lbl = f"{len(succ)}/{N}",
         path = m('path_length_m', succ), path_sd = sd('path_length_m', succ),
         arr  = m('arrival_time_s', succ), arr_sd = sd('arrival_time_s', succ),
-        smooth_vx = m('smooth_vx', succ),  # std of /cmd_vel (lower=smoother)
+        smooth_vx = m('smooth_vx', succ),  # std of /cmd_vel = COMMAND smoothness
         smooth_vy = m('smooth_vy', succ),
         smooth_wz = m('smooth_wz', succ),
         clr  = m('min_clearance_m', valid_clr),
