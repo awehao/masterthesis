@@ -36,26 +36,27 @@ echo "[$(date +%T)] 案例 method=$METHOD seed=$SEED start=($SX,$SY) goal=($GX,$
 echo "[$(date +%T)] POSES_CSV=$POSES_CSV  TRAJ=bigarena_traffic  BIGARENA=1"
 
 PIDS=()
-NODE_PAT='isaac_bigarena_sim|ros2 launch|ros2 bag|ros2 topic pub|nav2_|map_server|amcl'
-NODE_PAT+='|planner_server|lifecycle_manager|velocity_smoother|gmpc_node|scan_relay'
-NODE_PAT+='|scan_obstacle_tracker|obstacle_aggregator|scan_safety_shield|ekf_node'
-NODE_PAT+='|odom_tf_broadcaster|dynamic_obstacle_driver|robot_state_publisher'
-NODE_PAT+='|goal_to_plan_relay|foxglove_bridge|goal_watcher'
 cleanup() {
+  trap - EXIT INT TERM
   echo "[$(date +%T)] cleanup ..."
-  for p in "${PIDS[@]:-}"; do pkill -INT -P "$p" 2>/dev/null; kill -INT "$p" 2>/dev/null; done
-  sleep 3; pkill -INT -f "$NODE_PAT" 2>/dev/null; sleep 3
-  pkill -KILL -f "$NODE_PAT" 2>/dev/null; sleep 1
-  ros2 daemon stop >/dev/null 2>&1; sleep 1; ros2 daemon start >/dev/null 2>&1
+  # Each registered child is launched with setsid below; its PID is its PGID.
+  # Signal only this run's groups, never unrelated ROS/Kit sessions by name.
+  for p in "${PIDS[@]}"; do kill -INT -- "-$p" 2>/dev/null || true; done
+  sleep 10
+  for p in "${PIDS[@]}"; do kill -TERM -- "-$p" 2>/dev/null || true; done
+  sleep 3
+  for p in "${PIDS[@]}"; do kill -KILL -- "-$p" 2>/dev/null || true; done
   echo "[$(date +%T)] cleanup done"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # 0. 溫度取樣：在 Isaac 之前就開始，用牆鐘每秒取樣
 THERM_CSV="${RUN_DIR}/thermal.csv"
 ISAAC_PIDFILE="${RUN_DIR}/isaac.pid"
 rm -f "$ISAAC_PIDFILE"
-"${HERE}/thermal_sampler.sh" "$THERM_CSV" "${CPU_LIMIT:-88}" "$ISAAC_PIDFILE" \
+setsid "${HERE}/thermal_sampler.sh" "$THERM_CSV" "${CPU_LIMIT:-88}" "$ISAAC_PIDFILE" \
     >> "$LOG" 2>&1 < /dev/null &
 THERM_PID=$!; PIDS+=( $THERM_PID )
 echo "[$(date +%T)] [0/6] 溫度取樣已啟動 -> $THERM_CSV（上限 ${CPU_LIMIT:-88} °C）"
@@ -64,14 +65,17 @@ sleep 3
 # 1. Isaac
 HEADLESS="${HEADLESS:-true}"
 echo "[$(date +%T)] [1/6] 啟動 Isaac（headless=$HEADLESS, cpu_threads=${CPU_THREADS:-8}）..."
-"$ISAAC_PY" "${HERE}/isaac_bigarena_sim.py" --seed "$SEED" --method "$METHOD" \
+setsid "$ISAAC_PY" "${HERE}/isaac_bigarena_sim.py" --seed "$SEED" --method "$METHOD" \
     --traj bigarena_traffic --headless "$HEADLESS" \
+    --experience "${EXPERIENCE:-}" --width "${VIEW_WIDTH:-1600}" --height "${VIEW_HEIGHT:-900}" \
+    --poses-csv "$POSES_CSV" \
     --duration "${SIM_BUDGET:-900}" --task-limit "$DURATION" \
     --wall-limit "${WALL_LIMIT:-1200}" \
     --render-hz "${RENDER_HZ:-12}" --cpu-limit "${CPU_LIMIT:-88}" \
     --cpu-threads "${CPU_THREADS:-8}" \
     --out "${RUN_DIR}/isaac_run.json" >> "$LOG" 2>&1 < /dev/null &
 ISAAC_PID=$!; echo "$ISAAC_PID" > "$ISAAC_PIDFILE"; PIDS+=( $ISAAC_PID )
+echo "[$(date +%T)] Isaac PID=$ISAAC_PID（獨立 session），experience=${EXPERIENCE:-default}"
 # `ros2 topic echo --once` exits 0 even when it printed nothing, so the first
 # version of this wait passed after 5 s while Isaac was still loading -- the
 # navigation chain and the readiness gate then both ran before the simulator
@@ -107,7 +111,7 @@ fi
 # already removes gz entirely, so gui:=true here only enables the bridge.
 echo "[$(date +%T)] [2/6] 啟動導航鏈（NO_GZ=1, BIGARENA=1, TRAJ=bigarena_traffic）..."
 NO_GZ=1 BIGARENA=1 TRAJ=bigarena_traffic SPAWN_X="$SX" SPAWN_Y="$SY" \
-  ros2 launch my_omnibot_description omni_bot_dynamic.launch.py \
+  setsid ros2 launch my_omnibot_description omni_bot_dynamic.launch.py \
   gui:="${LAUNCH_GUI:-true}" use_arm:=true >> "$LOG" 2>&1 < /dev/null &
 PIDS+=( $! )
 sleep 25
@@ -128,7 +132,7 @@ sleep 5
 # only a backstop.
 REC_CAP="${REC_CAP:-1500}"
 echo "[$(date +%T)] [4/6] 開始錄製（防呆上限 ${REC_CAP}s，任務時限由模擬時間另計）..."
-timeout --foreground --signal=INT --kill-after=5 "${REC_CAP}s" \
+setsid timeout --foreground --signal=INT --kill-after=5 "${REC_CAP}s" \
   ros2 bag record -o "${RUN_DIR}/bag" \
   /clock /odom /odom_raw /odometry/filtered /amcl_pose /model/omni_bot/pose \
   /cmd_vel /cmd_vel_nav /cmd_vel_pre_shield /scan /scan_raw /plan /goal_pose \
@@ -153,6 +157,9 @@ wait_for() {  # wait_for <秒數> <說明> <指令...>
     local lim="$1" desc="$2"; shift 2
     local t0=$SECONDS
     while [ $((SECONDS - t0)) -lt "$lim" ]; do
+        if ! kill -0 "$ISAAC_PID" 2>/dev/null; then
+            mark "!! Isaac 已退出，立即停止就緒檢查"; exit 3
+        fi
         if "$@" >/dev/null 2>&1; then
             mark "$desc（$((SECONDS - t0))s）"; return 0
         fi
@@ -174,7 +181,7 @@ lifecycle_active() { timeout 6 ros2 lifecycle get "$1" 2>/dev/null | grep -q act
 
 isaac_alive() { kill -0 "$ISAAC_PID" 2>/dev/null; }
 if ! isaac_alive; then
-    mark "!! Isaac 在就緒檢查前已退出"; gate_fail=1
+    mark "!! Isaac 在就緒檢查前已退出"; exit 3
 fi
 wait_for 60 "clock 在前進" clock_moved
 for t in /scan /scan_raw /odom /odom_raw; do
@@ -241,7 +248,7 @@ while kill -0 "$ISAAC_PID" 2>/dev/null; do
 done
 echo "[$(date +%T)] [6/6] Isaac 已結束並保存，停止錄製"
 grep -a "停止原因" "$LOG" | tail -1
-pkill -INT -P "$REC" 2>/dev/null; kill -INT "$REC" 2>/dev/null
+kill -INT -- "-$REC" 2>/dev/null || true
 wait $REC 2>/dev/null || true
 echo "[$(date +%T)] === 結束：$TAG ==="
 echo "[$(date +%T)]     資料目錄: ${RUN_DIR}"

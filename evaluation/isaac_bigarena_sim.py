@@ -47,6 +47,8 @@ ap.add_argument('--method', default='gmpc_scan', help='記錄用，不影響模�
 ap.add_argument('--traj', default='bigarena_traffic', help='記錄用')
 ap.add_argument('--headless', default='false')
 ap.add_argument('--experience', default='')
+ap.add_argument('--width', type=int, default=1600)
+ap.add_argument('--height', type=int, default=900)
 ap.add_argument('--cpu-threads', type=int, default=0,
                 help='>0 傳給 SimulationApp 的 limit_cpu_threads（官方效能設定）')
 ap.add_argument('--physics-dt', type=float, default=0.01)   # bigarena.sdf
@@ -154,12 +156,15 @@ from isaacsim import SimulationApp                                # noqa: E402
 _headless = a.headless.lower() == 'true'
 _exp = '' if _headless else (a.experience or os.path.join(
     os.path.dirname(_isaacsim_pkg.__file__), 'apps', 'isaacsim.exp.full.kit'))
+if _exp and not os.path.isabs(_exp):
+    _exp = os.path.join(os.path.dirname(_isaacsim_pkg.__file__), 'apps', _exp)
 if _exp and not os.path.exists(_exp):
     print(f'  !! 找不到 experience：{_exp}', file=sys.stderr)
     sys.exit(1)
 if _exp:
     print(f'  GUI experience：{os.path.basename(_exp)}', flush=True)
-_cfg_app = {'headless': _headless, 'width': 1600, 'height': 900}
+_cfg_app = {'headless': _headless, 'width': a.width, 'height': a.height,
+            'window_width': a.width, 'window_height': a.height}
 if a.cpu_threads > 0:
     # Official performance setting. 8 is a trial value for this machine, not a
     # tuned one: whether it lowers the temperature at all is what this run
@@ -441,6 +446,14 @@ def main():
                   rendering_dt=a.physics_dt * 4)
     stage = omni.usd.get_context().get_stage()
     dyn = build_scene(stage)
+    if not _headless:
+        # Display only: keep the entire arena visible without changing physics.
+        from pxr import UsdLux
+        from isaacsim.core.utils.viewports import set_camera_view
+        light = UsdLux.DomeLight.Define(stage, '/World/gui_light')
+        light.CreateIntensityAttr(700.0)
+        set_camera_view(eye=np.array([10., 7., 26.]),
+                        target=np.array([10., 10., 0.]))
     print(f'  場景建立完成：動態 {len(dyn)} 個', flush=True)
 
     prim = import_urdf(a.urdf, '/World/omni_bot')
@@ -1040,7 +1053,10 @@ def main():
                           task_limit=a.task_limit, wall_limit=a.wall_limit,
                           wall_time=_wall,
                           rtf_measured=(_sim / _wall) if _wall > 0 else None,
-                          cpu_threads=a.cpu_threads)
+                          cpu_threads=a.cpu_threads,
+                          headless=_headless, experience=_exp,
+                          resolution=[a.width, a.height], render_hz=a.render_hz,
+                          cpu_limit=a.cpu_limit)
         print(f'    實際 RTF {_sim/max(_wall,1e-9):.3f}'
               f'（模擬 {_sim:.1f} s / 實際 {_wall:.1f} s），'
               f'limit_cpu_threads={a.cpu_threads or "未設"}')
