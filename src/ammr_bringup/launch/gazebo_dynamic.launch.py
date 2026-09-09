@@ -30,12 +30,26 @@ def _load_dyn_names(traj_file):
     return [d['name'] for d in (cfg.get('dynamic_obstacles') or [])]
 
 
+
+# Scenario selection. Both launches read the SAME two environment variables so
+# Gazebo and Isaac cannot silently run different scenarios: AMMR_TRAJ_FILE
+# picks the trajectory config and AMMR_OBSTACLE_MODE picks legacy (feedback
+# ping-pong, historical, not reproducible) or scheduled (position computed from
+# simulation time with /case_start as phase zero). Defaults reproduce the
+# historical behaviour exactly.
+def _scenario(pkg):
+    traj = os.environ.get('AMMR_TRAJ_FILE') or os.path.join(
+        pkg, 'config', 'dynamic_trajectories.yaml')
+    mode = os.environ.get('AMMR_OBSTACLE_MODE', 'legacy')
+    return traj, mode
+
+
 def generate_launch_description():
     pkg = get_package_share_directory('ammr_bringup')
     world_file = os.path.join(pkg, 'worlds', 'random_room_dynamic.sdf')
     urdf_file  = os.path.join(pkg, 'urdf',   'ammr_base.urdf.xacro')
     map_file   = os.path.join(pkg, 'maps',   'random_room.yaml')
-    traj_file  = os.path.join(pkg, 'config', 'dynamic_trajectories.yaml')
+    traj_file, obstacle_mode = _scenario(pkg)
 
     robot_description = ParameterValue(
         Command(['xacro ', urdf_file]), value_type=str
@@ -171,6 +185,7 @@ def generate_launch_description():
                 parameters=[
                     {'use_sim_time': True},
                     {'trajectories_file': traj_file},
+                    {'mode': obstacle_mode},
                 ],
                 output='screen',
             )],

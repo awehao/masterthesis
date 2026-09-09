@@ -288,6 +288,20 @@ def main():
 
     rclpy.init()
     node = IsaacBridge(list(dyn_handles))
+    # Callbacks run on their own executor thread rather than one spin_once per
+    # physics step. At 100 steps/s a single spin_once handles at most 100
+    # callbacks/s, and the incoming traffic is already 100/s (4 obstacles x
+    # 20 Hz cmd_vel + /cmd_vel at 20 Hz): the queue saturates and commands are
+    # applied late. It showed up as the obstacles lagging the schedule by up to
+    # ~320 mm around the reversals, 21% of samples over 100 mm, where Gazebo
+    # had none. The fields the callbacks write are plain attribute assignments
+    # read by the loop, so no locking is needed.
+    import threading
+    from rclpy.executors import SingleThreadedExecutor
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
 
     dt = a.physics_dt
     steps = int(round(a.duration / dt))
@@ -329,7 +343,6 @@ def main():
             break
         t = k * dt
         node.sim_t = t
-        rclpy.spin_once(node, timeout_sec=0.0)
 
         # chassis: rewrite the velocity state every physics step, which is what
         # gz-sim-velocity-control-system does with the latest /cmd_vel
@@ -428,6 +441,7 @@ def main():
               f'位移 {math.hypot(log[-1]["x"]-log[0]["x"], log[-1]["y"]-log[0]["y"]):.3f} m')
     save((k + 1) * dt)
     print(f'  已寫入 {a.out}', flush=True)
+    executor.shutdown()
     node.destroy_node()
     rclpy.shutdown()
     return 0

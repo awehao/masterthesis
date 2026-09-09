@@ -76,8 +76,23 @@ case "$METHOD" in
 esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_TAG="seed${SEED}"
 METHOD_TAG="isaac_${METHOD}"
+# --------------------------------------------------------------------- scenario
+# SCENARIO=v2 selects the reproducible obstacle schedule: position computed
+# from simulation time with /case_start as phase zero, so the encounter no
+# longer depends on process start order. v1 (default) is the historical
+# feedback ping-pong. Bags are tagged with the version so the two are never
+# mixed into one group.
+SCENARIO="${SCENARIO:-v1}"
+if [ "$SCENARIO" = "v2" ]; then
+    export AMMR_TRAJ_FILE="${WS_ROOT}/src/ammr_bringup/config/dynamic_trajectories_v2.yaml"
+    export AMMR_OBSTACLE_MODE="scheduled"
+    SCEN_TAG="_v2"
+else
+    SCEN_TAG=""
+fi
+RUN_TAG="seed${SEED}${SCEN_TAG}"
+
 LOG_DIR="${HERE}/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="${LOG_DIR}/${METHOD_TAG}__${RUN_TAG}.log"
@@ -218,6 +233,57 @@ for i in $(seq 1 30); do
     fi
     sleep 1
 done
+
+# Phase zero for the scheduled obstacles. Published at the SAME point in both
+# runners, immediately before the goal, so the scenario starts from the same
+# instant regardless of how long the stack took to come up. Latched-style
+# repetition covers a late subscriber; the driver resets phase on each message,
+# so the last one before the goal is the one that counts.
+if [ "$SCENARIO" = "v2" ]; then
+    # Same DDS race the goal publication already documents: a fresh publisher
+    # that sends a burst and exits can finish before the subscriber has been
+    # discovered. The first attempt did exactly that -- rosbag recorded three
+    # /case_start messages, the driver received none, and every obstacle sat at
+    # its start pose for the whole run. Wait for the subscribers, then publish
+    # over five seconds like the goal does.
+    echo "[$(date +%T)] [5/7] waiting for /case_start subscribers ..."
+    for i in $(seq 1 30); do
+        cs=$(ros2 topic info /case_start 2>/dev/null \
+             | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
+        cs=${cs:-0}
+        if [ "$cs" -ge 2 ]; then
+            echo "[$(date +%T)] [5/7]   /case_start subscribers=$cs after ${i}s"
+            break
+        fi
+        sleep 1
+    done
+    # Publish ONCE. The driver resets phase on every /case_start, which is the
+    # behaviour we want for a reset but makes the epoch ambiguous if the
+    # message is repeated: a five-message burst reset the phase five times and
+    # the effective zero was the last one, ~4 s after the first. Publish a
+    # single message and then verify the driver actually adopted it, retrying
+    # only if it did not.
+    CS_OK=0
+    for attempt in 1 2 3; do
+        echo "[$(date +%T)] [5/7] publishing /case_start (attempt ${attempt}) ..."
+        timeout 8 ros2 topic pub -t 1 /case_start std_msgs/msg/Empty "{}" \
+            >> "$LOG_FILE" 2>&1 || true
+        for j in 1 2 3 4 5 6 7 8; do
+            ep=$(timeout 3 ros2 topic echo --once --field data \
+                 /dynamic_obstacles/phase_epoch 2>/dev/null | head -1)
+            case "$ep" in
+                ""|nan|NaN|.nan) ;;
+                *) echo "[$(date +%T)] [5/7]   相位零點已設定：${ep}"; CS_OK=1; break ;;
+            esac
+            sleep 1
+        done
+        [ "$CS_OK" -eq 1 ] && break
+    done
+    if [ "$CS_OK" -ne 1 ]; then
+        echo "[$(date +%T)] [5/7] ERROR: driver 未接受 /case_start — 障礙物不會移動，中止"
+        exit 1
+    fi
+fi
 echo "[$(date +%T)] [5/7] publishing goal (${GOAL_X}, ${GOAL_Y}) — 5 times @ 1 Hz ..."
 # Multi-publish: -t 5 -r 1 emits the message 5 times at 1 Hz over 5 seconds,
 # which gives goal_to_plan_relay and rosbag2_recorder a 5-second window to

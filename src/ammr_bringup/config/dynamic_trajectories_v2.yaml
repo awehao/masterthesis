@@ -1,0 +1,71 @@
+# Reproducible dynamic-obstacle scenario (scenario version v2).
+#
+# Same four movers, same start/end/speed as dynamic_trajectories.yaml. What is
+# new is that the phase is FIXED rather than emergent: the driver's `scheduled`
+# mode computes position from simulation time, with /case_start as the phase
+# zero, so the trajectory no longer depends on which process started first.
+#
+# Measured reason for the change: under the legacy feedback ping-pong, two runs
+# of the same nominal case had obstacles 0.11-2.43 m apart at the SAME
+# simulation time, which is enough to give the robot a different encounter.
+# Those runs were therefore not the same scenario instance and could not be
+# used to compare simulators.
+#
+# Per obstacle, additionally fixed:
+#   direction  +1 = moving start -> end at phase zero, -1 = end -> start
+#   phase0_m   arclength already travelled along the outbound leg at phase zero
+#
+# Known behavioural difference from v1, stated rather than hidden:
+#   legacy reversed when it came within REACH_TOL = 0.20 m of the endpoint, at
+#   a feedback-dependent instant. scheduled reverses EXACTLY at the endpoint,
+#   so each mover sweeps up to 0.20 m further at each end, and the velocity
+#   reversal is a clean discontinuity of 2*speed at that point. Speed magnitude
+#   is constant everywhere else, as before.
+#
+# v1 results stay in their own bags; do not mix the two scenario versions.
+
+scenario_version: v2
+
+dynamic_obstacles:
+
+  # Slowest sweeper, first one met leaving the spawn column. The floor on speed
+  # from v1 still applies: scan_obstacle_tracker only forwards a track to the
+  # dynamic CBF above min_track_speed = 0.10 m/s.
+  - name:   dyn_obs_1
+    start:  [0.0, 5.55]
+    end:    [0.0, 3.0]
+    speed:  0.15
+    radius: 0.25
+    height: 1.0
+    direction: 1
+    phase0_m:  0.0
+
+  # The mover the robot passed at 0.261 m in the Isaac run, when localisation
+  # first diverged. Phase fixed so that encounter is reproducible instead of
+  # accidental.
+  - name:   dyn_obs_2
+    start:  [10.3, 8.4]
+    end:    [11.9, 7.5]
+    speed:  0.3
+    radius: 0.25
+    height: 1.0
+    direction: 1
+    phase0_m:  0.0
+
+  - name:   dyn_obs_0
+    start:  [14.1, 7.1]
+    end:    [17.1, 7.1]
+    speed:  0.3
+    radius: 0.25
+    height: 1.0
+    direction: 1
+    phase0_m:  0.0
+
+  - name:   dyn_obs_5
+    start:  [5.0, 8.2]
+    end:    [5.0, 9.8]
+    speed:  0.3
+    radius: 0.25
+    height: 1.0
+    direction: 1
+    phase0_m:  0.0
