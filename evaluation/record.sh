@@ -26,9 +26,9 @@ DURATION="${3:-60}"
 # Gazebo; the bag keeps the prefix so the two never collide, but the allowlist
 # is checked on the method itself. Without this the Isaac trials died here
 # instantly under `set -e`, before recording a single message.
-case "${METHOD#isaac_}" in
+case "$(echo "$METHOD" | sed -E 's/^(isaac|gz)_//')" in
     rpp|mppi|gmpc|gmpc_cbf) ;;
-    *) echo "ERROR: METHOD must be [isaac_]{rpp | mppi | gmpc | gmpc_cbf}, got '$METHOD'"
+    *) echo "ERROR: METHOD must be [isaac_|gz_]{rpp | mppi | gmpc | gmpc_cbf}, got '$METHOD'"
        exit 1 ;;
 esac
 
@@ -76,6 +76,7 @@ timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
     ros2 bag record \
         -o "$OUT_DIR" \
         --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
+                 /model/ammr_base/pose \
                  /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h \
                  /gmpc/static_obstacles /gmpc/diag /gmpc/tracks_debug \
                  /shield/diag /cmd_vel_pre_shield \
