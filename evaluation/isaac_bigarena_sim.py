@@ -68,6 +68,12 @@ ap.add_argument('--kd', type=float, default=1.0e4)
 ap.add_argument('--self-drive-goal', type=float, default=0.0,
                 help='>0 時模擬器自行以該速度朝目標直線前進，用來單獨驗證'
                      '「到達即結束」的停止邏輯，不需要導航鏈')
+ap.add_argument('--cam-raw', default='true',
+                help='是否同時發布未壓縮 image_raw。1600x900 每張 4 MB，'
+                     '觀看用設定建議關閉')
+ap.add_argument('--cam-async', default='true',
+                help='JPEG 編碼移到背景執行緒；佇列滿時丟最舊的幀（優先顯示新幀）')
+ap.add_argument('--cam-queue', type=int, default=2)
 ap.add_argument('--cam-jpeg', default='true',
                 help='同時發布 .../image_raw/compressed（JPEG），原始 topic 不變')
 ap.add_argument('--cam-jpeg-q', type=int, default=80)
@@ -491,8 +497,15 @@ class Bridge(Node):
         m.step = w * 3
         m.data = rgb[:, :, :3].tobytes()
         self.img_pub.publish(m)
+
+    def publish_info(self, t, w, h, K):
+        # Independent of the raw image. It used to live inside publish_image,
+        # so turning the raw topic off -- which a 1600x900 viewing config must
+        # do, 4 MB a frame -- silently took camera_info with it and the intrinsics
+        # were never published at all.
         ci = CameraInfo()
-        ci.header = m.header
+        ci.header.stamp = self.stamp(t)
+        ci.header.frame_id = self.CAM_FRAME
         ci.height, ci.width = h, w
         ci.distortion_model = 'plumb_bob'
         ci.d = [0.0] * 5
@@ -518,6 +531,56 @@ class Bridge(Node):
         m = Clock()
         m.clock = self.stamp(t)
         self.clock_pub.publish(m)
+
+
+class JpegWorker:
+    """Encode and publish JPEG off the simulation loop.
+
+    Encoding a 1600x900 frame took 27.34 ms inside the loop -- more than two
+    physics steps -- and that cost showed up directly as a lower frame rate.
+    The queue is deliberately tiny and drops the OLDEST frame when full: for
+    live viewing a fresh frame is worth more than a complete sequence.
+    """
+
+    def __init__(self, node, quality, depth):
+        import queue
+        import threading
+        self.node = node
+        self.quality = quality
+        self.q = queue.Queue(maxsize=depth)
+        self.sizes = []
+        self.dropped = 0
+        self.stop = False
+        self.t = threading.Thread(target=self._run, daemon=True)
+        self.t.start()
+
+    def submit(self, t, rgb):
+        import queue
+        try:
+            self.q.put_nowait((t, rgb))
+        except queue.Full:
+            try:
+                self.q.get_nowait()
+                self.dropped += 1
+                self.q.put_nowait((t, rgb))
+            except Exception:
+                self.dropped += 1
+
+    def _run(self):
+        import queue
+        while not self.stop:
+            try:
+                t, rgb = self.q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                self.sizes.append(self.node.publish_jpeg(t, rgb, self.quality))
+            except Exception:
+                pass
+
+    def shutdown(self):
+        self.stop = True
+        self.t.join(timeout=2.0)
 
 
 def main():
@@ -1059,6 +1122,9 @@ def main():
         cam_frames = 0
         cam_wall = []
         cam_jpeg_bytes = []
+        jpeg_worker = (JpegWorker(node, a.cam_jpeg_q, a.cam_queue)
+                       if (cam is not None and a.cam_jpeg.lower() == 'true'
+                           and a.cam_async.lower() == 'true') else None)
         # Per-step wall timing, split by what the step actually did. The frame
         # interval is bimodal -- 88% at 110-130 ms, 11.6% at 150-200 ms, none
         # at the configured 100 ms -- and the camera's own cost (3.13 ms
@@ -1159,11 +1225,17 @@ def main():
                 rgba = cam.get_rgba()
                 _w1 = time.monotonic()
                 if rgba is not None and rgba.size:
-                    node.publish_image(t + dt, rgba, cam_K)
-                    _w2 = time.monotonic()
+                    # camera_info goes out with EVERY frame, whichever image
+                    # topic is enabled
+                    node.publish_info(t + dt, a.cam_width, a.cam_height, cam_K)
+                    if a.cam_raw.lower() == 'true':
+                        node.publish_image(t + dt, rgba, cam_K)
                     if a.cam_jpeg.lower() == 'true':
-                        _nb = node.publish_jpeg(t + dt, rgba, a.cam_jpeg_q)
-                        cam_jpeg_bytes.append(_nb)
+                        if jpeg_worker is not None:
+                            jpeg_worker.submit(t + dt, rgba.copy())
+                        else:
+                            cam_jpeg_bytes.append(
+                                node.publish_jpeg(t + dt, rgba, a.cam_jpeg_q))
                     _w2 = time.monotonic()
                     # wall-clock cost of producing vs publishing one frame,
                     # kept separate: a simulated-time interval says nothing
@@ -1286,6 +1358,13 @@ def main():
                      arm_err=max(abs(float(jp_end[idx[j]]) - ARM_TARGET[j])
                                  for j in ARM_JOINTS),
                      dist_goal=math.dist((float(p_end[0]), float(p_end[1])), GOAL))
+        # Collect the worker's counters BEFORE the record is assembled: the
+        # first version read them afterwards, so a run that published 832 JPEGs
+        # recorded jpeg=None.
+        jpeg_dropped = 0
+        if jpeg_worker is not None:
+            cam_jpeg_bytes = list(jpeg_worker.sizes)
+            jpeg_dropped = jpeg_worker.dropped
         _wall = time.monotonic() - t_wall0
         _sim = log[-1]['t'] if log else 0.0
         rec['run'] = dict(stop_reason=stop_reason, log=log, sim_time=_sim,
@@ -1308,6 +1387,7 @@ def main():
                                           mean_kib=(sum(cam_jpeg_bytes)
                                                     / max(len(cam_jpeg_bytes), 1)
                                                     / 1024.0),
+                                          dropped=jpeg_dropped,
                                           quality=a.cam_jpeg_q)
                                           if cam_jpeg_bytes else None)),
                           step_profile=step_prof,
@@ -1345,6 +1425,10 @@ def main():
         print(f'  歸零步進後 ({final["x"]:.3f}, {final["y"]:.3f})，'
               f'距目標 {final["dist_goal"]:.3f} m（僅描述停機）', flush=True)
         print(f'  已寫入 {a.out}', flush=True)
+        if jpeg_worker is not None:
+            print(f'    JPEG 背景編碼：發出 {len(cam_jpeg_bytes)} 張，'
+                  f'因佇列滿而丟棄 {jpeg_dropped} 張')
+            jpeg_worker.shutdown()
         ex.shutdown()
         node.destroy_node()
         rclpy.shutdown()

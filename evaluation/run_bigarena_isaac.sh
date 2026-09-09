@@ -75,7 +75,8 @@ setsid "$ISAAC_PY" "${HERE}/isaac_bigarena_sim.py" --seed "$SEED" --method "$MET
     --arrive-tol "${ARRIVE_TOL:-0.30}" \
     --camera "${CAMERA:-false}" --cam-width "${CAM_W:-640}" \
     --cam-height "${CAM_H:-480}" --cam-hz "${CAM_HZ:-10}" \
-    --cam-save "${CAM_SAVE:-0}" \
+    --cam-save "${CAM_SAVE:-0}" --cam-raw "${CAM_RAW:-true}" \
+    --cam-async "${CAM_ASYNC:-true}" --cam-jpeg-q "${CAM_Q:-80}" \
     --cpu-threads "${CPU_THREADS:-8}" \
     --out "${RUN_DIR}/isaac_run.json" >> "$LOG" 2>&1 < /dev/null &
 ISAAC_PID=$!; echo "$ISAAC_PID" > "$ISAAC_PIDFILE"; PIDS+=( $ISAAC_PID )
