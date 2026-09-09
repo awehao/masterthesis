@@ -65,6 +65,20 @@ ap.add_argument('--duration', type=float, default=0.0,
                 help='0 = 只做檢查並保留畫面，不進入模擬迴圈')
 ap.add_argument('--kp', type=float, default=1.0e5)
 ap.add_argument('--kd', type=float, default=1.0e4)
+ap.add_argument('--camera', default='false',
+                help='true = 啟用底盤相機 RGB（功能驗證設定，不接入導航）')
+ap.add_argument('--cam-width', type=int, default=640)
+ap.add_argument('--cam-height', type=int, default=480)
+ap.add_argument('--cam-hz', type=float, default=10.0)
+ap.add_argument('--cam-hfov', type=float, default=1.518,
+                help='水平視角(rad)；預設取自 URDF base_camera_rgbd')
+ap.add_argument('--cam-near', type=float, default=0.1)
+ap.add_argument('--cam-far', type=float, default=10.0)
+ap.add_argument('--cam-probe', default='',
+                help='dist,left_off：在相機正前方 dist 放紅球、其左側 left_off 放綠球，'
+                     '用來判定影像方向（紅應在中央、綠應在畫面左半）')
+ap.add_argument('--cam-save', type=int, default=0,
+                help='存前 N 張 PNG 供人工核對影像方向')
 ap.add_argument('--markers', default='true')
 ap.add_argument('--static-scan', default='false',
                 help='true = 在起點做靜態掃描驗收後結束，不進導航')
@@ -190,7 +204,7 @@ from rosgraph_msgs.msg import Clock                               # noqa: E402
 from geometry_msgs.msg import PoseStamped, Twist                  # noqa: E402
 from nav_msgs.msg import Odometry                                 # noqa: E402
 from sensor_msgs.msg import JointState                            # noqa: E402
-from sensor_msgs.msg import LaserScan                             # noqa: E402
+from sensor_msgs.msg import CameraInfo, Image, LaserScan          # noqa: E402
 
 SCAN_N, SCAN_MIN, SCAN_MAX = 360, -3.14159, 3.14159
 SCAN_INC = (SCAN_MAX - SCAN_MIN) / (SCAN_N - 1)
@@ -381,6 +395,13 @@ class Bridge(Node):
         # robot_state_publisher needs these to complete the arm's TF chain;
         # gz's ros2_control provided them there.
         self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
+        # Viewing and recording only: nothing in the navigation chain subscribes
+        # to these. The frame_id is the URDF's optical frame, so the image and
+        # TF agree without a separate convention being invented here.
+        self.img_pub = self.create_publisher(
+            Image, '/base_camera/color/image_raw', be)
+        self.info_pub = self.create_publisher(
+            CameraInfo, '/base_camera/color/camera_info', be)
 
     def _cmd(self, m):
         self.cmd = [m.linear.x, m.linear.y, m.angular.z]
@@ -435,6 +456,29 @@ class Bridge(Node):
         m.position = [float(v) for v in pos]
         self.js_pub.publish(m)
 
+    CAM_FRAME = 'base_camera_color_optical_frame'
+
+    def publish_image(self, t, rgb, K):
+        h, w = rgb.shape[0], rgb.shape[1]
+        m = Image()
+        m.header.stamp = self.stamp(t)
+        m.header.frame_id = self.CAM_FRAME
+        m.height, m.width = h, w
+        m.encoding = 'rgb8'
+        m.is_bigendian = 0
+        m.step = w * 3
+        m.data = rgb[:, :, :3].tobytes()
+        self.img_pub.publish(m)
+        ci = CameraInfo()
+        ci.header = m.header
+        ci.height, ci.width = h, w
+        ci.distortion_model = 'plumb_bob'
+        ci.d = [0.0] * 5
+        ci.k = [K[0], 0.0, K[2], 0.0, K[1], K[3], 0.0, 0.0, 1.0]
+        ci.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        ci.p = [K[0], 0.0, K[2], 0.0, 0.0, K[1], K[3], 0.0, 0.0, 0.0, 1.0, 0.0]
+        self.info_pub.publish(ci)
+
     def publish_clock(self, t):
         m = Clock()
         m.clock = self.stamp(t)
@@ -446,12 +490,16 @@ def main():
                   rendering_dt=a.physics_dt * 4)
     stage = omni.usd.get_context().get_stage()
     dyn = build_scene(stage)
+    # A dome light is needed by ANY rendering, not just the viewport: the first
+    # camera test ran headless, never reached the GUI-only branch that created
+    # it, and returned three completely black 640x480 frames. Physics is
+    # unaffected either way.
+    from pxr import UsdLux
+    light = UsdLux.DomeLight.Define(stage, '/World/scene_light')
+    light.CreateIntensityAttr(700.0)
     if not _headless:
         # Display only: keep the entire arena visible without changing physics.
-        from pxr import UsdLux
         from isaacsim.core.utils.viewports import set_camera_view
-        light = UsdLux.DomeLight.Define(stage, '/World/gui_light')
-        light.CreateIntensityAttr(700.0)
         set_camera_view(eye=np.array([10., 7., 26.]),
                         target=np.array([10., 10., 0.]))
     print(f'  場景建立完成：動態 {len(dyn)} 個', flush=True)
@@ -548,6 +596,88 @@ def main():
                 if pr.GetName() == 'base_camera_link':
                     paint(stage, str(pr.GetPath()), (1.0, 0.25, 0.0), 'base_cam')
                     break
+
+    cam = None
+    cam_K = None
+    cam_optical = None
+    if a.camera.lower() == 'true':
+        from isaacsim.sensors.camera import Camera
+        for pr in walk(stage, prim):
+            if pr.GetName() == 'base_camera_color_optical_frame':
+                cam_optical = pr
+                break
+        if cam_optical is None:
+            print('  !! 找不到 base_camera_color_optical_frame', file=sys.stderr)
+            return 1
+        cam = Camera(prim_path='/World/base_camera', name='base_camera',
+                     resolution=(a.cam_width, a.cam_height),
+                     frequency=a.cam_hz)
+        cam.initialize()
+        # The URDF's *_color_optical_frame is the ROS optical convention
+        # (z forward, x right, y down). Isaac's own camera looks down -Z with
+        # +Y up, so the two differ by a 180 deg roll. Rather than hand-rolling
+        # that rotation, the pose is handed over with camera_axes='ros', which
+        # is the documented way to say "this quaternion is in ROS optical
+        # axes" -- and the saved PNGs are then checked by eye, because a
+        # silently transposed axis still produces a plausible-looking image.
+        xfc = UsdGeom.XformCache()
+        M = xfc.GetLocalToWorldTransform(cam_optical)
+        t_ = M.ExtractTranslation()
+        q_ = M.ExtractRotationQuat()
+        qi = q_.GetImaginary()
+        cam.set_world_pose(
+            np.array([t_[0], t_[1], t_[2]]),
+            np.array([q_.GetReal(), qi[0], qi[1], qi[2]]),
+            camera_axes='ros')
+        # Intrinsics come from the URDF's own <sensor name="base_camera_rgbd">
+        # block -- horizontal_fov 1.518 rad, 640x480, clip 0.1-10.0 -- not from
+        # the USD camera's defaults. Those defaults gave a 23.7 deg horizontal
+        # field of view, against the 87.0 deg the model actually declares.
+        hfov = a.cam_hfov
+        ha = float(cam.get_horizontal_aperture())
+        fpx = (a.cam_width / 2.0) / math.tan(hfov / 2.0)
+        cam.set_focal_length(ha / (2.0 * math.tan(hfov / 2.0)))
+        cam.set_clipping_range(a.cam_near, a.cam_far)
+        cam_K = (fpx, fpx, a.cam_width / 2.0, a.cam_height / 2.0)
+        print(f'\n  ── 底盤相機 ──')
+        print(f'    對齊 frame：{cam_optical.GetPath()}')
+        print(f'    位置 ({t_[0]:.4f}, {t_[1]:.4f}, {t_[2]:.4f})，'
+              f'解析度 {a.cam_width}x{a.cam_height}，{a.cam_hz:.0f} Hz')
+        print(f'    hfov {hfov:.4f} rad = {math.degrees(hfov):.1f}°（取自 URDF），'
+              f'clip {a.cam_near}–{a.cam_far} m')
+        print(f'    → fx=fy={fpx:.1f} px，cx={cam_K[2]:.1f} cy={cam_K[3]:.1f}，'
+              f'焦距設為 {float(cam.get_focal_length()):.3f}')
+        print(f'    發布 /base_camera/color/image_raw 與 .../camera_info，'
+              f'frame_id={Bridge.CAM_FRAME}（不接入導航）', flush=True)
+
+    if a.cam_probe and cam is not None:
+        # Direction test. A grey image of an empty corridor cannot show whether
+        # the axes are right: seed 1 facing +x has nothing within 10 m of the
+        # 87 deg view. Two coloured balls at known bearings can -- red dead
+        # ahead must land at the image centre, green offset to the robot's LEFT
+        # must land in the LEFT half, which is what distinguishes a correct
+        # optical frame from a mirrored one.
+        from isaacsim.core.api.objects import FixedSphere
+        pd, lo = [float(v) for v in a.cam_probe.split(',')]
+        _p, _q = robot.get_world_pose()
+        yw = yaw_of(_q)
+        cx_, cy_, cz_ = 17.3606, 14.8325, 0.3625   # 覆寫於下方
+        xfp = UsdGeom.XformCache()
+        _m = xfp.GetLocalToWorldTransform(cam_optical).ExtractTranslation()
+        cx_, cy_, cz_ = float(_m[0]), float(_m[1]), float(_m[2])
+        fwd = (cx_ + pd * math.cos(yw), cy_ + pd * math.sin(yw))
+        lft = (fwd[0] - lo * math.sin(yw), fwd[1] + lo * math.cos(yw))
+        FixedSphere(prim_path='/World/probe_red', name='probe_red',
+                    position=np.array([fwd[0], fwd[1], cz_]), radius=0.10,
+                    color=np.array([1.0, 0.0, 0.0]))
+        FixedSphere(prim_path='/World/probe_green', name='probe_green',
+                    position=np.array([lft[0], lft[1], cz_]), radius=0.10,
+                    color=np.array([0.0, 1.0, 0.0]))
+        for _ in range(5):
+            world.step(render=False)
+        print(f'\n  影像方向探針：紅球正前 {pd:.2f} m ({fwd[0]:.3f},{fwd[1]:.3f})，'
+              f'綠球再左 {lo:.2f} m ({lft[0]:.3f},{lft[1]:.3f})，'
+              f'皆與相機同高 z={cz_:.3f}', flush=True)
 
     print('\n  ── 檢查一：標記球不得參與碰撞或雷射 ──', flush=True)
     bad = [p for p in marker_paths
@@ -883,6 +1013,8 @@ def main():
         pe = max(1, int(round((1.0 / a.pose_rate) / dt)))
         oe = max(1, int(round((1.0 / 30.0) / dt)))          # gz odom 30 Hz
         re_ = max(1, int(round((1.0 / max(a.render_hz, 0.1)) / dt)))
+        ce = max(1, int(round((1.0 / max(a.cam_hz, 0.1)) / dt)))
+        cam_frames = 0
         dyn_pose = {n: np.array(dyn[n].get_world_pose()[0], dtype=float)
                     for n in dyn}
         xf5 = UsdGeom.XformCache()
@@ -933,13 +1065,41 @@ def main():
                     dyn_pose[nm][1] += c[1] * dt
                     h.set_world_pose(position=dyn_pose[nm])
 
-            world.step(render=(k % re_ == 0))
+            # a camera tick needs a rendered frame, so it forces render even
+            # when the viewport rate is lower
+            world.step(render=(k % re_ == 0 or (cam is not None and k % ce == 0)))
             node.publish_clock(t + dt)
             p_now, q_now = robot.get_world_pose()
 
             if k % oe == 0:
                 node.publish_odom(t + dt, p_now, q_now, [wx, wy], wz)
                 node.publish_joints(t + dt, names, robot.get_joint_positions())
+            if cam is not None and k % ce == 0:
+                # follow the robot: the camera prim is not parented under the
+                # articulation, so its pose is refreshed from the optical
+                # frame's own transform each tick
+                xf5.Clear()
+                Mc = xf5.GetLocalToWorldTransform(cam_optical)
+                tc = Mc.ExtractTranslation()
+                qc = Mc.ExtractRotationQuat()
+                qci = qc.GetImaginary()
+                cam.set_world_pose(
+                    np.array([tc[0], tc[1], tc[2]]),
+                    np.array([qc.GetReal(), qci[0], qci[1], qci[2]]),
+                    camera_axes='ros')
+                rgba = cam.get_rgba()
+                if rgba is not None and rgba.size:
+                    node.publish_image(t + dt, rgba, cam_K)
+                    cam_frames += 1
+                    if cam_frames <= a.cam_save:
+                        try:
+                            from PIL import Image as PILImage
+                            PILImage.fromarray(rgba[:, :, :3]).save(
+                                os.path.join(os.path.dirname(a.out),
+                                             f'cam_{cam_frames:03d}.png'))
+                        except Exception as e:
+                            print(f'    存 PNG 失敗：{e}', flush=True)
+
             if k % se == 0:
                 xf5.Clear()
                 o5 = xf5.GetLocalToWorldTransform(lidar_prim).ExtractTranslation()
@@ -1050,6 +1210,13 @@ def main():
                           goal_msgs_received=node.goal_count,
                           task_elapsed_sim=(None if node.goal_sim_t is None
                                             else _sim - node.goal_sim_t),
+                          camera=dict(enabled=(cam is not None),
+                                      frames=cam_frames,
+                                      width=a.cam_width, height=a.cam_height,
+                                      hz=a.cam_hz,
+                                      measured_hz=(cam_frames / _sim
+                                                   if _sim > 0 else None),
+                                      K=list(cam_K) if cam_K else None),
                           task_limit=a.task_limit, wall_limit=a.wall_limit,
                           wall_time=_wall,
                           rtf_measured=(_sim / _wall) if _wall > 0 else None,
