@@ -54,7 +54,9 @@ sleep 3
 HEADLESS="${HEADLESS:-true}"
 echo "[$(date +%T)] [1/6] 啟動 Isaac（headless=$HEADLESS, cpu_threads=${CPU_THREADS:-8}）..."
 "$ISAAC_PY" "${HERE}/isaac_bigarena_sim.py" --seed "$SEED" --method "$METHOD" \
-    --traj bigarena_traffic --headless "$HEADLESS" --duration "$((DURATION+60))" \
+    --traj bigarena_traffic --headless "$HEADLESS" \
+    --duration "${SIM_BUDGET:-900}" --task-limit "$DURATION" \
+    --wall-limit "${WALL_LIMIT:-1200}" \
     --render-hz "${RENDER_HZ:-12}" --cpu-limit "${CPU_LIMIT:-88}" \
     --cpu-threads "${CPU_THREADS:-8}" \
     --out "${HERE}/results/${TAG}.json" >> "$LOG" 2>&1 < /dev/null &
@@ -103,9 +105,15 @@ timeout 10 ros2 topic pub -t 3 -r 1 /initialpose \
   >> "$LOG" 2>&1 || true
 sleep 5
 
-# 4. 錄製
-echo "[$(date +%T)] [4/6] 開始錄製 ${DURATION}s ..."
-timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
+# 4. 錄製：先開始，涵蓋啟動與就緒檢查；上限只是防呆，正常由 Isaac 結束後才停
+# The previous run ended because THIS timer expired 180 s after recording
+# began, which included start-up and the readiness gate: the task itself had
+# only had 140.7 s of simulated time and was still closing on the goal. The
+# task clock now lives in the simulator and starts at the goal; this one is
+# only a backstop.
+REC_CAP="${REC_CAP:-1500}"
+echo "[$(date +%T)] [4/6] 開始錄製（防呆上限 ${REC_CAP}s，任務時限由模擬時間另計）..."
+timeout --foreground --signal=INT --kill-after=5 "${REC_CAP}s" \
   ros2 bag record -o "${HERE}/bags/${TAG}" \
   /clock /odom /odom_raw /odometry/filtered /amcl_pose /model/omni_bot/pose \
   /cmd_vel /cmd_vel_nav /cmd_vel_pre_shield /scan /scan_raw /plan /goal_pose \
@@ -206,8 +214,19 @@ timeout 15 ros2 topic pub -t 5 -r 1 /goal_pose geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: 'map'}, pose: {position: {x: $GX, y: $GY, z: 0.0}, orientation: {w: 1.0}}}" \
   >> "$LOG" 2>&1 || true
 
-# 6. 等錄製結束（Isaac 端在真值抵達或溫度中止時會自行結束）
-echo "[$(date +%T)] [6/6] 等待 ..."
+# 6. 等 Isaac 自己結束：它會先把底盤歸零、步進生效，再寫入停止原因與最後樣本。
+# 只有在那之後才停止錄製並清理，否則保存會被 cleanup 截斷（上一趟就是如此，
+# JSON 的 stop_reason 是 None）。
+echo "[$(date +%T)] [6/6] 等 Isaac 完成任務並保存（任務時限 ${DURATION}s 模擬時間）..."
+while kill -0 "$ISAAC_PID" 2>/dev/null; do
+    if ! kill -0 "$REC" 2>/dev/null; then
+        echo "[$(date +%T)] [6/6] 錄製已先結束（防呆上限），繼續等 Isaac 保存"
+    fi
+    sleep 2
+done
+echo "[$(date +%T)] [6/6] Isaac 已結束並保存，停止錄製"
+grep -a "停止原因" "$LOG" | tail -1
+pkill -INT -P "$REC" 2>/dev/null; kill -INT "$REC" 2>/dev/null
 wait $REC 2>/dev/null || true
 echo "[$(date +%T)] === 結束：$TAG ==="
 echo "[$(date +%T)]     bag: ${HERE}/bags/${TAG}"

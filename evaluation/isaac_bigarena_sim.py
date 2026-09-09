@@ -55,6 +55,10 @@ ap.add_argument('--render-hz', type=float, default=15.0)
 ap.add_argument('--cpu-limit', type=float, default=88.0)
 ap.add_argument('--scan-rate', type=float, default=10.0)
 ap.add_argument('--pose-rate', type=float, default=20.0)
+ap.add_argument('--task-limit', type=float, default=0.0,
+                help='任務時限（模擬秒），從 /goal_pose 發布起算；0 = 不設')
+ap.add_argument('--wall-limit', type=float, default=0.0,
+                help='牆鐘逾時（秒），處理程序卡住，與任務時限分開；0 = 不設')
 ap.add_argument('--duration', type=float, default=0.0,
                 help='0 = 只做檢查並保留畫面，不進入模擬迴圈')
 ap.add_argument('--kp', type=float, default=1.0e5)
@@ -337,6 +341,8 @@ def build_scene(stage):
 
 
 class Bridge(Node):
+    sim_t = 0.0
+
     def __init__(self, dyn_names):
         super().__init__('isaac_bigarena_sim')
         be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -354,6 +360,11 @@ class Bridge(Node):
                 PoseStamped, f'/model/{n}/pose', 10)
         self.robot_pose_pub = self.create_publisher(
             PoseStamped, '/model/omni_bot/pose', 10)
+        # The task clock starts when the goal is published, in SIMULATION time.
+        # Recording starts earlier and covers start-up and the readiness gate,
+        # so the two must not share one timer.
+        self.goal_sim_t = None
+        self.create_subscription(PoseStamped, '/goal_pose', self._goal, 10)
         # gz publishes this from gz-sim-odometry-publisher-system at 30 Hz:
         # true-pose derived, 2D, odom frame, child base_footprint, and already
         # in map coordinates. odom_tf_broadcaster relays it to /odom and emits
@@ -366,6 +377,10 @@ class Bridge(Node):
 
     def _cmd(self, m):
         self.cmd = [m.linear.x, m.linear.y, m.angular.z]
+
+    def _goal(self, _m):
+        if self.goal_sim_t is None:
+            self.goal_sim_t = self.sim_t
 
     def _dyn(self, n, m):
         self.dyn_cmd[n] = [m.linear.x, m.linear.y, m.angular.z]
@@ -850,6 +865,14 @@ def main():
         xf5 = UsdGeom.XformCache()
         log = []
         stop_reason = 'duration'
+        stop_flag = {'sig': False}
+
+        def _sig(_s, _f):
+            stop_flag['sig'] = True
+
+        import signal
+        signal.signal(signal.SIGTERM, _sig)
+        signal.signal(signal.SIGINT, _sig)
         t_wall0 = time.monotonic()
         nxt = t_wall0
         print(f'\n  ── 閉迴路開始：{a.duration:.0f} s 模擬時間，RTF {a.rtf:.1f}，'
@@ -857,6 +880,22 @@ def main():
               flush=True)
         for k in range(steps):
             t = k * dt
+            node.sim_t = t
+            if stop_flag['sig']:
+                stop_reason = 'signal'
+                print('\n  收到終止訊號', flush=True)
+                break
+            if a.task_limit > 0 and node.goal_sim_t is not None \
+                    and (t - node.goal_sim_t) > a.task_limit:
+                stop_reason = 'task_timeout'
+                print(f'\n  任務逾時：目標發布後 {t - node.goal_sim_t:.1f} s '
+                      f'（模擬時間）超過 {a.task_limit:.0f} s', flush=True)
+                break
+            if a.wall_limit > 0 and (time.monotonic() - t_wall0) > a.wall_limit:
+                stop_reason = 'wall_timeout'
+                print(f'\n  牆鐘逾時 {a.wall_limit:.0f} s（處理程序卡住的保護，'
+                      f'與任務時限分開）', flush=True)
+                break
             vx, vy, wz = node.cmd
             p_now, q_now = robot.get_world_pose()
             yw = yaw_of(q_now)
@@ -951,9 +990,29 @@ def main():
                 else:
                     nxt = time.monotonic()
 
+        # Zero the chassis and let it take effect BEFORE anything is saved, so
+        # the recorded last sample is the stopped state rather than whatever
+        # velocity happened to be latched when the loop broke.
+        robot.set_linear_velocity(np.array([0.0, 0.0, 0.0], dtype=np.float32))
+        robot.set_angular_velocity(np.array([0.0, 0.0, 0.0], dtype=np.float32))
+        for _ in range(20):
+            world.step(render=False)
+        p_end, q_end = robot.get_world_pose()
+        jp_end = robot.get_joint_positions()
+        rr_e, pp_e = rpy2(q_end)
+        final = dict(x=float(p_end[0]), y=float(p_end[1]),
+                     yaw=float(yaw_of(q_end)), roll=rr_e, pitch=pp_e,
+                     arm_err=max(abs(float(jp_end[idx[j]]) - ARM_TARGET[j])
+                                 for j in ARM_JOINTS),
+                     dist_goal=math.dist((float(p_end[0]), float(p_end[1])), GOAL))
         _wall = time.monotonic() - t_wall0
         _sim = log[-1]['t'] if log else 0.0
         rec['run'] = dict(stop_reason=stop_reason, log=log, sim_time=_sim,
+                          final_sample=final,
+                          goal_sim_t=node.goal_sim_t,
+                          task_elapsed_sim=(None if node.goal_sim_t is None
+                                            else _sim - node.goal_sim_t),
+                          task_limit=a.task_limit, wall_limit=a.wall_limit,
                           wall_time=_wall,
                           rtf_measured=(_sim / _wall) if _wall > 0 else None,
                           cpu_threads=a.cpu_threads)
@@ -972,6 +1031,11 @@ def main():
             if fin:
                 print(f'    與移動體最小間距 {min(fin):.3f} m')
         json.dump(rec, open(a.out, 'w'), ensure_ascii=False, indent=1)
+        print(f'  停止原因 {stop_reason}；'
+              + (f'任務歷時 {_sim - node.goal_sim_t:.1f} s（模擬，自目標發布）'
+                 if node.goal_sim_t is not None else '目標未發布')
+              + f'；最終真值 ({final["x"]:.3f}, {final["y"]:.3f})，'
+                f'距目標 {final["dist_goal"]:.3f} m', flush=True)
         print(f'  已寫入 {a.out}', flush=True)
         ex.shutdown()
         node.destroy_node()
