@@ -172,6 +172,20 @@ def generate_launch_description():
         # drives straight through the robot.
         bridge_args.append(f'/model/{name}/pose@geometry_msgs/msg/PoseStamped[gz.msgs.Pose')
 
+    # HEADING=1 turns on the optional heading objective (gmpc_scan_heading).
+    # Default off, so gmpc_scan and every frozen result are untouched: with the
+    # flag clear this dict is empty and the node falls back to its own defaults,
+    # which leave Q's yaw diagonal at zero and hand path_processor no desired
+    # yaw -- verified bit-identical against the pre-change commit over 500
+    # randomised reference windows.
+    _heading = os.environ.get('HEADING', '0') == '1'
+    heading_overrides = {
+        'heading_enable':      True,
+        'heading_weight':      float(os.environ.get('HEADING_W', '2.0')),
+        'heading_lookahead_m': float(os.environ.get('HEADING_LOOK', '1.2')),
+        'heading_rate_max':    float(os.environ.get('HEADING_RATE', '1.0')),
+    } if _heading else {}
+
     cbf_overrides = {
         # safe_margin 0.38 = robot radius 0.30 + 0.08 m buffer. At exactly the
         # robot radius (old 0.30) the CBF target was "edge just grazes surface",
@@ -410,11 +424,13 @@ def generate_launch_description():
         # cmd_vel_nav so velocity_smoother (above) can rate-limit it.
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
              name='gmpc_controller', output='screen',
-             parameters=[gmpc_params, cbf_overrides, {'cmd_vel_topic': gmpc_cmd_topic}],
+             parameters=[gmpc_params, cbf_overrides, heading_overrides,
+                         {'cmd_vel_topic': gmpc_cmd_topic}],
              condition=IfCondition(cbf)),
         Node(package='ammr_wholebody_mpc', executable='gmpc_node',
              name='gmpc_controller', output='screen',
-             parameters=[gmpc_params, {'cmd_vel_topic': gmpc_cmd_topic}],
+             parameters=[gmpc_params, heading_overrides,
+                         {'cmd_vel_topic': gmpc_cmd_topic}],
              condition=UnlessCondition(cbf)),
         # Perception (scan mode): real /scan -> dynamic /gmpc/obstacles + static
         # wall points /gmpc/static_obstacles.

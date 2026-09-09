@@ -60,6 +60,13 @@ ARM="${ARM:-0}"
 if [ "$ARM" = "1" ]; then GUI_ARG="$GUI_ARG use_arm:=true"; fi
 
 case "$METHOD" in
+  gmpc_scan_heading)
+                  # Same stack as gmpc_scan; HEADING=1 enables the optional
+                  # heading objective in the launch. gmpc_scan itself is
+                  # untouched, and results go to their own tag.
+                  export HEADING=1
+                  LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan"
+                  AMETHOD="gmpc_cbf"; TAG="scan_heading" ;;
   gmpc_scan)      LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan";                    AMETHOD="gmpc_cbf"; TAG="scan"      ;;
   gmpc_scan_nosm) LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=scan use_smoother:=false"; AMETHOD="gmpc_cbf"; TAG="scan_nosm" ;;
   gmpc_truth)     LAUNCH_ARGS="omni_bot_dynamic.launch.py $GUI_ARG obstacle_source:=truth";                   AMETHOD="gmpc_cbf"; TAG="truth"     ;;
