@@ -171,6 +171,8 @@ from rclpy.node import Node                                       # noqa: E402
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy  # noqa: E402
 from rosgraph_msgs.msg import Clock                               # noqa: E402
 from geometry_msgs.msg import PoseStamped, Twist                  # noqa: E402
+from nav_msgs.msg import Odometry                                 # noqa: E402
+from sensor_msgs.msg import JointState                            # noqa: E402
 from sensor_msgs.msg import LaserScan                             # noqa: E402
 
 SCAN_N, SCAN_MIN, SCAN_MAX = 360, -3.14159, 3.14159
@@ -188,6 +190,18 @@ def cpu_temp_c():
         except Exception:
             continue
     return None
+
+
+MOVER_R = {m['name']: (m['dims'][0] if m['kind'] == 'cylinder'
+                       else max(m['dims'][0], m['dims'][1]) / 2.0)
+           for m in MODELS if m['kinematic'] and m['dims']}
+
+
+def rpy2(q):
+    w, x, y, z = [float(v) for v in q]
+    roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+    sp = max(-1.0, min(1.0, 2 * (w * y - z * x)))
+    return roll, math.asin(sp)
 
 
 def q_yaw(y):
@@ -332,6 +346,15 @@ class Bridge(Node):
                 PoseStamped, f'/model/{n}/pose', 10)
         self.robot_pose_pub = self.create_publisher(
             PoseStamped, '/model/omni_bot/pose', 10)
+        # gz publishes this from gz-sim-odometry-publisher-system at 30 Hz:
+        # true-pose derived, 2D, odom frame, child base_footprint, and already
+        # in map coordinates. odom_tf_broadcaster relays it to /odom and emits
+        # odom->base_footprint, and the EKF fuses it with /amcl_pose. It is
+        # part of the original chain, not truth being injected on top of it.
+        self.odom_pub = self.create_publisher(Odometry, '/odom_raw', 10)
+        # robot_state_publisher needs these to complete the arm's TF chain;
+        # gz's ros2_control provided them there.
+        self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
 
     def _cmd(self, m):
         self.cmd = [m.linear.x, m.linear.y, m.angular.z]
@@ -345,6 +368,34 @@ class Bridge(Node):
         s.sec = int(t)
         s.nanosec = int(round((t - int(t)) * 1e9))
         return s
+
+    def publish_odom(self, t, p, q, v_world, wz):
+        m = Odometry()
+        m.header.stamp = self.stamp(t)
+        m.header.frame_id = 'odom'
+        m.child_frame_id = 'base_footprint'
+        m.pose.pose.position.x = float(p[0])
+        m.pose.pose.position.y = float(p[1])
+        m.pose.pose.position.z = 0.0
+        m.pose.pose.orientation.w = float(q[0])
+        m.pose.pose.orientation.x = float(q[1])
+        m.pose.pose.orientation.y = float(q[2])
+        m.pose.pose.orientation.z = float(q[3])
+        # gz reports the body twist in child_frame_id
+        yw = yaw_of(q)
+        m.twist.twist.linear.x = float(v_world[0] * math.cos(yw)
+                                       + v_world[1] * math.sin(yw))
+        m.twist.twist.linear.y = float(-v_world[0] * math.sin(yw)
+                                       + v_world[1] * math.cos(yw))
+        m.twist.twist.angular.z = float(wz)
+        self.odom_pub.publish(m)
+
+    def publish_joints(self, t, names_, pos):
+        m = JointState()
+        m.header.stamp = self.stamp(t)
+        m.name = list(names_)
+        m.position = [float(v) for v in pos]
+        self.js_pub.publish(m)
 
     def publish_clock(self, t):
         m = Clock()
@@ -767,6 +818,149 @@ def main():
             node.destroy_node()
             rclpy.shutdown()
         print('\n  靜態驗收完成，結束（未進入導航）', flush=True)
+        return 0
+
+    # ---- closed-loop run ---------------------------------------------------
+    if a.duration > 0.0:
+        import time
+        rclpy.init()
+        node = Bridge(list(dyn))
+        import threading
+        from rclpy.executors import SingleThreadedExecutor
+        ex = SingleThreadedExecutor()
+        ex.add_node(node)
+        threading.Thread(target=ex.spin, daemon=True).start()
+
+        dt = a.physics_dt
+        steps = int(a.duration / dt)
+        se = max(1, int(round((1.0 / a.scan_rate) / dt)))
+        pe = max(1, int(round((1.0 / a.pose_rate) / dt)))
+        oe = max(1, int(round((1.0 / 30.0) / dt)))          # gz odom 30 Hz
+        re_ = max(1, int(round((1.0 / max(a.render_hz, 0.1)) / dt)))
+        dyn_pose = {n: np.array(dyn[n].get_world_pose()[0], dtype=float)
+                    for n in dyn}
+        xf5 = UsdGeom.XformCache()
+        log = []
+        stop_reason = 'duration'
+        t_wall0 = time.monotonic()
+        nxt = t_wall0
+        print(f'\n  ── 閉迴路開始：{a.duration:.0f} s 模擬時間，RTF {a.rtf:.1f}，'
+              f'畫面 {1.0/(re_*dt):.0f} Hz，CPU 中止線 {a.cpu_limit:.0f} °C ──',
+              flush=True)
+        for k in range(steps):
+            t = k * dt
+            vx, vy, wz = node.cmd
+            p_now, q_now = robot.get_world_pose()
+            yw = yaw_of(q_now)
+            wx = vx * math.cos(yw) - vy * math.sin(yw)
+            wy = vx * math.sin(yw) + vy * math.cos(yw)
+            robot.set_linear_velocity(np.array([wx, wy, 0.0], dtype=np.float32))
+            robot.set_angular_velocity(np.array([0.0, 0.0, wz], dtype=np.float32))
+            for nm, h in dyn.items():
+                c = node.dyn_cmd[nm]
+                if c[0] or c[1]:
+                    dyn_pose[nm][0] += c[0] * dt
+                    dyn_pose[nm][1] += c[1] * dt
+                    h.set_world_pose(position=dyn_pose[nm])
+
+            world.step(render=(k % re_ == 0))
+            node.publish_clock(t + dt)
+            p_now, q_now = robot.get_world_pose()
+
+            if k % oe == 0:
+                node.publish_odom(t + dt, p_now, q_now, [wx, wy], wz)
+                node.publish_joints(t + dt, names, robot.get_joint_positions())
+            if k % se == 0:
+                xf5.Clear()
+                o5 = xf5.GetLocalToWorldTransform(lidar_prim).ExtractTranslation()
+                y5 = yaw_of(q_now)
+                m = LaserScan()
+                m.header.stamp = node.stamp(t + dt)
+                m.header.frame_id = 'lidar_link'
+                m.angle_min, m.angle_max = SCAN_MIN, SCAN_MAX
+                m.angle_increment = SCAN_INC
+                m.range_min, m.range_max = RANGE_MIN, RANGE_MAX
+                org5 = [float(o5[0]), float(o5[1]), float(o5[2])]
+                m.ranges = [ray_range(query, org5,
+                                      [math.cos(y5 + SCAN_MIN + i * SCAN_INC),
+                                       math.sin(y5 + SCAN_MIN + i * SCAN_INC), 0.0],
+                                      RANGE_MAX, excluded)[0]
+                            for i in range(SCAN_N)]
+                node.scan_pub.publish(m)
+            if k % pe == 0:
+                for nm in dyn:
+                    ps = PoseStamped()
+                    ps.header.stamp = node.stamp(t + dt)
+                    ps.header.frame_id = 'world'
+                    ps.pose.position.x = float(dyn_pose[nm][0])
+                    ps.pose.position.y = float(dyn_pose[nm][1])
+                    ps.pose.position.z = float(dyn_pose[nm][2])
+                    ps.pose.orientation.w = 1.0
+                    node.pose_pub[nm].publish(ps)
+                ps = PoseStamped()
+                ps.header.stamp = node.stamp(t + dt)
+                ps.header.frame_id = 'world'
+                ps.pose.position.x = float(p_now[0])
+                ps.pose.position.y = float(p_now[1])
+                ps.pose.position.z = float(p_now[2])
+                ps.pose.orientation.w = float(q_now[0])
+                ps.pose.orientation.x = float(q_now[1])
+                ps.pose.orientation.y = float(q_now[2])
+                ps.pose.orientation.z = float(q_now[3])
+                node.robot_pose_pub.publish(ps)
+                jp = robot.get_joint_positions()
+                arm_err = max(abs(float(jp[idx[j]]) - ARM_TARGET[j])
+                              for j in ARM_JOINTS)
+                clr = min(
+                    [math.hypot(float(p_now[0]) - dyn_pose[n_][0],
+                                float(p_now[1]) - dyn_pose[n_][1])
+                     - (0.25 if MOVER_R.get(n_) is None else MOVER_R[n_])
+                     for n_ in dyn] or [float('inf')])
+                rr_, pp_ = rpy2(q_now)
+                log.append(dict(t=t + dt, x=float(p_now[0]), y=float(p_now[1]),
+                                yaw=float(yaw_of(q_now)), roll=rr_, pitch=pp_,
+                                cmd=[vx, vy, wz], arm_err=arm_err,
+                                clr_dyn=float(clr),
+                                dist_goal=math.dist((float(p_now[0]),
+                                                     float(p_now[1])), GOAL)))
+                if log[-1]['dist_goal'] <= 0.25:
+                    stop_reason = 'goal_reached_truth'
+                    print(f'\n  ** 真值抵達目標：t={t+dt:.2f} s，'
+                          f'距目標 {log[-1]["dist_goal"]:.3f} m **', flush=True)
+                    break
+            if k % 200 == 0 and a.cpu_limit > 0:
+                c = cpu_temp_c()
+                if c is not None and c >= a.cpu_limit:
+                    stop_reason = 'thermal_abort'
+                    print(f'\n  !! CPU {c:.0f} °C ≥ {a.cpu_limit:.0f} °C，'
+                          f'溫度中止（非導航失敗）', flush=True)
+                    break
+            if a.rtf > 0:
+                nxt += dt
+                sl = nxt - time.monotonic()
+                if sl > 0:
+                    time.sleep(sl)
+                else:
+                    nxt = time.monotonic()
+
+        rec['run'] = dict(stop_reason=stop_reason, log=log,
+                          sim_time=log[-1]['t'] if log else 0.0)
+        if log:
+            L = log
+            print(f'\n  ── 結束（{stop_reason}）──')
+            print(f'    真值終點 ({L[-1]["x"]:.3f}, {L[-1]["y"]:.3f})，'
+                  f'距目標 {L[-1]["dist_goal"]:.3f} m')
+            print(f'    手臂保持誤差 最大 {max(r["arm_err"] for r in L)*1000:.3f} mrad')
+            print(f'    底盤 |roll| 最大 {max(abs(r["roll"]) for r in L)*57.3:.4f}°，'
+                  f'|pitch| 最大 {max(abs(r["pitch"]) for r in L)*57.3:.4f}°')
+            fin = [r['clr_dyn'] for r in L if math.isfinite(r['clr_dyn'])]
+            if fin:
+                print(f'    與移動體最小間距 {min(fin):.3f} m')
+        json.dump(rec, open(a.out, 'w'), ensure_ascii=False, indent=1)
+        print(f'  已寫入 {a.out}', flush=True)
+        ex.shutdown()
+        node.destroy_node()
+        rclpy.shutdown()
         return 0
 
     # ---- keep the window ---------------------------------------------------

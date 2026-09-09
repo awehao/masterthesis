@@ -23,7 +23,7 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
+from launch.actions import (DeclareLaunchArgument, ExecuteProcess, LogInfo,
                             SetEnvironmentVariable, TimerAction)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import Command, LaunchConfiguration, PythonExpression
@@ -106,6 +106,7 @@ def generate_launch_description():
     # Read once: the smoother's output topic depends on it, and a launch-time
     # substitution cannot be used to pick a remapping.
     _shield = os.environ.get('SHIELD', '0') == '1'
+    _no_gz = os.environ.get('NO_GZ', '0') == '1'
     truth_pose = PythonExpression(
         ["'", str(os.environ.get('TRUTH_POSE', '0')), "' == '1'"])
     use_arm = LaunchConfiguration('use_arm')
@@ -534,13 +535,23 @@ def generate_launch_description():
                               description='true = GMPC->cmd_vel_nav->velocity_smoother->/cmd_vel; '
                                           'false = GMPC drives /cmd_vel directly'),
 
+        # NO_GZ=1 leaves out ONLY the three Gazebo-specific actions -- the
+        # simulator process, the ros_gz bridge and the model spawn -- so that
+        # another simulator can supply /clock, /odom_raw, /scan_raw,
+        # /cmd_vel (in) and the /model/<dyn>/{cmd_vel,pose} pair on the same
+        # topics. Every other node, parameter and ordering below is shared, so
+        # the two runs cannot silently diverge in the parts being compared.
+        # Default 0: the Gazebo behaviour is unchanged.
         ExecuteProcess(cmd=['gz', 'sim', '-r', world_file], output='screen',
-                       condition=IfCondition(gui)),
+                       condition=IfCondition(gui)) if not _no_gz else LogInfo(
+                           msg='NO_GZ=1: gz sim 未啟動'),
         ExecuteProcess(cmd=['gz', 'sim', '-s', '-r', world_file], output='screen',
-                       condition=UnlessCondition(gui)),
+                       condition=UnlessCondition(gui)) if not _no_gz else LogInfo(
+                           msg='NO_GZ=1: gz sim (headless) 未啟動'),
 
         Node(package='ros_gz_bridge', executable='parameter_bridge',
-             arguments=bridge_args, output='screen'),
+             arguments=bridge_args, output='screen') if not _no_gz else LogInfo(
+                 msg='NO_GZ=1: ros_gz_bridge 未啟動'),
         Node(package='robot_state_publisher', executable='robot_state_publisher',
              parameters=[{'robot_description': robot_description, 'use_sim_time': True}]),
         Node(package='ammr_bringup', executable='odom_tf_broadcaster',
@@ -571,7 +582,7 @@ def generate_launch_description():
                               os.environ.get('MASK_HW', '10.0'))}],
              output='screen'),
 
-        TimerAction(period=6.0, actions=[Node(
+        TimerAction(period=6.0, actions=([] if _no_gz else [Node(
             package='ros_gz_sim', executable='create',
             arguments=['-name', 'omni_bot', '-topic', 'robot_description',
                        # Spawn pose, so a batch can randomise where a traverse
@@ -579,7 +590,7 @@ def generate_launch_description():
                        # origin, which is what every recorded result used.
                        '-x', os.environ.get('SPAWN_X', '0.0'),
                        '-y', os.environ.get('SPAWN_Y', '0.0'),
-                       '-z', '0.0'], output='screen')]),
+                       '-z', '0.0'], output='screen')])),
 
         # move the obstacles (ping-pong)
         TimerAction(period=8.0, actions=[Node(

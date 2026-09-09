@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# One bigarena trial in Isaac Sim, phase-4 chain, arm carried tucked.
+#
+# Only the simulator differs from the Gazebo runs: omni_bot_dynamic.launch.py
+# is started with NO_GZ=1, which omits exactly three actions (gz sim, the
+# ros_gz bridge, the model spawn) and keeps every other node, parameter and
+# ordering. Isaac supplies /clock, /odom_raw, /scan_raw, consumes /cmd_vel and
+# handles /model/<dyn>/{cmd_vel,pose}.
+#
+# Usage: ./run_bigarena_isaac.sh [METHOD] [SEED] [DURATION_S]
+WS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source /opt/ros/jazzy/setup.bash
+source "${WS_ROOT}/install/setup.bash"
+set -u
+
+METHOD="${1:-gmpc_scan}"; SEED="${2:-1}"; DURATION="${3:-180}"
+POSES_CSV="${POSES_CSV:-${HERE}/results/bigarena_poses.csv}"
+ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
+TAG="isaac_bigarena_${METHOD}__seed${SEED}"
+LOG="${HERE}/logs/${TAG}.log"; mkdir -p "${HERE}/logs"
+read -r SX SY GX GY < <(awk -F, -v s="$SEED" 'NR>1 && $1==s {print $2,$3,$4,$5; exit}' "$POSES_CSV")
+if [ -z "${SX:-}" ]; then echo "POSES_CSV 沒有 seed=$SEED"; exit 1; fi
+echo "[$(date +%T)] 案例 method=$METHOD seed=$SEED start=($SX,$SY) goal=($GX,$GY) dur=${DURATION}s"
+echo "[$(date +%T)] POSES_CSV=$POSES_CSV  TRAJ=bigarena_traffic  BIGARENA=1"
+
+PIDS=()
+NODE_PAT='isaac_bigarena_sim|ros2 launch|ros2 bag|ros2 topic pub|nav2_|map_server|amcl'
+NODE_PAT+='|planner_server|lifecycle_manager|velocity_smoother|gmpc_node|scan_relay'
+NODE_PAT+='|scan_obstacle_tracker|obstacle_aggregator|scan_safety_shield|ekf_node'
+NODE_PAT+='|odom_tf_broadcaster|dynamic_obstacle_driver|robot_state_publisher'
+NODE_PAT+='|goal_to_plan_relay|foxglove_bridge|goal_watcher'
+cleanup() {
+  echo "[$(date +%T)] cleanup ..."
+  for p in "${PIDS[@]:-}"; do pkill -INT -P "$p" 2>/dev/null; kill -INT "$p" 2>/dev/null; done
+  sleep 3; pkill -INT -f "$NODE_PAT" 2>/dev/null; sleep 3
+  pkill -KILL -f "$NODE_PAT" 2>/dev/null; sleep 1
+  ros2 daemon stop >/dev/null 2>&1; sleep 1; ros2 daemon start >/dev/null 2>&1
+  echo "[$(date +%T)] cleanup done"
+}
+trap cleanup EXIT INT TERM
+
+# 1. Isaac：GUI，場景與機器人就位
+echo "[$(date +%T)] [1/6] 啟動 Isaac（GUI）..."
+"$ISAAC_PY" "${HERE}/isaac_bigarena_sim.py" --seed "$SEED" --method "$METHOD" \
+    --traj bigarena_traffic --headless false --duration "$((DURATION+60))" \
+    --render-hz "${RENDER_HZ:-12}" --cpu-limit "${CPU_LIMIT:-88}" \
+    --out "${HERE}/results/${TAG}.json" >> "$LOG" 2>&1 < /dev/null &
+PIDS+=( $! )
+echo "[$(date +%T)] [1/6] 等 /clock（最多 300 s）..."
+for i in $(seq 1 300); do
+  timeout 2 ros2 topic echo --once /clock rosgraph_msgs/msg/Clock >/dev/null 2>&1 && \
+    { echo "[$(date +%T)] [1/6]   /clock 就緒（${i}s）"; break; }
+  sleep 1
+done
+
+# 2. 導航鏈：同一支 launch，只跳過 gz 三個節點
+echo "[$(date +%T)] [2/6] 啟動導航鏈（NO_GZ=1, BIGARENA=1, TRAJ=bigarena_traffic）..."
+NO_GZ=1 BIGARENA=1 TRAJ=bigarena_traffic SPAWN_X="$SX" SPAWN_Y="$SY" \
+  ros2 launch my_omnibot_description omni_bot_dynamic.launch.py \
+  gui:=false use_arm:=true >> "$LOG" 2>&1 < /dev/null &
+PIDS+=( $! )
+sleep 25
+
+# 3. AMCL 初始位姿：起點，不是原點
+echo "[$(date +%T)] [3/6] 設定 AMCL 初始位姿 ($SX, $SY) ..."
+timeout 10 ros2 topic pub -t 3 -r 1 /initialpose \
+  geometry_msgs/msg/PoseWithCovarianceStamped \
+  "{header: {frame_id: 'map'}, pose: {pose: {position: {x: $SX, y: $SY, z: 0.0}, orientation: {w: 1.0}}}}" \
+  >> "$LOG" 2>&1 || true
+sleep 5
+
+# 4. 錄製
+echo "[$(date +%T)] [4/6] 開始錄製 ${DURATION}s ..."
+timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
+  ros2 bag record -o "${HERE}/bags/${TAG}" \
+  /clock /odom /odom_raw /odometry/filtered /amcl_pose /model/omni_bot/pose \
+  /cmd_vel /cmd_vel_nav /cmd_vel_pre_shield /scan /scan_raw /plan /goal_pose \
+  /tf /tf_static /gmpc/solve_time_ms /gmpc/min_h /gmpc/diag /joint_states \
+  >> "$LOG" 2>&1 < /dev/null &
+REC=$!; PIDS+=( $REC )
+sleep 3
+
+# 5. 目標
+echo "[$(date +%T)] [5/6] 等 /goal_pose 訂閱者後發布目標 ($GX, $GY) ..."
+for i in $(seq 1 30); do
+  c=$(ros2 topic info /goal_pose 2>/dev/null | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
+  [ "${c:-0}" -ge 2 ] && { echo "[$(date +%T)] [5/6]   訂閱者=$c（${i}s）"; break; }
+  sleep 1
+done
+echo "[$(date +%T)] [5/6] 發布目標（時間點記錄於此）"
+timeout 15 ros2 topic pub -t 5 -r 1 /goal_pose geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'map'}, pose: {position: {x: $GX, y: $GY, z: 0.0}, orientation: {w: 1.0}}}" \
+  >> "$LOG" 2>&1 || true
+
+# 6. 等錄製結束（Isaac 端在真值抵達或溫度中止時會自行結束）
+echo "[$(date +%T)] [6/6] 等待 ..."
+wait $REC 2>/dev/null || true
+echo "[$(date +%T)] === 結束：$TAG ==="
+echo "[$(date +%T)]     bag: ${HERE}/bags/${TAG}"
+echo "[$(date +%T)]     log: $LOG"
