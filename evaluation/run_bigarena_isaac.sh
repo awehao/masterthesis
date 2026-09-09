@@ -101,10 +101,14 @@ if [ "$clock_ok" -ne 1 ]; then
 fi
 
 # 2. 導航鏈：同一支 launch，只跳過 gz 三個節點
+# The launch's gui:= argument is its Gazebo-GUI switch, but it ALSO gates
+# foxglove_bridge. Passing false to avoid a gz window silently disabled the
+# bridge as well, which is why no Foxglove was ever reachable. NO_GZ=1
+# already removes gz entirely, so gui:=true here only enables the bridge.
 echo "[$(date +%T)] [2/6] 啟動導航鏈（NO_GZ=1, BIGARENA=1, TRAJ=bigarena_traffic）..."
 NO_GZ=1 BIGARENA=1 TRAJ=bigarena_traffic SPAWN_X="$SX" SPAWN_Y="$SY" \
   ros2 launch my_omnibot_description omni_bot_dynamic.launch.py \
-  gui:=false use_arm:=true >> "$LOG" 2>&1 < /dev/null &
+  gui:="${LAUNCH_GUI:-true}" use_arm:=true >> "$LOG" 2>&1 < /dev/null &
 PIDS+=( $! )
 sleep 25
 
