@@ -33,6 +33,14 @@ ap.add_argument('--pose-key', default='',
                 help="'' = the top-level joint1..joint6 (spawn pose); "
                      "or a named block such as test_start / pregrasp_reference")
 ap.add_argument('--headless', default='false')
+ap.add_argument('--highlight', default='true',
+                help='把底盤相機染色，並在手腕相機位置放一個標記球')
+ap.add_argument('--render-hz', type=float, default=20.0,
+                help='保留視窗時的畫面更新率；越低越省 CPU')
+ap.add_argument('--cpu-limit', type=float, default=88.0,
+                help='CPU 超過這個溫度就自動結束（0 = 不檢查）')
+ap.add_argument('--hold-s', type=float, default=0.0,
+                help='保留視窗的秒數；0 = 直到關閉視窗')
 ap.add_argument('--experience', default='',
                 help='kit experience 檔；留空且非 headless 時用 isaacsim.exp.full.kit')
 ap.add_argument('--physics-dt', type=float, default=1.0 / 200.0)
@@ -98,6 +106,64 @@ import omni.usd                                                   # noqa: E402
 sys.path.insert(0, HERE)
 from isaac_common import (import_urdf, walk, physics_parts,       # noqa: E402
                           bind_frictionless, collision_prims, bbox_caches)
+
+
+def cpu_temp_c():
+    """AMD package temperature, the sensor the thermal limit is judged on."""
+    import glob
+    for d in glob.glob('/sys/class/hwmon/*/'):
+        try:
+            if open(d + 'name').read().strip() != 'k10temp':
+                continue
+            return int(open(d + 'temp1_input').read()) / 1000.0
+        except Exception:
+            continue
+    return None
+
+
+def paint(stage, prim_path, rgb, name):
+    """Bind a plain coloured surface to every Gprim under prim_path.
+
+    displayColor alone is not enough: RTX draws the bound material, and these
+    links already carry one from the URDF import, so the colour would not show.
+    """
+    from pxr import Gf, Sdf, UsdShade
+    mat_path = f'/World/Looks/{name}'
+    stage.DefinePrim('/World/Looks', 'Scope')
+    mat = UsdShade.Material.Define(stage, mat_path)
+    sh = UsdShade.Shader.Define(stage, mat_path + '/surface')
+    sh.CreateIdAttr('UsdPreviewSurface')
+    sh.CreateInput('diffuseColor', Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*rgb))
+    sh.CreateInput('emissiveColor', Sdf.ValueTypeNames.Color3f).Set(
+        Gf.Vec3f(rgb[0] * 0.4, rgb[1] * 0.4, rgb[2] * 0.4))
+    sh.CreateInput('roughness', Sdf.ValueTypeNames.Float).Set(0.4)
+    mat.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), 'surface')
+    n = 0
+    for pr in walk(stage, prim_path):
+        if not pr.IsA(UsdGeom.Gprim) or pr.IsInstanceProxy():
+            continue
+        UsdShade.MaterialBindingAPI.Apply(pr).Bind(mat)
+        pr.CreateAttribute('primvars:displayColor',
+                           Sdf.ValueTypeNames.Color3fArray).Set(
+            [Gf.Vec3f(*rgb)])
+        n += 1
+    return n
+
+
+def marker(stage, path, xyz, radius, rgb, name):
+    """A free-standing sphere at a world position.
+
+    The wrist camera has no geometry at all in the URDF -- nine coordinate
+    frames and nothing to draw -- so nothing is being hidden or lost; there is
+    simply no shape. This marks where it is. It is NOT part of the robot: no
+    collision, no physics, and it does not move with the arm.
+    """
+    from pxr import Gf, UsdGeom
+    sp = UsdGeom.Sphere.Define(stage, path)
+    sp.CreateRadiusAttr(radius)
+    UsdGeom.Xformable(sp).AddTranslateOp().Set(Gf.Vec3d(*[float(v) for v in xyz]))
+    paint(stage, path, rgb, name)
+    return path
 
 
 def rpy(q):
@@ -211,9 +277,10 @@ def main():
 
     xf = UsdGeom.XformCache()
     print('\n  ── 安裝位置（world 座標，底盤在原點）──', flush=True)
-    landmarks = ['base_link', 'lidar_link', 'link_base', 'link6', 'link_eef',
-                 'link_tcp', 'uflite_gripper_link', 'uflite_finger1',
-                 'uflite_finger2', 'camera_link', 'camera_color_optical_frame']
+    landmarks = ['base_link', 'lidar_link', 'base_camera_link', 'link_base',
+                 'link6', 'link_eef', 'link_tcp', 'uflite_gripper_link',
+                 'uflite_finger1', 'uflite_finger2', 'camera_link',
+                 'camera_color_optical_frame']
     found = {}
     for pr in walk(stage, prim):
         nm = pr.GetName()
@@ -229,6 +296,29 @@ def main():
     if 'link_base' in found and 'base_link' in found:
         d = found['link_base'] - found['base_link']
         print(f'    → 手臂底座相對底盤：({d[0]:+.4f}, {d[1]:+.4f}, {d[2]:+.4f}) m')
+
+    if a.highlight.lower() == 'true':
+        print('\n  ── 標示 ──', flush=True)
+        base_cam = None
+        for pr in walk(stage, prim):
+            if pr.GetName() == 'base_camera_link':
+                base_cam = str(pr.GetPath())
+                break
+        if base_cam:
+            n_ = paint(stage, base_cam, (1.0, 0.25, 0.0), 'base_cam_orange')
+            print(f'    底盤相機 {base_cam} → 橘紅色（{n_} 個 Gprim）')
+        else:
+            print('    !! 找不到 base_camera_link')
+        if 'camera_link' in found:
+            marker(stage, '/World/markers/wrist_camera', found['camera_link'],
+                   0.030, (0.0, 0.85, 1.0), 'wrist_cam_cyan')
+            print(f'    手腕相機在 URDF 中無任何幾何，於其位置放青色標記球 r=30 mm'
+                  f'（{found["camera_link"][0]:+.3f}, {found["camera_link"][1]:+.3f},'
+                  f' {found["camera_link"][2]:+.3f}）')
+        if 'lidar_link' in found:
+            marker(stage, '/World/markers/lidar', found['lidar_link'],
+                   0.020, (0.2, 1.0, 0.2), 'lidar_green')
+            print('    lidar 位置放綠色標記球 r=20 mm')
 
     # ---- settle: droop / tipping / penetration ----------------------------
     print(f'\n  ── 啟動物理 {a.settle_s:.1f} s ──', flush=True)
@@ -285,15 +375,32 @@ def main():
         # where nobody is watching the temperature -- it measured 88 C while
         # the model was simply being looked at.
         import time
-        nxt = time.monotonic()
+        every = max(1, int(round((1.0 / max(a.render_hz, 0.1)) / a.physics_dt)))
+        print(f'    畫面每 {every} 個物理步更新一次（約 {1.0/(every*a.physics_dt):.0f} Hz）'
+              + (f'，CPU 超過 {a.cpu_limit:.0f} °C 自動結束' if a.cpu_limit > 0 else ''),
+              flush=True)
+        t0 = time.monotonic()
+        nxt = t0
+        k = 0
         while sim_app.is_running():
-            world.step(render=True)
+            world.step(render=(k % every == 0))
+            k += 1
             nxt += a.physics_dt
             slack = nxt - time.monotonic()
             if slack > 0:
                 time.sleep(slack)
             else:
                 nxt = time.monotonic()
+            if k % 200 == 0:
+                if a.cpu_limit > 0:
+                    c = cpu_temp_c()
+                    if c is not None and c >= a.cpu_limit:
+                        print(f'\n  !! CPU {c:.0f} °C ≥ {a.cpu_limit:.0f} °C，'
+                              f'自動結束以免逼近溫度上限', flush=True)
+                        break
+                if a.hold_s > 0 and (time.monotonic() - t0) > a.hold_s:
+                    print(f'\n  已保留 {a.hold_s:.0f} s，結束', flush=True)
+                    break
     return 0
 
 
