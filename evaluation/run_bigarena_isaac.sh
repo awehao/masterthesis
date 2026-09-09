@@ -17,8 +17,19 @@ set -u
 METHOD="${1:-gmpc_scan}"; SEED="${2:-1}"; DURATION="${3:-180}"
 POSES_CSV="${POSES_CSV:-${HERE}/results/bigarena_poses.csv}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
-TAG="isaac_bigarena_${METHOD}__seed${SEED}"
-LOG="${HERE}/logs/${TAG}.log"; mkdir -p "${HERE}/logs"
+# Every run gets its own directory. The previous scheme reused one name per
+# (method, seed), so preparing a re-run meant deleting the last one -- which is
+# how the earlier seed-1 bag was lost and its task time became a reconstruction
+# rather than a measurement. RUN_ID can be set to label a run; it never
+# overwrites, because the timestamp is always part of the path.
+RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+TAG="isaac_bigarena_${METHOD}__seed${SEED}__${RUN_ID}"
+RUN_DIR="${HERE}/runs/${TAG}"
+if [ -e "$RUN_DIR" ]; then
+    echo "ERROR: $RUN_DIR 已存在，拒絕覆蓋（改 RUN_ID）"; exit 1
+fi
+mkdir -p "$RUN_DIR"
+LOG="${RUN_DIR}/run.log"
 read -r SX SY GX GY < <(awk -F, -v s="$SEED" 'NR>1 && $1==s {print $2,$3,$4,$5; exit}' "$POSES_CSV")
 if [ -z "${SX:-}" ]; then echo "POSES_CSV 沒有 seed=$SEED"; exit 1; fi
 echo "[$(date +%T)] 案例 method=$METHOD seed=$SEED start=($SX,$SY) goal=($GX,$GY) dur=${DURATION}s"
@@ -41,8 +52,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # 0. 溫度取樣：在 Isaac 之前就開始，用牆鐘每秒取樣
-THERM_CSV="${HERE}/results/${TAG}_thermal.csv"
-ISAAC_PIDFILE="${HERE}/logs/${TAG}.isaacpid"
+THERM_CSV="${RUN_DIR}/thermal.csv"
+ISAAC_PIDFILE="${RUN_DIR}/isaac.pid"
 rm -f "$ISAAC_PIDFILE"
 "${HERE}/thermal_sampler.sh" "$THERM_CSV" "${CPU_LIMIT:-88}" "$ISAAC_PIDFILE" \
     >> "$LOG" 2>&1 < /dev/null &
@@ -59,7 +70,7 @@ echo "[$(date +%T)] [1/6] 啟動 Isaac（headless=$HEADLESS, cpu_threads=${CPU_T
     --wall-limit "${WALL_LIMIT:-1200}" \
     --render-hz "${RENDER_HZ:-12}" --cpu-limit "${CPU_LIMIT:-88}" \
     --cpu-threads "${CPU_THREADS:-8}" \
-    --out "${HERE}/results/${TAG}.json" >> "$LOG" 2>&1 < /dev/null &
+    --out "${RUN_DIR}/isaac_run.json" >> "$LOG" 2>&1 < /dev/null &
 ISAAC_PID=$!; echo "$ISAAC_PID" > "$ISAAC_PIDFILE"; PIDS+=( $ISAAC_PID )
 # `ros2 topic echo --once` exits 0 even when it printed nothing, so the first
 # version of this wait passed after 5 s while Isaac was still loading -- the
@@ -114,7 +125,7 @@ sleep 5
 REC_CAP="${REC_CAP:-1500}"
 echo "[$(date +%T)] [4/6] 開始錄製（防呆上限 ${REC_CAP}s，任務時限由模擬時間另計）..."
 timeout --foreground --signal=INT --kill-after=5 "${REC_CAP}s" \
-  ros2 bag record -o "${HERE}/bags/${TAG}" \
+  ros2 bag record -o "${RUN_DIR}/bag" \
   /clock /odom /odom_raw /odometry/filtered /amcl_pose /model/omni_bot/pose \
   /cmd_vel /cmd_vel_nav /cmd_vel_pre_shield /scan /scan_raw /plan /goal_pose \
   /tf /tf_static /gmpc/solve_time_ms /gmpc/min_h /gmpc/diag /joint_states \
@@ -127,7 +138,7 @@ sleep 3
 # with two topics. Two causes were tangled there -- the run lasted 2 s, and
 # nothing had confirmed the interfaces were live -- so each is now checked
 # explicitly and its time recorded.
-READY_LOG="${HERE}/logs/${TAG}.ready"
+READY_LOG="${RUN_DIR}/readiness.log"
 : > "$READY_LOG"
 mark() { echo "[$(date +%T)] [5/6]   $1"; echo "$(date +%s) $1" >> "$READY_LOG"; }
 gate_fail=0
@@ -229,5 +240,5 @@ grep -a "停止原因" "$LOG" | tail -1
 pkill -INT -P "$REC" 2>/dev/null; kill -INT "$REC" 2>/dev/null
 wait $REC 2>/dev/null || true
 echo "[$(date +%T)] === 結束：$TAG ==="
-echo "[$(date +%T)]     bag: ${HERE}/bags/${TAG}"
+echo "[$(date +%T)]     資料目錄: ${RUN_DIR}"
 echo "[$(date +%T)]     log: $LOG"
