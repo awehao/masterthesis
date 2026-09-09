@@ -58,6 +58,8 @@ ap.add_argument('--duration', type=float, default=0.0,
 ap.add_argument('--kp', type=float, default=1.0e5)
 ap.add_argument('--kd', type=float, default=1.0e4)
 ap.add_argument('--markers', default='true')
+ap.add_argument('--static-scan', default='false',
+                help='true = 在起點做靜態掃描驗收後結束，不進導航')
 ap.add_argument('--out', default=os.path.join(HERE, 'results/isaac_bigarena.json'))
 a = ap.parse_args()
 
@@ -209,6 +211,74 @@ def paint(stage, path, rgb, name):
             UsdShade.MaterialBindingAPI.Apply(pr).Bind(mat)
             n += 1
     return n
+
+
+def find_chassis_cylinder(stage, prim):
+    """The chassis collision cylinder, which the lidar query must skip.
+
+    It is a deliberate over-approximation: r=0.300 spanning z 0.050-0.330, so
+    it encloses the lidar at z=0.2652 and a PhysX raycast returns 360/360 hits
+    on it. gz does not see this, because its gpu_lidar rasterises the VISUAL
+    mesh -- and that mesh has only four posts at the lidar height, blocking 36
+    of 360 beams in four sectors (measured from the STL, and matching the
+    recorded /scan_raw of gmpc_cbf__scan_seed1: 34 beams at 0.2449-0.2633 m in
+    sectors 41-49, 131-138, 221-228, 310-318).
+
+    Only this one shape is skipped, and only for the lidar query: its physics
+    collision is untouched, and the arm, gripper, camera stand and the whole
+    environment still answer the query.
+    """
+    out = []
+    for pr in walk(stage, prim):
+        if not pr.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        p_ = str(pr.GetPath())
+        # the chassis over-approximation, and the lidar's own housing: the beam
+        # starts inside the housing (r=0.036 around the sensor origin) and PhysX
+        # returns distance 0 on it. The recorded gz /scan_raw contains no ring
+        # at that radius -- only the four posts -- so the housing is not part of
+        # the sensor's own returns there either.
+        if p_.endswith('/base_link/cylinder') or '/lidar_link/' in p_:
+            out.append(p_)
+    return out
+
+
+def ray_range(query, origin, direction, max_range, excluded, eps=0.01,
+              max_steps=24, overlap_step=0.05):
+    """Nearest hit that is not an excluded shape.
+
+    A beam that hits the excluded chassis cylinder is NOT turned into inf --
+    that would throw away whatever the beam would have reached. The origin is
+    advanced just past the excluded hit and the query repeats, so the
+    environment behind it is still found.
+    """
+    cur = list(origin)
+    travelled = 0.0
+    for _ in range(max_steps):
+        rem = max_range - travelled
+        if rem <= 0.0:
+            return float('inf'), None
+        h = query.raycast_closest(cur, direction, rem)
+        if not h or not h.get('hit'):
+            return float('inf'), None
+        d = float(h['distance'])
+        body = str(h.get('rigidBody', ''))
+        coll = str(h.get('collision', ''))
+        # match on either the shape path or its owning body, because the hit
+        # dict does not always carry both
+        skip = any(coll == e or (body and e.startswith(body + '/'))
+                   for e in excluded)
+        if skip:
+            # A ray that starts INSIDE a shape is reported by PhysX as an
+            # initial overlap at distance 0. Advancing by eps then crawls: the
+            # chassis cylinder is 0.30 m deep and 0.01 m steps never leave it
+            # within any sane step budget, so every beam came back inf. Step by
+            # a usable amount whenever the hit distance is degenerate.
+            travelled += (d + eps) if d > 1e-6 else overlap_step
+            cur = [origin[i] + direction[i] * travelled for i in range(3)]
+            continue
+        return travelled + d, (coll or body)
+    return float('inf'), None
 
 
 def build_scene(stage):
@@ -434,7 +504,6 @@ def main():
                                   RANGE_MAX)
         if h and h.get('hit'):
             body = str(h.get('rigidBody', h.get('collision', '?')))
-            d = float(h['distance'])
             if body.startswith(prim):
                 hits[body] = hits.get(body, 0) + 1
                 short += 1
@@ -462,7 +531,120 @@ def main():
               f'雷射 z {origin[2]:+.4f} → '
               f'{"**在圓柱高度範圍內**" if inside else "在圓柱之外"}')
 
-    rec = dict(case=CASE, dof=names,
+    # ---- static scan acceptance ------------------------------------------
+    # scan_relay masks four body-fixed sectors at 45/135/225/315 deg, half-width
+    # MASK_HW (default 10 deg), replacing them with inf. This approximation
+    # reproduces the MASKED /scan the controller actually consumes; it does NOT
+    # reproduce /scan_raw, because the four chassis posts that produced the real
+    # near returns are not in the collision geometry at all.
+    MASK_CENTRES = (45.0, 135.0, 225.0, 315.0)
+    MASK_HW = float(os.environ.get('MASK_HW', '10.0'))
+
+    def in_mask(i):
+        b = math.degrees(SCAN_MIN + i * SCAN_INC) % 360.0
+        return any(min(abs(b - c), 360.0 - abs(b - c)) <= MASK_HW
+                   for c in MASK_CENTRES)
+
+    excluded = find_chassis_cylinder(stage, prim)
+    print(f'\n  ── 雷射查詢排除清單 ──')
+    print(f'    {len(excluded)} 個：{excluded}')
+    print('    （只在雷射查詢中略過，物理碰撞不變；手臂、夾爪、相機支架、環境照常參與）')
+
+    if a.static_scan.lower() == 'true':
+        p_now, q_now = robot.get_world_pose()
+        yaw_now = yaw_of(q_now)
+        xf2 = UsdGeom.XformCache()
+        o2 = xf2.GetLocalToWorldTransform(lidar_prim).ExtractTranslation()
+        org = [float(o2[0]), float(o2[1]), float(o2[2])]
+        rngs, owners = [], []
+        for i in range(SCAN_N):
+            th = yaw_now + SCAN_MIN + i * SCAN_INC
+            d, who = ray_range(query, org, [math.cos(th), math.sin(th), 0.0],
+                               RANGE_MAX, excluded)
+            rngs.append(d)
+            owners.append(who)
+        rngs = np.array(rngs)
+        msk = np.array([in_mask(i) for i in range(SCAN_N)])
+        fin = np.isfinite(rngs)
+        self_hit = [(i, owners[i]) for i in range(SCAN_N)
+                    if owners[i] and owners[i].startswith(prim)]
+        print(f'\n  ── 靜態掃描驗收（機器人靜止於起點，yaw={math.degrees(yaw_now):+.2f}°）──')
+        print(f'    有限回波 {int(fin.sum())}/360，inf {int((~fin).sum())}')
+        print(f'    遮罩內 {int(msk.sum())} 條（中心 {MASK_CENTRES}，半寬 {MASK_HW:.0f}°）')
+        out = fin & ~msk
+        if out.sum():
+            print(f'    遮罩外有限回波 {int(out.sum())} 條，'
+                  f'距離 {rngs[out].min():.3f}–{rngs[out].max():.3f} m，'
+                  f'中位 {np.median(rngs[out]):.3f} m')
+        near = fin & (rngs < 0.35)
+        print(f'    < 0.35 m 的回波 {int(near.sum())} 條'
+              + (f'（index {list(np.where(near)[0])[:8]}）' if near.sum() else ''))
+        print(f'    命中自身的光束 {len(self_hit)} 條'
+              + (f'：{sorted(set(w.split("/")[-2] for _, w in self_hit))}'
+                 if self_hit else '（手臂在收納姿態不到雷射高度，預期為 0）'))
+        # 幾何對照：用世界檔的靜態幾何直接算應有距離
+        def ray_world(ox, oy, th):
+            best = RANGE_MAX
+            for m in MODELS:
+                if m['kinematic'] or m['kind'] in (None, 'plane'):
+                    continue
+                cx, cy = m['pose'][0], m['pose'][1]
+                if m['kind'] == 'box':
+                    hx, hy = m['dims'][0] / 2.0, m['dims'][1] / 2.0
+                    t0, t1, ok = 0.0, best, True
+                    for o_, d_, c_, h_ in ((ox, math.cos(th), cx, hx),
+                                           (oy, math.sin(th), cy, hy)):
+                        if abs(d_) < 1e-12:
+                            if abs(o_ - c_) > h_:
+                                ok = False
+                                break
+                            continue
+                        ta, tb = (c_ - h_ - o_) / d_, (c_ + h_ - o_) / d_
+                        if ta > tb:
+                            ta, tb = tb, ta
+                        t0, t1 = max(t0, ta), min(t1, tb)
+                        if t0 > t1:
+                            ok = False
+                            break
+                    if ok and t0 < best:
+                        best = t0
+                else:
+                    r_ = m['dims'][0]
+                    fx, fy = ox - cx, oy - cy
+                    b_ = fx * math.cos(th) + fy * math.sin(th)
+                    c2 = fx * fx + fy * fy - r_ * r_
+                    disc = b_ * b_ - c2
+                    if disc < 0:
+                        continue
+                    t = -b_ - math.sqrt(disc)
+                    if 0 < t < best:
+                        best = t
+            return best
+        res = []
+        for i in range(SCAN_N):
+            if msk[i] or not fin[i]:
+                continue
+            th = yaw_now + SCAN_MIN + i * SCAN_INC
+            g = ray_world(org[0], org[1], th)
+            if g < RANGE_MAX - 1e-6:
+                res.append(rngs[i] - g)
+        if res:
+            res = np.array(res)
+            print(f'    遮罩外逐束 vs 世界靜態幾何：n={len(res)}，'
+                  f'中位差 {np.median(res)*1000:+.1f} mm，'
+                  f'|差| p90 {np.percentile(np.abs(res), 90)*1000:.1f} mm')
+            print(f'      → {"一致" if abs(np.median(res)) < 0.02 else "**不一致，需再查**"}')
+        rec_scan = dict(yaw=float(yaw_now), origin=org,
+                        ranges=[None if not np.isfinite(v) else float(v)
+                                for v in rngs],
+                        mask_centres=list(MASK_CENTRES), mask_halfwidth=MASK_HW,
+                        n_finite=int(fin.sum()), n_self=len(self_hit),
+                        residual_median_m=float(np.median(res)) if len(res) else None)
+    else:
+        rec_scan = None
+
+    rec = dict(case=CASE, dof=names, static_scan=rec_scan,
+               lidar_excluded=excluded,
                arm_projection_m=worst['r'], arm_projection_prim=worst['prim'],
                per_link_radius=per_owner, footprints=dict(FOOTPRINTS),
                lidar_origin_z=origin[2], lidar_self_hits=short,
@@ -471,6 +653,10 @@ def main():
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     json.dump(rec, open(a.out, 'w'), ensure_ascii=False, indent=1)
     print(f'\n  已寫入 {a.out}', flush=True)
+
+    if a.static_scan.lower() == 'true':
+        print('\n  靜態驗收完成，結束（未進入導航）', flush=True)
+        return 0
 
     # ---- keep the window ---------------------------------------------------
     import time
