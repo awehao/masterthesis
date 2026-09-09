@@ -673,11 +673,18 @@ def main():
         FixedSphere(prim_path='/World/probe_green', name='probe_green',
                     position=np.array([lft[0], lft[1], cz_]), radius=0.10,
                     color=np.array([0.0, 1.0, 0.0]))
+        # Two balls at the SAME height cannot distinguish a correct image from
+        # a vertically flipped one: both would sit on the centre row either
+        # way. A third, raised ball must appear in the UPPER half (v < cy).
+        FixedSphere(prim_path='/World/probe_blue', name='probe_blue',
+                    position=np.array([fwd[0], fwd[1], cz_ + 0.30]),
+                    radius=0.10, color=np.array([0.0, 0.0, 1.0]))
         for _ in range(5):
             world.step(render=False)
         print(f'\n  影像方向探針：紅球正前 {pd:.2f} m ({fwd[0]:.3f},{fwd[1]:.3f})，'
               f'綠球再左 {lo:.2f} m ({lft[0]:.3f},{lft[1]:.3f})，'
-              f'皆與相機同高 z={cz_:.3f}', flush=True)
+              f'；藍球在紅球正上方 0.30 m（判定上下方向）'
+              f'，相機高 z={cz_:.3f}', flush=True)
 
     print('\n  ── 檢查一：標記球不得參與碰撞或雷射 ──', flush=True)
     bad = [p for p in marker_paths

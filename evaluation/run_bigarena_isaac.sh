@@ -72,6 +72,9 @@ setsid "$ISAAC_PY" "${HERE}/isaac_bigarena_sim.py" --seed "$SEED" --method "$MET
     --duration "${SIM_BUDGET:-900}" --task-limit "$DURATION" \
     --wall-limit "${WALL_LIMIT:-1200}" \
     --render-hz "${RENDER_HZ:-12}" --cpu-limit "${CPU_LIMIT:-88}" \
+    --camera "${CAMERA:-false}" --cam-width "${CAM_W:-640}" \
+    --cam-height "${CAM_H:-480}" --cam-hz "${CAM_HZ:-10}" \
+    --cam-save "${CAM_SAVE:-0}" \
     --cpu-threads "${CPU_THREADS:-8}" \
     --out "${RUN_DIR}/isaac_run.json" >> "$LOG" 2>&1 < /dev/null &
 ISAAC_PID=$!; echo "$ISAAC_PID" > "$ISAAC_PIDFILE"; PIDS+=( $ISAAC_PID )
@@ -137,6 +140,7 @@ setsid timeout --foreground --signal=INT --kill-after=5 "${REC_CAP}s" \
   /clock /odom /odom_raw /odometry/filtered /amcl_pose /model/omni_bot/pose \
   /cmd_vel /cmd_vel_nav /cmd_vel_pre_shield /scan /scan_raw /plan /goal_pose \
   /tf /tf_static /gmpc/solve_time_ms /gmpc/min_h /gmpc/diag /joint_states \
+  /base_camera/color/image_raw /base_camera/color/camera_info \
   >> "$LOG" 2>&1 < /dev/null &
 REC=$!; PIDS+=( $REC )
 sleep 3
