@@ -65,6 +65,12 @@ ap.add_argument('--duration', type=float, default=0.0,
                 help='0 = 只做檢查並保留畫面，不進入模擬迴圈')
 ap.add_argument('--kp', type=float, default=1.0e5)
 ap.add_argument('--kd', type=float, default=1.0e4)
+ap.add_argument('--self-drive-goal', type=float, default=0.0,
+                help='>0 時模擬器自行以該速度朝目標直線前進，用來單獨驗證'
+                     '「到達即結束」的停止邏輯，不需要導航鏈')
+ap.add_argument('--arrive-tol', type=float, default=0.30,
+                help='測試器的到達門檻（真值距目標，公尺）。v1=0.25、v2=0.30。'
+                     '會在啟動時印出並存入結果檔。')
 ap.add_argument('--camera', default='false',
                 help='true = 啟用底盤相機 RGB（功能驗證設定，不接入導航）')
 ap.add_argument('--cam-width', type=int, default=640)
@@ -105,12 +111,15 @@ if row is None:
     sys.exit(1)
 START = (float(row['start_x']), float(row['start_y']))
 GOAL = (float(row['goal_x']), float(row['goal_y']))
-CASE = dict(method=a.method, traj=a.traj, world=os.path.basename(a.world),
+CASE = dict(arrive_tol=a.arrive_tol,
+            method=a.method, traj=a.traj, world=os.path.basename(a.world),
             urdf=a.urdf, poses_csv=a.poses_csv, seed=a.seed,
             start=list(START), goal=list(GOAL),
             straight_m=float(row.get('straight_m', 'nan')),
             arm_target=ARM_TARGET)
 print('  ── 案例身分 ──')
+print(f'    到達判準   真值距目標 ≤ {a.arrive_tol:.3f} m'
+      f'（{"v2" if abs(a.arrive_tol - 0.30) < 1e-9 else ("v1" if abs(a.arrive_tol - 0.25) < 1e-9 else "自訂")}）')
 for k in ('method', 'traj', 'world', 'poses_csv', 'seed'):
     print(f'    {k:11s} {CASE[k]}')
 print(f'    start       ({START[0]:.2f}, {START[1]:.2f})')
@@ -1022,6 +1031,7 @@ def main():
         re_ = max(1, int(round((1.0 / max(a.render_hz, 0.1)) / dt)))
         ce = max(1, int(round((1.0 / max(a.cam_hz, 0.1)) / dt)))
         cam_frames = 0
+        cam_wall = []
         dyn_pose = {n: np.array(dyn[n].get_world_pose()[0], dtype=float)
                     for n in dyn}
         xf5 = UsdGeom.XformCache()
@@ -1058,6 +1068,20 @@ def main():
                 print(f'\n  牆鐘逾時 {a.wall_limit:.0f} s（處理程序卡住的保護，'
                       f'與任務時限分開）', flush=True)
                 break
+            if a.self_drive_goal > 0.0:
+                # Straight-line drive toward the goal in WORLD axes, used only
+                # to exercise the stop logic. The command is written into the
+                # same field the controller would use, so the arrival path is
+                # the same one a real run takes.
+                _p, _q = robot.get_world_pose()
+                _dx, _dy = GOAL[0] - float(_p[0]), GOAL[1] - float(_p[1])
+                _n = math.hypot(_dx, _dy)
+                _yw = yaw_of(_q)
+                if _n > 1e-6:
+                    _wx = a.self_drive_goal * _dx / _n
+                    _wy = a.self_drive_goal * _dy / _n
+                    node.cmd = [_wx * math.cos(_yw) + _wy * math.sin(_yw),
+                                -_wx * math.sin(_yw) + _wy * math.cos(_yw), 0.0]
             vx, vy, wz = node.cmd
             p_now, q_now = robot.get_world_pose()
             yw = yaw_of(q_now)
@@ -1094,9 +1118,16 @@ def main():
                     np.array([tc[0], tc[1], tc[2]]),
                     np.array([qc.GetReal(), qci[0], qci[1], qci[2]]),
                     camera_axes='ros')
+                _w0 = time.monotonic()
                 rgba = cam.get_rgba()
+                _w1 = time.monotonic()
                 if rgba is not None and rgba.size:
                     node.publish_image(t + dt, rgba, cam_K)
+                    _w2 = time.monotonic()
+                    # wall-clock cost of producing vs publishing one frame,
+                    # kept separate: a simulated-time interval says nothing
+                    # about how fast frames actually appear to a viewer
+                    cam_wall.append((_w0 - t_wall0, _w1 - _w0, _w2 - _w1))
                     cam_frames += 1
                     if cam_frames <= a.cam_save:
                         try:
@@ -1160,10 +1191,11 @@ def main():
                                 clr_dyn=float(clr),
                                 dist_goal=math.dist((float(p_now[0]),
                                                      float(p_now[1])), GOAL)))
-                if log[-1]['dist_goal'] <= 0.25:
+                if log[-1]['dist_goal'] <= a.arrive_tol:
                     stop_reason = 'goal_reached_truth'
                     print(f'\n  ** 真值抵達目標：t={t+dt:.2f} s，'
-                          f'距目標 {log[-1]["dist_goal"]:.3f} m **', flush=True)
+                          f'距目標 {log[-1]["dist_goal"]:.3f} m '
+                          f'≤ 判準 {a.arrive_tol:.3f} m **', flush=True)
                     break
             if k % 200 == 0 and a.cpu_limit > 0:
                 c = cpu_temp_c()
@@ -1223,7 +1255,8 @@ def main():
                                       hz=a.cam_hz,
                                       measured_hz=(cam_frames / _sim
                                                    if _sim > 0 else None),
-                                      K=list(cam_K) if cam_K else None),
+                                      K=list(cam_K) if cam_K else None,
+                                      wall=cam_wall),
                           task_limit=a.task_limit, wall_limit=a.wall_limit,
                           wall_time=_wall,
                           rtf_measured=(_sim / _wall) if _wall > 0 else None,

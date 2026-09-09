@@ -72,6 +72,7 @@ setsid "$ISAAC_PY" "${HERE}/isaac_bigarena_sim.py" --seed "$SEED" --method "$MET
     --duration "${SIM_BUDGET:-900}" --task-limit "$DURATION" \
     --wall-limit "${WALL_LIMIT:-1200}" \
     --render-hz "${RENDER_HZ:-12}" --cpu-limit "${CPU_LIMIT:-88}" \
+    --arrive-tol "${ARRIVE_TOL:-0.30}" \
     --camera "${CAMERA:-false}" --cam-width "${CAM_W:-640}" \
     --cam-height "${CAM_H:-480}" --cam-hz "${CAM_HZ:-10}" \
     --cam-save "${CAM_SAVE:-0}" \
