@@ -96,6 +96,21 @@ class GMPCConfig:
     wheel_base_L   : float = 0.245        # L   [m]
     wheel_w_max    : float = 5.55         # ω_max [rad/s]
     wheel_a_max    : float = 125.0        # α_max [rad/s²]
+    # Verify the COMMAND that actually leaves solve(), not just the solver's
+    # status. 'maximum iterations reached' is accepted as usable (see the solve
+    # tail), but the point OSQP returns then carries no feasibility guarantee,
+    # and the per-axis box clip below it cannot see the wheel rows at all: the
+    # coupling set cuts the corners off the box, so a command inside the box can
+    # still ask for 2x the hardware wheel speed. Measured by injecting a
+    # non-converged solution into this solver: u = (0.2775, 0.2775, 1.1327) left
+    # the guard and implied 11.10 rad/s against ω_max = 5.55.
+    #
+    # Off reproduces the old behaviour exactly, so a run can be replayed as it
+    # was recorded; on, the command is pulled back along the segment to ξ_prev
+    # (both wheel sets are convex and contain ξ_prev, so a single λ satisfies
+    # both) until it fits. A converged solve already satisfies the rows to
+    # eps_abs, so λ = 1 and nothing is touched.
+    wheel_enforce_output : bool = True
     # ---- Control Barrier Function safety filter ----------------------------
     cbf_alpha        : float = 1.0        # decay rate α in  ḣ + α·h ≥ 0
     cbf_safe_margin  : float = 0.30       # extra clearance added to obstacle radius [m]
@@ -235,6 +250,72 @@ class GMPCResult:
     eps0              : float = 0.0            # slack actually used at k = 0
     cbf_resid_noslack : float = float('inf')   # min over rows of  A z - l
     cbf_resid_slack   : float = float('inf')   # min over rows of  A z + eps - l
+    # Output acceptance audit (see wheel_enforce_output).
+    accept_action     : str   = 'as_is'   # as_is | acc_clipped | wheel_scaled | brake
+    accept_scale      : float = 1.0       # λ applied along the segment to ξ_prev
+    wheel_w_cmd_max   : float = 0.0       # worst |ω| the RETURNED command implies
+
+
+# ---------------------------------------------------------------------------
+# Output acceptance: does the command that leaves solve() fit the wheels?
+# ---------------------------------------------------------------------------
+
+def wheel_matrix(cfg: 'GMPCConfig') -> np.ndarray:
+    """W such that r·ω = W·u for the four wheels, in the same row order the
+    coupling constraints are built with."""
+    L = cfg.wheel_base_L
+    return np.array([[0.0,  1.0, L],
+                     [-1.0, 0.0, L],
+                     [0.0, -1.0, L],
+                     [1.0,  0.0, L]])
+
+
+def wheel_speeds(u, cfg: 'GMPCConfig') -> np.ndarray:
+    """The four wheel speeds [rad/s] a body twist u implies."""
+    return (wheel_matrix(cfg) @ np.asarray(u, dtype=float)) / cfg.wheel_radius
+
+
+def fit_to_wheels(u, xi_prev, cfg: 'GMPCConfig', dt: float, tol: float = 1e-6):
+    """Largest λ ∈ [0, 1] with u_λ = ξ_prev + λ(u - ξ_prev) inside BOTH wheel
+    sets, and that u_λ.
+
+    Both  |W·u| ≤ r·ω_max  and  |W·(u - ξ_prev)| ≤ r·α_max·dt  are convex and
+    contain ξ_prev (it is the previously applied command, which left this same
+    guard), so moving back along the segment can only help and one λ settles
+    both. Each row gives a closed-form bound, so this costs four comparisons,
+    not an iteration.
+
+    Returns (u_fitted, λ). λ = 1.0 means the command was already feasible --
+    which is the case for every converged solve, since OSQP satisfied the same
+    rows to eps_abs.
+    """
+    u  = np.asarray(u, dtype=float)
+    xp = np.asarray(xi_prev, dtype=float)
+    W  = wheel_matrix(cfg)
+    w_lim = cfg.wheel_radius * cfg.wheel_w_max          # r·ω_max      [m/s]
+    a_lim = cfg.wheel_radius * cfg.wheel_a_max * dt     # r·α_max·dt   [m/s]
+
+    b = W @ xp                      # wheel-space speed at ξ_prev
+    d = W @ (u - xp)                # direction toward the requested command
+
+    # If ξ_prev is itself outside the speed set the segment gives us nothing to
+    # retreat along -- that can only happen on the first cycle after a state
+    # reset or with the flag switched on mid-run, so aim at zero instead.
+    if np.max(np.abs(b)) > w_lim + tol:
+        b = np.zeros_like(b)
+        d = W @ u
+        xp = np.zeros_like(xp)
+
+    lam = 1.0
+    for bi, di in zip(b, d):
+        if abs(di) > 1e-12:
+            hi = (w_lim - bi) / di if di > 0 else (-w_lim - bi) / di
+            lam = min(lam, max(hi, 0.0))
+            lam = min(lam, a_lim / abs(di))
+        elif abs(bi) > w_lim + tol:
+            lam = 0.0
+    lam = float(min(max(lam, 0.0), 1.0))
+    return xp + lam * (u - xp), lam
 
 
 # ---------------------------------------------------------------------------
@@ -963,6 +1044,17 @@ class GMPC:
         # Only true infeasibility falls through to brake.
         usable = status in ('solved', 'solved inaccurate',
                             'maximum iterations reached')
+        # A usable STATUS is not a usable POINT. OSQP can report max-iterations
+        # and hand back a vector carrying NaN/inf, or one shorter than the
+        # decision vector; either would propagate straight into cmd_vel through
+        # the arithmetic below, because np.clip passes NaN through unchanged.
+        # Check the object before trusting the label.
+        if usable:
+            _sol = np.asarray(res.x) if res.x is not None else None
+            if (_sol is None or _sol.size < Nm
+                    or not np.all(np.isfinite(_sol[:Nm]))):
+                usable = False
+                status = f'{status} (rejected: non-finite or short solution)'
         if not usable:
             delta = np.zeros((N, n))
             delta[0] = -xi_ref_win[0]
@@ -991,6 +1083,7 @@ class GMPC:
 
         u_opt = xi_ref_win[0] + delta[0]
         u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
+        accept_action, accept_scale = ('as_is' if usable else 'brake'), 1.0
         # Final feasibility guard, applied ONLY to solutions the solver did not
         # fully converge on. 'maximum iterations reached' usually carries a
         # usable sub-optimal point, but it is not guaranteed feasible: with the
@@ -1005,6 +1098,20 @@ class GMPC:
             u_opt = np.clip(u_opt, xi_prev - cfg.a_max * dt,
                             xi_prev + cfg.a_max * dt)
             u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
+            accept_action = 'acc_clipped'
+
+        # Wheel-space acceptance of the FINAL command. The per-axis clips above
+        # cannot see the coupling rows -- v_x, v_y and φ̇ each sit inside their
+        # own interval while the wheel they share is asked for twice ω_max -- so
+        # this is the only check between a non-converged QP and the chassis.
+        # It runs on the emergency-brake path too, where u = 0 trivially passes.
+        if cfg.wheel_coupling and cfg.wheel_enforce_output:
+            u_fit, lam = fit_to_wheels(u_opt, xi_prev, cfg, dt)
+            if lam < 1.0 - 1e-9:
+                u_opt, accept_scale = u_fit, lam
+                accept_action = 'wheel_scaled'
+        w_cmd_max = (float(np.max(np.abs(wheel_speeds(u_opt, cfg))))
+                     if cfg.wheel_coupling else 0.0)
 
         return GMPCResult(u_opt=u_opt, delta_xi_all=delta,
                           e0=e0, solve_time_s=solve_time, status=status,
@@ -1012,7 +1119,9 @@ class GMPC:
                           n_obs_in=n_obs_in, n_static_in=n_static_in,
                           min_h_static=min_h_static, min_h_dynamic=min_h_dynamic,
                           eps0=eps0, cbf_resid_noslack=resid_noslack,
-                          cbf_resid_slack=resid_slack)
+                          cbf_resid_slack=resid_slack,
+                          accept_action=accept_action, accept_scale=accept_scale,
+                          wheel_w_cmd_max=w_cmd_max)
 
 
 # ---------------------------------------------------------------------------
