@@ -23,8 +23,9 @@ METHOD="${1:-gmpc_scan}"; SEED="${2:-1}"; DURATION="${3:-180}"
 # configuration, an unknown name is refused rather than falling through to the
 # default chain, and a conflicting HEADING in the environment is an error, not a
 # silent override.
+# method_config 的說明走 stderr（已直接顯示），所以這裡只補上收尾訊息。
 if ! _MCFG=$(method_config "$METHOD"); then
-    echo "ERROR: $_MCFG"; exit 1
+    echo "ERROR: 方法 '$METHOD' 未定義於 method_config()，拒絕執行"; exit 1
 fi
 _HEADING_WANT="${_MCFG#HEADING=}"
 if [ -n "${HEADING:-}" ] && [ "${HEADING}" != "$_HEADING_WANT" ]; then

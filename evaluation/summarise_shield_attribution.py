@@ -59,6 +59,25 @@ from std_msgs.msg import Float32MultiArray
 # /gmpc/diag field indices (see gmpc_node.py, the d.data = [...] block)
 G_CYCLE, G_NEAR_D, G_MIN_H, G_ACTIVE = 0, 7, 13, 14
 G_LEN = 22
+# gmpc_node now publishes a diag row for EVERY control cycle, including the ones
+# that never reached the solver (no plan, no pose, arrived, stale input); those
+# carry NaN in the solver fields and a state code in field 22. Bags recorded
+# before that field existed are 22 long and are all solver cycles by
+# construction, so a missing state reads as 'running'.
+G_STATE = 22
+G_STATE_RUNNING = 0.0
+
+
+def _solver_rows(rows):
+    """Only the cycles that actually solved. Without this the NaN rows count as
+    CBF cycles -- `act <= 0` is False for NaN, so a row with no solver output at
+    all would fall straight through into the danger/violation tallies."""
+    out = []
+    for t, v in rows:
+        st = float(v[G_STATE]) if len(v) > G_STATE else G_STATE_RUNNING
+        if st == G_STATE_RUNNING:
+            out.append((t, v))
+    return out
 # /shield/diag field indices (see scan_safety_shield.py)
 S_CYCLE, S_ACTIVE, S_DMIN, S_DV, S_FALLBACK = 0, 1, 3, 4, 16
 S_LEN = 18
@@ -111,12 +130,15 @@ def collect(batch: str, prefix: str, limit: int, max_age: float) -> dict:
     d_danger: list[float] = []
     d_hneg: list[float] = []
     n_runs = 0
+    n_nonsolver = 0      # cycles that published a diag row but never solved
 
     for bag in bags:
         if not os.path.exists(f'{bag}/metadata.yaml'):
             continue
         d = _read(bag, ['/gmpc/diag', '/shield/diag'])
-        g = [(t, v) for t, v in d['/gmpc/diag'] if len(v) >= G_LEN]
+        g_all = [(t, v) for t, v in d['/gmpc/diag'] if len(v) >= G_LEN]
+        g = _solver_rows(g_all)
+        n_nonsolver += len(g_all) - len(g)
         s = [(t, v) for t, v in d['/shield/diag'] if len(v) >= S_LEN]
         if not g:
             continue
@@ -207,6 +229,9 @@ def collect(batch: str, prefix: str, limit: int, max_age: float) -> dict:
         'danger_threshold_h': DANGER_H,
         'join_max_age_s': max_age,
         'total_cycles': total_cycles,
+        # 這些週期有發診斷列，但沒有進到求解器（無路徑、無位姿、已到達、
+        # 輸入過期）。舊的 bag 沒有這個欄位，值會是 0。
+        'nonsolver_cycles': n_nonsolver,
 
         'shield_active': sh_active,
         'shield_cbf_classifiable': classified,
