@@ -213,6 +213,57 @@ def main():
         rec.update(frac_forward=f_fwd, frac_backward=f_bwd,
                    frac_lateral_dom=f_lat, frac_fwd_and_lat=both)
 
+    # ---- 車頭與行進方向的夾角 -------------------------------------------
+    # 定義在看結果之前固定：
+    #  * 主指標**不分穩態／過渡段**。用朝向誤差本身去切出「穩態」再報朝向誤差
+    #    會構成循環；而且長時間穩定側移會被整段叫成「過渡」，不符實際行為。
+    #  * 有效移動樣本 = 真值平移速度 >= MOVE_EPS。低速樣本不計夾角。
+    #  * 「持續對齊區間」= 夾角連續至少 SUSTAIN_S 秒低於 SUSTAIN_DEG。
+    #    報它占有效移動時間的比例，**不稱為穩態**。
+    SUSTAIN_S, SUSTAIN_DEG = 1.0, 15.0
+    ang = np.full(len(dt), np.nan)
+    ok_ang = ok & np.isfinite(spd) & (spd > MOVE_EPS)
+    for i in np.nonzero(ok_ang)[0]:
+        ang[i] = abs(wrap(math.atan2(vy_w[i], vx_w[i]) - tr[i, 3]))
+    av = ang[np.isfinite(ang)]
+    print(f'\n  ---- 車頭與行進方向夾角（有效移動樣本 {len(av)}，'
+          f'門檻 {MOVE_EPS} m/s；不分穩態／過渡段）----')
+    if len(av):
+        w_ = dt[np.isfinite(ang)]
+        tot = float(np.sum(w_))
+        print(f'    中位 {math.degrees(np.percentile(av,50)):6.2f}°  '
+              f'p90 {math.degrees(np.percentile(av,90)):6.2f}°  '
+              f'max {math.degrees(np.max(av)):6.2f}°')
+        f10 = float(np.sum(w_[av < math.radians(10)])) / tot
+        f15 = float(np.sum(w_[av < math.radians(15)])) / tot
+        print(f'    < 10° 佔 {f10*100:5.1f} %   < 15° 佔 {f15*100:5.1f} %'
+              '（依時間加權）')
+        # 持續對齊區間
+        run_s, best, segs = 0.0, 0.0, []
+        for i in np.nonzero(np.isfinite(ang))[0]:
+            if ang[i] < math.radians(SUSTAIN_DEG):
+                run_s += dt[i]
+            else:
+                if run_s >= SUSTAIN_S: segs.append(run_s)
+                run_s = 0.0
+        if run_s >= SUSTAIN_S: segs.append(run_s)
+        sus = float(sum(segs))
+        print(f'    持續對齊區間（連續 >= {SUSTAIN_S} s 低於 {SUSTAIN_DEG}°）：'
+              f'{len(segs)} 段，合計 {sus:.2f} s = {100*sus/tot:.1f} % 有效移動時間')
+        rec.update(align_med_deg=math.degrees(np.percentile(av, 50)),
+                   align_p90_deg=math.degrees(np.percentile(av, 90)),
+                   align_frac_lt10=f10, align_frac_lt15=f15,
+                   sustained_align_s=sus, sustained_align_frac=sus / tot,
+                   sustained_align_n=len(segs))
+    # 低速樣本另外報，不丟掉
+    lo = ok & np.isfinite(spd) & (spd <= MOVE_EPS)
+    lo_t = float(np.sum(dt[lo]))
+    lo_turn = float(np.sum(np.abs(dyaw[lo]))) if lo.any() else 0.0
+    print(f'    低速（<= {MOVE_EPS} m/s）時間 {lo_t:.2f} s，'
+          f'其間累計絕對轉角 {math.degrees(lo_turn):.2f}°'
+          f'（原地轉向）')
+    rec.update(lowspeed_s=lo_t, lowspeed_turn_deg=math.degrees(lo_turn))
+
     # ---- 轉動 ----
     cum = float(np.sum(np.abs(dyaw[ok])))
     net = wrap(float(tr[-1, 3] - tr[0, 3]))
@@ -280,6 +331,16 @@ def main():
         print(f'    |wz_cmd| p95 {pct(cw,95):.4f}  max {float(np.max(cw)):.4f} rad/s')
         print(f'    |vx_cmd| max {float(np.max(np.abs(cmd[:,1]))):.4f}  '
               f'|vy_cmd| max {float(np.max(np.abs(cmd[:,2]))):.4f} m/s')
+        # 全向底盤不可只看縱向：側向加速度同樣是平滑度的一部分
+        ct = cmd[:, 0]; cdt = np.diff(ct)
+        good = cdt > 1e-6
+        for lbl, col in (('dvx/dt', 1), ('dvy/dt', 2)):
+            dv = np.abs(np.diff(cmd[:, col])[good] / cdt[good])
+            print(f'    |{lbl}| p95 {np.percentile(dv,95):7.3f}  '
+                  f'max {np.max(dv):7.3f} m/s²  '
+                  f'（限值 a{"x" if col==1 else "y"}_max 6.25）')
+            rec[f'{"ax" if col==1 else "ay"}_p95'] = float(np.percentile(dv, 95))
+            rec[f'{"ax" if col==1 else "ay"}_max'] = float(np.max(dv))
         rec['wz_cmd_max'] = float(np.max(cw))
         # gmpc_node runs with wheel_coupling=True (its declare_parameter
         # default, not overridden in gmpc_params.yaml), so the QP already

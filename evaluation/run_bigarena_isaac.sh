@@ -308,7 +308,7 @@ if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then
     fi
 fi
 
-echo "[$(date +%T)] [5/6] 等 /goal_pose 訂閱者後發布目標 ($GX, $GY) ...
+echo "[$(date +%T)] [5/6] 等 /goal_pose 訂閱者後發布目標 ($GX, $GY) ..."
 for i in $(seq 1 30); do
   c=$(ros2 topic info /goal_pose 2>/dev/null | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
   [ "${c:-0}" -ge 2 ] && { echo "[$(date +%T)] [5/6]   訂閱者=$c（${i}s）"; break; }
@@ -322,7 +322,16 @@ done
 # be tied to a verifiable publish event.
 echo "[$(date +%T)] [5/6] **案例開始時間 $(date +%T)**：發布目標"
 echo "$(date +%s) case_start_goal_published" >> "$READY_LOG"
-timeout 60 python3 "${HERE}/publish_goal.py" --x "$GX" --y "$GY" \
+# 固定的 epoch -> 目標發布延遲。事前設定，兩趟共用；前置檢查必須在它之前跑完，
+# 錯過就中止不順延，否則檢查耗時會決定遭遇相位。
+GOAL_AT_ARGS=""
+if [ -n "$CS_EPOCH" ]; then
+    PHASE_DELTA="${PHASE_DELTA:-30.0}"
+    GOAL_AT=$(python3 -c "print(f'{${CS_EPOCH} + ${PHASE_DELTA}:.6f}')")
+    echo "[$(date +%T)] [5/6] 排定目標發布時刻 = epoch ${CS_EPOCH} + Δ ${PHASE_DELTA} = ${GOAL_AT} s"
+    GOAL_AT_ARGS="--at-sim-time $GOAL_AT"
+fi
+timeout 900 python3 "${HERE}/publish_goal.py" --x "$GX" --y "$GY" $GOAL_AT_ARGS \
   --count 5 --period 1.0 --out "${RUN_DIR}/goal_publish.json" \
   2>&1 | tee -a "$LOG" | sed "s/^/[$(date +%T)] [5\/6]   /"
 # epoch 與目標發布之間流逝的相位必須被記錄，不能只說「設計上同時」：
@@ -334,7 +343,9 @@ d, ep = sys.argv[1], float(sys.argv[2])
 g = json.load(open(f'{d}/goal_publish.json'))
 gp = g['first_publish_sim_t']
 rec = dict(phase_epoch_sim_t=ep, first_goal_publish_sim_t=gp,
-           phase_consumed_before_goal_s=gp - ep)
+           phase_consumed_before_goal_s=gp - ep,
+           scheduled_sim_t=g.get('scheduled_sim_t'),
+           schedule_error_s=g.get('schedule_error_s'))
 json.dump(rec, open(f'{d}/phase_alignment.json', 'w'), indent=1)
 print(f'  相位零點 {ep:.3f} s，目標發布 {gp:.3f} s，'
       f'發目標前已流逝相位 {gp-ep:+.3f} s')
