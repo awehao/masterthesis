@@ -1,0 +1,832 @@
+  ── 案例身分 ──
+    到達判準   真值距目標 ≤ 0.300 m（v2）
+    method      gmpc_scan_heading
+    traj        bigarena_traffic
+    world       bigarena.sdf
+    poses_csv   /home/howardchen/masterthesis/evaluation/results/heading_probe_poses.csv
+    seed        103
+    start       (5.00, 10.50)
+    goal        (2.00, 10.50)   直線距離 3.00 m
+    手臂收納角   joint1=+0.000, joint2=+0.000, joint3=+0.000, joint4=+0.000, joint5=+0.000, joint6=+0.000
+
+  世界 bigarena.sdf：52 個模型，動態 10 個
+  limit_cpu_threads = 8
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789014849.834057  913620 descriptor_database.cc:633] File already exists in database: grpc/health/v1/health.proto
+W0000 00:00:1789014849.834085  913620 message.cc:301] Protobuf GeneratedMessageFactory: File is already registered: grpc/health/v1/health.proto
+2026-09-10T04:34:09Z [Info] [carb] Logging to file: /home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/kit/logs/Kit/Isaac-Sim Python/6.0/kit_20260910_123409.log
+[0.048s] [ext: omni.assets.plugins-0.0.0] startup
+[0.050s] [ext: omni.blobkey-1.1.2] startup
+[0.050s] [ext: omni.kit.async_engine-0.0.3] startup
+[0.145s] [ext: omni.client.lib-1.1.1] startup
+[0.154s] [ext: omni.client-1.3.0] startup
+[0.158s] [ext: omni.protobuf.lib-1.0.0] startup
+[0.159s] [ext: omni.grpc.lib-1.0.0] startup
+[0.162s] [ext: omni.metrics.core-0.0.3] startup
+[0.162s] [ext: omni.datastore-0.0.0] startup
+[0.163s] [ext: omni.gpu_foundation.shadercache.vulkan-1.0.0] startup
+[0.165s] [ext: omni.hsscclient-1.1.4] startup
+[0.165s] [ext: omni.stats-1.0.1] startup
+[0.166s] [ext: omni.ujitso.default-1.0.0] startup
+[0.169s] [ext: omni.gpu_foundation-0.0.0] startup
+[0.430s] [ext: carb.windowing.plugins-1.0.1] startup
+[0.430s] [ext: omni.kit.renderer.init-1.0.1] startup
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 0 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 1 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 2 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 3 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 4 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 5 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 6 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 7 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 8 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 9 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 10 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 11 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 12 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 13 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 14 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 15 belongs to.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] all CPU packages were empty!  Failed to find any available CPU cores.
+2026-09-10T04:34:10Z [450ms] [Error] [omni.platforminfo.plugin] failed to retrieve CPU information.
+2026-09-10T04:34:10Z [636ms] [Warning] [omni.rtx] Skipping unsupported non-NVIDIA GPU: AMD Ryzen 7 7700 8-Core Processor (RADV RAPHAEL_MENDOCINO)
+2026-09-10T04:34:10Z [636ms] [Warning] [omni.rtx] Skipping unsupported non-NVIDIA GPU: AMD Ryzen 7 7700 8-Core Processor (RADV RAPHAEL_MENDOCINO)
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 595.84        | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA GeForce RTX 5070          | Yes: 0 |     | 12227   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2f04      | 9661f60e.. |
+|     |                                  |        |     |            | 1         |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | AMD Ryzen 7 7700 8-Core Proces.. |        |     | 10719   MB | 1002      | 0          |
+|     |                                  |        |     |            | 164e      | 00000000.. |
+|     |                                  |        |     |            | d         |            |
+|=============================================================================================|
+| OS: 24.04.4 LTS (Noble Numbat) ubuntu, Version: 24.04.4, Kernel: 7.0.0-31-generic
+| XServer Vendor: The X.Org Foundation, XServer Version: 12101011 (1.21.1.11)
+| Processor: AMD Ryzen 7 7700 8-Core Processor
+| Cores: Unknown | Logical Cores: 0
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 31134 | Free Memory: 22673
+| Total Page/Swap (MB): 8191 | Free Page/Swap: 7591
+|---------------------------------------------------------------------------------------------|
+2026-09-10T04:34:10Z [889ms] [Warning] [omni.rtx] IOMMU is enabled.
+[1.023s] [ext: omni.kit.pipapi-0.0.0] startup
+[1.024s] [ext: omni.kit.telemetry-0.5.2] startup
+[1.059s] [ext: omni.kit.loop-isaac-1.6.0] startup
+[1.060s] [ext: omni.kit.test-2.0.7] startup
+[1.250s] [ext: omni.materialx.libs-1.0.9] startup
+[1.256s] [ext: omni.gpucompute.plugins-0.0.0] startup
+[1.256s] [ext: omni.usd.config-1.0.7] startup
+[1.259s] [ext: omni.usd.libs-1.0.3] startup
+[1.330s] [ext: omni.iray.libs-0.0.1] startup
+[1.334s] [ext: omni.mdl-57.0.3] startup
+[1.348s] [ext: omni.mdl.neuraylib-0.2.20] startup
+[1.349s] [ext: omni.kit.usd.mdl-1.1.9] startup
+[1.428s] [ext: omni.appwindow-1.2.2] startup
+[1.429s] [ext: omni.kit.renderer.core-1.2.2] startup
+[2.467s] [ext: omni.kit.renderer.capture-2.0.1] startup
+[2.469s] [ext: omni.kit.renderer.imgui-2.0.6] startup
+[2.518s] [ext: omni.ui-3.2.0] startup
+[2.525s] [ext: omni.kit.mainwindow-1.0.3] startup
+[2.526s] [ext: carb.audio-0.1.0] startup
+[2.531s] [ext: omni.uiaudio-1.0.0] startup
+[2.531s] [ext: omni.kit.uiapp-0.0.0] startup
+[2.531s] [ext: omni.usd.schema.metrics.assembler-110.1.0] startup
+[2.533s] [ext: omni.usd.schema.audio-0.0.1] startup
+[2.536s] [ext: omni.usd_resolver-1.0.0] startup
+[2.538s] [ext: omni.usd.core-1.8.3] startup
+[2.542s] [ext: omni.metropolis.schema-0.0.3] startup
+[2.542s] [ext: isaacsim.anim.robot.schema-0.1.1] startup
+[2.543s] [ext: omni.usd.schema.anim-0.0.1] startup
+[2.556s] [ext: omni.usd.schema.geospatial-0.0.1] startup
+[2.558s] [ext: omni.usd.schema.omnigraph-1.0.1] startup
+[2.562s] [ext: omni.usd.schema.semantics-0.0.0] startup
+[2.564s] [ext: omni.activity.core-1.0.3] startup
+[2.565s] [ext: omni.cubric-0.1.0] startup
+[2.566s] [ext: omni.graph.exec-0.9.6] startup
+[2.566s] [ext: omni.hydra.scene_delegate-0.3.5] startup
+[2.569s] [ext: usdrt.scenegraph-7.6.3] startup
+[2.588s] [ext: omni.hydra.usdrt_delegate-7.5.2] startup
+[2.593s] [ext: omni.inspect-1.0.2] startup
+[2.594s] [ext: omni.kit.actions.core-1.0.0] startup
+[2.595s] [ext: omni.kit.audiodeviceenum-1.0.2] startup
+[2.596s] [ext: omni.kit.commands-1.5.0] startup
+[2.598s] [ext: omni.kit.exec.core-0.13.5] startup
+[2.599s] [ext: omni.kit.usd_undo-0.1.8] startup
+[2.599s] [ext: omni.kit.window.popup_dialog-2.0.25] startup
+[2.602s] [ext: omni.kit.widget.nucleus_connector-2.3.1] startup
+[2.604s] [ext: omni.timeline-1.1.0] startup
+[2.605s] [ext: omni.usd-1.16.0] startup
+[2.634s] [ext: omni.graph.core-3.1.2] startup
+[2.636s] [ext: omni.kit.notification_manager-1.0.11] startup
+[2.637s] [ext: isaacsim.core.deprecation_manager-0.4.2] startup
+[2.638s] [ext: isaacsim.replicator.agent.schema-0.1.1] startup
+[2.638s] [ext: isaacsim.robot.schema-6.3.7] startup
+[2.642s] [ext: isaacsim.robot_motion.schema-0.2.1] startup
+[2.643s] [ext: omni.anim.behavior.schema-110.1.0] startup
+[2.646s] [ext: omni.anim.graph.schema-110.1.1] startup
+[2.650s] [ext: omni.anim.navigation.schema-110.1.0] startup
+[2.652s] [ext: omni.behavior.tree.schema-110.1.0] startup
+[2.653s] [ext: omni.kit.asset_converter-6.0.1] startup
+[2.663s] [ext: omni.usd.schema.flow-110.0.0] startup
+[2.663s] [ext: omni.usd.schema.mujoco-1.1.1] startup
+[2.664s] [ext: omni.usd.schema.newton-1.2.1] startup
+[2.664s] [ext: omni.usd.schema.omni_lens_distortion-1.0.0] startup
+[2.665s] [ext: omni.usd.schema.omni_projectors-1.0.0] startup
+[2.665s] [ext: omni.usd.schema.omni_sensors-0.0.0] startup
+[2.671s] [ext: omni.usd.schema.omniscripting-1.0.1] startup
+[2.674s] [ext: omni.usd.schema.physical_lighting-0.1.0] startup
+[2.676s] [ext: omni.usd.schema.physx-110.1.13] startup
+[2.699s] [ext: omni.usd.schema.render_settings.rtx-1.0.2] startup
+[2.701s] [ext: omni.usd.schema.usd_particle_field-1.0.0] startup
+[2.702s] [ext: isaacsim.core.version-2.1.1] startup
+[2.702s] [ext: omni.kit.menu.core-1.2.0] startup
+[2.703s] [ext: omni.kit.menu.utils-2.2.4] startup
+[2.708s] [ext: isaacsim.app.about-2.3.1] startup
+[2.712s] [ext: isaacsim.asset.transformer-1.2.5] startup
+[2.714s] [ext: omni.scene.optimizer.core-110.1.0] startup
+[2.757s] [ext: isaacsim.asset.importer.utils-1.8.1] startup
+[2.759s] [ext: omni.convexdecomposition-110.1.13] startup
+[2.761s] [ext: omni.physics-110.1.13] startup
+[2.763s] [ext: omni.physx.gpu-110.1.13] startup
+[2.763s] [ext: omni.physx.foundation-110.1.13] startup
+[2.764s] [ext: omni.usdphysics-110.1.13] startup
+[2.766s] [ext: omni.physx.cooking-110.1.13] startup
+[2.767s] [ext: omni.physx-110.1.13] startup
+[2.775s] [ext: omni.physics.physx-110.1.13] startup
+[2.776s] [ext: isaacsim.asset.exporter.urdf-2.0.5] startup
+[2.783s] [ext: omni.kit.clipboard-1.1.1] startup
+[2.784s] [ext: omni.kit.usd.layers-2.6.1] startup
+[2.790s] [ext: omni.kit.widget.context_menu-1.4.0] startup
+[2.791s] [ext: omni.kit.context_menu-1.9.0] startup
+[2.792s] [ext: omni.kit.helper.file_utils-0.1.10] startup
+[2.793s] [ext: omni.kit.widget.nucleus_info-2.0.2] startup
+[2.793s] [ext: omni.kit.search_core-1.0.8] startup
+[2.794s] [ext: omni.kit.widget.path_field-2.0.13] startup
+[2.794s] [ext: omni.kit.widget.browser_bar-2.0.10] startup
+[2.795s] [ext: omni.kit.widget.filebrowser-2.13.4] startup
+[2.798s] [ext: omni.kit.widget.options_menu-1.1.6] startup
+[2.800s] [ext: omni.kit.widget.options_button-1.0.3] startup
+[2.800s] [ext: omni.kit.widget.search_delegate-1.0.9] startup
+[2.801s] [ext: omni.ui.scene-2.0.3] startup
+[2.805s] [ext: omni.kit.window.filepicker-2.15.5] startup
+[2.814s] [ext: omni.kit.window.file_importer-1.1.21] startup
+[2.815s] [ext: omni.kit.material.library-3.1.2] startup
+[2.819s] [ext: isaacsim.asset.transformer.rules-1.7.10] startup
+[2.826s] [ext: omni.usdex.libs-2.2.2] startup
+[2.833s] [ext: isaacsim.asset.importer.mjcf-3.10.1] startup
+[2.834s] [ext: isaacsim.asset.importer.urdf-3.11.2] startup
+[2.837s] [ext: omni.kit.primitive.mesh-1.1.0] startup
+[2.838s] [ext: omni.kit.stage_template.core-1.1.22] startup
+[2.839s] [ext: omni.kit.stage_templates-2.0.2] startup
+[2.840s] [ext: omni.usd.metrics.assembler-110.1.2] startup
+[2.842s] [ext: omni.warp.core-1.13.0] startup
+[2.976s] [ext: isaacsim.core.experimental.utils-0.17.2] startup
+[2.978s] [ext: omni.physics.stageupdate-110.1.13] startup
+[2.979s] [ext: omni.physics.tensors-110.1.13] startup
+[2.983s] [ext: omni.physx.tensors-110.1.13] startup
+[2.986s] [ext: isaacsim.core.simulation_manager-1.15.6] startup
+[2.996s] [ext: isaacsim.storage.native-1.9.3] startup
+[2.997s] [ext: omni.usd.metrics.assembler.physics-110.1.13] startup
+[2.998s] [ext: isaacsim.core.utils-4.1.7] startup
+[3.000s] [ext: isaacsim.core.prims-0.11.7] startup
+[3.990s] [ext: isaacsim.core.api-5.2.13] startup
+[3.996s] [ext: isaacsim.core.cloner-1.7.3] startup
+[3.997s] [ext: isaacsim.test.docstring-1.3.2] startup
+[4.000s] [ext: isaacsim.core.experimental.prims-1.8.9] startup
+[4.019s] [ext: isaacsim.core.experimental.primdata-0.3.2] startup
+[4.022s] [ext: omni.graph.tools-1.81.0] startup
+[4.039s] [ext: omni.graph-1.142.5] startup
+[4.068s] [ext: isaacsim.core.experimental.actuators-0.1.2] startup
+[4.081s] [ext: isaacsim.core.experimental.materials-0.7.1] startup
+[4.084s] [ext: isaacsim.core.experimental.objects-0.8.1] startup
+[4.133s] [ext: omni.hydra.engine.stats-1.0.5] startup
+[4.136s] [ext: omni.hydra.rtx.shadercache.vulkan-1.0.0] startup
+[4.136s] [ext: omni.index.libs-387500.4413.0] startup
+[4.136s] [ext: omni.index-1.0.1] startup
+[4.137s] [ext: omni.ujitso.client-0.0.0] startup
+[4.137s] [ext: omni.usd.schema.playback-1.0.0] startup
+[4.140s] [ext: omni.volume-0.5.2] startup
+[4.145s] [ext: omni.hydra.rtx-1.0.4] startup
+2026-09-10T04:34:13Z [4,138ms] [Warning] [omni.log] Source: omni.hydra was already registered.
+[4.180s] [ext: omni.kit.hydra_texture-1.6.0] startup
+[4.184s] [ext: omni.kit.raycast.query-1.2.0] startup
+[4.188s] [ext: omni.kit.viewport.legacy_gizmos-1.0.24] startup
+[4.191s] [ext: omni.kit.viewport.registry-104.0.6] startup
+[4.191s] [ext: omni.kit.viewport.scene_camera_model-1.0.7] startup
+[4.195s] [ext: omni.kit.widget.viewport-109.2.0] startup
+[4.198s] [ext: omni.kit.window.drop_support-1.0.8] startup
+[4.199s] [ext: omni.kit.viewport.window-109.0.2] startup
+[4.213s] [ext: omni.kit.viewport.utility-2.0.1] startup
+[4.214s] [ext: isaacsim.core.rendering_manager-0.4.3] startup
+[4.229s] [ext: omni.graph.action_core-1.1.9] startup
+[4.232s] [ext: omni.graph.action_nodes_core-2.11.0] startup
+[4.234s] [ext: omni.graph.action_nodes-2.11.0] startup
+[4.265s] [ext: omni.graph.action-2.10.2] startup
+[4.267s] [ext: omni.graph.image.core-0.6.1] startup
+[4.268s] [ext: omni.graph.image.nodes-1.3.1] startup
+[4.269s] [ext: omni.graph.nodes_core-2.11.0] startup
+[4.274s] [ext: omni.graph.nodes-2.12.0] startup
+[4.280s] [ext: omni.kit.hotkeys.core-1.3.12] startup
+[4.281s] [ext: omni.kit.property.adapter.core-1.1.1] startup
+[4.283s] [ext: omni.kit.property.adapter.usd-1.0.5] startup
+[4.284s] [ext: omni.kit.widget.filter-1.1.5] startup
+[4.285s] [ext: omni.kit.widget.highlight_label-1.0.3] startup
+[4.285s] [ext: omni.kit.widget.searchfield-1.1.8] startup
+[4.286s] [ext: omni.kit.window.file_exporter-1.0.36] startup
+[4.287s] [ext: omni.kit.widget.stage-4.4.0] startup
+[4.295s] [ext: omni.kit.window.content_browser_registry-0.0.6] startup
+[4.296s] [ext: omni.kit.window.file-2.0.10] startup
+[4.298s] [ext: omni.kit.window.content_browser-3.1.8] startup
+[4.307s] [ext: omni.kit.window.property-1.15.1] startup
+[4.317s] [ext: omni.kit.property.usd-4.9.4] startup
+[4.327s] [ext: omni.graph.scriptnode-2.10.2] startup
+[4.334s] [ext: omni.kit.widget.searchable_combobox-1.0.7] startup
+[4.335s] [ext: omni.kit.widget.settings-2.0.0] startup
+[4.336s] [ext: omni.kit.window.preferences-1.8.3] startup
+[4.341s] [ext: omni.kit.viewport.menubar.core-107.2.2] startup
+[4.350s] [ext: omni.syntheticdata-0.6.15] startup
+[4.373s] [ext: omni.replicator.nv-1.1.1] startup
+[4.378s] [ext: omni.videoencoding-0.2.1] startup
+[4.381s] [ext: omni.replicator.core-1.13.27] startup
+2026-09-10T04:34:14Z [4,367ms] [Warning] [pxr.Semantics] pxr.Semantics is deprecated - please use Semantics instead
+2026-09-10T04:34:14Z [4,429ms] [Warning] [omni.replicator.core.scripts.extension] No material configuration file, adding configuration to material settings directly.
+[4.571s] [ext: isaacsim.core.nodes-5.10.5] startup
+[4.598s] [ext: isaacsim.core.throttling-2.3.5] startup
+[4.599s] [ext: omni.kit.manipulator.viewport-107.0.1] startup
+[4.600s] [ext: omni.graph.visualization.nodes-2.1.4] startup
+[4.612s] [ext: omni.kit.window.extensions-1.5.10] startup
+[4.616s] [ext: isaacsim.gui.components-1.8.5] startup
+[4.620s] [ext: isaacsim.robot.surface_gripper-3.6.2] startup
+[4.630s] [ext: isaacsim.robot.manipulators-3.4.4] startup
+[4.639s] [ext: isaacsim.robot_motion.lula-4.1.3] startup
+[4.645s] [ext: isaacsim.robot_motion.motion_generation-8.2.9] startup
+[4.649s] [ext: isaacsim.cortex.framework-1.0.18] startup
+[4.651s] [ext: isaacsim.cortex.behaviors-2.0.17] startup
+[4.652s] [ext: isaacsim.examples.base-1.3.2] startup
+[4.653s] [ext: omni.kit.widget.zoombar-1.0.7] startup
+[4.654s] [ext: omni.kit.browser.core-2.3.18] startup
+[4.657s] [ext: omni.kit.browser.folder.core-2.0.2] startup
+[4.661s] [ext: omni.kit.widget.stage_icons-1.0.8] startup
+[4.662s] [ext: omni.kit.window.stage-2.6.1] startup
+[4.665s] [ext: omni.kit.menu.stage-1.2.7] startup
+[4.666s] [ext: omni.kit.usd.collect-3.0.6] startup
+[4.668s] [ext: omni.kit.widget.prompt-1.0.7] startup
+[4.669s] [ext: omni.kit.tool.collect-2.2.19] startup
+[4.670s] [ext: isaacsim.examples.browser-0.3.2] startup
+[4.672s] [ext: omni.kit.search.files-1.0.4] startup
+[4.673s] [ext: omni.kit.widget.calendar-1.0.9] startup
+[4.674s] [ext: omni.kit.widget.extended_searchfield-1.0.31] startup
+[4.681s] [ext: omni.simready.content.browser-0.3.7] startup
+[4.767s] [ext: isaacsim.gui.content_browser-0.4.3] startup
+[4.769s] [ext: omni.kit.selection-0.1.6] startup
+[4.770s] [ext: isaacsim.gui.menu-2.10.5] startup
+[4.777s] [ext: isaacsim.gui.property-1.6.4] startup
+[4.782s] [ext: omni.kit.viewport.actions-110.0.0] startup
+[4.786s] [ext: omni.kit.viewport.menubar.display-107.1.3] startup
+[4.787s] [ext: isaacsim.gui.sensors.icon-2.2.1] startup
+[4.789s] [ext: omni.behavior.scripting.core-110.1.0] startup
+[4.792s] [ext: isaacsim.replicator.behavior-1.5.4] startup
+[4.793s] [ext: isaacsim.replicator.experimental.domain_randomization-1.2.5] startup
+[4.805s] [ext: isaacsim.replicator.domain_randomization-1.2.2] startup
+[4.865s] [ext: isaacsim.replicator.writers-1.5.4] startup
+[4.884s] [ext: isaacsim.robot.experimental.wheeled_robots-0.2.11] startup
+[4.900s] [ext: isaacsim.robot.policy.examples-5.2.12] startup
+[4.909s] [ext: isaacsim.robot.wheeled_robots-5.2.4] startup
+[4.912s] [ext: isaacsim.robot.wheeled_robots.nodes-0.1.5] startup
+[4.929s] [ext: isaacsim.robot_motion.experimental.motion_generation-6.1.3] startup
+[4.938s] [ext: isaacsim.robot_motion.cumotion-1.3.1] startup
+[4.949s] [ext: omni.kit.numpy.common-0.1.3] startup
+[4.950s] [ext: isaacsim.sensors.camera-1.7.9] startup
+[4.974s] [ext: isaacsim.sensors.experimental.physics-3.0.2] startup
+[4.981s] [ext: omni.sensors.net-1.0.1] startup
+[4.983s] [ext: omni.sensors.nv.common-3.0.0] startup
+[4.995s] [ext: omni.sensors.nv.materials-2.0.0] startup
+[4.998s] [ext: omni.sensors.nv.acoustic-3.0.0] startup
+[5.001s] [ext: omni.sensors.nv.ids-2.0.1] startup
+[5.003s] [ext: omni.sensors.nv.lidar-3.0.0] startup
+[5.006s] [ext: omni.sensors.nv.radar-3.0.0] startup
+[5.009s] [ext: isaacsim.sensors.experimental.rtx-1.4.6] startup
+[5.179s] [ext: isaacsim.sensors.physics.nodes-1.5.3] startup
+[5.184s] [ext: isaacsim.util.debug_draw-3.2.3] startup
+[5.189s] [ext: isaacsim.sensors.physx-2.5.5] startup
+[5.195s] [ext: isaacsim.sensors.rtx-15.17.1] startup
+[5.204s] [ext: isaacsim.simulation_app-2.18.4] startup
+[5.205s] [ext: omni.anim.curve.core-1.6.0] startup
+[5.214s] [ext: omni.graph.ui_nodes-2.11.1] startup
+[5.235s] [ext: omni.hydra.scene_api-0.1.3] startup
+[5.240s] [ext: omni.kit.manipulator.camera-110.0.0] startup
+[5.242s] [ext: omni.kit.manipulator.selector-1.1.4] startup
+[5.243s] [ext: omni.kit.manipulator.transform-107.0.0] startup
+[5.247s] [ext: omni.kit.widget.toolbar-2.1.0] startup
+[5.251s] [ext: omni.kit.manipulator.tool.snap-1.5.14] startup
+[5.254s] [ext: omni.kit.viewport.manipulator.transform-107.0.4] startup
+[5.256s] [ext: omni.kit.manipulator.prim.core-108.0.2] startup
+[5.260s] [ext: omni.kit.manipulator.prim.usd-107.0.3] startup
+[5.261s] [ext: omni.kit.manipulator.prim-108.0.0] startup
+[5.261s] [ext: omni.kit.manipulator.selection-109.0.1] startup
+[5.262s] [ext: omni.kit.menu.create-2.0.2] startup
+[5.264s] [ext: omni.kit.property.audio-1.0.16] startup
+[5.266s] [ext: omni.kit.property.camera-1.0.14] startup
+[5.267s] [ext: omni.kit.property.geometry-2.1.2] startup
+[5.270s] [ext: omni.kit.property.light-1.0.14] startup
+2026-09-10T04:34:14Z [5,271ms] [Warning] [omni.usd] Encountered USD Warnings but USD Diagnostics are currently muted. To view USD Warnings, please set the '/persistent/app/usd/muteUsdDiagnostics' setting to false in Preferences page.
+[5.299s] [ext: omni.kit.property.material-1.14.6] startup
+[5.304s] [ext: omni.kit.property.render-1.2.2] startup
+[5.305s] [ext: omni.kit.property.transform-1.6.9] startup
+[5.307s] [ext: omni.kit.property.bundle-1.5.1] startup
+[5.308s] [ext: omni.kit.usdz_export-1.1.0] startup
+[5.310s] [ext: omni.kit.tool.asset_importer-6.0.1] startup
+[5.314s] [ext: omni.kit.ui.actions-1.0.5] startup
+[5.316s] [ext: omni.kit.viewport.menubar.camera-107.0.10] startup
+[5.319s] [ext: omni.kit.viewport.menubar.lighting-107.3.2] startup
+[5.321s] [ext: omni.kit.viewport.menubar.render-110.0.0] startup
+[5.323s] [ext: omni.kit.viewport.menubar.settings-110.0.1] startup
+[5.325s] [ext: omni.kit.window.console-1.1.9] startup
+[5.329s] [ext: omni.kit.window.status_bar-0.1.11] startup
+[5.331s] [ext: omni.kit.window.toolbar-3.0.3] startup
+[5.333s] [ext: omni.ocio-0.1.1] startup
+[5.334s] [ext: omni.physx.commands-110.1.13] startup
+[5.337s] [ext: omni.replicator.replicator_yaml-2.0.12] startup
+[5.345s] [ext: omni.rtx.window.settings-0.8.0] startup
+[5.348s] [ext: omni.rtx.settings.core-0.7.1] startup
+[5.351s] [ext: omni.usd.metrics.assembler.ui-110.1.1] startup
+[5.356s] [ext: semantics.schema.editor-2.0.2] startup
+[5.358s] [ext: semantics.schema.property-2.0.2] startup
+[5.359s] [ext: omni.kit.menu.common-2.0.2] startup
+[5.360s] [ext: isaacsim.exp.base-6.0.1] startup
+[5.361s] [ext: isaacsim.exp.base.python-6.0.1] startup
+[5.362s] Simulation App Starting
+[6.404s] Simulation App Startup Complete
+[6.412s] app ready
+Starting kit application with the following args:  ['/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/exts/isaacsim.simulation_app/isaacsim/simulation_app/simulation_app.py', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/apps/isaacsim.exp.base.python.kit', '--/app/tokens/exe-path=/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/kit', '--/persistent/app/viewport/displayOptions=3094', '--/rtx/materialDb/syncLoads=True', '--/rtx/hydra/materialSyncLoads=True', '--/omni/kit/plugin/syncUsdLoads=True', '--/app/renderer/resolution/width=1600', '--/app/renderer/resolution/height=900', '--/app/window/width=1600', '--/app/window/height=900', '--/renderer/multiGpu/enabled=True', '--/app/fastShutdown=True', '--/app/installSignalHandlers=0', '--ext-folder', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/exts', '--ext-folder', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/apps', '--/physics/cudaDevice=0', '--/plugins/carb.tasking.plugin/threadCount=8', '--/plugins/omni.tbb.globalcontrol/maxThreadCount=8', '--portable', '--no-window', '--/app/window/hideUi=1']
+Passing the following args to the base kit application:  ['--seed', '103', '--method', 'gmpc_scan_heading', '--traj', 'bigarena_traffic', '--headless', 'true', '--experience', '', '--width', '1600', '--height', '900', '--poses-csv', '/home/howardchen/masterthesis/evaluation/results/heading_probe_poses.csv', '--duration', '900', '--task-limit', '90', '--wall-limit', '1200', '--render-hz', '12', '--cpu-limit', '92', '--arrive-tol', '0.30', '--camera', 'false', '--cam-width', '640', '--cam-height', '480', '--cam-hz', '10', '--cam-save', '0', '--cam-raw', 'true', '--cam-async', 'true', '--cam-jpeg-q', '80', '--cpu-threads', '8', '--out', '/home/howardchen/masterthesis/evaluation/runs/isaac_bigarena_gmpc_scan_heading__seed103__tfix_back_123406/isaac_run.json']
+Warp 1.13.0 initialized:
+   CUDA Toolkit 12.9, Driver 13.2
+   Devices:
+     "cpu"      : "x86_64"
+     "cuda:0"   : "NVIDIA GeForce RTX 5070" (11 GiB, sm_120, mempool enabled)
+   Kernel cache:
+     /home/howardchen/.cache/warp/1.13.0
+  時間設定回讀：physics_dt=0.01, rendering_dt=0.01
+  場景建立完成：動態 10 個
+  URDF → USD：/tmp/isaac_usd/omni_bot_wb_13/omni_bot_wb.usda
+  Physics 變體：可選 ['mujoco', 'none', 'physics', 'physx']，沿用匯入器的選擇 'physx'
+  articulation root：/World/omni_bot/Geometry/base_footprint（剛體 107）
+  零摩擦材質：支撐球 4 + 地面 2 → 綁定 6
+  自由度 8，手臂已設定並以位置驅動保持
+  底盤起點：articulation (5.0000, 10.5000)  USD (5.0000, 10.5000)  差 0.000 mm → 同步
+
+  ── 檢查一：標記球不得參與碰撞或雷射 ──
+    標記球 2 個，帶有 CollisionAPI 的 0 個 → 通過（純顯示）
+
+  ── 檢查二：收納手臂／夾爪的水平投影 vs 導航 footprint ──
+    link_eef               最大水平半徑 0.2811 m
+    link4                  最大水平半徑 0.2534 m
+    link4_1                最大水平半徑 0.2534 m
+    link3                  最大水平半徑 0.2408 m
+    link3_1                最大水平半徑 0.2404 m
+    link6                  最大水平半徑 0.2400 m
+    → 手臂＋夾爪最大水平投影 **0.2811 m**（link_eef）
+    底盤碰撞圓柱半徑 0.300 m
+      vs costmap robot_radius   0.280 m → **超出 1.1 mm**
+      vs scan_safety_shield     0.300 m → 未超出
+      vs GMPC robot_radius      0.330 m → 未超出
+
+  ── 檢查三：雷射是否掃到自身 ──
+    雷射原點 z = 0.2652 m
+    360 條射線中，打到自己身上的 360 條
+      180 條 → /World/omni_bot/Geometry/base_footprint/base_link
+      180 條 → /World/omni_bot/Geometry/base_footprint/base_link/lidar_link
+    → **雷射掃到自身**
+    底盤碰撞圓柱 z [+0.2430, +0.2874]，雷射 z +0.2652 → **在圓柱高度範圍內**
+
+  ── 雷射查詢排除清單 ──
+    2 個：['/World/omni_bot/Geometry/base_footprint/base_link/lidar_link/cylinder_1', '/World/omni_bot/Geometry/base_footprint/base_link/cylinder']
+    （只在雷射查詢中略過，物理碰撞不變；手臂、夾爪、相機支架、環境照常參與）
+
+  已寫入 /home/howardchen/masterthesis/evaluation/runs/isaac_bigarena_gmpc_scan_heading__seed103__tfix_back_123406/isaac_run.json
+
+  ── 閉迴路開始：900 s 模擬時間，RTF 1.0，畫面 12 Hz，CPU 中止線 92 °C ──
+[INFO] [launch]: All log files can be found below /home/howardchen/.ros/log/2026-09-10-12-34-22-309244-msi-914387
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [launch.user]: NO_GZ=1: gz sim 未啟動
+[INFO] [launch.user]: NO_GZ=1: gz sim (headless) 未啟動
+[INFO] [launch.user]: NO_GZ=1: ros_gz_bridge 未啟動
+[INFO] [robot_state_publisher-1]: process started with pid [914396]
+[INFO] [odom_tf_broadcaster-2]: process started with pid [914397]
+[INFO] [scan_relay-3]: process started with pid [914398]
+[robot_state_publisher-1] [WARN] [1789014862.576053878] [kdl_parser]: The root link base_footprint has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.
+[robot_state_publisher-1] [INFO] [1789014862.576303928] [robot_state_publisher]: Robot initialized
+[scan_relay-3] [INFO] [1789014862.805108780] [scan_relay]: self-occlusion filter ON: centers=[45.0, 135.0, 225.0, 315.0] ±10.0deg
+[scan_relay-3] [INFO] [1789014862.906397392] [scan_relay]: masked 80/360 rays as self-occlusion
+2026-09-10T04:34:17Z [7,562ms] [Warning] [isaacsim.asset.importer.utils.impl.urdf_to_mjc_physx_conversion_utils] Stiffness and damping not available joint /omni_bot/Physics/finger_joint1, actuator will be created without gain parameters
+2026-09-10T04:34:17Z [7,563ms] [Warning] [isaacsim.asset.importer.utils.impl.urdf_to_mjc_physx_conversion_utils] Stiffness and damping not available joint /omni_bot/Physics/finger_joint2, actuator will be created without gain parameters
+[INFO] [foxglove_bridge-4]: process started with pid [914693]
+[foxglove_bridge-4] [INFO] [1789014870.593176703] [foxglove_bridge]: Starting foxglove_bridge (jazzy, 3.4.1@)
+[foxglove_bridge-4] [INFO] [1789014870.594111220] [foxglove_bridge]: Server listening on port 8765
+[foxglove_bridge-4] [INFO] [1789014870.594904978] [foxglove_bridge]: Advertising new channel 2 for topic "/rosout"
+[foxglove_bridge-4] [INFO] [1789014870.595342417] [foxglove_bridge]: Advertising new channel 3 for topic "/parameter_events"
+[foxglove_bridge-4] [INFO] [1789014870.595484197] [foxglove_bridge]: Advertising new channel 4 for topic "/clock"
+[foxglove_bridge-4] [INFO] [1789014871.103223744] [foxglove_bridge]: Advertising new channel 5 for topic "/tf"
+[foxglove_bridge-4] [INFO] [1789014871.103415234] [foxglove_bridge]: Advertising new channel 6 for topic "/scan"
+[foxglove_bridge-4] [INFO] [1789014871.104134852] [foxglove_bridge]: Advertising new channel 7 for topic "/odom"
+[foxglove_bridge-4] [INFO] [1789014871.104142182] [foxglove_bridge]: Advertising new channel 8 for topic "/tf_static"
+[foxglove_bridge-4] [INFO] [1789014871.104375362] [foxglove_bridge]: Advertising new channel 9 for topic "/plan"
+[foxglove_bridge-4] [INFO] [1789014871.104499921] [foxglove_bridge]: Advertising new channel 10 for topic "/model/omni_bot/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104504851] [foxglove_bridge]: Advertising new channel 11 for topic "/model/dyn_obs_7/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104508631] [foxglove_bridge]: Advertising new channel 12 for topic "/scan_raw"
+[foxglove_bridge-4] [INFO] [1789014871.104512211] [foxglove_bridge]: Advertising new channel 13 for topic "/model/dyn_obs_8/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104637611] [foxglove_bridge]: Advertising new channel 14 for topic "/model/dyn_obs_7/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.104643391] [foxglove_bridge]: Advertising new channel 15 for topic "/model/dyn_obs_6/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104647731] [foxglove_bridge]: Advertising new channel 16 for topic "/odom_raw"
+[foxglove_bridge-4] [INFO] [1789014871.104651361] [foxglove_bridge]: Advertising new channel 17 for topic "/model/dyn_obs_6/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.104655011] [foxglove_bridge]: Advertising new channel 18 for topic "/model/dyn_obs_5/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104658721] [foxglove_bridge]: Advertising new channel 19 for topic "/model/dyn_obs_5/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.104662231] [foxglove_bridge]: Advertising new channel 20 for topic "/model/dyn_obs_9/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.104667151] [foxglove_bridge]: Advertising new channel 21 for topic "/model/dyn_obs_3/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104670661] [foxglove_bridge]: Advertising new channel 22 for topic "/model/dyn_obs_2/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104674481] [foxglove_bridge]: Advertising new channel 23 for topic "/model/dyn_obs_2/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.104677931] [foxglove_bridge]: Advertising new channel 24 for topic "/model/dyn_obs_4/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.104683531] [foxglove_bridge]: Advertising new channel 25 for topic "/model/dyn_obs_1/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104689621] [foxglove_bridge]: Advertising new channel 26 for topic "/model/dyn_obs_1/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.104818800] [foxglove_bridge]: Advertising new channel 27 for topic "/robot_description"
+[foxglove_bridge-4] [INFO] [1789014871.104823000] [foxglove_bridge]: Advertising new channel 28 for topic "/model/dyn_obs_9/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104827740] [foxglove_bridge]: Advertising new channel 29 for topic "/model/dyn_obs_0/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104962100] [foxglove_bridge]: Advertising new channel 30 for topic "/joint_states"
+[foxglove_bridge-4] [INFO] [1789014871.104966570] [foxglove_bridge]: Advertising new channel 31 for topic "/model/dyn_obs_4/pose"
+[foxglove_bridge-4] [INFO] [1789014871.104970960] [foxglove_bridge]: Advertising new channel 32 for topic "/model/dyn_obs_0/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.104974610] [foxglove_bridge]: Advertising new channel 33 for topic "/goal_pose"
+[foxglove_bridge-4] [INFO] [1789014871.105097669] [foxglove_bridge]: Advertising new channel 34 for topic "/events/write_split"
+[foxglove_bridge-4] [INFO] [1789014871.105101909] [foxglove_bridge]: Advertising new channel 35 for topic "/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.105105829] [foxglove_bridge]: Advertising new channel 36 for topic "/model/dyn_obs_3/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.105284839] [foxglove_bridge]: Advertising new channel 37 for topic "/base_camera/color/image_raw/compressed"
+[foxglove_bridge-4] [INFO] [1789014871.105431788] [foxglove_bridge]: Advertising new channel 38 for topic "/base_camera/color/image_raw"
+[foxglove_bridge-4] [INFO] [1789014871.105451518] [foxglove_bridge]: Advertising new channel 39 for topic "/model/dyn_obs_8/cmd_vel"
+[foxglove_bridge-4] [INFO] [1789014871.105808088] [foxglove_bridge]: Advertising new channel 40 for topic "/base_camera/color/camera_info"
+[INFO] [map_server-5]: process started with pid [914822]
+[INFO] [amcl-6]: process started with pid [914823]
+[INFO] [ekf_node-7]: process started with pid [914824]
+[INFO] [planner_server-8]: process started with pid [914825]
+[INFO] [lifecycle_manager-9]: process started with pid [914826]
+[INFO] [velocity_smoother-10]: process started with pid [914827]
+[INFO] [goal_to_plan_relay-11]: process started with pid [914828]
+[INFO] [gmpc_node-12]: process started with pid [914829]
+[INFO] [scan_obstacle_tracker-13]: process started with pid [914830]
+[lifecycle_manager-9] [INFO] [1789014872.636226992] [lifecycle_manager_navigation]: Creating
+[amcl-6] [INFO] [1789014872.636727761] [amcl]: 
+[amcl-6] 	amcl lifecycle node launched. 
+[amcl-6] 	Waiting on external lifecycle transitions to activate
+[amcl-6] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[amcl-6] [INFO] [1789014872.637265820] [amcl]: Creating
+[lifecycle_manager-9] [INFO] [1789014872.639132434] [lifecycle_manager_navigation]: [34m[1mCreating and initializing lifecycle service clients[0m[0m
+[velocity_smoother-10] [INFO] [1789014872.644701929] [velocity_smoother]: 
+[velocity_smoother-10] 	velocity_smoother lifecycle node launched. 
+[velocity_smoother-10] 	Waiting on external lifecycle transitions to activate
+[velocity_smoother-10] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[planner_server-8] [INFO] [1789014872.646318615] [planner_server]: 
+[planner_server-8] 	planner_server lifecycle node launched. 
+[planner_server-8] 	Waiting on external lifecycle transitions to activate
+[planner_server-8] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[ekf_node-7] [INFO] [1789014872.647777251] [ekf_global]: Waiting for clock to start...
+[planner_server-8] [INFO] [1789014872.648452459] [planner_server]: Creating
+[map_server-5] [INFO] [1789014872.655563189] [map_server]: 
+[map_server-5] 	map_server lifecycle node launched. 
+[map_server-5] 	Waiting on external lifecycle transitions to activate
+[map_server-5] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[map_server-5] [INFO] [1789014872.655643299] [map_server]: Creating
+[planner_server-8] [INFO] [1789014872.656295667] [global_costmap.global_costmap]: 
+[planner_server-8] 	global_costmap lifecycle node launched. 
+[planner_server-8] 	Waiting on external lifecycle transitions to activate
+[planner_server-8] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[planner_server-8] [INFO] [1789014872.656812816] [global_costmap.global_costmap]: Creating Costmap
+[lifecycle_manager-9] [INFO] [1789014872.833565141] [lifecycle_manager_navigation]: [34m[1mStarting managed nodes bringup...[0m[0m
+[lifecycle_manager-9] [INFO] [1789014872.833598031] [lifecycle_manager_navigation]: [34m[1mConfiguring map_server[0m[0m
+[map_server-5] [INFO] [1789014872.981161177] [map_server]: Configuring
+[map_server-5] [INFO] [1789014872.981214337] [map_io]: Loading yaml file: /home/howardchen/masterthesis/install/ammr_bringup/share/ammr_bringup/maps/bigarena.yaml
+[map_server-5] [INFO] [1789014872.981376066] [map_io]: resolution: 0.05
+[map_server-5] [INFO] [1789014872.981386926] [map_io]: origin[0]: -1.5
+[map_server-5] [INFO] [1789014872.981390156] [map_io]: origin[1]: -1.5
+[map_server-5] [INFO] [1789014872.981392216] [map_io]: origin[2]: 0
+[map_server-5] [INFO] [1789014872.981394796] [map_io]: free_thresh: 0.196
+[map_server-5] [INFO] [1789014872.981397026] [map_io]: occupied_thresh: 0.65
+[map_server-5] [INFO] [1789014872.981400026] [map_io]: mode: trinary
+[map_server-5] [INFO] [1789014872.981402936] [map_io]: negate: 0
+[map_server-5] [INFO] [1789014872.981518166] [map_io]: Loading image_file: /home/howardchen/masterthesis/install/ammr_bringup/share/ammr_bringup/maps/bigarena.pgm
+[map_server-5] [INFO] [1789014872.983665390] [map_io]: Read map /home/howardchen/masterthesis/install/ammr_bringup/share/ammr_bringup/maps/bigarena.pgm: 400 X 400 map @ 0.05 m/cell
+[lifecycle_manager-9] [INFO] [1789014872.988957515] [lifecycle_manager_navigation]: [34m[1mConfiguring amcl[0m[0m
+[lifecycle_manager-9] [INFO] [1789014873.001692790] [lifecycle_manager_navigation]: [34m[1mConfiguring planner_server[0m[0m
+[amcl-6] [INFO] [1789014872.989151595] [amcl]: Configuring
+[amcl-6] [INFO] [1789014872.989219325] [amcl]: initTransforms
+[amcl-6] [INFO] [1789014872.994916299] [amcl]: initPubSub
+[amcl-6] [INFO] [1789014872.999890726] [amcl]: Subscribed to map topic.
+[planner_server-8] [INFO] [1789014873.001836130] [planner_server]: Configuring
+[planner_server-8] [INFO] [1789014873.001859680] [global_costmap.global_costmap]: Configuring
+[planner_server-8] [INFO] [1789014873.006565237] [global_costmap.global_costmap]: Using plugin "static_layer"
+[planner_server-8] [INFO] [1789014873.008871131] [global_costmap.global_costmap]: Subscribing to the map topic (/map) with transient local durability
+[planner_server-8] [INFO] [1789014873.009977318] [global_costmap.global_costmap]: Initialized plugin "static_layer"
+[planner_server-8] [INFO] [1789014873.009989408] [global_costmap.global_costmap]: Using plugin "obstacle_layer"
+[planner_server-8] [INFO] [1789014873.010271097] [global_costmap.global_costmap]: Subscribed to Topics: scan
+[planner_server-8] [INFO] [1789014873.012384471] [global_costmap.global_costmap]: Initialized plugin "obstacle_layer"
+[planner_server-8] [INFO] [1789014873.012394811] [global_costmap.global_costmap]: Using plugin "inflation_layer"
+[planner_server-8] [INFO] [1789014873.012694080] [global_costmap.global_costmap]: Initialized plugin "inflation_layer"
+[planner_server-8] [INFO] [1789014873.029135255] [planner_server]: Created global planner plugin GridBased of type nav2_smac_planner::SmacPlanner2D
+[planner_server-8] [INFO] [1789014873.029160935] [planner_server]: Configuring GridBased of type SmacPlanner2D
+[planner_server-8] [ERROR] [1789014873.029587854] [planner_server]: Inflation layer either not found or inflation is not set sufficiently for optimized non-circular collision checking capabilities. It is HIGHLY recommended to set the inflation radius to be at MINIMUM half of the robot's largest cross-section. See github.com/ros-planning/navigation2/tree/main/nav2_smac_planner#potential-fields for full instructions. This will substantially impact run-time performance.
+[planner_server-8] [INFO] [1789014873.060375880] [planner_server]: Configured plugin GridBased of type SmacPlanner2D with tolerance 0.12, maximum iterations 1000000, max on approach iterations 1000, and allowing unknown traversal.
+[planner_server-8] [INFO] [1789014873.060417219] [planner_server]: Planner Server has GridBased  planners available.
+[lifecycle_manager-9] [INFO] [1789014873.071921528] [lifecycle_manager_navigation]: [34m[1mConfiguring velocity_smoother[0m[0m
+[velocity_smoother-10] [INFO] [1789014873.072181957] [velocity_smoother]: Configuring velocity smoother
+[lifecycle_manager-9] [INFO] [1789014873.075071719] [lifecycle_manager_navigation]: [34m[1mActivating map_server[0m[0m
+[map_server-5] [INFO] [1789014873.075172409] [map_server]: Activating
+[map_server-5] [INFO] [1789014873.075536418] [map_server]: Creating bond (map_server) to lifecycle manager.
+[amcl-6] [INFO] [1789014873.075806167] [amcl]: Received a 400 X 400 map @ 0.050 m/pix
+[planner_server-8] [INFO] [1789014873.075847597] [global_costmap.global_costmap]: StaticLayer: Resizing costmap to 400 X 400 at 0.050000 m/pix
+[foxglove_bridge-4] [INFO] [1789014873.119484248] [foxglove_bridge]: Advertising new channel 41 for topic "/set_pose"
+[foxglove_bridge-4] [INFO] [1789014873.119519017] [foxglove_bridge]: Advertising new channel 42 for topic "/unsmoothed_plan"
+[foxglove_bridge-4] [INFO] [1789014873.119880046] [foxglove_bridge]: Advertising new channel 43 for topic "/map"
+[foxglove_bridge-4] [INFO] [1789014873.120404845] [foxglove_bridge]: Advertising new channel 44 for topic "/planner_server/transition_event"
+[foxglove_bridge-4] [INFO] [1789014873.120545845] [foxglove_bridge]: Advertising new channel 45 for topic "/global_costmap/static_layer_updates"
+[foxglove_bridge-4] [INFO] [1789014873.120828824] [foxglove_bridge]: Advertising new channel 46 for topic "/global_costmap/static_layer_raw"
+[foxglove_bridge-4] [INFO] [1789014873.120835564] [foxglove_bridge]: Advertising new channel 47 for topic "/global_costmap/static_layer"
+[foxglove_bridge-4] [INFO] [1789014873.121245463] [foxglove_bridge]: Advertising new channel 48 for topic "/global_costmap/published_footprint"
+[foxglove_bridge-4] [INFO] [1789014873.121256853] [foxglove_bridge]: Advertising new channel 49 for topic "/global_costmap/obstacle_layer_updates"
+[foxglove_bridge-4] [INFO] [1789014873.121455432] [foxglove_bridge]: Advertising new channel 50 for topic "/global_costmap/obstacle_layer_raw_updates"
+[foxglove_bridge-4] [INFO] [1789014873.121466782] [foxglove_bridge]: Advertising new channel 51 for topic "/global_costmap/obstacle_layer_raw"
+[foxglove_bridge-4] [INFO] [1789014873.121472922] [foxglove_bridge]: Advertising new channel 52 for topic "/global_costmap/global_costmap/transition_event"
+[foxglove_bridge-4] [INFO] [1789014873.121478822] [foxglove_bridge]: Advertising new channel 53 for topic "/global_costmap/costmap_updates"
+[foxglove_bridge-4] [INFO] [1789014873.121484432] [foxglove_bridge]: Advertising new channel 54 for topic "/global_costmap/costmap_raw_updates"
+[foxglove_bridge-4] [INFO] [1789014873.121489702] [foxglove_bridge]: Advertising new channel 55 for topic "/global_costmap/costmap_raw"
+[foxglove_bridge-4] [INFO] [1789014873.121497332] [foxglove_bridge]: Advertising new channel 56 for topic "/global_costmap/costmap"
+[foxglove_bridge-4] [INFO] [1789014873.121517052] [foxglove_bridge]: Advertising new channel 57 for topic "/global_costmap/static_layer_raw_updates"
+[foxglove_bridge-4] [INFO] [1789014873.121961741] [foxglove_bridge]: Advertising new channel 58 for topic "/diagnostics"
+[foxglove_bridge-4] [INFO] [1789014873.122119270] [foxglove_bridge]: Advertising new channel 59 for topic "/global_costmap/footprint"
+[foxglove_bridge-4] [INFO] [1789014873.122129810] [foxglove_bridge]: Advertising new channel 60 for topic "/global_costmap/obstacle_layer"
+[foxglove_bridge-4] [INFO] [1789014873.122135760] [foxglove_bridge]: Advertising new channel 61 for topic "/odometry/filtered"
+[foxglove_bridge-4] [INFO] [1789014873.122140900] [foxglove_bridge]: Advertising new channel 62 for topic "/amcl_pose"
+[goal_to_plan_relay-11] [INFO] [1789014873.134219027] [goal_to_plan_relay]: goal_to_plan_relay up: planner_id='GridBased', frame map->base_footprint, replan_period=1.0s, tol=0.30m
+[gmpc_node-12] [INFO] [1789014873.144268450] [gmpc_controller]: GMPC controller up: N=20, dt=0.050s, v_nom=0.22 m/s, frame map->base_footprint, CBF=ON (α=3.0, margin=0.38m)
+[scan_obstacle_tracker-13] [INFO] [1789014873.162015851] [scan_obstacle_tracker]: scan_obstacle_tracker up: /scan -> track in map (map_subtraction=True) -> cluster(gap=0.3) -> KF -> velocity gate(>=0.1 m/s) -> /gmpc/obstacles in map
+[lifecycle_manager-9] [INFO] [1789014873.178699175] [lifecycle_manager_navigation]: Server map_server connected with bond.
+[lifecycle_manager-9] [INFO] [1789014873.178730975] [lifecycle_manager_navigation]: [34m[1mActivating amcl[0m[0m
+[amcl-6] [INFO] [1789014873.178905865] [amcl]: Activating
+[amcl-6] [INFO] [1789014873.178936725] [amcl]: initialPoseReceived
+[amcl-6] [INFO] [1789014873.178982944] [amcl]: Setting pose (13.370000): 0.000 -0.000 0.000
+[amcl-6] [INFO] [1789014873.179953892] [amcl]: Creating bond (amcl) to lifecycle manager.
+[lifecycle_manager-9] [INFO] [1789014873.282813020] [lifecycle_manager_navigation]: Server amcl connected with bond.
+[lifecycle_manager-9] [INFO] [1789014873.282842570] [lifecycle_manager_navigation]: [34m[1mActivating planner_server[0m[0m
+[planner_server-8] [INFO] [1789014873.283008060] [planner_server]: Activating
+[planner_server-8] [INFO] [1789014873.283035409] [global_costmap.global_costmap]: Activating
+[planner_server-8] [INFO] [1789014873.283041289] [global_costmap.global_costmap]: Checking transform
+[planner_server-8] [INFO] [1789014873.283099359] [global_costmap.global_costmap]: start
+[scan_obstacle_tracker-13] [INFO] [1789014873.412908723] [scan_obstacle_tracker]: map received: 400x400 @ 0.050 m, inflated occupied cells = 64260
+[foxglove_bridge-4] [INFO] [1789014873.705825431] [foxglove_bridge]: Advertising new channel 63 for topic "/scan_filtered"
+[foxglove_bridge-4] [INFO] [1789014873.706069120] [foxglove_bridge]: Advertising new channel 64 for topic "/gmpc/solve_time_ms"
+[foxglove_bridge-4] [INFO] [1789014873.707152987] [foxglove_bridge]: Advertising new channel 65 for topic "/gmpc/scan_obstacles_viz"
+[foxglove_bridge-4] [INFO] [1789014873.707619136] [foxglove_bridge]: Advertising new channel 66 for topic "/gmpc/obstacles"
+[foxglove_bridge-4] [INFO] [1789014873.707630616] [foxglove_bridge]: Advertising new channel 67 for topic "/gmpc/min_h"
+[foxglove_bridge-4] [INFO] [1789014873.707830875] [foxglove_bridge]: Advertising new channel 68 for topic "/gmpc/heading"
+[foxglove_bridge-4] [INFO] [1789014873.707841405] [foxglove_bridge]: Advertising new channel 69 for topic "/gmpc/cbf_zones"
+[foxglove_bridge-4] [INFO] [1789014873.707856715] [foxglove_bridge]: Advertising new channel 70 for topic "/gmpc/diag"
+[foxglove_bridge-4] [INFO] [1789014873.707862455] [foxglove_bridge]: Advertising new channel 71 for topic "/gmpc/static_obstacles"
+[foxglove_bridge-4] [INFO] [1789014873.707869515] [foxglove_bridge]: Advertising new channel 72 for topic "/cmd_vel_nav"
+[foxglove_bridge-4] [INFO] [1789014873.707877825] [foxglove_bridge]: Advertising new channel 73 for topic "/gmpc/tracks_debug"
+[foxglove_bridge-4] [INFO] [1789014874.208996422] [foxglove_bridge]: Advertising new channel 74 for topic "/velocity_smoother/transition_event"
+[planner_server-8] [INFO] [1789014874.333862929] [planner_server]: Activating plugin GridBased of type SmacPlanner2D
+[planner_server-8] [INFO] [1789014874.335021916] [planner_server]: Creating bond (planner_server) to lifecycle manager.
+[lifecycle_manager-9] [INFO] [1789014874.437631815] [lifecycle_manager_navigation]: Server planner_server connected with bond.
+[lifecycle_manager-9] [INFO] [1789014874.437661115] [lifecycle_manager_navigation]: [34m[1mActivating velocity_smoother[0m[0m
+[velocity_smoother-10] [INFO] [1789014874.437862834] [velocity_smoother]: Activating
+[velocity_smoother-10] [INFO] [1789014874.437912094] [velocity_smoother]: Creating bond (velocity_smoother) to lifecycle manager.
+[lifecycle_manager-9] [INFO] [1789014874.540985272] [lifecycle_manager_navigation]: Server velocity_smoother connected with bond.
+[lifecycle_manager-9] [INFO] [1789014874.541014671] [lifecycle_manager_navigation]: [34m[1mManaged nodes are active[0m[0m
+[lifecycle_manager-9] [INFO] [1789014874.541022931] [lifecycle_manager_navigation]: [34m[1mCreating bond timer...[0m[0m
+[foxglove_bridge-4] [INFO] [1789014874.744063045] [foxglove_bridge]: Advertising new channel 75 for topic "/particle_cloud"
+[foxglove_bridge-4] [INFO] [1789014874.744116035] [foxglove_bridge]: Advertising new channel 76 for topic "/map_server/transition_event"
+[foxglove_bridge-4] [INFO] [1789014874.744125875] [foxglove_bridge]: Advertising new channel 77 for topic "/initialpose"
+[foxglove_bridge-4] [INFO] [1789014874.744254945] [foxglove_bridge]: Advertising new channel 78 for topic "/bond"
+[foxglove_bridge-4] [INFO] [1789014874.744262395] [foxglove_bridge]: Advertising new channel 79 for topic "/amcl/transition_event"
+[amcl-6] [INFO] [1789014876.081361750] [amcl]: createLaserObject
+[lifecycle_manager-9] [INFO] [1789014887.122634596] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[velocity_smoother-10] [INFO] [1789014887.122636766] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[velocity_smoother-10] [INFO] [1789014887.122692365] [velocity_smoother]: Running Nav2 LifecycleNode rcl preshutdown (velocity_smoother)
+[amcl-6] [INFO] [1789014887.122642106] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[amcl-6] [INFO] [1789014887.122704945] [amcl]: Running Nav2 LifecycleNode rcl preshutdown (amcl)
+[foxglove_bridge-4] [INFO] [1789014887.122643876] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[lifecycle_manager-9] [INFO] [1789014887.122691035] [lifecycle_manager_navigation]: Running Nav2 LifecycleManager rcl preshutdown (lifecycle_manager_navigation)
+[lifecycle_manager-9] [INFO] [1789014887.122724195] [lifecycle_manager_navigation]: [34m[1mTerminating bond timer...[0m[0m
+[amcl-6] [INFO] [1789014887.122758365] [amcl]: Deactivating
+[amcl-6] [INFO] [1789014887.122777295] [amcl]: Destroying bond (amcl) to lifecycle manager.
+[velocity_smoother-10] [INFO] [1789014887.122769245] [velocity_smoother]: Deactivating
+[velocity_smoother-10] [INFO] [1789014887.122786175] [velocity_smoother]: Destroying bond (velocity_smoother) to lifecycle manager.
+[planner_server-8] [INFO] [1789014887.123576023] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[planner_server-8] [INFO] [1789014887.123619203] [planner_server]: Running Nav2 LifecycleNode rcl preshutdown (planner_server)
+[planner_server-8] [INFO] [1789014887.123655443] [planner_server]: Deactivating
+[planner_server-8] [INFO] [1789014887.123674663] [global_costmap.global_costmap]: Deactivating
+[map_server-5] [INFO] [1789014887.123740053] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[ekf_node-7] [INFO] [1789014887.123773002] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[map_server-5] [INFO] [1789014887.123797862] [map_server]: Running Nav2 LifecycleNode rcl preshutdown (map_server)
+[map_server-5] [INFO] [1789014887.123834922] [map_server]: Deactivating
+[map_server-5] [INFO] [1789014887.123845632] [map_server]: Destroying bond (map_server) to lifecycle manager.
+[robot_state_publisher-1] [INFO] [1789014887.123818582] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[foxglove_bridge-4] [INFO] [1789014887.125639257] [foxglove_bridge]: Shutting down foxglove_bridge
+[foxglove_bridge-4] [INFO] [1789014887.125981307] [foxglove_bridge]: Shutdown complete
+
+  收到終止訊號
+[amcl-6] [INFO] [1789014887.133057557] [amcl]: Cleaning up
+[velocity_smoother-10] [INFO] [1789014887.133177757] [velocity_smoother]: Cleaning up
+[velocity_smoother-10] [INFO] [1789014887.133205047] [velocity_smoother]: Destroying bond (velocity_smoother) to lifecycle manager.
+[map_server-5] [INFO] [1789014887.136445038] [map_server]: Cleaning up
+[map_server-5] [INFO] [1789014887.136478288] [map_server]: Destroying bond (map_server) to lifecycle manager.
+[amcl-6] [INFO] [1789014887.139147960] [amcl]: Destroying bond (amcl) to lifecycle manager.
+[velocity_smoother-10] [INFO] [1789014887.139579129] [velocity_smoother]: Destroying
+[map_server-5] [INFO] [1789014887.142855660] [map_server]: Destroying
+[amcl-6] [INFO] [1789014887.151362327] [amcl]: Destroying
+[odom_tf_broadcaster-2] Traceback (most recent call last):
+[odom_tf_broadcaster-2]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/odom_tf_broadcaster", line 33, in <module>
+[odom_tf_broadcaster-2]     sys.exit(load_entry_point('ammr-bringup==0.0.1', 'console_scripts', 'odom_tf_broadcaster')())
+[odom_tf_broadcaster-2]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[odom_tf_broadcaster-2]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/python3.12/site-packages/ammr_bringup/odom_tf_broadcaster.py", line 62, in main
+[odom_tf_broadcaster-2]     rclpy.spin(OdomTfBroadcaster())
+[odom_tf_broadcaster-2]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+[odom_tf_broadcaster-2]     executor.spin_once()
+[odom_tf_broadcaster-2]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+[odom_tf_broadcaster-2]     self._spin_once_impl(timeout_sec)
+[odom_tf_broadcaster-2]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+[odom_tf_broadcaster-2]     handler, entity, node = self.wait_for_ready_callbacks(
+[odom_tf_broadcaster-2]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[odom_tf_broadcaster-2]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+[odom_tf_broadcaster-2]     return next(self._cb_iter)
+[odom_tf_broadcaster-2]            ^^^^^^^^^^^^^^^^^^^
+[odom_tf_broadcaster-2]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+[odom_tf_broadcaster-2]     raise ExternalShutdownException()
+[odom_tf_broadcaster-2] rclpy.executors.ExternalShutdownException
+[scan_relay-3] Traceback (most recent call last):
+[scan_relay-3]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/scan_relay", line 33, in <module>
+[scan_relay-3]     sys.exit(load_entry_point('ammr-bringup==0.0.1', 'console_scripts', 'scan_relay')())
+[scan_relay-3]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[scan_relay-3]   File "/home/howardchen/masterthesis/install/ammr_bringup/lib/python3.12/site-packages/ammr_bringup/scan_relay.py", line 86, in main
+[scan_relay-3]     rclpy.spin(ScanRelay())
+[scan_relay-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+[scan_relay-3]     executor.spin_once()
+[scan_relay-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+[scan_relay-3]     self._spin_once_impl(timeout_sec)
+[scan_relay-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+[scan_relay-3]     handler, entity, node = self.wait_for_ready_callbacks(
+[scan_relay-3]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[scan_relay-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+[scan_relay-3]     return next(self._cb_iter)
+[scan_relay-3]            ^^^^^^^^^^^^^^^^^^^
+[scan_relay-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+[scan_relay-3]     raise ExternalShutdownException()
+[scan_relay-3] rclpy.executors.ExternalShutdownException
+[lifecycle_manager-9] [INFO] [1789014887.175044082] [lifecycle_manager_navigation]: Destroying lifecycle_manager_navigation
+[scan_obstacle_tracker-13] Traceback (most recent call last):
+[scan_obstacle_tracker-13]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/scan_obstacle_tracker.py", line 979, in main
+[scan_obstacle_tracker-13]     rclpy.spin(node)
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+[scan_obstacle_tracker-13]     executor.spin_once()
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+[scan_obstacle_tracker-13]     self._spin_once_impl(timeout_sec)
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 918, in _spin_once_impl
+[scan_obstacle_tracker-13]     raise handler.exception()
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/task.py", line 286, in _execute_coroutine_step
+[scan_obstacle_tracker-13]     result = coro.send(None)
+[scan_obstacle_tracker-13]              ^^^^^^^^^^^^^^^
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 592, in handler
+[scan_obstacle_tracker-13]     await call_coroutine()
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 480, in _execute
+[scan_obstacle_tracker-13]     await await_or_execute(sub.callback, *msg_tuple)
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 115, in await_or_execute
+[scan_obstacle_tracker-13]     return callback(*args)
+[scan_obstacle_tracker-13]            ^^^^^^^^^^^^^^^
+[scan_obstacle_tracker-13]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/scan_obstacle_tracker.py", line 540, in _scan_cb
+[scan_obstacle_tracker-13]     self._publish(t_ns, scan.header.stamp, movers, tx, ty)
+[scan_obstacle_tracker-13]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/scan_obstacle_tracker.py", line 943, in _publish
+[scan_obstacle_tracker-13]     self.pub.publish(msg)
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/publisher.py", line 70, in publish
+[scan_obstacle_tracker-13]     self.__publisher.publish(msg)
+[scan_obstacle_tracker-13] rclpy._rclpy_pybind11.RCLError: Failed to publish: publisher's context is invalid, at ./src/rcl/publisher.c:423
+[scan_obstacle_tracker-13] 
+[scan_obstacle_tracker-13] During handling of the above exception, another exception occurred:
+[scan_obstacle_tracker-13] 
+[scan_obstacle_tracker-13] Traceback (most recent call last):
+[scan_obstacle_tracker-13]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/scan_obstacle_tracker", line 33, in <module>
+[scan_obstacle_tracker-13]     sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'scan_obstacle_tracker')())
+[scan_obstacle_tracker-13]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[scan_obstacle_tracker-13]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/scan_obstacle_tracker.py", line 984, in main
+[scan_obstacle_tracker-13]     rclpy.shutdown()
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+[scan_obstacle_tracker-13]     _shutdown(context=context)
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+[scan_obstacle_tracker-13]     context.shutdown()
+[scan_obstacle_tracker-13]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+[scan_obstacle_tracker-13]     self.__context.shutdown()
+[scan_obstacle_tracker-13] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
+[goal_to_plan_relay-11] Traceback (most recent call last):
+[goal_to_plan_relay-11]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/goal_to_plan_relay.py", line 205, in main
+[goal_to_plan_relay-11]     rclpy.spin(node)
+[goal_to_plan_relay-11]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+[goal_to_plan_relay-11]     executor.spin_once()
+[goal_to_plan_relay-11]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+[goal_to_plan_relay-11]     self._spin_once_impl(timeout_sec)
+[goal_to_plan_relay-11]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+[goal_to_plan_relay-11]     handler, entity, node = self.wait_for_ready_callbacks(
+[goal_to_plan_relay-11]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[goal_to_plan_relay-11]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+[goal_to_plan_relay-11]     return next(self._cb_iter)
+[goal_to_plan_relay-11]            ^^^^^^^^^^^^^^^^^^^
+[goal_to_plan_relay-11]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+[goal_to_plan_relay-11]     raise ExternalShutdownException()
+[goal_to_plan_relay-11] rclpy.executors.ExternalShutdownException
+[goal_to_plan_relay-11] 
+[goal_to_plan_relay-11] During handling of the above exception, another exception occurred:
+[goal_to_plan_relay-11] 
+[goal_to_plan_relay-11] Traceback (most recent call last):
+[goal_to_plan_relay-11]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/goal_to_plan_relay", line 33, in <module>
+[goal_to_plan_relay-11]     sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'goal_to_plan_relay')())
+[goal_to_plan_relay-11]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[goal_to_plan_relay-11]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/goal_to_plan_relay.py", line 210, in main
+[goal_to_plan_relay-11]     rclpy.shutdown()
+[goal_to_plan_relay-11]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+[goal_to_plan_relay-11]     _shutdown(context=context)
+[goal_to_plan_relay-11]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+[goal_to_plan_relay-11]     context.shutdown()
+[goal_to_plan_relay-11]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+[goal_to_plan_relay-11]     self.__context.shutdown()
+[goal_to_plan_relay-11] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
+[gmpc_node-12] Traceback (most recent call last):
+[gmpc_node-12]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/gmpc_node.py", line 979, in main
+[gmpc_node-12]     rclpy.spin(node)
+[gmpc_node-12]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+[gmpc_node-12]     executor.spin_once()
+[gmpc_node-12]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+[gmpc_node-12]     self._spin_once_impl(timeout_sec)
+[gmpc_node-12]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+[gmpc_node-12]     handler, entity, node = self.wait_for_ready_callbacks(
+[gmpc_node-12]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[gmpc_node-12]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+[gmpc_node-12]     return next(self._cb_iter)
+[gmpc_node-12]            ^^^^^^^^^^^^^^^^^^^
+[gmpc_node-12]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+[gmpc_node-12]     raise ExternalShutdownException()
+[gmpc_node-12] rclpy.executors.ExternalShutdownException
+[gmpc_node-12] 
+[gmpc_node-12] During handling of the above exception, another exception occurred:
+[gmpc_node-12] 
+[gmpc_node-12] Traceback (most recent call last):
+[gmpc_node-12]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/gmpc_node", line 33, in <module>
+[gmpc_node-12]     sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'gmpc_node')())
+[gmpc_node-12]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[gmpc_node-12]   File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/gmpc_node.py", line 984, in main
+[gmpc_node-12]     rclpy.shutdown()
+[gmpc_node-12]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+[gmpc_node-12]     _shutdown(context=context)
+[gmpc_node-12]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+[gmpc_node-12]     context.shutdown()
+[gmpc_node-12]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+[gmpc_node-12]     self.__context.shutdown()
+[gmpc_node-12] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
+[INFO] [robot_state_publisher-1]: process has finished cleanly [pid 914396]
+[INFO] [velocity_smoother-10]: process has finished cleanly [pid 914827]
+[INFO] [ekf_node-7]: process has finished cleanly [pid 914824]
+[INFO] [map_server-5]: process has finished cleanly [pid 914822]
+[INFO] [amcl-6]: process has finished cleanly [pid 914823]
+[planner_server-8] [INFO] [1789014887.283267176] [planner_server]: Deactivating plugin GridBased of type SmacPlanner2D
+[planner_server-8] [INFO] [1789014887.283307336] [planner_server]: Destroying bond (planner_server) to lifecycle manager.
+[INFO] [lifecycle_manager-9]: process has finished cleanly [pid 914826]
+[planner_server-8] [INFO] [1789014887.293442768] [planner_server]: Cleaning up
+[planner_server-8] [INFO] [1789014887.296756129] [global_costmap.global_costmap]: Cleaning up
+[planner_server-8] [INFO] [1789014887.298324224] [planner_server]: Cleaning up plugin GridBased of type SmacPlanner2D
+[planner_server-8] [INFO] [1789014887.298421864] [planner_server]: Destroying plugin GridBased of type SmacPlanner2D
+[planner_server-8] [INFO] [1789014887.302393894] [planner_server]: Destroying bond (planner_server) to lifecycle manager.
+[planner_server-8] [INFO] [1789014887.304229599] [global_costmap.global_costmap]: Destroying
+[planner_server-8] [INFO] [1789014887.306990741] [planner_server]: Destroying
+    實際 RTF 0.937（模擬 26.6 s / 實際 28.4 s），limit_cpu_threads=8
+
+  ── 結束（signal）──
+    真值終點 (4.998, 10.500)，距目標 2.998 m
+    手臂保持誤差 最大 0.737 mrad
+    底盤 |roll| 最大 0.0000°，|pitch| 最大 0.0000°
+    與移動體最小間距 4.491 m
+  停止原因 signal
+  時間一致性：迴圈計數時鐘與物理時鐘最大偏差 0.001 ms（physics_dt=0.01, rendering_dt=0.01）
+  三個時刻（分開記錄，不互相取代）：目標訊息時戳 None，模擬器收到目標 None，第一個 /plan None，運動開始（首次非零 cmd_vel） None
+  觸發當下真值 (4.998, 10.500)，距目標 2.998 m ← 到達判定用這筆
+  歸零步進後 (4.998, 10.500)，距目標 2.998 m（僅描述停機）
+  已寫入 /home/howardchen/masterthesis/evaluation/runs/isaac_bigarena_gmpc_scan_heading__seed103__tfix_back_123406/isaac_run.json
+[INFO] [foxglove_bridge-4]: process has finished cleanly [pid 914693]
+[ERROR] [scan_relay-3]: process has died [pid 914398, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/scan_relay --ros-args --params-file /tmp/launch_params_ciqqhziz'].
+[ERROR] [odom_tf_broadcaster-2]: process has died [pid 914397, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_bringup/lib/ammr_bringup/odom_tf_broadcaster --ros-args --params-file /tmp/launch_params_i4t0tl9l'].
+[ERROR] [goal_to_plan_relay-11]: process has died [pid 914828, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/goal_to_plan_relay --ros-args -r __node:=goal_to_plan_relay --params-file /tmp/launch_params_182ryzfi'].
+[ERROR] [gmpc_node-12]: process has died [pid 914829, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/gmpc_node --ros-args -r __node:=gmpc_controller --params-file /home/howardchen/masterthesis/install/ammr_wholebody_mpc/share/ammr_wholebody_mpc/config/gmpc_params.yaml --params-file /tmp/launch_params_4rlbp6s6 --params-file /tmp/launch_params_j7nwi1jr --params-file /tmp/launch_params_9uvw1n_9'].
+[ERROR] [scan_obstacle_tracker-13]: process has died [pid 914830, exit code 1, cmd '/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/scan_obstacle_tracker --ros-args -r __node:=scan_obstacle_tracker --params-file /tmp/launch_params_3wgac73p'].
+[INFO] [planner_server-8]: process has finished cleanly [pid 914825]
+[37.796s] Simulation App Shutting Down
+12:34:48 Isaac exited; temperature sampling stopped

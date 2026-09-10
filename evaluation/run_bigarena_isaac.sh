@@ -222,12 +222,13 @@ for n in /map_server /amcl /planner_server; do
 done
 
 # (e) 錄製端確實訂閱了關鍵 topic（從 recorder 自己的日誌確認）
+# A one-shot grep raced the recorder: /cmd_vel does not exist until gmpc_node
+# publishes its first message, so the subscription can legitimately appear a
+# few seconds after the other topics. That is "not ready yet", not "broken" --
+# the same distinction the other checks already make -- so it is given time.
+bag_subscribed() { grep -aq "Subscribed to topic '${1}'" "$LOG" 2>/dev/null; }
 for t in /scan /odom /cmd_vel /amcl_pose /model/omni_bot/pose /tf; do
-    if grep -aq "Subscribed to topic '${t}'" "$LOG" 2>/dev/null; then
-        mark "bag 已訂閱 $t"
-    else
-        mark "!! bag 未訂閱 $t"; gate_fail=1
-    fi
+    wait_for 30 "bag 已訂閱 $t" bag_subscribed "$t"
 done
 
 # (f) 靜止檢查：NO_TRAFFIC=1 只保證沒有下命令，不保證物體不動。

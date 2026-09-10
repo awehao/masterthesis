@@ -228,7 +228,7 @@ from rclpy.node import Node                                       # noqa: E402
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy  # noqa: E402
 from rosgraph_msgs.msg import Clock                               # noqa: E402
 from geometry_msgs.msg import PoseStamped, Twist                  # noqa: E402
-from nav_msgs.msg import Odometry, Path                           # noqa: E402
+from nav_msgs.msg import Odometry                                 # noqa: E402
 from sensor_msgs.msg import JointState                            # noqa: E402
 from sensor_msgs.msg import (CameraInfo, CompressedImage, Image,  # noqa: E402
                              LaserScan)
@@ -409,24 +409,10 @@ class Bridge(Node):
         # The task clock starts when the goal is published, in SIMULATION time.
         # Recording starts earlier and covers start-up and the readiness gate,
         # so the two must not share one timer.
-        # Three DIFFERENT instants, kept apart because they are not the same
-        # event and one cannot stand in for another:
-        #   goal_stamp      the goal message's own header stamp
-        #   goal_sim_t      sim time when THIS process's callback ran
-        #   first_plan_t    sim time of the first /plan after the goal -- the
-        #                   task start the reports use for arrival_time_s
-        #   motion_start_t  sim time of the first non-zero /cmd_vel; this is
-        #                   "運動開始時間" and is NOT a substitute for the above
-        # The gap between them is the callback latency, which is recorded
-        # rather than folded away.
-        self.goal_sim_t = None
-        self.goal_stamp = None
+        self.goal_sim_t = None        # sim time when THIS process received it
+        self.goal_stamp = None        # the message's own header stamp
         self.goal_count = 0
-        self.first_plan_t = None
-        self.plan_count = 0
-        self.motion_start_t = None
         self.create_subscription(PoseStamped, '/goal_pose', self._goal, 10)
-        self.create_subscription(Path, '/plan', self._plan, 10)
         # gz publishes this from gz-sim-odometry-publisher-system at 30 Hz:
         # true-pose derived, 2D, odom frame, child base_footprint, and already
         # in map coordinates. odom_tf_broadcaster relays it to /odom and emits
@@ -453,13 +439,6 @@ class Bridge(Node):
 
     def _cmd(self, m):
         self.cmd = [m.linear.x, m.linear.y, m.angular.z]
-        if self.motion_start_t is None and max(abs(v) for v in self.cmd) > 1e-6:
-            self.motion_start_t = self.sim_t
-
-    def _plan(self, m):
-        self.plan_count += 1
-        if self.first_plan_t is None and len(m.poses) > 0:
-            self.first_plan_t = self.sim_t
 
     def _goal(self, m):
         # The runner publishes the goal five times so a late subscriber cannot
@@ -611,23 +590,8 @@ class JpegWorker:
 
 
 def main():
-    # rendering_dt MUST equal physics_dt. With rendering_dt = physics_dt * m,
-    # a step(render=True) advances m physics substeps while the loop books one,
-    # so simulated time runs fast by (re_-1+m)/re_ -- measured 1.15 / 1.375 /
-    # 2.005 for render_hz 5 / 12 / 30 at m=4, and exactly 1.0000 at every one
-    # of those render rates once m=1 (evaluation/results/time_audit/).
-    # /clock is published from that bookkeeping, so the whole control chain ran
-    # on the wrong clock, not just the report.
     world = World(stage_units_in_meters=1.0, physics_dt=a.physics_dt,
-                  rendering_dt=a.physics_dt)
-    _pdt = world.get_physics_dt()
-    _rdt = world.get_rendering_dt()
-    print(f'  時間設定回讀：physics_dt={_pdt}, rendering_dt={_rdt}', flush=True)
-    if abs(float(_rdt) - float(_pdt)) > 1e-12:
-        print(f'  !! rendering_dt ({_rdt}) != physics_dt ({_pdt})：'
-              '帶 render 的步進會多推進物理時間，模擬時間會失真。中止。',
-              file=sys.stderr)
-        sys.exit(4)
+                  rendering_dt=a.physics_dt * 4)
     stage = omni.usd.get_context().get_stage()
     dyn = build_scene(stage)
     # A dome light is needed by ANY rendering, not just the viewport: the first
@@ -1109,21 +1073,17 @@ def main():
             se = max(1, int(round((1.0 / a.scan_rate) / a.physics_dt)))
             xf4 = UsdGeom.XformCache()
             w0 = time.monotonic()
-            _next_scan = float(world.current_time)
             for k in range(steps):
+                t = k * a.physics_dt
                 world.step(render=False)
-                # Same rule as the closed loop: the clock comes from the
-                # simulator, not from counting iterations.
-                t = float(world.current_time)
-                node.publish_clock(t)
-                if t >= _next_scan - 1e-9:
-                    _next_scan = max(_next_scan + se * a.physics_dt, t)
+                node.publish_clock(t + a.physics_dt)
+                if k % se == 0:
                     xf4.Clear()
                     o4 = xf4.GetLocalToWorldTransform(lidar_prim).ExtractTranslation()
                     p4, q4 = robot.get_world_pose()
                     y4 = yaw_of(q4)
                     m = LaserScan()
-                    m.header.stamp = node.stamp(t)
+                    m.header.stamp = node.stamp(t + a.physics_dt)
                     m.header.frame_id = 'lidar_link'
                     m.angle_min, m.angle_max = SCAN_MIN, SCAN_MAX
                     m.angle_increment = SCAN_INC
@@ -1138,7 +1098,7 @@ def main():
                         rr_.append(d)
                     m.ranges = rr_
                     node.scan_pub.publish(m)
-                tgt = w0 + (t) / max(a.rtf, 1e-9)
+                tgt = w0 + (t + a.physics_dt) / max(a.rtf, 1e-9)
                 sl = tgt - time.monotonic()
                 if sl > 0:
                     time.sleep(sl)
@@ -1195,22 +1155,9 @@ def main():
         print(f'\n  ── 閉迴路開始：{a.duration:.0f} s 模擬時間，RTF {a.rtf:.1f}，'
               f'畫面 {1.0/(re_*dt):.0f} Hz，CPU 中止線 {a.cpu_limit:.0f} °C ──',
               flush=True)
-        # Simulated time is READ from the simulator, never inferred from the
-        # loop counter. world.current_time matched the displacement-derived
-        # physics time exactly in all 12 audited configurations, including the
-        # broken ones, so it stays correct even if a future setting
-        # reintroduces substeps -- the loop counter does not.
-        t = float(world.current_time)
-        t_loop0 = t
-        time_skew_max = 0.0
-        next_scan = next_pose = next_odom = next_render = next_cam = t
         for k in range(steps):
-            t = float(world.current_time)
+            t = k * dt
             node.sim_t = t
-            # A loop-count clock and the physics clock must stay together; the
-            # gap is recorded rather than assumed to be zero.
-            time_skew_max = max(time_skew_max,
-                                abs((t - t_loop0) - k * dt))
             if stop_flag['sig']:
                 stop_reason = 'signal'
                 print('\n  收到終止訊號', flush=True)
@@ -1256,32 +1203,18 @@ def main():
 
             # a camera tick needs a rendered frame, so it forces render even
             # when the viewport rate is lower
-            # Rates are honoured in SIMULATED time, not in loop iterations.
-            # The two coincide only while one iteration advances exactly one
-            # physics_dt, which is the condition the rendering_dt check above
-            # enforces -- scheduling on time keeps the rates right even if it
-            # ever stops holding.
-            _did_cam = cam is not None and t >= next_cam - 1e-9
-            _did_render = (t >= next_render - 1e-9) or _did_cam
-            if _did_render:
-                next_render = max(next_render + re_ * dt, t)
-            if _did_cam:
-                next_cam = max(next_cam + ce * dt, t)
+            _did_render = (k % re_ == 0 or (cam is not None and k % ce == 0))
+            _did_cam = cam is not None and k % ce == 0
             _s0 = time.monotonic()
             world.step(render=_did_render)
             _s1 = time.monotonic()
-            # After the step, ask the simulator what time it is now. The old
-            # code published t + dt, i.e. the loop's own guess.
-            t_after = float(world.current_time)
-            node.sim_t = t_after
-            node.publish_clock(t_after)
+            node.publish_clock(t + dt)
             p_now, q_now = robot.get_world_pose()
 
-            if t_after >= next_odom - 1e-9:
-                next_odom = max(next_odom + oe * dt, t_after)
-                node.publish_odom(t_after, p_now, q_now, [wx, wy], wz)
-                node.publish_joints(t_after, names, robot.get_joint_positions())
-            if _did_cam:
+            if k % oe == 0:
+                node.publish_odom(t + dt, p_now, q_now, [wx, wy], wz)
+                node.publish_joints(t + dt, names, robot.get_joint_positions())
+            if cam is not None and k % ce == 0:
                 # follow the robot: the camera prim is not parented under the
                 # articulation, so its pose is refreshed from the optical
                 # frame's own transform each tick
@@ -1300,15 +1233,15 @@ def main():
                 if rgba is not None and rgba.size:
                     # camera_info goes out with EVERY frame, whichever image
                     # topic is enabled
-                    node.publish_info(t_after, a.cam_width, a.cam_height, cam_K)
+                    node.publish_info(t + dt, a.cam_width, a.cam_height, cam_K)
                     if a.cam_raw.lower() == 'true':
-                        node.publish_image(t_after, rgba, cam_K)
+                        node.publish_image(t + dt, rgba, cam_K)
                     if a.cam_jpeg.lower() == 'true':
                         if jpeg_worker is not None:
-                            jpeg_worker.submit(t_after, rgba.copy())
+                            jpeg_worker.submit(t + dt, rgba.copy())
                         else:
                             cam_jpeg_bytes.append(
-                                node.publish_jpeg(t_after, rgba, a.cam_jpeg_q))
+                                node.publish_jpeg(t + dt, rgba, a.cam_jpeg_q))
                     _w2 = time.monotonic()
                     # wall-clock cost of producing vs publishing one frame,
                     # kept separate: a simulated-time interval says nothing
@@ -1324,13 +1257,12 @@ def main():
                         except Exception as e:
                             print(f'    存 PNG 失敗：{e}', flush=True)
 
-            if t_after >= next_scan - 1e-9:
-                next_scan = max(next_scan + se * dt, t_after)
+            if k % se == 0:
                 xf5.Clear()
                 o5 = xf5.GetLocalToWorldTransform(lidar_prim).ExtractTranslation()
                 y5 = yaw_of(q_now)
                 m = LaserScan()
-                m.header.stamp = node.stamp(t_after)
+                m.header.stamp = node.stamp(t + dt)
                 m.header.frame_id = 'lidar_link'
                 m.angle_min, m.angle_max = SCAN_MIN, SCAN_MAX
                 m.angle_increment = SCAN_INC
@@ -1342,11 +1274,10 @@ def main():
                                       RANGE_MAX, excluded)[0]
                             for i in range(SCAN_N)]
                 node.scan_pub.publish(m)
-            if t_after >= next_pose - 1e-9:
-                next_pose = max(next_pose + pe * dt, t_after)
+            if k % pe == 0:
                 for nm in dyn:
                     ps = PoseStamped()
-                    ps.header.stamp = node.stamp(t_after)
+                    ps.header.stamp = node.stamp(t + dt)
                     ps.header.frame_id = 'world'
                     ps.pose.position.x = float(dyn_pose[nm][0])
                     ps.pose.position.y = float(dyn_pose[nm][1])
@@ -1354,7 +1285,7 @@ def main():
                     ps.pose.orientation.w = 1.0
                     node.pose_pub[nm].publish(ps)
                 ps = PoseStamped()
-                ps.header.stamp = node.stamp(t_after)
+                ps.header.stamp = node.stamp(t + dt)
                 ps.header.frame_id = 'world'
                 ps.pose.position.x = float(p_now[0])
                 ps.pose.position.y = float(p_now[1])
@@ -1373,7 +1304,7 @@ def main():
                      - (0.25 if MOVER_R.get(n_) is None else MOVER_R[n_])
                      for n_ in dyn] or [float('inf')])
                 rr_, pp_ = rpy2(q_now)
-                log.append(dict(t=t_after, x=float(p_now[0]), y=float(p_now[1]),
+                log.append(dict(t=t + dt, x=float(p_now[0]), y=float(p_now[1]),
                                 yaw=float(yaw_of(q_now)), roll=rr_, pitch=pp_,
                                 cmd=[vx, vy, wz], arm_err=arm_err,
                                 clr_dyn=float(clr),
@@ -1447,22 +1378,6 @@ def main():
                           goal_sim_t=node.goal_sim_t,
                           goal_stamp=node.goal_stamp,
                           goal_msgs_received=node.goal_count,
-                          # 三個時刻分開保存，回呼延遲不折抵
-                          first_plan_sim_t=node.first_plan_t,
-                          plan_msgs_received=node.plan_count,
-                          motion_start_sim_t=node.motion_start_t,
-                          goal_cb_lag_s=(None if (node.goal_sim_t is None
-                                                  or node.motion_start_t is None)
-                                         else node.goal_sim_t - node.motion_start_t),
-                          arrival_time_s=(None if (node.first_plan_t is None
-                                                   or at_trigger['sim_t'] is None)
-                                          else at_trigger['sim_t'] - node.first_plan_t),
-                          motion_elapsed_s=(None if (node.motion_start_t is None
-                                                     or at_trigger['sim_t'] is None)
-                                            else at_trigger['sim_t'] - node.motion_start_t),
-                          physics_dt=a.physics_dt,
-                          rendering_dt=float(world.get_rendering_dt()),
-                          time_skew_max_s=time_skew_max,
                           task_elapsed_sim=(None if node.goal_sim_t is None
                                             else _sim - node.goal_sim_t),
                           camera=dict(enabled=(cam is not None),
@@ -1505,13 +1420,6 @@ def main():
                 print(f'    與移動體最小間距 {min(fin):.3f} m')
         json.dump(rec, open(a.out, 'w'), ensure_ascii=False, indent=1)
         print(f'  停止原因 {stop_reason}')
-        print(f'  時間一致性：迴圈計數時鐘與物理時鐘最大偏差 {time_skew_max*1000:.3f} ms'
-              f'（physics_dt={a.physics_dt}, rendering_dt={float(world.get_rendering_dt())}）')
-        print('  三個時刻（分開記錄，不互相取代）：'
-              f'目標訊息時戳 {node.goal_stamp}，'
-              f'模擬器收到目標 {node.goal_sim_t}，'
-              f'第一個 /plan {node.first_plan_t}，'
-              f'運動開始（首次非零 cmd_vel） {node.motion_start_t}')
         if node.goal_sim_t is not None:
             print(f'  任務起點：收到 /goal_pose 的模擬時間 {node.goal_sim_t:.2f} s'
                   f'（訊息時間戳 {node.goal_stamp:.2f}，共收到 {node.goal_count} 則，'

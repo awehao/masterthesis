@@ -77,12 +77,17 @@ def main():
     sim = json.load(open(js)) if os.path.exists(js) else {}
 
     print(f'== {os.path.basename(a.run_dir)} ==')
-    print('  !! 時間尺度警告：模擬器以 World(rendering_dt = physics_dt*4) 建立，'
-          '帶 render 的步進推進 4 個物理子步卻只記帳 1 步。')
-    print('     render_hz=12、physics_dt=0.01 -> 每 8 步 render 一次，'
-          '實際物理時間 / 記帳時間 = (7*0.01+0.04)/(8*0.01) = 1.375。')
-    print('     以下所有「秒」與「每秒」數值都在記帳時鐘上，'
-          '角度、比例、次數不受影響。')
+    _rd = sim.get('run', {}).get('rendering_dt')
+    _pd = sim.get('run', {}).get('physics_dt')
+    _sk = sim.get('run', {}).get('time_skew_max_s')
+    if _rd is None or _pd is None:
+        print('  !! 時間基準待核正：本趟未記錄 physics_dt / rendering_dt，'
+              '所有「秒」與「每秒」數值不可引用')
+    elif abs(float(_rd) - float(_pd)) > 1e-12:
+        print(f'  !! 時間基準失真：rendering_dt={_rd} != physics_dt={_pd}')
+    else:
+        print(f'  時間基準：physics_dt={_pd}, rendering_dt={_rd}, '
+              f'迴圈/物理時鐘最大偏差 {(_sk or 0)*1e6:.2f} µs')
     print(f'  訊息數  真值位姿 {len(truth)}  /cmd_vel {len(cmd)}  '
           f'/gmpc/heading {len(head)}  /plan {len(plans)}  /goal_pose {len(goal)}')
     if len(truth) < 10:
