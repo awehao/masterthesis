@@ -1,0 +1,99 @@
+# bigarena traffic **v3**：固定種子、分散相位的可重現對照情境
+#
+# 由 src/ammr_bringup/scripts/make_bigarena_traffic_v3.py 產生
+#   來源軌跡：dynamic_trajectories_bigarena_traffic.yaml
+#   相位種子：20260910
+#   起始碰撞邊界：機器人 0.3 m + 餘裕 0.1 m，機器人起點 (17.1, 14.8)
+#
+# **必須搭配 mode: scheduled 使用**；legacy 模式會忽略 phase0_m/direction。
+#
+# v3 是新情境，不是恢復舊 seed 1 的遭遇樣態。與 legacy 的行為差異：
+#   * 折返位置：legacy 距端點 0.20 m 前就換向；scheduled 走到端點才折返，
+#     每端多掃 0.20 m。
+#   * 速度變化：scheduled 在端點瞬間反向（速度跳變 2v）。
+#   * 掃掠區域與遭遇時序都不同，**v3 與 legacy 的結果不可互相比較**。
+#
+# 相位零點由 /case_start 決定。相位位置必須在任務開始前就放好並確認穩定，
+# 不可在發目標當下才把障礙物搬過去。
+
+dynamic_obstacles:
+- name: dyn_obs_5
+  start: [-0.29, 10.48]
+  end: [7.16, 10.15]
+  speed: 0.1
+  radius: 0.82
+  height: 1.0
+  phase0_m: 13.1546
+  direction: 1.0
+- name: dyn_obs_4
+  start: [14.7, 17.44]
+  end: [14.16, 6.6]
+  speed: 0.12
+  radius: 0.78
+  height: 1.0
+  phase0_m: 5.5027
+  direction: 1.0
+- name: dyn_obs_2
+  start: [10.24, 6.88]
+  end: [0.53, 6.36]
+  speed: 0.1
+  radius: 0.62
+  height: 1.0
+  phase0_m: 3.1837
+  direction: 1.0
+- name: dyn_obs_8
+  start: [13.3, 12.28]
+  end: [3.68, 12.23]
+  speed: 0.11
+  radius: 0.52
+  height: 1.0
+  phase0_m: 13.0434
+  direction: 1.0
+- name: dyn_obs_1
+  start: [-0.57, 4.63]
+  end: [8.42, 2.27]
+  speed: 0.14
+  radius: 0.4
+  height: 1.0
+  phase0_m: 13.3191
+  direction: 1.0
+- name: dyn_obs_7
+  start: [15.39, 8.3]
+  end: [3.71, 6.35]
+  speed: 0.12
+  radius: 0.3
+  height: 1.0
+  phase0_m: 13.4279
+  direction: 1.0
+- name: dyn_obs_0
+  start: [5.28, 1.57]
+  end: [15.33, 3.02]
+  speed: 0.14
+  radius: 0.25
+  height: 1.0
+  phase0_m: 16.7808
+  direction: 1.0
+- name: dyn_obs_6
+  start: [3.55, 17.46]
+  end: [16.46, 17.68]
+  speed: 0.13
+  radius: 0.25
+  height: 1.0
+  phase0_m: 2.3702
+  direction: 1.0
+- name: dyn_obs_9
+  start: [0.14, 14.8]
+  end: [8.53, 13.34]
+  speed: 0.14
+  radius: 0.2
+  height: 1.0
+  phase0_m: 3.1903
+  direction: 1.0
+- name: dyn_obs_3
+  start: [0.27, 1.5]
+  end: [12.5, 1.96]
+  speed: 0.14
+  radius: 0.15
+  height: 1.0
+  phase0_m: 3.1635
+  direction: 1.0

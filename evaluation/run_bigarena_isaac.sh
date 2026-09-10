@@ -73,6 +73,7 @@ setsid "$ISAAC_PY" "${HERE}/isaac_bigarena_sim.py" --seed "$SEED" --method "$MET
     --wall-limit "${WALL_LIMIT:-1200}" \
     --render-hz "${RENDER_HZ:-12}" --cpu-limit "${CPU_LIMIT:-88}" \
     --arrive-tol "${ARRIVE_TOL:-0.30}" \
+    --mover-phase-yaml "${AMMR_PHASE_YAML:-}" \
     --camera "${CAMERA:-false}" --cam-width "${CAM_W:-640}" \
     --cam-height "${CAM_H:-480}" --cam-hz "${CAM_HZ:-10}" \
     --cam-save "${CAM_SAVE:-0}" --cam-raw "${CAM_RAW:-true}" \
@@ -143,7 +144,9 @@ setsid timeout --foreground --signal=INT --kill-after=5 "${REC_CAP}s" \
   /clock /odom /odom_raw /odometry/filtered /amcl_pose /model/omni_bot/pose \
   /cmd_vel /cmd_vel_nav /cmd_vel_pre_shield /scan /scan_raw /plan /goal_pose \
   /tf /tf_static /gmpc/solve_time_ms /gmpc/min_h /gmpc/diag /joint_states \
-  /gmpc/heading \
+  /gmpc/heading /case_start \
+  /dynamic_obstacles/target /dynamic_obstacles/phase_epoch \
+  /dynamic_obstacles/ground_truth \
   /model/dyn_obs_0/pose /model/dyn_obs_1/pose /model/dyn_obs_2/pose \
   /model/dyn_obs_3/pose /model/dyn_obs_4/pose /model/dyn_obs_5/pose \
   /model/dyn_obs_6/pose /model/dyn_obs_7/pose /model/dyn_obs_8/pose \
@@ -236,8 +239,13 @@ done
 STILL_LOG="${RUN_DIR}/stillness.log"
 # NO_TRAFFIC=1 -> 全部應靜止；traffic 開啟 -> 只要求機器人靜止，
 # 並反過來要求移動體確實在動。
+# scheduled 情境在 /case_start 之前障礙物本來就靜止（驅動送零速度），因此不能
+# 用 --traffic（那會要求移動體正在動）。移動確認改在 /case_start 之後單獨做。
 STILL_ARGS=""
-[ "${NO_TRAFFIC:-0}" = "1" ] || STILL_ARGS="--traffic"
+if [ "${NO_TRAFFIC:-0}" != "1" ] && \
+   [ "${AMMR_OBSTACLE_MODE:-legacy}" != "scheduled" ]; then
+    STILL_ARGS="--traffic"
+fi
 if timeout 40 python3 "${HERE}/stillness_check.py" --window "${STILL_WINDOW:-3.0}" \
       $STILL_ARGS > "$STILL_LOG" 2>&1; then
     mark "靜止檢查通過（見 stillness.log）"
@@ -254,7 +262,53 @@ if [ "$gate_fail" -ne 0 ]; then
 fi
 echo "[$(date +%T)] [5/6] 就緒檢查全部通過"
 
-echo "[$(date +%T)] [5/6] 等 /goal_pose 訂閱者後發布目標 ($GX, $GY) ..."
+# ---- scheduled 情境：定位 -> /case_start -> 移動確認 --------------------
+CS_EPOCH=""
+if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then
+    echo "[$(date +%T)] [5/6] 相位 0 定位檢查（任務開始前就放好並確認穩定）..."
+    if ! timeout 40 python3 "${HERE}/case_start_check.py" preposition \
+          --traj "$AMMR_TRAJ_FILE" --out "${RUN_DIR}/preposition.json" \
+          2>&1 | tee -a "$LOG" | sed "s/^/[$(date +%T)] [5\/6]   /"; then
+        echo "[$(date +%T)] [5/6] **相位 0 定位未通過，不發 /case_start，中止**"
+        exit 4
+    fi
+    # Publish ONCE. The driver resets its phase epoch on EVERY /case_start, so a
+    # burst would set the zero point to the LAST message; the gz runner already
+    # hit that. Publish one, then verify the driver adopted it.
+    CS_OK=0
+    for attempt in 1 2 3; do
+        echo "[$(date +%T)] [5/6] 等 /case_start 訂閱者（第 ${attempt} 次）..."
+        for i in $(seq 1 30); do
+            cs=$(ros2 topic info /case_start 2>/dev/null \
+                 | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
+            [ "${cs:-0}" -ge 1 ] && break
+            sleep 1
+        done
+        echo "[$(date +%T)] [5/6] 發布 /case_start（僅一次）..."
+        timeout 8 ros2 topic pub -t 1 /case_start std_msgs/msg/Empty "{}" \
+            >> "$LOG" 2>&1 || true
+        if timeout 30 python3 "${HERE}/case_start_check.py" epoch --window 5 \
+              --out "${RUN_DIR}/phase_epoch.json" \
+              2>&1 | tee -a "$LOG" | sed "s/^/[$(date +%T)] [5\/6]   /"; then
+            CS_OK=1; break
+        fi
+    done
+    if [ "$CS_OK" -ne 1 ]; then
+        echo "[$(date +%T)] [5/6] **驅動未採用 /case_start，障礙物不會依排程移動，中止**"
+        exit 5
+    fi
+    CS_EPOCH=$(python3 -c "import json;print(json.load(open('${RUN_DIR}/phase_epoch.json'))['phase_epoch'])")
+    echo "[$(date +%T)] [5/6] phase_epoch = ${CS_EPOCH} s（模擬時間）"
+    echo "[$(date +%T)] [5/6] /case_start 之後的移動確認..."
+    if ! timeout 40 python3 "${HERE}/case_start_check.py" moving \
+          --traj "$AMMR_TRAJ_FILE" --out "${RUN_DIR}/movers_moving.json" \
+          2>&1 | tee -a "$LOG" | sed "s/^/[$(date +%T)] [5\/6]   /"; then
+        echo "[$(date +%T)] [5/6] **移動體未如預期啟動，中止**"
+        exit 6
+    fi
+fi
+
+echo "[$(date +%T)] [5/6] 等 /goal_pose 訂閱者後發布目標 ($GX, $GY) ...
 for i in $(seq 1 30); do
   c=$(ros2 topic info /goal_pose 2>/dev/null | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
   [ "${c:-0}" -ge 2 ] && { echo "[$(date +%T)] [5/6]   訂閱者=$c（${i}s）"; break; }
@@ -271,6 +325,21 @@ echo "$(date +%s) case_start_goal_published" >> "$READY_LOG"
 timeout 60 python3 "${HERE}/publish_goal.py" --x "$GX" --y "$GY" \
   --count 5 --period 1.0 --out "${RUN_DIR}/goal_publish.json" \
   2>&1 | tee -a "$LOG" | sed "s/^/[$(date +%T)] [5\/6]   /"
+# epoch 與目標發布之間流逝的相位必須被記錄，不能只說「設計上同時」：
+# 就緒等待若在兩趟長短不同，會吃掉不同長度的障礙物相位。
+if [ -n "$CS_EPOCH" ]; then
+    python3 - "$RUN_DIR" "$CS_EPOCH" <<'PYEOF' | tee -a "$LOG"
+import json, sys
+d, ep = sys.argv[1], float(sys.argv[2])
+g = json.load(open(f'{d}/goal_publish.json'))
+gp = g['first_publish_sim_t']
+rec = dict(phase_epoch_sim_t=ep, first_goal_publish_sim_t=gp,
+           phase_consumed_before_goal_s=gp - ep)
+json.dump(rec, open(f'{d}/phase_alignment.json', 'w'), indent=1)
+print(f'  相位零點 {ep:.3f} s，目標發布 {gp:.3f} s，'
+      f'發目標前已流逝相位 {gp-ep:+.3f} s')
+PYEOF
+fi
 
 # 6. 等 Isaac 自己結束：它會先把底盤歸零、步進生效，再寫入停止原因與最後樣本。
 # 只有在那之後才停止錄製並清理，否則保存會被 cleanup 截斷（上一趟就是如此，

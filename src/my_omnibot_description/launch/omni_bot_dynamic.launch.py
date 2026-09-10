@@ -87,6 +87,9 @@ def generate_launch_description():
     traj_file  = os.path.join(
         bringup, 'config',
         f'dynamic_trajectories_{_traj}.yaml' if _traj else 'dynamic_trajectories.yaml')
+    # AMMR_TRAJ_FILE overrides the scene-derived path (used by the v3
+    # reproducible scenario); the scene default is untouched when unset.
+    _traj_path = os.environ.get('AMMR_TRAJ_FILE') or traj_file
     ekf_config = os.path.join(desc_pkg, 'config', 'ekf_fusion.yaml')
 
     gui          = LaunchConfiguration('gui')
@@ -180,6 +183,13 @@ def generate_launch_description():
     # randomised reference windows.
     _heading = os.environ.get('HEADING', '0') == '1'
     _no_traffic = os.environ.get('NO_TRAFFIC', '0') == '1'
+    # Scenario selection uses the SAME two environment variables as
+    # ammr_bringup's isaac_dynamic.launch.py / gazebo_dynamic.launch.py, so the
+    # two simulators cannot silently run different scenarios. Both default to
+    # the historical behaviour: legacy mode (feedback ping-pong, NOT
+    # reproducible -- its own docstring records two runs diverging by 2.43 m)
+    # and whatever trajectory file the scene selection already picked.
+    _obstacle_mode = os.environ.get('AMMR_OBSTACLE_MODE', 'legacy')
     heading_overrides = {
         'heading_enable':      True,
         'heading_weight':      float(os.environ.get('HEADING_W', '2.0')),
@@ -616,7 +626,9 @@ def generate_launch_description():
         # corridor would confound what is being measured.
         TimerAction(period=8.0, actions=[Node(
             package='ammr_bringup', executable='dynamic_obstacle_driver',
-            parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],
+            parameters=[{'use_sim_time': True},
+                        {'trajectories_file': _traj_path},
+                        {'mode': _obstacle_mode}],
             output='screen')] if not _no_traffic else []),
 
         # nav + control + perception (wait for gz/robot/TF)

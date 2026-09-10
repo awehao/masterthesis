@@ -99,6 +99,9 @@ ap.add_argument('--cam-probe', default='',
                      '用來判定影像方向（紅應在中央、綠應在畫面左半）')
 ap.add_argument('--cam-save', type=int, default=0,
                 help='存前 N 張 PNG 供人工核對影像方向')
+ap.add_argument('--mover-phase-yaml', default='',
+                help='scheduled 情境的軌跡檔：生成時就把移動體放到相位 0 的位置，'
+                     '避免 /case_start 當下才把它們搬過去')
 ap.add_argument('--markers', default='true')
 ap.add_argument('--static-scan', default='false',
                 help='true = 在起點做靜態掃描驗收後結束，不進導航')
@@ -178,6 +181,34 @@ def read_world(path):
 
 
 MODELS = [] if a.empty_world.lower() == 'true' else read_world(a.world)
+
+# ---- scheduled 情境：把移動體的生成位置改成相位 0 的位置 -------------------
+# 驅動節點在收到 /case_start 之前送零速度，之後才依相位下命令。若生成位置是
+# 軌跡的 start 而相位 0 在別處，/case_start 當下位置誤差會被追蹤增益放大成一次
+# 猛烈的搬移。改成生成時就放好，因此任務開始前障礙物已在定位且靜止。
+# 公式與 dynamic_obstacle_driver._schedule 的 t = 0 情形相同。
+MOVER_PHASE0 = {}
+if a.mover_phase_yaml:
+    _pc = yaml.safe_load(open(a.mover_phase_yaml))
+    for _d in (_pc.get('dynamic_obstacles') or []):
+        _sx, _sy = [float(v) for v in _d['start']]
+        _ex, _ey = [float(v) for v in _d['end']]
+        _L = math.hypot(_ex - _sx, _ey - _sy)
+        if _L < 1e-9:
+            continue
+        _ux, _uy = (_ex - _sx) / _L, (_ey - _sy) / _L
+        _p0 = float(_d.get('phase0_m', 0.0))
+        _dir = float(_d.get('direction', 1.0))
+        _s0 = _p0 if _dir >= 0 else (2.0 * _L - _p0)
+        _s = _s0 % (2.0 * _L)
+        _dd = _s if _s <= _L else 2.0 * _L - _s
+        MOVER_PHASE0[_d['name']] = (_sx + _ux * _dd, _sy + _uy * _dd)
+    for _m in MODELS:
+        if _m['name'] in MOVER_PHASE0:
+            _m['pose'] = list(_m['pose'])
+            _m['pose'][0], _m['pose'][1] = MOVER_PHASE0[_m['name']]
+    print(f'  移動體相位 0 位置已套用（{len(MOVER_PHASE0)} 個，來源 '
+          f'{os.path.basename(a.mover_phase_yaml)}）', flush=True)
 DYN = [m['name'] for m in MODELS if m['kinematic']]
 print(f'\n  世界 '
       + ('**純地面（--empty-world）**，無任何障礙物'
@@ -1506,6 +1537,9 @@ def main():
                           first_plan_goal_err=node.first_plan_goal_err,
                           plan_goal_tol=node.plan_goal_tol,
                           plan_msgs_received=node.plan_count,
+                          mover_phase_yaml=(os.path.basename(a.mover_phase_yaml)
+                                            if a.mover_phase_yaml else None),
+                          mover_phase0=MOVER_PHASE0,
                           plan_goal_mismatch=node.plan_mismatch[:50],
                           plan_goal_mismatch_n=len(node.plan_mismatch),
                           motion_start_sim_t=node.motion_start_t,
