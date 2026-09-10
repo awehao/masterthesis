@@ -2,6 +2,7 @@
 """Mechanism diagrams with explicit signals, legends, and matched scene views."""
 from pathlib import Path
 import json,math,shutil,zipfile
+import xml.etree.ElementTree as ET
 import numpy as np
 from PIL import Image,ImageDraw,ImageFont
 import build_model_explanatory_figures as model
@@ -11,7 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'第五次進度報告素材/機制解說圖'
 ASSETS=OUT/'assets'
 art.OUT=OUT
-BLUE='#246B91';ORANGE='#B46A30';INK='#253540';GRAY='#79848C';GREEN='#257968'
+BLUE=art.BLUE;ORANGE=art.AMBER;INK=art.INK;GRAY=art.GRAY;GREEN='#257968'
 
 
 def words(f,x,y,lines,size=30,color=INK,step=43,anchor='start'):
@@ -43,7 +44,7 @@ def distance():
     for xx in [wallx-146,wallx]:f.line([(xx,889),(xx,915)],ORANGE,2)
     words(f,wallx-73,957,['停止距離 d_stop','基礎餘裕＋延遲＋制動'],28,ORANGE,39,'middle')
     f.leader(82,85,'連桿表面',pr(tri.mean((0,1))),(268,104),size=34)
-    f.leader(466,848,'取樣點 pᵢ',(px,py),(661,833),BLUE,size=32)
+    f.leader(466,972,'取樣點 pᵢ',(px,py),(661,949),BLUE,size=32)
     # One geometric point, three meaningful velocity directions.
     f.line([(px+23,py+75),(px+193,py+75)],ORANGE,3,True)
     f.text(px+202,py+85,'接近：受限制',30,ORANGE)
@@ -132,6 +133,11 @@ def lidar():
                 if i==0:f.circle(*ep,5,ORANGE,ORANGE,1)
             else:f.circle(*ep,5,BLUE,BLUE,1)
         for a,b in seg:f.line([xy(a),xy(b)],GRAY,1.5)
+        sec_center=xy(seg.reshape(-1,2).mean(0))
+        f.leader(cx-228,441,'手臂截面',sec_center,(cx-111,453),GRAY,size=25)
+        if i==1:
+            f.text(cx+89,354,'未知區域',24,GRAY)
+            f.line([(cx+75,358),(cx+20,381)],GRAY,1.3)
         f.circle(cx,by,10,BLUE,BLUE,1)
         f.text(cx,by+51,'LiDAR',28,BLUE,400,'middle')
         f.text(cx,935,'橙點：手臂自體回波' if i==0 else '橙點移除，藍點保留',29,ORANGE if i==0 else BLUE,400,'middle')
@@ -146,13 +152,17 @@ def lidar():
 
 def comparison():
     a,b=model.load_runs();rows=[a['log'][-1],b['log'][-1]]
-    bundles=[model.scene(model.qrow(r)) for r in rows]
+    bundles=[]
+    obstacle=model.mesh.primitive(ET.fromstring('<geometry><box size="0.16 0.20 0.60"/></geometry>'))+np.array([-.225,-.32,.30])
+    for r in rows:
+        t,c,n=model.scene(model.qrow(r))
+        bundles.append((np.concatenate([t,obstacle]),np.concatenate([c,np.tile([.72,.62,.50],(len(obstacle),1))]),np.r_[n,np.repeat('obstacle',len(obstacle))]))
     view=model.View(np.concatenate([s[0] for s in bundles]),eye=(1.0,-3.0,1.7))
     f=art.Fig('04_為何停住與如何完成',2300,1450)
     for i,(bundle,r) in enumerate(zip(bundles,rows)):
         x=45+i*1150
         tri,col,names=bundle;p=ASSETS/f'control_{i}.png';view.render(tri,col,p)
-        pr=model.inset(f,p,view,x+16,325,1010)
+        pr=model.inset(f,p,view,x+52,320,880)
         f.text(x+530,82,'分離式控制' if i==0 else '整合式全身 QP',40,INK,500,'middle')
         words(f,x+530,145,['先求任務速度 → 再做安全修正'] if i==0 else ['在安全限制內，同時求底盤與手臂動作'],28,GRAY,anchor='middle')
         # Explicit target and measured TCP symbols use identical geometry and scale.
@@ -173,9 +183,10 @@ def comparison():
             f.text(x+520,1269,'底盤想往目標走，但被安全層擋住',32,INK,400,'middle')
             f.text(x+520,1321,'手臂未接手 → 末端仍有位置誤差',32,ORANGE,400,'middle')
         else:
-            f.leader(x+666,297,'TCP 與目標重合',tcp,(x+646,314),BLUE,size=32)
+            f.leader(x+666,297,'TCP 到達目標容差內',tcp,(x+646,314),BLUE,size=32)
             f.text(x+520,1269,'底盤移位／旋轉，手臂調整構形',32,INK,400,'middle')
             f.text(x+520,1321,'重新分配動作 → 到達預抓取位姿',32,GREEN,400,'middle')
+        f.leader(x+70,1137,'障礙物',pr([-.225,-.42,.46]),(x+187,1116),ORANGE,size=30)
     f.text(1150,1408,'藍色十字：固定目標　橙色圓點：實際 TCP　｜　兩組實驗的架構與構形權重均不同',25,GRAY,400,'middle')
     return f.save()
 
@@ -184,6 +195,8 @@ def sequence():
     a,b=model.load_runs();logs=b['log'];idx=[0,len(logs)//2,len(logs)-1];rows=[logs[j] for j in idx]
     bundles=[model.scene(model.qrow(r)) for r in rows]
     view=model.View(np.concatenate([s[0] for s in bundles]),eye=(.35,-3.0,1.35))
+    view.scale*=.85
+    view.offset=np.array([950,950])+(view.offset-np.array([950,950]))*.85
     f=art.Fig('05_固定目標下的全身動作',2800,1310)
     for i,(bundle,r,j) in enumerate(zip(bundles,rows,idx)):
         x=40+i*925
@@ -207,10 +220,8 @@ def sequence():
         initial=rows[0]['base']
         ring=[pr([initial[0]+.3*np.cos(a),initial[1]+.3*np.sin(a),.012]) for a in np.linspace(0,2*np.pi,60)]
         f.line(ring,'#9EA8AF',1.5,dash=True)
-        words(f,x+440,1106,[['底盤離目標較遠','TCP 尚未到達'][i*0]] if False else [
-            '底盤與 TCP 均在起始位置',
-            '底盤前移，手臂同步伸展',
-            '底盤停在新位置，TCP 到達目標'][i:i+1],32,INK,anchor='middle')
+        captions=['底盤與 TCP 均在起始位置','底盤前移，手臂同步伸展','底盤停在新位置，TCP 到達目標']
+        words(f,x+440,1106,[captions[i]],32,INK,anchor='middle')
     f.line([(100,1175),(2700,1175)],'#D2D7DC',1)
     f.text(1400,1230,'三格使用相同世界座標與比例　｜　藍線：底盤軌跡　橙虛線：TCP 軌跡　灰虛線：底盤起始輪廓',29,INK,400,'middle')
     f.text(2700,1282,'依同次實驗紀錄重建，模型未各自置中',23,GRAY,anchor='end')
@@ -235,14 +246,14 @@ def package(paths):
 第一張原樣保留。本輪以完整解說機制為目標，保留必要文字、箭頭、圖例、訊號意義。
 各圖有透明 PNG、白底 PNG、SVG、PDF；模型為內嵌位圖，文字與箭頭為向量。
 
-02：靜态障礙、取樣誤差與停止距離的幾何示意，不代表一般性安全證明。
+02：靜態障礙、取樣誤差與停止距離的幾何示意，不代表一般性安全證明。
 03：連桿剖面由 URDF collision mesh 與指定掃描平面相交取得，雷射線與牆面為合成示意。
 姿態來自前輪構形求解；不是實測 scan，亦未進行該姿態自碰撞驗收。
 04：A 終態來自 wholebody_pregrasp.json；B 終態來自 baseline_repeat/mu0p03_run1.json。
 兩者控制架構與構形權重均不同，不能當成單一變因消融。
 05：三個時刻、底盤與 TCP 軌跡均來自 baseline_repeat/mu0p03_run1.json，同世界座標與比例。
 首末列 t 取紀錄值，沒有宣稱是 Isaac 模擬結果。
-本轮只重製圖像，未重跑控制實驗。
+本輪只重製圖像，未重跑控制實驗。
 ''')
     zpath=OUT.parent/'第五次進度報告_機制解說圖.zip'
     with zipfile.ZipFile(zpath,'w',zipfile.ZIP_DEFLATED) as z:

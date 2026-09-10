@@ -98,11 +98,19 @@ def main():
     # it received the goal; that is the authority. Fall back only if absent.
     _run = sim.get('run', {})
     _gt = _run.get('goal_sim_t')
-    # The simulator services its ROS callbacks inside the physics loop, so the
-    # sim time at which IT saw /goal_pose lags the controller's own receipt by
-    # ~1 s. Measured: the first non-zero /cmd_vel precedes goal_sim_t by
-    # 0.84-1.60 s across these trials. The motion start is therefore taken from
-    # the command stream and goal_sim_t is reported alongside, not instead.
+    # Motion start is taken from the command stream, and goal_sim_t is reported
+    # alongside it rather than instead of it.
+    #
+    # NOTE: earlier runs showed goal_sim_t sitting 0.84-1.96 s away from the
+    # first command, and that was attributed here to the simulator servicing
+    # its ROS callbacks inside the physics loop. That attribution is NOT
+    # supported: those runs were published by `ros2 topic pub`, whose
+    # header.stamp is zero, so the baseline being compared against was itself
+    # invalid. With publish_goal.py stamping in simulation time, the gap
+    # between publish and the simulator's callback measured 0.030 s on seed 1.
+    # That shows the old comparison was meaningless -- it does not establish
+    # what the old gap actually was. Settling that would need a per-message
+    # re-check of those runs, which has not been done.
     _first = None
     for _x in (_run.get('log') or []):
         if max(abs(v) for v in _x['cmd']) > 1e-6:
@@ -116,7 +124,8 @@ def main():
     print(f'  任務起點模擬時刻 {t0:.2f} s（來源：{src}）')
     if _gt is not None and _first is not None:
         print(f'    模擬器記錄的 goal_sim_t = {_gt:.2f} s，'
-              f'晚於首次命令 {_gt - _first:+.2f} s（callback 在物理迴圈內處理）')
+              f'與首次命令相差 {_gt - _first:+.2f} s'
+              '（成因未定；舊趟的零時間戳使當時的比較基準無效）')
         rec['goal_cb_lag_s'] = _gt - _first
 
     # ---- 結束狀態（來自模擬器，不是我重算的）----
@@ -158,7 +167,8 @@ def main():
             rec['near_goal_cum_turn_deg'] = _m.degrees(cum)
 
     # ---- 移動體是否真的靜止 ----
-    print('  移動體位移（NO_TRAFFIC=1 只保證未下命令）：')
+    _traf = run.get('traj')
+    print('  移動體位移（未下命令不等於不動；traffic 開啟時本欄預期為非零）：')
     worst = 0.0
     for t, h in sorted(movers.items()):
         h = np.array(h)
