@@ -266,9 +266,14 @@ echo "[$(date +%T)] [5/6] 就緒檢查全部通過"
 CS_EPOCH=""
 if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then
     echo "[$(date +%T)] [5/6] 相位 0 定位檢查（任務開始前就放好並確認穩定）..."
-    if ! timeout 40 python3 "${HERE}/case_start_check.py" preposition \
+    # `cmd | tee | sed` 會讓 if 判定 sed 的退出碼，python 的失敗被吞掉。
+    # 實測有一趟移動確認明確印出「未通過」卻仍繼續執行。先存檔再判定。
+    timeout 40 python3 "${HERE}/case_start_check.py" preposition \
           --traj "$AMMR_TRAJ_FILE" --out "${RUN_DIR}/preposition.json" \
-          2>&1 | tee -a "$LOG" | sed "s/^/[$(date +%T)] [5\/6]   /"; then
+          > "${RUN_DIR}/preposition.log" 2>&1
+    _rc=$?
+    sed "s/^/[$(date +%T)] [5\/6]   /" "${RUN_DIR}/preposition.log" | tee -a "$LOG"
+    if [ "$_rc" -ne 0 ]; then
         echo "[$(date +%T)] [5/6] **相位 0 定位未通過，不發 /case_start，中止**"
         exit 4
     fi
@@ -287,11 +292,11 @@ if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then
         echo "[$(date +%T)] [5/6] 發布 /case_start（僅一次）..."
         timeout 8 ros2 topic pub -t 1 /case_start std_msgs/msg/Empty "{}" \
             >> "$LOG" 2>&1 || true
-        if timeout 30 python3 "${HERE}/case_start_check.py" epoch --window 5 \
-              --out "${RUN_DIR}/phase_epoch.json" \
-              2>&1 | tee -a "$LOG" | sed "s/^/[$(date +%T)] [5\/6]   /"; then
-            CS_OK=1; break
-        fi
+        timeout 30 python3 "${HERE}/case_start_check.py" epoch --window 5 \
+              --out "${RUN_DIR}/phase_epoch.json" > "${RUN_DIR}/epoch.log" 2>&1
+        _rc=$?
+        sed "s/^/[$(date +%T)] [5\/6]   /" "${RUN_DIR}/epoch.log" | tee -a "$LOG"
+        if [ "$_rc" -eq 0 ]; then CS_OK=1; break; fi
     done
     if [ "$CS_OK" -ne 1 ]; then
         echo "[$(date +%T)] [5/6] **驅動未採用 /case_start，障礙物不會依排程移動，中止**"
@@ -300,9 +305,14 @@ if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then
     CS_EPOCH=$(python3 -c "import json;print(json.load(open('${RUN_DIR}/phase_epoch.json'))['phase_epoch'])")
     echo "[$(date +%T)] [5/6] phase_epoch = ${CS_EPOCH} s（模擬時間）"
     echo "[$(date +%T)] [5/6] /case_start 之後的移動確認..."
-    if ! timeout 40 python3 "${HERE}/case_start_check.py" moving \
+    # `cmd | tee | sed` 會讓 if 判定 sed 的退出碼，python 的失敗被吞掉。
+    # 實測有一趟移動確認明確印出「未通過」卻仍繼續執行。先存檔再判定。
+    timeout 40 python3 "${HERE}/case_start_check.py" moving \
           --traj "$AMMR_TRAJ_FILE" --out "${RUN_DIR}/movers_moving.json" \
-          2>&1 | tee -a "$LOG" | sed "s/^/[$(date +%T)] [5\/6]   /"; then
+          > "${RUN_DIR}/moving.log" 2>&1
+    _rc=$?
+    sed "s/^/[$(date +%T)] [5\/6]   /" "${RUN_DIR}/moving.log" | tee -a "$LOG"
+    if [ "$_rc" -ne 0 ]; then
         echo "[$(date +%T)] [5/6] **移動體未如預期啟動，中止**"
         exit 6
     fi
@@ -327,7 +337,13 @@ echo "$(date +%s) case_start_goal_published" >> "$READY_LOG"
 GOAL_AT_ARGS=""
 if [ -n "$CS_EPOCH" ]; then
     PHASE_DELTA="${PHASE_DELTA:-30.0}"
-    GOAL_AT=$(python3 -c "print(f'{${CS_EPOCH} + ${PHASE_DELTA}:.6f}')")
+    GOAL_AT=$(python3 -c "
+import math, sys
+e = float('${CS_EPOCH}')
+if not math.isfinite(e):
+    sys.exit('phase_epoch 非有限值')
+print(f'{e + ${PHASE_DELTA}:.6f}')") || {
+        echo "[$(date +%T)] [5/6] **phase_epoch 無效，中止**"; exit 7; }
     echo "[$(date +%T)] [5/6] 排定目標發布時刻 = epoch ${CS_EPOCH} + Δ ${PHASE_DELTA} = ${GOAL_AT} s"
     GOAL_AT_ARGS="--at-sim-time $GOAL_AT"
 fi

@@ -1,0 +1,8 @@
+此趟資料無效，不列入分析。
+
+原因：我對前一趟（pair_on_174108）作廢的 Isaac 送出 SIGTERM 後未確認它真的結束，
+它一直存活到本趟啟動。實測同時有兩個 isaac_bigarena_sim 在跑
+（PID 1113413 起於 17:41:11、PID 1122722 起於 17:44:54），兩者都會發布 /clock
+與 /model/*/pose，本趟的時間基準與障礙物位姿因此被污染。
+
+已改用獨立的 cleanup 腳本（scratchpad/cleanup.py）在每趟前確認無殘留。

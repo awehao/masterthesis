@@ -103,8 +103,15 @@ if a.stage == 'preposition':
     res['rows'] = rows
 elif a.stage == 'epoch':
     print(f'--- 相位零點 ---')
+    # 驅動在還沒收到 /case_start 時就會持續發布 phase_epoch = NaN。只檢查
+    # 「有沒有收到訊息」會把 NaN 當成已採用而放行——實測就是這樣讓一趟障礙物
+    # 全程不動的執行通過了檢查。值必須是有限數。
     if epoch['v'] is None:
         print('  !! 未收到 /dynamic_obstacles/phase_epoch：驅動未採用 /case_start')
+        rc = 1
+    elif not math.isfinite(epoch['v']):
+        print(f'  !! phase_epoch = {epoch["v"]}（非有限值）：'
+              '驅動尚未採用 /case_start')
         rc = 1
     else:
         print(f'  phase_epoch = {epoch["v"]:.3f} s（模擬時間）')
