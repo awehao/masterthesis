@@ -25,7 +25,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
-from geometry_msgs.msg import Twist, TransformStamped, Point
+from geometry_msgs.msg import Twist, TransformStamped, Point, PoseStamped
 from nav_msgs.msg      import Odometry, Path
 from std_msgs.msg      import Float32, Float32MultiArray
 from geometry_msgs.msg import Vector3Stamped
@@ -458,6 +458,12 @@ class GMPCNode(Node):
             str(self.get_parameter('plan_topic').value),
             self._plan_cb, plan_qos,
         )
+        # The goal as REQUESTED, which is not the goal the controller steers to:
+        # it stops on the last pose of /plan, and the planner is free to end its
+        # path short of the request. Subscribing here is diagnostic only -- it
+        # changes no control decision -- but it is the only way an arrival can
+        # name which of the two endpoints it was measured against.
+        self.create_subscription(PoseStamped, '/goal_pose', self._goal_cb, 10)
         # Always subscribe, even when pose_source is 'tf': the diagnostic logs
         # both poses every cycle, so a run can show how far the TF composition
         # drifted without having to switch the controller over to find out.
@@ -706,9 +712,81 @@ class GMPCNode(Node):
             for i in range(n)
         ]
 
+    def _goal_cb(self, msg: PoseStamped):
+        self._requested_goal = (self.get_clock().now().nanoseconds * 1e-9,
+                                float(msg.pose.position.x),
+                                float(msg.pose.position.y))
+
     def _publish_zero(self):
         self.cmd_pub.publish(Twist())
         self.xi_prev = np.zeros(3)
+
+    # Why a cycle produced no command. Published as diag field 22 so a bag can
+    # tell "arrived" from "no plan" from "the obstacle feed died" -- previously
+    # every one of these returned early and published nothing at all, so the
+    # diagnostic went silent in exactly the cycles that needed explaining.
+    STATE = {'running': 0.0, 'no_plan': 1.0, 'no_pose': 2.0, 'arrived': 3.0,
+             'holding_stuck': 4.0, 'stale_obstacles': 5.0, 'stale_static': 6.0}
+
+    def _halt(self, state: str, robot_xyth=None):
+        """Stop the chassis and say why, in the log and on /gmpc/diag."""
+        if state != self._last_state:
+            log = (self.get_logger().warn if state.startswith('stale')
+                   else self.get_logger().info)
+            log(f'gmpc state -> {state}')
+            self._last_state = state
+        self._publish_diag(state, robot_xyth=robot_xyth)
+        self._publish_zero()
+
+    def _publish_diag(self, state, robot_xyth=None, result=None, entry=None):
+        """One /gmpc/diag row per control cycle, whatever the cycle did.
+
+        Fields 0-21 keep the layout the existing readers index by; the state and
+        acceptance fields are APPENDED, so a reader written against the old
+        length still works (they gate on len(v) >= their own G_LEN).
+        Anything this cycle did not compute is NaN, never a stale carry-over.
+        """
+        self._cycle_id += 1
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+        n = float('nan')
+        v = [n] * 29
+        v[0] = float(self._cycle_id)
+        if robot_xyth is not None:
+            v[1], v[2] = float(robot_xyth[0]), float(robot_xyth[1])
+        v[3] = float(self._stat_rx_seq)
+        v[4] = float(self._stat_rx_n)
+        v[5] = float(len(self._static_obstacles))
+        v[15] = now_s - self._stat_rx_t if self._stat_rx_seq else n
+        v[19] = self._pose_gap()
+        v[20] = 1.0 if self.pose_source == 'odom' else 0.0
+        v[21] = float(self._pose_fallbacks)
+        v[22] = self.STATE.get(state, n)
+        v[25] = (now_s - self._obs_rx_t) if self._obs_rx_t is not None else n
+        v[26] = self._tf_age_last
+        if entry is not None:
+            (v[6], v[7], v[8], v[9], v[10]) = entry
+        if result is not None:
+            v[11] = result.min_h_static
+            v[12] = result.min_h_dynamic
+            v[13] = result.min_h
+            v[14] = float(result.cbf_active)
+            v[16] = result.eps0
+            v[17] = result.cbf_resid_noslack
+            v[18] = result.cbf_resid_slack
+            v[23] = {'as_is': 0.0, 'acc_clipped': 1.0,
+                     'wheel_scaled': 2.0, 'brake': 3.0}.get(
+                         getattr(result, 'accept_action', 'as_is'), n)
+            v[24] = float(getattr(result, 'wheel_w_cmd_max', n))
+        if self.latest_path is not None and len(self.latest_path.poses) and \
+                robot_xyth is not None:
+            e = self.latest_path.poses[-1].pose.position
+            v[27] = float(math.hypot(e.x - robot_xyth[0], e.y - robot_xyth[1]))
+        if self._requested_goal is not None and robot_xyth is not None:
+            v[28] = float(math.hypot(self._requested_goal[1] - robot_xyth[0],
+                                     self._requested_goal[2] - robot_xyth[1]))
+        d = Float32MultiArray()
+        d.data = [float(x) for x in v]
+        self.diag_pub.publish(d)
 
     @staticmethod
     def _tf_to_xyth(tf: TransformStamped) -> np.ndarray:
@@ -788,31 +866,74 @@ class GMPCNode(Node):
     def _control_step(self):
         # 0. Need a plan
         if self.latest_path is None or len(self.latest_path.poses) < 2:
-            self._publish_zero()
+            self._halt('no_plan')
             return
 
         # 1. Robot pose in global_frame
         robot_xyth = self._lookup_robot_pose()
         if robot_xyth is None:
-            self._publish_zero()
+            self._halt('no_pose')
             return
+
+        # 1b. Inputs must be FRESH, not merely once-received. A tracker that
+        # stops publishing leaves self._obstacles holding its last frame, and
+        # the CBF would keep constraining against obstacles that are no longer
+        # being observed while treating everything new as empty space.
+        if self.cbf_enable and self.obstacle_max_age > 0.0:
+            now_s = self.get_clock().now().nanoseconds * 1e-9
+            if self._obs_rx_t is not None:
+                age = now_s - self._obs_rx_t
+                if age > self.obstacle_max_age:
+                    self.get_logger().warn(
+                        f'/gmpc/obstacles stale by {age:.2f} s '
+                        f'(limit {self.obstacle_max_age:.2f} s)',
+                        throttle_duration_sec=2.0)
+                    if self.stale_policy == 'stop':
+                        self._halt('stale_obstacles', robot_xyth)
+                        return
+            if self._stat_rx_seq:
+                age = now_s - self._stat_rx_t
+                if age > self.obstacle_max_age:
+                    self.get_logger().warn(
+                        f'/gmpc/static_obstacles stale by {age:.2f} s '
+                        f'(limit {self.obstacle_max_age:.2f} s)',
+                        throttle_duration_sec=2.0)
+                    if self.stale_policy == 'stop':
+                        self._halt('stale_static', robot_xyth)
+                        return
 
         # 2. Distance-to-goal check (just hold zero when there)
         goal_xy = np.array([self.latest_path.poses[-1].pose.position.x,
                             self.latest_path.poses[-1].pose.position.y])
         dist_to_goal = float(np.linalg.norm(goal_xy - robot_xyth[:2]))
         if self._hold_if_stuck(dist_to_goal):
+            self._publish_diag('holding_stuck', robot_xyth)
             return
         if dist_to_goal < self.goal_tol_xy:
             if not self._arrived:
+                # Name BOTH endpoints. This controller stops on the last pose of
+                # /plan; the test harness scores against the goal it asked for;
+                # the relay closes its replan loop against the /goal_pose it
+                # received. Those are three different points, and a run that
+                # reports only "0.295 m from (8.10, 0.45)" cannot be checked
+                # against a request for (8.12, 0.48) after the fact.
+                rq = self._requested_goal
+                extra = ''
+                if rq is not None:
+                    d_rq = math.hypot(rq[1] - robot_xyth[0], rq[2] - robot_xyth[1])
+                    gap = math.hypot(rq[1] - goal_xy[0], rq[2] - goal_xy[1])
+                    extra = (f'; requested goal ({rq[1]:.2f}, {rq[2]:.2f}) is '
+                             f'{d_rq:.3f} m away, plan endpoint sits {gap:.3f} m '
+                             f'from it')
                 self.get_logger().info(
                     f'\033[1;32mGoal reached\033[0m '
-                    f'(within {dist_to_goal:.3f} m of '
-                    f'({goal_xy[0]:.2f}, {goal_xy[1]:.2f}), tol={self.goal_tol_xy:.2f} m) '
-                    f'-- holding zero twist'
+                    f'(within {dist_to_goal:.3f} m of plan endpoint '
+                    f'({goal_xy[0]:.2f}, {goal_xy[1]:.2f}), '
+                    f'tol={self.goal_tol_xy:.2f} m, pose_source={self.pose_source})'
+                    f'{extra} -- holding zero twist'
                 )
                 self._arrived = True
-            self._publish_zero()
+            self._halt('arrived', robot_xyth)
             return
 
         # 3. Build horizon reference from latest /plan
@@ -956,22 +1077,20 @@ class GMPCNode(Node):
         #  18  min CBF row residual WITH slack      (A z + eps - l)
         #  19  |TF pose - EKF pose|  [m]     20  pose source (0 tf, 1 odom)
         #  21  fallbacks so far
+        #  22  control state (see GMPCNode.STATE)  23  acceptance action
+        #  24  worst |ω| the sent command implies  25  dynamic obstacle age [s]
+        #  26  age of the TF actually used [s]     27  dist to /plan endpoint
+        #  28  dist to the goal as REQUESTED on /goal_pose
         # 19 is logged whichever source is active, so one run shows both how far
         # the TF composition drifted and whether it mattered.
         # 17 < 0 while 18 >= 0 and 16 > 0 is the proof that the command broke
         # the barrier condition and only the slack kept the QP feasible.
-        self._cycle_id += 1
-        now_s = self.get_clock().now().nanoseconds * 1e-9
-        d = Float32MultiArray()
-        d.data = [float(v) for v in (
-            self._cycle_id, rx_d, ry_d, self._stat_rx_seq, self._stat_rx_n,
-            n_stat_held, len(stat_in), near_d, near_r, near_m,
-            min_h_stat_entry, result.min_h_static, result.min_h_dynamic,
-            result.min_h, result.cbf_active, now_s - self._stat_rx_t,
-            result.eps0, result.cbf_resid_noslack, result.cbf_resid_slack,
-            self._pose_gap(), 1.0 if self.pose_source == 'odom' else 0.0,
-            self._pose_fallbacks)]
-        self.diag_pub.publish(d)
+        # 27 against 28 is what separates "the robot arrived" from "the planner
+        # stopped somewhere else"; fields 22-28 are appended, so readers written
+        # against the 22-field layout keep working unchanged.
+        self._publish_diag('running', robot_xyth=robot_xyth, result=result,
+                           entry=(len(stat_in), near_d, near_r, near_m,
+                                  min_h_stat_entry))
         m = Float32(); m.data = float(result.solve_time_s * 1e3)
         self.solve_time_pub.publish(m)
         if self.cbf_enable and result.cbf_active > 0:
@@ -981,9 +1100,27 @@ class GMPCNode(Node):
             self._last_min_h = float(result.min_h)
             self._publish_cbf_zones()
 
-        if result.status not in ('solved', 'solved inaccurate'):
+        # Say what was actually sent. This used to log 'emergency-braking' for
+        # every status outside {solved, solved inaccurate} -- including
+        # 'maximum iterations reached', which is accepted as usable and whose
+        # NON-ZERO command had already been published two statements earlier.
+        # A diagnostic that contradicts the command is worse than none.
+        self._last_state = 'running'
+        act = getattr(result, 'accept_action', 'as_is')
+        if act == 'brake':
             self.get_logger().warn(
-                f'OSQP status={result.status}, emergency-braking',
+                f'OSQP status={result.status}, emergency-braking (u=0)',
+                throttle_duration_sec=1.0)
+        elif act == 'wheel_scaled':
+            self.get_logger().warn(
+                f'OSQP status={result.status}: command scaled by '
+                f'{result.accept_scale:.3f} to fit the wheel limits '
+                f'(|ω|max now {result.wheel_w_cmd_max:.2f} rad/s), u={np.round(u, 4)}',
+                throttle_duration_sec=1.0)
+        elif result.status not in ('solved', 'solved inaccurate'):
+            self.get_logger().warn(
+                f'OSQP status={result.status}: sub-optimal point accepted and '
+                f'sent as u={np.round(u, 4)} (NOT braking)',
                 throttle_duration_sec=1.0)
 
     def _publish_cbf_zones(self):
