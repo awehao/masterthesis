@@ -160,19 +160,6 @@ class GMPCNode(Node):
         # Reject a pose this much older than now; a stale pose is worse than
         # none because the CBF would linearise about a place the robot has left.
         self.declare_parameter('pose_max_age', 0.30)
-        # Age limits for the OTHER inputs. The readiness gate before a run only
-        # proves a topic published once; it says nothing about a publisher that
-        # stops halfway. Without these the CBF keeps steering around an obstacle
-        # set frozen at the moment its tracker died, and the TF lookup happily
-        # returns the last transform in the buffer however old it is.
-        #   <= 0 disables that check (and reproduces the old behaviour).
-        self.declare_parameter('obstacle_max_age', 1.0)   # /gmpc/obstacles [s]
-        self.declare_parameter('tf_max_age',       0.50)  # map->base_footprint
-        # What to do when an input goes stale: 'stop' publishes zero and says
-        # why; 'warn' keeps driving and only logs. 'stop' is the default because
-        # a stale obstacle set is indistinguishable from an empty one at the
-        # barrier, and an empty one reads as "nothing to avoid".
-        self.declare_parameter('stale_input_policy', 'stop')
 
         # ---- CBF safety filter ------------------------------------------
         self.declare_parameter('cbf_enable',         False)
@@ -436,13 +423,6 @@ class GMPCNode(Node):
         self._stat_rx_n   = 0            # points in it
         self._stat_rx_seq = 0            # messages received (DDS liveness)
         self._cycle_id    = 0            # ties every diagnostic to one solve
-        self._obs_rx_t    = None         # arrival time of the last dynamic msg
-        self._requested_goal = None      # (t, x, y) straight off /goal_pose
-        self._last_state  = None         # suppress repeated state logs
-        self.obstacle_max_age = float(self.get_parameter('obstacle_max_age').value)
-        self.tf_max_age       = float(self.get_parameter('tf_max_age').value)
-        self.stale_policy     = str(self.get_parameter('stale_input_policy').value)
-        self._tf_age_last = float('nan')  # age of the transform actually used
 
         # ---- TF + I/O -----------------------------------------------------
         self.tf_buffer   = tf2_ros.Buffer()
@@ -649,9 +629,6 @@ class GMPCNode(Node):
 
     def _obstacles_cb(self, msg: Float32MultiArray):
         """Flat [x, y, r, vx, vy, ...] (5 floats per obstacle) in global frame."""
-        # Float32MultiArray carries no header, so arrival time is the only clock
-        # this feed has; it is what the freshness gate in _control_step reads.
-        self._obs_rx_t = self.get_clock().now().nanoseconds * 1e-9
         data = list(msg.data)
         stride = 5
         n = len(data) // stride
@@ -731,25 +708,7 @@ class GMPCNode(Node):
             self.get_logger().warn(
                 f'TF {self.global_frame}->{self.base_frame} failed: {e}',
                 throttle_duration_sec=2.0)
-            self._tf_age_last = float('nan')
             return None
-        # rclpy.time.Time() asks for "the latest available", which succeeds for
-        # as long as the buffer holds anything at all -- a localisation chain
-        # that died two minutes ago still returns a transform, and the lookup
-        # reports no error. Its own stamp is the only thing that says so.
-        # A stamp in the FUTURE is not freshness: it means the publisher's clock
-        # disagrees with ours, so take the magnitude, not the signed difference.
-        st = tf.header.stamp
-        age = (self.get_clock().now().nanoseconds * 1e-9
-               - (st.sec + st.nanosec * 1e-9))
-        self._tf_age_last = abs(age)
-        if self.tf_max_age > 0.0 and self._tf_age_last > self.tf_max_age:
-            self.get_logger().warn(
-                f'TF {self.global_frame}->{self.base_frame} is '
-                f'{age:+.2f} s off now (limit {self.tf_max_age:.2f} s)',
-                throttle_duration_sec=2.0)
-            if self.stale_policy == 'stop':
-                return None
         return self._tf_to_xyth(tf)
 
     def _lookup_robot_pose(self):
