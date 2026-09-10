@@ -234,8 +234,12 @@ done
 # (f) 靜止檢查：NO_TRAFFIC=1 只保證沒有下命令，不保證物體不動。
 # 記錄輸出，不論通過與否，讓「殘留速度」在事後可查而不是靠推論。
 STILL_LOG="${RUN_DIR}/stillness.log"
+# NO_TRAFFIC=1 -> 全部應靜止；traffic 開啟 -> 只要求機器人靜止，
+# 並反過來要求移動體確實在動。
+STILL_ARGS=""
+[ "${NO_TRAFFIC:-0}" = "1" ] || STILL_ARGS="--traffic"
 if timeout 40 python3 "${HERE}/stillness_check.py" --window "${STILL_WINDOW:-3.0}" \
-      > "$STILL_LOG" 2>&1; then
+      $STILL_ARGS > "$STILL_LOG" 2>&1; then
     mark "靜止檢查通過（見 stillness.log）"
 else
     mark "!! 靜止檢查未通過（見 stillness.log）"
@@ -256,11 +260,17 @@ for i in $(seq 1 30); do
   [ "${c:-0}" -ge 2 ] && { echo "[$(date +%T)] [5/6]   訂閱者=$c（${i}s）"; break; }
   sleep 1
 done
+# `ros2 topic pub` leaves header.stamp at zero, so the publish instant could not
+# be checked afterwards and the reports had to fall back on "the time the
+# simulator's callback ran" -- which was measured running LATE, after the first
+# /plan and after motion had started. publish_goal.py stamps each message with
+# simulation time and writes the publish events to JSON, so the task clock can
+# be tied to a verifiable publish event.
 echo "[$(date +%T)] [5/6] **案例開始時間 $(date +%T)**：發布目標"
 echo "$(date +%s) case_start_goal_published" >> "$READY_LOG"
-timeout 15 ros2 topic pub -t 5 -r 1 /goal_pose geometry_msgs/msg/PoseStamped \
-  "{header: {frame_id: 'map'}, pose: {position: {x: $GX, y: $GY, z: 0.0}, orientation: {w: 1.0}}}" \
-  >> "$LOG" 2>&1 || true
+timeout 60 python3 "${HERE}/publish_goal.py" --x "$GX" --y "$GY" \
+  --count 5 --period 1.0 --out "${RUN_DIR}/goal_publish.json" \
+  2>&1 | tee -a "$LOG" | sed "s/^/[$(date +%T)] [5\/6]   /"
 
 # 6. 等 Isaac 自己結束：它會先把底盤歸零、步進生效，再寫入停止原因與最後樣本。
 # 只有在那之後才停止錄製並清理，否則保存會被 cleanup 截斷（上一趟就是如此，

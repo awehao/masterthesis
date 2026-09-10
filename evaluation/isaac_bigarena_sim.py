@@ -255,6 +255,41 @@ MOVER_R = {m['name']: (m['dims'][0] if m['kind'] == 'cylinder'
            for m in MODELS if m['kinematic'] and m['dims']}
 
 
+# Static obstacle shapes in world coordinates, for a per-step clearance that
+# covers the WHOLE arena rather than only the movers. Distances are chassis
+# CENTRE to the obstacle SURFACE -- the same "淨距" convention used when the
+# start point was chosen -- so nothing is subtracted for the robot's own
+# radius (0.300 m); the reader does that.
+STATIC_SHAPES = []
+for _m in MODELS:
+    if _m['kinematic'] or _m['name'] == 'ground_plane' or not _m['dims']:
+        continue
+    _x, _y = float(_m['pose'][0]), float(_m['pose'][1])
+    _yaw = float(_m['pose'][5]) if len(_m['pose']) > 5 else 0.0
+    if _m['kind'] == 'box':
+        STATIC_SHAPES.append(('box', _x, _y, _m['dims'][0] / 2.0,
+                              _m['dims'][1] / 2.0, _yaw, _m['name']))
+    elif _m['kind'] == 'cylinder':
+        STATIC_SHAPES.append(('cyl', _x, _y, _m['dims'][0], 0.0, 0.0,
+                              _m['name']))
+
+
+def static_clearance(px, py):
+    """(最小淨距, 最近物體名)；中心到表面，未扣機器人半徑。"""
+    best, who = float('inf'), None
+    for k, cx, cy, a1, a2, th, nm in STATIC_SHAPES:
+        if k == 'box':
+            c, sn = math.cos(-th), math.sin(-th)
+            dx, dy = px - cx, py - cy
+            lx, ly = c * dx - sn * dy, sn * dx + c * dy
+            d = math.hypot(max(abs(lx) - a1, 0.0), max(abs(ly) - a2, 0.0))
+        else:
+            d = max(math.hypot(px - cx, py - cy) - a1, 0.0)
+        if d < best:
+            best, who = d, nm
+    return best, who
+
+
 def rpy2(q):
     w, x, y, z = [float(v) for v in q]
     roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
@@ -423,7 +458,10 @@ class Bridge(Node):
         self.goal_stamp = None
         self.goal_count = 0
         self.first_plan_t = None
+        self.first_plan_goal_err = None
         self.plan_count = 0
+        self.plan_mismatch = []
+        self.plan_goal_tol = 0.35        # 0.30 到達容差 + 0.05 costmap 格
         self.motion_start_t = None
         self.create_subscription(PoseStamped, '/goal_pose', self._goal, 10)
         self.create_subscription(Path, '/plan', self._plan, 10)
@@ -457,9 +495,23 @@ class Bridge(Node):
             self.motion_start_t = self.sim_t
 
     def _plan(self, m):
+        # A plan only starts the task clock if it actually ends at THIS goal.
+        # Nav2 can still be publishing a path for a previous goal when the new
+        # one arrives, and "the first /plan after the goal" would then time the
+        # wrong path. The endpoint is checked against GOAL; the tolerance is
+        # one costmap cell plus the arrival tolerance, and the miss distance of
+        # every rejected plan is kept so the check itself can be audited.
         self.plan_count += 1
-        if self.first_plan_t is None and len(m.poses) > 0:
+        if not len(m.poses):
+            return
+        e = m.poses[-1].pose.position
+        d = math.dist((float(e.x), float(e.y)), GOAL)
+        if d > self.plan_goal_tol:
+            self.plan_mismatch.append([round(self.sim_t, 3), round(d, 4)])
+            return
+        if self.first_plan_t is None:
             self.first_plan_t = self.sim_t
+            self.first_plan_goal_err = d
 
     def _goal(self, m):
         # The runner publishes the goal five times so a late subscriber cannot
@@ -1372,11 +1424,13 @@ def main():
                                 float(p_now[1]) - dyn_pose[n_][1])
                      - (0.25 if MOVER_R.get(n_) is None else MOVER_R[n_])
                      for n_ in dyn] or [float('inf')])
+                _cs, _cw = static_clearance(float(p_now[0]), float(p_now[1]))
                 rr_, pp_ = rpy2(q_now)
                 log.append(dict(t=t_after, x=float(p_now[0]), y=float(p_now[1]),
                                 yaw=float(yaw_of(q_now)), roll=rr_, pitch=pp_,
                                 cmd=[vx, vy, wz], arm_err=arm_err,
                                 clr_dyn=float(clr),
+                                clr_static=float(_cs), clr_static_who=_cw,
                                 dist_goal=math.dist((float(p_now[0]),
                                                      float(p_now[1])), GOAL)))
                 if log[-1]['dist_goal'] <= a.arrive_tol:
@@ -1449,7 +1503,11 @@ def main():
                           goal_msgs_received=node.goal_count,
                           # 三個時刻分開保存，回呼延遲不折抵
                           first_plan_sim_t=node.first_plan_t,
+                          first_plan_goal_err=node.first_plan_goal_err,
+                          plan_goal_tol=node.plan_goal_tol,
                           plan_msgs_received=node.plan_count,
+                          plan_goal_mismatch=node.plan_mismatch[:50],
+                          plan_goal_mismatch_n=len(node.plan_mismatch),
                           motion_start_sim_t=node.motion_start_t,
                           goal_cb_lag_s=(None if (node.goal_sim_t is None
                                                   or node.motion_start_t is None)
@@ -1502,7 +1560,15 @@ def main():
                   f'|pitch| 最大 {max(abs(r["pitch"]) for r in L)*57.3:.4f}°')
             fin = [r['clr_dyn'] for r in L if math.isfinite(r['clr_dyn'])]
             if fin:
-                print(f'    與移動體最小間距 {min(fin):.3f} m')
+                print(f'    與移動體最小間距 {min(fin):.3f} m（中心到表面，'
+                      '未扣底盤半徑 0.300）')
+            fs = [(r['clr_static'], r.get('clr_static_who')) for r in L
+                  if math.isfinite(r.get('clr_static', float('inf')))]
+            if fs:
+                mn = min(fs, key=lambda z: z[0])
+                print(f'    與靜態障礙最小間距 {mn[0]:.3f} m（最近：{mn[1]}，'
+                      f'中心到表面，未扣底盤半徑 0.300；涵蓋 '
+                      f'{len(STATIC_SHAPES)} 個靜態碰撞體）')
         json.dump(rec, open(a.out, 'w'), ensure_ascii=False, indent=1)
         print(f'  停止原因 {stop_reason}')
         print(f'  時間一致性：迴圈計數時鐘與物理時鐘最大偏差 {time_skew_max*1000:.3f} ms'
