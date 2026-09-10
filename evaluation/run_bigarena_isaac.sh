@@ -116,6 +116,7 @@ fi
 # already removes gz entirely, so gui:=true here only enables the bridge.
 echo "[$(date +%T)] [2/6] 啟動導航鏈（NO_GZ=1, BIGARENA=1, TRAJ=bigarena_traffic）..."
 NO_GZ=1 BIGARENA=1 TRAJ=bigarena_traffic SPAWN_X="$SX" SPAWN_Y="$SY" \
+  HEADING="${HEADING:-0}" NO_TRAFFIC="${NO_TRAFFIC:-0}" \
   setsid ros2 launch my_omnibot_description omni_bot_dynamic.launch.py \
   gui:="${LAUNCH_GUI:-true}" use_arm:=true >> "$LOG" 2>&1 < /dev/null &
 PIDS+=( $! )
@@ -142,6 +143,11 @@ setsid timeout --foreground --signal=INT --kill-after=5 "${REC_CAP}s" \
   /clock /odom /odom_raw /odometry/filtered /amcl_pose /model/omni_bot/pose \
   /cmd_vel /cmd_vel_nav /cmd_vel_pre_shield /scan /scan_raw /plan /goal_pose \
   /tf /tf_static /gmpc/solve_time_ms /gmpc/min_h /gmpc/diag /joint_states \
+  /gmpc/heading \
+  /model/dyn_obs_0/pose /model/dyn_obs_1/pose /model/dyn_obs_2/pose \
+  /model/dyn_obs_3/pose /model/dyn_obs_4/pose /model/dyn_obs_5/pose \
+  /model/dyn_obs_6/pose /model/dyn_obs_7/pose /model/dyn_obs_8/pose \
+  /model/dyn_obs_9/pose \
   /base_camera/color/image_raw /base_camera/color/camera_info \
   /base_camera/color/image_raw/compressed \
   >> "$LOG" 2>&1 < /dev/null &
@@ -223,6 +229,18 @@ for t in /scan /odom /cmd_vel /amcl_pose /model/omni_bot/pose /tf; do
         mark "!! bag 未訂閱 $t"; gate_fail=1
     fi
 done
+
+# (f) 靜止檢查：NO_TRAFFIC=1 只保證沒有下命令，不保證物體不動。
+# 記錄輸出，不論通過與否，讓「殘留速度」在事後可查而不是靠推論。
+STILL_LOG="${RUN_DIR}/stillness.log"
+if timeout 40 python3 "${HERE}/stillness_check.py" --window "${STILL_WINDOW:-3.0}" \
+      > "$STILL_LOG" 2>&1; then
+    mark "靜止檢查通過（見 stillness.log）"
+else
+    mark "!! 靜止檢查未通過（見 stillness.log）"
+    [ "${STILL_STRICT:-1}" = "1" ] && gate_fail=1
+fi
+cat "$STILL_LOG" >> "$READY_LOG"
 
 if [ "$gate_fail" -ne 0 ]; then
     echo "[$(date +%T)] [5/6] **就緒檢查未通過，不發目標**（見 $READY_LOG）"

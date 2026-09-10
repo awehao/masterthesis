@@ -28,6 +28,7 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from geometry_msgs.msg import Twist, TransformStamped, Point
 from nav_msgs.msg      import Odometry, Path
 from std_msgs.msg      import Float32, Float32MultiArray
+from geometry_msgs.msg import Vector3Stamped
 from visualization_msgs.msg import MarkerArray, Marker
 
 import tf2_ros
@@ -328,6 +329,7 @@ class GMPCNode(Node):
         self.heading_rate   = float(self.get_parameter('heading_rate_max').value)
         self.heading_fixed  = float(self.get_parameter('heading_fixed').value)
         self._yaw_ref       = None      # rate-limited heading reference
+        self._yaw_raw       = None      # pre-slew direction, diagnostics only
         self._yaw_ref_t     = None
         Qyaw = self.heading_w if self.heading_enable else 0.0
         Qy   = float(self.get_parameter('Q_y').value)
@@ -460,6 +462,14 @@ class GMPCNode(Node):
         # bag). Layout is documented at the publish site.
         self.diag_pub       = self.create_publisher(
             Float32MultiArray, '/gmpc/diag', 10)
+        # Heading diagnostics, one row per control step while heading_enable is
+        # on. x = pre-slew chord direction, y = rate-limited reference actually
+        # given to the QP, z = the robot's measured yaw. Separating x from y is
+        # the only way a bag can tell "the plan moved" from "the reference was
+        # allowed to follow it"; z against y gives the tracking error. Stamped,
+        # unlike /gmpc/diag.
+        self.heading_pub    = self.create_publisher(
+            Vector3Stamped, '/gmpc/heading', 10)
         self.cbf_zone_pub   = self.create_publisher(
             MarkerArray, str(self.get_parameter('cbf_zone_topic').value), 10)
 
@@ -526,6 +536,7 @@ class GMPCNode(Node):
         if float(chord @ chord) < 1e-4:               # 1 cm: no usable direction
             return self._yaw_ref
         raw = math.atan2(float(chord[1]), float(chord[0]))
+        self._yaw_raw = raw          # pre-slew, for diagnostics only
         if self._yaw_ref is None or self._yaw_ref_t is None:
             self._yaw_ref, self._yaw_ref_t = raw, now_s
             return raw
@@ -768,6 +779,14 @@ class GMPCNode(Node):
         # (reference yaw is rate-limited after blending; see step 3b below)
         yaw_des = self._desired_yaw(path_xyth, robot_xyth,
                                     self.get_clock().now().nanoseconds * 1e-9)
+        if self.heading_enable:
+            hm = Vector3Stamped()
+            hm.header.stamp = self.get_clock().now().to_msg()
+            hm.header.frame_id = 'map'
+            hm.vector.x = float('nan') if self._yaw_raw is None else float(self._yaw_raw)
+            hm.vector.y = float('nan') if yaw_des is None else float(yaw_des)
+            hm.vector.z = float(robot_xyth[2])
+            self.heading_pub.publish(hm)
         X_ref_win, xi_ref_win = build_reference_window(
             path_xyth, robot_xyth,
             N=self.N, dt=self.dt, v_nom=self.v_nom,
