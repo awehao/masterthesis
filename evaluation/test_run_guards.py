@@ -148,5 +148,52 @@ check('a converged, feasible solve is untouched',
       res_ok.accept_action == 'as_is' and res_ok.accept_scale == 1.0,
       f'action={res_ok.accept_action}')
 
+# ---------------------------------------------------------------------------
+# 2. A trial that did not arrive must not carry an arrival time
+# ---------------------------------------------------------------------------
+from isaac_result import arrival_fields                     # noqa: E402
+
+print('\n-- trial result fields --')
+
+# The OFF run this came from: it timed out, but first_plan_t and the stop time
+# both existed, so the old expression produced a completion time regardless.
+to = arrival_fields('task_timeout', first_plan_t=10.0, stop_sim_t=190.0,
+                    motion_start_t=12.0)
+check('a timeout carries no arrival_time_s',
+      to['arrival_time_s'] is None and to['arrived'] is False,
+      f'arrival_time_s={to["arrival_time_s"]}')
+check('but the elapsed time is still recorded, under its own name',
+      abs(to['elapsed_until_stop_s'] - 180.0) < 1e-9,
+      f'elapsed_until_stop_s={to["elapsed_until_stop_s"]}')
+
+ar = arrival_fields('goal_reached_truth', first_plan_t=10.0, stop_sim_t=95.0,
+                    motion_start_t=12.0, dist_goal=0.21, arrive_tol=0.30)
+check('an arrival keeps its arrival time',
+      ar['arrived'] and abs(ar['arrival_time_s'] - 85.0) < 1e-9,
+      f'arrival_time_s={ar["arrival_time_s"]}')
+check('and its motion-elapsed time',
+      abs(ar['motion_elapsed_s'] - 83.0) < 1e-9,
+      f'motion_elapsed_s={ar["motion_elapsed_s"]}')
+
+th = arrival_fields('thermal_abort', first_plan_t=10.0, stop_sim_t=50.0,
+                    motion_start_t=12.0)
+check('a thermal abort is flagged as not a navigation outcome',
+      th['scoreable'] is False and th['arrival_time_s'] is None,
+      f'scoreable={th["scoreable"]}')
+
+try:
+    arrival_fields('goal_reached_truth', 10.0, 95.0, 12.0,
+                   dist_goal=0.62, arrive_tol=0.30)
+    ok = False
+except ValueError:
+    ok = True
+check('a label that contradicts the geometry raises instead of being averaged',
+      ok)
+
+miss = arrival_fields('goal_reached_truth', first_plan_t=None,
+                      stop_sim_t=95.0, motion_start_t=None)
+check('a missing first-plan time yields None, not a bogus number',
+      miss['arrival_time_s'] is None, f'{miss["arrival_time_s"]}')
+
 print('\n' + ('FAILURES: ' + ', '.join(FAILS) if FAILS else 'all guard tests pass'))
 sys.exit(1 if FAILS else 0)

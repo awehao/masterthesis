@@ -93,6 +93,10 @@ class GoalToPlanRelay(Node):
 
         # State for continuous replanning
         self._active_goal: PoseStamped | None = None
+        # Plan requests are numbered so an older result cannot overwrite a
+        # newer plan; see _request_plan.
+        self._req_seq       = 0     # requests sent
+        self._published_seq = 0     # highest request whose path reached /plan
         if self.replan_period > 0.0:
             self.create_timer(self.replan_period, self._replan_tick)
 
@@ -125,7 +129,14 @@ class GoalToPlanRelay(Node):
         return ps
 
     def _request_plan(self, goal: PoseStamped, log_prefix: str = 'Plan request'):
-        """Send one ComputePathToPose action call for the given goal."""
+        """Send one ComputePathToPose action call for the given goal.
+
+        Requests are numbered because they can overlap: the periodic replan and
+        a re-sent goal both call this, and the action results come back on
+        whatever order the planner finishes them in. Without a sequence number
+        a slow reply from an older request publishes over a newer plan, and the
+        controller follows a path computed from a pose the robot has left.
+        """
         if not self.action_client.wait_for_server(timeout_sec=self.srv_timeout):
             self.get_logger().error(
                 'ComputePathToPose action server unavailable — '
@@ -148,8 +159,11 @@ class GoalToPlanRelay(Node):
             f'-> ({goal.pose.position.x:.2f}, {goal.pose.position.y:.2f})'
         )
 
+        self._req_seq += 1
+        seq = self._req_seq
         send_future = self.action_client.send_goal_async(req)
-        send_future.add_done_callback(self._goal_response_cb)
+        send_future.add_done_callback(
+            lambda fut, s=seq: self._goal_response_cb(fut, s))
 
     def _goal_cb(self, msg: PoseStamped):
         # Store + trigger immediate plan; the replan timer will keep refreshing.
@@ -177,25 +191,37 @@ class GoalToPlanRelay(Node):
             return
         self._request_plan(self._active_goal, log_prefix='Plan request (replan)')
 
-    def _goal_response_cb(self, future):
+    def _goal_response_cb(self, future, seq: int = 0):
         gh = future.result()
         if not gh.accepted:
-            self.get_logger().warn('Planner rejected goal')
+            self.get_logger().warn(f'Planner rejected goal (request #{seq})')
             return
         result_future = gh.get_result_async()
-        result_future.add_done_callback(self._result_cb)
+        result_future.add_done_callback(lambda fut, s=seq: self._result_cb(fut, s))
 
-    def _result_cb(self, future):
+    def _result_cb(self, future, seq: int = 0):
         result = future.result().result
         path = result.path
         if path is None or len(path.poses) == 0:
             self.get_logger().warn(
-                f'Planner returned empty path (error_code={result.error_code}, '
-                f'msg={result.error_msg!r})'
+                f'Planner returned empty path (request #{seq}, '
+                f'error_code={result.error_code}, msg={result.error_msg!r})'
             )
             return
+        # Drop a result that a newer request has already overtaken. Publishing
+        # it would replace a current plan with an older one -- and because
+        # gmpc_node re-arms its arrival detector on every /plan, that also
+        # resets arrival state on a path the robot has already moved past.
+        if seq < self._published_seq:
+            self.get_logger().warn(
+                f'Discarding stale plan from request #{seq}: '
+                f'#{self._published_seq} has already been published'
+            )
+            return
+        self._published_seq = seq
         self.plan_pub.publish(path)
-        self.get_logger().info(f'Path published: {len(path.poses)} poses')
+        self.get_logger().info(f'Path published: {len(path.poses)} poses '
+                               f'(request #{seq})')
 
 
 def main():

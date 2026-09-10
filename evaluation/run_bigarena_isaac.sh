@@ -13,8 +13,26 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source /opt/ros/jazzy/setup.bash
 source "${WS_ROOT}/install/setup.bash"
 set -u
+source "${HERE}/lib/run_guards.sh"
 
 METHOD="${1:-gmpc_scan}"; SEED="${2:-1}"; DURATION="${3:-180}"
+# METHOD used to name the output directory and nothing else, while the heading
+# objective came from a separate HEADING variable -- so a directory called
+# ...gmpc_scan_heading... could hold a run with the heading objective off, and
+# an ON/OFF pair could silently be two OFFs. The method now DECIDES the
+# configuration, an unknown name is refused rather than falling through to the
+# default chain, and a conflicting HEADING in the environment is an error, not a
+# silent override.
+if ! _MCFG=$(method_config "$METHOD"); then
+    echo "ERROR: $_MCFG"; exit 1
+fi
+_HEADING_WANT="${_MCFG#HEADING=}"
+if [ -n "${HEADING:-}" ] && [ "${HEADING}" != "$_HEADING_WANT" ]; then
+    echo "ERROR: HEADING=${HEADING} 與方法 $METHOD 要求的 HEADING=${_HEADING_WANT} 衝突"
+    echo "       方法名稱決定設定；要跑別的組合請用對應的方法名稱。"
+    exit 1
+fi
+HEADING="$_HEADING_WANT"
 POSES_CSV="${POSES_CSV:-${HERE}/results/bigarena_poses.csv}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 # Every run gets its own directory. The previous scheme reused one name per
@@ -73,6 +91,7 @@ setsid "$ISAAC_PY" "${HERE}/isaac_bigarena_sim.py" --seed "$SEED" --method "$MET
     --wall-limit "${WALL_LIMIT:-1200}" \
     --render-hz "${RENDER_HZ:-12}" --cpu-limit "${CPU_LIMIT:-88}" \
     --arrive-tol "${ARRIVE_TOL:-0.30}" \
+    --odom-vel-source "${ODOM_VEL_SOURCE:-cmd}" \
     --mover-phase-yaml "${AMMR_PHASE_YAML:-}" \
     --camera "${CAMERA:-false}" --cam-width "${CAM_W:-640}" \
     --cam-height "${CAM_H:-480}" --cam-hz "${CAM_HZ:-10}" \
@@ -117,7 +136,7 @@ fi
 # already removes gz entirely, so gui:=true here only enables the bridge.
 echo "[$(date +%T)] [2/6] 啟動導航鏈（NO_GZ=1, BIGARENA=1, TRAJ=bigarena_traffic）..."
 NO_GZ=1 BIGARENA=1 TRAJ=bigarena_traffic SPAWN_X="$SX" SPAWN_Y="$SY" \
-  HEADING="${HEADING:-0}" NO_TRAFFIC="${NO_TRAFFIC:-0}" \
+  HEADING="${HEADING}" NO_TRAFFIC="${NO_TRAFFIC:-0}" \
   setsid ros2 launch my_omnibot_description omni_bot_dynamic.launch.py \
   gui:="${LAUNCH_GUI:-true}" use_arm:=true >> "$LOG" 2>&1 < /dev/null &
 PIDS+=( $! )
@@ -193,7 +212,8 @@ clock_moved() {
     [ -n "${y:-}" ] && [ "$y" -gt "$x" ] 2>/dev/null
 }
 has_data() { timeout 6 ros2 topic echo --once "$1" 2>/dev/null | grep -q . ; }
-lifecycle_active() { timeout 6 ros2 lifecycle get "$1" 2>/dev/null | grep -q active ; }
+# lifecycle_active() now comes from lib/run_guards.sh: `grep -q active` also
+# matched "inactive", so an unconfigured node passed this gate.
 
 isaac_alive() { kill -0 "$ISAAC_PID" 2>/dev/null; }
 if ! isaac_alive; then
@@ -255,6 +275,33 @@ else
 fi
 cat "$STILL_LOG" >> "$READY_LOG"
 
+# 方法名稱說的是「應該」，這裡讀回節點「實際」的設定。兩者不符就中止：
+# 一趟目錄名寫 _heading 而 heading_enable=False 的執行，比沒有這趟更糟，
+# 因為它會被當成 ON 進入配對統計。
+echo "[$(date +%T)] [5/6] 讀回控制器實際參數並與方法核對 ..."
+_HEADING_EXPECT=$([ "$HEADING" = "1" ] && echo True || echo False)
+# 這裡刻意不用 `if ! cmd | tee`：那樣判的是 tee 的退出碼，正是 run_step
+# 存在的原因。先跑、留下退出碼，再把輸出送進紀錄。
+assert_param /gmpc_controller heading_enable "$_HEADING_EXPECT" \
+    > "${RUN_DIR}/param_readback.log" 2>&1
+_rc=$?
+tee -a "$LOG" "$READY_LOG" < "${RUN_DIR}/param_readback.log" >/dev/null
+sed 's/^/[5\/6]   /' "${RUN_DIR}/param_readback.log"
+if [ "$_rc" -ne 0 ]; then
+    echo "[$(date +%T)] [5/6] **實際設定與方法 $METHOD 不符**"; gate_fail=1
+fi
+# 完整參數快照：之後要重現或申訴某一趟的設定，只能靠這份，不能靠目錄名稱。
+timeout 20 ros2 param dump /gmpc_controller --output-dir "$RUN_DIR" \
+    >> "$LOG" 2>&1 || echo "[$(date +%T)] [5/6]   （參數快照失敗，不中止）"
+python3 - "$RUN_DIR" "$METHOD" "$SEED" "$HEADING" <<'PYEOF2' | tee -a "$LOG"
+import json, sys
+d, method, seed, heading = sys.argv[1:5]
+json.dump(dict(method=method, seed=int(seed), heading=int(heading),
+               resolved_from='method_config() in evaluation/lib/run_guards.sh'),
+          open(f'{d}/method_manifest.json', 'w'), indent=1)
+print(f'  method={method} seed={seed} HEADING={heading} -> method_manifest.json')
+PYEOF2
+
 if [ "$gate_fail" -ne 0 ]; then
     echo "[$(date +%T)] [5/6] **就緒檢查未通過，不發目標**（見 $READY_LOG）"
     sleep 5
@@ -268,35 +315,44 @@ if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then
     echo "[$(date +%T)] [5/6] 相位 0 定位檢查（任務開始前就放好並確認穩定）..."
     # `cmd | tee | sed` 會讓 if 判定 sed 的退出碼，python 的失敗被吞掉。
     # 實測有一趟移動確認明確印出「未通過」卻仍繼續執行。先存檔再判定。
-    timeout 40 python3 "${HERE}/case_start_check.py" preposition \
-          --traj "$AMMR_TRAJ_FILE" --out "${RUN_DIR}/preposition.json" \
-          > "${RUN_DIR}/preposition.log" 2>&1
-    _rc=$?
-    sed "s/^/[$(date +%T)] [5\/6]   /" "${RUN_DIR}/preposition.log" | tee -a "$LOG"
-    if [ "$_rc" -ne 0 ]; then
+    run_step "$LOG" "[$(date +%T)] [5/6]   " "${RUN_DIR}/preposition.log" \
+        timeout 40 python3 "${HERE}/case_start_check.py" preposition \
+              --traj "$AMMR_TRAJ_FILE" --out "${RUN_DIR}/preposition.json"
+    if [ $? -ne 0 ]; then
         echo "[$(date +%T)] [5/6] **相位 0 定位未通過，不發 /case_start，中止**"
         exit 4
     fi
     # Publish ONCE. The driver resets its phase epoch on EVERY /case_start, so a
     # burst would set the zero point to the LAST message; the gz runner already
     # hit that. Publish one, then verify the driver adopted it.
+    # 發送與確認必須分開。舊的迴圈每次重試都會再發一次 /case_start，而驅動
+    # 收到每一則都會重設相位零點——所以「第一次其實已被採用、只是確認讀取
+    # 逾時」的情況下，第二次重試會把相位整個推掉，兩趟的遭遇時序就不同了。
+    # 現在只發一次；重試的只有讀取。
+    echo "[$(date +%T)] [5/6] 等 /case_start 訂閱者 ..."
+    for i in $(seq 1 30); do
+        cs=$(ros2 topic info /case_start 2>/dev/null \
+             | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
+        [ "${cs:-0}" -ge 1 ] && break
+        sleep 1
+    done
+    if [ "${cs:-0}" -lt 1 ]; then
+        echo "[$(date +%T)] [5/6] **/case_start 沒有訂閱者，驅動不在線上，中止**"
+        exit 5
+    fi
+    # 發布前先記下模擬時刻：採用到的 epoch 必須晚於它，否則那是上一次
+    # /case_start 留下的舊值，而不是這一趟的零點。
+    CS_T_PRE=$(timeout 5 ros2 topic echo --once --field clock.sec /clock 2>/dev/null | head -1)
+    echo "[$(date +%T)] [5/6] 發布 /case_start（整趟僅此一次，發布前 clock=${CS_T_PRE:-?} s）..."
+    timeout 8 ros2 topic pub -t 1 /case_start std_msgs/msg/Empty "{}" >> "$LOG" 2>&1 \
+        || { echo "[$(date +%T)] [5/6] **/case_start 發布失敗，中止**"; exit 5; }
     CS_OK=0
     for attempt in 1 2 3; do
-        echo "[$(date +%T)] [5/6] 等 /case_start 訂閱者（第 ${attempt} 次）..."
-        for i in $(seq 1 30); do
-            cs=$(ros2 topic info /case_start 2>/dev/null \
-                 | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
-            [ "${cs:-0}" -ge 1 ] && break
-            sleep 1
-        done
-        echo "[$(date +%T)] [5/6] 發布 /case_start（僅一次）..."
-        timeout 8 ros2 topic pub -t 1 /case_start std_msgs/msg/Empty "{}" \
-            >> "$LOG" 2>&1 || true
-        timeout 30 python3 "${HERE}/case_start_check.py" epoch --window 5 \
-              --out "${RUN_DIR}/phase_epoch.json" > "${RUN_DIR}/epoch.log" 2>&1
-        _rc=$?
-        sed "s/^/[$(date +%T)] [5\/6]   /" "${RUN_DIR}/epoch.log" | tee -a "$LOG"
-        if [ "$_rc" -eq 0 ]; then CS_OK=1; break; fi
+        echo "[$(date +%T)] [5/6] 確認驅動已採用（第 ${attempt} 次讀取，不重發）..."
+        run_step "$LOG" "[$(date +%T)] [5/6]   " "${RUN_DIR}/epoch.log" \
+            timeout 30 python3 "${HERE}/case_start_check.py" epoch --window 5 \
+                  --out "${RUN_DIR}/phase_epoch.json"
+        if [ $? -eq 0 ]; then CS_OK=1; break; fi
     done
     if [ "$CS_OK" -ne 1 ]; then
         echo "[$(date +%T)] [5/6] **驅動未採用 /case_start，障礙物不會依排程移動，中止**"
@@ -304,15 +360,24 @@ if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then
     fi
     CS_EPOCH=$(python3 -c "import json;print(json.load(open('${RUN_DIR}/phase_epoch.json'))['phase_epoch'])")
     echo "[$(date +%T)] [5/6] phase_epoch = ${CS_EPOCH} s（模擬時間）"
+    # 有限值只證明「有某個 epoch」，不證明「是這一趟的 epoch」。
+    python3 - "$CS_EPOCH" "${CS_T_PRE:-nan}" <<'PYEOF3' || exit 5
+import math, sys
+ep, pre = float(sys.argv[1]), float(sys.argv[2])
+if not math.isfinite(ep):
+    sys.exit('!! phase_epoch 非有限值')
+if math.isfinite(pre) and ep < pre - 1.0:
+    sys.exit(f'!! phase_epoch {ep:.3f} 早於本次發布時刻 {pre:.1f}：'
+             '驅動採用的是先前的 /case_start，相位不屬於這一趟')
+print(f'  phase_epoch {ep:.3f} s 屬於本次發布事件（發布前 clock={pre:.1f} s）')
+PYEOF3
     echo "[$(date +%T)] [5/6] /case_start 之後的移動確認..."
     # `cmd | tee | sed` 會讓 if 判定 sed 的退出碼，python 的失敗被吞掉。
     # 實測有一趟移動確認明確印出「未通過」卻仍繼續執行。先存檔再判定。
-    timeout 40 python3 "${HERE}/case_start_check.py" moving \
-          --traj "$AMMR_TRAJ_FILE" --out "${RUN_DIR}/movers_moving.json" \
-          > "${RUN_DIR}/moving.log" 2>&1
-    _rc=$?
-    sed "s/^/[$(date +%T)] [5\/6]   /" "${RUN_DIR}/moving.log" | tee -a "$LOG"
-    if [ "$_rc" -ne 0 ]; then
+    run_step "$LOG" "[$(date +%T)] [5/6]   " "${RUN_DIR}/moving.log" \
+        timeout 40 python3 "${HERE}/case_start_check.py" moving \
+              --traj "$AMMR_TRAJ_FILE" --out "${RUN_DIR}/movers_moving.json"
+    if [ $? -ne 0 ]; then
         echo "[$(date +%T)] [5/6] **移動體未如預期啟動，中止**"
         exit 6
     fi
@@ -347,9 +412,15 @@ print(f'{e + ${PHASE_DELTA}:.6f}')") || {
     echo "[$(date +%T)] [5/6] 排定目標發布時刻 = epoch ${CS_EPOCH} + Δ ${PHASE_DELTA} = ${GOAL_AT} s"
     GOAL_AT_ARGS="--at-sim-time $GOAL_AT"
 fi
-timeout 900 python3 "${HERE}/publish_goal.py" --x "$GX" --y "$GY" $GOAL_AT_ARGS \
-  --count 5 --period 1.0 --out "${RUN_DIR}/goal_publish.json" \
-  2>&1 | tee -a "$LOG" | sed "s/^/[$(date +%T)] [5\/6]   /"
+# `python | tee | sed` 讓 shell 判 sed 的退出碼：模擬發布器以退出碼 3 結束，
+# 整條管線仍回報 0，整趟會在沒有目標的情況下繼續跑到逾時。
+run_step "$LOG" "[$(date +%T)] [5/6]   " "${RUN_DIR}/goal_publish.log" \
+  timeout 900 python3 "${HERE}/publish_goal.py" --x "$GX" --y "$GY" $GOAL_AT_ARGS \
+    --count 5 --period 1.0 --out "${RUN_DIR}/goal_publish.json"
+if [ $? -ne 0 ]; then
+    echo "[$(date +%T)] [5/6] **目標發布失敗，中止（沒有目標的執行不是一趟資料）**"
+    exit 8
+fi
 # epoch 與目標發布之間流逝的相位必須被記錄，不能只說「設計上同時」：
 # 就緒等待若在兩趟長短不同，會吃掉不同長度的障礙物相位。
 if [ -n "$CS_EPOCH" ]; then
@@ -378,10 +449,28 @@ while kill -0 "$ISAAC_PID" 2>/dev/null; do
     fi
     sleep 2
 done
-echo "[$(date +%T)] [6/6] Isaac 已結束並保存，停止錄製"
+# 「程序消失」不等於「完成並保存」。Isaac 是 setsid 起的背景子程序，wait 能
+# 取得它的退出狀態；取不到就退回檢查結果檔。之前這裡無論它是正常收尾還是
+# 中途崩潰，都一律印「已結束並保存」。
+wait "$ISAAC_PID" 2>/dev/null; ISAAC_RC=$?
+echo "[$(date +%T)] [6/6] Isaac 程序結束，退出碼 ${ISAAC_RC}"
+if [ "$ISAAC_RC" -ge 128 ]; then
+    echo "[$(date +%T)] [6/6] **Isaac 被訊號 $((ISAAC_RC - 128)) 中止，不是正常收尾**"
+fi
+RUN_OK=0
+verify_result_json "${RUN_DIR}/isaac_run.json" > "${RUN_DIR}/result_check.log" 2>&1 \
+    && RUN_OK=1
+sed "s|^|[$(date +%T)] [6/6] |" "${RUN_DIR}/result_check.log" | tee -a "$LOG"
+if [ "$RUN_OK" -ne 1 ]; then
+    echo "[$(date +%T)] [6/6] **結果檔不完整：這一趟不可評分**" | tee -a "$LOG"
+    echo "結果檔不完整（見 result_check.log）" > "${RUN_DIR}/INCOMPLETE.txt"
+fi
+echo "[$(date +%T)] [6/6] 停止錄製"
 grep -a "停止原因" "$LOG" | tail -1
 kill -INT -- "-$REC" 2>/dev/null || true
 wait $REC 2>/dev/null || true
 echo "[$(date +%T)] === 結束：$TAG ==="
 echo "[$(date +%T)]     資料目錄: ${RUN_DIR}"
 echo "[$(date +%T)]     log: $LOG"
+# 收尾的退出碼要說出這一趟能不能用，否則批次腳本無從分辨「跑完」與「跑壞」。
+if [ "$RUN_OK" -ne 1 ]; then exit 9; fi

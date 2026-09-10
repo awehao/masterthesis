@@ -266,11 +266,24 @@ def main():
 
     # ---- 轉動 ----
     cum = float(np.sum(np.abs(dyaw[ok])))
-    net = wrap(float(tr[-1, 3] - tr[0, 3]))
+    # 兩個不同的量，過去被混為一談：
+    #   net_signed  逐步有號增量的總和，不 wrap——單向轉一整圈是 +360°。
+    #   term_diff   起訖朝向差，wrap 到 (-180, 180]——單向轉一整圈是 0°。
+    # 舊版只算後者，再拿它當「累計/|淨|」的分母，所以單向轉 360° 會得到
+    # 淨轉角≈0、比值→∞，看起來像來回擺動；那個比值不能用來判斷反轉。
+    net_signed = float(np.sum(dyaw[ok]))
+    term_diff  = wrap(float(tr[-1, 3] - tr[0, 3]))
     print(f'\n  ---- 轉動（真值）----')
     print(f'    起始 yaw {math.degrees(tr[0,3]):7.2f}°  結束 yaw {math.degrees(tr[-1,3]):7.2f}°')
-    print(f'    淨轉角 {math.degrees(net):7.2f}°   累計絕對轉角 {math.degrees(cum):8.2f}°')
-    print(f'    比值 累計/|淨| = {cum/max(abs(net),1e-6):6.2f}  （1.0 = 全程單向轉）')
+    print(f'    累計有號轉角 {math.degrees(net_signed):8.2f}°（含整圈，不 wrap）')
+    print(f'    終末朝向差   {math.degrees(term_diff):8.2f}°（wrap 到 ±180°）')
+    print(f'    累計絕對轉角 {math.degrees(cum):8.2f}°')
+    print(f'    比值 累計/|累計有號| = {cum/max(abs(net_signed),1e-6):6.2f}'
+          f'  （1.0 = 全程單向轉；分母用有號累計，不是終末差）')
+    rec.update(net_signed_turn_deg=math.degrees(net_signed),
+               terminal_yaw_diff_deg=math.degrees(term_diff),
+               cum_abs_turn_deg=math.degrees(cum))
+    net = term_diff        # 沿用舊名，供後續既有欄位使用
     w = wz_t[ok & np.isfinite(wz_t)]
     print(f'    角速度 |wz| p50 {pct(np.abs(w),50):.4f}  p95 {pct(np.abs(w),95):.4f}  '
           f'max {float(np.max(np.abs(w))) if len(w) else float("nan"):.4f} rad/s')

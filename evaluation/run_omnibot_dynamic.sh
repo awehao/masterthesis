@@ -203,7 +203,19 @@ $([ "$ARM" = "1" ] && echo ", arm")$([ "${DETOUR:-0}" = "1" ] && echo ", detour"
     fi
 
     # 3. record (record.sh already captures /gmpc/obstacles + diagnostics)
-    echo "[$(date +%T)] [3/5] start recording -> ${bag_dir}"
+    # 底盤真值位姿：這支 runner 跑的是 omni_bot，但 record.sh 的清單原本寫死
+    # /model/ammr_base/pose，而且這條 launch 只橋接了障礙物的位姿——所以這些
+    # 趟根本沒有任何底盤真值可比對，/odom 是唯一的位置來源。場景廣播器已經在
+    # 發布每個移動模型的真實位姿，中繼一條出來即可，世界與模型都不必改。
+    GZ_WORLD="${GZ_WORLD:-$([ "${BIGARENA:-0}" = "1" ] && echo bigarena \
+                           || { [ "${ARENA:-0}" = "1" ] && echo arena \
+                                || echo random_room; })}"
+    python3 "${HERE}/gz_truth_relay.py" --model omni_bot \
+        --in-topic "/world/${GZ_WORLD}/dynamic_pose/info" \
+        >> "$log_file" 2>&1 < /dev/null &
+    PIDS+=( $! )
+    echo "[$(date +%T)] [3/5] 底盤真值中繼 -> /model/omni_bot/pose（world=${GZ_WORLD}）"
+    ROBOT_POSE_TOPIC=/model/omni_bot/pose \
     "${HERE}/record.sh" "$AMETHOD" "$run_tag" "$DURATION" \
         >> "$log_file" 2>&1 < /dev/null &
     REC_PID=$!

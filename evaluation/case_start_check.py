@@ -19,7 +19,11 @@ ap.add_argument('--traj', default='', help='相位資產（preposition 需要）
 ap.add_argument('--window', type=float, default=3.0)
 ap.add_argument('--tol', type=float, default=0.05, help='定位容差 m')
 ap.add_argument('--max-speed', type=float, default=0.02)
-ap.add_argument('--min-moving', type=int, default=8)
+# 預設 8 是寫死的猜測：資產有 10 個移動體，所以兩個完全沒動也會通過，而且
+# 「沒收到任何訊息」的移動體根本不會進入分母。改為由資產決定——speed > 0 的
+# 都必須有足夠樣本且確實在動。--min-moving 仍可指定數字以沿用舊行為。
+ap.add_argument('--min-moving', default='auto',
+                help="'auto'（依資產要求全部）或一個數字")
 ap.add_argument('--out', default='')
 a = ap.parse_args()
 
@@ -118,13 +122,35 @@ elif a.stage == 'epoch':
         res['phase_epoch'] = epoch['v']
 else:
     sp = speeds()
-    mov = sum(1 for t in sp if sp[t][0] > a.max_speed)
+    # 期望會動的移動體來自資產本身（speed > 0），不是主題上碰巧出現的那些。
+    expect = names
+    if a.traj:
+        expect = [d['name'] for d in
+                  (yaml.safe_load(open(a.traj)).get('dynamic_obstacles') or [])
+                  if float(d.get('speed', 0.0)) > 0.0]
+    need = len(expect) if str(a.min_moving) == 'auto' else int(a.min_moving)
     print(f'--- /case_start 之後的移動確認 ---')
-    for t in sorted(sp):
-        print(f'  {t:28s} 最大瞬時速度 {sp[t][0]:.4f} m/s')
-    print(f'  移動中 {mov}/{len(sp)}（要求 >= {a.min_moving}）')
-    res['moving'] = mov
-    if mov < a.min_moving:
+    rows, mov, silent = [], 0, []
+    for nm in sorted(expect):
+        t = f'/model/{nm}/pose'
+        v, cnt = (sp[t][0], sp[t][1]) if t in sp else (float('nan'), 0)
+        # 樣本不足與「有樣本但沒動」是兩種不同的失敗，要分開報：前者代表
+        # 這個移動體整段時間一則位姿都沒發出來，分母不能因此縮小。
+        if cnt < 2:
+            silent.append(nm)
+            print(f'  {t:28s} 樣本不足（{cnt}）<< 未過')
+        else:
+            ok = v > a.max_speed
+            mov += 1 if ok else 0
+            print(f'  {t:28s} 最大瞬時速度 {v:.4f} m/s  {"" if ok else "<< 未過"}')
+        rows.append(dict(name=nm, speed=(None if cnt < 2 else v), samples=cnt))
+    print(f'  移動中 {mov}/{len(expect)}（要求 >= {need}）'
+          + (f'，無樣本 {len(silent)}：{", ".join(silent)}' if silent else ''))
+    res.update(moving=mov, expected=len(expect), required=need,
+               rows=rows, silent=silent)
+    if silent:
+        print('  !! 有移動體整段沒有位姿樣本，無法確認排程'); rc = 1
+    if mov < need:
         print('  !! 移動體數量不足，情境未如預期啟動'); rc = 1
 
 n.destroy_node(); rclpy.shutdown()

@@ -85,6 +85,11 @@ ap.add_argument('--step-profile', default='false',
 ap.add_argument('--arrive-tol', type=float, default=0.30,
                 help='測試器的到達門檻（真值距目標，公尺）。v1=0.25、v2=0.30。'
                      '會在啟動時印出並存入結果檔。')
+ap.add_argument('--odom-vel-source', choices=['cmd', 'physics'], default='cmd',
+                help="/odom 的速度欄位來源。'cmd'＝施加前算出的命令速度（既有"
+                     '行為，所有已完成的實驗都是這樣錄的）；'
+                     "'physics'＝步進後量到的實際速度。EKF 會融合這個欄位，"
+                     '所以改動會影響閉迴路，必須另立版本比較，不可在配對中途切換。')
 ap.add_argument('--camera', default='false',
                 help='true = 啟用底盤相機 RGB（功能驗證設定，不接入導航）')
 ap.add_argument('--cam-width', type=int, default=640)
@@ -251,6 +256,7 @@ from pxr import Gf, Sdf, UsdGeom, UsdPhysics, UsdShade            # noqa: E402
 import omni.usd                                                   # noqa: E402
 
 sys.path.insert(0, HERE)
+from isaac_result import arrival_fields                           # noqa: E402
 from isaac_common import (import_urdf, walk, physics_parts,       # noqa: E402
                           bind_frictionless, collision_prims, bbox_caches)
 
@@ -1362,7 +1368,27 @@ def main():
 
             if t_after >= next_odom - 1e-9:
                 next_odom = max(next_odom + oe * dt, t_after)
-                node.publish_odom(t_after, p_now, q_now, [wx, wy], wz)
+                # Which velocity goes on /odom is a real choice, not a detail:
+                # ekf_fusion.yaml fuses odom's velocity fields, so this feeds
+                # the localisation the controller then steers on.
+                #   'cmd'      what was ASKED for, computed before the step was
+                #              applied. On contact, on a blocked chassis, or
+                #              whenever the articulation cannot execute the
+                #              request, the pose says "not moving" while the
+                #              twist tells the EKF "moving". Every trial so far
+                #              was recorded this way.
+                #   'physics'  what the body actually did, measured after the
+                #              step and rotated into the body frame.
+                # 'physics' is the correct one, and it is NOT the default: it
+                # changes the closed loop, so it belongs to a new version rather
+                # than being slipped into a pairing that is already half run.
+                if a.odom_vel_source == 'physics':
+                    lv = robot.get_linear_velocity()
+                    av = robot.get_angular_velocity()
+                    v_pub, wz_pub = [float(lv[0]), float(lv[1])], float(av[2])
+                else:
+                    v_pub, wz_pub = [wx, wy], wz
+                node.publish_odom(t_after, p_now, q_now, v_pub, wz_pub)
                 node.publish_joints(t_after, names, robot.get_joint_positions())
             if _did_cam:
                 # follow the robot: the camera prim is not parented under the
@@ -1498,7 +1524,13 @@ def main():
         p_trg, q_trg = robot.get_world_pose()
         jp_trg = robot.get_joint_positions()
         rr_t, pp_t = rpy2(q_trg)
-        at_trigger = dict(sim_t=(log[-1]['t'] if log else None),
+        # The stop instant, asked of the simulator, not inherited from the last
+        # 20 Hz log sample. The pose beside it is read at this same instant, so
+        # taking the time from a sample up to 50 ms earlier put the two out of
+        # step -- and that difference lands directly in the completion time.
+        stop_sim_t = float(world.current_time)
+        at_trigger = dict(sim_t=stop_sim_t,
+                          sim_t_last_sample=(log[-1]['t'] if log else None),
                           x=float(p_trg[0]), y=float(p_trg[1]),
                           yaw=float(yaw_of(q_trg)), roll=rr_t, pitch=pp_t,
                           arm_err=max(abs(float(jp_trg[idx[j]]) - ARM_TARGET[j])
@@ -1527,6 +1559,10 @@ def main():
             jpeg_dropped = jpeg_worker.dropped
         _wall = time.monotonic() - t_wall0
         _sim = log[-1]['t'] if log else 0.0
+        _arrival = arrival_fields(
+            stop_reason, node.first_plan_t, at_trigger['sim_t'],
+            node.motion_start_t,
+            dist_goal=at_trigger['dist_goal'], arrive_tol=a.arrive_tol)
         rec['run'] = dict(stop_reason=stop_reason, log=log, sim_time=_sim,
                           at_trigger=at_trigger, after_stop=final,
                           goal_sim_t=node.goal_sim_t,
@@ -1546,12 +1582,14 @@ def main():
                           goal_cb_lag_s=(None if (node.goal_sim_t is None
                                                   or node.motion_start_t is None)
                                          else node.goal_sim_t - node.motion_start_t),
-                          arrival_time_s=(None if (node.first_plan_t is None
-                                                   or at_trigger['sim_t'] is None)
-                                          else at_trigger['sim_t'] - node.first_plan_t),
-                          motion_elapsed_s=(None if (node.motion_start_t is None
-                                                     or at_trigger['sim_t'] is None)
-                                            else at_trigger['sim_t'] - node.motion_start_t),
+                          # arrival_time_s used to be computed from whatever
+                          # timestamps existed, so a run that timed out short of
+                          # the goal still carried a completion time and any
+                          # later mean over the column mixed arrivals with
+                          # failures. The rule now lives in isaac_result.py,
+                          # where it is tested.
+                          **_arrival,
+                          odom_vel_source=a.odom_vel_source,
                           physics_dt=a.physics_dt,
                           rendering_dt=float(world.get_rendering_dt()),
                           time_skew_max_s=time_skew_max,

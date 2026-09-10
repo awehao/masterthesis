@@ -72,11 +72,13 @@ if [ -d "$OUT_DIR" ]; then
     mv "$OUT_DIR" "${OUT_DIR}__prev_$(date +%H%M%S)" 2>/dev/null || true
 fi
 
+# 機器人真值位姿的主題名稱依底盤而異：這支腳本原本寫死 /model/ammr_base/pose，
+# 但 omni_bot 的 runner 也呼叫它，於是那些趟完全沒有錄到自己的真值位姿。
 timeout --foreground --signal=INT --kill-after=5 "${DURATION}s" \
     ros2 bag record \
         -o "$OUT_DIR" \
         --topics /odom /cmd_vel /cmd_vel_nav /plan /goal_pose /tf /tf_static \
-                 /model/ammr_base/pose \
+                 "${ROBOT_POSE_TOPIC:-/model/ammr_base/pose}" \
                  /dynamic_obstacles/target /dynamic_obstacles/phase_epoch \
                  /case_start \
                  /gmpc/solve_time_ms /gmpc/obstacles /gmpc/min_h \
