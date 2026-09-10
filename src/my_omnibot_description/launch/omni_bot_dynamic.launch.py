@@ -179,6 +179,7 @@ def generate_launch_description():
     # yaw -- verified bit-identical against the pre-change commit over 500
     # randomised reference windows.
     _heading = os.environ.get('HEADING', '0') == '1'
+    _no_traffic = os.environ.get('NO_TRAFFIC', '0') == '1'
     heading_overrides = {
         'heading_enable':      True,
         'heading_weight':      float(os.environ.get('HEADING_W', '2.0')),
@@ -608,11 +609,15 @@ def generate_launch_description():
                        '-y', os.environ.get('SPAWN_Y', '0.0'),
                        '-z', '0.0'], output='screen')])),
 
-        # move the obstacles (ping-pong)
+        # move the obstacles (ping-pong). NO_TRAFFIC=1 leaves the driver out:
+        # the obstacles are still spawned and still occupy space and appear in
+        # /scan, they simply never receive a cmd_vel and so stay at their
+        # initial pose. Used by isolation tests where a mover crossing the
+        # corridor would confound what is being measured.
         TimerAction(period=8.0, actions=[Node(
             package='ammr_bringup', executable='dynamic_obstacle_driver',
             parameters=[{'use_sim_time': True}, {'trajectories_file': traj_file}],
-            output='screen')]),
+            output='screen')] if not _no_traffic else []),
 
         # nav + control + perception (wait for gz/robot/TF)
         TimerAction(period=10.0, actions=nav_nodes),
