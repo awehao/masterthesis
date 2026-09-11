@@ -65,3 +65,17 @@
   **不接續當成舊 OFF／ON 配對**。
 - 舊資料的離線補查（如 `resid_slack` 完整精度、殘差對應的命令）仍可進行，
   但**不得用新程式解釋舊命令**。
+
+## 補充（2026-09-11）：執行隔離
+
+`pair_on3_174644` 因執行隔離條件未滿足，不納入正式配對比較
+（見 `../pair_seed1_offon_20260910.md`）。
+
+新增測試與其證據範圍：
+
+| 檔案 | 範圍 | 隔離方式 |
+|---|---|---|
+| `evaluation/test_wheel_exit_semantics.py` | A／B 組：出口語意、診斷忠實度、前一命令不可行 | 純 Python，不經 ROS |
+| `evaluation/test_smoother_wheel.py` | C 組：smoother 輸出的輪級限制 | `ROS_DOMAIN_ID=77`、`ROS_LOCALHOST_ONLY=1`、`/t_cmd_in`→`/t_cmd_out`、`/t_odom` |
+
+雜湊快照：`snapshot_tests_AB.json`。
