@@ -165,6 +165,7 @@ setsid timeout --foreground --signal=INT --kill-after=5 "${REC_CAP}s" \
   /cmd_vel /cmd_vel_nav /cmd_vel_pre_shield /scan /scan_raw /plan /goal_pose \
   /tf /tf_static /gmpc/solve_time_ms /gmpc/min_h /gmpc/diag /joint_states \
   /gmpc/heading /case_start \
+  /gmpc/diag_v2 /cmd_vel_smoothed /wheel_guard/status \
   /dynamic_obstacles/target /dynamic_obstacles/phase_epoch \
   /dynamic_obstacles/ground_truth \
   /model/dyn_obs_0/pose /model/dyn_obs_1/pose /model/dyn_obs_2/pose \
@@ -252,6 +253,14 @@ done
 # the same distinction the other checks already make -- so it is given time.
 bag_subscribed() { grep -aq "Subscribed to topic '${1}'" "$LOG" 2>/dev/null; }
 for t in /scan /odom /cmd_vel /amcl_pose /model/omni_bot/pose /tf; do
+    wait_for 30 "bag 已訂閱 $t" bag_subscribed "$t"
+done
+
+# 命令鏈的中間輸出與 guard 內部狀態。v2_off_093455 那趟最終命令的輪速檢查
+# 通過，但因為沒錄這幾項，無法判斷每一筆命令是原樣通過還是被改過，也拿不到
+# guard 的逐筆 dt 與縮放量。訂閱只代表 recorder 接上了，收到幾筆要在事後從
+# bag 的 message_count 確認，所以兩件事分開做。
+for t in /cmd_vel_smoothed /wheel_guard/status /gmpc/diag_v2; do
     wait_for 30 "bag 已訂閱 $t" bag_subscribed "$t"
 done
 

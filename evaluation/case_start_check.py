@@ -17,6 +17,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument('stage', choices=['preposition', 'epoch', 'moving'])
 ap.add_argument('--traj', default='', help='相位資產（preposition 需要）')
 ap.add_argument('--window', type=float, default=3.0)
+ap.add_argument('--discover', type=float, default=12.0,
+                help='開始取樣前，等訂閱配對上的最長秒數')
 ap.add_argument('--tol', type=float, default=0.05, help='定位容差 m')
 ap.add_argument('--max-speed', type=float, default=0.02)
 # 預設 8 是寫死的猜測：資產有 10 個移動體，所以兩個完全沒動也會通過，而且
@@ -67,6 +69,28 @@ for nm in names:
 epoch = {'v': None}
 n.create_subscription(Float64, '/dynamic_obstacles/phase_epoch',
                       lambda m: epoch.__setitem__('v', float(m.data)), 10)
+
+# 建立訂閱不等於已經配對上。v2_on_095217 那趟的固定取樣視窗在配對完成前
+# 就結束，10 個移動體全部判為「樣本不足（0）」而中止；但同一段時間 bag 每
+# 顆都錄到 1247 筆位姿，驅動目標也逐點等於排程 —— 那是檢查器的誤判，不是
+# 情境沒啟動。所以「等配對」與「取樣」分成兩段：先等到每個主題都至少收到
+# 一則，再清空並開始計時。這樣「零樣本」才真的代表那個移動體沒有發位姿。
+if a.stage in ('preposition', 'moving'):
+    want = [f'/model/{nm}/pose' for nm in names]
+    t_disc = time.monotonic()
+    while time.monotonic() - t_disc < a.discover:
+        if all(hist.get(t) for t in want):
+            break
+        rclpy.spin_once(n, timeout_sec=0.05)
+    disc_s = time.monotonic() - t_disc
+    missing = [t for t in want if not hist.get(t)]
+    if missing:
+        print(f'  !! 等待配對 {disc_s:.1f} s 後仍有 {len(missing)}/{len(want)} '
+              f'個主題沒有樣本，取樣照常進行並據實判定')
+    else:
+        print(f'  訂閱配對完成，用時 {disc_s:.1f} s；'
+              f'開始 {a.window:.1f} s 取樣視窗')
+    hist.clear()
 
 t0 = time.monotonic()
 while time.monotonic() - t0 < a.window:
