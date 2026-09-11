@@ -20,41 +20,9 @@ sys.path.insert(0, os.path.join(WS, 'src/ammr_wholebody_mpc'))
 sys.path.insert(0, HERE)
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics, DOF_NAMES
 from verify_self_collision import link_clouds, DESIGNED_CONTACT
+from arm_traj import trapezoid   # 與 play_arm_traj.py 共用，不各自實作
 
 ARM = [f'joint{i}' for i in range(1, 7)]
-
-
-def trapezoid(q0, q1, vmax, amax, hz):
-    """同步梯形速度剖面：所有關節同時啟停，最慢的那個決定總時長。"""
-    d = np.abs(q1 - q0)
-    if d.max() < 1e-12:
-        return np.array([q0]), 0.0
-    # 每個關節單獨算最短時間，取最大值當共同時長
-    T = 0.0
-    for di in d:
-        if di < 1e-12:
-            continue
-        t_acc = vmax / amax
-        if di <= vmax * t_acc:                     # 三角形（到不了 vmax）
-            T = max(T, 2.0 * math.sqrt(di / amax))
-        else:
-            T = max(T, di / vmax + t_acc)
-    n = max(int(round(T * hz)), 2)
-    ts = np.linspace(0.0, T, n + 1)
-    # 用同一條正規化的梯形 s(t) ∈ [0,1] 驅動每個關節，保證同步且不超限
-    t_acc = min(T / 2.0, vmax / amax)
-    def s_of(t):
-        if T <= 0: return 1.0
-        if t <= t_acc:            a = 0.5 * t * t
-        elif t <= T - t_acc:      a = 0.5 * t_acc * t_acc + t_acc * (t - t_acc)
-        else:
-            tt = T - t
-            a = (0.5 * t_acc * t_acc + t_acc * (T - 2 * t_acc)
-                 + 0.5 * t_acc * t_acc - 0.5 * tt * tt)
-        tot = (0.5 * t_acc * t_acc + t_acc * (T - 2 * t_acc) + 0.5 * t_acc * t_acc)
-        return a / tot if tot > 0 else 1.0
-    Q = np.array([q0 + (q1 - q0) * s_of(t) for t in ts])
-    return Q, T
 
 
 def static_boxes(world_path, exclude=()):
@@ -86,7 +54,12 @@ ap.add_argument('--poses', default=os.path.join(
     WS, 'src/my_omnibot_description/config/arm_initial_pose.yaml'))
 ap.add_argument('--urdf', default='')
 ap.add_argument('--world', default=os.path.join(WS, 'src/ammr_bringup/worlds/bigarena.sdf'))
-ap.add_argument('--warn', type=float, default=0.010, help='餘裕警告門檻 m')
+# 門檻對齊專案既有數字，不自訂：
+#   0.020 m  verify_self_collision.py 的 MARGIN_WARN（舒適線）
+#   0.005 m  §10.9 記載的規劃器自碰拒絕門檻
+# 兩者都不是「軌跡驗收」的正式門檻——本檔只如實標示落在哪一段。
+ap.add_argument('--warn', type=float, default=0.020, help='舒適線 m（低於此標注）')
+ap.add_argument('--hard', type=float, default=0.005, help='規劃器拒絕門檻 m')
 a = ap.parse_args()
 
 CASES = yaml.safe_load(open(a.cases))
@@ -169,7 +142,10 @@ for i, qa in enumerate(Q):
     if de < worst_env: worst_env, worst_env_at = de, (i, whoe)
 
 def flag(d):
-    return '✗ 碰撞' if d <= 0 else ('⚠ 餘裕偏小' if d < a.warn else '✓')
+    if d <= 0:       return '✗ 碰撞'
+    if d < a.hard:   return f'✗ 低於 {a.hard*1000:.0f} mm 規劃器門檻'
+    if d < a.warn:   return f'⚠ 介於 {a.hard*1000:.0f}–{a.warn*1000:.0f} mm'
+    return '✓'
 
 print(f'  沿途最小自碰餘裕  {worst_self*1000:8.2f} mm  {flag(worst_self)}'
       f'   第 {worst_self_at[0]}/{len(Q)-1} 點  {worst_self_at[1]}')
@@ -180,6 +156,10 @@ step = max(len(rows) // 12, 1)
 for t, ds, de in rows[::step] + [rows[-1]]:
     print(f'  {t:7.2f}{ds*1000:10.2f}{de*1000:10.2f}')
 
-ok = worst_self > 0 and worst_env > 0
-print(f'\n  判定：{"通過（沿途皆無碰撞）" if ok else "**未通過**"}')
+ok = worst_self > a.hard and worst_env > a.hard
+print(f'\n  判定：{"通過（沿途皆高於規劃器門檻）" if ok else "**未通過**"}')
+print(f'  幾何與算法：URDF <collision> 的 mesh 頂點與基本形取樣點雲，'
+      f'每 link ≤900 點；以控制器自己的 FK 轉到世界座標後做 KD-tree 最近鄰。')
+print(f'  **{len(Q)} 個離散取樣點，不是連續碰撞證明**；取樣間隔 '
+      f'{T/max(len(Q)-1,1)*1000:.1f} ms。')
 sys.exit(0 if ok else 1)

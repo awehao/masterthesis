@@ -1,0 +1,772 @@
+[01:53:12] === 手臂短測試 RUN_ID=manip_015312  domain=70 ===
+[01:53:12] [1/7] 重新展開共用模型
+已產生 /home/howardchen/masterthesis/evaluation/models/omni_bot_manip.urdf
+  參數      use_arm:=true add_gripper:=true add_arm_camera:=true use_camera:=true
+  來源 sha  87a540decff9d13c
+  輸出 sha  fd3252f41bd3d6ef
+[01:53:12] [2/7] 離線沿途碰撞檢查（未過就不執行）
+案例 box12_south   URDF omni_bot_wholebody_expanded.urdf
+  起點 test_start -> 終點 pregrasp_reference
+  每關節變化量 (rad): [0.0, 0.3641, 0.5263, 0.0, -1.4086, 0.0]
+  軌跡 227 點，時長 4.52 s（v≤0.35 rad/s，a≤0.7 rad/s²，50 Hz）
+  底盤固定於 (5.003, 6.671)，車頭 90.0°
+  12 個碰撞幾何，53 對自碰組合，18 個靜態方塊（含目標 known_obs_12）
+
+  沿途最小自碰餘裕      8.71 mm  ⚠ 介於 5–20 mm   第 211/226 點  ('link4', 'link6')
+  沿途最小環境餘裕    242.49 mm  ✓   第 226/226 點  ('uflite_finger1', 'known_obs_12')
+
+    t (s)     自碰 mm     環境 mm
+     0.00      8.91    412.55
+     0.36     10.70    404.53
+     0.72     11.38    384.55
+     1.08     12.07    365.29
+     1.44     10.38    348.15
+     1.80     10.95    333.27
+     2.16     10.70    320.77
+     2.52     10.55    310.70
+     2.88     12.65    294.81
+     3.24     13.27    277.27
+     3.60     11.35    262.48
+     3.96      9.26    250.51
+     4.32      8.74    243.40
+     4.52      8.81    242.49
+
+  判定：通過（沿途皆高於規劃器門檻）
+  幾何與算法：URDF <collision> 的 mesh 頂點與基本形取樣點雲，每 link ≤900 點；以控制器自己的 FK 轉到世界座標後做 KD-tree 最近鄰。
+  **227 個離散取樣點，不是連續碰撞證明**；取樣間隔 20.0 ms。
+[01:53:20] [3/7] 啟動 Isaac（固定底盤）
+[01:53:20]   Isaac PID=2250105
+[01:53:20] [4/7] 啟動 robot_state_publisher（**同一份檔案**）與 guard
+[01:53:20] [5/7] 等 /clock 前進，再做執行期核對
+[WARN] [1789149200.298725406] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1789149200.298746376] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+[WARN] [1789149200.310932124] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1789149200.310939424] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+[WARN] [1789149200.315862603] [kdl_parser]: The root link base_footprint has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.
+[INFO] [1789149200.316052783] [robot_state_publisher]: Robot initialized
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789149200.389928 2250105 descriptor_database.cc:633] File already exists in database: grpc/health/v1/health.proto
+W0000 00:00:1789149200.389958 2250105 message.cc:301] Protobuf GeneratedMessageFactory: File is already registered: grpc/health/v1/health.proto
+[WARN] [1789149200.505724533] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1789149200.505748533] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+[INFO] [1789149200.553556145] [wheel_limit_guard]: wheel_limit_guard: /cmd_vel_smoothed -> /cmd_vel，起始模式 normal，r·ω_max=0.2775 m/s，α_max=125.0 rad/s²
+2026-09-11T17:53:20Z [Info] [carb] Logging to file: /home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/kit/logs/Kit/Isaac-Sim Python/6.0/kit_20260912_015320.log
+[0.048s] [ext: omni.assets.plugins-0.0.0] startup
+[0.049s] [ext: omni.blobkey-1.1.2] startup
+[0.049s] [ext: omni.kit.async_engine-0.0.3] startup
+[0.145s] [ext: omni.client.lib-1.1.1] startup
+[0.155s] [ext: omni.client-1.3.0] startup
+[0.158s] [ext: omni.protobuf.lib-1.0.0] startup
+[0.159s] [ext: omni.grpc.lib-1.0.0] startup
+[0.164s] [ext: omni.metrics.core-0.0.3] startup
+[0.164s] [ext: omni.datastore-0.0.0] startup
+[0.164s] [ext: omni.gpu_foundation.shadercache.vulkan-1.0.0] startup
+[0.166s] [ext: omni.hsscclient-1.1.4] startup
+[0.167s] [ext: omni.stats-1.0.1] startup
+[0.167s] [ext: omni.ujitso.default-1.0.0] startup
+[0.170s] [ext: omni.gpu_foundation-0.0.0] startup
+[0.413s] [ext: carb.windowing.plugins-1.0.1] startup
+[0.413s] [ext: omni.kit.renderer.init-1.0.1] startup
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 0 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 1 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 2 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 3 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 4 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 5 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 6 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 7 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 8 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 9 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 10 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 11 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 12 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 13 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 14 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 15 belongs to.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] all CPU packages were empty!  Failed to find any available CPU cores.
+2026-09-11T17:53:20Z [431ms] [Error] [omni.platforminfo.plugin] failed to retrieve CPU information.
+2026-09-11T17:53:20Z [641ms] [Warning] [omni.rtx] Skipping unsupported non-NVIDIA GPU: AMD Ryzen 7 7700 8-Core Processor (RADV RAPHAEL_MENDOCINO)
+2026-09-11T17:53:20Z [641ms] [Warning] [omni.rtx] Skipping unsupported non-NVIDIA GPU: AMD Ryzen 7 7700 8-Core Processor (RADV RAPHAEL_MENDOCINO)
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 595.84        | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA GeForce RTX 5070          | Yes: 0 |     | 12227   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2f04      | 9661f60e.. |
+|     |                                  |        |     |            | 1         |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | AMD Ryzen 7 7700 8-Core Proces.. |        |     | 10719   MB | 1002      | 0          |
+|     |                                  |        |     |            | 164e      | 00000000.. |
+|     |                                  |        |     |            | d         |            |
+|=============================================================================================|
+| OS: 24.04.4 LTS (Noble Numbat) ubuntu, Version: 24.04.4, Kernel: 7.0.0-31-generic
+| XServer Vendor: The X.Org Foundation, XServer Version: 12101011 (1.21.1.11)
+| Processor: AMD Ryzen 7 7700 8-Core Processor
+| Cores: Unknown | Logical Cores: 0
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 31134 | Free Memory: 21434
+| Total Page/Swap (MB): 8191 | Free Page/Swap: 7715
+|---------------------------------------------------------------------------------------------|
+2026-09-11T17:53:21Z [924ms] [Warning] [omni.rtx] IOMMU is enabled.
+[1.053s] [ext: omni.kit.pipapi-0.0.0] startup
+[1.054s] [ext: omni.kit.telemetry-0.5.2] startup
+[1.089s] [ext: omni.kit.loop-isaac-1.6.0] startup
+[1.091s] [ext: omni.kit.test-2.0.7] startup
+[1.255s] [ext: omni.materialx.libs-1.0.9] startup
+[1.260s] [ext: omni.gpucompute.plugins-0.0.0] startup
+[1.261s] [ext: omni.usd.config-1.0.7] startup
+[1.264s] [ext: omni.usd.libs-1.0.3] startup
+[1.338s] [ext: omni.iray.libs-0.0.1] startup
+[1.342s] [ext: omni.mdl-57.0.3] startup
+[1.357s] [ext: omni.mdl.neuraylib-0.2.20] startup
+[1.358s] [ext: omni.kit.usd.mdl-1.1.9] startup
+[1.444s] [ext: omni.appwindow-1.2.2] startup
+[1.445s] [ext: omni.kit.renderer.core-1.2.2] startup
+[2.501s] [ext: omni.kit.renderer.capture-2.0.1] startup
+[2.504s] [ext: omni.kit.renderer.imgui-2.0.6] startup
+[2.554s] [ext: omni.ui-3.2.0] startup
+[2.561s] [ext: omni.kit.mainwindow-1.0.3] startup
+[2.561s] [ext: carb.audio-0.1.0] startup
+[2.566s] [ext: omni.uiaudio-1.0.0] startup
+[2.566s] [ext: omni.kit.uiapp-0.0.0] startup
+[2.566s] [ext: omni.usd.schema.metrics.assembler-110.1.0] startup
+[2.568s] [ext: omni.usd.schema.audio-0.0.1] startup
+[2.571s] [ext: omni.usd_resolver-1.0.0] startup
+[2.574s] [ext: omni.usd.core-1.8.3] startup
+[2.577s] [ext: omni.metropolis.schema-0.0.3] startup
+[2.577s] [ext: isaacsim.anim.robot.schema-0.1.1] startup
+[2.578s] [ext: omni.usd.schema.anim-0.0.1] startup
+[2.591s] [ext: omni.usd.schema.geospatial-0.0.1] startup
+[2.593s] [ext: omni.usd.schema.omnigraph-1.0.1] startup
+[2.597s] [ext: omni.usd.schema.semantics-0.0.0] startup
+[2.599s] [ext: omni.activity.core-1.0.3] startup
+[2.600s] [ext: omni.cubric-0.1.0] startup
+[2.600s] [ext: omni.graph.exec-0.9.6] startup
+[2.601s] [ext: omni.hydra.scene_delegate-0.3.5] startup
+[2.604s] [ext: usdrt.scenegraph-7.6.3] startup
+[2.622s] [ext: omni.hydra.usdrt_delegate-7.5.2] startup
+[2.627s] [ext: omni.inspect-1.0.2] startup
+[2.628s] [ext: omni.kit.actions.core-1.0.0] startup
+[2.629s] [ext: omni.kit.audiodeviceenum-1.0.2] startup
+[2.630s] [ext: omni.kit.commands-1.5.0] startup
+[2.633s] [ext: omni.kit.exec.core-0.13.5] startup
+[2.634s] [ext: omni.kit.usd_undo-0.1.8] startup
+[2.634s] [ext: omni.kit.window.popup_dialog-2.0.25] startup
+[2.636s] [ext: omni.kit.widget.nucleus_connector-2.3.1] startup
+[2.639s] [ext: omni.timeline-1.1.0] startup
+[2.640s] [ext: omni.usd-1.16.0] startup
+[2.667s] [ext: omni.graph.core-3.1.2] startup
+[2.670s] [ext: omni.kit.notification_manager-1.0.11] startup
+[2.672s] [ext: isaacsim.core.deprecation_manager-0.4.2] startup
+[2.673s] [ext: isaacsim.replicator.agent.schema-0.1.1] startup
+[2.674s] [ext: isaacsim.robot.schema-6.3.7] startup
+[2.677s] [ext: isaacsim.robot_motion.schema-0.2.1] startup
+[2.677s] [ext: omni.anim.behavior.schema-110.1.0] startup
+[2.680s] [ext: omni.anim.graph.schema-110.1.1] startup
+[2.684s] [ext: omni.anim.navigation.schema-110.1.0] startup
+[2.686s] [ext: omni.behavior.tree.schema-110.1.0] startup
+[2.687s] [ext: omni.kit.asset_converter-6.0.1] startup
+[2.697s] [ext: omni.usd.schema.flow-110.0.0] startup
+[2.697s] [ext: omni.usd.schema.mujoco-1.1.1] startup
+[2.697s] [ext: omni.usd.schema.newton-1.2.1] startup
+[2.698s] [ext: omni.usd.schema.omni_lens_distortion-1.0.0] startup
+[2.698s] [ext: omni.usd.schema.omni_projectors-1.0.0] startup
+[2.699s] [ext: omni.usd.schema.omni_sensors-0.0.0] startup
+[2.704s] [ext: omni.usd.schema.omniscripting-1.0.1] startup
+[2.707s] [ext: omni.usd.schema.physical_lighting-0.1.0] startup
+[2.709s] [ext: omni.usd.schema.physx-110.1.13] startup
+[2.730s] [ext: omni.usd.schema.render_settings.rtx-1.0.2] startup
+[2.733s] [ext: omni.usd.schema.usd_particle_field-1.0.0] startup
+[2.733s] [ext: isaacsim.core.version-2.1.1] startup
+[2.733s] [ext: omni.kit.menu.core-1.2.0] startup
+[2.734s] [ext: omni.kit.menu.utils-2.2.4] startup
+[2.740s] [ext: isaacsim.app.about-2.3.1] startup
+[2.744s] [ext: isaacsim.asset.transformer-1.2.5] startup
+[2.746s] [ext: omni.scene.optimizer.core-110.1.0] startup
+[2.789s] [ext: isaacsim.asset.importer.utils-1.8.1] startup
+[2.791s] [ext: omni.convexdecomposition-110.1.13] startup
+[2.793s] [ext: omni.physics-110.1.13] startup
+[2.796s] [ext: omni.physx.gpu-110.1.13] startup
+[2.796s] [ext: omni.physx.foundation-110.1.13] startup
+[2.797s] [ext: omni.usdphysics-110.1.13] startup
+[2.799s] [ext: omni.physx.cooking-110.1.13] startup
+[2.801s] [ext: omni.physx-110.1.13] startup
+[2.808s] [ext: omni.physics.physx-110.1.13] startup
+[2.810s] [ext: isaacsim.asset.exporter.urdf-2.0.5] startup
+[2.817s] [ext: omni.kit.clipboard-1.1.1] startup
+[2.818s] [ext: omni.kit.usd.layers-2.6.1] startup
+[2.825s] [ext: omni.kit.widget.context_menu-1.4.0] startup
+[2.826s] [ext: omni.kit.context_menu-1.9.0] startup
+[2.827s] [ext: omni.kit.helper.file_utils-0.1.10] startup
+[2.828s] [ext: omni.kit.widget.nucleus_info-2.0.2] startup
+[2.828s] [ext: omni.kit.search_core-1.0.8] startup
+[2.828s] [ext: omni.kit.widget.path_field-2.0.13] startup
+[2.829s] [ext: omni.kit.widget.browser_bar-2.0.10] startup
+[2.830s] [ext: omni.kit.widget.filebrowser-2.13.4] startup
+[2.833s] [ext: omni.kit.widget.options_menu-1.1.6] startup
+[2.835s] [ext: omni.kit.widget.options_button-1.0.3] startup
+[2.835s] [ext: omni.kit.widget.search_delegate-1.0.9] startup
+[2.836s] [ext: omni.ui.scene-2.0.3] startup
+[2.840s] [ext: omni.kit.window.filepicker-2.15.5] startup
+[2.850s] [ext: omni.kit.window.file_importer-1.1.21] startup
+[2.851s] [ext: omni.kit.material.library-3.1.2] startup
+[2.855s] [ext: isaacsim.asset.transformer.rules-1.7.10] startup
+[2.862s] [ext: omni.usdex.libs-2.2.2] startup
+[2.869s] [ext: isaacsim.asset.importer.mjcf-3.10.1] startup
+[2.870s] [ext: isaacsim.asset.importer.urdf-3.11.2] startup
+[2.873s] [ext: omni.kit.primitive.mesh-1.1.0] startup
+[2.875s] [ext: omni.kit.stage_template.core-1.1.22] startup
+[2.875s] [ext: omni.kit.stage_templates-2.0.2] startup
+[2.877s] [ext: omni.usd.metrics.assembler-110.1.2] startup
+[2.879s] [ext: omni.warp.core-1.13.0] startup
+[3.019s] [ext: isaacsim.core.experimental.utils-0.17.2] startup
+[3.019s] [ext: omni.physics.stageupdate-110.1.13] startup
+[3.021s] [ext: omni.physics.tensors-110.1.13] startup
+[3.024s] [ext: omni.physx.tensors-110.1.13] startup
+[3.027s] [ext: isaacsim.core.simulation_manager-1.15.6] startup
+[3.038s] [ext: isaacsim.storage.native-1.9.3] startup
+[3.039s] [ext: omni.usd.metrics.assembler.physics-110.1.13] startup
+[3.040s] [ext: isaacsim.core.utils-4.1.7] startup
+[3.042s] [ext: isaacsim.core.prims-0.11.7] startup
+[4.009s] [ext: isaacsim.core.api-5.2.13] startup
+[4.015s] [ext: isaacsim.core.cloner-1.7.3] startup
+[4.016s] [ext: isaacsim.test.docstring-1.3.2] startup
+[4.019s] [ext: isaacsim.core.experimental.prims-1.8.9] startup
+[4.038s] [ext: isaacsim.core.experimental.primdata-0.3.2] startup
+[4.040s] [ext: omni.graph.tools-1.81.0] startup
+[4.057s] [ext: omni.graph-1.142.5] startup
+[4.088s] [ext: isaacsim.core.experimental.actuators-0.1.2] startup
+[4.100s] [ext: isaacsim.core.experimental.materials-0.7.1] startup
+[4.103s] [ext: isaacsim.core.experimental.objects-0.8.1] startup
+[4.151s] [ext: omni.hydra.engine.stats-1.0.5] startup
+[4.154s] [ext: omni.hydra.rtx.shadercache.vulkan-1.0.0] startup
+[4.155s] [ext: omni.index.libs-387500.4413.0] startup
+[4.155s] [ext: omni.index-1.0.1] startup
+[4.155s] [ext: omni.ujitso.client-0.0.0] startup
+[4.156s] [ext: omni.usd.schema.playback-1.0.0] startup
+[4.158s] [ext: omni.volume-0.5.2] startup
+[4.162s] [ext: omni.hydra.rtx-1.0.4] startup
+2026-09-11T17:53:24Z [4,159ms] [Warning] [omni.log] Source: omni.hydra was already registered.
+[4.197s] [ext: omni.kit.hydra_texture-1.6.0] startup
+[4.201s] [ext: omni.kit.raycast.query-1.2.0] startup
+[4.205s] [ext: omni.kit.viewport.legacy_gizmos-1.0.24] startup
+[4.208s] [ext: omni.kit.viewport.registry-104.0.6] startup
+[4.208s] [ext: omni.kit.viewport.scene_camera_model-1.0.7] startup
+[4.212s] [ext: omni.kit.widget.viewport-109.2.0] startup
+[4.215s] [ext: omni.kit.window.drop_support-1.0.8] startup
+[4.216s] [ext: omni.kit.viewport.window-109.0.2] startup
+[4.231s] [ext: omni.kit.viewport.utility-2.0.1] startup
+[4.232s] [ext: isaacsim.core.rendering_manager-0.4.3] startup
+[4.247s] [ext: omni.graph.action_core-1.1.9] startup
+[4.250s] [ext: omni.graph.action_nodes_core-2.11.0] startup
+[4.252s] [ext: omni.graph.action_nodes-2.11.0] startup
+[4.282s] [ext: omni.graph.action-2.10.2] startup
+[4.284s] [ext: omni.graph.image.core-0.6.1] startup
+[4.285s] [ext: omni.graph.image.nodes-1.3.1] startup
+[4.286s] [ext: omni.graph.nodes_core-2.11.0] startup
+[4.291s] [ext: omni.graph.nodes-2.12.0] startup
+[4.297s] [ext: omni.kit.hotkeys.core-1.3.12] startup
+[4.298s] [ext: omni.kit.property.adapter.core-1.1.1] startup
+[4.300s] [ext: omni.kit.property.adapter.usd-1.0.5] startup
+[4.301s] [ext: omni.kit.widget.filter-1.1.5] startup
+[4.302s] [ext: omni.kit.widget.highlight_label-1.0.3] startup
+[4.302s] [ext: omni.kit.widget.searchfield-1.1.8] startup
+[4.303s] [ext: omni.kit.window.file_exporter-1.0.36] startup
+[4.304s] [ext: omni.kit.widget.stage-4.4.0] startup
+[4.311s] [ext: omni.kit.window.content_browser_registry-0.0.6] startup
+[4.312s] [ext: omni.kit.window.file-2.0.10] startup
+[4.315s] [ext: omni.kit.window.content_browser-3.1.8] startup
+[4.323s] [ext: omni.kit.window.property-1.15.1] startup
+[4.332s] [ext: omni.kit.property.usd-4.9.4] startup
+[4.340s] [ext: omni.graph.scriptnode-2.10.2] startup
+[4.348s] [ext: omni.kit.widget.searchable_combobox-1.0.7] startup
+[4.348s] [ext: omni.kit.widget.settings-2.0.0] startup
+[4.350s] [ext: omni.kit.window.preferences-1.8.3] startup
+[4.354s] [ext: omni.kit.viewport.menubar.core-107.2.2] startup
+[4.365s] [ext: omni.syntheticdata-0.6.15] startup
+[4.387s] [ext: omni.replicator.nv-1.1.1] startup
+[4.392s] [ext: omni.videoencoding-0.2.1] startup
+[4.395s] [ext: omni.replicator.core-1.13.27] startup
+2026-09-11T17:53:24Z [4,384ms] [Warning] [pxr.Semantics] pxr.Semantics is deprecated - please use Semantics instead
+2026-09-11T17:53:24Z [4,446ms] [Warning] [omni.replicator.core.scripts.extension] No material configuration file, adding configuration to material settings directly.
+[4.579s] [ext: isaacsim.core.nodes-5.10.5] startup
+[4.605s] [ext: isaacsim.core.throttling-2.3.5] startup
+[4.606s] [ext: omni.kit.manipulator.viewport-107.0.1] startup
+[4.607s] [ext: omni.graph.visualization.nodes-2.1.4] startup
+[4.619s] [ext: omni.kit.window.extensions-1.5.10] startup
+[4.624s] [ext: isaacsim.gui.components-1.8.5] startup
+[4.627s] [ext: isaacsim.robot.surface_gripper-3.6.2] startup
+[4.637s] [ext: isaacsim.robot.manipulators-3.4.4] startup
+[4.646s] [ext: isaacsim.robot_motion.lula-4.1.3] startup
+[4.652s] [ext: isaacsim.robot_motion.motion_generation-8.2.9] startup
+[4.657s] [ext: isaacsim.cortex.framework-1.0.18] startup
+[4.658s] [ext: isaacsim.cortex.behaviors-2.0.17] startup
+[4.660s] [ext: isaacsim.examples.base-1.3.2] startup
+[4.661s] [ext: omni.kit.widget.zoombar-1.0.7] startup
+[4.662s] [ext: omni.kit.browser.core-2.3.18] startup
+[4.665s] [ext: omni.kit.browser.folder.core-2.0.2] startup
+[4.669s] [ext: omni.kit.widget.stage_icons-1.0.8] startup
+[4.669s] [ext: omni.kit.window.stage-2.6.1] startup
+[4.672s] [ext: omni.kit.menu.stage-1.2.7] startup
+[4.673s] [ext: omni.kit.usd.collect-3.0.6] startup
+[4.675s] [ext: omni.kit.widget.prompt-1.0.7] startup
+[4.676s] [ext: omni.kit.tool.collect-2.2.19] startup
+[4.678s] [ext: isaacsim.examples.browser-0.3.2] startup
+[4.680s] [ext: omni.kit.search.files-1.0.4] startup
+[4.680s] [ext: omni.kit.widget.calendar-1.0.9] startup
+[4.681s] [ext: omni.kit.widget.extended_searchfield-1.0.31] startup
+[4.688s] [ext: omni.simready.content.browser-0.3.7] startup
+[4.768s] [ext: isaacsim.gui.content_browser-0.4.3] startup
+[4.771s] [ext: omni.kit.selection-0.1.6] startup
+[4.772s] [ext: isaacsim.gui.menu-2.10.5] startup
+[4.779s] [ext: isaacsim.gui.property-1.6.4] startup
+[4.784s] [ext: omni.kit.viewport.actions-110.0.0] startup
+[4.787s] [ext: omni.kit.viewport.menubar.display-107.1.3] startup
+[4.789s] [ext: isaacsim.gui.sensors.icon-2.2.1] startup
+[4.791s] [ext: omni.behavior.scripting.core-110.1.0] startup
+[4.793s] [ext: isaacsim.replicator.behavior-1.5.4] startup
+[4.794s] [ext: isaacsim.replicator.experimental.domain_randomization-1.2.5] startup
+[4.807s] [ext: isaacsim.replicator.domain_randomization-1.2.2] startup
+[4.867s] [ext: isaacsim.replicator.writers-1.5.4] startup
+[4.887s] [ext: isaacsim.robot.experimental.wheeled_robots-0.2.11] startup
+[4.904s] [ext: isaacsim.robot.policy.examples-5.2.12] startup
+[4.913s] [ext: isaacsim.robot.wheeled_robots-5.2.4] startup
+[4.916s] [ext: isaacsim.robot.wheeled_robots.nodes-0.1.5] startup
+[4.932s] [ext: isaacsim.robot_motion.experimental.motion_generation-6.1.3] startup
+[4.941s] [ext: isaacsim.robot_motion.cumotion-1.3.1] startup
+[4.952s] [ext: omni.kit.numpy.common-0.1.3] startup
+[4.954s] [ext: isaacsim.sensors.camera-1.7.9] startup
+[4.977s] [ext: isaacsim.sensors.experimental.physics-3.0.2] startup
+[4.984s] [ext: omni.sensors.net-1.0.1] startup
+[4.987s] [ext: omni.sensors.nv.common-3.0.0] startup
+[4.999s] [ext: omni.sensors.nv.materials-2.0.0] startup
+[5.002s] [ext: omni.sensors.nv.acoustic-3.0.0] startup
+[5.105s] [ext: omni.sensors.nv.ids-2.0.1] startup
+[5.107s] [ext: omni.sensors.nv.lidar-3.0.0] startup
+[5.111s] [ext: omni.sensors.nv.radar-3.0.0] startup
+[5.114s] [ext: isaacsim.sensors.experimental.rtx-1.4.6] startup
+[5.285s] [ext: isaacsim.sensors.physics.nodes-1.5.3] startup
+[5.291s] [ext: isaacsim.util.debug_draw-3.2.3] startup
+[5.296s] [ext: isaacsim.sensors.physx-2.5.5] startup
+[5.302s] [ext: isaacsim.sensors.rtx-15.17.1] startup
+[5.313s] [ext: isaacsim.simulation_app-2.18.4] startup
+[5.313s] [ext: omni.anim.curve.core-1.6.0] startup
+[5.322s] [ext: omni.graph.ui_nodes-2.11.1] startup
+[5.344s] [ext: omni.hydra.scene_api-0.1.3] startup
+[5.349s] [ext: omni.kit.manipulator.camera-110.0.0] startup
+[5.352s] [ext: omni.kit.manipulator.selector-1.1.4] startup
+[5.353s] [ext: omni.kit.manipulator.transform-107.0.0] startup
+[5.356s] [ext: omni.kit.widget.toolbar-2.1.0] startup
+[5.361s] [ext: omni.kit.manipulator.tool.snap-1.5.14] startup
+[5.365s] [ext: omni.kit.viewport.manipulator.transform-107.0.4] startup
+[5.366s] [ext: omni.kit.manipulator.prim.core-108.0.2] startup
+[5.370s] [ext: omni.kit.manipulator.prim.usd-107.0.3] startup
+[5.372s] [ext: omni.kit.manipulator.prim-108.0.0] startup
+[5.372s] [ext: omni.kit.manipulator.selection-109.0.1] startup
+[5.373s] [ext: omni.kit.menu.create-2.0.2] startup
+[5.374s] [ext: omni.kit.property.audio-1.0.16] startup
+[5.377s] [ext: omni.kit.property.camera-1.0.14] startup
+[5.378s] [ext: omni.kit.property.geometry-2.1.2] startup
+[5.381s] [ext: omni.kit.property.light-1.0.14] startup
+2026-09-11T17:53:25Z [5,385ms] [Warning] [omni.usd] Encountered USD Warnings but USD Diagnostics are currently muted. To view USD Warnings, please set the '/persistent/app/usd/muteUsdDiagnostics' setting to false in Preferences page.
+[5.409s] [ext: omni.kit.property.material-1.14.6] startup
+[5.414s] [ext: omni.kit.property.render-1.2.2] startup
+[5.415s] [ext: omni.kit.property.transform-1.6.9] startup
+[5.418s] [ext: omni.kit.property.bundle-1.5.1] startup
+[5.419s] [ext: omni.kit.usdz_export-1.1.0] startup
+[5.421s] [ext: omni.kit.tool.asset_importer-6.0.1] startup
+[5.425s] [ext: omni.kit.ui.actions-1.0.5] startup
+[5.427s] [ext: omni.kit.viewport.menubar.camera-107.0.10] startup
+[5.430s] [ext: omni.kit.viewport.menubar.lighting-107.3.2] startup
+[5.432s] [ext: omni.kit.viewport.menubar.render-110.0.0] startup
+[5.434s] [ext: omni.kit.viewport.menubar.settings-110.0.1] startup
+[5.437s] [ext: omni.kit.window.console-1.1.9] startup
+[5.441s] [ext: omni.kit.window.status_bar-0.1.11] startup
+[5.443s] [ext: omni.kit.window.toolbar-3.0.3] startup
+[5.445s] [ext: omni.ocio-0.1.1] startup
+[5.446s] [ext: omni.physx.commands-110.1.13] startup
+[5.449s] [ext: omni.replicator.replicator_yaml-2.0.12] startup
+[5.457s] [ext: omni.rtx.window.settings-0.8.0] startup
+[5.461s] [ext: omni.rtx.settings.core-0.7.1] startup
+[5.463s] [ext: omni.usd.metrics.assembler.ui-110.1.1] startup
+[5.469s] [ext: semantics.schema.editor-2.0.2] startup
+[5.471s] [ext: semantics.schema.property-2.0.2] startup
+[5.472s] [ext: omni.kit.menu.common-2.0.2] startup
+[5.473s] [ext: isaacsim.exp.base-6.0.1] startup
+[5.474s] [ext: isaacsim.exp.base.python-6.0.1] startup
+[5.475s] Simulation App Starting
+[6.483s] Simulation App Startup Complete
+[6.492s] app ready
+[WARN] [1789149209.768292390] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1789149209.768313490] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+[manip] 案例 box12_south
+[manip] URDF /home/howardchen/masterthesis/evaluation/models/omni_bot_manip.urdf  sha fd3252f41bd3d6ef
+[manip] 停放 (5.003, 6.671) yaw 90.0°
+[manip] 手臂 test_start -> pregrasp_reference
+Starting kit application with the following args:  ['/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/exts/isaacsim.simulation_app/isaacsim/simulation_app/simulation_app.py', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/apps/isaacsim.exp.base.python.kit', '--/app/tokens/exe-path=/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/kit', '--/persistent/app/viewport/displayOptions=3094', '--/rtx/materialDb/syncLoads=True', '--/rtx/hydra/materialSyncLoads=True', '--/omni/kit/plugin/syncUsdLoads=True', '--/app/renderer/resolution/width=1280', '--/app/renderer/resolution/height=720', '--/app/window/width=1440', '--/app/window/height=900', '--/renderer/multiGpu/enabled=True', '--/app/fastShutdown=True', '--/app/installSignalHandlers=0', '--ext-folder', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/exts', '--ext-folder', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/apps', '--/physics/cudaDevice=0', '--/plugins/carb.tasking.plugin/threadCount=8', '--/plugins/omni.tbb.globalcontrol/maxThreadCount=8', '--portable', '--no-window', '--/app/window/hideUi=1']
+Passing the following args to the base kit application:  ['--urdf', '/home/howardchen/masterthesis/evaluation/models/omni_bot_manip.urdf', '--out', '/home/howardchen/masterthesis/evaluation/runs/manip_015312/manip_run.json']
+Warp 1.13.0 initialized:
+   CUDA Toolkit 12.9, Driver 13.2
+   Devices:
+     "cpu"      : "x86_64"
+     "cuda:0"   : "NVIDIA GeForce RTX 5070" (11 GiB, sm_120, mempool enabled)
+   Kernel cache:
+     /home/howardchen/.cache/warp/1.13.0
+[manip] 靜態方塊 18 個
+  URDF → USD：/home/howardchen/masterthesis/evaluation/models/isaac_usd/omni_bot_manip_4/omni_bot_manip.usda
+  Physics 變體：可選 ['mujoco', 'none', 'physics', 'physx']，沿用匯入器的選擇 'physx'
+[manip] articulation DOF 8: ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6', 'finger_joint1', 'finger_joint2']
+[manip] 初始化後底盤 (5.0030, 6.6710) yaw 90.000°
+[manip] link_tcp prim: /World/omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link/link_tcp
+[manip] 進入主迴圈；等待 /arm/joint_position_cmd
+  配對用時 9.7 s；0.3 s 內模擬時間前進 0.51 s（52 則，要求 >= 0.5）
+[01:53:30]   -- 執行期模型一致性 --
+[WARN] [1789149210.597068546] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1789149210.597075936] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+  檔案   /home/howardchen/masterthesis/evaluation/models/omni_bot_manip.urdf
+  執行中 /robot_state_publisher 的 robot_description（89900 字元）
+  非固定關節  檔案 8  執行中 8
+  link 數     檔案 126  執行中 126
+  檔案的 link_tcp：link6 → joint_eef → gripper_fix → joint_tcp   累計平移 0.08360 m
+  執行中的 link_tcp：link6 → joint_eef → gripper_fix → joint_tcp   累計平移 0.08360 m
+  --- 結果：執行中的模型一致 ---
+[01:53:33]   -- /cmd_vel 唯一發布者 --
+[WARN] [1789149213.439694702] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1789149213.439702442] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+2026-09-11T17:53:27Z [7,731ms] [Warning] [isaacsim.asset.importer.utils.impl.urdf_to_mjc_physx_conversion_utils] Stiffness and damping not available joint /omni_bot/Physics/finger_joint1, actuator will be created without gain parameters
+2026-09-11T17:53:27Z [7,731ms] [Warning] [isaacsim.asset.importer.utils.impl.urdf_to_mjc_physx_conversion_utils] Stiffness and damping not available joint /omni_bot/Physics/finger_joint2, actuator will be created without gain parameters
+--- 關鍵 topic 端點身分 ---
+  /clock
+      發布: ['_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_']
+      訂閱: ['/robot_state_publisher', '/wheel_limit_guard']
+  /cmd_vel
+      發布: ['/wheel_limit_guard']
+      訂閱: ['_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_']
+  /joint_states
+      發布: ['_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_']
+      訂閱: ['/robot_state_publisher']
+  /manip/tcp_pose
+      發布: ['_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_']
+      訂閱: （無）
+--- 唯一發布者要求 ---
+  /cmd_vel 必須只由 wheel_limit_guard 發布 -> 實際 ['/wheel_limit_guard']  OK
+--- 結果：通過 ---
+[01:53:36]   -- TF 是否到得了 link_tcp --
+[WARN] [1789149216.757514600] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1789149216.757539690] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+At time 17.699999604
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.062, -0.030]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 19.199999571
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.068, -0.033]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 20.999999531
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.065, -0.033]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 22.859999489
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.064, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 24.659999449
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.065, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 26.459999409
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.064, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 28.259999368
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.066, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 30.119999327
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.064, -0.031]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 31.919999287
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.066, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 33.659999248
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.067, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 35.519999206
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.066, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 37.319999166
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.066, -0.031]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 39.119999126
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.063, -0.033]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 40.919999085
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.068, -0.034]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 42.779999044
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.068, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 44.639999002
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.068, -0.033]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 46.379998963
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.065, -0.033]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 48.179998923
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.063, -0.033]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 50.39998882
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.065, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 51.839998841
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.070, -0.033]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 53.639998801
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.065, -0.033]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 55.439998761
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.064, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 57.239998721
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.064, -0.033]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 59.39998680
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.066, -0.034]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+[manip] 結束 stop_reason=sim_limit sim=60.01s 關節最終誤差 max 1408.602 mrad 底盤位移 0.219 mm
+[manip] TCP 世界座標 (5.0032, 6.8677, 0.3999)
+[manip] 收到關節命令 0 則；/cmd_vel 非零 0 則
+[manip] -> /home/howardchen/masterthesis/evaluation/runs/manip_015312/manip_run.json
+[43.389s] Simulation App Shutting Down
+At time 59.999998659
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.067, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 59.999998659
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.067, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+At time 59.999998659
+- Translation: [0.197, -0.000, 0.400]
+- Rotation: in Quaternion (xyzw) [1.000, -0.000, -0.001, 0.000]
+- Rotation: in RPY (radian) [3.142, 0.001, -0.001]
+- Rotation: in RPY (degree) [180.000, 0.067, -0.032]
+- Matrix:
+  1.000 -0.001 -0.001  0.197
+ -0.001 -1.000 -0.000 -0.000
+ -0.001  0.000 -1.000  0.400
+  0.000  0.000  0.000  1.000
+[INFO] [1789149246.604460108] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[01:54:06]     base_footprint -> link_tcp 可查
+[01:54:06] [6/7] 播放已檢查的軌跡
+[WARN] [1789149246.791397435] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1789149246.791404775] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+案例 box12_south：227 點，4.52 s，50 Hz （v≤0.35 rad/s，a≤0.7 rad/s²）
+!! 等不到 /arm/joint_position_cmd 的訂閱者
+[01:55:07] [7/7] 等 Isaac 存檔
+[01:55:07]   Isaac 退出碼 0
+  停止原因 sim_limit  sim 60.01s  取樣 5979
+  關節最終誤差 max 1408.602 mrad
+  底盤位移 0.219 mm
+  TCP 世界座標 [5.0032, 6.8677, 0.3999]
+  收到關節命令 0 則；/cmd_vel 非零 0 則
+[01:55:07] 資料目錄 /home/howardchen/masterthesis/evaluation/runs/manip_015312
+[01:55:07] cleanup ...
+[INFO] [1789149307.066570888] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/wheel_limit_guard", line 33, in <module>
+    sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'wheel_limit_guard')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/wheel_limit_guard.py", line 194, in main
+    rclpy.spin(n)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+[01:55:10] cleanup done
