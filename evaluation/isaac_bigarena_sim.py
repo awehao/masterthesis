@@ -107,6 +107,12 @@ ap.add_argument('--cam-save', type=int, default=0,
 ap.add_argument('--mover-phase-yaml', default='',
                 help='scheduled 情境的軌跡檔：生成時就把移動體放到相位 0 的位置，'
                      '避免 /case_start 當下才把它們搬過去')
+ap.add_argument('--cmd-timeout', type=float, default=0.5,
+                help='接收端獨立命令逾時（模擬秒）。/cmd_vel 超過這麼久沒更新就'
+                     '**緊急歸零**。這是 guard 自身失效時唯一的保護，必須在'
+                     '下游：上游的 guard 不能替自己的失效提供保護。'
+                     '緊急歸零是失效處置，**不宣稱它滿足正常加速度限制**。'
+                     '設 0 可停用（僅供重現舊行為，正式測試不得使用）。')
 ap.add_argument('--markers', default='true')
 ap.add_argument('--static-scan', default='false',
                 help='true = 在起點做靜態掃描驗收後結束，不進導航')
@@ -494,6 +500,8 @@ class Bridge(Node):
         self.goal_sim_t = None
         self.goal_stamp = None
         self.goal_count = 0
+        self.cmd_rx_t = None                # 最後一次收到 /cmd_vel 的模擬時間
+        self.cmd_timeout_events = []        # [(觸發時刻, 歸零前的最後命令)]
         self.first_plan_t = None
         self.first_plan_goal_err = None
         self.plan_count = 0
@@ -528,6 +536,7 @@ class Bridge(Node):
 
     def _cmd(self, m):
         self.cmd = [m.linear.x, m.linear.y, m.angular.z]
+        self.cmd_rx_t = self.sim_t          # 接收端逾時的依據
         if self.motion_start_t is None and max(abs(v) for v in self.cmd) > 1e-6:
             self.motion_start_t = self.sim_t
 
@@ -1329,6 +1338,17 @@ def main():
                     _wy = a.self_drive_goal * _dy / _n
                     node.cmd = [_wx * math.cos(_yw) + _wy * math.sin(_yw),
                                 -_wx * math.sin(_yw) + _wy * math.cos(_yw), 0.0]
+            # 接收端獨立命令逾時。guard 停止輸出時，這是唯一會讓車停下的東西：
+            # 先前 node.cmd 會無限期沿用最後一筆並持續施加。
+            if a.cmd_timeout > 0 and node.cmd_rx_t is not None:
+                if (t - node.cmd_rx_t) > a.cmd_timeout and any(node.cmd):
+                    node.cmd_timeout_events.append(
+                        [round(t, 3), [float(v) for v in node.cmd],
+                         round(t - node.cmd_rx_t, 3)])
+                    print(f'  !! 接收端命令逾時 {t - node.cmd_rx_t:.2f} s '
+                          f'> {a.cmd_timeout:.2f} s，緊急歸零（失效處置，'
+                          f'不宣稱滿足加速度限制）', flush=True)
+                    node.cmd = [0.0, 0.0, 0.0]
             vx, vy, wz = node.cmd
             p_now, q_now = robot.get_world_pose()
             yw = yaw_of(q_now)
@@ -1573,6 +1593,8 @@ def main():
                           first_plan_goal_err=node.first_plan_goal_err,
                           plan_goal_tol=node.plan_goal_tol,
                           plan_msgs_received=node.plan_count,
+                          cmd_timeout=a.cmd_timeout,
+                          cmd_timeout_events=node.cmd_timeout_events,
                           mover_phase_yaml=(os.path.basename(a.mover_phase_yaml)
                                             if a.mover_phase_yaml else None),
                           mover_phase0=MOVER_PHASE0,

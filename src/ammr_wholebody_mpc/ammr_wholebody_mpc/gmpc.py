@@ -252,6 +252,12 @@ class GMPCResult:
     cbf_resid_slack   : float = float('inf')   # min over rows of  A z + eps - l
     # Output acceptance audit (see wheel_enforce_output).
     accept_action     : str   = 'as_is'   # as_is | acc_clipped | wheel_scaled | brake
+    # 出口修正後，對**回傳的命令**重算的殘差。舊欄位 cbf_resid_* 描述的是
+    # 求解器的解，出口修正後兩者可能不同（實測 0.177 -> 0.452），因此分開回報。
+    cbf_resid_post_noslack : float = float('nan')
+    cbf_resid_post_slack   : float = float('nan')
+    cbf_resid_evaluated_on : str   = 'solved'   # solved | returned
+    cmd_id                 : int   = -1
     accept_scale      : float = 1.0       # λ applied along the segment to ξ_prev
     wheel_w_cmd_max   : float = 0.0       # worst |ω| the RETURNED command implies
 
@@ -1113,6 +1119,23 @@ class GMPC:
         w_cmd_max = (float(np.max(np.abs(wheel_speeds(u_opt, cfg))))
                      if cfg.wheel_coupling else 0.0)
 
+        # 對**回傳的命令**重算 CBF 殘差。用的是同一組 A_cbf_keep / l_cbf_keep，
+        # 不重寫障壁公式。z' 只改 delta[0]，其餘沿用求解器的解。
+        resid_post_ns = resid_post_s = float('nan')
+        evaluated_on = 'solved'
+        if (A_cbf_keep is not None and A_cbf_keep.shape[0] > 0 and usable):
+            try:
+                sol = np.asarray(res.x)
+                z2 = np.zeros(Nm + n_slack)
+                z2[:len(sol)] = sol[:Nm + n_slack]
+                z2[:n] = u_opt - xi_ref_win[0]          # 回傳命令對應的 delta[0]
+                resid_post_s = float(np.min(A_cbf_keep @ z2 - l_cbf_keep))
+                resid_post_ns = float(np.min(
+                    A_cbf_keep[:, :Nm] @ z2[:Nm] - l_cbf_keep))
+                evaluated_on = 'returned'
+            except Exception:
+                pass
+
         return GMPCResult(u_opt=u_opt, delta_xi_all=delta,
                           e0=e0, solve_time_s=solve_time, status=status,
                           cbf_active=cbf_active, min_h=min_h,
@@ -1121,7 +1144,10 @@ class GMPC:
                           eps0=eps0, cbf_resid_noslack=resid_noslack,
                           cbf_resid_slack=resid_slack,
                           accept_action=accept_action, accept_scale=accept_scale,
-                          wheel_w_cmd_max=w_cmd_max)
+                          wheel_w_cmd_max=w_cmd_max,
+                          cbf_resid_post_noslack=resid_post_ns,
+                          cbf_resid_post_slack=resid_post_s,
+                          cbf_resid_evaluated_on=evaluated_on)
 
 
 # ---------------------------------------------------------------------------

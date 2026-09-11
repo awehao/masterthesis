@@ -29,6 +29,7 @@ from geometry_msgs.msg import Twist, TransformStamped, Point, PoseStamped
 from nav_msgs.msg      import Odometry, Path
 from std_msgs.msg      import Float32, Float32MultiArray
 from geometry_msgs.msg import Vector3Stamped
+from std_msgs.msg import String  # noqa: E402  (versioned JSON diag)
 from visualization_msgs.msg import MarkerArray, Marker
 
 import tf2_ros
@@ -496,6 +497,9 @@ class GMPCNode(Node):
         # unlike /gmpc/diag.
         self.heading_pub    = self.create_publisher(
             Vector3Stamped, '/gmpc/heading', 10)
+        # 版本化的診斷。舊 /gmpc/diag 是位置索引陣列，22 欄/29 欄曾被混淆；
+        # 這裡改用自描述的 JSON 並帶 schema 版本，讀取端遇未知版本應直接失敗。
+        self.diag2_pub      = self.create_publisher(String, '/gmpc/diag_v2', 10)
         self.cbf_zone_pub   = self.create_publisher(
             MarkerArray, str(self.get_parameter('cbf_zone_topic').value), 10)
 
@@ -787,6 +791,35 @@ class GMPCNode(Node):
         d = Float32MultiArray()
         d.data = [float(x) for x in v]
         self.diag_pub.publish(d)
+        # --- 版本化診斷：把「命令識別／時間／約束評估對象／原 slack」配成一組 ---
+        import json as _json
+        rec = dict(schema='gmpc_diag/2', cmd_id=int(self._cycle_id), t=now_s,
+                   state=state, u=None, accept_action=None, accept_scale=None,
+                   wheel_w_cmd_max=None,
+                   cbf_resid_solved_noslack=None, cbf_resid_solved_slack=None,
+                   cbf_resid_returned_noslack=None, cbf_resid_returned_slack=None,
+                   cbf_evaluated_on='not_evaluated', eps0=None,
+                   cbf_active=None, min_h=None)
+        if result is not None:
+            rec.update(
+                u=[float(x) for x in np.asarray(result.u_opt).ravel()],
+                accept_action=getattr(result, 'accept_action', None),
+                accept_scale=float(getattr(result, 'accept_scale', float('nan'))),
+                wheel_w_cmd_max=float(getattr(result, 'wheel_w_cmd_max',
+                                              float('nan'))),
+                cbf_resid_solved_noslack=float(result.cbf_resid_noslack),
+                cbf_resid_solved_slack=float(result.cbf_resid_slack),
+                cbf_resid_returned_noslack=float(
+                    getattr(result, 'cbf_resid_post_noslack', float('nan'))),
+                cbf_resid_returned_slack=float(
+                    getattr(result, 'cbf_resid_post_slack', float('nan'))),
+                cbf_evaluated_on=getattr(result, 'cbf_resid_evaluated_on',
+                                         'not_evaluated'),
+                eps0=float(result.eps0), cbf_active=float(result.cbf_active),
+                min_h=float(result.min_h))
+        _m = String(); _m.data = _json.dumps(rec, ensure_ascii=False,
+                                             default=lambda o: None)
+        self.diag2_pub.publish(_m)
 
     @staticmethod
     def _tf_to_xyth(tf: TransformStamped) -> np.ndarray:
