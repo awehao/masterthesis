@@ -134,8 +134,13 @@ def metrics(d):
     rj = d['run']
     t0, t1 = float(rj['motion_start_sim_t']), float(rj['sim_time'])
     s = d['rob'][(d['rob'][:, 0] >= t0) & (d['rob'][:, 0] <= t1)]
+    # 未到達時 arrival_time_s 是 None。逾時照實保留，不可當成缺值丟掉：
+    # 改報「任務經過時間」與「停止時距目標多遠」，這兩項到達與否都有。
+    ta = rj.get('arrival_time_s')
     m = dict(stop=rj['stop_reason'], arrived=bool(rj['arrived']),
-             t_arr=float(rj['arrival_time_s']), n=len(s))
+             t_arr=(float(ta) if ta is not None else float('nan')),
+             t_elapsed=float(t1 - t0), n=len(s),
+             d_goal=float(rj['at_trigger']['dist_goal']))
     m['path'] = float(np.hypot(np.diff(s[:, 1]), np.diff(s[:, 2])).sum())
     # 速度、夾角、轉動
     dt = s[2:, 0] - s[:-2, 0]
@@ -243,7 +248,9 @@ for seed, off_d, on_d in a.pair:
     print(f'║ {"-"*52}')
     print(f'║ {"停止原因":<24} {ma["stop"]:>12} {mb["stop"]:>12}')
     print(f'║ {"到達":<26} {str(ma["arrived"]):>12} {str(mb["arrived"]):>12}')
-    line('t_arr','.3f','到達時間 s')
+    line('t_arr','.3f','到達時間 s（未到達為 nan）')
+    line('t_elapsed','.3f','任務經過時間 s')
+    line('d_goal','.4f','停止時距目標 m')
     line('path','.3f','實際路徑 m')
     line('ang_med','.2f','夾角中位 °')
     line('ang_lt15','.1f','夾角<15° %')
@@ -267,13 +274,13 @@ for seed, off_d, on_d in a.pair:
 
 print('\n\n跨 seed 彙整（ON − OFF）')
 print(f'{"seed":>5} {"到達":>9} {"夾角中位°":>18} {"夾角<15%":>16} '
-      f'{"路徑 m":>16} {"到達時間 s":>16} {"轉角°":>16} {"淨距 m":>16}')
+      f'{"路徑 m":>16} {"任務時間 s":>16} {"轉角°":>16} {"淨距 m":>16}')
 for seed, ma, mb in rows:
     arr = f'{"Y" if ma["arrived"] else "N"}/{"Y" if mb["arrived"] else "N"}'
     print(f'{seed:5d} {arr:>9} '
           f'{ma["ang_med"]:7.2f}→{mb["ang_med"]:<7.2f} '
           f'{ma["ang_lt15"]:6.1f}→{mb["ang_lt15"]:<6.1f} '
           f'{ma["path"]:7.3f}→{mb["path"]:<7.3f} '
-          f'{ma["t_arr"]:7.3f}→{mb["t_arr"]:<7.3f} '
+          f'{ma["t_elapsed"]:7.3f}→{mb["t_elapsed"]:<7.3f} '
           f'{ma["turn_abs"]:7.2f}→{mb["turn_abs"]:<7.2f} '
           f'{ma["dyn_clr"]:7.4f}→{mb["dyn_clr"]:<7.4f}')
