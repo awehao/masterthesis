@@ -160,6 +160,24 @@ def report(run_dir):
                         default=0.0)
             print(f'    正常樣本 |out - target| 最大 {resid:.3e}'
                   f'（lam=1 的浮點往返殘差，非截斷）')
+            # 「命令是否被修改」不能只看 lam：lam 只描述線性插值縮放這一種。
+            #   stop_unverified / first_cycle -> lam 是 None 或 0.0
+            #   input_timeout                 -> 有效目標換成零，lam 仍可為 1
+            # 所以三個條件合看：action、faults、帶容差的數值比較。
+            TOL = 1e-6          # m/s、rad/s；小於此視為浮點殘差
+            n_act = sum(1 for g in guard if g['action'] != 'ok')
+            n_flt = sum(1 for g in guard if g.get('faults'))
+            n_num = sum(1 for g in guard
+                        if np.max(np.abs(np.array(g['out'])
+                                         - np.array(g['target']))) > TOL)
+            n_any = sum(1 for g in guard
+                        if g['action'] != 'ok' or g.get('faults')
+                        or np.max(np.abs(np.array(g['out'])
+                                         - np.array(g['target']))) > TOL)
+            print(f'    命令是否被修改（三條件合判，數值容差 {TOL:g}）：'
+                  f'{n_any}/{len(guard)} 筆')
+            print(f'      action != ok {n_act}   有 faults {n_flt}   '
+                  f'|out-target| > 容差 {n_num}')
     print(f'  /gmpc/diag_v2：{len(diag2)} 筆'
           + (f'（schema {sorted({d.get("schema") for d in diag2})}）'
              if diag2 else '（**未錄製**）'))
