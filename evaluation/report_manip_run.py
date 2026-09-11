@@ -45,13 +45,15 @@ print(f'    {"位置":<34}{"數量":>8}  備註')
 g = (third or {}).get('/wheel_guard/status', {})
 cv = (third or {}).get('/cmd_vel', {})
 print(f'    {"guard 發布（/wheel_guard/status）":<30}{g.get("count","—"):>8}  '
-      f'跨度 {g.get("span_s","—")} s  約 {g.get("hz","—")} Hz')
+      f'跨度 {g.get("span_s","—")} s  約 {g.get("hz","—")} Hz  [**牆鐘**]')
 print(f'    {"第三方收到 /cmd_vel":<32}{cv.get("count","—"):>8}  '
-      f'匹配發布者 {cv.get("matched_publishers","—")}  約 {cv.get("hz","—")} Hz')
+      f'匹配發布者 {cv.get("matched_publishers","—")}  約 {cv.get("hz","—")} Hz  [**牆鐘**]')
 b = cb.get('base', {})
 print(f'    {"Isaac /cmd_vel 回呼入口":<31}{b.get("entered","—"):>8}  '
-      f'其中非零 {b.get("nonzero","—")}  首 sim {b.get("first_sim_t")}  '
-      f'末 sim {b.get("last_sim_t")}')
+      f'其中非零 {b.get("nonzero","—")}  首 {b.get("first_sim_t")}  '
+      f'末 {b.get("last_sim_t")}  [**模擬時間**]')
+print('    ！第三方那兩列是牆鐘、Isaac 回呼這列是模擬時間 —— '
+      '**兩者的頻率不可相除**，不能據以推論接收比例。')
 print(f'    {"手臂播放端發布":<34}{pub if pub is not None else "—":>8}  '
       + (f'軌跡 {sent.get("n_traj")} + 保持 {sent.get("n_hold")}；'
          f'匹配訂閱 前 {sent.get("matched_subs_before")} / '

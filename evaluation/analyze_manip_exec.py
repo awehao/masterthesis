@@ -74,11 +74,21 @@ if pub_late:
     pl = np.array(pub_late)
     print(f'    軌跡點「發布」相對預定時刻：中位 {np.median(pl)*1000:+.1f} ms  '
           f'max {pl.max()*1000:+.1f} ms')
-ex = [r for r in log if r.get('applied_seq') is not None]
-if ex:
-    t_first = min(r['t'] for r in ex); t_last = max(r['t'] for r in ex)
-    print(f'    實際套用的模擬時間區間 {t_first:.3f} – {t_last:.3f} s '
-          f'（跨度 {t_last-t_first:.3f} s，軌跡標稱 {sent["T_traj"]:.2f} s）')
+# 軌跡類與保持類必須分開算跨度。把兩者合在一起會把「到位後長時間保持」
+# 算進運動時間 —— 本檔先前就是這樣得出「拉長 9.6 倍」的錯誤結論。
+ex_t = [r for r in log if r.get('applied_seq') in traj_seqs]
+ex_h = [r for r in log if r.get('applied_seq') in hold_seqs]
+if ex_t:
+    t0_, t1_ = ex_t[0]['t'], ex_t[-1]['t']
+    print(f'    **軌跡類**設定點的套用區間 {t0_:.3f} – {t1_:.3f} s '
+          f'（跨度 **{t1_-t0_:.3f} s**，標稱 {sent["T_traj"]:.2f} s）'
+          f'  seq {ex_t[0]["applied_seq"]} → {ex_t[-1]["applied_seq"]}')
+if ex_h:
+    h0, h1 = ex_h[0]['t'], ex_h[-1]['t']
+    print(f'    保持類的套用區間     {h0:.3f} – {h1:.3f} s '
+          f'（跨度 {h1-h0:.3f} s，含到模擬時間上限為止的保持）')
+    print(f'    （兩者合計 {ex_h[-1]["t"]-ex_t[0]["t"]:.3f} s —— '
+          f'**這個數字不是運動時間，不可用來說軌跡被拉長**）')
 
 # ---- 3. 追蹤誤差：只在運動段，且以 applied_seq 對齊 --------------------------
 print('\n[3] 追蹤誤差（只取運動段，參考值由 applied_seq 對齊）')
@@ -170,8 +180,40 @@ print(f'    （參考軌跡那份的對應值：自碰 8.71 mm、環境 242.49 m
 print(f'    門檻：{a.hard*1000:.0f} mm 規劃器拒絕 / {a.warn*1000:.0f} mm 舒適線；'
       f'**離散取樣，非連續無碰撞證明**')
 
+# ---- 4b. 實際到位時間（依誤差與持續條件，不用套用區間推論）-----------------
+print('\n[4b] 實際到位時間（TCP 位置誤差進入容差並持續）')
+obj0 = C['object']; pg0 = C['pregrasp']
+fc0 = obj0['face_center']
+nx0, ny0 = {'+x': (1, 0), '-x': (-1, 0),
+            '+y': (0, 1), '-y': (0, -1)}[obj0['approach_face']]
+tgt0 = np.array([fc0[0] + nx0 * pg0['standoff_from_face_m'],
+                 fc0[1] + ny0 * pg0['standoff_from_face_m'], pg0['tcp_xyz'][2]])
+tol_p = C['tolerance']['tcp_pos_m']
+settle = C['trajectory'].get('settle_s', 1.0)
+te = [(r['t'], float(np.linalg.norm(np.array(r['tcp']) - tgt0))) for r in log]
+arr = None
+for i, (t_, e_) in enumerate(te):
+    if e_ > tol_p:
+        continue
+    j2 = i
+    while j2 < len(te) and te[j2][0] - t_ < settle:
+        if te[j2][1] > tol_p:
+            break
+        j2 += 1
+    else:
+        arr = t_; break
+    if j2 < len(te) and te[j2][1] <= tol_p:
+        arr = t_; break
+if arr is None:
+    print(f'    TCP 位置誤差未曾進入 {tol_p*1000:.1f} mm 並持續 {settle:.1f} s')
+else:
+    print(f'    首次進入 {tol_p*1000:.1f} mm 且持續 {settle:.1f} s：sim **{arr:.3f} s**')
+    if ex_t:
+        print(f'    相對軌跡首次套用（{ex_t[0]["t"]:.3f} s）為 '
+              f'**+{arr-ex_t[0]["t"]:.3f} s**；軌跡標稱 {sent["T_traj"]:.2f} s')
+
 # ---- 5. TCP 位置與姿態 ------------------------------------------------------
-print('\n[5] TCP 位置與姿態（對箱體錨定目標）')
+print('\n[5] TCP 位置與**工具軸方向**（對箱體錨定目標）')
 obj = C['object']; pg = C['pregrasp']
 fc = obj['face_center']
 nx, ny = {'+x': (1, 0), '-x': (-1, 0), '+y': (0, 1), '-y': (0, -1)}[obj['approach_face']]
@@ -198,4 +240,6 @@ print(f'    工具軸目標（世界） ({z_tgt[0]:+.4f}, {z_tgt[1]:+.4f}, {z_tg
 print(f'    工具軸實際（世界） ({z_act[0]:+.4f}, {z_act[1]:+.4f}, {z_act[2]:+.4f})')
 print(f'    夾角 **{ang:.3f}°**   容差 {C["tolerance"]["tcp_rot_deg"]:.1f}°  '
       f'{"合格" if ang <= C["tolerance"]["tcp_rot_deg"] else "**不合格**"}')
+print('    注意：這是**工具軸方向**，不是完整三維姿態 —— '
+      '繞工具軸的旋轉未受此判準約束。')
 print('=' * 70)

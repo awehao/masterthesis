@@ -135,6 +135,7 @@ class ManipNode(Node):
         self.base_cb_first_t = None
         self.base_cb_last_t = None
         self.cmd_seq = None
+        self.snap = None             # (seq, q) —— 一次指派，讀取端一次取走
         self.rx = []                 # [(seq, kind, t_sched, recv_sim_t)]
         self.sim_t = 0.0
         self.create_subscription(Float64MultiArray, '/arm/joint_position_cmd',
@@ -157,7 +158,14 @@ class ManipNode(Node):
             self.arm_cb_rejected += 1
             return
         seq = int(m.data[0]); kind = int(m.data[1]); ts = float(m.data[2])
-        self.cmd = np.array([float(v) for v in m.data[3:9]])
+        q = np.array([float(v) for v in m.data[3:9]])
+        # 序號與關節目標必須是**同一份快照**。先前分別存成 self.cmd 與
+        # self.cmd_seq，而物理迴圈是「先讀 cmd → apply_action → 再讀 cmd_seq」，
+        # 背景回呼可能在這兩次讀取之間更新，於是記下的序號未必對應真正套用的
+        # 關節值，誤差就會被歸到錯的命令上。改成一次指派一個 tuple，
+        # 讀取端一次取走，兩者必然一致。
+        self.snap = (seq, q)
+        self.cmd = q                 # 保留供既有欄位使用
         self.cmd_seq = seq
         self.cmd_n += 1
         self.cmd_t = self.sim_t
@@ -298,16 +306,16 @@ def main():
         applied_seq = None
         node.sim_t = t
         tgt = q.copy()
-        if node.cmd is not None:
+        snap = node.snap             # 一次取走：序號與關節目標同源
+        if snap is not None:
+            applied_seq, q_cmd = snap
             for k, j in enumerate(ARM):
-                tgt[idx[j]] = float(node.cmd[k])
+                tgt[idx[j]] = float(q_cmd[k])
             robot.get_articulation_controller().apply_action(
                 ArticulationAction(joint_positions=tgt))
             node.applied_n += 1
             node.applied_last = [float(tgt[idx[j]]) for j in ARM]
-            applied_seq = node.cmd_seq
-            if applied_seq is not None:
-                applied_seqs.add(applied_seq)
+            applied_seqs.add(applied_seq)
         # 底盤固定：每步歸零，並檢查它真的沒動
         robot.set_linear_velocity(np.array([0.0, 0.0, 0.0], dtype=np.float32))
         robot.set_angular_velocity(np.array([0.0, 0.0, 0.0], dtype=np.float32))
@@ -324,7 +332,7 @@ def main():
         node.pub_joints(t, names, jp)
         node.pub_tcp(t, tp, tq)
 
-        cmd_v = node.cmd if node.cmd is not None else qa
+        cmd_v = snap[1] if snap is not None else qa
         err = float(np.max(np.abs(qa - cmd_v)))
         log.append(dict(t=t, q=[float(v) for v in qa],
                         cmd=[float(v) for v in cmd_v], track_err=err,
