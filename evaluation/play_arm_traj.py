@@ -38,6 +38,8 @@ ap.add_argument('--poses', default=os.path.join(
 ap.add_argument('--hold-s', type=float, default=3.0, help='走完後保持終點的模擬秒數')
 ap.add_argument('--lead-s', type=float, default=1.0, help='起點比現在晚多少模擬秒')
 ap.add_argument('--clock-wait', type=float, default=60.0)
+ap.add_argument('--stall-s', type=float, default=30.0,
+                help='等單一設定點的牆鐘上限；超過視為模擬時間停止')
 ap.add_argument('--out', default='')
 a = ap.parse_args()
 
@@ -91,8 +93,19 @@ sent = []
 late = []
 for seq, kind, ts, q in sched:
     due = T_START + ts
+    # 牆鐘上限：模擬器結束後 /clock 會停，sim['t'] 就此凍結。沒有這個上限時
+    # 迴圈會永遠等下去（實測卡住 9 分鐘才被人工中止）。
+    w0 = time.monotonic()
+    stalled = False
     while sim['t'] is not None and sim['t'] < due:
+        if time.monotonic() - w0 > a.stall_s:
+            stalled = True
+            break
         rclpy.spin_once(n, timeout_sec=0.005)
+    if stalled:
+        print(f'!! 等待模擬時間 {due:.3f} s 超過 {a.stall_s:.0f} s 牆鐘仍未到達'
+              f'（sim 停在 {sim["t"]:.3f} s）——模擬器可能已結束，中止播放')
+        break
     m = Float64MultiArray()
     m.data = [float(seq), float(kind), float(ts)] + [float(v) for v in q]
     pub.publish(m)

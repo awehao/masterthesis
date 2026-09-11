@@ -91,26 +91,50 @@ if ex_h:
           f'**這個數字不是運動時間，不可用來說軌跡被拉長**）')
 
 # ---- 3. 追蹤誤差：只在運動段，且以 applied_seq 對齊 --------------------------
-print('\n[3] 追蹤誤差（只取運動段，參考值由 applied_seq 對齊）')
-rows = [r for r in log
-        if r.get('applied_seq') is not None and r['applied_seq'] in traj_seqs]
+print('\n[3] 追蹤誤差（兩種參考分開算，回答不同問題）')
+T_START = sent['t_start_sim']; dt_ref = sent['dt']; T_traj = sent['T_traj']
+
+def q_ref_at(t):
+    """預定時間軌跡 q_ref(t)：起點前夾住 q0，終點後夾住 q1。"""
+    u = (t - T_START) / dt_ref
+    if u <= 0:
+        return Qref[0]
+    if u >= len(Qref) - 1:
+        return Qref[-1]
+    i0 = int(math.floor(u)); f = u - i0
+    return Qref[i0] * (1 - f) + Qref[i0 + 1] * f
+
+rows = [r for r in log if r.get('applied_seq') in traj_seqs]
+print(f'    (a) 相對**該步實際套用的設定點**（檢查位置驅動的追蹤）')
 if not rows:
-    print('    運動段沒有樣本')
+    print('        運動段沒有樣本')
 else:
-    err = []
-    for r in rows:
-        qr = Qref[r['applied_seq']]
-        err.append(np.max(np.abs(np.array(r['q']) - qr)))
-    e = np.array(err)
-    print(f'    樣本 {len(e)}（物理步）  相異序號 {len({r["applied_seq"] for r in rows})}')
-    print(f'    |q − q_ref(applied_seq)| max：p50 {np.median(e)*1000:.2f}  '
-          f'p95 {np.percentile(e,95)*1000:.2f}  max {e.max()*1000:.2f} mrad')
-    hold = [r for r in log
-            if r.get('applied_seq') is not None and r['applied_seq'] in hold_seqs]
-    if hold:
-        eh = np.array([np.max(np.abs(np.array(r['q']) - Qref[-1])) for r in hold])
-        print(f'    保持段（{len(eh)} 步）對終點：p50 {np.median(eh)*1000:.2f}  '
-              f'max {eh.max()*1000:.2f} mrad')
+    ea = np.array([np.max(np.abs(np.array(r['q']) - np.array(r['cmd'])))
+                   for r in rows])
+    print(f'        樣本 {len(ea)} 物理步，相異序號 '
+          f'{len({r["applied_seq"] for r in rows})}')
+    print(f'        p50 {np.median(ea)*1000:.2f}  p95 {np.percentile(ea,95)*1000:.2f}'
+          f'  max {ea.max()*1000:.2f} mrad')
+
+print(f'    (b) 相對**預定時間軌跡 q_ref(t)**（檢查整體延遲、跳點與執行偏差）')
+win = [r for r in log if T_START <= r['t'] <= T_START + T_traj]
+if not win:
+    print('        軌跡時間窗內沒有樣本')
+else:
+    eb = np.array([np.max(np.abs(np.array(r['q']) - q_ref_at(r['t']))) for r in win])
+    print(f'        樣本 {len(eb)} 物理步（時間窗 {T_START:.3f} – '
+          f'{T_START+T_traj:.3f} s）')
+    print(f'        p50 {np.median(eb)*1000:.2f}  p95 {np.percentile(eb,95)*1000:.2f}'
+          f'  max {eb.max()*1000:.2f} mrad')
+    k = int(np.argmax(eb))
+    print(f'        最大於 sim {win[k]["t"]:.3f} s（軌跡內 '
+          f'{win[k]["t"]-T_START:.3f} s），該步 applied_seq={win[k].get("applied_seq")}')
+
+hold = [r for r in log if r.get('applied_seq') in hold_seqs]
+if hold:
+    eh = np.array([np.max(np.abs(np.array(r['q']) - Qref[-1])) for r in hold])
+    print(f'    (c) 保持段對終點（{len(eh)} 步）：p50 {np.median(eh)*1000:.2f}'
+          f'  max {eh.max()*1000:.2f} mrad')
 
 # ---- 4. 對實際關節路徑重做幾何檢查 ------------------------------------------
 print(f'\n[4] 幾何：對**實際量到的關節路徑**重做離散檢查（每 {a.geom_stride} 個物理步取樣）')
@@ -180,8 +204,8 @@ print(f'    （參考軌跡那份的對應值：自碰 8.71 mm、環境 242.49 m
 print(f'    門檻：{a.hard*1000:.0f} mm 規劃器拒絕 / {a.warn*1000:.0f} mm 舒適線；'
       f'**離散取樣，非連續無碰撞證明**')
 
-# ---- 4b. 實際到位時間（依誤差與持續條件，不用套用區間推論）-----------------
-print('\n[4b] 實際到位時間（TCP 位置誤差進入容差並持續）')
+# ---- 4b. 到位時間：四個時刻分列，並對照事前定義的容差 --------------------
+print('\n[4b] 到位時間（四個時刻分列，對照**事前定義**的容差）')
 obj0 = C['object']; pg0 = C['pregrasp']
 fc0 = obj0['face_center']
 nx0, ny0 = {'+x': (1, 0), '-x': (-1, 0),
@@ -189,28 +213,47 @@ nx0, ny0 = {'+x': (1, 0), '-x': (-1, 0),
 tgt0 = np.array([fc0[0] + nx0 * pg0['standoff_from_face_m'],
                  fc0[1] + ny0 * pg0['standoff_from_face_m'], pg0['tcp_xyz'][2]])
 tol_p = C['tolerance']['tcp_pos_m']
-settle = C['trajectory'].get('settle_s', 1.0)
+hold_s = C['tolerance'].get('arrival_hold_s', 1.0)
+tol_t = C['tolerance'].get('arrival_time_s')
 te = [(r['t'], float(np.linalg.norm(np.array(r['tcp']) - tgt0))) for r in log]
-arr = None
-for i, (t_, e_) in enumerate(te):
-    if e_ > tol_p:
-        continue
+seg_start = seg_confirm = None
+i = 0
+while i < len(te):
+    if te[i][1] > tol_p:
+        i += 1; continue
     j2 = i
-    while j2 < len(te) and te[j2][0] - t_ < settle:
-        if te[j2][1] > tol_p:
+    while j2 < len(te) and te[j2][1] <= tol_p:
+        if te[j2][0] - te[i][0] >= hold_s:
+            seg_start, seg_confirm = te[i][0], te[j2][0]
             break
         j2 += 1
-    else:
-        arr = t_; break
-    if j2 < len(te) and te[j2][1] <= tol_p:
-        arr = t_; break
-if arr is None:
-    print(f'    TCP 位置誤差未曾進入 {tol_p*1000:.1f} mm 並持續 {settle:.1f} s')
+    if seg_start is not None:
+        break
+    i = j2 + 1
+print(f'    ① 預定軌跡起點              sim {T_START:.3f} s')
+first_app = rows[0]['t'] if rows else None
+print(f'    ② 首次實際套用軌跡設定點    sim '
+      + (f'{first_app:.3f} s（相對 ① +{first_app-T_START:.3f} s，起步延遲）'
+         if first_app else '—'))
+if seg_start is None:
+    print(f'    ③ 誤差 ≤{tol_p*1000:.1f} mm 的持續區段起點  —— 未出現')
+    print(f'    ④ 持續 {hold_s:.1f} s 的確認時刻            —— 未出現')
 else:
-    print(f'    首次進入 {tol_p*1000:.1f} mm 且持續 {settle:.1f} s：sim **{arr:.3f} s**')
-    if ex_t:
-        print(f'    相對軌跡首次套用（{ex_t[0]["t"]:.3f} s）為 '
-              f'**+{arr-ex_t[0]["t"]:.3f} s**；軌跡標稱 {sent["T_traj"]:.2f} s')
+    print(f'    ③ 誤差 ≤{tol_p*1000:.1f} mm 的持續區段起點  sim {seg_start:.3f} s'
+          f'（事後辨識）')
+    print(f'    ④ 持續 {hold_s:.1f} s 的確認時刻            sim {seg_confirm:.3f} s')
+    d_sched = seg_start - T_START
+    print(f'\n    到位時間 = ③ − ① = **{d_sched:.3f} s**；軌跡標稱 {T_traj:.3f} s'
+          f'  → 慢 **{d_sched-T_traj:+.3f} s**')
+    if first_app:
+        print(f'    （若改由 ② 起算為 {seg_start-first_app:.3f} s —— '
+              f'這會略去起步延遲，**不可用來宣稱準時**）')
+    if tol_t is not None:
+        ok_t = abs(d_sched - T_traj) <= tol_t
+        print(f'    對照事前定義的容差 ±{tol_t:.2f} s：'
+              f'**{"合格" if ok_t else "不合格"}**')
+    else:
+        print('    **案例未定義到位時間容差，因此不判定合格與否**')
 
 # ---- 5. TCP 位置與姿態 ------------------------------------------------------
 print('\n[5] TCP 位置與**工具軸方向**（對箱體錨定目標）')
