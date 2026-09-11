@@ -134,6 +134,8 @@ class ManipNode(Node):
         self.base_cb_n = 0
         self.base_cb_first_t = None
         self.base_cb_last_t = None
+        self.cmd_seq = None
+        self.rx = []                 # [(seq, kind, t_sched, recv_sim_t)]
         self.sim_t = 0.0
         self.create_subscription(Float64MultiArray, '/arm/joint_position_cmd',
                                  self._cmd, 10)
@@ -150,14 +152,19 @@ class ManipNode(Node):
         if self.arm_cb_first_t is None:
             self.arm_cb_first_t = self.sim_t
         self.arm_cb_last_t = self.sim_t
-        if len(m.data) != 6:
+        # [seq, kind, t_sched, q1..q6]
+        if len(m.data) != 9:
             self.arm_cb_rejected += 1
             return
-        self.cmd = np.array([float(v) for v in m.data])
+        seq = int(m.data[0]); kind = int(m.data[1]); ts = float(m.data[2])
+        self.cmd = np.array([float(v) for v in m.data[3:9]])
+        self.cmd_seq = seq
         self.cmd_n += 1
         self.cmd_t = self.sim_t
         if self.cmd_first_t is None:
             self.cmd_first_t = self.sim_t
+        # 逐則記錄：序號、類別、預定模擬時間、實際進回呼的模擬時間
+        self.rx.append((seq, kind, ts, self.sim_t))
 
     def _base(self, m):
         # 同樣計在入口。先前只計「非零」則數，而 guard 送的是零 ——
@@ -285,8 +292,10 @@ def main():
     except Exception:
         pass
 
+    applied_seqs = set()
     print('[manip] 進入主迴圈；等待 /arm/joint_position_cmd', flush=True)
     while True:
+        applied_seq = None
         node.sim_t = t
         tgt = q.copy()
         if node.cmd is not None:
@@ -296,6 +305,9 @@ def main():
                 ArticulationAction(joint_positions=tgt))
             node.applied_n += 1
             node.applied_last = [float(tgt[idx[j]]) for j in ARM]
+            applied_seq = node.cmd_seq
+            if applied_seq is not None:
+                applied_seqs.add(applied_seq)
         # 底盤固定：每步歸零，並檢查它真的沒動
         robot.set_linear_velocity(np.array([0.0, 0.0, 0.0], dtype=np.float32))
         robot.set_angular_velocity(np.array([0.0, 0.0, 0.0], dtype=np.float32))
@@ -316,7 +328,9 @@ def main():
         err = float(np.max(np.abs(qa - cmd_v)))
         log.append(dict(t=t, q=[float(v) for v in qa],
                         cmd=[float(v) for v in cmd_v], track_err=err,
+                        applied_seq=applied_seq,
                         tcp=[float(v) for v in tp],
+                        tcp_quat=[float(v) for v in tq],
                         base_drift=drift, base_yaw_drift_deg=dyaw))
         if len(log) % 50 == 0:
             node.pub_status(dict(t=t, cmd_recv=node.cmd_n, cmd_applied=node.applied_n,
@@ -364,6 +378,14 @@ def main():
                       last_recv_sim_t=node.cmd_t,
                       last_applied=node.applied_last),
         # 回呼入口計數：兩個受測 topic 分開記，先於內容檢查
+        # 收到 vs 實際被套用：兩個物理步之間收到多則時，較早的會被覆寫、
+        # 從未套用。這兩個集合的差就是「收到但沒執行」的序號。
+        seq_trace=dict(received=[list(r) for r in node.rx],
+                       applied_seqs=sorted(applied_seqs),
+                       received_n=len(node.rx),
+                       applied_unique_n=len(applied_seqs),
+                       received_not_applied=sorted(
+                           {r[0] for r in node.rx} - applied_seqs)),
         callbacks=dict(
             arm=dict(topic='/arm/joint_position_cmd', entered=node.arm_cb_n,
                      rejected_bad_len=node.arm_cb_rejected,
@@ -381,6 +403,9 @@ def main():
     print(f'[manip] TCP 世界座標 ({tp[0]:.4f}, {tp[1]:.4f}, {tp[2]:.4f})')
     print(f'[manip] 命令交付：收到 {node.cmd_n} 則，實際套用 {node.applied_n} 次'
           f'（首則 sim {node.cmd_first_t}）')
+    print(f'[manip] 序號：收到 {len(node.rx)} 則，實際套用過的相異序號 '
+          f'{len(applied_seqs)} 個，收到但從未套用 '
+          f'{len({r[0] for r in node.rx} - applied_seqs)} 個')
     print(f'[manip] 回呼入口計數：/arm/joint_position_cmd {node.arm_cb_n} 則'
           f'（拒絕 {node.arm_cb_rejected}）；/cmd_vel {node.base_cb_n} 則'
           f'（其中非零 {node.base_cmd_nonzero}）')

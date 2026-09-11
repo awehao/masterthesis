@@ -102,4 +102,6 @@ wait $ISAAC; rc=$?
 say "  Isaac 退出碼 $rc"
 [ -f "$DIR/manip_run.json" ] && python3 evaluation/report_manip_run.py \
     "$DIR/manip_run.json" --sent "$DIR/traj_sent.json" 2>&1 | tee -a "$LOG"
+[ -f "$DIR/manip_run.json" ] && python3 evaluation/analyze_manip_exec.py \
+    "$DIR/manip_run.json" --sent "$DIR/traj_sent.json" 2>&1 | tee -a "$LOG"
 say "資料目錄 $DIR"

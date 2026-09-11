@@ -33,7 +33,8 @@ print('=' * 66)
 # ---- 1. 命令交付 -----------------------------------------------------------
 dl = d.get('delivery', {})
 cb = d.get('callbacks', {})
-pub = sent['published_msgs'] if sent else None
+# schema 3：軌跡點與保持命令分開，不再有單一的 published_msgs
+pub = (sent.get('n_traj', 0) + sent.get('n_hold', 0)) if sent else None
 third = None
 _tp = os.path.join(os.path.dirname(os.path.abspath(a.run)), 'third_party_counts.json')
 if os.path.exists(_tp):
@@ -52,8 +53,9 @@ print(f'    {"Isaac /cmd_vel 回呼入口":<31}{b.get("entered","—"):>8}  '
       f'其中非零 {b.get("nonzero","—")}  首 sim {b.get("first_sim_t")}  '
       f'末 sim {b.get("last_sim_t")}')
 print(f'    {"手臂播放端發布":<34}{pub if pub is not None else "—":>8}  '
-      + (f'匹配訂閱 前 {sent.get("matched_subs_before_play")} / '
-         f'後 {sent.get("matched_subs_after_play")}；{sent.get("qos","")}'
+      + (f'軌跡 {sent.get("n_traj")} + 保持 {sent.get("n_hold")}；'
+         f'匹配訂閱 前 {sent.get("matched_subs_before")} / '
+         f'後 {sent.get("matched_subs_after")}'
          if sent else '（無 traj_sent.json）'))
 m = cb.get('arm', {})
 print(f'    {"Isaac 手臂回呼入口":<32}{m.get("entered","—"):>8}  '
