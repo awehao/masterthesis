@@ -224,6 +224,60 @@ rec('A', 'A3 命令被修正後，殘差是否描述回傳的命令',
             '修正後的殘差從未計算。此案例使用**軟** CBF（有 slack，'
             f'eps0={r_on.eps0!r}）。'))
 
+# ---- A3b：用產品自己的約束列，獨立重算「修正後命令」的殘差 --------------
+# 手法：第二次求解讓假求解器直接吐出**修正後**的 delta[0]。solve() 便會用同一組
+# A_cbf_keep / l_cbf_keep 對修正後命令算殘差，不需要在測試裡重寫障壁公式。
+# xi_ref_win 全為零，故 delta[0] == u。
+r_post = solve_forced(r_on.u_opt, xp, False, obs)
+print(f'\n  A3b 以產品約束列重算：')
+print(f'    修正前命令 {np.round(corner,5)}  -> noslack {r_off.cbf_resid_noslack!r}'
+      f'  slack {r_off.cbf_resid_slack!r}  eps0 {r_off.eps0!r}')
+print(f'    修正後命令 {np.round(r_on.u_opt,5)}  -> noslack {r_post.cbf_resid_noslack!r}'
+      f'  slack {r_post.cbf_resid_slack!r}  eps0 {r_post.eps0!r}')
+resid_actually_differs = (r_post.cbf_resid_noslack != r_off.cbf_resid_noslack
+                          or r_post.cbf_resid_slack != r_off.cbf_resid_slack)
+rec('A', 'A3b 相關約束的殘差確實隨命令改變（否則 A3 不成立）',
+    '修正前後以同一組約束列算出的殘差應不同',
+    f'不同={resid_actually_differs}；'
+    f'noslack {r_off.cbf_resid_noslack!r} -> {r_post.cbf_resid_noslack!r}',
+    'PASS' if resid_actually_differs else 'INCONCLUSIVE',
+    detail=('若相同，則 A3 的「殘差未更新」無法只從數值相等推得——'
+            '可能該命令變化與這些約束無關，或回報的是最小值而剛好相同。'))
+if resid_actually_differs:
+    rec('A', 'A3c 回報值等於修正前而非修正後（診斷不實，已證）',
+        f'回報應為修正後的 {r_post.cbf_resid_noslack!r}',
+        f'實際回報 {r_on.cbf_resid_noslack!r}（＝修正前值）',
+        'FAIL' if r_on.cbf_resid_noslack == r_off.cbf_resid_noslack else 'PASS')
+
+# ---- A4：硬約束案例（cbf_hard_k0）--------------------------------------
+def solve_hard(u_force, xi_prev, enforce, obs):
+    c = cfg_std(cbf_enable=True, cbf_hard_k0=True, cbf_hard_k0_static=True)
+    c.wheel_enforce_output = enforce
+    X_ref = np.tile(np.eye(3), (c.N + 1, 1, 1))
+    xi_ref = np.zeros((c.N + 1, 3))
+    saved, G.osqp = G.osqp, types.SimpleNamespace(OSQP=_StuckOSQP(u_force))
+    try:
+        return G.GMPC(c).solve(X_now=np.eye(3), X_ref_win=X_ref,
+                               xi_ref_win=xi_ref,
+                               xi_prev=np.asarray(xi_prev, float),
+                               obstacles=obs)
+    finally:
+        G.osqp = saved
+
+h_on = solve_hard(corner, xp, True, obs)
+h_off = solve_hard(corner, xp, False, obs)
+h_post = solve_hard(h_on.u_opt, xp, False, obs)
+print(f'\n  A4 硬約束（cbf_hard_k0=True, cbf_hard_k0_static=True）：')
+print(f'    enforce=True  u={np.round(h_on.u_opt,5)}  action={h_on.accept_action}'
+      f'  λ={h_on.accept_scale:.6f}  回報 noslack {h_on.cbf_resid_noslack!r}')
+print(f'    修正後命令重算 noslack {h_post.cbf_resid_noslack!r}'
+      f'  slack {h_post.cbf_resid_slack!r}  eps0 {h_post.eps0!r}')
+rec('A', 'A4 硬約束下，回報殘差是否描述回傳命令',
+    f'回報應為修正後的 {h_post.cbf_resid_noslack!r}',
+    f'實際回報 {h_on.cbf_resid_noslack!r}',
+    'FAIL' if h_on.cbf_resid_noslack == h_off.cbf_resid_noslack
+             and h_post.cbf_resid_noslack != h_off.cbf_resid_noslack else 'INCONCLUSIVE')
+
 rec('A', 'A3 附註：能否據此判定「限制真的衝突」',
     '不能——只證明這條縮回策略沒有重算殘差',
     '未做獨立可行性檢查，無法排除存在同時滿足輪級與 CBF 的其他命令',
