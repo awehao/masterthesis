@@ -8,25 +8,43 @@ VERIFIED against UFACTORY "Lite 6 Hardware Manual V2.6.0", Preface:
                     acceleration 0..1145   deg/s^2
                     jerk         0..28647  deg/s^3
 
-NOT in that manual, and therefore NOT verified:
+NOT in that manual:
 
-    joint torque    The [50, 50, 32, 32, 32, 20] N.m below comes from the
-                    <limit effort=...> fields of UFACTORY's published
-                    xarm_description URDF. Hardware Manual V2.6.0 contains no
-                    joint torque table at all -- its only N.m figure is the
-                    20 N.m tightening torque for the base bolts, which is
-                    unrelated. Whether the URDF effort means peak, continuous,
-                    or a value chosen for simulation is UNKNOWN, so it must not
-                    be promoted to a verified hardware torque limit.
+    joint torque    Hardware Manual V2.6.0 contains no joint torque table at
+                    all, and neither does User Manual V2.3.0 -- the only N.m
+                    figure in either is the 20 N.m tightening torque for the
+                    base bolts, which is unrelated. The [50, 50, 32, 32, 32, 20]
+                    N.m below were DETERMINED EXPERIMENTALLY by this project's
+                    author (2026-09-12, stated directly); they coincide with the
+                    <limit effort=...> fields of UFACTORY's xarm_description
+                    URDF but are not a transcription of an unexamined number.
+                    The experiment itself is not written up here, so a reader
+                    who needs the method has to ask rather than assume.
+                    Still NOT a manufacturer-published hardware torque limit.
 
-    payload         0.6 kg is widely quoted for this arm but appears NOWHERE in
-                    Hardware Manual V2.6.0, whose Technical Specifications list
-                    weight, speed, repeatability, power and reach and stop
-                    there. SOURCE UNVERIFIED. It is also unknown whether the
-                    figure is measured at the flange or at the tool, and
-                    therefore whether the 0.25 kg gripper comes out of it --
-                    leaving the graspable mass somewhere between 0.35 and
-                    0.6 kg. Neither number may be written as settled.
+    payload         RESOLVED for the User Manual, 2026-09-12. "UFACTORY Lite 6
+                    User Manual V2.3.0", Appendix 6 (Product Information),
+                    section 1.8 "Specifications", lists for model LI1000:
+
+                        Payload           600 g
+                        Maximum Reach     440 mm
+                        Repeatability     +-1 mm
+                        Weight (arm only) 9 kg
+
+                    So 0.6 kg IS manufacturer-published; the earlier note that
+                    it "appears NOWHERE" was about Hardware Manual V2.6.0, a
+                    different document, and must not be repeated as a statement
+                    about the User Manual.
+
+                    What the manual still does NOT resolve: whether 600 g is
+                    measured at the flange or at the tool. The same 600 g also
+                    appears twice more as an END-EFFECTOR rating -- section 3.1
+                    "the maximum payload of the gripper <=600 g" and section 3.2
+                    "the vacuum gripper can ... suck ... payload <=600 g". One
+                    number serving both the arm and its grippers makes the
+                    flange-vs-tool question harder to settle, not easier, so the
+                    graspable mass remains unsettled and nothing here enforces
+                    any of it.
 
 An earlier version of this header cited "User Manual V2.0.0" with table
 numbers, and claimed the effort values "match the datasheet". The manual is a
@@ -187,9 +205,57 @@ SOURCES = {
     'acceleration': 'Hardware Manual V2.6.0 Preface (1145 deg/s^2) — VERIFIED, hard',
     'jerk': 'Hardware Manual V2.6.0 Preface (28647 deg/s^3) — VERIFIED, '
             'enforced as a SOFT limit (the safety barrier may override it)',
-    'effort': 'xarm_description URDF — NOT in the Hardware Manual, meaning unconfirmed',
-    'payload': 'UNVERIFIED; adopted as a conservative task limit, not a rated spec',
+    'effort': 'determined experimentally by this project (2026-09-12); coincides with xarm_description URDF. NO torque table exists in either the Hardware Manual V2.6.0 or the User Manual V2.3.0, so this is NOT a manufacturer-published limit',
+    'payload': 'User Manual V2.3.0 Appendix 6 s1.8 (600 g, model LI1000) — '
+               'published, but flange-vs-tool unresolved; NOT enforced anywhere',
 }
+
+
+# ---------------------------------------------------------------------------
+# Manufacturer dynamics data, recorded for the payload/dynamics work that has
+# not been done yet. NOTHING below is used by any constraint today -- it is
+# here so the numbers live in one place with their source, instead of being
+# re-read off a PDF when someone finally writes the load constraint.
+#
+# Source: "UFACTORY Lite 6 User Manual V2.3.0", Appendix 7,
+#         "Kinematic and Dynamic Parameters of UFACTORY Lite 6".
+
+# Modified D-H: (theta_offset [deg], d [mm], alpha [deg], a [mm])
+DH_MODIFIED = (
+    (0.0, 243.3, 0.0, 0.0),
+    (-90.0, 0.0, -90.0, 0.0),
+    (-90.0, 0.0, 180.0, 200.0),
+    (0.0, 227.6, 90.0, 87.0),
+    (0.0, 0.0, 90.0, 0.0),
+    (0.0, 61.5, -90.0, 0.0),
+)
+
+# Standard D-H: same tuple layout
+DH_STANDARD = (
+    (0.0, 243.3, -90.0, 0.0),
+    (-90.0, 0.0, 180.0, 200.0),
+    (-90.0, 0.0, 90.0, 87.0),
+    (0.0, 227.6, 90.0, 0.0),
+    (0.0, 0.0, -90.0, 0.0),
+    (0.0, 61.5, 0.0, 0.0),
+)
+
+# Link mass [kg] and centre of mass [mm] in that link's own frame.
+LINK_MASS_KG = (1.411, 1.34, 0.953, 1.284, 0.804, 0.13)
+LINK_COM_MM = (
+    (-0.36, 41.95, -2.5),
+    (179.0, 0.0, 58.4),
+    (72.0, -35.7, -1.0),
+    (-2.0, -28.5, -81.3),
+    (0.0, 10.0, 1.9),
+    (0.0, -1.94, -10.2),
+)
+# Sum 5.922 kg against a 9 kg "arm only" weight in s1.8 -- the difference is
+# base, covers and cabling, which the appendix does not itemise. Do not treat
+# the six link masses as the whole arm.
+
+DYNAMICS_SOURCE = ('UFACTORY Lite 6 User Manual V2.3.0, Appendix 7 — '
+                   'recorded only; no constraint consumes it yet')
 
 
 def describe(lim: ArmLimits = LITE6_SAFE) -> list[str]:
