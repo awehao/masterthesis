@@ -321,8 +321,13 @@ echo "[$(date +%T)] [5/6] 就緒檢查全部通過"
 # ---- 端點身分檢查：guard 必須是 /cmd_vel 的唯一發布者 -------------------
 # 只看訂閱者「計數」無法辨識來源；先前一趟 ON 正是因同 domain 的殘留導航鏈而作廢。
 if [ "${GUARD:-0}" = "1" ]; then
-    timeout 60 python3 "${HERE}/endpoint_check.py" \
+    # --resolve-wait：先等節點名稱解析完成再判定。實測過這個誤判會兩邊都發生
+    # （某趟是 guard 顯示為 _NODE_NAME_UNKNOWN_ 而判定「不符」中止，另一趟
+    # 反過來是模擬器那端未解析）。判定邏輯不變 —— 未解析的名稱一樣不算通過 ——
+    # 只是先給它時間解析，避免大批次被隨機吃掉幾趟。
+    timeout 90 python3 "${HERE}/endpoint_check.py" \
         --out "${RUN_DIR}/endpoints.json" \
+        --resolve-wait 40 \
         --sole-publisher "/cmd_vel=wheel_limit_guard" \
         > "${RUN_DIR}/endpoints.log" 2>&1
     _rc=$?
