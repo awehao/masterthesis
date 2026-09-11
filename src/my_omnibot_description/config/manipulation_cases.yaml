@@ -1,0 +1,75 @@
+# 操作案例：導航終點與手臂可達範圍綁在一起的停放規格。
+#
+# **獨立於 bigarena_poses.csv**。那份是導航實驗用的隨機起終點，與手臂可達
+# 範圍無關；已凍結的導航實驗不因本檔改變。
+#
+# 幾何怎麼來的（可重算，不是抄的）
+# --------------------------------
+# 用 evaluation/models/omni_bot_manip.urdf 對 arm_initial_pose.yaml 的
+# pregrasp_reference 做 FK，得到底盤座標下的 TCP：
+#
+#     link_tcp = (+0.4500, 0.0000, +0.5500)   工具 z 軸 = (+1, 0, 0)（朝前）
+#     link_eef = (+0.3664, 0.0000, +0.5500)
+#     （對照 test_start：link_tcp = (+0.1970, 0, +0.4000)，工具朝下）
+#
+# 因此本案例的 TCP 目標以**底盤座標**定義，而不是抄原案例的世界座標。
+# pregrasp_reference 的六個關節角之所以可以沿用，是因為它算出來的底盤相對
+# 目標與本案例的目標相同 —— 這是**核對過的等價**，不是直接照搬。
+#
+# 停放點的推導：
+#     面中心      = 箱心 ± 半邊長
+#     TCP 目標    = 面中心 + 站距 0.24 m（沿面法線向外）
+#     底盤停放點  = TCP 目標 + 0.450 m（TCP 在底盤前方的距離）
+#     車頭朝向    = 面法線的反向（朝著箱子）
+#
+# 候選是把 18 個 known_obs × 4 個面全部算過、依淨距排序選出來的，不是挑順眼的。
+
+schema: manipulation_case/1
+
+default_case: box12_south
+
+cases:
+  box12_south:
+    world: bigarena
+    # ---- 操作對象（bigarena 的靜態障礙，已在地圖與 costmap 內）----
+    object:
+      name: known_obs_12
+      pose: [5.00, 7.91, 0.50]        # 箱心，z 為中心；箱高 1.00 m（0 到 1.00）
+      size: [0.84, 1.10, 1.00]
+      approach_face: '-y'             # 由南側接近
+      face_center: [5.00, 7.36]
+    # ---- 底盤停放（導航要送到這裡，不是任意終點）----
+    parking:
+      x: 5.003
+      y: 6.671
+      yaw_deg: 90.0                   # 車頭朝 +y，正對箱面
+      # 停放點的真值淨距（面對面，機器人以半徑 0.30 m 圓盤近似）
+      clearance_to_object_m: 0.390
+      clearance_to_other_static_m: 2.328
+    # ---- 預抓取目標（底盤座標，不是世界座標）----
+    pregrasp:
+      frame: base_footprint
+      tcp_xyz: [0.450, 0.000, 0.550]
+      tcp_forward_axis: [1.0, 0.0, 0.0]   # 工具 z 軸方向
+      standoff_from_face_m: 0.24
+      arm_config: pregrasp_reference       # 見 arm_initial_pose.yaml
+      start_config: test_start
+    # ---- 容差 ----
+    #
+    # 這些是**操作端的需求**，不是現況能力。底盤停放誤差會 1:1 轉成 TCP 誤差：
+    # 停偏 0.30 m，TCP 就偏 0.30 m。目前導航的到達容差是 0.30 m（而且量到的是
+    # 停在 0.29–0.31 m），**無法滿足下列停放需求**，所以接上導航時必須另外有
+    # 一段停放對準行為。本檔只寫需求，不假設現有導航做得到。
+    tolerance:
+      parking_xy_m: 0.05
+      parking_yaw_deg: 3.0
+      stop_speed_mps: 0.01            # 以 Isaac 的物理速度判定，不用 /odom
+      stop_hold_s: 0.5                # 需連續低於上限這麼久
+      tcp_pos_m: 0.005
+      tcp_rot_deg: 2.0
+    # ---- 手臂軌跡限制（位置介面，但必須平滑且有速度上限）----
+    trajectory:
+      joint_vel_max_rps: 0.35         # rad/s，每關節
+      joint_acc_max_rps2: 0.7         # rad/s²
+      rate_hz: 50.0
+      settle_s: 1.0
