@@ -32,19 +32,61 @@ print('=' * 66)
 
 # ---- 1. 命令交付 -----------------------------------------------------------
 dl = d.get('delivery', {})
+cb = d.get('callbacks', {})
 pub = sent['published_msgs'] if sent else None
-print('\n[1] 命令交付')
-print(f'    播放端發布      {pub if pub is not None else "（無 traj_sent.json）"}')
-print(f'    Isaac 收到      {dl.get("received_msgs")}')
-print(f'    Isaac 實際套用  {dl.get("applied_actions")}')
-if dl.get('first_recv_sim_t') is not None:
-    print(f'    首則收到於 sim  {dl["first_recv_sim_t"]:.3f} s')
+third = None
+_tp = os.path.join(os.path.dirname(os.path.abspath(a.run)), 'third_party_counts.json')
+if os.path.exists(_tp):
+    third = json.load(open(_tp))['stats']
+
+print('\n[1] 命令交付（四個位置分開記，計數皆在回呼／發布入口）')
+print(f'    {"位置":<34}{"數量":>8}  備註')
+g = (third or {}).get('/wheel_guard/status', {})
+cv = (third or {}).get('/cmd_vel', {})
+print(f'    {"guard 發布（/wheel_guard/status）":<30}{g.get("count","—"):>8}  '
+      f'跨度 {g.get("span_s","—")} s  約 {g.get("hz","—")} Hz')
+print(f'    {"第三方收到 /cmd_vel":<32}{cv.get("count","—"):>8}  '
+      f'匹配發布者 {cv.get("matched_publishers","—")}  約 {cv.get("hz","—")} Hz')
+b = cb.get('base', {})
+print(f'    {"Isaac /cmd_vel 回呼入口":<31}{b.get("entered","—"):>8}  '
+      f'其中非零 {b.get("nonzero","—")}  首 sim {b.get("first_sim_t")}  '
+      f'末 sim {b.get("last_sim_t")}')
+print(f'    {"手臂播放端發布":<34}{pub if pub is not None else "—":>8}  '
+      + (f'匹配訂閱 前 {sent.get("matched_subs_before_play")} / '
+         f'後 {sent.get("matched_subs_after_play")}；{sent.get("qos","")}'
+         if sent else '（無 traj_sent.json）'))
+m = cb.get('arm', {})
+print(f'    {"Isaac 手臂回呼入口":<32}{m.get("entered","—"):>8}  '
+      f'拒絕(長度) {m.get("rejected_bad_len","—")}  首 sim {m.get("first_sim_t")}  '
+      f'末 sim {m.get("last_sim_t")}')
+print(f'    {"Isaac 內容合格並記為命令":<30}{dl.get("received_msgs"):>8}')
+print(f'    {"Isaac 實際套用關節目標":<31}{dl.get("applied_actions"):>8}')
+if sent:
+    print(f'    型別 {sent.get("msg_type")}')
 delivered = bool(dl.get('received_msgs'))
-if not delivered:
-    print('    → **命令未送達**。以下「關節追蹤」與「TCP 誤差」皆為'
-          '**未測到**，不代表控制器有問題，也不代表沒問題。')
+arm_in = m.get('entered') or 0
+base_in = b.get('entered') or 0
+print('\n    判讀（只縮小範圍，不定案成因）：')
+if arm_in == 0 and base_in == 0:
+    print('    → 兩個受測 topic 都沒有進入 Isaac 的回呼。'
+          '優先查共同的通訊設定與 executor；')
+    print('      **尚不能區分「訊息沒抵達」與「抵達但回呼沒被執行」**，'
+          '也不能就此推廣到所有外部輸入。')
+elif base_in > 0 and arm_in == 0:
+    print('    → 底盤有收到、手臂沒有。優先查手臂 topic 的發布、匹配、'
+          '型別／QoS 與回呼路徑。')
+elif arm_in > 0 and (dl.get('applied_actions') or 0) == 0:
+    print('    → 手臂回呼有進、但未套用關節目標。往訊息驗證與套用層查'
+          f'（長度拒絕 {m.get("rejected_bad_len")} 則）。')
+elif not delivered:
+    print('    → **命令未送達**。')
 elif pub and dl['received_msgs'] < pub * 0.9:
     print(f'    → 收到 {dl["received_msgs"]}/{pub}，**有遺失**')
+else:
+    print('    → 命令交付成立。')
+if not delivered:
+    print('    以下「關節追蹤」與「TCP 誤差」皆為**未測到**，'
+          '不代表控制器有問題，也不代表沒問題。')
 
 # ---- 2. 關節追蹤 -----------------------------------------------------------
 print('\n[2] 關節追蹤')

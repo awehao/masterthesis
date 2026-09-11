@@ -55,11 +55,24 @@ t0 = time.monotonic()
 while n.count_subscribers('/arm/joint_position_cmd') < 1 and time.monotonic() - t0 < a.wait_subs:
     rclpy.spin_once(n, timeout_sec=0.1)
 nsub = n.count_subscribers('/arm/joint_position_cmd')
-print(f'訂閱者計數 {nsub}（等待 {time.monotonic()-t0:.1f} s）'
-      + ('' if nsub else ' —— 計數為 0，仍照發，由接收端計數判定'))
+# 發布器自己看見的匹配訂閱數，以及本端實際用的型別與 QoS —— 這三項要和
+# 接收端的回呼入口計數擺在一起看，才能分出「沒匹配」「沒抵達」「抵達沒進回呼」。
+try:
+    matched = pub.get_subscription_count()
+except Exception:
+    matched = None
+qos = pub.qos_profile
+qos_txt = (f'reliability={qos.reliability.name} durability={qos.durability.name} '
+           f'history={qos.history.name} depth={qos.depth}')
+print(f'訂閱者計數 {nsub}（等待 {time.monotonic()-t0:.1f} s）；'
+      f'發布器看見的匹配訂閱數 {matched}')
+print(f'  型別 std_msgs/msg/Float64MultiArray   QoS {qos_txt}')
+if not nsub and not matched:
+    print('  —— 兩者皆 0，仍照發，由接收端的回呼入口計數判定')
 
 dt = 1.0 / tr['rate_hz']
 sent = []
+t_pub0 = time.time()
 nxt = time.monotonic()
 for i, q in enumerate(Q):
     m = Float64MultiArray(); m.data = [float(v) for v in q]
@@ -76,12 +89,23 @@ for _ in range(hold_n):
     m = Float64MultiArray(); m.data = [float(v) for v in Q[-1]]
     pub.publish(m); rclpy.spin_once(n, timeout_sec=0.0)
     time.sleep(dt)
+t_pub1 = time.time()
 published = len(Q) + hold_n
 print(f'播放完成：實際發布 {published} 則（軌跡 {len(Q)} + 保持 {hold_n}）')
 if a.out:
-    json.dump(dict(schema='arm_traj_sent/1', case=name, n=len(Q), T=T,
+    try:
+        matched_end = pub.get_subscription_count()
+    except Exception:
+        matched_end = None
+    json.dump(dict(schema='arm_traj_sent/2', case=name, n=len(Q), T=T,
                    rate_hz=tr['rate_hz'], hold_s=a.hold_s,
-                   published_msgs=published, subs_seen_before_play=nsub,
+                   published_msgs=published,
+                   subs_seen_before_play=nsub,
+                   matched_subs_before_play=matched,
+                   matched_subs_after_play=matched_end,
+                   msg_type='std_msgs/msg/Float64MultiArray',
+                   qos=qos_txt,
+                   first_pub_wall=t_pub0, last_pub_wall=t_pub1,
                    traj=sent), open(a.out, 'w'), ensure_ascii=False)
     print(f'-> {a.out}')
 n.destroy_node(); rclpy.shutdown()

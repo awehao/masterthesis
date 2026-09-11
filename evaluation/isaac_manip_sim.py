@@ -126,6 +126,14 @@ class ManipNode(Node):
         self.cmd_first_t = None
         self.applied_n = 0           # **實際套用**幾次（與收到分開記）
         self.applied_last = None
+        # 回呼入口計數（診斷用）：抵達回呼就 +1，與內容是否合格無關
+        self.arm_cb_n = 0
+        self.arm_cb_first_t = None
+        self.arm_cb_last_t = None
+        self.arm_cb_rejected = 0
+        self.base_cb_n = 0
+        self.base_cb_first_t = None
+        self.base_cb_last_t = None
         self.sim_t = 0.0
         self.create_subscription(Float64MultiArray, '/arm/joint_position_cmd',
                                  self._cmd, 10)
@@ -136,7 +144,14 @@ class ManipNode(Node):
         self.base_cmd_nonzero = 0
 
     def _cmd(self, m):
+        # 計數在回呼**入口**，先於任何內容檢查 —— 否則長度不符的訊息會被
+        # 算成「沒收到」，把「收到但被拒絕」和「訊息沒抵達」混為一談。
+        self.arm_cb_n += 1
+        if self.arm_cb_first_t is None:
+            self.arm_cb_first_t = self.sim_t
+        self.arm_cb_last_t = self.sim_t
         if len(m.data) != 6:
+            self.arm_cb_rejected += 1
             return
         self.cmd = np.array([float(v) for v in m.data])
         self.cmd_n += 1
@@ -145,6 +160,12 @@ class ManipNode(Node):
             self.cmd_first_t = self.sim_t
 
     def _base(self, m):
+        # 同樣計在入口。先前只計「非零」則數，而 guard 送的是零 ——
+        # 0 與「沒收到」因此分不開，這正是要消除的歧義。
+        self.base_cb_n += 1
+        if self.base_cb_first_t is None:
+            self.base_cb_first_t = self.sim_t
+        self.base_cb_last_t = self.sim_t
         self.base_cmd = [m.linear.x, m.linear.y, m.angular.z]
         if max(abs(v) for v in self.base_cmd) > 1e-9:
             self.base_cmd_nonzero += 1
@@ -342,6 +363,14 @@ def main():
                       first_recv_sim_t=node.cmd_first_t,
                       last_recv_sim_t=node.cmd_t,
                       last_applied=node.applied_last),
+        # 回呼入口計數：兩個受測 topic 分開記，先於內容檢查
+        callbacks=dict(
+            arm=dict(topic='/arm/joint_position_cmd', entered=node.arm_cb_n,
+                     rejected_bad_len=node.arm_cb_rejected,
+                     first_sim_t=node.arm_cb_first_t, last_sim_t=node.arm_cb_last_t),
+            base=dict(topic='/cmd_vel', entered=node.base_cb_n,
+                      nonzero=node.base_cmd_nonzero,
+                      first_sim_t=node.base_cb_first_t, last_sim_t=node.base_cb_last_t)),
         cmd_msgs=node.cmd_n,
         base_cmd_nonzero=node.base_cmd_nonzero,
         dof_names=names, samples=len(log), log=log)
@@ -352,7 +381,9 @@ def main():
     print(f'[manip] TCP 世界座標 ({tp[0]:.4f}, {tp[1]:.4f}, {tp[2]:.4f})')
     print(f'[manip] 命令交付：收到 {node.cmd_n} 則，實際套用 {node.applied_n} 次'
           f'（首則 sim {node.cmd_first_t}）')
-    print(f'[manip] /cmd_vel 非零 {node.base_cmd_nonzero} 則')
+    print(f'[manip] 回呼入口計數：/arm/joint_position_cmd {node.arm_cb_n} 則'
+          f'（拒絕 {node.arm_cb_rejected}）；/cmd_vel {node.base_cb_n} 則'
+          f'（其中非零 {node.base_cmd_nonzero}）')
     print(f'[manip] -> {a.out}')
     _ex.shutdown(); node.destroy_node(); rclpy.shutdown(); sim_app.close()
     return 0

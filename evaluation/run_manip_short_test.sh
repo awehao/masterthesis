@@ -32,7 +32,8 @@ fi
 
 say "[3/7] 啟動 Isaac（固定底盤）"
 setsid "$ISAAC_PY" evaluation/isaac_manip_sim.py ${CASE:+--case "$CASE"} \
-    --urdf "$URDF" --out "$DIR/manip_run.json" >> "$LOG" 2>&1 < /dev/null &
+    --urdf "$URDF" --sim-limit "${SIM_LIMIT:-60}" \
+    --out "$DIR/manip_run.json" >> "$LOG" 2>&1 < /dev/null &
 ISAAC=$!; PIDS+=($ISAAC)
 say "  Isaac PID=$ISAAC"
 
@@ -79,6 +80,13 @@ say "  -- TF 是否到得了 link_tcp --"
 if timeout 30 ros2 run tf2_ros tf2_echo base_footprint link_tcp --ros-args -p use_sim_time:=true >> "$LOG" 2>&1; then :; fi
 grep -q "At time" "$LOG" && say "    base_footprint -> link_tcp 可查" || { say "    !! base_footprint -> link_tcp 查不到"; fail=1; }
 [ "$fail" -ne 0 ] && { say "**執行期核對未通過，不播放軌跡**"; exit 4; }
+
+say "  -- 第三方計數：guard 是否真的在發（含零命令）--"
+python3 evaluation/count_topics.py --seconds 20 --out "$DIR/third_party_counts.json" \
+    --topic /cmd_vel=geometry_msgs/msg/Twist \
+    --topic /wheel_guard/status=std_msgs/msg/String \
+    --topic /joint_states=sensor_msgs/msg/JointState \
+    2>&1 | tee -a "$LOG"
 
 say "  -- 診斷：手臂命令 topic 在圖上的狀態 --"
 { echo "### ros2 topic list"; ros2 topic list 2>&1 | sort
