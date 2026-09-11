@@ -344,36 +344,18 @@ if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then
     # 收到每一則都會重設相位零點——所以「第一次其實已被採用、只是確認讀取
     # 逾時」的情況下，第二次重試會把相位整個推掉，兩趟的遭遇時序就不同了。
     # 現在只發一次；重試的只有讀取。
-    echo "[$(date +%T)] [5/6] 等 /case_start 訂閱者 ..."
-    for i in $(seq 1 30); do
-        cs=$(ros2 topic info /case_start 2>/dev/null \
-             | awk '/[Ss]ubscri.*[Cc]ount/ {print $NF; exit}')
-        [ "${cs:-0}" -ge 1 ] && break
-        sleep 1
-    done
-    if [ "${cs:-0}" -lt 1 ]; then
-        echo "[$(date +%T)] [5/6] **/case_start 沒有訂閱者，驅動不在線上，中止**"
+    # 端點匹配後單次發布。只看「訂閱者數 >= 1」不足以確認對方是本趟的
+    # dynamic_obstacle_driver，也不確認型別與 QoS 相容；publish_case_start.py
+    # 逐項核對後才發，且發布器保持存活、只重讀不重發（driver 每收到一則都會
+    # 重設相位零點，重送會改掉零點）。
+    run_step "$LOG" "[$(date +%T)] [5/6]   " "${RUN_DIR}/case_start.log" \
+        timeout 90 python3 "${HERE}/publish_case_start.py" \
+              --out "${RUN_DIR}/case_start.json"
+    if [ $? -ne 0 ]; then
+        echo "[$(date +%T)] [5/6] **/case_start 握手未完成，障礙物不會依排程移動，中止**"
         exit 5
     fi
-    # 發布前先記下模擬時刻：採用到的 epoch 必須晚於它，否則那是上一次
-    # /case_start 留下的舊值，而不是這一趟的零點。
-    CS_T_PRE=$(timeout 5 ros2 topic echo --once --field clock.sec /clock 2>/dev/null | head -1)
-    echo "[$(date +%T)] [5/6] 發布 /case_start（整趟僅此一次，發布前 clock=${CS_T_PRE:-?} s）..."
-    timeout 8 ros2 topic pub -t 1 /case_start std_msgs/msg/Empty "{}" >> "$LOG" 2>&1 \
-        || { echo "[$(date +%T)] [5/6] **/case_start 發布失敗，中止**"; exit 5; }
-    CS_OK=0
-    for attempt in 1 2 3; do
-        echo "[$(date +%T)] [5/6] 確認驅動已採用（第 ${attempt} 次讀取，不重發）..."
-        run_step "$LOG" "[$(date +%T)] [5/6]   " "${RUN_DIR}/epoch.log" \
-            timeout 30 python3 "${HERE}/case_start_check.py" epoch --window 5 \
-                  --out "${RUN_DIR}/phase_epoch.json"
-        if [ $? -eq 0 ]; then CS_OK=1; break; fi
-    done
-    if [ "$CS_OK" -ne 1 ]; then
-        echo "[$(date +%T)] [5/6] **驅動未採用 /case_start，障礙物不會依排程移動，中止**"
-        exit 5
-    fi
-    CS_EPOCH=$(python3 -c "import json;print(json.load(open('${RUN_DIR}/phase_epoch.json'))['phase_epoch'])")
+    CS_EPOCH=$(python3 -c "import json;print(json.load(open('${RUN_DIR}/case_start.json'))['phase_epoch'])")
     echo "[$(date +%T)] [5/6] phase_epoch = ${CS_EPOCH} s（模擬時間）"
     # 有限值只證明「有某個 epoch」，不證明「是這一趟的 epoch」。
     python3 - "$CS_EPOCH" "${CS_T_PRE:-nan}" <<'PYEOF3' || exit 5
