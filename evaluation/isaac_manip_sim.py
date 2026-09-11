@@ -121,8 +121,11 @@ class ManipNode(Node):
         self.tcp_pub = self.create_publisher(PoseStamped, '/manip/tcp_pose', be)
         self.st_pub = self.create_publisher(String, '/manip/status', 10)
         self.cmd = None              # 尚未收到任何關節命令
-        self.cmd_n = 0
+        self.cmd_n = 0               # **收到**幾則
         self.cmd_t = None
+        self.cmd_first_t = None
+        self.applied_n = 0           # **實際套用**幾次（與收到分開記）
+        self.applied_last = None
         self.sim_t = 0.0
         self.create_subscription(Float64MultiArray, '/arm/joint_position_cmd',
                                  self._cmd, 10)
@@ -138,6 +141,8 @@ class ManipNode(Node):
         self.cmd = np.array([float(v) for v in m.data])
         self.cmd_n += 1
         self.cmd_t = self.sim_t
+        if self.cmd_first_t is None:
+            self.cmd_first_t = self.sim_t
 
     def _base(self, m):
         self.base_cmd = [m.linear.x, m.linear.y, m.angular.z]
@@ -268,6 +273,8 @@ def main():
                 tgt[idx[j]] = float(node.cmd[k])
             robot.get_articulation_controller().apply_action(
                 ArticulationAction(joint_positions=tgt))
+            node.applied_n += 1
+            node.applied_last = [float(tgt[idx[j]]) for j in ARM]
         # 底盤固定：每步歸零，並檢查它真的沒動
         robot.set_linear_velocity(np.array([0.0, 0.0, 0.0], dtype=np.float32))
         robot.set_angular_velocity(np.array([0.0, 0.0, 0.0], dtype=np.float32))
@@ -291,8 +298,9 @@ def main():
                         tcp=[float(v) for v in tp],
                         base_drift=drift, base_yaw_drift_deg=dyaw))
         if len(log) % 50 == 0:
-            node.pub_status(dict(t=t, cmd_n=node.cmd_n, track_err=err,
-                                 base_drift=drift, tcp=[float(v) for v in tp]))
+            node.pub_status(dict(t=t, cmd_recv=node.cmd_n, cmd_applied=node.applied_n,
+                                 track_err=err, base_drift=drift,
+                                 tcp=[float(v) for v in tp]))
 
         if drift > a.base_drift_max or dyaw > a.base_yaw_drift_max_deg:
             stop_reason = 'base_moved'; break
@@ -328,6 +336,12 @@ def main():
         arm_final_err_max=float(np.max(np.abs(qa - Q_GOAL))),
         tcp_final_world=[float(v) for v in tp],
         tcp_final_quat_wxyz=[float(v) for v in tq],
+        # 命令交付分三層記錄，任何一層都不由另一層推論
+        delivery=dict(received_msgs=node.cmd_n,
+                      applied_actions=node.applied_n,
+                      first_recv_sim_t=node.cmd_first_t,
+                      last_recv_sim_t=node.cmd_t,
+                      last_applied=node.applied_last),
         cmd_msgs=node.cmd_n,
         base_cmd_nonzero=node.base_cmd_nonzero,
         dof_names=names, samples=len(log), log=log)
@@ -336,7 +350,9 @@ def main():
           f'關節最終誤差 max {res["arm_final_err_max"]*1000:.3f} mrad '
           f'底盤位移 {res["base_final"]["drift_m"]*1000:.3f} mm')
     print(f'[manip] TCP 世界座標 ({tp[0]:.4f}, {tp[1]:.4f}, {tp[2]:.4f})')
-    print(f'[manip] 收到關節命令 {node.cmd_n} 則；/cmd_vel 非零 {node.base_cmd_nonzero} 則')
+    print(f'[manip] 命令交付：收到 {node.cmd_n} 則，實際套用 {node.applied_n} 次'
+          f'（首則 sim {node.cmd_first_t}）')
+    print(f'[manip] /cmd_vel 非零 {node.base_cmd_nonzero} 則')
     print(f'[manip] -> {a.out}')
     _ex.shutdown(); node.destroy_node(); rclpy.shutdown(); sim_app.close()
     return 0

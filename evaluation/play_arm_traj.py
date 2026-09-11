@@ -39,7 +39,9 @@ Q, T = trapezoid(q0, q1, tr['joint_vel_max_rps'], tr['joint_acc_max_rps2'], tr['
 
 rclpy.init()
 n = Node('play_arm_traj')
-n.set_parameters([rclpy.parameter.Parameter('use_sim_time', value=True)])
+# 單變數測試：endpoint_check（看得到 Isaac 的那個行程）沒有設 use_sim_time，
+# 播放端有設且看不到。本節點用 time.sleep 控制節奏，不依賴 ROS 時鐘，
+# 所以拿掉它不改變送出的軌跡內容或時序。
 pub = n.create_publisher(Float64MultiArray, '/arm/joint_position_cmd', 10)
 
 print(f'案例 {name}：{len(Q)} 點，{T:.2f} s，{tr["rate_hz"]:.0f} Hz '
@@ -74,9 +76,12 @@ for _ in range(hold_n):
     m = Float64MultiArray(); m.data = [float(v) for v in Q[-1]]
     pub.publish(m); rclpy.spin_once(n, timeout_sec=0.0)
     time.sleep(dt)
-print(f'播放完成：軌跡 {len(Q)} 則 + 保持 {hold_n} 則')
+published = len(Q) + hold_n
+print(f'播放完成：實際發布 {published} 則（軌跡 {len(Q)} + 保持 {hold_n}）')
 if a.out:
-    json.dump(dict(case=name, n=len(Q), T=T, rate_hz=tr['rate_hz'],
-                   hold_s=a.hold_s, traj=sent), open(a.out, 'w'), ensure_ascii=False)
+    json.dump(dict(schema='arm_traj_sent/1', case=name, n=len(Q), T=T,
+                   rate_hz=tr['rate_hz'], hold_s=a.hold_s,
+                   published_msgs=published, subs_seen_before_play=nsub,
+                   traj=sent), open(a.out, 'w'), ensure_ascii=False)
     print(f'-> {a.out}')
 n.destroy_node(); rclpy.shutdown()

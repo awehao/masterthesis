@@ -88,38 +88,65 @@ TCP 目標以**底盤座標**定義 (0.450, 0, 0.550)、工具朝 +x；
 規劃器自碰拒絕門檻。8.71 mm **通過 5 mm 門檻、低於 20 mm 舒適線**。
 兩者都不是「軌跡驗收」的正式門檻；本檔只如實標示落點。
 
-## 2. 尚未完成：軌跡沒有實際播出去
+## 2. 尚未完成：命令未送達 Isaac
 
-手臂命令入口 `/arm/joint_position_cmd`（`Float64MultiArray`, 6）已實作於
-`evaluation/isaac_manip_sim.py`，Isaac 端 `收到關節命令 0 則`——
-播放端在等訂閱者時逾時，所以**手臂仍停在 `test_start`，沒有運動**。
-`arm_final_err_max = 1408.602 mrad` 就是「完全沒動」（等於 joint5 的整段行程）。
+**完成標準未達成。** 既定的 4.52 s 軌跡沒有執行，TCP 沒有到達預抓取目標。
 
-### 已排除的原因
+### 命令鏈確認：**通過**
 
-* Isaac 有進主迴圈、有建立訂閱（log 明確印出「進入主迴圈；等待
-  /arm/joint_position_cmd」）
-* 把節點改到背景執行緒用 `SingleThreadedExecutor`（與 `isaac_bigarena_sim.py`
-  相同寫法）**沒有改變症狀**，所以不是 spin 方式
-* Isaac 的端點確實在線上：某一趟 `endpoint_check` 解析出
-  `/clock`、`/joint_states`、`/manip/tcp_pose` 的發布者就是 `/isaac_manip_sim`
+`endpoint_check` 加入有上限的名稱解析等待（`--resolve-wait 40`）與端點存在
+要求（`--require-endpoint /arm/joint_position_cmd=sub`）後：
 
-### 已定位的現象（尚未修好）
+```
+--- 名稱解析等待 0.0 s（上限 40 s）---
+  所有列出的端點名稱都已解析
+  /arm/joint_position_cmd
+      發布: （無）
+      訂閱: ['/isaac_manip_sim']
+--- 端點存在要求 ---
+  /arm/joint_position_cmd 訂閱端 ['/isaac_manip_sim']  OK
+--- 唯一發布者要求 ---
+  /cmd_vel 必須只由 wheel_limit_guard 發布 -> 實際 ['/wheel_limit_guard']  OK
+```
 
-節點名在圖上的解析**有競賽**，且方向會變：
+三種失敗現在分開判：**端點缺失** / **名稱尚未解析（不當作通過）** / **非預期端點**。
 
-* 第 3–5 趟：Isaac 顯示為 `_NODE_NAME_UNKNOWN_`，`robot_state_publisher` 與
-  guard 正常
-* 第 6 趟：**反過來** —— `/isaac_manip_sim` 正常，換成 guard 是
-  `_NODE_NAME_UNKNOWN_`，導致「`/cmd_vel` 唯一發布者」誤判為不符而中止
+### 命令交付：三層分開記錄
 
-`ros2` CLI（走 ROS 2 daemon）在同 domain 下 `topic list` 只看到
-`/parameter_events` 與 `/rosout`、`node list` 為空，而同一趟的 rclpy 腳本
-看得到圖 —— 兩者不一致。
+| 層 | 數值 |
+|---|---|
+| 播放端發布 | **377** 則（軌跡 227 ＋ 保持 150） |
+| Isaac 收到 | **0** |
+| Isaac 實際套用 | **0** |
 
-**下一步要修的是這個，不是手臂控制本身**：`endpoint_check.py` 需要先等節點名
-解析完成再判定，否則會產生偽失敗；播放端的放行條件也不該只靠圖查詢
-（已改為「等一段時間後照發，由接收端計數判定」，但該版尚未跑到播放階段）。
+**所以「關節追蹤」與「TCP 誤差」都是未測到** —— 既不能說追蹤失敗，
+也不能說控制器沒問題，這兩層目前沒有任何證據。
+
+### 卡在哪一層
+
+**卡在「訊息從播放端行程送進 Isaac 行程」這一層。** 上游（軌跡產生、沿途檢查、
+命令鏈確認）與下游（手臂控制器）都沒有被觸及。
+
+已逐一排除（每次只改一個變數）：
+
+| 候選 | 證據 | 結論 |
+|---|---|---|
+| 訂閱在圖上看不到 | `endpoint_check` 明確列出 `/arm/joint_position_cmd` 訂閱端為 `/isaac_manip_sim` | **排除** |
+| 節點名稱未解析 | 解析等待 0.0 s 完成，全部已解析 | **排除** |
+| Isaac 的 spin 方式 | 改成背景執行緒＋`SingleThreadedExecutor`（與 `isaac_bigarena_sim.py` 同寫法），症狀不變 | **排除** |
+| 播放端的 `use_sim_time` | 移除後重跑，症狀不變 | **排除** |
+
+**仍未解釋**：播放端自己的 `count_subscribers('/arm/joint_position_cmd')` 讀到 0，
+而同一個 shell、同一個 domain、僅數秒前執行的 `endpoint_check` 讀得到那個訂閱。
+`ros2` CLI（走 daemon）在同 domain 下 `topic list` 也只看到
+`/parameter_events` 與 `/rosout`、`node list` 為空。
+
+**一個尚未量到、但應該先量的東西**：目前沒有任何證據顯示**有任何訊息從外部行程
+進得了 Isaac**。出方向是通的（`/joint_states` 到得了 `robot_state_publisher`，
+TF 因此可查）；入方向唯一的候選是 `/cmd_vel`，但 guard 送的是零，
+而 Isaac 只計了「非零」則數（0 則），**零與「沒收到」無法區分**。
+下一步應該只做這一件事：把 `/cmd_vel` 改成計全部收到的則數，
+就能判定入方向是否全面不通，還是只有這個 topic 不通。
 
 ## 3. 本輪未觸碰
 

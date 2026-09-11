@@ -69,7 +69,10 @@ fail=0
 say "  -- 執行期模型一致性 --"
 python3 evaluation/check_model_runtime.py --file "$URDF" 2>&1 | tee "$DIR/model_runtime.log" | tee -a "$LOG" || fail=1
 say "  -- /cmd_vel 唯一發布者 --"
-python3 evaluation/endpoint_check.py --topics /clock,/cmd_vel,/joint_states,/manip/tcp_pose \
+python3 evaluation/endpoint_check.py \
+    --topics /clock,/cmd_vel,/joint_states,/manip/tcp_pose,/arm/joint_position_cmd \
+    --resolve-wait 40 \
+    --require-endpoint /arm/joint_position_cmd=sub \
     --sole-publisher /cmd_vel=wheel_limit_guard --out "$DIR/endpoints.json" \
     2>&1 | tee -a "$LOG" || fail=1
 say "  -- TF 是否到得了 link_tcp --"
@@ -89,13 +92,6 @@ python3 evaluation/play_arm_traj.py ${CASE:+--case "$CASE"} --out "$DIR/traj_sen
 say "[7/7] 等 Isaac 存檔"
 wait $ISAAC; rc=$?
 say "  Isaac 退出碼 $rc"
-[ -f "$DIR/manip_run.json" ] && python3 - "$DIR/manip_run.json" <<'PY' 2>&1 | tee -a "$LOG"
-import json,sys
-d=json.load(open(sys.argv[1]))
-print(f"  停止原因 {d['stop_reason']}  sim {d['sim_time']:.2f}s  取樣 {d['samples']}")
-print(f"  關節最終誤差 max {d['arm_final_err_max']*1000:.3f} mrad")
-print(f"  底盤位移 {d['base_final']['drift_m']*1000:.3f} mm")
-print(f"  TCP 世界座標 {[round(v,4) for v in d['tcp_final_world']]}")
-print(f"  收到關節命令 {d['cmd_msgs']} 則；/cmd_vel 非零 {d['base_cmd_nonzero']} 則")
-PY
+[ -f "$DIR/manip_run.json" ] && python3 evaluation/report_manip_run.py \
+    "$DIR/manip_run.json" --sent "$DIR/traj_sent.json" 2>&1 | tee -a "$LOG"
 say "資料目錄 $DIR"
