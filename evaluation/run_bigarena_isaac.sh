@@ -310,6 +310,20 @@ if [ "$gate_fail" -ne 0 ]; then
 fi
 echo "[$(date +%T)] [5/6] 就緒檢查全部通過"
 
+# ---- 端點身分檢查：guard 必須是 /cmd_vel 的唯一發布者 -------------------
+# 只看訂閱者「計數」無法辨識來源；先前一趟 ON 正是因同 domain 的殘留導航鏈而作廢。
+if [ "${GUARD:-0}" = "1" ]; then
+    timeout 60 python3 "${HERE}/endpoint_check.py" \
+        --out "${RUN_DIR}/endpoints.json" \
+        --sole-publisher "/cmd_vel=wheel_limit_guard" \
+        > "${RUN_DIR}/endpoints.log" 2>&1
+    _rc=$?
+    sed "s/^/[$(date +%T)] [5\/6]   /" "${RUN_DIR}/endpoints.log" | tee -a "$LOG"
+    if [ "$_rc" -ne 0 ]; then
+        echo "[$(date +%T)] [5/6] **端點身分檢查未通過，中止**"; exit 8
+    fi
+fi
+
 # ---- scheduled 情境：定位 -> /case_start -> 移動確認 --------------------
 CS_EPOCH=""
 if [ "${AMMR_OBSTACLE_MODE:-legacy}" = "scheduled" ]; then

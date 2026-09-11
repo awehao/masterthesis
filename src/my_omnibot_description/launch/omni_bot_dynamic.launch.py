@@ -183,6 +183,13 @@ def generate_launch_description():
     # randomised reference windows.
     _heading = os.environ.get('HEADING', '0') == '1'
     _no_traffic = os.environ.get('NO_TRAFFIC', '0') == '1'
+    # GUARD=1 puts wheel_limit_guard at the end of the chain, so it is the sole
+    # publisher of /cmd_vel: gmpc -> cmd_vel_nav -> smoother -> cmd_vel_smoothed
+    # -> guard -> cmd_vel. The smoother only enforces PER-AXIS limits and cannot
+    # see the four-wheel coupling rows; measured, its output stayed inside every
+    # axis limit while the wheel-level acceleration reached 178 rad/s^2 against a
+    # 125 limit (evaluation/test_smoother_wheel.py).
+    _guard = os.environ.get('GUARD', '0') == '1'
     # Scenario selection uses the SAME two environment variables as
     # ammr_bringup's isaac_dynamic.launch.py / gazebo_dynamic.launch.py, so the
     # two simulators cannot silently run different scenarios. Both default to
@@ -392,8 +399,25 @@ def generate_launch_description():
              parameters=[configured_nav_params],
              remappings=[('cmd_vel', 'cmd_vel_nav'),
                          ('cmd_vel_smoothed',
-                          'cmd_vel_pre_shield' if _shield else 'cmd_vel')],
+                          'cmd_vel_pre_shield' if _shield
+                          else ('cmd_vel_smoothed' if _guard else 'cmd_vel'))],
              condition=IfCondition(use_smoother)),
+        Node(package='ammr_wholebody_mpc', executable='wheel_limit_guard',
+             name='wheel_limit_guard', output='screen',
+             parameters=[{'use_sim_time': True,
+                          'cmd_in_topic': '/cmd_vel_smoothed',
+                          'cmd_out_topic': '/cmd_vel',
+                          'odom_topic': '/odom',
+                          'wheel_radius': 0.05, 'wheel_base_L': 0.245,
+                          'wheel_w_max': 5.55, 'wheel_a_max': 125.0,
+                          'publish_rate': 20.0,
+                          'input_timeout': float(os.environ.get('GUARD_IN_TO', '0.25')),
+                          'dt_max': 0.50,
+                          # The navigation chain starts with the robot spawned
+                          # stationary and no command published yet, so the cold
+                          # start really is a confirmed stop.
+                          'assume_stopped_at_start': True}],
+             condition=IfCondition(str(int(_guard)))),
         Node(package='ammr_wholebody_mpc', executable='scan_safety_shield',
              name='scan_safety_shield', output='screen',
              parameters=[{'use_sim_time': True,

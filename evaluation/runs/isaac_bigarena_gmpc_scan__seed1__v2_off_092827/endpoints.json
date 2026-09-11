@@ -1,0 +1,99 @@
+{
+ "schema": "endpoint_check/1",
+ "topics": {
+  "/cmd_vel": {
+   "publishers": [
+    "/wheel_limit_guard"
+   ],
+   "subscribers": [
+    "/rosbag2_recorder",
+    "/isaac_bigarena_sim"
+   ]
+  },
+  "/cmd_vel_nav": {
+   "publishers": [
+    "/gmpc_controller"
+   ],
+   "subscribers": [
+    "/velocity_smoother",
+    "/rosbag2_recorder"
+   ]
+  },
+  "/cmd_vel_smoothed": {
+   "publishers": [
+    "/velocity_smoother"
+   ],
+   "subscribers": [
+    "/wheel_limit_guard"
+   ]
+  },
+  "/goal_pose": {
+   "publishers": [],
+   "subscribers": [
+    "/goal_to_plan_relay",
+    "/gmpc_controller",
+    "/isaac_bigarena_sim"
+   ]
+  },
+  "/plan": {
+   "publishers": [
+    "/planner_server",
+    "/goal_to_plan_relay"
+   ],
+   "subscribers": [
+    "/gmpc_controller",
+    "/rosbag2_recorder",
+    "/isaac_bigarena_sim"
+   ]
+  },
+  "/clock": {
+   "publishers": [
+    "/isaac_bigarena_sim"
+   ],
+   "subscribers": [
+    "/map_server",
+    "/amcl",
+    "/ekf_global",
+    "/planner_server",
+    "/global_costmap/global_costmap",
+    "/lifecycle_manager_navigation",
+    "/velocity_smoother",
+    "/wheel_limit_guard",
+    "/goal_to_plan_relay",
+    "/gmpc_controller",
+    "/scan_obstacle_tracker",
+    "/robot_state_publisher",
+    "/odom_tf_broadcaster",
+    "/scan_relay",
+    "/foxglove_bridge",
+    "/foxglove_bridge",
+    "/rosbag2_recorder"
+   ]
+  },
+  "/scan": {
+   "publishers": [
+    "/scan_relay"
+   ],
+   "subscribers": [
+    "/amcl",
+    "/global_costmap/global_costmap",
+    "/scan_obstacle_tracker",
+    "/rosbag2_recorder"
+   ]
+  },
+  "/odom": {
+   "publishers": [
+    "/odom_tf_broadcaster"
+   ],
+   "subscribers": [
+    "/ekf_global",
+    "/wheel_limit_guard",
+    "/rosbag2_recorder"
+   ]
+  }
+ },
+ "sole_publisher": [
+  "/cmd_vel=wheel_limit_guard"
+ ],
+ "rc": 0
+}

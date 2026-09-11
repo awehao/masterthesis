@@ -1,0 +1,14 @@
+此趟未發布目標、無任務資料，不列入分析。
+
+中止原因：/case_start 未被 dynamic_obstacle_driver 採用。三次讀取
+phase_epoch 皆為 NaN，驅動端日誌明確記錄「scheduled 模式尚未收到 /case_start」。
+保護正確生效——障礙物全程停在相位 0 位置，未產生無效情境資料。
+
+新命令鏈本身通過驗證：
+  - wheel_limit_guard 已隨導航鏈啟動（wheel_limit_guard-12）
+  - 端點身分檢查通過：/cmd_vel 的發布端實際只有 ['/wheel_limit_guard']
+  - 相位 0 定位檢查通過
+
+待查：runner 目前的流程是「整趟只發一次 /case_start，之後三次只讀不重發」
+（由另一個 session 改動）。該設計避免重設相位零點，但單次發布若遇上
+DDS discovery race 便無法補救。
