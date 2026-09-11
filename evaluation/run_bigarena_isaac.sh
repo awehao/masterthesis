@@ -205,13 +205,12 @@ wait_for() {  # wait_for <秒數> <說明> <指令...>
     mark "!! $desc 逾時 ${lim}s"; gate_fail=1; return 1
 }
 
+# 舊版每次嘗試都開兩個 `ros2 topic echo --once`，各自付一次 DDS 配對而
+# timeout 只有 3 s；導航鏈起來之後配對常常超過 3 s，於是不斷重試把 60 s
+# 預算耗光（OFF 用掉 56 s 勉強過，ON 直接逾時，但 bag 有 /clock 10391 筆）。
+# 改成單一行程：配對只付一次，再量測是否前進。
 clock_moved() {
-    local x y
-    x=$(timeout 3 ros2 topic echo --once --field clock.sec /clock 2>/dev/null | head -1)
-    [ -n "${x:-}" ] || return 1
-    sleep 1
-    y=$(timeout 3 ros2 topic echo --once --field clock.sec /clock 2>/dev/null | head -1)
-    [ -n "${y:-}" ] && [ "$y" -gt "$x" ] 2>/dev/null
+    timeout 50 python3 "${HERE}/clock_advancing.py" 2>&1
 }
 has_data() { timeout 6 ros2 topic echo --once "$1" 2>/dev/null | grep -q . ; }
 # lifecycle_active() now comes from lib/run_guards.sh: `grep -q active` also
@@ -221,7 +220,7 @@ isaac_alive() { kill -0 "$ISAAC_PID" 2>/dev/null; }
 if ! isaac_alive; then
     mark "!! Isaac 在就緒檢查前已退出"; exit 3
 fi
-wait_for 60 "clock 在前進" clock_moved
+wait_for 120 "clock 在前進" clock_moved
 for t in /scan /scan_raw /odom /odom_raw; do
     wait_for 40 "$t 有資料" has_data "$t"
 done

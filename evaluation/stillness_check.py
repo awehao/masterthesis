@@ -17,6 +17,8 @@ from nav_msgs.msg import Odometry
 ap = argparse.ArgumentParser()
 ap.add_argument('--movers', type=int, default=10)
 ap.add_argument('--window', type=float, default=3.0, help='wall seconds to watch')
+ap.add_argument('--discover', type=float, default=15.0,
+                help='開始量測前，等訂閱配對上的最長秒數')
 ap.add_argument('--max-speed', type=float, default=0.02, help='m/s allowed')
 ap.add_argument('--traffic', action='store_true',
                 help='移動障礙預期會動：只要求機器人靜止，並反過來要求至少一個'
@@ -48,6 +50,27 @@ def odom_cb(m):
 n.create_subscription(Odometry, '/odom', odom_cb, be)
 
 import time
+# 建立訂閱不等於已經配對上。v2_on_095657 那趟這裡印出「/odom 無資料」而中止，
+# 但同一趟的 bag 錄到 /odom 3596 筆、/clock 10391 筆 —— 固定長度的觀察視窗
+# 在配對完成前就結束了。所以先等配對（每個主題至少一則），再清空重新計時；
+# 這樣「無資料」才真的代表那個主題沒有發布。
+want = [f'/model/dyn_obs_{i}/pose' for i in range(a.movers)] \
+       + ['/model/omni_bot/pose']
+t_disc = time.monotonic()
+while time.monotonic() - t_disc < a.discover:
+    if twist and all(hist.get(t) for t in want):
+        break
+    rclpy.spin_once(n, timeout_sec=0.05)
+disc_s = time.monotonic() - t_disc
+missing = ([t for t in want if not hist.get(t)] + ([] if twist else ['/odom']))
+if missing:
+    print(f'  !! 等待配對 {disc_s:.1f} s 後仍有 {len(missing)} 個主題沒有樣本：'
+          f'{", ".join(missing)}；量測照常進行並據實判定')
+else:
+    print(f'  訂閱配對完成，用時 {disc_s:.1f} s；'
+          f'開始 {a.window:.1f} s 觀察視窗')
+hist.clear(); twist.clear()
+
 t0 = time.monotonic()
 while time.monotonic() - t0 < a.window:
     rclpy.spin_once(n, timeout_sec=0.1)
