@@ -139,10 +139,27 @@ def report(run_dir):
     else:
         print(f'可做（/cmd_vel_smoothed {len(smoothed)} 筆）')
         if guard:
-            same = sum(1 for g in guard
-                       if np.allclose(g['target'], g['out'], atol=0, rtol=0))
-            print(f'    guard 輸出與輸入完全相同（未改動）{same}/{len(guard)} 筆')
-            print(f'    guard 有改動 {len(guard)-same}/{len(guard)} 筆')
+            # 兩件事必須分開：
+            #  * input_timeout 時 guard 刻意把「有效目標」換成零，但狀態裡的
+            #    `target` 欄位記的是最後收到的輸入，不是那個零。拿它跟 out 比
+            #    會把失效處置誤讀成輪級截斷。
+            #  * lam == 1 時 out = prev + 1.0*(target-prev)，浮點往返不會精確
+            #    等於 target。用位元相等去數「有改動」會數到 ~1e-9 的殘差。
+            # 判定截斷一律看 lam，不看 out 與 target 的差。
+            to = [g for g in guard if 'input_timeout' in g.get('faults', [])]
+            ok = [g for g in guard if 'input_timeout' not in g.get('faults', [])]
+            lam_ok = np.array([g['lam'] for g in ok
+                               if g['lam'] is not None], float)
+            n_clip = int((lam_ok < 1.0 - 1e-9).sum()) if len(lam_ok) else 0
+            print(f'    正常樣本 {len(ok)}，其中輪級截斷（lam < 1）{n_clip} 筆')
+            if len(lam_ok):
+                print(f'      lam 最小 {lam_ok.min():.6f}  平均 {lam_ok.mean():.6f}')
+            print(f'    input_timeout（有效目標改為零）{len(to)} 筆')
+            resid = max((np.max(np.abs(np.array(g['out'])
+                                       - np.array(g['target']))) for g in ok),
+                        default=0.0)
+            print(f'    正常樣本 |out - target| 最大 {resid:.3e}'
+                  f'（lam=1 的浮點往返殘差，非截斷）')
     print(f'  /gmpc/diag_v2：{len(diag2)} 筆'
           + (f'（schema {sorted({d.get("schema") for d in diag2})}）'
              if diag2 else '（**未錄製**）'))
