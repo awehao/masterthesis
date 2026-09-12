@@ -66,6 +66,12 @@ ap.add_argument('--align-from', default='',
 ap.add_argument('--handover', default='align', choices=('align', 'offset'))
 ap.add_argument('--postengage-hold-s', type=float, default=1.0,
                 help='offset 模式：engage 後先以**原命令**保持這麼久再開始疊加增量')
+# 沿路徑的前饋致動補償表（由 build_ff_comp.py 產生）。
+#   q_cmd,new(s) = q_cmd,old(s) + Δq_ff(s) ，且 Δq_ff(0) = 0
+# 等價於 b(s) = b0 + Δq_ff(s)：**保留已通過的初始保持命令，b0 不會被重複加一次**。
+ap.add_argument('--ff-comp', default='', help='前饋補償表 JSON')
+ap.add_argument('--ff-smooth', type=int, default=15,
+                help='Δq_ff 的置中移動平均視窗（列數，50 Hz）')
 ap.add_argument('--pull-target-m', type=float, default=0.0,
                 help='>0 時覆寫本趟的目標開度（有界交接驗證用）')
 ap.add_argument('--align-ramp-s', type=float, default=0.5,
@@ -376,6 +382,96 @@ seed = Qt_t[-1].copy()
 for q in dwell(seed, a.settle_s, HZ):
     rows.append(('settle', '', q, F_OPEN, TARGET))
 
+# ---------------------------------------------------- 沿路徑前饋補償 Δq_ff(s)
+FF = None
+if a.ff_comp:
+    FFJ = json.load(open(a.ff_comp))
+    if ALIGN is None or a.handover != 'offset':
+        print('  **前饋補償只支援 offset 交接 ＋ 對準參考，中止**'); sys.exit(3)
+    tbl = {int(q): (np.array(e), np.array(v))
+           for q, e, v in zip(FFJ['seq'], FFJ['e_perp_m'], FFJ['rotvec_rad'])}
+
+    def rv2R(v):
+        th = float(np.linalg.norm(v))
+        if th < 1e-15:
+            return np.eye(3)
+        k = v / th
+        K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+        return np.eye(3) + math.sin(th) * K + (1 - math.cos(th)) * (K @ K)
+
+    T_GD = ALIGN.T_GD; T_GD_inv = ALIGN.T_GD_inv; T_G_TCP = ALIGN.T_G_TCP
+    pidx = [i for i, r in enumerate(rows) if r[0] == 'pull']
+    # **對補償輸入做內插**，不要「缺序號就沿用前一值」——
+    # 那會產生階梯，單點 0.001 rad 的階躍在 50 Hz 下就是 2.5 rad/s²，
+    # 第一版因此量到 4.27 rad/s²（上限 0.7）而未通過。
+    tseq = np.array(sorted(tbl))
+    tE = np.array([tbl[q][0] for q in tseq])
+    tV = np.array([tbl[q][1] for q in tseq])
+    pi_arr = np.array(pidx, float)
+    Ei = np.stack([np.interp(pi_arr, tseq, tE[:, j]) for j in range(3)], axis=1)
+    Vi = np.stack([np.interp(pi_arr, tseq, tV[:, j]) for j in range(3)], axis=1)
+    n_extrap = int((pi_arr < tseq[0]).sum() + (pi_arr > tseq[-1]).sum())
+    dq = np.zeros((len(rows), 6))
+    prev = None
+    n_hit = 0
+    for kk, i in enumerate(pidx):
+        e, v = Ei[kk], Vi[kk]
+        q_geo_i = rows[i][2] - OFFS
+        T_G_old = K.K.fk(K.q_full(q_geo_i), 'uflite_gripper_link')
+        T_D_old = T_G_old @ T_GD
+        T_D_new = np.eye(4)
+        T_D_new[:3, :3] = rv2R(v).T @ T_D_old[:3, :3]      # ΔR⁻¹ 左乘（世界座標）
+        T_D_new[:3, 3] = T_D_old[:3, 3] - e                 # 只減垂直分量
+        T_TCP_new = T_D_new @ T_GD_inv @ T_G_TCP
+        r_, _sw = K.ik_pose(T_TCP_new, prev if prev is not None else q_geo_i,
+                            a.limit_margin)
+        if not r_.ok or r_.pos_err > 1e-3:
+            print(f'  **補償後 IK 未收斂** seq={i} 殘差 {r_.pos_err*1000:.4f} mm')
+        prev = r_.q[K.idx].copy()
+        dq[i] = prev - q_geo_i
+        n_hit += 1
+    # 平滑 Δq_ff：補償量在拉開段出現「兩列一階」的階梯 ——
+    # /manip/tcp_pose 的則數少於 log 列數，最近鄰查找讓相鄰序號取到同一則位姿。
+    # 那是**取樣假象**，不是訊號；不平滑的話單點階躍在 50 Hz 下就是 ~4.3 rad/s²。
+    W = a.ff_smooth
+    if W > 1:
+        blk = dq[pidx[0]:pidx[-1] + 1]
+        pad = W // 2
+        ext = np.pad(blk, ((pad, pad), (0, 0)), mode='edge')
+        ker = np.ones(W) / W
+        sm = np.stack([np.convolve(ext[:, j], ker, mode='valid')
+                       for j in range(6)], axis=1)
+        dq[pidx[0]:pidx[-1] + 1] = sm[:len(blk)]
+    # Δq_ff(0) = 0：整條減去拉開段第一點的值，保留 b(0) = b0
+    base_dq = dq[pidx[0]].copy()
+    for i in pidx:
+        dq[i] -= base_dq
+    # 拉開段之後沿用最後一個值，維持命令連續
+    for i in range(pidx[-1] + 1, len(rows)):
+        dq[i] = dq[pidx[-1]]
+    for i in range(len(rows)):
+        rows[i] = (rows[i][0], rows[i][1], rows[i][2] + dq[i], rows[i][3], rows[i][4])
+    FF = {'table': os.path.abspath(a.ff_comp), 'n_pull_rows_compensated': n_hit,
+          'n_pull_rows': len(pidx),
+          'table_seq_range': [int(tseq[0]), int(tseq[-1])],
+          'n_rows_outside_table': n_extrap,
+          'outside_table_handling': ('np.interp 的端點外插 = 取端點值（平坦延伸）；'
+                                     '**表外區段未經校準**，本輪驗證只跑到 80 mm，'
+                                     '不觸及該區段'),
+          'dq_ff_at_first_pull_rad': [0.0] * 6,
+          'dq_ff_smooth_window_rows': W,
+          'dq_ff_max_abs_rad': float(np.abs(dq).max()),
+          'dq_ff_per_joint_max_rad': np.abs(dq).max(axis=0).tolist(),
+          'dq_ff_at_last_pull_rad': dq[pidx[-1]].tolist(),
+          'note': ('q_cmd,new = q_cmd,old + Δq_ff，Δq_ff(拉開段首點) = 0；'
+                   'b(s) = b0 + Δq_ff(s)，b0 未被重複加')}
+    print(f'\n  前饋補償：補償表涵蓋序號 {int(tseq[0])}–{int(tseq[-1])}；'
+          f'拉開段 {len(pidx)} 列全部以內插取值，其中 {n_extrap} 列落在表外'
+          f'（平坦延伸，**未經校準**）')
+    print(f'    Δq_ff 最大 {FF["dq_ff_max_abs_rad"]:.6f} rad；'
+          f'逐關節 {np.round(FF["dq_ff_per_joint_max_rad"],6).tolist()}')
+    print(f'    Δq_ff(拉開首點) = 0（b(0) = b0 保留）')
+
 DTS = 1.0 / HZ
 Q = np.array([r[2] for r in rows])
 FING = np.array([r[3] for r in rows])
@@ -524,6 +620,7 @@ meta = {
     'alignment': (dict(ALIGN.describe(), snapshot=ALIGN.snap)
                   if ALIGN is not None else None),
     'handover': HANDOVER,
+    'ff_comp': FF,
     'handover_mode': a.handover,
     'target_opening_used_m': TARGET,
     'target_opening_case_m': TARGET_FULL,
