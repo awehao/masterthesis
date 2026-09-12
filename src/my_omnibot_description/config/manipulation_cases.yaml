@@ -80,3 +80,134 @@ cases:
       joint_acc_max_rps2: 0.7         # rad/s²
       rate_hz: 50.0
       settle_s: 1.0
+
+  # ===================================================================
+  # 接觸操作：固定底盤 ＋ 單一被動抽屜
+  #
+  # 與 box12_south 的關係：那個案例停在預抓取，**沒有接觸**。本案例才有接觸，
+  # 用的是 drawer_unit.yaml 定義的新資產（有把手、有滑動關節），不是把
+  # known_obs_12 當成已有的操作機構。
+  #
+  # 抓取模型分兩版，**不混稱**：
+  #   drawer_open_a_fixed     理想固定連接 —— 夾爪與把手之間直接加一個固定關節。
+  #                           測的是「手臂能不能沿這條路徑把抽屜帶開」，
+  #                           與夾持力無關。同時量出所需拉力。
+  #   drawer_open_a_friction  摩擦夾持 —— 只有接觸與摩擦，沒有任何額外約束。
+  #                           測的是「這個夾爪的握力夠不夠維持這個關係」。
+  # 兩版各自獨立記錄，結果不得互相代表。
+  # ===================================================================
+  drawer_open_a_fixed: &drawer_open_a
+    world: bigarena
+    grasp_model: fixed_attachment   # 見上；friction 版另有條目
+    object:
+      spec: drawer_unit.yaml
+      name: drawer_unit_a
+      # 櫃體底面中心的世界位置。**不寫進 bigarena.sdf**：那份是已凍結的導航
+      # 場景，動它等於動已完成資料的前提。只有操作模擬載入這個資產。
+      pose: [10.500, 9.000]
+      yaw_deg: 0.0                  # 本地 +y 指向櫃內（世界 +y），抽屜沿 −y 拉出
+      # 選址：對 **18 個 known_obs 與 16 面 wall 全部**做網格搜尋後選的。
+      # 第一次只比對 known_obs，選到 (12.5, 7.5)，那裡正好壓在 wall_12
+      # （x = 12.5, y ∈ [5.50, 7.40]）上 —— 內牆必須一起算。
+      # 本點位於中央帶（wall_5/6 的 y = 5.5 與 wall_8 的 y = 11.5 之間）。
+      # 淨距以「抽屜全開時的資產佔地 0.600 x 0.715」計，不是只算櫃體。
+      clearance_to_static_m: 1.643
+    parking:
+      x: 10.500
+      y: 8.0897                     # 由把手幾何反推，使夾持 TCP 落在底盤 x = 0.6400
+      yaw_deg: 90.0                 # 車頭朝 +y，正對櫃體
+      # 同樣含內牆；底盤以 0.60 x 0.60 方框計（量自 URDF，不是半徑 0.30 的圓）
+      clearance_to_static_m: 1.647
+    # ---- 手臂姿態 ----
+    pregrasp:
+      frame: base_footprint
+      # 接近軸沿底盤 +x；joint6 = −π/2 讓手指改為**垂直**閉合，
+      # 因此把手是常規的水平橫桿。joint6 在此分支的限位餘裕 1.365 rad。
+      tcp_forward_axis: [1.0, 0.0, 0.0]
+      finger_closing_axis_world: [0.0, 0.0, 1.0]
+      start_config: test_start
+    drawer:
+      target_opening_m: 0.200       # 硬限位 0.220，目標不落在限位上
+      approach_backoff_m: 0.100     # 夾持前退在夾持位後方這麼遠（沿工具 z）
+      retreat_backoff_m: 0.040      # 夾持後退開這麼遠；清開橫桿最少需 0.0233 m
+      # 可達性依據 —— 以 10 組 IK 種子逐點取最佳解，再逐點算自碰，
+      # 條件為「限位餘裕 ≥ 0.15 rad 且自碰餘裕 ≥ 5 mm」。
+      # z = 0.55 的連續可用區間 TCP x ∈ [0.380, 0.680]，長 0.300 m。
+      # 近端界由 joint3 的安全下限 −0.0611 決定（肘關節範圍很不對稱），
+      # 不是由臂展決定；把手放低反而更差（z=0.40 近端界 0.480）。
+      #
+      # 需求 = 行程 0.200 ＋ 退出 0.040 = 0.240 m，餘 0.060 m：
+      #   夾持（關閉） x = 0.640   全開 x = 0.440   退出後 x = 0.400
+      # 接近起點 x = 0.540 落在中間，不額外佔用窗口。
+      # 該區間內的限位餘裕：0.640 → 1.095、0.440 → 0.537、0.400 → 0.337 rad，
+      # 最小值仍是停止門檻 0.050 rad 的 6.7 倍。
+      reachable_span_m: 0.300
+      reachable_x_range_m: [0.380, 0.680]
+      grasp_x_closed_m: 0.640
+      # 拉開段：笛卡兒直線，時間參數化後任一關節不超過下列上限
+      # （與已凍結的預抓取軌跡同一組限制，不因接觸而放寬）
+      vel_max_rps: 0.35
+      acc_max_rps2: 0.7
+      rate_hz: 50.0
+    # ---- 容差與判定 ----
+    # 這些是**操作端的需求**，不是現況能力的描述，也不是照已量到的數字配出來的。
+    tolerance:
+      opening_m: 0.010              # 目標開度 ±10 mm（行程的 5 %）
+      opening_hold_s: 2.0           # 需連續落在容差內這麼久才算到位
+      tcp_pos_m: 0.010              # TCP 對預定夾持點的位置誤差
+      tcp_rot_deg: 3.0              # 工具軸方向夾角，不是完整三維姿態
+      grasp_slip_m: 0.020           # TCP 對把手中心的相對位移超過此值 = 夾持關係失效
+      base_drift_m: 0.010
+      base_yaw_drift_deg: 1.0
+      joint_track_err_rad: 0.20
+      joint_limit_margin_rad: 0.050
+    # ---- 逾時（模擬時間）----
+    timeout_s:
+      approach: 30.0
+      grasp: 10.0
+      pull: 60.0
+      hold: 10.0
+      retreat: 30.0
+      total_wall_s: 900.0
+    # ---- 停止處置：發生下列任一項即停，**不自動重試** ----
+    # 停止動作一律相同：把手臂命令凍結在最後一次已套用的設定點並持續發布，
+    # 停掉軌跡播放，寫出 stop_reason 與當下所有量測。抽屜由滑動關節承重，
+    # 不會掉落，所以不做緊急鬆開。
+    stop_on:
+      - base_drift                  # 底盤位移或轉角超過容差（底盤必須固定）
+      - joint_limit_margin          # 任一關節離安全限位小於 0.050 rad
+      - joint_track_err             # 追蹤誤差超過 0.20 rad
+      - grasp_lost                  # 夾持關係失效（見 grasp_slip_m）
+      - drawer_limit                # 開度進入硬限位 0.005 m 內
+      - contact_force               # 把手接觸力超過 contact_force_max_n
+      - phase_timeout
+      - wall_timeout
+      - cpu_temp                    # 92 °C，沿用既有中止線，不上調
+    contact_force_max_n: 30.0
+    cpu_limit_c: 92.0
+    # ---- 必錄項目 ----
+    # 少錄任何一項就不是完整驗收資料；缺項在紀錄裡寫「未錄製」，不寫 0。
+    record:
+      - /arm/joint_position_cmd     # 手臂命令（含 seq 與預定時刻）
+      - /joint_states               # 手臂回授
+      - /manip/tcp_pose             # TCP 實際位姿
+      - /manip/drawer_state         # 抽屜實際開度與速度（讀自模擬器關節）
+      - /manip/grasp_state          # 夾持關係：TCP 對把手中心的相對位移
+      - /manip/contact              # 可取得的接觸資料（把手上的接觸力）
+      - /manip/status
+      - /clock
+
+  drawer_open_a_friction:
+    <<: *drawer_open_a
+    grasp_model: friction
+    # 摩擦夾持版**只**改抓取關係，幾何、行程、容差、停止處置全部沿用上一版。
+    # 這樣兩版的差異就只有抓取模型本身。
+    grip:
+      finger_cmd_closed: 0.000      # 命令全閉；橫桿 12 mm ⇒ 接觸在 0.006
+      finger_cmd_open: 0.0089       # 進入／退出時全開，內距 17.8 mm
+      finger_max_force_n: 5.0       # URDF finger_joint effort 上限，不上調
+      friction_coefficient: 0.8     # 指墊／把手的物理材質，執行前選定
+      # 由上列推得的上限：2 指 × 5 N × 0.8 = 8 N 可傳遞的拉力。
+      # 抽屜 2.0 kg、線性阻尼 2.0 /s，在 0.05 m/s 下阻尼力約 0.2 N。
+      # **這是設計餘裕，不是量測結果**；實際所需拉力由 fixed 版量出來。
+      expected_pull_force_n: 8.0
