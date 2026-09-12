@@ -226,9 +226,38 @@ def main():
         print('[drawer] rendering_dt != physics_dt，中止'); return 4
     GroundPlane(prim_path='/World/ground', name='ground', z_position=0.0)
     authored = DA.build_usd(world.stage, SPEC, POSE)
-    import_urdf(a.urdf, ROBOT)
+    # --- S3 固定底座版 ---
+    # 舊版用「每個物理步呼叫 set_linear_velocity(0)/set_angular_velocity(0)」固定底盤。
+    # 逐步診斷顯示那個覆寫本身會使保持偏差與 effort 增加、位置游移放大，
+    # 所以改成匯入器的 fix_base：world→根 的單一固定關節。
+    # **這代表底盤被外部固定支撐**，不代表輪子靠地面摩擦能承受相同的操作負載；
+    # 移動底盤的操作要另外驗證。
+    import_urdf(a.urdf, ROBOT, fix_base=True)
 
     stage = world.stage
+    # root_joint 的 body0 是 /World/omni_bot 這個 Xform、錨點 localPos0 = 0，
+    # 所以把**那個 Xform** 移到停放位姿即可；不動 root_joint，也不另建第二個
+    # world 固定關節。之後**不呼叫 set_world_pose**（會與固定關節打架）。
+    _root_fixed = []
+    for _p in Usd.PrimRange.Stage(stage, Usd.TraverseInstanceProxies(
+            Usd.PrimDefaultPredicate)):
+        if not str(_p.GetPath()).startswith(ROBOT) or not _p.IsA(UsdPhysics.FixedJoint):
+            continue
+        _j = UsdPhysics.Joint(_p)
+        _b1 = [str(t) for t in (_j.GetBody1Rel().GetTargets() or [])]
+        _b0 = [str(t) for t in (_j.GetBody0Rel().GetTargets() or [])]
+        if _b1 and _b1[0].endswith('base_footprint') and (not _b0 or _b0[0] == ROBOT):
+            _root_fixed.append(str(_p.GetPath()))
+    print(f'[drawer] world→根 固定關節 {len(_root_fixed)} 個：{_root_fixed}')
+    if len(_root_fixed) != 1:
+        print('[drawer] **預期恰好 1 個 world→根 固定關節，中止**'); return 10
+    _xf = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT))
+    _xf.ClearXformOpOrder()
+    _xf.AddTranslateOp().Set(Gf.Vec3d(PARK[0], PARK[1], 0.0))
+    _rq = q_yaw(PARK[2])
+    _xf.AddOrientOp().Set(Gf.Quatf(_rq[0], _rq[1], _rq[2], _rq[3]))
+    print(f'[drawer] 已把 {ROBOT} 移到停放位姿；root_joint 未更動')
+
     fingers = [str(p.GetPath()) for p in stage.Traverse()
                if p.GetName() in ('uflite_finger1', 'uflite_finger2')]
     grip_link = [str(p.GetPath()) for p in stage.Traverse()
@@ -276,7 +305,7 @@ def main():
     robot.set_joint_positions(q)
     robot.get_articulation_controller().set_gains(kps=kp, kds=kd)
     robot.get_articulation_controller().apply_action(ArticulationAction(joint_positions=q))
-    robot.set_world_pose(np.array([PARK[0], PARK[1], 0.0]), np.array(q_yaw(PARK[2])))
+    # 固定底座下不呼叫 set_world_pose：位姿由 Xform 與 root_joint 決定。
     print('[drawer] view initialize ...', flush=True)
     # joint6 的反作用力列號要在暖機監看之前就決定
     j6_row_pre = None
@@ -386,7 +415,10 @@ def main():
         print(f'[drawer] 讀不到 articulation metadata（{e}）')
     if j6_row is None:
         j6_row = idx['joint6'] + 1; j6_src = 'dof_names 順序（後備）'
-    print(f'[drawer] joint6 反作用力列號 {j6_row}（來源 {j6_src}）')
+    # 固定根部會改變 articulation 索引，**不沿用舊的列號**：一律由 metadata 重新
+    # 對應。該列已在 evaluation/results/fixedbase_* 的短測中以已知 20 N 外力核對
+    # 通過（Δ|F| = 20.0000 N）。
+    print(f'[drawer] joint6 反作用力列號 {j6_row}（來源 {j6_src}，由 metadata 重新對應）')
     if jnames:
         print(f'[drawer] articulation joint 順序 {jnames}')
 
@@ -504,8 +536,7 @@ def main():
         c = Clock(); c.clock.sec = sec; c.clock.nanosec = min(nsec, 999999999)
         node.clock_pub.publish(c)
 
-        # 底盤固定：每一步歸零速度並回寫位姿
-        robot.set_linear_velocity(np.zeros(3)); robot.set_angular_velocity(np.zeros(3))
+        # 底盤由 world→根 的固定關節固定；**正常迴圈不做任何底盤位置／速度覆寫**。
 
         ph = node.phase
         if ph != last_phase:
@@ -850,6 +881,13 @@ def main():
                      '不同版本的趟次不可直接相提並論。'
                      'v1 那次量到的 65.4 N 峰值不因為只出現一次就無害。')},
         'f_norm_peak': {'N': f_peak, 'sim_t': f_peak_t, 'phase': f_peak_ph},
+        'base_fixation': {
+            'mode': 'importer_fix_base',
+            'root_fixed_joints': _root_fixed,
+            'placed_by': 'Xform transform on ' + ROBOT,
+            'per_step_base_override': False,
+            'caveat': ('底盤由外部固定支撐；不代表輪子靠地面摩擦能承受相同負載，'
+                       '移動底盤的操作要另外驗證')},
         'align_ref': ALIGN_REF,
         'monitors_at_start': mon0,
         'monitor_failure': monitor_fail,
