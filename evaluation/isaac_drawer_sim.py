@@ -66,6 +66,14 @@ ap.add_argument('--drawer-no-gravity', action='store_true',
                 help='只把抽屜剛體的 disableGravity 設為 True（診斷用）')
 # 只跑原軌跡的前段：命令序列與完整版**逐點相同**，到指定開度即停，
 # **不是**把整條軌跡壓縮到該行程（那會改變速度剖面）。
+# 只重播命令、**不建立夾爪—抽屜固定關節**：回答「負載成長是否依賴這個連接」。
+# engage 事件照常記錄（同步快照照取），但不建關節、也不把 coupled 設為 True
+# （否則 grasp_lost 會因抽屜不動而誤觸發）。
+ap.add_argument('--no-attach', action='store_true',
+                help='engage 時記錄快照但**不建立固定關節**，繼續重播（診斷用）')
+# 以**指令進度**收尾：不建立連接時抽屜不會動，不能等它開到某個開度。
+ap.add_argument('--stop-at-cmd-t', type=float, default=0.0,
+                help='>0 時已套用設定點的 t_sched 超過此值即停（診斷用）')
 ap.add_argument('--stop-at-opening-m', type=float, default=0.0,
                 help='>0 時開度超過此值即停（診斷用），停止原因 diagnostic_opening_limit')
 ap.add_argument('--pull-target-m', type=float, default=0.0,
@@ -320,6 +328,11 @@ def main():
                          track_contact_forces=True, max_contact_count=128,
                          prepare_contact_sensors=True)
     print('[drawer] 建立手指 view ...', flush=True)
+    # 夾爪殼對抽屜的接觸也要追蹤：**不建立固定關節不等於沒有其他接觸傳力**
+    grip_v = RigidPrim(prim_paths_expr=GRIP, name='grip_v',
+                       track_contact_forces=True, max_contact_count=128,
+                       prepare_contact_sensors=True,
+                       contact_filter_prim_paths_expr=[DRAWER])
     finger_v = None
     if fingers:
         # 用字元類別而不是 (A|B) 的全路徑交替：兩條路徑只差最後一個字元
@@ -360,6 +373,7 @@ def main():
         j6_row_pre = idx['joint6'] + 1
 
     drawer_v.initialize()
+    grip_v.initialize()
     if finger_v is not None:
         finger_v.initialize()
 
@@ -383,6 +397,12 @@ def main():
                                   'shape': [int(v) for v in Mc.shape]}
     except Exception as e:
         mon0['finger_contact'] = {'ok': False, 'error': repr(e)}
+    try:
+        Mg = np.array(grip_v.get_contact_force_matrix(dt=a.physics_dt))
+        mon0['gripper_contact'] = {'ok': bool(np.all(np.isfinite(Mg))),
+                                   'shape': [int(v) for v in Mg.shape]}
+    except Exception as e:
+        mon0['gripper_contact'] = {'ok': False, 'error': repr(e)}
     bad_mon = [k for k, v in mon0.items() if not v.get('ok')]
     print(f'[drawer] 啟動前監看檢查 {json.dumps(mon0, ensure_ascii=False)}', flush=True)
     if bad_mon:
@@ -556,6 +576,12 @@ def main():
     ex = SingleThreadedExecutor(); ex.add_node(node)
     threading.Thread(target=ex.spin, daemon=True).start()
 
+    LOG_COLS = ['t', 'phase', 'applied_seq', 'opening', 'opening_v',
+                'slip', 'f_norm', 'f_pull', 'fc_norm', 'gc_norm', 'f_drawer',
+                'tq_x', 'tq_y', 'tq_z', 'tq_norm',
+                'rot_conv_err_deg', 'stage_vs_fk_err', 'cmd_lag',
+                'e_par', 'e_perp', 'base_drift',
+                'base_dyaw_deg', 'track_err', 'limit_margin'] + ARM
     log, events, stop_reason = [], [], 'sim_limit'
     prev_ov, prev_ov_t = None, None
     rot_err_max, stage_fk_err_max = 0.0, 0.0
@@ -615,6 +641,12 @@ def main():
                     snapshot_done = True
                     print('[drawer] 快照取得模式：已記錄同步快照，**未建立連接**',
                           flush=True)
+                elif a.no_attach:
+                    # 照常記錄同步快照，**但不建立固定關節**，也不設 coupled
+                    info['attach_frames'], _ = frames()
+                    info['no_attach'] = True
+                    print('[drawer] 診斷模式：已記錄同步快照，'
+                          '**未建立夾爪—抽屜固定關節**，繼續重播', flush=True)
                 elif GRASP_MODEL == 'fixed_attachment':
                     info['attach_frames'] = attach()
                     if ALIGN_REF is not None:
@@ -730,6 +762,16 @@ def main():
             except Exception as e:
                 raise MonitorFailure('finger_contact', repr(e))
         fc_n = float(np.linalg.norm(fc))
+        try:
+            gcm = np.array(grip_v.get_contact_force_matrix(dt=a.physics_dt))
+            gc = gcm.reshape(-1, 3).sum(axis=0)
+            if not np.all(np.isfinite(gc)):
+                raise MonitorFailure('gripper_contact', f'非有限值 {gc}')
+        except MonitorFailure:
+            raise
+        except Exception as e:
+            raise MonitorFailure('gripper_contact', repr(e))
+        gc_n = float(np.linalg.norm(gc))
         # **依抽屜動力學重建的軸向外力估計** F̂ = m·â + m·d·v。
         # 這是重建值，不是拉力的直接量測：它依賴阻尼模型（線性阻尼 d）、
         # 速度的差分，以及「軸向沒有其他作用力」這個假設。
@@ -783,7 +825,8 @@ def main():
         node.farr(node.gr_pub, [t, slip[0], slip[1], slip[2], slip_n,
                                 1.0 if coupled else 0.0])
         node.farr(node.ct_pub, [t, f_world[0], f_world[1], f_world[2], f_norm,
-                                f_pull, fc[0], fc[1], fc[2], fc_n, f_drawer])
+                                f_pull, fc[0], fc[1], fc[2], fc_n,
+                                gc[0], gc[1], gc[2], gc_n, f_drawer])
         js = JointState(); js.header.stamp.sec = sec
         js.header.stamp.nanosec = min(nsec, 999999999)
         js.name = names; js.position = [float(v) for v in qm]
@@ -795,15 +838,22 @@ def main():
             ps.pose.orientation.z = [float(v) for v in tcp_q]
         node.tcp_pub.publish(ps)
 
+        # 欄名與資料列長度必須一致 —— 曾經只加欄名沒加值，讓其後欄位全部錯位，
+        # 事後讀到的「track_err」其實是 limit_margin。這裡每步檢查一次。
         log.append([round(t, 4), ph, applied_seq, round(opening, 6),
                     round(opening_v, 5), round(slip_n, 6), round(f_norm, 4),
-                    round(f_pull, 4), round(fc_n, 4), round(f_drawer, 5),
+                    round(f_pull, 4), round(fc_n, 4), round(gc_n, 4),
+                    round(f_drawer, 5),
                     round(tq_world[0], 4), round(tq_world[1], 4),
                     round(tq_world[2], 4), round(tq_norm, 4),
                     round(rot_err, 5), round(stage_fk_err, 6), round(lag, 6),
                     round(e_par, 6), round(e_perp, 6), round(drift, 5),
                     round(math.degrees(dyaw), 4), round(trk, 5), round(lm, 5)]
                    + [round(float(v), 6) for v in qa])
+
+        if len(log) == 1 and len(log[0]) != len(LOG_COLS):
+            raise RuntimeError(f'log 欄名 {len(LOG_COLS)} 個 vs 資料列 '
+                               f'{len(log[0])} 個 —— 欄位錯位，中止')
 
         # --- 到位判定 ---
         if abs(opening - TARGET) <= float(TOL['opening_m']):
@@ -824,7 +874,11 @@ def main():
         else:
             f_over_n = 0
         stop = None
-        if a.stop_at_opening_m > 0 and opening >= a.stop_at_opening_m:
+        if (a.stop_at_cmd_t > 0 and snap is not None
+                and snap[1] >= a.stop_at_cmd_t):
+            # 依**指令進度**收尾（t_sched），不依賴抽屜是否真的移動
+            stop = 'diagnostic_cmd_progress'
+        elif a.stop_at_opening_m > 0 and opening >= a.stop_at_opening_m:
             # 診斷用的區間上限：命令序列與完整版相同，只是提前收尾
             stop = 'diagnostic_opening_limit'
         elif snapshot_done:
@@ -869,7 +923,8 @@ def main():
 
         if stop is not None:
             handling = ('release_coupling_then_freeze'
-                        if stop == 'diagnostic_opening_limit'
+                        if stop in ('diagnostic_opening_limit',
+                                    'diagnostic_cmd_progress')
                         else CASE['stop_handling'].get(
                             stop, CASE['stop_handling']['default']))
             print(f'[drawer] 停止：{stop}（處置 {handling}）@ sim {t:.3f}', flush=True)
@@ -963,8 +1018,11 @@ def main():
                      'v1 那次量到的 65.4 N 峰值不因為只出現一次就無害。')},
         'f_norm_peak': {'N': f_peak, 'sim_t': f_peak_t, 'phase': f_peak_ph},
         'diagnostic': {
-            'is_diagnostic': bool(a.drawer_no_gravity or a.stop_at_opening_m > 0),
+            'is_diagnostic': bool(a.drawer_no_gravity or a.stop_at_opening_m > 0
+                                  or a.no_attach or a.stop_at_cmd_t > 0),
             'drawer_no_gravity': bool(a.drawer_no_gravity),
+            'no_attach': bool(a.no_attach),
+            'stop_at_cmd_t': a.stop_at_cmd_t,
             'stop_at_opening_m': a.stop_at_opening_m,
             'gravity_disabled_prims': [k for k, v in grav_state.items() if v is True],
             'rigid_body_count': len(grav_state),
@@ -998,12 +1056,7 @@ def main():
         'cb': {'arm': node.arm_cb_n, 'arm_rejected': node.arm_cb_rej,
                'gripper': node.g_cb_n, 'phase': node.p_cb_n},
         'cpu_temp_c': tc, 'cpu_temp_source': tsrc, 'cpu_limit_c': CPU_LIMIT,
-        'log_cols': ['t', 'phase', 'applied_seq', 'opening', 'opening_v',
-                     'slip', 'f_norm', 'f_pull', 'fc_norm', 'f_drawer',
-                     'tq_x', 'tq_y', 'tq_z', 'tq_norm',
-                     'rot_conv_err_deg', 'stage_vs_fk_err', 'cmd_lag',
-                     'e_par', 'e_perp', 'base_drift',
-                     'base_dyaw_deg', 'track_err', 'limit_margin'] + ARM,
+        'log_cols': LOG_COLS,
         'rot_conv_err_max_deg': rot_err_max,
         'stage_vs_fk_err_max_m': stage_fk_err_max,
         'log': log,
