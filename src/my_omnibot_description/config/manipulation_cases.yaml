@@ -168,12 +168,15 @@ cases:
     # align 相位（只在對準版出現）：engage 之後把命令從舊的（帶偏移）設定點
     # 平順帶到以實際抓取關係反推的對準首點。笛卡兒參考連續不代表關節命令連續，
     # 所以要有這一段，而不是直接切換；也不能在固定連接後繼續追逐舊設定點。
-    phases: [approach, engage, align, pull, hold, release, retreat]
+    # align       （舊交接）engage 後把命令斜坡帶到 IK 首點 —— 兩趟皆在此觸發超力
+    # postengage  （新交接）engage 後**保留原保持命令**一段，再疊加拉開增量
+    phases: [approach, engage, align, postengage, pull, hold, release, retreat]
     # ---- 逾時（模擬時間）----
     timeout_s:
       approach: 30.0
       engage: 10.0
       align: 10.0
+      postengage: 15.0
       pull: 60.0
       hold: 10.0
       release: 10.0

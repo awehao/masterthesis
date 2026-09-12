@@ -56,6 +56,18 @@ ap.add_argument('--pull-time-scale', type=float, default=1.0,
 # 對準版：以某一趟 engage 當下的**實際**抓取關係反推拉開參考。
 ap.add_argument('--align-from', default='',
                 help='取 engage 快照的既有趟次目錄（evaluation/runs/<id>）')
+# 交接策略：
+#   align   （舊）engage 後把命令從 q_hold 斜坡帶到 q_geo(0)。兩趟都在此觸發超力。
+#   offset  （新）**保留連接前的保持命令**，只疊加拉開增量：
+#               q_cmd(s) = q_hold + [ q_geo(s) − q_geo(0) ]   ⇒  q_cmd(0) = q_hold
+#           連接後不把舊命令拉到量測角或 IK 首點；偏置**取一次**，不每步更新。
+#           這是「保留初始命令偏置的增量交接」，**不是已辨識的重力補償**，
+#           也不保證該偏置在整段行程都適用。
+ap.add_argument('--handover', default='align', choices=('align', 'offset'))
+ap.add_argument('--postengage-hold-s', type=float, default=1.0,
+                help='offset 模式：engage 後先以**原命令**保持這麼久再開始疊加增量')
+ap.add_argument('--pull-target-m', type=float, default=0.0,
+                help='>0 時覆寫本趟的目標開度（有界交接驗證用）')
 ap.add_argument('--align-ramp-s', type=float, default=0.5,
                 help='engage 後把命令從舊設定點平順帶到對準首點的時間')
 ap.add_argument('--check-stride', type=int, default=5,
@@ -73,6 +85,10 @@ Q_START = np.array([float(POSES[CASE['pregrasp']['start_config']][j]) for j in A
 
 DR = CASE['drawer']
 TARGET = float(DR['target_opening_m'])
+TARGET_FULL = TARGET
+if a.pull_target_m > 0:
+    TARGET = float(a.pull_target_m)
+    print(f'**本趟目標開度覆寫為 {TARGET*1000:.1f} mm**（案例值 {TARGET_FULL*1000:.1f} mm）')
 BACK_A = float(DR['approach_backoff_m'])
 BACK_R = float(DR['retreat_backoff_m'])
 VMAX = float(DR['vel_max_rps']); AMAX = float(DR['acc_max_rps2'])
@@ -250,7 +266,31 @@ PK = float(a.pull_time_scale)
 # 先用原速產生（含收斂式縮放），**再依 q_new(t) = q_old(t/k) 精確重取樣**。
 # 不能直接把規劃上限改成 vmax/k、amax/k² —— 那樣收斂式縮放會對兩個版本各自
 # 再乘一個不同的係數，實測時間比值變成 2.034 而不是 2.000，就不是單變數了。
-if ALIGN is not None:
+if ALIGN is not None and a.handover == 'offset':
+    # **保留連接前的保持命令**：q_cmd(s) = q_hold + [q_geo(s) − q_geo(0)]
+    # 偏置只算一次，不每步更新。engage 後先以原命令保持一段，再從零速度加增量。
+    Q_HOLD = seed.copy()
+    Q_GEO0 = Qp[0].copy()
+    OFFS = Q_HOLD - Q_GEO0
+    Qp = Qp + OFFS                       # 幾何路徑整條平移，形狀與弧長不變
+    for q in dwell(Q_HOLD, a.postengage_hold_s, HZ):
+        rows.append(('postengage', '', q, f_hold, 0.0))
+    HANDOVER = {
+        'mode': 'offset',
+        'q_hold': Q_HOLD.tolist(),
+        'q_geo_0': Q_GEO0.tolist(),
+        'offset_rad': OFFS.tolist(),
+        'offset_max_rad': float(np.abs(OFFS).max()),
+        'q_measured_at_engage': list(ALIGN.snap['q_measured']),
+        'q_hold_minus_measured_rad': float(np.abs(
+            Q_HOLD - np.array(ALIGN.snap['q_measured'])).max()),
+        'postengage_hold_s': a.postengage_hold_s,
+        'step_rad': 0.0,
+        'note': ('連接後不改寫保持命令；偏置取一次。'
+                 '**不是已辨識的重力補償**，也不保證整段行程適用'),
+    }
+    seed = Q_HOLD.copy()
+elif ALIGN is not None:
     # 笛卡兒參考連續 ≠ 關節命令連續：engage 的最後命令是舊（帶偏移）的設定點，
     # 對準首點是實際位姿對應的解，兩者差的就是那段追蹤殘差。
     # 直接切換等於在固定連接後丟一個階躍；改成用同一組 v/a 上限的斜坡帶過去，
@@ -287,7 +327,14 @@ if abs(PK - 1.0) > 1e-12:
     _b, _L = _builder(Qp, HZ)
     Qp_t, Tp = _b(VMAX / (sc_p * PK), AMAX / (sc_p * sc_p * PK * PK))
 # 開度由 TCP 的 x 反推，與軌跡同步（不是獨立給的）
-if ALIGN is not None:
+if ALIGN is not None and a.handover == 'offset':
+    # 開度由**幾何路徑**（命令扣掉一次性偏置）反算 —— 那是剛性連接下抽屜
+    # 應有的位移。命令本身帶著偏置，不等於幾何參考，兩者分開記錄。
+    for q in Qp_t:
+        T_g = K.K.fk(K.q_full(q - OFFS), 'uflite_gripper_link')
+        si, _p, _pn, _ra = ALIGN.residual(T_g)
+        rows.append(('pull', '', q, f_hold, float(np.clip(si, 0.0, TARGET))))
+elif ALIGN is not None:
     # 開度必須由**命令位姿**反算，不能用樣本序號線性內插 ——
     # Qp_t 是梯形配時的，開度不隨序號線性變化，中段會差幾十 mm，
     # 那會讓離線碰撞檢查把抽屜放在錯的位置（第一版就是這樣量到假的侵入）。
@@ -310,13 +357,16 @@ if ALIGN is not None:
     T_end = ALIGN.tcp_ref(TARGET)
     z_tool = ALIGN.gripper_ref(TARGET)[:3, 2]
     n_r = max(int(round(BACK_R / a.cart_step_m)) + 1, 2)
-    Qt, prev, sw_t = [], seed.copy(), 0
+    # 幾何解要從**幾何**終點出發；偏置稍後整段加回去
+    Qt, prev, sw_t = [], (seed - OFFS if a.handover == 'offset' else seed.copy()), 0
     for u in np.linspace(0.0, BACK_R, n_r):
         Tt = T_end.copy(); Tt[:3, 3] = T_end[:3, 3] - z_tool * u
         r, sw = K.ik_pose(Tt, prev, a.limit_margin)
         if sw: sw_t += 1
         prev = r.q[K.idx].copy(); Qt.append(prev.copy())
     Qt = np.array(Qt); qdt = np.full(n_r, TARGET)
+    if a.handover == 'offset':
+        Qt = Qt + OFFS          # 沿用同一次性偏置，維持命令連續
 else:
     Qt, qdt, sw_t = cart_path(X0 - TARGET, X0 - TARGET - BACK_R, TARGET, TARGET, seed)
 Qt_t, Tt, sc_t = time_param(Qt, VMAX, AMAX, HZ, 'retreat')
@@ -392,7 +442,29 @@ print(f'    （安全下限 −0.0611，起點 0.0 距中止線 {0.0611-a.limit_
       f'{"往正向離開，方向正確" if j3[1] >= j3[0] - 1e-12 else "**往負向，方向錯誤**"}）')
 if j3.min() < -1e-9:
     fail.append('joint3 起步往負向')
-if ALIGN is not None:
+if ALIGN is not None and a.handover == 'offset':
+    print(f'\n  交接（offset 模式：保留保持命令，疊加拉開增量）：')
+    print(f'    q_hold      {np.round(HANDOVER["q_hold"],6).tolist()}')
+    print(f'    q_geo(0)    {np.round(HANDOVER["q_geo_0"],6).tolist()}')
+    print(f'    一次性偏置  {np.round(HANDOVER["offset_rad"],6).tolist()}'
+          f'  最大 {HANDOVER["offset_max_rad"]:.6f} rad')
+    print(f'    q_hold 與 engage 量測角差 {HANDOVER["q_hold_minus_measured_rad"]:.6f} rad')
+    print(f'    engage 後以原命令保持 {a.postengage_hold_s:.1f} s，'
+          f'q_cmd(0) = q_hold（**命令零階躍**）')
+    pm = [i for i, r in enumerate(rows) if r[0] == 'pull']
+    rc, rg = [], []
+    for i in pm[::max(len(pm) // 60, 1)] + [pm[-1]]:
+        Tc = K.K.fk(K.q_full(Q[i]), 'uflite_gripper_link')
+        Tg = K.K.fk(K.q_full(Q[i] - OFFS), 'uflite_gripper_link')
+        rc.append(ALIGN.residual(Tc)[2] * 1000)
+        rg.append(ALIGN.residual(Tg)[2] * 1000)
+    print(f'\n  **命令**相對實際滑軌的絕對橫向殘差：'
+          f'中位 {np.median(rc):.4f}  max {max(rc):.4f} mm')
+    print(f'  （對照：**幾何參考**同樣算法 中位 {np.median(rg):.4f}  max {max(rg):.4f} mm）')
+    print(f'  ⇒ 幾何參考的微米級相容**不代表命令也相容**，本版命令刻意帶著'
+          f'{HANDOVER["offset_max_rad"]:.6f} rad 的保持偏置。')
+    resid = [[0.0, float(np.median(rc)), 0.0]]
+elif ALIGN is not None:
     print(f'\n  交接（engage 最後命令 → 對準首點）：')
     print(f'    關節階躍 {HANDOVER["step_rad"]:.6f} rad'
           f'（逐關節 {np.round(HANDOVER["per_joint_rad"],6).tolist()}）')
@@ -452,6 +524,9 @@ meta = {
     'alignment': (dict(ALIGN.describe(), snapshot=ALIGN.snap)
                   if ALIGN is not None else None),
     'handover': HANDOVER,
+    'handover_mode': a.handover,
+    'target_opening_used_m': TARGET,
+    'target_opening_case_m': TARGET_FULL,
     'align_residual': ([[float(v) for v in r] for r in resid]
                        if ALIGN is not None else None),
     'fail': fail,

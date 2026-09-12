@@ -59,6 +59,8 @@ ap.add_argument('--snapshot-only', action='store_true',
 ap.add_argument('--align-check', default='',
                 help='對準版軌跡的 traj_meta.json；engage 時核對實際快照是否與'
                      '產生軌跡時用的那份相符')
+ap.add_argument('--pull-target-m', type=float, default=0.0,
+                help='>0 時覆寫本趟的目標開度（有界交接驗證用），須與軌跡一致')
 ap.add_argument('--align-tol-m', type=float, default=0.002)
 ap.add_argument('--align-tol-deg', type=float, default=0.2)
 ap.add_argument('--cpu-threads', type=int, default=8)
@@ -97,6 +99,9 @@ AXIS = np.array(FRC['drawer_axis_world'], float)
 AXIS = AXIS / np.linalg.norm(AXIS)
 GRASP_MODEL = CASE['grasp_model']
 TARGET = float(CASE['drawer']['target_opening_m'])
+TARGET_CASE = TARGET
+if a.pull_target_m > 0:
+    TARGET = float(a.pull_target_m)
 CPU_LIMIT = float(CASE['cpu_limit_c'])
 F_OPEN = float(SPEC['grasp_surface']['finger_joint_open'])
 TCP_OFF = float(SPEC['grasp_surface']['tcp_offset_along_tool_z'])
@@ -118,7 +123,8 @@ print(f'[drawer] 案例 {a.case}  抓取模型 {GRASP_MODEL}')
 print(f'[drawer] sha {SHA}')
 print(f'[drawer] 停放 ({PARK[0]:.4f}, {PARK[1]:.4f}) yaw {CASE["parking"]["yaw_deg"]}°')
 print(f'[drawer] 目標開度 {TARGET:.3f} m ± {TOL["opening_m"]:.3f}，'
-      f'保持 {TOL["opening_hold_s"]:.1f} s')
+      f'保持 {TOL["opening_hold_s"]:.1f} s'
+      + (f'  **本趟覆寫，案例值 {TARGET_CASE:.3f} m**' if a.pull_target_m > 0 else ''))
 
 from isaacsim import SimulationApp                                  # noqa: E402
 _cfg = {'headless': a.headless.lower() == 'true'}
@@ -925,6 +931,8 @@ def main():
         'events': events, 'stop_reason': stop_reason,
         'sim_time_s': float(world.current_time),
         'wall_s': time.monotonic() - w0,
+        'target_opening_used_m': TARGET,
+        'target_opening_case_m': TARGET_CASE,
         'final_opening_m': final_open,
         'opening_err_m': final_open - TARGET,
         'arrived_sim_t': arrived_t,
