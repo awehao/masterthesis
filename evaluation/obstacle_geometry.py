@@ -37,8 +37,36 @@ import re
 import numpy as np
 
 
-def load_dyn_obstacles(sdf_path):
-    """回傳 {name: [(kind, params, offset_xy)]}，kind 為 'box' 或 'cyl'。"""
+AS_GENERATED_NOTE = (
+    'evaluation/isaac_bigarena_sim.py 的 read_world()，提交 983ce966（2026-09-11 09:13）'
+    '起未再更動；探索批（09-11 09:34 起）與確認批（09-12 03:59 起）皆為此版')
+
+
+def load_dyn_obstacles(sdf_path, mode='full_sdf'):
+    """回傳 {name: [(kind, params, offset_xy, (z_off, height))]}。
+
+    mode='full_sdf'
+        **SDF 檔案完整定義**：每個模型的所有 collision 區塊，並套用各自的
+        局部 pose 偏移。這是場景「設計上」是什麼。
+
+    mode='as_generated'
+        **歷史執行幾何的重建**：忠實重現該版 read_world() 的行為 ——
+
+            g = m.find('.//collision/geometry')   # find 只回傳第一個
+            e = list(g)[0]
+
+        因此每個模型**只取第一個 collision 的第一個 geometry**，且
+        **不套用 collision 的局部 pose**（匯入時物件直接放在模型 pose 上）。
+
+        這不是「正確匯入 SDF」的通用模式，而是為了評估**實際跑過的那批軌跡**
+        所重建的歷史幾何。適用版本見 AS_GENERATED_NOTE；換了生成程式就不適用，
+        必須重新確認。
+
+    兩種模式都保留，因為它們回答不同問題：完整 SDF 顯示設計與實際生成的落差，
+    as_generated 才是評估既有資料該用的幾何。
+    """
+    if mode not in ('full_sdf', 'as_generated'):
+        raise ValueError(f'未知 mode：{mode}')
     s = re.sub(r'<!--.*?-->', '', open(sdf_path).read(), flags=re.S)
     out = {}
     for m in re.finditer(r'<model name="(dyn_obs_\d+)">(.*?)</model>', s, re.S):
@@ -50,7 +78,10 @@ def load_dyn_obstacles(sdf_path):
                 raise ValueError(
                     f'{name} 的模型 {k} = {ang} 非零，本模組未處理旋轉')
         shapes = []
-        for blk in re.finditer(r'<collision[^>]*>(.*?)</collision>', body, re.S):
+        blocks = list(re.finditer(r'<collision[^>]*>(.*?)</collision>', body, re.S))
+        if mode == 'as_generated':
+            blocks = blocks[:1]          # find() 只回傳第一個
+        for blk in blocks:
             c = blk.group(1)
             cp = re.search(r'<pose>([^<]+)</pose>', c)
             p = [float(v) for v in cp.group(1).split()] if cp else [0.0] * 6
@@ -65,12 +96,16 @@ def load_dyn_obstacles(sdf_path):
             box = re.search(r'<box>\s*<size>([^<]+)</size>', c)
             cyl = re.search(r'<cylinder>\s*<radius>([^<]+)</radius>\s*'
                             r'<length>([^<]+)</length>', c, re.S)
+            # as_generated：匯入器把物件直接放在模型 pose，未套用 collision
+            # 的局部偏移，所以這裡也不能套用。
+            off = (0.0, 0.0) if mode == 'as_generated' else (p[0], p[1])
+            zc = 0.0 if mode == 'as_generated' else p[2]
             if box:
                 a, b, h = [float(v) for v in box.group(1).split()]
-                shapes.append(('box', (a / 2.0, b / 2.0), (p[0], p[1]), (p[2], h)))
+                shapes.append(('box', (a / 2.0, b / 2.0), off, (zc, h)))
             elif cyl:
-                shapes.append(('cyl', (float(cyl.group(1)),), (p[0], p[1]),
-                               (p[2], float(cyl.group(2)))))
+                shapes.append(('cyl', (float(cyl.group(1)),), off,
+                               (zc, float(cyl.group(2)))))
             else:
                 raise ValueError(
                     f'{name} 的 collision 幾何不支援：{kinds}（只支援 box / cylinder）')

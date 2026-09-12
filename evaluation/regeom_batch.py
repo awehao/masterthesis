@@ -8,17 +8,24 @@
 每趟都要通過執行期姿態檢查與資料完整性檢查；不通過就標記**不可評估**，
 不退回舊公式、不略過物件。
 """
-import csv, glob, hashlib, json, math, os, re, sys
+import argparse, csv, glob, hashlib, json, math, os, re, sys
 import numpy as np, yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from obstacle_geometry import (load_dyn_obstacles, surface_distance,
-                               check_height_cover, assert_no_rotation_in_run)
+                               check_height_cover, assert_no_rotation_in_run,
+                               AS_GENERATED_NOTE)
 from rclpy.serialization import deserialize_message
 from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
 from geometry_msgs.msg import PoseStamped
 
 WS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(WS, 'evaluation/results/geom_v2')
+ap = argparse.ArgumentParser()
+ap.add_argument('--glob', default='evaluation/runs/*c10_s*',
+                help='可用逗號分隔多個模式（Python glob 不支援大括號展開）')
+ap.add_argument('--out', default='evaluation/results/geom_v3')
+ap.add_argument('--label', default='confirm40')
+A = ap.parse_args()
+OUT = os.path.join(WS, A.out, A.label)
 SDF = os.path.join(WS, 'src/ammr_bringup/worlds/bigarena.sdf')
 TRAJ = os.path.join(WS, 'src/ammr_bringup/config/'
                         'dynamic_trajectories_bigarena_traffic_v3.yaml')
@@ -39,7 +46,10 @@ def yaw_of(q):
     return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
 
-SHAPES = load_dyn_obstacles(SDF)
+# 三版幾何並存：舊圓盤（YAML 外接圓）、SDF 完整定義、歷史執行幾何。
+# 評估這批實際跑過的軌跡要用 as_generated；full_sdf 只用來顯示場景漏建的落差。
+SH_FULL = load_dyn_obstacles(SDF, 'full_sdf')
+SHAPES = load_dyn_obstacles(SDF, 'as_generated')
 YR = {d['name']: float(d['radius'])
       for d in yaml.safe_load(open(TRAJ))['dynamic_obstacles']}
 for n, sh in SHAPES.items():
@@ -49,7 +59,12 @@ for n, sh in SHAPES.items():
 
 version = dict(
     schema='geom_reeval/1',
-    metric='依 SDF 碰撞幾何與真值位姿計算的底盤圓盤最小取樣間距',
+    metric='依**實際生成**的碰撞幾何與真值位姿計算的底盤圓盤最小取樣間距',
+    geometry_mode='as_generated',
+    as_generated_note=AS_GENERATED_NOTE,
+    also_reported=['old_disc（YAML 外接圓，歷史度量）',
+                   'full_sdf（SDF 完整定義，顯示場景漏建的落差）'],
+    label=A.label, run_glob=A.glob,
     robot_disc_radius_m=R_ROB,
     sdf=os.path.relpath(SDF, WS), sdf_sha=sha(SDF),
     traj_yaml_sha=sha(TRAJ),
@@ -67,16 +82,27 @@ for k in ('metric', 'sdf_sha', 'traj_yaml_sha', 'obstacle_geometry_sha',
 
 # ---- 1) 清單 ---------------------------------------------------------------
 runs = []
-for d in sorted(glob.glob(os.path.join(WS, 'evaluation/runs/*c10_s*'))):
+_dirs = []
+for _g in A.glob.split(','):
+    _dirs += glob.glob(os.path.join(WS, _g.strip()))
+for d in sorted(set(_dirs)):
     b = os.path.basename(d)
     m = re.search(r'c10_s(\d+)_(r\d)_(off|on)_', b)
-    if not m:
-        continue
+    if m:
+        seed, rep, cond = int(m.group(1)), m.group(2), m.group(3)
+    else:
+        m2 = re.search(r'__seed(\d+)__', b)
+        if not m2:
+            continue
+        seed = int(m2.group(1))
+        cond = 'on' if 'heading' in b else 'off'
+        rep = 'x'
+        m = True
     aborted = os.path.exists(os.path.join(d, 'ABORTED.md'))
     has_bag = os.path.exists(os.path.join(d, 'bag', 'metadata.yaml'))
     has_res = os.path.exists(os.path.join(d, 'isaac_run.json'))
-    runs.append(dict(dir=d, name=b, seed=int(m.group(1)), rep=m.group(2),
-                     cond=m.group(3), aborted=aborted,
+    runs.append(dict(dir=d, name=b, seed=seed, rep=rep,
+                     cond=cond, aborted=aborted,
                      has_bag=has_bag, has_result=has_res))
 print(f'\n清單：共 {len(runs)} 趟')
 print(f'  標記 ABORTED：{sum(r["aborted"] for r in runs)}')
@@ -131,15 +157,18 @@ for r in runs:
         continue
     r['evaluable'] = True; r['reason'] = ''
 
-    old_all, new_all = {}, {}
-    for n, A in obs.items():
-        ox = np.interp(s[:, 0], A[:, 0], A[:, 1])
-        oy = np.interp(s[:, 0], A[:, 0], A[:, 2])
+    old_all, new_all, full_all = {}, {}, {}
+    for n, B in obs.items():
+        ox = np.interp(s[:, 0], B[:, 0], B[:, 1])
+        oy = np.interp(s[:, 0], B[:, 0], B[:, 2])
         old_all[n] = np.hypot(s[:, 1] - ox, s[:, 2] - oy) - YR[n] - R_ROB
         new_all[n] = surface_distance(s[:, 1], s[:, 2], ox, oy, SHAPES[n]) - R_ROB
+        full_all[n] = surface_distance(s[:, 1], s[:, 2], ox, oy, SH_FULL[n]) - R_ROB
     o_min = {n: float(v.min()) for n, v in old_all.items()}
     n_min = {n: float(v.min()) for n, v in new_all.items()}
+    f_min = {n: float(v.min()) for n, v in full_all.items()}
     o_who = min(o_min, key=o_min.get); n_who = min(n_min, key=n_min.get)
+    f_who = min(f_min, key=f_min.get)
 
     # 不受幾何影響的項目（回歸核對用）
     dt = s[2:, 0] - s[:-2, 0]
@@ -156,8 +185,14 @@ for r in runs:
         ang_med=float(np.median(ang[mv])), ang_lt15=float((ang[mv] < 15).mean() * 100),
         turn_abs_deg=float(np.degrees(np.abs(dyaw).sum())),
         old_disc_min=o_min[o_who], old_disc_who=o_who,
-        new_sdf_min=n_min[n_who], new_sdf_who=n_who,
-        delta=n_min[n_who] - o_min[o_who], n_samples=len(s)))
+        full_sdf_min=f_min[f_who], full_sdf_who=f_who,
+        exec_min=n_min[n_who], exec_who=n_who,
+        t_exec_min=float(s[int(np.argmin(new_all[n_who])), 0] - t0),
+        d_exec_lt_050=int((new_all[n_who] < 0.050).sum()),
+        d_exec_lt_020=int((new_all[n_who] < 0.020).sum()),
+        d_exec_lt_005=int((new_all[n_who] < 0.005).sum()),
+        delta_old=n_min[n_who] - o_min[o_who],
+        delta_full=n_min[n_who] - f_min[f_who], n_samples=len(s)))
 
     # 遭遇事件：以**新**距離重新辨識，門檻不變
     vxb = vx * np.cos(yaw) + vy * np.sin(yaw)
