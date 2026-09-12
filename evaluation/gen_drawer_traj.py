@@ -47,6 +47,11 @@ ap.add_argument('--engage-settle-s', type=float, default=2.0,
                 help='連接前的沉降時間；事件在這段的**最後**才發')
 ap.add_argument('--release-settle-s', type=float, default=1.0)
 ap.add_argument('--settle-s', type=float, default=1.0)
+# 單變數試驗用：只把**拉開段**的時間放大這個倍率，關節路徑完全不變。
+#   q_new(t) = q_old(t/k)  ⇒  v_new = v_old/k，a_new = a_old/k²
+# 實作方式是把該段的規劃上限改成 vmax/k 與 amax/k²，其餘段一律不動。
+ap.add_argument('--pull-time-scale', type=float, default=1.0,
+                help='拉開段時間倍率（1.0 = 不變，2.0 = 拉長兩倍）')
 ap.add_argument('--check-stride', type=int, default=5,
                 help='幾何檢查的取樣間隔（1 = 每點都查）')
 ap.add_argument('--hard', type=float, default=0.005, help='規劃器拒絕門檻 m')
@@ -143,21 +148,27 @@ def _fit(build, vmax, amax, hz, tag):
     return Q, T * scale, scale
 
 
-def time_param(Q_path, vmax, amax, hz, tag='cart'):
-    """用 ∞-範數關節弧長當單一自由度，餵給已凍結的 trapezoid 取回 s(t)。"""
-    if len(Q_path) < 2:
-        return Q_path.copy(), 0.0, 1.0
+def _builder(Q_path, hz):
+    """回傳 (build, L)：build(vm, am) 產生該路徑在這組上限下的配時軌跡。"""
     seg = np.abs(np.diff(Q_path, axis=0)).max(axis=1)
     u = np.concatenate([[0.0], np.cumsum(seg)])
     L = float(u[-1])
-    if L < 1e-12:
-        return Q_path[:1].copy(), 0.0, 1.0
 
     def build(vm, am):
         Sq, T = trapezoid(np.zeros(6), np.array([L, 0, 0, 0, 0, 0]), vm, am, hz)
         s = Sq[:, 0]
         return np.stack([np.interp(s, u, Q_path[:, j]) for j in range(6)],
                         axis=1), float(T)
+    return build, L
+
+
+def time_param(Q_path, vmax, amax, hz, tag='cart'):
+    """用 ∞-範數關節弧長當單一自由度，餵給已凍結的 trapezoid 取回 s(t)。"""
+    if len(Q_path) < 2:
+        return Q_path.copy(), 0.0, 1.0
+    build, L = _builder(Q_path, hz)
+    if L < 1e-12:
+        return Q_path[:1].copy(), 0.0, 1.0
     return _fit(build, vmax, amax, hz, tag)
 
 
@@ -200,7 +211,18 @@ for i, q in enumerate(_eng):
                  (f_hold if last else F_OPEN), 0.0))
 
 Qp, qdp, sw_p = cart_path(X0, X0 - TARGET, 0.0, TARGET, seed)
+PK = float(a.pull_time_scale)
+# 先用原速產生（含收斂式縮放），**再依 q_new(t) = q_old(t/k) 精確重取樣**。
+# 不能直接把規劃上限改成 vmax/k、amax/k² —— 那樣收斂式縮放會對兩個版本各自
+# 再乘一個不同的係數，實測時間比值變成 2.034 而不是 2.000，就不是單變數了。
 Qp_t, Tp, sc_p = time_param(Qp, VMAX, AMAX, HZ, 'pull')
+if abs(PK - 1.0) > 1e-12:
+    # 用原速版**收斂後**的係數 sc_p 再乘 k，直接產生 —— 梯形剖面在
+    # (v/k, a/k²) 下的時長正好是 k 倍、形狀正好是 s(t/k)。
+    # 不用「對離散樣本做時間內插」的做法：線性內插一條已經離散的剖面，
+    # 二階差分會在原本的取樣節點上出現假尖峰（量到 0.3485 而不是 0.1742）。
+    _b, _L = _builder(Qp, HZ)
+    Qp_t, Tp = _b(VMAX / (sc_p * PK), AMAX / (sc_p * sc_p * PK * PK))
 # 開度由 TCP 的 x 反推，與軌跡同步（不是獨立給的）
 for q in Qp_t:
     x = float(K.tcp_world(q)[1, 3] - PARK[1])
@@ -238,6 +260,12 @@ print(f'  規劃用的時間縮放 reach {sc_r:.4f} / approach {sc_a:.4f} / '
       f'pull {sc_p:.4f} / retreat {sc_t:.4f}（1.0 = 未縮放）')
 print(f'\n  實際最大關節速度   {np.round(vmax_got,4).tolist()}  上限 {VMAX}')
 print(f'  實際最大關節加速度 {np.round(amax_got,4).tolist()}  上限 {AMAX}')
+if PK != 1.0:
+    pm = np.array([r[0] == 'pull' for r in rows])
+    pv, pa = _measure(Q[pm], HZ)
+    print(f'  拉開段時間倍率 {PK:.3f}：該段實際速度 {pv.max():.4f}'
+          f'（原速版的 1/{PK:.3f} ⇒ 應 ≈ {0.3492/PK:.4f}）、'
+          f'加速度 {pa.max():.4f}（應 ≈ {0.6969/(PK*PK):.4f}）')
 fail = []
 if vmax_got.max() > VMAX + 1e-6:
     fail.append(f'速度超限 {vmax_got.max():.4f} > {VMAX}')
@@ -306,6 +334,7 @@ meta = {
     'phases': {p: {'i0': i0, 'i1': i1, 't0': float(TS[i0]), 't1': float(TS[i1])}
                for p, (i0, i1) in ph_span.items()},
     'limits': {'vel_max_rps': VMAX, 'acc_max_rps2': AMAX},
+    'pull_time_scale': PK,
     'time_scale': {'reach': sc_r, 'approach': sc_a, 'pull': sc_p, 'retreat': sc_t},
     'measured': {'vel_max_per_joint': vmax_got.tolist(),
                  'acc_max_per_joint': amax_got.tolist(),

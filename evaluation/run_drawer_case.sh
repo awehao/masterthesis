@@ -36,7 +36,7 @@ say "=== 抽屜案例 RUN_ID=$RUN_ID CASE=$CASE domain=${ROS_DOMAIN_ID:-未設} 
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 
 say "[1/6] 產生並驗證軌跡"
-if ! python3 -u evaluation/gen_drawer_traj.py --case "$CASE" --out "$DIR/traj" \
+if ! python3 -u evaluation/gen_drawer_traj.py --case "$CASE" --out "$DIR/traj" --pull-time-scale "${PULL_SCALE:-1.0}" \
      2>&1 | tee "$DIR/traj_gen.log" | tee -a "$LOG" >/dev/null; then
     say "**軌跡驗證未通過，中止（不啟動模擬器）**"; exit 2
 fi

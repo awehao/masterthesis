@@ -193,6 +193,10 @@ cases:
     stop_handling:
       default: freeze_setpoint
       contact_force: release_coupling_then_freeze
+      # 監看失效（溫度或力讀不到）**不是**「沒有超限」。讀不到就代表我們不知道
+      # 現在的力或溫度，所以走保守處置，與「量到超限」分開記錄。
+      # 啟動前會先確認每一個監看量都讀得到，讀不到就不開始跑；暖機階段也納入監看。
+      monitor_failure: release_coupling_then_freeze
     stop_on:
       - base_drift                  # 底盤位移或轉角超過容差（底盤必須固定）
       - joint_limit_margin          # 任一關節離安全限位小於 0.050 rad
@@ -219,7 +223,9 @@ cases:
       drawer_axis_world: [0.0, -1.0, 0.0]
       # 交叉核對：由抽屜自身運動推得的拉力 F_drawer = m·a + m·d·v + F_friction。
       # 兩者相符是旁證，**不等於逐筆對應**；不相符就兩個都報並說明各是什麼。
-      cross_check: drawer_dynamics
+      # **依抽屜動力學重建的軸向外力估計**，不是拉力的直接量測。
+      # 依賴線性阻尼模型、速度差分，以及「軸向無其他作用力」的假設。
+      cross_check: drawer_dynamics_reconstruction
       # 接觸力查詢必須明確帶 dt = physics_dt。預設 dt = 1.0 回傳的是**衝量**，
       # 不是力（已由 isaac_drawer_probe.py 用已知質量的方塊實測核對）。
       contact_dt: physics_dt
@@ -229,21 +235,26 @@ cases:
       # 手腕傳遞力兩版都存在，而且是會造成損壞的那個量。
       abort_on: wrist_transmitted_force_norm
       abort_threshold_n: 30.0
-      # **這一項是看到資料之後才加的，記在這裡而不是悄悄改門檻。**
-      # 2026-09-12 第一趟 fixed 版：建立固定關節的**那一個物理步**量到 65.4 N，
-      # 前後樣本都在 3.7–8.7 N，1331 個樣本裡只有 1 個超過 30 N。那是求解器
-      # 建立約束的瞬時暫態，不是持續負載。
-      # 門檻 30 N **未改動**；改的是判定方式：要連續超過這麼久才算。
+      # 中止判準有**兩個版本**，不是同一個判準的兩種判讀：
+      #   v1_instantaneous  單一樣本超過 30 N 即停          （第 1 趟用）
+      #   v2_sustained      需連續超過 30 N 達 0.05 s 才停  （第 2 趟起用）
+      #
+      # **v2 相對 v1 是放寬中止規則**，這一點要講清楚，不能說成「只是改判讀」。
+      # 加它的理由：2026-09-12 第 1 趟在建立固定關節的那一個物理步量到 65.4 N，
+      # 前後樣本都在 3.7–8.7 N，1331 個樣本裡只有 1 個超過 30 N。
+      # 但「只出現一次」**不等於無害** —— 65.4 N 遠高於門檻，那個峰值本身仍是
+      # 需要解釋的現象，只是 v2 選擇不因單步暫態中止。
+      # 不同判準版本的趟次不可直接相提並論；輸出 JSON 會記下該趟用的版本。
       # 0.05 s 的依據：足以濾掉單步暫態，而真正的過載會在 1/20 秒內停住，
       # 這段時間手臂最多再走 0.35 rad/s × 0.05 s = 0.0175 rad。
-      # 瞬時峰值**一律記錄**（f_norm_peak），不因為不中止就不寫。
+      # 瞬時峰值一律記錄（f_norm_peak），不因為不中止就不寫。
       abort_sustained_s: 0.05
       # 已用已知外力校正過（見 §量測）：夾爪施世界 (0,0,−20) N 時，
       # joint_indices['joint6']+1 那一列的 Δ|F| = 20.109 N，誤差 0.5 %。
       # 但靜止無接觸時該列約 5.2 N，而 joint6 以下重量只有 4.05 N —— 有約 1.1 N
       # 的常數偏置未解釋。所以這個量只作**安全監看**，不是把手拉力。
       # 拉力看 f_drawer（抽屜側動力學，不依賴列號對應）。
-      pull_force_primary: f_drawer
+      pull_force_primary: f_drawer_reconstructed
       pull_force_cross_check: f_pull
     cpu_limit_c: 92.0
     # ---- 必錄項目 ----

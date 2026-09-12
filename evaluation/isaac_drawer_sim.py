@@ -122,6 +122,15 @@ from sensor_msgs.msg import JointState                              # noqa: E402
 from geometry_msgs.msg import PoseStamped                           # noqa: E402
 from std_msgs.msg import Float64MultiArray, String                  # noqa: E402
 
+class MonitorFailure(RuntimeError):
+    """監看量讀不到。**不是**「沒有超限」，兩者必須分開處置。"""
+
+    def __init__(self, what, detail=''):
+        super().__init__(f'{what}: {detail}')
+        self.what = what
+        self.detail = str(detail)
+
+
 DRAWER = '/World/drawer_unit/drawer'
 ROBOT = '/World/omni_bot'
 JOINT_ATTACH = '/World/drawer_unit/grasp_attach'
@@ -254,12 +263,77 @@ def main():
     robot.get_articulation_controller().apply_action(ArticulationAction(joint_positions=q))
     robot.set_world_pose(np.array([PARK[0], PARK[1], 0.0]), np.array(q_yaw(PARK[2])))
     print('[drawer] view initialize ...', flush=True)
+    # joint6 的反作用力列號要在暖機監看之前就決定
+    j6_row_pre = None
+    try:
+        j6_row_pre = int(robot._articulation_view._metadata.joint_indices['joint6']) + 1
+    except Exception:
+        j6_row_pre = idx['joint6'] + 1
+
     drawer_v.initialize()
     if finger_v is not None:
         finger_v.initialize()
-    print('[drawer] view 就緒，暖機 30 步', flush=True)
+
+    # --- 啟動前：確認每一個監看量都讀得到。讀不到就不要開始跑。---
+    mon0 = {}
+    tc0, tsrc0 = cpu_temp_read()
+    mon0['cpu_temp'] = {'ok': bool(tc0 is not None),
+                        'value': float(tc0) if tc0 is not None else None,
+                        'source': str(tsrc0)}
+    try:
+        F_chk = np.array(robot.get_measured_joint_forces())
+        mon0['wrist_force'] = {
+            'ok': bool(F_chk.ndim == 2 and np.all(np.isfinite(F_chk))),
+            'shape': [int(v) for v in F_chk.shape]}
+    except Exception as e:
+        mon0['wrist_force'] = {'ok': False, 'error': repr(e)}
+    try:
+        Mc = np.array(finger_v.get_contact_force_matrix(dt=a.physics_dt)) \
+            if finger_v is not None else np.zeros((1, 1, 3))
+        mon0['finger_contact'] = {'ok': bool(np.all(np.isfinite(Mc))),
+                                  'shape': [int(v) for v in Mc.shape]}
+    except Exception as e:
+        mon0['finger_contact'] = {'ok': False, 'error': repr(e)}
+    bad_mon = [k for k, v in mon0.items() if not v.get('ok')]
+    print(f'[drawer] 啟動前監看檢查 {json.dumps(mon0, ensure_ascii=False)}', flush=True)
+    if bad_mon:
+        print(f'[drawer] **監看量讀不到 {bad_mon}，不開始執行**', flush=True)
+        json.dump({'schema': 'drawer_run/2', 'case': a.case,
+                   'stop_reason': 'monitor_unavailable_at_start',
+                   'monitors': mon0, 'unavailable': bad_mon},
+                  open(os.path.join(a.out, 'drawer_run.json'), 'w'),
+                  ensure_ascii=False, indent=2)
+        return 7
+
+    print('[drawer] view 就緒，暖機 30 步（暖機同樣納入監看）', flush=True)
+    warm_fail = None
     for _ in range(30):
         world.step(render=False)
+        # 暖機階段就開始監看：不能等進了正式迴圈才開始看溫度與力
+        tcw, _srcw = cpu_temp_read()
+        if tcw is None:
+            warm_fail = ('monitor_failed_cpu_temp', '暖機中溫度讀不到')
+            break
+        if tcw >= CPU_LIMIT:
+            warm_fail = ('cpu_temp', f'暖機中 {tcw:.1f} °C')
+            break
+        try:
+            Fw = np.array(robot.get_measured_joint_forces())
+            fw = np.linalg.norm(Fw[j6_row_pre][:3]) if j6_row_pre is not None else 0.0
+        except Exception as e:
+            warm_fail = ('monitor_failed_wrist_force', repr(e))
+            break
+        if fw > float(FRC['abort_threshold_n']):
+            warm_fail = ('contact_force', f'暖機中 |F| {fw:.2f} N')
+            break
+    if warm_fail is not None:
+        print(f'[drawer] **暖機階段停止：{warm_fail[0]}（{warm_fail[1]}）**', flush=True)
+        json.dump({'schema': 'drawer_run/2', 'case': a.case,
+                   'stop_reason': warm_fail[0], 'detail': warm_fail[1],
+                   'monitors': mon0, 'phase': 'warmup'},
+                  open(os.path.join(a.out, 'drawer_run.json'), 'w'),
+                  ensure_ascii=False, indent=2)
+        return 8
 
     p0, qq0 = robot.get_world_pose()
     BASE0 = (float(p0[0]), float(p0[1]), yaw_of(qq0))
@@ -318,7 +392,17 @@ def main():
         j.CreateLocalRot1Attr().Set(Gf.Quatf(float(r.GetReal()),
                                              float(i[0]), float(i[1]), float(i[2])))
         j.CreateJointEnabledAttr().Set(True)
-        return [float(t[0]), float(t[1]), float(t[2])]
+        # 連接當下的**實際**相對位姿全部留下（含旋轉與兩端的世界位姿）：
+        # 它決定了之後的幾何相容性，事後要靠它判斷參考路徑是否與連接框架相符。
+        ta = Ma.ExtractTranslation(); ra = Ma.ExtractRotationQuat()
+        tb = Mb.ExtractTranslation(); rb = Mb.ExtractRotationQuat()
+        qz = lambda q: [float(q.GetReal())] + [float(v) for v in q.GetImaginary()]
+        return {'local_pos1': [float(t[0]), float(t[1]), float(t[2])],
+                'local_rot1_wxyz': qz(r),
+                'gripper_world_pos': [float(v) for v in ta],
+                'gripper_world_rot_wxyz': qz(ra),
+                'drawer_world_pos': [float(v) for v in tb],
+                'drawer_world_rot_wxyz': qz(rb)}
 
     def detach():
         pr = stage.GetPrimAtPath(JOINT_ATTACH)
@@ -373,7 +457,10 @@ def main():
     threading.Thread(target=ex.spin, daemon=True).start()
 
     log, events, stop_reason = [], [], 'sim_limit'
-    prev_ov, rot_err_max, model_err_max = None, 0.0, 0.0
+    prev_ov, prev_ov_t = None, None
+    rot_err_max, model_err_max = 0.0, 0.0
+    TEMP_EVERY = 50                    # 每這麼多樣本量一次溫度（0.5 s @100 Hz）
+    last_temp = tc0
     f_over_n = 0                       # 連續超過門檻的樣本數
     F_SUSTAIN = int(round(float(FRC.get('abort_sustained_s', 0.0))
                           / a.physics_dt))
@@ -392,7 +479,9 @@ def main():
     print('[drawer] 進入物理主迴圈', flush=True)
     dist_mass = 0.25 + 2 * 0.0163      # 夾爪殼 + 兩指，用於座標慣例自我核對
 
+    monitor_fail = None
     while True:
+      try:
         world.step(render=False)
         t = float(world.current_time)
         sec = int(t); nsec = int(round((t - sec) * 1e9))
@@ -417,7 +506,7 @@ def main():
                     'tcp_before': tcp_a.tolist()}
             if ev == 'engage':
                 if GRASP_MODEL == 'fixed_attachment':
-                    info['local_pos1'] = attach()
+                    info['attach_frames'] = attach()
                     coupled = True
                 else:
                     coupled = True      # friction：靠手指命令，不建關節
@@ -472,27 +561,52 @@ def main():
         exp_tcp = DA.grasp_tcp_world(SPEC, POSE, opening)
         slip = tcp_p - exp_tcp
         slip_n = float(np.linalg.norm(slip))
+        # 讀不到就拋例外，**不補零**。補零等於把「監看失效」偽裝成「力為 0」。
         try:
             F = np.array(robot.get_measured_joint_forces())
+            if F.ndim != 2 or j6_row >= F.shape[0]:
+                raise MonitorFailure('wrist_force', f'shape {F.shape} row {j6_row}')
             f_local = F[j6_row][:3]
-        except Exception:
-            f_local = np.zeros(3)
+            tq_local = F[j6_row][3:6]
+            if not np.all(np.isfinite(F[j6_row])):
+                raise MonitorFailure('wrist_force', f'非有限值 {F[j6_row]}')
+        except MonitorFailure:
+            raise
+        except Exception as e:
+            raise MonitorFailure('wrist_force', repr(e))
         f_world = l6_R @ f_local
         f_norm = float(np.linalg.norm(f_world))
         f_pull = float(AXIS @ f_world)
+        # 力矩分量：力隨開度成長而與速度無關時，要靠力矩才分得出是哪一種負載
+        # （抽屜外伸造成的傾覆力矩 vs 沿軸的推拉）。只記力分不出來。
+        tq_world = l6_R @ tq_local
+        tq_norm = float(np.linalg.norm(tq_world))
         fc = np.zeros(3)
         if finger_v is not None:
             try:
                 M = np.array(finger_v.get_contact_force_matrix(dt=a.physics_dt))
                 fc = M.reshape(-1, 3).sum(axis=0)
-            except Exception:
-                pass
+                if not np.all(np.isfinite(fc)):
+                    raise MonitorFailure('finger_contact', f'非有限值 {fc}')
+            except MonitorFailure:
+                raise
+            except Exception as e:
+                raise MonitorFailure('finger_contact', repr(e))
         fc_n = float(np.linalg.norm(fc))
-        # 抽屜側的拉力估計：F = m·a + m·d·v（m、d 都是已讀回核對過的資產參數）。
-        # 這一項**不依賴 articulation 的列號對應**，所以拿它當主要的拉力量測，
-        # 手腕反作用力當交叉核對。兩者相符是旁證，不等於逐筆對應。
-        a_dr = (opening_v - prev_ov) / a.physics_dt if prev_ov is not None else 0.0
-        prev_ov = opening_v
+        # **依抽屜動力學重建的軸向外力估計** F̂ = m·â + m·d·v。
+        # 這是重建值，不是拉力的直接量測：它依賴阻尼模型（線性阻尼 d）、
+        # 速度的差分，以及「軸向沒有其他作用力」這個假設。
+        # 它的好處是不依賴 articulation 的列號對應，可與手腕反作用力互相對照。
+        #
+        # 時間基準：engage / release 會額外呼叫一次 world.step()，那些樣本的
+        # 兩次速度量測相隔的模擬時間**不是** physics_dt。固定除以 physics_dt
+        # 會讓那幾個樣本的加速度項偏小，連帶影響峰值，所以改用實際時間差。
+        if prev_ov is not None and prev_ov_t is not None and t > prev_ov_t:
+            dt_ov = t - prev_ov_t
+            a_dr = (opening_v - prev_ov) / dt_ov
+        else:
+            dt_ov, a_dr = a.physics_dt, 0.0
+        prev_ov, prev_ov_t = opening_v, t
         f_drawer = DR_M * a_dr + DR_M * DR_D * opening_v
         # 旋轉慣例的持續比對：運動中 R 與 R^T 會分開，差角應保持在 0 附近
         T_fk = fk_tcp(qa, PARK)
@@ -505,9 +619,19 @@ def main():
         # 與「命令還沒追上」的動態落後是兩回事，不能混在 slip 裡一起看。
         model_err = float(np.linalg.norm(tcp_p - T_fk[:3, 3]))
         model_err_max = max(model_err_max, model_err)
-        # 命令對應的 TCP（把當下的命令角送進同一個 FK）與實際 TCP 的差 = 追蹤落後
-        lag = (float(np.linalg.norm(tcp_p - fk_tcp(snap[2], PARK)[:3, 3]))
-               if snap is not None else 0.0)
+        # 命令對應的 TCP 與實際 TCP 的差 = 追蹤落後，**要分解**：
+        #   e_par  = â^T e        沿滑動軸（抽屜可以讓開的方向）
+        #   e_perp = e − â e_par  垂直滑動軸（滑動關節會剛性抵抗的方向）
+        # 總落後 5–6 mm **不等於**橫向偏離 5–6 mm；要判斷高力是否隨橫向誤差
+        # 增加，只能看 e_perp，不能用總誤差推論。
+        if snap is not None:
+            e_vec = tcp_p - fk_tcp(snap[2], PARK)[:3, 3]
+            e_par = float(AXIS @ e_vec)
+            e_perp_v = e_vec - AXIS * e_par
+            e_perp = float(np.linalg.norm(e_perp_v))
+            lag = float(np.linalg.norm(e_vec))
+        else:
+            e_par, e_perp, lag = 0.0, 0.0, 0.0
         bp, bq = robot.get_world_pose()
         drift = math.hypot(float(bp[0]) - BASE0[0], float(bp[1]) - BASE0[1])
         dyaw = abs(yaw_of(bq) - BASE0[2])
@@ -535,8 +659,10 @@ def main():
         log.append([round(t, 4), ph, applied_seq, round(opening, 6),
                     round(opening_v, 5), round(slip_n, 6), round(f_norm, 4),
                     round(f_pull, 4), round(fc_n, 4), round(f_drawer, 5),
+                    round(tq_world[0], 4), round(tq_world[1], 4),
+                    round(tq_world[2], 4), round(tq_norm, 4),
                     round(rot_err, 5), round(model_err, 6), round(lag, 6),
-                    round(drift, 5),
+                    round(e_par, 6), round(e_perp, 6), round(drift, 5),
                     round(math.degrees(dyaw), 4), round(trk, 5), round(lm, 5)]
                    + [round(float(v), 6) for v in qa])
 
@@ -581,9 +707,13 @@ def main():
             stop = 'sim_limit'
         elif time.monotonic() - w0 > a.wall_limit:
             stop = 'wall_timeout'
-        elif len(log) % 50 == 0:
-            tc, _ = cpu_temp_read()
-            if tc is not None and tc >= CPU_LIMIT:
+        elif len(log) % TEMP_EVERY == 0:
+            tc, tsrc_now = cpu_temp_read()
+            if tc is None:
+                # 讀不到不是「沒超溫」。啟動時已確認可讀，中途讀不到是監看失效。
+                raise MonitorFailure('cpu_temp', f'來源 {tsrc_now} 回傳 None')
+            last_temp = tc
+            if tc >= CPU_LIMIT:
                 stop = 'cpu_temp'
 
         if stop is not None:
@@ -615,6 +745,32 @@ def main():
                 time.sleep(sl)
             else:
                 nxt = time.monotonic()
+      except MonitorFailure as mf:
+        # 監看失效：我們**不知道**力或溫度是多少，所以走保守處置（先解除耦合），
+        # 與「量到超限」分開記錄，兩者不能混為一談。
+        monitor_fail = {'what': mf.what, 'detail': mf.detail,
+                        'sim_t': float(world.current_time)}
+        stop_reason = f'monitor_failed_{mf.what}'
+        print(f'[drawer] **監看失效：{mf.what}（{mf.detail}）** '
+              f'→ 保守處置：解除耦合後凍結', flush=True)
+        if GRASP_MODEL == 'fixed_attachment':
+            detach()
+        coupled = False
+        try:
+            qa_now = np.array([float(robot.get_joint_positions()[idx[j]]) for j in ARM])
+            frozen_q = qa_now.copy()
+            tgt = robot.get_joint_positions()
+            for j in FJ:
+                tgt[idx[j]] = F_OPEN
+            robot.get_articulation_controller().apply_action(
+                ArticulationAction(joint_positions=tgt))
+        except Exception:
+            pass
+        node.say({'stop': stop_reason, 'handling': 'release_coupling_then_freeze',
+                  'monitor_failure': monitor_fail})
+        for _ in range(20):
+            world.step(render=False)
+        break
 
     tc, tsrc = cpu_temp_read()
     dp, _ = drawer_v.get_world_poses()
@@ -634,9 +790,21 @@ def main():
                           'static_check': chk,
                           'note': ('F_pull 未扣除夾爪慣性項，是「手腕沿抽屜軸傳遞'
                                    '的力」，不是純把手拉力')},
-        'f_norm_peak': {'N': f_peak, 'sim_t': f_peak_t, 'phase': f_peak_ph,
-                        'threshold_N': float(FRC['abort_threshold_n']),
-                        'sustain_samples_required': F_SUSTAIN},
+        'abort_rule': {
+            'version': ('v1_instantaneous' if F_SUSTAIN <= 0
+                        else 'v2_sustained'),
+            'threshold_N': float(FRC['abort_threshold_n']),
+            'sustained_s': float(FRC.get('abort_sustained_s', 0.0)),
+            'sustain_samples_required': F_SUSTAIN,
+            'note': ('v2 相對 v1 是**放寬**中止規則（不只是改判讀）：v1 單一樣本'
+                     '超過即停，v2 要連續超過才停。兩者不是同一個判準，'
+                     '不同版本的趟次不可直接相提並論。'
+                     'v1 那次量到的 65.4 N 峰值不因為只出現一次就無害。')},
+        'f_norm_peak': {'N': f_peak, 'sim_t': f_peak_t, 'phase': f_peak_ph},
+        'monitors_at_start': mon0,
+        'monitor_failure': monitor_fail,
+        'temp_check_every_samples': TEMP_EVERY,
+        'last_temp_c': last_temp,
         'events': events, 'stop_reason': stop_reason,
         'sim_time_s': float(world.current_time),
         'wall_s': time.monotonic() - w0,
@@ -649,7 +817,9 @@ def main():
         'cpu_temp_c': tc, 'cpu_temp_source': tsrc, 'cpu_limit_c': CPU_LIMIT,
         'log_cols': ['t', 'phase', 'applied_seq', 'opening', 'opening_v',
                      'slip', 'f_norm', 'f_pull', 'fc_norm', 'f_drawer',
-                     'rot_conv_err_deg', 'model_err', 'cmd_lag', 'base_drift',
+                     'tq_x', 'tq_y', 'tq_z', 'tq_norm',
+                     'rot_conv_err_deg', 'model_err', 'cmd_lag',
+                     'e_par', 'e_perp', 'base_drift',
                      'base_dyaw_deg', 'track_err', 'limit_margin'] + ARM,
         'rot_conv_err_max_deg': rot_err_max,
         'model_err_max_m': model_err_max,
