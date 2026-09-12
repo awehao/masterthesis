@@ -521,6 +521,7 @@ def main():
     rot_err_max, stage_fk_err_max = 0.0, 0.0
     TEMP_EVERY = 50                    # 每這麼多樣本量一次溫度（0.5 s @100 Hz）
     last_temp = tc0
+    temp_max, temp_max_t = tc0, 0.0    # 本趟實測峰值（回報用）
     f_over_n = 0                       # 連續超過門檻的樣本數
     F_SUSTAIN = int(round(float(FRC.get('abort_sustained_s', 0.0))
                           / a.physics_dt))
@@ -817,6 +818,8 @@ def main():
                 # 讀不到不是「沒超溫」。啟動時已確認可讀，中途讀不到是監看失效。
                 raise MonitorFailure('cpu_temp', f'來源 {tsrc_now} 回傳 None')
             last_temp = tc
+            if tc > temp_max:
+                temp_max, temp_max_t = tc, t
             if tc >= CPU_LIMIT:
                 stop = 'cpu_temp'
 
@@ -917,6 +920,8 @@ def main():
         'monitor_failure': monitor_fail,
         'temp_check_every_samples': TEMP_EVERY,
         'last_temp_c': last_temp,
+        'temp_max_c': temp_max, 'temp_max_sim_t': temp_max_t,
+        'temp_start_c': tc0,
         'events': events, 'stop_reason': stop_reason,
         'sim_time_s': float(world.current_time),
         'wall_s': time.monotonic() - w0,
@@ -939,6 +944,8 @@ def main():
     }
     json.dump(out, open(os.path.join(a.out, 'drawer_run.json'), 'w'),
               ensure_ascii=False)
+    print(f'[drawer] 溫度：起 {tc0} °C，本趟峰值 {temp_max} °C @ sim {temp_max_t:.2f} s，'
+          f'中止線 {CPU_LIMIT:.0f} °C')
     print(f'[drawer] 結束 {stop_reason}  最終開度 {final_open*1000:.2f} mm '
           f'(誤差 {(final_open-TARGET)*1000:+.2f} mm)  CPU {tc} °C（{tsrc}）')
     print(f'[drawer] -> {os.path.join(a.out, "drawer_run.json")}')
