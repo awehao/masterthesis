@@ -30,6 +30,7 @@ sys.path.insert(0, HERE)
 from arm_traj import trapezoid                                     # noqa: E402
 import drawer_asset as DA                                          # noqa: E402
 import drawer_kin as DK                                            # noqa: E402
+import drawer_align as AL                                          # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--case', default='drawer_open_a_fixed')
@@ -52,6 +53,11 @@ ap.add_argument('--settle-s', type=float, default=1.0)
 # 實作方式是把該段的規劃上限改成 vmax/k 與 amax/k²，其餘段一律不動。
 ap.add_argument('--pull-time-scale', type=float, default=1.0,
                 help='拉開段時間倍率（1.0 = 不變，2.0 = 拉長兩倍）')
+# 對準版：以某一趟 engage 當下的**實際**抓取關係反推拉開參考。
+ap.add_argument('--align-from', default='',
+                help='取 engage 快照的既有趟次目錄（evaluation/runs/<id>）')
+ap.add_argument('--align-ramp-s', type=float, default=0.5,
+                help='engage 後把命令從舊設定點平順帶到對準首點的時間')
 ap.add_argument('--check-stride', type=int, default=5,
                 help='幾何檢查的取樣間隔（1 = 每點都查）')
 ap.add_argument('--hard', type=float, default=0.005, help='規劃器拒絕門檻 m')
@@ -81,6 +87,17 @@ F_CLOSED = float(CASE.get('grip', {}).get('finger_cmd_closed', 0.0))
 
 os.makedirs(a.out, exist_ok=True)
 K = DK.DrawerKin(a.urdf, SPEC, POSE, PARK)
+
+ALIGN = None
+if a.align_from:
+    _sn = AL.snapshot_from_run(a.align_from)
+    ALIGN = AL.Alignment(_sn, CASE['force']['drawer_axis_world'])
+    print(f'對準快照來自 {_sn["source_run"]}（engage @ sim {_sn["sim_t"]:.3f} s）')
+    _d = ALIGN.describe()
+    print(f'  ᴳT_D 位移 {np.round(_d["T_GD_pos"],6).tolist()}  '
+          f'模長 {_d["T_GD_pos_norm_m"]:.4f} m')
+    print(f'  抽屜基準位置 {np.round(_d["drawer_ref_pos"],6).tolist()}  '
+          f'滑軌軸 {_d["axis_world"]}')
 
 tcp0 = DA.grasp_tcp_world(SPEC, POSE, 0.0)          # 夾持點（抽屜關閉）
 X0 = float(tcp0[1] - PARK[1])                        # 底盤座標的 x
@@ -210,11 +227,57 @@ for i, q in enumerate(_eng):
                  F_OPEN if GRASP_MODEL == 'fixed_attachment' else
                  (f_hold if last else F_OPEN), 0.0))
 
-Qp, qdp, sw_p = cart_path(X0, X0 - TARGET, 0.0, TARGET, seed)
+if ALIGN is not None:
+    # 以實際抓取關係反推：ᵂT_G^ref(s) = ᵂT_D^ref(s) (ᴳT_D)⁻¹，再套 ᴳT_TCP。
+    # 首點用 s = 0 的 IK 解（與整條路徑同源），不直接用量測角，避免路徑內部不一致；
+    # 量測角與該解的差另外報出來核對。
+    n_al = max(int(round(TARGET / a.cart_step_m)) + 1, 2)
+    ss = np.linspace(0.0, TARGET, n_al)
+    Qp, prev, sw_p = [], None, 0
+    for si in ss:
+        r, sw = K.ik_pose(ALIGN.tcp_ref(si), prev, a.limit_margin)
+        if sw and prev is not None:
+            sw_p += 1
+        if not r.ok or r.pos_err > 1e-3:
+            print(f'  **對準拉開段 IK 未收斂** s={si:.4f} 殘差 {r.pos_err*1000:.3f} mm')
+        prev = r.q[K.idx].copy()
+        Qp.append(prev.copy())
+    Qp = np.array(Qp)
+    qdp = ss
+else:
+    Qp, qdp, sw_p = cart_path(X0, X0 - TARGET, 0.0, TARGET, seed)
 PK = float(a.pull_time_scale)
 # 先用原速產生（含收斂式縮放），**再依 q_new(t) = q_old(t/k) 精確重取樣**。
 # 不能直接把規劃上限改成 vmax/k、amax/k² —— 那樣收斂式縮放會對兩個版本各自
 # 再乘一個不同的係數，實測時間比值變成 2.034 而不是 2.000，就不是單變數了。
+if ALIGN is not None:
+    # 笛卡兒參考連續 ≠ 關節命令連續：engage 的最後命令是舊（帶偏移）的設定點，
+    # 對準首點是實際位姿對應的解，兩者差的就是那段追蹤殘差。
+    # 直接切換等於在固定連接後丟一個階躍；改成用同一組 v/a 上限的斜坡帶過去，
+    # 並且**不再繼續追逐舊的偏移設定點**。
+    q_from = seed.copy()
+    q_to = Qp[0].copy()
+    Qal, Tal = trapezoid(q_from, q_to, VMAX, AMAX, HZ)
+    if Tal < a.align_ramp_s and Tal > 0:
+        k_ = Tal / a.align_ramp_s
+        Qal, Tal = trapezoid(q_from, q_to, VMAX * k_, AMAX * k_ * k_, HZ)
+    elif Tal <= 0:
+        Qal = dwell(q_to, a.align_ramp_s, HZ); Tal = a.align_ramp_s
+    HANDOVER = {
+        'q_engage_cmd': q_from.tolist(), 'q_align_first': q_to.tolist(),
+        'step_rad': float(np.abs(q_to - q_from).max()),
+        'per_joint_rad': np.abs(q_to - q_from).tolist(),
+        'ramp_s': float(Tal), 'ramp_points': int(len(Qal)),
+        'q_measured_at_engage': list(ALIGN.snap['q_measured']),
+        'ik_vs_measured_rad': float(np.abs(
+            q_to - np.array(ALIGN.snap['q_measured'])).max()),
+    }
+    for q in Qal:
+        rows.append(('align', '', q, f_hold, 0.0))
+    seed = q_to.copy()
+else:
+    HANDOVER = None
+
 Qp_t, Tp, sc_p = time_param(Qp, VMAX, AMAX, HZ, 'pull')
 if abs(PK - 1.0) > 1e-12:
     # 用原速版**收斂後**的係數 sc_p 再乘 k，直接產生 —— 梯形剖面在
@@ -224,9 +287,18 @@ if abs(PK - 1.0) > 1e-12:
     _b, _L = _builder(Qp, HZ)
     Qp_t, Tp = _b(VMAX / (sc_p * PK), AMAX / (sc_p * sc_p * PK * PK))
 # 開度由 TCP 的 x 反推，與軌跡同步（不是獨立給的）
-for q in Qp_t:
-    x = float(K.tcp_world(q)[1, 3] - PARK[1])
-    rows.append(('pull', '', q, f_hold, max(0.0, X0 - x)))
+if ALIGN is not None:
+    # 開度必須由**命令位姿**反算，不能用樣本序號線性內插 ——
+    # Qp_t 是梯形配時的，開度不隨序號線性變化，中段會差幾十 mm，
+    # 那會讓離線碰撞檢查把抽屜放在錯的位置（第一版就是這樣量到假的侵入）。
+    for q in Qp_t:
+        T_g = K.K.fk(K.q_full(q), 'uflite_gripper_link')
+        si, _p, _pn, _ra = ALIGN.residual(T_g)
+        rows.append(('pull', '', q, f_hold, float(np.clip(si, 0.0, TARGET))))
+else:
+    for q in Qp_t:
+        x = float(K.tcp_world(q)[1, 3] - PARK[1])
+        rows.append(('pull', '', q, f_hold, max(0.0, X0 - x)))
 seed = Qp_t[-1].copy()
 
 for q in dwell(seed, HOLD_S, HZ):
@@ -234,7 +306,19 @@ for q in dwell(seed, HOLD_S, HZ):
 for i, q in enumerate(dwell(seed, a.release_settle_s, HZ)):
     rows.append(('release', 'release' if i == 0 else '', q, F_OPEN, TARGET))
 
-Qt, qdt, sw_t = cart_path(X0 - TARGET, X0 - TARGET - BACK_R, TARGET, TARGET, seed)
+if ALIGN is not None:
+    T_end = ALIGN.tcp_ref(TARGET)
+    z_tool = ALIGN.gripper_ref(TARGET)[:3, 2]
+    n_r = max(int(round(BACK_R / a.cart_step_m)) + 1, 2)
+    Qt, prev, sw_t = [], seed.copy(), 0
+    for u in np.linspace(0.0, BACK_R, n_r):
+        Tt = T_end.copy(); Tt[:3, 3] = T_end[:3, 3] - z_tool * u
+        r, sw = K.ik_pose(Tt, prev, a.limit_margin)
+        if sw: sw_t += 1
+        prev = r.q[K.idx].copy(); Qt.append(prev.copy())
+    Qt = np.array(Qt); qdt = np.full(n_r, TARGET)
+else:
+    Qt, qdt, sw_t = cart_path(X0 - TARGET, X0 - TARGET - BACK_R, TARGET, TARGET, seed)
 Qt_t, Tt, sc_t = time_param(Qt, VMAX, AMAX, HZ, 'retreat')
 for q in Qt_t:
     rows.append(('retreat', '', q, F_OPEN, TARGET))
@@ -308,6 +392,23 @@ print(f'    （安全下限 −0.0611，起點 0.0 距中止線 {0.0611-a.limit_
       f'{"往正向離開，方向正確" if j3[1] >= j3[0] - 1e-12 else "**往負向，方向錯誤**"}）')
 if j3.min() < -1e-9:
     fail.append('joint3 起步往負向')
+if ALIGN is not None:
+    print(f'\n  交接（engage 最後命令 → 對準首點）：')
+    print(f'    關節階躍 {HANDOVER["step_rad"]:.6f} rad'
+          f'（逐關節 {np.round(HANDOVER["per_joint_rad"],6).tolist()}）')
+    print(f'    斜坡 {HANDOVER["ramp_s"]:.3f} s / {HANDOVER["ramp_points"]} 點；'
+          f'對準首點 vs engage 量測角差 {HANDOVER["ik_vs_measured_rad"]:.6f} rad')
+    pm = [i for i, r in enumerate(rows) if r[0] == 'pull']
+    resid = []
+    for i in pm[::max(len(pm) // 60, 1)] + [pm[-1]]:
+        T_g = K.K.fk(K.q_full(Q[i]), 'uflite_gripper_link')
+        sv, perp, pn, ra = ALIGN.residual(T_g)
+        resid.append((rows[i][4] * 1000, pn * 1000, ra))
+    rr = np.array(resid)
+    print(f'\n  對準後的**絕對**殘差（基準 = 實際滑軌允許集合，未做相對消去）：')
+    print(f'    橫向偏差 中位 {np.median(rr[:,1]):.4f}  max {rr[:,1].max():.4f} mm')
+    print(f'    姿態誤差 中位 {np.median(rr[:,2]):.6f}  max {rr[:,2].max():.6f}°')
+    print(f'    （對照：未對準版 橫向 4.4394 mm、姿態 0.35208°）')
 encl = DK.enclosure_margin(SPEC)
 print(f'  手指全開包覆餘裕  {encl*1000:.2f} mm（解析值）')
 if worst['lm'][0] < a.limit_margin: fail.append('限位餘裕不足')
@@ -347,6 +448,12 @@ meta = {
                  'shell_bar_min_m': worst['shell'][0],
                  'enclosure_margin_m': encl},
     'ik_branch_switches': {'approach': sw_a, 'pull': sw_p, 'retreat': sw_t},
+    'aligned': ALIGN is not None,
+    'alignment': (dict(ALIGN.describe(), snapshot=ALIGN.snap)
+                  if ALIGN is not None else None),
+    'handover': HANDOVER,
+    'align_residual': ([[float(v) for v in r] for r in resid]
+                       if ALIGN is not None else None),
     'fail': fail,
     'pass': not fail,
     'note': ('幾何為離散取樣，不是連續碰撞證明；stride 見上。'

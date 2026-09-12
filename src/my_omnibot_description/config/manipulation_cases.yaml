@@ -165,11 +165,15 @@ cases:
     # 固定連接若還在，手臂「退出 40 mm」只會繼續把抽屜拉出來，不是退開。
     # 正常釋放與異常停止時的「不緊急鬆開」是兩種不同流程，不衝突：
     # 前者是任務完成的一步，後者是避免在失控狀態下丟開負載。
-    phases: [approach, engage, pull, hold, release, retreat]
+    # align 相位（只在對準版出現）：engage 之後把命令從舊的（帶偏移）設定點
+    # 平順帶到以實際抓取關係反推的對準首點。笛卡兒參考連續不代表關節命令連續，
+    # 所以要有這一段，而不是直接切換；也不能在固定連接後繼續追逐舊設定點。
+    phases: [approach, engage, align, pull, hold, release, retreat]
     # ---- 逾時（模擬時間）----
     timeout_s:
       approach: 30.0
       engage: 10.0
+      align: 10.0
       pull: 60.0
       hold: 10.0
       release: 10.0

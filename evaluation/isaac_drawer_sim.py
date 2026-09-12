@@ -51,10 +51,16 @@ ap.add_argument('--kp', type=float, default=1.0e5)
 ap.add_argument('--kd', type=float, default=1.0e4)
 ap.add_argument('--finger-kp', type=float, default=1.0e4)
 ap.add_argument('--finger-kd', type=float, default=1.0e3)
+ap.add_argument('--align-check', default='',
+                help='對準版軌跡的 traj_meta.json；engage 時核對實際快照是否與'
+                     '產生軌跡時用的那份相符')
+ap.add_argument('--align-tol-m', type=float, default=0.002)
+ap.add_argument('--align-tol-deg', type=float, default=0.2)
 ap.add_argument('--cpu-threads', type=int, default=8)
 a = ap.parse_args()
 
 import drawer_asset as DA                                           # noqa: E402
+import drawer_align as DAL                                         # noqa: E402
 from cpu_temp import read as cpu_temp_read                          # noqa: E402
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE                # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
@@ -90,6 +96,15 @@ CPU_LIMIT = float(CASE['cpu_limit_c'])
 F_OPEN = float(SPEC['grasp_surface']['finger_joint_open'])
 TCP_OFF = float(SPEC['grasp_surface']['tcp_offset_along_tool_z'])
 BAR = SPEC['drawer']['handle']['bar']['center']
+
+ALIGN_REF = None
+if a.align_check:
+    _m = json.load(open(a.align_check))
+    if _m.get('aligned'):
+        ALIGN_REF = _m['alignment']['snapshot']
+        print(f'[drawer] 對準版：將核對 engage 快照（來源 '
+              f'{ALIGN_REF["source_run"]}），容差 '
+              f'{a.align_tol_m*1000:.1f} mm / {a.align_tol_deg:.2f}°')
 
 os.makedirs(a.out, exist_ok=True)
 SHA = {k: hashlib.sha256(open(v, 'rb').read()).hexdigest()[:16] for k, v in
@@ -480,6 +495,7 @@ def main():
     dist_mass = 0.25 + 2 * 0.0163      # 夾爪殼 + 兩指，用於座標慣例自我核對
 
     monitor_fail = None
+    align_mismatch = False
     while True:
       try:
         world.step(render=False)
@@ -507,6 +523,30 @@ def main():
             if ev == 'engage':
                 if GRASP_MODEL == 'fixed_attachment':
                     info['attach_frames'] = attach()
+                    if ALIGN_REF is not None:
+                        af = info['attach_frames']
+                        dp = float(np.linalg.norm(
+                            np.array(af['gripper_world_pos'])
+                            - np.array(ALIGN_REF['gripper_world_pos'])))
+                        da = DAL.ang_deg(
+                            DAL.quat_R(af['gripper_world_rot_wxyz']),
+                            DAL.quat_R(ALIGN_REF['gripper_world_rot_wxyz']))
+                        dd = float(np.linalg.norm(
+                            np.array(af['drawer_world_pos'])
+                            - np.array(ALIGN_REF['drawer_world_pos'])))
+                        info['align_check'] = {
+                            'ref_run': ALIGN_REF['source_run'],
+                            'gripper_pos_diff_m': dp, 'gripper_rot_diff_deg': da,
+                            'drawer_pos_diff_m': dd,
+                            'tol_m': a.align_tol_m, 'tol_deg': a.align_tol_deg,
+                            'ok': bool(dp <= a.align_tol_m
+                                       and da <= a.align_tol_deg
+                                       and dd <= a.align_tol_m)}
+                        print(f'[drawer] 對準快照核對：夾爪位置差 {dp*1000:.4f} mm、'
+                              f'姿態差 {da:.5f}°、抽屜位置差 {dd*1000:.4f} mm '
+                              f'→ {"相符" if info["align_check"]["ok"] else "**不符**"}',
+                              flush=True)
+                        align_mismatch = not info['align_check']['ok']
                     coupled = True
                 else:
                     coupled = True      # friction：靠手指命令，不建關節
@@ -690,6 +730,10 @@ def main():
         else:
             f_over_n = 0
         stop = None
+        if align_mismatch:
+            # 實際快照與產生軌跡時用的那份不符 ⇒ 後面的參考是對錯位姿算的。
+            # 不拿錯位的參考硬跑，直接停。
+            stop = 'align_snapshot_mismatch'
         # 門檻 30 N 未變；要**連續**超過 abort_sustained_s 才中止，
         # 這樣建立約束的單步暫態不會被當成過載（見案例設定的說明）。
         if f_over_n > F_SUSTAIN:
@@ -806,6 +850,7 @@ def main():
                      '不同版本的趟次不可直接相提並論。'
                      'v1 那次量到的 65.4 N 峰值不因為只出現一次就無害。')},
         'f_norm_peak': {'N': f_peak, 'sim_t': f_peak_t, 'phase': f_peak_ph},
+        'align_ref': ALIGN_REF,
         'monitors_at_start': mon0,
         'monitor_failure': monitor_fail,
         'temp_check_every_samples': TEMP_EVERY,

@@ -78,8 +78,10 @@ class DrawerKin:
                       for _ in range(7)]
 
     # ------------------------------------------------------------------ IK
-    def _solve(self, tcp_w, seed):
-        T = np.eye(4); T[:3, :3] = R_DES_WORLD; T[:3, 3] = tcp_w
+    def _solve(self, tcp_w, seed, R=None):
+        T = np.eye(4)
+        T[:3, :3] = R_DES_WORLD if R is None else np.asarray(R, float)
+        T[:3, 3] = tcp_w
         q = np.zeros(len(self.K.dof_names))
         q[0], q[1], q[2] = self.park
         q[self.idx] = seed
@@ -90,7 +92,12 @@ class DrawerKin:
              for k in range(6)]
         return float(min(v)), int(np.argmin(v)) + 1
 
-    def ik_at(self, tcp_w, prev, min_margin=0.05):
+    def ik_pose(self, T_des, prev, min_margin=0.05):
+        """對完整 4x4 目標位姿解 IK（對準版的拉開段用）。"""
+        T_des = np.asarray(T_des, float)
+        return self.ik_at(T_des[:3, 3], prev, min_margin, R=T_des[:3, :3])
+
+    def ik_at(self, tcp_w, prev, min_margin=0.05, R=None):
         """能延續上一點的解就延續（保持關節空間連續），不能才換種子。
 
         單一種子沿路徑暖啟動會卡在一個 IK 分支；但每點獨立取「餘裕最大」的解
@@ -98,20 +105,21 @@ class DrawerKin:
         回傳 (IKResult, 是否換了分支)。
         """
         if prev is not None:
-            r = self._solve(tcp_w, prev)
+            r = self._solve(tcp_w, prev, R)
             m, _ = self.margin(r.q[self.idx])
             if r.ok and r.pos_err < 1e-3 and m >= min_margin:
                 return r, False
         best, bm = None, -1.0
         for sd in self.seeds:
-            r = self._solve(tcp_w, sd)
+            r = self._solve(tcp_w, sd, R)
             if not (r.ok and r.pos_err < 1e-3 and r.rot_err < 1e-2):
                 continue
             m, _ = self.margin(r.q[self.idx])
             if m > bm:
                 best, bm = r, m
         if best is None:
-            return self._solve(tcp_w, prev if prev is not None else self.seeds[0]), True
+            return self._solve(tcp_w, prev if prev is not None else self.seeds[0],
+                               R), True
         return best, True
 
     def q_full(self, qa):
