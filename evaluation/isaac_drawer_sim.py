@@ -509,6 +509,41 @@ def main():
               f'；相機 eye={np.round(_eye,3).tolist()} at={np.round(_at,3).tolist()}',
               flush=True)
 
+    # --- 接觸量測介面自省：**列對應哪根手指、過濾哪些物件，要有證據** ---
+    # 「指2為零」若其實是列序搞反、或過濾沒涵蓋把手，結論就整個反過來。
+    contact_introspect = None
+    if GRASP_MODEL == 'friction' and finger_v is not None:
+        def _paths(v):
+            for at in ('prim_paths', 'prims', '_prim_paths'):
+                x = getattr(v, at, None)
+                if x is None:
+                    continue
+                try:
+                    return [str(getattr(e, 'GetPath', lambda: e)()) for e in x]
+                except Exception:
+                    return [str(e) for e in x]
+            return None
+        contact_introspect = {
+            'finger_view_expr': fingers[0][:-1] + '[12]',
+            'finger_view_prim_paths_in_row_order': _paths(finger_v),
+            'contact_filter_prim_paths': [DRAWER],
+            'drawer_rigid_body_prim': DRAWER,
+            'handle_bar_collider': f'{DRAWER}/handle_bar',
+            'filter_covers_bar_note': (
+                '過濾對象是抽屜剛體；把手橫桿是它底下的碰撞形狀。'
+                '**此處只記錄設定，涵蓋與否由本趟的接觸讀數驗證**'),
+            'available_contact_methods': sorted(
+                m for m in dir(finger_v) if 'contact' in m.lower()),
+            'force_semantics_gap': (
+                'get_contact_force_matrix 回傳的是合力向量；'
+                '**本趟未證實它是否包含摩擦分量，也未取得接觸點與法向**。'
+                '列為缺口，不以分量投影冒充接觸法向／摩擦力'),
+        }
+        print('[drawer] 手指接觸 view 列序：'
+              f'{contact_introspect["finger_view_prim_paths_in_row_order"]}', flush=True)
+        print(f'[drawer] 可用接觸方法：{contact_introspect["available_contact_methods"]}',
+              flush=True)
+
     print('[drawer] world.reset() ...', flush=True)
     world.reset()
     print('[drawer] reset 完成', flush=True)
@@ -569,6 +604,50 @@ def main():
         else:
             finger_force_rb = {'source': src, 'values': got, 'gap': None}
             print(f'[drawer] 手指 drive 出力上限（執行期讀回，{src}）：{got}', flush=True)
+
+    # --- 兩指關節本身的設定讀回（含 mimic）---
+    # **看到 newton:mimicJoint 屬性不等於目前物理後端有採用**，所以分開記：
+    # 一是 USD 上宣告了什麼，二是執行期能不能證實它生效。
+    finger_joint_rb = None
+    if GRASP_MODEL == 'friction':
+        from pxr import UsdPhysics as _UP
+        finger_joint_rb = {'joints': {}, 'mimic_declared': {},
+                           'mimic_runtime_evidence': (
+                               '**本趟無法由單一組對稱命令證實 mimic 是否生效**：'
+                               '兩指收到相同命令，跟隨與獨立驅動的結果無法區分。'
+                               '可用的間接證據是逐步的兩指實際位置 —— '
+                               '一指被接觸擋住時另一指是否同步停止。列為缺口')}
+        for jn in ('finger_joint1', 'finger_joint2'):
+            jp = next((pr for pr in Usd.PrimRange.Stage(
+                stage, Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
+                if pr.GetName() == jn and pr.IsA(_UP.PrismaticJoint)), None)
+            if jp is None:
+                continue
+            J_ = _UP.PrismaticJoint(jp)
+            d = {'prim': str(jp.GetPath()), 'axis': str(J_.GetAxisAttr().Get()),
+                 'lower': float(J_.GetLowerLimitAttr().Get()),
+                 'upper': float(J_.GetUpperLimitAttr().Get()),
+                 'localRot0': [float(v) for v in (
+                     [J_.GetLocalRot0Attr().Get().GetReal()]
+                     + list(J_.GetLocalRot0Attr().Get().GetImaginary()))],
+                 'api_schemas': [str(x) for x in jp.GetAppliedSchemas()]}
+            dr = _UP.DriveAPI.Get(jp, 'linear')
+            if dr:
+                mf = dr.GetMaxForceAttr().Get()
+                d['drive_max_force_usd'] = None if mf is None else float(mf)
+            finger_joint_rb['joints'][jn] = d
+            rel = jp.GetRelationship('newton:mimicJoint')
+            if rel and rel.GetTargets():
+                finger_joint_rb['mimic_declared'][jn] = {
+                    'target': [str(t) for t in rel.GetTargets()],
+                    'schema': 'NewtonMimicAPI',
+                    'gearing': None, 'offset': None,
+                    'note': ('宣告於 USD；**本模擬選用的是 physx variant，'
+                             'Newton 專用 schema 是否被 PhysX 後端採用未經證實**')}
+        print(f'[drawer] 手指關節讀回：{json.dumps(finger_joint_rb["joints"], ensure_ascii=False)[:260]}',
+              flush=True)
+        print(f'[drawer] mimic 宣告：{json.dumps(finger_joint_rb["mimic_declared"], ensure_ascii=False)[:200]}',
+              flush=True)
 
     q = robot.get_joint_positions()
     kp = np.zeros(robot.num_dof, dtype=np.float32)
@@ -803,7 +882,13 @@ def main():
                 'base_dyaw_deg', 'track_err', 'limit_margin'] + ARM + [
                 # friction 版的量測欄；fixed 版恆為 0（**0 代表未套用該模型，
                 # 不代表量到零接觸**，兩者由 grasp_model 區分）
-                'fc1_norm', 'fc2_norm', 'f_grip_normal', 'f_grip_tangential']
+                'fc1_norm', 'fc2_norm',
+                # **不是接觸面的法向／摩擦力**：只是把接觸合力投影到
+                # 「兩指原點連線」這條閉合軸及其垂直方向。把手是圓柱，
+                # 接觸法向未必沿該軸，所以照分量本義命名。
+                'f_along_close_axis', 'f_perp_close_axis',
+                # 量測補強：兩指的命令與實際關節位置
+                'fj1_cmd', 'fj2_cmd', 'fj1_act', 'fj2_act']
     log, events, stop_reason = [], [], 'sim_limit'
     prev_ov, prev_ov_t = None, None
     rot_err_max, stage_fk_err_max = 0.0, 0.0
@@ -841,6 +926,7 @@ def main():
     snapshot_done = False
     post_stop = []
     n_step = 0
+    finger_pose_trace = []          # [t, p1xyz, p2xyz]：兩指墊世界位置逐步紀錄
     while True:
       try:
         world.step(render=False)
@@ -1009,7 +1095,15 @@ def main():
             # 摩擦夾持靠接觸傳力；**讀不到接觸資料不能當成零**
             raise MonitorFailure('finger_contact', 'friction 版缺少手指接觸 view')
         fc_n = float(np.linalg.norm(fc))
-        # 逐指：模長（中止判準）＋沿閉合軸的正向／切向分解（量測用）
+        # 兩指的命令與實際關節位置（**量測，不影響控制**）：
+        # 「手指停止移動」不等於夾住，要看實際位置與命令的關係。
+        _fs = node.fsnap
+        _fc_cmd = float(_fs[1]) if _fs is not None else float('nan')
+        fj_cmd = [_fc_cmd if j in idx else 0.0
+                  for j in ('finger_joint1', 'finger_joint2')]
+        fj_act = [float(qm[idx[j]]) if j in idx else 0.0
+                  for j in ('finger_joint1', 'finger_joint2')]
+        # 逐指：模長（中止判準）＋沿閉合軸的分量分解（**非接觸法向／摩擦**）
         fpn = fpt = 0.0
         fc_each = [0.0, 0.0]
         if per_finger is not None and GRASP_MODEL == 'friction':
@@ -1020,6 +1114,8 @@ def main():
                        float(np.linalg.norm(per_finger[1]))]
             p1, _, _ = world_T(prims['uflite_finger1'])
             p2, _, _ = world_T(prims['uflite_finger2'])
+            finger_pose_trace.append([round(t, 4), *[round(float(v), 6) for v in p1],
+                                      *[round(float(v), 6) for v in p2]])
             ax = p1 - p2
             nrm = float(np.linalg.norm(ax))
             if nrm > 1e-9:
@@ -1118,7 +1214,9 @@ def main():
                     round(math.degrees(dyaw), 4), round(trk, 5), round(lm, 5)]
                    + [round(float(v), 6) for v in qa]
                    + [round(fc_each[0], 4), round(fc_each[1], 4),
-                      round(fpn, 4), round(fpt, 4)])
+                      round(fpn, 4), round(fpt, 4),
+                      round(fj_cmd[0], 6), round(fj_cmd[1], 6),
+                      round(fj_act[0], 6), round(fj_act[1], 6)])
 
         if len(log) == 1 and len(log[0]) != len(LOG_COLS):
             raise RuntimeError(f'log 欄名 {len(LOG_COLS)} 個 vs 資料列 '
@@ -1289,6 +1387,10 @@ def main():
                                    '的力」，不是純把手拉力')},
         'grip_spec': GRIP_SPEC if GRASP_MODEL == 'friction' else None,
         'grasp_friction_readback': fric_rb,
+        'contact_introspect': contact_introspect,
+        'finger_pose_trace': finger_pose_trace if GRASP_MODEL == 'friction' else None,
+        'finger_pose_cols': ['t', 'f1x', 'f1y', 'f1z', 'f2x', 'f2y', 'f2z'],
+        'finger_joint_readback': finger_joint_rb,
         'finger_drive_force_readback': finger_force_rb,
         'finger_abort_rule': ({
             'threshold_N': FG_ABORT_N, 'basis': FG_BASIS,
