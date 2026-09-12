@@ -286,12 +286,41 @@ cases:
     grip:
       finger_cmd_closed: 0.000      # 命令全閉；橫桿 12 mm ⇒ 接觸在 0.006
       finger_cmd_open: 0.0089       # 進入／退出時全開，內距 17.8 mm
-      finger_max_force_n: 5.0       # URDF finger_joint effort 上限，不上調
-      friction_coefficient: 0.8     # 指墊／把手的物理材質，執行前選定
-      # 由上列推得的上限：2 指 × 5 N × 0.8 = 8 N 可傳遞的拉力。
-      # 抽屜 2.0 kg、線性阻尼 2.0 /s，在 0.05 m/s 下阻尼力約 0.2 N。
-      # **這是設計餘裕，不是量測結果**；實際所需拉力由 fixed 版量出來。
-      expected_pull_force_n: 8.0
-      # friction 版**額外**監看手指對把手的接觸力（get_contact_force_matrix，
-      # dt = physics_dt）。它不取代上面的手腕傳遞力中止條件，是多一項。
+      # URDF finger_joint effort 上限，不上調。
+      # **這是致動器出力的上限，不是已量到的接觸力**；兩者不可互相代替。
+      finger_max_force_n: 5.0
+      # --- 接觸摩擦：靜／動分開明訂，不只寫一個 μ ---
+      # 本版兩者同取 0.8，這是**建模假設**，不是量測值，也不對應任何實體材料。
+      # 之所以同值：沒有可依據的實測資料來區分靜／動；同值讓「滑移前」與
+      # 「滑移後」的容量不因模型選擇而跳變，把不確定性留在單一個數字上。
+      friction_static: 0.8
+      friction_dynamic: 0.8
+      friction_restitution: 0.0
+      # PhysX 的有效摩擦由**接觸雙方的材質與混合規則**共同決定，不是單方說了算。
+      # 取 min：與預設材質接觸時取較小者，是保守選擇。兩側同為 0.8 時
+      # average / min / max 都給 0.8，multiply 會給 0.64 —— 選定並記錄，不留給預設。
+      friction_combine_mode: min
+      # 材質只綁在**把手橫桿**與**兩片指墊的碰撞形狀**上，不擴及櫃體或抽屜其他面。
+      # 綁定對象必須是帶 CollisionAPI 的 prim，不是視覺模型；執行時讀回驗證。
+      friction_scope: handle_bar_and_finger_pads_collision_only
+      # **不得由下列數字推出「可拉動」的保證**：
+      # 庫侖模型 |F_切向| ≤ μ_L·N_L + μ_R·N_R，容量取決於**實際量到的兩側正向
+      # 接觸力**，且會被其他切向負載（力矩、垂直分量）佔用。
+      # 2 指 × 5 N × 0.8 = 8 N 只是**在兩側都達到 drive 上限、且摩擦容量未被佔用時**
+      # 的理想上限，不是需求量、也不是保證值。
+      # fixed 版量到的 0.1 N 軸向與 0.16 N·m 手腕力矩來自**有固定連接**的傳力路徑，
+      # 移除連接後傳力方式改變，不可直接當作摩擦夾持的需求量。
+      pull_capacity_note: ideal_upper_bound_only_not_a_requirement
+      # --- friction 版**額外**的手指接觸中止（不取代手腕傳遞力中止，是多一項）---
+      # 判準三要素明寫，不沿用手腕規則的任何一項：
+      #   basis    每一指各自對抽屜的接觸力模長（不是雙指合計、不是只取正向分量）
+      #   門檻     12.0 N，任一指超過即中止
+      #   持續時間 0.0 s＝單一樣本即中止（**最嚴格**，不是手腕那條的 50 ms）
+      # 之所以取單一樣本：靜態閉合是準靜態過程，drive 上限 5 N／指，
+      # 正常情況不應接近 12 N；真的出現就是需要知道的事件，不該被濾掉。
       finger_contact_abort_n: 12.0
+      finger_contact_abort_basis: per_finger_contact_force_norm
+      finger_contact_abort_sustained_s: 0.0
+      finger_contact_abort_rule_version: v1_instantaneous
+      # 讀不到接觸資料**不等於零**：取不到矩陣時走監看失效處置，不寫 0 繼續跑。
+      finger_contact_unreadable: treat_as_monitor_failure

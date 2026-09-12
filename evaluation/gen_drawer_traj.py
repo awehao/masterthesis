@@ -69,6 +69,10 @@ ap.add_argument('--postengage-hold-s', type=float, default=1.0,
 # 沿路徑的前饋致動補償表（由 build_ff_comp.py 產生）。
 #   q_cmd,new(s) = q_cmd,old(s) + Δq_ff(s) ，且 Δq_ff(0) = 0
 # 等價於 b(s) = b0 + Δq_ff(s)：**保留已通過的初始保持命令，b0 不會被重複加一次**。
+# 緩慢閉合：>0 時手指命令在 postengage 段由全開線性斜升到全閉，而不是一步到位。
+# 預設 0 = 維持原本的一步閉合，**不帶此旗標時軌跡與先前逐點相同**。
+ap.add_argument('--finger-close-s', type=float, default=0.0,
+                help='手指閉合斜坡長度（秒），只作用於 friction 版')
 ap.add_argument('--ff-comp', default='', help='前饋補償表 JSON')
 ap.add_argument('--ff-smooth', type=int, default=15,
                 help='Δq_ff 的置中移動平均視窗（列數，50 Hz）')
@@ -243,11 +247,14 @@ seed = Qa_t[-1].copy()
 # 頂在關閉硬限位上，量到 −147 N 沿抽屜軸的持續力。先讓命令收斂再連接。
 f_hold = F_OPEN if GRASP_MODEL == 'fixed_attachment' else F_CLOSED
 _eng = dwell(seed, a.engage_settle_s, HZ)
+RAMP = float(a.finger_close_s) if GRASP_MODEL == 'friction' else 0.0
 for i, q in enumerate(_eng):
     last = (i == len(_eng) - 1)
-    rows.append(('engage', 'engage' if last else '', q,
-                 F_OPEN if GRASP_MODEL == 'fixed_attachment' else
-                 (f_hold if last else F_OPEN), 0.0))
+    # 有斜坡時 engage 段**全程保持全開**：同步快照要在手指未接觸時取，
+    # 才與 fixed 版的對準參考取在同一個狀態。閉合留到 postengage。
+    fv = (F_OPEN if (GRASP_MODEL == 'fixed_attachment' or RAMP > 0.0)
+          else (f_hold if last else F_OPEN))
+    rows.append(('engage', 'engage' if last else '', q, fv, 0.0))
 
 if ALIGN is not None:
     # 以實際抓取關係反推：ᵂT_G^ref(s) = ᵂT_D^ref(s) (ᴳT_D)⁻¹，再套 ᴳT_TCP。
@@ -279,8 +286,16 @@ if ALIGN is not None and a.handover == 'offset':
     Q_GEO0 = Qp[0].copy()
     OFFS = Q_HOLD - Q_GEO0
     Qp = Qp + OFFS                       # 幾何路徑整條平移，形狀與弧長不變
-    for q in dwell(Q_HOLD, a.postengage_hold_s, HZ):
-        rows.append(('postengage', '', q, f_hold, 0.0))
+    _pe = dwell(Q_HOLD, a.postengage_hold_s, HZ)
+    _nr = int(round(RAMP * HZ))
+    for i, q in enumerate(_pe):
+        if RAMP > 0.0 and _nr > 0:
+            # 線性斜升：第 0 列仍為全開（與 engage 末列連續，命令無跳變）
+            u = min(1.0, i / float(_nr))
+            fv = F_OPEN + (f_hold - F_OPEN) * u
+        else:
+            fv = f_hold
+        rows.append(('postengage', '', q, fv, 0.0))
     HANDOVER = {
         'mode': 'offset',
         'q_hold': Q_HOLD.tolist(),
@@ -594,6 +609,8 @@ with open(csv_p, 'w', newline='') as f:
                    + [f'{v:.9f}' for v in r[2]] + [f'{r[3]:.6f}', f'{r[4]:.6f}'])
 meta = {
     'schema': 'drawer_traj/1', 'case': a.case, 'grasp_model': GRASP_MODEL,
+    'finger_close_ramp_s': RAMP,
+    'finger_cmd_open': F_OPEN, 'finger_cmd_closed': F_CLOSED,
     'spec_sha256_16': hashlib.sha256(open(a.spec, 'rb').read()).hexdigest()[:16],
     'cases_sha256_16': hashlib.sha256(open(a.cases, 'rb').read()).hexdigest()[:16],
     'urdf_sha256_16': hashlib.sha256(open(a.urdf, 'rb').read()).hexdigest()[:16],

@@ -106,6 +106,109 @@ KIN = WholeBodyKinematics.from_urdf_string(open(WB_URDF).read())
 KIDX = [KIN.dof_names.index(f'joint{i}') for i in range(1, 7)]
 
 
+def apply_grasp_friction(stage, grip, drawer_prim, finger_links):
+    """把接觸摩擦材質綁到**把手橫桿**與**兩片指墊的碰撞形狀**，並讀回驗證。
+
+    為什麼要讀回：設了不等於生效。材質可能綁到視覺模型而不是碰撞形狀，
+    綁定也可能被更強的 binding 蓋掉。這裡逐一列出實際綁到哪些 prim，
+    並把讀回值寫進輸出，讓「摩擦是 0.8」變成可查核的事實而不是宣稱。
+
+    PhysX 的有效摩擦由**接觸雙方的材質與混合規則**共同決定，不是單方說了算 ——
+    所以混合規則也一併明訂並記錄。
+    """
+    from pxr import UsdShade, UsdPhysics, PhysxSchema, Sdf
+
+    mpath = '/World/PhysicsMaterials/grasp_friction'
+    mat = UsdShade.Material.Define(stage, mpath)
+    mp = mat.GetPrim()
+    api = UsdPhysics.MaterialAPI.Apply(mp)
+    api.CreateStaticFrictionAttr().Set(float(grip['friction_static']))
+    api.CreateDynamicFrictionAttr().Set(float(grip['friction_dynamic']))
+    api.CreateRestitutionAttr().Set(float(grip.get('friction_restitution', 0.0)))
+    pxm = PhysxSchema.PhysxMaterialAPI.Apply(mp)
+    mode = str(grip['friction_combine_mode'])
+    pxm.CreateFrictionCombineModeAttr().Set(mode)
+    pxm.CreateRestitutionCombineModeAttr().Set(mode)
+
+    # 目標 1：把手橫桿（build_usd 對它套了 CollisionAPI）
+    targets = []
+    bar = stage.GetPrimAtPath(f'{drawer_prim}/handle_bar')
+    if bar and bar.IsValid() and bar.HasAPI(UsdPhysics.CollisionAPI):
+        targets.append(str(bar.GetPath()))
+    # 目標 2：兩片指墊底下**帶 CollisionAPI** 的 prim（不是視覺模型）
+    #
+    # 兩個坑：
+    #  1) 指墊幾何是 USD instance，**預設的 PrimRange 不會走進 instance proxy**，
+    #     不加 TraverseInstanceProxies 會一個都找不到（第一版就是這樣）。
+    #  2) instance proxy **不可授寫**。要綁材質得先把外層 instance 取消 instanceable；
+    #     這只改場景的實例化表示，不改幾何、質量或任何物理參數。
+    def _scan(fl):
+        root = stage.GetPrimAtPath(fl)
+        found, tree = [], []
+        if not (root and root.IsValid()):
+            return found, tree
+        for pr in Usd.PrimRange(root, Usd.TraverseInstanceProxies(
+                Usd.PrimDefaultPredicate)):
+            has = bool(pr.HasAPI(UsdPhysics.CollisionAPI))
+            tree.append({'prim': str(pr.GetPath()), 'type': str(pr.GetTypeName()),
+                         'collision': has, 'instance_proxy': bool(pr.IsInstanceProxy()),
+                         'instance': bool(pr.IsInstance())})
+            if has:
+                found.append(pr)
+        return found, tree
+
+    subtree = []
+    for fl in finger_links:
+        found, tree = _scan(fl)
+        # 有 instance proxy 就先解除外層 instanceable，再重掃一次
+        if any(pr.IsInstanceProxy() for pr in found):
+            n_un = 0
+            for pr in Usd.PrimRange(stage.GetPrimAtPath(fl),
+                                    Usd.TraverseInstanceProxies(
+                                        Usd.PrimDefaultPredicate)):
+                if pr.IsInstance():
+                    pr.SetInstanceable(False); n_un += 1
+            print(f'[drawer] {fl}：取消 {n_un} 個 instanceable 以便授寫材質',
+                  flush=True)
+            found, tree = _scan(fl)
+        subtree.append({'link': fl, 'n_collision': len(found), 'tree': tree})
+        for pr in found:
+            targets.append(str(pr.GetPath()))
+
+    bound = []
+    for tp in targets:
+        pr = stage.GetPrimAtPath(tp)
+        b = UsdShade.MaterialBindingAPI.Apply(pr)
+        b.Bind(mat, UsdShade.Tokens.strongerThanDescendants, 'physics')
+    # 讀回：實際解析到的 physics 材質路徑
+    for tp in targets:
+        pr = stage.GetPrimAtPath(tp)
+        rel = UsdShade.MaterialBindingAPI(pr).GetDirectBindingRel('physics')
+        got = [str(x) for x in (rel.GetTargets() or [])] if rel else []
+        bound.append({'prim': tp, 'bound_to': got, 'ok': got == [mpath]})
+
+    rb = {
+        'material_prim': mpath,
+        'static_friction': float(api.GetStaticFrictionAttr().Get()),
+        'dynamic_friction': float(api.GetDynamicFrictionAttr().Get()),
+        'restitution': float(api.GetRestitutionAttr().Get()),
+        'friction_combine_mode': str(pxm.GetFrictionCombineModeAttr().Get()),
+        'scope_note': ('只綁把手橫桿與指墊碰撞形狀；櫃體與抽屜其他面未設材質，'
+                       '沿用 PhysX 預設'),
+        'combine_note': ('有效摩擦由接觸雙方材質與混合規則共同決定；'
+                         '與未設材質的一方接觸時，結果取決於預設材質與本規則'),
+        'targets': bound,
+        'n_targets': len(bound),
+        'finger_subtrees': subtree,
+        'all_bound_ok': bool(bound) and all(x['ok'] for x in bound),
+    }
+    print(f'[drawer] 夾持摩擦材質：靜 {rb["static_friction"]} / 動 '
+          f'{rb["dynamic_friction"]}，混合規則 {rb["friction_combine_mode"]}', flush=True)
+    for x in bound:
+        print(f'    綁定 {"OK " if x["ok"] else "**失敗**"} {x["prim"]}', flush=True)
+    return rb
+
+
 def fk_tcp(qa, park):
     q = np.zeros(len(KIN.dof_names))
     q[0], q[1], q[2] = park
@@ -127,6 +230,7 @@ FRC = CASE['force']
 AXIS = np.array(FRC['drawer_axis_world'], float)
 AXIS = AXIS / np.linalg.norm(AXIS)
 GRASP_MODEL = CASE['grasp_model']
+GRIP_SPEC = CASE.get('grip') or {}
 TARGET = float(CASE['drawer']['target_opening_m'])
 TARGET_CASE = TARGET
 if a.pull_target_m > 0:
@@ -333,6 +437,25 @@ def main():
         print('[drawer] 找不到 uflite_gripper_link，中止'); return 5
     GRIP = grip_link[0]
 
+    # --- friction 版：接觸摩擦材質（fixed 版完全不走這段）---
+    fric_rb = None
+    if GRASP_MODEL == 'friction':
+        fric_rb = apply_grasp_friction(stage, GRIP_SPEC, DRAWER, fingers)
+        if not fric_rb['all_bound_ok']:
+            print('[drawer] **摩擦材質未全部綁到碰撞形狀，中止**'); return 13
+        if not fric_rb['n_targets'] >= 3:
+            print(f'[drawer] **綁定目標只有 {fric_rb["n_targets"]} 個'
+                  '（預期至少把手 1 + 指墊 2），中止**')
+            for st in fric_rb.get('finger_subtrees', []):
+                print(f'  子樹 {st["link"]}（帶 CollisionAPI 的有 '
+                      f'{st["n_collision"]} 個）：')
+                for e in st['tree'][:40]:
+                    print(f'    {"C" if e["collision"] else " "}'
+                          f'{"P" if e["instance_proxy"] else " "}'
+                          f'{"I" if e["instance"] else " "} '
+                          f'{e["type"]:<14s} {e["prim"]}')
+            return 13
+
     # **view 必須在 world.reset() 之前建立**：prepare_contact_sensors 要早於
     # PhysX 場景建好才有效。reset 之後才建，接觸力一律回傳 0（已實測）。
     print('[drawer] 建立抽屜 view ...', flush=True)
@@ -409,6 +532,43 @@ def main():
     missing = [j for j in ARM if j not in idx]
     if missing:
         print(f'[drawer] URDF 缺關節 {missing}，中止'); return 5
+
+    # --- 手指 drive 出力上限：**執行期**讀回，不以 USD 上的值冒充 ---
+    finger_force_rb = {'source': None, 'values': None,
+                       'gap': '未嘗試'} if GRASP_MODEL == 'friction' else None
+    if GRASP_MODEL == 'friction':
+        FJ_probe = [j for j in ('finger_joint1', 'finger_joint2') if j in idx]
+        got = None; src = None
+        for nm in ('get_max_efforts', 'get_max_joint_efforts'):
+            fn = getattr(robot, nm, None)
+            if fn is None:
+                continue
+            try:
+                v = np.asarray(fn()).reshape(-1)
+                got = {j: float(v[idx[j]]) for j in FJ_probe}; src = f'robot.{nm}()'
+                break
+            except Exception:
+                continue
+        if got is None:
+            av = getattr(robot, '_articulation_view', None)
+            fn = getattr(av, 'get_max_efforts', None) if av is not None else None
+            if fn is not None:
+                try:
+                    v = np.asarray(fn()).reshape(-1)
+                    got = {j: float(v[idx[j]]) for j in FJ_probe}
+                    src = 'articulation_view.get_max_efforts()'
+                except Exception:
+                    got = None
+        if got is None:
+            finger_force_rb = {
+                'source': None, 'values': None,
+                'gap': ('**執行期讀不到 drive 出力上限**；USD 上 '
+                        'drive:linear:physics:maxForce = 5，但本趟未能在執行期證實。'
+                        '此為明列的缺口，不以 USD 值代替量測')}
+            print('[drawer] **手指 drive 出力上限：執行期讀不到，列為缺口**', flush=True)
+        else:
+            finger_force_rb = {'source': src, 'values': got, 'gap': None}
+            print(f'[drawer] 手指 drive 出力上限（執行期讀回，{src}）：{got}', flush=True)
 
     q = robot.get_joint_positions()
     kp = np.zeros(robot.num_dof, dtype=np.float32)
@@ -510,7 +670,8 @@ def main():
           f'yaw {math.degrees(BASE0[2]):.3f}°，抽屜 y0 {DY0:.5f}')
 
     prims = {}
-    for nm in ('link_tcp', 'link6'):
+    for nm in ('link_tcp', 'link6') + (
+            ('uflite_finger1', 'uflite_finger2') if GRASP_MODEL == 'friction' else ()):
         pr = next((p for p in stage.Traverse() if p.GetName() == nm), None)
         if pr is None:
             print(f'[drawer] 找不到 {nm}，中止'); return 6
@@ -639,7 +800,10 @@ def main():
                 'tq_x', 'tq_y', 'tq_z', 'tq_norm',
                 'rot_conv_err_deg', 'stage_vs_fk_err', 'cmd_lag',
                 'e_par', 'e_perp', 'base_drift',
-                'base_dyaw_deg', 'track_err', 'limit_margin'] + ARM
+                'base_dyaw_deg', 'track_err', 'limit_margin'] + ARM + [
+                # friction 版的量測欄；fixed 版恆為 0（**0 代表未套用該模型，
+                # 不代表量到零接觸**，兩者由 grasp_model 區分）
+                'fc1_norm', 'fc2_norm', 'f_grip_normal', 'f_grip_tangential']
     log, events, stop_reason = [], [], 'sim_limit'
     prev_ov, prev_ov_t = None, None
     rot_err_max, stage_fk_err_max = 0.0, 0.0
@@ -647,6 +811,14 @@ def main():
     last_temp = tc0
     temp_max, temp_max_t = tc0, 0.0    # 本趟實測峰值（回報用）
     f_over_n = 0                       # 連續超過門檻的樣本數
+    # 手指接觸中止：門檻、判準基礎、持續時間**全部由案例明訂**，
+    # 與手腕傳遞力的規則各自獨立，不共用計數器也不共用持續時間。
+    FG_ABORT_N = float(GRIP_SPEC.get('finger_contact_abort_n', 0.0) or 0.0)
+    FG_SUSTAIN = int(round(float(GRIP_SPEC.get('finger_contact_abort_sustained_s', 0.0) or 0.0)
+                           / a.physics_dt))
+    FG_BASIS = str(GRIP_SPEC.get('finger_contact_abort_basis', ''))
+    fg_over_n = 0
+    fg_peak, fg_peak_t = 0.0, None
     F_SUSTAIN = int(round(float(FRC.get('abort_sustained_s', 0.0))
                           / a.physics_dt))
     f_peak, f_peak_t, f_peak_ph = 0.0, None, None
@@ -821,17 +993,42 @@ def main():
         tq_world = l6_R @ tq_local
         tq_norm = float(np.linalg.norm(tq_world))
         fc = np.zeros(3)
+        per_finger = None
         if finger_v is not None:
             try:
                 M = np.array(finger_v.get_contact_force_matrix(dt=a.physics_dt))
                 fc = M.reshape(-1, 3).sum(axis=0)
                 if not np.all(np.isfinite(fc)):
                     raise MonitorFailure('finger_contact', f'非有限值 {fc}')
+                per_finger = M.reshape(M.shape[0], -1, 3).sum(axis=1)
             except MonitorFailure:
                 raise
             except Exception as e:
                 raise MonitorFailure('finger_contact', repr(e))
+        elif GRASP_MODEL == 'friction':
+            # 摩擦夾持靠接觸傳力；**讀不到接觸資料不能當成零**
+            raise MonitorFailure('finger_contact', 'friction 版缺少手指接觸 view')
         fc_n = float(np.linalg.norm(fc))
+        # 逐指：模長（中止判準）＋沿閉合軸的正向／切向分解（量測用）
+        fpn = fpt = 0.0
+        fc_each = [0.0, 0.0]
+        if per_finger is not None and GRASP_MODEL == 'friction':
+            if per_finger.shape[0] < 2:
+                raise MonitorFailure(
+                    'finger_contact', f'逐指矩陣只有 {per_finger.shape[0]} 列')
+            fc_each = [float(np.linalg.norm(per_finger[0])),
+                       float(np.linalg.norm(per_finger[1]))]
+            p1, _, _ = world_T(prims['uflite_finger1'])
+            p2, _, _ = world_T(prims['uflite_finger2'])
+            ax = p1 - p2
+            nrm = float(np.linalg.norm(ax))
+            if nrm > 1e-9:
+                ax = ax / nrm
+                # 正向 = 沿閉合軸的分量（逐指各自投影後取絕對值再相加）
+                fpn = float(abs(np.dot(per_finger[0], ax))
+                            + abs(np.dot(per_finger[1], ax)))
+                tv = [per_finger[i] - ax * np.dot(per_finger[i], ax) for i in (0, 1)]
+                fpt = float(np.linalg.norm(tv[0]) + np.linalg.norm(tv[1]))
         try:
             gcm = np.array(grip_v.get_contact_force_matrix(dt=a.physics_dt))
             gc = gcm.reshape(-1, 3).sum(axis=0)
@@ -919,7 +1116,9 @@ def main():
                     round(rot_err, 5), round(stage_fk_err, 6), round(lag, 6),
                     round(e_par, 6), round(e_perp, 6), round(drift, 5),
                     round(math.degrees(dyaw), 4), round(trk, 5), round(lm, 5)]
-                   + [round(float(v), 6) for v in qa])
+                   + [round(float(v), 6) for v in qa]
+                   + [round(fc_each[0], 4), round(fc_each[1], 4),
+                      round(fpn, 4), round(fpt, 4)])
 
         if len(log) == 1 and len(log[0]) != len(LOG_COLS):
             raise RuntimeError(f'log 欄名 {len(LOG_COLS)} 個 vs 資料列 '
@@ -937,6 +1136,16 @@ def main():
             hold_ok_t = None
 
         # --- 停止條件 ---
+        # 手指接觸中止（friction 版才啟用）：判準是**每一指各自**的接觸力模長，
+        # 任一指超過門檻即計數；持續時間為 0 代表單一樣本即中止。
+        if GRASP_MODEL == 'friction' and FG_ABORT_N > 0:
+            fg_max = max(fc_each)
+            if fg_max > fg_peak:
+                fg_peak, fg_peak_t = fg_max, t
+            if fg_max > FG_ABORT_N:
+                fg_over_n += 1
+            else:
+                fg_over_n = 0
         if f_norm > f_peak:
             f_peak, f_peak_t, f_peak_ph = f_norm, t, ph
         if f_norm > float(FRC['abort_threshold_n']):
@@ -962,6 +1171,8 @@ def main():
         # 這樣建立約束的單步暫態不會被當成過載（見案例設定的說明）。
         if f_over_n > F_SUSTAIN:
             stop = 'contact_force'
+        elif GRASP_MODEL == 'friction' and FG_ABORT_N > 0 and fg_over_n > FG_SUSTAIN:
+            stop = 'finger_contact_force'
         elif drift > float(TOL['base_drift_m']):
             stop = 'base_drift'
         elif math.degrees(dyaw) > float(TOL['base_yaw_drift_deg']):
@@ -1076,6 +1287,19 @@ def main():
                           'static_check': chk,
                           'note': ('F_pull 未扣除夾爪慣性項，是「手腕沿抽屜軸傳遞'
                                    '的力」，不是純把手拉力')},
+        'grip_spec': GRIP_SPEC if GRASP_MODEL == 'friction' else None,
+        'grasp_friction_readback': fric_rb,
+        'finger_drive_force_readback': finger_force_rb,
+        'finger_abort_rule': ({
+            'threshold_N': FG_ABORT_N, 'basis': FG_BASIS,
+            'sustained_s': float(GRIP_SPEC.get('finger_contact_abort_sustained_s', 0.0) or 0.0),
+            'sustain_samples_required': FG_SUSTAIN,
+            'version': str(GRIP_SPEC.get('finger_contact_abort_rule_version', '')),
+            'peak_per_finger_N': fg_peak, 'peak_sim_t': fg_peak_t,
+            'note': ('與手腕傳遞力中止**各自獨立**：門檻、判準基礎與持續時間'
+                     '都由案例明訂，未沿用手腕規則的 50 ms。'
+                     '讀不到接觸資料走監看失效，不寫 0 繼續跑')}
+            if GRASP_MODEL == 'friction' else None),
         'abort_rule': {
             'version': ('v1_instantaneous' if F_SUSTAIN <= 0
                         else 'v2_sustained'),
