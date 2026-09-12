@@ -458,7 +458,7 @@ def main():
 
     log, events, stop_reason = [], [], 'sim_limit'
     prev_ov, prev_ov_t = None, None
-    rot_err_max, model_err_max = 0.0, 0.0
+    rot_err_max, stage_fk_err_max = 0.0, 0.0
     TEMP_EVERY = 50                    # 每這麼多樣本量一次溫度（0.5 s @100 Hz）
     last_temp = tc0
     f_over_n = 0                       # 連續超過門檻的樣本數
@@ -579,6 +579,9 @@ def main():
         f_pull = float(AXIS @ f_world)
         # 力矩分量：力隨開度成長而與速度無關時，要靠力矩才分得出是哪一種負載
         # （抽屜外伸造成的傾覆力矩 vs 沿軸的推拉）。只記力分不出來。
+        # **參考點是 link6 原點**（reaction 本來就在該連桿座標系原點取），
+        # 這裡只把分量旋轉到世界座標軸，**沒有把參考點移到把手或抽屜**。
+        # 所以它不是抽屜的傾覆力矩，兩者不可互稱。
         tq_world = l6_R @ tq_local
         tq_norm = float(np.linalg.norm(tq_world))
         fc = np.zeros(3)
@@ -614,11 +617,13 @@ def main():
         rot_err = float(np.degrees(np.arccos(np.clip(
             (np.trace(tcp_R.T @ R_fk) - 1) / 2, -1, 1))))
         rot_err_max = max(rot_err_max, rot_err)
-        # 同一組關節角下，Isaac 的 TCP 與離線 FK 的 TCP 差多少。
-        # 這一項是**模型差異**（omni_bot_manip.urdf vs 展開的 9-DOF 檔），
+        # Isaac stage 讀出的 TCP 位置，與**同一組量測關節角**的離線 FK 之差。
+        # **不是 URDF 模型差異**：離線核對過，omni_bot_manip.urdf 與展開的 9-DOF
+        # 檔在夾爪連桿上運動學完全相同（0.0000 mm / 0.00000°）。
+        # 這裡量到的 0.26–0.52 mm 成因未確立，先如實記錄、不下標籤。
         # 與「命令還沒追上」的動態落後是兩回事，不能混在 slip 裡一起看。
-        model_err = float(np.linalg.norm(tcp_p - T_fk[:3, 3]))
-        model_err_max = max(model_err_max, model_err)
+        stage_fk_err = float(np.linalg.norm(tcp_p - T_fk[:3, 3]))
+        stage_fk_err_max = max(stage_fk_err_max, stage_fk_err)
         # 命令對應的 TCP 與實際 TCP 的差 = 追蹤落後，**要分解**：
         #   e_par  = â^T e        沿滑動軸（抽屜可以讓開的方向）
         #   e_perp = e − â e_par  垂直滑動軸（滑動關節會剛性抵抗的方向）
@@ -661,7 +666,7 @@ def main():
                     round(f_pull, 4), round(fc_n, 4), round(f_drawer, 5),
                     round(tq_world[0], 4), round(tq_world[1], 4),
                     round(tq_world[2], 4), round(tq_norm, 4),
-                    round(rot_err, 5), round(model_err, 6), round(lag, 6),
+                    round(rot_err, 5), round(stage_fk_err, 6), round(lag, 6),
                     round(e_par, 6), round(e_perp, 6), round(drift, 5),
                     round(math.degrees(dyaw), 4), round(trk, 5), round(lm, 5)]
                    + [round(float(v), 6) for v in qa])
@@ -818,11 +823,11 @@ def main():
         'log_cols': ['t', 'phase', 'applied_seq', 'opening', 'opening_v',
                      'slip', 'f_norm', 'f_pull', 'fc_norm', 'f_drawer',
                      'tq_x', 'tq_y', 'tq_z', 'tq_norm',
-                     'rot_conv_err_deg', 'model_err', 'cmd_lag',
+                     'rot_conv_err_deg', 'stage_vs_fk_err', 'cmd_lag',
                      'e_par', 'e_perp', 'base_drift',
                      'base_dyaw_deg', 'track_err', 'limit_margin'] + ARM,
         'rot_conv_err_max_deg': rot_err_max,
-        'model_err_max_m': model_err_max,
+        'stage_vs_fk_err_max_m': stage_fk_err_max,
         'log': log,
     }
     json.dump(out, open(os.path.join(a.out, 'drawer_run.json'), 'w'),
