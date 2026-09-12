@@ -96,7 +96,13 @@ for d in sorted(set(_dirs)):
             continue
         seed = int(m2.group(1))
         cond = 'on' if 'heading' in b else 'off'
-        rep = 'x'
+        # 探索批的重複次數藏在 RUN_ID 前綴，不是統一格式：
+        #   v2_ / b5_ 是第 1 次，r2_ 第 2 次，r3_ 第 3 次。
+        # 先前一律填 'x'，導致同一 seed 的三次重複在配對時互相覆蓋，
+        # 9 組配對被算成 5 組。
+        tail = b.split('__')[-1]
+        rep = ('r2' if tail.startswith('r2_') else
+               'r3' if tail.startswith('r3_') else 'r1')
         m = True
     aborted = os.path.exists(os.path.join(d, 'ABORTED.md'))
     has_bag = os.path.exists(os.path.join(d, 'bag', 'metadata.yaml'))
