@@ -48,6 +48,13 @@ ap.add_argument('--kp', type=float, default=1.0e5)
 ap.add_argument('--kd', type=float, default=1.0e4)
 ap.add_argument('--cpu-limit', type=float, default=92.0)
 ap.add_argument('--cpu-threads', type=int, default=8)
+# **本輪唯一的變數**：物理主迴圈的牆鐘節流。
+#   0   不節流，迴圈盡快跑（先前所有手臂測試都是這樣）
+#   >0  以該倍率對齊牆鐘；time.sleep 同時讓出 GIL，背景 executor 才有機會
+#       處理回呼。這是診斷「接收／套用節奏」的單變數，**不預先宣稱 executor
+#       就是根因**——若沒改善，就依新的時序去定位下一層。
+ap.add_argument('--rtf', type=float, default=0.0,
+                help='>0 時以此倍率對齊牆鐘（1.0 = 即時）')
 a = ap.parse_args()
 
 CASES = yaml.safe_load(open(a.cases))
@@ -301,6 +308,9 @@ def main():
         pass
 
     applied_seqs = set()
+    nxt = time.monotonic()
+    print(f'[manip] 牆鐘節流 rtf={a.rtf}'
+          + ('（不節流）' if a.rtf <= 0 else f'（每步睡到 {a.physics_dt/a.rtf*1000:.1f} ms）'))
     print('[manip] 進入主迴圈；等待 /arm/joint_position_cmd', flush=True)
     while True:
         applied_seq = None
@@ -360,6 +370,13 @@ def main():
             c = cpu_temp_c()
             if c is not None and c >= a.cpu_limit:
                 stop_reason = 'thermal_abort'; break
+        if a.rtf > 0:
+            nxt += a.physics_dt / a.rtf
+            sl = nxt - time.monotonic()
+            if sl > 0:
+                time.sleep(sl)
+            else:
+                nxt = time.monotonic()
 
     tp, tq = tcp_world()
     pb, qb = robot.get_world_pose()
@@ -369,6 +386,7 @@ def main():
         schema='manip_run/1', case=CASE_NAME, urdf=a.urdf, urdf_sha=URDF_SHA,
         stop_reason=stop_reason, sim_time=t, wall_time=time.monotonic() - t_wall0,
         physics_dt=a.physics_dt, rendering_dt=float(world.get_rendering_dt()),
+        rtf_throttle=a.rtf,
         parking_target=dict(x=PARK[0], y=PARK[1], yaw_deg=CASE['parking']['yaw_deg']),
         base_final=dict(x=float(pb[0]), y=float(pb[1]),
                         yaw_deg=math.degrees(yaw_of(qb)),

@@ -32,7 +32,7 @@ fi
 
 say "[3/7] 啟動 Isaac（固定底盤）"
 setsid "$ISAAC_PY" evaluation/isaac_manip_sim.py ${CASE:+--case "$CASE"} \
-    --urdf "$URDF" --sim-limit "${SIM_LIMIT:-60}" \
+    --urdf "$URDF" --sim-limit "${SIM_LIMIT:-60}" --rtf "${RTF:-0}" \
     --out "$DIR/manip_run.json" >> "$LOG" 2>&1 < /dev/null &
 ISAAC=$!; PIDS+=($ISAAC)
 say "  Isaac PID=$ISAAC"
