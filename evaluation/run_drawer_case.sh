@@ -49,6 +49,8 @@ setsid "$ISAAC_PY" -u evaluation/isaac_drawer_sim.py --case "$CASE" \
     ${ALIGN_FROM:+--align-check "$DIR/traj/traj_meta.json"} \
     ${SNAPSHOT_ONLY:+--snapshot-only} \
     ${PULL_TARGET:+--pull-target-m "$PULL_TARGET"} \
+    ${DRAWER_NO_GRAVITY:+--drawer-no-gravity} \
+    ${STOP_AT_OPENING:+--stop-at-opening-m "$STOP_AT_OPENING"} \
     >> "$LOG" 2>&1 < /dev/null &
 ISAAC=$!; PIDS+=($ISAAC); say "  Isaac PID=$ISAAC"
 

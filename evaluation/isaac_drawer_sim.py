@@ -59,6 +59,15 @@ ap.add_argument('--snapshot-only', action='store_true',
 ap.add_argument('--align-check', default='',
                 help='對準版軌跡的 traj_meta.json；engage 時核對實際快照是否與'
                      '產生軌跡時用的那份相符')
+# --- 獨立診斷用（**不計為正式操作成果**）---
+# 僅取消**抽屜剛體**的重力作用；手臂與夾爪重力保留。
+# 抽屜質量、慣量、阻尼、滑軌、固定連接、偏置策略與軌跡配時全部不變。
+ap.add_argument('--drawer-no-gravity', action='store_true',
+                help='只把抽屜剛體的 disableGravity 設為 True（診斷用）')
+# 只跑原軌跡的前段：命令序列與完整版**逐點相同**，到指定開度即停，
+# **不是**把整條軌跡壓縮到該行程（那會改變速度剖面）。
+ap.add_argument('--stop-at-opening-m', type=float, default=0.0,
+                help='>0 時開度超過此值即停（診斷用），停止原因 diagnostic_opening_limit')
 ap.add_argument('--pull-target-m', type=float, default=0.0,
                 help='>0 時覆寫本趟的目標開度（有界交接驗證用），須與軌跡一致')
 ap.add_argument('--align-tol-m', type=float, default=0.002)
@@ -136,7 +145,7 @@ from isaacsim.core.api import World                                 # noqa: E402
 from isaacsim.core.api.objects.ground_plane import GroundPlane      # noqa: E402
 from isaacsim.core.prims import SingleArticulation, RigidPrim       # noqa: E402
 from isaacsim.core.utils.types import ArticulationAction            # noqa: E402
-from pxr import UsdGeom, UsdPhysics, Gf, Sdf, Usd                   # noqa: E402
+from pxr import UsdGeom, UsdPhysics, PhysxSchema, Gf, Sdf, Usd   # noqa: E402
 from isaac_common import import_urdf                                # noqa: E402
 
 import rclpy                                                        # noqa: E402
@@ -262,6 +271,31 @@ def main():
     print(f'[drawer] world→根 固定關節 {len(_root_fixed)} 個：{_root_fixed}')
     if len(_root_fixed) != 1:
         print('[drawer] **預期恰好 1 個 world→根 固定關節，中止**'); return 10
+    # --- 診斷：只取消抽屜的重力 ---
+    grav_state = {}
+    if a.drawer_no_gravity:
+        _d = stage.GetPrimAtPath(DRAWER)
+        PhysxSchema.PhysxRigidBodyAPI.Apply(_d).CreateDisableGravityAttr(True)
+        print('[drawer] **診斷模式：已把抽屜剛體的 disableGravity 設為 True**',
+              flush=True)
+    # 逐一檢查所有剛體，確認取消重力只作用於抽屜
+    for _p in Usd.PrimRange.Stage(stage, Usd.TraverseInstanceProxies(
+            Usd.PrimDefaultPredicate)):
+        if not _p.HasAPI(UsdPhysics.RigidBodyAPI):
+            continue
+        _v = None
+        if _p.HasAPI(PhysxSchema.PhysxRigidBodyAPI):
+            _at = PhysxSchema.PhysxRigidBodyAPI(_p).GetDisableGravityAttr()
+            _v = bool(_at.Get()) if _at and _at.Get() is not None else None
+        grav_state[str(_p.GetPath())] = _v
+    _off = [k for k, v in grav_state.items() if v is True]
+    print(f'[drawer] 剛體 {len(grav_state)} 個；disableGravity=True 的有 '
+          f'{len(_off)} 個：{_off}')
+    if a.drawer_no_gravity and _off != [DRAWER]:
+        print(f'[drawer] **取消重力的範圍不等於只有抽屜，中止**'); return 11
+    if not a.drawer_no_gravity and _off:
+        print(f'[drawer] **非診斷模式卻有剛體被取消重力，中止**'); return 11
+
     _xf = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT))
     _xf.ClearXformOpOrder()
     _xf.AddTranslateOp().Set(Gf.Vec3d(PARK[0], PARK[1], 0.0))
@@ -790,7 +824,10 @@ def main():
         else:
             f_over_n = 0
         stop = None
-        if snapshot_done:
+        if a.stop_at_opening_m > 0 and opening >= a.stop_at_opening_m:
+            # 診斷用的區間上限：命令序列與完整版相同，只是提前收尾
+            stop = 'diagnostic_opening_limit'
+        elif snapshot_done:
             # 沒有建立任何連接，沒有負載要卸，直接以預設處置收尾
             stop = 'snapshot_captured'
         elif align_mismatch:
@@ -831,8 +868,10 @@ def main():
                 stop = 'cpu_temp'
 
         if stop is not None:
-            handling = CASE['stop_handling'].get(
-                stop, CASE['stop_handling']['default'])
+            handling = ('release_coupling_then_freeze'
+                        if stop == 'diagnostic_opening_limit'
+                        else CASE['stop_handling'].get(
+                            stop, CASE['stop_handling']['default']))
             print(f'[drawer] 停止：{stop}（處置 {handling}）@ sim {t:.3f}', flush=True)
             if handling == 'release_coupling_then_freeze':
                 # 凍結設定點**不會**卸力：位置驅動會持續施力。先解除耦合。
@@ -923,6 +962,14 @@ def main():
                      '不同版本的趟次不可直接相提並論。'
                      'v1 那次量到的 65.4 N 峰值不因為只出現一次就無害。')},
         'f_norm_peak': {'N': f_peak, 'sim_t': f_peak_t, 'phase': f_peak_ph},
+        'diagnostic': {
+            'is_diagnostic': bool(a.drawer_no_gravity or a.stop_at_opening_m > 0),
+            'drawer_no_gravity': bool(a.drawer_no_gravity),
+            'stop_at_opening_m': a.stop_at_opening_m,
+            'gravity_disabled_prims': [k for k, v in grav_state.items() if v is True],
+            'rigid_body_count': len(grav_state),
+            'note': ('**不計為正式操作成果**。命令序列與完整版逐點相同，'
+                     '只是到指定開度提前收尾，非把軌跡壓縮到該行程')},
         'base_fixation': {
             'mode': 'importer_fix_base',
             'root_fixed_joints': _root_fixed,
