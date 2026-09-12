@@ -47,6 +47,7 @@ say "[2/6] 啟動 Isaac"
 setsid "$ISAAC_PY" -u evaluation/isaac_drawer_sim.py --case "$CASE" \
     --out "$DIR/sim" --sim-limit "$SIM_LIMIT" --rtf "$RTF" \
     ${ALIGN_FROM:+--align-check "$DIR/traj/traj_meta.json"} \
+    ${SNAPSHOT_ONLY:+--snapshot-only} \
     >> "$LOG" 2>&1 < /dev/null &
 ISAAC=$!; PIDS+=($ISAAC); say "  Isaac PID=$ISAAC"
 

@@ -51,6 +51,11 @@ ap.add_argument('--kp', type=float, default=1.0e5)
 ap.add_argument('--kd', type=float, default=1.0e4)
 ap.add_argument('--finger-kp', type=float, default=1.0e4)
 ap.add_argument('--finger-kd', type=float, default=1.0e3)
+# 快照取得模式：只做到接近、停穩與取得同步快照，**不建立固定連接、不執行拉開**。
+# 用途是在新的底盤固定方式下取得對準參考所需的實際抓取關係，
+# 不必為此承受一次已知可能超力的未對準拉開段。
+ap.add_argument('--snapshot-only', action='store_true',
+                help='在 engage 時刻記錄快照但不連接，隨即安全收尾')
 ap.add_argument('--align-check', default='',
                 help='對準版軌跡的 traj_meta.json；engage 時核對實際快照是否與'
                      '產生軌跡時用的那份相符')
@@ -422,12 +427,30 @@ def main():
     if jnames:
         print(f'[drawer] articulation joint 順序 {jnames}')
 
-    def attach():
+    def frames():
+        """連接當下的同步快照（純讀取，**不建立任何關節**）。
+
+        快照取得模式與正式連接共用這一段，確保兩者記錄的是同一組量。
+        """
         Ma = UsdGeom.Xformable(stage.GetPrimAtPath(GRIP)).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default())
         Mb = UsdGeom.Xformable(stage.GetPrimAtPath(DRAWER)).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default())
-        Mrel = Ma * Mb.GetInverse()      # 夾爪原點框架，用抽屜座標表示
+        Mrel = Ma * Mb.GetInverse()
+        ta = Ma.ExtractTranslation(); ra = Ma.ExtractRotationQuat()
+        tb = Mb.ExtractTranslation(); rb = Mb.ExtractRotationQuat()
+        t = Mrel.ExtractTranslation(); r = Mrel.ExtractRotationQuat()
+        i = r.GetImaginary()
+        qz = lambda q: [float(q.GetReal())] + [float(v) for v in q.GetImaginary()]
+        return {'local_pos1': [float(t[0]), float(t[1]), float(t[2])],
+                'local_rot1_wxyz': qz(r),
+                'gripper_world_pos': [float(v) for v in ta],
+                'gripper_world_rot_wxyz': qz(ra),
+                'drawer_world_pos': [float(v) for v in tb],
+                'drawer_world_rot_wxyz': qz(rb)}, Mrel
+
+    def attach():
+        _f, Mrel = frames()
         j = UsdPhysics.FixedJoint.Define(stage, JOINT_ATTACH)
         j.CreateBody0Rel().SetTargets([Sdf.Path(GRIP)])
         j.CreateBody1Rel().SetTargets([Sdf.Path(DRAWER)])
@@ -439,17 +462,7 @@ def main():
         j.CreateLocalRot1Attr().Set(Gf.Quatf(float(r.GetReal()),
                                              float(i[0]), float(i[1]), float(i[2])))
         j.CreateJointEnabledAttr().Set(True)
-        # 連接當下的**實際**相對位姿全部留下（含旋轉與兩端的世界位姿）：
-        # 它決定了之後的幾何相容性，事後要靠它判斷參考路徑是否與連接框架相符。
-        ta = Ma.ExtractTranslation(); ra = Ma.ExtractRotationQuat()
-        tb = Mb.ExtractTranslation(); rb = Mb.ExtractRotationQuat()
-        qz = lambda q: [float(q.GetReal())] + [float(v) for v in q.GetImaginary()]
-        return {'local_pos1': [float(t[0]), float(t[1]), float(t[2])],
-                'local_rot1_wxyz': qz(r),
-                'gripper_world_pos': [float(v) for v in ta],
-                'gripper_world_rot_wxyz': qz(ra),
-                'drawer_world_pos': [float(v) for v in tb],
-                'drawer_world_rot_wxyz': qz(rb)}
+        return _f
 
     def detach():
         pr = stage.GetPrimAtPath(JOINT_ATTACH)
@@ -528,6 +541,7 @@ def main():
 
     monitor_fail = None
     align_mismatch = False
+    snapshot_done = False
     while True:
       try:
         world.step(render=False)
@@ -552,7 +566,14 @@ def main():
                     'drawer_y_before': float(dpa[0][1]),
                     'tcp_before': tcp_a.tolist()}
             if ev == 'engage':
-                if GRASP_MODEL == 'fixed_attachment':
+                if a.snapshot_only:
+                    # **只記錄，不連接**：同一個物理時刻的同步快照
+                    info['attach_frames'], _ = frames()
+                    info['snapshot_only'] = True
+                    snapshot_done = True
+                    print('[drawer] 快照取得模式：已記錄同步快照，**未建立連接**',
+                          flush=True)
+                elif GRASP_MODEL == 'fixed_attachment':
                     info['attach_frames'] = attach()
                     if ALIGN_REF is not None:
                         af = info['attach_frames']
@@ -761,7 +782,10 @@ def main():
         else:
             f_over_n = 0
         stop = None
-        if align_mismatch:
+        if snapshot_done:
+            # 沒有建立任何連接，沒有負載要卸，直接以預設處置收尾
+            stop = 'snapshot_captured'
+        elif align_mismatch:
             # 實際快照與產生軌跡時用的那份不符 ⇒ 後面的參考是對錯位姿算的。
             # 不拿錯位的參考硬跑，直接停。
             stop = 'align_snapshot_mismatch'
