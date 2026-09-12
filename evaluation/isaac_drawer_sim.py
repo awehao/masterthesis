@@ -187,8 +187,58 @@ def apply_grasp_friction(stage, grip, drawer_prim, finger_links):
         got = [str(x) for x in (rel.GetTargets() or [])] if rel else []
         bound.append({'prim': tp, 'bound_to': got, 'ok': got == [mpath]})
 
+    # --- 碰撞幾何與接觸 offset 讀回 ---
+    # 「以 URDF 點雲 + stage 位姿算出的間隙」不等於物理引擎實際使用的碰撞形狀
+    # 與接觸距離。FK 與 stage 一致**不能**推論碰撞幾何也已驗證，所以這裡分開讀。
+    def _collider_info(tp):
+        pr = stage.GetPrimAtPath(tp)
+        d = {'prim': tp, 'type': str(pr.GetTypeName())}
+        try:
+            mc = UsdPhysics.MeshCollisionAPI(pr)
+            at = mc.GetApproximationAttr() if mc else None
+            d['approximation'] = str(at.Get()) if (at and at.Get()) else None
+        except Exception as e:
+            d['approximation'] = f'讀取失敗 {e!r}'
+        try:
+            pc = PhysxSchema.PhysxCollisionAPI(pr)
+            if pc:
+                for nm, fn in (('contact_offset', pc.GetContactOffsetAttr),
+                               ('rest_offset', pc.GetRestOffsetAttr)):
+                    at = fn()
+                    v = at.Get() if at else None
+                    d[nm] = None if v is None else float(v)
+            else:
+                d['contact_offset'] = d['rest_offset'] = None
+                d['offset_note'] = 'prim 未套用 PhysxCollisionAPI'
+        except Exception as e:
+            d['contact_offset'] = d['rest_offset'] = f'讀取失敗 {e!r}'
+        if d.get('contact_offset') in (None, -1.0) or d.get('rest_offset') in (None, -1.0):
+            d.setdefault('offset_note', '')
+            d['offset_note'] += '（-1 或 None 代表沿用場景預設，實際值需由場景讀）'
+        return d
+
+    collider_rb = [_collider_info(tp) for tp in targets]
+    scene_rb = None
+    for pr in stage.Traverse():
+        if pr.HasAPI(PhysxSchema.PhysxSceneAPI):
+            sc = PhysxSchema.PhysxSceneAPI(pr)
+            scene_rb = {'prim': str(pr.GetPath())}
+            for nm, fn in (('default_contact_offset', 'GetContactOffsetAttr'),
+                           ('default_rest_offset', 'GetRestOffsetAttr')):
+                at = getattr(sc, fn, lambda: None)()
+                v = at.Get() if at else None
+                scene_rb[nm] = None if v is None else float(v)
+            break
+
     rb = {
         'material_prim': mpath,
+        'colliders': collider_rb,
+        'physx_scene': scene_rb,
+        'gap_definition_gap': (
+            '本專案離線算的「間隙」= URDF collision 網格取樣點雲到把手解析圓柱的'
+            '最短距離。**物理引擎用的是該網格的凸包近似加上接觸 offset**，兩者'
+            '不是同一個量；離線間隙為 0 之前就可能產生接觸力。'
+            '未經對照前，不得以離線間隙推論接觸時機'),
         'static_friction': float(api.GetStaticFrictionAttr().Get()),
         'dynamic_friction': float(api.GetDynamicFrictionAttr().Get()),
         'restitution': float(api.GetRestitutionAttr().Get()),

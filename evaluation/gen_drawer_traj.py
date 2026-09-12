@@ -73,6 +73,19 @@ ap.add_argument('--postengage-hold-s', type=float, default=1.0,
 # 預設 0 = 維持原本的一步閉合，**不帶此旗標時軌跡與先前逐點相同**。
 ap.add_argument('--finger-close-s', type=float, default=0.0,
                 help='手指閉合斜坡長度（秒），只作用於 friction 版')
+# --- 閉合前對中校準用（friction 版）---
+# 這兩個旗標預設關閉；不帶時軌跡與先前逐點相同。
+ap.add_argument('--finger-hold-open', action='store_true',
+                help='校準輪：手指全程保持全開，不閉合')
+ap.add_argument('--hold-correction', default='',
+                help='六個關節的命令層保持修正（rad，逗號分隔）。'
+                     '**這是該工作點的經驗估計，不是已辨識的重力補償**，'
+                     '也不保證加一次就完全抵銷')
+ap.add_argument('--hold-correction-s', type=float, default=2.0,
+                help='修正的斜升長度（秒），在 engage 停留段內完成；'
+                     '不直接跳命令，速度／加速度仍由既有離線檢查把關')
+ap.add_argument('--hold-correction-cap', type=float, default=0.010,
+                help='單一關節修正幅度上限（rad）；超過即判為模型有誤，中止')
 ap.add_argument('--ff-comp', default='', help='前饋補償表 JSON')
 ap.add_argument('--ff-smooth', type=int, default=15,
                 help='Δq_ff 的置中移動平均視窗（列數，50 Hz）')
@@ -245,7 +258,8 @@ seed = Qa_t[-1].copy()
 # engage 事件排在沉降**之後**：第一版排在接近段結束後 20 ms 就發，手臂還有
 # 2.96 mm 的動態落後沒收斂，固定關節把這個殘差鎖成預壓，位置驅動接著把抽屜
 # 頂在關閉硬限位上，量到 −147 N 沿抽屜軸的持續力。先讓命令收斂再連接。
-f_hold = F_OPEN if GRASP_MODEL == 'fixed_attachment' else F_CLOSED
+f_hold = (F_OPEN if (GRASP_MODEL == 'fixed_attachment' or a.finger_hold_open)
+          else F_CLOSED)
 _eng = dwell(seed, a.engage_settle_s, HZ)
 RAMP = float(a.finger_close_s) if GRASP_MODEL == 'friction' else 0.0
 for i, q in enumerate(_eng):
@@ -487,6 +501,36 @@ if a.ff_comp:
           f'逐關節 {np.round(FF["dq_ff_per_joint_max_rad"],6).tolist()}')
     print(f'    Δq_ff(拉開首點) = 0（b(0) = b0 保留）')
 
+# ------------------------------------------- 命令層保持修正（校準輪）
+HOLDC = None
+if a.hold_correction:
+    dq = np.array([float(x) for x in a.hold_correction.split(',')], float)
+    if dq.shape != (6,):
+        print('  **--hold-correction 需要 6 個值，中止**'); sys.exit(2)
+    if np.abs(dq).max() > a.hold_correction_cap:
+        print(f'  **修正幅度 {np.abs(dq).max():.6f} rad 超過事前訂定的上限 '
+              f'{a.hold_correction_cap} rad，中止**'); sys.exit(2)
+    # 從 engage 停留段起斜升，斜升完成後**維持**到之後所有列。
+    i0 = next(i for i, r in enumerate(rows) if r[0] == 'engage')
+    nr = max(1, int(round(a.hold_correction_s * HZ)))
+    new_rows = []
+    for i, r in enumerate(rows):
+        if i < i0:
+            new_rows.append(r); continue
+        u = min(1.0, (i - i0) / float(nr))
+        new_rows.append((r[0], r[1], np.asarray(r[2], float) + dq * u, r[3], r[4]))
+    rows = new_rows
+    HOLDC = {'dq_rad': dq.tolist(), 'max_abs_rad': float(np.abs(dq).max()),
+             'ramp_s': float(a.hold_correction_s), 'ramp_rows': nr,
+             'applied_from_row': int(i0), 'applied_from_phase': 'engage',
+             'cap_rad': float(a.hold_correction_cap),
+             'note': ('命令層的經驗修正，**不是已辨識的重力補償**；'
+                      '以受速度／加速度限制的斜升導入，不跳命令。'
+                      '是否足以抵銷由實際指墊—把手相對位置驗收，不以命令 FK 認定')}
+    print(f'\n  命令層保持修正：{np.round(dq, 6).tolist()} rad'
+          f'（最大 {np.abs(dq).max():.6f}，上限 {a.hold_correction_cap}）'
+          f'，自第 {i0} 列起以 {a.hold_correction_s} s 斜升')
+
 DTS = 1.0 / HZ
 Q = np.array([r[2] for r in rows])
 FING = np.array([r[3] for r in rows])
@@ -610,6 +654,8 @@ with open(csv_p, 'w', newline='') as f:
 meta = {
     'schema': 'drawer_traj/1', 'case': a.case, 'grasp_model': GRASP_MODEL,
     'finger_close_ramp_s': RAMP,
+    'finger_hold_open': bool(a.finger_hold_open),
+    'hold_correction': HOLDC,
     'finger_cmd_open': F_OPEN, 'finger_cmd_closed': F_CLOSED,
     'spec_sha256_16': hashlib.sha256(open(a.spec, 'rb').read()).hexdigest()[:16],
     'cases_sha256_16': hashlib.sha256(open(a.cases, 'rb').read()).hexdigest()[:16],
