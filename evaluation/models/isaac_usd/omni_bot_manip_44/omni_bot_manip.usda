@@ -1,0 +1,52 @@
+#usda 1.0
+(
+    customLayerData = {
+        string creator = "URDF USD Converter v0.1.3"
+    }
+    defaultPrim = "omni_bot"
+    doc = """Generated from Composed Stage of root layer /tmp/tmpdbhggjpp/omni_bot.usdc
+
+
+Generated from Composed Stage of root layer /tmp/urdf_import_omni_bot_manip_6rqp301v/usdex_omni_bot_manip/omni_bot.usdc
+
+
+Generated from Composed Stage of root layer /tmp/urdf_import_omni_bot_manip_6rqp301v/temp_omni_bot_manip/omni_bot_manip.usd
+
+
+Generated from Composed Stage of root layer /home/howardchen/masterthesis/evaluation/models/isaac_usd/omni_bot_manip_44/payloads/base.usd
+"""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "omni_bot" (
+    prepend references = @./payloads/base.usda@
+    variants = {
+        string Physics = "physx"
+    }
+    append variantSets = "Physics"
+)
+{
+    variantSet "Physics" = {
+        "mujoco" (
+            prepend payload = @./payloads/Physics/mujoco.usda@
+        ) {
+
+        }
+        "none" {
+
+        }
+        "physics" (
+            prepend payload = @./payloads/Physics/physics.usda@
+        ) {
+
+        }
+        "physx" (
+            prepend payload = @./payloads/Physics/physx.usda@
+        ) {
+
+        }
+    }
+}
+
