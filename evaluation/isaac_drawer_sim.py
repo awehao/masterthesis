@@ -549,6 +549,7 @@ def main():
     monitor_fail = None
     align_mismatch = False
     snapshot_done = False
+    post_stop = []
     while True:
       try:
         world.step(render=False)
@@ -847,8 +848,16 @@ def main():
             frozen_q = qa.copy()
             stop_reason = stop
             node.say({'stop': stop, 'handling': handling, 'sim_t': t})
-            for _ in range(20):
+            # 停止後的步進**也要留紀錄**：否則「釋放／解除連接後物體是否停穩」
+            # 在資料裡沒有依據（前一趟就是這樣，只知道最終開度、不知道過程）。
+            post_stop = []
+            for _ in range(60):
                 world.step(render=False)
+                _p, _ = drawer_v.get_world_poses()
+                _v = drawer_v.get_velocities()[0]
+                post_stop.append([round(float(world.current_time), 4),
+                                  round(DY0 - float(_p[0][1]), 6),
+                                  round(-float(_v[1]), 6)])
             break
 
         if a.rtf > 0:
@@ -928,6 +937,8 @@ def main():
         'last_temp_c': last_temp,
         'temp_max_c': temp_max, 'temp_max_sim_t': temp_max_t,
         'temp_start_c': tc0,
+        'post_stop_log': post_stop,
+        'post_stop_cols': ['t', 'opening', 'opening_v'],
         'events': events, 'stop_reason': stop_reason,
         'sim_time_s': float(world.current_time),
         'wall_s': time.monotonic() - w0,
