@@ -112,17 +112,28 @@ def build_usd(stage, spec: dict, pose, root: str = '/World/drawer_unit'):
         p = UsdGeom.Cube.Define(stage, path)
         p.GetSizeAttr().Set(2.0)
         x = UsdGeom.Xformable(p)
+        # 平移用 double、縮放用 double3：Gf.Vec3f 是 float32，0.45 之類的值會在
+        # 讀回時差幾十 µm，看起來像幾何不一致，其實只是精度。
         x.AddTranslateOp().Set(Gf.Vec3d(*[float(v) for v in c]))
-        x.AddScaleOp().Set(Gf.Vec3f(*[float(v) / 2.0 for v in s]))
+        x.AddScaleOp(UsdGeom.XformOp.PrecisionDouble).Set(
+            Gf.Vec3d(*[float(v) / 2.0 for v in s]))
         UsdPhysics.CollisionAPI.Apply(p.GetPrim())
         return p
 
-    # 櫃體：只有 CollisionAPI，沒有 RigidBodyAPI ⇒ 靜態
+    # 兩個子 Xform 都放在 (ox, oy, 0)，底下的幾何用**規格裡的本地座標**。
+    # 第一版把子幾何寫成世界絕對座標、Xform 本身不位移，結果滑動關節的
+    # body1 框架在原點、body0 錨點在 (ox, oy, 0)，PhysX 報
+    # "joint with disjointed body transforms" 並把抽屜瞬移過去 —— 限位的零點
+    # 因此整個偏掉。關節兩端的框架必須真的重合。
+    cpath = f'{root}/cabinet'
+    cx = UsdGeom.Xform.Define(stage, cpath)
+    UsdGeom.Xformable(cx).AddTranslateOp().Set(Gf.Vec3d(ox, oy, 0.0))
     for n, c, s in spec['cabinet']:
-        cube(f'{root}/cabinet_{n}', (c[0] + ox, c[1] + oy, c[2]), s)
+        cube(f'{cpath}/{n}', c, s)
 
     dpath = f'{root}/drawer'
     dx = UsdGeom.Xform.Define(stage, dpath)
+    UsdGeom.Xformable(dx).AddTranslateOp().Set(Gf.Vec3d(ox, oy, 0.0))
     UsdPhysics.RigidBodyAPI.Apply(dx.GetPrim())
     ph = spec['drawer']['physics']
     m = UsdPhysics.MassAPI.Apply(dx.GetPrim())
@@ -131,17 +142,16 @@ def build_usd(stage, spec: dict, pose, root: str = '/World/drawer_unit'):
     rb.CreateLinearDampingAttr().Set(float(ph['linear_damping']))
 
     for n, c, s in spec['drawer']['body']:
-        cube(f'{dpath}/{n}', (c[0] + ox, c[1] + oy, c[2]), s)
+        cube(f'{dpath}/{n}', c, s)
     h = spec['drawer']['handle']
     for n, c, s in h['posts']:
-        cube(f'{dpath}/{n}', (c[0] + ox, c[1] + oy, c[2]), s)
+        cube(f'{dpath}/{n}', c, s)
     b = h['bar']
     cyl = UsdGeom.Cylinder.Define(stage, f'{dpath}/handle_bar')
     cyl.GetAxisAttr().Set('X')
     cyl.GetRadiusAttr().Set(float(b['radius']))
     cyl.GetHeightAttr().Set(float(b['length']))
-    UsdGeom.Xformable(cyl).AddTranslateOp().Set(
-        Gf.Vec3d(b['center'][0] + ox, b['center'][1] + oy, b['center'][2]))
+    UsdGeom.Xformable(cyl).AddTranslateOp().Set(Gf.Vec3d(*b['center']))
     UsdPhysics.CollisionAPI.Apply(cyl.GetPrim())
 
     j = UsdPhysics.PrismaticJoint.Define(stage, f'{root}/drawer_slide')
@@ -149,6 +159,7 @@ def build_usd(stage, spec: dict, pose, root: str = '/World/drawer_unit'):
     j.CreateAxisAttr().Set('Y')
     # 兩端框架都繞 Z 轉 180°：關節 +Y 對到世界 −Y（抽屜拉出方向）
     rot = Gf.Quatf(0.0, Gf.Vec3f(0.0, 0.0, 1.0))
+    # body0 空 ⇒ 錨在世界；錨點與抽屜 Xform 的原點同為 (ox, oy, 0)，兩端框架重合
     anchor = Gf.Vec3f(ox, oy, 0.0)
     j.CreateLocalPos0Attr().Set(anchor)
     j.CreateLocalRot0Attr().Set(rot)
@@ -172,6 +183,7 @@ def build_usd(stage, spec: dict, pose, root: str = '/World/drawer_unit'):
 
     return {
         'root': root,
+        'cabinet_prim': cpath,
         'drawer_prim': dpath,
         'joint_prim': f'{root}/drawer_slide',
         'mass_kg': float(m.GetMassAttr().Get()),

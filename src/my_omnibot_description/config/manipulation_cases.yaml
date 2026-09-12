@@ -161,18 +161,38 @@ cases:
       base_yaw_drift_deg: 1.0
       joint_track_err_rad: 0.20
       joint_limit_margin_rad: 0.050
+    # ---- 階段順序：釋放在退出**之前** ----
+    # 固定連接若還在，手臂「退出 40 mm」只會繼續把抽屜拉出來，不是退開。
+    # 正常釋放與異常停止時的「不緊急鬆開」是兩種不同流程，不衝突：
+    # 前者是任務完成的一步，後者是避免在失控狀態下丟開負載。
+    phases: [approach, engage, pull, hold, release, retreat]
     # ---- 逾時（模擬時間）----
     timeout_s:
       approach: 30.0
-      grasp: 10.0
+      engage: 10.0
       pull: 60.0
       hold: 10.0
+      release: 10.0
       retreat: 30.0
       total_wall_s: 900.0
     # ---- 停止處置：發生下列任一項即停，**不自動重試** ----
-    # 停止動作一律相同：把手臂命令凍結在最後一次已套用的設定點並持續發布，
-    # 停掉軌跡播放，寫出 stop_reason 與當下所有量測。抽屜由滑動關節承重，
-    # 不會掉落，所以不做緊急鬆開。
+    # 處置分兩種，**不是一律凍結設定點**：
+    #
+    #   default = freeze_setpoint
+    #     把手臂命令凍結在最後一次已套用的設定點並持續發布，停掉軌跡播放，
+    #     寫出 stop_reason 與當下所有量測。適用於追蹤誤差、限位餘裕、底盤漂移、
+    #     逾時這類「運動異常」。抽屜由滑動關節承重，不會掉落，不做緊急鬆開。
+    #
+    #   contact_force = release_coupling_then_freeze
+    #     **凍結設定點不保證力會下降** —— 位置驅動會持續施力，凍結只是不再前進。
+    #     所以超力有自己的處置，順序固定：
+    #       1. 先解除耦合（fixed 版拆掉固定關節；friction 版手指張開到 finger_cmd_open）
+    #       2. 再凍結設定點
+    #       3. 停止並寫出紀錄
+    #     解除耦合會移除力的傳遞路徑，這才是真正卸力；抽屜仍由滑動關節承重。
+    stop_handling:
+      default: freeze_setpoint
+      contact_force: release_coupling_then_freeze
     stop_on:
       - base_drift                  # 底盤位移或轉角超過容差（底盤必須固定）
       - joint_limit_margin          # 任一關節離安全限位小於 0.050 rad
@@ -183,7 +203,48 @@ cases:
       - phase_timeout
       - wall_timeout
       - cpu_temp                    # 92 °C，沿用既有中止線，不上調
-    contact_force_max_n: 30.0
+    # ---- 力的量測與中止：必須說清楚監看哪一個力 ----
+    force:
+      # **不能**把任一手臂關節的 get_measured_joint_forces() 數值直接稱為把手拉力。
+      # 該函式回傳的是「該連桿上游關節」的反作用力與力矩，且表示在**該關節的子
+      # 連桿座標系**裡。所以本案例定義的算法是：
+      #   1. 取 link6 上游關節（joint6）的反作用力 F_j（6 維：力 3 ＋ 力矩 3）
+      #   2. 以 FK 取該子座標系到世界的旋轉 R，得 F_world = R · F_j[:3]
+      #   3. 沿抽屜軸投影：F_pull = â^T · F_world
+      # 抽屜軸是水平的、夾爪自重沿 −z，投影後夾爪重量一階上不進入 F_pull；
+      # 但**夾爪的慣性項沒有扣除**，所以 F_pull 是「手腕沿抽屜軸傳遞的力」，
+      # 不等於純把手拉力。報告必須這樣寫。
+      measure_link: link6
+      measure_joint: joint6
+      drawer_axis_world: [0.0, -1.0, 0.0]
+      # 交叉核對：由抽屜自身運動推得的拉力 F_drawer = m·a + m·d·v + F_friction。
+      # 兩者相符是旁證，**不等於逐筆對應**；不相符就兩個都報並說明各是什麼。
+      cross_check: drawer_dynamics
+      # 接觸力查詢必須明確帶 dt = physics_dt。預設 dt = 1.0 回傳的是**衝量**，
+      # 不是力（已由 isaac_drawer_probe.py 用已知質量的方塊實測核對）。
+      contact_dt: physics_dt
+      # 中止門檻監看的量：**手腕傳遞力的世界座標模長** |R · F_j[:3]|。
+      # 不是 F_pull 那個投影（投影會漏掉側向過載），也不是手指接觸力
+      # （fixed 版根本沒有手指接觸，用它監看等於沒監看）。
+      # 手腕傳遞力兩版都存在，而且是會造成損壞的那個量。
+      abort_on: wrist_transmitted_force_norm
+      abort_threshold_n: 30.0
+      # **這一項是看到資料之後才加的，記在這裡而不是悄悄改門檻。**
+      # 2026-09-12 第一趟 fixed 版：建立固定關節的**那一個物理步**量到 65.4 N，
+      # 前後樣本都在 3.7–8.7 N，1331 個樣本裡只有 1 個超過 30 N。那是求解器
+      # 建立約束的瞬時暫態，不是持續負載。
+      # 門檻 30 N **未改動**；改的是判定方式：要連續超過這麼久才算。
+      # 0.05 s 的依據：足以濾掉單步暫態，而真正的過載會在 1/20 秒內停住，
+      # 這段時間手臂最多再走 0.35 rad/s × 0.05 s = 0.0175 rad。
+      # 瞬時峰值**一律記錄**（f_norm_peak），不因為不中止就不寫。
+      abort_sustained_s: 0.05
+      # 已用已知外力校正過（見 §量測）：夾爪施世界 (0,0,−20) N 時，
+      # joint_indices['joint6']+1 那一列的 Δ|F| = 20.109 N，誤差 0.5 %。
+      # 但靜止無接觸時該列約 5.2 N，而 joint6 以下重量只有 4.05 N —— 有約 1.1 N
+      # 的常數偏置未解釋。所以這個量只作**安全監看**，不是把手拉力。
+      # 拉力看 f_drawer（抽屜側動力學，不依賴列號對應）。
+      pull_force_primary: f_drawer
+      pull_force_cross_check: f_pull
     cpu_limit_c: 92.0
     # ---- 必錄項目 ----
     # 少錄任何一項就不是完整驗收資料；缺項在紀錄裡寫「未錄製」，不寫 0。
@@ -211,3 +272,6 @@ cases:
       # 抽屜 2.0 kg、線性阻尼 2.0 /s，在 0.05 m/s 下阻尼力約 0.2 N。
       # **這是設計餘裕，不是量測結果**；實際所需拉力由 fixed 版量出來。
       expected_pull_force_n: 8.0
+      # friction 版**額外**監看手指對把手的接觸力（get_contact_force_matrix，
+      # dt = physics_dt）。它不取代上面的手腕傳遞力中止條件，是多一項。
+      finger_contact_abort_n: 12.0
