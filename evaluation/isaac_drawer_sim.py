@@ -56,6 +56,18 @@ ap.add_argument('--finger-kd', type=float, default=1.0e3)
 # 不必為此承受一次已知可能超力的未對準拉開段。
 ap.add_argument('--snapshot-only', action='store_true',
                 help='在 engage 時刻記錄快照但不連接，隨即安全收尾')
+# --- 執行時錄影（**預設關閉；不帶旗標時本檔行為與未加此功能時逐行相同**）---
+# 錄的是**這一趟真正執行的畫面**，不是事後的姿態重演。
+# 只加光源（headless 場景沒有光就全黑），**不改任何幾何、材質顏色、質量或物理參數**，
+# 也不疊任何文字。保護條件不受影響：中止判斷與監看都在錄影之外照常執行。
+ap.add_argument('--record-frames', default='', help='輸出 PNG 的目錄；空字串=不錄')
+ap.add_argument('--record-fps', type=float, default=30.0)
+ap.add_argument('--record-res', default='1280x720')
+ap.add_argument('--record-focal', type=float, default=20.0)
+ap.add_argument('--record-eye', default='')
+ap.add_argument('--record-at', default='')
+ap.add_argument('--record-warmup', type=int, default=40,
+                help='開錄前先算繪幾幀：RTX 標註器首次取像會回 None')
 ap.add_argument('--align-check', default='',
                 help='對準版軌跡的 traj_meta.json；engage 時核對實際快照是否與'
                      '產生軌跡時用的那份相符')
@@ -340,9 +352,55 @@ def main():
                              name='finger_v', track_contact_forces=True,
                              max_contact_count=128, prepare_contact_sensors=True,
                              contact_filter_prim_paths_expr=[DRAWER])
+    # --- 執行時錄影：相機與光源要在 reset 之前建好 ---
+    rec_cam = None
+    rec_every = 0
+    rec_dir = a.record_frames
+    rec_index = []
+    if rec_dir:
+        from isaacsim.sensors.camera import Camera            # noqa: E402
+        from pxr import UsdLux                                # noqa: E402
+        os.makedirs(rec_dir, exist_ok=True)
+        _k = UsdLux.DistantLight.Define(stage, '/World/rec_key')
+        _k.CreateIntensityAttr(3000.0)
+        UsdGeom.Xformable(_k).AddRotateXYZOp().Set(Gf.Vec3f(-45.0, 0.0, 35.0))
+        UsdLux.DomeLight.Define(stage, '/World/rec_dome').CreateIntensityAttr(450.0)
+        _foc = np.array([POSE[0], POSE[1] - 0.38, 0.45])
+        _eye = (np.array([float(v) for v in a.record_eye.split(',')])
+                if a.record_eye else _foc + np.array([1.70, -2.45, 0.92]))
+        _at = (np.array([float(v) for v in a.record_at.split(',')])
+               if a.record_at else _foc)
+        _w, _h = (int(v) for v in a.record_res.split('x'))
+        rec_cam = Camera(prim_path='/World/rec_cam', resolution=(_w, _h))
+        _cx = UsdGeom.Xformable(stage.GetPrimAtPath('/World/rec_cam'))
+        _cx.ClearXformOpOrder()
+        _cx.AddTransformOp().Set(Gf.Matrix4d().SetLookAt(
+            Gf.Vec3d(*[float(v) for v in _eye]), Gf.Vec3d(*[float(v) for v in _at]),
+            Gf.Vec3d(0, 0, 1)).GetInverse())
+        _cg = UsdGeom.Camera(stage.GetPrimAtPath('/World/rec_cam'))
+        _cg.GetFocalLengthAttr().Set(float(a.record_focal))
+        _cg.GetClippingRangeAttr().Set(Gf.Vec2f(0.02, 200.0))
+        rec_every = max(1, int(round(1.0 / (a.record_fps * a.physics_dt))))
+        print(f'[drawer] **執行時錄影開啟** -> {rec_dir}；{_w}x{_h} '
+              f'每 {rec_every} 個物理步取一幀（約 {1.0/(rec_every*a.physics_dt):.1f} fps）'
+              f'；相機 eye={np.round(_eye,3).tolist()} at={np.round(_at,3).tolist()}',
+              flush=True)
+
     print('[drawer] world.reset() ...', flush=True)
     world.reset()
     print('[drawer] reset 完成', flush=True)
+    if rec_cam is not None:
+        import imageio.v2 as _imageio                          # noqa: E402
+        rec_cam.initialize()
+        for _ in range(max(1, a.record_warmup)):
+            world.render()
+            if rec_cam.get_rgba() is not None and len(rec_cam.get_rgba()):
+                break
+        else:
+            print('[drawer] **相機暖機後仍取不到影像，中止**'); return 12
+        for _ in range(max(1, a.record_warmup)):
+            world.render()
+        print('[drawer] 相機暖機完成', flush=True)
     robot = SingleArticulation(prim_path=ROBOT, name='omni_bot')
     robot.initialize()
     print(f'[drawer] articulation DOF {robot.num_dof}', flush=True)
@@ -610,10 +668,22 @@ def main():
     align_mismatch = False
     snapshot_done = False
     post_stop = []
+    n_step = 0
     while True:
       try:
         world.step(render=False)
         t = float(world.current_time)
+        # 執行時錄影：**這一趟真正在跑的畫面**。算繪只讀場景、不寫回任何狀態，
+        # 也不介入中止判斷；代價是牆鐘變慢（模擬時間語意不變）。
+        if rec_cam is not None and (n_step % rec_every) == 0:
+            world.render()
+            _img = rec_cam.get_rgba()
+            if _img is not None and len(_img):
+                _imageio.imwrite(
+                    os.path.join(rec_dir, f'f{len(rec_index):06d}.png'),
+                    np.asarray(_img)[:, :, :3].astype(np.uint8))
+                rec_index.append([len(rec_index), round(t, 4)])
+        n_step += 1
         sec = int(t); nsec = int(round((t - sec) * 1e9))
         c = Clock(); c.clock.sec = sec; c.clock.nanosec = min(nsec, 999999999)
         node.clock_pub.publish(c)
@@ -1061,6 +1131,22 @@ def main():
         'stage_vs_fk_err_max_m': stage_fk_err_max,
         'log': log,
     }
+    if rec_dir and rec_index:
+        import csv as _csv
+        with open(os.path.join(rec_dir, 'frames_index.csv'), 'w', newline='') as _f:
+            _w = _csv.writer(_f)
+            _w.writerow(['frame', 'sim_t'])
+            _w.writerows(rec_index)
+        out['recording'] = {
+            'dir': os.path.abspath(rec_dir), 'frames': len(rec_index),
+            'fps_nominal': a.record_fps, 'every_n_physics_steps': rec_every,
+            'resolution': a.record_res, 'focal_mm': a.record_focal,
+            'sim_t_first': rec_index[0][1], 'sim_t_last': rec_index[-1][1],
+            'nature': ('本趟執行當下由模擬器內相機感測器取像，非事後回放、非桌面擷取；'
+                       '場景只加光源，未改幾何、材質顏色、質量或物理參數'),
+            'caveat': ('RTX 標註器有數幀延遲，畫面相對物理步可能有固定的小延遲；'
+                       'frames_index.csv 記的是**取像當下的模擬時間**')}
+        print(f'[drawer] 錄影 {len(rec_index)} 幀 -> {rec_dir}', flush=True)
     json.dump(out, open(os.path.join(a.out, 'drawer_run.json'), 'w'),
               ensure_ascii=False)
     print(f'[drawer] 溫度：起 {tc0} °C，本趟峰值 {temp_max} °C @ sim {temp_max_t:.2f} s，'

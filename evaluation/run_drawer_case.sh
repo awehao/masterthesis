@@ -53,6 +53,11 @@ setsid "$ISAAC_PY" -u evaluation/isaac_drawer_sim.py --case "$CASE" \
     ${STOP_AT_OPENING:+--stop-at-opening-m "$STOP_AT_OPENING"} \
     ${NO_ATTACH:+--no-attach} \
     ${STOP_AT_CMD_T:+--stop-at-cmd-t "$STOP_AT_CMD_T"} \
+    ${RECORD_FRAMES:+--record-frames "$DIR/frames"} \
+    ${RECORD_FPS:+--record-fps "$RECORD_FPS"} \
+    ${RECORD_FOCAL:+--record-focal "$RECORD_FOCAL"} \
+    ${RECORD_EYE:+--record-eye "$RECORD_EYE"} \
+    ${RECORD_AT:+--record-at "$RECORD_AT"} \
     >> "$LOG" 2>&1 < /dev/null &
 ISAAC=$!; PIDS+=($ISAAC); say "  Isaac PID=$ISAAC"
 
