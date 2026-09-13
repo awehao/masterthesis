@@ -19,8 +19,8 @@ import numpy as np
 
 sys.path.insert(0, __file__.rsplit('/', 1)[0])
 from wb_wheel_limit import (NORMAL, STOP_UNVERIFIED, WheelLimitConfig,  # noqa
-                            arm_within, limit9, stop_command, stop_target,
-                            wheel_matrix)
+                            TIMEOUT, arm_within, limit9, limit9_timeout,
+                            stop_command, wheel_matrix)
 
 CFG = WheelLimitConfig()
 W = wheel_matrix(CFG.wheel_base_L)
@@ -66,6 +66,16 @@ ratio_ok = abs(r.u_out[4] / r.u_out[0] - big[4] / big[0]) < 1e-9
 ratio_bad = abs(only_base[4] / only_base[0] - big[4] / big[0]) > 1e-6
 expect('A4 只縮底盤會改掉底盤/手臂比例（反例）', ratio_ok and ratio_bad,
        f'同λ 比例保留={ratio_ok}；只縮底盤 比例被改={ratio_bad}')
+# **保留的是增量方向，不是請求命令的比例** —— u_prev ≠ 0 時兩者不同
+pnz = cmd(0.02, dq2=-0.30)
+req = cmd(0.50, dq2=0.60)
+rr = limit9(req, pnz, DT, CFG)
+dv_out, dv_req = rr.u_out - pnz, req - pnz
+cosang = float(dv_out @ dv_req / (np.linalg.norm(dv_out) * np.linalg.norm(dv_req)))
+ratio_kept = abs(rr.u_out[4] / rr.u_out[0] - req[4] / req[0]) < 1e-6
+expect('A5 u_prev≠0 時保留的是**增量方向**，非請求命令比例',
+       abs(cosang - 1.0) < 1e-12 and not ratio_kept,
+       f'增量方向 cos={cosang:.12f}；請求比例被保留={ratio_kept}')
 
 print('B 輪速約束')
 # 從一個已在高速的 prev 出發，要求更高速 → 速度綁定
@@ -88,6 +98,25 @@ for _ in range(400):
 sp = max(float(np.max(np.abs(W @ s[:3]))) for s in seq)
 expect('B3 400 步序列每筆都在輪速上限內', sp <= CFG.w_lim + 1e-9,
        f'最大 {sp:.6f} ≤ {CFG.w_lim:.6f}')
+
+print('B4 座標系：W 作用於**本體**速度，yaw 非零不得碰巧通過')
+def world_to_body(vx_w, vy_w, yaw):
+    c, sn = math.cos(yaw), math.sin(yaw)
+    return (vx_w * c + vy_w * sn, -vx_w * sn + vy_w * c)
+# 同一個**世界**速度，在不同 yaw 下的本體命令不同 → λ 也應不同
+VW = (0.0, 0.9)                     # 世界 +y
+lams = {}
+for yaw_deg in (0.0, 40.0, 90.0):
+    bx, by = world_to_body(*VW, math.radians(yaw_deg))
+    lams[yaw_deg] = limit9(cmd(bx, by), cmd(0.02, 0.0), DT, CFG).lam
+expect('B4 同一世界速度、不同 yaw → λ 不同（證明作用在本體）',
+       abs(lams[0.0] - lams[90.0]) > 1e-6 and abs(lams[0.0] - lams[40.0]) > 1e-6,
+       '  '.join(f'yaw={k:g}° λ={v:.6f}' for k, v in lams.items()))
+# 若誤用世界速度，會得到與 yaw 無關的 λ —— 反例對照
+lam_wrong = limit9(cmd(*VW), cmd(0.02, 0.0), DT, CFG).lam
+expect('B5 誤用世界速度會得到與 yaw 無關的 λ（反例）',
+       all(abs(lam_wrong - v) > 1e-6 for k, v in lams.items() if k != 0.0),
+       f'誤用世界 λ={lam_wrong:.6f}（等於 yaw=0 的情形）')
 
 print('C 輪加速度約束')
 ac = max(float(np.max(np.abs(W @ (seq[k + 1][:3] - seq[k][:3])))) / DT
@@ -133,57 +162,61 @@ for bad_dt, why in [(0.0, 'dt_invalid'), (-0.01, 'dt_invalid'),
 expect('E4 stop_command 為全零且另外標記',
        np.allclose(stop_command(cmd(0.2)), np.zeros(9)))
 
-print('F 逾時轉換：經限制器斜降，不瞬間歸零')
-u = cmd(0.03, dq2=0.05)
+print('F 逾時：底盤經輪級限制減速，手臂設定點**立即**停止積分')
+# 這一組正是規格中指出矛盾的例子：底盤 0.25 m/s、joint2 0.05 rad/s
+u = cmd(0.25, dq2=0.05)
+r_to = limit9_timeout(u, DT, CFG)
+naive = u + (1.0 - 0.0) * 0.0      # 佔位
+lam_to = r_to.lam
+naive_arm = (1.0 - lam_to) * u[4]
+expect('F1 逾時後手臂速率**恰為零**', abs(r_to.u_out[4]) == 0.0,
+       f'λ={lam_to:.4f}；若沿用 9 維插值會是 {naive_arm:.6f} rad/s（設定點還在積分）')
+expect('F2 反例確認：9 維插值在此確實不為零', abs(naive_arm) > 1e-6,
+       f'(1−λ)·dq2_prev = {naive_arm:.6f} rad/s')
+expect('F3 逾時明確標記不保留耦合方向',
+       r_to.coupling_preserved is False and r_to.mode == TIMEOUT
+       and r_to.reason == 'timeout_decel')
+expect('F4 底盤本步仍在加速度上限內',
+       r_to.wheel_accel_max <= CFG.wheel_a_max * CFG.wheel_radius + 1e-6,
+       f'{r_to.wheel_accel_max:.4f} ≤ {CFG.wheel_a_max*CFG.wheel_radius:.4f} m/s²')
+
+# 多步減速：底盤與手臂同時非零，且輪速超過單步預算
+u = cmd(0.25, dq2=0.05)
 sp0 = float(np.max(np.abs(W @ u[:3])))
-steps, accs, us = 0, [], [u.copy()]
+steps, accs, seq = 0, [], [u.copy()]
+lim_a2 = CFG.wheel_a_max * CFG.wheel_radius
 while np.max(np.abs(W @ u[:3])) > 1e-9 and steps < 1000:
-    rr = limit9(stop_target(u), u, DT, CFG)
+    rr = limit9_timeout(u, DT, CFG)
     assert rr.u_out is not None
     accs.append(float(np.max(np.abs(W @ (rr.u_out[:3] - u[:3])))) / DT)
     u = rr.u_out
-    us.append(u.copy())
+    seq.append(u.copy())
     steps += 1
-expect('F1 底盤確實降到零', float(np.max(np.abs(W @ u[:3]))) <= 1e-9,
-       f'{steps} 步')
-expect('F2 每步都在加速度上限內', max(accs) <= lim_a + 1e-6,
-       f'最大 {max(accs):.4f} ≤ {lim_a:.4f} m/s²')
-need = math.ceil(sp0 / CFG.a_lim(DT))
-expect('F3 步數與加速度預算相符', steps == need,
-       f'實得 {steps} 步，預算推算 {need} 步（{sp0:.4f}/{CFG.a_lim(DT):.4f}）')
-# **實質發現**：在本階段幅度（0.03 m/s）下，單步預算 0.0625 m/s 已足夠，
-# 斜降就是 1 步 —— E2 的逾時轉換與 E1 的瞬間歸零**無法區分**。
-# 差異只在輪速超過 a_lim(dt) 時才出現。這是要寫進記錄的限制，不是測試瑕疵。
-expect('F4 本階段幅度下斜降為 1 步（與 E1 無法區分）',
-       steps == 1 and sp0 <= CFG.a_lim(DT),
-       f'輪速 {sp0:.4f} ≤ 單步預算 {CFG.a_lim(DT):.4f} → {steps} 步')
-
-# 超過單步預算的幅度才看得出差異
-u2 = cmd(0.25, dq2=0.05)
-sp2 = float(np.max(np.abs(W @ u2[:3])))
-st2, acc2, seq2 = 0, [], [u2.copy()]
-while np.max(np.abs(W @ u2[:3])) > 1e-9 and st2 < 1000:
-    rr = limit9(stop_target(u2), u2, DT, CFG)
-    acc2.append(float(np.max(np.abs(W @ (rr.u_out[:3] - u2[:3])))) / DT)
-    u2 = rr.u_out
-    seq2.append(u2.copy())
-    st2 += 1
-expect('F5 超過單步預算時確實多步斜降（與 E1 不同）', st2 > 1,
-       f'輪速 {sp2:.4f} > 預算 {CFG.a_lim(DT):.4f} → {st2} 步（{st2*DT:.3f}s）')
-expect('F6 多步斜降每步都在加速度上限內', max(acc2) <= lim_a + 1e-6,
-       f'最大 {max(acc2):.4f} ≤ {lim_a:.4f} m/s²')
-expect('F7 多步斜降步數與預算相符',
-       st2 == math.ceil(sp2 / CFG.a_lim(DT)),
-       f'實得 {st2}，推算 {math.ceil(sp2 / CFG.a_lim(DT))}')
-expect('F8 斜降期間手臂速率同步降到零',
-       abs(seq2[-1][4]) <= 1e-12 and abs(seq2[1][4]) < abs(seq2[0][4]),
-       f'joint2 速率 {seq2[0][4]:.6f} → {seq2[1][4]:.6f} → {seq2[-1][4]:.6f}')
+expect('F5 需要多步才減到零（輪速 > 單步預算）', steps > 1,
+       f'輪速 {sp0:.4f} > 預算 {CFG.a_lim(DT):.4f} → {steps} 步（{steps*DT:.3f}s）')
+expect('F6 每步都在加速度上限內', max(accs) <= lim_a2 + 1e-6,
+       f'最大 {max(accs):.4f} ≤ {lim_a2:.4f} m/s²')
+expect('F7 步數與加速度預算相符', steps == math.ceil(sp0 / CFG.a_lim(DT)),
+       f'實得 {steps}，推算 {math.ceil(sp0 / CFG.a_lim(DT))}')
+expect('F8 **第一步之後手臂速率就一直是零**（設定點不再積分）',
+       all(abs(x[4]) == 0.0 for x in seq[1:]),
+       f'joint2 序列 {[round(float(x[4]), 6) for x in seq[:3]]} …')
+# 本階段幅度：底盤一步到零，手臂同樣立即歸零
+r_low = limit9_timeout(cmd(0.03, dq2=0.05), DT, CFG)
+expect('F9 本階段幅度下底盤一步到零（與 E1 無法區分），手臂仍立即歸零',
+       float(np.max(np.abs(W @ r_low.u_out[:3]))) <= 1e-12
+       and r_low.u_out[4] == 0.0,
+       f'輪速 0.0300 ≤ 單步預算 {CFG.a_lim(DT):.4f}')
+r_bad = limit9_timeout(cmd(0.9), DT, CFG)
+expect('F10 逾時時前值超速 → stop_unverified，不偷換基準',
+       r_bad.u_out is None and r_bad.mode == STOP_UNVERIFIED)
 
 print('G 記錄欄位（policy §5）')
 r = limit9(cmd(1.0, dq2=0.8), Z, DT, CFG)
 row = r.as_row(cmd(1.0, dq2=0.8), Z, DT)
 need_keys = {'u_req', 'u_prev', 'u_out', 'lam', 'modified', 'reason', 'dt',
-             'mode', 'wheel_speed_max', 'wheel_accel_max', 'binding'}
+             'mode', 'wheel_speed_max', 'wheel_accel_max', 'binding',
+             'coupling_preserved'}
 expect('G1 欄位齊全', need_keys <= set(row), f'缺 {need_keys - set(row)}')
 expect('G2 修改前後命令都有記錄',
        row['u_req'] != row['u_out'] and row['u_prev'] == [0.0] * 9)

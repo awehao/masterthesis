@@ -1,6 +1,13 @@
 """完整 9 維命令的輪級限制（執行版本 E2）。
 
-策略見 `evaluation/results/specs/wb_wheel_limit_policy_v1.md`。
+**座標系（重要）**：輪速映射 `r·ω = W·ξ` 的 ξ 必須是**底盤本體座標**速度。
+Isaac 執行端收到的 `/wb_vel_cmd` 已由 `arm_vel_adapter` 從安全層的
+`report_frame` 轉成本體座標（執行端再轉回世界座標才呼叫速度 API），
+所以本模組的輸入就是**本體命令**。`u_prev` 必須保存為
+**上一物理步真正套用的本體命令**，不是 report frame 的值、也不是世界速度。
+yaw ≈ 0 時兩者碰巧一致，不可據此混稱。
+
+策略見 `evaluation/results/specs/wb_wheel_limit_policy_v2.md`。
 本檔是**純函式模組**，不含 ROS、不含模擬器，可完全離線測試。
 
 核心：λ 由**底盤**分量的輪速／輪加速度約束決定，但**施加於完整 9 維增量**——
@@ -10,9 +17,15 @@
 只縮底盤會改掉底盤與手臂的相對比例，上游求解出的耦合方向就沒了。
 同一個 λ 讓 u_out 落在 9 維空間中 u_prev→u_req 的線段上。
 
+共用 λ 保留的是 **`u_req − u_prev` 這個增量的方向**，
+**不是**一般情況下請求命令本身的底盤／手臂比例 ——
+只有 `u_prev = 0` 時兩者才恰好一致。
+
 **不得由此宣稱上游全身安全性不變**：u_out 不是求解器的輸出，
 上游的距離約束是對 u_req 算的。λ < 1 時 `modified` 為 True，
 呼叫端必須記錄。
+
+**逾時是完整 9 維插值的例外**，見 `limit9_timeout`。
 
 E1 保持不變；本檔是另立的版本，不改動 E1 的檔案。
 """
@@ -22,15 +35,17 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-POLICY = 'evaluation/results/specs/wb_wheel_limit_policy_v1.md'
+POLICY = 'evaluation/results/specs/wb_wheel_limit_policy_v2.md'
 VERSION = 'wb_wheel_limit/1'
 
 NORMAL = 'normal'
+TIMEOUT = 'timeout'                     # 逾時減速：**不是**完整 9 維插值
 STOP_UNVERIFIED = 'stop_unverified'     # 不在輪級加速度保證之內
 
 
 def wheel_matrix(L: float) -> np.ndarray:
-    """r·ω = W·u_base。列序與 gmpc 的耦合約束一致。"""
+    """r·ω = W·ξ_body。**ξ 必須是底盤本體座標速度**，不是 report frame、
+    也不是世界速度。列序與 gmpc 的耦合約束一致。"""
     return np.array([[0.0, 1.0, L],
                      [-1.0, 0.0, L],
                      [0.0, -1.0, L],
@@ -65,9 +80,11 @@ class LimitResult:
     wheel_speed_max: float = float('nan')
     wheel_accel_max: float = float('nan')
     binding: list = field(default_factory=list)
+    # 逾時模式為 False：手臂被獨立歸零，本步不保留耦合方向
+    coupling_preserved: bool = True
 
     def as_row(self, u_req, u_prev, dt):
-        """policy_v1 §5 的記錄欄位。"""
+        """policy_v2 §5 的記錄欄位。"""
         f = lambda v: [round(float(x), 6) for x in np.asarray(v, float)]  # noqa
         return {'u_req': f(u_req), 'u_prev': f(u_prev),
                 'u_out': None if self.u_out is None else f(self.u_out),
@@ -76,7 +93,8 @@ class LimitResult:
                 'dt': round(float(dt), 6), 'mode': self.mode,
                 'wheel_speed_max': round(float(self.wheel_speed_max), 6),
                 'wheel_accel_max': round(float(self.wheel_accel_max), 6),
-                'binding': list(self.binding)}
+                'binding': list(self.binding),
+                'coupling_preserved': bool(self.coupling_preserved)}
 
 
 def limit9(u_req, u_prev, dt: float, cfg: WheelLimitConfig) -> LimitResult:
@@ -150,13 +168,41 @@ def limit9(u_req, u_prev, dt: float, cfg: WheelLimitConfig) -> LimitResult:
                        binding=[f'{k}[{i}]' for k, i in binding])
 
 
-def stop_target(u_prev) -> np.ndarray:
-    """逾時／失效時的目標：底盤三分量 0、手臂速率 0。
+def limit9_timeout(u_prev, dt: float, cfg: WheelLimitConfig) -> LimitResult:
+    """逾時減速：**底盤經輪級限制、手臂速率立即歸零**。
 
-    **目標為零不等於輸出為零** —— 仍要經過 limit9 才知道這一步能走多少。
-    手臂速率為 0 使設定點停止積分，與 E1 的凍結行為一致。
+    **這是完整 9 維插值的例外，而且是必要的例外。**
+    若沿用 `u_out = u_prev + λ(0 − u_prev) = (1 − λ)·u_prev`，
+    則 λ < 1 且前一筆手臂速度非零時，輸出的手臂速度**仍然非零**，
+    設定點會**繼續積分** —— 與「逾時凍結設定點」（E1 語意）直接矛盾。
+
+        例：u_prev 底盤 0.25 m/s、joint2 0.05 rad/s，單步預算 0.0625 m/s
+            → λ = 0.25，v_out = 0.1875，dq2_out = 0.0375（**設定點還在動**）
+
+    因此本函式：
+
+        u_out[:3] = (1 − λ) · u_prev[:3]     底盤照輪級限制減速
+        u_out[3:] = 0                        手臂**立即**停止積分（保留 E1 語意）
+
+    代價要說清楚：**本步不保留耦合方向**，`coupling_preserved` 為 False。
+    呼叫端必須記錄**最後真正套用的整筆命令**。
     """
-    return np.zeros(9)
+    u_prev = np.asarray(u_prev, float)
+    if u_prev.shape != (9,):
+        raise ValueError('命令長度必須為 9')
+    target = np.zeros(9)
+    r = limit9(target, u_prev, dt, cfg)
+    if r.u_out is None:
+        r.mode = STOP_UNVERIFIED
+        return r
+    u_out = r.u_out.copy()
+    u_out[3:] = 0.0                      # **例外**：手臂立即歸零，不隨 λ 縮放
+    ws = float(np.max(np.abs(wheel_matrix(cfg.wheel_base_L) @ u_out[:3])))
+    wa = float(np.max(np.abs(wheel_matrix(cfg.wheel_base_L)
+                             @ (u_out[:3] - u_prev[:3])))) / dt
+    return LimitResult(u_out, r.lam, 'timeout_decel', TIMEOUT,
+                       modified=True, wheel_speed_max=ws, wheel_accel_max=wa,
+                       binding=r.binding, coupling_preserved=False)
 
 
 def stop_command(u_prev) -> np.ndarray:

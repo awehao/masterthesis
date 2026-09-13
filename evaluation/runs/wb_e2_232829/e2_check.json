@@ -1,0 +1,88 @@
+{
+ "schema": "wb_e2_check/1",
+ "run": "/home/howardchen/masterthesis/evaluation/runs/wb_e2_232829",
+ "spec_path": "evaluation/results/specs/wb_e2_criteria_v1.yaml",
+ "spec_version": "v1",
+ "spec_sha256": "4de4d5161ce3a3a24a422ca96574fabd769d2a8e468b098fa61932732eb97506",
+ "checks": [
+  {
+   "key": "T1_限制被觸發的步數",
+   "pass": true,
+   "detail": "5 步（≥ 1）；摘要 modified_steps=5"
+  },
+  {
+   "key": "T2_最小 λ 明顯小於 1",
+   "pass": true,
+   "detail": "λ_min = 0.567718（< 0.999）"
+  },
+  {
+   "key": "T3_被限制時有記錄原因",
+   "pass": true,
+   "detail": "逐步記錄 4000 筆；被限制步的原因 ['wheel_accel']"
+  },
+  {
+   "key": "L1_輪速逐步合規",
+   "pass": true,
+   "detail": "max 0.055045 ≤ 0.2775"
+  },
+  {
+   "key": "L2_輪加速度逐步合規",
+   "pass": true,
+   "detail": "max 6.250000 ≤ 6.25"
+  },
+  {
+   "key": "B1_線速度未超界",
+   "pass": true,
+   "detail": "max |vx| 0.045000 ≤ 0.05"
+  },
+  {
+   "key": "B2_角速度未超界",
+   "pass": true,
+   "detail": "max |wz| 0.041000 ≤ 0.2"
+  },
+  {
+   "key": "B3_界限設定未被放寬",
+   "pass": true,
+   "detail": "執行端界限 0.05/0.2"
+  },
+  {
+   "key": "S1_手臂門檻不變",
+   "pass": true,
+   "detail": "arm_rate_max=1.0"
+  },
+  {
+   "key": "S2_rejected",
+   "pass": true,
+   "detail": "rejected=0"
+  },
+  {
+   "key": "S3_fail_is_none",
+   "pass": true,
+   "detail": "fail=None"
+  },
+  {
+   "key": "D1_pregrasp 由獨立條件禁止",
+   "pass": true,
+   "detail": "wheel_limit_implemented=True, pregrasp_preconditions_met=False"
+  },
+  {
+   "key": "D2_熱中止門檻",
+   "pass": true,
+   "detail": "cpu_limit_c=92.0，峰值 84.625 °C"
+  }
+ ],
+ "passed": 13,
+ "total": 13,
+ "all_pass": true,
+ "measured": {
+  "modified_steps": 5,
+  "lam_min": 0.567718,
+  "wheel_speed_max": 0.055045,
+  "wheel_accel_max": 6.25,
+  "vx_max": 0.045,
+  "wz_max": 0.041
+ },
+ "scope_limit": "僅驗證**限制器在執行端確實生效且合規**。 **不**宣稱上游全身安全性在命令被修改後仍成立； **不**宣稱停止掃掠範圍的避碰保證；pregrasp 仍由獨立條件禁止。\n",
+ "not_retroactive": "本判準只適用於本規格建立之後的 E2 趟次。E1 的既有結果不受影響， 也不因 E2 通過而追認任何 E1 趟次。\n",
+ "not_claimed": "上游全身安全性在命令被修改後**未重新論證**；停止掃掠範圍**無避碰保證**；pregrasp 仍禁止"
+}

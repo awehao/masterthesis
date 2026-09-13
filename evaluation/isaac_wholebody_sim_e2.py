@@ -1,0 +1,611 @@
+"""Isaac 全身執行端：底盤與手臂由**同一筆** 9 維命令驅動。
+
+定位
+----
+把已在 **Gazebo** 驗收過的全身同動能力（`wholebody_pregrasp_20260908.md`）
+接到 **Isaac 執行端**。**不重新研究控制器**，上游沿用既有的
+`wholebody_pregrasp.py → wholebody_safety_node → arm_vel_adapter`。
+
+既有三支**一律不動**：`isaac_bigarena_sim.py`（導航，凍結）、
+`isaac_manip_sim.py`（預抓取）、`isaac_drawer_sim.py`（抽屜）。
+
+介面
+----
+    /wb_vel_cmd   Float64MultiArray, 9   [vx_body, vy_body, wz, dq1..dq6]
+
+**只訂閱這一個 topic**。底盤與手臂分量來自同一次全身求解，
+分開訂閱兩個 topic 取最新值**不算同步**，本檔不提供那條路徑。
+
+不啟動 `arm_vel_gate` 與 `wheel_limit_guard` 兩個節點，
+但**它們的必要檢查沒有省略** —— 全部由 `wb_cmd_chain.CmdChain` 承接，
+並已由 `evaluation/test_wb_cmd_chain.py` 不開模擬器逐項測試。
+
+手臂致動轉接層
+--------------
+Isaac 手臂是位置驅動，上游給的是關節速度，因此需要積分。
+**這不是原生速度控制**：積分用 `world.current_time` 的相鄰物理步差、
+初始設定點由實測關節位置建立、過期則停止積分並凍結設定點。
+**凍結設定點只代表停止積分，不代表手臂實際速度瞬間為零** ——
+停止行為由本檔逐步記錄的實測關節速度另行判定。
+
+規格：`evaluation/results/specs/isaac_wholebody_port_v2.md`
+
+用法（介面測試）：
+    $ISAAC_PY evaluation/isaac_wholebody_sim.py --out <dir> --mode base
+"""
+import argparse, json, math, os, sys, threading, time
+import numpy as np
+
+WS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.join(WS, 'evaluation')
+sys.path.insert(0, HERE)
+# 與 isaac_drawer_sim.py 相同：套件在 src/ 下，Isaac 的直譯器沒有 workspace 的
+# install/ 在路徑上，所以直接加進來。
+sys.path.insert(0, os.path.join(WS, 'src/ammr_wholebody_mpc'))
+
+ap = argparse.ArgumentParser()
+ap.add_argument('--out', required=True)
+ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_manip.urdf'))
+ap.add_argument('--physics-dt', type=float, default=0.01)
+ap.add_argument('--headless', default='true')
+ap.add_argument('--sim-limit', type=float, default=30.0)
+ap.add_argument('--rtf', type=float, default=1.0)
+ap.add_argument('--kp', type=float, default=1.0e5)
+ap.add_argument('--kd', type=float, default=1.0e4)
+# --- 命令鏈 ---
+ap.add_argument('--max-cmd-age-s', type=float, default=0.2,
+                help='接收端**獨立**的逾時判定（模擬時間）')
+ap.add_argument('--arm-rate-max', type=float, default=1.0,
+                help='關節速度上限（rad/s）；超過即整筆失效')
+# --- 輪級：正常輸出限制尚未實作，先用明確低速界限 + 越界中止 ---
+ap.add_argument('--base-lin-max', type=float, default=0.05,
+                help='**低速介面界限**（m/s）。這不是輪級限制功能，'
+                     '只是介面測試用的明確界限；越界即整筆中止，不縮命令')
+ap.add_argument('--base-ang-max', type=float, default=0.20,
+                help='**低速介面界限**（rad/s），同上')
+ap.add_argument('--no-frictionless', action='store_true',
+                help='診斷用：不綁零摩擦材質（保留 PhysX 預設），用來對照。'
+                     'URDF 的 <gazebo><mu1> importer 不讀，不綁就是預設約 0.5')
+# ---- E2 輪級限制參數（**預設值不得為了觸發限制而放寬**）----
+ap.add_argument('--wheel-radius', type=float, default=0.05)
+ap.add_argument('--wheel-base-L', type=float, default=0.245,
+                help='取自 URDF base_link_rim_*_joint 的 ±0.245')
+ap.add_argument('--wheel-w-max', type=float, default=5.55, help='rad/s')
+ap.add_argument('--wheel-a-max', type=float, default=125.0, help='rad/s²')
+ap.add_argument('--keep-limit-rows', type=int, default=4000,
+                help='存進 wb_run.json 的逐步限制記錄筆數上限')
+ap.add_argument('--mode', default='base',
+                choices=['base', 'arm', 'sync', 'pregrasp'],
+                help='驗收順序：base → arm → sync → pregrasp')
+ap.add_argument('--solver-label', default='dls',
+                help='僅供記錄：本趟上游用的求解模式。介面煙霧測試標示 dls；'
+                     '**dls 不是 B 基線**')
+a = ap.parse_args()
+os.makedirs(a.out, exist_ok=True)
+
+# ===== 執行版本 E2 =====
+# E1（isaac_wholebody_sim.py）**保持位元不變**；本檔是另立的版本。
+# 與 E1 的唯一功能差異：命令鏈改用 CmdChainE2，加上輪級限制
+#（策略 evaluation/results/specs/wb_wheel_limit_policy_v2.md）。
+WHEEL_LIMIT_IMPLEMENTED = True
+
+# **輪級限制已實作，不等於 pregrasp 可以解鎖。**
+# 這裡刻意用**另一個獨立條件**，不是同一個旗標 —— 還缺三項：
+#   1. 命令被修改後，上游全身安全性的重新論證（策略 §2 明說目前沒有）
+#   2. 停止掃掠範圍的避碰保證（見停止預算撤回書，目前沒有）
+#   3. 求解器驅動的受限測試規格（低速、自由空間）尚未訂定
+PREGRASP_PRECONDITIONS_MET = False
+
+if a.mode == 'pregrasp' and not PREGRASP_PRECONDITIONS_MET:
+    print('[wb] **pregrasp 仍禁止**：輪級限制雖已實作，'
+          '但「命令被修改後的上游安全性」「停止掃掠避碰保證」'
+          '「求解器受限測試規格」三項前提未滿足。'
+          '這不是同一個旗標，不能由 WHEEL_LIMIT_IMPLEMENTED 解鎖。')
+    sys.exit(2)
+
+import yaml                                                    # noqa: E402
+from wb_cmd_chain_e2 import CmdChainE2                          # noqa: E402
+from wb_wheel_limit import WheelLimitConfig                     # noqa: E402
+from cpu_temp import read as cpu_temp_read                     # noqa: E402
+from ammr_wholebody_mpc.arm_limits import LITE6_SAFE           # noqa: E402
+
+# **單一命令順序**：`joints` 參數、六個速度分量的積分、以及對 articulation
+# 的實際 DOF 索引與套用，全部用這一份。**不另外宣告一份讓檢查通過。**
+CMD_JOINT_ORDER = [f'joint{i}' for i in range(1, 7)]
+ARM = CMD_JOINT_ORDER          # 沿用既有名稱，指向同一個物件
+ROBOT = '/World/omni_bot'
+
+from isaacsim import SimulationApp                             # noqa: E402
+_cfg = {'headless': a.headless.lower() == 'true'}
+sim_app = SimulationApp(_cfg)
+
+from isaacsim.core.api import World                            # noqa: E402
+from isaacsim.core.api.objects.ground_plane import GroundPlane  # noqa: E402
+from isaacsim.core.prims import SingleArticulation             # noqa: E402
+from isaacsim.core.utils.types import ArticulationAction       # noqa: E402
+from pxr import UsdGeom, Gf, Usd                               # noqa: E402
+from isaac_common import (import_urdf, physics_parts,           # noqa: E402
+                          bind_frictionless, collision_prims)
+
+import rclpy                                                   # noqa: E402
+from rclpy.node import Node                                    # noqa: E402
+from rclpy.executors import SingleThreadedExecutor             # noqa: E402
+from rosgraph_msgs.msg import Clock                            # noqa: E402
+from sensor_msgs.msg import JointState                         # noqa: E402
+from std_msgs.msg import Float64MultiArray, String             # noqa: E402
+from nav_msgs.msg import Odometry                              # noqa: E402
+from geometry_msgs.msg import TransformStamped                 # noqa: E402
+import tf2_ros                                                 # noqa: E402
+
+
+class WBNode(Node):
+    """只訂閱 /wb_vel_cmd 這一個 topic。"""
+
+    def __init__(self, chain, joint_order):
+        super().__init__('isaac_wholebody_sim')
+        # 回報給 adapter 核對的 joints，**就是本端實際使用的命令順序**。
+        self.declare_parameter('joints', list(joint_order))
+        self.chain = chain
+        self.sim_t = 0.0
+        self.n_cb = 0
+        self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
+                                 self._cmd, 10)
+        self.clock_pub = self.create_publisher(Clock, '/clock', 10)
+        self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
+        self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
+        self.status_pub = self.create_publisher(String, '/wb_sim/status', 10)
+        # **Isaac 只發布到模型根部 base_footprint**。
+        # base_footprint → base_link（URDF 固定 +0.05 m）由 robot_state_publisher
+        # 發在 /tf_static；安全層查 odom → base_link 時由 TF 鏈自動組合。
+        # 若這裡另發 odom → base_link，base_link 就有兩個父節點。
+        self.tfb = tf2_ros.TransformBroadcaster(self)
+
+    def _cmd(self, msg):
+        self.n_cb += 1
+        # **接收時間**用模擬時間，命名為 recv_sim_t；不冒稱來源發布時間
+        self.chain.receive(list(msg.data), self.sim_t)
+
+    def publish_feedback(self, t, names, q, dq, p_fp, quat_fp, R_fp,
+                         v_world, w_world, status):
+        """回授：**同一份完整位姿與同一個時間戳**。
+
+        * 位姿取自 `base_footprint` prim 的實際世界變換，**保留完整姿態**
+          （不只用 yaw 重建 —— 那會把底盤的 roll/pitch 藏掉）。
+        * `/odom.twist` 以 **child_frame_id 表達**（本體座標），
+          由世界座標速度旋轉而來。yaw = 0 時碰巧相同，不代表定義正確。
+        """
+        stamp = self.get_clock().now().to_msg()
+        stamp.sec = int(t); stamp.nanosec = min(int(round((t - int(t)) * 1e9)),
+                                                999999999)
+        js = JointState(); js.header.stamp = stamp
+        js.name = list(names)
+        js.position = [float(x) for x in q]
+        js.velocity = [float(x) for x in dq]
+        self.js_pub.publish(js)
+
+        # 世界 → 本體（child_frame）：twist 的定義要求如此
+        v_b = R_fp.T @ np.asarray(v_world, float)
+        w_b = R_fp.T @ np.asarray(w_world, float)
+
+        od = Odometry(); od.header.stamp = stamp
+        od.header.frame_id = 'odom'
+        od.child_frame_id = 'base_footprint'
+        od.pose.pose.position.x = float(p_fp[0])
+        od.pose.pose.position.y = float(p_fp[1])
+        od.pose.pose.position.z = float(p_fp[2])
+        od.pose.pose.orientation.w = float(quat_fp[0])
+        od.pose.pose.orientation.x = float(quat_fp[1])
+        od.pose.pose.orientation.y = float(quat_fp[2])
+        od.pose.pose.orientation.z = float(quat_fp[3])
+        od.twist.twist.linear.x = float(v_b[0])
+        od.twist.twist.linear.y = float(v_b[1])
+        od.twist.twist.linear.z = float(v_b[2])
+        od.twist.twist.angular.x = float(w_b[0])
+        od.twist.twist.angular.y = float(w_b[1])
+        od.twist.twist.angular.z = float(w_b[2])
+        self.odom_pub.publish(od)
+
+        tr = TransformStamped()
+        tr.header.stamp = stamp                  # **與 /odom 同一時間戳**
+        tr.header.frame_id = 'odom'
+        tr.child_frame_id = 'base_footprint'     # **單一父節點**
+        tr.transform.translation.x = float(p_fp[0])
+        tr.transform.translation.y = float(p_fp[1])
+        tr.transform.translation.z = float(p_fp[2])
+        tr.transform.rotation.w = float(quat_fp[0])
+        tr.transform.rotation.x = float(quat_fp[1])
+        tr.transform.rotation.y = float(quat_fp[2])
+        tr.transform.rotation.z = float(quat_fp[3])
+        self.tfb.sendTransform(tr)
+
+        self.status_pub.publish(String(data=status))
+
+
+def q_yaw(t):
+    return [math.cos(t / 2.0), 0.0, 0.0, math.sin(t / 2.0)]
+
+
+def yaw_of(q):
+    w, x, y, z = (float(v) for v in q)
+    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def main():
+    world = World(stage_units_in_meters=1.0, physics_dt=a.physics_dt,
+                  rendering_dt=a.physics_dt)
+    if abs(float(world.get_rendering_dt()) - float(a.physics_dt)) > 1e-12:
+        print('[wb] rendering_dt != physics_dt，中止'); return 4
+    GroundPlane(prim_path='/World/ground', name='ground', z_position=0.0)
+
+    # **底盤不固定**：全身同動需要底盤能動，所以不用 fix_base
+    prim = import_urdf(a.urdf, ROBOT, fix_base=False)
+    stage = world.stage
+    # 與導航版一致：**搜尋 articulation root**，不直接寫死 prim 路徑。
+    bodies, arts = physics_parts(stage, prim)
+    if not arts:
+        print('[wb] **找不到 articulation root**，中止'); return 7
+    ART_ROOT = arts[0]
+    print(f'[wb] articulation root {ART_ROOT}（剛體 {len(bodies)}）', flush=True)
+    globals()['ART_ROOT'] = ART_ROOT
+    xf = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT))
+    xf.ClearXformOpOrder()
+    xf.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+    _rq = q_yaw(0.0)
+    xf.AddOrientOp().Set(Gf.Quatf(_rq[0], _rq[1], _rq[2], _rq[3]))
+
+    # 零摩擦材質：URDF 的 <gazebo><mu1> importer 不讀，產生的 USD 沒有材質，
+    # PhysX 退回預設（約 0.5）。導航版量到的效果是速度追蹤只有 37 %。
+    # **接觸雙方都要綁**：預設混合規則取平均，只歸零機器人側仍留一半地面摩擦。
+    fric_rb = None
+    if not a.no_frictionless:
+        sph = collision_prims(stage, prim, lambda p: 'support_' in p)
+        gr = collision_prims(stage, '/World/ground')
+        n_bound = bind_frictionless(stage, sph + gr)
+        fric_rb = {'support_spheres': len(sph), 'ground': len(gr),
+                   'bound': n_bound,
+                   'note': ('URDF 的 <gazebo><mu1> 不會被 importer 讀入；'
+                            '雙方都綁才有效（預設混合規則取平均）')}
+        print(f'[wb] 零摩擦材質：支撐球 {len(sph)} + 地面 {len(gr)} → '
+              f'綁定 {n_bound}', flush=True)
+        if n_bound == 0:
+            print('[wb] **零摩擦綁定數為 0，中止**'); return 8
+
+    world.reset()
+    robot = SingleArticulation(prim_path=ART_ROOT, name='omni_bot')
+    robot.initialize()
+    idx = {n: k for k, n in enumerate(robot.dof_names)}
+    missing = [j for j in CMD_JOINT_ORDER if j not in idx]
+    if missing:
+        print(f'[wb] URDF 缺關節 {missing}，中止'); return 5
+    if len(set(CMD_JOINT_ORDER)) != len(CMD_JOINT_ORDER):
+        print('[wb] **命令順序有重複關節**，中止'); return 5
+    dof_ids = [idx[j] for j in CMD_JOINT_ORDER]
+    if len(set(dof_ids)) != len(dof_ids):
+        print('[wb] **命令順序對應到重複的 DOF 索引**，中止'); return 5
+    cmd_map = [{'cmd_field': 3 + k, 'joint': j, 'dof_index': idx[j]}
+               for k, j in enumerate(CMD_JOINT_ORDER)]
+    print('[wb] 命令欄位 → 關節名稱 → articulation 索引：', flush=True)
+    for e in cmd_map:
+        print(f"    v[{e['cmd_field']}]  {e['joint']:<8}  DOF {e['dof_index']}",
+              flush=True)
+    print(f'[wb] 無缺漏、無重複；執行中不改順序', flush=True)
+    globals()['CMD_MAP'] = cmd_map
+    print(f'[wb] articulation DOF {robot.num_dof}', flush=True)
+
+    # **確認實際位姿對應的 prim**：不把 articulation 根的位姿直接當成某個連桿。
+    fp = next((pr for pr in Usd.PrimRange.Stage(
+        stage, Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
+        if pr.GetName() == 'base_footprint'
+        and str(pr.GetPath()).startswith(ROBOT)), None)
+    if fp is None:
+        print('[wb] 找不到 base_footprint prim，中止'); return 6
+    print(f'[wb] base_footprint prim {fp.GetPath()}', flush=True)
+    xc = UsdGeom.XformCache()
+    m_fp = xc.GetLocalToWorldTransform(fp)
+    t_fp = m_fp.ExtractTranslation()
+    rp, _ = robot.get_world_pose()
+    d_root = float(np.linalg.norm(np.array([t_fp[0], t_fp[1], t_fp[2]])
+                                  - np.asarray(rp, float)))
+    print(f'[wb] articulation 根 vs base_footprint 位置差 {d_root*1000:.4f} mm'
+          f'（核對，非假設）', flush=True)
+    globals()['ROOT_FP_OFFSET_MM'] = d_root * 1000.0
+
+    q = robot.get_joint_positions()
+    kp = np.zeros(robot.num_dof, dtype=np.float32)
+    kd = np.zeros(robot.num_dof, dtype=np.float32)
+    for j in ARM:
+        kp[idx[j]] = a.kp; kd[idx[j]] = a.kd
+    robot.set_joint_positions(q)
+    robot.get_articulation_controller().set_gains(kps=kp, kds=kd)
+    robot.get_articulation_controller().apply_action(
+        ArticulationAction(joint_positions=q))
+
+    # --- **低速介面界限**（不是輪級限制功能）：越界即整筆中止，不縮命令 ---
+    def low_speed_bound(vx, vy, wz):
+        lin = math.hypot(vx, vy)
+        if lin > a.base_lin_max:
+            return (False, f'線速度 {lin:.4f} > {a.base_lin_max} m/s')
+        if abs(wz) > a.base_ang_max:
+            return (False, f'角速度 {abs(wz):.4f} > {a.base_ang_max} rad/s')
+        return (True, None)
+
+    wcfg = WheelLimitConfig(wheel_radius=a.wheel_radius,
+                            wheel_base_L=a.wheel_base_L,
+                            wheel_w_max=a.wheel_w_max,
+                            wheel_a_max=a.wheel_a_max,
+                            arm_rate_max=a.arm_rate_max,
+                            dt_max=max(5.0 * a.physics_dt, 0.05))
+    chain = CmdChainE2(max_cmd_age_s=a.max_cmd_age_s,
+                       arm_rate_max=a.arm_rate_max, wheel_ok=low_speed_bound,
+                       joint_lower=tuple(LITE6_SAFE.lower),
+                       joint_upper=tuple(LITE6_SAFE.upper), mode=a.mode,
+                       wheel_cfg=wcfg, keep_limit_rows=a.keep_limit_rows)
+    print(f'[wb] **E2 輪級限制**：r={wcfg.wheel_radius} L={wcfg.wheel_base_L} '
+          f'w_lim={wcfg.w_lim:.4f} m/s a_lim(dt={a.physics_dt})={wcfg.a_lim(a.physics_dt):.4f} m/s'
+          f'；底盤分量為**本體座標**', flush=True)
+    print(f'[wb] 模式 {a.mode}：允許分量 {chain.mode}；'
+          f'不符模式的命令整筆拒收', flush=True)
+
+    rclpy.init()
+    node = WBNode(chain, CMD_JOINT_ORDER)
+    ex = SingleThreadedExecutor(); ex.add_node(node)
+    th = threading.Thread(target=ex.spin, daemon=True); th.start()
+    print('[wb] 進入主迴圈；等待 /wb_vel_cmd', flush=True)
+    return loop(world, robot, idx, chain, node, ex, th, fp)
+
+
+# 三路同步（診斷用）：
+#   sent_*    上一步**送進 set_linear_velocity/set_angular_velocity 的世界速度**
+#   phys_*    **本步**（= 送出後的下一個物理步）由 PhysX 回報的位置與速度
+#   usd_*     **同步**讀到的 USD base_footprint 位姿
+# 程式順序是「物理步進 → 讀量測 → 套用新命令」，所以本列的量測是**上一列命令**
+# 的執行結果；比較時要這樣對齊，不能拿同列的新命令比。
+LOG_COLS = ['t', 'recv_seq', 'cmd_age', 'vx_cmd', 'vy_cmd', 'wz_cmd',
+            # sent_prev_*：**產生本列量測的那一筆**世界速度命令
+            # （不是本列剛送出的那筆）
+            'sent_prev_vwx', 'sent_prev_vwy', 'sent_prev_wz',
+            'phys_x', 'phys_y', 'phys_vx', 'phys_vy',
+            'usd_x', 'usd_y',
+            'base_x', 'base_y', 'base_yaw', 'base_lin_meas', 'base_ang_meas',
+            'integrating',
+            # E2 新增：輪級限制的逐步記錄
+            'lam', 'modified', 'limit_mode', 'wheel_speed_max',
+            'wheel_accel_max'] + [f'{j}_sp' for j in ARM] \
+    + [f'{j}_act' for j in ARM] + [f'{j}_rate_meas' for j in ARM]
+
+
+def loop(world, robot, idx, chain, node, ex, th, fp):
+    log, stop = [], 'sim_limit'
+    STOP_HOLD_STEPS = 100        # 失效後續量 1.0 s，證明停止行為而非直接關掉
+    fail_steps = 0
+    sent_prev = (float('nan'),) * 3     # 上一步送進速度 API 的世界速度
+    t_prev = None
+    q_prev = None
+    tc0, tsrc = cpu_temp_read()
+    temp_max = tc0 or -1.0
+    w0 = time.monotonic()
+    nxt = time.monotonic()
+    print(f'[wb] 起始 CPU {tc0} °C（{tsrc}）', flush=True)
+    while True:
+        world.step(render=False)
+        t = float(world.current_time)
+        if t_prev is not None and t <= t_prev:
+            chain.note_time_reset(t)
+            stop = 'time_not_monotonic'
+            break
+        dt = a.physics_dt if t_prev is None else (t - t_prev)
+        node.sim_t = t
+        sec = int(t); nsec = int(round((t - sec) * 1e9))
+        c = Clock(); c.clock.sec = sec; c.clock.nanosec = min(nsec, 999999999)
+        node.clock_pub.publish(c)
+
+        qm = robot.get_joint_positions()
+        qa = np.array([float(qm[idx[j]]) for j in ARM])
+        # 實測關節速度：用來判定「停止」，**不用設定點凍結代替**
+        rate = (np.zeros(6) if q_prev is None or dt <= 0
+                else (qa - q_prev) / dt)
+        # **物理端**位姿與速度（PhysX 回報，經 articulation 包裝）
+        p_phys, _q_phys = robot.get_world_pose()
+        p_phys = np.asarray(p_phys, float)
+        v_phys = np.asarray(robot.get_linear_velocity(), float)
+        # 位姿取自 **base_footprint prim 的實際世界變換**，保留完整姿態。
+        xc = UsdGeom.XformCache()
+        M = xc.GetLocalToWorldTransform(fp)
+        tt = M.ExtractTranslation()
+        bp = np.array([tt[0], tt[1], tt[2]], float)
+        R3 = np.array([[M[r][c] for c in range(3)] for r in range(3)])
+        sc = np.linalg.norm(R3, axis=1)
+        R_fp = (R3 / sc[:, None]).T        # USD 是列向量慣例，取轉置
+        rq = M.ExtractRotationQuat()
+        ri = rq.GetImaginary()
+        bquat = np.array([rq.GetReal(), ri[0], ri[1], ri[2]], float)
+        byaw = yaw_of(bquat)
+        # 速度：articulation 根剛體的速度（PhysX 回報，參考點為該剛體框架原點）。
+        # **只旋轉表示，不移動參考點** —— 參考點差異未在此補正，列為限制。
+        bv = np.asarray(robot.get_linear_velocity(), float)
+        bw = np.asarray(robot.get_angular_velocity(), float)
+
+        # **時序對齊**：本列的量測是**上一列送出命令**的執行結果
+        #（迴圈順序是「物理步進 → 讀量測 → 套用新命令」）。
+        # 先把那一筆存下來再套用新命令，log 記的才是對得上的那一筆。
+        sent_effective = sent_prev
+        # 失效後**不關迴圈**：底盤停止、手臂保持設定點，並繼續量測，
+        # 直到停止條件由實測資料判定。關閉模擬器不等於驗證停止。
+        node.publish_feedback(
+            t, ARM, qa, rate, bp, bquat, R_fp, bv, bw,
+            json.dumps({'mode': a.mode, 'fail': chain.fail,
+                        'integrating': chain.integrating,
+                        'recv': chain.n_recv, 'rejected': chain.n_rejected},
+                       ensure_ascii=False))
+        out = chain.step(t, dt, qa) if chain.fail is None else chain.stop_command()
+        s = chain.applied
+        if out is not None and out[1] is None:
+            base_cmd, sp = out[0], None
+        elif out is not None:
+            base_cmd, sp = out
+            if sp is not None:
+                tgt = robot.get_joint_positions()
+                for k, j in enumerate(ARM):
+                    tgt[idx[j]] = sp[k]
+                robot.get_articulation_controller().apply_action(
+                    ArticulationAction(joint_positions=tgt))
+            # 底盤：本體速度 → 世界速度
+            cy, sy = math.cos(byaw), math.sin(byaw)
+            vwx = base_cmd[0] * cy - base_cmd[1] * sy
+            vwy = base_cmd[0] * sy + base_cmd[1] * cy
+            robot.set_linear_velocity(np.array([vwx, vwy, 0.0]))
+            robot.set_angular_velocity(np.array([0.0, 0.0, base_cmd[2]]))
+            sent_prev = (vwx, vwy, float(base_cmd[2]))
+        else:
+            base_cmd, sp = (float('nan'),) * 3, (float('nan'),) * 6
+            sent_prev = (float('nan'),) * 3
+        if sp is None:
+            sp = (float('nan'),) * 6
+
+        log.append([round(t, 4),
+                    s.recv_seq if s is not None else -1,
+                    round(t - s.recv_sim_t, 4) if s is not None else float('nan'),
+                    *[round(float(v), 6) for v in base_cmd],
+                    *[round(float(v), 6) for v in sent_effective],
+                    round(float(p_phys[0]), 6), round(float(p_phys[1]), 6),
+                    round(float(v_phys[0]), 6), round(float(v_phys[1]), 6),
+                    round(float(bp[0]), 6), round(float(bp[1]), 6),
+                    round(float(bp[0]), 6), round(float(bp[1]), 6),
+                    round(float(byaw), 6),
+                    round(float(math.hypot(bv[0], bv[1])), 6),
+                    round(float(bw[2]), 6),
+                    1 if chain.integrating else 0,
+                    (float('nan') if not chain.last_limit
+                     or chain.last_limit['lam'] is None
+                     else chain.last_limit['lam']),
+                    (float('nan') if not chain.last_limit
+                     else (1 if chain.last_limit['modified'] else 0)),
+                    (float('nan') if not chain.last_limit else
+                     {'normal': 0, 'timeout': 1,
+                      'stop_unverified': 2}.get(chain.last_limit['mode'], -1)),
+                    (float('nan') if not chain.last_limit
+                     else chain.last_limit['wheel_speed_max']),
+                    (float('nan') if not chain.last_limit
+                     else chain.last_limit['wheel_accel_max'])]
+                   + [round(float(v), 6) for v in sp]
+                   + [round(float(v), 6) for v in qa]
+                   + [round(float(v), 6) for v in rate])
+        if len(log) == 1 and len(log[0]) != len(LOG_COLS):
+            raise RuntimeError(f'log 欄名 {len(LOG_COLS)} vs 資料列 {len(log[0])}')
+
+        if len(log) % 25 == 0:
+            tc, src = cpu_temp_read()
+            if tc is None:
+                # **讀不到溫度不等於安全。** 沿用已確立的監看失效處置。
+                chain.note_monitor_failure('cpu_temp', f'讀不到（來源 {src}）', t)
+            else:
+                temp_max = max(temp_max, tc)
+                if tc >= 92.0:
+                    chain.note_monitor_failure('cpu_temp',
+                                               f'{tc:.2f} °C ≥ 92.0', t)
+        # 失效後仍執行 stop_command 並量測；連續 `stop_hold_steps` 步後才收尾
+        if chain.fail is not None:
+            fail_steps += 1
+            if fail_steps >= STOP_HOLD_STEPS:
+                stop = ('monitor_failure' if '監看失效' in chain.fail
+                        else 'cmd_chain_fail')
+                break
+        if t >= a.sim_limit:
+            stop = 'sim_limit'; break
+        if time.monotonic() - w0 > 900.0:
+            stop = 'wall_limit'; break
+        t_prev, q_prev = t, qa
+        if a.rtf > 0:
+            nxt += a.physics_dt / a.rtf
+            sl = nxt - time.monotonic()
+            if sl > 0:
+                time.sleep(sl)
+            else:
+                nxt = time.monotonic()
+
+    print(f'[wb] 停止：{stop} @ sim {float(world.current_time):.3f}', flush=True)
+    out = {
+        'schema': 'wb_sim/1', 'mode': a.mode,
+        'spec': 'evaluation/results/specs/isaac_wholebody_port_v2.md',
+        'solver_label': a.solver_label,
+        'solver_note': ('僅供記錄的上游求解模式標示。**dls 不是 B 基線**；'
+                        'B 凍結於 baseline_B_frozen_20260909.md（--solver qp、'
+                        'OSQP eps 1e-6、μ=0.03、下游濾波器保留），'
+                        '移植前須逐項核對現行程式'),
+        'command_interface': {
+            'topic': '/wb_vel_cmd', 'dof': 9,
+            'joint_order': list(CMD_JOINT_ORDER),
+            'command_map': globals().get('CMD_MAP'),
+            'joint_order_note': ('`joints` 參數、速度積分與 articulation 套用'
+                                 '**共用同一份順序**；啟動時已檢查無缺漏、無重複，'
+                                 '執行中不改'),
+            'note': ('只訂閱單一 topic；底盤與手臂來自同一次全身求解。'
+                     '分開訂閱兩個 topic 取最新值不算同步，本檔不提供該路徑')},
+        'guards_not_started': ['arm_vel_gate', 'wheel_limit_guard'],
+        'guards_note': ('節點未啟動，但其必要檢查未省略 —— 由 wb_cmd_chain 承接，'
+                        '並已由 evaluation/test_wb_cmd_chain.py 不開模擬器測試'),
+        'low_speed_interface_bound': {
+            'lin_mps': a.base_lin_max, 'ang_rps': a.base_ang_max,
+            'note': ('**低速介面界限**，不是輪級限制功能；越界即整筆中止，'
+                     '不縮命令')},
+        'execution_version': 'E2',
+        'wheel_level_limiting_implemented': WHEEL_LIMIT_IMPLEMENTED,
+        'pregrasp_preconditions_met': PREGRASP_PRECONDITIONS_MET,
+        'pregrasp_note': ('pregrasp 由**另一個獨立條件**禁止，'
+                          '不由 wheel_level_limiting_implemented 解鎖'),
+        'limit_rows': chain.limit_rows,
+        'limit_mode_codes': {'0': 'normal', '1': 'timeout',
+                             '2': 'stop_unverified'},
+        'wheel_level_note': ('輪級正常輸出限制尚未實作；pregrasp 由程式常數'
+                             '無條件禁止，不提供旗標讓使用者自行宣告'),
+        'arm_adapter': {
+            'kind': 'velocity_integrated_to_position_setpoint',
+            'dt_source': 'world.current_time 相鄰物理步差',
+            'setpoint_init': '第一筆有效命令時由實測關節位置建立',
+            'on_expire': ('停止積分、設定點凍結；**不代表手臂實際速度瞬間為零** —— '
+                          '停止行為由 log 的 *_rate_meas 另行判定'),
+            'not_native_velocity_control': True},
+        'cmd_chain': chain.summary(),
+        'fail_hold_steps': fail_steps,
+        'stop_flow_note': ('失效後每步送 stop_command（底盤停止、手臂保持設定點）'
+                           f'並繼續量測 {STOP_HOLD_STEPS} 步（{STOP_HOLD_STEPS*a.physics_dt:.1f} s）'
+                           '才收尾；停止行為由 log 的 base_lin_meas 與 '
+                           '*_rate_meas 判定，不以關閉模擬器代替'),
+        'feedback_published': ['/clock', '/joint_states', '/odom',
+                               '/wb_sim/status', 'TF odom→base_footprint'],
+        'frame_wiring': {
+            'isaac_publishes_tf': 'odom → base_footprint（模型根部，單一父節點）',
+            'rsp_publishes_static': 'base_footprint → base_link（URDF 固定 +0.05 m）',
+            'safety_query': 'odom → base_link 由 TF 鏈自動組合',
+            'odom_child_frame_id': 'base_footprint',
+            'pose_source': 'base_footprint prim 的實際世界變換（完整姿態，非僅 yaw）',
+            'twist_frame': 'child_frame（本體座標），由世界速度旋轉而來',
+            'twist_reference_point_caveat': (
+                '速度為 articulation 根剛體的 PhysX 回報值，參考點是該剛體框架'
+                '原點；本檔只旋轉表示、**未移動參考點**，此差異列為限制'),
+            'root_vs_footprint_offset_mm': globals().get('ROOT_FP_OFFSET_MM')},
+        'callbacks': node.n_cb,
+        'stop_reason': stop, 'sim_time_s': float(world.current_time),
+        'wall_s': time.monotonic() - w0,
+        'cpu_temp_start_c': tc0, 'cpu_temp_max_c': temp_max,
+        'cpu_temp_source': tsrc, 'cpu_limit_c': 92.0,
+        'log_cols': LOG_COLS, 'log': log,
+    }
+    json.dump(out, open(os.path.join(a.out, 'wb_run.json'), 'w'),
+              ensure_ascii=False)
+    print(f'[wb] -> {os.path.join(a.out, "wb_run.json")}', flush=True)
+    ex.shutdown(); rclpy.try_shutdown()
+    return 0
+
+
+rc = 1
+try:
+    rc = main()
+except Exception:
+    import traceback
+    tb = traceback.format_exc(); print(tb, flush=True)
+    open(os.path.join(a.out, 'traceback.txt'), 'w').write(tb)
+    rc = 9
+finally:
+    sim_app.close()
+sys.exit(rc)
