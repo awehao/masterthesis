@@ -15,10 +15,19 @@ from __future__ import annotations
 
 import numpy as np
 
-from wb_cmd_chain import CmdChain
+from wb_cmd_chain import MODES, CmdChain
+
+# E1 的 MODES 是凍結檔案，不在原地改。E2 在本地擴充一個模式：
+#   solver_freespace —— 允許底盤與手臂（與 sync 相同的分量），
+#   但由執行端的**場景條件**另行把關（見 isaac_wholebody_sim_e2.py）。
+# **這不是把 pregrasp 換個名稱**：pregrasp 仍由 PREGRASP_PRECONDITIONS_MET
+# 獨立禁止，而 solver_freespace 另有「場景中不得有接觸目標」的可檢查條件。
 from wb_wheel_limit import (NORMAL, STOP_UNVERIFIED, TIMEOUT,
                             WheelLimitConfig, limit9, limit9_timeout,
                             stop_command)
+
+MODES_E2 = dict(MODES)
+MODES_E2['solver_freespace'] = {'base': True, 'arm': True}
 
 VERSION = 'wb_cmd_chain_e2/1'
 
@@ -28,7 +37,15 @@ class CmdChainE2(CmdChain):
 
     def __init__(self, *args, wheel_cfg: WheelLimitConfig | None = None,
                  keep_limit_rows: int = 0, **kw):
-        super().__init__(*args, **kw)
+        mode = kw.get('mode', 'sync')
+        if mode == 'solver_freespace':
+            # 父類別不認得這個模式，先以 sync 建構再改寫允許分量與標示
+            kw = dict(kw, mode='sync')
+            super().__init__(*args, **kw)
+            self.cfg['mode'] = 'solver_freespace'
+            self.mode = MODES_E2['solver_freespace']
+        else:
+            super().__init__(*args, **kw)
         self.wcfg = wheel_cfg or WheelLimitConfig(
             arm_rate_max=self.cfg['arm_rate_max'])
         # **上一物理步真正套用的本體命令**（9 維）。尚未套用過任何命令時為 None：

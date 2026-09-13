@@ -74,9 +74,12 @@ ap.add_argument('--wheel-w-max', type=float, default=5.55, help='rad/s')
 ap.add_argument('--wheel-a-max', type=float, default=125.0, help='rad/s²')
 ap.add_argument('--keep-limit-rows', type=int, default=4000,
                 help='存進 wb_run.json 的逐步限制記錄筆數上限')
+# solver_freespace：允許底盤與手臂，另有場景條件把關；**不解除 pregrasp 禁止**
 ap.add_argument('--mode', default='base',
-                choices=['base', 'arm', 'sync', 'pregrasp'],
-                help='驗收順序：base → arm → sync → pregrasp')
+                choices=['base', 'arm', 'sync', 'solver_freespace',
+                         'pregrasp'],
+                help='驗收順序：base → arm → sync → solver_freespace；'
+                     'pregrasp 另由 PREGRASP_PRECONDITIONS_MET 禁止')
 ap.add_argument('--solver-label', default='dls',
                 help='僅供記錄：本趟上游用的求解模式。介面煙霧測試標示 dls；'
                      '**dls 不是 B 基線**')
@@ -95,6 +98,12 @@ WHEEL_LIMIT_IMPLEMENTED = True
 #   2. 停止掃掠範圍的避碰保證（見停止預算撤回書，目前沒有）
 #   3. 求解器驅動的受限測試規格（低速、自由空間）尚未訂定
 PREGRASP_PRECONDITIONS_MET = False
+
+# ===== 自由空間求解器測試模式的**條件**（不是換個名稱繞過原檢查）=====
+# 這個模式允許的分量與 sync 相同，但多一道**可檢查的場景條件**：
+# 場景中不得存在任何接觸目標（抽屜／櫃體／把手）。條件在載入 stage 之後
+# 實際掃描，不是宣告。pregrasp 的禁止**完全不受本模式影響**。
+FREESPACE_FORBIDDEN_SUBSTRINGS = ('drawer', 'cabinet', 'handle', 'box')
 
 if a.mode == 'pregrasp' and not PREGRASP_PRECONDITIONS_MET:
     print('[wb] **pregrasp 仍禁止**：輪級限制雖已實作，'
@@ -241,6 +250,19 @@ def main():
     prim = import_urdf(a.urdf, ROBOT, fix_base=False)
     stage = world.stage
     # 與導航版一致：**搜尋 articulation root**，不直接寫死 prim 路徑。
+    if a.mode == 'solver_freespace':
+        hits = [str(pr.GetPath()) for pr in Usd.PrimRange.Stage(
+            stage, Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
+            if any(k in pr.GetName().lower()
+                   for k in FREESPACE_FORBIDDEN_SUBSTRINGS)]
+        if hits:
+            print(f'[wb] **solver_freespace 模式的場景條件未滿足**：'
+                  f'場景中有接觸目標 {hits[:5]}（共 {len(hits)}）。'
+                  f'本模式僅適用於自由空間，中止。')
+            return 8
+        print('[wb] solver_freespace 場景條件已核對：'
+              '場景中無抽屜／櫃體／把手／箱體（實際掃描，非宣告）', flush=True)
+
     bodies, arts = physics_parts(stage, prim)
     if not arts:
         print('[wb] **找不到 articulation root**，中止'); return 7
