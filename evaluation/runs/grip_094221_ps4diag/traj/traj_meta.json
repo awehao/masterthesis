@@ -1,0 +1,171 @@
+{
+  "schema": "drawer_traj/1",
+  "case": "drawer_open_a_friction",
+  "grasp_model": "friction",
+  "finger_close_ramp_s": 3.0,
+  "finger_hold_open": false,
+  "hold_correction": {
+    "dq_rad": [
+      7.066e-06,
+      -0.002148867,
+      0.000731934,
+      -0.000444389,
+      -0.000613722,
+      -0.000169016
+    ],
+    "max_abs_rad": 0.002148867,
+    "ramp_s": 2.0,
+    "ramp_rows": 100,
+    "applied_from_row": 386,
+    "applied_from_phase": "engage",
+    "cap_rad": 0.01,
+    "note": "命令層的經驗修正，**不是已辨識的重力補償**；以受速度／加速度限制的斜升導入，不跳命令。是否足以抵銷由實際指墊—把手相對位置驗收，不以命令 FK 認定"
+  },
+  "finger_close_ramp": {
+    "ramp_s": 3.0,
+    "ramp_rows": 150,
+    "start_row": 636,
+    "start_s_after_engage": 5.0,
+    "engage_start_row": 386,
+    "release_row": 1288,
+    "f_open": 0.0089,
+    "f_closed": 0.0,
+    "note": "斜坡只放進命令；實際放行由模擬端的對中／監看閘把關",
+    "check": {
+      "contiguous_single_ramp": true,
+      "n_down": 150,
+      "n_up": 1,
+      "step_max": 5.933333333333485e-05,
+      "step_nominal": 5.933333333333333e-05,
+      "f_before": [
+        0.0089,
+        0.0089
+      ],
+      "f_after": [
+        0.0,
+        0.0
+      ],
+      "ok": true
+    }
+  },
+  "finger_cmd_open": 0.0089,
+  "finger_cmd_closed": 0.0,
+  "spec_sha256_16": "9cad296fd6e21c43",
+  "cases_sha256_16": "258023c7636e05b2",
+  "urdf_sha256_16": "9c9e118d8adb4907",
+  "rate_hz": 50.0,
+  "n_points": 1457,
+  "duration_s": 29.12,
+  "x_closed": 0.6399999999999988,
+  "x_open": 0.6199999999999988,
+  "x_retreat": 0.5799999999999987,
+  "target_opening_m": 0.02,
+  "phases": {
+    "reach": {
+      "i0": 0,
+      "i1": 255,
+      "t0": 0.0,
+      "t1": 5.1000000000000005
+    },
+    "approach": {
+      "i0": 256,
+      "i1": 385,
+      "t0": 5.12,
+      "t1": 7.7
+    },
+    "engage": {
+      "i0": 386,
+      "i1": 985,
+      "t0": 7.72,
+      "t1": 19.7
+    },
+    "pull": {
+      "i0": 986,
+      "i1": 1187,
+      "t0": 19.72,
+      "t1": 23.740000000000002
+    },
+    "hold": {
+      "i0": 1188,
+      "i1": 1287,
+      "t0": 23.76,
+      "t1": 25.740000000000002
+    },
+    "release": {
+      "i0": 1288,
+      "i1": 1337,
+      "t0": 25.76,
+      "t1": 26.740000000000002
+    },
+    "retreat": {
+      "i0": 1338,
+      "i1": 1406,
+      "t0": 26.76,
+      "t1": 28.12
+    },
+    "settle": {
+      "i0": 1407,
+      "i1": 1456,
+      "t0": 28.14,
+      "t1": 29.12
+    }
+  },
+  "limits": {
+    "vel_max_rps": 0.35,
+    "acc_max_rps2": 0.7
+  },
+  "pull_time_scale": 4.0,
+  "time_scale": {
+    "reach": 1.021637682485646,
+    "approach": 1.0215781088028433,
+    "pull": 1.0223365825054478,
+    "retreat": 1.0246598200762442
+  },
+  "measured": {
+    "vel_max_per_joint": [
+      9.433690585226722e-06,
+      0.1933810635531441,
+      0.3423893798309874,
+      0.00022219450000000233,
+      0.2635982765179401,
+      0.3423134334047062
+    ],
+    "acc_max_per_joint": [
+      0.0002492382670575526,
+      0.38163560203169355,
+      0.6698884995498533,
+      0.011109725,
+      0.5156184632831851,
+      0.6695913525117669
+    ],
+    "max_step_rad": 0.006847787596619748
+  },
+  "geometry": {
+    "checked_points": 304,
+    "stride": 5,
+    "limit_margin_min_rad": 0.061087,
+    "limit_margin_at": "reach@0.00s joint3",
+    "self_min_m": 0.00890747464666496,
+    "self_at": "reach link_base|link5",
+    "env_min_m": 0.007211217201226608,
+    "env_at": "hold uflite_gripper_link|handle/bar",
+    "shell_bar_min_m": 0.007211217201226608,
+    "enclosure_margin_m": 0.0039
+  },
+  "ik_branch_switches": {
+    "approach": 0,
+    "pull": 0,
+    "retreat": 0
+  },
+  "aligned": false,
+  "alignment": null,
+  "handover": null,
+  "ff_comp": null,
+  "handover_mode": "align",
+  "target_opening_used_m": 0.02,
+  "target_opening_case_m": 0.2,
+  "align_residual": null,
+  "fail": [],
+  "pass": true,
+  "note": "幾何為離散取樣，不是連續碰撞證明；stride 見上。底盤假設精確停在停放位姿。"
+}
