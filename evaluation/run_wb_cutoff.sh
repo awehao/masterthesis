@@ -48,11 +48,11 @@ URDF_WB="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
 
 # ---- 2 準備階段與任務時間分開 ----
 PROFILE_S=9.0                   # 零2 + 斜升1 + 保持3 + 斜降1 + 零2
-# **判準事前固定**，見 evaluation/results/specs/wb_cutoff_criteria_v1.yaml，
+# **判準事前固定**，見 evaluation/results/specs/wb_cutoff_criteria_v2.yaml，
 # 由 evaluation/wb_cutoff_check.py 離線判定。速率不得為了通過而調整。
 ARM_RATE="${ARM_RATE:-0.05}"    # joint2，rad/s；與 arm 趟次同幅度
 BASE_VX="${BASE_VX:-0.03}"      # report frame +x，m/s；與 base 趟次同幅度
-CRITERIA="$WS/evaluation/results/specs/wb_cutoff_criteria_v1.yaml"
+CRITERIA="$WS/evaluation/results/specs/wb_cutoff_criteria_v2.yaml"
 # **事前固定**的切斷時刻：命令源第一則訊息的模擬時間 + 4.5 s。
 # 保持段為 elapsed [3.0, 6.0]，4.5 落在正中；與趟次結果無關。
 CUT_OFFSET="${CUT_OFFSET:-4.5}"

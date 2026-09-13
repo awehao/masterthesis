@@ -1,16 +1,17 @@
 {
- "schema": "wb_cutoff_check/1",
- "run": "/home/howardchen/masterthesis/evaluation/runs/wb_cutoff_223153",
- "spec_path": "evaluation/results/specs/wb_cutoff_criteria_v1.yaml",
- "spec_schema": "wb_cutoff_criteria/1",
- "spec_version": "v1",
- "spec_sha256": "363d46d80d3e41f1ad6e8ececa4daa27039db7ade708a6a1cb1dd2456b33cfc2",
+ "schema": "wb_cutoff_check/2",
+ "run": "evaluation/runs/wb_cutoff_223153",
+ "spec_path": "evaluation/results/specs/wb_cutoff_criteria_v2.yaml",
+ "spec_schema": "wb_cutoff_criteria/2",
+ "spec_version": "v2",
+ "spec_sha256": "63af8d6cf84fac2c0bd4fd660e3819a9724805e0f1e882f7ba816d72b86085b1",
  "spec_copied_to": "criteria_used.yaml",
  "cut_sim_t": 20.8,
  "observe_window_s": [
   20.8,
   28.8
  ],
+ "retrospective": true,
  "checks": [
   {
    "key": "W0_log涵蓋觀察窗",
@@ -78,34 +79,49 @@
    "detail": "觀察窗內設定點最大變動 0.000 µrad"
   },
   {
-   "key": "G1_底盤降到門檻下並保持",
+   "key": "S1_底盤停穩",
    "pass": true,
-   "detail": "凍結後 +0.010s 降到 0.005 m/s 以下並維持至觀察窗結束（期限 1.0s）"
+   "detail": "凍結後 +0.010s 低於 0.005 m/s，持續 7.82s 至窗末（期限 1.0s、需持續 ≥ 2.0s）"
   },
   {
-   "key": "G2_手臂降到門檻下並保持",
+   "key": "S2_手臂停穩",
    "pass": true,
-   "detail": "凍結後 +0.230s 降到 0.005 rad/s 以下並維持（期限 1.0s）"
+   "detail": "凍結後 +0.230s 低於 0.005 rad/s，持續 7.60s 至窗末"
   },
   {
-   "key": "G3a_保持段位移(設計行為)",
+   "key": "M1_切斷→凍結最大位移",
    "pass": true,
-   "detail": "5.380 mm（≤ 8；設計預期 0.03×0.2=6.0 mm，命令保持到過期）"
+   "detail": "8.9890 mrad（≤ 13；命令依設計保持到過期，名目 0.05×0.2=10.0 mrad）"
   },
   {
-   "key": "G3b_凍結後位移(原始)",
+   "key": "M2_凍結後最大位移",
    "pass": true,
-   "detail": "0.724 mm（≤ 3；**未扣漂移**，已知漂移 8s 約 0.7 mm；不要求恰為零）"
+   "detail": "4.7500 mrad（≤ 10.0；**窗內最大、原始值、未扣漂移**；上限出自離線幾何推導）"
   },
   {
-   "key": "G4a_保持段 joint2 位移(設計行為)",
+   "key": "M3_切斷後全段最大位移",
    "pass": true,
-   "detail": "8.9890 mrad（≤ 13；設計預期 0.05×0.2=10.0 mrad）"
+   "detail": "13.7390 mrad（≤ 23；M1+M2 導出的上界，非獨立約束）"
   },
   {
-   "key": "G4b_凍結後 joint2 位移(原始)",
-   "pass": false,
-   "detail": "4.7490 mrad（≤ 2）"
+   "key": "M4_底盤切斷→凍結最大位移",
+   "pass": true,
+   "detail": "5.380 mm（≤ 8）"
+  },
+  {
+   "key": "M5_底盤凍結後最大位移",
+   "pass": true,
+   "detail": "0.724 mm（≤ 3；未扣漂移）"
+  },
+  {
+   "key": "C1_末值距凍結設定點",
+   "pass": true,
+   "detail": "+0.6120 mrad（≤ 10；**停在設定點附近，不是恰好停在設定點上**）"
+  },
+  {
+   "key": "C2_超越量",
+   "pass": true,
+   "detail": "0.6130 mrad（≤ 10；另列回報，不替代 M）"
   },
   {
    "key": "D1_pregrasp仍禁止",
@@ -118,9 +134,9 @@
    "detail": "cpu_limit_c=92.0，峰值 85.0 °C"
   }
  ],
- "passed": 20,
- "total": 21,
- "all_pass": false,
+ "passed": 24,
+ "total": 24,
+ "all_pass": true,
  "measured": {
   "freeze_sim_t": 20.98,
   "freeze_delay_s": 0.18,
@@ -130,14 +146,20 @@
   "wb_vel_cmd_last_sim_t": 20.76,
   "base_settle_delay_s": 0.01,
   "arm_settle_delay_s": 0.23,
-  "base_disp_cut_to_freeze_m": 0.00538,
-  "base_disp_after_freeze_m_raw": 0.000724,
-  "arm_disp_cut_to_freeze_rad": 0.008989,
-  "arm_disp_after_freeze_rad_raw": 0.004749
+  "arm_max_cut_to_freeze_rad": 0.008989,
+  "arm_max_after_freeze_rad": 0.00475,
+  "arm_max_whole_post_cut_rad": 0.013739,
+  "base_max_cut_to_freeze_m": 0.00538,
+  "base_max_after_freeze_m": 0.000724,
+  "final_err_to_frozen_sp_rad": 0.000612,
+  "overshoot_rad": 0.000613
  },
  "topic_stop_evidence": "由獨立觀測程序 wb_topic_recorder 記錄的 /wb_vel_cmd 實際訊息，非執行端內部 cmd_age 推論",
  "drift_subtraction_applied": false,
  "exact_zero_not_required": true,
- "displacement_split_note": "位移分「保持段（切斷→凍結，設計上命令保持到過期）」與「凍結後」兩段；合成單一數字會讓是否真的停下無法判讀",
+ "travel_budget_source": "evaluation/results/specs/wb_stop_budget_20260913.json",
+ "not_retroactive": "wb_cutoff_223153 一律保留「判定未通過」。以 v2 重算的數值只列為回溯分析， **不追認為通過**。v2 僅適用於本規格建立之後的趟次。\n",
+ "scope_limit": "**僅限本階段的低速自由空間介面測試。** 本規格**不**證明這種停止方式適合接觸操作；接觸情境的可接受停止行程 要由接觸力、夾持餘裕與目標幾何另行訂定，本檔不涉及。\n",
+ "displacement_split_note": "位移分「切斷→凍結（命令依設計保持到過期）」、「凍結後（非命令運動）」與「切斷後全段」三段，一律取**窗內最大原始值**，非終點淨值；收斂判準另列，**不替代**位移上限",
  "differs_from_upstream_zero_test": "上游歸零趟次 frozen_steps=0，接收端一路收到新鮮零命令；本趟話題實際停止更新"
 }

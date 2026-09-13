@@ -24,12 +24,16 @@ import sys
 import numpy as np
 import yaml
 
-DEFAULT_SPEC = 'evaluation/results/specs/wb_cutoff_criteria_v1.yaml'
-WANT = 'wb_cutoff_criteria/1'
+DEFAULT_SPEC = 'evaluation/results/specs/wb_cutoff_criteria_v2.yaml'
+WANT = 'wb_cutoff_criteria/2'
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--run', required=True)
 ap.add_argument('--spec', default=DEFAULT_SPEC)
+ap.add_argument('--retrospective', action='store_true',
+                help='對既有判定為**不同規格版本**的趟次重算。'
+                     '結果寫到 cutoff_check_<version>_retrospective.json，'
+                     '**不覆蓋**原判定，也不追認為通過')
 a = ap.parse_args()
 
 raw = open(a.spec, 'rb').read()
@@ -41,13 +45,42 @@ if S.get('schema') != WANT:
 if not S.get('prospective', False):
     print('**規格未宣告 prospective —— 拒絕判定**')
     sys.exit(3)
-G = S['G_actual_motion']
-if not G.get('drift_subtraction_forbidden', False):
+M = S['M_travel_budget']
+if not M.get('drift_subtraction_forbidden', False):
     print('**規格未禁止扣除漂移 —— 拒絕判定**')
+    sys.exit(3)
+if not M.get('use_max_not_endpoint', False):
+    print('**規格未要求以窗內最大值判定 —— 拒絕判定**')
+    sys.exit(3)
+if not S.get('not_retroactive'):
+    print('**規格未標註不追溯 —— 拒絕判定**')
     sys.exit(3)
 P, F, Q, T, W, D = (S['P_premise'], S['F_topic_stopped'], S['Q_others_alive'],
                     S['T_timeout_handling'], S['windows'], S['D_protections'])
-shutil.copyfile(a.spec, os.path.join(a.run, 'criteria_used.yaml'))
+ST, CV = S['S_settled'], S['C_convergence']
+# **防護**：不得覆蓋以不同規格版本做成的既有判定。
+# 判斷依據是趟次目錄裡的 criteria_used.yaml —— 那是**當時治理該趟的規格**，
+# 比判定輸出耐用（判定檔可能被搬走或改名，規格副本不會）。
+# 這道防護是因為我曾經誤覆蓋過一次 v1 趟次的判定而加上的。
+OUT = os.path.join(a.run, 'cutoff_check.json')
+USED = os.path.join(a.run, 'criteria_used.yaml')
+prev_ver = None
+if os.path.exists(USED):
+    try:
+        prev_ver = yaml.safe_load(open(USED).read()).get('version')
+    except Exception:
+        prev_ver = '讀不出'
+if prev_ver is not None and prev_ver != S['version']:
+    if not a.retrospective:
+        print(f'**拒絕覆蓋**：{a.run} 由規格 {prev_ver} 治理，本次是 '
+              f'{S["version"]}。要重算請加 --retrospective'
+              f'（寫到獨立檔名，原判定與原規格副本都不動，且不追認為通過）')
+        sys.exit(4)
+    OUT = os.path.join(a.run, f'cutoff_check_{S["version"]}_retrospective.json')
+    print(f'[retro] 回溯重算 → {os.path.basename(OUT)}；'
+          f'原規格 {prev_ver} 與原判定保持不動', flush=True)
+else:
+    shutil.copyfile(a.spec, USED)
 
 def rd(name):
     p = os.path.join(a.run, name)
@@ -153,49 +186,73 @@ chk('T4_設定點停止積分',
     f'觀察窗內設定點最大變動 {np.nanmax(np.abs(sp[win] - sp_f))*1e6:.3f} µrad')
 
 # ---------------- G 實際運動 ----------------
-# 期限自**凍結時刻**起算：切斷後命令保持到過期才凍結，那段是設計行為
-def first_below(series, thr, deadline):
+# ---------------- S 是否確實停穩 ----------------
+def below_and_held(series, thr, deadline, min_cont):
+    """回傳 (首次低於門檻的延遲, 是否通過)。
+    需**持續**低於門檻到觀察窗結束，且持續長度 >= min_cont —— 碰一下不算停。"""
     m = np.where((t >= t_freeze) & (series <= thr))[0]
     if not m.size:
-        return float('nan'), False
-    k = m[0]      # 需**持續**在門檻下，不是碰一下
-    held = bool((series[k:][(t[k:] <= W_END)] <= thr).all())
-    return float(t[k] - t_freeze), held and (t[k] - t_freeze) <= deadline
+        return float('nan'), False, 0.0
+    k = m[0]
+    seg = (t >= t[k]) & (t <= W_END)
+    held = bool((series[seg] <= thr).all())
+    cont = float(seg.sum() * DT)
+    delay = float(t[k] - t_freeze)
+    return delay, (held and delay <= deadline and cont >= min_cont), cont
 
-d_b, ok_b = first_below(bv, P['base_moving_mps'],
-                        G['G1_base_below_threshold_within_s'])
-d_a, ok_a = first_below(ar, P['arm_moving_rps'],
-                        G['G2_arm_below_threshold_within_s'])
-chk('G1_底盤降到門檻下並保持', ok_b,
-    f"凍結後 {d_b:+.3f}s 降到 {P['base_moving_mps']} m/s 以下並維持至觀察窗結束"
-    f"（期限 {G['G1_base_below_threshold_within_s']}s）")
-chk('G2_手臂降到門檻下並保持', ok_a,
-    f"凍結後 {d_a:+.3f}s 降到 {P['arm_moving_rps']} rad/s 以下並維持"
-    f"（期限 {G['G2_arm_below_threshold_within_s']}s）")
+d_b, ok_b, c_b = below_and_held(bv, P['base_moving_mps'],
+                                ST['S1_base_rate_below_within_s'],
+                                ST['S3_min_continuous_below_s'])
+d_a, ok_a, c_a = below_and_held(ar, P['arm_moving_rps'],
+                                ST['S2_arm_rate_below_within_s'],
+                                ST['S3_min_continuous_below_s'])
+chk('S1_底盤停穩', ok_b,
+    f"凍結後 {d_b:+.3f}s 低於 {P['base_moving_mps']} m/s，持續 {c_b:.2f}s 至窗末"
+    f"（期限 {ST['S1_base_rate_below_within_s']}s、需持續 ≥ {ST['S3_min_continuous_below_s']}s）")
+chk('S2_手臂停穩', ok_a,
+    f"凍結後 {d_a:+.3f}s 低於 {P['arm_moving_rps']} rad/s，持續 {c_a:.2f}s 至窗末")
 
+# ---------------- M 停穩前最多走多遠（**窗內最大**，非終點淨值）----------------
 kfr = int(np.argmin(np.abs(t - t_freeze)))
 we = int(np.argmin(np.abs(t - W_END)))
-def bdisp(k0, k1):
-    return math.hypot(L[k1, i['base_x']] - L[k0, i['base_x']],
-                      L[k1, i['base_y']] - L[k0, i['base_y']])
-d_hold = bdisp(kcut, kfr)
-d_after = bdisp(kfr, we)
-chk('G3a_保持段位移(設計行為)', d_hold <= G['G3a_base_disp_cut_to_freeze_m_max'],
-    f"{d_hold*1000:.3f} mm（≤ {G['G3a_base_disp_cut_to_freeze_m_max']*1000:.0f}；"
-    '設計預期 0.03×0.2=6.0 mm，命令保持到過期）')
-chk('G3b_凍結後位移(原始)', d_after <= G['G3b_base_disp_after_freeze_m_max'],
-    f"{d_after*1000:.3f} mm（≤ {G['G3b_base_disp_after_freeze_m_max']*1000:.0f}；"
-    '**未扣漂移**，已知漂移 8s 約 0.7 mm；不要求恰為零）')
-q_hold = abs(q2[kfr] - q2[kcut])
-q_after = abs(q2[we] - q2[kfr])
-chk('G4a_保持段 joint2 位移(設計行為)',
-    q_hold <= G['G4a_arm_disp_cut_to_freeze_rad_max'],
-    f"{q_hold*1000:.4f} mrad（≤ {G['G4a_arm_disp_cut_to_freeze_rad_max']*1000:.0f}；"
-    '設計預期 0.05×0.2=10.0 mrad）')
-chk('G4b_凍結後 joint2 位移(原始)',
-    q_after <= G['G4b_arm_disp_after_freeze_rad_max'],
-    f"{q_after*1000:.4f} mrad（≤ {G['G4b_arm_disp_after_freeze_rad_max']*1000:.0f}）")
-disp, dq = d_after, q_after
+def qmax(k0, k1):
+    seg = q2[k0:k1 + 1]
+    return float(np.max(np.abs(seg - q2[k0])))
+def bmax(k0, k1):
+    dx = L[k0:k1 + 1, i['base_x']] - L[k0, i['base_x']]
+    dy = L[k0:k1 + 1, i['base_y']] - L[k0, i['base_y']]
+    return float(np.max(np.hypot(dx, dy)))
+
+m1 = qmax(kcut, kfr)
+m2 = qmax(kfr, we)
+m3 = qmax(kcut, we)
+b4 = bmax(kcut, kfr)
+b5 = bmax(kfr, we)
+chk('M1_切斷→凍結最大位移', m1 <= M['M1_cut_to_freeze_max_rad'],
+    f"{m1*1000:.4f} mrad（≤ {M['M1_cut_to_freeze_max_rad']*1000:.0f}；"
+    '命令依設計保持到過期，名目 0.05×0.2=10.0 mrad）')
+chk('M2_凍結後最大位移', m2 <= M['M2_after_freeze_max_rad'],
+    f"{m2*1000:.4f} mrad（≤ {M['M2_after_freeze_max_rad']*1000:.1f}；"
+    '**窗內最大、原始值、未扣漂移**；上限出自離線幾何推導）')
+chk('M3_切斷後全段最大位移', m3 <= M['M3_whole_post_cut_max_rad'],
+    f"{m3*1000:.4f} mrad（≤ {M['M3_whole_post_cut_max_rad']*1000:.0f}；"
+    'M1+M2 導出的上界，非獨立約束）')
+chk('M4_底盤切斷→凍結最大位移', b4 <= M['M4_base_cut_to_freeze_max_m'],
+    f"{b4*1000:.3f} mm（≤ {M['M4_base_cut_to_freeze_max_m']*1000:.0f}）")
+chk('M5_底盤凍結後最大位移', b5 <= M['M5_base_after_freeze_max_m'],
+    f"{b5*1000:.3f} mm（≤ {M['M5_base_after_freeze_max_m']*1000:.0f}；未扣漂移）")
+
+# ---------------- C 是否在追蹤凍結目標（另列，不替代 M）----------------
+sp_fr = float(sp_f)
+err = q2 - sp_fr
+final_err = float(err[we])
+sgn = 1.0 if (sp_fr - q2[kfr]) >= 0 else -1.0
+over = float(max(0.0, np.max((err[kfr:we + 1]) * sgn)))
+chk('C1_末值距凍結設定點', abs(final_err) <= CV['C1_final_err_to_frozen_sp_rad_max'],
+    f"{final_err*1000:+.4f} mrad（≤ {CV['C1_final_err_to_frozen_sp_rad_max']*1000:.0f}；"
+    '**停在設定點附近，不是恰好停在設定點上**）')
+chk('C2_超越量', over <= CV['C2_overshoot_rad_max'],
+    f"{over*1000:.4f} mrad（≤ {CV['C2_overshoot_rad_max']*1000:.0f}；另列回報，不替代 M）")
 
 # ---------------- D 保護 ----------------
 chk('D1_pregrasp仍禁止',
@@ -216,12 +273,15 @@ for r in res:
     print(f"  [{'通過' if r['pass'] else '**未通過**'}] {r['key']:22} {r['detail']}")
 print(f'\n  {npass}/{len(res)} 項通過')
 print('  **停止不要求數值恰為零**：本系統零命令下本有殘留漂移，未扣除')
+print(f'  位移上限出自 {M["budget_source"]}（離線推導，與任何趟次量值無關）')
+print('  **不追溯**：v1 趟次一律保留原判定')
 print(f"  結論：{'判定通過' if ok else '**判定未通過**；門檻不下修'}")
 
-json.dump({'schema': 'wb_cutoff_check/1', 'run': a.run, 'spec_path': a.spec,
+json.dump({'schema': 'wb_cutoff_check/2', 'run': a.run, 'spec_path': a.spec,
            'spec_schema': S['schema'], 'spec_version': S['version'],
            'spec_sha256': spec_sha, 'spec_copied_to': 'criteria_used.yaml',
            'cut_sim_t': T_CUT, 'observe_window_s': [T_CUT, round(W_END, 3)],
+           'retrospective': bool(a.retrospective),
            'checks': res, 'passed': npass, 'total': len(res), 'all_pass': ok,
            'measured': {
                'freeze_sim_t': round(t_freeze, 4),
@@ -232,21 +292,29 @@ json.dump({'schema': 'wb_cutoff_check/1', 'run': a.run, 'spec_path': a.spec,
                'wb_vel_cmd_last_sim_t': last,
                'base_settle_delay_s': round(d_b, 4),
                'arm_settle_delay_s': round(d_a, 4),
-               'base_disp_cut_to_freeze_m': round(d_hold, 6),
-               'base_disp_after_freeze_m_raw': round(d_after, 6),
-               'arm_disp_cut_to_freeze_rad': round(q_hold, 6),
-               'arm_disp_after_freeze_rad_raw': round(q_after, 6)},
+               'base_settle_delay_s': round(d_b, 4),
+               'arm_settle_delay_s': round(d_a, 4),
+               'arm_max_cut_to_freeze_rad': round(m1, 6),
+               'arm_max_after_freeze_rad': round(m2, 6),
+               'arm_max_whole_post_cut_rad': round(m3, 6),
+               'base_max_cut_to_freeze_m': round(b4, 6),
+               'base_max_after_freeze_m': round(b5, 6),
+               'final_err_to_frozen_sp_rad': round(final_err, 6),
+               'overshoot_rad': round(over, 6)},
            'topic_stop_evidence': ('由獨立觀測程序 wb_topic_recorder 記錄的 '
                                    '/wb_vel_cmd 實際訊息，非執行端內部 cmd_age 推論'),
            'drift_subtraction_applied': False,
            'exact_zero_not_required': True,
-           'displacement_split_note': ('位移分「保持段（切斷→凍結，設計上命令'
-                                       '保持到過期）」與「凍結後」兩段；'
-                                       '合成單一數字會讓是否真的停下無法判讀'),
+           'travel_budget_source': M['budget_source'],
+           'not_retroactive': S['not_retroactive'],
+           'scope_limit': S['scope_limit'],
+           'displacement_split_note': ('位移分「切斷→凍結（命令依設計保持到過期）」、'
+                                       '「凍結後（非命令運動）」與「切斷後全段」三段，'
+                                       '一律取**窗內最大原始值**，非終點淨值；'
+                                       '收斂判準另列，**不替代**位移上限'),
            'differs_from_upstream_zero_test': ('上游歸零趟次 frozen_steps=0，'
                                                '接收端一路收到新鮮零命令；'
                                                '本趟話題實際停止更新')},
-          open(os.path.join(a.run, 'cutoff_check.json'), 'w'),
-          ensure_ascii=False, indent=1)
-print(f"  -> {os.path.join(a.run, 'cutoff_check.json')}")
+          open(OUT, 'w'), ensure_ascii=False, indent=1)
+print(f'  -> {OUT}')
 sys.exit(0 if ok else 1)

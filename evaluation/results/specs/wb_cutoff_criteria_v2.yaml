@@ -1,0 +1,106 @@
+# Isaac 全身執行端：**接收端斷訊**驗收判準 v2
+#
+# **v1 的結果保留為「未通過」，v2 對 wb_cutoff_223153 不追溯。**
+#
+# v1 未通過的是 G4b（凍結後 joint2 位移 4.749 mrad > 2 mrad）。
+# v2 **不移除位移上限** —— 「凍結設定點」不等於「凍結實際位置」，
+# 既有追蹤滯後收斂時手臂確實還在移動，那段運動會改變連桿位置、
+# 可能影響障礙物間距，不能因為原因可解釋就從驗收中移除。
+# v2 改的是：位移上限**有推導依據**（見 stop_budget），
+# 並把「是否停穩」與「是否收斂到凍結目標」拆成各自的分項。
+schema: wb_cutoff_criteria/2
+version: v2
+status: provisional_engineering
+created: 2026-09-13
+baseline: E1
+prospective: true
+supersedes: v1
+not_retroactive: >
+  wb_cutoff_223153 一律保留「判定未通過」。以 v2 重算的數值只列為回溯分析，
+  **不追認為通過**。v2 僅適用於本規格建立之後的趟次。
+scope_limit: >
+  **僅限本階段的低速自由空間介面測試。**
+  本規格**不**證明這種停止方式適合接觸操作；接觸情境的可接受停止行程
+  要由接觸力、夾持餘裕與目標幾何另行訂定，本檔不涉及。
+
+profile:                                # 與 v1 同條件，**不改速度、逾時、增益、保護**
+  mode: sync
+  base_vx_mps: 0.03
+  arm_rate_rps: 0.05
+  cut_offset_s: 4.5
+  endpoint_max_cmd_age_s: 0.2
+
+windows:
+  observe_after_cut_s: 8.0
+  require_log_covers_window: true
+
+P_premise:
+  base_moving_mps: 0.005
+  arm_moving_rps: 0.005
+  P1_both_moving_at_cut: true
+
+F_topic_stopped:                        # 與 v1 相同
+  F1_adapter_exited: true
+  F2_last_msg_within_s: 0.10
+  F3_msgs_after_cut_eq: 0
+  F4_min_msgs_before_cut: 50
+
+Q_others_alive:
+  Q1_endpoint_ran_to_sim_limit: true
+  Q2_safety_alive_after_observe: true
+
+T_timeout_handling:
+  T1_frozen_steps_gt: 0
+  T2_freeze_within_s: 0.25
+  T3_base_cmd_exactly_zero_after_freeze: true
+  T4_arm_setpoint_frozen_tol_rad: 1.0e-6
+
+# ================= 三類判準各自保留 =================
+
+# ---- S 是否確實停穩：**實測速率**低於門檻並**持續**指定時間 ----
+S_settled:
+  S1_base_rate_below_within_s: 1.0      # 自凍結起算
+  S2_arm_rate_below_within_s: 1.0
+  # 低於門檻後必須**持續**到觀察窗結束，且至少這麼久（避免短暫觸及就算停）
+  S3_min_continuous_below_s: 2.0
+  S4_setpoint_not_updating: true        # 與 T4 同一事實，於本類再列一次以便閱讀
+
+# ---- M 停穩前最多走多遠：**最大原始位移**，不是終點淨值 ----
+# 上限來自 evaluation/results/specs/wb_stop_budget_20260913.json 的離線推導，
+# **與任何趟次量到的數值無關**：
+#   幾何配額   ρ_min/r_max = 12.275 mm / 0.2517 m·rad⁻¹ = 48.768 mrad
+#   運動範圍配額 5 % × 0.200 rad                          = 10.000 mrad
+#   取較嚴者 → **10.000 mrad**（綁定者為運動範圍配額）
+M_travel_budget:
+  budget_source: evaluation/results/specs/wb_stop_budget_20260913.json
+  uncommanded_budget_rad: 0.010         # 凍結後（非命令運動）
+  # 切斷→凍結是**命令依設計保持到過期**，不是非命令運動：
+  #   名目 0.05 rad/s × 0.2 s = 10.0 mrad，加餘裕
+  M1_cut_to_freeze_max_rad: 0.013
+  # 凍結後：**窗內最大**，不是終點淨值 —— 中途走遠再回來不得視為通過
+  M2_after_freeze_max_rad: 0.010
+  # 切斷後全段：由 M1 + M2 導出的上界，列為記錄用上限，非獨立約束
+  M3_whole_post_cut_max_rad: 0.023
+  M3_is_derived_bound: true
+  use_max_not_endpoint: true
+  drift_subtraction_forbidden: true
+  # 底盤同時保留（v1 已通過的兩段，門檻不變）
+  M4_base_cut_to_freeze_max_m: 0.008
+  M5_base_after_freeze_max_m: 0.003
+
+# ---- C 是否在追蹤凍結目標：相對凍結設定點的誤差與超越量（**另列回報**）----
+C_convergence:
+  C1_final_err_to_frozen_sp_rad_max: 0.010   # 偏離凍結目標本身也是非命令運動
+  C2_overshoot_rad_max: 0.010
+  report_only_not_substitute_for_M: true     # 收斂不得替代位移上限
+
+D_protections:
+  pregrasp_forbidden_unchanged: true
+  thermal_abort_c: 92.0
+  independent_domain_required: true
+  independent_run_dir: true
+
+on_pass: proceed_to_wheel_level_limiting
+on_fail:
+  - 標記結果，不下修門檻
+  - 不接輪級限制

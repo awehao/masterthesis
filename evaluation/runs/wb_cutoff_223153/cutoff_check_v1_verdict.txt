@@ -1,0 +1,30 @@
+=== 接收端斷訊判定 ===
+  規格 evaluation/results/specs/wb_cutoff_criteria_v1.yaml
+  schema wb_cutoff_criteria/1 version v1 sha256 363d46d80d3e41f1
+  切斷 sim 20.800（預定 20.79）；觀察窗 20.80 – 28.80s（事前固定）
+  [通過] W0_log涵蓋觀察窗            觀察窗至 28.80s，log 至 70.01s
+  [通過] P1_切斷時兩者都在運動           切斷前 0.2s：底盤 0.02998–0.03003 m/s、joint2 0.04990–0.04995 rad/s
+  [通過] F1_adapter 確實結束        exited=True，等待 0.171s，訊號 SIGTERM->pgid
+  [通過] F2_最後一則距切斷             最後 sim 20.76，切斷 20.800，差 -0.0400s（≤ 0.1）
+  [通過] F3_切斷後無新訊息             切斷 +0.1s 之後 0 則
+  [通過] F4_切斷前觀測正常             切斷前 342 則（≥ 50）
+  [通過] Q1_執行端跑到 sim_limit     stop_reason=sim_limit
+  [通過] Q2_安全層在觀察窗後仍存活         安全層存活=True；其餘 isaac=True, rsp=True, dist=True, adapter=False, recorder=True
+  [通過] Q3_切斷非 cleanup 所為      由 wb_cut_adapter 對已核對身分的單一 PID 4138854 送 SIGTERM->pgid
+  [通過] T1_凍結步數 > 0            frozen_steps=4904（上游歸零那趟為 0）
+  [通過] T2_凍結時刻在期限內            凍結 sim 20.980，切斷後 +0.180s（≤ 0.25）
+  [通過] T3_凍結後底盤命令為零           凍結後套用底盤命令 |max| 0.000000000
+  [通過] T4_設定點停止積分             觀察窗內設定點最大變動 0.000 µrad
+  [通過] G1_底盤降到門檻下並保持          凍結後 +0.010s 降到 0.005 m/s 以下並維持至觀察窗結束（期限 1.0s）
+  [通過] G2_手臂降到門檻下並保持          凍結後 +0.230s 降到 0.005 rad/s 以下並維持（期限 1.0s）
+  [通過] G3a_保持段位移(設計行為)        5.380 mm（≤ 8；設計預期 0.03×0.2=6.0 mm，命令保持到過期）
+  [通過] G3b_凍結後位移(原始)          0.724 mm（≤ 3；**未扣漂移**，已知漂移 8s 約 0.7 mm；不要求恰為零）
+  [通過] G4a_保持段 joint2 位移(設計行為) 8.9890 mrad（≤ 13；設計預期 0.05×0.2=10.0 mrad）
+  [**未通過**] G4b_凍結後 joint2 位移(原始)  4.7490 mrad（≤ 2）
+  [通過] D1_pregrasp仍禁止         wheel_level_limiting_implemented=False
+  [通過] D2_熱中止門檻               cpu_limit_c=92.0，峰值 85.0 °C
+
+  20/21 項通過
+  **停止不要求數值恰為零**：本系統零命令下本有殘留漂移，未扣除
+  結論：**判定未通過**；門檻不下修
+  -> /home/howardchen/masterthesis/evaluation/runs/wb_cutoff_223153/cutoff_check.json

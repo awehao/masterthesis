@@ -1,0 +1,165 @@
+{
+ "schema": "wb_cutoff_check/2",
+ "run": "/home/howardchen/masterthesis/evaluation/runs/wb_cutoff_v2_225200",
+ "spec_path": "evaluation/results/specs/wb_cutoff_criteria_v2.yaml",
+ "spec_schema": "wb_cutoff_criteria/2",
+ "spec_version": "v2",
+ "spec_sha256": "63af8d6cf84fac2c0bd4fd660e3819a9724805e0f1e882f7ba816d72b86085b1",
+ "spec_copied_to": "criteria_used.yaml",
+ "cut_sim_t": 21.55,
+ "observe_window_s": [
+  21.55,
+  29.55
+ ],
+ "retrospective": false,
+ "checks": [
+  {
+   "key": "W0_log涵蓋觀察窗",
+   "pass": true,
+   "detail": "觀察窗至 29.55s，log 至 70.01s"
+  },
+  {
+   "key": "P1_切斷時兩者都在運動",
+   "pass": true,
+   "detail": "切斷前 0.2s：底盤 0.02998–0.03003 m/s、joint2 0.04990–0.04995 rad/s"
+  },
+  {
+   "key": "F1_adapter 確實結束",
+   "pass": true,
+   "detail": "exited=True，等待 0.181s，訊號 SIGTERM->pgid"
+  },
+  {
+   "key": "F2_最後一則距切斷",
+   "pass": true,
+   "detail": "最後 sim 21.51，切斷 21.550，差 -0.0400s（≤ 0.1）"
+  },
+  {
+   "key": "F3_切斷後無新訊息",
+   "pass": true,
+   "detail": "切斷 +0.1s 之後 0 則"
+  },
+  {
+   "key": "F4_切斷前觀測正常",
+   "pass": true,
+   "detail": "切斷前 405 則（≥ 50）"
+  },
+  {
+   "key": "Q1_執行端跑到 sim_limit",
+   "pass": true,
+   "detail": "stop_reason=sim_limit"
+  },
+  {
+   "key": "Q2_安全層在觀察窗後仍存活",
+   "pass": true,
+   "detail": "安全層存活=True；其餘 isaac=True, rsp=True, dist=True, adapter=False, recorder=True"
+  },
+  {
+   "key": "Q3_切斷非 cleanup 所為",
+   "pass": true,
+   "detail": "由 wb_cut_adapter 對已核對身分的單一 PID 4152215 送 SIGTERM->pgid"
+  },
+  {
+   "key": "T1_凍結步數 > 0",
+   "pass": true,
+   "detail": "frozen_steps=4829（上游歸零那趟為 0）"
+  },
+  {
+   "key": "T2_凍結時刻在期限內",
+   "pass": true,
+   "detail": "凍結 sim 21.730，切斷後 +0.180s（≤ 0.25）"
+  },
+  {
+   "key": "T3_凍結後底盤命令為零",
+   "pass": true,
+   "detail": "凍結後套用底盤命令 |max| 0.000000000"
+  },
+  {
+   "key": "T4_設定點停止積分",
+   "pass": true,
+   "detail": "觀察窗內設定點最大變動 0.000 µrad"
+  },
+  {
+   "key": "S1_底盤停穩",
+   "pass": true,
+   "detail": "凍結後 +0.010s 低於 0.005 m/s，持續 7.82s 至窗末（期限 1.0s、需持續 ≥ 2.0s）"
+  },
+  {
+   "key": "S2_手臂停穩",
+   "pass": true,
+   "detail": "凍結後 +0.230s 低於 0.005 rad/s，持續 7.60s 至窗末"
+  },
+  {
+   "key": "M1_切斷→凍結最大位移",
+   "pass": true,
+   "detail": "8.9880 mrad（≤ 13；命令依設計保持到過期，名目 0.05×0.2=10.0 mrad）"
+  },
+  {
+   "key": "M2_凍結後最大位移",
+   "pass": true,
+   "detail": "4.7490 mrad（≤ 10.0；**窗內最大、原始值、未扣漂移**；上限出自離線幾何推導）"
+  },
+  {
+   "key": "M3_切斷後全段最大位移",
+   "pass": true,
+   "detail": "13.7370 mrad（≤ 23；M1+M2 導出的上界，非獨立約束）"
+  },
+  {
+   "key": "M4_底盤切斷→凍結最大位移",
+   "pass": true,
+   "detail": "5.380 mm（≤ 8）"
+  },
+  {
+   "key": "M5_底盤凍結後最大位移",
+   "pass": true,
+   "detail": "0.725 mm（≤ 3；未扣漂移）"
+  },
+  {
+   "key": "C1_末值距凍結設定點",
+   "pass": true,
+   "detail": "+0.5710 mrad（≤ 10；**停在設定點附近，不是恰好停在設定點上**）"
+  },
+  {
+   "key": "C2_超越量",
+   "pass": true,
+   "detail": "0.5710 mrad（≤ 10；另列回報，不替代 M）"
+  },
+  {
+   "key": "D1_pregrasp仍禁止",
+   "pass": true,
+   "detail": "wheel_level_limiting_implemented=False"
+  },
+  {
+   "key": "D2_熱中止門檻",
+   "pass": true,
+   "detail": "cpu_limit_c=92.0，峰值 85.875 °C"
+  }
+ ],
+ "passed": 24,
+ "total": 24,
+ "all_pass": true,
+ "measured": {
+  "freeze_sim_t": 21.73,
+  "freeze_delay_s": 0.18,
+  "frozen_steps": 4829,
+  "wb_vel_cmd_msgs_before_cut": 405,
+  "wb_vel_cmd_msgs_after_cut": 0,
+  "wb_vel_cmd_last_sim_t": 21.51,
+  "base_settle_delay_s": 0.01,
+  "arm_settle_delay_s": 0.23,
+  "arm_max_cut_to_freeze_rad": 0.008988,
+  "arm_max_after_freeze_rad": 0.004749,
+  "arm_max_whole_post_cut_rad": 0.013737,
+  "base_max_cut_to_freeze_m": 0.00538,
+  "base_max_after_freeze_m": 0.000725,
+  "final_err_to_frozen_sp_rad": 0.000571,
+  "overshoot_rad": 0.000571
+ },
+ "topic_stop_evidence": "由獨立觀測程序 wb_topic_recorder 記錄的 /wb_vel_cmd 實際訊息，非執行端內部 cmd_age 推論",
+ "drift_subtraction_applied": false,
+ "exact_zero_not_required": true,
+ "travel_budget_source": "evaluation/results/specs/wb_stop_budget_20260913.json",
+ "not_retroactive": "wb_cutoff_223153 一律保留「判定未通過」。以 v2 重算的數值只列為回溯分析， **不追認為通過**。v2 僅適用於本規格建立之後的趟次。\n",
+ "scope_limit": "**僅限本階段的低速自由空間介面測試。** 本規格**不**證明這種停止方式適合接觸操作；接觸情境的可接受停止行程 要由接觸力、夾持餘裕與目標幾何另行訂定，本檔不涉及。\n",
+ "displacement_split_note": "位移分「切斷→凍結（命令依設計保持到過期）」、「凍結後（非命令運動）」與「切斷後全段」三段，一律取**窗內最大原始值**，非終點淨值；收斂判準另列，**不替代**位移上限",
+ "differs_from_upstream_zero_test": "上游歸零趟次 frozen_steps=0，接收端一路收到新鮮零命令；本趟話題實際停止更新"
+}
