@@ -63,6 +63,9 @@ ap.add_argument('--base-lin-max', type=float, default=0.05,
                      '只是介面測試用的明確界限；越界即整筆中止，不縮命令')
 ap.add_argument('--base-ang-max', type=float, default=0.20,
                 help='**低速介面界限**（rad/s），同上')
+ap.add_argument('--no-frictionless', action='store_true',
+                help='診斷用：不綁零摩擦材質（保留 PhysX 預設），用來對照。'
+                     'URDF 的 <gazebo><mu1> importer 不讀，不綁就是預設約 0.5')
 ap.add_argument('--mode', default='base',
                 choices=['base', 'arm', 'sync', 'pregrasp'],
                 help='驗收順序：base → arm → sync → pregrasp')
@@ -102,7 +105,8 @@ from isaacsim.core.api.objects.ground_plane import GroundPlane  # noqa: E402
 from isaacsim.core.prims import SingleArticulation             # noqa: E402
 from isaacsim.core.utils.types import ArticulationAction       # noqa: E402
 from pxr import UsdGeom, Gf, Usd                               # noqa: E402
-from isaac_common import import_urdf                           # noqa: E402
+from isaac_common import (import_urdf, physics_parts,           # noqa: E402
+                          bind_frictionless, collision_prims)
 
 import rclpy                                                   # noqa: E402
 from rclpy.node import Node                                    # noqa: E402
@@ -215,16 +219,40 @@ def main():
     GroundPlane(prim_path='/World/ground', name='ground', z_position=0.0)
 
     # **底盤不固定**：全身同動需要底盤能動，所以不用 fix_base
-    import_urdf(a.urdf, ROBOT, fix_base=False)
+    prim = import_urdf(a.urdf, ROBOT, fix_base=False)
     stage = world.stage
+    # 與導航版一致：**搜尋 articulation root**，不直接寫死 prim 路徑。
+    bodies, arts = physics_parts(stage, prim)
+    if not arts:
+        print('[wb] **找不到 articulation root**，中止'); return 7
+    ART_ROOT = arts[0]
+    print(f'[wb] articulation root {ART_ROOT}（剛體 {len(bodies)}）', flush=True)
+    globals()['ART_ROOT'] = ART_ROOT
     xf = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT))
     xf.ClearXformOpOrder()
     xf.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
     _rq = q_yaw(0.0)
     xf.AddOrientOp().Set(Gf.Quatf(_rq[0], _rq[1], _rq[2], _rq[3]))
 
+    # 零摩擦材質：URDF 的 <gazebo><mu1> importer 不讀，產生的 USD 沒有材質，
+    # PhysX 退回預設（約 0.5）。導航版量到的效果是速度追蹤只有 37 %。
+    # **接觸雙方都要綁**：預設混合規則取平均，只歸零機器人側仍留一半地面摩擦。
+    fric_rb = None
+    if not a.no_frictionless:
+        sph = collision_prims(stage, prim, lambda p: 'support_' in p)
+        gr = collision_prims(stage, '/World/ground')
+        n_bound = bind_frictionless(stage, sph + gr)
+        fric_rb = {'support_spheres': len(sph), 'ground': len(gr),
+                   'bound': n_bound,
+                   'note': ('URDF 的 <gazebo><mu1> 不會被 importer 讀入；'
+                            '雙方都綁才有效（預設混合規則取平均）')}
+        print(f'[wb] 零摩擦材質：支撐球 {len(sph)} + 地面 {len(gr)} → '
+              f'綁定 {n_bound}', flush=True)
+        if n_bound == 0:
+            print('[wb] **零摩擦綁定數為 0，中止**'); return 8
+
     world.reset()
-    robot = SingleArticulation(prim_path=ROBOT, name='omni_bot')
+    robot = SingleArticulation(prim_path=ART_ROOT, name='omni_bot')
     robot.initialize()
     idx = {n: k for k, n in enumerate(robot.dof_names)}
     missing = [j for j in CMD_JOINT_ORDER if j not in idx]
@@ -297,7 +325,18 @@ def main():
     return loop(world, robot, idx, chain, node, ex, th, fp)
 
 
+# 三路同步（診斷用）：
+#   sent_*    上一步**送進 set_linear_velocity/set_angular_velocity 的世界速度**
+#   phys_*    **本步**（= 送出後的下一個物理步）由 PhysX 回報的位置與速度
+#   usd_*     **同步**讀到的 USD base_footprint 位姿
+# 程式順序是「物理步進 → 讀量測 → 套用新命令」，所以本列的量測是**上一列命令**
+# 的執行結果；比較時要這樣對齊，不能拿同列的新命令比。
 LOG_COLS = ['t', 'recv_seq', 'cmd_age', 'vx_cmd', 'vy_cmd', 'wz_cmd',
+            # sent_prev_*：**產生本列量測的那一筆**世界速度命令
+            # （不是本列剛送出的那筆）
+            'sent_prev_vwx', 'sent_prev_vwy', 'sent_prev_wz',
+            'phys_x', 'phys_y', 'phys_vx', 'phys_vy',
+            'usd_x', 'usd_y',
             'base_x', 'base_y', 'base_yaw', 'base_lin_meas', 'base_ang_meas',
             'integrating'] + [f'{j}_sp' for j in ARM] \
     + [f'{j}_act' for j in ARM] + [f'{j}_rate_meas' for j in ARM]
@@ -307,6 +346,7 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
     log, stop = [], 'sim_limit'
     STOP_HOLD_STEPS = 100        # 失效後續量 1.0 s，證明停止行為而非直接關掉
     fail_steps = 0
+    sent_prev = (float('nan'),) * 3     # 上一步送進速度 API 的世界速度
     t_prev = None
     q_prev = None
     tc0, tsrc = cpu_temp_read()
@@ -332,6 +372,10 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         # 實測關節速度：用來判定「停止」，**不用設定點凍結代替**
         rate = (np.zeros(6) if q_prev is None or dt <= 0
                 else (qa - q_prev) / dt)
+        # **物理端**位姿與速度（PhysX 回報，經 articulation 包裝）
+        p_phys, _q_phys = robot.get_world_pose()
+        p_phys = np.asarray(p_phys, float)
+        v_phys = np.asarray(robot.get_linear_velocity(), float)
         # 位姿取自 **base_footprint prim 的實際世界變換**，保留完整姿態。
         xc = UsdGeom.XformCache()
         M = xc.GetLocalToWorldTransform(fp)
@@ -349,6 +393,10 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         bv = np.asarray(robot.get_linear_velocity(), float)
         bw = np.asarray(robot.get_angular_velocity(), float)
 
+        # **時序對齊**：本列的量測是**上一列送出命令**的執行結果
+        #（迴圈順序是「物理步進 → 讀量測 → 套用新命令」）。
+        # 先把那一筆存下來再套用新命令，log 記的才是對得上的那一筆。
+        sent_effective = sent_prev
         # 失效後**不關迴圈**：底盤停止、手臂保持設定點，並繼續量測，
         # 直到停止條件由實測資料判定。關閉模擬器不等於驗證停止。
         node.publish_feedback(
@@ -375,8 +423,10 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
             vwy = base_cmd[0] * sy + base_cmd[1] * cy
             robot.set_linear_velocity(np.array([vwx, vwy, 0.0]))
             robot.set_angular_velocity(np.array([0.0, 0.0, base_cmd[2]]))
+            sent_prev = (vwx, vwy, float(base_cmd[2]))
         else:
             base_cmd, sp = (float('nan'),) * 3, (float('nan'),) * 6
+            sent_prev = (float('nan'),) * 3
         if sp is None:
             sp = (float('nan'),) * 6
 
@@ -384,6 +434,10 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                     s.recv_seq if s is not None else -1,
                     round(t - s.recv_sim_t, 4) if s is not None else float('nan'),
                     *[round(float(v), 6) for v in base_cmd],
+                    *[round(float(v), 6) for v in sent_effective],
+                    round(float(p_phys[0]), 6), round(float(p_phys[1]), 6),
+                    round(float(v_phys[0]), 6), round(float(v_phys[1]), 6),
+                    round(float(bp[0]), 6), round(float(bp[1]), 6),
                     round(float(bp[0]), 6), round(float(bp[1]), 6),
                     round(float(byaw), 6),
                     round(float(math.hypot(bv[0], bv[1])), 6),

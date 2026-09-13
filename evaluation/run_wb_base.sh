@@ -76,7 +76,7 @@ prep_left(){ echo $(( PREP_TIMEOUT_S - ( $(date +%s) - W0 ) )); }
 say "[1/7] 純邏輯測試（不開模擬器）"
 python3 -u evaluation/test_wb_cmd_chain.py >>"$LOG" 2>&1 \
   || fail "純邏輯測試未通過"
-say "  43 項通過"
+say "  純邏輯測試通過"
 
 say "[2/7] 啟動 Isaac 執行端（--mode base）"
 spawn isaac "$ISAAC_PY" -u evaluation/isaac_wholebody_sim.py \
