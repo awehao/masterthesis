@@ -67,10 +67,17 @@ ap.add_argument('--grip-gate-offset-mm', type=float, default=0.30,
                 help='放行門檻：兩指中心沿閉合軸相對把手軸的偏移上限（mm）')
 ap.add_argument('--grip-gate-hold-s', type=float, default=0.5,
                 help='達標須連續保持的時間（秒）')
-ap.add_argument('--grip-gate-timeout-s', type=float, default=0.0,
-                help='閉合請求到達時閘尚未放行的容許時間（秒）。'
-                     '預設 0 = 必須**先**放行才能收到閉合請求，否則立即中止。'
-                     '這樣命令才會從全開連續進入斜坡，不會因中途放行而跳變')
+ap.add_argument('--grip-gate-timeout-s', type=float, default=8.0,
+                help='命令要求閉合後，閘未放行的容許等待時間；逾時即中止。'
+                     '等待期間手指維持全開，放行後由閘自行產生完整斜坡')
+ap.add_argument('--grip-gate-pos-mm', type=float, default=20.0,
+                help='放行條件：兩指中點到把手軸、垂直閉合軸的距離上限（mm）')
+ap.add_argument('--grip-gate-rot-deg', type=float, default=1.0,
+                help='放行條件：工具姿態相對設計姿態的夾角上限（度）')
+ap.add_argument('--grip-gate-track-rad', type=float, default=0.005,
+                help='放行條件：手臂關節追蹤誤差上限（rad）')
+ap.add_argument('--grip-close-ramp-s', type=float, default=3.0,
+                help='放行後由閘自行產生的閉合斜坡長度（秒）')
 ap.add_argument('--record-frames', default='', help='輸出 PNG 的目錄；空字串=不錄')
 ap.add_argument('--record-fps', type=float, default=30.0)
 ap.add_argument('--record-res', default='1280x720')
@@ -108,7 +115,8 @@ a = ap.parse_args()
 
 import drawer_asset as DA                                           # noqa: E402
 import drawer_align as DAL                                         # noqa: E402
-from cpu_temp import read as cpu_temp_read                          # noqa: E402
+from cpu_temp import read as cpu_temp_read
+from grip_gate import GripGate                          # noqa: E402
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE                # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
 
@@ -988,23 +996,18 @@ def main():
     post_stop = []
     n_step = 0
     # --- 閉合放行閘（friction 版）---
-    # 判準：兩指中心沿閉合軸相對把手軸的偏移 ≤ 門檻，且**連續保持**足夠時間。
-    # 閘未放行時，手指命令一律夾在全開；逾時即中止，不默默閉合。
+    # 邏輯在 evaluation/grip_gate.py，已由 evaluation/test_grip_gate.py
+    # **不開模擬器**覆蓋：初始姿態投影碰巧為零、只有位置合格但姿態錯誤、
+    # 保持途中失效、延遲放行後仍完整執行斜坡、逾時中止。
     GATE_BAR = np.array([float(BAR[0]) + POSE[0], float(BAR[1]) + POSE[1],
                          float(BAR[2])])
-    gate = {'enabled': GRASP_MODEL == 'friction',
-            'offset_limit_mm': float(a.grip_gate_offset_mm),
-            'hold_s': float(a.grip_gate_hold_s),
-            'timeout_s': float(a.grip_gate_timeout_s),
-            'bar_axis_world': GATE_BAR.tolist(),
-            'released': False, 'release_sim_t': None,
-            'first_close_request_sim_t': None,
-            'ok_since': None, 'offset_at_release_mm': None,
-            'offset_min_mm': None, 'offset_max_mm': None,
-            'basis': ('兩指連桿原點中點相對把手軸、沿閉合軸（夾爪局部 y）的偏移；'
-                      '**由實際位姿量測，不用命令 FK**。'
-                      '指墊表面間隙需要 URDF 點雲，離線另行核對')}
-    gate_blocked_n = 0
+    R_DES = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+    grip_gate = GripGate(
+        offset_limit_mm=a.grip_gate_offset_mm, pos_perp_max_mm=a.grip_gate_pos_mm,
+        rot_max_deg=a.grip_gate_rot_deg, track_max_rad=a.grip_gate_track_rad,
+        hold_s=a.grip_gate_hold_s, timeout_s=a.grip_gate_timeout_s,
+        ramp_s=a.grip_close_ramp_s) if GRASP_MODEL == 'friction' else None
+    gate_metrics = []          # [t, pos_perp_mm, rot_deg, offset_mm]
     finger_pose_trace = []          # [t, p1xyz, p2xyz]：兩指墊世界位置逐步紀錄
     while True:
       try:
@@ -1117,16 +1120,10 @@ def main():
             fs = node.fsnap
             if fs is not None:
                 _fv = fs[1]
-                # 閘未放行 ⇒ 手指命令夾在全開。命令序列要求閉合不代表可以閉合。
-                if gate['enabled'] and (not gate['released']) and _fv < F_OPEN - 1e-12:
-                    if gate['first_close_request_sim_t'] is None:
-                        gate['first_close_request_sim_t'] = t
-                        print(f'[drawer] **命令要求閉合 @ sim {t:.3f}，但閘尚未放行**'
-                              f'（目前偏移 min {gate["offset_min_mm"]}、'
-                              f'max {gate["offset_max_mm"]} mm）→ 手指夾在全開',
-                              flush=True)
-                    _fv = F_OPEN
-                    gate_blocked_n += 1
+                if grip_gate is not None:
+                    _fv = grip_gate.finger_command(t, float(fs[1]), F_OPEN,
+                                                   float(GRIP_SPEC.get(
+                                                       'finger_cmd_closed', 0.0)))
                 for j in FJ:
                     tgt[idx[j]] = _fv
             robot.get_articulation_controller().apply_action(
@@ -1187,30 +1184,33 @@ def main():
         fc_n = float(np.linalg.norm(fc))
         # 兩指的命令與實際關節位置（**量測，不影響控制**）：
         # 「手指停止移動」不等於夾住，要看實際位置與命令的關係。
-        # --- 更新閉合放行閘 ---
-        if gate['enabled']:
-            _pf1, _Rg, _ = world_T(prims['uflite_finger1'])
-            _pf2, _, _ = world_T(prims['uflite_finger2'])
+        # --- 更新閉合放行閘（條件同時檢查，不只單一投影）---
+        if grip_gate is not None:
+            _ok = True
+            try:
+                _pf1, _Rg, _ = world_T(prims['uflite_finger1'])
+                _pf2, _, _ = world_T(prims['uflite_finger2'])
+                _ok = bool(np.all(np.isfinite(_pf1)) and np.all(np.isfinite(_pf2)))
+            except Exception:
+                _pf1 = _pf2 = np.zeros(3); _Rg = np.eye(3); _ok = False
             _ctr = 0.5 * (_pf1 + _pf2)
             _ax = _Rg @ np.array([0.0, 1.0, 0.0])
-            _off = float(np.dot(_ctr - GATE_BAR, _ax)) * 1000.0
-            gate['offset_min_mm'] = (_off if gate['offset_min_mm'] is None
-                                     else min(gate['offset_min_mm'], _off))
-            gate['offset_max_mm'] = (_off if gate['offset_max_mm'] is None
-                                     else max(gate['offset_max_mm'], _off))
-            if abs(_off) <= gate['offset_limit_mm']:
-                if gate['ok_since'] is None:
-                    gate['ok_since'] = t
-                elif (not gate['released']
-                      and t - gate['ok_since'] >= gate['hold_s']):
-                    gate['released'] = True
-                    gate['release_sim_t'] = t
-                    gate['offset_at_release_mm'] = _off
-                    print(f'[drawer] **閉合放行閘：通過** @ sim {t:.3f}'
-                          f'（偏移 {_off:+.4f} mm ≤ {gate["offset_limit_mm"]}，'
-                          f'已連續保持 {gate["hold_s"]} s）', flush=True)
-            else:
-                gate['ok_since'] = None
+            _v = _ctr - GATE_BAR
+            _off = float(np.dot(_v, _ax)) * 1000.0
+            _perp = float(np.linalg.norm(_v - _ax * np.dot(_v, _ax))) * 1000.0
+            _rot = float(DAL.ang_deg(_Rg, R_DES))
+            # 追蹤誤差在本迴圈稍後才算，這裡用**同一定義**自行取值，
+            # 不把尚未賦值的變數帶進閘（第一版就是這個 UnboundLocalError）
+            _trk = (float(np.abs(qa - snap[2]).max())
+                    if snap is not None else 0.0)
+            grip_gate.update(t, phase=ph, data_ok=_ok, pos_perp_mm=_perp,
+                             rot_deg=_rot, offset_mm=_off, track_rad=_trk)
+            gate_metrics.append([round(t, 4), round(_perp, 4), round(_rot, 5),
+                                 round(_off, 4)])
+            if grip_gate.released and grip_gate.release_t == t:
+                print(f'[drawer] **閉合放行閘：通過** @ sim {t:.3f}'
+                      f'（位置 {_perp:.3f} mm、姿態 {_rot:.4f}°、'
+                      f'對中 {_off:+.4f} mm、追蹤 {_trk:.6f} rad）', flush=True)
 
         _fs = node.fsnap
         _fc_cmd = float(_fs[1]) if _fs is not None else float('nan')
@@ -1386,12 +1386,9 @@ def main():
             stop = 'contact_force'
         elif GRASP_MODEL == 'friction' and FG_ABORT_N > 0 and fg_over_n > FG_SUSTAIN:
             stop = 'finger_contact_force'
-        elif (gate['enabled'] and not gate['released']
-              and gate['first_close_request_sim_t'] is not None
-              and t - gate['first_close_request_sim_t'] >= gate['timeout_s']):
-            # 閉合請求到達時閘未放行 ⇒ 停。
-            # 不在未對中的狀態下硬夾，也不容許中途放行造成的命令跳變。
-            stop = 'grip_gate_not_met'
+        elif grip_gate is not None and grip_gate.abort:
+            # 命令要求閉合但對中始終未達標 ⇒ 停，不在未對中的狀態下硬夾
+            stop = grip_gate.abort
         elif drift > float(TOL['base_drift_m']):
             stop = 'base_drift'
         elif math.degrees(dyaw) > float(TOL['base_yaw_drift_deg']):
@@ -1509,8 +1506,9 @@ def main():
         'grip_spec': GRIP_SPEC if GRASP_MODEL == 'friction' else None,
         'grasp_friction_readback': fric_rb,
         'contact_introspect': contact_introspect,
-        'grip_gate': ({**gate, 'blocked_samples': gate_blocked_n}
-                      if GRASP_MODEL == 'friction' else None),
+        'grip_gate': (grip_gate.summary() if grip_gate is not None else None),
+        'grip_gate_metrics': gate_metrics if grip_gate is not None else None,
+        'grip_gate_metric_cols': ['t', 'pos_perp_mm', 'rot_deg', 'offset_mm'],
         'finger_pose_trace': finger_pose_trace if GRASP_MODEL == 'friction' else None,
         'finger_pose_cols': ['t', 'f1x', 'f1y', 'f1z', 'f2x', 'f2y', 'f2z'],
         'finger_joint_readback': finger_joint_rb,
