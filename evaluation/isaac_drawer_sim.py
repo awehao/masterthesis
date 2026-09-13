@@ -831,7 +831,8 @@ def main():
 
     prims = {}
     for nm in ('link_tcp', 'link6') + (
-            ('uflite_finger1', 'uflite_finger2') if GRASP_MODEL == 'friction' else ()):
+            ('uflite_finger1', 'uflite_finger2', 'uflite_gripper_link')
+            if GRASP_MODEL == 'friction' else ()):
         pr = next((p for p in stage.Traverse() if p.GetName() == nm), None)
         if pr is None:
             print(f'[drawer] 找不到 {nm}，中止'); return 6
