@@ -180,6 +180,14 @@ try:
     dv1 = make(os.path.join(tmp, 'is_v1'), spec_for_used=SPEC_V1)
     rcx, outx = run_check(dv1)
     expect('A8 既有規格版本不符 → 拒絕覆蓋', rcx == 4 and '拒絕覆蓋' in outx)
+    dsame = make(os.path.join(tmp, 'same_version'))
+    run_check(dsame)
+    rcs, outs = run_check(dsame)
+    expect('A10 同版本既有結果不得靜默覆寫',
+           rcs == 5 and '拒絕覆寫' in outs, f'rc={rcs}')
+    rcs2, _ = run_check(dsame, extra=('--allow-recheck',))
+    expect('A11 --allow-recheck 可明確重算', rcs2 == 0)
+
     rcx, _ = run_check(dv1, extra=('--retrospective',))
     expect('A9 --retrospective 寫到獨立檔名、不動原規格副本',
            os.path.exists(os.path.join(dv1, 'cutoff_check_v2_retrospective.json'))

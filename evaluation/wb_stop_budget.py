@@ -1,23 +1,31 @@
-"""停止行程預算的**離線幾何推導**：不開模擬器、不新增趟次。
+"""停止行程上限的離線推導與位移估算：不開模擬器、不新增趟次。
 
-要回答的是「本次低速自由空間測試可接受多大的停止行程」，
-**不是**把某一趟量到的位移向上取整。兩個配額各自獨立推導，取較嚴者：
+**2026-09-13 更正** —— 見 `results/specs/wb_stop_budget_RETRACTION_20260913.md`。
+初版把「覆蓋連桿幾何所需的半徑 ρ」當成「還可以額外移動的空間」，**那是錯的**：
 
-1. **幾何配額** —— 安全層的距離障壁把每個連桿以**認證覆蓋半徑 ρ** 膨脹後
-   才回報距離。若非命令的停止行程在笛卡耳空間小於 ρ，
-   這段運動就落在障壁本來就已計入的幾何不確定度之內，
-   不會引入比幾何模型本身更大的位置誤差來源。
-       Δq_geo = ρ_min / r_max
-   r_max 取**所有連桿取樣點**對 joint2 的笛卡耳靈敏度上界
-   |ω₂ × (p − o₂)|，在停止當下的位形計算。
+    幾何淨距下界      d_lower     = d − ρ
+    再移動 δ 之後     d_lower,new ≥ d − ρ − δ
 
-2. **運動範圍配額** —— 非命令的停止行程應遠小於命令運動本身。
-   本測試命令 joint2 走 0.200 rad，宣告比例 **5 %**。
-       Δq_range = 0.05 × 0.200 = 10.0 mrad
+ρ 已經花在覆蓋幾何上，不能再花一次；**δ < ρ 不代表安全**。
+要比較的是扣除覆蓋半徑與其他保留量後的**剩餘淨距**，不是 ρ 本身。
+「幾何配額」一項已**撤回**，本檔不再產生它。
 
-**適用範圍**：僅限本階段的**低速自由空間介面測試**。
-本推導**不**證明這種停止方式適合接觸操作 —— 接觸情境的可接受行程
-要由接觸力、夾持餘裕與目標幾何另行訂定，本檔不涉及。
+本檔現在只做兩件事：
+
+1. **事前選定的工程位移上限** —— 名目行程的宣告比例（預設 5 %）。
+   Δq_limit = 0.05 × 0.200 rad = 10.0 mrad。
+   這是**工程選擇**，不是幾何安全保證。
+
+2. **該位形下取樣點的位移估算** —— 對所選上限，報出
+   |ω₂ × (p − o₂)| 在**該位形、該組取樣點**上的最大值所對應的笛卡耳位移。
+   **不是**整個連桿曲面、整段停止軌跡的認證上界，
+   也**不得**用來宣稱避碰。
+
+ρ 仍然照常回報，但只作為**幾何模型自身的覆蓋半徑**記錄，
+**不參與**上限的推導。
+
+**適用範圍**：僅限本階段低速自由空間介面測試。
+**尚未建立停止掃掠範圍的避碰保證。**
 """
 from __future__ import annotations
 
@@ -98,25 +106,28 @@ for name in distal:
         r_max = float(r.max())
         worst = name
 
-# ρ 也只取下游連桿：上游連桿不因 joint2 停止行程而移動
+# ρ 只作記錄，**不參與上限推導**（撤回書：ρ 已花在覆蓋幾何上）
 rho_min = min(rho[n] for n in distal)
-print(f'[budget] 下游 ρ 最小 {rho_min*1000:.3f} mm', flush=True)
-dq_geo = rho_min / r_max
-dq_range = a.range_fraction * a.commanded_rad
-budget = min(dq_geo, dq_range)
-binding = '幾何配額' if dq_geo < dq_range else '運動範圍配額'
+print(f'[budget] 下游 ρ 最小 {rho_min*1000:.3f} mm'
+      f'（**僅記錄，不作為停止餘裕**）', flush=True)
+budget = a.range_fraction * a.commanded_rad
+binding = '事前選定的工程位移上限（名目行程比例）'
 
 print()
-print(f'[budget] r_max {r_max:.4f} m/rad（最遠取樣點在 {worst}）')
-print(f'[budget] 幾何配額   Δq = ρ_min/r_max = {rho_min:.6f}/{r_max:.4f} '
-      f'= {dq_geo*1000:.3f} mrad')
-print(f'[budget] 運動範圍配額 Δq = {a.range_fraction:.0%} × {a.commanded_rad} '
-      f'= {dq_range*1000:.3f} mrad')
-print(f'[budget] **取較嚴者 = {budget*1000:.3f} mrad**（{binding}）')
-print(f'[budget] 笛卡耳對應 {budget*r_max*1000:.3f} mm（在 {worst} 的最遠取樣點）')
+print(f'[budget] **停止位移上限 = {budget*1000:.3f} mrad**'
+      f'（{a.range_fraction:.0%} × {a.commanded_rad} rad；{binding}）')
+print(f'[budget] 該位形取樣點位移估算 {budget*r_max*1000:.3f} mm'
+      f'（r_max {r_max:.4f} m/rad，最遠取樣點在 {worst}）')
+print('[budget] **不是**連桿曲面／停止軌跡的認證上界，**不得**據以宣稱避碰')
+print('[budget] 幾何配額已撤回：見 wb_stop_budget_RETRACTION_20260913.md')
 
-out = {'schema': 'wb_stop_budget/1',
-       'scope': '僅限本階段低速自由空間介面測試；不證明適用於接觸操作',
+out = {'schema': 'wb_stop_budget/2',
+       'supersedes': 'wb_stop_budget_20260913.json',
+       'retraction': 'results/specs/wb_stop_budget_RETRACTION_20260913.md',
+       'retracted': ['幾何配額 ρ_min/r_max —— ρ 已花在覆蓋幾何，不能再當額外餘裕',
+                     'r_max 不是連桿曲面／停止軌跡的認證上界'],
+       'scope': ('僅限本階段低速自由空間介面測試；不證明適用於接觸操作；'
+                 '**尚未建立停止掃掠範圍的避碰保證**'),
        'derivation_independent_of_observed_run_value': True,
        'urdf': a.urdf, 'config_from_run': a.run,
        'config_sim_t': round(float(t[k0]), 4),
@@ -126,15 +137,15 @@ out = {'schema': 'wb_stop_budget/1',
        'distal_links': distal, 'upstream_links_excluded': upstream,
        'r_max_m_per_rad': round(r_max, 6), 'r_max_link': worst,
        'per_link': per_link,
-       'quota_geometry_rad': round(dq_geo, 6),
-       'quota_range_rad': round(dq_range, 6),
        'range_fraction': a.range_fraction,
        'commanded_rad': a.commanded_rad,
        'budget_rad': round(budget, 6),
        'budget_binding': binding,
-       'budget_cartesian_m': round(budget * r_max, 6),
-       'note': ('幾何配額的依據：障壁已把連桿以認證覆蓋半徑 ρ 膨脹，'
-                '停止行程小於 ρ 即落在障壁已計入的幾何不確定度內。'
-                '運動範圍配額的依據：非命令運動應遠小於命令運動，宣告比例。')}
+       'sampled_displacement_estimate_m': round(budget * r_max, 6),
+       'estimate_is_not_certified_bound': True,
+       'rho_recorded_not_used_for_budget': True,
+       'note': ('上限依據：非命令運動應遠小於命令運動，宣告比例 —— '
+                '**工程選擇，非幾何安全保證**。'
+                'ρ 僅作幾何模型自身的覆蓋半徑記錄，不參與推導。')}
 json.dump(out, open(a.out, 'w'), ensure_ascii=False, indent=1)
 print(f'[budget] -> {a.out}')

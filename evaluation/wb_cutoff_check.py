@@ -30,6 +30,9 @@ WANT = 'wb_cutoff_criteria/2'
 ap = argparse.ArgumentParser()
 ap.add_argument('--run', required=True)
 ap.add_argument('--spec', default=DEFAULT_SPEC)
+ap.add_argument('--allow-recheck', action='store_true',
+                help='允許以**同一規格版本**覆寫既有判定。'
+                     '預設拒絕，避免既有結果被靜默蓋掉')
 ap.add_argument('--retrospective', action='store_true',
                 help='對既有判定為**不同規格版本**的趟次重算。'
                      '結果寫到 cutoff_check_<version>_retrospective.json，'
@@ -80,6 +83,11 @@ if prev_ver is not None and prev_ver != S['version']:
     print(f'[retro] 回溯重算 → {os.path.basename(OUT)}；'
           f'原規格 {prev_ver} 與原判定保持不動', flush=True)
 else:
+    # **同版本也不得靜默覆寫**：既有結果要被蓋掉必須明講
+    if os.path.exists(OUT) and not a.allow_recheck:
+        print(f'**拒絕覆寫**：{OUT} 已存在（同規格版本 {S["version"]}）。'
+              f'要重算請加 --allow-recheck')
+        sys.exit(5)
     shutil.copyfile(a.spec, USED)
 
 def rd(name):
