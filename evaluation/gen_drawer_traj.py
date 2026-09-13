@@ -84,6 +84,9 @@ ap.add_argument('--hold-correction', default='',
 ap.add_argument('--hold-correction-s', type=float, default=2.0,
                 help='修正的斜升長度（秒），在 engage 停留段內完成；'
                      '不直接跳命令，速度／加速度仍由既有離線檢查把關')
+ap.add_argument('--finger-close-start-s', type=float, default=0.0,
+                help='閉合斜坡起點，量自 engage 相位起點（秒）。'
+                     '應排在保持修正斜升完成之後')
 ap.add_argument('--hold-correction-cap', type=float, default=0.010,
                 help='單一關節修正幅度上限（rad）；超過即判為模型有誤，中止')
 ap.add_argument('--ff-comp', default='', help='前饋補償表 JSON')
@@ -300,16 +303,8 @@ if ALIGN is not None and a.handover == 'offset':
     Q_GEO0 = Qp[0].copy()
     OFFS = Q_HOLD - Q_GEO0
     Qp = Qp + OFFS                       # 幾何路徑整條平移，形狀與弧長不變
-    _pe = dwell(Q_HOLD, a.postengage_hold_s, HZ)
-    _nr = int(round(RAMP * HZ))
-    for i, q in enumerate(_pe):
-        if RAMP > 0.0 and _nr > 0:
-            # 線性斜升：第 0 列仍為全開（與 engage 末列連續，命令無跳變）
-            u = min(1.0, i / float(_nr))
-            fv = F_OPEN + (f_hold - F_OPEN) * u
-        else:
-            fv = f_hold
-        rows.append(('postengage', '', q, fv, 0.0))
+    for q in dwell(Q_HOLD, a.postengage_hold_s, HZ):
+        rows.append(('postengage', '', q, f_hold, 0.0))
     HANDOVER = {
         'mode': 'offset',
         'q_hold': Q_HOLD.tolist(),
@@ -501,6 +496,38 @@ if a.ff_comp:
           f'逐關節 {np.round(FF["dq_ff_per_joint_max_rad"],6).tolist()}')
     print(f'    Δq_ff(拉開首點) = 0（b(0) = b0 保留）')
 
+# --------------------------------- 手指閉合斜坡（與 postengage 相位解耦）
+# 原本寫在 postengage 迴圈裡，但該相位只在「用快照對準 + offset 交接」時才產生。
+# 改成以 **engage 相位起點** 為基準的後處理，任何一種軌跡都適用。
+# **注意**：這裡只是把斜坡放進命令序列；是否真的放行閉合，由模擬端在執行期
+# 依「保持修正完成、實際對中驗收通過、監看有效」決定 —— 與相位解耦，
+# **不與對中驗收條件解耦**。
+FCR = None
+if RAMP > 0.0 and not a.finger_hold_open:
+    i0 = next(i for i, r in enumerate(rows) if r[0] == 'engage')
+    i_rel = next((i for i, r in enumerate(rows) if r[0] == 'release'), len(rows))
+    j0 = i0 + int(round(a.finger_close_start_s * HZ))
+    nr = max(1, int(round(RAMP * HZ)))
+    if j0 + nr > i_rel:
+        print('  **閉合斜坡在 release 之前放不下，中止**'); sys.exit(2)
+    new_rows = []
+    for i, r in enumerate(rows):
+        if i < j0 or i >= i_rel:
+            fv = F_OPEN if i < j0 else r[3]
+        else:
+            u = min(1.0, (i - j0) / float(nr))
+            fv = F_OPEN + (F_CLOSED - F_OPEN) * u
+        new_rows.append((r[0], r[1], r[2], fv, r[4]))
+    rows = new_rows
+    FCR = {'ramp_s': RAMP, 'ramp_rows': nr, 'start_row': j0,
+           'start_s_after_engage': float(a.finger_close_start_s),
+           'engage_start_row': i0, 'release_row': i_rel,
+           'f_open': F_OPEN, 'f_closed': F_CLOSED,
+           'note': ('斜坡只放進命令；實際放行由模擬端的對中／監看閘把關')}
+    print(f'\n  手指閉合斜坡：自第 {j0} 列（engage 起點後 '
+          f'{a.finger_close_start_s} s）起 {RAMP} s 斜升 '
+          f'{F_OPEN} → {F_CLOSED}')
+
 # ------------------------------------------- 命令層保持修正（校準輪）
 HOLDC = None
 if a.hold_correction:
@@ -637,6 +664,38 @@ elif ALIGN is not None:
     print(f'    姿態誤差 中位 {np.median(rr[:,2]):.6f}  max {rr[:,2].max():.6f}°')
     print(f'    （對照：未對準版 橫向 4.4394 mm、姿態 0.35208°）')
 encl = DK.enclosure_margin(SPEC)
+# --- 手指閉合斜坡的離線核對：恰好一次、起終值、速率、無跳變 ---
+if FCR is not None:
+    F = np.array([r[3] for r in rows], float)
+    d = np.diff(F)
+    n_dn = int((d < -1e-12).sum()); n_up = int((d > 1e-12).sum())
+    seg = np.where(d < -1e-12)[0]
+    contiguous = bool(len(seg) and (seg.max() - seg.min() + 1) == len(seg))
+    step_nom = (FCR['f_open'] - FCR['f_closed']) / FCR['ramp_rows']
+    step_max = float(-d.min()) if len(d) else 0.0
+    f_before = float(F[:FCR['start_row']].min()), float(F[:FCR['start_row']].max())
+    f_after = float(F[FCR['start_row'] + FCR['ramp_rows']:FCR['release_row']].min()), \
+        float(F[FCR['start_row'] + FCR['ramp_rows']:FCR['release_row']].max())
+    ok = (contiguous and n_up <= 1 and abs(step_max - step_nom) < 1e-9
+          and abs(f_before[0] - FCR['f_open']) < 1e-12
+          and abs(f_before[1] - FCR['f_open']) < 1e-12
+          and abs(f_after[0] - FCR['f_closed']) < 1e-12
+          and abs(f_after[1] - FCR['f_closed']) < 1e-12)
+    print(f'\n  手指閉合斜坡核對：')
+    print(f'    下降段連續且恰一次   {contiguous} （下降 {n_dn} 步、上升 {n_up} 步'
+          f'；上升 1 步 = release 張開）')
+    print(f'    斜坡前恆為全開       [{f_before[0]:.6f}, {f_before[1]:.6f}]'
+          f'  應為 {FCR["f_open"]:.6f}')
+    print(f'    斜坡後至 release 恆閉 [{f_after[0]:.6f}, {f_after[1]:.6f}]'
+          f'  應為 {FCR["f_closed"]:.6f}')
+    print(f'    每步變化             {step_max:.9f}  標稱 {step_nom:.9f}')
+    if not ok:
+        fail.append('手指閉合斜坡核對未通過')
+    print(f'    → {"通過" if ok else "**未通過**"}')
+    FCR['check'] = {'contiguous_single_ramp': contiguous, 'n_down': n_dn,
+                    'n_up': n_up, 'step_max': step_max, 'step_nominal': step_nom,
+                    'f_before': list(f_before), 'f_after': list(f_after), 'ok': ok}
+
 print(f'  手指全開包覆餘裕  {encl*1000:.2f} mm（解析值）')
 if worst['lm'][0] < a.limit_margin: fail.append('限位餘裕不足')
 if worst['self'][0] < a.hard: fail.append('自碰低於門檻')
@@ -656,6 +715,7 @@ meta = {
     'finger_close_ramp_s': RAMP,
     'finger_hold_open': bool(a.finger_hold_open),
     'hold_correction': HOLDC,
+    'finger_close_ramp': FCR,
     'finger_cmd_open': F_OPEN, 'finger_cmd_closed': F_CLOSED,
     'spec_sha256_16': hashlib.sha256(open(a.spec, 'rb').read()).hexdigest()[:16],
     'cases_sha256_16': hashlib.sha256(open(a.cases, 'rb').read()).hexdigest()[:16],
