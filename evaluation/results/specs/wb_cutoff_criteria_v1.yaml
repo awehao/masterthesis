@@ -1,0 +1,104 @@
+# Isaac 全身執行端：**接收端斷訊**驗收判準 v1
+#
+# **事前固定**：本檔與 evaluation/wb_cutoff_check.py 在任何斷訊趟次執行**之前**定版。
+# 數值由檢查器**實際載入**。門檻不得因為某趟未通過而下修。
+#
+# 與先前「上游歸零後停止發布」的測試**不同**：
+#   那一趟安全層仍持續輸出零，接收端一路收到新鮮命令，frozen_steps = 0，
+#   驗到的是**上游失效處置**。
+# 本趟直接中止 adapter，讓 `/wb_vel_cmd` **實際停止更新**，
+# 驗的是**接收端在完整 9 維命令突然斷掉時的處置**。
+schema: wb_cutoff_criteria/1
+version: v1
+status: provisional_engineering
+created: 2026-09-13
+baseline: E1
+prospective: true
+builds_on: wb_sync_criteria/1          # 沿用已通過的低速 sync 剖面與門檻
+
+profile:
+  mode: sync                            # 與 wb_sync_221734 同幅度，不改速度
+  base_vx_mps: 0.03
+  arm_rate_rps: 0.05
+  zero_lead_s: 2.0
+  ramp_s: 1.0
+  hold_s: 3.0
+  # 切斷時刻**事前固定**：命令源第一則訊息的模擬時間 + 4.5 s
+  # 保持段為 elapsed [3.0, 6.0]，4.5 s 落在正中；與趟次結果無關。
+  cut_offset_s: 4.5
+  cut_target: this_run_adapter_pid_only
+  endpoint_max_cmd_age_s: 0.2           # 執行端 --max-cmd-age-s 預設，本趟未改
+
+windows:
+  observe_after_cut_s: 8.0              # 事前固定的觀察窗
+  settle_deadline_s: 1.0                # 停止到門檻以下的期限
+  require_log_covers_window: true
+
+# ---- P 前提：切斷時兩者確實在運動（實測，不是假設）----
+P_premise:
+  base_moving_mps: 0.005                # 與 sync 判準同門檻
+  arm_moving_rps: 0.005
+  P1_both_moving_at_cut: true
+
+# ---- F 話題確實停止更新（由**獨立觀測程序**記錄）----
+F_topic_stopped:
+  F1_adapter_exited: true               # 不以「送了訊號」代替「已停止」
+  F2_last_msg_within_s: 0.10            # 最後一則 /wb_vel_cmd 距切斷時刻
+  F3_msgs_after_cut_eq: 0               # 切斷 + F2 之後不得再有訊息
+  F4_min_msgs_before_cut: 50            # 證明觀測程序本來就收得到，不是全程沒收到
+  observer_is_separate_process: true
+
+# ---- Q 安全層與 Isaac 繼續運作（不以 cleanup 代替停止）----
+Q_others_alive:
+  Q1_endpoint_ran_to_sim_limit: true
+  Q2_safety_alive_after_observe: true   # 觀察窗結束時仍存活
+  Q3_cleanup_not_used_as_stop: true     # 切斷由 wb_cut_adapter 執行，非 trap cleanup
+
+# ---- T 逾時觸發與設計處置 ----
+T_timeout_handling:
+  T1_frozen_steps_gt: 0
+  T2_freeze_within_s: 0.25              # 切斷後多久內凍結（max_cmd_age 0.2 + 餘裕）
+  T3_base_cmd_exactly_zero_after_freeze: true   # 凍結後套用的底盤命令為 (0,0,0)
+  T4_arm_setpoint_frozen_tol_rad: 1.0e-6        # 設定點停止積分
+
+# ---- G 實際速度與後續位移（**原始值**）----
+G_actual_motion:
+  exact_zero_not_required: true
+  rationale: >
+    本系統在零命令下本來就有殘留漂移（底盤約 0.09 mm/s、yaw 約 0.014 °/s）。
+    要求數值恰為零等於要求漂移消失，不是停止判準。
+    門檻取在「明顯高於已知漂移、明顯低於運動量級」之間。
+  drift_subtraction_forbidden: true
+  # 期限自**凍結時刻**起算（切斷後命令依設計保持到過期才凍結）
+  G1_base_below_threshold_within_s: 1.0
+  G2_arm_below_threshold_within_s: 1.0
+  # 位移**分兩段**。切斷後命令保持到過期是**設計行為**，不是未停止；
+  # 把兩段混在一起會讓「有沒有真的停下」無法判讀。
+  #   保持段 = 切斷 → 凍結，預期 = 幅度 × max_cmd_age
+  #     底盤 0.03 × 0.2 = 6.0 mm；手臂 0.05 × 0.2 = 10.0 mrad
+  #   凍結後 = 凍結 → 凍結 + observe_after_cut_s，這才是「是否真的停下」
+  #     已知漂移 8 s 約貢獻 0.7 mm，故門檻必須高於它、又明顯低於運動量級
+  G3a_base_disp_cut_to_freeze_m_max: 0.008     # 預期 6.0 mm ＋ 餘裕
+  G3b_base_disp_after_freeze_m_max: 0.003      # 漂移約 0.7 mm
+  G4a_arm_disp_cut_to_freeze_rad_max: 0.013    # 預期 10.0 mrad ＋ 餘裕
+  G4b_arm_disp_after_freeze_rad_max: 0.002
+  threshold_derivation_note: >
+    G3/G4 的門檻由**設計值推導**（幅度 × max_cmd_age ＋ 已知漂移 ＋ 餘裕），
+    在任何斷訊趟次執行**之前**訂定。初稿曾把兩段合成單一 5 mm 門檻，
+    未計入命令保持到過期的 6 mm，於離線測試階段發現並改正 ——
+    **不是為了讓某趟通過而放寬**。
+
+D_protections:
+  pregrasp_forbidden_unchanged: true
+  thermal_abort_c: 92.0
+  independent_domain_required: true
+  independent_run_dir: true
+  kill_scope: single_recorded_pid_with_identity_check
+
+on_pass: stop_and_report
+next_steps_fixed_order:
+  - 接收端斷訊驗收
+  - 補齊正常輪級命令限制
+  - 求解器驅動的自由空間預抓取
+on_fail:
+  - 標記結果，不下修門檻

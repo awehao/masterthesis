@@ -1,0 +1,143 @@
+{
+ "schema": "wb_cutoff_check/1",
+ "run": "/home/howardchen/masterthesis/evaluation/runs/wb_cutoff_223153",
+ "spec_path": "evaluation/results/specs/wb_cutoff_criteria_v1.yaml",
+ "spec_schema": "wb_cutoff_criteria/1",
+ "spec_version": "v1",
+ "spec_sha256": "363d46d80d3e41f1ad6e8ececa4daa27039db7ade708a6a1cb1dd2456b33cfc2",
+ "spec_copied_to": "criteria_used.yaml",
+ "cut_sim_t": 20.8,
+ "observe_window_s": [
+  20.8,
+  28.8
+ ],
+ "checks": [
+  {
+   "key": "W0_log涵蓋觀察窗",
+   "pass": true,
+   "detail": "觀察窗至 28.80s，log 至 70.01s"
+  },
+  {
+   "key": "P1_切斷時兩者都在運動",
+   "pass": true,
+   "detail": "切斷前 0.2s：底盤 0.02998–0.03003 m/s、joint2 0.04990–0.04995 rad/s"
+  },
+  {
+   "key": "F1_adapter 確實結束",
+   "pass": true,
+   "detail": "exited=True，等待 0.171s，訊號 SIGTERM->pgid"
+  },
+  {
+   "key": "F2_最後一則距切斷",
+   "pass": true,
+   "detail": "最後 sim 20.76，切斷 20.800，差 -0.0400s（≤ 0.1）"
+  },
+  {
+   "key": "F3_切斷後無新訊息",
+   "pass": true,
+   "detail": "切斷 +0.1s 之後 0 則"
+  },
+  {
+   "key": "F4_切斷前觀測正常",
+   "pass": true,
+   "detail": "切斷前 342 則（≥ 50）"
+  },
+  {
+   "key": "Q1_執行端跑到 sim_limit",
+   "pass": true,
+   "detail": "stop_reason=sim_limit"
+  },
+  {
+   "key": "Q2_安全層在觀察窗後仍存活",
+   "pass": true,
+   "detail": "安全層存活=True；其餘 isaac=True, rsp=True, dist=True, adapter=False, recorder=True"
+  },
+  {
+   "key": "Q3_切斷非 cleanup 所為",
+   "pass": true,
+   "detail": "由 wb_cut_adapter 對已核對身分的單一 PID 4138854 送 SIGTERM->pgid"
+  },
+  {
+   "key": "T1_凍結步數 > 0",
+   "pass": true,
+   "detail": "frozen_steps=4904（上游歸零那趟為 0）"
+  },
+  {
+   "key": "T2_凍結時刻在期限內",
+   "pass": true,
+   "detail": "凍結 sim 20.980，切斷後 +0.180s（≤ 0.25）"
+  },
+  {
+   "key": "T3_凍結後底盤命令為零",
+   "pass": true,
+   "detail": "凍結後套用底盤命令 |max| 0.000000000"
+  },
+  {
+   "key": "T4_設定點停止積分",
+   "pass": true,
+   "detail": "觀察窗內設定點最大變動 0.000 µrad"
+  },
+  {
+   "key": "G1_底盤降到門檻下並保持",
+   "pass": true,
+   "detail": "凍結後 +0.010s 降到 0.005 m/s 以下並維持至觀察窗結束（期限 1.0s）"
+  },
+  {
+   "key": "G2_手臂降到門檻下並保持",
+   "pass": true,
+   "detail": "凍結後 +0.230s 降到 0.005 rad/s 以下並維持（期限 1.0s）"
+  },
+  {
+   "key": "G3a_保持段位移(設計行為)",
+   "pass": true,
+   "detail": "5.380 mm（≤ 8；設計預期 0.03×0.2=6.0 mm，命令保持到過期）"
+  },
+  {
+   "key": "G3b_凍結後位移(原始)",
+   "pass": true,
+   "detail": "0.724 mm（≤ 3；**未扣漂移**，已知漂移 8s 約 0.7 mm；不要求恰為零）"
+  },
+  {
+   "key": "G4a_保持段 joint2 位移(設計行為)",
+   "pass": true,
+   "detail": "8.9890 mrad（≤ 13；設計預期 0.05×0.2=10.0 mrad）"
+  },
+  {
+   "key": "G4b_凍結後 joint2 位移(原始)",
+   "pass": false,
+   "detail": "4.7490 mrad（≤ 2）"
+  },
+  {
+   "key": "D1_pregrasp仍禁止",
+   "pass": true,
+   "detail": "wheel_level_limiting_implemented=False"
+  },
+  {
+   "key": "D2_熱中止門檻",
+   "pass": true,
+   "detail": "cpu_limit_c=92.0，峰值 85.0 °C"
+  }
+ ],
+ "passed": 20,
+ "total": 21,
+ "all_pass": false,
+ "measured": {
+  "freeze_sim_t": 20.98,
+  "freeze_delay_s": 0.18,
+  "frozen_steps": 4904,
+  "wb_vel_cmd_msgs_before_cut": 342,
+  "wb_vel_cmd_msgs_after_cut": 0,
+  "wb_vel_cmd_last_sim_t": 20.76,
+  "base_settle_delay_s": 0.01,
+  "arm_settle_delay_s": 0.23,
+  "base_disp_cut_to_freeze_m": 0.00538,
+  "base_disp_after_freeze_m_raw": 0.000724,
+  "arm_disp_cut_to_freeze_rad": 0.008989,
+  "arm_disp_after_freeze_rad_raw": 0.004749
+ },
+ "topic_stop_evidence": "由獨立觀測程序 wb_topic_recorder 記錄的 /wb_vel_cmd 實際訊息，非執行端內部 cmd_age 推論",
+ "drift_subtraction_applied": false,
+ "exact_zero_not_required": true,
+ "displacement_split_note": "位移分「保持段（切斷→凍結，設計上命令保持到過期）」與「凍結後」兩段；合成單一數字會讓是否真的停下無法判讀",
+ "differs_from_upstream_zero_test": "上游歸零趟次 frozen_steps=0，接收端一路收到新鮮零命令；本趟話題實際停止更新"
+}
