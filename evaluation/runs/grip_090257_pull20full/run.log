@@ -482,3 +482,53 @@ stdin is not a terminal device. Keyboard handling disabled.[INFO] [1789261396.97
 [INFO] [1789261397.082232246] [rosbag2_recorder]: Subscribed to topic '/manip/status'
 [INFO] [1789261397.082833131] [rosbag2_recorder]: Subscribed to topic '/manip/tcp_pose'
 [09:03:19] [5/6] 播放
+[INFO] [1789261399.964424535] [rosbag2_recorder]: Subscribed to topic '/arm/joint_position_cmd'
+[INFO] [1789261399.964985510] [rosbag2_recorder]: Subscribed to topic '/manip/gripper_cmd'
+[INFO] [1789261399.965335548] [rosbag2_recorder]: Subscribed to topic '/manip/phase_cmd'
+[INFO] [1789261399.965352707] [rosbag2_recorder]: All requested topics are subscribed. Stopping discovery...
+[INFO] [1789261399.965359567] [rosbag2_recorder]: Topics discovery stopped.
+/clock 就緒（等 0.1 s），模擬時間 4.360 s
+匹配訂閱數 arm/gripper/phase = (1, 1, 1)（等 0.3 s）
+1356 個設定點，總時長 27.100 s，起點 sim 5.880 s
+[drawer] **閉合放行閘：通過** @ sim 15.830（位置 14.640 mm、姿態 0.0019°、對中 -0.0131 mm、追蹤 0.002173 rad）
+  事件 engage   seq 985 t_sched 19.700 sim 25.590
+[drawer] 診斷模式：已記錄同步快照，**未建立夾爪—抽屜固定關節**，繼續重播
+[drawer] 事件 engage @ sim 25.600  抽屜跳動 +0.0000 mm  TCP 跳動 +0.0128 mm
+[drawer] 停止：grip_slip（處置 freeze_setpoint）@ sim 27.300
+[drawer] 溫度：起 74.875 °C，本趟峰值 77.25 °C @ sim 23.82 s，中止線 92 °C
+[drawer] 結束 grip_slip  最終開度 16.31 mm (誤差 -3.69 mm)  CPU 76.75 °C（hwmon:k10temp）
+[drawer] -> /home/howardchen/masterthesis/evaluation/runs/grip_090257_pull20full/sim/drawer_run.json
+2026-09-13T01:03:43Z [36,338ms] [Error] [omni.kit.app._impl] [py stderr]: Exception in thread Thread-3 (spin):
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]: Traceback (most recent call last):
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/usr/lib/python3.12/threading.py", line 1073, in _bootstrap_inner
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:     self.run()
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/usr/lib/python3.12/threading.py", line 1010, in run
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:     self._target(*self._args, **self._kwargs)
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 359, in spin
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:     self._spin_once_impl()
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:     handler, entity, node = self.wait_for_ready_callbacks(
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:     return next(self._cb_iter)
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:            ^^^^^^^^^^^^^^^^^^^
+2026-09-13T01:03:43Z [36,339ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+2026-09-13T01:03:43Z [36,340ms] [Error] [omni.kit.app._impl] [py stderr]:     raise ExternalShutdownException()
+2026-09-13T01:03:43Z [36,340ms] [Error] [omni.kit.app._impl] [py stderr]: rclpy.executors.ExternalShutdownException
+[36.496s] Simulation App Shutting Down
+!! 等模擬時間 27.300 s 超過 30 s（sim 停在 27.300 s）——模擬器可能已結束，中止播放
+發布完成 1071 / 1356 則
+  相對預定時刻延遲：中位 10.0 ms  max 20.0 ms；超過 2 週期的 0 則
+  模擬端回報的事件套用訊息 1 則
+    {"event_applied": "engage", "sim_t": 25.59999942779541, "drawer_jump_mm": 0.0, "tcp_jump_mm": 0.012769460026961514}
+  -> /home/howardchen/masterthesis/evaluation/runs/grip_090257_pull20full/sent.json
+[09:04:13]   發布完成 1071 / 1356 則
+[09:04:13] [6/6] 等模擬器收尾
+[09:04:13] 收尾後 CPU 62.875  來源 hwmon:k10temp
+[09:04:13] 輸出目錄 /home/howardchen/masterthesis/evaluation/runs/grip_090257_pull20full
+[09:04:13] cleanup ...
+[INFO] [1789261453.213808668] [rosbag2_recorder]: Pausing recording.
+[INFO] [1789261453.213883247] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while
+[INFO] [1789261453.217030024] [rosbag2_recorder]: Recording stopped
+[INFO] [1789261453.218270244] [rosbag2_recorder]: Event publisher thread: Exited
+[09:04:16] cleanup done
