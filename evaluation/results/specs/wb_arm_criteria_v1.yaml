@@ -1,0 +1,89 @@
+# Isaac 全身執行端：**有界 arm 單動測試**的事前判準 v1
+#
+# **事前固定**：本檔與 evaluation/wb_arm_check.py 皆在任何 arm 趟次執行**之前**
+# 定版。門檻不得因為某趟未通過而下修；要改門檻只能另立 v2 並明寫理由與時點。
+#
+# 適用執行基線：**E1**（isaac_wholebody_port_20260913.md §9.4b）
+#   root 搜尋 ＋ 零摩擦綁定**兩項合併**，各自貢獻未分離。
+schema: wb_arm_criteria/1
+version: v1
+status: provisional_engineering        # 暫定工程判準，非安全標準
+created: 2026-09-13
+baseline: E1
+prospective: true                      # 自本規格建立後的趟次為前瞻驗收
+
+# ---- 命令剖面（事前固定，不在跑後調整）----
+profile:
+  mode: arm                            # 底盤三分量恆 0；由 cmd_source.json 核對
+  joint: joint2                        # 命令向量 index 4（= dq2）
+  rate_rps: 0.05                       # 執行端界限 1.0 rad/s
+  zero_lead_s: 2.0
+  ramp_s: 1.0
+  hold_s: 3.0
+  zero_tail_s: 2.0
+  nominal_integral_rad: 0.200          # 0.05 × (1.0 + 3.0)；含兩段斜坡各 0.025
+  joint2_limit_rad: [-2.4435, 2.4435]  # URDF；0.200 rad 遠在界內
+
+# ---- A 命令鏈完整性 ----
+A_chain:
+  A1_rejected_eq: 0
+  A2_fail_is_none: true
+  A3_base_components_all_zero: true    # arm 模式下 cmd_source 的 v0..v2 恆 0
+  A4_cmd_age_max_s: 0.10
+  A5_no_low_speed_abort: true          # 低速介面界限未觸發整筆中止
+
+# ---- B 手臂追蹤（主判準）----
+# 比較對象說明（避免 §9.2 那類「拿恆等式當證據」的錯誤）：
+#   Δq2_sp  = joint2 設定點變化量。命令鏈以 sp += dq2 × dt 積分，
+#             所以 **Δq2_sp 就是實際套用命令的積分**（恆等，非量測）。
+#   Δq2_act = joint2 **實測**位置變化量。
+#
+#   B1 = |Δq2_act − Δq2_sp|  → 執行端**物理追蹤**，這是主判準。
+#   B4 = |Δq2_sp − 名目 0.200| → **跨程序**鏈路保真度
+#        （上游 wb_bounded_cmd 是另一個程序，非恆等式）。
+#   **不得**把 Δq2_sp 與「套用命令積分」的相等當成成果。
+B_tracking:
+  # B1 主判準：實測位移 vs 設定點（= 實際套用命令積分）
+  B1_abs_err_rad_max: 0.005            # 5 mrad
+  B1_threshold_basis: >
+    約為已觀測零命令關節漂移（wb_base_diag_160757 joint2 最大 1.381 mrad）的 3.6 倍，
+    且遠小於「完全不動」對應的 200 mrad。不是感測精度或控制器能力的推導值。
+  # B2 保持段平均速度（用區間端點差 / 區間長，避開 100 Hz 差分雜訊）
+  B2_hold_mean_rate_rps: 0.05
+  B2_hold_mean_rate_tol_frac: 0.10     # ±10 %
+  # B3 其他五軸串音（記錄＋合理性上限，非緊度宣稱）
+  B3_other_joints_abs_rad_max: 0.010   # 10 mrad
+  # B4 跨程序鏈路保真度：設定點總變化 vs 上游名目積分
+  B4_sp_vs_nominal_rad_max: 0.004      # 2 % of 0.200
+  B4_threshold_basis: >
+    寬鬆上限。對照 wb_base_diag_160757 的同類量：命令積分 0.11999 vs 名目 0.120，
+    誤差 0.008 %。設 2 % 是為了容納 ZOH 與發布節奏抖動，不是精度宣稱。
+
+# ---- C 底盤附帶運動（記錄＋合理性上限）----
+# **原始值判定，不扣漂移。** 同趟零命令段的漂移率一併記錄供對照，
+# 但**不得相減後宣稱底盤靜止**。
+C_base_incidental:
+  drift_subtraction_forbidden: true
+  C1_abs_disp_m_max: 0.020             # 20 mm
+  C2_abs_yaw_deg_max: 1.0
+  C_threshold_basis: >
+    合理性／安全上限，不是「底盤不動」的緊度宣稱。
+    參考：wb_base_diag_160757 零命令段平移漂移 −0.0885 mm/s、
+    yaw 漂移 +0.0135 °/s；9 s 剖面對應約 0.8 mm 與 0.12°。
+  also_record:
+    - zero_command_drift_rate_same_run   # 同趟零命令段漂移率
+    - raw_and_uncorrected                # 原始值，未扣除
+
+# ---- D 保護條件（維持不變，逐項核對）----
+D_protections:
+  pregrasp_forbidden_unchanged: true   # WHEEL_LIMIT_IMPLEMENTED 必須仍為 False
+  thermal_abort_c: 92.0                # **不得上調**
+  independent_domain_required: true
+  independent_run_dir: true
+  no_broad_process_kill: true
+
+# ---- 通過後才做的事 ----
+on_pass: proceed_to_sync
+on_fail:
+  - 標記結果，不下修門檻
+  - 不進 sync
