@@ -1,0 +1,90 @@
+[12:32:24] === base 介面測試 RUN_ID=wb_base_123224 domain=95 ===
+[12:32:24] 準備逾時 240s（牆鐘）；任務需要模擬時間 17.0s；SIM_LIMIT=70
+[12:32:24] 起跑前 CPU 65.625  來源 hwmon:k10temp
+[12:32:24] [1/7] 純邏輯測試（不開模擬器）
+A 結構有效性：長度、有限值
+  通過  長度 8 整筆拒收  長度 8 ≠ 9
+  通過  整體失效已設定  命令無效：長度 8 ≠ 9
+  通過  含 NaN 整筆拒收  第 4 個分量非有限值 nan
+  通過  含 Inf 整筆拒收  第 0 個分量非有限值 inf
+  通過  長度 9 且全有限 ⇒ 接受
+B 同一物理步使用同一份快照
+  通過  已取用的快照不被本步覆寫  recv_seq=1
+  通過  下一步才換新快照  recv_seq=2
+C 手臂積分：初始化、限位、過期凍結
+  通過  初始設定點由實測關節位置建立  首步 (0.305, -0.195, 0.105, 0.005, 0.405, -0.095)
+  通過  初始化事件有記錄
+  通過  初始化後不再被量測值覆寫  setpoint[0]=0.5500
+  通過  積分超出限位 ⇒ 整體失效  關節 1 積分結果 +2.010000 超出限位 [-2.0000, +2.0000]
+D 命令過期：停止積分，設定點凍結
+  通過  過期時底盤分量歸零  (0.0, 0.0, 0.0)
+  通過  過期時設定點凍結
+  通過  停止積分有計數  n_frozen=1
+  通過  凍結不等於實際速度為零（僅語意，須另量測）  見 summary 的 fail_note / 規格 §1.1
+E 輪級檢查：越界即整體失效，不只縮底盤
+  通過  低速通過
+  通過  超界 ⇒ 整筆停止（回傳 None）
+  通過  整體失效原因為輪級  底盤輪級檢查未通過：底盤線速度 > 0.05 m/s
+  通過  未縮底盤後續跑
+F 時間重設
+  通過  時間非單調 ⇒ 整體失效  模擬時間非單調遞增
+G 接收端編號不冒稱來源時間
+  通過  欄位名為 recv_seq / recv_sim_t  recv_seq=1, recv_sim_t=1.234
+  通過  summary 註明不得冒稱端到端延遲
+H 模式錯誤：接收端拒收，不事後切掉分量
+  通過  base 模式收到手臂分量 ⇒ 拒收  模式 base 不允許手臂分量，收到 (0.1, 0.0, 0.0, 0.0, 0.0, 0.0)
+  通過  整體失效（非只把手臂歸零）  命令無效：模式 base 不允許手臂分量，收到 (0.1, 0.0, 0.0, 0.0, 0.0, 0.0)
+  通過  base 模式純底盤 ⇒ 接受
+  通過  arm 模式收到底盤分量 ⇒ 拒收  模式 arm 不允許底盤分量，收到 (0.01, 0, 0)
+  通過  arm 模式純手臂 ⇒ 接受
+  通過  sync 模式兩者皆可
+I 失效停止：底盤停止、手臂保持設定點、可繼續量測
+  通過  已失效  命令無效：長度 8 ≠ 9
+  通過  底盤停止  (0.0, 0.0, 0.0)
+  通過  手臂保持在失效前的設定點
+  通過  可重複呼叫（迴圈可繼續量測）
+  通過  設定點未建立時不對手臂下命令  base=(0.0, 0.0, 0.0)
+J 監看失效：讀不到不等於安全
+  通過  監看失效 ⇒ 整體失效  監看失效（cpu_temp）：讀不到（來源 None）
+  通過  失效後 step 不再執行命令
+  通過  但停止命令仍可取得
+K pregrasp 不可由參數繞過
+  通過  無 --wheel-limit-implemented 旗標
+  通過  由程式常數把關
+  通過  pregrasp 檢查存在
+  通過  回報為低速介面界限而非輪級限制
+L 回授確實發布
+  通過  js_pub.publish 有呼叫
+  通過  odom_pub.publish 有呼叫
+  通過  status_pub.publish 有呼叫
+  通過  clock_pub.publish 有呼叫
+
+全部通過
+[12:32:24]   43 項通過
+[12:32:24] [2/7] 啟動 Isaac 執行端（--mode base）
+[12:32:24]   起 isaac PID=3806116
+[12:32:24] [3/7] 等 /clock 前進（剩餘準備時間 240s）
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/isaac_wholebody_sim.py", line 85, in <module>
+    from ammr_wholebody_mpc.arm_limits import LITE6_SAFE           # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ModuleNotFoundError: No module named 'ammr_wholebody_mpc'
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/clock_advancing.py", line 48, in <module>
+    rclpy.spin_once(n, timeout_sec=0.05)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 226, in spin_once
+    executor.spin_once(timeout_sec=timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+[12:33:38] **失敗：/clock 未前進或準備逾時**
+[12:33:38] cleanup（只針對本趟 PID）...
+[12:33:41] cleanup done

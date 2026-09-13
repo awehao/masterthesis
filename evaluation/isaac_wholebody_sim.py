@@ -39,6 +39,9 @@ import numpy as np
 WS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HERE = os.path.join(WS, 'evaluation')
 sys.path.insert(0, HERE)
+# 與 isaac_drawer_sim.py 相同：套件在 src/ 下，Isaac 的直譯器沒有 workspace 的
+# install/ 在路徑上，所以直接加進來。
+sys.path.insert(0, os.path.join(WS, 'src/ammr_wholebody_mpc'))
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--out', required=True)
@@ -256,10 +259,12 @@ def loop(world, robot, idx, chain, node, ex, th):
         # 實測關節速度：用來判定「停止」，**不用設定點凍結代替**
         rate = (np.zeros(6) if q_prev is None or dt <= 0
                 else (qa - q_prev) / dt)
-        bp, bq = robot.get_world_poses()
-        bp = np.asarray(bp[0], float); byaw = yaw_of(np.asarray(bq[0], float))
-        bv = robot.get_linear_velocities()[0]
-        bw = robot.get_angular_velocities()[0]
+        # SingleArticulation 是**單一 prim** 包裝，用單數形 API；
+        # 複數形（get_world_poses 等）屬於批次視圖，這裡沒有。
+        bp, bq = robot.get_world_pose()
+        bp = np.asarray(bp, float); byaw = yaw_of(np.asarray(bq, float))
+        bv = np.asarray(robot.get_linear_velocity(), float)
+        bw = np.asarray(robot.get_angular_velocity(), float)
 
         # 失效後**不關迴圈**：底盤停止、手臂保持設定點，並繼續量測，
         # 直到停止條件由實測資料判定。關閉模擬器不等於驗證停止。
@@ -285,8 +290,8 @@ def loop(world, robot, idx, chain, node, ex, th):
             cy, sy = math.cos(byaw), math.sin(byaw)
             vwx = base_cmd[0] * cy - base_cmd[1] * sy
             vwy = base_cmd[0] * sy + base_cmd[1] * cy
-            robot.set_linear_velocities(np.array([[vwx, vwy, 0.0]]))
-            robot.set_angular_velocities(np.array([[0.0, 0.0, base_cmd[2]]]))
+            robot.set_linear_velocity(np.array([vwx, vwy, 0.0]))
+            robot.set_angular_velocity(np.array([0.0, 0.0, base_cmd[2]]))
         else:
             base_cmd, sp = (float('nan'),) * 3, (float('nan'),) * 6
         if sp is None:
