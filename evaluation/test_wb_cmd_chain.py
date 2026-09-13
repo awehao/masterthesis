@@ -180,5 +180,51 @@ for topic in ('js_pub.publish', 'odom_pub.publish', 'status_pub.publish',
               'clock_pub.publish'):
     check(f'{topic} 有呼叫', topic in src)
 
+# ============ M 關節順序核對（adapter 的純函式，不開 ROS、不開 Isaac）============
+print('\nM 關節順序核對')
+_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'arm_vel_adapter.py')).read()
+_ns = {}
+exec(_src[_src.index('def verify_order'):_src.index('class Adapter')], _ns)
+verify_order = _ns['verify_order']
+ARM6 = [f'joint{i}' for i in range(1, 7)]
+
+ok, why = verify_order(ARM6, ARM6)
+check('正確順序 ⇒ 通過', ok and why is None)
+
+_sw = ARM6[:]; _sw[1], _sw[2] = _sw[2], _sw[1]
+ok, why = verify_order(_sw, ARM6)
+check('交換兩個關節 ⇒ 拒絕', not ok and '順序不同' in (why or ''), why)
+
+ok, why = verify_order(None, ARM6)
+check('服務缺失／回應無效 ⇒ 拒絕', not ok and '服務缺失' in (why or ''), why)
+
+ok, why = verify_order('joint1', ARM6)
+check('型別不對 ⇒ 拒絕', not ok and '型別' in (why or ''), why)
+
+ok, why = verify_order(['a'] * 6, ARM6)
+check('關節集合不同 ⇒ 拒絕', not ok and '集合不同' in (why or ''), why)
+
+print('N 消費端節點可設定，預設仍為 Gazebo 控制器')
+check('預設常數為 /lite6_vel_controller',
+      "CTRL_DEFAULT = '/lite6_vel_controller'" in _src)
+check('Adapter 接受 ctrl 參數', 'def __init__(self, ctrl=CTRL_DEFAULT)' in _src)
+check('查詢路徑用 self.ctrl', "f'{self.ctrl}/get_parameters'" in _src)
+check('新增 --consumer-node 旗標', "'--consumer-node'" in _src)
+check('order_ok 為假時仍拒絕轉送',
+      'not self.order_ok' in _src and 'refusing to forward commands' in _src)
+
+print('O Isaac 端的 joints 與實際命令映射同源')
+_isrc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'isaac_wholebody_sim.py')).read()
+check('單一命令順序常數', 'CMD_JOINT_ORDER = [' in _isrc)
+check('ARM 指向同一份', 'ARM = CMD_JOINT_ORDER' in _isrc)
+check('joints 參數由該順序宣告',
+      "self.declare_parameter('joints', list(joint_order))" in _isrc)
+check('啟動時檢查重複關節',
+      'len(set(CMD_JOINT_ORDER)) != len(CMD_JOINT_ORDER)' in _isrc)
+check('啟動時檢查重複 DOF 索引', 'len(set(dof_ids)) != len(dof_ids)' in _isrc)
+check('記錄 命令欄位 → 關節 → DOF 索引', "'cmd_field': 3 + k" in _isrc)
+
 print(f'\n{"全部通過" if not fails else "**未通過：" + ", ".join(fails) + "**"}')
 sys.exit(1 if fails else 0)

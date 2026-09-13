@@ -95,7 +95,10 @@ spawn dist ros2 run ammr_wholebody_mpc arm_link_distance --ros-args \
 spawn safety ros2 run ammr_wholebody_mpc wholebody_safety --ros-args \
     -p use_sim_time:=true -p report_frame:=odom -p base_frame:=base_link \
     -p wholebody_urdf:="$URDF_WB"
-spawn adapter python3 -u evaluation/arm_vel_adapter.py
+# **Isaac 鏈的消費端是執行端本身**，不是 ros2_control 控制器。
+# 關節順序核對的對象因此指向實際會執行這些數字的那一端。
+spawn adapter python3 -u evaluation/arm_vel_adapter.py \
+    --consumer-node /isaac_wholebody_sim
 sleep 5
 
 say "[5/7] 起動前檢查（內容 / 新鮮度 / 端點身分）"

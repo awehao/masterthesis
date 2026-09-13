@@ -87,7 +87,10 @@ from wb_cmd_chain import CmdChain                              # noqa: E402
 from cpu_temp import read as cpu_temp_read                     # noqa: E402
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE           # noqa: E402
 
-ARM = [f'joint{i}' for i in range(1, 7)]
+# **單一命令順序**：`joints` 參數、六個速度分量的積分、以及對 articulation
+# 的實際 DOF 索引與套用，全部用這一份。**不另外宣告一份讓檢查通過。**
+CMD_JOINT_ORDER = [f'joint{i}' for i in range(1, 7)]
+ARM = CMD_JOINT_ORDER          # 沿用既有名稱，指向同一個物件
 ROBOT = '/World/omni_bot'
 
 from isaacsim import SimulationApp                             # noqa: E402
@@ -115,8 +118,10 @@ import tf2_ros                                                 # noqa: E402
 class WBNode(Node):
     """只訂閱 /wb_vel_cmd 這一個 topic。"""
 
-    def __init__(self, chain):
+    def __init__(self, chain, joint_order):
         super().__init__('isaac_wholebody_sim')
+        # 回報給 adapter 核對的 joints，**就是本端實際使用的命令順序**。
+        self.declare_parameter('joints', list(joint_order))
         self.chain = chain
         self.sim_t = 0.0
         self.n_cb = 0
@@ -222,9 +227,22 @@ def main():
     robot = SingleArticulation(prim_path=ROBOT, name='omni_bot')
     robot.initialize()
     idx = {n: k for k, n in enumerate(robot.dof_names)}
-    missing = [j for j in ARM if j not in idx]
+    missing = [j for j in CMD_JOINT_ORDER if j not in idx]
     if missing:
         print(f'[wb] URDF 缺關節 {missing}，中止'); return 5
+    if len(set(CMD_JOINT_ORDER)) != len(CMD_JOINT_ORDER):
+        print('[wb] **命令順序有重複關節**，中止'); return 5
+    dof_ids = [idx[j] for j in CMD_JOINT_ORDER]
+    if len(set(dof_ids)) != len(dof_ids):
+        print('[wb] **命令順序對應到重複的 DOF 索引**，中止'); return 5
+    cmd_map = [{'cmd_field': 3 + k, 'joint': j, 'dof_index': idx[j]}
+               for k, j in enumerate(CMD_JOINT_ORDER)]
+    print('[wb] 命令欄位 → 關節名稱 → articulation 索引：', flush=True)
+    for e in cmd_map:
+        print(f"    v[{e['cmd_field']}]  {e['joint']:<8}  DOF {e['dof_index']}",
+              flush=True)
+    print(f'[wb] 無缺漏、無重複；執行中不改順序', flush=True)
+    globals()['CMD_MAP'] = cmd_map
     print(f'[wb] articulation DOF {robot.num_dof}', flush=True)
 
     # **確認實際位姿對應的 prim**：不把 articulation 根的位姿直接當成某個連桿。
@@ -272,7 +290,7 @@ def main():
           f'不符模式的命令整筆拒收', flush=True)
 
     rclpy.init()
-    node = WBNode(chain)
+    node = WBNode(chain, CMD_JOINT_ORDER)
     ex = SingleThreadedExecutor(); ex.add_node(node)
     th = threading.Thread(target=ex.spin, daemon=True); th.start()
     print('[wb] 進入主迴圈；等待 /wb_vel_cmd', flush=True)
@@ -418,6 +436,11 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                         '移植前須逐項核對現行程式'),
         'command_interface': {
             'topic': '/wb_vel_cmd', 'dof': 9,
+            'joint_order': list(CMD_JOINT_ORDER),
+            'command_map': globals().get('CMD_MAP'),
+            'joint_order_note': ('`joints` 參數、速度積分與 articulation 套用'
+                                 '**共用同一份順序**；啟動時已檢查無缺漏、無重複，'
+                                 '執行中不改'),
             'note': ('只訂閱單一 topic；底盤與手臂來自同一次全身求解。'
                      '分開訂閱兩個 topic 取最新值不算同步，本檔不提供該路徑')},
         'guards_not_started': ['arm_vel_gate', 'wheel_limit_guard'],

@@ -42,6 +42,7 @@ import math
 import sys
 import time
 
+import argparse
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -49,12 +50,36 @@ from std_msgs.msg import Float32MultiArray, Float64MultiArray
 
 ARM = [f'joint{i}' for i in range(1, 7)]
 OUT = '/wb_vel_cmd'
-CTRL = '/lite6_vel_controller'
+# **實際消費端**的節點名。預設是 Gazebo 鏈的 ros2_control 控制器；
+# Isaac 鏈沒有控制器，執行端直接吃 /wb_vel_cmd，所以要能指向它。
+# 核對的對象應該是**真的會執行這些數字的那一端**。
+CTRL_DEFAULT = '/lite6_vel_controller'
+
+
+def verify_order(got, expect):
+    """純函式：核對消費端回報的關節順序。**可不開 ROS 測試。**
+
+    回傳 (ok, reason)。`got` 為 None 代表服務缺失或回應無效。
+    """
+    if got is None:
+        return False, '消費端未回報 joints（服務缺失或回應無效）'
+    if not isinstance(got, (list, tuple)):
+        return False, f'joints 型別不對：{type(got).__name__}'
+    got = list(got)
+    if not all(isinstance(x, str) for x in got):
+        return False, 'joints 內容不是字串陣列'
+    if got == list(expect):
+        return True, None
+    if sorted(got) == sorted(expect):
+        diff = [(i, a, b) for i, (a, b) in enumerate(zip(got, expect)) if a != b]
+        return False, f'順序不同（集合相同）：欄位 {diff}'
+    return False, f'關節集合不同：消費端 {got} vs 濾波器 {list(expect)}'
 
 
 class Adapter(Node):
-    def __init__(self):
+    def __init__(self, ctrl=CTRL_DEFAULT):
         super().__init__('arm_vel_adapter')
+        self.ctrl = str(ctrl)
         self.n_in = self.n_out = self.n_bad = 0
         self.last_in = 0.0
         self.yaw = None
@@ -85,26 +110,30 @@ class Adapter(Node):
         downstream still looks perfectly healthy -- there is no symptom until
         the arm moves somewhere unexpected.
         """
+        got = None
         cli = self.create_client(
             __import__('rcl_interfaces.srv', fromlist=['GetParameters']).GetParameters,
-            f'{CTRL}/get_parameters')
+            f'{self.ctrl}/get_parameters')
         if not cli.wait_for_service(timeout_sec=20.0):
             self.get_logger().error(
-                f'{CTRL}/get_parameters unavailable: cannot verify joint order')
+                f'{self.ctrl}/get_parameters 無法取得：不能核對關節順序')
+        else:
+            Req = __import__('rcl_interfaces.srv',
+                             fromlist=['GetParameters']).GetParameters.Request
+            req = Req(); req.names = ['joints']
+            fut = cli.call_async(req)
+            rclpy.spin_until_future_complete(self, fut, timeout_sec=20.0)
+            r = fut.result()
+            if r is not None and r.values:
+                v = r.values[0]
+                # 型別要對：必須是字串陣列，不能拿其他型別的欄位充數
+                got = (list(v.string_array_value)
+                       if getattr(v, 'string_array_value', None) else None)
+        ok, why = verify_order(got, ARM)
+        if not ok:
+            self.get_logger().error(f'關節順序核對未通過（{self.ctrl}）：{why}')
             return False
-        Req = __import__('rcl_interfaces.srv', fromlist=['GetParameters']).GetParameters.Request
-        req = Req(); req.names = ['joints']
-        fut = cli.call_async(req)
-        rclpy.spin_until_future_complete(self, fut, timeout_sec=20.0)
-        if fut.result() is None or not fut.result().values:
-            self.get_logger().error('no joints parameter from the controller')
-            return False
-        got = list(fut.result().values[0].string_array_value)
-        if got != ARM:
-            self.get_logger().error(
-                f'JOINT ORDER MISMATCH: controller {got} vs filter {ARM}')
-            return False
-        self.get_logger().info(f'joint order verified against {CTRL}: {got}')
+        self.get_logger().info(f'關節順序已對 {self.ctrl} 核對通過：{got}')
         return True
 
     def on_cmd(self, msg):
@@ -139,8 +168,14 @@ class Adapter(Node):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--consumer-node', default=CTRL_DEFAULT,
+                    help='實際消費端的節點名（查其 joints 參數核對順序）。'
+                         '預設為 Gazebo 鏈的 ros2_control 控制器；'
+                         'Isaac 鏈請指定 /isaac_wholebody_sim')
+    a, _ = ap.parse_known_args()
     rclpy.init()
-    nd = Adapter()
+    nd = Adapter(a.consumer_node)
     if not nd.order_ok:
         nd.get_logger().error('refusing to forward commands')
     try:
