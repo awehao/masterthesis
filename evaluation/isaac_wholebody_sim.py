@@ -56,13 +56,10 @@ ap.add_argument('--arm-rate-max', type=float, default=1.0,
                 help='關節速度上限（rad/s）；超過即整筆失效')
 # --- 輪級：正常輸出限制尚未實作，先用明確低速界限 + 越界中止 ---
 ap.add_argument('--base-lin-max', type=float, default=0.05,
-                help='底盤線速度界限（m/s）。**這是介面測試用的明確低速界限，'
-                     '不是輪系正常輸出限制**；越界即中止，不縮命令')
+                help='**低速介面界限**（m/s）。這不是輪級限制功能，'
+                     '只是介面測試用的明確界限；越界即整筆中止，不縮命令')
 ap.add_argument('--base-ang-max', type=float, default=0.20,
-                help='底盤角速度界限（rad/s），同上')
-ap.add_argument('--wheel-limit-implemented', action='store_true',
-                help='輪級正常輸出限制已實作時才可加。未加時本檔拒絕進入'
-                     '完整預抓取驗收（見規格 §2.1c）')
+                help='**低速介面界限**（rad/s），同上')
 ap.add_argument('--mode', default='base',
                 choices=['base', 'arm', 'sync', 'pregrasp'],
                 help='驗收順序：base → arm → sync → pregrasp')
@@ -72,9 +69,14 @@ ap.add_argument('--solver-label', default='dls',
 a = ap.parse_args()
 os.makedirs(a.out, exist_ok=True)
 
-if a.mode == 'pregrasp' and not a.wheel_limit_implemented:
-    print('[wb] **輪級正常輸出限制尚未實作，不得進入完整預抓取驗收**'
-          '（規格 §2.1c）。請先完成 base / arm / sync 介面測試。')
+# 輪級**正常輸出限制**目前尚未實作。程式裡沒有這個功能，
+# 就**無條件禁止** pregrasp —— 不提供任何讓使用者自行宣告已實作的旗標。
+# 實作完成後，把下面這個常數改為 True 並附上實作與測試，才可解鎖。
+WHEEL_LIMIT_IMPLEMENTED = False
+
+if a.mode == 'pregrasp' and not WHEEL_LIMIT_IMPLEMENTED:
+    print('[wb] **輪級正常輸出限制尚未實作，無條件禁止 pregrasp**'
+          '（規格 §2.1c）。目前只有低速介面界限，沒有輪級限制功能。')
     sys.exit(2)
 
 import yaml                                                    # noqa: E402
@@ -125,6 +127,31 @@ class WBNode(Node):
         # **接收時間**用模擬時間，命名為 recv_sim_t；不冒稱來源發布時間
         self.chain.receive(list(msg.data), self.sim_t)
 
+    def publish_feedback(self, t, names, q, dq, bp, byaw, bv, bw, status):
+        """回授：上游控制器與安全鏈需要這些才能閉迴路。"""
+        stamp = self.get_clock().now().to_msg()
+        stamp.sec = int(t); stamp.nanosec = min(int(round((t - int(t)) * 1e9)),
+                                                999999999)
+        js = JointState(); js.header.stamp = stamp
+        js.name = list(names)
+        js.position = [float(x) for x in q]
+        js.velocity = [float(x) for x in dq]
+        self.js_pub.publish(js)
+
+        od = Odometry(); od.header.stamp = stamp
+        od.header.frame_id = 'odom'; od.child_frame_id = 'base_link'
+        od.pose.pose.position.x = float(bp[0])
+        od.pose.pose.position.y = float(bp[1])
+        od.pose.pose.position.z = float(bp[2])
+        od.pose.pose.orientation.w = math.cos(byaw / 2.0)
+        od.pose.pose.orientation.z = math.sin(byaw / 2.0)
+        od.twist.twist.linear.x = float(bv[0])
+        od.twist.twist.linear.y = float(bv[1])
+        od.twist.twist.angular.z = float(bw[2])
+        self.odom_pub.publish(od)
+
+        self.status_pub.publish(String(data=status))
+
 
 def q_yaw(t):
     return [math.cos(t / 2.0), 0.0, 0.0, math.sin(t / 2.0)]
@@ -170,8 +197,8 @@ def main():
     robot.get_articulation_controller().apply_action(
         ArticulationAction(joint_positions=q))
 
-    # --- 輪級檢查：**明確低速界限，越界即中止，不縮命令** ---
-    def wheel_ok(vx, vy, wz):
+    # --- **低速介面界限**（不是輪級限制功能）：越界即整筆中止，不縮命令 ---
+    def low_speed_bound(vx, vy, wz):
         lin = math.hypot(vx, vy)
         if lin > a.base_lin_max:
             return (False, f'線速度 {lin:.4f} > {a.base_lin_max} m/s')
@@ -180,9 +207,11 @@ def main():
         return (True, None)
 
     chain = CmdChain(max_cmd_age_s=a.max_cmd_age_s,
-                     arm_rate_max=a.arm_rate_max, wheel_ok=wheel_ok,
+                     arm_rate_max=a.arm_rate_max, wheel_ok=low_speed_bound,
                      joint_lower=tuple(LITE6_SAFE.lower),
-                     joint_upper=tuple(LITE6_SAFE.upper))
+                     joint_upper=tuple(LITE6_SAFE.upper), mode=a.mode)
+    print(f'[wb] 模式 {a.mode}：允許分量 {chain.mode}；'
+          f'不符模式的命令整筆拒收', flush=True)
 
     rclpy.init()
     node = WBNode(chain)
@@ -200,6 +229,8 @@ LOG_COLS = ['t', 'recv_seq', 'cmd_age', 'vx_cmd', 'vy_cmd', 'wz_cmd',
 
 def loop(world, robot, idx, chain, node, ex, th):
     log, stop = [], 'sim_limit'
+    STOP_HOLD_STEPS = 100        # 失效後續量 1.0 s，證明停止行為而非直接關掉
+    fail_steps = 0
     t_prev = None
     q_prev = None
     tc0, tsrc = cpu_temp_read()
@@ -230,15 +261,26 @@ def loop(world, robot, idx, chain, node, ex, th):
         bv = robot.get_linear_velocities()[0]
         bw = robot.get_angular_velocities()[0]
 
-        out = chain.step(t, dt, qa)
+        # 失效後**不關迴圈**：底盤停止、手臂保持設定點，並繼續量測，
+        # 直到停止條件由實測資料判定。關閉模擬器不等於驗證停止。
+        node.publish_feedback(
+            t, ARM, qa, rate, np.array([bp[0], bp[1], bp[2]]), byaw, bv, bw,
+            json.dumps({'mode': a.mode, 'fail': chain.fail,
+                        'integrating': chain.integrating,
+                        'recv': chain.n_recv, 'rejected': chain.n_rejected},
+                       ensure_ascii=False))
+        out = chain.step(t, dt, qa) if chain.fail is None else chain.stop_command()
         s = chain.applied
-        if out is not None:
+        if out is not None and out[1] is None:
+            base_cmd, sp = out[0], None
+        elif out is not None:
             base_cmd, sp = out
-            tgt = robot.get_joint_positions()
-            for k, j in enumerate(ARM):
-                tgt[idx[j]] = sp[k]
-            robot.get_articulation_controller().apply_action(
-                ArticulationAction(joint_positions=tgt))
+            if sp is not None:
+                tgt = robot.get_joint_positions()
+                for k, j in enumerate(ARM):
+                    tgt[idx[j]] = sp[k]
+                robot.get_articulation_controller().apply_action(
+                    ArticulationAction(joint_positions=tgt))
             # 底盤：本體速度 → 世界速度
             cy, sy = math.cos(byaw), math.sin(byaw)
             vwx = base_cmd[0] * cy - base_cmd[1] * sy
@@ -247,6 +289,8 @@ def loop(world, robot, idx, chain, node, ex, th):
             robot.set_angular_velocities(np.array([[0.0, 0.0, base_cmd[2]]]))
         else:
             base_cmd, sp = (float('nan'),) * 3, (float('nan'),) * 6
+        if sp is None:
+            sp = (float('nan'),) * 6
 
         log.append([round(t, 4),
                     s.recv_seq if s is not None else -1,
@@ -264,13 +308,22 @@ def loop(world, robot, idx, chain, node, ex, th):
             raise RuntimeError(f'log 欄名 {len(LOG_COLS)} vs 資料列 {len(log[0])}')
 
         if len(log) % 25 == 0:
-            tc, _ = cpu_temp_read()
-            if tc is not None:
+            tc, src = cpu_temp_read()
+            if tc is None:
+                # **讀不到溫度不等於安全。** 沿用已確立的監看失效處置。
+                chain.note_monitor_failure('cpu_temp', f'讀不到（來源 {src}）', t)
+            else:
                 temp_max = max(temp_max, tc)
                 if tc >= 92.0:
-                    stop = 'cpu_temp'; break
+                    chain.note_monitor_failure('cpu_temp',
+                                               f'{tc:.2f} °C ≥ 92.0', t)
+        # 失效後仍執行 stop_command 並量測；連續 `stop_hold_steps` 步後才收尾
         if chain.fail is not None:
-            stop = 'cmd_chain_fail'; break
+            fail_steps += 1
+            if fail_steps >= STOP_HOLD_STEPS:
+                stop = ('monitor_failure' if '監看失效' in chain.fail
+                        else 'cmd_chain_fail')
+                break
         if t >= a.sim_limit:
             stop = 'sim_limit'; break
         if time.monotonic() - w0 > 900.0:
@@ -300,12 +353,13 @@ def loop(world, robot, idx, chain, node, ex, th):
         'guards_not_started': ['arm_vel_gate', 'wheel_limit_guard'],
         'guards_note': ('節點未啟動，但其必要檢查未省略 —— 由 wb_cmd_chain 承接，'
                         '並已由 evaluation/test_wb_cmd_chain.py 不開模擬器測試'),
-        'wheel_limit': {
-            'implemented_normal_output_limiting': bool(a.wheel_limit_implemented),
-            'interface_bound_lin_mps': a.base_lin_max,
-            'interface_bound_ang_rps': a.base_ang_max,
-            'note': ('這是介面測試用的**明確低速界限**，不是輪系正常輸出限制；'
-                     '越界即整筆中止，**不縮命令**')},
+        'low_speed_interface_bound': {
+            'lin_mps': a.base_lin_max, 'ang_rps': a.base_ang_max,
+            'note': ('**低速介面界限**，不是輪級限制功能；越界即整筆中止，'
+                     '不縮命令')},
+        'wheel_level_limiting_implemented': WHEEL_LIMIT_IMPLEMENTED,
+        'wheel_level_note': ('輪級正常輸出限制尚未實作；pregrasp 由程式常數'
+                             '無條件禁止，不提供旗標讓使用者自行宣告'),
         'arm_adapter': {
             'kind': 'velocity_integrated_to_position_setpoint',
             'dt_source': 'world.current_time 相鄰物理步差',
@@ -314,6 +368,12 @@ def loop(world, robot, idx, chain, node, ex, th):
                           '停止行為由 log 的 *_rate_meas 另行判定'),
             'not_native_velocity_control': True},
         'cmd_chain': chain.summary(),
+        'fail_hold_steps': fail_steps,
+        'stop_flow_note': ('失效後每步送 stop_command（底盤停止、手臂保持設定點）'
+                           f'並繼續量測 {STOP_HOLD_STEPS} 步（{STOP_HOLD_STEPS*a.physics_dt:.1f} s）'
+                           '才收尾；停止行為由 log 的 base_lin_meas 與 '
+                           '*_rate_meas 判定，不以關閉模擬器代替'),
+        'feedback_published': ['/clock', '/joint_states', '/odom', '/wb_sim/status'],
         'callbacks': node.n_cb,
         'stop_reason': stop, 'sim_time_s': float(world.current_time),
         'wall_s': time.monotonic() - w0,

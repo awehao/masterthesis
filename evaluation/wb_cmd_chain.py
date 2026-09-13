@@ -25,6 +25,16 @@ import math
 
 N_DOF = 9          # [vx, vy, wz, dq1..dq6]，底盤為**本體**座標
 
+# 驗收模式允許的分量。**由接收端拒絕不符模式的整筆命令**，
+# 不在事後把分量切掉 —— 切掉之後執行的就不是任何求解器產生的命令。
+MODES = {
+    'base': {'base': True, 'arm': False},
+    'arm': {'base': False, 'arm': True},
+    'sync': {'base': True, 'arm': True},
+    'pregrasp': {'base': True, 'arm': True},
+}
+MODE_ZERO_TOL = 1e-9
+
 
 class Snapshot:
     """一筆已通過結構檢查的命令，附接收端編號。"""
@@ -54,12 +64,15 @@ class CmdChain:
     """
 
     def __init__(self, *, max_cmd_age_s, arm_rate_max, wheel_ok,
-                 joint_lower, joint_upper, expect_dof=N_DOF):
+                 joint_lower, joint_upper, mode='sync', expect_dof=N_DOF):
+        if mode not in MODES:
+            raise ValueError(f'未知模式 {mode}')
         self.cfg = dict(max_cmd_age_s=float(max_cmd_age_s),
                         arm_rate_max=float(arm_rate_max),
-                        expect_dof=int(expect_dof),
+                        expect_dof=int(expect_dof), mode=str(mode),
                         joint_lower=tuple(joint_lower),
                         joint_upper=tuple(joint_upper))
+        self.mode = MODES[mode]
         self.wheel_ok = wheel_ok
         self.n_recv = 0
         self.n_rejected = 0
@@ -89,10 +102,21 @@ class CmdChain:
                 if not isinstance(x, (int, float)) or not math.isfinite(float(x)):
                     why = f'第 {i} 個分量非有限值 {x!r}'
                     break
+        if why is None:
+            # 模式檢查：**不允許的分量必須為零**。不符即整筆拒收，
+            # 不把分量切掉後續跑 —— 切掉的命令不是任何求解器的輸出。
+            if not self.mode['base'] and any(
+                    abs(x) > MODE_ZERO_TOL for x in v[:3]):
+                why = (f'模式 {self.cfg["mode"]} 不允許底盤分量，'
+                       f'收到 {tuple(round(x, 6) for x in v[:3])}')
+            elif not self.mode['arm'] and any(
+                    abs(x) > MODE_ZERO_TOL for x in v[3:]):
+                why = (f'模式 {self.cfg["mode"]} 不允許手臂分量，'
+                       f'收到 {tuple(round(x, 6) for x in v[3:])}')
         if why is not None:
             self.n_rejected += 1
             self.last_reject = why
-            self._fail(f'命令結構無效：{why}', recv_sim_t)
+            self._fail(f'命令無效：{why}', recv_sim_t)
             return False
         self.snap = Snapshot(v, self.n_recv, recv_sim_t)
         return True
@@ -150,6 +174,24 @@ class CmdChain:
     def note_time_reset(self, sim_t):
         self._fail('模擬時間非單調遞增', sim_t)
 
+    def note_monitor_failure(self, what, why, sim_t):
+        """監看本身失效（例如溫度讀不到）。
+
+        **讀不到不等於安全。** 沿用已確立的處置：整體失效、停止，
+        與「量到超限」分開記錄，兩者不可混為一談。
+        """
+        self._fail(f'監看失效（{what}）：{why}', sim_t)
+
+    def stop_command(self):
+        """失效後每步要送的命令：**底盤停止、手臂保持設定點**。
+
+        回傳 None 代表連設定點都還沒建立（手臂沒被命令過），
+        此時不對手臂下任何命令。
+        """
+        if self.setpoint is None:
+            return (0.0, 0.0, 0.0), None
+        return (0.0, 0.0, 0.0), tuple(self.setpoint)
+
     def _fail(self, why, sim_t):
         if self.fail is None:
             self.fail = why
@@ -163,5 +205,9 @@ class CmdChain:
                 'fail': self.fail, 'events': self.events,
                 'recv_seq_note': ('recv_seq / recv_sim_t 是**接收端**編號與時間，'
                                   '不是來源發布時間，也不能據此宣稱端到端延遲'),
+                'mode': self.cfg['mode'],
+                'mode_note': ('不符模式的命令由接收端**整筆拒收**；'
+                              '不在事後切掉分量'),
                 'fail_note': ('整體失效：不原樣執行，也不只縮底盤分量後'
-                              '宣稱全身安全仍成立')}
+                              '宣稱全身安全仍成立。失效後每步送 stop_command()：'
+                              '底盤停止、手臂保持設定點，並**繼續量測**')}

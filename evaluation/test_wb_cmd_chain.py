@@ -123,5 +123,62 @@ check('欄位名為 recv_seq / recv_sim_t',
 check('summary 註明不得冒稱端到端延遲',
       '端到端' in c.summary()['recv_seq_note'])
 
+print('H 模式錯誤：接收端拒收，不事後切掉分量')
+c = mk(mode='base')
+check('base 模式收到手臂分量 ⇒ 拒收',
+      not c.receive([0.01, 0, 0] + [0.1] + [0.0] * 5, 0.0), c.last_reject)
+check('整體失效（非只把手臂歸零）', c.fail is not None and '模式' in c.fail, c.fail)
+c = mk(mode='base')
+check('base 模式純底盤 ⇒ 接受', c.receive([0.01, 0, 0] + [0.0] * 6, 0.0))
+c = mk(mode='arm')
+check('arm 模式收到底盤分量 ⇒ 拒收',
+      not c.receive([0.01, 0, 0] + [0.0] * 6, 0.0), c.last_reject)
+c = mk(mode='arm')
+check('arm 模式純手臂 ⇒ 接受', c.receive([0, 0, 0] + [0.1] * 6, 0.0))
+c = mk(mode='sync')
+check('sync 模式兩者皆可', c.receive([0.01, 0, 0] + [0.1] * 6, 0.0))
+
+print('I 失效停止：底盤停止、手臂保持設定點、可繼續量測')
+c = mk()
+c.receive([0.01, 0, 0] + [0.2] * 6, 0.0)
+c.step(0.0, DT, [0.1] * 6)
+sp_held = tuple(c.setpoint)
+c.receive([0] * 8, 0.01)                    # 觸發失效
+check('已失效', c.fail is not None, c.fail)
+base, sp = c.stop_command()
+check('底盤停止', base == (0.0, 0.0, 0.0), str(base))
+check('手臂保持在失效前的設定點', sp == sp_held, '')
+b2, s2 = c.stop_command()
+check('可重複呼叫（迴圈可繼續量測）', (b2, s2) == (base, sp))
+c2 = mk()
+c2.receive([0] * 8, 0.0)
+b3, s3 = c2.stop_command()
+check('設定點未建立時不對手臂下命令', s3 is None, f'base={b3}')
+
+print('J 監看失效：讀不到不等於安全')
+c = mk()
+c.receive([0] * 9, 0.0)
+c.step(0.0, DT, [0.0] * 6)
+c.note_monitor_failure('cpu_temp', '讀不到（來源 None）', 0.5)
+check('監看失效 ⇒ 整體失效', c.fail is not None and '監看失效' in c.fail, c.fail)
+check('失效後 step 不再執行命令', c.step(0.51, DT, [0.0] * 6) is None)
+check('但停止命令仍可取得', c.stop_command()[0] == (0.0, 0.0, 0.0))
+
+print('K pregrasp 不可由參數繞過')
+src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'isaac_wholebody_sim.py')).read()
+check('無 --wheel-limit-implemented 旗標', '--wheel-limit-implemented' not in src)
+check('由程式常數把關', 'WHEEL_LIMIT_IMPLEMENTED = False' in src)
+check('pregrasp 檢查存在',
+      "a.mode == 'pregrasp' and not WHEEL_LIMIT_IMPLEMENTED" in src)
+check('回報為低速介面界限而非輪級限制',
+      'low_speed_interface_bound' in src and
+      "'wheel_level_limiting_implemented': WHEEL_LIMIT_IMPLEMENTED" in src)
+
+print('L 回授確實發布')
+for topic in ('js_pub.publish', 'odom_pub.publish', 'status_pub.publish',
+              'clock_pub.publish'):
+    check(f'{topic} 有呼叫', topic in src)
+
 print(f'\n{"全部通過" if not fails else "**未通過：" + ", ".join(fails) + "**"}')
 sys.exit(1 if fails else 0)
