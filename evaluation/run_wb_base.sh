@@ -11,6 +11,14 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; WS="$(dirname "$HERE")"
 cd "$WS"
 
+# ROS 與本 workspace：`ros2 run ammr_wholebody_mpc ...` 需要 install/ 在環境裡，
+# 否則會是 "Package 'ammr_wholebody_mpc' not found"。
+# shellcheck disable=SC1091
+. /opt/ros/jazzy/setup.bash
+# shellcheck disable=SC1091
+[ -f "$WS/install/setup.bash" ] && . "$WS/install/setup.bash" || {
+  echo "**找不到 $WS/install/setup.bash —— 請先 colcon build**"; exit 65; }
+
 # ---- 1 獨立 domain：**未設即拒絕啟動** ----
 if [ -z "${ROS_DOMAIN_ID:-}" ]; then
   echo "**ROS_DOMAIN_ID 未設定，拒絕啟動**。請明確指定本趟的獨立 domain，例如："
@@ -23,7 +31,14 @@ RUN_ID="${RUN_ID:-wb_base_$(date +%H%M%S)}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
 LOG="$DIR/run.log"; : > "$LOG"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
-URDF="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
+# **兩份 URDF 用途不同，不可互換：**
+#   manip 版     根 base_footprint → base_link → 手臂；與 Isaac 載入的一致，
+#                給 robot_state_publisher 發 TF 用。
+#   wholebody 版 根 world → virtual_base → base_x/y/theta → base_link，
+#                底盤是**真實關節**；只當距離／安全節點的 FK **參數**，
+#                拿去發 TF 會要求 base_x/y/theta 的 joint_states，且根本不同。
+URDF_TF="$WS/evaluation/models/omni_bot_manip.urdf"
+URDF_WB="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
 
 # ---- 2 準備階段與任務時間分開 ----
 PROFILE_S=9.0                   # 零2 + 斜升1 + 保持3 + 斜降1 + 零2
@@ -66,14 +81,14 @@ timeout "$(prep_left)" python3 evaluation/clock_advancing.py --discover 180 \
     >>"$LOG" 2>&1 || fail "/clock 未前進或準備逾時"
 
 say "[4/7] 啟動 robot_state_publisher、距離節點與安全層"
-spawn rsp ros2 run robot_state_publisher robot_state_publisher "$URDF" \
+spawn rsp ros2 run robot_state_publisher robot_state_publisher "$URDF_TF" \
     --ros-args -p use_sim_time:=true
 spawn dist ros2 run ammr_wholebody_mpc arm_link_distance --ros-args \
     -p use_sim_time:=true -p report_frame:=odom -p geometry:=links \
-    -p wholebody_urdf:="$URDF"
+    -p wholebody_urdf:="$URDF_WB"
 spawn safety ros2 run ammr_wholebody_mpc wholebody_safety --ros-args \
     -p use_sim_time:=true -p report_frame:=odom -p base_frame:=base_link \
-    -p wholebody_urdf:="$URDF"
+    -p wholebody_urdf:="$URDF_WB"
 spawn adapter python3 -u evaluation/arm_vel_adapter.py
 sleep 5
 

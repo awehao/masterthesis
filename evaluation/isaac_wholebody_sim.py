@@ -108,6 +108,8 @@ from rosgraph_msgs.msg import Clock                            # noqa: E402
 from sensor_msgs.msg import JointState                         # noqa: E402
 from std_msgs.msg import Float64MultiArray, String             # noqa: E402
 from nav_msgs.msg import Odometry                              # noqa: E402
+from geometry_msgs.msg import TransformStamped                 # noqa: E402
+import tf2_ros                                                 # noqa: E402
 
 
 class WBNode(Node):
@@ -124,14 +126,26 @@ class WBNode(Node):
         self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.status_pub = self.create_publisher(String, '/wb_sim/status', 10)
+        # **Isaac 只發布到模型根部 base_footprint**。
+        # base_footprint → base_link（URDF 固定 +0.05 m）由 robot_state_publisher
+        # 發在 /tf_static；安全層查 odom → base_link 時由 TF 鏈自動組合。
+        # 若這裡另發 odom → base_link，base_link 就有兩個父節點。
+        self.tfb = tf2_ros.TransformBroadcaster(self)
 
     def _cmd(self, msg):
         self.n_cb += 1
         # **接收時間**用模擬時間，命名為 recv_sim_t；不冒稱來源發布時間
         self.chain.receive(list(msg.data), self.sim_t)
 
-    def publish_feedback(self, t, names, q, dq, bp, byaw, bv, bw, status):
-        """回授：上游控制器與安全鏈需要這些才能閉迴路。"""
+    def publish_feedback(self, t, names, q, dq, p_fp, quat_fp, R_fp,
+                         v_world, w_world, status):
+        """回授：**同一份完整位姿與同一個時間戳**。
+
+        * 位姿取自 `base_footprint` prim 的實際世界變換，**保留完整姿態**
+          （不只用 yaw 重建 —— 那會把底盤的 roll/pitch 藏掉）。
+        * `/odom.twist` 以 **child_frame_id 表達**（本體座標），
+          由世界座標速度旋轉而來。yaw = 0 時碰巧相同，不代表定義正確。
+        """
         stamp = self.get_clock().now().to_msg()
         stamp.sec = int(t); stamp.nanosec = min(int(round((t - int(t)) * 1e9)),
                                                 999999999)
@@ -141,17 +155,40 @@ class WBNode(Node):
         js.velocity = [float(x) for x in dq]
         self.js_pub.publish(js)
 
+        # 世界 → 本體（child_frame）：twist 的定義要求如此
+        v_b = R_fp.T @ np.asarray(v_world, float)
+        w_b = R_fp.T @ np.asarray(w_world, float)
+
         od = Odometry(); od.header.stamp = stamp
-        od.header.frame_id = 'odom'; od.child_frame_id = 'base_link'
-        od.pose.pose.position.x = float(bp[0])
-        od.pose.pose.position.y = float(bp[1])
-        od.pose.pose.position.z = float(bp[2])
-        od.pose.pose.orientation.w = math.cos(byaw / 2.0)
-        od.pose.pose.orientation.z = math.sin(byaw / 2.0)
-        od.twist.twist.linear.x = float(bv[0])
-        od.twist.twist.linear.y = float(bv[1])
-        od.twist.twist.angular.z = float(bw[2])
+        od.header.frame_id = 'odom'
+        od.child_frame_id = 'base_footprint'
+        od.pose.pose.position.x = float(p_fp[0])
+        od.pose.pose.position.y = float(p_fp[1])
+        od.pose.pose.position.z = float(p_fp[2])
+        od.pose.pose.orientation.w = float(quat_fp[0])
+        od.pose.pose.orientation.x = float(quat_fp[1])
+        od.pose.pose.orientation.y = float(quat_fp[2])
+        od.pose.pose.orientation.z = float(quat_fp[3])
+        od.twist.twist.linear.x = float(v_b[0])
+        od.twist.twist.linear.y = float(v_b[1])
+        od.twist.twist.linear.z = float(v_b[2])
+        od.twist.twist.angular.x = float(w_b[0])
+        od.twist.twist.angular.y = float(w_b[1])
+        od.twist.twist.angular.z = float(w_b[2])
         self.odom_pub.publish(od)
+
+        tr = TransformStamped()
+        tr.header.stamp = stamp                  # **與 /odom 同一時間戳**
+        tr.header.frame_id = 'odom'
+        tr.child_frame_id = 'base_footprint'     # **單一父節點**
+        tr.transform.translation.x = float(p_fp[0])
+        tr.transform.translation.y = float(p_fp[1])
+        tr.transform.translation.z = float(p_fp[2])
+        tr.transform.rotation.w = float(quat_fp[0])
+        tr.transform.rotation.x = float(quat_fp[1])
+        tr.transform.rotation.y = float(quat_fp[2])
+        tr.transform.rotation.z = float(quat_fp[3])
+        self.tfb.sendTransform(tr)
 
         self.status_pub.publish(String(data=status))
 
@@ -190,6 +227,24 @@ def main():
         print(f'[wb] URDF 缺關節 {missing}，中止'); return 5
     print(f'[wb] articulation DOF {robot.num_dof}', flush=True)
 
+    # **確認實際位姿對應的 prim**：不把 articulation 根的位姿直接當成某個連桿。
+    fp = next((pr for pr in Usd.PrimRange.Stage(
+        stage, Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
+        if pr.GetName() == 'base_footprint'
+        and str(pr.GetPath()).startswith(ROBOT)), None)
+    if fp is None:
+        print('[wb] 找不到 base_footprint prim，中止'); return 6
+    print(f'[wb] base_footprint prim {fp.GetPath()}', flush=True)
+    xc = UsdGeom.XformCache()
+    m_fp = xc.GetLocalToWorldTransform(fp)
+    t_fp = m_fp.ExtractTranslation()
+    rp, _ = robot.get_world_pose()
+    d_root = float(np.linalg.norm(np.array([t_fp[0], t_fp[1], t_fp[2]])
+                                  - np.asarray(rp, float)))
+    print(f'[wb] articulation 根 vs base_footprint 位置差 {d_root*1000:.4f} mm'
+          f'（核對，非假設）', flush=True)
+    globals()['ROOT_FP_OFFSET_MM'] = d_root * 1000.0
+
     q = robot.get_joint_positions()
     kp = np.zeros(robot.num_dof, dtype=np.float32)
     kd = np.zeros(robot.num_dof, dtype=np.float32)
@@ -221,7 +276,7 @@ def main():
     ex = SingleThreadedExecutor(); ex.add_node(node)
     th = threading.Thread(target=ex.spin, daemon=True); th.start()
     print('[wb] 進入主迴圈；等待 /wb_vel_cmd', flush=True)
-    return loop(world, robot, idx, chain, node, ex, th)
+    return loop(world, robot, idx, chain, node, ex, th, fp)
 
 
 LOG_COLS = ['t', 'recv_seq', 'cmd_age', 'vx_cmd', 'vy_cmd', 'wz_cmd',
@@ -230,7 +285,7 @@ LOG_COLS = ['t', 'recv_seq', 'cmd_age', 'vx_cmd', 'vy_cmd', 'wz_cmd',
     + [f'{j}_act' for j in ARM] + [f'{j}_rate_meas' for j in ARM]
 
 
-def loop(world, robot, idx, chain, node, ex, th):
+def loop(world, robot, idx, chain, node, ex, th, fp):
     log, stop = [], 'sim_limit'
     STOP_HOLD_STEPS = 100        # 失效後續量 1.0 s，證明停止行為而非直接關掉
     fail_steps = 0
@@ -259,17 +314,27 @@ def loop(world, robot, idx, chain, node, ex, th):
         # 實測關節速度：用來判定「停止」，**不用設定點凍結代替**
         rate = (np.zeros(6) if q_prev is None or dt <= 0
                 else (qa - q_prev) / dt)
-        # SingleArticulation 是**單一 prim** 包裝，用單數形 API；
-        # 複數形（get_world_poses 等）屬於批次視圖，這裡沒有。
-        bp, bq = robot.get_world_pose()
-        bp = np.asarray(bp, float); byaw = yaw_of(np.asarray(bq, float))
+        # 位姿取自 **base_footprint prim 的實際世界變換**，保留完整姿態。
+        xc = UsdGeom.XformCache()
+        M = xc.GetLocalToWorldTransform(fp)
+        tt = M.ExtractTranslation()
+        bp = np.array([tt[0], tt[1], tt[2]], float)
+        R3 = np.array([[M[r][c] for c in range(3)] for r in range(3)])
+        sc = np.linalg.norm(R3, axis=1)
+        R_fp = (R3 / sc[:, None]).T        # USD 是列向量慣例，取轉置
+        rq = M.ExtractRotationQuat()
+        ri = rq.GetImaginary()
+        bquat = np.array([rq.GetReal(), ri[0], ri[1], ri[2]], float)
+        byaw = yaw_of(bquat)
+        # 速度：articulation 根剛體的速度（PhysX 回報，參考點為該剛體框架原點）。
+        # **只旋轉表示，不移動參考點** —— 參考點差異未在此補正，列為限制。
         bv = np.asarray(robot.get_linear_velocity(), float)
         bw = np.asarray(robot.get_angular_velocity(), float)
 
         # 失效後**不關迴圈**：底盤停止、手臂保持設定點，並繼續量測，
         # 直到停止條件由實測資料判定。關閉模擬器不等於驗證停止。
         node.publish_feedback(
-            t, ARM, qa, rate, np.array([bp[0], bp[1], bp[2]]), byaw, bv, bw,
+            t, ARM, qa, rate, bp, bquat, R_fp, bv, bw,
             json.dumps({'mode': a.mode, 'fail': chain.fail,
                         'integrating': chain.integrating,
                         'recv': chain.n_recv, 'rejected': chain.n_rejected},
@@ -378,7 +443,19 @@ def loop(world, robot, idx, chain, node, ex, th):
                            f'並繼續量測 {STOP_HOLD_STEPS} 步（{STOP_HOLD_STEPS*a.physics_dt:.1f} s）'
                            '才收尾；停止行為由 log 的 base_lin_meas 與 '
                            '*_rate_meas 判定，不以關閉模擬器代替'),
-        'feedback_published': ['/clock', '/joint_states', '/odom', '/wb_sim/status'],
+        'feedback_published': ['/clock', '/joint_states', '/odom',
+                               '/wb_sim/status', 'TF odom→base_footprint'],
+        'frame_wiring': {
+            'isaac_publishes_tf': 'odom → base_footprint（模型根部，單一父節點）',
+            'rsp_publishes_static': 'base_footprint → base_link（URDF 固定 +0.05 m）',
+            'safety_query': 'odom → base_link 由 TF 鏈自動組合',
+            'odom_child_frame_id': 'base_footprint',
+            'pose_source': 'base_footprint prim 的實際世界變換（完整姿態，非僅 yaw）',
+            'twist_frame': 'child_frame（本體座標），由世界速度旋轉而來',
+            'twist_reference_point_caveat': (
+                '速度為 articulation 根剛體的 PhysX 回報值，參考點是該剛體框架'
+                '原點；本檔只旋轉表示、**未移動參考點**，此差異列為限制'),
+            'root_vs_footprint_offset_mm': globals().get('ROOT_FP_OFFSET_MM')},
         'callbacks': node.n_cb,
         'stop_reason': stop, 'sim_time_s': float(world.current_time),
         'wall_s': time.monotonic() - w0,

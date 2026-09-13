@@ -22,7 +22,10 @@ ap.add_argument('--timeout-s', type=float, default=30.0)
 ap.add_argument('--max-age-s', type=float, default=0.5,
                 help='新鮮度上限（模擬時間）')
 ap.add_argument('--report-frame', default='odom')
-ap.add_argument('--base-frame', default='base_link')
+ap.add_argument('--base-frame', default='base_link',
+                help='安全層查詢的目標 frame；由 TF 鏈組合而得')
+ap.add_argument('--odom-child', default='base_footprint',
+                help='Isaac 發布的 TF 與 /odom 的 child frame（模型根部）')
 a = ap.parse_args()
 os.makedirs(a.out, exist_ok=True)
 
@@ -186,10 +189,10 @@ def main():
                     (tw.linear.x, tw.linear.y, tw.linear.z,
                      tw.angular.x, tw.angular.y, tw.angular.z))
         frm_ok = (m.header.frame_id == a.report_frame
-                  and m.child_frame_id == a.base_frame)
+                  and m.child_frame_id == a.odom_child)
         add('/odom 內容', pos_ok and quat_ok and tw_ok and frm_ok,
             f'frame={m.header.frame_id!r}→{m.child_frame_id!r}'
-            f'（預期 {a.report_frame!r}→{a.base_frame!r}）、位置有限={pos_ok}、'
+            f'（預期 {a.report_frame!r}→{a.odom_child!r}）、位置有限={pos_ok}、'
             f'四元數模長={nq:.6f}、twist 有限={tw_ok}')
         fresh('/odom', m, ts)
         check_pub(add, n, '/odom', 'isaac_wholebody_sim')
@@ -232,7 +235,22 @@ def main():
         fresh('距離資料', m, ts)
         check_pub(add, n, '/arm_link_distance/points', 'arm_link_distance')
 
-    # ---- TF：平移 + 姿態 + 動態資料新鮮度 ----
+    # ---- TF：先查 Isaac 直接發布的（單一父節點），再查組合後的 ----
+    try:
+        tr0 = n.buf.lookup_transform(
+            a.report_frame, a.odom_child, Time(),
+            timeout=rclpy.duration.Duration(seconds=2.0))
+        st0 = tr0.header.stamp.sec + tr0.header.stamp.nanosec * 1e-9
+        age0 = (n.sim_t - st0) if n.sim_t is not None else float('inf')
+        add(f'TF {a.report_frame} → {a.odom_child}（Isaac 直接發布）',
+            0.0 <= age0 <= a.max_age_s,
+            f'資料時間 age = {age0:.4f} s；平移 '
+            f'({tr0.transform.translation.x:.4f}, '
+            f'{tr0.transform.translation.y:.4f}, '
+            f'{tr0.transform.translation.z:.4f})')
+    except Exception as ex:
+        add(f'TF {a.report_frame} → {a.odom_child}（Isaac 直接發布）',
+            False, repr(ex)[:120])
     try:
         tr = n.buf.lookup_transform(
             a.report_frame, a.base_frame, Time(),
@@ -245,7 +263,8 @@ def main():
                          1.0 - 2.0 * (r_.y**2 + r_.z**2))
         st = tr.header.stamp.sec + tr.header.stamp.nanosec * 1e-9
         age = (n.sim_t - st) if n.sim_t is not None else float('inf')
-        add(f'TF {a.report_frame} → {a.base_frame} 內容', pos_ok and rot_ok,
+        add(f'TF {a.report_frame} → {a.base_frame} 內容（TF 鏈組合）',
+            pos_ok and rot_ok,
             f'平移 ({t_.x:.4f}, {t_.y:.4f}, {t_.z:.4f})、四元數模長 {nq:.6f}、'
             f'yaw {math.degrees(yaw):+.3f}°')
         add(f'TF {a.report_frame} → {a.base_frame} 新鮮度',
