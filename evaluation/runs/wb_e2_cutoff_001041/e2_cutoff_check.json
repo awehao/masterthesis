@@ -1,0 +1,163 @@
+{
+ "schema": "wb_e2_cutoff_check/1",
+ "run": "/home/howardchen/masterthesis/evaluation/runs/wb_e2_cutoff_001041",
+ "spec_path": "evaluation/results/specs/wb_e2_cutoff_criteria_v1.yaml",
+ "spec_version": "v1",
+ "spec_sha256": "d7ecd8848c05dc05681cf3ed03b3975d4026cf5ca010a7df5174fb69d0e1b30d",
+ "cut_sim_t": 20.64,
+ "observe_window_s": [
+  20.64,
+  28.64
+ ],
+ "checks": [
+  {
+   "key": "W0_log涵蓋觀察窗",
+   "pass": true,
+   "detail": "觀察窗至 28.64s，log 至 70.01s"
+  },
+  {
+   "key": "P1_切斷時兩者都在運動",
+   "pass": true,
+   "detail": "底盤 0.03000–0.03002 m/s、joint2 0.04990–0.04995 rad/s"
+  },
+  {
+   "key": "F1_adapter 確實結束",
+   "pass": true,
+   "detail": "exited=True，等待 0.181s"
+  },
+  {
+   "key": "F2_最後一則距切斷",
+   "pass": true,
+   "detail": "最後 sim 20.61，切斷 20.640"
+  },
+  {
+   "key": "F3_切斷後無新訊息",
+   "pass": true,
+   "detail": "0 則"
+  },
+  {
+   "key": "F4_切斷前觀測正常",
+   "pass": true,
+   "detail": "382 則（≥ 50）"
+  },
+  {
+   "key": "Q1_執行端跑到 sim_limit",
+   "pass": true,
+   "detail": "stop_reason=sim_limit"
+  },
+  {
+   "key": "Q2_安全層仍存活",
+   "pass": true,
+   "detail": "isaac=True, rsp=True, dist=True, safety=True, adapter=False, recorder=True"
+  },
+  {
+   "key": "E2T1_凍結步數 > 0",
+   "pass": true,
+   "detail": "frozen_steps=4919"
+  },
+  {
+   "key": "E2T2_**E2 逾時減速分支被呼叫**",
+   "pass": true,
+   "detail": "timeout_decel_steps=4919（E1 的鏈沒有這個分支）"
+  },
+  {
+   "key": "E2T3_凍結時刻在期限內",
+   "pass": true,
+   "detail": "凍結 sim 20.830，切斷後 +0.190s"
+  },
+  {
+   "key": "E2T4_凍結後 limit_mode 轉為 timeout",
+   "pass": true,
+   "detail": "凍結後 limit_mode 取值 [1.0]（1=timeout）"
+  },
+  {
+   "key": "A1_設定點停止積分",
+   "pass": true,
+   "detail": "觀察窗內設定點最大變動 0.000 µrad"
+  },
+  {
+   "key": "A2_逾時分支手臂輸出速率恰為零",
+   "pass": true,
+   "detail": "逾時記錄 2074 筆，手臂非零者 0 筆"
+  },
+  {
+   "key": "A3_逾時明記不保留耦合方向",
+   "pass": true,
+   "detail": "coupling_preserved 取值 [False]"
+  },
+  {
+   "key": "L1_停止過程輪速逐步合規",
+   "pass": true,
+   "detail": "max 0.030000 ≤ 0.2775"
+  },
+  {
+   "key": "L2_停止過程輪加速度逐步合規",
+   "pass": true,
+   "detail": "max 3.000000 ≤ 6.25"
+  },
+  {
+   "key": "L3_停止過程確實到零",
+   "pass": true,
+   "detail": "觀察窗末輪速 0.000000000；凍結後非零步數 0（單步歸零；多步非必要：True）"
+  },
+  {
+   "key": "S1_底盤停穩",
+   "pass": true,
+   "detail": "凍結後 +0.010s 低於門檻，持續 7.81s"
+  },
+  {
+   "key": "S2_手臂停穩",
+   "pass": true,
+   "detail": "凍結後 +0.230s 低於門檻，持續 7.59s"
+  },
+  {
+   "key": "S4_凍結後底盤最大位移(原始)",
+   "pass": true,
+   "detail": "0.726 mm（≤ 3；未扣漂移）"
+  },
+  {
+   "key": "S5_凍結後 joint2 最大位移(原始)",
+   "pass": true,
+   "detail": "4.7500 mrad（≤ 10）"
+  },
+  {
+   "key": "D1_pregrasp 由獨立條件禁止",
+   "pass": true,
+   "detail": "wheel_limit=True, preconditions=False"
+  },
+  {
+   "key": "D2_熱中止門檻",
+   "pass": true,
+   "detail": "cpu_limit_c=92.0，峰值 85.875 °C"
+  },
+  {
+   "key": "D3_未放寬界限或加速度上限",
+   "pass": true,
+   "detail": "界限 0.05/0.2、α_max 125.0"
+  }
+ ],
+ "passed": 25,
+ "total": 25,
+ "all_pass": true,
+ "result_label": "逾時分支接線與單步停止已驗證；多步行為仍只具離線證據",
+ "single_step_zeroing": true,
+ "measured": {
+  "freeze_sim_t": 20.83,
+  "freeze_delay_s": 0.19,
+  "frozen_steps": 4919,
+  "timeout_decel_steps": 4919,
+  "nonzero_steps_after_freeze": 0,
+  "wheel_speed_max": 0.03,
+  "wheel_accel_max": 3.0,
+  "setpoint_drift_rad": 0.0,
+  "base_max_after_freeze_m": 0.0007257857810676685,
+  "arm_max_after_freeze_rad": 0.004750000000000004,
+  "base_settle_delay_s": 0.010000000000001563,
+  "arm_settle_delay_s": 0.23000000000000043
+ },
+ "multi_step_evidence": "多步減速**僅有離線證據**",
+ "drift_subtraction_applied": false,
+ "scope_limit": "驗證 E2 停止分支的**接線與語意**。 **不**宣稱上游全身安全性在命令被修改後仍成立； **不**宣稱停止掃掠範圍的避碰保證；pregrasp 仍由獨立條件禁止。\n",
+ "not_retroactive": "只適用於本規格建立之後的 E2 趟次。E1 的既有結果（含 wb_cutoff_223153 的 未通過與 wb_cutoff_v2_225200 的通過）不受影響，也不因本規格而改變。\n",
+ "not_claimed": "上游全身安全性在命令被修改後**未重新論證**；停止掃掠範圍**無避碰保證**；pregrasp 仍禁止"
+}

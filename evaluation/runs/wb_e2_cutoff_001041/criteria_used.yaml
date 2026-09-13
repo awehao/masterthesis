@@ -1,0 +1,97 @@
+# 執行版本 E2 的**接收端斷訊**驗收判準 v1
+#
+# **事前固定**：本檔與 evaluation/wb_e2_cutoff_check.py 在任何 E2 斷訊趟次
+# 執行之前定版。數值由檢查器實際載入。門檻不得因為某趟未通過而下修。
+#
+# **這不是重做 E1 的斷訊測試。** E1 已驗過「話題停止、逾時觸發、手臂停穩」。
+# E2 換了**停止分支**（底盤經輪級限制減速、手臂速率立即歸零），
+# 要確認的是那個新分支在**實際執行端**有被呼叫，且語意正確。
+schema: wb_e2_cutoff_criteria/1
+version: v1
+status: provisional_engineering
+created: 2026-09-14
+execution_version: E2
+policy: evaluation/results/specs/wb_wheel_limit_policy_v2.md
+prospective: true
+not_retroactive: >
+  只適用於本規格建立之後的 E2 趟次。E1 的既有結果（含 wb_cutoff_223153 的
+  未通過與 wb_cutoff_v2_225200 的通過）不受影響，也不因本規格而改變。
+scope_limit: >
+  驗證 E2 停止分支的**接線與語意**。
+  **不**宣稱上游全身安全性在命令被修改後仍成立；
+  **不**宣稱停止掃掠範圍的避碰保證；pregrasp 仍由獨立條件禁止。
+
+profile:
+  source: evaluation/wb_bounded_cmd.py      # 既有低速斜坡剖面，**幅度不動**
+  mode: sync
+  base_vx_mps: 0.03
+  arm_rate_rps: 0.05
+  cut_offset_s: 4.5                         # 保持段 [3.0, 6.0] 的正中
+  endpoint_max_cmd_age_s: 0.2
+
+windows:
+  observe_after_cut_s: 8.0
+  require_log_covers_window: true
+
+# ---- P 前提：切斷時底盤與手臂確實在運動（實測）----
+P_premise:
+  base_moving_mps: 0.005
+  arm_moving_rps: 0.005
+
+# ---- F 話題確實停止（獨立觀測程序）----
+F_topic_stopped:
+  F1_adapter_exited: true
+  F2_last_msg_within_s: 0.10
+  F3_msgs_after_cut_eq: 0
+  F4_min_msgs_before_cut: 50
+
+Q_others_alive:
+  Q1_endpoint_ran_to_sim_limit: true
+  Q2_safety_alive_after_observe: true
+
+# ---- E2T 執行端**確實進入 E2 的逾時分支** ----
+E2T_timeout_branch:
+  E1_frozen_steps_gt: 0
+  E2_timeout_decel_steps_gt: 0        # 摘要計數；E1 的鏈沒有這個欄位
+  E3_limit_mode_timeout_after_freeze: true   # log 的 limit_mode 欄位 == 1
+  E4_freeze_within_s: 0.25
+
+# ---- A 手臂：輸出速率立即為零、設定點停止積分 ----
+A_arm_stop:
+  A1_setpoint_frozen_tol_rad: 1.0e-6
+  A2_arm_rate_out_exactly_zero: true  # 逾時分支的 u_out[3:] 必須恰為 0
+  A3_coupling_preserved_false: true   # 逾時明記不保留耦合方向
+
+# ---- L 底盤：最後套用命令 → 零命令的**每一步**都合規 ----
+L_base_stop_compliance:
+  L1_wheel_speed_max_mps: 0.2775
+  L2_wheel_accel_max_mps2: 6.25
+  L3_tolerance: 1.0e-6
+  L4_check_every_step: true
+  # **不要求多步減速。** 本階段幅度的輪緣速度約 0.03 m/s，
+  # 單步預算 r·α_max·dt = 0.0625 m/s 已足夠，單步歸零即合規。
+  # 反向階躍會觸發限制，不代表歸零也必須觸發。
+  multi_step_not_required: true
+  label_if_single_step: 逾時分支接線與單步停止已驗證；多步行為仍只具離線證據
+
+# ---- S 停止時間與行程（沿用 wb_cutoff_criteria_v2 的適用門檻）----
+S_stop:
+  S1_base_rate_below_within_s: 1.0
+  S2_arm_rate_below_within_s: 1.0
+  S3_min_continuous_below_s: 2.0
+  S4_base_after_freeze_max_m: 0.003
+  S5_arm_after_freeze_max_rad: 0.010   # 停止位移上限，見 §18（工程選擇，非幾何保證）
+  drift_subtraction_forbidden: true
+  use_max_not_endpoint: true
+  exact_zero_not_required: true
+
+D_protections:
+  pregrasp_forbidden_by_separate_condition: true
+  thermal_abort_c: 92.0
+  independent_domain_required: true
+  independent_run_dir: true
+  no_bound_widening: true             # 不得為看到多步斜降而改速度或加速度上限
+
+on_pass: proceed_to_solver_spec
+on_fail:
+  - 標記結果，不下修門檻
