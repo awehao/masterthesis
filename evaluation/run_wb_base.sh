@@ -13,11 +13,17 @@ cd "$WS"
 
 # ROS 與本 workspace：`ros2 run ammr_wholebody_mpc ...` 需要 install/ 在環境裡，
 # 否則會是 "Package 'ammr_wholebody_mpc' not found"。
+# ROS 的 setup.bash 會引用未綁定變數，與 `set -u` 衝突；只在 source 期間關閉。
+set +u
 # shellcheck disable=SC1091
 . /opt/ros/jazzy/setup.bash
-# shellcheck disable=SC1091
-[ -f "$WS/install/setup.bash" ] && . "$WS/install/setup.bash" || {
-  echo "**找不到 $WS/install/setup.bash —— 請先 colcon build**"; exit 65; }
+if [ -f "$WS/install/setup.bash" ]; then
+  # shellcheck disable=SC1091
+  . "$WS/install/setup.bash"
+else
+  set -u; echo "**找不到 $WS/install/setup.bash —— 請先 colcon build**"; exit 65
+fi
+set -u
 
 # ---- 1 獨立 domain：**未設即拒絕啟動** ----
 if [ -z "${ROS_DOMAIN_ID:-}" ]; then
