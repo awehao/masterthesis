@@ -76,6 +76,18 @@ ap.add_argument('--grip-gate-rot-deg', type=float, default=1.0,
                 help='放行條件：工具姿態相對設計姿態的夾角上限（度）')
 ap.add_argument('--grip-gate-track-rad', type=float, default=0.005,
                 help='放行條件：手臂關節追蹤誤差上限（rad）')
+ap.add_argument('--grip-hold-contact-n', type=float, default=0.5,
+                help='夾持驗收：每指接觸量下限（N）。**接觸存在門檻，不稱法向夾持力**')
+ap.add_argument('--grip-hold-pos-mm', type=float, default=0.20,
+                help='夾持驗收：把手相對夾爪的位置變化上限（mm，相對保持起點）')
+ap.add_argument('--grip-hold-rot-deg', type=float, default=1.0,
+                help='夾持驗收：把手相對夾爪的姿態變化上限（度，相對保持起點）')
+ap.add_argument('--grip-hold-s', type=float, default=2.0,
+                help='夾持驗收：須由**實際資料**連續滿足的時間（秒）')
+ap.add_argument('--pull-slip-mm', type=float, default=2.0,
+                help='拉動段：把手相對夾爪的位置變化上限（mm，相對**拉動起點**）')
+ap.add_argument('--pull-rot-deg', type=float, default=2.0,
+                help='拉動段：把手相對夾爪的姿態變化上限（度，相對**拉動起點**）')
 ap.add_argument('--grip-close-ramp-s', type=float, default=3.0,
                 help='放行後由閘自行產生的閉合斜坡長度（秒）')
 ap.add_argument('--record-frames', default='', help='輸出 PNG 的目錄；空字串=不錄')
@@ -116,7 +128,7 @@ a = ap.parse_args()
 import drawer_asset as DA                                           # noqa: E402
 import drawer_align as DAL                                         # noqa: E402
 from cpu_temp import read as cpu_temp_read
-from grip_gate import GripGate                          # noqa: E402
+from grip_gate import GripGate, GripHold                          # noqa: E402
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE                # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
 
@@ -957,7 +969,10 @@ def main():
                 # 接觸法向未必沿該軸，所以照分量本義命名。
                 'f_along_close_axis', 'f_perp_close_axis',
                 # 量測補強：兩指的命令與實際關節位置
-                'fj1_cmd', 'fj2_cmd', 'fj1_act', 'fj2_act']
+                # 手指三路分開記錄，**不可互相代替**：
+                'fj_req',          # 軌跡請求值
+                'fj_sent',         # 閘輸出、實際送入 articulation 的值
+                'fj1_act', 'fj2_act']   # 量測關節位置
     log, events, stop_reason = [], [], 'sim_limit'
     prev_ov, prev_ov_t = None, None
     rot_err_max, stage_fk_err_max = 0.0, 0.0
@@ -1008,6 +1023,17 @@ def main():
         hold_s=a.grip_gate_hold_s, timeout_s=a.grip_gate_timeout_s,
         ramp_s=a.grip_close_ramp_s) if GRASP_MODEL == 'friction' else None
     gate_metrics = []          # [t, pos_perp_mm, rot_deg, offset_mm]
+    grip_hold = GripHold(contact_min_n=a.grip_hold_contact_n,
+                         rel_pos_max_mm=a.grip_hold_pos_mm,
+                         rel_rot_max_deg=a.grip_hold_rot_deg,
+                         hold_s=a.grip_hold_s) if GRASP_MODEL == 'friction' else None
+    # 同步記錄夾爪與抽屜的實際位置、四元數與模擬時間。
+    # 相對量一律由 T_gripper→drawer 計算，**不用世界座標差代替**。
+    pose_trace = []
+    pull_ref = None            # 拉動起點的相對位姿
+    pull_metrics = []          # [t, slip_mm, rot_deg]
+    pull_block = None
+    last_fj_sent = float(F_OPEN)
     finger_pose_trace = []          # [t, p1xyz, p2xyz]：兩指墊世界位置逐步紀錄
     while True:
       try:
@@ -1124,6 +1150,7 @@ def main():
                     _fv = grip_gate.finger_command(t, float(fs[1]), F_OPEN,
                                                    float(GRIP_SPEC.get(
                                                        'finger_cmd_closed', 0.0)))
+                last_fj_sent = float(_fv)
                 for j in FJ:
                     tgt[idx[j]] = _fv
             robot.get_articulation_controller().apply_action(
@@ -1134,7 +1161,7 @@ def main():
         qa = np.array([float(qm[idx[j]]) for j in ARM])
         tcp_p, tcp_R, tcp_q = world_T(prims['link_tcp'])
         _, l6_R, _ = world_T(prims['link6'])
-        dp, _ = drawer_v.get_world_poses()
+        dp, dq_w = drawer_v.get_world_poses()
         dv = drawer_v.get_velocities()[0]
         opening = DY0 - float(dp[0][1])
         opening_v = -float(dv[1])
@@ -1213,9 +1240,8 @@ def main():
                       f'對中 {_off:+.4f} mm、追蹤 {_trk:.6f} rad）', flush=True)
 
         _fs = node.fsnap
-        _fc_cmd = float(_fs[1]) if _fs is not None else float('nan')
-        fj_cmd = [_fc_cmd if j in idx else 0.0
-                  for j in ('finger_joint1', 'finger_joint2')]
+        fj_req = float(_fs[1]) if _fs is not None else float('nan')
+        fj_sent = float(last_fj_sent)
         fj_act = [float(qm[idx[j]]) if j in idx else 0.0
                   for j in ('finger_joint1', 'finger_joint2')]
         # 逐指：模長（中止判準）＋沿閉合軸的分量分解（**非接觸法向／摩擦**）
@@ -1240,6 +1266,35 @@ def main():
                             + abs(np.dot(per_finger[1], ax)))
                 tv = [per_finger[i] - ax * np.dot(per_finger[i], ax) for i in (0, 1)]
                 fpt = float(np.linalg.norm(tv[0]) + np.linalg.norm(tv[1]))
+
+        # --- 同步記錄夾爪與抽屜位姿；相對量用 T_gripper→drawer ---
+        if GRASP_MODEL == 'friction':
+            _pg, _Rg2, _qg = world_T(prims['uflite_gripper_link'])
+            _pd = np.asarray(dp[0], float)
+            _qd = np.asarray(dq_w[0], float)
+            _Rd = DAL.quat_R(_qd)
+            _relR = _Rg2.T @ _Rd
+            _relp = _Rg2.T @ (_pd - _pg)
+            pose_trace.append([round(t, 4)]
+                              + [round(float(v), 7) for v in _pg]
+                              + [round(float(v), 7) for v in _qg]
+                              + [round(float(v), 7) for v in _pd]
+                              + [round(float(v), 7) for v in _qd])
+            # 夾持驗收：**閉合斜坡實際完成後**才開始累積（不用請求軌跡的時間）
+            _cs = grip_gate.close_start_t if grip_gate is not None else None
+            if (_cs is not None
+                    and t >= _cs + grip_gate.cfg['ramp_s'] - 1e-9):
+                grip_hold.update(t, f1_n=fc_each[0], f2_n=fc_each[1],
+                                 rel_p=_relp, rel_R=_relR,
+                                 ang_deg_fn=DAL.ang_deg)
+            # 拉動段：相對變化自**拉動起點**計算
+            if ph == 'pull':
+                if pull_ref is None:
+                    pull_ref = (_relp.copy(), _relR.copy())
+                _sl = float(np.linalg.norm(_relp - pull_ref[0])) * 1000.0
+                _rr = float(DAL.ang_deg(_relR, pull_ref[1]))
+                pull_metrics.append([round(t, 4), round(_sl, 5), round(_rr, 5)])
+
         try:
             gcm = np.array(grip_v.get_contact_force_matrix(dt=a.physics_dt))
             gc = gcm.reshape(-1, 3).sum(axis=0)
@@ -1330,7 +1385,7 @@ def main():
                    + [round(float(v), 6) for v in qa]
                    + [round(fc_each[0], 4), round(fc_each[1], 4),
                       round(fpn, 4), round(fpt, 4),
-                      round(fj_cmd[0], 6), round(fj_cmd[1], 6),
+                      round(fj_req, 6), round(fj_sent, 6),
                       round(fj_act[0], 6), round(fj_act[1], 6)])
 
         if len(log) == 1 and len(log[0]) != len(LOG_COLS):
@@ -1386,6 +1441,22 @@ def main():
             stop = 'contact_force'
         elif GRASP_MODEL == 'friction' and FG_ABORT_N > 0 and fg_over_n > FG_SUSTAIN:
             stop = 'finger_contact_force'
+        elif (grip_hold is not None and ph == 'pull' and pull_block is None
+              and not grip_hold.satisfied):
+            # **不以預排時間代替**：拉動只有在實際資料連續滿足夾持判準後才觸發
+            pull_block = {'sim_t': t, 'held_s': grip_hold.held_s(t),
+                          'last_fail': grip_hold.last_fail,
+                          'worst': dict(grip_hold.worst)}
+            print(f'[drawer] **夾持驗收未由實際資料滿足，不拉動** @ sim {t:.3f}'
+                  f'（已連續 {grip_hold.held_s(t):.3f} s < '
+                  f'{grip_hold.cfg["hold_s"]}；{grip_hold.last_fail}）', flush=True)
+            stop = 'grip_hold_not_met'
+        elif (grip_hold is not None and ph == 'pull' and pull_ref is not None
+              and pull_metrics and pull_metrics[-1][1] > a.pull_slip_mm):
+            stop = 'grip_slip'
+        elif (grip_hold is not None and ph == 'pull' and pull_ref is not None
+              and pull_metrics and pull_metrics[-1][2] > a.pull_rot_deg):
+            stop = 'grip_rotation'
         elif grip_gate is not None and grip_gate.abort:
             # 命令要求閉合但對中始終未達標 ⇒ 停，不在未對中的狀態下硬夾
             stop = grip_gate.abort
@@ -1509,6 +1580,17 @@ def main():
         'grip_gate': (grip_gate.summary() if grip_gate is not None else None),
         'grip_gate_metrics': gate_metrics if grip_gate is not None else None,
         'grip_gate_metric_cols': ['t', 'pos_perp_mm', 'rot_deg', 'offset_mm'],
+        'grip_hold': (grip_hold.summary() if grip_hold is not None else None),
+        'grip_hold_blocked_pull': pull_block,
+        'pose_trace': pose_trace if GRASP_MODEL == 'friction' else None,
+        'pose_trace_cols': ['t', 'gx', 'gy', 'gz', 'gqw', 'gqx', 'gqy', 'gqz',
+                            'dx', 'dy', 'dz', 'dqw', 'dqx', 'dqy', 'dqz'],
+        'pull_metrics': pull_metrics if GRASP_MODEL == 'friction' else None,
+        'pull_metric_cols': ['t', 'slip_mm', 'rot_deg'],
+        'pull_criteria': {'slip_max_mm': a.pull_slip_mm,
+                          'rot_max_deg': a.pull_rot_deg,
+                          'reference': '拉動起點的 T_gripper→drawer',
+                          'note': '拉動後不要求把手在世界座標不動'},
         'finger_pose_trace': finger_pose_trace if GRASP_MODEL == 'friction' else None,
         'finger_pose_cols': ['t', 'f1x', 'f1y', 'f1z', 'f2x', 'f2y', 'f2z'],
         'finger_joint_readback': finger_joint_rb,

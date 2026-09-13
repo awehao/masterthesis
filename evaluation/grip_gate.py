@@ -118,3 +118,73 @@ class GripGate:
                 'abort': self.abort, 'last_fail': self.last_fail,
                 'note': ('斜坡由閘自行產生，起點為「已放行且命令要求閉合」；'
                          '閉合開始後凍結條件評估')}
+
+
+class GripHold:
+    """閉合後的夾持驗收：**由實際資料**確認連續滿足，才允許拉動。
+
+    與 GripGate 的分工：GripGate 管「能不能開始閉合」，本類別管「能不能開始拉動」。
+    兩者都不接受「時間排得夠久」當成通過 —— 必須逐樣本檢查並連續累積。
+
+    相對位姿一律用 T_gripper→drawer = T_world→gripper⁻¹ · T_world→drawer，
+    **不用世界座標差代替**：世界座標差會把夾爪自身的移動算進去。
+    """
+
+    def __init__(self, *, contact_min_n=0.5, rel_pos_max_mm=0.20,
+                 rel_rot_max_deg=1.0, hold_s=2.0):
+        self.cfg = dict(contact_min_n=float(contact_min_n),
+                        rel_pos_max_mm=float(rel_pos_max_mm),
+                        rel_rot_max_deg=float(rel_rot_max_deg),
+                        hold_s=float(hold_s))
+        self.ref = None          # 保持起點的相對位姿 (p, R)
+        self.ok_since = None
+        self.satisfied = False
+        self.satisfied_t = None
+        self.last_fail = None
+        self.n_eval = 0
+        self.worst = {'contact_min_n': None, 'rel_pos_mm': 0.0, 'rel_rot_deg': 0.0}
+
+    def update(self, t, *, f1_n, f2_n, rel_p, rel_R, ang_deg_fn):
+        """閉合斜坡完成後每步呼叫。`rel_p`/`rel_R` 為夾爪座標系下的抽屜位姿。"""
+        self.n_eval += 1
+        if self.ref is None:
+            self.ref = (rel_p.copy(), rel_R.copy())
+        dp = float(((rel_p - self.ref[0]) ** 2).sum() ** 0.5) * 1000.0
+        dr = float(ang_deg_fn(rel_R, self.ref[1]))
+        cmin = min(float(f1_n), float(f2_n))
+        w = self.worst
+        w['contact_min_n'] = cmin if w['contact_min_n'] is None else min(
+            w['contact_min_n'], cmin)
+        w['rel_pos_mm'] = max(w['rel_pos_mm'], dp)
+        w['rel_rot_deg'] = max(w['rel_rot_deg'], dr)
+        c = self.cfg
+        fail = None
+        if cmin < c['contact_min_n']:
+            fail = f'接觸量最小 {cmin:.4f} N < {c["contact_min_n"]}'
+        elif dp > c['rel_pos_max_mm']:
+            fail = f'相對位移 {dp:.4f} mm > {c["rel_pos_max_mm"]}'
+        elif dr > c['rel_rot_max_deg']:
+            fail = f'相對轉動 {dr:.4f}° > {c["rel_rot_max_deg"]}'
+        self.last_fail = fail
+        if fail is None:
+            if self.ok_since is None:
+                self.ok_since = t
+            elif not self.satisfied and t - self.ok_since >= c['hold_s']:
+                self.satisfied = True
+                self.satisfied_t = t
+        else:
+            # 中斷 ⇒ 重新累積；已達成的結果也失效
+            self.ok_since = None
+            self.satisfied = False
+            self.satisfied_t = None
+        return dp, dr, cmin
+
+    def held_s(self, t):
+        return 0.0 if self.ok_since is None else t - self.ok_since
+
+    def summary(self):
+        return {'config': self.cfg, 'satisfied': self.satisfied,
+                'satisfied_sim_t': self.satisfied_t, 'samples': self.n_eval,
+                'worst': self.worst, 'last_fail': self.last_fail,
+                'note': ('相對位姿為 T_gripper→drawer，相對**保持起點**；'
+                         '接觸量門檻是「接觸存在」判準，不稱法向夾持力')}
