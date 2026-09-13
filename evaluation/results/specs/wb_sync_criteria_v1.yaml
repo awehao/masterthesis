@@ -1,0 +1,101 @@
+# Isaac 全身執行端：**有界 sync 同動測試**的事前判準 v1
+#
+# **事前固定**：本檔與 evaluation/wb_sync_check.py 在任何 sync 趟次執行**之前**定版。
+# 門檻不得因為某趟未通過而下修；要改只能另立 v2 並明寫理由與時點。
+# 本檔數值由 wb_sync_check.py **實際載入**，不是說明文件。
+#
+# 適用基線 E1（isaac_wholebody_port_20260913.md §9.4b），沿用 arm 測試的判準架構
+# （wb_arm_criteria_v2）。**不改增益、摩擦、速度或保護門檻。**
+schema: wb_sync_criteria/1
+version: v1
+status: provisional_engineering
+created: 2026-09-13
+baseline: E1
+prospective: true
+inherits_from: wb_arm_criteria/2
+
+profile:
+  mode: sync
+  base_vx_mps: 0.03            # **report frame** +x（非本體），與 base 趟次同幅度
+  arm_joint: joint2
+  arm_rate_rps: 0.05           # 與 arm 趟次同幅度
+  zero_lead_s: 2.0
+  ramp_s: 1.0
+  hold_s: 3.0
+  zero_tail_s: 2.0
+  arm_nominal_integral_rad: 0.200
+
+windows:
+  ref_before_ramp_s: 0.5
+  settle_tail_s: 1.0
+  post_profile_s: 8.0
+  require_log_covers_window: true
+
+A_chain:
+  A1_rejected_eq: 0
+  A2_fail_is_none: true
+  A4_cmd_age_max_s: 0.10
+  A5_expected_stop_reasons: [sim_limit]
+
+# ---- E 同一則訊息、同一份快照 ----
+E_single_message:
+  # 上游：每一則發布的 9 維訊息，底盤與手臂分量必須**同時為零或同時非零**
+  # （兩者由同一個 scale 縮放）。單邊非零即代表不是同一則訊息帶的。
+  E1_no_single_sided_message: true
+  E2_recv_seq_monotonic: true
+  # **誠實標註**：執行端「同一份快照」是 CmdChain.step() 單一回傳的**結構保證**，
+  # 不是獨立量測。本規格只把上游訊息的同時性列為可驗證項。
+  endpoint_same_snapshot_is_structural: true
+
+B_arm_tracking:                # 與 arm 趟次相同門檻，不放寬
+  B1_abs_err_rad_max: 0.005
+  B2_hold_mean_rate_rps: 0.05
+  B2_hold_mean_rate_tol_frac: 0.10
+  B2_edge_window_s: 0.05
+  B3_other_joints_abs_rad_max: 0.010
+  B4_sp_vs_nominal_rad_max: 0.004
+  B4_semantics: >
+    設定點總增量對名目剖面的符合程度；非逐筆跨程序保真度，
+    無法排除互相抵銷的逐筆差異。
+
+# ---- C 底盤：**比命令預期運動與實測軌跡**，不是靜止上限 ----
+# arm 趟次的「位移 ≤ 20 mm」在此**不適用** —— 底盤本來就該主動移動。
+C_base_tracking:
+  compare_against: applied_command_integral   # ∫ sent_prev_vw dt（實際送進物理 API 的世界速度）
+  not_a_static_bound: true
+  C1_pos_err_norm_m_max: 0.005     # ‖Δp實測 − ∫v dt‖
+  C1_threshold_basis: >
+    wb_base_diag_160757 的同類誤差為 0.48 mm（命令積分 119.99 mm、實測 119.51 mm）。
+    設 5 mm 約為其 10 倍，容納手臂同時運動的反作用。非精度推導值。
+  C2_abs_yaw_deg_max: 1.0          # wz 命令恆 0；**原始值**，不扣漂移
+  drift_subtraction_forbidden: true
+  report_along_cross_track_separately: true
+
+# ---- S 同動：由**實測運動**判定，不看命令分量 ----
+S_simultaneity:
+  # 「運動中」門檻，依既有趟次零命令段噪底訂定：
+  #   底盤 base_lin_meas 閒置 max 4.9e-5 m/s → 門檻約 100 倍
+  #   joint2 速率閒置低於 log 解析度 1e-4 rad/s → 門檻約 50 倍
+  base_moving_mps: 0.005           # = 命令峰值的 16.7 %
+  arm_moving_rps: 0.005            # = 命令峰值的 10 %
+  threshold_basis: >
+    兩者都遠高於噪底、又明顯低於命令峰值。**不得**以「兩個命令分量同時非零」
+    代替本項 —— 那只證明命令同時下達，不證明兩者同時運動。
+  S1_cumulative_s_min: 3.0
+  S2_longest_continuous_s_min: 3.0
+  S_threshold_basis: >
+    保持段名目長度即 3.0 s。門檻取保持段全長，代表「至少在整個保持段同時運動」。
+    依剖面與門檻推算的預期值約 4.6 s（斜升／斜降各約 0.83 s 超過門檻）。
+
+D_protections:
+  pregrasp_forbidden_unchanged: true
+  thermal_abort_c: 92.0
+  independent_domain_required: true
+  independent_run_dir: true
+
+on_pass: stop_and_report          # **不自動進 pregrasp**
+excluded_from_this_run:
+  - 接收端斷訊試驗（不混入）
+  - pregrasp（程式常數無條件禁止，未解除）
+on_fail:
+  - 標記結果，不下修門檻

@@ -1,0 +1,139 @@
+{
+ "schema": "wb_sync_check/1",
+ "run": "/home/howardchen/masterthesis/evaluation/runs/wb_sync_221734",
+ "spec_path": "evaluation/results/specs/wb_sync_criteria_v1.yaml",
+ "spec_schema": "wb_sync_criteria/1",
+ "spec_version": "v1",
+ "spec_sha256": "c65fc89420908b379643b5f6f1e92303039db8dbe193fffa6902e0da3427152a",
+ "spec_copied_to": "criteria_used.yaml",
+ "eval_window_s": [
+  18.65,
+  33.6
+ ],
+ "log_covers_window": true,
+ "checks": [
+  {
+   "key": "W0_log涵蓋評估窗",
+   "pass": true,
+   "detail": "評估窗至 33.60s，log 至 70.01s"
+  },
+  {
+   "key": "A1_rejected",
+   "pass": true,
+   "detail": "rejected=0"
+  },
+  {
+   "key": "A2_fail_is_none",
+   "pass": true,
+   "detail": "fail=None"
+  },
+  {
+   "key": "A4_cmd_age_max",
+   "pass": true,
+   "detail": "max 0.0600s（≤ 0.1）"
+  },
+  {
+   "key": "A5_stop_reason",
+   "pass": true,
+   "detail": "sim_limit"
+  },
+  {
+   "key": "E1_無單邊非零訊息",
+   "pass": true,
+   "detail": "單邊非零筆數 0 / 共 181 則"
+  },
+  {
+   "key": "E2_recv_seq 單調不減",
+   "pass": true,
+   "detail": "最小差 0"
+  },
+  {
+   "key": "B1_|實測−設定點|",
+   "pass": true,
+   "detail": "Δ實測 +0.199834、Δ設定點 +0.200080，差 -0.246 mrad（≤ 5）"
+  },
+  {
+   "key": "B2_保持段平均速度",
+   "pass": true,
+   "detail": "0.049813 rad/s；分母 2.9000s"
+  },
+  {
+   "key": "B3_其他五軸串音",
+   "pass": true,
+   "detail": "最大 joint4 -0.250 mrad"
+  },
+  {
+   "key": "B4_設定點總增量對名目",
+   "pass": true,
+   "detail": "Δ設定點 +0.200080 vs 0.200，差 +0.080 mrad（**總增量符合度，非逐筆**）"
+  },
+  {
+   "key": "C1_軌跡誤差範數",
+   "pass": true,
+   "detail": "預期 120.048 mm、實測 118.650 mm、誤差 1.470 mm（≤ 5）"
+  },
+  {
+   "key": "C2_偏航(原始)",
+   "pass": true,
+   "detail": "+0.2247°（≤ 1.0）"
+  },
+  {
+   "key": "S1_同時運動累計時間",
+   "pass": true,
+   "detail": "4.65s（≥ 3.0）"
+  },
+  {
+   "key": "S2_最長連續同時運動",
+   "pass": true,
+   "detail": "4.65s（≥ 3.0）"
+  },
+  {
+   "key": "D1_pregrasp仍禁止",
+   "pass": true,
+   "detail": "wheel_level_limiting_implemented=False"
+  },
+  {
+   "key": "D2_熱中止門檻",
+   "pass": true,
+   "detail": "cpu_limit_c=92.0，峰值 84.625 °C"
+  }
+ ],
+ "passed": 17,
+ "total": 17,
+ "all_pass": true,
+ "measured": {
+  "d_q2_act_rad": 0.199834,
+  "d_q2_sp_rad": 0.20008,
+  "hold_mean_rate_rps": 0.049813,
+  "cross_talk_rad": {
+   "joint1": -7.3e-05,
+   "joint3": 0.000197,
+   "joint4": -0.00025,
+   "joint5": -2e-06,
+   "joint6": 0.0
+  },
+  "base_expected_m": [
+   0.120048,
+   1e-06
+  ],
+  "base_measured_m": [
+   0.118649,
+   0.000451
+  ],
+  "base_pos_err_norm_m": 0.00147,
+  "base_along_track_m": 0.118649,
+  "base_cross_track_m": 0.00045,
+  "base_dyaw_deg_raw": 0.22467,
+  "simultaneous_cumulative_s": 4.65,
+  "simultaneous_longest_s": 4.65,
+  "cmd_age_max_s": 0.06
+ },
+ "simultaneity_basis": "由**實測**底盤速度與 joint2 速率的門檻交集判定；未以命令分量同時非零代替",
+ "base_criterion_note": "底盤比的是「實際送進物理 API 的速度積分」與實測軌跡，**不是靜止上限**",
+ "drift_subtraction_applied": false,
+ "endpoint_same_snapshot": "CmdChain.step() 單一回傳的結構保證，非獨立量測；上游訊息同時性見 E1",
+ "excluded": [
+  "接收端斷訊試驗",
+  "pregrasp"
+ ]
+}
