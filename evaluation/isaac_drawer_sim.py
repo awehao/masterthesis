@@ -88,6 +88,9 @@ ap.add_argument('--pull-slip-mm', type=float, default=2.0,
                 help='拉動段：把手相對夾爪的位置變化上限（mm，相對**拉動起點**）')
 ap.add_argument('--pull-rot-deg', type=float, default=2.0,
                 help='拉動段：把手相對夾爪的姿態變化上限（度，相對**拉動起點**）')
+ap.add_argument('--pull-gate-max-wait-s', type=float, default=1.0,
+                help='拉動放行的等待上限（秒）。逾時即停 —— 等太久會讓後續 '
+                     'hold/release/retreat 與軌跡脫節，與其跑不同步的序列不如停下')
 ap.add_argument('--grip-close-ramp-s', type=float, default=3.0,
                 help='放行後由閘自行產生的閉合斜坡長度（秒）')
 ap.add_argument('--record-frames', default='', help='輸出 PNG 的目錄；空字串=不錄')
@@ -128,7 +131,7 @@ a = ap.parse_args()
 import drawer_asset as DA                                           # noqa: E402
 import drawer_align as DAL                                         # noqa: E402
 from cpu_temp import read as cpu_temp_read
-from grip_gate import GripGate, GripHold                          # noqa: E402
+from grip_gate import GripGate, GripHold, PullGate                          # noqa: E402
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE                # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
 
@@ -1037,6 +1040,13 @@ def main():
     pull_metrics = []          # [t, slip_mm, rot_deg]
     pull_block = None
     last_fj_sent = float(F_OPEN)
+    # 拉動放行：**許可在命令套用前決定**；未放行則零筆拉動命令被套用，
+    # 等待期間的設定點先緩衝、不消耗軌跡時間，放行後自首點起步。
+    pull_gate = PullGate(rate_hz=50.0,
+                         max_wait_s=a.pull_gate_max_wait_s) \
+        if GRASP_MODEL == 'friction' else None
+    q_pre_pull = None          # 拉動前的最後手臂命令（凍結用）
+    cond_ok_last = (False, '尚未量測')   # 上一步完成的條件判定
     finger_pose_trace = []          # [t, p1xyz, p2xyz]：兩指墊世界位置逐步紀錄
     while True:
       try:
@@ -1144,8 +1154,23 @@ def main():
         elif snap is not None:
             applied_seq, _, q_cmd = snap
             tgt = robot.get_joint_positions()
+            q_use = q_cmd
+            if pull_gate is not None:
+                if ph == 'pull':
+                    pull_gate.offer(applied_seq, q_cmd)
+                    # **在套用命令前**決定許可，用的是上一步完成的量測
+                    pull_gate.decide(t, cond_ok_last[0], cond_ok_last[1])
+                    if q_pre_pull is None:
+                        q_pre_pull = list(q_cmd)
+                    _pv = pull_gate.command(t, q_pre_pull)
+                    if _pv is not None:
+                        q_use = _pv
+                    if grip_hold is not None and pull_gate.released:
+                        grip_hold.freeze(t)   # 靜態判準不再適用、不覆寫歷史
+                else:
+                    q_pre_pull = list(q_cmd)
             for k, j in enumerate(ARM):
-                tgt[idx[j]] = q_cmd[k]
+                tgt[idx[j]] = q_use[k]
             fs = node.fsnap
             if fs is not None:
                 _fv = fs[1]
@@ -1298,6 +1323,17 @@ def main():
                                  rel_p=_relp, rel_R=_relR,
                                  ang_deg_fn=DAL.ang_deg)
             # 拉動段：相對變化自**拉動起點**計算
+            # 當下條件（供下一步在**套用命令前**判定拉動許可）：
+            # 曾經通過 ≠ 永久放行 —— 這裡看的是當下值，不是歷史。
+            if grip_hold is not None:
+                _c1 = min(fc_each[0], fc_each[1]) >= grip_hold.cfg['contact_min_n']
+                _hist = grip_hold.first_satisfied_t is not None
+                if not _hist:
+                    cond_ok_last = (False, '尚未完成連續 2 s 保持驗收')
+                elif not _c1:
+                    cond_ok_last = (False, f'當下接觸量 {min(fc_each):.3f} N 不足')
+                else:
+                    cond_ok_last = (True, None)
             if ph == 'pull':
                 if pull_ref is None:
                     pull_ref = (_relp.copy(), _relR.copy())
@@ -1451,16 +1487,17 @@ def main():
             stop = 'contact_force'
         elif GRASP_MODEL == 'friction' and FG_ABORT_N > 0 and fg_over_n > FG_SUSTAIN:
             stop = 'finger_contact_force'
-        elif (grip_hold is not None and ph == 'pull' and pull_block is None
-              and not grip_hold.satisfied):
-            # **不以預排時間代替**：拉動只有在實際資料連續滿足夾持判準後才觸發
-            pull_block = {'sim_t': t, 'held_s': grip_hold.held_s(t),
-                          'last_fail': grip_hold.last_fail,
-                          'worst': dict(grip_hold.worst)}
-            print(f'[drawer] **夾持驗收未由實際資料滿足，不拉動** @ sim {t:.3f}'
-                  f'（已連續 {grip_hold.held_s(t):.3f} s < '
-                  f'{grip_hold.cfg["hold_s"]}；{grip_hold.last_fail}）', flush=True)
-            stop = 'grip_hold_not_met'
+        elif pull_gate is not None and pull_gate.abort:
+            # 拉動許可等待逾時 ⇒ 停。此前**零筆拉動命令被套用**。
+            if pull_block is None:
+                pull_block = {'sim_t': t, 'reason': pull_gate.block_reason,
+                              'blocked_samples': pull_gate.n_blocked,
+                              'grip_hold_first_satisfied':
+                                  (grip_hold.first_satisfied_t
+                                   if grip_hold is not None else None)}
+                print(f'[drawer] **拉動許可未成立，零筆拉動命令被套用** @ sim '
+                      f'{t:.3f}（{pull_gate.block_reason}）', flush=True)
+            stop = pull_gate.abort
         elif (grip_hold is not None and ph == 'pull' and pull_ref is not None
               and pull_metrics and pull_metrics[-1][1] > a.pull_slip_mm):
             stop = 'grip_slip'
@@ -1592,6 +1629,7 @@ def main():
         'grip_gate_metric_cols': ['t', 'pos_perp_mm', 'rot_deg', 'offset_mm'],
         'grip_hold': (grip_hold.summary() if grip_hold is not None else None),
         'grip_hold_blocked_pull': pull_block,
+        'pull_gate': (pull_gate.summary() if pull_gate is not None else None),
         'pose_trace': pose_trace if GRASP_MODEL == 'friction' else None,
         'pose_trace_cols': ['t', 'gx', 'gy', 'gz', 'gqw', 'gqx', 'gqy', 'gqz',
                             'dx', 'dy', 'dz', 'dqw', 'dqx', 'dqy', 'dqz',
