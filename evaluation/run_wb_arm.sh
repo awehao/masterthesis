@@ -48,10 +48,10 @@ URDF_WB="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
 
 # ---- 2 準備階段與任務時間分開 ----
 PROFILE_S=9.0                   # 零2 + 斜升1 + 保持3 + 斜降1 + 零2
-# **判準事前固定**，見 evaluation/results/specs/wb_arm_criteria_v1.yaml，
+# **判準事前固定**，見 evaluation/results/specs/wb_arm_criteria_v2.yaml，
 # 由 evaluation/wb_arm_check.py 離線判定。速率不得為了通過而調整。
 ARM_RATE="${ARM_RATE:-0.05}"    # joint2，rad/s；執行端界限 1.0
-CRITERIA="$WS/evaluation/results/specs/wb_arm_criteria_v1.yaml"
+CRITERIA="$WS/evaluation/results/specs/wb_arm_criteria_v2.yaml"
 OBSERVE_S="${OBSERVE_S:-8.0}"   # 停止觀察窗
 NEED_S=$(python3 -c "print($PROFILE_S + $OBSERVE_S)")
 SIM_LIMIT="${SIM_LIMIT:-70}"    # 足以涵蓋啟動 + NEED_S
@@ -75,16 +75,19 @@ say "=== arm 單動測試 RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID ==="
 say "準備逾時 ${PREP_TIMEOUT_S}s（牆鐘）；任務需要模擬時間 ${NEED_S}s；SIM_LIMIT=${SIM_LIMIT}"
 say "判準 $CRITERIA（事前定版）；joint2 速率 ${ARM_RATE} rad/s"
 [ -f "$CRITERIA" ] || fail "找不到事前判準檔 —— 不在判準未定版時開跑"
+say "判準 sha256 $(sha256sum "$CRITERIA" | cut -c1-16)（由判定器實際載入）"
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 W0=$(date +%s)
 prep_left(){ echo $(( PREP_TIMEOUT_S - ( $(date +%s) - W0 ) )); }
 
 say "[1/8] 純邏輯測試（不開模擬器）"
 python3 -u evaluation/test_wb_cmd_chain.py >>"$LOG" 2>&1 \
-  || fail "純邏輯測試未通過"
-say "  純邏輯測試通過"
+  || fail "命令鏈純邏輯測試未通過"
+python3 -u evaluation/test_wb_arm_check.py >>"$LOG" 2>&1 \
+  || fail "判定器離線測試未通過 —— 不在判定器未驗證時開跑"
+say "  純邏輯測試通過（命令鏈 + 判定器）"
 
-say "[2/8] 啟動 Isaac 執行端（--mode base）"
+say "[2/8] 啟動 Isaac 執行端（--mode arm）"
 spawn isaac "$ISAAC_PY" -u evaluation/isaac_wholebody_sim.py \
     --out "$DIR/sim" --mode arm --sim-limit "$SIM_LIMIT" --solver-label none
 

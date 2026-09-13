@@ -1,0 +1,121 @@
+{
+ "schema": "wb_arm_check/2",
+ "run": "/home/howardchen/masterthesis/evaluation/runs/wb_arm_220513",
+ "spec_path": "evaluation/results/specs/wb_arm_criteria_v2.yaml",
+ "spec_schema": "wb_arm_criteria/2",
+ "spec_version": "v2",
+ "spec_sha256": "b31f8b65230dada264e8d861fd89173aebc825a31601d5624fec8538c3b10d50",
+ "spec_copied_to": "criteria_used.yaml",
+ "eval_window_s": [
+  17.79,
+  32.74
+ ],
+ "eval_window_def": "斜升開始 → 命令剖面結束 + post_profile_s（事前固定）",
+ "log_covers_window": true,
+ "checks": [
+  {
+   "key": "W0_log涵蓋評估窗",
+   "pass": true,
+   "detail": "評估窗至 32.74s，log 至 70.01s"
+  },
+  {
+   "key": "A1_rejected",
+   "pass": true,
+   "detail": "rejected=0（要 0）"
+  },
+  {
+   "key": "A2_fail_is_none",
+   "pass": true,
+   "detail": "fail=None"
+  },
+  {
+   "key": "A3_底盤分量恆零",
+   "pass": true,
+   "detail": "非零發布筆數 0"
+  },
+  {
+   "key": "A4_cmd_age_max",
+   "pass": true,
+   "detail": "max 0.0700s（≤ 0.1）"
+  },
+  {
+   "key": "A5_stop_reason",
+   "pass": true,
+   "detail": "sim_limit（允許 ['sim_limit']）"
+  },
+  {
+   "key": "B1_|實測−設定點|",
+   "pass": true,
+   "detail": "Δ實測 +0.199629 rad、Δ設定點 +0.199875 rad、差 -0.246 mrad（≤ 5）"
+  },
+  {
+   "key": "B2_保持段平均速度",
+   "pass": true,
+   "detail": "0.049800 rad/s（0.05±10%）；分母 t̄ 21.7150−18.8150=2.9000s"
+  },
+  {
+   "key": "B3_其他五軸串音",
+   "pass": true,
+   "detail": "最大 joint4 -0.250 mrad（≤ 10）"
+  },
+  {
+   "key": "B4_設定點總增量對名目",
+   "pass": true,
+   "detail": "Δ設定點 +0.199875 vs 名目 0.200，差 -0.125 mrad（≤ 4；**總增量符合度，非逐筆**）"
+  },
+  {
+   "key": "C1_窗內最大平移(原始)",
+   "pass": true,
+   "detail": "1.517 mm @ t=32.73s（≤ 20）"
+  },
+  {
+   "key": "C2_窗內最大偏航(原始)",
+   "pass": true,
+   "detail": "+0.2317° @ t=32.64s（≤ 1.0）"
+  },
+  {
+   "key": "D1_pregrasp仍禁止",
+   "pass": true,
+   "detail": "wheel_level_limiting_implemented=False"
+  },
+  {
+   "key": "D2_熱中止門檻",
+   "pass": true,
+   "detail": "cpu_limit_c=92.0，峰值 85.875 °C"
+  }
+ ],
+ "passed": 14,
+ "total": 14,
+ "all_pass": true,
+ "measured": {
+  "d_q2_act_rad": 0.199629,
+  "d_q2_sp_rad": 0.199875,
+  "hold_mean_rate_rps": 0.0498,
+  "hold_rate_denominator_s": 2.9,
+  "cross_talk_rad": {
+   "joint1": -7.2e-05,
+   "joint3": 0.000196,
+   "joint4": -0.00025,
+   "joint5": -2e-06,
+   "joint6": 0.0
+  },
+  "base_max_disp_m_raw": 0.001517,
+  "base_max_yaw_deg_raw": 0.23167,
+  "base_final_disp_m_raw": 0.001471,
+  "base_final_yaw_deg_raw": 0.22463,
+  "cmd_age_max_s": 0.07
+ },
+ "zero_command_drift_same_run": {
+  "window_s": [
+   3.03,
+   14.74
+  ],
+  "disp_mm_per_s": 0.0908,
+  "yaw_deg_per_s": 0.01559,
+  "note": "**僅作對照，未從 C1/C2 扣除**"
+ },
+ "drift_subtraction_applied": false,
+ "drift_subtraction_forbidden_by_spec": true,
+ "B4_semantics": "設定點總增量對名目剖面的符合程度；非逐筆跨程序保真度，無法排除互相抵銷的逐筆差異",
+ "identity_not_evidence": "Δ設定點＝套用命令積分為恆等式，不列為成果"
+}

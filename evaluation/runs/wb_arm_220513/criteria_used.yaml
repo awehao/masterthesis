@@ -1,0 +1,90 @@
+# Isaac 全身執行端：**有界 arm 單動測試**的事前判準 v2
+#
+# **事前固定**：本檔與 evaluation/wb_arm_check.py 在任何 arm 趟次執行**之前**定版。
+# 門檻不得因為某趟未通過而下修；要改只能另立 v3 並明寫理由與時點。
+#
+# **本檔的數值由 wb_arm_check.py 實際載入使用**，不是說明文件。
+# 檢查器會驗證 schema/version，並把本檔內容與雜湊寫進趟次目錄。
+schema: wb_arm_criteria/2
+version: v2
+status: provisional_engineering
+created: 2026-09-13
+baseline: E1
+prospective: true
+supersedes: v1
+v1_applied_to_runs: []          # v1 未曾用於任何趟次，無回溯問題
+change_from_v1:
+  - 門檻改為**程式實際載入**（v1 的數值寫死在 Python，規格只是路徑字串）
+  - B2 速度分母改用**實際樣本平均時刻**（v1 用整段首末時間差，會低估速度）
+  - C 類改為**事前固定評估窗內的最大值**判定；終點淨值另列，不互相替代
+  - B4 正名為「設定點總增量對名目剖面的符合程度」，非逐筆跨程序保真度
+
+profile:
+  mode: arm
+  joint: joint2                  # 命令向量 index 4（= dq2）
+  rate_rps: 0.05
+  zero_lead_s: 2.0
+  ramp_s: 1.0
+  hold_s: 3.0
+  zero_tail_s: 2.0
+  nominal_integral_rad: 0.200
+  joint2_limit_rad: [-2.4435, 2.4435]
+
+# ---- 評估窗（**事前固定**，不隨 log 長度或準備時間改變）----
+windows:
+  ref_before_ramp_s: 0.5         # 參考值：斜升開始前 0.5 s 平均
+  settle_tail_s: 1.0             # 終點值：評估窗末 1.0 s 平均
+  # C 類評估窗 = [斜升開始, 命令剖面結束 + post_profile_s]
+  post_profile_s: 8.0
+  require_log_covers_window: true  # log 未涵蓋評估窗 → 判定不成立，不算通過
+
+A_chain:
+  A1_rejected_eq: 0
+  A2_fail_is_none: true
+  A3_base_components_all_zero: true
+  A4_cmd_age_max_s: 0.10
+  A5_expected_stop_reasons: [sim_limit]
+
+B_tracking:
+  # B1 主判準：實測 vs 設定點。設定點＝套用命令積分（恆等），故 B1 測的是**物理追蹤**
+  B1_abs_err_rad_max: 0.005
+  B1_threshold_basis: >
+    約為已觀測零命令關節漂移（wb_base_diag_160757 joint2 最大 1.381 mrad）的 3.6 倍，
+    遠小於「完全不動」的 200 mrad。非感測精度或控制器能力的推導值。
+  # B2 保持段平均速度：分子與分母都用**實際樣本**的平均（值與時刻配對）
+  B2_hold_mean_rate_rps: 0.05
+  B2_hold_mean_rate_tol_frac: 0.10
+  B2_edge_window_s: 0.05
+  B2_denominator: mean_sample_time_difference    # 不用整段首末時間差
+  B3_other_joints_abs_rad_max: 0.010
+  # B4：**設定點總增量對名目剖面的符合程度**
+  B4_sp_vs_nominal_rad_max: 0.004
+  B4_semantics: >
+    這是總增量對名目積分的符合程度，**不是逐筆跨程序保真度**。
+    總增量相同可由互相抵銷的逐筆差異產生，本項無法排除該情形。
+    要證明逐筆一致，必須逐筆比對中間話題，本趟未做。
+
+C_base_incidental:
+  drift_subtraction_forbidden: true   # **由檢查器實際讀取並強制**
+  # 判定用「窗內最大原始值」（中途偏出再回來不得視為通過）
+  C1_max_abs_disp_m_max: 0.020
+  C2_max_abs_yaw_deg_max: 1.0
+  # 終點淨值**另外回報**，不替代最大值判定
+  report_final_net_separately: true
+  C_threshold_basis: >
+    合理性／安全上限，不是「底盤不動」的緊度宣稱。
+    參考：wb_base_diag_160757 零命令段平移漂移 −0.0885 mm/s、yaw +0.0135 °/s。
+  also_record:
+    - zero_command_drift_rate_same_run
+    - raw_and_uncorrected
+
+D_protections:
+  pregrasp_forbidden_unchanged: true
+  thermal_abort_c: 92.0
+  independent_domain_required: true
+  independent_run_dir: true
+
+on_pass: proceed_to_sync_requires_explicit_go   # 本次不自動接跑 sync
+on_fail:
+  - 標記結果，不下修門檻
+  - 不進 sync
