@@ -1,0 +1,76 @@
+# 靜態夾持的**暫定工程判準** v1
+#
+# 這不是通用安全標準，也不是由摩擦容量推導出的保證。
+# 制定時機：**在觀察 grip_081342_close2 的結果之後**才訂定。
+# 因此對該趟只能做「回溯評估」，不得稱為事前驗收；
+# 自本規格建立之後的趟次，才算前瞻驗收。
+schema: grip_hold_criteria/2
+version: v2
+status: provisional_engineering          # 暫定工程判準，非安全標準
+created: 2026-09-13
+basis_run: grip_081342_close2
+supersedes: v1
+change_from_v1: acceptance_point_only     # 門檻未變，僅明訂驗收位置
+# 這兩趟、這個比較區間內，差異主要來自**參考點**；換趟次在四捨五入後相同，
+# 但不據此宣稱趟次永遠沒有影響。
+retrospective_only_for: [grip_081342_close2, grip_083623_pull20]
+not_retroactive: >
+  grip_081342_close2 與 grip_083623_pull20 一律保留「原判準未通過、未進入拉動」。
+  以 v2 算法得到的數值只列為回溯分析，**不追認為通過**。
+
+# ---- 閉合後的靜態夾持驗收 ----
+hold:
+  # 區間自**實際閉合斜坡完成**起算（閘輸出達全閉），不用請求軌跡的時間
+  interval_from: actual_close_ramp_complete
+  min_duration_s: 2.0                    # 按模擬時間，不按樣本數
+  # 每指所監看的接觸量下限。**這是「接觸存在」門檻，不稱法向夾持力**：
+  # get_contact_force_matrix 回傳的是合力向量，是否含摩擦分量未經證實。
+  contact_min_n: 0.5
+  contact_no_sample_below: true          # 區間內不得有任何低於門檻的樣本
+  # v1 → v2 的**唯一**改動：明確指定驗收位置在**把手參考點**。
+  #
+  # v1 只寫「把手相對夾爪」而未指定參考點，實作取了抽屜剛體原點：
+  #     p_GD = R_G^T (p_D − p_G)
+  # 抽屜原點距夾爪約 654 mm，把手僅約 69 mm。0.044° 的相對轉角在 654 mm
+  # 力臂上投影約 0.50 mm —— 與量到的 0.44 mm 同量級。
+  # 實測（grip_083623_pull20，同一保持區間）：把手 0.0450 mm vs 抽屜原點
+  # 0.4385 mm，差 10.3 倍，與距離比 9.5 相符。
+  #
+  # **門檻完全不變**（0.20 mm、1.0°、0.5 N、2.0 s）；改的是量到哪一點。
+  acceptance_point: drawer_handle_bar_center
+  acceptance_point_frame: drawer_body_local     # 抽屜剛體座標系
+  acceptance_point_xyz_m: [0.0, -0.285, 0.550]  # = drawer_unit.yaml 的 handle.bar.center
+  # p_GH = R_G^T (p_D + R_D · p_DH − p_G)
+  # 相對量一律以此計算，**不得用世界座標差代替**（世界座標差會把夾爪自身的
+  # 移動算進去），也**不得用抽屜剛體原點代替**。
+  rel_pos_formula: "p_GH = R_G^T (p_D + R_D * p_DH - p_G)"
+  rel_pos_max_mm: 0.20                   # 相對保持起點的最大位置變化
+  rel_rot_max_deg: 1.0                   # 相對保持起點的最大姿態變化
+  # 抽屜剛體原點的位移**保留為診斷量**，不再當作把手滑移
+  diagnostic_only:
+    - drawer_origin_rel_pos_mm
+  require_protections_untriggered: [finger_contact, wrist_force, cpu_temp]
+  require_monitors_valid: true
+  require_data_covers_interval: true
+  execution:
+    no_fixed_attachment: true
+    no_pull_command: true
+    gate_and_ramp_per_defined_flow: true
+
+# ---- 拉動段（本判準適用於短行程試拉）----
+pull:
+  # 相對變化自**拉動起點**計算；拉動後**不要求把手在世界座標不動**
+  reference: pull_start
+  slip_max_mm: 2.0
+  rot_max_deg: 2.0
+  on_violation: freeze_setpoint          # 無固定連接，無耦合可解除
+  stop_reasons: [grip_slip, grip_rotation]
+
+# ---- 明確不要求的事 ----
+not_required:
+  - 兩指接觸量相等
+  - 接觸量完全不波動
+  - 把手在世界座標靜止（拉動段）
+notes:
+  - 核心是「接觸是否保持、物件是否相對滑移」，不是力的大小或平滑度。
+  - 拉動放行必須由**實際資料**確認連續滿足 min_duration_s，不得以預排時間代替。

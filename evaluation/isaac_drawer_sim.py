@@ -1017,6 +1017,8 @@ def main():
     # 保持途中失效、延遲放行後仍完整執行斜坡、逾時中止。
     GATE_BAR = np.array([float(BAR[0]) + POSE[0], float(BAR[1]) + POSE[1],
                          float(BAR[2])])
+    # 把手參考點在**抽屜剛體座標系**的固定位置（= drawer_unit.yaml handle.bar.center）
+    BAR_LOCAL = np.array([float(BAR[0]), float(BAR[1]), float(BAR[2])])
     R_DES = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
     grip_gate = GripGate(
         offset_limit_mm=a.grip_gate_offset_mm, pos_perp_max_mm=a.grip_gate_pos_mm,
@@ -1275,12 +1277,19 @@ def main():
             _qd = np.asarray(dq_w[0], float)
             _Rd = DAL.quat_R(_qd)
             _relR = _Rg2.T @ _Rd
-            _relp = _Rg2.T @ (_pd - _pg)
+            # **驗收位置在把手參考點**（grip_hold_criteria v2）：
+            #   p_GH = R_G^T (p_D + R_D · p_DH − p_G)
+            # 抽屜剛體原點距夾爪約 654 mm、把手約 69 mm；用原點會把夾爪的
+            # 微小轉動經力臂放大成視在位移（實測 0.4385 vs 0.0450 mm）。
+            _relp = _Rg2.T @ ((_pd + _Rd @ BAR_LOCAL) - _pg)
+            # 抽屜剛體原點：**保留為診斷量**，不作為把手滑移判準
+            _relp_org = _Rg2.T @ (_pd - _pg)
             pose_trace.append([round(t, 4)]
                               + [round(float(v), 7) for v in _pg]
                               + [round(float(v), 7) for v in _qg]
                               + [round(float(v), 7) for v in _pd]
-                              + [round(float(v), 7) for v in _qd])
+                              + [round(float(v), 7) for v in _qd]
+                              + [round(float(np.linalg.norm(_relp_org)), 7)])
             # 夾持驗收：**閉合斜坡實際完成後**才開始累積（不用請求軌跡的時間）
             _cs = grip_gate.close_start_t if grip_gate is not None else None
             if (_cs is not None
@@ -1585,7 +1594,17 @@ def main():
         'grip_hold_blocked_pull': pull_block,
         'pose_trace': pose_trace if GRASP_MODEL == 'friction' else None,
         'pose_trace_cols': ['t', 'gx', 'gy', 'gz', 'gqw', 'gqx', 'gqy', 'gqz',
-                            'dx', 'dy', 'dz', 'dqw', 'dqx', 'dqy', 'dqz'],
+                            'dx', 'dy', 'dz', 'dqw', 'dqx', 'dqy', 'dqz',
+                            'drawer_origin_rel_norm_m'],
+        'grip_hold_criteria': {
+            'spec': 'evaluation/results/specs/grip_hold_criteria_v2.yaml',
+            'version': 'v2',
+            'acceptance_point': 'drawer_handle_bar_center',
+            'acceptance_point_frame': 'drawer_body_local',
+            'acceptance_point_xyz_m': [float(BAR[0]), float(BAR[1]), float(BAR[2])],
+            'formula': 'p_GH = R_G^T (p_D + R_D * p_DH - p_G)',
+            'note': ('抽屜剛體原點的位移僅為診斷量，見 pose_trace 末欄；'
+                     '**不得當作把手滑移**')},
         'pull_metrics': pull_metrics if GRASP_MODEL == 'friction' else None,
         'pull_metric_cols': ['t', 'slip_mm', 'rot_deg'],
         'pull_criteria': {'slip_max_mm': a.pull_slip_mm,
