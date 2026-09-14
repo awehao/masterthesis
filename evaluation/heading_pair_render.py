@@ -76,12 +76,30 @@ def sample(arr, ts):
 
 
 class View:
+    """把世界範圍鋪滿畫格。
+
+    路徑範圍（約 11 x 16 m）比畫格（960 x 1080）**更瘦長**，
+    若只取 min(sx, sy) 會在左右留下約 23 % 的空白 —— 兩張地圖擺不滿。
+    這裡把**較短的那一軸往兩側等量擴張**到與畫格同比例：
+    比例尺不變、路徑完整保留，多出來的空間顯示的是**真實場景**
+    （牆與障礙物），不是空白。
+    """
+
     def __init__(self, x0, y0, x1, y1, w, h, pad=0.6):
-        self.sx = w / (x1 - x0 + 2 * pad)
-        self.sy = h / (y1 - y0 + 2 * pad)
-        self.s = min(self.sx, self.sy)
+        x0, x1 = x0 - pad, x1 + pad
+        y0, y1 = y0 - pad, y1 + pad
+        want = w / h
+        have = (x1 - x0) / (y1 - y0)
+        if have < want:                      # 太瘦 → 往左右擴
+            grow = (y1 - y0) * want - (x1 - x0)
+            x0, x1 = x0 - grow / 2, x1 + grow / 2
+        else:                                # 太扁 → 往上下擴
+            grow = (x1 - x0) / want - (y1 - y0)
+            y0, y1 = y0 - grow / 2, y1 + grow / 2
+        self.s = w / (x1 - x0)
         self.cx, self.cy = (x0 + x1) / 2, (y0 + y1) / 2
         self.w, self.h = w, h
+        self.box = (x0, y0, x1, y1)
 
     def px(self, x, y):
         return (self.w / 2 + (x - self.cx) * self.s,
@@ -144,7 +162,11 @@ def main() -> int:
                     help='0 = 取兩趟位姿涵蓋的較短者')
     ap.add_argument('--size', default='1920x1080')
     ap.add_argument('--trail-s', type=float, default=1e9)
-    ap.add_argument('--pad', type=float, default=1.2, help='鏡位邊界，m')
+    ap.add_argument('--pad', type=float, default=0.4, help='鏡位邊界，m')
+    ap.add_argument('--frame', default='arena', choices=['arena', 'path'],
+                    help='arena = 框整個場地（含四周牆壁，置中）；'
+                         'path = 只框兩趟路徑')
+    ap.add_argument('--ss', type=int, default=2, help='超取樣倍率（消鋸齒）')
     a = ap.parse_args()
 
     D = {k: np.load(getattr(a, k)) for k in ('off', 'on')}
@@ -167,29 +189,39 @@ def main() -> int:
             arr = D[k][f'obs_{n}']
             OB[k][n] = sample(np.column_stack([arr[:, 0] - t0, arr[:, 1:]]), ts)
 
-    # **鏡位取兩趟機器人路徑的聯集**（加邊界），不含全場障礙物的漫遊範圍 ——
-    # 否則畫面被拉到整個競技場，主體小到看不清車頭。
-    # 障礙物會自然進出畫面，這是實況，不做裁剪。
-    xs = np.concatenate([P[k][0] for k in P])
-    ys = np.concatenate([P[k][1] for k in P])
+    # 鏡位：預設框**整個場地**（靜態物件的聯集，含四周牆壁），畫面置中。
+    # 先前只框路徑，導致整體偏左、上下牆壁看不到。
+    if a.frame == 'arena':
+        xs = np.array([c - sx / 2 for _n, c, _cy, sx, _sy, _r in statics]
+                      + [c + sx / 2 for _n, c, _cy, sx, _sy, _r in statics])
+        ys = np.array([c - sy / 2 for _n, _cx, c, _sx, sy, _r in statics]
+                      + [c + sy / 2 for _n, _cx, c, _sx, sy, _r in statics])
+    else:
+        xs = np.concatenate([P[k][0] for k in P])
+        ys = np.concatenate([P[k][1] for k in P])
     W, H = (int(v) for v in a.size.split('x'))
     pw = W // 2
-    v = View(xs.min(), ys.min(), xs.max(), ys.max(), pw, H, pad=a.pad)
-    print(f'共用鏡位（兩趟路徑聯集 + {a.pad} m 邊界）：'
-          f'x {xs.min():.2f}~{xs.max():.2f}、y {ys.min():.2f}~{ys.max():.2f} m，'
-          f'兩格同比例 {v.s:.1f} px/m')
+    SS = max(1, int(a.ss))
+    v = View(xs.min(), ys.min(), xs.max(), ys.max(), pw * SS, H * SS, pad=a.pad)
+    print(f'取景模式 {a.frame}：x {xs.min():.2f}~{xs.max():.2f}、'
+          f'y {ys.min():.2f}~{ys.max():.2f} m（邊界 {a.pad} m、超取樣 {SS}×）')
+    print(f'共用鏡位（已擴張至畫格比例，路徑完整保留）：'
+          f'x {v.box[0]:.2f}~{v.box[2]:.2f}、y {v.box[1]:.2f}~{v.box[3]:.2f} m，'
+          f'兩格同比例 {v.s / SS:.1f} px/m（輸出解析度）')
 
     os.makedirs(a.out, exist_ok=True)
     ntr = int(a.trail_s * a.sample_hz)
     for i in range(len(ts)):
         im = Image.new('RGB', (W, H), BG)
         for j, k in enumerate(('off', 'on')):          # **左 OFF、右 ON**
-            pane = Image.new('RGB', (pw, H), BG)
+            pane = Image.new('RGB', (pw * SS, H * SS), BG)
             obs_xy = {n: (OB[k][n][0][i], OB[k][n][1][i]) for n in OB[k]}
             lo = max(0, i - ntr)
             trail = list(zip(P[k][0][lo:i + 1], P[k][1][lo:i + 1]))
             draw_pane(pane, v, shapes, obs_xy,
                       P[k][0][i], P[k][1][i], P[k][2][i], trail, statics)
+            if SS > 1:
+                pane = pane.resize((pw, H), Image.LANCZOS)
             im.paste(pane, (j * pw, 0))
         ImageDraw.Draw(im).line([(pw, 0), (pw, H)], fill=(214, 221, 229), width=3)
         im.save(os.path.join(a.out, f'f{i:06d}.png'))

@@ -91,6 +91,13 @@ ap.add_argument('--record-from', type=float, default=0.0, help='起始模擬時�
 ap.add_argument('--record-to', type=float, default=1e9, help='結束模擬時間')
 ap.add_argument('--record-warmup', type=int, default=12,
                 help='RTX 註解器暖機次數；單次算繪會拿到過期影像')
+# **純視覺**目標標記：半透明目標點 ＋ 短三軸表示目標姿態。
+# 只在錄影時建立；**不帶碰撞體、不帶剛體**，也不會被距離節點當成障礙物
+#（距離節點的障礙物來自它自己的 obstacles 參數，不掃 stage）。
+# 不錄影的趟次場景完全不受影響。
+ap.add_argument('--record-target', default='',
+                help='目標 TCP 位置 x,y,z（世界座標）；空=不放標記')
+ap.add_argument('--record-target-scale', type=float, default=1.0)
 ap.add_argument('--run-label', default='',
                 help='趟次名稱標示，寫進輸出以免日後被誤讀')
 ap.add_argument('--solver-label', default='dls',
@@ -732,8 +739,10 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                            'n': len(globals().get('REC_INDEX', [])),
                            'window_sim_s': [a.record_from, a.record_to],
                            'index': globals().get('REC_INDEX', []),
+                           'target_marker': globals().get('REC_TARGET'),
                            'note': ('模擬器內相機，執行時錄影；'
-                                    '無文字、無覆疊、場景未加碰撞體')}),
+                                    '無文字、無覆疊；目標標記為純視覺，'
+                                    '無碰撞體／剛體，不被距離節點視為障礙物')}),
         'solver_label': a.solver_label,
         'solver_note': ('僅供記錄的上游求解模式標示。**dls 不是 B 基線**；'
                         'B 凍結於 baseline_B_frozen_20260909.md（--solver qp、'
