@@ -147,8 +147,18 @@ def constraints_lowspeed(K, q, v_lin, pts, cfg, facts: SceneFacts,
 
 
 def check_e2_bounds(v9) -> tuple[bool, str]:
-    """對照 E2 執行端的界限。**求解後仍要檢查**，不以「已放進約束」代替。"""
+    """對照 E2 執行端的界限。**求解後仍要檢查**，不以「已放進約束」代替。
+
+    餘裕 `SOLVE_MARGIN` 是本配置的工程選擇，**不是越界不會發生的證明** ——
+    求解器可能不收斂、可能回傳非有限值。所以先擋 NaN／Inf：
+    `nan > x` 恆為 False，只比大小會讓 NaN **靜默通過**。
+    """
     v = np.asarray(v9, float)
+    if v.shape != (9,):
+        return False, f'長度 {v.shape} 不是 9'
+    if not np.isfinite(v).all():
+        bad = [i for i, x in enumerate(v) if not np.isfinite(x)]
+        return False, f'非有限值於分量 {bad}：{[float(v[i]) for i in bad]}'
     lin = float(np.hypot(v[0], v[1]))
     if lin > E2_LIN_NORM_MAX + 1e-9:
         return False, f'線速度 {lin:.4f} > {E2_LIN_NORM_MAX}'

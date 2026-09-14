@@ -80,6 +80,8 @@ ap.add_argument('--mode', default='base',
                          'pregrasp'],
                 help='驗收順序：base → arm → sync → solver_freespace；'
                      'pregrasp 另由 PREGRASP_PRECONDITIONS_MET 禁止')
+ap.add_argument('--run-label', default='',
+                help='趟次名稱標示，寫進輸出以免日後被誤讀')
 ap.add_argument('--solver-label', default='dls',
                 help='僅供記錄：本趟上游用的求解模式。介面煙霧測試標示 dls；'
                      '**dls 不是 B 基線**')
@@ -100,10 +102,19 @@ WHEEL_LIMIT_IMPLEMENTED = True
 PREGRASP_PRECONDITIONS_MET = False
 
 # ===== 自由空間求解器測試模式的**條件**（不是換個名稱繞過原檢查）=====
-# 這個模式允許的分量與 sync 相同，但多一道**可檢查的場景條件**：
-# 場景中不得存在任何接觸目標（抽屜／櫃體／把手）。條件在載入 stage 之後
-# 實際掃描，不是宣告。pregrasp 的禁止**完全不受本模式影響**。
-FREESPACE_FORBIDDEN_SUBSTRINGS = ('drawer', 'cabinet', 'handle', 'box')
+# 這個模式允許的分量與 sync 相同，但多一道**可檢查的場景條件**。
+#
+# **語意檢查，不比對名稱或型別**：掃描機器人與地面**以外**是否存在
+# 碰撞體（UsdPhysics.CollisionAPI）。有碰撞體才可能構成接觸，
+# 材質、Looks、燈光都沒有碰撞體。
+#
+# 先前兩次都因為用名稱／型別判斷而誤判並中止：
+#   wb_solver_iso_093451：子字串 'box' 比對到相機自身的網格
+#   wb_solver_iso_093853：白名單把匯入產生的 Physics_Materials / Looks 當成物件
+# 兩趟都標記為 ABORTED，不計為任務結果。
+#
+# pregrasp 的禁止**完全不受本模式影響**。
+FREESPACE_OWN_SUBTREES = ('/World/omni_bot', '/World/ground')
 
 if a.mode == 'pregrasp' and not PREGRASP_PRECONDITIONS_MET:
     print('[wb] **pregrasp 仍禁止**：輪級限制雖已實作，'
@@ -251,17 +262,24 @@ def main():
     stage = world.stage
     # 與導航版一致：**搜尋 articulation root**，不直接寫死 prim 路徑。
     if a.mode == 'solver_freespace':
-        hits = [str(pr.GetPath()) for pr in Usd.PrimRange.Stage(
+        from pxr import UsdPhysics
+        own = tuple(FREESPACE_OWN_SUBTREES)
+        foreign = [str(pr.GetPath()) for pr in Usd.PrimRange.Stage(
             stage, Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
-            if any(k in pr.GetName().lower()
-                   for k in FREESPACE_FORBIDDEN_SUBSTRINGS)]
-        if hits:
-            print(f'[wb] **solver_freespace 模式的場景條件未滿足**：'
-                  f'場景中有接觸目標 {hits[:5]}（共 {len(hits)}）。'
-                  f'本模式僅適用於自由空間，中止。')
+            if pr.HasAPI(UsdPhysics.CollisionAPI)
+            and not str(pr.GetPath()).startswith(own)]
+        n_own = sum(len(collision_prims(stage, u)) for u in own)
+        if foreign:
+            print(f'[wb] **solver_freespace 場景條件未滿足**：'
+                  f'機器人與地面以外有 {len(foreign)} 個碰撞體，'
+                  f'例如 {foreign[:3]}。本模式僅適用於自由空間，中止。')
             return 8
-        print('[wb] solver_freespace 場景條件已核對：'
-              '場景中無抽屜／櫃體／把手／箱體（實際掃描，非宣告）', flush=True)
+        print(f'[wb] solver_freespace 場景條件已核對（語意檢查，非名稱比對）：'
+              f'機器人與地面共 {n_own} 個碰撞體，其他位置 0 個', flush=True)
+        globals()['FREESPACE_SCENE'] = {
+            'check': 'UsdPhysics.CollisionAPI 於機器人與地面以外',
+            'own_subtrees': list(own), 'own_colliders': n_own,
+            'foreign_colliders': 0}
 
     bodies, arts = physics_parts(stage, prim)
     if not arts:
@@ -315,6 +333,16 @@ def main():
     print(f'[wb] articulation DOF {robot.num_dof}', flush=True)
 
     # **確認實際位姿對應的 prim**：不把 articulation 根的位姿直接當成某個連桿。
+    tcp_prim = next((pr for pr in Usd.PrimRange.Stage(
+        stage, Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
+        if pr.GetName() == 'link_tcp'
+        and str(pr.GetPath()).startswith(ROBOT)), None)
+    if tcp_prim is None:
+        print('[wb] **找不到 link_tcp prim** —— 中止（判準需要它做獨立驗算）')
+        return 9
+    print(f'[wb] link_tcp prim {tcp_prim.GetPath()}', flush=True)
+    globals()['TCP_PRIM'] = tcp_prim
+
     fp = next((pr for pr in Usd.PrimRange.Stage(
         stage, Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
         if pr.GetName() == 'base_footprint'
@@ -392,7 +420,12 @@ LOG_COLS = ['t', 'recv_seq', 'cmd_age', 'vx_cmd', 'vy_cmd', 'wz_cmd',
             'integrating',
             # E2 新增：輪級限制的逐步記錄
             'lam', 'modified', 'limit_mode', 'wheel_speed_max',
-            'wheel_accel_max'] + [f'{j}_sp' for j in ARM] \
+            'wheel_accel_max',
+            # E2.1 新增：Isaac 的 link_tcp 世界位姿（供獨立讀回驗算）
+            'tcp_x', 'tcp_y', 'tcp_z',
+            'tcp_r00', 'tcp_r01', 'tcp_r02',
+            'tcp_r10', 'tcp_r11', 'tcp_r12',
+            'tcp_r20', 'tcp_r21', 'tcp_r22'] + [f'{j}_sp' for j in ARM] \
     + [f'{j}_act' for j in ARM] + [f'{j}_rate_meas' for j in ARM]
 
 
@@ -432,6 +465,15 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         v_phys = np.asarray(robot.get_linear_velocity(), float)
         # 位姿取自 **base_footprint prim 的實際世界變換**，保留完整姿態。
         xc = UsdGeom.XformCache()
+        Mt = xc.GetLocalToWorldTransform(TCP_PRIM)
+        tt_t = Mt.ExtractTranslation()
+        R3t = np.array([[Mt[r][c] for c in range(3)] for r in range(3)])
+        sct = np.linalg.norm(R3t, axis=1)
+        R_tcp = (R3t / sct[:, None]).T          # USD 列向量慣例
+        tcp_row = [round(float(tt_t[0]), 6), round(float(tt_t[1]), 6),
+                   round(float(tt_t[2]), 6)] + \
+                  [round(float(R_tcp[r][c]), 6)
+                   for r in range(3) for c in range(3)]
         M = xc.GetLocalToWorldTransform(fp)
         tt = M.ExtractTranslation()
         bp = np.array([tt[0], tt[1], tt[2]], float)
@@ -453,8 +495,16 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         sent_effective = sent_prev
         # 失效後**不關迴圈**：底盤停止、手臂保持設定點，並繼續量測，
         # 直到停止條件由實測資料判定。關閉模擬器不等於驗證停止。
+        # **夾爪手指也要發布**：robot_state_publisher 少了 finger_joint1/2
+        # 就算不出 uflite_finger1/2 的 TF，逐連桿 TF 檢查會少兩個
+        #（趟次 wb_solver_iso_094406 即為 TF 9/11）。
+        # 本測試不動夾爪，但它們是模型的真實自由度，狀態照實發布。
+        fj = [n for n in ('finger_joint1', 'finger_joint2') if n in idx]
+        names_all = list(ARM) + fj
+        qa_all = np.concatenate([qa, [float(qm[idx[n]]) for n in fj]])
+        rate_all = np.concatenate([rate, np.zeros(len(fj))])
         node.publish_feedback(
-            t, ARM, qa, rate, bp, bquat, R_fp, bv, bw,
+            t, names_all, qa_all, rate_all, bp, bquat, R_fp, bv, bw,
             json.dumps({'mode': a.mode, 'fail': chain.fail,
                         'integrating': chain.integrating,
                         'recv': chain.n_recv, 'rejected': chain.n_rejected},
@@ -509,6 +559,7 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                      else chain.last_limit['wheel_speed_max']),
                     (float('nan') if not chain.last_limit
                      else chain.last_limit['wheel_accel_max'])]
+                   + tcp_row
                    + [round(float(v), 6) for v in sp]
                    + [round(float(v), 6) for v in qa]
                    + [round(float(v), 6) for v in rate])
@@ -549,6 +600,7 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
     out = {
         'schema': 'wb_sim/1', 'mode': a.mode,
         'spec': 'evaluation/results/specs/isaac_wholebody_port_v2.md',
+        'run_label': a.run_label,
         'solver_label': a.solver_label,
         'solver_note': ('僅供記錄的上游求解模式標示。**dls 不是 B 基線**；'
                         'B 凍結於 baseline_B_frozen_20260909.md（--solver qp、'
@@ -570,9 +622,12 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
             'lin_mps': a.base_lin_max, 'ang_rps': a.base_ang_max,
             'note': ('**低速介面界限**，不是輪級限制功能；越界即整筆中止，'
                      '不縮命令')},
-        'execution_version': 'E2',
+        'execution_version': 'E2.1',
+        'e2_1_change': ('相對 §23／§25 所用的 E2.0，**只新增 link_tcp 位姿記錄**，'
+                        '命令路徑與限制邏輯未動'),
         'wheel_level_limiting_implemented': WHEEL_LIMIT_IMPLEMENTED,
         'pregrasp_preconditions_met': PREGRASP_PRECONDITIONS_MET,
+        'freespace_scene_children': globals().get('FREESPACE_SCENE'),
         'pregrasp_note': ('pregrasp 由**另一個獨立條件**禁止，'
                           '不由 wheel_level_limiting_implemented 解鎖'),
         'limit_rows': chain.limit_rows,

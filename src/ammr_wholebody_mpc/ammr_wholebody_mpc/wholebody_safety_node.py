@@ -96,6 +96,11 @@ class WholeBodySafetyNode(Node):
         p('tau', 0.15)
         p('a_brake', 1.0)
         p('eps', 0.03)
+        # 低速配置用：**加性參數，預設 -1 表示沿用 SafetyConfig 的原值**。
+        # 求解端與下游必須用同一份框，否則求解時滿足的界限會在下游被放寬回去。
+        p('vmax_base_lin', -1.0)      # m/s，逐軸 |vx|,|vy|
+        p('vmax_base_ang', -1.0)      # rad/s，|wz|
+        p('vmax_arm', -1.0)           # rad/s，各關節
 
         g = lambda k: self.get_parameter(k).value
         self.report_frame = str(g('report_frame'))
@@ -112,6 +117,21 @@ class WholeBodySafetyNode(Node):
                                 eps=float(g('eps')),
                                 dt=1.0 / max(1.0, float(g('control_rate'))),
                                 fix_base=bool(g('fix_base')))
+        # 速度框覆寫：只在參數為正時生效；一律**收緊**（取 min），不放寬。
+        import numpy as _np
+        _vm = _np.array(self.cfg.vmax, dtype=float).copy()
+        _ov = {}
+        for _k, _sl in (('vmax_base_lin', slice(0, 2)),
+                        ('vmax_base_ang', slice(2, 3)),
+                        ('vmax_arm', slice(3, None))):
+            _v = float(g(_k))
+            if _v > 0.0:
+                _vm[_sl] = _np.minimum(_vm[_sl], _v)
+                _ov[_k] = _v
+        if _ov:
+            self.cfg.vmax = _vm
+        self.vmax_overrides = _ov
+        self.vmax_effective = [float(x) for x in self.cfg.vmax]
 
         self.K: WholeBodyKinematics | None = None
         # Same order the distance node derives, from the same description. The
@@ -189,6 +209,12 @@ class WholeBodySafetyNode(Node):
         self.get_logger().info(
             f'wholebody_safety: frame {self.report_frame}, '
             f'{1.0/self.cfg.dt:.0f} Hz, base DOF {"on" if self.use_base else "off"}')
+        # **執行期生效值**寫進 log，供趟次讀回存檔 —— 不以參數設定值代替
+        self.get_logger().info(
+            f'wholebody_safety vmax_effective base_lin='
+            f'{self.vmax_effective[0]:.6f} base_ang={self.vmax_effective[2]:.6f} '
+            f'arm_max={max(self.vmax_effective[3:]):.6f} '
+            f'overrides={self.vmax_overrides or "無（沿用預設）"}')
 
     # ------------------------------------------------------------ inputs
     def _on_urdf(self, msg) -> None:
