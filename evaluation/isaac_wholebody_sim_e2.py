@@ -399,6 +399,63 @@ def main():
         _cg = UsdGeom.Camera(stage.GetPrimAtPath('/World/rec_cam'))
         _cg.GetFocalLengthAttr().Set(float(a.record_focal))
         _cg.GetClippingRangeAttr().Set(Gf.Vec2f(0.02, 200.0))
+        if a.record_target:
+            _t = np.array([float(v) for v in a.record_target.split(',')])
+            _sc = float(a.record_target_scale)
+            # 目標姿態與判準同一組定義：工具 +z 指向世界 +x、工具 +x 指向世界 +z
+            _zc = np.array([1.0, 0.0, 0.0])
+            _xc = np.array([0.0, 0.0, 1.0])
+            _xc = _xc - float(_xc @ _zc) * _zc
+            _xc /= np.linalg.norm(_xc)
+            _Rm = np.column_stack([_xc, np.cross(_zc, _xc), _zc])
+            _M = np.eye(4)
+            _M[:3, :3] = _Rm.T          # USD 為列向量慣例
+            _M[3, :3] = _t
+            UsdGeom.Xform.Define(stage, '/World/rec_target')
+            UsdGeom.Xformable(stage.GetPrimAtPath('/World/rec_target')) \
+                .AddTransformOp().Set(Gf.Matrix4d(*_M.flatten().tolist()))
+
+            def _vis(prim, rgb, opacity):
+                g = UsdGeom.Gprim(prim)
+                g.CreateDisplayColorAttr().Set([Gf.Vec3f(*rgb)])
+                g.CreateDisplayOpacityAttr().Set([float(opacity)])
+
+            _sp = UsdGeom.Sphere.Define(stage, '/World/rec_target/point')
+            _sp.CreateRadiusAttr(0.020 * _sc)
+            _vis(_sp.GetPrim(), (0.95, 0.45, 0.15), 0.45)
+            for _ax, _rgb, _rot in (
+                    ('x', (0.90, 0.25, 0.25), (0.0, 90.0, 0.0)),
+                    ('y', (0.25, 0.75, 0.35), (-90.0, 0.0, 0.0)),
+                    ('z', (0.25, 0.45, 0.95), (0.0, 0.0, 0.0))):
+                _c = UsdGeom.Cylinder.Define(stage, f'/World/rec_target/ax_{_ax}')
+                _c.CreateRadiusAttr(0.0045 * _sc)
+                _c.CreateHeightAttr(0.080 * _sc)
+                # **順序要緊**：USD 依 xformOpOrder 逐一套用（列向量慣例）。
+                # 先旋轉再平移的話，位移會落在**父座標**而不是旋轉後的軸向 ——
+                # x 軸圓柱會被推到父 +z。先平移、再旋轉才是沿各自軸向。
+                _x = UsdGeom.Xformable(_c.GetPrim())
+                _x.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.040 * _sc))
+                _x.AddRotateXYZOp().Set(Gf.Vec3f(*_rot))
+                _vis(_c.GetPrim(), _rgb, 0.85)
+            # **自我查核**：標記底下不得有碰撞體或剛體，否則中止 ——
+            # 有的話它就成了場景裡的物件，solver_freespace 的條件也會失真
+            from pxr import UsdPhysics                            # noqa: E402
+            _bad = [str(pr.GetPath()) for pr in Usd.PrimRange(
+                stage.GetPrimAtPath('/World/rec_target'))
+                if pr.HasAPI(UsdPhysics.CollisionAPI)
+                or pr.HasAPI(UsdPhysics.RigidBodyAPI)]
+            if _bad:
+                print(f'[wb] **目標標記帶有物理 API {_bad}，中止**')
+                return 13
+            print(f'[wb] 目標標記（**純視覺**，無碰撞體／剛體）'
+                  f' @ {np.round(_t, 3).tolist()}；'
+                  f'距離節點的障礙物來自其 obstacles 參數，不掃 stage',
+                  flush=True)
+            globals()['REC_TARGET'] = {'xyz': [float(v) for v in _t],
+                                       'visual_only': True,
+                                       'has_collision': False,
+                                       'has_rigid_body': False}
+
         rec_every = max(1, int(round(1.0 / (a.record_fps * a.physics_dt))))
         globals()['REC'] = (rec_cam, rec_dir, rec_every, rec_index, _imageio)
         globals()['REC_INDEX'] = rec_index

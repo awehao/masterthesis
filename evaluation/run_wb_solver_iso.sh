@@ -59,6 +59,11 @@ if [ "${RECORD:-0}" = "1" ]; then
   REC_ARGS="--record-frames $DIR/frames --record-res ${REC_RES:-1920x1080}"
   REC_ARGS="$REC_ARGS --record-fps ${REC_FPS:-20} --record-from ${REC_FROM:-12}"
   REC_ARGS="$REC_ARGS --record-to ${REC_TO:-45} --record-focal ${REC_FOCAL:-35}"
+  # 純視覺目標標記（半透明目標點＋短三軸）；預設就是本趟的目標位置。
+  # **無碰撞體、無剛體**，執行端會自我查核；設 REC_TARGET=none 可關閉。
+  if [ "${REC_TARGET:-$(echo $TARGET | tr ' ' ',')}" != "none" ]; then
+    REC_ARGS="$REC_ARGS --record-target ${REC_TARGET:-$(echo $TARGET | tr ' ' ',')}"
+  fi
   [ -n "${REC_EYE:-}" ] && REC_ARGS="$REC_ARGS --record-eye $REC_EYE"
   [ -n "${REC_AT:-}" ] && REC_ARGS="$REC_ARGS --record-at $REC_AT"
 fi
