@@ -619,3 +619,104 @@ rclpy._rclpy_pybind11.InvalidHandle: cannot use Destroyable because destruction 
 [15:27:58]   到達後觀察 10.0s 模擬時間（不因求解器自報成功就收掉）
 [obs] 觀察窗結束：sim 28.710（需要 >= 28.700）
 [15:28:49] 等執行端收尾（觀察窗 10.0s 之後；最多等 900s 牆鐘）
+[wb] 停止：sim_limit @ sim 140.010
+[wb] -> /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_portrait_1532/sim/wb_run.json
+[340.266s] Simulation App Shutting Down
+[15:32:35] 收尾檢查
+[15:32:35] 收尾後 CPU 77.125  來源 hwmon:k10temp
+[15:32:35] [8/8] 離線判定（事前定版判準，不下修門檻）
+
+=== 低速 QP 配置的 Isaac 自由空間閉迴路驗證 ===
+  規格 /home/howardchen/masterthesis/evaluation/results/specs/wb_solver_iso_criteria_v1.yaml  wb_solver_iso_criteria/1 v1 sha256 e9a79e5be61773f3
+  **本配置的速度框與 B 基線不同。不得以本趟結果代表 B，也不得稱為 WGMPC。**
+  [通過] P1_起動前檢查通過                 fails=[]
+  [通過] P2_障礙物設定為 0                obstacles_configured=0
+  [通過] P3_每連桿 TF 合格               11/11
+  [通過] P4_執行端場景檢查                 endpoint_scene_ok=True
+  [通過] P5_下游與求解端同一份低速框            下游 {'vmax_base_lin': 0.035255339, 'vmax_base_ang': 0.1999, 'vmax_arm': 0.9999} vs 求解端 {'vmax_base_lin': 0.03525533905932737, 'vmax_base_ang': 0.19990000000000002, 'vmax_arm': 0.9999}
+  [通過] R0_Isaac 有記錄 link_tcp      E2.1 欄位 tcp_x/tcp_y/tcp_z + 旋轉矩陣
+  [通過] R1_兩來源同時達標並持續              最長連續 35.25s（≥ 2.0）；Isaac **全程最小**誤差 1.774 mm、FK 最小 1.761 mm、末值 22.477 mm
+  [通過] R2_兩來源一致                   最大差 0.220 mm（≤ 10）
+  [通過] R3_姿態誤差（完整三維）              最小 0.00316 rad（≤ 0.02）
+  [通過] C1_最長連續同動                  4.64s（≥ 3.0）；累計 4.64s（**實測運動判定**）
+  [通過] B1_線速度                     max 0.035267 ≤ 0.05
+  [通過] B2_角速度                     max 0.001505 ≤ 0.2
+  [通過] B3_手臂門檻不變                  arm_rate_max=1.0
+  [通過] B4_執行端界限未動                 0.05/0.2
+  [通過] B5_rejected                rejected=0
+  [通過] B6_fail_is_none            fail=None
+  [通過] L1_輪速                      max 0.035624 ≤ 0.2775
+  [通過] L2_輪加速度                    max 3.554299 ≤ 6.25
+  [通過] S1_log 涵蓋到達後觀察窗            到達 17.89s，窗至 25.89s，log 至 140.01s
+  [通過] S2_觀察窗內底盤最大位移              3.401 mm（≤ 20；未扣漂移）
+  [通過] S3_觀察窗內關節最大變化              1.301 mrad（≤ 50）
+  [通過] D1_pregrasp 由獨立條件禁止        preconditions=False
+  [通過] D2_熱中止門檻                   cpu_limit_c=92.0，峰值 87.125 °C
+
+  23/23 項通過
+  結論：判定通過
+  -> /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_portrait_1532/solver_iso_check.json
+[15:32:37] 輸出 /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_portrait_1532
+[15:32:37] 判定通過 —— **停下回報；pregrasp 仍由獨立條件禁止**
+[15:32:37] cleanup（只針對本趟 PID）...
+[rec] 共 2578 則；最後 sim 140.01
+[INFO] [1789371157.852061067] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[rec] 共 2578 則；最後 sim 140.01
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/arm_link_distance", line 33, in <module>
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/wholebody_safety", line 33, in <module>
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/arm_vel_adapter.py", line 190, in <module>
+    sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'arm_link_distance')())
+    sys.exit(main())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/arm_link_distance.py", line 511, in main
+         ^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/arm_vel_adapter.py", line 182, in main
+    rclpy.spin(nd)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'wholebody_safety')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/wholebody_safety_node.py", line 531, in main
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    rclpy.spin(node)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    rclpy.spin(node)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    handler, entity, node = self.wait_for_ready_callbacks(
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+     return next(self._cb_iter)
+               ^^^^^^^^^^^^^^^^^^^
+    File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+                   raise ExternalShutdownException()
+    return next(self._cb_iter)
+     rclpy.executors.ExternalShutdownException
+^^           ^^^^^^^^^^^^^^^^^^^
+^^^  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+[15:32:40] cleanup done
