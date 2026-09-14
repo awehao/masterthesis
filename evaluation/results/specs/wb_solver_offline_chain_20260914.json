@@ -1,0 +1,106 @@
+{
+ "schema": "wb_solver_offline_chain/1",
+ "reused_functions": {
+  "solver": "wholebody_pregrasp.Node.solve（--solver dls）",
+  "safety": "wholebody_safety_filter.filter_velocity",
+  "adapter": "report frame → 本體座標旋轉",
+  "endpoint": "wb_cmd_chain_e2.CmdChainE2 ＋ E2 low_speed_bound",
+  "guard": "wholebody_pregrasp 的關節限位判準 lo+0.05 / hi−0.05"
+ },
+ "note": "後續位形依**最後可執行命令**更新，非積分原始 DLS 輸出。安全層速度框 [0.2775, 0.2775, 1.1327]，與 E2 的 lin 0.05／ang 0.2 是不同層的不同界限。",
+ "target": [
+  0.3,
+  0.0,
+  0.55
+ ],
+ "cycles": 1,
+ "sim_t": 0.0,
+ "stop_reason": "E2 整體失效：底盤輪級檢查未通過：線速度 0.2205 > 0.05",
+ "final_e_p": 0.181969,
+ "final_e_r": 1.570804,
+ "peak": {
+  "solver_lin": 0.358932,
+  "safety_lin": 0.220498,
+  "body_lin": 0.220498,
+  "body_ang": 1.6e-05
+ },
+ "e2_bounds": {
+  "lin": 0.05,
+  "ang": 0.2
+ },
+ "e2_rejected_cycles": 0,
+ "e2_fail": "底盤輪級檢查未通過：線速度 0.2205 > 0.05",
+ "joint_margin_min": 0.061087,
+ "wheel_limit": {
+  "policy": "evaluation/results/specs/wb_wheel_limit_policy_v2.md",
+  "frame": "底盤三分量為**本體座標**（adapter 已轉換）",
+  "wheel_radius": 0.05,
+  "wheel_base_L": 0.245,
+  "w_lim_mps": 0.2775,
+  "a_max_rad_s2": 125.0,
+  "dt_max_s": 0.05,
+  "modified_steps": 0,
+  "timeout_decel_steps": 0,
+  "stop_unverified_steps": 0,
+  "last_limit": null,
+  "rows_kept": 0,
+  "note": "λ 由底盤輪級約束決定、施加於完整 9 維增量；保留的是**增量方向**，不是請求命令的底盤／手臂比例。**逾時是例外**：手臂速率立即歸零，不保留耦合方向。",
+  "not_claimed": "u_out 不是求解器的輸出；上游距離約束是對 u_req 算的。**不宣稱上游全身安全性不變**。"
+ },
+ "rows": [
+  {
+   "cyc": 0,
+   "sim_t": 0.0,
+   "e_p": 0.181969,
+   "e_r": 1.570804,
+   "solver_raw": [
+    -0.358932,
+    -2e-06,
+    -1.6e-05,
+    -0.0,
+    1.084665,
+    1.213711,
+    -2e-06,
+    -1.028775,
+    -2e-06
+   ],
+   "safety_out": [
+    -0.220498,
+    -2e-06,
+    -1.6e-05,
+    -0.0,
+    1.084665,
+    1.213711,
+    -2e-06,
+    -1.028775,
+    -2e-06
+   ],
+   "adapter_body": [
+    -0.220498,
+    -2e-06,
+    -1.6e-05,
+    -0.0,
+    1.084665,
+    1.213711,
+    -2e-06,
+    -1.028775,
+    -2e-06
+   ],
+   "e2_accepted": true,
+   "e2_reject": null,
+   "e2_fail": "底盤輪級檢查未通過：線速度 0.2205 > 0.05",
+   "lam": null,
+   "n_applied_steps": 0,
+   "base": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "joint_margin_lo": 0.061087,
+   "joint_margin_hi": 1.989667,
+   "solver_lin": 0.358932,
+   "safety_lin": 0.220498,
+   "body_lin": 0.220498
+  }
+ ]
+}
