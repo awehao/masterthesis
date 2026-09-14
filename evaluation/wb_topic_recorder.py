@@ -18,21 +18,27 @@ import time
 ap = argparse.ArgumentParser()
 ap.add_argument('--out', required=True)
 ap.add_argument('--topic', default='/wb_vel_cmd')
+ap.add_argument('--msg-type', default='f64', choices=['f64', 'f32'],
+                help='Float64MultiArray 或 Float32MultiArray')
+ap.add_argument('--name', default='wb_topic_recorder')
+ap.add_argument('--outfile', default='wb_vel_cmd_record.json')
 a = ap.parse_args()
 
 import rclpy                                                   # noqa: E402
 from rclpy.node import Node                                    # noqa: E402
-from std_msgs.msg import Float64MultiArray                     # noqa: E402
+from std_msgs.msg import (Float32MultiArray,                   # noqa: E402
+                          Float64MultiArray)
 from rosgraph_msgs.msg import Clock                            # noqa: E402
 
 
 class Rec(Node):
     def __init__(self):
-        super().__init__('wb_topic_recorder')
+        super().__init__(a.name)
         self.sim_t = None
         self.msgs = []
         self.create_subscription(Clock, '/clock', self._clk, 10)
-        self.create_subscription(Float64MultiArray, a.topic, self._msg, 50)
+        MT = Float64MultiArray if a.msg_type == 'f64' else Float32MultiArray
+        self.create_subscription(MT, a.topic, self._msg, 50)
         self.t_wall0 = time.monotonic()
         self.last_dump = 0.0
 
@@ -53,7 +59,7 @@ class Rec(Node):
                    'note': ('獨立觀測者，只訂閱不發布；'
                             '用於證明話題實際停止更新，而非執行端內部狀態推論'),
                    'msgs': self.msgs},
-                  open(os.path.join(a.out, 'wb_vel_cmd_record.json'), 'w'),
+                  open(os.path.join(a.out, a.outfile), 'w'),
                   ensure_ascii=False)
 
 

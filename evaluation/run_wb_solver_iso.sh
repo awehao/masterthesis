@@ -111,11 +111,13 @@ VMAX_LIN=$(python3 -c "import sys;sys.path.insert(0,'$WS/evaluation');sys.path.i
 VMAX_ANG=$(python3 -c "import sys;sys.path.insert(0,'$WS/evaluation');sys.path.insert(0,'$WS/install/ammr_wholebody_mpc/lib/python3.12/site-packages');from wb_qp_lowspeed import lowspeed_cfg;print(f'{lowspeed_cfg().vmax[2]:.9f}')")
 VMAX_ARM=$(python3 -c "import sys;sys.path.insert(0,'$WS/evaluation');sys.path.insert(0,'$WS/install/ammr_wholebody_mpc/lib/python3.12/site-packages');from wb_qp_lowspeed import lowspeed_cfg;print(f'{lowspeed_cfg().vmax[3]:.9f}')")
 say "  下游低速框 lin=$VMAX_LIN ang=$VMAX_ANG arm=$VMAX_ARM（與求解端同源）"
+say "  **狀態分類**：freespace_confirmed:=true（宣告；節點每週期另要求資料非缺失／過期）"
 spawn safety ros2 run ammr_wholebody_mpc wholebody_safety --ros-args \
     -p use_sim_time:=true -p report_frame:=odom -p base_frame:=base_link \
     -p wholebody_urdf:="$URDF_WB" \
     -p vmax_base_lin:="$VMAX_LIN" -p vmax_base_ang:="$VMAX_ANG" \
-    -p vmax_arm:="$VMAX_ARM"
+    -p vmax_arm:="$VMAX_ARM" \
+    -p freespace_confirmed:=true
 # **Isaac 鏈的消費端是執行端本身**，不是 ros2_control 控制器。
 # 關節順序核對的對象因此指向實際會執行這些數字的那一端。
 spawn adapter python3 -u evaluation/arm_vel_adapter.py \
@@ -156,6 +158,15 @@ except Exception:
   || fail "剩餘模擬時間 ${LEFT}s 不足 ${NEED_S}s —— 不在時間不夠時放行命令源"
 
 YAW=$(python3 -c "import json;print(json.load(open('$DIR/preflight.json')).get('base_yaw_deg') or 0.0)")
+# 中間命令與安全層診斷一併保留
+spawn rec_cmdout python3 -u evaluation/wb_topic_recorder.py --out "$DIR" \
+    --topic /wholebody_safety/cmd_out --msg-type f64 \
+    --name wb_rec_cmdout --outfile safety_cmd_out_record.json
+spawn rec_diag python3 -u evaluation/wb_topic_recorder.py --out "$DIR" \
+    --topic /wholebody_safety/diag --msg-type f32 \
+    --name wb_rec_diag --outfile safety_diag_record.json
+sleep 2
+
 say "[7/8] 自由空間起動前檢查（場景／逐連桿 TF／下游速度框讀回）"
 timeout 180 python3 -u evaluation/wb_freespace_preflight.py \
     --out "$DIR/freespace_preflight.json" --endpoint-scene-ok 2>&1 | tee -a "$LOG"
@@ -197,7 +208,9 @@ fi
 
 say "收尾檢查"
 [ -f "$DIR/sim/wb_run.json" ] || fail "缺少 sim/wb_run.json"
-[ -f "$DIR/cmd_source.json" ] || fail "缺少 cmd_source.json"
+# 求解器趟次沒有有界命令源；要的是求解器輸出與起動前檢查
+[ -f "$DIR/solver_out.json" ] || fail "缺少 solver_out.json"
+[ -f "$DIR/freespace_preflight.json" ] || fail "缺少 freespace_preflight.json"
 [ -f "$DIR/preflight.json" ] || fail "缺少 preflight.json"
 say "收尾後 CPU $(python3 evaluation/cpu_temp.py)"
 if [ -n "$ABORT" ]; then

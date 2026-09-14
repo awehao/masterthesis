@@ -101,6 +101,11 @@ class WholeBodySafetyNode(Node):
         p('vmax_base_lin', -1.0)      # m/s，逐軸 |vx|,|vy|
         p('vmax_base_ang', -1.0)      # rad/s，|wz|
         p('vmax_arm', -1.0)           # rad/s，各關節
+        # **已確認的自由空間**（狀態分類，不是放寬未知情境）。
+        # 由外部檢查提供：執行端場景掃描通過 ＋ 距離節點 obstacles 為空
+        # ＋ 各連桿 TF 有效且新鮮。本節點**另外**要求資料本身不是
+        # 缺失／過期，兩者皆成立才套用。預設 False。
+        p('freespace_confirmed', False)
 
         g = lambda k: self.get_parameter(k).value
         self.report_frame = str(g('report_frame'))
@@ -132,6 +137,12 @@ class WholeBodySafetyNode(Node):
             self.cfg.vmax = _vm
         self.vmax_overrides = _ov
         self.vmax_effective = [float(x) for x in self.cfg.vmax]
+        # 外部提供的「已確認自由空間」宣告。**不等於**本節點會套用 ——
+        # 每個週期還要求資料不是缺失／過期（見 _tick）。
+        self.freespace_declared = bool(g('freespace_confirmed'))
+        self.cfg.freespace_confirmed = False        # 逐週期決定，不預先開啟
+        self._n_freespace_applied = 0
+        self._n_freespace_withheld = 0
 
         self.K: WholeBodyKinematics | None = None
         # Same order the distance node derives, from the same description. The
@@ -215,6 +226,9 @@ class WholeBodySafetyNode(Node):
             f'{self.vmax_effective[0]:.6f} base_ang={self.vmax_effective[2]:.6f} '
             f'arm_max={max(self.vmax_effective[3:]):.6f} '
             f'overrides={self.vmax_overrides or "無（沿用預設）"}')
+        self.get_logger().info(
+            f'wholebody_safety freespace_declared={self.freespace_declared}'
+            f'（宣告不等於套用：每週期另要求資料非缺失／過期）')
 
     # ------------------------------------------------------------ inputs
     def _on_urdf(self, msg) -> None:
@@ -351,6 +365,23 @@ class WholeBodySafetyNode(Node):
                 # actually fires at 47 or 62 ms would make every acceleration
                 # and jerk bound wrong by the same ratio, and the jitter is
                 # exactly what has never been measured on this node.
+                # **狀態分類**：宣告的自由空間只有在資料本身沒問題時才成立。
+                # 缺資料／過期／溢位在上面已各自轉成 reason 5/7/8 而停止；
+                # 走到這裡代表資料是活的。再要求沒有任何一列是 STALE/UNKNOWN，
+                # 才把 NODATA 讀成「範圍內沒有東西」。
+                st_ok = True
+                if pts:
+                    st_ok = all(int(pt.status) in (0, int(STATUS_NODATA))
+                                for pt in pts)
+                apply_fs = bool(self.freespace_declared and st_ok
+                                and not getattr(self, '_pts_stale', False)
+                                and pts)
+                self.cfg.freespace_confirmed = apply_fs
+                if self.freespace_declared:
+                    if apply_fs:
+                        self._n_freespace_applied += 1
+                    else:
+                        self._n_freespace_withheld += 1
                 dt = (now - self._tick_t) if self._tick_t is not None else self.cfg.dt
                 dt = float(min(max(dt, 1e-3), 10.0 * self.cfg.dt))
                 a_prev = None

@@ -132,6 +132,15 @@ class SafetyConfig:
     stale_obstacle_speed: float = 0.30   # m/s an unseen obstacle may close at
     stale_speed_cap: float = 0.05        # m/s cap while any row is stale
     nodata_speed_cap: float = 0.05       # m/s cap while any row has no distance
+    # **狀態分類**，不是把上面的值調大。
+    # NODATA 在兩種情況下都會出現，語意完全不同：
+    #   (a) 資料未知 —— 沒收到、過期、TF 失效。**必須**維持退化上限。
+    #   (b) 已確認的自由空間 —— 場景檢查通過、障礙物設定為空、
+    #       各連桿 TF 有效且新鮮，NODATA 代表「範圍內沒有東西」。
+    # 只有 (b) 才可以不套 nodata_speed_cap；關節、速度、加速度、jerk
+    # 等限制**一律保留**。預設 False，一般模式行為完全不變。
+    # 呼叫端必須自行確認 (b) 的事實，本旗標不自行推論。
+    freespace_confirmed: bool = False
     blind_approach_cap: float = 0.03     # m/s toward an occluded direction
 
     # Budgets. Measured cost of the projection on the 5B problem size (66 rows
@@ -282,7 +291,10 @@ def _rows_from_points(K, q, pts, cfg, v_in):
     JL = _link_jacobians(K, q, pts)
     for pi, pt in enumerate(pts):
         if pt.status == STATUS_NODATA:
-            cap = min(cap, cfg.nodata_speed_cap)
+            # 已確認的自由空間：NODATA 是「範圍內沒有東西」，不是「不知道」。
+            # 未確認時一律維持退化上限 —— 不知道就不給速度。
+            if not getattr(cfg, 'freespace_confirmed', False):
+                cap = min(cap, cfg.nodata_speed_cap)
             continue
         J6, R = JL[pt.frame]
         J = _row_at(J6, R, pt.offset)             # 3 x n, linear part

@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.join(WS, 'install', 'ammr_wholebody_mpc',
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE                 # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa
 from ammr_wholebody_mpc.wholebody_safety_filter import (             # noqa: E402
-    SafetyConfig, filter_velocity)
+    STATUS_NODATA, DetectionPoint, SafetyConfig, filter_velocity)
 from wb_cmd_chain_e2 import CmdChainE2                               # noqa: E402
 from wb_qp_lowspeed import (SceneFacts, check_e2_bounds,             # noqa: E402
                             constraints_lowspeed, lowspeed_cfg)
@@ -132,6 +132,14 @@ def main():
     facts = SceneFacts(obstacles_configured=0, tf_ok_links=len(link_names),
                        n_links=len(link_names), rows_total=len(free_rows),
                        rows_status_ok=0)
+    # **與線上相同的濾波器輸入**：距離節點在自由空間下每個連桿一列 NODATA。
+    # 先前離線餵空點集合，與線上不等價（空集合 cap=inf、NODATA cap=0.05），
+    # 那正是 wb_solver_iso_094526 離線／線上結果相反的原因。
+    pts_online = [DetectionPoint(frame=n, p=np.zeros(3),
+                                 n=np.array([1.0, 0.0, 0.0]), d=0.0,
+                                 status=int(STATUS_NODATA), age=0.0,
+                                 occluded=False, offset=np.zeros(3), rho=0.015)
+                  for n in link_names]
 
     # 求解器參數：**沿用既有預設**，逐項寫出以便查核
     a = types.SimpleNamespace(
@@ -160,6 +168,12 @@ def main():
                         dt=1.0 / cl.rate, fix_base=False)
     if cl.lowspeed_qp:
         scfg = lowspeed_cfg(scfg)
+        # **狀態分類**：空場景已由 facts 確認，NODATA 讀成「範圍內沒有東西」。
+        # 未確認時這裡維持 False，退化上限照舊生效。
+        scfg.freespace_confirmed = bool(facts.empty_scene_confirmed)
+        print(f'[cfg] freespace_confirmed={scfg.freespace_confirmed}'
+              f'（NODATA 的語意：'
+              f'{"範圍內沒有東西" if scfg.freespace_confirmed else "資料未知"}）')
         print(f'[cfg] **低速 QP 配置**：速度框 → |vx|,|vy| ≤ '
               f'{scfg.vmax[0]:.6f}, |wz| ≤ {scfg.vmax[2]}, 手臂 ≤ {scfg.vmax[3]}')
         print(f'[cfg] 空場景確認：障礙物設定 {facts.obstacles_configured} 個、'
@@ -234,7 +248,7 @@ def main():
         v_raw, _T, _ep, _er = M.WholeBody.solve(sh, T_des)   # **真正的 solve**
 
         # ---- 安全濾波器（真正的 filter_velocity）----
-        sr = filter_velocity(K, q9, v_raw, [], cfg=scfg,
+        sr = filter_velocity(K, q9, v_raw, pts_online, cfg=scfg,
                              v_prev=v_prev, a_prev=a_prev, dt=period)
         v_saf = np.asarray(sr.v, float)
 
@@ -284,8 +298,9 @@ def main():
             'e2_bounds_why': check_e2_bounds(v_body)[1],
             'con': getattr(sh, 'last_con_info', None),
         })
+        # a_prev 必須用**前兩筆**輸出；先前寫成先更新 v_prev 再算，恆為 0
+        a_prev = ((v_saf - v_prev) / period) if v_prev is not None else None
         v_prev = v_saf.copy()
-        a_prev = (v_saf - (v_prev if v_prev is not None else v_saf)) / period
         if chain.fail is not None:
             stop_reason = f'E2 整體失效：{chain.fail}'
             break
