@@ -30,6 +30,38 @@ sys.path.insert(0, HERE)
 from obstacle_geometry import load_dyn_obstacles                   # noqa: E402
 
 SDF = os.path.join(WS, 'src/ammr_bringup/worlds/bigarena.sdf')
+
+
+def load_static(sdf_path):
+    """場景裡的**靜態**物件：牆、known_obs、unknown_obs。
+
+    先前版本只畫了 10 顆動態障礙物，靜態的 41 個全部沒畫 ——
+    畫面因此看起來像機器人在繞空氣，繞行的原因看不出來。
+
+    顏色取 SDF 自己的 diffuse，不另外配色、不做分類標註。
+    全部為 box 且 yaw = 0（已核對 41/41）；遇到其他情形就拋出，不靜默略過。
+    """
+    import re
+    s = re.sub(r'<!--.*?-->', '', open(sdf_path).read(), flags=re.S)
+    out = []
+    pat = r'<model name="((?:wall|known_obs|unknown_obs)_\d+)">(.*?)</model>'
+    for m in re.finditer(pat, s, re.S):
+        name, body = m.group(1), m.group(2)
+        p = re.search(r'<pose>([^<]+)</pose>', body)
+        v = [float(x) for x in p.group(1).split()] if p else [0.0] * 6
+        if any(abs(x) > 1e-9 for x in v[3:6]):
+            raise ValueError(f'{name} 有非零旋轉，本算圖未處理')
+        g = re.search(r'<collision[^>]*>.*?<geometry>\s*<box>\s*'
+                      r'<size>([^<]+)</size>', body, re.S)
+        if not g:
+            raise ValueError(f'{name} 不是 box，本算圖未處理')
+        sx, sy, _sz = (float(x) for x in g.group(1).split())
+        d = re.search(r'<diffuse>([^<]+)</diffuse>', body)
+        rgb = ([float(x) for x in d.group(1).split()][:3] if d
+               else [0.6, 0.6, 0.6])
+        out.append((name, v[0], v[1], sx, sy,
+                    tuple(int(round(c * 255)) for c in rgb)))
+    return out
 BG, GRID = (250, 250, 251), (228, 233, 238)
 OBS = (150, 158, 166)
 ROBOT, HEAD = (33, 79, 125), (203, 107, 39)
@@ -69,7 +101,7 @@ def draw_shape(dr, v, kind, params, off, ox, oy):
         dr.polygon(pts, fill=OBS)
 
 
-def draw_pane(im, v, shapes, obs_xy, rx, ry, ryaw, trail):
+def draw_pane(im, v, shapes, obs_xy, rx, ry, ryaw, trail, statics=()):
     dr = ImageDraw.Draw(im, 'RGBA')
     for gx in np.arange(math.floor(v.cx - 30), v.cx + 30, 1.0):
         p0, p1 = v.px(gx, v.cy - 30), v.px(gx, v.cy + 30)
@@ -77,6 +109,10 @@ def draw_pane(im, v, shapes, obs_xy, rx, ry, ryaw, trail):
     for gy in np.arange(math.floor(v.cy - 30), v.cy + 30, 1.0):
         p0, p1 = v.px(v.cx - 30, gy), v.px(v.cx + 30, gy)
         dr.line([p0, p1], fill=GRID, width=2)
+    for _n, cx, cy, sx, sy, rgb in statics:      # 靜態物件畫在動態之下
+        hx, hy = sx / 2, sy / 2
+        dr.polygon([v.px(cx - hx, cy - hy), v.px(cx + hx, cy - hy),
+                    v.px(cx + hx, cy + hy), v.px(cx - hx, cy + hy)], fill=rgb)
     for name, (ox, oy) in obs_xy.items():
         for kind, params, off, _z in shapes.get(name, []):
             draw_shape(dr, v, kind, params, off, ox, oy)
@@ -113,6 +149,9 @@ def main() -> int:
 
     D = {k: np.load(getattr(a, k)) for k in ('off', 'on')}
     shapes = load_dyn_obstacles(SDF, 'as_generated')
+    statics = load_static(SDF)
+    print(f'靜態物件 {len(statics)} 個（牆／known_obs／unknown_obs），'
+          f'動態障礙物 {len(shapes)} 顆')
     rel = {k: D[k]['robot'][:, 0] - float(D[k]['t0_goal']) for k in D}
     t_end = a.t_end or min(float(rel[k].max()) for k in D)
     ts = np.arange(0.0, t_end, 1.0 / a.sample_hz)
@@ -150,7 +189,7 @@ def main() -> int:
             lo = max(0, i - ntr)
             trail = list(zip(P[k][0][lo:i + 1], P[k][1][lo:i + 1]))
             draw_pane(pane, v, shapes, obs_xy,
-                      P[k][0][i], P[k][1][i], P[k][2][i], trail)
+                      P[k][0][i], P[k][1][i], P[k][2][i], trail, statics)
             im.paste(pane, (j * pw, 0))
         ImageDraw.Draw(im).line([(pw, 0), (pw, H)], fill=(214, 221, 229), width=3)
         im.save(os.path.join(a.out, f'f{i:06d}.png'))
