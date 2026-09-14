@@ -566,3 +566,42 @@ Warp 1.13.0 initialized:
 [INFO] [1789370826.584198103] [wholebody_safety]: wholebody_safety freespace_declared=True（宣告不等於套用：每週期另要求資料非缺失／過期）
 [INFO] [1789370826.636046679] [arm_vel_adapter]: 關節順序已對 /isaac_wholebody_sim 核對通過：['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
 [15:27:11] [5/8] 起動前檢查（內容 / 新鮮度 / 端點身分）
+[INFO] [1789370840.085338356] [arm_link_distance]: arm_link_distance: certified sampling -- base_link 1200pt rho 28.1mm, link_base 362pt rho 14.3mm, link1 226pt rho 13.7mm, link2 362pt rho 12.8mm, link3 226pt rho 12.8mm, link4 362pt rho 13.5mm, link5 141pt rho 12.6mm, link6 55pt rho 13.3mm, uflite_gripper_link 88pt rho 13.3mm, uflite_finger1 8pt rho 12.7mm, uflite_finger2 8pt rho 12.3mm
+[INFO] [1789370840.093300786] [arm_link_distance]: arm_link_distance: 12 points, 0 obstacles, frame odom
+  通過  /clock 前進：434 則，6.519999854 → 10.919999756
+  通過  /joint_states 內容：六軸齊全=True、position 有限=True、velocity 有效=True（三項皆納入判準）
+  通過  /joint_states 新鮮度：資料時間 age = 0.0000 s（上限 0.5）；接收時間 age = 0.0000 s（另記，不作判準）
+  通過  /joint_states 端點身分：發布者 ['/isaac_wholebody_sim']（預期恰一個、含 isaac_wholebody_sim）
+  通過  /odom 內容：frame='odom'→'base_footprint'（預期 'odom'→'base_footprint'）、位置有限=True、四元數模長=1.000000、twist 有限=True
+  通過  /odom 新鮮度：資料時間 age = 0.0000 s（上限 0.5）；接收時間 age = 0.0000 s（另記，不作判準）
+  通過  /odom 端點身分：發布者 ['/isaac_wholebody_sim']（預期恰一個、含 isaac_wholebody_sim）
+  通過  /robot_description 內容：長度 89900 字元、含 <robot=True（latched QoS 訂閱）
+  通過  距離資料 內容：11 點、缺欄位 無、抽驗值有效=True、抽驗 d 最小 0.0
+  通過  距離資料 新鮮度：資料時間 age = 0.0000 s（上限 0.5）；接收時間 age = 0.0000 s（另記，不作判準）
+  通過  /arm_link_distance/points 端點身分：發布者 ['/arm_link_distance']（預期恰一個、含 arm_link_distance）
+  通過  TF odom → base_footprint（Isaac 直接發布）：資料時間 age = 0.0000 s；平移 (-0.0008, 0.0002, -0.0000)
+  通過  TF odom → base_link 內容（TF 鏈組合）：平移 (-0.0008, 0.0002, 0.0500)、四元數模長 1.000000、yaw +0.125°
+  通過  TF odom → base_link 新鮮度：資料時間 age = 0.0000 s（上限 0.5）
+  通過  /wb_vel_cmd 端點身分：發布者 ['/arm_vel_adapter']（預期恰一個、含 arm_vel_adapter）
+
+起動前檢查全部通過
+[15:27:20] [6/8] 放行前確認剩餘模擬時間
+[15:27:20]   目前模擬時間 11.050s；剩餘 128.950s；需要 70.0s
+[15:27:20]   起 rec_cmdout PID=560094
+[15:27:20]   起 rec_diag PID=560098
+[rec] 記錄 /wholebody_safety/cmd_out → /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_portrait_1532[rec] 記錄 /wholebody_safety/diag → /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_portrait_1532
+
+[15:27:22] [7/8] 自由空間起動前檢查（場景／逐連桿 TF／下游速度框讀回）
+[preflight] 模擬時間已就緒（11 s）；TF 新鮮度以 sim time 計算
+[preflight] obstacles=0、TF 11/11、執行端場景 True
+[preflight] 下游速度框 {'vmax_base_lin': 0.035255339, 'vmax_base_ang': 0.1999, 'vmax_arm': 0.9999} vs 求解端 {'vmax_base_lin': 0.03525533905932737, 'vmax_base_ang': 0.19990000000000002, 'vmax_arm': 0.9999}
+[preflight] 全部通過
+[preflight] -> /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_portrait_1532/freespace_preflight.json
+[15:27:29]   **低速 QP 求解節點**（目標 0.300 0.000 0.550；不是 B 基線、不是 WGMPC）
+[solver] 低速 QP 配置的 Isaac 自由空間閉迴路驗證
+[solver] 本配置不是 B 基線。B 凍結於 baseline_B_frozen_20260909.md；本檔只是把 E2 執行界限放進約束集的低速自由空間配置。
+[solver] 空場景已確認：障礙物設定 0、TF 11/11、執行端場景檢查通過
+[INFO] [1789370850.041150703] [wholebody_pregrasp]: 低速 QP 配置 vmax base_lin=0.035255 base_ang=0.199900 arm=0.999900
+  等待 /joint_states、/odom 與距離資料…
+  起始 底盤 (-0.001, +0.000, +0.2°)  手臂 [-0.001, 0.003, -0.001, 0.0, 0.0, -0.0]
+  起始 TCP (0.195, 0.001, 0.400)  → 目標 (0.300, 0.000, 0.550)
