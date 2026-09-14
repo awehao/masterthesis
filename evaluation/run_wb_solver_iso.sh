@@ -53,6 +53,15 @@ PROFILE_S=60.0                  # 任務上限；準備時間另計
 ARM_RATE="${ARM_RATE:-0.05}"    # joint2，rad/s；與 arm 趟次同幅度
 TARGET="${TARGET:-0.300 0.000 0.550}"   # odom；事前定版，不因未到達而更換
 TASK_TIMEOUT="${TASK_TIMEOUT:-60}"      # 首筆求解器命令起算的模擬時間上限
+# 執行時錄影（模擬器內相機）。RECORD=1 才開；**設定其餘一律不變**。
+REC_ARGS=""
+if [ "${RECORD:-0}" = "1" ]; then
+  REC_ARGS="--record-frames $DIR/frames --record-res ${REC_RES:-1920x1080}"
+  REC_ARGS="$REC_ARGS --record-fps ${REC_FPS:-20} --record-from ${REC_FROM:-12}"
+  REC_ARGS="$REC_ARGS --record-to ${REC_TO:-45} --record-focal ${REC_FOCAL:-35}"
+  [ -n "${REC_EYE:-}" ] && REC_ARGS="$REC_ARGS --record-eye $REC_EYE"
+  [ -n "${REC_AT:-}" ] && REC_ARGS="$REC_ARGS --record-at $REC_AT"
+fi
 CRITERIA="$WS/evaluation/results/specs/wb_solver_iso_criteria_v1.yaml"
 OBSERVE_S="${OBSERVE_S:-10.0}"  # 到達後觀察窗
 NEED_S=$(python3 -c "print($PROFILE_S + $OBSERVE_S)")
@@ -93,7 +102,9 @@ say "  純邏輯測試通過（命令鏈 + 判定器）"
 
 say "[2/8] 啟動 Isaac **E2.1** 執行端（--mode solver_freespace）"
 spawn isaac "$ISAAC_PY" -u evaluation/isaac_wholebody_sim_e2.py \
-    --out "$DIR/sim" --mode solver_freespace --sim-limit "$SIM_LIMIT" --solver-label qp --run-label "低速 QP 配置的 Isaac 自由空間閉迴路驗證"
+    --out "$DIR/sim" --mode solver_freespace --sim-limit "$SIM_LIMIT" \
+    --solver-label qp --run-label "低速 QP 配置的 Isaac 自由空間閉迴路驗證" \
+    $REC_ARGS
 
 say "[3/8] 等 /clock 前進（剩餘準備時間 $(prep_left)s）"
 timeout "$(prep_left)" python3 evaluation/clock_advancing.py --discover 180 \
@@ -194,9 +205,12 @@ rclpy.try_shutdown()")
 timeout 120 python3 -u evaluation/wb_wait_sim_t.py --until "$NOW2" \
     --plus "$OBSERVE_S" --wall-timeout-s 120 2>&1 | tee -a "$LOG" || true
 
-say "等執行端收尾（觀察窗 ${OBSERVE_S}s 之後）"
+# 錄影會拖慢牆鐘（算繪），等待窗要跟著放大；**模擬設定不變**
+WAIT_S="${WAIT_S:-120}"
+[ "${RECORD:-0}" = "1" ] && WAIT_S="${WAIT_S_REC:-900}"
+say "等執行端收尾（觀察窗 ${OBSERVE_S}s 之後；最多等 ${WAIT_S}s 牆鐘）"
 DONE=0
-for i in $(seq 120); do
+for i in $(seq "$WAIT_S"); do
   kill -0 "${PIDS[0]}" 2>/dev/null || { DONE=1; break; }
   sleep 1
 done

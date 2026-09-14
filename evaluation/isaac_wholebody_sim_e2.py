@@ -80,6 +80,17 @@ ap.add_argument('--mode', default='base',
                          'pregrasp'],
                 help='驗收順序：base → arm → sync → solver_freespace；'
                      'pregrasp 另由 PREGRASP_PRECONDITIONS_MET 禁止')
+# ---- 執行時錄影（模擬器內相機；**不加任何文字、不改場景**）----
+ap.add_argument('--record-frames', default='', help='輸出 PNG 的目錄；空=不錄')
+ap.add_argument('--record-res', default='1920x1080')
+ap.add_argument('--record-fps', type=float, default=30.0)
+ap.add_argument('--record-eye', default='')
+ap.add_argument('--record-at', default='')
+ap.add_argument('--record-focal', type=float, default=24.0)
+ap.add_argument('--record-from', type=float, default=0.0, help='起始模擬時間')
+ap.add_argument('--record-to', type=float, default=1e9, help='結束模擬時間')
+ap.add_argument('--record-warmup', type=int, default=12,
+                help='RTX 註解器暖機次數；單次算繪會拿到過期影像')
 ap.add_argument('--run-label', default='',
                 help='趟次名稱標示，寫進輸出以免日後被誤讀')
 ap.add_argument('--solver-label', default='dls',
@@ -360,6 +371,51 @@ def main():
           f'（核對，非假設）', flush=True)
     globals()['ROOT_FP_OFFSET_MM'] = d_root * 1000.0
 
+    # --- 執行時錄影：**這一趟真正在跑的畫面**，不是姿態重演 ---
+    # 只加相機與燈光（無碰撞體，不影響 solver_freespace 的場景條件），
+    # **不加任何文字、標記或覆疊**；算繪只讀場景、不寫回狀態。
+    rec_dir = a.record_frames
+    rec_index, rec_cam, rec_every = [], None, 1
+    if rec_dir:
+        import imageio.v2 as _imageio                          # noqa: E402
+        from isaacsim.sensors.camera import Camera             # noqa: E402
+        from pxr import UsdLux                                 # noqa: E402
+        os.makedirs(rec_dir, exist_ok=True)
+        _k = UsdLux.DistantLight.Define(stage, '/World/rec_key')
+        _k.CreateIntensityAttr(3000.0)
+        UsdGeom.Xformable(_k).AddRotateXYZOp().Set(Gf.Vec3f(-45.0, 0.0, 35.0))
+        UsdLux.DomeLight.Define(stage, '/World/rec_dome').CreateIntensityAttr(450.0)
+        _at = (np.array([float(v) for v in a.record_at.split(',')])
+               if a.record_at else np.array([0.06, 0.0, 0.34]))
+        _eye = (np.array([float(v) for v in a.record_eye.split(',')])
+                if a.record_eye else _at + np.array([1.55, -2.30, 1.05]))
+        _w, _h = (int(v) for v in a.record_res.split('x'))
+        rec_cam = Camera(prim_path='/World/rec_cam', resolution=(_w, _h))
+        _cx = UsdGeom.Xformable(stage.GetPrimAtPath('/World/rec_cam'))
+        _cx.ClearXformOpOrder()
+        _cx.AddTransformOp().Set(Gf.Matrix4d().SetLookAt(
+            Gf.Vec3d(*[float(v) for v in _eye]), Gf.Vec3d(*[float(v) for v in _at]),
+            Gf.Vec3d(0, 0, 1)).GetInverse())
+        _cg = UsdGeom.Camera(stage.GetPrimAtPath('/World/rec_cam'))
+        _cg.GetFocalLengthAttr().Set(float(a.record_focal))
+        _cg.GetClippingRangeAttr().Set(Gf.Vec2f(0.02, 200.0))
+        rec_every = max(1, int(round(1.0 / (a.record_fps * a.physics_dt))))
+        globals()['REC'] = (rec_cam, rec_dir, rec_every, rec_index, _imageio)
+        globals()['REC_INDEX'] = rec_index
+        # **RTX 註解器有延遲**：不 initialize、不暖機的話 get_rgba() 取不到影像
+        #（先前錄影趟寫出 0 幀即為此）。取不到就中止，不讓趟次靜默錄成空的。
+        rec_cam.initialize()
+        for _ in range(max(1, a.record_warmup)):
+            world.render()
+            _img0 = rec_cam.get_rgba()
+            if _img0 is not None and len(_img0):
+                break
+        else:
+            print('[wb] **相機暖機後仍取不到影像，中止**'); return 12
+        for _ in range(max(1, a.record_warmup)):
+            world.render()
+        print('[wb] 相機暖機完成', flush=True)
+
     q = robot.get_joint_positions()
     kp = np.zeros(robot.num_dof, dtype=np.float32)
     kd = np.zeros(robot.num_dof, dtype=np.float32)
@@ -433,6 +489,7 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
     log, stop = [], 'sim_limit'
     STOP_HOLD_STEPS = 100        # 失效後續量 1.0 s，證明停止行為而非直接關掉
     fail_steps = 0
+    n_step = 0
     sent_prev = (float('nan'),) * 3     # 上一步送進速度 API 的世界速度
     t_prev = None
     q_prev = None
@@ -443,6 +500,18 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
     print(f'[wb] 起始 CPU {tc0} °C（{tsrc}）', flush=True)
     while True:
         world.step(render=False)
+        _R = globals().get('REC')
+        _tn = float(world.current_time)
+        if (_R is not None and (n_step % _R[2]) == 0
+                and a.record_from <= _tn <= a.record_to):
+            world.render()
+            _im = _R[0].get_rgba()
+            if _im is not None and len(_im):
+                _R[4].imwrite(
+                    os.path.join(_R[1], f'f{len(_R[3]):06d}.png'),
+                    np.asarray(_im)[:, :, :3].astype(np.uint8))
+                _R[3].append([len(_R[3]), round(float(world.current_time), 4)])
+        n_step += 1
         t = float(world.current_time)
         if t_prev is not None and t <= t_prev:
             chain.note_time_reset(t)
@@ -601,6 +670,13 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         'schema': 'wb_sim/1', 'mode': a.mode,
         'spec': 'evaluation/results/specs/isaac_wholebody_port_v2.md',
         'run_label': a.run_label,
+        'record_frames': (None if not a.record_frames else
+                          {'dir': a.record_frames,
+                           'n': len(globals().get('REC_INDEX', [])),
+                           'window_sim_s': [a.record_from, a.record_to],
+                           'index': globals().get('REC_INDEX', []),
+                           'note': ('模擬器內相機，執行時錄影；'
+                                    '無文字、無覆疊、場景未加碰撞體')}),
         'solver_label': a.solver_label,
         'solver_note': ('僅供記錄的上游求解模式標示。**dls 不是 B 基線**；'
                         'B 凍結於 baseline_B_frozen_20260909.md（--solver qp、'

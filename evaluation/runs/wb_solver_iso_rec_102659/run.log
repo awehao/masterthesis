@@ -1,0 +1,721 @@
+[10:27:00] === 低速 QP 配置 Isaac 自由空間閉迴路驗證 RUN_ID=wb_solver_iso_rec_102659 domain=110 ===
+[10:27:00] 準備逾時 240s（牆鐘）；任務需要模擬時間 70.0s；SIM_LIMIT=140
+[10:27:00] 判準 /home/howardchen/masterthesis/evaluation/results/specs/wb_solver_iso_criteria_v1.yaml（事前定版）；目標 0.300 0.000 0.550；任務上限 60s
+[10:27:00] 判準 sha256 e9a79e5be61773f3（由判定器實際載入）
+[10:27:00] 起跑前 CPU 68.875  來源 hwmon:k10temp
+[10:27:00] [1/8] 純邏輯測試（不開模擬器）
+A 結構有效性：長度、有限值
+  通過  長度 8 整筆拒收  長度 8 ≠ 9
+  通過  整體失效已設定  命令無效：長度 8 ≠ 9
+  通過  含 NaN 整筆拒收  第 4 個分量非有限值 nan
+  通過  含 Inf 整筆拒收  第 0 個分量非有限值 inf
+  通過  長度 9 且全有限 ⇒ 接受
+B 同一物理步使用同一份快照
+  通過  已取用的快照不被本步覆寫  recv_seq=1
+  通過  下一步才換新快照  recv_seq=2
+C 手臂積分：初始化、限位、過期凍結
+  通過  初始設定點由實測關節位置建立  首步 (0.305, -0.195, 0.105, 0.005, 0.405, -0.095)
+  通過  初始化事件有記錄
+  通過  初始化後不再被量測值覆寫  setpoint[0]=0.5500
+  通過  積分超出限位 ⇒ 整體失效  關節 1 積分結果 +2.010000 超出限位 [-2.0000, +2.0000]
+D 命令過期：停止積分，設定點凍結
+  通過  過期時底盤分量歸零  (0.0, 0.0, 0.0)
+  通過  過期時設定點凍結
+  通過  停止積分有計數  n_frozen=1
+  通過  凍結不等於實際速度為零（僅語意，須另量測）  見 summary 的 fail_note / 規格 §1.1
+E 輪級檢查：越界即整體失效，不只縮底盤
+  通過  低速通過
+  通過  超界 ⇒ 整筆停止（回傳 None）
+  通過  整體失效原因為輪級  底盤輪級檢查未通過：底盤線速度 > 0.05 m/s
+  通過  未縮底盤後續跑
+F 時間重設
+  通過  時間非單調 ⇒ 整體失效  模擬時間非單調遞增
+G 接收端編號不冒稱來源時間
+  通過  欄位名為 recv_seq / recv_sim_t  recv_seq=1, recv_sim_t=1.234
+  通過  summary 註明不得冒稱端到端延遲
+H 模式錯誤：接收端拒收，不事後切掉分量
+  通過  base 模式收到手臂分量 ⇒ 拒收  模式 base 不允許手臂分量，收到 (0.1, 0.0, 0.0, 0.0, 0.0, 0.0)
+  通過  整體失效（非只把手臂歸零）  命令無效：模式 base 不允許手臂分量，收到 (0.1, 0.0, 0.0, 0.0, 0.0, 0.0)
+  通過  base 模式純底盤 ⇒ 接受
+  通過  arm 模式收到底盤分量 ⇒ 拒收  模式 arm 不允許底盤分量，收到 (0.01, 0, 0)
+  通過  arm 模式純手臂 ⇒ 接受
+  通過  sync 模式兩者皆可
+I 失效停止：底盤停止、手臂保持設定點、可繼續量測
+  通過  已失效  命令無效：長度 8 ≠ 9
+  通過  底盤停止  (0.0, 0.0, 0.0)
+  通過  手臂保持在失效前的設定點
+  通過  可重複呼叫（迴圈可繼續量測）
+  通過  設定點未建立時不對手臂下命令  base=(0.0, 0.0, 0.0)
+J 監看失效：讀不到不等於安全
+  通過  監看失效 ⇒ 整體失效  監看失效（cpu_temp）：讀不到（來源 None）
+  通過  失效後 step 不再執行命令
+  通過  但停止命令仍可取得
+K pregrasp 不可由參數繞過
+  通過  無 --wheel-limit-implemented 旗標
+  通過  由程式常數把關
+  通過  pregrasp 檢查存在
+  通過  回報為低速介面界限而非輪級限制
+L 回授確實發布
+  通過  js_pub.publish 有呼叫
+  通過  odom_pub.publish 有呼叫
+  通過  status_pub.publish 有呼叫
+  通過  clock_pub.publish 有呼叫
+
+M 關節順序核對
+  通過  正確順序 ⇒ 通過
+  通過  交換兩個關節 ⇒ 拒絕  順序不同（集合相同）：欄位 [(1, 'joint3', 'joint2'), (2, 'joint2', 'joint3')]
+  通過  服務缺失／回應無效 ⇒ 拒絕  消費端未回報 joints（服務缺失或回應無效）
+  通過  型別不對 ⇒ 拒絕  joints 型別不對：str
+  通過  關節集合不同 ⇒ 拒絕  關節集合不同：消費端 ['a', 'a', 'a', 'a', 'a', 'a'] vs 濾波器 ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
+N 消費端節點可設定，預設仍為 Gazebo 控制器
+  通過  預設常數為 /lite6_vel_controller
+  通過  Adapter 接受 ctrl 參數
+  通過  查詢路徑用 self.ctrl
+  通過  新增 --consumer-node 旗標
+  通過  order_ok 為假時仍拒絕轉送
+O Isaac 端的 joints 與實際命令映射同源
+  通過  單一命令順序常數
+  通過  ARM 指向同一份
+  通過  joints 參數由該順序宣告
+  通過  啟動時檢查重複關節
+  通過  啟動時檢查重複 DOF 索引
+  通過  記錄 命令欄位 → 關節 → DOF 索引
+
+全部通過
+A E1 的檢查語意未變
+  [ok] A1 E1 手臂超速仍整筆失效 — 關節 2 速度 +5.0000 超過 1.0
+  [ok] A2 E1 結構不合整筆拒收
+  [ok] A1 E2 手臂超速仍整筆失效 — 關節 2 速度 +5.0000 超過 1.0
+  [ok] A2 E2 結構不合整筆拒收
+B 低幅度：E2 與 E1 輸出一致（λ=1，不被修改）
+  [ok] B1 本階段幅度下 E2 與 E1 逐筆一致
+  [ok] B2 且 E2 記錄 modified 步數為 0
+C 階躍＋反向：限制**實際觸發**
+  [ok] C1 λ<1 的步數 > 0（限制確實被觸發） — 15 / 400 步
+  [ok] C2 全序列輪加速度都在上限內 — 6.2500 ≤ 6.2500 m/s²
+  [ok] C3 全序列輪速都在上限內 — 0.089100 ≤ 0.277500
+  [ok] C4 未提高既有速度界限 — vx ≤ 0.05、wz ≤ 0.2（低速介面界限未動）
+D 逾時：底盤減速、手臂設定點立即停止積分
+  [ok] D1 設定點在逾時後完全不變 — 最大變動 0.000e+00 rad
+  [ok] D2 底盤確實減到零
+  [ok] D3 減速每步在加速度上限內 — 2.6600 ≤ 6.2500
+  [ok] D4 減速步數與加速度預算相符（E1 為 1 步瞬間歸零） — 輪速 0.0891 / 預算 0.0625 → 2 步
+  [ok] D5 逾時標記不保留耦合方向
+E 摘要欄位
+  [ok] E1 摘要欄位齊全 — 缺 set()
+  [ok] E2 明記不宣稱上游全身安全性不變
+  [ok] E3 明記座標系為本體
+
+全部通過
+參數：r=0.05 L=0.245 w_lim=0.2775 m/s  a_lim(dt=0.01)=0.0625 m/s
+A 修改策略：同一個 λ 施加於完整 9 維
+  [ok] A1 本階段幅度不被修改 — λ=1.0, 輪速 0.0300 ≤ 0.2775
+  [ok] A2 大幅度被限制且標記 modified — λ=0.062500 reason=wheel_accel binding=['wheel_accel[1]', 'wheel_accel[3]']
+  [ok] A3 底盤與手臂**同比例**縮放 — 手臂比例 0.062500 vs λ 0.062500
+  [ok] A4 只縮底盤會改掉底盤/手臂比例（反例） — 同λ 比例保留=True；只縮底盤 比例被改=True
+  [ok] A5 u_prev≠0 時保留的是**增量方向**，非請求命令比例 — 增量方向 cos=1.000000000000；請求比例被保留=False
+B 輪速約束
+  [ok] B1 速度綁定時 reason 正確 — λ=0.022727 binding=['wheel_speed[1]', 'wheel_speed[3]']
+  [ok] B2 輸出恰好落在輪速上限內 — 0.277500 ≤ 0.277500
+  [ok] B3 400 步序列每筆都在輪速上限內 — 最大 0.277500 ≤ 0.277500
+B4 座標系：W 作用於**本體**速度，yaw 非零不得碰巧通過
+  [ok] B4 同一世界速度、不同 yaw → λ 不同（證明作用在本體） — yaw=0° λ=0.069444  yaw=40° λ=0.090653  yaw=90° λ=0.071023
+  [ok] B5 誤用世界速度會得到與 yaw 無關的 λ（反例） — 誤用世界 λ=0.069444（等於 yaw=0 的情形）
+C 輪加速度約束
+  [ok] C1 連續兩筆的輪加速度都在上限內 — 最大 6.2500 ≤ 6.2500 m/s²
+  [ok] C2 dt 越小，單步預算越小 — dt=0.001 λ=0.006250 < dt=0.01 λ=0.062500
+  [ok] C3 加速度綁定時 reason 正確 — binding=['wheel_accel[1]', 'wheel_accel[3]']
+D 手臂限制在凸組合後仍成立
+  [ok] D1 3000 組隨機凸組合，手臂分量從未超限 — 最大 0.998169 ≤ 1.0
+E 前提失敗的處置
+  [ok] E1 prev 超速 → prev_infeasible
+  [ok] E2 不偷偷換基準（不回傳縮放結果）
+  [ok] E3 dt=0.0 → dt_invalid，停止模式
+  [ok] E3 dt=-0.01 → dt_invalid，停止模式
+  [ok] E3 dt=0.1 → dt_gap，停止模式
+  [ok] E4 stop_command 為全零且另外標記
+F 逾時：底盤經輪級限制減速，手臂設定點**立即**停止積分
+  [ok] F1 逾時後手臂速率**恰為零** — λ=0.2500；若沿用 9 維插值會是 0.037500 rad/s（設定點還在積分）
+  [ok] F2 反例確認：9 維插值在此確實不為零 — (1−λ)·dq2_prev = 0.037500 rad/s
+  [ok] F3 逾時明確標記不保留耦合方向
+  [ok] F4 底盤本步仍在加速度上限內 — 6.2500 ≤ 6.2500 m/s²
+  [ok] F5 需要多步才減到零（輪速 > 單步預算） — 輪速 0.2500 > 預算 0.0625 → 4 步（0.040s）
+  [ok] F6 每步都在加速度上限內 — 最大 6.2500 ≤ 6.2500 m/s²
+  [ok] F7 步數與加速度預算相符 — 實得 4，推算 4
+  [ok] F8 **第一步之後手臂速率就一直是零**（設定點不再積分） — joint2 序列 [0.05, 0.0, 0.0] …
+  [ok] F9 本階段幅度下底盤一步到零（與 E1 無法區分），手臂仍立即歸零 — 輪速 0.0300 ≤ 單步預算 0.0625
+  [ok] F10 逾時時前值超速 → stop_unverified，不偷換基準
+G 記錄欄位（policy §5）
+  [ok] G1 欄位齊全 — 缺 set()
+  [ok] G2 修改前後命令都有記錄
+  [ok] G3 λ<1 時 modified 為真且有限制原因
+  [ok] G4 未修改時 modified 為假、reason 為 ok
+
+全部通過
+[10:27:00]   純邏輯測試通過（命令鏈 + 判定器）
+[10:27:00] [2/8] 啟動 Isaac **E2.1** 執行端（--mode solver_freespace）
+[10:27:00]   起 isaac PID=353084
+[10:27:00] [3/8] 等 /clock 前進（剩餘準備時間 240s）
+Starting kit application with the following args:  ['/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/exts/isaacsim.simulation_app/isaacsim/simulation_app/simulation_app.py', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/apps/isaacsim.exp.base.python.kit', '--/app/tokens/exe-path=/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/kit', '--/persistent/app/viewport/displayOptions=3094', '--/rtx/materialDb/syncLoads=True', '--/rtx/hydra/materialSyncLoads=True', '--/omni/kit/plugin/syncUsdLoads=True', '--/app/renderer/resolution/width=1280', '--/app/renderer/resolution/height=720', '--/app/window/width=1440', '--/app/window/height=900', '--/renderer/multiGpu/enabled=True', '--/app/fastShutdown=True', '--/app/installSignalHandlers=0', '--ext-folder', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/exts', '--ext-folder', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/apps', '--/physics/cudaDevice=0', '--/plugins/carb.tasking.plugin/threadCount=16', '--/plugins/omni.tbb.globalcontrol/maxThreadCount=16', '--portable', '--no-window', '--/app/window/hideUi=1']
+Passing the following args to the base kit application:  ['--out', '/home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_102659/sim', '--mode', 'solver_freespace', '--sim-limit', '140', '--solver-label', 'qp', '--run-label', '低速 QP 配置的 Isaac 自由空間閉迴路驗證', '--record-frames', '/home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_102659/frames', '--record-res', '1920x1080', '--record-fps', '20', '--record-from', '12', '--record-to', '45']
+2026-09-14T02:27:00Z [Info] [carb] Logging to file: /home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/kit/logs/Kit/Isaac-Sim Python/6.0/kit_20260914_102700.log
+[0.049s] [ext: omni.assets.plugins-0.0.0] startup
+[0.051s] [ext: omni.blobkey-1.1.2] startup
+[0.051s] [ext: omni.kit.async_engine-0.0.3] startup
+[0.152s] [ext: omni.client.lib-1.1.1] startup
+[0.161s] [ext: omni.client-1.3.0] startup
+[0.164s] [ext: omni.protobuf.lib-1.0.0] startup
+[0.165s] [ext: omni.grpc.lib-1.0.0] startup
+[0.169s] [ext: omni.metrics.core-0.0.3] startup
+[0.169s] [ext: omni.datastore-0.0.0] startup
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789352820.829125  353084 descriptor_database.cc:633] File already exists in database: grpc/health/v1/health.proto
+W0000 00:00:1789352820.829147  353084 message.cc:301] Protobuf GeneratedMessageFactory: File is already registered: grpc/health/v1/health.proto
+[0.170s] [ext: omni.gpu_foundation.shadercache.vulkan-1.0.0] startup
+[0.172s] [ext: omni.hsscclient-1.1.4] startup
+[0.172s] [ext: omni.stats-1.0.1] startup
+[0.173s] [ext: omni.ujitso.default-1.0.0] startup
+[0.175s] [ext: omni.gpu_foundation-0.0.0] startup
+[0.416s] [ext: carb.windowing.plugins-1.0.1] startup
+[0.416s] [ext: omni.kit.renderer.init-1.0.1] startup
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 0 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 1 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 2 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 3 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 4 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 5 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 6 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 7 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 8 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 9 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 10 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 11 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 12 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 13 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 14 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 15 belongs to.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] all CPU packages were empty!  Failed to find any available CPU cores.
+2026-09-14T02:27:01Z [436ms] [Error] [omni.platforminfo.plugin] failed to retrieve CPU information.
+2026-09-14T02:27:01Z [762ms] [Warning] [omni.rtx] Skipping unsupported non-NVIDIA GPU: AMD Ryzen 7 7700 8-Core Processor (RADV RAPHAEL_MENDOCINO)
+2026-09-14T02:27:01Z [762ms] [Warning] [omni.rtx] Skipping unsupported non-NVIDIA GPU: AMD Ryzen 7 7700 8-Core Processor (RADV RAPHAEL_MENDOCINO)
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 595.84        | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA GeForce RTX 5070          | Yes: 0 |     | 12227   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2f04      | 9661f60e.. |
+|     |                                  |        |     |            | 1         |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | AMD Ryzen 7 7700 8-Core Proces.. |        |     | 10719   MB | 1002      | 0          |
+|     |                                  |        |     |            | 164e      | 00000000.. |
+|     |                                  |        |     |            | d         |            |
+|=============================================================================================|
+| OS: 24.04.4 LTS (Noble Numbat) ubuntu, Version: 24.04.4, Kernel: 7.0.0-31-generic
+| XServer Vendor: The X.Org Foundation, XServer Version: 12101011 (1.21.1.11)
+| Processor: AMD Ryzen 7 7700 8-Core Processor
+| Cores: Unknown | Logical Cores: 0
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 31134 | Free Memory: 17673
+| Total Page/Swap (MB): 8191 | Free Page/Swap: 7293
+|---------------------------------------------------------------------------------------------|
+2026-09-14T02:27:01Z [1,011ms] [Warning] [omni.rtx] IOMMU is enabled.
+[1.154s] [ext: omni.kit.pipapi-0.0.0] startup
+[1.155s] [ext: omni.kit.telemetry-0.5.2] startup
+[1.191s] [ext: omni.kit.loop-isaac-1.6.0] startup
+[1.192s] [ext: omni.kit.test-2.0.7] startup
+[1.444s] [ext: omni.materialx.libs-1.0.9] startup
+[1.449s] [ext: omni.gpucompute.plugins-0.0.0] startup
+[1.450s] [ext: omni.usd.config-1.0.7] startup
+[1.453s] [ext: omni.usd.libs-1.0.3] startup
+[1.529s] [ext: omni.iray.libs-0.0.1] startup
+[1.533s] [ext: omni.mdl-57.0.3] startup
+[1.547s] [ext: omni.mdl.neuraylib-0.2.20] startup
+[1.548s] [ext: omni.kit.usd.mdl-1.1.9] startup
+[1.627s] [ext: omni.appwindow-1.2.2] startup
+[1.629s] [ext: omni.kit.renderer.core-1.2.2] startup
+[2.628s] [ext: omni.kit.renderer.capture-2.0.1] startup
+[2.630s] [ext: omni.kit.renderer.imgui-2.0.6] startup
+[2.678s] [ext: omni.ui-3.2.0] startup
+[2.686s] [ext: omni.kit.mainwindow-1.0.3] startup
+[2.687s] [ext: carb.audio-0.1.0] startup
+[2.698s] [ext: omni.uiaudio-1.0.0] startup
+[2.699s] [ext: omni.kit.uiapp-0.0.0] startup
+[2.699s] [ext: omni.usd.schema.metrics.assembler-110.1.0] startup
+[2.701s] [ext: omni.usd.schema.audio-0.0.1] startup
+[2.704s] [ext: omni.usd_resolver-1.0.0] startup
+[2.707s] [ext: omni.usd.core-1.8.3] startup
+[2.710s] [ext: omni.metropolis.schema-0.0.3] startup
+[2.711s] [ext: isaacsim.anim.robot.schema-0.1.1] startup
+[2.711s] [ext: omni.usd.schema.anim-0.0.1] startup
+[2.725s] [ext: omni.usd.schema.geospatial-0.0.1] startup
+[2.727s] [ext: omni.usd.schema.omnigraph-1.0.1] startup
+[2.732s] [ext: omni.usd.schema.semantics-0.0.0] startup
+[2.734s] [ext: omni.activity.core-1.0.3] startup
+[2.736s] [ext: omni.cubric-0.1.0] startup
+[2.736s] [ext: omni.graph.exec-0.9.6] startup
+[2.736s] [ext: omni.hydra.scene_delegate-0.3.5] startup
+[2.739s] [ext: usdrt.scenegraph-7.6.3] startup
+[2.758s] [ext: omni.hydra.usdrt_delegate-7.5.2] startup
+[2.762s] [ext: omni.inspect-1.0.2] startup
+[2.764s] [ext: omni.kit.actions.core-1.0.0] startup
+[2.765s] [ext: omni.kit.audiodeviceenum-1.0.2] startup
+[2.766s] [ext: omni.kit.commands-1.5.0] startup
+[2.768s] [ext: omni.kit.exec.core-0.13.5] startup
+[2.769s] [ext: omni.kit.usd_undo-0.1.8] startup
+[2.769s] [ext: omni.kit.window.popup_dialog-2.0.25] startup
+[2.772s] [ext: omni.kit.widget.nucleus_connector-2.3.1] startup
+[2.774s] [ext: omni.timeline-1.1.0] startup
+[2.775s] [ext: omni.usd-1.16.0] startup
+[2.817s] [ext: omni.graph.core-3.1.2] startup
+[2.820s] [ext: omni.kit.notification_manager-1.0.11] startup
+[2.821s] [ext: isaacsim.core.deprecation_manager-0.4.2] startup
+[2.822s] [ext: isaacsim.replicator.agent.schema-0.1.1] startup
+[2.822s] [ext: isaacsim.robot.schema-6.3.7] startup
+[2.826s] [ext: isaacsim.robot_motion.schema-0.2.1] startup
+[2.827s] [ext: omni.anim.behavior.schema-110.1.0] startup
+[2.829s] [ext: omni.anim.graph.schema-110.1.1] startup
+[2.834s] [ext: omni.anim.navigation.schema-110.1.0] startup
+[2.837s] [ext: omni.behavior.tree.schema-110.1.0] startup
+[2.838s] [ext: omni.kit.asset_converter-6.0.1] startup
+[2.848s] [ext: omni.usd.schema.flow-110.0.0] startup
+[2.848s] [ext: omni.usd.schema.mujoco-1.1.1] startup
+[2.848s] [ext: omni.usd.schema.newton-1.2.1] startup
+[2.849s] [ext: omni.usd.schema.omni_lens_distortion-1.0.0] startup
+[2.850s] [ext: omni.usd.schema.omni_projectors-1.0.0] startup
+[2.850s] [ext: omni.usd.schema.omni_sensors-0.0.0] startup
+[2.856s] [ext: omni.usd.schema.omniscripting-1.0.1] startup
+[2.859s] [ext: omni.usd.schema.physical_lighting-0.1.0] startup
+[2.862s] [ext: omni.usd.schema.physx-110.1.13] startup
+[2.885s] [ext: omni.usd.schema.render_settings.rtx-1.0.2] startup
+[2.888s] [ext: omni.usd.schema.usd_particle_field-1.0.0] startup
+[2.888s] [ext: isaacsim.core.version-2.1.1] startup
+[2.888s] [ext: omni.kit.menu.core-1.2.0] startup
+[2.889s] [ext: omni.kit.menu.utils-2.2.4] startup
+[2.895s] [ext: isaacsim.app.about-2.3.1] startup
+[2.898s] [ext: isaacsim.asset.transformer-1.2.5] startup
+[2.901s] [ext: omni.scene.optimizer.core-110.1.0] startup
+[2.946s] [ext: isaacsim.asset.importer.utils-1.8.1] startup
+[2.948s] [ext: omni.convexdecomposition-110.1.13] startup
+[2.950s] [ext: omni.physics-110.1.13] startup
+[2.953s] [ext: omni.physx.gpu-110.1.13] startup
+[2.953s] [ext: omni.physx.foundation-110.1.13] startup
+[2.963s] [ext: omni.usdphysics-110.1.13] startup
+[2.965s] [ext: omni.physx.cooking-110.1.13] startup
+[2.969s] [ext: omni.physx-110.1.13] startup
+[2.979s] [ext: omni.physics.physx-110.1.13] startup
+[2.981s] [ext: isaacsim.asset.exporter.urdf-2.0.5] startup
+[2.988s] [ext: omni.kit.clipboard-1.1.1] startup
+[2.989s] [ext: omni.kit.usd.layers-2.6.1] startup
+[2.995s] [ext: omni.kit.widget.context_menu-1.4.0] startup
+[2.996s] [ext: omni.kit.context_menu-1.9.0] startup
+[2.997s] [ext: omni.kit.helper.file_utils-0.1.10] startup
+[2.998s] [ext: omni.kit.widget.nucleus_info-2.0.2] startup
+[2.999s] [ext: omni.kit.search_core-1.0.8] startup
+[2.999s] [ext: omni.kit.widget.path_field-2.0.13] startup
+[3.000s] [ext: omni.kit.widget.browser_bar-2.0.10] startup
+[3.000s] [ext: omni.kit.widget.filebrowser-2.13.4] startup
+[3.004s] [ext: omni.kit.widget.options_menu-1.1.6] startup
+[3.005s] [ext: omni.kit.widget.options_button-1.0.3] startup
+[3.006s] [ext: omni.kit.widget.search_delegate-1.0.9] startup
+[3.006s] [ext: omni.ui.scene-2.0.3] startup
+[3.010s] [ext: omni.kit.window.filepicker-2.15.5] startup
+[3.019s] [ext: omni.kit.window.file_importer-1.1.21] startup
+[3.021s] [ext: omni.kit.material.library-3.1.2] startup
+[3.024s] [ext: isaacsim.asset.transformer.rules-1.7.10] startup
+[3.032s] [ext: omni.usdex.libs-2.2.2] startup
+[3.038s] [ext: isaacsim.asset.importer.mjcf-3.10.1] startup
+[3.040s] [ext: isaacsim.asset.importer.urdf-3.11.2] startup
+[3.043s] [ext: omni.kit.primitive.mesh-1.1.0] startup
+[3.044s] [ext: omni.kit.stage_template.core-1.1.22] startup
+[3.045s] [ext: omni.kit.stage_templates-2.0.2] startup
+[3.046s] [ext: omni.usd.metrics.assembler-110.1.2] startup
+[3.048s] [ext: omni.warp.core-1.13.0] startup
+[3.186s] [ext: isaacsim.core.experimental.utils-0.17.2] startup
+[3.187s] [ext: omni.physics.stageupdate-110.1.13] startup
+[3.290s] [ext: omni.physics.tensors-110.1.13] startup
+[3.295s] [ext: omni.physx.tensors-110.1.13] startup
+[3.300s] [ext: isaacsim.core.simulation_manager-1.15.6] startup
+[3.314s] [ext: isaacsim.storage.native-1.9.3] startup
+[3.316s] [ext: omni.usd.metrics.assembler.physics-110.1.13] startup
+[3.317s] [ext: isaacsim.core.utils-4.1.7] startup
+[3.319s] [ext: isaacsim.core.prims-0.11.7] startup
+[4.492s] [ext: isaacsim.core.api-5.2.13] startup
+[4.498s] [ext: isaacsim.core.cloner-1.7.3] startup
+[4.499s] [ext: isaacsim.test.docstring-1.3.2] startup
+[4.502s] [ext: isaacsim.core.experimental.prims-1.8.9] startup
+[4.520s] [ext: isaacsim.core.experimental.primdata-0.3.2] startup
+[4.523s] [ext: omni.graph.tools-1.81.0] startup
+[4.539s] [ext: omni.graph-1.142.5] startup
+[4.568s] [ext: isaacsim.core.experimental.actuators-0.1.2] startup
+[4.580s] [ext: isaacsim.core.experimental.materials-0.7.1] startup
+[4.583s] [ext: isaacsim.core.experimental.objects-0.8.1] startup
+[4.632s] [ext: omni.hydra.engine.stats-1.0.5] startup
+[4.634s] [ext: omni.hydra.rtx.shadercache.vulkan-1.0.0] startup
+[4.635s] [ext: omni.index.libs-387500.4413.0] startup
+[4.635s] [ext: omni.index-1.0.1] startup
+[4.635s] [ext: omni.ujitso.client-0.0.0] startup
+[4.636s] [ext: omni.usd.schema.playback-1.0.0] startup
+[4.639s] [ext: omni.volume-0.5.2] startup
+[4.643s] [ext: omni.hydra.rtx-1.0.4] startup
+2026-09-14T02:27:05Z [4,634ms] [Warning] [omni.log] Source: omni.hydra was already registered.
+[4.676s] [ext: omni.kit.hydra_texture-1.6.0] startup
+[4.680s] [ext: omni.kit.raycast.query-1.2.0] startup
+[4.684s] [ext: omni.kit.viewport.legacy_gizmos-1.0.24] startup
+[4.686s] [ext: omni.kit.viewport.registry-104.0.6] startup
+[4.687s] [ext: omni.kit.viewport.scene_camera_model-1.0.7] startup
+[4.690s] [ext: omni.kit.widget.viewport-109.2.0] startup
+[4.693s] [ext: omni.kit.window.drop_support-1.0.8] startup
+[4.694s] [ext: omni.kit.viewport.window-109.0.2] startup
+[4.707s] [ext: omni.kit.viewport.utility-2.0.1] startup
+[4.708s] [ext: isaacsim.core.rendering_manager-0.4.3] startup
+[4.723s] [ext: omni.graph.action_core-1.1.9] startup
+[4.726s] [ext: omni.graph.action_nodes_core-2.11.0] startup
+[4.728s] [ext: omni.graph.action_nodes-2.11.0] startup
+[4.750s] [ext: omni.graph.action-2.10.2] startup
+[4.751s] [ext: omni.graph.image.core-0.6.1] startup
+[4.752s] [ext: omni.graph.image.nodes-1.3.1] startup
+[4.753s] [ext: omni.graph.nodes_core-2.11.0] startup
+[4.758s] [ext: omni.graph.nodes-2.12.0] startup
+[4.763s] [ext: omni.kit.hotkeys.core-1.3.12] startup
+[4.764s] [ext: omni.kit.property.adapter.core-1.1.1] startup
+[4.766s] [ext: omni.kit.property.adapter.usd-1.0.5] startup
+[4.767s] [ext: omni.kit.widget.filter-1.1.5] startup
+[4.768s] [ext: omni.kit.widget.highlight_label-1.0.3] startup
+[4.768s] [ext: omni.kit.widget.searchfield-1.1.8] startup
+[4.769s] [ext: omni.kit.window.file_exporter-1.0.36] startup
+[4.770s] [ext: omni.kit.widget.stage-4.4.0] startup
+[4.776s] [ext: omni.kit.window.content_browser_registry-0.0.6] startup
+[4.777s] [ext: omni.kit.window.file-2.0.10] startup
+[4.779s] [ext: omni.kit.window.content_browser-3.1.8] startup
+[4.787s] [ext: omni.kit.window.property-1.15.1] startup
+[4.905s] [ext: omni.kit.property.usd-4.9.4] startup
+[4.913s] [ext: omni.graph.scriptnode-2.10.2] startup
+[4.921s] [ext: omni.kit.widget.searchable_combobox-1.0.7] startup
+[4.922s] [ext: omni.kit.widget.settings-2.0.0] startup
+[4.923s] [ext: omni.kit.window.preferences-1.8.3] startup
+[4.928s] [ext: omni.kit.viewport.menubar.core-107.2.2] startup
+[4.938s] [ext: omni.syntheticdata-0.6.15] startup
+[4.961s] [ext: omni.replicator.nv-1.1.1] startup
+[4.966s] [ext: omni.videoencoding-0.2.1] startup
+[4.968s] [ext: omni.replicator.core-1.13.27] startup
+2026-09-14T02:27:05Z [4,953ms] [Warning] [pxr.Semantics] pxr.Semantics is deprecated - please use Semantics instead
+Warp 1.13.0 initialized:
+   CUDA Toolkit 12.9, Driver 13.2
+   Devices:
+     "cpu"      : "x86_64"
+     "cuda:0"   : "NVIDIA GeForce RTX 5070" (11 GiB, sm_120, mempool enabled)
+   Kernel cache:
+     /home/howardchen/.cache/warp/1.13.0
+2026-09-14T02:27:05Z [5,014ms] [Warning] [omni.replicator.core.scripts.extension] No material configuration file, adding configuration to material settings directly.
+[5.154s] [ext: isaacsim.core.nodes-5.10.5] startup
+[5.180s] [ext: isaacsim.core.throttling-2.3.5] startup
+[5.181s] [ext: omni.kit.manipulator.viewport-107.0.1] startup
+[5.182s] [ext: omni.graph.visualization.nodes-2.1.4] startup
+[5.193s] [ext: omni.kit.window.extensions-1.5.10] startup
+[5.197s] [ext: isaacsim.gui.components-1.8.5] startup
+[5.201s] [ext: isaacsim.robot.surface_gripper-3.6.2] startup
+[5.210s] [ext: isaacsim.robot.manipulators-3.4.4] startup
+[5.219s] [ext: isaacsim.robot_motion.lula-4.1.3] startup
+[5.225s] [ext: isaacsim.robot_motion.motion_generation-8.2.9] startup
+[5.229s] [ext: isaacsim.cortex.framework-1.0.18] startup
+[5.230s] [ext: isaacsim.cortex.behaviors-2.0.17] startup
+[5.232s] [ext: isaacsim.examples.base-1.3.2] startup
+[5.233s] [ext: omni.kit.widget.zoombar-1.0.7] startup
+[5.234s] [ext: omni.kit.browser.core-2.3.18] startup
+[5.237s] [ext: omni.kit.browser.folder.core-2.0.2] startup
+[5.241s] [ext: omni.kit.widget.stage_icons-1.0.8] startup
+[5.242s] [ext: omni.kit.window.stage-2.6.1] startup
+[5.245s] [ext: omni.kit.menu.stage-1.2.7] startup
+[5.246s] [ext: omni.kit.usd.collect-3.0.6] startup
+[5.248s] [ext: omni.kit.widget.prompt-1.0.7] startup
+[5.248s] [ext: omni.kit.tool.collect-2.2.19] startup
+[5.250s] [ext: isaacsim.examples.browser-0.3.2] startup
+[5.252s] [ext: omni.kit.search.files-1.0.4] startup
+[5.252s] [ext: omni.kit.widget.calendar-1.0.9] startup
+[5.253s] [ext: omni.kit.widget.extended_searchfield-1.0.31] startup
+[5.260s] [ext: omni.simready.content.browser-0.3.7] startup
+[5.339s] [ext: isaacsim.gui.content_browser-0.4.3] startup
+[5.341s] [ext: omni.kit.selection-0.1.6] startup
+[5.342s] [ext: isaacsim.gui.menu-2.10.5] startup
+[5.350s] [ext: isaacsim.gui.property-1.6.4] startup
+[5.356s] [ext: omni.kit.viewport.actions-110.0.0] startup
+[5.359s] [ext: omni.kit.viewport.menubar.display-107.1.3] startup
+[5.360s] [ext: isaacsim.gui.sensors.icon-2.2.1] startup
+[5.362s] [ext: omni.behavior.scripting.core-110.1.0] startup
+[5.364s] [ext: isaacsim.replicator.behavior-1.5.4] startup
+[5.365s] [ext: isaacsim.replicator.experimental.domain_randomization-1.2.5] startup
+[5.377s] [ext: isaacsim.replicator.domain_randomization-1.2.2] startup
+[5.434s] [ext: isaacsim.replicator.writers-1.5.4] startup
+[5.453s] [ext: isaacsim.robot.experimental.wheeled_robots-0.2.11] startup
+[5.470s] [ext: isaacsim.robot.policy.examples-5.2.12] startup
+[5.478s] [ext: isaacsim.robot.wheeled_robots-5.2.4] startup
+[5.482s] [ext: isaacsim.robot.wheeled_robots.nodes-0.1.5] startup
+[5.497s] [ext: isaacsim.robot_motion.experimental.motion_generation-6.1.3] startup
+[5.505s] [ext: isaacsim.robot_motion.cumotion-1.3.1] startup
+[5.516s] [ext: omni.kit.numpy.common-0.1.3] startup
+[5.517s] [ext: isaacsim.sensors.camera-1.7.9] startup
+[5.541s] [ext: isaacsim.sensors.experimental.physics-3.0.2] startup
+[5.548s] [ext: omni.sensors.net-1.0.1] startup
+[5.550s] [ext: omni.sensors.nv.common-3.0.0] startup
+[5.563s] [ext: omni.sensors.nv.materials-2.0.0] startup
+[5.566s] [ext: omni.sensors.nv.acoustic-3.0.0] startup
+[5.569s] [ext: omni.sensors.nv.ids-2.0.1] startup
+[5.570s] [ext: omni.sensors.nv.lidar-3.0.0] startup
+[5.574s] [ext: omni.sensors.nv.radar-3.0.0] startup
+[5.577s] [ext: isaacsim.sensors.experimental.rtx-1.4.6] startup
+[5.745s] [ext: isaacsim.sensors.physics.nodes-1.5.3] startup
+[5.751s] [ext: isaacsim.util.debug_draw-3.2.3] startup
+[5.858s] [ext: isaacsim.sensors.physx-2.5.5] startup
+[5.865s] [ext: isaacsim.sensors.rtx-15.17.1] startup
+[5.874s] [ext: isaacsim.simulation_app-2.18.4] startup
+[5.874s] [ext: omni.anim.curve.core-1.6.0] startup
+[5.883s] [ext: omni.graph.ui_nodes-2.11.1] startup
+[5.904s] [ext: omni.hydra.scene_api-0.1.3] startup
+[5.908s] [ext: omni.kit.manipulator.camera-110.0.0] startup
+[5.911s] [ext: omni.kit.manipulator.selector-1.1.4] startup
+[5.912s] [ext: omni.kit.manipulator.transform-107.0.0] startup
+[5.915s] [ext: omni.kit.widget.toolbar-2.1.0] startup
+[5.920s] [ext: omni.kit.manipulator.tool.snap-1.5.14] startup
+[5.923s] [ext: omni.kit.viewport.manipulator.transform-107.0.4] startup
+[5.925s] [ext: omni.kit.manipulator.prim.core-108.0.2] startup
+[5.929s] [ext: omni.kit.manipulator.prim.usd-107.0.3] startup
+[5.930s] [ext: omni.kit.manipulator.prim-108.0.0] startup
+[5.930s] [ext: omni.kit.manipulator.selection-109.0.1] startup
+[5.931s] [ext: omni.kit.menu.create-2.0.2] startup
+[5.932s] [ext: omni.kit.property.audio-1.0.16] startup
+[5.936s] [ext: omni.kit.property.camera-1.0.14] startup
+[5.937s] [ext: omni.kit.property.geometry-2.1.2] startup
+[5.939s] [ext: omni.kit.property.light-1.0.14] startup
+2026-09-14T02:27:06Z [5,938ms] [Warning] [omni.usd] Encountered USD Warnings but USD Diagnostics are currently muted. To view USD Warnings, please set the '/persistent/app/usd/muteUsdDiagnostics' setting to false in Preferences page.
+[5.968s] [ext: omni.kit.property.material-1.14.6] startup
+[5.973s] [ext: omni.kit.property.render-1.2.2] startup
+[5.974s] [ext: omni.kit.property.transform-1.6.9] startup
+[5.976s] [ext: omni.kit.property.bundle-1.5.1] startup
+[5.978s] [ext: omni.kit.usdz_export-1.1.0] startup
+[5.980s] [ext: omni.kit.tool.asset_importer-6.0.1] startup
+[5.984s] [ext: omni.kit.ui.actions-1.0.5] startup
+[5.985s] [ext: omni.kit.viewport.menubar.camera-107.0.10] startup
+[5.988s] [ext: omni.kit.viewport.menubar.lighting-107.3.2] startup
+[5.990s] [ext: omni.kit.viewport.menubar.render-110.0.0] startup
+[5.992s] [ext: omni.kit.viewport.menubar.settings-110.0.1] startup
+[5.995s] [ext: omni.kit.window.console-1.1.9] startup
+[5.998s] [ext: omni.kit.window.status_bar-0.1.11] startup
+[6.000s] [ext: omni.kit.window.toolbar-3.0.3] startup
+[6.002s] [ext: omni.ocio-0.1.1] startup
+[6.003s] [ext: omni.physx.commands-110.1.13] startup
+[6.006s] [ext: omni.replicator.replicator_yaml-2.0.12] startup
+[6.014s] [ext: omni.rtx.window.settings-0.8.0] startup
+[6.018s] [ext: omni.rtx.settings.core-0.7.1] startup
+[6.021s] [ext: omni.usd.metrics.assembler.ui-110.1.1] startup
+[6.026s] [ext: semantics.schema.editor-2.0.2] startup
+[6.029s] [ext: semantics.schema.property-2.0.2] startup
+[6.030s] [ext: omni.kit.menu.common-2.0.2] startup
+[6.031s] [ext: isaacsim.exp.base-6.0.1] startup
+[6.031s] [ext: isaacsim.exp.base.python-6.0.1] startup
+[6.033s] Simulation App Starting
+[7.009s] Simulation App Startup Complete
+[7.017s] app ready
+2026-09-14T02:27:08Z [8,204ms] [Warning] [isaacsim.asset.importer.utils.impl.urdf_to_mjc_physx_conversion_utils] Stiffness and damping not available joint /omni_bot/Physics/finger_joint1, actuator will be created without gain parameters
+2026-09-14T02:27:08Z [8,204ms] [Warning] [isaacsim.asset.importer.utils.impl.urdf_to_mjc_physx_conversion_utils] Stiffness and damping not available joint /omni_bot/Physics/finger_joint2, actuator will be created without gain parameters
+  URDF → USD：/home/howardchen/masterthesis/evaluation/models/isaac_usd/omni_bot_manip_103/omni_bot_manip.usda
+  Physics 變體：可選 ['mujoco', 'none', 'physics', 'physx']，沿用匯入器的選擇 'physx'
+[wb] solver_freespace 場景條件已核對（語意檢查，非名稱比對）：機器人與地面共 20 個碰撞體，其他位置 0 個
+[wb] articulation root /World/omni_bot/Geometry/base_footprint（剛體 107）
+[wb] 零摩擦材質：支撐球 4 + 地面 2 → 綁定 6
+[wb] 命令欄位 → 關節名稱 → articulation 索引：
+    v[3]  joint1    DOF 0
+    v[4]  joint2    DOF 1
+    v[5]  joint3    DOF 2
+    v[6]  joint4    DOF 3
+    v[7]  joint5    DOF 4
+    v[8]  joint6    DOF 5
+[wb] 無缺漏、無重複；執行中不改順序
+[wb] articulation DOF 8
+[wb] link_tcp prim /World/omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link/link_tcp
+[wb] base_footprint prim /World/omni_bot/Geometry/base_footprint
+[wb] articulation 根 vs base_footprint 位置差 0.0000 mm（核對，非假設）
+2026-09-14T02:27:10Z [9,997ms] [Warning] [isaacsim.sensors.camera.camera] 'verticalAperture' (1.5290800094604493) and 'horizontalAperture' (2.0954999923706055) are inconsistent with the pixel resolution aspect ratio (1.7777777777777777). Setting 'verticalAperture' to 1.1787187457084656 to ensure square pixels.
+2026-09-14T02:27:10Z [10,136ms] [Warning] [isaacsim.sensors.camera.camera] Annotator 'rgb' returned None or unexpected shape for /Render/OmniverseKit/HydraTextures/Replicator. A few render frames may be required before data is available.
+2026-09-14T02:27:10Z [10,146ms] [Warning] [omni.syntheticdata.plugin] OgnSdPostRenderVarToHost : rendervar copy from texture directly to host buffer is counter-performant. Please use copy from texture to device buffer first.
+2026-09-14T02:27:10Z [10,228ms] [Warning] [isaacsim.sensors.camera.camera] Annotator 'rgb' returned None or unexpected shape for /Render/OmniverseKit/HydraTextures/Replicator. A few render frames may be required before data is available.
+2026-09-14T02:27:10Z [10,229ms] [Warning] [omni.syntheticdata.plugin] SdRenderVarPtr missing valid input renderVar LdrColorSDhost
+[wb] 相機暖機完成
+[wb] **E2 輪級限制**：r=0.05 L=0.245 w_lim=0.2775 m/s a_lim(dt=0.01)=0.0625 m/s；底盤分量為**本體座標**
+[wb] 模式 solver_freespace：允許分量 {'base': True, 'arm': True}；不符模式的命令整筆拒收
+[wb] 進入主迴圈；等待 /wb_vel_cmd
+[wb] 起始 CPU 75.375 °C（hwmon:k10temp）
+  配對用時 10.5 s；0.5 s 內模擬時間前進 0.51 s（52 則，要求 >= 0.5）
+[10:27:11] [4/8] 啟動 robot_state_publisher、距離節點與安全層
+[10:27:11]   起 rsp PID=353648
+[10:27:11]   起 dist PID=353652
+[WARN] [1789352832.003472874] [robot_state_publisher]: No robot_description parameter, but command-line argument available.  Assuming argument is name of URDF file.  This backwards compatibility fallback will be removed in the future.
+[WARN] [1789352832.010316006] [kdl_parser]: The root link base_footprint has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.
+[INFO] [1789352832.010709105] [robot_state_publisher]: Robot initialized
+[10:27:12]   下游低速框 lin=0.035255339 ang=0.199900000 arm=0.999900000（與求解端同源）
+[10:27:12]   **狀態分類**：freespace_confirmed:=true（宣告；節點每週期另要求資料非缺失／過期）
+[10:27:12]   起 safety PID=353686
+[10:27:12]   起 adapter PID=353690
+[INFO] [1789352832.563004803] [arm_vel_adapter]: 關節順序已對 /isaac_wholebody_sim 核對通過：['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
+[INFO] [1789352832.604360243] [wholebody_safety]: kinematics loaded from /home/howardchen/masterthesis/evaluation/models/omni_bot_wholebody_expanded.urdf; 11 arm links: base_link link_base link1 link2 link3 link4 link5 link6 uflite_gripper_link uflite_finger1 uflite_finger2
+[INFO] [1789352832.611473084] [wholebody_safety]: wholebody_safety: frame odom, 20 Hz, base DOF on
+[INFO] [1789352832.611805643] [wholebody_safety]: wholebody_safety vmax_effective base_lin=0.035255 base_ang=0.199900 arm_max=0.999900 overrides={'vmax_base_lin': 0.035255339, 'vmax_base_ang': 0.1999, 'vmax_arm': 0.9999}
+[INFO] [1789352832.612106842] [wholebody_safety]: wholebody_safety freespace_declared=True（宣告不等於套用：每週期另要求資料非缺失／過期）
+[10:27:17] [5/8] 起動前檢查（內容 / 新鮮度 / 端點身分）
+[INFO] [1789352846.299257040] [arm_link_distance]: arm_link_distance: certified sampling -- base_link 1200pt rho 28.1mm, link_base 362pt rho 14.3mm, link1 226pt rho 13.7mm, link2 362pt rho 12.8mm, link3 226pt rho 12.8mm, link4 362pt rho 13.5mm, link5 141pt rho 12.6mm, link6 55pt rho 13.3mm, uflite_gripper_link 88pt rho 13.3mm, uflite_finger1 8pt rho 12.7mm, uflite_finger2 8pt rho 12.3mm
+[INFO] [1789352846.305081954] [arm_link_distance]: arm_link_distance: 12 points, 0 obstacles, frame odom
+  通過  /clock 前進：652 則，6.309999859 → 12.819999713
+  通過  /joint_states 內容：六軸齊全=True、position 有限=True、velocity 有效=True（三項皆納入判準）
+  通過  /joint_states 新鮮度：資料時間 age = 0.0000 s（上限 0.5）；接收時間 age = 0.0000 s（另記，不作判準）
+  通過  /joint_states 端點身分：發布者 ['/isaac_wholebody_sim']（預期恰一個、含 isaac_wholebody_sim）
+  通過  /odom 內容：frame='odom'→'base_footprint'（預期 'odom'→'base_footprint'）、位置有限=True、四元數模長=1.000000、twist 有限=True
+  通過  /odom 新鮮度：資料時間 age = 0.0000 s（上限 0.5）；接收時間 age = 0.0000 s（另記，不作判準）
+  通過  /odom 端點身分：發布者 ['/isaac_wholebody_sim']（預期恰一個、含 isaac_wholebody_sim）
+  通過  /robot_description 內容：長度 89900 字元、含 <robot=True（latched QoS 訂閱）
+  通過  距離資料 內容：11 點、缺欄位 無、抽驗值有效=True、抽驗 d 最小 0.0
+  通過  距離資料 新鮮度：資料時間 age = 0.0000 s（上限 0.5）；接收時間 age = 0.0000 s（另記，不作判準）
+  通過  /arm_link_distance/points 端點身分：發布者 ['/arm_link_distance']（預期恰一個、含 arm_link_distance）
+  通過  TF odom → base_footprint（Isaac 直接發布）：資料時間 age = 0.0000 s；平移 (-0.0010, 0.0002, -0.0000)
+  通過  TF odom → base_link 內容（TF 鏈組合）：平移 (-0.0010, 0.0002, 0.0500)、四元數模長 1.000000、yaw +0.153°
+  通過  TF odom → base_link 新鮮度：資料時間 age = 0.0000 s（上限 0.5）
+  通過  /wb_vel_cmd 端點身分：發布者 ['/arm_vel_adapter']（預期恰一個、含 arm_vel_adapter）
+
+起動前檢查全部通過
+[10:27:26] [6/8] 放行前確認剩餘模擬時間
+[10:27:26]   目前模擬時間 12.950s；剩餘 127.050s；需要 70.0s
+[10:27:26]   起 rec_cmdout PID=354005
+[10:27:26]   起 rec_diag PID=354009
+[rec] 記錄 /wholebody_safety/cmd_out → /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_102659
+[rec] 記錄 /wholebody_safety/diag → /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_102659
+[10:27:28] [7/8] 自由空間起動前檢查（場景／逐連桿 TF／下游速度框讀回）
+[preflight] 模擬時間已就緒（13 s）；TF 新鮮度以 sim time 計算
+[preflight] obstacles=0、TF 11/11、執行端場景 True
+[preflight] 下游速度框 {'vmax_base_lin': 0.035255339, 'vmax_base_ang': 0.1999, 'vmax_arm': 0.9999} vs 求解端 {'vmax_base_lin': 0.03525533905932737, 'vmax_base_ang': 0.19990000000000002, 'vmax_arm': 0.9999}
+[preflight] 全部通過
+[preflight] -> /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_102659/freespace_preflight.json
+[10:27:34]   **低速 QP 求解節點**（目標 0.300 0.000 0.550；不是 B 基線、不是 WGMPC）
+[solver] 低速 QP 配置的 Isaac 自由空間閉迴路驗證
+[solver] 本配置不是 B 基線。B 凍結於 baseline_B_frozen_20260909.md；本檔只是把 E2 執行界限放進約束集的低速自由空間配置。
+[solver] 空場景已確認：障礙物設定 0、TF 11/11、執行端場景檢查通過
+[INFO] [1789352855.121019266] [wholebody_pregrasp]: 低速 QP 配置 vmax base_lin=0.035255 base_ang=0.199900 arm=0.999900
+  等待 /joint_states、/odom 與距離資料…
+  起始 底盤 (-0.001, +0.000, +0.2°)  手臂 [-0.001, 0.003, -0.001, 0.0, 0.0, -0.0]
+  起始 TCP (0.195, 0.001, 0.400)  → 目標 (0.300, 0.000, 0.550)
+  412 週期寫入 /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_102659/solver_out.json
+Exception ignored in: <function TransformListener.__del__ at 0x76efd091ef20>
+Traceback (most recent call last):
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/tf2_ros/transform_listener.py", line 119, in __del__
+    self.executor.shutdown()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 297, in shutdown
+    self._sigint_gc.destroy()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/signals.py", line 65, in destroy
+    with self.handle:
+rclpy._rclpy_pybind11.InvalidHandle: cannot use Destroyable because destruction was requested
+[10:27:57]   求解節點結束碼 0 —— **自報成功不等於驗收通過**
+[10:27:57]   到達後觀察 10.0s 模擬時間（不因求解器自報成功就收掉）
+[obs] 觀察窗結束：sim 31.260（需要 >= 31.250）
+[10:28:35] 等執行端收尾（觀察窗 10.0s 之後；最多等 900s 牆鐘）
+[wb] 停止：sim_limit @ sim 140.010
+[wb] -> /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_102659/sim/wb_run.json
+[243.387s] Simulation App Shutting Down
+[10:31:04] 收尾檢查
+[10:31:04] 收尾後 CPU 78.75  來源 hwmon:k10temp
+[10:31:04] [8/8] 離線判定（事前定版判準，不下修門檻）
+
+=== 低速 QP 配置的 Isaac 自由空間閉迴路驗證 ===
+  規格 evaluation/results/specs/wb_solver_iso_criteria_v1.yaml  wb_solver_iso_criteria/1 v1 sha256 e9a79e5be61773f3
+  **本配置的速度框與 B 基線不同。不得以本趟結果代表 B，也不得稱為 WGMPC。**
+  [通過] P1_起動前檢查通過                 fails=[]
+  [通過] P2_障礙物設定為 0                obstacles_configured=0
+  [通過] P3_每連桿 TF 合格               11/11
+  [通過] P4_執行端場景檢查                 endpoint_scene_ok=True
+  [通過] P5_下游與求解端同一份低速框            下游 {'vmax_base_lin': 0.035255339, 'vmax_base_ang': 0.1999, 'vmax_arm': 0.9999} vs 求解端 {'vmax_base_lin': 0.03525533905932737, 'vmax_base_ang': 0.19990000000000002, 'vmax_arm': 0.9999}
+  [通過] R0_Isaac 有記錄 link_tcp      E2.1 欄位 tcp_x/tcp_y/tcp_z + 旋轉矩陣
+  [通過] R1_兩來源同時達標並持續              最長連續 33.95s（≥ 2.0）；Isaac **全程最小**誤差 1.516 mm、FK 最小 1.501 mm、末值 22.359 mm
+  [通過] R2_兩來源一致                   最大差 0.220 mm（≤ 10）
+  [通過] R3_姿態誤差（完整三維）              最小 0.00245 rad（≤ 0.02）
+  [通過] C1_最長連續同動                  4.65s（≥ 3.0）；累計 4.65s（**實測運動判定**）
+  [通過] B1_線速度                     max 0.035275 ≤ 0.05
+  [通過] B2_角速度                     max 0.001740 ≤ 0.2
+  [通過] B3_手臂門檻不變                  arm_rate_max=1.0
+  [通過] B4_執行端界限未動                 0.05/0.2
+  [通過] B5_rejected                rejected=0
+  [通過] B6_fail_is_none            fail=None
+  [通過] L1_輪速                      max 0.035682 ≤ 0.2775
+  [通過] L2_輪加速度                    max 3.555384 ≤ 6.25
+  [通過] S1_log 涵蓋到達後觀察窗            到達 20.19s，窗至 28.19s，log 至 140.01s
+  [通過] S2_觀察窗內底盤最大位移              3.852 mm（≤ 20；未扣漂移）
+  [通過] S3_觀察窗內關節最大變化              1.514 mrad（≤ 50）
+  [通過] D1_pregrasp 由獨立條件禁止        preconditions=False
+  [通過] D2_熱中止門檻                   cpu_limit_c=92.0，峰值 84.625 °C
+
+  23/23 項通過
+  結論：判定通過
+  -> /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_102659/solver_iso_check.json
+[10:31:06] 輸出 /home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_rec_102659
+[10:31:06] 判定通過 —— **停下回報；pregrasp 仍由獨立條件禁止**
+[10:31:06] cleanup（只針對本趟 PID）...
+[INFO] [1789353066.490285231] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/arm_vel_adapter.py", line 190, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/arm_vel_adapter.py", line 182, in main
+    rclpy.spin(nd)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/arm_link_distance", line 33, in <module>
+    sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'arm_link_distance')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/arm_link_distance.py", line 511, in main
+    rclpy.spin(node)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/wholebody_safety", line 33, in <module>
+    sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'wholebody_safety')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/wholebody_safety_node.py", line 531, in main
+    rclpy.spin(node)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+[rec] 共 2539 則；最後 sim 140.01
+[rec] 共 2539 則；最後 sim 140.01
+[10:31:09] cleanup done

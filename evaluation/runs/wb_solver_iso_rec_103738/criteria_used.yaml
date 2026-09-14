@@ -1,0 +1,89 @@
+# 低速 QP 配置的 **Isaac 自由空間閉迴路驗證** 判準 v1
+#
+# **事前固定**：本檔與 evaluation/wb_solver_iso_check.py 在任何趟次執行之前定版。
+# 門檻沿用既有求解器設定（5 mm／0.02 rad／2 s／60 s），不是依任何結果選的。
+#
+# 本趟**不是 B 基線、不是 WGMPC**。B 凍結於 baseline_B_frozen_20260909.md。
+schema: wb_solver_iso_criteria/1
+version: v1
+run_label: 低速 QP 配置的 Isaac 自由空間閉迴路驗證
+status: provisional_engineering
+created: 2026-09-14
+execution_version: E2.1
+config: wb_qp_lowspeed
+prospective: true
+not_retroactive: >
+  只適用於本規格建立之後的趟次。先前所有 E1／E2 結果不受影響。
+not_b_baseline: >
+  本配置的速度框與 B 基線不同。不得以本趟結果代表 B，也不得稱為 WGMPC。
+scope_limit: >
+  自由空間、低速、單一目標。**不**宣稱上游全身安全性在命令被修改後仍成立；
+  **不**宣稱停止掃掠範圍的避碰保證；接觸操作不在範圍內；pregrasp 仍禁止。
+
+profile:
+  solver: qp
+  target_odom_m: [0.300, 0.000, 0.550]
+  tcp: link_tcp
+  orientation: 工具 +z 指向世界 +x、工具 +x 指向世界 +z
+  task_timeout_s: 60.0           # 自**首筆求解器命令**起算；準備時間另計
+
+# ---- R 到達：**兩個來源都要成立**，不以求解器自報誤差代替 ----
+R_arrival:
+  R1_pos_err_m_max: 0.005
+  R2_rot_err_rad_max: 0.02       # 完整三維旋轉，非僅工具軸
+  R3_sustain_s_min: 2.0          # 兩項同時符合且連續
+  # 來源一：Isaac 記錄的 link_tcp 世界位姿
+  # 來源二：由**實測底盤位姿與關節角**重算的 FK
+  R4_require_both_sources: true
+  R5_source_agreement_m_max: 0.010   # 兩來源位置差；不一致即判定不成立
+  solver_self_report_not_accepted: true
+
+# ---- C 同動：由**實測運動**判定，與到達**分項** ----
+C_simultaneity:
+  base_moving_mps: 0.005
+  arm_moving_rps: 0.005
+  C1_longest_continuous_s_min: 3.0
+  separate_from_arrival: true    # 不得互相替代
+
+# ---- B 執行界限 ----
+B_bounds:
+  B1_lin_mps_max: 0.05
+  B2_ang_rps_max: 0.2
+  B3_arm_rate_max: 1.0
+  B4_endpoint_settings_unchanged: true
+  B5_rejected_eq: 0
+  B6_fail_is_none: true
+
+# ---- L 輪級限制 ----
+L_wheel:
+  L1_wheel_speed_max_mps: 0.2775
+  L2_wheel_accel_max_mps2: 6.25
+  L3_tolerance: 1.0e-6
+
+# ---- S 到達後觀察：不因求解器自報成功就收掉 ----
+S_post_arrival:
+  S1_observe_after_arrival_s: 8.0
+  S2_require_log_covers: true
+  S3_base_max_move_m: 0.020      # 觀察窗內最大原始位移
+  S4_arm_max_move_rad: 0.050
+  drift_subtraction_forbidden: true
+  use_max_not_endpoint: true
+
+# ---- P 起動前檢查必須通過 ----
+P_preflight:
+  P1_preflight_passed: true
+  P2_obstacles_configured_eq: 0
+  P3_all_links_tf_ok: true
+  P4_endpoint_scene_ok: true
+  P5_safety_vmax_matches_solver: true   # 下游與求解端同一份低速框
+
+D_protections:
+  pregrasp_forbidden_by_separate_condition: true
+  thermal_abort_c: 92.0
+  independent_domain_required: true
+  independent_run_dir: true
+
+on_pass: 整理為第五次報告的全身閉迴路成果
+on_fail:
+  - 保存明確阻點
+  - 不自動換目標、不放寬門檻、不連續調參重跑
