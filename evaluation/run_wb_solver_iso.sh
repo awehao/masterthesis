@@ -67,7 +67,7 @@ if [ "${RECORD:-0}" = "1" ]; then
   [ -n "${REC_EYE:-}" ] && REC_ARGS="$REC_ARGS --record-eye $REC_EYE"
   [ -n "${REC_AT:-}" ] && REC_ARGS="$REC_ARGS --record-at $REC_AT"
 fi
-CRITERIA="$WS/evaluation/results/specs/wb_solver_iso_criteria_v1.yaml"
+CRITERIA="${CRITERIA:-$WS/evaluation/results/specs/wb_solver_iso_criteria_v1.yaml}"
 OBSERVE_S="${OBSERVE_S:-10.0}"  # 到達後觀察窗
 NEED_S=$(python3 -c "print($PROFILE_S + $OBSERVE_S)")
 SIM_LIMIT="${SIM_LIMIT:-140}"    # 足以涵蓋啟動 + NEED_S
@@ -237,7 +237,7 @@ if [ -n "$ABORT" ]; then
 fi
 
 say "[8/8] 離線判定（事前定版判準，不下修門檻）"
-python3 -u evaluation/wb_solver_iso_check.py --run "$DIR" 2>&1 | tee -a "$LOG"
+python3 -u evaluation/wb_solver_iso_check.py --run "$DIR" --spec "$CRITERIA" 2>&1 | tee -a "$LOG"
 CHECK=${PIPESTATUS[0]}
 say "輸出 $DIR"
 if [ "$CHECK" != "0" ]; then

@@ -1,0 +1,145 @@
+{
+ "schema": "wb_solver_iso_check/1",
+ "run": "/home/howardchen/masterthesis/evaluation/runs/wb_solver_iso_long_144705",
+ "run_label": "低速 QP 配置的 Isaac 自由空間閉迴路驗證（長距離案例）",
+ "not_b_baseline": "本配置的速度框與 B 基線不同。不得以本趟結果代表 B，也不得稱為 WGMPC。\n",
+ "spec_version": "v2-long",
+ "spec_sha256": "4b7c6adf17c39a2469997a2f20d73f6b1b8bc329664f5557aacf6e60226ac3d1",
+ "checks": [
+  {
+   "key": "P1_起動前檢查通過",
+   "pass": true,
+   "detail": "fails=[]"
+  },
+  {
+   "key": "P2_障礙物設定為 0",
+   "pass": true,
+   "detail": "obstacles_configured=0"
+  },
+  {
+   "key": "P3_每連桿 TF 合格",
+   "pass": true,
+   "detail": "11/11"
+  },
+  {
+   "key": "P4_執行端場景檢查",
+   "pass": true,
+   "detail": "endpoint_scene_ok=True"
+  },
+  {
+   "key": "P5_下游與求解端同一份低速框",
+   "pass": true,
+   "detail": "下游 {'vmax_base_lin': 0.035255339, 'vmax_base_ang': 0.1999, 'vmax_arm': 0.9999} vs 求解端 {'vmax_base_lin': 0.03525533905932737, 'vmax_base_ang': 0.19990000000000002, 'vmax_arm': 0.9999}"
+  },
+  {
+   "key": "R0_Isaac 有記錄 link_tcp",
+   "pass": true,
+   "detail": "E2.1 欄位 tcp_x/tcp_y/tcp_z + 旋轉矩陣"
+  },
+  {
+   "key": "R1_兩來源同時達標並持續",
+   "pass": true,
+   "detail": "最長連續 17.34s（≥ 2.0）；Isaac **全程最小**誤差 1.716 mm、FK 最小 1.704 mm、末值 20.964 mm"
+  },
+  {
+   "key": "R2_兩來源一致",
+   "pass": true,
+   "detail": "最大差 0.221 mm（≤ 10）"
+  },
+  {
+   "key": "R3_姿態誤差（完整三維）",
+   "pass": true,
+   "detail": "最小 0.00000 rad（≤ 0.02）"
+  },
+  {
+   "key": "C1_最長連續同動",
+   "pass": true,
+   "detail": "4.04s（≥ 3.0）；累計 4.54s（**實測運動判定**）"
+  },
+  {
+   "key": "B1_線速度",
+   "pass": true,
+   "detail": "max 0.035270 ≤ 0.05"
+  },
+  {
+   "key": "B2_角速度",
+   "pass": true,
+   "detail": "max 0.002118 ≤ 0.2"
+  },
+  {
+   "key": "B3_手臂門檻不變",
+   "pass": true,
+   "detail": "arm_rate_max=1.0"
+  },
+  {
+   "key": "B4_執行端界限未動",
+   "pass": true,
+   "detail": "0.05/0.2"
+  },
+  {
+   "key": "B5_rejected",
+   "pass": true,
+   "detail": "rejected=0"
+  },
+  {
+   "key": "B6_fail_is_none",
+   "pass": true,
+   "detail": "fail=None"
+  },
+  {
+   "key": "L1_輪速",
+   "pass": true,
+   "detail": "max 0.035771 ≤ 0.2775"
+  },
+  {
+   "key": "L2_輪加速度",
+   "pass": true,
+   "detail": "max 3.559282 ≤ 6.25"
+  },
+  {
+   "key": "S1_log 涵蓋到達後觀察窗",
+   "pass": true,
+   "detail": "到達 45.03s，窗至 53.03s，log 至 140.01s"
+  },
+  {
+   "key": "S2_觀察窗內底盤最大位移",
+   "pass": true,
+   "detail": "3.280 mm（≤ 20；未扣漂移）"
+  },
+  {
+   "key": "S3_觀察窗內關節最大變化",
+   "pass": true,
+   "detail": "0.190 mrad（≤ 50）"
+  },
+  {
+   "key": "D1_pregrasp 由獨立條件禁止",
+   "pass": true,
+   "detail": "preconditions=False"
+  },
+  {
+   "key": "D2_熱中止門檻",
+   "pass": true,
+   "detail": "cpu_limit_c=92.0，峰值 85.375 °C"
+  }
+ ],
+ "passed": 23,
+ "total": 23,
+ "all_pass": true,
+ "measured": {
+  "arrival_sim_t": 45.03,
+  "sustain_s": 17.34,
+  "ep_iso_min_m": 0.0017163038775228686,
+  "ep_iso_final_m": 0.020963744894460158,
+  "ep_fk_min_m": 0.001703590328537004,
+  "ep_fk_final_m": 0.020963246187181924,
+  "er_iso_min_rad": 0.0,
+  "source_agreement_max_m": 0.00022131726287838153,
+  "simultaneous_longest_s": 4.04,
+  "lin_max": 0.03527002984121221,
+  "wheel_speed_max": 0.035771,
+  "wheel_accel_max": 3.559282
+ },
+ "solver_self_report": true,
+ "solver_self_report_not_used_for_acceptance": true,
+ "not_claimed": "上游全身安全性在命令被修改後未重新論證；停止掃掠範圍無避碰保證；接觸操作不在範圍內"
+}
