@@ -39,6 +39,8 @@ from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa
 from ammr_wholebody_mpc.wholebody_safety_filter import (             # noqa: E402
     SafetyConfig, filter_velocity)
 from wb_cmd_chain_e2 import CmdChainE2                               # noqa: E402
+from wb_qp_lowspeed import (SceneFacts, check_e2_bounds,             # noqa: E402
+                            constraints_lowspeed, lowspeed_cfg)
 from wb_wheel_limit import WheelLimitConfig                          # noqa: E402
 
 ARM_JOINTS = [f'joint{i}' for i in range(1, 7)]
@@ -65,14 +67,17 @@ class Shim:
         self.q_arm = np.asarray(q_arm, float)
         self.base = np.asarray(base, float)
         self.q_pref = np.asarray(q_pref, float)
-        # guard() 會檢查這三項；自由空間下距離資料視為已收到且無列
-        self.rows = np.zeros((0, 8))
+        # **自由空間下距離節點實際產生的列**：每個連桿一列（不是零列），
+        # 狀態 STATUS_NODATA(3.0)、位置全零。與「該連桿缺 TF」編碼相同 ——
+        # 因此空場景要靠設定確認，不靠列推論。
+        self.rows = None               # 由 main 指派
         self.q_arm_t = self.base_t = None      # 由 main 以 time.monotonic() 設定
         self.min_d = float('inf')   # 自由空間：無障礙物，模型間距不受限
         self.base0 = np.asarray(base, float).copy()   # 由 main 覆寫為起始位姿
         self.n_qp_fail = 0
         self.qp_iter_max = 4000        # 與節點預設一致
         self.qp_last_status = ''
+        self.qp_status = {}
         self.n_bar_rows = 0
         self.cfg = None                # 由 main 指派為 SafetyConfig
         self.link_names = []           # 由 main 以 arm_link_names 指派
@@ -101,6 +106,9 @@ def main():
     ap.add_argument('--arm-vmax', type=float, default=None,
                     help='安全層手臂速度框（rad/s）；預設 LITE6_SAFE 的 3.14，'
                          '比 E2 的 arm_rate_max 1.0 寬')
+    ap.add_argument('--lowspeed-qp', action='store_true',
+                    help='另立配置：把 E2 執行界限放進 QP 約束集'
+                         '（wb_qp_lowspeed）；**不冒稱 B 基線**')
     ap.add_argument('--solver', default='dls', choices=['dls', 'qp'])
     ap.add_argument('--label', default='')
     ap.add_argument('--out', required=True)
@@ -116,6 +124,14 @@ def main():
     K = WholeBodyKinematics.from_urdf_file(cl.urdf)
     from ammr_wholebody_mpc.arm_link_geometry import arm_link_names
     link_names = arm_link_names(open(cl.urdf).read())
+    # 自由空間：每連桿一列、STATUS_NODATA、位置全零（見 arm_link_distance._rows_links）
+    STATUS_NODATA = 3.0
+    free_rows = np.array([[0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 1.0,
+                                       float(li), 0.0, 0.0, 0.0, 0.015]
+                          for li in range(len(link_names))], dtype=float)
+    facts = SceneFacts(obstacles_configured=0, tf_ok_links=len(link_names),
+                       n_links=len(link_names), rows_total=len(free_rows),
+                       rows_status_ok=0)
 
     # 求解器參數：**沿用既有預設**，逐項寫出以便查核
     a = types.SimpleNamespace(
@@ -142,6 +158,21 @@ def main():
 
     scfg = SafetyConfig(alpha=2.0, d0=0.05, tau=0.15, a_brake=1.0, eps=0.03,
                         dt=1.0 / cl.rate, fix_base=False)
+    if cl.lowspeed_qp:
+        scfg = lowspeed_cfg(scfg)
+        print(f'[cfg] **低速 QP 配置**：速度框 → |vx|,|vy| ≤ '
+              f'{scfg.vmax[0]:.6f}, |wz| ≤ {scfg.vmax[2]}, 手臂 ≤ {scfg.vmax[3]}')
+        print(f'[cfg] 空場景確認：障礙物設定 {facts.obstacles_configured} 個、'
+              f'TF {facts.tf_ok_links}/{facts.n_links} —— '
+              f'{"已確認" if facts.empty_scene_confirmed else facts.why_not()}')
+        # **只換約束集的組裝方式**，目標函式與權重沿用既有 solve
+        def _c(self, q, v_lin):
+            A, b, nb, info = constraints_lowspeed(
+                self.K, q, v_lin, [], self.cfg, facts,
+                v_prev=self.v_prev, dt=self.cfg.dt)
+            self.last_con_info = info
+            return A, b, nb
+        Shim._constraints = _c
     if (cl.base_vmax is not None or cl.base_wmax is not None
             or cl.arm_vmax is not None):
         vm = scfg.vmax.copy()
@@ -190,6 +221,7 @@ def main():
         sh.base0 = np.zeros(3)                 # 起始底盤位姿（原點）
         sh.cfg = scfg                          # QP 的約束集用同一份安全設定
         sh.link_names = link_names
+        sh.rows = free_rows
         sh.v_prev, sh.a_prev, sh.dt = v_prev, a_prev, period
         why = sh.guard()
         if why:
@@ -248,6 +280,9 @@ def main():
             'solver_lin': round(float(math.hypot(v_raw[0], v_raw[1])), 6),
             'safety_lin': round(float(math.hypot(v_saf[0], v_saf[1])), 6),
             'body_lin': round(float(math.hypot(vbx, vby)), 6),
+            'e2_bounds_ok': check_e2_bounds(v_body)[0],
+            'e2_bounds_why': check_e2_bounds(v_body)[1],
+            'con': getattr(sh, 'last_con_info', None),
         })
         v_prev = v_saf.copy()
         a_prev = (v_saf - (v_prev if v_prev is not None else v_saf)) / period
