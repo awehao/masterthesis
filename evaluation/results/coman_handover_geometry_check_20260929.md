@@ -370,3 +370,71 @@ P4 的釋放後 10 s 穩定觀察**獨立判定、獨立記錄**。
 1. 同一物理步讀取夾爪與抽屜的完整世界位姿
 2. 接上 `release_requested`、`decouple_confirmed` 與緊急解除路徑
 3. 保存原始量測、相位與各項判定 —— **先驗證接線，再安排 20 mm 協同試驗**
+
+---
+
+## 9. 執行端接線（第一步）：同一物理步位姿讀取與記錄
+
+**本步完成的是量測接通，不是協同操作驗收；底盤仍由固定關節支撐，本輪未跑 20 mm 拉動。**
+
+| 檔案 | 角色 | sha256(前 16) |
+|---|---|---|
+| `evaluation/coman_pose_reader.py` | 讀取與記錄邏輯（與模擬器解耦，可離線測） | `36d62ef02bab31f0` |
+| `evaluation/isaac_coman_drawer_sim.py` | **協同執行版本**（新檔） | `5a073f7d109ffa2f` |
+| `evaluation/isaac_drawer_sim.py` | 固定底座 200 mm 版本，**未修改** | `d7bbb868a4fc555e` |
+
+### 9.1 讀取來源
+
+| 量 | 來源 |
+|---|---|
+| 夾爪世界位姿 | 夾爪連桿 prim 的 `RigidPrim.get_world_poses()` |
+| 抽屜世界位姿 | `/World/drawer_unit/drawer` 的 `RigidPrim.get_world_poses()` |
+| 物理步序 | **每次讀取當下**取 `world.current_time_step_index`（缺此屬性即拒絕啟動） |
+| 模擬時間 | `world.current_time` |
+| 把手固定變換 | `drawer_unit.yaml`：橫桿中心 `[0, −0.285, 0.550]`、軸 x |
+| 把手世界位姿 | **抽屜實際位姿 × 固定變換**；不以抽屜原點代替 |
+
+### 9.2 物理步內的讀取順序
+
+```
+world.step(render=False)
+  → t = world.current_time
+  → ① physics_step_id  ② sim_time  ③ 夾爪世界位姿  ④ 抽屜世界位姿
+  → ⑤ 把手世界位姿（④ × 固定變換）  ⑥ 相對位姿 G_T_H  ⑦ 兩套基準
+  → 寫入紀錄
+  → （其後才是錄影與命令寫入）
+```
+
+讀取在**寫入任何命令之前**。夾爪與抽屜各自帶回讀取當下的步序，兩者不一致即判不同步。
+
+### 9.3 log 欄位（44 欄）
+
+| 群組 | 欄位 |
+|---|---|
+| 時間與步序 | `physics_step_id`, `sim_time` |
+| 原始世界位姿 | `grip_p{x,y,z}`／`grip_q{w,x,y,z}`、`draw_*`、`hand_*`（各 7 欄） |
+| 相對位姿 | `rel_t{x,y,z}`、`rel_r00…r22`（9 欄） |
+| 幾何量 | `bar_axis_tool_{x,y,z}` |
+| 兩套基準 | `datum_pre_pos_m`、`datum_post_pos_m`、`datum_post_rot_rad` |
+| 有效性 | `valid`、`invalid_reason`、`same_step_read` |
+
+原始世界位姿與相對位姿**同時保存**，可離線重算核對。
+
+### 9.4 無效時的處置
+
+步序不一致、缺值、非有限、讀取例外 → `valid=False`、`relative=None`，
+**不以 FK 補值、不沿用上一筆**；協同執行端當場停止並記錄 `coman_abort`。
+
+### 9.5 離線核對結果（14 項，全部通過）
+
+* 把手位姿 = 抽屜位姿 × 固定變換，且**不等於**抽屜原點
+* 抽屜轉 30° 時把手偏移一併旋轉（驗證用的是變換而非單純平移）
+* 相對位姿 = 夾爪⁻¹ × 把手
+* 步序不一致／NaN／讀取例外 → 無效；無效後的下一筆有效讀數**重新計算**，未帶入舊值
+* 無效讀數不得用來設定連接基準
+* **與既有 FK 路徑交叉比對**（固定底座 20 mm 趟 engage 末）：差 **0.0005 mm**
+
+### 9.6 下一步
+
+短時接線測試（實際開模擬器跑少量物理步，確認讀數與記錄），
+通過後才安排 20 mm 協同試驗。
