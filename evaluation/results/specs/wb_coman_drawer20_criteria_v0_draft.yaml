@@ -5,7 +5,7 @@
 # set_angular_velocity() 直接設定底盤根部速度，支撐球與地面零摩擦 —— 不是輪驅動。
 # 因此**不能**驗證牽引力或打滑；由底盤速度換算的輪速不是獨立實測輪速。
 schema: wb_coman_drawer_criteria/0
-version: v0.7-draft
+version: v0.8-draft
 status: draft_not_frozen
 created: 2026-09-29
 revised: 2026-09-29
@@ -171,10 +171,24 @@ P_pull:
     basis: 固定底座 20 mm 趟釋放後 34.23 s 變化 0.00000 mm；解析度 0.001 mm
     note: 位移與速率、觀察窗須同時明訂，只給位移不足
   P5_opening_source: 抽屜關節實測開度，不以命令值代替
-  P6_retreat_clear_tool_z_m: 0.0233
+  P6_retreat_clear_m: 0.0233
+  P6_retreat_clear_tool_z_m: 0.0233          # 同值，保留舊鍵名供載入相容
+  P6_definition: >
+    退出開始時（執行端確認解除完成的當下）保存夾爪世界位姿為參考；
+    退出量為**相對該起點、沿退出起始座標系固定方向（起始夾爪 +z）的有號位移**。
+    方向固定於起始座標系，之後轉動工具不改變判讀。
   P6_basis:
     source: manipulation_cases.yaml —— 「清開橫桿最少需 0.0233 m」；案例命令的退開量為 0.040 m
-    role: 退出完成的**實測**條件，不以多跑一個週期代替
+    applicability: 該 23.3 mm 描述的是沿接近／退出軸的退開距離，與本定義一致
+    not_claimed: 投影距離達標**不等於**已完全清開；碰撞與姿態檢查仍須各自保留
+  P7_release_handshake_required: true
+  P7_definition: >
+    正常釋放需**資格與請求同時成立**：狀態機輸出 normal_release_allowed，
+    任務流程在當下送出 release_requested，兩者同一週期成立才進入 RELEASE。
+    可全自動，不需人工確認。**緊急解除維持獨立閂鎖，不等正常請求。**
+  P8_retreat_starts_after_decouple_confirmed: true
+  P9_done_excludes_stability: >
+    DONE **不代表** P4 的釋放後穩定觀察已通過；穩定性獨立判定並獨立記錄。
 
 F_force:
   F1_force_abort_n: 30.0

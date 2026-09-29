@@ -105,6 +105,9 @@ class Frame:
     monitor_ok: bool = True
     rel_rot_tool: np.ndarray | None = None      # 完整相對旋轉（3×3），缺則記為未提供
     decouple_confirmed: bool = False            # 執行端回報「已解除連接」
+    release_requested: bool = False             # 任務流程**明確請求**釋放
+    gripper_pos_world: np.ndarray | None = None  # 夾爪世界位置（退出量判定必需）
+    gripper_rot_world: np.ndarray | None = None  # 夾爪世界姿態（同上）
     same_step_read: bool = True                 # 呼叫端聲明位姿為同一物理步讀取
 
 
@@ -116,9 +119,13 @@ class Flags:
     handover_cond_now: bool = False     # 當下瞬時符合
     handover_pass: bool = False         # 連續符合滿 H3 才為真
     hold_tracking_pass: bool = False
-    normal_release_allowed: bool = False
+    normal_release_allowed: bool = False        # **具備資格**，不等於現在要執行
+    release_handshake: bool = False             # 資格 ＋ 明確請求同時成立
     emergency_decouple: bool = False
     continuity_break: bool = False
+    retreat_measurable: bool = False
+    retreat_signed_m: float = float('nan')      # 沿退出起始方向的有號退開量
+    release_stability_pass: bool = False        # 與 DONE **無關**，獨立判定
 
 
 PHASES = ('HANDOVER', 'ENGAGE', 'PULL', 'HOLD', 'RELEASE', 'RETREAT',
@@ -148,6 +155,10 @@ class HandoverMachine:
         self.p1 = float(p['P1_final_opening_err_m_max'])
         self.p1_hold_s = float(p['P1_hold_s'])
         self.retreat_clear = float(p['P6_retreat_clear_tool_z_m'])
+        p4 = p['P4_release_stability']
+        self.stab_window_s = float(p4['window_s'])
+        self.stab_change_max = float(p4['opening_change_m_max'])
+        self.stab_rate_max = float(p4['opening_rate_m_per_s_max'])
         self.f_abort = float(spec['F_force']['F1_force_abort_n'])
         self.f_sustain_s = float(spec['F_force']['F2_force_abort_sustain_s'])
         self.max_gap_s = float(max_gap_s)
@@ -162,6 +173,8 @@ class HandoverMachine:
         self._hold_since: float | None = None
         self._force_since: float | None = None
         self._emergency_latched = False
+        self._retreat_ref: dict | None = None
+        self._stab: dict | None = None
         self.log: list[tuple[float, str, Flags]] = []
 
     # ---------------- 幾何量 ----------------
@@ -243,9 +256,32 @@ class HandoverMachine:
             self._hold_since = None
 
         ok_now = fl.cmd_fresh and fl.endpoint_recv_ok
-        # 正常釋放：保持合格 ＋ 仍在連接 ＋ 當下命令與執行端合格 ＋ 相位為 HOLD
+        # 正常釋放**資格**：保持合格 ＋ 仍在連接 ＋ 當下命令與執行端合格 ＋ 相位為 HOLD
         fl.normal_release_allowed = bool(fl.hold_tracking_pass and f.attached
                                          and ok_now and self.phase == 'HOLD')
+        # **資格與執行分開**：還要任務流程在當下明確請求
+        fl.release_handshake = bool(fl.normal_release_allowed and f.release_requested)
+
+        # 退出量：相對**退出起點**、沿**退出起始座標系固定方向**的有號位移
+        if self._retreat_ref is not None:
+            if f.gripper_pos_world is None:
+                fl.retreat_measurable = False
+            else:
+                d = np.asarray(f.gripper_pos_world, float) - self._retreat_ref['p0']
+                fl.retreat_signed_m = float(d @ self._retreat_ref['u'])
+                fl.retreat_measurable = True
+
+        # 釋放後穩定性：**獨立判定**，DONE 不代表它通過
+        if self._stab is not None:
+            st = self._stab
+            st['lo'] = min(st['lo'], f.opening_m)
+            st['hi'] = max(st['hi'], f.opening_m)
+            span = st['hi'] - st['lo']
+            dur = f.t - st['t0']
+            rate = span / dur if dur > 0 else float('inf')
+            fl.release_stability_pass = bool(dur >= self.stab_window_s
+                                             and span <= self.stab_change_max
+                                             and rate <= self.stab_rate_max)
 
         if f.attached and self.attach_ref is None:
             self.attach_ref = {'pos': np.asarray(f.rel_pos_tool, float).copy(),
@@ -260,13 +296,24 @@ class HandoverMachine:
             self.phase = 'PULL'
         elif self.phase == 'PULL' and fl.hold_tracking_pass and ok_now:
             self.phase = 'HOLD'; self._mark('hold_tracking_pass', f.t)
-        elif self.phase == 'HOLD' and fl.normal_release_allowed:
-            self.phase = 'RELEASE'; self._mark('normal_release', f.t)
-        elif self.phase == 'RELEASE' and not f.attached:
+        elif self.phase == 'HOLD' and fl.release_handshake:
+            self.phase = 'RELEASE'; self._mark('release_requested', f.t)
+        elif self.phase == 'RELEASE' and f.decouple_confirmed:
+            # 退出**要等執行端確認解除完成**才開始
             self.phase = 'RETREAT'
+            self._mark('decouple_confirmed', f.t)
+            self._stab = {'t0': f.t, 'lo': f.opening_m, 'hi': f.opening_m}
+            if f.gripper_pos_world is not None and f.gripper_rot_world is not None:
+                R0 = np.asarray(f.gripper_rot_world, float)
+                self._retreat_ref = {
+                    'p0': np.asarray(f.gripper_pos_world, float).copy(),
+                    # 退出方向 = 退出起始時夾爪的 +z（把手位於工具 −z 側）
+                    'u': R0 @ np.array([0.0, 0.0, 1.0])}
+            else:
+                self._retreat_ref = None
         elif self.phase == 'RETREAT':
-            # **由實測退出量決定完成**，不以多跑一個週期代替
-            if float(np.linalg.norm(f.rel_pos_tool)) >= self.retreat_clear:
+            # 完成條件：**沿退出方向**的有號退開量達門檻；缺世界位姿即無法判定
+            if fl.retreat_measurable and fl.retreat_signed_m >= self.retreat_clear:
                 self.phase = 'DONE'; self._mark('retreat_complete', f.t)
         self.log.append((f.t, self.phase, fl))
         return fl
@@ -363,22 +410,100 @@ def selftest() -> int:
                   - 2.0) < 0.3)
     fl = M4.step(_frame(t, attached=True, opening_m=0.0200,
                         cmd_age_endpoint_s=0.22))
-    check('保持合格但執行端逾時 → 不允許正常釋放',
+    check('保持合格但執行端逾時 → 不具釋放資格',
           fl.hold_tracking_pass and not fl.normal_release_allowed)
-    check('不允許釋放時相位不得進入 RELEASE', M4.phase == 'HOLD')
-    fl = M4.step(_frame(t + 0.05, attached=True, opening_m=0.0200))
-    check('恢復正常後才允許釋放並進入 RELEASE',
-          fl.normal_release_allowed and M4.phase == 'RELEASE')
+    check('不具資格時相位不得進入 RELEASE', M4.phase == 'HOLD')
 
-    # --- 反例 5：退出完成須由實測退出量決定 ---
-    fl = M4.step(_frame(t + 0.10, attached=False, opening_m=0.0200))
-    check('解除連接後進入 RETREAT', M4.phase == 'RETREAT')
-    fl = M4.step(_frame(t + 0.15, attached=False, opening_m=0.0200))
-    check('未退開足夠距離不得判為 DONE', M4.phase == 'RETREAT')
-    fl = M4.step(_frame(t + 0.20, attached=False, opening_m=0.0200,
-                        rel_pos_tool=np.array([0.0, 0.0005, -0.0547])))
-    check('退開達實測門檻才 DONE',
+    # --- 反例 5：釋放需「資格 ＋ 明確請求」同時成立 ---
+    t += 0.05
+    fl = M4.step(_frame(t, attached=True, opening_m=0.0200))
+    check('有資格但**未請求** → 不得進入 RELEASE',
+          fl.normal_release_allowed and not fl.release_handshake
+          and M4.phase == 'HOLD')
+    t += 0.05
+    fl = M4.step(_frame(t, attached=True, opening_m=0.0200,
+                        cmd_age_endpoint_s=0.22, release_requested=True))
+    check('有請求但**無資格** → 不得進入 RELEASE',
+          not fl.normal_release_allowed and not fl.release_handshake
+          and M4.phase == 'HOLD')
+    t += 0.05
+    fl = M4.step(_frame(t, attached=True, opening_m=0.0200,
+                        release_requested=True))
+    check('資格與請求同時成立 → 進入 RELEASE',
+          fl.release_handshake and M4.phase == 'RELEASE')
+
+    # --- 反例 6：退出須等執行端確認解除完成才開始 ---
+    t += 0.05
+    M4.step(_frame(t, attached=False, opening_m=0.0200))
+    check('僅 attached=False 不足以開始退出', M4.phase == 'RELEASE')
+    t += 0.05
+    P0 = np.zeros(3); R0 = np.eye(3)
+    M4.step(_frame(t, attached=False, opening_m=0.0200, decouple_confirmed=True,
+                   gripper_pos_world=P0, gripper_rot_world=R0))
+    check('確認解除後才進入 RETREAT', M4.phase == 'RETREAT')
+
+    # --- 反例 7：退出量必須是沿退出方向的有號位移 ---
+    t += 0.05
+    fl = M4.step(_frame(t, attached=False, opening_m=0.0200,
+                        rel_pos_tool=np.array([0.020, 0.0005, -0.0147]),
+                        gripper_pos_world=np.array([0.020, 0.0, 0.0]),
+                        gripper_rot_world=R0))
+    check('沿橫桿方向移動 20 mm、未沿退出方向退開 → 不得 DONE',
+          M4.phase == 'RETREAT' and abs(fl.retreat_signed_m) < 1e-9)
+    t += 0.05
+    fl = M4.step(_frame(t, attached=False, opening_m=0.0200,
+                        rel_pos_tool=np.array([0.0, 0.0005, -0.0240]),
+                        gripper_pos_world=np.array([0.0, 0.0, 0.0093]),
+                        gripper_rot_world=R0))
+    check('僅退開 9.3 mm（< 23.3）→ 不得 DONE',
+          M4.phase == 'RETREAT' and abs(fl.retreat_signed_m - 0.0093) < 1e-9)
+    t += 0.05
+    fl = M4.step(_frame(t, attached=False, opening_m=0.0200,
+                        gripper_pos_world=np.array([0.0, 0.0, 0.0233]),
+                        gripper_rot_world=R0))
+    check('沿退出方向退開 23.3 mm → DONE',
           M4.phase == 'DONE' and 'retreat_complete' in M4.stamps)
+    check('DONE 當下釋放後穩定性尚未通過（兩者獨立）',
+          not fl.release_stability_pass)
+
+    # 方向固定於起始座標系：之後轉動工具不改變判讀
+    M8 = HandoverMachine(spec)
+    M8.phase = 'RETREAT'
+    M8._retreat_ref = {'p0': np.zeros(3), 'u': np.array([0.0, 0.0, 1.0])}
+    c30, s30 = math.cos(math.radians(30)), math.sin(math.radians(30))
+    Rz = np.array([[c30, -s30, 0.0], [s30, c30, 0.0], [0.0, 0.0, 1.0]])
+    fl = M8.step(_frame(0.0, gripper_pos_world=np.array([0.0, 0.0, 0.025]),
+                        gripper_rot_world=Rz))
+    check('退出開始後轉動工具不改變退出量',
+          abs(fl.retreat_signed_m - 0.025) < 1e-12)
+    M9 = HandoverMachine(spec)
+    M9.phase = 'RETREAT'
+    M9._retreat_ref = {'p0': np.zeros(3), 'u': np.array([0.0, 0.0, 1.0])}
+    fl = M9.step(_frame(0.0))
+    check('缺世界位姿 → 無法判定退出，維持 RETREAT',
+          not fl.retreat_measurable and M9.phase == 'RETREAT')
+
+    # --- 釋放後穩定性獨立判定 ---
+    M10 = HandoverMachine(spec)
+    M10.phase = 'RELEASE'
+    M10.step(_frame(0.0, opening_m=0.0200, decouple_confirmed=True,
+                    gripper_pos_world=np.zeros(3), gripper_rot_world=np.eye(3)))
+    tt, fl = 0.05, None
+    for _ in range(220):                       # 11 s，開度不變
+        fl = M10.step(_frame(tt, opening_m=0.0200,
+                             gripper_pos_world=np.zeros(3),
+                             gripper_rot_world=np.eye(3))); tt += 0.05
+    check('開度穩定滿 10 s → 穩定性通過', fl.release_stability_pass)
+    M11 = HandoverMachine(spec)
+    M11.phase = 'RELEASE'
+    M11.step(_frame(0.0, opening_m=0.0200, decouple_confirmed=True,
+                    gripper_pos_world=np.zeros(3), gripper_rot_world=np.eye(3)))
+    tt = 0.05
+    for k in range(220):
+        fl = M11.step(_frame(tt, opening_m=0.0200 + (0.0002 if k > 100 else 0.0),
+                             gripper_pos_world=np.zeros(3),
+                             gripper_rot_world=np.eye(3))); tt += 0.05
+    check('釋放後開度變動 0.2 mm → 穩定性不通過', not fl.release_stability_pass)
 
     # --- 反例 6：緊急解除要閂鎖到執行端確認 ---
     M5 = HandoverMachine(spec)
