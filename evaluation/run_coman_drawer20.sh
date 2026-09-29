@@ -17,7 +17,9 @@ ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 URDF_WB="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
 SIM_LIMIT="${SIM_LIMIT:-120}"
 PAIR_D0="${PAIR_D0:-uflite_finger1:drawer_front_panel:0.010,uflite_finger2:drawer_front_panel:0.010}"
-CONTACT_PAIRS="${CONTACT_PAIRS:-uflite_finger1:handle_bar:engage|postengage|pull|hold|release,uflite_finger2:handle_bar:engage|postengage|pull|hold|release}"
+CONTACT_PAIRS="${CONTACT_PAIRS:-uflite_finger1:handle_bar:engage|pull|hold|release,uflite_finger2:handle_bar:engage|pull|hold|release}"
+# 一般列只留最近障礙物；橫桿的列被接觸例外刪掉後面板會完全沒有列，故強制產生此配對列
+PAIR_ROWS="${PAIR_ROWS:-uflite_finger1:drawer_front_panel,uflite_finger2:drawer_front_panel}"
 STROKE="${STROKE:-0.020}"
 PULL_S="${PULL_S:-4.0}"
 PIDS=(); say(){ echo "[$(date +%T)] $*" | tee -a "$LOG"; }
@@ -31,11 +33,11 @@ say "=== 20 mm 協同抽屜操作 主成果首測 RUN_ID=$RUN_ID domain=$ROS_DOM
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 
 say "[1/6] 起動前檢查（版本、規格、配對規則一致性）"
-python3 - "$DIR" "$PAIR_D0" "$CONTACT_PAIRS" <<'PY' | tee -a "$LOG" || exit 2
+python3 - "$DIR" "$PAIR_D0" "$CONTACT_PAIRS" "$PAIR_ROWS" <<'PY' | tee -a "$LOG" || exit 2
 import hashlib, json, os, sys, yaml
 ws=os.path.dirname(os.path.dirname(os.path.abspath(__file__))) if False else os.getcwd()
 sha=lambda f: hashlib.sha256(open(f,'rb').read()).hexdigest()[:16]
-out, pair, cpairs = sys.argv[1], sys.argv[2], sys.argv[3]
+out, pair, cpairs, prows = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 sp='evaluation/results/specs'
 v1=yaml.safe_load(open(f'{sp}/wb_coman_drawer20_criteria_v1.yaml',encoding='utf-8'))
 s1=yaml.safe_load(open(f'{sp}/wb_coman_drawer20_supplement_s1.yaml',encoding='utf-8'))
@@ -58,6 +60,14 @@ for x in cpairs.split(','):
 if wcp!=gcp: fails.append(f'contact_pairs 與 S1 不符：{gcp} vs {wcp}')
 if not s1['pair_avoidance'].get('bar_stays_in_avoidance'):
     fails.append('S1 未聲明橫桿仍在避碰集合')
+wpr=sorted(s1['pair_avoidance']['required_pair_rows']['pairs'])
+gpr=sorted(x.strip() for x in prows.split(',') if x.strip())
+if wpr!=gpr: fails.append(f'pair_rows 與 S1 必要配對列不符：{gpr} vs {wpr}')
+_pm=s1['pair_avoidance']['phase_map']
+_prod=set(_pm['contact_phases_produced'])
+_used=set(p for v in wcp.values() for p in v)
+if not _used <= _prod:
+    fails.append(f'S1 接觸相位有無產生端者：{sorted(_used - _prod)}')
 for f_,rec in s1['checkers_sha256_16'].items():
     path=(f'src/ammr_wholebody_mpc/ammr_wholebody_mpc/{f_}'
           if f_ in ('wholebody_safety_filter.py','arm_link_distance.py',
@@ -77,12 +87,13 @@ spawn isaac "$ISAAC_PY" -u evaluation/isaac_coman_drawer_sim.py \
 say "[3/6] 等 /clock"
 python3 evaluation/clock_advancing.py --discover 180 2>&1 | tee -a "$LOG" || exit 3
 
-say "[4/6] 起感測與安全鏈（障礙物含櫃體與抽屜各部件，**橫桿不列入**）"
+say "[4/6] 起感測與安全鏈（障礙物含櫃體、橫桿與抽屜各部件）"
 mapfile -t OBS < <(python3 evaluation/coman_obstacle_specs.py)
 say "  障礙物 ${#OBS[@]} 個（**含橫桿**；接觸例外只給兩指且限定相位）"
 spawn dist ros2 run ammr_wholebody_mpc arm_link_distance --ros-args \
   -p use_sim_time:=true -p report_frame:=odom -p geometry:=links \
-  -p wholebody_urdf:="$URDF_WB" -p obstacles:="[$(IFS=,; echo "${OBS[*]}")]"
+  -p wholebody_urdf:="$URDF_WB" -p obstacles:="[$(IFS=,; echo "${OBS[*]}")]" \
+  -p pair_rows:="[$(echo "$PAIR_ROWS" | sed 's/,/","/g; s/^/"/; s/$/"/')]"
 spawn safety ros2 run ammr_wholebody_mpc wholebody_safety --ros-args \
   -p use_sim_time:=true -p report_frame:=odom -p base_frame:=base_link \
   -p wholebody_urdf:="$URDF_WB" -p freespace_confirmed:=false \

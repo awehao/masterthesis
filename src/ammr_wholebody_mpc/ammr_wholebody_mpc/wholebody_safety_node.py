@@ -295,7 +295,17 @@ class WholeBodySafetyNode(Node):
         self.q_arm_t = self._now()
 
     def _on_phase(self, msg) -> None:
-        self._phase_stamp, self._phase_val = self._now(), str(msg.data)
+        """相位訊息帶**來源時間**：年齡以來源時間計，不以收到時間計。
+
+        解析失敗或缺欄位 ⇒ 相位未知 ⇒ **不給任何例外**。
+        """
+        import json as _json
+        try:
+            d = _json.loads(msg.data)
+            self._phase_val = str(d['phase'])
+            self._phase_stamp = float(d['sim_t'])      # **來源時間**
+        except Exception:      # noqa: BLE001
+            self._phase_val, self._phase_stamp = None, None
 
     def _on_obs_names(self, msg) -> None:
         import json as _json
@@ -438,8 +448,10 @@ class WholeBodySafetyNode(Node):
                         and self._dt_prev:
                     a_prev = (self._v_prev - self._v_prev2) / self._dt_prev
                 # **相位只在新鮮時採用**：過期或未收到 ⇒ phase=None ⇒ 無任何接觸例外
+                # 年齡 = 現在（模擬時間）− **來源時間**
                 _pa = (self._now() - self._phase_stamp
-                       if self._phase_stamp is not None else float('inf'))
+                       if (self._phase_stamp is not None
+                           and self._phase_val is not None) else float('inf'))
                 self.cfg.phase = (self._phase_val
                                   if _pa <= self._phase_max_age else None)
                 self.cfg.last_contact_skipped = 0

@@ -34,6 +34,19 @@ from coman_pull_target import PullTarget                          # noqa: E402
 PHASES = ('APPROACH', 'ENGAGE_WAIT', 'PULL', 'HOLD', 'RELEASE_WAIT', 'RETREAT',
           'DONE')
 
+# **相位對應**：任務狀態機的相位名稱 → 安全規格（S1）使用的相位名稱。
+# 兩者本來就不同（等待相位的語意也不同），**不是大小寫問題**，因此逐項明列。
+# 未列出的相位一律發布 'unknown'，在濾波器端**匹配不到任何例外**（fail closed）。
+PHASE_MAP = {
+    'APPROACH': 'approach',        # 尚未就位，無接觸例外
+    'ENGAGE_WAIT': 'engage',       # 已就位待連接 —— 指—桿接觸在此開始被允許
+    'PULL': 'pull',
+    'HOLD': 'hold',
+    'RELEASE_WAIT': 'release',     # 保持合格、等待釋放許可與請求
+    'RETREAT': 'retreat',          # 已解除，退出中：不再允許接觸例外
+    'DONE': 'done',
+}
+
 
 def load_base():
     path = os.path.join(HERE, 'wholebody_pregrasp.py')
@@ -271,10 +284,15 @@ def build(M, cl):
                     emergency=bool(self.task.get('emergency')))
                 prev_phase = pol.phase
                 dec = pol.step(st)
-                # **相位由求解端擁有並發布**：安全層訂閱同一份，確保上下游一致
-                _pm = _Str(); _pm.data = dec['phase']
+                # 相位由求解端擁有並發布。**帶來源模擬時間**，讓訂閱端以
+                # 來源時間計算年齡，而不是以收到時間。
+                # 共用來源只保證**來源一致**，**不保證**兩端在同一週期收到同一相位。
+                _mapped = PHASE_MAP.get(dec['phase'], 'unknown')
+                _pm = _Str()
+                _pm.data = json.dumps({'phase': _mapped, 'sim_t': now_s,
+                                       'raw': dec['phase']})
                 self.phase_pub.publish(_pm)
-                self.cfg.phase = dec['phase']
+                self.cfg.phase = _mapped
                 if prev_phase == 'ENGAGE_WAIT' and dec['phase'] == 'PULL':
                     self.on_attached(now_s)
                 self.phase = dec['phase']

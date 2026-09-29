@@ -22,17 +22,36 @@ pair_avoidance:
   contact_pairs:
     uflite_finger1|handle_bar:
     - engage
-    - postengage
     - pull
     - hold
     - release
     uflite_finger2|handle_bar:
     - engage
-    - postengage
     - pull
     - hold
     - release
   bar_stays_in_avoidance: true
+  phase_map:
+    note: '任務相位名稱與設定鍵**逐項明列**，不是大小寫轉換；未列出者一律 unknown ⇒ 無例外。'
+    APPROACH: approach
+    ENGAGE_WAIT: engage
+    PULL: pull
+    HOLD: hold
+    RELEASE_WAIT: release
+    RETREAT: retreat
+    DONE: done
+    contact_phases_produced: [engage, pull, hold, release]
+    dropped_from_pairs_table: 'postengage —— 該相位屬**舊的軌跡重演管線**
+      （gen_drawer_traj.py），本趟的產生端是狀態機政策，不產生此名稱。
+      留在設定裡等於一條永不生效的規則，故移除；參照表 v0 草稿不動。'
+  required_pair_rows:
+    note: '一般列只保留每個取樣點的**最近**障礙物。手指接近時最近者是橫桿；
+      橫桿的列被接觸例外刪掉後，面板就完全沒有列 ⇒ 該配對無屏障。
+      因此距離節點須為下列配對**強制產生**距離列（不論誰最近）。'
+    pairs:
+    - uflite_finger1:drawer_front_panel
+    - uflite_finger2:drawer_front_panel
+    wired_via: arm_link_distance.py 參數 pair_rows（由 run_coman_drawer20.sh 傳入）
   rationale:
     task_need: 設計抓取位姿下指尖距面板 27.9 mm（實測），一般規則 d0 = 50 mm 會擋死任務
     selection_basis_m:
@@ -54,7 +73,11 @@ pair_avoidance:
     - 預設設定下所有配對一律一般規則
   consistency_required:
   - 求解器與安全層使用**同一份** d0_by_pair／contact_pairs／相位
-  - 相位由求解端發布、安全層訂閱 ⇒ 結構上一致；仍於趟後核對設定讀回
+  - '相位由求解端發布、安全層訂閱：**只保證來源一致**，
+    不保證兩個節點在同一週期收到同一相位。'
+  - '相位訊息攜帶**來源模擬時間**（sim_t），安全層以來源時間計齡；
+    逾 contact_phase_max_age 或解析失敗 ⇒ 相位未知 ⇒ 無例外。'
+  - 趟後核對兩節點的設定讀回與相位序列
 time_semantics:
   task_timing: 模擬時間（拉動時長、保持時長、狀態新鮮度）
   process_watchdog: 牆鐘（僅用於程序逾時與熱監看）
@@ -65,14 +88,27 @@ checkers_sha256_16:
   coman_pose_reader.py: 9581efb675d8d361
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
-  coman_pull_solver_node.py: 00957cf5c59ff2b1
+  coman_pull_solver_node.py: 52031ba7fe6cc38c
   isaac_coman_drawer_sim.py: 3cd85d5b2d3787b8
   wholebody_safety_filter.py: c81268f57616b59d
-  arm_link_distance.py: 85dd71e9af66635e
-  wholebody_safety_node.py: 2a20967ec6be385c
+  arm_link_distance.py: d29c5e694a77be7a
+  wholebody_safety_node.py: a00dc729e15421cb
   test_pair_exceptions.py: da31af8647a8f293
-checker_change_note: coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更（Frame 新增三態 safety_fresh）；wholebody_safety_filter/arm_link_distance/wholebody_safety_node
-  新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。**v1 門檻一個都沒動**。
+  test_pipeline_pairs.py: 39b36ce1130586f3
+checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
+  （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
+  wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。
+  本次再補兩處接線：求解端明列相位對應表並發布**來源模擬時間**；
+  距離節點新增 pair_rows 強制產生必要配對列。**v1 門檻一個都沒動。**'
+wiring_fixes_20260929:
+- issue: 求解端發布的相位名稱（大寫任務相位）與設定鍵不符 ⇒ 接觸例外**從未生效**
+  fix: coman_pull_solver_node.PHASE_MAP 逐項明列；未列出者 unknown
+  counterexample: test_pipeline_pairs.py —— 直接送 'PULL' 時例外不生效（fail closed）
+- issue: 一般列只留**最近**障礙物；橫桿被例外刪掉後手指—面板**完全沒有屏障列**
+  fix: arm_link_distance.forced_pair_rows + pair_rows 參數
+  counterexample: test_pipeline_pairs.py —— 以橫桿為最近者時仍產生面板列並重現漏洞
+- issue: 相位齡以**接收時間**計，不是來源時間
+  fix: 相位訊息改為 JSON 攜帶 sim_t，安全層以來源時間計齡；解析失敗 ⇒ 相位未知
 questions:
   q1_completion: 20 mm 完整操作是否完成（接近→連接→拉開→保持→釋放→退出）
   q2_coordination: '操作期間是否真有底盤與手臂的協調運動，而不是只有底盤漂移。 判定用**實測運動**：底盤線速度 > 0.005 m/s 且任一關節速率 > 0.005 rad/s

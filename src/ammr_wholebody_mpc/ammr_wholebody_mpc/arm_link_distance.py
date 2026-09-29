@@ -108,6 +108,33 @@ FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded',
 
 
 
+def forced_pair_rows(W, pts_local, obstacle, obs_idx, li, rho, status, age,
+                     occ_of, max_range, max_rows=None):
+    """對**指定的 (連桿, 障礙物) 配對**單獨算距離並產生列。
+
+    為什麼需要：一般列只保留每個取樣點的**最近**障礙物。若最近的是接觸例外
+    對象（例如橫桿），濾波器依規則刪掉該列之後，其他物件（例如面板）就**完全
+    沒有列** —— 例外會連帶遮掉別的避碰。因此對有配對規則的組合另外補列。
+    """
+    from .arm_link_geometry import obstacle_distances as _od
+    d, v, _w = _od(W, [obstacle])
+    dmin = float(d.min())
+    if dmin > max_range:
+        return []
+    sel = np.nonzero(d <= dmin + rho)[0]
+    sel = sel[np.argsort(d[sel])]
+    if max_rows:
+        sel = sel[:max_rows]
+    out = []
+    for k in sel:
+        n_hat = v[k] / max(abs(float(d[k])), 1e-9)
+        out.append(list(W[k]) + list(n_hat)
+                   + [float(d[k]), float(status), age, float(occ_of(W[k], v[k])),
+                      float(li)] + list(pts_local[k]) + [float(rho),
+                                                         float(obs_idx)])
+    return out
+
+
 def _expand(path: str) -> str:
     """Read a URDF, expanding it first if it is still a .xacro."""
     import subprocess
@@ -131,6 +158,9 @@ class ArmLinkDistance(Node):
         p('report_frame', 'odom')
         p('lidar_frame', 'lidar_link')
         p('obstacles', [''])
+        # **必要配對列**：'link:obstacle'。對這些組合**另外**產生距離列，
+        # 不受「只留最近障礙物」影響 —— 否則接觸例外會連帶遮掉其他物件的列。
+        p('pair_rows', [''])
         # 'points' keeps the twelve fixed detection frames, retained only so the
         # old behaviour can be reproduced; measured against the link meshes they
         # understate clearance by up to 0.238 m. 'links' is the certified
@@ -230,6 +260,14 @@ class ArmLinkDistance(Node):
                                  '/scan_self_filter/occluded',
                                  self._on_occl, 10)
         self._obs_index = {o.name: i for i, o in enumerate(self.obstacles)}
+        self._pair_rows = {}
+        for _sp in [x for x in g('pair_rows') if str(x).strip()]:
+            _lk, _ob = str(_sp).split(':')
+            if _ob not in self._obs_index:
+                raise ValueError(f'pair_rows 指定了不存在的障礙物：{_sp!r}')
+            self._pair_rows.setdefault(_lk, []).append(_ob)
+        if self._pair_rows:
+            self.get_logger().info(f'必要配對列：{self._pair_rows}')
         # 障礙物索引→名稱（latched）：下游據此做配對層級規則
         from rclpy.qos import QoSProfile, DurabilityPolicy
         _lat = QoSProfile(depth=1)
@@ -501,6 +539,24 @@ class ArmLinkDistance(Node):
                                float(li)] + list(S.points[k])
                             + [float(S.rho),
                                float(self._obs_index.get(which[k], -1))])
+
+            # **必要配對列**：即使該配對不是最近障礙物也照樣產生
+            def _occ_of(p_w, vk):
+                if T_rl is None:
+                    return 1.0
+                p_l = (_inv(T_rl) @ np.append(p_w + vk, 1.0))[:3]
+                return 1.0 if self._occluded(p_l) else 0.0
+
+            for _obn in self._pair_rows.get(name, []):
+                _oi = self._obs_index[_obn]
+                _ob = self.obstacles[_oi]
+                if _ob.T_world_link is None:
+                    continue
+                _extra = forced_pair_rows(
+                    W, S.points, _ob, _oi, li, S.rho, status, age, _occ_of,
+                    self.max_range, self.max_rows_per_link)
+                rows.extend(_extra)
+                n_ok += len(_extra) if status == STATUS_OK else 0
         return rows, n_ok, n_unk, n_stale, n_nodata, worst_age
 
     def _publish(self, rows: list[list[float]]) -> None:
