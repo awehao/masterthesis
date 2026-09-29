@@ -12,7 +12,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WS = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(WS, 'src/ammr_wholebody_mpc'))
-from ammr_wholebody_mpc.arm_link_distance import forced_pair_rows            # noqa
+from ammr_wholebody_mpc.arm_link_distance import (                           # noqa
+    expand_pair_rows, forced_pair_rows)
 from ammr_wholebody_mpc.arm_link_geometry import Obstacle, obstacle_distances  # noqa
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics      # noqa
 from ammr_wholebody_mpc.wholebody_safety_filter import (                     # noqa
@@ -106,6 +107,74 @@ def main() -> int:
                                    d=float(d_panel))]
     A, b, _, _ = _rows_from_points(K, Q, with_extra, cfg, np.zeros(9))
     check('加入必要配對列後：接觸相位仍保有**面板**的屏障列', len(b) == 1)
+
+    # ---------- 3 漏列不限於面板：任一非例外物件都要有列 ----------
+    # 假設幾何（非本趟量測）：橫桿最近且允許接觸、面板 28 mm 合格、
+    # 支柱 40 mm 應受一般 50 mm 規則限制。
+    post = box('handle_post_l', [0.0, 0.040, 0.0], [0.02, 0.02, 0.06])
+    obs_all = [bar, panel, post]
+    names = [o.name for o in obs_all]
+    d3, _, which3 = obstacle_distances(W, obs_all)
+    check('前提：三個物件中最近者仍是橫桿',
+          all(w == 'handle_bar' for w in which3))
+    only_panel = [pt('uflite_finger1', 'handle_bar', d=float(d3.min())),
+                  pt('uflite_finger1', 'drawer_front_panel', d=0.028)]
+    A, b, _, _ = _rows_from_points(K, Q, only_panel, cfg, np.zeros(9))
+    names_in = {p_.obs for p_ in only_panel} - {'handle_bar'}
+    check('**只補面板時**：支柱完全沒有列（面板測試會通過但規則不成立）',
+          len(b) == 1 and 'handle_post_l' not in names_in)
+
+    pairs, exempt = expand_pair_rows(
+        ['uflite_finger1:*', 'uflite_finger2:*'],
+        ['uflite_finger1:handle_bar', 'uflite_finger2:handle_bar'], names)
+    check('link:* 展開到兩指',
+          set(pairs) == {'uflite_finger1', 'uflite_finger2'})
+    check('展開涵蓋所有非例外物件（面板與支柱都在）',
+          all(set(pairs[lk]) == {'drawer_front_panel', 'handle_post_l'}
+              for lk in pairs))
+    check('例外對象（橫桿）不在展開結果內',
+          all('handle_bar' not in v for v in pairs.values()))
+    check('免列清單記錄了橫桿',
+          all(exempt[lk] == {'handle_bar'} for lk in pairs))
+
+    rows_all = [pt('uflite_finger1', 'handle_bar', d=float(d3.min()))]
+    for obn in pairs['uflite_finger1']:
+        ob = {o.name: o for o in obs_all}[obn]
+        ex = forced_pair_rows(W, loc, ob, names.index(obn), li=0, rho=0.0,
+                              status=STATUS_OK, age=0.0,
+                              occ_of=lambda p, v: 0.0, max_range=1.0)
+        check(f'{obn} 產生了必要配對列', len(ex) > 0)
+        rows_all.append(pt('uflite_finger1', obn, d=min(r[6] for r in ex)))
+    A, b, _, _ = _rows_from_points(K, Q, rows_all, cfg, np.zeros(9))
+    kept = {p_.obs for p_ in rows_all if p_.obs != 'handle_bar'}
+    check('橫桿最近＋面板合格＋支柱違規：**支柱仍有限制列**',
+          len(b) == 2 and 'handle_post_l' in kept)
+    # 支柱 40 mm < 一般 d0 50 mm ⇒ 該列的 rhs 必須是**負的**（要求遠離）
+    A1, b1, _, _ = _rows_from_points(
+        K, Q, [pt('uflite_finger1', 'handle_post_l', d=0.040)], cfg,
+        np.zeros(9))
+    check('支柱那一列確實在限制方向（rhs < 0，要求遠離）', float(b1[0]) < 0.0)
+    # **S1 的 10 mm 並沒有打通面板那一對。** 零接近速度下
+    #   d_stop = d0 + eps = 10 + 30 = 40 mm > 設計間距 27.9 mm
+    # eps（幾何＋量測餘裕）預設 30 mm，本身就大於 27.9 mm ⇒
+    # **任何 d0 ≥ 0 都放行不了**。這是規格缺口，不在此處調門檻。
+    A2, b2, _, _ = _rows_from_points(
+        K, Q, [pt('uflite_finger1', 'drawer_front_panel', d=0.0279)], cfg,
+        np.zeros(9))
+    check('面板在設計間距 27.9 mm 下**仍是限制方向**（d0+eps = 40 mm）',
+          float(b2[0]) < 0.0)
+    cfg0 = SafetyConfig(contact_pairs=dict(cfg.contact_pairs),
+                        d0_by_pair={'uflite_finger1|drawer_front_panel': 0.0})
+    cfg0.phase = 'pull'
+    A3, b3, _, _ = _rows_from_points(
+        K, Q, [pt('uflite_finger1', 'drawer_front_panel', d=0.0279)], cfg0,
+        np.zeros(9))
+    check('連 d0 = 0 都仍是限制方向（eps 單獨 30 mm > 27.9 mm）',
+          float(b3[0]) < 0.0)
+    check('支柱的限制比面板嚴（一般 d0 50 mm vs 配對 10 mm）',
+          float(b1[0]) < float(b2[0]))
+    check('支柱沿用一般門檻，未被 10 mm 設定波及',
+          'uflite_finger1|handle_post_l' not in cfg.d0_by_pair)
 
     # 例外對象之外的連桿不受影響
     A, b, _, _ = _rows_from_points(K, Q, [pt('link4', 'handle_bar')], cfg,

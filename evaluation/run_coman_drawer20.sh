@@ -18,8 +18,11 @@ URDF_WB="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
 SIM_LIMIT="${SIM_LIMIT:-120}"
 PAIR_D0="${PAIR_D0:-uflite_finger1:drawer_front_panel:0.010,uflite_finger2:drawer_front_panel:0.010}"
 CONTACT_PAIRS="${CONTACT_PAIRS:-uflite_finger1:handle_bar:engage|pull|hold|release,uflite_finger2:handle_bar:engage|pull|hold|release}"
-# 一般列只留最近障礙物；橫桿的列被接觸例外刪掉後面板會完全沒有列，故強制產生此配對列
-PAIR_ROWS="${PAIR_ROWS:-uflite_finger1:drawer_front_panel,uflite_finger2:drawer_front_panel}"
+# 一般列只留最近障礙物。橫桿被接觸例外刪列後，**任何**其他物件都可能完全沒有列
+# （面板 28 mm 合格、支柱 40 mm 違規卻無列可約束），故對兩指補齊「其餘所有配對」。
+PAIR_ROWS="${PAIR_ROWS:-uflite_finger1:*,uflite_finger2:*}"
+# 免列＝接觸例外對象本身（它仍有一般的最近列，只在允許相位被濾掉）
+PAIR_ROWS_EXEMPT="${PAIR_ROWS_EXEMPT:-uflite_finger1:handle_bar,uflite_finger2:handle_bar}"
 STROKE="${STROKE:-0.020}"
 PULL_S="${PULL_S:-4.0}"
 PIDS=(); say(){ echo "[$(date +%T)] $*" | tee -a "$LOG"; }
@@ -33,11 +36,11 @@ say "=== 20 mm 協同抽屜操作 主成果首測 RUN_ID=$RUN_ID domain=$ROS_DOM
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 
 say "[1/6] 起動前檢查（版本、規格、配對規則一致性）"
-python3 - "$DIR" "$PAIR_D0" "$CONTACT_PAIRS" "$PAIR_ROWS" <<'PY' | tee -a "$LOG" || exit 2
+python3 - "$DIR" "$PAIR_D0" "$CONTACT_PAIRS" "$PAIR_ROWS" "$PAIR_ROWS_EXEMPT" <<'PY' | tee -a "$LOG" || exit 2
 import hashlib, json, os, sys, yaml
 ws=os.path.dirname(os.path.dirname(os.path.abspath(__file__))) if False else os.getcwd()
 sha=lambda f: hashlib.sha256(open(f,'rb').read()).hexdigest()[:16]
-out, pair, cpairs, prows = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+out, pair, cpairs, prows, pexempt = sys.argv[1:6]
 sp='evaluation/results/specs'
 v1=yaml.safe_load(open(f'{sp}/wb_coman_drawer20_criteria_v1.yaml',encoding='utf-8'))
 s1=yaml.safe_load(open(f'{sp}/wb_coman_drawer20_supplement_s1.yaml',encoding='utf-8'))
@@ -46,6 +49,10 @@ if v1['status']!='frozen': fails.append('v1 未凍結')
 if sha(f'{sp}/wb_coman_drawer20_criteria_v1.yaml')!=s1['references']['criteria_v1_sha256_16']:
     fails.append('v1 sha 與 S1 記錄不符（v1 可能被就地改寫）')
 if s1['status']!='approved': fails.append(f"S1 補充規格未核准（status={s1['status']}）")
+# 即使標為 approved，只要還有 blocking 的未決項就一律擋住
+for _oi in s1.get('open_issues') or []:
+    if str(_oi.get('severity'))=='blocking':
+        fails.append(f"S1 未決項 {_oi.get('id')} 仍為 blocking：{_oi.get('title')}")
 want={k:float(v) for k,v in s1['pair_avoidance']['d0_by_pair'].items()}
 got={}
 for x in pair.split(','):
@@ -60,9 +67,16 @@ for x in cpairs.split(','):
 if wcp!=gcp: fails.append(f'contact_pairs 與 S1 不符：{gcp} vs {wcp}')
 if not s1['pair_avoidance'].get('bar_stays_in_avoidance'):
     fails.append('S1 未聲明橫桿仍在避碰集合')
-wpr=sorted(s1['pair_avoidance']['required_pair_rows']['pairs'])
+_rpr=s1['pair_avoidance']['required_pair_rows']
+wpr=sorted(_rpr['pairs'])
 gpr=sorted(x.strip() for x in prows.split(',') if x.strip())
 if wpr!=gpr: fails.append(f'pair_rows 與 S1 必要配對列不符：{gpr} vs {wpr}')
+wex=sorted(_rpr['exempt'])
+gex=sorted(x.strip() for x in pexempt.split(',') if x.strip())
+if wex!=gex: fails.append(f'pair_rows_exempt 與 S1 不符：{gex} vs {wex}')
+# 免列對象必須就是接觸例外對象，不得放過任何沒有例外的物件
+if {x.replace(':','|') for x in gex}!=set(wcp):
+    fails.append(f'免列清單與 contact_pairs 不一致：{gex} vs {sorted(wcp)}')
 _pm=s1['pair_avoidance']['phase_map']
 _prod=set(_pm['contact_phases_produced'])
 _used=set(p for v in wcp.values() for p in v)
@@ -93,7 +107,8 @@ say "  障礙物 ${#OBS[@]} 個（**含橫桿**；接觸例外只給兩指且限
 spawn dist ros2 run ammr_wholebody_mpc arm_link_distance --ros-args \
   -p use_sim_time:=true -p report_frame:=odom -p geometry:=links \
   -p wholebody_urdf:="$URDF_WB" -p obstacles:="[$(IFS=,; echo "${OBS[*]}")]" \
-  -p pair_rows:="[$(echo "$PAIR_ROWS" | sed 's/,/","/g; s/^/"/; s/$/"/')]"
+  -p pair_rows:="[$(echo "$PAIR_ROWS" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
+  -p pair_rows_exempt:="[$(echo "$PAIR_ROWS_EXEMPT" | sed 's/,/","/g; s/^/"/; s/$/"/')]"
 spawn safety ros2 run ammr_wholebody_mpc wholebody_safety --ros-args \
   -p use_sim_time:=true -p report_frame:=odom -p base_frame:=base_link \
   -p wholebody_urdf:="$URDF_WB" -p freespace_confirmed:=false \

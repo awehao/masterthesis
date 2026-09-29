@@ -108,6 +108,39 @@ FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded',
 
 
 
+def expand_pair_rows(specs, exempt_specs, obstacle_names):
+    """解析 `pair_rows` 與 `pair_rows_exempt`，回傳 ({連桿: [障礙物…]}, {連桿: {免列…}})。
+
+    `<link>:*` 展開為**該連桿對所有非免列障礙物**。漏列問題不限於某一個物件：
+    接觸例外對象成為最近者並被刪列後，**任何**其他物件都可能完全沒有列
+    （面板 28 mm 合格、支柱 40 mm 違規卻無列可約束）。因此逐一補齊。
+
+    免列對象是接觸例外物件本身；它仍有一般的最近列，只是在允許相位被濾掉。
+    """
+    known = set(obstacle_names)
+    exempt: dict[str, set[str]] = {}
+    for sp in [x for x in (exempt_specs or []) if str(x).strip()]:
+        lk, ob = str(sp).split(':')
+        if ob not in known:
+            raise ValueError(f'pair_rows_exempt 指定了不存在的障礙物：{sp!r}')
+        exempt.setdefault(lk, set()).add(ob)
+    pairs: dict[str, list[str]] = {}
+    for sp in [x for x in (specs or []) if str(x).strip()]:
+        lk, ob = str(sp).split(':')
+        if ob == '*':
+            exp = [n for n in obstacle_names if n not in exempt.get(lk, set())]
+            if not exp:
+                raise ValueError(f'pair_rows {sp!r} 展開後為空')
+            pairs.setdefault(lk, []).extend(exp)
+        elif ob not in known:
+            raise ValueError(f'pair_rows 指定了不存在的障礙物：{sp!r}')
+        else:
+            pairs.setdefault(lk, []).append(ob)
+    for lk in pairs:                          # 去重、保持設定順序
+        pairs[lk] = list(dict.fromkeys(pairs[lk]))
+    return pairs, exempt
+
+
 def forced_pair_rows(W, pts_local, obstacle, obs_idx, li, rho, status, age,
                      occ_of, max_range, max_rows=None):
     """對**指定的 (連桿, 障礙物) 配對**單獨算距離並產生列。
@@ -161,6 +194,7 @@ class ArmLinkDistance(Node):
         # **必要配對列**：'link:obstacle'。對這些組合**另外**產生距離列，
         # 不受「只留最近障礙物」影響 —— 否則接觸例外會連帶遮掉其他物件的列。
         p('pair_rows', [''])
+        p('pair_rows_exempt', [''])
         # 'points' keeps the twelve fixed detection frames, retained only so the
         # old behaviour can be reproduced; measured against the link meshes they
         # understate clearance by up to 0.238 m. 'links' is the certified
@@ -260,14 +294,13 @@ class ArmLinkDistance(Node):
                                  '/scan_self_filter/occluded',
                                  self._on_occl, 10)
         self._obs_index = {o.name: i for i, o in enumerate(self.obstacles)}
-        self._pair_rows = {}
-        for _sp in [x for x in g('pair_rows') if str(x).strip()]:
-            _lk, _ob = str(_sp).split(':')
-            if _ob not in self._obs_index:
-                raise ValueError(f'pair_rows 指定了不存在的障礙物：{_sp!r}')
-            self._pair_rows.setdefault(_lk, []).append(_ob)
-        if self._pair_rows:
-            self.get_logger().info(f'必要配對列：{self._pair_rows}')
+        self._pair_rows, self._pair_exempt = expand_pair_rows(
+            g('pair_rows'), g('pair_rows_exempt'),
+            [o.name for o in self.obstacles])
+        for _lk, _obs in self._pair_rows.items():
+            self.get_logger().info(
+                f'必要配對列 {_lk}：{len(_obs)} 個障礙物 {_obs}'
+                f'（免列：{sorted(self._pair_exempt.get(_lk, set()))}）')
         # 障礙物索引→名稱（latched）：下游據此做配對層級規則
         from rclpy.qos import QoSProfile, DurabilityPolicy
         _lat = QoSProfile(depth=1)

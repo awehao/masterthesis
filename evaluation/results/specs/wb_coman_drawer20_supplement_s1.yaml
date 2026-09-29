@@ -46,12 +46,19 @@ pair_avoidance:
       留在設定裡等於一條永不生效的規則，故移除；參照表 v0 草稿不動。'
   required_pair_rows:
     note: '一般列只保留每個取樣點的**最近**障礙物。手指接近時最近者是橫桿；
-      橫桿的列被接觸例外刪掉後，面板就完全沒有列 ⇒ 該配對無屏障。
-      因此距離節點須為下列配對**強制產生**距離列（不論誰最近）。'
+      橫桿的列被接觸例外刪掉後，**任何**其他物件都可能完全沒有列 ——
+      不只面板（面板 28 mm 合格，支柱 40 mm 違規卻無列可約束）。
+      因此對**有接觸例外的兩根手指**，逐一補齊其餘所有非例外配對。
+      其他連桿的距離算法不變。'
     pairs:
-    - uflite_finger1:drawer_front_panel
-    - uflite_finger2:drawer_front_panel
-    wired_via: arm_link_distance.py 參數 pair_rows（由 run_coman_drawer20.sh 傳入）
+    - uflite_finger1:*
+    - uflite_finger2:*
+    exempt:
+    - uflite_finger1:handle_bar
+    - uflite_finger2:handle_bar
+    exempt_note: 免列＝接觸例外對象本身；它仍有一般的最近列，只在允許相位被濾掉
+    wired_via: arm_link_distance.py 參數 pair_rows／pair_rows_exempt（由 run_coman_drawer20.sh 傳入，起動前檢查比對 S1
+      並要求免列清單與 contact_pairs 完全一致）
   rationale:
     task_need: 設計抓取位姿下指尖距面板 27.9 mm（實測），一般規則 d0 = 50 mm 會擋死任務
     selection_basis_m:
@@ -91,10 +98,10 @@ checkers_sha256_16:
   coman_pull_solver_node.py: 52031ba7fe6cc38c
   isaac_coman_drawer_sim.py: 3cd85d5b2d3787b8
   wholebody_safety_filter.py: c81268f57616b59d
-  arm_link_distance.py: d29c5e694a77be7a
+  arm_link_distance.py: 5f4cbbdacd57bd79
   wholebody_safety_node.py: a00dc729e15421cb
   test_pair_exceptions.py: da31af8647a8f293
-  test_pipeline_pairs.py: 39b36ce1130586f3
+  test_pipeline_pairs.py: 98d40f4360dc9bb2
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。
@@ -109,6 +116,25 @@ wiring_fixes_20260929:
   counterexample: test_pipeline_pairs.py —— 以橫桿為最近者時仍產生面板列並重現漏洞
 - issue: 相位齡以**接收時間**計，不是來源時間
   fix: 相位訊息改為 JSON 攜帶 sim_t，安全層以來源時間計齡；解析失敗 ⇒ 相位未知
+open_issues:
+- id: O1
+  severity: blocking
+  title: 10 mm 的配對 d0 **沒有**打通手指—面板；eps 單獨就大於設計間距
+  facts:
+    design_clearance_mm: 27.9
+    filter_eps_mm: 30.0
+    pair_d0_mm: 10.0
+    d_stop_at_zero_speed_mm: 40.0
+    d0_needed_for_pass_mm: -2.1
+  detail: 'd_stop = d0 + v·τ + v²/2a + eps。零接近速度下 d_stop = 10 + 30 = 40 mm
+    > 27.9 mm ⇒ 面板那一列**仍在限制方向**。eps（幾何＋量測餘裕，預設 30 mm）
+    本身就大於 27.9 mm，所以**任何 d0 ≥ 0 都放行不了**這一對。
+    離線反例已固定此行為（test_pipeline_pairs.py：d0 = 10 mm 與 d0 = 0 皆 rhs < 0）。'
+  note_on_double_counting: 'eps 的用途（幾何＋量測餘裕）與 S1 選值依據
+    （網格取樣 2.0 + 追蹤誤差 1.5 + 工程預留 3.0 = 6.5 mm）**重疊**；
+    但如何處置屬門檻決定，**不在此版自行更動**。'
+  status: 待指導意見裁定；**未調整任何門檻**（eps 仍為 30 mm，d0 仍為 10 mm）
+  blocks: S1 核准與 20 mm 主成果首測
 questions:
   q1_completion: 20 mm 完整操作是否完成（接近→連接→拉開→保持→釋放→退出）
   q2_coordination: '操作期間是否真有底盤與手臂的協調運動，而不是只有底盤漂移。 判定用**實測運動**：底盤線速度 > 0.005 m/s 且任一關節速率 > 0.005 rad/s
