@@ -5,7 +5,7 @@
 # set_angular_velocity() 直接設定底盤根部速度，支撐球與地面零摩擦 —— 不是輪驅動。
 # 因此**不能**驗證牽引力或打滑；由底盤速度換算的輪速不是獨立實測輪速。
 schema: wb_coman_drawer_criteria/0
-version: v0.5-draft
+version: v0.6-draft
 status: draft_not_frozen
 created: 2026-09-29
 revised: 2026-09-29
@@ -106,10 +106,19 @@ H_handover:
   M1_not_guaranteed: 只涵蓋手指內面與桿面；非完整碰撞檢查；不得逕稱為「最小間距」
   M1_validation:
     script: evaluation/check_enclosure_margin_approx.py
-    method: 真實手指網格（finger1.stl 2238 面，finger2 以 y 鏡射近似）對有限長圓柱，逐點求最小間距
-    cases: 160（零誤差、單獨平移、單獨傾斜與疊加）
-    result: m_approx − m_num 介於 −7.735 mm 與 −0.713 mm，**全部保守**
-    least_conservative_case: t_z = −4 mm 併 3° 傾斜，仍保守 0.713 mm
+    revision: rev2（rev1 的最近點算法有缺陷，結論作廢）
+    algorithm: 完整區域判定（面內／三邊／三頂點），七個可手算單元測試通過
+    mesh_source: finger1.stl 與 finger2.stl 各自讀取，不用鏡射；URDF collision 即引用這兩個 STL
+    engine_shape_not_verified: 模擬引擎實際使用的凸分解形狀未經驗證
+    bar_model: 完整有限圓柱（長 0.200 m，含兩端面）
+    sampling: 手指表面格距 ≤ 0.30 mm（555694 點）＋ 解析式圓柱距離
+    lipschitz_bound_m: 0.0003
+    comparison: 一律用保守下界 (m_num − h)
+    cross_check: 兩條獨立路徑差 0.001–0.002 mm
+    cases: 1260（含負向偏移與多軸合併旋轉）
+    result: m_approx − (m_num − h) 介於 −7.477 mm 與 −0.182 mm，**全部保守**
+    conservatism_within_H6: 1.050 mm（|t_z| ≤ 2 mm）
+    conservatism_at_boundary: 0.182 mm（|t_z| = 4 mm，H6 限值的 2 倍）
   M1_validated_range:
     t_y_abs_max_m: 0.0029
     t_z_abs_max_m: 0.0040
@@ -118,8 +127,8 @@ H_handover:
     outside_range: refuse                    # 超出已核對範圍即拒絕放行，不得外推
   M1_model_gap_recorded:
     finding: 手指網格內面在橫桿高度處退在局部 y = +0.0112；名目 y = 0 平面只存在於指根
-    consequence: 零誤差下真實最小間距 6.911 mm，非名目 3.9 mm
-    impact_this_case: 無（理想固定連接不靠夾持面摩擦）
+    consequence: 零誤差下最小間距 6.910 mm（**本模型與算法的估計值**），非名目 3.9 mm
+    impact_this_case: 對夾持力無影響（理想固定連接不靠摩擦）；**不等於**對交接碰撞無影響
     impact_future: 摩擦夾持必須重新檢視
   H1_tcp_rel_handle_pos: record_only         # 降為記錄量
   H2_tcp_rel_handle_rot: record_only         # 降為記錄量
@@ -218,7 +227,8 @@ comparison:
 
 runner_gate:
   refuse_if_any_required_threshold_null: true
-  note: 本輪尚未撰寫 runner；此規則於撰寫時實作。
+  enforced_in: evaluation/coman_handover_state.py（load_spec：未凍結或仍有 null 即拋 SpecNotFrozen）
+  state_machine_module: evaluation/coman_handover_state.py（20 項離線狀態序列測試通過）
   currently_null: []
   freeze_status: 三個數值已填入，**待核准後才改 status 並凍結為 v1**；在此之前仍為草案
 
