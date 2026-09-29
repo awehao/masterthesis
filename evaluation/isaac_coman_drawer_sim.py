@@ -127,6 +127,18 @@ ap.add_argument('--drawer-no-gravity', action='store_true',
 # 只重播命令、**不建立夾爪—抽屜固定關節**：回答「負載成長是否依賴這個連接」。
 # engage 事件照常記錄（同步快照照取），但不建關節、也不把 coupled 設為 True
 # （否則 grasp_lost 會因抽屜不動而誤觸發）。
+ap.add_argument('--machine', action='store_true',
+                help='接上 v1 狀態機：正式釋放資格改用 normal_release_allowed')
+ap.add_argument('--cmd-source', default='traj', choices=['traj', 'wb9'],
+                help='命令來源：traj=重播關節軌跡；wb9=E2 的 9 維速度命令')
+ap.add_argument('--max-cmd-age-s', type=float, default=0.2,
+                help='9 維命令的新鮮度上限（執行端自身）')
+ap.add_argument('--arm-rate-max', type=float, default=1.0,
+                help='9 維命令的手臂速率上限（整筆拒收門檻）')
+ap.add_argument('--base-lin-max', type=float, default=0.05,
+                help='9 維命令的底盤線速度界限（整筆拒收門檻）')
+ap.add_argument('--base-ang-max', type=float, default=0.2,
+                help='9 維命令的底盤角速度界限（整筆拒收門檻）')
 ap.add_argument('--post-stop-steps', type=int, default=20,
                 help='停止後的觀察步數（**事前指定**，不是跑完才決定）')
 ap.add_argument('--handshake-test', action='store_true',
@@ -332,11 +344,13 @@ from coman_pose_reader import (HandleTransform, LOG_COLS as POSE_LOG_COLS,  # no
                                READ_ORDER, SameStepPoseReader)
 from coman_couple_link import (CoupleLink, evaluate_capability,       # noqa: E402
                                freeze_target)
+from coman_handover_state import (Frame as HSFrame,                  # noqa: E402
+                                  HandoverMachine, load_spec as load_v1_spec)
+from wb_cmd_chain_e2 import CmdChainE2                               # noqa: E402
+from wb_wheel_limit import WheelLimitConfig                          # noqa: E402
 
-# **狀態機尚未接到本執行端**：正式路徑的釋放資格必須來自
-# coman_handover_state.HandoverMachine 的 normal_release_allowed。
-# 在接妥之前，正式釋放一律被擋下 —— 不得退回「已連接且位姿有效」這種簡化條件。
-MACHINE_WIRED = False
+# 正式路徑的釋放資格**只能**來自 v1 狀態機的 normal_release_allowed。
+# `--cmd-source wb9` 或 `--machine` 啟用時才算接妥；未接妥仍一律擋下。
 POSES = yaml.safe_load(open(a.poses))
 ARM = [f'joint{i}' for i in range(1, 7)]
 Q_START = np.array([float(POSES[CASE['pregrasp']['start_config']][j]) for j in ARM])
@@ -1091,12 +1105,46 @@ def main():
     hs_attach_step = None          # 連接事件的物理步（注入與釋放計時的基準）
     hs_stop_after = None           # 確認後收尾的物理步
     hs_blocked_events = []         # 連接後被攔下的軌跡事件
+    release_req_flag = False       # 任務流程是否已送出釋放請求
     inject_info = None             # 注入當下的關節讀回
     last_applied_q = None          # **實際送進 apply_action() 的六軸設定點**
     coman_applied_log = []         # [step, t, q1..q6, source]
 
     coman_post_stop_log = []
     coman_post_nan = {}
+    machine = None
+    machine_wired = False
+    machine_flags_last = None
+    machine_log = []
+    if a.machine or a.cmd_source == 'wb9':
+        # **載入已凍結的 v1**（不傳 allow_draft）：未凍結或門檻為 null 會直接拋錯
+        v1_spec = load_v1_spec()
+        machine = HandoverMachine(v1_spec)
+        machine_wired = True
+        print(f'[coman] v1 狀態機已接上（spec {v1_spec["version"]}／'
+              f'{v1_spec["status"]}），正式釋放資格改用 normal_release_allowed',
+              flush=True)
+    chain9 = None
+    if a.cmd_source == 'wb9':
+        # 低速介面界限：越界即**整筆拒收**，不縮命令（沿用 E2 的作法）
+        def _low_speed_bound(vx, vy, wz):
+            lin = math.hypot(vx, vy)
+            if lin > a.base_lin_max:
+                return (False, f'線速度 {lin:.4f} > {a.base_lin_max} m/s')
+            if abs(wz) > a.base_ang_max:
+                return (False, f'角速度 {abs(wz):.4f} > {a.base_ang_max} rad/s')
+            return (True, None)
+
+        _wcfg = WheelLimitConfig(arm_rate_max=a.arm_rate_max,
+                                 dt_max=max(5.0 * a.physics_dt, 0.05))
+        chain9 = CmdChainE2(max_cmd_age_s=a.max_cmd_age_s,
+                            arm_rate_max=a.arm_rate_max,
+                            wheel_ok=_low_speed_bound,
+                            joint_lower=tuple(LITE6_SAFE.lower),
+                            joint_upper=tuple(LITE6_SAFE.upper),
+                            mode='sync', wheel_cfg=_wcfg)
+        print(f'[coman] 9 維命令鏈已建立（E2，max_cmd_age_s={a.max_cmd_age_s}）；'
+              f'底盤 3 維與手臂 6 維**同一物理步**套用', flush=True)
 
     def coman_post_sample(tag):
         """停止**之後**的取樣：力、開度與**實際關節角**都要留。
@@ -1361,9 +1409,12 @@ def main():
                 # 任務流程的**明確請求**；**正式資格只能來自狀態機**
                 _ps = pose_src.physics_step_id()
                 couple_link.request_release(_ps, t, 'task_flow_event')
+                release_req_flag = True
                 _cap, _src = evaluate_capability(
-                    'production', machine_allowed=False,
-                    machine_wired=MACHINE_WIRED)
+                    'production',
+                    machine_allowed=bool(machine_flags_last is not None
+                                         and machine_flags_last.normal_release_allowed),
+                    machine_wired=machine_wired)
                 if couple_link.may_release_now(_cap, _ps, t, _src):
                     info['detached'] = (detach()
                                         if GRASP_MODEL == 'fixed_attachment' else True)
@@ -1404,6 +1455,30 @@ def main():
             coman_applied_log.append([int(pose_src.physics_step_id()), round(t, 4)]
                                      + [round(v, 9) for v in last_applied_q]
                                      + ['frozen'])
+        elif chain9 is not None:
+            # **9 維命令**：底盤 3 維與手臂 6 維由同一筆命令、同一物理步套用。
+            # 新鮮度、整筆拒收與輪級限制都在命令鏈內；逾時只凍結設定點，
+            # **不代表手臂實際速度瞬間為零**。
+            _qm9 = robot.get_joint_positions()
+            _res9 = chain9.step(t, a.physics_dt,
+                                [float(_qm9[idx[j]]) for j in ARM])
+            if _res9 is not None:
+                _bv, _asp = _res9
+                _bp, _bq = robot.get_world_pose()
+                _cy, _sy = math.cos(yaw_of(_bq)), math.sin(yaw_of(_bq))
+                robot.set_linear_velocity(np.array([
+                    _bv[0] * _cy - _bv[1] * _sy,
+                    _bv[0] * _sy + _bv[1] * _cy, 0.0]))
+                robot.set_angular_velocity(np.array([0.0, 0.0, _bv[2]]))
+                tgt = robot.get_joint_positions()
+                for k, j in enumerate(ARM):
+                    tgt[idx[j]] = _asp[k]
+                robot.get_articulation_controller().apply_action(
+                    ArticulationAction(joint_positions=tgt))
+                last_applied_q = [float(v) for v in _asp]
+                coman_applied_log.append(
+                    [int(pose_src.physics_step_id()), round(t, 4)]
+                    + [round(v, 9) for v in last_applied_q] + ['wb9'])
         elif snap is not None:
             applied_seq, _, q_cmd = snap
             tgt = robot.get_joint_positions()
@@ -1705,6 +1780,38 @@ def main():
                       flush=True)
         else:
             hold_ok_t = None
+
+        # --- v1 狀態機：以**本步量測**評估，正式釋放資格由它決定 ---
+        if machine is not None and _prec.valid:
+            _age9 = (t - chain9.snap.recv_sim_t
+                     if (chain9 is not None and chain9.snap is not None) else 0.0)
+            _relR = _prec.relative[:3, :3]
+            _hsf = HSFrame(
+                t=t,
+                # 本執行端沒有獨立安全層節點；兩個年齡目前同源，**已註明**，
+                # 不得據此宣稱兩層各自獨立驗證過。
+                cmd_age_safety_s=_age9, cmd_age_endpoint_s=_age9,
+                rel_pos_tool=_prec.relative[:3, 3],
+                bar_axis_tool=_relR @ pose_reader.handle.bar_axis_local,
+                opening_m=float(opening), f_norm_n=float(f_norm),
+                attached=bool(coupled), monitor_ok=True,
+                rel_rot_tool=_relR,
+                decouple_confirmed=(couple_link.confirm is not None),
+                release_requested=bool(release_req_flag),
+                gripper_pos_world=_prec.gripper[:3, 3],
+                gripper_rot_world=_prec.gripper[:3, :3],
+                same_step_read=True)
+            machine_flags_last = machine.step(_hsf)
+            _fl = machine_flags_last
+            machine_log.append([
+                int(pose_src.physics_step_id()), round(t, 4), machine.phase,
+                bool(_fl.cmd_fresh), bool(_fl.endpoint_recv_ok),
+                bool(_fl.in_validated_range), bool(_fl.handover_cond_now),
+                bool(_fl.handover_pass), bool(_fl.hold_tracking_pass),
+                bool(_fl.normal_release_allowed), bool(_fl.release_handshake),
+                bool(_fl.emergency_decouple),
+                round(machine.margin(_hsf.rel_pos_tool, _hsf.bar_axis_tool), 6),
+                round(machine.insertion_dev(_hsf.rel_pos_tool), 6)])
 
         # --- 停止條件 ---
         # 手指接觸中止（friction 版才啟用）：判準是**每一指各自**的接觸力模長，
@@ -2009,7 +2116,7 @@ def main():
         'coman_pose_invalid_n': pose_reader.n_invalid,
         'coman_abort': coman_abort,
         'coman_couple_link': couple_link.record(),
-        'coman_machine_wired': MACHINE_WIRED,
+        'coman_machine_wired': machine_wired,
         'coman_handshake_blocked_events': hs_blocked_events,
         'coman_inject_info': inject_info,
         'coman_applied_cmd_cols': ['physics_step_id', 'sim_time',
@@ -2019,6 +2126,15 @@ def main():
                                  'drawer_vy', 'f_norm',
                                  'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'tag'],
         'coman_post_stop_log': coman_post_stop_log,
+        'coman_machine_cols': ['physics_step_id', 'sim_time', 'phase',
+                               'cmd_fresh', 'endpoint_recv_ok',
+                               'in_validated_range', 'handover_cond_now',
+                               'handover_pass', 'hold_tracking_pass',
+                               'normal_release_allowed', 'release_handshake',
+                               'emergency_decouple', 'margin_m', 'insertion_dev_m'],
+        'coman_machine_log': machine_log,
+        'coman_cmd_source': a.cmd_source,
+        'coman_chain9': (chain9.summary() if chain9 is not None else None),
         'coman_post_stop_quality': {
             'steps_configured': int(a.post_stop_steps),
             'samples': len(coman_post_stop_log),
