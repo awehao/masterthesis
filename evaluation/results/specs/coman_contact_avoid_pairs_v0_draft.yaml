@@ -10,9 +10,13 @@ created: 2026-09-29
 basis: evaluation/results/coman_handover_geometry_check_20260929.md §18
 
 general_rule:
-  source: 安全濾波屏障 n^T J v <= alpha (d - d_stop)
-  d_stop: d0 + v*tau + v^2/(2a)
+  source: 安全濾波屏障 n^T J v <= alpha (d_eff - d_stop)
+  # **更正（2026-09-29）**：本欄原寫 `d0 + v*tau + v^2/(2a)`，**漏了 eps**。
+  # 實作是 wholebody_safety_filter._rows_from_points，含 eps 且從 d 扣除 rho：
+  d_stop: d0 + v*tau + v^2/(2a) + eps
+  d_eff: d - rho                    # rho = 該連桿經認證的取樣覆蓋半徑
   d0_m: 0.05
+  eps_m: 0.03                       # 幾何＋量測餘裕；**零速下的總靜態間距是 80 mm**
   tau_s: 0.15
   alpha: 2.0
   applies_to: 所有未列入例外的配對
@@ -40,13 +44,31 @@ near_approach_pairs:      # 量測後**收窄為兩組**（見下方 measured_re
     issue: 實測最小 27.99 mm < 50 mm
     min_clearance_m: null        # 待定
 
-no_conflict_after_measurement:   # 原先被誤列為衝突，量測後確認**適用一般規則**
-  - pair: [uflite_gripper_link, drawer/front_panel]
-    measured_min_m: 0.0523
-  - pair: [uflite_finger1, drawer/handle/post_l]
-    measured_min_m: 0.0671
-  - pair: [uflite_finger2, drawer/handle/post_r]
-    measured_min_m: 0.0670
+no_conflict_after_measurement:
+  status: "**結論已撤回（2026-09-29）**"
+  why: |
+    這三組的「無衝突」是拿量測最小間距與 d0 = 50 mm 相比得出的，
+    但一般規則零速下的總靜態間距是 d0 + eps = **80 mm**，且還要從 d 扣除 rho。
+    以完整屏障重算（evaluation/coman_zero_cmd_feasible.py，既有趟次 hold 相位），
+    支柱兩組在設計保持位姿下**不允許零命令**。
+  recheck_full_barrier:            # 餘量為距離當量 = rhs / alpha
+    - {pair: [uflite_finger1, drawer/handle/post_r], d_mm: 66.95, rho_mm: 12.73,
+       margin_mm: -25.78}
+    - {pair: [uflite_finger1, drawer/handle/post_l], d_mm: 67.27, rho_mm: 12.73,
+       margin_mm: -25.46}
+    - {pair: [uflite_finger2, drawer/handle/post_l], d_mm: 67.46, rho_mm: 12.28,
+       margin_mm: -24.82}
+    - {pair: [uflite_finger2, drawer/handle/post_r], d_mm: 69.91, rho_mm: 12.28,
+       margin_mm: -22.37}
+    - {pair: [uflite_gripper_link, drawer/front_panel], d_mm: null,
+       note: 該配對未落入最緊十名；未單獨重算，**不再宣稱無衝突**}
+  missing_from_this_table:
+    - pair: [uflite_gripper_link, drawer/handle/bar]
+      why: 本表只列了殼—面板，**沒有列殼—橫桿**
+      full_barrier_margin_mm: -84.65
+      true_min_distance_mm: 7.42     # 局部加密判定（coman_shell_bar_bound.py）
+      verdict: '**有間隙、非接觸配對**；d − rho < 0 只是下界過保守'
+  not_resolved_here: 近接操作配置待**一次決定**；不逐組降門檻、不全域移除 eps
 
 measured_reference:
   source: evaluation/coman_near_pair_clearance.py，趟次 drawer_220102_offset20

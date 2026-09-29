@@ -115,6 +115,7 @@ checkers_sha256_16:
   test_pair_exceptions.py: da31af8647a8f293
   test_pipeline_pairs.py: 819689265ea84de3
   coman_zero_cmd_feasible.py: 59b2c2d21c3cc0eb
+  coman_shell_bar_bound.py: d1ba12bd7a0a5c38
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。
@@ -176,8 +177,8 @@ open_issues:
   blocking_pairs:
   - {pair: uflite_gripper_link|handle_bar, d_mm: 8.69, rho_mm: 13.35,
      margin_mm: -84.65, feasible_gap_limit_mm: -4.65,
-     note: '**上限為負** —— 取樣點已落在橫桿的覆蓋半徑內，任何非負間距都放行不了；
-       這是抓取幾何（夾爪殼包住橫桿），不是門檻大小問題'}
+     note: '上限為負**只表示這組取樣證不出正間距**，不是實際相交。
+       已用局部加密判定（見 geometry_resolved）。'}
   - {pair: link6|handle_bar, d_mm: 64.12, rho_mm: 13.30, margin_mm: -29.17,
      feasible_gap_limit_mm: 50.83}
   - {pair: uflite_finger1|handle_post_r, d_mm: 66.95, rho_mm: 12.73,
@@ -200,8 +201,29 @@ open_issues:
   representation_note: '手指／夾爪的 rho 為 12.3–13.4 mm，與此處的間距
     （8.7–28.9 mm）同一數量級 ⇒ 這些配對的餘量主要由**取樣表示的覆蓋半徑**決定，
     不是量測誤差。'
+  geometry_resolved:
+    pair: uflite_gripper_link|handle_bar
+    method: 'evaluation/coman_shell_bar_bound.py —— 只對這一對做分支與界限：
+      夾爪殼碰撞三角形局部加密（8812 → 40816），每個三角形取形心到橫桿的
+      **精確**帶號距離配上外接半徑（距離函數 1-Lipschitz）。
+      **未全場重掃、未改動 rho。**'
+    true_min_distance_mm: {lower: 7.416, upper: 7.4415, gap: 0.0255}
+    verdict: '**確認有間隙**（≥ 7.416 mm）⇒ 仍為**非接觸配對**，不新增接觸例外。'
+    retraction: '我先前寫「夾爪殼包住橫桿、屬抓取幾何」**不成立**。
+      d − rho < 0 只代表下界過保守，不能區分相交與證不出間距。'
+    actual_sampling_error_mm: 1.25
+    note: 'rho 13.35 mm 是**整條連桿的最壞情況**覆蓋半徑；此位姿此配對的實際取樣
+      誤差只有 1.25 mm。屏障在此位姿無法給零命令，是因為 rho 大於實際間距
+      7.44 mm，不是因為幾何相交。'
+    other_seven_pairs: 同一個保守性問題是否也適用於另外七組，**本次未核**（依裁定不擴大範圍）
+  eps_correction_required:
+    file: evaluation/results/specs/coman_contact_avoid_pairs_v0_draft.yaml
+    action: 'general_rule 的 d_stop 補上 eps；撤回 no_conflict_after_measurement
+      的三組「無衝突」結論（該判定是拿 50 mm 比，不是 80 mm）'
+  decision_pending: '**完整的近接操作配置一次決定**（不逐組把門檻降到剛好通過、
+    不全域移除 eps、不繼續逐列補例外）。'
   not_done: 未刪除任何餘裕、未調整任何門檻、未改動一般規則；僅回報造成不相容的項目
-  status: 待指導意見裁定
+  status: 待指導意見裁定近接操作配置（幾何性質已釐清）
   blocks: S1 核准與 20 mm 主成果首測
 questions:
   q1_completion: 20 mm 完整操作是否完成（接近→連接→拉開→保持→釋放→退出）
