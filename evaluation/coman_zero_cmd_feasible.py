@@ -41,12 +41,21 @@ from ammr_wholebody_mpc.wholebody_safety_filter import (               # noqa
 
 URDF = os.path.join(HERE, 'models', 'omni_bot_wholebody_expanded.urdf')
 RUN = 'drawer_220102_offset20'          # 既有 20 mm 趟次；**不重跑**
-# 趟次用的配置（與 run_coman_drawer20.sh 的預設相同）
-PAIR_GAP = {'uflite_finger1|drawer_front_panel': 0.010,
-            'uflite_finger2|drawer_front_panel': 0.010}
+# **間距一律讀定版規格**，不在此另存一份常數（避免兩處不一致）
+def _load_gaps():
+    import yaml
+    d = yaml.safe_load(open(os.path.join(
+        HERE, 'results/specs/coman_r1_pair_gaps_proposal.yaml'),
+        encoding='utf-8'))
+    if d['status'] != 'approved':
+        raise SystemExit(f'R1 未核准（status={d["status"]}），不執行核對')
+    return {p['pair']: float(p['g_pair_m']) for p in d['pairs']}
+
+
+PAIR_GAP = _load_gaps()
 CONTACT = {'uflite_finger1|handle_bar': ['engage', 'pull', 'hold', 'release'],
            'uflite_finger2|handle_bar': ['engage', 'pull', 'hold', 'release']}
-PAIR_ROWS = ['uflite_finger1:*', 'uflite_finger2:*']
+PAIR_ROWS = sorted({k.split('|')[0] + ':*' for k in PAIR_GAP})
 EXEMPT = ['uflite_finger1:handle_bar', 'uflite_finger2:handle_bar']
 
 
@@ -66,17 +75,8 @@ def hold_state():
 
 
 def main() -> int:
-    # `--r1`：改用 R1 定版提案表的候選值（由 coman_r1_table.py 產生），
-    # 用來核對**整組列**在該配置下是否還有其他配對為負。
-    use_r1 = '--r1' in sys.argv
     gaps = dict(PAIR_GAP)
-    if use_r1:
-        import json as _json
-        _t = _json.load(open(os.path.join(HERE, 'results',
-                                          'coman_r1_table.json'),
-                             encoding='utf-8'))
-        gaps = {k: float(v['g']) for k, v in _t.items()}
-        print(f'**使用 R1 候選配置**（{len(gaps)} 組）')
+    print(f'間距來源：coman_r1_pair_gaps_proposal.yaml（approved，{len(gaps)} 組）')
     st = hold_state()
     print(f'資料來源：既有趟次 {RUN} 的 hold 相位（sim {st["sim_t"]:.2f} s，'
           f'開度 {st["opening"]*1000:.2f} mm）—— **未重跑任何趟次**')

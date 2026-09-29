@@ -18,12 +18,12 @@ URDF_WB="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
 SIM_LIMIT="${SIM_LIMIT:-120}"
 # **總靜態間距**（取代該配對的 d0+eps，不是在 30 mm 上再加 10 mm）。
 # 一般規則 d0+eps = 80 mm；eps 單獨 30 mm 已大於設計間距 27.9 mm。
-PAIR_GAP="${PAIR_GAP:-uflite_finger1:drawer_front_panel:0.010,uflite_finger2:drawer_front_panel:0.010}"
+PAIR_GAP="${PAIR_GAP:-uflite_gripper_link:handle_bar:0.003,uflite_finger1:drawer_front_panel:0.010,uflite_finger2:drawer_front_panel:0.010,link6:handle_bar:0.045,uflite_finger1:handle_post_l:0.045,uflite_finger1:handle_post_r:0.045,uflite_finger2:handle_post_l:0.045,uflite_finger2:handle_post_r:0.045,link5:handle_bar:0.065,link4:handle_bar:0.070}"
 PAIR_D0="${PAIR_D0:-}"   # 不使用逐配對 d0 覆寫（與 PAIR_GAP 互斥）
 CONTACT_PAIRS="${CONTACT_PAIRS:-uflite_finger1:handle_bar:engage|pull|hold|release,uflite_finger2:handle_bar:engage|pull|hold|release}"
 # 一般列只留最近障礙物。橫桿被接觸例外刪列後，**任何**其他物件都可能完全沒有列
 # （面板 28 mm 合格、支柱 40 mm 違規卻無列可約束），故對兩指補齊「其餘所有配對」。
-PAIR_ROWS="${PAIR_ROWS:-uflite_finger1:*,uflite_finger2:*}"
+PAIR_ROWS="${PAIR_ROWS:-link4:*,link5:*,link6:*,uflite_finger1:*,uflite_finger2:*,uflite_gripper_link:*}"
 # 免列＝接觸例外對象本身（它仍有一般的最近列，只在允許相位被濾掉）
 PAIR_ROWS_EXEMPT="${PAIR_ROWS_EXEMPT:-uflite_finger1:handle_bar,uflite_finger2:handle_bar}"
 # **逐配對精確距離下界**（R2）：每週期由當前位姿重算，取代該列的 d − rho。
@@ -52,6 +52,7 @@ out, pair, cpairs, prows, pexempt, pgap = sys.argv[1:7]
 sp='evaluation/results/specs'
 v1=yaml.safe_load(open(f'{sp}/wb_coman_drawer20_criteria_v1.yaml',encoding='utf-8'))
 s1=yaml.safe_load(open(f'{sp}/wb_coman_drawer20_supplement_s1.yaml',encoding='utf-8'))
+r1=yaml.safe_load(open(f'{sp}/coman_r1_pair_gaps_proposal.yaml',encoding='utf-8'))
 fails=[]
 if v1['status']!='frozen': fails.append('v1 未凍結')
 if sha(f'{sp}/wb_coman_drawer20_criteria_v1.yaml')!=s1['references']['criteria_v1_sha256_16']:
@@ -70,9 +71,13 @@ def _kv(spec):
 want={k:float(v) for k,v in (s1['pair_avoidance'].get('d0_by_pair') or {}).items()}
 got=_kv(pair)
 if want!=got: fails.append(f'pair_d0 與 S1 不符：{got} vs {want}')
+# 間距的權威來源是 **R1 定版表**；S1 與執行參數都必須與它逐項一致
+if r1['status']!='approved': fails.append(f"R1 未核准（status={r1['status']}）")
+wr={p_['pair']:float(p_['g_pair_m']) for p_ in r1['pairs']}
 wg={k:float(v) for k,v in (s1['pair_avoidance'].get('g_by_pair') or {}).items()}
 gg=_kv(pgap)
-if wg!=gg: fails.append(f'pair_gap 與 S1 不符：{gg} vs {wg}')
+if wg!=wr: fails.append(f'S1 的 g_by_pair 與 R1 定版表不符：{sorted(set(wg.items())^set(wr.items()))}')
+if gg!=wr: fails.append(f'pair_gap 與 R1 定版表不符：{sorted(set(gg.items())^set(wr.items()))}')
 if set(wg)&set(want): fails.append(f'同一配對同時設了 d0 與總靜態間距：{sorted(set(wg)&set(want))}')
 wcp={k:list(v) for k,v in s1['pair_avoidance']['contact_pairs'].items()}
 gcp={}
@@ -86,6 +91,13 @@ _rpr=s1['pair_avoidance']['required_pair_rows']
 wpr=sorted(_rpr['pairs'])
 gpr=sorted(x.strip() for x in prows.split(',') if x.strip())
 if wpr!=gpr: fails.append(f'pair_rows 與 S1 必要配對列不符：{gpr} vs {wpr}')
+# R1 十組所在的連桿都必須有必要配對列：間距被放寬的連桿若沒有補列，
+# 橫桿最近時其他仍受一般規則的物件就完全沒有列（參考位姿實測：
+# 夾爪殼對面板 39.0 mm、link6 對支柱 66.7 mm，皆 < 80 mm 卻無列）
+_need={k.split('|')[0] for k in wr}
+_have={x.split(':')[0] for x in gpr}
+if not _need <= _have:
+    fails.append(f'下列連桿的間距被放寬但沒有必要配對列：{sorted(_need - _have)}')
 wex=sorted(_rpr['exempt'])
 gex=sorted(x.strip() for x in pexempt.split(',') if x.strip())
 if wex!=gex: fails.append(f'pair_rows_exempt 與 S1 不符：{gex} vs {wex}')
