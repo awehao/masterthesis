@@ -82,6 +82,13 @@ class DetectionPoint:
     offset: np.ndarray | None = None   # point on the link, in the link frame
     rho: float = 0.0                   # sampling covering radius, m
     obs: str | None = None             # 產生此列的**障礙物名稱**（配對層級規則用）
+    # 該列**障礙物表面點**的速度（報告座標系，m/s）與其可用性。
+    # 距離變化是 d_dot = n^T (v_obs − v_link)，不是只看機器人側。
+    #   v_obs_state = VOBS_STATIC   宣告為靜態 ⇒ 速度確為零，可用
+    #   v_obs_state = VOBS_OK       動態物件、速度新鮮可用
+    #   v_obs_state = VOBS_UNKNOWN  動態物件但缺測／過期 ⇒ **不得當成零**
+    v_obs: np.ndarray | None = None
+    v_obs_state: int = 1               # 預設 VOBS_STATIC：不帶此資訊者行為不變
 
 
 @dataclass
@@ -149,6 +156,10 @@ class SafetyConfig:
     velocity_error_margin: float = 0.0     # extra flat allowance, m/s
 
     # Degradation
+    # 動態物件速度缺測／過期時假設的最壞接近速度（m/s）。**不是零。**
+    # 取與 stale_obstacle_speed 同值：兩者都是「未看見的東西可能以多快接近」。
+    unknown_vobs_speed: float = 0.30
+    unknown_vobs_speed_cap: float = 0.05  # m/s，速度不可用期間的退化上限
     stale_obstacle_speed: float = 0.30   # m/s an unseen obstacle may close at
     stale_speed_cap: float = 0.05        # m/s cap while any row is stale
     nodata_speed_cap: float = 0.05       # m/s cap while any row has no distance
@@ -296,6 +307,28 @@ def _row_at(J6, R, offset):
     return J6[:3] - skew @ J6[3:]
 
 
+def _n_dot_v_obs(pt, cfg) -> tuple[float, bool]:
+    """回傳 (n^T v_obs, 速度是否不可用)。
+
+    **不可用時不回傳零** —— 回傳最壞接近 −V（V = cfg.unknown_vobs_speed），
+    使約束比忽略障礙物速度時**更嚴**，並由呼叫端套退化上限。
+    """
+    st = getattr(pt, 'v_obs_state', VOBS_STATIC)
+    if st == VOBS_STATIC:
+        return 0.0, False
+    if st == VOBS_OK and pt.v_obs is not None:
+        v = np.asarray(pt.v_obs, dtype=float)
+        if v.shape == (3,) and np.isfinite(v).all():
+            return float(pt.n @ v), False
+        # 宣告可用卻不是有效數值 ⇒ 當成不可用，**不靜默取零**
+    return -float(cfg.unknown_vobs_speed), True
+
+
+VOBS_UNKNOWN = 0     # 動態物件，速度缺測或過期 —— **不得視為零**
+VOBS_STATIC = 1      # 已明確設定為靜態的物件 —— 零速度可用
+VOBS_OK = 2          # 動態物件，速度新鮮可用
+
+
 def _rows_from_points(K, q, pts, cfg, v_in):
     """Barrier rows A v <= b, plus the per-row bookkeeping.
 
@@ -325,7 +358,15 @@ def _rows_from_points(K, q, pts, cfg, v_in):
             # distance by that much rather than trusting a stale number.
             d_eff = pt.d - pt.age * cfg.stale_obstacle_speed
             cap = min(cap, cfg.stale_speed_cap)
-        v_app = max(0.0, float(row @ v_in))
+        # ---- 相對接近速度：n^T (J u − v_obs) ----
+        # 左式與 d_stop 裡的接近速度**用同一個定義**；只改左式會讓兩邊不一致。
+        n_vobs, vobs_unknown = _n_dot_v_obs(pt, cfg)
+        if vobs_unknown:
+            # 動態物件速度缺測／過期：**不默認為零**，取最壞接近
+            # （|v_obs| <= V ⇒ n^T v_obs >= −V），並套退化上限。
+            cap = min(cap, cfg.unknown_vobs_speed_cap)
+        # v_rel > 0 表示兩者正在互相靠近
+        v_app = max(0.0, float(row @ v_in) - n_vobs)
         a_br = (max(_brake_along(row, cfg, len(row)), cfg.brake_floor)
                 if cfg.use_jacobian_brake else cfg.a_brake)
         _key = f'{pt.frame}|{pt.obs}'
@@ -335,6 +376,13 @@ def _rows_from_points(K, q, pts, cfg, v_in):
             # 其他連桿對同一物件、以及本連桿對其他物件，**都不受影響**。
             cfg.last_contact_skipped = getattr(cfg, 'last_contact_skipped', 0) + 1
             continue
+        # **煞停距離的假設要明列。** v_app 已改為相對接近速度，但 a_br 仍是
+        # **機器人側**的減速能力（Jacobian 界或 a_brake）。相對減速能力並不等於
+        # 機器人的減速能力：
+        #   * 障礙物若能朝機器人加速，相對減速比 a_br 小 ⇒ d_stop 被低估。
+        #   * 本案抽屜為被動件、只在被拉時移動，因此**在本案**該假設偏保守；
+        #     但這是**案例性質**，不是一般性證明。
+        # 相對速度修正**不自動證明煞停距離成立**。
         _g_pair = cfg.g_by_pair.get(_key)
         if _g_pair is not None:
             # **受限模擬配置**：g_pair 就是該配對的總靜態間距，取代 d0 + eps。
@@ -347,7 +395,8 @@ def _rows_from_points(K, q, pts, cfg, v_in):
                       + v_app * v_app / (2.0 * max(a_br, 1e-3)) + cfg.eps)
         A.append(row)
         owner.append(pi)
-        rhs = cfg.alpha * (d_eff - d_stop)
+        # n^T J u − n^T v_obs <= alpha(...)  ⇔  n^T J u <= alpha(...) + n^T v_obs
+        rhs = cfg.alpha * (d_eff - d_stop) + n_vobs
         if pt.offset is not None:
             # Only the sampled representation carries the representative-point
             # approximation these allowances cover. A row pinned to a fixed lug

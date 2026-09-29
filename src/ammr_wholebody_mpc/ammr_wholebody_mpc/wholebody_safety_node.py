@@ -572,11 +572,18 @@ class WholeBodySafetyNode(Node):
                 _oi = int(row[15]) if len(row) > 15 else -1
                 _on = (self.obs_names[_oi]
                        if 0 <= _oi < len(self.obs_names) else None)
+                # 障礙物表面點速度。**舊寬度的雲不帶這四欄** ⇒ 視為未知，
+                # 不當成零速（`VOBS_UNKNOWN`），由濾波器取最壞接近並套上限。
+                if len(row) > 19:
+                    _vo = np.array(row[16:19], dtype=float)
+                    _vst = int(row[19])
+                else:
+                    _vo, _vst = None, 0
                 pts.append(DetectionPoint(
                     self.link_names[li], np.array([x, y, z]), nvec, float(dd),
                     st, float(max(age, 0.0)), occ >= 0.5,
                     offset=np.array(row[11:14], dtype=float),
-                    rho=float(row[14]), obs=_on))
+                    rho=float(row[14]), obs=_on, v_obs=_vo, v_obs_state=_vst))
             else:
                 pts.append(DetectionPoint(
                     FRAMES[i], np.array([x, y, z]), nvec, float(dd), st,

@@ -103,9 +103,49 @@ BEST_EFFORT = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=1,
 # `obs` 是產生該列距離的**障礙物索引**（−1 表示無）。加在最後，
 # 既有欄位的名稱與位移不變；消費端一律由 point_step 取寬度，因此相容。
 # 索引對應的名稱由 ~/obstacle_names 發布（JSON 陣列，latched）。
+# `vox,voy,voz` 是該列**障礙物表面點**的速度（報告座標系，m/s），
+# `vobs` 是其可用性（0 未知／1 宣告靜態／2 新鮮可用）。
+# 距離變化是 d_dot = n^T (v_obs − v_link)，只看機器人側會把隨夾爪移動的
+# 橫桿當成靜止。四個欄位加在最後，既有欄位的名稱與位移不變；
+# 消費端一律由 point_step 取寬度。**兩端必須一起更新。**
 FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded',
-          'link', 'ox', 'oy', 'oz', 'rho', 'obs']
+          'link', 'ox', 'oy', 'oz', 'rho', 'obs', 'vox', 'voy', 'voz', 'vobs']
+VOBS_UNKNOWN, VOBS_STATIC, VOBS_OK = 0, 1, 2
 
+
+
+def model_twist(T_prev, t_prev, T_now, t_now, min_dt=1.0e-4):
+    """由兩個世界位姿估物件的 twist（v, omega）。回傳 (v, omega) 或 None。
+
+    **旋轉也要算進去**：表面點的速度是 v + omega x (p − 原點)，
+    物件轉動時即使原點不動，表面點仍有速度。
+    """
+    if T_prev is None or T_now is None:
+        return None
+    dt = float(t_now) - float(t_prev)
+    if not np.isfinite(dt) or dt < min_dt:
+        return None
+    v = (T_now[:3, 3] - T_prev[:3, 3]) / dt
+    R = T_now[:3, :3] @ T_prev[:3, :3].T
+    # log(R) 的向量部分；小角度下取反對稱部分即可，大角度改用 arccos 標準式
+    w = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+    c = (np.trace(R) - 1.0) / 2.0
+    c = float(np.clip(c, -1.0, 1.0))
+    th = float(np.arccos(c))
+    nw = float(np.linalg.norm(w))
+    omega = (w / dt / 2.0 if th < 1.0e-6 or nw < 1.0e-12
+             else (w / nw) * (th / dt))
+    if not (np.isfinite(v).all() and np.isfinite(omega).all()):
+        return None
+    return v, omega
+
+
+def surface_point_velocity(twist, origin, pts):
+    """表面點速度 v + omega x (p − 原點)。twist 為 None 時回傳 None。"""
+    if twist is None:
+        return None
+    v, omega = twist
+    return v[None, :] + np.cross(omega[None, :], pts - origin[None, :])
 
 
 def parse_obstacles(specs):
@@ -171,7 +211,7 @@ def expand_pair_rows(specs, exempt_specs, obstacle_names):
 
 
 def forced_pair_rows(W, pts_local, obstacle, obs_idx, li, rho, status, age,
-                     occ_of, max_range, max_rows=None):
+                     occ_of, max_range, max_rows=None, vobs_of=None):
     """對**指定的 (連桿, 障礙物) 配對**單獨算距離並產生列。
 
     為什麼需要：一般列只保留每個取樣點的**最近**障礙物。若最近的是接觸例外
@@ -190,10 +230,15 @@ def forced_pair_rows(W, pts_local, obstacle, obs_idx, li, rho, status, age,
     out = []
     for k in sel:
         n_hat = v[k] / max(abs(float(d[k])), 1e-9)
+        if vobs_of is None:
+            vo, vst = np.zeros(3), VOBS_STATIC
+        else:
+            vo, vst = vobs_of(obstacle, W[k] + v[k])
         out.append(list(W[k]) + list(n_hat)
                    + [float(d[k]), float(status), age, float(occ_of(W[k], v[k])),
                       float(li)] + list(pts_local[k]) + [float(rho),
-                                                         float(obs_idx)])
+                                                         float(obs_idx)]
+                   + [float(vo[0]), float(vo[1]), float(vo[2]), float(vst)])
     return out
 
 
@@ -268,6 +313,8 @@ class ArmLinkDistance(Node):
         p('max_rows_per_link', 0)
         p('publish_rate', 30.0)
         p('pose_timeout', 0.5)      # s, obstacle pose older than this is stale
+        # 物件速度估值的有效期。過期 ⇒ VOBS_UNKNOWN，**不當成零速**。
+        p('vobs_timeout', 0.2)
         p('occl_timeout', 0.5)      # s, occlusion info older than this is unusable
         # Absence of the occlusion feed is NOT evidence of no occlusion. With
         # the arm mounted this node cannot tell a clear bearing from one the
@@ -282,6 +329,7 @@ class ArmLinkDistance(Node):
         self.report_frame = str(g('report_frame'))
         self.lidar_frame = str(g('lidar_frame'))
         self.pose_timeout = float(g('pose_timeout'))
+        self.vobs_timeout = float(g('vobs_timeout'))
         self.occl_timeout = float(g('occl_timeout'))
         self.require_occl = bool(g('require_occlusion_feed'))
         self.max_range = float(g('max_range'))
@@ -311,6 +359,8 @@ class ArmLinkDistance(Node):
                 + ', '.join(f'{k} {len(v.points)}pt rho {v.rho*1000:.1f}mm'
                             for k, v in self.samples.items()))
         self._stamp: dict[str, float] = {}
+        self._pose_prev: dict[str, tuple] = {}
+        self._twist: dict[str, tuple] = {}
         self._occl = None            # (angle_min, inc, n, set(indices))
         self._occl_t = 0.0
 
@@ -364,11 +414,39 @@ class ArmLinkDistance(Node):
         def cb(msg: PoseStamped) -> None:
             q, t = msg.pose.orientation, msg.pose.position
             T = _iso(_quat_to_rot(q.x, q.y, q.z, q.w), np.array([t.x, t.y, t.z]))
-            self._stamp[model] = self.get_clock().now().nanoseconds * 1e-9
+            now = self.get_clock().now().nanoseconds * 1e-9
+            # **物件 twist**：由連續兩筆位姿估，含旋轉。估不出來就留 None ——
+            # 下游會因此標為 VOBS_UNKNOWN，**不會當成零速**。
+            prev = self._pose_prev.get(model)
+            tw = None if prev is None else model_twist(prev[0], prev[1], T, now)
+            self._twist[model] = (tw, now)
+            self._pose_prev[model] = (T, now)
+            self._stamp[model] = now
             for o in self.obstacles:
                 if o.model == model:
                     o.T_world_link = T
         return cb
+
+    def _vobs_for(self, o, p_surf):
+        """障礙物表面點的速度與可用性。
+
+        靜態物件（設定裡沒有 model）**確為零**；動態物件缺 twist 或 twist
+        過期一律 VOBS_UNKNOWN，**不以零代替**。
+        """
+        if not o.model:
+            return np.zeros(3), VOBS_STATIC
+        rec = self._twist.get(o.model)
+        if rec is None or rec[0] is None:
+            return np.zeros(3), VOBS_UNKNOWN
+        tw, t_tw = rec
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if now - t_tw > self.vobs_timeout:
+            return np.zeros(3), VOBS_UNKNOWN
+        V = surface_point_velocity(tw, o.T_world_link[:3, 3],
+                                   np.asarray(p_surf, float)[None, :])
+        if V is None or not np.isfinite(V).all():
+            return np.zeros(3), VOBS_UNKNOWN
+        return V[0], VOBS_OK
 
     def _on_occl(self, msg: Float32MultiArray) -> None:
         d = list(msg.data)
@@ -443,7 +521,8 @@ class ArmLinkDistance(Node):
             T = self._tf(self.report_frame, fr)
             if T is None:
                 rows.append([0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 0.0]
-                            + [0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
+                            + [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+                            + [0.0, 0.0, 0.0, float(VOBS_STATIC)])
                 n_nodata += 1
                 continue
             p = T[:3, 3]
@@ -465,7 +544,8 @@ class ArmLinkDistance(Node):
                 rows.append(list(p) + [0.0, 0.0, 0.0, self.max_range,
                                        STATUS_NODATA, -1.0,
                                        1.0 if T_rl is None else 0.0]
-                            + [0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
+                            + [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+                            + [0.0, 0.0, 0.0, float(VOBS_STATIC)])
                 n_nodata += 1
                 continue
 
@@ -492,8 +572,12 @@ class ArmLinkDistance(Node):
                 if occ:
                     n_unk += 1
             worst_age = max(worst_age, best_age)
+            # **這條路徑先前只填 15 欄，FIELDS 卻是 16** —— 加 `obs` 欄位時漏改，
+            # 會讓 geometry:=points 發出的雲寬度不符。一併補齊（obs = −1 表示
+            # 此路徑不帶障礙物身分），並加上四個速度欄位。
             rows.append(list(p) + list(n_hat) + [best_d, status, best_age, occ]
-                        + [0.0, 0.0, 0.0, 0.0, 0.0])
+                        + [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+                        + [0.0, 0.0, 0.0, float(VOBS_STATIC)])
 
         return rows, n_ok, n_unk, n_stale, n_nodata, worst_age
 
@@ -516,10 +600,20 @@ class ArmLinkDistance(Node):
         self._dropped = 0
         self._overflow = False
         live = [o for o in self.obstacles if o.T_world_link is not None]
+        _by = {o.name: o for o in live}
+
+        def _vo_row(obs_name, p_surf):
+            o = _by.get(obs_name)
+            if o is None:
+                return (0.0, 0.0, 0.0, float(VOBS_UNKNOWN))
+            vo, vst = self._vobs_for(o, p_surf)
+            return (float(vo[0]), float(vo[1]), float(vo[2]), float(vst))
+
         for li, name in enumerate(self.link_names):
             T = self._tf(self.report_frame, name)
             S = self.samples[name]
-            blank = [float(li), 0.0, 0.0, 0.0, float(S.rho), -1.0]
+            blank = [float(li), 0.0, 0.0, 0.0, float(S.rho), -1.0,
+                     0.0, 0.0, 0.0, float(VOBS_STATIC)]
             if T is None or not live:
                 rows.append([0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 1.0] + blank)
                 n_nodata += 1
@@ -535,7 +629,7 @@ class ArmLinkDistance(Node):
                 rows.append(list(T[:3, 3]) + [0.0, 0.0, 0.0, self.max_range,
                                               STATUS_NODATA, -1.0,
                                               1.0 if T_rl is None else 0.0]
-                            + blank)
+                            + blank)   # blank 已含四個速度欄位
                 n_nodata += 1
                 continue
             sel = np.nonzero(d <= dmin + S.rho)[0]
@@ -576,7 +670,8 @@ class ArmLinkDistance(Node):
                             + [float(d[k]), float(status), age, occ,
                                float(li)] + list(S.points[k])
                             + [float(S.rho),
-                               float(self._obs_index.get(which[k], -1))])
+                               float(self._obs_index.get(which[k], -1))]
+                            + list(_vo_row(which[k], p_w + v[k])))
 
             # **必要配對列**：即使該配對不是最近障礙物也照樣產生
             def _occ_of(p_w, vk):
@@ -592,7 +687,8 @@ class ArmLinkDistance(Node):
                     continue
                 _extra = forced_pair_rows(
                     W, S.points, _ob, _oi, li, S.rho, status, age, _occ_of,
-                    self.max_range, self.max_rows_per_link)
+                    self.max_range, self.max_rows_per_link,
+                    vobs_of=self._vobs_for)
                 rows.extend(_extra)
                 n_ok += len(_extra) if status == STATUS_OK else 0
         return rows, n_ok, n_unk, n_stale, n_nodata, worst_age
