@@ -127,6 +127,8 @@ ap.add_argument('--drawer-no-gravity', action='store_true',
 # 只重播命令、**不建立夾爪—抽屜固定關節**：回答「負載成長是否依賴這個連接」。
 # engage 事件照常記錄（同步快照照取），但不建關節、也不把 coupled 設為 True
 # （否則 grasp_lost 會因抽屜不動而誤觸發）。
+ap.add_argument('--post-stop-steps', type=int, default=20,
+                help='停止後的觀察步數（**事前指定**，不是跑完才決定）')
 ap.add_argument('--handshake-test', action='store_true',
                 help='**診斷用**：建立連接後凍結手臂（不拉動），經過指定步數送出'
                      '釋放請求，走資格＋請求 → 執行 → 讀回確認，然後收尾')
@@ -1094,6 +1096,7 @@ def main():
     coman_applied_log = []         # [step, t, q1..q6, source]
 
     coman_post_stop_log = []
+    coman_post_nan = {}
 
     def coman_post_sample(tag):
         """停止**之後**的取樣：力、開度與**實際關節角**都要留。
@@ -1120,9 +1123,15 @@ def main():
             _qs = [float(_qm[idx[j]]) for j in ARM]
         except Exception:
             _qs = [float('nan')] * len(ARM)
-        coman_post_stop_log.append(
-            [st, round(tt, 4), round(_op, 7), round(_vy, 7), round(_fn, 4)]
-            + [round(v, 7) for v in _qs] + [tag])
+        row = ([st, round(tt, 4), round(_op, 7), round(_vy, 7), round(_fn, 4)]
+               + [round(v, 7) for v in _qs] + [tag])
+        # **必要量測出現 NaN 即記為資料不足**；有 log 不等於通過
+        for key, val in (('opening', _op), ('drawer_vy', _vy), ('f_norm', _fn)):
+            if not np.isfinite(val):
+                coman_post_nan[key] = coman_post_nan.get(key, 0) + 1
+        if not all(np.isfinite(v) for v in _qs):
+            coman_post_nan['joints'] = coman_post_nan.get('joints', 0) + 1
+        coman_post_stop_log.append(row)
 
     def couple_readback():
         """**讀回**固定關節狀態：回傳 (關節存在, 是否仍啟用)。
@@ -1865,7 +1874,7 @@ def main():
             pass
         node.say({'stop': stop_reason, 'handling': 'release_coupling_then_freeze',
                   'monitor_failure': monitor_fail})
-        for _ in range(20):
+        for _ in range(int(a.post_stop_steps)):
             world.step(render=False)
             coman_post_sample('emergency')
             # 緊急解除的**確認**同樣要讀回；閂鎖維持到確認為止
@@ -2010,6 +2019,20 @@ def main():
                                  'drawer_vy', 'f_norm',
                                  'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'tag'],
         'coman_post_stop_log': coman_post_stop_log,
+        'coman_post_stop_quality': {
+            'steps_configured': int(a.post_stop_steps),
+            'samples': len(coman_post_stop_log),
+            'sim_t_first': (coman_post_stop_log[0][1]
+                            if coman_post_stop_log else None),
+            'sim_t_last': (coman_post_stop_log[-1][1]
+                           if coman_post_stop_log else None),
+            'sim_span_s': (round(coman_post_stop_log[-1][1]
+                                 - coman_post_stop_log[0][1], 4)
+                           if len(coman_post_stop_log) > 1 else None),
+            'nan_counts': coman_post_nan,
+            'data_sufficient': bool(coman_post_stop_log) and not coman_post_nan,
+            'note': ('必要量測出現 NaN 即判資料不足；'
+                     '有 log 不等於通過。觀察步數為事前指定。')},
         'coman_stage_note': ('本階段只做量測接通；底盤仍由固定關節支撐，'
                              '不是協同操作驗收'),
         'rot_conv_err_max_deg': rot_err_max,

@@ -23,6 +23,7 @@ ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 SIM_LIMIT="${SIM_LIMIT:-30}"
 REL_AFTER="${REL_AFTER:-20}"          # 連接後第幾步送出釋放請求
 STOP_AFTER="${STOP_AFTER:-20}"        # 確認後再跑幾步才收尾
+POST_STOP_STEPS="${POST_STOP_STEPS:-20}"   # **事前指定**的停止後觀察步數
 PIDS=()
 say(){ echo "[$(date +%T)] $*" | tee -a "$LOG"; }
 cleanup(){
@@ -51,6 +52,7 @@ setsid "$ISAAC_PY" -u evaluation/isaac_coman_drawer_sim.py --case "$CASE" \
     --out "$DIR/sim" --sim-limit "$SIM_LIMIT" \
     --handshake-test --handshake-release-after-steps "$REL_AFTER" \
     --handshake-stop-after-confirm-steps "$STOP_AFTER" \
+    --post-stop-steps "$POST_STOP_STEPS" \
     ${INJECT_FAULT:+--inject-fault "$INJECT_FAULT"} \
     ${INJECT_FAULT_STEP:+--inject-fault-step "$INJECT_FAULT_STEP"} \
     ${RECORD:+--record-frames "$DIR/frames"} \
