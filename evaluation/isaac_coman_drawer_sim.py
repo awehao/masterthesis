@@ -136,7 +136,8 @@ ap.add_argument('--inject-fault', default='none',
                 choices=['none', 'monitor_fail'],
                 help='**診斷用**故障注入：在指定物理步觸發監看失效，'
                      '驗證緊急解除路徑；會把趟次標記為 diagnostic')
-ap.add_argument('--inject-fault-step', type=int, default=0)
+ap.add_argument('--inject-fault-step', type=int, default=0,
+                help='**連接事件之後**第幾個物理步注入（不是模擬絕對步序）')
 ap.add_argument('--no-attach', action='store_true',
                 help='engage 時記錄快照但**不建立固定關節**，繼續重播（診斷用）')
 # 以**指令進度**收尾：不建立連接時抽屜不會動，不能等它開到某個開度。
@@ -327,7 +328,12 @@ CASE = CASES['cases'][a.case]
 SPEC = DA.load(a.spec)
 from coman_pose_reader import (HandleTransform, LOG_COLS as POSE_LOG_COLS,  # noqa: E402
                                READ_ORDER, SameStepPoseReader)
-from coman_couple_link import CoupleLink                            # noqa: E402
+from coman_couple_link import CoupleLink, evaluate_capability        # noqa: E402
+
+# **狀態機尚未接到本執行端**：正式路徑的釋放資格必須來自
+# coman_handover_state.HandoverMachine 的 normal_release_allowed。
+# 在接妥之前，正式釋放一律被擋下 —— 不得退回「已連接且位姿有效」這種簡化條件。
+MACHINE_WIRED = False
 POSES = yaml.safe_load(open(a.poses))
 ARM = [f'joint{i}' for i in range(1, 7)]
 Q_START = np.array([float(POSES[CASE['pregrasp']['start_config']][j]) for j in ARM])
@@ -1079,8 +1085,10 @@ def main():
     coman_pose_log = []
     coman_abort = None
     couple_link = CoupleLink(min_steps_after_execute=1)
-    hs_freeze_step = None          # 握手測試：凍結手臂的物理步
+    hs_attach_step = None          # 連接事件的物理步（注入與釋放計時的基準）
     hs_stop_after = None           # 確認後收尾的物理步
+    hs_blocked_events = []         # 連接後被攔下的軌跡事件
+    inject_info = None             # 注入當下的關節讀回
 
     def couple_readback():
         """**讀回**固定關節狀態：回傳 (關節存在, 是否仍啟用)。
@@ -1092,7 +1100,15 @@ def main():
             return False, False
         en = UsdPhysics.Joint(pr).GetJointEnabledAttr().Get()
         return True, bool(en)
+    if (a.inject_fault != 'none' and a.handshake_test
+            and a.inject_fault_step >= a.handshake_release_after_steps):
+        print(f'[coman] **注入步 {a.inject_fault_step} 不早於正常釋放步 '
+              f'{a.handshake_release_after_steps}**，測不到帶連接的緊急解除；拒絕啟動',
+              flush=True)
+        return 9
     print(f'[coman] 同一物理步讀取已接上；讀取順序 {READ_ORDER}', flush=True)
+    print(f'[coman] 正式釋放資格來源：狀態機（目前 MACHINE_WIRED={MACHINE_WIRED}）',
+          flush=True)
 
     n_step = 0
     # --- 閉合放行閘（friction 版）---
@@ -1150,37 +1166,44 @@ def main():
             if couple_link.poll_confirm(_ex, _en, _pstep, t):
                 print(f'[coman] 解除**已確認**（讀回）@ step {_pstep} sim {t:.3f}',
                       flush=True)
-        # **診斷用**握手測試：連接後凍結手臂、不拉動，再走完整解除流程
-        if a.handshake_test and coupled and frozen_q is None:
-            frozen_q = np.array([float(robot.get_joint_positions()[idx[j]])
-                                 for j in ARM])
-            hs_freeze_step = _pstep
-            print(f'[coman] 握手測試：已連接並凍結手臂（不拉動）@ step {_pstep}',
-                  flush=True)
-        if (a.handshake_test and hs_freeze_step is not None
+        # **診斷用**握手測試：連接後（凍結已在 engage 事件內完成）送出釋放請求
+        if (a.handshake_test and hs_attach_step is not None
                 and couple_link.execute is None
-                and _pstep - hs_freeze_step >= a.handshake_release_after_steps):
+                and _pstep - hs_attach_step >= a.handshake_release_after_steps):
             couple_link.request_release(_pstep, t, 'handshake_test')
-            _cap = bool(coupled) and bool(_prec.valid)
-            if couple_link.may_release_now(_cap, _pstep, t):
+            _cap, _src = evaluate_capability(
+                'diagnostic',
+                diagnostic_allowed=bool(coupled) and bool(_prec.valid))
+            if couple_link.may_release_now(_cap, _pstep, t, _src):
                 detach()
                 couple_link.mark_executed(_pstep, t, 'normal')
                 coupled = False
-                print(f'[coman] 握手測試：資格＋請求成立 → 已呼叫解除 '
+                print(f'[coman] 握手測試（**診斷資格**）：請求＋資格成立 → 已呼叫解除 '
                       f'@ step {_pstep}（**尚未確認**）', flush=True)
             else:
-                print(f'[coman] 握手測試：**資格未成立，不執行解除** '
-                      f'(capability={_cap})', flush=True)
+                print(f'[coman] 握手測試：**資格未成立，不執行解除**'
+                      f'（source={_src}）', flush=True)
         if (a.handshake_test and couple_link.confirm is not None
                 and hs_stop_after is None):
             hs_stop_after = _pstep + a.handshake_stop_after_confirm_steps
         # **診斷用**故障注入：驗證緊急解除路徑，不必製造超力
-        if (a.inject_fault == 'monitor_fail' and a.inject_fault_step > 0
-                and _pstep >= a.inject_fault_step
+        if (a.inject_fault == 'monitor_fail' and hs_attach_step is not None
+                and _pstep - hs_attach_step >= a.inject_fault_step
                 and couple_link.emergency_stamp is None):
+            _ex, _en = couple_readback()
+            inject_info = {'physics_step_id': _pstep, 'sim_time': t,
+                           'steps_after_attach': _pstep - hs_attach_step,
+                           'joint_exists': bool(_ex),
+                           'joint_enabled_at_injection': bool(_en),
+                           'before_normal_release': couple_link.execute is None,
+                           'valid_coupled_emergency': bool(_ex and _en
+                                                           and couple_link.execute is None)}
+            if not inject_info['valid_coupled_emergency']:
+                print('[coman] **注入當下並非「仍連接且尚未正常釋放」**，'
+                      '本趟測不到帶連接的緊急解除（已記錄）', flush=True)
             couple_link.emergency(_pstep, t, 'injected_monitor_fail')
             raise MonitorFailure('injected_fault',
-                                 f'診斷注入於 step {_pstep}')
+                                 f'診斷注入於連接後第 {_pstep - hs_attach_step} 步')
         # 執行時錄影：**這一趟真正在跑的畫面**。算繪只讀場景、不寫回任何狀態，
         # 也不介入中止判斷；代價是牆鐘變慢（模擬時間語意不變）。
         if rec_cam is not None and (n_step % rec_every) == 0:
@@ -1211,6 +1234,12 @@ def main():
             info = {'event': ev, 'sim_t': t, 'seq': e.get('seq'),
                     'drawer_y_before': float(dpa[0][1]),
                     'tcp_before': tcp_a.tolist()}
+            if a.handshake_test and hs_attach_step is not None and ev != 'engage':
+                # 連接之後的軌跡事件一律攔下：本模式不執行拉動與軌跡釋放
+                hs_blocked_events.append([int(pose_src.physics_step_id()),
+                                          round(t, 4), str(ev)])
+                print(f'[coman] 握手測試：攔下軌跡事件 {ev} @ sim {t:.3f}', flush=True)
+                continue
             if ev == 'engage':
                 if a.snapshot_only:
                     # **只記錄，不連接**：同一個物理時刻的同步快照
@@ -1253,15 +1282,31 @@ def main():
                         align_mismatch = not info['align_check']['ok']
                     coupled = True
                     couple_link.mark_attached(pose_src.physics_step_id(), t)
+                    # 連接步序**不分模式**都記錄：注入與釋放計時都以它為基準
+                    hs_attach_step = pose_src.physics_step_id()
+                    info['attach_step'] = hs_attach_step
+                    if a.handshake_test:
+                        # **在本步後續命令套用之前**就設好保持目標，
+                        # 確保連接後不再套用任何軌跡命令。
+                        frozen_q = np.array([
+                            float(robot.get_joint_positions()[idx[j]])
+                            for j in ARM])
+                        info['handshake_freeze_step'] = hs_attach_step
+                        print(f'[coman] 握手測試：連接同步設定保持目標（不拉動）'
+                              f'@ step {hs_attach_step}', flush=True)
                 else:
                     coupled = True      # friction：靠手指命令，不建關節
                     couple_link.mark_attached(pose_src.physics_step_id(), t)
+                    hs_attach_step = pose_src.physics_step_id()
+                    info['attach_step'] = hs_attach_step
             elif ev == 'release':
-                # 任務流程的**明確請求**；資格由執行端判定，兩者都成立才執行
+                # 任務流程的**明確請求**；**正式資格只能來自狀態機**
                 _ps = pose_src.physics_step_id()
                 couple_link.request_release(_ps, t, 'task_flow_event')
-                _cap = bool(coupled) and bool(_prec.valid)
-                if couple_link.may_release_now(_cap, _ps, t):
+                _cap, _src = evaluate_capability(
+                    'production', machine_allowed=False,
+                    machine_wired=MACHINE_WIRED)
+                if couple_link.may_release_now(_cap, _ps, t, _src):
                     info['detached'] = (detach()
                                         if GRASP_MODEL == 'fixed_attachment' else True)
                     couple_link.mark_executed(_ps, t, 'normal')
@@ -1270,9 +1315,10 @@ def main():
                 else:
                     info['detached'] = False
                     info['release_blocked'] = {'capability': _cap,
-                                               'requested': True}
-                    print(f'[coman] **釋放請求未獲資格，不執行解除** '
-                          f'(capability={_cap}) @ step {_ps}', flush=True)
+                                               'requested': True,
+                                               'source': _src}
+                    print(f'[coman] **釋放請求未獲資格，不執行解除**'
+                          f'（source={_src}）@ step {_ps}', flush=True)
             world.step(render=False)    # 讓連接／解除在下一步生效後再量
             dpb, _ = drawer_v.get_world_poses()
             tcp_b, _, _ = world_T(prims['link_tcp'])
@@ -1885,6 +1931,9 @@ def main():
         'coman_pose_invalid_n': pose_reader.n_invalid,
         'coman_abort': coman_abort,
         'coman_couple_link': couple_link.record(),
+        'coman_machine_wired': MACHINE_WIRED,
+        'coman_handshake_blocked_events': hs_blocked_events,
+        'coman_inject_info': inject_info,
         'coman_stage_note': ('本階段只做量測接通；底盤仍由固定關節支撐，'
                              '不是協同操作驗收'),
         'rot_conv_err_max_deg': rot_err_max,

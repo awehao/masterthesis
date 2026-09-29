@@ -20,6 +20,29 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+CAPABILITY_SOURCES = ('state_machine', 'diagnostic')
+
+
+def evaluate_capability(mode: str, machine_allowed: bool = False,
+                        machine_wired: bool = False,
+                        diagnostic_allowed: bool = False) -> tuple[bool, str]:
+    """決定釋放資格，並回報**資格來源**。
+
+    * `mode='production'`：資格**只能**來自狀態機的 normal_release_allowed。
+      狀態機尚未接妥（`machine_wired=False`）⇒ **禁止正常釋放**，
+      不得退回「已連接且位姿有效」這類簡化條件。
+    * `mode='diagnostic'`：明確標記的診斷資格，只用於零行程接線測試，
+      **與正式操作隔離**，不得用來宣稱操作合格。
+    """
+    if mode == 'diagnostic':
+        return bool(diagnostic_allowed), 'diagnostic'
+    if mode != 'production':
+        return False, f'unknown_mode:{mode}'
+    if not machine_wired:
+        return False, 'state_machine_not_wired'
+    return bool(machine_allowed), 'state_machine'
+
+
 @dataclass
 class Stamp:
     step: int
@@ -41,6 +64,7 @@ class CoupleLink:
         self.emergency_stamp: Stamp | None = None
         self.kind: str = ''            # 'normal' | 'emergency'
         self.blocked: list = []        # 被擋下的嘗試，保留為證據
+        self.capability_source: str = ''
 
     # ---------------- 連接 ----------------
     def mark_attached(self, step: int, t: float) -> None:
@@ -54,13 +78,20 @@ class CoupleLink:
             self.request = Stamp(step, t, source)
 
     # ---------------- 執行 ----------------
-    def may_release_now(self, capability: bool, step: int, t: float) -> bool:
-        """正常解除：資格與請求**同一週期**都成立才允許。"""
+    def may_release_now(self, capability: bool, step: int, t: float,
+                        source: str = 'unspecified') -> bool:
+        """正常解除：資格與請求**同一週期**都成立才允許。
+
+        `source` 記錄資格來源（state_machine／diagnostic／未接妥的原因），
+        讓趟後可以分辨這是正式資格還是診斷資格。
+        """
         ok = bool(capability) and self.request is not None
+        self.capability_source = source
         if not ok:
             self.blocked.append([int(step), float(t),
                                  f'capability={bool(capability)}, '
-                                 f'requested={self.request is not None}'])
+                                 f'requested={self.request is not None}, '
+                                 f'source={source}'])
         return ok
 
     def mark_executed(self, step: int, t: float, kind: str) -> None:
@@ -112,9 +143,11 @@ class CoupleLink:
             'emergency': f(self.emergency_stamp),
             'emergency_latched': self.emergency_latched,
             'blocked_attempts': self.blocked,
+            'capability_source': self.capability_source,
             'stamp_cols': ['physics_step_id', 'sim_time', 'note'],
-            'semantics': ('execute = 呼叫解除函式；confirm = 讀回確認已解除。'
-                          '兩者不可互相代表。'),
+            'semantics': ('execute = 呼叫解除函式；confirm = **停用屬性讀回確認**'
+                          '（JointEnabledAttr=False 並經過至少一個物理步）。'
+                          '兩者不可互相代表；confirm **不等同**獨立證明物理約束已卸載。'),
         }
 
 
@@ -191,6 +224,29 @@ def selftest() -> int:
     L6.emergency(5, 0.05, 'injected')
     check('緊急時即使資格為假也不阻擋（資格只管正常路徑）',
           L6.emergency_latched and not L6.may_release_now(False, 5, 0.05))
+
+    # 7 正式路徑未接妥狀態機 ⇒ 禁止正常釋放，不得退回簡化條件
+    ok, src = evaluate_capability('production', machine_allowed=True,
+                                  machine_wired=False)
+    check('狀態機未接妥 → 正式資格為假且標明原因',
+          not ok and src == 'state_machine_not_wired')
+    ok, src = evaluate_capability('production', machine_allowed=False,
+                                  machine_wired=True)
+    check('狀態機已接但不允許 → 資格為假', not ok and src == 'state_machine')
+    ok, src = evaluate_capability('production', machine_allowed=True,
+                                  machine_wired=True)
+    check('狀態機已接且允許 → 資格為真', ok and src == 'state_machine')
+    ok, src = evaluate_capability('diagnostic', diagnostic_allowed=True)
+    check('診斷資格獨立標記', ok and src == 'diagnostic')
+    L7 = CoupleLink()
+    L7.mark_attached(1, 0.01)
+    L7.request_release(2, 0.02)
+    cap, src = evaluate_capability('production', machine_allowed=True,
+                                   machine_wired=False)
+    check('未接妥狀態機時正式釋放被擋下',
+          not L7.may_release_now(cap, 3, 0.03, src) and L7.execute is None)
+    check('被擋原因記錄資格來源',
+          'state_machine_not_wired' in L7.record()['blocked_attempts'][-1][2])
 
     print('連接／解除握手離線測試：' + ('全部通過' if bad == 0 else f'**{bad} 項失敗**'))
     return 1 if bad else 0
