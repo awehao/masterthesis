@@ -684,3 +684,41 @@ RTF 1.0，牆鐘 10.8 s；CPU 起 65.0、峰值 **76.0** °C（中止線 92，�
 B 趟（緊急注入）**仍未跑**；正式資格（狀態機 `normal_release_allowed`）**仍未接**，
 `MACHINE_WIRED = False`，正式釋放路徑目前一律被擋；底盤自由度與 9 維命令未接。
 
+---
+
+## 15. B 趟（緊急注入，`coman_emerg_145659`）：**邏輯全對，但停止後無紀錄**
+
+不錄影、固定底盤、不拉動；連接後第 10 步注入（正常釋放設在第 20 步）。
+
+### 15.1 通過的項目
+
+| 核對項 | 結果 |
+|---|---|
+| 注入時機 | 連接後 **10 步**（sim 12.730 → 12.830） |
+| 注入當下狀態 | `joint_exists=true`、**`joint_enabled_at_injection=true`**、`before_normal_release=true` ⇒ **`valid_coupled_emergency=true`** |
+| 是否等待資格或請求 | **否** —— `request` 為 **null**，`blocked_attempts` 為空 |
+| 緊急觸發 → 執行 | 同一步（step 1283，sim 12.830） |
+| **讀回確認** | step 1284（sim 12.840），晚 1 步 |
+| 閂鎖 | 確認後才撤除（`emergency_latched=false`） |
+| 停止原因 | `monitor_failed_injected_fault`（與 `contact_force` 分開） |
+| 連接後 \|F\| 峰值 | 7.27 N；開度 0.0000 mm；各軸位移 ≤ 0.011 mrad |
+| 位姿紀錄 | 1250 筆，無效 0 |
+
+### 15.2 **未通過**：停止後沒有留下任何紀錄
+
+`post_stop_log` **筆數 0**。原因：停止後的 60 步取樣屬於**正常停止路徑**，
+而緊急路徑（`MonitorFailure` 處置）自己的 20 步迴圈**只步進、不記錄**。
+因此「停止後的力、開度與實際關節運動」這項要求**沒有達成** ——
+本趟只能證明命令已凍結，不能說明停止後實際發生什麼。
+
+即使是正常停止路徑，其 `post_stop_log` 也只有 `t / opening / opening_v`，
+**沒有力與關節角**。
+
+### 15.3 修正（已實作，**尚未重跑**）
+
+新增兩條路徑共用的 `coman_post_sample()`，每步記錄
+`physics_step_id`、`sim_time`、`opening`、`drawer_vy`、**`f_norm`**、**六軸實際關節角**、`tag`，
+輸出於 `coman_post_stop_log`。讀不到的量記 **NaN**，不補零、不沿用上一筆。
+
+**B 趟需重跑**才能宣稱「緊急解除接線通過」。
+

@@ -1093,6 +1093,37 @@ def main():
     last_applied_q = None          # **實際送進 apply_action() 的六軸設定點**
     coman_applied_log = []         # [step, t, q1..q6, source]
 
+    coman_post_stop_log = []
+
+    def coman_post_sample(tag):
+        """停止**之後**的取樣：力、開度與**實際關節角**都要留。
+
+        只看「命令已凍結」不足以說明停止後發生什麼；讀不到的量記 NaN，
+        **不補零、不沿用上一筆**。
+        """
+        st = int(world.current_time_step_index)
+        tt = float(world.current_time)
+        try:
+            _dp, _ = drawer_v.get_world_poses()
+            _op = DY0 - float(_dp[0][1])
+            _vy = float(drawer_v.get_velocities()[0][1])
+        except Exception:
+            _op, _vy = float('nan'), float('nan')
+        try:
+            _F = np.array(robot.get_measured_joint_forces())
+            _, _l6R, _ = world_T(prims['link6'])
+            _fn = float(np.linalg.norm(_l6R @ _F[j6_row][:3]))
+        except Exception:
+            _fn = float('nan')
+        try:
+            _qm = robot.get_joint_positions()
+            _qs = [float(_qm[idx[j]]) for j in ARM]
+        except Exception:
+            _qs = [float('nan')] * len(ARM)
+        coman_post_stop_log.append(
+            [st, round(tt, 4), round(_op, 7), round(_vy, 7), round(_fn, 4)]
+            + [round(v, 7) for v in _qs] + [tag])
+
     def couple_readback():
         """**讀回**固定關節狀態：回傳 (關節存在, 是否仍啟用)。
 
@@ -1787,6 +1818,7 @@ def main():
             post_stop = []
             for _ in range(60):
                 world.step(render=False)
+                coman_post_sample(f'stop_{stop}')
                 if couple_link.confirm is None:
                     _ex, _en = couple_readback()
                     couple_link.poll_confirm(_ex, _en,
@@ -1835,6 +1867,7 @@ def main():
                   'monitor_failure': monitor_fail})
         for _ in range(20):
             world.step(render=False)
+            coman_post_sample('emergency')
             # 緊急解除的**確認**同樣要讀回；閂鎖維持到確認為止
             if couple_link.confirm is None:
                 _ex, _en = couple_readback()
@@ -1973,6 +2006,10 @@ def main():
         'coman_applied_cmd_cols': ['physics_step_id', 'sim_time',
                                    'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'source'],
         'coman_applied_cmd_log': coman_applied_log,
+        'coman_post_stop_cols': ['physics_step_id', 'sim_time', 'opening',
+                                 'drawer_vy', 'f_norm',
+                                 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'tag'],
+        'coman_post_stop_log': coman_post_stop_log,
         'coman_stage_note': ('本階段只做量測接通；底盤仍由固定關節支撐，'
                              '不是協同操作驗收'),
         'rot_conv_err_max_deg': rot_err_max,
