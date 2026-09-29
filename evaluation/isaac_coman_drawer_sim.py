@@ -478,11 +478,22 @@ class DrawerNode(Node):
         self.safety_diag_log = []   # [sim_t, reason, filter_ms, node_ms, paired, n_rows]
         self.dist_diag_log = []     # [sim_t, n_rows, cycle_ms, dup_dropped, …]
         self.cmd_meta = []          # 安全層轉發的來源 meta
+        self.safety_fields = None   # 安全 diag 的欄位名單（latched）
+        self.dist_fields = None     # 距離 diag 的欄位名單（latched）
         self.e2e_log = []           # [step, apply_sim_t, seq, src_sim_t, age_s, …]
         self.create_subscription(Float32MultiArray, '/wholebody_safety/diag',
                                  self._safety_diag, rel)
         self.create_subscription(Float32MultiArray, '/arm_link_distance/diag',
                                  self._dist_diag, rel)
+        from rclpy.qos import QoSProfile as _QP, DurabilityPolicy as _DPol
+        _latq = _QP(depth=1)
+        _latq.durability = _DPol.TRANSIENT_LOCAL
+        self.create_subscription(
+            String, '/wholebody_safety/diag_fields',
+            lambda m: setattr(self, 'safety_fields', json.loads(m.data)), _latq)
+        self.create_subscription(
+            String, '/arm_link_distance/diag_fields',
+            lambda m: setattr(self, 'dist_fields', json.loads(m.data)), _latq)
         from std_msgs.msg import Float64MultiArray as _F64m
         self.create_subscription(_F64m, '/wholebody_safety/cmd_meta',
                                  self._cmd_meta, rel)
@@ -517,24 +528,34 @@ class DrawerNode(Node):
         if len(m.data) > 1:
             self.safety_diag_n += 1
             self.safety_diag = (float(self.sim_t), float(m.data[1]))
-            # **完整保存**，不只接收時間與 reason：
-            #   9 濾波投影耗時、18 安全節點整個回呼耗時、19 是否配對到來源
+            # **完整保存**，不只接收時間與 reason。欄位一律**按名稱索引**：
+            # 位置索引在上游加欄位時會誤讀（曾把 tf_age 當成 node_ms）。
             d = [float(x) for x in m.data]
+            g = lambda nm: self._diag_get(self.safety_fields, d, nm)
             self.safety_diag_log.append(
-                [float(self.sim_t), d[1],
-                 d[9] if len(d) > 9 else float('nan'),
-                 d[18] if len(d) > 18 else float('nan'),
-                 d[19] if len(d) > 19 else float('nan'),
-                 d[2] if len(d) > 2 else float('nan')])
+                [float(self.sim_t), g('reason'), g('filter_ms'),
+                 g('node_ms'), g('src_paired'), g('n_rows')])
+
+    @staticmethod
+    def _diag_get(fields, data, name):
+        """按**名稱**取診斷欄位；名單未收到或沒有該名稱即回 NaN。
+
+        **不猜位置** —— 上游加欄位時位置索引會把別的量當成新欄位。
+        """
+        if not fields or name not in fields:
+            return float('nan')
+        i = fields.index(name)
+        return float(data[i]) if i < len(data) else float('nan')
 
     def _dist_diag(self, m):
-        """距離節點的診斷：**整個節點週期**耗時（第 8 欄）與重複列移除數。"""
+        """距離節點的診斷：**整個節點週期**耗時與重複列移除數（按名稱取）。"""
         d = [float(x) for x in m.data]
+        g = lambda nm: self._diag_get(self.dist_fields, d, nm)
+        tight = [f for f in (self.dist_fields or []) if f.startswith('tight_')]
         self.dist_diag_log.append(
-            [float(self.sim_t), d[0] if d else float('nan'),
-             d[8] if len(d) > 8 else float('nan'),
-             d[9] if len(d) > 9 else float('nan')]
-            + ([d[10], d[11], d[12], d[13]] if len(d) > 13 else []))
+            [float(self.sim_t), g('n_rows'), g('node_cycle_ms'),
+             g('dup_dropped')]
+            + [self._diag_get(self.dist_fields, d, f) for f in tight])
 
     def _cmd_meta(self, m):
         """安全層轉發的命令 meta。以**手臂六分量**為配對鍵（adapter 只旋轉
@@ -547,18 +568,22 @@ class DrawerNode(Node):
             self.cmd_meta = self.cmd_meta[-64:]
 
     def pair_cmd_meta(self, v9):
-        """**唯一相符才配對**；配不到回 None，由呼叫端記為未配對。
+        """依**命令值**配對來源 meta，回傳 (meta, 候選數)。
 
-        **不以「距上次收件的時間」冒稱端到端年齡** —— 端到端年齡必須是
-        來源發布時間到實際套用時間之差，需要可配對的來源時間／序號。
+        **證據強度**：這是「**依值配對的延遲估計**」，**不是**已證明同一筆命令。
+        只比手臂六分量（adapter 只旋轉底盤三分量），而**重複命令、訊息遺失
+        或延遲都可能造成誤配** —— 即使候選唯一也不構成證明。
+        因此：候選數一併記錄，配不到記 `unpaired`，
+        **不單獨用它宣告端到端時效通過**。原有逾時保護照常運作
+        （命令鏈的新鮮度判定完全不依賴本配對）。
         """
         key = [round(float(x), 12) for x in list(v9)[3:9]]
         hits = [d for d in self.cmd_meta
                 if [round(x, 12) for x in d[4 + 3:4 + 9]] == key]
         if len(hits) != 1:
-            return None
+            return None, len(hits)
         self.cmd_meta.remove(hits[0])
-        return hits[0]
+        return hits[0], 1
 
     def _wb9(self, m):
         """9 維速度命令：**只轉交命令鏈**，新鮮度與拒收都由鏈內判定。"""
@@ -1588,8 +1613,8 @@ def main():
                 # 只有配對成功才記數值；配不到就記 unpaired，
                 # **不以距上次收件的時間冒稱端到端年齡**。
                 _snapv = getattr(chain9, 'snap', None)
-                _mt = (node.pair_cmd_meta(_snapv.v)
-                       if _snapv is not None else None)
+                _mt, _ncand = ((None, 0) if _snapv is None
+                               else node.pair_cmd_meta(_snapv.v))
                 node.e2e_log.append(
                     [int(pose_src.physics_step_id()), round(t, 5),
                      int(_mt[0]) if _mt else -1,
@@ -1597,7 +1622,8 @@ def main():
                      round(t - _mt[1], 5) if _mt else float('nan'),
                      round(_mt[2], 4) if _mt else float('nan'),
                      round(_mt[3], 4) if _mt else float('nan'),
-                     'paired' if _mt else 'unpaired'])
+                     int(_ncand),
+                     'value_paired_estimate' if _mt else 'unpaired'])
         elif snap is not None:
             applied_seq, _, q_cmd = snap
             tgt = robot.get_joint_positions()
@@ -2333,19 +2359,28 @@ def main():
                                  '**不作為間距預算，未歸給 v·tau。**'),
         # ---- O4 要求的計時：**各節點分開記錄，不相加當作端到端驗收** ----
         'coman_e2e_cols': ['physics_step_id', 'apply_sim_t', 'src_seq',
-                           'src_sim_t', 'e2e_age_s', 'solve_ms',
-                           'safety_node_ms', 'pairing'],
+                           'src_sim_t', 'e2e_age_s_value_paired_estimate',
+                           'solve_ms', 'safety_node_ms', 'n_candidates',
+                           'pairing'],
         'coman_e2e_log': node.e2e_log,
-        'coman_e2e_note': ('e2e_age_s = 實際套用時間 − 求解端發布時間，'
-                           '**僅在以命令值唯一配對成功時**才有數值；'
-                           'pairing = unpaired 者為 NaN。'
-                           '**接收端距上次收件的時間不是端到端年齡。**'),
+        'coman_e2e_note': (
+            '**依值配對的延遲估計**，不是已證明同一筆命令。'
+            '配對鍵只有手臂六分量（adapter 只旋轉底盤三分量）；'
+            '重複命令、訊息遺失或延遲都可能造成誤配，'
+            '**候選唯一也不構成證明**。n_candidates 一併記錄；'
+            'pairing = unpaired 者為 NaN。'
+            '**不單獨用本欄宣告端到端時效通過**；'
+            '接收端距上次收件的時間更不是端到端年齡。'
+            '原有逾時保護（命令鏈新鮮度）完全不依賴本配對，照常運作。'),
         'coman_safety_diag_cols': ['sim_t', 'reason', 'filter_ms',
                                    'safety_node_ms', 'paired', 'n_rows'],
         'coman_safety_diag_log': node.safety_diag_log,
-        'coman_dist_diag_cols': ['sim_t', 'n_rows', 'node_cycle_ms',
-                                 'dup_dropped', 'tight_lb', 'tight_ub',
-                                 'tight_elapsed_s', 'tight_tol_met'],
+        'coman_dist_diag_cols': (['sim_t', 'n_rows', 'node_cycle_ms',
+                                  'dup_dropped']
+                                 + [f for f in (node.dist_fields or [])
+                                    if f.startswith('tight_')]),
+        'coman_diag_fields_seen': {'safety': node.safety_fields,
+                                   'dist': node.dist_fields},
         'coman_dist_diag_log': node.dist_diag_log,
         'coman_post_stop_cols': ['physics_step_id', 'sim_time', 'opening',
                                  'drawer_vy', 'f_norm',

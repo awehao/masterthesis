@@ -62,6 +62,16 @@ from .wholebody_safety_filter import (STATUS_NODATA, DetectionPoint,
                                       detection_point_from_row)
 
 ARM_JOINTS = [f'joint{i}' for i in range(1, 7)]
+
+# **診斷欄位的權威名單**。加欄位一律加在**尾端**，並由 `~/diag_fields`
+# 以名稱發布，讓讀取端**按名稱索引**而不是按硬編碼位置 ——
+# 位置索引在加欄位時會把別的量誤讀成新欄位（實際發生過：
+# tf_age 在第 18 欄，新增的 node_ms 其實在第 19 欄）。
+DIAG_FIELDS = ['cycle', 'reason', 'n_rows', 'n_active', 'resid_before',
+               'resid_after', 'iters', 'fallback', 'unresolved',
+               'filter_ms', 'speed_cap', 'min_d', 'n_stale', 'n_nodata',
+               'n_occluded', 'safety_override', 'dt_prev_ms', 'have_v_prev2',
+               'tf_age', 'node_ms', 'src_paired']
 PC_FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded']
 FRAMES = ['detect0_1', 'detect0_2', 'detect1', 'detect2_1', 'detect2_2',
           'detect2_3', 'detect3_1', 'detect3_2', 'detect4_1', 'detect4_2',
@@ -260,6 +270,15 @@ class WholeBodySafetyNode(Node):
                                  self._on_obs_names, _lat)
         self.pub = self.create_publisher(Float64MultiArray, '~/cmd_out', 10)
         self.diag = self.create_publisher(Float32MultiArray, '~/diag', 10)
+        from rclpy.qos import QoSProfile as _QP, DurabilityPolicy as _DP
+        from std_msgs.msg import String as _Str
+        _lat = _QP(depth=1)
+        _lat.durability = _DP.TRANSIENT_LOCAL
+        self.diag_fields = self.create_publisher(_Str, '~/diag_fields', _lat)
+        _fm = _Str()
+        import json as _json
+        _fm.data = _json.dumps(DIAG_FIELDS)
+        self.diag_fields.publish(_fm)
         # **命令來源 meta 的轉發**：本節點會改寫命令值，因此下游無法用值配對到
         # 求解端。這裡以**收到的輸入值**配對上游 meta，再以**本節點輸出的值**
         # 為鍵重新發布，附上本節點的處理耗時。配不到就明載 seq = −1、
@@ -540,6 +559,10 @@ class WholeBodySafetyNode(Node):
                   # 18 本節點**整個回呼**的耗時（不只投影），19 是否配對到來源
                   float(getattr(self, '_node_ms_last', float('nan'))),
                   1.0 if _src else 0.0]
+        if len(d.data) != len(DIAG_FIELDS):
+            # 欄位數與名單不符即為接線錯誤；**不靜默發布**讓下游誤讀
+            raise RuntimeError(f'diag 欄位數 {len(d.data)} != '
+                               f'{len(DIAG_FIELDS)}（DIAG_FIELDS 未同步）')
         self.diag.publish(d)
 
         bm = Float32MultiArray()

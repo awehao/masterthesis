@@ -3,6 +3,12 @@ version: S1
 status: draft_pending_approval
 created: 2026-09-29
 references:
+  v1_corrigenda:
+  - file: wb_coman_drawer20_v1_corrigendum_c1.yaml
+    item: P6 退出方向
+    summary: '「起始夾爪 +z」更正為「向外 −z」；**23.3 mm 門檻不變**。
+      這是判定方向修正，不是文字修飾 —— 求解目標、狀態機與趟後判定都須一致。'
+    status: approved
   criteria_v1: wb_coman_drawer20_criteria_v1.yaml
   criteria_v1_sha256_16: c9f303a8630d4d0e
   pairs_table: coman_contact_avoid_pairs_v0_draft.yaml
@@ -128,10 +134,10 @@ checkers_sha256_16:
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
   coman_pull_solver_node.py: 770222f5bdaa5b5d
-  isaac_coman_drawer_sim.py: 5d02a35bf293aa32
+  isaac_coman_drawer_sim.py: f1f4677cc5a613d6
   wholebody_safety_filter.py: 6250b75f08a30d84
-  arm_link_distance.py: fb0c27dd545e9b01
-  wholebody_safety_node.py: 38946ce00f2baff0
+  arm_link_distance.py: 38b73aa866c7f79c
+  wholebody_safety_node.py: d3f90cfb1901b158
   test_pair_exceptions.py: da31af8647a8f293
   test_pipeline_pairs.py: 819689265ea84de3
   coman_zero_cmd_feasible.py: dd3d22105933c884
@@ -142,7 +148,8 @@ checkers_sha256_16:
   arm_link_geometry.py: 7fe840907f6e57ba
   test_solver_safety_parity.py: 13b8c5972217ede3
   test_retreat_direction.py: 491c88b9322dd307
-  coman_diag_record.py: b563c09c0121afbe
+  coman_diag_record.py: 610c9196e0d84946
+  coman_entry_check.py: a87ea8e3e3d20d51
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。
@@ -351,6 +358,14 @@ open_issues:
     budget_ms: 50
   positioning: '這些數字代表**目前已量到的部分成本**，
     **不能**斷言整條鏈一定超時，也**不能**宣稱能滿足 50 ms。'
+  e2e_evidence_strength:
+    label: '**依值配對的延遲估計**（value_paired_estimate）'
+    is_not: 已證明是同一筆命令
+    why: '配對鍵只有手臂六分量（adapter 只旋轉底盤三分量）；
+      重複命令、訊息遺失或延遲都可能造成誤配，**候選唯一也不構成證明**。'
+    recorded: [n_candidates, unpaired 計數, src_seq]
+    not_allowed: 單獨用它宣告端到端時效通過
+    unaffected: 原有逾時保護（命令鏈新鮮度判定）完全不依賴本配對，照常運作
   still_required_at_run_time:
   - 各節點處理時間分開記錄（距離節點、安全節點、求解節點）
   - 求解器 QP 耗時單獨記錄

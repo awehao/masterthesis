@@ -11,16 +11,14 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float32MultiArray, Float64MultiArray
 
+# 欄位名單**由上游節點以 latched String 發布**（`~/diag_fields`）。
+# 本檔不自帶硬編碼欄位名 —— 上游加欄位時硬編碼名單會錯位，
+# 把別的量當成新欄位（曾把 tf_age 當成 node_ms）。
+FIELD_TOPICS = {'dist': '/arm_link_distance/diag_fields',
+                'safety': '/wholebody_safety/diag_fields'}
 TOPICS = [
-    ('/arm_link_distance/diag', Float32MultiArray, 'dist',
-     ['n_rows', 'n_ok', 'n_unk', 'n_stale', 'n_nodata', 'worst_age', 'min_d',
-      'dropped', 'node_cycle_ms', 'dup_dropped', 'tight_lb', 'tight_ub',
-      'tight_elapsed_s', 'tight_tol_met']),
-    ('/wholebody_safety/diag', Float32MultiArray, 'safety',
-     ['cycle', 'reason', 'n_rows', 'n_active', 'resid_before', 'resid_after',
-      'iters', 'fallback', 'unresolved', 'filter_ms', 'speed_cap', 'min_d',
-      'n_stale', 'n_nodata', 'n_occluded', 'safety_override', 'dt_prev_ms',
-      'have_v_prev2', 'tf_age', 'node_ms', 'src_paired']),
+    ('/arm_link_distance/diag', Float32MultiArray, 'dist', None),
+    ('/wholebody_safety/diag', Float32MultiArray, 'safety', None),
     ('/coman/cmd_meta', Float64MultiArray, 'solver_meta',
      ['seq', 'src_sim_t', 'solve_ms'] + [f'v{i}' for i in range(9)]),
     ('/wholebody_safety/cmd_meta', Float64MultiArray, 'safety_meta',
@@ -37,10 +35,22 @@ class Rec(Node):
                                        True)])
         self.out = out
         self.data = {tag: [] for _, _, tag, _ in TOPICS}
-        self.cols = {tag: ['sim_t'] + cols for _, _, tag, cols in TOPICS}
+        self.cols = {tag: (['sim_t'] + cols) if cols else None
+                     for _, _, tag, cols in TOPICS}
         for topic, typ, tag, _ in TOPICS:
             self.create_subscription(
                 typ, topic, self._make(tag), qos_profile_sensor_data)
+        from rclpy.qos import QoSProfile, DurabilityPolicy
+        from std_msgs.msg import String
+        lat = QoSProfile(depth=1)
+        lat.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        for tag, ftopic in FIELD_TOPICS.items():
+            self.create_subscription(String, ftopic, self._fields(tag), lat)
+
+    def _fields(self, tag):
+        def cb(m):
+            self.cols[tag] = ['sim_t'] + list(json.loads(m.data))
+        return cb
         self.create_timer(2.0, self._flush)
 
     def _now(self):
@@ -55,6 +65,8 @@ class Rec(Node):
     def _flush(self):
         os.makedirs(os.path.dirname(self.out) or '.', exist_ok=True)
         json.dump({'cols': self.cols,
+                   'cols_source': '上游 ~/diag_fields（latched）；'
+                                  'null 表示尚未收到名單，不得猜位置',
                    'counts': {k: len(v) for k, v in self.data.items()},
                    'data': self.data},
                   open(self.out, 'w'), ensure_ascii=False)

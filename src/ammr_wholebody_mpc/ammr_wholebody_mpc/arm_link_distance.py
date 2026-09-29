@@ -117,6 +117,13 @@ FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded',
           'dlb', 'dlbv']
 VOBS_UNKNOWN, VOBS_STATIC, VOBS_OK = 0, 1, 2
 
+# **診斷欄位的權威名單**（tight 配對的四欄依 tight_pairs 順序接在尾端）。
+# 由 `~/diag_fields` 以名稱發布，讀取端**按名稱索引**。
+DIAG_FIELDS_BASE = ['n_rows', 'n_ok', 'n_unk', 'n_stale', 'n_nodata',
+                    'worst_age', 'min_d', 'dropped', 'node_cycle_ms',
+                    'dup_dropped']
+DIAG_TIGHT_SUFFIX = ['lb', 'ub', 'elapsed_s', 'tol_met']
+
 
 
 def pair_distance_bound(tris_world, obstacle, tol=5.0e-4, max_tris=60000,
@@ -500,6 +507,14 @@ class ArmLinkDistance(Node):
         _lat = QoSProfile(depth=1)
         _lat.durability = DurabilityPolicy.TRANSIENT_LOCAL
         self.names_pub = self.create_publisher(String, '~/obstacle_names', _lat)
+        self.diag_field_names = list(DIAG_FIELDS_BASE) + [
+            f'tight_{lk}|{ob}_{sfx}' for lk, ob in self._tight
+            for sfx in DIAG_TIGHT_SUFFIX]
+        self.diag_fields_pub = self.create_publisher(String, '~/diag_fields',
+                                                     _lat)
+        _dfm = String()
+        _dfm.data = json.dumps(self.diag_field_names)
+        self.diag_fields_pub.publish(_dfm)
         _nm = String(); _nm.data = json.dumps([o.name for o in self.obstacles])
         self.names_pub.publish(_nm)
         self.pub = self.create_publisher(PointCloud2, '~/points', 10)
@@ -629,15 +644,19 @@ class ArmLinkDistance(Node):
                   #   發布），不只 G2；9 本週期移除的完全重複列數
                   float(getattr(self, '_cycle_ms', float('nan'))),
                   float(getattr(self, '_dup_dropped', 0))]
-        #  8.. 每個 tight 配對的 lb、ub、耗時、是否達容差（逐週期發布，
-        #      讓趟後能核對「下界真的每步重算」而不是只寫在某份紀錄裡）
+        # 每個 tight 配對的 lb、ub、耗時、是否達容差接在**基礎欄位之後**
+        # （即索引 10 起，見 DIAG_FIELDS_BASE）。逐週期發布，
+        # 讓趟後能核對「下界真的每步重算」而不是只寫在某份紀錄裡。
         for _lk, _ob in self._tight:
             _r = self._tight_stat.get(f'{_lk}|{_ob}')
             d.data += ([float(_r['lb']), float(_r['ub']), float(_r['elapsed_s']),
                         1.0 if _r['tol_met'] else 0.0]
                        if _r else [float('nan')] * 3 + [0.0])
         self._cycle_ms = (time.perf_counter() - _c0) * 1e3
-        d.data[8] = float(self._cycle_ms)
+        d.data[DIAG_FIELDS_BASE.index('node_cycle_ms')] = float(self._cycle_ms)
+        if len(d.data) != len(self.diag_field_names):
+            raise RuntimeError(f'diag 欄位數 {len(d.data)} != '
+                               f'{len(self.diag_field_names)}（名單未同步）')
         self.diag.publish(d)
 
 

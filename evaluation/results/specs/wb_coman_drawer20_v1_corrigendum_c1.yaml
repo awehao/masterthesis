@@ -1,0 +1,41 @@
+# **v1 勘誤 C1：退出方向（P6）**
+#
+# v1 原檔 `wb_coman_drawer20_criteria_v1.yaml` **保留不動**
+# （sha c9f303a8630d4d0e）。本檔為獨立勘誤，不就地改寫凍結檔。
+schema: wb_coman_drawer20_corrigendum/1
+version: C1
+status: approved
+created: 2026-09-30
+applies_to:
+  file: wb_coman_drawer20_criteria_v1.yaml
+  file_sha256_16: c9f303a8630d4d0e
+  item: P6_definition（退出量的方向）
+
+correction:
+  kind: '**判定方向修正**，不是文字修飾'
+  was: 沿退出起始座標系固定方向「**起始夾爪 +z**」的有號位移
+  now: 沿退出起始座標系固定方向「**向外**」的有號位移；在此夾爪座標系即 **−z**
+  threshold_unchanged: true
+  threshold_m: 0.0233          # P6_retreat_clear_m，**未變**
+  axis_definition: 'retreat_axis_world(T) = −(T[:3,:3] @ [0,0,1])，
+    於**退出開始當下**固定；之後轉動工具不改變判讀（此點與 v1 相同）。'
+
+evidence:
+  source: 既有趟次 drawer_220102_offset20 的 retreat 相位（FK 重建，**未重跑**）
+  measured:
+    retreat_displacement_along_start_plus_z_mm: -38.96
+    bar_position_along_start_plus_z_mm: 69.05
+  reading: '橫桿在起始 +z 側，退出實測往 −z ⇒ **向外即 −z**。
+    原措辭要求沿 +z 的正向位移達 23.3 mm，與該幾何相反，
+    會造成「照目標退了，完成判定卻不承認」。'
+  offline_check: evaluation/test_retreat_direction.py（8 項全部通過，含舊寫法的反例）
+
+consistency_required:      # 三處必須用**同一套定義**
+  solver_target: coman_pull_solver_node.current_target() —— RETREAT 目標沿 retreat_axis_world
+  solver_reference: 退出開始當下保存 (起點, 軸)，軸同上
+  signed_measure: r_signed = (Tg.p − 起點) · 軸 ⇒ 退出時為**正**
+  policy_gate: coman_pull_policy 的 retreat_signed_m >= retreat_clear（0.0233，未變）
+  post_run_judgement: 趟後判定沿用同一軸；**不得**改用絕對值掩蓋方向
+not_claimed:
+- 投影距離達標**不等於**已完全清開（與 v1 P6_basis 相同）
+- 本勘誤不改動 v1 的任何門檻數值
