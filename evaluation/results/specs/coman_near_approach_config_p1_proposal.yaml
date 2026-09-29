@@ -1,0 +1,259 @@
+# **近接操作配置 P1（提案，待審定）**
+#
+# 目的：把「近接操作需求」與「線上避碰規則」定義成一致、可執行的一套，
+# 取代逐列遇到阻擋才修改的做法。**保留目前抓取幾何。**
+#
+# 本檔是提案，不是已核准的配置。起動前檢查會因 status 非 approved 而擋住。
+schema: coman_near_approach_config/1
+version: P1
+status: proposal_pending_approval
+created: 2026-09-30
+supersedes_conclusions_in:
+  file: coman_contact_avoid_pairs_v0_draft.yaml
+  what: no_conflict_after_measurement（已撤回）與缺少 eps 的 general_rule（已更正）
+basis:
+  full_barrier_check: evaluation/coman_zero_cmd_feasible.py
+  local_bound: evaluation/coman_shell_bar_bound.py
+  execution_deviation: 既有趟次 drawer_220102_offset20 的 track_err（**未重跑、未新掃描**）
+  pose: 既有趟次 hold 相位、開度 19.99 mm —— **單一位姿**，不外推到整段操作
+
+# ---------------------------------------------------------------- 一、不可動的部分
+invariants:
+  barrier_form: 'n^T J v <= alpha (d_eff - d_stop)'
+  kept_unconditionally:
+  - v_app * tau 與 v_app^2/(2a)（速度相關停止距離）
+  - rho 扣除（或其替代的**已認證**下界）
+  - omega * rho 與 velocity_error_margin（速度誤差修正）
+  - STATUS_STALE 的距離收縮與 stale_speed_cap
+  - 遮蔽方向的 blind_approach_cap
+  - 關節限位列、速度框、加速度框、jerk 框、執行端最終檢查
+  note: '距離估計改善**不得**順手刪掉上述任何一項；改善的是 d 的下界，不是這些項的用途。'
+
+# ---------------------------------------------------------------- 二、三類配對
+classification:
+  contact_exception:
+    pairs: [uflite_finger1|handle_bar, uflite_finger2|handle_bar]
+    phases: [engage, pull, hold, release]
+    rule: 維持指定相位的設計接觸例外（不產生屏障列）
+    unchanged_from: S1
+  near_approach:
+    rule: '**保留避碰**，另訂局部間距與適用相位；間距是 g_pair（總靜態間距，
+      取代該配對的 d0 + eps），速度相關項照常計入。'
+    pairs: 見 pair_table
+  general:
+    rule: 其餘所有配對維持既有一般規則（d0 50 + eps 30 = 80 mm 零速總靜態間距）
+
+# ---------------------------------------------------------------- 三、十組配對一次列完
+# margin_mm 為距離當量（rhs / alpha）。d 與 rho 是距離節點在保持位姿的實際輸出。
+# fail_mode：
+#   rho_only  —— d 本身已 >= 80 mm，只因 rho 扣除而不可行 ⇒ **只需改幾何表示**
+#   distance  —— d 本身 < 80 mm ⇒ 需要局部間距決定
+pair_table:
+- pair: uflite_gripper_link|handle_bar
+  fail_mode: distance
+  d_mm: 8.69
+  rho_mm: 13.35
+  true_min_distance_mm: {lower: 7.4160, upper: 7.4415}
+  margin_now_mm: -84.65
+  geometry_method: G2（線上逐配對分支與界限）
+  proposed_gap_mm: null           # **無法從現有資料指定** —— 見 unresolved_decision
+  phases: [approach, engage, pull, hold, release, retreat]
+  why_hard: 保持位姿的真實間距 7.42 mm 與同相位的執行偏差界 5.83 mm 同數量級
+- pair: uflite_finger1|drawer_front_panel
+  fail_mode: distance
+  d_mm: 28.07
+  rho_mm: 12.73
+  margin_now_mm: 5.34            # S1 的 g_pair = 10 mm 之下已為正
+  geometry_method: G1（現行取樣＋rho）
+  proposed_gap_mm: 0.010
+  phases: [approach, engage, pull, hold, release, retreat]
+  status: 沿用 S1 已裁定的受限模擬配置
+- pair: uflite_finger2|drawer_front_panel
+  fail_mode: distance
+  d_mm: 28.88
+  rho_mm: 12.28
+  margin_now_mm: 6.60
+  geometry_method: G1
+  proposed_gap_mm: 0.010
+  phases: [approach, engage, pull, hold, release, retreat]
+  status: 沿用 S1 已裁定的受限模擬配置
+- pair: link6|handle_bar
+  fail_mode: distance
+  d_mm: 64.12
+  rho_mm: 13.30
+  margin_now_mm: -29.17
+  geometry_method: G1
+  proposed_gap_mm: 0.045          # < d - rho = 50.83；見 gap_selection
+  phases: [approach, engage, pull, hold, release, retreat]
+- pair: uflite_finger1|handle_post_r
+  fail_mode: distance
+  d_mm: 66.95
+  rho_mm: 12.73
+  margin_now_mm: -25.78
+  geometry_method: G1
+  proposed_gap_mm: 0.045
+  phases: [approach, engage, pull, hold, release, retreat]
+- pair: uflite_finger1|handle_post_l
+  fail_mode: distance
+  d_mm: 67.27
+  rho_mm: 12.73
+  margin_now_mm: -25.46
+  geometry_method: G1
+  proposed_gap_mm: 0.045
+  phases: [approach, engage, pull, hold, release, retreat]
+- pair: uflite_finger2|handle_post_l
+  fail_mode: distance
+  d_mm: 67.46
+  rho_mm: 12.28
+  margin_now_mm: -24.82
+  geometry_method: G1
+  proposed_gap_mm: 0.045
+  phases: [approach, engage, pull, hold, release, retreat]
+- pair: uflite_finger2|handle_post_r
+  fail_mode: distance
+  d_mm: 69.91
+  rho_mm: 12.28
+  margin_now_mm: -22.37
+  geometry_method: G1
+  proposed_gap_mm: 0.045
+  phases: [approach, engage, pull, hold, release, retreat]
+- pair: link5|handle_bar
+  fail_mode: rho_only            # d 84.80 >= 80，僅因 rho 扣除不可行
+  d_mm: 84.80
+  rho_mm: 12.62
+  margin_now_mm: -7.82
+  geometry_method: G1
+  proposed_gap_mm: 0.070          # < d - rho = 72.18；**仍低於一般規則的 80**
+  phases: [pull, hold]
+  note: 只在需要的相位放寬；其餘相位回到一般規則
+- pair: link4|handle_bar
+  fail_mode: rho_only            # d 91.20 >= 80
+  d_mm: 91.20
+  rho_mm: 13.54
+  margin_now_mm: -2.34
+  geometry_method: G1
+  proposed_gap_mm: 0.075          # < d - rho = 77.66
+  phases: [pull, hold]
+
+# ---------------------------------------------------------------- 四、幾何怎麼算
+geometry_methods:
+  G1:
+    name: 現行取樣＋認證覆蓋半徑
+    formula: d_eff = d_sample - rho_link
+    cost_ms: 已在線上（現行實作）
+    conservatism: 'rho 是**整條連桿的最壞情況**；保持位姿夾爪殼—橫桿的實際取樣
+      誤差只有 1.25 mm，rho 卻是 13.35 mm'
+    keep_for: 所有 fail_mode = rho_only 與間距餘裕充足的配對
+  G2:
+    name: 線上逐配對分支與界限（只給指定配對）
+    formula: 'd_eff = LB(當前位姿)，LB = min over 三角形 (d(形心) - r_c)；
+      距離函數 1-Lipschitz'
+    validity: '**每個週期以當前位姿重算**。離線算出的 7.416 mm 是**該位姿**的值，
+      不得當成整段運動的固定下界。'
+    measured_cost:
+      offline_python_loops_ms: {tol_0.05mm: 1101, tol_0.5mm: 243, tol_2mm: 174}
+      note: '上列是**純 Python 逐三角形迴圈**的成本，不是本質成本'
+      vectorised_per_round_ms: {tri_500: 0.23, tri_2000: 0.65, tri_5000: 1.65}
+      distance_eval_ms: {pts_2000: 0.30, pts_8812: 1.21, pts_40816: 6.73}
+      budget_ms: 50            # 20 Hz
+      verdict: '向量化＋熱啟動（沿用上一週期的活躍三角形集合）可在預算內；
+        **尚未實作、未驗證**'
+    required_before_use:
+    - 活躍集合的熱啟動必須依兩週期間的最大位移**擴張**，否則下界不再有效
+    - 活躍集合上限與逾時退回 G1（fail closed，較保守）
+    - 逐週期發布 LB、上界、活躍集合大小與是否逾時；不得只發布結果
+  G3:
+    name: 離線認證的局部基元代理（未提案採用）
+    idea: 對殼的近橫桿區域擬合保守基元（球／膠囊），閉式距離、線上近乎零成本
+    blocker: '認證必須覆蓋**整段操作的相對位姿集合**，不是單一位姿；
+      本次未做，且依裁定不新增同類幾何掃描'
+
+# ---------------------------------------------------------------- 五、間距怎麼選
+gap_selection:
+  principle: '間距要覆蓋「線上距離估計的殘餘保守量」與「執行偏差沿 n 的分量」，
+    但**不得與屏障已有的項重複計算**。'
+  components:
+    model_geometry: 抽屜部件以軸對齊方塊近似（無倒角）；橫桿以圓柱基元近似
+    distance_estimate: G1 為 rho（12.3–13.5 mm）；G2 為當前週期的上下界差
+    execution_deviation: 見 execution_deviation
+  proposed_45mm_basis: '45 mm 用於四組支柱配對與 link6：取 d - rho 的最小值
+    50.83 mm 再留約 6 mm。**這是工程選值，不是證明足夠**。'
+  proposed_70_75mm_basis: 'link5／link4 只因 rho 扣除不可行，取 d - rho 之下
+    的整數值，仍低於一般規則的 80 mm ⇒ 屬**局部放寬**，須明載。'
+  not_claimed: 以上任一數值都**不是已證明足夠的安全距離**
+
+execution_deviation:
+  source: 既有趟次 drawer_220102_offset20 的 track_err（**關節**追蹤誤差，rad）
+  correction: '先前把 track_err 的 1000 倍讀成 mm 是錯的 —— 那是 mrad。'
+  p95_rad: {engage: 0.00300, pull: 0.01559, hold: 0.00239, release: 0.00195}
+  cartesian_bound: '沿 n 的偏差 <= |n^T J_lin|_2 * ||dq||_2，
+    且 ||dq||_2 <= sqrt(6) * max_i|dq_i|（**只有 max 有記錄**）'
+  directional_gain_m_per_rad: 0.995–1.284（十組配對，保持位姿）
+  bound_mm:
+    hold: 5.83–7.52
+    pull: 38.00–49.04
+  double_counting_warning: '`pull` 的 15.59 mrad **以命令落後為主**，
+    而屏障的 v_app * tau（tau = 0.15 s）已在涵蓋延遲造成的接近。
+    把這 38–49 mm 再當成獨立餘裕會**重複計算**同一個延遲。
+    逐關節誤差向量未記錄 ⇒ 無法從本資料分離落後與非落後成分。'
+
+# ---------------------------------------------------------------- 六、還沒解決的決定
+unresolved_decision:
+  id: D1
+  title: 夾爪殼—橫桿的間距要求無法從現有資料指定
+  facts:
+  - 保持位姿真實間距落在 7.4160–7.4415 mm（**單一位姿**）
+  - 同相位執行偏差界 5.83 mm ⇒ 最壞情況下殘餘僅約 1.6 mm
+  - pull 相位偏差界 38.00 mm，遠大於該間距；但其中以命令落後為主（見上）
+  - 因此**任何正的間距要求**在最壞情況處理下都不成立
+  options_for_ruling:
+  - id: D1a
+    action: 明訂偏差的**統計處理**（例如以 p95 搭配明載的超出率），而非最壞情況
+    requires: 決定超出率如何被接受、以及超出時由什麼機制承接
+    changes: 方法論定義，不改門檻
+  - id: D1b
+    action: 把落後成分歸給既有的 v_app * tau，只對**非落後**成分留餘裕
+    requires: 逐關節誤差向量的記錄（現行只記 max）⇒ 需改記錄欄位，非新掃描
+    changes: 記錄欄位
+  - id: D1c
+    action: 收緊關節追蹤（降低 pull 相位的 15.59 mrad）
+    changes: 控制側，不改門檻
+  - id: D1d
+    action: 接受低於偏差界的間距要求，並明載力中止為後備
+    must_state: '這是**工程決定**，不得寫成已證明的餘裕；力中止不是幾何不變式'
+  not_proposed: 改變抓取幾何（依裁定保留）
+
+# ---------------------------------------------------------------- 七、仍未涵蓋的不確定性
+uncertainties_not_covered:
+- id: U1
+  item: 只核了**單一位姿**（hold、開度 19.99 mm）
+  impact: 整段操作（approach→retreat）的最小間距未知；G2 的線上下界正是為此
+- id: U2
+  item: 位姿來源是**固定底座**趟次的 FK 重建，base_drift 記錄全為 0
+  impact: 開放底盤趟次的底盤位移與偏擺完全未涵蓋
+- id: U3
+  item: 執行偏差取自**理想固定連接**、固定底座、軌跡重演趟次
+  impact: 全身 QP＋開放底盤的偏差分布可能不同
+- id: U4
+  item: 逐關節誤差向量未記錄，只有 max|dq|
+  impact: sqrt(6) 放大是最壞情況；無法分離落後與非落後成分
+- id: U5
+  item: 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，無倒角與細節
+  impact: 模型與模擬器碰撞幾何的差異未量化
+- id: U6
+  item: 抽屜位姿由執行端發布，屏障端有齡期
+  impact: STATUS_STALE 收縮已在線上，但齡期分布未在此核對
+- id: U7
+  item: G2 尚未實作，熱啟動下界的有效性未驗證
+- id: U8
+  item: 另外七組是否也像殼—橫桿一樣「rho 遠大於實際誤差」，**本次未核**
+  reason: 依裁定不擴大幾何掃描範圍
+
+# ---------------------------------------------------------------- 八、本提案沒有做的事
+not_done:
+- 未調整任何門檻、未刪除任何餘裕、未改動一般規則
+- 未新增同類幾何掃描、未跑模擬器、未重跑任何趟次
+- 未把此位姿的 1.25 mm 取樣差拿去取代全域 rho
+- 未把離線的 7.416 mm 當成整段運動的固定下界
+- 未新增任何接觸例外（殼—橫桿仍為非接觸配對）
+blocks_until_approved: O2 維持 blocking；20 mm 主成果首測不放行
