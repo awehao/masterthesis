@@ -9,9 +9,11 @@
 #   因此本案例**不能**驗證牽引力是否足夠、輪子是否打滑；
 #   由底盤速度換算的輪速**不是**獨立實測輪速。
 schema: wb_coman_drawer_criteria/0
-version: v0-draft
+version: v0.2-draft
 status: draft_not_frozen
 created: 2026-09-29
+revised: 2026-09-29   # v0.2：依離線統計填入有依據的門檻
+basis_doc: evaluation/results/coman_drawer20_offline_stats_20260929.md
 run_label: 速度驅動底盤下的全身協同抽屜操作（短行程 20 mm）
 prospective: true
 not_retroactive: >
@@ -39,6 +41,13 @@ drawer:
   drive_max_force: 0
   drive_target: 0
 
+# ---- 任務側幾何硬限（來自抽屜資產定義，非量測、非可調）----
+geometry:
+  handle_bar_diameter_m: 0.010
+  gripper_open_inner_m: 0.0178
+  clearance_per_side_m: 0.0039      # (0.0178 − 0.010)/2；橫向對準超過此值就包不住橫桿
+  handle_standoff_m: 0.040
+
 profile:
   controller: 全身單步 QP（低速配置），底盤與手臂由同一次求解決定
   base_fixed: false                          # 與固定底座案例的唯一設計差異
@@ -56,21 +65,48 @@ forbidden:
 
 # ---- H 交接：接觸開始前必須先穩住 ----
 H_handover:
-  H1_tcp_rel_handle_pos_err_m_max: null      # 待定
-  H2_tcp_rel_handle_rot_err_rad_max: null    # 待定
+  H1_tcp_rel_handle_pos_err_m_max: 0.0020
+  H1_basis:
+    task_need: 單邊夾持餘隙 0.0039 m（幾何硬限）
+    measured: 固定底座 engage 期 e_par 0.830 mm、e_perp 1.490 mm
+    rationale: 取餘隙約一半；既有能力落在其內
+    limit: 量測來自固定底座趟次，移動底盤未驗證
+  H2_tcp_rel_handle_rot_err_rad_max: 0.01745   # 1.0°
+  H2_basis:
+    task_need: 1° 在 40 mm 站距上約 0.7 mm 橫移，仍在餘隙內
+    measured: 固定底座各相位姿態誤差 ≤ 0.0001°
+    limit: 理想固定連接下姿態誤差本來就小，此門檻非嚴苛考驗
   H3_window_s: 3.0                           # **候選值**：固定底座版 engage 2.0 + postengage 1.0
   H3_basis: 既有流程的相位時間，屬設計依據；**不是**已證明「3 s 夠穩」
-  H4_base_displacement_m_max: null           # 待定；**不得**引用他趟的 10 s 位移 3.4 mm 當證明
+  H4_base_displacement_m_max: null           # **維持待定**
+  H4_basis:
+    task_need: 須小於分配給底盤的餘隙份額（總餘隙 0.0039 m）
+    measured: 唯一具 ≥3 s 持續命令窗的趟次（long_144345，3.85 s）量到 4.342 mm
+    gap: "**既有能力已超出餘隙**，須先查明漂移來源或縮短交接窗"
+    forbidden: 不得為了通過而把門檻放寬到 5 mm；不得引用他趟 10 s 位移 3.4 mm 當證明
+    note: 底盤位移不等於 TCP 相對把手誤差（手臂可補償），故 H4 為原始指標，不與餘隙直接相減
+    yaw_column_suspect: 五趟最大偏航皆為 0.691 mrad（相同到小數點後三位），疑為量化或固定偏置，查明前不採用
   H5_long_tail_claim: >
     本判準只檢查交接窗內的行為。長時間保持（sim 140 s 誤差 21.71 mm）仍未驗收，
     **不得**宣稱長尾漂移對本案例沒有影響，只能說未在本窗內檢出。
 
 # ---- P 拉開：受控到達，不是滑過去 ----
 P_pull:
-  P1_final_opening_err_m_max: null           # 待定
+  P1_final_opening_err_m_max: null           # **維持待定**
+  P1_basis:
+    task_need: 尚無「多少算完成 20 mm」的定義
+    measured: 200 mm 版誤差 −1.270 mm，來源為 b(s) 相關的致動偏差，不隨行程等比例縮放
+    needed: 先跑 20 mm 固定底座參照趟
   P2_arrival_before_release_required: true   # 到位必須早於解除連接（沿用固定底座口徑）
-  P3_grasp_rel_pose_drift_m_max: null        # 待定：拉動期間抓取相對位姿漂移
-  P4_opening_after_release_change_m_max: null # 待定：釋放後開度不應再變
+  P3_grasp_rel_pose_drift_m_max: null        # **維持待定**；本輪列為必記錄量
+  P3_basis:
+    measured: 固定底座 pull 期 e_par 3.727 mm、e_perp 1.468 mm（**有 b(s) 補償**）
+    limit: 協同版不沿用 b(s)，偏差來源不同，不可沿用其數值
+  P4_opening_after_release_change_m_max: 0.00005   # 0.05 mm
+  P4_basis:
+    task_need: 釋放後抽屜不應自行移動
+    measured: 固定底座 release+retreat+settle 共 9.7 s 內變化 0.00000 mm；解析度 0.001 mm
+    rationale: 取解析度的 50 倍，為行程 20 mm 的 0.25 %
   P5_opening_source: 抽屜關節實測開度；不以命令值代替
 
 # ---- F 負載與停止 ----
@@ -82,8 +118,16 @@ F_force:
 
 # ---- B 底盤運動追蹤（取代原先誤設的「牽引／打滑驗收」）----
 B_base_tracking:
-  B1_cmd_vs_measured_vel_err_mps_max: null   # 待定
-  B2_cmd_vs_measured_disp_err_m_max: null    # 待定
+  B1_cmd_vs_measured_vel_err_mps_max: 0.005      # 回歸偵測門檻，非任務需求
+  B1_basis:
+    measured: 五趟 max 一致為 3.03 mm/s（中位 0.011、p95 0.04–0.71）
+    role: capability_regression_detector
+  B2_cmd_vs_measured_disp_rate_m_per_s_max: 0.0003   # 0.30 mm/s of window
+  B2_basis:
+    measured: 位移偏差隨窗長成長，折算 0.20–0.27 mm/s（1.33 mm/4.9 s、5.28 mm/26.7 s）
+    limit: 含「上一步送出速度」對齊慣例造成的系統性成分，非純追蹤誤差
+    role: capability_regression_detector
+  B7_wheel_limiter_inactive_in_reference: 五趟 modified 0.0 %、λ 最小 1.0000（最終套用命令＝所請求命令）
   B3_rejected_commands: 0
   B4_endpoint_failure: none
   B5_speed_box: 沿用低速配置（逐軸 0.035255 m/s、wz 0.1999、手臂 0.9999）
@@ -91,15 +135,21 @@ B_base_tracking:
 
 # ---- S 命令鏈健康度 ----
 S_chain:
-  S1_stale_ratio_in_operating_segment_max: 0.0
+  S0_note: 以下四項互相獨立，必須分別記錄，不以其中一項代表另一項
+  S1_stale_ratio_in_operating_segment_max: 0.0        # 安全層上游過期（reason=2），max_cmd_age 0.25 s
   S1_basis: >
     既有四趟自由空間趟次的有效運動段 reason≠0 皆為 0.0 %、最長連續過期 0.00 s
     （isaac_wholebody_port_20260913.md §39），故此處要求 0。
+  S1b_endpoint_recv_timeout_events_max: 0             # 執行端自身接收逾時，max_cmd_age_s 0.2 s（比安全層嚴）
+  S1c_two_timeouts_differ: 0.20 s（執行端）與 0.25 s（安全層）不同，不可互相代表
   S2_solver_must_publish_through_hold: true
   S2_basis: >
     四趟求解器都在到達後 0.9–3.9 s 自行停止發布。接觸案例的 hold 需要命令持續更新，
     因此必須**明確要求**求解器在整個操作段（含 hold）持續發布，並在趟後查核。
-  S3_tail_stale_expected: true               # 任務結束後的過期是預期行為，不計入 S1
+  S3_hold_tracking_pass_required: true       # 保持追蹤合格：hold 期開度與 TCP 誤差在容差內（與新鮮度無關）
+  S4_release_gated_by_hold_pass: true        # 允許釋放：保持條件達成後才可進入 release
+  S5_record_separate_timestamps: [命令新鮮, 執行端未逾時, 保持追蹤合格, 允許釋放]
+  S6_tail_stale_expected: true               # 任務結束後的過期是預期行為，不計入 S1
 
 # ---- D 保護（不得為了通過而調整）----
 D_protections:
@@ -116,6 +166,13 @@ comparison:
   report_items: [關節限位餘裕, 手腕負載, 完成行程, 底盤運動追蹤]
 
 # ---- 尚未定版的門檻與所需依據 ----
+runner_gate:
+  refuse_if_any_required_threshold_null: true
+  note: >
+    草案只要還有必要門檻為 null，runner 必須拒絕正式執行，不得預設略過。
+    本輪**尚未**撰寫該 runner；此規則於撰寫時實作。
+  currently_null: [H4_base_displacement_m_max, P1_final_opening_err_m_max, P3_grasp_rel_pose_drift_m_max]
+
 pending:
   - key: H1/H2
     需要: 固定底座版在 engage 階段的實測抓取相對位姿散佈，取其保守包絡
