@@ -1160,6 +1160,7 @@ def main():
     inject_info = None             # 注入當下的關節讀回
     last_applied_q = None          # **實際送進 apply_action() 的六軸設定點**
     coman_applied_log = []         # [step, t, q1..q6, source]
+    coman_jerr_log = []            # [step, t, phase, dq1..dq6]（僅記錄）
 
     coman_post_stop_log = []
     coman_post_nan = {}
@@ -1782,6 +1783,14 @@ def main():
         dyaw = abs(yaw_of(bq) - BASE0[2])
         trk = float(np.abs(qa - (snap[2] if snap is not None else qa)).max()) \
             if snap is not None else 0.0
+        # **逐關節**命令／實測誤差向量。原本只記 max|dq|，無法分離落後與非落後
+        # 成分，也無法把誤差投影到某個配對的法向。此處只**記錄**，
+        # **不歸給 v·tau、不改任何增益或門檻**。
+        if snap is not None:
+            _dq = (np.asarray(qa, float) - np.asarray(snap[2], float))[:6]
+            coman_jerr_log.append([int(world.current_time_step_index),
+                                   round(t, 5), ph]
+                                  + [round(float(v), 8) for v in _dq])
         lm = min(min(qa[k] - LITE6_SAFE.lower[k], LITE6_SAFE.upper[k] - qa[k])
                  for k in range(6))
 
@@ -2251,6 +2260,12 @@ def main():
         'coman_applied_cmd_cols': ['physics_step_id', 'sim_time',
                                    'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'source'],
         'coman_applied_cmd_log': coman_applied_log,
+        # 逐關節命令／實測誤差（rad）。**僅記錄**，未用於任何門檻或增益。
+        'coman_joint_err_cols': ['physics_step_id', 'sim_time', 'phase',
+                                 'dq1', 'dq2', 'dq3', 'dq4', 'dq5', 'dq6'],
+        'coman_joint_err_log': coman_jerr_log,
+        'coman_joint_err_note': ('dq = q_measured − q_commanded，逐關節。'
+                                 '**不作為間距預算，未歸給 v·tau。**'),
         'coman_post_stop_cols': ['physics_step_id', 'sim_time', 'opening',
                                  'drawer_vy', 'f_norm',
                                  'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'tag'],

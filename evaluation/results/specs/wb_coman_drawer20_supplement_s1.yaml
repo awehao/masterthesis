@@ -108,7 +108,7 @@ checkers_sha256_16:
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
   coman_pull_solver_node.py: a6f05ff9d8dd1104
-  isaac_coman_drawer_sim.py: 3cd85d5b2d3787b8
+  isaac_coman_drawer_sim.py: 90c6121e4a3203e8
   wholebody_safety_filter.py: 5e9eeece4e6b900b
   arm_link_distance.py: 81a60f35f9f296c9
   wholebody_safety_node.py: ae3013ae7051f3f3
@@ -223,10 +223,26 @@ open_issues:
   decision_pending: '**完整的近接操作配置一次決定**（不逐組把門檻降到剛好通過、
     不全域移除 eps、不繼續逐列補例外）。'
   proposal: coman_near_approach_config_p1_proposal.yaml（P1，proposal_pending_approval）
-  proposal_summary: '十組配對一次列完；四組已有提案值（面板 10 mm 沿用 S1）、
-    五組提案 45／70／75 mm 工程選值、夾爪殼—橫桿**無法從現有資料指定**（提案中 D1）。
-    夾爪殼—橫桿需要**線上**的逐配對下界（G2），離線的 7.416 mm 不得當成
-    整段運動的固定下界。'
+  proposal_summary: '十組配對一次列完。面板 10 mm 沿用 S1；45／70／75 mm 為
+    **候選值，未批准套用**；夾爪殼—橫桿尚無成立的推導依據。
+    離線的 7.4160–7.4415 mm 是**單一位姿**，不得當成整段運動的固定下界。'
+  current_focus: '**D2：屏障與偏差預算是否使用正確的相對運動量**（不是再選更小的安全距離）。
+    程式核對結論：屏障把障礙物當作該週期內靜止（左式只含 n^T J u），
+    濾波器與距離節點都未估計 v_obs；stale_obstacle_speed 只是未看見期間的假設。'
+  retracted_2026_09_30:
+  - '「7.42 − 5.83 ≈ 1.6 mm 為剩餘間距下界」—— 撤回。J·(q_實測−q_命令) 是
+    機器人相對命令的偏差，不是殼—橫桿的相對間距誤差；且當前 d 已由實測位姿算出，
+    落後造成的位置差已在幾何裡，不得再扣一次。'
+  - '「任何正的間距要求都不成立」—— 撤回（建立在上述換算之上）。'
+  - '「38–49 mm 為最壞情況界」—— 撤回；那是以**保持位姿增益**與 **p95** 關節誤差
+    換算的**估計**，非最大值或認證上界。'
+  - '「該值以命令落後為主、已由 v·tau 涵蓋」—— 撤回；未經核對，不先歸給 v·tau。'
+  - '「d ≥ 80 mm ⇒ 改善幾何表示後必然滿足 80 mm」—— 撤回；d 是取樣值，
+    真實最小距離可能更小（殼—橫桿：取樣 8.69、真實 7.44）。'
+  - '「G2 可在 50 ms 預算內」—— 撤回；量到的是局部片段耗時，
+    未含 TF／FK、三角形變換、活躍集合維護、多配對與屏障組裝的競用。'
+  allowed_and_done: '補記逐關節命令／實測誤差向量（isaac_coman_drawer_sim.py
+    新增 coman_joint_err_log，僅記錄；**未歸給 v·tau、未調任何增益或門檻**）。'
   precision_note: '最小距離落在 **7.4160–7.4415 mm**，不是已知恰等於 7.416 mm，
     且**不能外推到整段操作**。'
   not_done: 未刪除任何餘裕、未調整任何門檻、未改動一般規則；僅回報造成不相容的項目
