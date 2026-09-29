@@ -484,6 +484,34 @@ def _inside(o: Obstacle, P: np.ndarray) -> np.ndarray:
     return np.zeros(len(P), dtype=bool)
 
 
+def obstacle_distance_matrix(P: np.ndarray, obs: list[Obstacle]):
+    """**一次算完**所有 (取樣點, 障礙物) 的帶號距離與接近向量。
+
+    回傳 (D, V)，D 形狀 (n_pts, n_obs)、V 形狀 (n_pts, n_obs, 3)，
+    語意與 `obstacle_distances` 逐一呼叫完全相同（同一組
+    `_closest_local_batch` / `_inside`）。
+
+    為什麼需要：先前「最近障礙物」用一次全障礙物呼叫取 min，
+    而每個**必要配對列**又對同一個障礙物再呼叫一次 —— 同一份狀態快照
+    重複計算。兩者現在共用這一份矩陣，**數值不變**。
+    """
+    P = np.asarray(P, dtype=float)
+    n, m = len(P), len(obs)
+    D = np.full((n, m), np.inf)
+    V = np.zeros((n, m, 3))
+    for j, o in enumerate(obs):
+        T = o.T_world_link @ o.T_link_collision
+        Ti = _inv(T)
+        loc = (P @ Ti[:3, :3].T) + Ti[:3, 3]
+        surf = (_closest_local_batch(o, loc) @ T[:3, :3].T) + T[:3, 3]
+        v = surf - P
+        dist = np.linalg.norm(v, axis=1)
+        ins = _inside(o, loc)
+        D[:, j] = np.where(ins, -dist, dist)
+        V[:, j] = np.where(ins[:, None], -v, v)
+    return D, V
+
+
 def obstacle_distances(P: np.ndarray, obs: list[Obstacle]) -> tuple[np.ndarray, np.ndarray, list]:
     """SIGNED distance and approach direction from each of P to the nearest
     obstacle.
@@ -507,21 +535,14 @@ def obstacle_distances(P: np.ndarray, obs: list[Obstacle]) -> tuple[np.ndarray, 
     best_d = np.full(len(P), np.inf)
     best_v = np.zeros((len(P), 3))
     which = [''] * len(P)
-    for o in obs:
-        T = o.T_world_link @ o.T_link_collision
-        Ti = _inv(T)
-        loc = (P @ Ti[:3, :3].T) + Ti[:3, 3]
-        surf_loc = _closest_local_batch(o, loc)
-        surf = (surf_loc @ T[:3, :3].T) + T[:3, 3]
-        v = surf - P
-        dist = np.linalg.norm(v, axis=1)
-        ins = _inside(o, loc)
-        d = np.where(ins, -dist, dist)          # signed
-        v = np.where(ins[:, None], -v, v)       # approach direction, either way
-        m = d < best_d                          # a penetration beats any clearance
-        best_d[m], best_v[m] = d[m], v[m]
-        for i in np.nonzero(m)[0]:
-            which[i] = o.name
+    if not obs:
+        return best_d, best_v, which
+    D, V = obstacle_distance_matrix(P, obs)
+    j = np.argmin(D, axis=1)                 # 侵入為負 ⇒ 任何侵入勝過任何間隙
+    idx = np.arange(len(P))
+    best_d = D[idx, j]
+    best_v = V[idx, j]
+    which = [obs[k].name for k in j]
     return best_d, best_v, which
 
 

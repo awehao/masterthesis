@@ -18,7 +18,7 @@ URDF_WB="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
 SIM_LIMIT="${SIM_LIMIT:-120}"
 # **總靜態間距**（取代該配對的 d0+eps，不是在 30 mm 上再加 10 mm）。
 # 一般規則 d0+eps = 80 mm；eps 單獨 30 mm 已大於設計間距 27.9 mm。
-PAIR_GAP="${PAIR_GAP:-uflite_gripper_link:handle_bar:0.003,uflite_finger1:drawer_front_panel:0.010,uflite_finger2:drawer_front_panel:0.010,link6:handle_bar:0.045,uflite_finger1:handle_post_l:0.045,uflite_finger1:handle_post_r:0.045,uflite_finger2:handle_post_l:0.045,uflite_finger2:handle_post_r:0.045,link5:handle_bar:0.065,link4:handle_bar:0.070}"
+PAIR_GAP="${PAIR_GAP:-uflite_gripper_link:handle_bar:0.003,uflite_finger1:drawer_front_panel:0.010,uflite_finger2:drawer_front_panel:0.010,link6:handle_bar:0.045,uflite_finger1:handle_post_l:0.045,uflite_finger1:handle_post_r:0.045,uflite_finger2:handle_post_l:0.045,uflite_finger2:handle_post_r:0.045,link5:handle_bar:0.065,link4:handle_bar:0.070,uflite_gripper_link:drawer_front_panel:0.030,uflite_gripper_link:handle_post_l:0.035,uflite_gripper_link:handle_post_r:0.035,link6:handle_post_l:0.060,link6:handle_post_r:0.060}"
 PAIR_D0="${PAIR_D0:-}"   # 不使用逐配對 d0 覆寫（與 PAIR_GAP 互斥）
 CONTACT_PAIRS="${CONTACT_PAIRS:-uflite_finger1:handle_bar:engage|pull|hold|release,uflite_finger2:handle_bar:engage|pull|hold|release}"
 # 一般列只留最近障礙物。橫桿被接觸例外刪列後，**任何**其他物件都可能完全沒有列
@@ -52,7 +52,7 @@ out, pair, cpairs, prows, pexempt, pgap = sys.argv[1:7]
 sp='evaluation/results/specs'
 v1=yaml.safe_load(open(f'{sp}/wb_coman_drawer20_criteria_v1.yaml',encoding='utf-8'))
 s1=yaml.safe_load(open(f'{sp}/wb_coman_drawer20_supplement_s1.yaml',encoding='utf-8'))
-r1=yaml.safe_load(open(f'{sp}/coman_r1_pair_gaps_proposal.yaml',encoding='utf-8'))
+r1=yaml.safe_load(open(f'{sp}/coman_r1_1_pair_gaps.yaml',encoding='utf-8'))  # R1.1 為權威
 fails=[]
 if v1['status']!='frozen': fails.append('v1 未凍結')
 if sha(f'{sp}/wb_coman_drawer20_criteria_v1.yaml')!=s1['references']['criteria_v1_sha256_16']:
@@ -72,12 +72,12 @@ want={k:float(v) for k,v in (s1['pair_avoidance'].get('d0_by_pair') or {}).items
 got=_kv(pair)
 if want!=got: fails.append(f'pair_d0 與 S1 不符：{got} vs {want}')
 # 間距的權威來源是 **R1 定版表**；S1 與執行參數都必須與它逐項一致
-if r1['status']!='approved': fails.append(f"R1 未核准（status={r1['status']}）")
+if r1['status']!='approved': fails.append(f"R1.1 未核准（status={r1['status']}）")
 wr={p_['pair']:float(p_['g_pair_m']) for p_ in r1['pairs']}
 wg={k:float(v) for k,v in (s1['pair_avoidance'].get('g_by_pair') or {}).items()}
 gg=_kv(pgap)
-if wg!=wr: fails.append(f'S1 的 g_by_pair 與 R1 定版表不符：{sorted(set(wg.items())^set(wr.items()))}')
-if gg!=wr: fails.append(f'pair_gap 與 R1 定版表不符：{sorted(set(gg.items())^set(wr.items()))}')
+if wg!=wr: fails.append(f'S1 的 g_by_pair 與 R1.1 定版表不符：{sorted(set(wg.items())^set(wr.items()))}')
+if gg!=wr: fails.append(f'pair_gap 與 R1.1 定版表不符：{sorted(set(gg.items())^set(wr.items()))}')
 if set(wg)&set(want): fails.append(f'同一配對同時設了 d0 與總靜態間距：{sorted(set(wg)&set(want))}')
 wcp={k:list(v) for k,v in s1['pair_avoidance']['contact_pairs'].items()}
 gcp={}
@@ -110,9 +110,10 @@ _used=set(p for v in wcp.values() for p in v)
 if not _used <= _prod:
     fails.append(f'S1 接觸相位有無產生端者：{sorted(_used - _prod)}')
 for f_,rec in s1['checkers_sha256_16'].items():
-    path=(f'src/ammr_wholebody_mpc/ammr_wholebody_mpc/{f_}'
-          if f_ in ('wholebody_safety_filter.py','arm_link_distance.py',
-                    'wholebody_safety_node.py') else f'evaluation/{f_}')
+    # 兩個位置都找；**不要維護硬編碼名單**（先前漏了 arm_link_geometry.py，
+    # 於是被當成 evaluation/ 底下的缺檔）
+    _cands=[f'src/ammr_wholebody_mpc/ammr_wholebody_mpc/{f_}', f'evaluation/{f_}']
+    path=next((c for c in _cands if os.path.exists(c)), _cands[1])
     # 檔案缺失要**具名失敗**，不是拋例外 —— 例外訊息看不出是哪一項不一致
     if not os.path.exists(path):
         fails.append(f'{f_} 不存在於 {path}（S1 記錄了它的 sha）')

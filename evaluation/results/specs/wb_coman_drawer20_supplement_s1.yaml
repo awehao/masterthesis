@@ -22,7 +22,7 @@ pair_avoidance:
 
     '
   d0_by_pair: {}                     # 本趟不使用（與 g_by_pair 互斥）
-  g_by_pair:                         # **R1 定版十組**（取代該配對的 d0 + eps）
+  g_by_pair:                         # **R1.1 定版十五組**（取代該配對的 d0 + eps）
     uflite_gripper_link|handle_bar: 0.003
     uflite_finger1|drawer_front_panel: 0.010
     uflite_finger2|drawer_front_panel: 0.010
@@ -33,7 +33,12 @@ pair_avoidance:
     uflite_finger2|handle_post_r: 0.045
     link5|handle_bar: 0.065
     link4|handle_bar: 0.070
-  g_by_pair_source: 'coman_r1_pair_gaps_proposal.yaml（status: approved）'
+    uflite_gripper_link|drawer_front_panel: 0.030
+    uflite_gripper_link|handle_post_l: 0.035
+    uflite_gripper_link|handle_post_r: 0.035
+    link6|handle_post_l: 0.060
+    link6|handle_post_r: 0.060
+  g_by_pair_source: 'coman_r1_1_pair_gaps.yaml（R1.1，status: approved；R1 十組保存於 coman_r1_pair_gaps_proposal.yaml，未覆寫）'
   velocity_terms_kept: true
   rho_deduction_kept: true
   velocity_error_correction_kept: true
@@ -124,16 +129,17 @@ checkers_sha256_16:
   coman_pull_target.py: 9199c0a1011d1d91
   coman_pull_solver_node.py: a6f05ff9d8dd1104
   isaac_coman_drawer_sim.py: 90c6121e4a3203e8
-  wholebody_safety_filter.py: 3657de13abf35065
-  arm_link_distance.py: 59549ad7c2c34ab2
+  wholebody_safety_filter.py: 8cb3f3fb30b2f09c
+  arm_link_distance.py: e2a0e3b75cdbbc42
   wholebody_safety_node.py: bc63c5738301e8bf
   test_pair_exceptions.py: da31af8647a8f293
   test_pipeline_pairs.py: 819689265ea84de3
-  coman_zero_cmd_feasible.py: 48a53dbf975aa992
+  coman_zero_cmd_feasible.py: dd3d22105933c884
   coman_shell_bar_bound.py: d1ba12bd7a0a5c38
   test_relative_velocity.py: 26369e356ce75c22
   test_tight_pair_bound.py: ae18cd75f98e4991
-  coman_r1_table.py: b4ee210646e5eaa3
+  coman_r1_table.py: 244f65becde99e75
+  arm_link_geometry.py: 7fe840907f6e57ba
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。
@@ -270,7 +276,7 @@ open_issues:
     **但接線後暴露五組先前沒有列的配對** ⇒ 由 O3 接手阻擋。'
   blocks: 已解除（改由 O3 阻擋）
 - id: O3
-  severity: blocking
+  severity: resolved
   title: 補上必要配對列後，**五組先前沒有列的配對**在一般規則下不可行
   how_found: '把 R1 核准的十組接進上下游時，必要配對列依規則擴到所有
     「間距被放寬」的連桿（link4／link5／link6／兩指／夾爪殼）。
@@ -293,11 +299,18 @@ open_issues:
   rule_would_give_note: '「同規則會給的值」是依 R1 已核准的選值規則
     （≤ 有效距離項 − 5 mm 的最大 5 mm 整數倍）外推，**不是已核准值**。
     核准範圍是 3／10／45／65／70 mm 與本表具名配對。'
-  not_done: 未自行為這五組設定任何間距、未調整任何已核准值、未降門檻
-  status: 待裁定
-  blocks: 首測放行
+  resolution: '五組已核准並定版於 **R1.1**（30／35／35／60／60 mm），
+    十五組合計；R1 的十組**原樣保存不覆寫**。
+    整組 1180 列在 R1.1 下零相對速度零命令**可行**，最小餘量 +4.24 mm
+    （最緊者仍為夾爪殼—橫桿）。'
+  general_lesson: '**不同配對使用不同間距後，最近障礙物不一定是限制最嚴的障礙物** ——
+    不只發生在刪除接觸列時。只要同一連桿各配對規則不一致，
+    「以最近距離代表全部限制」就不成立。已寫入 R1.1 的
+    nearest_is_not_most_restrictive，並由起動前檢查強制具名連桿都要有 pair_rows。'
+  status: 已解決
+  blocks: 已解除
 - id: O4
-  severity: blocking
+  severity: open_for_run_records
   title: 補列後單一週期耗時 39.7／50 ms，且**尚未含求解器與 ROS 開銷**
   measured_at: 參考終點位姿，離線量測（未開模擬器）
   rows: 1193
@@ -306,13 +319,42 @@ open_issues:
                  total_p50: 39.73, budget: 50}
   not_included: [求解器 QP, ROS 通訊與序列化, Isaac 執行期, 多次重新線性化]
   driver: '列數由 320 增至 1193，主要來自必要配對列擴到六個連桿 ×14 個障礙物。'
-  options_not_applied:
-  - '只對「可能生效」的障礙物產生必要配對列（例如距離低於一般 d_stop 加一個
-    明載的位移界）。50 ms 內以 0.05 m/s 上限最多移動 2.5 mm，可據此設界。
-    **這會改變列的存在與否，需裁定，未自行套用。**'
-  - 降低 tight 配對的容差以省下部分耗時（會讓下界變鬆）
-  status: 待裁定
-  blocks: 首測放行（完整週期耗時未驗收）
+  rejected_option: '「0.05 m/s × 50 ms = 2.5 mm」**不採用為刪列依據** ——
+    那只是底盤平移，未涵蓋手臂關節運動、底盤旋轉、物件運動與資料延遲，
+    也沒考慮各配對不同的停止距離。'
+  equivalence_preserving_work_done:
+    1_shared_snapshot: '新增 arm_link_geometry.obstacle_distance_matrix：
+      同一狀態快照的 (取樣點 × 障礙物) 距離**一次算完**，最近列與必要配對列共用。
+      先前每個必要配對都對同一障礙物再算一次。'
+    2_exact_duplicates_only: '只移除**同一 (連桿, 障礙物, 取樣點)** 的完全重複列
+      （77 條）。**不因法向相近或距離較遠而刪**；診斷仍保留 link／obs／offset 的來源對應，
+      並發布移除計數。'
+    3_batched_assembly: '屏障列改批次組裝（依連桿分組，一次 einsum），
+      並把逐連桿常數 |J_omega v| 預先算好。**刻意沿用 _row_at 的同一組算術**，
+      不改寫成代數等價但加總順序不同的形式。'
+    not_changed: [tight 容差, 控制頻率, 速度界限, 間距]
+  equivalence_verified:
+    input: 同一份參考位姿的 1116 列輸入
+    A_bitwise_identical: true
+    b_bitwise_identical: true
+    filter_output_bitwise_identical: true
+    owner_and_cap_identical: true
+  measured_ms:               # 各節點**分開記錄**，不相加當作端到端驗收
+    distance_node_cycle: {before_p50: 25.88, after_p50: 21.38, after_max: 22.41}
+    barrier_assembly: {before_p50: 12.89, after_p50: 9.53, after_max: 10.04}
+    filter_velocity: {before_p50: 13.84, after_p50: 12.47, after_max: 14.68}
+    rows: {before: 1193, after: 1116}
+    one_time_setup_ms: 10086    # 取樣認證，**不在每週期**（先前誤計入，已更正）
+    budget_ms: 50
+  positioning: '這些數字代表**目前已量到的部分成本**，
+    **不能**斷言整條鏈一定超時，也**不能**宣稱能滿足 50 ms。'
+  still_required_at_run_time:
+  - 各節點處理時間分開記錄（距離節點、安全節點、求解節點）
+  - 求解器 QP 耗時單獨記錄
+  - '**端到端命令年齡**單獨記錄'
+  - 不得以幾項平均值相加當作執行期驗收
+  status: 等價改善已完成；**端到端計時只能在實跑時記錄**
+  blocks: 不再阻擋離線工作；首測仍需指導授權與機旁監看
 questions:
   q1_completion: 20 mm 完整操作是否完成（接近→連接→拉開→保持→釋放→退出）
   q2_coordination: '操作期間是否真有底盤與手臂的協調運動，而不是只有底盤漂移。 判定用**實測運動**：底盤線速度 > 0.005 m/s 且任一關節速率 > 0.005 rad/s

@@ -34,8 +34,19 @@ URDF = os.path.join(HERE, 'models', 'omni_bot_wholebody_expanded.urdf')
 ALL_PHASES = ['approach', 'engage', 'pull', 'hold', 'release', 'retreat']
 G2_PAIRS = {('uflite_gripper_link', 'handle_bar')}
 # 已裁定者直接沿用；其餘由規則產生
-FIXED = {('uflite_finger1', 'drawer_front_panel'): 0.010,
-         ('uflite_finger2', 'drawer_front_panel'): 0.010}
+# **R1 已核准的十組固定不動**（不重新計算，避免動到核准歷史）
+import yaml as _yaml, os as _os
+_R1 = _yaml.safe_load(open(_os.path.join(
+    _os.path.dirname(_os.path.abspath(__file__)),
+    'results/specs/coman_r1_pair_gaps_proposal.yaml'), encoding='utf-8'))
+FIXED = {tuple(p['pair'].split('|')): float(p['g_pair_m']) for p in _R1['pairs']}
+# R1.1 增補的五組（O3）：**不是**因為遇到失敗才降門檻，而是補上
+# 「先前根本沒有列、因此從未被檢查過」的配對。選值用**同一條規則**。
+EXTRA = [('uflite_gripper_link', 'drawer_front_panel'),
+         ('uflite_gripper_link', 'handle_post_l'),
+         ('uflite_gripper_link', 'handle_post_r'),
+         ('link6', 'handle_post_l'),
+         ('link6', 'handle_post_r')]
 PAIRS = [('uflite_gripper_link', 'handle_bar'),
          ('uflite_finger1', 'drawer_front_panel'),
          ('uflite_finger2', 'drawer_front_panel'),
@@ -45,7 +56,7 @@ PAIRS = [('uflite_gripper_link', 'handle_bar'),
          ('uflite_finger2', 'handle_post_l'),
          ('uflite_finger2', 'handle_post_r'),
          ('link5', 'handle_bar'),
-         ('link4', 'handle_bar')]
+         ('link4', 'handle_bar')] + EXTRA
 # 同類配對取同一值：四組指—支柱與 link6—橫桿共用最緊者決定的值
 UNIFORM = {('link6', 'handle_bar'), ('uflite_finger1', 'handle_post_l'),
            ('uflite_finger1', 'handle_post_r'),
@@ -110,8 +121,9 @@ def main() -> int:
     for p_, rec in rows.items():
         if p_ in FIXED:
             rec['g'] = FIXED[p_]
-            rec['basis'] = '沿用已裁定的受限模擬配置（10 mm 總靜態間距）'
-        elif p_ in G2_PAIRS:
+            rec['basis'] = 'R1 已核准值，**原樣沿用，不重新計算**'
+            rec['from_r1'] = True
+        elif p_ in G2_PAIRS:   # 已被 FIXED 覆蓋，保留分支以防設定變動
             rec['g'] = candidate(rec['d_eff'], 0.001, 0.004)
             rec['basis'] = ('1 mm 粒度、留 4 mm 以上；有效距離項只有約 '
                             f'{rec["d_eff"]*1000:.2f} mm，是本表最緊的一組')
@@ -121,8 +133,9 @@ def main() -> int:
                             f'由最緊者 {uni*1000:.2f} mm 決定，留 5 mm 以上')
         else:
             rec['g'] = candidate(rec['d_eff'], 0.005, 0.005)
-            rec['basis'] = ('逐組取幾何允許的最大 5 mm 整數倍，留 5 mm 以上 ——'
-                            '**盡量保留一般規則的 80 mm**，不是取剛好能過的小值')
+            rec['basis'] = ('**R1.1 增補**：同一條規則（≤ 有效距離項 − 5 mm 的最大 '
+                            '5 mm 整數倍）；5 mm 為參考位姿的可行性預留。'
+                            '盡量保留一般規則的 80 mm，不是取剛好能過的小值')
 
     # ---- 用完整屏障算零相對速度餘量 ----
     cfg = SafetyConfig(g_by_pair={f'{lk}|{ob}': rows[(lk, ob)]['g']

@@ -45,7 +45,7 @@ RUN = 'drawer_220102_offset20'          # 既有 20 mm 趟次；**不重跑**
 def _load_gaps():
     import yaml
     d = yaml.safe_load(open(os.path.join(
-        HERE, 'results/specs/coman_r1_pair_gaps_proposal.yaml'),
+        HERE, 'results/specs/coman_r1_1_pair_gaps.yaml'),
         encoding='utf-8'))
     if d['status'] != 'approved':
         raise SystemExit(f'R1 未核准（status={d["status"]}），不執行核對')
@@ -76,7 +76,7 @@ def hold_state():
 
 def main() -> int:
     gaps = dict(PAIR_GAP)
-    print(f'間距來源：coman_r1_pair_gaps_proposal.yaml（approved，{len(gaps)} 組）')
+    print(f'間距來源：coman_r1_1_pair_gaps.yaml（approved，{len(gaps)} 組）')
     st = hold_state()
     print(f'資料來源：既有趟次 {RUN} 的 hold 相位（sim {st["sim_t"]:.2f} s，'
           f'開度 {st["opening"]*1000:.2f} mm）—— **未重跑任何趟次**')

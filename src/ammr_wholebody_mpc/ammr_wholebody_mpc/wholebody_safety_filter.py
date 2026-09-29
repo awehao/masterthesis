@@ -350,6 +350,28 @@ def _rows_from_points(K, q, pts, cfg, v_in):
     A, b, owner = [], [], []
     cap = np.inf
     JL = _link_jacobians(K, q, pts)
+    # **批次組裝**：同一連桿的所有列一次算完。
+    # 刻意**沿用 _row_at 的同一組算術**（先 skew @ J_omega 再相減，
+    # 再與 n 做 3 項內積），而不是改寫成 n^T J_v − (n x r)^T J_omega ——
+    # 後者代數上相等，但加總順序不同會在最後一兩個位元上產生差異。
+    # 這裡要的是**約束完全不變**，所以只省重複計算，不改算式。
+    # |J_omega v| 是**逐連桿**常數，一併預先算好。
+    _rowcache = {}
+    _wnorm = {}
+    _byframe = {}
+    for _i, _p in enumerate(pts):
+        if _p.status != STATUS_NODATA:
+            _byframe.setdefault(_p.frame, []).append(_i)
+    for _fr, _idx in _byframe.items():
+        _J6, _R = JL[_fr]
+        _N = np.array([pts[i].n for i in _idx], dtype=float)
+        _off = [pts[i].offset for i in _idx]
+        _Jv, _Jw = _J6[:3], _J6[3:]
+        _Jat = np.stack([_row_at(_J6, _R, o) for o in _off])   # (N, 3, n)
+        _rows = np.einsum('ij,ijk->ik', _N, _Jat)
+        for _k, _i in enumerate(_idx):
+            _rowcache[_i] = _rows[_k]
+        _wnorm[_fr] = float(np.linalg.norm(_Jw @ v_in))
     for pi, pt in enumerate(pts):
         if pt.status == STATUS_NODATA:
             # 已確認的自由空間：NODATA 是「範圍內沒有東西」，不是「不知道」。
@@ -358,8 +380,7 @@ def _rows_from_points(K, q, pts, cfg, v_in):
                 cap = min(cap, cfg.nodata_speed_cap)
             continue
         J6, R = JL[pt.frame]
-        J = _row_at(J6, R, pt.offset)             # 3 x n, linear part
-        row = pt.n @ J                            # 1 x n, approach speed
+        row = _rowcache[pi]                       # 1 x n，批次算好的接近速度列
         # 距離項的基底：認證下界（若有效）已覆蓋整片網格 ⇒ **不再扣 rho**
         # （扣兩次等於把同一個保守量算兩遍）。rho 仍保留給下方的速度修正。
         _has_lb = pt.d_lb is not None and np.isfinite(pt.d_lb)
@@ -422,7 +443,7 @@ def _rows_from_points(K, q, pts, cfg, v_in):
             # has a different and much larger error, which no margin fixes.
             if cfg.use_omega_rho_margin and pt.rho > 0.0:
                 # omega does not depend on where on the link it is measured
-                rhs -= pt.rho * float(np.linalg.norm(J6[3:] @ v_in))
+                rhs -= pt.rho * _wnorm[pt.frame]   # 逐連桿常數，已預先算好
             rhs -= cfg.velocity_error_margin
         b.append(rhs)
         if pt.occluded:

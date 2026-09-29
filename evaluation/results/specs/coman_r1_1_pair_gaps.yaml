@@ -1,0 +1,247 @@
+# **R1.1：十五組近接配對的定版配置**
+#
+# 原十組保存於 coman_r1_pair_gaps_proposal.yaml（R1，approved）——
+# **本檔不覆寫它，也不改它的任何數值**。R1.1 = R1 十組 ＋ O3 增補五組。
+schema: coman_r1_pair_gaps/1.1
+version: R1.1
+status: approved
+created: 2026-09-30
+approved: 2026-09-30
+supersedes: coman_r1_pair_gaps_proposal.yaml（R1，十組；保存不動）
+generated_by: evaluation/coman_r1_table.py
+approval_scope: 'R1 的 3／10／45／65／70 mm ＋ R1.1 增補的 30／35／60 mm；
+  本表具名配對、六個操作相位；受限模擬工程設定。
+  **不是安全距離證明，也沒有新增接觸例外。**'
+
+nearest_is_not_most_restrictive:
+  statement: |
+    **不同配對使用不同間距後，最近障礙物不一定是限制最嚴的障礙物。**
+    這不只發生在刪除接觸列的時候 —— 只要同一連桿的各配對規則不一致，
+    「以最近距離代表全部限制」就不成立。
+  consequence: 後續一律按**完整配對規則**處理；不得用最近距離代表全部限制。
+  condition_for_nearest_to_suffice: |
+    僅當該連桿對**所有**障礙物套用同一條規則時，最近者才必然最嚴。
+    本配置中 base_link／link_base／link1–link3 滿足此條件（全部一般規則）；
+    link4／link5／link6／兩指／夾爪殼**不滿足**，故必須產生必要配對列。
+  enforced_by: 起動前檢查（R1.1 具名連桿都要有 pair_rows）＋ 離線反例
+  history: 這一點在 R1 審閱時被漏掉，導致「整組 320 列可行」的錯誤結論（見 O3）
+
+pairs:
+- pair: uflite_gripper_link|handle_bar
+  source: R1（已核准，原樣沿用）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G2
+    d_effective_mm: 7.2377
+    bound_upper_mm: 7.4418
+    d_sample_mm: 8.69
+    rho_mm: 13.35
+    note: 下界取代 d − rho（-4.65 mm）；rho 仍用於速度修正
+  g_pair_m: 0.003
+  rationale: 'R1 已核准值，**原樣沿用，不重新計算**'
+  compatibility:
+    margin_mm: 4.24
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: uflite_finger1|drawer_front_panel
+  source: R1（已核准，原樣沿用）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 15.3431
+    d_sample_mm: 28.07
+    rho_mm: 12.73
+  g_pair_m: 0.010
+  rationale: 'R1 已核准值，**原樣沿用，不重新計算**'
+  compatibility:
+    margin_mm: 5.34
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: uflite_finger2|drawer_front_panel
+  source: R1（已核准，原樣沿用）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 16.6011
+    d_sample_mm: 28.88
+    rho_mm: 12.28
+  g_pair_m: 0.010
+  rationale: 'R1 已核准值，**原樣沿用，不重新計算**'
+  compatibility:
+    margin_mm: 6.60
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: link6|handle_bar
+  source: R1（已核准，原樣沿用）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 50.8272
+    d_sample_mm: 64.12
+    rho_mm: 13.30
+  g_pair_m: 0.045
+  rationale: 'R1 已核准值，**原樣沿用，不重新計算**'
+  compatibility:
+    margin_mm: 5.83
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: uflite_finger1|handle_post_l
+  source: R1（已核准，原樣沿用）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 54.5408
+    d_sample_mm: 67.27
+    rho_mm: 12.73
+  g_pair_m: 0.045
+  rationale: 'R1 已核准值，**原樣沿用，不重新計算**'
+  compatibility:
+    margin_mm: 9.54
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: uflite_finger1|handle_post_r
+  source: R1（已核准，原樣沿用）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 54.2229
+    d_sample_mm: 66.95
+    rho_mm: 12.73
+  g_pair_m: 0.045
+  rationale: 'R1 已核准值，**原樣沿用，不重新計算**'
+  compatibility:
+    margin_mm: 9.22
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: uflite_finger2|handle_post_l
+  source: R1（已核准，原樣沿用）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 55.1830
+    d_sample_mm: 67.46
+    rho_mm: 12.28
+  g_pair_m: 0.045
+  rationale: 'R1 已核准值，**原樣沿用，不重新計算**'
+  compatibility:
+    margin_mm: 10.18
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: uflite_finger2|handle_post_r
+  source: R1（已核准，原樣沿用）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 57.6311
+    d_sample_mm: 69.91
+    rho_mm: 12.28
+  g_pair_m: 0.045
+  rationale: 'R1 已核准值，**原樣沿用，不重新計算**'
+  compatibility:
+    margin_mm: 12.63
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: link5|handle_bar
+  source: R1（已核准，原樣沿用）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 72.1779
+    d_sample_mm: 84.80
+    rho_mm: 12.62
+  g_pair_m: 0.065
+  rationale: 'R1 已核准值，**原樣沿用，不重新計算**'
+  compatibility:
+    margin_mm: 7.18
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: link4|handle_bar
+  source: R1（已核准，原樣沿用）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 77.6560
+    d_sample_mm: 91.20
+    rho_mm: 13.54
+  g_pair_m: 0.070
+  rationale: 'R1 已核准值，**原樣沿用，不重新計算**'
+  compatibility:
+    margin_mm: 7.66
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: uflite_gripper_link|drawer_front_panel
+  source: R1.1 增補（O3）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 38.9876
+    d_sample_mm: 52.33
+    rho_mm: 13.35
+  g_pair_m: 0.030
+  rationale: '**R1.1 增補**：同一條規則（≤ 有效距離項 − 5 mm 的最大 5 mm 整數倍）；5 mm 為參考位姿的可行性預留。盡量保留一般規則的 80 mm，不是取剛好能過的小值'
+  compatibility:
+    margin_mm: 8.99
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: uflite_gripper_link|handle_post_l
+  source: R1.1 增補（O3）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 43.9873
+    d_sample_mm: 57.33
+    rho_mm: 13.35
+  g_pair_m: 0.035
+  rationale: '**R1.1 增補**：同一條規則（≤ 有效距離項 − 5 mm 的最大 5 mm 整數倍）；5 mm 為參考位姿的可行性預留。盡量保留一般規則的 80 mm，不是取剛好能過的小值'
+  compatibility:
+    margin_mm: 8.99
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: uflite_gripper_link|handle_post_r
+  source: R1.1 增補（O3）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 44.5820
+    d_sample_mm: 57.93
+    rho_mm: 13.35
+  g_pair_m: 0.035
+  rationale: '**R1.1 增補**：同一條規則（≤ 有效距離項 − 5 mm 的最大 5 mm 整數倍）；5 mm 為參考位姿的可行性預留。盡量保留一般規則的 80 mm，不是取剛好能過的小值'
+  compatibility:
+    margin_mm: 9.58
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: link6|handle_post_l
+  source: R1.1 增補（O3）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 66.6767
+    d_sample_mm: 79.97
+    rho_mm: 13.30
+  g_pair_m: 0.060
+  rationale: '**R1.1 增補**：同一條規則（≤ 有效距離項 − 5 mm 的最大 5 mm 整數倍）；5 mm 為參考位姿的可行性預留。盡量保留一般規則的 80 mm，不是取剛好能過的小值'
+  compatibility:
+    margin_mm: 6.68
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+- pair: link6|handle_post_r
+  source: R1.1 增補（O3）
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 68.5236
+    d_sample_mm: 81.82
+    rho_mm: 13.30
+  g_pair_m: 0.060
+  rationale: '**R1.1 增補**：同一條規則（≤ 有效距離項 − 5 mm 的最大 5 mm 整數倍）；5 mm 為參考位姿的可行性預留。盡量保留一般規則的 80 mm，不是取剛好能過的小值'
+  compatibility:
+    margin_mm: 8.52
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+
+reference_pose:
+  name: '**參考終點位姿**'
+  run: drawer_220102_offset20（既有趟次，未重跑）
+  phase: hold
+  opening_m: 0.019987
+  note: '開度最大**不保證**各連桿間距最小；行程中間構形未核對。'
+
+mechanism:
+  g_pair: 該配對的**總靜態間距**，取代 d0 + eps（80 mm），單位**公尺**
+  d_stop: 'g_pair + v_app·tau + v_app²/(2a)，**v_app = max(0, v_rel)**、
+    v_rel = n^T (J u − v_obs)；取 max(0, ·) 以不把遠離速度代入延遲項。'
+  kept: v_rel 相關項、omega x rho、velocity_error_margin、stale 收縮、遮蔽上限
+
+limits:
+- 單一**參考終點位姿**；行程中間構形未核對
+- 零相對速度；運動中的相對煞停能力**未驗證**
+- 抽屜部件以方塊、橫桿以圓柱近似；與模擬器碰撞幾何的差異未量化
+- 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+- 夾爪殼—橫桿的下界是**該位姿**的值；7.24 mm 不是整段操作都有的間距
+- Isaac 執行期與端到端命令年齡尚未驗收

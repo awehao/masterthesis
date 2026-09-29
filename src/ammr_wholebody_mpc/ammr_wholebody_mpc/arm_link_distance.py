@@ -289,15 +289,19 @@ def expand_pair_rows(specs, exempt_specs, obstacle_names):
 
 def forced_pair_rows(W, pts_local, obstacle, obs_idx, li, rho, status, age,
                      occ_of, max_range, max_rows=None, vobs_of=None,
-                     d_lb=None):
+                     d_lb=None, d_col=None, v_col=None):
     """對**指定的 (連桿, 障礙物) 配對**單獨算距離並產生列。
 
     為什麼需要：一般列只保留每個取樣點的**最近**障礙物。若最近的是接觸例外
     對象（例如橫桿），濾波器依規則刪掉該列之後，其他物件（例如面板）就**完全
     沒有列** —— 例外會連帶遮掉別的避碰。因此對有配對規則的組合另外補列。
     """
-    from .arm_link_geometry import obstacle_distances as _od
-    d, v, _w = _od(W, [obstacle])
+    if d_col is None or v_col is None:
+        from .arm_link_geometry import obstacle_distances as _od
+        d, v, _w = _od(W, [obstacle])
+    else:
+        # **共用同一份狀態快照的計算結果**，不對同一障礙物再算一次
+        d, v = np.asarray(d_col, float), np.asarray(v_col, float)
     dmin = float(d.min())
     if dmin > max_range:
         return []
@@ -711,11 +715,12 @@ class ArmLinkDistance(Node):
         nearest sample does not provide it, and held-out testing of that version
         found the true approach rate beating the constrained one by 37.9 mm/s.
         """
-        from .arm_link_geometry import obstacle_distances
+        from .arm_link_geometry import obstacle_distance_matrix
         rows = []
         worst_age = 0.0
         n_ok = n_unk = n_stale = n_nodata = 0
         self._dropped = 0
+        self._dup_dropped = 0
         self._overflow = False
         live = [o for o in self.obstacles if o.T_world_link is not None]
         _by = {o.name: o for o in live}
@@ -737,7 +742,12 @@ class ArmLinkDistance(Node):
                 n_nodata += 1
                 continue
             W = (S.points @ T[:3, :3].T) + T[:3, 3]
-            d, v, which = obstacle_distances(W, live)
+            # **一次算完**該連桿對所有障礙物的距離；最近列與必要配對列共用
+            Dm, Vm = obstacle_distance_matrix(W, live)
+            _jm = np.argmin(Dm, axis=1)
+            _ix = np.arange(len(W))
+            d, v = Dm[_ix, _jm], Vm[_ix, _jm]
+            which = [live[k].name for k in _jm]
             # **每週期由當前位姿重算**該連桿的精確下界（只給 tight_pairs）。
             # 算好放在 dict，**一般列與必要配對列共用同一份** —— 否則一般列
             # 仍用 d − rho，會把較緊的下界壓過去，等於沒有接上。
@@ -828,10 +838,25 @@ class ArmLinkDistance(Node):
                 # 與一般列**共用本週期算好的下界**；失敗時為 None ⇒
                 # 該列走既有 d − rho，**不沿用上一筆**。
                 _dlb = _lb_now.get(_obn)
+                _lj = [i for i, o in enumerate(live) if o.name == _obn]
                 _extra = forced_pair_rows(
                     W, S.points, _ob, _oi, li, S.rho, status, age, _occ_of,
                     self.max_range, self.max_rows_per_link,
-                    vobs_of=self._vobs_for, d_lb=_dlb)
+                    vobs_of=self._vobs_for, d_lb=_dlb,
+                    d_col=(Dm[:, _lj[0]] if _lj else None),
+                    v_col=(Vm[:, _lj[0]] if _lj else None))
+                # **只移除完全重複的列**：同一 (連桿, 障礙物, 取樣點)
+                # 已由一般最近列產生過。不因法向相近或距離較遠而刪。
+                _seen = {(int(r[10]), int(r[15]), round(float(r[11]), 12),
+                          round(float(r[12]), 12), round(float(r[13]), 12))
+                         for r in rows}
+                _kept = [r for r in _extra
+                         if (int(r[10]), int(r[15]), round(float(r[11]), 12),
+                             round(float(r[12]), 12),
+                             round(float(r[13]), 12)) not in _seen]
+                self._dup_dropped = (getattr(self, '_dup_dropped', 0)
+                                     + len(_extra) - len(_kept))
+                _extra = _kept
                 rows.extend(_extra)
                 n_ok += len(_extra) if status == STATUS_OK else 0
         return rows, n_ok, n_unk, n_stale, n_nodata, worst_age
