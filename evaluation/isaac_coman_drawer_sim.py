@@ -127,6 +127,16 @@ ap.add_argument('--drawer-no-gravity', action='store_true',
 # 只重播命令、**不建立夾爪—抽屜固定關節**：回答「負載成長是否依賴這個連接」。
 # engage 事件照常記錄（同步快照照取），但不建關節、也不把 coupled 設為 True
 # （否則 grasp_lost 會因抽屜不動而誤觸發）。
+ap.add_argument('--handshake-test', action='store_true',
+                help='**診斷用**：建立連接後凍結手臂（不拉動），經過指定步數送出'
+                     '釋放請求，走資格＋請求 → 執行 → 讀回確認，然後收尾')
+ap.add_argument('--handshake-release-after-steps', type=int, default=20)
+ap.add_argument('--handshake-stop-after-confirm-steps', type=int, default=20)
+ap.add_argument('--inject-fault', default='none',
+                choices=['none', 'monitor_fail'],
+                help='**診斷用**故障注入：在指定物理步觸發監看失效，'
+                     '驗證緊急解除路徑；會把趟次標記為 diagnostic')
+ap.add_argument('--inject-fault-step', type=int, default=0)
 ap.add_argument('--no-attach', action='store_true',
                 help='engage 時記錄快照但**不建立固定關節**，繼續重播（診斷用）')
 # 以**指令進度**收尾：不建立連接時抽屜不會動，不能等它開到某個開度。
@@ -317,6 +327,7 @@ CASE = CASES['cases'][a.case]
 SPEC = DA.load(a.spec)
 from coman_pose_reader import (HandleTransform, LOG_COLS as POSE_LOG_COLS,  # noqa: E402
                                READ_ORDER, SameStepPoseReader)
+from coman_couple_link import CoupleLink                            # noqa: E402
 POSES = yaml.safe_load(open(a.poses))
 ARM = [f'joint{i}' for i in range(1, 7)]
 Q_START = np.array([float(POSES[CASE['pregrasp']['start_config']][j]) for j in ARM])
@@ -1067,6 +1078,20 @@ def main():
                                     ['tcp_offset_along_tool_z'])]))
     coman_pose_log = []
     coman_abort = None
+    couple_link = CoupleLink(min_steps_after_execute=1)
+    hs_freeze_step = None          # 握手測試：凍結手臂的物理步
+    hs_stop_after = None           # 確認後收尾的物理步
+
+    def couple_readback():
+        """**讀回**固定關節狀態：回傳 (關節存在, 是否仍啟用)。
+
+        這是「已確認解除」的唯一來源；呼叫過 detach() 不算。
+        """
+        pr = stage.GetPrimAtPath(JOINT_ATTACH)
+        if not pr.IsValid():
+            return False, False
+        en = UsdPhysics.Joint(pr).GetJointEnabledAttr().Get()
+        return True, bool(en)
     print(f'[coman] 同一物理步讀取已接上；讀取順序 {READ_ORDER}', flush=True)
 
     n_step = 0
@@ -1118,6 +1143,44 @@ def main():
             # 而不是直接跳出迴圈讓 stop_reason 停留在 sim_limit。
             coman_abort = _prec.invalid_reason
             raise MonitorFailure('coman_pose_read', coman_abort)
+        _pstep = pose_src.physics_step_id()
+        # 解除確認：由**讀回**決定，每步輪詢（執行 ≠ 確認）
+        if couple_link.execute is not None and couple_link.confirm is None:
+            _ex, _en = couple_readback()
+            if couple_link.poll_confirm(_ex, _en, _pstep, t):
+                print(f'[coman] 解除**已確認**（讀回）@ step {_pstep} sim {t:.3f}',
+                      flush=True)
+        # **診斷用**握手測試：連接後凍結手臂、不拉動，再走完整解除流程
+        if a.handshake_test and coupled and frozen_q is None:
+            frozen_q = np.array([float(robot.get_joint_positions()[idx[j]])
+                                 for j in ARM])
+            hs_freeze_step = _pstep
+            print(f'[coman] 握手測試：已連接並凍結手臂（不拉動）@ step {_pstep}',
+                  flush=True)
+        if (a.handshake_test and hs_freeze_step is not None
+                and couple_link.execute is None
+                and _pstep - hs_freeze_step >= a.handshake_release_after_steps):
+            couple_link.request_release(_pstep, t, 'handshake_test')
+            _cap = bool(coupled) and bool(_prec.valid)
+            if couple_link.may_release_now(_cap, _pstep, t):
+                detach()
+                couple_link.mark_executed(_pstep, t, 'normal')
+                coupled = False
+                print(f'[coman] 握手測試：資格＋請求成立 → 已呼叫解除 '
+                      f'@ step {_pstep}（**尚未確認**）', flush=True)
+            else:
+                print(f'[coman] 握手測試：**資格未成立，不執行解除** '
+                      f'(capability={_cap})', flush=True)
+        if (a.handshake_test and couple_link.confirm is not None
+                and hs_stop_after is None):
+            hs_stop_after = _pstep + a.handshake_stop_after_confirm_steps
+        # **診斷用**故障注入：驗證緊急解除路徑，不必製造超力
+        if (a.inject_fault == 'monitor_fail' and a.inject_fault_step > 0
+                and _pstep >= a.inject_fault_step
+                and couple_link.emergency_stamp is None):
+            couple_link.emergency(_pstep, t, 'injected_monitor_fail')
+            raise MonitorFailure('injected_fault',
+                                 f'診斷注入於 step {_pstep}')
         # 執行時錄影：**這一趟真正在跑的畫面**。算繪只讀場景、不寫回任何狀態，
         # 也不介入中止判斷；代價是牆鐘變慢（模擬時間語意不變）。
         if rec_cam is not None and (n_step % rec_every) == 0:
@@ -1189,11 +1252,27 @@ def main():
                               flush=True)
                         align_mismatch = not info['align_check']['ok']
                     coupled = True
+                    couple_link.mark_attached(pose_src.physics_step_id(), t)
                 else:
                     coupled = True      # friction：靠手指命令，不建關節
+                    couple_link.mark_attached(pose_src.physics_step_id(), t)
             elif ev == 'release':
-                info['detached'] = detach() if GRASP_MODEL == 'fixed_attachment' else True
-                coupled = False
+                # 任務流程的**明確請求**；資格由執行端判定，兩者都成立才執行
+                _ps = pose_src.physics_step_id()
+                couple_link.request_release(_ps, t, 'task_flow_event')
+                _cap = bool(coupled) and bool(_prec.valid)
+                if couple_link.may_release_now(_cap, _ps, t):
+                    info['detached'] = (detach()
+                                        if GRASP_MODEL == 'fixed_attachment' else True)
+                    couple_link.mark_executed(_ps, t, 'normal')
+                    coupled = False
+                    info['release_handshake'] = 'capability_and_request'
+                else:
+                    info['detached'] = False
+                    info['release_blocked'] = {'capability': _cap,
+                                               'requested': True}
+                    print(f'[coman] **釋放請求未獲資格，不執行解除** '
+                          f'(capability={_cap}) @ step {_ps}', flush=True)
             world.step(render=False)    # 讓連接／解除在下一步生效後再量
             dpb, _ = drawer_v.get_world_poses()
             tcp_b, _, _ = world_T(prims['link_tcp'])
@@ -1547,6 +1626,9 @@ def main():
             # 實際快照與產生軌跡時用的那份不符 ⇒ 後面的參考是對錯位姿算的。
             # 不拿錯位的參考硬跑，直接停。
             stop = 'align_snapshot_mismatch'
+        if (stop is None and a.handshake_test and hs_stop_after is not None
+                and _pstep >= hs_stop_after):
+            stop = 'handshake_test_done'
         # 門檻 30 N 未變；要**連續**超過 abort_sustained_s 才中止，
         # 這樣建立約束的單步暫態不會被當成過載（見案例設定的說明）。
         if f_over_n > F_SUSTAIN:
@@ -1650,8 +1732,12 @@ def main():
         stop_reason = f'monitor_failed_{mf.what}'
         print(f'[drawer] **監看失效：{mf.what}（{mf.detail}）** '
               f'→ 保守處置：解除耦合後凍結', flush=True)
+        _ps_em = int(world.current_time_step_index)
+        couple_link.emergency(_ps_em, float(world.current_time),
+                              f'monitor_failed_{mf.what}')
         if GRASP_MODEL == 'fixed_attachment':
             detach()
+        couple_link.mark_executed(_ps_em, float(world.current_time), 'emergency')
         coupled = False
         try:
             qa_now = np.array([float(robot.get_joint_positions()[idx[j]]) for j in ARM])
@@ -1667,6 +1753,14 @@ def main():
                   'monitor_failure': monitor_fail})
         for _ in range(20):
             world.step(render=False)
+            # 緊急解除的**確認**同樣要讀回；閂鎖維持到確認為止
+            if couple_link.confirm is None:
+                _ex, _en = couple_readback()
+                couple_link.poll_confirm(_ex, _en,
+                                         int(world.current_time_step_index),
+                                         float(world.current_time))
+        print(f'[coman] 緊急解除確認：{couple_link.confirm is not None}；'
+              f'閂鎖仍在：{couple_link.emergency_latched}', flush=True)
         break
 
     tc, tsrc = cpu_temp_read()
@@ -1742,7 +1836,12 @@ def main():
         'f_norm_peak': {'N': f_peak, 'sim_t': f_peak_t, 'phase': f_peak_ph},
         'diagnostic': {
             'is_diagnostic': bool(a.drawer_no_gravity or a.stop_at_opening_m > 0
-                                  or a.no_attach or a.stop_at_cmd_t > 0),
+                                  or a.no_attach or a.stop_at_cmd_t > 0
+                                  or a.inject_fault != 'none'
+                                  or a.handshake_test),
+            'handshake_test': bool(a.handshake_test),
+            'inject_fault': a.inject_fault,
+            'inject_fault_step': a.inject_fault_step,
             'drawer_no_gravity': bool(a.drawer_no_gravity),
             'no_attach': bool(a.no_attach),
             'stop_at_cmd_t': a.stop_at_cmd_t,
@@ -1785,6 +1884,7 @@ def main():
         'coman_pose_read_order': list(READ_ORDER),
         'coman_pose_invalid_n': pose_reader.n_invalid,
         'coman_abort': coman_abort,
+        'coman_couple_link': couple_link.record(),
         'coman_stage_note': ('本階段只做量測接通；底盤仍由固定關節支撐，'
                              '不是協同操作驗收'),
         'rot_conv_err_max_deg': rot_err_max,
