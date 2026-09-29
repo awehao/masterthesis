@@ -139,6 +139,8 @@ ap.add_argument('--base-lin-max', type=float, default=0.05,
                 help='9 維命令的底盤線速度界限（整筆拒收門檻）')
 ap.add_argument('--base-ang-max', type=float, default=0.2,
                 help='9 維命令的底盤角速度界限（整筆拒收門檻）')
+ap.add_argument('--safety-diag-max-age-s', type=float, default=0.25,
+                help='安全層 diag 自身的新鮮度上限；超過即視為不知道')
 ap.add_argument('--post-stop-steps', type=int, default=20,
                 help='停止後的觀察步數（**事前指定**，不是跑完才決定）')
 ap.add_argument('--handshake-test', action='store_true',
@@ -341,7 +343,8 @@ CASES = yaml.safe_load(open(a.cases))
 CASE = CASES['cases'][a.case]
 SPEC = DA.load(a.spec)
 from coman_pose_reader import (HandleTransform, LOG_COLS as POSE_LOG_COLS,  # noqa: E402
-                               READ_ORDER, SameStepPoseReader)
+                               READ_ORDER, SameStepPoseReader,
+                               rot_to_quat as rot_to_quat_wxyz)
 from coman_couple_link import (CoupleLink, evaluate_capability,       # noqa: E402
                                freeze_target)
 from coman_handover_state import (Frame as HSFrame,                  # noqa: E402
@@ -412,7 +415,8 @@ from rclpy.qos import (QoSProfile, ReliabilityPolicy, HistoryPolicy,
 from rosgraph_msgs.msg import Clock                                 # noqa: E402
 from sensor_msgs.msg import JointState                              # noqa: E402
 from geometry_msgs.msg import PoseStamped                           # noqa: E402
-from std_msgs.msg import Float64MultiArray, String                  # noqa: E402
+from std_msgs.msg import (Float32MultiArray, Float64MultiArray,     # noqa: E402
+                          String)
 
 class MonitorFailure(RuntimeError):
     """監看量讀不到。**不是**「沒有超限」，兩者必須分開處置。"""
@@ -461,6 +465,15 @@ class DrawerNode(Node):
         self.g_cb_n = self.p_cb_n = 0
         self.wb9_cb = None          # 9 維命令回呼（由主程式在 wb9 模式掛上）
         self.wb9_n = 0
+        # **安全層自己的上游新鮮度**：由其 diag 的 reason 得知（2 = 命令過期）。
+        # 未收到或 diag 本身不新鮮 ⇒ **不知道**，一律判為不合格，不冒充。
+        self.sim_t = 0.0
+        self.safety_diag = None     # (sim_t_收到, reason)
+        self.safety_diag_n = 0
+        self.create_subscription(Float32MultiArray, '/wholebody_safety/diag',
+                                 self._safety_diag, rel)
+        # 任務狀態：給求解節點用的**量測與旗標**（不含命令）
+        self.task_pub = self.create_publisher(String, '/coman/task_state', 10)
         self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
                                  self._wb9, rel)
         self.create_subscription(Float64MultiArray, '/arm/joint_position_cmd',
@@ -481,6 +494,11 @@ class DrawerNode(Node):
         if len(m.data) != 3:
             return
         self.fsnap = (int(m.data[0]), float(m.data[2]))
+
+    def _safety_diag(self, m):
+        if len(m.data) > 1:
+            self.safety_diag_n += 1
+            self.safety_diag = (float(self.sim_t), float(m.data[1]))
 
     def _wb9(self, m):
         """9 維速度命令：**只轉交命令鏈**，新鮮度與拒收都由鏈內判定。"""
@@ -1261,6 +1279,7 @@ def main():
             # 而不是直接跳出迴圈讓 stop_reason 停留在 sim_limit。
             coman_abort = _prec.invalid_reason
             raise MonitorFailure('coman_pose_read', coman_abort)
+        node.sim_t = t                # diag 回呼用它標記收到時的模擬時間
         _pstep = pose_src.physics_step_id()
         # 解除確認：由**讀回**決定，每步輪詢（執行 ≠ 確認）
         if couple_link.execute is not None and couple_link.confirm is None:
@@ -1795,13 +1814,21 @@ def main():
         # --- v1 狀態機：以**本步量測**評估，正式釋放資格由它決定 ---
         if machine is not None and _prec.valid:
             _age9 = (t - chain9.snap.recv_sim_t
-                     if (chain9 is not None and chain9.snap is not None) else 0.0)
+                     if (chain9 is not None and chain9.snap is not None)
+                     else float('inf'))
+            # **安全層的上游新鮮度另外取**：由其 diag 的 reason 判定，
+            # 並先檢查 diag 自身是否新鮮；未接入／過期 ⇒ 不知道 ⇒ 判不合格。
+            _sd = node.safety_diag
+            if _sd is None or (t - _sd[0]) > a.safety_diag_max_age_s:
+                _age_safety = float('inf')
+                _safety_src = 'unknown'
+            else:
+                _age_safety = (999.0 if abs(_sd[1] - 2.0) < 0.5 else 0.0)
+                _safety_src = f'diag_reason_{int(_sd[1])}'
             _relR = _prec.relative[:3, :3]
             _hsf = HSFrame(
                 t=t,
-                # 本執行端沒有獨立安全層節點；兩個年齡目前同源，**已註明**，
-                # 不得據此宣稱兩層各自獨立驗證過。
-                cmd_age_safety_s=_age9, cmd_age_endpoint_s=_age9,
+                cmd_age_safety_s=_age_safety, cmd_age_endpoint_s=_age9,
                 rel_pos_tool=_prec.relative[:3, 3],
                 bar_axis_tool=_relR @ pose_reader.handle.bar_axis_local,
                 opening_m=float(opening), f_norm_n=float(f_norm),
@@ -1814,6 +1841,24 @@ def main():
                 same_step_read=True)
             machine_flags_last = machine.step(_hsf)
             _fl = machine_flags_last
+            # 發布任務狀態：求解節點據此決定相位與目標。
+            # **只送量測與旗標**，命令仍由求解節點自己算。
+            _tq = rot_to_quat_wxyz(_prec.gripper[:3, :3])
+            _hq = rot_to_quat_wxyz(_prec.handle[:3, :3])
+            _msg = String()
+            _msg.data = json.dumps({
+                'sim_t': round(t, 5),
+                'phase': ph,
+                'attached': bool(coupled),
+                'handover_pass': bool(_fl.handover_pass),
+                'hold_tracking_pass': bool(_fl.hold_tracking_pass),
+                'normal_release_allowed': bool(_fl.normal_release_allowed),
+                'gripper_pos': [float(v) for v in _prec.gripper[:3, 3]],
+                'gripper_quat': [float(v) for v in _tq],
+                'handle_pos': [float(v) for v in _prec.handle[:3, 3]],
+                'handle_quat': [float(v) for v in _hq],
+                'opening_m': float(opening)}, ensure_ascii=False)
+            node.task_pub.publish(_msg)
             machine_log.append([
                 int(pose_src.physics_step_id()), round(t, 4), machine.phase,
                 bool(_fl.cmd_fresh), bool(_fl.endpoint_recv_ok),
@@ -1822,7 +1867,8 @@ def main():
                 bool(_fl.normal_release_allowed), bool(_fl.release_handshake),
                 bool(_fl.emergency_decouple),
                 round(machine.margin(_hsf.rel_pos_tool, _hsf.bar_axis_tool), 6),
-                round(machine.insertion_dev(_hsf.rel_pos_tool), 6)])
+                round(machine.insertion_dev(_hsf.rel_pos_tool), 6),
+                _safety_src, round(_age9, 4)])
 
         # --- 停止條件 ---
         # 手指接觸中止（friction 版才啟用）：判準是**每一指各自**的接觸力模長，
@@ -2142,7 +2188,8 @@ def main():
                                'in_validated_range', 'handover_cond_now',
                                'handover_pass', 'hold_tracking_pass',
                                'normal_release_allowed', 'release_handshake',
-                               'emergency_decouple', 'margin_m', 'insertion_dev_m'],
+                               'emergency_decouple', 'margin_m', 'insertion_dev_m',
+                               'safety_freshness_source', 'cmd_age_endpoint_s'],
         'coman_machine_log': machine_log,
         'coman_cmd_source': a.cmd_source,
         'coman_chain9': (chain9.summary() if chain9 is not None else None),

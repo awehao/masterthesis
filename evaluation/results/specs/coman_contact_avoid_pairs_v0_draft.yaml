@@ -1,0 +1,60 @@
+# 協同抽屜案例：**接觸與避碰的最小配對表**（草案 v0，未定版）
+#
+# 原則：例外**只給必要配對**，按「哪個機器人連桿 × 哪個物件表面 × 哪個相位」列出。
+# 資產註解寫的是**手指—橫桿**，不擴大解讀為手指—面板或手臂—側板。
+# 剛性連接只固定抓取關係，**不會**讓整個抽屜對整台機器人變成可碰撞物件。
+schema: coman_contact_avoid_pairs/0
+version: v0-draft
+status: draft_not_frozen
+created: 2026-09-29
+basis: evaluation/results/coman_handover_geometry_check_20260929.md §18
+
+general_rule:
+  source: 安全濾波屏障 n^T J v <= alpha (d - d_stop)
+  d_stop: d0 + v*tau + v^2/(2a)
+  d0_m: 0.05
+  tau_s: 0.15
+  alpha: 2.0
+  applies_to: 所有未列入例外的配對
+  freespace_confirmed: false        # 場景有抽屜與櫃體，不得沿用自由空間豁免
+
+contact_exceptions:
+  - pair: [uflite_finger1, drawer/handle/bar]
+    phases: [engage, postengage, pull, hold, release]
+    rule: 設計接觸；改由 M1 合併餘裕 >= 1.0 mm、H6 插入偏差 <= 2.0 mm、
+          手腕力 <= 30 N（持續 0.05 s 即中止）把關
+    basis: drawer_unit.yaml「手指與橫桿是設計接觸對，不套用一般環境的 5 mm 門檻」
+  - pair: [uflite_finger2, drawer/handle/bar]
+    phases: [engage, postengage, pull, hold, release]
+    rule: 同上（兩指對稱）
+    basis: 同上
+
+near_approach_pairs:      # **需要近接、但不是接觸**：需專屬幾何限制，待定
+  - pair: [uflite_gripper_link, drawer/front_panel]
+    issue: 設計站距使指尖距面板約 27.8 mm，小於一般規則的 d0 = 50 mm
+    min_clearance_m: null        # **待定**：先量既有趟次的實際最小間距再訂
+    phases: [approach, engage, postengage, pull, hold, release, retreat]
+    must_state: 若採用不同間距，**明白標示為新配置並事前審定**，
+                不得包裝成「門檻完全沒變」
+  - pair: [uflite_finger1, drawer/handle/post_l]
+    min_clearance_m: null        # 待定
+  - pair: [uflite_finger2, drawer/handle/post_r]
+    min_clearance_m: null        # 待定
+
+avoidance_unchanged:      # 一般規則照舊
+  - [任何手臂連桿, drawer/front_panel（除上列近接配對外）]
+  - [任何手臂連桿, drawer/side_l, drawer/side_r, drawer/bottom, drawer/back]
+  - [底盤, 抽屜任何部件]
+  - [任何機器人連桿, cabinet 櫃體]
+  - [任何機器人連桿, 地面與其他環境]
+
+not_claimed:
+  - 30 N 手腕力上限與 M1／H6 **不能替代**其他連桿的碰撞檢查
+  - 例外只在列出的相位成立；相位之外一律適用一般規則
+  - 本表**尚未**在距離節點實作；該節點目前沒有配對識別能力（見 pending）
+
+pending:
+  - key: 距離節點的配對識別
+    需要: 最小必要的 (連桿, 物件表面) 識別；**不得**以「整個抽屜排除」代替
+  - key: near_approach_pairs 的 min_clearance_m
+    需要: 先量既有固定底座趟次中該配對的實際最小間距，再據此訂定並事前審定
