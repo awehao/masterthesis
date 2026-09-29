@@ -5,7 +5,7 @@
 # set_angular_velocity() 直接設定底盤根部速度，支撐球與地面零摩擦 —— 不是輪驅動。
 # 因此**不能**驗證牽引力或打滑；由底盤速度換算的輪速不是獨立實測輪速。
 schema: wb_coman_drawer_criteria/0
-version: v0.4-draft
+version: v0.5-draft
 status: draft_not_frozen
 created: 2026-09-29
 revised: 2026-09-29
@@ -79,18 +79,21 @@ required_new_measurement:
   gripper_pose_relative_to_handle:
     reason: 既有紀錄只有 TCP 對理想路徑的追蹤誤差（e_par／e_perp），不是相對把手的對準誤差
     needed_for: [M1, H1, H2, H6]
-    offline_reconstructable: true
-    reconstruction: G_T_H = (W_T_G)^-1 · W_T_H，由 park ＋ 逐筆關節角 FK 與 pose ＋ 逐筆 opening 組出
-    time_alignment: 關節角與開度在同一列紀錄，無跨話題同步問題
-    still_required_in_new_endpoint: true      # 直接記錄，避免每次重建
+    offline_reconstructable_for_fixed_base_reference: true
+    reconstruction_caveat: >
+      參照趟的重建是**依量測關節角與開度、假設底盤固定且抽屜沿理想滑軌運動**的模型值，
+      不含抽屜實際微小轉動、滑軌橫向偏差與 stage 對 FK 的差異，**不是實際位姿量測**。
+    new_endpoint_requirement: >
+      協同案例**不得**沿用該重建：底盤會動，park 不再是常數。
+      執行端須在**同一物理步**直接讀取夾爪與抽屜的實際世界位姿，再算相對變換。
     datums_must_be_separate:
       pre_attachment: 與**設計抓取關係**比較（判斷有沒有對準）
       post_attachment: 與**連接當下的關係**比較（判斷約束殘差是否增加）
 
 H_handover:
   # **位置與姿態不再各自設門檻**，改用同一份幾何算出的合併餘裕 M1。
-  M1_enclosure_margin_m_min: null            # 候選 0.0010，待核准
-  M1_candidate_m: 0.0010
+  M1_enclosure_margin_m_min: 0.0010          # 工程放行餘裕（待核准後凍結）
+  M1_role: engineering_release_margin        # **不是**已認證的模型誤差上界
   M1_formula: m = (finger_gap_open/2 − bar_radius) − |t_y| − (L/2)·|a_y|
   M1_terms:
     t_y: 桿心在手指閉合方向（工具 y）的偏移 —— 位置誤差的貢獻
@@ -100,10 +103,29 @@ H_handover:
     task_hard_need: m > 0（手指全開時須能不接觸地包住橫桿）
     engineering_allowance: 1.0 mm 為模型簡化餘裕（平面近似手指、網格對解析值差異、接觸寬取包絡上界），非由歷史散佈挑出
     reference_run: drawer_220102_offset20 各相位 m = 2.458–2.496 mm（名目 3.9 mm）
-  M1_not_guaranteed: 只涵蓋手指內面與桿面；非完整碰撞檢查；插入深度另外檢查
+  M1_not_guaranteed: 只涵蓋手指內面與桿面；非完整碰撞檢查；不得逕稱為「最小間距」
+  M1_validation:
+    script: evaluation/check_enclosure_margin_approx.py
+    method: 真實手指網格（finger1.stl 2238 面，finger2 以 y 鏡射近似）對有限長圓柱，逐點求最小間距
+    cases: 160（零誤差、單獨平移、單獨傾斜與疊加）
+    result: m_approx − m_num 介於 −7.735 mm 與 −0.713 mm，**全部保守**
+    least_conservative_case: t_z = −4 mm 併 3° 傾斜，仍保守 0.713 mm
+  M1_validated_range:
+    t_y_abs_max_m: 0.0029
+    t_z_abs_max_m: 0.0040
+    tilt_deg_max: 3.0
+    t_x_abs_max_m: 0.005
+    outside_range: refuse                    # 超出已核對範圍即拒絕放行，不得外推
+  M1_model_gap_recorded:
+    finding: 手指網格內面在橫桿高度處退在局部 y = +0.0112；名目 y = 0 平面只存在於指根
+    consequence: 零誤差下真實最小間距 6.911 mm，非名目 3.9 mm
+    impact_this_case: 無（理想固定連接不靠夾持面摩擦）
+    impact_future: 摩擦夾持必須重新檢視
   H1_tcp_rel_handle_pos: record_only         # 降為記錄量
   H2_tcp_rel_handle_rot: record_only         # 降為記錄量
-  H6_insertion_depth_tool_z_dev_m_max: null  # 候選：工具 z 窗口兩側各 0.0072
+  H6_insertion_depth_tool_z_dev_m_max: 0.0020   # 新選定的工程限制，非由歷史誤差反推
+  H6_joint_check_with_orientation: true         # 須與姿態合併檢查
+  H6_note: 名目單側窗口 7.2 mm；剩餘 5.2 mm 只是零傾斜下的名目餘隙，不代表所有姿態都有
   H6_reference: 參照趟工具 z 對設計值偏差 0.17–0.85 mm
   H3_window_s: 3.0
   H3_basis: 固定底座版 engage 2.0 + postengage 1.0；屬設計依據，非「3 s 夠穩」的證明
@@ -120,8 +142,9 @@ H4_base_displacement:
   yaw_unresolved: 五趟窗內最大偏航皆 0.691 mrad，僅記錄此一致性，不判定成因
 
 P_pull:
-  P1_final_opening_err_m_max: null           # 待任務決定
-  P1_candidate_m: 0.0005                     # 行程 2.5 %
+  P1_final_opening_err_m_max: 0.0005         # 19.5–20.5 mm，工程完成容差
+  P1_hold_s: 2.0                             # 須明訂保持時間；沿用參照趟 hold 相位時長
+  P1_must_be_met_before_decouple: true       # 解除連接前達成，不得只看最後一筆開度
   P1_basis:
     task_need: 須由任務定義「多少算完成」；門檻不由參照趟反推
     reference: 固定底座 20 mm 無補償趟達 −0.013 mm，顯示餘裕充足
@@ -196,14 +219,14 @@ comparison:
 runner_gate:
   refuse_if_any_required_threshold_null: true
   note: 本輪尚未撰寫 runner；此規則於撰寫時實作。
-  currently_null: [M1_enclosure_margin_m_min, H6_insertion_depth_tool_z_dev_m_max,
-                   P1_final_opening_err_m_max]
+  currently_null: []
+  freeze_status: 三個數值已填入，**待核准後才改 status 並凍結為 v1**；在此之前仍為草案
 
 pending:
-  - key: M1
-    需要: 核准 m_min = 1.0 mm（任務硬需求為 m > 0，1.0 mm 是模型簡化餘裕）
-  - key: H6
-    需要: 決定插入深度容差；工具 z 窗口為兩側各 7.2 mm
+  - key: M1 / H6 / P1
+    需要: 核准三個數值（1.0 mm ／ 2.0 mm ／ 0.5 mm 併 2.0 s 保持），核准後凍結 v1
+  - key: 量測與狀態機
+    需要: 新執行端實作實際世界位姿讀取，以及四個獨立旗標（命令新鮮／執行端未逾時／保持追蹤合格／允許正常釋放）與不受閘擋的緊急解除
   - key: P1
     需要: 任務端決定「多少算完成 20 mm」；候選 0.5 mm 已有參照趟佐證餘裕
   - key: H4
