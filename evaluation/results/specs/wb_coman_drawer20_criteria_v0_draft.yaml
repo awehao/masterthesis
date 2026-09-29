@@ -5,7 +5,7 @@
 # set_angular_velocity() 直接設定底盤根部速度，支撐球與地面零摩擦 —— 不是輪驅動。
 # 因此**不能**驗證牽引力或打滑；由底盤速度換算的輪速不是獨立實測輪速。
 schema: wb_coman_drawer_criteria/0
-version: v0.6-draft
+version: v0.7-draft
 status: draft_not_frozen
 created: 2026-09-29
 revised: 2026-09-29
@@ -138,6 +138,7 @@ H_handover:
   H6_reference: 參照趟工具 z 對設計值偏差 0.17–0.85 mm
   H3_window_s: 3.0
   H3_basis: 固定底座版 engage 2.0 + postengage 1.0；屬設計依據，非「3 s 夠穩」的證明
+  H3_enforcement: 必須**連續**符合交接條件滿 H3 才放行；取樣中斷即重新計時
   H5_joint_check_required: true              # H1 與 H2 須合併檢查，不得各自判定
   H6_long_tail_claim: 只檢查交接窗內行為；不得宣稱長尾漂移對本案例無影響
 
@@ -170,6 +171,10 @@ P_pull:
     basis: 固定底座 20 mm 趟釋放後 34.23 s 變化 0.00000 mm；解析度 0.001 mm
     note: 位移與速率、觀察窗須同時明訂，只給位移不足
   P5_opening_source: 抽屜關節實測開度，不以命令值代替
+  P6_retreat_clear_tool_z_m: 0.0233
+  P6_basis:
+    source: manipulation_cases.yaml —— 「清開橫桿最少需 0.0233 m」；案例命令的退開量為 0.040 m
+    role: 退出完成的**實測**條件，不以多跑一個週期代替
 
 F_force:
   F1_force_abort_n: 30.0
@@ -224,6 +229,20 @@ comparison:
     - pull 時長 2.02 s
     - 釋放後窗 34.23 s
   report_items: [關節限位餘裕, 手腕負載, 完成行程, 底盤運動追蹤]
+
+continuity:
+  max_gap_s: 0.15            # 取樣間隔超過即視為缺測，連續計時重置
+  note: 缺測不得計入連續保持或連續交接
+
+scope_caveats:
+  geometry_validation: >
+    1260 組支持的是**已測位姿點**的結果，不是整個連續位姿範圍的保守性證明。
+    表面取樣的 Lipschitz 下界只涵蓋手指表面離散化，**未涵蓋位姿掃描點之間的空隙**。
+  datum_rotation: >
+    模組已可保存完整相對旋轉，但執行端尚未提供；目前兩套基準的實測資料只有位置。
+  same_step_read: >
+    位姿是否為同一物理步讀取，由呼叫端聲明（Frame.same_step_read），
+    純邏輯模組**無法自行驗證資料來源**。
 
 runner_gate:
   refuse_if_any_required_threshold_null: true

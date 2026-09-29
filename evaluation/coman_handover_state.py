@@ -33,30 +33,79 @@ class SpecNotFrozen(RuntimeError):
     pass
 
 
+REQUIRED = (
+    # (路徑, 下界, 上界)；**逐項驗值、驗型別、驗範圍**，不相信 currently_null 清單
+    (('H_handover', 'M1_enclosure_margin_m_min'), 0.0, 0.0039),
+    (('H_handover', 'H6_insertion_depth_tool_z_dev_m_max'), 0.0, 0.0072),
+    (('H_handover', 'H3_window_s'), 0.0, 60.0),
+    (('P_pull', 'P1_final_opening_err_m_max'), 0.0, 0.010),
+    (('P_pull', 'P1_hold_s'), 0.0, 60.0),
+    (('P_pull', 'P6_retreat_clear_tool_z_m'), 0.0, 0.100),
+    (('F_force', 'F1_force_abort_n'), 0.0, 1000.0),
+    (('F_force', 'F2_force_abort_sustain_s'), 0.0, 10.0),
+    (('profile', 'target_stroke_m'), 0.0, 0.220),
+    (('geometry', 'gripper_open_inner_m'), 0.0, 0.100),
+    (('geometry', 'handle_bar_diameter_m'), 0.0, 0.100),
+    (('geometry', 'tcp_to_bar_center_along_tool_z_m'), 0.0, 0.100),
+)
+RANGE_KEYS = ('t_y_abs_max_m', 't_z_abs_max_m', 'tilt_deg_max', 't_x_abs_max_m')
+
+
 def load_spec(path: str = SPEC_PATH, allow_draft: bool = False) -> dict:
-    """載入判準。未凍結或仍有 null 門檻時**拒絕**，除非明確允許草案（僅供測試）。"""
+    """載入判準並**逐項查核**。
+
+    不以 `currently_null` 清單代替查核 —— 清單可能與實際內容不一致。
+    每個必要門檻都要有值、型別為數、且落在有效範圍內。
+    """
     d = yaml.safe_load(open(path, encoding='utf-8'))
-    nulls = d.get('runner_gate', {}).get('currently_null', []) or []
-    frozen = d.get('status') == 'frozen'
-    if not (frozen and not nulls) and not allow_draft:
+    bad = []
+    for keys, lo, hi in REQUIRED:
+        node = d
+        for k in keys:
+            node = (node or {}).get(k) if isinstance(node, dict) else None
+        name = '.'.join(keys)
+        if node is None:
+            bad.append(f'{name} 為 null／缺漏')
+        elif isinstance(node, bool) or not isinstance(node, (int, float)):
+            bad.append(f'{name} 型別為 {type(node).__name__}，不是數值')
+        elif not (lo < float(node) <= hi):
+            bad.append(f'{name} = {node} 不在有效範圍 ({lo}, {hi}]')
+    rng = (d.get('H_handover') or {}).get('M1_validated_range')
+    if not isinstance(rng, dict):
+        bad.append('M1_validated_range 缺漏')
+    else:
+        for k in RANGE_KEYS:
+            v = rng.get(k)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+                bad.append(f'M1_validated_range.{k} 無效：{v!r}')
+    if bad:
+        raise SpecNotFrozen('判準查核未過：' + '；'.join(bad))
+    if d.get('status') != 'frozen' and not allow_draft:
         raise SpecNotFrozen(
-            f"判準未凍結（status={d.get('status')}）或仍有 null 門檻 {nulls}；"
-            '拒絕正式執行。測試可傳 allow_draft=True。')
+            f"判準未凍結（status={d.get('status')}）；拒絕正式執行。"
+            '測試可傳 allow_draft=True。')
     return d
 
 
 @dataclass
 class Frame:
-    """一個週期的輸入。時間一律為模擬時間。"""
+    """一個週期的輸入。時間一律為模擬時間。
+
+    相對位姿必須由呼叫端**在同一物理步**讀取夾爪與抽屜的實際世界位姿後算出。
+    本模組無法驗證資料來源，只能要求並記錄；`same_step_read` 由呼叫端聲明。
+    """
     t: float
-    cmd_age_safety_s: float      # 安全層看到的上游命令年齡
-    cmd_age_endpoint_s: float    # 執行端自身的命令年齡
-    rel_pos_tool: np.ndarray     # 把手（橫桿中心）在**工具座標**的位置
-    bar_axis_tool: np.ndarray    # 橫桿軸在工具座標的單位向量
+    cmd_age_safety_s: float
+    cmd_age_endpoint_s: float
+    rel_pos_tool: np.ndarray
+    bar_axis_tool: np.ndarray
     opening_m: float
     f_norm_n: float
     attached: bool
     monitor_ok: bool = True
+    rel_rot_tool: np.ndarray | None = None      # 完整相對旋轉（3×3），缺則記為未提供
+    decouple_confirmed: bool = False            # 執行端回報「已解除連接」
+    same_step_read: bool = True                 # 呼叫端聲明位姿為同一物理步讀取
 
 
 @dataclass
@@ -64,10 +113,12 @@ class Flags:
     cmd_fresh: bool = False
     endpoint_recv_ok: bool = False
     in_validated_range: bool = False
-    handover_pass: bool = False
+    handover_cond_now: bool = False     # 當下瞬時符合
+    handover_pass: bool = False         # 連續符合滿 H3 才為真
     hold_tracking_pass: bool = False
     normal_release_allowed: bool = False
     emergency_decouple: bool = False
+    continuity_break: bool = False
 
 
 PHASES = ('HANDOVER', 'ENGAGE', 'PULL', 'HOLD', 'RELEASE', 'RETREAT',
@@ -75,36 +126,46 @@ PHASES = ('HANDOVER', 'ENGAGE', 'PULL', 'HOLD', 'RELEASE', 'RETREAT',
 
 
 class HandoverMachine:
-    """相位狀態機。每個旗標各自記時間戳，互不代表。"""
+    """相位狀態機。每個旗標各自記時間戳，互不代表。
 
-    def __init__(self, spec: dict):
-        g = spec['geometry']
-        h = spec['H_handover']
-        p = spec['P_pull']
+    * 交接與保持都要求**連續**符合：取樣中斷（間隔 > max_gap_s）即重新計時。
+    * 正常釋放同時要求：保持合格、仍在連接中、當下命令新鮮、執行端未逾時、相位為 HOLD。
+    * 緊急解除要求**閂鎖**，直到執行端回報已解除為止，不因單次旗標消失而取消。
+    * 退出完成由**實測退出量**決定，不以多跑一個週期代替。
+    """
+
+    def __init__(self, spec: dict, max_gap_s: float = 0.15):
+        g = spec['geometry']; h = spec['H_handover']; p = spec['P_pull']
         self.gap_half = float(g['gripper_open_inner_m']) / 2.0
         self.r_bar = float(g['handle_bar_diameter_m']) / 2.0
         self.L = float(h['M1_terms']['L'])
-        self.m_min = h['M1_enclosure_margin_m_min']
+        self.m_min = float(h['M1_enclosure_margin_m_min'])
         self.rng = h['M1_validated_range']
-        self.h6 = h['H6_insertion_depth_tool_z_dev_m_max']
+        self.h6 = float(h['H6_insertion_depth_tool_z_dev_m_max'])
+        self.h3 = float(h['H3_window_s'])
         self.z_nom = -float(g['tcp_to_bar_center_along_tool_z_m'])
         self.target = float(spec['profile']['target_stroke_m'])
-        self.p1 = p['P1_final_opening_err_m_max']
+        self.p1 = float(p['P1_final_opening_err_m_max'])
         self.p1_hold_s = float(p['P1_hold_s'])
+        self.retreat_clear = float(p['P6_retreat_clear_tool_z_m'])
         self.f_abort = float(spec['F_force']['F1_force_abort_n'])
         self.f_sustain_s = float(spec['F_force']['F2_force_abort_sustain_s'])
-        self.age_safety = 0.25      # 安全層 max_cmd_age
-        self.age_endpoint = 0.20    # 執行端 max_cmd_age_s（較嚴）
+        self.max_gap_s = float(max_gap_s)
+        self.age_safety, self.age_endpoint = 0.25, 0.20
         self.phase = 'HANDOVER'
         self.stamps: dict[str, float] = {}
-        self.attach_ref: np.ndarray | None = None
+        self.attach_ref: dict | None = None
+        self.rot_recorded = False
+        self.same_step_declared = True
+        self._t_prev: float | None = None
+        self._hand_since: float | None = None
         self._hold_since: float | None = None
         self._force_since: float | None = None
+        self._emergency_latched = False
         self.log: list[tuple[float, str, Flags]] = []
 
     # ---------------- 幾何量 ----------------
     def margin(self, rel_pos, bar_axis) -> float:
-        """合併餘裕 m（近似式，僅在已核對範圍內使用）。"""
         return ((self.gap_half - self.r_bar) - abs(float(rel_pos[1]))
                 - (self.L / 2.0) * abs(float(bar_axis[1])))
 
@@ -125,59 +186,88 @@ class HandoverMachine:
     # ---------------- 逐週期 ----------------
     def step(self, f: Frame) -> Flags:
         fl = Flags()
+        gap = None if self._t_prev is None else f.t - self._t_prev
+        fl.continuity_break = gap is not None and gap > self.max_gap_s
+        if fl.continuity_break:                 # **缺測不算連續**
+            self._hand_since = None
+            self._hold_since = None
+            self._force_since = None
+        self._t_prev = f.t
+        if not f.same_step_read:
+            self.same_step_declared = False
+
         fl.cmd_fresh = f.cmd_age_safety_s <= self.age_safety
         fl.endpoint_recv_ok = f.cmd_age_endpoint_s <= self.age_endpoint
         fl.in_validated_range = self.in_range(f.rel_pos_tool, f.bar_axis_tool)
 
-        # **緊急路徑先判，且不看任何閘** ——
-        # 超力或監看失效時，必須能立即「先解除耦合、再停止」。
+        # 緊急路徑：先判、不看任何閘，且**閂鎖到執行端確認已解除**
         over = f.f_norm_n > self.f_abort
-        self._force_since = (f.t if over and self._force_since is None
-                             else (None if not over else self._force_since))
-        force_sustained = (over and self._force_since is not None
-                           and f.t - self._force_since >= self.f_sustain_s)
-        if force_sustained or not f.monitor_ok:
-            fl.emergency_decouple = True
+        if over and self._force_since is None:
+            self._force_since = f.t
+        elif not over:
+            self._force_since = None
+        sustained = (over and self._force_since is not None
+                     and f.t - self._force_since >= self.f_sustain_s)
+        if sustained or not f.monitor_ok:
+            self._emergency_latched = True
             self._mark('emergency_decouple', f.t)
+        if self._emergency_latched:
+            if f.decouple_confirmed:
+                self._emergency_latched = False
+                self._mark('decouple_confirmed', f.t)
+                fl.emergency_decouple = False
+            else:
+                fl.emergency_decouple = True
             self.phase = 'EMERGENCY'
             self.log.append((f.t, self.phase, fl))
             return fl
 
-        # 交接：合併餘裕與插入深度都要過，且必須在已核對範圍內
-        if self.m_min is not None and self.h6 is not None:
-            fl.handover_pass = (fl.in_validated_range
+        # 交接：瞬時條件 → 連續滿 H3 才放行
+        fl.handover_cond_now = (fl.in_validated_range
                                 and self.margin(f.rel_pos_tool,
                                                 f.bar_axis_tool) >= self.m_min
                                 and self.insertion_dev(f.rel_pos_tool) <= self.h6)
+        if fl.handover_cond_now:
+            if self._hand_since is None:
+                self._hand_since = f.t
+            fl.handover_pass = (f.t - self._hand_since) >= self.h3
+        else:
+            self._hand_since = None
 
-        # 保持追蹤：開度在容差內並持續足夠時間（與命令新鮮無關）
-        if self.p1 is not None and abs(f.opening_m - self.target) <= self.p1:
-            self._hold_since = f.t if self._hold_since is None else self._hold_since
+        # 保持追蹤：連續符合開度容差滿 P1_hold_s（與命令新鮮無關）
+        if abs(f.opening_m - self.target) <= self.p1:
+            if self._hold_since is None:
+                self._hold_since = f.t
             fl.hold_tracking_pass = (f.t - self._hold_since) >= self.p1_hold_s
         else:
             self._hold_since = None
 
-        # 正常釋放：**只**由保持條件閘控，且必須仍在連接中
-        fl.normal_release_allowed = bool(fl.hold_tracking_pass and f.attached)
+        ok_now = fl.cmd_fresh and fl.endpoint_recv_ok
+        # 正常釋放：保持合格 ＋ 仍在連接 ＋ 當下命令與執行端合格 ＋ 相位為 HOLD
+        fl.normal_release_allowed = bool(fl.hold_tracking_pass and f.attached
+                                         and ok_now and self.phase == 'HOLD')
 
         if f.attached and self.attach_ref is None:
-            self.attach_ref = np.asarray(f.rel_pos_tool, float).copy()
+            self.attach_ref = {'pos': np.asarray(f.rel_pos_tool, float).copy(),
+                               'rot': (None if f.rel_rot_tool is None
+                                       else np.asarray(f.rel_rot_tool, float).copy())}
+            self.rot_recorded = f.rel_rot_tool is not None
             self._mark('attached', f.t)
 
-        # 相位推進（命令不新鮮或執行端逾時即原地保持，不推進）
-        ok = fl.cmd_fresh and fl.endpoint_recv_ok
-        if self.phase == 'HANDOVER' and fl.handover_pass and ok:
+        if self.phase == 'HANDOVER' and fl.handover_pass and ok_now:
             self.phase = 'ENGAGE'; self._mark('handover_pass', f.t)
-        elif self.phase == 'ENGAGE' and f.attached and ok:
+        elif self.phase == 'ENGAGE' and f.attached and ok_now:
             self.phase = 'PULL'
-        elif self.phase == 'PULL' and fl.hold_tracking_pass and ok:
+        elif self.phase == 'PULL' and fl.hold_tracking_pass and ok_now:
             self.phase = 'HOLD'; self._mark('hold_tracking_pass', f.t)
-        elif self.phase == 'HOLD' and fl.normal_release_allowed and ok:
+        elif self.phase == 'HOLD' and fl.normal_release_allowed:
             self.phase = 'RELEASE'; self._mark('normal_release', f.t)
         elif self.phase == 'RELEASE' and not f.attached:
             self.phase = 'RETREAT'
         elif self.phase == 'RETREAT':
-            self.phase = 'DONE'
+            # **由實測退出量決定完成**，不以多跑一個週期代替
+            if float(np.linalg.norm(f.rel_pos_tool)) >= self.retreat_clear:
+                self.phase = 'DONE'; self._mark('retreat_complete', f.t)
         self.log.append((f.t, self.phase, fl))
         return fl
 
@@ -186,14 +276,22 @@ class HandoverMachine:
 
     # ---------------- 兩個基準 ----------------
     def datum_pre(self, rel_pos, design_rel) -> float:
-        """連接前：對**設計抓取關係**的偏差。"""
         return float(np.linalg.norm(np.asarray(rel_pos) - np.asarray(design_rel)))
 
-    def datum_post(self, rel_pos) -> float:
-        """連接後：對**連接當下關係**的漂移。未連接則為 NaN。"""
+    def datum_post(self, rel_pos, rel_rot=None) -> dict:
+        """連接後：對連接當下關係的位置與**旋轉**漂移。缺旋轉則回報 NaN。"""
         if self.attach_ref is None:
-            return float('nan')
-        return float(np.linalg.norm(np.asarray(rel_pos) - self.attach_ref))
+            return {'pos_m': float('nan'), 'rot_rad': float('nan')}
+        out = {'pos_m': float(np.linalg.norm(
+            np.asarray(rel_pos) - self.attach_ref['pos']))}
+        R0 = self.attach_ref['rot']
+        if R0 is None or rel_rot is None:
+            out['rot_rad'] = float('nan')
+        else:
+            dR = np.asarray(rel_rot, float) @ R0.T
+            out['rot_rad'] = float(math.acos(
+                max(-1.0, min(1.0, (np.trace(dR) - 1.0) / 2.0))))
+        return out
 
 
 # ------------------------------------------------------------------ 離線測試
@@ -206,83 +304,128 @@ def _frame(t, **kw):
     return Frame(**base)
 
 
+def _run(M, t0, n, dt=0.05, **kw):
+    t = t0
+    fl = None
+    for _ in range(n):
+        fl = M.step(_frame(t, **kw)); t += dt
+    return fl, t
+
+
 def selftest() -> int:
-    """離線狀態序列測試：不需要模擬器，也不需要凍結判準。"""
     spec = load_spec(allow_draft=True)
     bad = 0
 
     def check(name, cond):
         nonlocal bad
-        print(f'  {name:46s} {"ok" if cond else "**錯**"}')
+        print(f'  {name:52s} {"ok" if cond else "**錯**"}')
         bad += not cond
 
-    # 1 正常序列：交接 → 連接 → 拉到 20 mm → 保持 2 s → 允許釋放
+    # --- 反例 1：交接必須連續滿 H3，第一筆合格不得放行 ---
     M = HandoverMachine(spec)
-    t = 0.0
-    for _ in range(10):
-        M.step(_frame(t)); t += 0.05
-    check('交接通過後進入 ENGAGE', M.phase == 'ENGAGE')
-    for _ in range(4):
-        M.step(_frame(t, attached=True)); t += 0.05
-    check('連接後進入 PULL', M.phase == 'PULL')
-    fl = None
-    for _ in range(60):                      # 3 s 維持在容差內
-        fl = M.step(_frame(t, attached=True, opening_m=0.0200)); t += 0.05
-    check('保持追蹤合格', fl.hold_tracking_pass)
-    check('允許正常釋放', fl.normal_release_allowed)
-    check('保持 2 s 之前不得允許釋放',
-          M.stamps['hold_tracking_pass'] - M.stamps['attached'] >= 2.0)
+    fl = M.step(_frame(0.0))
+    check('交接首筆合格不得放行（需連續 3 s）',
+          fl.handover_cond_now and not fl.handover_pass and M.phase == 'HANDOVER')
+    fl, t = _run(M, 0.05, 40)                      # 共 2.0 s
+    check('交接連續 2.0 s 仍不得放行', not fl.handover_pass)
+    fl, t = _run(M, t, 25)                         # 累計 > 3.0 s
+    check('交接連續滿 3 s 才進入 ENGAGE',
+          fl.handover_pass and M.phase == 'ENGAGE')
 
-    # 2 命令過期：旗標分開，且相位不推進
+    # --- 反例 2：交接中途不合格要重新計時 ---
     M2 = HandoverMachine(spec)
-    fl = M2.step(_frame(0.0, cmd_age_safety_s=0.30, cmd_age_endpoint_s=0.05))
-    check('安全層過期 → cmd_fresh 為假', not fl.cmd_fresh)
-    check('同一週期執行端仍在容忍內 → endpoint_recv_ok 為真', fl.endpoint_recv_ok)
-    check('過期時不推進相位', M2.phase == 'HANDOVER')
-    fl = M2.step(_frame(0.05, cmd_age_safety_s=0.05, cmd_age_endpoint_s=0.22))
-    check('執行端逾時（0.22 > 0.20）獨立判定', not fl.endpoint_recv_ok and fl.cmd_fresh)
+    _run(M2, 0.0, 50)
+    M2.step(_frame(2.5, rel_pos_tool=np.array([0.0, 0.0035, -0.0147])))  # 超範圍
+    fl, t = _run(M2, 2.55, 50)                     # 之後再連續 2.5 s
+    check('中斷後重新計時，未滿 3 s 不得放行',
+          not fl.handover_pass and M2.phase == 'HANDOVER')
 
-    # 3 保持未達成 → 不得釋放
+    # --- 反例 3：缺測不得算連續保持（只餵 t=0 與 t=3）---
     M3 = HandoverMachine(spec)
-    t = 0.0
-    for _ in range(40):
-        fl = M3.step(_frame(t, attached=True, opening_m=0.0190)); t += 0.05
-    check('開度差 1.0 mm > 容差 0.5 mm → 保持不合格', not fl.hold_tracking_pass)
-    check('保持不合格 → 不允許正常釋放', not fl.normal_release_allowed)
+    M3.step(_frame(0.0, attached=True, opening_m=0.0200))
+    fl = M3.step(_frame(3.0, attached=True, opening_m=0.0200))
+    check('t=0 與 t=3 兩筆：偵測到取樣中斷', fl.continuity_break)
+    check('缺測不得算保持合格', not fl.hold_tracking_pass)
 
-    # 4 超力 → 緊急解除，且**不受保持閘擋**
+    # --- 反例 4：保持合格但當下執行端逾時 → 不得允許正常釋放 ---
     M4 = HandoverMachine(spec)
-    t = 0.0
-    for _ in range(4):
-        M4.step(_frame(t, attached=True, opening_m=0.0)); t += 0.05
-    for _ in range(3):                        # 連續超力 0.10 s ≥ 0.05 s
-        fl = M4.step(_frame(t, attached=True, f_norm_n=35.0)); t += 0.05
-    check('超力持續 → 緊急解除', fl.emergency_decouple and M4.phase == 'EMERGENCY')
-    check('緊急解除時保持條件未達成（證明未被閘住）', not fl.hold_tracking_pass)
+    _run(M4, 0.0, 65)                              # 交接滿 3 s
+    _run(M4, 3.25, 4, attached=True)               # 進 PULL
+    t = 3.45
+    fl = None
+    for _ in range(80):                            # 跑到剛進入 HOLD 就停
+        fl = M4.step(_frame(t, attached=True, opening_m=0.0200)); t += 0.05
+        if M4.phase == 'HOLD':
+            break
+    check('保持連續 2 s 後進入 HOLD',
+          fl.hold_tracking_pass and M4.phase == 'HOLD'
+          and abs(M4.stamps['hold_tracking_pass'] - M4.stamps.get('attached', 0)
+                  - 2.0) < 0.3)
+    fl = M4.step(_frame(t, attached=True, opening_m=0.0200,
+                        cmd_age_endpoint_s=0.22))
+    check('保持合格但執行端逾時 → 不允許正常釋放',
+          fl.hold_tracking_pass and not fl.normal_release_allowed)
+    check('不允許釋放時相位不得進入 RELEASE', M4.phase == 'HOLD')
+    fl = M4.step(_frame(t + 0.05, attached=True, opening_m=0.0200))
+    check('恢復正常後才允許釋放並進入 RELEASE',
+          fl.normal_release_allowed and M4.phase == 'RELEASE')
 
-    # 5 監看失效 → 立即緊急解除
+    # --- 反例 5：退出完成須由實測退出量決定 ---
+    fl = M4.step(_frame(t + 0.10, attached=False, opening_m=0.0200))
+    check('解除連接後進入 RETREAT', M4.phase == 'RETREAT')
+    fl = M4.step(_frame(t + 0.15, attached=False, opening_m=0.0200))
+    check('未退開足夠距離不得判為 DONE', M4.phase == 'RETREAT')
+    fl = M4.step(_frame(t + 0.20, attached=False, opening_m=0.0200,
+                        rel_pos_tool=np.array([0.0, 0.0005, -0.0547])))
+    check('退開達實測門檻才 DONE',
+          M4.phase == 'DONE' and 'retreat_complete' in M4.stamps)
+
+    # --- 反例 6：緊急解除要閂鎖到執行端確認 ---
     M5 = HandoverMachine(spec)
-    fl = M5.step(_frame(0.0, monitor_ok=False))
-    check('監看失效 → 立即緊急解除', fl.emergency_decouple)
+    _run(M5, 0.0, 4, attached=True)
+    fl, t = _run(M5, 0.20, 3, attached=True, f_norm_n=35.0)
+    check('超力持續 → 緊急解除', fl.emergency_decouple and M5.phase == 'EMERGENCY')
+    fl = M5.step(_frame(t, attached=True, f_norm_n=5.0))
+    check('力回到正常仍維持解除要求（閂鎖）',
+          fl.emergency_decouple and M5.phase == 'EMERGENCY')
+    fl = M5.step(_frame(t + 0.05, attached=False, f_norm_n=5.0,
+                        decouple_confirmed=True))
+    check('執行端確認已解除後才撤除要求', not fl.emergency_decouple)
 
-    # 6 超出已核對範圍 → 拒絕放行
+    # --- 反例 7：判準查核不得只看清單 ---
+    import copy, tempfile, os as _os
+    bogus = copy.deepcopy(spec)
+    bogus['H_handover']['M1_enclosure_margin_m_min'] = None
+    bogus['runner_gate']['currently_null'] = []
+    bogus['status'] = 'frozen'
+    fd, tmp = tempfile.mkstemp(suffix='.yaml'); _os.close(fd)
+    yaml.safe_dump(bogus, open(tmp, 'w', encoding='utf-8'), allow_unicode=True)
+    try:
+        load_spec(tmp)
+        check('M1 為 null 但標 frozen → 應拒絕', False)
+    except SpecNotFrozen as e:
+        check('M1 為 null 但標 frozen → 仍被拒絕', 'M1' in str(e))
+    bogus['H_handover']['M1_enclosure_margin_m_min'] = 0.05     # 大於名目餘隙
+    yaml.safe_dump(bogus, open(tmp, 'w', encoding='utf-8'), allow_unicode=True)
+    try:
+        load_spec(tmp)
+        check('M1 超出有效範圍 → 應拒絕', False)
+    except SpecNotFrozen as e:
+        check('M1 超出有效範圍 → 被拒絕', '有效範圍' in str(e))
+    _os.unlink(tmp)
+
+    # --- 基準：位置與旋轉分開保存 ---
     M6 = HandoverMachine(spec)
-    fl = M6.step(_frame(0.0, rel_pos_tool=np.array([0.0, 0.0035, -0.0147])))
-    check('|t_y| 3.5 mm 超出已核對範圍 → in_validated_range 為假',
-          not fl.in_validated_range)
-    check('超出範圍 → 交接不通過', not fl.handover_pass)
-    fl = M6.step(_frame(0.05, rel_pos_tool=np.array([0.0, 0.0005, -0.0147 - 0.0025])))
-    check('插入偏差 2.5 mm > H6 2.0 mm → 交接不通過', not fl.handover_pass)
-
-    # 7 兩個基準分開
+    R0 = np.eye(3)
+    M6.step(_frame(0.0, attached=True, rel_rot_tool=R0))
+    c, s_ = math.cos(0.01), math.sin(0.01)
+    R1 = np.array([[c, -s_, 0], [s_, c, 0], [0, 0, 1.0]])
+    d = M6.datum_post(np.array([0.0, 0.0008, -0.0147]), R1)
+    check('連接後基準含旋轉漂移 0.01 rad', abs(d['rot_rad'] - 0.01) < 1e-9)
     M7 = HandoverMachine(spec)
-    design = np.array([0.0, 0.0, -0.0147])
-    pre = M7.datum_pre(np.array([0.0, 0.0014, -0.0147]), design)
-    check('連接前基準：對設計關係 1.4 mm', abs(pre - 0.0014) < 1e-12)
-    check('未連接時連接後基準為 NaN', math.isnan(M7.datum_post(design)))
     M7.step(_frame(0.0, attached=True))
-    post = M7.datum_post(np.array([0.0, 0.0008, -0.0147]))
-    check('連接後基準：對連接當下關係 0.3 mm', abs(post - 0.0003) < 1e-9)
+    check('未提供旋轉時記為 NaN 且標記未記錄',
+          math.isnan(M7.datum_post(np.zeros(3))['rot_rad']) and not M7.rot_recorded)
 
     print('離線狀態序列測試：' + ('全部通過' if bad == 0 else f'**{bad} 項失敗**'))
     return 1 if bad else 0
