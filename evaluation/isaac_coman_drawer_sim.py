@@ -127,6 +127,10 @@ ap.add_argument('--drawer-no-gravity', action='store_true',
 # 只重播命令、**不建立夾爪—抽屜固定關節**：回答「負載成長是否依賴這個連接」。
 # engage 事件照常記錄（同步快照照取），但不建關節、也不把 coupled 設為 True
 # （否則 grasp_lost 會因抽屜不動而誤觸發）。
+ap.add_argument('--attach-on-handover', action='store_true',
+                help='由 v1 狀態機的交接通過觸發連接（協同案例沒有軌跡事件）')
+ap.add_argument('--free-base', action='store_true',
+                help='**開放底盤自由度**：不建 world→根 固定關節，底盤由 9 維命令驅動')
 ap.add_argument('--machine', action='store_true',
                 help='接上 v1 狀態機：正式釋放資格改用 normal_release_allowed')
 ap.add_argument('--cmd-source', default='traj', choices=['traj', 'wb9'],
@@ -415,6 +419,7 @@ from rclpy.qos import (QoSProfile, ReliabilityPolicy, HistoryPolicy,
 from rosgraph_msgs.msg import Clock                                 # noqa: E402
 from sensor_msgs.msg import JointState                              # noqa: E402
 from geometry_msgs.msg import PoseStamped                           # noqa: E402
+from geometry_msgs.msg import PoseStamped                           # noqa: E402
 from std_msgs.msg import (Float32MultiArray, Float64MultiArray,     # noqa: E402
                           String)
 
@@ -474,6 +479,10 @@ class DrawerNode(Node):
                                  self._safety_diag, rel)
         # 任務狀態：給求解節點用的**量測與旗標**（不含命令）
         self.task_pub = self.create_publisher(String, '/coman/task_state', 10)
+        # 抽屜本體世界位姿：距離節點據此追蹤**會移動的**障礙物部件
+        #（櫃體不動，直接在障礙物設定裡給世界位姿，不需發布）
+        self.drawer_pose_pub = self.create_publisher(
+            PoseStamped, '/model/drawer_body/pose', 10)
         self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
                                  self._wb9, rel)
         self.create_subscription(Float64MultiArray, '/arm/joint_position_cmd',
@@ -537,7 +546,10 @@ def main():
     # 所以改成匯入器的 fix_base：world→根 的單一固定關節。
     # **這代表底盤被外部固定支撐**，不代表輪子靠地面摩擦能承受相同的操作負載；
     # 移動底盤的操作要另外驗證。
-    import_urdf(a.urdf, ROBOT, fix_base=True)
+    import_urdf(a.urdf, ROBOT, fix_base=not a.free_base)
+    if a.free_base:
+        print('[coman] **底盤自由度已開放**（無 world→根 固定關節）；'
+              '停放位姿改由 set_world_pose 設定', flush=True)
 
     stage = world.stage
     # root_joint 的 body0 是 /World/omni_bot 這個 Xform、錨點 localPos0 = 0，
@@ -822,6 +834,17 @@ def main():
     robot.get_articulation_controller().set_gains(kps=kp, kds=kd)
     robot.get_articulation_controller().apply_action(ArticulationAction(joint_positions=q))
     # 固定底座下不呼叫 set_world_pose：位姿由 Xform 與 root_joint 決定。
+    # 開放底盤時沒有 root_joint，必須明確設定世界位姿，否則初始位姿不確定。
+    if a.free_base:
+        _pq = q_yaw(PARK[2])
+        robot.set_world_pose(np.array([PARK[0], PARK[1], 0.0]),
+                             np.array([_pq[0], _pq[1], _pq[2], _pq[3]]))
+        _p_chk, _q_chk = robot.get_world_pose()
+        _err = float(np.hypot(_p_chk[0] - PARK[0], _p_chk[1] - PARK[1]))
+        print(f'[coman] 停放位姿讀回 ({_p_chk[0]:.4f}, {_p_chk[1]:.4f})，'
+              f'與指定差 {1000*_err:.3f} mm', flush=True)
+        if _err > 0.005:
+            print('[coman] **停放位姿讀回與指定不符，中止**'); return 12
     print('[drawer] view initialize ...', flush=True)
     # joint6 的反作用力列號要在暖機監看之前就決定
     j6_row_pre = None
@@ -1867,6 +1890,19 @@ def main():
                 'handle_quat': [float(v) for v in _hq],
                 'opening_m': float(opening)}, ensure_ascii=False)
             node.task_pub.publish(_msg)
+            _ps = PoseStamped()
+            _ps.header.stamp.sec = int(t)
+            _ps.header.stamp.nanosec = int((t - int(t)) * 1e9)
+            _ps.header.frame_id = 'world'
+            _dpw, _dqw = drawer_v.get_world_poses()
+            _ps.pose.position.x = float(_dpw[0][0])
+            _ps.pose.position.y = float(_dpw[0][1])
+            _ps.pose.position.z = float(_dpw[0][2])
+            _ps.pose.orientation.w = float(_dqw[0][0])
+            _ps.pose.orientation.x = float(_dqw[0][1])
+            _ps.pose.orientation.y = float(_dqw[0][2])
+            _ps.pose.orientation.z = float(_dqw[0][3])
+            node.drawer_pose_pub.publish(_ps)
             machine_log.append([
                 int(pose_src.physics_step_id()), round(t, 4), machine.phase,
                 bool(_fl.cmd_fresh), bool(_fl.endpoint_recv_ok),
@@ -1880,6 +1916,30 @@ def main():
                 (None if _safety_fresh is None else bool(_safety_fresh)),
                 (round(_diag_age, 4) if np.isfinite(_diag_age) else None),
                 round(_age9, 4) if np.isfinite(_age9) else None])
+
+        # --- 協同案例：連接由**狀態機交接通過**觸發（無軌跡事件） ---
+        if (a.attach_on_handover and machine is not None and not coupled
+                and machine_flags_last is not None
+                and machine_flags_last.handover_pass and _prec.valid):
+            _ps_at = pose_src.physics_step_id()
+            _af = None
+            if GRASP_MODEL == 'fixed_attachment':
+                _af = attach()
+            coupled = True
+            couple_link.mark_attached(_ps_at, t)
+            hs_attach_step = _ps_at
+            events.append({'event': 'engage_by_handover', 'sim_t': t,
+                           'physics_step_id': _ps_at,
+                           'attach_frames': _af,
+                           'margin_m': round(machine.margin(
+                               _prec.relative[:3, 3],
+                               _prec.relative[:3, :3]
+                               @ pose_reader.handle.bar_axis_local), 6),
+                           'insertion_dev_m': round(machine.insertion_dev(
+                               _prec.relative[:3, 3]), 6)})
+            pose_reader.mark_attached(_prec)
+            print(f'[coman] **交接通過 → 建立連接** @ step {_ps_at} sim {t:.3f}',
+                  flush=True)
 
         # --- 停止條件 ---
         # 手指接觸中止（friction 版才啟用）：判準是**每一指各自**的接觸力模長，
@@ -2150,7 +2210,8 @@ def main():
             'note': ('**不計為正式操作成果**。命令序列與完整版逐點相同，'
                      '只是到指定開度提前收尾，非把軌跡壓縮到該行程')},
         'base_fixation': {
-            'mode': 'importer_fix_base',
+            'mode': ('free_base' if a.free_base else 'importer_fix_base'),
+            'free_base': bool(a.free_base),
             'root_fixed_joints': _root_fixed,
             'placed_by': 'Xform transform on ' + ROBOT,
             'per_step_base_override': False,

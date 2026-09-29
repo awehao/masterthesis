@@ -1,0 +1,67 @@
+# 20 mm 協同操作首測的**補充規格 S1**（v1 門檻不動，另存不覆寫）
+#
+# v1（已凍結）**原地不改**：本檔只補「配對避碰規則」與「本趟實際使用的判定器版本」。
+# 任何門檻若與 v1 不同，一律在此明列並標示為新配置。
+schema: wb_coman_drawer20_supplement/1
+version: S1
+status: draft_pending_approval          # **待核准後才可執行**
+created: 2026-09-29
+references:
+  criteria_v1: wb_coman_drawer20_criteria_v1.yaml
+  criteria_v1_sha256_16: c9f303a8630d4d0e
+  pairs_table: coman_contact_avoid_pairs_v0_draft.yaml
+v1_thresholds_changed: false            # M1／H6／P1 一個都沒動
+
+# ---- 配對避碰：唯一的新配置 ----
+pair_avoidance:
+  mechanism: SafetyConfig.d0_by_link（逐**連桿**的 d0 覆寫；預設空 ⇒ 行為不變）
+  override:
+    uflite_finger1: 0.010
+    uflite_finger2: 0.010
+  rationale:
+    task_need: 設計抓取位姿下指尖距面板 27.9 mm（實測），一般規則 d0 = 50 mm 會擋死任務
+    error_budget_m:
+      robot_mesh_sampling: 0.002        # 網格取樣格距，可能高估距離
+      tracking_error: 0.0015            # 固定底座趟次 e_perp 上限
+      base_motion_allowance: 0.003      # 協同案例首測，底盤運動的未知量
+      sum: 0.0065
+    chosen: 0.010                       # 取整並留餘裕；名目 27.9 mm 尚餘 17.9 mm
+    not_derived_from: 歷史最小間距**不是**門檻的推導依據，只用來確認可行性
+  limitation:
+    level: 連桿層級，**不是嚴格的配對層級**
+    evidence: |
+      本場景中手指對櫃體的最小距離為 113.8 mm（實測），遠大於覆寫值，
+      故覆寫不會波及櫃體；但換場景必須重新確認。
+  consistency_required:
+    - 求解器與安全層**必須使用同一份 d0_by_link**
+    - 趟後由兩端的設定讀回核對，不一致即判該趟無效
+
+# ---- 時間口徑 ----
+time_semantics:
+  task_timing: 模擬時間（拉動時長、保持時長、狀態新鮮度）
+  process_watchdog: 牆鐘（僅用於程序逾時與熱監看）
+  rule: 兩者**不得混用**；求解節點須以 use_sim_time 取得模擬時間
+
+# ---- 本趟實際使用的判定器版本 ----
+checkers_sha256_16:
+  coman_handover_state.py: b1d8f290b4499fbc
+  coman_couple_link.py: 3f89f33edc5a7cd7
+  coman_pose_reader.py: 9581efb675d8d361
+  coman_pull_policy.py: 6e1492d2f95d5be7
+  coman_pull_target.py: 9199c0a1011d1d91
+  coman_pull_solver_node.py: 1375b26f4af824ac
+  isaac_coman_drawer_sim.py: 347972de5436b45d
+  wholebody_safety_filter.py: c996086159a8f320
+checker_change_note: >
+  coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更為上表值：
+  Frame 新增選用欄位 safety_fresh（三態）。**沒有任何門檻改變**，測試 53/53 通過。
+  wholebody_safety_filter.py 新增 d0_by_link（預設空 ⇒ 行為不變）。
+
+# ---- 本趟要分開回答的兩個問題 ----
+questions:
+  q1_completion: 20 mm 完整操作是否完成（接近→連接→拉開→保持→釋放→退出）
+  q2_coordination: >
+    操作期間是否真有底盤與手臂的協調運動，而不是只有底盤漂移。
+    判定用**實測運動**：底盤線速度 > 0.005 m/s 且任一關節速率 > 0.005 rad/s 的時間比例，
+    區間為首個非零命令到退出完成；**底盤位移本身不足以證明協調**。
+  not_allowed: 不得為了讓同動數字好看而調權重或硬塞底盤速度

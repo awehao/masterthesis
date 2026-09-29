@@ -80,7 +80,23 @@ def build(M, cl):
             self.pull_s = float(cl.pull_duration_s)
             self.retreat_m = float(cl.retreat_m)
             self.n_no_task = 0
-            self.task_recv_wall = None
+            self.task_recv_sim = None
+            # **與安全層同一份** d0 覆寫；不一致即上下游規則不同，趟次無效
+            _pd = {}
+            for _spec in [x for x in cl.pair_d0.split(',') if x.strip()]:
+                _lk, _v = _spec.split(':')
+                _fv = float(_v)
+                if not (_fv > 0.0):
+                    raise ValueError(f'pair_d0 值必須為正：{_spec!r}')
+                _pd[_lk] = _fv
+            self.cfg.d0_by_link = _pd
+            if _pd:
+                self.get_logger().warn(
+                    f'**求解端逐連桿 d0 覆寫**（一般值 {self.cfg.d0}）：{_pd}')
+            # **任務配時與新鮮度一律用模擬時間**；牆鐘只作程序監看（逾時／熱）
+            from rclpy.parameter import Parameter
+            self.set_parameters([Parameter('use_sim_time',
+                                           Parameter.Type.BOOL, True)])
             self.create_subscription(String, '/coman/task_state',
                                      self._task, 10)
             self.get_logger().info(
@@ -88,11 +104,14 @@ def build(M, cl):
                 f'拉動 {self.pull_s:.1f} s、退出 {self.retreat_m*1000:.0f} mm')
 
         # ---------------- 任務狀態 ----------------
+        def sim_now(self) -> float:
+            """**模擬時間**（use_sim_time ＋ 執行端發布的 /clock）。"""
+            return self.get_clock().now().nanoseconds * 1e-9
+
         def _task(self, m):
-            import time as _t
             try:
                 self.task = json.loads(m.data)
-                self.task_recv_wall = _t.monotonic()
+                self.task_recv_sim = self.sim_now()
             except Exception:           # noqa: BLE001
                 self.task = None
 
@@ -166,9 +185,11 @@ def build(M, cl):
                     self.stop()
                     print(f'  中止（guard）：{why}', flush=True)
                     return False
+                # **牆鐘逾時＝程序監看**，與任務配時分開；任務配時全部用模擬時間
                 if _t.monotonic() - t0 > a.timeout_s:
                     self.stop()
-                    print(f'  逾時 {a.timeout_s:.0f} s（相位 {pol.phase}）', flush=True)
+                    print(f'  程序逾時（牆鐘）{a.timeout_s:.0f} s，'
+                          f'相位 {pol.phase}', flush=True)
                     return False
                 if self.task is None:
                     self.n_no_task += 1
@@ -176,10 +197,9 @@ def build(M, cl):
                     self.exec.spin_once(timeout_sec=0.01)
                     continue
                 now_s = float(self.task.get('sim_t', 0.0))
-                # **狀態年齡以牆鐘計**（求解節點沒有自己的模擬時鐘）；
-                # RTF ≠ 1 時牆鐘與模擬時間不等價，這一點必須一併報告。
-                age = (_t.monotonic() - self.task_recv_wall
-                       if self.task_recv_wall is not None else float('inf'))
+                # 狀態年齡＝**模擬時間**之差（兩端同一時鐘源）
+                age = (self.sim_now() - float(self.task.get('sim_t', 0.0))
+                       if self.task_recv_sim is not None else float('inf'))
                 Tg = self.gripper_world()
                 if pol.phase == 'RETREAT' and retreat_ref is None and Tg is not None:
                     retreat_ref = (Tg[:3, 3].copy(), Tg[:3, :3] @ np.array([0, 0, 1.0]))
@@ -256,6 +276,9 @@ def main() -> int:
     ap.add_argument('--retreat-m', type=float, default=0.040)
     ap.add_argument('--tcp-offset-z', type=float, default=0.0147)
     ap.add_argument('--slide-axis', default='[0.0, -1.0, 0.0]')
+    ap.add_argument('--pair-d0', default='',
+                    help="逐連桿 d0 覆寫，格式 'link:value,link:value'；"
+                         '必須與安全層參數一致')
     ap.add_argument('--retreat-clear-m', type=float, default=0.0233,
                     help='退出完成的實測門檻（沿退出起始方向的有號位移）')
     ap.add_argument('--grasp-rot',

@@ -87,6 +87,10 @@ class DetectionPoint:
 class SafetyConfig:
     alpha: float = 2.0           # 1/s, barrier relaxation
     d0: float = 0.05             # m, standoff at zero speed
+    # 逐**連桿**的 d0 覆寫（預設空 ⇒ 行為完全不變）。
+    # 用於操作案例中必須近接的連桿；**這是連桿層級，不是嚴格的配對層級** ——
+    # 覆寫對該連桿的所有障礙物生效，採用前必須證明場景中其他障礙物遠離該連桿。
+    d0_by_link: dict = field(default_factory=dict)
     tau: float = 0.15            # s, sense + control + actuation latency
     # Fallback only. The real value is computed per point from the Jacobian
     # (see _brake_along), because the deceleration available at a link point is
@@ -308,7 +312,8 @@ def _rows_from_points(K, q, pts, cfg, v_in):
         v_app = max(0.0, float(row @ v_in))
         a_br = (max(_brake_along(row, cfg, len(row)), cfg.brake_floor)
                 if cfg.use_jacobian_brake else cfg.a_brake)
-        d_stop = (cfg.d0 + v_app * cfg.tau
+        d0_pt = cfg.d0_by_link.get(pt.frame, cfg.d0)
+        d_stop = (d0_pt + v_app * cfg.tau
                   + v_app * v_app / (2.0 * max(a_br, 1e-3)) + cfg.eps)
         A.append(row)
         owner.append(pi)

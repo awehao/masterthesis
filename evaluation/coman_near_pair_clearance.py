@@ -70,6 +70,8 @@ def main(run='drawer_220102_offset20', every=10, spacing=0.002) -> int:
     panel = [np.array(x, float) for x in spec['drawer']['body'][0][1:]]
     posts = {p[0]: [np.array(p[1], float), np.array(p[2], float)]
              for p in spec['drawer']['handle']['posts']}
+    cab = [[np.array(c[1], float), np.array(c[2], float)]
+           for c in spec['cabinet']]
     rows = d['log']
     ph = [str(r[ix['phase']]) for r in rows]
     res = {}
@@ -96,6 +98,13 @@ def main(run='drawer_220102_offset20', every=10, spacing=0.002) -> int:
             # **關鍵配對**：資產註解的 27.8 mm 指的是**指尖**對面板，不是殼
             'finger1↔front_panel': box_dist(P1, off + panel[0], panel[1]).min(),
             'finger2↔front_panel': box_dist(P2, off + panel[0], panel[1]).min(),
+            # 櫃體**不隨開度移動**：證明連桿層級 d0 覆寫在本場景不會波及它
+            'finger1↔cabinet': min(
+                box_dist(P1, np.array([unit[0], unit[1], 0.0]) + c[0], c[1]).min()
+                for c in cab),
+            'finger2↔cabinet': min(
+                box_dist(P2, np.array([unit[0], unit[1], 0.0]) + c[0], c[1]).min()
+                for c in cab),
         }
         p = ph[k]
         for name, v in pairs.items():
@@ -104,8 +113,9 @@ def main(run='drawer_220102_offset20', every=10, spacing=0.002) -> int:
     print(f'\n趟次 {run}（**固定底座、FK 重建**；歷史值＝可行性參考，非門檻依據）')
     order = ['approach', 'engage', 'postengage', 'pull', 'hold', 'release',
              'retreat']
-    for name in ('shell↔front_panel', 'finger1↔front_panel',
-                 'finger2↔front_panel', 'finger1↔post_l', 'finger2↔post_r'):
+    for name in ('finger1↔front_panel', 'finger2↔front_panel',
+                 'finger1↔cabinet', 'finger2↔cabinet',
+                 'shell↔front_panel', 'finger1↔post_l', 'finger2↔post_r'):
         print(f'  {name}')
         for p in order:
             v = res.get((name, p))

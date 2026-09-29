@@ -84,6 +84,9 @@ class WholeBodySafetyNode(Node):
         p('base_frame', 'base_link')
         p('control_rate', 20.0)
         p('max_cmd_age', 0.25)
+        # 逐**連桿**的 d0 覆寫，格式 'link:value'；預設空 ⇒ 行為完全不變。
+        # 用於操作案例中必須近接的連桿；**求解端必須使用同一份設定**。
+        p('pair_d0', [''])
         p('max_points_age', 0.30)
         p('max_joint_age', 0.30)
         # Base pose from TF. Separate from the joint age because it is a
@@ -122,6 +125,20 @@ class WholeBodySafetyNode(Node):
                                 eps=float(g('eps')),
                                 dt=1.0 / max(1.0, float(g('control_rate'))),
                                 fix_base=bool(g('fix_base')))
+        # 逐連桿 d0 覆寫：'link:value'。**只接受正值**，且記錄於啟動日誌，
+        # 讓趟後能核對求解端與本節點用的是同一份設定。
+        _pd = {}
+        for _spec in [x for x in g('pair_d0') if str(x).strip()]:
+            _lk, _v = str(_spec).split(':')
+            _fv = float(_v)
+            if not (_fv > 0.0):
+                raise ValueError(f'pair_d0 值必須為正：{_spec!r}')
+            _pd[_lk] = _fv
+        self.cfg.d0_by_link = _pd
+        if _pd:
+            self.get_logger().warn(
+                f'**逐連桿 d0 覆寫生效**（一般值 {self.cfg.d0}）：{_pd}；'
+                f'此為新配置，求解端必須使用同一份設定')
         # 速度框覆寫：只在參數為正時生效；一律**收緊**（取 min），不放寬。
         import numpy as _np
         _vm = _np.array(self.cfg.vmax, dtype=float).copy()
