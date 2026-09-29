@@ -58,7 +58,8 @@ from tf2_ros import Buffer, TransformListener
 from .arm_detection_points import _quat_to_rot
 from .wholebody_kinematics import DOF_NAMES, WholeBodyKinematics
 from .wholebody_safety_filter import (STATUS_NODATA, DetectionPoint,
-                                      SafetyConfig, filter_velocity)
+                                      SafetyConfig, filter_velocity,
+                                      detection_point_from_row)
 
 ARM_JOINTS = [f'joint{i}' for i in range(1, 7)]
 PC_FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded']
@@ -259,6 +260,15 @@ class WholeBodySafetyNode(Node):
                                  self._on_obs_names, _lat)
         self.pub = self.create_publisher(Float64MultiArray, '~/cmd_out', 10)
         self.diag = self.create_publisher(Float32MultiArray, '~/diag', 10)
+        # **命令來源 meta 的轉發**：本節點會改寫命令值，因此下游無法用值配對到
+        # 求解端。這裡以**收到的輸入值**配對上游 meta，再以**本節點輸出的值**
+        # 為鍵重新發布，附上本節點的處理耗時。配不到就明載 seq = −1、
+        # 來源時間 NaN —— **不以收件時間冒稱來源時間**。
+        self._src_meta = []          # [(seq, src_sim_t, solve_ms, v9…)]
+        self.meta_out = self.create_publisher(Float64MultiArray,
+                                             '~/cmd_meta', 10)
+        self.create_subscription(Float64MultiArray, '/coman/cmd_meta',
+                                 self._on_src_meta, 20)
         # Which barrier rows bound this cycle, and by how much. The diagnostic
         # above carries counts; a count cannot tell a visualiser or a snapshot
         # WHICH sample on WHICH link did the constraining, and that is the one
@@ -384,6 +394,8 @@ class WholeBodySafetyNode(Node):
         return np.array([tr.x, tr.y, float(np.arctan2(R[1, 0], R[0, 0]))])
 
     def _tick(self) -> None:
+        import time as _pt
+        self._tick_wall0 = _pt.perf_counter()
         self._cycle += 1
         now = self._now()
         out = np.zeros(9)
@@ -493,6 +505,19 @@ class WholeBodySafetyNode(Node):
         m = Float64MultiArray()
         m.data = [float(v) for v in out]
         self.pub.publish(m)
+        # **來源 meta 的重新鍵入**：以本節點收到的輸入值配對上游，
+        # 再以輸出值為鍵發布。配不到就明載未配對，不冒稱來源時間。
+        import time as _pt2
+        _node_ms = (_pt2.perf_counter() - getattr(self, '_tick_wall0',
+                                                 _pt2.perf_counter())) * 1e3
+        _src = self._pair_src(self.cmd) if self.cmd is not None else None
+        _mm = Float64MultiArray()
+        _mm.data = ([float(_src[0]) if _src else -1.0,
+                     float(_src[1]) if _src else float('nan'),
+                     float(_src[2]) if _src else float('nan'),
+                     float(_node_ms)] + [float(v) for v in out])
+        self.meta_out.publish(_mm)
+        self._node_ms_last = _node_ms
 
         d = Float32MultiArray()
         #  0 cycle 1 reason 2 n_rows 3 n_active 4 resid_before 5 resid_after
@@ -511,7 +536,10 @@ class WholeBodySafetyNode(Node):
                   1.0 if getattr(res, 'safety_override', False) else 0.0,
                   float((self._dt_prev or 0.0) * 1e3),
                   1.0 if self._v_prev2 is not None else 0.0,
-                  float(self._tf_age)]
+                  float(self._tf_age),
+                  # 18 本節點**整個回呼**的耗時（不只投影），19 是否配對到來源
+                  float(getattr(self, '_node_ms_last', float('nan'))),
+                  1.0 if _src else 0.0]
         self.diag.publish(d)
 
         bm = Float32MultiArray()
@@ -565,30 +593,13 @@ class WholeBodySafetyNode(Node):
             if st == 0:
                 mind = min(mind, dd)
             if wide:
-                li = int(row[10])
-                if li < 0 or li >= len(self.link_names):
+                # **與求解端共用同一份解析**（v_obs／v_obs_state／d_lb 一併帶入）
+                _pt = detection_point_from_row(row, self.link_names,
+                                               self.obs_names, status=st)
+                if _pt is None:
                     self._n_nodata += 1
                     continue
-                _oi = int(row[15]) if len(row) > 15 else -1
-                _on = (self.obs_names[_oi]
-                       if 0 <= _oi < len(self.obs_names) else None)
-                # 障礙物表面點速度。**舊寬度的雲不帶這四欄** ⇒ 視為未知，
-                # 不當成零速（`VOBS_UNKNOWN`），由濾波器取最壞接近並套上限。
-                if len(row) > 19:
-                    _vo = np.array(row[16:19], dtype=float)
-                    _vst = int(row[19])
-                else:
-                    _vo, _vst = None, 0
-                # 認證距離下界：**只在有效旗標為真時採用**。無旗標的舊寬度雲
-                # 一律 None ⇒ 走既有的 d − rho，不會誤用 0.0 當成下界。
-                _dlb = (float(row[20]) if len(row) > 21 and row[21] >= 0.5
-                        else None)
-                pts.append(DetectionPoint(
-                    self.link_names[li], np.array([x, y, z]), nvec, float(dd),
-                    st, float(max(age, 0.0)), occ >= 0.5,
-                    offset=np.array(row[11:14], dtype=float),
-                    rho=float(row[14]), obs=_on, v_obs=_vo, v_obs_state=_vst,
-                    d_lb=_dlb))
+                pts.append(_pt)
             else:
                 pts.append(DetectionPoint(
                     FRAMES[i], np.array([x, y, z]), nvec, float(dd), st,

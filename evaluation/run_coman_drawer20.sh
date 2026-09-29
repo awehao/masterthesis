@@ -149,6 +149,8 @@ spawn safety ros2 run ammr_wholebody_mpc wholebody_safety --ros-args \
   -p pair_gap:="[$(echo "$PAIR_GAP" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
   -p contact_pairs:="[$(echo "$CONTACT_PAIRS" | sed 's/,/","/g; s/^/"/; s/$/"/')]"
 spawn adapter python3 -u evaluation/arm_vel_adapter.py --consumer-node /isaac_drawer_sim
+# **診斷錄製**（O4）：各節點處理時間、求解器耗時與命令 meta **分開落盤**
+spawn diagrec python3 -u evaluation/coman_diag_record.py --out "$DIR/diag_record.json"
 sleep 5
 
 say "[5/6] 起求解節點（接近→連接→拉開→保持→釋放→退出，一趟走完）"

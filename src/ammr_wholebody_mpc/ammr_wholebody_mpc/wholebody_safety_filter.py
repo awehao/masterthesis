@@ -337,6 +337,41 @@ VOBS_STATIC = 1      # 已明確設定為靜態的物件 —— 零速度可用
 VOBS_OK = 2          # 動態物件，速度新鮮可用
 
 
+def detection_point_from_row(row, link_names, obs_names, status=None):
+    """一列距離雲 → DetectionPoint。**求解端與安全層共用同一份解析。**
+
+    為什麼要共用：求解端先前只取到 `obs`，沒有取 `v_obs`／`v_obs_state`／`d_lb`，
+    於是**安全層用新模型、求解器卻把障礙物當靜態並用舊的 d − rho**。
+    十五組間距相同不代表兩端約束相同 —— 約束由整列欄位決定，不只由間距決定。
+
+    欄位缺少時的處理與安全層一致：沒有速度四欄 ⇒ `VOBS_UNKNOWN`（**不當成零速**）；
+    沒有有效旗標 ⇒ `d_lb = None`（走既有 d − rho，不把 0.0 誤當下界）。
+    `status` 可覆寫（例如整份資料過期時一律降級），None 表示照列上的值。
+    連桿索引越界回傳 None。
+    """
+    n = len(row)
+    x, y, z, nx, ny, nz, dd, st, age, occ = (float(v) for v in row[:10])
+    st = int(st if status is None else status)
+    nvec = np.array([nx, ny, nz], dtype=float)
+    nn = float(np.linalg.norm(nvec))
+    nvec = np.array([1.0, 0.0, 0.0]) if nn < 1e-6 else nvec / nn
+    li = int(row[10])
+    if li < 0 or li >= len(link_names):
+        return None
+    oi = int(row[15]) if n > 15 else -1
+    on = obs_names[oi] if 0 <= oi < len(obs_names) else None
+    if n > 19:
+        vo, vst = np.array(row[16:19], dtype=float), int(row[19])
+    else:
+        vo, vst = None, VOBS_UNKNOWN
+    dlb = float(row[20]) if n > 21 and float(row[21]) >= 0.5 else None
+    return DetectionPoint(link_names[li], np.array([x, y, z]), nvec, dd, st,
+                          max(age, 0.0), occ >= 0.5,
+                          offset=np.array(row[11:14], dtype=float),
+                          rho=float(row[14]), obs=on, v_obs=vo,
+                          v_obs_state=vst, d_lb=dlb)
+
+
 def _rows_from_points(K, q, pts, cfg, v_in):
     """Barrier rows A v <= b, plus the per-row bookkeeping.
 

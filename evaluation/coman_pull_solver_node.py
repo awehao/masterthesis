@@ -126,6 +126,11 @@ def build(M, cl):
                                      self._obs_names, _LATCH)
             self.phase_pub = self.create_publisher(String,
                                                    '/coman/contact_phase', 10)
+            # 命令的來源序號／來源時間／求解耗時（配對鍵＝該筆命令的九個值）
+            from std_msgs.msg import Float64MultiArray as _F64init
+            self.cmd_seq = 0
+            self.meta_pub = self.create_publisher(_F64init,
+                                                  '/coman/cmd_meta', 10)
             if _pd or _pg or _cp:
                 self.get_logger().warn(
                     f'**求解端局部安全參數配置**（一般 d0 {self.cfg.d0}、'
@@ -156,23 +161,18 @@ def build(M, cl):
                 _joint_limit_rows, _rows_from_points)
             if self.K is None or self.rows is None or not self.link_names:
                 raise RuntimeError('QP: 缺運動學或距離資料')
+            # **與安全層共用同一份解析**：同一份 22 欄訊息、同一狀態與相位。
+            # 先前這裡只帶 obs，漏掉 v_obs／v_obs_state／d_lb，於是求解端
+            # 把障礙物當靜態、又用舊的 d − rho —— 兩端約束並不相同。
+            from ammr_wholebody_mpc.wholebody_safety_filter import (
+                detection_point_from_row as _dpfr)
             pts = []
             for r in self.rows:
                 if r[7] != _OK:
                     continue
-                li = int(r[10])
-                if li >= len(self.link_names):
-                    continue
-                oi = int(r[15]) if len(r) > 15 else -1
-                pts.append(_DP(frame=self.link_names[li],
-                               p=np.asarray(r[0:3], float),
-                               n=np.asarray(r[3:6], float), d=float(r[6]),
-                               status=int(r[7]), age=float(r[8]),
-                               occluded=bool(r[9] >= 0.5),
-                               offset=np.asarray(r[11:14], float),
-                               rho=float(r[14]),
-                               obs=(self.obs_names[oi]
-                                    if 0 <= oi < len(self.obs_names) else None)))
+                _pt = _dpfr(r, self.link_names, self.obs_names)
+                if _pt is not None:
+                    pts.append(_pt)
             if not pts:
                 raise RuntimeError('QP: 沒有可用的距離列')
             Ab, bb, cap, _ = _rows_from_points(self.K, q, pts, self.cfg, v_lin)
@@ -206,6 +206,15 @@ def build(M, cl):
             return homog(np.array(t['gripper_pos'], float),
                          quat_R(t['gripper_quat']))
 
+        # ---------------- 退出方向：**單一定義** ----------------
+        # 目標、參考起點與有號位移判定**一律用這一個函式**。
+        # 向外方向在此夾爪座標系是 **−z**：既有趟次實測，退出段沿起始 +z
+        # 的投影是 −38.96 mm，而橫桿在起始 +z 側 +69.05 mm
+        # ⇒ 離開橫桿即 −z。不以絕對值掩蓋方向。
+        @staticmethod
+        def retreat_axis_world(T):
+            return -(T[:3, :3] @ np.array([0.0, 0.0, 1.0]))
+
         # ---------------- 目標 ----------------
         def approach_target(self):
             """接近段：由**把手當下位姿**與設計抓取關係反推夾爪目標。"""
@@ -229,8 +238,8 @@ def build(M, cl):
                 return self.pull.gripper_target(self.t_pull0 + self.pull_s)
             if self.phase == 'RETREAT':
                 T = self.pull.gripper_target(self.t_pull0 + self.pull_s).copy()
-                T[:3, 3] = T[:3, 3] + T[:3, :3] @ np.array(
-                    [0.0, 0.0, -self.retreat_m])
+                # 與判定同一個軸（見 retreat_axis_world）
+                T[:3, 3] = T[:3, 3] + self.retreat_m * self.retreat_axis_world(T)
                 return T
             return None
 
@@ -280,7 +289,9 @@ def build(M, cl):
                        if self.task_recv_sim is not None else float('inf'))
                 Tg = self.gripper_world()
                 if pol.phase == 'RETREAT' and retreat_ref is None and Tg is not None:
-                    retreat_ref = (Tg[:3, 3].copy(), Tg[:3, :3] @ np.array([0, 0, 1.0]))
+                    # 起點與軸都在**退出開始當下**固定；之後轉動工具不改變判讀
+                    retreat_ref = (Tg[:3, 3].copy(),
+                                   self.retreat_axis_world(Tg))
                 r_signed = (float((Tg[:3, 3] - retreat_ref[0]) @ retreat_ref[1])
                             if (retreat_ref is not None and Tg is not None) else 0.0)
                 st = TaskState(
@@ -321,20 +332,33 @@ def build(M, cl):
                     self.stop()
                     self.exec.spin_once(timeout_sec=0.01)
                     continue
+                _t_solve0 = _t.perf_counter()
                 try:
                     v, T, ep, er = super().solve(tgt)
                 except RuntimeError as exc:
                     self.stop()
                     print(f'  中止（fail closed）：{exc}', flush=True)
                     return False
+                _solve_ms = (_t.perf_counter() - _t_solve0) * 1e3
                 self.ep_last, self.er_last = ep, er
                 m = _F64()
                 m.data = [float(x) for x in v]
                 self.pub.publish(m)
+                # **命令的來源序號與來源模擬時間**，另一條訊息帶出去。
+                # 命令本身的九個數值沒有序號與時間戳，而 E1 命令鏈是凍結檔案
+                # （長度不符即整筆拒收），因此**不改命令訊息**，改以旁路發布，
+                # 並附上這九個值作為配對鍵（adapter 只旋轉底盤三分量，
+                # 手臂六分量原樣通過，下游可據此配對）。
+                self.cmd_seq += 1
+                _mm = _F64()
+                _mm.data = ([float(self.cmd_seq), float(now_s),
+                             float(_solve_ms)] + [float(x) for x in v])
+                self.meta_pub.publish(_mm)
                 self.v_prev = v.copy()
                 v_last = np.asarray(v, float)
                 self.log.append(dict(t=now_s, phase=pol.phase, ep=float(ep),
-                                     er=float(er),
+                                     er=float(er), seq=int(self.cmd_seq),
+                                     solve_ms=round(_solve_ms, 4),
                                      cmd=[float(x) for x in v]))
                 slot += 1
                 target = t0 + slot * period

@@ -475,8 +475,17 @@ class DrawerNode(Node):
         self.sim_t = 0.0
         self.safety_diag = None     # (sim_t_收到, reason)
         self.safety_diag_n = 0
+        self.safety_diag_log = []   # [sim_t, reason, filter_ms, node_ms, paired, n_rows]
+        self.dist_diag_log = []     # [sim_t, n_rows, cycle_ms, dup_dropped, …]
+        self.cmd_meta = []          # 安全層轉發的來源 meta
+        self.e2e_log = []           # [step, apply_sim_t, seq, src_sim_t, age_s, …]
         self.create_subscription(Float32MultiArray, '/wholebody_safety/diag',
                                  self._safety_diag, rel)
+        self.create_subscription(Float32MultiArray, '/arm_link_distance/diag',
+                                 self._dist_diag, rel)
+        from std_msgs.msg import Float64MultiArray as _F64m
+        self.create_subscription(_F64m, '/wholebody_safety/cmd_meta',
+                                 self._cmd_meta, rel)
         # 任務狀態：給求解節點用的**量測與旗標**（不含命令）
         self.task_pub = self.create_publisher(String, '/coman/task_state', 10)
         # 抽屜本體世界位姿：距離節點據此追蹤**會移動的**障礙物部件
@@ -508,6 +517,48 @@ class DrawerNode(Node):
         if len(m.data) > 1:
             self.safety_diag_n += 1
             self.safety_diag = (float(self.sim_t), float(m.data[1]))
+            # **完整保存**，不只接收時間與 reason：
+            #   9 濾波投影耗時、18 安全節點整個回呼耗時、19 是否配對到來源
+            d = [float(x) for x in m.data]
+            self.safety_diag_log.append(
+                [float(self.sim_t), d[1],
+                 d[9] if len(d) > 9 else float('nan'),
+                 d[18] if len(d) > 18 else float('nan'),
+                 d[19] if len(d) > 19 else float('nan'),
+                 d[2] if len(d) > 2 else float('nan')])
+
+    def _dist_diag(self, m):
+        """距離節點的診斷：**整個節點週期**耗時（第 8 欄）與重複列移除數。"""
+        d = [float(x) for x in m.data]
+        self.dist_diag_log.append(
+            [float(self.sim_t), d[0] if d else float('nan'),
+             d[8] if len(d) > 8 else float('nan'),
+             d[9] if len(d) > 9 else float('nan')]
+            + ([d[10], d[11], d[12], d[13]] if len(d) > 13 else []))
+
+    def _cmd_meta(self, m):
+        """安全層轉發的命令 meta。以**手臂六分量**為配對鍵（adapter 只旋轉
+        底盤三分量）。存起來等命令實際套用時配對。"""
+        d = [float(x) for x in m.data]
+        if len(d) < 13:
+            return
+        self.cmd_meta.append(d)
+        if len(self.cmd_meta) > 64:
+            self.cmd_meta = self.cmd_meta[-64:]
+
+    def pair_cmd_meta(self, v9):
+        """**唯一相符才配對**；配不到回 None，由呼叫端記為未配對。
+
+        **不以「距上次收件的時間」冒稱端到端年齡** —— 端到端年齡必須是
+        來源發布時間到實際套用時間之差，需要可配對的來源時間／序號。
+        """
+        key = [round(float(x), 12) for x in list(v9)[3:9]]
+        hits = [d for d in self.cmd_meta
+                if [round(x, 12) for x in d[4 + 3:4 + 9]] == key]
+        if len(hits) != 1:
+            return None
+        self.cmd_meta.remove(hits[0])
+        return hits[0]
 
     def _wb9(self, m):
         """9 維速度命令：**只轉交命令鏈**，新鮮度與拒收都由鏈內判定。"""
@@ -1533,6 +1584,20 @@ def main():
                 coman_applied_log.append(
                     [int(pose_src.physics_step_id()), round(t, 4)]
                     + [round(v, 9) for v in last_applied_q] + ['wb9'])
+                # **端到端年齡**：來源發布時間 → 實際套用時間。
+                # 只有配對成功才記數值；配不到就記 unpaired，
+                # **不以距上次收件的時間冒稱端到端年齡**。
+                _snapv = getattr(chain9, 'snap', None)
+                _mt = (node.pair_cmd_meta(_snapv.v)
+                       if _snapv is not None else None)
+                node.e2e_log.append(
+                    [int(pose_src.physics_step_id()), round(t, 5),
+                     int(_mt[0]) if _mt else -1,
+                     round(_mt[1], 5) if _mt else float('nan'),
+                     round(t - _mt[1], 5) if _mt else float('nan'),
+                     round(_mt[2], 4) if _mt else float('nan'),
+                     round(_mt[3], 4) if _mt else float('nan'),
+                     'paired' if _mt else 'unpaired'])
         elif snap is not None:
             applied_seq, _, q_cmd = snap
             tgt = robot.get_joint_positions()
@@ -2266,6 +2331,22 @@ def main():
         'coman_joint_err_log': coman_jerr_log,
         'coman_joint_err_note': ('dq = q_measured − q_commanded，逐關節。'
                                  '**不作為間距預算，未歸給 v·tau。**'),
+        # ---- O4 要求的計時：**各節點分開記錄，不相加當作端到端驗收** ----
+        'coman_e2e_cols': ['physics_step_id', 'apply_sim_t', 'src_seq',
+                           'src_sim_t', 'e2e_age_s', 'solve_ms',
+                           'safety_node_ms', 'pairing'],
+        'coman_e2e_log': node.e2e_log,
+        'coman_e2e_note': ('e2e_age_s = 實際套用時間 − 求解端發布時間，'
+                           '**僅在以命令值唯一配對成功時**才有數值；'
+                           'pairing = unpaired 者為 NaN。'
+                           '**接收端距上次收件的時間不是端到端年齡。**'),
+        'coman_safety_diag_cols': ['sim_t', 'reason', 'filter_ms',
+                                   'safety_node_ms', 'paired', 'n_rows'],
+        'coman_safety_diag_log': node.safety_diag_log,
+        'coman_dist_diag_cols': ['sim_t', 'n_rows', 'node_cycle_ms',
+                                 'dup_dropped', 'tight_lb', 'tight_ub',
+                                 'tight_elapsed_s', 'tight_tol_met'],
+        'coman_dist_diag_log': node.dist_diag_log,
         'coman_post_stop_cols': ['physics_step_id', 'sim_time', 'opening',
                                  'drawer_vy', 'f_norm',
                                  'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'tag'],

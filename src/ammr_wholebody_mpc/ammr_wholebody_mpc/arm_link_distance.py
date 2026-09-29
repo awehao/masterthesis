@@ -598,6 +598,7 @@ class ArmLinkDistance(Node):
         return any((i + k) % n in idx for k in (-1, 0, 1))
 
     def _tick(self) -> None:
+        _c0 = time.perf_counter()
         now = self.get_clock().now().nanoseconds * 1e-9
         T_rl = self._tf(self.report_frame, self.lidar_frame)
         rows = []
@@ -623,7 +624,11 @@ class ArmLinkDistance(Node):
         d.data = [float(len(rows)), float(n_ok), float(n_unk), float(n_stale),
                   float(n_nodata), float(worst_age),
                   float(min(finite)) if finite else -1.0,
-                  float(getattr(self, '_dropped', 0))]
+                  float(getattr(self, '_dropped', 0)),
+                  # 8 **整個節點週期**的耗時（含 TF、FK、距離、下界、列建構、
+                  #   發布），不只 G2；9 本週期移除的完全重複列數
+                  float(getattr(self, '_cycle_ms', float('nan'))),
+                  float(getattr(self, '_dup_dropped', 0))]
         #  8.. 每個 tight 配對的 lb、ub、耗時、是否達容差（逐週期發布，
         #      讓趟後能核對「下界真的每步重算」而不是只寫在某份紀錄裡）
         for _lk, _ob in self._tight:
@@ -631,6 +636,8 @@ class ArmLinkDistance(Node):
             d.data += ([float(_r['lb']), float(_r['ub']), float(_r['elapsed_s']),
                         1.0 if _r['tol_met'] else 0.0]
                        if _r else [float('nan')] * 3 + [0.0])
+        self._cycle_ms = (time.perf_counter() - _c0) * 1e3
+        d.data[8] = float(self._cycle_ms)
         self.diag.publish(d)
 
 
