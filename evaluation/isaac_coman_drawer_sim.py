@@ -459,6 +459,10 @@ class DrawerNode(Node):
         self.phase = 'idle'
         self.arm_cb_n = self.arm_cb_rej = 0
         self.g_cb_n = self.p_cb_n = 0
+        self.wb9_cb = None          # 9 維命令回呼（由主程式在 wb9 模式掛上）
+        self.wb9_n = 0
+        self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
+                                 self._wb9, rel)
         self.create_subscription(Float64MultiArray, '/arm/joint_position_cmd',
                                  self._cmd, 10)
         self.create_subscription(Float64MultiArray, '/manip/gripper_cmd',
@@ -477,6 +481,12 @@ class DrawerNode(Node):
         if len(m.data) != 3:
             return
         self.fsnap = (int(m.data[0]), float(m.data[2]))
+
+    def _wb9(self, m):
+        """9 維速度命令：**只轉交命令鏈**，新鮮度與拒收都由鏈內判定。"""
+        self.wb9_n += 1
+        if self.wb9_cb is not None:
+            self.wb9_cb(list(m.data))
 
     def _phase(self, m):
         self.p_cb_n += 1
@@ -1143,6 +1153,7 @@ def main():
                             joint_lower=tuple(LITE6_SAFE.lower),
                             joint_upper=tuple(LITE6_SAFE.upper),
                             mode='sync', wheel_cfg=_wcfg)
+        node.wb9_cb = lambda v: chain9.receive(v, float(world.current_time))
         print(f'[coman] 9 維命令鏈已建立（E2，max_cmd_age_s={a.max_cmd_age_s}）；'
               f'底盤 3 維與手臂 6 維**同一物理步**套用', flush=True)
 
