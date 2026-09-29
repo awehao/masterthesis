@@ -51,6 +51,7 @@ verified depth source before any claim about unknown 3D environments.
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -62,7 +63,7 @@ from rclpy.node import Node
 from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
                        QoSReliabilityPolicy)
 from sensor_msgs.msg import PointCloud2, PointField
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, String
 from tf2_ros import Buffer, TransformListener
 
 from .arm_detection_points import (Obstacle, _closest_local, _inv, _iso,
@@ -99,8 +100,11 @@ BEST_EFFORT = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=1,
 # consumer in this package did -- gets a shape error, and a subscriber that
 # indexes rows by a fixed stride reads garbage. Both ends of this wire were
 # updated together; anything else reading it has to be updated too.
+# `obs` 是產生該列距離的**障礙物索引**（−1 表示無）。加在最後，
+# 既有欄位的名稱與位移不變；消費端一律由 point_step 取寬度，因此相容。
+# 索引對應的名稱由 ~/obstacle_names 發布（JSON 陣列，latched）。
 FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded',
-          'link', 'ox', 'oy', 'oz', 'rho']
+          'link', 'ox', 'oy', 'oz', 'rho', 'obs']
 
 
 
@@ -225,6 +229,14 @@ class ArmLinkDistance(Node):
         self.create_subscription(Float32MultiArray,
                                  '/scan_self_filter/occluded',
                                  self._on_occl, 10)
+        self._obs_index = {o.name: i for i, o in enumerate(self.obstacles)}
+        # 障礙物索引→名稱（latched）：下游據此做配對層級規則
+        from rclpy.qos import QoSProfile, DurabilityPolicy
+        _lat = QoSProfile(depth=1)
+        _lat.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.names_pub = self.create_publisher(String, '~/obstacle_names', _lat)
+        _nm = String(); _nm.data = json.dumps([o.name for o in self.obstacles])
+        self.names_pub.publish(_nm)
         self.pub = self.create_publisher(PointCloud2, '~/points', 10)
         self.diag = self.create_publisher(Float32MultiArray, '~/diag', 10)
 
@@ -355,13 +367,13 @@ class ArmLinkDistance(Node):
             T = self._tf(self.report_frame, fr)
             if T is None:
                 rows.append([0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 0.0]
-                            + [0.0, 0.0, 0.0, 0.0, 0.0])
+                            + [0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
                 n_nodata += 1
                 continue
             p = T[:3, 3]
 
-            best_d, best_v, best_age = math.inf, None, 0.0
-            for o in self.obstacles:
+            best_d, best_v, best_age, best_i = math.inf, None, 0.0, -1
+            for _oi, o in enumerate(self.obstacles):
                 if o.T_world_link is None:
                     continue
                 age = 0.0 if not o.model else now - self._stamp.get(o.model, 0.0)
@@ -371,13 +383,13 @@ class ArmLinkDistance(Node):
                 v = surf - p
                 dist = float(np.linalg.norm(v))
                 if dist < best_d:
-                    best_d, best_v, best_age = dist, v, age
+                    best_d, best_v, best_age, best_i = dist, v, age, _oi
 
             if best_v is None or best_d > self.max_range:
                 rows.append(list(p) + [0.0, 0.0, 0.0, self.max_range,
                                        STATUS_NODATA, -1.0,
                                        1.0 if T_rl is None else 0.0]
-                            + [0.0, 0.0, 0.0, 0.0, 0.0])
+                            + [0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
                 n_nodata += 1
                 continue
 
@@ -431,13 +443,13 @@ class ArmLinkDistance(Node):
         for li, name in enumerate(self.link_names):
             T = self._tf(self.report_frame, name)
             S = self.samples[name]
-            blank = [float(li), 0.0, 0.0, 0.0, float(S.rho)]
+            blank = [float(li), 0.0, 0.0, 0.0, float(S.rho), -1.0]
             if T is None or not live:
                 rows.append([0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 1.0] + blank)
                 n_nodata += 1
                 continue
             W = (S.points @ T[:3, :3].T) + T[:3, 3]
-            d, v, _ = obstacle_distances(W, live)
+            d, v, which = obstacle_distances(W, live)
             age = max((0.0 if not o.model else now - self._stamp.get(o.model, 0.0))
                       for o in live)
             worst_age = max(worst_age, age)
@@ -482,9 +494,13 @@ class ArmLinkDistance(Node):
                     n_ok += 1
                 else:
                     n_stale += 1
+                # **障礙物身分**：由 obstacle_distances 回傳的名稱轉成索引，
+                # 供下游做**配對層級**的規則（哪個連桿對哪個物件）。
                 rows.append(list(p_w) + list(n_hat)
                             + [float(d[k]), float(status), age, occ,
-                               float(li)] + list(S.points[k]) + [float(S.rho)])
+                               float(li)] + list(S.points[k])
+                            + [float(S.rho),
+                               float(self._obs_index.get(which[k], -1))])
         return rows, n_ok, n_unk, n_stale, n_nodata, worst_age
 
     def _publish(self, rows: list[list[float]]) -> None:

@@ -81,16 +81,22 @@ class DetectionPoint:
     occluded: bool = False
     offset: np.ndarray | None = None   # point on the link, in the link frame
     rho: float = 0.0                   # sampling covering radius, m
+    obs: str | None = None             # 產生此列的**障礙物名稱**（配對層級規則用）
 
 
 @dataclass
 class SafetyConfig:
     alpha: float = 2.0           # 1/s, barrier relaxation
     d0: float = 0.05             # m, standoff at zero speed
-    # 逐**連桿**的 d0 覆寫（預設空 ⇒ 行為完全不變）。
-    # 用於操作案例中必須近接的連桿；**這是連桿層級，不是嚴格的配對層級** ——
-    # 覆寫對該連桿的所有障礙物生效，採用前必須證明場景中其他障礙物遠離該連桿。
-    d0_by_link: dict = field(default_factory=dict)
+    # ---- 配對層級的例外（預設全空 ⇒ 行為完全不變）----
+    # 鍵一律為 '<link>|<obstacle>'：**哪個連桿對哪個物件**，不是整條連桿或整個物件。
+    #   d0_by_pair    只改該配對的**基礎間距 d0**；
+    #                 速度相關項（v·tau、v²/2a）**照常計入**，不取消。
+    #   contact_pairs 該配對在列出的**相位**中允許接觸 ⇒ 不產生屏障列；
+    #                 相位不符、或 phase 為 None（未知）時**一律照一般規則**。
+    d0_by_pair: dict = field(default_factory=dict)
+    contact_pairs: dict = field(default_factory=dict)
+    phase: str | None = None           # 當前相位；未知即不給任何例外
     tau: float = 0.15            # s, sense + control + actuation latency
     # Fallback only. The real value is computed per point from the Jacobian
     # (see _brake_along), because the deceleration available at a link point is
@@ -312,7 +318,14 @@ def _rows_from_points(K, q, pts, cfg, v_in):
         v_app = max(0.0, float(row @ v_in))
         a_br = (max(_brake_along(row, cfg, len(row)), cfg.brake_floor)
                 if cfg.use_jacobian_brake else cfg.a_brake)
-        d0_pt = cfg.d0_by_link.get(pt.frame, cfg.d0)
+        _key = f'{pt.frame}|{pt.obs}'
+        _ph_ok = cfg.contact_pairs.get(_key)
+        if _ph_ok and cfg.phase is not None and cfg.phase in _ph_ok:
+            # **設計接觸配對且在允許相位**：該配對不產生屏障列。
+            # 其他連桿對同一物件、以及本連桿對其他物件，**都不受影響**。
+            cfg.last_contact_skipped = getattr(cfg, 'last_contact_skipped', 0) + 1
+            continue
+        d0_pt = cfg.d0_by_pair.get(_key, cfg.d0)
         d_stop = (d0_pt + v_app * cfg.tau
                   + v_app * v_app / (2.0 * max(a_br, 1e-3)) + cfg.eps)
         A.append(row)

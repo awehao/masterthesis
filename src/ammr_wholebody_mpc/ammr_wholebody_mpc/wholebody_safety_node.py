@@ -84,9 +84,14 @@ class WholeBodySafetyNode(Node):
         p('base_frame', 'base_link')
         p('control_rate', 20.0)
         p('max_cmd_age', 0.25)
-        # 逐**連桿**的 d0 覆寫，格式 'link:value'；預設空 ⇒ 行為完全不變。
-        # 用於操作案例中必須近接的連桿；**求解端必須使用同一份設定**。
+        # **配對層級**例外（預設空 ⇒ 行為完全不變），求解端必須用同一份設定：
+        #   pair_d0       'link:obstacle:value'  只改該配對的基礎間距
+        #   contact_pairs 'link:obstacle:ph1|ph2' 該配對在列出相位允許接觸
+        #   contact_phase_topic 相位來源；**過期或未收到 ⇒ 無任何例外**
         p('pair_d0', [''])
+        p('contact_pairs', [''])
+        p('contact_phase_topic', '/coman/contact_phase')
+        p('contact_phase_max_age', 0.25)
         p('max_points_age', 0.30)
         p('max_joint_age', 0.30)
         # Base pose from TF. Separate from the joint age because it is a
@@ -129,15 +134,24 @@ class WholeBodySafetyNode(Node):
         # 讓趟後能核對求解端與本節點用的是同一份設定。
         _pd = {}
         for _spec in [x for x in g('pair_d0') if str(x).strip()]:
-            _lk, _v = str(_spec).split(':')
+            _lk, _ob, _v = str(_spec).split(':')
             _fv = float(_v)
             if not (_fv > 0.0):
                 raise ValueError(f'pair_d0 值必須為正：{_spec!r}')
-            _pd[_lk] = _fv
-        self.cfg.d0_by_link = _pd
-        if _pd:
+            _pd[f'{_lk}|{_ob}'] = _fv
+        self.cfg.d0_by_pair = _pd
+        _cp = {}
+        for _spec in [x for x in g('contact_pairs') if str(x).strip()]:
+            _lk, _ob, _phs = str(_spec).split(':')
+            _cp[f'{_lk}|{_ob}'] = [x for x in _phs.split('|') if x]
+        self.cfg.contact_pairs = _cp
+        self._phase_max_age = float(g('contact_phase_max_age'))
+        self._phase_stamp, self._phase_val = None, None
+        self.obs_names = []
+        if _pd or _cp:
             self.get_logger().warn(
-                f'**逐連桿 d0 覆寫生效**（一般值 {self.cfg.d0}）：{_pd}；'
+                f'**配對層級例外生效**（一般 d0 {self.cfg.d0}）：'
+                f'd0_by_pair={_pd}、contact_pairs={_cp}；'
                 f'此為新配置，求解端必須使用同一份設定')
         # 速度框覆寫：只在參數為正時生效；一律**收緊**（取 min），不放寬。
         import numpy as _np
@@ -221,6 +235,14 @@ class WholeBodySafetyNode(Node):
         self.create_subscription(PointCloud2, '/arm_link_distance/points',
                                  self._on_pts, 10)
         self.create_subscription(Float64MultiArray, '~/cmd_in', self._on_cmd, 10)
+        # 配對例外所需：相位來源與障礙物名稱對照
+        from rclpy.qos import QoSProfile, DurabilityPolicy
+        _lat = QoSProfile(depth=1)
+        _lat.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.create_subscription(String, str(g('contact_phase_topic')),
+                                 self._on_phase, 10)
+        self.create_subscription(String, '/arm_link_distance/obstacle_names',
+                                 self._on_obs_names, _lat)
         self.pub = self.create_publisher(Float64MultiArray, '~/cmd_out', 10)
         self.diag = self.create_publisher(Float32MultiArray, '~/diag', 10)
         # Which barrier rows bound this cycle, and by how much. The diagnostic
@@ -271,6 +293,16 @@ class WholeBodySafetyNode(Node):
             return
         self.q_arm = np.array([msg.position[idx[j]] for j in ARM_JOINTS])
         self.q_arm_t = self._now()
+
+    def _on_phase(self, msg) -> None:
+        self._phase_stamp, self._phase_val = self._now(), str(msg.data)
+
+    def _on_obs_names(self, msg) -> None:
+        import json as _json
+        try:
+            self.obs_names = list(_json.loads(msg.data))
+        except Exception:      # noqa: BLE001
+            self.obs_names = []
 
     def _on_pts(self, msg: PointCloud2) -> None:
         """Take the row width from the MESSAGE, not from a constant here.
@@ -405,6 +437,12 @@ class WholeBodySafetyNode(Node):
                 if self._v_prev is not None and self._v_prev2 is not None \
                         and self._dt_prev:
                     a_prev = (self._v_prev - self._v_prev2) / self._dt_prev
+                # **相位只在新鮮時採用**：過期或未收到 ⇒ phase=None ⇒ 無任何接觸例外
+                _pa = (self._now() - self._phase_stamp
+                       if self._phase_stamp is not None else float('inf'))
+                self.cfg.phase = (self._phase_val
+                                  if _pa <= self._phase_max_age else None)
+                self.cfg.last_contact_skipped = 0
                 r = filter_velocity(self.K, q, v_in, pts, self.cfg,
                                     v_prev=self._v_prev, a_prev=a_prev, dt=dt)
                 out = r.v
@@ -505,11 +543,14 @@ class WholeBodySafetyNode(Node):
                 if li < 0 or li >= len(self.link_names):
                     self._n_nodata += 1
                     continue
+                _oi = int(row[15]) if len(row) > 15 else -1
+                _on = (self.obs_names[_oi]
+                       if 0 <= _oi < len(self.obs_names) else None)
                 pts.append(DetectionPoint(
                     self.link_names[li], np.array([x, y, z]), nvec, float(dd),
                     st, float(max(age, 0.0)), occ >= 0.5,
                     offset=np.array(row[11:14], dtype=float),
-                    rho=float(row[14])))
+                    rho=float(row[14]), obs=_on))
             else:
                 pts.append(DetectionPoint(
                     FRAMES[i], np.array([x, y, z]), nvec, float(dd), st,

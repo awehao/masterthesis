@@ -62,7 +62,10 @@ def homog(p, R):
 
 
 def build(M, cl):
+    from rclpy.qos import DurabilityPolicy, QoSProfile
     from std_msgs.msg import String
+    _LATCH = QoSProfile(depth=1)
+    _LATCH.durability = DurabilityPolicy.TRANSIENT_LOCAL
 
     class PullSolver(M.WholeBody):
         """只換目標來源；約束集沿用父類別（**真實障礙物，不是空場景**）。"""
@@ -84,15 +87,25 @@ def build(M, cl):
             # **與安全層同一份** d0 覆寫；不一致即上下游規則不同，趟次無效
             _pd = {}
             for _spec in [x for x in cl.pair_d0.split(',') if x.strip()]:
-                _lk, _v = _spec.split(':')
+                _lk, _ob, _v = _spec.split(':')
                 _fv = float(_v)
                 if not (_fv > 0.0):
                     raise ValueError(f'pair_d0 值必須為正：{_spec!r}')
-                _pd[_lk] = _fv
-            self.cfg.d0_by_link = _pd
-            if _pd:
+                _pd[f'{_lk}|{_ob}'] = _fv
+            _cp = {}
+            for _spec in [x for x in cl.contact_pairs.split(',') if x.strip()]:
+                _lk, _ob, _phs = _spec.split(':')
+                _cp[f'{_lk}|{_ob}'] = [x for x in _phs.split('|') if x]
+            self.cfg.d0_by_pair, self.cfg.contact_pairs = _pd, _cp
+            self.obs_names = []
+            self.create_subscription(String, '/arm_link_distance/obstacle_names',
+                                     self._obs_names, _LATCH)
+            self.phase_pub = self.create_publisher(String,
+                                                   '/coman/contact_phase', 10)
+            if _pd or _cp:
                 self.get_logger().warn(
-                    f'**求解端逐連桿 d0 覆寫**（一般值 {self.cfg.d0}）：{_pd}')
+                    f'**求解端配對層級例外**（一般 d0 {self.cfg.d0}）：'
+                    f'd0_by_pair={_pd}、contact_pairs={_cp}')
             # **任務配時與新鮮度一律用模擬時間**；牆鐘只作程序監看（逾時／熱）
             from rclpy.parameter import Parameter
             self.set_parameters([Parameter('use_sim_time',
@@ -104,6 +117,45 @@ def build(M, cl):
                 f'拉動 {self.pull_s:.1f} s、退出 {self.retreat_m*1000:.0f} mm')
 
         # ---------------- 任務狀態 ----------------
+        def _obs_names(self, m):
+            try:
+                self.obs_names = list(json.loads(m.data))
+            except Exception:      # noqa: BLE001
+                self.obs_names = []
+
+        def _constraints(self, q, v_lin):
+            """沿用父類別的組裝，但**把障礙物名稱帶進 DetectionPoint**，
+            讓配對層級規則在求解端與安全層一致生效。"""
+            from ammr_wholebody_mpc.wholebody_safety_filter import (
+                STATUS_OK as _OK, DetectionPoint as _DP, _box_rows,
+                _joint_limit_rows, _rows_from_points)
+            if self.K is None or self.rows is None or not self.link_names:
+                raise RuntimeError('QP: 缺運動學或距離資料')
+            pts = []
+            for r in self.rows:
+                if r[7] != _OK:
+                    continue
+                li = int(r[10])
+                if li >= len(self.link_names):
+                    continue
+                oi = int(r[15]) if len(r) > 15 else -1
+                pts.append(_DP(frame=self.link_names[li],
+                               p=np.asarray(r[0:3], float),
+                               n=np.asarray(r[3:6], float), d=float(r[6]),
+                               status=int(r[7]), age=float(r[8]),
+                               occluded=bool(r[9] >= 0.5),
+                               offset=np.asarray(r[11:14], float),
+                               rho=float(r[14]),
+                               obs=(self.obs_names[oi]
+                                    if 0 <= oi < len(self.obs_names) else None)))
+            if not pts:
+                raise RuntimeError('QP: 沒有可用的距離列')
+            Ab, bb, cap, _ = _rows_from_points(self.K, q, pts, self.cfg, v_lin)
+            Aj, bj = _joint_limit_rows(self.K, q, self.cfg)
+            Ax, bx = _box_rows(self.cfg, self.n, cap,
+                               getattr(self, 'v_prev', None), self.cfg.dt)
+            return np.array(Ab + Aj + Ax), np.array(bb + bj + bx), len(Ab)
+
         def sim_now(self) -> float:
             """**模擬時間**（use_sim_time ＋ 執行端發布的 /clock）。"""
             return self.get_clock().now().nanoseconds * 1e-9
@@ -167,7 +219,8 @@ def build(M, cl):
             相位與結束條件一律交給 `PullTaskPolicy`（已離線測試 16 項）。
             """
             import time as _t
-            from std_msgs.msg import Float64MultiArray as _F64
+            from std_msgs.msg import (Float64MultiArray as _F64,
+                                       String as _Str)
             a = self.a
             self.base0 = self.base.copy()
             self.q_pref = np.array(a.posture, dtype=float)
@@ -218,6 +271,10 @@ def build(M, cl):
                     emergency=bool(self.task.get('emergency')))
                 prev_phase = pol.phase
                 dec = pol.step(st)
+                # **相位由求解端擁有並發布**：安全層訂閱同一份，確保上下游一致
+                _pm = _Str(); _pm.data = dec['phase']
+                self.phase_pub.publish(_pm)
+                self.cfg.phase = dec['phase']
                 if prev_phase == 'ENGAGE_WAIT' and dec['phase'] == 'PULL':
                     self.on_attached(now_s)
                 self.phase = dec['phase']
@@ -276,6 +333,8 @@ def main() -> int:
     ap.add_argument('--retreat-m', type=float, default=0.040)
     ap.add_argument('--tcp-offset-z', type=float, default=0.0147)
     ap.add_argument('--slide-axis', default='[0.0, -1.0, 0.0]')
+    ap.add_argument('--contact-pairs', default='',
+                    help="接觸例外，格式 'link:obstacle:ph1|ph2'；必須與安全層一致")
     ap.add_argument('--pair-d0', default='',
                     help="逐連桿 d0 覆寫，格式 'link:value,link:value'；"
                          '必須與安全層參數一致')
