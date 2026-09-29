@@ -6,6 +6,8 @@
 # 成果的程式版本），**維持不動**。本支只跑協同版 isaac_coman_drawer_sim.py。
 #
 # 本流程一律為**診斷**：--handshake-test 會把趟次標記 is_diagnostic。
+# RECORD=<目錄以外的任意非空值> 開啟模擬器內相機錄影（沿用既有預設鏡位）。
+# 錄影會吃掉即時餘裕，可能改變 RTF；畫面內不加任何文字。
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; WS="$(dirname "$HERE")"
 cd "$WS"
@@ -51,6 +53,12 @@ setsid "$ISAAC_PY" -u evaluation/isaac_coman_drawer_sim.py --case "$CASE" \
     --handshake-stop-after-confirm-steps "$STOP_AFTER" \
     ${INJECT_FAULT:+--inject-fault "$INJECT_FAULT"} \
     ${INJECT_FAULT_STEP:+--inject-fault-step "$INJECT_FAULT_STEP"} \
+    ${RECORD:+--record-frames "$DIR/frames"} \
+    ${RECORD_FPS:+--record-fps "$RECORD_FPS"} \
+    ${RECORD_RES:+--record-res "$RECORD_RES"} \
+    ${RECORD_FOCAL:+--record-focal "$RECORD_FOCAL"} \
+    ${RECORD_EYE:+--record-eye "$RECORD_EYE"} \
+    ${RECORD_AT:+--record-at "$RECORD_AT"} \
     >> "$LOG" 2>&1 < /dev/null &
 ISAAC=$!; PIDS+=($ISAAC); say "  Isaac PID=$ISAAC"
 
