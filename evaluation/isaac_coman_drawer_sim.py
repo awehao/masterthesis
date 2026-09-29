@@ -328,7 +328,8 @@ CASE = CASES['cases'][a.case]
 SPEC = DA.load(a.spec)
 from coman_pose_reader import (HandleTransform, LOG_COLS as POSE_LOG_COLS,  # noqa: E402
                                READ_ORDER, SameStepPoseReader)
-from coman_couple_link import CoupleLink, evaluate_capability        # noqa: E402
+from coman_couple_link import (CoupleLink, evaluate_capability,       # noqa: E402
+                               freeze_target)
 
 # **狀態機尚未接到本執行端**：正式路徑的釋放資格必須來自
 # coman_handover_state.HandoverMachine 的 normal_release_allowed。
@@ -1089,6 +1090,8 @@ def main():
     hs_stop_after = None           # 確認後收尾的物理步
     hs_blocked_events = []         # 連接後被攔下的軌跡事件
     inject_info = None             # 注入當下的關節讀回
+    last_applied_q = None          # **實際送進 apply_action() 的六軸設定點**
+    coman_applied_log = []         # [step, t, q1..q6, source]
 
     def couple_readback():
         """**讀回**固定關節狀態：回傳 (關節存在, 是否仍啟用)。
@@ -1288,10 +1291,25 @@ def main():
                     if a.handshake_test:
                         # **在本步後續命令套用之前**就設好保持目標，
                         # 確保連接後不再套用任何軌跡命令。
-                        frozen_q = np.array([
-                            float(robot.get_joint_positions()[idx[j]])
-                            for j in ARM])
-                        info['handshake_freeze_step'] = hs_attach_step
+                        # 目標取**最後一次實際套用的命令設定點**，不是實測角 ——
+                        # 用實測角會把維持負載所需的追蹤誤差一次抽掉，
+                        # 等於在命令上製造跳變（見 §12：joint2 約 2.15 mrad）。
+                        _meas_now = [float(robot.get_joint_positions()[idx[j]])
+                                     for j in ARM]
+                        _tgt, _src_f, _delta = freeze_target(last_applied_q,
+                                                             _meas_now)
+                        if _tgt is None:
+                            info['handshake_freeze'] = _src_f
+                            print('[coman] **尚無已套用命令，拒絕凍結**', flush=True)
+                        else:
+                            frozen_q = np.array(_tgt, dtype=float)
+                            info['handshake_freeze_step'] = hs_attach_step
+                            info['freeze_target_source'] = _src_f
+                            info['freeze_minus_measured_mrad'] = _delta
+                            coman_applied_log.append(
+                                [int(hs_attach_step), round(t, 4)]
+                                + [round(float(v), 9) for v in frozen_q]
+                                + ['freeze_switch'])
                         print(f'[coman] 握手測試：連接同步設定保持目標（不拉動）'
                               f'@ step {hs_attach_step}', flush=True)
                 else:
@@ -1342,6 +1360,10 @@ def main():
                 tgt[idx[j]] = frozen_q[k]
             robot.get_articulation_controller().apply_action(
                 ArticulationAction(joint_positions=tgt))
+            last_applied_q = [float(frozen_q[k]) for k in range(len(ARM))]
+            coman_applied_log.append([int(pose_src.physics_step_id()), round(t, 4)]
+                                     + [round(v, 9) for v in last_applied_q]
+                                     + ['frozen'])
         elif snap is not None:
             applied_seq, _, q_cmd = snap
             tgt = robot.get_joint_positions()
@@ -1374,6 +1396,10 @@ def main():
                     tgt[idx[j]] = _fv
             robot.get_articulation_controller().apply_action(
                 ArticulationAction(joint_positions=tgt))
+            last_applied_q = [float(q_use[k]) for k in range(len(ARM))]
+            coman_applied_log.append([int(pose_src.physics_step_id()), round(t, 4)]
+                                     + [round(v, 9) for v in last_applied_q]
+                                     + ['traj'])
 
         # --- 量測 ---
         qm = robot.get_joint_positions()
@@ -1739,8 +1765,13 @@ def main():
             print(f'[drawer] 停止：{stop}（處置 {handling}）@ sim {t:.3f}', flush=True)
             if handling == 'release_coupling_then_freeze':
                 # 凍結設定點**不會**卸力：位置驅動會持續施力。先解除耦合。
+                # **走同一套解除紀錄**：緊急要求 → 執行 → 讀回確認；
+                # 停止原因各自保留（contact_force 與 monitor_failed_* 不混為一談）。
+                _ps_st = int(world.current_time_step_index)
+                couple_link.emergency(_ps_st, t, f'stop_{stop}')
                 if GRASP_MODEL == 'fixed_attachment':
                     detach()
+                couple_link.mark_executed(_ps_st, t, f'emergency_{stop}')
                 coupled = False
                 if snap is not None:
                     tgt = robot.get_joint_positions()
@@ -1756,6 +1787,11 @@ def main():
             post_stop = []
             for _ in range(60):
                 world.step(render=False)
+                if couple_link.confirm is None:
+                    _ex, _en = couple_readback()
+                    couple_link.poll_confirm(_ex, _en,
+                                             int(world.current_time_step_index),
+                                             float(world.current_time))
                 _p, _ = drawer_v.get_world_poses()
                 _v = drawer_v.get_velocities()[0]
                 post_stop.append([round(float(world.current_time), 4),
@@ -1934,6 +1970,9 @@ def main():
         'coman_machine_wired': MACHINE_WIRED,
         'coman_handshake_blocked_events': hs_blocked_events,
         'coman_inject_info': inject_info,
+        'coman_applied_cmd_cols': ['physics_step_id', 'sim_time',
+                                   'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'source'],
+        'coman_applied_cmd_log': coman_applied_log,
         'coman_stage_note': ('本階段只做量測接通；底盤仍由固定關節支撐，'
                              '不是協同操作驗收'),
         'rot_conv_err_max_deg': rot_err_max,

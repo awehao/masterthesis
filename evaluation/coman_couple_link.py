@@ -43,6 +43,25 @@ def evaluate_capability(mode: str, machine_allowed: bool = False,
     return bool(machine_allowed), 'state_machine'
 
 
+def freeze_target(last_applied_q, measured_q):
+    """決定保持目標：**只能用最後一次實際套用的命令設定點**。
+
+    不得改用實測角 —— 實測與命令之間的穩態差是維持負載所需的追蹤誤差，
+    把它一次抽掉等於在命令上製造跳變。
+    尚無任何已套用命令時**拒絕凍結**，不以實測角替代。
+
+    回傳 (target, source, delta_mrad)；拒絕時 target 為 None。
+    """
+    if last_applied_q is None:
+        return None, 'refused_no_applied_cmd', None
+    tgt = [float(v) for v in last_applied_q]
+    delta = None
+    if measured_q is not None and len(measured_q) == len(tgt):
+        delta = [round(1000.0 * (t_ - float(m_)), 4)
+                 for t_, m_ in zip(tgt, measured_q)]
+    return tgt, 'last_applied_command', delta
+
+
 @dataclass
 class Stamp:
     step: int
@@ -247,6 +266,33 @@ def selftest() -> int:
           not L7.may_release_now(cap, 3, 0.03, src) and L7.execute is None)
     check('被擋原因記錄資格來源',
           'state_machine_not_wired' in L7.record()['blocked_attempts'][-1][2])
+
+    # 8 凍結目標只能取最後實際套用的命令設定點
+    tgt, src, delta = freeze_target(None, [1.0, 2.0])
+    check('尚無已套用命令 → 拒絕凍結，不以實測角替代',
+          tgt is None and src == 'refused_no_applied_cmd')
+    applied = [0.0, 1.05390, 1.72386, 0.0, -0.5, 0.0]
+    measured = [0.0, 1.05175, 1.72459, 0.0, -0.5, 0.0]
+    tgt, src, delta = freeze_target(applied, measured)
+    check('凍結目標等於最後套用命令，不等於實測角',
+          tgt == applied and tgt != measured and src == 'last_applied_command')
+    check('記錄命令與實測之差（joint2 約 +2.15 mrad）',
+          abs(delta[1] - 2.15) < 0.01 and abs(delta[2] + 0.73) < 0.01)
+
+    # 9 超力解除也要走同一套紀錄，且不得偽裝成正常釋放
+    L8 = CoupleLink()
+    L8.mark_attached(100, 1.00)
+    L8.emergency(110, 1.10, 'stop_contact_force')
+    L8.mark_executed(110, 1.10, 'emergency_contact_force')
+    check('超力解除：緊急閂鎖並記錄執行',
+          L8.emergency_latched and L8.record()['execute'][0] == 110)
+    check('超力解除不得出現正常請求紀錄', L8.record()['request'] is None)
+    check('超力解除確認前維持閂鎖',
+          not L8.poll_confirm(True, True, 111, 1.11) and L8.emergency_latched)
+    check('超力解除經讀回確認後撤除閂鎖',
+          L8.poll_confirm(True, False, 112, 1.12) and not L8.emergency_latched)
+    check('停止原因保留在種類欄位',
+          L8.record()['kind'] == 'emergency_contact_force')
 
     print('連接／解除握手離線測試：' + ('全部通過' if bad == 0 else f'**{bad} 項失敗**'))
     return 1 if bad else 0
