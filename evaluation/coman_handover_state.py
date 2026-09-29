@@ -123,9 +123,14 @@ class Flags:
     release_handshake: bool = False             # 資格 ＋ 明確請求同時成立
     emergency_decouple: bool = False
     continuity_break: bool = False
+    input_valid: bool = True                    # 必要量測皆為有限值
+    time_valid: bool = True                     # 時間嚴格遞增且有限
+    sync_declared: bool = True                  # 呼叫端聲明同一物理步讀取
     retreat_measurable: bool = False
     retreat_signed_m: float = float('nan')      # 沿退出起始方向的有號退開量
     release_stability_pass: bool = False        # 與 DONE **無關**，獨立判定
+    release_stability_data_insufficient: bool = False   # 固定窗內缺測 ⇒ 不可判定
+    release_stability_max_rate: float = float('nan')    # 相鄰樣本開度速率上限
 
 
 PHASES = ('HANDOVER', 'ENGAGE', 'PULL', 'HOLD', 'RELEASE', 'RETREAT',
@@ -141,7 +146,7 @@ class HandoverMachine:
     * 退出完成由**實測退出量**決定，不以多跑一個週期代替。
     """
 
-    def __init__(self, spec: dict, max_gap_s: float = 0.15):
+    def __init__(self, spec: dict, max_gap_s: float | None = None):
         g = spec['geometry']; h = spec['H_handover']; p = spec['P_pull']
         self.gap_half = float(g['gripper_open_inner_m']) / 2.0
         self.r_bar = float(g['handle_bar_diameter_m']) / 2.0
@@ -161,6 +166,13 @@ class HandoverMachine:
         self.stab_rate_max = float(p4['opening_rate_m_per_s_max'])
         self.f_abort = float(spec['F_force']['F1_force_abort_n'])
         self.f_sustain_s = float(spec['F_force']['F2_force_abort_sustain_s'])
+        # **從規格讀取**，不用預設值；規格缺此欄即拒絕
+        if max_gap_s is None:
+            cont = spec.get('continuity')
+            if not isinstance(cont, dict) or not isinstance(
+                    cont.get('max_gap_s'), (int, float)) or cont['max_gap_s'] <= 0:
+                raise SpecNotFrozen('continuity.max_gap_s 缺漏或無效')
+            max_gap_s = cont['max_gap_s']
         self.max_gap_s = float(max_gap_s)
         self.age_safety, self.age_endpoint = 0.25, 0.20
         self.phase = 'HANDOVER'
@@ -199,6 +211,17 @@ class HandoverMachine:
     # ---------------- 逐週期 ----------------
     def step(self, f: Frame) -> Flags:
         fl = Flags()
+        # ---- 輸入查核：非有限值、時間異常、未聲明同步，一律不得正常放行 ----
+        arrs = [np.asarray(f.rel_pos_tool, float),
+                np.asarray(f.bar_axis_tool, float)]
+        fl.input_valid = (all(np.isfinite(a).all() for a in arrs)
+                          and np.isfinite(f.opening_m))
+        fl.time_valid = (np.isfinite(f.t)
+                         and (self._t_prev is None or f.t > self._t_prev))
+        fl.sync_declared = bool(f.same_step_read)
+        force_valid = bool(np.isfinite(f.f_norm_n))
+        if not f.same_step_read:
+            self.same_step_declared = False
         gap = None if self._t_prev is None else f.t - self._t_prev
         fl.continuity_break = gap is not None and gap > self.max_gap_s
         if fl.continuity_break:                 # **缺測不算連續**
@@ -213,8 +236,12 @@ class HandoverMachine:
         fl.endpoint_recv_ok = f.cmd_age_endpoint_s <= self.age_endpoint
         fl.in_validated_range = self.in_range(f.rel_pos_tool, f.bar_axis_tool)
 
+        # 力量測無效 ⇒ 監看失效處置（不是忽略）
+        if not force_valid:
+            self._emergency_latched = True
+            self._mark('emergency_decouple', f.t)
         # 緊急路徑：先判、不看任何閘，且**閂鎖到執行端確認已解除**
-        over = f.f_norm_n > self.f_abort
+        over = force_valid and f.f_norm_n > self.f_abort
         if over and self._force_since is None:
             self._force_since = f.t
         elif not over:
@@ -232,6 +259,14 @@ class HandoverMachine:
             else:
                 fl.emergency_decouple = True
             self.phase = 'EMERGENCY'
+            self.log.append((f.t, self.phase, fl))
+            return fl
+
+        # 輸入無效／時間異常／未聲明同步：不累積、不放行、不推進相位
+        if not (fl.input_valid and fl.time_valid and fl.sync_declared):
+            self._hand_since = None
+            self._hold_since = None
+            self._update_stability(f, fl, invalid=True)
             self.log.append((f.t, self.phase, fl))
             return fl
 
@@ -272,16 +307,7 @@ class HandoverMachine:
                 fl.retreat_measurable = True
 
         # 釋放後穩定性：**獨立判定**，DONE 不代表它通過
-        if self._stab is not None:
-            st = self._stab
-            st['lo'] = min(st['lo'], f.opening_m)
-            st['hi'] = max(st['hi'], f.opening_m)
-            span = st['hi'] - st['lo']
-            dur = f.t - st['t0']
-            rate = span / dur if dur > 0 else float('inf')
-            fl.release_stability_pass = bool(dur >= self.stab_window_s
-                                             and span <= self.stab_change_max
-                                             and rate <= self.stab_rate_max)
+        self._update_stability(f, fl)
 
         if f.attached and self.attach_ref is None:
             self.attach_ref = {'pos': np.asarray(f.rel_pos_tool, float).copy(),
@@ -302,7 +328,9 @@ class HandoverMachine:
             # 退出**要等執行端確認解除完成**才開始
             self.phase = 'RETREAT'
             self._mark('decouple_confirmed', f.t)
-            self._stab = {'t0': f.t, 'lo': f.opening_m, 'hi': f.opening_m}
+            self._stab = {'t0': f.t, 'last_t': f.t, 'last_o': f.opening_m,
+                          'lo': f.opening_m, 'hi': f.opening_m,
+                          'max_rate': 0.0, 'insufficient': False}
             if f.gripper_pos_world is not None and f.gripper_rot_world is not None:
                 R0 = np.asarray(f.gripper_rot_world, float)
                 self._retreat_ref = {
@@ -317,6 +345,38 @@ class HandoverMachine:
                 self.phase = 'DONE'; self._mark('retreat_complete', f.t)
         self.log.append((f.t, self.phase, fl))
         return fl
+
+    def _update_stability(self, f: Frame, fl: Flags, invalid: bool = False) -> None:
+        """固定窗的釋放後穩定性。
+
+        * 窗為**解除確認後的固定 stab_window_s**；窗內缺測即判**資料不足**，
+          不改窗、不重新計時、不得補成通過。
+        * 速率用**相鄰有效樣本**的開度變化率，不用全窗平均 ——
+          全窗平均會把短暫快速運動攤平。
+        """
+        st = self._stab
+        if st is None:
+            return
+        if invalid:
+            st['insufficient'] = True
+        else:
+            dt = f.t - st['last_t']
+            if dt > self.max_gap_s:
+                st['insufficient'] = True
+            if dt > 0:
+                st['max_rate'] = max(st['max_rate'],
+                                     abs(f.opening_m - st['last_o']) / dt)
+            st['lo'] = min(st['lo'], f.opening_m)
+            st['hi'] = max(st['hi'], f.opening_m)
+            st['last_t'], st['last_o'] = f.t, f.opening_m
+        span = st['hi'] - st['lo']
+        dur = f.t - st['t0']
+        fl.release_stability_max_rate = st['max_rate']
+        fl.release_stability_data_insufficient = bool(st['insufficient'])
+        fl.release_stability_pass = bool(
+            dur >= self.stab_window_s and not st['insufficient']
+            and span <= self.stab_change_max
+            and st['max_rate'] <= self.stab_rate_max)
 
     def _mark(self, key: str, t: float) -> None:
         self.stamps.setdefault(key, t)
@@ -551,6 +611,87 @@ def selftest() -> int:
     M7.step(_frame(0.0, attached=True))
     check('未提供旋轉時記為 NaN 且標記未記錄',
           math.isnan(M7.datum_post(np.zeros(3))['rot_rad']) and not M7.rot_recorded)
+
+    # --- 反例 8：釋放後缺測不得算穩定 ---
+    M12 = HandoverMachine(spec)
+    M12.phase = 'RELEASE'
+    M12.step(_frame(0.0, opening_m=0.0200, decouple_confirmed=True,
+                    gripper_pos_world=np.zeros(3), gripper_rot_world=np.eye(3)))
+    fl = M12.step(_frame(10.0, opening_m=0.0200,
+                         gripper_pos_world=np.zeros(3),
+                         gripper_rot_world=np.eye(3)))
+    check('解除後只有 t=0 與 t=10 兩筆：偵測到中斷', fl.continuity_break)
+    check('缺測 → 穩定性判為資料不足', fl.release_stability_data_insufficient)
+    check('資料不足 → 穩定性不得通過', not fl.release_stability_pass)
+    fl = M12.step(_frame(10.05, opening_m=0.0200,
+                         gripper_pos_world=np.zeros(3),
+                         gripper_rot_world=np.eye(3)))
+    check('之後補資料也不得補成通過（不換窗）', not fl.release_stability_pass)
+
+    # --- 反例 9：速率上限不得用全窗平均取代 ---
+    M13 = HandoverMachine(spec)
+    M13.phase = 'RELEASE'
+    M13.step(_frame(0.0, opening_m=0.0200, decouple_confirmed=True,
+                    gripper_pos_world=np.zeros(3), gripper_rot_world=np.eye(3)))
+    tt = 0.05
+    for _ in range(205):                       # 10.25 s 穩定
+        fl = M13.step(_frame(tt, opening_m=0.0200,
+                             gripper_pos_world=np.zeros(3),
+                             gripper_rot_world=np.eye(3))); tt += 0.05
+    check('穩定 10 s 先通過（對照組）', fl.release_stability_pass)
+    t_last = tt - 0.05                          # 迴圈結束時 tt 已多加一步
+    fl = M13.step(_frame(t_last + 0.01, opening_m=0.0200 + 0.00004,
+                         gripper_pos_world=np.zeros(3),
+                         gripper_rot_world=np.eye(3)))
+    span_ok = (0.00004 <= M13.stab_change_max)
+    check('最後 10 ms 跳動 0.04 mm：變化量本身仍在容差內', span_ok)
+    check('相鄰樣本速率 4 mm/s > 0.005 mm/s → 穩定性不通過',
+          abs(fl.release_stability_max_rate - 0.004) < 1e-9
+          and not fl.release_stability_pass)
+
+    # --- 反例 10：無效輸入不得放行 ---
+    M14 = HandoverMachine(spec)
+    fl = M14.step(_frame(0.0, f_norm_n=float('nan'), same_step_read=False))
+    check('力為 NaN → 走監看失效處置（緊急解除）',
+          fl.emergency_decouple and M14.phase == 'EMERGENCY')
+    M15 = HandoverMachine(spec)
+    _run(M15, 0.0, 70)                          # 正常交接滿 3 s
+    check('對照組：正常序列已進入 ENGAGE', M15.phase == 'ENGAGE')
+    M16 = HandoverMachine(spec)
+    t = 0.0
+    for _ in range(70):
+        fl = M16.step(_frame(t, same_step_read=False)); t += 0.05
+    check('未聲明同一物理步 → 不得進入 ENGAGE',
+          not fl.sync_declared and not fl.handover_pass
+          and M16.phase == 'HANDOVER')
+    M17 = HandoverMachine(spec)
+    t = 0.0
+    for _ in range(70):
+        fl = M17.step(_frame(t, rel_pos_tool=np.array([0.0, float('nan'), -0.0147])))
+        t += 0.05
+    check('相對位姿含 NaN → 不得放行',
+          not fl.input_valid and M17.phase == 'HANDOVER')
+    M18 = HandoverMachine(spec)
+    M18.step(_frame(1.0))
+    fl = M18.step(_frame(0.5))                  # 時間倒退
+    check('時間倒退 → 判為時間異常且不放行',
+          not fl.time_valid and M18.phase == 'HANDOVER')
+
+    # --- 反例 11：連續性上限必須從規格讀 ---
+    import copy as _copy
+    tight = _copy.deepcopy(spec)
+    tight['continuity']['max_gap_s'] = 0.01
+    M19 = HandoverMachine(tight)
+    M19.step(_frame(0.0))
+    fl = M19.step(_frame(0.05))                 # 0.05 s > 規格的 0.01 s
+    check('規格 max_gap_s=0.01 → 0.05 s 間隔判為缺測',
+          M19.max_gap_s == 0.01 and fl.continuity_break)
+    noc = _copy.deepcopy(spec); noc.pop('continuity')
+    try:
+        HandoverMachine(noc)
+        check('規格缺 continuity → 應拒絕建構', False)
+    except SpecNotFrozen:
+        check('規格缺 continuity → 拒絕建構', True)
 
     print('離線狀態序列測試：' + ('全部通過' if bad == 0 else f'**{bad} 項失敗**'))
     return 1 if bad else 0

@@ -5,7 +5,7 @@
 # set_angular_velocity() 直接設定底盤根部速度，支撐球與地面零摩擦 —— 不是輪驅動。
 # 因此**不能**驗證牽引力或打滑；由底盤速度換算的輪速不是獨立實測輪速。
 schema: wb_coman_drawer_criteria/0
-version: v0.8-draft
+version: v0.9-draft
 status: draft_not_frozen
 created: 2026-09-29
 revised: 2026-09-29
@@ -170,6 +170,11 @@ P_pull:
     opening_rate_m_per_s_max: 0.000005       # 0.005 mm/s
     basis: 固定底座 20 mm 趟釋放後 34.23 s 變化 0.00000 mm；解析度 0.001 mm
     note: 位移與速率、觀察窗須同時明訂，只給位移不足
+    window_definition: 解除確認後的**固定**窗，不得因缺測而改窗或重新計時
+    coverage_required: true
+    coverage_rule: 窗內任一取樣間隔 > continuity.max_gap_s 即判**資料不足**，不得通過
+    rate_definition: 相鄰有效樣本的開度變化率上限；**不得**以全窗平均（變化量÷窗長）取代
+    rate_reason: 全窗平均會把短暫快速運動攤平（實測反例：最後 10 ms 跳動 0.04 mm，全窗平均仍通過）
   P5_opening_source: 抽屜關節實測開度，不以命令值代替
   P6_retreat_clear_m: 0.0233
   P6_retreat_clear_tool_z_m: 0.0233          # 同值，保留舊鍵名供載入相容
@@ -247,6 +252,14 @@ comparison:
 continuity:
   max_gap_s: 0.15            # 取樣間隔超過即視為缺測，連續計時重置
   note: 缺測不得計入連續保持或連續交接
+  must_be_read_from_spec: true   # 模組不得使用內建預設值；規格缺此欄即拒絕建構
+
+input_validity:
+  required_finite: [rel_pos_tool, bar_axis_tool, opening_m, t]
+  time_rule: 時間須有限且嚴格遞增；倒退或重複即判時間異常
+  same_step_read_required: true
+  on_invalid: 不累積連續計時、不放行、不推進相位
+  force_measurement_invalid: 走**監看失效**處置（緊急解除閂鎖），不得忽略
 
 scope_caveats:
   geometry_validation: >
