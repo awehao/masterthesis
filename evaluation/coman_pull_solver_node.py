@@ -28,6 +28,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+from coman_pull_policy import PullTaskPolicy, TaskState            # noqa: E402
 from coman_pull_target import PullTarget                          # noqa: E402
 
 PHASES = ('APPROACH', 'ENGAGE_WAIT', 'PULL', 'HOLD', 'RELEASE_WAIT', 'RETREAT',
@@ -79,6 +80,7 @@ def build(M, cl):
             self.pull_s = float(cl.pull_duration_s)
             self.retreat_m = float(cl.retreat_m)
             self.n_no_task = 0
+            self.task_recv_wall = None
             self.create_subscription(String, '/coman/task_state',
                                      self._task, 10)
             self.get_logger().info(
@@ -87,8 +89,10 @@ def build(M, cl):
 
         # ---------------- 任務狀態 ----------------
         def _task(self, m):
+            import time as _t
             try:
                 self.task = json.loads(m.data)
+                self.task_recv_wall = _t.monotonic()
             except Exception:           # noqa: BLE001
                 self.task = None
 
@@ -134,33 +138,101 @@ def build(M, cl):
                 return T
             return None
 
-        # ---------------- 相位推進與逐週期求解 ----------------
-        def advance(self, now_s):
-            """相位只由**執行端回報的量測與狀態機旗標**推進，不自行認定。"""
-            t = self.task or {}
-            if self.phase == 'APPROACH' and t.get('handover_pass'):
-                self.phase = 'ENGAGE_WAIT'
-            elif self.phase == 'ENGAGE_WAIT' and t.get('attached'):
-                self.on_attached(now_s)
-                self.phase = 'PULL'
-            elif self.phase == 'PULL' and now_s - self.t_pull0 >= self.pull_s:
-                self.phase = 'HOLD'
-            elif self.phase == 'HOLD' and t.get('hold_tracking_pass'):
-                self.phase = 'RELEASE_WAIT'
-            elif self.phase == 'RELEASE_WAIT' and not t.get('attached', True):
-                self.phase = 'RETREAT'
+        # ---------------- 任務迴圈 ----------------
+        def run(self, _T_des_ignored):
+            """**另寫的任務迴圈**：父類別的 run() 是為固定目標寫的，
+            誤差小於容差就完成 —— 拉動任務沿用會在**接近點就結束**。
 
-        def solve(self, _ignored):
-            """父迴圈每週期呼叫一次；**目標由相位決定**，不是固定值。"""
-            if self.task is None:
-                self.n_no_task += 1
-                raise RuntimeError('尚未收到執行端任務狀態，不發命令')
-            now_s = float(self.task.get('sim_t', 0.0))
-            self.advance(now_s)
-            tgt = self.current_target(now_s)
-            if tgt is None:
-                raise RuntimeError(f'相位 {self.phase} 無可用目標（缺把手位姿）')
-            return super().solve(tgt)
+            這裡重複了父迴圈的四件事：guard、solve、發布、deadline 排程與逐週期記錄；
+            其餘（QP、運動學、停止處置）仍呼叫父類別，父檔**未修改**。
+            相位與結束條件一律交給 `PullTaskPolicy`（已離線測試 16 項）。
+            """
+            import time as _t
+            from std_msgs.msg import Float64MultiArray as _F64
+            a = self.a
+            self.base0 = self.base.copy()
+            self.q_pref = np.array(a.posture, dtype=float)
+            pol = PullTaskPolicy(pull_duration_s=self.pull_s,
+                                 retreat_clear_m=float(cl.retreat_clear_m),
+                                 tol_p=a.tol_p, tol_r=a.tol_r)
+            period = 1.0 / a.rate
+            t0 = _t.monotonic()
+            slot = 0
+            retreat_ref = None
+            v_last = np.zeros(9)
+            while True:
+                why = self.guard()
+                if why:
+                    self.stop()
+                    print(f'  中止（guard）：{why}', flush=True)
+                    return False
+                if _t.monotonic() - t0 > a.timeout_s:
+                    self.stop()
+                    print(f'  逾時 {a.timeout_s:.0f} s（相位 {pol.phase}）', flush=True)
+                    return False
+                if self.task is None:
+                    self.n_no_task += 1
+                    self.stop()          # **沒有狀態就不發命令**
+                    self.exec.spin_once(timeout_sec=0.01)
+                    continue
+                now_s = float(self.task.get('sim_t', 0.0))
+                # **狀態年齡以牆鐘計**（求解節點沒有自己的模擬時鐘）；
+                # RTF ≠ 1 時牆鐘與模擬時間不等價，這一點必須一併報告。
+                age = (_t.monotonic() - self.task_recv_wall
+                       if self.task_recv_wall is not None else float('inf'))
+                Tg = self.gripper_world()
+                if pol.phase == 'RETREAT' and retreat_ref is None and Tg is not None:
+                    retreat_ref = (Tg[:3, 3].copy(), Tg[:3, :3] @ np.array([0, 0, 1.0]))
+                r_signed = (float((Tg[:3, 3] - retreat_ref[0]) @ retreat_ref[1])
+                            if (retreat_ref is not None and Tg is not None) else 0.0)
+                st = TaskState(
+                    sim_t=now_s, state_age_s=age,
+                    attached=bool(self.task.get('attached')),
+                    handover_pass=bool(self.task.get('handover_pass')),
+                    hold_tracking_pass=bool(self.task.get('hold_tracking_pass')),
+                    decouple_confirmed=bool(self.task.get('decouple_confirmed')),
+                    pos_err_m=float(getattr(self, 'ep_last', 1.0)),
+                    rot_err_rad=float(getattr(self, 'er_last', 1.0)),
+                    cmd_max_abs=float(np.abs(v_last).max()),
+                    retreat_signed_m=r_signed,
+                    emergency=bool(self.task.get('emergency')))
+                prev_phase = pol.phase
+                dec = pol.step(st)
+                if prev_phase == 'ENGAGE_WAIT' and dec['phase'] == 'PULL':
+                    self.on_attached(now_s)
+                self.phase = dec['phase']
+                if dec['abort']:
+                    self.stop()
+                    print(f"  中止：{dec['abort']}（{dec['reason']}）", flush=True)
+                    return False
+                if dec['done']:
+                    self.stop()
+                    print(f"  完成：{dec['reason']}", flush=True)
+                    return True
+                tgt = self.current_target(now_s)
+                if tgt is None:
+                    self.stop()
+                    self.exec.spin_once(timeout_sec=0.01)
+                    continue
+                try:
+                    v, T, ep, er = super().solve(tgt)
+                except RuntimeError as exc:
+                    self.stop()
+                    print(f'  中止（fail closed）：{exc}', flush=True)
+                    return False
+                self.ep_last, self.er_last = ep, er
+                m = _F64()
+                m.data = [float(x) for x in v]
+                self.pub.publish(m)
+                self.v_prev = v.copy()
+                v_last = np.asarray(v, float)
+                self.log.append(dict(t=now_s, phase=pol.phase, ep=float(ep),
+                                     er=float(er),
+                                     cmd=[float(x) for x in v]))
+                slot += 1
+                target = t0 + slot * period
+                while _t.monotonic() < target:
+                    self.exec.spin_once(timeout_sec=0.002)
 
         def on_attached(self, now_s):
             """連接當下建立 PullTarget：**用實際量到的**夾爪與把手位姿。"""
@@ -184,6 +256,8 @@ def main() -> int:
     ap.add_argument('--retreat-m', type=float, default=0.040)
     ap.add_argument('--tcp-offset-z', type=float, default=0.0147)
     ap.add_argument('--slide-axis', default='[0.0, -1.0, 0.0]')
+    ap.add_argument('--retreat-clear-m', type=float, default=0.0233,
+                    help='退出完成的實測門檻（沿退出起始方向的有號位移）')
     ap.add_argument('--grasp-rot',
                     default='[[-1,0,0],[0,0,1],[0,1,0]]')
     cl, rest = ap.parse_known_args()

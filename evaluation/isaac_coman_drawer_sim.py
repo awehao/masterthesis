@@ -1818,17 +1818,25 @@ def main():
                      else float('inf'))
             # **安全層的上游新鮮度另外取**：由其 diag 的 reason 判定，
             # 並先檢查 diag 自身是否新鮮；未接入／過期 ⇒ 不知道 ⇒ 判不合格。
+            # diag 給的是**新鮮度判定**，不是命令年齡；記三態＋diag 自身年齡，
+            # **不填推定秒數**。非 0 的其他故障碼一律不視為安全層健康。
             _sd = node.safety_diag
-            if _sd is None or (t - _sd[0]) > a.safety_diag_max_age_s:
-                _age_safety = float('inf')
-                _safety_src = 'unknown'
+            _diag_age = (t - _sd[0]) if _sd is not None else float('inf')
+            if _sd is None or _diag_age > a.safety_diag_max_age_s:
+                _safety_fresh, _safety_src = None, 'unknown'
+            elif int(round(_sd[1])) == 0:
+                _safety_fresh, _safety_src = True, 'diag_reason_0_ok'
+            elif int(round(_sd[1])) == 2:
+                _safety_fresh, _safety_src = False, 'diag_reason_2_stale'
             else:
-                _age_safety = (999.0 if abs(_sd[1] - 2.0) < 0.5 else 0.0)
-                _safety_src = f'diag_reason_{int(_sd[1])}'
+                _safety_fresh = False
+                _safety_src = f'diag_reason_{int(round(_sd[1]))}_not_healthy'
             _relR = _prec.relative[:3, :3]
             _hsf = HSFrame(
                 t=t,
-                cmd_age_safety_s=_age_safety, cmd_age_endpoint_s=_age9,
+                cmd_age_safety_s=float('nan'),   # **未取得實際年齡**，不填推定值
+                safety_fresh=_safety_fresh,
+                cmd_age_endpoint_s=_age9,
                 rel_pos_tool=_prec.relative[:3, 3],
                 bar_axis_tool=_relR @ pose_reader.handle.bar_axis_local,
                 opening_m=float(opening), f_norm_n=float(f_norm),
@@ -1868,7 +1876,10 @@ def main():
                 bool(_fl.emergency_decouple),
                 round(machine.margin(_hsf.rel_pos_tool, _hsf.bar_axis_tool), 6),
                 round(machine.insertion_dev(_hsf.rel_pos_tool), 6),
-                _safety_src, round(_age9, 4)])
+                _safety_src,
+                (None if _safety_fresh is None else bool(_safety_fresh)),
+                (round(_diag_age, 4) if np.isfinite(_diag_age) else None),
+                round(_age9, 4) if np.isfinite(_age9) else None])
 
         # --- 停止條件 ---
         # 手指接觸中止（friction 版才啟用）：判準是**每一指各自**的接觸力模長，
@@ -2189,7 +2200,8 @@ def main():
                                'handover_pass', 'hold_tracking_pass',
                                'normal_release_allowed', 'release_handshake',
                                'emergency_decouple', 'margin_m', 'insertion_dev_m',
-                               'safety_freshness_source', 'cmd_age_endpoint_s'],
+                               'safety_freshness_source', 'safety_fresh',
+                               'safety_diag_age_s', 'cmd_age_endpoint_s'],
         'coman_machine_log': machine_log,
         'coman_cmd_source': a.cmd_source,
         'coman_chain9': (chain9.summary() if chain9 is not None else None),

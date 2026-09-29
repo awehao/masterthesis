@@ -29,17 +29,41 @@ contact_exceptions:
     rule: 同上（兩指對稱）
     basis: 同上
 
-near_approach_pairs:      # **需要近接、但不是接觸**：需專屬幾何限制，待定
-  - pair: [uflite_gripper_link, drawer/front_panel]
-    issue: 設計站距使指尖距面板約 27.8 mm，小於一般規則的 d0 = 50 mm
-    min_clearance_m: null        # **待定**：先量既有趟次的實際最小間距再訂
+near_approach_pairs:      # 量測後**收窄為兩組**（見下方 measured_reference）
+  - pair: [uflite_finger1, drawer/front_panel]
+    issue: 實測最小 27.92 mm < 一般規則 d0 = 50 mm ⇒ 確實衝突
+    min_clearance_m: null        # **待定**：需交代幾何近似、量測誤差與所需餘裕後事前審定
     phases: [approach, engage, postengage, pull, hold, release, retreat]
     must_state: 若採用不同間距，**明白標示為新配置並事前審定**，
                 不得包裝成「門檻完全沒變」
+  - pair: [uflite_finger2, drawer/front_panel]
+    issue: 實測最小 27.99 mm < 50 mm
+    min_clearance_m: null        # 待定
+
+no_conflict_after_measurement:   # 原先被誤列為衝突，量測後確認**適用一般規則**
+  - pair: [uflite_gripper_link, drawer/front_panel]
+    measured_min_m: 0.0523
   - pair: [uflite_finger1, drawer/handle/post_l]
-    min_clearance_m: null        # 待定
+    measured_min_m: 0.0671
   - pair: [uflite_finger2, drawer/handle/post_r]
-    min_clearance_m: null        # 待定
+    measured_min_m: 0.0670
+
+measured_reference:
+  source: evaluation/coman_near_pair_clearance.py，趟次 drawer_220102_offset20
+  status: "**可行性參考，不是門檻的推導依據**"
+  approximations:
+    - 抽屜部件以軸對齊方塊近似（面板、支柱），未含倒角與細節
+    - 機器人側以視覺網格取樣，格距 ≤ 2.0 mm ⇒ 距離可能高估至多約 2.0 mm
+    - 相對位姿為 FK 重建（底盤固定假設），非同一物理步實測
+    - 每 10 筆取樣一次；瞬態最小值可能落在未取樣處
+
+ground_contact:                  # 支撐接觸與碰撞要分清
+  - pair: [底盤支撐球, ground]
+    kind: designed_support_contact
+    rule: 設計支撐接觸，**不列為避碰對象**
+  - pair: [任何手臂連桿, ground]
+    kind: avoidance
+    rule: 一般規則照舊 —— 不得因支撐接觸而豁免手臂碰地
 
 avoidance_unchanged:      # 一般規則照舊
   - [任何手臂連桿, drawer/front_panel（除上列近接配對外）]

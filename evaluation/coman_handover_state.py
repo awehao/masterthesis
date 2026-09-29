@@ -109,6 +109,10 @@ class Frame:
     rel_rot_tool: np.ndarray | None = None      # 完整相對旋轉（3×3），缺則記為未提供
     decouple_confirmed: bool = False            # 執行端回報「已解除連接」
     release_requested: bool = False             # 任務流程**明確請求**釋放
+    # 安全層上游新鮮度的**三態判定**：True=新鮮、False=過期或不健康、None=未知。
+    # 提供時**優先採用**，因為 diag 給的是判定而不是實際命令年齡 ——
+    # 不得以推定秒數冒充量測。None 時才退回 cmd_age_safety_s 比較。
+    safety_fresh: bool | None = None
     gripper_pos_world: np.ndarray | None = None  # 夾爪世界位置（退出量判定必需）
     gripper_rot_world: np.ndarray | None = None  # 夾爪世界姿態（同上）
     same_step_read: bool = True                 # 呼叫端聲明位姿為同一物理步讀取
@@ -239,7 +243,8 @@ class HandoverMachine:
         if not f.same_step_read:
             self.same_step_declared = False
 
-        fl.cmd_fresh = f.cmd_age_safety_s <= self.age_safety
+        fl.cmd_fresh = (bool(f.safety_fresh) if f.safety_fresh is not None
+                        else f.cmd_age_safety_s <= self.age_safety)
         fl.endpoint_recv_ok = f.cmd_age_endpoint_s <= self.age_endpoint
         fl.in_validated_range = self.in_range(f.rel_pos_tool, f.bar_axis_tool)
 
@@ -661,6 +666,16 @@ def selftest() -> int:
     M7.step(_frame(0.0, attached=True))
     check('未提供旋轉時記為 NaN 且標記未記錄',
           math.isnan(M7.datum_post(np.zeros(3))['rot_rad']) and not M7.rot_recorded)
+
+    # --- 反例 7b：安全層新鮮度為三態，不以推定秒數冒充 ---
+    Mf = HandoverMachine(spec)
+    flf = Mf.step(_frame(0.0, cmd_age_safety_s=0.0, safety_fresh=False))
+    check('safety_fresh=False → cmd_fresh 為假（即使年齡填 0）', not flf.cmd_fresh)
+    flf = Mf.step(_frame(0.05, cmd_age_safety_s=99.0, safety_fresh=True))
+    check('safety_fresh=True → cmd_fresh 為真（不看填入的年齡）', flf.cmd_fresh)
+    flf = Mf.step(_frame(0.10, cmd_age_safety_s=float('nan'),
+                         safety_fresh=None))
+    check('safety_fresh=None ＋ 年齡為 NaN → 判不新鮮', not flf.cmd_fresh)
 
     # --- 反例 8：釋放後缺測不得算穩定 ---
     M12 = HandoverMachine(spec)
