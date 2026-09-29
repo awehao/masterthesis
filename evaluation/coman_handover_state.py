@@ -130,7 +130,11 @@ class Flags:
     retreat_signed_m: float = float('nan')      # 沿退出起始方向的有號退開量
     release_stability_pass: bool = False        # 與 DONE **無關**，獨立判定
     release_stability_data_insufficient: bool = False   # 固定窗內缺測 ⇒ 不可判定
-    release_stability_max_rate: float = float('nan')    # 相鄰樣本開度速率上限
+    release_stability_max_rate: float = float('nan')    # 窗內相鄰樣本開度速率上限
+    release_stability_sealed: bool = False      # 固定窗已結算，判定不再被窗外資料改寫
+    post_window_drift_m: float = float('nan')   # 窗外開度變化（另行記錄，不改判定）
+    post_window_max_rate: float = float('nan')  # 窗外速率（同上）
+    post_window_gap: bool = False               # 窗外缺測（同上）
 
 
 PHASES = ('HANDOVER', 'ENGAGE', 'PULL', 'HOLD', 'RELEASE', 'RETREAT',
@@ -347,36 +351,76 @@ class HandoverMachine:
         return fl
 
     def _update_stability(self, f: Frame, fl: Flags, invalid: bool = False) -> None:
-        """固定窗的釋放後穩定性。
+        """釋放後穩定性：**固定窗 [t_解除確認, +stab_window_s]**。
 
-        * 窗為**解除確認後的固定 stab_window_s**；窗內缺測即判**資料不足**，
-          不改窗、不重新計時、不得補成通過。
-        * 速率用**相鄰有效樣本**的開度變化率，不用全窗平均 ——
-          全窗平均會把短暫快速運動攤平。
+        窗口與結算規則（明訂，避免結果隨錄多久而變）：
+        * **窗內樣本**：t ≤ t0 + W。相鄰樣本構成的區間，只要其**起點仍在窗內**
+          （last_t < t0 + W），該區間的速率與開度就計入本窗 ——
+          **跨界取樣也計入**，因此不需要恰好落在窗末的樣本。
+        * **覆蓋**：窗內（含跨界區間）任一間隔 > max_gap_s 即判資料不足。
+        * **結算**：取樣時間首次達到或越過 t0 + W 時結算，判定與統計**封存**，
+          其後不再被窗外資料改寫。
+        * **窗外**的漂移、缺測仍**另行記錄**（post_window_*），
+          超力與監看失效照常走緊急處置 —— 封存判定**不等於**停止監看。
         """
         st = self._stab
         if st is None:
             return
+        t_end = st['t0'] + self.stab_window_s
+        if st.get('sealed'):
+            if invalid:
+                st['post_gap'] = True
+            else:
+                dt = f.t - st['post_last_t']
+                if dt > self.max_gap_s:
+                    st['post_gap'] = True
+                if dt > 0:
+                    st['post_rate'] = max(st['post_rate'],
+                                          abs(f.opening_m - st['post_last_o']) / dt)
+                st['post_lo'] = min(st['post_lo'], f.opening_m)
+                st['post_hi'] = max(st['post_hi'], f.opening_m)
+                st['post_last_t'], st['post_last_o'] = f.t, f.opening_m
+            fl.release_stability_sealed = True
+            fl.release_stability_pass = st['verdict']
+            fl.release_stability_data_insufficient = st['insufficient']
+            fl.release_stability_max_rate = st['max_rate']
+            fl.post_window_drift_m = st['post_hi'] - st['post_lo']
+            fl.post_window_max_rate = st['post_rate']
+            fl.post_window_gap = st['post_gap']
+            return
+
         if invalid:
             st['insufficient'] = True
         else:
             dt = f.t - st['last_t']
-            if dt > self.max_gap_s:
-                st['insufficient'] = True
-            if dt > 0:
-                st['max_rate'] = max(st['max_rate'],
-                                     abs(f.opening_m - st['last_o']) / dt)
-            st['lo'] = min(st['lo'], f.opening_m)
-            st['hi'] = max(st['hi'], f.opening_m)
+            if st['last_t'] < t_end:          # 區間起點仍在窗內 ⇒ 計入本窗
+                if dt > self.max_gap_s:
+                    st['insufficient'] = True
+                if dt > 0:
+                    st['max_rate'] = max(st['max_rate'],
+                                         abs(f.opening_m - st['last_o']) / dt)
+                st['lo'] = min(st['lo'], f.opening_m)
+                st['hi'] = max(st['hi'], f.opening_m)
             st['last_t'], st['last_o'] = f.t, f.opening_m
+
         span = st['hi'] - st['lo']
-        dur = f.t - st['t0']
         fl.release_stability_max_rate = st['max_rate']
         fl.release_stability_data_insufficient = bool(st['insufficient'])
-        fl.release_stability_pass = bool(
-            dur >= self.stab_window_s and not st['insufficient']
-            and span <= self.stab_change_max
-            and st['max_rate'] <= self.stab_rate_max)
+        if not invalid and f.t >= t_end:      # ---- 結算並封存 ----
+            st['verdict'] = bool(not st['insufficient']
+                                 and span <= self.stab_change_max
+                                 and st['max_rate'] <= self.stab_rate_max)
+            st['sealed'] = True
+            st['seal_t'] = f.t
+            st['post_last_t'], st['post_last_o'] = f.t, f.opening_m
+            st['post_lo'] = st['post_hi'] = f.opening_m
+            st['post_rate'] = 0.0
+            st['post_gap'] = False
+            self._mark('stability_sealed', f.t)
+            fl.release_stability_sealed = True
+            fl.release_stability_pass = st['verdict']
+        else:
+            fl.release_stability_pass = False
 
     def _mark(self, key: str, t: float) -> None:
         self.stamps.setdefault(key, t)
@@ -628,26 +672,77 @@ def selftest() -> int:
                          gripper_rot_world=np.eye(3)))
     check('之後補資料也不得補成通過（不換窗）', not fl.release_stability_pass)
 
-    # --- 反例 9：速率上限不得用全窗平均取代 ---
+    # --- 反例 9：速率上限不得用全窗平均取代（跳動落在**窗內**）---
     M13 = HandoverMachine(spec)
     M13.phase = 'RELEASE'
     M13.step(_frame(0.0, opening_m=0.0200, decouple_confirmed=True,
                     gripper_pos_world=np.zeros(3), gripper_rot_world=np.eye(3)))
     tt = 0.05
-    for _ in range(205):                       # 10.25 s 穩定
+    for _ in range(198):                        # 到 9.90 s，窗內
         fl = M13.step(_frame(tt, opening_m=0.0200,
                              gripper_pos_world=np.zeros(3),
                              gripper_rot_world=np.eye(3))); tt += 0.05
-    check('穩定 10 s 先通過（對照組）', fl.release_stability_pass)
-    t_last = tt - 0.05                          # 迴圈結束時 tt 已多加一步
-    fl = M13.step(_frame(t_last + 0.01, opening_m=0.0200 + 0.00004,
+    check('窗未滿 10 s 前不得判通過', not fl.release_stability_pass)
+    fl = M13.step(_frame(9.91, opening_m=0.0200 + 0.00004,
                          gripper_pos_world=np.zeros(3),
                          gripper_rot_world=np.eye(3)))
-    span_ok = (0.00004 <= M13.stab_change_max)
-    check('最後 10 ms 跳動 0.04 mm：變化量本身仍在容差內', span_ok)
-    check('相鄰樣本速率 4 mm/s > 0.005 mm/s → 穩定性不通過',
-          abs(fl.release_stability_max_rate - 0.004) < 1e-9
-          and not fl.release_stability_pass)
+    check('窗內最後 10 ms 跳動 0.04 mm：變化量本身仍在容差內',
+          0.00004 <= M13.stab_change_max)
+    check('窗內相鄰樣本速率 4 mm/s → 記為超限',
+          abs(fl.release_stability_max_rate - 0.004) < 1e-9)
+    for t2 in (9.96, 10.01):
+        fl = M13.step(_frame(t2, opening_m=0.0200 + 0.00004,
+                             gripper_pos_world=np.zeros(3),
+                             gripper_rot_world=np.eye(3)))
+    check('結算時因窗內速率超限 → 不通過',
+          fl.release_stability_sealed and not fl.release_stability_pass)
+
+    # --- 反例 9b：窗外跳動**不改寫**已封存的判定 ---
+    M13b = HandoverMachine(spec)
+    M13b.phase = 'RELEASE'
+    M13b.step(_frame(0.0, opening_m=0.0200, decouple_confirmed=True,
+                     gripper_pos_world=np.zeros(3), gripper_rot_world=np.eye(3)))
+    tt = 0.05
+    while tt <= 10.0 + 1e-9:
+        fl = M13b.step(_frame(round(tt, 3), opening_m=0.0200,
+                              gripper_pos_world=np.zeros(3),
+                              gripper_rot_world=np.eye(3))); tt += 0.05
+    check('0–10 s 完整取樣、開度不變 → 封存為通過',
+          fl.release_stability_sealed and fl.release_stability_pass)
+    fl = M13b.step(_frame(10.01, opening_m=0.0200 + 0.00004,
+                          gripper_pos_world=np.zeros(3),
+                          gripper_rot_world=np.eye(3)))
+    check('窗外 10.01 s 跳動 0.04 mm → **原判定不變**',
+          fl.release_stability_pass)
+    check('窗外變動另行記錄', abs(fl.post_window_drift_m - 0.00004) < 1e-12
+          and fl.post_window_max_rate > 0.0)
+    fl = M13b.step(_frame(10.06, opening_m=0.0200, f_norm_n=35.0,
+                          gripper_pos_world=np.zeros(3),
+                          gripper_rot_world=np.eye(3)))
+    fl = M13b.step(_frame(10.12, opening_m=0.0200, f_norm_n=35.0,
+                          gripper_pos_world=np.zeros(3),
+                          gripper_rot_world=np.eye(3)))
+    check('封存後仍持續監看：窗外超力照樣緊急解除',
+          fl.emergency_decouple and M13b.phase == 'EMERGENCY')
+
+    # --- 反例 9c：沒有恰好落在窗末的樣本 ---
+    M13c = HandoverMachine(spec)
+    M13c.phase = 'RELEASE'
+    M13c.step(_frame(0.0, opening_m=0.0200, decouple_confirmed=True,
+                     gripper_pos_world=np.zeros(3), gripper_rot_world=np.eye(3)))
+    tt = 0.03
+    fl = None
+    while tt < 10.5:                            # 0.03 s 取樣：沒有樣本落在 10.000
+        fl = M13c.step(_frame(round(tt, 3), opening_m=0.0200,
+                              gripper_pos_world=np.zeros(3),
+                              gripper_rot_world=np.eye(3)))
+        if fl.release_stability_sealed:
+            break
+        tt += 0.03
+    check('無窗末樣本時由**跨界取樣**結算',
+          fl.release_stability_sealed and M13c._stab['seal_t'] > 10.0
+          and M13c._stab['seal_t'] < 10.0 + 0.03 + 1e-9)
+    check('跨界結算的判定為通過（窗內無異常）', fl.release_stability_pass)
 
     # --- 反例 10：無效輸入不得放行 ---
     M14 = HandoverMachine(spec)

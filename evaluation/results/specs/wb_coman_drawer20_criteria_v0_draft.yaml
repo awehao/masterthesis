@@ -5,7 +5,7 @@
 # set_angular_velocity() 直接設定底盤根部速度，支撐球與地面零摩擦 —— 不是輪驅動。
 # 因此**不能**驗證牽引力或打滑；由底盤速度換算的輪速不是獨立實測輪速。
 schema: wb_coman_drawer_criteria/0
-version: v0.9-draft
+version: v0.10-draft
 status: draft_not_frozen
 created: 2026-09-29
 revised: 2026-09-29
@@ -170,7 +170,13 @@ P_pull:
     opening_rate_m_per_s_max: 0.000005       # 0.005 mm/s
     basis: 固定底座 20 mm 趟釋放後 34.23 s 變化 0.00000 mm；解析度 0.001 mm
     note: 位移與速率、觀察窗須同時明訂，只給位移不足
-    window_definition: 解除確認後的**固定**窗，不得因缺測而改窗或重新計時
+    window_definition: "固定窗 [t_解除確認, t_解除確認 + window_s]；不得因缺測而改窗或重新計時"
+    in_window_rule: 樣本 t ≤ 窗末即為窗內；相鄰樣本構成的區間只要**起點仍在窗內**即計入本窗
+    crossing_sample_rule: 跨界取樣計入本窗，因此**不需要**恰好落在窗末的樣本
+    sealing_rule: 取樣時間首次達到或越過窗末即**結算並封存**判定與統計
+    sealed_immutable: 封存後**不再被窗外資料改寫**（避免結果隨錄多久而變）
+    post_window_recorded: [post_window_drift_m, post_window_max_rate, post_window_gap]
+    monitoring_continues: 封存判定**不等於**停止監看；窗外超力與監看失效照常走緊急處置
     coverage_required: true
     coverage_rule: 窗內任一取樣間隔 > continuity.max_gap_s 即判**資料不足**，不得通過
     rate_definition: 相鄰有效樣本的開度變化率上限；**不得**以全窗平均（變化量÷窗長）取代
