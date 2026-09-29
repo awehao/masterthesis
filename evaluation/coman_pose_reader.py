@@ -125,6 +125,7 @@ class PoseRecord:
     relative: np.ndarray | None
     valid: bool
     invalid_reason: str
+    same_step: bool = False          # **實際核對結果**，不是固定值
     read_order: tuple = field(default=READ_ORDER)
 
 
@@ -148,27 +149,52 @@ class SameStepPoseReader:
             ds, dp, dq = self.src.read_drawer()
         except Exception as e:                    # 讀取失敗即無效，不補值
             self.n_invalid += 1
+            # 讀取失敗**不得冒稱同步**
             return PoseRecord(step, t, None, None, None, None, False,
-                              f'讀取例外：{type(e).__name__}')
-        if gs != ds or gs != step:
+                              f'讀取例外：{type(e).__name__}', same_step=False)
+        same_step = (gs == ds == step)
+        if not same_step:
             bad = f'不同步：夾爪 step {gs}、抽屜 step {ds}、當前 step {step}'
-        arrs = {'grip_pos': gp, 'grip_quat': gq, 'draw_pos': dp, 'draw_quat': dq}
-        for k, v in arrs.items():
-            a = np.asarray(v, float) if v is not None else None
-            if a is None or a.size == 0 or not np.isfinite(a).all():
-                bad = bad or f'{k} 缺值或非有限'
+
+        def _vec(v, n, name):
+            nonlocal bad
+            a = np.asarray(v, float).reshape(-1) if v is not None else None
+            if a is None or a.shape != (n,):
+                bad = bad or f'{name} 維度不符（應為 {n}）'
+                return None
+            if not np.isfinite(a).all():
+                bad = bad or f'{name} 含非有限值'
+                return None
+            return a
+
+        gpv = _vec(gp, 3, 'grip_pos'); gqv = _vec(gq, 4, 'grip_quat')
+        dpv = _vec(dp, 3, 'draw_pos'); dqv = _vec(dq, 4, 'draw_quat')
+        for q, name in ((gqv, 'grip_quat'), (dqv, 'draw_quat')):
+            if q is not None and float(np.linalg.norm(q)) < 1e-8:
+                bad = bad or f'{name} 模長近零，不是有效四元數'
         if not np.isfinite(t) or not isinstance(step, (int, np.integer)):
             bad = bad or '時間或步序無效'
         if bad:
             self.n_invalid += 1
             # **不以 FK 重建、不沿用上一筆**：直接回報無效
-            return PoseRecord(step, t, None, None, None, None, False, bad)
+            return PoseRecord(step, t, None, None, None, None, False, bad,
+                              same_step=same_step)
 
-        Tg = homog(np.asarray(gp, float), quat_to_rot(gq))
-        Td = homog(np.asarray(dp, float), quat_to_rot(dq))
+        Tg = homog(gpv, quat_to_rot(gqv))
+        Td = homog(dpv, quat_to_rot(dqv))
         Th = self.handle.world(Td[:3, 3], Td[:3, :3])
-        rel = np.linalg.inv(Tg) @ Th
-        return PoseRecord(step, t, Tg, Td, Th, rel, True, '')
+        try:
+            rel = np.linalg.inv(Tg) @ Th
+        except np.linalg.LinAlgError:
+            self.n_invalid += 1
+            return PoseRecord(step, t, None, None, None, None, False,
+                              '夾爪變換不可逆', same_step=same_step)
+        # **算完再查一次**：四元數合法不保證變換有限
+        if not all(np.isfinite(M).all() for M in (Tg, Td, Th, rel)):
+            self.n_invalid += 1
+            return PoseRecord(step, t, None, None, None, None, False,
+                              '計算後的變換含非有限值', same_step=same_step)
+        return PoseRecord(step, t, Tg, Td, Th, rel, True, '', same_step=True)
 
     # ---- 兩套基準 ----
     def mark_attached(self, rec: PoseRecord) -> None:
@@ -212,7 +238,7 @@ class SameStepPoseReader:
                 + (pose(rec.handle) if rec.valid else nan3 + nan4)
                 + rel_t + rel_R + axis_tool
                 + [d['pre_pos_m'], d['post_pos_m'], d['post_rot_rad']]
-                + [bool(rec.valid), rec.invalid_reason, True])
+                + [bool(rec.valid), rec.invalid_reason, bool(rec.same_step)])
 
 
 # ------------------------------------------------------------------ 離線測試
@@ -300,6 +326,34 @@ def selftest() -> int:
     check('無效之後的有效讀數重新計算，未帶入舊值',
           rec_ok.valid and np.allclose(rec_ok.relative[:3, 3], [0.0, 0.715, 0.0]))
     check('無效筆數已計數', rdr.n_invalid == 3)
+
+    # 3b 步序不一致時**不得**記成同步；零四元數不得判為有效
+    src.g_step_offset = 1
+    rec_ns = rdr.read()
+    row_ns = rdr.row(rec_ns)
+    check('不同步時 same_step_read 記為 False',
+          rec_ns.same_step is False and row_ns[LOG_COLS.index('same_step_read')] is False)
+    src.g_step_offset = 0
+    src.g = (np.array([10.5, 8.0, 0.55]), np.array([0.0, 0.0, 0.0, 0.0]))
+    rec_zq = rdr.read()
+    check('零四元數 → 無效（不得標為有效）',
+          not rec_zq.valid and '四元數' in rec_zq.invalid_reason
+          and rec_zq.relative is None)
+    src.g = (np.array([10.5, 8.0, 0.55]), np.array([1.0, 0, 0]))
+    rec_dim = rdr.read()
+    check('四元數維度不符 → 無效', not rec_dim.valid and '維度' in rec_dim.invalid_reason)
+    src.g = (np.array([10.5, 8.0]), np.array([1.0, 0, 0, 0]))
+    rec_dim2 = rdr.read()
+    check('位置維度不符 → 無效', not rec_dim2.valid and '維度' in rec_dim2.invalid_reason)
+    src.raise_on_drawer = True
+    rec_ex2 = rdr.read()
+    check('讀取例外時 same_step_read 記為 False', rec_ex2.same_step is False)
+    src.raise_on_drawer = False
+    src.g = (np.array([10.5, 8.0, 0.55]), np.array([1.0, 0, 0, 0]))
+    rec_ok2 = rdr.read()
+    check('有效讀數的 same_step_read 為 True',
+          rec_ok2.same_step is True
+          and rdr.row(rec_ok2)[LOG_COLS.index('same_step_read')] is True)
 
     # 4 兩套基準
     rdr.mark_attached(rec_ok)

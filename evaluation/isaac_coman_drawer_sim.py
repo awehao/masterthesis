@@ -1113,10 +1113,11 @@ def main():
         _prec = pose_reader.read()
         coman_pose_log.append(pose_reader.row(_prec))
         if not _prec.valid:
+            # 位姿量測失效 ＝ **監看失效**：走既有統一停止處置
+            #（先解除耦合、凍結、留下停止後紀錄），
+            # 而不是直接跳出迴圈讓 stop_reason 停留在 sim_limit。
             coman_abort = _prec.invalid_reason
-            print(f'[coman] **位姿讀取無效：{coman_abort}** —— 停止，不放行',
-                  flush=True)
-            break
+            raise MonitorFailure('coman_pose_read', coman_abort)
         # 執行時錄影：**這一趟真正在跑的畫面**。算繪只讀場景、不寫回任何狀態，
         # 也不介入中止判斷；代價是牆鐘變慢（模擬時間語意不變）。
         if rec_cam is not None and (n_step % rec_every) == 0:
