@@ -5,11 +5,12 @@
 # set_angular_velocity() 直接設定底盤根部速度，支撐球與地面零摩擦 —— 不是輪驅動。
 # 因此**不能**驗證牽引力或打滑；由底盤速度換算的輪速不是獨立實測輪速。
 schema: wb_coman_drawer_criteria/0
-version: v0.3-draft
+version: v0.4-draft
 status: draft_not_frozen
 created: 2026-09-29
 revised: 2026-09-29
 basis_doc: evaluation/results/coman_drawer20_offline_stats_20260929.md   # rev2
+basis_doc_2: evaluation/results/coman_handover_geometry_check_20260929.md
 revision_note: >
   v0.3 撤回 v0.2 的三處：(1)「交接能力已超出餘隙」——比較的量與窗口都不對，
   底盤位移不是抓取是否成立的指標；(2) e_par／e_perp 被當成相對把手的對準誤差 ——
@@ -48,7 +49,15 @@ geometry:
   tcp_to_bar_center_along_tool_z_m: 0.0147   # 姿態誤差換算橫移的正確力臂
   tool_z_window_m: 0.0244              # 桿置中後前後各餘 6.2 mm
   panel_to_bar_standoff_m: 0.040       # **不是**夾持力臂
-  unresolved: 資產註解推導站距時寫「12 mm 的桿」，與 handle 的 10.0 mm 不一致，須查明
+  bar_diameter_authoritative: 0.010          # drawer_unit.yaml 的 bar.radius 0.005 為權威值
+  comment_defect: 資產註解推導站距時寫「12 mm 的桿、兩側各 6.2 mm」為舊版殘留；以 10 mm 桿計為**兩側各 7.2 mm**（文件缺陷，非幾何缺陷）
+  tool_z_side_margin_m: 0.0072
+  enclosure_margin_semantics: >
+    drawer_kin.enclosure_margin = finger_gap_open/2 − bar_radius = 0.0039 m，是**零誤差名目值**；
+    enclosure_margin_min_m = 0.002 是**設計期下限檢查**，不是預留給誤差的份額。
+    因此「3.9 − 2.0 = 1.9 mm 可用預算」不成立；誤差要代進 M1 的合併式重算。
+  finger_closing_axis: tool_y                # finger_joint1 axis 0 1 0
+  finger_contact_width_along_bar_m: 0.020    # 由 finger1.stl 包絡量得
 
 profile:
   controller: 全身單步 QP（低速配置），底盤與手臂由同一次求解決定
@@ -69,23 +78,33 @@ forbidden:
 required_new_measurement:
   gripper_pose_relative_to_handle:
     reason: 既有紀錄只有 TCP 對理想路徑的追蹤誤差（e_par／e_perp），不是相對把手的對準誤差
-    needed_for: [H1, H2]
-    note: 交接前的對準誤差與連接後的鎖定漂移是不同指標，不可互換
+    needed_for: [M1, H1, H2, H6]
+    offline_reconstructable: true
+    reconstruction: G_T_H = (W_T_G)^-1 · W_T_H，由 park ＋ 逐筆關節角 FK 與 pose ＋ 逐筆 opening 組出
+    time_alignment: 關節角與開度在同一列紀錄，無跨話題同步問題
+    still_required_in_new_endpoint: true      # 直接記錄，避免每次重建
+    datums_must_be_separate:
+      pre_attachment: 與**設計抓取關係**比較（判斷有沒有對準）
+      post_attachment: 與**連接當下的關係**比較（判斷約束殘差是否增加）
 
 H_handover:
-  classification: task_threshold_candidate
-  H1_tcp_rel_handle_pos_err_m_max: null      # 候選 0.0020，待幾何查清後定案
-  H1_candidate_m: 0.0020
-  H1_basis:
-    task_need: 名目單邊餘隙 0.0039 m；資產自訂包覆餘裕 ≥ 0.002 m
-    measured: 無直接量測（既有為對理想路徑的追蹤誤差）
-    limit: 餘隙僅適用指定截面／姿態／閉合方向
-  H2_tcp_rel_handle_rot_err_rad_max: null    # 候選 0.01745（1.0°）
-  H2_candidate_rad: 0.01745
-  H2_basis:
-    task_need: 1° 在 0.0147 m 力臂上約 0.26 mm 橫移
-    lever_arm_corrected: 使用 TCP 到桿心 0.0147 m，**不是** 0.040 m 面板站距
-    limit: 須先確認 10 mm 與 12 mm 桿徑何者有效
+  # **位置與姿態不再各自設門檻**，改用同一份幾何算出的合併餘裕 M1。
+  M1_enclosure_margin_m_min: null            # 候選 0.0010，待核准
+  M1_candidate_m: 0.0010
+  M1_formula: m = (finger_gap_open/2 − bar_radius) − |t_y| − (L/2)·|a_y|
+  M1_terms:
+    t_y: 桿心在手指閉合方向（工具 y）的偏移 —— 位置誤差的貢獻
+    a_y: 桿軸在工具座標下的閉合方向分量 —— 姿態誤差的貢獻
+    L: 0.020    # 手指沿桿軸接觸寬度
+  M1_basis:
+    task_hard_need: m > 0（手指全開時須能不接觸地包住橫桿）
+    engineering_allowance: 1.0 mm 為模型簡化餘裕（平面近似手指、網格對解析值差異、接觸寬取包絡上界），非由歷史散佈挑出
+    reference_run: drawer_220102_offset20 各相位 m = 2.458–2.496 mm（名目 3.9 mm）
+  M1_not_guaranteed: 只涵蓋手指內面與桿面；非完整碰撞檢查；插入深度另外檢查
+  H1_tcp_rel_handle_pos: record_only         # 降為記錄量
+  H2_tcp_rel_handle_rot: record_only         # 降為記錄量
+  H6_insertion_depth_tool_z_dev_m_max: null  # 候選：工具 z 窗口兩側各 0.0072
+  H6_reference: 參照趟工具 z 對設計值偏差 0.17–0.85 mm
   H3_window_s: 3.0
   H3_basis: 固定底座版 engage 2.0 + postengage 1.0；屬設計依據，非「3 s 夠穩」的證明
   H5_joint_check_required: true              # H1 與 H2 須合併檢查，不得各自判定
@@ -166,21 +185,30 @@ D_protections:
 comparison:
   must_match: [同一抽屜資產, 同一目標行程 0.020 m, 同一抓取模型, 同一增益與判準]
   fixed_base_reference: drawer_220102_offset20
-  reference_differences_to_state: [無 b(s) 補償（與協同版一致）, pull 時長 2.02 s, 釋放後窗 34.23 s]
+  reference_differences_to_state:
+    - 無沿行程 b(s) 補償（與協同版一致）
+    - "**仍有一次性交接偏置 b0**（handover.mode = offset），控制方式與全身 QP 不同"
+    - 不得把比較說成「只改了底盤是否固定」
+    - pull 時長 2.02 s
+    - 釋放後窗 34.23 s
   report_items: [關節限位餘裕, 手腕負載, 完成行程, 底盤運動追蹤]
 
 runner_gate:
   refuse_if_any_required_threshold_null: true
   note: 本輪尚未撰寫 runner；此規則於撰寫時實作。
-  currently_null: [H1_tcp_rel_handle_pos_err_m_max, H2_tcp_rel_handle_rot_err_rad_max,
+  currently_null: [M1_enclosure_margin_m_min, H6_insertion_depth_tool_z_dev_m_max,
                    P1_final_opening_err_m_max]
 
 pending:
-  - key: H1/H2
-    需要: 確認桿徑 10 vs 12 mm；新增「夾爪相對把手位姿」記錄；決定候選值是否定案
+  - key: M1
+    需要: 核准 m_min = 1.0 mm（任務硬需求為 m > 0，1.0 mm 是模型簡化餘裕）
+  - key: H6
+    需要: 決定插入深度容差；工具 z 窗口為兩側各 7.2 mm
   - key: P1
     需要: 任務端決定「多少算完成 20 mm」；候選 0.5 mm 已有參照趟佐證餘裕
   - key: H4
     需要: 若要設門檻，須提出獨立的停放或環境需求；否則維持純記錄
+  - key: P1 容差性質
+    需要: 0.5 mm 為待核准的工程任務容差；19.987 mm 只說明舊配置曾落在其中，不作推導依據
   - key: 偏航 0.691 mrad
     需要: 查明五趟相同的原因，查明前不作為任何門檻依據
