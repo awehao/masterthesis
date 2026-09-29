@@ -1,0 +1,129 @@
+# 20 mm 底盤—手臂協同抽屜操作　判準 **草案 v0（未定版）**
+#
+# **這份還不是事前定版的判準。** 多個門檻標為 null，需要先取得依據才能填。
+# 填完並復核之前，**不得**拿它去跑趟次、也不得由檢查器載入當成已核准規格。
+#
+# 定位：**速度驅動底盤下的全身協同抽屜操作**。
+#   執行端以 set_linear_velocity()／set_angular_velocity() 直接設定底盤根部速度，
+#   支撐球與地面綁定零摩擦材質 —— **不是**以輪子扭矩經地面摩擦驅動底盤。
+#   因此本案例**不能**驗證牽引力是否足夠、輪子是否打滑；
+#   由底盤速度換算的輪速**不是**獨立實測輪速。
+schema: wb_coman_drawer_criteria/0
+version: v0-draft
+status: draft_not_frozen
+created: 2026-09-29
+run_label: 速度驅動底盤下的全身協同抽屜操作（短行程 20 mm）
+prospective: true
+not_retroactive: >
+  只適用於本規格**定版之後**的趟次。既有固定底座結果不受影響，也不得回頭套用。
+
+# ---- 平台範圍：明講模型能回答與不能回答的事 ----
+platform_scope:
+  base_actuation: velocity_commanded_root
+  wheel_ground_contact: not_modelled
+  traction_verifiable: false
+  slip_verifiable: false
+  wheel_speed_source: derived_from_base_velocity   # 非獨立量測
+  claim_forbidden:
+    - 不得宣稱「牽引力足夠」
+    - 不得宣稱「輪子未打滑」
+    - 不得僅憑命令與實際兩條曲線，就把底盤運動定因為「主動移動」或「被抽屜拖動」
+
+# ---- 抓取與物件模型：分版驗證，不混稱 ----
+grasp_model: ideal_fixed_attachment          # **非摩擦夾持**
+drawer:
+  passive: true
+  open_command_forbidden: true               # 抽屜不接收開度位置／速度命令
+  drive_stiffness: 0
+  drive_damping: 0
+  drive_max_force: 0
+  drive_target: 0
+
+profile:
+  controller: 全身單步 QP（低速配置），底盤與手臂由同一次求解決定
+  base_fixed: false                          # 與固定底座案例的唯一設計差異
+  target_stroke_m: 0.020
+  tcp: link_tcp
+  phases: [handover, engage, pull, hold, release, retreat]
+
+# ---- 明確禁止（沿用既有裁決，不得為了通過而放寬）----
+forbidden:
+  - 不得解除底盤固定後，直接沿用固定底座版的手臂軌跡
+  - 不得沿用固定底座的 b(s) 前饋補償（其適用條件明載「固定底座」）
+  - 不得以 sim_limit（程序停止原因）代替任務成功
+  - 不得以解除連接後的滑行算作受控到達
+  - 不得為了讓比較好看，把固定底座版放在不可能完成的位置
+
+# ---- H 交接：接觸開始前必須先穩住 ----
+H_handover:
+  H1_tcp_rel_handle_pos_err_m_max: null      # 待定
+  H2_tcp_rel_handle_rot_err_rad_max: null    # 待定
+  H3_window_s: 3.0                           # **候選值**：固定底座版 engage 2.0 + postengage 1.0
+  H3_basis: 既有流程的相位時間，屬設計依據；**不是**已證明「3 s 夠穩」
+  H4_base_displacement_m_max: null           # 待定；**不得**引用他趟的 10 s 位移 3.4 mm 當證明
+  H5_long_tail_claim: >
+    本判準只檢查交接窗內的行為。長時間保持（sim 140 s 誤差 21.71 mm）仍未驗收，
+    **不得**宣稱長尾漂移對本案例沒有影響，只能說未在本窗內檢出。
+
+# ---- P 拉開：受控到達，不是滑過去 ----
+P_pull:
+  P1_final_opening_err_m_max: null           # 待定
+  P2_arrival_before_release_required: true   # 到位必須早於解除連接（沿用固定底座口徑）
+  P3_grasp_rel_pose_drift_m_max: null        # 待定：拉動期間抓取相對位姿漂移
+  P4_opening_after_release_change_m_max: null # 待定：釋放後開度不應再變
+  P5_opening_source: 抽屜關節實測開度；不以命令值代替
+
+# ---- F 負載與停止 ----
+F_force:
+  F1_force_abort_n: 30.0                     # 沿用 v2_sustained
+  F2_force_abort_sustain_s: 0.05
+  F3_record_decomposition: [沿滑軌分量, 垂直分量]   # 固定底座版的成長即出現在垂直分量
+  F4_threshold_change_forbidden: true
+
+# ---- B 底盤運動追蹤（取代原先誤設的「牽引／打滑驗收」）----
+B_base_tracking:
+  B1_cmd_vs_measured_vel_err_mps_max: null   # 待定
+  B2_cmd_vs_measured_disp_err_m_max: null    # 待定
+  B3_rejected_commands: 0
+  B4_endpoint_failure: none
+  B5_speed_box: 沿用低速配置（逐軸 0.035255 m/s、wz 0.1999、手臂 0.9999）
+  B6_interpretation_limit: 偏差只報為「命令與實際的差」，不歸因為牽引或打滑
+
+# ---- S 命令鏈健康度 ----
+S_chain:
+  S1_stale_ratio_in_operating_segment_max: 0.0
+  S1_basis: >
+    既有四趟自由空間趟次的有效運動段 reason≠0 皆為 0.0 %、最長連續過期 0.00 s
+    （isaac_wholebody_port_20260913.md §39），故此處要求 0。
+  S2_solver_must_publish_through_hold: true
+  S2_basis: >
+    四趟求解器都在到達後 0.9–3.9 s 自行停止發布。接觸案例的 hold 需要命令持續更新，
+    因此必須**明確要求**求解器在整個操作段（含 hold）持續發布，並在趟後查核。
+  S3_tail_stale_expected: true               # 任務結束後的過期是預期行為，不計入 S1
+
+# ---- D 保護（不得為了通過而調整）----
+D_protections:
+  cpu_abort_c: 92.0
+  cpu_abort_change_forbidden: true
+  independent_domain_required: true
+  independent_run_dir_required: true
+  attended_operation_required: true
+
+# ---- 與固定底座的比較條件 ----
+comparison:
+  must_match: [同一抽屜資產, 同一目標行程 0.020 m, 同一抓取模型, 同一增益與判準]
+  fixed_base_reference: 需另跑 20 mm 固定底座趟次；**不得**直接引用 200 mm 那一趟
+  report_items: [關節限位餘裕, 手腕負載, 完成行程, 底盤運動追蹤]
+
+# ---- 尚未定版的門檻與所需依據 ----
+pending:
+  - key: H1/H2
+    需要: 固定底座版在 engage 階段的實測抓取相對位姿散佈，取其保守包絡
+  - key: H4
+    需要: 本配置在「到位後不發新任務」時的底盤位移分佈（短窗，非 140 s 長尾）
+  - key: P1
+    需要: 20 mm 行程下的開度量測解析度與既有 200 mm 誤差（−1.270 mm）換算依據
+  - key: P3/P4
+    需要: 固定底座版拉開段的抓取相對位姿漂移實測
+  - key: B1/B2
+    需要: 自由空間趟次中命令與實測底盤速度的既有偏差統計（可由既有 log 離線算）
