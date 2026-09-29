@@ -579,11 +579,16 @@ class WholeBodySafetyNode(Node):
                     _vst = int(row[19])
                 else:
                     _vo, _vst = None, 0
+                # 認證距離下界：**只在有效旗標為真時採用**。無旗標的舊寬度雲
+                # 一律 None ⇒ 走既有的 d − rho，不會誤用 0.0 當成下界。
+                _dlb = (float(row[20]) if len(row) > 21 and row[21] >= 0.5
+                        else None)
                 pts.append(DetectionPoint(
                     self.link_names[li], np.array([x, y, z]), nvec, float(dd),
                     st, float(max(age, 0.0)), occ >= 0.5,
                     offset=np.array(row[11:14], dtype=float),
-                    rho=float(row[14]), obs=_on, v_obs=_vo, v_obs_state=_vst))
+                    rho=float(row[14]), obs=_on, v_obs=_vo, v_obs_state=_vst,
+                    d_lb=_dlb))
             else:
                 pts.append(DetectionPoint(
                     FRAMES[i], np.array([x, y, z]), nvec, float(dd), st,

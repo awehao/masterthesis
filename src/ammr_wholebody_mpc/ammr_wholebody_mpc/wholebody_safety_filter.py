@@ -89,6 +89,12 @@ class DetectionPoint:
     #   v_obs_state = VOBS_UNKNOWN  動態物件但缺測／過期 ⇒ **不得當成零**
     v_obs: np.ndarray | None = None
     v_obs_state: int = 1               # 預設 VOBS_STATIC：不帶此資訊者行為不變
+    # **當前位姿的認證距離下界**（m）。有效時**取代 `d − rho` 的距離項**，
+    # 因為它已經是整片網格的下界，不需要再扣 rho。
+    # `rho` 仍**保留給速度修正**（omega x rho）—— 那一項覆蓋的是取樣點與真正
+    # 最近點之間的**速度**差異，與距離估計的緊度是兩件事。只換距離**不等於**
+    # 完整屏障已獲證明。None ⇒ 一律走既有的 `d − rho` 路徑。
+    d_lb: float | None = None
 
 
 @dataclass
@@ -354,11 +360,21 @@ def _rows_from_points(K, q, pts, cfg, v_in):
         J6, R = JL[pt.frame]
         J = _row_at(J6, R, pt.offset)             # 3 x n, linear part
         row = pt.n @ J                            # 1 x n, approach speed
-        d_eff = pt.d - pt.rho
+        # 距離項的基底：認證下界（若有效）已覆蓋整片網格 ⇒ **不再扣 rho**
+        # （扣兩次等於把同一個保守量算兩遍）。rho 仍保留給下方的速度修正。
+        _has_lb = pt.d_lb is not None and np.isfinite(pt.d_lb)
+        d_base = float(pt.d_lb) if _has_lb else pt.d - pt.rho
+        d_eff = d_base
         if pt.status == STATUS_STALE:
             # The obstacle could have closed in during the gap. Shrink the
             # distance by that much rather than trusting a stale number.
-            d_eff = pt.d - pt.age * cfg.stale_obstacle_speed
+            #
+            # **注意**：既有行為在這條路徑上用的是 `pt.d`，**沒有**扣 rho；
+            # 這是既有設計，此處不更動（改它會動到退化行為的口徑）。
+            # 但下界有效時**不能讓 stale 路徑把它忽略掉** —— 否則過期反而能
+            # 取得比下界更大的距離。故以下界為基底再套 age 收縮。
+            d_eff = (d_base if _has_lb else pt.d) \
+                - pt.age * cfg.stale_obstacle_speed
             cap = min(cap, cfg.stale_speed_cap)
         # ---- 相對接近速度：n^T (J u − v_obs) ----
         # 左式與 d_stop 裡的接近速度**用同一個定義**；只改左式會讓兩邊不一致。

@@ -56,6 +56,8 @@ import math
 import os
 import re
 
+import time
+
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
@@ -108,10 +110,85 @@ BEST_EFFORT = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=1,
 # 距離變化是 d_dot = n^T (v_obs − v_link)，只看機器人側會把隨夾爪移動的
 # 橫桿當成靜止。四個欄位加在最後，既有欄位的名稱與位移不變；
 # 消費端一律由 point_step 取寬度。**兩端必須一起更新。**
+# `dlb` 是**當前位姿的認證距離下界**（m），`dlbv` 為其有效性（0 無／1 有）。
+# 有效時下游以它取代 `d − rho` 的距離項；rho 仍用於速度修正。
 FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded',
-          'link', 'ox', 'oy', 'oz', 'rho', 'obs', 'vox', 'voy', 'voz', 'vobs']
+          'link', 'ox', 'oy', 'oz', 'rho', 'obs', 'vox', 'voy', 'voz', 'vobs',
+          'dlb', 'dlbv']
 VOBS_UNKNOWN, VOBS_STATIC, VOBS_OK = 0, 1, 2
 
+
+
+def pair_distance_bound(tris_world, obstacle, tol=5.0e-4, max_tris=60000,
+                        budget_s=None):
+    """單一 (連桿, 障礙物) 配對的**距離下界**，向量化、每次由當前位姿重算。
+
+    分支與界限：距離函數對點位置是 1-Lipschitz（到固定集合的距離），故三角形
+    內任一點 x 滿足 ``d(x) >= d(形心) − r_c``，r_c 為形心到頂點的最大距離。
+
+        lb = min over 三角形 (d(形心) − r_c)        ← **整片網格**的有效下界
+        ub = min over 已取樣點 d
+
+    **截斷仍然有效**：提早停止只是讓 lb 較鬆，不會讓它變成非下界。
+    這與 `d − rho` 的關係是：rho 是**整條連桿的最壞情況**覆蓋半徑，
+    lb 則是當前位姿的實際下界，通常緊得多。
+
+    回傳 dict：lb, ub, gap, rounds, n_tris, elapsed_s, tol_met, reason。
+    無法計算時 lb 為 nan 且 reason 說明原因 —— **呼叫端不得沿用上一筆值**。
+    """
+    t0 = time.perf_counter()
+    T = np.asarray(tris_world, dtype=float)
+    if T.ndim != 3 or T.shape[1:] != (3, 3) or len(T) == 0:
+        return dict(lb=float('nan'), ub=float('nan'), gap=float('nan'),
+                    rounds=0, n_tris=0, elapsed_s=time.perf_counter() - t0,
+                    tol_met=False, reason='三角形陣列形狀不合')
+    if not np.isfinite(T).all():
+        return dict(lb=float('nan'), ub=float('nan'), gap=float('nan'),
+                    rounds=0, n_tris=len(T), elapsed_s=time.perf_counter() - t0,
+                    tol_met=False, reason='三角形含非有限值')
+    if obstacle is None or obstacle.T_world_link is None:
+        return dict(lb=float('nan'), ub=float('nan'), gap=float('nan'),
+                    rounds=0, n_tris=len(T), elapsed_s=time.perf_counter() - t0,
+                    tol_met=False, reason='障礙物位姿未知')
+    from .arm_link_geometry import obstacle_distances as _od
+    ub = float('inf')
+    lb = float('-inf')
+    rounds = 0
+    reason = ''
+    while True:
+        rounds += 1
+        cent = T.mean(axis=1)
+        rc = np.linalg.norm(T - cent[:, None, :], axis=2).max(axis=1)
+        d_c, _, _ = _od(cent, [obstacle])
+        if not np.isfinite(d_c).all():
+            return dict(lb=float('nan'), ub=float('nan'), gap=float('nan'),
+                        rounds=rounds, n_tris=len(T),
+                        elapsed_s=time.perf_counter() - t0, tol_met=False,
+                        reason='距離求值回傳非有限值')
+        lb_per = d_c - rc
+        lb = float(lb_per.min())
+        ub = min(ub, float(d_c.min()))
+        if ub - lb <= tol:
+            reason = ''
+            break
+        keep = lb_per < ub                      # 只細分可能含最小值者
+        if not keep.any():
+            break
+        el = time.perf_counter() - t0
+        if len(T) * 4 > max_tris:
+            reason = f'三角形上限 {max_tris} 已達（lb 仍為有效下界，只是較鬆）'
+            break
+        if budget_s is not None and el >= budget_s:
+            reason = f'耗時預算 {budget_s:.3f} s 已達（lb 仍為有效下界，只是較鬆）'
+            break
+        K = T[keep]
+        a, b, c = K[:, 0], K[:, 1], K[:, 2]
+        ab, bc, ca = (a + b) / 2.0, (b + c) / 2.0, (c + a) / 2.0
+        T = np.concatenate([np.stack([a, ab, ca], 1), np.stack([ab, b, bc], 1),
+                            np.stack([ca, bc, c], 1), np.stack([ab, bc, ca], 1)])
+    el = time.perf_counter() - t0
+    return dict(lb=lb, ub=ub, gap=ub - lb, rounds=rounds, n_tris=int(len(T)),
+                elapsed_s=el, tol_met=bool(ub - lb <= tol), reason=reason)
 
 
 def model_twist(T_prev, t_prev, T_now, t_now, min_dt=1.0e-4):
@@ -211,7 +288,8 @@ def expand_pair_rows(specs, exempt_specs, obstacle_names):
 
 
 def forced_pair_rows(W, pts_local, obstacle, obs_idx, li, rho, status, age,
-                     occ_of, max_range, max_rows=None, vobs_of=None):
+                     occ_of, max_range, max_rows=None, vobs_of=None,
+                     d_lb=None):
     """對**指定的 (連桿, 障礙物) 配對**單獨算距離並產生列。
 
     為什麼需要：一般列只保留每個取樣點的**最近**障礙物。若最近的是接觸例外
@@ -238,7 +316,9 @@ def forced_pair_rows(W, pts_local, obstacle, obs_idx, li, rho, status, age,
                    + [float(d[k]), float(status), age, float(occ_of(W[k], v[k])),
                       float(li)] + list(pts_local[k]) + [float(rho),
                                                          float(obs_idx)]
-                   + [float(vo[0]), float(vo[1]), float(vo[2]), float(vst)])
+                   + [float(vo[0]), float(vo[1]), float(vo[2]), float(vst)]
+                   + ([float(d_lb), 1.0] if d_lb is not None
+                      and np.isfinite(d_lb) else [0.0, 0.0]))
     return out
 
 
@@ -269,6 +349,13 @@ class ArmLinkDistance(Node):
         # 不受「只留最近障礙物」影響 —— 否則接觸例外會連帶遮掉其他物件的列。
         p('pair_rows', [''])
         p('pair_rows_exempt', [''])
+        # **逐配對的精確距離下界**（R2）。格式 'link:obstacle'。
+        # 每週期由**當前位姿**重算，不沿用上一筆。逾時或資料無效 ⇒
+        # 不輸出下界，該列退回既有的 `d − rho`（較保守），**不冒充本步有效值**。
+        p('tight_pairs', [''])
+        p('tight_tol', 5.0e-4)
+        p('tight_max_tris', 60000)
+        p('tight_budget_s', 0.020)
         # 'points' keeps the twelve fixed detection frames, retained only so the
         # old behaviour can be reproduced; measured against the link meshes they
         # understate clearance by up to 0.238 m. 'links' is the certified
@@ -373,6 +460,30 @@ class ArmLinkDistance(Node):
                                  '/scan_self_filter/occluded',
                                  self._on_occl, 10)
         self._obs_index = {o.name: i for i, o in enumerate(self.obstacles)}
+        self._tight = []
+        for _sp in [x for x in g('tight_pairs') if str(x).strip()]:
+            _lk, _ob = str(_sp).split(':')
+            if _ob not in self._obs_index:
+                raise ValueError(f'tight_pairs 指定了不存在的障礙物：{_sp!r}')
+            self._tight.append((_lk, _ob))
+        self._tight_tol = float(g('tight_tol'))
+        self._tight_max_tris = int(g('tight_max_tris'))
+        self._tight_budget = float(g('tight_budget_s'))
+        self._tight_tris = {}
+        self._tight_stat = {}
+        if self._tight:
+            from .arm_link_geometry import link_collision_tris
+            _xml = _expand(str(g('wholebody_urdf')))
+            _ct = link_collision_tris(_xml, links=[lk for lk, _ in self._tight])
+            for _lk, _ in self._tight:
+                self._tight_tris[_lk] = _ct[_lk]
+            self.get_logger().warn(
+                '**逐配對精確距離下界生效**：'
+                + '、'.join(f'{lk}|{ob}（{len(self._tight_tris[lk])} 三角形）'
+                            for lk, ob in self._tight)
+                + f'；容差 {self._tight_tol*1000:.2f} mm、'
+                + f'預算 {self._tight_budget*1000:.0f} ms。'
+                  '逾時或無效 ⇒ 退回 d − rho，**不沿用上一筆**')
         self._pair_rows, self._pair_exempt = expand_pair_rows(
             g('pair_rows'), g('pair_rows_exempt'),
             [o.name for o in self.obstacles])
@@ -509,6 +620,13 @@ class ArmLinkDistance(Node):
                   float(n_nodata), float(worst_age),
                   float(min(finite)) if finite else -1.0,
                   float(getattr(self, '_dropped', 0))]
+        #  8.. 每個 tight 配對的 lb、ub、耗時、是否達容差（逐週期發布，
+        #      讓趟後能核對「下界真的每步重算」而不是只寫在某份紀錄裡）
+        for _lk, _ob in self._tight:
+            _r = self._tight_stat.get(f'{_lk}|{_ob}')
+            d.data += ([float(_r['lb']), float(_r['ub']), float(_r['elapsed_s']),
+                        1.0 if _r['tol_met'] else 0.0]
+                       if _r else [float('nan')] * 3 + [0.0])
         self.diag.publish(d)
 
 
@@ -522,7 +640,7 @@ class ArmLinkDistance(Node):
             if T is None:
                 rows.append([0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 0.0]
                             + [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
-                            + [0.0, 0.0, 0.0, float(VOBS_STATIC)])
+                            + [0.0, 0.0, 0.0, float(VOBS_STATIC), 0.0, 0.0])
                 n_nodata += 1
                 continue
             p = T[:3, 3]
@@ -545,7 +663,7 @@ class ArmLinkDistance(Node):
                                        STATUS_NODATA, -1.0,
                                        1.0 if T_rl is None else 0.0]
                             + [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
-                            + [0.0, 0.0, 0.0, float(VOBS_STATIC)])
+                            + [0.0, 0.0, 0.0, float(VOBS_STATIC), 0.0, 0.0])
                 n_nodata += 1
                 continue
 
@@ -577,7 +695,7 @@ class ArmLinkDistance(Node):
             # 此路徑不帶障礙物身分），並加上四個速度欄位。
             rows.append(list(p) + list(n_hat) + [best_d, status, best_age, occ]
                         + [0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
-                        + [0.0, 0.0, 0.0, float(VOBS_STATIC)])
+                        + [0.0, 0.0, 0.0, float(VOBS_STATIC), 0.0, 0.0])
 
         return rows, n_ok, n_unk, n_stale, n_nodata, worst_age
 
@@ -613,13 +731,33 @@ class ArmLinkDistance(Node):
             T = self._tf(self.report_frame, name)
             S = self.samples[name]
             blank = [float(li), 0.0, 0.0, 0.0, float(S.rho), -1.0,
-                     0.0, 0.0, 0.0, float(VOBS_STATIC)]
+                     0.0, 0.0, 0.0, float(VOBS_STATIC), 0.0, 0.0]
             if T is None or not live:
                 rows.append([0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 1.0] + blank)
                 n_nodata += 1
                 continue
             W = (S.points @ T[:3, :3].T) + T[:3, 3]
             d, v, which = obstacle_distances(W, live)
+            # **每週期由當前位姿重算**該連桿的精確下界（只給 tight_pairs）。
+            # 算好放在 dict，**一般列與必要配對列共用同一份** —— 否則一般列
+            # 仍用 d − rho，會把較緊的下界壓過去，等於沒有接上。
+            _lb_now = {}
+            for _tl, _tob in self._tight:
+                if _tl != name:
+                    continue
+                _tobj = self._obs_index.get(_tob)
+                _tobj = None if _tobj is None else self.obstacles[_tobj]
+                if _tobj is None or _tobj.T_world_link is None:
+                    self._tight_stat[f'{name}|{_tob}'] = None
+                    continue
+                _tris = (self._tight_tris[name].reshape(-1, 3)
+                         @ T[:3, :3].T + T[:3, 3]).reshape(-1, 3, 3)
+                _r = pair_distance_bound(
+                    _tris, _tobj, tol=self._tight_tol,
+                    max_tris=self._tight_max_tris, budget_s=self._tight_budget)
+                self._tight_stat[f'{name}|{_tob}'] = _r
+                if np.isfinite(_r['lb']):
+                    _lb_now[_tob] = float(_r['lb'])
             age = max((0.0 if not o.model else now - self._stamp.get(o.model, 0.0))
                       for o in live)
             worst_age = max(worst_age, age)
@@ -671,7 +809,9 @@ class ArmLinkDistance(Node):
                                float(li)] + list(S.points[k])
                             + [float(S.rho),
                                float(self._obs_index.get(which[k], -1))]
-                            + list(_vo_row(which[k], p_w + v[k])))
+                            + list(_vo_row(which[k], p_w + v[k]))
+                            + ([float(_lb_now[which[k]]), 1.0]
+                               if which[k] in _lb_now else [0.0, 0.0]))
 
             # **必要配對列**：即使該配對不是最近障礙物也照樣產生
             def _occ_of(p_w, vk):
@@ -685,10 +825,13 @@ class ArmLinkDistance(Node):
                 _ob = self.obstacles[_oi]
                 if _ob.T_world_link is None:
                     continue
+                # 與一般列**共用本週期算好的下界**；失敗時為 None ⇒
+                # 該列走既有 d − rho，**不沿用上一筆**。
+                _dlb = _lb_now.get(_obn)
                 _extra = forced_pair_rows(
                     W, S.points, _ob, _oi, li, S.rho, status, age, _occ_of,
                     self.max_range, self.max_rows_per_link,
-                    vobs_of=self._vobs_for)
+                    vobs_of=self._vobs_for, d_lb=_dlb)
                 rows.extend(_extra)
                 n_ok += len(_extra) if status == STATUS_OK else 0
         return rows, n_ok, n_unk, n_stale, n_nodata, worst_age

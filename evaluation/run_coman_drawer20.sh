@@ -26,6 +26,11 @@ CONTACT_PAIRS="${CONTACT_PAIRS:-uflite_finger1:handle_bar:engage|pull|hold|relea
 PAIR_ROWS="${PAIR_ROWS:-uflite_finger1:*,uflite_finger2:*}"
 # 免列＝接觸例外對象本身（它仍有一般的最近列，只在允許相位被濾掉）
 PAIR_ROWS_EXEMPT="${PAIR_ROWS_EXEMPT:-uflite_finger1:handle_bar,uflite_finger2:handle_bar}"
+# **逐配對精確距離下界**（R2）：每週期由當前位姿重算，取代該列的 d − rho。
+# 逾時或無效 ⇒ 退回 d − rho，不沿用上一筆。
+TIGHT_PAIRS="${TIGHT_PAIRS:-uflite_gripper_link:handle_bar}"
+TIGHT_TOL="${TIGHT_TOL:-0.0005}"
+TIGHT_BUDGET="${TIGHT_BUDGET:-0.020}"
 STROKE="${STROKE:-0.020}"
 PULL_S="${PULL_S:-4.0}"
 PIDS=(); say(){ echo "[$(date +%T)] $*" | tee -a "$LOG"; }
@@ -122,7 +127,9 @@ spawn dist ros2 run ammr_wholebody_mpc arm_link_distance --ros-args \
   -p use_sim_time:=true -p report_frame:=odom -p geometry:=links \
   -p wholebody_urdf:="$URDF_WB" -p obstacles:="[$(IFS=,; echo "${OBS[*]}")]" \
   -p pair_rows:="[$(echo "$PAIR_ROWS" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
-  -p pair_rows_exempt:="[$(echo "$PAIR_ROWS_EXEMPT" | sed 's/,/","/g; s/^/"/; s/$/"/')]"
+  -p pair_rows_exempt:="[$(echo "$PAIR_ROWS_EXEMPT" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
+  -p tight_pairs:="[$(echo "$TIGHT_PAIRS" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
+  -p tight_tol:="$TIGHT_TOL" -p tight_budget_s:="$TIGHT_BUDGET"
 spawn safety ros2 run ammr_wholebody_mpc wholebody_safety --ros-args \
   -p use_sim_time:=true -p report_frame:=odom -p base_frame:=base_link \
   -p wholebody_urdf:="$URDF_WB" -p freespace_confirmed:=false \

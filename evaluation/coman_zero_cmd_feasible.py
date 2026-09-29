@@ -30,7 +30,8 @@ WS = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(WS, 'src/ammr_wholebody_mpc'))
 from ammr_wholebody_mpc.arm_link_distance import (                     # noqa
-    expand_pair_rows, forced_pair_rows, parse_obstacles)
+    expand_pair_rows, forced_pair_rows, pair_distance_bound, parse_obstacles)
+from ammr_wholebody_mpc.arm_link_geometry import link_collision_tris   # noqa
 from ammr_wholebody_mpc.arm_link_geometry import (                     # noqa
     arm_link_names, obstacle_distances, sample_links_certified)
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa
@@ -98,6 +99,18 @@ def main() -> int:
                       for k, v in samples.items()))
 
     pairs, exempt = expand_pair_rows(PAIR_ROWS, EXEMPT, names)
+    # R2：殼—橫桿的精確下界，每次由當前位姿重算（與節點同一支函式）
+    _xml = open(URDF, encoding='utf-8').read()
+    _tt = link_collision_tris(_xml, links=['uflite_gripper_link'])
+    _Tw = K.fk(q, 'uflite_gripper_link')
+    _tris = (_tt['uflite_gripper_link'].reshape(-1, 3) @ _Tw[:3, :3].T
+             + _Tw[:3, 3]).reshape(-1, 3, 3)
+    _bnd = pair_distance_bound(_tris, obs[names.index('handle_bar')],
+                               tol=5.0e-4, max_tris=60000, budget_s=0.020)
+    TIGHT = ({('uflite_gripper_link', 'handle_bar'): float(_bnd['lb'])}
+             if np.isfinite(_bnd['lb']) else {})
+    print(f'精確下界（殼—橫桿）：{_bnd["lb"]*1000:.4f} mm '
+          f'（上界 {_bnd["ub"]*1000:.4f}、耗時 {_bnd["elapsed_s"]*1000:.1f} ms）')
 
     # ---- 依節點的做法產生列：一般帶狀列（最近障礙物）＋必要配對列 ----
     rows = []
@@ -125,7 +138,10 @@ def main() -> int:
                           np.array(r[3:6]), float(r[6]), int(r[7]),
                           float(r[8]), r[9] >= 0.5,
                           offset=np.array(r[11:14]), rho=float(r[14]),
-                          obs=names[int(r[15])]) for r in rows]
+                          obs=names[int(r[15])],
+                          d_lb=TIGHT.get((link_names[int(r[10])],
+                                          names[int(r[15])])))
+           for r in rows]
     print(f'屏障輸入列 {len(pts)} 條')
 
     cfg = SafetyConfig(g_by_pair=dict(PAIR_GAP),
@@ -168,21 +184,23 @@ def main() -> int:
             key = f'{p_.frame}|{p_.obs}'
             r_ = float(b[i])
             if key not in by_pair or r_ < by_pair[key][0]:
-                by_pair[key] = (r_, float(p_.d), float(p_.rho))
+                by_pair[key] = (r_, float(p_.d), float(p_.rho),
+                                None if p_.d_lb is None else float(p_.d_lb))
         print('\n最緊的十個配對（餘量由小到大；d 與 rho 為距離節點的實際輸出）。')
-        print('「可行上限」= d − rho，即零速下該列要 rhs >= 0 所需的**總靜態間距上限**；')
-        print('為負表示取樣點已落在物件的覆蓋半徑內，**任何非負間距都無法放行**。')
+        print('「可行上限」= **實際生效的距離項**（有精確下界者用下界，'
+              '否則 d − rho），即零速下該列要 rhs >= 0 所需的總靜態間距上限。')
         print('餘量單位是 rhs 本身（alpha x 距離，m/s）；「餘量距離」= 餘量 / alpha。')
         print(f'  {"配對":42s}{"餘量":>10s}{"餘量距離":>10s}{"d":>9s}{"rho":>8s}'
               f'{"可行上限":>10s}{"現行門檻":>10s}')
         print(f'  {"":42s}{"":>10s}{"(mm)":>10s}{"(mm)":>9s}{"(mm)":>8s}'
               f'{"(mm)":>10s}{"(mm)":>10s}')
-        for key, (r_, d_, rho_) in sorted(by_pair.items(),
-                                          key=lambda kv: kv[1][0])[:10]:
-            lim = (d_ - rho_) * 1000.0
+        for key, (r_, d_, rho_, lb_) in sorted(by_pair.items(),
+                                               key=lambda kv: kv[1][0])[:10]:
+            lim = (lb_ if lb_ is not None else d_ - rho_) * 1000.0
             cur = (cfg.g_by_pair.get(key, cfg.d0 + cfg.eps)) * 1000.0
             print(f'  {key:42s}{r_:+10.5f}{1000.0*r_/cfg.alpha:+10.2f}'
-                  f'{d_*1000:9.2f}{rho_*1000:8.2f}{lim:10.2f}{cur:10.1f}')
+                  f'{d_*1000:9.2f}{rho_*1000:8.2f}{lim:10.2f}{cur:10.1f}'
+                  f'{"  ←精確下界" if lb_ is not None else ""}')
 
     if bad:
         print('\n**零命令不可行。** 造成的列：')

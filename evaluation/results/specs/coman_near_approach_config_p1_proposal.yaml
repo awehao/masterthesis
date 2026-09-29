@@ -148,6 +148,8 @@ geometry_methods:
       誤差只有 1.25 mm，rho 卻是 13.35 mm'
     keep_for: 所有 fail_mode = rho_only 與間距餘裕充足的配對
   G2:
+    status: '**已實作並接進管線**（2026-09-30，R2）。向量化、每週期由當前位姿
+      重算；**未加熱啟動與活躍集合維護** —— 完整耗時已足夠。'
     name: 線上逐配對分支與界限（只給指定配對）
     formula: 'd_eff = LB(當前位姿)，LB = min over 三角形 (d(形心) - r_c)；
       距離函數 1-Lipschitz'
@@ -163,10 +165,33 @@ geometry_methods:
         **不能證明完整週期在 50 ms 內** —— 未含每週期的 TF／FK、三角形變換、
         活躍集合的擴張與維護、多配對並行、以及與現有 320 列屏障組裝的競用。
         **尚未實作、未量測完整週期。**'
-    required_before_use:
-    - 活躍集合的熱啟動必須依兩週期間的最大位移**擴張**，否則下界不再有效
-    - 活躍集合上限與逾時退回 G1（fail closed，較保守）
-    - 逐週期發布 LB、上界、活躍集合大小與是否逾時；不得只發布結果
+    implemented:
+      function: arm_link_distance.pair_distance_bound（向量化分支與界限）
+      node_params: tight_pairs／tight_tol（0.5 mm）／tight_max_tris／tight_budget_s（20 ms）
+      wire: PointCloud2 新增 dlb、dlbv（共 22 欄）；安全節點只在有效旗標為真時採用
+      applied_to: '**一般帶狀列與必要配對列共用同一份下界** —— 只補配對列沒有用，
+        一般列仍走 d − rho 會把較緊的下界壓過去（此缺口已在實作中修掉並有反例）'
+      distance_term: 'd_eff = d_lb（**不再扣 rho**，扣兩次等於重複計算）'
+      velocity_terms: 'rho **保留給速度修正**（omega x rho）；v·tau、v²/2a、
+        velocity_error_margin、相對速度項、stale 收縮、遮蔽上限全部保留'
+      fail_closed: '逾時／無效／非有限值 ⇒ 不輸出下界，該列退回 d − rho，
+        **不沿用上一筆**；stale 時以下界為基底再套 age 收縮，
+        避免過期反而取得較大距離'
+      diagnostics: 逐週期在距離節點的 diag 發布每個 tight 配對的 lb、ub、耗時、是否達容差
+    measured_full_path:       # FK + 三角形變換 + 分支界限，保持位姿
+      tol_2.0mm: {lb_mm: 5.7732, p50_ms: 5.15}
+      tol_1.0mm: {lb_mm: 7.2377, p50_ms: 7.11}
+      tol_0.5mm: {lb_mm: 7.2377, p50_ms: 7.12, max_ms: 7.31}   # 採用
+      tol_0.2mm: {lb_mm: 7.3397, p50_ms: 10.20}
+      tol_0.05mm: {lb_mm: 7.3905, p50_ms: 19.79, max_ms: 33.24, tol_met: false}
+      note: '控制週期 50 ms。這是**完整路徑**單一配對的耗時，
+        **不是**整個週期（尚未含節點其餘工作、多配對與屏障組裝）。'
+    effect_at_hold_pose:
+      distance_term_mm: {before: -4.65, after: 7.24}   # d − rho → 下界
+      barrier_residual: {before: -0.169301, after: -0.145525}
+      still_infeasible: '**仍不可行** —— 一般規則要求 80 mm，真實間距只有約 7.4 mm。
+        這是 R1 的問題，不是 R2。'
+    not_claimed: '只換距離**不等於**完整屏障已獲證明；相對煞停能力仍未驗證。'
   G3:
     name: 離線認證的局部基元代理（未提案採用）
     idea: 對殼的近橫桿區域擬合保守基元（球／膠囊），閉式距離、線上近乎零成本
