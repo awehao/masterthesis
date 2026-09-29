@@ -26,7 +26,10 @@ import yaml
 
 SPEC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          'results', 'specs',
-                         'wb_coman_drawer20_criteria_v0_draft.yaml')
+                         'wb_coman_drawer20_criteria_v1.yaml')
+SPEC_DRAFT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'results', 'specs',
+                               'wb_coman_drawer20_criteria_v0_draft.yaml')
 
 
 class SpecNotFrozen(RuntimeError):
@@ -335,6 +338,9 @@ class HandoverMachine:
             self._stab = {'t0': f.t, 'last_t': f.t, 'last_o': f.opening_m,
                           'lo': f.opening_m, 'hi': f.opening_m,
                           'max_rate': 0.0, 'insufficient': False}
+            # **名目窗末**與**實際結算時間**分開記錄：跨界樣本可能略超過窗末
+            self._mark('stability_window_start', f.t)
+            self._mark('stability_window_nominal_end', f.t + self.stab_window_s)
             if f.gripper_pos_world is not None and f.gripper_rot_world is not None:
                 R0 = np.asarray(f.gripper_rot_world, float)
                 self._retreat_ref = {

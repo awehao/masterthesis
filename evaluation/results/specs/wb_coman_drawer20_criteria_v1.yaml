@@ -1,0 +1,314 @@
+# 20 mm 底盤—手臂協同抽屜操作　判準 **v1（已定版・已凍結）**
+#
+# **定版範圍＝工程規格**。凍結**不代表**執行端已驗收，也不代表協同開抽屜已完成：
+# 執行端的同一物理步位姿讀取、完整相對旋轉記錄，以及實際趟次結果**都尚未存在**。
+#
+# 定位：**速度驅動底盤下的全身協同抽屜操作**。執行端以 set_linear_velocity()／
+# set_angular_velocity() 直接設定底盤根部速度，支撐球與地面零摩擦 —— 不是輪驅動。
+# 因此**不能**驗證牽引力或打滑；由底盤速度換算的輪速不是獨立實測輪速。
+#
+# 草案沿革保留於 wb_coman_drawer20_criteria_v0_draft.yaml（v0.1–v0.10），不刪除。
+schema: wb_coman_drawer_criteria/0
+version: v1
+status: frozen
+created: 2026-09-29
+frozen_at: 2026-09-29
+supersedes: wb_coman_drawer20_criteria_v0_draft.yaml（v0.10-draft，保留不刪）
+checker_sha256_16:
+  coman_handover_state.py: 5e717e4e3789efa5
+  check_enclosure_margin_approx.py: 2548f66c0a6f2edb
+test_results_at_freeze:
+  state_machine_offline_sequences: 50/50 通過
+  geometry_unit_tests: 三角面七個手算案例＋解析圓柱四案例＋批次一致性，全部通過
+  geometry_scan: 1260 組，近似式全部保守（最小保守餘裕 0.182 mm；H6 限值內 1.050 mm）
+freeze_meaning: >
+  本次定版的是**工程規格**。**不代表**執行端已驗收、不代表協同開抽屜已完成。
+basis_doc: evaluation/results/coman_drawer20_offline_stats_20260929.md   # rev2
+basis_doc_2: evaluation/results/coman_handover_geometry_check_20260929.md
+revision_note: >
+  沿革（草案 v0.3 階段）撤回 v0.2 的三處：(1)「交接能力已超出餘隙」——比較的量與窗口都不對，
+  底盤位移不是抓取是否成立的指標；(2) e_par／e_perp 被當成相對把手的對準誤差 ——
+  它們是 TCP 對理想路徑的追蹤誤差；(3)「最終套用命令等於求解器請求」——
+  只核對了輪級限制器一段。H2 的力臂由 40 mm（面板站距）改為 14.7 mm（TCP 到桿心）。
+run_label: 速度驅動底盤下的全身協同抽屜操作（短行程 20 mm）
+prospective: true
+not_retroactive: 只適用於本規格定版之後的趟次；既有固定底座結果不受影響。
+
+platform_scope:
+  base_actuation: velocity_commanded_root
+  wheel_ground_contact: not_modelled
+  traction_verifiable: false
+  slip_verifiable: false
+  claim_forbidden:
+    - 不得宣稱牽引力足夠或輪子未打滑
+    - 不得僅憑命令與實際兩條曲線把底盤運動定因為主動移動或被拖動
+    - 不得由「輪級限制器輸入輸出一致」推論「最終套用命令等於求解器請求」
+
+grasp_model: ideal_fixed_attachment          # 非摩擦夾持，分版驗證不混稱
+drawer:
+  passive: true
+  open_command_forbidden: true
+  drive_stiffness: 0
+  drive_damping: 0
+  drive_max_force: 0
+  drive_target: 0
+
+# ---- 任務側幾何（資產定義，非量測）----
+geometry:
+  handle_bar_diameter_m: 0.010
+  gripper_open_inner_m: 0.0178
+  nominal_clearance_per_side_m: 0.0039
+  nominal_clearance_scope: 僅適用指定截面、姿態與閉合方向；不是三維位置誤差容許半徑
+  enclosure_margin_min_m: 0.002        # 資產自訂的包覆餘裕要求
+  tcp_to_bar_center_along_tool_z_m: 0.0147   # 姿態誤差換算橫移的正確力臂
+  tool_z_window_m: 0.0244              # 桿置中後前後各餘 6.2 mm
+  panel_to_bar_standoff_m: 0.040       # **不是**夾持力臂
+  bar_diameter_authoritative: 0.010          # drawer_unit.yaml 的 bar.radius 0.005 為權威值
+  comment_defect: 資產註解推導站距時寫「12 mm 的桿、兩側各 6.2 mm」為舊版殘留；以 10 mm 桿計為**兩側各 7.2 mm**（文件缺陷，非幾何缺陷）
+  tool_z_side_margin_m: 0.0072
+  enclosure_margin_semantics: >
+    drawer_kin.enclosure_margin = finger_gap_open/2 − bar_radius = 0.0039 m，是**零誤差名目值**；
+    enclosure_margin_min_m = 0.002 是**設計期下限檢查**，不是預留給誤差的份額。
+    因此「3.9 − 2.0 = 1.9 mm 可用預算」不成立；誤差要代進 M1 的合併式重算。
+  finger_closing_axis: tool_y                # finger_joint1 axis 0 1 0
+  finger_contact_width_along_bar_m: 0.020    # 由 finger1.stl 包絡量得
+
+profile:
+  controller: 全身單步 QP（低速配置），底盤與手臂由同一次求解決定
+  base_fixed: false
+  target_stroke_m: 0.020
+  tcp: link_tcp
+  phases: [handover, engage, pull, hold, release, retreat]
+  reference_run_fixed_base: drawer_220102_offset20     # 20 mm、**無 b(s) 補償**，與協同版同樣不用補償
+
+forbidden:
+  - 不得解除底盤固定後直接沿用固定底座版的手臂軌跡
+  - 不得沿用固定底座的 b(s) 前饋補償
+  - 不得以 sim_limit 代替任務成功
+  - 不得以解除連接後的滑行算作受控到達
+  - 不得為了凸顯協同而把固定底座版放在不可能完成的位置
+
+# ---- 本案例必須新增的量測（沒有它就無法判定 H1／H2）----
+required_new_measurement:
+  gripper_pose_relative_to_handle:
+    reason: 既有紀錄只有 TCP 對理想路徑的追蹤誤差（e_par／e_perp），不是相對把手的對準誤差
+    needed_for: [M1, H1, H2, H6]
+    offline_reconstructable_for_fixed_base_reference: true
+    reconstruction_caveat: >
+      參照趟的重建是**依量測關節角與開度、假設底盤固定且抽屜沿理想滑軌運動**的模型值，
+      不含抽屜實際微小轉動、滑軌橫向偏差與 stage 對 FK 的差異，**不是實際位姿量測**。
+    new_endpoint_requirement: >
+      協同案例**不得**沿用該重建：底盤會動，park 不再是常數。
+      執行端須在**同一物理步**直接讀取夾爪與抽屜的實際世界位姿，再算相對變換。
+    datums_must_be_separate:
+      pre_attachment: 與**設計抓取關係**比較（判斷有沒有對準）
+      post_attachment: 與**連接當下的關係**比較（判斷約束殘差是否增加）
+
+H_handover:
+  # **位置與姿態不再各自設門檻**，改用同一份幾何算出的合併餘裕 M1。
+  M1_enclosure_margin_m_min: 0.0010          # 工程放行餘裕（已定版）
+  M1_role: engineering_release_margin        # **不是**已認證的模型誤差上界
+  M1_formula: m = (finger_gap_open/2 − bar_radius) − |t_y| − (L/2)·|a_y|
+  M1_terms:
+    t_y: 桿心在手指閉合方向（工具 y）的偏移 —— 位置誤差的貢獻
+    a_y: 桿軸在工具座標下的閉合方向分量 —— 姿態誤差的貢獻
+    L: 0.020    # 手指沿桿軸接觸寬度
+  M1_basis:
+    task_hard_need: m > 0（手指全開時須能不接觸地包住橫桿）
+    engineering_allowance: 1.0 mm 為模型簡化餘裕（平面近似手指、網格對解析值差異、接觸寬取包絡上界），非由歷史散佈挑出
+    reference_run: drawer_220102_offset20 各相位 m = 2.458–2.496 mm（名目 3.9 mm）
+  M1_not_guaranteed: 只涵蓋手指內面與桿面；非完整碰撞檢查；不得逕稱為「最小間距」
+  M1_validation:
+    script: evaluation/check_enclosure_margin_approx.py
+    revision: rev2（rev1 的最近點算法有缺陷，結論作廢）
+    algorithm: 完整區域判定（面內／三邊／三頂點），七個可手算單元測試通過
+    mesh_source: finger1.stl 與 finger2.stl 各自讀取，不用鏡射；URDF collision 即引用這兩個 STL
+    engine_shape_not_verified: 模擬引擎實際使用的凸分解形狀未經驗證
+    bar_model: 完整有限圓柱（長 0.200 m，含兩端面）
+    sampling: 手指表面格距 ≤ 0.30 mm（555694 點）＋ 解析式圓柱距離
+    lipschitz_bound_m: 0.0003
+    comparison: 一律用保守下界 (m_num − h)
+    cross_check: 兩條獨立路徑差 0.001–0.002 mm
+    cases: 1260（含負向偏移與多軸合併旋轉）
+    result: m_approx − (m_num − h) 介於 −7.477 mm 與 −0.182 mm，**全部保守**
+    conservatism_within_H6: 1.050 mm（|t_z| ≤ 2 mm）
+    conservatism_at_boundary: 0.182 mm（|t_z| = 4 mm，H6 限值的 2 倍）
+  M1_validated_range:
+    t_y_abs_max_m: 0.0029
+    t_z_abs_max_m: 0.0040
+    tilt_deg_max: 3.0
+    t_x_abs_max_m: 0.005
+    outside_range: refuse                    # 超出已核對範圍即拒絕放行，不得外推
+  M1_model_gap_recorded:
+    finding: 手指網格內面在橫桿高度處退在局部 y = +0.0112；名目 y = 0 平面只存在於指根
+    consequence: 零誤差下最小間距 6.910 mm（**本模型與算法的估計值**），非名目 3.9 mm
+    impact_this_case: 對夾持力無影響（理想固定連接不靠摩擦）；**不等於**對交接碰撞無影響
+    impact_future: 摩擦夾持必須重新檢視
+  H1_tcp_rel_handle_pos: record_only         # 降為記錄量
+  H2_tcp_rel_handle_rot: record_only         # 降為記錄量
+  H6_insertion_depth_tool_z_dev_m_max: 0.0020   # 新選定的工程限制，非由歷史誤差反推
+  H6_joint_check_with_orientation: true         # 須與姿態合併檢查
+  H6_note: 名目單側窗口 7.2 mm；剩餘 5.2 mm 只是零傾斜下的名目餘隙，不代表所有姿態都有
+  H6_reference: 參照趟工具 z 對設計值偏差 0.17–0.85 mm
+  H3_window_s: 3.0
+  H3_basis: 固定底座版 engage 2.0 + postengage 1.0；屬設計依據，非「3 s 夠穩」的證明
+  H3_enforcement: 必須**連續**符合交接條件滿 H3 才放行；取樣中斷即重新計時
+  H5_joint_check_required: true              # H1 與 H2 須合併檢查，不得各自判定
+  H6_long_tail_claim: 只檢查交接窗內行為；不得宣稱長尾漂移對本案例無影響
+
+H4_base_displacement:
+  classification: record_only                # **不設門檻**
+  threshold: null
+  reason: >
+    底盤位移不是抓取是否成立的指標（手臂可在全身求解中補償），
+    且夾爪餘隙不能當底盤位移預算。要設硬門檻需獨立的停放或環境需求。
+  existing_reference: 唯一具 ≥3 s 持續命令窗的趟次（long_144345），前 3 s 內最大 4.342 mm
+  yaw_unresolved: 五趟窗內最大偏航皆 0.691 mrad，僅記錄此一致性，不判定成因
+
+P_pull:
+  P1_final_opening_err_m_max: 0.0005         # 19.5–20.5 mm，工程完成容差
+  P1_hold_s: 2.0                             # 須明訂保持時間；沿用參照趟 hold 相位時長
+  P1_must_be_met_before_decouple: true       # 解除連接前達成，不得只看最後一筆開度
+  P1_basis:
+    task_need: 須由任務定義「多少算完成」；門檻不由參照趟反推
+    reference: 固定底座 20 mm 無補償趟達 −0.013 mm，顯示餘裕充足
+  P2_arrival_before_release_required: true
+  P3_path_tracking_err:
+    classification: record_only
+    threshold: null
+    reference: 20 mm 趟 e_par 1.902 mm、e_perp 1.467 mm（TCP 對理想路徑，非相對把手）
+  P4_release_stability:
+    classification: stability_indicator_candidate
+    window_s: 10.0
+    opening_change_m_max: 0.00005            # 0.05 mm
+    opening_rate_m_per_s_max: 0.000005       # 0.005 mm/s
+    basis: 固定底座 20 mm 趟釋放後 34.23 s 變化 0.00000 mm；解析度 0.001 mm
+    note: 位移與速率、觀察窗須同時明訂，只給位移不足
+    window_definition: "固定窗 [t_解除確認, t_解除確認 + window_s]；不得因缺測而改窗或重新計時"
+    in_window_rule: 樣本 t ≤ 窗末即為窗內；相鄰樣本構成的區間只要**起點仍在窗內**即計入本窗
+    crossing_sample_rule: 跨界取樣計入本窗，因此**不需要**恰好落在窗末的樣本
+    sealing_rule: 取樣時間首次達到或越過窗末即**結算並封存**判定與統計
+    sealed_immutable: 封存後**不再被窗外資料改寫**（避免結果隨錄多久而變）
+    post_window_recorded: [post_window_drift_m, post_window_max_rate, post_window_gap]
+    monitoring_continues: 封存判定**不等於**停止監看；窗外超力與監看失效照常走緊急處置
+    must_record: [stability_window_start, stability_window_nominal_end, stability_sealed]
+    seal_time_note: >
+      實際結算時間可能**略超過**名目窗末（跨界樣本的保守納入規則），
+      兩者一律分開記錄，不得以名目窗末充當實際結算時間。
+    coverage_required: true
+    coverage_rule: 窗內任一取樣間隔 > continuity.max_gap_s 即判**資料不足**，不得通過
+    rate_definition: 相鄰有效樣本的開度變化率上限；**不得**以全窗平均（變化量÷窗長）取代
+    rate_reason: 全窗平均會把短暫快速運動攤平（實測反例：最後 10 ms 跳動 0.04 mm，全窗平均仍通過）
+  P5_opening_source: 抽屜關節實測開度，不以命令值代替
+  P6_retreat_clear_m: 0.0233
+  P6_retreat_clear_tool_z_m: 0.0233          # 同值，保留舊鍵名供載入相容
+  P6_definition: >
+    退出開始時（執行端確認解除完成的當下）保存夾爪世界位姿為參考；
+    退出量為**相對該起點、沿退出起始座標系固定方向（起始夾爪 +z）的有號位移**。
+    方向固定於起始座標系，之後轉動工具不改變判讀。
+  P6_basis:
+    source: manipulation_cases.yaml —— 「清開橫桿最少需 0.0233 m」；案例命令的退開量為 0.040 m
+    applicability: 該 23.3 mm 描述的是沿接近／退出軸的退開距離，與本定義一致
+    not_claimed: 投影距離達標**不等於**已完全清開；碰撞與姿態檢查仍須各自保留
+  P7_release_handshake_required: true
+  P7_definition: >
+    正常釋放需**資格與請求同時成立**：狀態機輸出 normal_release_allowed，
+    任務流程在當下送出 release_requested，兩者同一週期成立才進入 RELEASE。
+    可全自動，不需人工確認。**緊急解除維持獨立閂鎖，不等正常請求。**
+  P8_retreat_starts_after_decouple_confirmed: true
+  P9_done_excludes_stability: >
+    DONE **不代表** P4 的釋放後穩定觀察已通過；穩定性獨立判定並獨立記錄。
+
+F_force:
+  F1_force_abort_n: 30.0
+  F2_force_abort_sustain_s: 0.05
+  F3_record_decomposition: [沿滑軌分量, 垂直分量]
+  F4_threshold_change_forbidden: true
+
+B_base_tracking:
+  classification: regression_alert           # **告警用，不作驗收**
+  B1_cmd_vs_measured_vel_err_mps_max: 0.005
+  B1_basis: 五趟 max 一致 3.03 mm/s（中位 0.011、p95 0.04–0.71）
+  B2_cmd_vs_measured_disp_err_m_max: 0.006   # **主指標：窗內最大值**
+  B2_rate_aux_m_per_s: 0.0003                # 輔助統計，**不得取代**窗內最大值
+  B2_basis: 窗內 max 1.33 mm（4.9 s）／5.28 mm（26.7 s）；折算 0.20–0.27 mm/s
+  B3_rejected_commands: 0
+  B4_endpoint_failure: none
+  B5_speed_box: 沿用低速配置（逐軸 0.035255 m/s、wz 0.1999、手臂 0.9999）
+  B6_interpretation_limit: 偏差只報為命令與實際之差，不歸因為牽引或打滑
+  B7_wheel_limiter_note: 參照趟 modified 0.0 %、λ 1.0000 ⇒ 僅代表輪級限制器輸入輸出一致
+
+S_chain:
+  S0_note: 以下各項互相獨立，必須分別記錄，不以其中一項代表另一項
+  S1_stale_ratio_in_operating_segment_max: 0.0     # 安全層上游過期，max_cmd_age 0.25 s
+  S1_basis: 既有四趟有效運動段 reason≠0 皆 0.0 %（isaac_wholebody_port_20260913.md §39）
+  S1b_endpoint_recv_timeout_events_max: 0          # 執行端自身逾時，max_cmd_age_s 0.2 s
+  S1c_two_timeouts_differ: 0.20 s（執行端）與 0.25 s（安全層）不同，不可互相代表
+  S2_solver_must_publish_through_hold: true
+  S2_basis: 既有四趟求解器在到達後 0.9–3.9 s 自行停止；hold 期是否持續發布未經證明
+  S3_hold_tracking_pass_required: true
+  S4_normal_release_gated_by_hold_pass: true       # **僅限正常任務釋放**
+  S5_emergency_decouple_must_not_be_gated: true
+  S5_basis: >
+    超力、監看失效等異常必須能立即執行既有的「先解除耦合、再停止」處置，
+    不得被到位或保持閘擋住。
+  S6_record_separate_timestamps: [命令新鮮, 執行端未逾時, 保持追蹤合格, 允許正常釋放, 緊急解除]
+  S7_tail_stale_expected: true
+
+D_protections:
+  cpu_abort_c: 92.0
+  cpu_abort_change_forbidden: true
+  independent_domain_required: true
+  independent_run_dir_required: true
+  attended_operation_required: true
+
+comparison:
+  must_match: [同一抽屜資產, 同一目標行程 0.020 m, 同一抓取模型, 同一增益與判準]
+  fixed_base_reference: drawer_220102_offset20
+  reference_differences_to_state:
+    - 無沿行程 b(s) 補償（與協同版一致）
+    - "**仍有一次性交接偏置 b0**（handover.mode = offset），控制方式與全身 QP 不同"
+    - 不得把比較說成「只改了底盤是否固定」
+    - pull 時長 2.02 s
+    - 釋放後窗 34.23 s
+  report_items: [關節限位餘裕, 手腕負載, 完成行程, 底盤運動追蹤]
+
+continuity:
+  max_gap_s: 0.15            # 取樣間隔超過即視為缺測，連續計時重置
+  note: 缺測不得計入連續保持或連續交接
+  must_be_read_from_spec: true   # 模組不得使用內建預設值；規格缺此欄即拒絕建構
+
+input_validity:
+  required_finite: [rel_pos_tool, bar_axis_tool, opening_m, t]
+  time_rule: 時間須有限且嚴格遞增；倒退或重複即判時間異常
+  same_step_read_required: true
+  on_invalid: 不累積連續計時、不放行、不推進相位
+  force_measurement_invalid: 走**監看失效**處置（緊急解除閂鎖），不得忽略
+
+scope_caveats:
+  geometry_validation: >
+    1260 組支持的是**已測位姿點**的結果，不是整個連續位姿範圍的保守性證明。
+    表面取樣的 Lipschitz 下界只涵蓋手指表面離散化，**未涵蓋位姿掃描點之間的空隙**。
+  datum_rotation: >
+    模組已可保存完整相對旋轉，但執行端尚未提供；目前兩套基準的實測資料只有位置。
+  same_step_read: >
+    位姿是否為同一物理步讀取，由呼叫端聲明（Frame.same_step_read），
+    純邏輯模組**無法自行驗證資料來源**。
+
+runner_gate:
+  refuse_if_any_required_threshold_null: true
+  enforced_in: evaluation/coman_handover_state.py（load_spec：未凍結或仍有 null 即拋 SpecNotFrozen）
+  state_machine_module: evaluation/coman_handover_state.py（20 項離線狀態序列測試通過）
+  currently_null: []
+  frozen_note: 門檻已定版；載入時仍逐項驗值、驗型別、驗範圍，不以本清單代替查核
+
+pending:
+  # 門檻已定版；以下為**執行端接線**待辦，不是門檻缺口
+  - key: 同一物理步位姿讀取
+    需要: 執行端在同一物理步讀取夾爪與抽屜的完整世界位姿並記錄原始量測
+  - key: 釋放與解除接線
+    需要: 接上 release_requested、decouple_confirmed 與緊急解除路徑
+  - key: 完整相對旋轉
+    需要: 執行端提供 rel_rot_tool，兩套基準才有旋轉資料
+  - key: 20 mm 協同試驗
+    需要: 接線驗證通過後才安排；本規格不預判其結果
