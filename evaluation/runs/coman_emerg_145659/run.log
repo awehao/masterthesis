@@ -1,0 +1,139 @@
+[14:57:00] === 協同握手短測 RUN_ID=coman_emerg_145659 CASE=drawer_open_a_fixed domain=120 ===
+[14:57:00] 起跑前 CPU 53.0  來源 hwmon:coretemp
+[14:57:00] [1/5] 產生並驗證軌跡（沿用既有產生器；連接後的事件會被執行端攔下）
+案例 drawer_open_a_fixed（抓取模型 fixed_attachment）
+  夾持 TCP 底盤 x：0.6400（關閉） → 0.4400（開 0.200 m） → 0.4000（退出後）
+  接近起點 x = 0.5400；速度上限 0.35 rad/s、加速度 0.7 rad/s²、50 Hz
+
+  1150 個設定點，總時長 22.980 s
+    reach       256 點    0.000 –   5.100 s
+    approach    130 點    5.120 –   7.700 s
+    engage      100 點    7.720 –   9.700 s
+    pull        408 點    9.720 –  17.860 s
+    hold        100 點   17.880 –  19.860 s
+    release      50 點   19.880 –  20.860 s
+    retreat      56 點   20.880 –  21.980 s
+    settle       50 點   22.000 –  22.980 s
+  規劃用的時間縮放 reach 1.0216 / approach 1.0216 / pull 1.0000 / retreat 1.0293（1.0 = 未縮放）
+
+  實際最大關節速度   [0.0, 0.232, 0.3424, 0.0, 0.2636, 0.3423]  上限 0.35
+  實際最大關節加速度 [0.0002, 0.4941, 0.6699, 0.0002, 0.5156, 0.6696]  上限 0.7
+  拉開段時間倍率 2.000：該段實際速度 0.1750（原速版的 1/2.000 ⇒ 應 ≈ 0.1746）、加速度 0.1751（應 ≈ 0.1742）
+  相鄰設定點最大跳動 0.00685 rad（第 314 點，approach → approach）
+
+  幾何檢查 241 / 1150 點（stride 5，含所有段界）
+    0/241 …
+    25/241 …
+    50/241 …
+    75/241 …
+    100/241 …
+    125/241 …
+    150/241 …
+    175/241 …
+    200/241 …
+    225/241 …
+  （10.0 s）
+  限位餘裕最小      0.0611 rad   reach@0.00s joint3
+  自碰餘裕最小      8.62 mm   pull link4|link6
+  對櫃體／抽屜最小  7.28 mm   hold uflite_gripper_link|handle/bar
+  夾爪殼對橫桿最小  7.28 mm   hold
+  joint3 起步前 12 點 [0.0, 9e-05, 0.00035, 0.00078, 0.00139, 0.00217, 0.00312, 0.00425, 0.00555, 0.00702, 0.00867, 0.01049]
+    （安全下限 −0.0611，起點 0.0 距中止線 0.0111 rad；往正向離開，方向正確）
+  手指全開包覆餘裕  3.90 mm（解析值）
+
+判定：通過
+輸出：/home/howardchen/masterthesis/evaluation/runs/coman_emerg_145659/traj/traj.csv
+[14:57:11]     1150 個設定點，總時長 22.980 s
+[14:57:11] [2/5] 啟動 Isaac（協同版）
+[14:57:11]   Isaac PID=44327
+[14:57:11] [3/5] 等 /clock 前進與訂閱者
+[drawer] 案例 drawer_open_a_fixed  抓取模型 fixed_attachment
+[drawer] sha {'urdf': 'fd3252f41bd3d6ef', 'spec': '9cad296fd6e21c43', 'cases': '258023c7636e05b2', 'poses': '685ee536c51f898d'}
+[drawer] 停放 (10.5000, 8.0897) yaw 90.0°
+[drawer] 目標開度 0.200 m ± 0.010，保持 2.0 s
+Starting kit application with the following args:  ['/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/exts/isaacsim.simulation_app/isaacsim/simulation_app/simulation_app.py', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/apps/isaacsim.exp.base.python.kit', '--/app/tokens/exe-path=/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/kit', '--/persistent/app/viewport/displayOptions=3094', '--/rtx/materialDb/syncLoads=True', '--/rtx/hydra/materialSyncLoads=True', '--/omni/kit/plugin/syncUsdLoads=True', '--/app/renderer/resolution/width=1280', '--/app/renderer/resolution/height=720', '--/app/window/width=1440', '--/app/window/height=900', '--/renderer/multiGpu/enabled=True', '--/app/fastShutdown=True', '--/app/installSignalHandlers=0', '--ext-folder', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/exts', '--ext-folder', '/home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/apps', '--/physics/cudaDevice=0', '--/plugins/carb.tasking.plugin/threadCount=8', '--/plugins/omni.tbb.globalcontrol/maxThreadCount=8', '--portable', '--no-window', '--/app/window/hideUi=1']
+Passing the following args to the base kit application:  ['--case', 'drawer_open_a_fixed', '--out', '/home/howardchen/masterthesis/evaluation/runs/coman_emerg_145659/sim', '--sim-limit', '40', '--handshake-test', '--handshake-release-after-steps', '20', '--handshake-stop-after-confirm-steps', '20', '--inject-fault', 'monitor_fail', '--inject-fault-step', '10']
+2026-09-29T06:57:11Z [Info] [carb] Logging to file: /home/howardchen/venvs/isaacsim-6.0.1/lib/python3.12/site-packages/isaacsim/kit/logs/Kit/Isaac-Sim Python/6.0/kit_20260929_145711.log
+[0.068s] [ext: omni.assets.plugins-0.0.0] startup
+[0.069s] [ext: omni.blobkey-1.1.2] startup
+[0.069s] [ext: omni.kit.async_engine-0.0.3] startup
+[0.175s] [ext: omni.client.lib-1.1.1] startup
+[0.186s] [ext: omni.client-1.3.0] startup
+[0.189s] [ext: omni.protobuf.lib-1.0.0] startup
+[0.190s] [ext: omni.grpc.lib-1.0.0] startup
+[0.194s] [ext: omni.metrics.core-0.0.3] startup
+[0.194s] [ext: omni.datastore-0.0.0] startup
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1790665031.624821   44327 descriptor_database.cc:633] File already exists in database: grpc/health/v1/health.proto
+W0000 00:00:1790665031.624858   44327 message.cc:301] Protobuf GeneratedMessageFactory: File is already registered: grpc/health/v1/health.proto
+[0.195s] [ext: omni.gpu_foundation.shadercache.vulkan-1.0.0] startup
+[0.197s] [ext: omni.hsscclient-1.1.4] startup
+[0.198s] [ext: omni.stats-1.0.1] startup
+[0.198s] [ext: omni.ujitso.default-1.0.0] startup
+[0.201s] [ext: omni.gpu_foundation-0.0.0] startup
+[0.422s] [ext: carb.windowing.plugins-1.0.1] startup
+[0.422s] [ext: omni.kit.renderer.init-1.0.1] startup
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 0 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 1 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 2 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 3 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 4 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 5 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 6 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 7 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 8 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 9 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 10 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 11 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 12 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 13 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 14 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 15 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 16 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 17 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 18 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to find the package that core 19 belongs to.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] all CPU packages were empty!  Failed to find any available CPU cores.
+2026-09-29T06:57:11Z [430ms] [Error] [omni.platforminfo.plugin] failed to retrieve CPU information.
+2026-09-29T06:57:12Z [651ms] [Warning] [omni.rtx] Skipping unsupported non-NVIDIA GPU: Intel(R) Iris(R) Xe Graphics (RPL-P)
+2026-09-29T06:57:12Z [651ms] [Warning] [omni.rtx] Skipping unsupported non-NVIDIA GPU: Intel(R) Iris(R) Xe Graphics (RPL-P)
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 595.84        | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA GeForce RTX 4060 Laptop.. | Yes: 0 |     | 8188    MB | 10de      | 0          |
+|     |                                  |        |     |            | 28a0      | 7f591da1.. |
+|     |                                  |        |     |            | 1         |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | Intel(R) Iris(R) Xe Graphics (.. |        |     | 23841   MB | 8086      | 0          |
+|     |                                  |        |     |            | a7a0      | 8680a0a7.. |
+|     |                                  |        |     |            | 0         |            |
+|=============================================================================================|
+| OS: 24.04.4 LTS (Noble Numbat) ubuntu, Version: 24.04.4, Kernel: 7.0.0-31-generic
+| XServer Vendor: The X.Org Foundation, XServer Version: 12101011 (1.21.1.11)
+| Processor: 13th Gen Intel(R) Core(TM) i7-13700H
+| Cores: Unknown | Logical Cores: 0
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 31789 | Free Memory: 22236
+| Total Page/Swap (MB): 8191 | Free Page/Swap: 8191
+|---------------------------------------------------------------------------------------------|
+2026-09-29T06:57:12Z [893ms] [Warning] [omni.rtx] CPU performance profile is set to powersave. This profile sets the CPU to the lowest frequency reducing performance.
+2026-09-29T06:57:12Z [902ms] [Warning] [omni.rtx] IOMMU is enabled.
+[1.031s] [ext: omni.kit.pipapi-0.0.0] startup
+[1.032s] [ext: omni.kit.telemetry-0.5.2] startup
+[1.055s] [ext: omni.kit.loop-isaac-1.6.0] startup
+[1.059s] [ext: omni.kit.test-2.0.7] startup
+[1.246s] [ext: omni.materialx.libs-1.0.9] startup
+[1.252s] [ext: omni.gpucompute.plugins-0.0.0] startup
+[1.253s] [ext: omni.usd.config-1.0.7] startup
+[1.255s] [ext: omni.usd.libs-1.0.3] startup
+[1.351s] [ext: omni.iray.libs-0.0.1] startup
+[1.355s] [ext: omni.mdl-57.0.3] startup
+[1.374s] [ext: omni.mdl.neuraylib-0.2.20] startup
+[1.376s] [ext: omni.kit.usd.mdl-1.1.9] startup
+[1.474s] [ext: omni.appwindow-1.2.2] startup
+[1.476s] [ext: omni.kit.renderer.core-1.2.2] startup
