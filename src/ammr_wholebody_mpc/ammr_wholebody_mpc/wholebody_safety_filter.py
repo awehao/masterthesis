@@ -90,11 +90,21 @@ class SafetyConfig:
     d0: float = 0.05             # m, standoff at zero speed
     # ---- 配對層級的例外（預設全空 ⇒ 行為完全不變）----
     # 鍵一律為 '<link>|<obstacle>'：**哪個連桿對哪個物件**，不是整條連桿或整個物件。
-    #   d0_by_pair    只改該配對的**基礎間距 d0**；
+    #   d0_by_pair    只改該配對的**基礎間距 d0**；`eps` 仍另外加上去。
     #                 速度相關項（v·tau、v²/2a）**照常計入**，不取消。
+    #   g_by_pair     該配對的**總靜態間距**，**取代 d0 + eps**（不是再加 10 mm）。
+    #                 用於受限模擬配置：設計保持位姿的間距小於一般規則的
+    #                 d0 + eps = 80 mm，甚至小於 eps 單獨的 30 mm，
+    #                 靠調 d0 或靠負值抵銷都不成立。
+    #                 **保留**：v·tau、v²/2a、rho 扣除、omega·rho 與速度誤差修正、
+    #                 stale 收縮、遮蔽上限。
+    #                 這是**局部安全參數配置的變更**，不是「門檻完全沒變」。
     #   contact_pairs 該配對在列出的**相位**中允許接觸 ⇒ 不產生屏障列；
     #                 相位不符、或 phase 為 None（未知）時**一律照一般規則**。
+    # 同一鍵不得同時出現在 d0_by_pair 與 g_by_pair（語意會互相掩蓋）——
+    # 由 validate_pair_config 擋掉。
     d0_by_pair: dict = field(default_factory=dict)
+    g_by_pair: dict = field(default_factory=dict)
     contact_pairs: dict = field(default_factory=dict)
     phase: str | None = None           # 當前相位；未知即不給任何例外
     tau: float = 0.15            # s, sense + control + actuation latency
@@ -325,9 +335,16 @@ def _rows_from_points(K, q, pts, cfg, v_in):
             # 其他連桿對同一物件、以及本連桿對其他物件，**都不受影響**。
             cfg.last_contact_skipped = getattr(cfg, 'last_contact_skipped', 0) + 1
             continue
-        d0_pt = cfg.d0_by_pair.get(_key, cfg.d0)
-        d_stop = (d0_pt + v_app * cfg.tau
-                  + v_app * v_app / (2.0 * max(a_br, 1e-3)) + cfg.eps)
+        _g_pair = cfg.g_by_pair.get(_key)
+        if _g_pair is not None:
+            # **受限模擬配置**：g_pair 就是該配對的總靜態間距，取代 d0 + eps。
+            # 速度相關項照常計入；rho 扣除與速度誤差修正在下方保留。
+            d_stop = (float(_g_pair) + v_app * cfg.tau
+                      + v_app * v_app / (2.0 * max(a_br, 1e-3)))
+        else:
+            d0_pt = cfg.d0_by_pair.get(_key, cfg.d0)
+            d_stop = (d0_pt + v_app * cfg.tau
+                      + v_app * v_app / (2.0 * max(a_br, 1e-3)) + cfg.eps)
         A.append(row)
         owner.append(pi)
         rhs = cfg.alpha * (d_eff - d_stop)
@@ -347,6 +364,23 @@ def _rows_from_points(K, q, pts, cfg, v_in):
             owner.append(pi)
             b.append(cfg.blind_approach_cap)
     return A, b, cap, owner
+
+
+def validate_pair_config(cfg) -> None:
+    """配對層級設定的相容性檢查。**不合法就拋出，不靜默取一邊。**
+
+    `d0_by_pair` 與 `g_by_pair` 對同一鍵的語意互相掩蓋（一個加 eps、一個取代
+    d0+eps），同時出現時無法判斷意圖；`g_by_pair` 為負會變成「允許穿入」。
+    """
+    both = set(cfg.d0_by_pair) & set(cfg.g_by_pair)
+    if both:
+        raise ValueError(f'同一配對同時設了 d0_by_pair 與 g_by_pair：{sorted(both)}')
+    for k, v in cfg.g_by_pair.items():
+        if not np.isfinite(v) or float(v) < 0.0:
+            raise ValueError(f'g_by_pair[{k!r}] = {v!r}：總靜態間距不得為負或非有限值')
+    for k, v in cfg.d0_by_pair.items():
+        if not np.isfinite(v) or float(v) < 0.0:
+            raise ValueError(f'd0_by_pair[{k!r}] = {v!r}：基礎間距不得為負或非有限值')
 
 
 def _joint_limit_rows(K, q, cfg):

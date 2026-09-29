@@ -6,19 +6,28 @@ references:
   criteria_v1: wb_coman_drawer20_criteria_v1.yaml
   criteria_v1_sha256_16: c9f303a8630d4d0e
   pairs_table: coman_contact_avoid_pairs_v0_draft.yaml
-v1_thresholds_changed: false
+v1_thresholds_changed: false        # 凍結的**操作驗收**門檻未變
+safety_filter_config_changed: true  # 安全濾波**配置**有變（局部、逐配對）——
+#   兩者是兩件事，不得寫成「安全門檻完全沒變」
 pair_avoidance:
-  mechanism: 'SafetyConfig.d0_by_pair 與 contact_pairs，鍵為 ''<link>|<obstacle>''。
+  mechanism: 'SafetyConfig.g_by_pair／d0_by_pair 與 contact_pairs，鍵為 ''<link>|<obstacle>''。
+
+    g_by_pair 是該配對的**總靜態間距**，**取代** d0 + eps（不是再加上去）；
+
+    d0_by_pair 只改基礎 d0、eps 仍另加。同一配對不得同時設兩者。
 
     預設全空 ⇒ 既有行為完全不變。相位由**求解端擁有並發布**
 
     （/coman/contact_phase），安全層訂閱同一份；**過期或未收到 ⇒ 無任何例外**。
 
     '
-  d0_by_pair:
+  d0_by_pair: {}                     # 本趟不使用（與 g_by_pair 互斥）
+  g_by_pair:                         # 總靜態間距，取代該配對的 d0 + eps = 80 mm
     uflite_finger1|drawer_front_panel: 0.01
     uflite_finger2|drawer_front_panel: 0.01
   velocity_terms_kept: true
+  rho_deduction_kept: true
+  velocity_error_correction_kept: true
   contact_pairs:
     uflite_finger1|handle_bar:
     - engage
@@ -60,19 +69,22 @@ pair_avoidance:
     wired_via: arm_link_distance.py 參數 pair_rows／pair_rows_exempt（由 run_coman_drawer20.sh 傳入，起動前檢查比對 S1
       並要求免列清單與 contact_pairs 完全一致）
   rationale:
-    task_need: 設計抓取位姿下指尖距面板 27.9 mm（實測），一般規則 d0 = 50 mm 會擋死任務
+    task_need: '設計抓取位姿下指尖距面板 27.9 mm（實測）；一般規則的總靜態間距是
+      d0 + eps = 80 mm，扣除 rho 後仍擋死任務'
     selection_basis_m:
       robot_mesh_sampling: 0.002
       tracking_error: 0.0015
       engineering_reserve: 0.003
       sum: 0.0065
     chosen: 0.01
-    nominal_margin_note: 27.9 − 10 = 17.9 mm 為**名目幾何餘裕**，非安全裕度證明
+    nominal_margin_note: '27.9 − 10 = 17.9 mm 只是**名目**幾何餘裕，非安全裕度證明；
+      完整屏障下的實際餘量為 +5.34／+6.60 mm（距離當量，見 O2）——
+      差異來自 rho 扣除，**不能只做名目減法**'
     not_derived_from: 歷史最小間距只用於確認可行性，**不是門檻的推導依據**
   scope_guarantee:
     verified_offline: evaluation/test_pair_exceptions.py（15 項全部通過）
     checks:
-    - 手指—面板仍產生屏障列，只是 d0 由 50 → 10 mm
+    - 手指—面板仍產生屏障列，只是總靜態間距由 d0+eps = 80 → 10 mm
     - 有接近速度時 rhs 變小 ⇒ 速度相關停止距離未取消
     - 手指—櫃體、link4—面板、link4—橫桿、底盤—橫桿：規則完全未變
     - 手指—橫桿只在允許相位免列；非允許相位與相位未知一律照一般規則
@@ -95,13 +107,14 @@ checkers_sha256_16:
   coman_pose_reader.py: 9581efb675d8d361
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
-  coman_pull_solver_node.py: 52031ba7fe6cc38c
+  coman_pull_solver_node.py: a6f05ff9d8dd1104
   isaac_coman_drawer_sim.py: 3cd85d5b2d3787b8
-  wholebody_safety_filter.py: c81268f57616b59d
-  arm_link_distance.py: 5f4cbbdacd57bd79
-  wholebody_safety_node.py: a00dc729e15421cb
+  wholebody_safety_filter.py: 5e9eeece4e6b900b
+  arm_link_distance.py: 81a60f35f9f296c9
+  wholebody_safety_node.py: ae3013ae7051f3f3
   test_pair_exceptions.py: da31af8647a8f293
-  test_pipeline_pairs.py: 98d40f4360dc9bb2
+  test_pipeline_pairs.py: 819689265ea84de3
+  coman_zero_cmd_feasible.py: 59b2c2d21c3cc0eb
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。
@@ -118,7 +131,7 @@ wiring_fixes_20260929:
   fix: 相位訊息改為 JSON 攜帶 sim_t，安全層以來源時間計齡；解析失敗 ⇒ 相位未知
 open_issues:
 - id: O1
-  severity: blocking
+  severity: resolved
   title: 10 mm 的配對 d0 **沒有**打通手指—面板；eps 單獨就大於設計間距
   facts:
     design_clearance_mm: 27.9
@@ -133,7 +146,62 @@ open_issues:
   note_on_double_counting: 'eps 的用途（幾何＋量測餘裕）與 S1 選值依據
     （網格取樣 2.0 + 追蹤誤差 1.5 + 工程預留 3.0 = 6.5 mm）**重疊**；
     但如何處置屬門檻決定，**不在此版自行更動**。'
-  status: 待指導意見裁定；**未調整任何門檻**（eps 仍為 30 mm，d0 仍為 10 mm）
+  status: '已裁定（2026-09-29）：兩組「手指—面板」另立為**總靜態間距 10 mm 的
+    受限模擬配置**，g_pair **取代**該配對的 d0 + eps，不是在 30 mm 上再加 10 mm。
+    其餘配對維持原設定；速度相關項、rho 扣除與速度誤差修正全部保留。
+    **不使用負的 d0 抵銷 eps。**'
+  resolution:
+    mechanism: SafetyConfig.g_by_pair（節點參數 pair_gap、求解端 --pair-gap）
+    formula: d_stop_pair = g_pair + v_app·tau + v_app²/(2a)
+    g_pair_m: 0.010
+    replaces: 該配對的 d0 + eps（80 mm）
+    exclusive: 同一配對不得同時設 d0_by_pair 與 g_by_pair（validate_pair_config 擋掉）
+    verified: 'coman_zero_cmd_feasible.py：兩組面板配對在完整屏障下餘量
+      +5.34／+6.60 mm（距離當量）⇒ **此配置對其目標配對成立**'
+  naming: '這是**局部安全參數配置的變更**。凍結的 v1 操作驗收門檻不變，
+    與安全濾波配置有變，是兩件事；不得寫成「安全門檻完全沒變」。'
+  ten_mm_status: '首測的**工程選值**，不是已證明足夠的安全距離。
+    只能說 eps 與選值理由涵蓋的誤差類別**可能重疊**，
+    不能據此認定原本 30 mm 全部是重複計算。'
+  blocks: 已解除（改由 O2 阻擋）
+- id: O2
+  severity: blocking
+  title: 完整屏障下設計保持位姿**不允許零命令**；造成者是**其餘八組一般規則配對**
+  check: evaluation/coman_zero_cmd_feasible.py（既有趟次 drawer_220102_offset20 的
+    hold 相位，開度 19.99 mm；用距離節點實際的取樣、d 與 rho，未重跑任何趟次）
+  result: 屏障 320 列中有 8 組配對餘量為負；關節限位與速度框可行
+  target_pairs_ok:
+    uflite_finger1|drawer_front_panel: {d_mm: 28.07, rho_mm: 12.73, margin_mm: 5.34}
+    uflite_finger2|drawer_front_panel: {d_mm: 28.88, rho_mm: 12.28, margin_mm: 6.60}
+  blocking_pairs:
+  - {pair: uflite_gripper_link|handle_bar, d_mm: 8.69, rho_mm: 13.35,
+     margin_mm: -84.65, feasible_gap_limit_mm: -4.65,
+     note: '**上限為負** —— 取樣點已落在橫桿的覆蓋半徑內，任何非負間距都放行不了；
+       這是抓取幾何（夾爪殼包住橫桿），不是門檻大小問題'}
+  - {pair: link6|handle_bar, d_mm: 64.12, rho_mm: 13.30, margin_mm: -29.17,
+     feasible_gap_limit_mm: 50.83}
+  - {pair: uflite_finger1|handle_post_r, d_mm: 66.95, rho_mm: 12.73,
+     margin_mm: -25.78, feasible_gap_limit_mm: 54.22}
+  - {pair: uflite_finger1|handle_post_l, d_mm: 67.27, rho_mm: 12.73,
+     margin_mm: -25.46, feasible_gap_limit_mm: 54.54}
+  - {pair: uflite_finger2|handle_post_l, d_mm: 67.46, rho_mm: 12.28,
+     margin_mm: -24.82, feasible_gap_limit_mm: 55.18}
+  - {pair: uflite_finger2|handle_post_r, d_mm: 69.91, rho_mm: 12.28,
+     margin_mm: -22.37, feasible_gap_limit_mm: 57.63}
+  - {pair: link5|handle_bar, d_mm: 84.80, rho_mm: 12.62, margin_mm: -7.82,
+     feasible_gap_limit_mm: 72.18}
+  - {pair: link4|handle_bar, d_mm: 91.20, rho_mm: 13.54, margin_mm: -2.34,
+     feasible_gap_limit_mm: 77.66}
+  root_cause_of_pattern: '參照表 coman_contact_avoid_pairs_v0_draft.yaml 的
+    general_rule 寫 `d_stop = d0 + v·tau + v²/(2a)`，**漏了 eps**。
+    因此該表 no_conflict_after_measurement 的判定是拿 50 mm 比，不是 80 mm；
+    七組「可行上限 50.8–77.7 mm」的配對正落在 50 與 80 之間。
+    夾爪殼—橫桿該表**完全沒有列**（只列了殼—面板）。'
+  representation_note: '手指／夾爪的 rho 為 12.3–13.4 mm，與此處的間距
+    （8.7–28.9 mm）同一數量級 ⇒ 這些配對的餘量主要由**取樣表示的覆蓋半徑**決定，
+    不是量測誤差。'
+  not_done: 未刪除任何餘裕、未調整任何門檻、未改動一般規則；僅回報造成不相容的項目
+  status: 待指導意見裁定
   blocks: S1 核准與 20 mm 主成果首測
 questions:
   q1_completion: 20 mm 完整操作是否完成（接近→連接→拉開→保持→釋放→退出）

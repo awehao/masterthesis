@@ -17,7 +17,8 @@ from ammr_wholebody_mpc.arm_link_distance import (                           # n
 from ammr_wholebody_mpc.arm_link_geometry import Obstacle, obstacle_distances  # noqa
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics      # noqa
 from ammr_wholebody_mpc.wholebody_safety_filter import (                     # noqa
-    DetectionPoint, SafetyConfig, STATUS_OK, _rows_from_points)
+    DetectionPoint, SafetyConfig, STATUS_OK, _rows_from_points,
+    validate_pair_config)
 from coman_pull_policy import PHASES as POLICY_PHASES                        # noqa
 from coman_pull_solver_node import PHASE_MAP                                 # noqa
 
@@ -65,8 +66,8 @@ def main() -> int:
     cfg = SafetyConfig(
         contact_pairs={k: list(v) for k, v in
                        S1['pair_avoidance']['contact_pairs'].items()},
-        d0_by_pair={k: float(v) for k, v in
-                    S1['pair_avoidance']['d0_by_pair'].items()})
+        g_by_pair={k: float(v) for k, v in
+                   S1['pair_avoidance']['g_by_pair'].items()})
     for policy_phase in ('ENGAGE_WAIT', 'PULL', 'HOLD', 'RELEASE_WAIT'):
         cfg.phase = PHASE_MAP[policy_phase]
         A, b, _, _ = _rows_from_points(K, Q, [pt('uflite_finger1', 'handle_bar')],
@@ -158,10 +159,13 @@ def main() -> int:
     #   d_stop = d0 + eps = 10 + 30 = 40 mm > 設計間距 27.9 mm
     # eps（幾何＋量測餘裕）預設 30 mm，本身就大於 27.9 mm ⇒
     # **任何 d0 ≥ 0 都放行不了**。這是規格缺口，不在此處調門檻。
+    cfg_d0 = SafetyConfig(contact_pairs=dict(cfg.contact_pairs),
+                          d0_by_pair={'uflite_finger1|drawer_front_panel': 0.010})
+    cfg_d0.phase = 'pull'
     A2, b2, _, _ = _rows_from_points(
-        K, Q, [pt('uflite_finger1', 'drawer_front_panel', d=0.0279)], cfg,
+        K, Q, [pt('uflite_finger1', 'drawer_front_panel', d=0.0279)], cfg_d0,
         np.zeros(9))
-    check('面板在設計間距 27.9 mm 下**仍是限制方向**（d0+eps = 40 mm）',
+    check('（O1）d0_by_pair 10 mm 在 27.9 mm 仍是限制方向（d0+eps = 40 mm）',
           float(b2[0]) < 0.0)
     cfg0 = SafetyConfig(contact_pairs=dict(cfg.contact_pairs),
                         d0_by_pair={'uflite_finger1|drawer_front_panel': 0.0})
@@ -169,10 +173,35 @@ def main() -> int:
     A3, b3, _, _ = _rows_from_points(
         K, Q, [pt('uflite_finger1', 'drawer_front_panel', d=0.0279)], cfg0,
         np.zeros(9))
-    check('連 d0 = 0 都仍是限制方向（eps 單獨 30 mm > 27.9 mm）',
+    check('（O1）連 d0 = 0 都仍是限制方向（eps 單獨 30 mm > 27.9 mm）',
           float(b3[0]) < 0.0)
-    check('支柱的限制比面板嚴（一般 d0 50 mm vs 配對 10 mm）',
-          float(b1[0]) < float(b2[0]))
+    # ---------- 4 總靜態間距：**取代** d0 + eps，不是再加上去 ----------
+    A4, b4, _, _ = _rows_from_points(
+        K, Q, [pt('uflite_finger1', 'drawer_front_panel', d=0.0279)], cfg,
+        np.zeros(9))
+    check('（裁定）總靜態間距 10 mm 下，27.9 mm **不再是限制方向**',
+          float(b4[0]) > 0.0)
+    exp = cfg.alpha * (0.0279 - 0.010)          # 零速、rho = 0
+    check(f'該列 rhs 恰為 alpha(d − g_pair) = {exp:+.4f}（eps 未再疊加）',
+          abs(float(b4[0]) - exp) < 1e-12)
+    check('若 g_pair 被當成疊加項（d0+eps+g = 90 mm）則會是負的 —— 未發生',
+          float(b4[0]) > 0.0)
+    check('支柱仍照一般規則 d0+eps = 80 mm（餘量比面板小）',
+          float(b1[0]) < float(b4[0]))
+    try:
+        bad_cfg = SafetyConfig(
+            d0_by_pair={'uflite_finger1|drawer_front_panel': 0.010},
+            g_by_pair={'uflite_finger1|drawer_front_panel': 0.010})
+        validate_pair_config(bad_cfg)
+        check('同一配對同時設 d0 與總靜態間距會被拒絕', False)
+    except ValueError:
+        check('同一配對同時設 d0 與總靜態間距會被拒絕', True)
+    try:
+        validate_pair_config(SafetyConfig(
+            g_by_pair={'uflite_finger1|drawer_front_panel': -0.002}))
+        check('負的總靜態間距會被拒絕（不得靠負值抵銷 eps）', False)
+    except ValueError:
+        check('負的總靜態間距會被拒絕（不得靠負值抵銷 eps）', True)
     check('支柱沿用一般門檻，未被 10 mm 設定波及',
           'uflite_finger1|handle_post_l' not in cfg.d0_by_pair)
 

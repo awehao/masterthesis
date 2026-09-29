@@ -108,6 +108,35 @@ FIELDS = ['x', 'y', 'z', 'nx', 'ny', 'nz', 'd', 'status', 'age', 'occluded',
 
 
 
+def parse_obstacles(specs):
+    """障礙物設定字串 → Obstacle 串列。**離線核對與節點共用同一份解析。**"""
+    out = []
+    for spec in specs:
+        f = spec.split(':')
+        if len(f) < 4:
+            raise ValueError(f'obstacle spec needs >=4 fields: {spec!r}')
+        o = Obstacle(name=f[0], model=f[1], kind=f[2])
+        nums = [float(v) for v in f[3].replace(' ', '').split(',') if v]
+        if o.kind == 'box':
+            o.size = np.array(nums)
+        elif o.kind == 'cylinder':
+            o.radius, o.height = nums
+        elif o.kind == 'sphere':
+            o.radius = nums[0]
+        else:
+            raise ValueError(f'unsupported type {o.kind!r}')
+        xyz = np.array([float(v) for v in f[4].split(',')]) if len(f) > 4 and f[4].strip() else np.zeros(3)
+        rpy = np.array([float(v) for v in f[5].split(',')]) if len(f) > 5 and f[5].strip() else np.zeros(3)
+        if o.model:
+            o.T_link_collision = _iso(_rpy_to_rot(*rpy), xyz)
+        else:
+            # Static: xyz/rpy is the world pose of the collision body.
+            o.T_world_link = _iso(_rpy_to_rot(*rpy), xyz)
+            o.T_link_collision = np.eye(4)
+        out.append(o)
+    return out
+
+
 def expand_pair_rows(specs, exempt_specs, obstacle_names):
     """解析 `pair_rows` 與 `pair_rows_exempt`，回傳 ({連桿: [障礙物…]}, {連桿: {免列…}})。
 
@@ -329,31 +358,7 @@ class ArmLinkDistance(Node):
     # modelling input, not a measurement, and it is marked as such: age 0 is
     # honest here precisely because nothing is being measured.
     def _parse(self, specs: list[str]) -> list[Obstacle]:
-        out = []
-        for spec in specs:
-            f = spec.split(':')
-            if len(f) < 4:
-                raise ValueError(f'obstacle spec needs >=4 fields: {spec!r}')
-            o = Obstacle(name=f[0], model=f[1], kind=f[2])
-            nums = [float(v) for v in f[3].replace(' ', '').split(',') if v]
-            if o.kind == 'box':
-                o.size = np.array(nums)
-            elif o.kind == 'cylinder':
-                o.radius, o.height = nums
-            elif o.kind == 'sphere':
-                o.radius = nums[0]
-            else:
-                raise ValueError(f'unsupported type {o.kind!r}')
-            xyz = np.array([float(v) for v in f[4].split(',')]) if len(f) > 4 and f[4].strip() else np.zeros(3)
-            rpy = np.array([float(v) for v in f[5].split(',')]) if len(f) > 5 and f[5].strip() else np.zeros(3)
-            if o.model:
-                o.T_link_collision = _iso(_rpy_to_rot(*rpy), xyz)
-            else:
-                # Static: xyz/rpy is the world pose of the collision body.
-                o.T_world_link = _iso(_rpy_to_rot(*rpy), xyz)
-                o.T_link_collision = np.eye(4)
-            out.append(o)
-        return out
+        return parse_obstacles(specs)
 
     def _make_cb(self, model: str):
         def cb(msg: PoseStamped) -> None:

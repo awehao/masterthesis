@@ -105,20 +105,32 @@ def build(M, cl):
                 if not (_fv > 0.0):
                     raise ValueError(f'pair_d0 值必須為正：{_spec!r}')
                 _pd[f'{_lk}|{_ob}'] = _fv
+            _pg = {}
+            for _spec in [x for x in cl.pair_gap.split(',') if x.strip()]:
+                _lk, _ob, _v = _spec.split(':')
+                _fv = float(_v)
+                if not (_fv > 0.0):
+                    raise ValueError(f'pair_gap 值必須為正：{_spec!r}')
+                _pg[f'{_lk}|{_ob}'] = _fv
             _cp = {}
             for _spec in [x for x in cl.contact_pairs.split(',') if x.strip()]:
                 _lk, _ob, _phs = _spec.split(':')
                 _cp[f'{_lk}|{_ob}'] = [x for x in _phs.split('|') if x]
             self.cfg.d0_by_pair, self.cfg.contact_pairs = _pd, _cp
+            self.cfg.g_by_pair = _pg
+            from ammr_wholebody_mpc.wholebody_safety_filter import (
+                validate_pair_config)
+            validate_pair_config(self.cfg)
             self.obs_names = []
             self.create_subscription(String, '/arm_link_distance/obstacle_names',
                                      self._obs_names, _LATCH)
             self.phase_pub = self.create_publisher(String,
                                                    '/coman/contact_phase', 10)
-            if _pd or _cp:
+            if _pd or _pg or _cp:
                 self.get_logger().warn(
-                    f'**求解端配對層級例外**（一般 d0 {self.cfg.d0}）：'
-                    f'd0_by_pair={_pd}、contact_pairs={_cp}')
+                    f'**求解端局部安全參數配置**（一般 d0 {self.cfg.d0}、'
+                    f'eps {self.cfg.eps}）：d0_by_pair={_pd}、'
+                    f'g_by_pair={_pg}（取代該配對的 d0+eps）、contact_pairs={_cp}')
             # **任務配時與新鮮度一律用模擬時間**；牆鐘只作程序監看（逾時／熱）
             from rclpy.parameter import Parameter
             self.set_parameters([Parameter('use_sim_time',
@@ -354,8 +366,11 @@ def main() -> int:
     ap.add_argument('--contact-pairs', default='',
                     help="接觸例外，格式 'link:obstacle:ph1|ph2'；必須與安全層一致")
     ap.add_argument('--pair-d0', default='',
-                    help="逐連桿 d0 覆寫，格式 'link:value,link:value'；"
+                    help="配對 d0 覆寫，格式 'link:obstacle:value'（eps 仍另加）；"
                          '必須與安全層參數一致')
+    ap.add_argument('--pair-gap', default='',
+                    help="配對**總靜態間距**，格式 'link:obstacle:value'，"
+                         '**取代該配對的 d0+eps**；必須與安全層 pair_gap 一致')
     ap.add_argument('--retreat-clear-m', type=float, default=0.0233,
                     help='退出完成的實測門檻（沿退出起始方向的有號位移）')
     ap.add_argument('--grasp-rot',

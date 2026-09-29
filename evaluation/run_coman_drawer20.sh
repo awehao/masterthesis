@@ -16,7 +16,10 @@ LOG="$DIR/run.log"; : > "$LOG"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 URDF_WB="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
 SIM_LIMIT="${SIM_LIMIT:-120}"
-PAIR_D0="${PAIR_D0:-uflite_finger1:drawer_front_panel:0.010,uflite_finger2:drawer_front_panel:0.010}"
+# **總靜態間距**（取代該配對的 d0+eps，不是在 30 mm 上再加 10 mm）。
+# 一般規則 d0+eps = 80 mm；eps 單獨 30 mm 已大於設計間距 27.9 mm。
+PAIR_GAP="${PAIR_GAP:-uflite_finger1:drawer_front_panel:0.010,uflite_finger2:drawer_front_panel:0.010}"
+PAIR_D0="${PAIR_D0:-}"   # 不使用逐配對 d0 覆寫（與 PAIR_GAP 互斥）
 CONTACT_PAIRS="${CONTACT_PAIRS:-uflite_finger1:handle_bar:engage|pull|hold|release,uflite_finger2:handle_bar:engage|pull|hold|release}"
 # 一般列只留最近障礙物。橫桿被接觸例外刪列後，**任何**其他物件都可能完全沒有列
 # （面板 28 mm 合格、支柱 40 mm 違規卻無列可約束），故對兩指補齊「其餘所有配對」。
@@ -36,11 +39,11 @@ say "=== 20 mm 協同抽屜操作 主成果首測 RUN_ID=$RUN_ID domain=$ROS_DOM
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 
 say "[1/6] 起動前檢查（版本、規格、配對規則一致性）"
-python3 - "$DIR" "$PAIR_D0" "$CONTACT_PAIRS" "$PAIR_ROWS" "$PAIR_ROWS_EXEMPT" <<'PY' | tee -a "$LOG" || exit 2
+python3 - "$DIR" "$PAIR_D0" "$CONTACT_PAIRS" "$PAIR_ROWS" "$PAIR_ROWS_EXEMPT" "$PAIR_GAP" <<'PY' | tee -a "$LOG" || exit 2
 import hashlib, json, os, sys, yaml
 ws=os.path.dirname(os.path.dirname(os.path.abspath(__file__))) if False else os.getcwd()
 sha=lambda f: hashlib.sha256(open(f,'rb').read()).hexdigest()[:16]
-out, pair, cpairs, prows, pexempt = sys.argv[1:6]
+out, pair, cpairs, prows, pexempt, pgap = sys.argv[1:7]
 sp='evaluation/results/specs'
 v1=yaml.safe_load(open(f'{sp}/wb_coman_drawer20_criteria_v1.yaml',encoding='utf-8'))
 s1=yaml.safe_load(open(f'{sp}/wb_coman_drawer20_supplement_s1.yaml',encoding='utf-8'))
@@ -53,12 +56,19 @@ if s1['status']!='approved': fails.append(f"S1 補充規格未核准（status={s
 for _oi in s1.get('open_issues') or []:
     if str(_oi.get('severity'))=='blocking':
         fails.append(f"S1 未決項 {_oi.get('id')} 仍為 blocking：{_oi.get('title')}")
-want={k:float(v) for k,v in s1['pair_avoidance']['d0_by_pair'].items()}
-got={}
-for x in pair.split(','):
-    if x.strip():
-        lk,ob,v=x.split(':'); got[f'{lk}|{ob}']=float(v)
+def _kv(spec):
+    out={}
+    for x in spec.split(','):
+        if x.strip():
+            lk,ob,v=x.split(':'); out[f'{lk}|{ob}']=float(v)
+    return out
+want={k:float(v) for k,v in (s1['pair_avoidance'].get('d0_by_pair') or {}).items()}
+got=_kv(pair)
 if want!=got: fails.append(f'pair_d0 與 S1 不符：{got} vs {want}')
+wg={k:float(v) for k,v in (s1['pair_avoidance'].get('g_by_pair') or {}).items()}
+gg=_kv(pgap)
+if wg!=gg: fails.append(f'pair_gap 與 S1 不符：{gg} vs {wg}')
+if set(wg)&set(want): fails.append(f'同一配對同時設了 d0 與總靜態間距：{sorted(set(wg)&set(want))}')
 wcp={k:list(v) for k,v in s1['pair_avoidance']['contact_pairs'].items()}
 gcp={}
 for x in cpairs.split(','):
@@ -112,7 +122,7 @@ spawn dist ros2 run ammr_wholebody_mpc arm_link_distance --ros-args \
 spawn safety ros2 run ammr_wholebody_mpc wholebody_safety --ros-args \
   -p use_sim_time:=true -p report_frame:=odom -p base_frame:=base_link \
   -p wholebody_urdf:="$URDF_WB" -p freespace_confirmed:=false \
-  -p pair_d0:="[$(echo "$PAIR_D0" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
+  -p pair_gap:="[$(echo "$PAIR_GAP" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
   -p contact_pairs:="[$(echo "$CONTACT_PAIRS" | sed 's/,/","/g; s/^/"/; s/$/"/')]"
 spawn adapter python3 -u evaluation/arm_vel_adapter.py --consumer-node /isaac_drawer_sim
 sleep 5
@@ -120,7 +130,7 @@ sleep 5
 say "[5/6] 起求解節點（接近→連接→拉開→保持→釋放→退出，一趟走完）"
 python3 -u evaluation/coman_pull_solver_node.py --out "$DIR/solver_out.json" \
   --stroke-m "$STROKE" --pull-duration-s "$PULL_S" \
-  --pair-d0 "$PAIR_D0" --contact-pairs "$CONTACT_PAIRS" \
+  --pair-gap "$PAIR_GAP" --contact-pairs "$CONTACT_PAIRS" \
   2>&1 | tee "$DIR/solver.log" | tee -a "$LOG" >/dev/null
 
 say "[6/6] 等執行端收尾"

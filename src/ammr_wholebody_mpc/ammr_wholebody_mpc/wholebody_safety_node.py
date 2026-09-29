@@ -85,10 +85,12 @@ class WholeBodySafetyNode(Node):
         p('control_rate', 20.0)
         p('max_cmd_age', 0.25)
         # **配對層級**例外（預設空 ⇒ 行為完全不變），求解端必須用同一份設定：
-        #   pair_d0       'link:obstacle:value'  只改該配對的基礎間距
+        #   pair_d0       'link:obstacle:value'  只改該配對的基礎間距（eps 仍另加）
+        #   pair_gap      'link:obstacle:value'  該配對的**總靜態間距**，取代 d0+eps
         #   contact_pairs 'link:obstacle:ph1|ph2' 該配對在列出相位允許接觸
         #   contact_phase_topic 相位來源；**過期或未收到 ⇒ 無任何例外**
         p('pair_d0', [''])
+        p('pair_gap', [''])
         p('contact_pairs', [''])
         p('contact_phase_topic', '/coman/contact_phase')
         p('contact_phase_max_age', 0.25)
@@ -140,6 +142,15 @@ class WholeBodySafetyNode(Node):
                 raise ValueError(f'pair_d0 值必須為正：{_spec!r}')
             _pd[f'{_lk}|{_ob}'] = _fv
         self.cfg.d0_by_pair = _pd
+        # 總靜態間距覆寫：**取代該配對的 d0 + eps**，不是再加上去。
+        _pg = {}
+        for _spec in [x for x in g('pair_gap') if str(x).strip()]:
+            _lk, _ob, _v = str(_spec).split(':')
+            _fv = float(_v)
+            if not (_fv > 0.0):
+                raise ValueError(f'pair_gap 值必須為正：{_spec!r}')
+            _pg[f'{_lk}|{_ob}'] = _fv
+        self.cfg.g_by_pair = _pg
         _cp = {}
         for _spec in [x for x in g('contact_pairs') if str(x).strip()]:
             _lk, _ob, _phs = str(_spec).split(':')
@@ -148,11 +159,14 @@ class WholeBodySafetyNode(Node):
         self._phase_max_age = float(g('contact_phase_max_age'))
         self._phase_stamp, self._phase_val = None, None
         self.obs_names = []
-        if _pd or _cp:
+        from .wholebody_safety_filter import validate_pair_config
+        validate_pair_config(self.cfg)
+        if _pd or _pg or _cp:
             self.get_logger().warn(
-                f'**配對層級例外生效**（一般 d0 {self.cfg.d0}）：'
-                f'd0_by_pair={_pd}、contact_pairs={_cp}；'
-                f'此為新配置，求解端必須使用同一份設定')
+                f'**局部安全參數配置變更**（一般 d0 {self.cfg.d0}、eps {self.cfg.eps}）：'
+                f'd0_by_pair={_pd}、g_by_pair={_pg}（取代該配對的 d0+eps）、'
+                f'contact_pairs={_cp}；速度相關項、rho 扣除與速度誤差修正全部保留。'
+                f'求解端必須使用同一份設定')
         # 速度框覆寫：只在參數為正時生效；一律**收緊**（取 min），不放寬。
         import numpy as _np
         _vm = _np.array(self.cfg.vmax, dtype=float).copy()
