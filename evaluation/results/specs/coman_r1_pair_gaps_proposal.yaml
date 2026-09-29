@@ -1,0 +1,263 @@
+# **R1：十組近接配對的一次性定版提案**（待核准或退回）
+#
+# 這是一份**提案**。填了具體數值**不代表自動核准**，也不代表已證明安全。
+# 定位：完成**受限模擬條件下**的 20 mm 協同操作實驗；
+# 本輪**不**追求通用的接觸避碰安全證明。
+schema: coman_r1_pair_gaps/1
+version: R1
+status: proposal_pending_approval
+created: 2026-09-30
+generated_by: evaluation/coman_r1_table.py（數值由程式產生，非手抄）
+parent: coman_near_approach_config_p1_proposal.yaml
+
+naming:
+  is: '本次受限模擬採用的**工程設定**'
+  is_not: '**已證明在所有誤差與動態下都安全**'
+  note: '兩者不可互換敘述。v1 的操作驗收門檻未變；安全濾波配置有變。'
+
+mechanism:
+  g_pair: 該配對的**總靜態間距**，取代 d0 + eps（80 mm），單位**公尺**
+  d_stop: g_pair + v_rel·tau + v_rel²/(2a)；v_rel = n^T (J u − v_obs)
+  kept: v_rel 相關項、omega x rho、velocity_error_margin、stale 收縮、遮蔽上限
+
+selection_rule:
+  principle: '**盡量保留一般規則的 80 mm** —— 每組取其幾何允許的最大值，
+    不是取一個剛好能過的小值。'
+  general: 小於等於「有效距離項 − 5 mm」的最大 5 mm 整數倍
+  shell_bar: 1 mm 粒度、留 4 mm 以上（有效距離項只有約 7.2 mm）
+  fingers_panel: 沿用已裁定的 10 mm
+  reserve_is: '5 mm／4 mm 是留給**未核對的位姿**與**模型差異**的工程預留，
+    **不是**誤差上界，也不是證明。'
+
+phases_rationale: |
+  十組一律套用全部六個相位（approach、engage、pull、hold、release、retreat）。
+  理由：設計抓取位姿是在 approach 末段抵達、在 retreat 初段離開，
+  若把局部間距限定在 engage–release，機器人就**無法抵達或離開該位姿** ——
+  一般規則的 80 mm 會在抵達前擋住。相位限定在這個幾何下不可行，故不採用。
+
+reference_pose:
+  run: drawer_220102_offset20（既有趟次，**未重跑**）
+  phase: hold
+  opening_m: 0.019987
+  why_this_pose: '開度 19.99 mm 是**行程終點**，抽屜離機器人最近 ⇒
+    就抽屜位置而言是行程中的最壞情況。但**手臂在行程中間的構形未核對**。'
+  base: 固定底座趟次的 FK 重建；**開放底盤的位移與偏擺未涵蓋**
+
+compatibility_whole_set:
+  method: evaluation/coman_zero_cmd_feasible.py --r1（**整組 320 列**，非只算十組）
+  barrier_rows: 320
+  min_margin_rhs: 0.008475
+  min_margin_mm: 4.24
+  tightest_pair: uflite_gripper_link|handle_bar
+  joint_limit_rows: {n: 18, min_margin: 0.0, feasible: true}
+  box_rows: {n: 18, min_margin: 0.2775, feasible: true}
+  verdict: '在此候選配置下，參考位姿的**零相對速度**零命令可行；
+    十組之外沒有其他配對變負。'
+  not_claimed: '零相對速度可行**不等於**運動中可行，也不等於整段行程可行。'
+
+pairs:
+- pair: uflite_gripper_link|handle_bar
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G2
+    d_effective_mm: 7.2377   # 當前位姿的認證下界
+    bound_upper_mm: 7.4418
+    bound_elapsed_ms: 6.5
+    d_sample_mm: 8.69
+    rho_mm: 13.35
+    note: 下界取代 d − rho（該值為 -4.65 mm）；rho 仍用於速度修正
+  g_pair_m: 0.003
+  g_pair_mm_for_reading: 3.0
+  rationale: '1 mm 粒度、留 4 mm 以上；有效距離項只有約 7.24 mm，是本表最緊的一組'
+  compatibility:
+    barrier_rhs_zero_rel_v: 0.008475
+    margin_mm: 4.24
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+  limits:
+  - 單一位姿（hold、開度 19.99 mm）；行程中間構形未核對
+  - 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，與模擬器碰撞幾何的差異未量化
+  - 零相對速度；運動中的相對煞停能力**未驗證**
+  - 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+  - 下界是**該位姿**的值；7.24 mm **不是整段操作都有的間距**
+  - Isaac 執行期與整體週期耗時尚未驗收
+- pair: uflite_finger1|drawer_front_panel
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 15.34   # d_sample − rho
+    d_sample_mm: 28.07
+    rho_mm: 12.73
+  g_pair_m: 0.010
+  g_pair_mm_for_reading: 10.0
+  rationale: '沿用已裁定的受限模擬配置（10 mm 總靜態間距）'
+  compatibility:
+    barrier_rhs_zero_rel_v: 0.010686
+    margin_mm: 5.34
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+  limits:
+  - 單一位姿（hold、開度 19.99 mm）；行程中間構形未核對
+  - 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，與模擬器碰撞幾何的差異未量化
+  - 零相對速度；運動中的相對煞停能力**未驗證**
+  - 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+- pair: uflite_finger2|drawer_front_panel
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 16.60   # d_sample − rho
+    d_sample_mm: 28.88
+    rho_mm: 12.28
+  g_pair_m: 0.010
+  g_pair_mm_for_reading: 10.0
+  rationale: '沿用已裁定的受限模擬配置（10 mm 總靜態間距）'
+  compatibility:
+    barrier_rhs_zero_rel_v: 0.013202
+    margin_mm: 6.60
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+  limits:
+  - 單一位姿（hold、開度 19.99 mm）；行程中間構形未核對
+  - 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，與模擬器碰撞幾何的差異未量化
+  - 零相對速度；運動中的相對煞停能力**未驗證**
+  - 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+- pair: link6|handle_bar
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 50.83   # d_sample − rho
+    d_sample_mm: 64.12
+    rho_mm: 13.30
+  g_pair_m: 0.045
+  g_pair_mm_for_reading: 45.0
+  rationale: '五組同類配對（手臂／手指對橫桿與支柱）取**同一值**，由最緊者 50.83 mm 決定，留 5 mm 以上'
+  compatibility:
+    barrier_rhs_zero_rel_v: 0.011654
+    margin_mm: 5.83
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+  limits:
+  - 單一位姿（hold、開度 19.99 mm）；行程中間構形未核對
+  - 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，與模擬器碰撞幾何的差異未量化
+  - 零相對速度；運動中的相對煞停能力**未驗證**
+  - 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+- pair: uflite_finger1|handle_post_l
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 54.54   # d_sample − rho
+    d_sample_mm: 67.27
+    rho_mm: 12.73
+  g_pair_m: 0.045
+  g_pair_mm_for_reading: 45.0
+  rationale: '五組同類配對（手臂／手指對橫桿與支柱）取**同一值**，由最緊者 50.83 mm 決定，留 5 mm 以上'
+  compatibility:
+    barrier_rhs_zero_rel_v: 0.019082
+    margin_mm: 9.54
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+  limits:
+  - 單一位姿（hold、開度 19.99 mm）；行程中間構形未核對
+  - 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，與模擬器碰撞幾何的差異未量化
+  - 零相對速度；運動中的相對煞停能力**未驗證**
+  - 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+- pair: uflite_finger1|handle_post_r
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 54.22   # d_sample − rho
+    d_sample_mm: 66.95
+    rho_mm: 12.73
+  g_pair_m: 0.045
+  g_pair_mm_for_reading: 45.0
+  rationale: '五組同類配對（手臂／手指對橫桿與支柱）取**同一值**，由最緊者 50.83 mm 決定，留 5 mm 以上'
+  compatibility:
+    barrier_rhs_zero_rel_v: 0.018446
+    margin_mm: 9.22
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+  limits:
+  - 單一位姿（hold、開度 19.99 mm）；行程中間構形未核對
+  - 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，與模擬器碰撞幾何的差異未量化
+  - 零相對速度；運動中的相對煞停能力**未驗證**
+  - 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+- pair: uflite_finger2|handle_post_l
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 55.18   # d_sample − rho
+    d_sample_mm: 67.46
+    rho_mm: 12.28
+  g_pair_m: 0.045
+  g_pair_mm_for_reading: 45.0
+  rationale: '五組同類配對（手臂／手指對橫桿與支柱）取**同一值**，由最緊者 50.83 mm 決定，留 5 mm 以上'
+  compatibility:
+    barrier_rhs_zero_rel_v: 0.020366
+    margin_mm: 10.18
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+  limits:
+  - 單一位姿（hold、開度 19.99 mm）；行程中間構形未核對
+  - 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，與模擬器碰撞幾何的差異未量化
+  - 零相對速度；運動中的相對煞停能力**未驗證**
+  - 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+- pair: uflite_finger2|handle_post_r
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 57.63   # d_sample − rho
+    d_sample_mm: 69.91
+    rho_mm: 12.28
+  g_pair_m: 0.045
+  g_pair_mm_for_reading: 45.0
+  rationale: '五組同類配對（手臂／手指對橫桿與支柱）取**同一值**，由最緊者 50.83 mm 決定，留 5 mm 以上'
+  compatibility:
+    barrier_rhs_zero_rel_v: 0.025262
+    margin_mm: 12.63
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+  limits:
+  - 單一位姿（hold、開度 19.99 mm）；行程中間構形未核對
+  - 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，與模擬器碰撞幾何的差異未量化
+  - 零相對速度；運動中的相對煞停能力**未驗證**
+  - 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+- pair: link5|handle_bar
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 72.18   # d_sample − rho
+    d_sample_mm: 84.80
+    rho_mm: 12.62
+  g_pair_m: 0.065
+  g_pair_mm_for_reading: 65.0
+  rationale: '逐組取幾何允許的最大 5 mm 整數倍，留 5 mm 以上 ——**盡量保留一般規則的 80 mm**，不是取剛好能過的小值'
+  compatibility:
+    barrier_rhs_zero_rel_v: 0.014356
+    margin_mm: 7.18
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+  limits:
+  - 單一位姿（hold、開度 19.99 mm）；行程中間構形未核對
+  - 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，與模擬器碰撞幾何的差異未量化
+  - 零相對速度；運動中的相對煞停能力**未驗證**
+  - 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+- pair: link4|handle_bar
+  phases: [approach, engage, pull, hold, release, retreat]
+  distance_basis:
+    method: G1
+    d_effective_mm: 77.66   # d_sample − rho
+    d_sample_mm: 91.20
+    rho_mm: 13.54
+  g_pair_m: 0.070
+  g_pair_mm_for_reading: 70.0
+  rationale: '逐組取幾何允許的最大 5 mm 整數倍，留 5 mm 以上 ——**盡量保留一般規則的 80 mm**，不是取剛好能過的小值'
+  compatibility:
+    barrier_rhs_zero_rel_v: 0.015312
+    margin_mm: 7.66
+    computed_by: 完整屏障（_rows_from_points），非 d − g 的名目減法
+  limits:
+  - 單一位姿（hold、開度 19.99 mm）；行程中間構形未核對
+  - 抽屜部件以軸對齊方塊近似、橫桿以圓柱近似，與模擬器碰撞幾何的差異未量化
+  - 零相對速度；運動中的相對煞停能力**未驗證**
+  - 固定底座 FK 重建；開放底盤的位移與偏擺未涵蓋
+
+r2_status:
+  state: '**已實作、離線資料路徑核對通過；Isaac 執行期與整體週期耗時尚未驗收。**'
+  implemented: arm_link_distance.pair_distance_bound（向量化，每週期由當前位姿重算）
+  offline_checked: evaluation/test_tight_pair_bound.py（26 項通過）
+  full_path_single_pair_ms: {p50: 7.12, max: 7.31, tol_mm: 0.5, budget_ms: 50}
+  not_verified: ['Isaac 執行期行為', '整個控制週期的耗時（含節點其餘工作與屏障組裝）']
+
+decision_requested: 對**整份配置**一次核准或退回；核准後才更新版本與 hash，
+  並安排第一趟完整 20 mm 操作。**本次提交提案，不開模擬器。**
