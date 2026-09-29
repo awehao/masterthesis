@@ -275,10 +275,13 @@ relative_motion_review:
                         hold_p95: 1.00, hold_max: 2.24}
     unmodelled_displacement_per_cycle_mm: 0.95   # |v_obs| max x 0.05 s
     d_stop_attributable_to_shared_motion_mm: 3.0 # v x tau + v^2/2a 於 v = 18.9 mm/s
-  does_not_explain_zero_command_infeasibility: '**必須分清**：u = 0 時左式為 0，
-    不可行純粹來自 d_eff < d_stop（靜態要求）。修正相對運動模型**不會**
-    使保持位姿變成可行；它影響的是**運動中的速率約束**是否正確，
-    以及偏差預算該用什麼相對量。'
+  does_not_explain_zero_command_infeasibility: '**必須分清**，但條件要說準：
+    u = 0 **不一定**使相對速度左式為零 —— 左式是 n^T (J u − v_obs)，
+    還需要同時 n^T v_obs = 0。本次比較的是**靜止保持位姿**（抽屜靜止、
+    宣告靜態），該條件成立，故左式為 0，不可行純粹來自 d_eff < d_stop（靜態要求）。
+    在障礙物運動的情況下，零命令本身不足以推出左式為零。
+    修正相對運動模型**不會**使該保持位姿變成可行；它影響的是
+    **運動中的速率約束**是否正確，以及偏差預算該用什麼相對量。'
   next_steps_not_yet_done:
   - 依 d_dot = n^T (v_obs − v_link) 決定屏障是否納入 v_obs，以及資料從哪裡來
   - 補記逐關節命令／實測誤差向量（**已獲允許**）；**不先歸給 v·tau、不先調增益**

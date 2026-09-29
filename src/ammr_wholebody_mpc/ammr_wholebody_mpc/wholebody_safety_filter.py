@@ -156,8 +156,10 @@ class SafetyConfig:
     velocity_error_margin: float = 0.0     # extra flat allowance, m/s
 
     # Degradation
-    # 動態物件速度缺測／過期時假設的最壞接近速度（m/s）。**不是零。**
-    # 取與 stale_obstacle_speed 同值：兩者都是「未看見的東西可能以多快接近」。
+    # 動態物件速度缺測／過期時**假設**的接近速度（m/s）。**不是零**，
+    # 但也**不是已證明的最壞情況** —— 它是一個工程假設，與 stale_obstacle_speed
+    # 同值（兩者都在回答「未看見的東西可能以多快接近」）。
+    # 搭配 unknown_vobs_speed_cap 只是降低暴露，**不能單獨宣稱安全**。
     unknown_vobs_speed: float = 0.30
     unknown_vobs_speed_cap: float = 0.05  # m/s，速度不可用期間的退化上限
     stale_obstacle_speed: float = 0.30   # m/s an unseen obstacle may close at
@@ -378,10 +380,11 @@ def _rows_from_points(K, q, pts, cfg, v_in):
             continue
         # **煞停距離的假設要明列。** v_app 已改為相對接近速度，但 a_br 仍是
         # **機器人側**的減速能力（Jacobian 界或 a_brake）。相對減速能力並不等於
-        # 機器人的減速能力：
-        #   * 障礙物若能朝機器人加速，相對減速比 a_br 小 ⇒ d_stop 被低估。
-        #   * 本案抽屜為被動件、只在被拉時移動，因此**在本案**該假設偏保守；
-        #     但這是**案例性質**，不是一般性證明。
+        # 機器人的減速能力：障礙物若朝機器人加速，相對減速比 a_br 小
+        # ⇒ d_stop 被低估。
+        #
+        # **本案尚未驗證相對煞停能力。** 不得以「抽屜是被動件」推論偏保守：
+        # 被動件仍可能因慣性、接觸力或約束反作用繼續運動。
         # 相對速度修正**不自動證明煞停距離成立**。
         _g_pair = cfg.g_by_pair.get(_key)
         if _g_pair is not None:

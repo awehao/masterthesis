@@ -96,7 +96,11 @@ for f_,rec in s1['checkers_sha256_16'].items():
     path=(f'src/ammr_wholebody_mpc/ammr_wholebody_mpc/{f_}'
           if f_ in ('wholebody_safety_filter.py','arm_link_distance.py',
                     'wholebody_safety_node.py') else f'evaluation/{f_}')
-    if sha(path)!=rec: fails.append(f'{f_} sha 與 S1 記錄不符')
+    # 檔案缺失要**具名失敗**，不是拋例外 —— 例外訊息看不出是哪一項不一致
+    if not os.path.exists(path):
+        fails.append(f'{f_} 不存在於 {path}（S1 記錄了它的 sha）')
+    elif sha(path)!=rec:
+        fails.append(f'{f_} sha 與 S1 記錄不符')
 print(json.dumps({'checks_failed':fails}, ensure_ascii=False))
 open(os.path.join(out,'preflight.json'),'w').write(json.dumps({'failed':fails},ensure_ascii=False))
 sys.exit(1 if fails else 0)
