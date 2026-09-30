@@ -337,6 +337,27 @@ class WholeBodySafetyNode(Node):
         self.q_arm = np.array([msg.position[idx[j]] for j in ARM_JOINTS])
         self.q_arm_t = self._now()
 
+    def _on_src_meta(self, m) -> None:
+        """求解端的命令 meta：[seq, src_sim_t, solve_ms, v0..v8]。"""
+        d = [float(x) for x in m.data]
+        if len(d) < 12:
+            return
+        self._src_meta.append(d)
+        if len(self._src_meta) > 64:
+            self._src_meta = self._src_meta[-64:]
+
+    def _pair_src(self, v_in):
+        """以命令值配對上游 meta。**唯一相符才採用**，否則回報未配對。"""
+        if v_in is None:
+            return None
+        key = [round(float(x), 12) for x in v_in]
+        hits = [d for d in self._src_meta
+                if [round(x, 12) for x in d[3:3 + len(key)]] == key]
+        if len(hits) != 1:
+            return None
+        self._src_meta.remove(hits[0])
+        return hits[0]
+
     def _on_phase(self, msg) -> None:
         """相位訊息帶**來源時間**：年齡以來源時間計，不以收到時間計。
 

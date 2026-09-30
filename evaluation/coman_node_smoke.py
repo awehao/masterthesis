@@ -1,0 +1,107 @@
+"""節點啟動冒煙測試：用 **runner 的實際參數** 起每個節點，確認它活得過初始化。
+
+為什麼需要：離線套件全部通過、入口核對全部通過，仍然有兩類錯只在真正
+`rclpy.init()` 與 `Node.__init__()` 時才會爆：
+
+  * 參數字串格式錯（`obstacles` 每條規格含逗號，未逐項加引號 ⇒ RCLError）
+  * 回呼方法不存在（`create_subscription(..., self._on_src_meta)` 而該方法
+    因為替換字串沒對上而**從未被加進類別** ⇒ AttributeError）
+
+兩者都讓節點在啟動瞬間死掉，而 runner 只會在 180 s 後以 /clock 逾時收場。
+
+**不啟動 Isaac**：每個節點起 N 秒後送 SIGTERM，看是否在該期間內自行退出。
+"""
+from __future__ import annotations
+import os, re, shlex, signal, subprocess, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+WS = os.path.dirname(HERE)
+RUNNER = os.path.join(HERE, 'run_coman_drawer20.sh')
+
+
+def runner_vars():
+    """取 runner 的預設參數值（**不執行它**）：只抽取變數指派那幾行後 eval。"""
+    keys = ('PAIR_GAP', 'PAIR_D0', 'CONTACT_PAIRS', 'PAIR_ROWS',
+            'PAIR_ROWS_EXEMPT', 'TIGHT_PAIRS', 'TIGHT_TOL', 'TIGHT_BUDGET',
+            'URDF_TF', 'URDF_WB', 'STROKE')
+    lines = [l.rstrip('\n') for l in open(RUNNER, encoding='utf-8')
+             if re.match(r'^(' + '|'.join(keys) + r')=', l)]
+    script = (f'WS={shlex.quote(WS)}\n' + '\n'.join(lines) + '\n'
+              + '\n'.join(f'printf "%s\\t%s\\n" {k} "${k}"' for k in keys))
+    out = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+    return dict(l.split('\t', 1) for l in out.stdout.strip().split('\n')
+                if '\t' in l)
+
+
+def quoted(csv):
+    return '[' + ','.join(f'"{x}"' for x in csv.split(',') if x.strip()) + ']'
+
+
+def smoke(name, argv, seconds=6.0):
+    """起節點 seconds 秒。**提早退出＝失敗**。"""
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, start_new_session=True)
+    t0 = time.time()
+    while time.time() - t0 < seconds:
+        if p.poll() is not None:
+            out = p.stdout.read()
+            return False, out[-1500:]
+        time.sleep(0.2)
+    p.send_signal(signal.SIGTERM)
+    try:
+        p.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        p.kill()
+    return True, ''
+
+
+def main() -> int:
+    v = runner_vars()
+    if not v.get('URDF_WB'):
+        print('取不到 runner 變數', file=sys.stderr)
+        return 2
+    obs = subprocess.run([sys.executable,
+                          os.path.join(HERE, 'coman_obstacle_specs.py')],
+                         capture_output=True, text=True, check=True)
+    obs_list = '[' + ','.join(f'"{x}"' for x in obs.stdout.split()
+                              if x.strip()) + ']'
+    jobs = [
+        ('arm_link_distance',
+         ['ros2', 'run', 'ammr_wholebody_mpc', 'arm_link_distance', '--ros-args',
+          '-p', 'use_sim_time:=true', '-p', 'report_frame:=odom',
+          '-p', 'geometry:=links', '-p', f'wholebody_urdf:={v["URDF_WB"]}',
+          '-p', f'obstacles:={obs_list}',
+          '-p', f'pair_rows:={quoted(v["PAIR_ROWS"])}',
+          '-p', f'pair_rows_exempt:={quoted(v["PAIR_ROWS_EXEMPT"])}',
+          '-p', f'tight_pairs:={quoted(v["TIGHT_PAIRS"])}',
+          '-p', f'tight_tol:={v["TIGHT_TOL"]}',
+          '-p', f'tight_budget_s:={v["TIGHT_BUDGET"]}'], 25.0),
+        ('wholebody_safety',
+         ['ros2', 'run', 'ammr_wholebody_mpc', 'wholebody_safety', '--ros-args',
+          '-p', 'use_sim_time:=true', '-p', 'report_frame:=odom',
+          '-p', 'base_frame:=base_link',
+          '-p', f'wholebody_urdf:={v["URDF_WB"]}',
+          '-p', 'freespace_confirmed:=false',
+          '-p', f'pair_gap:={quoted(v["PAIR_GAP"])}',
+          '-p', f'contact_pairs:={quoted(v["CONTACT_PAIRS"])}'], 8.0),
+        ('robot_state_publisher',
+         ['ros2', 'run', 'robot_state_publisher', 'robot_state_publisher',
+          v['URDF_TF'], '--ros-args', '-p', 'use_sim_time:=true'], 5.0),
+        ('coman_diag_record',
+         [sys.executable, '-u', os.path.join(HERE, 'coman_diag_record.py'),
+          '--out', '/tmp/_smoke_diag.json'], 5.0),
+    ]
+    bad = 0
+    for name, argv, secs in jobs:
+        ok, tail = smoke(name, argv, secs)
+        print(f'  {name:26s}{"存活" if ok else "**啟動即死**"}')
+        if not ok:
+            bad += 1
+            for ln in tail.strip().split('\n')[-8:]:
+                print(f'      {ln}')
+    print('節點冒煙測試：' + ('全部存活' if bad == 0 else f'**{bad} 個啟動即死**'))
+    return 1 if bad else 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

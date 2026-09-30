@@ -69,6 +69,15 @@ run_history:
   thermal: '峰值 86.875 °C @ sim 23.3 s（起 69.9；限 92，餘裕 5.1 °C）——
     命令鏈整條運作時的負載，明顯高於 retry2 空轉的 79.25 °C'
   evidence_for_three_questions: 無
+- run_id: coman_drawer20_main1
+  outcome: '**距離／安全節點啟動即死，任務未開始**'
+  detail: evaluation/runs/coman_drawer20_main1/OUTCOME.md
+  g8_result: '**G8a／G8b 皆生效** —— base=True（先前 False）、rsp Robot initialized'
+  blocked_by:
+  - 'obstacles 參數每條規格含逗號卻未逐項加引號 ⇒ 距離節點 rclpy.init() RCLError
+    （**此缺陷從第一趟就在**，先前被更早的中止掩蓋）'
+  - "安全節點 _on_src_meta 方法因替換字串未對上而從未加入類別 ⇒ AttributeError"
+  evidence_for_three_questions: 無
 open_gap_G8_odom_RESOLVED:
   id: G8
   issue: 協同執行端未發布 /odom 與 odom→base_link TF
@@ -126,6 +135,16 @@ fixes_after_first_attempt:
     根本不啟動，而腳本一路跑到 sim_limit 才停 —— 整趟浪費且無任何一處擋下'
   fix: 起動前守衛：ammr_wholebody_mpc 與 my_omnibot_description 必須可解析，否則具名失敗 exit 65
   verified: 未 source 時實測擋下並印出 source 指令
+- id: F6
+  issue: obstacles 參數格式錯（每條規格含逗號）⇒ 距離節點啟動即死
+  fix: 逐項加引號組成陣列
+- id: F7
+  issue: "安全節點 _on_src_meta／_pair_src 從未加入類別（替換字串未對上，靜默失敗）"
+  fix: 補上方法，並以 AST 核對確實在 WholeBodySafetyNode 內
+- id: F8
+  issue: '離線套件與入口核對抓不到「節點啟動即死」'
+  fix: 'evaluation/coman_node_smoke.py —— 用 runner 實際參數啟動四個節點，
+    提早退出即失敗；已接入起動前檢查（未通過 exit 66）'
 retry_precondition:
   gpu_required: true
   why: 'Isaac 無 CUDA 時退為 CPU-only（PhysX GPU 功能跳過），
@@ -295,7 +314,7 @@ checkers_sha256_16:
   isaac_coman_drawer_sim.py: ffb72f60d66bab66
   wholebody_safety_filter.py: 6250b75f08a30d84
   arm_link_distance.py: 38b73aa866c7f79c
-  wholebody_safety_node.py: d3f90cfb1901b158
+  wholebody_safety_node.py: 3db649ad05e07f98
   test_pair_exceptions.py: da31af8647a8f293
   test_pipeline_pairs.py: 819689265ea84de3
   coman_zero_cmd_feasible.py: dd3d22105933c884
@@ -311,6 +330,7 @@ checkers_sha256_16:
   test_base_mode_guard.py: 8929a8438dc6f4bd
   test_opening_acceptance.py: ff2225b5b5fdd038
   test_base_feedback.py: b983b8ea1f6aa509
+  coman_node_smoke.py: 1a7fd063ac0a56bf
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。

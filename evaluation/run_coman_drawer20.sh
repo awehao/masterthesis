@@ -61,6 +61,13 @@ for _pkg in ammr_wholebody_mpc my_omnibot_description; do
   fi
 done
 say "  工作區已 source（ammr_wholebody_mpc、my_omnibot_description 可解析）"
+# **節點冒煙測試**：用本腳本的實際參數把各節點起幾秒。參數格式錯或回呼方法
+# 不存在只會在 rclpy.init()/Node.__init__() 時爆，離線套件與入口核對都抓不到。
+say "  節點冒煙測試（用實際參數啟動各節點）"
+if ! ROS_DOMAIN_ID=$((ROS_DOMAIN_ID + 100)) python3 evaluation/coman_node_smoke.py \
+     2>&1 | tee -a "$LOG" | grep -q "全部存活"; then
+  echo "**節點冒煙測試未通過：有節點啟動即死**" | tee -a "$LOG"; exit 66
+fi
 say "[1/6] 起動前檢查（版本、規格、配對規則一致性）"
 python3 - "$DIR" "$PAIR_D0" "$CONTACT_PAIRS" "$PAIR_ROWS" "$PAIR_ROWS_EXEMPT" "$PAIR_GAP" <<'PY' | tee -a "$LOG" || exit 2
 import hashlib, json, os, sys, yaml
@@ -154,6 +161,9 @@ python3 evaluation/clock_advancing.py --discover 180 2>&1 | tee -a "$LOG" || exi
 
 say "[4/6] 起感測與安全鏈（障礙物含櫃體、橫桿與抽屜各部件）"
 mapfile -t OBS < <(python3 evaluation/coman_obstacle_specs.py)
+# **每條規格本身含逗號**（尺寸與座標），所以必須逐項加引號再組成陣列。
+# 先前用 IFS=, 直接串接 ⇒ ROS 無法分辨規格邊界，
+# 距離節點在 rclpy.init() 就以 RCLError 死掉（整條鏈因此沒有距離列）。
 say "  障礙物 ${#OBS[@]} 個（**含橫桿**；接觸例外只給兩指且限定相位）"
 # **TF 鏈**：Isaac 只發 odom → base_footprint（G8a）。
 # base_footprint → base_link → … → link6 由 robot_state_publisher 從
@@ -163,7 +173,8 @@ spawn rsp ros2 run robot_state_publisher robot_state_publisher "$URDF_TF" \
   --ros-args -p use_sim_time:=true
 spawn dist ros2 run ammr_wholebody_mpc arm_link_distance --ros-args \
   -p use_sim_time:=true -p report_frame:=odom -p geometry:=links \
-  -p wholebody_urdf:="$URDF_WB" -p obstacles:="[$(IFS=,; echo "${OBS[*]}")]" \
+  -p wholebody_urdf:="$URDF_WB" \
+  -p obstacles:="[$(printf '"%s",' "${OBS[@]}" | sed 's/,$//')]" \
   -p pair_rows:="[$(echo "$PAIR_ROWS" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
   -p pair_rows_exempt:="[$(echo "$PAIR_ROWS_EXEMPT" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
   -p tight_pairs:="[$(echo "$TIGHT_PAIRS" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
