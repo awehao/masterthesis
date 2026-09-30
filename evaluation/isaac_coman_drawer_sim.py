@@ -449,6 +449,12 @@ def yaw_of(q):
 class DrawerNode(Node):
     def __init__(self):
         super().__init__('isaac_drawer_sim')
+        # **關節順序要能被下游核對**。arm_vel_adapter 會查本節點的 `joints`
+        # 參數：九個數字本身不帶關節身分,順序不同就是每個關節拿到別人的速度,
+        # 而下游殘差看起來完全正常。先前本節點沒宣告這個參數,adapter 因此
+        # 「拒絕轉發命令」—— 守衛正常運作,缺的是本端沒提供資訊。
+        # 這與 isaac_wholebody_sim_e2.py:185 的做法相同。
+        self.declare_parameter('joints', list(ARM))
         be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
                         history=HistoryPolicy.KEEP_LAST)
         rel = QoSProfile(depth=200, reliability=ReliabilityPolicy.RELIABLE,

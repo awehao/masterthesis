@@ -43,6 +43,17 @@ spawn(){ local n="$1"; shift; setsid "$@" >>"$LOG" 2>&1 </dev/null & PIDS+=($!);
 say "=== 20 mm 協同抽屜操作 主成果首測 RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID ==="
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 
+# **工作區必須已 source**。未 source 時 `ros2 run ammr_wholebody_mpc …` 會靜默
+# 失敗（Package not found），距離節點與安全節點根本不會啟動,而本腳本會一路等到
+# /clock 逾時才停 —— 浪費一整趟。在這裡具名擋下。
+for _pkg in ammr_wholebody_mpc my_omnibot_description; do
+  if ! ros2 pkg prefix "$_pkg" >/dev/null 2>&1; then
+    echo "**工作區未 source：找不到套件 $_pkg**" | tee -a "$LOG"
+    echo "  先執行： source $WS/install/setup.bash" | tee -a "$LOG"
+    exit 65
+  fi
+done
+say "  工作區已 source（ammr_wholebody_mpc、my_omnibot_description 可解析）"
 say "[1/6] 起動前檢查（版本、規格、配對規則一致性）"
 python3 - "$DIR" "$PAIR_D0" "$CONTACT_PAIRS" "$PAIR_ROWS" "$PAIR_ROWS_EXEMPT" "$PAIR_GAP" <<'PY' | tee -a "$LOG" || exit 2
 import hashlib, json, os, sys, yaml

@@ -451,3 +451,81 @@ Traceback (most recent call last):
     raise CalledProcessError(retcode, process.args,
 subprocess.CalledProcessError: Command '['xacro', 'src/my_omnibot_description/urdf/omni_bot_wholebody.urdf.xacro']' returned non-zero exit status 2.
 [00:29:20] [6/6] 等執行端收尾
+[drawer] 停止：sim_limit（處置 freeze_setpoint）@ sim 120.010
+[drawer] 溫度：起 66.875 °C，本趟峰值 79.25 °C @ sim 91.32 s，中止線 92 °C
+[drawer] 結束 sim_limit  最終開度 0.00 mm (誤差 -20.00 mm)  CPU 65.375 °C（hwmon:k10temp）
+[drawer] -> /home/howardchen/masterthesis/evaluation/runs/coman_drawer20_retry2/sim/drawer_run.json
+2026-09-30T16:31:32Z [160,945ms] [Error] [omni.kit.app._impl] [py stderr]: Exception in thread Thread-2 (spin):
+2026-09-30T16:31:32Z [160,946ms] [Error] [omni.kit.app._impl] [py stderr]: Traceback (most recent call last):
+2026-09-30T16:31:32Z [160,946ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/usr/lib/python3.12/threading.py", line 1073, in _bootstrap_inner
+2026-09-30T16:31:32Z [161,047ms] [Error] [omni.kit.app._impl] [py stderr]:     self.run()
+2026-09-30T16:31:32Z [161,047ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/usr/lib/python3.12/threading.py", line 1010, in run
+2026-09-30T16:31:32Z [161,048ms] [Error] [omni.kit.app._impl] [py stderr]:     self._target(*self._args, **self._kwargs)
+2026-09-30T16:31:32Z [161,048ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 359, in spin
+2026-09-30T16:31:32Z [161,048ms] [Error] [omni.kit.app._impl] [py stderr]:     self._spin_once_impl()
+2026-09-30T16:31:32Z [161,048ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+2026-09-30T16:31:32Z [161,048ms] [Error] [omni.kit.app._impl] [py stderr]:     handler, entity, node = self.wait_for_ready_callbacks(
+2026-09-30T16:31:32Z [161,049ms] [Error] [omni.kit.app._impl] [py stderr]:                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-09-30T16:31:32Z [161,049ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+2026-09-30T16:31:32Z [161,049ms] [Error] [omni.kit.app._impl] [py stderr]:     return next(self._cb_iter)
+2026-09-30T16:31:32Z [161,049ms] [Error] [omni.kit.app._impl] [py stderr]:            ^^^^^^^^^^^^^^^^^^^
+2026-09-30T16:31:32Z [161,049ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+2026-09-30T16:31:32Z [161,049ms] [Error] [omni.kit.app._impl] [py stderr]:     raise ExternalShutdownException()
+2026-09-30T16:31:32Z [161,049ms] [Error] [omni.kit.app._impl] [py stderr]: rclpy.executors.ExternalShutdownException
+[161.513s] Simulation App Shutting Down
+[00:31:34] 收尾後 CPU 62.625  來源 hwmon:k10temp
+[00:31:34] 輸出目錄 /home/howardchen/masterthesis/evaluation/runs/coman_drawer20_retry2
+[00:31:34] cleanup（只針對本趟 PID）...
+診斷錄製：{'dist': 0, 'safety': 0, 'solver_meta': 0, 'safety_meta': 0}
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/coman_diag_record.py", line 82, in main
+    rclpy.spin(n)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/coman_diag_record.py", line 94, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/coman_diag_record.py", line 89, in main
+    rclpy.shutdown()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+    _shutdown(context=context)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+    context.shutdown()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+    self.__context.shutdown()
+rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/arm_vel_adapter.py", line 190, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/arm_vel_adapter.py", line 182, in main
+    rclpy.spin(nd)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+[00:31:37] cleanup done

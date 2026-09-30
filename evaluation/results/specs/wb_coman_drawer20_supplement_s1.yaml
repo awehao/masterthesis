@@ -45,6 +45,21 @@ run_history:
     cudaErrorNoDevice 131 次；首趟在 7.0.0-31 為 0 次）⇒ Isaac 退為 CPU-only，
     **動態與時效兩題的數字不可採信**'
   evidence_for_three_questions: 無 —— 不得以本趟填任何一題
+- run_id: coman_drawer20_retry2
+  outcome: '**環境未 source ＋ 接線缺口，任務未開始**（不是操作失敗）'
+  detail: evaluation/runs/coman_drawer20_retry2/OUTCOME.md
+  gpu: 正常（驅動 595.91.07、cudaErrorNoDevice 0 次）
+  f1_f2_f3: 三項修正**皆通過**（守衛放行、目標開度 0.020 m、machine_wired=True）
+  blocked_by: ['工作區未 source ⇒ 距離／安全節點未啟動、求解端 xacro 失敗',
+               '執行端未宣告 joints ⇒ adapter 拒絕轉發']
+  chain9_received: 0
+  evidence_for_three_questions: 無 —— 相位始終 idle、開度 0.000 mm
+  only_observation: 'free_base 在 Isaac 連續跑 120 s 物理無中止 —— 只說明站得住，
+    **不說明任何任務能力**'
+- run_id: coman_drawer20_retry3
+  outcome: '**起動前檢查擋下**（sha 不符），未啟動任何節點'
+  note: '新的 source 守衛通過；sha 比對正確抓到 F4 對執行端的修改尚未登錄。
+    這是一致性檢查正常運作。'
 fixes_after_first_attempt:
 - id: F1
   issue: '固定關節守衛寫死「恰好 1 個」，與 --free-base 相斥 ⇒
@@ -70,6 +85,18 @@ fixes_after_first_attempt:
   scope_note: '第三個只存在於 --free-base ＋ --machine 路徑的缺陷；
     該路徑從未真正執行過'
   swept: pyflakes 掃過協同鏈七個檔案的未定義名稱／使用前參照 —— 全部無
+- id: F4
+  issue: '執行端未宣告 `joints` 參數 ⇒ arm_vel_adapter 的關節順序核對失敗、
+    拒絕轉發命令（守衛正常運作，缺的是本端沒提供資訊）'
+  fix: "DrawerNode.__init__ 加 declare_parameter('joints', list(ARM))"
+  same_as: isaac_wholebody_sim_e2.py:185 早有同樣宣告
+  not: 不是放寬守衛 —— 順序若錯，核對仍會擋下
+- id: F5
+  issue: 'run_coman_drawer20.sh 不自己 source 工作區，依賴呼叫端環境。
+    未 source 時 ros2 run 靜默失敗（Package not found），距離與安全節點
+    根本不啟動，而腳本一路跑到 sim_limit 才停 —— 整趟浪費且無任何一處擋下'
+  fix: 起動前守衛：ammr_wholebody_mpc 與 my_omnibot_description 必須可解析，否則具名失敗 exit 65
+  verified: 未 source 時實測擋下並印出 source 指令
 retry_precondition:
   gpu_required: true
   why: 'Isaac 無 CUDA 時退為 CPU-only（PhysX GPU 功能跳過），
@@ -236,7 +263,7 @@ checkers_sha256_16:
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
   coman_pull_solver_node.py: 770222f5bdaa5b5d
-  isaac_coman_drawer_sim.py: 711f0ea50153aa4e
+  isaac_coman_drawer_sim.py: 4b7c440148a940d2
   wholebody_safety_filter.py: 6250b75f08a30d84
   arm_link_distance.py: 38b73aa866c7f79c
   wholebody_safety_node.py: d3f90cfb1901b158
