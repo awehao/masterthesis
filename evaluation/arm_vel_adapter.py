@@ -76,6 +76,23 @@ def verify_order(got, expect):
     return False, f'關節集合不同：消費端 {got} vs 濾波器 {list(expect)}'
 
 
+def world_to_body9(d, yaw):
+    """9 維命令的底盤平移對：世界座標 → 本體座標。**純旋轉。**
+
+    旋轉可逆且**保範數**：它改的是表示，不是命令。wz 與手臂六分量原樣通過。
+    這裡不裁切、不平滑、不重新限幅 —— 本節點對數值做的任何事都會被下游
+    量測歸給安全層。
+
+    抽成模組級函式是為了讓離線核對**呼叫同一段算術**，
+    而不是各自重寫一份（重寫的版本驗不到實際行為）。
+    """
+    c, s_ = math.cos(yaw), math.sin(yaw)
+    vx, vy = float(d[0]), float(d[1])
+    return [c * vx + s_ * vy,
+            -s_ * vx + c * vy,
+            float(d[2])] + [float(x) for x in d[3:9]]
+
+
 class Adapter(Node):
     def __init__(self, ctrl=CTRL_DEFAULT):
         super().__init__('arm_vel_adapter')
@@ -148,12 +165,8 @@ class Adapter(Node):
         if self.yaw is None or time.monotonic() - self.yaw_t > 0.3:
             self.n_bad += 1
             return
-        c, s_ = math.cos(self.yaw), math.sin(self.yaw)
-        vx, vy = float(d[0]), float(d[1])
         out = Float64MultiArray()
-        out.data = [c * vx + s_ * vy,          # world -> body, a pure rotation
-                    -s_ * vx + c * vy,
-                    float(d[2])] + [float(x) for x in d[3:9]]
+        out.data = world_to_body9(d, self.yaw)
         self.pub.publish(out)
         self.n_out += 1
         self.last_in = time.monotonic()

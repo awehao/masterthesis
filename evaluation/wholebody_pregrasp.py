@@ -84,6 +84,9 @@ from ammr_wholebody_mpc.wholebody_safety_filter import (            # noqa: E402
     STATUS_OK as F_OK, DetectionPoint, SafetyConfig, _box_rows,
     _joint_limit_rows, _rows_from_points)
 from arm_poses import pose as named_pose                            # noqa: E402
+from coman_low_speed_box import (ADVICE as LOW_SPEED_ADVICE,        # noqa: E402
+                                 e2_compat_violations, tighten_vmax,
+                                 worst_plane_norm)
 
 # World z of the model root (base_footprint). base_footprint is DEFINED as the
 # ground contact frame, so this is zero -- and it stayed zero only after the
@@ -185,6 +188,37 @@ class WholeBody(Node):
                                          '/wholebody_safety/cmd_in', 10)
         self.exec.add_node(self)
         self.cfg = SafetyConfig(dt=1.0 / a.rate)
+        # **低速框覆寫**：只縮不放。用 np.minimum 而非直接指派 —— 覆寫值若比
+        # 硬體框寬，硬體框仍然生效（速度與加速度是硬體絕對值，不得被放寬）。
+        _vm, _ov = tighten_vmax(self.cfg.vmax, a.vmax_base_lin,
+                                a.vmax_base_ang, a.vmax_arm, np)
+        self.cfg.vmax = _vm
+        self.vmax_overrides = _ov
+        self.vmax_effective = [float(x) for x in self.cfg.vmax]
+        # 與安全節點**同一格式**的讀回行，供 runner 啟動時逐項比對兩端。
+        print(f'[solver] vmax_effective base_lin={self.vmax_effective[0]:.6f} '
+              f'base_ang={self.vmax_effective[2]:.6f} '
+              f'arm_max={max(self.vmax_effective[3:]):.6f} '
+              f'overrides={_ov if _ov else "無（沿用預設）"}', flush=True)
+        # **與執行端 E2 的相容性自檢**。逐軸框對上範數門檻要乘 sqrt(2)：
+        # 兩軸同時到頂時 |(vx,vy)| = sqrt(2)*vmax_base_lin，這是逐軸框能產生的
+        # 最大平面速度。只比單軸會漏掉這個情形。
+        _viol = e2_compat_violations(
+            self.vmax_effective[0], self.vmax_effective[2],
+            max(self.vmax_effective[3:]),
+            a.e2_base_lin, a.e2_base_ang, a.e2_arm_rate)
+        if _viol:
+            raise SystemExit(
+                '啟動中止（fail closed）：求解端的有效速度框無法保證通過執行端 E2 的\n'
+                '整筆拒收門檻，越界一筆就會 _fail **閂鎖**整條命令鏈。\n  '
+                + '\n  '.join(_viol) + '\n' + LOW_SPEED_ADVICE)
+        if any(x > 0.0 for x in (a.e2_base_lin, a.e2_base_ang, a.e2_arm_rate)):
+            print(f'[solver] E2 相容性自檢通過：平面範數上界 '
+                  f'{worst_plane_norm(self.vmax_effective[0]):.6f} '
+                  f'<= {a.e2_base_lin:.6f}、'
+                  f'角速度 {self.vmax_effective[2]:.6f} <= {a.e2_base_ang:.6f}、'
+                  f'關節 {max(self.vmax_effective[3:]):.6f} <= {a.e2_arm_rate:.6f}',
+                  flush=True)
         self.v_prev = np.zeros(self.n)
         # NOT reset here: link_names is set above from the description, and
         # clearing it made every cloud row fail the link-index check, so the
@@ -612,6 +646,27 @@ def main() -> int:
                     default=named_pose('pregrasp_reference'),
                     help='preferred arm configuration; defaults to '
                          'pregrasp_reference in config/arm_initial_pose.yaml')
+    # **低速介面框**：執行端 E2 早就有 base_lin/base_ang/arm_rate 的整筆拒收
+    # 門檻，但上游求解從不知道它們存在（main4：解出 0.2775 m/s，E2 界限 0.05）。
+    # 這三個值把那個限制**納入 QP 的約束組裝**（經 cfg.vmax → _box_rows），
+    # 不是對求解後的輸出裁切 —— 裁切過的命令不是任何求解器的答案。
+    # 預設 -1.0 = 不覆寫，沿用 SafetyConfig 的硬體框。
+    ap.add_argument('--vmax-base-lin', type=float, default=-1.0,
+                    help='底盤平移速度上限，**逐軸** |vx|,|vy|，m/s；'
+                         '須與安全層 vmax_base_lin 一致')
+    ap.add_argument('--vmax-base-ang', type=float, default=-1.0,
+                    help='底盤角速度上限 |wz|，rad/s；須與安全層 vmax_base_ang 一致')
+    ap.add_argument('--vmax-arm', type=float, default=-1.0,
+                    help='各手臂關節速度上限，rad/s；須與安全層 vmax_arm 一致')
+    # 執行端 E2 的**整筆拒收門檻**，由 runner 傳入（不在此寫死，也不由本端決定）。
+    # 給正值即啟用相容性自檢：本端的有效框若無法保證通過 E2，**啟動即中止**。
+    # 這是 fail closed —— 不是靠下游把越界命令擋掉，越界一筆就會閂鎖整條鏈。
+    ap.add_argument('--e2-base-lin', type=float, default=-1.0,
+                    help='E2 的底盤平面速度**範數**門檻，m/s（-1 = 不自檢）')
+    ap.add_argument('--e2-base-ang', type=float, default=-1.0,
+                    help='E2 的底盤角速度門檻，rad/s')
+    ap.add_argument('--e2-arm-rate', type=float, default=-1.0,
+                    help='E2 的各關節速率門檻，rad/s')
     ap.add_argument('--damping', type=float, default=0.06)
     ap.add_argument('--tol-p', type=float, default=0.005)
     ap.add_argument('--tol-r', type=float, default=0.02)

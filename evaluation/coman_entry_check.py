@@ -15,7 +15,8 @@
 (G) 執行端仍用案例的 200 mm 目標。F、G 就是為這兩類漏洞補上的。
 """
 from __future__ import annotations
-import hashlib, os, re, sys
+import hashlib
+import math, os, re, sys
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -238,6 +239,99 @@ def main() -> int:
           f'  案例 ±{ctol*1000:.0f} mm vs v1 ±{_mm.p1*1000:.2f} mm')
     check('協同執行端已無未標註的 arrived_sim_t 欄名',
           "'arrived_sim_t':" not in ep)
+
+    # ---------- H 低速框與執行端 E2 相容（L1）----------
+    print('\nH 低速框與執行端 E2 相容（L1）')
+    l1 = yaml.safe_load(open(f'{SPECS}/coman_low_speed_box_l1.yaml',
+                             encoding='utf-8'))
+    check('L1 已核准', l1.get('status') == 'approved', f"  {l1.get('status')}")
+    # **逐行**解析，兩種形式都要：`NAME="${NAME:-值}"` 與 `NAME=值`。
+    # 先前用一條跨行正則，[^:] 會吃掉換行 ⇒ 抓到別的變數的預設值。
+    _WANT = ('VMAX_BASE_LIN', 'VMAX_BASE_ANG', 'VMAX_ARM',
+             'E2_BASE_LIN', 'E2_BASE_ANG', 'E2_ARM_RATE')
+    rv = {}
+    for _ln in runner.splitlines():
+        _m = re.match(r'([A-Z0-9_]+)=(.*)$', _ln.strip())
+        if not _m or _m.group(1) not in _WANT:
+            continue
+        _val = _m.group(2).strip().strip('"')
+        _d = re.match(r'^\$\{[A-Z0-9_]+:-([\d.eE+-]+)\}$', _val)
+        rv[_m.group(1)] = _d.group(1) if _d else _val
+    check('runner 定義了六個低速框／E2 變數', len(rv) == 6, f'  {sorted(rv)}')
+    lv = l1['values']
+    for k, want in (('VMAX_BASE_LIN', lv['base_lin_per_axis_mps']),
+                    ('VMAX_BASE_ANG', lv['base_ang_mps']),
+                    ('VMAX_ARM', lv['arm_per_joint_rps'])):
+        check(f'runner 的 {k} 與 L1 相同',
+              k in rv and abs(float(rv[k]) - float(want)) < 1e-12,
+              f"  {rv.get(k)} vs {want}")
+    # **執行端的門檻不由 runner 決定** —— runner 的 E2_* 只是比對用的副本，
+    # 必須與執行端 argparse 的預設逐項相同，否則比對基準會與實際門檻漂移。
+    for k, flag in (('E2_BASE_LIN', 'base-lin-max'),
+                    ('E2_BASE_ANG', 'base-ang-max'),
+                    ('E2_ARM_RATE', 'arm-rate-max')):
+        m = re.search(r"add_argument\('--" + flag
+                      + r"',\s*type=float,\s*default=([\d.]+)", ep)
+        check(f'runner 的 {k} == 執行端 --{flag} 預設',
+              bool(m) and k in rv
+              and abs(float(rv[k]) - float(m.group(1))) < 1e-12,
+              f"  runner {rv.get(k)} vs 原始碼 {m.group(1) if m else '未找到'}")
+    # 逐軸框對**範數**門檻：兩軸同時到頂 ⇒ sqrt(2) 倍
+    if {'VMAX_BASE_LIN', 'E2_BASE_LIN'} <= set(rv):
+        worst = math.sqrt(2.0) * float(rv['VMAX_BASE_LIN'])
+        check('兩軸同時到頂的平面範數 <= E2 範數門檻',
+              worst <= float(rv['E2_BASE_LIN']) + 1e-12,
+              f"  {worst:.6f} <= {rv['E2_BASE_LIN']}")
+    if {'VMAX_BASE_ANG', 'E2_BASE_ANG'} <= set(rv):
+        check('角速度框 <= E2 門檻',
+              float(rv['VMAX_BASE_ANG']) <= float(rv['E2_BASE_ANG']) + 1e-12)
+    if {'VMAX_ARM', 'E2_ARM_RATE'} <= set(rv):
+        check('關節速率框 <= E2 門檻',
+              float(rv['VMAX_ARM']) <= float(rv['E2_ARM_RATE']) + 1e-12)
+    check('runner 把低速框傳給**安全層**',
+          '-p vmax_base_lin:="$VMAX_BASE_LIN"' in runner)
+    check('runner 把低速框傳給**求解端**',
+          '--vmax-base-lin "$VMAX_BASE_LIN"' in runner)
+    check('runner 把 E2 門檻傳給求解端做自檢',
+          '--e2-base-lin "$E2_BASE_LIN"' in runner)
+    check('runner 在起求解端**之前**做讀回比對',
+          runner.index('coman_lowspeed_readback.py')
+          < runner.index('coman_pull_solver_node.py'))
+    check('讀回比對失敗會具名中止（exit 67）', 'exit 67' in runner)
+    sol = open(os.path.join(HERE, 'wholebody_pregrasp.py'),
+               encoding='utf-8').read()
+    check('求解端的框進入 cfg.vmax（**不是**對輸出裁切）',
+          'self.cfg.vmax = _vm' in sol)
+    check('求解端與讀回比對用**同一個**共用模組',
+          'from coman_low_speed_box import' in sol
+          and 'from coman_low_speed_box import' in open(
+              os.path.join(HERE, 'coman_lowspeed_readback.py'),
+              encoding='utf-8').read())
+    check('求解端覆寫只縮不放（共用 tighten_vmax）', 'tighten_vmax(' in sol)
+    check('求解端自檢呼叫共用 e2_compat_violations',
+          'e2_compat_violations(' in sol)
+    lsb = open(os.path.join(HERE, 'coman_low_speed_box.py'),
+               encoding='utf-8').read()
+    check('共用模組的範數上界用 sqrt(2) 倍（不是只比單軸）',
+          'SQRT2 * float(vmax_base_lin_per_axis)' in lsb)
+    check('求解端自檢失敗即啟動中止（fail closed）',
+          'raise SystemExit(' in sol and '啟動中止（fail closed）' in sol)
+    # **實際執行**守門判斷，不只比對字串
+    sys.path.insert(0, HERE)
+    from coman_low_speed_box import e2_compat_violations as _v
+    e2 = (float(rv['E2_BASE_LIN']), float(rv['E2_BASE_ANG']),
+          float(rv['E2_ARM_RATE']))
+    check('守門：L1 值判為相容',
+          not _v(float(rv['VMAX_BASE_LIN']), float(rv['VMAX_BASE_ANG']),
+                 float(rv['VMAX_ARM']), *e2))
+    check('守門：main4 的硬體框判為不相容（三項全中）',
+          len(_v(0.2775, 1.1327, 3.141593, *e2)) == 3)
+    check('守門：逐軸剛好等於範數門檻仍判為不相容（√2 生效）',
+          bool(_v(e2[0], 0.1, 0.5, *e2)))
+    check('執行端封存三個界限（不只 arm_rate_max）',
+          "'coman_low_speed_interface'" in ep
+          and "'base_lin_max_mps'" in ep and "'base_ang_max_rps'" in ep
+          and "'arm_rate_max_rps'" in ep)
 
     print('\n入口核對：' + ('全部通過' if bad == 0 else f'**{bad} 項失敗**'))
     return 1 if bad else 0

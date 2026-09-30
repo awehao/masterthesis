@@ -11,7 +11,8 @@ approval_scope:
     v1_corrigendum_c1: 3264cd08ea677828  # P6 退出方向；23.3 mm 門檻不變
     pair_gaps_r1_1: f2714067369be541     # 十五組間距
     pair_gaps_r1: 0e97a9c0baef9ca7       # 原十組，保存不覆寫
-  code_version: 29 個 checker 的 sha 逐項記錄於 checkers_sha256_16（入口核對比對 install 與 src）
+    low_speed_box_l1: 50b06800c03ebca1  # 上游低速框，E2 門檻不動
+  code_version: 34 個 checker 的 sha 逐項記錄於 checkers_sha256_16（入口核對比對 install 與 src）
   entry_check: 'evaluation/coman_entry_check.py（**A–G 七段**；A–E 為版本、參數宣告、
     接線、欄位索引、規格鏈，F 為模式條件、G 為任務數值 —— 見
     entry_check_scope_correction。**通過入口核對不等於執行期驗收**。）'
@@ -255,6 +256,72 @@ fixes_after_first_attempt:
   not: '不是改判定 —— 只修正封存文字；兩種模式的限制敘述各自保留，
     且新字串仍明載「站得住不等於任務能力」、「不表示協同操作已驗收」。'
   why_it_matters: 封存紀錄自相矛盾會讓後續引用無法判斷該趟底盤到底是哪種模式
+- id: F16
+  issue: '**上游求解與執行端的速度界限不相容，且從未被執行過。**
+    執行端 E2 的整筆拒收門檻是 base_lin 0.05 m/s（平面**範數**）、
+    base_ang 0.2 rad/s、arm_rate 1.0 rad/s，而求解端與安全層用硬體框
+    0.2775／1.1327／3.1416。main4 安全層的 16 個非零輸出中 **15 個**
+    hypot(vx,vy) > 0.05（最大 0.2775 = 5.55 倍）、11 個手臂分量 > 1.0、
+    2 個角速度 > 0.2。`_fail` 是**閂鎖** ⇒ 越界一筆就永久停掉整條命令鏈。'
+  how_found: 'F14 修好後的唯讀核對。−0.2775 同時出現在求解端輸出
+    （solver_out.json 的 cmd，即 super().solve() 回傳、發往 cmd_in）
+    與安全層輸出（safety_meta.out1），adapter 只做純旋轉**保範數**
+    ⇒ 它會原樣到 /wb_vel_cmd。**安全層沒有把它降下來，因為 0.2775 就是
+    安全層自己的框**（main4 log 明載 overrides=無）。'
+  never_exercised: '六趟 cmd_source=wb9（retry2、retry4、main1–main4）
+    全部 received = 0 ⇒ 九維命令路徑從未送達過任何一筆，
+    這個矛盾從未被執行過。與 F1 同一種結構問題。'
+  ruling: '**執行端界限不動**，讓求解端與安全層共同採用相容的低速框（L1）。
+    不改接近目標、任務增益或步長，也不在 adapter 裁切命令。
+    這不是放寬保護，而是把執行端早已存在的限制納入上游求解。'
+  fix_a: 'wholebody_pregrasp.py 新增 --vmax-base-lin/--vmax-base-ang/--vmax-arm，
+    覆寫 `cfg.vmax` ⇒ 經 `_box_rows` **進入 QP 的約束組裝**。
+    **不是對求解後的輸出裁切。** 已由 test_low_speed_chain 段 A 核對：
+    約束集合最後 2n 列中，底盤四列的界恰為 0.035255。'
+  fix_b: 'runner 以單一份設定傳給**兩端**；起求解端之前用
+    coman_lowspeed_readback.py 從**實際執行中**的安全節點讀回 vmax_effective
+    逐項比對，並核 sqrt(2) 倍的範數上界；失敗具名 exit 67。'
+  fix_c: '求解端新增 --e2-base-lin/--e2-base-ang/--e2-arm-rate 的**啟動自檢**，
+    有效框無法保證通過 E2 即 **SystemExit（fail closed）**，
+    並明載不要提高 E2 門檻。'
+  fix_d: '執行端封存新增 coman_low_speed_interface，
+    把 base_lin_max／base_ang_max／arm_rate_max 三個一起記
+    —— E1 的 summary() 只帶 arm_rate_max，底盤兩個原本只在
+    `_low_speed_bound` 的閉包裡，封存看不到門住整條鏈的條件。'
+  single_source: 'evaluation/coman_low_speed_box.py —— tighten_vmax 與
+    e2_compat_violations 由求解端自檢、runner 讀回比對與離線核對**共用**，
+    避免三處各寫一份而漂移（main4 的成因正是兩端各看自己的設定）。'
+  sqrt2_matters: '逐軸框對**範數**門檻要乘 sqrt(2)。逐軸設 0.05 看起來剛好，
+    實際兩軸同時到頂能產生 0.0707 > 0.05 ⇒ **只比單軸會漏掉**。
+    入口核對 H 段以此為守門反例實際執行驗證。'
+  not: ['不放寬任何保護', '不改 E2 三個門檻', '不關屏障',
+        '不自動解除閂鎖', '不在 adapter 裁切']
+  preserved: ['接觸例外與 R1.1 十五組間距', '輪級 limit9 與逾時減速',
+              '加速度框 amax（收緊速度框不改加速度）',
+              '整筆拒收、_fail 閂鎖、fail closed']
+  spec: evaluation/results/specs/coman_low_speed_box_l1.yaml（L1，approved）
+  offline_verification: 'evaluation/test_low_speed_chain.py ——
+    用 main4 的 APPROACH 狀態（底盤 park、手臂≈零、開度 0、1350 列距離資料）
+    走**實際的** QP → 安全濾波 → adapter 座標轉換 → E2 新鮮命令執行。'
+  verified:
+    qp: 'OSQP solved；ep 0.4679 m（與 main4 的 0.4679 相符）、er 2.0951 rad；
+      v_qp 底盤 (0.000000, −0.035255, 0.199900)、平面範數 0.035255'
+    safety_filter: 'fallback False、unresolved False；輸出逐軸在框內、
+      平面範數 0.035255 < 0.05'
+    adapter: 旋轉保範數（差 < 1e-12）
+    e2: '**接受並產生可套用命令**，fail 保持 None'
+    two_axis_case: '逐軸同時到頂（平面範數 0.049858）E2 接受；
+      同一命令旋轉 45° 後仍接受（範數不變）'
+    negative_controls: '略超範數 0.050141 被擋（線速度 0.0501 > 0.05）、
+      略超關節速率被擋、**main4 的實際命令仍被擋**（0.2775 > 0.05）
+      ⇒ 門檻未被繞過'
+  scope: '**只證明已測狀態的相容性，不證明整段任務必然成功。**
+    該狀態下 n_active = 0（機器人離障礙物尚遠）⇒ 屏障未活躍，
+    本核對**未涵蓋**低速框下屏障活躍時的行為。'
+  side_effect_to_watch: '底盤平移上限由 0.2775 降到逐軸 0.035255（約 1/7.9）
+    ⇒ 接近段耗時會顯著變長（main4 的接近誤差 ep 0.4679 m、er 2.0951 rad）。
+    **這不是本修訂要解決的問題**，但會影響 sim_limit 是否足夠，實跑時一併觀察。'
+
 F14_followup_speedups:
   title: 距離節點單一週期的等價加速（**不改約束內容**）
   why: 'main4 實測 `dist.node_cycle_ms` p50 **97.96 ms**，週期 50 ms
@@ -476,7 +543,7 @@ checkers_sha256_16:
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
   coman_pull_solver_node.py: 06d1e78d363d0bc1
-  isaac_coman_drawer_sim.py: 05ddf909e67425da
+  isaac_coman_drawer_sim.py: db54e6a107fe075d
   wholebody_safety_filter.py: 6250b75f08a30d84
   arm_link_distance.py: 76671ab2c900a9cd
   wholebody_safety_node.py: 3db649ad05e07f98
@@ -491,7 +558,7 @@ checkers_sha256_16:
   test_solver_safety_parity.py: 13b8c5972217ede3
   test_retreat_direction.py: 491c88b9322dd307
   coman_diag_record.py: 610c9196e0d84946
-  coman_entry_check.py: d45512831ddc2a2d
+  coman_entry_check.py: 740f6a882f1ac9d1
   test_base_mode_guard.py: 8929a8438dc6f4bd
   test_opening_acceptance.py: ff2225b5b5fdd038
   test_base_feedback.py: b983b8ea1f6aa509
@@ -499,6 +566,11 @@ checkers_sha256_16:
   test_cmd_qos_delivery.py: bd527d71b4e1ab18
   test_dist_speedup_equivalence.py: a07279e87f2dd2a3
   coman_dist_profile.py: 6d4dbbe1ddd6f120
+  wholebody_pregrasp.py: 38331421074a05ec
+  arm_vel_adapter.py: 2616b6a05d88741c
+  coman_low_speed_box.py: 7ec0dd1bfca3d92e
+  coman_lowspeed_readback.py: 8238db6576c98263
+  test_low_speed_chain.py: 17a52f72ed6f3520
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。
@@ -512,7 +584,16 @@ checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789ef
   （唯一呼叫端隨 vobs_of= → vobs_batch= 更名）。
   新增三項：test_cmd_qos_delivery.py、test_dist_speedup_equivalence.py、
   coman_dist_profile.py。
-  **sha 更新只代表記錄與檔案一致，不代表執行期已驗收。**'
+  **sha 更新只代表記錄與檔案一致，不代表執行期已驗收。**
+  **F16（低速框）追加**：isaac_coman_drawer_sim.py 05ddf909e67425da →
+  db54e6a107fe075d（封存三個 E2 界限）；
+  coman_entry_check.py d45512831ddc2a2d → 740f6a882f1ac9d1（新增 H 段）。
+  新入名單五項：wholebody_pregrasp.py（低速框入口與 E2 自檢）、
+  arm_vel_adapter.py（旋轉抽成 world_to_body9 供離線核對共用）、
+  coman_low_speed_box.py（相容性判斷單一來源）、
+  coman_lowspeed_readback.py、test_low_speed_chain.py。
+  run_coman_drawer20.sh **不入 sha 名單**（它自己執行該守門，自我比對無額外保護）；
+  其 L1 值由入口核對 H 段直接比對 L1 規格與執行端原始碼預設。'
 wiring_fixes_20260929:
 - issue: 求解端發布的相位名稱（大寫任務相位）與設定鍵不符 ⇒ 接觸例外**從未生效**
   fix: coman_pull_solver_node.PHASE_MAP 逐項明列；未列出者 unknown

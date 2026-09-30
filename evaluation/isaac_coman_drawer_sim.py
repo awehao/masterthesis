@@ -2546,6 +2546,21 @@ def main():
         'coman_machine_log': machine_log,
         'coman_cmd_source': a.cmd_source,
         'coman_chain9': (chain9.summary() if chain9 is not None else None),
+        # **低速介面界限**（整筆拒收門檻）。E1 的 summary() 只帶 arm_rate_max，
+        # 底盤的兩個界限原本只在 _low_speed_bound 的閉包裡 ⇒ 封存紀錄看不到
+        # 門住整條命令鏈的條件。三個一起記，避免只有部分界限。
+        'coman_low_speed_interface': ({
+            'base_lin_max_mps': float(a.base_lin_max),
+            'base_lin_form': '平面**範數** math.hypot(vx, vy)，不是逐軸',
+            'base_ang_max_rps': float(a.base_ang_max),
+            'arm_rate_max_rps': float(a.arm_rate_max),
+            'on_violation': ('**整筆拒收，不縮命令**；且 _fail 為**閂鎖** —— '
+                             '越界一筆之後 step() 永久回 None'),
+            'checked_in': 'CmdChainE2.step()：先 wheel_ok(底盤)，再逐關節速率',
+            'frame': '底盤三分量為**本體座標**（adapter 已純旋轉轉換）',
+            'policy': 'evaluation/results/specs/wb_wheel_limit_policy_v2.md §7'
+                      '（lin 0.05／ang 0.2 **不得提高**）',
+        } if chain9 is not None else None),
         'coman_post_stop_quality': {
             'steps_configured': int(a.post_stop_steps),
             'samples': len(coman_post_stop_log),

@@ -1,0 +1,100 @@
+schema: coman_low_speed_box/1
+version: L1
+status: approved
+approved: 2026-10-01
+approved_scope: '**僅限上游求解框的收緊**；不改任何凍結規格、不改執行端門檻、
+  不改接觸／避碰／輪級／加速度／失效處置。'
+
+title: 求解端與安全層共同採用與 E2 相容的低速框
+
+why:
+  found_in: coman_drawer20_main4
+  problem: '執行端 E2 早已有整筆拒收門檻（base_lin 0.05 m/s **平面範數**、
+    base_ang 0.2 rad/s、arm_rate 1.0 rad/s），但上游求解用的是硬體框
+    （0.2775／1.1327／3.1416），**從不知道那些門檻存在**。'
+  measured: 'main4 安全層的 16 個非零輸出中，**15 個** hypot(vx,vy) > 0.05；
+    最大 0.2775 = E2 門檻的 5.55 倍。手臂 11 筆 > 1.0，角速度 2 筆 > 0.2。'
+  severity: '`_fail` 是**閂鎖** —— `if self.fail is None: self.fail = why`，
+    而 `step()` 開頭 `if self.fail is not None: return None`。
+    越界一筆就永久停掉整條命令鏈，不是逐筆拒收。'
+  never_exercised: '六趟 cmd_source=wb9（retry2、retry4、main1–main4）
+    全部 received = 0 ⇒ 九維命令路徑**從未送達過任何一筆**，
+    這個矛盾從未被執行過。與 F1（開放底盤路徑 29 趟從未執行）同一種結構問題。'
+
+ruling: '**執行端界限不動，讓求解端與安全層共同採用相容的低速框。**
+  不改接近目標、任務增益或步長，也不在 adapter 裁切命令。
+  這不是放寬保護，而是把執行端早已存在的限制納入上游求解。'
+
+values:
+  base_lin_per_axis_mps: 0.035255
+  base_ang_mps: 0.199900
+  arm_per_joint_rps: 0.999900
+  form: '求解端與安全層的框是**逐軸**（|vx|, |vy| 各自），
+    執行端檢查的是**平面範數** hypot(vx, vy)。兩者形式不同，
+    所以逐軸值不能直接等於範數門檻。'
+  inscribed_box_argument: '取**內接方框**：兩軸同時到頂時
+    sqrt(2) x 0.035255 = 0.049858 < 0.05 ⇒ 逐軸框能產生的**最大**平面速度
+    仍在 E2 門檻內。只比單軸會漏掉這個情形。'
+  margins:
+    base_lin_norm_worst_case: 0.049858     # vs E2 0.05
+    base_ang: 0.199900                     # vs E2 0.2
+    arm: 0.999900                          # vs E2 1.0
+  adapter_note: 'adapter 只做平面純旋轉 [c·vx+s·vy, −s·vx+c·vy, wz, arm…]
+    ⇒ **保範數**，wz 與手臂原樣，不改變上述論證。'
+  provenance: '沿用先前自由空間低速配置的數值餘裕。
+    **不代表新的接觸任務已證明可行** —— 那要由實跑證據判定。'
+
+not_raised:
+  e2_thresholds_unchanged: true
+  policy: 'wb_wheel_limit_policy_v2.md §7：「**不得為了觸發限制而提高既有速度界限。**
+    現行低速介面界限 lin_mps = 0.05、ang_rps = 0.2 保持不變」'
+  note: '0.2775 的出處是同一份政策 §102：w_lim = r·ω_max = 0.05 × 5.55。
+    那裡的 0.05 是**輪半徑（m）**，與低速介面的 0.05 **m/s** 是不同的量、恰好同數字。'
+
+wiring:
+  solver:
+    entry: 'wholebody_pregrasp.py 新增 --vmax-base-lin / --vmax-base-ang / --vmax-arm'
+    applied_at: '`SafetyConfig(dt=…)` 之後覆寫 `cfg.vmax`，
+      經 `_box_rows(cfg, …)` **進入 QP 的約束組裝**'
+    not: '**不是對求解後的輸出裁切** —— 裁切過的命令不是任何求解器的答案'
+    tighten_only: '用 np.minimum，覆寫值若比硬體框寬則硬體框仍生效
+      （速度與加速度是硬體絕對值，不得被放寬）'
+    self_check: '新增 --e2-base-lin / --e2-base-ang / --e2-arm-rate；
+      有效框若無法保證通過 E2 則**啟動即中止**（fail closed），
+      並明載不要提高 E2 門檻'
+  safety_node:
+    entry: 既有 vmax_base_lin / vmax_base_ang / vmax_arm 參數（預設 −1.0 不覆寫）
+    semantics_identical_to_solver: 'np.minimum、僅正值生效 —— 兩端逐行相同'
+    was: 'main4 的 log 明載 overrides=無（沿用預設）⇒ runner 從未傳過'
+  runner:
+    single_source: VMAX_BASE_LIN / VMAX_BASE_ANG / VMAX_ARM 一份設定傳給兩端
+    e2_values_for_comparison_only: 'E2_BASE_LIN / E2_BASE_ANG / E2_ARM_RATE
+      **不傳給執行端**；執行端沿用自己的 argparse 預設，這三個只用於比對與自檢'
+    readback: 'evaluation/coman_lowspeed_readback.py —— 從**實際執行中**的
+      安全節點所印出的 vmax_effective 取值逐項比對，並核 sqrt(2) 倍的範數上界。
+      失敗具名 exit 67，不進任務。傳了參數不等於節點套用了。'
+  endpoint_record:
+    added: coman_low_speed_interface（base_lin_max、base_ang_max、arm_rate_max）
+    why: 'E1 的 summary() 是凍結檔案、只帶 arm_rate_max；底盤兩個界限原本只在
+      _low_speed_bound 的閉包裡 ⇒ 封存紀錄看不到門住整條鏈的條件'
+
+preserved:
+- 接觸例外與避碰配對（R1.1 十五組間距、contact_pairs、pair_rows）
+- 輪級限制 limit9 與逾時減速 limit9_timeout
+- 加速度框 amax（速度框收緊不改加速度）
+- 失效處置：整筆拒收、_fail 閂鎖、fail closed 全部保留
+- 執行端的三個門檻數值
+
+not_done:
+- 不自動解除閂鎖
+- 不改寫 v1／C1／R1／R1.1
+- 不改接近目標、kp、v_task、w_task 或步長
+- 不在 adapter 裁切命令
+
+open:
+  feasibility: '低速框下 QP 在**已測狀態**是否可行，由
+    evaluation/test_low_speed_chain.py 核對。該核對只證明**已測狀態**的相容性，
+    **不證明整段任務必然成功**。'
+  task_duration: '底盤平移上限由 0.2775 降到逐軸 0.035255（約 1/7.9）
+    ⇒ 接近段耗時會顯著變長。main4 的接近誤差是 ep 0.4679 m、er 2.0951 rad。
+    **這不是本修訂要解決的問題**，但會影響 sim_limit 是否足夠，實跑時一併觀察。'

@@ -38,6 +38,23 @@ PAIR_ROWS_EXEMPT="${PAIR_ROWS_EXEMPT:-uflite_finger1:handle_bar,uflite_finger2:h
 TIGHT_PAIRS="${TIGHT_PAIRS:-uflite_gripper_link:handle_bar}"
 TIGHT_TOL="${TIGHT_TOL:-0.0005}"
 TIGHT_BUDGET="${TIGHT_BUDGET:-0.020}"
+
+# **低速介面框（L1）**：執行端 E2 的整筆拒收門檻是 base_lin 0.05 m/s（平面**範數**）、
+# base_ang 0.2 rad/s、arm_rate 1.0 rad/s，且越界會 _fail **閂鎖**整條命令鏈。
+# 上游求解原本用硬體框（0.2775／1.1327／3.1416），從不知道這些門檻存在。
+# 這裡把同一份低速框傳給**求解端與安全層**，讓它進 QP 的約束組裝。
+# 平移取**內接方框**：逐軸 0.035255 ⇒ 兩軸同時到頂時
+#   sqrt(2) x 0.035255 = 0.049858 < 0.05 ⇒ 仍滿足 E2 的範數門檻。
+# adapter 只做純旋轉，不改變這個範數。
+# 規格：evaluation/results/specs/coman_low_speed_box_l1.yaml
+# **執行端門檻不動**（政策 wb_wheel_limit_policy_v2.md §7 禁止提高）。
+VMAX_BASE_LIN="${VMAX_BASE_LIN:-0.035255}"
+VMAX_BASE_ANG="${VMAX_BASE_ANG:-0.199900}"
+VMAX_ARM="${VMAX_ARM:-0.999900}"
+# E2 端的門檻（**只用於比對，不傳給執行端**；執行端沿用自己的 argparse 預設）
+E2_BASE_LIN=0.05
+E2_BASE_ANG=0.2
+E2_ARM_RATE=1.0
 STROKE="${STROKE:-0.020}"
 PULL_S="${PULL_S:-4.0}"
 PIDS=(); say(){ echo "[$(date +%T)] $*" | tee -a "$LOG"; }
@@ -183,16 +200,30 @@ spawn safety ros2 run ammr_wholebody_mpc wholebody_safety --ros-args \
   -p use_sim_time:=true -p report_frame:=odom -p base_frame:=base_link \
   -p wholebody_urdf:="$URDF_WB" -p freespace_confirmed:=false \
   -p pair_gap:="[$(echo "$PAIR_GAP" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
-  -p contact_pairs:="[$(echo "$CONTACT_PAIRS" | sed 's/,/","/g; s/^/"/; s/$/"/')]"
+  -p contact_pairs:="[$(echo "$CONTACT_PAIRS" | sed 's/,/","/g; s/^/"/; s/$/"/')]" \
+  -p vmax_base_lin:="$VMAX_BASE_LIN" -p vmax_base_ang:="$VMAX_BASE_ANG" \
+  -p vmax_arm:="$VMAX_ARM"
 spawn adapter python3 -u evaluation/arm_vel_adapter.py --consumer-node /isaac_drawer_sim
 # **診斷錄製**（O4）：各節點處理時間、求解器耗時與命令 meta **分開落盤**
 spawn diagrec python3 -u evaluation/coman_diag_record.py --out "$DIR/diag_record.json"
 sleep 5
 
+# **讀回比對**：從實際執行中的安全節點所印出的 vmax_effective 取值，與 runner
+# 傳出的低速框逐項比對。傳了參數不等於節點套用了 —— main4 的教訓就是兩端
+# 各自看自己的設定而沒有人核對。比對失敗 ⇒ 具名失敗 exit 67，不進任務。
+say "  低速框讀回比對（安全層 vs runner）"
+python3 evaluation/coman_lowspeed_readback.py "$LOG" \
+  "$VMAX_BASE_LIN" "$VMAX_BASE_ANG" "$VMAX_ARM" \
+  "$E2_BASE_LIN" "$E2_BASE_ANG" "$E2_ARM_RATE" 2>&1 | tee -a "$LOG" || exit 67
+
 say "[5/6] 起求解節點（接近→連接→拉開→保持→釋放→退出，一趟走完）"
 python3 -u evaluation/coman_pull_solver_node.py --out "$DIR/solver_out.json" \
   --stroke-m "$STROKE" --pull-duration-s "$PULL_S" \
   --pair-gap "$PAIR_GAP" --contact-pairs "$CONTACT_PAIRS" \
+  --vmax-base-lin "$VMAX_BASE_LIN" --vmax-base-ang "$VMAX_BASE_ANG" \
+  --vmax-arm "$VMAX_ARM" \
+  --e2-base-lin "$E2_BASE_LIN" --e2-base-ang "$E2_BASE_ANG" \
+  --e2-arm-rate "$E2_ARM_RATE" \
   2>&1 | tee "$DIR/solver.log" | tee -a "$LOG" >/dev/null
 
 say "[6/6] 等執行端收尾"

@@ -1,6 +1,62 @@
-# 起動前核對（含 L1 低速框）　2026-10-01T03:39:44+08:00
+# 起動前核對　2026-10-01T03:06:31+08:00
 
-**不開 Isaac。** 下一趟（未錄影的 20 mm 完整操作）的起動前核對留存，**不是操作驗收**。
+**不開 Isaac。** 這份是下一趟（未錄影的 20 mm 完整操作）的起動前核對留存，
+**不是操作驗收**。
+
+## 結果總表
+
+| 段 | 結果 |
+|---|---|
+| `coman_entry_check.py` A–G 七段 | **全部通過**（rc=0） |
+| runner 起動前檢查（sha 守門） | `{"checks_failed": []}`（rc=0） |
+| 節點冒煙測試（實際參數、假時鐘） | **四節點全部存活**（rc=0） |
+| 殘留程序 | 無（另按確切 PID 清掉一個 29 分鐘前剖析留下的 fake_world，domain 80） |
+| 離線套件 | **11 / 11 通過** |
+
+## 執行的建置版本
+
+```
+colcon build --packages-select ammr_wholebody_mpc   （**未用 --symlink-install**）
+```
+
+入口核對 A 段逐檔比對 `src` 與
+`install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc`
+的 sha，24 個 `.py` 全部相同 ⇒ **執行時載入的就是這份原始碼**。
+
+本次變動的三個檔案（與 S1 `checkers_sha256_16` 記錄一致）：
+
+| 檔案 | sha256[:16] |
+|---|---|
+| `isaac_coman_drawer_sim.py` | 05ddf909e67425da |
+| `arm_link_distance.py` | 76671ab2c900a9cd |
+| `test_tight_pair_bound.py` | db9d7b4eddcc43f5 |
+
+## 參數與規格一致性（由 A–G 與 sha 守門共同覆蓋）
+
+- v1 仍為 frozen 且 sha 未變；C1 已掛載且門檻未變
+- R1.1 十五組間距：S1 的 `g_by_pair`、runner 的 `PAIR_GAP` **逐項相符**
+- 間距被放寬的連桿**都有**必要配對列
+- 模式條件：runner 用 `--free-base`，執行端守衛期望 0 個 world→根固定關節；
+  **守衛不符期望仍會中止**（保護未移除）
+- 任務數值：runner 的 `STROKE` = v1 `target_stroke_m` = 20.0 mm，
+  且**同時**傳給執行端與求解端；v1 正式容差 ±0.50 mm，案例 ±10 mm 已標明非正式
+- 診斷欄位一律**按名稱**索引；錄製器的欄位名單來自上游，不自帶硬編碼
+
+## 這份核對**不涵蓋**什麼
+
+- **不涵蓋**命令是否實際送達並套用 —— `test_cmd_qos_delivery` 是通訊診斷，
+  實際送達要靠下一趟的 `chain9.received > 0` 與 `coman_applied_cmd_log` 非空
+- **不涵蓋**滿載耗時 —— 距離節點的 26.64 ms 是假世界 998 列，
+  下一趟是 1350 列；求解器的 O6（p50 106 ms）**尚未處理**
+- **不涵蓋** O7（JointState 586 ms）的原因
+- 通過入口核對**不等於**執行期驗收
+
+---
+
+## 附錄：原始輸出
+
+```
+# 入口核對輸出　2026-10-01T03:03:41+08:00
 
 ## coman_entry_check.py
 A 建置後載入的程式與 src 是否相同
@@ -33,7 +89,7 @@ B runner 的每個 -p 參數都在節點宣告過
   arm_link_distance：取到 spawn 區塊                            ok
   arm_link_distance：10 個參數都已宣告                             ok
   wholebody_safety：取到 spawn 區塊                             ok
-  wholebody_safety：10 個參數都已宣告                              ok
+  wholebody_safety：7 個參數都已宣告                               ok
 
 C 話題接線成對
   /coman/cmd_meta 由 solver 發布                              ok
@@ -100,48 +156,21 @@ G 任務數值：兩端與 v1 一致
   案例容差與 v1 容差不同 ⇒ 舊判定必須標明非正式                               ok  案例 ±10 mm vs v1 ±0.50 mm
   協同執行端已無未標註的 arrived_sim_t 欄名                             ok
 
-H 低速框與執行端 E2 相容（L1）
-  L1 已核准                                                   ok  approved
-  runner 定義了六個低速框／E2 變數                                    ok  ['E2_ARM_RATE', 'E2_BASE_ANG', 'E2_BASE_LIN', 'VMAX_ARM', 'VMAX_BASE_ANG', 'VMAX_BASE_LIN']
-  runner 的 VMAX_BASE_LIN 與 L1 相同                           ok  0.035255 vs 0.035255
-  runner 的 VMAX_BASE_ANG 與 L1 相同                           ok  0.199900 vs 0.1999
-  runner 的 VMAX_ARM 與 L1 相同                                ok  0.999900 vs 0.9999
-  runner 的 E2_BASE_LIN == 執行端 --base-lin-max 預設            ok  runner 0.05 vs 原始碼 0.05
-  runner 的 E2_BASE_ANG == 執行端 --base-ang-max 預設            ok  runner 0.2 vs 原始碼 0.2
-  runner 的 E2_ARM_RATE == 執行端 --arm-rate-max 預設            ok  runner 1.0 vs 原始碼 1.0
-  兩軸同時到頂的平面範數 <= E2 範數門檻                                   ok  0.049858 <= 0.05
-  角速度框 <= E2 門檻                                            ok
-  關節速率框 <= E2 門檻                                           ok
-  runner 把低速框傳給**安全層**                                     ok
-  runner 把低速框傳給**求解端**                                     ok
-  runner 把 E2 門檻傳給求解端做自檢                                   ok
-  runner 在起求解端**之前**做讀回比對                                  ok
-  讀回比對失敗會具名中止（exit 67）                                     ok
-  求解端的框進入 cfg.vmax（**不是**對輸出裁切）                            ok
-  求解端與讀回比對用**同一個**共用模組                                     ok
-  求解端覆寫只縮不放（共用 tighten_vmax）                               ok
-  求解端自檢呼叫共用 e2_compat_violations                           ok
-  共用模組的範數上界用 sqrt(2) 倍（不是只比單軸）                             ok
-  求解端自檢失敗即啟動中止（fail closed）                                ok
-  守門：L1 值判為相容                                              ok
-  守門：main4 的硬體框判為不相容（三項全中）                                 ok
-  守門：逐軸剛好等於範數門檻仍判為不相容（√2 生效）                               ok
-  執行端封存三個界限（不只 arm_rate_max）                               ok
-
 入口核對：全部通過
 
-## runner 起動前檢查（sha 守門）
-{"checks_failed": []}   （rc=0）
+## runner 起動前檢查（sha 守門，同一份程式碼）
+{"checks_failed": []}
 
-## 節點冒煙測試（實際參數、假時鐘；不開 Isaac）
+## 節點冒煙測試（實際參數啟動四節點，假時鐘；不開 Isaac）
   arm_link_distance         存活
   wholebody_safety          存活
   robot_state_publisher     存活
   coman_diag_record         存活
 節點冒煙測試：全部存活
 
+## 殘留程序：無
+
 ## 離線套件
-- test_low_speed_chain               通過
 - test_cmd_qos_delivery              通過
 - test_dist_speedup_equivalence      通過
 - test_tight_pair_bound              通過
@@ -153,53 +182,4 @@ H 低速框與執行端 E2 相容（L1）
 - test_opening_acceptance            通過
 - test_solver_safety_parity          通過
 - test_retreat_direction             通過
-
-## 低速框鏈路核對（詳細輸出）
-```
-狀態：底盤 (10.5000, 8.0897) yaw 90.0°、手臂≈零、開度 0.0 mm；距離列 1350
-
-A 低速框進入約束組裝（不是對輸出裁切）
-  三項覆寫都生效                                                    ok  ['vmax_arm', 'vmax_base_ang', 'vmax_base_lin']
-  硬體框確實被收緊（只縮不放）                                             ok  0.2775→0.035255
-  逐軸框兩軸同時到頂仍在 E2 範數門檻內                                       ok  √2×0.035255=0.049858 <= 0.05
-  共用守門判 L1 為相容                                               ok
-  框列全為單位列且共 2n 列                                             ok  18/18
-  約束集合含底盤平移的速度框列                                             ok  4 列
-  底盤框列的界 == L1 逐軸值                                           ok  max |b| = 0.035255
-  手臂框列的界 <= L1 關節值                                           ok  max |b| = 0.999201
-  屏障列仍在（避碰未被關掉）                                              ok  1350 列
-
-B QP 求解（低速框在約束裡）
-  QP 可行（已測狀態）                                                ok  
-  接近誤差與 main4 相符（±5 mm）                                      ok  ep 0.4679 vs main4 0.4679
-  OSQP 狀態 {'solved': 1}、迭代上限 600、ep 0.4679 m、er 2.0951 rad
-  v_qp 底盤 (+0.000000, -0.035255, +0.199900)  平面範數 0.035255
-  v_qp 手臂 [0.01987, 0.236944, 0.965385, -0.023026, 0.230801, -0.022837]
-  QP 輸出逐軸在低速框內                                               ok
-  QP 輸出平面範數 < E2 門檻                                          ok  0.035255 < 0.05
-
-C 安全濾波（同一份低速框）
-  列 1386、活躍 0、fallback False、unresolved False
-  v_sf 底盤 (+0.000000, -0.035255, +0.199900)  平面範數 0.035255
-  濾波未 fallback、未 unresolved                                  ok
-  濾波輸出逐軸在低速框內                                                ok
-  濾波輸出平面範數 < E2 門檻                                           ok  0.035255 < 0.05
-
-D adapter 純旋轉 → E2 新鮮命令執行
-  旋轉保範數                                                      ok  0.035255000
-  E2 接受並產生可套用命令（濾波輸出）                                        ok  receive=True step=有 fail=None
-  E2 套用：底盤本體 (-0.02616, -0.0, 0.148328)、手臂設定點 (-0.000141, 0.002484, 0.007061, -1.3e-05, 0.001713, -0.000169)
-
-E 兩軸同時接近上限（不能只測單軸）
-  逐軸到頂：平面範數 0.049858
-  E2 接受兩軸同時到頂的命令                                             ok  receive=True step=有 fail=None
-  E2 接受同一命令旋轉 45° 後（範數不變）                                    ok  receive=True step=有 fail=None
-  略超：平面範數 0.050141 > 0.05
-  E2 仍擋下略超範數的命令（門檻未被繞過）                                      ok  receive=True step=None fail=底盤輪級檢查未通過：線速度 0.0501 > 0.05 m/s
-  E2 仍擋下略超關節速率的命令                                            ok  receive=True step=None fail=關節 1 速度 +1.0010 超過 1.0
-  main4 實際命令：平面範數 0.2775、手臂最大 1.1376
-  E2 仍會擋下 main4 的越界命令                                        ok  receive=True step=None fail=底盤輪級檢查未通過：線速度 0.2775 > 0.05 m/s
-
-低速框鏈路核對：全部通過
-本核對只證明**已測狀態**的相容性，不證明整段任務必然成功。
 ```
