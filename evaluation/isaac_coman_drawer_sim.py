@@ -526,8 +526,15 @@ class DrawerNode(Node):
         #（櫃體不動，直接在障礙物設定裡給世界位姿，不需發布）
         self.drawer_pose_pub = self.create_publisher(
             PoseStamped, '/model/drawer_body/pose', 10)
+        # **命令路徑的 QoS 必須與發布端相容**。arm_vel_adapter 以預設
+        # （RELIABLE / **VOLATILE**）發布 /wb_vel_cmd；這裡若用 rel
+        # （TRANSIENT_LOCAL）訂閱就不相容 ⇒ **一筆命令都收不到**
+        # （實測 main4：求解端發了 9 筆，chain9.received = 0，
+        #  兩端各自印出 'incompatible QoS ... DURABILITY' 警告）。
+        _cmdq = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE,
+                           history=HistoryPolicy.KEEP_LAST)
         self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
-                                 self._wb9, rel)
+                                 self._wb9, _cmdq)
         self.create_subscription(Float64MultiArray, '/arm/joint_position_cmd',
                                  self._cmd, 10)
         self.create_subscription(Float64MultiArray, '/manip/gripper_cmd',
