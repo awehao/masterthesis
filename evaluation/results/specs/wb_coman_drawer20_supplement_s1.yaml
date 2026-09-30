@@ -69,14 +69,26 @@ run_history:
   thermal: '峰值 86.875 °C @ sim 23.3 s（起 69.9；限 92，餘裕 5.1 °C）——
     命令鏈整條運作時的負載，明顯高於 retry2 空轉的 79.25 °C'
   evidence_for_three_questions: 無
-open_gap_G6_odom:
+open_gap_G8_odom_RESOLVED:
   id: G8
   issue: 協同執行端未發布 /odom 與 odom→base_link TF
   impact: 求解節點 base=False；距離節點 report_frame=odom 查不到 TF ⇒ 距離列全 NODATA
   reference_impl: isaac_wholebody_sim_e2.py:193-229
   cautions: ['/odom.twist 以 child_frame_id 的本體座標表達',
              'odom→base_link 不得重複發，否則 base_link 有兩個父節點']
-  status: 未實作，待確認
+  status: '**已實作**（2026-10-01）'
+  implemented:
+    g8a: '執行端 DrawerNode 加 /odom 發布器 ＋ TransformBroadcaster；
+      每週期與 /joint_states 同一模擬時間戳發布 publish_base_feedback()'
+    g8b: 'runner 加 robot_state_publisher（**manip** URDF），提供
+      base_footprint → base_link → … → link6；距離／安全節點仍用 wholebody URDF 當 FK 參數'
+    conventions_locked:
+    - TF 只發 odom → base_footprint（base_link 不得有兩個父節點）
+    - /odom.twist 以 child_frame 表達；yaw=0 時碰巧相同不代表定義正確
+    - /odom 與 TF 同一時間戳，且由**模擬時間**組出
+    - 位姿取 prim 完整變換（含 roll/pitch），非 yaw 重建；USD 列向量慣例已轉置
+    - 找不到 base_footprint prim 即中止 return 12
+    offline_test: evaluation/test_base_feedback.py（20 項全部通過）
 fixes_after_first_attempt:
 - id: F1
   issue: '固定關節守衛寫死「恰好 1 個」，與 --free-base 相斥 ⇒
@@ -280,7 +292,7 @@ checkers_sha256_16:
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
   coman_pull_solver_node.py: 770222f5bdaa5b5d
-  isaac_coman_drawer_sim.py: 4b7c440148a940d2
+  isaac_coman_drawer_sim.py: ffb72f60d66bab66
   wholebody_safety_filter.py: 6250b75f08a30d84
   arm_link_distance.py: 38b73aa866c7f79c
   wholebody_safety_node.py: d3f90cfb1901b158
@@ -298,6 +310,7 @@ checkers_sha256_16:
   coman_entry_check.py: d45512831ddc2a2d
   test_base_mode_guard.py: 8929a8438dc6f4bd
   test_opening_acceptance.py: ff2225b5b5fdd038
+  test_base_feedback.py: b983b8ea1f6aa509
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。

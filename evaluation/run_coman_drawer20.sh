@@ -14,6 +14,13 @@ RUN_ID="${RUN_ID:-coman_drawer20_$(date +%H%M%S)}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
 LOG="$DIR/run.log"; : > "$LOG"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
+# **兩份 URDF 用途不同，不可互換**（同 run_wb_arm.sh）：
+#   manip 版     根 base_footprint → base_link → 手臂；與 Isaac 載入的一致，
+#                給 robot_state_publisher 發 TF 用。
+#   wholebody 版 根 world → virtual_base → base_x/y/theta → base_link，
+#                底盤是**真實關節**；只當距離／安全節點的 FK **參數**，
+#                拿去發 TF 會要求 base_x/y/theta 的 joint_states，且根本不同。
+URDF_TF="$WS/evaluation/models/omni_bot_manip.urdf"
 URDF_WB="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
 SIM_LIMIT="${SIM_LIMIT:-120}"
 # **總靜態間距**（取代該配對的 d0+eps，不是在 30 mm 上再加 10 mm）。
@@ -148,6 +155,12 @@ python3 evaluation/clock_advancing.py --discover 180 2>&1 | tee -a "$LOG" || exi
 say "[4/6] 起感測與安全鏈（障礙物含櫃體、橫桿與抽屜各部件）"
 mapfile -t OBS < <(python3 evaluation/coman_obstacle_specs.py)
 say "  障礙物 ${#OBS[@]} 個（**含橫桿**；接觸例外只給兩指且限定相位）"
+# **TF 鏈**：Isaac 只發 odom → base_footprint（G8a）。
+# base_footprint → base_link → … → link6 由 robot_state_publisher 從
+# /joint_states ＋ manip URDF 組出；缺了它，距離節點的 report_frame=odom
+# 查不到任何連桿，整片距離列都是 NODATA。
+spawn rsp ros2 run robot_state_publisher robot_state_publisher "$URDF_TF" \
+  --ros-args -p use_sim_time:=true
 spawn dist ros2 run ammr_wholebody_mpc arm_link_distance --ros-args \
   -p use_sim_time:=true -p report_frame:=odom -p geometry:=links \
   -p wholebody_urdf:="$URDF_WB" -p obstacles:="[$(IFS=,; echo "${OBS[*]}")]" \

@@ -418,8 +418,9 @@ from rclpy.qos import (QoSProfile, ReliabilityPolicy, HistoryPolicy,
                        DurabilityPolicy)                            # noqa: E402
 from rosgraph_msgs.msg import Clock                                 # noqa: E402
 from sensor_msgs.msg import JointState                              # noqa: E402
-from geometry_msgs.msg import PoseStamped                           # noqa: E402
-from geometry_msgs.msg import PoseStamped                           # noqa: E402
+from geometry_msgs.msg import PoseStamped, TransformStamped       # noqa: E402
+from nav_msgs.msg import Odometry                                  # noqa: E402
+import tf2_ros                                                     # noqa: E402
 from std_msgs.msg import (Float32MultiArray, Float64MultiArray,     # noqa: E402
                           String)
 
@@ -455,6 +456,17 @@ class DrawerNode(Node):
         # 「拒絕轉發命令」—— 守衛正常運作,缺的是本端沒提供資訊。
         # 這與 isaac_wholebody_sim_e2.py:185 的做法相同。
         self.declare_parameter('joints', list(ARM))
+        # **底盤回授**（G8）。協同執行端由固定底座版衍生，底盤不動時不需要
+        # odom；接上開放底盤與全身 QP 後，求解端取不到底盤狀態（base=False）、
+        # 距離節點 report_frame=odom 查不到 TF（整片距離列 NODATA）。
+        # 寫法沿用 isaac_wholebody_sim_e2.py:193-260，兩個慣例不可改：
+        #   1. TF 只發 odom → **base_footprint**。base_footprint → base_link
+        #      由 robot_state_publisher 發在 /tf_static，TF 鏈自動組合；
+        #      這裡若另發 odom → base_link，base_link 就有兩個父節點。
+        #   2. /odom.twist 以 **child_frame_id 表達**（本體座標），由世界座標
+        #      速度旋轉而來。yaw = 0 時碰巧相同，不代表定義正確。
+        self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
+        self.tfb = tf2_ros.TransformBroadcaster(self)
         be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
                         history=HistoryPolicy.KEEP_LAST)
         rel = QoSProfile(depth=200, reliability=ReliabilityPolicy.RELIABLE,
@@ -529,6 +541,54 @@ class DrawerNode(Node):
         if len(m.data) != 3:
             return
         self.fsnap = (int(m.data[0]), float(m.data[2]))
+
+    def publish_base_feedback(self, t, p_fp, quat_fp, R_fp, v_world, w_world):
+        """底盤回授：**同一份完整位姿、同一個時間戳**，odom 與 TF 一起發。
+
+        * 位姿取自 `base_footprint` prim 的實際世界變換，**保留完整姿態**
+          （不只用 yaw 重建 —— 那會把底盤的 roll/pitch 藏掉）。
+        * twist 轉到 child_frame（本體）；世界座標速度**不可**直接填。
+        * 時間戳用**模擬時間** t，與 /joint_states、/clock 同一時基。
+        """
+        stamp = self.get_clock().now().to_msg()
+        stamp.sec = int(t)
+        stamp.nanosec = min(int(round((t - int(t)) * 1e9)), 999999999)
+
+        # 世界 → 本體（child_frame）：twist 的定義要求如此
+        v_b = np.asarray(R_fp, float).T @ np.asarray(v_world, float)
+        w_b = np.asarray(R_fp, float).T @ np.asarray(w_world, float)
+
+        od = Odometry()
+        od.header.stamp = stamp
+        od.header.frame_id = 'odom'
+        od.child_frame_id = 'base_footprint'
+        od.pose.pose.position.x = float(p_fp[0])
+        od.pose.pose.position.y = float(p_fp[1])
+        od.pose.pose.position.z = float(p_fp[2])
+        od.pose.pose.orientation.w = float(quat_fp[0])
+        od.pose.pose.orientation.x = float(quat_fp[1])
+        od.pose.pose.orientation.y = float(quat_fp[2])
+        od.pose.pose.orientation.z = float(quat_fp[3])
+        od.twist.twist.linear.x = float(v_b[0])
+        od.twist.twist.linear.y = float(v_b[1])
+        od.twist.twist.linear.z = float(v_b[2])
+        od.twist.twist.angular.x = float(w_b[0])
+        od.twist.twist.angular.y = float(w_b[1])
+        od.twist.twist.angular.z = float(w_b[2])
+        self.odom_pub.publish(od)
+
+        tr = TransformStamped()
+        tr.header.stamp = stamp                  # **與 /odom 同一時間戳**
+        tr.header.frame_id = 'odom'
+        tr.child_frame_id = 'base_footprint'     # **單一父節點**
+        tr.transform.translation.x = float(p_fp[0])
+        tr.transform.translation.y = float(p_fp[1])
+        tr.transform.translation.z = float(p_fp[2])
+        tr.transform.rotation.w = float(quat_fp[0])
+        tr.transform.rotation.x = float(quat_fp[1])
+        tr.transform.rotation.y = float(quat_fp[2])
+        tr.transform.rotation.z = float(quat_fp[3])
+        self.tfb.sendTransform(tr)
 
     def _safety_diag(self, m):
         if len(m.data) > 1:
@@ -687,6 +747,21 @@ def main():
         print(f'[drawer] **取消重力的範圍不等於只有抽屜，中止**'); return 11
     if not a.drawer_no_gravity and _off:
         print(f'[drawer] **非診斷模式卻有剛體被取消重力，中止**'); return 11
+
+    # **base_footprint prim**：TF 與 /odom 的來源（G8）。
+    # 用 prim 的實際世界變換，不用 articulation 根 —— 兩者參考點可能不同。
+    FP_PRIM = None
+    for _p in Usd.PrimRange.Stage(stage, Usd.TraverseInstanceProxies(
+            Usd.PrimDefaultPredicate)):
+        if (str(_p.GetPath()).startswith(ROBOT)
+                and _p.GetName() == 'base_footprint'):
+            FP_PRIM = _p
+            break
+    if FP_PRIM is None:
+        print('[coman] **找不到 base_footprint prim**，無法發 /odom 與 TF，中止',
+              flush=True)
+        return 12
+    print(f'[coman] base_footprint prim {FP_PRIM.GetPath()}', flush=True)
 
     _xf = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT))
     _xf.ClearXformOpOrder()
@@ -1916,6 +1991,24 @@ def main():
         js.header.stamp.nanosec = min(nsec, 999999999)
         js.name = names; js.position = [float(v) for v in qm]
         node.js_pub.publish(js)
+        # **底盤回授**（G8）：與 /joint_states 同一週期、同一模擬時間 t。
+        # 位姿取 base_footprint prim 的世界變換（保留完整姿態）；
+        # 速度取 articulation 根剛體的 PhysX 回報 —— **只旋轉表示，
+        # 不移動參考點**，參考點差異未補正，列為限制。
+        _xc = UsdGeom.XformCache()
+        _M = _xc.GetLocalToWorldTransform(FP_PRIM)
+        _tt = _M.ExtractTranslation()
+        _p_fp = np.array([_tt[0], _tt[1], _tt[2]], float)
+        _R3 = np.array([[_M[r][c] for c in range(3)] for r in range(3)])
+        _sc = np.linalg.norm(_R3, axis=1)
+        _R_fp = (_R3 / _sc[:, None]).T          # USD 是列向量慣例，取轉置
+        _rq = _M.ExtractRotationQuat()
+        _ri = _rq.GetImaginary()
+        _quat_fp = np.array([_rq.GetReal(), _ri[0], _ri[1], _ri[2]], float)
+        node.publish_base_feedback(
+            t, _p_fp, _quat_fp, _R_fp,
+            np.asarray(robot.get_linear_velocity(), float),
+            np.asarray(robot.get_angular_velocity(), float))
         ps = PoseStamped(); ps.header.stamp = js.header.stamp
         ps.header.frame_id = 'world'
         ps.pose.position.x, ps.pose.position.y, ps.pose.position.z = [float(v) for v in tcp_p]
