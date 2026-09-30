@@ -91,6 +91,16 @@ def build(M, cl):
             self.t_pull0 = None
             self.grasp_offset = np.array([0.0, 0.0,
                                           -float(cl.tcp_offset_z)])
+            # 排程診斷（**不降低設定頻率來掩蓋超時**，只記錄）
+            self.pump_budget = int(cl.pump_budget)
+            self.max_input_age = float(cl.max_input_age)
+            self.n_deadline_miss = 0
+            self.missed_slots = 0
+            self.worst_late_ms = 0.0
+            self.n_stale_discard = 0
+            self._last_src_sim_t = None
+            self.n_same_state_skip = 0
+            self.t_cons = 0.0
             self.R_des = np.array(json.loads(cl.grasp_rot), dtype=float)
             self.stroke = float(cl.stroke_m)
             self.pull_s = float(cl.pull_duration_s)
@@ -179,11 +189,48 @@ def build(M, cl):
                     pts.append(_pt)
             if not pts:
                 raise RuntimeError('QP: 沒有可用的距離列')
+            import time as _tt
+            _c0 = _tt.monotonic()               # **單調牆鐘**，只量耗時
             Ab, bb, cap, _ = _rows_from_points(self.K, q, pts, self.cfg, v_lin)
             Aj, bj = _joint_limit_rows(self.K, q, self.cfg)
             Ax, bx = _box_rows(self.cfg, self.n, cap,
                                getattr(self, 'v_prev', None), self.cfg.dt)
-            return np.array(Ab + Aj + Ax), np.array(bb + bj + bx), len(Ab)
+            out = np.array(Ab + Aj + Ax), np.array(bb + bj + bx), len(Ab)
+            self.t_cons = _tt.monotonic() - _c0
+            return out
+
+        def _pump(self, budget=None, wait_s=0.002):
+            """**有界**回呼處理。每輪都做，**不依賴距離 deadline 的剩餘時間**。
+
+            main5 的缺陷：處理回呼只寫在 `while monotonic() < target` 裡，
+            `solve()` 一旦超過週期，target 早已過去 ⇒ 迴圈本體一次都不執行
+            ⇒ 連續長求解期間完全沒有 spin ⇒ 自己的新鮮度守門觸發。
+
+            **一次 spin_once 不保證所有必要主題都更新**，所以呼叫端仍必須
+            查來源時間與有效性 —— 「有 spin」不等於「狀態是新的」。
+            有界：至多 budget 次回呼、至多 wait_s 的阻塞。
+            """
+            n = int(self.pump_budget if budget is None else budget)
+            self.exec.spin_once(timeout_sec=float(wait_s))   # 一次等待機會
+            for _ in range(max(0, n - 1)):
+                self.exec.spin_once(timeout_sec=0.0)         # 非阻塞，清已就緒者
+
+        def sched_summary(self):
+            """排程診斷。**deadline miss 一定要留下** —— 不以降頻掩蓋超時。"""
+            return {
+                'rate_hz': float(self.a.rate),
+                'pump_budget': int(self.pump_budget),
+                'max_input_age_s': float(self.max_input_age),
+                'n_deadline_miss': int(self.n_deadline_miss),
+                'missed_slots': int(self.missed_slots),
+                'worst_late_ms': round(float(self.worst_late_ms), 3),
+                'n_stale_discard': int(self.n_stale_discard),
+                'n_same_state_skip': int(self.n_same_state_skip),
+                'note': ('worst_late_ms 是**單調牆鐘**的落後量；'
+                         'in_age 是**模擬時鐘**的輸入年齡。兩者不同量，不相減。'
+                         'n_deadline_miss > 0 表示確實超時 —— '
+                         '設定頻率 rate_hz 未被調降。'),
+            }
 
         def sim_now(self) -> float:
             """**模擬時間**（use_sim_time ＋ 執行端發布的 /clock）。"""
@@ -272,7 +319,18 @@ def build(M, cl):
             slot = 0
             retreat_ref = None
             v_last = np.zeros(9)
+            # **對照組開關**（COMAN_SCHED_LEGACY=1，預設關閉、零行為改變）：
+            # 還原成「只在 deadline 尚有剩餘時間才處理回呼」的舊寫法，
+            # 供 test_solver_sched 的 E 段重現 main5 的守門中止。
+            # 沒有這個對照，就無法證明修正處理的是真缺陷而非別的原因。
+            _legacy = os.environ.get('COMAN_SCHED_LEGACY') == '1'
+            if _legacy:
+                print('[solver] **對照組**：還原舊排程（每輪不 pump）', flush=True)
             while True:
+                # **每輪都有界地處理回呼**，放在 guard 與取得求解輸入之前。
+                # 這是 O7 的修正點：不再依賴「距離 deadline 還有剩餘時間」。
+                if not _legacy:
+                    self._pump()
                 why = self.guard()
                 if why:
                     self.stop()
@@ -359,7 +417,22 @@ def build(M, cl):
                     self.stop()
                     self.exec.spin_once(timeout_sec=0.02)
                     continue
-                _t_solve0 = _t.perf_counter()
+                # **本次求解所用狀態的來源時間**（模擬時鐘）。求解返回後要用它
+                # 判斷輸入是否已過期 —— 不能因為剛收到新 JointState，就把
+                # 基於舊狀態算出的解當成新解。
+                _src_sim_t = now_s
+                # **同一來源狀態不重複求解**：狀態沒前進就再解一次，等於在
+                # 已落後時立刻連解（main5 的 301 + 256 ms），而且會發出兩筆
+                # 基於同一狀態的命令。等回呼帶來新狀態再解。
+                if (not _legacy and self._last_src_sim_t is not None
+                        and now_s <= self._last_src_sim_t):
+                    self.n_same_state_skip += 1
+                    self._pump()
+                    continue
+                self._last_src_sim_t = now_s
+                self.t_cons = 0.0
+                self.t_qp = 0.0
+                _t_solve0 = _t.perf_counter()      # 耗時用**單調牆鐘**
                 try:
                     v, T, ep, er = super().solve(tgt)
                 except RuntimeError as exc:
@@ -367,8 +440,61 @@ def build(M, cl):
                     print(f'  中止（fail closed）：{exc}', flush=True)
                     return False
                 _solve_ms = (_t.perf_counter() - _t_solve0) * 1e3
+                _cons_ms, _qp_ms = self.t_cons * 1e3, self.t_qp * 1e3
+                _kin_ms = _solve_ms - _cons_ms - _qp_ms
                 self._solved_once = True
                 self.ep_last, self.er_last = ep, er
+                # ---- 發布**之前**再驗一次有效性 ----
+                # 先處理新回呼（有界），再用**模擬時鐘**之差判斷輸入年齡。
+                # 來源時間用模擬時鐘、運算耗時用單調牆鐘，**兩者不相減**。
+                self._pump()
+                _drop = None
+                _in_age = float('nan')
+                if self.max_input_age > 0.0:
+                    # **兩個模擬時鐘來源取較新者**：node clock 本身也靠回呼
+                    # 更新，只用它會在時鐘訊息落後時把年齡算小 ⇒ 反而放行
+                    # 過期結果。另一個來源是最新收到的任務狀態的 sim_t。
+                    # 兩者都是模擬時鐘量，取 max 只會讓年齡估得更大（保守）。
+                    _ref = self.sim_now()
+                    if self.task is not None:
+                        _ref = max(_ref, float(self.task.get('sim_t', _ref)))
+                    _in_age = _ref - _src_sim_t
+                    if _in_age > self.max_input_age:
+                        _drop = (f'求解所用狀態已過期 {_in_age * 1e3:.0f} ms '
+                                 f'> {self.max_input_age * 1e3:.0f} ms')
+                if _drop is None and self.task is not None:
+                    if bool(self.task.get('emergency')):
+                        _drop = '出現緊急狀態'
+                    elif PHASE_MAP.get(pol.phase, 'unknown') != self.cfg.phase:
+                        _drop = f'任務相位已變（{self.cfg.phase} → {pol.phase}）'
+                if _legacy:
+                    _drop = None        # 對照組：不做發布前驗證
+                if _drop is not None:
+                    # **丟棄結果，走既定停止處置**（stop() 發零命令，
+                    # 與本迴圈其他「沒有狀態就不發命令」的處置相同）。
+                    # 不重新蓋上新時間後發布。
+                    self.n_stale_discard += 1
+                    self.stop()
+                    print(f'  丟棄本次求解結果（不發布）：{_drop}', flush=True)
+                    self.log.append(dict(t=_src_sim_t, phase=pol.phase,
+                                         ep=float(ep), er=float(er), seq=-1,
+                                         solve_ms=round(_solve_ms, 4),
+                                         cons_ms=round(_cons_ms, 4),
+                                         qp_ms=round(_qp_ms, 4),
+                                         kin_ms=round(_kin_ms, 4),
+                                         in_age=round(_in_age, 6),
+                                         dropped=_drop, cmd=None))
+                    slot += 1
+                    target = t0 + slot * period
+                    _nw = _t.monotonic()
+                    if _nw > target:
+                        _sk = int((_nw - target) // period) + 1
+                        self.n_deadline_miss += 1
+                        self.missed_slots += _sk
+                        self.worst_late_ms = max(self.worst_late_ms,
+                                                 (_nw - target) * 1e3)
+                        slot += _sk
+                    continue
                 m = _F64()
                 m.data = [float(x) for x in v]
                 self.pub.publish(m)
@@ -387,11 +513,36 @@ def build(M, cl):
                 self.log.append(dict(t=now_s, phase=pol.phase, ep=float(ep),
                                      er=float(er), seq=int(self.cmd_seq),
                                      solve_ms=round(_solve_ms, 4),
+                                     # 發布當下的**單調牆鐘**，只用於量發布間隔。
+                                     # 與來源模擬時間 t 各自記錄，**不相減**。
+                                     pub_mono=round(_t.monotonic(), 6),
+                                     # **solve_ms 的分段**（O6）：約束組裝與 QP
+                                     # 分開量，其餘歸運動學／成本。
+                                     cons_ms=round(_cons_ms, 4),
+                                     qp_ms=round(_qp_ms, 4),
+                                     kin_ms=round(_kin_ms, 4),
+                                     # **輸入狀態的年齡**（模擬時鐘之差）。
+                                     # 與 solve_ms（牆鐘耗時）是不同的量，
+                                     # **不可互相比較或相減**。
+                                     in_age=round(_in_age, 6),
                                      cmd=[float(x) for x in v]))
                 slot += 1
                 target = t0 + slot * period
-                while _t.monotonic() < target:
-                    self.exec.spin_once(timeout_sec=0.002)
+                _nw = _t.monotonic()
+                if _nw > target and not _legacy:
+                    # **已落後：跳過錯過的 slot，不連續追趕舊 slot。**
+                    # 追趕會在已落後時立刻再解好幾次 —— 那正是 main5 的
+                    # 301 + 256 ms 連解。**不降低設定頻率**（a.rate 不變），
+                    # 只把 slot 推到當下之後，並記錄 deadline miss。
+                    _sk = int((_nw - target) // period) + 1
+                    self.n_deadline_miss += 1
+                    self.missed_slots += _sk
+                    self.worst_late_ms = max(self.worst_late_ms,
+                                             (_nw - target) * 1e3)
+                    slot += _sk
+                else:
+                    while _t.monotonic() < target:
+                        self.exec.spin_once(timeout_sec=0.002)
 
         def on_attached(self, now_s):
             """連接當下建立 PullTarget：**用實際量到的**夾爪與把手位姿。"""
@@ -427,6 +578,13 @@ def main() -> int:
                          '**取代該配對的 d0+eps**；必須與安全層 pair_gap 一致')
     ap.add_argument('--retreat-clear-m', type=float, default=0.0233,
                     help='退出完成的實測門檻（沿退出起始方向的有號位移）')
+    ap.add_argument('--pump-budget', type=int, default=32,
+                    help='每輪有界回呼處理的上限次數（至多一次 2 ms 阻塞）')
+    ap.add_argument('--max-input-age', type=float, default=-1.0,
+                    help='求解**輸入狀態**的年齡上限（模擬時鐘，s）。'
+                         '求解返回後若超過即丟棄結果、走既定停止處置。'
+                         '-1 = 不檢查。應由 runner 以執行端的 '
+                         '--max-cmd-age-s 傳入（命令在下游就是以該界限判新鮮）')
     ap.add_argument('--grasp-rot',
                     default='[[-1,0,0],[0,0,1],[0,1,0]]')
     cl, rest = ap.parse_known_args()

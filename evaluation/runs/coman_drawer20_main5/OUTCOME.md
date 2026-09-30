@@ -70,13 +70,22 @@ while _t.monotonic() < target:
 **一次都不執行** ⇒ 連續長時間求解期間**完全沒有 spin**
 ⇒ `/joint_states` 的回呼不被處理 ⇒ `q_arm_t` 不更新 ⇒ 自己的守門觸發。
 
-**這不是發布端問題，也不是物理迴圈停頓** —— `/joint_states` 在物理迴圈內同步發布，
-且 `frozen_steps = 0`（執行端全程收到新鮮命令，逾時路徑從未觸發）。
-main4 的 586 ms 用同一算術也吻合（後四筆 106+100+133+128 ≈ 467 ms 加開銷）。
-
-**O6 與 O7 是同一根因**：求解本身阻塞，餓死自己的執行器。
-程式路徑與數值都吻合，但我**沒有直接量測執行器的阻塞時間**，
-所以這是「程式碼與量測共同支持的機制」，不是已插樁證明。
+> **更正（2026-10-01，F17 驗證之後）**：上面那個機制**撤回**。
+> `TransformListener(self.tf_buffer, self, spin_thread=True)` 把**求解端節點
+> 本身**加進一個專用 `SingleThreadedExecutor` 並在背景執行緒 `spin()`
+> （已讀 tf2_ros 原始碼確認）⇒ 節點的訂閱一直有人服務，
+> **「主迴圈沒 spin」不等於回呼沒被處理**。
+> 在受控環境（持續發布狀態、注入 300／260 ms 求解）也**重現不出**守門中止。
+>
+> 另兩處也撤回：
+> - 「已排除執行端資料飢餓（`frozen_steps = 0`）」—— 安全層在求解端死後仍以
+>   20 Hz 發**零命令**，執行端因此一直新鮮，`frozen_steps = 0` **不能**反證
+>   求解端沒有回呼飢餓。
+> - 「O6 與 O7 同一根因」—— 安全層活躍約束增加是相關證據，但**不能證明**
+>   求解端變慢與守門觸發同源。
+>
+> **仍然成立的**：四筆 solve_ms 合計 581.35 ms、後兩筆 557.12 ms，守門報
+> 563 ms —— 數值吻合。但**吻合不等於因果**。**O7 成因仍未確立。**
 
 守門照裁定沿用，**沒有延長門檻**。
 
@@ -147,7 +156,13 @@ main5 命令真的套用、機器人開始接近 ⇒ 屏障大量活躍，QP 變
 
 ## 收尾雜訊
 
-求解端收尾出現 `RCLError: failed to shutdown: rcl_shutdown already called`
-與多個 `Traceback`。守門中止後走 `stop()` 再關閉，`rclpy.shutdown()` 被呼叫兩次。
-**發生在資料落盤之後**（4 週期已寫入、diag 2360 筆完整），
-不影響本趟結果，但應修。
+`RCLError: failed to shutdown: rcl_shutdown already called` 與多個 `Traceback`。
+
+> **更正**：這不在求解端，在 **`coman_diag_record.py:89`** ——
+> `ExternalShutdownException`（cleanup 的 SIGTERM 已關掉 context）之後
+> 又呼叫 `rclpy.shutdown()`。我先前歸給求解端，講錯了。已修為
+> `try_shutdown()` 並吞該例外（F17 fix_5）。
+
+**發生在資料落盤之後**（run.log 行 457 的 4 週期寫入、行 471 的
+drawer_run.json 都在行 583 的 RCLError 之前；diag 2360 筆完整），
+不影響本趟結果。

@@ -12,7 +12,7 @@ approval_scope:
     pair_gaps_r1_1: f2714067369be541     # 十五組間距
     pair_gaps_r1: 0e97a9c0baef9ca7       # 原十組，保存不覆寫
     low_speed_box_l1: 50b06800c03ebca1  # 上游低速框，E2 門檻不動
-  code_version: 34 個 checker 的 sha 逐項記錄於 checkers_sha256_16（入口核對比對 install 與 src）
+  code_version: 37 個 checker 的 sha 逐項記錄於 checkers_sha256_16（入口核對比對 install 與 src）
   entry_check: 'evaluation/coman_entry_check.py（**A–G 七段**；A–E 為版本、參數宣告、
     接線、欄位索引、規格鏈，F 為模式條件、G 為任務數值 —— 見
     entry_check_scope_correction。**通過入口核對不等於執行期驗收**。）'
@@ -366,6 +366,60 @@ fixes_after_first_attempt:
     ⇒ 接近段耗時會顯著變長（main4 的接近誤差 ep 0.4679 m、er 2.0951 rad）。
     **這不是本修訂要解決的問題**，但會影響 sim_limit 是否足夠，實跑時一併觀察。'
 
+- id: F17
+  issue: '求解迴圈**唯一的回呼處理點**寫在 `while monotonic() < target:` 裡。
+    `solve()` 一旦超過週期，`target` 早已過去 ⇒ 迴圈本體一次都不執行
+    ⇒ 該輪沒有任何回呼處理點，而 `guard()` 緊接著就被檢查。
+    這是**可由程式碼直接確認**的排程缺陷。'
+  important_scope_limit: '**這不等於 O7 的成因已確立。**
+    背景有 TransformListener 的專用 executor 在轉本節點（見 O7 的撤回），
+    而受控環境重現不出 main5 的守門中止。修這個是因為它本身就是缺陷，
+    不是因為已證明它造成了 main5。'
+  fix_1: '每輪都在 `guard()` **之前**做**有界**回呼處理（`_pump`）：
+    至多 `pump_budget`（預設 32）次、至多一次 2 ms 阻塞。
+    **不依賴距離 deadline 的剩餘時間。**
+    註明「一次 spin_once 不保證所有必要主題都更新」⇒ 仍要查來源時間與有效性。'
+  fix_2: '超時就**跳過錯過的 slot**，不連續追趕舊 slot
+    （追趕會在已落後時立刻再解好幾次）。**不降低 a.rate 來掩蓋超時**，
+    改記 `n_deadline_miss`／`missed_slots`／`worst_late_ms`。
+    另加「同一來源狀態不重複求解」（`_last_src_sim_t`）——
+    狀態沒前進就再解一次，等於立刻連解，且會發兩筆基於同一狀態的命令。'
+  fix_3: '求解返回後、**發布之前**再驗有效性：記住本次求解所用狀態的
+    來源時間 `_src_sim_t`，`_pump()` 後若輸入已過期、出現緊急狀態或
+    任務相位已變 ⇒ **丟棄結果、走既定停止處置**（`stop()` 發零命令），
+    **不重新蓋上新時間後發布**。'
+  time_base_discipline: '來源時間用**模擬時鐘**（`sim_now()` 與任務狀態的
+    `sim_t`，取較新者以免時鐘落後把年齡算小）；運算耗時用**單調牆鐘**
+    （`perf_counter`／`monotonic`）。**兩者不相減**，`in_age` 與 `solve_ms`
+    在紀錄中各自成欄。'
+  max_input_age: 'runner 以執行端的 `--max-cmd-age-s`（0.2 s）傳入
+    `--max-input-age`：輸入比它舊，算出的命令在下游本來就已經不新鮮。
+    入口核對比對 runner 的 E2_MAX_CMD_AGE 與執行端 argparse 預設。'
+  fix_4_timing: 'solve_ms 拆成 `cons_ms`（約束組裝）／`qp_ms`（OSQP）／
+    `kin_ms`（其餘：FK、Jacobian、成本、稠密解）。**只補計時，
+    不依猜測做效能重構。**'
+  fix_5_o8: 'coman_diag_record 改用 `rclpy.try_shutdown()` 並吞
+    `ExternalShutdownException` —— O8 在**診斷錄製器**，不在求解端
+    （我先前歸給求解端，講錯了）。'
+  offline_verification: 'evaluation/test_solver_sched.py（不開 Isaac、不用 GPU）
+    ＋ coman_solver_sched_world.py（持續發布狀態的最小假世界）
+    ＋ coman_solver_delay_wrap.py（**CPU-bound** 注入，不用 time.sleep ——
+    sleep 會釋放 GIL，重現不出真實長求解的條件）。'
+  verified:
+    A: '注入連續 300／260 ms、狀態持續發布 ⇒ **不再觸發 JointState 守門**，
+      迴圈持續前進 65 輪'
+    B: '到 sim 12 s **真的停止發布** /joint_states ⇒
+      **原有新鮮度守門仍觸發**（501 ms）—— 保護未被弱化'
+    C: '過期結果被丟棄 30 筆（min in_age 0.2015 s）、
+      已發布 35 筆（max in_age **0.1964 s**，全部 <= 0.2）；
+      被丟棄的列 `cmd` 為 None ⇒ **沒有被蓋新時間再發**'
+    D: '注入 120 ms ⇒ 牆鐘相鄰發布間隔最小 **127.6 ms**、0 筆過密；
+      來源模擬時間嚴格前進（最小 0.0218 s）⇒ **無追趕式密集發布**'
+    E_diagnostic: '（**非通過條件**）舊排程在本環境**重現不出**守head中止
+      ⇒ 見 O7 的撤回'
+  not_done: ['不改多執行緒', '不重構求解器', '不降低控制頻率',
+             '不延長任何新鮮度門檻', '不讓過時解重新變成有效命令']
+
 corrections_20261001:
 - what: 距離節點的週期被記為 50 ms
   actual: '`arm_link_distance` 的 `publish_rate` 預設 **30.0 Hz ⇒ 33.3 ms**
@@ -595,14 +649,14 @@ checkers_prev_sha256_16:     # **前版**（首趟啟動中止時的版本），
   test_solver_safety_parity.py: 13b8c5972217ede3
   test_retreat_direction.py: 491c88b9322dd307
   coman_diag_record.py: 610c9196e0d84946
-  coman_entry_check.py: a87ea8e3e3d20d51
+  coman_entry_check.py: c3104095e93d519a
 checkers_sha256_16:
   coman_handover_state.py: b1d8f290b4499fbc
   coman_couple_link.py: 3f89f33edc5a7cd7
   coman_pose_reader.py: 9581efb675d8d361
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
-  coman_pull_solver_node.py: 06d1e78d363d0bc1
+  coman_pull_solver_node.py: 919b128f22678b9a
   isaac_coman_drawer_sim.py: db54e6a107fe075d
   wholebody_safety_filter.py: 6250b75f08a30d84
   arm_link_distance.py: 76671ab2c900a9cd
@@ -617,8 +671,8 @@ checkers_sha256_16:
   arm_link_geometry.py: 7fe840907f6e57ba
   test_solver_safety_parity.py: 13b8c5972217ede3
   test_retreat_direction.py: 491c88b9322dd307
-  coman_diag_record.py: 610c9196e0d84946
-  coman_entry_check.py: 740f6a882f1ac9d1
+  coman_diag_record.py: 68179907b87d8c30
+  coman_entry_check.py: 2be73a5826877a2d
   test_base_mode_guard.py: 8929a8438dc6f4bd
   test_opening_acceptance.py: ff2225b5b5fdd038
   test_base_feedback.py: b983b8ea1f6aa509
@@ -626,11 +680,14 @@ checkers_sha256_16:
   test_cmd_qos_delivery.py: bd527d71b4e1ab18
   test_dist_speedup_equivalence.py: a07279e87f2dd2a3
   coman_dist_profile.py: 6d4dbbe1ddd6f120
-  wholebody_pregrasp.py: 38331421074a05ec
+  wholebody_pregrasp.py: aa9eeea03acd8d48
   arm_vel_adapter.py: 2616b6a05d88741c
   coman_low_speed_box.py: 7ec0dd1bfca3d92e
   coman_lowspeed_readback.py: 8238db6576c98263
   test_low_speed_chain.py: 17a52f72ed6f3520
+  coman_solver_sched_world.py: 0ad9314c1bf8b267
+  coman_solver_delay_wrap.py: d51a4284615f3c7a
+  test_solver_sched.py: 3c992fd3a5826ddd
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。
@@ -908,7 +965,7 @@ open_issues:
   now_blocking: '**是 O7 的同一根因**（見 O7）⇒ 它已從效能問題升級為任務阻擋項'
   status: '**尚未處理，且已成為主要阻擋**'
 - id: O7
-  severity: mechanism_located_fix_undecided  # main5 實測後更新
+  severity: cause_not_established            # 20261001 撤回「已定位」
   title: 求解端守門中止 —— JointState 586 ms 未更新
   what_happened: 求解端在 sim ≈ 11.98 被自己的新鮮度守門擋下並收束（寫入 9 週期）；
     執行端繼續跑到 sim_limit 120.010
@@ -921,22 +978,26 @@ open_issues:
     （sim 11.87，立即 98 ms/週期）與求解器首次求解（133 ms）同時上線的時刻；
     溫度峰值 79.625 °C 也在 sim 11.82。**時間吻合不等於因果。**'
   main5_recurred: {stale_ms: 563, cycles_written: 4, max_data_age_s: 0.50}
-  mechanism_located: '求解迴圈在發布後是
-    `target = t0 + slot * period`（period = 1/20 s = **50 ms**）、
-    `while monotonic() < target: exec.spin_once(0.002)`。
-    `solve()` 花 301 ms 時 target 早已過去 ⇒ **迴圈本體一次都不執行**
-    ⇒ 連續長時間求解期間**完全沒有 spin** ⇒ `/joint_states` 回呼不被處理
-    ⇒ `q_arm_t` 不更新 ⇒ 自己的守門觸發。'
-  quantitative_match: 'main5 四筆 solve_ms 合計 **581.35 ms**、
-    後兩筆合計 **557.12 ms**，守門報 **563 ms** —— 落在兩者之間。
-    main4 的 586 ms 用同一算術亦吻合。'
-  ruled_out: ['發布端問題（/joint_states 在物理迴圈內同步發布）',
-              '執行端資料飢餓（frozen_steps = 0，逾時路徑從未觸發）']
-  same_root_cause_as: O6 —— 求解本身阻塞，餓死自己的執行器
-  evidence_strength: '**程式碼路徑與數值共同支持的機制**，
-    不是已插樁證明 —— 未直接量測執行器的阻塞時間。'
+  retracted_20261001:
+  - '「機制已定位：連續長求解期間**完全沒有 spin** ⇒ 回呼不被處理」
+    —— **撤回**。`TransformListener(self.tf_buffer, self, spin_thread=True)`
+    把**求解端節點本身**加進一個專用 `SingleThreadedExecutor` 並在背景
+    執行緒 `spin()`（已讀 tf2_ros 原始碼確認）⇒ 節點的所有訂閱一直有人服務，
+    「主迴圈沒 spin」**不等於**回呼沒被處理。'
+  - '「已排除執行端資料飢餓（frozen_steps = 0）」—— **撤回**。
+    安全層在求解端死後仍以 20 Hz 發**零命令**，執行端因此一直「新鮮」，
+    所以 frozen_steps = 0 **不能**反證求解端沒有回呼飢餓。（指導意見更正）'
+  - '「與 O6 同一根因」—— **撤回**；安全層活躍約束增加是相關證據，
+    但**還不能證明**求解端變慢的原因與守門觸發同源。'
+  what_remains_true: '四筆 solve_ms 合計 581.35 ms、後兩筆 557.12 ms，
+    守門報 563 ms —— 數值吻合仍然成立，但**吻合不等於因果**。'
+  not_reproducible: '在 test_solver_sched 的受控環境（持續發布狀態、
+    注入 300／260 ms 求解）**重現不出**守門中止：
+    舊排程跑了 70 輪也沒觸發。純 Python 忙迴圈每 5 ms
+    （sys.getswitchinterval）讓出 GIL，也重現不出 GIL 獨佔。'
   threshold_unchanged: 守門照裁定沿用，**沒有延長 max_data_age**
-  status: '機制已定位（與 O6 同根因）；**修正方式未決**'
+  status: '**成因仍未確立。** F17 修的是可由程式碼直接確認的排程缺陷，
+    **不等於**已解決 O7。'
 - id: O8
   severity: cosmetic_but_real
   title: 求解端收尾 `rcl_shutdown already called`

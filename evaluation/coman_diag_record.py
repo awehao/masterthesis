@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse, json, os, sys
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float32MultiArray, Float64MultiArray
@@ -82,11 +83,21 @@ def main() -> int:
         rclpy.spin(n)
     except KeyboardInterrupt:
         pass
+    except ExternalShutdownException:
+        # cleanup 的 SIGTERM 已經關掉 context。**這不是錯誤** ——
+        # 落盤仍要做完，所以在這裡吞掉，不讓它蓋掉 finally 的輸出。
+        pass
     finally:
         n._flush()
         print(f'診斷錄製：{ {k: len(v) for k, v in n.data.items()} }', flush=True)
-        n.destroy_node()
-        rclpy.shutdown()
+        try:
+            n.destroy_node()
+        except Exception:
+            pass          # context 已關時 destroy 會拋，落盤已完成
+        # **try_shutdown 而非 shutdown**：context 已被外部關閉時
+        # shutdown() 會拋 RCLError（rcl_shutdown already called），
+        # 那個例外出現在落盤之後、只會污染 log（main5 的 O8）。
+        rclpy.try_shutdown()
     return 0
 
 

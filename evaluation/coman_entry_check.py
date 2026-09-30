@@ -248,7 +248,7 @@ def main() -> int:
     # **逐行**解析，兩種形式都要：`NAME="${NAME:-值}"` 與 `NAME=值`。
     # 先前用一條跨行正則，[^:] 會吃掉換行 ⇒ 抓到別的變數的預設值。
     _WANT = ('VMAX_BASE_LIN', 'VMAX_BASE_ANG', 'VMAX_ARM',
-             'E2_BASE_LIN', 'E2_BASE_ANG', 'E2_ARM_RATE')
+             'E2_BASE_LIN', 'E2_BASE_ANG', 'E2_ARM_RATE', 'E2_MAX_CMD_AGE')
     rv = {}
     for _ln in runner.splitlines():
         _m = re.match(r'([A-Z0-9_]+)=(.*)$', _ln.strip())
@@ -257,7 +257,7 @@ def main() -> int:
         _val = _m.group(2).strip().strip('"')
         _d = re.match(r'^\$\{[A-Z0-9_]+:-([\d.eE+-]+)\}$', _val)
         rv[_m.group(1)] = _d.group(1) if _d else _val
-    check('runner 定義了六個低速框／E2 變數', len(rv) == 6, f'  {sorted(rv)}')
+    check('runner 定義了七個低速框／E2 變數', len(rv) == 7, f'  {sorted(rv)}')
     lv = l1['values']
     for k, want in (('VMAX_BASE_LIN', lv['base_lin_per_axis_mps']),
                     ('VMAX_BASE_ANG', lv['base_ang_mps']),
@@ -269,7 +269,8 @@ def main() -> int:
     # 必須與執行端 argparse 的預設逐項相同，否則比對基準會與實際門檻漂移。
     for k, flag in (('E2_BASE_LIN', 'base-lin-max'),
                     ('E2_BASE_ANG', 'base-ang-max'),
-                    ('E2_ARM_RATE', 'arm-rate-max')):
+                    ('E2_ARM_RATE', 'arm-rate-max'),
+                    ('E2_MAX_CMD_AGE', 'max-cmd-age-s')):
         m = re.search(r"add_argument\('--" + flag
                       + r"',\s*type=float,\s*default=([\d.]+)", ep)
         check(f'runner 的 {k} == 執行端 --{flag} 預設',
@@ -328,6 +329,46 @@ def main() -> int:
           len(_v(0.2775, 1.1327, 3.141593, *e2)) == 3)
     check('守門：逐軸剛好等於範數門檻仍判為不相容（√2 生效）',
           bool(_v(e2[0], 0.1, 0.5, *e2)))
+    # ---- O7 的排程修正 ----
+    ps = open(os.path.join(HERE, 'coman_pull_solver_node.py'),
+              encoding='utf-8').read()
+    check('每輪都在 guard **之前**做有界回呼處理',
+          ps.index('self._pump()\n                why = self.guard()')
+          < ps.index('_t_solve0'))
+    check('_pump 有界（次數與阻塞時間都有上限）',
+          'range(max(0, n - 1))' in ps and 'timeout_sec=0.0)' in ps)
+    check('超時跳過錯過的 slot（不連續追趕）',
+          'slot += _sk' in ps and 'n_deadline_miss' in ps)
+    check('deadline miss 有記錄（不以降頻掩蓋）',
+          'self.worst_late_ms' in ps and 'missed_slots' in ps
+          and '--rate' not in ps)
+    check('發布**之前**再驗有效性並可丟棄結果',
+          '丟棄本次求解結果（不發布）' in ps
+          and ps.index('_drop is not None') < ps.index('self.pub.publish(m)'))
+    check('過期判斷用**模擬時鐘**之差（不與牆鐘相減）',
+          '_in_age = _ref - _src_sim_t' in ps
+          and '_ref = self.sim_now()' in ps)
+    check('年齡參考取兩個模擬時鐘來源的較新者（時鐘落後不會把年齡算小）',
+          "_ref = max(_ref, float(self.task.get('sim_t', _ref)))" in ps)
+    check('in_age 與 solve_ms 在紀錄中各自成欄（不互相比較）',
+          'in_age=round(_in_age, 6)' in ps and 'solve_ms=round(_solve_ms, 4)' in ps)
+    check('同一來源狀態不重複求解', 'n_same_state_skip' in ps
+          and '_last_src_sim_t' in ps)
+    check('耗時用單調牆鐘', '_t.perf_counter()' in ps and '_tt.monotonic()' in ps)
+    check('runner 以執行端的命令年齡界限傳入 --max-input-age',
+          '--max-input-age "$E2_MAX_CMD_AGE"' in runner)
+    check('deadline miss 等排程計數會**落盤**',
+          'def sched_summary' in ps and 'n_deadline_miss' in ps
+          and "sched=_sched" in open(os.path.join(HERE, 'wholebody_pregrasp.py'),
+                                     encoding='utf-8').read())
+    check('solve_ms 已分段（約束組裝／QP／運動學）',
+          all(x in ps for x in ('cons_ms=', 'qp_ms=', 'kin_ms=')))
+    dr = open(os.path.join(HERE, 'coman_diag_record.py'), encoding='utf-8').read()
+    check('O8：診斷錄製改用 try_shutdown 並吞 ExternalShutdownException',
+          'rclpy.try_shutdown()' in dr
+          and 'except ExternalShutdownException' in dr
+          and 'rclpy.shutdown()' not in dr)
+
     check('執行端封存三個界限（不只 arm_rate_max）',
           "'coman_low_speed_interface'" in ep
           and "'base_lin_max_mps'" in ep and "'base_ang_max_rps'" in ep

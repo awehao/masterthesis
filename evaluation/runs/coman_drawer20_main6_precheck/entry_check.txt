@@ -1,0 +1,216 @@
+# 起動前核對（含 L1 低速框 ＋ F17 排程修正）　2026-10-01T04:18:49+08:00
+
+**不開 Isaac、不用 GPU。** 下一趟（未錄影的 20 mm 完整操作）的起動前核對留存，**不是操作驗收**。
+
+## coman_entry_check.py A–H
+A 建置後載入的程式與 src 是否相同
+  __init__.py                                              ok
+  arm_detection_points.py                                  ok
+  arm_dynamics.py                                          ok
+  arm_limits.py                                            ok
+  arm_link_distance.py                                     ok
+  arm_link_geometry.py                                     ok
+  arm_payload_limits.py                                    ok
+  arm_pregrasp.py                                          ok
+  arm_scan_self_filter.py                                  ok
+  detour.py                                                ok
+  gmpc.py                                                  ok
+  gmpc_node.py                                             ok
+  goal_to_plan_relay.py                                    ok
+  kalman_tracker.py                                        ok
+  obstacle_aggregator.py                                   ok
+  path_processor.py                                        ok
+  scan_obstacle_tracker.py                                 ok
+  scan_safety_shield.py                                    ok
+  se2.py                                                   ok
+  test_path_publisher.py                                   ok
+  wheel_limit_guard.py                                     ok
+  wholebody_kinematics.py                                  ok
+  wholebody_safety_filter.py                               ok
+  wholebody_safety_node.py                                 ok
+
+B runner 的每個 -p 參數都在節點宣告過
+  arm_link_distance：取到 spawn 區塊                            ok
+  arm_link_distance：10 個參數都已宣告                             ok
+  wholebody_safety：取到 spawn 區塊                             ok
+  wholebody_safety：10 個參數都已宣告                              ok
+
+C 話題接線成對
+  /coman/cmd_meta 由 solver 發布                              ok
+    ↳ safety 訂閱                                            ok
+  /wholebody_safety/cmd_meta 由 safety 發布                   ok
+    ↳ endpoint 訂閱                                          ok
+  /wholebody_safety/diag_fields 由 safety 發布                ok
+    ↳ endpoint 訂閱                                          ok
+    ↳ recorder 訂閱                                          ok
+  /arm_link_distance/diag_fields 由 distance 發布             ok
+    ↳ endpoint 訂閱                                          ok
+    ↳ recorder 訂閱                                          ok
+  /arm_link_distance/diag 由 distance 發布                    ok
+    ↳ endpoint 訂閱                                          ok
+    ↳ recorder 訂閱                                          ok
+  /wholebody_safety/diag 由 safety 發布                       ok
+    ↳ endpoint 訂閱                                          ok
+    ↳ recorder 訂閱                                          ok
+  /coman/contact_phase 由 solver 發布                         ok
+    ↳ safety 訂閱                                            ok
+  /coman/task_state 由 endpoint 發布                          ok
+    ↳ solver 訂閱                                            ok
+  /arm_link_distance/obstacle_names 由 distance 發布          ok
+    ↳ solver 訂閱                                            ok
+  runner 啟動診斷錄製器                                           ok
+
+D 診斷欄位一律按名稱索引
+  安全 diag：tf_age 與 node_ms 不同欄                             ok  18 vs 19
+  執行端按名稱取 'reason'                                         ok
+  執行端按名稱取 'filter_ms'                                      ok
+  執行端按名稱取 'node_ms'                                        ok
+  執行端按名稱取 'src_paired'                                     ok
+  執行端按名稱取 'n_rows'                                         ok
+  執行端按名稱取 'node_cycle_ms'                                  ok
+  執行端按名稱取 'dup_dropped'                                    ok
+  執行端已無 diag 的硬編碼位置索引                                      ok
+  錄製器的欄位名單來自上游（不自帶硬編碼）                                     ok
+
+E 規格鏈一致
+  v1 仍為 frozen 且 sha 未變                                    ok
+  勘誤 C1 已核准且門檻未變                                           ok
+  S1 已掛載 C1                                                ok
+  R1.1 已核准且為十五組                                            ok
+  S1 的 g_by_pair 與 R1.1 逐項相符                               ok
+  runner 的 PAIR_GAP 與 R1.1 逐項相符                            ok
+  間距被放寬的連桿都有必要配對列                                          ok
+
+  S1 status = approved；blocking 未決項 = 無
+
+F 模式條件：runner 的模式與執行端守衛相容
+  執行端的固定關節期望值是**模式相依**                                     ok  free_base→0、fix_base→1
+  runner 使用 --free-base（開放底盤）                              ok
+  該模式的期望值為 0 個 world→根固定關節                                 ok
+  守衛不符期望仍會中止（保護未移除）                                        ok
+  runner 傳 --cmd-source wb9                                ok
+  runner 傳 --machine                                       ok
+  runner 傳 --attach-on-handover                            ok
+
+G 任務數值：兩端與 v1 一致
+  runner 的 STROKE 與 v1 target_stroke_m 相同                  ok  20.0 mm
+  runner 把目標傳給**執行端**（不只求解端）                               ok
+  runner 把行程傳給求解端                                          ok
+  v1 狀態機的目標與容差取自 v1（正式資格）                                  ok  20.0 mm ±0.50 mm
+  案例容差與 v1 容差不同 ⇒ 舊判定必須標明非正式                               ok  案例 ±10 mm vs v1 ±0.50 mm
+  協同執行端已無未標註的 arrived_sim_t 欄名                             ok
+
+H 低速框與執行端 E2 相容（L1）
+  L1 已核准                                                   ok  approved
+  runner 定義了七個低速框／E2 變數                                    ok  ['E2_ARM_RATE', 'E2_BASE_ANG', 'E2_BASE_LIN', 'E2_MAX_CMD_AGE', 'VMAX_ARM', 'VMAX_BASE_ANG', 'VMAX_BASE_LIN']
+  runner 的 VMAX_BASE_LIN 與 L1 相同                           ok  0.035255 vs 0.035255
+  runner 的 VMAX_BASE_ANG 與 L1 相同                           ok  0.199900 vs 0.1999
+  runner 的 VMAX_ARM 與 L1 相同                                ok  0.999900 vs 0.9999
+  runner 的 E2_BASE_LIN == 執行端 --base-lin-max 預設            ok  runner 0.05 vs 原始碼 0.05
+  runner 的 E2_BASE_ANG == 執行端 --base-ang-max 預設            ok  runner 0.2 vs 原始碼 0.2
+  runner 的 E2_ARM_RATE == 執行端 --arm-rate-max 預設            ok  runner 1.0 vs 原始碼 1.0
+  runner 的 E2_MAX_CMD_AGE == 執行端 --max-cmd-age-s 預設        ok  runner 0.2 vs 原始碼 0.2
+  兩軸同時到頂的平面範數 <= E2 範數門檻                                   ok  0.049858 <= 0.05
+  角速度框 <= E2 門檻                                            ok
+  關節速率框 <= E2 門檻                                           ok
+  runner 把低速框傳給**安全層**                                     ok
+  runner 把低速框傳給**求解端**                                     ok
+  runner 把 E2 門檻傳給求解端做自檢                                   ok
+  runner 在起求解端**之前**做讀回比對                                  ok
+  讀回比對失敗會具名中止（exit 67）                                     ok
+  求解端的框進入 cfg.vmax（**不是**對輸出裁切）                            ok
+  求解端與讀回比對用**同一個**共用模組                                     ok
+  求解端覆寫只縮不放（共用 tighten_vmax）                               ok
+  求解端自檢呼叫共用 e2_compat_violations                           ok
+  共用模組的範數上界用 sqrt(2) 倍（不是只比單軸）                             ok
+  求解端自檢失敗即啟動中止（fail closed）                                ok
+  守門：L1 值判為相容                                              ok
+  守門：main4 的硬體框判為不相容（三項全中）                                 ok
+  守門：逐軸剛好等於範數門檻仍判為不相容（√2 生效）                               ok
+  每輪都在 guard **之前**做有界回呼處理                                 ok
+  _pump 有界（次數與阻塞時間都有上限）                                    ok
+  超時跳過錯過的 slot（不連續追趕）                                      ok
+  deadline miss 有記錄（不以降頻掩蓋）                                ok
+  發布**之前**再驗有效性並可丟棄結果                                      ok
+  過期判斷用**模擬時鐘**之差（不與牆鐘相減）                                  ok
+  年齡參考取兩個模擬時鐘來源的較新者（時鐘落後不會把年齡算小）                           ok
+  in_age 與 solve_ms 在紀錄中各自成欄（不互相比較）                        ok
+  同一來源狀態不重複求解                                              ok
+  耗時用單調牆鐘                                                  ok
+  runner 以執行端的命令年齡界限傳入 --max-input-age                     ok
+  deadline miss 等排程計數會**落盤**                               ok
+  solve_ms 已分段（約束組裝／QP／運動學）                                ok
+  O8：診斷錄製改用 try_shutdown 並吞 ExternalShutdownException      ok
+  執行端封存三個界限（不只 arm_rate_max）                               ok
+
+入口核對：全部通過
+
+## runner sha 守門
+{"checks_failed": []}   （rc=0）
+
+## 求解端排程反例（O7 的四項確認）
+```
+暫存 /tmp/claude-1000/-home-howardchen-masterthesis/757c950c-2cbf-43e3-a66b-44e0527a4873/scratchpad/sched　domain 151　（不開 Isaac、不用 GPU）
+
+A+C 注入連續 300／260 ms（狀態持續發布）
+  求解端有產出紀錄                                                   ok
+  **不再**因回呼飢餓觸發 JointState 守門                                ok
+  確實注入了長求解                                                   ok  max 315.2 ms
+  有過期結果被丟棄                                                   ok  丟棄 37、發布 28
+  **已發布者的輸入年齡全部 <= 0.2 s**                                   ok  max in_age 0.1999 s、n=28
+  被丟棄者的輸入年齡全部 > 0.2 s                                        ok  min in_age 0.2008 s
+  丟棄原因是輸入過期（不是別的）                                            ok  例：求解所用狀態已過期 216 ms > 200 ms
+  被丟棄的列 cmd 為 None（沒有被蓋新時間再發）                                ok
+  solve_ms 已分段（cons／qp／kin）                                  ok
+  迴圈持續前進（不是解一次就卡住）                                           ok  65 輪
+    分段例：cons 0.93 / qp 1.02 / kin 313.25 ms
+
+D 注入 120 ms（超過 50 ms 週期但輸入仍新鮮）
+  求解端有產出紀錄                                                   ok
+  結果**有**發布（沒有過度丟棄）                                          ok  90 筆
+  不再觸發 JointState 守門                                         ok
+  **無追趕式密集發布**（牆鐘相鄰發布間隔皆 >= 20 ms）                           ok  最小 128.0 ms、0 筆過密
+  來源模擬時間嚴格前進（不重複用同一狀態發兩次）                                    ok  最小 0.0221 s
+    牆鐘發布間隔 中位 131.2 ms、最小 128.0 ms、最大 720.1 ms
+
+B 到 sim 12 s 停止發布 /joint_states（其餘照發）
+  **原有新鮮度守門仍會觸發**                                            ok
+    中止（guard）：JointState 已 540 ms 未更新
+
+E 診斷（**非通過條件**）：舊排程是否重現 main5 的守門中止
+    舊排程重現守門中止：**否**
+    舊排程 70 輪（新排程 65 輪）
+    ⇒ **本測試環境重現不出 main4／main5 的守門中止。**
+       `TransformListener(spin_thread=True)` 把求解端節點加進一個
+       專用 SingleThreadedExecutor 並在背景執行緒 spin()，
+       所以「主迴圈沒 spin」並**不等於**回呼沒被處理。
+       純 Python 忙迴圈每 5 ms（sys.getswitchinterval）讓出 GIL，
+       也重現不出 GIL 獨佔。
+       ⇒ **O7 的成因仍未確立**；本次修的是**可由程式碼直接確認**
+         的排程缺陷（主迴圈唯一的回呼處理點在超時時不會執行），
+         但**沒有證明**它就是 main5 中止的原因。
+
+求解端排程反例：全部通過
+本測試只驗**排程與有效性**，**不涵蓋** O6（一次 solve 為何 301 ms）。
+```
+
+## 離線套件
+- test_solver_sched                  通過
+- test_low_speed_chain               通過
+- test_cmd_qos_delivery              通過
+- test_dist_speedup_equivalence      通過
+- test_tight_pair_bound              通過
+- test_pipeline_pairs                通過
+- test_relative_velocity             通過
+- test_pair_exceptions               通過
+- test_base_feedback                 通過
+- test_base_mode_guard               通過
+- test_opening_acceptance            通過
+- test_solver_safety_parity          通過
+- test_retreat_direction             通過
+冒煙測試
+  arm_link_distance         存活
+  wholebody_safety          存活
+  robot_state_publisher     存活
+  coman_diag_record         存活
+節點冒煙測試：全部存活

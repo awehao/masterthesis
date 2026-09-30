@@ -55,6 +55,10 @@ VMAX_ARM="${VMAX_ARM:-0.999900}"
 E2_BASE_LIN=0.05
 E2_BASE_ANG=0.2
 E2_ARM_RATE=1.0
+# 執行端判命令新鮮度的界限。求解端用它當**求解輸入狀態**的年齡上限：
+# 輸入比它舊，算出的命令在下游本來就已經不新鮮（main5 的 301 ms 求解
+# 讓輸入落後 300 ms 以上）。值必須與執行端 --max-cmd-age-s 預設相同。
+E2_MAX_CMD_AGE=0.2
 STROKE="${STROKE:-0.020}"
 PULL_S="${PULL_S:-4.0}"
 PIDS=(); say(){ echo "[$(date +%T)] $*" | tee -a "$LOG"; }
@@ -223,7 +227,7 @@ python3 -u evaluation/coman_pull_solver_node.py --out "$DIR/solver_out.json" \
   --vmax-base-lin "$VMAX_BASE_LIN" --vmax-base-ang "$VMAX_BASE_ANG" \
   --vmax-arm "$VMAX_ARM" \
   --e2-base-lin "$E2_BASE_LIN" --e2-base-ang "$E2_BASE_ANG" \
-  --e2-arm-rate "$E2_ARM_RATE" \
+  --e2-arm-rate "$E2_ARM_RATE" --max-input-age "$E2_MAX_CMD_AGE" \
   2>&1 | tee "$DIR/solver.log" | tee -a "$LOG" >/dev/null
 
 say "[6/6] 等執行端收尾"

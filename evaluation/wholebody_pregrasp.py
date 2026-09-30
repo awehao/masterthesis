@@ -738,8 +738,12 @@ def main() -> int:
     finally:
         nd.stop()
         os.makedirs(os.path.dirname(a.out), exist_ok=True)
+        # 排程診斷（若子類別提供）。**deadline miss 必須落盤**，
+        # 否則超時只會出現在 log 的 solve_ms 裡而看不出被跳過幾個 slot。
+        _sched = (nd.sched_summary() if hasattr(nd, 'sched_summary') else None)
         json.dump(dict(args=vars(a), completed=ok,
-                       target=[float(x) for x in a.target], log=nd.log),
+                       target=[float(x) for x in a.target],
+                       sched=_sched, log=nd.log),
                   open(a.out, 'w'), ensure_ascii=False)
         print(f'  {len(nd.log)} 週期寫入 {a.out}', flush=True)
         rclpy.try_shutdown()
