@@ -1,0 +1,185 @@
+# 起動前核對　2026-10-01T03:06:31+08:00
+
+**不開 Isaac。** 這份是下一趟（未錄影的 20 mm 完整操作）的起動前核對留存，
+**不是操作驗收**。
+
+## 結果總表
+
+| 段 | 結果 |
+|---|---|
+| `coman_entry_check.py` A–G 七段 | **全部通過**（rc=0） |
+| runner 起動前檢查（sha 守門） | `{"checks_failed": []}`（rc=0） |
+| 節點冒煙測試（實際參數、假時鐘） | **四節點全部存活**（rc=0） |
+| 殘留程序 | 無（另按確切 PID 清掉一個 29 分鐘前剖析留下的 fake_world，domain 80） |
+| 離線套件 | **11 / 11 通過** |
+
+## 執行的建置版本
+
+```
+colcon build --packages-select ammr_wholebody_mpc   （**未用 --symlink-install**）
+```
+
+入口核對 A 段逐檔比對 `src` 與
+`install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc`
+的 sha，24 個 `.py` 全部相同 ⇒ **執行時載入的就是這份原始碼**。
+
+本次變動的三個檔案（與 S1 `checkers_sha256_16` 記錄一致）：
+
+| 檔案 | sha256[:16] |
+|---|---|
+| `isaac_coman_drawer_sim.py` | 05ddf909e67425da |
+| `arm_link_distance.py` | 76671ab2c900a9cd |
+| `test_tight_pair_bound.py` | db9d7b4eddcc43f5 |
+
+## 參數與規格一致性（由 A–G 與 sha 守門共同覆蓋）
+
+- v1 仍為 frozen 且 sha 未變；C1 已掛載且門檻未變
+- R1.1 十五組間距：S1 的 `g_by_pair`、runner 的 `PAIR_GAP` **逐項相符**
+- 間距被放寬的連桿**都有**必要配對列
+- 模式條件：runner 用 `--free-base`，執行端守衛期望 0 個 world→根固定關節；
+  **守衛不符期望仍會中止**（保護未移除）
+- 任務數值：runner 的 `STROKE` = v1 `target_stroke_m` = 20.0 mm，
+  且**同時**傳給執行端與求解端；v1 正式容差 ±0.50 mm，案例 ±10 mm 已標明非正式
+- 診斷欄位一律**按名稱**索引；錄製器的欄位名單來自上游，不自帶硬編碼
+
+## 這份核對**不涵蓋**什麼
+
+- **不涵蓋**命令是否實際送達並套用 —— `test_cmd_qos_delivery` 是通訊診斷，
+  實際送達要靠下一趟的 `chain9.received > 0` 與 `coman_applied_cmd_log` 非空
+- **不涵蓋**滿載耗時 —— 距離節點的 26.64 ms 是假世界 998 列，
+  下一趟是 1350 列；求解器的 O6（p50 106 ms）**尚未處理**
+- **不涵蓋** O7（JointState 586 ms）的原因
+- 通過入口核對**不等於**執行期驗收
+
+---
+
+## 附錄：原始輸出
+
+```
+# 入口核對輸出　2026-10-01T03:03:41+08:00
+
+## coman_entry_check.py
+A 建置後載入的程式與 src 是否相同
+  __init__.py                                              ok
+  arm_detection_points.py                                  ok
+  arm_dynamics.py                                          ok
+  arm_limits.py                                            ok
+  arm_link_distance.py                                     ok
+  arm_link_geometry.py                                     ok
+  arm_payload_limits.py                                    ok
+  arm_pregrasp.py                                          ok
+  arm_scan_self_filter.py                                  ok
+  detour.py                                                ok
+  gmpc.py                                                  ok
+  gmpc_node.py                                             ok
+  goal_to_plan_relay.py                                    ok
+  kalman_tracker.py                                        ok
+  obstacle_aggregator.py                                   ok
+  path_processor.py                                        ok
+  scan_obstacle_tracker.py                                 ok
+  scan_safety_shield.py                                    ok
+  se2.py                                                   ok
+  test_path_publisher.py                                   ok
+  wheel_limit_guard.py                                     ok
+  wholebody_kinematics.py                                  ok
+  wholebody_safety_filter.py                               ok
+  wholebody_safety_node.py                                 ok
+
+B runner 的每個 -p 參數都在節點宣告過
+  arm_link_distance：取到 spawn 區塊                            ok
+  arm_link_distance：10 個參數都已宣告                             ok
+  wholebody_safety：取到 spawn 區塊                             ok
+  wholebody_safety：7 個參數都已宣告                               ok
+
+C 話題接線成對
+  /coman/cmd_meta 由 solver 發布                              ok
+    ↳ safety 訂閱                                            ok
+  /wholebody_safety/cmd_meta 由 safety 發布                   ok
+    ↳ endpoint 訂閱                                          ok
+  /wholebody_safety/diag_fields 由 safety 發布                ok
+    ↳ endpoint 訂閱                                          ok
+    ↳ recorder 訂閱                                          ok
+  /arm_link_distance/diag_fields 由 distance 發布             ok
+    ↳ endpoint 訂閱                                          ok
+    ↳ recorder 訂閱                                          ok
+  /arm_link_distance/diag 由 distance 發布                    ok
+    ↳ endpoint 訂閱                                          ok
+    ↳ recorder 訂閱                                          ok
+  /wholebody_safety/diag 由 safety 發布                       ok
+    ↳ endpoint 訂閱                                          ok
+    ↳ recorder 訂閱                                          ok
+  /coman/contact_phase 由 solver 發布                         ok
+    ↳ safety 訂閱                                            ok
+  /coman/task_state 由 endpoint 發布                          ok
+    ↳ solver 訂閱                                            ok
+  /arm_link_distance/obstacle_names 由 distance 發布          ok
+    ↳ solver 訂閱                                            ok
+  runner 啟動診斷錄製器                                           ok
+
+D 診斷欄位一律按名稱索引
+  安全 diag：tf_age 與 node_ms 不同欄                             ok  18 vs 19
+  執行端按名稱取 'reason'                                         ok
+  執行端按名稱取 'filter_ms'                                      ok
+  執行端按名稱取 'node_ms'                                        ok
+  執行端按名稱取 'src_paired'                                     ok
+  執行端按名稱取 'n_rows'                                         ok
+  執行端按名稱取 'node_cycle_ms'                                  ok
+  執行端按名稱取 'dup_dropped'                                    ok
+  執行端已無 diag 的硬編碼位置索引                                      ok
+  錄製器的欄位名單來自上游（不自帶硬編碼）                                     ok
+
+E 規格鏈一致
+  v1 仍為 frozen 且 sha 未變                                    ok
+  勘誤 C1 已核准且門檻未變                                           ok
+  S1 已掛載 C1                                                ok
+  R1.1 已核准且為十五組                                            ok
+  S1 的 g_by_pair 與 R1.1 逐項相符                               ok
+  runner 的 PAIR_GAP 與 R1.1 逐項相符                            ok
+  間距被放寬的連桿都有必要配對列                                          ok
+
+  S1 status = approved；blocking 未決項 = 無
+
+F 模式條件：runner 的模式與執行端守衛相容
+  執行端的固定關節期望值是**模式相依**                                     ok  free_base→0、fix_base→1
+  runner 使用 --free-base（開放底盤）                              ok
+  該模式的期望值為 0 個 world→根固定關節                                 ok
+  守衛不符期望仍會中止（保護未移除）                                        ok
+  runner 傳 --cmd-source wb9                                ok
+  runner 傳 --machine                                       ok
+  runner 傳 --attach-on-handover                            ok
+
+G 任務數值：兩端與 v1 一致
+  runner 的 STROKE 與 v1 target_stroke_m 相同                  ok  20.0 mm
+  runner 把目標傳給**執行端**（不只求解端）                               ok
+  runner 把行程傳給求解端                                          ok
+  v1 狀態機的目標與容差取自 v1（正式資格）                                  ok  20.0 mm ±0.50 mm
+  案例容差與 v1 容差不同 ⇒ 舊判定必須標明非正式                               ok  案例 ±10 mm vs v1 ±0.50 mm
+  協同執行端已無未標註的 arrived_sim_t 欄名                             ok
+
+入口核對：全部通過
+
+## runner 起動前檢查（sha 守門，同一份程式碼）
+{"checks_failed": []}
+
+## 節點冒煙測試（實際參數啟動四節點，假時鐘；不開 Isaac）
+  arm_link_distance         存活
+  wholebody_safety          存活
+  robot_state_publisher     存活
+  coman_diag_record         存活
+節點冒煙測試：全部存活
+
+## 殘留程序：無
+
+## 離線套件
+- test_cmd_qos_delivery              通過
+- test_dist_speedup_equivalence      通過
+- test_tight_pair_bound              通過
+- test_pipeline_pairs                通過
+- test_relative_velocity             通過
+- test_pair_exceptions               通過
+- test_base_feedback                 通過
+- test_base_mode_guard               通過
+- test_opening_acceptance            通過
+- test_solver_safety_parity          通過
+- test_retreat_direction             通過
+```

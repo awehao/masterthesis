@@ -2449,8 +2449,14 @@ def main():
             'root_fixed_joints': _root_fixed,
             'placed_by': 'Xform transform on ' + ROBOT,
             'per_step_base_override': False,
-            'caveat': ('底盤由外部固定支撐；不代表輪子靠地面摩擦能承受相同負載，'
-                       '移動底盤的操作要另外驗證')},
+            'caveat': (
+                # **模式相依**：兩種模式的限制不同，寫死任一句都會使封存紀錄失真。
+                ('底盤為開放底盤（無固定關節），由 Xform 置位後靠物理站立；'
+                 '輪子與地面的摩擦承載已在迴圈內，但**站得住不等於任務能力**，'
+                 '協同操作仍須由該趟的實測同動證據判定')
+                if a.free_base else
+                ('底盤由外部固定支撐；不代表輪子靠地面摩擦能承受相同負載，'
+                 '移動底盤的操作要另外驗證'))},
         'align_ref': ALIGN_REF,
         'monitors_at_start': mon0,
         'monitor_failure': monitor_fail,
@@ -2554,8 +2560,13 @@ def main():
             'data_sufficient': bool(coman_post_stop_log) and not coman_post_nan,
             'note': ('必要量測出現 NaN 即判資料不足；'
                      '有 log 不等於通過。觀察步數為事前指定。')},
-        'coman_stage_note': ('本階段只做量測接通；底盤仍由固定關節支撐，'
-                             '不是協同操作驗收'),
+        'coman_stage_note': (
+            # 與 base_fixation 同一事實來源；**不得**與 mode 相矛盾。
+            ('開放底盤（root_fixed_joints 為空）。本欄只陳述底盤固定方式，'
+             '**不表示**協同操作已驗收 —— 完整操作與拉動期間同動另由該趟證據判定')
+            if a.free_base else
+            ('本階段只做量測接通；底盤仍由固定關節支撐，'
+             '不是協同操作驗收')),
         'rot_conv_err_max_deg': rot_err_max,
         'stage_vs_fk_err_max_m': stage_fk_err_max,
         'log': log,

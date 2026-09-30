@@ -11,8 +11,10 @@ approval_scope:
     v1_corrigendum_c1: 3264cd08ea677828  # P6 退出方向；23.3 mm 門檻不變
     pair_gaps_r1_1: f2714067369be541     # 十五組間距
     pair_gaps_r1: 0e97a9c0baef9ca7       # 原十組，保存不覆寫
-  code_version: 22 個 checker 的 sha 逐項記錄於 checkers_sha256_16（入口核對比對 install 與 src）
-  entry_check: evaluation/coman_entry_check.py（A–E 五段全部通過）
+  code_version: 29 個 checker 的 sha 逐項記錄於 checkers_sha256_16（入口核對比對 install 與 src）
+  entry_check: 'evaluation/coman_entry_check.py（**A–G 七段**；A–E 為版本、參數宣告、
+    接線、欄位索引、規格鏈，F 為模式條件、G 為任務數值 —— 見
+    entry_check_scope_correction。**通過入口核對不等於執行期驗收**。）'
   must_not:
   - 不改間距（R1.1 十五組）
   - 不改速度界限
@@ -78,6 +80,63 @@ run_history:
     （**此缺陷從第一趟就在**，先前被更早的中止掩蓋）'
   - "安全節點 _on_src_meta 方法因替換字串未對上而從未加入類別 ⇒ AttributeError"
   evidence_for_three_questions: 無
+- run_id: coman_drawer20_main2
+  outcome: '**啟動競態，任務未開始**'
+  blocked_by: '距離節點剛起來時第一批雲整片 NODATA ⇒ 求解端 _constraints
+    立刻 fail closed 中止（F9 的實測來源）'
+  evidence_for_three_questions: 無
+- run_id: coman_drawer20_main3
+  outcome: '**距離節點在第一個 `_tick` 崩潰，任務未開始**'
+  detail: evaluation/runs/coman_drawer20_main3/OUTCOME.md
+  blocked_by: "Float32MultiArray.data 是 array.array('f')，`+= list` ⇒ TypeError（F12）"
+  f9_result: '**生效** —— 求解端等距離列而不再立刻中止'
+  thermal: 峰值 78.25 °C（限 92）
+  evidence_for_three_questions: 無
+- run_id: coman_drawer20_main4
+  outcome: '**九筆命令發出、執行端一筆未收（QoS 不相容）**；
+    未取得操作與同動結果，**不算單步 QP 任務失敗**'
+  detail: evaluation/runs/coman_drawer20_main4/OUTCOME.md
+  preflight: '0 項失敗'
+  passed:
+  - F1（free_base 放行、root_fixed_joints 為空）
+  - F2（兩端目標 0.020 m；案例值 0.200 未被沿用）
+  - F3
+  - F4
+  - F5
+  - F6
+  - F7（safety.src_paired = 1 出現 5 個週期，src_seq {2,5,6,7,8}）
+  - F9（求解端等到 OK 列才解）
+  - F10
+  - F11
+  - F12（距離節點連續跑滿 108 s，未再崩潰）
+  - G8a／G8b
+  - R1.1 十五組間距兩端載入一致（run.log 行 433 與 440 逐項相同）
+  blocked_by: 'F14 —— `/wb_vel_cmd` DURABILITY 不相容，
+    `chain9.received = 0`、`coman_applied_cmd_log` 長度 0'
+  first_time_solved: '**首次真的解出並發出九維命令**（9 筆，相位全部 APPROACH）'
+  commands_not_evidence: '九筆命令裡底盤與手臂同時非零（底盤橫向達 −0.2775 =
+    base_lin 飽和值），但**這不是同動證據** —— 既未送達也未套用，
+    且同動要求的是**拉動期間**的實測連續同動，APPROACH 相位的命令值不算。'
+  runtime_timing:
+    dist_node_cycle_ms: {n: 1078, p50: 97.96, p95: 110.56, max: 170.74, rows: 1350,
+                         period: 50, effective_hz: 約 10}
+    solver_solve_ms: {n: 9, p50: 106.16, max: 133.58, over_50ms: 6}
+    safety_loaded_cycles: {n: 21, node_ms_p50: 26.30, node_ms_max: 47.64,
+                           filter_ms_p50: 14.67, filter_ms_max: 21.99,
+                           n_active_max: 212, iters_max: 75,
+                           fallback: 0, unresolved: 0}
+    safety_idle_cycles: {n: 2347, node_ms_p50: 0.12,
+                         note: 'SafetyLike 零值替身 ⇒ 該週期**沒有計算**；
+                           0.12 ms 是空轉成本，不是正常成本'}
+    sample_size_caveat: '9 筆與 21 筆都**不足以刻畫分布**，只能說這些筆本身超出週期'
+  freshness: 'dist.n_stale 全程 0、worst_age 最大 0.12 s ⇒ 資料新鮮度本身未失效'
+  min_d_constant: 'dist.min_d 與 safety.min_d 全程恆為 0.38 m ⇒ 與「機器人從未移動」一致'
+  rtf: 'sim_time_s 120.61 / wall_s 120.12 = **1.004**（實測，非設定值 rtf: 1.0）'
+  thermal: 起 56.625 → 峰值 79.625 °C @ sim 11.82 → 收 77.25（限 92）
+  monitors: monitor_failure 與 coman_abort 皆 None；腕力峰值 6.016 N @ 相位 idle
+  final_opening: 0.00 mm（誤差 −20.00 mm）；attached_ever = false；stop_reason = sim_limit
+  solver_guard_abort: 'JointState 已 586 ms 未更新 ⇒ 求解端自行收束（見 O7）'
+  evidence_for_three_questions: '無 —— 不得以本趟填任何一題'
 open_gap_G8_odom_RESOLVED:
   id: G8
   issue: 協同執行端未發布 /odom 與 odom→base_link TF
@@ -170,6 +229,87 @@ fixes_after_first_attempt:
   issue: '冒煙測試沒發 /clock，而節點 use_sim_time:=true ⇒ 計時器從未觸發，
     只驗到 __init__ 不驗執行期；F12 因此沒被抓到'
   fix: 冒煙測試加假時鐘；**用壞版本實測**確認新版會報出該 TypeError
+- id: F14
+  issue: '`/wb_vel_cmd` QoS 不相容：`arm_vel_adapter` 以 VOLATILE 發布，
+    執行端以 TRANSIENT_LOCAL 訂閱 ⇒ **DURABILITY 不相容，命令整條落地**。
+    實測 main4：求解端發出 9 筆、`chain9.received = 0`、`rejected = 0`、
+    `coman_applied_cmd_log` 長度 0；**兩端各自印出 incompatible QoS 警告**
+    （run.log 行 432 發布端、行 438 訂閱端）'
+  fix: 執行端改用相容的 RELIABLE/VOLATILE、depth 50、KEEP_LAST
+  same_class_as_F10: '**與 F10 同一類錯誤在另一個主題上重演** —— F10 修了
+    diag 與 cmd_meta 兩個診斷主題，卻沒有一併掃過命令主題。'
+  offline_test: 'evaluation/test_cmd_qos_delivery.py —— 用實際 adapter／接收端的
+    QoS 發九維命令：修正後 **9/9 送達**、舊 QoS **0/9**（重現本缺陷）；
+    逐筆九個分量內容相同，CmdChainE2 全部接受。'
+  test_scope: '**這是通訊診斷，不是操作驗收** —— 只證明同一份命令在這組 QoS 下
+    會到達接收端，不涉及抽屜、機械臂動作或同動。'
+  run_time_evidence_still_required: '實際送達與套用必須由下一趟的
+    `chain9.received > 0` 與 `coman_applied_cmd_log` 非空證明；
+    離線送達不得代替。'
+- id: F15
+  issue: '封存紀錄兩處字串寫死固定底座說明，與 `--free-base` 相矛盾：
+    `coman_stage_note` 寫「底盤仍由固定關節支撐」、`base_fixation.caveat`
+    寫「底盤由外部固定支撐」，而同一份紀錄的 `mode = free_base`、
+    `root_fixed_joints = []`。main4 的封存檔因此內部自相矛盾。'
+  fix: 兩處改為**模式相依**，與 base_fixation.mode 同一事實來源
+  not: '不是改判定 —— 只修正封存文字；兩種模式的限制敘述各自保留，
+    且新字串仍明載「站得住不等於任務能力」、「不表示協同操作已驗收」。'
+  why_it_matters: 封存紀錄自相矛盾會讓後續引用無法判斷該趟底盤到底是哪種模式
+F14_followup_speedups:
+  title: 距離節點單一週期的等價加速（**不改約束內容**）
+  why: 'main4 實測 `dist.node_cycle_ms` p50 **97.96 ms**，週期 50 ms
+    ⇒ 距離節點實際只跑到約 10 Hz（1078 筆橫跨 sim 11.87–120.01）。'
+  how_located: '先前的離線重建量到 20.21 ms，與線上差太多，**該數字不採用**。
+    改以 `COMAN_DIST_PROF=1` 對**真正的 `_tick`** 分段計時，並把真實節點接到
+    假世界（/clock、odom→base_footprint TF、/joint_states、
+    /model/drawer_body/pose、robot_state_publisher）量測。'
+  root_cause: '去重鍵集合 `_seen` 被放在**每個障礙物迴圈內重建一次**，
+    對已累積的全部列掃過 ⇒ O(n²)，一個 tick 約重建 80 次。
+    **不是列數、也不是 G2** —— G2 只佔 6.28 ms。'
+  changes:
+  - '去重鍵改**增量維護**：鍵集合跨障礙物迴圈保留（鍵含連桿索引，不會跨連桿相撞）'
+  - '障礙物表面速度改**逐配對批次**：`forced_pair_rows` 的 `vobs_of=` 改為
+    `vobs_batch=`，一次算完該配對所有取樣點'
+  measured_ms:
+    harness: 假世界、**998 列**（非 main4 的 1350 列）
+    baseline_total: 52.52
+    baseline_e_forced_dedup: 34.79
+    after_incremental_total: 33.08
+    after_both_total: 26.64
+    after_both_breakdown:
+      a_tf_lookup: 0.31
+      b_dist_matrix: 5.70
+      c_g2_bound: 6.35
+      d_vobs_per_row: 2.26
+      e_forced_dedup: 8.09
+      f_publish: 1.10
+    period_ms: 50
+  equivalence_verified:
+    tool: evaluation/test_dist_speedup_equivalence.py
+    method: '同一批輸入（`drawer_220102_offset20` 保持位姿、14 組障礙物、
+      六條 pair_rows 連桿；抽屜 twist 設為非零使速度路徑真的被走到），
+      **舊寫法與新寫法各自產列後逐欄比對**。'
+    rows: 1119
+    cols: 22
+    all_fields_bitwise_identical: true
+    max_abs_diff: 0.0
+    checked_columns: [距離 d, rho, 障礙物索引, 速度 vox, 速度 voy,
+                      有效性 vobs, 下界 dlb, 下界有效 dlbv]
+    dup_dropped_identical: '77 = 77'
+  not_changed:
+  - 未刪任何約束列
+  - 未放寬幾何容差
+  - 未降低頻率
+  - '未延長新鮮度門檻（vobs_timeout 仍 0.2 s，運算子與 VOBS_UNKNOWN 結果皆未變，
+     只是從 _vobs_of 搬到 _vobs_batch）'
+  offline_suites_rerun: [test_tight_pair_bound, test_pipeline_pairs,
+                         test_relative_velocity, test_pair_exceptions,
+                         test_base_feedback, test_dist_speedup_equivalence]
+  positioning: '**998 列假世界的 52.52 → 26.64 ms 不可寫成「97.96 → 26.64」**
+    —— 列數與負載都不同，比值 2.0× 只在同一套量測條件下成立。
+    線上滿載值必須下一趟重新量。'
+  does_not_address_O6: '求解器的 solve_ms（main4 九筆 p50 106 ms）
+    **完全不受此項改善影響**，是另一個獨立問題。'
 retry_precondition:
   gpu_required: true
   why: 'Isaac 無 CUDA 時退為 CPU-only（PhysX GPU 功能跳過），
@@ -336,16 +476,16 @@ checkers_sha256_16:
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
   coman_pull_solver_node.py: 06d1e78d363d0bc1
-  isaac_coman_drawer_sim.py: a5c4e9a8addc4570
+  isaac_coman_drawer_sim.py: 05ddf909e67425da
   wholebody_safety_filter.py: 6250b75f08a30d84
-  arm_link_distance.py: 2f7b09305cc733df
+  arm_link_distance.py: 76671ab2c900a9cd
   wholebody_safety_node.py: 3db649ad05e07f98
   test_pair_exceptions.py: da31af8647a8f293
   test_pipeline_pairs.py: 819689265ea84de3
   coman_zero_cmd_feasible.py: dd3d22105933c884
   coman_shell_bar_bound.py: d1ba12bd7a0a5c38
   test_relative_velocity.py: 26369e356ce75c22
-  test_tight_pair_bound.py: ae18cd75f98e4991
+  test_tight_pair_bound.py: db9d7b4eddcc43f5
   coman_r1_table.py: 244f65becde99e75
   arm_link_geometry.py: 7fe840907f6e57ba
   test_solver_safety_parity.py: 13b8c5972217ede3
@@ -356,11 +496,23 @@ checkers_sha256_16:
   test_opening_acceptance.py: ff2225b5b5fdd038
   test_base_feedback.py: b983b8ea1f6aa509
   coman_node_smoke.py: 9ef9c6f28a9c8d27
+  test_cmd_qos_delivery.py: bd527d71b4e1ab18
+  test_dist_speedup_equivalence.py: a07279e87f2dd2a3
+  coman_dist_profile.py: 6d4dbbe1ddd6f120
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。
   本次再補兩處接線：求解端明列相位對應表並發布**來源模擬時間**；
-  距離節點新增 pair_rows 強制產生必要配對列。**v1 門檻一個都沒動。**'
+  距離節點新增 pair_rows 強制產生必要配對列。**v1 門檻一個都沒動。**
+  **2026-10-01 追加三項變動**：isaac_coman_drawer_sim.py
+  a5c4e9a8addc4570 → 05ddf909e67425da（F14 命令主題 QoS ＋ F15 封存文字模式相依）；
+  arm_link_distance.py 2f7b09305cc733df → 76671ab2c900a9cd（兩項等價加速
+  ＋ COMAN_DIST_PROF 分段計時，預設關閉）；
+  test_tight_pair_bound.py ae18cd75f98e4991 → db9d7b4eddcc43f5
+  （唯一呼叫端隨 vobs_of= → vobs_batch= 更名）。
+  新增三項：test_cmd_qos_delivery.py、test_dist_speedup_equivalence.py、
+  coman_dist_profile.py。
+  **sha 更新只代表記錄與檔案一致，不代表執行期已驗收。**'
 wiring_fixes_20260929:
 - issue: 求解端發布的相位名稱（大寫任務相位）與設定鍵不符 ⇒ 接觸例外**從未生效**
   fix: coman_pull_solver_node.PHASE_MAP 逐項明列；未列出者 unknown
@@ -579,6 +731,40 @@ open_issues:
   - 不得以幾項平均值相加當作執行期驗收
   status: 等價改善已完成；**端到端計時只能在實跑時記錄**
   blocks: 不再阻擋離線工作；首測仍需指導授權與機旁監看
+- id: O5
+  severity: mitigated_offline_pending_run_measurement
+  title: 距離節點線上單一週期 **97.96 ms**，超出 50 ms 週期
+  measured_at: main4 實跑（1350 列，1078 筆）
+  facts: {p50: 97.96, p95: 110.56, max: 170.74, period_ms: 50, effective_hz: 約 10}
+  work_done: 見 F14_followup_speedups（假世界 998 列 52.52 → 26.64 ms，逐位元等價）
+  not_yet: '**滿載 1350 列的線上值未量** —— 不得以假世界數字代替'
+  status: 等價加速已完成；線上值待下一趟
+- id: O6
+  severity: open_untouched
+  title: 求解器 `solve_ms` p50 **106 ms**（九筆中六筆 > 50 ms）
+  measured_at: main4 實跑，`solver_out.json` 九筆
+  values_ms: [133.17, 2.60, 2.93, 2.43, 115.20, 128.37, 133.58, 106.16, 100.15]
+  facts: {n: 9, p50: 106.16, max: 133.58, over_50ms: 6, period_ms: 50}
+  independent_of_O5: '距離節點的加速**完全不會改善它**'
+  sample_size: '9 筆不足以刻畫分布，但這 9 筆本身已明顯超出週期'
+  note: 九筆的模擬時間只從 11.91 走到 11.98
+  status: '**尚未處理**'
+- id: O7
+  severity: open_cause_not_established
+  title: 求解端守門中止 —— JointState 586 ms 未更新
+  what_happened: 求解端在 sim ≈ 11.98 被自己的新鮮度守門擋下並收束（寫入 9 週期）；
+    執行端繼續跑到 sim_limit 120.010
+  ruled_out: '`/joint_states` 是在**物理迴圈內同步發布**
+    （isaac_coman_drawer_sim.py 約 2002 行），不是獨立 spin 執行緒
+    ⇒ 不能用「發布執行緒被餓死」解釋'
+  cannot_exonerate: 'RTF 1.004 是 **120 s 的平均值**，
+    **無法排除一次 586 ms 的停頓**，不得拿來為物理迴圈開脫'
+  temporal_coincidence: '停頓時點（sim 11.9–12.0）正好是距離節點首次 `_tick`
+    （sim 11.87，立即 98 ms/週期）與求解器首次求解（133 ms）同時上線的時刻；
+    溫度峰值 79.625 °C 也在 sim 11.82。**時間吻合不等於因果。**'
+  not_measured: [該時段的 CPU 佔用, 求解端執行器的阻塞時間]
+  status: '**原因未確立**；下一趟需保留同一守門並記錄上述兩項'
+
 questions:
   q1_completion: 20 mm 完整操作是否完成（接近→連接→拉開→保持→釋放→退出）
   q2_coordination: '操作期間是否真有底盤與手臂的協調運動，而不是只有底盤漂移。 判定用**實測運動**：底盤線速度 > 0.005 m/s 且任一關節速率 > 0.005 rad/s
