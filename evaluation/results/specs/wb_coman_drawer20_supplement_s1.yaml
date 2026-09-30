@@ -35,6 +35,16 @@ run_history:
   aborted_at: Isaac 啟動階段 return 10（固定關節守衛）
   evidence_for_three_questions: 無 —— 不得以本趟填任何一題
   code_version: checkers_prev_sha256_16（S1 sha 385c9894a53a0a20）
+- run_id: coman_drawer20_retry1
+  outcome: '**環境不合格 ＋ 程式中止，未進入任務**（不是操作失敗）'
+  detail: evaluation/runs/coman_drawer20_retry1/OUTCOME.md
+  preflight: 0 項失敗
+  f1_result: '**通過** —— 開放底盤守衛放行（0 個固定關節，模式期望 0）'
+  aborted_at: "進入物理主迴圈後 NameError: MACHINE_WIRED 未定義（只是一行 log）"
+  environment_disqualifier: 'GPU 不可用（核心 7.0.0-34 無 nvidia 模組，
+    cudaErrorNoDevice 131 次；首趟在 7.0.0-31 為 0 次）⇒ Isaac 退為 CPU-only，
+    **動態與時效兩題的數字不可採信**'
+  evidence_for_three_questions: 無 —— 不得以本趟填任何一題
 fixes_after_first_attempt:
 - id: F1
   issue: '固定關節守衛寫死「恰好 1 個」，與 --free-base 相斥 ⇒
@@ -53,6 +63,18 @@ fixes_after_first_attempt:
     （HandoverMachine 讀 v1：target_stroke_m 20 mm、P1 ±0.5 mm、hold 2.0 s）'
   v1_unchanged: true
   offline_test: evaluation/test_opening_acceptance.py（19 項）
+- id: F3
+  issue: "NameError: MACHINE_WIRED 未定義（變數名為 machine_wired），
+    在進入物理主迴圈後立刻中止整趟"
+  fix: 改用正確的變數名
+  scope_note: '第三個只存在於 --free-base ＋ --machine 路徑的缺陷；
+    該路徑從未真正執行過'
+  swept: pyflakes 掃過協同鏈七個檔案的未定義名稱／使用前參照 —— 全部無
+retry_precondition:
+  gpu_required: true
+  why: 'Isaac 無 CUDA 時退為 CPU-only（PhysX GPU 功能跳過），
+    而三題中的動態同動與執行期時效直接取決於物理與 RTF'
+  check_before_rerun: ['nvidia-smi 正常', '/dev/nvidia0 存在', 'dkms status 有已編出的模組']
 entry_check_scope_correction: '先前稱「入口核對全部通過」只涵蓋 A–E
   （版本、參數宣告、部分接線、欄位索引、規格鏈），**沒有涵蓋模式條件與任務數值** ——
   首趟啟動失敗證明了這點。已新增 F（模式條件）與 G（任務數值）兩段。
@@ -214,7 +236,7 @@ checkers_sha256_16:
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
   coman_pull_solver_node.py: 770222f5bdaa5b5d
-  isaac_coman_drawer_sim.py: 860d8fe734f41272
+  isaac_coman_drawer_sim.py: 711f0ea50153aa4e
   wholebody_safety_filter.py: 6250b75f08a30d84
   arm_link_distance.py: 38b73aa866c7f79c
   wholebody_safety_node.py: d3f90cfb1901b158
