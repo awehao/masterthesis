@@ -647,11 +647,16 @@ class ArmLinkDistance(Node):
         # 每個 tight 配對的 lb、ub、耗時、是否達容差接在**基礎欄位之後**
         # （即索引 10 起，見 DIAG_FIELDS_BASE）。逐週期發布，
         # 讓趟後能核對「下界真的每步重算」而不是只寫在某份紀錄裡。
+        # **先組 list 再一次指派**。`Float32MultiArray.data` 在 Jazzy 是
+        # array.array('f')，`+= [...]` 會 TypeError（實測 main3：距離節點
+        # 在第一個 _tick 就死，整趟因此沒有任何距離列）。
+        _tail = []
         for _lk, _ob in self._tight:
             _r = self._tight_stat.get(f'{_lk}|{_ob}')
-            d.data += ([float(_r['lb']), float(_r['ub']), float(_r['elapsed_s']),
-                        1.0 if _r['tol_met'] else 0.0]
-                       if _r else [float('nan')] * 3 + [0.0])
+            _tail += ([float(_r['lb']), float(_r['ub']), float(_r['elapsed_s']),
+                       1.0 if _r['tol_met'] else 0.0]
+                      if _r else [float('nan')] * 3 + [0.0])
+        d.data = list(d.data) + _tail
         self._cycle_ms = (time.perf_counter() - _c0) * 1e3
         d.data[DIAG_FIELDS_BASE.index('node_cycle_ms')] = float(self._cycle_ms)
         if len(d.data) != len(self.diag_field_names):

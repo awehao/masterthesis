@@ -12,7 +12,7 @@
 **不啟動 Isaac**：每個節點起 N 秒後送 SIGTERM，看是否在該期間內自行退出。
 """
 from __future__ import annotations
-import os, re, shlex, signal, subprocess, sys, time
+import os, re, shlex, signal, subprocess, sys, textwrap, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WS = os.path.dirname(HERE)
@@ -35,6 +35,44 @@ def runner_vars():
 
 def quoted(csv):
     return '[' + ','.join(f'"{x}"' for x in csv.split(',') if x.strip()) + ']'
+
+
+class FakeClock:
+    """冒煙測試期間發 /clock。
+
+    **沒有時鐘，計時器就不會觸發** —— 節點過得了 `__init__` 卻從未跑過一個
+    週期，`_tick` 裡的錯照不到（實測：`d.data += [...]` 的 TypeError 讓距離
+    節點在第一個 tick 就死，冒煙測試卻回報「存活」）。
+    """
+
+    def __init__(self):
+        self.p = subprocess.Popen(
+            [sys.executable, '-c', textwrap.dedent("""
+                import rclpy
+                from rclpy.node import Node
+                from rosgraph_msgs.msg import Clock
+                rclpy.init()
+                n = Node('smoke_clock')
+                pub = n.create_publisher(Clock, '/clock', 10)
+                t = [0.0]
+                def tick():
+                    t[0] += 0.01
+                    m = Clock()
+                    m.clock.sec = int(t[0])
+                    m.clock.nanosec = int((t[0] - int(t[0])) * 1e9)
+                    pub.publish(m)
+                n.create_timer(0.01, tick)
+                rclpy.spin(n)
+            """)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        time.sleep(1.5)
+
+    def stop(self):
+        try:
+            os.killpg(os.getpgid(self.p.pid), signal.SIGTERM)
+            self.p.wait(timeout=5)
+        except Exception:                                     # noqa: BLE001
+            self.p.kill()
 
 
 def smoke(name, argv, seconds=6.0):
@@ -102,6 +140,7 @@ def main() -> int:
          [sys.executable, '-u', os.path.join(HERE, 'coman_diag_record.py'),
           '--out', '/tmp/_smoke_diag.json'], 5.0),
     ]
+    clk = FakeClock()          # 讓計時器真的觸發，才照得到 _tick 裡的錯
     bad = 0
     for name, argv, secs in jobs:
         ok, tail = smoke(name, argv, secs)
@@ -110,6 +149,7 @@ def main() -> int:
             bad += 1
             for ln in tail.strip().split('\n')[-8:]:
                 print(f'      {ln}')
+    clk.stop()
     print('節點冒煙測試：' + ('全部存活' if bad == 0 else f'**{bad} 個啟動即死**'))
     return 1 if bad else 0
 

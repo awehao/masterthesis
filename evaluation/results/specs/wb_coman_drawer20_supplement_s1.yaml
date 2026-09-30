@@ -161,6 +161,15 @@ fixes_after_first_attempt:
     活了下來；跑三次漏了九個程序'
   fix: 'killpg 整個行程群組（start_new_session=True 使該群組只含本函式起的程序，
     不會波及他人）；已實測測試後零殘留'
+- id: F12
+  issue: "Float32MultiArray.data 是 array.array('f')，`+= list` ⇒ TypeError；
+    距離節點在第一個 _tick 就死（實測 main3），整趟因此沒有任何距離列"
+  fix: 先組 list 再一次指派（d.data = list(d.data) + _tail）；離線重現舊寫法的
+    TypeError 確認修法
+- id: F13
+  issue: '冒煙測試沒發 /clock，而節點 use_sim_time:=true ⇒ 計時器從未觸發，
+    只驗到 __init__ 不驗執行期；F12 因此沒被抓到'
+  fix: 冒煙測試加假時鐘；**用壞版本實測**確認新版會報出該 TypeError
 retry_precondition:
   gpu_required: true
   why: 'Isaac 無 CUDA 時退為 CPU-only（PhysX GPU 功能跳過），
@@ -329,7 +338,7 @@ checkers_sha256_16:
   coman_pull_solver_node.py: 06d1e78d363d0bc1
   isaac_coman_drawer_sim.py: a5c4e9a8addc4570
   wholebody_safety_filter.py: 6250b75f08a30d84
-  arm_link_distance.py: 38b73aa866c7f79c
+  arm_link_distance.py: 2f7b09305cc733df
   wholebody_safety_node.py: 3db649ad05e07f98
   test_pair_exceptions.py: da31af8647a8f293
   test_pipeline_pairs.py: 819689265ea84de3
@@ -346,7 +355,7 @@ checkers_sha256_16:
   test_base_mode_guard.py: 8929a8438dc6f4bd
   test_opening_acceptance.py: ff2225b5b5fdd038
   test_base_feedback.py: b983b8ea1f6aa509
-  coman_node_smoke.py: fbc13be215b0ddc5
+  coman_node_smoke.py: 9ef9c6f28a9c8d27
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。

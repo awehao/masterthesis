@@ -428,3 +428,161 @@ Warp 1.13.0 initialized:
 [WARN] [1790792570.988008305] [robot_state_publisher]: No robot_description parameter, but command-line argument available.  Assuming argument is name of URDF file.  This backwards compatibility fallback will be removed in the future.
 [WARN] [1790792570.992512285] [kdl_parser]: The root link base_footprint has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.
 [INFO] [1790792570.992708075] [robot_state_publisher]: Robot initialized
+[WARN] [1790792571.480653332] [wholebody_safety]: **局部安全參數配置變更**（一般 d0 0.05、eps 0.03）：d0_by_pair={}、g_by_pair={'uflite_gripper_link|handle_bar': 0.003, 'uflite_finger1|drawer_front_panel': 0.01, 'uflite_finger2|drawer_front_panel': 0.01, 'link6|handle_bar': 0.045, 'uflite_finger1|handle_post_l': 0.045, 'uflite_finger1|handle_post_r': 0.045, 'uflite_finger2|handle_post_l': 0.045, 'uflite_finger2|handle_post_r': 0.045, 'link5|handle_bar': 0.065, 'link4|handle_bar': 0.07, 'uflite_gripper_link|drawer_front_panel': 0.03, 'uflite_gripper_link|handle_post_l': 0.035, 'uflite_gripper_link|handle_post_r': 0.035, 'link6|handle_post_l': 0.06, 'link6|handle_post_r': 0.06}（取代該配對的 d0+eps）、contact_pairs={'uflite_finger1|handle_bar': ['engage', 'pull', 'hold', 'release'], 'uflite_finger2|handle_bar': ['engage', 'pull', 'hold', 'release']}；速度相關項、rho 扣除與速度誤差修正全部保留。求解端必須使用同一份設定
+[INFO] [1790792571.524593191] [wholebody_safety]: kinematics loaded from /home/howardchen/masterthesis/evaluation/models/omni_bot_wholebody_expanded.urdf; 11 arm links: base_link link_base link1 link2 link3 link4 link5 link6 uflite_gripper_link uflite_finger1 uflite_finger2
+[INFO] [1790792571.534810920] [wholebody_safety]: wholebody_safety: frame odom, 20 Hz, base DOF on
+[INFO] [1790792571.535178084] [wholebody_safety]: wholebody_safety vmax_effective base_lin=0.277500 base_ang=1.132700 arm_max=3.141593 overrides=無（沿用預設）
+[INFO] [1790792571.535487510] [wholebody_safety]: wholebody_safety freespace_declared=False（宣告不等於套用：每週期另要求資料非缺失／過期）
+[INFO] [1790792571.585625554] [arm_vel_adapter]: 關節順序已對 /isaac_drawer_sim 核對通過：['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
+[WARN] [1790792571.621839408] [arm_vel_adapter]: New subscription discovered on topic '/wb_vel_cmd', requesting incompatible QoS. No messages will be sent to it. Last incompatible policy: DURABILITY
+[WARN] [1790792571.773595689] [isaac_drawer_sim]: New publisher discovered on topic '/wb_vel_cmd', offering incompatible QoS. No messages will be received from it. Last incompatible policy: DURABILITY
+[02:22:55] [5/6] 起求解節點（接近→連接→拉開→保持→釋放→退出，一趟走完）
+[WARN] [1790792576.582363781] [wholebody_pregrasp]: **求解端局部安全參數配置**（一般 d0 0.05、eps 0.03）：d0_by_pair={}、g_by_pair={'uflite_gripper_link|handle_bar': 0.003, 'uflite_finger1|drawer_front_panel': 0.01, 'uflite_finger2|drawer_front_panel': 0.01, 'link6|handle_bar': 0.045, 'uflite_finger1|handle_post_l': 0.045, 'uflite_finger1|handle_post_r': 0.045, 'uflite_finger2|handle_post_l': 0.045, 'uflite_finger2|handle_post_r': 0.045, 'link5|handle_bar': 0.065, 'link4|handle_bar': 0.07, 'uflite_gripper_link|drawer_front_panel': 0.03, 'uflite_gripper_link|handle_post_l': 0.035, 'uflite_gripper_link|handle_post_r': 0.035, 'link6|handle_post_l': 0.06, 'link6|handle_post_r': 0.06}（取代該配對的 d0+eps）、contact_pairs={'uflite_finger1|handle_bar': ['engage', 'pull', 'hold', 'release'], 'uflite_finger2|handle_bar': ['engage', 'pull', 'hold', 'release']}
+[INFO] [1790792576.583908322] [wholebody_pregrasp]: 協同拉動求解節點：行程 20.0 mm、拉動 4.0 s、退出 40 mm
+  等待 /joint_states、/odom 與距離資料…
+[INFO] [1790792581.471673869] [arm_link_distance]: arm_link_distance: certified sampling -- base_link 1200pt rho 28.1mm, link_base 362pt rho 14.3mm, link1 226pt rho 13.7mm, link2 362pt rho 12.8mm, link3 226pt rho 12.8mm, link4 362pt rho 13.5mm, link5 141pt rho 12.6mm, link6 55pt rho 13.3mm, uflite_gripper_link 88pt rho 13.3mm, uflite_finger1 8pt rho 12.7mm, uflite_finger2 8pt rho 12.3mm
+[WARN] [1790792581.479268741] [arm_link_distance]: **逐配對精確距離下界生效**：uflite_gripper_link|handle_bar（8812 三角形）；容差 0.50 mm、預算 20 ms。逾時或無效 ⇒ 退回 d − rho，**不沿用上一筆**
+[INFO] [1790792581.479645203] [arm_link_distance]: 必要配對列 link4：14 個障礙物 ['drawer_front_panel', 'drawer_bottom', 'drawer_side_l', 'drawer_side_r', 'drawer_back', 'handle_post_l', 'handle_post_r', 'handle_bar', 'cab_side_left', 'cab_side_right', 'cab_back', 'cab_top', 'cab_shelf_below', 'cab_shelf_above']（免列：[]）
+[INFO] [1790792581.479916446] [arm_link_distance]: 必要配對列 link5：14 個障礙物 ['drawer_front_panel', 'drawer_bottom', 'drawer_side_l', 'drawer_side_r', 'drawer_back', 'handle_post_l', 'handle_post_r', 'handle_bar', 'cab_side_left', 'cab_side_right', 'cab_back', 'cab_top', 'cab_shelf_below', 'cab_shelf_above']（免列：[]）
+[INFO] [1790792581.480180736] [arm_link_distance]: 必要配對列 link6：14 個障礙物 ['drawer_front_panel', 'drawer_bottom', 'drawer_side_l', 'drawer_side_r', 'drawer_back', 'handle_post_l', 'handle_post_r', 'handle_bar', 'cab_side_left', 'cab_side_right', 'cab_back', 'cab_top', 'cab_shelf_below', 'cab_shelf_above']（免列：[]）
+[INFO] [1790792581.480468911] [arm_link_distance]: 必要配對列 uflite_finger1：13 個障礙物 ['drawer_front_panel', 'drawer_bottom', 'drawer_side_l', 'drawer_side_r', 'drawer_back', 'handle_post_l', 'handle_post_r', 'cab_side_left', 'cab_side_right', 'cab_back', 'cab_top', 'cab_shelf_below', 'cab_shelf_above']（免列：['handle_bar']）
+[INFO] [1790792581.480721759] [arm_link_distance]: 必要配對列 uflite_finger2：13 個障礙物 ['drawer_front_panel', 'drawer_bottom', 'drawer_side_l', 'drawer_side_r', 'drawer_back', 'handle_post_l', 'handle_post_r', 'cab_side_left', 'cab_side_right', 'cab_back', 'cab_top', 'cab_shelf_below', 'cab_shelf_above']（免列：['handle_bar']）
+[INFO] [1790792581.480972924] [arm_link_distance]: 必要配對列 uflite_gripper_link：14 個障礙物 ['drawer_front_panel', 'drawer_bottom', 'drawer_side_l', 'drawer_side_r', 'drawer_back', 'handle_post_l', 'handle_post_r', 'handle_bar', 'cab_side_left', 'cab_side_right', 'cab_back', 'cab_top', 'cab_shelf_below', 'cab_shelf_above']（免列：[]）
+[INFO] [1790792581.483789521] [arm_link_distance]: arm_link_distance: 12 points, 14 obstacles, frame odom
+  等距離列（雲已到但整片 NODATA：TF 或障礙物位姿尚未就緒）…
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/arm_link_distance", line 33, in <module>
+    sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'arm_link_distance')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/arm_link_distance.py", line 911, in main
+    rclpy.spin(node)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 918, in _spin_once_impl
+    raise handler.exception()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/task.py", line 286, in _execute_coroutine_step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 592, in handler
+    await call_coroutine()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 454, in _execute
+    await await_or_execute(tmr.callback)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 115, in await_or_execute
+    return callback(*args)
+           ^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/arm_link_distance.py", line 652, in _tick
+    d.data += ([float(_r['lb']), float(_r['ub']), float(_r['elapsed_s']),
+TypeError: can only extend array with array (not "list")
+[ros2run]: Process exited with failure 1
+  中止：stall（DONE 相位命令連續 41 週期近零）
+  0 週期寫入 /home/howardchen/masterthesis/evaluation/runs/coman_drawer20_main3/solver_out.json
+Exception ignored in: <function TransformListener.__del__ at 0x7f6f5efe93a0>
+Traceback (most recent call last):
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/tf2_ros/transform_listener.py", line 119, in __del__
+    self.executor.shutdown()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 297, in shutdown
+    self._sigint_gc.destroy()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/signals.py", line 65, in destroy
+    with self.handle:
+rclpy._rclpy_pybind11.InvalidHandle: cannot use Destroyable because destruction was requested
+[02:23:02] [6/6] 等執行端收尾
+[drawer] 停止：sim_limit（處置 freeze_setpoint）@ sim 120.010
+[drawer] 溫度：起 53.75 °C，本趟峰值 78.25 °C @ sim 107.32 s，中止線 92 °C
+[drawer] 結束 sim_limit  最終開度 0.00 mm (誤差 -20.00 mm)  CPU 57.25 °C（hwmon:k10temp）
+[drawer] -> /home/howardchen/masterthesis/evaluation/runs/coman_drawer20_main3/sim/drawer_run.json
+2026-09-30T18:24:50Z [132,209ms] [Error] [omni.kit.app._impl] [py stderr]: Exception in thread Thread-3 (spin):
+2026-09-30T18:24:50Z [132,210ms] [Error] [omni.kit.app._impl] [py stderr]: Traceback (most recent call last):
+2026-09-30T18:24:50Z [132,210ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/usr/lib/python3.12/threading.py", line 1073, in _bootstrap_inner
+2026-09-30T18:24:50Z [132,210ms] [Error] [omni.kit.app._impl] [py stderr]:     self.run()
+2026-09-30T18:24:50Z [132,210ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/usr/lib/python3.12/threading.py", line 1010, in run
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:     self._target(*self._args, **self._kwargs)
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 359, in spin
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:     self._spin_once_impl()
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:     handler, entity, node = self.wait_for_ready_callbacks(
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:     return next(self._cb_iter)
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:            ^^^^^^^^^^^^^^^^^^^
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]:     raise ExternalShutdownException()
+2026-09-30T18:24:50Z [132,211ms] [Error] [omni.kit.app._impl] [py stderr]: rclpy.executors.ExternalShutdownException
+[132.451s] Simulation App Shutting Down
+[02:24:51] 收尾後 CPU 66.0  來源 hwmon:k10temp
+[02:24:51] 輸出目錄 /home/howardchen/masterthesis/evaluation/runs/coman_drawer20_main3
+[02:24:51] cleanup（只針對本趟 PID）...
+[INFO] [1790792691.426365970] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/arm_vel_adapter.py", line 190, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/arm_vel_adapter.py", line 182, in main
+    rclpy.spin(nd)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+診斷錄製：{'dist': 0, 'safety': 2362, 'solver_meta': 0, 'safety_meta': 2362}
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/coman_diag_record.py", line 82, in main
+    rclpy.spin(n)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/coman_diag_record.py", line 94, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/coman_diag_record.py", line 89, in main
+    rclpy.shutdown()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+    _shutdown(context=context)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+    context.shutdown()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+    self.__context.shutdown()
+rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/wholebody_safety", line 33, in <module>
+    sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'wholebody_safety')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/wholebody_safety_node.py", line 682, in main
+    rclpy.spin(node)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+[02:24:54] cleanup done
