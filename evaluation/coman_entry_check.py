@@ -7,6 +7,12 @@
   C 話題接線成對（發布端 ↔ 訂閱端），新增主題都有對應讀取端
   D 診斷欄位一律**按名稱**索引；沒有任何讀取端用硬編碼位置讀新欄位
   E 規格鏈一致：v1 未被改寫、勘誤／R1／R1.1／S1 的狀態與間距逐項相符
+  F **模式條件**：runner 選的模式與執行端守衛的期望值相容
+  G **任務數值**：目標行程、到位容差與保持時間，兩端與 v1 一致
+
+**A–E 不構成完整驗證** —— 首趟啟動失敗證明了這點：當時 A–E 全過，
+但 (F) `--free-base` 與寫死「恰好 1 個固定關節」的守衛相斥、
+(G) 執行端仍用案例的 200 mm 目標。F、G 就是為這兩類漏洞補上的。
 """
 from __future__ import annotations
 import hashlib, os, re, sys
@@ -179,6 +185,59 @@ def main() -> int:
     blocking = [i['id'] for i in (s1.get('open_issues') or [])
                 if i.get('severity') == 'blocking']
     print(f'\n  S1 status = {s1["status"]}；blocking 未決項 = {blocking or "無"}')
+
+    # ---------- F 模式條件 ----------
+    print('\nF 模式條件：runner 的模式與執行端守衛相容')
+    ep = open(os.path.join(HERE, 'isaac_coman_drawer_sim.py'),
+              encoding='utf-8').read()
+    m_rule = re.search(r'_n_expect\s*=\s*(\d+)\s*if\s*a\.free_base\s*else\s*(\d+)',
+                       ep)
+    check('執行端的固定關節期望值是**模式相依**', m_rule is not None,
+          f'  free_base→{m_rule.group(1)}、fix_base→{m_rule.group(2)}'
+          if m_rule else '  **仍是寫死值**')
+    isaac_blk = re.search(r'spawn isaac(.*?)(?=\nsay )', runner, re.S)
+    isaac_args = isaac_blk.group(1) if isaac_blk else ''
+    free = '--free-base' in isaac_args
+    check('runner 使用 --free-base（開放底盤）', free)
+    if m_rule and free:
+        check('該模式的期望值為 0 個 world→根固定關節',
+              int(m_rule.group(1)) == 0)
+    check('守衛不符期望仍會中止（保護未移除）', 'return 10' in ep)
+    for flag in ('--cmd-source wb9', '--machine', '--attach-on-handover'):
+        check(f'runner 傳 {flag}', flag in isaac_args)
+
+    # ---------- G 任務數值 ----------
+    print('\nG 任務數值：兩端與 v1 一致')
+    stroke = float(re.search(r'STROKE="\$\{STROKE:-([0-9.]+)\}"',
+                             runner).group(1))
+    tgt_v1 = float(v1['profile']['target_stroke_m'])
+    check('runner 的 STROKE 與 v1 target_stroke_m 相同',
+          abs(stroke - tgt_v1) < 1e-12, f'  {stroke*1000:.1f} mm')
+    check('runner 把目標傳給**執行端**（不只求解端）',
+          '--pull-target-m "$STROKE"' in isaac_args,
+          '' if '--pull-target-m "$STROKE"' in isaac_args
+          else '  **執行端會沿用案例值**')
+    check('runner 把行程傳給求解端', '--stroke-m "$STROKE"' in runner)
+    sys.path.insert(0, HERE)
+    from coman_handover_state import HandoverMachine, load_spec
+    _mm = HandoverMachine(load_spec(
+        f'{SPECS}/wb_coman_drawer20_criteria_v1.yaml'))
+    check('v1 狀態機的目標與容差取自 v1（正式資格）',
+          abs(_mm.target - tgt_v1) < 1e-12
+          and abs(_mm.p1 - float(v1['P_pull']['P1_final_opening_err_m_max']))
+          < 1e-12,
+          f'  {_mm.target*1000:.1f} mm ±{_mm.p1*1000:.2f} mm')
+    case = yaml.safe_load(open(
+        os.path.join(WS, 'src/my_omnibot_description/config/'
+                         'manipulation_cases.yaml'), encoding='utf-8'))
+    ctol = float(case['cases']['drawer_open_a_fixed']['tolerance']['opening_m'])
+    check('案例容差與 v1 容差不同 ⇒ 舊判定必須標明非正式',
+          abs(ctol - _mm.p1) > 1e-9
+          and "'legacy_case_tol_arrived_sim_t'" in ep
+          and "'formal_acceptance_source'" in ep,
+          f'  案例 ±{ctol*1000:.0f} mm vs v1 ±{_mm.p1*1000:.2f} mm')
+    check('協同執行端已無未標註的 arrived_sim_t 欄名',
+          "'arrived_sim_t':" not in ep)
 
     print('\n入口核對：' + ('全部通過' if bad == 0 else f'**{bad} 項失敗**'))
     return 1 if bad else 0

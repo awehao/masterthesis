@@ -2124,3 +2124,88 @@ sha `3264cd08ea677828`）。v1 原檔保留不動（仍 `c9f303a8630d4d0e`）。
 S1 的 `open_issues` 已無 `blocking` 項。
 
 **未改間距、未追加幾何掃描、未放寬保護、未開模擬器。**
+
+---
+
+## §36 首趟啟動中止的兩項修正（2026-09-30）
+
+### 36.1 `coman_drawer20_first`：啟動中止，未進入任務
+
+保留原樣，標記於 `evaluation/runs/coman_drawer20_first/OUTCOME.md`。
+**不是操作失敗** —— 任務從未開始，三題都沒有證據，不得以本趟填任何一題。
+起動前檢查 0 項失敗；CPU 峰值 57.0 °C；cleanup 完成、無殘留程序。
+
+### 36.2 F1 固定關節守衛：改為模式相依
+
+```
+[drawer] world→根 固定關節 0 個：[]
+[drawer] **預期恰好 1 個 world→根 固定關節，中止**      ← return 10
+```
+
+守衛寫死「恰好 1 個」，是為固定底座版寫的；`--free-base` 讓匯入器不建該關節
+（**本來就該是 0 個**）。查全部趟次：**29 趟皆 `importer_fix_base`，
+開放底盤路徑從未真正執行過** —— 這不是這次才壞。
+
+改為 `_n_expect = 0 if a.free_base else 1`，不符一律中止。**不是移除保護**：
+
+| 組合 | 結果 | 理由 |
+|---|---|---|
+| free_base ＋ 0 個 | 通過 | 正確 |
+| **free_base ＋ 1 個** | **中止** | 底盤其實被釘住，命令鏈與判定卻以為自由 |
+| 固定底座 ＋ 1 個 | 通過 | 正確 |
+| **固定底座 ＋ 0 個** | **中止** | 沒有外部固定支撐 |
+| 固定底座 ＋ 2 個 | 中止 | 約束重複 |
+
+`evaluation/test_base_mode_guard.py`（11 項全過），含舊守衛的兩個反例：
+舊守衛會**擋掉**正確的 free_base 組合，也會**放行**「free_base 卻被釘住」。
+
+後面的 `carb TaskGroup` 斷言與 `Fatal Python error: Aborted` 是
+`SimulationApp.close()` 在我們中止後關閉時的雜訊，**不是原因**。
+
+### 36.3 F2 開度：目標與判準都對齊，且不讓寬鬆舊判定冒充通過
+
+執行端沿用案例 `drawer_open_a_fixed` 的 `target_opening_m = 0.200`。
+runner 已加 `--pull-target-m "$STROKE"`（20 mm）。
+
+但只改目標不夠 —— 執行端自己的到位判定用**案例容差**：
+
+| 來源 | 目標 | 容差 | 保持 |
+|---|---|---|---|
+| 案例 `drawer_open_a_fixed` | 200 mm | **±10 mm** | 2.0 s |
+| **v1（正式資格）** | **20 mm** | **±0.5 mm** | 2.0 s |
+
+已核對：**正式到位／保持／釋放資格確實由 v1 狀態機判定** ——
+`HandoverMachine` 讀 v1，`target = profile.target_stroke_m = 0.020`、
+`p1 = P1_final_opening_err_m_max = 0.0005`。**v1 門檻未改動。**
+
+舊判定保留（與既有趟次可比），但改名並標明：
+`legacy_case_tol_arrived_sim_t`、`legacy_case_tol_opening_m`、
+`legacy_case_tol_hold_s`，新增 `formal_acceptance_source` 與
+`legacy_vs_formal_note`，列印也標「**非 v1 正式資格**」。
+
+`evaluation/test_opening_acceptance.py`（19 項全過）：25.0 mm 在案例容差內
+卻不在 v1 容差內 —— 兩者確實不同，不會混用。
+
+### 36.4 入口核對的範圍更正
+
+先前稱「入口核對全部通過」只涵蓋 **A–E**（版本、參數宣告、部分接線、
+欄位索引、規格鏈），**沒有涵蓋模式條件與任務數值** —— 首趟啟動失敗證明了這點。
+**A–E 不得再稱為完整驗證。**
+
+已新增兩段：
+
+* **F 模式條件**：執行端的固定關節期望值必須是模式相依；runner 的模式與之相容；
+  守衛仍會中止；`--cmd-source wb9`／`--machine`／`--attach-on-handover` 都有傳。
+* **G 任務數值**：`STROKE` 與 v1 `target_stroke_m` 相同；目標**同時**傳給
+  執行端與求解端；v1 狀態機的目標與容差取自 v1；案例容差與 v1 容差不同
+  ⇒ 舊判定必須標明非正式；協同執行端已無未標註的 `arrived_sim_t`。
+
+### 36.5 狀態
+
+離線套件**十三個全部通過**（新增兩個），入口核對 **A–G 全部通過**，
+起動前檢查 **0 項失敗**，24 個 checker sha 相符。
+S1 保留 `checkers_prev_sha256_16`（前版 22 項）以便追溯，並記錄
+`run_history` 與 `fixes_after_first_attempt`。
+
+**未改間距、速度、力與溫度中止條件；未繞過起動前檢查；未修改 v1 門檻。**
+重試將**另開目錄**，不覆寫 `coman_drawer20_first/`。

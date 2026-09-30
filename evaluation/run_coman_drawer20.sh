@@ -129,7 +129,8 @@ say "[2/6] 啟動 Isaac 執行端（開放底盤、9 維命令、v1 資格、交
 spawn isaac "$ISAAC_PY" -u evaluation/isaac_coman_drawer_sim.py \
   --out "$DIR/sim" --sim-limit "$SIM_LIMIT" \
   --free-base --cmd-source wb9 --machine --attach-on-handover \
-  --post-stop-steps 60
+  --post-stop-steps 60 \
+  --pull-target-m "$STROKE"
 say "[3/6] 等 /clock"
 python3 evaluation/clock_advancing.py --discover 180 2>&1 | tee -a "$LOG" || exit 3
 

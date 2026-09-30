@@ -641,9 +641,22 @@ def main():
         _b0 = [str(t) for t in (_j.GetBody0Rel().GetTargets() or [])]
         if _b1 and _b1[0].endswith('base_footprint') and (not _b0 or _b0[0] == ROBOT):
             _root_fixed.append(str(_p.GetPath()))
-    print(f'[drawer] world→根 固定關節 {len(_root_fixed)} 個：{_root_fixed}')
-    if len(_root_fixed) != 1:
-        print('[drawer] **預期恰好 1 個 world→根 固定關節，中止**'); return 10
+    # **模式相依的期望值**。這個守衛原本寫死「恰好 1 個」，是為固定底座版寫的；
+    # 加上 --free-base 之後沒有跟著改，於是開放底盤模式**每次都在啟動就中止**
+    # （29 趟歷史紀錄全是 importer_fix_base，開放底盤路徑從未真正執行過）。
+    # 修的是守衛語意，**不是移除保護**：兩種模式各有明確期望，不符一律中止 ——
+    #   free_base  期望 0 個：若出現任何 world→根固定關節，底盤其實被釘住，
+    #                        而命令鏈與判定都會以為它是自由的。
+    #   固定底座   期望 1 個：缺了就沒有外部固定支撐，多了則約束重複。
+    _n_expect = 0 if a.free_base else 1
+    print(f'[drawer] world→根 固定關節 {len(_root_fixed)} 個：{_root_fixed}'
+          f'（模式 {"free_base" if a.free_base else "importer_fix_base"} '
+          f'期望 {_n_expect} 個）')
+    if len(_root_fixed) != _n_expect:
+        print(f'[drawer] **預期恰好 {_n_expect} 個 world→根 固定關節'
+              f'（模式 {"free_base" if a.free_base else "importer_fix_base"}），'
+              f'實際 {len(_root_fixed)} 個，中止**')
+        return 10
     # --- 診斷：只取消抽屜的重力 ---
     grav_state = {}
     if a.drawer_no_gravity:
@@ -1923,13 +1936,21 @@ def main():
             raise RuntimeError(f'log 欄名 {len(LOG_COLS)} 個 vs 資料列 '
                                f'{len(log[0])} 個 —— 欄位錯位，中止')
 
-        # --- 到位判定 ---
+        # --- 舊的**案例容差**到位判定（不是 v1 正式資格）---
+        # 這一段用的是案例的 tolerance.opening_m（10 mm），**遠寬於** v1 的
+        # P1_final_opening_err_m_max（0.5 mm）與 P1_hold_s。
+        # 正式到位／保持／釋放資格一律由 v1 狀態機（HandoverMachine 讀 v1 規格，
+        # target_stroke_m = 0.020、P1 = 0.5 mm、hold = 2.0 s）判定。
+        # 這裡保留只為與既有趟次可比，欄名已標明 legacy_case_tol_*，
+        # **不得當成正式通過**。
         if abs(opening - TARGET) <= float(TOL['opening_m']):
             if hold_ok_t is None:
                 hold_ok_t = t
             elif arrived_t is None and t - hold_ok_t >= float(TOL['opening_hold_s']):
                 arrived_t = t
-                print(f'[drawer] 開度到位並保持 {TOL["opening_hold_s"]:.1f} s @ sim {t:.3f}',
+                print(f'[drawer] **案例容差**到位並保持 '
+                      f'{TOL["opening_hold_s"]:.1f} s @ sim {t:.3f}'
+                      f'（±{TOL["opening_m"]*1000:.0f} mm，**非 v1 正式資格**）',
                       flush=True)
         else:
             hold_ok_t = None
@@ -2331,9 +2352,18 @@ def main():
         'wall_s': time.monotonic() - w0,
         'target_opening_used_m': TARGET,
         'target_opening_case_m': TARGET_CASE,
+        'legacy_case_tol_opening_m': float(TOL['opening_m']),
+        'legacy_case_tol_hold_s': float(TOL['opening_hold_s']),
+        'formal_acceptance_source': ('v1 狀態機（HandoverMachine 讀 '
+                                     'wb_coman_drawer20_criteria_v1.yaml）：'
+                                     'target_stroke_m、P1_final_opening_err_m_max、'
+                                     'P1_hold_s'),
+        'legacy_vs_formal_note': ('legacy_case_tol_* 欄位是**案例容差**的舊判定'
+                                  '（±10 mm），**不是** v1 正式資格（±0.5 mm）；'
+                                  '保留僅為與既有趟次可比。'),
         'final_opening_m': final_open,
-        'opening_err_m': final_open - TARGET,
-        'arrived_sim_t': arrived_t,
+        'opening_err_m': final_open - TARGET,   # 對 TARGET 的最終誤差（量測，非判定）
+        'legacy_case_tol_arrived_sim_t': arrived_t,
         'tcp_final_world': tcp_p.tolist(),
         'cb': {'arm': node.arm_cb_n, 'arm_rejected': node.arm_cb_rej,
                'gripper': node.g_cb_n, 'phase': node.p_cb_n},

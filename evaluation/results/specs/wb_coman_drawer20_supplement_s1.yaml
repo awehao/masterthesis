@@ -27,6 +27,36 @@ approval_scope:
   - 執行期時效（各節點耗時、求解耗時、依值配對的延遲估計與 unpaired 計數）
   partial_results: 任何一項未通過**不抹掉**其他項已取得的證據
   attendance_required: '本人在機旁監看；Claude 無法確認溫度／風扇，也無法代為斷電'
+run_history:
+- run_id: coman_drawer20_first
+  outcome: '**啟動中止，未進入任務**（不是操作失敗）'
+  detail: evaluation/runs/coman_drawer20_first/OUTCOME.md
+  preflight: 0 項失敗
+  aborted_at: Isaac 啟動階段 return 10（固定關節守衛）
+  evidence_for_three_questions: 無 —— 不得以本趟填任何一題
+  code_version: checkers_prev_sha256_16（S1 sha 385c9894a53a0a20）
+fixes_after_first_attempt:
+- id: F1
+  issue: '固定關節守衛寫死「恰好 1 個」，與 --free-base 相斥 ⇒
+    開放底盤模式每次都在啟動就中止；**29 趟歷史全是 importer_fix_base，
+    開放底盤路徑從未真正執行過**'
+  fix: 期望值改為**模式相依**（free_base 期望 0、固定底座期望 1），不符一律中止
+  not: 不是移除保護 —— 兩種模式各有明確期望，相反配置都會被拒
+  offline_test: evaluation/test_base_mode_guard.py（11 項，含四種組合與舊守衛的反例）
+- id: F2
+  issue: 'runner 只把 --stroke-m 傳給求解端；執行端沿用案例
+    target_opening_m = 0.200，且其自身到位判定用案例容差 ±10 mm'
+  fix_a: runner 傳 --pull-target-m "$STROKE" 給執行端（兩端目標一致）
+  fix_b: '舊判定欄位改名 legacy_case_tol_*，並新增 formal_acceptance_source
+    與 legacy_vs_formal_note；列印也標明「**非 v1 正式資格**」'
+  formal_path: '正式到位／保持／釋放資格由 **v1 狀態機**判定
+    （HandoverMachine 讀 v1：target_stroke_m 20 mm、P1 ±0.5 mm、hold 2.0 s）'
+  v1_unchanged: true
+  offline_test: evaluation/test_opening_acceptance.py（19 項）
+entry_check_scope_correction: '先前稱「入口核對全部通過」只涵蓋 A–E
+  （版本、參數宣告、部分接線、欄位索引、規格鏈），**沒有涵蓋模式條件與任務數值** ——
+  首趟啟動失敗證明了這點。已新增 F（模式條件）與 G（任務數值）兩段。
+  **A–E 不得再稱為完整驗證。**'
 
 references:
   v1_corrigenda:
@@ -153,7 +183,8 @@ time_semantics:
   task_timing: 模擬時間（拉動時長、保持時長、狀態新鮮度）
   process_watchdog: 牆鐘（僅用於程序逾時與熱監看）
   rule: 兩者**不得混用**；求解節點須以 use_sim_time 取得模擬時間
-checkers_sha256_16:
+checkers_prev_sha256_16:     # **前版**（首趟啟動中止時的版本），保留可追溯
+  recorded_at: 2026-09-30（S1 核准時，sha 385c9894a53a0a20）
   coman_handover_state.py: b1d8f290b4499fbc
   coman_couple_link.py: 3f89f33edc5a7cd7
   coman_pose_reader.py: 9581efb675d8d361
@@ -176,6 +207,31 @@ checkers_sha256_16:
   test_retreat_direction.py: 491c88b9322dd307
   coman_diag_record.py: 610c9196e0d84946
   coman_entry_check.py: a87ea8e3e3d20d51
+checkers_sha256_16:
+  coman_handover_state.py: b1d8f290b4499fbc
+  coman_couple_link.py: 3f89f33edc5a7cd7
+  coman_pose_reader.py: 9581efb675d8d361
+  coman_pull_policy.py: 6e1492d2f95d5be7
+  coman_pull_target.py: 9199c0a1011d1d91
+  coman_pull_solver_node.py: 770222f5bdaa5b5d
+  isaac_coman_drawer_sim.py: 860d8fe734f41272
+  wholebody_safety_filter.py: 6250b75f08a30d84
+  arm_link_distance.py: 38b73aa866c7f79c
+  wholebody_safety_node.py: d3f90cfb1901b158
+  test_pair_exceptions.py: da31af8647a8f293
+  test_pipeline_pairs.py: 819689265ea84de3
+  coman_zero_cmd_feasible.py: dd3d22105933c884
+  coman_shell_bar_bound.py: d1ba12bd7a0a5c38
+  test_relative_velocity.py: 26369e356ce75c22
+  test_tight_pair_bound.py: ae18cd75f98e4991
+  coman_r1_table.py: 244f65becde99e75
+  arm_link_geometry.py: 7fe840907f6e57ba
+  test_solver_safety_parity.py: 13b8c5972217ede3
+  test_retreat_direction.py: 491c88b9322dd307
+  coman_diag_record.py: 610c9196e0d84946
+  coman_entry_check.py: d45512831ddc2a2d
+  test_base_mode_guard.py: 8929a8438dc6f4bd
+  test_opening_acceptance.py: ff2225b5b5fdd038
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。
