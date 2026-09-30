@@ -47,10 +47,21 @@ def smoke(name, argv, seconds=6.0):
             out = p.stdout.read()
             return False, out[-1500:]
         time.sleep(0.2)
-    p.send_signal(signal.SIGTERM)
+    # **殺整個行程群組**：`ros2 run` 只是外殼，真正的節點是它的子程序。
+    # 先前只送 SIGTERM 給外殼 ⇒ 節點活下來，一次冒煙測試漏三個程序。
+    # start_new_session=True 讓本程序自成一個 session，所以 killpg 只會影響
+    # **本函式自己起的那一組**，不會碰到其他人的程序。
+    try:
+        os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
     try:
         p.wait(timeout=8)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
         p.kill()
     return True, ''
 

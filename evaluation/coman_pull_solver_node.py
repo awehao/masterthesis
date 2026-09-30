@@ -96,6 +96,10 @@ def build(M, cl):
             self.pull_s = float(cl.pull_duration_s)
             self.retreat_m = float(cl.retreat_m)
             self.n_no_task = 0
+            # 啟動期等距離列用（見 run()）；**只在第一次成功求解前有效**
+            self._solved_once = False
+            self._wait_rows_t0 = None
+            self.rows_wait_s = float(cl.rows_wait_s)
             self.task_recv_sim = None
             # **與安全層同一份** d0 覆寫；不一致即上下游規則不同，趟次無效
             _pd = {}
@@ -253,6 +257,8 @@ def build(M, cl):
             相位與結束條件一律交給 `PullTaskPolicy`（已離線測試 16 項）。
             """
             import time as _t
+            from ammr_wholebody_mpc.wholebody_safety_filter import (
+                STATUS_OK as _OK_S)
             from std_msgs.msg import (Float64MultiArray as _F64,
                                        String as _Str)
             a = self.a
@@ -332,6 +338,27 @@ def build(M, cl):
                     self.stop()
                     self.exec.spin_once(timeout_sec=0.01)
                     continue
+                # **啟動競態**：父類別的等待只看「有沒有雲」，不看「有沒有 OK 列」。
+                # 距離節點剛起來時 TF 尚未暖、抽屜位姿也可能還沒到，第一批雲整片
+                # NODATA ⇒ _constraints 立刻 fail closed 把整趟中止（實測 main2）。
+                # 這裡分兩種情況，**不放寬 fail closed**：
+                #   啟動期（還沒成功解過一次）：等，不下命令，有上限。
+                #   任務中（已解過）：列消失是真的異常 ⇒ 交給 _constraints 中止。
+                _n_ok = (0 if self.rows is None
+                         else int((np.asarray(self.rows)[:, 7] == _OK_S).sum()))
+                if _n_ok == 0 and not self._solved_once:
+                    if self._wait_rows_t0 is None:
+                        self._wait_rows_t0 = _t.monotonic()
+                        print('  等距離列（雲已到但整片 NODATA：TF 或障礙物位姿'
+                              '尚未就緒）…', flush=True)
+                    if _t.monotonic() - self._wait_rows_t0 > self.rows_wait_s:
+                        self.stop()
+                        print(f'  中止（fail closed）：等待 {self.rows_wait_s:.0f} s '
+                              f'仍無 STATUS_OK 的距離列', flush=True)
+                        return False
+                    self.stop()
+                    self.exec.spin_once(timeout_sec=0.02)
+                    continue
                 _t_solve0 = _t.perf_counter()
                 try:
                     v, T, ep, er = super().solve(tgt)
@@ -340,6 +367,7 @@ def build(M, cl):
                     print(f'  中止（fail closed）：{exc}', flush=True)
                     return False
                 _solve_ms = (_t.perf_counter() - _t_solve0) * 1e3
+                self._solved_once = True
                 self.ep_last, self.er_last = ep, er
                 m = _F64()
                 m.data = [float(x) for x in v]
@@ -392,6 +420,8 @@ def main() -> int:
     ap.add_argument('--pair-d0', default='',
                     help="配對 d0 覆寫，格式 'link:obstacle:value'（eps 仍另加）；"
                          '必須與安全層參數一致')
+    ap.add_argument('--rows-wait-s', type=float, default=15.0,
+                    help='啟動期等待 STATUS_OK 距離列的上限；逾時 fail closed')
     ap.add_argument('--pair-gap', default='',
                     help="配對**總靜態間距**，格式 'link:obstacle:value'，"
                          '**取代該配對的 d0+eps**；必須與安全層 pair_gap 一致')

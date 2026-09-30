@@ -145,6 +145,22 @@ fixes_after_first_attempt:
   issue: '離線套件與入口核對抓不到「節點啟動即死」'
   fix: 'evaluation/coman_node_smoke.py —— 用 runner 實際參數啟動四個節點，
     提早退出即失敗；已接入起動前檢查（未通過 exit 66）'
+- id: F9
+  issue: '啟動競態：父類別的等待只看「有沒有雲」，不看有沒有 STATUS_OK 列。
+    距離節點剛起來時 TF 未暖、抽屜位姿未到 ⇒ 第一批雲整片 NODATA ⇒
+    _constraints 立刻 fail closed 中止整趟（實測 main2）'
+  fix: '協同求解端在解之前檢查 OK 列數。**啟動期**（尚未成功解過）等待至多
+    rows_wait_s=15 s 且不下命令；**任務中**列消失仍交由 _constraints 中止。
+    不放寬 fail closed。'
+- id: F10
+  issue: '執行端以 TRANSIENT_LOCAL 訂閱 diag／cmd_meta，而發布端是 VOLATILE
+    ⇒ QoS 不相容，一則都收不到（O4 要求的節點耗時因此全部缺）'
+  fix: 改用相容的 RELIABLE/VOLATILE QoS
+- id: F11
+  issue: '冒煙測試只對 `ros2 run` 外殼送 SIGTERM ⇒ 真正的節點是其子程序，
+    活了下來；跑三次漏了九個程序'
+  fix: 'killpg 整個行程群組（start_new_session=True 使該群組只含本函式起的程序，
+    不會波及他人）；已實測測試後零殘留'
 retry_precondition:
   gpu_required: true
   why: 'Isaac 無 CUDA 時退為 CPU-only（PhysX GPU 功能跳過），
@@ -310,8 +326,8 @@ checkers_sha256_16:
   coman_pose_reader.py: 9581efb675d8d361
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
-  coman_pull_solver_node.py: 770222f5bdaa5b5d
-  isaac_coman_drawer_sim.py: ffb72f60d66bab66
+  coman_pull_solver_node.py: 06d1e78d363d0bc1
+  isaac_coman_drawer_sim.py: a5c4e9a8addc4570
   wholebody_safety_filter.py: 6250b75f08a30d84
   arm_link_distance.py: 38b73aa866c7f79c
   wholebody_safety_node.py: 3db649ad05e07f98
@@ -330,7 +346,7 @@ checkers_sha256_16:
   test_base_mode_guard.py: 8929a8438dc6f4bd
   test_opening_acceptance.py: ff2225b5b5fdd038
   test_base_feedback.py: b983b8ea1f6aa509
-  coman_node_smoke.py: 1a7fd063ac0a56bf
+  coman_node_smoke.py: fbc13be215b0ddc5
 checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789efa5 變更
   （Frame 新增三態 safety_fresh）；wholebody_safety_filter／arm_link_distance／
   wholebody_safety_node 新增**配對層級**例外與障礙物身分欄位（預設空 ⇒ 行為不變）。

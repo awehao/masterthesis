@@ -499,10 +499,15 @@ class DrawerNode(Node):
         self.safety_fields = None   # 安全 diag 的欄位名單（latched）
         self.dist_fields = None     # 距離 diag 的欄位名單（latched）
         self.e2e_log = []           # [step, apply_sim_t, seq, src_sim_t, age_s, …]
+        # **diag 用預設（VOLATILE）QoS 發布**，這裡若用 rel（TRANSIENT_LOCAL）
+        # 訂閱會 QoS 不相容 ⇒ 一則都收不到（實測 main2 出現
+        # 'incompatible QoS ... DURABILITY' 警告，執行端因此沒有任何節點耗時）。
+        _diagq = QoSProfile(depth=20, reliability=ReliabilityPolicy.RELIABLE,
+                            history=HistoryPolicy.KEEP_LAST)
         self.create_subscription(Float32MultiArray, '/wholebody_safety/diag',
-                                 self._safety_diag, rel)
+                                 self._safety_diag, _diagq)
         self.create_subscription(Float32MultiArray, '/arm_link_distance/diag',
-                                 self._dist_diag, rel)
+                                 self._dist_diag, _diagq)
         from rclpy.qos import QoSProfile as _QP, DurabilityPolicy as _DPol
         _latq = _QP(depth=1)
         _latq.durability = _DPol.TRANSIENT_LOCAL
@@ -514,7 +519,7 @@ class DrawerNode(Node):
             lambda m: setattr(self, 'dist_fields', json.loads(m.data)), _latq)
         from std_msgs.msg import Float64MultiArray as _F64m
         self.create_subscription(_F64m, '/wholebody_safety/cmd_meta',
-                                 self._cmd_meta, rel)
+                                 self._cmd_meta, _diagq)
         # 任務狀態：給求解節點用的**量測與旗標**（不含命令）
         self.task_pub = self.create_publisher(String, '/coman/task_state', 10)
         # 抽屜本體世界位姿：距離節點據此追蹤**會移動的**障礙物部件
