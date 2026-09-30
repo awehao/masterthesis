@@ -1,7 +1,33 @@
 schema: wb_coman_drawer20_supplement/1
 version: S1
-status: draft_pending_approval
+status: approved
 created: 2026-09-29
+approved: 2026-09-30
+approval_scope:
+  what: '**僅限第一趟 20 mm 完整操作的受限模擬**'
+  is_not: '**不是實機安全核准，也不是避碰保證**'
+  versions_in_force:
+    criteria_v1: c9f303a8630d4d0e        # 凍結，未改寫
+    v1_corrigendum_c1: 3264cd08ea677828  # P6 退出方向；23.3 mm 門檻不變
+    pair_gaps_r1_1: f2714067369be541     # 十五組間距
+    pair_gaps_r1: 0e97a9c0baef9ca7       # 原十組，保存不覆寫
+  code_version: 22 個 checker 的 sha 逐項記錄於 checkers_sha256_16（入口核對比對 install 與 src）
+  entry_check: evaluation/coman_entry_check.py（A–E 五段全部通過）
+  must_not:
+  - 不改間距（R1.1 十五組）
+  - 不改速度界限
+  - 不改力中止條件
+  - 不改溫度中止條件（92 °C，**不得提高**）
+  - 不繞過起動前檢查
+  run_plan: 一趟執行 接近 → 連接 → 拉開 20 mm → 保持 → 釋放 → 退出
+  on_protection_trigger: '**保留結果、停止**；不自行調參連跑，不拆成一串診斷趟次'
+  report_separately:
+  - 完整操作是否完成
+  - '**連接後拉動期間**是否有實測底盤與手臂同動（不以接近／退出段拉高全程比例）'
+  - 執行期時效（各節點耗時、求解耗時、依值配對的延遲估計與 unpaired 計數）
+  partial_results: 任何一項未通過**不抹掉**其他項已取得的證據
+  attendance_required: '本人在機旁監看；Claude 無法確認溫度／風扇，也無法代為斷電'
+
 references:
   v1_corrigenda:
   - file: wb_coman_drawer20_v1_corrigendum_c1.yaml
