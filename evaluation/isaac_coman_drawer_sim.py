@@ -1340,7 +1340,9 @@ def main():
               flush=True)
         return 9
     print(f'[coman] 同一物理步讀取已接上；讀取順序 {READ_ORDER}', flush=True)
-    print(f'[coman] 正式釋放資格來源：狀態機（目前 MACHINE_WIRED={MACHINE_WIRED}）',
+    # 變數名是 machine_wired（第 1257 行）；先前寫成大寫 MACHINE_WIRED，
+    # 只在這行 log 用到，於是**整趟在進入物理迴圈後立刻 NameError 中止**。
+    print(f'[coman] 正式釋放資格來源：狀態機（machine_wired={machine_wired}）',
           flush=True)
 
     n_step = 0
