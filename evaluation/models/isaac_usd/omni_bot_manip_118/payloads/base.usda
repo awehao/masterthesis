@@ -17,11 +17,14 @@ Generated from Composed Stage of root layer /home/howardchen/masterthesis/evalua
 """
     kilogramsPerUnit = 1
     metersPerUnit = 1
+    subLayers = [
+        @./robot.usda@
+    ]
     upAxis = "Z"
 )
 
 def Xform "omni_bot" (
-    apiSchemas = ["GeomModelAPI"]
+    prepend apiSchemas = ["GeomModelAPI"]
     assetInfo = {
         string name = "omni_bot"
     }
@@ -70,23 +73,10 @@ def Xform "omni_bot" (
 
     def Scope "Geometry"
     {
-        def Xform "base_footprint" (
-            apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsArticulationRootAPI", "NewtonArticulationRootAPI", "PhysicsMassAPI"]
-        )
+        def Xform "base_footprint"
         {
-            bool newton:selfCollisionEnabled = 0
-            float3 physics:diagonalInertia = (0.000001, 0.000001, 0.000001)
-            float physics:mass = 0.001
-            quatf physics:principalAxes = (1, 0, 0, 0)
-
-            def Xform "base_link" (
-                apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-            )
+            def Xform "base_link"
             {
-                point3f physics:centerOfMass = (0, 0, 0.14)
-                float3 physics:diagonalInertia = (0.5229, 0.5229, 0.81)
-                float physics:mass = 18
-                quatf physics:principalAxes = (1, 0, 0, 0)
                 quatf xformOp:orient = (1, 0, 0, 0)
                 float3 xformOp:scale = (1, 1, 1)
                 double3 xformOp:translate = (0, 0, 0.05)
@@ -103,20 +93,15 @@ def Xform "omni_bot" (
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                 }
 
-                def Xform "rim_a_link" (
-                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                )
+                def Xform "rim_a_link"
                 {
-                    float3 physics:diagonalInertia = (0.000131905, 0.000131905, 0.000203)
-                    float physics:mass = 0.5
-                    quatf physics:principalAxes = (1, 0, 0, 0)
                     quatf xformOp:orient = (0.7073883, 0, -0.7068252, 0)
                     float3 xformOp:scale = (1, 1, 1)
                     double3 xformOp:translate = (0.245, 0, 0)
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
                     def Cylinder "cylinder" (
-                        apiSchemas = ["MaterialBindingAPI"]
+                        prepend apiSchemas = ["MaterialBindingAPI"]
                     )
                     {
                         uniform token axis = "Z"
@@ -131,14 +116,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_1_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.7071067691, 0, 0, 0.7071067933)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.039551, 0, 0.01)
@@ -146,14 +127,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_2_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9063078165, 0, 0, 0.4226181985)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.030181, -0.025561, 0.01)
@@ -161,14 +138,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_3_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9961947203, 0, 0, 0.08715548927)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.00669, -0.038981, 0.01)
@@ -176,14 +149,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_4_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9659258127, 0, 0, -0.2588190957)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.019932, -0.034161, 0.01)
@@ -191,14 +160,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_5_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.8191520572, 0, 0, -0.573576418)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.037227, -0.013357, 0.01)
@@ -206,14 +171,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_6_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.5735764503, 0, 0, -0.8191520345)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.037104, 0.013697, 0.01)
@@ -221,14 +182,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_7_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.2588190436, 0, 0, -0.9659258267)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.019619, 0.034342, 0.01)
@@ -236,14 +193,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_8_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.08715574443, 0, 0, 0.9961946979)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.007046, 0.038918, 0.01)
@@ -251,14 +204,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_9_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.4226182699, 0, 0, 0.9063077832)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.030414, 0.025284, 0.01)
@@ -266,14 +215,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_10_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.8191520572, 0, 0, 0.573576418)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.037227, -0.013357, -0.01)
@@ -281,14 +226,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_11_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9659258127, 0, 0, 0.2588190957)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.019932, -0.034161, -0.01)
@@ -296,14 +237,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_12_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9961947203, 0, 0, -0.08715548927)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.00669, -0.038981, -0.01)
@@ -311,14 +248,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_13_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9063078165, 0, 0, -0.4226181985)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.030181, -0.025561, -0.01)
@@ -326,14 +259,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_14_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.7071067691, 0, 0, -0.7071067933)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.039551, 0, -0.01)
@@ -341,14 +270,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_15_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.4226182699, 0, 0, -0.9063077832)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.030414, 0.025284, -0.01)
@@ -356,14 +281,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_16_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.08715574443, 0, 0, -0.9961946979)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.007046, 0.038918, -0.01)
@@ -371,14 +292,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_17_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.2588190436, 0, 0, 0.9659258267)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.019619, 0.034342, -0.01)
@@ -386,14 +303,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_18_rim_a_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.5735764503, 0, 0, 0.8191520345)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.037104, 0.013697, -0.01)
@@ -401,20 +314,15 @@ def Xform "omni_bot" (
                     }
                 }
 
-                def Xform "rim_b_link" (
-                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                )
+                def Xform "rim_b_link"
                 {
-                    float3 physics:diagonalInertia = (0.000131905, 0.000131905, 0.000203)
-                    float physics:mass = 0.5
-                    quatf physics:principalAxes = (1, 0, 0, 0)
                     quatf xformOp:orient = (0.50039816, 0.49999985, 0.49999985, -0.49960184)
                     float3 xformOp:scale = (1, 1, 1)
                     double3 xformOp:translate = (0, 0.245, 0)
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
                     def Cylinder "cylinder" (
-                        apiSchemas = ["MaterialBindingAPI"]
+                        prepend apiSchemas = ["MaterialBindingAPI"]
                     )
                     {
                         uniform token axis = "Z"
@@ -429,14 +337,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_1_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.7071067691, 0, 0, 0.7071067933)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.039551, 0, 0.01)
@@ -444,14 +348,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_2_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9063078165, 0, 0, 0.4226181985)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.030181, -0.025561, 0.01)
@@ -459,14 +359,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_3_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9961947203, 0, 0, 0.08715548927)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.00669, -0.038981, 0.01)
@@ -474,14 +370,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_4_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9659258127, 0, 0, -0.2588190957)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.019932, -0.034161, 0.01)
@@ -489,14 +381,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_5_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.8191520572, 0, 0, -0.573576418)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.037227, -0.013357, 0.01)
@@ -504,14 +392,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_6_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.5735764503, 0, 0, -0.8191520345)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.037104, 0.013697, 0.01)
@@ -519,14 +403,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_7_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.2588190436, 0, 0, -0.9659258267)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.019619, 0.034342, 0.01)
@@ -534,14 +414,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_8_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.08715574443, 0, 0, 0.9961946979)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.007046, 0.038918, 0.01)
@@ -549,14 +425,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_9_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.4226182699, 0, 0, 0.9063077832)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.030414, 0.025284, 0.01)
@@ -564,14 +436,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_10_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.8191520572, 0, 0, 0.573576418)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.037227, -0.013357, -0.01)
@@ -579,14 +447,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_11_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9659258127, 0, 0, 0.2588190957)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.019932, -0.034161, -0.01)
@@ -594,14 +458,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_12_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9961947203, 0, 0, -0.08715548927)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.00669, -0.038981, -0.01)
@@ -609,14 +469,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_13_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9063078165, 0, 0, -0.4226181985)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.030181, -0.025561, -0.01)
@@ -624,14 +480,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_14_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.7071067691, 0, 0, -0.7071067933)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.039551, 0, -0.01)
@@ -639,14 +491,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_15_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.4226182699, 0, 0, -0.9063077832)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.030414, 0.025284, -0.01)
@@ -654,14 +502,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_16_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.08715574443, 0, 0, -0.9961946979)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.007046, 0.038918, -0.01)
@@ -669,14 +513,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_17_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.2588190436, 0, 0, 0.9659258267)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.019619, 0.034342, -0.01)
@@ -684,14 +524,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_18_rim_b_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.5735764503, 0, 0, 0.8191520345)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.037104, 0.013697, -0.01)
@@ -699,20 +535,15 @@ def Xform "omni_bot" (
                     }
                 }
 
-                def Xform "rim_c_link" (
-                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                )
+                def Xform "rim_c_link"
                 {
-                    float3 physics:diagonalInertia = (0.000131905, 0.000131905, 0.000203)
-                    float physics:mass = 0.5
-                    quatf physics:principalAxes = (1, 0, 0, 0)
                     quatf xformOp:orient = (0.7073883, 0, 0.7068252, 0)
                     float3 xformOp:scale = (1, 1, 1)
                     double3 xformOp:translate = (-0.245, 0, 0)
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
                     def Cylinder "cylinder" (
-                        apiSchemas = ["MaterialBindingAPI"]
+                        prepend apiSchemas = ["MaterialBindingAPI"]
                     )
                     {
                         uniform token axis = "Z"
@@ -727,14 +558,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_1_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.7071067691, 0, 0, 0.7071067933)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.039551, 0, 0.01)
@@ -742,14 +569,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_2_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9063078165, 0, 0, 0.4226181985)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.030181, -0.025561, 0.01)
@@ -757,14 +580,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_3_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9961947203, 0, 0, 0.08715548927)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.00669, -0.038981, 0.01)
@@ -772,14 +591,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_4_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9659258127, 0, 0, -0.2588190957)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.019932, -0.034161, 0.01)
@@ -787,14 +602,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_5_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.8191520572, 0, 0, -0.573576418)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.037227, -0.013357, 0.01)
@@ -802,14 +613,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_6_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.5735764503, 0, 0, -0.8191520345)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.037104, 0.013697, 0.01)
@@ -817,14 +624,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_7_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.2588190436, 0, 0, -0.9659258267)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.019619, 0.034342, 0.01)
@@ -832,14 +635,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_8_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.08715574443, 0, 0, 0.9961946979)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.007046, 0.038918, 0.01)
@@ -847,14 +646,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_9_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.4226182699, 0, 0, 0.9063077832)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.030414, 0.025284, 0.01)
@@ -862,14 +657,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_10_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.8191520572, 0, 0, 0.573576418)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.037227, -0.013357, -0.01)
@@ -877,14 +668,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_11_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9659258127, 0, 0, 0.2588190957)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.019932, -0.034161, -0.01)
@@ -892,14 +679,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_12_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9961947203, 0, 0, -0.08715548927)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.00669, -0.038981, -0.01)
@@ -907,14 +690,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_13_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9063078165, 0, 0, -0.4226181985)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.030181, -0.025561, -0.01)
@@ -922,14 +701,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_14_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.7071067691, 0, 0, -0.7071067933)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.039551, 0, -0.01)
@@ -937,14 +712,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_15_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.4226182699, 0, 0, -0.9063077832)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.030414, 0.025284, -0.01)
@@ -952,14 +723,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_16_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.08715574443, 0, 0, -0.9961946979)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.007046, 0.038918, -0.01)
@@ -967,14 +734,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_17_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.2588190436, 0, 0, 0.9659258267)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.019619, 0.034342, -0.01)
@@ -982,14 +745,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_18_rim_c_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.5735764503, 0, 0, 0.8191520345)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.037104, 0.013697, -0.01)
@@ -997,20 +756,15 @@ def Xform "omni_bot" (
                     }
                 }
 
-                def Xform "rim_d_link" (
-                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                )
+                def Xform "rim_d_link"
                 {
-                    float3 physics:diagonalInertia = (0.000131905, 0.000131905, 0.000203)
-                    float physics:mass = 0.5
-                    quatf physics:principalAxes = (1, 0, 0, 0)
                     quatf xformOp:orient = (0.50039816, -0.49999985, -0.49999985, -0.49960184)
                     float3 xformOp:scale = (1, 1, 1)
                     double3 xformOp:translate = (0, -0.245, 0)
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
                     def Cylinder "cylinder" (
-                        apiSchemas = ["MaterialBindingAPI"]
+                        prepend apiSchemas = ["MaterialBindingAPI"]
                     )
                     {
                         uniform token axis = "Z"
@@ -1025,14 +779,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_1_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.7071067691, 0, 0, 0.7071067933)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.039551, 0, 0.01)
@@ -1040,14 +790,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_2_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9063078165, 0, 0, 0.4226181985)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.030181, -0.025561, 0.01)
@@ -1055,14 +801,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_3_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9961947203, 0, 0, 0.08715548927)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.00669, -0.038981, 0.01)
@@ -1070,14 +812,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_4_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9659258127, 0, 0, -0.2588190957)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.019932, -0.034161, 0.01)
@@ -1085,14 +823,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_5_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.8191520572, 0, 0, -0.573576418)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.037227, -0.013357, 0.01)
@@ -1100,14 +834,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_6_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.5735764503, 0, 0, -0.8191520345)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.037104, 0.013697, 0.01)
@@ -1115,14 +845,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_7_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.2588190436, 0, 0, -0.9659258267)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.019619, 0.034342, 0.01)
@@ -1130,14 +856,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_8_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.08715574443, 0, 0, 0.9961946979)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.007046, 0.038918, 0.01)
@@ -1145,14 +867,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_9_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.4226182699, 0, 0, 0.9063077832)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.030414, 0.025284, 0.01)
@@ -1160,14 +878,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_10_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.8191520572, 0, 0, 0.573576418)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.037227, -0.013357, -0.01)
@@ -1175,14 +889,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_11_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9659258127, 0, 0, 0.2588190957)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.019932, -0.034161, -0.01)
@@ -1190,14 +900,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_12_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9961947203, 0, 0, -0.08715548927)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.00669, -0.038981, -0.01)
@@ -1205,14 +911,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_13_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.9063078165, 0, 0, -0.4226181985)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.030181, -0.025561, -0.01)
@@ -1220,14 +922,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_14_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.7071067691, 0, 0, -0.7071067933)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.039551, 0, -0.01)
@@ -1235,14 +933,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_15_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.4226182699, 0, 0, -0.9063077832)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.030414, 0.025284, -0.01)
@@ -1250,14 +944,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_16_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.08715574443, 0, 0, -0.9961946979)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (-0.007046, 0.038918, -0.01)
@@ -1265,14 +955,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_17_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.2588190436, 0, 0, 0.9659258267)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.019619, 0.034342, -0.01)
@@ -1280,14 +966,10 @@ def Xform "omni_bot" (
                     }
 
                     def Xform "roller_18_rim_d_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
                         instanceable = true
                         prepend references = @./instances.usda@</Instances/roller_omni_wheel>
                     )
                     {
-                        float3 physics:diagonalInertia = (0.000001, 0.00001, 0.00001)
-                        float physics:mass = 0.02
-                        quatf physics:principalAxes = (0.5, 0.5, 0.5, 0.5)
                         quatd xformOp:orient = (0.5735764503, 0, 0, 0.8191520345)
                         double3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.037104, 0.013697, -0.01)
@@ -1295,21 +977,15 @@ def Xform "omni_bot" (
                     }
                 }
 
-                def Xform "lidar_link" (
-                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                )
+                def Xform "lidar_link"
                 {
-                    point3f physics:centerOfMass = (0, 0, 0)
-                    float3 physics:diagonalInertia = (0.000105074, 0.000105074, 0.00013983)
-                    float physics:mass = 0.214
-                    quatf physics:principalAxes = (1, 0, 0, 0)
                     quatf xformOp:orient = (1, 0, 0, 0)
                     float3 xformOp:scale = (1, 1, 1)
                     double3 xformOp:translate = (0, 0, 0.2152)
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
                     def Cylinder "cylinder" (
-                        apiSchemas = ["MaterialBindingAPI"]
+                        prepend apiSchemas = ["MaterialBindingAPI"]
                     )
                     {
                         uniform token axis = "Z"
@@ -1324,7 +1000,7 @@ def Xform "omni_bot" (
                     }
 
                     def Cylinder "cylinder_1" (
-                        apiSchemas = ["PhysicsCollisionAPI", "NewtonCollisionAPI"]
+                        prepend apiSchemas = ["PhysicsCollisionAPI"]
                         displayName = "cylinder"
                     )
                     {
@@ -1340,14 +1016,8 @@ def Xform "omni_bot" (
                     }
                 }
 
-                def Xform "link_base" (
-                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                )
+                def Xform "link_base"
                 {
-                    point3f physics:centerOfMass = (-0.008295446, 0.000032635744, 0.063119456)
-                    float3 physics:diagonalInertia = (0, 0, 0)
-                    float physics:mass = 1.6539351
-                    quatf physics:principalAxes = (1, 0, 0, 0)
                     quatf xformOp:orient = (1, 0, 0, 0)
                     float3 xformOp:scale = (1, 1, 1)
                     double3 xformOp:translate = (0.11, 0, 0.28)
@@ -1364,14 +1034,8 @@ def Xform "omni_bot" (
                         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                     }
 
-                    def Xform "link1" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                    )
+                    def Xform "link1"
                     {
-                        point3f physics:centerOfMass = (-0.00036, 0.04195, -0.0025)
-                        float3 physics:diagonalInertia = (0.00085335504, 0.001352752, 0.001452763)
-                        float physics:mass = 1.411
-                        quatf physics:principalAxes = (-0.460984, 0.54410225, 0.39894152, 0.5764479)
                         quatf xformOp:orient = (1, 0, 0, 0)
                         float3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0, 0, 0.2435)
@@ -1388,14 +1052,8 @@ def Xform "omni_bot" (
                             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                         }
 
-                        def Xform "link2" (
-                            apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                        )
+                        def Xform "link2"
                         {
-                            point3f physics:centerOfMass = (0.179, 0, 0.0584)
-                            float3 physics:diagonalInertia = (0.0012201827, 0.0052152043, 0.005609713)
-                            float physics:mass = 1.34
-                            quatf physics:principalAxes = (-0.69801784, 0.6995492, 0.10749694, -0.10884147)
                             quatf xformOp:orient = (0.5000037, -0.49999815, -0.50000185, -0.49999633)
                             float3 xformOp:scale = (1, 1, 1)
                             double3 xformOp:translate = (0, 0, 0)
@@ -1412,14 +1070,8 @@ def Xform "omni_bot" (
                                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                             }
 
-                            def Xform "link3" (
-                                apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                            )
+                            def Xform "link3"
                             {
-                                point3f physics:centerOfMass = (0.072, -0.0357, -0.001)
-                                float3 physics:diagonalInertia = (0.00070380664, 0.0017554633, 0.0018521)
-                                float physics:mass = 0.953
-                                quatf physics:principalAxes = (0.97674966, -0.02757489, 0.039178774, 0.20896101)
                                 quatf xformOp:orient = (0.0000025973434, 0.70710546, 0.7071081, 0.000002597353)
                                 float3 xformOp:scale = (1, 1, 1)
                                 double3 xformOp:translate = (0.2002, 0, 0)
@@ -1436,14 +1088,8 @@ def Xform "omni_bot" (
                                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                 }
 
-                                def Xform "link4" (
-                                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                )
+                                def Xform "link4"
                                 {
-                                    point3f physics:centerOfMass = (-0.002, -0.0285, -0.0813)
-                                    float3 physics:diagonalInertia = (0.0010958591, 0.0034909125, 0.0037050284)
-                                    float physics:mass = 1.284
-                                    quatf physics:principalAxes = (0.6910432, -0.1544806, 0.6881653, 0.15818836)
                                     quatf xformOp:orient = (0.70710546, 0.7071081, 0, 0)
                                     float3 xformOp:scale = (1, 1, 1)
                                     double3 xformOp:translate = (0.087, -0.22761, 0)
@@ -1460,14 +1106,8 @@ def Xform "omni_bot" (
                                         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                     }
 
-                                    def Xform "link5" (
-                                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                    )
+                                    def Xform "link5"
                                     {
-                                        point3f physics:centerOfMass = (0, 0.01, 0.0019)
-                                        float3 physics:diagonalInertia = (0.0005076809, 0.00052926637, 0.00056755275)
-                                        float physics:mass = 0.804
-                                        quatf physics:principalAxes = (0.5426506, -0.4601064, -0.46742386, -0.5247355)
                                         quatf xformOp:orient = (0.70710546, 0.7071081, 0, 0)
                                         float3 xformOp:scale = (1, 1, 1)
                                         double3 xformOp:translate = (0, 0, 0)
@@ -1484,14 +1124,8 @@ def Xform "omni_bot" (
                                             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                         }
 
-                                        def Xform "link6" (
-                                            apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                        )
+                                        def Xform "link6"
                                         {
-                                            point3f physics:centerOfMass = (0, -0.00194, -0.0102)
-                                            float3 physics:diagonalInertia = (0.00007714115, 0.00008577572, 0.00014814813)
-                                            float physics:mass = 0.13
-                                            quatf physics:principalAxes = (0.9982899, 0.005007234, 0.0026026506, -0.058185063)
                                             quatf xformOp:orient = (-0.70710546, 0.7071081, 0, 0)
                                             float3 xformOp:scale = (1, 1, 1)
                                             double3 xformOp:translate = (0, 0.0625, 0)
@@ -1508,9 +1142,7 @@ def Xform "omni_bot" (
                                                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                             }
 
-                                            def Xform "link_eef" (
-                                                apiSchemas = ["PhysicsRigidBodyAPI"]
-                                            )
+                                            def Xform "link_eef"
                                             {
                                                 quatf xformOp:orient = (1, 0, 0, 0)
                                                 float3 xformOp:scale = (1, 1, 1)
@@ -1528,14 +1160,8 @@ def Xform "omni_bot" (
                                                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                                 }
 
-                                                def Xform "uflite_gripper_link" (
-                                                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                                )
+                                                def Xform "uflite_gripper_link"
                                                 {
-                                                    point3f physics:centerOfMass = (0, 0, 0.03)
-                                                    float3 physics:diagonalInertia = (0.0002547995, 0.00033230725, 0.00047109328)
-                                                    float physics:mass = 0.25
-                                                    quatf physics:principalAxes = (0.7008982, 0.050398108, 0.70964307, -0.05107336)
                                                     quatf xformOp:orient = (1, 0, 0, 0)
                                                     float3 xformOp:scale = (1, 1, 1)
                                                     double3 xformOp:translate = (0, 0, 0)
@@ -1552,14 +1178,8 @@ def Xform "omni_bot" (
                                                         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                                     }
 
-                                                    def Xform "uflite_finger1" (
-                                                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                                    )
+                                                    def Xform "uflite_finger1"
                                                     {
-                                                        point3f physics:centerOfMass = (0, 0.01, 0.0086)
-                                                        float3 physics:diagonalInertia = (7.53375e-7, 0.000001425, 0.000001739625)
-                                                        float physics:mass = 0.0163
-                                                        quatf physics:principalAxes = (0.4082289, 0.57736397, 0.57736397, 0.4082289)
                                                         quatf xformOp:orient = (1, 0, 0, 0)
                                                         float3 xformOp:scale = (1, 1, 1)
                                                         double3 xformOp:translate = (0, 0, 0.0543)
@@ -1589,14 +1209,8 @@ def Xform "omni_bot" (
                                                         }
                                                     }
 
-                                                    def Xform "uflite_finger2" (
-                                                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                                    )
+                                                    def Xform "uflite_finger2"
                                                     {
-                                                        point3f physics:centerOfMass = (0, -0.01, 0.0086)
-                                                        float3 physics:diagonalInertia = (7.53375e-7, 0.000001425, 0.000001739625)
-                                                        float physics:mass = 0.0163
-                                                        quatf physics:principalAxes = (0.57736397, 0.4082289, 0.4082289, 0.57736397)
                                                         quatf xformOp:orient = (1, 0, 0, 0)
                                                         float3 xformOp:scale = (1, 1, 1)
                                                         double3 xformOp:translate = (0, 0, 0.0543)
@@ -1744,14 +1358,8 @@ def Xform "omni_bot" (
                                                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                             }
 
-                                            def Xform "detect6" (
-                                                apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                            )
+                                            def Xform "detect6"
                                             {
-                                                point3f physics:centerOfMass = (0, 0, 0)
-                                                float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                                                float physics:mass = 0.000001
-                                                quatf physics:principalAxes = (1, 0, 0, 0)
                                                 quatf xformOp:orient = (1, 0, 0, 0)
                                                 float3 xformOp:scale = (1, 1, 1)
                                                 double3 xformOp:translate = (0, 0, 0.025)
@@ -1771,14 +1379,8 @@ def Xform "omni_bot" (
                                             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                         }
 
-                                        def Xform "detect5" (
-                                            apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                        )
+                                        def Xform "detect5"
                                         {
-                                            point3f physics:centerOfMass = (0, 0, 0)
-                                            float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                                            float physics:mass = 0.000001
-                                            quatf physics:principalAxes = (1, 0, 0, 0)
                                             quatf xformOp:orient = (1, 0, 0, 0)
                                             float3 xformOp:scale = (1, 1, 1)
                                             double3 xformOp:translate = (0, 0, 0)
@@ -1798,28 +1400,16 @@ def Xform "omni_bot" (
                                         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                     }
 
-                                    def Xform "detect4_1" (
-                                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                    )
+                                    def Xform "detect4_1"
                                     {
-                                        point3f physics:centerOfMass = (0, 0, 0)
-                                        float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                                        float physics:mass = 0.000001
-                                        quatf physics:principalAxes = (1, 0, 0, 0)
                                         quatf xformOp:orient = (1, 0, 0, 0)
                                         float3 xformOp:scale = (1, 1, 1)
                                         double3 xformOp:translate = (0, 0, -0.1)
                                         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                     }
 
-                                    def Xform "detect4_2" (
-                                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                    )
+                                    def Xform "detect4_2"
                                     {
-                                        point3f physics:centerOfMass = (0, 0, 0)
-                                        float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                                        float physics:mass = 0.000001
-                                        quatf physics:principalAxes = (1, 0, 0, 0)
                                         quatf xformOp:orient = (1, 0, 0, 0)
                                         float3 xformOp:scale = (1, 1, 1)
                                         double3 xformOp:translate = (0, -0.05, -0.05)
@@ -1839,28 +1429,16 @@ def Xform "omni_bot" (
                                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                 }
 
-                                def Xform "detect3_1" (
-                                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                )
+                                def Xform "detect3_1"
                                 {
-                                    point3f physics:centerOfMass = (0, 0, 0)
-                                    float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                                    float physics:mass = 0.000001
-                                    quatf physics:principalAxes = (1, 0, 0, 0)
                                     quatf xformOp:orient = (1, 0, 0, 0)
                                     float3 xformOp:scale = (1, 1, 1)
                                     double3 xformOp:translate = (0, 0, 0)
                                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                                 }
 
-                                def Xform "detect3_2" (
-                                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                                )
+                                def Xform "detect3_2"
                                 {
-                                    point3f physics:centerOfMass = (0, 0, 0)
-                                    float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                                    float physics:mass = 0.000001
-                                    quatf physics:principalAxes = (1, 0, 0, 0)
                                     quatf xformOp:orient = (1, 0, 0, 0)
                                     float3 xformOp:scale = (1, 1, 1)
                                     double3 xformOp:translate = (0.08, 0, 0)
@@ -1880,42 +1458,24 @@ def Xform "omni_bot" (
                                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                             }
 
-                            def Xform "detect2_1" (
-                                apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                            )
+                            def Xform "detect2_1"
                             {
-                                point3f physics:centerOfMass = (0, 0, 0)
-                                float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                                float physics:mass = 0.000001
-                                quatf physics:principalAxes = (1, 0, 0, 0)
                                 quatf xformOp:orient = (1, 0, 0, 0)
                                 float3 xformOp:scale = (1, 1, 1)
                                 double3 xformOp:translate = (0.1, 0, 0.1)
                                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                             }
 
-                            def Xform "detect2_2" (
-                                apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                            )
+                            def Xform "detect2_2"
                             {
-                                point3f physics:centerOfMass = (0, 0, 0)
-                                float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                                float physics:mass = 0.000001
-                                quatf physics:principalAxes = (1, 0, 0, 0)
                                 quatf xformOp:orient = (1, 0, 0, 0)
                                 float3 xformOp:scale = (1, 1, 1)
                                 double3 xformOp:translate = (0, 0, 0.1)
                                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                             }
 
-                            def Xform "detect2_3" (
-                                apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                            )
+                            def Xform "detect2_3"
                             {
-                                point3f physics:centerOfMass = (0, 0, 0)
-                                float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                                float physics:mass = 0.000001
-                                quatf physics:principalAxes = (1, 0, 0, 0)
                                 quatf xformOp:orient = (1, 0, 0, 0)
                                 float3 xformOp:scale = (1, 1, 1)
                                 double3 xformOp:translate = (0.2, 0, 0.1)
@@ -1935,14 +1495,8 @@ def Xform "omni_bot" (
                             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                         }
 
-                        def Xform "detect1" (
-                            apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                        )
+                        def Xform "detect1"
                         {
-                            point3f physics:centerOfMass = (0, 0, 0)
-                            float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                            float physics:mass = 0.000001
-                            quatf physics:principalAxes = (1, 0, 0, 0)
                             quatf xformOp:orient = (1, 0, 0, 0)
                             float3 xformOp:scale = (1, 1, 1)
                             double3 xformOp:translate = (0, 0, 0)
@@ -1962,28 +1516,16 @@ def Xform "omni_bot" (
                         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                     }
 
-                    def Xform "detect0_1" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                    )
+                    def Xform "detect0_1"
                     {
-                        point3f physics:centerOfMass = (0, 0, 0)
-                        float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                        float physics:mass = 0.000001
-                        quatf physics:principalAxes = (1, 0, 0, 0)
                         quatf xformOp:orient = (1, 0, 0, 0)
                         float3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0, 0, 0.15)
                         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                     }
 
-                    def Xform "detect0_2" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                    )
+                    def Xform "detect0_2"
                     {
-                        point3f physics:centerOfMass = (0, 0, 0)
-                        float3 physics:diagonalInertia = (1e-9, 1e-9, 1e-9)
-                        float physics:mass = 0.000001
-                        quatf physics:principalAxes = (1, 0, 0, 0)
                         quatf xformOp:orient = (1, 0, 0, 0)
                         float3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0, 0, 0.05)
@@ -1992,7 +1534,7 @@ def Xform "omni_bot" (
                 }
 
                 def Cylinder "cylinder" (
-                    apiSchemas = ["PhysicsCollisionAPI", "NewtonCollisionAPI"]
+                    prepend apiSchemas = ["PhysicsCollisionAPI"]
                 )
                 {
                     uniform token axis = "Z"
@@ -2006,20 +1548,15 @@ def Xform "omni_bot" (
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
                 }
 
-                def Xform "support_fx" (
-                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                )
+                def Xform "support_fx"
                 {
-                    float3 physics:diagonalInertia = (0.0001, 0.0001, 0.0001)
-                    float physics:mass = 0.1
-                    quatf physics:principalAxes = (1, 0, 0, 0)
                     quatf xformOp:orient = (1, 0, 0, 0)
                     float3 xformOp:scale = (1, 1, 1)
                     double3 xformOp:translate = (0.245, 0, 0)
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
                     def Sphere "sphere" (
-                        apiSchemas = ["PhysicsCollisionAPI", "NewtonCollisionAPI"]
+                        prepend apiSchemas = ["PhysicsCollisionAPI"]
                     )
                     {
                         float3[] extent = [(-0.05, -0.05, -0.05), (0.05, 0.05, 0.05)]
@@ -2032,20 +1569,15 @@ def Xform "omni_bot" (
                     }
                 }
 
-                def Xform "support_bx" (
-                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                )
+                def Xform "support_bx"
                 {
-                    float3 physics:diagonalInertia = (0.0001, 0.0001, 0.0001)
-                    float physics:mass = 0.1
-                    quatf physics:principalAxes = (1, 0, 0, 0)
                     quatf xformOp:orient = (1, 0, 0, 0)
                     float3 xformOp:scale = (1, 1, 1)
                     double3 xformOp:translate = (-0.245, 0, 0)
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
                     def Sphere "sphere" (
-                        apiSchemas = ["PhysicsCollisionAPI", "NewtonCollisionAPI"]
+                        prepend apiSchemas = ["PhysicsCollisionAPI"]
                     )
                     {
                         float3[] extent = [(-0.05, -0.05, -0.05), (0.05, 0.05, 0.05)]
@@ -2058,20 +1590,15 @@ def Xform "omni_bot" (
                     }
                 }
 
-                def Xform "support_ly" (
-                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                )
+                def Xform "support_ly"
                 {
-                    float3 physics:diagonalInertia = (0.0001, 0.0001, 0.0001)
-                    float physics:mass = 0.1
-                    quatf physics:principalAxes = (1, 0, 0, 0)
                     quatf xformOp:orient = (1, 0, 0, 0)
                     float3 xformOp:scale = (1, 1, 1)
                     double3 xformOp:translate = (0, 0.245, 0)
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
                     def Sphere "sphere" (
-                        apiSchemas = ["PhysicsCollisionAPI", "NewtonCollisionAPI"]
+                        prepend apiSchemas = ["PhysicsCollisionAPI"]
                     )
                     {
                         float3[] extent = [(-0.05, -0.05, -0.05), (0.05, 0.05, 0.05)]
@@ -2084,20 +1611,15 @@ def Xform "omni_bot" (
                     }
                 }
 
-                def Xform "support_ry" (
-                    apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                )
+                def Xform "support_ry"
                 {
-                    float3 physics:diagonalInertia = (0.0001, 0.0001, 0.0001)
-                    float physics:mass = 0.1
-                    quatf physics:principalAxes = (1, 0, 0, 0)
                     quatf xformOp:orient = (1, 0, 0, 0)
                     float3 xformOp:scale = (1, 1, 1)
                     double3 xformOp:translate = (0, -0.245, 0)
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
                     def Sphere "sphere" (
-                        apiSchemas = ["PhysicsCollisionAPI", "NewtonCollisionAPI"]
+                        prepend apiSchemas = ["PhysicsCollisionAPI"]
                     )
                     {
                         float3[] extent = [(-0.05, -0.05, -0.05), (0.05, 0.05, 0.05)]
@@ -2117,14 +1639,8 @@ def Xform "omni_bot" (
                     double3 xformOp:translate = (0.25, 0, 0.3)
                     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
-                    def Xform "base_camera_link" (
-                        apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-                    )
+                    def Xform "base_camera_link"
                     {
-                        point3f physics:centerOfMass = (0, 0, 0)
-                        float3 physics:diagonalInertia = (0.00049894, 0.003879257, 0.003881243)
-                        float physics:mass = 0.072
-                        quatf physics:principalAxes = (-0.5, 0.5, 0.5, 0.5)
                         quatf xformOp:orient = (1, 0, 0, 0)
                         float3 xformOp:scale = (1, 1, 1)
                         double3 xformOp:translate = (0.010600000000000002, 0.0175, 0.0125)
@@ -2139,7 +1655,7 @@ def Xform "omni_bot" (
                         }
 
                         def Cube "box" (
-                            apiSchemas = ["PhysicsCollisionAPI", "NewtonCollisionAPI"]
+                            prepend apiSchemas = ["PhysicsCollisionAPI"]
                         )
                         {
                             float3[] extent = [(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)]
@@ -2222,1248 +1738,6 @@ def Xform "omni_bot" (
 
     def Scope "Physics"
     {
-        def PhysicsFixedJoint "base_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link>
-            point3f physics:localPos0 = (0, 0, 0.05)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "base_link_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            point3f physics:localPos0 = (0.245, 0, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.7073883, 0, -0.7068252, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_1_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_1_rim_a_link>
-            point3f physics:localPos0 = (0.039551, 0, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.70710677, -5.551115e-17, 0, 0.70710677)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_2_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_2_rim_a_link>
-            point3f physics:localPos0 = (0.030181, -0.025561, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9063078, 2.7755576e-17, -1.110223e-16, 0.4226182)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_3_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_3_rim_a_link>
-            point3f physics:localPos0 = (0.00669, -0.038981, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9961947, 0, 0, 0.08715549)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_4_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_4_rim_a_link>
-            point3f physics:localPos0 = (-0.019932, -0.034161, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9659258, -2.7755576e-17, -2.7755576e-16, -0.2588191)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_5_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_5_rim_a_link>
-            point3f physics:localPos0 = (-0.037227, -0.013357, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.81915206, 0, 0, -0.5735764)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_6_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_6_rim_a_link>
-            point3f physics:localPos0 = (-0.037104, 0.013697, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.57357645, -1.110223e-16, 0, 0.81915206)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_7_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_7_rim_a_link>
-            point3f physics:localPos0 = (-0.019619, 0.034342, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.25881904, -5.551115e-17, -5.551115e-17, 0.9659258)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_8_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_8_rim_a_link>
-            point3f physics:localPos0 = (0.007046, 0.038918, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.087155744, 1.6653345e-16, -1.7347235e-16, 0.9961947)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_9_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_9_rim_a_link>
-            point3f physics:localPos0 = (0.030414, 0.025284, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.42261827, 1.110223e-16, -2.7755576e-17, 0.90630776)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_10_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_10_rim_a_link>
-            point3f physics:localPos0 = (0.037227, -0.013357, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.81915206, 0, 0, 0.5735764)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_11_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_11_rim_a_link>
-            point3f physics:localPos0 = (0.019932, -0.034161, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9659258, 2.7755576e-17, -2.7755576e-16, 0.2588191)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_12_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_12_rim_a_link>
-            point3f physics:localPos0 = (-0.00669, -0.038981, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9961947, 0, 0, -0.08715549)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_13_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_13_rim_a_link>
-            point3f physics:localPos0 = (-0.030181, -0.025561, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9063078, 5.551115e-17, -1.110223e-16, -0.4226182)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_14_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_14_rim_a_link>
-            point3f physics:localPos0 = (-0.039551, 0, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.70710677, 1.110223e-16, 1.6653345e-16, 0.70710677)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_15_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_15_rim_a_link>
-            point3f physics:localPos0 = (-0.030414, 0.025284, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.42261827, 1.110223e-16, 2.7755576e-17, 0.90630776)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_16_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_16_rim_a_link>
-            point3f physics:localPos0 = (-0.007046, 0.038918, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.087155744, 1.6653345e-16, 6.2450045e-17, 0.9961947)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_17_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_17_rim_a_link>
-            point3f physics:localPos0 = (0.019619, 0.034342, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.25881904, -2.220446e-16, -1.6653345e-16, 0.9659258)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_18_rim_a_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_a_link/roller_18_rim_a_link>
-            point3f physics:localPos0 = (0.037104, 0.013697, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.57357645, -5.551115e-17, 5.551115e-17, 0.81915206)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "base_link_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            point3f physics:localPos0 = (0, 0.245, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.50039816, 0.49999985, 0.49999985, -0.49960184)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_1_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_1_rim_b_link>
-            point3f physics:localPos0 = (0.039551, 2.7105054e-20, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.70710677, 1.0608918e-16, -5.551115e-17, 0.70710677)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_2_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_2_rim_b_link>
-            point3f physics:localPos0 = (0.030181, -0.025561, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9063078, 8.326673e-17, 0, 0.4226182)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_3_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_3_rim_b_link>
-            point3f physics:localPos0 = (0.00669, -0.038981, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9961947, -1.3877788e-16, 5.551115e-17, 0.08715549)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_4_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_4_rim_b_link>
-            point3f physics:localPos0 = (-0.019932, -0.034161, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9659258, 5.551115e-17, 5.551115e-17, -0.2588191)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_5_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_5_rim_b_link>
-            point3f physics:localPos0 = (-0.037227, -0.013357, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.81915206, 0, 5.551115e-17, -0.5735764)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_6_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_6_rim_b_link>
-            point3f physics:localPos0 = (-0.037104, 0.013697, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.57357645, -6.2450045e-17, 0, 0.81915206)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_7_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_7_rim_b_link>
-            point3f physics:localPos0 = (-0.019619, 0.034342, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.25881904, -8.326673e-17, -5.551115e-17, 0.9659258)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_8_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_8_rim_b_link>
-            point3f physics:localPos0 = (0.007046, 0.038918, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.087155744, -2.7755576e-17, -2.220446e-16, 0.9961947)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_9_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_9_rim_b_link>
-            point3f physics:localPos0 = (0.030414, 0.025284, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.42261827, -1.110223e-16, -1.6653345e-16, 0.90630776)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_10_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_10_rim_b_link>
-            point3f physics:localPos0 = (0.037227, -0.013357, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.81915206, 7.632783e-17, 5.551115e-17, 0.5735764)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_11_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_11_rim_b_link>
-            point3f physics:localPos0 = (0.019932, -0.034161, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9659258, 1.110223e-16, 0, 0.2588191)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_12_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_12_rim_b_link>
-            point3f physics:localPos0 = (-0.00669, -0.038981, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9961947, -5.551115e-17, 1.3877788e-16, -0.08715549)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_13_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_13_rim_b_link>
-            point3f physics:localPos0 = (-0.030181, -0.025561, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9063078, 6.938894e-17, -2.7755576e-17, -0.4226182)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_14_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_14_rim_b_link>
-            point3f physics:localPos0 = (-0.039551, 0, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.70710677, 1.5986561e-16, -1.6653345e-16, 0.70710677)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_15_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_15_rim_b_link>
-            point3f physics:localPos0 = (-0.030414, 0.025284, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.42261827, 9.7144515e-17, -2.220446e-16, 0.90630776)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_16_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_16_rim_b_link>
-            point3f physics:localPos0 = (-0.007046, 0.038918, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.087155744, 8.326673e-17, -5.551115e-17, 0.9961947)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_17_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_17_rim_b_link>
-            point3f physics:localPos0 = (0.019619, 0.034342, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.25881904, 1.6653345e-16, 1.110223e-16, 0.9659258)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_18_rim_b_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_b_link/roller_18_rim_b_link>
-            point3f physics:localPos0 = (0.037104, 0.013697, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.57357645, -8.326673e-17, -1.6653345e-16, 0.81915206)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "base_link_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            point3f physics:localPos0 = (-0.245, 0, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.7073883, 0, 0.7068252, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_1_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_1_rim_c_link>
-            point3f physics:localPos0 = (0.039551, 0, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.70710677, 5.551115e-17, 0, 0.70710677)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_2_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_2_rim_c_link>
-            point3f physics:localPos0 = (0.030181, -0.025561, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9063078, 5.551115e-17, 1.110223e-16, 0.4226182)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_3_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_3_rim_c_link>
-            point3f physics:localPos0 = (0.00669, -0.038981, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9961947, 0, 0, 0.08715549)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_4_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_4_rim_c_link>
-            point3f physics:localPos0 = (-0.019932, -0.034161, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9659258, 2.7755576e-17, 2.7755576e-16, -0.2588191)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_5_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_5_rim_c_link>
-            point3f physics:localPos0 = (-0.037227, -0.013357, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.81915206, 0, 0, -0.5735764)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_6_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_6_rim_c_link>
-            point3f physics:localPos0 = (-0.037104, 0.013697, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.57357645, 1.110223e-16, 0, 0.81915206)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_7_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_7_rim_c_link>
-            point3f physics:localPos0 = (-0.019619, 0.034342, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.25881904, 5.551115e-17, 5.551115e-17, 0.9659258)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_8_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_8_rim_c_link>
-            point3f physics:localPos0 = (0.007046, 0.038918, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.087155744, -1.6653345e-16, 1.7347235e-16, 0.9961947)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_9_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_9_rim_c_link>
-            point3f physics:localPos0 = (0.030414, 0.025284, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.42261827, -1.110223e-16, 2.7755576e-17, 0.90630776)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_10_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_10_rim_c_link>
-            point3f physics:localPos0 = (0.037227, -0.013357, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.81915206, 0, 0, 0.5735764)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_11_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_11_rim_c_link>
-            point3f physics:localPos0 = (0.019932, -0.034161, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9659258, -2.7755576e-17, 2.7755576e-16, 0.2588191)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_12_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_12_rim_c_link>
-            point3f physics:localPos0 = (-0.00669, -0.038981, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9961947, 0, 0, -0.08715549)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_13_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_13_rim_c_link>
-            point3f physics:localPos0 = (-0.030181, -0.025561, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9063078, 2.7755576e-17, 1.110223e-16, -0.4226182)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_14_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_14_rim_c_link>
-            point3f physics:localPos0 = (-0.039551, 0, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.70710677, -1.110223e-16, -1.6653345e-16, 0.70710677)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_15_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_15_rim_c_link>
-            point3f physics:localPos0 = (-0.030414, 0.025284, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.42261827, -1.110223e-16, -2.7755576e-17, 0.90630776)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_16_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_16_rim_c_link>
-            point3f physics:localPos0 = (-0.007046, 0.038918, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.087155744, -1.6653345e-16, -6.2450045e-17, 0.9961947)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_17_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_17_rim_c_link>
-            point3f physics:localPos0 = (0.019619, 0.034342, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.25881904, 2.220446e-16, 1.6653345e-16, 0.9659258)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_18_rim_c_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_c_link/roller_18_rim_c_link>
-            point3f physics:localPos0 = (0.037104, 0.013697, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.57357645, 5.551115e-17, -5.551115e-17, 0.81915206)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "base_link_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            point3f physics:localPos0 = (0, -0.245, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.50039816, -0.49999985, -0.49999985, -0.49960184)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_1_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_1_rim_d_link>
-            point3f physics:localPos0 = (0.039551, -2.7105054e-20, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.70710677, 5.04154e-18, 5.551115e-17, 0.70710677)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_2_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_2_rim_d_link>
-            point3f physics:localPos0 = (0.030181, -0.025561, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9063078, 6.938894e-17, 2.7755576e-17, 0.4226182)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_3_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_3_rim_d_link>
-            point3f physics:localPos0 = (0.00669, -0.038981, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9961947, 1.9428903e-16, -2.7755576e-17, 0.08715549)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_4_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_4_rim_d_link>
-            point3f physics:localPos0 = (-0.019932, -0.034161, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.9659258, 0, -1.6653345e-16, 0.2588191)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_5_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_5_rim_d_link>
-            point3f physics:localPos0 = (-0.037227, -0.013357, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.81915206, 4.1633363e-17, -5.551115e-17, 0.5735764)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_6_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_6_rim_d_link>
-            point3f physics:localPos0 = (-0.037104, 0.013697, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.57357645, 7.632783e-17, -1.6653345e-16, 0.81915206)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_7_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_7_rim_d_link>
-            point3f physics:localPos0 = (-0.019619, 0.034342, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.25881904, 1.3877788e-16, 0, 0.9659258)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_8_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_8_rim_d_link>
-            point3f physics:localPos0 = (0.007046, 0.038918, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.087155744, -2.4980018e-16, -2.220446e-16, -0.9961947)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_9_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_9_rim_d_link>
-            point3f physics:localPos0 = (0.030414, 0.025284, 0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.42261827, 2.0816682e-16, 1.110223e-16, -0.90630776)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_10_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_10_rim_d_link>
-            point3f physics:localPos0 = (0.037227, -0.013357, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.81915206, 3.469447e-17, 0, 0.5735764)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_11_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_11_rim_d_link>
-            point3f physics:localPos0 = (0.019932, -0.034161, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.9659258, -5.551115e-17, 2.7755576e-17, 0.2588191)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_12_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_12_rim_d_link>
-            point3f physics:localPos0 = (-0.00669, -0.038981, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.9961947, -1.9428903e-16, -2.7755576e-17, 0.08715549)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_13_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_13_rim_d_link>
-            point3f physics:localPos0 = (-0.030181, -0.025561, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.9063078, 1.3877788e-17, -1.9428903e-16, 0.4226182)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_14_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_14_rim_d_link>
-            point3f physics:localPos0 = (-0.039551, -2.7105054e-20, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.70710677, -1.5986561e-16, 5.551115e-17, 0.70710677)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_15_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_15_rim_d_link>
-            point3f physics:localPos0 = (-0.030414, 0.025284, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.42261827, -1.8041124e-16, -5.551115e-17, 0.90630776)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_16_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_16_rim_d_link>
-            point3f physics:localPos0 = (-0.007046, 0.038918, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.087155744, -2.7755576e-17, -1.110223e-16, 0.9961947)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_17_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_17_rim_d_link>
-            point3f physics:localPos0 = (0.019619, 0.034342, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.25881904, 1.3877788e-16, 2.7755576e-16, -0.9659258)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "roller_18_rim_d_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/rim_d_link/roller_18_rim_d_link>
-            point3f physics:localPos0 = (0.037104, 0.013697, -0.01)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.57357645, -1.9428903e-16, -1.110223e-16, -0.81915206)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "support_fx_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/support_fx>
-            point3f physics:localPos0 = (0.245, 0, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "support_bx_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/support_bx>
-            point3f physics:localPos0 = (-0.245, 0, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "support_ly_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/support_ly>
-            point3f physics:localPos0 = (0, 0.245, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "support_ry_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/support_ry>
-            point3f physics:localPos0 = (0, -0.245, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "base_link_lidar_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/lidar_link>
-            point3f physics:localPos0 = (0, 0, 0.2152)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "base_camera_link_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/base_camera_bottom_screw_frame>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/base_camera_bottom_screw_frame/base_camera_link>
-            point3f physics:localPos0 = (0.0106, 0.0175, 0.0125)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsRevoluteJoint "joint1" (
-            apiSchemas = ["PhysxJointAPI", "PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
-        )
-        {
-            float drive:angular:physics:damping = 1
-            float drive:angular:physics:maxForce = 50
-            custom float mjc:frictionloss = 1
-            uniform token physics:axis = "Z"
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1>
-            point3f physics:localPos0 = (0, 0, 0.2435)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-            float physics:lowerLimit = -168.2
-            float physics:upperLimit = 168.2
-            float physxJoint:jointFriction = 1
-            float physxJoint:maxJointVelocity = 179.90875
-            custom float urdf:dynamics:damping = 1
-            custom float urdf:dynamics:friction = 1
-            custom float urdf:limit:effort = 50
-            custom float urdf:limit:velocity = 3.14
-        }
-
-        def PhysicsRevoluteJoint "joint2" (
-            apiSchemas = ["PhysxJointAPI", "PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
-        )
-        {
-            float drive:angular:physics:damping = 1
-            float drive:angular:physics:maxForce = 50
-            custom float mjc:frictionloss = 1
-            uniform token physics:axis = "Z"
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2>
-            point3f physics:localPos0 = (0, 0, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.5000037, -0.49999815, -0.50000185, -0.49999633)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-            float physics:lowerLimit = -139.99977
-            float physics:upperLimit = 139.99977
-            float physxJoint:jointFriction = 1
-            float physxJoint:maxJointVelocity = 179.90875
-            custom float urdf:dynamics:damping = 1
-            custom float urdf:dynamics:friction = 1
-            custom float urdf:limit:effort = 50
-            custom float urdf:limit:velocity = 3.14
-        }
-
-        def PhysicsRevoluteJoint "joint3" (
-            apiSchemas = ["PhysxJointAPI", "PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
-        )
-        {
-            float drive:angular:physics:damping = 1
-            float drive:angular:physics:maxForce = 32
-            custom float mjc:frictionloss = 1
-            uniform token physics:axis = "Z"
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3>
-            point3f physics:localPos0 = (0.2002, -1.3877788e-17, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.0000025973434, 0.70710546, 0.7071081, 0.000002597353)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-            float physics:lowerLimit = -3.5000272
-            float physics:upperLimit = 168.2
-            float physxJoint:jointFriction = 1
-            float physxJoint:maxJointVelocity = 179.90875
-            custom float urdf:dynamics:damping = 1
-            custom float urdf:dynamics:friction = 1
-            custom float urdf:limit:effort = 32
-            custom float urdf:limit:velocity = 3.14
-        }
-
-        def PhysicsRevoluteJoint "joint4" (
-            apiSchemas = ["PhysxJointAPI", "PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
-        )
-        {
-            float drive:angular:physics:damping = 1
-            float drive:angular:physics:maxForce = 32
-            custom float mjc:frictionloss = 1
-            uniform token physics:axis = "Z"
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4>
-            point3f physics:localPos0 = (0.087, -0.22761, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0.70710546, 0.7071081, -6.273041e-17, 2.5952242e-17)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-            float physics:lowerLimit = -168.2
-            float physics:upperLimit = 168.2
-            float physxJoint:jointFriction = 1
-            float physxJoint:maxJointVelocity = 179.90875
-            custom float urdf:dynamics:damping = 1
-            custom float urdf:dynamics:friction = 1
-            custom float urdf:limit:effort = 32
-            custom float urdf:limit:velocity = 3.14
-        }
-
-        def PhysicsRevoluteJoint "joint5" (
-            apiSchemas = ["PhysxJointAPI", "PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
-        )
-        {
-            float drive:angular:physics:damping = 1
-            float drive:angular:physics:maxForce = 32
-            custom float mjc:frictionloss = 1
-            uniform token physics:axis = "Z"
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5>
-            point3f physics:localPos0 = (-2.7755576e-17, -8.4703295e-22, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.70710546, -0.7071081, 2.3117223e-17, 2.5585477e-17)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-            float physics:lowerLimit = -113.99953
-            float physics:upperLimit = 113.99953
-            float physxJoint:jointFriction = 1
-            float physxJoint:maxJointVelocity = 179.90875
-            custom float urdf:dynamics:damping = 1
-            custom float urdf:dynamics:friction = 1
-            custom float urdf:limit:effort = 32
-            custom float urdf:limit:velocity = 3.14
-        }
-
-        def PhysicsRevoluteJoint "joint6" (
-            apiSchemas = ["PhysxJointAPI", "PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
-        )
-        {
-            float drive:angular:physics:damping = 1
-            float drive:angular:physics:maxForce = 20
-            custom float mjc:frictionloss = 1
-            uniform token physics:axis = "Z"
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6>
-            point3f physics:localPos0 = (2.7755576e-17, 0.0625, 8.4703295e-22)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (-0.70710546, 0.7071081, -2.8023238e-17, -2.0678192e-17)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-            float physics:lowerLimit = -168.2
-            float physics:upperLimit = 168.2
-            float physxJoint:jointFriction = 1
-            float physxJoint:maxJointVelocity = 179.90875
-            custom float urdf:dynamics:damping = 1
-            custom float urdf:dynamics:friction = 1
-            custom float urdf:limit:effort = 20
-            custom float urdf:limit:velocity = 3.14
-        }
-
-        def PhysicsFixedJoint "joint_eef"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef>
-            point3f physics:localPos0 = (0, -8.4703295e-22, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "gripper_fix"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link>
-            point3f physics:localPos0 = (0, -8.4703295e-22, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsPrismaticJoint "finger_joint1" (
-            apiSchemas = ["PhysxJointAPI", "PhysicsDriveAPI:linear", "PhysicsJointStateAPI:linear"]
-        )
-        {
-            float drive:linear:physics:maxForce = 5
-            uniform token physics:axis = "Y"
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link/uflite_finger1>
-            point3f physics:localPos0 = (2.7755576e-17, -8.4703295e-22, 0.0543)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-            float physics:lowerLimit = 0
-            float physics:upperLimit = 0.0089
-            float physxJoint:maxJointVelocity = 114.59156
-            custom float urdf:limit:effort = 5
-            custom float urdf:limit:velocity = 2
-        }
-
-        def PhysicsPrismaticJoint "finger_joint2" (
-            apiSchemas = ["NewtonMimicAPI", "PhysxJointAPI", "PhysicsDriveAPI:linear", "PhysicsJointStateAPI:linear"]
-        )
-        {
-            float drive:linear:physics:maxForce = 5
-            rel newton:mimicJoint = </omni_bot/Physics/finger_joint1>
-            uniform token physics:axis = "Y"
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link/uflite_finger2>
-            point3f physics:localPos0 = (2.7755576e-17, -8.4703295e-22, 0.0543)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (0, -1, 0, 0)
-            quatf physics:localRot1 = (0, -1, 0, 0)
-            float physics:lowerLimit = 0
-            float physics:upperLimit = 0.0089
-            float physxJoint:maxJointVelocity = 114.59156
-            custom float urdf:limit:effort = 5
-            custom float urdf:limit:velocity = 2
-        }
-
-        def PhysicsFixedJoint "arm_base_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base>
-            point3f physics:localPos0 = (0.11, 0, 0.28)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect0_1_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/detect0_1>
-            point3f physics:localPos0 = (0, 0, 0.15)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect0_2_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/detect0_2>
-            point3f physics:localPos0 = (0, 0, 0.05)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect1_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/detect1>
-            point3f physics:localPos0 = (0, 0, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect2_1_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/detect2_1>
-            point3f physics:localPos0 = (0.1, -1.3877788e-17, 0.1)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect2_2_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/detect2_2>
-            point3f physics:localPos0 = (0, -1.3877788e-17, 0.1)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect2_3_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/detect2_3>
-            point3f physics:localPos0 = (0.2, -1.3877788e-17, 0.1)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect3_1_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/detect3_1>
-            point3f physics:localPos0 = (0, -1.110223e-16, -8.4703295e-22)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect3_2_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/detect3_2>
-            point3f physics:localPos0 = (0.08, 0, 0)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect4_1_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/detect4_1>
-            point3f physics:localPos0 = (-2.7755576e-17, -8.4703295e-22, -0.1)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect4_2_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/detect4_2>
-            point3f physics:localPos0 = (-2.7755576e-17, -0.05, -0.05)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect5_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/detect5>
-            point3f physics:localPos0 = (5.551115e-17, -1.110223e-16, 4.2351647e-22)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def PhysicsFixedJoint "detect6_joint"
-        {
-            rel physics:body0 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6>
-            rel physics:body1 = </omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/detect6>
-            point3f physics:localPos0 = (2.7755576e-17, -8.4703295e-22, 0.025)
-            point3f physics:localPos1 = (0, 0, 0)
-            quatf physics:localRot0 = (1, 0, 0, 0)
-            quatf physics:localRot1 = (1, 0, 0, 0)
-        }
-
-        def MjcActuator "joint1_actuator"
-        {
-            uniform double[] mjc:biasPrm = [0, 0, -1, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:biasType = "affine"
-            uniform double mjc:forceRange:max = 50
-            uniform double mjc:forceRange:min = -50
-            uniform double[] mjc:gainPrm = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:gainType = "fixed"
-            rel mjc:target = </omni_bot/Physics/joint1>
-        }
-
-        def MjcActuator "joint2_actuator"
-        {
-            uniform double[] mjc:biasPrm = [0, 0, -1, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:biasType = "affine"
-            uniform double mjc:forceRange:max = 50
-            uniform double mjc:forceRange:min = -50
-            uniform double[] mjc:gainPrm = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:gainType = "fixed"
-            rel mjc:target = </omni_bot/Physics/joint2>
-        }
-
-        def MjcActuator "joint3_actuator"
-        {
-            uniform double[] mjc:biasPrm = [0, 0, -1, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:biasType = "affine"
-            uniform double mjc:forceRange:max = 32
-            uniform double mjc:forceRange:min = -32
-            uniform double[] mjc:gainPrm = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:gainType = "fixed"
-            rel mjc:target = </omni_bot/Physics/joint3>
-        }
-
-        def MjcActuator "joint4_actuator"
-        {
-            uniform double[] mjc:biasPrm = [0, 0, -1, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:biasType = "affine"
-            uniform double mjc:forceRange:max = 32
-            uniform double mjc:forceRange:min = -32
-            uniform double[] mjc:gainPrm = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:gainType = "fixed"
-            rel mjc:target = </omni_bot/Physics/joint4>
-        }
-
-        def MjcActuator "joint5_actuator"
-        {
-            uniform double[] mjc:biasPrm = [0, 0, -1, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:biasType = "affine"
-            uniform double mjc:forceRange:max = 32
-            uniform double mjc:forceRange:min = -32
-            uniform double[] mjc:gainPrm = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:gainType = "fixed"
-            rel mjc:target = </omni_bot/Physics/joint5>
-        }
-
-        def MjcActuator "joint6_actuator"
-        {
-            uniform double[] mjc:biasPrm = [0, 0, -1, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:biasType = "affine"
-            uniform double mjc:forceRange:max = 20
-            uniform double mjc:forceRange:min = -20
-            uniform double[] mjc:gainPrm = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-            uniform token mjc:gainType = "fixed"
-            rel mjc:target = </omni_bot/Physics/joint6>
-        }
-
-        def MjcActuator "finger_joint1_actuator"
-        {
-            uniform double mjc:forceRange:max = 5
-            uniform double mjc:forceRange:min = -5
-            rel mjc:target = </omni_bot/Physics/finger_joint1>
-        }
-
-        def MjcActuator "finger_joint2_actuator"
-        {
-            uniform double mjc:forceRange:max = 5
-            uniform double mjc:forceRange:min = -5
-            rel mjc:target = </omni_bot/Physics/finger_joint2>
-        }
     }
 
     def Scope "VisualMaterials"
