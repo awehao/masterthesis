@@ -295,7 +295,7 @@ def expand_pair_rows(specs, exempt_specs, obstacle_names):
 
 
 def forced_pair_rows(W, pts_local, obstacle, obs_idx, li, rho, status, age,
-                     occ_of, max_range, max_rows=None, vobs_of=None,
+                     occ_of, max_range, max_rows=None, vobs_batch=None,
                      d_lb=None, d_col=None, v_col=None):
     """對**指定的 (連桿, 障礙物) 配對**單獨算距離並產生列。
 
@@ -316,13 +316,16 @@ def forced_pair_rows(W, pts_local, obstacle, obs_idx, li, rho, status, age,
     sel = sel[np.argsort(d[sel])]
     if max_rows:
         sel = sel[:max_rows]
+    # **批次取速度**：逐列呼叫會對同一障礙物重複查 twist 並逐點算速度。
+    if vobs_batch is None:
+        _V = np.zeros((len(sel), 3))
+        _vst = VOBS_STATIC
+    else:
+        _V, _vst = vobs_batch(obstacle, W[sel] + v[sel])
     out = []
-    for k in sel:
+    for _i, k in enumerate(sel):
         n_hat = v[k] / max(abs(float(d[k])), 1e-9)
-        if vobs_of is None:
-            vo, vst = np.zeros(3), VOBS_STATIC
-        else:
-            vo, vst = vobs_of(obstacle, W[k] + v[k])
+        vo, vst = _V[_i], _vst
         out.append(list(W[k]) + list(n_hat)
                    + [float(d[k]), float(status), age, float(occ_of(W[k], v[k])),
                       float(li)] + list(pts_local[k]) + [float(rho),
@@ -456,6 +459,8 @@ class ArmLinkDistance(Node):
                 'arm_link_distance: certified sampling -- '
                 + ', '.join(f'{k} {len(v.points)}pt rho {v.rho*1000:.1f}mm'
                             for k, v in self.samples.items()))
+        self._prof = ({} if os.environ.get('COMAN_DIST_PROF') == '1' else None)
+        self._prof_n = 0
         self._stamp: dict[str, float] = {}
         self._pose_prev: dict[str, tuple] = {}
         self._twist: dict[str, tuple] = {}
@@ -557,6 +562,27 @@ class ArmLinkDistance(Node):
                     o.T_world_link = T
         return cb
 
+    def _vobs_batch(self, o, pts):
+        """**一次算一組**表面點的速度與可用性（與 _vobs_for 同一語意）。
+
+        逐列呼叫 _vobs_for 會對同一個障礙物重複做 twist 查詢與逾時判斷，
+        並對每個點各做一次 surface_point_velocity（實測約 900 次／週期）。
+        這裡把查詢提到迴圈外、速度一次算完；**數值與逐列版相同**。
+        """
+        pts = np.atleast_2d(np.asarray(pts, float))
+        if not o.model:
+            return np.zeros((len(pts), 3)), VOBS_STATIC
+        rec = self._twist.get(o.model)
+        if rec is None or rec[0] is None:
+            return np.zeros((len(pts), 3)), VOBS_UNKNOWN
+        tw, t_tw = rec
+        if self.get_clock().now().nanoseconds * 1e-9 - t_tw > self.vobs_timeout:
+            return np.zeros((len(pts), 3)), VOBS_UNKNOWN
+        V = surface_point_velocity(tw, o.T_world_link[:3, 3], pts)
+        if V is None or not np.isfinite(V).all():
+            return np.zeros((len(pts), 3)), VOBS_UNKNOWN
+        return V, VOBS_OK
+
     def _vobs_for(self, o, p_surf):
         """障礙物表面點的速度與可用性。
 
@@ -614,6 +640,8 @@ class ArmLinkDistance(Node):
 
     def _tick(self) -> None:
         _c0 = time.perf_counter()
+        # **分段計時**：COMAN_DIST_PROF=1 才啟用（預設關閉，零行為改變）。
+        # 離線重建量到 20 ms、線上卻是 98 ms，差距必須由**真正的 _tick**回答。
         now = self.get_clock().now().nanoseconds * 1e-9
         T_rl = self._tf(self.report_frame, self.lidar_frame)
         rows = []
@@ -631,7 +659,11 @@ class ArmLinkDistance(Node):
             blank = list(rows[0])
             blank[7] = STATUS_OVERFLOW
             rows = rows + [blank]
+        _t0 = time.perf_counter()
         self._publish(rows)
+        if self._prof is not None:
+            self._prof['f_publish'] = (self._prof.get('f_publish', 0.0)
+                                       + time.perf_counter() - _t0)
         d = Float32MultiArray()
         #  0 n_points 1 ok 2 occluded 3 stale 4 nodata 5 worst_age 6 min_d
         #  7 rows dropped by max_rows_per_link this cycle
@@ -663,6 +695,19 @@ class ArmLinkDistance(Node):
             raise RuntimeError(f'diag 欄位數 {len(d.data)} != '
                                f'{len(self.diag_field_names)}（名單未同步）')
         self.diag.publish(d)
+        if self._prof is not None:
+            self._prof_n += 1
+            self._prof['z_total'] = (self._prof.get('z_total', 0.0)
+                                     + self._cycle_ms / 1e3)
+            if self._prof_n % 20 == 0:
+                _n = self._prof_n
+                _tot = self._prof.get('z_total', 0.0)
+                _parts = ' '.join(
+                    f'{k}={self._prof[k]/_n*1e3:.2f}'
+                    for k in sorted(self._prof) if k != 'z_total')
+                self.get_logger().warn(
+                    f'[PROF n={_n}] total={_tot/_n*1e3:.2f}ms  {_parts}  '
+                    f'rows={len(rows)}')
 
 
     def _rows_points(self, now, T_rl):
@@ -757,14 +802,23 @@ class ArmLinkDistance(Node):
         _by = {o.name: o for o in live}
 
         def _vo_row(obs_name, p_surf):
+            _t0 = time.perf_counter()
             o = _by.get(obs_name)
             if o is None:
                 return (0.0, 0.0, 0.0, float(VOBS_UNKNOWN))
             vo, vst = self._vobs_for(o, p_surf)
+            if self._prof is not None:
+                self._prof['d_vobs_per_row'] = (
+                    self._prof.get('d_vobs_per_row', 0.0)
+                    + time.perf_counter() - _t0)
             return (float(vo[0]), float(vo[1]), float(vo[2]), float(vst))
 
         for li, name in enumerate(self.link_names):
+            _t0 = time.perf_counter()
             T = self._tf(self.report_frame, name)
+            if self._prof is not None:
+                self._prof['a_tf_lookup'] = (self._prof.get('a_tf_lookup', 0.0)
+                                             + time.perf_counter() - _t0)
             S = self.samples[name]
             blank = [float(li), 0.0, 0.0, 0.0, float(S.rho), -1.0,
                      0.0, 0.0, 0.0, float(VOBS_STATIC), 0.0, 0.0]
@@ -772,9 +826,13 @@ class ArmLinkDistance(Node):
                 rows.append([0.0] * 6 + [0.0, STATUS_NODATA, -1.0, 1.0] + blank)
                 n_nodata += 1
                 continue
+            _t0 = time.perf_counter()
             W = (S.points @ T[:3, :3].T) + T[:3, 3]
             # **一次算完**該連桿對所有障礙物的距離；最近列與必要配對列共用
             Dm, Vm = obstacle_distance_matrix(W, live)
+            if self._prof is not None:
+                self._prof['b_dist_matrix'] = (self._prof.get('b_dist_matrix', 0.0)
+                                               + time.perf_counter() - _t0)
             _jm = np.argmin(Dm, axis=1)
             _ix = np.arange(len(W))
             d, v = Dm[_ix, _jm], Vm[_ix, _jm]
@@ -783,6 +841,8 @@ class ArmLinkDistance(Node):
             # 算好放在 dict，**一般列與必要配對列共用同一份** —— 否則一般列
             # 仍用 d − rho，會把較緊的下界壓過去，等於沒有接上。
             _lb_now = {}
+            # 去重鍵集合：**跨障礙物迴圈保留**（鍵含連桿索引，不會跨連桿相撞）
+            _seen_keys = set()
             for _tl, _tob in self._tight:
                 if _tl != name:
                     continue
@@ -793,9 +853,13 @@ class ArmLinkDistance(Node):
                     continue
                 _tris = (self._tight_tris[name].reshape(-1, 3)
                          @ T[:3, :3].T + T[:3, 3]).reshape(-1, 3, 3)
+                _t0 = time.perf_counter()
                 _r = pair_distance_bound(
                     _tris, _tobj, tol=self._tight_tol,
                     max_tris=self._tight_max_tris, budget_s=self._tight_budget)
+                if self._prof is not None:
+                    self._prof['c_g2_bound'] = (self._prof.get('c_g2_bound', 0.0)
+                                                + time.perf_counter() - _t0)
                 self._tight_stat[f'{name}|{_tob}'] = _r
                 if np.isfinite(_r['lb']):
                     _lb_now[_tob] = float(_r['lb'])
@@ -853,6 +917,10 @@ class ArmLinkDistance(Node):
                             + list(_vo_row(which[k], p_w + v[k]))
                             + ([float(_lb_now[which[k]]), 1.0]
                                if which[k] in _lb_now else [0.0, 0.0]))
+                _seen_keys.add((li, self._obs_index.get(which[k], -1),
+                                round(float(S.points[k][0]), 12),
+                                round(float(S.points[k][1]), 12),
+                                round(float(S.points[k][2]), 12)))
 
             # **必要配對列**：即使該配對不是最近障礙物也照樣產生
             def _occ_of(p_w, vk):
@@ -870,23 +938,35 @@ class ArmLinkDistance(Node):
                 # 該列走既有 d − rho，**不沿用上一筆**。
                 _dlb = _lb_now.get(_obn)
                 _lj = [i for i, o in enumerate(live) if o.name == _obn]
+                _t0 = time.perf_counter()
                 _extra = forced_pair_rows(
                     W, S.points, _ob, _oi, li, S.rho, status, age, _occ_of,
                     self.max_range, self.max_rows_per_link,
-                    vobs_of=self._vobs_for, d_lb=_dlb,
+                    vobs_batch=self._vobs_batch, d_lb=_dlb,
                     d_col=(Dm[:, _lj[0]] if _lj else None),
                     v_col=(Vm[:, _lj[0]] if _lj else None))
                 # **只移除完全重複的列**：同一 (連桿, 障礙物, 取樣點)
                 # 已由一般最近列產生過。不因法向相近或距離較遠而刪。
-                _seen = {(int(r[10]), int(r[15]), round(float(r[11]), 12),
-                          round(float(r[12]), 12), round(float(r[13]), 12))
-                         for r in rows}
-                _kept = [r for r in _extra
-                         if (int(r[10]), int(r[15]), round(float(r[11]), 12),
-                             round(float(r[12]), 12),
-                             round(float(r[13]), 12)) not in _seen]
+                #
+                # **增量維護**：這個集合原本在**每個障礙物的迴圈裡**對
+                # `rows` 全部重建一次（6 連桿 × 14 障礙物 = 80 次，每次掃過
+                # 累積到當時的所有列）⇒ O(n²)，實測佔整個 _tick 的 66 %。
+                # 改為跨迴圈保留同一個集合，**輸出完全相同**。
+                _kept = []
+                for _r in _extra:
+                    _key = (int(_r[10]), int(_r[15]),
+                            round(float(_r[11]), 12), round(float(_r[12]), 12),
+                            round(float(_r[13]), 12))
+                    if _key in _seen_keys:
+                        continue
+                    _seen_keys.add(_key)
+                    _kept.append(_r)
                 self._dup_dropped = (getattr(self, '_dup_dropped', 0)
                                      + len(_extra) - len(_kept))
+                if self._prof is not None:
+                    self._prof['e_forced_dedup'] = (
+                        self._prof.get('e_forced_dedup', 0.0)
+                        + time.perf_counter() - _t0)
                 _extra = _kept
                 rows.extend(_extra)
                 n_ok += len(_extra) if status == STATUS_OK else 0

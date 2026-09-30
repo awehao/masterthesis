@@ -96,7 +96,7 @@ def main() -> int:
     rows = forced_pair_rows(W, S.points, bar, names.index(OBST), li=0,
                             rho=S.rho, status=STATUS_OK, age=0.0,
                             occ_of=lambda p, v: 0.0, max_range=3.0,
-                            vobs_of=None, d_lb=r['lb'])
+                            vobs_batch=None, d_lb=r["lb"])
     check('3 必要配對列帶出下界與有效旗標',
           bool(rows) and abs(rows[0][20] - r['lb']) < 1e-12
           and rows[0][21] == 1.0)
