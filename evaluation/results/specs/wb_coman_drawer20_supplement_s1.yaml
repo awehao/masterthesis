@@ -60,6 +60,23 @@ run_history:
   outcome: '**起動前檢查擋下**（sha 不符），未啟動任何節點'
   note: '新的 source 守衛通過；sha 比對正確抓到 F4 對執行端的修改尚未登錄。
     這是一致性檢查正常運作。'
+- run_id: coman_drawer20_retry4
+  outcome: '**命令鏈缺輸入，任務未開始**（不是操作失敗）'
+  detail: evaluation/runs/coman_drawer20_retry4/OUTCOME.md
+  passed: [F1, F2, F3, F4, F5, 'R1.1 十五組兩端載入一致']
+  blocked_by: '執行端不發 /odom 與 odom→base_link TF ⇒ base=False、rows=False'
+  commands_issued: 0
+  thermal: '峰值 86.875 °C @ sim 23.3 s（起 69.9；限 92，餘裕 5.1 °C）——
+    命令鏈整條運作時的負載，明顯高於 retry2 空轉的 79.25 °C'
+  evidence_for_three_questions: 無
+open_gap_G6_odom:
+  id: G8
+  issue: 協同執行端未發布 /odom 與 odom→base_link TF
+  impact: 求解節點 base=False；距離節點 report_frame=odom 查不到 TF ⇒ 距離列全 NODATA
+  reference_impl: isaac_wholebody_sim_e2.py:193-229
+  cautions: ['/odom.twist 以 child_frame_id 的本體座標表達',
+             'odom→base_link 不得重複發，否則 base_link 有兩個父節點']
+  status: 未實作，待確認
 fixes_after_first_attempt:
 - id: F1
   issue: '固定關節守衛寫死「恰好 1 個」，與 --free-base 相斥 ⇒
