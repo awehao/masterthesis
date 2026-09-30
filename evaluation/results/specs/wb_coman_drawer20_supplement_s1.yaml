@@ -138,6 +138,50 @@ run_history:
   final_opening: 0.00 mm（誤差 −20.00 mm）；attached_ever = false；stop_reason = sim_limit
   solver_guard_abort: 'JointState 已 586 ms 未更新 ⇒ 求解端自行收束（見 O7）'
   evidence_for_three_questions: '無 —— 不得以本趟填任何一題'
+- run_id: coman_drawer20_main5
+  outcome: '**命令首次端到端送達並套用；任務仍未完成（O7 阻擋）**。
+    未取得完整操作與拉動期間同動結果，**不算單步 QP 任務失敗**。'
+  detail: evaluation/runs/coman_drawer20_main5/OUTCOME.md
+  preflight: 0 項失敗
+  domain: 41（冒煙測試 141）；獨立目錄；cleanup 只針對本趟 PID
+  f14_f16_result:
+    safety_readback: 'vmax_effective base_lin=0.035255 base_ang=0.199900
+      arm_max=0.999900，overrides **三項全生效**（main4 為 overrides=無、0.277500）'
+    solver_selfcheck: '通過 —— 平面範數上界 0.049858 <= 0.050000、
+      0.199900 <= 0.200000、0.999900 <= 1.000000'
+    chain9: {received: 2360, rejected: 0, fail: None, frozen_steps: 0}
+    applied_cmd_log: 11792
+    commands_in_box: '四筆逐筆皆在 L1 框內（平面範數恆 0.035255）⇒ **零拒收、無閂鎖**'
+    endpoint_record: coman_low_speed_interface 三個界限齊全
+    f15_result: coman_stage_note 已隨 free_base 改寫，與 base_fixation.mode 一致
+  blocked_by: 'O7 —— 求解端在 sim 11.88 被自己的 JointState 新鮮度守門擋下
+    （563 ms），只解出 4 個週期'
+  task_result: {phase_reached: idle, final_opening_m: 0.0, attached_ever: false,
+                stop_reason: sim_limit}
+  runtime_timing:
+    dist_node_cycle_ms: {n: 3172, p50: 31.44, p95: 45.05, max: 68.11, rows: 1370,
+                         period_ms: 33.3, effective_hz: 29.3}
+    solver_solve_ms: {n: 4, values: [20.18, 4.04, 301.02, 256.10],
+                      note: '**比 main4 更糟**（p50 106／max 134）；4 筆不足以刻畫分布'}
+    safety_loaded: {n: 15, node_ms_p50: 27.18, node_ms_max: 44.22,
+                    filter_ms_p50: 13.50, filter_ms_max: 27.40,
+                    n_active_max: 1220, iters_max: 241, n_rows_max: 2832,
+                    fallback_cycles: 4, unresolved: 0}
+    safety_idle: {n: 2345, note: SafetyLike 零值替身 —— 該週期沒有計算}
+  freshness: dist.n_stale 全程 0、worst_age max 0.06 s ⇒ 未失效
+  rtf: 0.9662（main4 為 1.004；命令真的套用後負載升高）
+  thermal: 起 54.375 → 峰值 84.0 °C @ sim 109.32 → 收 81.5（限 92，**未提高**）
+  monitors: monitor_failure = None；frozen_steps = 0（逾時路徑從未觸發）
+  motion_observed: '最大 base_drift **3.07 mm**、最大 |dyaw| 0.126°；
+    各關節行程 [0.0066, 0.0858, 0.0150, 0.0102, 0.1888, 0.0101] rad。
+    安全層只有 **9 筆非零輸出**（sim 11.86–12.39），之後 2151 個週期
+    輸出**精確為零** ⇒ 12.4 s 後的關節變化是追隨那段短窗口積分出的設定點，
+    **不是新命令**；底盤漂移是開放底盤在零速度命令下的物理漂移。
+    **這都不是同動證據。**'
+  three_questions:
+    delivered_and_applied: '**是**（2360 收 / 0 拒 / 11792 套用 / fail None）'
+    full_operation_completed: '**否**（相位未離開 idle、開度 0.00 mm）'
+    coordinated_motion_during_pull: '**無證據**（從未進入 PULL）'
 open_gap_G8_odom_RESOLVED:
   id: G8
   issue: 協同執行端未發布 /odom 與 odom→base_link TF
@@ -322,10 +366,26 @@ fixes_after_first_attempt:
     ⇒ 接近段耗時會顯著變長（main4 的接近誤差 ep 0.4679 m、er 2.0951 rad）。
     **這不是本修訂要解決的問題**，但會影響 sim_limit 是否足夠，實跑時一併觀察。'
 
+corrections_20261001:
+- what: 距離節點的週期被記為 50 ms
+  actual: '`arm_link_distance` 的 `publish_rate` 預設 **30.0 Hz ⇒ 33.3 ms**
+    （`p(''publish_rate'', 30.0)`、`create_timer(1.0 / rate, self._tick)`）；
+    runner 未覆寫。50 ms 是**控制端**（求解端 --rate 20.0、安全層 20 Hz）的週期。'
+  effect: 'main4 的 p50 97.96 ms 是目標的 **2.94 倍**（原文按 50 ms 算成 1.96 倍）
+    ⇒ 比原記述更差。main5 的 p50 31.44 ms 在 33.3 ms 內，
+    但 **p95 45.05 ms 仍超出**，不能說完全乾淨。'
+  where_wrong: [F14_followup_speedups.measured_ms.period_ms, open_issues O5,
+                runs/coman_drawer20_main4/OUTCOME.md]
+  where_correct: '求解器與安全層引用的 50 ms **是正確的**（兩者都是 20 Hz），
+    包括 O6 的 over_50ms 與安全層滿載 node_ms 的對比。'
+  found_by: main5 的 dist diag 達 29.3 Hz（3172 筆 / 108.2 s），高於 20 Hz ⇒ 回查 timer 設定
+
 F14_followup_speedups:
   title: 距離節點單一週期的等價加速（**不改約束內容**）
-  why: 'main4 實測 `dist.node_cycle_ms` p50 **97.96 ms**，週期 50 ms
-    ⇒ 距離節點實際只跑到約 10 Hz（1078 筆橫跨 sim 11.87–120.01）。'
+  why: 'main4 實測 `dist.node_cycle_ms` p50 **97.96 ms**，週期 **33.3 ms**
+    （publish_rate 預設 30 Hz）⇒ 距離節點實際只跑到約 10 Hz
+    （1078 筆橫跨 sim 11.87–120.01），即目標的 **2.94 倍**。
+    **見 corrections_20261001：此處原記 50 ms 有誤。**'
   how_located: '先前的離線重建量到 20.21 ms，與線上差太多，**該數字不採用**。
     改以 `COMAN_DIST_PROF=1` 對**真正的 `_tick`** 分段計時，並把真實節點接到
     假世界（/clock、odom→base_footprint TF、/joint_states、
@@ -350,7 +410,7 @@ F14_followup_speedups:
       d_vobs_per_row: 2.26
       e_forced_dedup: 8.09
       f_publish: 1.10
-    period_ms: 50
+    period_ms: 33.3          # 距離節點 publish_rate 30 Hz（原記 50 ms 有誤）
   equivalence_verified:
     tool: evaluation/test_dist_speedup_equivalence.py
     method: '同一批輸入（`drawer_220102_offset20` 保持位姿、14 組障礙物、
@@ -813,15 +873,20 @@ open_issues:
   status: 等價改善已完成；**端到端計時只能在實跑時記錄**
   blocks: 不再阻擋離線工作；首測仍需指導授權與機旁監看
 - id: O5
-  severity: mitigated_offline_pending_run_measurement
-  title: 距離節點線上單一週期 **97.96 ms**，超出 50 ms 週期
+  severity: mostly_resolved_p95_still_over   # main5 實測後更新
+  title: 距離節點線上單一週期 **97.96 ms**，超出 **33.3 ms** 週期
   measured_at: main4 實跑（1350 列，1078 筆）
-  facts: {p50: 97.96, p95: 110.56, max: 170.74, period_ms: 50, effective_hz: 約 10}
+  facts: {p50: 97.96, p95: 110.56, max: 170.74, period_ms: 33.3, effective_hz: 約 10,
+          over_target: 2.94}
   work_done: 見 F14_followup_speedups（假世界 998 列 52.52 → 26.64 ms，逐位元等價）
-  not_yet: '**滿載 1350 列的線上值未量** —— 不得以假世界數字代替'
-  status: 等價加速已完成；線上值待下一趟
+  main5_measured: {n: 3172, p50: 31.44, p95: 45.05, max: 68.11, rows: 1370,
+                   effective_hz: 29.3, period_ms: 33.3}
+  verdict: '**滿載下確實生效**：p50 97.96 → **31.44 ms**（1350 → 1370 列），
+    實際頻率由約 10 Hz 升到 **29.3 Hz**（目標 30）。
+    但 **p95 45.05 ms 仍超出 33.3 ms 目標**，不能說完全乾淨。'
+  status: 主要部分已解決；p95 仍超，列為殘留
 - id: O6
-  severity: open_untouched
+  severity: open_worse_and_now_blocking      # main5 實測後更新
   title: 求解器 `solve_ms` p50 **106 ms**（九筆中六筆 > 50 ms）
   measured_at: main4 實跑，`solver_out.json` 九筆
   values_ms: [133.17, 2.60, 2.93, 2.43, 115.20, 128.37, 133.58, 106.16, 100.15]
@@ -829,9 +894,21 @@ open_issues:
   independent_of_O5: '距離節點的加速**完全不會改善它**'
   sample_size: '9 筆不足以刻畫分布，但這 9 筆本身已明顯超出週期'
   note: 九筆的模擬時間只從 11.91 走到 11.98
-  status: '**尚未處理**'
+  main5_measured: {n: 4, values: [20.18, 4.04, 301.02, 256.10]}
+  main5_verdict: '**變更糟**（301／256 ms vs main4 的 p50 106／max 134）。'
+  why_worse: 'main4 的機器人從未移動、離障礙物尚遠 ⇒ 屏障幾乎不活躍；
+    main5 命令真的套用、開始接近 ⇒ 屏障大量活躍：
+    n_active max 212 → **1220**、iters max 75 → **241**、
+    fallback 週期數 0 → **4/15**。QP 因此變難。
+    **4 筆與 15 筆都不足以刻畫分布。**'
+  scope_of_solve_ms: '`_solve_ms` 只量 `super().solve(tgt)` 一次呼叫，其中含
+    FK、旋轉誤差、任務步長截斷、Jacobian、姿態／限位勢、9x9 稠密解、
+    **`_constraints`（由 1370 列雲組出整個屏障約束集）** 與 `_solve_qp`（OSQP）。
+    **不能叫作 QP 求解時間**；沒有內部分段，各段佔比未知，不做歸因。'
+  now_blocking: '**是 O7 的同一根因**（見 O7）⇒ 它已從效能問題升級為任務阻擋項'
+  status: '**尚未處理，且已成為主要阻擋**'
 - id: O7
-  severity: open_cause_not_established
+  severity: mechanism_located_fix_undecided  # main5 實測後更新
   title: 求解端守門中止 —— JointState 586 ms 未更新
   what_happened: 求解端在 sim ≈ 11.98 被自己的新鮮度守門擋下並收束（寫入 9 週期）；
     執行端繼續跑到 sim_limit 120.010
@@ -843,8 +920,33 @@ open_issues:
   temporal_coincidence: '停頓時點（sim 11.9–12.0）正好是距離節點首次 `_tick`
     （sim 11.87，立即 98 ms/週期）與求解器首次求解（133 ms）同時上線的時刻；
     溫度峰值 79.625 °C 也在 sim 11.82。**時間吻合不等於因果。**'
-  not_measured: [該時段的 CPU 佔用, 求解端執行器的阻塞時間]
-  status: '**原因未確立**；下一趟需保留同一守門並記錄上述兩項'
+  main5_recurred: {stale_ms: 563, cycles_written: 4, max_data_age_s: 0.50}
+  mechanism_located: '求解迴圈在發布後是
+    `target = t0 + slot * period`（period = 1/20 s = **50 ms**）、
+    `while monotonic() < target: exec.spin_once(0.002)`。
+    `solve()` 花 301 ms 時 target 早已過去 ⇒ **迴圈本體一次都不執行**
+    ⇒ 連續長時間求解期間**完全沒有 spin** ⇒ `/joint_states` 回呼不被處理
+    ⇒ `q_arm_t` 不更新 ⇒ 自己的守門觸發。'
+  quantitative_match: 'main5 四筆 solve_ms 合計 **581.35 ms**、
+    後兩筆合計 **557.12 ms**，守門報 **563 ms** —— 落在兩者之間。
+    main4 的 586 ms 用同一算術亦吻合。'
+  ruled_out: ['發布端問題（/joint_states 在物理迴圈內同步發布）',
+              '執行端資料飢餓（frozen_steps = 0，逾時路徑從未觸發）']
+  same_root_cause_as: O6 —— 求解本身阻塞，餓死自己的執行器
+  evidence_strength: '**程式碼路徑與數值共同支持的機制**，
+    不是已插樁證明 —— 未直接量測執行器的阻塞時間。'
+  threshold_unchanged: 守門照裁定沿用，**沒有延長 max_data_age**
+  status: '機制已定位（與 O6 同根因）；**修正方式未決**'
+- id: O8
+  severity: cosmetic_but_real
+  title: 求解端收尾 `rcl_shutdown already called`
+  what: '守門中止後走 `stop()` 再關閉，`rclpy.shutdown()` 被呼叫兩次 ⇒
+    `RCLError: failed to shutdown` 與多個 Traceback（main4 亦有
+    `TransformListener.__del__` 的同類雜訊）。'
+  when: '**發生在資料落盤之後** —— run.log 行 457（4 週期寫入）與
+    行 471（drawer_run.json）都在行 583（RCLError）之前；
+    diag 2360 筆完整。不影響本趟結果。'
+  status: 應修，未修
 
 questions:
   q1_completion: 20 mm 完整操作是否完成（接近→連接→拉開→保持→釋放→退出）
