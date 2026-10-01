@@ -1,0 +1,86 @@
+id: WG2-RUN4-PRE
+title: W-GMPC 第四趟自由空間整合測試：事前登錄
+date: 2026-10-01
+status: 啟動前定版
+
+目的: >-
+  在**已確認的自由空間**中，讓 W-GMPC（N=5、dt=0.05）驅動 omni_bot + Lite 6
+  實際到達目標並保持。本趟**不是**地面避碰驗收，也**不是**抽屜操作。
+
+配置:
+  來源: wgmpc_wg2_first_config.yaml（WG2-CFG-1，sha 5cf67684ad56035c）
+  變更: 無 —— 控制參數與第三趟完全相同，本趟只還原資料管線
+  N: 5
+  dt: 0.05
+  rate_hz: 20
+  target_offset_m: [0.25, 0.15, 0.05]
+  reach_pos_m: 0.005
+  reach_rot_rad: 0.02
+  hold_s: 2.0
+  task_s: 60
+  sim_limit_s: 120
+  u_prev_policy: strict
+  assume_initial_rest: true
+  low_speed_box_l1: {base_lin: 0.035255, base_ang: 0.199900, arm: 0.999900}
+
+本趟相對第三趟的差異:
+  - key: 執行端模式
+    value: >-
+      `--mode solver_freespace`。執行端遍歷 UsdPhysics.CollisionAPI，
+      機器人與地面以外若有任何碰撞體則 return 8 中止（語意檢查，不靠 runner 名稱）。
+  - key: 補上 robot_state_publisher 與 arm_link_distance
+    value: >-
+      第三趟的 runner 漏了這兩者 ⇒ 安全層 `pts is None` ⇒ reason 5 ⇒ 零輸出
+      ⇒ u_prev 恆為 0 ⇒ 核心永遠只命令 a_max·dt。**這是第一／三趟不動的已定原因。**
+  - key: 啟用既有的 freespace_confirmed
+    value: >-
+      `freespace_confirmed:=true`（既有路徑，非新增）。
+      **缺資料（reason 5）、過期（7）、溢位（8）的停止規則一字未改**，已於離線核對實測。
+  - key: 距離節點不給 obstacles 參數
+    value: >-
+      live 為空 ⇒ 每個連桿仍發一列 STATUS_NODATA（`if T is None or not live:` 路徑）。
+      這與「完全沒收到距離資料」是不同情形。**不新增遠距障礙物、不加地面為一般屏障。**
+  - key: runner 缺陷修正
+    value: >-
+      `$URDF_TF` 未定義，在 `set -u` 下會讓第 [3/6] 步以 exit 127 死掉（已實測）。
+      已定義為 omni_bot_manip.urdf。
+
+啟動前已通過的離線核對:
+  檔案: evaluation/test_wgmpc_wg2_freespace.py（domain 186，不開 Isaac）
+  結果: 全部通過
+  items:
+    - NODATA 列真的發布：11 列，狀態分布 NODATA=11／OK=0
+    - 必要 TF 全部查得到：11/11（含 uflite_finger1/2），以模擬時間判定新鮮
+    - NODATA **可歸因於空場景而非 TF 缺失**（兩者都會產生 NODATA，故分開核對）
+    - 有命令時安全層解析列：reason=0.0、n_rows=54、cmd_out 非零（放行）
+    - 停發距離雲後：cmd_out 全為零、reason=7.0（過期停止規則仍生效）
+  已修正的核對缺陷:
+    - 假世界漏發 finger_joint1/2（prismatic）⇒ rsp 算不出 uflite_finger1/2
+    - 核對腳本原用 `ros2 topic echo` 解析 cmd_out，取不到就誤判成「未放行」⇒ 改為自行訂閱
+    - 「安全層解析了列」原本在**閒置階段**就要求 n_rows>0；但 reason=1
+      在 `_points()` 之前短路（wholebody_safety_node.py:450）⇒ 結構上不可能 ⇒ 改為分階段判定
+
+判準順序:
+  說明: >-
+    必須**依序**回答，前一項未成立則後一項無從判定。
+  items:
+    - 1. 執行端存活且狀態回授出現（/joint_states 含手指、/odom、/clock）
+    - 2. W-GMPC 節點有發布命令（endpoint_requested 非零）
+    - 3. 命令是否真的被執行 —— 由 exec_mode、命令年齡、applied 回報三者定位
+    - 4. 受控停止與封存完成（H3：archive_complete = true）
+    - 5. **只有 1–4 都成立，才判到達與保持**
+
+保護與約束:
+  - 熱中止線 92 °C，不得提高
+  - 中止後不自動重跑
+  - 獨立資料目錄、獨立 domain、只清理本趟記錄的 PID
+  - 不調門檻、不追加幾何掃描、不放寬保護、不繞過起動前檢查
+  - 保護觸發則保留結果、定位原因，不自動重跑或調寬門檻
+  - 不以姿態重演冒充實錄；不錄製桌面
+
+未解決項目（本趟不處理，不影響判準）:
+  - O6 OSQP 為主要成本
+  - O7 成因未定（已撤回先前的機制說法）
+  - O5 p95 45.05 ms
+  - F18 `_on_pts` 資料競態：修法已知，尚未套用
+  - N=1 閉迴路消融未比較；稀疏 QP 未嘗試

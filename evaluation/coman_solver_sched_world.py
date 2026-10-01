@@ -30,6 +30,10 @@ from std_msgs.msg import String
 from tf2_ros import TransformBroadcaster
 
 ARM = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
+# **手指也要發**：manip URDF 的 finger_joint1/2 是 prismatic，
+# 不發 rsp 就算不出 uflite_finger1/2 的 TF ⇒ 距離節點查不到那兩個連桿，
+# 下游會看到「TF 缺失型」的 NODATA 而無法與空場景區分（實際踩過）。
+FINGERS = ['finger_joint1', 'finger_joint2']
 NF = 22                      # 22 欄，與距離節點的線格式一致
 STATUS_OK = 0.0
 OBS = ['handle_bar']
@@ -68,6 +72,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--sim-rate', type=float, default=1.0)
     ap.add_argument('--duration-s', type=float, default=60.0)
+    ap.add_argument('--no-cloud', action='store_true',
+                    help='**不發布** /arm_link_distance/points。'
+                         '接真實距離節點時必須給，否則同一主題有兩個發布者，'
+                         '下游讀到的是本檔的合成雲（實際踩過）。')
     ap.add_argument('--stop-js-at', type=float, default=-1.0,
                     help='到此模擬時刻停止發布 /joint_states（-1 = 不停）')
     a = ap.parse_args()
@@ -105,8 +113,8 @@ def main() -> int:
             if not js_stopped:
                 j = JointState()
                 j.header.stamp = c.clock
-                j.name = list(ARM)
-                j.position = [0.0] * 6
+                j.name = list(ARM) + list(FINGERS)
+                j.position = [0.0] * (6 + len(FINGERS))
                 js.publish(j)
             o = Odometry()
             o.header.stamp = c.clock
@@ -126,7 +134,7 @@ def main() -> int:
             tr.transform.rotation.z = math.sin(math.pi / 4)
             tr.transform.rotation.w = math.cos(math.pi / 4)
             tb.sendTransform(tr)
-        if sim - last['pc'] >= 1.0 / 30.0:
+        if (not a.no_cloud) and sim - last['pc'] >= 1.0 / 30.0:
             last['pc'] = sim
             pc.publish(cloud(sim))
         if sim - last['ts'] >= 0.02:
