@@ -1,0 +1,304 @@
+schema: wgmpc_wg0_problem/1
+version: WG0
+status: proposal_pending_approval      # **審定後才實作 WG1**
+created: 2026-10-01
+supersedes_nothing: 單步 20 mm 支線已封存（S1 single_step_branch_closure_20261001），本規格不回頭改它
+
+title: 全身多步控制問題定義（W-GMPC 第一層）
+
+scope:
+  question: '給定底盤與手臂的當前狀態，能否**一次聯合規劃未來 N>1 步的九維速度**，
+    並在每次執行首步後重新規劃，使末端到達目標？'
+  v1_assumptions: [已知目標, 自由空間, 理想運動學積分]
+  explicitly_out_of_v1: [視覺, 摩擦抓取, 抽屜被動關節, 接觸模式, 障礙物, 避碰]
+  labelling: '**首版必須標為自由空間原型。** 未加入障礙物與接觸模型之前，
+    **不得宣稱已有全身避碰能力**，也不得稱為 MotM 成果。'
+  not_acceptance: 這是 W-GMPC 的第一層驗證，不是最終成果
+
+# ---------------------------------------------------------------- 1 狀態與座標
+state:
+  q: 'q = (x, y, θ, q1..q6) ∈ R^9'
+  base: '(x, y, θ) 為 base_footprint 在 odom 的平面位姿（SE(2)）'
+  arm: q1..q6 為 Lite 6 關節角（6-DOF，**不是 7**）
+  dof_order: "沿用 wholebody_kinematics.DOF_NAMES =
+    ['base_x', 'base_y', 'base_theta', 'joint1'..'joint6']"
+object_axis_declaration:
+  requirement: 第二階段計畫 §5.9 的 WG0 門檻要求明列「接觸時物體軸 R」
+  dimension: 'σ ∈ R —— 抽屜滑軌的開度（單一移動自由度）'
+  status_in_v1: '**不含**。v1 為自由空間原型，狀態維持 R^9。'
+  nature_when_added: '**被動狀態或由抓取約束耦合的輔助決策，
+    不是額外可任意命令的致動器**（§5.9 實作要點 4）。
+    加入後狀態為 (q, σ) ∈ R^10，但 σ 的演化由接觸／抓取閉合關係決定，
+    **不得**在控制向量裡多一個 σ̇ 直接命令它。'
+  closure_relation_deferred: '閉合／耦合關係（抓取點的相對速度約束、
+    滑軌方向、被動阻尼）屬 WG3 的接觸階段，WG0 只宣告維度與性質，
+    **不在此版定義數值關係** —— 未定義前不得宣稱接觸模型已就緒。'
+
+control:
+  u: 'u = (v_x^B, v_y^B, ω, q̇1..q̇6) ∈ R^9'
+  base_frame: '**本體座標**（與 adapter 的 world_to_body9 輸出、E2 的 step() 輸入一致）'
+  arm_frame: 關節速率，無座標問題
+
+frame_coupling_CRITICAL:
+  fact: '展開 URDF 裡 `base_x`／`base_y` 是**世界軸**平移關節
+    （axis 1 0 0 與 0 1 0），且在鏈上**位於 `base_theta` 之前**。
+    因此 `WholeBodyKinematics.jacobian()` 的前兩列對應**世界**平移速度，
+    **不是本體平移速度**。'
+  consequence: 'q̇ = B(θ) u，  B(θ) = blkdiag(Rz(θ)_{2×2}, 1, I_6)
+    ⇒ TCP twist V^w = J(q) B(θ) u ≜ J_B(q) u'
+  must_not: '**直接用 J(q) 乘本體控制 u 就是 frame 錯誤。**
+    這是第一次 MPC 嘗試的已記錄教訓（frame fix），WG1 必須有專門的反例測試
+    （故意省略 B(θ) 時測試要失敗）。'
+  note: 因平移關節在旋轉關節之前，世界平移與 θ 無關 ⇒ B(θ) 只在前 2×2 區塊有 θ
+
+# ------------------------------------------------- 2 離散預測模型（理想運動學）
+discrete_model:
+  form: 'q_{k+1} = q_k + dt · B(θ_k) u_k   （顯式 Euler）'
+  expanded:
+  - 'x_{k+1} = x_k + dt (cosθ_k · v_x^B − sinθ_k · v_y^B)'
+  - 'y_{k+1} = y_k + dt (sinθ_k · v_x^B + cosθ_k · v_y^B)'
+  - 'θ_{k+1} = θ_k + dt · ω'
+  - 'q_{arm,k+1} = q_{arm,k} + dt · q̇'
+  nonlinearity: '唯一的非線性來自 B(θ_k) 的 θ_k。手臂部分**嚴格線性**
+    ⇒ 關節位置限制可寫成 z 的精確線性列，無需線性化。'
+  integrator_v1: 顯式 Euler（O(dt) 局部誤差）；是否改 RK2／中點，列為待定配置
+  excluded: [動力學, 輪滑移, 接觸, 抽屜被動關節, 執行端命令年齡與延遲]
+  honesty: '**理想積分 ⇒ 預測與實機／Isaac 的差距不在本層驗證範圍**，
+    WG1 只核「預測 vs 自身模型的實際積分」一致性。'
+
+# ------------------------------------------------------------- 3 SE(3) 誤差定義
+task_error:
+  tcp_pose: 'T(q) = FK(q, tcp) ∈ SE(3)（世界座標）'
+  target: 'T_des ∈ SE(3) 固定（v1 已知目標）'
+  error_vector: 'e_k = [ p_des − p(q_k) ;  R(q_k) · log( R(q_k)^T R_des )^∨ ] ∈ R^6'
+  frame: '**世界軸**（與 J 的慣例一致）：位置誤差直接相減；
+    姿態誤差先在本體取 SO(3) 對數，再用 R(q_k) 轉到世界軸。'
+  why_this_form: '`jacobian()` 回傳的是世界軸 [v; ω]，所以誤差也放在世界軸，
+    兩者可直接相乘，不需要額外的 Adjoint 轉換 —— 少一處可出錯的慣例轉換。'
+  propagation: 'ė^w ≈ −J_B(q) u  ⇒  e_{k+1} = e_k − dt · J_B(q^nom_k) u_k'
+  exactness: '位置部分**精確**；姿態部分為**一階**近似
+    （小誤差下 θ̇_err^w ≈ −ω^w）。'
+  why_multipoint_matters: '一階姿態近似只在小誤差下成立 ⇒ **必須在每個預測步
+    的 q^nom_k 重新評估 J_B 與 e^nom**，不能只在 q_0 線性化一次。
+    這正是既有 SE(2) GMPC 記載的修正方向（逐步繞參考線性化），
+    也是前一次 MPC 嘗試失敗的原因之一。'
+  sign_convention: 'e 定義為**要被驅動到零的誤差**，與 arm_pregrasp.rot_error 的
+    既有慣例一致。**符號反了不會直接失敗**，而是收斂到相距 180° 的對極點
+    （wholebody_pregrasp 已記錄過這個實例）⇒ WG1 必須有符號反例測試。'
+
+# -------------------------------------------------------------- 4 決策與維度
+decision:
+  variable: 'z = [u_0; u_1; ...; u_{N-1}] ∈ R^{9N}（**絕對控制**，非偏差量）'
+  why_absolute: 速度框與輪級列直接作用在 u 上，用絕對量少一次 ξ_ref 的加減
+  coupling: 預測步之間由 discrete_model 耦合（condensed 或 sparse 形式皆可，列為實作選擇）
+  executed: '**只執行 u_0**；其餘保留作下一輪的暖啟動'
+  N_gt_1_required: 'N > 1 是本層的驗證對象；N = 1 作為**消融**保留（見 tests）'
+
+# ------------------------------------------------------- 5 成本與單位尺度
+cost:
+  form: 'J = Σ_{k=1}^{N} e_k^T Q_k e_k
+         + Σ_{k=0}^{N-1} u_k^T R u_k
+         + Σ_{k=0}^{N-1} Δu_k^T S Δu_k'
+  terminal: 'Q_k = Q（k < N）、Q_N = Q_f'
+  increment: 'Δu_k = u_k − u_{k−1}，  u_{−1} := u_prev（**上一輪實際執行的首步**）'
+  u_prev_note: '不預設 u_prev = 0 —— 那會讓第一步不受增量懲罰。
+    尚無 u_prev 時以零為基準並**標記該步不納入平滑保證**（沿用 E2 的既有作法）。'
+  scaling_RULE: '**e 與 u 都是混合單位**（m 與 rad、m/s 與 rad/s），
+    所以權重一律寫成「無量綱權重 ÷ 參考尺度平方」，參考尺度明列：'
+  Q_scaling: 'Q = blkdiag( w_p / L_p² · I_3 ,  w_r / L_r² · I_3 )
+    with L_p = 1 m、L_r = 1 rad'
+  R_scaling: 'R = blkdiag( w_bt / V_bt² · I_2 ,  w_br / V_br² ,  w_a / V_a² · I_6 )
+    with V_bt = 0.035255 m/s、V_br = 0.199900 rad/s、V_a = 0.999900 rad/s
+    —— **即各分量以自己的限制正規化**，權重 1 的意思是「飽和的代價相同」。
+    這三個數取自已核准的 L1 低速框（coman_low_speed_box_l1.yaml）。'
+  S_scaling: 'S 與 R 同一套正規化，另乘無量綱 w_s'
+  pending_config: [w_p, w_r, w_bt, w_br, w_a, w_s, Qf 相對 Q 的倍率]
+
+# ------------------------------------------------------------------ 6 限制
+constraints:
+  velocity_box:
+    form: '|u_k| ≤ u_max，逐軸，k = 0..N-1'
+    v1_values: 'L1 低速框：底盤平移**逐軸** 0.035255 m/s、
+      底盤角速度 0.199900 rad/s、各關節 0.999900 rad/s'
+    why_L1: '沿用已核准的 L1。逐軸 0.035255 是**內接方框**：
+      兩軸同時到頂時 √2 × 0.035255 = 0.049858 < 0.05
+      ⇒ 仍滿足執行端 E2 的平面**範數**門檻。
+      **平面範數是二階錐**，QP 用內接方框作線性替代，這是保守的。'
+  acceleration:
+    form: '|u_k − u_{k−1}| ≤ a_max · dt，  u_{−1} = u_prev'
+    v1_values: 手臂 a_max 取 LITE6_SAFE.max_acceleration（19.984 rad/s²）；底盤待定
+  joint_position:
+    form: 'lo + m_j ≤ q_{arm,0} + dt · Σ_{j<k} q̇_j ≤ hi − m_j，  k = 1..N'
+    exactness: '**嚴格線性**（手臂積分無非線性）⇒ 不需線性化，逐步皆為精確列'
+    v1_values: LITE6_SAFE.lower／upper；邊界餘量 m_j 待定
+  wheel_level:
+    form: '|W u_{base,k}| ≤ r·ω_max 與 |W (u_{base,k} − u_{base,k−1})| ≤ r·α_max·dt'
+    W: 'gmpc.wheel_matrix —— W = [[0,1,L],[-1,0,L],[0,-1,L],[1,0,L]]'
+    why: '逐軸框是方框，底盤可行集不是方框：兩個平移軸驅動不同輪對、
+      旋轉驅動全部四輪並與兩者競爭。已記錄實測：19 趟中 7.4 % 的週期
+      要求超出硬體的輪速，最壞 2.0 倍。'
+    v1_values: r = 0.05 m、L = 0.245 m、ω_max = 5.55 rad/s、α_max = 125 rad/s²
+  NOT_imposed:
+    base_position: '**不施加** URDF 裡 base_x／base_y 的 ±2.5 m 限位 ——
+      那是虛擬關節的建模產物，不是任務約束。若施加會把工作空間憑空切掉。'
+    barrier_rows: '**v1 完全沒有避碰列。** 這是自由空間原型的定義，
+      不是「避碰通過了」。'
+    contact_rows: v1 無接觸模式、無配對例外
+
+# ------------------------------------------------- 7 線性化與求解流程
+solve_flow:
+  per_cycle:
+  - '1. 取狀態快照 (q_0, u_prev)。**單一快照，整輪不更新** ——
+      核心不訂閱任何東西，狀態由呼叫端傳入。'
+  - '2. 暖啟動 nominal：u^nom = shift(上一輪解)，末步複製；首輪 u^nom = 0。'
+  - '3. 依 discrete_model 以 u^nom 積分得 q^nom_0..N。'
+  - '4. 在**每個** q^nom_k 評估 J_k = J_B(q^nom_k) 與 e^nom_k。'
+  - '5. 組 QP（P, q, A, l, u）並求解。'
+  - '6. **SQP 迭代**：步驟 3–5 可重複 n_sqp 次（以上一次的解作為新 nominal）。
+      n_sqp 列為待定配置，**至少 1**；每次迭代的耗時分別記錄。'
+  - '7. 接受判定（見 accept）。'
+  - '8. 只取 u_0 回傳；完整序列與預測狀態一併回傳供診斷與下輪暖啟動。'
+  relinearisation_rule: '**每個預測步都重新評估 J_B**（不是只在 q_0 評估一次）。
+    單點線性化是前一次 MPC 嘗試的失敗原因，不重複。'
+  accept:
+    required:
+    - 'OSQP status = solved'
+    - '逐列約束殘差 ≤ r_tol（**自己核**，不只信 status）'
+    - 'u_0 逐項在速度框、加速度框與輪級列內（輸出端再核一次）'
+    not_auto_accepted: "'solved inaccurate' **不自動接受** ——
+      既有記錄：非收斂解曾讓 u = (0.2775, 0.2775, 1.1327) 通過守衛，
+      實際隱含 11.10 rad/s 的輪速（ω_max = 5.55）。"
+    recorded_not_enforced: '預測 |e_N| 是否不大於 |e_0| —— **只記錄，不作為接受條件**
+      （多步解可以先繞遠再收斂）'
+  pending_config: [N, dt, n_sqp, r_tol, m_j, 底盤 a_max, QP 形式（condensed／sparse）]
+
+# ------------------------------------------------------------- 8 失敗處置
+failure_handling:
+  on_infeasible_or_nonconvergent:
+    action: '**不輸出命令**，回傳明確的 `no_valid_solution`'
+    payload: [osqp_status, 逐列最大殘差, 分段耗時, 違反的約束類別, N, n_sqp 次數]
+  must_not:
+  - '**不退回無約束解**（已記錄：QP 分支曾因 `_constraints` 回 None 而落到
+    無約束答案，整趟卻報成功）'
+  - 不放寬任何限制
+  - 不沿用上一筆命令假裝有解
+  - 不自動降低 N 或 dt 來湊出可行解（**v1 不做降級**，失敗就記錄）
+  caller_contract: '核心只回報「無有效解」；**停止處置屬於呼叫端**。
+    WG1 是純數值核心，不發命令、不決定機器人要不要停。'
+
+# ------------------------------------------------------------- 9 測試設計
+tests:
+  t1_model_and_jacobian:
+  - 'J_B 對有限差分一致：對隨機 q 與隨機 u，比較 J_B(q)·u 與
+    (FK(q ⊕ dt·B(θ)u) 的 TCP twist 數值差分)，逐分量相對誤差門檻明列'
+  - '**本體→世界旋轉反例**：θ ∈ {0, π/2, −π/2, 任意角}，
+    驗 q̇ = B(θ)u 與直接積分一致；**故意省略 B(θ) 時測試必須失敗**'
+  - '離散積分收斂階：dt 減半時單步誤差應約減半（Euler，O(dt)）'
+  - 'SE(3) 誤差符號反例：把 e 取負號後閉迴路必須**不**收斂到目標
+    （重現對極點行為），以此固定符號慣例'
+  t2_constraints_and_failure:
+  - '逐步逐列核對：u_k、Δu_k、q_arm,k、輪級列全部在界內'
+  - '**強制不可行**（目標遠超可達 ＋ 緊限制）⇒ 必須回 no_valid_solution，
+    且**沒有**任何命令被輸出'
+  - "'solved inaccurate' 注入 ⇒ 必須被殘差核對擋下"
+  t3_ideal_closed_loop:
+  - '自由空間已知目標、理想積分閉迴路：到達容差與步數'
+  - '**預測／實際一致性**：每輪的 q^nom_k 與「實際執行 u_0 後再積分」的偏差，
+    逐步記錄 —— 不是只看最後到不到'
+  - '多組起始位姿與目標（含需要大幅轉身者，檢驗逐步線性化）'
+  t4_cost_vs_horizon:
+  - 'N ∈ {1, 5, 10, 20}（具體集合待定）下的 cons_ms／qp_ms／總耗時與 OSQP 迭代數'
+  - '**N = 1 消融**：與現有單步 RMRC 的到達步數與路徑比較'
+  - 'O6 的教訓：**從第一天就量分段耗時**，不等接 Isaac 才發現。
+    main6 實測 qp_ms 佔 solve_ms 約 85 % ⇒ 預期 QP 本身是主成本。'
+  measurement_discipline: '耗時用**單調牆鐘**；若之後引入模擬時間，
+    來源時間與耗時**各自成欄、不相減**（S1 F17 的既有紀律）。'
+  no_rate_assumption: '**不預設一定能達到 20 Hz。** 先用量測決定可行的實作，
+    而不是先放寬控制週期。'
+
+# -------------------------------------------- 10 可重用 vs 不得帶進核心
+reuse:
+  pure_reusable:
+    wholebody_kinematics.py: 'Joint、WholeBodyKinematics、fk、jacobian、
+      joint_limits、velocity_limits —— 純數值、無 ROS import、已經過核對'
+    arm_limits.py: LITE6_SAFE（lower／upper／max_velocity／max_acceleration）
+    arm_pregrasp.py: 'rot_error、ARM_JOINTS —— 純數值，含已記錄的符號教訓'
+    gmpc.py: '**純數值**（無 ROS import）。可直接重用或作樣板：
+      wheel_matrix、wheel_speeds、fit_to_wheels、_build_prediction、
+      _build_Q_bar、_build_R_bar、_build_smoothness_terms，
+      以及「逐步繞參考線性化」的整體結構。'
+    wb_wheel_limit.py: WheelLimitConfig、limit9（純數值）
+    coman_low_speed_box.py: tighten_vmax、e2_compat_violations（純數值，L1 的單一來源）
+    arm_poses.py: 具名位姿
+  must_not_enter_core:
+    any_node: '`*_node.py` 全部 —— gmpc_node、wholebody_safety_node、
+      arm_link_distance、obstacle_aggregator、scan_* 等'
+    wholebody_pregrasp.py: 'Node ＋ **兩個 executor 同轉一個節點**
+      ＋ `_on_pts` 的資料競爭（F18）'
+    coman_pull_solver_node.py: 同上；含 `_pump` 排程
+    execution_framework: '**整套執行框架不沿用**（依指導）：
+      rclpy Node、MultiThreadedExecutor、ReentrantCallbackGroup、
+      TransformListener(spin_thread=True)、`_pump`、
+      以及任何跨執行緒共享的可變狀態。'
+    wb_cmd_chain_e2.py: '屬**執行介面**（整筆拒收、_fail 閂鎖），不屬規劃核心。
+      WG1 不 import；兩者的界限相容性在整合階段才談。'
+  partial_only:
+    wholebody_safety_filter.py: '雖然是純數值，但 SafetyConfig 與
+      pair_gap／contact_pairs／屏障語意綁在一起。
+      **WG1 自己寫限制列**（形式可對照 `_box_rows`／`_joint_limit_rows`），
+      測試中可 import 作交叉核對，但核心不依賴它 ——
+      避免把接觸／避碰語意提前帶進自由空間原型。'
+
+plan_5_9_compliance:
+  must_be_one_joint_solve: '**不把底盤 horizon 與手臂單步分開求完再拼接；
+    不把同一個單步 QP 重複呼叫 N 次當成全身時域最佳化。**（§5.9 要點 1）
+    決策向量是單一的 z ∈ R^{9N}，底盤與手臂在**同一個** QP 裡，
+    預測步之間由 discrete_model 耦合。
+    若採凝縮（condensed），**仍須能還原九維控制序列與預測狀態** ——
+    WG1 的回傳值因此必含完整 u_0..u_{N-1} 與 q^nom_0..N。'
+  not_globally_convex: '非線性 FK、旋轉誤差使原問題**不必然凸**。
+    本規格採局部線性化／序列 QP（n_sqp），**每個 QP** 的二次項與線性約束
+    符合 OSQP 的要求，但**不得據此聲稱整個問題已成全域凸問題**。（§5.9 要點 2）'
+  consistent_frames_and_relinearisation: '幾何誤差與擾動用一致的 frame／排列／log
+    微分；**模型與 Jacobian 在預測構形上重算**（§5.9 要點 3）——
+    見 task_error.why_multipoint_matters 與 solve_flow.relinearisation_rule。'
+  no_copying_current_rows_forward: '（§5.9 要點 3 後半）障礙物與相對速度按預測模型
+    推進，**不把當前距離列直接複製到全部未來步就宣稱完成全時域避碰**。
+    v1 沒有任何避碰列，所以此條在 v1 不適用，但**加入時必須遵守** ——
+    這也是不得以 v1 宣稱避碰能力的理由之一。'
+  execution_boundary: '（§5.9 要點 5）記錄請求／修改後／實際套用命令、
+    下一輪預測由**量測狀態**與已套用歷史初始化、
+    **不預設濾波修改後仍符合原預測** —— 這些屬 **WG2**（滾動閉迴路接既有執行鏈）。
+    WG1 是純數值核心，只回傳資料結構，不接執行鏈。'
+  low_load_offline_first: '（§5.9 要點 6）模型與數值測試一律先低負載離線；
+    物理驗證須 GPU／電源正常且**使用者在機旁確認**。v1 不開模擬器。'
+
+naming_limits_from_5_9:
+  wg1_alone: 'WG1 通過**只**代表「全身多步求解器的數值行為成立」。'
+  wg2_phrase: '**只有 WG2 完成**才可稱「W-GMPC 自由空間核心已驗證」。'
+  wg3_wg4: '**WG3／WG4 未完成，不得宣稱已具備接觸 MotM 的核心證據。**'
+  threshold_not_auto: 'WG0–WG4 的具體數值門檻、案例與試驗次數須在看該輪結果**之前**
+    另訂，不由本規格自動認定通過。'
+  what_passing_means: '通過門檻只指**限定模型／任務範圍的核心版本**，
+    不是全情境穩定性、避碰或實機安全證明。'
+
+concurrency_position:
+  statement: '**WG1 為單執行緒純數值核心**：不訂閱、不發布、無背景執行緒、
+    無跨執行緒共享可變狀態。輸入是固定狀態快照，輸出是資料結構。'
+  f18_not_resolved: '**F18 不能只因局部變數能消掉那次例外，就算整個並行問題解決。**
+    同一節點被兩個 executor 轉、其餘共享可變狀態是否還有競爭，**未核**。
+    該問題延到整合階段處理，WG1 以「不沿用該框架」迴避，**不是解決**。'
+
+pending_development_config:
+  note: '以下全部是**待定開發配置**，不冒稱已驗收、不寫入任何已核准規格：'
+  items: [N, dt, n_sqp, w_p, w_r, w_bt, w_br, w_a, w_s, Qf 倍率, r_tol,
+          關節邊界餘量 m_j, 底盤 a_max, QP 形式, 積分器階數, 測試容差]
+
+wg1_deliverables:
+- 完整九維控制序列與預測狀態
+- 求解狀態、逐列約束殘差、分段耗時（約束組裝／QP／其餘，**逐輪記錄**）
+- 首步控制；失敗時明確的 no_valid_solution 結果
+- 四組測試（t1–t4）的實測輸出
+
+explicitly_not_in_wg1: [視覺, 接觸, 障礙物, 避碰, ROS 接線, Isaac, 錄影,
+                        抽屜任務, 摩擦抓取]
