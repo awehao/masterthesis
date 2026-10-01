@@ -36,10 +36,13 @@ TASK_SIM_S=60; TASK_WALL_S=400
 # ---- 錄影（模擬器內相機 /World/rec_cam，**不是桌面錄製**）----
 # 解析度與 fps 明確指定，不用較高負載的預設（1920x1080／30 fps）。
 REC_RES="1280x720"; REC_FPS=10
-# 取景由 URDF 連桿原點 ∪ free4 實際軌跡 ∪ 目標算出，含 0.12 m 幾何加厚；
-# 距離 4.45 m 在悲觀 vFOV 20° 下仍涵蓋八個角點（見入口核對）。
+# 取景由 URDF 連桿原點 ∪ free4 實際軌跡 ∪ 目標算出，含 0.12 m 幾何加厚。
+# 距離 **3.80 m**：rec5 趟次的實拍影格反推實際 vFOV ≈ 26–27.6°
+#（與「水平光圈 20.955 mm、焦距 24 mm」的假設相符），
+# 故不再用悲觀 20° 的 4.45 m —— 那讓畫面過空、機器人只佔 313/720 像素。
+# 3.80 m 對 vFOV 24° 仍涵蓋八個角點，機器人高約 367/720 像素。
 REC_AT="0.1322,0.0000,0.4468"
-REC_EYE="2.4581,-3.4512,2.0224"
+REC_EYE="2.1183,-2.9471,1.7923"
 # 目標標記：名目 FK（q=0）＋偏移。與 free4 實錄差 0.0016 m，遠小於標記半徑
 # 0.020 m。**權威目標是節點在趟中算出並寫進 wg2_out.json 的那一個。**
 REC_TARGET="0.44700,0.15000,0.44999"
@@ -187,6 +190,14 @@ else
   say "  **封存不完整 ⇒ 升級終止；結果保留，不自動重跑**"
   echo '{"archive_complete": false, "basis": "wgmpc_wg2_archive_check.py 內容核對未通過", "reason": "執行端未在 '"$ARCHIVE_WAIT_S"' s 內完成可核對的封存"}' \
     > "$DIR/archive_status.json"
+fi
+
+if [ "$ARCHIVE_OK" = "1" ]; then
+  say "[收尾 2b/3] 轉成可播放 MP4（**影格完整才轉**）"
+  python3 evaluation/wgmpc_wg2_make_video.py "$DIR" --fps "$REC_FPS" \
+    --skip-archive-check 2>&1 | tee -a "$LOG"
+else
+  say "[收尾 2b/3] 封存不完整 ⇒ **不轉檔**；影格原樣保留"
 fi
 
 say "[收尾 3/3] cleanup 由 trap 執行（只針對本趟 PID）"

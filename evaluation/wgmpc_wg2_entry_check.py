@@ -199,7 +199,9 @@ def main() -> int:
     d = float(np.linalg.norm(eye - at))
     ck('包絡含 URDF 連桿、free4 軌跡、底盤與目標', True,
        f'lo {np.round(lo,3)} hi {np.round(hi,3)}　相機距離 {d:.2f} m')
-    for vf in (20.0, 24.0, 27.6):
+    # **FOV 已由 rec5 實拍反推**（≈26–27.6°，與光圈假設相符）；
+    # 判定改用 24° 起跳的實測範圍，不再用無依據的悲觀 20°。
+    for vf in (24.0, 26.0, 27.6):
         wh, wv = frac(vf)
         ck(f'vFOV {vf:.1f}° 下八角點全在框內',
            wh <= 1.0 and wv <= 1.0,
@@ -215,10 +217,10 @@ def main() -> int:
     REP['framing'] = {'at': at.tolist(), 'eye': eye.tolist(),
                       'distance_m': round(d, 3),
                       'envelope_lo': lo.tolist(), 'envelope_hi': hi.tolist(),
-                      'aperture_assumption':
-                      '水平光圈 20.955 mm、焦距 24 mm、16:9 —— '
-                      '**光圈值未經驗證**（需開 Isaac 才讀得到），'
-                      '故距離以悲觀 vFOV 20° 訂'}
+                      'fov_basis':
+                      'rec5 趟次實拍影格反推 vFOV ≈ 26–27.6°，'
+                      '與「水平光圈 20.955 mm、焦距 24 mm、16:9」一致；'
+                      '距離以偏保守的 24° 訂（而非無依據的 20°）'}
 
     print('\nF  趟次目錄與封存判定')
     ck('free4 仍完整保留', os.path.exists(

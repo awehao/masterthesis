@@ -113,10 +113,19 @@ def main() -> int:
     ex = SingleThreadedExecutor()
     ex.add_node(nd)
     t0 = time.monotonic()
+    # **等待條件要涵蓋後面會用到的每一項。**
+    # 先前只等 cloud／diag／clock，卻在後面要求 `diag_fields` ——
+    # 那是安全層 `__init__` 發一次的 latched 訊息，負載較重時它的傳遞
+    # 會慢於其他三項，於是迴圈先跳出、檢查才報缺（實測於 rec5 趟次）。
+    # 這不是放寬門檻：該檢查仍要通過，只是把等待補齊。
     while time.monotonic() - t0 < a.wait_s:
         ex.spin_once(timeout_sec=0.05)
-        if nd.cloud is not None and nd.diag is not None and nd.clock_seen > 5:
+        if (nd.cloud is not None and nd.diag is not None
+                and nd.diag_fields and nd.clock_seen > 5):
             break
+    if not nd.diag_fields:
+        print(f'  （已等滿 {a.wait_s:.0f} s 仍未收到 '
+              f'/wholebody_safety/diag_fields）', flush=True)
     rep = {'checks': [], 'ok': True}
 
     def ck(name, cond, detail=''):
