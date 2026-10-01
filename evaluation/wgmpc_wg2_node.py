@@ -116,6 +116,8 @@ class WGMPCNode(Node):
         self.pub = self.create_publisher(Float64MultiArray,
                                          '/wholebody_safety/cmd_in', 10)
         self.log = []
+        self._hold_t0 = None
+        self._reached_held = False
 
     # ---------------------------------------------------------- 回呼
     def _on_js(self, m):
@@ -318,7 +320,26 @@ class WGMPCNode(Node):
             n_pub += 1
             U_warm = r.U
             e = task_error(self.K, q0, T_des, self.cfg.tcp)
-            rec.update(published=True,
+            _ep, _er = float(np.linalg.norm(e[:3])), float(np.linalg.norm(e[3:]))
+            # **到達並保持**：用實測狀態算的 FK 誤差，不是核心預測。
+            _in_tol = (_ep <= self.a.reach_pos_m and _er <= self.a.reach_rot_rad)
+            if _in_tol:
+                if self._hold_t0 is None:
+                    self._hold_t0 = snap.sim_t
+                    print(f'[wg2] 首次進入容差 @ sim {snap.sim_t:.3f}  '
+                          f'{_ep*1e3:.2f} mm / {math.degrees(_er):.3f}°', flush=True)
+                elif snap.sim_t - self._hold_t0 >= self.a.hold_s:
+                    self._reached_held = True
+            else:
+                if self._hold_t0 is not None:
+                    print(f'[wg2] 離開容差 @ sim {snap.sim_t:.3f}  '
+                          f'{_ep*1e3:.2f} mm / {math.degrees(_er):.3f}° '
+                          f'（保持計時重設）', flush=True)
+                self._hold_t0 = None
+            rec.update(in_tol=bool(_in_tol),
+                       hold_elapsed=(None if self._hold_t0 is None
+                                     else round(snap.sim_t - self._hold_t0, 4)),
+                       published=True,
                        request_world=[round(float(x), 8) for x in u_world],
                        request_body=[round(float(x), 8) for x in r.u0],
                        # **兩次座標轉換用的 yaw 與時間**各自記錄：
@@ -328,14 +349,18 @@ class WGMPCNode(Node):
                        conv_yaw_node=round(float(q0[2]), 9),
                        conv_yaw_src_sim_t=round(snap.sim_t, 6),
                        conv_at_mono=round(time.monotonic(), 6),
-                       err_p=float(np.linalg.norm(e[:3])),
-                       err_r=float(np.linalg.norm(e[3:])))
+                       err_p=_ep, err_r=_er)
             self.log.append(rec)
+            if self._reached_held:
+                print(f'[wg2] **到達並保持 {self.a.hold_s:.1f} s** '
+                      f'@ sim {snap.sim_t:.3f}', flush=True)
+                break
             slot, _m = self._reschedule(t0, slot, period)
             n_miss += _m
         return dict(published=n_pub, dropped_stale=n_drop_age,
                     no_solution=n_no_sol, deadline_miss=int(n_miss),
-                    rate_hz=self.a.rate)
+                    rate_hz=self.a.rate,
+                    reached_held=bool(self._reached_held))
 
     def _reschedule(self, t0, slot, period):
         """超時**跳過錯過的 slot**，不連續追趕（沿用 F17 的作法）。"""
@@ -370,7 +395,15 @@ def main() -> int:
     ap.add_argument('--tcp', default='link_tcp')
     ap.add_argument('--N', type=int, default=5)
     ap.add_argument('--rate', type=float, default=20.0)
-    ap.add_argument('--target', nargs=3, type=float, required=True)
+    ap.add_argument('--target', nargs=3, type=float, default=None,
+                    help='**絕對**世界座標 TCP 目標')
+    ap.add_argument('--target-offset', nargs=3, type=float, default=None,
+                    help='相對**實測起始 TCP** 的偏移（事前定版用；'
+                         '避免猜生成位姿）。與 --target 二擇一。')
+    ap.add_argument('--reach-pos-m', type=float, default=0.005)
+    ap.add_argument('--reach-rot-rad', type=float, default=0.02)
+    ap.add_argument('--hold-s', type=float, default=2.0,
+                    help='首次到達後要連續維持在容差內多久才算完成（模擬時間）')
     ap.add_argument('--target-rot-deg', type=float, default=0.0)
     ap.add_argument('--duration-s', type=float, default=30.0)
     ap.add_argument('--max-input-age', type=float, default=0.2)
@@ -404,16 +437,33 @@ def main() -> int:
         return 3
     q0 = np.asarray(nd._snap.q, float)
     T = nd.K.fk(q0, a.tcp).copy()
+    if (a.target is None) == (a.target_offset is None):
+        print('**--target 與 --target-offset 必須且只能給一個**', flush=True)
+        ex.shutdown(); nd.destroy_node(); rclpy.try_shutdown()
+        return 2
     T_des = np.eye(4)
-    T_des[:3, 3] = np.asarray(a.target, float)
-    T_des[:3, :3] = T[:3, :3]        # 首版只給位置目標＋保持起始姿態
-    print(f'[wg2] N={a.N} dt={1.0/a.rate:.3f} 目標 {a.target}  '
-          f'起始 TCP {np.round(T[:3,3],4).tolist()}', flush=True)
+    T_des[:3, 3] = (np.asarray(a.target, float) if a.target is not None
+                    else T[:3, 3] + np.asarray(a.target_offset, float))
+    T_des[:3, :3] = T[:3, :3]        # 首版只給位置目標＋**保持起始姿態**
+    print(f'[wg2] N={a.N} dt={1.0/a.rate:.3f}  '
+          f'起始 q {np.round(q0,5).tolist()}', flush=True)
+    print(f'[wg2] 起始 TCP {np.round(T[:3,3],5).tolist()}  '
+          f'目標 TCP {np.round(T_des[:3,3],5).tolist()}  '
+          f'偏移 {a.target_offset if a.target_offset else "（絕對）"}', flush=True)
+    print(f'[wg2] 到達 ≤{a.reach_pos_m*1e3:.1f} mm / '
+          f'{math.degrees(a.reach_rot_rad):.2f}°、保持 {a.hold_s:.1f} s（模擬時間）、'
+          f'u_prev 政策 {a.u_prev_policy}'
+          f'{"＋初始靜止" if a.assume_initial_rest else ""}', flush=True)
     try:
         stats = nd.run(T_des)
     finally:
         if a.out:
-            json.dump({'args': vars(a), 'log': nd.log},
+            json.dump({'args': vars(a),
+                       'target_tcp': [float(x) for x in T_des[:3, 3]],
+                       'start_tcp': [float(x) for x in T[:3, 3]],
+                       'start_q': [float(x) for x in q0],
+                       'reached_held': bool(nd._reached_held),
+                       'log': nd.log},
                       open(a.out, 'w'), ensure_ascii=False)
             print(f'[wg2] {len(nd.log)} 輪寫入 {a.out}', flush=True)
         ex.shutdown()

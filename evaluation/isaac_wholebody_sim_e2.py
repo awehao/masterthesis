@@ -171,6 +171,7 @@ from rclpy.executors import SingleThreadedExecutor             # noqa: E402
 from rosgraph_msgs.msg import Clock                            # noqa: E402
 from sensor_msgs.msg import JointState                         # noqa: E402
 from std_msgs.msg import Float64MultiArray, String             # noqa: E402
+from rclpy.qos import DurabilityPolicy, QoSProfile             # noqa: E402
 from nav_msgs.msg import Odometry                              # noqa: E402
 from geometry_msgs.msg import TransformStamped                 # noqa: E402
 import tf2_ros                                                 # noqa: E402
@@ -192,6 +193,30 @@ class WBNode(Node):
         self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.status_pub = self.create_publisher(String, '/wb_sim/status', 10)
+        # **經 E2 處理、真正送進物理 API 的命令回報**（WG2 的 u_prev 權威來源）。
+        # /wb_vel_cmd 是 adapter 輸出、位於 E2 **之前**，之後還可能有輪級修改、
+        # 逾時處置或閂鎖 ⇒ 它**不是**「實際套用」。
+        # 欄位 [physics_step_id, sim_t, bvx_body, bvy_body, wz, qd1..qd6]；
+        # 底盤為**本體**座標；手臂是**套用設定點對應的命令速率**，
+        # **不是**實測關節速度。
+        self.applied_pub = self.create_publisher(
+            Float64MultiArray, '/coman/applied_cmd', 10)
+        _lat1 = QoSProfile(depth=1)
+        _lat1.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.applied_meta_pub = self.create_publisher(
+            String, '/coman/applied_cmd_meta', _lat1)
+        self.applied_meta_pub.publish(String(data=json.dumps({
+            'cols': ['physics_step_id', 'sim_t', 'bvx_body', 'bvy_body', 'wz',
+                     'qd1', 'qd2', 'qd3', 'qd4', 'qd5', 'qd6'],
+            'base_frame': 'body（送進 set_linear_velocity 之前）',
+            'arm_semantics': '套用設定點對應的命令速率 (sp_k − sp_{k-1})/dt',
+            'arm_is_not': '實測關節速度',
+            'stage': '**E2 之後**（含輪級限制與逾時處置）、真正送進物理 API',
+            'not_the_same_as': '/wb_vel_cmd（adapter 輸出，E2 之前）',
+            'endpoint': 'isaac_wholebody_sim_e2',
+        }, ensure_ascii=False)))
+        self._sp_prev = None
+        self._step_id = 0
         # **Isaac 只發布到模型根部 base_footprint**。
         # base_footprint → base_link（URDF 固定 +0.05 m）由 robot_state_publisher
         # 發在 /tf_static；安全層查 odom → base_link 時由 TF 鏈自動組合。
@@ -661,6 +686,19 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
             robot.set_linear_velocity(np.array([vwx, vwy, 0.0]))
             robot.set_angular_velocity(np.array([0.0, 0.0, base_cmd[2]]))
             sent_prev = (vwx, vwy, float(base_cmd[2]))
+            # **套用回報**：底盤用**本體**命令（E2 輸出，未經世界旋轉）；
+            # 手臂用**設定點對應的命令速率**，首步無前值時為 0。
+            _qd = ([0.0] * len(ARM) if (sp is None or node._sp_prev is None)
+                   else [(float(sp[k]) - float(node._sp_prev[k])) / dt
+                         for k in range(len(ARM))])
+            if sp is not None:
+                node._sp_prev = [float(v) for v in sp]
+            node._step_id += 1
+            _am = Float64MultiArray()
+            _am.data = ([float(node._step_id), float(t),
+                         float(base_cmd[0]), float(base_cmd[1]),
+                         float(base_cmd[2])] + [float(x) for x in _qd])
+            node.applied_pub.publish(_am)
         else:
             base_cmd, sp = (float('nan'),) * 3, (float('nan'),) * 6
             sent_prev = (float('nan'),) * 3

@@ -1,0 +1,78 @@
+schema: wgmpc_wg2_run_prereg/1
+version: WG2-RUN1-PREREG
+status: registered_before_launch
+created: 2026-10-01
+note: '**啟動前記錄，不依結果修改。** 這是首趟整合測試，
+  **不是**宣告 WG2 驗收通過。通訊送達**不替代**到達成果。'
+
+run_id: wgmpc_wg2_free1
+domain: 51
+
+configuration:
+  N: 5
+  dt: 0.05
+  rate_hz: 20.0
+  D1: 'A —— 安全層世界逐軸 0.035255、核心本體逐軸 0.035255（接受安全層可能修改命令）'
+  u_prev_policy: strict
+  endpoint: 'evaluation/isaac_wholebody_sim_e2.py --mode sync（**自由空間，無抽屜**）'
+  chain: CmdChainE2（base_lin_max 0.05 範數、base_ang_max 0.20、arm_rate_max 1.0）
+  no_recording: true
+  not_included: [抽屜, 接觸, 視覺, 摩擦抓取, 避碰列]
+
+handshake_bootstrap:
+  problem: '**strict 下會互等**：WG2 節點等 /coman/applied_cmd，
+    而執行端只有在收到 /wb_vel_cmd 後才會產生套用回報。'
+  pre_declared_resolution: '**使用 `--assume-initial-rest`**。
+    機器人在自由空間生成後靜止、尚無任何命令流動，
+    所以第一輪以零值作 u_prev 是**事實陳述**，不是替代值。
+    該旗標的閘門是 `_applied is None and _ep_req is None and _modified is None`
+    ⇒ 一旦有命令流過就自動失效，之後必須用真正的 applied。'
+  this_is_not: '**不是**臨時切成 diagnostic，**也不是**拿零值冒充歷史。'
+  if_still_deadlocked: '若第一輪發布後仍拿不到 applied（例如 E2 閂鎖或拒收）
+    ⇒ **記為啟動握手問題並停止**，不切 diagnostic、不改政策。'
+
+target:
+  definition: '**相對實測起始 TCP 的偏移**（避免猜生成位姿；規則事前定版）'
+  offset_m: [0.25, 0.15, 0.05]
+  orientation: 保持**起始姿態**（首版只給位置目標）
+  rationale: 'WG1 的「大轉身 90°」案例用同一偏移，36 輪到達
+    ⇒ 已知在理想運動學下可達，適合作首趟整合測試。'
+
+acceptance_recorded_before_launch:
+  reach_pos_m: 0.005
+  reach_rot_rad: 0.02
+  hold_s: 2.0
+  hold_basis: '**實測狀態的 FK 誤差**（/odom ＋ /joint_states → FK），
+    **不是核心預測**。離開容差即重設保持計時。'
+  task_time_limit_s: 60.0        # WG2 節點的 --duration-s（牆鐘）
+  sim_limit_s: 120.0             # Isaac 端
+  unchanged_protections: [E2 三門檻與 max_cmd_age_s, 輪級限制, 加速度框,
+                          關節位置框, 熱中止線 92 °C, 整筆拒收與 _fail 閂鎖]
+  no_auto_rerun: 中止後**不自動重跑**
+
+four_questions_to_answer:
+- id: Q1
+  q: 回授是否成立
+  evidence: '求解實際使用了哪些狀態（/joint_states、/odom 的 sim_t）
+    與 **E2 後的套用命令**（/coman/applied_cmd 的 physics_step_id、sim_t）；
+    逐輪的 u_prev_src 與 u_prev_authoritative'
+- id: Q2
+  q: 任務是否到達並保持
+  evidence: '以**實測 TCP／FK** 評估（err_p、err_r、in_tol、hold_elapsed、
+    reached_held），**不只看核心預測**'
+- id: Q3
+  q: 能否持續提供有效命令
+  evidence: 發布／丟棄／無解／超時數、deadline_miss、核心 total 與逐輪牆鐘
+- id: Q4
+  q: 預測與執行差多少
+  evidence: '**分清兩個來源**：
+    (a) 安全層修改 = request（cmd_in，世界）vs modified（cmd_out，世界）；
+    (b) 物理追蹤 = 核心預測的 Q_pred vs 實測 FK。
+    兩者不可混為一談。'
+
+explicit_limits:
+- '**首趟整合測試，不是 WG2 驗收通過。**'
+- 通訊送達**不替代**到達成果
+- 'E 段反例只證明**已測延遲情境下**沒有發布過期解，
+  **不得擴大成**排除了所有時鐘／佇列情境'
+- 'p95 <= 1.1 x 週期 是**開發診斷**，不是驗收條件'
