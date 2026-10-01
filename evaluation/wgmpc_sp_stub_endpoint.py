@@ -11,11 +11,16 @@
   --fail-at S          S 秒後 exec_mode = 3（失效閂鎖）
   --api-false-at S     S 秒後 api_applied = False
   --sp-freeze-at S     S 秒後停發設定點（測 HOLD）
+  --rtf R              模擬時間相對牆鐘的推進比（1.0 = 即時；0.3 = 慢 3.3 倍）
+  --pause-at S         S 秒（模擬時間）後**暫停模擬時鐘**
+  --pause-wall-s W     暫停持續多久（牆鐘），之後恢復
+  --drop-js-at S       S 秒後停發 /joint_states（缺測）
 """
 from __future__ import annotations
 
 import argparse
 import json
+import time
 
 
 import rclpy
@@ -63,7 +68,10 @@ class Stub(Node):
         self.n_cmd = 0
         self.n_nonzero_cmd = 0
         self.meta_sent = False
-        self.create_timer(PHYS_DT, self._tick)
+        self.paused_until = None; self.n_pause = 0
+        # **RTF**：每個 tick 仍推進一個 PHYS_DT 的模擬時間，
+        # 但 tick 的牆鐘週期放大為 PHYS_DT / rtf。
+        self.create_timer(PHYS_DT / max(a.rtf, 1e-6), self._tick)
 
     def _on_cmd(self, m):
         if len(m.data) >= 9:
@@ -73,6 +81,24 @@ class Stub(Node):
                 self.n_nonzero_cmd += 1
 
     def _tick(self):
+        # **模擬時鐘暫停**：t 不前進，但照常發布（時鐘停住，不是訊息消失）
+        if self.paused_until is not None:
+            if time.monotonic() < self.paused_until:
+                c = Clock()
+                c.clock.sec = int(self.t)
+                c.clock.nanosec = min(int(round((self.t - int(self.t)) * 1e9)),
+                                      999999999)
+                self.clock.publish(c)
+                return
+            self.paused_until = None
+            print(f'[stub] 模擬時鐘恢復 @ sim {self.t:.3f}', flush=True)
+        if (self.a.pause_at >= 0 and self.n_pause == 0
+                and self.t >= self.a.pause_at):
+            self.n_pause = 1
+            self.paused_until = time.monotonic() + self.a.pause_wall_s
+            print(f'[stub] **模擬時鐘暫停** {self.a.pause_wall_s:.1f} s（牆鐘）'
+                  f' @ sim {self.t:.3f}', flush=True)
+            return
         self.t += PHYS_DT
         self.step += 1
         t = self.t
@@ -89,6 +115,8 @@ class Stub(Node):
             self.sp = [p + r * PHYS_DT for p, r in zip(self.sp, self.u_arm)]
             # 一階追蹤（係數與 free4 辨識同量級，只為讓狀態會動）
             self.q = [x + 0.095 * (s - x) for x, s in zip(self.q, self.sp)]
+        if self.a.drop_js_at >= 0 and t >= self.a.drop_js_at:
+            return                      # **缺測**：不再發 /joint_states
         js = JointState()
         js.header.stamp = stamp
         js.name = list(ARM)
@@ -148,13 +176,16 @@ def main() -> int:
     ap.add_argument('--fail-at', type=float, default=-1.0)
     ap.add_argument('--api-false-at', type=float, default=-1.0)
     ap.add_argument('--sp-freeze-at', type=float, default=-1.0)
+    ap.add_argument('--rtf', type=float, default=1.0)
+    ap.add_argument('--pause-at', type=float, default=-1.0)
+    ap.add_argument('--pause-wall-s', type=float, default=3.0)
+    ap.add_argument('--drop-js-at', type=float, default=-1.0)
     ap.add_argument('--run-s', type=float, default=12.0)
     a = ap.parse_args()
     rclpy.init()
     nd = Stub(a)
-    import time as _t
-    t0 = _t.monotonic()
-    while rclpy.ok() and _t.monotonic() - t0 < a.run_s:
+    t0 = time.monotonic()
+    while rclpy.ok() and time.monotonic() - t0 < a.run_s:
         rclpy.spin_once(nd, timeout_sec=0.05)
     print(json.dumps({'n_cmd': nd.n_cmd, 'n_nonzero_cmd': nd.n_nonzero_cmd,
                       'sp_ready': nd.sp_ready, 'sim_t': round(nd.t, 3)},

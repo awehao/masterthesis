@@ -159,6 +159,14 @@ class WGMPCNode(Node):
         self.handshake_startup = {'n_init_cmd': 0, 'states': []}
         self._t_sim0 = None
         self._stop_why = 'not_started'
+        self._t_wall0 = time.monotonic()
+        self._sim_slot0 = None
+        self._halt = False
+        self._n_dup_skip = self._n_missed_slot = self._n_stall = 0
+        self._n_warm_discard = 0
+        self._last_stall_s = None
+        self._last_solved_key = None
+        self._last_solved_sim_t = None
         # 命令三階段，各自只存**最後一筆不可變 tuple**
         self._modified = None       # (tuple9_world, mono)
         self._ep_req = None         # (tuple9_body, mono)  —— **E2 之前**
@@ -384,8 +392,17 @@ class WGMPCNode(Node):
 
     # ---------------------------------------------------------- 迴圈
     def run(self, T_des) -> int:
-        period = 1.0 / self.a.rate
         t0 = time.monotonic()
+        self._t_wall0 = t0            # **牆鐘監看**的原點（上限照舊）
+        self._sim_slot0 = None        # 時槽原點（模擬時間），首個可用快照時定
+        self._halt = False
+        self._n_dup_skip = 0          # 同一時間／步序被跳過的次數
+        self._n_missed_slot = 0
+        self._n_stall = 0
+        self._last_stall_s = None
+        self._n_warm_discard = 0
+        self._last_solved_key = None  # 已求解過的快照鍵（µs）
+        self._last_solved_sim_t = None
         slot = 0
         U_warm = None
         n_pub = n_drop_age = n_no_sol = 0
@@ -400,6 +417,9 @@ class WGMPCNode(Node):
             _cycle_wall = (None if _prev_top is None
                            else round((_top - _prev_top) * 1e3, 4))
             _prev_top = _top
+            if self._halt:
+                # 等待時槽時由 `_reschedule` 設定（牆鐘上限或模擬時鐘停滯）
+                break
             if time.monotonic() - t0 > self.a.duration_s:
                 self._stop_why = 'wall_duration'
                 break
@@ -453,7 +473,7 @@ class WGMPCNode(Node):
                         handshake_cmd_sent=bool(u_init is not None),
                         gate_state=gs, gate_why=gwhy,
                         timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
-                    slot, _m = self._reschedule(t0, slot, period)
+                    slot, _m = self._reschedule(slot)
                     n_miss += _m
                     continue
                 if gs == HOLD:
@@ -463,12 +483,34 @@ class WGMPCNode(Node):
                         reason='sp_gate_hold', published=False,
                         gate_state=gs, gate_why=gwhy,
                         timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
-                    slot, _m = self._reschedule(t0, slot, period)
+                    slot, _m = self._reschedule(slot)
                     n_miss += _m
                     continue
             snap = self._snap              # **讀一次**，整輪只用區域變數
             if snap is None:
                 self._exec.spin_once(timeout_sec=0.01)
+                continue
+            _key = self._key(snap.sim_t)
+            if self._sim_slot0 is None:
+                # 時槽原點 = 第一個可用快照的模擬時間
+                self._sim_slot0 = snap.sim_t
+            # ---- **重複／過舊快照閘門** ----
+            # 同一個時間／步序不得重複求解；較舊的快照也不得覆蓋
+            # 已經用過的較新控制依據。rec6 有 423 次相鄰快照時間相同。
+            if self._last_solved_key is not None and (
+                    _key == self._last_solved_key
+                    or snap.sim_t <= self._last_solved_sim_t + 1e-9):
+                self._n_dup_skip += 1
+                self.log.append(dict(
+                    slot=slot, sim_t=snap.sim_t, ok=False,
+                    reason=('snapshot_duplicate' if _key == self._last_solved_key
+                            else 'snapshot_not_newer'),
+                    published=False,
+                    last_solved_sim_t=self._last_solved_sim_t,
+                    n_dup_skip=self._n_dup_skip,
+                    timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
+                slot, _m = self._reschedule(slot)
+                n_miss += _m
                 continue
             if self._gate is not None and len(snap.s) != 6:
                 # 閘門說 ARMED，但**同時刻快照裡沒有設定點** ⇒ 配對未成立。
@@ -480,7 +522,7 @@ class WGMPCNode(Node):
                     paired_sources=list(snap.paired_sources),
                     n_incomplete=self._n_incomplete,
                     timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
-                slot, _m = self._reschedule(t0, slot, period)
+                slot, _m = self._reschedule(slot)
                 n_miss += _m
                 continue
             age_in = self.sim_now() - snap.sim_t
@@ -495,7 +537,7 @@ class WGMPCNode(Node):
                                      cycle_wall_ms=_cycle_wall,
                                      dropped=f'求解前輸入已過期 '
                                              f'{age_in * 1e3:.0f} ms'))
-                slot, _m = self._reschedule(t0, slot, period)
+                slot, _m = self._reschedule(slot)
                 n_miss += _m
                 continue
             q0 = np.asarray(snap.q, float)
@@ -510,9 +552,11 @@ class WGMPCNode(Node):
                                      published=False, timing_ms={'total': 0.0},
                                      cycle_wall_ms=_cycle_wall,
                                      dropped=f'無權威 u_prev（{src}）'))
-                slot, _m = self._reschedule(t0, slot, period)
+                slot, _m = self._reschedule(slot)
                 n_miss += _m
                 continue
+            _solve_sim_t0 = self.sim_now()
+            _solve_wall0 = time.monotonic()
             if self._gate is not None:
                 # 增廣狀態由**同時刻快照**組成：q 與 s 同一個物理步。
                 # `make_z` 在 s 含非有限值時拋錯，不以實測關節角代替。
@@ -520,6 +564,7 @@ class WGMPCNode(Node):
                              u_prev, T_des, self.cfg, U_warm=U_warm)
             else:
                 r = solve(self.K, q0, u_prev, T_des, self.cfg, U_warm=U_warm)
+            _solve_wall_ms = (time.monotonic() - _solve_wall0) * 1e3
             # **求解返回後重新檢查輸入年齡與任務有效性。**
             # 單一 executor 在求解期間不處理回呼，所以返回時佇列裡可能積了
             # 多筆訊息；**一次 spin_once 不保證已處理到新的 /clock**，
@@ -559,12 +604,22 @@ class WGMPCNode(Node):
                                    sp_exec_mode=snap.sp_exec_mode,
                                    sp_api_applied=snap.sp_api_applied),
                        gate_state=self._gate_state,
-                       n_incomplete=self._n_incomplete)
+                       n_incomplete=self._n_incomplete,
+                       # **時間契約的分項紀錄**（快照／求解起點／發布／牆鐘）
+                       timing=dict(snap_sim_t=round(snap.sim_t, 6),
+                                   solve_start_sim_t=round(_solve_sim_t0, 6),
+                                   solve_wall_ms=round(_solve_wall_ms, 4),
+                                   slot_target_sim_t=(
+                                       None if self._sim_slot0 is None else
+                                       round(self._sim_slot0
+                                             + slot / self.a.rate, 6))),
+                       n_dup_skip=self._n_dup_skip,
+                       n_missed_slot=self._n_missed_slot)
             if not r.ok:
                 n_no_sol += 1
                 rec['published'] = False
                 self.log.append(rec)
-                slot, _m = self._reschedule(t0, slot, period)
+                slot, _m = self._reschedule(slot)
                 n_miss += _m
                 continue
             rec['clock_moved'] = bool(_clock_moved)
@@ -580,7 +635,7 @@ class WGMPCNode(Node):
                                   f'而求解耗時 {r.timing_ms["total"]:.0f} ms '
                                   f'> {self.a.max_input_age*1e3:.0f} ms')
                 self.log.append(rec)
-                slot, _m = self._reschedule(t0, slot, period)
+                slot, _m = self._reschedule(slot)
                 n_miss += _m
                 continue
             if age_out > self.a.max_input_age:
@@ -589,7 +644,7 @@ class WGMPCNode(Node):
                 rec['published'] = False
                 rec['dropped'] = f'輸入已過期 {age_out*1e3:.0f} ms'
                 self.log.append(rec)
-                slot, _m = self._reschedule(t0, slot, period)
+                slot, _m = self._reschedule(slot)
                 n_miss += _m
                 continue
             if self._gate is not None:
@@ -607,12 +662,15 @@ class WGMPCNode(Node):
                         print(f'[wg2] **求解後回報失效閂鎖**：{why2}', flush=True)
                         self._stopped_on_fail = True
                         break
-                    slot, _m = self._reschedule(t0, slot, period)
+                    slot, _m = self._reschedule(slot)
                     n_miss += _m
                     continue
             if self._t_sim0 is None:
                 # 任務的**模擬時間**起點 = 首次成功發布那一輪的快照時間
                 self._t_sim0 = snap.sim_t
+            self._last_solved_key = _key
+            self._last_solved_sim_t = snap.sim_t
+            rec['publish_sim_t'] = round(self.sim_now(), 6)
             # 四段紀錄裡的 request 段**用同一個值**，不另算一次轉換
             u_world = self._publish_u(r.u0, float(q0[2]))
             n_pub += 1
@@ -681,9 +739,22 @@ class WGMPCNode(Node):
                 print(f'[wg2] **到達並保持 {self.a.hold_s:.1f} s** '
                       f'@ sim {snap.sim_t:.3f}', flush=True)
                 break
-            slot, _m = self._reschedule(t0, slot, period)
+            slot, _m = self._reschedule(slot)
             n_miss += _m
+            if _m:
+                # **跨過多個時槽**：暖啟動序列假設只前進一步，
+                # 不能再當成有效的 nominal。最小處理是丟棄重建，
+                # **不**臨時改模型 dt 來補救。
+                U_warm = None
+                self._n_warm_discard += 1
         return dict(stop_why=self._stop_why,
+                    slot_basis='simulation_clock',
+                    nominal_period_sim_s=1.0 / self.a.rate,
+                    n_dup_skip=self._n_dup_skip,
+                    n_missed_slot=self._n_missed_slot,
+                    n_warm_discard=self._n_warm_discard,
+                    n_sim_stall=self._n_stall,
+                    last_stall_s=self._last_stall_s,
                     task_sim_t0=self._t_sim0,
                     task_sim_span_s=(None if self._t_sim0 is None
                                      else round(self.sim_now()
@@ -704,16 +775,55 @@ class WGMPCNode(Node):
                     stopped_on_chain_fail=bool(self._stopped_on_fail),
                     chain_fail_info=self._chain_fail_info)
 
-    def _reschedule(self, t0, slot, period):
-        """超時**跳過錯過的 slot**，不連續追趕（沿用 F17 的作法）。"""
+    def _reschedule(self, slot):
+        """等到**下一個模擬時間時槽**。回傳 (slot, missed)。
+
+        時槽由**同一個模擬時鐘**驅動，名目間隔 `period = 1/rate`
+        （0.05 s **模擬時間**，與核心的 dt 同一個量）。
+
+        先前用 `time.monotonic()` 排程：RTF < 1 時，以模擬時間計的控制率
+        會高於名目值（rec6 實測 34.7 Hz 對名目 20 Hz，間隔 p50 0.030 s），
+        而核心的 dt 仍是 0.050 —— **時間契約不一致**。
+
+        等待期間仍服務回呼與失效訊息。模擬時間暫停時就一直等
+        （因此不會持續求解，保持計時也不會累積，它是以模擬時間算的）；
+        **牆鐘監看與上限照舊**，由本函式在等待中檢查並設 `self._halt`。
+
+        錯過時槽就**跳到下一個未來時槽**，不密集補發。
+        """
+        period = 1.0 / self.a.rate
         slot += 1
-        target = t0 + slot * period
-        now = time.monotonic()
-        if now > target:
-            slot += int((now - target) // period) + 1
-            return slot, True
-        while time.monotonic() < target:
+        if self._sim_slot0 is None:
+            return slot, False
+        target = self._sim_slot0 + slot * period
+        stall_t0 = time.monotonic()
+        sim_seen = self.sim_now()
+        while True:
+            now_sim = self.sim_now()
+            if now_sim > sim_seen + 1e-9:
+                sim_seen = now_sim
+                stall_t0 = time.monotonic()
+            if now_sim >= target - 1e-9:
+                break
+            # **牆鐘監看照舊**：等待中也要能被上限中止，否則模擬時鐘
+            # 停住時會永遠卡在這裡。
+            if time.monotonic() - self._t_wall0 > self.a.duration_s:
+                self._halt, self._stop_why = True, 'wall_duration'
+                return slot, False
+            _st = time.monotonic() - stall_t0
+            if _st > self.a.sim_stall_wall_s:
+                self._n_stall += 1
+                self._last_stall_s = round(_st, 3)
+                self._halt, self._stop_why = True, 'sim_clock_stalled'
+                return slot, False
             self._exec.spin_once(timeout_sec=0.002)
+        # 已經越過幾個時槽？跳到第一個未來時槽，**不追趕**
+        now_sim = self.sim_now()
+        k = int((now_sim - self._sim_slot0) // period)
+        if k > slot:
+            self._n_missed_slot += (k - slot)
+            slot = k
+            return slot, True
         return slot, False
 
     def _pump(self):
@@ -753,6 +863,9 @@ def main() -> int:
                     help='**模擬時間**預算上限（0 = 不啟用）。'
                          '錄影會拖慢 sim:wall，只靠牆鐘上限會讓任務拿到的'
                          '模擬時間比無錄影趟次少 ⇒ 要與 free4 對齊時用這個。')
+    ap.add_argument('--sim-stall-wall-s', type=float, default=10.0,
+                    help='模擬時鐘停滯多久（**牆鐘**）就中止等待。'
+                         '等待期間不求解、不累積保持時間。')
     ap.add_argument('--max-input-age', type=float, default=0.2)
     ap.add_argument('--hist-age', type=float, default=0.5)
     ap.add_argument('--u-prev-policy', default='strict',
