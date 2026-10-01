@@ -1,0 +1,84 @@
+schema: wgmpc_wg2_config/1
+version: WG2-CFG-1
+status: proposal_pending_approval      # **WG2 首版配置提案，待審定**
+created: 2026-10-01
+refs:
+  wg0: evaluation/results/specs/wgmpc_wg0_problem_spec.yaml（定版，c97507855eeb956e）
+  dev: evaluation/results/specs/wgmpc_wg1_dev_config.yaml（WG1-DEV-2）
+  result: evaluation/results/specs/wgmpc_wg1_round1_result.yaml
+  policy: evaluation/results/specs/wgmpc_wg1_policy_revisions.yaml（WG1-POL-1）
+
+title: WG2 首版配置的選定依據
+
+recommendation:
+  N: 5
+  dt: 0.05
+  rest: 沿用 WG1-DEV-2 的權重、限制與 SQP 參數；**驗收門檻一項未改**
+
+evidence_n1_n5_n10:
+  note: '同三個案例、dt 與限制與門檻均不變。**事前選定的開發配置比較，
+    不是執行中偷偷降 N。** 單位 ms。'
+  rows:
+  - {N: 1, cycles: [13, 37, 38], reached: [true, true, true],
+     cycle_total_p50: [5.41, 5.28, 5.25], cycle_total_p95: [5.63, 5.73, 5.78],
+     sqp_p50: 4.0, residual_max: 6.7e-16, recovery_steps: 0}
+  - {N: 5, cycles: [13, 36, 37], reached: [true, true, true],
+     cycle_total_p50: [17.99, 20.49, 18.51],
+     cycle_total_p95: [20.60, 43.88, 22.05],
+     sqp_p50: 4.0, residual_max: 1.3e-9, recovery_steps: 0}
+  - {N: 10, cycles: [13, 36, 37], reached: [true, true, true],
+     cycle_total_p50: [12.51, 70.60, 52.85],
+     cycle_total_p95: [66.23, 149.63, 78.66],
+     sqp_p50: 4.0, residual_max: 1.5e-7, recovery_steps: 0}
+
+why_N5:
+  behaviour: '三案例全部到達、殘差 ≤ 1.3e-9、恢復步 0、SQP 中位 4 次 ⇒ **行為合格**'
+  timing: 'p50 18.0–20.5 ms、**最差 p95 43.88 ms**（週期 50 ms）
+    ⇒ 餘裕 6.1 ms，約 **12 %**'
+  not_N10: 'p95 最差 149.63 ms，**已超過週期三倍**'
+  not_N20: '依指示不追 N = 20；單次 total p50 320.15 ms'
+  why_not_N1_despite_margin: '**N = 1 的時間餘裕遠大於 N = 5**
+    （p95 5.78 ms），而且在這三個案例中**輪數完全相同**
+    （13/37/38 vs 13/36/37）⇒ 長時域在此沒有輪數優勢。
+    **但這三個案例是自由空間 ＋ 靜態目標。** 多步預測的價值在於
+    提前處理會綁住的約束（障礙物、移動目標、接觸），
+    而那正是 W-GMPC 要驗的東西。選 N = 1 會把受測對象本身拿掉。
+    ⇒ 建議 N = 5，但**必須承認輪數優勢在本輪未被證明**。'
+
+margin_is_thin_HONEST:
+  statement: '**12 % 餘裕不足以宣稱能跑 20 Hz。**
+    WG2 還要加上 ROS 通訊、序列化、執行端往返與回授處理的負載，
+    而這些在 WG1 完全沒有。'
+  what_wg2_must_measure:
+  - 逐輪的核心 total（已有）＋ **通訊與執行往返**分開記錄
+  - 實際達成的控制頻率，與設定頻率的差
+  - deadline miss 與其分佈（**不以降頻掩蓋**）
+  - 任一輪 no_valid_solution 的原因分類
+  decision_rule: '若 WG2 顯示餘裕不足，依分段量測**只選一項**優化，
+    不先改架構。'
+
+next_single_optimisation_if_needed:
+  target: 'QP 物件重用（`update()` 取代每次 `setup()`）'
+  why_this_one: '**拆開 QP 分段後才看得出來的事**：
+    `_solve_qp` 每個 SQP 迭代都**新建一個 OSQP 物件**，
+    所以 `qp_prep`（稀疏轉換）＋ `qp_setup`（建立與因式分解）
+    是**乘以 n_sqp** 的固定成本。
+    N = 5 時 prep 0.96 ＋ setup 2.30 = **3.26 ms**（佔 total 11 %）；
+    N = 1 時 setup 1.32 ms **比 qp_iter 0.40 ms 還大** ——
+    合記為 `qp_solve` 時這件事完全看不到。'
+  expected_scope: 只改求解器呼叫方式，不改問題、不改接受邏輯、不改門檻
+  not_now: 本輪不做；等 WG2 的實測餘裕決定是否需要
+
+already_done_this_round:
+  optimisation: 'e 與 H 合併為 `task_error_and_jacobian`，**fk 只算一次**'
+  equivalence: '50 組隨機位姿（含大姿態誤差）下
+    e 與 H 相對原兩函式**逐位元相同**（max|Δ| = 0.0）'
+  measured: 'N = 5 的 H 組裝 11.70 → **9.51 ms**；
+    閉迴路最差 p95 48.19 → **43.88 ms**'
+
+carried_forward:
+  n1_ablation_caveat: '**N = 1 不等於既有的單步 QP**（不同成本尺度、
+    不同接受邏輯、不同限制組裝）⇒ 兩者不可直接相提並論'
+  horizon_benefit_unproven: 多步的輪數優勢在自由空間靜態目標下**未被證明**
+  sparse_not_attempted: 'N = 20 的 qp_build 51.77 ms 顯示稠密凝縮在長時域不划算，
+    但**本輪未改 sparse**（依指示）'

@@ -1,0 +1,61 @@
+schema: wgmpc_policy_revision/1
+version: WG1-POL-1
+status: recorded_policy_revision
+created: 2026-10-01
+wg0_ref: evaluation/results/specs/wgmpc_wg0_problem_spec.yaml（定版，c97507855eeb956e）
+
+title: WG1 的政策修訂紀錄（**不是等價修正**）
+
+note: '以下條目**改變了接受規則**，不能當成等價修正帶過。
+  每條都要記明適用範圍與不得沿用的情形。'
+
+revisions:
+- id: P1
+  name: 可行性恢復步（feasibility recovery step）
+  origin: W1–W3（見 wgmpc_wg1_round1_result.yaml）
+  what_changed: '當暖啟動 nominal **不可行**時：
+    (a) 該輪 QP **暫停信賴區域**；
+    (b) **無條件接受**第一個通過逐候選閘門的候選（不做 ΔJ 比較）。'
+  why_needed: 'ΔJ 比較需要一個**可行的**基準。nominal 不可行時，
+    QP 的可行集不含 nominal ⇒ 回傳解的線性化目標可以比 nominal 高
+    （實測 J_lin(cand) − J_lin(nom) = **+7.47e-4**）⇒ 每個候選都被拒；
+    而信賴區域以不可行點為中心會把問題切空
+    （LP 核對：不含信賴區域**可行**、含 Δ = 0.2 **不可行**）。'
+  this_is_a_policy_change: '**是。** 「暫停信賴區域」與「無條件接受」都改變了
+    接受規則，不是把同一規則寫得更正確。'
+  guardrails_v1:
+  - '候選仍必須通過**逐候選閘門**（有限值 ＋ 硬約束殘差 ≤ r_tol）
+    ⇒ 被接受的恢復步**本身是可行點**'
+  - '恢復成功後**重新 rollout**，並**恢復正常信賴區域**'
+  - '**該恢復步本身不判為 SQP 收斂**（`sqp_stop_reason = feasibility_recovered`，
+    `sqp_converged` 保持 false）'
+  - 回報 `nominal_infeasible`、`nominal_residual`、`first_feasible_unconditional`、
+    `n_recovery_steps`
+  scope_limited_to:
+    constraint_classes: '**僅限 v1 的線性硬約束** —— 控制速度框、加速度框、
+      手臂關節積分（嚴格線性）、輪級列。全部是 z 的線性不等式。'
+    why_that_matters: '線性硬約束下「可行點」可由一次 LP／QP 直接找到，
+      且可行集是凸的；「接受任一可行點」有明確意義。'
+  must_not_be_carried_over:
+    nonlinear_constraints: '**加入非線性避碰／接觸約束後不得直接沿用這個理由。**
+      屆時可行集非凸、線性化的可行點不保證真實可行，
+      「無條件接受首個可行候選」可能接受一個實際違反避碰的點。'
+    required_before_reuse: 要重新審定恢復步的定義與守衛，並另立政策條目
+- id: P2
+  name: 任一次 QP 失敗即回 no_valid_solution
+  what_changed: '先前的實作在 `qp_failed` 後**只要已有 U_best 仍會走到 ok=True**，
+    與 WG0 的 `output_policy_fixed.on_qp_failed` 不一致。已改為一致。'
+  this_is_a_bug_fix: 是（回到定版政策），不是政策修訂
+  test: '`先接受一次、下一次 QP 失敗 ⇒ 仍回 no_valid_solution`
+    （以 monkeypatch 讓第二次 QP 回 primal infeasible）'
+- id: P3
+  name: 逐候選閘門
+  what_changed: '候選在**進入成本比較與 nominal 更新之前**，必須先通過
+    有限值檢查與硬約束殘差核對；先前只在 nominal 不可行時才核，
+    正常路徑是單憑 ΔJ 就進 nominal。'
+  why: '未過閘的候選若先進了 nominal，後續的線性化與 ΔJ 比較
+    就建立在一個不合格的點上 —— 只靠最後的輸出檢查抓不到這件事。'
+  this_is_a_bug_fix: 是
+  test: '注入「OSQP 回報 solved 但解乘以 50 倍」⇒ 閘門拒 1 次，
+    理由 residual:velocity,acceleration,joint_position,wheel_speed,wheel_accel；
+    輸出未被汙染（最終殘差 0.0）'

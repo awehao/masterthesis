@@ -1,5 +1,5 @@
 schema: wgmpc_wg1_result/1
-version: WG1-R1
+version: WG1-R1b
 status: recorded
 created: 2026-10-01
 refs:
@@ -118,6 +118,23 @@ defects_found_and_fixed_in_round1:
     measured: 'R 的底盤項與手臂項相差約 800 倍（0.805 vs 1.0e-3）⇒ OSQP 迭代數暴增'
     fix: '**正規化決策變數** z = Σ ẑ，Σ = diag(tile(vmax, N))。
       純變數變換（同一問題），實測迭代數降約 35 %。'
+
+round1b_followups:
+  note: 'WG1 收尾輪（不開 Isaac、不加接觸、不改 sparse、不調寬門檻）'
+  acceptance_logic_fixes: 見 wgmpc_wg1_policy_revisions.yaml 的 P2、P3
+  policy_revision_registered: P1（可行性恢復步，限定自由空間線性硬約束）
+  timing_corrections:
+  - 'total **量到 return 之前**（先前在 E_pred 與線性化診斷之前就結算）'
+  - '`qp_solve` 拆成 **qp_prep／qp_setup／qp_iter** ——
+    先前合記會把稀疏轉換與 OSQP 建立誤判成迭代成本。
+    實測 N = 1 時 setup 1.32 ms **大於** iter 0.40 ms。'
+  - 't4 改為每個 N 重複 5 次取 **p50**（先前只取最後一次）'
+  - '新增「total >= Σ分段」的核對，確認沒有漏計'
+  equivalence_optimisation:
+    what: e 與 H 合併為 task_error_and_jacobian（fk 只算一次）
+    equivalence: 50 組隨機位姿下 e 與 H **逐位元相同**（max|Δ| = 0.0）
+    measured: N = 5 的 H 11.70 → 9.51 ms；閉迴路最差 p95 48.19 → 43.88 ms
+  horizon_ablation: 見 wgmpc_wg2_first_config.yaml 的 evidence_n1_n5_n10
 
 naming_limits:
   what_this_is: '**WG1 第一輪的求解器數值行為成立。**'
