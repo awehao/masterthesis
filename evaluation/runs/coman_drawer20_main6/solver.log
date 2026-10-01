@@ -1,0 +1,48 @@
+[solver] vmax_effective base_lin=0.035255 base_ang=0.199900 arm_max=0.999900 overrides={'vmax_base_lin': 0.035255, 'vmax_base_ang': 0.1999, 'vmax_arm': 0.9999}
+[solver] E2 相容性自檢通過：平面範數上界 0.049858 <= 0.050000、角速度 0.199900 <= 0.200000、關節 0.999900 <= 1.000000
+[WARN] [1790814955.823225826] [wholebody_pregrasp]: **求解端局部安全參數配置**（一般 d0 0.05、eps 0.03）：d0_by_pair={}、g_by_pair={'uflite_gripper_link|handle_bar': 0.003, 'uflite_finger1|drawer_front_panel': 0.01, 'uflite_finger2|drawer_front_panel': 0.01, 'link6|handle_bar': 0.045, 'uflite_finger1|handle_post_l': 0.045, 'uflite_finger1|handle_post_r': 0.045, 'uflite_finger2|handle_post_l': 0.045, 'uflite_finger2|handle_post_r': 0.045, 'link5|handle_bar': 0.065, 'link4|handle_bar': 0.07, 'uflite_gripper_link|drawer_front_panel': 0.03, 'uflite_gripper_link|handle_post_l': 0.035, 'uflite_gripper_link|handle_post_r': 0.035, 'link6|handle_post_l': 0.06, 'link6|handle_post_r': 0.06}（取代該配對的 d0+eps）、contact_pairs={'uflite_finger1|handle_bar': ['engage', 'pull', 'hold', 'release'], 'uflite_finger2|handle_bar': ['engage', 'pull', 'hold', 'release']}
+[INFO] [1790814955.824949137] [wholebody_pregrasp]: 協同拉動求解節點：行程 20.0 mm、拉動 4.0 s、退出 40 mm
+  等待 /joint_states、/odom 與距離資料…
+  等距離列（雲已到但整片 NODATA：TF 或障礙物位姿尚未就緒）…
+  丟棄本次求解結果（不發布）：求解所用狀態已過期 220 ms > 200 ms
+  丟棄本次求解結果（不發布）：求解所用狀態已過期 430 ms > 200 ms
+  丟棄本次求解結果（不發布）：求解所用狀態已過期 210 ms > 200 ms
+  丟棄本次求解結果（不發布）：求解所用狀態已過期 280 ms > 200 ms
+  丟棄本次求解結果（不發布）：求解所用狀態已過期 270 ms > 200 ms
+  18 週期寫入 /home/howardchen/masterthesis/evaluation/runs/coman_drawer20_main6/solver_out.json
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/coman_pull_solver_node.py", line 602, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/coman_pull_solver_node.py", line 596, in main
+    return M.main()
+           ^^^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/wholebody_pregrasp.py", line 735, in main
+    ok = nd.run(T_des)
+         ^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/coman_pull_solver_node.py", line 450, in run
+    self._pump()
+  File "/home/howardchen/masterthesis/evaluation/coman_pull_solver_node.py", line 214, in _pump
+    self.exec.spin_once(timeout_sec=float(wait_s))   # 一次等待機會
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 1015, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 1009, in _spin_once_impl
+    future.result()  # raise any exceptions
+    ^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/task.py", line 109, in result
+    raise self.exception()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/task.py", line 286, in _execute_coroutine_step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 592, in handler
+    await call_coroutine()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 480, in _execute
+    await await_or_execute(sub.callback, *msg_tuple)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 115, in await_or_execute
+    return callback(*args)
+           ^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/wholebody_pregrasp.py", line 266, in _on_pts
+    self.min_d = float((self.rows[ok, 6] - rho[ok]).min()) if ok.any() \
+                        ~~~~~~~~~^^^^^^^
+IndexError: boolean index did not match indexed array along dimension 0; dimension is 1109 but corresponding boolean dimension is 1111
