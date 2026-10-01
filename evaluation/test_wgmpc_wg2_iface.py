@@ -41,7 +41,9 @@ def ck(name, cond, extra=''):
     _bad += not cond
 
 
-def run_case(name, stop_js_at=-1.0, duration=12.0, with_safety=True):
+def run_case(name, stop_js_at=-1.0, duration=12.0, with_safety=True,
+             delay_ms=0, policy='diagnostic', wrap=False,
+             assume_rest=True):
     os.makedirs(SC, exist_ok=True)
     out = os.path.join(SC, f'{name}.json')
     env = dict(os.environ, ROS_DOMAIN_ID=DOMAIN)
@@ -81,12 +83,16 @@ def run_case(name, stop_js_at=-1.0, duration=12.0, with_safety=True):
                 stderr=subprocess.STDOUT, start_new_session=True)
             procs.append(ad)
             time.sleep(4.0)
+        script = 'wgmpc_wg2_delay_wrap.py' if wrap else 'wgmpc_wg2_node.py'
+        env2 = dict(env, COMAN_WG2_DELAY_MS=str(delay_ms))
         n = subprocess.Popen(
-            [sys.executable, '-u', os.path.join(HERE, 'wgmpc_wg2_node.py'),
+            [sys.executable, '-u', os.path.join(HERE, script),
              '--N', '5', '--rate', '20',
              '--target', '10.80', '8.40', '0.60',
-             '--duration-s', str(duration), '--out', out],
-            cwd=WS, env=env, stdout=subprocess.PIPE,
+             '--duration-s', str(duration), '--out', out,
+             '--u-prev-policy', policy]
+            + (['--assume-initial-rest'] if assume_rest else []),
+            cwd=WS, env=env2, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, start_new_session=True)
         procs.append(n)
         log = n.communicate(timeout=duration + 60)[0]
@@ -149,8 +155,27 @@ def main() -> int:
            float)[:2] - np.array([0.03, -0.02])).max()) > 1e-6)
 
     # ---------- D 三階段 ＋ 正常閉迴路 ----------
-    print('\nD 完整鏈：請求／修改後／實際套用（含安全層與 adapter）')
-    d, log = run_case('chain', duration=12.0)
+    print('\nD1 strict 模式：**沒有執行端的 applied 回報時必須拒絕發布**')
+    # **不給 --assume-initial-rest**：純測「沒有權威回報就不發布」的契約，
+    # 不讓「已確認初始靜止」的零值混進來。
+    ds, _ = run_case('strict', duration=8.0, policy='strict',
+                     assume_rest=False)
+    ck('節點有產出紀錄', ds is not None)
+    if ds is not None:
+        lgs = ds['log']
+        ck('**一筆都沒有發布**',
+           not any(r.get('published') for r in lgs), f'  {len(lgs)} 輪')
+        ck('理由是「無權威 u_prev」',
+           all(r.get('reason') == 'no_u_prev' for r in lgs),
+           f'  {sorted({r.get("reason") for r in lgs})}')
+        ck('u_prev 來源標為 no_valid_applied_report',
+           all(r['u_prev_src'] == 'no_valid_applied_report' for r in lgs))
+        ck('**沒有**任何輪被標成權威',
+           not any(r.get('u_prev_authoritative') for r in lgs))
+
+    print('\nD2 diagnostic 模式：鏈路與階段可分辨'
+          '（**此模式不算該項驗證通過**）')
+    d, log = run_case('chain', duration=12.0, policy='diagnostic')
     ck('節點有產出紀錄', d is not None)
     if d is None:
         print(log[-2000:])
@@ -162,8 +187,15 @@ def main() -> int:
        all('request_world' in r and 'request_body' in r for r in pub))
     srcs = {r['u_prev_src'] for r in lg}
     ck('u_prev 來源有被記錄', bool(srcs), f'  {sorted(srcs)}')
-    ck('**u_prev 取到實際套用者**（applied）', 'applied' in srcs,
-       f'  出現 {sum(1 for r in lg if r["u_prev_src"]=="applied")} 次')
+    ck('**/wb_vel_cmd 的來源標為 DIAG:endpoint_requested（E2 之前）**',
+       'DIAG:endpoint_requested' in srcs, f'  {sorted(srcs)}')
+    ck('診斷替代值**不得**被標成權威',
+       not any(r.get('u_prev_authoritative') for r in lg
+               if str(r['u_prev_src']).startswith('DIAG:')))
+    auth = [r for r in lg if r.get('u_prev_authoritative')]
+    print(f'    權威 u_prev（/coman/applied_cmd）輪次：{len(auth)} / {len(lg)}'
+          f'  —— 無 Isaac 時執行端不存在 ⇒ 預期 0。'
+          f'**diagnostic 模式不算「實際套用」驗證通過。**')
     ck('所有週期都有完整耗時（含 total）',
        all('total' in r['timing_ms'] for r in lg))
     tt = sorted(r['timing_ms']['total'] for r in pub)
@@ -211,6 +243,37 @@ def main() -> int:
         ck('已發布者的輸入年齡皆 <= 0.2 s',
            not ages or max(ages) <= 0.2 + 1e-9,
            f'  max {max(ages):.4f} s' if ages else '')
+
+    # ---------- E 直接反例：求解很久、時鐘持續前進 ----------
+    print('\nE 反例：注入 300 ms 求解延遲（> 0.2 s 年齡界限），'
+          '假世界的 /clock 與狀態持續前進')
+    d3, log3 = run_case('delay', duration=14.0, delay_ms=300, wrap=True)
+    ck('節點有產出紀錄', d3 is not None)
+    if d3 is not None:
+        lg3 = d3['log']
+        slow = [r for r in lg3 if r['timing_ms'].get('total', 0) > 250]
+        ck('確實注入了長求解', len(slow) >= 5,
+           f'  {len(slow)} 輪 total > 250 ms')
+        pub3 = [r for r in lg3 if r.get('published')]
+        stale_pub = [r for r in pub3 if (r.get('age_out') or 0) > 0.2]
+        ck('**過期解一筆都沒有發布**', not stale_pub,
+           f'  違規 {len(stale_pub)} 筆 / 已發布 {len(pub3)}')
+        moved = [r for r in lg3 if r.get('clock_moved') or r.get('state_moved')]
+        ck('**時間依據確認已更新**（clock 或 state 前進）',
+           len(slow) == 0 or len(moved) >= len(slow) * 0.8,
+           f'  {len(moved)} / {len(lg3)} 輪')
+        drops = [r for r in lg3 if not r.get('published') and r.get('dropped')]
+        ck('長求解的輪次被判過期並丟棄', len(drops) >= 5,
+           f'  {len(drops)} 輪；例：{drops[0]["dropped"] if drops else "—"}')
+        ao = [r['age_out'] for r in lg3
+              if r.get('age_out') is not None
+              and r['timing_ms'].get('total', 0) > 250]
+        if ao:
+            print(f'    長求解輪的 age_out：min {min(ao):.4f}、'
+                  f'max {max(ao):.4f} s（界限 0.2）'
+                  f'⇒ **時間依據確實前進了，不是舊時鐘**')
+        ck('  已發布者的 age_out 皆 <= 0.2',
+           all((r.get('age_out') or 0) <= 0.2 for r in pub3))
 
     print()
     print('WG2 介面測試：' + ('全部通過' if _bad == 0 else f'**{_bad} 項失敗**'))

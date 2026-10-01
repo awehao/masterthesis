@@ -1,5 +1,5 @@
 schema: wgmpc_wg2_interface/1
-version: WG2-IF-1
+version: WG2-IF-2
 status: recorded
 created: 2026-10-01
 refs:
@@ -36,17 +36,40 @@ frame_wiring:
     另有反例核對「少做 body→world 會與往返結果不同」。'
 
 command_history:
-  three_stages:
-    request: 本節點發到 cmd_in 的（**世界**）
-    modified: 安全層發到 cmd_out 的（**世界**）
-    applied: adapter 發到 /wb_vel_cmd 的（**本體**）
-  u_prev_source: '取**實際套用**者（applied）；取不到時依序退回
-    modified（世界→本體）→ zeros，並**記錄來源**。'
-  measured: 'u_prev 來源在完整鏈測試中 **239/239 輪都是 applied**'
-  adapter_guard_note: '**沒有消費端節點時 adapter 會拒絕轉發**
-    （F4 的 joints 順序守衛）⇒ 無 Isaac 時 applied 結構上取不到。
-    因此加了 `wgmpc_wg2_sink.py`：**只**宣告 joints 並訂閱 /wb_vel_cmd，
-    **不積分、不模擬物理、不回授狀態** ⇒ **不得用它取代 Isaac 的物理驗證**。'
+  correction_20261001: '**先前把 `/wb_vel_cmd` 稱為「實際套用」是錯的。**
+    它是 adapter 輸出，位於 **E2 之前** —— 之後還可能發生輪級修改、
+    逾時處置或閂鎖。先前「239/239 都是 applied」只證明**取得了該話題的命令**，
+    **不能證明物理步套用**。sink 只訂閱不執行，**更不能提供「已套用」證據**。'
+  stages:
+    request: 本節點發到 /wholebody_safety/cmd_in 的（**世界**）
+    modified: 安全層發到 /wholebody_safety/cmd_out 的（**世界**）
+    endpoint_requested: '/wb_vel_cmd（**本體**）—— **E2 之前，不是實際套用**'
+    applied: '**/coman/applied_cmd（E2 之後，真正送進物理 API）**'
+  applied_contract:
+    topic: /coman/applied_cmd（Float64MultiArray）
+    cols: [physics_step_id, sim_t, bvx_body, bvy_body, wz, qd1, qd2, qd3,
+           qd4, qd5, qd6]
+    base_frame: '**本體**（送進 set_linear_velocity 之前的值，即 E2 輸出）'
+    arm_semantics: '**套用設定點對應的命令速率** (asp_k − asp_{k−1})/physics_dt'
+    arm_is_not: '**實測關節速度**'
+    meta_topic: /coman/applied_cmd_meta（latched，帶欄位名與語意）
+    endpoint_change: '`isaac_coman_drawer_sim.py` **新增**這兩個發布器
+      （純新增，不改任何行為、門檻或既有主題）。
+      先前執行端只把套用命令寫進封存的 `coman_applied_cmd_log`，**不發布**。'
+  u_prev_policy:
+    strict: '**正式閉迴路用這個。** 只接受 /coman/applied_cmd 的權威回報；
+      取不到就**不求解、不發布**，不以 endpoint_requested 或零值冒稱真實歷史。'
+    initial_zero: '零值**只在明確確認初始靜止時**使用（`--assume-initial-rest`），
+      且只在還沒有任何命令流動之前。'
+    diagnostic: '保留替代值，但每筆都標 `DIAG:` 前綴與來源，
+      且 `u_prev_authoritative = false` ⇒ **該模式不算這項驗證通過**。'
+  verified:
+    D1_strict_refuses: '無執行端時 **160 輪一筆都沒有發布**，
+      理由全為 `no_u_prev`、來源全為 `no_valid_applied_report`、
+      **沒有任何輪被標成權威**'
+    D2_diagnostic: '鏈路可跑（238/239 發布），來源標為
+      `DIAG:endpoint_requested`／`DIAG:zeros`，
+      **權威輪次 0/239** —— 無 Isaac 時執行端不存在，**預期如此**'
 
 freshness_and_failure:
   before_solve: 輸入年齡 > max_input_age（0.2 s）⇒ 不求解，**留紀錄**
@@ -58,15 +81,40 @@ freshness_and_failure:
   verified_C: '到 sim 8 s 停止發布 /joint_states ⇒
     **過期解一筆都沒有發布**（違規 0）、305 輪被擋下、
     已發布者輸入年齡 max 0.1840 s ≤ 0.2'
+  time_basis_correction_20261001: '**先前求解後只做一次 `spin_once(0.0)`。**
+    單一 executor 在求解期間不處理回呼，返回時佇列裡積著多筆訊息，
+    **一次 spin 未必已處理到新的 /clock** —— 而 /clock 正是 sim_now() 的來源。
+    所以先前的停發 JointState 測試成立，**不能排除
+    「求解很久、時鐘仍舊、因此過期解被放行」**。'
+  time_basis_fix:
+  - '求解後做**有界**回呼處理（至多 pump_budget = 32 次、一次 2 ms 阻塞）。
+    **保持單一 executor，不加第二個 spin 執行緒。**'
+  - '時間依據取**兩個模擬時鐘來源的較新者**：sim_now() 與最新狀態的 sim_t'
+  - '**無法確認時間依據已更新**（clock 與 state 皆未前進）而求解耗時又超過
+    年齡界限 ⇒ **不發布**（fail closed），並記 dropped 理由'
+  - 逐輪記錄 clock_moved／state_moved／time_ref
+  verified_E_counterexample:
+    setup: '注入 **300 ms** 求解延遲（> 0.2 s 界限），
+      假世界的 /clock 與狀態**持續前進**；返回時佇列中仍有其他訊息。
+      延遲為 CPU-bound 忙迴圈，並計入核心回報的 total。'
+    long_solve_cycles: 43（total > 250 ms）
+    published: '**0** —— 過期解一筆都沒有發布'
+    time_basis_confirmed_updated: 43 / 43 輪
+    age_out_range: 'min 0.4135、max 0.5891 s（界限 0.2）
+      ⇒ **時間依據確實前進了，不是舊時鐘**'
+    conclusion: '直接反例成立：求解很久時，發布檢查用的是**已更新**的時間依據。'
 
 measured_timing:
   note: '**核心的 timing_ms[total] 不含介面開銷**（發布、回呼、排程等待），
     所以另量迴圈頂到頂的牆鐘。'
   core_total_ms: {p50: 12.49, p95: 16.28, max: 92.59}
   cycle_wall_ms: {p50: 50.01, p95: 51.75, max: 90.72, period: 50.0}
-  interpretation: '牆鐘 p50 ≈ 週期代表**跟得上**（迴圈在等 deadline）。
+  interpretation: '牆鐘 p50 ≈ 週期代表**典型週期接近設定值**，
+    **不等於每輪都跟得上**（實測 128/238 輪牆鐘 > 50 ms，p95 51.49）。
     **不可**用「牆鐘 − 核心」當介面開銷 —— 差額主要是刻意的等待。
     我一度這樣算出「介面開銷 37.61 ms」，**那是錯的，已修掉**。'
+  p95_rule_status: '**`p95 <= 1.1 x 週期` 是本輪新增的開發診斷，
+    不是 WG2 的正式驗收條件。** 要成為驗收條件須另案審定。'
   over_period_cycles: 120 / 238（牆鐘 > 50 ms 的輪次；p95 51.75 ⇒ 多為小幅超出）
   publish_rate: 239 / 239 輪發布（完整鏈案例）
   caveat: '**假世界的負載遠低於 Isaac。** 這些數字不能當成 Isaac 趟次的預測。'
@@ -93,8 +141,18 @@ open_decision_for_user:
       what: 安全層世界框放寬到 0.049858
       consequence: '**允許範數 0.070510 > 0.05** ⇒ 不可接受'
       safety: '**放寬保護，不採用**'
-  claude_position: '本輪用 **A**（保守、且能實測安全層的修改量）。
-    **這是保護相關的選擇，我不自行定版** —— 等你裁定後再寫入配置。'
+  ruling: '**核准 A**（2026-10-01）：安全層維持世界逐軸 0.035255、
+    核心維持本體逐軸 0.035255。僅作 WG2 首版整合配置，
+    **接受安全層可能修改命令**，並量測修改量與追蹤影響。
+    **不採 C，也不先為此降低核心速度。**'
+  verification_caveats:
+  - '**核心預測的是請求命令。** 安全層修改後，**不能宣稱原預測仍成立。**'
+  - 下一輪應由**實測狀態**與**真正套用歷史**重新規劃
+  - '**兩次座標轉換用的 yaw 與時間要各自記錄**：本節點用 snap 的 yaw
+    （記 conv_yaw_node、conv_yaw_src_sim_t、conv_at_mono），
+    adapter 用它自己收到的 /odom yaw。
+    **往返誤差測試只證明同一 yaw 下的代數正確性**，
+    兩者不同步時的實際誤差要靠這兩組紀錄事後對帳。'
 
 naming_limits:
   what_this_is: WG2 的**介面**已接通並通過無 Isaac 測試

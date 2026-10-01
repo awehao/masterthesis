@@ -522,6 +522,28 @@ class DrawerNode(Node):
                                  self._cmd_meta, _diagq)
         # 任務狀態：給求解節點用的**量測與旗標**（不含命令）
         self.task_pub = self.create_publisher(String, '/coman/task_state', 10)
+        # **經 E2 處理、真正送進物理 API 的命令回報**（WG2 的 u_prev 來源）。
+        # `/wb_vel_cmd` 是 adapter 輸出，位於 E2 **之前** —— 之後還可能發生
+        # 輪級修改、逾時處置或閂鎖，所以它**不是**「實際套用」。
+        # 欄位：[physics_step_id, sim_t, bvx_body, bvy_body, wz, qd1..qd6]
+        # 底盤三分量為**本體座標**（即送進 set_linear/angular_velocity 之前的值）；
+        # 手臂六分量是**套用設定點對應的命令速率** (asp_k − asp_{k-1})/dt，
+        # **不是**實測關節速度。
+        self.applied_pub = self.create_publisher(
+            Float64MultiArray, '/coman/applied_cmd', 10)
+        _lat1 = QoSProfile(depth=1)
+        _lat1.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.applied_meta_pub = self.create_publisher(
+            String, '/coman/applied_cmd_meta', _lat1)
+        self.applied_meta_pub.publish(String(data=json.dumps({
+            'cols': ['physics_step_id', 'sim_t', 'bvx_body', 'bvy_body', 'wz',
+                     'qd1', 'qd2', 'qd3', 'qd4', 'qd5', 'qd6'],
+            'base_frame': 'body（送進 set_linear_velocity 之前）',
+            'arm_semantics': '套用設定點對應的命令速率 (asp_k − asp_{k-1})/physics_dt',
+            'arm_is_not': '實測關節速度',
+            'stage': '**E2 之後**（含輪級限制與逾時處置）、真正送進物理 API',
+            'not_the_same_as': '/wb_vel_cmd（adapter 輸出，E2 之前）',
+        }, ensure_ascii=False)))
         # 抽屜本體世界位姿：距離節點據此追蹤**會移動的**障礙物部件
         #（櫃體不動，直接在障礙物設定裡給世界位姿，不需發布）
         self.drawer_pose_pub = self.create_publisher(
@@ -1713,10 +1735,20 @@ def main():
                     tgt[idx[j]] = _asp[k]
                 robot.get_articulation_controller().apply_action(
                     ArticulationAction(joint_positions=tgt))
+                # **命令速率**：用前一筆已套用設定點算，所以要在覆寫之前算。
+                # 沒有前一筆時速率為 0（首步），並由 meta 的語意說明涵蓋。
+                _qd = ([0.0] * len(ARM) if last_applied_q is None else
+                       [(float(_asp[k]) - float(last_applied_q[k]))
+                        / a.physics_dt for k in range(len(ARM))])
                 last_applied_q = [float(v) for v in _asp]
                 coman_applied_log.append(
                     [int(pose_src.physics_step_id()), round(t, 4)]
                     + [round(v, 9) for v in last_applied_q] + ['wb9'])
+                _am = Float64MultiArray()
+                _am.data = ([float(pose_src.physics_step_id()), float(t),
+                             float(_bv[0]), float(_bv[1]), float(_bv[2])]
+                            + [float(x) for x in _qd])
+                node.applied_pub.publish(_am)
                 # **端到端年齡**：來源發布時間 → 實際套用時間。
                 # 只有配對成功才記數值；配不到就記 unpaired，
                 # **不以距上次收件的時間冒稱端到端年齡**。

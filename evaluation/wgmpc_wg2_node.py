@@ -22,14 +22,22 @@
 所以本節點在發布前要做 **body → world**（乘 Rz(θ)）。
 **少做這一步，adapter 的轉換就會把命令轉錯一次。**
 
-命令的三個階段分開記錄（請求／修改後／實際套用）
------------------------------------------------
-    request  = 本節點發到 cmd_in 的（世界）
-    modified = 安全層發到 cmd_out 的（世界）
-    applied  = adapter 發到 /wb_vel_cmd 的（本體）
+命令的階段（**正名**）
+----------------------
+    request            = 本節點發到 /wholebody_safety/cmd_in 的（世界）
+    modified           = 安全層發到 /wholebody_safety/cmd_out 的（世界）
+    endpoint_requested = adapter 發到 /wb_vel_cmd 的（本體）
+                         —— **位於 E2 之前**，之後還可能有輪級修改、
+                         逾時處置或閂鎖 ⇒ **不是「實際套用」**
+    applied            = 執行端 /coman/applied_cmd（**E2 之後**，
+                         真正送進物理 API；附 physics_step_id 與 sim_t）
 
-下一輪的 `u_prev` 取**實際套用**者（轉回本體），不是請求值；
-取不到時依序退回 modified → request，並記錄來源。
+`u_prev` 的權威來源是 **applied**。
+`--u-prev-policy strict`（正式閉迴路）：**等**有效的 applied 回報；
+沒有就不發布，不以 endpoint_requested 或零值冒稱真實歷史。
+初始零值**只在明確確認初始靜止時**使用（`--assume-initial-rest`）。
+`--u-prev-policy diagnostic` 保留替代值，但每筆都標來源，
+且該模式**不算這項驗證通過**。
 """
 from __future__ import annotations
 
@@ -46,8 +54,9 @@ import rclpy
 from nav_msgs.msg import Odometry
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, String
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), 'src/ammr_wholebody_mpc'))
@@ -86,15 +95,24 @@ class WGMPCNode(Node):
         self._base = None         # (tuple3, sim_t, mono)
         self._snap = None
         # 命令三階段，各自只存**最後一筆不可變 tuple**
-        self._modified = None     # (tuple9_world, mono)
-        self._applied = None      # (tuple9_body, mono)
+        self._modified = None       # (tuple9_world, mono)
+        self._ep_req = None         # (tuple9_body, mono)  —— **E2 之前**
+        self._applied = None        # (tuple9_body, mono, step_id, sim_t) E2 之後
+        self._applied_meta = None
         self.create_subscription(JointState, '/joint_states', self._on_js, 10)
         self.create_subscription(Odometry, '/odom', self._on_odom, 10)
         self.create_subscription(Float64MultiArray,
                                  '/wholebody_safety/cmd_out',
                                  self._on_modified, 10)
         self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
+                                 self._on_ep_req, 10)
+        # **權威來源**：執行端經 E2 處理、真正送進物理 API 的命令回報
+        self.create_subscription(Float64MultiArray, '/coman/applied_cmd',
                                  self._on_applied, 10)
+        _lat = QoSProfile(depth=1)
+        _lat.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.create_subscription(String, '/coman/applied_cmd_meta',
+                                 self._on_applied_meta, _lat)
         self.pub = self.create_publisher(Float64MultiArray,
                                          '/wholebody_safety/cmd_in', 10)
         self.log = []
@@ -134,21 +152,53 @@ class WGMPCNode(Node):
             self._modified = (tuple(float(x) for x in m.data[:NU]),
                               time.monotonic())
 
-    def _on_applied(self, m):
+    def _on_ep_req(self, m):
+        """/wb_vel_cmd —— adapter 輸出，**E2 之前**。不是實際套用。"""
         if len(m.data) >= NU:
-            self._applied = (tuple(float(x) for x in m.data[:NU]),
-                             time.monotonic())
+            self._ep_req = (tuple(float(x) for x in m.data[:NU]),
+                            time.monotonic())
+
+    def _on_applied(self, m):
+        """/coman/applied_cmd —— **E2 之後**真正送進物理 API 的命令。
+
+        欄位 [physics_step_id, sim_t, bvx_body, bvy_body, wz, qd1..qd6]。
+        底盤為**本體**座標；手臂是**套用設定點對應的命令速率**，
+        不是實測關節速度。
+        """
+        if len(m.data) >= 11:
+            self._applied = (tuple(float(x) for x in m.data[2:11]),
+                             time.monotonic(), int(m.data[0]),
+                             float(m.data[1]))
+
+    def _on_applied_meta(self, m):
+        self._applied_meta = m.data
 
     # ------------------------------------------------- u_prev 的來源
     def _u_prev(self, theta):
-        """取**實際套用**者（本體）；退回 modified（世界→本體）→ request。"""
+        """回傳 (u_prev, 來源, 是否為權威來源)。
+
+        **權威來源只有 `applied`**（執行端 E2 之後的回報）。
+        strict 模式下取不到就回 (None, 理由, False) ⇒ 呼叫端**不發布**，
+        不以 endpoint_requested 或零值冒稱真實歷史。
+        """
         now = time.monotonic()
         if self._applied is not None and now - self._applied[1] <= self.a.hist_age:
-            return np.asarray(self._applied[0], float), 'applied'
+            return np.asarray(self._applied[0], float), 'applied', True
+        if self.a.u_prev_policy == 'strict':
+            if self.a.assume_initial_rest and self._applied is None \
+                    and self._ep_req is None and self._modified is None:
+                # **只在明確確認初始靜止時**使用零值，且只在還沒有任何
+                # 命令流動之前。一旦有命令流過就不再適用。
+                return np.zeros(NU), 'zeros_initial_rest', True
+            return None, 'no_valid_applied_report', False
+        # ---- diagnostic：保留替代值，但**另標來源**，不算驗證通過 ----
+        if self._ep_req is not None and now - self._ep_req[1] <= self.a.hist_age:
+            return (np.asarray(self._ep_req[0], float),
+                    'DIAG:endpoint_requested', False)
         if self._modified is not None and now - self._modified[1] <= self.a.hist_age:
             w = np.asarray(self._modified[0], float)
-            return body_to_world(-theta) @ w, 'modified_rotated'   # world→body
-        return np.zeros(NU), 'zeros'
+            return body_to_world(-theta) @ w, 'DIAG:modified_rotated', False
+        return np.zeros(NU), "DIAG:zeros", False
 
     # ---------------------------------------------------------- 迴圈
     def run(self, T_des) -> int:
@@ -188,22 +238,65 @@ class WGMPCNode(Node):
                 n_miss += _m
                 continue
             q0 = np.asarray(snap.q, float)
-            u_prev, src = self._u_prev(float(q0[2]))
+            u_prev, src, authoritative = self._u_prev(float(q0[2]))
+            if u_prev is None:
+                # **strict：沒有權威的已套用回報就不求解、不發布。**
+                # 不以 endpoint_requested 或零值冒稱真實歷史。
+                self.log.append(dict(slot=slot, sim_t=snap.sim_t,
+                                     age_in=round(age_in, 6), age_out=None,
+                                     u_prev_src=src, u_prev_authoritative=False,
+                                     ok=False, reason='no_u_prev',
+                                     published=False, timing_ms={'total': 0.0},
+                                     cycle_wall_ms=_cycle_wall,
+                                     dropped=f'無權威 u_prev（{src}）'))
+                slot, _m = self._reschedule(t0, slot, period)
+                n_miss += _m
+                continue
             r = solve(self.K, q0, u_prev, T_des, self.cfg, U_warm=U_warm)
-            # **求解返回後重新檢查輸入年齡與任務有效性**
-            self._exec.spin_once(timeout_sec=0.0)
-            age_out = max(self.sim_now(), (self._snap.sim_t if self._snap
-                                           else 0.0)) - snap.sim_t
+            # **求解返回後重新檢查輸入年齡與任務有效性。**
+            # 單一 executor 在求解期間不處理回呼，所以返回時佇列裡可能積了
+            # 多筆訊息；**一次 spin_once 不保證已處理到新的 /clock**，
+            # 而 /clock 正是 sim_now() 的來源。
+            # 所以這裡做**有界**回呼處理，並要求時間依據**可確認已更新**：
+            #   若 sim_now() 與 pump 之前相同、且沒有更新的狀態訊息，
+            #   就**無法確認**解是否過期 ⇒ **不發布**（fail closed）。
+            _t_before = self.sim_now()
+            _sn_before = snap.sim_t
+            self._pump()
+            _t_after = self.sim_now()
+            _sn_after = self._snap.sim_t if self._snap else _sn_before
+            _clock_moved = _t_after > _t_before + 1e-9
+            _state_moved = _sn_after > _sn_before + 1e-9
+            # 時間依據取**兩個模擬時鐘來源的較新者**（與 F17 同一紀律）
+            _ref = max(_t_after, _sn_after)
+            age_out = _ref - snap.sim_t
             rec = dict(slot=slot, sim_t=snap.sim_t, age_in=round(age_in, 6),
                        age_out=round(age_out, 6), u_prev_src=src,
                        ok=bool(r.ok), reason=r.reason,
                        sqp_stop=r.sqp_stop_reason,
                        sqp_converged=bool(r.sqp_converged),
                        n_sqp=r.n_sqp_used, residual=r.max_residual,
-                       timing_ms=r.timing_ms, cycle_wall_ms=_cycle_wall)
+                       timing_ms=r.timing_ms, cycle_wall_ms=_cycle_wall,
+                       u_prev_authoritative=bool(authoritative))
             if not r.ok:
                 n_no_sol += 1
                 rec['published'] = False
+                self.log.append(rec)
+                slot, _m = self._reschedule(t0, slot, period)
+                n_miss += _m
+                continue
+            rec['clock_moved'] = bool(_clock_moved)
+            rec['state_moved'] = bool(_state_moved)
+            rec['time_ref'] = round(_ref, 6)
+            if (not _clock_moved) and (not _state_moved) \
+                    and r.timing_ms['total'] > self.a.max_input_age * 1e3:
+                # **無法確認時間依據已更新，而求解耗時又超過年齡界限**
+                # ⇒ 不能判斷解是否過期 ⇒ **不發布**。
+                n_drop_age += 1
+                rec['published'] = False
+                rec['dropped'] = (f'時間依據未更新（clock/state 皆未前進）'
+                                  f'而求解耗時 {r.timing_ms["total"]:.0f} ms '
+                                  f'> {self.a.max_input_age*1e3:.0f} ms')
                 self.log.append(rec)
                 slot, _m = self._reschedule(t0, slot, period)
                 n_miss += _m
@@ -228,6 +321,13 @@ class WGMPCNode(Node):
             rec.update(published=True,
                        request_world=[round(float(x), 8) for x in u_world],
                        request_body=[round(float(x), 8) for x in r.u0],
+                       # **兩次座標轉換用的 yaw 與時間**各自記錄：
+                       # 本節點用 snap 的 yaw；adapter 用它自己收到的 /odom yaw。
+                       # 往返代數正確**只在同一 yaw 下**成立，
+                       # 兩者若不同步就會有實際誤差 —— 要能事後對帳。
+                       conv_yaw_node=round(float(q0[2]), 9),
+                       conv_yaw_src_sim_t=round(snap.sim_t, 6),
+                       conv_at_mono=round(time.monotonic(), 6),
                        err_p=float(np.linalg.norm(e[:3])),
                        err_r=float(np.linalg.norm(e[3:])))
             self.log.append(rec)
@@ -249,6 +349,16 @@ class WGMPCNode(Node):
             self._exec.spin_once(timeout_sec=0.002)
         return slot, False
 
+    def _pump(self):
+        """**有界**回呼處理。保持單一 executor，**不加第二個 spin 執行緒**。
+
+        至多 `pump_budget` 次回呼、至多一次 `pump_wait_s` 的阻塞。
+        一次 spin_once 不保證所有必要主題都更新 ⇒ 呼叫端仍要查時間依據。
+        """
+        self._exec.spin_once(timeout_sec=self.a.pump_wait_s)
+        for _ in range(max(0, int(self.a.pump_budget) - 1)):
+            self._exec.spin_once(timeout_sec=0.0)
+
     def sim_now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
 
@@ -265,6 +375,15 @@ def main() -> int:
     ap.add_argument('--duration-s', type=float, default=30.0)
     ap.add_argument('--max-input-age', type=float, default=0.2)
     ap.add_argument('--hist-age', type=float, default=0.5)
+    ap.add_argument('--u-prev-policy', default='strict',
+                    choices=['strict', 'diagnostic'],
+                    help="strict = **只接受** /coman/applied_cmd 的權威回報，"
+                         "取不到就不發布；diagnostic = 保留替代值但標來源，"
+                         "**不算驗證通過**")
+    ap.add_argument('--pump-budget', type=int, default=32)
+    ap.add_argument('--pump-wait-s', type=float, default=0.002)
+    ap.add_argument('--assume-initial-rest', action='store_true',
+                    help='明確確認初始靜止時，允許第一輪以零值作 u_prev')
     ap.add_argument('--out', default='')
     a = ap.parse_args()
     rclpy.init()

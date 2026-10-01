@@ -731,7 +731,7 @@ checkers_sha256_16:
   coman_pull_policy.py: 6e1492d2f95d5be7
   coman_pull_target.py: 9199c0a1011d1d91
   coman_pull_solver_node.py: 919b128f22678b9a
-  isaac_coman_drawer_sim.py: db54e6a107fe075d
+  isaac_coman_drawer_sim.py: ebf8a62dc16ce046
   wholebody_safety_filter.py: 6250b75f08a30d84
   arm_link_distance.py: 76671ab2c900a9cd
   wholebody_safety_node.py: 3db649ad05e07f98
@@ -784,7 +784,12 @@ checker_change_note: 'coman_handover_state.py 自 v1 凍結時的 5e717e4e3789ef
   coman_low_speed_box.py（相容性判斷單一來源）、
   coman_lowspeed_readback.py、test_low_speed_chain.py。
   run_coman_drawer20.sh **不入 sha 名單**（它自己執行該守門，自我比對無額外保護）；
-  其 L1 值由入口核對 H 段直接比對 L1 規格與執行端原始碼預設。'
+  其 L1 值由入口核對 H 段直接比對 L1 規格與執行端原始碼預設。
+  **2026-10-01（WG2 介面）**：isaac_coman_drawer_sim.py 再次變更 ——
+  **純新增** /coman/applied_cmd 與 /coman/applied_cmd_meta 兩個發布器
+  （WG2 的 u_prev 權威來源；先前執行端只把套用命令寫進封存的
+  coman_applied_cmd_log，不發布）。**不改任何行為、門檻或既有主題**；
+  單步 20 mm 支線的判定與保護完全未動。'
 wiring_fixes_20260929:
 - issue: 求解端發布的相位名稱（大寫任務相位）與設定鍵不符 ⇒ 接觸例外**從未生效**
   fix: coman_pull_solver_node.PHASE_MAP 逐項明列；未列出者 unknown
