@@ -411,3 +411,75 @@ Warp 1.13.0 initialized:
 [wg2] N=5 dt=0.050  起始 q [-0.00042, 0.0001, 0.0012, -0.00064, 0.00261, -0.00122, 0.00034, 2e-05, -0.0]
 [wg2] 起始 TCP [0.19567, 0.00028, 0.39966]  目標 TCP [0.44567, 0.15028, 0.44966]  偏移 [0.25, 0.15, 0.05]
 [wg2] 到達 ≤5.0 mm / 1.15°、保持 2.0 s（模擬時間）、u_prev 政策 strict＋初始靜止
+[wg2] 1199 輪寫入 /home/howardchen/masterthesis/evaluation/runs/wgmpc_wg2_free3/wg2_out.json
+[wg2] {'published': 1199, 'dropped_stale': 0, 'no_solution': 0, 'deadline_miss': 1, 'rate_hz': 20.0, 'reached_held': False, 'stopped_on_chain_fail': False, 'chain_fail_info': None}
+[16:59:04] [收尾 1/3] 請執行端受控停止（/wb_sim/stop_request）
+publisher: beginning loop
+publishing #1: std_msgs.msg.String(data='wgmpc_wg2 節點已結束，請走受控停止與停止觀察後封存')
+
+[wb] **收到受控停止請求**：wgmpc_wg2 節點已結束，請走受控停止與停止觀察後封存
+[wb] 停止：stop_request @ sim 87.460
+[16:59:05] [收尾 2/3] 等執行端完成封存（上限 180 s）
+[16:59:05]   **封存完成**（/home/howardchen/masterthesis/evaluation/runs/wgmpc_wg2_free3/sim/wb_run.json ）
+[16:59:05] [收尾 3/3] cleanup 由 trap 執行（只針對本趟 PID）
+[16:59:05] 收尾後 CPU 74.75  來源 hwmon:k10temp
+[16:59:05] 輸出目錄 /home/howardchen/masterthesis/evaluation/runs/wgmpc_wg2_free3
+[16:59:05] cleanup（只針對本趟 PID）...
+2026-10-01T08:59:05Z [98,578ms] [Error] [omni.kit.app._impl] [py stderr]: Exception in thread Thread-3 (spin):
+2026-10-01T08:59:05Z [98,580ms] [Error] [omni.kit.app._impl] [py stderr]: Traceback (most recent call last):
+2026-10-01T08:59:05Z [98,581ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/usr/lib/python3.12/threading.py", line 1073, in _bootstrap_inner
+2026-10-01T08:59:05Z [98,586ms] [Error] [omni.kit.app._impl] [py stderr]:     self.run()
+2026-10-01T08:59:05Z [98,586ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/usr/lib/python3.12/threading.py", line 1010, in run
+2026-10-01T08:59:05Z [98,588ms] [Error] [omni.kit.app._impl] [py stderr]:     self._target(*self._args, **self._kwargs)
+2026-10-01T08:59:05Z [98,588ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 359, in spin
+2026-10-01T08:59:05Z [98,591ms] [Error] [omni.kit.app._impl] [py stderr]:     self._spin_once_impl()
+2026-10-01T08:59:05Z [98,592ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+2026-10-01T08:59:05Z [98,595ms] [Error] [omni.kit.app._impl] [py stderr]:     handler, entity, node = self.wait_for_ready_callbacks(
+2026-10-01T08:59:05Z [98,596ms] [Error] [omni.kit.app._impl] [py stderr]:                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-01T08:59:05Z [98,596ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+2026-10-01T08:59:05Z [98,598ms] [Error] [omni.kit.app._impl] [py stderr]:     return next(self._cb_iter)
+2026-10-01T08:59:05Z [98,598ms] [Error] [omni.kit.app._impl] [py stderr]:            ^^^^^^^^^^^^^^^^^^^
+2026-10-01T08:59:05Z [98,598ms] [Error] [omni.kit.app._impl] [py stderr]:   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+2026-10-01T08:59:05Z [98,600ms] [Error] [omni.kit.app._impl] [py stderr]:     raise ExternalShutdownException()
+2026-10-01T08:59:05Z [98,600ms] [Error] [omni.kit.app._impl] [py stderr]: rclpy.executors.ExternalShutdownException
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/arm_vel_adapter.py", line 203, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/arm_vel_adapter.py", line 195, in main
+    rclpy.spin(nd)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/ammr_wholebody_mpc/wholebody_safety", line 33, in <module>
+    sys.exit(load_entry_point('ammr-wholebody-mpc==0.0.1', 'console_scripts', 'wholebody_safety')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/install/ammr_wholebody_mpc/lib/python3.12/site-packages/ammr_wholebody_mpc/wholebody_safety_node.py", line 682, in main
+    rclpy.spin(node)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+[wb] -> /home/howardchen/masterthesis/evaluation/runs/wgmpc_wg2_free3/sim/wb_run.json
+[99.170s] Simulation App Shutting Down
+[16:59:08] cleanup done
