@@ -237,17 +237,17 @@ class WBNode(Node):
         self._fail_sent = False
         self._sp_prev = None
         self._step_id = 0
+        # **Isaac 只發布到模型根部 base_footprint**。
+        # base_footprint → base_link（URDF 固定 +0.05 m）由 robot_state_publisher
+        # 發在 /tf_static；安全層查 odom → base_link 時由 TF 鏈自動組合。
+        # 若這裡另發 odom → base_link，base_link 就有兩個父節點。
+        self.tfb = tf2_ros.TransformBroadcaster(self)
 
     def _on_stop_request(self, m):
         """上游請求受控停止。**不是** SIGTERM —— 走正常收尾與封存。"""
         if self.stop_requested is None:
             self.stop_requested = str(m.data)
             print(f'[wb] **收到受控停止請求**：{self.stop_requested}', flush=True)
-        # **Isaac 只發布到模型根部 base_footprint**。
-        # base_footprint → base_link（URDF 固定 +0.05 m）由 robot_state_publisher
-        # 發在 /tf_static；安全層查 odom → base_link 時由 TF 鏈自動組合。
-        # 若這裡另發 odom → base_link，base_link 就有兩個父節點。
-        self.tfb = tf2_ros.TransformBroadcaster(self)
 
     def _cmd(self, msg):
         self.n_cb += 1

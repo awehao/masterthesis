@@ -161,6 +161,43 @@ def main() -> int:
     print('    **H3 的完整路徑（Isaac 自己落盤）需實跑驗證**；'
           '本檔只驗停止條件、等待上限與狀態檔契約。')
 
+    # ---------- H4 執行端節點的屬性必須在 __init__ 賦值 ----------
+    print('\nH4 執行端節點屬性在 __init__ 賦值（**防止錨點插錯把賦值切進方法體**）')
+    import ast as _ast
+    NEED = ('applied_pub', 'applied_meta_pub', 'fail_pub',
+            '_sp_prev', '_step_id', '_fail_sent')
+    for f, cls, extra in (('isaac_wholebody_sim_e2.py', 'WBNode', ('tfb',)),
+                          ('isaac_coman_drawer_sim.py', 'DrawerNode', ())):
+        src = open(os.path.join(HERE, f), encoding='utf-8').read()
+        tree = _ast.parse(src)
+        node = next((n for n in _ast.walk(tree)
+                     if isinstance(n, _ast.ClassDef) and n.name == cls), None)
+        ck(f'{f}：找到 class {cls}', node is not None)
+        if node is None:
+            continue
+        init = next((x for x in node.body if isinstance(x, _ast.FunctionDef)
+                     and x.name == '__init__'), None)
+        ck(f'  {cls}.__init__ 存在', init is not None)
+        if init is None:
+            continue
+        got = {t.attr for n in _ast.walk(init) if isinstance(n, _ast.Assign)
+               for t in n.targets if isinstance(t, _ast.Attribute)}
+        miss = [x for x in NEED + extra if x not in got]
+        ck(f'  {cls}.__init__ 賦值齊備（含 {len(NEED + extra)} 項）',
+           not miss, f'  **缺 {miss}**' if miss else '')
+        # 方法體裡**不得**出現這些屬性的賦值（除了 __init__）
+        stray = []
+        for fn in node.body:
+            if not isinstance(fn, _ast.FunctionDef) or fn.name == '__init__':
+                continue
+            a = {t.attr for n in _ast.walk(fn) if isinstance(n, _ast.Assign)
+                 for t in n.targets if isinstance(t, _ast.Attribute)}
+            stray += [f'{fn.name}:{x}' for x in (NEED + extra) if x in a]
+        ck(f'  這些屬性**不在**其他方法裡被賦值', not stray, f'  {stray}')
+    print('    這一項是因為 free2 的實際失敗：我把方法插在 __init__ 中間，')
+    print('    使 self.tfb 的賦值被切進 _on_stop_request 的函式體 ⇒')
+    print('    **只有收到停止請求才會賦值** ⇒ publish_feedback 立刻 AttributeError。')
+
     print()
     print('第二趟前最小核對：' + ('全部通過' if _bad == 0 else f'**{_bad} 項失敗**'))
     return 1 if _bad else 0
