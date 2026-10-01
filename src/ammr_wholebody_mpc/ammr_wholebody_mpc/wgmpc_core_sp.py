@@ -59,6 +59,26 @@ free4 的離線辨識（`wgmpc_arm_setpoint_ident.py`，前半估、後半驗證
 
 兩者都保留 `cfg.joint_margin`；執行端本身不留餘量，故這是保守方向。
 
+數值處理：等價正值列縮放
+------------------------
+`measured_position` 的複合增益 G ≈ 0.00864 遠小於其他區塊的係數，
+欄正規化後整體 |係數| 跨度達 115.8×，OSQP 會在限位逼近時打到迭代上限。
+本版對每列同乘有限正數 d_i：
+
+    l_i ≤ A_i U ≤ h_i   ⟺   d_i l_i ≤ d_i A_i U ≤ d_i h_i
+
+**精確算術下不改可行集合**，不等同刪除限制或放寬門檻。成本與限制內容不變。
+候選解的閘門與最終殘差核對一律使用**未縮放的 A、lo、hi 與原單位**，
+`r_tol` 不動，`accepted_status` 仍只接受 `solved`（超迭代解不接受）。
+可用 `cfg.row_scaling = False` 關閉以做對照。
+
+**兩組關節限位都保留。** 先前以「偏置累積 < 餘量」論證 `measured_position`
+被 `setpoint_position` 蘊含是**錯的**：含非零偏置時
+x⁺ = (1−α)x + αs + b 不再只是 x 與 s 的凸組合，穩態偏移是 b/α，
+不是 b。joint2 的反例（α = 0.09504、b = 2.715e-4，故 b/α = 2.856e-3）：
+取 x = s = U − 0.5 mrad、u = 0，五個物理步後 x = U + 0.623 mrad ——
+**設定點界成立、實測界不成立**。
+
 界線
 ----
 α 與 b 由**單趟**（free4，n = 1）辨識，是**候選模型參數，未定版**。
@@ -131,6 +151,7 @@ class ArmSetpointModel:
 @dataclass
 class WGMPCResultSP(WGMPCResult):
     """沿用 WGMPCResult 的全部欄位，另記設定點預測與手臂模型出處。"""
+    row_scale_range: tuple = (1.0, 1.0)   # 本輪列縮放係數的 (min, max)
     Z_pred: np.ndarray | None = None      # (N+1, 15) 增廣狀態 rollout
     S_pred: np.ndarray | None = None      # (N+1, 6) 設定點預測
     arm_model_status: str = ''
@@ -140,6 +161,11 @@ class WGMPCResultSP(WGMPCResult):
 class WGMPCConfigSP(WGMPCConfig):
     """沿用 WGMPCConfig 的**全部**已核准數值，只加上手臂執行模型。"""
     arm_model: ArmSetpointModel = field(default_factory=ArmSetpointModel)
+    # **等價正值列縮放**（Howard 2026-10-01 核准的唯一數值改善）。
+    # 對第 i 列同乘有限正數 d_i：l_i ≤ A_i U ≤ h_i ⟺ d_i l_i ≤ d_i A_i U ≤ d_i h_i。
+    # 精確算術下**不改可行集合**，不等同刪除限制或放寬門檻。
+    # 殘差一律以**未縮放的原始限制、原單位**檢查（見 solve_sp）。
+    row_scaling: bool = True
 
     def composed(self):
         return self.arm_model.compose(self.dt)
@@ -355,6 +381,19 @@ def build_constraints_sp(z0, U_nom, u_prev, cfg: WGMPCConfigSP, delta,
             np.asarray(hi, float), blocks)
 
 
+def row_scale(A: np.ndarray, floor: float = 1e-12) -> np.ndarray:
+    """逐列等化：d_i = 1 / ‖A_i‖_∞。回傳**有限正值**向量。
+
+    輸入是**已做欄正規化**（×Σ）的矩陣，所以 d 只處理列間的係數跨度。
+    全零列（理論上不應出現）給 d_i = 1，不讓 1/0 進去。
+    """
+    m = np.abs(np.asarray(A, float)).max(axis=1)
+    d = np.where(m > floor, 1.0 / np.maximum(m, floor), 1.0)
+    if not np.isfinite(d).all() or np.any(d <= 0.0):
+        raise ValueError('列縮放係數必須為有限正值')
+    return d
+
+
 # ---------------------------------------------------------------- QP 與 SQP
 def solve_sp(K, z0, u_prev, T_des, cfg: WGMPCConfigSP,
              U_warm=None) -> WGMPCResultSP:
@@ -462,8 +501,17 @@ def solve_sp(K, z0, u_prev, T_des, cfg: WGMPCConfigSP,
         tm['qp_build'] += (time.monotonic() - t0) * 1e3
 
         sig = np.tile(cfg.vmax(), N)
+        # **欄正規化**（原核心既有）＋**列等化**（本版新增，等價變換）。
+        # 送進 OSQP 的是縮放後的問題；下面的閘門與最終核對一律回到
+        # **未縮放的 Am/lo/hi、原單位**，所以縮放不可能放過違反約束的解。
+        _Ac = Am * sig[None, :]
+        if cfg.row_scaling:
+            _d = row_scale(_Ac)
+            res.row_scale_range = (float(_d.min()), float(_d.max()))
+        else:
+            _d = np.ones(_Ac.shape[0])
         zh, st, nit, _tq = _solve_qp(P * np.outer(sig, sig), qv * sig,
-                                     Am * sig[None, :], lo, hi, cfg)
+                                     _Ac * _d[:, None], lo * _d, hi * _d, cfg)
         tm['qp_prep'] += _tq['prep']
         tm['qp_setup'] += _tq['setup']
         tm['qp_iter'] += _tq['iter']

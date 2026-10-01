@@ -225,6 +225,14 @@ class WBNode(Node):
             'pairing': 'src_recv_seq／src_recv_sim_t 來自 chain.applied 快照；'
                        '**無法確定同一筆來源時為 -1／NaN**，不得拿各話題最新值相減',
         }, ensure_ascii=False)))
+        # **手臂設定點回報**（WG2-ARM-SP）。獨立話題，不改既有命令訊息，
+        # 也不改任何控制行為 —— 只是把執行端已有的內部狀態照實發出。
+        # 取樣時刻契約見 /coman/arm_setpoint_meta。
+        self.sp_pub = self.create_publisher(
+            Float64MultiArray, '/coman/arm_setpoint', 10)
+        self.sp_meta_pub = self.create_publisher(
+            String, '/coman/arm_setpoint_meta',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.fail_pub = self.create_publisher(String, '/coman/applied_fail',
                                               _lat1)
         # **受控停止請求**（純新增的停止條件，不改既有門檻）。
@@ -236,6 +244,7 @@ class WBNode(Node):
                                  self._on_stop_request, 10)
         self._fail_sent = False
         self._sp_prev = None
+        self._sp_meta_sent = False
         self._step_id = 0
         # **Isaac 只發布到模型根部 base_footprint**。
         # base_footprint → base_link（URDF 固定 +0.05 m）由 robot_state_publisher
@@ -707,6 +716,11 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                          + [4.0, float('nan'), float(chain.n_recv),
                             float(chain.n_rejected), 0.0, -1.0, float('nan')])
             node.applied_pub.publish(_am0)
+            # **設定點尚未建立 ⇒ 回報 ready = 0**，不讓求解器以 s = q 自行補。
+            _sp0 = Float64MultiArray()
+            _sp0.data = ([float(node._step_id), float(t), 0.0]
+                         + [float('nan')] * 6 + [4.0, 0.0])
+            node.sp_pub.publish(_sp0)
         elif out is not None:
             base_cmd, sp = out
             if sp is not None:
@@ -749,6 +763,44 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                            float(_sn.recv_sim_t) if _sn is not None
                            else float('nan')])
             node.applied_pub.publish(_am)
+            # **設定點回報**：此處是 `apply_action` 之後，故發出的是
+            # 「本步**寫入後**」的設定點 sp_i，與同一輪 `/joint_states`
+            # 的量測 act_i 構成**匹配對**（兩者同 sim_t、同 physics_step_id）。
+            # free4 實錄核對：(act_i, sp_i) 配對擬合 R² = 1.00000、
+            # 殘差 0.0039 mrad；(act_i, sp_{i−1}) 為 R² = 0.99266、0.545 mrad。
+            _spm = Float64MultiArray()
+            _spm.data = ([float(node._step_id), float(t),
+                          1.0 if sp is not None else 0.0]
+                         + [float(v) for v in (sp if sp is not None
+                                               else [float('nan')] * 6)]
+                         + [float(_mode), 1.0 if sp is not None else 0.0])
+            node.sp_pub.publish(_spm)
+            if not node._sp_meta_sent:
+                node._sp_meta_sent = True
+                node.sp_meta_pub.publish(String(data=json.dumps({
+                    'cols': ['physics_step_id', 'sim_t', 'ready']
+                            + [f'sp_{j}' for j in ARM]
+                            + ['exec_mode_code', 'api_applied'],
+                    'joint_order': list(ARM),
+                    'units': 'rad（prismatic 不在此列；手臂六軸皆 revolute）',
+                    'sampling_instant': '**本步寫入後**（apply_action 之後）',
+                    'pairing': '與同一輪 /joint_states 的量測構成匹配對'
+                               '（同 sim_t、同 physics_step_id）',
+                    'recursion': 'act_{i+1} = act_i + α·(sp_i − act_i) + b'
+                                 '　⇒ sp_i **先作用於下一物理段**',
+                    'composed_G_for_dt_0p05': 0.008640,
+                    'not_this': '若回報的是寫入前的 sp_{i−1}，'
+                                '五步合成的 G 會是 0.012570 —— 兩者不可混用',
+                    'ready_false_means': '設定點**尚未建立**'
+                                         '（執行端在第一筆有效命令時由實測關節位置建立）'
+                                         '⇒ 求解器**不得**假設 s = q，'
+                                         '須走初始化握手',
+                    'integration_rate': '設定點每物理步積分一次'
+                                        f'（physics_dt，約 {1.0/max(dt,1e-9):.0f} Hz）'
+                                        '；20 Hz 只是上游控制頻率',
+                    'does_not_change': '本話題為純新增回報，'
+                                       '不改既有命令訊息、不改控制行為',
+                }, ensure_ascii=False)))
             if chain.fail is not None and not node._fail_sent:
                 # **閂鎖只報一次**（latched topic），帶明確原因
                 node._fail_sent = True
@@ -894,7 +946,7 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                            f'並繼續量測 {STOP_HOLD_STEPS} 步（{STOP_HOLD_STEPS*a.physics_dt:.1f} s）'
                            '才收尾；停止行為由 log 的 base_lin_meas 與 '
                            '*_rate_meas 判定，不以關閉模擬器代替'),
-        'feedback_published': ['/clock', '/joint_states', '/odom',
+        'feedback_published': ['/coman/arm_setpoint', '/clock', '/joint_states', '/odom',
                                '/wb_sim/status', 'TF odom→base_footprint'],
         'frame_wiring': {
             'isaac_publishes_tf': 'odom → base_footprint（模型根部，單一父節點）',

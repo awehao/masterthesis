@@ -220,50 +220,62 @@ def main() -> int:
     ck('所有**成功回傳**的解都遵守設定點界', n_ok > 0 and n_resp == n_ok,
        f'{n_resp}/{n_ok} 遵守')
 
-    # T6c 限位逼近時 QP 的穩定性：**照實記，不美化**。
-    # 原核心在同樣的餘量下都回傳有效解（stop 可能是 no_progress，但 ok=True）；
-    # 增廣版會打到 OSQP 迭代上限。這是本次增廣**新引入**的問題，不可歸為既有。
-    print('    餘量逼近時的可解性對照（原核心逼近實測關節角）')
-    bad_sp, bad_old = [], []
+    # T6c 兩組限位都必須保留：**蘊含不成立**（Howard 的反例，已獨立重現）
+    print('    反例：b ≠ 0 時 x⁺ 不是 x 與 s 的凸組合 ⇒ 實測界不被設定點界蘊含')
+    jj = 1                                  # joint2，偏置最大
+    al_j = float(cfg.arm_model.alpha[jj]); b_j = float(cfg.arm_model.bias[jj])
+    Uu = 0.0                                # 以收緊後上限為原點
+    s_in = Uu - 0.5e-3
+    x = s_in
+    for _ in range(kp):
+        x = x + al_j * (s_in - x) + b_j     # 命令 u = 0 ⇒ 設定點不變
+    print(f'      α={al_j:.5f}  b={b_j:.4e}  穩態偏移 b/α = {b_j/al_j:+.4e} rad')
+    print(f'      起始 x = s = U − 0.5 mrad、u = 0'
+          f' ⇒ 五個物理步後 x = U {1e3*x:+.3f} mrad')
+    ck('**反例成立**：設定點界成立而實測界不成立 ⇒ 兩組限位都要保留',
+       s_in <= Uu and x > Uu,
+       f's = U{1e3*s_in:+.1f} mrad（界內）、x = U{1e3*x:+.3f} mrad（**越界**）'
+       '　⇒ 先前的「蘊含」論證已撤回')
+    # 閉式複合映射必須給同一個值（否則反例與模型不是同一件事）
+    Pj, Qj, Gj, hj, _ = cfg.composed()
+    x_cf = Pj[jj] * s_in + Qj[jj] * s_in + Gj[jj] * 0.0 + hj[jj]
+    ck('閉式複合映射重現同一反例', abs(x_cf - x) < 1e-15,
+       f'閉式 {1e3*x_cf:+.3f} mrad　差 {abs(x_cf-x):.1e}')
+
+    # T6d 列縮放前後的可解性：**同一批六個餘量案例**
+    print('    列縮放前後的六個限位案例（殘差一律以未縮放原單位檢查）')
+    import dataclasses
+    cfg_ns = dataclasses.replace(cfg, row_scaling=False)
+    print(f"      {'d (rad)':>9} {'未縮放':>26} {'列縮放':>26} {'縮放後殘差':>12}")
+    n_fix = 0
     for d in (0.5, 0.2, 0.1, 0.05, 0.02, 0.004):
         sh = s0.copy(); sh[4] = hi5 - d
-        r1 = S.solve_sp(K, S.make_z(q_cold, sh), np.zeros(9), T_des, cfg)
-        qh = q0.copy(); qh[3 + 4] = hi5 - d
-        r2 = C.solve(K, qh, np.zeros(9), T_des, cfg_old)
-        if not r1.ok:
-            bad_sp.append(d)
-        if not r2.ok:
-            bad_old.append(d)
-    print(f'      增廣核心無解於 d={bad_sp}')
-    print(f'      原核心無解於   d={bad_old}')
-    ck('**已知缺陷**：增廣版在設定點逼近限位時會打到 OSQP 迭代上限',
-       len(bad_sp) > 0 and len(bad_old) == 0,
-       f'增廣 {len(bad_sp)}/6 無解、原核心 {len(bad_old)}/6'
-       '　⇒ 這一項「ok」表示**缺陷已如實重現並記錄**，不是功能通過')
-    # 成因：measured_position 的複合增益 G ≈ 0.00864 遠小於其他區塊的係數，
-    # 正規化後整體 |係數| 跨度由 28.4× 擴到 115.8×。
-    Am2, lo2, hi2, bl2 = rows_for(S.make_z(q_cold, s_hot),
-                                  np.zeros((cfg.N, S.NU)))
-    sig = np.tile(cfg.vmax(), cfg.N)
-    A2 = Am2 * sig[None, :]
-    nz = np.abs(A2[A2 != 0])
-    qh = q0.copy(); qh[3 + 4] = hi5 - 0.004
-    Ao, _, _, _ = C.build_constraints(qh, np.zeros((cfg.N, S.NU)),
-                                      np.zeros(9), cfg_old, cfg_old.delta_max)
-    Ao = Ao * sig[None, :]
-    nzo = np.abs(Ao[Ao != 0])
-    ck('成因：正規化後係數跨度被 measured_position 擴大',
-       nz.max() / nz.min() > 3 * (nzo.max() / nzo.min()),
-       f'原核心 {nzo.max()/nzo.min():.1f}×　增廣 {nz.max()/nz.min():.1f}×')
-    # 補充：measured_position 其實被 setpoint_position **蘊含**（見下註），
-    # 故「移除它」是候選解法之一；但那會改動約束集合，**留待裁定**。
-    bmax = float(np.abs(cfg.arm_model.bias).max())
-    acc = bmax * cfg.N * kp
-    ck('measured_position 被 setpoint_position 蘊含（凸組合 ＋ 累積偏置 < 餘量）',
-       acc < cfg.joint_margin,
-       f'累積偏置 {acc:.2e} rad < 餘量 {cfg.joint_margin}'
-       f'（{acc/cfg.joint_margin*100:.1f}%）'
-       '　⇒ 候選解法：移除該區塊或對其列做縮放，**未自行採用**')
+        z = S.make_z(q_cold, sh)
+        r_ns = S.solve_sp(K, z, np.zeros(9), T_des, cfg_ns)
+        r_rs = S.solve_sp(K, z, np.zeros(9), T_des, cfg)
+        if (not r_ns.ok) and r_rs.ok:
+            n_fix += 1
+        print(f'      {d:9.3f} {r_ns.sqp_stop_reason:>26} '
+              f'{r_rs.sqp_stop_reason:>26} '
+              f'{(f"{r_rs.max_residual:.1e}" if r_rs.ok else "-"):>12}')
+    ck('列縮放修復了原本無解的案例', n_fix > 0, f'{n_fix} 個案例由無解轉為有解')
+    ck('列縮放後六個案例全部有解', all(
+        S.solve_sp(K, S.make_z(q_cold, (lambda a: (a.__setitem__(4, hi5 - d),
+                                                   a)[1])(s0.copy())),
+                   np.zeros(9), T_des, cfg).ok
+        for d in (0.5, 0.2, 0.1, 0.05, 0.02, 0.004)), '六個餘量')
+    # 縮放係數範圍與等價性
+    r_chk = S.solve_sp(K, S.make_z(q_cold, s_hot), np.zeros(9), T_des, cfg)
+    ck('殘差以**未縮放原單位**檢查且 <= r_tol',
+       r_chk.ok and r_chk.max_residual <= cfg.r_tol,
+       f'max_residual {r_chk.max_residual:.2e} <= r_tol {cfg.r_tol:.0e}')
+    ck('列縮放係數為有限正值', r_chk.row_scale_range[0] > 0
+       and np.isfinite(r_chk.row_scale_range[1]),
+       f'd ∈ [{r_chk.row_scale_range[0]:.3f}, {r_chk.row_scale_range[1]:.3f}]')
+    ck('r_tol 與 accepted_status 未被放寬',
+       cfg.r_tol == C.WGMPCConfig().r_tol
+       and cfg.accepted_status == ('solved',),
+       f'r_tol {cfg.r_tol:.0e}、accepted_status {cfg.accepted_status}')
 
     print('\nT7  用 free4 實錄比較兩個模型的**一控制步**預測落差')
     # 兩者都用同一段實際套用的命令；比較預測 TCP 誤差變化與實際

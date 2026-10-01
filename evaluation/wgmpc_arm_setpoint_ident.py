@@ -149,39 +149,69 @@ def main() -> int:
     # 起點：驗證段中每個可用的物理步 i，比較 act_{i+k} 的預測與實際
     base = i0 + half
     starts = []
-    for i in range(base, i1 + 1 - k_ctrl):
-        r = slice(i, i + k_ctrl + 1)
+    # 起點需要 SP[i−1]（命令區間的左端）⇒ 下界 +1
+    # 需要 SP[i−1]（命令區間左端）與 SP[i+kp+1]（逐筆重播的末增量）
+    for i in range(max(base, i0 + 1), i1 - k_ctrl):
+        r = slice(i - 1, i + k_ctrl + 2)
         if np.isfinite(SP[r]).all() and np.isfinite(AC[r]).all():
             starts.append(i)
     starts = np.array(starts)
     print(f'  起點數 {len(starts)}')
 
+    def cmd_window(i):
+        """i → i+kp 這段**實際作用**的命令積分。
+
+        設定點的遞推是 `sp_i = sp_{i−1} + u_i·dt_p`（`_apply`），而 i→i+1 的
+        物理由 **sp_i** 支配。因此 i→i+kp 作用的設定點是 sp_i … sp_{i+kp−1}，
+        對應命令 u_i … u_{i+kp−1}，積分為 **sp_{i+kp−1} − sp_{i−1}**。
+        先前寫成 sp_{i+kp} − sp_i，**偏了一個物理步**（Howard 指出）。
+        """
+        return SP[i + k_ctrl - 1] - SP[i - 1]
+
     def pred_ideal(i):
-        """理想速度積分：沿用**實際套用的**手臂命令速率。
-        命令速率由設定點差分回推（設定點就是命令的積分，見 _apply）。"""
-        u = (SP[i + 1:i + 1 + k_ctrl] - SP[i:i + k_ctrl]) / phys_dt
-        return AC[i] + u.sum(axis=0) * phys_dt
+        """理想速度積分（現行核心的假設），命令取實際作用區間。"""
+        return AC[i] + cmd_window(i)
 
     def pred_sp_logged(i):
-        """設定點追蹤：連乘 k 步，設定點取 log 實錄。"""
+        """設定點追蹤：連乘 kp 步，設定點**取 log 實錄**（模型品質上界）。"""
         q = AC[i].copy()
         for k in range(k_ctrl):
             q = q + alpha * (SP[i + k] - q) + bias
         return q
 
-    def pred_sp_rolled(i):
-        """設定點追蹤 ＋ 設定點**由命令自行遞推**（MPC 實際會用的形式）。
-        視界內命令取該控制步實際套用的平均速率（保持不變）。"""
-        u = (SP[i + k_ctrl] - SP[i]) / (k_ctrl * phys_dt)
+    def pred_sp_cmd_held(i):
+        """設定點追蹤 ＋ 設定點由**單一保持命令**遞推（MPC 實際採用的形式）。
+
+        命令取該視窗實際作用的**平均**速率。這是近似：20 Hz 命令在
+        對齊控制週期的視窗內本來就固定，但逐物理步滑動的視窗會跨越更新。
+        """
+        u = cmd_window(i) / (k_ctrl * phys_dt)
         q = AC[i].copy(); s = SP[i].copy()
         for _ in range(k_ctrl):
             q = q + alpha * (s - q) + bias
             s = s + u * phys_dt
         return q
 
-    names = ['理想速度積分（現行核心）', '設定點追蹤（設定點取實錄）',
-             '設定點追蹤（設定點由命令遞推）']
-    fns = [pred_ideal, pred_sp_logged, pred_sp_rolled]
+    def pred_sp_cmd_replay(i):
+        """設定點追蹤 ＋ **逐筆重播實際命令**。
+
+        s_0 = sp_i 已含 u_i，故第 k 次的增量是 u_{i+k+1}·dt_p =
+        sp_{i+k+1} − sp_{i+k}。於是遞推出的設定點**逐步等於 log 實錄**
+        —— 因為設定點本來就是命令的積分。所以這一項與
+        `pred_sp_logged` 在數值上恆等，保留它是為了把這個恆等**明示**，
+        不是當成第三個獨立數字。
+        """
+        q = AC[i].copy(); s = SP[i].copy()
+        for k in range(k_ctrl):
+            q = q + alpha * (s - q) + bias
+            s = s + (SP[i + k + 1] - SP[i + k])     # = u_{i+k+1}·dt_p
+        return q
+
+    names = ['理想速度積分（現行核心）',
+             '設定點追蹤｜設定點取實錄',
+             '設定點追蹤｜單一保持命令（視窗平均）',
+             '設定點追蹤｜逐筆重播實際命令（應與取實錄恆等）']
+    fns = [pred_ideal, pred_sp_logged, pred_sp_cmd_held, pred_sp_cmd_replay]
 
     # **兩種起點集合**。逐物理步滑動的視窗會跨越 20 Hz 命令更新；
     # 對齊控制週期的才是 MPC 實際面對的情形。兩者都報，不挑一個。
@@ -192,10 +222,10 @@ def main() -> int:
             if not x.get('published'):
                 continue
             i = int(np.argmin(np.abs(t - x['sim_t'])))
-            if (i >= base and i + k_ctrl <= i1
+            if (i >= max(base, i0 + 1) and i + k_ctrl < i1
                     and abs(t[i] - x['sim_t']) <= phys_dt
-                    and np.isfinite(SP[i:i + k_ctrl + 1]).all()
-                    and np.isfinite(AC[i:i + k_ctrl + 1]).all()):
+                    and np.isfinite(SP[i - 1:i + k_ctrl + 2]).all()
+                    and np.isfinite(AC[i - 1:i + k_ctrl + 1]).all()):
                 cand.append(i)
         aligned = np.array(sorted(set(cand)))
 
@@ -216,10 +246,17 @@ def main() -> int:
             print(f'      **最差關節 {rmse.max():.3f} mrad**　'
                   f'六軸 p50 {np.median(rmse):.3f}')
         ri = res[f'{tag}｜{names[0]}'].max()
-        rl = res[f'{tag}｜{names[1]}'].max()
-        rr = res[f'{tag}｜{names[2]}'].max()
-        print(f'    最差關節比值：實錄設定點 {ri/rl:.1f}× 改善、'
-              f'命令遞推 {ri/rr:.1f}× 改善')
+        print('    最差關節相對理想模型的改善：' + '　'.join(
+            f'{nm.split("｜")[1]} {ri/res[f"{tag}｜{nm}"].max():.1f}×'
+            for nm in names[1:]))
+
+    # 恆等核對：逐筆重播 == 取實錄（設定點即命令的積分）
+    for tag in ('逐物理步滑動', '對齊控制週期'):
+        kl = f'{tag}｜{names[1]}'; kr = f'{tag}｜{names[3]}'
+        if kl in res and kr in res:
+            d = float(np.abs(res[kl] - res[kr]).max())
+            print(f'\n  恆等核對（{tag}）：逐筆重播 vs 取實錄 RMSE 最大差 '
+                  f'{d:.3e} mrad　{"**恆等成立**" if d < 1e-9 else "**不成立**"}')
 
     print('\n=== 界線 ===')
     print('  * α 與 b 是**候選模型參數**，由單趟（n=1）資料辨識，尚未定版。')
