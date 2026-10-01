@@ -182,6 +182,64 @@ run_history:
     delivered_and_applied: '**是**（2360 收 / 0 拒 / 11792 套用 / fail None）'
     full_operation_completed: '**否**（相位未離開 idle、開度 0.00 mm）'
     coordinated_motion_during_pull: '**無證據**（從未進入 PULL）'
+- run_id: coman_drawer20_main6
+  outcome: '**新排程行為成立，但無法持續提供有效控制命令**；
+    求解端在 18 輪後因新發現的資料競爭（F18）崩潰。
+    未取得完整操作與拉動期間同動結果。'
+  detail: evaluation/runs/coman_drawer20_main6/OUTCOME.md
+  not_a_rerun_after_o7_fix: '**本趟不得稱為「O7 修好後的重跑」。**
+    F17 通過的是**新排程的行為測試**；舊排程在受控環境同樣沒觸發守門，
+    所以那不是 O7 的成功復現。'
+  preflight: 0 項失敗；domain 42（冒煙 142）；獨立目錄
+  task_result: {phase_reached: idle, final_opening_m: 0.0, attached_ever: false,
+                stop_reason: sim_limit}
+  coordinated_motion: '**無證據** —— 從未進入 PULL。
+    手臂確實動了（joint5 行程 1.0875 rad，main5 為 0.1888），
+    但那是接近段運動，相位全程 idle、開度始終 0。**不可互代。**'
+  validity_gate:
+    published: 13
+    dropped_stale: 5
+    drop_rate: 0.28
+    n_same_state_skip: 2
+    in_age_published: {n: 13, p50: 0.09, max: 0.20}
+    in_age_dropped: {n: 5, min: 0.21, max: 0.43}
+    verdict: '**在 0.2 s 門檻處乾淨分離** ⇒ 有效性閘門完全按設計運作；
+      過期解一筆都沒有被蓋上新時間後發出。'
+  cannot_sustain_valid_commands:
+    effective_rate_hz: 3.48
+    configured_rate_hz: 20.0
+    publish_gap_ms: {p50: 313, min: 135, max: 485}
+    n_deadline_miss: 18
+    rounds: 18
+    missed_slots: 54
+    worst_late_ms: 278.4
+    verdict: '**每一輪都超時。** 依約定判準記為
+      **「無法持續提供有效控制命令」** ——
+      **不因為 O7 未觸發就算修復成功。** rate_hz 未調降。'
+  o6_breakdown_first_measured:
+    solve_ms: {n: 18, p50: 165.95, min: 105.59, max: 342.06}
+    qp_ms: {n: 18, p50: 140.44, min: 1.53, max: 317.15}
+    cons_ms: {n: 18, p50: 13.06, min: 2.00, max: 18.07}
+    kin_ms: {n: 18, p50: 10.03, min: 7.85, max: 120.59}
+    verdict: '**qp_ms 佔 solve_ms 約 85 % ⇒ O6 的主成本是 OSQP 本身，
+      不是約束組裝（約 8 %）。** 這更正了先前「組裝可能佔大份」的猜測。'
+    sample_size: '**18 筆不足以刻畫分布**，但分段比例在這 18 筆裡一致。'
+    time_bases: in_age 為模擬時鐘、solve_ms 等為牆鐘，各自成欄，**不相減**
+  o7_recurrence: '**未發生**（run.log 中 `中止（guard）：JointState` 0 次）。
+    但**不能**當作已解決：本趟求解端在 18 輪（約 3.4 s 牆鐘）就崩潰，
+    樣本遠短於 main4／main5 觸發守門的時長，且成因本來就未確立。'
+  command_chain: {received: 2367, rejected: 0, fail: None, frozen_steps: 0,
+                  applied_cmd_log: 11830}
+  low_speed_box: 兩端讀回一致、E2 自檢通過、**零拒收無閂鎖**（F16 再次成立）
+  rtf: 0.9772
+  thermal: '起 52.625 → 峰值 81.75 °C @ sim 14.82 → 收 78.75（限 92，未提高）。
+    峰值落在**活躍段內**，不像 main5 落在空轉尾段（sim 109.32）。'
+  monitors: monitor_failure = None
+  idle_tail: '求解端於 sim 14.35 崩潰、執行端跑到 sim_limit 120.61
+    ⇒ 空轉約 106.3 s。**事先已說明做不到避開**：drawer_run.json 只在主迴圈
+    正常結束後落盤（不在 finally 裡），SIGTERM 會弄丟封存；--stop-at-* 標記為
+    is_diagnostic（不計為正式成果）；執行端無「求解端死了就停」的條件。
+    依指定保留既定 120 s 上限。'
 open_gap_G8_odom_RESOLVED:
   id: G8
   issue: 協同執行端未發布 /odom 與 odom→base_link TF
@@ -419,6 +477,22 @@ fixes_after_first_attempt:
       ⇒ 見 O7 的撤回'
   not_done: ['不改多執行緒', '不重構求解器', '不降低控制頻率',
              '不延長任何新鮮度門檻', '不讓過時解重新變成有效命令']
+
+- id: F18
+  severity: found_not_fixed
+  issue: "`wholebody_pregrasp._on_pts` 的**資料競爭**：先用 `self.rows` 算
+    布林遮罩 `ok`（1111 列），再用 `self.rows` 取值（已被換成 1109 列）
+    ⇒ `IndexError: boolean index did not match indexed array`。
+    兩次存取之間，`self.rows` 被**另一個執行緒的** `_on_pts` 換掉。"
+  exposed_by: '**既有缺陷，但由 F17 的改動暴露。** `ReentrantCallbackGroup`
+    下有**兩個** executor 同時在轉這個節點：
+    `TransformListener(spin_thread=True)` 的背景執行緒，
+    加上 F17 新加的主迴圈 `_pump()`。並發提高後競爭才顯現。'
+  effect: main6 的求解端在 18 輪（sim 14.35）崩潰 —— **不是守門中止**
+  fix_known_not_applied: '把陣列綁進區域變數，讓整段計算對同一份快照自洽
+    （兩行）。**本趟未修、未重跑**，依約定界線封存。'
+  wider_question: '同一節點被兩個 executor 轉是否還有其他共享可變狀態的競爭，
+    **本次未核**。接閉迴路時要一併處理。'
 
 corrections_20261001:
 - what: 距離節點的週期被記為 50 ms
@@ -943,7 +1017,7 @@ open_issues:
     但 **p95 45.05 ms 仍超出 33.3 ms 目標**，不能說完全乾淨。'
   status: 主要部分已解決；p95 仍超，列為殘留
 - id: O6
-  severity: open_worse_and_now_blocking      # main5 實測後更新
+  severity: main_cost_located_in_osqp        # main6 分段後更新
   title: 求解器 `solve_ms` p50 **106 ms**（九筆中六筆 > 50 ms）
   measured_at: main4 實跑，`solver_out.json` 九筆
   values_ms: [133.17, 2.60, 2.93, 2.43, 115.20, 128.37, 133.58, 106.16, 100.15]
@@ -962,8 +1036,16 @@ open_issues:
     FK、旋轉誤差、任務步長截斷、Jacobian、姿態／限位勢、9x9 稠密解、
     **`_constraints`（由 1370 列雲組出整個屏障約束集）** 與 `_solve_qp`（OSQP）。
     **不能叫作 QP 求解時間**；沒有內部分段，各段佔比未知，不做歸因。'
-  now_blocking: '**是 O7 的同一根因**（見 O7）⇒ 它已從效能問題升級為任務阻擋項'
-  status: '**尚未處理，且已成為主要阻擋**'
+  retracted_20261001: '「是 O7 的同一根因」—— **撤回**（見 O7 的撤回）。'
+  main6_breakdown: 'solve_ms p50 165.95 ms，其中 **qp_ms（OSQP）p50 140.44
+    ≈ 85 %**、cons_ms 13.06 ≈ 8 %、kin_ms 10.03。
+    ⇒ **主成本是 QP 求解本身，不是約束組裝。**
+    這更正了先前「組裝可能佔大份」的猜測。18 筆不足以刻畫分布。'
+  main6_consequence: '每一輪都超時（n_deadline_miss 18/18、missed_slots 54）
+    ⇒ 有效命令率 **3.48 Hz**（設定 20）⇒
+    **「無法持續提供有效控制命令」**。'
+  status: '**主成本已定位在 OSQP，未處理。** 接閉迴路時仍要面對 ——
+    換成多步控制不會讓它自然消失。'
 - id: O7
   severity: cause_not_established            # 20261001 撤回「已定位」
   title: 求解端守門中止 —— JointState 586 ms 未更新
@@ -999,7 +1081,7 @@ open_issues:
   status: '**成因仍未確立。** F17 修的是可由程式碼直接確認的排程缺陷，
     **不等於**已解決 O7。'
 - id: O8
-  severity: cosmetic_but_real
+  severity: resolved
   title: 求解端收尾 `rcl_shutdown already called`
   what: '守門中止後走 `stop()` 再關閉，`rclpy.shutdown()` 被呼叫兩次 ⇒
     `RCLError: failed to shutdown` 與多個 Traceback（main4 亦有
@@ -1007,7 +1089,33 @@ open_issues:
   when: '**發生在資料落盤之後** —— run.log 行 457（4 週期寫入）與
     行 471（drawer_run.json）都在行 583（RCLError）之前；
     diag 2360 筆完整。不影響本趟結果。'
-  status: 應修，未修
+  correction: '**不在求解端，在 `coman_diag_record.py:89`** ——
+    `ExternalShutdownException` 之後又呼叫 `rclpy.shutdown()`。
+    我先前歸給求解端，講錯了。'
+  status: 已修（F17 fix_5：try_shutdown ＋ 吞該例外）
+
+single_step_branch_closure_20261001:
+  decision: '**封存單步 QP 支線，轉入 W-GMPC 離線核心。**
+    依約定界線：main6 仍被 O6 與新阻點（F18）擋住 ⇒ 不再續修這條支線。'
+  what_was_achieved:
+  - '**低速命令端到端送達並套用，零越界閂鎖**（main5：2367/0/11830；
+    main6 再次成立）—— 這是確實的進展，與操作驗收是兩件事。'
+  - 'F14（命令主題 QoS）、F16（上游低速框納入 QP 約束組裝）、
+    F15（封存文字模式相依）、F17（排程與有效性閘門）、F18（已定位未修）'
+  - 'O5：距離節點滿載 p50 97.96 → 31.44 ms（約 10 Hz → 29.3 Hz，目標 30）；
+    p95 45.05 仍超。'
+  - 'O6：**主成本已定位在 OSQP（約 85 %）**，不是約束組裝。'
+  - '有效性閘門實測：in_age 在 0.2 s 門檻處乾淨分離，過期解零發出。'
+  what_was_not_achieved:
+  - '**完整 20 mm 操作從未完成**（11 趟皆未離開 idle／APPROACH，開度恆 0）'
+  - '**拉動期間實測同動：始終無證據**（從未進入 PULL）'
+  - '**無法持續提供有效控制命令**（main6 有效命令率 3.48 Hz / 設定 20 Hz）'
+  carried_forward:
+    O6: '主成本在 OSQP。接閉迴路仍要面對 —— **換成多步控制不會讓它自然消失**。'
+    O7: '成因仍未確立。不得宣稱已修。'
+    O5_p95: p95 45.05 ms 仍超出 33.3 ms 目標
+    F18: 兩行修法已知，未套用；同一節點被兩個 executor 轉是否還有其他競爭，未核
+  not_claimed: '**不得**把 main5／main6 的命令送達寫成「單步全身 QP 協同操作已驗收」。'
 
 questions:
   q1_completion: 20 mm 完整操作是否完成（接近→連接→拉開→保持→釋放→退出）
