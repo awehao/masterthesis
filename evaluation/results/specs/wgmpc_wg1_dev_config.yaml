@@ -1,0 +1,170 @@
+schema: wgmpc_wg1_dev_config/1
+version: WG1-DEV-2
+status: development_values          # **開發值，不是驗收門檻，不冒稱已驗收**
+created: 2026-10-01
+wg0_ref: evaluation/results/specs/wgmpc_wg0_problem_spec.yaml（WG0 定版，c97507855eeb956e）
+
+title: WG1 第一輪的落定開發配置
+
+separation_of_concerns:
+  development_parameters: '**可調**。改動它們只需記錄，不需重新審定。
+    用途是讓第一輪測試跑得起來並產生可比較的數字。'
+  acceptance_criteria: '**不可由實作者自行調整**。改動要另案審定。
+    它們判定「這個數值行為算不算成立」。'
+  why_separated: '若兩者混在一起，調一個權重就能讓「測試通過」——
+    那不是驗證，是調到過關。'
+
+# ============================================================ 開發參數
+development_parameters:
+  horizon:
+    N: 10
+    dt: 0.05            # s，與控制端 20 Hz 一致（**不代表已證明能跑 20 Hz**）
+    note: 'N 與 dt 的組合給 0.5 s 預測窗。t4 另掃 N ∈ {1, 5, 10, 20}。'
+  integrator:
+    order: explicit_euler
+    note: WG0 已實測其單步局部誤差為 O(dt²)；是否改 RK2 視 t3b 的線性化誤差再定
+  cost_weights:
+    w_p: 50.0           # 位置追蹤（無量綱；L_p = 1 m）
+    w_r: 25.0           # 姿態追蹤（無量綱；L_r = 1 rad）
+    w_bt: 1.0e-3         # 底盤平移控制量（正規化尺度 V_bt = 0.035255 m/s）
+    w_br: 1.0e-3         # 底盤角速度（V_br = 0.199900 rad/s）
+    w_a: 1.0e-3          # 各手臂關節（V_a = 0.999900 rad/s）
+    w_s: 1.0e-3          # 控制增量平滑
+    Qf_scale: 5.0      # Q_f = Qf_scale · Q
+    rationale: '控制項權重先取追蹤項的 1/20，讓第一輪以**追蹤為主**；
+      w_r < w_p 因姿態誤差的數值範圍（rad）大於位置（m）。
+      **這些是起始值，不是調校結果。**'
+  limits:
+    vmax_base_lin_per_axis: 0.035255     # m/s，L1（已核准）
+    vmax_base_ang: 0.199900              # rad/s，L1
+    vmax_arm: 0.999900                   # rad/s，L1
+    amax_base_lin: 0.50                  # m/s²，**開發值**（L1 未定義底盤加速度）
+    amax_base_ang: 2.00                  # rad/s²，**開發值**
+    amax_arm: 19.984                     # rad/s²，LITE6_SAFE.max_acceleration
+    joint_margin_m_j: 0.05               # rad，距硬限位的餘量
+    wheel_radius: 0.05
+    wheel_base_L: 0.245
+    wheel_w_max: 5.55
+    wheel_a_max: 125.0
+    base_position_limits: '**不施加**（URDF 的 ±2.5 m 是虛擬關節產物）'
+    amax_base_provenance: '底盤加速度界限在既有已核准規格中**沒有**對應值，
+      因此 0.50／2.00 是**本輪自訂的開發值**，不得寫成已核准界限。'
+  sqp:
+    n_sqp: 10                 # 每輪最多 5 次迭代
+    delta_0: 0.2             # 信賴區域初值，**以各分量的 vmax 為單位**（相對量）
+    delta_max: 1.0           # 1.0 = 整個速度框
+    delta_min_conv: 0.01     # 低於此值 ⇒ trust_region_exhausted，**不算收斂**
+    gamma_up: 2.0
+    gamma_dn: 0.5
+    tol_accept: 1.0e-9       # ΔJ ≤ tol_accept 即接受（含零更新）
+    tol_step: 1.0e-4         # ‖Δu‖_∞ 相對於 vmax
+    tol_cost: 1.0e-4         # |ΔJ| / max(1, |J_nl|)
+    delta_units_note: 'Δ 是**相對量**：第 i 個分量的信賴區域半徑為 Δ · vmax_i。
+      這樣一個 Δ 可同時用於 m/s 與 rad/s 的分量。'
+  qp:
+    form: condensed           # 先凝縮；若組裝成本過高再試 sparse
+    solver: osqp
+    eps_abs: 1.0e-7
+    eps_rel: 1.0e-7
+    max_iter: 20000
+    polish: true
+    accepted_status: [solved]           # **首版只接受 solved**
+    note: eps 取 1e-6 而非 1e-7 —— 既有記錄顯示 1e-7 讓同類問題無法在預算內收斂
+  H_k:
+    method: analytic          # 解析式；有限差分僅作交叉驗證
+    fd_cross_check: true
+    fd_step_small_angle: 1.0e-7
+    fd_step_near_pi: 1.0e-5   # θ > 179° 時改用（WG0 實測：1e-7 會假警報）
+    near_pi_eval_band: 1.0e-5 # π − θ < band 時改用穩定分支求值
+  initial_conditions:
+    u_prev_first_cycle: zeros_9        # 「初始靜止、上一命令為零」
+    u_prev_thereafter: 每輪執行首步後更新為該輪實際執行的 u_0
+    warm_start: 上一輪最終接受序列左移一格、末步複製；首輪為零
+
+# ============================================================ 驗收門檻
+acceptance_criteria:
+  note: '**不可由實作者自行調整。** 這些判定數值行為是否成立。'
+  t1_model_and_derivatives:
+    A_B_vs_fd_max_abs: 1.0e-8
+    affine_self_consistency_max_abs: 1.0e-10
+    H_position_vs_fd_max_abs: 1.0e-8
+    H_orientation_vs_fd_rel:
+      angles_up_to_179_9deg: 1.0e-4
+      angle_179_99deg: 2.0e-3        # 受參考值精度限制（WG0 實測 7.5e-4）
+      at_or_beyond_180deg: not_checked_by_fd   # 依 WG0 的分支處置
+    euler_local_order_ratio: [3.6, 4.4]        # dt 減半的誤差比值應落在此區間
+    counterexamples_must_fail:
+    - 省略 B(θ)（直接用 J 乘本體 u）
+    - 把 A_k 的 θ 欄置零
+    - 省略 J_l^{-1}（WG0 實測 30° 即有 20.5 % 偏差）
+    - e 與 H 只負其中一個（符號不一致）
+  t2_constraints_and_failure:
+    all_rows_within_bounds: true          # 逐步逐列，無例外
+    row_residual_tol_r_tol: 1.0e-6
+    infeasible_cases_must_return_no_valid_solution:
+    - 'velocity_vs_acceleration：|u_prev| − a_max·dt > u_max'
+    - 'joint_position：超界量 > dt · V_a'
+    no_command_output_on_failure: true    # 失敗時**完全沒有**命令輸出
+    status_gate_rejects: [solved_inaccurate, primal_infeasible, dual_infeasible,
+                          max_iter_reached]
+    residual_check_catches_fake_solved: true
+    two_checks_independent: '狀態閘與殘差核對**分開測**，互不替代'
+  t3_prediction_and_reaching:
+    t3a_rollout_replay_max_abs: 1.0e-12   # 同初值同序列重播，要求逐值相等
+    t3b_linearisation_error: recorded_only  # **只記錄，不設門檻**
+    reaching_pos_tol_m: 0.005
+    reaching_rot_tol_rad: 0.02
+    reaching_max_cycles: 400
+    must_include_large_turn_cases: true
+    u_prev_updated_every_cycle: true      # 以紀錄核對，不是只看程式碼
+  t4_cost_vs_horizon:
+    N_set: [1, 5, 10, 20]
+    must_record_per_segment: [H_k 組裝, A_B_c 組裝, QP 組裝, QP 求解, 非線性 rollout]
+    must_record_osqp_iters: true
+    n1_ablation_required: true
+    no_rate_threshold: '**不設耗時門檻。** 本輪是量測，不是達標；
+      量完才決定可行的實作方向。'
+  reporting_rules:
+    sqp_status_must_be_reported: '五種結果（converged_step／converged_cost／
+      no_progress／trust_region_exhausted／iter_limit／qp_failed）逐輪回報'
+    sqp_converged_flag: 達迭代上限而輸出者必須回報 sqp_converged = false
+    time_bases: 耗時用單調牆鐘；與任何模擬時間量**各自成欄、不相減**
+    no_overclaiming: 'WG1 通過只代表求解器數值行為成立；
+      **不得**稱「W-GMPC 自由空間核心已驗證」（那要 WG2）'
+
+changes_log_dev2:
+  note: '以下全為**開發參數**變更（依本檔規則**記錄即可**）。
+    **驗收門檻一項未改。**'
+  items:
+  - param: [w_p, w_r]
+    from: [1.0, 0.5]
+    to: [50.0, 25.0]
+    why: 'DEV-1 的控制項在 0.1 m 位置誤差時比追蹤項貴 **5 倍**
+    （R 底盤 40.23 × V² = 0.05 vs Q 位置 1.0 × 0.01 = 0.01）
+    ⇒ 控制器只用到速度框的 **27.9 %**，小案例要 310 輪才到達。'
+  - param: [w_bt, w_br, w_a, w_s]
+    from: 0.05
+    to: 1.0e-3
+    why: 同上；調整後小案例 310 → **13 輪**
+  - param: [n_sqp, delta_0, delta_min_conv]
+    from: [5, 0.5, 0.05]
+    to: [10, 0.2, 0.01]
+    why: 'DEV-1 的 γ_dn = 0.5 搭配 Δ_min_conv = 0.05 只容許 4 次縮小，
+    不足以在拒絕後找到下降步。Δ_0 降低使第一個候選更保守。'
+  - param: [eps_abs, eps_rel]
+    from: 1.0e-6
+    to: 1.0e-7
+    why: '**與驗收門檻 r_tol = 1e-6 的一致性問題。**
+    OSQP 的 `solved` 只保證**縮放後**殘差 ≤ eps，與未縮放的約束列不是同一個量。
+    eps 與 r_tol 同階時，合法的 `solved` 解可能通不過自己的殘差核對
+    —— **實測發生過**（大轉身案例第 17 輪 residual_check_failed:velocity）。
+    **選擇把 OSQP 收緊，而不是放寬 r_tol。**'
+  - param: decision_variable_scaling
+    change: '新增**正規化決策變數** z = Σ ẑ，Σ = diag(tile(vmax, N))'
+    why: '未正規化時 R 的底盤項與手臂項相差約 800 倍（0.805 vs 1.0e-3），
+    OSQP 迭代數暴增。這是**純變數變換**（同一個最佳化問題），
+    不是改問題；實測迭代數降約 35 %。'
+
+changes_require: 
+  development_parameters: 記錄即可
+  acceptance_criteria: '**另案審定**'

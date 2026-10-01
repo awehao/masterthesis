@@ -1,0 +1,132 @@
+schema: wgmpc_wg1_result/1
+version: WG1-R1
+status: recorded
+created: 2026-10-01
+refs:
+  wg0: evaluation/results/specs/wgmpc_wg0_problem_spec.yaml（定版，c97507855eeb956e）
+  dev_config: evaluation/results/specs/wgmpc_wg1_dev_config.yaml（WG1-DEV-2，281defc9894a3e67）
+  core: src/ammr_wholebody_mpc/ammr_wholebody_mpc/wgmpc_core.py
+  tests: evaluation/test_wgmpc_wg1.py
+
+title: WG1 第一輪結果
+
+environment: '**不接 ROS、不開 Isaac、不用 GPU、單執行緒。**
+  核心的 import 只有 math／time／dataclasses／numpy／arm_limits／osqp／scipy。'
+
+outcome: t1–t4 全部通過（依 WG1-DEV-2 的 acceptance_criteria）
+
+t1_model_and_derivatives:
+  B_theta: 三個 θ 皆相符
+  A_k_vs_fd: 5.84e-10
+  B_k_vs_fd: 7.64e-10
+  affine_self_consistency: 0.0
+  H_position_vs_fd: 4.67e-10
+  H_orientation_vs_fd_rel:
+    0.5deg: 1.28e-9
+    30deg: 5.79e-10
+    90deg: 1.89e-9
+    150deg: 9.33e-9
+    170deg: 8.87e-8
+    179deg: 7.74e-6
+    179.9deg: 7.14e-6
+    179.99deg: 9.08e-4
+  counterexamples_caught:
+    omit_Jl_inv_at_30deg: 相對偏差 20.0 %（必須被抓出 ⇒ 已抓出）
+    omit_B_theta: 積分差 0.0015
+    A_k_theta_column: '|A[0:2,2]| = 0.0018（非零）'
+  Jl_inv_stability: '‖·‖₂ = [1.1107, 1.3552, 1.5621, 1.5707]（平滑趨近 π/2）'
+  pi_branch: '跨 π 主值換向（內積 −9.87）⇒ **已知分支行為，不要求差分一致**'
+  euler_local_order: 比值 [4.00, 4.00, 4.00] ⇒ O(dt²)
+
+t2_constraints_and_failure:
+  normal_case: 有解；逐步速度／加速度／關節位置／輪速全部在界內；最終殘差 0.0
+  velocity_box_utilisation: 'max 比值（DEV-1 時僅 27.9 %，DEV-2 後達 100 %）'
+  infeasible_a: '|u_prev| − a_max·dt = 0.1750 > u_max = 0.035255 ⇒ 回
+    no_valid_solution，**且 u0 與 U 皆為 None**'
+  infeasible_b: '關節超界 0.074993 > dt·V_a = 0.049995 ⇒ 同上'
+  status_gate: 預設只接受 solved；放寬是可區分的配置而非預設
+  residual_check_independent: '注入違反約束的解 ⇒ max 殘差 2.0005，
+    違反區塊 [velocity, acceleration, joint_position, trust_region]
+    ⇒ **與狀態閘分開且各自有效**'
+
+t3_prediction_and_reaching:
+  t3a_rollout_replay: 0.0（要求相等 ⇒ 通過）
+  t3b_linearisation_error_recorded_only:
+    max_abs_state: 2.220e-16
+    max_abs_base_xy: 3.469e-18
+    max_abs_theta: 0.0
+    note: '**只記錄不設門檻。** 此處極小是因為線性化點就是回傳序列本身
+      （最終 rollout 與對該序列的仿射展開一致）；
+      **這不代表 SQP 迭代中的線性化誤差也這麼小**。'
+  closed_loop:
+  - {case: 小位移 ＋ 20°, cycles: 13, pos_mm: 1.93, rot_deg: 0.036, reached: true}
+  - {case: 大轉身 90°, cycles: 36, pos_mm: 2.94, rot_deg: 0.052, reached: true}
+  - {case: 底盤起始 yaw 1.0 ＋ 120°, cycles: 37, pos_mm: 4.28, rot_deg: 0.094,
+     reached: true}
+  u_prev_updated_every_cycle: 三案例皆逐輪更新（以計數核對，不只看程式碼）
+
+t4_cost_vs_horizon:
+  note: '**量測，不設門檻。** 單位 ms，單調牆鐘。'
+  rows:
+  - {N: 1, total: 5.42, H: 1.92, ABc: 0.04, qp_build: 0.24, qp_solve: 2.21,
+     rollout: 0.03, cost: 0.70, osqp_iters: [225, 225, 325, 325]}
+  - {N: 5, total: 30.00, H: 11.79, ABc: 0.19, qp_build: 1.45, qp_solve: 12.60,
+     rollout: 0.10, cost: 3.26, osqp_iters: [400, 350, 1275, 1150, 1150]}
+  - {N: 10, total: 73.27, H: 23.38, ABc: 0.37, qp_build: 5.97, qp_solve: 35.99,
+     rollout: 0.19, cost: 6.31, osqp_iters: [825, 750, 950, 1075, 950]}
+  - {N: 20, total: 316.77, H: 45.68, ABc: 0.79, qp_build: 50.25, qp_solve: 204.65,
+     rollout: 0.34, cost: 12.22, osqp_iters: [825, 675, 2350, 2250, 2350]}
+  observations:
+    dominant_costs: '`qp_solve` 與 `H` 組裝為主；`ABc` 與 `rollout` 可忽略。
+      N = 20 時 `qp_build`（稠密凝縮矩陣）也升到 50.25 ms。'
+    differs_from_single_step: '單步求解器（main6）量到 qp_ms 佔 solve_ms 約 85 %；
+      這裡 N = 10 時 qp_solve 佔 49 %、H 佔 32 % ⇒ **分佈不同**，
+      不可把單步的結論直接搬過來。'
+    n1_ablation: 'N = 1 時 5.42 ms；N = 10 時 73.27 ms（約 13.5 倍）。
+      **但 N = 1 的閉迴路行為未在本輪與 N = 10 對比**（只量了成本）。'
+    no_rate_claim: '**不宣稱能達到 20 Hz。** N = 10 的 73.27 ms 已超過 50 ms；
+      是否改 sparse 形式、降 N、或改 H 的計算方式，依這些量測另議。'
+
+defects_found_and_fixed_in_round1:
+  note: '這**五項**都是實作缺陷，由 t3 的閉迴路測試暴露。
+    若只跑 t1／t2 會全部通過而看不到 —— 正是「測試通過、接受邏輯卻錯了」那一類。'
+  items:
+  - id: W1
+    what: 暖啟動**複製末步**會把關節推過餘量
+    measured: 第 25 輪 joint_position 殘差 4.51e-3 rad ⇒ nominal 不可行
+    fix: 改為末步**以最大允許減速朝零收**（依建構滿足加速度框）
+  - id: W2
+    what: 暖啟動**直接補零**會由飽和值跳到 0，違反加速度框
+    measured: acceleration 殘差 9.99e-2（底盤角速度 0.1999 → 0，界限 0.1）
+    fix: 同 W1 —— **兩種樸素作法都不可行**，收尾必須受加速度框約束
+  - id: W3
+    what: SQP 以**可能不可行**的 nominal 作 ΔJ 比較基準
+    why_fatal: 'QP 的可行集不含 nominal ⇒ 回傳解的線性化目標**可以比 nominal 高**
+      ⇒ 每個候選都被拒 ⇒ 信賴區域繞著不可行點縮小 ⇒ 最後 primal infeasible。
+      實測 J_lin(cand) − J_lin(nom) = **+7.47e-4**（正值，對正確的最小化不可能）。
+      另以 LP 核對：不含信賴區域**可行**、含 Δ = 0.2 **不可行**。'
+    fix: '求解前檢查 nominal 可行性；不可行時**無條件接受第一個通過殘差核對的候選**
+      （「比一個不可行點更差」沒有意義），且該輪**不設信賴區域**；
+      回報 nominal_infeasible、nominal_residual、first_feasible_unconditional。'
+  - id: W4
+    what: '`r_tol = 1e-6` 與 OSQP `eps_abs = 1e-6` **同階 ⇒ 不一致**'
+    measured: 大轉身案例第 17 輪 residual_check_failed:velocity（OSQP 回報 solved）
+    why: OSQP 的 solved 只保證**縮放後**殘差 ≤ eps，與未縮放的約束列不是同一個量
+    fix: '把 eps 收到 **1e-7**（開發參數）；**不放寬 r_tol**（驗收門檻一項未改）'
+  - id: W5
+    what: 條件數
+    measured: 'R 的底盤項與手臂項相差約 800 倍（0.805 vs 1.0e-3）⇒ OSQP 迭代數暴增'
+    fix: '**正規化決策變數** z = Σ ẑ，Σ = diag(tile(vmax, N))。
+      純變數變換（同一問題），實測迭代數降約 35 %。'
+
+naming_limits:
+  what_this_is: '**WG1 第一輪的求解器數值行為成立。**'
+  what_this_is_not:
+  - '**不得**稱「W-GMPC 自由空間核心已驗證」—— 那要 WG2（接既有執行鏈的滾動閉迴路）'
+  - '**不得**宣稱有全身避碰能力 —— v1 沒有任何避碰列'
+  - '**不得**宣稱能達到 20 Hz —— N = 10 已 73.27 ms'
+  - '**不得**宣稱具備接觸 MotM 的核心證據 —— WG3／WG4 未做'
+  carried_forward:
+    O6: 'main6 的 OSQP 主成本問題在此以不同分佈再現；接 WG2 仍要面對'
+    sparse_vs_condensed: N = 20 的 qp_build 50.25 ms 顯示稠密凝縮在長時域不划算
+    n1_closed_loop_ablation: 本輪只量 N = 1 的成本，**未**比較其閉迴路行為

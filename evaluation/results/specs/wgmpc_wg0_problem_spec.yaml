@@ -1,8 +1,11 @@
-schema: wgmpc_wg0_problem/2
-version: WG0-r2
-status: proposal_pending_approval      # **審定後才實作 WG1**
+schema: wgmpc_wg0_problem/3
+version: WG0（定版）
+status: approved                       # 定版；准予進入 WG1
 created: 2026-10-01
 revised: 2026-10-01
+approved: 2026-10-01
+approval_scope: '**WG0 通過只代表問題定義成立，不代表求解器已完成。**
+  四項實作契約（implementation_contract）與開發配置一併定版。'
 revision_note: '第一版（WG0-r1，sha 4c117f491de6277a）未定版。
   本版依審定意見修正**預測模型與測試定義**；範圍不變
   （自由空間、純數值、九維聯合多步）。不新增模擬、不修 F18、不加接觸模型。'
@@ -158,8 +161,25 @@ task_error:
       後者在 θ→π 是兩個趨零量相除，會抵銷掉有效位數。
       **實測**：穩定形式下 ‖J_l^{-1}‖₂ 隨 θ→π 平滑趨近 π/2
       （179.99° 時 1.5707、cond 1.5707）⇒ **J_l^{-1} 本身良置，不是奇異點。**'
-    near_pi_measured: '實測 e_r 在 170°–180° 對垂直微擾**連續**
-      （方向變化 0.0003°）⇒ 本誤差形式在此區間沒有不連續跳變。'
+    near_pi_measured_NARROWED: '實測 e_r 在 170°–180° 對**垂直於轉軸**的微擾連續
+      （方向變化 0.0003°）。**此結論僅限該擾動方向**，
+      **不可推論「π 附近對所有擾動都連續」** —— 見 branch_crossing_measured。'
+    branch_crossing_measured: '**沿同一軸跨 π 會換向**（實測）：
+      180.00° → 180.01° 的主值 log 向量相差 **359.99°**；
+      正好 π 時 exp(+π·ax) 與 exp(−π·ax) 是**同一旋轉**
+      （‖Δ‖_F = 3.5e-16），log 只能回其中一個表示；
+      沿軸中央差分在正好 π 給出範數 **314157**（≈ π/h）而非 1。
+      ⇒ `J_l^{-1}` 良置**不等於**主值 log 沒有分支問題。'
+    branch_policy_v1:
+      small_angle: '小角度用**穩定級數**（I − ½Φ + Φ²/12），避免 1/θ² 的抵銷'
+      near_pi_eval: '近 π 用**穩定 log 求值**（主值；軸由 (R+I)/2 的主特徵向量定，
+        符號由 skew 部分挑）'
+      at_pi_and_crossing: '**正好 π 與跨分支不要求一般中央差分一致。**
+        測試在該處只核**單點求值**與分支處置，不核差分。'
+      applicable_range: '解析 H_r 的差分驗證適用範圍：**θ ≤ 179.9°**
+        （實測相對偏差 4.5e-6，h = 1e-5）。179.99° 受參考值精度限制（7.5e-4）。
+        θ ≥ 180° 不在差分驗證範圍內。'
+      no_further_sweep_required: 本項為規格補充，**不要求再開一輪大角度掃描**
     fd_step_must_match_angle: '**有限差分步長必須配合角度。** 實測：
       179.9° 用 h = 1e-7 得相對偏差 4.3e-4（**假警報**），
       改 h = 1e-5 則為 4.5e-6。原因是 θ/(2 sin θ) 在近 π 放大抵銷誤差。
@@ -179,6 +199,22 @@ task_error:
     與 discrete_model 同一套模型，不會不一致。'
   sign_convention: 'e 定義為**要被驅動到零的誤差**。符號慣例由測試固定
     （見 tests.corrected_expectations.sign）。'
+
+implementation_contract:
+  note: '**四項實作契約**，與開發配置一併定版。
+    沒有它們，可能出現「測試通過、接受邏輯卻錯了」。'
+  c_pi_branch: '近 π 數值穩定 **≠** 跨 π 沒有分支問題。
+    見 task_error.H_k.branch_crossing_measured 與 branch_policy_v1。
+    正好 π／跨分支**不要求**一般中央差分一致；另記分支處置與適用範圍。'
+  c_sqp_acceptance: '**不把「沒有下降」或「步長很小」直接判成失敗／收斂。**
+    見 solve_flow.trust_region.measure_before_overwrite、
+    solve_flow.sqp_status（五種結果分開）、
+    solve_flow.output_policy_fixed（固定政策）、
+    solve_flow.final_check_target（檢查實際回傳序列）。'
+  c_tests_narrowed: '預測一致性拆成 t3a（要求相等）與 t3b（量線性化誤差，不要求相等）；
+    符號測試只用**限制不活躍**的小測例，且 e 與 H 同時取負是**不變**的。'
+  c_u_prev: '**u_prev 每輪更新**（見 cost.u_prev_update_every_cycle），
+    理想閉迴路也一樣。'
 
 formula_verification_20261001:
   tool: evaluation/wg0_math_check.py（**不開模擬器、不用 GPU、不接 ROS**）
@@ -222,9 +258,14 @@ cost:
          + Σ_{k=0}^{N-1} Δu_k^T S Δu_k'
   terminal: 'Q_k = Q（k < N）、Q_N = Q_f'
   increment: 'Δu_k = u_k − u_{k−1}，u_{−1} := u_prev'
-  u_prev_v1: '**首版理想模擬明定「初始靜止、上一命令為零」** ⇒ u_prev = 0。
-    這**仍然會懲罰第一步的增量**（只是基準是真實的靜止狀態，不是錯的歷史）。
-    後續接實際執行時改用**實際已套用的**首步歷史。**不模糊排除第一步。**'
+  u_prev_v1: '**u_prev = 0 只適用於第一次求解。** 首版理想模擬明定
+    「初始靜止、上一命令為零」⇒ 第一輪 u_prev = 0。
+    這**仍然會懲罰第一步的增量**（基準是真實的靜止狀態，不是錯的歷史）。'
+  u_prev_update_every_cycle: '**首版理想閉迴路也必須在每輪執行首步後更新
+    u_prev ← 該輪實際執行的 u_0。**
+    **不能等接 Isaac 才用歷史命令** —— 否則 WG1 的加速度限制與平滑成本
+    每輪都會錯把機器人當成從靜止開始，等於這兩項在閉迴路裡形同失效。'
+  u_prev_later_stages: 接實際執行後改用**實際已套用**的首步（可能經下游修改），不是請求值
   scaling_RULE: 'e 與 u 都是混合單位 ⇒ 權重一律寫成「無量綱權重 ÷ 參考尺度平方」'
   Q_scaling: 'Q = blkdiag( w_p / L_p² · I_3 , w_r / L_r² · I_3 )，L_p = 1 m、L_r = 1 rad'
   R_scaling: 'R = blkdiag( w_bt / V_bt² · I_2 , w_br / V_br² , w_a / V_a² · I_6 )
@@ -270,13 +311,44 @@ solve_flow:
   relinearisation_rule: '每個預測步都重算 A_k／B_k／c_k 與 H_k，**不是只在 q_0 算一次**'
   trust_region:
     v1_rule: '**明訂信賴區域**：對每步加線性列 |u_k − u^nom_k| ≤ Δ（逐軸、∞ 範數）'
-    acceptance: '以**非線性** rollout 算真實成本 J_nl（同一成本式，但用非線性模型
-      與真實 e(q_k)，不用線性化近似）。
-      J_nl 下降 ⇒ 接受並放大 Δ（×γ_up，上限 Δ_max）；
-      不下降 ⇒ **拒絕該步**、縮小 Δ（×γ_dn）後重試，計入 n_sqp。'
-    pending_config: [Δ_0, Δ_max, γ_up, γ_dn, sqp_stop 門檻]
-  sqp_stop: '以下任一：‖u − u^nom‖_∞ ≤ tol_step、J_nl 相對下降 ≤ tol_cost、
-    或達 n_sqp 上限。**達上限不算收斂。**'
+    measure_before_overwrite: '**更新大小 ‖u_cand − u^nom‖_∞ 與成本差
+      ΔJ = J_nl(cand) − J_nl(nom) 都在**覆寫 nominal 之前**計算。**
+      覆寫後再量會把基準換掉，量到的不是這一步的進展。'
+    acceptance_rule: '以**非線性** rollout 算真實成本 J_nl
+      （同一成本式，但用非線性模型與真實 e(q_k)，不用線性化近似）。
+      **接受條件：ΔJ ≤ tol_accept**（注意是 ≤，含等號與 tol_accept 的容許量）
+      ⇒ **已在最佳點的零更新會被接受，不會被誤判為失敗。**
+      接受後放大 Δ（×γ_up，上限 Δ_max）；
+      ΔJ > tol_accept ⇒ 拒絕該候選、縮小 Δ（×γ_dn）後重試，計入 n_sqp。'
+    why_not_strict_decrease: '若寫「成本不下降就拒絕」，
+      **已在最佳點的零更新也會被拒絕** —— 那不是失敗。'
+  sqp_status:
+    must_distinguish: '**五種結果必須分開，不可混為「成功／失敗」：**'
+    converged_step: '‖Δu‖_∞ ≤ tol_step **且 Δ ≥ Δ_min_conv**
+      ⇒ 步長小是因為已近最佳，不是因為信賴區域被縮死'
+    converged_cost: '接受的步其 |ΔJ| / max(1, |J_nl|) ≤ tol_cost
+      **且 Δ ≥ Δ_min_conv**'
+    no_progress: 候選連續被拒但 Δ 仍 > Δ_min_conv（**不是收斂**）
+    trust_region_exhausted: 'Δ 縮到 < Δ_min_conv（**不是收斂**）'
+    iter_limit: 用盡 n_sqp（**不是收斂**）
+    qp_failed: 任一次 OSQP status 非 solved 或殘差核對未過
+    small_step_rule: '**信賴區域造成的小步長，不單獨作為收斂證據。**
+      converged_step／converged_cost 都附帶 Δ ≥ Δ_min_conv 的條件。'
+  output_policy_fixed:
+    rule: '**政策固定，不留給實作者臨場決定：**'
+    on_iter_limit_or_no_progress_or_tr_exhausted:
+      '若**有至少一個被接受的候選**且其最終接受檢查通過
+       ⇒ **輸出該序列**，並回報 `sqp_converged = false` 與對應的 sqp_stop_reason。'
+    on_no_accepted_candidate:
+      '若**從未接受任何候選** ⇒ 回 `no_valid_solution`
+       （reason = `no_accepted_candidate`）。
+       **不得把暖啟動序列冒稱為新求解成功。**'
+    on_qp_failed: 回 no_valid_solution（reason = qp_failed）
+  final_check_target: '**最終接受檢查針對實際要返回的完整控制序列
+    及其非線性 rollout**，不是只檢查最後一個 QP 候選。
+    被拒絕的候選不得進入最終檢查。'
+  sqp_pending_config: [Δ_0, Δ_max, Δ_min_conv, γ_up, γ_dn,
+                       tol_accept, tol_step, tol_cost]
   returned_prediction:
     requirement: '回傳的預測狀態**必須是最終控制序列的非線性 rollout 結果**，
       **不得**只回傳最後一次求解前的 nominal。'
@@ -333,10 +405,15 @@ tests:
   - "**殘差核測試**：注入「回報 `solved` 但解違反約束」⇒ 必須被**殘差核對**擋下。
     與上一項**分開測**，兩道檢查互不替代。"
   t3_prediction_consistency_and_reaching:
-  - '**預測一致性（已更正）**：用**同一初始狀態、同一完整控制序列**重播非線性模型，
-    與 QP 的預測狀態逐步比較。
-    **滾動閉迴路下一輪改了控制後，後續軌跡不必等於上一輪預測 —— 那不是積分錯誤**，
-    不得作為一致性判準。'
+  - '**t3a 回傳 rollout 的可重播性**：回傳的非線性 rollout
+    與「同初值 q_0、同完整控制序列 u_0..u_{N-1}」的**獨立重播**應一致
+    （到積分容差）。**這是要求逐值相等的那一項。**'
+  - '**t3b 線性化誤差（量，不要求相等）**：QP 的仿射預測
+    （A_k, B_k, c_k 串接）與非線性 rollout **本來就可能不同**。
+    本項**量這個差距的大小**（逐步、逐分量），
+    **不要求逐值相等** —— 它是線性化誤差的指標，不是錯誤。'
+  - '**滾動閉迴路下一輪改了控制後，後續軌跡不必等於上一輪預測
+    —— 那不是積分錯誤**，不得作為一致性判準。'
   - 自由空間已知目標、理想積分閉迴路：到達容差與步數
   - 多組起始位姿與目標，含需大幅轉身者（檢驗逐步線性化與 A_k 的 θ 欄）
   t4_cost_vs_horizon:
@@ -365,10 +442,18 @@ tests:
         兩者分開測，並明示所測的是哪一個。'
     sign:
       r1_wrong: 'r1 寫「反號必須收斂到對極點」。**對極點不是普遍結果。**'
-      correct: '改驗**誤差導數符號與局部下降方向**：
-        對求得的 u_0，檢查一階變化量 e^T H_k B_k u_0 < 0（誤差在下降）；
-        把 e 取負號後同一量必須變正 ⇒ 錯號會被此測試抓出。
-        **不指定錯誤軌跡必然去哪裡。**'
+      r2_still_too_broad: '把 e^T H B u_0 < 0 套到**每個**受限最優解也不對 ——
+        受限或平滑成本（R、S、信賴區域）影響下，
+        **首步不保證讓即時追蹤誤差下降**。'
+      correct: '用**刻意設計的小測例**驗下降方向，條件明列：
+        (a) 誤差梯度非零；(b) **所有限制不活躍**（速度框、加速度框、
+        關節位置、輪級、信賴區域都有餘裕）；(c) R、S 權重設到足夠小。
+        在該測例下檢查 e^T H_0 B_0 u_0 < 0。
+        **不套用到一般受限最優解。**'
+      double_negation_is_invariant: '**把 e 與 H 同時取負，平方成本不變
+        ⇒ 控制結果應相同。** 這本身不是錯誤。
+        測試真正要抓的是**「誤差與其導數符號不一致」**
+        （只負其中一個），不是單純的負號。'
 
 # -------------------------------------------- 可重用（已收窄）
 reuse:
