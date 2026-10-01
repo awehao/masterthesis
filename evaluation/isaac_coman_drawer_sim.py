@@ -537,13 +537,29 @@ class DrawerNode(Node):
             String, '/coman/applied_cmd_meta', _lat1)
         self.applied_meta_pub.publish(String(data=json.dumps({
             'cols': ['physics_step_id', 'sim_t', 'bvx_body', 'bvy_body', 'wz',
-                     'qd1', 'qd2', 'qd3', 'qd4', 'qd5', 'qd6'],
+                     'qd1', 'qd2', 'qd3', 'qd4', 'qd5', 'qd6',
+                     'exec_mode_code', 'cmd_age_s', 'n_recv', 'n_rejected',
+                     'api_applied', 'src_recv_seq', 'src_recv_sim_t'],
+            'exec_mode_code': {'0': 'normal', '1': 'timeout_decel_or_hold',
+                               '2': 'stop_unverified', '3': 'FAIL_LATCHED',
+                               '4': 'no_command'},
             'base_frame': 'body（送進 set_linear_velocity 之前）',
-            'arm_semantics': '套用設定點對應的命令速率 (asp_k − asp_{k-1})/physics_dt',
+            'arm_semantics': '套用設定點對應的命令速率',
             'arm_is_not': '實測關節速度',
-            'stage': '**E2 之後**（含輪級限制與逾時處置）、真正送進物理 API',
+            'stage': '**E2 之後**、真正送進物理 API',
             'not_the_same_as': '/wb_vel_cmd（adapter 輸出，E2 之前）',
+            'zero_is_not_an_error': '**零值本身不是錯** —— 正常模式下的零命令合法；'
+                                    '要看 exec_mode_code 才知道停止原因',
+            'fail_reason_topic': '/coman/applied_fail（String，閂鎖時發一次）',
+            'api_applied': '本步是否成功完成 apply_action／set_*_velocity',
+            'pairing': 'src_recv_seq／src_recv_sim_t 來自 chain.applied 快照；'
+                       '**無法確定同一筆來源時為 -1／NaN**，不得拿各話題最新值相減',
         }, ensure_ascii=False)))
+        self.fail_pub = self.create_publisher(String, '/coman/applied_fail',
+                                              _lat1)
+        self._fail_sent = False
+        self._sp_prev = None
+        self._step_id = 0
         # 抽屜本體世界位姿：距離節點據此追蹤**會移動的**障礙物部件
         #（櫃體不動，直接在障礙物設定裡給世界位姿，不需發布）
         self.drawer_pose_pub = self.create_publisher(
@@ -1744,11 +1760,36 @@ def main():
                 coman_applied_log.append(
                     [int(pose_src.physics_step_id()), round(t, 4)]
                     + [round(v, 9) for v in last_applied_q] + ['wb9'])
+                # **套用值與執行健康狀態分開**（零值本身不是錯，缺的是停止原因）
+                _mode = (3 if chain9.fail is not None else
+                         {None: 0, 'normal': 0, 'timeout': 1,
+                          'stop_unverified': 2}.get(
+                              getattr(chain9, 'last_mode', None), 0))
+                _sn = chain9.applied
+                _age = (float(t - _sn.recv_sim_t) if _sn is not None
+                        else float('nan'))
                 _am = Float64MultiArray()
                 _am.data = ([float(pose_src.physics_step_id()), float(t),
                              float(_bv[0]), float(_bv[1]), float(_bv[2])]
-                            + [float(x) for x in _qd])
+                            + [float(x) for x in _qd]
+                            + [float(_mode), _age, float(chain9.n_recv),
+                               float(chain9.n_rejected), 1.0,
+                               float(_sn.recv_seq) if _sn is not None else -1.0,
+                               float(_sn.recv_sim_t) if _sn is not None
+                               else float('nan')])
                 node.applied_pub.publish(_am)
+                if chain9.fail is not None and not node._fail_sent:
+                    node._fail_sent = True
+                    node.fail_pub.publish(String(data=json.dumps({
+                        'fail': str(chain9.fail), 'sim_t': float(t),
+                        'physics_step_id': int(pose_src.physics_step_id()),
+                        'n_recv': int(chain9.n_recv),
+                        'n_rejected': int(chain9.n_rejected),
+                        'last_reject': str(chain9.last_reject),
+                        'n_frozen': int(chain9.n_frozen),
+                    }, ensure_ascii=False)))
+                    print(f'[coman] **命令鏈失效閂鎖**：{chain9.fail}',
+                          flush=True)
                 # **端到端年齡**：來源發布時間 → 實際套用時間。
                 # 只有配對成功才記數值；配不到就記 unpaired，
                 # **不以距上次收件的時間冒稱端到端年齡**。

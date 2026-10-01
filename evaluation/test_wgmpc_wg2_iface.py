@@ -165,11 +165,17 @@ def main() -> int:
         lgs = ds['log']
         ck('**一筆都沒有發布**',
            not any(r.get('published') for r in lgs), f'  {len(lgs)} 輪')
-        ck('理由是「無權威 u_prev」',
-           all(r.get('reason') == 'no_u_prev' for r in lgs),
+        # 理由只能是這兩種：無權威 u_prev，或**求解前就過期**
+        # （後者是合法的獨立原因，不是 u_prev 問題）
+        _ok_reasons = {'no_u_prev', 'stale_before_solve'}
+        ck('理由只有「無權威 u_prev」或「求解前過期」',
+           {r.get('reason') for r in lgs} <= _ok_reasons,
            f'  {sorted({r.get("reason") for r in lgs})}')
-        ck('u_prev 來源標為 no_valid_applied_report',
-           all(r['u_prev_src'] == 'no_valid_applied_report' for r in lgs))
+        _nu = [r for r in lgs if r.get('reason') == 'no_u_prev']
+        ck('no_u_prev 的輪次來源皆為 no_valid_applied_report',
+           bool(_nu) and all(r['u_prev_src'] == 'no_valid_applied_report'
+                             for r in _nu),
+           f'  {len(_nu)} 輪')
         ck('**沒有**任何輪被標成權威',
            not any(r.get('u_prev_authoritative') for r in lgs))
 
@@ -227,12 +233,15 @@ def main() -> int:
           f'{sorted({r.get("dropped") or r.get("reason") or "?" for r in nb})}')
 
     # ---------- C 新鮮度：停止發布狀態 ----------
-    print('\nC 新鮮度：到 sim 8 s 停止發布 /joint_states')
-    d2, log2 = run_case('stale', stop_js_at=8.0, duration=16.0)
+    # **停發時點必須在節點啟動之後**：啟動序列（假世界 3 s ＋ 樁 2 s ＋
+    # 安全層 5 s ＋ adapter 4 s）約 14 s，而 stop_js_at 是**模擬時間** ——
+    # 設 8.0 會在節點啟動前就停發，節點等不到 /joint_states 而直接退出。
+    print('\nC 新鮮度：到 sim 25 s 停止發布 /joint_states（節點啟動後）')
+    d2, log2 = run_case('stale', stop_js_at=25.0, duration=20.0)
     ck('節點有產出紀錄', d2 is not None)
     if d2 is not None:
         lg2 = d2['log']
-        late = [r for r in lg2 if r['sim_t'] > 7.5]
+        late = [r for r in lg2 if r['sim_t'] > 24.5]
         stale_pub = [r for r in late
                      if r.get('published') and r['age_out'] > 0.2]
         ck('**過期解一筆都沒有發布**', not stale_pub,

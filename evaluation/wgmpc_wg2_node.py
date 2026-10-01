@@ -113,11 +113,16 @@ class WGMPCNode(Node):
         _lat.durability = DurabilityPolicy.TRANSIENT_LOCAL
         self.create_subscription(String, '/coman/applied_cmd_meta',
                                  self._on_applied_meta, _lat)
+        self.create_subscription(String, '/coman/applied_fail',
+                                 self._on_applied_fail, _lat)
         self.pub = self.create_publisher(Float64MultiArray,
                                          '/wholebody_safety/cmd_in', 10)
         self.log = []
         self._hold_t0 = None
         self._reached_held = False
+        self._chain_failed = False
+        self._chain_fail_info = None
+        self._stopped_on_fail = False
 
     # ---------------------------------------------------------- 回呼
     def _on_js(self, m):
@@ -168,12 +173,32 @@ class WGMPCNode(Node):
         不是實測關節速度。
         """
         if len(m.data) >= 11:
-            self._applied = (tuple(float(x) for x in m.data[2:11]),
-                             time.monotonic(), int(m.data[0]),
-                             float(m.data[1]))
+            d = m.data
+            # **執行健康狀態**與套用值分開。零值本身不是錯 ——
+            # 正常模式下的零命令合法；exec_mode 才說明停止原因。
+            h = {'exec_mode': int(d[11]) if len(d) > 11 else 0,
+                 'cmd_age_s': float(d[12]) if len(d) > 12 else float('nan'),
+                 'n_recv': int(d[13]) if len(d) > 13 else -1,
+                 'n_rejected': int(d[14]) if len(d) > 14 else -1,
+                 'api_applied': bool(d[15] > 0.5) if len(d) > 15 else None,
+                 'src_recv_seq': int(d[16]) if len(d) > 16 else -1,
+                 'src_recv_sim_t': (float(d[17]) if len(d) > 17
+                                    else float('nan'))}
+            self._applied = (tuple(float(x) for x in d[2:11]),
+                             time.monotonic(), int(d[0]), float(d[1]), h)
+            if h['exec_mode'] == 3:
+                self._chain_failed = True
 
     def _on_applied_meta(self, m):
         self._applied_meta = m.data
+
+    def _on_applied_fail(self, m):
+        """/coman/applied_fail —— 命令鏈**失效閂鎖**的明確原因。
+
+        收到這個就**停止任務推進**，不能繼續把它當健康的零命令回授。
+        """
+        self._chain_failed = True
+        self._chain_fail_info = m.data
 
     # ------------------------------------------------- u_prev 的來源
     def _u_prev(self, theta):
@@ -185,6 +210,8 @@ class WGMPCNode(Node):
         """
         now = time.monotonic()
         if self._applied is not None and now - self._applied[1] <= self.a.hist_age:
+            # **正常模式下的零命令仍合法** —— 只有 exec_mode == 3（閂鎖）
+            # 才停止任務推進，那由迴圈開頭的 _chain_failed 處理。
             return np.asarray(self._applied[0], float), 'applied', True
         if self.a.u_prev_policy == 'strict':
             if self.a.assume_initial_rest and self._applied is None \
@@ -219,6 +246,19 @@ class WGMPCNode(Node):
                            else round((_top - _prev_top) * 1e3, 4))
             _prev_top = _top
             if time.monotonic() - t0 > self.a.duration_s:
+                break
+            if self._chain_failed:
+                # **執行端的命令鏈已失效閂鎖** ⇒ 停止任務推進、記錄原因、
+                # 走既定收尾。**不把閂鎖後的零回報當成健康的零命令。**
+                self.log.append(dict(slot=slot, sim_t=self.sim_now(),
+                                     ok=False, reason='chain_fail_latched',
+                                     published=False,
+                                     chain_fail_info=self._chain_fail_info,
+                                     timing_ms={'total': 0.0},
+                                     cycle_wall_ms=_cycle_wall))
+                print(f'[wg2] **執行端命令鏈失效閂鎖，停止任務推進**：'
+                      f'{self._chain_fail_info}', flush=True)
+                self._stopped_on_fail = True
                 break
             snap = self._snap              # **讀一次**，整輪只用區域變數
             if snap is None:
@@ -336,7 +376,35 @@ class WGMPCNode(Node):
                           f'{_ep*1e3:.2f} mm / {math.degrees(_er):.3f}° '
                           f'（保持計時重設）', flush=True)
                 self._hold_t0 = None
-            rec.update(in_tol=bool(_in_tol),
+            # ---- **四段紀錄**：request → modified → endpoint_requested → applied
+            # 各自附時間、座標與執行狀態。**無法確定同一筆來源時標 unpaired**，
+            # 不拿各話題的「最新值」直接當成同筆的衰減量。
+            _now_m = time.monotonic()
+            _ap = self._applied
+            _stages = {
+                'request': {'frame': 'world', 'v': [round(float(x), 8)
+                                                    for x in u_world],
+                            'body': [round(float(x), 8) for x in r.u0],
+                            'yaw': round(float(q0[2]), 9),
+                            'src_sim_t': round(snap.sim_t, 6),
+                            'at_mono': round(_now_m, 6)},
+                'modified': ({'frame': 'world',
+                              'v': [round(x, 8) for x in self._modified[0]],
+                              'age_mono_s': round(_now_m - self._modified[1], 4)}
+                             if self._modified is not None else None),
+                'endpoint_requested': ({'frame': 'body',
+                                        'v': [round(x, 8) for x in self._ep_req[0]],
+                                        'age_mono_s': round(_now_m - self._ep_req[1], 4)}
+                                       if self._ep_req is not None else None),
+                'applied': ({'frame': 'body', 'v': [round(x, 8) for x in _ap[0]],
+                             'physics_step_id': _ap[2], 'sim_t': round(_ap[3], 6),
+                             'health': _ap[4]} if _ap is not None else None),
+                'pairing': 'unpaired_latest_values_only',
+                'pairing_note': '各段取各話題的最新值，**未逐筆配對** ⇒ '
+                                '不得相減當成同一筆命令的衰減量',
+            }
+            rec.update(stages=_stages,
+                       in_tol=bool(_in_tol),
                        hold_elapsed=(None if self._hold_t0 is None
                                      else round(snap.sim_t - self._hold_t0, 4)),
                        published=True,
@@ -360,7 +428,9 @@ class WGMPCNode(Node):
         return dict(published=n_pub, dropped_stale=n_drop_age,
                     no_solution=n_no_sol, deadline_miss=int(n_miss),
                     rate_hz=self.a.rate,
-                    reached_held=bool(self._reached_held))
+                    reached_held=bool(self._reached_held),
+                    stopped_on_chain_fail=bool(self._stopped_on_fail),
+                    chain_fail_info=self._chain_fail_info)
 
     def _reschedule(self, t0, slot, period):
         """超時**跳過錯過的 slot**，不連續追趕（沿用 F17 的作法）。"""
@@ -463,6 +533,9 @@ def main() -> int:
                        'start_tcp': [float(x) for x in T[:3, 3]],
                        'start_q': [float(x) for x in q0],
                        'reached_held': bool(nd._reached_held),
+                       'stopped_on_chain_fail': bool(nd._stopped_on_fail),
+                       'chain_fail_info': nd._chain_fail_info,
+                       'applied_meta': nd._applied_meta,
                        'log': nd.log},
                       open(a.out, 'w'), ensure_ascii=False)
             print(f'[wg2] {len(nd.log)} 輪寫入 {a.out}', flush=True)

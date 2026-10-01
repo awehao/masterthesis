@@ -207,16 +207,42 @@ class WBNode(Node):
             String, '/coman/applied_cmd_meta', _lat1)
         self.applied_meta_pub.publish(String(data=json.dumps({
             'cols': ['physics_step_id', 'sim_t', 'bvx_body', 'bvy_body', 'wz',
-                     'qd1', 'qd2', 'qd3', 'qd4', 'qd5', 'qd6'],
+                     'qd1', 'qd2', 'qd3', 'qd4', 'qd5', 'qd6',
+                     'exec_mode_code', 'cmd_age_s', 'n_recv', 'n_rejected',
+                     'api_applied', 'src_recv_seq', 'src_recv_sim_t'],
+            'exec_mode_code': {'0': 'normal', '1': 'timeout_decel_or_hold',
+                               '2': 'stop_unverified', '3': 'FAIL_LATCHED',
+                               '4': 'no_command'},
             'base_frame': 'body（送進 set_linear_velocity 之前）',
-            'arm_semantics': '套用設定點對應的命令速率 (sp_k − sp_{k-1})/dt',
+            'arm_semantics': '套用設定點對應的命令速率',
             'arm_is_not': '實測關節速度',
-            'stage': '**E2 之後**（含輪級限制與逾時處置）、真正送進物理 API',
+            'stage': '**E2 之後**、真正送進物理 API',
             'not_the_same_as': '/wb_vel_cmd（adapter 輸出，E2 之前）',
-            'endpoint': 'isaac_wholebody_sim_e2',
+            'zero_is_not_an_error': '**零值本身不是錯** —— 正常模式下的零命令合法；'
+                                    '要看 exec_mode_code 才知道停止原因',
+            'fail_reason_topic': '/coman/applied_fail（String，閂鎖時發一次）',
+            'api_applied': '本步是否成功完成 apply_action／set_*_velocity',
+            'pairing': 'src_recv_seq／src_recv_sim_t 來自 chain.applied 快照；'
+                       '**無法確定同一筆來源時為 -1／NaN**，不得拿各話題最新值相減',
         }, ensure_ascii=False)))
+        self.fail_pub = self.create_publisher(String, '/coman/applied_fail',
+                                              _lat1)
+        # **受控停止請求**（純新增的停止條件，不改既有門檻）。
+        # 收到後走與 sim_limit 相同的收尾路徑：停止觀察 → 封存。
+        # 先前上游節點先結束時 cleanup 會直接 SIGTERM，
+        # 使「為何停止套用」的紀錄遺失。
+        self.stop_requested = None
+        self.create_subscription(String, '/wb_sim/stop_request',
+                                 self._on_stop_request, 10)
+        self._fail_sent = False
         self._sp_prev = None
         self._step_id = 0
+
+    def _on_stop_request(self, m):
+        """上游請求受控停止。**不是** SIGTERM —— 走正常收尾與封存。"""
+        if self.stop_requested is None:
+            self.stop_requested = str(m.data)
+            print(f'[wb] **收到受控停止請求**：{self.stop_requested}', flush=True)
         # **Isaac 只發布到模型根部 base_footprint**。
         # base_footprint → base_link（URDF 固定 +0.05 m）由 robot_state_publisher
         # 發在 /tf_static；安全層查 odom → base_link 時由 TF 鏈自動組合。
@@ -671,6 +697,16 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         s = chain.applied
         if out is not None and out[1] is None:
             base_cmd, sp = out[0], None
+            # **設定點尚未建立**（手臂沒被命令過）⇒ 回報 no_command，
+            # 不讓這一步在紀錄裡消失。
+            node._step_id += 1
+            _am0 = Float64MultiArray()
+            _am0.data = ([float(node._step_id), float(t),
+                          float(base_cmd[0]), float(base_cmd[1]),
+                          float(base_cmd[2])] + [0.0] * 6
+                         + [4.0, float('nan'), float(chain.n_recv),
+                            float(chain.n_rejected), 0.0, -1.0, float('nan')])
+            node.applied_pub.publish(_am0)
         elif out is not None:
             base_cmd, sp = out
             if sp is not None:
@@ -686,19 +722,47 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
             robot.set_linear_velocity(np.array([vwx, vwy, 0.0]))
             robot.set_angular_velocity(np.array([0.0, 0.0, base_cmd[2]]))
             sent_prev = (vwx, vwy, float(base_cmd[2]))
-            # **套用回報**：底盤用**本體**命令（E2 輸出，未經世界旋轉）；
-            # 手臂用**設定點對應的命令速率**，首步無前值時為 0。
+            # **套用值與執行健康狀態分開回報。**
+            # 零值本身不是錯 —— 正常模式下的零命令合法；
+            # 缺的是停止原因，所以一併帶 exec_mode、cmd_age、拒收數
+            # 與「本步是否完成 API 套用」。
             _qd = ([0.0] * len(ARM) if (sp is None or node._sp_prev is None)
                    else [(float(sp[k]) - float(node._sp_prev[k])) / dt
                          for k in range(len(ARM))])
             if sp is not None:
                 node._sp_prev = [float(v) for v in sp]
             node._step_id += 1
+            _mode = (3 if chain.fail is not None else
+                     {None: 0, 'normal': 0, 'timeout': 1,
+                      'stop_unverified': 2}.get(
+                          getattr(chain, 'last_mode', None), 0))
+            _sn = chain.applied
+            _age = (float(t - _sn.recv_sim_t) if _sn is not None
+                    else float('nan'))
             _am = Float64MultiArray()
             _am.data = ([float(node._step_id), float(t),
                          float(base_cmd[0]), float(base_cmd[1]),
-                         float(base_cmd[2])] + [float(x) for x in _qd])
+                         float(base_cmd[2])] + [float(x) for x in _qd]
+                        + [float(_mode), _age, float(chain.n_recv),
+                           float(chain.n_rejected), 1.0,
+                           float(_sn.recv_seq) if _sn is not None else -1.0,
+                           float(_sn.recv_sim_t) if _sn is not None
+                           else float('nan')])
             node.applied_pub.publish(_am)
+            if chain.fail is not None and not node._fail_sent:
+                # **閂鎖只報一次**（latched topic），帶明確原因
+                node._fail_sent = True
+                node.fail_pub.publish(String(data=json.dumps({
+                    'fail': str(chain.fail), 'sim_t': float(t),
+                    'physics_step_id': int(node._step_id),
+                    'n_recv': int(chain.n_recv),
+                    'n_rejected': int(chain.n_rejected),
+                    'last_reject': str(chain.last_reject),
+                    'n_frozen': int(chain.n_frozen),
+                }, ensure_ascii=False)))
+                print(f'[wb] **命令鏈失效閂鎖**：{chain.fail}'
+                      f'（sim {t:.3f}、recv {chain.n_recv}、'
+                      f'rej {chain.n_rejected}）', flush=True)
         else:
             base_cmd, sp = (float('nan'),) * 3, (float('nan'),) * 6
             sent_prev = (float('nan'),) * 3
@@ -754,6 +818,8 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                 stop = ('monitor_failure' if '監看失效' in chain.fail
                         else 'cmd_chain_fail')
                 break
+        if node.stop_requested is not None:
+            stop = 'stop_request'; break
         if t >= a.sim_limit:
             stop = 'sim_limit'; break
         if time.monotonic() - w0 > 900.0:

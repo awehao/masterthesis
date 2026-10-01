@@ -74,5 +74,34 @@ python3 -u evaluation/wgmpc_wg2_node.py \
   --reach-pos-m "$REACH_P" --reach-rot-rad "$REACH_R" --hold-s "$HOLD_S" \
   --duration-s "$TASK_S" --u-prev-policy strict --assume-initial-rest \
   --out "$DIR/wg2_out.json" 2>&1 | tee -a "$LOG"
+
+# ---- 受控停止與落盤**先於** cleanup ----
+# 先前的缺陷：節點先結束 ⇒ trap cleanup 立刻 SIGTERM Isaac，
+# 而執行端只在自己的迴圈結束後才落盤 ⇒ **能說明為何停止套用的紀錄被弄丟**。
+# 現在：請執行端走受控停止（送停止請求），等它自己完成封存，
+# **等待有上限**；超時才升級終止並標記「封存不完整」。
+ARCHIVE_WAIT_S="${ARCHIVE_WAIT_S:-180}"
+say "[收尾 1/3] 請執行端受控停止（/wb_sim/stop_request）"
+timeout 10 ros2 topic pub --once /wb_sim/stop_request std_msgs/msg/String \
+  "{data: 'wgmpc_wg2 節點已結束，請走受控停止與停止觀察後封存'}" \
+  >>"$LOG" 2>&1 || say "  （停止請求發布失敗，改等自然收尾）"
+
+say "[收尾 2/3] 等執行端完成封存（上限 ${ARCHIVE_WAIT_S} s）"
+ARCHIVE_OK=0
+for i in $(seq "$ARCHIVE_WAIT_S"); do
+  # 執行端的封存檔出現且非空 ⇒ 完成
+  if ls "$DIR/sim/"*.json >/dev/null 2>&1; then ARCHIVE_OK=1; break; fi
+  sleep 1
+done
+if [ "$ARCHIVE_OK" = "1" ]; then
+  say "  **封存完成**（$(ls "$DIR/sim/"*.json | tr '\n' ' ')）"
+  echo '{"archive_complete": true}' > "$DIR/archive_status.json"
+else
+  say "  **等待逾時 ⇒ 升級終止，標記「封存不完整」**"
+  echo '{"archive_complete": false, "reason": "執行端未在 '"$ARCHIVE_WAIT_S"' s 內完成封存，由 cleanup 升級終止"}' \
+    > "$DIR/archive_status.json"
+fi
+
+say "[收尾 3/3] cleanup 由 trap 執行（只針對本趟 PID）"
 say "收尾後 CPU $(python3 evaluation/cpu_temp.py)"
 say "輸出目錄 $DIR"

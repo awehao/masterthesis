@@ -1,0 +1,100 @@
+schema: wgmpc_wg2_run_outcome/1
+version: WG2-RUN1
+status: recorded
+created: 2026-10-01
+run_id: wgmpc_wg2_free1
+prereg: evaluation/results/specs/wgmpc_wg2_run1_preregistration.yaml（86fd736966d3332c）
+
+title: WG2 首趟自由空間整合測試的結果與未知
+
+what_is_established:
+- '**W-GMPC 在這趟負載下持續產出解**：1197 輪、0 丟棄、0 無解、
+  3 次 deadline miss、全部 converged_cost、殘差 max 4.44e-16、
+  核心 total p50 23.74 ms / p95 32.54 ms。'
+- '**套用回報通道持續運作**：u_prev 權威輪次 1197/1197，
+  其中 1196 輪來自 /coman/applied_cmd、1 輪為已確認的初始靜止零值。
+  互等問題按事前宣告的 --assume-initial-rest 解開。'
+must_not_claim:
+- '**不得稱「命令鏈完全成立」**（我先前這樣寫，已更正）'
+- '**不得把本趟判成 W-GMPC 無法到達** —— 為何沒有形成預期運動仍未知'
+
+what_was_not_achieved:
+  reached: false
+  err_p: 295.80 mm → 298.33 mm（**變遠 2.53 mm**）
+  err_r: 0.0000° → 0.8001°
+  in_tol_cycles: 0
+  measured_vs_commanded: '命令角速度 0.1 rad/s 持續 59.3 s **應轉 340°**，
+    實測 yaw 僅 **+0.800°**（比值 0.0024）⇒ 底盤實際幾乎沒動'
+
+derivation_applied_was_zero:
+  claim: 'applied 回報的底盤與手臂速率**為零**'
+  evidence_1: '請求命令 1197 輪完全不變：底盤 (0.025, 0.025, 0.1)、手臂 0.9992
+    —— 恰好是 a_max·dt（0.50×0.05、2.00×0.05、19.984×0.05）。
+    速度框 0.035255 未綁住 ⇒ 約束 u_0 = u_prev + a_max·dt
+    只在 **u_prev = 0** 時持續成立。'
+  evidence_2: 實測 yaw 59.3 s 只轉 0.800°
+
+root_cause: '**未確立。** 下列兩條都是程式上可能的路徑，本趟資料不足以分辨。'
+candidate_A_timeout:
+  path: 'E2 的逾時路徑：age > max_cmd_age_s(0.2) ⇒ limit9_timeout
+    ⇒ 底盤減速至零、手臂設定點凍結（_qd = 0）'
+  consistent_with: '**不設 chain.fail** ⇒ 執行端不會走 cmd_chain_fail 停止
+    —— 與「free1 的執行端跑到被 cleanup 殺掉」一致'
+  status: 目前的主要候選
+candidate_B_fail_latch:
+  path: 'chain.fail 閂鎖 ⇒ stop_command() 回傳 ((0,0,0), setpoint)
+    ⇒ out[1] 非 None ⇒ 舊版的 applied 發布分支照樣執行、報出全零'
+  weakened_by: '執行端**本來就有** `stop = cmd_chain_fail; break`
+    的停止條件。free1 的執行端並未自行停止 ⇒ **當時 chain.fail 很可能未設定**。'
+  status: '**程式上可能發生，但本趟證據削弱它**；封存保留這個區別'
+
+offline_e2_replay:
+  what: 用 free1 的**實際請求命令**（本體）離線重播 CmdChainE2，20 Hz → 100 Hz
+  result: '前 199 個物理步 normal 並套用；命令第 39 筆、t = 1.99 s
+    **關節 5 積分結果 +1.998419 超出限位 [−1.9897, +1.9897] ⇒ _fail 閂鎖**。
+    n_rejected = 0、n_frozen = 0。'
+  my_earlier_error: '我先前以 0.2 s 視窗判定「關節限位不是原因」，**那是錯的** ——
+    持續命令 ±0.9992 rad/s 約 2 s 就會讓關節 5（最緊的 ±1.9897）觸限。'
+  why_it_does_not_settle_it: '重播**跳過了安全層**。實跑中安全層有自己的
+    關節位置列與 vmax，可能已把手臂速率降下來 ⇒ 到 E2 的命令與重播不同。
+    而且實跑的執行端**沒有**走 cmd_chain_fail。'
+  limitation: '**重播無法還原到達時序**（命令何時抵達、是否過期）⇒ 那部分仍未知'
+
+defects_found_in_my_own_work:
+  note: 三項都已修；修法見 wgmpc_wg2_interface.yaml
+  items:
+  - id: R1
+    what: 'applied 回報**無法區分**「真正送出的停止命令」與「鏈已失效閂鎖」'
+    why_it_matters: '**零值本身不是錯** —— 正常模式下的零命令合法；
+      缺的是停止原因。缺了它就形成死迴圈：報零 → u_prev = 0 →
+      下 a_max·dt → 仍不動 → 再報零，**每一環都「正常」**。'
+    fix: '回報加 exec_mode／cmd_age_s／n_recv／n_rejected／api_applied／
+      src_recv_seq／src_recv_sim_t；另加 latched /coman/applied_fail 帶明確原因。
+      求解端收到失效閂鎖即**停止任務推進**並走既定收尾，
+      **正常模式下的零命令仍合法**。'
+  - id: R2
+    what: 節點未逐輪記錄 modified（cmd_out）
+    why_it_matters: 'D1 選 A 的前提就是要量安全層的修改量 ⇒ Q4 無法分離'
+    fix: '四段紀錄 request → modified → endpoint_requested → applied，
+      各附時間／座標／執行狀態；**標為 unpaired_latest_values_only** ——
+      不拿各話題最新值相減當成同一筆的衰減量。'
+  - id: R3
+    what: runner 在執行端落盤**之前**就 cleanup
+    why_it_matters: '能說明「為何停止套用」的紀錄被弄丟（sim/ 只剩 shutdown 的 traceback）'
+    fix: '受控停止請求（/wb_sim/stop_request，執行端走正常收尾而非 SIGTERM）
+      → 等封存（上限 ARCHIVE_WAIT_S = 180 s）→ 才 cleanup；
+      超時升級並寫 archive_status.json 標記「封存不完整」。'
+
+pre_run2_checks:
+  tool: evaluation/test_wgmpc_wg2_health.py（不開 Isaac、不用 GPU）
+  H1_healthy_zero_not_misjudged: '**通過** —— exec_mode=0 的零回報不停止任務，
+    196/198 輪持續發布、u_prev 仍取權威 applied、模式集合 [0]'
+  H2_injected_fail_aborts: '**通過** —— exec_mode=3 ＋ applied_fail
+    ⇒ stopped_on_chain_fail=True、1 筆 chain_fail_latched、
+    記下明確原因、停止後不再發布'
+  H3_windown_record: '**部分** —— 停止條件、等待上限與狀態檔契約已驗；
+    **完整路徑（Isaac 自己落盤）需實跑驗證**'
+
+run2_primary_question: '**非零命令經安全層與 E2 後，究竟套用了什麼？
+  若停止，是哪個明確條件觸發？** 資料完整後才判斷到達問題。'
+run2_unchanged: '**不改 W-GMPC、權重、目標或限制** —— 避免把執行問題與控制方法混在一起'

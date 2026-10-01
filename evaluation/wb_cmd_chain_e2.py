@@ -55,11 +55,18 @@ class CmdChainE2(CmdChain):
         self.n_timeout_decel = 0
         self.n_stop_unverified = 0
         self.last_limit = None
+        self.last_mode = None          # 本步執行模式（診斷用）
+        self.last_modified = False
         self.keep_limit_rows = int(keep_limit_rows)
         self.limit_rows = []
 
     # ------------------------------------------------------------ 內部
     def _record(self, res, u_req, dt):
+        # **本步的執行模式**（normal／timeout／stop_unverified）。
+        # 純新增診斷狀態，**不改任何判定**；供執行端把「真正送出的停止命令」
+        # 與「鏈已失效閂鎖」分開回報 —— 零值本身不是錯，缺的是停止原因。
+        self.last_mode = res.mode
+        self.last_modified = bool(res.modified)
         self.last_limit = res.as_row(u_req, self.u_prev
                                      if self.u_prev is not None
                                      else np.zeros(9), dt)
