@@ -157,6 +157,8 @@ class WGMPCNode(Node):
         self._n_step_mismatch = 0
         self._last_step_mismatch = None
         self.handshake_startup = {'n_init_cmd': 0, 'states': []}
+        self._t_sim0 = None
+        self._stop_why = 'not_started'
         # 命令三階段，各自只存**最後一筆不可變 tuple**
         self._modified = None       # (tuple9_world, mono)
         self._ep_req = None         # (tuple9_body, mono)  —— **E2 之前**
@@ -389,6 +391,8 @@ class WGMPCNode(Node):
         n_pub = n_drop_age = n_no_sol = 0
         n_miss = 0
         _prev_top = None
+        self._t_sim0 = None          # 任務的模擬時間起點（首次成功發布時定）
+        self._stop_why = 'loop_end'
         while rclpy.ok():
             # **逐輪牆鐘**：核心的 timing_ms['total'] **不含**介面開銷
             # （發布、回呼處理、排程等待）⇒ 要另外量迴圈頂到頂的實際間隔。
@@ -397,6 +401,12 @@ class WGMPCNode(Node):
                            else round((_top - _prev_top) * 1e3, 4))
             _prev_top = _top
             if time.monotonic() - t0 > self.a.duration_s:
+                self._stop_why = 'wall_duration'
+                break
+            if self.a.duration_sim_s > 0.0 and self._t_sim0 is not None \
+                    and self.sim_now() - self._t_sim0 > self.a.duration_sim_s:
+                # **模擬時間預算**：與牆鐘上限並存，先到者為準。
+                self._stop_why = 'sim_duration'
                 break
             if self._chain_failed:
                 # **執行端的命令鏈已失效閂鎖** ⇒ 停止任務推進、記錄原因、
@@ -600,6 +610,9 @@ class WGMPCNode(Node):
                     slot, _m = self._reschedule(t0, slot, period)
                     n_miss += _m
                     continue
+            if self._t_sim0 is None:
+                # 任務的**模擬時間**起點 = 首次成功發布那一輪的快照時間
+                self._t_sim0 = snap.sim_t
             # 四段紀錄裡的 request 段**用同一個值**，不另算一次轉換
             u_world = self._publish_u(r.u0, float(q0[2]))
             n_pub += 1
@@ -670,7 +683,12 @@ class WGMPCNode(Node):
                 break
             slot, _m = self._reschedule(t0, slot, period)
             n_miss += _m
-        return dict(n_step_mismatch=self._n_step_mismatch,
+        return dict(stop_why=self._stop_why,
+                    task_sim_t0=self._t_sim0,
+                    task_sim_span_s=(None if self._t_sim0 is None
+                                     else round(self.sim_now()
+                                                - self._t_sim0, 3)),
+                    n_step_mismatch=self._n_step_mismatch,
                     last_step_mismatch=self._last_step_mismatch,
                     n_compose_incomplete=self._n_incomplete,
                     n_compose_incomplete_note='先到的來源還湊不齊的次數；'
@@ -729,7 +747,12 @@ def main() -> int:
     ap.add_argument('--hold-s', type=float, default=2.0,
                     help='首次到達後要連續維持在容差內多久才算完成（模擬時間）')
     ap.add_argument('--target-rot-deg', type=float, default=0.0)
-    ap.add_argument('--duration-s', type=float, default=30.0)
+    ap.add_argument('--duration-s', type=float, default=30.0,
+                    help='**牆鐘**時間上限')
+    ap.add_argument('--duration-sim-s', type=float, default=0.0,
+                    help='**模擬時間**預算上限（0 = 不啟用）。'
+                         '錄影會拖慢 sim:wall，只靠牆鐘上限會讓任務拿到的'
+                         '模擬時間比無錄影趟次少 ⇒ 要與 free4 對齊時用這個。')
     ap.add_argument('--max-input-age', type=float, default=0.2)
     ap.add_argument('--hist-age', type=float, default=0.5)
     ap.add_argument('--u-prev-policy', default='strict',

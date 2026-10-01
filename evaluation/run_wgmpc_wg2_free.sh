@@ -22,10 +22,27 @@ URDF_WB="$WS/evaluation/models/omni_bot_wholebody_expanded.urdf"
 # rsp 用 manip 版（底盤不是關節 ⇒ 不需要 base_x/y/theta 的 joint_states）。
 URDF_TF="$WS/evaluation/models/omni_bot_manip.urdf"
 # ---- 事前定版的配置（見 preregistration）----
-N=5; RATE=20; SIM_LIMIT=120; TASK_S=60
+N=5; RATE=20; SIM_LIMIT=120
 OFFSET="0.25 0.15 0.05"
 REACH_P=0.005; REACH_R=0.02; HOLD_S=2.0
 VMAX_BASE_LIN=0.035255; VMAX_BASE_ANG=0.199900; VMAX_ARM=0.999900
+# **模型選擇要顯式傳入**：節點預設是 ideal，不傳就會跑成原核心。
+ARM_MODEL="${ARM_MODEL:-setpoint}"
+ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
+# **任務時間預算**：牆鐘上限留寬，由**模擬時間**預算與 free4 對齊。
+# 錄影會拖慢 sim:wall（free4 無錄影時為 0.997），只靠牆鐘會讓任務
+# 拿到的模擬時間比 free4 少。free4 任務覆蓋模擬 59.61 s。
+TASK_SIM_S=60; TASK_WALL_S=400
+# ---- 錄影（模擬器內相機 /World/rec_cam，**不是桌面錄製**）----
+# 解析度與 fps 明確指定，不用較高負載的預設（1920x1080／30 fps）。
+REC_RES="1280x720"; REC_FPS=10
+# 取景由 URDF 連桿原點 ∪ free4 實際軌跡 ∪ 目標算出，含 0.12 m 幾何加厚；
+# 距離 4.45 m 在悲觀 vFOV 20° 下仍涵蓋八個角點（見入口核對）。
+REC_AT="0.1322,0.0000,0.4468"
+REC_EYE="2.4581,-3.4512,2.0224"
+# 目標標記：名目 FK（q=0）＋偏移。與 free4 實錄差 0.0016 m，遠小於標記半徑
+# 0.020 m。**權威目標是節點在趟中算出並寫進 wg2_out.json 的那一個。**
+REC_TARGET="0.44700,0.15000,0.44999"
 
 PIDS=(); NAMES=()
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
@@ -42,6 +59,26 @@ spawn(){ local n="$1"; shift; setsid "$@" >>"$LOG" 2>&1 </dev/null &
 say "=== WG2 首趟自由空間整合測試 RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID ==="
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 say "判準：N=$N dt=$(python3 -c "print(1/$RATE)") 偏移=($OFFSET) 到達≤${REACH_P}m/${REACH_R}rad 保持${HOLD_S}s"
+say "**手臂執行模型：$ARM_MODEL**（辨識檔 $(basename "$ARM_IDENT")）"
+say "錄影：$REC_RES @ ${REC_FPS}fps、模擬器內相機、at=$REC_AT eye=$REC_EYE target=$REC_TARGET"
+say "時間預算：模擬 ${TASK_SIM_S}s（與 free4 的 59.61s 對齊）、牆鐘上限 ${TASK_WALL_S}s"
+python3 - <<EOF | tee -a "$LOG"
+import json, os
+json.dump({'arm_model': '$ARM_MODEL', 'arm_ident': '$ARM_IDENT',
+           'N': $N, 'rate_hz': $RATE, 'offset_m': [$(echo $OFFSET | tr ' ' ',')],
+           'reach_pos_m': $REACH_P, 'reach_rot_rad': $REACH_R,
+           'hold_s': $HOLD_S, 'sim_limit_s': $SIM_LIMIT,
+           'task_sim_s': $TASK_SIM_S, 'task_wall_s': $TASK_WALL_S,
+           'recording': {'res': '$REC_RES', 'fps': $REC_FPS,
+                         'at': '$REC_AT', 'eye': '$REC_EYE',
+                         'target_marker': '$REC_TARGET',
+                         'source': '模擬器內相機 /World/rec_cam，非桌面錄製'},
+           'low_speed_box_l1': {'base_lin': $VMAX_BASE_LIN,
+                                'base_ang': $VMAX_BASE_ANG,
+                                'arm': $VMAX_ARM}},
+          open('$DIR/run_config.json', 'w'), ensure_ascii=False, indent=1)
+print('啟動配置已落盤 $DIR/run_config.json')
+EOF
 
 say "[1/6] 起 Isaac 執行端（--mode solver_freespace，**無抽屜、無額外碰撞體**）"
 # **--mode solver_freespace**：執行端會遍歷 UsdPhysics.CollisionAPI，
@@ -50,7 +87,10 @@ say "[1/6] 起 Isaac 執行端（--mode solver_freespace，**無抽屜、無額�
 spawn isaac "$ISAAC_PY" -u evaluation/isaac_wholebody_sim_e2.py \
   --out "$DIR/sim" --mode solver_freespace --sim-limit "$SIM_LIMIT" \
   --solver-label wgmpc_wg2 \
-  --run-label "WG2 自由空間閉迴路：W-GMPC N=5 在已確認空場景的到達與保持"
+  --record-frames "$DIR/frames" --record-res "$REC_RES" \
+  --record-fps "$REC_FPS" --record-at "$REC_AT" --record-eye "$REC_EYE" \
+  --record-target "$REC_TARGET" \
+  --run-label "WG2 自由空間閉迴路：W-GMPC N=5（$ARM_MODEL 模型）到達與保持"
 say "  等 Isaac 起 scene（最多 180 s）"
 for i in $(seq 180); do
   grep -q '/joint_states\|進入物理\|physics' "$LOG" 2>/dev/null && break; sleep 1
@@ -98,11 +138,15 @@ spawn adapter python3 -u evaluation/arm_vel_adapter.py \
   --consumer-node /isaac_wholebody_sim
 sleep 5
 
-say "  起 W-GMPC 節點（N=$N、u_prev=strict ＋ 已確認初始靜止）"
+say "  起 W-GMPC 節點（**--arm-model $ARM_MODEL**、N=$N、u_prev=strict ＋ 已確認初始靜止）"
+[ "$ARM_MODEL" = "setpoint" ] && { [ -f "$ARM_IDENT" ] || {
+  echo "**找不到辨識檔 $ARM_IDENT**" | tee -a "$LOG"; exit 66; }; }
 python3 -u evaluation/wgmpc_wg2_node.py \
+  --arm-model "$ARM_MODEL" --arm-ident "$ARM_IDENT" \
   --N "$N" --rate "$RATE" --target-offset $OFFSET \
   --reach-pos-m "$REACH_P" --reach-rot-rad "$REACH_R" --hold-s "$HOLD_S" \
-  --duration-s "$TASK_S" --u-prev-policy strict --assume-initial-rest \
+  --duration-s "$TASK_WALL_S" --duration-sim-s "$TASK_SIM_S" \
+  --u-prev-policy strict --assume-initial-rest \
   --out "$DIR/wg2_out.json" 2>&1 | tee -a "$LOG"
 
 # ---- 受控停止與落盤**先於** cleanup ----
@@ -117,18 +161,31 @@ timeout 10 ros2 topic pub --once /wb_sim/stop_request std_msgs/msg/String \
   >>"$LOG" 2>&1 || say "  （停止請求發布失敗，改等自然收尾）"
 
 say "[收尾 2/3] 等執行端完成封存（上限 ${ARCHIVE_WAIT_S} s）"
+# **不以「目錄內有任意 JSON」判定**：加入錄影後目錄會有其他產物，
+# 存在不等於執行結果已落盤。改為核對 sim/wb_run.json 能解析、
+# 必要紀錄齊備、且錄影索引與磁碟影格數一致。
 ARCHIVE_OK=0
 for i in $(seq "$ARCHIVE_WAIT_S"); do
-  # 執行端的封存檔出現且非空 ⇒ 完成
-  if ls "$DIR/sim/"*.json >/dev/null 2>&1; then ARCHIVE_OK=1; break; fi
+  if [ -f "$DIR/sim/wb_run.json" ]; then
+    if python3 evaluation/wgmpc_wg2_archive_check.py "$DIR" \
+         --expect-recording --expect-arm-model "$ARM_MODEL" \
+         --out "$DIR/archive_check.json" >/dev/null 2>&1; then
+      ARCHIVE_OK=1; break
+    fi
+  fi
   sleep 1
 done
+say "  封存內容核對結果："
+python3 evaluation/wgmpc_wg2_archive_check.py "$DIR" \
+  --expect-recording --expect-arm-model "$ARM_MODEL" \
+  --out "$DIR/archive_check.json" 2>&1 | tee -a "$LOG"
 if [ "$ARCHIVE_OK" = "1" ]; then
-  say "  **封存完成**（$(ls "$DIR/sim/"*.json | tr '\n' ' ')）"
-  echo '{"archive_complete": true}' > "$DIR/archive_status.json"
+  say "  **封存完整**（內容已核對，不只是檔案存在）"
+  echo '{"archive_complete": true, "basis": "wgmpc_wg2_archive_check.py 內容核對"}' \
+    > "$DIR/archive_status.json"
 else
-  say "  **等待逾時 ⇒ 升級終止，標記「封存不完整」**"
-  echo '{"archive_complete": false, "reason": "執行端未在 '"$ARCHIVE_WAIT_S"' s 內完成封存，由 cleanup 升級終止"}' \
+  say "  **封存不完整 ⇒ 升級終止；結果保留，不自動重跑**"
+  echo '{"archive_complete": false, "basis": "wgmpc_wg2_archive_check.py 內容核對未通過", "reason": "執行端未在 '"$ARCHIVE_WAIT_S"' s 內完成可核對的封存"}' \
     > "$DIR/archive_status.json"
 fi
 
