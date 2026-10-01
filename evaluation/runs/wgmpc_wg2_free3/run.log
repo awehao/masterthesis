@@ -395,3 +395,19 @@ Warp 1.13.0 initialized:
 [wb] 模式 sync：允許分量 {'base': True, 'arm': True}；不符模式的命令整筆拒收
 [wb] 進入主迴圈；等待 /wb_vel_cmd
 [wb] 起始 CPU 55.75 °C（hwmon:k10temp）
+[16:57:52] [2/5] 起安全層（低速框 L1；D1 選 A ⇒ 世界逐軸 0.035255）
+[16:57:52]   起 safety PID=204893
+[INFO] [1790845072.845731998] [wholebody_safety]: kinematics loaded from /home/howardchen/masterthesis/evaluation/models/omni_bot_wholebody_expanded.urdf; 11 arm links: base_link link_base link1 link2 link3 link4 link5 link6 uflite_gripper_link uflite_finger1 uflite_finger2
+[INFO] [1790845072.852302533] [wholebody_safety]: wholebody_safety: frame odom, 20 Hz, base DOF on
+[INFO] [1790845072.852665171] [wholebody_safety]: wholebody_safety vmax_effective base_lin=0.035255 base_ang=0.199900 arm_max=0.999900 overrides={'vmax_base_lin': 0.035255, 'vmax_base_ang': 0.1999, 'vmax_arm': 0.9999}
+[INFO] [1790845072.852979348] [wholebody_safety]: wholebody_safety freespace_declared=False（宣告不等於套用：每週期另要求資料非缺失／過期）
+[16:57:58] [3/5] 低速框讀回比對（安全層 vs 本趟設定）
+  安全層讀回 base_lin=0.035255 base_ang=0.199900 arm_max=0.999900，與 runner 逐項一致
+  對 E2：平面範數上界 0.049858 <= 0.05、角速度 0.199900 <= 0.2、關節 0.999900 <= 1.0
+[16:57:58] [4/5] 起 adapter（消費端為 Isaac 執行端）
+[16:57:58]   起 adapter PID=204987
+[INFO] [1790845078.902533556] [arm_vel_adapter]: 關節順序已對 /isaac_wholebody_sim 核對通過：['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
+[16:58:03] [5/5] 起 W-GMPC 節點（N=5、u_prev=strict ＋ 已確認初始靜止）
+[wg2] N=5 dt=0.050  起始 q [-0.00042, 0.0001, 0.0012, -0.00064, 0.00261, -0.00122, 0.00034, 2e-05, -0.0]
+[wg2] 起始 TCP [0.19567, 0.00028, 0.39966]  目標 TCP [0.44567, 0.15028, 0.44966]  偏移 [0.25, 0.15, 0.05]
+[wg2] 到達 ≤5.0 mm / 1.15°、保持 2.0 s（模擬時間）、u_prev 政策 strict＋初始靜止
