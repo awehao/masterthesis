@@ -784,13 +784,21 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                     'joint_order': list(ARM),
                     'units': 'rad（prismatic 不在此列；手臂六軸皆 revolute）',
                     'sampling_instant': '**本步寫入後**（apply_action 之後）',
-                    'pairing': '與同一輪 /joint_states 的量測構成匹配對'
-                               '（同 sim_t、同 physics_step_id）',
+                    # **物理步長是執行端的量測事實**，所以放進契約。
+                    # 模型係數 G 不放 —— 那是由辨識參數 α 與控制步長算出的
+                    # 模型量，兩端硬編碼同一個常數只能證明字串一致。
+                    'physics_dt_s': float(dt),
+                    'physics_dt_nominal_s': float(a.physics_dt),
+                    'pairing': '與同一輪 /joint_states 與 /odom 共用同一個'
+                               ' sim_t（三者的 stamp 都由本步的 t 導出）'
+                               ' ⇒ 以**共同時間戳**配對；'
+                               'JointState 沒有 physics_step_id 欄位，'
+                               '不得只靠本說明視為已核對',
                     'recursion': 'act_{i+1} = act_i + α·(sp_i − act_i) + b'
                                  '　⇒ sp_i **先作用於下一物理段**',
-                    'composed_G_for_dt_0p05': 0.008640,
-                    'not_this': '若回報的是寫入前的 sp_{i−1}，'
-                                '五步合成的 G 會是 0.012570 —— 兩者不可混用',
+                    'G_not_reported': '合成增益 G 由模型端以 α 與 dt 計算；'
+                                      '取樣時刻決定用哪一種合成，'
+                                      '故契約只需核對取樣時刻與物理步長',
                     'ready_false_means': '設定點**尚未建立**'
                                          '（執行端在第一筆有效命令時由實測關節位置建立）'
                                          '⇒ 求解器**不得**假設 s = q，'

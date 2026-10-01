@@ -63,19 +63,38 @@ sys.path.insert(0, os.path.join(os.path.dirname(_HERE), 'src/ammr_wholebody_mpc'
 
 from ammr_wholebody_mpc.arm_pregrasp import ARM_JOINTS          # noqa: E402
 from ammr_wholebody_mpc.wgmpc_core import (                     # noqa: E402
-    NQ, NU, WGMPCConfig, body_to_world, solve, task_error)
+    NU, WGMPCConfig, body_to_world, solve, task_error)
+from ammr_wholebody_mpc.wgmpc_core_sp import (                   # noqa: E402
+    ArmSetpointModel, WGMPCConfigSP, make_z, solve_sp)
 from ammr_wholebody_mpc.wholebody_kinematics import (            # noqa: E402
     WholeBodyKinematics)
+from wgmpc_sp_handshake import (ARMED, FAILED, HOLD, INIT,       # noqa: E402
+                                SetpointGate, SpSample)
 
 
 @dataclass(frozen=True)
 class Snap:
-    """**不可變**狀態快照。回呼只建新的，不就地改。"""
-    q: tuple           # 9 維
-    sim_t: float       # 來源模擬時間
-    recv_mono: float   # 收到時的單調牆鐘
+    """**不可變、同時刻**狀態快照。回呼只建新的，不就地改。
+
+    `sim_t` 是**三方共同的**模擬時間，不是「最舊者」。
+    先前用 `min(t_arm, t_base)` 合成會把錯配藏起來：兩個來源各自新鮮、
+    但不是同一個物理步，取最舊時間後看起來仍然新鮮。
+    現在只有在**共同時間鍵**上三方都有樣本才建快照，
+    並保留各來源自己的時間供事後核對。
+    """
+    q: tuple           # 9 維（底盤 3 ＋ 手臂 6）
+    sim_t: float       # **共同**模擬時間
+    recv_mono: float   # 收到時的單調牆鐘（取最舊者，僅用於診斷）
     have_js: bool
     have_odom: bool
+    t_arm: float = float('nan')     # 各來源自己的時間（應與 sim_t 相同）
+    t_base: float = float('nan')
+    t_sp: float = float('nan')
+    s: tuple = ()                   # 手臂設定點（6），無設定點模式時為空
+    sp_step_id: int = -1
+    sp_exec_mode: int = -1
+    sp_api_applied: bool = False
+    paired_sources: tuple = ()
 
 
 class WGMPCNode(Node):
@@ -89,11 +108,55 @@ class WGMPCNode(Node):
         self.set_parameters([_P('use_sim_time', _P.Type.BOOL, True)])
         self.a = a
         self.K = WholeBodyKinematics.from_urdf_file(a.urdf)
-        self.cfg = WGMPCConfig(N=a.N, dt=1.0 / a.rate, tcp=a.tcp)
-        # 兩半狀態各自保存**不可變** tuple；合成快照時才組 9 維
-        self._arm = None          # (tuple6, sim_t, mono)
-        self._base = None         # (tuple3, sim_t, mono)
+        if a.arm_model == 'setpoint':
+            # **增廣核心**：手臂設定點納入狀態。α／b 由辨識檔讀入，
+            # 不在程式裡硬編碼；列縮放沿用 WG2-ARM-SP-1 的核准值。
+            _id = json.load(open(a.arm_ident))
+            self.arm_model = ArmSetpointModel(
+                alpha=_id['alpha'], bias=_id['bias_rad'],
+                phys_dt=_id['phys_dt_measured_s'])
+            self.cfg = WGMPCConfigSP(N=a.N, dt=1.0 / a.rate, tcp=a.tcp,
+                                     arm_model=self.arm_model,
+                                     row_scaling=not a.no_row_scaling)
+            # G 由模型自行計算 —— **不從執行端 meta 取**
+            _P, _Q, _G, _h, _kp = self.cfg.composed()
+            self.composed_G = [float(x) for x in _G]
+            self.composed_kp = int(_kp)
+        else:
+            self.arm_model = None
+            self.cfg = WGMPCConfig(N=a.N, dt=1.0 / a.rate, tcp=a.tcp)
+            self.composed_G = None
+            self.composed_kp = None
+        # **同時刻配對**：各來源各自保存最近若干筆，鍵為 round(sim_t, 6)。
+        # 物理步 10 ms ⇒ µs 鍵唯一；只有三方（或兩方，理想模型時）在
+        # **同一鍵**上都有樣本才合成快照。
+        self._buf = {'arm': {}, 'base': {}, 'sp': {}}
+        self._buf_keep = 64
+        self._need = (('arm', 'base', 'sp') if a.arm_model == 'setpoint'
+                      else ('arm', 'base'))
+        self._arm = None          # 仍保留最後一筆供診斷
+        self._base = None
         self._snap = None
+        # **語意**：某個來源先到、該時間鍵還湊不齊的次數。
+        # 每個物理步**本來就會有一次**（先到的那一個來源）⇒
+        # 這個數字接近步數是正常的，**不是錯誤計數**。
+        # 真正的錯配由 `_n_step_mismatch` 與 `snapshot_not_paired` 反映。
+        self._n_incomplete = 0
+        # 設定點握手閘門（理想模型時不建，避免誤用）
+        self._gate = (SetpointGate(max_age_s=a.max_input_age,
+                                   phys_dt_s=a.phys_dt,
+                                   joint_order=list(ARM_JOINTS))
+                      if a.arm_model == 'setpoint' else None)
+        self._sp_meta_seen = False
+        self._gate_state = None
+        self._gate_why = ''
+        self._n_init_cmd = 0
+        # 步序關聯：step_id → applied 回報的 sim_t（上限筆數，不無限成長）
+        self._step_t = {}
+        self._step_t_tol = 1e-6
+        self._n_step_mismatch = 0
+        self._last_step_mismatch = None
+        self.handshake_startup = {'n_init_cmd': 0, 'states': []}
         # 命令三階段，各自只存**最後一筆不可變 tuple**
         self._modified = None       # (tuple9_world, mono)
         self._ep_req = None         # (tuple9_body, mono)  —— **E2 之前**
@@ -113,6 +176,13 @@ class WGMPCNode(Node):
         _lat.durability = DurabilityPolicy.TRANSIENT_LOCAL
         self.create_subscription(String, '/coman/applied_cmd_meta',
                                  self._on_applied_meta, _lat)
+        if a.arm_model == 'setpoint':
+            self.create_subscription(Float64MultiArray,
+                                     '/coman/arm_setpoint', self._on_sp, 10)
+            self.create_subscription(
+                String, '/coman/arm_setpoint_meta', self._on_sp_meta,
+                QoSProfile(depth=1,
+                           durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.create_subscription(String, '/coman/applied_fail',
                                  self._on_applied_fail, _lat)
         self.pub = self.create_publisher(Float64MultiArray,
@@ -132,27 +202,102 @@ class WGMPCNode(Node):
         if len(m.position) <= max(ix[j] for j in ARM_JOINTS):
             return
         t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
-        self._arm = (tuple(float(m.position[ix[j]]) for j in ARM_JOINTS),
-                     t, time.monotonic())
-        self._compose()
+        v = (tuple(float(m.position[ix[j]]) for j in ARM_JOINTS),
+             t, time.monotonic())
+        self._arm = v
+        self._put('arm', t, v)
 
     def _on_odom(self, m):
         p, o = m.pose.pose.position, m.pose.pose.orientation
         yaw = math.atan2(2.0 * (o.w * o.z + o.x * o.y),
                          1.0 - 2.0 * (o.y * o.y + o.z * o.z))
         t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
-        self._base = ((float(p.x), float(p.y), float(yaw)), t, time.monotonic())
-        self._compose()
+        v = ((float(p.x), float(p.y), float(yaw)), t, time.monotonic())
+        self._base = v
+        self._put('base', t, v)
 
-    def _compose(self):
-        """組出**新的**不可變快照並原子指派。不就地修改任何既有物件。"""
-        a, b = self._arm, self._base
-        if a is None or b is None:
+    def _publish_u(self, u_body: np.ndarray, theta: float) -> np.ndarray:
+        """**body → world** 後發給安全鏈（adapter 之後會轉回 body）。回傳世界系命令。
+
+        握手的全零命令與求解結果走**同一條發布路徑**，
+        避免兩條路徑的座標約定日後分歧。零向量旋轉後仍是零。
+        """
+        u_world = body_to_world(float(theta)) @ np.asarray(u_body, float)
+        m = Float64MultiArray()
+        m.data = [float(x) for x in u_world]
+        self.pub.publish(m)
+        return u_world
+
+    @staticmethod
+    def _key(t: float) -> int:
+        """共同時間鍵：µs 整數。物理步 10 ms ⇒ 鍵唯一、不會把兩步併一起。"""
+        return int(round(float(t) * 1e6))
+
+    def _put(self, which: str, t: float, val) -> None:
+        """寫入來源緩衝並嘗試在**該時間鍵**上合成快照。"""
+        d = self._buf[which]
+        d[self._key(t)] = val
+        if len(d) > self._buf_keep:
+            for k in sorted(d)[:len(d) - self._buf_keep]:
+                del d[k]
+        self._compose(self._key(t))
+
+    def _compose(self, key: int) -> None:
+        """只在**同一時間鍵**上三方（或兩方）齊備時建快照。
+
+        **不**用各話題最新值直接拼接，也**不**用最舊時間掩蓋錯配：
+        湊不出同時刻就記一次 `_n_incomplete` 並維持舊快照（每物理步本來就有一次）。
+        """
+        got = {w: self._buf[w].get(key) for w in self._need}
+        if any(v is None for v in got.values()):
+            self._n_incomplete += 1
             return
-        self._snap = Snap(q=b[0] + a[0],
-                          sim_t=min(a[1], b[1]),          # 取較舊者，不樂觀
-                          recv_mono=min(a[2], b[2]),
-                          have_js=True, have_odom=True)
+        a, b = got['arm'], got['base']
+        sp = got.get('sp')
+        # 共同鍵成立 ⇒ 三方時間本就相同；仍把各自的時間記進快照備查
+        self._snap = Snap(
+            q=b[0] + a[0], sim_t=key * 1e-6,
+            recv_mono=min([x[2] for x in got.values()]),
+            have_js=True, have_odom=True,
+            t_arm=a[1], t_base=b[1],
+            t_sp=(sp[1] if sp else float('nan')),
+            s=(tuple(sp[0]) if sp else ()),
+            sp_step_id=(sp[3] if sp else -1),
+            sp_exec_mode=(sp[4] if sp else -1),
+            sp_api_applied=(bool(sp[5]) if sp else False),
+            paired_sources=tuple(self._need))
+
+    def _on_sp(self, m):
+        """`/coman/arm_setpoint`。**只寫緩衝與閘門，不在此下任何裁示。**"""
+        try:
+            smp = SpSample.from_data(m.data)
+        except ValueError:
+            return
+        self._gate.feed(smp)
+        if not (smp.ready and all(math.isfinite(v) for v in smp.sp)):
+            return
+        # **步序關聯交叉核對**：共同時間戳配對**無法**察覺一個標錯時間的
+        # 設定點（把它標成下一步，下一步的 arm/base 就會與它配上）。
+        # /coman/applied_cmd 與 /coman/arm_setpoint 由執行端**同一輪**發出，
+        # 帶同一個 physics_step_id 與同一個 t。所以拿同一個 step_id
+        # 在兩個話題上的 sim_t 互相核對，才是明確的步序關聯。
+        prev = self._step_t.get(smp.step_id)
+        if prev is not None and abs(prev - smp.sim_t) > self._step_t_tol:
+            self._n_step_mismatch += 1
+            self._last_step_mismatch = {
+                'step_id': smp.step_id, 'sim_t_setpoint': smp.sim_t,
+                'sim_t_applied': prev, 'diff_s': round(smp.sim_t - prev, 9)}
+            return                       # **不入緩衝** ⇒ 配不出快照 ⇒ 不求解
+        self._put('sp', smp.sim_t,
+                  (tuple(smp.sp), smp.sim_t, time.monotonic(),
+                   smp.step_id, smp.exec_mode, smp.api_applied))
+
+    def _on_sp_meta(self, m):
+        try:
+            self._gate.feed_meta(json.loads(m.data))
+            self._sp_meta_seen = True
+        except (ValueError, TypeError):
+            self._sp_meta_seen = False
 
     def _on_modified(self, m):
         if len(m.data) >= NU:
@@ -186,6 +331,12 @@ class WGMPCNode(Node):
                                     else float('nan'))}
             self._applied = (tuple(float(x) for x in d[2:11]),
                              time.monotonic(), int(d[0]), float(d[1]), h)
+            # **步序關聯**：同一輪的 applied 與 arm_setpoint 應帶同一個
+            # (step_id, sim_t)。記下來供 `_on_sp` 交叉核對。
+            self._step_t[int(d[0])] = float(d[1])
+            if len(self._step_t) > 256:
+                for k in sorted(self._step_t)[:len(self._step_t) - 256]:
+                    del self._step_t[k]
             if h['exec_mode'] == 3:
                 self._chain_failed = True
 
@@ -260,9 +411,67 @@ class WGMPCNode(Node):
                       f'{self._chain_fail_info}', flush=True)
                 self._stopped_on_fail = True
                 break
+            # ---- 設定點握手閘門（只在設定點模式）----
+            # **在讀快照之前裁示**：閂鎖要優先停住，HOLD 不得求解，
+            # INIT 只在首次送全零初始化命令。
+            if self._gate is not None:
+                gs, _gsp, gwhy = self._gate.decide(self.sim_now())
+                self._gate_state, self._gate_why = gs, gwhy
+                if gs == FAILED:
+                    self.log.append(dict(
+                        slot=slot, sim_t=self.sim_now(), ok=False,
+                        reason='sp_gate_failed', published=False,
+                        gate_state=gs, gate_why=gwhy,
+                        timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
+                    print(f'[wg2] **設定點閘門回報失效閂鎖**：{gwhy}', flush=True)
+                    self._stopped_on_fail = True
+                    break
+                if gs == INIT:
+                    # 首次握手：送全零命令讓執行端建立設定點。
+                    # **這是握手步驟，不是求解結果**，所以另記 reason。
+                    try:
+                        u_init = self._gate.init_command(NU)
+                    except RuntimeError as e:
+                        u_init = None
+                        gwhy = f'{gwhy}｜{e}'
+                    if u_init is not None:
+                        self._publish_u(np.asarray(u_init, float), 0.0)
+                        self._n_init_cmd += 1
+                    self.log.append(dict(
+                        slot=slot, sim_t=self.sim_now(), ok=False,
+                        reason='sp_handshake_init', published=False,
+                        handshake_cmd_sent=bool(u_init is not None),
+                        gate_state=gs, gate_why=gwhy,
+                        timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
+                    slot, _m = self._reschedule(t0, slot, period)
+                    n_miss += _m
+                    continue
+                if gs == HOLD:
+                    # **不求解、不發布、不重送初始化命令、不沿用舊設定點。**
+                    self.log.append(dict(
+                        slot=slot, sim_t=self.sim_now(), ok=False,
+                        reason='sp_gate_hold', published=False,
+                        gate_state=gs, gate_why=gwhy,
+                        timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
+                    slot, _m = self._reschedule(t0, slot, period)
+                    n_miss += _m
+                    continue
             snap = self._snap              # **讀一次**，整輪只用區域變數
             if snap is None:
                 self._exec.spin_once(timeout_sec=0.01)
+                continue
+            if self._gate is not None and len(snap.s) != 6:
+                # 閘門說 ARMED，但**同時刻快照裡沒有設定點** ⇒ 配對未成立。
+                # 「各話題都新鮮」不等於「同一個物理步」。
+                self.log.append(dict(
+                    slot=slot, sim_t=snap.sim_t, ok=False,
+                    reason='snapshot_not_paired', published=False,
+                    gate_state=self._gate_state,
+                    paired_sources=list(snap.paired_sources),
+                    n_incomplete=self._n_incomplete,
+                    timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
+                slot, _m = self._reschedule(t0, slot, period)
+                n_miss += _m
                 continue
             age_in = self.sim_now() - snap.sim_t
             if age_in > self.a.max_input_age:
@@ -294,7 +503,13 @@ class WGMPCNode(Node):
                 slot, _m = self._reschedule(t0, slot, period)
                 n_miss += _m
                 continue
-            r = solve(self.K, q0, u_prev, T_des, self.cfg, U_warm=U_warm)
+            if self._gate is not None:
+                # 增廣狀態由**同時刻快照**組成：q 與 s 同一個物理步。
+                # `make_z` 在 s 含非有限值時拋錯，不以實測關節角代替。
+                r = solve_sp(self.K, make_z(q0, np.asarray(snap.s, float)),
+                             u_prev, T_des, self.cfg, U_warm=U_warm)
+            else:
+                r = solve(self.K, q0, u_prev, T_des, self.cfg, U_warm=U_warm)
             # **求解返回後重新檢查輸入年齡與任務有效性。**
             # 單一 executor 在求解期間不處理回呼，所以返回時佇列裡可能積了
             # 多筆訊息；**一次 spin_once 不保證已處理到新的 /clock**，
@@ -319,7 +534,22 @@ class WGMPCNode(Node):
                        sqp_converged=bool(r.sqp_converged),
                        n_sqp=r.n_sqp_used, residual=r.max_residual,
                        timing_ms=r.timing_ms, cycle_wall_ms=_cycle_wall,
-                       u_prev_authoritative=bool(authoritative))
+                       u_prev_authoritative=bool(authoritative),
+                       # **同時刻配對的證據**：各來源自己的時間都記下來，
+                       # 不只記合成後的 sim_t（那會把錯配藏起來）
+                       paired=dict(sources=list(snap.paired_sources),
+                                   t_arm=snap.t_arm, t_base=snap.t_base,
+                                   t_sp=snap.t_sp,
+                                   max_spread_s=round(
+                                       max(abs(snap.t_arm - snap.sim_t),
+                                           abs(snap.t_base - snap.sim_t),
+                                           (abs(snap.t_sp - snap.sim_t)
+                                            if snap.s else 0.0)), 9),
+                                   sp_step_id=snap.sp_step_id,
+                                   sp_exec_mode=snap.sp_exec_mode,
+                                   sp_api_applied=snap.sp_api_applied),
+                       gate_state=self._gate_state,
+                       n_incomplete=self._n_incomplete)
             if not r.ok:
                 n_no_sol += 1
                 rec['published'] = False
@@ -352,11 +582,26 @@ class WGMPCNode(Node):
                 slot, _m = self._reschedule(t0, slot, period)
                 n_miss += _m
                 continue
-            # **body → world**，再發給安全鏈（adapter 之後會轉回 body）
-            u_world = body_to_world(float(q0[2])) @ r.u0
-            m = Float64MultiArray()
-            m.data = [float(x) for x in u_world]
-            self.pub.publish(m)
+            if self._gate is not None:
+                # **求解後再查一次執行健康**：求解期間（p50 ~25 ms）可能
+                # 收到閂鎖或 api_applied = False。只檢查年齡不夠。
+                gs2, _s2, why2 = self._gate.decide(_ref)
+                rec['gate_state_after'] = gs2
+                rec['gate_why_after'] = why2
+                if gs2 != ARMED:
+                    rec['published'] = False
+                    rec['reason'] = f'sp_gate_{gs2}_after_solve'
+                    rec['dropped'] = f'求解後執行健康不合格（{gs2}）：{why2}'
+                    self.log.append(rec)
+                    if gs2 == FAILED:
+                        print(f'[wg2] **求解後回報失效閂鎖**：{why2}', flush=True)
+                        self._stopped_on_fail = True
+                        break
+                    slot, _m = self._reschedule(t0, slot, period)
+                    n_miss += _m
+                    continue
+            # 四段紀錄裡的 request 段**用同一個值**，不另算一次轉換
+            u_world = self._publish_u(r.u0, float(q0[2]))
             n_pub += 1
             U_warm = r.U
             e = task_error(self.K, q0, T_des, self.cfg.tcp)
@@ -425,7 +670,16 @@ class WGMPCNode(Node):
                 break
             slot, _m = self._reschedule(t0, slot, period)
             n_miss += _m
-        return dict(published=n_pub, dropped_stale=n_drop_age,
+        return dict(n_step_mismatch=self._n_step_mismatch,
+                    last_step_mismatch=self._last_step_mismatch,
+                    n_compose_incomplete=self._n_incomplete,
+                    n_compose_incomplete_note='先到的來源還湊不齊的次數；'
+                                              '每物理步本來就有一次，**非錯誤**',
+                    handshake_startup=self.handshake_startup,
+                    n_init_cmd_in_run=self._n_init_cmd,
+                    gate_report=(self._gate.report() if self._gate else None),
+                    composed_G=self.composed_G, composed_kp=self.composed_kp,
+                    published=n_pub, dropped_stale=n_drop_age,
                     no_solution=n_no_sol, deadline_miss=int(n_miss),
                     rate_hz=self.a.rate,
                     reached_held=bool(self._reached_held),
@@ -487,30 +741,103 @@ def main() -> int:
     ap.add_argument('--pump-wait-s', type=float, default=0.002)
     ap.add_argument('--assume-initial-rest', action='store_true',
                     help='明確確認初始靜止時，允許第一輪以零值作 u_prev')
+    ap.add_argument('--arm-model', default='ideal',
+                    choices=['ideal', 'setpoint'],
+                    help='ideal = 原核心（理想速度積分，free4 基準，預設不變）；'
+                         'setpoint = 增廣核心（手臂設定點納入狀態）')
+    ap.add_argument('--arm-ident',
+                    default=os.path.join(_HERE, 'results',
+                                         'wgmpc_arm_sp_ident_free4.json'),
+                    help='setpoint 模式用的辨識檔（α、b、physics_dt）')
+    ap.add_argument('--no-row-scaling', action='store_true',
+                    help='關閉等價正值列縮放（對照用）')
+    ap.add_argument('--handshake-timeout-s', type=float, default=20.0,
+                    help='啟動握手與狀態齊備的等待上限')
+    ap.add_argument('--phys-dt', type=float, default=0.01,
+                    help='介面契約核對用的物理步長；與執行端 meta 比對')
     ap.add_argument('--out', default='')
     a = ap.parse_args()
     rclpy.init()
     nd = WGMPCNode(a)
+
+    def _bail(code, why):
+        """**拒絕啟動也要留紀錄**：只印在終端的話，事後無從對帳。"""
+        print(f'**{why}**', flush=True)
+        if a.out:
+            json.dump({'args': vars(a), 'started': False,
+                       'exit_code': code, 'refuse_reason': why,
+                       'handshake_startup': nd.handshake_startup,
+                       'n_step_mismatch': nd._n_step_mismatch,
+                       'last_step_mismatch': nd._last_step_mismatch,
+                       'n_compose_incomplete': nd._n_incomplete,
+                       'gate_report': (nd._gate.report() if nd._gate
+                                       else None),
+                       'log': nd.log},
+                      open(a.out, 'w'), ensure_ascii=False)
+        ex.shutdown(); nd.destroy_node(); rclpy.try_shutdown()
+        return code
     # **單一 executor 所有權**：只有這裡建立，節點只加入一次
     ex = SingleThreadedExecutor()
     ex.add_node(nd)
     nd._exec = ex
-    # 等狀態齊備
+    # ---- 等狀態齊備；設定點模式還要先完成**初始化握手** ----
+    # **死鎖防治**：設定點模式的同時刻快照需要 /coman/arm_setpoint，
+    # 而真實執行端**只在收到第一筆有效命令時**才建立設定點
+    # （wb_cmd_chain_e2 的 setpoint_init）。若在這裡只等快照，
+    # 就會「等設定點 ← 等命令 ← 等 run()」互相卡住
+    # （實測：替身用計時器自行建立設定點，把這個缺陷遮掉了）。
+    # 所以握手要在**啟動路徑**就做：按控制週期送全零命令直到就緒。
     t0 = time.monotonic()
-    while nd._snap is None and time.monotonic() - t0 < 20.0:
-        ex.spin_once(timeout_sec=0.05)
+    _hs_period = 1.0 / a.rate
+    _hs_next = time.monotonic()
+    while time.monotonic() - t0 < a.handshake_timeout_s:
+        ex.spin_once(timeout_sec=0.02)
+        if nd._gate is None:
+            if nd._snap is not None:
+                break
+            continue
+        gs, _sp, why = nd._gate.decide(nd.sim_now())
+        if not nd.handshake_startup['states'] or \
+                nd.handshake_startup['states'][-1][0] != gs:
+            nd.handshake_startup['states'].append(
+                (gs, round(nd.sim_now(), 4), why[:90]))
+        if gs == FAILED:
+            return _bail(4, f'啟動時執行端已失效閂鎖：{why}')
+        if gs == ARMED and nd._snap is not None and len(nd._snap.s) == 6:
+            break
+        if gs == INIT and time.monotonic() >= _hs_next:
+            # **握手命令**：全零，只為讓執行端走到 setpoint_init。
+            # 用快照的 yaw（沒有快照時用 0；零向量旋轉後仍是零）。
+            _yaw = float(nd._snap.q[2]) if nd._snap is not None else 0.0
+            try:
+                nd._publish_u(np.asarray(nd._gate.init_command(NU), float),
+                              _yaw)
+                nd.handshake_startup['n_init_cmd'] += 1
+            except RuntimeError:
+                pass
+            _hs_next = time.monotonic() + _hs_period
     if nd._snap is None:
-        print('**狀態未齊備（缺 /joint_states 或 /odom）**', flush=True)
-        ex.shutdown()
-        nd.destroy_node()
-        rclpy.try_shutdown()
-        return 3
+        _extra = ''
+        if nd._gate is not None:
+            _extra = (f'；步序不符 {nd._n_step_mismatch} 次'
+                      f'（{nd._last_step_mismatch}）'
+                      f'、未湊齊 {nd._n_incomplete} 次'
+                      f'、握手送出 {nd.handshake_startup["n_init_cmd"]} 筆')
+        return _bail(3, '狀態未齊備（缺 /joint_states、/odom 或同時刻設定點）'
+                        + _extra)
+    if nd._gate is not None and len(nd._snap.s) != 6:
+        return _bail(5, f'初始化握手未完成：送出 '
+                        f'{nd.handshake_startup["n_init_cmd"]} 筆全零命令後'
+                        f'仍未取得同時刻設定點。'
+                        f'狀態歷程 {nd.handshake_startup["states"]}')
+    if nd._gate is not None:
+        print(f'[wg2] 初始化握手完成：送出 '
+              f'{nd.handshake_startup["n_init_cmd"]} 筆全零命令，'
+              f'設定點 step {nd._snap.sp_step_id}', flush=True)
     q0 = np.asarray(nd._snap.q, float)
     T = nd.K.fk(q0, a.tcp).copy()
     if (a.target is None) == (a.target_offset is None):
-        print('**--target 與 --target-offset 必須且只能給一個**', flush=True)
-        ex.shutdown(); nd.destroy_node(); rclpy.try_shutdown()
-        return 2
+        return _bail(2, '--target 與 --target-offset 必須且只能給一個')
     T_des = np.eye(4)
     T_des[:3, 3] = (np.asarray(a.target, float) if a.target is not None
                     else T[:3, 3] + np.asarray(a.target_offset, float))
@@ -524,11 +851,21 @@ def main() -> int:
           f'{math.degrees(a.reach_rot_rad):.2f}°、保持 {a.hold_s:.1f} s（模擬時間）、'
           f'u_prev 政策 {a.u_prev_policy}'
           f'{"＋初始靜止" if a.assume_initial_rest else ""}', flush=True)
+    stats = None          # finally 會讀它；run() 丟例外時不可變成 NameError
     try:
         stats = nd.run(T_des)
     finally:
         if a.out:
-            json.dump({'args': vars(a),
+            json.dump({'args': vars(a), 'started': True,
+                       'stats': stats,
+                       'handshake_startup': nd.handshake_startup,
+                       'n_step_mismatch': nd._n_step_mismatch,
+                       'last_step_mismatch': nd._last_step_mismatch,
+                       'n_compose_incomplete': nd._n_incomplete,
+                       'gate_report': (nd._gate.report() if nd._gate
+                                       else None),
+                       'composed_G': nd.composed_G,
+                       'composed_kp': nd.composed_kp,
                        'target_tcp': [float(x) for x in T_des[:3, 3]],
                        'start_tcp': [float(x) for x in T[:3, 3]],
                        'start_q': [float(x) for x in q0],
