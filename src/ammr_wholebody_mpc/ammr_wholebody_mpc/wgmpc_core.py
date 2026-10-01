@@ -170,6 +170,27 @@ def task_error_jacobian(K, q: np.ndarray, T_des: np.ndarray, tcp: str,
     return H
 
 
+def task_error_and_jacobian(K, q: np.ndarray, T_des: np.ndarray, tcp: str,
+                            pi_band: float = 1e-5):
+    """同時回傳 (e, H)，**fk 只算一次**。
+
+    **等價改寫**：數值定義與 `task_error` / `task_error_jacobian` 完全相同，
+    只是避免重複的 FK。原本每個預測步做
+    `task_error_jacobian`（fk ＋ jacobian）再加 `task_error`（又一次 fk），
+    實測 fk 0.1192 ms、jacobian 0.3748 ms ⇒ 合併省約 19 %。
+    """
+    q = np.asarray(q, float)
+    T = K.fk(q, tcp)
+    R = T[:3, :3]
+    J = K.jacobian(q, tcp)
+    e_r = so3_log(R.T @ T_des[:3, :3], pi_band)
+    e = np.concatenate([T_des[:3, 3] - T[:3, 3], e_r])
+    H = np.zeros((NE, NQ))
+    H[:3, :] = -J[:3, :]
+    H[3:, :] = -so3_Jl_inv(e_r) @ R.T @ J[3:, :]
+    return e, H
+
+
 # ------------------------------------------------------------------ 配置
 @dataclass
 class WGMPCConfig:
@@ -279,6 +300,9 @@ class WGMPCResult:
     nominal_infeasible: bool = False        # 暖啟動 nominal 是否不可行
     nominal_residual: float = float('nan')
     first_feasible_unconditional: bool = False  # 是否因無基準而無條件接受首個候選
+    n_recovery_steps: int = 0               # 可行性恢復步次數（不計為收斂）
+    n_gate_rejected: int = 0                # 未通過逐候選閘門的次數
+    last_gate_reject: str = ''
 
 
 # ---------------------------------------------------- 凝縮預測（含仿射項）
@@ -425,23 +449,39 @@ def residuals(A, lo, hi, z, blocks):
 
 # ---------------------------------------------------------------- QP 與 SQP
 def _solve_qp(P, qv, A, lo, hi, cfg: WGMPCConfig):
-    """單次 QP。回傳 (z, status, iters)；status 非 solved 時 z 為 None。"""
+    """單次 QP。回傳 (z, status, iters, t)；status 非 solved 時 z 為 None。
+
+    `t` 把 QP 成本**拆成三段**，因為它們的優化手段完全不同：
+      prep  —— 稀疏矩陣轉換（csc_matrix）
+      setup —— OSQP 物件建立與 setup()（含其內部的縮放與因式分解）
+      iter  —— solve() 本身，才是迭代求解成本
+    先前把三者合記為 `qp_solve`，會把「轉換與建立」誤判成「迭代太慢」。
+    """
     import contextlib
     import io
     import osqp
     from scipy import sparse
+    t = {}
+    t0 = time.monotonic()
+    Pm = sparse.csc_matrix((P + P.T) * 0.5)
+    Am = sparse.csc_matrix(A)
+    t['prep'] = (time.monotonic() - t0) * 1e3
+    t0 = time.monotonic()
     m = osqp.OSQP()
     with contextlib.redirect_stdout(io.StringIO()):
-        m.setup(P=sparse.csc_matrix((P + P.T) * 0.5), q=qv,
-                A=sparse.csc_matrix(A), l=lo, u=hi, verbose=False,
+        m.setup(P=Pm, q=qv, A=Am, l=lo, u=hi, verbose=False,
                 eps_abs=cfg.eps_abs, eps_rel=cfg.eps_rel,
                 max_iter=cfg.max_iter, polish=cfg.polish)
+    t['setup'] = (time.monotonic() - t0) * 1e3
+    t0 = time.monotonic()
+    with contextlib.redirect_stdout(io.StringIO()):
         r = m.solve()
+    t['iter'] = (time.monotonic() - t0) * 1e3
     st = str(r.info.status)
     it = int(r.info.iter)
     if st not in cfg.accepted_status:
-        return None, st, it
-    return np.asarray(r.x, float), st, it
+        return None, st, it, t
+    return np.asarray(r.x, float), st, it, t
 
 
 def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
@@ -457,8 +497,9 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
     q0 = np.asarray(q0, float)
     u_prev = np.asarray(u_prev, float)
     res = WGMPCResult(ok=False)
-    tm = {'H': 0.0, 'ABc': 0.0, 'qp_build': 0.0, 'qp_solve': 0.0,
-          'rollout': 0.0, 'cost': 0.0}
+    tm = {'H': 0.0, 'ABc': 0.0, 'qp_build': 0.0,
+          'qp_prep': 0.0, 'qp_setup': 0.0, 'qp_iter': 0.0,
+          'rollout': 0.0, 'cost': 0.0, 'post': 0.0}
 
     # 暖啟動：上一輪最終序列左移一格、末步複製；無則為零
     if U_warm is None:
@@ -529,10 +570,10 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
             A_l.append(a); B_l.append(b); c_l.append(c)
         tm['ABc'] += (time.monotonic() - t0) * 1e3
         t0 = time.monotonic()
-        Hs = [task_error_jacobian(K, Qn[k], T_des, cfg.tcp, cfg.pi_band)
-              for k in range(1, N + 1)]
-        e_nom = np.concatenate([task_error(K, Qn[k], T_des, cfg.tcp,
-                                           cfg.pi_band) for k in range(1, N + 1)])
+        _eh = [task_error_and_jacobian(K, Qn[k], T_des, cfg.tcp, cfg.pi_band)
+               for k in range(1, N + 1)]
+        Hs = [x[1] for x in _eh]
+        e_nom = np.concatenate([x[0] for x in _eh])
         tm['H'] += (time.monotonic() - t0) * 1e3
 
         # --- 凝縮與成本 ---
@@ -563,9 +604,10 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
         Ps = P * np.outer(sig, sig)
         qs = qv * sig
         Ams = Am * sig[None, :]
-        t0 = time.monotonic()
-        zh, st, nit = _solve_qp(Ps, qs, Ams, lo, hi, cfg)
-        tm['qp_solve'] += (time.monotonic() - t0) * 1e3
+        zh, st, nit, _tq = _solve_qp(Ps, qs, Ams, lo, hi, cfg)
+        tm['qp_prep'] += _tq['prep']
+        tm['qp_setup'] += _tq['setup']
+        tm['qp_iter'] += _tq['iter']
         z = None if zh is None else zh * sig
         res.qp_status.append(st)
         res.qp_iters.append(nit)
@@ -574,6 +616,31 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
             break
 
         U_cand = z.reshape(N, NU)
+        # --- **逐候選閘門**：有限值 ＋ 硬約束殘差，**先過閘才進成本比較** ---
+        # 不能只靠最後的輸出檢查：未過閘的候選若先進了 nominal，
+        # 後續的線性化與 ΔJ 比較就建立在一個不合格的點上。
+        # `_Am[_a:_b]` 是**與候選無關**的硬約束（速度／加速度／關節積分／輪級）；
+        # 信賴區域區塊以 nominal 為中心，不納入本閘門。
+        _finite = bool(np.isfinite(U_cand).all())
+        _mxc, _byc = (residuals(_Am[_a:_b], _lo[_a:_b], _hi[_a:_b],
+                                U_cand.reshape(-1),
+                                {k: (v[0] - _a, v[1] - _a)
+                                 for k, v in _b2.items()})
+                      if _finite else (float('inf'), {}))
+        _gate_ok = _finite and _mxc <= cfg.r_tol
+        if not _gate_ok:
+            res.n_rejected += 1
+            res.n_gate_rejected += 1
+            res.last_gate_reject = ('non_finite' if not _finite else
+                                    'residual:' + ','.join(
+                                        k for k, v in _byc.items()
+                                        if v > cfg.r_tol))
+            delta *= cfg.gamma_dn
+            if delta < cfg.delta_min_conv:
+                stop = 'trust_region_exhausted'
+                break
+            stop = 'no_progress'
+            continue
         # --- **在覆寫 nominal 之前**算更新大小與成本差 ---
         step_inf = float(np.max(np.abs(U_cand - U_nom) / cfg.vmax()))
         t0 = time.monotonic()
@@ -586,15 +653,16 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
         # 無條件接受第一個通過殘差核對的候選，之後才開始 ΔJ 比較。
         # 不是放寬下降要求 —— 是因為「比一個不可行點更差」沒有意義。
         _accept = dJ <= cfg.tol_accept
+        _was_recovery = False
         if not nominal_feasible:
-            _mxc, _byc = residuals(_Am[_a:_b], _lo[_a:_b], _hi[_a:_b],
-                                   U_cand.reshape(-1),
-                                   {k: (v[0] - _a, v[1] - _a)
-                                    for k, v in _b2.items()})
-            if _mxc <= cfg.r_tol:
-                _accept = True
-                nominal_feasible = True       # 之後有了有效基準
-                res.first_feasible_unconditional = True
+            # **可行性恢復步**（W3，政策修訂 —— 見 wgmpc_wg1_round1_result）：
+            # nominal 不可行時沒有有效的 ΔJ 基準，無條件接受**已過閘**的候選。
+            # 候選已經通過上面的硬約束殘差核對，所以它是可行點。
+            _accept = True
+            _was_recovery = True
+            nominal_feasible = True           # 之後有了有效基準
+            res.first_feasible_unconditional = True
+            res.n_recovery_steps += 1
         if _accept:
             # **接受**（含零更新：ΔJ ≤ tol_accept 的等號情形）
             res.n_accepted += 1
@@ -604,7 +672,11 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
             delta = min(cfg.delta_max, delta * cfg.gamma_up)
             # 收斂判定**附帶 Δ ≥ delta_min_conv** ——
             # 信賴區域造成的小步長不單獨作為收斂證據
-            if delta >= cfg.delta_min_conv:
+            # **可行性恢復步本身不判為 SQP 收斂** ——
+            # 它是為了離開不可行點，不是因為已近最佳。
+            if _was_recovery:
+                stop = 'feasibility_recovered'
+            elif delta >= cfg.delta_min_conv:
                 if step_inf <= cfg.tol_step:
                     stop, conv = 'converged_step', True
                     break
@@ -623,9 +695,12 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
     res.sqp_converged = bool(conv)
 
     # --- 輸出政策（固定，不留給實作者臨場決定）---
-    if U_best is None:
-        res.reason = ('no_accepted_candidate' if stop != 'qp_failed'
-                      else 'qp_failed')
+    # **任一次 QP 失敗即回 no_valid_solution**，即使先前已接受過候選。
+    # WG0 output_policy_fixed.on_qp_failed 如此規定；
+    # 先前的實作在 qp_failed 後只要 U_best 非 None 仍會走到 ok=True。
+    if stop == 'qp_failed' or U_best is None:
+        res.reason = ('qp_failed' if stop == 'qp_failed'
+                      else 'no_accepted_candidate')
         res.timing_ms = {k: round(v, 4) for k, v in tm.items()}
         res.timing_ms['total'] = round((time.monotonic() - t_all) * 1e3, 4)
         return res          # **不得把暖啟動序列冒稱為新求解成功**
@@ -639,12 +714,13 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
     mx, by = residuals(Am, lo, hi, U_best.reshape(-1), blocks)
     res.max_residual, res.residual_by_block = mx, by
     res.violated_blocks = [n for n, v in by.items() if v > cfg.r_tol]
-    res.timing_ms = {k: round(v, 4) for k, v in tm.items()}
-    res.timing_ms['total'] = round((time.monotonic() - t_all) * 1e3, 4)
     if res.violated_blocks:
         res.reason = 'residual_check_failed:' + ','.join(res.violated_blocks)
+        res.timing_ms = {k: round(v, 4) for k, v in tm.items()}
+        res.timing_ms['total'] = round((time.monotonic() - t_all) * 1e3, 4)
         return res
 
+    _t_post = time.monotonic()
     res.ok = True
     res.u0 = U_best[0].copy()
     res.U = U_best
@@ -666,4 +742,8 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
         'note': '仿射預測 vs 非線性 rollout 的差距 —— **線性化誤差指標，'
                 '不要求為零**',
     }
+    # **total 量到 return 之前**：E_pred 與線性化診斷也計入
+    tm['post'] += (time.monotonic() - _t_post) * 1e3
+    res.timing_ms = {k: round(v, 4) for k, v in tm.items()}
+    res.timing_ms['total'] = round((time.monotonic() - t_all) * 1e3, 4)
     return res

@@ -222,6 +222,49 @@ def t2(K):
     ck('  （對照）放寬狀態閘是**可區分的配置**，不是預設',
        c4.accepted_status != cfg.accepted_status)
 
+    # **後續 QP 失敗，不得回傳先前已接受的候選**
+    import ammr_wholebody_mpc.wgmpc_core as _C
+    _orig = _C._solve_qp
+    _state = {'n': 0}
+
+    def _fail_after_first(P, qv, A, lo, hi, c):
+        _state['n'] += 1
+        if _state['n'] == 1:
+            return _orig(P, qv, A, lo, hi, c)
+        return None, 'primal infeasible', 0, {'prep': 0.0, 'setup': 0.0,
+                                              'iter': 0.0}
+    _C._solve_qp = _fail_after_first
+    try:
+        c5 = WGMPCConfig(n_sqp=5)
+        rq = solve(K, q0, np.zeros(NU), Td, c5)
+    finally:
+        _C._solve_qp = _orig
+    ck('先接受一次、下一次 QP 失敗 ⇒ 仍回 no_valid_solution',
+       (not rq.ok) and rq.reason == 'qp_failed'
+       and rq.u0 is None and rq.U is None,
+       f'  ok={rq.ok} reason={rq.reason!r} 接受{rq.n_accepted} 次')
+
+    # **逐候選閘門**：未過閘的候選不得進入 nominal／成本比較
+    _state2 = {'n': 0}
+
+    def _bad_second(P, qv, A, lo, hi, c):
+        _state2['n'] += 1
+        z, st, it, t = _orig(P, qv, A, lo, hi, c)
+        if _state2['n'] == 2 and z is not None:
+            z = z * 50.0        # 大幅越界，但 status 仍是 solved
+        return z, st, it, t
+    _C._solve_qp = _bad_second
+    try:
+        rg = solve(K, q0, np.zeros(NU), Td, WGMPCConfig(n_sqp=4))
+    finally:
+        _C._solve_qp = _orig
+    ck('回報 solved 但越界的候選**被逐候選閘門擋下**',
+       rg.n_gate_rejected >= 1,
+       f'  閘門拒 {rg.n_gate_rejected} 次、理由 {rg.last_gate_reject!r}')
+    ck('  被擋下的候選沒有汙染輸出（若有解，最終殘差仍合格）',
+       (not rg.ok) or rg.max_residual <= TOL_R,
+       f'  ok={rg.ok} 殘差 {rg.max_residual:.2e}')
+
     # 殘差核對能擋下「回報 solved 但違反約束」—— 直接測 residuals
     Am, lo_, hi_, blocks = build_constraints(q0, np.zeros((cfg.N, NU)),
                                              np.zeros(NU), cfg, cfg.delta_max)
@@ -287,32 +330,87 @@ def t3(K):
 
 # ========================================================= t4
 def t4(K):
-    print('\nt4 時域成本（**量測，不設門檻**）')
+    print('\nt4 時域成本（**量測，不設門檻**；每個 N 重複 5 次取 p50）')
     q0 = np.array([0.0, 0.0, 0.0, 0.0, 0.3, 0.6, 0.0, 0.5, 0.0])
     Td = target_from(K, q0, 20.0)
-    print(f'  {"N":>3} {"total":>9} {"H":>8} {"ABc":>7} {"qp_build":>9} '
-          f'{"qp_solve":>9} {"rollout":>8} {"cost":>8} {"iters":>12} {"狀態":>18}')
+    keys = ['total', 'H', 'ABc', 'qp_build', 'qp_prep', 'qp_setup',
+            'qp_iter', 'rollout', 'cost', 'post']
+    print('    N ' + ' '.join(f'{k:>9}' for k in keys) + '   OSQP 迭代合計')
     for N in (1, 5, 10, 20):
         cfg = WGMPCConfig(N=N)
-        ts = []
-        for _ in range(3):
-            r = solve(K, q0, np.zeros(NU), Td, cfg)
-            ts.append(r)
-        r = ts[-1]
-        t = r.timing_ms
-        print(f'  {N:3d} {t["total"]:9.2f} {t["H"]:8.2f} {t["ABc"]:7.2f} '
-              f'{t["qp_build"]:9.2f} {t["qp_solve"]:9.2f} {t["rollout"]:8.2f} '
-              f'{t["cost"]:8.2f} {str(r.qp_iters):>12} '
-              f'{r.sqp_stop_reason:>18}')
+        runs = [solve(K, q0, np.zeros(NU), Td, cfg) for _ in range(5)]
         ck(f'  N={N} 有解且回傳完整序列',
-           r.ok and r.U is not None and r.U.shape == (N, NU))
-    print('  **不設耗時門檻** —— 本輪是量測；量完才決定可行的實作方向。')
+           all(r.ok and r.U is not None and r.U.shape == (N, NU) for r in runs))
+        p50 = {k: st.median([r.timing_ms[k] for r in runs]) for k in keys}
+        its = st.median([sum(r.qp_iters) for r in runs])
+        print(f'  {N:3d} ' + ' '.join(f'{p50[k]:9.2f}' for k in keys)
+              + f'   {its:>8.0f}')
+        # total 必須 >= 各分段之和（證明沒有漏計）
+        ssum = sum(p50[k] for k in keys if k != 'total')
+        ck(f'    N={N} total 覆蓋各分段（total >= Σ分段）',
+           p50['total'] >= ssum - 1e-6,
+           f'  total {p50["total"]:.2f} vs Σ {ssum:.2f}')
+    print('  **不設耗時門檻** —— 量測決定下一步優化哪裡，不先改架構。')
+
+
+def t5_horizon_closed_loop(K):
+    """N = 1／5／10 在**同三個案例**的閉迴路行為與耗時對照。"""
+    print('\nt5 時域消融：N = 1／5／10 的閉迴路對照（dt、限制、門檻均不變）')
+    cases = [('小位移 ＋ 20°', 0.0, 20.0, (0.10, -0.05, 0.07)),
+             ('大轉身 90°', 0.0, 90.0, (0.25, 0.15, 0.05)),
+             ('yaw 1.0 ＋ 120°', 1.0, 120.0, (0.30, -0.20, 0.10))]
+    print(f'  {"N":>3} {"案例":<16} {"輪數":>5} {"位置mm":>8} {"姿態°":>7} '
+          f'{"到達":>5} {"週期total p50":>13} {"p95":>8} {"SQP次數p50":>10} '
+          f'{"殘差max":>9} {"恢復步":>6} {"失敗":>22}')
+    summary = {}
+    for N in (1, 5, 10):
+        cfg = WGMPCConfig(N=N)
+        for nm, yaw0, rot, dp in cases:
+            q = np.array([0.0, 0.0, yaw0, 0.0, 0.3, 0.6, 0.0, 0.5, 0.0])
+            Td = target_from(K, q, rot, dp)
+            up = np.zeros(NU); Uw = None
+            tot, nsq, mxr, rec = [], [], 0.0, 0
+            fail = None; ep = er = float('nan'); it = -1
+            for it in range(REACH_MAX):
+                r = solve(K, q, up, Td, cfg, U_warm=Uw)
+                if not r.ok:
+                    fail = f'{it} 輪 {r.reason}'
+                    break
+                tot.append(r.timing_ms['total'])
+                nsq.append(r.n_sqp_used)
+                mxr = max(mxr, r.max_residual)
+                rec += r.n_recovery_steps
+                q = step(q, r.u0, cfg.dt); up = r.u0.copy(); Uw = r.U
+                e = task_error(K, q, Td, TCP)
+                ep, er = float(np.linalg.norm(e[:3])), float(np.linalg.norm(e[3:]))
+                if ep <= REACH_P and er <= REACH_R:
+                    break
+            reached = fail is None and ep <= REACH_P and er <= REACH_R
+            p50 = st.median(tot) if tot else float('nan')
+            p95 = (sorted(tot)[min(len(tot)-1, int(round(0.95*(len(tot)-1))))]
+                   if tot else float('nan'))
+            print(f'  {N:3d} {nm:<16} {it+1:5d} {ep*1e3:8.2f} '
+                  f'{math.degrees(er):7.3f} {"是" if reached else "**否**":>5} '
+                  f'{p50:13.2f} {p95:8.2f} '
+                  f'{st.median(nsq) if nsq else float("nan"):10.1f} '
+                  f'{mxr:9.1e} {rec:6d} {fail or "":>22}')
+            summary[(N, nm)] = (reached, p50, it + 1)
+    print()
+    for N in (1, 5, 10):
+        got = [summary[(N, c[0])] for c in cases]
+        ck(f'  N={N}：三案例全部到達',
+           all(g[0] for g in got),
+           f'  輪數 {[g[2] for g in got]}、週期 p50 '
+           f'{[round(g[1],1) for g in got]} ms')
+    print('  **N = 5 仍是真正的多步 W-GMPC，不是退回單步**；'
+          '這是事前選定的開發配置比較。')
+    print('  **一次約 30 ms 不足以宣稱能跑 20 Hz** —— WG2 還有通訊與執行負載。')
 
 
 def main() -> int:
     K = WholeBodyKinematics.from_urdf_file(URDF)
     print('WG1 純數值核心驗證（不接 ROS、不開 Isaac、單執行緒）\n')
-    t1(K); t2(K); t3(K); t4(K)
+    t1(K); t2(K); t3(K); t4(K); t5_horizon_closed_loop(K)
     print('\nWG1 第一輪：' + ('全部通過' if _bad == 0 else f'**{_bad} 項失敗**'))
     print('WG1 通過只代表**求解器數值行為成立**；'
           '**不得**稱「W-GMPC 自由空間核心已驗證」（那要 WG2）。')
