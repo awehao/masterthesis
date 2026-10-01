@@ -65,7 +65,7 @@ from ammr_wholebody_mpc.arm_pregrasp import ARM_JOINTS          # noqa: E402
 from ammr_wholebody_mpc.wgmpc_core import (                     # noqa: E402
     NU, WGMPCConfig, body_to_world, solve, task_error)
 from ammr_wholebody_mpc.wgmpc_core_sp import (                   # noqa: E402
-    ArmSetpointModel, WGMPCConfigSP, make_z, solve_sp)
+    ArmSetpointModel, WGMPCConfigSP, make_z, plant_phys_step, solve_sp)
 from ammr_wholebody_mpc.wholebody_kinematics import (            # noqa: E402
     WholeBodyKinematics)
 from wgmpc_sp_handshake import (ARMED, FAILED, HOLD, INIT,       # noqa: E402
@@ -167,6 +167,7 @@ class WGMPCNode(Node):
         self._last_stall_s = None
         self._last_solved_key = None
         self._last_solved_sim_t = None
+        self._cmd_hist = []
         # 命令三階段，各自只存**最後一筆不可變 tuple**
         self._modified = None       # (tuple9_world, mono)
         self._ep_req = None         # (tuple9_body, mono)  —— **E2 之前**
@@ -236,7 +237,45 @@ class WGMPCNode(Node):
         m = Float64MultiArray()
         m.data = [float(x) for x in u_world]
         self.pub.publish(m)
+        # **發布歷史**：延遲補償要知道哪些命令已發出但還沒生效
+        self._cmd_hist.append((self.sim_now(),
+                               np.asarray(u_body, float).copy()))
+        if len(self._cmd_hist) > 128:
+            self._cmd_hist.pop(0)
         return u_world
+
+    def _predict_delay(self, q, s, t_snap):
+        """把量測狀態推到**命令真正生效的時刻**，回傳 (q, s, n_used)。
+
+        迴路延遲 D 由 `--delay-comp-cycles` 給（以控制週期計）。
+        rec7 實錄量到端到端 ≈ **1.40 個週期**（發布延遲 0.60 ＋ cmd_age 0.60
+        ＋ 一個物理步），離線重現該趟行為所需的延遲是 1.5 個週期 —— 兩者吻合。
+
+        語意：時刻 τ 作用的命令是 **τ − D** 時已發布的最新一筆。
+        要把狀態由 t_snap 推到 t_snap + D，用的是 [t_snap − D, t_snap)
+        這段**已發布**的命令 —— 全部已知，**不預測未來輸入**。
+
+        核心的預測模型本身**沒有**這個延遲；本函式只改求解的**起點狀態**，
+        不改權重、視界或任何限制。
+        """
+        D = float(self.a.delay_comp_cycles) * self.cfg.dt
+        if D <= 0.0 or not self._cmd_hist:
+            return q, s, 0
+        dtp = self.cfg.arm_model.phys_dt
+        n = int(round(D / dtp))
+        qq, ss = np.asarray(q, float).copy(), np.asarray(s, float).copy()
+        for j in range(n):
+            tau = t_snap + j * dtp - D
+            uu = None
+            for (tp, up) in self._cmd_hist:
+                if tp <= tau + 1e-12:
+                    uu = up
+                else:
+                    break
+            if uu is None:
+                uu = np.zeros(NU)
+            qq, ss = plant_phys_step(qq, ss, uu, self.cfg, 1)
+        return qq, ss, n
 
     @staticmethod
     def _key(t: float) -> int:
@@ -403,6 +442,7 @@ class WGMPCNode(Node):
         self._n_warm_discard = 0
         self._last_solved_key = None  # 已求解過的快照鍵（µs）
         self._last_solved_sim_t = None
+        self._cmd_hist = []
         slot = 0
         U_warm = None
         n_pub = n_drop_age = n_no_sol = 0
@@ -557,10 +597,14 @@ class WGMPCNode(Node):
                 continue
             _solve_sim_t0 = self.sim_now()
             _solve_wall0 = time.monotonic()
+            _q_sol, _s_sol, _n_comp = q0, np.asarray(snap.s, float), 0
+            if self._gate is not None and self.a.delay_comp_cycles > 0.0:
+                _q_sol, _s_sol, _n_comp = self._predict_delay(
+                    q0, np.asarray(snap.s, float), snap.sim_t)
             if self._gate is not None:
                 # 增廣狀態由**同時刻快照**組成：q 與 s 同一個物理步。
                 # `make_z` 在 s 含非有限值時拋錯，不以實測關節角代替。
-                r = solve_sp(self.K, make_z(q0, np.asarray(snap.s, float)),
+                r = solve_sp(self.K, make_z(_q_sol, _s_sol),
                              u_prev, T_des, self.cfg, U_warm=U_warm)
             else:
                 r = solve(self.K, q0, u_prev, T_des, self.cfg, U_warm=U_warm)
@@ -614,7 +658,17 @@ class WGMPCNode(Node):
                                        round(self._sim_slot0
                                              + slot / self.a.rate, 6))),
                        n_dup_skip=self._n_dup_skip,
-                       n_missed_slot=self._n_missed_slot)
+                       n_missed_slot=self._n_missed_slot,
+                       delay_comp=dict(
+                           cycles=float(self.a.delay_comp_cycles),
+                           n_phys_steps=int(_n_comp),
+                           dq_pos_m=(None if _n_comp == 0 else round(float(
+                               np.linalg.norm(np.asarray(_q_sol)[:3]
+                                              - q0[:3])), 6)),
+                           dq_arm_max_rad=(None if _n_comp == 0 else
+                                           round(float(np.abs(
+                                               np.asarray(_q_sol)[3:]
+                                               - q0[3:]).max()), 6))))
             if not r.ok:
                 n_no_sol += 1
                 rec['published'] = False
@@ -748,6 +802,7 @@ class WGMPCNode(Node):
                 U_warm = None
                 self._n_warm_discard += 1
         return dict(stop_why=self._stop_why,
+                    delay_comp_cycles=float(self.a.delay_comp_cycles),
                     slot_basis='simulation_clock',
                     nominal_period_sim_s=1.0 / self.a.rate,
                     n_dup_skip=self._n_dup_skip,
@@ -863,6 +918,12 @@ def main() -> int:
                     help='**模擬時間**預算上限（0 = 不啟用）。'
                          '錄影會拖慢 sim:wall，只靠牆鐘上限會讓任務拿到的'
                          '模擬時間比無錄影趟次少 ⇒ 要與 free4 對齊時用這個。')
+    ap.add_argument('--delay-comp-cycles', type=float, default=0.0,
+                    help='**迴路延遲補償**（以控制週期計，0 = 關閉）。'
+                         '求解前用已驗證的受控對象模型與**已發布**的在途命令'
+                         '把狀態推到命令生效的時刻。'
+                         'rec7 實測端到端延遲 ≈ 1.40 個週期。'
+                         '**不改權重、視界或任何限制。**')
     ap.add_argument('--sim-stall-wall-s', type=float, default=10.0,
                     help='模擬時鐘停滯多久（**牆鐘**）就中止等待。'
                          '等待期間不求解、不累積保持時間。')

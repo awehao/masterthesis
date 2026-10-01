@@ -207,6 +207,31 @@ def step_sp(z: np.ndarray, u: np.ndarray, cfg: WGMPCConfigSP) -> np.ndarray:
     return out
 
 
+def plant_phys_step(q: np.ndarray, s: np.ndarray, u: np.ndarray,
+                    cfg: WGMPCConfigSP, n_phys: int = 1):
+    """受控對象的**逐物理步**推進，回傳 (q, s)。
+
+    與 `step_sp` 的差別：`step_sp` 是一個**控制步**的閉式映射（供 MPC 預測），
+    這裡是逐物理步，供**延遲補償**把量測狀態推到命令真正生效的時刻。
+    兩者用同一組 α、b、dt_p，所以不會分歧。
+
+    延遲補償的語意：時刻 τ 作用的命令是 τ − D 時發出的那一筆；
+    要把狀態由 t 推到 t + D，就用 [t − D, t) 這段**已發布**的命令
+    —— 全部已知，不需預測未來輸入。
+    """
+    al, b = cfg.arm_model.alpha, cfg.arm_model.bias
+    dtp = cfg.arm_model.phys_dt
+    q = np.asarray(q, float).copy()
+    s = np.asarray(s, float).copy()
+    u = np.asarray(u, float)
+    for _ in range(int(n_phys)):
+        q[:3] = q[:3] + dtp * (body_to_world(float(q[2])) @ u)[:3]
+        x = q[ARM]
+        q[ARM] = x + al * (s - x) + b
+        s = s + u[ARM] * dtp
+    return q, s
+
+
 def rollout_sp(z0: np.ndarray, U: np.ndarray,
                cfg: WGMPCConfigSP) -> np.ndarray:
     U = np.atleast_2d(np.asarray(U, float))

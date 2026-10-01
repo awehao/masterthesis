@@ -29,6 +29,11 @@ VMAX_BASE_LIN=0.035255; VMAX_BASE_ANG=0.199900; VMAX_ARM=0.999900
 # **模型選擇要顯式傳入**：節點預設是 ideal，不傳就會跑成原核心。
 ARM_MODEL="${ARM_MODEL:-setpoint}"
 ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
+# **迴路延遲補償**：rec7 實錄量到端到端延遲 ≈ 1.40 個控制週期
+#（發布延遲 0.60 ＋ cmd_age 0.60 ＋ 一個物理步）。
+# 離線閉迴路在延遲 1.4 週期、補償 0 時重現 rec7 的不收斂；
+# 補償 1.4 時 1.35 s 到達並保持。**不改權重、視界或任何限制。**
+DELAY_COMP="${DELAY_COMP:-1.4}"
 # **任務時間預算**：牆鐘上限留寬，由**模擬時間**預算與 free4 對齊。
 # 錄影會拖慢 sim:wall（free4 無錄影時為 0.997），只靠牆鐘會讓任務
 # 拿到的模擬時間比 free4 少。free4 任務覆蓋模擬 59.61 s。
@@ -63,6 +68,7 @@ say "=== WG2 首趟自由空間整合測試 RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 say "判準：N=$N dt=$(python3 -c "print(1/$RATE)") 偏移=($OFFSET) 到達≤${REACH_P}m/${REACH_R}rad 保持${HOLD_S}s"
 say "**手臂執行模型：$ARM_MODEL**（辨識檔 $(basename "$ARM_IDENT")）"
+say "**迴路延遲補償：$DELAY_COMP 個控制週期**（實測端到端 ≈ 1.40）"
 say "錄影：$REC_RES @ ${REC_FPS}fps、模擬器內相機、at=$REC_AT eye=$REC_EYE target=$REC_TARGET"
 say "時間預算：模擬 ${TASK_SIM_S}s（與 free4 的 59.61s 對齊）、牆鐘上限 ${TASK_WALL_S}s"
 python3 - <<EOF | tee -a "$LOG"
@@ -146,6 +152,7 @@ say "  起 W-GMPC 節點（**--arm-model $ARM_MODEL**、N=$N、u_prev=strict ＋
   echo "**找不到辨識檔 $ARM_IDENT**" | tee -a "$LOG"; exit 66; }; }
 python3 -u evaluation/wgmpc_wg2_node.py \
   --arm-model "$ARM_MODEL" --arm-ident "$ARM_IDENT" \
+  --delay-comp-cycles "$DELAY_COMP" \
   --N "$N" --rate "$RATE" --target-offset $OFFSET \
   --reach-pos-m "$REACH_P" --reach-rot-rad "$REACH_R" --hold-s "$HOLD_S" \
   --duration-s "$TASK_WALL_S" --duration-sim-s "$TASK_SIM_S" \
