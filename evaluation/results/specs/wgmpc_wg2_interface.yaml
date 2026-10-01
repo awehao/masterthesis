@@ -1,0 +1,105 @@
+schema: wgmpc_wg2_interface/1
+version: WG2-IF-1
+status: recorded
+created: 2026-10-01
+refs:
+  config: evaluation/results/specs/wgmpc_wg2_first_config.yaml（WG2-CFG-1，approved）
+  node: evaluation/wgmpc_wg2_node.py
+  sink: evaluation/wgmpc_wg2_sink.py
+  test: evaluation/test_wgmpc_wg2_iface.py
+
+title: WG2 薄執行介面與無 Isaac 介面測試
+
+environment: '**不開 Isaac、不用 GPU。** 最小假世界（/clock、/joint_states、/odom）
+  ＋ **實際的** wholebody_safety 節點 ＋ **實際的** arm_vel_adapter ＋ 消費端樁。'
+
+executor_ownership:
+  rule: '**只有 main() 建立並 spin 一個 SingleThreadedExecutor，節點只加入一次。**'
+  not_used: ['TransformListener(spin_thread=True)', MultiThreadedExecutor,
+             ReentrantCallbackGroup]
+  no_tf_at_all: 本節點**完全不用 TF** —— 狀態只來自 /joint_states 與 /odom
+  why: F18 的成因是同一節點被兩個 executor 轉；**不複製那套框架**
+  immutable_snapshot: '狀態快照是 `@dataclass(frozen=True)` 的 `Snap`。
+    回呼只組**新的**快照並原子指派；求解迴圈把它讀進區域變數一次，
+    整輪不再讀 `self._snap`。**沒有跨回呼共用的可變陣列**
+    （F18 的 `_on_pts` 正是在兩次存取之間被換掉）。'
+  verified: 靜態核對五項全部通過（見 test 的 B 段）
+
+frame_wiring:
+  core_output: 'u = (v_x^B, v_y^B, ω, q̇…) —— **本體**座標'
+  safety_entry: '/wholebody_safety/cmd_in —— **世界**座標（安全鏈的既有慣例）'
+  adapter: /wholebody_safety/cmd_out（世界）→ 純旋轉 → /wb_vel_cmd（本體）
+  node_does: '發布前做 **body → world**（乘 Rz(θ)）'
+  why_critical: '少做這一步，adapter 的 world→body 就會把命令轉錯一次
+    —— **雙重轉換**。'
+  verified: '本體→世界→(adapter)→本體 往返 max|Δ| **3.47e-18**；
+    另有反例核對「少做 body→world 會與往返結果不同」。'
+
+command_history:
+  three_stages:
+    request: 本節點發到 cmd_in 的（**世界**）
+    modified: 安全層發到 cmd_out 的（**世界**）
+    applied: adapter 發到 /wb_vel_cmd 的（**本體**）
+  u_prev_source: '取**實際套用**者（applied）；取不到時依序退回
+    modified（世界→本體）→ zeros，並**記錄來源**。'
+  measured: 'u_prev 來源在完整鏈測試中 **239/239 輪都是 applied**'
+  adapter_guard_note: '**沒有消費端節點時 adapter 會拒絕轉發**
+    （F4 的 joints 順序守衛）⇒ 無 Isaac 時 applied 結構上取不到。
+    因此加了 `wgmpc_wg2_sink.py`：**只**宣告 joints 並訂閱 /wb_vel_cmd，
+    **不積分、不模擬物理、不回授狀態** ⇒ **不得用它取代 Isaac 的物理驗證**。'
+
+freshness_and_failure:
+  before_solve: 輸入年齡 > max_input_age（0.2 s）⇒ 不求解，**留紀錄**
+  after_solve: '求解返回後重新檢查輸入年齡與任務有效性；
+    過期解**不發布、不重新蓋時間**'
+  no_valid_solution: 不發布，記錄 reason／sqp_stop／殘差／完整耗時
+  scheduling: 超時**跳過錯過的 slot**，不連續追趕；記 deadline miss
+  not_done: ['不降低頻率', 不延長門檻掩蓋超時]
+  verified_C: '到 sim 8 s 停止發布 /joint_states ⇒
+    **過期解一筆都沒有發布**（違規 0）、305 輪被擋下、
+    已發布者輸入年齡 max 0.1840 s ≤ 0.2'
+
+measured_timing:
+  note: '**核心的 timing_ms[total] 不含介面開銷**（發布、回呼、排程等待），
+    所以另量迴圈頂到頂的牆鐘。'
+  core_total_ms: {p50: 12.49, p95: 16.28, max: 92.59}
+  cycle_wall_ms: {p50: 50.01, p95: 51.75, max: 90.72, period: 50.0}
+  interpretation: '牆鐘 p50 ≈ 週期代表**跟得上**（迴圈在等 deadline）。
+    **不可**用「牆鐘 − 核心」當介面開銷 —— 差額主要是刻意的等待。
+    我一度這樣算出「介面開銷 37.61 ms」，**那是錯的，已修掉**。'
+  over_period_cycles: 120 / 238（牆鐘 > 50 ms 的輪次；p95 51.75 ⇒ 多為小幅超出）
+  publish_rate: 239 / 239 輪發布（完整鏈案例）
+  caveat: '**假世界的負載遠低於 Isaac。** 這些數字不能當成 Isaac 趟次的預測。'
+
+open_decision_for_user:
+  id: D1
+  title: 安全層的**世界逐軸**速度框與核心的**本體逐軸**框不相容
+  facts:
+  - '核心本體逐軸 0.035255 ⇒ 平面範數 ≤ 0.049858 < 0.05（E2 的範數門檻）✓'
+  - '旋轉到世界後**逐軸**可達 0.049858（45° 時）> 安全層的 0.035255'
+  - '若把安全層的世界逐軸框放寬到 0.049858，它允許的範數變成 0.070510 > 0.05 ✗'
+  - '**範數界限無法用逐軸方框精確表達** —— 要嘛過緊、要嘛過鬆'
+  options:
+    A_keep_tight:
+      what: 安全層世界框維持 0.035255（**本輪測試用的就是這個**）
+      consequence: '核心在偏軸方位的飽和命令會被安全層修改
+        ⇒ 執行的命令與求解的不同（已分三階段記錄，可量）'
+      safety: 保守（更緊），**不放寬任何保護**
+    B_tighten_core:
+      what: 核心本體逐軸降到 0.035255/√2 = 0.024930
+      consequence: 世界逐軸 ≤ 0.035255 ✓、命令不被修改，但**底盤速度降 29 %**
+      safety: 保守
+    C_widen_safety:
+      what: 安全層世界框放寬到 0.049858
+      consequence: '**允許範數 0.070510 > 0.05** ⇒ 不可接受'
+      safety: '**放寬保護，不採用**'
+  claude_position: '本輪用 **A**（保守、且能實測安全層的修改量）。
+    **這是保護相關的選擇，我不自行定版** —— 等你裁定後再寫入配置。'
+
+naming_limits:
+  what_this_is: WG2 的**介面**已接通並通過無 Isaac 測試
+  what_this_is_not:
+  - '**不得**據此宣稱「W-GMPC 自由空間核心已驗證」—— 那要 Isaac 的物理回授'
+  - '**不得**宣稱 20 Hz 驗收通過 —— 假世界負載遠低於 Isaac'
+  - 消費端樁不得取代物理驗證
+  next: 自由空間 Isaac 趟次（事前選定的已知目標；不加抽屜、接觸或視覺）

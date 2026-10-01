@@ -1,6 +1,9 @@
 schema: wgmpc_wg2_config/1
 version: WG2-CFG-1
-status: proposal_pending_approval      # **WG2 首版配置提案，待審定**
+status: approved
+approved: 2026-10-01
+approval_scope: '**僅核准為 WG2 的開發配置。**
+  **不是** 20 Hz 驗收通過，**也不是**立即啟動 Isaac 的授權。'
 created: 2026-10-01
 refs:
   wg0: evaluation/results/specs/wgmpc_wg0_problem_spec.yaml（定版，c97507855eeb956e）
@@ -33,20 +36,21 @@ evidence_n1_n5_n10:
 
 why_N5:
   behaviour: '三案例全部到達、殘差 ≤ 1.3e-9、恢復步 0、SQP 中位 4 次 ⇒ **行為合格**'
-  timing: 'p50 18.0–20.5 ms、**最差 p95 43.88 ms**（週期 50 ms）
-    ⇒ 餘裕 6.1 ms，約 **12 %**'
+  timing: 'p50 18.0–20.5 ms、**最差 p95 43.88 ms**（週期 50 ms）。
+    43.88 與 50 ms 的差額是 6.1 ms —— 這是**已測案例 p95 與 50 ms 的差額**，
+    **不是每輪可保證的時間餘裕**。'
   not_N10: 'p95 最差 149.63 ms，**已超過週期三倍**'
   not_N20: '依指示不追 N = 20；單次 total p50 320.15 ms'
   why_not_N1_despite_margin: '**N = 1 的時間餘裕遠大於 N = 5**
-    （p95 5.78 ms），而且在這三個案例中**輪數完全相同**
-    （13/37/38 vs 13/36/37）⇒ 長時域在此沒有輪數優勢。
+    （p95 5.78 ms），而且在這三個案例中輪數**相近：13/37/38 對 13/36/37
+    ⇒ 尚不足以證明多步優勢**（不是「完全相同」，也不是已證明沒有優勢）。
     **但這三個案例是自由空間 ＋ 靜態目標。** 多步預測的價值在於
     提前處理會綁住的約束（障礙物、移動目標、接觸），
     而那正是 W-GMPC 要驗的東西。選 N = 1 會把受測對象本身拿掉。
     ⇒ 建議 N = 5，但**必須承認輪數優勢在本輪未被證明**。'
 
 margin_is_thin_HONEST:
-  statement: '**12 % 餘裕不足以宣稱能跑 20 Hz。**
+  statement: '**已測案例 p95 與 50 ms 只差 6.1 ms，不足以宣稱能跑 20 Hz。**
     WG2 還要加上 ROS 通訊、序列化、執行端往返與回授處理的負載，
     而這些在 WG1 完全沒有。'
   what_wg2_must_measure:
