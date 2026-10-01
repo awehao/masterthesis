@@ -1,0 +1,69 @@
+schema: wgmpc_wg2_run_outcome/1
+version: WG2-RUN2
+status: recorded
+created: 2026-10-01
+run_id: wgmpc_wg2_free2
+prereg: evaluation/results/specs/wgmpc_wg2_run1_preregistration.yaml（同配置）
+
+title: '**執行端初始化失敗，未進入控制任務**'
+
+classification:
+  what_this_is: '**執行端整合故障的證據**'
+  what_this_is_not: '**不是** W-GMPC 效果的結果；不是執行問題（逾時／限位）的證據'
+  config_unchanged: W-GMPC、權重、目標、限制與第一趟完全相同，**本趟未調任何控制參數**
+
+what_happened:
+  node_exit: '「狀態未齊備（缺 /joint_states 或 /odom）」⇒ **一筆命令都沒發出**'
+  endpoint_crash: |
+    AttributeError: 'WBNode' object has no attribute 'tfb'
+      isaac_wholebody_sim_e2.py:308 in publish_feedback
+    Isaac 於 11.5 s 關閉 ⇒ 沒有 /joint_states、/odom、/clock
+  four_questions: '**1–4 全部無法回答** —— 沒有非零請求，就沒有 exec_mode、
+    沒有 api_applied、沒有到達資料'
+
+root_cause:
+  mine: '**我的程式碼編輯錯誤。**'
+  detail: '加 `_on_stop_request` 時錨點選了 `self._step_id = 0`，
+    但那不是 `__init__` 的結尾。結果
+    `self.tfb = tf2_ros.TransformBroadcaster(self)` 連同其註解
+    被切進 `_on_stop_request` 的函式體
+    ⇒ **只有收到停止請求才會建立 TransformBroadcaster**
+    ⇒ `publish_feedback` 第一次呼叫就 AttributeError。'
+  why_not_caught: '檔案行數與前一版**相同**（934 行）、`self.tfb` 字串**也還在**
+    ⇒ grep 與行數比對都看不出來。**要用 AST 才看得到它跑到別的函式裡。**'
+  second_anchor_error_this_round: '同一輪我先前還犯過一次錨點錯誤
+    （NEW_META 的 regex 用 `.*?` 搭 re.S，閉合匹配到更後面）。
+    兩次都是**錨點選擇**的問題。'
+
+fix:
+  code: 'self.tfb 與其註解已移回 `__init__`；AST 確認
+    `WBNode.__init__` 賦值 tfb／clock_pub／js_pub／odom_pub／applied_pub／
+    applied_meta_pub／fail_pub／stop_requested／_sp_prev／_step_id／_fail_sent，
+    而 `_on_stop_request` **只**賦值 stop_requested。
+    抽屜執行端同樣查過，DrawerNode.__init__ 齊備、方法清單完整。'
+  guard: H4（見下）
+
+H4_narrowed:
+  previous_rule_was_wrong: '我原本寫「必要屬性不得在其他方法賦值」，
+    **那條規則太寬** —— `stop_requested` 本來就必須由停止回呼更新，
+    `_step_id`／`_sp_prev`／`_fail_sent` 也必須在執行中更新。'
+  corrected_rule:
+    resources: '`tfb`、各 publisher 等**必要資源必須在初始化路徑建立**，
+      **且不得**在其他方法裡建立。'
+    state: 狀態欄位必須在 `__init__` 初始化，**之後可以**由指定方法更新
+  verified_both_ways:
+    catches_the_bad_version: '以**重建的 free2 壞版本**反證：H4 抓到
+      「tfb 不在 __init__」與「tfb 在 _on_stop_request 裡建立」'
+    does_not_false_block: '正常版本通過，且明示列出允許的狀態更新
+      `_on_stop_request:stop_requested`'
+  limitation: '**AST 核對只能證明程式結構符合要求，不代表第一次回授發布已成功。**
+    那由第三趟實際確認。'
+
+H3_status: '**仍未通過。** 本趟的停止請求發布失敗、等待 180 s 逾時、
+  archive_status.json 標記 archive_complete: false —— 但這些都發生在
+  **執行端已經死掉之後**，所以測不出受控停止與落盤路徑是否可行。
+  （逾時→標記→才 cleanup 這一小段按設計運作了，但不等於 H3 通過。）'
+
+unaffected:
+  run1_root_cause: '**仍未確立** —— 逾時與閂鎖兩條候選都保留'
+  joint_limit_replay: '**只是一條可能的失效路徑，不是 free1 的根因**'

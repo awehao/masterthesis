@@ -161,42 +161,91 @@ def main() -> int:
     print('    **H3 的完整路徑（Isaac 自己落盤）需實跑驗證**；'
           '本檔只驗停止條件、等待上限與狀態檔契約。')
 
-    # ---------- H4 執行端節點的屬性必須在 __init__ 賦值 ----------
-    print('\nH4 執行端節點屬性在 __init__ 賦值（**防止錨點插錯把賦值切進方法體**）')
+    # ---------- H4 資源在初始化路徑建立；狀態可由指定方法更新 ----------
+    print('\nH4 資源 vs 狀態（**資源必須在初始化路徑建立；狀態可被更新**）')
     import ast as _ast
-    NEED = ('applied_pub', 'applied_meta_pub', 'fail_pub',
-            '_sp_prev', '_step_id', '_fail_sent')
-    for f, cls, extra in (('isaac_wholebody_sim_e2.py', 'WBNode', ('tfb',)),
-                          ('isaac_coman_drawer_sim.py', 'DrawerNode', ())):
-        src = open(os.path.join(HERE, f), encoding='utf-8').read()
+
+    def _assigned(fn):
+        return {t.attr for n in _ast.walk(fn) if isinstance(n, _ast.Assign)
+                for t in n.targets if isinstance(t, _ast.Attribute)}
+
+    def audit(src, cls, resources, state):
+        """回傳 (missing_init, resource_outside_init)。
+
+        resources：publisher／broadcaster 等**必要資源** ——
+          必須在 __init__ 建立，**且不得**在其他方法裡建立
+          （free2 的實際失敗：tfb 被切進 _on_stop_request 的函式體）。
+        state：狀態欄位 —— 必須在 __init__ 初始化，
+          **之後可以**由指定方法更新（stop_requested、_step_id 等本來就要更新）。
+        """
         tree = _ast.parse(src)
         node = next((n for n in _ast.walk(tree)
                      if isinstance(n, _ast.ClassDef) and n.name == cls), None)
-        ck(f'{f}：找到 class {cls}', node is not None)
         if node is None:
-            continue
+            return None, None, None
         init = next((x for x in node.body if isinstance(x, _ast.FunctionDef)
                      and x.name == '__init__'), None)
-        ck(f'  {cls}.__init__ 存在', init is not None)
         if init is None:
-            continue
-        got = {t.attr for n in _ast.walk(init) if isinstance(n, _ast.Assign)
-               for t in n.targets if isinstance(t, _ast.Attribute)}
-        miss = [x for x in NEED + extra if x not in got]
-        ck(f'  {cls}.__init__ 賦值齊備（含 {len(NEED + extra)} 項）',
-           not miss, f'  **缺 {miss}**' if miss else '')
-        # 方法體裡**不得**出現這些屬性的賦值（除了 __init__）
-        stray = []
+            return None, None, None
+        got = _assigned(init)
+        missing = [x for x in resources + state if x not in got]
+        outside = []
         for fn in node.body:
             if not isinstance(fn, _ast.FunctionDef) or fn.name == '__init__':
                 continue
-            a = {t.attr for n in _ast.walk(fn) if isinstance(n, _ast.Assign)
-                 for t in n.targets if isinstance(t, _ast.Attribute)}
-            stray += [f'{fn.name}:{x}' for x in (NEED + extra) if x in a]
-        ck(f'  這些屬性**不在**其他方法裡被賦值', not stray, f'  {stray}')
-    print('    這一項是因為 free2 的實際失敗：我把方法插在 __init__ 中間，')
-    print('    使 self.tfb 的賦值被切進 _on_stop_request 的函式體 ⇒')
-    print('    **只有收到停止請求才會賦值** ⇒ publish_feedback 立刻 AttributeError。')
+            a = _assigned(fn)
+            outside += [f'{fn.name}:{x}' for x in resources if x in a]
+        return missing, outside, node
+
+    CASES = [
+        ('isaac_wholebody_sim_e2.py', 'WBNode',
+         ('tfb', 'clock_pub', 'js_pub', 'odom_pub',
+          'applied_pub', 'applied_meta_pub', 'fail_pub'),
+         ('stop_requested', '_sp_prev', '_step_id', '_fail_sent')),
+        ('isaac_coman_drawer_sim.py', 'DrawerNode',
+         ('applied_pub', 'applied_meta_pub', 'fail_pub'),
+         ('_sp_prev', '_step_id', '_fail_sent')),
+    ]
+    for f, cls, res, stt in CASES:
+        src = open(os.path.join(HERE, f), encoding='utf-8').read()
+        miss, outside, node = audit(src, cls, res, stt)
+        ck(f'{f}：{cls} 與 __init__ 都找得到', node is not None)
+        if node is None:
+            continue
+        ck(f'  資源與狀態都在 __init__ 初始化（{len(res)} + {len(stt)} 項）',
+           not miss, f'  **缺 {miss}**' if miss else '')
+        ck('  **資源不得在其他方法裡建立**', not outside,
+           f'  {outside}' if outside else '')
+        # **狀態更新不得被誤擋**：確認這些狀態確實有方法在更新
+        upd = []
+        for fn in node.body:
+            if isinstance(fn, _ast.FunctionDef) and fn.name != '__init__':
+                upd += [f'{fn.name}:{x}' for x in _assigned(fn) if x in stt]
+        print(f'    狀態更新（**允許**）：{upd if upd else "（本趟無）"}')
+
+    # **用實際的壞版本確認 H4 抓得到錯位**
+    print('    用 free2 的壞版本反證：')
+    bad = open(os.path.join(HERE, 'isaac_wholebody_sim_e2.py'),
+               encoding='utf-8').read()
+    # 重建壞版本：把 tfb 的賦值搬進 _on_stop_request（與 free2 相同的錯位）
+    m = re.search(r"(        self\._step_id = 0\n)((?:        #.*\n)+)"
+                  r"(        self\.tfb = tf2_ros\.TransformBroadcaster\(self\)\n)"
+                  r"(\n    def _on_stop_request\(self, m\):\n"
+                  r'(?:        .*\n)+?)(\n    def )', bad)
+    if m is None:
+        ck('  （無法重建壞版本 ⇒ 反證跳過）', False, '  **錨點未命中**')
+    else:
+        bad2 = (bad[:m.start()] + m.group(1) + m.group(4)
+                + m.group(2) + m.group(3) + m.group(5) + bad[m.end():])
+        miss_b, out_b, nd_b = audit(bad2, 'WBNode', CASES[0][2], CASES[0][3])
+        ck('  壞版本：H4 **抓到** tfb 不在 __init__',
+           nd_b is not None and miss_b is not None and 'tfb' in miss_b,
+           f'  缺 {miss_b}' if miss_b else '')
+        ck('  壞版本：H4 **抓到** tfb 在 _on_stop_request 裡建立',
+           bool(out_b) and any(x.endswith(':tfb') for x in out_b),
+           f'  {out_b}')
+    print('    **AST 核對只證明程式結構符合要求，不代表第一次回授發布已成功**')
+    print('    —— 那由第三趟實際確認。')
 
     print()
     print('第二趟前最小核對：' + ('全部通過' if _bad == 0 else f'**{_bad} 項失敗**'))
