@@ -56,16 +56,25 @@ def plant_step(q, s, u, cfg, n_phys):
 def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
         hold_s=2.0, tcp='link_tcp', delay_cycles=0.0,
         compensate=0.0, comp_mode='pipe', jitter_cycles=0.0,
-        seed=0, measure_comp=False):
+        seed=0, measure_comp=False, u_prev_mode='applied',
+        d_pub_cycles=0.0, comp_state=None, comp_cmd=None):
     """`delay_cycles`：命令從算出到真正套用的延遲（以控制週期計）。
 
     實跑量到的端到端延遲 ≈ 1.40 個週期（rec7：發布延遲 0.60 ＋ cmd_age 0.60
     ＋ 一個物理步 0.01 s）。核心的預測模型**沒有這個延遲** ——
     它假設 u0 立刻作用。
 
-    `compensate`：求解前先用**同一個受控對象模型**把狀態依「尚未作用的
-    在途命令」往前推這麼多週期，再從預測狀態求解。
-    這是延遲補償，**不改權重、視界或限制**。
+    **兩種時間必須分開**（先前用同一個 D 做兩件事是錯的）：
+
+        量測 ──D_pub──> 發布 ──D_cmd──> 生效
+        └──────── D_state = D_pub + D_cmd ────────┘
+
+    * `d_pub_cycles`：量測 → 發布（求解與傳遞到發布）。
+      離線原本求解是**瞬時**的 ⇒ D_pub = 0，於是 D_state ≡ D_cmd，
+      這個區別被掩蓋。加入 d_pub 才驗得出來。
+    * `comp_state`：狀態要往前推多久（應等於 D_state）。
+    * `comp_cmd`：由發布歷史倒查命令時用的偏移（應等於 D_cmd）。
+    `compensate` 保留為兩者同值的簡寫。
     """
     n_phys = int(round(cfg.dt / cfg.arm_model.phys_dt))
     n_del = int(round(delay_cycles * n_phys))     # 以物理步計的延遲
@@ -75,11 +84,23 @@ def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
     U_warm = None
     t = 0.0
     hold_t0 = None
-    rec = {'t': [], 'ep': [], 'er': [], 'sat': [], 'ok': []}
+    rec = {'t': [], 'ep': [], 'er': [], 'sat': [], 'ok': [],
+           'u_req': [], 'u_app': []}
     reached_held = False
     n_fail = 0
-    n_comp = int(round(compensate * n_phys))
-    hist = []            # (發布的模擬時間, u) —— 節點端也只需要這個
+    cs = compensate if comp_state is None else comp_state
+    cc = compensate if comp_cmd is None else comp_cmd
+    n_comp = int(round(cs * n_phys))          # 狀態前推的物理步數
+    n_pub = int(round(d_pub_cycles * n_phys))  # 量測 → 發布（物理步）
+    # **命令三態分離**（與線上語意對齊）：
+    #   requested  求解端算出並發布的命令（= 節點的 request／發布歷史）
+    #   in_flight  已發布、尚未生效的命令（延遲管線內）
+    #   applied    執行端 E2 之後**真正套用**的命令（線上 u_prev 的唯一權威來源）
+    # 先前這裡用 `u_prev = u`（剛求解的 requested），**與線上不同** ——
+    # 有延遲時兩者本來就不同，會直接改變下一輪的加速度約束與平滑成本。
+    hist = []            # (發布的模擬時間, u_requested)
+    applied_last = np.zeros(S.NU)     # 最近一筆**實際套用**的命令
+    pubq = [np.zeros(S.NU)] * max(n_pub, 0)   # 量測→發布的佇列
     rng = np.random.default_rng(seed)
     d_true = []          # 每輪真正的延遲（物理步），供 measure_comp 使用
     while t < t_end:
@@ -102,7 +123,7 @@ def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
                 # **發布歷史查表**（節點可直接照搬）：
                 # 時刻 τ 作用的命令是 τ − D 時「已發布的最新一筆」。
                 # 要把狀態由 t 推到 t + D，就用 [t − D, t) 這段的已發布命令。
-                Dt = compensate * cfg.dt
+                Dt = cc * cfg.dt
                 inflight = []
                 for j in range(n_comp):
                     tau = t + j * cfg.arm_model.phys_dt - Dt
@@ -139,6 +160,8 @@ def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
         rec['t'].append(t); rec['ep'].append(ep); rec['er'].append(er)
         rec['sat'].append(float(np.abs(u[3:]).max() / cfg.v_arm))
         rec['ok'].append(bool(r.ok))
+        rec['u_req'].append(u.copy())
+        rec['u_app'].append(applied_last.copy())
         if ep <= reach_p and er <= reach_r:
             if hold_t0 is None:
                 hold_t0 = t
@@ -149,16 +172,25 @@ def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
             hold_t0 = None
         # 命令先進管線，實際作用的是 n_del 個物理步之前那一筆
         for _ in range(n_phys):
-            pipe.append(u.copy())
+            # **發布延遲**：本輪算出的命令要 n_pub 個物理步後才發布，
+            # 在那之前管線裡進的是上一筆已發布的命令。
+            pubq.append(u.copy())
+            u_pub = pubq.pop(0) if n_pub > 0 else u
+            pipe.append(u_pub.copy())
             # 管線長度 = 當前延遲；多出來的最舊者就是本步實際套用的命令
             u_app = u.copy()
             while len(pipe) > max(n_del_now, 0):
                 u_app = pipe.pop(0)
             q, s = plant_step(q, s, u_app, cfg, 1)
-        hist.append((t, u.copy()))
+            applied_last = u_app          # **實際套用**，供下一輪當 u_prev
+        # 發布歷史記的是**發布時刻**（= 求解時刻 + D_pub），不是求解時刻
+        hist.append((t + d_pub_cycles * cfg.dt, u.copy()))
         if len(hist) > 64:
             hist.pop(0)
-        u_prev = u
+        # **與線上一致**：u_prev 取「E2 之後實際套用」的那一筆，
+        # 不是剛求解的 requested。
+        u_prev = (applied_last.copy() if u_prev_mode == 'applied'
+                  else u.copy())
         t += cfg.dt
     for k in rec:
         rec[k] = np.array(rec[k])
@@ -180,6 +212,10 @@ def summarise(res, tag=''):
         'sat_frac': float(np.mean(sat > 0.95)),
         'n_in_tol': int(np.sum((ep <= 0.005) & (er <= 0.02))),
         'n_fail': res['n_fail'],
+        # requested 與 applied 的差距：若為 0 表示延遲沒被模出來
+        'req_vs_app_p50': (float(np.percentile(np.abs(
+            r['u_req'] - r['u_app']).max(axis=1), 50))
+            if len(r.get('u_req', [])) else float('nan')),
     }
 
 
@@ -210,6 +246,7 @@ def main() -> int:
     ap.add_argument('--sweep-comp', action='store_true')
     ap.add_argument('--sweep-jitter', action='store_true')
     ap.add_argument('--sweep-base-gain', action='store_true')
+    ap.add_argument('--sweep-split', action='store_true')
     ap.add_argument('--compensate', type=float, default=0.0)
     a = ap.parse_args()
     ident, K, q0, T_des, w = load_scene(a.run, a.ident)
@@ -237,6 +274,25 @@ def main() -> int:
               f" {np.percentile(er,50):10.4f}"
               f" {np.mean(np.abs(U[:,3:]).max(axis=1)/0.9992>0.95):8.3f}"
               f" {int(((ep<=0.005)&(er<=0.02)).sum()):7d}")
+        return 0
+    if a.sweep_split:
+        print('=== 兩種時間分開 vs 混用（D_pub 0.6、D_cmd 0.6 ⇒ D_state 1.2）===')
+        print('  rec8 實測：發布延遲 p50 0.020 s（0.40 週期）、'
+              'cmd_age p50 0.020 s（0.40 週期）')
+        print(f"  {'補償設定':>28} {'到達保持':>8} {'err_p p50':>10}"
+              f" {'err_r p50':>10} {'飽和':>7} {'同時達標':>8}")
+        for cs_, cc_, lab in (
+                (0.0, 0.0, '不補償'),
+                (1.2, 1.2, '混用單一 D=1.2（現行節點）'),
+                (0.6, 0.6, '混用單一 D=0.6'),
+                (1.2, 0.6, '**分開 state 1.2 / cmd 0.6**')):
+            r = run(cfg, K, q0, s0, T_des, t_end=a.t_end,
+                    delay_cycles=0.6, d_pub_cycles=0.6,
+                    comp_state=cs_, comp_cmd=cc_, comp_mode='hist')
+            m = summarise(r, '')
+            print(f"  {lab:>28} {str(m['reached_held']):>8}"
+                  f" {m['err_p_p50']:10.5f} {m['err_r_p50']:10.5f}"
+                  f" {m['sat_frac']:7.3f} {m['n_in_tol']:8d}")
         return 0
     if a.sweep_base_gain:
         global BASE_GAIN
