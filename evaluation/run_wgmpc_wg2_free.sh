@@ -34,6 +34,16 @@ ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
 # 離線閉迴路在延遲 1.4 週期、補償 0 時重現 rec7 的不收斂；
 # 補償 1.4 時 1.35 s 到達並保持。**不改權重、視界或任何限制。**
 DELAY_COMP="${DELAY_COMP:-1.4}"
+# **命令追蹤封裝**：身分 (run_id, source_seq) 與九維值同訊息，全鏈四段各記
+# output_seq。啟用後**三端都改走封裝**（唯一控制入口），既有九維路徑不參與。
+# 預設啟用，設 CMD_ENV=0 可退回既有九維路徑。
+CMD_ENV="${CMD_ENV:-1}"
+if [ "$CMD_ENV" = "1" ]; then
+  ENV_NODE="--cmd-env"; ENV_SAFETY="-p cmd_env:=true"
+  ENV_ADAPTER="--cmd-env"; ENV_ISAAC="--cmd-env"
+else
+  ENV_NODE=""; ENV_SAFETY=""; ENV_ADAPTER=""; ENV_ISAAC=""
+fi
 # **任務時間預算**：牆鐘上限留寬，由**模擬時間**預算與 free4 對齊。
 # 錄影會拖慢 sim:wall（free4 無錄影時為 0.997），只靠牆鐘會讓任務
 # 拿到的模擬時間比 free4 少。free4 任務覆蓋模擬 59.61 s。
@@ -69,6 +79,7 @@ say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 say "判準：N=$N dt=$(python3 -c "print(1/$RATE)") 偏移=($OFFSET) 到達≤${REACH_P}m/${REACH_R}rad 保持${HOLD_S}s"
 say "**手臂執行模型：$ARM_MODEL**（辨識檔 $(basename "$ARM_IDENT")）"
 say "**迴路延遲補償：$DELAY_COMP 個控制週期**（實測端到端 ≈ 1.40）"
+say "**命令追蹤封裝：$([ "$CMD_ENV" = 1 ] && echo 啟用 || echo 關閉)**"$([ "$CMD_ENV" = 1 ] && echo "（三端同時啟用；落盤 $DIR/cmd_env.jsonl）")
 say "錄影：$REC_RES @ ${REC_FPS}fps、模擬器內相機、at=$REC_AT eye=$REC_EYE target=$REC_TARGET"
 say "時間預算：模擬 ${TASK_SIM_S}s（與 free4 的 59.61s 對齊）、牆鐘上限 ${TASK_WALL_S}s"
 python3 - <<EOF | tee -a "$LOG"
@@ -98,7 +109,7 @@ spawn isaac "$ISAAC_PY" -u evaluation/isaac_wholebody_sim_e2.py \
   --solver-label wgmpc_wg2 \
   --record-frames "$DIR/frames" --record-res "$REC_RES" \
   --record-fps "$REC_FPS" --record-at "$REC_AT" --record-eye "$REC_EYE" \
-  --record-target "$REC_TARGET" \
+  --record-target "$REC_TARGET" $ENV_ISAAC \
   --run-label "WG2 自由空間閉迴路：W-GMPC N=5（$ARM_MODEL 模型）到達與保持"
 say "  等 Isaac 起 scene（最多 180 s）"
 for i in $(seq 180); do
@@ -129,7 +140,7 @@ spawn safety ros2 run ammr_wholebody_mpc wholebody_safety --ros-args \
   -p wholebody_urdf:="$URDF_WB" \
   -p vmax_base_lin:="$VMAX_BASE_LIN" -p vmax_base_ang:="$VMAX_BASE_ANG" \
   -p vmax_arm:="$VMAX_ARM" \
-  -p freespace_confirmed:=true
+  -p freespace_confirmed:=true $ENV_SAFETY
 sleep 6
 
 say "[5/6] 低速框讀回比對 ＋ TF／NODATA 通路核對"
@@ -144,7 +155,10 @@ python3 evaluation/wgmpc_wg2_freespace_check.py --out "$DIR/freespace_check.json
 
 say "[6/6] 起 adapter 與 W-GMPC 節點"
 spawn adapter python3 -u evaluation/arm_vel_adapter.py \
-  --consumer-node /isaac_wholebody_sim
+  --consumer-node /isaac_wholebody_sim $ENV_ADAPTER
+# **四段封裝的落盤錄製器**：事後要能只憑檔案重建關聯
+[ "$CMD_ENV" = "1" ] && spawn envrec python3 -u evaluation/wgmpc_env_recorder.py \
+  --out "$DIR/cmd_env.jsonl"
 sleep 5
 
 say "  起 W-GMPC 節點（**--arm-model $ARM_MODEL**、N=$N、u_prev=strict ＋ 已確認初始靜止）"
@@ -152,7 +166,7 @@ say "  起 W-GMPC 節點（**--arm-model $ARM_MODEL**、N=$N、u_prev=strict ＋
   echo "**找不到辨識檔 $ARM_IDENT**" | tee -a "$LOG"; exit 66; }; }
 python3 -u evaluation/wgmpc_wg2_node.py \
   --arm-model "$ARM_MODEL" --arm-ident "$ARM_IDENT" \
-  --delay-comp-cycles "$DELAY_COMP" \
+  --delay-comp-cycles "$DELAY_COMP" $ENV_NODE --run-id "$RUN_ID" \
   --N "$N" --rate "$RATE" --target-offset $OFFSET \
   --reach-pos-m "$REACH_P" --reach-rot-rad "$REACH_R" --hold-s "$HOLD_S" \
   --duration-s "$TASK_WALL_S" --duration-sim-s "$TASK_SIM_S" \

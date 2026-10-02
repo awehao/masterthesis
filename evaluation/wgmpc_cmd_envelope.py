@@ -11,6 +11,10 @@ import sys
 _WS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_WS, 'src', 'ammr_wholebody_mpc'))
 
-from ammr_wholebody_mpc.cmd_envelope import (  # noqa: E402,F401
-    COLS, NFIELD, NU, SCHEMA, ST_ADAPTER, ST_ENDPOINT, ST_SAFETY, ST_SOLVER,
-    STAGE_NAME, TOPIC, decode, describe, encode, run_id_num)
+# **全量轉出**：新增常數時不必兩邊各改一次（先前漏了 K_* 就踩過）。
+from ammr_wholebody_mpc import cmd_envelope as _impl              # noqa: E402
+
+for _n in dir(_impl):
+    if not _n.startswith('_'):
+        globals()[_n] = getattr(_impl, _n)
+del _n

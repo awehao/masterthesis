@@ -97,7 +97,7 @@ def world_to_body9(d, yaw):
 
 
 class Adapter(Node):
-    def __init__(self, ctrl=CTRL_DEFAULT):
+    def __init__(self, ctrl=CTRL_DEFAULT, cmd_env=False):
         super().__init__('arm_vel_adapter')
         self.ctrl = str(ctrl)
         self.n_in = self.n_out = self.n_bad = 0
@@ -109,15 +109,22 @@ class Adapter(Node):
         from rclpy.qos import qos_profile_sensor_data
         self.create_subscription(Odometry, '/odom', self.on_odom,
                                  qos_profile_sensor_data)
-        self.create_subscription(Float64MultiArray,
-                                 '/wholebody_safety/cmd_out', self.on_cmd, 10)
-        self.pub = self.create_publisher(Float64MultiArray, OUT, 10)
-        # **封裝路徑**：啟用時改**消費封裝本身**（值就在封裝裡），
-        # 不再靠數值或接收順序與旁路資料配對。
-        self.env_pub = self.create_publisher(
-            Float64MultiArray, ENV.TOPIC[ENV.ST_ADAPTER], 10)
-        self.create_subscription(Float64MultiArray,
-                                 ENV.TOPIC[ENV.ST_SAFETY], self.on_env, 10)
+        # **唯一控制入口**：兩種入口**擇一訂閱**，不同時存在。
+        # 封裝模式只訂封裝、只發封裝；舊模式只訂舊話題、只發舊話題。
+        # 這樣既有九維路徑不會因為啟用封裝而多執行一筆。
+        self.env_on = bool(cmd_env)
+        if self.env_on:
+            self.env_pub = self.create_publisher(
+                Float64MultiArray, ENV.TOPIC[ENV.ST_ADAPTER], 10)
+            self.create_subscription(Float64MultiArray,
+                                     ENV.TOPIC[ENV.ST_SAFETY], self.on_env, 10)
+            self.pub = None
+        else:
+            self.env_pub = None
+            self.create_subscription(Float64MultiArray,
+                                     '/wholebody_safety/cmd_out',
+                                     self.on_cmd, 10)
+            self.pub = self.create_publisher(Float64MultiArray, OUT, 10)
         self._out_seq = 0
         self.diag = self.create_publisher(Float32MultiArray, '~/diag', 10)
         self.create_timer(0.5, self.report)
@@ -145,13 +152,13 @@ class Adapter(Node):
         v = world_to_body9(d, self.yaw)
         self._out_seq += 1
         om = Float64MultiArray()
+        # adapter 做的是**座標轉換**，不是修改命令內容；
+        # 種類沿用上游（世界↔本體的旋轉不算 modified）。
         om.data = ENV.encode(e['run_id'], e['source_seq'], ENV.ST_ADAPTER,
                              self._out_seq, e['output_seq'], e['derived'],
-                             self.get_clock().now().nanoseconds * 1e-9, v)
+                             self.get_clock().now().nanoseconds * 1e-9, v,
+                             kind=e['kind'])
         self.env_pub.publish(om)
-        out = Float64MultiArray()
-        out.data = [float(x) for x in v]
-        self.pub.publish(out)
         self.n_out += 1
         self.last_in = time.monotonic()
 
@@ -229,9 +236,12 @@ def main():
                     help='實際消費端的節點名（查其 joints 參數核對順序）。'
                          '預設為 Gazebo 鏈的 ros2_control 控制器；'
                          'Isaac 鏈請指定 /isaac_wholebody_sim')
+    ap.add_argument('--cmd-env', action='store_true',
+                    help='啟用 WG2 命令追蹤封裝。**兩種入口擇一**：'
+                         '封裝模式只訂／只發封裝，舊話題完全不參與。')
     a, _ = ap.parse_known_args()
     rclpy.init()
-    nd = Adapter(a.consumer_node)
+    nd = Adapter(a.consumer_node, cmd_env=a.cmd_env)
     if not nd.order_ok:
         nd.get_logger().error('refusing to forward commands')
     try:

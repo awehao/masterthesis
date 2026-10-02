@@ -269,6 +269,7 @@ class WholeBodySafetyNode(Node):
         self._env_on = bool(self.get_parameter('cmd_env').value)
         self._env_src = None        # 最近一筆來源 (run_id, source_seq, out_seq)
         self._env_out_seq = 0
+        self._n_env_ignored_legacy = 0
         self._env_pub = None
         if self._env_on:
             # 格式的**權威定義在套件內**，兩邊共用同一份，不各寫一份。
@@ -416,6 +417,15 @@ class WholeBodySafetyNode(Node):
         self.pts_t = self._now()
 
     def _on_cmd(self, msg: Float64MultiArray) -> None:
+        if self._env_on:
+            # **唯一控制入口**：封裝模式下舊九維話題**不得更新控制值**。
+            # 否則會出現「先收封裝 A、再收舊話題 B，實際處理 B 卻標成 A
+            # 的來源」的錯配（`_env_src` 未被清除）。
+            self._n_env_ignored_legacy += 1
+            self.get_logger().warn(
+                '封裝模式下收到舊 ~/cmd_in，**已忽略**（唯一控制入口是封裝）',
+                throttle_duration_sec=5.0)
+            return
         d = list(msg.data)
         if len(d) != 9:
             self.get_logger().warn(f'cmd_in must be 9 long, got {len(d)}',
@@ -586,15 +596,26 @@ class WholeBodySafetyNode(Node):
             # derived = 0：本段自行產生（停止命令、無命令、缺資料等），
             #              此時沒有上游來源可對應。
             self._env_out_seq += 1
+            _E = self._ENV
             _drv = bool(self._env_src is not None and reason == 0.0)
-            _rid = self._env_src[0] if self._env_src else 0.0
-            _ssq = self._env_src[1] if self._env_src else -1
-            _usq = self._env_src[2] if self._env_src else -1
+            if not _drv:
+                # 本段**自行產生**：依 reason 分種類，**不冒認來源**。
+                #   1 = 尚無命令、2 = 命令過期 ⇒ no_command
+                #   其餘（缺運動學／缺資料／TF／過期資料…）⇒ stop_generated
+                _kind = (_E.K_NO_COMMAND if reason in (1.0, 2.0)
+                         else _E.K_STOP_GEN)
+                _rid, _ssq, _usq = (self._env_src[0] if self._env_src
+                                    else 0.0), -1, -1
+            else:
+                _kind = (_E.K_MODIFIED
+                         if not np.allclose(out, self.cmd, atol=1e-12)
+                         else _E.K_NORMAL)
+                _rid, _ssq, _usq = self._env_src
             _em = Float64MultiArray()
-            _em.data = self._ENV.encode(
-                _rid, _ssq if _drv else -1, self._ENV.ST_SAFETY,
-                self._env_out_seq, _usq if _drv else -1, _drv,
-                float(now), [float(v) for v in out])
+            _em.data = _E.encode(_rid, _ssq, _E.ST_SAFETY,
+                                 self._env_out_seq, _usq, _drv,
+                                 float(now), [float(v) for v in out],
+                                 kind=_kind)
             self._env_pub.publish(_em)
         # **來源 meta 的重新鍵入**：以本節點收到的輸入值配對上游，
         # 再以輸出值為鍵發布。配不到就明載未配對，不冒稱來源時間。

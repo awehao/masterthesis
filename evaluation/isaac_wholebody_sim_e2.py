@@ -190,14 +190,18 @@ class WBNode(Node):
         self.chain = chain
         self.sim_t = 0.0
         self.n_cb = 0
-        self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
-                                 self._cmd, 10)
-        # ---- WG2 命令追蹤封裝（**額外**路徑；既有 /wb_vel_cmd 不變）----
-        # 啟用時改**消費封裝本身**。身分隨值一起到，不靠接收順序猜。
+        # ---- WG2 命令追蹤封裝 ----
+        # **唯一控制入口**：封裝模式**不訂閱**舊 /wb_vel_cmd
+        #（不是收了再丟 —— 根本不建立那條訂閱），
+        # 舊模式則完全不碰封裝。既有九維模式保留且不受影響。
         self.env_on = bool(a.cmd_env)
+        if not self.env_on:
+            self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
+                                     self._cmd, 10)
         self._env_map = {}        # chain 的 recv_seq → 封裝身分與接收時間
         self._env_seen = set()    # 已回報過首次套用的 recv_seq
         self._env_out_seq = 0
+        self._env_events = []      # 落盤用的四段事件（endpoint 段）
         if self.env_on:
             self.create_subscription(Float64MultiArray,
                                      ENV.TOPIC[ENV.ST_ADAPTER],
@@ -281,8 +285,6 @@ class WBNode(Node):
             print(f'[wb] **收到受控停止請求**：{self.stop_requested}', flush=True)
 
     def _cmd(self, msg):
-        if self.env_on:
-            return      # 封裝路徑啟用時由 `_cmd_env` 收，不重複收同一筆
         self.n_cb += 1
         # **接收時間**用模擬時間，命名為 recv_sim_t；不冒稱來源發布時間
         self.chain.receive(list(msg.data), self.sim_t)
@@ -819,14 +821,47 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                 if _id is not None and _rs not in node._env_seen:
                     node._env_seen.add(_rs)
                     node._env_out_seq += 1
+                    # **首次套用的種類要分清楚**：
+                    #   fail_latched_stop —— 鏈已失效，這是自行產生的停止值，
+                    #     **不得冒稱原命令成功套用** ⇒ derived = 0、不帶來源
+                    #   modified_by_this_stage —— E2 改動過（lam < 1 或 modified）
+                    #   normal —— 原樣套用
+                    _applied9 = ([float(base_cmd[0]), float(base_cmd[1]),
+                                  float(base_cmd[2])]
+                                 + [float(x) for x in _qd])
+                    if chain.fail is not None or _mode == 3:
+                        _k = ENV.K_FAIL_LATCHED
+                        _ok_src = False
+                    elif (chain.last_limit
+                          and chain.last_limit.get('modified')):
+                        _k, _ok_src = ENV.K_MODIFIED, True
+                    else:
+                        _k, _ok_src = ENV.K_NORMAL, True
                     _ee = Float64MultiArray()
                     _ee.data = ENV.encode(
-                        _id['run_id'], _id['source_seq'], ENV.ST_ENDPOINT,
-                        node._env_out_seq, _id['adapter_out_seq'],
-                        _id['derived'], float(t),
-                        [float(base_cmd[0]), float(base_cmd[1]),
-                         float(base_cmd[2])] + [float(x) for x in _qd])
+                        _id['run_id'],
+                        _id['source_seq'] if _ok_src else -1,
+                        ENV.ST_ENDPOINT, node._env_out_seq,
+                        _id['adapter_out_seq'] if _ok_src else -1,
+                        bool(_id['derived']) and _ok_src, float(t),
+                        _applied9, kind=_k)
                     node.env_pub.publish(_ee)
+                    # **四段事件要落盤**，不能只存在記憶體裡
+                    node._env_events.append({
+                        'stage': 'endpoint', 'run_id': _id['run_id'],
+                        'source_seq': _id['source_seq'],
+                        'adapter_out_seq': _id['adapter_out_seq'],
+                        'recv_sim_t': _id['recv_sim_t'],
+                        'first_apply_sim_t': float(t),
+                        'physics_step_id': int(node._step_id),
+                        'chain_recv_seq': _rs,
+                        'kind': int(_k), 'kind_name': ENV.KIND_NAME[_k],
+                        'exec_mode': int(_mode),
+                        'api_applied': True,
+                        'applied9': [round(v, 8) for v in _applied9],
+                        'lam': (None if not chain.last_limit
+                                else chain.last_limit.get('lam')),
+                    })
                     if not node._env_meta_sent:
                         node._env_meta_sent = True
                         node.env_meta.publish(String(data=json.dumps(dict(
@@ -981,6 +1016,21 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         'schema': 'wb_sim/1', 'mode': a.mode,
         'spec': 'evaluation/results/specs/isaac_wholebody_port_v2.md',
         'run_label': a.run_label,
+        'cmd_env': (None if not a.cmd_env else {
+            'enabled': True,
+            'schema': ENV.SCHEMA,
+            'cols': list(ENV.COLS),
+            'kinds': {str(k): v for k, v in ENV.KIND_NAME.items()},
+            'n_events': len(node._env_events),
+            'events': node._env_events,
+            'times': {
+                'recv_sim_t': '封裝抵達執行端的模擬時間',
+                'first_apply_sim_t': '本筆**第一次**送進物理 API 的模擬時間',
+                'caveat': '**API 套用時間 ≠ 機械響應完成時間**；'
+                          '設定點寫入後關節還要追（一階追蹤）'},
+            'per_step_applied': '逐物理步套用值見本檔 log 的 joint*_sp 與 '
+                                '/coman/applied_cmd',
+            'single_entry': '封裝模式**不訂閱** /wb_vel_cmd（根本不建立訂閱）'}),
         'record_frames': (None if not a.record_frames else
                           {'dir': a.record_frames,
                            'n': len(globals().get('REC_INDEX', [])),
