@@ -202,6 +202,7 @@ class WBNode(Node):
         self._env_seen = set()    # 已回報過首次套用的 recv_seq
         self._env_out_seq = 0
         self._env_events = []      # 落盤用的四段事件（endpoint 段）
+        self._env_fail_reported = False
         if self.env_on:
             self.create_subscription(Float64MultiArray,
                                      ENV.TOPIC[ENV.ST_ADAPTER],
@@ -812,75 +813,6 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                            float(_sn.recv_sim_t) if _sn is not None
                            else float('nan')])
             node.applied_pub.publish(_am)
-            # ---- stage 3 封裝：**首次 API 套用**時回報關聯 ----
-            # `first_apply_sim_t` 是本筆**第一次**被送進物理 API 的模擬時間。
-            # **它不等於機械響應完成的時間** —— 設定點寫入後關節還要追。
-            if node.env_on and _sn is not None:
-                _rs = int(_sn.recv_seq)
-                _id = node._env_map.get(_rs)
-                if _id is not None and _rs not in node._env_seen:
-                    node._env_seen.add(_rs)
-                    node._env_out_seq += 1
-                    # **首次套用的種類要分清楚**：
-                    #   fail_latched_stop —— 鏈已失效，這是自行產生的停止值，
-                    #     **不得冒稱原命令成功套用** ⇒ derived = 0、不帶來源
-                    #   modified_by_this_stage —— E2 改動過（lam < 1 或 modified）
-                    #   normal —— 原樣套用
-                    _applied9 = ([float(base_cmd[0]), float(base_cmd[1]),
-                                  float(base_cmd[2])]
-                                 + [float(x) for x in _qd])
-                    if chain.fail is not None or _mode == 3:
-                        _k = ENV.K_FAIL_LATCHED
-                        _ok_src = False
-                    elif (chain.last_limit
-                          and chain.last_limit.get('modified')):
-                        _k, _ok_src = ENV.K_MODIFIED, True
-                    else:
-                        _k, _ok_src = ENV.K_NORMAL, True
-                    _ee = Float64MultiArray()
-                    _ee.data = ENV.encode(
-                        _id['run_id'],
-                        _id['source_seq'] if _ok_src else -1,
-                        ENV.ST_ENDPOINT, node._env_out_seq,
-                        _id['adapter_out_seq'] if _ok_src else -1,
-                        bool(_id['derived']) and _ok_src, float(t),
-                        _applied9, kind=_k)
-                    node.env_pub.publish(_ee)
-                    # **四段事件要落盤**，不能只存在記憶體裡
-                    node._env_events.append({
-                        'stage': 'endpoint', 'run_id': _id['run_id'],
-                        'source_seq': _id['source_seq'],
-                        'adapter_out_seq': _id['adapter_out_seq'],
-                        'recv_sim_t': _id['recv_sim_t'],
-                        'first_apply_sim_t': float(t),
-                        'physics_step_id': int(node._step_id),
-                        'chain_recv_seq': _rs,
-                        'kind': int(_k), 'kind_name': ENV.KIND_NAME[_k],
-                        'exec_mode': int(_mode),
-                        'api_applied': True,
-                        'applied9': [round(v, 8) for v in _applied9],
-                        'lam': (None if not chain.last_limit
-                                else chain.last_limit.get('lam')),
-                    })
-                    if not node._env_meta_sent:
-                        node._env_meta_sent = True
-                        node.env_meta.publish(String(data=json.dumps(dict(
-                            ENV.describe(), stage='endpoint',
-                            times={
-                                'recv_sim_t': '封裝抵達執行端的模擬時間',
-                                'first_apply_sim_t':
-                                    '本筆**第一次**送進物理 API 的模擬時間'
-                                    '（= 本封裝的 stamp_sim_t）',
-                                'not_the_same_as':
-                                    '**API 套用時間 ≠ 機械響應完成時間**；'
-                                    '設定點寫入後關節還要追（一階追蹤）'},
-                            per_step_applied='逐物理步的套用值見 '
-                                             '/coman/applied_cmd 與 log 的 '
-                                             'joint*_sp',
-                            recv_seq_note='recv_seq 是執行端自己的計數；'
-                                          '與來源的對應由本封裝的 '
-                                          '(run_id, source_seq) 建立'),
-                            ensure_ascii=False)))
             # **設定點回報**：此處是 `apply_action` 之後，故發出的是
             # 「本步**寫入後**」的設定點 sp_i，與同一輪 `/joint_states`
             # 的量測 act_i 構成**匹配對**（兩者同 sim_t、同 physics_step_id）。
@@ -927,6 +859,61 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                     'does_not_change': '本話題為純新增回報，'
                                        '不改既有命令訊息、不改控制行為',
                 }, ensure_ascii=False)))
+            # ---- stage 3 封裝：首次 API 套用 ／ 失效停止 ----
+            # `first_apply_sim_t` 是本筆**第一次**被送進物理 API 的模擬時間。
+            # **它不等於機械響應完成的時間** —— 設定點寫入後關節還要追。
+            #
+            # **失效停止不走「首次套用」去重**：某筆命令可能已正常回報過
+            # 首次套用（已進 `_env_seen`），之後才發生失效；若把失效事件
+            # 包在同一個 `_rs not in _env_seen` 條件裡，那個停止事件就會
+            # 被擋掉。兩者是不同的事件，分開判定。
+            if node.env_on:
+                _rs = int(_sn.recv_seq) if _sn is not None else -1
+                _id = node._env_map.get(_rs)
+                _failed = (chain.fail is not None or _mode == 3)
+                _applied9 = ([float(base_cmd[0]), float(base_cmd[1]),
+                              float(base_cmd[2])]
+                             + [float(x) for x in _qd])
+                # **判定由共用純函式負責**（ENV.endpoint_event），
+                # 執行端與離線測試用同一份，不各寫一套。
+                _ev = ENV.endpoint_event(
+                    _id, failed=_failed,
+                    fail_reported=node._env_fail_reported,
+                    seen_has=(_rs in node._env_seen),
+                    modified=bool(chain.last_limit
+                                  and chain.last_limit.get('modified')),
+                    exec_mode=_mode, sim_t=float(t), applied9=_applied9,
+                    lam=(None if not chain.last_limit
+                         else chain.last_limit.get('lam')),
+                    chain_recv_seq=_rs, step_id=int(node._step_id))
+                if _ev is not None:
+                    if _ev['kind'] == ENV.K_FAIL_LATCHED:
+                        node._env_fail_reported = True
+                    else:
+                        node._env_seen.add(_rs)
+                    # **話題與檔案共用同一份事件資料**，不得有不同的來源語意
+                    node._env_out_seq += 1
+                    _ev['output_seq'] = node._env_out_seq
+                    _ee = Float64MultiArray()
+                    _ee.data = ENV.event_to_payload(_ev, node._env_out_seq)
+                    node.env_pub.publish(_ee)
+                    node._env_events.append(_ev)
+                    if not node._env_meta_sent:
+                        node._env_meta_sent = True
+                        node.env_meta.publish(String(data=json.dumps(dict(
+                            ENV.describe(), stage='endpoint',
+                            times={
+                                'recv_sim_t': '封裝抵達執行端的模擬時間',
+                                'first_apply_sim_t':
+                                    '本筆**第一次**送進物理 API 的模擬時間',
+                                'not_the_same_as':
+                                    '**API 套用時間 ≠ 機械響應完成時間**；'
+                                    '設定點寫入後關節還要追（一階追蹤）'},
+                            fail_stop='失效停止**不走首次套用去重**；'
+                                      'source_seq = −1，原命令序號只放診斷欄位',
+                            same_payload='話題與 wb_run.json 的事件'
+                                         '**共用同一份資料**'),
+                            ensure_ascii=False)))
             if chain.fail is not None and not node._fail_sent:
                 # **閂鎖只報一次**（latched topic），帶明確原因
                 node._fail_sent = True

@@ -11,7 +11,7 @@
 退出碼
 ------
     0 封存完整    70 wb_run.json 缺少或無法解析    71 必要紀錄不齊
-    72 錄影不完整    73 節點輸出不齊
+    72 錄影不完整    73 節點輸出不齊    74 **追蹤封存不完整**
 """
 from __future__ import annotations
 
@@ -32,6 +32,9 @@ def main() -> int:
     ap.add_argument('run_dir')
     ap.add_argument('--expect-recording', action='store_true')
     ap.add_argument('--expect-arm-model', default=None)
+    ap.add_argument('--expect-cmd-env', default=None,
+                    help='追蹤 JSONL 路徑；給了就核對可解析、summary 與'
+                         '實際筆數一致、關聯可重建')
     ap.add_argument('--node-out', default='wg2_out.json')
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
@@ -108,6 +111,10 @@ def main() -> int:
     else:
         ck('本趟未要求錄影', rf is None or not rf, '')
 
+    # ---- 四段追蹤的落盤 ----
+    if a.expect_cmd_env:
+        _check_cmd_env(a.expect_cmd_env, sim, ck, rep)
+
     # ---- 節點輸出 ----
     q = os.path.join(D, a.node_out)
     if not os.path.exists(q):
@@ -155,6 +162,72 @@ def main() -> int:
                f"published={st.get('published')}")
 
     return _fin(rep, bad, a)
+
+
+def _check_cmd_env(path, sim, ck, rep):
+    """追蹤封存：**不能靠檔案存在判通過**。"""
+    if not os.path.exists(path):
+        ck('追蹤 JSONL 存在', False, f'**缺少** {path}', 74)
+        return
+    lines = [ln for ln in open(path, encoding='utf-8') if ln.strip()]
+    recs, bad_ln = [], 0
+    for ln in lines:
+        try:
+            recs.append(json.loads(ln))
+        except ValueError:
+            bad_ln += 1
+    ck('追蹤 JSONL 每行可解析', bad_ln == 0,
+       f'{len(recs)} 行可解析／{bad_ln} 行壞', 74)
+    head = [r for r in recs if r.get('type') == 'header']
+    summ = [r for r in recs if r.get('type') == 'summary']
+    evs = [r for r in recs if r.get('type') == 'env']
+    rej = [r for r in recs if r.get('type') == 'reject']
+    ck('有 header 與 **summary**（錄製器已受控關檔）',
+       len(head) == 1 and len(summ) == 1,
+       f'header {len(head)}／summary {len(summ)}', 74)
+    if summ:
+        cnt = summ[0].get('counts') or {}
+        actual = {}
+        for r in evs:
+            actual[r['stage_name']] = actual.get(r['stage_name'], 0) + 1
+        same = all(int(cnt.get(k, 0)) == v for k, v in actual.items()) and \
+            sum(int(v) for v in cnt.values()) == len(evs)
+        ck('summary 筆數與**實際筆數一致**', same,
+           f'summary {cnt}／實際 {actual}', 74)
+        ck('錄製器未拒絕任何封裝',
+           int(summ[0].get('n_rejected', 0)) == 0 and len(rej) == 0,
+           f"拒絕 {summ[0].get('n_rejected')}", 74)
+    # ---- 關聯可重建 ----
+    by = {}
+    for r in evs:
+        by.setdefault(r['stage_name'], []).append(r)
+    ck('四段都有紀錄',
+       all(len(by.get(s_, [])) > 0
+           for s_ in ('solver', 'safety', 'adapter', 'endpoint')),
+       ' '.join(f'{k}:{len(v)}' for k, v in sorted(by.items())), 74)
+    solver_seqs = {r['source_seq'] for r in by.get('solver', [])}
+    full = [q for q in sorted(solver_seqs)
+            if all(any(r['source_seq'] == q for r in by.get(s_, []))
+                   for s_ in ('safety', 'adapter', 'endpoint'))]
+    ck('**至少有一筆可逐段重建關聯**', len(full) > 0,
+       f'{len(full)} / {len(solver_seqs)} 筆 source_seq 四段齊全', 74)
+    # 與執行端自己的事件對帳
+    ce = (sim.get('cmd_env') or {})
+    sim_ev = ce.get('events') or []
+    ck('執行端事件也已落盤（wb_run.json）', len(sim_ev) > 0,
+       f"{len(sim_ev)} 筆", 74)
+    if sim_ev:
+        ck('失效停止事件的 source_seq 一律 −1',
+           all(e['source_seq'] == -1 for e in sim_ev
+               if e.get('kind_name') == 'fail_latched_stop'),
+           f"失效事件 {sum(1 for e in sim_ev if e.get('kind_name') == 'fail_latched_stop')} 筆",
+           74)
+    rep['cmd_env'] = {
+        'path': path, 'n_lines': len(lines), 'n_env': len(evs),
+        'counts': {k: len(v) for k, v in by.items()},
+        'n_traceable_full_chain': len(full),
+        'n_endpoint_events_in_wb_run': len(sim_ev),
+    }
 
 
 def _fin(rep, bad, a):

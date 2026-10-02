@@ -1,10 +1,71 @@
-id: WG2-TRACK-2
+id: WG2-TRACK-3
 title: WG2 命令追蹤：新舊入口互斥、嚴格解析、全鏈落盤
 date: 2026-10-02
 status: >-
   **封裝格式與全鏈追蹤測試完成**（含 adapter → 真實 CmdChainE2 → 首次 API 套用）。
   未開 Isaac、未重辨識、未調模型／權重／限制。
-前版: WG2-TRACK-1（當時只驗到安全層輸出，定位為「封裝格式與安全層追蹤測試完成」）
+前版: >-
+  WG2-TRACK-1（只驗到安全層輸出）、WG2-TRACK-2（補全鏈替身測試）。
+  本版補上**實際 Isaac 執行端的失效回報**與**追蹤檔納入封存核對**。
+
+七_本版收尾的兩項（Howard 指出，已核對屬實）:
+  - id: 實際 Isaac 路徑的失效回報未跟上
+    問題: >-
+      失效停止事件仍包在 `if _id is not None and _rs not in node._env_seen:`
+      裡 ⇒ **某筆命令已正常回報過首次套用、之後才失效**，停止事件會被
+      `_env_seen` 擋掉。替身的 C6b 通過**不能證明這段實際程式通過**。
+      另外同一事件在話題用 `source_seq = -1`、在 wb_run.json 卻用
+      `_id['source_seq']` —— **同一事件不得有不同的來源語意**。
+    修法: >-
+      判定抽成**共用純函式** `ENV.endpoint_event`，執行端與離線測試用同一份；
+      失效停止與首次套用**分開判定**（各自的旗標）；
+      話題 payload 由 `ENV.event_to_payload` 從**同一份事件**組出。
+      原命令序號改放診斷欄位 `diag_last_source_seq_before_fail`，
+      不佔用正常來源欄位。
+    驗證: >-
+      evaluation/test_wgmpc_endpoint_event.py（P1–P4 全過），
+      直接驅動執行端實際呼叫的那支函式。
+      **P1 就是指定的序列**：正常套用 A → A 進 seen → 再失效，
+      仍留下 `fail_latched_stop` 事件、`source_seq = −1`、
+      原序號只在診斷欄位、上游 `src_seq` 保留。
+      P4 另以原始碼核對執行端確實呼叫該函式、舊的巢狀條件已移除。
+  - id: 封存完整未涵蓋追蹤檔
+    問題: >-
+      原流程先宣告 archive_complete、最後才由 trap 清掉錄製器；
+      archive checker 也沒核對 cmd_env.jsonl ⇒
+      「封存完整」只代表舊有模擬／影格通過。
+      另：run_config.json 沒寫 cmd_env 與 delay_comp_cycles；
+      runner 仍印「實測端到端 ≈ 1.40」（該說法已撤回）。
+    修法:
+      - 收尾新增 [1b/3]：先對 envrec 送 TERM、等 summary 寫入（上限 30 s），再核對封存
+      - 錄製器加 SIGTERM／SIGINT handler ⇒ 走 finally 關檔（預設 SIGTERM 不會跑 finally，summary 寫不出來）
+      - archive checker 新增 `--expect-cmd-env`，退出碼 **74 = 追蹤封存不完整**
+      - run_config.json 補 delay_comp_cycles、delay_comp_note 與 cmd_env
+      - 措辭改為「**沿用的補償設定，非已逐筆量測的延遲**」
+    追蹤核對的項目: >-
+      JSONL 每行可解析、有 header 與 **summary**（證明受控關檔）、
+      summary 筆數與**實際筆數一致**、未拒絕任何封裝、四段都有紀錄、
+      **至少一筆可逐段重建關聯**、執行端事件也在 wb_run.json、
+      失效事件的 source_seq 一律 −1。
+    正負兩向實測:
+      - {情境: 完整, 期望: 0, 實際: 0}
+      - {情境: '**錄製器未關檔（無 summary）**', 期望: 74, 實際: 74}
+      - {情境: summary 與實際筆數不符, 期望: 74, 實際: 74}
+      - {情境: 缺 endpoint 段, 期望: 74, 實際: 74}
+      - {情境: 失效事件 source_seq 不是 −1, 期望: 74, 實際: 74}
+      - {情境: 追蹤檔缺少, 期望: 74, 實際: 74}
+    舊趟次: 未給 --expect-cmd-env 時行為不變（rec8 實測 exit 0）
+
+八_本版我自己造成並修掉的回歸: >-
+  做區塊替換時把**手臂設定點回報**整段吃掉了（只剩 ready = 0 的路徑），
+  由 H12 抓到（`node.sp_meta_pub.publish` 找不到）。已由 git diff 取回原文復原，
+  並核對順序為 applied_pub → 設定點回報 → stage3 → fail_sent，
+  AST 核對資源仍全在 `__init__`。**這類大範圍替換要逐項回歸，不能只看 pyflakes。**
+
+九_下一趟的目標: >-
+  以「**取得可逐筆對帳的延遲與命令修改資料**」為首要目標。
+  沿用 rec8 的控制配置作量測基準。
+  **不把追蹤功能當成新的穩定化方法**，也不要求它這一趟就解決保持問題。
 
 一_三組缺口（Howard 指出，已逐一核對屬實並修正）:
   - id: 新舊命令路徑未互斥

@@ -29,10 +29,10 @@ VMAX_BASE_LIN=0.035255; VMAX_BASE_ANG=0.199900; VMAX_ARM=0.999900
 # **模型選擇要顯式傳入**：節點預設是 ideal，不傳就會跑成原核心。
 ARM_MODEL="${ARM_MODEL:-setpoint}"
 ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
-# **迴路延遲補償**：rec7 實錄量到端到端延遲 ≈ 1.40 個控制週期
-#（發布延遲 0.60 ＋ cmd_age 0.60 ＋ 一個物理步）。
-# 離線閉迴路在延遲 1.4 週期、補償 0 時重現 rec7 的不收斂；
-# 補償 1.4 時 1.35 s 到達並保持。**不改權重、視界或任何限制。**
+# **迴路延遲補償**：這是**沿用的補償設定**，不是已逐筆量測的延遲。
+# 1.4 的由來是工程估計（發布延遲 ＋ cmd_age ＋ 一物理步）加上離線閉迴路
+# 的重現，**但 cmd_age 不是傳遞延遲**，D_cmd 目前仍量不到 ——
+# 要等含逐筆序號的趟次才能對帳。**不改權重、視界或任何限制。**
 DELAY_COMP="${DELAY_COMP:-1.4}"
 # **命令追蹤封裝**：身分 (run_id, source_seq) 與九維值同訊息，全鏈四段各記
 # output_seq。啟用後**三端都改走封裝**（唯一控制入口），既有九維路徑不參與。
@@ -78,7 +78,7 @@ say "=== WG2 首趟自由空間整合測試 RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 say "判準：N=$N dt=$(python3 -c "print(1/$RATE)") 偏移=($OFFSET) 到達≤${REACH_P}m/${REACH_R}rad 保持${HOLD_S}s"
 say "**手臂執行模型：$ARM_MODEL**（辨識檔 $(basename "$ARM_IDENT")）"
-say "**迴路延遲補償：$DELAY_COMP 個控制週期**（實測端到端 ≈ 1.40）"
+say "**迴路延遲補償：$DELAY_COMP 個控制週期**（**沿用的補償設定，非已逐筆量測的延遲**）"
 say "**命令追蹤封裝：$([ "$CMD_ENV" = 1 ] && echo 啟用 || echo 關閉)**"$([ "$CMD_ENV" = 1 ] && echo "（三端同時啟用；落盤 $DIR/cmd_env.jsonl）")
 say "錄影：$REC_RES @ ${REC_FPS}fps、模擬器內相機、at=$REC_AT eye=$REC_EYE target=$REC_TARGET"
 say "時間預算：模擬 ${TASK_SIM_S}s（與 free4 的 59.61s 對齊）、牆鐘上限 ${TASK_WALL_S}s"
@@ -88,6 +88,13 @@ json.dump({'arm_model': '$ARM_MODEL', 'arm_ident': '$ARM_IDENT',
            'N': $N, 'rate_hz': $RATE, 'offset_m': [$(echo $OFFSET | tr ' ' ',')],
            'reach_pos_m': $REACH_P, 'reach_rot_rad': $REACH_R,
            'hold_s': $HOLD_S, 'sim_limit_s': $SIM_LIMIT,
+           'delay_comp_cycles': $DELAY_COMP,
+           'delay_comp_note': ('**沿用的補償設定，非已逐筆量測的延遲**；'
+                               'D_cmd 要等含序號的趟次才能對帳'),
+           'cmd_env': {'enabled': ($CMD_ENV == 1),
+                       'record': '$DIR/cmd_env.jsonl',
+                       'note': ('啟用時三端**都**改走封裝（唯一控制入口），'
+                                '既有九維路徑不參與')},
            'task_sim_s': $TASK_SIM_S, 'task_wall_s': $TASK_WALL_S,
            'recording': {'res': '$REC_RES', 'fps': $REC_FPS,
                          'at': '$REC_AT', 'eye': '$REC_EYE',
@@ -184,6 +191,22 @@ timeout 10 ros2 topic pub --once /wb_sim/stop_request std_msgs/msg/String \
   "{data: 'wgmpc_wg2 節點已結束，請走受控停止與停止觀察後封存'}" \
   >>"$LOG" 2>&1 || say "  （停止請求發布失敗，改等自然收尾）"
 
+say "[收尾 1b/3] 讓追蹤錄製器**受控結束並關檔**（summary 要寫得出來）"
+if [ "$CMD_ENV" = "1" ]; then
+  for i in "${!NAMES[@]}"; do
+    [ "${NAMES[$i]}" = "envrec" ] && kill -TERM "${PIDS[$i]}" 2>/dev/null || true
+  done
+  for i in $(seq 30); do
+    grep -q '"type": "summary"' "$DIR/cmd_env.jsonl" 2>/dev/null && break
+    sleep 1
+  done
+  if grep -q '"type": "summary"' "$DIR/cmd_env.jsonl" 2>/dev/null; then
+    say "  追蹤錄製器已關檔（summary 已寫入）"
+  else
+    say "  **追蹤錄製器未在 30 s 內關檔** ⇒ 封存核對會標為追蹤不完整"
+  fi
+fi
+
 say "[收尾 2/3] 等執行端完成封存（上限 ${ARCHIVE_WAIT_S} s）"
 # **不以「目錄內有任意 JSON」判定**：加入錄影後目錄會有其他產物，
 # 存在不等於執行結果已落盤。改為核對 sim/wb_run.json 能解析、
@@ -193,6 +216,7 @@ for i in $(seq "$ARCHIVE_WAIT_S"); do
   if [ -f "$DIR/sim/wb_run.json" ]; then
     if python3 evaluation/wgmpc_wg2_archive_check.py "$DIR" \
          --expect-recording --expect-arm-model "$ARM_MODEL" \
+         $([ "$CMD_ENV" = "1" ] && echo --expect-cmd-env "$DIR/cmd_env.jsonl") \
          --out "$DIR/archive_check.json" >/dev/null 2>&1; then
       ARCHIVE_OK=1; break
     fi
@@ -202,14 +226,15 @@ done
 say "  封存內容核對結果："
 python3 evaluation/wgmpc_wg2_archive_check.py "$DIR" \
   --expect-recording --expect-arm-model "$ARM_MODEL" \
+  $([ "$CMD_ENV" = "1" ] && echo --expect-cmd-env "$DIR/cmd_env.jsonl") \
   --out "$DIR/archive_check.json" 2>&1 | tee -a "$LOG"
 if [ "$ARCHIVE_OK" = "1" ]; then
   say "  **封存完整**（內容已核對，不只是檔案存在）"
-  echo '{"archive_complete": true, "basis": "wgmpc_wg2_archive_check.py 內容核對"}' \
+  echo '{"archive_complete": true, "basis": "wgmpc_wg2_archive_check.py 內容核對（含四段追蹤）"}' \
     > "$DIR/archive_status.json"
 else
   say "  **封存不完整 ⇒ 升級終止；結果保留，不自動重跑**"
-  echo '{"archive_complete": false, "basis": "wgmpc_wg2_archive_check.py 內容核對未通過", "reason": "執行端未在 '"$ARCHIVE_WAIT_S"' s 內完成可核對的封存"}' \
+  echo '{"archive_complete": false, "basis": "wgmpc_wg2_archive_check.py 內容核對未通過（模擬／影格／**四段追蹤**任一未過）", "reason": "未在 '"$ARCHIVE_WAIT_S"' s 內完成可核對的封存"}' \
     > "$DIR/archive_status.json"
 fi
 

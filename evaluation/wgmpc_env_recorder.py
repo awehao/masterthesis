@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 
@@ -72,10 +73,19 @@ def main() -> int:
     a = ap.parse_args()
     rclpy.init()
     nd = Rec(a.out)
+    # **受控結束**：預設的 SIGTERM 不會跑 finally，summary 就寫不出來，
+    # 事後只能靠「檔案存在」判斷 —— 那正是要避免的。
+    stop = {'v': False}
+
+    def _sig(_s, _f):
+        stop['v'] = True
+
+    signal.signal(signal.SIGTERM, _sig)
+    signal.signal(signal.SIGINT, _sig)
     t0 = time.monotonic()
     try:
-        while rclpy.ok() and (a.run_s <= 0
-                              or time.monotonic() - t0 < a.run_s):
+        while (rclpy.ok() and not stop['v']
+               and (a.run_s <= 0 or time.monotonic() - t0 < a.run_s)):
             rclpy.spin_once(nd, timeout_sec=0.05)
     except KeyboardInterrupt:
         pass

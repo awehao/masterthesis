@@ -137,6 +137,66 @@ def decode(data) -> dict:
             'stamp_sim_t': d[8], 'u': d[9:9 + NU]}
 
 
+def endpoint_event(ident, *, failed, fail_reported, seen_has, modified,
+                   exec_mode, sim_t, applied9, lam, chain_recv_seq,
+                   step_id) -> dict | None:
+    """執行端 stage 3 的**回報判定**（純函式，執行端與測試共用同一份）。
+
+    兩種事件**分開判定**：
+
+    * **失效停止**：不走「首次套用」去重。某筆命令可能已正常回報過首次
+      套用（已進 seen），之後才發生失效 —— 若共用同一個去重條件，
+      那個停止事件就會被擋掉。失效停止 `source_seq = −1`
+      （**不得冒稱原命令成功套用**），原命令序號只放診斷欄位。
+    * **首次套用**：同一個 `chain_recv_seq` 只報一次。
+
+    回傳 event dict 或 None。**話題與檔案共用這一份**，
+    不得在兩邊有不同的來源語意。
+    """
+    a9 = [round(float(v), 8) for v in applied9]
+    if failed and not fail_reported:
+        return {
+            'stage': 'endpoint', 'run_id': (ident['run_id'] if ident else 0.0),
+            'source_seq': -1,
+            'src_seq': (ident['adapter_out_seq'] if ident else -1),
+            'derived': False, 'kind': K_FAIL_LATCHED,
+            'kind_name': KIND_NAME[K_FAIL_LATCHED],
+            'recv_sim_t': (ident['recv_sim_t'] if ident else None),
+            'first_apply_sim_t': float(sim_t),
+            'physics_step_id': int(step_id),
+            'chain_recv_seq': int(chain_recv_seq),
+            'exec_mode': int(exec_mode), 'api_applied': True,
+            'applied9': a9, 'lam': lam,
+            'diag_last_source_seq_before_fail':
+                (ident['source_seq'] if ident else None),
+            'note': '**失效後自行產生的停止值，不是原命令成功套用**',
+        }
+    if (not failed) and ident is not None and not seen_has:
+        k = K_MODIFIED if modified else K_NORMAL
+        return {
+            'stage': 'endpoint', 'run_id': ident['run_id'],
+            'source_seq': ident['source_seq'],
+            'src_seq': ident['adapter_out_seq'],
+            'derived': bool(ident['derived']), 'kind': k,
+            'kind_name': KIND_NAME[k],
+            'recv_sim_t': ident['recv_sim_t'],
+            'first_apply_sim_t': float(sim_t),
+            'physics_step_id': int(step_id),
+            'chain_recv_seq': int(chain_recv_seq),
+            'exec_mode': int(exec_mode), 'api_applied': True,
+            'applied9': a9, 'lam': lam,
+            'diag_last_source_seq_before_fail': None,
+        }
+    return None
+
+
+def event_to_payload(ev, output_seq) -> list:
+    """由**同一份事件**組出話題 payload，確保兩邊來源語意一致。"""
+    return encode(ev['run_id'], ev['source_seq'], ST_ENDPOINT,
+                  int(output_seq), ev['src_seq'], ev['derived'],
+                  ev['first_apply_sim_t'], ev['applied9'], kind=ev['kind'])
+
+
 def describe() -> dict:
     return {
         'cols': list(COLS), 'schema': SCHEMA, 'n_fields': NFIELD,
