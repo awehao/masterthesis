@@ -204,6 +204,9 @@ class WGMPCConfig:
     w_br: float = 1.0e-3
     w_a: float = 1.0e-3
     w_s: float = 1.0e-3
+    # 變化率權重可分底盤／手臂；None = 沿用 w_s（預設，行為不變）
+    w_s_base: float | None = None
+    w_s_arm: float | None = None
     Qf_scale: float = 5.0
     # 速度框（逐軸）——  L1
     v_base_lin: float = 0.035255
@@ -265,8 +268,17 @@ class WGMPCConfig:
         return np.diag(w / (v * v))
 
     def S(self) -> np.ndarray:
+        """命令**變化率**權重。底盤與手臂可分開設。
+
+        `w_s_base` / `w_s_arm` 為 None 時沿用 `w_s`（與原行為完全相同）。
+        甩動發生在手臂；底盤的命令本來就平順，用同一個高權重壓它只會
+        拖慢末段沉降。
+        """
         v = self.vmax()
-        return np.diag(np.full(NU, self.w_s) / (v * v))
+        wb = self.w_s if self.w_s_base is None else self.w_s_base
+        wa = self.w_s if self.w_s_arm is None else self.w_s_arm
+        w = np.concatenate([np.full(3, wb), np.full(6, wa)])
+        return np.diag(w / (v * v))
 
     def wheel_matrix(self) -> np.ndarray:
         L = self.wheel_base_L

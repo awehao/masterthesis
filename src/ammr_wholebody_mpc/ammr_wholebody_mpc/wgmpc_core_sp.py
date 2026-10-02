@@ -207,6 +207,72 @@ def step_sp(z: np.ndarray, u: np.ndarray, cfg: WGMPCConfigSP) -> np.ndarray:
     return out
 
 
+def shape_near_target(u0, J, theta, e_p, e_r, u_prev, cfg,
+                      gamma=0.0, deadband_m=0.0, deadband_rad=0.0,
+                      tol_p=0.0, tol_r=0.0):
+    """**近目標輸出整形**：讓單週期命令的位移不超過當下殘差。
+
+    為什麼需要（rec10 實測）：每週期命令造成的 TCP 位移對當下誤差的比值
+    在遠離目標時是 0.1–0.4×，**但 5–20 mm 時 1.6×、2–5 mm 時 4.3×、
+    <2 mm 時 8.2×** —— 命令要求的位移遠大於要修正的誤差，必然過衝，
+    下一週期反向修正，形成極限環。近目標的命令翻號率
+    wz 18.1%、手臂 j2 31.6%（遠離目標皆 0%）。
+
+    規則：預測本週期的 TCP 位移 d_p = |J_p·B(θ)·u|·dt 與姿態變化
+    d_r = |J_ω·B(θ)·u|·dt；若超過 γ·**max(殘差, 容差)** 就把整個 u
+    等比例縮小到剛好不超過。**γ = 1 表示「一個週期最多把誤差走完」。**
+
+    **為什麼用 max(殘差, 容差) 而不是殘差本身**：姿態目標就是起始姿態，
+    所以 e_r 在起點恰好是 **0** —— 直接用 γ·e_r 會把整個命令縮到零、
+    機器人完全停住（實測踩過）。進了容差以內本來就不需要比容差更精確，
+    所以下限取容差。`tol_p`／`tol_r` 給 0 時退回用殘差本身。
+
+    這條規則**自己會在遠處失效**：遠離目標時 e 大、比值本來就 < 1，
+    不會縮放（實測 0.1–0.4×）。所以不需要另設「近目標區」的切換門檻。
+
+    `deadband_*`：殘差進入內圈時直接歸零（預設 0 = 不啟用）。
+    縮放已經讓 u 隨 e 平滑趨零，硬歸零只在需要完全停止輸出時才用。
+
+    **加速度框**：縮放後仍以 u_prev 為基準夾進 ±a_max·dt，
+    否則由大命令驟降到小命令會違反加速度保證。
+
+    回傳 (u_out, scale, reason)。**不改權重、視界或任何約束集合** ——
+    這是求解之後的輸出整形。
+    """
+    u = np.asarray(u0, float).copy()
+    if gamma <= 0.0 and deadband_m <= 0.0 and deadband_rad <= 0.0:
+        return u, 1.0, 'off'
+    B = body_to_world(float(theta))
+    qd = B @ u
+    dt = cfg.dt
+    d_p = float(np.linalg.norm(np.asarray(J)[:3, :] @ qd)) * dt
+    d_r = float(np.linalg.norm(np.asarray(J)[3:, :] @ qd)) * dt
+    reason = 'none'
+    scale = 1.0
+    if gamma > 0.0:
+        lim = 1.0
+        b_p = max(float(e_p), float(tol_p))
+        b_r = max(float(e_r), float(tol_r))
+        if d_p > 1e-12 and gamma * b_p < d_p:
+            lim = min(lim, gamma * b_p / d_p)
+        if d_r > 1e-12 and gamma * b_r < d_r:
+            lim = min(lim, gamma * b_r / d_r)
+        if lim < 1.0:
+            scale = lim
+            u = u * lim
+            reason = 'scaled'
+    if (deadband_m > 0.0 and e_p <= deadband_m
+            and deadband_rad > 0.0 and e_r <= deadband_rad):
+        u = np.zeros_like(u)
+        scale = 0.0
+        reason = 'deadband'
+    # **加速度框**：相對 u_prev 夾住，維持原有的加速度保證
+    up = np.asarray(u_prev, float)
+    adt = cfg.amax() * dt
+    u = up + np.clip(u - up, -adt, adt)
+    return u, scale, reason
+
+
 def plant_phys_step(q: np.ndarray, s: np.ndarray, u: np.ndarray,
                     cfg: WGMPCConfigSP, n_phys: int = 1):
     """受控對象的**逐物理步**推進，回傳 (q, s)。

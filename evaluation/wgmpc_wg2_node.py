@@ -65,7 +65,8 @@ from ammr_wholebody_mpc.arm_pregrasp import ARM_JOINTS          # noqa: E402
 from ammr_wholebody_mpc.wgmpc_core import (                     # noqa: E402
     NU, WGMPCConfig, body_to_world, solve, task_error)
 from ammr_wholebody_mpc.wgmpc_core_sp import (                   # noqa: E402
-    ArmSetpointModel, WGMPCConfigSP, make_z, plant_phys_step, solve_sp)
+    ArmSetpointModel, WGMPCConfigSP, make_z, plant_phys_step,
+    shape_near_target, solve_sp)
 from ammr_wholebody_mpc.wholebody_kinematics import (            # noqa: E402
     WholeBodyKinematics)
 import wgmpc_cmd_envelope as ENV                                 # noqa: E402
@@ -116,8 +117,14 @@ class WGMPCNode(Node):
             self.arm_model = ArmSetpointModel(
                 alpha=_id['alpha'], bias=_id['bias_rad'],
                 phys_dt=_id['phys_dt_measured_s'])
+            # `w_s` 是**命令變化率**的權重（S = w_s/vmax² · I）。原預設 1e-3 相對
+            # 誤差項（w_p=50）小了四個數量級：0.8 m 誤差給 50×0.8²=32／步，
+            # 滿框跳變只給 1e-3×2²=4e-3 ⇒ 命令怎麼甩都幾乎不花成本。
+            # 以 CLI 顯式傳入；**預設仍是 1e-3，不傳就與既有趟次完全相同。**
             self.cfg = WGMPCConfigSP(N=a.N, dt=1.0 / a.rate, tcp=a.tcp,
                                      arm_model=self.arm_model,
+                                     w_s=a.w_s, w_a=a.w_a,
+                                     w_s_base=a.w_s_base, w_s_arm=a.w_s_arm,
                                      row_scaling=not a.no_row_scaling)
             # G 由模型自行計算 —— **不從執行端 meta 取**
             _P, _Q, _G, _h, _kp = self.cfg.composed()
@@ -125,7 +132,9 @@ class WGMPCNode(Node):
             self.composed_kp = int(_kp)
         else:
             self.arm_model = None
-            self.cfg = WGMPCConfig(N=a.N, dt=1.0 / a.rate, tcp=a.tcp)
+            self.cfg = WGMPCConfig(N=a.N, dt=1.0 / a.rate, tcp=a.tcp,
+                                   w_s=a.w_s, w_a=a.w_a,
+                                   w_s_base=a.w_s_base, w_s_arm=a.w_s_arm)
             self.composed_G = None
             self.composed_kp = None
         # **同時刻配對**：各來源各自保存最近若干筆，鍵為 round(sim_t, 6)。
@@ -221,8 +230,12 @@ class WGMPCNode(Node):
                         if a.delay_comp_state_cycles >= 0.0 else _d0)
         self.d_cmd = (float(a.delay_comp_cmd_cycles)
                       if a.delay_comp_cmd_cycles >= 0.0 else _d0)
+        self._n_shaped = 0            # 輸出被近目標整形縮放的輪數
+        self._shape_scales = []
         self._n_pred_applied = 0      # 預推時用到**實際套用值**的次數
         self._n_pred_requested = 0    # 只能用請求值（尚未回報）的次數
+        self._last_pred_sel = []      # 最近一輪預推逐步選到的 (source_seq, 來源)
+        self._last_pub_t = None       # 最近一次發布的模擬時刻（未捨入）
         self._run_id_n = ENV.run_id_num(a.run_id or 'wgmpc_wg2')
         self._source_seq = 0
         self._env_meta_sent = False
@@ -265,10 +278,16 @@ class WGMPCNode(Node):
         m = Float64MultiArray()
         m.data = [float(x) for x in u_world]
         self.pub.publish(m)
+        # **一次讀時鐘，兩處共用**：封裝 stamp 與發布歷史先前各讀一次
+        # `sim_now()`，離線重播就分不清 _cmd_hist 用的是哪一個。
+        # 模擬時鐘 10 ms 才跳一次，兩次讀值幾乎總是相同；併成一次是去掉
+        # 這個歧義，不改發布內容。
+        _tpub = self.sim_now()
+        self._last_pub_t = float(_tpub)
         # **封裝**：身分與值同訊息。source_seq 逐筆遞增，全鏈據此關聯。
         if self.env_pub is not None:
             self._source_seq += 1
-            _t = self.sim_now()
+            _t = _tpub
             _em = Float64MultiArray()
             _em.data = ENV.encode(self._run_id_n, self._source_seq,
                                   ENV.ST_SOLVER, self._source_seq,
@@ -282,7 +301,7 @@ class WGMPCNode(Node):
                     ensure_ascii=False)))
         # **發布歷史**：延遲補償要知道哪些命令已發出但還沒生效。
         # 記下 source_seq，才能與執行端回報的實際套用值逐筆對上。
-        self._cmd_hist.append((self.sim_now(),
+        self._cmd_hist.append((_tpub,
                                np.asarray(u_body, float).copy(),
                                int(self._source_seq)))
         if len(self._cmd_hist) > 128:
@@ -316,11 +335,17 @@ class WGMPCNode(Node):
         D_state = self.d_state * self.cfg.dt
         D_cmd = self.d_cmd * self.cfg.dt
         if D_state <= 0.0 or not self._cmd_hist:
+            # **提早返回也要清空**：否則 `_last_pred_sel` 會留著上一輪的值，
+            # 紀錄裡看起來像本輪的選取 —— 陳舊值冒充當前值。
+            self._last_pred_sel = []
             return q, s, 0
         dtp = self.cfg.arm_model.phys_dt
         n = int(round(D_state / dtp))
         qq, ss = np.asarray(q, float).copy(), np.asarray(s, float).copy()
         use_applied = bool(self.a.use_applied_for_predict)
+        # **逐步選取紀錄**：離線重播要能逐筆核對「這一步用了哪個 source_seq、
+        # 用的是實際套用值還是請求值」。只寫欄位，不改選取規則。
+        sel = []
         for j in range(n):
             tau = t_snap + j * dtp - D_cmd
             uu, seq = None, None
@@ -331,13 +356,17 @@ class WGMPCNode(Node):
                     break
             if uu is None:
                 uu = np.zeros(NU)
+                sel.append((-1, 'zeros'))
             elif use_applied and seq in self._applied_by_seq:
                 # **實際套用值**優先（安全層／E2 可能已改過它）
                 uu = self._applied_by_seq[seq][0]
                 self._n_pred_applied += 1
+                sel.append((int(seq), 'applied'))
             else:
                 self._n_pred_requested += 1
+                sel.append((int(seq) if seq is not None else -1, 'requested'))
             qq, ss = plant_phys_step(qq, ss, uu, self.cfg, 1)
+        self._last_pred_sel = sel
         return qq, ss, n
 
     @staticmethod
@@ -681,6 +710,8 @@ class WGMPCNode(Node):
             _solve_sim_t0 = self.sim_now()
             _solve_wall0 = time.monotonic()
             _q_sol, _s_sol, _n_comp = q0, np.asarray(snap.s, float), 0
+            # 本輪若根本不做延遲補償，選取紀錄必須是空的，不是上一輪的殘留
+            self._last_pred_sel = []
             if self._gate is not None and self.d_state > 0.0:
                 _q_sol, _s_sol, _n_comp = self._predict_delay(
                     q0, np.asarray(snap.s, float), snap.sim_t)
@@ -754,6 +785,26 @@ class WGMPCNode(Node):
                                            round(float(np.abs(
                                                np.asarray(_q_sol)[3:]
                                                - q0[3:]).max()), 6))))
+            # ---- **求解輸入的完整紀錄**（供離線逐筆重播核對）----
+            # 先前只記 dq_pos_m／dq_arm_max_rad 兩個純量摘要、且都捨入到
+            # 1e-6，無法驗證求解器實際收到的 15 維預測狀態；離線重播因此
+            # 停在 p50 2.3e-4 / max 1.8e-2 rad/s 的殘差上。
+            # **全部不捨入**；時間也保留原始精度（log 另外那些欄位仍捨入
+            # 到 1e-6，維持既有工具可用）。
+            rec['solve_in'] = dict(
+                q_pred=[float(v) for v in np.asarray(_q_sol, float)],
+                s_pred=[float(v) for v in np.asarray(_s_sol, float)],
+                q_meas=[float(v) for v in np.asarray(q0, float)],
+                s_meas=[float(v) for v in np.asarray(snap.s, float)],
+                u_prev=[float(v) for v in np.asarray(u_prev, float)],
+                u_prev_src=src,
+                snap_sim_t_exact=float(snap.sim_t),
+                solve_start_sim_t_exact=float(_solve_sim_t0),
+                pred_sel=[[int(a_), str(b_)] for a_, b_ in self._last_pred_sel],
+                n_pred_applied_cycle=sum(
+                    1 for _, b_ in self._last_pred_sel if b_ == 'applied'),
+                n_pred_requested_cycle=sum(
+                    1 for _, b_ in self._last_pred_sel if b_ == 'requested'))
             if not r.ok:
                 n_no_sol += 1
                 rec['published'] = False
@@ -804,6 +855,27 @@ class WGMPCNode(Node):
                     slot, _m = self._reschedule(slot)
                     n_miss += _m
                     continue
+            # **到達判定與整形共用同一組誤差**：都用實測狀態 q0 的 FK，
+            # 不是核心預測。先算，供整形使用。
+            e = task_error(self.K, q0, T_des, self.cfg.tcp)
+            _ep, _er = float(np.linalg.norm(e[:3])), float(np.linalg.norm(e[3:]))
+            # ---- **近目標輸出整形**（求解之後，發布之前）----
+            # 與離線模擬共用 `shape_near_target`，不各寫一份。
+            _u_out, _shape_sc, _shape_rs = r.u0, 1.0, 'off'
+            if (self.a.near_target_gamma > 0.0
+                    or self.a.near_target_deadband_m > 0.0):
+                _u_out, _shape_sc, _shape_rs = shape_near_target(
+                    r.u0, self.K.jacobian(q0, self.cfg.tcp), float(q0[2]),
+                    _ep, _er, u_prev, self.cfg,
+                    gamma=self.a.near_target_gamma,
+                    deadband_m=self.a.near_target_deadband_m,
+                    deadband_rad=self.a.near_target_deadband_rad,
+                    tol_p=self.a.reach_pos_m, tol_r=self.a.reach_rot_rad)
+                if _shape_sc < 1.0:
+                    self._n_shaped += 1
+                self._shape_scales.append(float(_shape_sc))
+            rec['shape'] = {'scale': round(float(_shape_sc), 6),
+                            'reason': _shape_rs}
             if self._t_sim0 is None:
                 # 任務的**模擬時間**起點 = 首次成功發布那一輪的快照時間
                 self._t_sim0 = snap.sim_t
@@ -811,12 +883,14 @@ class WGMPCNode(Node):
             self._last_solved_sim_t = snap.sim_t
             rec['publish_sim_t'] = round(self.sim_now(), 6)
             # 四段紀錄裡的 request 段**用同一個值**，不另算一次轉換
-            u_world = self._publish_u(r.u0, float(q0[2]))
+            u_world = self._publish_u(_u_out, float(q0[2]))
+            # `_publish_u` 內部只讀一次時鐘，這裡記下**它用的那一個值**
+            # （未捨入）。既有的 publish_sim_t 仍保留，不動既有工具。
+            rec['publish_sim_t_exact'] = self._last_pub_t
             n_pub += 1
             U_warm = r.U
-            e = task_error(self.K, q0, T_des, self.cfg.tcp)
-            _ep, _er = float(np.linalg.norm(e[:3])), float(np.linalg.norm(e[3:]))
             # **到達並保持**：用實測狀態算的 FK 誤差，不是核心預測。
+            # （e／_ep／_er 已於整形前算出，此處沿用同一組值）
             _in_tol = (_ep <= self.a.reach_pos_m and _er <= self.a.reach_rot_rad)
             if _in_tol:
                 if self._hold_t0 is None:
@@ -839,7 +913,7 @@ class WGMPCNode(Node):
             _stages = {
                 'request': {'frame': 'world', 'v': [round(float(x), 8)
                                                     for x in u_world],
-                            'body': [round(float(x), 8) for x in r.u0],
+                            'body': [round(float(x), 8) for x in _u_out],
                             'yaw': round(float(q0[2]), 9),
                             'src_sim_t': round(snap.sim_t, 6),
                             'at_mono': round(_now_m, 6)},
@@ -864,7 +938,9 @@ class WGMPCNode(Node):
                                      else round(snap.sim_t - self._hold_t0, 4)),
                        published=True,
                        request_world=[round(float(x), 8) for x in u_world],
-                       request_body=[round(float(x), 8) for x in r.u0],
+                       request_body=[round(float(x), 8) for x in _u_out],
+                       request_body_presolve=[round(float(x), 8)
+                                              for x in r.u0],
                        # **兩次座標轉換用的 yaw 與時間**各自記錄：
                        # 本節點用 snap 的 yaw；adapter 用它自己收到的 /odom yaw。
                        # 往返代數正確**只在同一 yaw 下**成立，
@@ -890,6 +966,12 @@ class WGMPCNode(Node):
                     delay_comp_state_cycles=float(self.d_state),
                     delay_comp_cmd_cycles=float(self.d_cmd),
                     use_applied_for_predict=bool(self.a.use_applied_for_predict),
+                    near_target_gamma=float(self.a.near_target_gamma),
+                    n_shaped=int(self._n_shaped),
+                    shape_scale_p50=(float(np.percentile(self._shape_scales, 50))
+                                     if self._shape_scales else None),
+                    shape_scale_min=(float(min(self._shape_scales))
+                                     if self._shape_scales else None),
                     n_pred_applied=int(self._n_pred_applied),
                     n_pred_requested=int(self._n_pred_requested),
                     cmd_env=bool(self.a.cmd_env),
@@ -1009,6 +1091,13 @@ def main() -> int:
                     help='**模擬時間**預算上限（0 = 不啟用）。'
                          '錄影會拖慢 sim:wall，只靠牆鐘上限會讓任務拿到的'
                          '模擬時間比無錄影趟次少 ⇒ 要與 free4 對齊時用這個。')
+    ap.add_argument('--near-target-gamma', type=float, default=0.0,
+                    help='**近目標輸出整形**：把單週期命令的 TCP 位移限制在'
+                         'γ × 當下殘差以內（0 = 關閉）。'
+                         'rec10 量到該比值在 <2 mm 時達 8.2 倍 ⇒ 必然過衝。'
+                         '**求解之後的輸出整形，不改權重／視界／約束集合。**')
+    ap.add_argument('--near-target-deadband-m', type=float, default=0.0)
+    ap.add_argument('--near-target-deadband-rad', type=float, default=0.0)
     ap.add_argument('--cmd-env', action='store_true',
                     help='啟用**命令追蹤封裝**（身分與九維值同訊息）。'
                          '既有九維路徑與限制不變。')
@@ -1056,6 +1145,20 @@ def main() -> int:
                     default=os.path.join(_HERE, 'results',
                                          'wgmpc_arm_sp_ident_free4.json'),
                     help='setpoint 模式用的辨識檔（α、b、physics_dt）')
+    ap.add_argument('--w-s', type=float, default=1e-3,
+                    help='命令變化率權重（S = w_s/vmax² · I）。'
+                         '預設 1e-3 = 既有值；離線掃描指出 0.1 可同時抑制'
+                         '移動段的命令甩動與保持窗的極限環')
+    ap.add_argument('--w-a', type=float, default=1e-3,
+                    help='手臂命令大小權重（R 的手臂部分，以 vmax² 正規化）。'
+                         '預設 1e-3 = 既有值；0.05 可把 SQP 的 no_progress 壓到 0')
+    ap.add_argument('--w-s-arm', type=float, default=None,
+                    help='只給**手臂**的變化率權重；None = 沿用 --w-s。'
+                         'S 以 vmax² 正規化，底盤 vmax 0.0353 ⇒ 既有 1e-3 '
+                         '對底盤等效 0.805、對手臂只有 1e-3（差 800 倍），'
+                         '甩動只發生在手臂 ⇒ 分開設才對症')
+    ap.add_argument('--w-s-base', type=float, default=None,
+                    help='只給**底盤**的變化率權重；None = 沿用 --w-s')
     ap.add_argument('--no-row-scaling', action='store_true',
                     help='關閉等價正值列縮放（對照用）')
     ap.add_argument('--handshake-timeout-s', type=float, default=20.0,

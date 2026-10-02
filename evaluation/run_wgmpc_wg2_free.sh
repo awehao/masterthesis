@@ -24,6 +24,12 @@ URDF_TF="$WS/evaluation/models/omni_bot_manip.urdf"
 # ---- 事前定版的配置（見 preregistration）----
 N=5; RATE=20; SIM_LIMIT=120
 OFFSET="0.25 0.15 0.05"
+# **絕對世界座標目標**（可選）。設了就用 --target 取代 --target-offset：
+# 遠目標的判準（認證可達上界、必要底盤位移）都以**絕對座標**算，
+# 用偏移會讓結果相依於實測起始 TCP。
+#   遠目標 B： ABS_TARGET="1.0 0.0 0.45" REC_TARGET="1.00000,0.00000,0.45000"
+# 見 evaluation/results/wgmpc_wg2_far_target_B_spec.yaml
+ABS_TARGET="${ABS_TARGET:-}"
 REACH_P=0.005; REACH_R=0.02; HOLD_S=2.0
 VMAX_BASE_LIN=0.035255; VMAX_BASE_ANG=0.199900; VMAX_ARM=0.999900
 # **模型選擇要顯式傳入**：節點預設是 ideal，不傳就會跑成原核心。
@@ -41,6 +47,18 @@ DELAY_CMD="${DELAY_CMD:-1.0}"
 # rec9 逐筆量到安全層會修改 **38.1%** 的命令 ⇒ 預推改用**實際套用值**
 #（需 CMD_ENV=1；尚未回報的才退回請求值）
 USE_APPLIED="${USE_APPLIED:-1}"
+# **近目標輸出整形**：把單週期命令的 TCP 位移限制在 γ × 當下殘差以內。
+# rec10 量到該比值遠離目標 0.1–0.4×、但 5–20 mm 時 1.6×、2–5 mm 時 4.3×、
+# **<2 mm 時 8.2×** ⇒ 必然過衝、形成極限環（近目標命令翻號率 wz 18.1%、
+# 手臂 j2 31.6%，遠離目標皆 0%）。規則**自己在遠處不作用**。
+# 0 = 關閉（與 rec10–rec13 相同）。**求解之後的輸出整形，不改權重／視界／約束。**
+NEAR_GAMMA="${NEAR_GAMMA:-0}"
+# 命令變化率權重。預設 1e-3 = 既有值；0.1 為離線掃描選出的新值。
+W_S="${W_S:-0.001}"
+# 手臂命令大小權重。預設 1e-3 = 既有值；0.05 為離線選出的新值。
+W_A="${W_A:-0.001}"
+# 只壓手臂的變化率權重（空字串 = 沿用 W_S）。離線選出 0.05。
+W_S_ARM="${W_S_ARM:-}"
 # **命令追蹤封裝**：身分 (run_id, source_seq) 與九維值同訊息，全鏈四段各記
 # output_seq。啟用後**三端都改走封裝**（唯一控制入口），既有九維路徑不參與。
 # 預設啟用，設 CMD_ENV=0 可退回既有九維路徑。
@@ -63,11 +81,14 @@ REC_RES="1280x720"; REC_FPS=10
 #（與「水平光圈 20.955 mm、焦距 24 mm」的假設相符），
 # 故不再用悲觀 20° 的 4.45 m —— 那讓畫面過空、機器人只佔 313/720 像素。
 # 3.80 m 對 vFOV 24° 仍涵蓋八個角點，機器人高約 367/720 像素。
-REC_AT="0.1322,0.0000,0.4468"
-REC_EYE="2.1183,-2.9471,1.7923"
+REC_AT="${REC_AT:-0.1322,0.0000,0.4468}"
+REC_EYE="${REC_EYE:-2.1183,-2.9471,1.7923}"
 # 目標標記：名目 FK（q=0）＋偏移。與 free4 實錄差 0.0016 m，遠小於標記半徑
 # 0.020 m。**權威目標是節點在趟中算出並寫進 wg2_out.json 的那一個。**
-REC_TARGET="0.44700,0.15000,0.44999"
+REC_TARGET="${REC_TARGET:-0.44700,0.15000,0.44999}"
+# 錄影起始模擬時間。預設 0 = 整趟（含約 24 s 的靜止握手段，佔影片一半以上）。
+# 遠目標趟次設成任務開始前一點，影片才不會一半是靜止畫面。
+REC_FROM="${REC_FROM:-0}"
 
 PIDS=(); NAMES=()
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
@@ -83,22 +104,31 @@ spawn(){ local n="$1"; shift; setsid "$@" >>"$LOG" 2>&1 </dev/null &
 
 say "=== WG2 首趟自由空間整合測試 RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID ==="
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
-say "判準：N=$N dt=$(python3 -c "print(1/$RATE)") 偏移=($OFFSET) 到達≤${REACH_P}m/${REACH_R}rad 保持${HOLD_S}s"
+if [ -n "$ABS_TARGET" ]; then
+  say "判準：N=$N dt=$(python3 -c "print(1/$RATE)") **絕對目標**=($ABS_TARGET) 到達≤${REACH_P}m/${REACH_R}rad 保持${HOLD_S}s"
+else
+  say "判準：N=$N dt=$(python3 -c "print(1/$RATE)") 偏移=($OFFSET) 到達≤${REACH_P}m/${REACH_R}rad 保持${HOLD_S}s"
+fi
 say "**手臂執行模型：$ARM_MODEL**（辨識檔 $(basename "$ARM_IDENT")）"
 say "**迴路延遲補償（兩種時間分開）：D_state=$DELAY_STATE、D_cmd=$DELAY_CMD 個控制週期**（rec9 逐筆量到）"
+say "**近目標輸出整形 γ = $NEAR_GAMMA**（0 = 關閉）"
+say "**命令權重 w_s = $W_S / w_a = $W_A / w_s_arm = ${W_S_ARM:-（沿用 w_s）}**（既有值皆 0.001）"
 say "**預推命令來源：$([ "$USE_APPLIED" = 1 ] && [ "$CMD_ENV" = 1 ] && echo '實際套用值優先（安全層修改 38.1%）' || echo '發布的請求值')**"
 say "**命令追蹤封裝：$([ "$CMD_ENV" = 1 ] && echo 啟用 || echo 關閉)**"$([ "$CMD_ENV" = 1 ] && echo "（三端同時啟用；落盤 $DIR/cmd_env.jsonl）")
-say "錄影：$REC_RES @ ${REC_FPS}fps、模擬器內相機、at=$REC_AT eye=$REC_EYE target=$REC_TARGET"
+say "錄影：$REC_RES @ ${REC_FPS}fps、模擬器內相機、at=$REC_AT eye=$REC_EYE target=$REC_TARGET 自 sim ${REC_FROM}s"
 say "時間預算：模擬 ${TASK_SIM_S}s（與 free4 的 59.61s 對齊）、牆鐘上限 ${TASK_WALL_S}s"
 python3 - <<EOF | tee -a "$LOG"
 import json, os
 json.dump({'arm_model': '$ARM_MODEL', 'arm_ident': '$ARM_IDENT',
            'N': $N, 'rate_hz': $RATE, 'offset_m': [$(echo $OFFSET | tr ' ' ',')],
+           'abs_target_m': $([ -n "$ABS_TARGET" ] && echo "[$(echo $ABS_TARGET | tr ' ' ',')]" || echo None),
            'reach_pos_m': $REACH_P, 'reach_rot_rad': $REACH_R,
            'hold_s': $HOLD_S, 'sim_limit_s': $SIM_LIMIT,
            'delay_comp_state_cycles': $DELAY_STATE,
            'delay_comp_cmd_cycles': $DELAY_CMD,
            'use_applied_for_predict': ($USE_APPLIED == 1 and $CMD_ENV == 1),
+           'near_target_gamma': $NEAR_GAMMA, 'w_s': $W_S, 'w_a': $W_A,
+           'w_s_arm': $([ -n "$W_S_ARM" ] && echo $W_S_ARM || echo None),
            'delay_comp_note': ('**兩種時間分開**；值由 rec9 的逐筆序號量到'
                                '（D_pub 0.60 ＋ D_cmd 1.00 ⇒ D_state 1.60）'),
            'cmd_env': {'enabled': ($CMD_ENV == 1),
@@ -126,7 +156,7 @@ spawn isaac "$ISAAC_PY" -u evaluation/isaac_wholebody_sim_e2.py \
   --solver-label wgmpc_wg2 \
   --record-frames "$DIR/frames" --record-res "$REC_RES" \
   --record-fps "$REC_FPS" --record-at "$REC_AT" --record-eye "$REC_EYE" \
-  --record-target "$REC_TARGET" $ENV_ISAAC \
+  --record-target "$REC_TARGET" --record-from "$REC_FROM" $ENV_ISAAC \
   --run-label "WG2 自由空間閉迴路：W-GMPC N=5（$ARM_MODEL 模型）到達與保持"
 say "  等 Isaac 起 scene（最多 180 s）"
 for i in $(seq 180); do
@@ -186,8 +216,11 @@ python3 -u evaluation/wgmpc_wg2_node.py \
   --delay-comp-state-cycles "$DELAY_STATE" \
   --delay-comp-cmd-cycles "$DELAY_CMD" \
   $([ "$USE_APPLIED" = "1" ] && [ "$CMD_ENV" = "1" ] && echo --use-applied-for-predict) \
+  --near-target-gamma "$NEAR_GAMMA" --w-s "$W_S" --w-a "$W_A" \
+  $([ -n "$W_S_ARM" ] && echo --w-s-arm "$W_S_ARM") \
   $ENV_NODE --run-id "$RUN_ID" \
-  --N "$N" --rate "$RATE" --target-offset $OFFSET \
+  --N "$N" --rate "$RATE" \
+  $([ -n "$ABS_TARGET" ] && echo "--target $ABS_TARGET" || echo "--target-offset $OFFSET") \
   --reach-pos-m "$REACH_P" --reach-rot-rad "$REACH_R" --hold-s "$HOLD_S" \
   --duration-s "$TASK_WALL_S" --duration-sim-s "$TASK_SIM_S" \
   --u-prev-policy strict --assume-initial-rest \

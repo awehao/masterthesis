@@ -147,8 +147,13 @@ def main() -> int:
         back = np.asarray(w2b(list(u_world), th), float)
         mx = max(mx, float(np.abs(back - u_body).max()))
     ck('本體→世界→(adapter)→本體 可往返', mx < 1e-12, f'  max|Δ| {mx:.2e}')
-    ck('節點在發布前做 body→world',
-       'body_to_world(float(q0[2])) @ r.u0' in src)
+    # 先前這裡比對字面 `body_to_world(float(q0[2])) @ r.u0`。近目標整形引入後
+    # 節點改成 `self._publish_u(_u_out, float(q0[2]))`，轉換搬進 `_publish_u`，
+    # 字面不再出現 ⇒ **這是斷言過時，不是轉換不見了**（往返檢查仍通過）。
+    # 改成核對結構：轉換在 _publish_u 內、且發布走的是這條路徑。
+    ck('節點在發布前做 body→world（於 _publish_u 內）',
+       'u_world = body_to_world(float(theta)) @ np.asarray(u_body, float)' in src
+       and 'self._publish_u(_u_out, float(q0[2]))' in src)
     ck('**反例**：少做 body→world 會與往返結果不同',
        float(np.abs(np.asarray(
            w2b(list(np.array([0.03, -0.02, 0.15, 0, 0, 0, 0, 0, 0])), 0.7),

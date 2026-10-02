@@ -47,7 +47,23 @@ def shv(src, name):
     （實測踩過：N 被讀成「5（$ARM_MODEL 模型）到達與保持」）。
     """
     m = re.findall(rf'(?:^|;\s*){re.escape(name)}="?([^"\n;]*)"?', src, re.M)
-    return m[-1] if m else None
+    if not m:
+        return None
+    v = m[-1]
+    # 支援 `VAR="${VAR:-預設值}"` 的寫法：取預設值。
+    # （先前只認字面賦值，遇到這種形式會把 '${REC_TARGET:-0.44700' 當成值。）
+    d = re.fullmatch(r'\$\{' + re.escape(name) + r':-(.*)\}', v)
+    return d.group(1) if d else v
+
+
+def eff(src, name):
+    """**實際會生效的值**：環境變數優先，其次是 runner 裡的字面／預設值。
+
+    遠目標趟次由環境變數傳 ABS_TARGET / REC_TARGET / REC_AT / REC_EYE，
+    只讀 runner 原始碼會核到近目標的設定，與真正要跑的那一組不同。
+    """
+    v = os.environ.get(name)
+    return v if v not in (None, '') else shv(src, name)
 
 
 def code_only(src):
@@ -73,8 +89,13 @@ def main() -> int:
     print('A  模型選擇確實傳入')
     ck('runner 傳 --arm-model', '--arm-model "$ARM_MODEL"' in src,
        f'ARM_MODEL={shv(src, "ARM_MODEL")}')
+    # 原本比對整串 `${ARM_MODEL:-setpoint}` —— 那是因為舊的 shv 無法解析
+    # `${VAR:-預設}`，把整串當成值。shv 修好後要分兩件事核：
+    #   (a) 寫法仍是**可由環境覆寫的預設**（保留這個契約）
+    #   (b) 解析出來的預設值是 setpoint，不是節點預設的 ideal
     ck('預設值為 setpoint（不是節點預設的 ideal）',
-       shv(src, 'ARM_MODEL') == '${ARM_MODEL:-setpoint}',
+       'ARM_MODEL="${ARM_MODEL:-setpoint}"' in src
+       and shv(src, 'ARM_MODEL') == 'setpoint',
        str(shv(src, 'ARM_MODEL')))
     ck('runner 傳 --arm-ident', '--arm-ident "$ARM_IDENT"' in src, '')
     ck('辨識檔存在且可解析', os.path.exists(IDENT), IDENT)
@@ -166,14 +187,33 @@ def main() -> int:
     tcp = L4[:, [ci['tcp_x'], ci['tcp_y'], ci['tcp_z']]]
     bas = L4[:, [ci['base_x'], ci['base_y']]]
     T0 = K.fk(np.zeros(9), 'link_tcp')[:3, 3]
-    tgt = T0 + np.array([float(x) for x in shv(src, 'OFFSET').split()])
-    PAD = 0.12
-    pts = np.vstack([P, tcp, np.column_stack([bas, np.zeros(len(bas))]),
-                     tgt[None, :]])
-    lo, hi = pts.min(0) - PAD, pts.max(0) + PAD
+    _abs = eff(src, 'ABS_TARGET')
+    if _abs:
+        # **遠目標**：目標與包絡都不能沿用近目標的。包絡取自已登錄的
+        # B 規格（離線預覽軌跡逐連桿 FK），不在此重跑閉迴路。
+        tgt = np.array([float(x) for x in _abs.split()])
+        bspec = os.path.join(HERE, 'results', 'wgmpc_wg2_far_target_B_spec.yaml')
+        if not os.path.exists(bspec):
+            FAIL.append('遠目標趟次但找不到 B 規格：' + bspec)
+            lo, hi = tgt - 0.5, tgt + 0.5
+        else:
+            import yaml
+            fr = yaml.safe_load(open(bspec))['framing']
+            lo = np.array(fr['envelope_lo'], float)
+            hi = np.array(fr['envelope_hi'], float)
+            ck('遠目標與 B 規格一致',
+               np.linalg.norm(tgt - np.array(
+                   yaml.safe_load(open(bspec))['target']['world_m'])) < 1e-9,
+               f'ABS_TARGET={tgt.tolist()}')
+    else:
+        tgt = T0 + np.array([float(x) for x in shv(src, 'OFFSET').split()])
+        PAD = 0.12
+        pts = np.vstack([P, tcp, np.column_stack([bas, np.zeros(len(bas))]),
+                         tgt[None, :]])
+        lo, hi = pts.min(0) - PAD, pts.max(0) + PAD
     lo[2] = max(0.0, lo[2])
-    at = np.array([float(x) for x in shv(src, 'REC_AT').split(',')])
-    eye = np.array([float(x) for x in shv(src, 'REC_EYE').split(',')])
+    at = np.array([float(x) for x in eff(src, 'REC_AT').split(',')])
+    eye = np.array([float(x) for x in eff(src, 'REC_EYE').split(',')])
     corners = np.array(list(itertools.product(*zip(lo, hi))))
 
     def frac(vf_deg, margin=0.12):
@@ -197,8 +237,10 @@ def main() -> int:
         return wh, wv
 
     d = float(np.linalg.norm(eye - at))
-    ck('包絡含 URDF 連桿、free4 軌跡、底盤與目標', True,
-       f'lo {np.round(lo,3)} hi {np.round(hi,3)}　相機距離 {d:.2f} m')
+    ck('包絡含 URDF 連桿、' + ('B 規格離線軌跡' if _abs else 'free4 軌跡')
+       + '、底盤與目標', True,
+       f'lo {np.round(lo,3)} hi {np.round(hi,3)}　相機距離 {d:.2f} m'
+       + ('　**遠目標**' if _abs else ''))
     # **FOV 已由 rec5 實拍反推**（≈26–27.6°，與光圈假設相符）；
     # 判定改用 24° 起跳的實測範圍，不再用無依據的悲觀 20°。
     for vf in (24.0, 26.0, 27.6):
@@ -208,12 +250,12 @@ def main() -> int:
            f'水平佔 {wh*100:.0f}%、垂直佔 {wv*100:.0f}% 的可用框')
     ck('目標標記與名目目標一致（權威值由節點趟中寫入）',
        np.linalg.norm(
-           np.array([float(x) for x in shv(src, 'REC_TARGET').split(',')])
+           np.array([float(x) for x in eff(src, 'REC_TARGET').split(',')])
            - tgt) < 0.001,
-       f'標記 {shv(src, "REC_TARGET")}　名目 {np.round(tgt,5)}；'
-       f'free4 實錄差 '
-       f'{np.linalg.norm(tgt - np.array(w4["target_tcp"])):.4f} m '
-       f'< 標記半徑 0.020 m')
+       f'標記 {eff(src, "REC_TARGET")}　名目 {np.round(tgt,5)}'
+       + ('' if _abs else f'；free4 實錄差 '
+          f'{np.linalg.norm(tgt - np.array(w4["target_tcp"])):.4f} m '
+          f'< 標記半徑 0.020 m'))
     REP['framing'] = {'at': at.tolist(), 'eye': eye.tolist(),
                       'distance_m': round(d, 3),
                       'envelope_lo': lo.tolist(), 'envelope_hi': hi.tolist(),

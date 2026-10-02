@@ -57,7 +57,8 @@ def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
         hold_s=2.0, tcp='link_tcp', delay_cycles=0.0,
         compensate=0.0, comp_mode='pipe', jitter_cycles=0.0,
         seed=0, measure_comp=False, u_prev_mode='applied',
-        d_pub_cycles=0.0, comp_state=None, comp_cmd=None):
+        d_pub_cycles=0.0, comp_state=None, comp_cmd=None,
+        gamma=0.0, deadband_m=0.0, deadband_rad=0.0):
     """`delay_cycles`：命令從算出到真正套用的延遲（以控制週期計）。
 
     實跑量到的端到端延遲 ≈ 1.40 個週期（rec7：發布延遲 0.60 ＋ cmd_age 0.60
@@ -85,7 +86,8 @@ def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
     t = 0.0
     hold_t0 = None
     rec = {'t': [], 'ep': [], 'er': [], 'sat': [], 'ok': [],
-           'u_req': [], 'u_app': []}
+           'u_req': [], 'u_app': [], 'q': [], 's': [],
+           'n_sqp': [], 'sqp_stop': []}
     reached_held = False
     n_fail = 0
     cs = compensate if comp_state is None else comp_state
@@ -155,13 +157,28 @@ def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
         else:
             u = r.u0
             U_warm = r.U
-        e = task_error(K, q, T_des, tcp)      # 判準用**實際**狀態，不用預測
+        # **近目標輸出整形**（與節點共用 S.shape_near_target）
+        e_now = task_error(K, q, T_des, tcp)
+        if gamma > 0.0 or deadband_m > 0.0:
+            Jn = K.jacobian(q, tcp)
+            u, _sc, _rs = S.shape_near_target(
+                u, Jn, float(q[2]),
+                float(np.linalg.norm(e_now[:3])),
+                float(np.linalg.norm(e_now[3:])),
+                u_prev, cfg, gamma=gamma,
+                deadband_m=deadband_m, deadband_rad=deadband_rad,
+                tol_p=reach_p, tol_r=reach_r)
+        e = e_now                              # 判準用**實際**狀態，不用預測
         ep, er = float(np.linalg.norm(e[:3])), float(np.linalg.norm(e[3:]))
         rec['t'].append(t); rec['ep'].append(ep); rec['er'].append(er)
         rec['sat'].append(float(np.abs(u[3:]).max() / cfg.v_arm))
         rec['ok'].append(bool(r.ok))
         rec['u_req'].append(u.copy())
         rec['u_app'].append(applied_last.copy())
+        rec['q'].append(q.copy())         # 本輪求解時的**實際**狀態
+        rec['s'].append(s.copy())
+        rec['n_sqp'].append(int(r.n_sqp_used))
+        rec['sqp_stop'].append(str(r.sqp_stop_reason))
         if ep <= reach_p and er <= reach_r:
             if hold_t0 is None:
                 hold_t0 = t
@@ -193,7 +210,8 @@ def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
                   else u.copy())
         t += cfg.dt
     for k in rec:
-        rec[k] = np.array(rec[k])
+        if k != 'sqp_stop':
+            rec[k] = np.array(rec[k])
     return {'reached_held': reached_held, 'n_fail': n_fail,
             't_reach': (float(hold_t0) if reached_held else None),
             'rec': rec}
@@ -248,6 +266,7 @@ def main() -> int:
     ap.add_argument('--sweep-base-gain', action='store_true')
     ap.add_argument('--sweep-split', action='store_true')
     ap.add_argument('--sweep-measured', action='store_true')
+    ap.add_argument('--sweep-gamma', action='store_true')
     ap.add_argument('--compensate', type=float, default=0.0)
     a = ap.parse_args()
     ident, K, q0, T_des, w = load_scene(a.run, a.ident)
@@ -275,6 +294,23 @@ def main() -> int:
               f" {np.percentile(er,50):10.4f}"
               f" {np.mean(np.abs(U[:,3:]).max(axis=1)/0.9992>0.95):8.3f}"
               f" {int(((ep<=0.005)&(er<=0.02)).sum()):7d}")
+        return 0
+    if a.sweep_gamma:
+        print('=== 近目標輸出整形（γ）掃描；延遲與補償用量到的值 ===')
+        print('  D_pub 0.60、D_cmd 1.00、補償 state 1.6 / cmd 1.0')
+        print(f"  {'γ':>8} {'到達保持':>8} {'到達s':>7} {'err_p 末':>10}"
+              f" {'err_r 末':>10} {'飽和':>7} {'同時達標':>8}")
+        for g in (0.0, 0.5, 1.0, 1.5, 2.0, 3.0):
+            r = run(cfg, K, q0, s0, T_des, t_end=a.t_end,
+                    delay_cycles=1.0, d_pub_cycles=0.6,
+                    comp_state=1.6, comp_cmd=1.0, comp_mode='hist',
+                    gamma=g)
+            m = summarise(r, '')
+            print(f"  {('關閉' if g == 0 else f'{g:.1f}'):>8}"
+                  f" {str(m['reached_held']):>8}"
+                  f" {str(round(m['t_reach_s'],2) if m['t_reach_s'] else '-'):>7}"
+                  f" {m['err_p_final']:10.6f} {m['err_r_final']:10.6f}"
+                  f" {m['sat_frac']:7.3f} {m['n_in_tol']:8d}")
         return 0
     if a.sweep_measured:
         print('=== 用 rec9 **逐筆量到**的值：D_pub 0.60、D_cmd 1.00 '

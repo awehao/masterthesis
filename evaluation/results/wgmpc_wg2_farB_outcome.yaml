@@ -1,0 +1,215 @@
+# 遠目標 B 首測結果
+# 判準在實跑前已寫定於 evaluation/results/wgmpc_wg2_far_target_B_spec.yaml，未事後更動。
+# 重現：python3 evaluation/wgmpc_wg2_farB_verdict.py evaluation/runs/wgmpc_wg2_farB_171109
+
+run:
+  id: wgmpc_wg2_farB_171109
+  target_world_m: [1.0, 0.0, 0.45]
+  gamma: 1.0
+  domain: 117
+  stop_why: loop_end
+  sim_span_s: [0.03, 45.46]
+  n_published_cycles: 402
+  n_physics_steps: 4544
+  n_missed_slot: 0
+  n_warm_discard: 0
+  n_sim_stall: 0
+  aborted_predecessor:
+    id: wgmpc_wg2_farB_170945
+    why: 漏傳 NEAR_GAMMA（會以 γ=0 執行，與規格登錄的離線預覽不一致）
+    when: Isaac 載入中、無任何量測產出
+    note: 已於該目錄留 ABORTED.txt；不計入任何統計
+
+verdicts:
+  A_reach_and_hold:
+    pass: true
+    hold_window_sim_s: [42.390, 44.390]
+    hold_s: 2.000
+    n_physics_steps: 200          # 門檻 >= 200
+    err_in_window: {pos_p50_mm: 0.70, pos_max_mm: 4.08,
+                    rot_p50_mrad: 1.42, rot_max_mrad: 5.76}
+  B_base_participation:
+    pass: true
+    t_eval: {physics_step: 4236, sim_t: 42.390}   # TCP 進入容差的那一物理步
+    net_displacement_m: 0.553859                  # **判準值**
+    certified_lower_bound_with_tol_m: 0.155207
+    certified_lower_bound_exact_m: 0.160207
+    margin_m: 0.398652
+    not_the_criterion:                            # 一併記錄，但不用於判定
+      path_length_to_t_eval_m: 0.617571
+      net_displacement_at_end_m: 0.556663
+    delta_m: 0.000080        # 未用到（位移遠高於下界）
+  C_simultaneous_motion:
+    pass: true
+    n_transit_cycles: 362
+    both_moving_frac: 0.99    # 門檻 >= 0.80
+    base_moving_frac: 1.00
+    arm_moving_frac: 0.99
+    base_axis_saturated_frac: 0.56
+    arm_saturated_frac: 0.14
+    arm_cmd_frac_of_box: {p50: 0.36, iqr: [0.18, 0.61]}
+    caveat: >
+      底盤有 56% 的移動時間處於逐軸飽和，那段是「底盤全速、手臂補其餘」。
+      同動 99% **不等於**非瑣碎的分配。
+  D_hold_window_vibration:
+    threshold: 無（依規格只記錄）
+    measured:
+      oscillation_period_cycles: 2        # 自相關峰僅 +0.17 ⇒ 週期性很弱
+      acf_peak: 0.17
+      presolve_cmd_rms_rad_s: 0.0081
+      tcp_path_mm: 5.1
+      base_path_mm: 4.85
+      tcp_p2p_mm: {x: 3.53, y: 1.69, z: 1.54}
+      j3_applied_rate_4_7Hz_band: {rms_rad_s: 0.0077, variance_frac: 0.12}
+      shape_scale_p50: 1.0000             # 整形幾乎未咬住
+      lam_p50: 1.0000
+      e2_modified_frac: 0.000
+    near_target_baseline_for_reference:   # **並列供如實呈現，不可逐項對比**
+      run: wgmpc_wg2_g1p0_111058
+      oscillation_period_cycles: 4
+      acf_peak: 0.81
+      presolve_cmd_rms_rad_s: 0.2740
+      tcp_path_mm: 51.7
+      j3_applied_rate_4_7Hz_band: {rms_rad_s: 0.1200, variance_frac: 0.80}
+      shape_scale_p50: 0.4992
+
+transit_motion_quality:        # **我原本沒看這一段；Howard 從影片指出手臂瘋狂振動**
+  window_sim_s: [24.25, 42.39]
+  n_cycles: 362
+  finding: 移動段手臂確實在大幅來回，**且是求解器命令的**，不是平台反應
+  commanded_arm_presolve:      # 整形前的求解器輸出
+    sign_flip_rate: {qd1: 0.404, qd2: 0.360, qd3: 0.321, qd4: 0.429,
+                     qd5: 0.388, qd6: 0.330}       # 平均 37.2%
+    p2p_rad_s: [1.78, 2.00, 2.00, 1.51, 2.00, 1.73]  # 速度框是 ±0.9999 ⇒ 幾乎打滿
+    travel_over_p2p: [41.9, 64.1, 48.8, 47.5, 63.7, 43.2]  # 命令在自身範圍內來回 40–64 次
+    at_velocity_box_frac: 0.177   # 至少一軸 >99% 框的週期比例
+  measured_joint_motion:
+    travel_over_net_p2p: {j1: 6.93, j2: 1.92, j3: 1.50, j4: 9.74, j5: 1.99, j6: 2.51}
+    reading: >
+      j4 來回走了 0.935 rad 才換到 0.096 rad 的淨變化；j1 是 6.93 倍。
+      j1/j4/j6 在 4–7 Hz 頻帶的變異佔比 0.34/0.45/0.35。
+  tcp:
+    path_m: 1.6967
+    net_displacement_m: 0.8020
+    path_over_net: 2.116          # TCP 走了淨位移的 2.1 倍
+    speed_p50_mm_s: 71.8
+    speed_max_mm_s: 359.8
+    accel_p95_mm_s2: 3590
+  error_monotonicity:
+    cycles_error_increased_frac: 0.213    # 單調下降應接近 0
+    wasted_backtrack_mm: 108.2            # 佔淨降量 801.5 mm 的 13.5%
+  solver_convergence:           # **與近目標基準差異最大的一項**
+    far_B: {n_sqp_p50: 9, hit_iteration_cap_frac: 0.467,
+            stop_reasons: {converged_cost: 259, no_progress: 102, converged_step: 1},
+            no_progress_frac: 0.282}
+    near_baseline: {n_sqp_p50: 3, hit_iteration_cap_frac: 0.0,
+                    stop_reasons: {converged_cost: 30, converged_step: 1},
+                    no_progress_frac: 0.0}
+    solve_wall_ms: {far_B_p50: 59.4, far_B_max: 149.2, near_p50: 23.1}
+    note: >
+      n_missed_slot = 0：RTF 0.58 下 50 ms 模擬時間 = 86 ms 牆鐘，
+      59 ms 的求解仍落在時槽內，所以沒有漏槽。
+  horizon_context:              # 事實，**不是**已證實的機制
+    horizon_s: 0.25             # N=5 × dt=0.05
+    base_reach_in_horizon_mm: 8.8
+    arm_reach_in_horizon_mm: 125    # 1 rad/s × 約 0.5 m 力臂
+    initial_position_error_mm: 806
+    horizon_covers_frac_of_initial_error: 0.166
+    transit_frac_with_target_beyond_horizon: 0.64
+    hypothesis_not_supported: >
+      我原本猜「目標超出視界可及範圍」是不收斂的原因。**資料不支持**：
+      誤差仍在視界之外時 no_progress 佔 20.8%，降到視界可及之後反而升到 41.2%。
+      方向相反 ⇒ 收回這個解釋，不另編一個。
+  criterion_C_was_too_weak:     # **我寫的判準的缺陷，不只是這一趟的問題**
+    what_C_asked: 底盤與手臂是否「同時在動」>= 80%
+    result: 99% 通過
+    why_inadequate: >
+      一支在速度框之間來回甩的手臂完全滿足「在動」。C 量不到運動品質。
+      要量品質至少需要：TCP 路徑/淨位移、命令翻號率、誤差單調性。
+      這三項本趟分別是 2.12、37.2%、21.3% —— 都很差。
+
+interpretation:
+  supported: >
+    **自由空間全身到達**：目標超出已認證的固定底盤可達上界（0.839793 m），
+    實測底盤淨位移 0.5538 m 遠高於認證必要下界 0.155207 m，
+    移動期間底盤與手臂同動 99%，TCP 進入 5 mm / 0.02 rad 並保持 2.0 s
+    （200 個物理步獨立複核）。
+  not_supported:
+    - >
+      **移動段的運動品質**。A/B/C 都是端點或粗略性質，量不到過程；
+      實測 TCP 路徑是淨位移的 2.12 倍、手臂命令翻號率 37.2%、
+      誤差有 21.3% 的週期在變大。這一趟**不適合當成平穩全身到達的示範**。
+    - 保持振動已解決。本趟振動數字較低（TCP 路徑 5.1 vs 51.7 mm），
+      但**不能據此宣稱改善**：(1) 終端手臂構型與近目標基準差異很大，
+      雅可比與姿態都不同；(2) n=1；(3) 近目標案例本身就有趟間雙態 ——
+      7 趟中有 2 趟未進入極限環（TCP 路徑 11.5／11.6 mm）。
+      單趟不足以分辨「遠目標不產生極限環」與「這一趟剛好沒進入」。
+    - 接觸式操作、抽屜任務、無振動驗證。
+
+gaps_and_watch_items:
+  cmd_env_recording_gap:
+    fact: >
+      錄製器自報 solver 406 筆、n_rejected 0，但 n_source_seq = 412
+      ⇒ **漏錄 6 筆**（1.5%）。保持窗內有 3 個週期（seq 388/394/399）
+      在 safety／adapter／endpoint 三段都查無對應列。
+    evidence_commands_were_applied: >
+      那三個週期的節點紀錄都是 api_applied=True、n_rejected=0、
+      n_recv 連續遞增（411/417/422），誤差在容差內。
+      ⇒ 這是**錄製缺口，不是命令遺失**；但那 3 個週期的逐筆鏈路無法重建。
+  mesh_collision:
+    status: "**未驗證**"
+    why: >
+      log 欄位中**沒有任何**接觸／力／穿透欄位。可得的只有
+      freespace_scene_children（own_colliders 20、foreign_colliders 0，
+      確認場景無外部碰撞體）與「趟次未因失效閂鎖中止」。
+      兩者都不能證明手臂與底盤之間無網格層級穿透。
+  j3_start_margin:
+    start_slack_rad: 0.009872
+    min_j3_in_run_rad: -0.001215      # 即起始值，趟中未再往負走
+    reading: 本趟 j3 未貼近該界
+  model_sync:
+    isaac_tcp_vs_node_fk: {max_mm: 0.079, p50_mm: 0.005, n_sampled: 414}
+  guards_not_started: [arm_vel_gate, wheel_limit_guard]   # 由執行端自報
+  thermal:
+    cpu_start_c: 67.125
+    cpu_max_c: 90.125
+    cpu_limit_c: 92.0
+    headroom_c: 1.875
+    reading: >
+      **逼近中止線**。本趟未觸發，但餘裕只有 1.875 °C；
+      下一趟若要連跑，起跑前溫度與機器負載都要先降下來。
+
+video_quality:                  # 影片難看的原因（**與量測無關**，資料不受影響）
+  symptom: 播放起來極不流暢
+  not_the_cause:
+    dropped_frames: 影格在模擬時間上**精確等距 0.1 s**（index 的間距唯一值就是 0.1）
+    recording_defect: 455 格全部寫出，無缺號
+  actual_causes:
+    dead_time: >
+      **53.4% 的影片（243 格 / 模擬 24.25 s）是起動與握手，機器人完全靜止。**
+      錄影窗預設涵蓋整趟，沒有裁到任務區間。
+    sub_pixel_motion: >
+      以相機模型投影計算，每影格畫面位移：
+      TCP 全片 p50 **0.00 px**、p90 2.82、max 8.71；
+      移動段 TCP p50 1.39 px、底盤 p50 0.92 px；保持段 TCP p50 0.00 px。
+      一半以上的影格之間畫面位移不到 1 像素 ⇒ 讀起來像幻燈片而非運動。
+    smaller_in_frame: >
+      為了框進 1.72 m 的行程，相機退到 5.55 m，機器人（高 0.9 m）約佔畫面
+      244/720 = 34%；近目標那趟是 370/720 = 51%。
+    slow_by_configuration: >
+      底盤速度框 v_base_lin = 0.035255 m/s，只有輪速能力 0.2775 m/s 的
+      **12.7%**。0.55 m 的行程因此需要 18.1 s。這是事前定版的限制，
+      不是控制器表現不良；要改必須另行核准，本輪未改。
+  remedies_applied:              # 只用既有影格重編，**未重跑 Isaac、未改任何參數**
+    - video_task.mp4：裁掉起動段（自 sim 23.53 起，220 格），10 fps，21.9 s，原速
+    - video_task_3x.mp4：同樣 220 格以 30 fps 輸出 = **3 倍速**，7.3 s
+  remedy_not_possible_without_rerun: 相機位置（機器人在畫面中的大小）
+
+artifacts:
+  run_dir: evaluation/runs/wgmpc_wg2_farB_171109
+  video_full: evaluation/runs/wgmpc_wg2_farB_171109/video.mp4        # 455 格 @10fps = 45.5 s（含 53% 靜止起動段）
+  video_task: evaluation/runs/wgmpc_wg2_farB_171109/video_task.mp4   # 裁切、原速 21.9 s
+  video_task_3x: evaluation/runs/wgmpc_wg2_farB_171109/video_task_3x.mp4  # 裁切、**3 倍速** 7.3 s
+  hold_plot: evaluation/results/wgmpc_wg2_hold_vibration_farB.png
+  verdict_script: evaluation/wgmpc_wg2_farB_verdict.py
+  spec: evaluation/results/wgmpc_wg2_far_target_B_spec.yaml
