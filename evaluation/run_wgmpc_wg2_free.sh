@@ -29,11 +29,18 @@ VMAX_BASE_LIN=0.035255; VMAX_BASE_ANG=0.199900; VMAX_ARM=0.999900
 # **模型選擇要顯式傳入**：節點預設是 ideal，不傳就會跑成原核心。
 ARM_MODEL="${ARM_MODEL:-setpoint}"
 ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
-# **迴路延遲補償**：這是**沿用的補償設定**，不是已逐筆量測的延遲。
-# 1.4 的由來是工程估計（發布延遲 ＋ cmd_age ＋ 一物理步）加上離線閉迴路
-# 的重現，**但 cmd_age 不是傳遞延遲**，D_cmd 目前仍量不到 ——
-# 要等含逐筆序號的趟次才能對帳。**不改權重、視界或任何限制。**
-DELAY_COMP="${DELAY_COMP:-1.4}"
+# **迴路延遲補償：兩種時間分開**（rec9 由逐筆序號**量到**，不再是估計）
+#   D_pub（量測 → 發布）  p50 0.60 週期
+#   D_cmd（發布 → 生效）  p50 1.00 週期
+#   ⇒ D_state = D_pub + D_cmd ≈ 1.60 週期
+# 先前用單一 1.4 同時當兩者：對 D_state 接近，對 D_cmd 偏高 0.4 ⇒ 查表取錯命令。
+# 離線以量到的值重跑：三種「混用單一 D」都失敗，只有**拆分**能到達並保持。
+# **不改權重、視界或任何限制。**
+DELAY_STATE="${DELAY_STATE:-1.6}"
+DELAY_CMD="${DELAY_CMD:-1.0}"
+# rec9 逐筆量到安全層會修改 **38.1%** 的命令 ⇒ 預推改用**實際套用值**
+#（需 CMD_ENV=1；尚未回報的才退回請求值）
+USE_APPLIED="${USE_APPLIED:-1}"
 # **命令追蹤封裝**：身分 (run_id, source_seq) 與九維值同訊息，全鏈四段各記
 # output_seq。啟用後**三端都改走封裝**（唯一控制入口），既有九維路徑不參與。
 # 預設啟用，設 CMD_ENV=0 可退回既有九維路徑。
@@ -78,7 +85,8 @@ say "=== WG2 首趟自由空間整合測試 RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID
 say "起跑前 CPU $(python3 evaluation/cpu_temp.py)"
 say "判準：N=$N dt=$(python3 -c "print(1/$RATE)") 偏移=($OFFSET) 到達≤${REACH_P}m/${REACH_R}rad 保持${HOLD_S}s"
 say "**手臂執行模型：$ARM_MODEL**（辨識檔 $(basename "$ARM_IDENT")）"
-say "**迴路延遲補償：$DELAY_COMP 個控制週期**（**沿用的補償設定，非已逐筆量測的延遲**）"
+say "**迴路延遲補償（兩種時間分開）：D_state=$DELAY_STATE、D_cmd=$DELAY_CMD 個控制週期**（rec9 逐筆量到）"
+say "**預推命令來源：$([ "$USE_APPLIED" = 1 ] && [ "$CMD_ENV" = 1 ] && echo '實際套用值優先（安全層修改 38.1%）' || echo '發布的請求值')**"
 say "**命令追蹤封裝：$([ "$CMD_ENV" = 1 ] && echo 啟用 || echo 關閉)**"$([ "$CMD_ENV" = 1 ] && echo "（三端同時啟用；落盤 $DIR/cmd_env.jsonl）")
 say "錄影：$REC_RES @ ${REC_FPS}fps、模擬器內相機、at=$REC_AT eye=$REC_EYE target=$REC_TARGET"
 say "時間預算：模擬 ${TASK_SIM_S}s（與 free4 的 59.61s 對齊）、牆鐘上限 ${TASK_WALL_S}s"
@@ -88,9 +96,11 @@ json.dump({'arm_model': '$ARM_MODEL', 'arm_ident': '$ARM_IDENT',
            'N': $N, 'rate_hz': $RATE, 'offset_m': [$(echo $OFFSET | tr ' ' ',')],
            'reach_pos_m': $REACH_P, 'reach_rot_rad': $REACH_R,
            'hold_s': $HOLD_S, 'sim_limit_s': $SIM_LIMIT,
-           'delay_comp_cycles': $DELAY_COMP,
-           'delay_comp_note': ('**沿用的補償設定，非已逐筆量測的延遲**；'
-                               'D_cmd 要等含序號的趟次才能對帳'),
+           'delay_comp_state_cycles': $DELAY_STATE,
+           'delay_comp_cmd_cycles': $DELAY_CMD,
+           'use_applied_for_predict': ($USE_APPLIED == 1 and $CMD_ENV == 1),
+           'delay_comp_note': ('**兩種時間分開**；值由 rec9 的逐筆序號量到'
+                               '（D_pub 0.60 ＋ D_cmd 1.00 ⇒ D_state 1.60）'),
            'cmd_env': {'enabled': ($CMD_ENV == 1),
                        'record': '$DIR/cmd_env.jsonl',
                        'note': ('啟用時三端**都**改走封裝（唯一控制入口），'
@@ -173,7 +183,10 @@ say "  起 W-GMPC 節點（**--arm-model $ARM_MODEL**、N=$N、u_prev=strict ＋
   echo "**找不到辨識檔 $ARM_IDENT**" | tee -a "$LOG"; exit 66; }; }
 python3 -u evaluation/wgmpc_wg2_node.py \
   --arm-model "$ARM_MODEL" --arm-ident "$ARM_IDENT" \
-  --delay-comp-cycles "$DELAY_COMP" $ENV_NODE --run-id "$RUN_ID" \
+  --delay-comp-state-cycles "$DELAY_STATE" \
+  --delay-comp-cmd-cycles "$DELAY_CMD" \
+  $([ "$USE_APPLIED" = "1" ] && [ "$CMD_ENV" = "1" ] && echo --use-applied-for-predict) \
+  $ENV_NODE --run-id "$RUN_ID" \
   --N "$N" --rate "$RATE" --target-offset $OFFSET \
   --reach-pos-m "$REACH_P" --reach-rot-rad "$REACH_R" --hold-s "$HOLD_S" \
   --duration-s "$TASK_WALL_S" --duration-sim-s "$TASK_SIM_S" \

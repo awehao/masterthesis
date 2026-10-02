@@ -247,6 +247,7 @@ def main() -> int:
     ap.add_argument('--sweep-jitter', action='store_true')
     ap.add_argument('--sweep-base-gain', action='store_true')
     ap.add_argument('--sweep-split', action='store_true')
+    ap.add_argument('--sweep-measured', action='store_true')
     ap.add_argument('--compensate', type=float, default=0.0)
     a = ap.parse_args()
     ident, K, q0, T_des, w = load_scene(a.run, a.ident)
@@ -274,6 +275,27 @@ def main() -> int:
               f" {np.percentile(er,50):10.4f}"
               f" {np.mean(np.abs(U[:,3:]).max(axis=1)/0.9992>0.95):8.3f}"
               f" {int(((ep<=0.005)&(er<=0.02)).sum()):7d}")
+        return 0
+    if a.sweep_measured:
+        print('=== 用 rec9 **逐筆量到**的值：D_pub 0.60、D_cmd 1.00 '
+              '⇒ D_state 1.60 ===')
+        print('  （先前節點用單一 D = 1.4 同時當 state 與 cmd）')
+        print(f"  {'補償設定':>30} {'到達保持':>8} {'到達s':>7}"
+              f" {'err_p 末':>10} {'err_r 末':>10} {'飽和':>7} {'同時達標':>8}")
+        for cs_, cc_, lab in (
+                (0.0, 0.0, '不補償'),
+                (1.4, 1.4, '混用單一 D=1.4（rec8/rec9 節點）'),
+                (1.6, 1.6, '混用單一 D=1.6'),
+                (1.0, 1.0, '混用單一 D=1.0'),
+                (1.6, 1.0, '**分開 state 1.6 / cmd 1.0（量到值）**')):
+            r = run(cfg, K, q0, s0, T_des, t_end=a.t_end,
+                    delay_cycles=1.0, d_pub_cycles=0.6,
+                    comp_state=cs_, comp_cmd=cc_, comp_mode='hist')
+            m = summarise(r, '')
+            print(f"  {lab:>30} {str(m['reached_held']):>8}"
+                  f" {str(round(m['t_reach_s'],2) if m['t_reach_s'] else '-'):>7}"
+                  f" {m['err_p_final']:10.5f} {m['err_r_final']:10.5f}"
+                  f" {m['sat_frac']:7.3f} {m['n_in_tol']:8d}")
         return 0
     if a.sweep_split:
         print('=== 兩種時間分開 vs 混用（D_pub 0.6、D_cmd 0.6 ⇒ D_state 1.2）===')

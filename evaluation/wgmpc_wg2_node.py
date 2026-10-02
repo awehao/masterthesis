@@ -169,6 +169,7 @@ class WGMPCNode(Node):
         self._last_solved_key = None
         self._last_solved_sim_t = None
         self._cmd_hist = []
+        self._applied_by_seq = {}
         # 命令三階段，各自只存**最後一筆不可變 tuple**
         self._modified = None       # (tuple9_world, mono)
         self._ep_req = None         # (tuple9_body, mono)  —— **E2 之前**
@@ -188,6 +189,11 @@ class WGMPCNode(Node):
         _lat.durability = DurabilityPolicy.TRANSIENT_LOCAL
         self.create_subscription(String, '/coman/applied_cmd_meta',
                                  self._on_applied_meta, _lat)
+        if a.cmd_env and a.use_applied_for_predict:
+            # **實際套用值**：逐筆帶 source_seq，可與自己的發布對上。
+            self.create_subscription(Float64MultiArray,
+                                     ENV.TOPIC[ENV.ST_ENDPOINT],
+                                     self._on_applied_env, 10)
         if a.arm_model == 'setpoint':
             self.create_subscription(Float64MultiArray,
                                      '/coman/arm_setpoint', self._on_sp, 10)
@@ -208,6 +214,15 @@ class WGMPCNode(Node):
             String, ENV.TOPIC[ENV.ST_SOLVER] + '_meta',
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
             if a.cmd_env else None)
+        # **兩種時間分開**（rec9 逐筆量到 D_state ≈ 1.60、D_cmd ≈ 1.00）。
+        # 給負值時沿用舊的單一 --delay-comp-cycles，保持回溯相容。
+        _d0 = float(a.delay_comp_cycles)
+        self.d_state = (float(a.delay_comp_state_cycles)
+                        if a.delay_comp_state_cycles >= 0.0 else _d0)
+        self.d_cmd = (float(a.delay_comp_cmd_cycles)
+                      if a.delay_comp_cmd_cycles >= 0.0 else _d0)
+        self._n_pred_applied = 0      # 預推時用到**實際套用值**的次數
+        self._n_pred_requested = 0    # 只能用請求值（尚未回報）的次數
         self._run_id_n = ENV.run_id_num(a.run_id or 'wgmpc_wg2')
         self._source_seq = 0
         self._env_meta_sent = False
@@ -265,9 +280,11 @@ class WGMPCNode(Node):
                     dict(ENV.describe(), run_id=self.a.run_id,
                          run_id_num=self._run_id_n, stage='solver'),
                     ensure_ascii=False)))
-        # **發布歷史**：延遲補償要知道哪些命令已發出但還沒生效
+        # **發布歷史**：延遲補償要知道哪些命令已發出但還沒生效。
+        # 記下 source_seq，才能與執行端回報的實際套用值逐筆對上。
         self._cmd_hist.append((self.sim_now(),
-                               np.asarray(u_body, float).copy()))
+                               np.asarray(u_body, float).copy(),
+                               int(self._source_seq)))
         if len(self._cmd_hist) > 128:
             self._cmd_hist.pop(0)
         return u_world
@@ -275,33 +292,51 @@ class WGMPCNode(Node):
     def _predict_delay(self, q, s, t_snap):
         """把量測狀態推到**命令真正生效的時刻**，回傳 (q, s, n_used)。
 
-        迴路延遲 D 由 `--delay-comp-cycles` 給（以控制週期計）。
-        rec7 實錄量到端到端 ≈ **1.40 個週期**（發布延遲 0.60 ＋ cmd_age 0.60
-        ＋ 一個物理步），離線重現該趟行為所需的延遲是 1.5 個週期 —— 兩者吻合。
+        **兩種時間必須分開**（先前用同一個 D 做兩件事是錯的）：
 
-        語意：時刻 τ 作用的命令是 **τ − D** 時已發布的最新一筆。
-        要把狀態由 t_snap 推到 t_snap + D，用的是 [t_snap − D, t_snap)
-        這段**已發布**的命令 —— 全部已知，**不預測未來輸入**。
+            量測 ──D_pub──> 發布 ──D_cmd──> 生效
+            └──────── D_state = D_pub + D_cmd ────────┘
+
+        * `d_state`：狀態要往前推多久。
+        * `d_cmd`：由發布歷史倒查命令時的偏移 —— 時刻 τ 作用的命令是
+          **τ − d_cmd** 時已發布的那一筆。
+
+        rec9 **逐筆量到**：D_pub p50 0.60、D_cmd p50 1.00 ⇒ D_state ≈ 1.60。
+        先前節點用單一 1.4 同時當兩者：對 D_state 接近，對 D_cmd 偏高 0.4，
+        查表會取到錯的命令。離線以量到的值重跑：只有**拆分**能到達並保持。
+
+        **命令來源**：rec9 量到安全層會修改 **38.1%** 的命令，所以
+        「發布的命令就是手臂會收到的」不成立。啟用
+        `--use-applied-for-predict` 時，若該筆已有執行端回報的實際套用值
+        就用它；尚未回報的（真正還在途中）才退回請求值。
 
         核心的預測模型本身**沒有**這個延遲；本函式只改求解的**起點狀態**，
         不改權重、視界或任何限制。
         """
-        D = float(self.a.delay_comp_cycles) * self.cfg.dt
-        if D <= 0.0 or not self._cmd_hist:
+        D_state = self.d_state * self.cfg.dt
+        D_cmd = self.d_cmd * self.cfg.dt
+        if D_state <= 0.0 or not self._cmd_hist:
             return q, s, 0
         dtp = self.cfg.arm_model.phys_dt
-        n = int(round(D / dtp))
+        n = int(round(D_state / dtp))
         qq, ss = np.asarray(q, float).copy(), np.asarray(s, float).copy()
+        use_applied = bool(self.a.use_applied_for_predict)
         for j in range(n):
-            tau = t_snap + j * dtp - D
-            uu = None
-            for (tp, up) in self._cmd_hist:
+            tau = t_snap + j * dtp - D_cmd
+            uu, seq = None, None
+            for (tp, up, sq) in self._cmd_hist:
                 if tp <= tau + 1e-12:
-                    uu = up
+                    uu, seq = up, sq
                 else:
                     break
             if uu is None:
                 uu = np.zeros(NU)
+            elif use_applied and seq in self._applied_by_seq:
+                # **實際套用值**優先（安全層／E2 可能已改過它）
+                uu = self._applied_by_seq[seq][0]
+                self._n_pred_applied += 1
+            else:
+                self._n_pred_requested += 1
             qq, ss = plant_phys_step(qq, ss, uu, self.cfg, 1)
         return qq, ss, n
 
@@ -343,6 +378,25 @@ class WGMPCNode(Node):
             sp_exec_mode=(sp[4] if sp else -1),
             sp_api_applied=(bool(sp[5]) if sp else False),
             paired_sources=tuple(self._need))
+
+    def _on_applied_env(self, m):
+        """`/coman/applied_env`：執行端回報的**實際套用值**（body 座標）。
+
+        以 `source_seq` 建索引，供延遲補償改用實際值而非自己發布的請求。
+        rec9 逐筆量到安全層會修改 **38.1%** 的命令，所以用請求值預推會錯。
+        `derived = 0`（停止／無命令）的那些**不可歸屬**，不入索引。
+        """
+        try:
+            e = ENV.decode(m.data)
+        except ValueError:
+            return
+        if not e['derived'] or e['source_seq'] < 0:
+            return
+        self._applied_by_seq[e['source_seq']] = (
+            np.asarray(e['u'], float), float(e['stamp_sim_t']))
+        if len(self._applied_by_seq) > 256:
+            for k in sorted(self._applied_by_seq)[:len(self._applied_by_seq) - 256]:
+                self._applied_by_seq.pop(k, None)
 
     def _on_sp(self, m):
         """`/coman/arm_setpoint`。**只寫緩衝與閘門，不在此下任何裁示。**"""
@@ -471,6 +525,7 @@ class WGMPCNode(Node):
         self._last_solved_key = None  # 已求解過的快照鍵（µs）
         self._last_solved_sim_t = None
         self._cmd_hist = []
+        self._applied_by_seq = {}
         slot = 0
         U_warm = None
         n_pub = n_drop_age = n_no_sol = 0
@@ -626,7 +681,7 @@ class WGMPCNode(Node):
             _solve_sim_t0 = self.sim_now()
             _solve_wall0 = time.monotonic()
             _q_sol, _s_sol, _n_comp = q0, np.asarray(snap.s, float), 0
-            if self._gate is not None and self.a.delay_comp_cycles > 0.0:
+            if self._gate is not None and self.d_state > 0.0:
                 _q_sol, _s_sol, _n_comp = self._predict_delay(
                     q0, np.asarray(snap.s, float), snap.sim_t)
             if self._gate is not None:
@@ -688,7 +743,9 @@ class WGMPCNode(Node):
                        n_dup_skip=self._n_dup_skip,
                        n_missed_slot=self._n_missed_slot,
                        delay_comp=dict(
-                           cycles=float(self.a.delay_comp_cycles),
+                           d_state_cycles=float(self.d_state),
+                           d_cmd_cycles=float(self.d_cmd),
+                           use_applied=bool(self.a.use_applied_for_predict),
                            n_phys_steps=int(_n_comp),
                            dq_pos_m=(None if _n_comp == 0 else round(float(
                                np.linalg.norm(np.asarray(_q_sol)[:3]
@@ -830,7 +887,11 @@ class WGMPCNode(Node):
                 U_warm = None
                 self._n_warm_discard += 1
         return dict(stop_why=self._stop_why,
-                    delay_comp_cycles=float(self.a.delay_comp_cycles),
+                    delay_comp_state_cycles=float(self.d_state),
+                    delay_comp_cmd_cycles=float(self.d_cmd),
+                    use_applied_for_predict=bool(self.a.use_applied_for_predict),
+                    n_pred_applied=int(self._n_pred_applied),
+                    n_pred_requested=int(self._n_pred_requested),
                     cmd_env=bool(self.a.cmd_env),
                     n_source_seq=int(self._source_seq),
                     slot_basis='simulation_clock',
@@ -953,6 +1014,20 @@ def main() -> int:
                          '既有九維路徑與限制不變。')
     ap.add_argument('--run-id', default='',
                     help='趟次識別，進封裝的 run_id')
+    ap.add_argument('--delay-comp-state-cycles', type=float, default=-1.0,
+                    help='**D_state**：量測 → 命令生效（狀態要往前推多久）。'
+                         '< 0 時沿用 --delay-comp-cycles。'
+                         'rec9 逐筆量到 ≈ 1.60 個週期'
+                         '（D_pub 0.60 ＋ D_cmd 1.00）。')
+    ap.add_argument('--delay-comp-cmd-cycles', type=float, default=-1.0,
+                    help='**D_cmd**：發布 → 生效（由發布歷史倒查命令時的偏移）。'
+                         '< 0 時沿用 --delay-comp-cycles。'
+                         'rec9 逐筆量到 ≈ 1.00 個週期。'
+                         '**與 D_state 不是同一個量，不可混用。**')
+    ap.add_argument('--use-applied-for-predict', action='store_true',
+                    help='預推時優先採用**執行端回報的實際套用值**'
+                         '（需 --cmd-env）。rec9 量到安全層會修改 38.1% 的命令，'
+                         '所以「發布的命令就是手臂會收到的」不成立。')
     ap.add_argument('--delay-comp-cycles', type=float, default=0.0,
                     help='**迴路延遲補償**（以控制週期計，0 = 關閉）。'
                          '求解前用已驗證的受控對象模型與**已發布**的在途命令'
