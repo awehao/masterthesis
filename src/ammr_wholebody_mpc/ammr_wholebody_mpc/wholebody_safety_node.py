@@ -127,6 +127,8 @@ class WholeBodySafetyNode(Node):
         # ＋ 各連桿 TF 有效且新鮮。本節點**另外**要求資料本身不是
         # 缺失／過期，兩者皆成立才套用。預設 False。
         p('freespace_confirmed', False)
+        # WG2 命令追蹤封裝（**額外**路徑，預設關閉；既有路徑與限制不變）
+        p('cmd_env', False)
 
         g = lambda k: self.get_parameter(k).value
         self.report_frame = str(g('report_frame'))
@@ -260,6 +262,23 @@ class WholeBodySafetyNode(Node):
         self.create_subscription(PointCloud2, '/arm_link_distance/points',
                                  self._on_pts, 10)
         self.create_subscription(Float64MultiArray, '~/cmd_in', self._on_cmd, 10)
+        # ---- WG2 命令追蹤封裝（**額外**路徑；既有 ~/cmd_in、~/cmd_out 不變）----
+        # 啟用時改**消費封裝本身**（九維值就在封裝裡），不另發旁路資料。
+        # 本段**每次輸出**都有自己的 output_seq，並保留來源：
+        # 同一請求可能被多次處理、被修改、或被替換成停止命令。
+        self._env_on = bool(self.get_parameter('cmd_env').value)
+        self._env_src = None        # 最近一筆來源 (run_id, source_seq, out_seq)
+        self._env_out_seq = 0
+        self._env_pub = None
+        if self._env_on:
+            # 格式的**權威定義在套件內**，兩邊共用同一份，不各寫一份。
+            from . import cmd_envelope as _m
+            self._ENV = _m
+            self.create_subscription(Float64MultiArray,
+                                     _m.TOPIC[_m.ST_SOLVER],
+                                     self._on_cmd_env, 10)
+            self._env_pub = self.create_publisher(
+                Float64MultiArray, _m.TOPIC[_m.ST_SAFETY], 10)
         # 配對例外所需：相位來源與障礙物名稱對照
         from rclpy.qos import QoSProfile, DurabilityPolicy
         _lat = QoSProfile(depth=1)
@@ -405,6 +424,22 @@ class WholeBodySafetyNode(Node):
         self.cmd = np.array(d, dtype=float)
         self.cmd_t = self._now()
 
+    def _on_cmd_env(self, msg: Float64MultiArray) -> None:
+        """封裝入口：**值就在封裝裡**，與 `_on_cmd` 走同一套處理。
+
+        另外記下來源身分 `(run_id, source_seq, upstream output_seq)`，
+        供本段每次輸出保留關聯。**不改任何既有檢查或限制。**
+        """
+        try:
+            e = self._ENV.decode(msg.data)
+        except ValueError:
+            self.get_logger().warn('cmd_env 格式不符，已丟棄',
+                                   throttle_duration_sec=2.0)
+            return
+        self._env_src = (e['run_id'], e['source_seq'], e['output_seq'])
+        self.cmd = np.array(e['u'], dtype=float)
+        self.cmd_t = self._now()
+
     # -------------------------------------------------------------- loop
     def _base_q(self):
         """Base pose from TF, refused when the transform has gone stale.
@@ -545,6 +580,22 @@ class WholeBodySafetyNode(Node):
         m = Float64MultiArray()
         m.data = [float(v) for v in out]
         self.pub.publish(m)
+        if self._env_pub is not None:
+            # **每次輸出**都有自己的 output_seq。
+            # derived = 1：由某筆來源導出（**可能已被修改**）。
+            # derived = 0：本段自行產生（停止命令、無命令、缺資料等），
+            #              此時沒有上游來源可對應。
+            self._env_out_seq += 1
+            _drv = bool(self._env_src is not None and reason == 0.0)
+            _rid = self._env_src[0] if self._env_src else 0.0
+            _ssq = self._env_src[1] if self._env_src else -1
+            _usq = self._env_src[2] if self._env_src else -1
+            _em = Float64MultiArray()
+            _em.data = self._ENV.encode(
+                _rid, _ssq if _drv else -1, self._ENV.ST_SAFETY,
+                self._env_out_seq, _usq if _drv else -1, _drv,
+                float(now), [float(v) for v in out])
+            self._env_pub.publish(_em)
         # **來源 meta 的重新鍵入**：以本節點收到的輸入值配對上游，
         # 再以輸出值為鍵發布。配不到就明載未配對，不冒稱來源時間。
         import time as _pt2

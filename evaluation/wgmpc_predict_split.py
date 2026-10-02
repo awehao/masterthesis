@@ -104,204 +104,61 @@ def main() -> int:
     print('  （低速 = |實測速率| <= 0.1 rad/s；單位 mrad，一步 = 10 ms）')
     rep['B_setpoint_to_joint'] = rb
 
-    # --------------------------------------------- (A) 命令預推的誤差
-    print('\n=== (A) 命令預推：由**發布歷史**推得的設定點 vs 實際設定點 ===')
-    hist = [(x['publish_sim_t'], np.asarray(x['stages']['request']['body'],
-                                            float))
-            for x in pub if 'publish_sim_t' in x]
-    hist.sort(key=lambda z: z[0])
-
-    def lookup(tau):
-        uu = None
-        for (tp, up) in hist:
-            if tp <= tau + 1e-12:
-                uu = up
-            else:
-                break
-        return uu
-
-    def predict_sp(t_snap, s0, d_state, d_cmd, src='requested'):
-        """把設定點往前推 d_state；查表偏移用 d_cmd。
-
-        `src`：'requested' 用節點的發布歷史（**只是請求**）；
-        'applied' 用執行端回報的 E2 之後命令。
-        """
-        n = int(round(d_state * cfg.dt / dtp))
-        s = np.asarray(s0, float).copy()
-        f = lookup if src == 'requested' else lookup_app
+    # ------------------------------- (A) 命令語意：全物理步的積分對帳
+    print('\n=== (A) 設定點積分的對帳（全物理步，100 Hz）===')
+    print('  正確的累加式：s_{i+n} = s_i + dt_p · Σ_{k=i+1..i+n} u^applied_{a,k}')
+    print('  —— s_i 是**本步寫入後**的值，已含 u_i，**不可再加一次**。')
+    ok2 = np.isfinite(SP).all(axis=1)
+    du = np.diff(SP, axis=0) / dtp          # 由設定點差分重建的套用速率
+    m2 = ok2[:-1] & ok2[1:]
+    for n in (1, 5, 7):
+        acc = np.zeros((len(SP) - n, ARMN))
         for k in range(n):
-            tau = t_snap + k * dtp - d_cmd * cfg.dt
-            uu = f(tau)
-            if uu is None:
-                return None
-            s = s + uu[3:] * dtp
-        return s
+            acc += du[k:len(SP) - n + k] * dtp
+        pred = SP[:len(SP) - n] + acc
+        mm = ok2[:len(SP) - n] & ok2[n:]
+        e = np.abs(pred[mm] - SP[n:][mm]).max(axis=1)
+        print(f'    n={n} 步（{n*dtp*1e3:.0f} ms）殘差 max p50 {np.percentile(e,50):.3e}'
+              f'  max {e.max():.3e} rad')
+    print('  ⇒ **這是自洽核對，不是獨立驗證**：套用速率本來就是由 joint*_sp')
+    print('     的差分重建的，所以殘差為數值量級只證明索引與累加式正確。')
+    rep['A_integration_selfcheck'] = {
+        'note': '套用速率由設定點差分重建 ⇒ 自洽核對，非獨立驗證',
+        'residual_order': 'numerical'}
 
-    D_pub_c = float(np.percentile(d_pub, 50)) / cfg.dt
-    D_cmd_c = float(np.percentile(age, 50)) / cfg.dt
-    # **用實際套用的命令**建歷史（E2 之後，執行端回報）——
-    # 設定點依定義就是它的積分，故這條用來判「請求 vs 套用」的落差。
-    hist_app = sorted(
-        [(((x.get('stages') or {}).get('applied') or {}).get('sim_t'),
-          np.asarray(((x.get('stages') or {}).get('applied') or {})['v'],
-                     float))
-         for x in pub
-         if ((x.get('stages') or {}).get('applied') or {}).get('sim_t')
-         is not None],
-        key=lambda z: z[0])
+    print('\n=== 為什麼「請求 vs 套用」目前無法逐筆比較 ===')
+    rs = L[:, ci['recv_seq']]
+    print(f'  執行端每物理步記 recv_seq（唯一值 {len(np.unique(rs[rs>=0]))}、'
+          f'物理步 {len(L)}）')
+    print('  **但 recv_seq 是執行端自己的計數**，與節點的發布沒有關聯欄位。')
+    print('  節點端只有自己的發布時刻；執行端只有自己的接收計數。')
+    print('  ⇒ 中間經過 adapter、安全層、E2，**無法確定哪一筆對上哪一筆**。')
+    print('  ⇒ D_cmd（發布 → 生效）**量不到**；')
+    print('     先前用「查表偏移的最小值」當 D_cmd 是**錯的**，已移除 ——')
+    print('     那個最小值同時吸收了時間錯位與命令被改動，不是物理延遲。')
+    rep['pairing_gap'] = {
+        'recv_seq_is': '執行端自己的計數，與節點發布無關聯',
+        'D_cmd': '量不到；查表偏移最小值**不可**當成物理延遲',
+    }
 
-    def lookup_app(tau):
-        uu = None
-        for (tp, up) in hist_app:
-            if tp <= tau + 1e-12:
-                uu = up
-            else:
-                break
-        return uu
-
-    schemes = [('節點 rec8 實際用法（混用單一 D=1.4）', 1.4, 1.4),
-               (f'分開：state {D_pub_c + D_cmd_c:.2f} / cmd {D_cmd_c:.2f}',
-                D_pub_c + D_cmd_c, D_cmd_c),
-               (f'混用單一 D={D_pub_c + D_cmd_c:.2f}',
-                D_pub_c + D_cmd_c, D_pub_c + D_cmd_c)]
-    schemes_app = [(f'**改用實際套用命令**：state {D_pub_c + D_cmd_c:.2f}'
-                    f' / cmd {D_cmd_c:.2f}', D_pub_c + D_cmd_c, D_cmd_c)]
-    print(f"  {'方案':>34} {'設定點預推 RMSE':>15} {'樣本':>7}")
-    ra = []
-    for lab, ds, dc, src in ([(a_, b_, c_, 'requested') for a_, b_, c_
-                              in schemes]
-                             + [(a_, b_, c_, 'applied') for a_, b_, c_
-                                in schemes_app]):
-        errs = []
-        for x in pub:
-            ts = x['timing']['snap_sim_t']
-            k0 = int(np.argmin(np.abs(t - ts)))
-            k1 = int(np.argmin(np.abs(t - (ts + ds * cfg.dt))))
-            if (abs(t[k0] - ts) > dtp or not np.isfinite(SP[k0]).all()
-                    or not np.isfinite(SP[k1]).all()):
-                continue
-            sp_pred = predict_sp(ts, SP[k0], ds, dc, src)
-            if sp_pred is None:
-                continue
-            errs.append(np.abs(sp_pred - SP[k1]).max())
-        e = np.array(errs)
-        ra.append({'scheme': lab, 'src': src,
-                   'rmse_mrad': float(np.sqrt((e**2).mean())*1e3),
-                   'p50_mrad': float(np.percentile(e, 50)*1e3), 'n': int(len(e))})
-        print(f'  {lab:>34} {np.sqrt((e**2).mean())*1e3:15.3f} {len(e):7d}')
-    rep['A_command_prediction'] = ra
-
-    # ---- 由資料**量出** D_cmd：掃查表偏移，找預推誤差的最小值 ----
-    print('\n=== 由預推誤差反推 D_cmd（取代無法量到的傳遞延遲）===')
-    print('  固定 D_state = 0.80 週期（D_pub 0.40 ＋ D_cmd 0.40 的估計），'
-          '只掃查表偏移 d_cmd')
-    def sweep(src):
-        bst, rws = None, []
-        for dc in np.arange(-0.4, 2.01, 0.1):
-            errs = []
-            for x in pub:
-                ts = x['timing']['snap_sim_t']
-                k0 = int(np.argmin(np.abs(t - ts)))
-                k1 = int(np.argmin(np.abs(t - (ts + 0.80 * cfg.dt))))
-                if (abs(t[k0] - ts) > dtp or not np.isfinite(SP[k0]).all()
-                        or not np.isfinite(SP[k1]).all()):
-                    continue
-                sp_pred = predict_sp(ts, SP[k0], 0.80, float(dc), src)
-                if sp_pred is None:
-                    continue
-                errs.append(np.abs(sp_pred - SP[k1]).max())
-            if not errs:
-                continue
-            e = float(np.sqrt((np.array(errs) ** 2).mean()) * 1e3)
-            rws.append((float(dc), e, len(errs)))
-            if bst is None or e < bst[1]:
-                bst = (float(dc), e, len(errs))
-        return bst, rws
-
-    res_src = {}
-    for src, lab in (('requested', '請求命令（節點發布歷史）'),
-                     ('applied', '實際套用命令（E2 之後回報）')):
-        bst, rws = sweep(src)
-        res_src[src] = {'best_cycles': bst[0], 'best_rmse_mrad': bst[1],
-                        'sweep': rws}
-        print(f'  -- {lab} --')
-        print(f'    最小在 d_cmd = {bst[0]:.2f} 週期'
-              f'（{bst[0]*cfg.dt*1e3:.0f} ms），**RMSE {bst[1]:.3f} mrad**')
-    rep['D_cmd_from_prediction'] = res_src
-    rq_b = res_src['requested']['best_rmse_mrad']
-    ap_b = res_src['applied']['best_rmse_mrad']
-    print(f'  ⇒ 改用**實際套用命令**後，預推 RMSE '
-          f'{rq_b:.2f} → {ap_b:.2f} mrad（{rq_b/max(ap_b,1e-9):.1f}× 改善）'
-          if ap_b < rq_b else
-          f'  ⇒ 改用實際套用命令**沒有**改善（{rq_b:.2f} → {ap_b:.2f} mrad）')
-    best = None
-    rows = []
-    for dc in []:
-        errs = []
-        for x in pub:
-            ts = x['timing']['snap_sim_t']
-            k0 = int(np.argmin(np.abs(t - ts)))
-            k1 = int(np.argmin(np.abs(t - (ts + 0.80 * cfg.dt))))
-            if (abs(t[k0] - ts) > dtp or not np.isfinite(SP[k0]).all()
-                    or not np.isfinite(SP[k1]).all()):
-                continue
-            sp_pred = predict_sp(ts, SP[k0], 0.80, float(dc), 'requested')
-            if sp_pred is None:
-                continue
-            errs.append(np.abs(sp_pred - SP[k1]).max())
-        if not errs:
-            continue
-        e = float(np.sqrt((np.array(errs) ** 2).mean()) * 1e3)
-        rows.append((float(dc), e, len(errs)))
-        if best is None or e < best[1]:
-            best = (float(dc), e, len(errs))
-
-    print('\n=== 請求命令 vs 實際套用命令（手臂六軸）===')
-    rq = np.array([x['stages']['request']['body'][3:] for x in pub], float)
-    apv = np.array([(((x.get('stages') or {}).get('applied') or {})
-                     .get('v') or [np.nan] * 9)[3:] for x in pub], float)
-    good = np.isfinite(apv).all(axis=1)
-    dd = np.abs(rq[good] - apv[good]).max(axis=1)
-    print(f'  |request − applied| max  p50 {np.percentile(dd,50):.4f}'
-          f'  p95 {np.percentile(dd,95):.4f} rad/s（手臂上限 0.9992）')
-    print(f'  完全相同的輪數 {int((dd < 1e-9).sum())} / {int(good.sum())}')
-    print('  **未逐筆配對**（各取各話題最新值）⇒ 只能看量級，不可當成逐筆衰減。')
-    rep['requested_vs_applied'] = {
-        'p50': float(np.percentile(dd, 50)), 'p95': float(np.percentile(dd, 95)),
-        'n_identical': int((dd < 1e-9).sum()), 'n': int(good.sum()),
-        'caveat': '未逐筆配對，僅量級參考'}
-
-    print('\n=== 判讀 ===')
+    print('\n=== 判讀（同口徑比較尚未完成）===')
     worst_b = max(x['rmse_mrad'] for x in rb)
-    rq_b = res_src['requested']['best_rmse_mrad']
-    ap_b = res_src['applied']['best_rmse_mrad']
-    node_a = ra[0]['rmse_mrad']
-    print(f'  (B) 設定點 → 關節：最差軸 **{worst_b:.4f} mrad**'
-          f'（用實際設定點，未重辨識）')
-    print(f'  (A) 命令預推：節點 rec8 用法 {node_a:.2f}、'
-          f'請求歷史最佳 {rq_b:.2f}、套用歷史最佳 {ap_b:.2f} mrad')
-    print(f'  ⇒ **誤差由命令預推主導**，是 (B) 的 '
-          f'{rq_b/max(worst_b,1e-9):.0f}–{node_a/max(worst_b,1e-9):.0f} 倍。')
-    print('  ⇒ 先修「手臂接下來會收到什麼」，**重辨識摩擦的優先度在其後**。')
-    print()
-    print('  但命令預推**不是調一個 D 就能修好**：')
-    print(f'    用請求歷史的最佳值仍有 {rq_b:.1f} mrad，'
-          f'而視界內總位移本來只有約 {0.9992*0.80*0.05*1e3:.0f} mrad。')
-    print(f'    改用套用歷史只改善 {rq_b/max(ap_b,1e-9):.1f}×，'
-          f'且最佳落在 d_cmd = {res_src["applied"]["best_cycles"]:.2f} 週期')
-    print('    —— **負的傳遞延遲在物理上不可能**，表示我對該序列的時間對齊'
-          '不可靠（未逐筆配對的最新值）。')
-    print()
-    print('  缺的是**逐筆關聯**：節點的發布 → 安全層 → E2 → applied 回報')
-    print('  全程沒有共同序號，所以 D_cmd 只能估計，')
-    print('  預測器也無法確知手臂真正會收到什麼。')
+    print(f'  **已發現**：離線與線上的命令／時間語意不一致（u_prev 的定義、'
+          f'D_state 與 D_cmd 混用）。')
+    print(f'  **仍成立**：原模型（free4 參數）在 rec8 實際設定點上的'
+          f'**一步殘差仍小** —— 最差軸 {worst_b:.4f} mrad。')
+    print('  **尚未完成**：同口徑的誤差貢獻比較。')
+    print('    先前把「40–70 ms 後的設定點誤差、六軸取最大再 RMSE」除以')
+    print('    「10 ms 一步、逐軸 RMSE」得出的倍數，**預測長度、比較對象與**')
+    print('    **彙整方式都不同，不成立**，已撤回。')
+    print('  ⇒ 「優先核對命令預推」仍合理，但依據是**語意不一致已被發現**，')
+    print('     不是倍數證明。要做同口徑比較，需先有逐筆序號。')
     rep['verdict'] = {
-        'dominant': 'command_prediction',
-        'ratio_A_over_B': float(rq_b / max(worst_b, 1e-9)),
-        'A_not_fixable_by_single_D': True,
-        'applied_best_cycles_negative': float(
-            res_src['applied']['best_cycles']),
-        'missing': '節點發布 → 安全層 → E2 → applied 的逐筆序號關聯',
+        'found': '命令／時間語意不一致（u_prev 定義、D_state 與 D_cmd 混用）',
+        'still_holds': f'原模型一步殘差仍小，最差軸 {worst_b:.4f} mrad',
+        'not_done': '同口徑的誤差貢獻比較',
+        'retracted': '220–365 倍的比較（預測長度／對象／彙整方式皆不同）',
+        'blocked_by': '全鏈缺逐筆序號',
     }
     if a.out:
         json.dump(rep, open(a.out, 'w'), ensure_ascii=False, indent=1)

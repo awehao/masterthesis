@@ -68,6 +68,7 @@ from ammr_wholebody_mpc.wgmpc_core_sp import (                   # noqa: E402
     ArmSetpointModel, WGMPCConfigSP, make_z, plant_phys_step, solve_sp)
 from ammr_wholebody_mpc.wholebody_kinematics import (            # noqa: E402
     WholeBodyKinematics)
+import wgmpc_cmd_envelope as ENV                                 # noqa: E402
 from wgmpc_sp_handshake import (ARMED, FAILED, HOLD, INIT,       # noqa: E402
                                 SetpointGate, SpSample)
 
@@ -198,6 +199,18 @@ class WGMPCNode(Node):
                                  self._on_applied_fail, _lat)
         self.pub = self.create_publisher(Float64MultiArray,
                                          '/wholebody_safety/cmd_in', 10)
+        # **命令追蹤封裝**（WG2 明確啟用的額外路徑；既有九維話題不變）。
+        # 身分與九維值在同一份訊息，不另發旁路資料。
+        self.env_pub = (self.create_publisher(
+            Float64MultiArray, ENV.TOPIC[ENV.ST_SOLVER], 10)
+            if a.cmd_env else None)
+        self.env_meta = (self.create_publisher(
+            String, ENV.TOPIC[ENV.ST_SOLVER] + '_meta',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+            if a.cmd_env else None)
+        self._run_id_n = ENV.run_id_num(a.run_id or 'wgmpc_wg2')
+        self._source_seq = 0
+        self._env_meta_sent = False
         self.log = []
         self._hold_t0 = None
         self._reached_held = False
@@ -237,6 +250,21 @@ class WGMPCNode(Node):
         m = Float64MultiArray()
         m.data = [float(x) for x in u_world]
         self.pub.publish(m)
+        # **封裝**：身分與值同訊息。source_seq 逐筆遞增，全鏈據此關聯。
+        if self.env_pub is not None:
+            self._source_seq += 1
+            _t = self.sim_now()
+            _em = Float64MultiArray()
+            _em.data = ENV.encode(self._run_id_n, self._source_seq,
+                                  ENV.ST_SOLVER, self._source_seq,
+                                  self._source_seq, True, _t, u_world)
+            self.env_pub.publish(_em)
+            if not self._env_meta_sent:
+                self._env_meta_sent = True
+                self.env_meta.publish(String(data=json.dumps(
+                    dict(ENV.describe(), run_id=self.a.run_id,
+                         run_id_num=self._run_id_n, stage='solver'),
+                    ensure_ascii=False)))
         # **發布歷史**：延遲補償要知道哪些命令已發出但還沒生效
         self._cmd_hist.append((self.sim_now(),
                                np.asarray(u_body, float).copy()))
@@ -803,6 +831,8 @@ class WGMPCNode(Node):
                 self._n_warm_discard += 1
         return dict(stop_why=self._stop_why,
                     delay_comp_cycles=float(self.a.delay_comp_cycles),
+                    cmd_env=bool(self.a.cmd_env),
+                    n_source_seq=int(self._source_seq),
                     slot_basis='simulation_clock',
                     nominal_period_sim_s=1.0 / self.a.rate,
                     n_dup_skip=self._n_dup_skip,
@@ -918,6 +948,11 @@ def main() -> int:
                     help='**模擬時間**預算上限（0 = 不啟用）。'
                          '錄影會拖慢 sim:wall，只靠牆鐘上限會讓任務拿到的'
                          '模擬時間比無錄影趟次少 ⇒ 要與 free4 對齊時用這個。')
+    ap.add_argument('--cmd-env', action='store_true',
+                    help='啟用**命令追蹤封裝**（身分與九維值同訊息）。'
+                         '既有九維路徑與限制不變。')
+    ap.add_argument('--run-id', default='',
+                    help='趟次識別，進封裝的 run_id')
     ap.add_argument('--delay-comp-cycles', type=float, default=0.0,
                     help='**迴路延遲補償**（以控制週期計，0 = 關閉）。'
                          '求解前用已驗證的受控對象模型與**已發布**的在途命令'

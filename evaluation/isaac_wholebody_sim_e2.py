@@ -81,6 +81,8 @@ ap.add_argument('--mode', default='base',
                 help='驗收順序：base → arm → sync → solver_freespace；'
                      'pregrasp 另由 PREGRASP_PRECONDITIONS_MET 禁止')
 # ---- 執行時錄影（模擬器內相機；**不加任何文字、不改場景**）----
+ap.add_argument('--cmd-env', action='store_true',
+                help='啟用 WG2 命令追蹤封裝（額外路徑；既有 /wb_vel_cmd 不變）')
 ap.add_argument('--record-frames', default='', help='輸出 PNG 的目錄；空=不錄')
 ap.add_argument('--record-res', default='1920x1080')
 ap.add_argument('--record-fps', type=float, default=30.0)
@@ -142,6 +144,7 @@ if a.mode == 'pregrasp' and not PREGRASP_PRECONDITIONS_MET:
     sys.exit(2)
 
 import yaml                                                    # noqa: E402
+import wgmpc_cmd_envelope as ENV                                 # noqa: E402
 from wb_cmd_chain_e2 import CmdChainE2                          # noqa: E402
 from wb_wheel_limit import WheelLimitConfig                     # noqa: E402
 from cpu_temp import read as cpu_temp_read                     # noqa: E402
@@ -189,6 +192,25 @@ class WBNode(Node):
         self.n_cb = 0
         self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
                                  self._cmd, 10)
+        # ---- WG2 命令追蹤封裝（**額外**路徑；既有 /wb_vel_cmd 不變）----
+        # 啟用時改**消費封裝本身**。身分隨值一起到，不靠接收順序猜。
+        self.env_on = bool(a.cmd_env)
+        self._env_map = {}        # chain 的 recv_seq → 封裝身分與接收時間
+        self._env_seen = set()    # 已回報過首次套用的 recv_seq
+        self._env_out_seq = 0
+        if self.env_on:
+            self.create_subscription(Float64MultiArray,
+                                     ENV.TOPIC[ENV.ST_ADAPTER],
+                                     self._cmd_env, 10)
+            self.env_pub = self.create_publisher(
+                Float64MultiArray, ENV.TOPIC[ENV.ST_ENDPOINT], 10)
+            self.env_meta = self.create_publisher(
+                String, ENV.TOPIC[ENV.ST_ENDPOINT] + '_meta',
+                QoSProfile(depth=1,
+                           durability=DurabilityPolicy.TRANSIENT_LOCAL))
+            self._env_meta_sent = False
+        else:
+            self.env_pub = self.env_meta = None
         self.clock_pub = self.create_publisher(Clock, '/clock', 10)
         self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
@@ -259,9 +281,34 @@ class WBNode(Node):
             print(f'[wb] **收到受控停止請求**：{self.stop_requested}', flush=True)
 
     def _cmd(self, msg):
+        if self.env_on:
+            return      # 封裝路徑啟用時由 `_cmd_env` 收，不重複收同一筆
         self.n_cb += 1
         # **接收時間**用模擬時間，命名為 recv_sim_t；不冒稱來源發布時間
         self.chain.receive(list(msg.data), self.sim_t)
+
+    def _cmd_env(self, msg):
+        """封裝入口：**值在封裝裡**，與 `_cmd` 走同一個 `chain.receive`。
+
+        另記 `(run_id, source_seq, 上游 output_seq)` 與**接收**模擬時間，
+        以 chain 的 `recv_seq` 當鍵。接收時間 ≠ 發布時間 ≠ 套用時間。
+        """
+        try:
+            e = ENV.decode(msg.data)
+        except ValueError:
+            return
+        self.n_cb += 1
+        _before = self.chain.n_recv
+        self.chain.receive(list(e['u']), self.sim_t)
+        if self.chain.n_recv > _before:
+            self._env_map[self.chain.n_recv] = {
+                'run_id': e['run_id'], 'source_seq': e['source_seq'],
+                'adapter_out_seq': e['output_seq'],
+                'src_seq': e['src_seq'], 'derived': e['derived'],
+                'recv_sim_t': float(self.sim_t)}
+            if len(self._env_map) > 512:
+                for k in sorted(self._env_map)[:len(self._env_map) - 512]:
+                    self._env_map.pop(k, None)
 
     def publish_feedback(self, t, names, q, dq, p_fp, quat_fp, R_fp,
                          v_world, w_world, status):
@@ -763,6 +810,42 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                            float(_sn.recv_sim_t) if _sn is not None
                            else float('nan')])
             node.applied_pub.publish(_am)
+            # ---- stage 3 封裝：**首次 API 套用**時回報關聯 ----
+            # `first_apply_sim_t` 是本筆**第一次**被送進物理 API 的模擬時間。
+            # **它不等於機械響應完成的時間** —— 設定點寫入後關節還要追。
+            if node.env_on and _sn is not None:
+                _rs = int(_sn.recv_seq)
+                _id = node._env_map.get(_rs)
+                if _id is not None and _rs not in node._env_seen:
+                    node._env_seen.add(_rs)
+                    node._env_out_seq += 1
+                    _ee = Float64MultiArray()
+                    _ee.data = ENV.encode(
+                        _id['run_id'], _id['source_seq'], ENV.ST_ENDPOINT,
+                        node._env_out_seq, _id['adapter_out_seq'],
+                        _id['derived'], float(t),
+                        [float(base_cmd[0]), float(base_cmd[1]),
+                         float(base_cmd[2])] + [float(x) for x in _qd])
+                    node.env_pub.publish(_ee)
+                    if not node._env_meta_sent:
+                        node._env_meta_sent = True
+                        node.env_meta.publish(String(data=json.dumps(dict(
+                            ENV.describe(), stage='endpoint',
+                            times={
+                                'recv_sim_t': '封裝抵達執行端的模擬時間',
+                                'first_apply_sim_t':
+                                    '本筆**第一次**送進物理 API 的模擬時間'
+                                    '（= 本封裝的 stamp_sim_t）',
+                                'not_the_same_as':
+                                    '**API 套用時間 ≠ 機械響應完成時間**；'
+                                    '設定點寫入後關節還要追（一階追蹤）'},
+                            per_step_applied='逐物理步的套用值見 '
+                                             '/coman/applied_cmd 與 log 的 '
+                                             'joint*_sp',
+                            recv_seq_note='recv_seq 是執行端自己的計數；'
+                                          '與來源的對應由本封裝的 '
+                                          '(run_id, source_seq) 建立'),
+                            ensure_ascii=False)))
             # **設定點回報**：此處是 `apply_action` 之後，故發出的是
             # 「本步**寫入後**」的設定點 sp_i，與同一輪 `/joint_states`
             # 的量測 act_i 構成**匹配對**（兩者同 sim_t、同 physics_step_id）。

@@ -50,6 +50,9 @@ from std_msgs.msg import Float32MultiArray, Float64MultiArray
 
 ARM = [f'joint{i}' for i in range(1, 7)]
 OUT = '/wb_vel_cmd'
+_HERE_ENV = __import__('os').path.dirname(__import__('os').path.abspath(__file__))
+__import__('sys').path.insert(0, _HERE_ENV)
+import wgmpc_cmd_envelope as ENV                                  # noqa: E402
 # **實際消費端**的節點名。預設是 Gazebo 鏈的 ros2_control 控制器；
 # Isaac 鏈沒有控制器，執行端直接吃 /wb_vel_cmd，所以要能指向它。
 # 核對的對象應該是**真的會執行這些數字的那一端**。
@@ -109,8 +112,48 @@ class Adapter(Node):
         self.create_subscription(Float64MultiArray,
                                  '/wholebody_safety/cmd_out', self.on_cmd, 10)
         self.pub = self.create_publisher(Float64MultiArray, OUT, 10)
+        # **封裝路徑**：啟用時改**消費封裝本身**（值就在封裝裡），
+        # 不再靠數值或接收順序與旁路資料配對。
+        self.env_pub = self.create_publisher(
+            Float64MultiArray, ENV.TOPIC[ENV.ST_ADAPTER], 10)
+        self.create_subscription(Float64MultiArray,
+                                 ENV.TOPIC[ENV.ST_SAFETY], self.on_env, 10)
+        self._out_seq = 0
         self.diag = self.create_publisher(Float32MultiArray, '~/diag', 10)
         self.create_timer(0.5, self.report)
+
+    def on_env(self, m):
+        """封裝路徑：**由封裝本身取值與身分**，轉換後連同關聯一起發出。
+
+        與 `on_cmd` 用**同一套**檢查與同一個 `world_to_body9`；
+        差別只在值的來源是封裝，而且輸出帶著 `(run_id, source_seq)`
+        與本段的 `output_seq`。
+        """
+        self.n_in += 1
+        try:
+            e = ENV.decode(m.data)
+        except ValueError:
+            self.n_bad += 1
+            return
+        d = np.asarray(e['u'], dtype=float)
+        if len(d) < 9 or not np.all(np.isfinite(d[:9])) or not self.order_ok:
+            self.n_bad += 1
+            return
+        if self.yaw is None or time.monotonic() - self.yaw_t > 0.3:
+            self.n_bad += 1
+            return
+        v = world_to_body9(d, self.yaw)
+        self._out_seq += 1
+        om = Float64MultiArray()
+        om.data = ENV.encode(e['run_id'], e['source_seq'], ENV.ST_ADAPTER,
+                             self._out_seq, e['output_seq'], e['derived'],
+                             self.get_clock().now().nanoseconds * 1e-9, v)
+        self.env_pub.publish(om)
+        out = Float64MultiArray()
+        out.data = [float(x) for x in v]
+        self.pub.publish(out)
+        self.n_out += 1
+        self.last_in = time.monotonic()
 
     def on_odom(self, m):
         q = m.pose.pose.orientation
