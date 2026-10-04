@@ -1,0 +1,92 @@
+# H1／H5 時域消融：共同設定與差異清單（P1）
+# 2026-10-04。性質：比較設計的設定表，**不是結果**。不啟動模擬、不改控制器。
+# 參考配置：b6 MotM（b6_motm1–3）的實際執行設定；數值取自
+#   runs/b6_motm1_192909/align_solver.json 的 args、task.json 的 args、
+#   wgmpc_core.WGMPCConfig 預設值，以及 commit 90eea5ac9 的程式。
+schema: horizon_ablation_config/1
+methods:
+  H1: {N: 1, dt_s: 0.05, 預測長度_s: 0.05}
+  H5: {N: 5, dt_s: 0.05, 預測長度_s: 0.25}
+  B: '經模型／成本／限制對齊的獨立單步 QP —— 後續工作，本表不涵蓋；H1 不得稱為 B'
+
+# ---------------------------------------------------------------- 共同（兩組相同）
+common:
+  程式版本: 'commit 90eea5ac9（b6 執行時為未提交工作區，求解相關程式與此 commit 相同）'
+  資產與辨識檔（sha256 前 16 碼）:
+    urdf: {path: evaluation/models/omni_bot_wholebody_expanded.urdf, sha: 9c9e118d8adb4907}
+    arm_ident: {path: evaluation/results/wgmpc_arm_sp_ident_free4.json, sha: 56eb4850747443f8}
+    drawer_asset: {path: src/my_omnibot_description/config/drawer_unit_bar26.yaml, sha: ef0396078012fd00}
+    手指碰撞: '--finger-collision split（finger_collision.py）'
+  時間:
+    控制週期: '20 Hz（dt 0.05 s，模擬時間時槽）'
+    物理步長: 0.01 s（設定點模型組合 kp = 5 個物理步／控制步）
+  模型:
+    核心: wgmpc_core_sp（增廣狀態 [q(9); s(6)]，九維控制）
+    手臂: '一階設定點模型 α = 0.095（每物理步），b 由線上偏移估計給'
+    底盤: 顯式 Euler，命令即速度（模型增益 1.0；實測約 0.9 不在模型內）
+  成本（無量綱權重；R、S 以各軸 vmax² 正規化）:
+    w_p: '50（啟動值）／200（MotM 相位，經 /wgmpc/coord）'
+    w_r: 25
+    w_bt: 0.001
+    w_br: 0.001
+    w_a: '0.05（啟動值）／0.01（MotM 相位）'
+    w_s: 0.001
+    w_s_arm: 0.05
+    Qf_scale: 5（**最後一步**的任務誤差權重 ×5；見差異 D1）
+    協同項: 'w_vref 0.03（接觸前位姿穩定前 0.3）、w_qn 0.8（開／關）／0（接近）；每一預測步都計入'
+  限制:
+    速度框: {底盤線: 0.035255 m/s, 底盤角: 0.1999 rad/s, 手臂: 0.9999 rad/s}
+    加速度框: {底盤線: 0.5 m/s², 底盤角: 2.0 rad/s², 手臂: 19.984 rad/s²}
+    joint_margin: 0.05 rad（設定點與實測角有效限位）
+    輪級: {wheel_w_max: 5.55, wheel_a_max: 125.0}
+    環境碰撞列: '**無**（核心不含；MotM 管線無安全層）'
+  求解:
+    SQP: {n_sqp: 10, delta_0: 0.2, delta_max: 1.0, delta_min_conv: 0.01, tol_accept: 1e-9}
+    OSQP: {eps_abs: 1e-7, eps_rel: 1e-7, max_iter: 20000, polish: true, 列縮放: true}
+    殘差核對: r_tol 1e-6（未縮放原始限制）
+  輸入與失敗處置:
+    max_input_age_s: 0.2
+    u_prev: 'strict；來源 = 執行端實際套用（applied）'
+    延遲補償: {d_state_cycles: 1.6, d_cmd_cycles: 1.0, use_applied_for_predict: false}
+    近目標整形: {gamma: 1.0, deadband: 0}
+    offset_free: {tau_s: 0.5, gate_rad: 0.002, max_rad: 0.05, init_static: true}
+    margin_guard: {enabled: true, max_qp_fail: 10, max_breach: 5}
+    目標來源: '/drawer/tcp_target，max_age 0.5 s'
+    協同設定: '/wgmpc/coord，max_age 0.5 s，過期退回啟動值'
+  任務層（drawer_task_node，MotM）:
+    判準: '夾持逐物理步雙指 ≥ 0.5 N 連續 2 s；開帶 195–205 mm、關帶 0–5 mm（限位容差 −10 µm）保持 2 s；漂移 ≤ 10 mm'
+    進場: {standoff_m: 0.03, approach_rate: 0.02, pre_ramp_mps: 0.03, pre_settle_s: 0.5, pre_tol_m: 0.005}
+    MotM: {v_creep: 0.004, overshoot: 0.03, a_ref: 0.002, v_pull: 0.018, a_travel: 0.02, arm_share: 0.06, v_back: 0.008, soft_start: true}
+    收臂: sync
+  模擬:
+    場景: drawer_room，Isaac Sim 6.0.1
+    ROS 佇列: 每物理步清空（isaac_drawer_room_sim，ros_drain 記於 room_run.json）
+    命令鏈: 'E2 低速介面界限 → 輪級 → 底盤變化率上限（0.5 m/s²、2.0 rad/s²）'
+
+# ---------------------------------------------------------------- 只因 N 而不同
+differences_caused_by_N:
+  D1_成本結構: >
+    Qbar 對最後一步乘 Qf_scale = 5。H1 唯一的一步就是終端步：任務項 = 5·Q·e₁²，
+    每步努力項 R、S 各一份。H5：任務項 = Q·(e₁²+…+e₄²) + 5·Q·e₅²，努力項五份。
+    ⇒ 「任務誤差權重對努力權重」的有效比例不同（H1 每步約 5:1，H5 合計 9:5）。
+    兩組**不是**數值相同、只差長度的最佳化問題，報告時必須寫出實際成本式。
+    主比較**不**事後調終端權重救某一組；若要終端項消融，另立開發比較。
+  D2_協同項: >
+    w_vref、w_qn 在每一預測步都計入 ⇒ H5 的協同項總權重是 H1 的 5 倍（相對任務項的比例也隨 D1 改變）。
+    v_ref、q_nom 在整個時域內取當輪值（沒有未來序列）。
+  D3_目標: '整個時域重用同一個 T_des（當輪目標），沒有未來目標序列 ⇒ H5 的前瞻只來自動力學與限制，不來自目標預告'
+  D4_問題規模: '決策變數 9N（9 vs 45）；限制列約與 N 成正比；暖啟動序列長度 N×9'
+  D5_計算: '早期離線量測：核心 p50 約 5.3 ms（N=1）vs 18–20 ms（N=5），p95 最差 5.8 vs 43.9 ms（週期 50 ms）—— 舊核心版本，需在新核心重量'
+  D6_預測誤差的比較: 'H1 只預測 50 ms，H5 預測 250 ms；預測誤差只能在相同時間長度（例如共同的第一步）比較'
+
+# ---------------------------------------------------------------- 執行入口的問題
+runner_issue:
+  現況: 'run_nav_handover.sh 寫死 `--N 5 --rate 20`（約第 212 行）'
+  需要: '新增明確的 N 參數（例如 WGMPC_N），求解節點把實際使用的 N 落盤（align_solver.json args.N 已有），分析器以落盤值為準，不信 shell 傳參'
+  本輪: 未修改（依指示不改控制程式）
+
+# ---------------------------------------------------------------- 不在兩組之間變動的事
+not_varied:
+  - 不同時關軟啟動、不加快退開（停車 vs MotM 分析裡的兩個時間損失另案處理）
+  - 不調權重、不改限制、不改判準
+  - 兩組都開 MotM、同相位規則、同一個 Ø26 / 200 mm 抽屜

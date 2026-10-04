@@ -1,0 +1,87 @@
+# 逐輪重播：輸入覆蓋與缺欄清單（P2）
+# 2026-10-04。只讀既有檔案；不改控制程式、不啟動模擬。
+# 檢查對象：b6_motm1–3、b6_park1（align_solver.json：692／628／638／580 輪）。
+schema: replay_input_coverage/1
+
+結論: >
+  狀態、u_prev、協同設定、模型偏移、設定與求解結果都能逐輪取得或精確重建；
+  **每輪的 TCP 目標矩陣沒有紀錄，也無法忠實重建** ⇒ 現有 b6 資料**不能**通過
+  「先讓 H5 重播回原本輸出」的驗收，P3 的同狀態 H1／H5 比較要等補紀錄後的新趟次。
+  暖啟動序列也未記錄（影響「逐輪」重現，但可用自身鏈式暖啟動近似並標明）。
+
+items:
+  - 項目: 求解實際收到的狀態（延遲補償後）
+    欄位: solve_in.q_pred（9）、solve_in.s_pred（6）
+    狀態: 有（每輪、未捨入）
+  - 項目: 量測狀態與快照時刻
+    欄位: solve_in.q_meas、s_meas、snap_sim_t_exact、solve_start_sim_t_exact、paired
+    狀態: 有
+  - 項目: u_prev 與來源
+    欄位: solve_in.u_prev、u_prev_src（applied／requested）、pred_sel
+    狀態: 有
+  - 項目: '當輪 TCP 目標（4×4）'
+    狀態: 缺
+    現有替代: >
+      err_p／err_r（以量測狀態算的目標誤差大小）可作核對；runtime_target 只有整趟計數；
+      task.json trace 約 0.5 s 一筆且無矩陣。
+    為何無法重建: >
+      開／關段的目標由 DrawerTarget 內部參考開度（速率限制＋有界超前）逐步產生；
+      接近段有接觸前斜坡、進場退讓量斜坡、退開斜坡，這些內部狀態都未記錄，
+      而且任務節點的 20 Hz 迴圈時刻與求解時刻不同步。以後驗資料補會違反「只用當時可得資料」。
+  - 項目: 目標來源與年齡（逐輪）
+    狀態: 缺（只有整趟 n_cycles_by_source、max_observed_age_s）
+  - 項目: 協同設定（逐輪、解析後）
+    欄位: coord.{src, age, w_vref, base_vref, w_qn, arm_q_nom, w_a, w_p}
+    狀態: 有
+  - 項目: 模型偏移 d̂（逐輪）與 bias = α ⊙ d̂
+    狀態: 可精確重建（已驗證）
+    驗證: >
+      以 q_meas、s_meas 依節點更新式（靜態初值、閘門 0.002 rad、τ 0.5 s、上限 0.05 rad）重算：
+      4 趟更新次數與紀錄完全相同（304／176／251／571），最終 d̂ 差 ≤ 4.9e-7 rad，初值差 0。
+  - 項目: α、物理步長、全部 resolved config
+    欄位: args（含 arm_ident 路徑）＋辨識檔（sha 56eb4850747443f8）＋WGMPCConfig 預設（commit 90eea5ac9）
+    狀態: 有
+  - 項目: 暖啟動序列 U_warm（N×9）與丟棄
+    狀態: 缺（只記 u0）
+    已知: 規則在程式中（上一輪 U 左移、末步以最大減速朝零收；求解失敗後為 None）
+    影響: 重播只能用「自身前一輪重播結果」鏈式暖啟動，無法對原始序列逐輪核對；SQP 為局部方法，暖啟動不同可能收斂到不同解
+  - 項目: 整形前 u0（求解器原始輸出）
+    欄位: request_body_presolve（= r.u0，捨入 1e-8）
+    狀態: 有（僅已發布輪次）
+  - 項目: 整形後輸出與整形資訊
+    欄位: request_body、request_world、shape.{scale, reason}
+    狀態: 有
+  - 項目: 完整最佳序列 U、預測軌跡 Q_pred
+    狀態: 缺（只有 u0）
+    影響: 無法比較兩種時域的預測軌跡，只能比首步
+  - 項目: 求解結果
+    欄位: ok、reason、sqp_stop、sqp_converged、n_sqp、residual、timing_ms、cycle_wall_ms
+    狀態: 有
+  - 項目: 發布狀態與時刻
+    欄位: published、publish_sim_t_exact、stages（請求／修改／端點／套用，各取最新值、未逐筆配對）
+    狀態: 有
+
+# ---------------------------------------------------------------- 未來補紀錄的規格（本輪不實作）
+logging_spec_proposal:
+  目的: 讓新趟次能通過 H5 重播驗收，再做同狀態 H1／H5 比較
+  每輪新增欄位（求解節點 log）:
+    - T_cyc: 當輪實際用於求解的 4×4（16 個，未捨入）
+    - target_src、target_age_s: 當輪的目標來源與年齡
+    - U_warm: 送入求解的暖啟動序列（N×9）或 null
+    - U_sol: 求解回傳的完整序列（N×9）
+    - offset_d_hat、arm_bias: 當輪模型使用的 d̂ 與 b（6＋6；雖可重建，直接記避免歧義）
+    - solver_N: 當輪實際 N（與 args 互核）
+  其他節點:
+    - 'drawer_wholebody_node：把 argparse 參數寫進 wholebody.json（目前沒有，--motm 等設定無法由檔案核對）'
+  估計大小: '每輪約 16 + 2×9N + 12 個浮點數；N = 5 時約 120 個，700 輪 ≈ 0.6 MB／趟'
+  注意: 只加紀錄，不改求解行為；加完要以單元測試確認輸出逐位元不變
+
+# ---------------------------------------------------------------- H5 重播驗收（事前定義，草案）
+h5_replay_acceptance_draft:
+  比較對象: '重播求得的整形前 u0 vs request_body_presolve（逐輪）'
+  容許值（草案，產生 H1 結果前凍結）: >
+    以速度框正規化後 |Δu0|/vmax：p95 ≤ 1e-3、max ≤ 1e-2；sqp_stop 一致率 ≥ 95%；
+    殘差同為 ≤ r_tol。依據：紀錄精度 1e-8、OSQP eps 1e-7、SQP tol_step 1e-4（正規化）。
+  不通過時: 先定位缺輸入或版本差異，不進入 H1 比較
+  能回答: 同狀態下兩種時域的首步命令差、綁定限制、計算代價（開迴路診斷）
+  不能回答: H1 閉迴路會走哪條路、夾持是否成功、整趟完成率
