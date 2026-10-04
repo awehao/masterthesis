@@ -36,6 +36,7 @@ E2 是階段 A 的執行端，其結果已封存 —— **不動它**，本檔�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -398,6 +399,9 @@ def main() -> int:
     print(f'[room] 房間：{n_box} 方塊、{n_cyl} 圓柱', flush=True)
 
     # ---- 抽屜櫃：與階段 A 同一條路徑 ----
+    # 載入當下的內容雜湊：事後核對要看「跑的時候」用的是哪份，不是核對時的檔案
+    with open(a.drawer_asset, 'rb') as _f:
+        drawer_asset_sha256 = hashlib.sha256(_f.read()).hexdigest()
     dspec = DA.load(a.drawer_asset)
     dpose = tuple(float(v) for v in a.drawer_pose.split(','))
     dauth = DA.build_usd(stage, dspec, dpose, root=DRAWER_SUBTREE)
@@ -1266,6 +1270,7 @@ def main() -> int:
                         'n_callbacks': node.n_cb}
     rec['config'] = {'finger_collision': finger_col_rep,
                      'drawer_asset': a.drawer_asset,
+                     'drawer_asset_sha256': drawer_asset_sha256,
                      'world': a.world, 'drawer_pose': a.drawer_pose,
                      'start_pose': a.start_pose, 'stow_q': stow,
                      'physics_dt': a.physics_dt,

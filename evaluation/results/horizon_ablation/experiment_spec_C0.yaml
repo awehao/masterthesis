@@ -24,9 +24,30 @@ prerequisites:
     內容: 'horizon_config_check.py 對每一對 H1／H5 只允許 solver.N 不同；其他差異 = 0 才計入'
   - id: P-REPLAY
     內容: '先在一趟新紀錄的 H5 上通過重播驗收（replay_input_coverage.yaml h5_replay_acceptance_draft），確認紀錄齊全'
-    工具: 'horizon_replay_check.py（離開碼 0 通過／1 不通過／2 紀錄不足）；test_horizon_replay_check.py 4/4：合成乾淨趟 PASS（差值 0）、缺 T_cyc 一輪 FAIL、偏差錯 0.01 FAIL（A1）、舊格式 INCOMPLETE；既有 b6_motm1 → INCOMPLETE（符合預期）'
-    熱中止: 'run_guarded.sh 包住運行器：取樣器先起、模擬器 PID 交給它、上限只能調低（> 92 拒跑）、趟次目錄已存在拒跑；已用假運行器驗過正常結束、起跑前超溫、中途超溫三條路徑'
-    狀態: 工具就緒，待使用者跑一趟功能確認
+    工具: >
+      horizon_replay_check.py（離開碼 0 整趟通過／1 不通過／2 無可用求解列／3 部分輪次僅診斷）。
+      覆蓋：C1 每列可歸類（求解列或節點既定的等待／閘門理由，後者另列、不算缺紀錄）、
+      C2 每個求解列欄位齊全且形狀正確、數值有限、C3 列數與節點統計對帳（published、no_solution）、solver_N = args.N。
+      門檻：A1 |Δu0|/vmax p95 ≤ 1e-3、max ≤ 1e-2；A2 停止理由一致 ≥ 95%；
+      A3 原解接受輪的原解與重播殘差有限且 ≤ r_tol；A4 接受／拒絕一致 = 100%（2026-10-05 新增，凍結前待使用者確認）。
+      殘差 NaN 只在 qp_failed／no_accepted_candidate 允許（核心在這兩種情形不算殘差）。
+    工具測試: >
+      test_horizon_replay_check.py 12/12：乾淨合成趟 PASS（含兩個閘門等待列）；
+      刪 solve_in、刪整列、原拒重收、接受輪殘差 NaN、輸入 inf、未知理由列、偏差錯、solver_N 錯 → 全部 FAIL；
+      --max-cycles → PARTIAL（後段缺目標也不會 PASS）；舊格式 → INCOMPLETE。b6_motm1／park1 → INCOMPLETE，列數與統計對帳相符
+    熱中止: >
+      run_guarded.sh：上限只接受 1–92 整數（NaN、小數、93 皆拒跑）；全程核對取樣器存活、讀值 ≤ 5 s 新鮮、讀值 > 0；
+      監看失效 ⇒ 砍模擬器並中止（離開碼 94）。假運行器驗過：正常、模擬器先結束、起跑前超溫、中途超溫、
+      取樣器死亡、取樣器停更、讀值無效。取樣器本身的超溫砍程序未在真實 92 °C 觸發過
+    資產雜湊: >
+      模擬器自 2026-10-05 起在 room_run.json config.drawer_asset_sha256 記錄載入當下雜湊。
+      b6 沒有記錄：現檔 ef0396078012fd00 與 20:04 提交 56f249c60 相同；檔案時間 20:13 來自 checkout／merge 重寫；
+      b6 跑於 19:29–19:40，此 25 分鐘內無編輯紀錄，但**無法嚴格證明** b6 載入的內容
+    口徑: >
+      這趟 H5 與 b6 同為 N = 5 ⇒ 核「控制設定一致」（horizon_config_check.py --allow，不允許任何差異；
+      wholebody.args 與資產雜湊來源的差異需逐項解釋）；「只有 N 不同」是正式 H1／H5 配對的要求。
+      cycle_wall_ms 含排程等待，只能看週期是否退化，不得直接歸因於紀錄開銷
+    狀態: 工具守門已補，待使用者跑一趟 H5 功能確認
   - id: P-CHATTER
     決定: '(a) 保留目前配置，把手臂命令反轉當成**待比較的現象**；兩組共用的是設定，不預設兩組有相同抖動'
     現況（b6，H5，修正口徑）: >

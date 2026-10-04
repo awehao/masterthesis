@@ -6,6 +6,7 @@ N 一律以求解節點**落盤**的 `align_solver.json → args.N` 為準，不
 （手指碰撞、抽屜資產），另加辨識檔的 sha256。
 
     python3 evaluation/horizon_config_check.py runs/A runs/B [runs/C …] [--allow N]
+    同 N 的兩趟核「控制設定一致」：加 `--allow`（不給值）＝ 不允許任何差異。
 
 離開碼：0 = 只有允許的差異；1 = 有其他差異（列出每一項）；2 = 讀不到必要檔案。
 """
@@ -58,8 +59,14 @@ def resolved(run_dir):
                 if k == 'finger_collision' and isinstance(v, dict):
                     v = v.get('mode')
                 out[f'sim.{k}'] = v
-        if isinstance(cfg.get('drawer_asset'), str):
+        # 優先用模擬器載入當下記錄的雜湊；舊趟次沒記，只能以核對當下的檔案代替，
+        # 並另列來源（兩者來源不同時會顯示為差異，要能解釋）
+        if isinstance(cfg.get('drawer_asset_sha256'), str):
+            out['hash.drawer_asset'] = cfg['drawer_asset_sha256'][:16]
+            out['hash.drawer_asset_source'] = 'recorded_at_load'
+        elif isinstance(cfg.get('drawer_asset'), str):
             out['hash.drawer_asset'] = sha16(cfg['drawer_asset'])
+            out['hash.drawer_asset_source'] = 'file_at_check_time'
     else:
         out['sim.room_run'] = 'MISSING'
     wp = os.path.join(run_dir, 'wholebody.json')
