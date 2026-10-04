@@ -205,11 +205,20 @@ while IFS=$'\t' read -r IDX RID CASE OPEN_M METHOD N PAIR ORDERTAG <&3; do
   say "    環境 $(env_snapshot "$RUNS/${RID}.env.json")"
   CUR_IDX="$IDX"; CUR_RID="$RID"
   freq_sampler "$RUNS/${RID}.freq.csv" < /dev/null & FS=$!
-  C1_RUN_TAG="${BATCH}:${IDX}" ROS_DOMAIN_ID="$DOMAIN" RUN_ID="$RID" WGMPC_N="$N" HEADING=1 MOTM=1 CAM=false OPEN_M="$OPEN_M" \
+  # method：H5／H1（時域消融，行為與既有完全相同）；MOTM／PARK（MotM 時間比較）
+  BASE_ARGS="--standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync --approach-rate 0.02"
+  case "$METHOD" in
+    PARK) MOTM_V=0; TASK_ARGS="$BASE_ARGS"; AREF="" ;;
+    MOTM) MOTM_V=1; TASK_ARGS="$BASE_ARGS --motm-w-qn 0.8 --motm-w-vref-pre 0.3 ${MOTM_EXTRA_ARGS:-}"; AREF="${MOTM_A_REF_SET:-}" ;;
+    *)    MOTM_V=1; TASK_ARGS="$BASE_ARGS --motm-w-qn 0.8 --motm-w-vref-pre 0.3"; AREF="" ;;
+  esac
+  say "    方法 $METHOD：MOTM=$MOTM_V MOTM_A_REF=${AREF:-（預設）} 任務參數 $TASK_ARGS"
+  if [ -n "$AREF" ]; then export MOTM_A_REF="$AREF"; else unset MOTM_A_REF; fi
+  C1_RUN_TAG="${BATCH}:${IDX}" ROS_DOMAIN_ID="$DOMAIN" RUN_ID="$RID" WGMPC_N="$N" HEADING=1 MOTM="$MOTM_V" CAM=false OPEN_M="$OPEN_M" \
   FINGER_COL=split \
   DRAWER_ASSET="$WS/src/my_omnibot_description/config/drawer_unit_bar26.yaml" \
   GRASP_DEPTH_M=0.0068 \
-  MOTM_TASK_ARGS="--standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync --approach-rate 0.02 --motm-w-qn 0.8 --motm-w-vref-pre 0.3" \
+  MOTM_TASK_ARGS="$TASK_ARGS" \
   SOLVER_EXTRA="--offset-init-static" \
   bash "$WS/evaluation/run_guarded.sh" > "$RUNS/${RID}.guard.out" 2>&1 < /dev/null &
   GP=$!
