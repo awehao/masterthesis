@@ -9,7 +9,6 @@
    "v_nav_avg_mps": 0.247,
    "d_low_during_restow_m": 0.221,
    "NAV_new_s": 17.77,
-   "est_saving_s_upper": 0.8,
    "arm_clearance_2d_reserved_actual_m": [
     0.0,
     [
@@ -41,7 +40,8 @@
      "link_tcp",
      0.0
     ]
-   ]
+   ],
+   "est_saving_s_optimistic_linear_model": 0.8
   },
   {
    "run": "mt_b1_04_M",
@@ -52,7 +52,6 @@
    "v_nav_avg_mps": 0.247,
    "d_low_during_restow_m": 0.223,
    "NAV_new_s": 17.78,
-   "est_saving_s_upper": 0.82,
    "arm_clearance_2d_reserved_actual_m": [
     0.0,
     [
@@ -84,7 +83,8 @@
      "link_tcp",
      0.0
     ]
-   ]
+   ],
+   "est_saving_s_optimistic_linear_model": 0.82
   },
   {
    "run": "mt_b1_05_M",
@@ -95,7 +95,6 @@
    "v_nav_avg_mps": 0.248,
    "d_low_during_restow_m": 0.221,
    "NAV_new_s": 17.71,
-   "est_saving_s_upper": 0.81,
    "arm_clearance_2d_reserved_actual_m": [
     0.0,
     [
@@ -127,11 +126,19 @@
      "link_tcp",
      0.0
     ]
-   ]
+   ],
+   "est_saving_s_optimistic_linear_model": 0.81
   }
  ],
  "summary": {
-  "est_saving_s_upper": {
+  "assumptions": [
+   "手臂未收攏期間底盤 ≤ 0.035 m/s（既有低速界限）",
+   "回程時間對剩餘距離線性（實錄平均速度）",
+   "未計轉向、導航啟動延遲、控制權切換耗時 ⇒ 上限估計",
+   "淨空 2D：連桿原點對碰撞體與「含全開抽屜」的保留區（視為全高；收臂起點時抽屜已關，此量過度保守、無鑑別力）",
+   "淨空 3D：連桿原點對櫃體與抽屜（關閉位置）方塊；只用原點、不含連桿半徑 ⇒ 不是完整碰撞檢查"
+  ],
+  "est_saving_s_optimistic_linear_model": {
    "per_run": [
     0.8,
     0.82,
@@ -139,12 +146,11 @@
    ],
    "mean": 0.81
   },
-  "assumptions": [
-   "手臂未收攏期間底盤 ≤ 0.035 m/s（既有低速界限）",
-   "回程時間對剩餘距離線性（實錄平均速度）",
-   "未計轉向、導航啟動延遲、控制權切換耗時 ⇒ 上限估計",
-   "淨空 2D：連桿原點對碰撞體與「含全開抽屜」的保留區（視為全高；收臂起點時抽屜已關，此量過度保守、無鑑別力）",
-   "淨空 3D：連桿原點對櫃體與抽屜（關閉位置）方塊；只用原點、不含連桿半徑 ⇒ 不是完整碰撞檢查"
+  "wording": [
+   "0.80–0.82 s 是「線性回程模型下的樂觀估算」，不是可認證的收益上限；未計額外成本不代表其餘假設必然使結果偏樂觀",
+   "57–59 mm 是連桿原點到方塊的距離，不是機器人碰撞餘裕，不能據此核准移動中收臂",
+   "原流程收臂期間已前進約 43 mm，假設方案約 221–223 mm ⇒ 額外前進約 178–180 mm"
   ]
- }
+ },
+ "decision": "T1 暫不實作（Codex reviews/20261005_051007_reply.md）：預期收益小、需改控制權契約與導航假設；不是因為已領先就不改善"
 }
