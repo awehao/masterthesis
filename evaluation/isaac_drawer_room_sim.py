@@ -57,6 +57,18 @@ ap.add_argument('--drawer-pose', default='0.0,1.45')
 ap.add_argument('--urdf', default=os.path.join(
     WS, 'evaluation/models/omni_bot_manip.urdf'))
 ap.add_argument('--start-pose', default='-2.80,-3.20,1.5708')
+# ---- V0 腕部 RGB-D 擷取（預設關閉；開啟時只擺位＋算圖，不跑控制、不建既有 ROS 節點）----
+ap.add_argument('--wrist-v0', action='store_true',
+                help='V0：腕部相機擷取模式（evaluation/results/vision/V0_spec.yaml）')
+ap.add_argument('--wrist-res', default='640x480')
+ap.add_argument('--wrist-hfov', type=float, default=69.0)
+ap.add_argument('--wrist-frames', type=int, default=20)
+ap.add_argument('--wrist-warmup', type=int, default=60)
+ap.add_argument('--wrist-max-steps', type=int, default=2000)
+ap.add_argument('--wrist-base', default='-0.136412,0.560,1.297349',
+                help='擺位底盤 x,y,yaw（預設＝基準停位）')
+ap.add_argument('--wrist-q', default='-0.05976,0.80551,1.28293,-0.37162,-1.12167,-1.40317',
+                help='擺位手臂六軸（預設＝基準夾持姿態的 TCP 沿 −y 退 0.20 m，離線 IK）')
 ap.add_argument('--stow-q', default='0,0,0,0,-1.5707963,0',
                 help='導航期間手臂維持的收攏姿態（**已核准定版**）')
 ap.add_argument('--physics-dt', type=float, default=0.01)
@@ -803,6 +815,10 @@ def main() -> int:
     #（nav_video_025746：164 s 模擬時間只走到 d = 0.69 m）。
     # 所以物理與控制照原樣跑，渲染另外一趟重播已封存的逐步位姿。
     # 場景由**同一份程式**建起，不另寫一支重播器。
+    if a.wrist_v0:
+        from wrist_v0_capture import run_wrist_v0
+        return run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, ROBOT,
+                            walk, dspec, a.urdf)
     if a.replay:
         if cam is None:
             print('[room] 重播模式要開 --cam', flush=True)
