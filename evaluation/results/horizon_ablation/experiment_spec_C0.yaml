@@ -24,6 +24,9 @@ prerequisites:
     內容: 'horizon_config_check.py 對每一對 H1／H5 只允許 solver.N 不同；其他差異 = 0 才計入'
   - id: P-REPLAY
     內容: '先在一趟新紀錄的 H5 上通過重播驗收（replay_input_coverage.yaml h5_replay_acceptance_draft），確認紀錄齊全'
+    工具: 'horizon_replay_check.py（離開碼 0 通過／1 不通過／2 紀錄不足）；test_horizon_replay_check.py 4/4：合成乾淨趟 PASS（差值 0）、缺 T_cyc 一輪 FAIL、偏差錯 0.01 FAIL（A1）、舊格式 INCOMPLETE；既有 b6_motm1 → INCOMPLETE（符合預期）'
+    熱中止: 'run_guarded.sh 包住運行器：取樣器先起、模擬器 PID 交給它、上限只能調低（> 92 拒跑）、趟次目錄已存在拒跑；已用假運行器驗過正常結束、起跑前超溫、中途超溫三條路徑'
+    狀態: 工具就緒，待使用者跑一趟功能確認
   - id: P-CHATTER
     決定: '(a) 保留目前配置，把手臂命令反轉當成**待比較的現象**；兩組共用的是設定，不預設兩組有相同抖動'
     現況（b6，H5，修正口徑）: >
