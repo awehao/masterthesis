@@ -130,10 +130,16 @@ def main():
     useq = []                # (相位, 九維命令)，依求解輪順序
     stops = collections.Counter()
     n_fail = 0
+    n_non_solve = collections.Counter()
     for L in log:
         t = float(L['sim_t'])
         if t > t_stop:
             break
+        # 非求解列（合法等待列，例如 snapshot_duplicate）沒有 solve_in，不是求解輪：
+        # 不計入追蹤／計算／餘裕／命令增量，另計數。（2026-10-05 修：先前遇到即 KeyError）
+        if 'solve_in' not in L:
+            n_non_solve[L.get('reason')] += 1
+            continue
         ph = phase_of(t)
         for g in (ph, 'WINDOW'):
             b = by[g]
@@ -234,6 +240,7 @@ def main():
         'phase_start': {p: round(t, 3) for p, t in bounds},
         'solver': {'n_cycles': len([L for L in log if float(L['sim_t']) <= t_stop]),
                    'n_failed': n_fail, 'sqp_stop': dict(stops),
+                   'n_non_solve_rows': dict(n_non_solve),
                    # 節點統計缺（例如中止路徑未寫出）⇒ 這三項標缺、不補造；其他指標照算
                    'n_missed_slot': (sol.get('stats') or {}).get('n_missed_slot'),
                    'n_warm_discard': (sol.get('stats') or {}).get('n_warm_discard'),

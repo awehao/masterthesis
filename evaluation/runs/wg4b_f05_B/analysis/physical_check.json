@@ -1,0 +1,98 @@
+{
+ "run": "wg4b_f05_B",
+ "source": "room_run.json 逐物理步真值；task.json 只用於切時間窗",
+ "data": {
+  "n_steps": 23999,
+  "physics_dt_s": 0.01,
+  "n_gaps": 0,
+  "gaps_first": [],
+  "missing_or_nonfinite": {
+   "opening_m": {
+    "n": 0
+   },
+   "finger_contact_n": {
+    "n": 4407,
+    "first_sim_t": 0.02,
+    "last_sim_t": 44.08
+   },
+   "base_xyth": {
+    "n": 0
+   },
+   "q_arm_meas": {
+    "n": 0
+   }
+  }
+ },
+ "S1_open_hold": {
+  "band_mm": [
+   195.0,
+   205.0
+  ],
+  "band_source": "task.json open_band_m",
+  "longest_s": 0.49,
+  "at_sim_t": [
+   66.11,
+   66.59
+  ],
+  "max_opening_mm": 220.0
+ },
+ "S2_close_hold": {
+  "band_mm": [
+   -0.01,
+   5.0
+  ],
+  "longest_s": null,
+  "at_sim_t": null,
+  "min_opening_after_open_mm": 205.028
+ },
+ "S3_grasp": {
+  "threshold_n": 0.5,
+  "longest_both_fingers_s": 7.08,
+  "at_sim_t": [
+   55.27,
+   62.34
+  ],
+  "sim_contact_held_s_max": 7.07
+ },
+ "S4_drift": "證據不足：缺 attach 或 RELEASE_WAIT 事件",
+ "S5_home": {
+  "final_xyth": [
+   -0.1271,
+   0.4201,
+   1.3059
+  ],
+  "start": [
+   -2.8,
+   -3.2,
+   1.5708
+  ],
+  "dist_m": 4.5,
+  "tol_m": 0.2
+ },
+ "S6_contact": {
+  "n_bodies": 107,
+  "non_finger_over_0p01n": "無",
+  "n_steps_record_missing": 0,
+  "n_rows_invalid_or_nonfinite": 0,
+  "n_gaps": 0,
+  "not_measured": "櫃體與其他物件 ⇒ NA"
+ },
+ "results": {
+  "S1_open_hold": false,
+  "S2_close_hold": false,
+  "S3_grasp": true,
+  "S4_drift": null,
+  "S5_home": false,
+  "S6_contact": true
+ },
+ "verdict": "FAIL",
+ "failed": [
+  "S1_open_hold",
+  "S2_close_hold",
+  "S5_home"
+ ],
+ "insufficient": [
+  "S4_drift"
+ ],
+ "note": "final_phase = DONE 只是流程完成；本檔 S1–S6 是任務成功的獨立判定"
+}
