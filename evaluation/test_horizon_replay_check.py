@@ -77,7 +77,8 @@ def base_log():
 
 
 def write(tmp, log):
-    stats = {'published': sum(1 for L in log if L.get('published') is True),
+    stats = {'n_solve_calls': sum(1 for L in log if 'sqp_stop' in L),
+             'published': sum(1 for L in log if L.get('published') is True),
              'no_solution': sum(1 for L in log
                                 if 'sqp_stop' in L and not L.get('ok'))}
     os.makedirs(tmp, exist_ok=True)
@@ -126,6 +127,32 @@ def test_deleted_whole_row_fails_reconcile(tmp_path, base_log):
     log = cp(base_log)
     del log[6]
     out, rc = run(tmp_path, 'norow', log, stats_from=cp(base_log))
+    assert rc == 1 and not out['passed']['C3_stats_reconcile']
+
+
+def test_deleted_unpublished_accepted_row_fails(tmp_path, base_log):
+    """接受但因過期未發布的列被整列刪除：published／no_solution 都不變，只靠呼叫數抓。"""
+    ref = cp(base_log)
+    ref[6].update(published=False, dropped='輸入已過期 120 ms')
+    out_ref, rc_ref = run(tmp_path, 'unpub_ref', cp(ref))
+    assert rc_ref == 0, out_ref['passed']         # 保留該列：合法、通過
+    log = cp(ref)
+    del log[6]
+    out, rc = run(tmp_path, 'unpub_del', log, stats_from=ref)
+    assert rc == 1 and not out['passed']['C3_stats_reconcile']
+    sr = out['stats_reconcile']
+    assert sr['published']['rows'] == sr['published']['stats']
+    assert sr['no_solution']['rows'] == sr['no_solution']['stats']
+    assert sr['n_solve_calls'] == {'rows': 9, 'stats': 10}
+
+
+def test_missing_call_count_fails(tmp_path, base_log):
+    d = write(str(tmp_path / 'nocount'), cp(base_log))
+    p = os.path.join(d, 'align_solver.json')
+    j = json.load(open(p))
+    del j['stats']['n_solve_calls']
+    json.dump(j, open(p, 'w'))
+    out, rc = HC.check(d)
     assert rc == 1 and not out['passed']['C3_stats_reconcile']
 
 

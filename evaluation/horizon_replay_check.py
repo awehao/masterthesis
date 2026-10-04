@@ -8,8 +8,9 @@
   C1  每一列都能歸類：求解列（有 sqp_stop／residual／n_sqp）或合法的非求解列
       （reason 屬於節點既定的等待／閘門理由，見 NON_SOLVE_REASONS）；其餘 = 無法歸類
   C2  每個求解列都有 solve_in 與全部重播欄位，形狀正確、數值有限
-  C3  列數與節點自己的統計相符：published 列數 = stats.published、
-      求解失敗列數 = stats.no_solution（抓整列被刪除）
+  C3  列數與節點自己的統計相符：求解列數 = stats.n_solve_calls（節點獨立計的求解器
+      呼叫數）、published 列數 = stats.published、求解失敗列數 = stats.no_solution
+      （抓整列被刪除，包括「求解接受但因過期／閘門未發布」的列）；統計缺項 = 不通過
   C4  每列 solver_N = args.N
   非求解列另列計數，**不算缺紀錄，也不參與重播**。
 
@@ -17,7 +18,8 @@
   A1  兩邊都接受的輪次：首筆命令差 |Δu0| / vmax（逐軸取最大）p95 ≤ 1e-3、max ≤ 1e-2
   A2  SQP 停止理由一致率 ≥ 95%
   A3  原解接受的輪次：原解與重播解的原單位限制殘差都有限且 ≤ r_tol
-  A4  接受／拒絕一致率 = 100%（任何一輪一邊發布、一邊不發布即不通過）
+  A4  求解器接受判定（ok）一致率 = 100%。比的是求解器的 ok，**不是是否發布**
+      （解被接受後仍可能因過期或健康閘門不發布，那屬於節點層，不在重播範圍）
   殘差 NaN 只在 qp_failed／no_accepted_candidate（核心本來就不算殘差）時允許。
 另報：完整序列差、停止理由配對、計算時效（記錄值，非重播）。
 
@@ -140,6 +142,8 @@ def check(run_dir, max_cycles=None):
     n_pub = sum(1 for L in log if L.get('published') is True)
     n_fail = sum(1 for L in solve_rows if not L.get('ok'))
     stats_check = {
+        'n_solve_calls': {'rows': len(solve_rows),
+                          'stats': stats.get('n_solve_calls')},
         'published': {'rows': n_pub, 'stats': stats.get('published')},
         'no_solution': {'rows': n_fail, 'stats': stats.get('no_solution')},
     }

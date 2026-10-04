@@ -785,6 +785,7 @@ class WGMPCNode(Node):
         slot = 0
         U_warm = None
         n_pub = n_drop_age = n_no_sol = 0
+        n_solve_calls = 0            # 求解器呼叫次數（獨立計數，供與求解列對帳）
         n_miss = 0
         _prev_top = None
         self._t_sim0 = None          # 任務的模擬時間起點（首次成功發布時定）
@@ -1025,6 +1026,7 @@ class WGMPCNode(Node):
                                  copy=True)
                         if getattr(self.cfg, 'arm_model', None) is not None
                         else None)
+            n_solve_calls += 1
             if self._gate is not None:
                 # 增廣狀態由**同時刻快照**組成：q 與 s 同一個物理步。
                 # `make_z` 在 s 含非有限值時拋錯，不以實測關節角代替。
@@ -1352,6 +1354,7 @@ class WGMPCNode(Node):
                     composed_G=self.composed_G, composed_kp=self.composed_kp,
                     published=n_pub, dropped_stale=n_drop_age,
                     no_solution=n_no_sol, deadline_miss=int(n_miss),
+                    n_solve_calls=n_solve_calls,
                     rate_hz=self.a.rate,
                     reached_held=bool(self._reached_held),
                     stopped_on_chain_fail=bool(self._stopped_on_fail),
