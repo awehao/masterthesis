@@ -1,0 +1,19 @@
+# C0 判定工具與配置凍結（2026-10-05，H1 功能確認之前）
+schema: horizon_c0_freeze/1
+雜湊清單: freeze_c0.sha256（30 檔；sha256sum -c 核對）
+範圍: >
+  判定工具（重播驗收、物理核對、設定核對、指標）與其測試；運行器與熱保護；
+  求解／任務／展開節點、模擬器、協同與執行層；W-GMPC 核心（src 版本 —— 求解節點以
+  sys.path.insert(0, src) 載入，install 內較舊的副本不被使用）；抽屜資產、辨識檔、URDF
+規則:
+  - 'H1 起跑前與跑完後各核一次；任一檔不符 ⇒ 該趟不計入，另建批次（C0 schedule.程式變更）'
+  - 修程式不覆寫既有實錄或本凍結；需要改 ⇒ 新凍結檔、新批次
+共同配置（H1 與 H5 只有 WGMPC_N 不同）:
+  環境: 'HEADING=1 MOTM=1 CAM=false OPEN_M=0.200 FINGER_COL=split GRASP_DEPTH_M=0.0068 DRAWER_ASSET=…/drawer_unit_bar26.yaml SOLVER_EXTRA=--offset-init-static'
+  MOTM_TASK_ARGS: '--standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync --approach-rate 0.02 --motm-w-qn 0.8 --motm-w-vref-pre 0.3'
+  熱保護: run_guarded.sh，上限 92 °C
+判定:
+  重播: horizon_replay_check.py（H5 已 PASS；H1 的逐輪紀錄也要完整、可重播）
+  任務成功: 'motm_physical_check.py S1–S6；連續 = 步號差 1 且時間差 = physics_dt ±50%；缺漏／非有限 ⇒ 中斷計時或「證據不足」'
+  設定一致: 'horizon_config_check.py --allow solver.N（H1 vs H5）'
+測試: 'test_motm_physical_check.py 15/15、test_horizon_replay_check.py 14/14、test_wgmpc_cycle_record.py 9/9、test_horizon_metrics.py 6/6'
