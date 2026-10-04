@@ -18,3 +18,12 @@ v2（2026-10-05，依 Codex 審查 reviews/20261005_023538_reply.md）:
     motm_physical_check.py：expect_open_m 必須是有限正數。c1_summarize.py：預期行程取自凍結排程。
   新增檔: 'test_run_plan_batch.sh（15 項假運行器反例）、c1_summarize.py、c0_summarize.py、tools/codex_review.sh'
   控制設定: '未變（與 v1、C0 相同）'
+v3（2026-10-05，依 Codex 審查 reviews/20261005_025141_reply.md）:
+  雜湊清單: 'freeze_c1a.sha256（40 檔）；v2 留底為 freeze_c1a_v2.sha256'
+  變更: >
+    c0_summarize.analyse：每支工具執行前刪舊輸出、離開碼與輸出檔都核，失敗記 tool_errors；指標安全取值，
+    缺值記 evidence_issues，不拋例外。c1_summarize：run_problems／pair_problems —— 批次狀態非 executed、
+    工具異常、N 缺失或與排程不符、重播非 PASS、物理判定非 PASS／FAIL、任一證據不足、指標缺值、配對設定核對非 0
+    ⇒ 不進配對差並列出原因；資料完整的任務 FAIL 保留。
+  新增檔: 'test_c1_summarize.py（16 項）'
+  控制設定: '未變'

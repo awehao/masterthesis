@@ -26,71 +26,115 @@ def sh(args):
     return p.returncode, p.stdout
 
 
+def run_tool(args, out_path, ok_rcs):
+    """執行一支判定工具。先刪舊輸出檔，避免工具失敗時讀到舊結果冒充本次。
+    回傳 (結果 dict 或 None, rc, 錯誤說明或 None)。"""
+    if out_path and os.path.exists(out_path):
+        os.remove(out_path)
+    rc, txt = sh(args)
+    if rc not in ok_rcs:
+        return None, rc, f'{args[0]} 離開碼 {rc} 不在預期 {sorted(ok_rcs)}'
+    if out_path:
+        if not os.path.exists(out_path):
+            return None, rc, f'{args[0]} 沒有寫出 {os.path.basename(out_path)}'
+        try:
+            return json.load(open(out_path)), rc, None
+        except ValueError as e:
+            return None, rc, f'{args[0]} 輸出無法解析：{e}'
+    try:
+        return json.loads(txt[txt.index('{'):]), rc, None
+    except ValueError as e:
+        return None, rc, f'{args[0]} 輸出無法解析：{e}'
+
+
+def dig(d, *keys):
+    """安全取值：任何一層缺漏或型別不對都回 None。"""
+    for k in keys:
+        if not isinstance(d, dict) or k not in d:
+            return None
+        d = d[k]
+    return d
+
+
 def analyse(rid, expect_open_m=None):
+    """逐趟跑判定工具並取指標。缺欄位或工具失敗逐趟記為證據問題（evidence_issues），
+    相關指標填 None，不拋例外、不讀舊分析檔。"""
     D = os.path.join(RUNS, rid)
     A = os.path.join(D, 'analysis')
     os.makedirs(A, exist_ok=True)
-    out = {'run': rid}
+    out = {'run': rid, 'evidence_issues': [], 'tool_errors': []}
     if not os.path.exists(os.path.join(D, 'align_solver.json')):
-        out['status'] = '缺 align_solver.json（啟動前中止？）'
+        out['tool_errors'].append('缺 align_solver.json')
         return out
-    rc, _ = sh(['horizon_replay_check.py', D, '--out', os.path.join(A, 'replay_check.json')])
-    out['replay_rc'] = rc
-    rc, _ = sh(['motm_physical_check.py', D, '--out', os.path.join(A, 'physical_check.json')]
-               + ([] if expect_open_m is None else ['--expect-open-m', repr(float(expect_open_m))]))
-    out['physical_rc'] = rc
-    rc, _ = sh(['horizon_metrics.py', D, '--out', os.path.join(A, 'horizon_metrics.json')])
-    out['metrics_rc'] = rc
-    rc, txt = sh(['motm_metrics.py', D])
-    open(os.path.join(A, 'motm_metrics.out'), 'w').write(txt)
-    out['motm_rc'] = rc
-    rp = json.load(open(os.path.join(A, 'replay_check.json')))
-    pc = json.load(open(os.path.join(A, 'physical_check.json')))
-    hm = json.load(open(os.path.join(A, 'horizon_metrics.json')))
-    mm = json.loads(txt[txt.index('{'):]) if '{' in txt else {}
-    task = json.load(open(os.path.join(D, 'task.json')))
-    ph = {e['phase']: float(e['sim_t']) for e in task['events'] if 'phase' in e}
-    W = hm['by_phase']['WINDOW']
-    sm = W['smoothness']
-    ar = sm['arm_reversals']
+    rp, out['replay_rc'], e1 = run_tool(
+        ['horizon_replay_check.py', D, '--out', os.path.join(A, 'replay_check.json')],
+        os.path.join(A, 'replay_check.json'), {0, 1, 2, 3})
+    pargs = ['motm_physical_check.py', D, '--out', os.path.join(A, 'physical_check.json')]
+    if expect_open_m is not None:
+        pargs += ['--expect-open-m', repr(float(expect_open_m))]
+    pc, out['physical_rc'], e2 = run_tool(pargs, os.path.join(A, 'physical_check.json'), {0, 1, 2})
+    hm, out['metrics_rc'], e3 = run_tool(
+        ['horizon_metrics.py', D, '--out', os.path.join(A, 'horizon_metrics.json')],
+        os.path.join(A, 'horizon_metrics.json'), {0})
+    mm, out['motm_rc'], e4 = run_tool(['motm_metrics.py', D], None, {0})
+    if mm is not None:
+        json.dump(mm, open(os.path.join(A, 'motm_metrics.json'), 'w'), ensure_ascii=False, indent=1)
+    out['tool_errors'] += [e for e in (e1, e2, e3, e4) if e]
+    task = json.load(open(os.path.join(D, 'task.json'))) if os.path.exists(os.path.join(D, 'task.json')) else {}
+    ph = {e['phase']: float(e['sim_t']) for e in task.get('events', []) if 'phase' in e}
+    W = dig(hm, 'by_phase', 'WINDOW') or {}
+
+    def win(*k):
+        return dig(W, *k)
+    s4 = dig(pc, 'S4_drift')
+    s4 = s4 if isinstance(s4, dict) else {}
+    s5 = dig(pc, 'S5_home')
+    s5 = s5 if isinstance(s5, dict) else {}
+    s1 = dig(pc, 'S1_open_hold')
+    s1 = s1 if isinstance(s1, dict) else {}
     out.update({
-        'N': hm['N'],
-        'flow_final_phase': mm.get('final_phase'), 'abort': mm.get('abort'),
-        'replay': rp['verdict'], 'physical': pc['verdict'],
-        'physical_failed': pc['failed'], 'physical_insufficient': pc['insufficient'],
+        'N': dig(hm, 'N') if hm else dig(rp, 'N_args'),
+        'flow_final_phase': dig(mm, 'final_phase'), 'abort': dig(mm, 'abort'),
+        'replay': dig(rp, 'verdict'), 'physical': dig(pc, 'verdict'),
+        'physical_failed': dig(pc, 'failed'), 'physical_insufficient': dig(pc, 'insufficient'),
         'm': {
-            'open_hold_s': pc['S1_open_hold']['longest_s'],
-            'grasp_longest_s': pc['S3_grasp']['longest_both_fingers_s'],
-            'grip_fraction_in_window': (pc['S4_drift'] or {}).get('grip_fraction_in_window')
-            if isinstance(pc['S4_drift'], dict) else None,
-            'drift_max_mm': pc['S4_drift'].get('max_mm') if isinstance(pc['S4_drift'], dict) else None,
-            'home_dist_m': pc['S5_home'].get('dist_m') if isinstance(pc['S5_home'], dict) else None,
-            'window_s': round(hm['window']['to_sim_t'] - hm['window']['from_sim_t'], 3),
+            'open_hold_s': s1.get('longest_s'),
+            'grasp_longest_s': dig(pc, 'S3_grasp', 'longest_both_fingers_s'),
+            'grip_fraction_in_window': s4.get('grip_fraction_in_window'),
+            'drift_max_mm': s4.get('max_mm'),
+            'home_dist_m': s5.get('dist_m'),
+            'window_s': (None if not hm else round(hm['window']['to_sim_t'] - hm['window']['from_sim_t'], 3)),
             'align_to_done_s': (round(ph['DONE'] - ph['ALIGN'], 3)
                                 if 'DONE' in ph and 'ALIGN' in ph else None),
-            'disallowed_stops': (mm.get('whole_run') or {}).get('n_disallowed_stops'),
-            'longest_dwell_excl_open_hold_s': (mm.get('low_speed_dwell') or {}).get('longest_excl_open_hold_s'),
-            'err_p_p95_m': W['tracking']['err_p_m']['p95'],
-            'err_p_max_m': W['tracking']['err_p_m']['max'],
-            'err_r_p95_rad': W['tracking']['err_r_rad']['p95'],
-            'sp_margin_min_rad': W['limits']['setpoint']['min_rad'],
-            'meas_margin_min_rad': W['limits']['measured']['min_rad'],
-            'arm_rev_adjacent_per_s': ar['adjacent_rate_per_s'],
-            'arm_rev_adjacent': ar['adjacent'],
-            'arm_rev_valid_pairs': ar['adjacent_valid_pairs'],
-            'du_arm_p95': sm['du_arm']['p95'], 'du_base_p95': sm['du_base']['p95'],
-            'tcp_speed_10ms_max_mps': sm['tcp_speed_10ms_mps']['max'],
-            'core_ms_p50': W['compute']['core_ms']['p50'],
-            'core_ms_p99': W['compute']['core_ms']['p99'],
-            'cycle_wall_ms_p95': W['compute']['cycle_wall_ms']['p95'],
-            'cycle_wall_ms_max': W['compute']['cycle_wall_ms']['max'],
-            'n_missed_slot': hm['solver']['n_missed_slot'],
-            'n_failed_solve': hm['solver']['n_failed'],
-            'n_shaped': hm['solver']['n_shaped'],
-            'n_cycles': hm['solver']['n_cycles'],
-            'arm_share_open_mm': (mm.get('share_OPEN') or {}).get('arm_only_dy_mm'),
-            'arm_share_close_mm': (mm.get('share_CLOSE') or {}).get('arm_only_dy_mm'),
+            'disallowed_stops': dig(mm, 'whole_run', 'n_disallowed_stops'),
+            'longest_dwell_excl_open_hold_s': dig(mm, 'low_speed_dwell', 'longest_excl_open_hold_s'),
+            'err_p_p95_m': win('tracking', 'err_p_m', 'p95'),
+            'err_p_max_m': win('tracking', 'err_p_m', 'max'),
+            'err_r_p95_rad': win('tracking', 'err_r_rad', 'p95'),
+            'sp_margin_min_rad': win('limits', 'setpoint', 'min_rad'),
+            'meas_margin_min_rad': win('limits', 'measured', 'min_rad'),
+            'arm_rev_adjacent_per_s': win('smoothness', 'arm_reversals', 'adjacent_rate_per_s'),
+            'arm_rev_adjacent': win('smoothness', 'arm_reversals', 'adjacent'),
+            'arm_rev_valid_pairs': win('smoothness', 'arm_reversals', 'adjacent_valid_pairs'),
+            'du_arm_p95': win('smoothness', 'du_arm', 'p95'),
+            'du_base_p95': win('smoothness', 'du_base', 'p95'),
+            'tcp_speed_10ms_max_mps': win('smoothness', 'tcp_speed_10ms_mps', 'max'),
+            'core_ms_p50': win('compute', 'core_ms', 'p50'),
+            'core_ms_p99': win('compute', 'core_ms', 'p99'),
+            'cycle_wall_ms_p95': win('compute', 'cycle_wall_ms', 'p95'),
+            'cycle_wall_ms_max': win('compute', 'cycle_wall_ms', 'max'),
+            'n_missed_slot': dig(hm, 'solver', 'n_missed_slot'),
+            'n_failed_solve': dig(hm, 'solver', 'n_failed'),
+            'n_shaped': dig(hm, 'solver', 'n_shaped'),
+            'n_cycles': dig(hm, 'solver', 'n_cycles'),
+            'arm_share_open_mm': dig(mm, 'share_OPEN', 'arm_only_dy_mm'),
+            'arm_share_close_mm': dig(mm, 'share_CLOSE', 'arm_only_dy_mm'),
         }})
+    if out['physical_insufficient']:
+        out['evidence_issues'].append('物理判定證據不足：' + '、'.join(out['physical_insufficient']))
+    missing = [k for k, v in out['m'].items() if v is None]
+    if missing:
+        out['evidence_issues'].append('指標缺值：' + '、'.join(missing))
     return out
 
 
