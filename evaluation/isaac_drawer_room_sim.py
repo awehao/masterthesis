@@ -65,6 +65,12 @@ ap.add_argument('--wrist-hfov', type=float, default=69.0)
 ap.add_argument('--wrist-frames', type=int, default=20)
 ap.add_argument('--wrist-warmup', type=int, default=60)
 ap.add_argument('--wrist-max-steps', type=int, default=2000)
+ap.add_argument('--wrist-hz', type=float, default=5.0,
+                help='腕部相機取樣頻率（模擬時間）；存檔與發布都依此頻率')
+ap.add_argument('--wrist-replay', default=None,
+                help='重播既有實錄（room_run.json）的一段運動來擷取動態腕部影像（不跑控制）')
+ap.add_argument('--wrist-replay-t0', type=float, default=0.0)
+ap.add_argument('--wrist-replay-t1', type=float, default=1e9)
 ap.add_argument('--wrist-base', default='-0.136412,0.560,1.297349',
                 help='擺位底盤 x,y,yaw（預設＝基準停位）')
 ap.add_argument('--wrist-q', default='-0.383712,0.301253,0.428917,-0.661155,-1.469862,-1.492557',
@@ -818,8 +824,19 @@ def main() -> int:
     # 場景由**同一份程式**建起，不另寫一支重播器。
     if a.wrist_v0:
         from wrist_v0_capture import run_wrist_v0
+        _set_drawer = None
+        if a.wrist_replay:
+            # 抽屜開度：與重播模式同一做法（剛體視圖設世界位姿，開度沿世界 −y）
+            _wv = _RigidPrim(prim_paths_expr=dauth['drawer_prim'], name='drawer_wrist_replay')
+            _wv.initialize()
+            xfc.Clear()
+            _w0 = xfc.GetLocalToWorldTransform(dprim).ExtractTranslation()
+            _wx0, _wz0 = float(_w0[0]), float(_w0[2])
+
+            def _set_drawer(op):
+                _wv.set_world_poses(positions=np.array([[_wx0, DY0 - op, _wz0]], dtype=np.float32))
         return run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, ROBOT,
-                            walk, dspec, a.urdf)
+                            walk, dspec, a.urdf, set_drawer=_set_drawer)
     if a.replay:
         if cam is None:
             print('[room] 重播模式要開 --cam', flush=True)

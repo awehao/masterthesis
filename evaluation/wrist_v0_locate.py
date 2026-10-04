@@ -140,7 +140,11 @@ def main():
         'selection': sel,
         'truth_cylinder': {'center': c_bar.tolist(), 'axis': a_bar.tolist(), 'radius_m': r, 'height_m': h},
         'A1_data': {'pass': bool(a1_ok), **a1},
-        'A2_box_check': {'pass': in_box, 'bar_center_uv': uvb.tolist(),
+        # A2 分兩項：真值中心在框內；框中心對準 ≤ 15 px（人工框對準條件，不是內外參標定精度）
+        'A2_box_check': {'pass': bool(in_box and np.linalg.norm(uvb - box_c) <= A2_PX),
+                         'in_box': in_box,
+                         'box_center_within_15px': bool(np.linalg.norm(uvb - box_c) <= A2_PX),
+                         'bar_center_uv': uvb.tolist(),
                          'px_from_box_center': float(np.linalg.norm(uvb - box_c)),
                          'note': '≤ 15 px 只是人工框對準條件，不是內外參標定精度'},
         'A3_depth_mm': {'pass': bool(dz and max(dz) <= A3_MM), 'median': float(np.median(dz)) if dz else None,

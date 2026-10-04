@@ -77,7 +77,7 @@ def wxyz_to_R(q):
 
 # ---------------------------------------------------------------- 主程序
 def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, walk,
-                 dspec, urdf):
+                 dspec, urdf, set_drawer=None):
     import imageio.v2 as imageio
     import rclpy
     from geometry_msgs.msg import TransformStamped
@@ -105,7 +105,8 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
         return 40
     T_mount = urdf_chain_T(urdf, base_link, OPT)
     cam_path = f'{eef.GetPath()}/wrist_cam'
-    cam = Camera(prim_path=cam_path, resolution=(W, H))
+    # 取樣頻率（模擬時間）：annotator 每 1/hz 秒才更新一次影格
+    cam = Camera(prim_path=cam_path, resolution=(W, H), frequency=int(a.wrist_hz))
     cam.initialize()
     cam.add_distance_to_image_plane_to_frame()
     # 2 設定光學參數（場景單位 m）→ 讀回
@@ -118,6 +119,7 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
                        camera_axes='ros')
     meta['mount'] = {'parent_prim': str(eef.GetPath()), 'parent_link': base_link,
                      'camera_prim': cam_path, 'T_parent_optical_urdf': T_mount.tolist()}
+    meta['sampling_hz_set'] = float(a.wrist_hz)
     meta['intrinsics_set'] = {'resolution': [W, H], 'hfov_deg': a.wrist_hfov,
                               'horizontal_aperture_m': ha, 'focal_length_m': fl,
                               'clipping_m': [0.05, 10.0]}
@@ -187,12 +189,65 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
     Kfk = WholeBodyKinematics.from_urdf_file(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), 'models', 'omni_bot_wholebody_expanded.urdf'))
 
-    # 4 取新影格
+    # 4 取新影格（靜態：瞬移保持；重播：逐物理步套用既有實錄的位姿）
+    # **時間匹配**：每個物理步後記下（模擬時間、相機世界位姿、把手真值位置）；新影格以它的
+    # rendering_time 找**同一時刻**的姿態。找不到就拒絕這個影格，不以讀取當下的時間／姿態補戳。
+    from pxr import UsdGeom as _UG
+    dt = float(a.physics_dt)
+    hist = {}
+    step_ms = []
+    rejected = []
+    replay_steps = None
+    if a.wrist_replay:
+        rec = json.load(open(a.wrist_replay))
+        cols = rec['steps_cols']
+        ib, iq, io = cols.index('base_xyth'), cols.index('q_arm_meas'), cols.index('opening_m')
+        iqf = cols.index('q_finger') if 'q_finger' in cols else None
+        replay_steps = [x for x in rec['steps']
+                        if a.wrist_replay_t0 <= float(x[1]) <= a.wrist_replay_t1]
+        meta['replay'] = {'source': a.wrist_replay, 't0': a.wrist_replay_t0, 't1': a.wrist_replay_t1,
+                          'n_steps': len(replay_steps)}
+        print(f'[wrist] 重播 {a.wrist_replay} {a.wrist_replay_t0}–{a.wrist_replay_t1} s：'
+              f'{len(replay_steps)} 步', flush=True)
+
+    def apply_replay(row):
+        bx_, by_, byaw_ = row[ib]
+        robot.set_world_pose(np.array([bx_, by_, 0.0], dtype=np.float32),
+                             np.array([math.cos(byaw_ / 2), 0.0, 0.0, math.sin(byaw_ / 2)],
+                                      dtype=np.float32))
+        qq = q.copy()
+        for k, j in enumerate(ARM):
+            qq[idx[j]] = float(row[iq][k])
+        if iqf is not None and row[iqf] is not None:
+            for k, j in enumerate(FJ):
+                qq[fidx[j]] = float(row[iqf][k])
+        robot.set_joint_positions(qq)
+        robot.set_linear_velocity(np.zeros(3, dtype=np.float32))
+        robot.set_angular_velocity(np.zeros(3, dtype=np.float32))
+        robot.get_articulation_controller().apply_action(ArticulationAction(joint_positions=qq))
+        if set_drawer is not None and row[io] is not None:
+            set_drawer(float(row[io]))
+
     last_rf = None
     n_reads = 0
-    for _ in range(int(a.wrist_max_steps)):
-        hold()
+    n_steps = len(replay_steps) if replay_steps is not None else int(a.wrist_max_steps)
+    for k_step in range(n_steps):
+        if replay_steps is not None:
+            apply_replay(replay_steps[k_step])
+        else:
+            hold()
+        import time as _time
+        _w0 = _time.perf_counter()
         world.step(render=True)
+        step_ms.append((_time.perf_counter() - _w0) * 1e3)
+        t_now = float(world.current_time)
+        pos_h, q_h = cam.get_world_pose(camera_axes='ros')
+        _xc = _UG.XformCache()
+        _Mh = _xc.GetLocalToWorldTransform(hprim)
+        hist[int(round(t_now / dt))] = {
+            't': t_now, 'pos': np.asarray(pos_h, float), 'quat': np.asarray(q_h, float),
+            'handle_center': [float(_Mh[3][0]), float(_Mh[3][1]), float(_Mh[3][2])],
+            'src_t': (float(replay_steps[k_step][1]) if replay_steps is not None else None)}
         fr = cam.get_current_frame()
         n_reads += 1
         # 影格識別：rendering_frame 是參考時間（分子／分母）的 dict；彩色在 'rgb' 鍵（RGBA）
@@ -202,26 +257,35 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
         col = fr.get('rgb') if fr.get('rgb') is not None else fr.get('rgba')
         if rf is None or rf == last_rf or rf == (0, 0) or col is None \
                 or fr.get('distance_to_image_plane') is None:
-            if n_reads <= 3:
-                print(f'[wrist] 讀 {n_reads}：鍵 {sorted(fr.keys())} rendering_frame={rfd!r}', flush=True)
+            continue
+        last_rf = rf
+        t_r = fr.get('rendering_time')
+        if t_r is None:
+            rejected.append({'reason': '影格沒有 rendering_time', 'read_t': t_now})
+            continue
+        t_r = float(t_r)
+        hk = int(round(t_r / dt))
+        hp = hist.get(hk)
+        if hp is None or abs(hp['t'] - t_r) > 1e-6:
+            rejected.append({'reason': '姿態歷史中沒有此擷取時刻', 'rendering_time': t_r, 'read_t': t_now})
             continue
         rgba = np.asarray(col)
         dep = np.asarray(fr['distance_to_image_plane'], dtype=np.float32)
         if rgba.size == 0 or dep.size == 0:
+            rejected.append({'reason': '影像為空', 'rendering_time': t_r})
             continue
-        last_rf = rf
-        t_r = float(fr.get('rendering_time') or world.current_time)
-        pos, qwxyz = cam.get_world_pose(camera_axes='ros')
-        pos = np.asarray(pos, float)
-        qwxyz = np.asarray(qwxyz, float)
-        bp, bq = robot.get_world_pose()
-        qa_now = np.asarray(robot.get_joint_positions(), float)
-        yaw = 2 * math.atan2(float(bq[3]), float(bq[0]))
-        qfk = np.r_[float(bp[0]), float(bp[1]), yaw, [qa_now[idx[j]] for j in ARM]]
-        T_fk = Kfk.fk(qfk, OPT)
-        R_isaac = wxyz_to_R(qwxyz)
-        dp = float(np.linalg.norm(T_fk[:3, 3] - pos))
-        dR = float(np.arccos(np.clip((np.trace(T_fk[:3, :3].T @ R_isaac) - 1) / 2, -1, 1)))
+        pos, qwxyz = hp['pos'], hp['quat']
+        # FK 互核（只在靜態模式有意義：重播時讀回的構型＝讀取當下，不是擷取時刻）
+        fkchk = None
+        if replay_steps is None:
+            bp, bq = robot.get_world_pose()
+            qa_now = np.asarray(robot.get_joint_positions(), float)
+            yaw = 2 * math.atan2(float(bq[3]), float(bq[0]))
+            qfk = np.r_[float(bp[0]), float(bp[1]), yaw, [qa_now[idx[j]] for j in ARM]]
+            T_fk = Kfk.fk(qfk, OPT)
+            fkchk = {'pos_m': float(np.linalg.norm(T_fk[:3, 3] - pos)),
+                     'rot_rad': float(np.arccos(np.clip((np.trace(T_fk[:3, :3].T @ wxyz_to_R(qwxyz)) - 1) / 2,
+                                                        -1, 1)))}
         n = len(meta['frames']) + 1
         rgb = rgba[:, :, :3].astype(np.uint8)
         dmm = np.where(np.isfinite(dep) & (dep >= 0.1) & (dep <= 3.0),
@@ -232,12 +296,13 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
         meta['frames'].append({
             'n': n, 'rendering_frame': [int(v) if v is not None else None for v in rf]
             if isinstance(rf, tuple) else rf, 'rendering_time': t_r,
-            'sim_time_at_read': float(world.current_time),
+            'read_time': t_now, 'read_minus_render_s': t_now - t_r,
+            'pose_time': hp['t'], 'pose_source': '姿態歷史（擷取時刻）',
+            'src_record_t': hp['src_t'],
             'cam_pos_world': pos.tolist(), 'cam_quat_wxyz_world': qwxyz.tolist(),
-            'base_xyyaw_actual': [float(bp[0]), float(bp[1]), yaw],
-            'q_arm_actual': [float(qa_now[idx[j]]) for j in ARM],
-            'fk_vs_isaac': {'pos_m': dp, 'rot_rad': dR}})
-        # ROS 發布（同一戳 = 該影格擷取時間）
+            'handle_center_world_at_capture': hp['handle_center'],
+            'fk_vs_isaac': fkchk})
+        # ROS 發布（同一戳 = 該影格擷取時間；姿態 = 擷取時刻的姿態）
         hdr_t = stamp(t_r)
         im = Image()
         im.header.stamp, im.header.frame_id = hdr_t, OPT
@@ -266,8 +331,18 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
         tfb.sendTransform(tf)
         for _k in range(5):
             rclpy.spin_once(nd, timeout_sec=0.01)
-        if len(meta['frames']) >= int(a.wrist_frames):
+        if replay_steps is None and len(meta['frames']) >= int(a.wrist_frames):
             break
+        # 姿態歷史只保留最近 2 s，避免無限長
+        if len(hist) > int(2.0 / dt):
+            for kk in sorted(hist)[:len(hist) - int(2.0 / dt)]:
+                hist.pop(kk, None)
+    meta['rejected_frames'] = rejected
+    meta['load'] = {'step_wall_ms_render_on': {
+        'n': len(step_ms), 'p50': float(np.percentile(step_ms, 50)) if step_ms else None,
+        'p95': float(np.percentile(step_ms, 95)) if step_ms else None,
+        'max': float(max(step_ms)) if step_ms else None},
+        'note': '每物理步含算圖的牆鐘耗時（world.step(render=True)）；取樣 5 Hz 只影響存檔與發布'}
     for _k in range(20):
         rclpy.spin_once(nd, timeout_sec=0.02)
     meta['n_reads'] = n_reads
@@ -299,4 +374,5 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
     nd.destroy_node()
     rclpy.shutdown()
     print(f'[wrist] 擷取 {len(meta["frames"])} 個新影格（讀 {n_reads} 次）→ {out}', flush=True)
-    return 0 if len(meta['frames']) >= int(a.wrist_frames) else 42
+    need = 10 if a.wrist_replay else int(a.wrist_frames)
+    return 0 if len(meta['frames']) >= need else 42
