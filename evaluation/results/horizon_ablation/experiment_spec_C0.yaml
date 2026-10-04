@@ -2,7 +2,7 @@
 # 2026-10-04。性質：**未執行**的實驗規格；新趟次等使用者恢復模擬後才跑。
 # 依據：單步與多步比較_下一步計畫.md、H1_H5_resolved_config.yaml、replay_input_coverage.yaml
 schema: horizon_ablation_c0/1
-status: draft（執行前需使用者確認並凍結）
+status: 'draft-2（分析口徑已修正；凍結前尚待：P-REPLAY 需新 H5 紀錄、使用者確認配對順序）'
 
 問題: >
   同一增廣 W-GMPC、同一 MotM 任務規則下，預測時域 1 步（H1）與 5 步（H5）
@@ -11,23 +11,27 @@ status: draft（執行前需使用者確認並凍結）
 # ---------------------------------------------------------------- 前置條件（全部滿足才開跑）
 prerequisites:
   - id: P-LOG
-    內容: '求解節點逐輪記錄 T_cyc、target_src／age、U_warm、U_sol、d̂、bias、solver_N（replay_input_coverage.yaml logging_spec_proposal）'
-    驗證: 加紀錄前後同輸入求解輸出逐位元相同（單元測試）
+    內容: '求解節點逐輪記錄 T_cyc、target_src／age、U_warm（求解前複製）、U_sol、d̂、bias、solver_N；失敗與未發布輪也記'
+    狀態: '已實作（wgmpc_cycle_record.py、wgmpc_wg2_node.py）。test_wgmpc_cycle_record.py 9/9：合成 8 輪閉環經 JSON 後逐位元重播（u0、U、停止理由、接受判定相同）'
+    界線: 只驗功能一致；紀錄開銷對即時性的影響**未量**，第一趟實跑要量核心與整輪牆鐘
   - id: P-WB
     內容: drawer_wholebody_node 把參數落盤
+    狀態: 已實作（wholebody.json args）
   - id: P-N
     內容: 'run_nav_handover.sh 改為明確的 WGMPC_N（預設 5，行為不變）；分析以 align_solver.json args.N 為準'
+    狀態: 已實作
   - id: P-CHK
     內容: 'horizon_config_check.py 對每一對 H1／H5 只允許 solver.N 不同；其他差異 = 0 才計入'
   - id: P-REPLAY
     內容: '先在一趟新紀錄的 H5 上通過重播驗收（replay_input_coverage.yaml h5_replay_acceptance_draft），確認紀錄齊全'
   - id: P-CHATTER
-    內容: >
-      已知條件：b6 MotM（H5）手臂命令有間歇性抖動 —— 手臂翻號 114／153／36 次、
-      相鄰命令變化 p95 0.18／0.20／0.06 rad/s，停車流程為 0 次／0.005。出現相位每趟不同，
-      三趟的退開都有。疑與 MotM 相位權重（w_a 0.01、w_p 200）有關，未驗證。
-      **比較前要決定**：(a) 照現況比較並把抖動列為兩組共同的已知條件；或
-      (b) 先另案處理抖動、凍結新配置後再比較。不得在比較中途為某一組調權重。
+    決定: '(a) 保留目前配置，把手臂命令反轉當成**待比較的現象**；兩組共用的是設定，不預設兩組有相同抖動'
+    現況（b6，H5，修正口徑）: >
+      相鄰兩輪都 > 0.05 rad/s 且反號：69／262、94／417、22／248（整窗 2.0／3.0／0.7 次/s）；
+      集中在關閉保持（12/s）、開到位保持（16/s）、拉開（5.7/s）、退開（9.6–14.6/s，三趟都有）。
+      停車 0／15–21 —— 停車手臂少超過閾值，有效比較次數少一個數量級，不能直接對比。
+    候選原因: MotM 相位權重（w_a 0.01、w_p 200）—— 未驗證，不據此改權重
+    處理: 抖動另做離線診斷；不在 H1／H5 比較中途改配置
 
 # ---------------------------------------------------------------- 方法與場景
 methods:
@@ -49,7 +53,13 @@ schedule:
 
 # ---------------------------------------------------------------- 判準（沿用 MotM，不為比較而改）
 criteria:
-  完成: 'task.json final_phase = DONE 且無 abort'
+  流程完成: 'task.json final_phase = DONE 且無 abort —— **只是流程完成，不單獨等於任務成功**'
+  任務成功（全部由物理紀錄獨立核對）:
+    - '開／關保持：由 room_run.json 逐物理步開度重算，帶內連續 ≥ 2 s'
+    - '夾持：room_run.json contact_held_s 逐物理步 ≥ 2 s（不採任務節點自報）'
+    - '漂移：夾持期間 ≤ 10 mm（逐步重算，不只取 task trace 的 0.5 s 抽樣）'
+    - '回程：最終底盤位姿到起點 ≤ home_tol 0.20 m（由 room_run 真值）'
+    - 非預期接觸：抽屜配對 > 0.01 N 只允許手指；櫃體等未量者填 NA
   夾持: 逐物理步雙指 ≥ 0.5 N 連續 2 s
   開／關: 開帶 195–205 mm、關帶 0–5 mm（限位容差 −10 µm），各保持 2 s
   滑脫: 夾持漂移 ≤ 10 mm
@@ -62,7 +72,7 @@ metrics:
     - 任務完成與失敗相位
     - 追蹤：err_p／err_r p50／p95／max（分相位）
     - 限制：設定點與實測角到有效限位的最小餘裕與關節
-    - 平順：手臂翻號數、相鄰命令變化 p95／max、TCP 速度峰值
+    - '平順：手臂命令反轉分三類報（相鄰輪 adjacent／隔零 gapped／跨相位 boundary），附有效比較次數與每秒速率；相鄰命令變化 p95／max；TCP 速度峰值以**逐物理步（10 ms）**為主、50 ms 區間平均另列'
     - 計算：核心 total 與整輪牆鐘 p50／p95／p99／max、漏時槽、暖啟動丟棄、求解失敗
   次要:
     - 全程時間、停頓（motm_metrics.py）、手臂／底盤分擔、夾持漂移、首次接觸到拉開

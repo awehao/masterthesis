@@ -201,6 +201,8 @@ def main():
     rclpy.init()
     nd = WholeBody(a)
     rep = {'phase': 'WARMUP', 'events': [],
+           # 參數落盤：--motm 等設定要能由檔案核對（horizon_config_check.py）
+           'args': {k: v for k, v in vars(a).items() if k != 'out'},
            'q_grasp': Q_GRASP.tolist(), 'stow': stow.tolist()}
     t0 = time.monotonic()
     while rclpy.ok() and time.monotonic() - t0 < 30 and (

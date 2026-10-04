@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(HERE, '..', 'src', 'ammr_wholebody_mpc'))
 from ammr_wholebody_mpc.wholebody_kinematics import (             # noqa: E402
     WholeBodyKinematics)
 
+FLIP_THR = 0.05          # rad/s：低於此視為近零，不參與翻號
 PHASES = ['ALIGN', 'ENGAGE_WAIT', 'OPEN', 'OPEN_HOLD', 'CLOSE', 'CLOSE_HOLD',
           'RELEASE_WAIT', 'RETREAT']
 
@@ -42,6 +43,45 @@ def pct(v, ps=(50, 95, 99)):
     out['max'] = round(float(v.max()), 6)
     out['n'] = int(len(v))
     return out
+
+
+def count_reversals(useq, thr=0.05, joints=range(3, 9)):
+    """手臂命令反轉計數。useq = [(相位, 九維命令), …]，依求解輪順序。
+
+    回傳 {相位或 'WINDOW': Counter(adjacent, gapped, adj_pairs, boundary)}：
+      adjacent   相鄰兩輪都 |u| > thr 且反號
+      gapped     同相位內、中間隔著近零命令的反號
+      adj_pairs  相鄰兩輪都 |u| > thr 的比較次數（adjacent 的分母）
+      boundary   跨相位切換的反號（只記在 WINDOW）
+    各關節分開比。
+    """
+    flip = collections.defaultdict(collections.Counter)
+    last = {}                 # j -> (sign, 上一輪是否 > thr)
+    prev_ph = None
+    for ph, u in useq:
+        u = np.asarray(u, float)
+        boundary = None
+        if prev_ph is not None and ph != prev_ph:
+            boundary = {j: v[0] for j, v in last.items()}
+            last = {}
+        for j in joints:
+            if abs(u[j]) > thr:
+                sg = float(np.sign(u[j]))
+                if boundary is not None and j in boundary and boundary[j] != sg:
+                    flip['WINDOW']['boundary'] += 1
+                if j in last:
+                    psg, adj = last[j]
+                    if adj:
+                        for g in (ph, 'WINDOW'):
+                            flip[g]['adj_pairs'] += 1
+                    if psg != sg:
+                        for g in (ph, 'WINDOW'):
+                            flip[g]['adjacent' if adj else 'gapped'] += 1
+                last[j] = (sg, True)
+            elif j in last:
+                last[j] = (last[j][0], False)
+        prev_ph = ph
+    return flip
 
 
 def main():
@@ -81,8 +121,13 @@ def main():
     # ---- 求解輪 ----
     by = collections.defaultdict(lambda: collections.defaultdict(list))
     prev_u = None
-    flips = collections.Counter()
-    prev_sign = {}
+    prev_ph = None
+    # 翻號分三類（各關節分開比，閾值 FLIP_THR rad/s）：
+    #   adjacent   相鄰兩個求解輪都 > 閾值且符號相反（真正的週期間反轉）
+    #   gapped     中間隔著近零命令的反轉（相位內）
+    #   boundary   跨相位切換的反轉（另列，不算進任一相位）
+    # adj_pairs = 相鄰兩輪都 > 閾值的有效比較次數（分母）
+    useq = []                # (相位, 九維命令)，依求解輪順序
     stops = collections.Counter()
     n_fail = 0
     for L in log:
@@ -112,20 +157,16 @@ def main():
                 for g in (ph, 'WINDOW'):
                     by[g]['du_base'].append(float(np.abs(u[:3] - prev_u[:3]).max()))
                     by[g]['du_arm'].append(float(np.abs(u[3:] - prev_u[3:]).max()))
-            for j in range(3, 9):
-                if abs(u[j]) > 0.05:
-                    sg = np.sign(u[j])
-                    if j in prev_sign and prev_sign[j] != sg:
-                        flips[ph] += 1
-                        flips['WINDOW'] += 1
-                    prev_sign[j] = sg
+            useq.append((ph, u))
             prev_u = u
+            prev_ph = ph
 
     # ---- 逐物理步真值（實測角餘裕、TCP 速度）----
     c = room['steps_cols']
     i = c.index
     S = [s for s in room['steps'] if t_win0 <= s[1] <= t_stop]
     tcp_prev = None
+    tcp_hist = []
     for k, s in enumerate(S):
         t = float(s[1])
         ph = phase_of(t)
@@ -134,13 +175,25 @@ def main():
         for g in (ph, 'WINDOW'):
             by[g]['meas_margin'].append(float(m.min()))
             by[g]['meas_margin_joint'].append(int(m.argmin()) + 1)
-        if k % 5 == 0:                 # 每 50 ms 一點算 FK
-            p = K.fk(np.r_[s[i('base_xyth')], q], args['tcp'])[:3, 3]
-            if tcp_prev is not None:
-                v = float(np.linalg.norm(p - tcp_prev[1]) / (t - tcp_prev[0]))
-                for g in (ph, 'WINDOW'):
-                    by[g]['tcp_speed'].append(v)
-            tcp_prev = (t, p)
+        # 逐物理步（10 ms）FK；另以 5 步（50 ms）區間平均速度作對照
+        p = K.fk(np.r_[s[i('base_xyth')], q], args['tcp'])[:3, 3]
+        tcp_hist.append((t, p))
+        if tcp_prev is not None and t > tcp_prev[0]:
+            v = float(np.linalg.norm(p - tcp_prev[1]) / (t - tcp_prev[0]))
+            for g in (ph, 'WINDOW'):
+                by[g]['tcp_speed'].append(v)
+        if len(tcp_hist) > 5:
+            t5, p5 = tcp_hist[-6]
+            for g in (ph, 'WINDOW'):
+                by[g]['tcp_speed_50ms'].append(
+                    float(np.linalg.norm(p - p5) / (t - t5)))
+        tcp_prev = (t, p)
+
+    flip = count_reversals(useq, FLIP_THR)
+    dur = {'WINDOW': t_stop - t_win0}
+    for k_, (p_, t0_) in enumerate(bounds):
+        t1_ = bounds[k_ + 1][1] if k_ + 1 < len(bounds) else t_stop
+        dur[p_] = max(0.0, min(t1_, t_stop) - t0_)
 
     def summarise(b, g):
         def mn(key, jkey):
@@ -155,8 +208,19 @@ def main():
                        'measured': mn('meas_margin', 'meas_margin_joint')},
             'smoothness': {'du_base': pct(b['du_base'], (95,)),
                            'du_arm': pct(b['du_arm'], (95,)),
-                           'arm_sign_flips': int(flips[g]),
-                           'tcp_speed_mps': pct(b['tcp_speed'], (50, 95))},
+                           'arm_reversals': {
+                               'threshold_rad_s': FLIP_THR,
+                               'adjacent': int(flip[g]['adjacent']),
+                               'adjacent_valid_pairs': int(flip[g]['adj_pairs']),
+                               'adjacent_rate_per_s': (
+                                   round(flip[g]['adjacent'] / dur[g], 3)
+                                   if dur.get(g) else None),
+                               'gapped': int(flip[g]['gapped']),
+                               'boundary': (int(flip[g]['boundary'])
+                                            if g == 'WINDOW' else None),
+                               'note': '各關節分開計；adjacent = 相鄰兩求解輪都 > 閾值且反號'},
+                           'tcp_speed_10ms_mps': pct(b['tcp_speed'], (50, 95)),
+                           'tcp_speed_50ms_avg_mps': pct(b['tcp_speed_50ms'], (50, 95))},
             'compute': {'core_ms': pct(b['core_ms']),
                         'cycle_wall_ms': pct(b['cycle_wall_ms']),
                         'age_out_s': pct(b['age_out_s'])},

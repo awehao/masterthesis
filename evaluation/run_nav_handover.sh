@@ -209,7 +209,9 @@ ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
     `# 啟動參數只是**退路**：偏移 0 = 保持實測起始 TCP。` \
     `# 不用 '--target 0 0 0' —— 那會讓目標話題失效時瞄向原點。` \
     --target-offset 0 0 0 \
-    --N 5 --rate 20 \
+    `# 預測步數：WGMPC_N（預設 5 = 既有行為）。分析一律以求解節點落盤的` \
+    `# align_solver.json args.N 為準，不信這裡的傳參。` \
+    --N "${WGMPC_N:-5}" --rate 20 \
     `# **沿用 Stage A 已驗證的那一組**（到達保持 9/10 的設定），` \
     `# 不自己另配一套：延遲補償 1.6/1.0、近目標整形 γ=1.0、` \
     `# 命令變化率權重分底盤（W_A）與手臂（W_S_ARM）、餘裕守衛開。` \

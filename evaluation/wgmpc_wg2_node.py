@@ -71,6 +71,7 @@ from ammr_wholebody_mpc import wgmpc_margin_guard as MG           # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import (            # noqa: E402
     WholeBodyKinematics)
 import wgmpc_cmd_envelope as ENV                                 # noqa: E402
+from wgmpc_cycle_record import solver_io_record                  # noqa: E402
 from wgmpc_sp_handshake import (ARMED, FAILED, HOLD, INIT,       # noqa: E402
                                 SetpointGate, SpSample)
 
@@ -1014,6 +1015,16 @@ class WGMPCNode(Node):
                 _q_sol, _s_sol, _n_comp = self._predict_delay(
                     q0, np.asarray(snap.s, float), snap.sim_t)
             _coord_rec = self._apply_coord(_solve_sim_t0)
+            # **求解前複製**實際送進求解器的暖啟動、偏移與偏差（逐輪重播用）。
+            # 只記錄，不影響求解。
+            _U_warm_in = (None if U_warm is None
+                          else np.array(U_warm, dtype=float, copy=True))
+            _d_hat_in = (np.array(self._of_d, dtype=float, copy=True)
+                         if self.a.offset_free else None)
+            _bias_in = (np.array(self.cfg.arm_model.bias, dtype=float,
+                                 copy=True)
+                        if getattr(self.cfg, 'arm_model', None) is not None
+                        else None)
             if self._gate is not None:
                 # 增廣狀態由**同時刻快照**組成：q 與 s 同一個物理步。
                 # `make_z` 在 s 含非有限值時拋錯，不以實測關節角代替。
@@ -1105,6 +1116,12 @@ class WGMPCNode(Node):
                     1 for _, b_ in self._last_pred_sel if b_ == 'applied'),
                 n_pred_requested_cycle=sum(
                     1 for _, b_ in self._last_pred_sel if b_ == 'requested'))
+            # 逐輪求解輸入／輸出（失敗與未發布輪也留；未捨入）
+            rec['solve_in'].update(solver_io_record(
+                T_cyc=T_cyc, target_src=_tgt_src, target_age_s=_tgt_age,
+                U_warm=_U_warm_in, U_sol=(r.U if r.ok else None),
+                offset_d_hat=_d_hat_in, arm_bias=_bias_in,
+                solver_N=self.cfg.N))
             if not r.ok:
                 n_no_sol += 1
                 rec['published'] = False
