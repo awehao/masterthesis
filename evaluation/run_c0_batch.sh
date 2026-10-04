@@ -9,6 +9,8 @@
 #   BATCH=c0b1 DOMAIN=94 bash evaluation/run_c0_batch.sh
 # 中斷後續跑（不是程式變更，批次不作廢）：RESUME_FROM=<第幾趟>，前面各趟必須已有
 # guard.log 且守護離開碼 0；中斷事件寫進同一份批次紀錄。
+# 整對補跑（處置修訂，須先登錄於 results/horizon_ablation/c0b1_revision_*.yaml）：
+#   ONLY_PAIR=3 PAIR_TAG=p3r ⇒ 只跑該對 H5 → H1，趟次名 <BATCH>_<PAIR_TAG>_H5／_H1，寫進同一份批次紀錄
 # 本腳本自己**不設** ROS_DOMAIN_ID，清殘留時才不會誤判自己。
 set -u
 WS="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,7 +20,13 @@ DOMAIN="${DOMAIN:-94}"
 FREEZE="$WS/evaluation/results/horizon_ablation/freeze_c0.sha256"
 LOG="$WS/evaluation/runs/${BATCH}_batch.log"
 RESUME_FROM="${RESUME_FROM:-1}"
-if [ "$RESUME_FROM" = 1 ]; then
+ONLY_PAIR="${ONLY_PAIR:-}"
+PAIR_TAG="${PAIR_TAG:-}"
+if [ -n "$ONLY_PAIR" ]; then
+  [ -n "$PAIR_TAG" ] || { echo "ONLY_PAIR 需要 PAIR_TAG"; exit 91; }
+  [ -e "$LOG" ] || { echo "補跑但 $LOG 不存在"; exit 91; }
+  [ -e "$WS/evaluation/runs/${BATCH}_${PAIR_TAG}_H5" ] && { echo "${BATCH}_${PAIR_TAG}_H5 已存在，拒跑"; exit 91; }
+elif [ "$RESUME_FROM" = 1 ]; then
   [ -e "$LOG" ] && { echo "$LOG 已存在，拒跑"; exit 91; }
 else
   [ -e "$LOG" ] || { echo "續跑但 $LOG 不存在"; exit 91; }
@@ -46,7 +54,9 @@ clean_domain(){
 
 freeze_ok(){ sha256sum -c --quiet "$FREEZE" >> "$LOG" 2>&1; }
 
-if [ "$RESUME_FROM" = 1 ]; then
+if [ -n "$ONLY_PAIR" ]; then
+  say "=== 整對補跑 $BATCH 第 $ONLY_PAIR 對 → ${PAIR_TAG}（H5 → H1；處置修訂見 c0b1_revision_*.yaml）==="
+elif [ "$RESUME_FROM" = 1 ]; then
   say "=== C0 批次 $BATCH domain=$DOMAIN 順序 ${ORDER[*]} ==="
 else
   say "=== 續跑 $BATCH：自第 $RESUME_FROM 趟（前一個批次程序在第 $((RESUME_FROM-1)) 趟結束後被中斷；非程式變更）==="
@@ -57,12 +67,17 @@ else
     say "  已完成：第 $j 趟 $RID"
   done
 fi
-say "批次腳本 sha256 $(sha256sum "$0" | cut -c1-16)；凍結清單 $(sha256sum "$FREEZE" | cut -c1-16)"
+say "批次腳本 sha256 $(sha256sum "$0" | cut -c1-16)；凍結清單 $(sha256sum "$FREEZE" | cut -c1-16)；kernel $(uname -r)"
 k=0
 for M in "${ORDER[@]}"; do
   k=$((k+1)); pair=$(( (k+1)/2 ))
-  [ "$k" -lt "$RESUME_FROM" ] && continue
-  RID="${BATCH}_p${pair}_${M}"
+  if [ -n "$ONLY_PAIR" ]; then
+    [ "$pair" = "$ONLY_PAIR" ] || continue
+    RID="${BATCH}_${PAIR_TAG}_${M}"
+  else
+    [ "$k" -lt "$RESUME_FROM" ] && continue
+    RID="${BATCH}_p${pair}_${M}"
+  fi
   N=$([ "$M" = H1 ] && echo 1 || echo 5)
   freeze_ok || { say "**凍結不符**（$RID 起跑前），整批停止"; exit 95; }
   clean_domain
