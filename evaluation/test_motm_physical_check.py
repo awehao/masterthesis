@@ -279,3 +279,10 @@ def test_legacy_band_only_for_listed_c0_runs(tmp_path, base):
         run(tmp_path, 'c1a_b1_01_T100_H5', room, task, sol, legacy_c0_band=True)
     out, rc = run(tmp_path, 'c0b1_p2_H1', room, task, sol, legacy_c0_band=True)
     assert rc == 0 and out['S1_open_hold']['band_source'] == 'legacy_c0_default'
+
+
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), 0.0, -0.1, 'x'])
+def test_expect_open_m_must_be_finite_positive(tmp_path, base, bad):
+    """NaN 等不得繞過事前開帶核對。"""
+    with pytest.raises(ValueError):
+        run(tmp_path, f'exp_{bad}', *copy.deepcopy(base), expect_open_m=bad)

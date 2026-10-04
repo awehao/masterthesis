@@ -1,8 +1,8 @@
 # 時域消融 C1 實驗規格（開發案例，事前登錄）
 # 2026-10-05。draft-2：依 Codex 審查修正五處；**只有 C1a 進入凍結**，C1b／S 類保留為候選、不凍結。
 # 依據：experiment_spec_C0.yaml、c0b1_results.yaml、c1_feasibility.py／c1_feasibility.json
-schema: horizon_ablation_c1/2
-status: 'draft-2（C1a 待凍結：freeze_c1a.sha256；C1b／S 類未凍結）'
+schema: horizon_ablation_c1/3
+status: '核定版本 c1a-v2（2026-10-05；凍結 freeze_c1a.sha256 v2，v1 保留為 freeze_c1a_v1.sha256＝功能確認趟的版本依據）；C1b／S 類未凍結'
 
 問題: >
   換了抽屜行程（C1a）或交棒起始條件（C1b／S，候選）後，C0 觀察到的 H5 優勢（整窗追蹤、命令平順、
@@ -28,6 +28,9 @@ C1a:
   逐趟順序: 'T100-H5 → T100-H1 → T150-H1 → T150-H5 → T100-H1 → T100-H5 → T150-H5 → T150-H1'
   配對: 'T100-A（01→02，H5 先）、T150-A（03→04，H1 先）、T100-B（05→06，H1 先）、T150-B（07→08，H5 先）'
   正式比較: '8 趟；功能確認另列（c1a_func_*，不計入）'
+  功能確認結果: >
+    c1a_func_T100_H5：重播 PASS、S1–S6 PASS（無物理步缺口，判定所需證據通過；前段雙指力在展開前有缺值，
+    不寫成全窗所有欄位零缺漏）；S6 只支持已量測的抽屜配對，櫃體與其他物件 NA
   趟次名: 'c1a_b1_<idx>_<case>_<method>'
 
 # ================================================================ C1b／S（候選，未凍結）
@@ -100,6 +103,17 @@ acceptance:
     S4: '夾持期間 TCP 相對把手漂移 ≤ 10 mm'
     S5: '回程終點距起點 ≤ 0.20 m'
     S6: '抽屜配對無非手指 > 0.01 N；櫃體與其他物件 NA'
+批次執行分類（run_plan_batch.sh 寫入 <rid>.status.json；非 executed 一律停批、保存原因、不自動略過或重跑）:
+  executed: '運行器 rc 0、守護 rc 0、必要封存檔齊全 ⇒ 繼續；任務成敗由事後判定'
+  guard_abort: '守護層 90–94'
+  startup_failure: '運行器 83／84／85／86（場景、模擬器、辨識檔、平滑器）'
+  handover_failure: '運行器 1／2（導航交棒節點回報失敗）⇒ 人工依下列分類處置'
+  missing_artifacts: 'rc 0 但封存檔不齊'
+  unclassified: '其他非零'
+  interrupted: '批次程序被中斷 ⇒ 收掉本趟帶標記程序'
+  續跑: '只接受前面各趟 status 為 executed'
+  清程序: '只清帶本批次標記（C1_RUN_TAG）的程序；domain 上有外來程序 ⇒ 停批（98），不殺'
+分析輸入: '預期行程取自凍結排程（c1_summarize.py 讀 c1a_schedule.tsv 傳 --expect-open-m），不取自待驗收趟次；expect 必須是有限正數'
 結果分類（事前定）:
   任務失敗_紀錄有效: '重播 PASS、凍結吻合、資料齊全，但 S1–S6 有不成立 ⇒ 是控制結果，**保留在比較中**'
   證據或協定問題: >

@@ -26,7 +26,7 @@ def sh(args):
     return p.returncode, p.stdout
 
 
-def analyse(rid):
+def analyse(rid, expect_open_m=None):
     D = os.path.join(RUNS, rid)
     A = os.path.join(D, 'analysis')
     os.makedirs(A, exist_ok=True)
@@ -36,7 +36,8 @@ def analyse(rid):
         return out
     rc, _ = sh(['horizon_replay_check.py', D, '--out', os.path.join(A, 'replay_check.json')])
     out['replay_rc'] = rc
-    rc, _ = sh(['motm_physical_check.py', D, '--out', os.path.join(A, 'physical_check.json')])
+    rc, _ = sh(['motm_physical_check.py', D, '--out', os.path.join(A, 'physical_check.json')]
+               + ([] if expect_open_m is None else ['--expect-open-m', repr(float(expect_open_m))]))
     out['physical_rc'] = rc
     rc, _ = sh(['horizon_metrics.py', D, '--out', os.path.join(A, 'horizon_metrics.json')])
     out['metrics_rc'] = rc

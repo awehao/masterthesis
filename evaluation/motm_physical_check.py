@@ -121,6 +121,12 @@ def resolve_band(task, run_name, expect_open_m=None, legacy_c0_band=False):
             raise ValueError(f'--legacy-c0-band 只能用於列名的 C0 舊趟次，{run_name} 不是')
         band, src = LEGACY_C0_BAND, 'legacy_c0_default'
     if expect_open_m is not None:
+        try:
+            ok_e = math.isfinite(float(expect_open_m)) and float(expect_open_m) > 0
+        except (TypeError, ValueError):
+            ok_e = False
+        if not ok_e:
+            raise ValueError(f'expect_open_m 必須是有限正數（取自凍結排程），收到 {expect_open_m!r}')
         want = (expect_open_m - BAND_HALF, expect_open_m + BAND_HALF)
         if abs(band[0] - want[0]) > 1e-9 or abs(band[1] - want[1]) > 1e-9:
             return None, (f'證據不足：開帶 {band} 與事前案例 open_m {expect_open_m} ± 5 mm 不符')

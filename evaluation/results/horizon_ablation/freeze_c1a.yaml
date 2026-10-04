@@ -9,3 +9,12 @@ schema: horizon_c1a_freeze/1
   - '每趟前後核對；不符 ⇒ 整批停止；舊資料標為舊版本批次、保留、停止合併'
   - 'C1b／S／C2 各自另建凍結版本'
 測試: 'test_motm_physical_check.py 20/20、test_horizon_replay_check.py 14/14、test_wgmpc_cycle_record.py 9/9、test_horizon_metrics.py 6/6'
+
+v2（2026-10-05，依 Codex 審查 reviews/20261005_023538_reply.md）:
+  雜湊清單: 'freeze_c1a.sha256（39 檔）；v1 保留為 freeze_c1a_v1.sha256 —— 功能確認趟 c1a_func_T100_H5 的版本依據'
+  變更: >
+    run_plan_batch.sh：非 executed 一律停批並寫逐趟 status.json；續跑只認 executed；只清帶本批次標記的程序、
+    兩輪排除本程序與祖先、外來程序 ⇒ 停批；父環境帶 domain 時去掉後重新 exec；中斷可被 wait 打斷並收掉本趟程序。
+    motm_physical_check.py：expect_open_m 必須是有限正數。c1_summarize.py：預期行程取自凍結排程。
+  新增檔: 'test_run_plan_batch.sh（15 項假運行器反例）、c1_summarize.py、c0_summarize.py、tools/codex_review.sh'
+  控制設定: '未變（與 v1、C0 相同）'
