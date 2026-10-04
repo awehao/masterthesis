@@ -266,7 +266,8 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
         t_r = float(t_r)
         hk = int(round(t_r / dt))
         hp = hist.get(hk)
-        if hp is None or abs(hp['t'] - t_r) > 1e-6:
+        # rendering_time 是 float32：80 s 附近精度約 7.6e-6 s ⇒ 容差取物理步長的 1/4（仍唯一對應同一步）
+        if hp is None or abs(hp['t'] - t_r) > 0.25 * dt:
             rejected.append({'reason': '姿態歷史中沒有此擷取時刻', 'rendering_time': t_r, 'read_t': t_now})
             continue
         rgba = np.asarray(col)

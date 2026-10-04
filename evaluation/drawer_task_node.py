@@ -357,6 +357,9 @@ def main():
                     help='開／關行程末端的 √ 減速（m/s²）')
     ap.add_argument('--motm-arm-share', type=float, default=0.06,
                     help='開抽屜時手臂收回量（m）；關抽屜時再伸回')
+    ap.add_argument('--motm-retreat-rate', type=float, default=None,
+                    help='T2：RETREAT 段 TCP 退開量的斜坡速率 m/s（只在釋放確認後的 RETREAT 生效；'
+                         '預設 None ＝ 沿用 --approach-rate，與既有行為相同）')
     ap.add_argument('--motm-v-back', type=float, default=0.008,
                     help='關閉後底盤倒退速度（m/s）')
     ap.add_argument('--motm-acc-lin', type=float, default=0.05)
@@ -814,7 +817,9 @@ def main():
             if a.motm:
                 # 退開量照進場速率斜坡增加；一次跳到退讓量會讓手臂衝到速率
                 # 上限（motm_165219：j3 −1.0 rad/s、底盤 −35 mm/s）
-                retreat_so = min(a.standoff_m, retreat_so + a.approach_rate * dt)
+                # T2：退開段**專用**的斜坡速率（只在 RETREAT 生效；未給 ＝ 沿用 approach_rate，行為不變）
+                _rr = a.motm_retreat_rate if a.motm_retreat_rate is not None else a.approach_rate
+                retreat_so = min(a.standoff_m, retreat_so + _rr * dt)
                 T = nd.target_at(retreat_so)
             else:
                 T = nd.target_at(a.standoff_m)
