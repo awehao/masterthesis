@@ -1,0 +1,21 @@
+# V0 腕部 RGB-D 通路：結果（草稿，待 Codex 審查）
+# 2026-10-05。規格 V0_spec.yaml draft-2（含開跑前的觀測姿態修訂）；趟次 evaluation/runs/v0_wrist_3
+schema: vision_v0_result/1
+第一份可見成果: 'runs/v0_wrist_3/wrist_v0/v0_overlay.png（腕部彩色＋對齊深度＋人工選點＋真值投影＋數值）'
+相機: 'Isaac 模擬腕部 RGB-D，prim 掛在 /World/omni_bot/.../link_eef/wrist_cam；實體 RealSense 不在 V0'
+內參: '設定 69° 水平視角、孔徑 0.020 m ⇒ 讀回 fx = fy = 465.60、cx 320、cy 240（640×480）；CameraInfo 由讀回值產生'
+影格: '暖機 60 步後 20 個新影格；rendering_time 嚴格遞增、影格識別不重複；模擬器每物理步算圖 ⇒ 更新率 100 Hz（不是規格寫的 5 Hz 上限，照實記）'
+掛載互核: 'Isaac 相機世界位姿 vs URDF FK（同一實際構型）：位置 0.0006 mm、姿態 7e-7 rad'
+ROS: '同節點回讀 /wrist/color/image_raw（rgb8）、/wrist/aligned_depth_to_color/image_raw（16UC1）、/wrist/color/camera_info 各 20 則；frame_id camera_color_optical_frame；戳 = 影格擷取時間；/tf 只由本節點發布（無 robot_state_publisher 重複）'
+人工選點: 'selection.json（雜湊 5004c3f40eebe6ae）：框 [350,180,400,479]、表面像素 (376,330)；先存檔、未疊真值'
+驗收:
+  A1_資料完整: PASS
+  A2_選框核對: 'PASS（真值橫桿中心投影 (376.4, 354.5) 在框內）；與框中心相距 25.1 px，**超過規格的 15 px 對準條件** —— 橫桿延伸出畫面底部，框只涵蓋可見段，框中心偏上；依規則不照真值改框，照實報'
+  A3_深度: 'PASS：選點 5×5 光軸深度中位數 0.26220 m vs 同射線表面參考 0.26185 m，差 0.35 mm（≤ 5 mm）'
+  A4_三維: 'PASS：可見表面點 vs 表面參考 0.36 mm（≤ 15 mm，工程通路門檻）'
+  A5_負載: '三趟峰值 89／69／66 °C，無熱中止'
+輸出: '把手可見表面三維點（世界，20 影格中位數）= (−0.0169, 1.1525, 0.5483) m（不是把手中心）'
+失敗與修正（全部保留）:
+  v0_wrist_1_failed_keys: '程式錯誤：影格字典的彩色鍵是 rgb、rendering_frame 是 dict ⇒ 0 影格；另真值屬性轉換崩潰。修正後重跑'
+  v0_wrist_2: '擺位參數錯誤：預設手臂姿態誤用退讓 0.03 m 的 IK 解 ⇒ 相機距橫桿 9 cm（< 0.1 m 有效深度）、真值中心投影在影像外 ⇒ A2–A4 未過。管線本身正常（A1 除 16 位元一致性判定的規則錯誤外皆過）；判定規則已修（量程外記 0）'
+證據範圍: '靜態、模擬、無雜訊、人工選點：只支持**靜態通路連通**。不支持感知性能、實機可行、抓取位姿、閉迴路視覺控制，也不是移動中的時間對齊驗收'

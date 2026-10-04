@@ -188,13 +188,13 @@ def main():
         ax.set_yticks([])
     pm = res['output_point']['median_world']
     fig.suptitle('V0 腕部 RGB-D：把手可見表面三維點（模擬、靜態、人工選點）', x=0.01, ha='left', fontsize=13)
-    fig.text(0.01, 0.03,
-             f'黃框＝人工框；橘＋＝人工選定表面像素 ({u},{v})；藍○＝真值橫桿中心投影（只供評估）。'
+    fig.text(0.01, 0.015,
+             f'黃框＝人工框；橘＋＝人工選定表面像素 ({u},{v})；藍○＝真值橫桿中心投影（只供評估）。\n'
              f'可見表面點（世界，20 影格中位數）= ({pm[0]:.4f}, {pm[1]:.4f}, {pm[2]:.4f}) m；'
              f'A3 深度差 中位 {res["A3_depth_mm"]["median"]:.2f}／最大 {res["A3_depth_mm"]["max"]:.2f} mm；'
              f'A4 三維差 中位 {res["A4_3d_mm"]["median"]:.2f}／最大 {res["A4_3d_mm"]["max"]:.2f} mm。',
              fontsize=8.8)
-    fig.tight_layout(rect=(0, 0.06, 1, 0.94))
+    fig.tight_layout(rect=(0, 0.09, 1, 0.94))
     fig.savefig(os.path.join(V, 'v0_overlay.png'), dpi=140)
     print(json.dumps({k: res[k] for k in ('A1_data', 'A2_box_check', 'A3_depth_mm', 'A4_3d_mm',
                                            'output_point', 'update_rate_hz', 'truth_cylinder')},
