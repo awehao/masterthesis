@@ -7,9 +7,13 @@
   S  導航起點：只改起點、停位不變 ⇒ 可能**不會**改變交棒狀態；必須先實跑一趟量交棒狀態才能算新案例
   T  抽屜行程：open_m 改變；其餘不變
 
-核對項（全部通過才「可行」；結果與理由逐項列出，不挑）：
-  場景：足跡（R_NAV 0.33 m）對場景碰撞體與保留區淨空、交棒區全周淨空、全開時底盤淨空、
-        起點—停位直線全段淨空（任務節點的導航計畫是直線，見 drawer_mission_node.publish_plan）
+核對項（全部通過 = 「通過目前離線篩選」，**不等於**展開、操作、收臂的連續路徑都已證明合規；
+結果與理由逐項列出，不挑）：
+  場景：足跡（R_NAV 0.33 m）對場景碰撞體與保留區淨空；全開時底盤淨空；**接近走廊** =
+        起點—停位直線全段（含保留區）淨空（任務節點的導航計畫是直線，見 drawer_mission_node.publish_plan）
+  參考（不擋案例）：交棒圓全周（停位 ± 0.30 m）對場景**與保留區**的淨空 —— 基準北側本來就只有約 72 mm，
+        不能稱整圈可安全交棒，只報數值
+  篩選不通過 ≠ 物理上不可達（例如 P-near 是被保守的足跡規則排除）
   手臂：夾持姿態 IK 殘差 ≤ 1e-6 m／1e-6 rad；夾持與收回姿態到**有效限位**（硬限位 ± 0.05）的
         最小餘裕 ≥ 0.10 rad（基準值另列）
   行程：開帶 open_m ± 5 mm 在滑軌 [0, upper − 5 mm] 內；open_m > 手臂收回量 0.06 m + 0.02
@@ -61,6 +65,9 @@ CAND_P = [('P-lat-', -0.05, 0.0, 0.0), ('P-lat+', +0.05, 0.0, 0.0),
 CAND_S = [('S-east', (2.80, -3.20)), ('S-west', (-3.00, -0.80)),
           ('S-south', (0.00, -4.20))]
 CAND_T = [('T-100', 0.100), ('T-150', 0.150)]
+# C2 保留案例（C1 結果出來前登錄；只做篩選，不用於選 C1 案例或調整）
+CAND_C2_T = [('C2-T125', 0.125), ('C2-T180', 0.180)]
+CAND_C2_P = [('C2-P-lat-yaw', -0.03, 0.0, +3.0), ('C2-P-far-lat', +0.03, -0.03, 0.0)]
 
 
 def world_boxes():
@@ -133,20 +140,28 @@ def scene_checks(start, park, open_m, boxes, res):
     do = box_dist(p_open, res)
     ds, nms = min_clear(p_open, boxes)
     out['open_base_clear_m'] = (round(min(do, ds), 3), min(do, ds) > R_NAV)
-    worst = 9e9
-    for th in np.linspace(0, 2 * np.pi, 73)[:-1]:
-        q = (park[0] + HANDOVER_ZONE_M * np.cos(th), park[1] + HANDOVER_ZONE_M * np.sin(th))
-        worst = min(worst, min_clear(q, boxes)[0])
-    out['handover_zone_clear_m'] = (round(worst, 3), worst > R_NAV)
     s, g = np.array(start[:2]), np.array(park[:2])
     lw = 9e9
-    for t in np.linspace(0, 1, 200):
+    for t in np.linspace(0, 1, 400):
         q = s + t * (g - s)
-        lw = min(lw, min_clear(q, boxes)[0])
-        if t < 0.97:                      # 終點附近本來就靠近保留區，另由停位項核
-            lw = min(lw, box_dist(q, res) + 0.0)
-    out['line_clear_m'] = (round(lw, 3), lw > R_NAV)
+        lw = min(lw, min_clear(q, boxes)[0], box_dist(q, res))
+    out['approach_corridor_clear_m'] = (round(lw, 3), lw > R_NAV)
     return out
+
+
+def handover_ring(park, boxes, res):
+    """參考值：交棒圓全周對場景與保留區的最小淨空（不擋案例）。"""
+    worst, who = 9e9, None
+    for th in np.linspace(0, 2 * np.pi, 145)[:-1]:
+        q = (park[0] + HANDOVER_ZONE_M * np.cos(th), park[1] + HANDOVER_ZONE_M * np.sin(th))
+        d, nm = min_clear(q, boxes)
+        dr = box_dist(q, res)
+        if dr < d:
+            d, nm = dr, 'reserved'
+        if d < worst:
+            worst, who = d, nm
+    return {'min_clear_m': round(worst, 3), 'nearest': who,
+            'note': '參考值，不擋案例；< R_NAV 表示交棒圓並非全周可用，只能核實際接近走廊'}
 
 
 def arm_checks(K, park, T_grasp):
@@ -197,23 +212,45 @@ def main():
     res = reserved_zone(d)
     upper = float(d['drawer']['joint']['upper'])
     T_grasp = K.fk(np.r_[PARK0, QG0], TCP)
-    out = {'note': '離線幾何／運動學核對；可行 ≠ 控制會成功。候選事前列出，全部報告',
+    out = {'note': ('離線幾何／運動學篩選；通過 ≠ 控制會成功，也不證明連續路徑合規；'
+                    '未通過 ≠ 物理上不可達。候選事前列出，全部報告'),
            'thresholds': {'R_NAV_m': R_NAV, 'arm_margin_min_rad': MIN_ARM_MARGIN,
                           'joint_margin_rad': JOINT_MARGIN, 'arm_share_m': ARM_SHARE},
            'cases': {}}
 
-    base_scene = scene_checks(START0, PARK0, OPEN0, boxes, res)
-    base_arm, _ = arm_checks(K, PARK0, T_grasp)
-    out['cases']['C0-baseline'] = {'scene': base_scene, 'arm': base_arm,
-                                   'feasible': feasible(base_scene) and feasible(base_arm)}
-    for name, dx, dy, dyaw in CAND_P:
+    def p_case(name, dx, dy, dyaw, group):
         park = (PARK0[0] + dx, PARK0[1] + dy, PARK0[2] + math.radians(dyaw))
         sc = scene_checks(START0, park, OPEN0, boxes, res)
         ar, qg = arm_checks(K, park, T_grasp)
-        out['cases'][name] = {'park': [round(v, 6) for v in park],
-                              'q_grasp': None if qg is None else [round(float(v), 4) for v in qg],
-                              'scene': sc, 'arm': ar,
-                              'feasible': feasible(sc) and feasible(ar)}
+        if qg is not None:
+            # 供執行的解以完整精度保存；由保存值重算 FK 再核一次
+            qs = [float(v) for v in qg]
+            T = K.fk(np.r_[park, qs], TCP)
+            ep = float(np.linalg.norm(T[:3, 3] - T_grasp[:3, 3]))
+            ar['ik_saved_value_residual'] = (f'{ep:.1e} m', ep <= 1e-6)
+        out['cases'][name] = {'group': group, 'park': [float(v) for v in park],
+                              'q_grasp': None if qg is None else [float(v) for v in qg],
+                              'scene': sc, 'arm': ar, 'handover_ring_ref': handover_ring(park, boxes, res),
+                              'passed_screen': feasible(sc) and feasible(ar)}
+
+    def t_case(name, om, group):
+        ck = {'band_in_rail': (f'[{(om - BAND_HALF) * 1e3:.0f}, {(om + BAND_HALF) * 1e3:.0f}] mm ⊂ '
+                               f'[0, {(upper - 0.005) * 1e3:.0f}] mm',
+                               om - BAND_HALF > 0 and om + BAND_HALF <= upper - 0.005),
+              'travel_gt_arm_share': (f'{om:.3f} > {ARM_SHARE + 0.02:.3f}', om > ARM_SHARE + 0.02)}
+        sc = scene_checks(START0, PARK0, om, boxes, res)
+        out['cases'][name] = {'group': group, 'open_m': om, 'travel': ck, 'scene': sc,
+                              'passed_screen': feasible(ck) and feasible(sc),
+                              'note': (f'手臂收回量固定 {ARM_SHARE} m ⇒ 底盤**名目**分配 '
+                                       f'{om - ARM_SHARE:.3f} m（不是實測必然位移）')}
+
+    base_scene = scene_checks(START0, PARK0, OPEN0, boxes, res)
+    base_arm, _ = arm_checks(K, PARK0, T_grasp)
+    out['cases']['C0-baseline'] = {'group': 'C0', 'scene': base_scene, 'arm': base_arm,
+                                   'handover_ring_ref': handover_ring(PARK0, boxes, res),
+                                   'passed_screen': feasible(base_scene) and feasible(base_arm)}
+    for name, dx, dy, dyaw in CAND_P:
+        p_case(name, dx, dy, dyaw, 'C1b')
     base_dir = math.degrees(math.atan2(PARK0[1] - START0[1], PARK0[0] - START0[0]))
     for name, st in CAND_S:
         sc = scene_checks(st, PARK0, OPEN0, boxes, res)
@@ -221,28 +258,27 @@ def main():
         sc['start_clear_m'] = (round(ds, 3), nm, ds > R_NAV)
         ang = math.degrees(math.atan2(PARK0[1] - st[1], PARK0[0] - st[0]))
         dang = (ang - base_dir + 180) % 360 - 180
-        out['cases'][name] = {'start': list(st), 'scene': sc,
+        out['cases'][name] = {'group': 'S', 'start': list(st), 'scene': sc,
                               'approach_dir_change_deg': round(dang, 1),
-                              'feasible': feasible(sc),
-                              'note': '停位不變 ⇒ 交棒狀態未必改變；需先實跑一趟量交棒位姿／速度／手臂構型'}
+                              'passed_screen': feasible(sc),
+                              'note': '停位不變 ⇒ 交棒狀態未必改變；需先實跑前導量交棒狀態'}
     for name, om in CAND_T:
-        ck = {'band_in_rail': (f'[{(om - BAND_HALF) * 1e3:.0f}, {(om + BAND_HALF) * 1e3:.0f}] mm ⊂ '
-                               f'[0, {(upper - 0.005) * 1e3:.0f}] mm',
-                               om - BAND_HALF > 0 and om + BAND_HALF <= upper - 0.005),
-              'travel_gt_arm_share': (f'{om:.3f} > {ARM_SHARE + 0.02:.3f}', om > ARM_SHARE + 0.02)}
-        sc = scene_checks(START0, PARK0, om, boxes, res)
-        out['cases'][name] = {'open_m': om, 'travel': ck, 'scene': sc,
-                              'feasible': feasible(ck) and feasible(sc),
-                              'note': f'手臂收回量固定 {ARM_SHARE} m ⇒ 底盤分擔 {om - ARM_SHARE:.3f} m'}
+        t_case(name, om, 'C1a')
+    for name, om in CAND_C2_T:
+        t_case(name, om, 'C2')
+    for name, dx, dy, dyaw in CAND_C2_P:
+        p_case(name, dx, dy, dyaw, 'C2')
     for k, v in out['cases'].items():
-        flag = '可行' if v['feasible'] else '**不可行**'
+        flag = '通過離線篩選' if v['passed_screen'] else '**未通過篩選**'
         bad = []
         for grp in ('scene', 'arm', 'travel'):
             for kk, vv in (v.get(grp) or {}).items():
                 if vv[-1] is not True:
                     bad.append(f'{kk}={vv[:-1]}')
         extra = f"（方向差 {v['approach_dir_change_deg']}°）" if 'approach_dir_change_deg' in v else ''
-        print(f'{k:12s} {flag}{extra}' + ('' if not bad else '  不合：' + '；'.join(bad)))
+        ring = v.get('handover_ring_ref')
+        ring_s = f"  交棒圓參考 {ring['min_clear_m']} m（{ring['nearest']}）" if ring else ''
+        print(f"{v['group']:4s} {k:13s} {flag}{extra}" + ('' if not bad else '  不合：' + '；'.join(bad)) + ring_s)
     gm = out['cases']['C0-baseline']['arm']
     print('基準手臂餘裕：夾持', gm.get('grasp_margin_rad'), '收回', gm.get('retract_margin_rad'))
     if a.out:

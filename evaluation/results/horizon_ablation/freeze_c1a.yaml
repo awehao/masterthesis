@@ -1,0 +1,11 @@
+# C1a 凍結（2026-10-05，C1a 功能確認之前）
+schema: horizon_c1a_freeze/1
+雜湊清單: 'freeze_c1a.sha256（35 檔：C0 凍結的 30 檔＋run_plan_batch.sh、c1_feasibility.py、c1a_schedule.tsv、experiment_spec_C1.yaml、c1_feasibility.json）'
+與C0凍結的差異: >
+  只有 motm_physical_check.py 與其測試（R2：開帶參數化）。控制、節點、核心、資產、運行器與熱保護與 C0 相同。
+  freeze_c0.sha256 原樣保留；因 R2 變更，現在核對 C0 清單會有這兩檔不符 —— 預期，C0 已封存。
+  C0 時期八趟以新判定（--expect-open-m 0.200）重核，結果逐項相同。
+規則:
+  - '每趟前後核對；不符 ⇒ 整批停止；舊資料標為舊版本批次、保留、停止合併'
+  - 'C1b／S／C2 各自另建凍結版本'
+測試: 'test_motm_physical_check.py 20/20、test_horizon_replay_check.py 14/14、test_wgmpc_cycle_record.py 9/9、test_horizon_metrics.py 6/6'

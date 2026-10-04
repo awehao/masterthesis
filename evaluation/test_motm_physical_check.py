@@ -24,19 +24,19 @@ Q = [0.0, 0.5, 1.2, 0.0, 0.8, 0.0]
 NAMES = ['base_link', 'left_finger', 'right_finger', 'link6']
 
 
-def opening(t):
+def opening(t, om=0.2):
     if t < 1.0:
         return 0.0
     if t < 3.0:
-        return 0.2 * (t - 1.0) / 2.0
+        return om * (t - 1.0) / 2.0
     if t < 6.0:
-        return 0.2
+        return om
     if t < 8.0:
-        return 0.2 * (8.0 - t) / 2.0
+        return om * (8.0 - t) / 2.0
     return 0.0
 
 
-def build():
+def build(om=0.2):
     cols = ['step', 'sim_t', 'owner', 'kind', 'base_cmd_body', 'meas_vb_body',
             'applied_arm', 'base_xyth', 'q_arm_meas', 'opening_m', 'q_finger',
             'finger_contact_n', 'contact_held_s', 'drawer_pairs', 'drawer_net_n']
@@ -44,7 +44,7 @@ def build():
     held = 0.0
     for k in range(1201):
         t = round((k + 1) * DT, 6)
-        op = opening(t)
+        op = opening(t, om)
         fc = [1.2, 1.1] if 0.9 <= t <= 11.0 else ([0.0, 0.0] if t > 0.5 else None)
         held = held + DT if fc and min(fc) >= 0.5 else 0.0
         pairs = ([[1, 2, 0.0, 0.5, 0.0, 0.1, 0.0, 0.0], [2, 2, 0.0, 0.5, 0.0, 0.1, 0.0, 0.0]]
@@ -55,7 +55,8 @@ def build():
     room = {'steps_cols': cols, 'steps': steps,
             'drawer_pairs': {'bodies': NAMES},
             'config': {'physics_dt': DT, 'start_pose': f'{X0},{Y0},{TH}'}}
-    task = {'events': [{'sim_t': 0.5, 'phase': 'ALIGN'}, {'sim_t': 1.0, 'attached': True},
+    task = {'open_m': om, 'open_band_m': [om - 0.005, om + 0.005],
+            'events': [{'sim_t': 0.5, 'phase': 'ALIGN'}, {'sim_t': 1.0, 'attached': True},
                        {'sim_t': 1.0, 'phase': 'OPEN'}, {'sim_t': 3.0, 'phase': 'OPEN_HOLD'},
                        {'sim_t': 6.0, 'phase': 'CLOSE'}, {'sim_t': 8.0, 'phase': 'CLOSE_HOLD'},
                        {'sim_t': 11.0, 'phase': 'RELEASE_WAIT'},
@@ -69,13 +70,13 @@ def base():
     return build()
 
 
-def run(tmp_path, name, room, task, sol):
+def run(tmp_path, name, room, task, sol, **kw):
     d = tmp_path / name
     d.mkdir()
     for fn, obj in (('room_run.json', room), ('task.json', task),
                     ('align_solver.json', sol)):
         json.dump(obj, open(d / fn, 'w'))
-    return PC.check(str(d))
+    return PC.check(str(d), **kw)
 
 
 def col(room, name):
@@ -241,3 +242,40 @@ def test_finger_none_in_hold_breaks_grasp(tmp_path, base):
     out, _ = run(tmp_path, 'fnone', room, task, sol)
     assert out['S3_grasp']['longest_both_fingers_s'] < 2.0
     assert out['results']['S3_grasp'] is False
+
+
+# ---------------------------------------------------------------- 開帶參數化（C1 R2）
+def test_band_missing_is_insufficient(tmp_path, base):
+    room, task, sol = copy.deepcopy(base)
+    task.pop('open_band_m')
+    out, rc = run(tmp_path, 'noband', room, task, sol)
+    assert out['results']['S1_open_hold'] is None and out['results']['S2_close_hold'] is None
+    assert rc == 2 and out['verdict'] == 'INSUFFICIENT'
+
+
+def test_band_mismatch_with_case_is_insufficient(tmp_path, base):
+    """200 mm 的紀錄被當成 100 mm 案例判：不得套用。"""
+    out, rc = run(tmp_path, 'mism', *copy.deepcopy(base), expect_open_m=0.100)
+    assert out['results']['S1_open_hold'] is None and rc == 2
+
+
+def test_100mm_case_passes_with_its_own_band(tmp_path):
+    out, rc = run(tmp_path, 'c100', *build(om=0.100), expect_open_m=0.100)
+    assert rc == 0, out['results']
+    assert out['S1_open_hold']['band_mm'] == pytest.approx([95.0, 105.0])
+
+
+def test_100mm_run_never_judged_with_200mm_band(tmp_path):
+    room, task, sol = build(om=0.100)
+    task['open_band_m'] = [0.195, 0.205]           # 紀錄被竄成 200 mm 開帶
+    out, rc = run(tmp_path, 'c100bad', room, task, sol, expect_open_m=0.100)
+    assert out['results']['S1_open_hold'] is None
+
+
+def test_legacy_band_only_for_listed_c0_runs(tmp_path, base):
+    room, task, sol = copy.deepcopy(base)
+    task.pop('open_band_m')
+    with pytest.raises(ValueError):
+        run(tmp_path, 'c1a_b1_01_T100_H5', room, task, sol, legacy_c0_band=True)
+    out, rc = run(tmp_path, 'c0b1_p2_H1', room, task, sol, legacy_c0_band=True)
+    assert rc == 0 and out['S1_open_hold']['band_source'] == 'legacy_c0_default'

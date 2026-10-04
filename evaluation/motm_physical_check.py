@@ -3,7 +3,9 @@
 
 不採任務節點自報（task.json 的相位只用來切時間窗，不用來判成功）。
 
-  S1 開保持   開度在 [195, 205] mm 連續 ≥ 2 s
+  S1 開保持   開度在**本趟開帶**（task.json open_band_m）內連續 ≥ 2 s
+              開帶缺欄 ⇒ 證據不足；只有明確列名的 C0 舊趟次可用 --legacy-c0-band 退回 [195, 205] mm。
+              --expect-open-m X ⇒ 開帶必須等於 X ± 5 mm（事前案例），不符 ⇒ 證據不足
   S2 關保持   開保持之後，開度在 [−10 µm, 5 mm] 連續 ≥ 2 s
   S3 夾持     雙指接觸力都 ≥ 0.5 N 連續 ≥ 2 s（逐步重算；另列模擬器 contact_held_s 作互核）
   S4 漂移     夾持期間（attach → RELEASE_WAIT）TCP 相對把手的位移 ≤ 10 mm（逐步 FK 重算）
@@ -24,6 +26,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 
 import numpy as np
@@ -33,7 +36,10 @@ sys.path.insert(0, os.path.join(HERE, '..', 'src', 'ammr_wholebody_mpc'))
 from ammr_wholebody_mpc.wholebody_kinematics import (             # noqa: E402
     WholeBodyKinematics)
 
-OPEN_BAND = (0.195, 0.205)
+LEGACY_C0_BAND = (0.195, 0.205)
+BAND_HALF = 0.005
+# 只有這些 C0 時期的趟次可以退回固定開帶（它們都是 open_m = 0.200）
+LEGACY_C0_RUNS = re.compile(r'^(b6_(motm|park)\d_\d+|h5_logcheck1|h1_func1|c0b1_p\d+r?_H[15])$')
 CLOSE_BAND = (-1e-5, 0.005)
 HOLD_S = 2.0
 GRIP_N = 0.5
@@ -96,9 +102,36 @@ def none_ranges(t, missing):
             'last_sim_t': round(float(t[idx[-1]]), 3)}
 
 
-def check(D):
+def resolve_band(task, run_name, expect_open_m=None, legacy_c0_band=False):
+    """回傳 (band 或 None, 來源／原因)。"""
+    b = task.get('open_band_m')
+    band = None
+    if isinstance(b, (list, tuple)) and len(b) == 2:
+        try:
+            lo, hi = float(b[0]), float(b[1])
+            if math.isfinite(lo) and math.isfinite(hi) and lo < hi:
+                band = (lo, hi)
+        except (TypeError, ValueError):
+            pass
+    src = 'task.json open_band_m'
+    if band is None:
+        if not legacy_c0_band:
+            return None, '證據不足：task.json 沒有有效的 open_band_m'
+        if not LEGACY_C0_RUNS.match(run_name):
+            raise ValueError(f'--legacy-c0-band 只能用於列名的 C0 舊趟次，{run_name} 不是')
+        band, src = LEGACY_C0_BAND, 'legacy_c0_default'
+    if expect_open_m is not None:
+        want = (expect_open_m - BAND_HALF, expect_open_m + BAND_HALF)
+        if abs(band[0] - want[0]) > 1e-9 or abs(band[1] - want[1]) > 1e-9:
+            return None, (f'證據不足：開帶 {band} 與事前案例 open_m {expect_open_m} ± 5 mm 不符')
+    return band, src
+
+
+def check(D, expect_open_m=None, legacy_c0_band=False):
     room = json.load(open(os.path.join(D, 'room_run.json')))
     task = json.load(open(os.path.join(D, 'task.json')))
+    band, band_src = resolve_band(task, os.path.basename(D.rstrip('/')),
+                                  expect_open_m, legacy_c0_band)
     sol = json.load(open(os.path.join(D, 'align_solver.json')))
     c = room['steps_cols']
     i = c.index
@@ -138,17 +171,23 @@ def check(D):
                }}}
     res = {}
 
-    # S1 開保持
-    with np.errstate(invalid='ignore'):
-        m_open = (op >= OPEN_BAND[0]) & (op <= OPEN_BAND[1])
-    bo = longest(runs_of(m_open, t, brk, dt))
-    res['S1_open_hold'] = (None if np.all(np.isnan(op))
-                           else bool(bo and bo[2] >= HOLD_S - 1e-9))
-    out['S1_open_hold'] = {'band_mm': [x * 1e3 for x in OPEN_BAND],
-                           'longest_s': None if not bo else round(bo[2], 3),
-                           'at_sim_t': None if not bo else [round(bo[0], 2), round(bo[1], 2)],
-                           'max_opening_mm': (None if np.all(np.isnan(op)) else
-                                              round(float(np.nanmax(op)) * 1e3, 2))}
+    # S1 開保持（本趟開帶）
+    if band is None:
+        bo = None
+        res['S1_open_hold'] = None
+        out['S1_open_hold'] = {'verdict': band_src}
+    else:
+        with np.errstate(invalid='ignore'):
+            m_open = (op >= band[0]) & (op <= band[1])
+        bo = longest(runs_of(m_open, t, brk, dt))
+        res['S1_open_hold'] = (None if np.all(np.isnan(op))
+                               else bool(bo and bo[2] >= HOLD_S - 1e-9))
+        out['S1_open_hold'] = {
+            'band_mm': [round(x * 1e3, 6) for x in band], 'band_source': band_src,
+            'longest_s': None if not bo else round(bo[2], 3),
+            'at_sim_t': None if not bo else [round(bo[0], 2), round(bo[1], 2)],
+            'max_opening_mm': (None if np.all(np.isnan(op)) else
+                               round(float(np.nanmax(op)) * 1e3, 2))}
 
     # S2 關保持（開保持之後）
     if bo is None:
@@ -274,8 +313,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('run_dir')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--expect-open-m', type=float, default=None,
+                    help='事前案例的 open_m；本趟開帶必須等於它 ± 5 mm')
+    ap.add_argument('--legacy-c0-band', action='store_true',
+                    help='只限列名的 C0 舊趟次：開帶缺欄時退回 195–205 mm')
     a = ap.parse_args()
-    out, rc = check(a.run_dir)
+    out, rc = check(a.run_dir, a.expect_open_m, a.legacy_c0_band)
     print(json.dumps(out, ensure_ascii=False, indent=1))
     if a.out:
         json.dump(out, open(a.out, 'w'), ensure_ascii=False, indent=1)
