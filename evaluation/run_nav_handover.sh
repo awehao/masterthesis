@@ -224,6 +224,8 @@ ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
     `# MotM：任務節點依相位送底盤參考速度／手臂名目姿態／權重；過期即關閉` \
     $([ "${MOTM:-0}" = "1" ] && echo "--coord-topic /wgmpc/coord") \
     ${SOLVER_EXTRA:-} \
+    `# WG4-B：SOLVER_KIND=b1 換成單步 QP 對照（預設不帶 = wgmpc，既有行為）` \
+    ${SOLVER_KIND:+--solver-kind "$SOLVER_KIND"} ${B1_KP:+--b1-kp "$B1_KP"} \
     `# **無偏移追蹤**：手臂在抓取姿態下 j2 穩態下垂 +0.0243 rad、` \
     `# j3 −0.0099 rad，模型不知道 ⇒ ALIGN 停在 12 mm。線上估計補上。` \
     --offset-free \

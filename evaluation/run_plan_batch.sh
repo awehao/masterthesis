@@ -205,15 +205,21 @@ while IFS=$'\t' read -r IDX RID CASE OPEN_M METHOD N PAIR ORDERTAG <&3; do
   say "    環境 $(env_snapshot "$RUNS/${RID}.env.json")"
   CUR_IDX="$IDX"; CUR_RID="$RID"
   freq_sampler "$RUNS/${RID}.freq.csv" < /dev/null & FS=$!
-  # method：H5／H1（時域消融，行為與既有完全相同）；MOTM／PARK（MotM 時間比較）
+  # method：H5／H1（時域消融，行為與既有完全相同）；MOTM／PARK（MotM 時間比較）；
+  #         B1（WG4-B：任務參數與 MOTM 完全相同，只把求解節點換成單步 QP，kp 取 B1_KP_SET，預設 1.0）
   BASE_ARGS="--standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync --approach-rate 0.02"
+  SK=""; BKP=""
   case "$METHOD" in
     PARK) MOTM_V=0; TASK_ARGS="$BASE_ARGS"; AREF="" ;;
+    B1)   MOTM_V=1; TASK_ARGS="$BASE_ARGS --motm-w-qn 0.8 --motm-w-vref-pre 0.3 ${MOTM_EXTRA_ARGS:-}"; AREF="${MOTM_A_REF_SET:-}"
+          SK=b1; BKP="${B1_KP_SET:-1.0}" ;;
     MOTM) MOTM_V=1; TASK_ARGS="$BASE_ARGS --motm-w-qn 0.8 --motm-w-vref-pre 0.3 ${MOTM_EXTRA_ARGS:-}"; AREF="${MOTM_A_REF_SET:-}" ;;
     *)    MOTM_V=1; TASK_ARGS="$BASE_ARGS --motm-w-qn 0.8 --motm-w-vref-pre 0.3"; AREF="" ;;
   esac
   say "    方法 $METHOD：MOTM=$MOTM_V MOTM_A_REF=${AREF:-（預設）} 任務參數 $TASK_ARGS"
   if [ -n "$AREF" ]; then export MOTM_A_REF="$AREF"; else unset MOTM_A_REF; fi
+  if [ -n "$SK" ]; then export SOLVER_KIND="$SK" B1_KP="$BKP"; say "    求解節點：$SK kp=$BKP"
+  else unset SOLVER_KIND B1_KP; fi
   C1_RUN_TAG="${BATCH}:${IDX}" ROS_DOMAIN_ID="$DOMAIN" RUN_ID="$RID" WGMPC_N="$N" HEADING=1 MOTM="$MOTM_V" CAM=false OPEN_M="$OPEN_M" \
   FINGER_COL=split \
   DRAWER_ASSET="$WS/src/my_omnibot_description/config/drawer_unit_bar26.yaml" \

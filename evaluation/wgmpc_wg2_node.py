@@ -72,6 +72,7 @@ from ammr_wholebody_mpc.wholebody_kinematics import (            # noqa: E402
     WholeBodyKinematics)
 import wgmpc_cmd_envelope as ENV                                 # noqa: E402
 from wgmpc_cycle_record import solver_io_record                  # noqa: E402
+import wg4b_b1_core as B1CORE                                    # noqa: E402
 from wgmpc_sp_handshake import (ARMED, FAILED, HOLD, INIT,       # noqa: E402
                                 SetpointGate, SpSample)
 
@@ -212,6 +213,13 @@ class WGMPCNode(Node):
                                    w_s_base=a.w_s_base, w_s_arm=a.w_s_arm)
             self.composed_G = None
             self.composed_kp = None
+        # **WG4-B B1**（experiment_spec_WG4B.yaml）：只換求解式，見 wg4b_b1_core.py。
+        # 預設 wgmpc ⇒ 既有路徑一位元不變。b1 需要設定點快照（s_meas），故要求增廣模式的閘門。
+        self._b1 = (getattr(a, 'solver_kind', 'wgmpc') == 'b1')
+        self._b1p = (B1CORE.B1Params(kp=float(a.b1_kp)) if self._b1 else None)
+        self._n_b1_mu = {}
+        if self._b1 and a.arm_model != 'setpoint':
+            raise ValueError('--solver-kind b1 需要 --arm-model setpoint（s_meas 取自同時刻快照）')
         if a.margin_guard:
             # 有效界取**求解器自己的** joint_margin，兩端用同一個數。
             self._mg_bounds = MG.effective_bounds(self.cfg)
@@ -739,6 +747,26 @@ class WGMPCNode(Node):
         self._coord_t = self.sim_now()
         self._n_coord_rx += 1
 
+    def b1_report(self) -> dict:
+        """WG4-B B1 的每趟一次紀錄（參數、限制、整形、OSQP 設定）；非 b1 時回空 dict。"""
+        if not self._b1:
+            return {}
+        a, c = self.a, self.cfg
+        return {'solver_kind': 'b1',
+                'b1': {'params': self._b1p.record(),
+                       'mu_reason_counts': dict(self._n_b1_mu),
+                       'limits': {'vmax': c.vmax().tolist(), 'amax': c.amax().tolist(),
+                                  'joint_margin': c.joint_margin,
+                                  'wheel_radius': c.wheel_radius,
+                                  'wheel_w_max': c.wheel_w_max,
+                                  'wheel_a_max': c.wheel_a_max, 'dt': c.dt},
+                       'shaping': {'gamma': a.near_target_gamma,
+                                   'tol_p': a.reach_pos_m, 'tol_r': a.reach_rot_rad,
+                                   'deadband_m': a.near_target_deadband_m,
+                                   'deadband_rad': a.near_target_deadband_rad},
+                       'note': 'WG4-B B1：改編自凍結原型的單步 QP；無增廣動態預測模型、'
+                               '無延遲補償與偏移估計；每輪冷啟動'}}
+
     def _apply_coord(self, sim_t):
         """本輪的協同設定寫進 cfg。**過期或沒有 ⇒ 退回啟動值（協同關閉）**，
         不沿用舊的底盤參考速度 —— 那會讓底盤在任務節點停掉之後繼續走。"""
@@ -1042,7 +1070,7 @@ class WGMPCNode(Node):
             # 估計式：d̂ ← d̂ + (dt/τ)·((q_arm − s) − d̂)，**只在設定點近乎
             # 靜止時更新** —— 移動中 q 落後 s 是模型本來就有的一階遲滯，
             # 不能當成偏移。再令 b = α ⊙ d̂，模型穩態就變成 act = s + d̂。
-            if self.a.offset_free:
+            if self.a.offset_free and not self._b1:
                 _s_now = np.asarray(snap.s, float)
                 _e = np.asarray(q0[3:], float) - _s_now
                 # **靜態初值**（--offset-init-static，預設關）：第一輪時手臂
@@ -1068,7 +1096,8 @@ class WGMPCNode(Node):
             _q_sol, _s_sol, _n_comp = q0, np.asarray(snap.s, float), 0
             # 本輪若根本不做延遲補償，選取紀錄必須是空的，不是上一輪的殘留
             self._last_pred_sel = []
-            if self._gate is not None and self.d_state > 0.0:
+            # B1 不做延遲補償（規格：以量測狀態直接求解）
+            if self._gate is not None and self.d_state > 0.0 and not self._b1:
                 _q_sol, _s_sol, _n_comp = self._predict_delay(
                     q0, np.asarray(snap.s, float), snap.sim_t)
             _coord_rec = self._apply_coord(_solve_sim_t0)
@@ -1077,13 +1106,25 @@ class WGMPCNode(Node):
             _U_warm_in = (None if U_warm is None
                           else np.array(U_warm, dtype=float, copy=True))
             _d_hat_in = (np.array(self._of_d, dtype=float, copy=True)
-                         if self.a.offset_free else None)
+                         if (self.a.offset_free and not self._b1) else None)
             _bias_in = (np.array(self.cfg.arm_model.bias, dtype=float,
                                  copy=True)
                         if getattr(self.cfg, 'arm_model', None) is not None
                         else None)
             self._c_solve_calls += 1
-            if self._gate is not None:
+            if self._b1:
+                # 單步 QP：量測 q 與同時刻設定點 s；s 缺失 ⇒ solve_b1 拒絕（不以實測角代替）
+                r = B1CORE.solve_b1(self.K, q0, snap.s, u_prev, T_cyc,
+                                    self.cfg, self._b1p)
+                # μ 開關原因細分：協同關閉／過期時 cfg 已退回啟動值（無 q_nom）
+                if r.b1 and _coord_rec['src'] != 'topic':
+                    r.b1['mu_reason'] = {'off': 'coord_off',
+                                         'stale_off': 'coord_stale'}.get(
+                                             _coord_rec['src'], r.b1['mu_reason'])
+                if r.ok:
+                    _k = r.b1['mu_reason']
+                    self._n_b1_mu[_k] = self._n_b1_mu.get(_k, 0) + 1
+            elif self._gate is not None:
                 # 增廣狀態由**同時刻快照**組成：q 與 s 同一個物理步。
                 # `make_z` 在 s 含非有限值時拋錯，不以實測關節角代替。
                 r = solve_sp(self.K, make_z(_q_sol, _s_sol),
@@ -1132,6 +1173,7 @@ class WGMPCNode(Node):
                        gate_state=self._gate_state,
                        coord=_coord_rec,
                        n_incomplete=self._n_incomplete,
+                       **({'solver_kind': 'b1', 'b1': r.b1} if self._b1 else {}),
                        # **時間契約的分項紀錄**（快照／求解起點／發布／牆鐘）
                        timing=dict(snap_sim_t=round(snap.sim_t, 6),
                                    solve_start_sim_t=round(_solve_sim_t0, 6),
@@ -1649,6 +1691,10 @@ def main() -> int:
     ap.add_argument('--pump-wait-s', type=float, default=0.002)
     ap.add_argument('--assume-initial-rest', action='store_true',
                     help='明確確認初始靜止時，允許第一輪以零值作 u_prev')
+    ap.add_argument('--solver-kind', default='wgmpc', choices=['wgmpc', 'b1'],
+                    help='wgmpc = 既有 W-GMPC（預設，不變）；b1 = WG4-B 單步 QP 對照（wg4b_b1_core.py）')
+    ap.add_argument('--b1-kp', type=float, default=1.0,
+                    help='B1 任務增益 kp_p = kp_r（事前登錄候選 1.0 → 2.0 → 0.5）')
     ap.add_argument('--arm-model', default='ideal',
                     choices=['ideal', 'setpoint'],
                     help='ideal = 原核心（理想速度積分，free4 基準，預設不變）；'
@@ -1702,6 +1748,7 @@ def main() -> int:
         if a.out:
             json.dump({'args': vars(a), 'started': False,
                        'exit_code': code, 'refuse_reason': why,
+                       **nd.b1_report(),
                        'handshake_startup': nd.handshake_startup,
                        'n_step_mismatch': nd._n_step_mismatch,
                        'last_step_mismatch': nd._last_step_mismatch,
@@ -1862,6 +1909,7 @@ def main() -> int:
                            'tau_s': getattr(a, 'offset_tau_s', None),
                            'gate_rad': getattr(a, 'offset_gate_rad', None),
                            'note': '手臂恆定穩態偏移的線上估計；b = α ⊙ d̂'},
+                       **nd.b1_report(),
                        'handshake_startup': nd.handshake_startup,
                        'n_step_mismatch': nd._n_step_mismatch,
                        'last_step_mismatch': nd._last_step_mismatch,

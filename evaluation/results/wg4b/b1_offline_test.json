@@ -1,0 +1,125 @@
+{
+ "run": "mt_b1_01_M",
+ "dt": 0.05,
+ "params": {
+  "kp": 1.0,
+  "v_task": 0.1,
+  "w_task": 0.5,
+  "base_weight": 3.0,
+  "damping": 0.06,
+  "mu_post": 0.03,
+  "kp_post": 1.2,
+  "k_limit": 1.5,
+  "limit_margin": 0.35,
+  "q_pref": [
+   -0.0321,
+   0.9177,
+   1.4853,
+   -0.358,
+   -1.0325,
+   -1.3813
+  ],
+  "q_pref_source": "evaluation/drawer_wholebody_node.py:199 Q_GRASP（抽屜展開完成參考構型）",
+  "eps_abs": 1e-07,
+  "eps_rel": 1e-07,
+  "max_iter": 50000,
+  "polish": true,
+  "r_tol": 1e-06
+ },
+ "limits": {
+  "vmax": [
+   0.035255,
+   0.035255,
+   0.1999,
+   0.9999,
+   0.9999,
+   0.9999,
+   0.9999,
+   0.9999,
+   0.9999
+  ],
+  "amax": [
+   0.5,
+   0.5,
+   2.0,
+   19.984,
+   19.984,
+   19.984,
+   19.984,
+   19.984,
+   19.984
+  ],
+  "joint_margin": 0.05,
+  "wheel_radius": 0.05,
+  "wheel_w_max": 5.55,
+  "wheel_a_max": 125.0
+ },
+ "checks": {
+  "recorded_states_feasible": {
+   "ok": true,
+   "n_rows": 670,
+   "n_ok": 670,
+   "reasons": {
+    "ok": 670
+   },
+   "first_fails": [],
+   "max_residual": 0.0,
+   "mu_reason_counts": {
+    "no_qnom": 277,
+    "qnom_active": 393
+   },
+   "solve_ms_p50": 0.8463500007565017,
+   "solve_ms_max": 2.212688001236529
+  },
+  "zero_feasible_stationary_legal": {
+   "ok": true,
+   "residual_by_block": {
+    "velocity": 0.0,
+    "acceleration": 0.0,
+    "measured_position": 0.0,
+    "setpoint_position": 0.0,
+    "wheel_speed": 0.0,
+    "wheel_accel": 0.0
+   }
+  },
+  "coord_gradient_direction": {
+   "ok": true,
+   "cos_base_vs_vref": 0.9999999960594698,
+   "cos_arm_vs_qnom": 0.9127965968460833,
+   "mu_reason_qn": "qnom_active"
+  },
+  "mu_switch_logic": {
+   "ok": true,
+   "cases": {
+    "coord_off_or_stale": [
+     true,
+     "no_qnom"
+    ],
+    "vref_only": [
+     true,
+     "no_qnom"
+    ],
+    "qnom_active": [
+     false,
+     "qnom_active"
+    ]
+   }
+  },
+  "body_world_frame": {
+   "ok": true,
+   "max_pos_rate_err": 7.945783179077531e-07
+  },
+  "missing_setpoint_rejected": {
+   "ok": true,
+   "reasons": [
+    "no_setpoint",
+    "no_setpoint",
+    "no_setpoint"
+   ]
+  },
+  "replay_bitwise": {
+   "ok": true
+  }
+ },
+ "all_pass": true
+}
