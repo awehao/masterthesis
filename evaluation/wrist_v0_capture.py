@@ -195,11 +195,17 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
         world.step(render=True)
         fr = cam.get_current_frame()
         n_reads += 1
-        rf = fr.get('rendering_frame')
-        if rf is None or rf == last_rf or fr.get('rgba') is None \
+        # 影格識別：rendering_frame 是參考時間（分子／分母）的 dict；彩色在 'rgb' 鍵（RGBA）
+        rfd = fr.get('rendering_frame')
+        rf = ((rfd.get('referenceTimeNumerator'), rfd.get('referenceTimeDenominator'))
+              if isinstance(rfd, dict) else rfd)
+        col = fr.get('rgb') if fr.get('rgb') is not None else fr.get('rgba')
+        if rf is None or rf == last_rf or rf == (0, 0) or col is None \
                 or fr.get('distance_to_image_plane') is None:
+            if n_reads <= 3:
+                print(f'[wrist] 讀 {n_reads}：鍵 {sorted(fr.keys())} rendering_frame={rfd!r}', flush=True)
             continue
-        rgba = np.asarray(fr['rgba'])
+        rgba = np.asarray(col)
         dep = np.asarray(fr['distance_to_image_plane'], dtype=np.float32)
         if rgba.size == 0 or dep.size == 0:
             continue
@@ -224,7 +230,8 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
         imageio.imwrite(os.path.join(fdir, f'f{n:02d}_depth_mm.png'), dmm)
         np.save(os.path.join(fdir, f'f{n:02d}_depth_m.npy'), dep)
         meta['frames'].append({
-            'n': n, 'rendering_frame': int(rf), 'rendering_time': t_r,
+            'n': n, 'rendering_frame': [int(v) if v is not None else None for v in rf]
+            if isinstance(rf, tuple) else rf, 'rendering_time': t_r,
             'sim_time_at_read': float(world.current_time),
             'cam_pos_world': pos.tolist(), 'cam_quat_wxyz_world': qwxyz.tolist(),
             'base_xyyaw_actual': [float(bp[0]), float(bp[1]), yaw],
@@ -264,9 +271,11 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
     for _k in range(20):
         rclpy.spin_once(nd, timeout_sec=0.02)
     meta['n_reads'] = n_reads
-    rfs = [f['rendering_frame'] for f in meta['frames']]
-    meta['fresh_frames_check'] = {'n': len(rfs), 'strictly_increasing': all(b > a_ for a_, b in zip(rfs, rfs[1:])),
-                                  'unique': len(set(rfs)) == len(rfs)}
+    rts = [f['rendering_time'] for f in meta['frames']]
+    rfs = [json.dumps(f['rendering_frame']) for f in meta['frames']]
+    meta['fresh_frames_check'] = {'n': len(rts),
+                                  'rendering_time_strictly_increasing': all(b > a_ for a_, b in zip(rts, rts[1:])),
+                                  'rendering_frame_unique': len(set(rfs)) == len(rfs)}
     ts = [f['rendering_time'] for f in meta['frames']]
     meta['update_rate_hz'] = (None if len(ts) < 2 or ts[-1] <= ts[0]
                               else (len(ts) - 1) / (ts[-1] - ts[0]))
@@ -284,7 +293,7 @@ def run_wrist_v0(a, world, stage, robot, idx, fidx, ARM, FJ, hprim, robot_root, 
         attr = hprim.GetAttribute(at)
         if attr and attr.IsValid() and attr.Get() is not None:
             v = attr.Get()
-            truth[f'prim_{at}'] = (str(v) if not hasattr(v, '__len__') else [float(x) if not isinstance(x, (tuple, list)) else list(map(float, x)) for x in v]) if at != 'axis' else str(v)
+            truth[f'prim_{at}'] = str(v)
     json.dump(meta, open(os.path.join(out, 'meta.json'), 'w'), ensure_ascii=False, indent=1)
     json.dump(truth, open(os.path.join(out, 'truth.json'), 'w'), ensure_ascii=False, indent=1, default=str)
     nd.destroy_node()
