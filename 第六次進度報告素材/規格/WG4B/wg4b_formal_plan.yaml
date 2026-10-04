@@ -1,0 +1,20 @@
+# WG4-B 正式批次：執行配置與分析口徑（起跑前鎖定；freeze_wg4b_formal.sha256）
+schema: wg4b_formal/1
+排程: 'wg4b_formal_schedule.tsv：B、P、P、B、B、P 各 3 趟，T200（open_m 0.200）'
+程式凍結: 'freeze_wg4b.sha256（不動）；本檔、排程、選定檔另列於 freeze_wg4b_formal.sha256（合併清單），起跑前與批次結束核對'
+執行配置:
+  B1: '方法 B1：SOLVER_KIND=b1、B1_KP_SET=1.0（tune_selection.yaml 依登錄順序選定）'
+  P: '方法 MOTM：既有 H5 W-GMPC（N=5）'
+  共同: 'BASE_ARGS --standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync --approach-rate 0.02；--motm-w-qn 0.8 --motm-w-vref-pre 0.3；MOTM_EXTRA_ARGS="--motm-retreat-rate 0.05"；MOTM_A_REF_SET=0.004；模擬上限 240 s（模擬器預設）'
+  規則: '不追加樣本、不改權重；紀錄／接線／配置不符 ⇒ 工程問題停批；證據完整的任務失敗照列'
+每趟驗收: 'B1：wg4b_b1_replay 必須 PASS；P：horizon_replay_check；兩組：motm_physical_check S1–S6（--expect-open-m 0.200）、凍結核對'
+分析口徑:
+  全任務主表: 'S1–S6、完成／未完成、最終相位、終止原因、實際觀察時長'
+  共同區段: '按 ALIGN、ENGAGE_WAIT、OPEN 分相位比較追蹤、命令變化、反轉率與計算時間，附各段時長；不混入 OPEN_HOLD'
+  OPEN_HOLD另表: '帶內最長連續時間、最大開度、超帶情形與該相位追蹤；觀察長度不同要明列，不混成全窗優劣'
+  完成時間: '只對完成趟報。B1 若到 240 s 未完成，標「時限內未完成」；不填 240 s、不算慢幾倍'
+  後續相位: '未到達者填 NA；不只留成功配對作整體結論'
+  統計: 'n = 3／組，配對差全列，不做顯著性；只支持本任務、本配置下的探索性架構比較'
+比較限制（主文必須揭露）: >
+  本比較評估事前定義、協同權重數值沿用 P、僅在有限預算內調整 kp 的 B1 改編基線；不代表單步 QP 的最佳性能，
+  也不能將差異單獨歸因於缺少多步預測。調參趟不併入正式樣本；kp = 1.0 為依登錄順序選定，非性能最佳

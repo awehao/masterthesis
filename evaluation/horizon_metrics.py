@@ -30,6 +30,9 @@ sys.path.insert(0, os.path.join(HERE, '..', 'src', 'ammr_wholebody_mpc'))
 from ammr_wholebody_mpc.wholebody_kinematics import (             # noqa: E402
     WholeBodyKinematics)
 
+sys.path.insert(0, HERE)
+from horizon_replay_check import NON_SOLVE_REASONS                # noqa: E402
+
 FLIP_THR = 0.05          # rad/s：低於此視為近零，不參與翻號
 PHASES = ['ALIGN', 'ENGAGE_WAIT', 'OPEN', 'OPEN_HOLD', 'CLOSE', 'CLOSE_HOLD',
           'RELEASE_WAIT', 'RETREAT']
@@ -135,9 +138,13 @@ def main():
         t = float(L['sim_t'])
         if t > t_stop:
             break
-        # 非求解列（合法等待列，例如 snapshot_duplicate）沒有 solve_in，不是求解輪：
-        # 不計入追蹤／計算／餘裕／命令增量，另計數。（2026-10-05 修：先前遇到即 KeyError）
+        # 非求解列：只有**節點既定的合法等待理由**（horizon_replay_check.NON_SOLVE_REASONS）
+        # 才跳過——不計入追蹤／計算／餘裕／命令增量，另計數。其他缺 solve_in 的列一律報錯，
+        # 不泛化成「沒有 solve_in 就忽略」。（2026-10-05 修：先前遇到合法等待列即 KeyError）
         if 'solve_in' not in L:
+            if L.get('reason') not in NON_SOLVE_REASONS:
+                raise ValueError(f'sim_t {t}：缺 solve_in 且理由 {L.get("reason")!r} '
+                                 '不是合法等待列')
             n_non_solve[L.get('reason')] += 1
             continue
         ph = phase_of(t)
