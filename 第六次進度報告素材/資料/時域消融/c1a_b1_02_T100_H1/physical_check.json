@@ -1,0 +1,87 @@
+{
+ "run": "c1a_b1_02_T100_H1",
+ "source": "room_run.json 逐物理步真值；task.json 只用於切時間窗",
+ "data": {
+  "n_steps": 6246,
+  "physics_dt_s": 0.01,
+  "n_gaps": 0,
+  "gaps_first": [],
+  "missing_or_nonfinite": {
+   "opening_m": {
+    "n": 0
+   },
+   "finger_contact_n": {
+    "n": 4571,
+    "first_sim_t": 0.02,
+    "last_sim_t": 45.72
+   },
+   "base_xyth": {
+    "n": 0
+   },
+   "q_arm_meas": {
+    "n": 0
+   }
+  }
+ },
+ "S1_open_hold": {
+  "band_mm": [
+   95.0,
+   105.0
+  ],
+  "band_source": "task.json open_band_m",
+  "longest_s": null,
+  "at_sim_t": null,
+  "max_opening_mm": 22.76
+ },
+ "S2_close_hold": "沒有開保持區段，無從判關保持",
+ "S3_grasp": {
+  "threshold_n": 0.5,
+  "longest_both_fingers_s": 2.48,
+  "at_sim_t": [
+   57.39,
+   59.86
+  ],
+  "sim_contact_held_s_max": 2.47
+ },
+ "S4_drift": "證據不足：缺 attach 或 RELEASE_WAIT 事件",
+ "S5_home": {
+  "final_xyth": [
+   -0.1371,
+   0.5483,
+   1.2978
+  ],
+  "start": [
+   -2.8,
+   -3.2,
+   1.5708
+  ],
+  "dist_m": 4.5979,
+  "tol_m": 0.2
+ },
+ "S6_contact": {
+  "n_bodies": 107,
+  "non_finger_over_0p01n": "無",
+  "n_steps_record_missing": 0,
+  "n_rows_invalid_or_nonfinite": 0,
+  "n_gaps": 0,
+  "not_measured": "櫃體與其他物件 ⇒ NA"
+ },
+ "results": {
+  "S1_open_hold": false,
+  "S2_close_hold": false,
+  "S3_grasp": true,
+  "S4_drift": null,
+  "S5_home": false,
+  "S6_contact": true
+ },
+ "verdict": "FAIL",
+ "failed": [
+  "S1_open_hold",
+  "S2_close_hold",
+  "S5_home"
+ ],
+ "insufficient": [
+  "S4_drift"
+ ],
+ "note": "final_phase = DONE 只是流程完成；本檔 S1–S6 是任務成功的獨立判定"
+}

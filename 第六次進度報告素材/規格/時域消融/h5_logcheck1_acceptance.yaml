@@ -1,0 +1,69 @@
+# H5 紀錄與重播驗收趟（功能確認，**不計入正式比較**）
+# 2026-10-05。趟次：evaluation/runs/h5_logcheck1（分析檔在 runs/h5_logcheck1/analysis/）
+schema: horizon_h5_acceptance/1
+run: h5_logcheck1
+設定: >
+  N=5、MOTM=1、HEADING=1、OPEN_M 0.200、FINGER_COL split、drawer_unit_bar26（載入雜湊 ef0396078012fd00…）、
+  GRASP_DEPTH_M 0.0068；任務節點 --standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync
+  --approach-rate 0.02 --motm-w-qn 0.8 --motm-w-vref-pre 0.3；求解節點 --offset-init-static。
+  與 b6 的程式差異只有紀錄：求解節點 solve_in 逐輪欄位與 stats.n_solve_calls、模擬器 drawer_asset_sha256
+熱保護: 'run_guarded.sh 上限 92 °C；起跑 45 °C、峰值 62 °C、中止 0 次、監看失效 0 次；守護離開碼 0'
+
+重播驗收（horizon_replay_check.py → analysis/replay_check.json）:
+  判定: PASS
+  覆蓋: '659 列全部為求解列（等待／閘門列 0、無法歸類 0）；欄位缺漏 0；對帳 n_solve_calls 659=659、published 659=659、no_solution 0=0'
+  A1: '|Δu0|/vmax p95 0、max 0（n = 659）—— 逐位元相同'
+  A2: '停止理由一致 100%（converged_step 456、converged_cost 203）'
+  A3: '原解與重播殘差最大值都 0（r_tol 1e-6）'
+  A4: 'ok 一致 100%'
+  完整序列差: 0
+  界線: '本趟沒有出現等待列、求解失敗或接受未發布的輪次 ⇒ 這些分支只由合成反例測過，未在實跑資料上出現'
+
+控制設定核對（horizon_config_check.py b6_motm1 h5_logcheck1 --allow）:
+  結論: '已記錄的控制設定一致，另有歷史證據缺項'
+  求解／任務／模擬器參數差異: 0
+  其他差異: '24 項：wholebody.* 23 項（b6 未落盤展開節點參數）＋ hash.drawer_asset_source（b6 為核對當下檔案、本趟為載入當下）；雜湊值相同'
+
+任務成功（motm_physical_check.py，逐物理步真值 → analysis/physical_check.json）:
+  流程: final_phase DONE、abort 無（只是流程完成）
+  S1_開保持: '195–205 mm 連續 2.49 s（b6：2.58／2.56／2.65）'
+  S2_關保持: '−0.01–5 mm 連續 ≥ 2 s 成立'
+  S3_夾持: '雙指 ≥ 0.5 N 連續 12.26 s；模擬器 contact_held_s 最大 12.25 s'
+  S4_漂移: 'attach → RELEASE_WAIT 1860 步，TCP 相對把手最大 0.08 mm（b6：0.10／0.31／0.03）；窗內雙指夾持步數比 99.78%'
+  S5_回程: '終點距起點 0.147 m（容許 0.20；b6 0.149–0.153）'
+  S6_非預期接觸: '抽屜 107 剛體配對無非手指 > 0.01 N；櫃體等 NA'
+  其他: 'motm_metrics：不允許停頓 0（唯一停頓 1.77 s 為開關之間）；手臂到速率上限 0 步'
+  定義說明: 'S4 與 motm_metrics 的 grasp_drift_max_mm（0.913，任務節點 trace 0.5 s 抽樣、自身參考）定義不同，正式判定用 S4'
+
+計算與週期（記錄值，n = 1，不歸因）:
+  core_ms_p50_p95_p99_max: [21.2, 30.4, 32.0, 70.6]
+  b6_core_ms_p50_p95: '17.8–18.5／24.6–27.8'
+  cycle_wall_ms_p50_p95_p99_max: [47.5, 63.7, 71.7, 89.8]
+  b6_cycle_wall_ms_p50_p95: '38.0–45.9／51.8–63.8'
+  漏時槽: 0
+  解讀: >
+    core 是求解器內部計時，新增紀錄在求解之外執行 ⇒ core p50 高 15–19% 不是紀錄本身的成本，
+    可能是機器狀態差異，n = 1 無法判定。cycle_wall 含排程等待，只用來看週期是否退化：
+    p95 63.7 ms 在 b6 範圍上緣，漏時槽 0。紀錄開銷要另做同機、交錯的開／關紀錄對照才能量
+
+觀察（不是驗收項）:
+  手臂命令相鄰反轉: '110／455（3.34 /s），高於 b6 的 0.69–3.00 /s；b6 三趟間已差 4 倍，n = 1 不下結論'
+  追蹤_err_p_p95_m: '0.0102（b6 0.0077–0.0095）'
+  ALIGN到DONE_s: '58.64（b6 56.95–60.14）'
+
+結論: >
+  紀錄齊全，重播逐位元重現原解 ⇒ P-REPLAY 成立。任務成功 S1–S6 由物理真值獨立成立。
+  可以進入下一步「H1 功能確認 1 趟」；是否開跑等審查意見。
+
+# ---------------------------------------------------------------- 2026-10-05 補：判定器補強後以同一份資料重核（未重跑）
+物理判定重核:
+  工具變更: >
+    motm_physical_check.py：保持計時遇步號／時間缺口或缺漏值即中斷；抽屜配對紀錄為 None、力值非有限、
+    或整趟有缺口 ⇒ S6「證據不足」，不當成沒有接觸。test_motm_physical_check.py 15/15
+  結果: 'PASS（analysis/physical_check_v2.json）；數值與首版相同'
+  資料完整性: '9890 步、缺口 0；抽屜配對每步都有紀錄、無非有限值；雙指力 0.02–37.74 s（3773 步）未取得 = 手臂展開前，不在夾持判定窗內'
+  b6_同判準: 'b6_motm1–3 皆 PASS、缺口 0；雙指力未取得到 47.52／38.98／40.26 s'
+殘留程序: >
+  本趟收尾後 domain 94 留下 velocity_smoother 與 lifecycle_manager_smoother 各一（00:21:28 由本趟啟動，
+  運行器 cleanup 未涵蓋，被系統接手）。屬本趟自己的程序 ⇒ 本趟執行期間只有一個平滑器，不影響本趟結果；
+  已於 H1 起跑前依 PID＋domain 清除。之後每趟起跑前都要檢查 domain 無殘留（流程，不改凍結程式）
