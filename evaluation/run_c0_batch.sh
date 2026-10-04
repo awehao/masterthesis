@@ -7,6 +7,8 @@
 # 任務失敗（運行器非 0）照樣繼續 —— 失敗是結果，留在分母，不補跑。
 #
 #   BATCH=c0b1 DOMAIN=94 bash evaluation/run_c0_batch.sh
+# 中斷後續跑（不是程式變更，批次不作廢）：RESUME_FROM=<第幾趟>，前面各趟必須已有
+# guard.log 且守護離開碼 0；中斷事件寫進同一份批次紀錄。
 # 本腳本自己**不設** ROS_DOMAIN_ID，清殘留時才不會誤判自己。
 set -u
 WS="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,7 +17,12 @@ BATCH="${BATCH:?BATCH 要明設}"
 DOMAIN="${DOMAIN:-94}"
 FREEZE="$WS/evaluation/results/horizon_ablation/freeze_c0.sha256"
 LOG="$WS/evaluation/runs/${BATCH}_batch.log"
-[ -e "$LOG" ] && { echo "$LOG 已存在，拒跑"; exit 91; }
+RESUME_FROM="${RESUME_FROM:-1}"
+if [ "$RESUME_FROM" = 1 ]; then
+  [ -e "$LOG" ] && { echo "$LOG 已存在，拒跑"; exit 91; }
+else
+  [ -e "$LOG" ] || { echo "續跑但 $LOG 不存在"; exit 91; }
+fi
 mkdir -p "$WS/evaluation/runs"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 ORDER=(H5 H1 H5 H1 H5 H1)
@@ -39,11 +46,22 @@ clean_domain(){
 
 freeze_ok(){ sha256sum -c --quiet "$FREEZE" >> "$LOG" 2>&1; }
 
-say "=== C0 批次 $BATCH domain=$DOMAIN 順序 ${ORDER[*]} ==="
+if [ "$RESUME_FROM" = 1 ]; then
+  say "=== C0 批次 $BATCH domain=$DOMAIN 順序 ${ORDER[*]} ==="
+else
+  say "=== 續跑 $BATCH：自第 $RESUME_FROM 趟（前一個批次程序在第 $((RESUME_FROM-1)) 趟結束後被中斷；非程式變更）==="
+  for j in $(seq 1 $((RESUME_FROM-1))); do
+    M=${ORDER[$((j-1))]}; RID="${BATCH}_p$(( (j+1)/2 ))_${M}"
+    tail -1 "$WS/evaluation/runs/$RID/guard.log" 2>/dev/null | grep -q '守護離開碼 0' \
+      || { say "**第 $j 趟 $RID 沒有完整收尾紀錄**，拒絕續跑"; exit 96; }
+    say "  已完成：第 $j 趟 $RID"
+  done
+fi
 say "批次腳本 sha256 $(sha256sum "$0" | cut -c1-16)；凍結清單 $(sha256sum "$FREEZE" | cut -c1-16)"
 k=0
 for M in "${ORDER[@]}"; do
   k=$((k+1)); pair=$(( (k+1)/2 ))
+  [ "$k" -lt "$RESUME_FROM" ] && continue
   RID="${BATCH}_p${pair}_${M}"
   N=$([ "$M" = H1 ] && echo 1 || echo 5)
   freeze_ok || { say "**凍結不符**（$RID 起跑前），整批停止"; exit 95; }
