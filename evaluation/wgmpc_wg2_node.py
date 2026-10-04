@@ -1153,7 +1153,8 @@ class WGMPCNode(Node):
                        age_out=round(age_out, 6), u_prev_src=src,
                        ok=bool(r.ok), reason=r.reason,
                        sqp_stop=r.sqp_stop_reason,
-                       sqp_converged=bool(r.sqp_converged),
+                       sqp_converged=(None if self._b1    # B1：SQP 欄位不適用
+                                      else bool(r.sqp_converged)),
                        n_sqp=r.n_sqp_used, residual=r.max_residual,
                        timing_ms=r.timing_ms, cycle_wall_ms=_cycle_wall,
                        u_prev_authoritative=bool(authoritative),
@@ -1173,7 +1174,9 @@ class WGMPCNode(Node):
                        gate_state=self._gate_state,
                        coord=_coord_rec,
                        n_incomplete=self._n_incomplete,
-                       **({'solver_kind': 'b1', 'b1': r.b1} if self._b1 else {}),
+                       # B1：求解器自己的原因另存（求解後閘門會覆寫 reason）
+                       **({'solver_kind': 'b1', 'b1': r.b1,
+                           'solver_reason': r.reason} if self._b1 else {}),
                        # **時間契約的分項紀錄**（快照／求解起點／發布／牆鐘）
                        timing=dict(snap_sim_t=round(snap.sim_t, 6),
                                    solve_start_sim_t=round(_solve_sim_t0, 6),
@@ -1219,9 +1222,12 @@ class WGMPCNode(Node):
             # 逐輪求解輸入／輸出（失敗與未發布輪也留；未捨入）
             rec['solve_in'].update(solver_io_record(
                 T_cyc=T_cyc, target_src=_tgt_src, target_age_s=_tgt_age,
-                U_warm=_U_warm_in, U_sol=(r.U if r.ok else None),
-                offset_d_hat=_d_hat_in, arm_bias=_bias_in,
-                solver_N=self.cfg.N))
+                # B1：單步、冷啟動、無增廣模型 ⇒ 暖啟動與模型偏差不是求解輸入，步數 1
+                U_warm=(None if self._b1 else _U_warm_in),
+                U_sol=(r.U if r.ok else None),
+                offset_d_hat=_d_hat_in,
+                arm_bias=(None if self._b1 else _bias_in),
+                solver_N=(1 if self._b1 else self.cfg.N)))
             if not r.ok:
                 self._c_no_sol += 1
                 rec['published'] = False

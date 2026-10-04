@@ -79,9 +79,10 @@ class B1Result:
     reason: str = ''
     u0: np.ndarray | None = None
     U: np.ndarray | None = None
-    sqp_converged: bool = True
-    sqp_stop_reason: str = 'b1_single_qp'
-    n_sqp_used: int = 1
+    # SQP 相容欄位：B1 不是 SQP ⇒ 明確標為不適用（不當成「收斂一次」）
+    sqp_converged: bool | None = None
+    sqp_stop_reason: str = 'not_applicable'
+    n_sqp_used: int | None = None
     max_residual: float = float('nan')
     timing_ms: dict = field(default_factory=dict)
     b1: dict = field(default_factory=dict)      # μ 開關、成本分項、OSQP 狀態、各區塊殘差
@@ -135,7 +136,7 @@ def build_objective(Jb, e, q_arm, cfg, p: B1Params):
         dt = cfg.dt
         H[ARM, ARM] += wq * dt * dt * np.eye(6)
         g[ARM] += wq * dt * (qn - q_arm)
-    info = dict(mu_on=bool(mu_on), mu_reason=why,
+    info = dict(mu_on=bool(mu_on), mu_reason=why, dt=float(cfg.dt),
                 w_vref=float(wv), w_qn=float(wq),
                 v_post=None if v_post is None else [float(x) for x in v_post])
     return H, g, info
@@ -192,10 +193,10 @@ def solve_b1(K, q0, s0, u_prev, T_des, cfg, p: B1Params) -> B1Result:
     q0 = np.asarray(q0, float)
     if s0 is None or len(s0) != 6 or not np.isfinite(np.asarray(s0, float)).all():
         return B1Result(ok=False, reason='no_setpoint',
-                        timing_ms={'total': 0.0})
+                        timing_ms={'total': 0.0}, b1={'dt': float(cfg.dt)})
     if not (np.isfinite(q0).all() and np.isfinite(np.asarray(u_prev, float)).all()):
         return B1Result(ok=False, reason='nonfinite_input',
-                        timing_ms={'total': 0.0})
+                        timing_ms={'total': 0.0}, b1={'dt': float(cfg.dt)})
     e, Jw = task_terms(K, q0, T_des, cfg.tcp, p)
     Jb = Jw @ body_to_world(float(q0[2]))
     H, g, info = build_objective(Jb, e, q0[ARM], cfg, p)

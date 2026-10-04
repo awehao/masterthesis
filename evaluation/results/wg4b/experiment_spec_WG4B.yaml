@@ -3,7 +3,14 @@
 # Codex 已同意進入 B1 實作＋離線測試；尚未凍結、未開模擬。
 # 依據：第二階段計畫 §5.9 WG4、§6、baseline_B_frozen_20260909.md、H1_H5_resolved_config.yaml、mt_b1
 schema: wg4b_spec/2
-status: 'draft-2b'
+status: 'frozen-1（調參前凍結，2026-10-05；Codex 20261005_052846／後續複審同意）'
+凍結: >
+  程式、規格與候選順序凍結於 evaluation/results/wg4b/freeze_wg4b.sha256；調參 3 趟與正式 6 趟都在此凍結下，
+  調參期間不改程式。選定 kp 後另存正式配置檔，引用同一凍結。不覆寫 C0／C1a／mt_b1 的凍結與實錄
+調參排程: 'wg4b_tune1_schedule.tsv（第一趟 kp = 1.0）；之後依選擇規則逐趟另立排程檔（tune2 kp 2.0、tune3 kp 0.5），不改既有排程'
+功能確認判準: >
+  沿用 S1–S6、A0 停止語意、限位、停頓與完整重播（wg4b_b1_replay.py 必須 PASS）。任務失敗但證據完整 ⇒ 有效候選結果；
+  紀錄、接線或配置不符 ⇒ 工程問題，停批修正，不算 kp 較差
 
 問題: '同一 MotM 抽屜任務、同輸入與限制數值下，整合式單步 QP（B1）與多步 W-GMPC（P，N = 5）的任務成功、追蹤、平順、停頓與計算代價差異'
 定位: '兩種控制架構的比較，**不是**多步預測本身的因果證明'
