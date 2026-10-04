@@ -52,7 +52,7 @@ from dataclasses import dataclass
 import numpy as np
 import rclpy
 from nav_msgs.msg import Odometry
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import JointState
@@ -292,6 +292,12 @@ class WGMPCNode(Node):
         self._T_last = None
         self._n_target_changes = 0
         self._stop_req = None
+        self._stop_rx = None           # 收到停止的時刻（模擬時間、牆鐘、原因）
+        self._c_pub = self._c_drop_age = self._c_no_sol = 0
+        self._c_solve_calls = self._c_miss = 0
+        self._c_pub_after_stop = 0     # 收到停止後仍發布的次數（應為 0）
+        self._c_solve_logged = 0       # 已寫入紀錄的求解列數（獨立計數）
+        self._shutdown_exc = None
         self._drawer_released = False
         self._drawer_start = False
         if getattr(a, 'wait_for_drawer_handover', False):
@@ -418,6 +424,8 @@ class WGMPCNode(Node):
         避免兩條路徑的座標約定日後分歧。零向量旋轉後仍是零。
         """
         u_world = body_to_world(float(theta)) @ np.asarray(u_body, float)
+        if self._stop_req is not None:
+            self._c_pub_after_stop += 1    # 獨立計數；正常應為 0（驗收項）
         m = Float64MultiArray()
         m.data = [float(x) for x in u_world]
         self.pub.publish(m)
@@ -694,6 +702,9 @@ class WGMPCNode(Node):
 
     # ---------------------------------------------------------- 迴圈
     def _on_stop(self, m):
+        if self._stop_req is None:
+            self._stop_rx = {'sim_t': self.sim_now(), 'wall_mono': time.monotonic(),
+                             'reason': str(m.data) or '（空）'}
         self._stop_req = str(m.data) or '（空）'
 
     def _on_target(self, m: Float64MultiArray):
@@ -768,7 +779,29 @@ class WGMPCNode(Node):
         self._n_by_target_src[src] = self._n_by_target_src.get(src, 0) + 1
         return T, src, age
 
-    def run(self, T_des) -> int:
+    def run(self, T_des):
+        """主迴圈外包一層：ROS 外部關閉（含 SIGTERM 觸發的 shutdown）時，
+        以 stop_why='external_shutdown' 收尾，照常由計數器產生統計。
+        其他例外不在此吞掉（由呼叫端保留真正原因）。"""
+        try:
+            return self._run_loop(T_des)
+        except Exception as e:                  # noqa: BLE001
+            # 外部關閉時丟出的不一定是 ExternalShutdownException（也可能是
+            # context 已失效的 RCLError，看當下卡在哪個呼叫）⇒ 以 rclpy.ok() 判定
+            if not (isinstance(e, ExternalShutdownException) or not rclpy.ok()):
+                raise
+            self._stop_why = 'external_shutdown'
+            self._shutdown_exc = f'{type(e).__name__}: {e}'[:300]
+            print('[wg2] 外部關閉（ROS shutdown／SIGTERM）⇒ 以累積計數寫出統計'
+                  f'（{type(e).__name__}）', flush=True)
+            return self._stats()
+
+    def _log_solve(self, rec):
+        """求解列寫入紀錄；另計數（與求解呼叫數相減 = 被中斷而未寫入的求解輪）。"""
+        self.log.append(rec)
+        self._c_solve_logged += 1
+
+    def _run_loop(self, T_des):
         t0 = time.monotonic()
         self._t_wall0 = t0            # **牆鐘監看**的原點（上限照舊）
         self._sim_slot0 = None        # 時槽原點（模擬時間），首個可用快照時定
@@ -784,9 +817,11 @@ class WGMPCNode(Node):
         self._applied_by_seq = {}
         slot = 0
         U_warm = None
-        n_pub = n_drop_age = n_no_sol = 0
-        n_solve_calls = 0            # 求解器呼叫次數（獨立計數，供與求解列對帳）
-        n_miss = 0
+        # **計數器是節點屬性**：外部關閉或例外時，統計仍由實際計數器產生
+        self._c_pub = self._c_drop_age = self._c_no_sol = 0
+        self._c_solve_calls = 0            # 求解器呼叫次數（獨立計數，供與求解列對帳）
+        self._c_solve_logged = 0
+        self._c_miss = 0
         _prev_top = None
         self._t_sim0 = None          # 任務的模擬時間起點（首次成功發布時定）
         self._stop_why = 'loop_end'
@@ -797,6 +832,12 @@ class WGMPCNode(Node):
             _cycle_wall = (None if _prev_top is None
                            else round((_top - _prev_top) * 1e3, 4))
             _prev_top = _top
+            if self._stop_req is not None:
+                # **收到停止後不得再開始求解或發布**（迴圈頂端檢查）
+                self._stop_why = f'stop_topic：{self._stop_req}'
+                print(f'[wg2] 收到停止請求：{self._stop_req}（迴圈頂端，本輪不求解）',
+                      flush=True)
+                break
             if self._halt:
                 # 等待時槽時由 `_reschedule` 設定（牆鐘上限或模擬時鐘停滯）
                 break
@@ -887,7 +928,7 @@ class WGMPCNode(Node):
                         gate_state=gs, gate_why=gwhy,
                         timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
                     slot, _m = self._reschedule(slot)
-                    n_miss += _m
+                    self._c_miss += _m
                     continue
                 if gs == HOLD:
                     # **不求解、不發布、不重送初始化命令、不沿用舊設定點。**
@@ -897,7 +938,7 @@ class WGMPCNode(Node):
                         gate_state=gs, gate_why=gwhy,
                         timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
                     slot, _m = self._reschedule(slot)
-                    n_miss += _m
+                    self._c_miss += _m
                     continue
             snap = self._snap              # **讀一次**，整輪只用區域變數
             if snap is None:
@@ -923,7 +964,7 @@ class WGMPCNode(Node):
                     n_dup_skip=self._n_dup_skip,
                     timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
                 slot, _m = self._reschedule(slot)
-                n_miss += _m
+                self._c_miss += _m
                 continue
             if self._gate is not None and len(snap.s) != 6:
                 # 閘門說 ARMED，但**同時刻快照裡沒有設定點** ⇒ 配對未成立。
@@ -936,12 +977,12 @@ class WGMPCNode(Node):
                     n_incomplete=self._n_incomplete,
                     timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
                 slot, _m = self._reschedule(slot)
-                n_miss += _m
+                self._c_miss += _m
                 continue
             age_in = self.sim_now() - snap.sim_t
             if age_in > self.a.max_input_age:
                 # **求解前就過期**也要留紀錄，否則 log 看不到被擋下的輪次
-                n_drop_age += 1
+                self._c_drop_age += 1
                 self.log.append(dict(slot=slot, sim_t=snap.sim_t,
                                      age_in=round(age_in, 6), age_out=None,
                                      u_prev_src='n/a', ok=False,
@@ -951,7 +992,7 @@ class WGMPCNode(Node):
                                      dropped=f'求解前輸入已過期 '
                                              f'{age_in * 1e3:.0f} ms'))
                 slot, _m = self._reschedule(slot)
-                n_miss += _m
+                self._c_miss += _m
                 continue
             q0 = np.asarray(snap.q, float)
             u_prev, src, authoritative = self._u_prev(float(q0[2]))
@@ -966,7 +1007,7 @@ class WGMPCNode(Node):
                                      cycle_wall_ms=_cycle_wall,
                                      dropped=f'無權威 u_prev（{src}）'))
                 slot, _m = self._reschedule(slot)
-                n_miss += _m
+                self._c_miss += _m
                 continue
             _solve_sim_t0 = self.sim_now()
             # **本輪的目標只解析一次**，求解與到達判定共用同一份
@@ -1026,7 +1067,7 @@ class WGMPCNode(Node):
                                  copy=True)
                         if getattr(self.cfg, 'arm_model', None) is not None
                         else None)
-            n_solve_calls += 1
+            self._c_solve_calls += 1
             if self._gate is not None:
                 # 增廣狀態由**同時刻快照**組成：q 與 s 同一個物理步。
                 # `make_z` 在 s 含非有限值時拋錯，不以實測關節角代替。
@@ -1125,11 +1166,11 @@ class WGMPCNode(Node):
                 offset_d_hat=_d_hat_in, arm_bias=_bias_in,
                 solver_N=self.cfg.N))
             if not r.ok:
-                n_no_sol += 1
+                self._c_no_sol += 1
                 rec['published'] = False
-                self.log.append(rec)
+                self._log_solve(rec)
                 slot, _m = self._reschedule(slot)
-                n_miss += _m
+                self._c_miss += _m
                 continue
             rec['clock_moved'] = bool(_clock_moved)
             rec['state_moved'] = bool(_state_moved)
@@ -1138,23 +1179,23 @@ class WGMPCNode(Node):
                     and r.timing_ms['total'] > self.a.max_input_age * 1e3:
                 # **無法確認時間依據已更新，而求解耗時又超過年齡界限**
                 # ⇒ 不能判斷解是否過期 ⇒ **不發布**。
-                n_drop_age += 1
+                self._c_drop_age += 1
                 rec['published'] = False
                 rec['dropped'] = (f'時間依據未更新（clock/state 皆未前進）'
                                   f'而求解耗時 {r.timing_ms["total"]:.0f} ms '
                                   f'> {self.a.max_input_age*1e3:.0f} ms')
-                self.log.append(rec)
+                self._log_solve(rec)
                 slot, _m = self._reschedule(slot)
-                n_miss += _m
+                self._c_miss += _m
                 continue
             if age_out > self.a.max_input_age:
                 # **過期解不發布，不重新蓋時間**
-                n_drop_age += 1
+                self._c_drop_age += 1
                 rec['published'] = False
                 rec['dropped'] = f'輸入已過期 {age_out*1e3:.0f} ms'
-                self.log.append(rec)
+                self._log_solve(rec)
                 slot, _m = self._reschedule(slot)
-                n_miss += _m
+                self._c_miss += _m
                 continue
             if self._gate is not None:
                 # **求解後再查一次執行健康**：求解期間（p50 ~25 ms）可能
@@ -1166,13 +1207,13 @@ class WGMPCNode(Node):
                     rec['published'] = False
                     rec['reason'] = f'sp_gate_{gs2}_after_solve'
                     rec['dropped'] = f'求解後執行健康不合格（{gs2}）：{why2}'
-                    self.log.append(rec)
+                    self._log_solve(rec)
                     if gs2 == FAILED:
                         print(f'[wg2] **求解後回報失效閂鎖**：{why2}', flush=True)
                         self._stopped_on_fail = True
                         break
                     slot, _m = self._reschedule(slot)
-                    n_miss += _m
+                    self._c_miss += _m
                     continue
             # **到達判定與整形共用同一組誤差**：都用實測狀態 q0 的 FK，
             # 不是核心預測。先算，供整形使用。
@@ -1200,13 +1241,22 @@ class WGMPCNode(Node):
                 self._t_sim0 = snap.sim_t
             self._last_solved_key = _key
             self._last_solved_sim_t = snap.sim_t
+            if self._stop_req is not None:
+                # **發布前**再查一次：求解期間收到停止 ⇒ 本輪不發布
+                rec['published'] = False
+                rec['dropped'] = f'收到停止請求，不發布：{self._stop_req}'
+                self._log_solve(rec)
+                self._stop_why = f'stop_topic：{self._stop_req}'
+                print(f'[wg2] 收到停止請求：{self._stop_req}（發布前，本輪不發布）',
+                      flush=True)
+                break
             rec['publish_sim_t'] = round(self.sim_now(), 6)
             # 四段紀錄裡的 request 段**用同一個值**，不另算一次轉換
             u_world = self._publish_u(_u_out, float(q0[2]))
             # `_publish_u` 內部只讀一次時鐘，這裡記下**它用的那一個值**
             # （未捨入）。既有的 publish_sim_t 仍保留，不動既有工具。
             rec['publish_sim_t_exact'] = self._last_pub_t
-            n_pub += 1
+            self._c_pub += 1
             U_warm = r.U
             # **到達並保持**：用實測狀態算的 FK 誤差，不是核心預測。
             # （e／_ep／_er 已於整形前算出，此處沿用同一組值）
@@ -1288,7 +1338,7 @@ class WGMPCNode(Node):
                        conv_yaw_src_sim_t=round(snap.sim_t, 6),
                        conv_at_mono=round(time.monotonic(), 6),
                        err_p=_ep, err_r=_er)
-            self.log.append(rec)
+            self._log_solve(rec)
             # ---- 狀態給任務編排節點（每輪）----
             if self.status_pub is not None:
                 _sm = Float64MultiArray()
@@ -1311,14 +1361,24 @@ class WGMPCNode(Node):
                 print(f'[wg2] 收到停止請求：{self._stop_req}', flush=True)
                 break
             slot, _m = self._reschedule(slot)
-            n_miss += _m
+            self._c_miss += _m
             if _m:
                 # **跨過多個時槽**：暖啟動序列假設只前進一步，
                 # 不能再當成有效的 nominal。最小處理是丟棄重建，
                 # **不**臨時改模型 dt 來補救。
                 U_warm = None
                 self._n_warm_discard += 1
+        return self._stats()
+
+    def _stats(self):
+        """由節點計數器組統計（正常結束、外部關閉、例外收尾共用）。"""
         return dict(stop_why=self._stop_why,
+                    stop_rx=self._stop_rx,
+                    last_publish_sim_t=self._last_pub_t,
+                    n_published_after_stop_rx=int(self._c_pub_after_stop),
+                    n_solve_rows_logged=int(self._c_solve_logged),
+                    n_solve_calls_unlogged=int(self._c_solve_calls - self._c_solve_logged),
+                    shutdown_exc=self._shutdown_exc,
                     delay_comp_state_cycles=float(self.d_state),
                     delay_comp_cmd_cycles=float(self.d_cmd),
                     use_applied_for_predict=bool(self.a.use_applied_for_predict),
@@ -1352,9 +1412,9 @@ class WGMPCNode(Node):
                     n_init_cmd_in_run=self._n_init_cmd,
                     gate_report=(self._gate.report() if self._gate else None),
                     composed_G=self.composed_G, composed_kp=self.composed_kp,
-                    published=n_pub, dropped_stale=n_drop_age,
-                    no_solution=n_no_sol, deadline_miss=int(n_miss),
-                    n_solve_calls=n_solve_calls,
+                    published=self._c_pub, dropped_stale=self._c_drop_age,
+                    no_solution=self._c_no_sol, deadline_miss=int(self._c_miss),
+                    n_solve_calls=self._c_solve_calls,
                     rate_hz=self.a.rate,
                     reached_held=bool(self._reached_held),
                     stopped_on_chain_fail=bool(self._stopped_on_fail),
@@ -1730,9 +1790,22 @@ def main() -> int:
           f'u_prev 政策 {a.u_prev_policy}'
           f'{"＋初始靜止" if a.assume_initial_rest else ""}', flush=True)
     stats = None          # finally 會讀它；run() 丟例外時不可變成 NameError
+    _exc = None
     try:
         stats = nd.run(T_des)
+    except BaseException as e:          # 保留真正原因後照樣往外拋
+        _exc = e
+        raise
     finally:
+        if stats is None:
+            # 例外收尾：仍由**實際計數器**組統計，並標部分統計與真正原因
+            try:
+                stats = nd._stats()
+            except Exception as e2:     # noqa: BLE001
+                stats = {'stats_error': f'{type(e2).__name__}: {e2}'}
+            stats['stats_partial'] = True
+            stats['stop_why'] = (f'exception：{type(_exc).__name__}：{_exc}'
+                                 if _exc is not None else stats.get('stop_why'))
         if a.out:
             json.dump({'args': vars(a), 'started': True,
                        'stats': stats,

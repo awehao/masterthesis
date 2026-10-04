@@ -234,9 +234,14 @@ def main():
         'phase_start': {p: round(t, 3) for p, t in bounds},
         'solver': {'n_cycles': len([L for L in log if float(L['sim_t']) <= t_stop]),
                    'n_failed': n_fail, 'sqp_stop': dict(stops),
-                   'n_missed_slot': sol['stats'].get('n_missed_slot'),
-                   'n_warm_discard': sol['stats'].get('n_warm_discard'),
-                   'n_shaped': sol['stats'].get('n_shaped')},
+                   # 節點統計缺（例如中止路徑未寫出）⇒ 這三項標缺、不補造；其他指標照算
+                   'n_missed_slot': (sol.get('stats') or {}).get('n_missed_slot'),
+                   'n_warm_discard': (sol.get('stats') or {}).get('n_warm_discard'),
+                   'n_shaped': (sol.get('stats') or {}).get('n_shaped'),
+                   'stats_missing': not bool(sol.get('stats')),
+                   'stats_missing_note': ('證據不足：align_solver.json 沒有節點統計，'
+                                          'n_missed_slot／n_warm_discard／n_shaped 標缺'
+                                          if not sol.get('stats') else None)},
         'by_phase': {g: summarise(by[g], g) for g in ['WINDOW'] + PHASES
                      if g in by},
         'limits_note': f'有效限位 = 硬限位 ± joint_margin {margin} rad；負值 = 超出有效限位',

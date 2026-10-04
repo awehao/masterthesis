@@ -141,14 +141,22 @@ def check(run_dir, max_cycles=None):
     # ---- C3：與節點統計對帳（整趟；抓整列被刪）----
     n_pub = sum(1 for L in log if L.get('published') is True)
     n_fail = sum(1 for L in solve_rows if not L.get('ok'))
+    # 外部關閉時，最後一輪可能已呼叫求解器、尚未寫入紀錄；節點以獨立計數報出
+    # （n_solve_calls_unlogged）。只在 stop_why = external_shutdown 且 ≤ 1 時扣除，並明列。
+    _unlogged = stats.get('n_solve_calls_unlogged') or 0
+    _unlogged_ok = (stats.get('stop_why') == 'external_shutdown' and _unlogged in (0, 1))
+    _calls = stats.get('n_solve_calls')
     stats_check = {
         'n_solve_calls': {'rows': len(solve_rows),
-                          'stats': stats.get('n_solve_calls')},
+                          'stats': (None if _calls is None else
+                                    _calls - (_unlogged if _unlogged_ok else 0)),
+                          'unlogged_at_external_shutdown': (_unlogged if _unlogged_ok else None)},
         'published': {'rows': n_pub, 'stats': stats.get('published')},
         'no_solution': {'rows': n_fail, 'stats': stats.get('no_solution')},
     }
-    c3_ok = all(v['stats'] is not None and v['rows'] == v['stats']
-                for v in stats_check.values())
+    c3_ok = (all(v['stats'] is not None and v['rows'] == v['stats']
+                 for v in stats_check.values())
+             and (_unlogged == 0 or _unlogged_ok))
 
     partial = bool(max_cycles)
     rows = solve_rows[:max_cycles] if partial else solve_rows

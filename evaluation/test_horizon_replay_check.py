@@ -143,7 +143,7 @@ def test_deleted_unpublished_accepted_row_fails(tmp_path, base_log):
     sr = out['stats_reconcile']
     assert sr['published']['rows'] == sr['published']['stats']
     assert sr['no_solution']['rows'] == sr['no_solution']['stats']
-    assert sr['n_solve_calls'] == {'rows': 9, 'stats': 10}
+    assert (sr['n_solve_calls']['rows'], sr['n_solve_calls']['stats']) == (9, 10)
 
 
 def test_missing_call_count_fails(tmp_path, base_log):
@@ -232,3 +232,32 @@ def test_nan_residual_allowed_only_for_qp_failure():
     assert HC.record_problems(L, 5) == []
     L['reason'] = 'residual_check_failed:dyn'
     assert HC.record_problems(L, 5) == ['nonfinite:residual']
+
+
+# ---------------------------------------------------------------- A0：外部關閉中斷的求解輪
+def _stats_override(tmp_path, name, base_log, **st):
+    d = write(str(tmp_path / name), cp(base_log))
+    p = os.path.join(d, 'align_solver.json')
+    j = json.load(open(p))
+    j['stats'].update(st)
+    json.dump(j, open(p, 'w'))
+    return HC.check(d)
+
+
+def test_unlogged_call_ok_only_at_external_shutdown(tmp_path, base_log):
+    n = sum(1 for L in base_log if 'sqp_stop' in L)
+    out, rc = _stats_override(tmp_path, 'un_ok', base_log, n_solve_calls=n + 1,
+                              n_solve_calls_unlogged=1, stop_why='external_shutdown')
+    assert rc == 0, out['passed']
+    assert out['stats_reconcile']['n_solve_calls']['unlogged_at_external_shutdown'] == 1
+
+
+@pytest.mark.parametrize('st', [
+    dict(n_solve_calls_unlogged=1, stop_why='stop_topic：x'),     # 非外部關閉
+    dict(n_solve_calls_unlogged=2, stop_why='external_shutdown'), # 超過 1 輪
+])
+def test_unlogged_call_rejected_otherwise(tmp_path, base_log, st):
+    n = sum(1 for L in base_log if 'sqp_stop' in L)
+    out, rc = _stats_override(tmp_path, f"un_bad_{st['n_solve_calls_unlogged']}", base_log,
+                              n_solve_calls=n + st['n_solve_calls_unlogged'], **st)
+    assert rc == 1 and not out['passed']['C3_stats_reconcile']

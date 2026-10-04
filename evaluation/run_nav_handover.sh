@@ -183,6 +183,7 @@ spawn task python3 -u evaluation/drawer_task_node.py \
   --open-m "${OPEN_M:-0.020}" --grasp-depth-m "${GRASP_DEPTH_M:-0.01226}" \
   --contact-min-n "${CONTACT_MIN_N:-0.5}" $MOTM_FLAG \
   ${MOTM_A_REF:+--motm-a-ref "$MOTM_A_REF"} ${MOTM_TASK_ARGS:-} \
+  ${INJECT_ABORT_AT_S:+--inject-abort-at-s "$INJECT_ABORT_AT_S"} \
   --out "$DIR/task.json"
 sleep 1
 
@@ -264,6 +265,30 @@ for i in $(seq 900); do
   sleep 1
 done
 grep -E '^\[task\]' "$DIR/task.log" | tee -a "$DIR/run.log"
+
+# **先等求解節點停止並寫完統計，再停物理（A0）**。中止路徑上任務節點會發 /wgmpc/stop；
+# 正常路徑求解節點早已在退開完成時停止 ⇒ 立即通過。等待有上限，不無限等；
+# 逾時就記下「未確認停止」再往下走（之後收尾時節點以外部關閉寫出統計）。
+SOLVER_PID=''
+for i in "${!NAMES[@]}"; do [ "${NAMES[$i]}" = solver ] && SOLVER_PID="${PIDS[$i]}"; done
+STOP_WAIT_S="${STOP_WAIT_S:-30}"
+say "[收尾] 等求解節點停止並封存（最多 ${STOP_WAIT_S} s）"
+stop_ok=0
+for i in $(seq "$STOP_WAIT_S"); do
+  if [ -s "$DIR/align_solver.json" ] && { [ -z "$SOLVER_PID" ] || ! kill -0 "$SOLVER_PID" 2>/dev/null; }; then
+    stop_ok=1; break
+  fi
+  sleep 1
+done
+if [ "$stop_ok" = 1 ]; then
+  say "  求解節點已停止並寫出 align_solver.json"
+else
+  say "  **求解節點未在 ${STOP_WAIT_S} s 內確認停止**（不再等；收尾時以外部關閉寫出統計，紀錄標為未確認）"
+fi
+# 停止後再讓物理跑一段（牆鐘），供核對執行端實際套用命令與實測速度確已歸零／減速。
+POST_STOP_HOLD_S="${POST_STOP_HOLD_S:-3}"
+say "[收尾] 停止後保留物理 ${POST_STOP_HOLD_S} s（牆鐘）供核對執行端減速"
+sleep "$POST_STOP_HOLD_S"
 
 say "[收尾] 請模擬器受控停止並封存"
 timeout 10 ros2 topic pub --once /room/stop std_msgs/msg/String \

@@ -304,6 +304,9 @@ def main():
     ap.add_argument('--attach-hold-s', type=float, default=2.0)
     ap.add_argument('--release-max-n', type=float, default=0.1)
     ap.add_argument('--release-hold-s', type=float, default=0.5)
+    ap.add_argument('--inject-abort-at-s', type=float, default=-1.0,
+                    help='**測試用**：進入 OPEN 後經過這麼多秒（模擬時間）注入中止，'
+                         '原因 test_injected_abort；預設 -1 = 關閉，只供功能確認')
     ap.add_argument('--restow-gain', type=float, default=1.0)
     ap.add_argument('--restow-qd-max', type=float, default=0.30)
     ap.add_argument('--restow-mode', default='j3_last',
@@ -426,6 +429,7 @@ def main():
     grasp_y = None
     started = False
     handback_sent = home_sent = stop_sent = False
+    inj_open_t0 = None              # 注入中止：進入 OPEN 的時刻
     prev_phase = None
     dt = 1.0 / a.rate
     # ---- MotM 狀態 ----
@@ -695,9 +699,33 @@ def main():
             m.data = phase
             nd.phase_pub.publish(m)
             prev_phase = phase
+        # ---- 測試用注入中止（預設關閉；只供功能確認，原因明記，不冒稱實際滑脫）----
+        if a.inject_abort_at_s >= 0.0 and phase == 'OPEN' and not out.get('abort'):
+            if inj_open_t0 is None:
+                inj_open_t0 = st
+            if st - inj_open_t0 >= a.inject_abort_at_s:
+                out['abort'] = 'test_injected_abort'
+                rep['injected_abort'] = {'sim_t': st, 'phase': phase,
+                                         'open_elapsed_s': round(st - inj_open_t0, 3),
+                                         'opening_m': d_meas}
         if out.get('abort'):
             rep['abort'] = out['abort']
             print(f'[task] **中止：{out["abort"]}** @ sim {st:.2f}', flush=True)
+            # **中止 ⇒ 停止任務推進**：通知求解節點停止（不再求解、不再發布），
+            # 本節點也不再發目標／協同設定。夾爪維持目前命令（不自動放開→退開→收臂：
+            # 中止可能代表夾持已失效或未知接觸，正常恢復路徑未必安全）。
+            if not stop_sent:
+                m = String()
+                m.data = f'drawer_task 中止：{out["abort"]}'
+                nd.stop_pub.publish(m)
+                stop_sent = True
+                rep['events'].append({'sim_t': st, 'solver_stop': True,
+                                      'reason': f'abort：{out["abort"]}'})
+                rep['abort_stop'] = {'abort_sim_t': st, 'stop_sent_sim_t': nd.sim_t(),
+                                     'reason': out['abort']}
+                # 讓停止訊息確實送出再離開（有界：最多約 0.5 s 牆鐘）
+                for _ in range(10):
+                    rclpy.spin_once(nd, timeout_sec=0.05)
             break
         if out.get('done') or phase == 'DONE':
             print(f'[task] **完成** @ sim {st:.2f}', flush=True)
