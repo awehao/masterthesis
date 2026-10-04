@@ -67,8 +67,9 @@ ap.add_argument('--wrist-warmup', type=int, default=60)
 ap.add_argument('--wrist-max-steps', type=int, default=2000)
 ap.add_argument('--wrist-base', default='-0.136412,0.560,1.297349',
                 help='擺位底盤 x,y,yaw（預設＝基準停位）')
-ap.add_argument('--wrist-q', default='-0.05976,0.80551,1.28293,-0.37162,-1.12167,-1.40317',
-                help='擺位手臂六軸（預設＝基準夾持姿態的 TCP 沿 −y 退 0.20 m，離線 IK）')
+ap.add_argument('--wrist-q', default='-0.383712,0.301253,0.428917,-0.661155,-1.469862,-1.492557',
+                help='擺位手臂六軸（預設＝基準夾持姿態的 TCP 沿 −y 退 0.20 m，離線 IK；'
+                     '真值橫桿中心投影約 (375,354)、光軸距離 0.275 m）')
 ap.add_argument('--stow-q', default='0,0,0,0,-1.5707963,0',
                 help='導航期間手臂維持的收攏姿態（**已核准定版**）')
 ap.add_argument('--physics-dt', type=float, default=0.01)
