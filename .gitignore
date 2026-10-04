@@ -20,3 +20,17 @@ evaluation/bags/
 *.mcap
 *.mcap.*
 **/metadata.yaml
+
+# URDF → USD 轉換產物：每趟 import_urdf 都會重新產生一份 omni_bot_manip_N，
+# 可由 URDF 重建，不入版本控制（2026-10-04 清理時已刪 274 份、約 600 MB）。
+# omni_bot_manip_244 保留在工作區：wgmpc_drawer_open_close.yaml 的
+# gripper_geometry_check 以它核對手指碰撞網格。
+evaluation/models/isaac_usd/
+
+# 趟次的重播影格與大型紀錄只留本機（2026-10-04）：影格 PNG 佔未推送量的 98%（9.45 GB），
+# 單一 align_solver.json 可達 1.7 GB，超過 GitHub 單檔 100 MB 與單次推送上限。
+# 影片（.mp4）與 JSON 摘要照常入庫。已追蹤的舊影格不受此規則影響。
+evaluation/runs/*/frames/
+evaluation/runs/*/replay*/
+evaluation/runs/nav_align_solve_021536/align_solver.json
+evaluation/runs/stage_a_overnight_1003_142154_r3_hang1/isaac_hang/

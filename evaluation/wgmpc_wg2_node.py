@@ -56,7 +56,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray, String
+from std_msgs.msg import Bool, Float64MultiArray, String
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), 'src/ammr_wholebody_mpc'))
@@ -67,11 +67,77 @@ from ammr_wholebody_mpc.wgmpc_core import (                     # noqa: E402
 from ammr_wholebody_mpc.wgmpc_core_sp import (                   # noqa: E402
     ArmSetpointModel, WGMPCConfigSP, make_z, plant_phys_step,
     shape_near_target, solve_sp)
+from ammr_wholebody_mpc import wgmpc_margin_guard as MG           # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import (            # noqa: E402
     WholeBodyKinematics)
 import wgmpc_cmd_envelope as ENV                                 # noqa: E402
 from wgmpc_sp_handshake import (ARMED, FAILED, HOLD, INIT,       # noqa: E402
                                 SetpointGate, SpSample)
+
+
+def validate_target_matrix(d):
+    """檢查 16 元素列優先 4x4 是不是合格的剛體變換。
+
+    回傳 `(T, None)` 或 `(None, 理由)`。**不合格要說出理由**，不靜默忽略 ——
+    目標位姿是執行期由別的節點算出來送進來的，靜默丟棄會讓「求解器還在用
+    舊目標」看起來像「目標沒變」。
+    """
+    if len(d) != 16:
+        return None, f'長度 {len(d)} 不是 16'
+    try:
+        vals = [float(x) for x in d]
+    except (TypeError, ValueError) as e:
+        return None, f'無法轉成浮點數：{e}'
+    if not all(math.isfinite(x) for x in vals):
+        return None, '含非有限值'
+    T = np.asarray(vals, float).reshape(4, 4)
+    R = T[:3, :3]
+    if not np.allclose(T[3], (0.0, 0.0, 0.0, 1.0), atol=1e-9):
+        return None, f'最後一列不是 (0,0,0,1)：{T[3].tolist()}'
+    if not np.allclose(R.T @ R, np.eye(3), atol=1e-6):
+        return None, '旋轉塊不是正交'
+    det = float(np.linalg.det(R))
+    if abs(det - 1.0) > 1e-6:
+        return None, f'旋轉塊行列式 {det:.6f} 不是 +1'
+    return T, None
+
+
+COORD_LEN = 14
+
+
+def parse_coord(d):
+    """整機協同設定（執行期，由任務節點依相位送）。回傳 (dict, None) 或 (None, 理由)。
+
+    版面 v1（14 元素）：
+        [1, w_vref, vx, vy, wz, w_qn, q1..q6, w_a, w_p]
+    v_ref 為**本體座標**底盤速度；w_a／w_p 給 NaN = 沿用啟動值。
+    權重 0 時對應的參考值可為 NaN（不使用）。**不合格就說出理由**。
+    """
+    if len(d) != COORD_LEN:
+        return None, f'長度 {len(d)} 不是 {COORD_LEN}'
+    try:
+        v = [float(x) for x in d]
+    except (TypeError, ValueError) as e:
+        return None, f'無法轉成浮點數：{e}'
+    if v[0] != 1.0:
+        return None, f'版面版本 {v[0]} 不是 1'
+    w_vref, vref, w_qn, qn, w_a, w_p = (v[1], v[2:5], v[5], v[6:12],
+                                         v[12], v[13])
+    for name, w in (('w_vref', w_vref), ('w_qn', w_qn)):
+        if not (math.isfinite(w) and w >= 0.0):
+            return None, f'{name} 必須為有限非負：{w}'
+    if w_vref > 0.0 and not all(math.isfinite(x) for x in vref):
+        return None, 'w_vref > 0 但 v_ref 含非有限值'
+    if w_qn > 0.0 and not all(math.isfinite(x) for x in qn):
+        return None, 'w_qn > 0 但 q_nom 含非有限值'
+    for name, w in (('w_a', w_a), ('w_p', w_p)):
+        if not math.isnan(w) and not (math.isfinite(w) and w > 0.0):
+            return None, f'{name} 必須為正或 NaN：{w}'
+    return dict(w_vref=w_vref,
+                base_vref=tuple(vref) if w_vref > 0.0 else None,
+                w_qn=w_qn, arm_q_nom=tuple(qn) if w_qn > 0.0 else None,
+                w_a=None if math.isnan(w_a) else w_a,
+                w_p=None if math.isnan(w_p) else w_p), None
 
 
 @dataclass(frozen=True)
@@ -137,6 +203,12 @@ class WGMPCNode(Node):
                                    w_s_base=a.w_s_base, w_s_arm=a.w_s_arm)
             self.composed_G = None
             self.composed_kp = None
+        if a.margin_guard:
+            # 有效界取**求解器自己的** joint_margin，兩端用同一個數。
+            self._mg_bounds = MG.effective_bounds(self.cfg)
+            self._mguard = MG.BreachPolicy(
+                max_consecutive_qp_fail=a.mg_max_qp_fail,
+                max_consecutive_breach=a.mg_max_breach)
         # **同時刻配對**：各來源各自保存最近若干筆，鍵為 round(sim_t, 6)。
         # 物理步 10 ms ⇒ µs 鍵唯一；只有三方（或兩方，理想模型時）在
         # **同一鍵**上都有樣本才合成快照。
@@ -210,10 +282,66 @@ class WGMPCNode(Node):
                 String, '/coman/arm_setpoint_meta', self._on_sp_meta,
                 QoSProfile(depth=1,
                            durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        # ---- 執行期目標位姿（預設關閉）--------------------------------
+        self._T_rx = None            # 最近一筆**已通過檢查**的目標
+        self._T_rx_t = None
+        self._n_target_rx = 0
+        self._n_tol_blocked_fallback = 0
+        self._reach_announced = False
+        self._T_last = None
+        self._n_target_changes = 0
+        self._stop_req = None
+        self._drawer_released = False
+        self._drawer_start = False
+        if getattr(a, 'wait_for_drawer_handover', False):
+            _lat = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+            self.drawer_ready_pub = self.create_publisher(Bool, '/wgmpc/ready', _lat)
+            self.create_subscription(String, '/wholebody/state',
+                                     self._on_drawer_handover, _lat)
+            self.create_subscription(Bool, '/drawer/solver_start',
+                                     self._on_drawer_start, _lat)
+        self.status_pub = (self.create_publisher(Float64MultiArray,
+                                                 '/wgmpc/status', 10)
+                           if a.continuous else None)
+        if a.continuous:
+            self.create_subscription(String, '/wgmpc/stop', self._on_stop, 1)
+        self._of_d = np.zeros(6)       # 無偏移追蹤：手臂穩態偏移估計
+        self._of_init = None
+        self._of_s_prev = None
+        self._of_n_upd = 0
+        self._n_target_rejected = 0
+        self._target_reject = {}
+        self._n_by_target_src = {}
+        self._max_target_age_s = 0.0
+        if getattr(self.a, 'target_topic', ''):
+            self.create_subscription(Float64MultiArray,
+                                     str(self.a.target_topic),
+                                     self._on_target, 1)
+        # ---- 整機協同（預設關閉 ⇒ 行為與既有趟次一位元相同）----
+        self._coord = None
+        self._coord_t = None
+        self._n_coord_rx = 0
+        self._coord_reject = {}
+        self._coord_launch = dict(w_vref=0.0, base_vref=None, w_qn=0.0,
+                                  arm_q_nom=None, w_a=self.cfg.w_a,
+                                  w_p=self.cfg.w_p)
+        self._n_by_coord_src = {}
+        if getattr(self.a, 'coord_topic', ''):
+            self.create_subscription(Float64MultiArray,
+                                     str(self.a.coord_topic),
+                                     self._on_coord, 1)
         self.create_subscription(String, '/coman/applied_fail',
                                  self._on_applied_fail, _lat)
+        # **輸出話題可指定，預設 '/wholebody_safety/cmd_in' = 既有行為。**
+        # 抽屜實驗的管線裡沒有安全層（展開節點本來就直接發 /wb_vel_cmd），
+        # 而 WG2 自由空間那條是以 `freespace_confirmed:=true` 放行的 ——
+        # 櫃體就在旁邊，那在抽屜房裡是**假前提**，不能照搬。
+        # 所以抽屜趟次把輸出直接接到 /wb_vel_cmd，並在報告裡明寫
+        # 「安全層不在此管線內」；該趟的保護是命令鏈的三層
+        #（低速介面界限 → 輪級 λ → 底盤變化率上限）。
+        # 這**不是**放寬現有保護：安全層本來就不在抽屜管線裡。
         self.pub = self.create_publisher(Float64MultiArray,
-                                         '/wholebody_safety/cmd_in', 10)
+                                         str(a.cmd_topic), 10)
         # **命令追蹤封裝**（WG2 明確啟用的額外路徑；既有九維話題不變）。
         # 身分與九維值在同一份訊息，不另發旁路資料。
         self.env_pub = (self.create_publisher(
@@ -236,6 +364,11 @@ class WGMPCNode(Node):
         self._n_pred_requested = 0    # 只能用請求值（尚未回報）的次數
         self._last_pred_sel = []      # 最近一輪預推逐步選到的 (source_seq, 來源)
         self._last_pub_t = None       # 最近一次發布的模擬時刻（未捨入）
+        # **關節餘裕的命令時間線守衛**。只在明確給 --margin-guard 時啟用；
+        # 預設關閉 ⇒ 既有趟次行為完全不變。
+        self._mguard = None
+        self._mg_bounds = None
+        self._mg_info = None
         self._run_id_n = ENV.run_id_num(a.run_id or 'wgmpc_wg2')
         self._source_seq = 0
         self._env_meta_sent = False
@@ -267,6 +400,15 @@ class WGMPCNode(Node):
         v = ((float(p.x), float(p.y), float(yaw)), t, time.monotonic())
         self._base = v
         self._put('base', t, v)
+
+    def _on_drawer_handover(self, msg):
+        try:
+            self._drawer_released = json.loads(msg.data).get('phase') == 'RELEASED'
+        except (ValueError, AttributeError):
+            self._drawer_released = False
+
+    def _on_drawer_start(self, msg):
+        self._drawer_start = bool(msg.data)
 
     def _publish_u(self, u_body: np.ndarray, theta: float) -> np.ndarray:
         """**body → world** 後發給安全鏈（adapter 之後會轉回 body）。回傳世界系命令。
@@ -520,13 +662,22 @@ class WGMPCNode(Node):
         不以 endpoint_requested 或零值冒稱真實歷史。
         """
         now = time.monotonic()
-        if self._applied is not None and now - self._applied[1] <= self.a.hist_age:
+        # **exec_mode == 4（no_command）的回報不算套用回報。**
+        # 執行端在設定點還沒建立時每一步也會發一筆，欄位是零值佔位、
+        # api_applied = False。把它當 'applied' 會把「什麼都沒套用」
+        # 標成「量到的套用值」，strict 政策的標籤就失去意義了
+        # （而且 --assume-initial-rest 會永遠觸發不到）。
+        _no_cmd = (self._applied is not None
+                   and int(self._applied[4].get('exec_mode', 0)) == 4)
+        if (self._applied is not None and not _no_cmd
+                and now - self._applied[1] <= self.a.hist_age):
             # **正常模式下的零命令仍合法** —— 只有 exec_mode == 3（閂鎖）
             # 才停止任務推進，那由迴圈開頭的 _chain_failed 處理。
             return np.asarray(self._applied[0], float), 'applied', True
         if self.a.u_prev_policy == 'strict':
-            if self.a.assume_initial_rest and self._applied is None \
-                    and self._ep_req is None and self._modified is None:
+            if (self.a.assume_initial_rest
+                    and (self._applied is None or _no_cmd)
+                    and self._ep_req is None and self._modified is None):
                 # **只在明確確認初始靜止時**使用零值，且只在還沒有任何
                 # 命令流動之前。一旦有命令流過就不再適用。
                 return np.zeros(NU), 'zeros_initial_rest', True
@@ -541,6 +692,81 @@ class WGMPCNode(Node):
         return np.zeros(NU), "DIAG:zeros", False
 
     # ---------------------------------------------------------- 迴圈
+    def _on_stop(self, m):
+        self._stop_req = str(m.data) or '（空）'
+
+    def _on_target(self, m: Float64MultiArray):
+        """目標位姿回呼。**不合格就記下理由**，不靜默忽略。"""
+        T, why = validate_target_matrix(list(m.data))
+        if why is not None:
+            self._n_target_rejected += 1
+            self._target_reject[why] = self._target_reject.get(why, 0) + 1
+            self.get_logger().warn(f'目標位姿不合格（{why}）⇒ 不採用',
+                                   throttle_duration_sec=2.0)
+            return
+        self._T_rx = T
+        self._T_rx_t = self.sim_now()
+        self._n_target_rx += 1
+
+    def _on_coord(self, m: Float64MultiArray):
+        c, why = parse_coord(list(m.data))
+        if why is not None:
+            self._coord_reject[why] = self._coord_reject.get(why, 0) + 1
+            self.get_logger().warn(f'協同設定不合格（{why}）⇒ 不採用',
+                                   throttle_duration_sec=2.0)
+            return
+        self._coord = c
+        self._coord_t = self.sim_now()
+        self._n_coord_rx += 1
+
+    def _apply_coord(self, sim_t):
+        """本輪的協同設定寫進 cfg。**過期或沒有 ⇒ 退回啟動值（協同關閉）**，
+        不沿用舊的底盤參考速度 —— 那會讓底盤在任務節點停掉之後繼續走。"""
+        c = self._coord
+        age = (None if (c is None or sim_t is None or self._coord_t is None)
+               else float(sim_t) - float(self._coord_t))
+        if c is None:
+            src, use = 'off', self._coord_launch
+        elif age is not None and age > float(self.a.coord_max_age_s):
+            src, use = 'stale_off', self._coord_launch
+        else:
+            src = 'topic'
+            use = dict(c)
+            use['w_a'] = c['w_a'] if c['w_a'] is not None else \
+                self._coord_launch['w_a']
+            use['w_p'] = c['w_p'] if c['w_p'] is not None else \
+                self._coord_launch['w_p']
+        for k, v in use.items():
+            setattr(self.cfg, k, v)
+        self._n_by_coord_src[src] = self._n_by_coord_src.get(src, 0) + 1
+        return dict(src=src, age=None if age is None else round(age, 4),
+                    w_vref=use['w_vref'], base_vref=use['base_vref'],
+                    w_qn=use['w_qn'], arm_q_nom=use['arm_q_nom'],
+                    w_a=use['w_a'], w_p=use['w_p'])
+
+    def _resolve_target(self, T_launch, sim_t):
+        """決定**本輪**要用的目標，求解與到達判定共用同一份。
+
+        兩處不能各自取 —— 那會變成「用一個目標求解、用另一個目標判到達」。
+        """
+        if not getattr(self.a, 'target_topic', ''):
+            src = 'launch_arg'
+            T, age = T_launch, None
+        elif self._T_rx is None:
+            src = 'launch_arg_fallback'
+            T, age = T_launch, None
+        else:
+            age = (None if (sim_t is None or self._T_rx_t is None)
+                   else float(sim_t) - float(self._T_rx_t))
+            if age is not None and age > float(self.a.target_max_age_s):
+                src, T = 'topic_stale_hold', self._T_rx
+            else:
+                src, T = 'topic', self._T_rx
+            if age is not None and age > self._max_target_age_s:
+                self._max_target_age_s = age
+        self._n_by_target_src[src] = self._n_by_target_src.get(src, 0) + 1
+        return T, src, age
+
     def run(self, T_des) -> int:
         t0 = time.monotonic()
         self._t_wall0 = t0            # **牆鐘監看**的原點（上限照舊）
@@ -593,6 +819,39 @@ class WGMPCNode(Node):
                       f'{self._chain_fail_info}', flush=True)
                 self._stopped_on_fail = True
                 break
+            # ---- 在途命令的關節餘裕守衛 ----
+            # **即使此刻立刻全停**，已發布尚未生效完畢的那幾筆仍會把某軸
+            # 推過有效餘裕線 ⇒ 本輪再怎麼求解都來不及補救，立即記錄並收尾。
+            # 只用**當下已知**的在途命令（剛求出、尚未發布的那一筆不算）。
+            if self._mguard is not None and self._snap is not None \
+                    and len(self._snap.s) == 6 and len(self._cmd_hist) >= 1:
+                _nph = int(round(self.cfg.dt / self.cfg.arm_model.phys_dt))
+                _left = max(1, int(round((1.0 - (self.d_cmd % 1.0)) * _nph)))
+                _ua = self._cmd_hist[-2][1] if len(self._cmd_hist) >= 2 else None
+                _un = self._cmd_hist[-1][1]
+                _sch = MG.inflight_schedule(_ua, _left, _un, _nph)
+                _f = MG.inflight_unavoidable_breach(
+                    np.asarray(self._snap.q, float),
+                    np.asarray(self._snap.s, float), _sch, self.cfg,
+                    n_tail=2 * _nph, bounds=self._mg_bounds)
+                if _f['unavoidable']:
+                    self._mg_info = dict(
+                        why='inflight_unavoidable_breach', **{
+                            k: _f[k] for k in ('worst_margin', 'worst_joint',
+                                               'worst_step', 'worst_kind',
+                                               'first_breach_step',
+                                               'n_inflight_steps')})
+                    self.log.append(dict(
+                        slot=slot, sim_t=self._snap.sim_t, ok=False,
+                        reason='inflight_unavoidable_breach', published=False,
+                        margin_guard=self._mg_info,
+                        timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall))
+                    print(f'[wg2] **在途命令必然穿過關節餘裕線，停止任務推進**：'
+                          f'j{_f["worst_joint"]} {_f["worst_kind"]} '
+                          f'餘裕 {_f["worst_margin"]:+.6f} rad', flush=True)
+                    self._stop_why = 'inflight_unavoidable_breach'
+                    self._stopped_on_fail = True
+                    break
             # ---- 設定點握手閘門（只在設定點模式）----
             # **在讀快照之前裁示**：閂鎖要優先停住，HOLD 不得求解，
             # INIT 只在首次送全零初始化命令。
@@ -708,20 +967,60 @@ class WGMPCNode(Node):
                 n_miss += _m
                 continue
             _solve_sim_t0 = self.sim_now()
+            # **本輪的目標只解析一次**，求解與到達判定共用同一份
+            T_cyc, _tgt_src, _tgt_age = self._resolve_target(
+                T_des, _solve_sim_t0)
             _solve_wall0 = time.monotonic()
+            # **無偏移追蹤（offset-free）**：線上估計手臂的恆定穩態偏移，
+            # 餵進模型的偏差項。預設關閉，既有趟次行為一位元未改。
+            #
+            # 為什麼需要：手臂模型 act⁺ = act + α(s − act) + b 預測 act → s，
+            # 而 b 是在自由空間（free4）、另一個姿態下辨識的（≈ 0）。抽屜的
+            # 抓取姿態下 j2 承重，實測**穩態**下垂 +0.0243 rad、j3 −0.0099 rad，
+            # 全程恆定。求解器把設定點擺到「若到位就是 3.24 mm」的位置，手臂卻
+            # 停在 12.13 mm；模型預測誤差會自己消失，於是不再推 —— 包括底盤。
+            # 離線重現：有下垂、模型不知道 ⇒ 平台 10.88 mm；加估計 ⇒ 0.02 mm。
+            #
+            # 估計式：d̂ ← d̂ + (dt/τ)·((q_arm − s) − d̂)，**只在設定點近乎
+            # 靜止時更新** —— 移動中 q 落後 s 是模型本來就有的一階遲滯，
+            # 不能當成偏移。再令 b = α ⊙ d̂，模型穩態就變成 act = s + d̂。
+            if self.a.offset_free:
+                _s_now = np.asarray(snap.s, float)
+                _e = np.asarray(q0[3:], float) - _s_now
+                # **靜態初值**（--offset-init-static，預設關）：第一輪時手臂
+                # 剛由展開節點交出、設定點靜止，q − s 就是下垂量本身。
+                # 由 0 起算的話，求解器一動、門檻就關上，整段啟動暫態模型都以為
+                # 沒有下垂（j2 實測 0.027 rad）—— motm_172100 啟動擺盪 ±45 mm。
+                if (self.a.offset_init_static and self._of_n_upd == 0
+                        and self._of_s_prev is None):
+                    self._of_d = np.clip(_e, -self.a.offset_max_rad,
+                                         self.a.offset_max_rad)
+                    self._of_init = [float(x) for x in self._of_d]
+                _gate_ok = (self._of_s_prev is not None and float(np.max(
+                    np.abs(_s_now - self._of_s_prev))) < self.a.offset_gate_rad)
+                if _gate_ok:
+                    self._of_d += (self.cfg.dt / self.a.offset_tau_s) * (
+                        _e - self._of_d)
+                    self._of_n_upd += 1
+                self._of_d = np.clip(self._of_d, -self.a.offset_max_rad,
+                                     self.a.offset_max_rad)
+                self._of_s_prev = _s_now.copy()
+                self.cfg.arm_model.bias = (
+                    np.asarray(self.cfg.arm_model.alpha, float) * self._of_d)
             _q_sol, _s_sol, _n_comp = q0, np.asarray(snap.s, float), 0
             # 本輪若根本不做延遲補償，選取紀錄必須是空的，不是上一輪的殘留
             self._last_pred_sel = []
             if self._gate is not None and self.d_state > 0.0:
                 _q_sol, _s_sol, _n_comp = self._predict_delay(
                     q0, np.asarray(snap.s, float), snap.sim_t)
+            _coord_rec = self._apply_coord(_solve_sim_t0)
             if self._gate is not None:
                 # 增廣狀態由**同時刻快照**組成：q 與 s 同一個物理步。
                 # `make_z` 在 s 含非有限值時拋錯，不以實測關節角代替。
                 r = solve_sp(self.K, make_z(_q_sol, _s_sol),
-                             u_prev, T_des, self.cfg, U_warm=U_warm)
+                             u_prev, T_cyc, self.cfg, U_warm=U_warm)
             else:
-                r = solve(self.K, q0, u_prev, T_des, self.cfg, U_warm=U_warm)
+                r = solve(self.K, q0, u_prev, T_cyc, self.cfg, U_warm=U_warm)
             _solve_wall_ms = (time.monotonic() - _solve_wall0) * 1e3
             # **求解返回後重新檢查輸入年齡與任務有效性。**
             # 單一 executor 在求解期間不處理回呼，所以返回時佇列裡可能積了
@@ -762,6 +1061,7 @@ class WGMPCNode(Node):
                                    sp_exec_mode=snap.sp_exec_mode,
                                    sp_api_applied=snap.sp_api_applied),
                        gate_state=self._gate_state,
+                       coord=_coord_rec,
                        n_incomplete=self._n_incomplete,
                        # **時間契約的分項紀錄**（快照／求解起點／發布／牆鐘）
                        timing=dict(snap_sim_t=round(snap.sim_t, 6),
@@ -857,7 +1157,7 @@ class WGMPCNode(Node):
                     continue
             # **到達判定與整形共用同一組誤差**：都用實測狀態 q0 的 FK，
             # 不是核心預測。先算，供整形使用。
-            e = task_error(self.K, q0, T_des, self.cfg.tcp)
+            e = task_error(self.K, q0, T_cyc, self.cfg.tcp)
             _ep, _er = float(np.linalg.norm(e[:3])), float(np.linalg.norm(e[3:]))
             # ---- **近目標輸出整形**（求解之後，發布之前）----
             # 與離線模擬共用 `shape_near_target`，不各寫一份。
@@ -892,6 +1192,26 @@ class WGMPCNode(Node):
             # **到達並保持**：用實測狀態算的 FK 誤差，不是核心預測。
             # （e／_ep／_er 已於整形前算出，此處沿用同一組值）
             _in_tol = (_ep <= self.a.reach_pos_m and _er <= self.a.reach_rot_rad)
+            # **目標換了就重新計算保持。** 連續模式下目標會一路移動；不重設
+            # 的話，第二個目標會繼承第一個目標的「已到達」。門檻取到達容差
+            # 的一半：比它小的移動屬於追蹤中的連續變化，不算換目標。
+            if self.a.continuous and self._T_last is not None:
+                _dT = float(np.linalg.norm(T_cyc[:3, 3] - self._T_last[:3, 3]))
+                if _dT > 0.5 * self.a.reach_pos_m:
+                    if self._reached_held or self._hold_t0 is not None:
+                        self._n_target_changes += 1
+                    self._reached_held = False
+                    self._reach_announced = False
+                    self._hold_t0 = None
+            self._T_last = np.array(T_cyc, float)
+            # **開著目標話題卻還沒收到任何一筆時，不得宣告到達。**
+            # 退路目標是「保持實測起始 TCP」，誤差天生就是 0 ⇒ 會立刻「到達
+            # 並保持」。實跑 nav_full_030409 正是如此：41 輪全部 launch_arg_
+            # fallback、n_rx = 0，卻印出「到達並保持 2.0 s」@ 0.00 mm。
+            # 那不是 ALIGN 的到達，是對自己起點的到達。
+            if _tgt_src == 'launch_arg_fallback':
+                _in_tol = False
+                self._n_tol_blocked_fallback += 1
             if _in_tol:
                 if self._hold_t0 is None:
                     self._hold_t0 = snap.sim_t
@@ -950,9 +1270,26 @@ class WGMPCNode(Node):
                        conv_at_mono=round(time.monotonic(), 6),
                        err_p=_ep, err_r=_er)
             self.log.append(rec)
+            # ---- 狀態給任務編排節點（每輪）----
+            if self.status_pub is not None:
+                _sm = Float64MultiArray()
+                _sm.data = [float(snap.sim_t), float(_ep), float(_er),
+                            1.0 if _in_tol else 0.0,
+                            1.0 if self._reached_held else 0.0]
+                self.status_pub.publish(_sm)
             if self._reached_held:
-                print(f'[wg2] **到達並保持 {self.a.hold_s:.1f} s** '
-                      f'@ sim {snap.sim_t:.3f}', flush=True)
+                if not self._reach_announced:
+                    print(f'[wg2] **到達並保持 {self.a.hold_s:.1f} s** '
+                          f'@ sim {snap.sim_t:.3f}', flush=True)
+                    self._reach_announced = True
+                # **連續模式不結束**：整個抽屜任務的目標會一路移動
+                #（接觸前 → 抓取 → 隨開度移動 → 退開），由任務節點決定
+                # 相位，求解節點只負責跟。單一目標模式照舊在此結束。
+                if not self.a.continuous:
+                    break
+            if self._stop_req is not None:
+                self._stop_why = f'stop_topic：{self._stop_req}'
+                print(f'[wg2] 收到停止請求：{self._stop_req}', flush=True)
                 break
             slot, _m = self._reschedule(slot)
             n_miss += _m
@@ -1068,6 +1405,45 @@ class WGMPCNode(Node):
         return self.get_clock().now().nanoseconds * 1e-9
 
 
+def validate_target_rot(values):
+    """列優先 9 個值 → 3x3 旋轉矩陣。**不合法就拋出**，不默默當成單位矩陣。
+
+    為什麼要核：任務誤差的姿態項是從 R_des 算出來的。傳進一個不是旋轉的矩陣
+    （例如含反射或非正交）時，誤差仍算得出數字，但那個數字不對應任何姿態，
+    而且不會有任何訊息。
+    """
+    import numpy as _np
+    v = _np.asarray(values, dtype=float)
+    if v.size != 9:
+        raise ValueError(f'目標姿態需要 9 個值（列優先），收到 {v.size} 個')
+    if not _np.isfinite(v).all():
+        raise ValueError('目標姿態含非有限值')
+    R = v.reshape(3, 3)
+    e = float(_np.abs(R.T @ R - _np.eye(3)).max())
+    if e > 1e-9:
+        raise ValueError(f'目標姿態不是正交矩陣：R^T R − I 最大 {e:.3e}')
+    d = float(_np.linalg.det(R))
+    if abs(d - 1.0) > 1e-9:
+        raise ValueError(f'目標姿態的行列式 {d:.12f} 不是 +1（反射不是旋轉）')
+    return R
+
+
+def wait_for_drawer_handover(nd, ex, timeout_s):
+    """Initialize early without sending even a zero handshake command."""
+    nd.drawer_ready_pub.publish(Bool(data=True))
+    print('[wg2] 已初始化，待命等展開端 RELEASED 與任務 ALIGN', flush=True)
+    t0 = time.monotonic()
+    while rclpy.ok():
+        if nd._stop_req is not None:
+            return '待命中收到停止要求'
+        if nd._drawer_released and nd._drawer_start:
+            return None
+        if time.monotonic() - t0 >= timeout_s:
+            return '等待抽屜控制交棒逾時；未發任何命令'
+        ex.spin_once(timeout_sec=0.02)
+    return '等待抽屜控制交棒時 ROS 結束'
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--urdf', default=os.path.join(
@@ -1084,7 +1460,48 @@ def main() -> int:
     ap.add_argument('--reach-rot-rad', type=float, default=0.02)
     ap.add_argument('--hold-s', type=float, default=2.0,
                     help='首次到達後要連續維持在容差內多久才算完成（模擬時間）')
-    ap.add_argument('--target-rot-deg', type=float, default=0.0)
+    # **六維目標的姿態**：列優先的 3x3 旋轉矩陣（9 個值）。
+    # 不給 ⇒ 沿用起始姿態（既有行為完全不變）。
+    # 用矩陣而非 rpy：階段 A 的 R_DES 本來就是以矩陣定義的，
+    # 轉成角度再轉回來會引入不必要的誤差與順序約定。
+    ap.add_argument('--target-rot', nargs=9, type=float, default=None,
+                    help='目標姿態，列優先 3x3 旋轉矩陣；不給 = 保持起始姿態')
+    # **執行期目標話題。預設 '' = 關閉，行為與既有趟次一位元相同。**
+    # 抽屜實驗需要這個：接觸前的退讓目標要由**實測把手位姿**算出，而開啟／
+    # 關閉段的目標會隨實測開度移動（見 evaluation/drawer_target.py）。
+    # 啟動參數給的是固定目標，做不到這件事。
+    ap.add_argument('--continuous', action='store_true',
+                    help='到達後不結束，持續跟隨目標話題；每輪發 /wgmpc/status，'
+                         '收到 /wgmpc/stop 才結束（整個抽屜任務用）')
+    ap.add_argument('--offset-free', action='store_true',
+                    help='線上估計手臂恆定穩態偏移並餵進模型偏差項（預設關閉）')
+    ap.add_argument('--offset-tau-s', type=float, default=0.5,
+                    help='偏移估計的時間常數（模擬時間）')
+    ap.add_argument('--offset-gate-rad', type=float, default=0.002,
+                    help='設定點每輪變化小於此值才更新估計（避開一階遲滯）')
+    ap.add_argument('--offset-init-static', action='store_true',
+                    help='偏移估計第一輪以 q − s 初始化（交接時手臂靜止，'
+                         '那就是下垂量）；預設關 = 由 0 起算（既有行為）')
+    ap.add_argument('--offset-max-rad', type=float, default=0.05,
+                    help='估計值上限；防止估計跑掉，不是控制限制')
+    ap.add_argument('--cmd-topic', default='/wholebody_safety/cmd_in',
+                    help='九維命令的輸出話題。預設 = 既有行為（經安全層）。'
+                         '抽屜實驗用 /wb_vel_cmd —— 那條管線沒有安全層，'
+                         '要在報告裡明寫')
+    ap.add_argument('--target-topic', default='',
+                    help='16 元素列優先 4x4 的目標位姿話題；'
+                         "'' = 關閉，只用啟動參數的固定目標")
+    ap.add_argument('--coord-topic', default='',
+                    help="整機協同設定話題（parse_coord 版面 v1）；'' = 關閉")
+    ap.add_argument('--coord-max-age-s', type=float, default=0.5,
+                    help='協同設定最大年齡；過期即退回啟動值（協同關閉）')
+    ap.add_argument('--target-max-age-s', type=float, default=0.5,
+                    help='目標位姿的最大年齡；超過就**沿用上一筆已接受的**'
+                         '並記錄，不以過期值當新鮮值')
+    # **這個參數從未被實作**。先前它宣告了卻沒有任何讀取處，傳了會靜默無效 ——
+    # 那比沒有這個選項更糟。保留名稱以免既有命令列直接報錯，但非零即中止。
+    ap.add_argument('--target-rot-deg', type=float, default=0.0,
+                    help='**未實作**：非零即中止，請改用 --target-rot')
     ap.add_argument('--duration-s', type=float, default=30.0,
                     help='**牆鐘**時間上限')
     ap.add_argument('--duration-sim-s', type=float, default=0.0,
@@ -1152,6 +1569,17 @@ def main() -> int:
     ap.add_argument('--w-a', type=float, default=1e-3,
                     help='手臂命令大小權重（R 的手臂部分，以 vmax² 正規化）。'
                          '預設 1e-3 = 既有值；0.05 可把 SQP 的 no_progress 壓到 0')
+    ap.add_argument('--margin-guard', action='store_true',
+                    help='啟用關節餘裕的**命令時間線**守衛：在途命令若必然'
+                         '穿過「硬限位±joint_margin」就立即記錄並走既定收尾。'
+                         '預設關閉 ⇒ 既有趟次行為不變。'
+                         '**提前量有物理上限**（在途占 1.6 週期，實測只早 1 輪）；'
+                         '真正防止設定點穿線的是執行端的拒寫。')
+    ap.add_argument('--mg-max-qp-fail', type=int, default=10,
+                    help='連續 qp_failed 的有界收尾門檻（診斷用，'
+                         '**不是**防止首次穿線的保護）')
+    ap.add_argument('--mg-max-breach', type=int, default=5,
+                    help='連續前瞻到穿線的有界收尾門檻（同上）')
     ap.add_argument('--w-s-arm', type=float, default=None,
                     help='只給**手臂**的變化率權重；None = 沿用 --w-s。'
                          'S 以 vmax² 正規化，底盤 vmax 0.0353 ⇒ 既有 1e-3 '
@@ -1166,6 +1594,9 @@ def main() -> int:
     ap.add_argument('--phys-dt', type=float, default=0.01,
                     help='介面契約核對用的物理步長；與執行端 meta 比對')
     ap.add_argument('--out', default='')
+    ap.add_argument('--wait-for-drawer-handover', action='store_true',
+                    help='提早初始化並待命；展開端交出且任務進入 ALIGN 才啟動握手')
+    ap.add_argument('--drawer-start-timeout-s', type=float, default=240.0)
     a = ap.parse_args()
     rclpy.init()
     nd = WGMPCNode(a)
@@ -1190,6 +1621,11 @@ def main() -> int:
     ex = SingleThreadedExecutor()
     ex.add_node(nd)
     nd._exec = ex
+    if a.wait_for_drawer_handover:
+        # 在初始化握手之前等待，連全零握手命令都不得覆寫展開控制。
+        why = wait_for_drawer_handover(nd, ex, a.drawer_start_timeout_s)
+        if why is not None:
+            return _bail(6, why)
     # ---- 等狀態齊備；設定點模式還要先完成**初始化握手** ----
     # **死鎖防治**：設定點模式的同時刻快照需要 /coman/arm_setpoint，
     # 而真實執行端**只在收到第一筆有效命令時**才建立設定點
@@ -1251,7 +1687,19 @@ def main() -> int:
     T_des = np.eye(4)
     T_des[:3, 3] = (np.asarray(a.target, float) if a.target is not None
                     else T[:3, 3] + np.asarray(a.target_offset, float))
-    T_des[:3, :3] = T[:3, :3]        # 首版只給位置目標＋**保持起始姿態**
+    if abs(float(a.target_rot_deg)) > 0.0:
+        return _bail(2, '--target-rot-deg 從未被實作（傳了會靜默無效）；'
+                        '請改用 --target-rot 給完整旋轉矩陣')
+    if a.target_rot is None:
+        T_des[:3, :3] = T[:3, :3]    # 不給姿態 ⇒ **保持起始姿態**（既有行為）
+        _rot_src = 'start_orientation'
+    else:
+        try:
+            T_des[:3, :3] = validate_target_rot(a.target_rot)
+        except ValueError as e:
+            return _bail(2, f'--target-rot {e}')
+        _rot_src = 'target_rot'
+    print(f'[wg2] 目標姿態來源：{_rot_src}', flush=True)
     print(f'[wg2] N={a.N} dt={1.0/a.rate:.3f}  '
           f'起始 q {np.round(q0,5).tolist()}', flush=True)
     print(f'[wg2] 起始 TCP {np.round(T[:3,3],5).tolist()}  '
@@ -1268,6 +1716,44 @@ def main() -> int:
         if a.out:
             json.dump({'args': vars(a), 'started': True,
                        'stats': stats,
+                       # **執行期目標的來源要逐輪可查。**
+                       # 「用了啟動參數的固定目標」與「用了話題給的目標」
+                       # 是兩件不同的事，混在一起就說不清那一趟到達的是誰。
+                       'coord': {
+                           'topic': getattr(a, 'coord_topic', ''),
+                           'max_age_s': getattr(a, 'coord_max_age_s', None),
+                           'n_rx': nd._n_coord_rx,
+                           'reject_reasons': dict(nd._coord_reject),
+                           'n_cycles_by_source': dict(nd._n_by_coord_src),
+                           'launch_values': {k: v for k, v in
+                                             nd._coord_launch.items()}},
+                       'runtime_target': {
+                           'topic': getattr(a, 'target_topic', ''),
+                           'max_age_s': getattr(a, 'target_max_age_s', None),
+                           'n_rx': nd._n_target_rx,
+                           'n_rejected': nd._n_target_rejected,
+                           'reject_reasons': dict(nd._target_reject),
+                           'n_cycles_by_source': dict(nd._n_by_target_src),
+                           'max_observed_age_s': round(
+                               nd._max_target_age_s, 6),
+                           'n_tol_blocked_fallback':
+                               nd._n_tol_blocked_fallback,
+                           'tol_blocked_note':
+                               '開著目標話題卻還沒收到任何一筆時，到達判定'
+                               '一律不成立 —— 退路目標是「保持起始 TCP」，'
+                               '誤差天生為 0，會產生假的「到達並保持」',
+                           'note': ('launch_arg = 關閉；launch_arg_fallback = '
+                                    '開著但一筆都還沒收到；topic = 用了新鮮的'
+                                    '話題目標；topic_stale_hold = 超過年齡'
+                                    '上限，沿用上一筆已接受的')},
+                       'offset_free': {
+                           'enabled': bool(getattr(a, 'offset_free', False)),
+                           'd_hat_rad': [round(float(x), 6) for x in nd._of_d],
+                           'init_static': getattr(nd, '_of_init', None),
+                           'n_updates': int(nd._of_n_upd),
+                           'tau_s': getattr(a, 'offset_tau_s', None),
+                           'gate_rad': getattr(a, 'offset_gate_rad', None),
+                           'note': '手臂恆定穩態偏移的線上估計；b = α ⊙ d̂'},
                        'handshake_startup': nd.handshake_startup,
                        'n_step_mismatch': nd._n_step_mismatch,
                        'last_step_mismatch': nd._last_step_mismatch,

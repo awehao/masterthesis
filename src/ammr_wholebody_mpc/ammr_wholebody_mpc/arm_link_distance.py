@@ -121,7 +121,12 @@ VOBS_UNKNOWN, VOBS_STATIC, VOBS_OK = 0, 1, 2
 # 由 `~/diag_fields` 以名稱發布，讀取端**按名稱索引**。
 DIAG_FIELDS_BASE = ['n_rows', 'n_ok', 'n_unk', 'n_stale', 'n_nodata',
                     'worst_age', 'min_d', 'dropped', 'node_cycle_ms',
-                    'dup_dropped']
+                    'dup_dropped',
+                    # **場景真值遮蔽來源**：本週期有多少列由真值給出遮蔽旗標、
+                    # 多少列回退到保守處置。趟後要能據此標明「使用場景真值」，
+                    # 而不是只寫在某份紀錄裡。回退為 0 不代表模式有啟用 ——
+                    # 模式關閉時兩者都是 0，請一併看 scene_truth_on。
+                    'n_truth', 'n_truth_fallback', 'scene_truth_on']
 DIAG_TIGHT_SUFFIX = ['lb', 'ub', 'elapsed_s', 'tol_met']
 
 
@@ -259,6 +264,133 @@ def parse_obstacles(specs):
             o.T_link_collision = np.eye(4)
         out.append(o)
     return out
+
+
+# ---- 明確標記的模擬場景真值：遮蔽來源 ----
+# 回傳碼。只有 TRUTH_GIVEN 會給真值，其餘一律回退到原本的保守處置。
+TRUTH_GIVEN = 0
+TRUTH_OFF = 1              # 模式未啟用
+TRUTH_NOT_APPROVED = 2     # 名稱不在場景守衛核准的具名幾何內
+TRUTH_MODEL_MISMATCH = 3   # 模型身分與核准清單不符
+TRUTH_NO_POSE = 4          # 沒有位姿
+TRUTH_POSE_STALE = 5       # 位姿不新鮮
+TRUTH_REASON = {
+    TRUTH_GIVEN: '核准的具名幾何、模型身分相符、位姿新鮮',
+    TRUTH_OFF: '場景真值模式未啟用',
+    TRUTH_NOT_APPROVED: '名稱不在場景守衛核准的具名幾何內',
+    TRUTH_MODEL_MISMATCH: '模型身分與核准清單不符',
+    TRUTH_NO_POSE: '沒有位姿',
+    TRUTH_POSE_STALE: '位姿不新鮮（超過 pose_timeout）',
+}
+
+
+def parse_scene_truth(specs):
+    """`'name:model'` 串列 → `{名稱: 期望模型}`。model 留空表示**宣告為靜態**。
+
+    名稱重複且模型不同 ⇒ 拋出。核准清單是這個模式唯一的身分依據，
+    不能有兩種互相矛盾的記載。
+    """
+    out = {}
+    for sp in [x for x in (specs or []) if str(x).strip()]:
+        f = str(sp).split(':')
+        if len(f) != 2:
+            raise ValueError(f"scene_truth_approved 需為 'name:model'：{sp!r}")
+        nm, md = f[0].strip(), f[1].strip()
+        if not nm:
+            raise ValueError(f'scene_truth_approved 的名稱為空：{sp!r}')
+        if nm in out and out[nm] != md:
+            raise ValueError(f'scene_truth_approved 對 {nm!r} 記載了兩個模型：'
+                             f'{out[nm]!r} 與 {md!r}')
+        out[nm] = md
+    return out
+
+
+def scene_truth_occ(obstacle, approved, now, stamp, pose_timeout,
+                    enabled=True):
+    """**明確標記的模擬場景真值**模式下，某個障礙物的遮蔽旗標。
+
+    回傳 `(occ, code)`。`occ is None` 表示**不給真值**，呼叫端必須退回原本的
+    保守處置（LiDAR ＋ 自濾遮蔽，或沒有外參時的 `occ = 1.0`）。
+
+    為什麼要這個模式，而不是把 `freespace_confirmed` 設真
+    -----------------------------------------------------
+    `freespace_confirmed` 的語意是「範圍內沒有東西」。抽屜場景裡**明明有**
+    櫃體與抽屜，把它設真等於宣稱一件不成立的事；而且它一併關掉的是
+    `nodata_speed_cap`，那是「沒有距離資料」的退化保護，與遮蔽是不同的事。
+
+    本模式只回答一件事：**這個具名物件的位姿是已知的**，所以朝它接近的方向
+    不是「沒有任何觀測的方向」。它**不宣稱**場景裡沒有別的東西 —— 那要由
+    場景守衛（放行子樹以外 0 個碰撞體）負責，兩者缺一不可。
+
+    錄影相機的外參**不能**充當這個證據。那是機器人感知之外的另一個視角，
+    與 LiDAR 在該方向上看不看得到無關。
+
+    成立條件（**全部**都要成立）：
+      1. 模式已啟用
+      2. 名稱在場景守衛核准的具名幾何清單內
+      3. 模型身分與核准清單記載的相符
+      4. 位姿存在且新鮮 —— 動態物件以 `pose_timeout` 判定；宣告為靜態者
+         由設定直接給定世界位姿，但仍要求位姿已填入
+
+    任何一項不成立就回退。**資料缺失不當成「看得見」。**
+    """
+    if not enabled:
+        return None, TRUTH_OFF
+    if obstacle is None or obstacle.name not in approved:
+        return None, TRUTH_NOT_APPROVED
+    if str(obstacle.model) != str(approved[obstacle.name]):
+        return None, TRUTH_MODEL_MISMATCH
+    if obstacle.T_world_link is None:
+        return None, TRUTH_NO_POSE
+    if obstacle.model:
+        t = (stamp or {}).get(obstacle.model)
+        if t is None:
+            return None, TRUTH_NO_POSE
+        if float(now) - float(t) > float(pose_timeout):
+            return None, TRUTH_POSE_STALE
+    return 0.0, TRUTH_GIVEN
+
+
+def validate_scene_truth(obstacles, approved, enabled, geometry='links'):
+    """場景真值的**啟動前提**核對。不合法就拋出，**不半啟用**。
+
+    為什麼要在啟動就核完：真值模式一旦半啟用，趟次會以為遮蔽證據已就位，
+    而實際上一部分列仍走退化上限 —— 量到的是兩種行為的混合，無法歸因。
+
+    核什麼：
+      1. 核准清單不得為空（沒有名單就沒有身分依據）
+      2. 設定裡的每一個障礙物都必須在核准清單內。少一個就表示**核准清單
+         不足以描述這個場景**，這時整個模式停用，而不是逐物件退讓
+      3. 核准清單不得列出設定裡不存在的障礙物（否則核准的是另一個場景）
+      4. 模型身分必須一致
+      5. 只接在 geometry='links' 的列建構路徑上
+    """
+    if not enabled:
+        return
+    if geometry != 'links':
+        raise RuntimeError(
+            f'scene_truth 只接在 geometry:=links 的列建構路徑上，'
+            f'目前 geometry={geometry!r}。不以「忽略該參數」通融 —— '
+            f'那會讓趟次以為真值已啟用而實際沒有')
+    if not approved:
+        raise RuntimeError(
+            'scene_truth 為真但核准清單是空的：沒有名單就沒有身分依據，'
+            '不以「預設全部核准」通融')
+    names = {o.name for o in obstacles}
+    missing = sorted(n for n in names if n not in approved)
+    if missing:
+        raise RuntimeError(
+            f'scene_truth 為真，但這些設定中的障礙物不在核准清單內：{missing}。'
+            f'核准清單必須涵蓋全部具名幾何，否則不得宣稱真值')
+    extra = sorted(set(approved) - names)
+    if extra:
+        raise RuntimeError(
+            f'核准清單列了設定裡不存在的障礙物：{extra}。'
+            f'名單與實際幾何必須一致，否則核准的是另一個場景')
+    bad = sorted(f'{o.name}（設定 {o.model!r} vs 核准 {approved[o.name]!r}）'
+                 for o in obstacles if str(o.model) != str(approved[o.name]))
+    if bad:
+        raise RuntimeError(f'scene_truth 的模型身分不符：{bad}')
 
 
 def expand_pair_rows(specs, exempt_specs, obstacle_names):
@@ -423,6 +555,12 @@ class ArmLinkDistance(Node):
         # refuse to call anything OK rather than default to clear. Set false
         # only when running without the arm, where nothing can occlude.
         p('require_occlusion_feed', True)
+        # **明確標記的模擬場景真值**遮蔽來源。預設關閉 ⇒ 行為完全不變。
+        # 啟用時只對 `scene_truth_approved` 列出的具名幾何、且模型身分相符、
+        # 位姿新鮮者給 occluded = 0；其餘一律走原本的保守處置。
+        # 這個模式**不等於** freespace_confirmed，也不以錄影相機外參為依據。
+        p('scene_truth', False)
+        p('scene_truth_approved', [''])      # 'name:model'，model 空 = 宣告靜態
         p('max_range', 3.0)         # m, beyond this a point reports NO DATA
 
         g = lambda k: self.get_parameter(k).value
@@ -436,7 +574,15 @@ class ArmLinkDistance(Node):
         self.max_range = float(g('max_range'))
 
         self.obstacles = self._parse([s for s in g('obstacles') if s.strip()])
+        # ---- 場景真值：啟動時就把前提核完，不留到執行期才半啟用 ----
+        self.scene_truth = bool(g('scene_truth'))
+        self._truth_approved = parse_scene_truth(g('scene_truth_approved'))
+        self._n_truth = self._n_truth_fb = 0
+        self._truth_codes = {}
         self.geometry = str(g('geometry'))
+        # **啟動前提**與離線核對共用同一份：validate_scene_truth
+        validate_scene_truth(self.obstacles, self._truth_approved,
+                             self.scene_truth, self.geometry)
         self.max_rows_per_link = int(g('max_rows_per_link'))
         self.samples = None
         self.link_names = []
@@ -675,7 +821,13 @@ class ArmLinkDistance(Node):
                   # 8 **整個節點週期**的耗時（含 TF、FK、距離、下界、列建構、
                   #   發布），不只 G2；9 本週期移除的完全重複列數
                   float(getattr(self, '_cycle_ms', float('nan'))),
-                  float(getattr(self, '_dup_dropped', 0))]
+                  float(getattr(self, '_dup_dropped', 0)),
+                  # 10–12 場景真值遮蔽來源的逐週期計數與模式旗標。
+                  # **旗標要發**：只看 n_truth 無法區分「模式關閉」與
+                  # 「模式開著但全部回退」，兩者的意思完全不同。
+                  float(getattr(self, '_n_truth', 0)),
+                  float(getattr(self, '_n_truth_fb', 0)),
+                  1.0 if getattr(self, 'scene_truth', False) else 0.0]
         # 每個 tight 配對的 lb、ub、耗時、是否達容差接在**基礎欄位之後**
         # （即索引 10 起，見 DIAG_FIELDS_BASE）。逐週期發布，
         # 讓趟後能核對「下界真的每步重算」而不是只寫在某份紀錄裡。
@@ -798,8 +950,27 @@ class ArmLinkDistance(Node):
         self._dropped = 0
         self._dup_dropped = 0
         self._overflow = False
+        self._n_truth = self._n_truth_fb = 0
+        self._truth_codes = {}
         live = [o for o in self.obstacles if o.T_world_link is not None]
         _by = {o.name: o for o in live}
+
+        def _occ_resolve(obs_name, p_w, vk):
+            """該列的遮蔽旗標。**真值優先，不成立就回退到原本的保守處置。**"""
+            _o = _by.get(obs_name)
+            _occ, _code = scene_truth_occ(_o, self._truth_approved, now,
+                                          self._stamp, self.pose_timeout,
+                                          self.scene_truth)
+            if _occ is not None:
+                self._n_truth += 1
+                return float(_occ)
+            if self.scene_truth:
+                self._n_truth_fb += 1
+                self._truth_codes[_code] = self._truth_codes.get(_code, 0) + 1
+            if T_rl is None:
+                return 1.0
+            _p_l = (_inv(T_rl) @ np.append(p_w + vk, 1.0))[:3]
+            return 1.0 if self._occluded(_p_l) else 0.0
 
         def _vo_row(obs_name, p_surf):
             _t0 = time.perf_counter()
@@ -896,13 +1067,8 @@ class ArmLinkDistance(Node):
             for k in sel:
                 p_w = W[k]
                 n_hat = v[k] / max(abs(float(d[k])), 1e-9)
-                if T_rl is None:
-                    occ = 1.0
-                    n_unk += 1
-                else:
-                    p_l = (_inv(T_rl) @ np.append(p_w + v[k], 1.0))[:3]
-                    occ = 1.0 if self._occluded(p_l) else 0.0
-                    n_unk += int(occ)
+                occ = _occ_resolve(which[k], p_w, v[k])
+                n_unk += int(occ)
                 if status == STATUS_OK:
                     n_ok += 1
                 else:
@@ -923,11 +1089,11 @@ class ArmLinkDistance(Node):
                                 round(float(S.points[k][2]), 12)))
 
             # **必要配對列**：即使該配對不是最近障礙物也照樣產生
-            def _occ_of(p_w, vk):
-                if T_rl is None:
-                    return 1.0
-                p_l = (_inv(T_rl) @ np.append(p_w + vk, 1.0))[:3]
-                return 1.0 if self._occluded(p_l) else 0.0
+            def _occ_of_for(_obn):
+                # `forced_pair_rows` 以 (p_w, vk) 兩個參數呼叫，所以障礙物名稱
+                # 必須在這裡**綁進閉包**。用預設參數會讓它永遠拿到 None，
+                # 於是配對列一律回退 —— 真值看起來接上了，實際沒有。
+                return lambda p_w, vk: _occ_resolve(_obn, p_w, vk)
 
             for _obn in self._pair_rows.get(name, []):
                 _oi = self._obs_index[_obn]
@@ -940,7 +1106,8 @@ class ArmLinkDistance(Node):
                 _lj = [i for i, o in enumerate(live) if o.name == _obn]
                 _t0 = time.perf_counter()
                 _extra = forced_pair_rows(
-                    W, S.points, _ob, _oi, li, S.rho, status, age, _occ_of,
+                    W, S.points, _ob, _oi, li, S.rho, status, age,
+                    _occ_of_for(_obn),
                     self.max_range, self.max_rows_per_link,
                     vobs_batch=self._vobs_batch, d_lb=_dlb,
                     d_col=(Dm[:, _lj[0]] if _lj else None),

@@ -1,0 +1,64 @@
+[17:58:59] === 導航交棒 RUN_ID=motm_175859 domain=112 ===
+[17:58:59] 範圍：真 gmpc_node；/odom 真值；/plan 本地產生（非 nav2）；**CBF 關閉**
+[17:58:59] control_frequency=20.0 Hz（dt=0.0500 s）；限制值全部沿用
+[17:58:59]   起 sim PID=437496
+[17:58:59]   等場景建起（最多 180 s）
+[17:59:08]   場景已建起
+[room] 零摩擦材質：支撐球 4 + 地面 2 → 綁定 6
+[room] 夾持面摩擦 μs=1.0 μd=0.8 → 綁定 7／7
+[room] 摩擦核對：
+[17:59:08]   起 gmpc PID=438285
+[17:59:14]   起 smoother PID=438617
+[17:59:14]   起 smlife PID=438621
+[17:59:19]   起 diag PID=438913
+[17:59:20]   起 glide PID=438993
+[17:59:21]   起 wholebody PID=439069
+[17:59:24]   起 task PID=439232
+[17:59:25] [待命] 提早起求解節點（目標由 /drawer/tcp_target 來；**無安全層**）
+[17:59:25]   起 adapter PID=439308
+[17:59:25]   起 solver PID=439332
+[17:59:25] [任務] 發計畫、監看、備妥時要求轉移
+[mission] 計畫已發：93 點，-2.755,-3.144 → -0.136,0.560
+[mission] d=0.598 m ⇒ **要求轉給減速交接段**（物理步 4077，窗口 400）
+[mission] d=0.559 m  v=+0.2774,-0.0083,+0.0300  → 碼 45 底盤實測速度**超出全身的速度框** —— 導航還沒把速度降進來，此刻換手第一筆命令就會越界
+[mission] d=0.172 m  v=+0.0295,-0.0058,+0.0649  → 碼 0 導航交棒條件全部成立
+[mission] **備妥 ⇒ 要求在物理步 4246 轉移控制權**；u_prev 來源 nav_applied
+[mission] **控制權已轉移給全身** @ step 4250
+[mission] 交棒完成；最後閘門 碼 0 導航交棒條件全部成立
+[17:59:39] [展開] 等全身端完成展開（最多 120 s）
+[wb] **取得控制權** @ sim 42.530 ⇒ 展開；起步位姿 [-0.242, 0.4249, 1.1104]；暖機底盤來源 nav_applied
+[wb] j3 已離開限位至 +0.2898 rad，開始走其餘各軸
+[wb] **展開完成** 關節最大差 0.0174 rad、底盤 0.0188 m／-0.00°、實測最小餘裕 +0.9025 rad
+[wb] 展開完成 ⇒ **保持交棒**（持續送零速率，等 /wb_vel_cmd 出現第二個發布者，最多 120 s）
+[wb] **求解節點已上線**（/wb_vel_cmd 發布者 3）⇒ 交出並結束 @ sim 50.590
+[wb] 展開完成
+[17:59:45] [任務] 等編排節點走完全部相位（最多 900 s）
+[task] 抓取深度：TCP 超過桿心 6.80 mm（設計姿態 FK 給的是 -14.69，不採用）；開到 200 mm（帶 195–205）
+[task] 相位 → **ALIGN** @ sim 50.54（底盤 18.6 mm、手臂 0.0189 rad；展開完成、求解節點上線前判定）
+[task] 求解節點已上線 @ sim 50.76 ⇒ 恢復推進
+[task] 接觸前位姿到達 ⇒ 開始收退讓量
+[task] 相位 ALIGN → **ENGAGE_WAIT** @ sim 57.66  開度    0.0 mm  
+[task] 到位 0.45 mm ⇒ 閉合手指
+[task] MotM 名目姿態：手臂收回 60 mm（IK 殘差 0.000 mm）
+[task] **夾持成立** 逐物理步連續 2.030 s；接觸 5.16／4.57 N
+[task] 相位 ENGAGE_WAIT → **OPEN** @ sim 61.44  開度    0.1 mm  
+[task] 相位 OPEN → **OPEN_HOLD** @ sim 69.94  開度  196.3 mm  
+[task] 相位 OPEN_HOLD → **CLOSE** @ sim 72.05  開度  201.2 mm  
+[task] 相位 CLOSE → **CLOSE_HOLD** @ sim 80.48  開度    4.9 mm  
+[task] 相位 CLOSE_HOLD → **RELEASE_WAIT** @ sim 82.97  開度    0.1 mm  
+[task] 相位 RELEASE_WAIT → **RETREAT** @ sim 83.77  開度    0.1 mm  
+[task] 相位 RETREAT → **RESTOW** @ sim 85.82  開度    0.1 mm  
+[task] 回起點計畫提早發（收臂中）：93 點
+[task] 相位 RESTOW → **HANDBACK_WAIT** @ sim 92.34  開度    0.1 mm  
+[task] 請求交還導航 @ 物理步 9237
+[task] 相位 HANDBACK_WAIT → **NAVIGATE_HOME** @ sim 92.43  開度    0.1 mm  
+[task] 相位 NAVIGATE_HOME → **DONE** @ sim 110.91  開度    0.1 mm  
+[task] **完成** @ sim 110.91
+[task] 結束；最終相位 DONE
+[18:00:31] [收尾] 請模擬器受控停止並封存
+publisher: beginning loop
+publishing #1: std_msgs.msg.String(data='導航交棒與展開已結束，請封存')
+
+[18:00:33]   封存完成 2081945 bytes
+[18:00:33] === 結束 rc=0 ===
+[18:00:33] cleanup（只針對本趟 PID）

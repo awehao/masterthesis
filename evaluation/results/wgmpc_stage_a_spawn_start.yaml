@@ -1,0 +1,163 @@
+title: 階段 A 的生成式起始構型 —— 起始位置不調 j3
+status: 已實跑一趟並通過；僅一趟，重複性未測
+
+request:
+  from_user: 希望在起始位置一開始不要去調 j3
+  interpretation: 取消階段 A 開頭那段 j3 前置調姿，讓機器人一開始就在可用構型
+
+why_j3_had_to_be_adjusted:
+  symptom: 零位起步跑不到正式預抓取（求解失敗 1171/1201、卡在 853.8 mm）
+  cause: >-
+    零位時 j3 向下只剩 0.0099 rad 的有效餘裕，而套用命令落後兩週期，
+    QP 的限位列因此不可滿足
+  not_the_cause: 目標不可達
+  enough_to_fix: 只要 j3 離開限位即足夠
+  source: evaluation/results/wgmpc_wg2_zero_start_block.yaml
+
+change:
+  switch: START_MODE（運行器環境變數），預設 spawn
+  spawn: 機器人**直接生成**在起始構型（Isaac 的 --init-arm-q），不做任何 j3 調姿
+  move: 保留原路徑（從實際零位閉迴路調姿到起始構型，再交棒；已實測四趟）
+  start_posture_source: 由運行器自 URDF 硬限位算出，只動 j3（取有效限位中點），其餘五軸留零位
+  computed_value: "0,0,1.437278401,0,0,0"
+  identical_to_baseline: 與基線長趟 --init-arm-q 的值逐位元相同
+  run_label_split: >-
+    Isaac 的 run-label 也依路徑分開；沿用 move 的標籤會讓 wb_run.json
+    描述一件沒發生的事
+
+cost_of_spawn:
+  not_demonstrated:
+    - 機器人能自己從實際零位移動到這個起始構型
+    - 該移動段的逐步限位與避碰（move 路徑才會實跑）
+  status_of_that_claim: 明列的**起始條件假設**，不是本趟展示的結果
+
+start_gate:
+  name: 起始構型核對
+  script: evaluation/wgmpc_stage_a_start_check.py
+  rule: ammr_wholebody_mpc.wgmpc_handover.check_start_posture
+  not_a_handover: >-
+    判準組成與交棒判定不同，兩者不可混用。交棒判定核「前置來源已宣告完成、
+    已解除、安靜夠久」；這條路徑沒有前置來源，那三條不適用。
+  checks:
+    - 實測關節角有效、新鮮、在有效限位內
+    - 實測角與要求的起始構型相符（容差 0.02 rad）
+    - 設定點有效、在有效限位內、與實測角相符（容差 0.01 rad）
+    - u_prev 取自**實際套用回報**（與交棒判定相同）
+    - 實際套用回報顯示手臂**確實靜止**（上限 1e-3；交棒判定不核這條）
+  cannot_check: >-
+    「沒有別的手臂命令來源」—— 運行器在此模式下不啟動前置節點，那是
+    **結構性質**（由 test_wgmpc_stage_a_runner.py 的不變量把住），
+    不是這個閘門量到的
+  measured_1003_152137:
+    start_max_dev_rad: 0.004696
+    setpoint_meas_max_dev_rad: 0.002367
+    arm_rest_max_abs_u: 0.0
+    n_recv: 20
+    n_rejected: 0
+    exec_mode: 0
+    u_prev_source: applied
+    min_effective_slack_rad: 1.44555
+
+revision_history:
+  - what: 初版假設此路徑下手臂「從未被命令過」，以初始靜止假設的零值當 u_prev
+    refuted_by: >-
+      實跑 wgmpc_stage_a_spawn_151022 以碼 26 攔下：n_recv=289、exec_mode=0、
+      設定點已建立。adapter 一上線就持續送零命令，所以該前提不成立。
+    outcome: >-
+      既然取得到實際套用回報就不需要那個假設；閘門因此改**強**（改取實際
+      套用回報，並新增「手臂確實靜止」）。碼 26 作廢但保留在碼表裡，
+      讓那一趟的 handover.json 仍讀得懂。
+  - what: 順帶修掉 wgmpc_wg2_node.py 的 u_prev **標籤**缺陷
+    detail: >-
+      執行端在設定點還沒建立時每一步也發一筆 /coman/applied_cmd
+      （exec_mode=4、欄位零值、api_applied=False）。節點不分模式一律把它
+      設成 self._applied，於是 strict 政策的首輪會把 u_prev 標成 applied
+      ——「量到的套用值」——而其實什麼都沒套用過。
+    numeric_impact: 無（兩者都是零）
+    why_it_still_matters: strict 政策的全部意義在標籤；標錯就等於驗證條件失效
+    test: evaluation/test_wgmpc_u_prev_no_command.py（修改前 9/14，修改後 14/14）
+
+voided_run:
+  id: wgmpc_stage_a_spawn_151801
+  why: >-
+    趟次還在等場景建立時我編輯了運行器，插入點在當時執行位置之前。
+    bash 按位元組偏移遞增讀取腳本，在執行點之前插入會讓後續讀取錯位。
+  state: 於場景仍未建起時依既定清理規則終止，無殘留程序，未產生任何結果判定
+  marker: evaluation/runs/wgmpc_stage_a_spawn_151801/VOID.md
+  lesson: 趟次在飛時不改腳本
+
+outcome_1003_152137:
+  verdict: pass（判定器零違規）
+  start_mode_source: run_config
+  reached_held: true（由實錄 TCP 位姿對 target.json 重算，非照抄節點回報）
+  t_reach_sim_s: 20.62
+  t_reach_minus_gate_s: 12.77
+  hold_s: 2.36
+  hold_err_p_p50_mm: 1.451
+  hold_err_p_p95_mm: 2.220
+  hold_err_p_max_mm: 4.868
+  hold_err_r_max_rad: 0.00316
+  base_disp_m: 0.401
+  base_path_m: 0.455
+  yaw_change_rad: 1.297
+  chain: 收 333 筆、拒 0、無失效閂鎖、stop_reason=stop_request
+  solver: 發布 298 筆、no_solution 0、deadline_miss 0、dropped_stale 0、20.0 Hz
+  archive: 完整
+  drawer: 位移未超過靜止基線（開度最大 0.0 mm）；淨接觸力最大 0.000 N
+  drawer_wording: >-
+    淨合力為零**不**證明沒有接觸，也不證明有接觸時感測器一定會回報；
+    distance 那一路因缺真值最短距離紀錄而不判定
+  video: evaluation/runs/wgmpc_stage_a_spawn_152137/video.mp4（1.7 MB、766 格 @ 30 fps、涵蓋模擬 22.95 s）
+  sim_time_s: 23.0
+
+comparison_with_move_runs:
+  basis: >-
+    五趟以**同一組明確定義**重算（到達時間相對各自起始閘門；餘裕只取閘門
+    之後的窗口）。先前表格的「手臂變號比例 29.3–48.3%」用的是另一種基準，
+    與本表的「保持窗變號 1.4%」**不是同一個量**，不可併讀。
+  margin_correction:
+    what_I_nearly_reported: spawn 的最小有效餘裕 +0.1043 比 move 的 +0.0100 大十倍
+    why_wrong: >-
+      move 四趟的 +0.009973 全部出現在**交棒之前的前置調姿段**
+      （r1 @25.07s／交棒 42.56s、r2 @27.04/42.57、r3 @24.92/39.54、
+      rec @12.87/23.42），那是調姿時 j3 貼著限位的數字，不是階段 A 的餘裕
+    corrected: >-
+      只取閘門之後：move 設定點最小餘裕 +0.100693…+0.105815，
+      spawn +0.104257 ⇒ 階段 A 的餘裕**沒有變**
+  table_post_gate:
+    - [趟次, 到達-起算 s, 保持 s, 誤差 p50 mm, p95, max, 同動 %, 保持 TCPv p95 mm/s, max, 總模擬 s]
+    - [move r1, 16.10, 4.58, 1.413, 1.455, 4.788, 63.0, 5.70, 32.64, 63.2]
+    - [move r2, 15.63, 3.67, 1.433, 1.625, 4.748, 67.0, 10.67, 29.40, 61.9]
+    - [move r3, 14.12, 3.76, 1.442, 1.784, 4.731, 72.1, 8.65, 28.99, 57.4]
+    - [move rec, 13.37, 2.49, 1.442, 2.277, 4.841, 81.1, 16.32, 28.49, 39.3]
+    - [spawn, 12.77, 2.36, 1.451, 2.220, 4.868, 84.6, 16.25, 34.64, 23.0]
+  what_can_be_claimed:
+    - >-
+      **總模擬時間明確下降**（23.0 s vs move 39.3–63.2 s）：整段前置調姿
+      不再存在。這一條不靠統計，是結構差異。
+    - 成功判準全部達成：5 mm／0.02 rad、連續保持 2.36 s ≥ 2 s
+    - 階段 A 的有效限位餘裕與 move 路徑相當（見 margin_correction）
+  what_cannot_be_claimed:
+    - >-
+      「spawn 比較快」—— 到達 12.77 s 只比最快的 move 趟次少 0.60 s，
+      而 move 自己四趟的散佈就有 2.73 s；單趟分不出來
+    - >-
+      「同動比例提高」—— 84.6% 只比最高的 move 趟次高 3.5 個百分點，
+      move 自身散佈 18 個百分點
+    - >-
+      「振動變好或變壞」—— 保持窗 TCP 速度 p95 16.25 落在 move 區間內；
+      峰值 34.64 比 move 區間上緣高 2.0 mm/s，單趟不足以判
+  still_open:
+    - 位置誤差峰值 4.868 mm 距 5 mm 容差只剩 0.132 mm（move 路徑也在同一邊緣）
+    - 保持期間的殘餘振動未解
+    - Isaac 間歇性啟動卡死的根因仍未確立
+
+tests:
+  - evaluation/test_wgmpc_start_posture.py（38/38；正常值取自實測趟次的閘門觀測）
+  - evaluation/test_wgmpc_u_prev_no_command.py（14/14；修改前 9/14 紅）
+  - evaluation/test_wgmpc_stage_a_runner.py（74/74；兩條起始路徑分開核）
+  - evaluation/test_wgmpc_handover.py（59/59；交棒路徑判準未改動）
+
+preserved:
+  move_path: 原四趟結果與影片未改動（rec 影片 md5 前綴 272953756ebfcc6f 不變，四趟判定仍 pass）
+  frozen_specs: 既有規格未覆寫；本檔為新增

@@ -1,0 +1,130 @@
+# WG2 保持期間整機振動診斷
+# 範圍：只讀既有趟次。未新增 Isaac 趟次，未改權重、模型、限制或整形參數。
+# 重現：python3 evaluation/wgmpc_wg2_hold_vibration.py <run_dir> --plot <out.png>
+
+scope:
+  authorised: 診斷保持期間的整機振動
+  not_done: [新增趟次, 調權重, 調模型, 調限制, 調整形參數]
+
+subject_run:
+  dir: evaluation/runs/wgmpc_wg2_g1p0_111058
+  reason: 保持段 TCP 路徑 51.7 mm（七趟最大），四段封裝在窗內各 40 筆可歸屬，無缺漏
+  gamma: 1.0
+  hold_window_sim_s: [23.660, 25.660]
+  n_control_cycle: 41          # 20 Hz
+  n_physics_step: 200          # 100 Hz
+  chain_missing: {presolve: 0, shaped: 0, published: 0, safety: 0, endpoint: 0,
+                  cycle_without_solver_env: 0}
+  nonfinite_cols_in_window: none
+
+oscillation:
+  period_control_cycles: 4     # 自相關 lag2 -0.82 / lag4 +0.81
+  frequency_hz: 5.00           # = 20 Hz / 4
+  waveform: 兩週期負、兩週期正重複（非逐週期翻號，故翻號率量不到）
+  note: 頻率隨控制率而非固定機械頻率（見 cross_run），排除固定機械共振
+
+# 問題 1：振盪最先出現在哪一段
+chain_localisation:
+  earliest_stage_with_oscillation: presolve      # 求解器輸出，整形之前
+  qd3_rms_rad_s:
+    presolve: 0.2740
+    shaped:   0.1329            # 比 0.485，週期仍為 4，自相關峰 +0.81 -> +0.90
+    published: 0.1329
+    safety:    0.1329
+    endpoint:  0.1329
+  stage_diff_max_abs:
+    presolve_vs_shaped:  {base_vxvy: 1.15e-3, omega: 7.06e-4, arm: 2.75e-1}
+    shaped_vs_published: {base_vxvy: 1.85e-4, omega: 5e-9,    arm: 5e-9}
+    published_vs_safety: {base_vxvy: 0.0,     omega: 0.0,     arm: 0.0}
+    safety_vs_endpoint:  {base_vxvy: 1.85e-4, omega: 5e-9,    arm: 5e-9}
+  shaped_to_published: 固定 +11.14 deg 偏航換算（模長差 5.1e-9），非振盪來源
+  safety_layer_in_window: {lam_p50: 1.0000, e2_modified_frac: 0.000}
+  applied_is_zoh: true          # 以 recv_seq 分組，群組內速率偏離上限 1e-4 rad/s = 紀錄捨入
+  conclusion: >
+    振盪在求解器輸出就已存在。整形把振幅壓到 0.485 倍但不改週期；
+    安全層對九維逐位元未改；執行端在同一筆命令期間未再改速率。
+    下游各段都不是來源。
+
+# 問題 2+3：平台側振幅與主頻，三種機制的分辨
+mechanisms:
+  command_self_recorrection:
+    supported: true
+    evidence:
+      - presolve qd2/qd3/qd5 峰峰值 0.79/0.80/0.72 rad/s，週期 4，自相關峰 +0.81
+      - 同期 TCP 位置誤差 p50 僅 0.94 mm、峰峰值 3.73 mm
+      - TCP 位置/姿態誤差自相關無週期 4 結構（lag4 +0.10 / +0.02）
+  setpoint_tracking_oscillation:
+    supported: false
+    evidence:   # 設定點 -> 實測關節角 @ 5 Hz，對照 free4 辨識的一階 tau=0.100 s
+      gain_measured:  {j2: 0.308, j3: 0.304, j5: 0.306, j6: 0.300}
+      gain_predicted: 0.303
+      gain_ratio:     {j2: 1.02, j3: 1.00, j5: 1.01, j6: 0.99}
+      phase_measured_deg:  {j2: -83.8, j3: -82.0, j5: -81.5, j6: -81.0}
+      phase_predicted_deg: -72.3
+    reading: 關節是被動低通，把設定點振盪衰減 3.3 倍，未自行加振；無放大、無共振
+    excluded_from_reading: [j1, j4]   # 設定點頻帶振幅 <= 9.6e-5 rad，接近紀錄捨入
+  base_driven_by_reaction:
+    supported: not_source
+    evidence:
+      base_pose_p2p: {x_mm: 0.60, y_mm: 0.20, yaw_mrad: 0.67}
+      base_path_mm: 1.33
+      tcp_path_mm: 51.66          # 底盤的 39 倍
+      base_vx_cmd_to_meas_at_5hz: {gain: 0.996, phase_deg: -15.2}
+      unexplained_residual_rms_over_measured_rms: {v_x: 0.40, v_y: 0.64, omega: 0.49}
+    reading: >
+      底盤實測速度在 5 Hz 幾乎就是被命令的那一份（v_x 增益 0.996）；
+      2 秒內底盤整體只移動 0.6 mm，至多佔 TCP 5.29 mm x 向擺幅的約 11%。
+      底盤不是振盪來源，也不是主要貢獻者。
+
+amplitudes:
+  arm_setpoint_p2p_rad:  {j2: 0.0204, j3: 0.0185, j5: 0.0180}
+  arm_measured_p2p_rad:  {j2: 0.0232, j3: 0.0305, j5: 0.0172}
+  arm_applied_rate_p2p_rad_s: {j2: 0.280, j3: 0.388, j5: 0.249}
+  tcp_p2p_mm: {x: 5.29, y: 2.10, z: 3.69}
+  tcp_err_p50: {pos_mm: 0.94, rot_mrad: 3.62}
+
+# 另一項在本輪量到、先前未記錄的現象。未歸因。
+publish_timing:
+  slot_interval_ms: 50.0        # 時槽本身精確
+  publish_lag_behind_slot_ms: {p50: 20.0, min: 10.0, max: 30.0}
+  publish_interval_hist_ms: {30: 11, 40: 9, 60: 10, 70: 10}   # 無一筆落在 50
+  lag_autocorr_lag1: -0.80      # 嚴格交替，週期 2 個控制週期
+  dwell_steps_in_simulator: {2: 1, 3: 1, 4: 10, 5: 19, 6: 10}  # 名目應為 5
+  corr_with_oscillation: -0.036
+  reading: >
+    發布時刻嚴格交替早/晚一個物理步，命令實際停留 4 或 6 步而非 5 步。
+    由節點 publish_sim_t 與模擬器 recv_seq 兩個獨立來源確認。
+    其週期為 2，振盪週期為 4，兩者相關係數 -0.036，依現有資料不能說它是驅動因素。
+
+cross_run:   # 保持窗內「整形前 qd3」的自相關週期
+  wgmpc_wg2_g0_110448:   {gamma: 0.0, rms: 0.0456, period: none, tcp_path_mm: 11.5}
+  wgmpc_wg2_g0_110745:   {gamma: 0.0, rms: 0.1433, period: 3, peak: 0.83, tcp_path_mm: 42.1}
+  wgmpc_wg2_g1p0_110329: {gamma: 1.0, rms: 0.2839, period: 4, peak: 0.72, tcp_path_mm: 49.7}
+  wgmpc_wg2_g1p0_110606: {gamma: 1.0, rms: 0.2860, period: 4, peak: 0.89, tcp_path_mm: 48.6}
+  wgmpc_wg2_g1p0_110930: {gamma: 1.0, rms: 0.2624, period: 4, peak: 0.60, tcp_path_mm: 51.3}
+  wgmpc_wg2_g1p0_111058: {gamma: 1.0, rms: 0.2740, period: 4, peak: 0.81, tcp_path_mm: 51.7}
+  wgmpc_wg2_g1p0_111220: {gamma: 1.0, rms: 0.0641, period: 4, peak: 0.11, tcp_path_mm: 11.6}
+  reading: >
+    5/7 趟進入整數週期極限環；γ=0 的 110745 同樣進入（週期 3），
+    故整形既非成因也非條件。趟次間是「進入 / 未進入」兩種狀態，
+    n=7 不足以估進入率，本輪不做統計宣稱。
+
+gaps:
+  - adapter 段 stamp_sim_t 為 wall clock（該節點未設 use_sim_time），不可與其他三段相減；
+    本分析改用錄製端 recorder_sim_t，那是「錄製端收到」而非「adapter 發出」的時刻。
+  - wb_run.json 無力/力矩欄位，手臂反作用力無法與輪端摩擦、接觸模型分開量化，
+    只能給底盤運動的上限。
+  - publish_sim_t 與 sim_t 皆讀自 100 Hz 模擬時鐘，解析度 10 ms，更細的時刻差異分辨不出。
+  - joint*_sp 以 1e-6 rad 紀錄，差分還原的套用速率量化階距 1e-4 rad/s。
+  - 求解器內部（QP 疊代、預測狀態、權重項各自的貢獻）未被紀錄，
+    因此只能定位到「求解器輸出」，不能再往內分。
+
+not_claimed:
+  - 未歸因於摩擦、延遲或權重。
+  - 迴路相位的簡單二元模型（延遲 1.6 週期 + 一階 tau=0.100 s）在 3.9 Hz 跨過 180 度，
+    與實測 5.00 Hz 不吻合，故不以延遲解釋此頻率。
+  - 未宣稱已找到修法。
+
+artifacts:
+  plot: evaluation/results/wgmpc_wg2_hold_vibration_111058.png
+  script: evaluation/wgmpc_wg2_hold_vibration.py

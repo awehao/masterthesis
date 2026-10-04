@@ -1,0 +1,245 @@
+{
+ "steps": [],
+ "events": [],
+ "summary": {
+  "owner": "wholebody",
+  "switch_step": 2694,
+  "pending": null,
+  "seed_applied": {
+   "u_applied": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "arm_setpoint": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.5707963,
+    0.0
+   ],
+   "sim_t": 26.939999397844076,
+   "physics_step_id": 2692
+  },
+  "rejected": {
+   "nav": 27
+  },
+  "n_steps_recorded": 2721,
+  "events": [
+   [
+    2692,
+    "switch_scheduled",
+    "nav->wholebody @ step 2694"
+   ],
+   [
+    2694,
+    "switch_done",
+    "nav->wholebody（排定 2694）"
+   ]
+  ],
+  "contract": "每個物理步恰有一個控制者；切換在明確物理步發生；晚到命令依控制權拒絕，不靠時間；切換失敗時控制權留在現任，由它繼續負責減速",
+  "chain_seeded": true,
+  "seed_admission": {
+   "u_applied": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "sim_t": 26.939999397844076,
+   "physics_step_id": 2692
+  },
+  "seed_used": {
+   "u_applied": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "arm_setpoint": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.5707963,
+    0.0
+   ],
+   "sim_t": 26.94999939762056,
+   "physics_step_id": 2693
+  },
+  "seed_note": "承接的是**切換當下**最新的套用回報；排程當下那一筆只是准入證據",
+  "nav_applied_last": {
+   "u_applied": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "sim_t": 26.94999939762056,
+   "physics_step_id": 2693
+  },
+  "n_steps": 2721,
+  "executor_events": [
+   [
+    26.94999939762056,
+    "handover_request",
+    "->wholebody @ 2694：已排定在指定物理步切換控制權"
+   ],
+   [
+    26.95999939739704,
+    "chain_seeded",
+    "底盤基準 [0.0, 0.0, 0.0]（切換當下第 2693 步的套用回報；排程當下是第 2692 步）"
+   ]
+  ],
+  "path_note": "導航三維直接寫入、不經輪級限制與低速介面界限；全身九維走 CmdChainE2。兩條都產生套用回報。"
+ },
+ "chain": {
+  "config": {
+   "max_cmd_age_s": 0.2,
+   "arm_rate_max": 1.0,
+   "expect_dof": 9,
+   "mode": "solver_drawer",
+   "joint_lower": [
+    -2.935643802,
+    -2.443457075,
+    -0.061087,
+    -2.935643802,
+    -1.989667075,
+    -2.935643802
+   ],
+   "joint_upper": [
+    2.935643802,
+    2.443457075,
+    2.935643802,
+    2.935643802,
+    1.989667075,
+    2.935643802
+   ],
+   "joint_margin": 0.05
+  },
+  "received": 0,
+  "rejected": 0,
+  "last_reject": null,
+  "frozen_steps": 0,
+  "fail": null,
+  "events": [
+   [
+    26.95,
+    "seeded_from_handover",
+    "來源 nav、物理步 2693；底盤基準 [0.0, 0.0, 0.0]"
+   ]
+  ],
+  "recv_seq_note": "recv_seq / recv_sim_t 是**接收端**編號與時間，不是來源發布時間，也不能據此宣稱端到端延遲",
+  "mode": "solver_drawer",
+  "mode_note": "不符模式的命令由接收端**整筆拒收**；不在事後切掉分量",
+  "fail_note": "整體失效：不原樣執行，也不只縮底盤分量後宣稱全身安全仍成立。失效後每步送 stop_command()：底盤停止、手臂保持設定點，並**繼續量測**",
+  "version": "wb_cmd_chain_e2/1",
+  "seeded_from_handover": {
+   "source": "nav",
+   "u_applied": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "arm_setpoint": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.5707963,
+    0.0
+   ],
+   "sim_t": 26.94999939762056,
+   "physics_step_id": 2693
+  },
+  "u_prev_baseline": "承接自交棒",
+  "wheel_limit": {
+   "policy": "evaluation/results/specs/wb_wheel_limit_policy_v2.md",
+   "frame": "底盤三分量為**本體座標**（adapter 已轉換）",
+   "wheel_radius": 0.05,
+   "wheel_base_L": 0.245,
+   "w_lim_mps": 0.2775,
+   "a_max_rad_s2": 125.0,
+   "dt_max_s": 0.05,
+   "modified_steps": 0,
+   "timeout_decel_steps": 0,
+   "stop_unverified_steps": 0,
+   "last_limit": null,
+   "rows_kept": 0,
+   "note": "λ 由底盤輪級約束決定、施加於完整 9 維增量；保留的是**增量方向**，不是請求命令的底盤／手臂比例。**逾時是例外**：手臂速率立即歸零，不保留耦合方向。",
+   "not_claimed": "u_out 不是求解器的輸出；上游距離約束是對 u_req 算的。**不宣稱上游全身安全性不變**。"
+  }
+ },
+ "config": {
+  "world": "/home/howardchen/masterthesis/src/ammr_bringup/worlds/drawer_room.sdf",
+  "drawer_pose": "0.0,1.45",
+  "start_pose": "-2.80,-3.20,1.5708",
+  "stow_q": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   -1.5707963,
+   0.0
+  ],
+  "physics_dt": 0.01,
+  "low_speed_bound": {
+   "lin": 0.05,
+   "ang": 0.2
+  },
+  "low_speed_bound_applies_to": "**只有全身那條路徑**；導航不經命令鏈",
+  "drawer": {
+   "root": "/World/drawer_unit",
+   "cabinet_prim": "/World/drawer_unit/cabinet",
+   "drawer_prim": "/World/drawer_unit/drawer",
+   "joint_prim": "/World/drawer_unit/drawer_slide",
+   "mass_kg": 2.0,
+   "linear_damping": 2.0,
+   "joint_friction": 0.0,
+   "drive_stiffness": 0.0,
+   "drive_damping": 0.0,
+   "drive_max_force": 0.0,
+   "limit_lower": 0.0,
+   "limit_upper": 0.2199999988079071
+  },
+  "DY0": 1.4500001668930054,
+  "frictionless": {
+   "support_spheres": 4,
+   "ground": 2,
+   "bound": 6
+  },
+  "friction_audit": {
+   "ok": true,
+   "n_faces": 34,
+   "violations": []
+  }
+ }
+}

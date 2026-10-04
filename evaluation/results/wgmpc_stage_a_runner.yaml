@@ -1,0 +1,221 @@
+# 階段 A 運行器與交棒：程式與離線測試
+主題: 前置調姿 → W-GMPC 交棒，以及階段 A 的啟動鎖定
+狀態: 程式與離線測試完成；**尚未實跑 Isaac**
+
+範圍界定:
+  成果判定起點: W-GMPC 接管後的協同接近
+  前置調姿: 準備動作，單獨記錄，不計入成果
+  終點名稱: 接觸前暫停位姿（**不叫**預抓取位姿）
+  不在範圍: 夾持、拉開抽屜、以感知取代抽屜位姿真值
+
+兩段分開記錄:
+  A_前置調姿:
+    執行檔: evaluation/wgmpc_prepos_node.py
+    run_id: "${RUN_ID}_prepos"          # 與階段 A 不同 ⇒ 封裝紀錄能分辨命令來自誰
+    起點: 以**實測**關節角為起點，不以名義零位代替
+    軌跡: 同步梯形，v<=0.35 rad/s、a<=0.7 rad/s²、20 Hz（凍結的預抓取軌跡限制）
+    管線: 以**求解段封裝**發到 /wgmpc/cmd_env ⇒ 與 W-GMPC 走完全相同的路
+          （安全層 → adapter → 執行端 E2），因此同受輪級限制、屏障與
+          設定點有效限位保護
+    底盤分量: 一律為零（前置調姿不動底盤）
+    速率上限自核: 命令速率峰值超過執行端 arm_rate_max 即中止（執行端會整筆拒收）
+    目標構型自核: 目標若已在有效限位之外即中止
+    尾段: 軌跡後繼續發零速率 1.0 s（讓設定點停穩）
+    完成宣告: latched 字串 /wgmpc/prepos_done，帶最後一筆命令的時間與序號
+  B_交棒後的階段A:
+    執行檔: evaluation/wgmpc_wg2_node.py（--u-prev-policy strict，**不傳 --assume-initial-rest**）
+    目標: 由**交棒時刻**的抽屜位姿算出的六維接觸前暫停位姿
+
+交棒閘門:
+  判定模組: ammr_wholebody_mpc.wgmpc_handover（與離線反例共用同一份）
+  執行期: evaluation/wgmpc_stage_a_handover.py
+  通過條件（**全部**都要）:
+    1: 前置來源**已明確宣告完成** —— 沉默不等於完成（發布端也可能掛了）
+    2: 已安靜 >= quiet_s 0.4 s，且 quiet_s **必須** >= max_cmd_age_s 0.2 s
+       （執行端要先走過逾時路徑、手臂速率歸零）
+    3: 兩個來源不得同時在線；運行器**先終止前置節點**才做判定
+    4: 實測關節角有值、有限、新鮮（<=0.1 s）、在**有效限位**內
+    5: 設定點同上
+    6: 設定點與實測角一致（<=0.01 rad）—— 靜止時應相同；差太多表示其中一份回報是錯的
+    7: 第一輪的 u_prev **取自實際套用回報**，有限且新鮮
+    8: 執行端未失效閂鎖（exec_mode != 3）且 api_applied != False
+  失敗處置: 回傳碼 72 ⇒ 運行器請執行端走受控停止並 exit，**不讓 W-GMPC 上線**
+  u_prev:
+    來源: /coman/applied_cmd（執行端 E2 之後的回報）
+    非零也照實帶出: 不替換成零 —— 加速度框的基準必須是真值
+    拒絕時: "**不給 u_prev** ⇒ 呼叫端拿不到可用基準，只能停"
+  交棒時的 exec_mode:
+    預期值: 1（逾時減速／保持）
+    理由: quiet_s >= max_cmd_age_s 的必然結果，不是異常
+    為什麼要特別擋 3: >
+      失效閂鎖之後，套用回報**仍然有值且仍然新鮮**（執行端會持續回報停止值），
+      所以只核有限性與新鮮度會讓一個已經閂鎖的執行端通過交棒。
+
+與既有握手的組合（已核對）:
+  問題: 交棒時 exec_mode = 1，W-GMPC 節點的設定點握手閘門會不會因此卡在 HOLD
+  結論: 不會
+  依據: >
+    wgmpc_sp_handshake.decide 只對 exec_mode == 3 回 FAILED；
+    exec_mode == 1 不在拒絕條件內。ARMED 需要 ready=1、api_applied、
+    設定點有限、樣本新鮮 —— 逾時路徑下四項都成立（執行端在逾時分支仍回傳
+    命令並呼叫 apply_action，設定點回報 ready=1、api_applied=1）。
+  連帶結果: >
+    前置調姿已建立設定點 ⇒ 閘門首次 decide 即 ARMED，
+    **不經過 INIT**，n_init_cmd = 0。W-GMPC 不需要再送全零握手命令。
+
+啟動鎖定（運行器 ＋ 執行期讀回）:
+  模組: evaluation/wgmpc_stage_a_entry.py
+  離線先核（不啟動 Isaac）: joint_margin 一致、模式、目標的離線預覽
+  執行期讀回（ros2 param get）:
+    scene_truth: true                 # 否則量到的是 blind_approach_cap 的節流
+    geometry: links
+    obstacles / scene_truth_approved: 與**資產算出的**逐項相同
+    freespace_confirmed: false        # 場景裡有櫃體與抽屜
+    安全層 d0/eps/tau/alpha: 若出現在參數裡就必須是原值 0.05/0.03/0.15/2.0
+    mode: solver_drawer
+    joint_margin: 求解器與執行端都必須是 0.05 且彼此一致
+  布林讀回: 不認得的字串**不當成假**，直接中止
+  幾何單一來源: >
+    距離節點的 obstacles／pair_rows／scene_truth_approved 由
+    gen_drawer_obstacle_params.py 產生；運行器裡沒有手抄的設定字串。
+    pair_rows 沿用 run_coman_drawer20.sh 的凍結設定（遠端六連桿）。
+
+六維目標:
+  計算: wgmpc_stage_a_entry.compute_pre_contact_pause（由**當步**抽屜位姿算出）
+  位置: 夾持 TCP 沿世界 −y 後退 0.120 m
+  姿態: R_DES = [[-1,0,0],[0,0,1],[0,1,0]]，以**列優先矩陣**傳入
+  記錄: target.json 含 target_source、stamp_sim_t、wall_utc、抽屜位姿與開度、
+        退讓、夾持 TCP、資產 schema 與名稱
+  核對: check_target 重算並比對，位置與姿態差超過 1e-9 即中止
+  把手隨抽屜移動: 開度一變目標就跟著變 ⇒ **抽屜被推動必須另外標記**，
+                  否則目標跟著跑、紀錄裡看不出有人碰過它
+
+節點端的新增與修正:
+  新增_target_rot: >
+    `--target-rot`（列優先 9 值）。先前節點是 `T_des[:3,:3] = T[:3,:3]`，
+    **只支援位置目標、姿態保持起始值** —— 六維目標無法表達。
+    不給此參數時行為完全不變。
+  驗證: validate_target_rot 核 9 個值、有限、正交（<=1e-9）、行列式 +1
+  修正_target_rot_deg: >
+    該參數先前**宣告了卻從未被讀取**，傳了會靜默無效。改為非零即中止。
+
+場景缺陷修正（本輪發現，**在任何趟次之前**）:
+  缺陷: >
+    E2 模擬**從來沒有把抽屜建出來**。`solver_drawer` 只在場景守衛裡放行
+    `/World/drawer`，但沒有任何程式建立它；而 `drawer_asset.build_usd` 的
+    root 是 `/World/drawer_unit`，在路徑分段比對下
+    `/World/drawer` **不會**匹配 `/World/drawer_unit/...` —— 正是守衛註解
+    自己說的「相似名稱」陷阱。
+  後果（若未修）: >
+    `--mode solver_drawer` 會跑出一個**沒有抽屜**的場景，守衛照樣通過
+    （放行子樹 0 個碰撞體、其他位置 0 個），而距離節點用自己的參數對著
+    **不存在的**抽屜算屏障。趟次會產出看起來正常的數字，卻與真實抽屜無關；
+    靜止基線更會量到「零漂移」——因為沒有東西可以漂。
+  修正:
+    - DRAWER_SUBTREE 改為 '/World/drawer_unit'（與 build_usd 的 root 相同）
+    - solver_drawer 模式在**場景守衛之前**呼叫 build_usd
+    - 讀回核對 drive_stiffness／damping／max_force 皆為 0，非零即中止（碼 14）
+    - 建出來的 root 與放行子樹不符即中止
+    - 新增抽屜剛體視圖（track_contact_forces=True）與開度零點 DY0
+    - log 新增 drawer_opening／drawer_vy／drawer_contact_fx,fy,fz,fmag
+    - drawer_v 與 DY0 **顯式傳入** loop（它們是 main() 的局部變數，
+      直接引用會 NameError —— 與先前 tcp_prim 改成顯式參數同一個理由）
+    - 新增 --init-arm-q（基線要停在階段 A 的起始姿態）
+    - 守衛測試同步更新；並新增一條反例固定「舊常數不匹配新子樹」
+
+抽屜是否被碰動:
+  模組: evaluation/wgmpc_stage_a_drawer_check.py
+  兩個軸**獨立**（不是一條階梯）:
+    位移: 開度超過靜止基線的門檻
+    接觸: PhysX 接觸力合力超過基線噪訊底線，或真值最短距離 <= 接觸門檻
+  措辭界線（**本輪收準**）:
+    超過開度門檻只能說: 抽屜位移超過靜止基線
+    由開度不能推論: 夾爪碰到抽屜、或機器人推了抽屜（都不行）
+    理由: 同一個數值也可能來自求解器數值漂移、接觸以外的擾動，或基線配置差異
+    接觸的依據: 獨立的接觸力／距離證據
+    判定輸出: 兩軸分開報告，合併判定同時說出兩邊，且自帶措辭限制欄位
+  門檻的兩道強制檢查（審閱後補）:
+    一_基線驗收: >
+      門檻產生前必須全部成立：完整觀察（sim_time_s >= 要求時長）、
+      正常收尾（stop_reason == sim_limit）、關鍵讀值完整
+      （讀值失敗步數為 0、開度與接觸力全窗皆有限、取樣筆數 >= 九成）、
+      機器人確實未受命令驅動（cmd_chain.received == 0、integrating 全 0、
+      |base_lin_meas| <= 1e-6）、抽屜為被動件（drive 三項讀回皆 0）。
+      任一項不成立即**拒絕產生門檻**（碼 77），理由落盤。
+      為什麼: >
+        先前運行器只要看到 wb_run.json 就呼叫產生器，而牆鐘逾時那條路徑
+        本來就會請求受控停止並落盤 ⇒ **提早中止的趟次會產生偏低的門檻**，
+        而偏低的門檻會讓階段 A 的任何微小數值都看起來超標。
+      實測: 同一趟截到 10 s，門檻比完整 60 s **低 55.2%**
+      運行器也修: 牆鐘逾時路徑現在直接 exit 79，保留紀錄但**不產生門檻**
+    二_配置綁定: >
+      門檻檔帶**配置指紋**（資產內容 sha256、櫃體擺放、物理步長、開度讀法、
+      資產 schema 與名稱），階段 A 的判定器重算並**逐項比對**，不符即拒用
+      （碼 78），不套用另一趟的門檻。缺任一項視為不符，不以「大概一樣」通融。
+      為什麼用內容雜湊: 改了幾何但檔名不變時，只比檔名會悄悄沿用另一個場景的門檻
+      也擋: 沒有指紋的舊版門檻檔、被拒絕的基線產出的檔
+    三_覆寫受規則約束: >
+      wgmpc_stage_a_baseline_gate.py 在啟動前依規則核對每一個可覆寫參數：
+      起跑溫度**只能調低**（<=42，調到 43 就不啟動）、觀察時長只能加長
+      （>=60）、物理步長必須 0.01、模式必須 solver_drawer、
+      joint_margin 必須 0.05、櫃體位姿必須與階段 A 設定相同、
+      資產必須是規則指定的那一份。不符即不啟動（碼 80）。
+  第二輪審閱補的三道（唯讀複核找到）:
+    四_時間戳涵蓋全窗: >
+      只核筆數不夠。實測反例：筆數 5400/6000（90.0%，過九成）、
+      sim_time_s = 60、收尾 sim_limit，但 log 只到 53.99 s —— 舊版**接受**它。
+      現在另核：第一筆 <= 2 個物理步、最後一筆 >= 要求時長 − 2 個物理步、
+      相鄰最大間隔 <= 5 個物理步、時間戳不得遞減或含非有限值。
+      反例涵蓋：末時間戳 53.99（拒）、59.99（通過，在容差內）、
+      起點 1.0 s（拒）、挖掉 20–25 s（筆數 91.7% 仍拒）、遞減（拒）、NaN（拒）。
+    五_成功訊息段讀錯路徑: >
+      基線腳本的門檻檔讀回用 `<<'EOF'`（分隔符加引號），其中 `$DIR`
+      **不會展開** ⇒ 會去開一個名為字面 "$DIR/..." 的檔案而失敗；
+      而腳本沒有 set -e，失敗之後仍會往下印「基線結束」。
+      已改為以**引數**傳路徑並檢查 PIPESTATUS（失敗即 exit 81）。
+      另加類別級測試：兩支腳本的引用式 heredoc 內文都不得引用 shell 變數；
+      掃描器本身先用刻意造的違規／合法檔驗過才採用。
+    六_非有限值與整數運算: >
+      參數閘門的 min/max 比較對 NaN 一律是 False ⇒ 實測 observe_sim_s=NaN
+      與 start_temp_c=NaN 都曾「零違規」通過。現在數值先核有限（NaN／inf
+      一律拒），且 observe_sim_s／physics_dt_s 必須為正。
+      另外合法的非整數加長（90.5）先前會撞 shell 的 $(( )) 整數運算，
+      而那是在**Isaac 已經起來之後**才發生：牆鐘上限改用浮點安全的算法、
+      在起 Isaac **之前**算好，算不出正整數即 exit 82。
+  門檻來源: >
+    基線趟次（run_wgmpc_stage_a_baseline.sh）依**執行前定版的規則**
+    （wgmpc_stage_a_baseline_rule.yaml）產生 drawer_threshold.json，
+    固定供階段 A 使用，不逐趟重算
+  門檻不給預設值: >
+    滑動關節的數值漂移量取決於質量、阻尼與求解器設定，**沒有量過就不該猜**。
+    `--tol-m` 必須顯式給，或提供只有抽屜、無機器人接觸的基線趟次由它推出
+    噪訊底線並記下來源。兩者都沒有就拒絕下判定（回傳碼 73）。
+  缺資料的處置:
+    缺最短距離紀錄: 只敢說沒被推動，碰到與否**不判定**
+    q_d 全為非有限值: 拒絕（缺少不等於沒被推動）
+
+測試:
+  test_wgmpc_handover: 49/49（覆蓋全部 18 個拒絕碼，含每一條的反例）
+  test_wgmpc_stage_a_entry: 40/40（每一條啟動中止條件都有反例）
+  test_wgmpc_stage_a_baseline_guards: 75/75（六道檢查的反例：10 s 截斷紀錄、
+    不同櫃體位置的門檻檔，以及資產雜湊／schema／名稱／讀法／步長不符、
+    舊版無指紋門檻、被拒絕的基線，加上參數閘門的七種違規）
+  test_wgmpc_stage_a_baseline: 64/64
+  test_wgmpc_stage_a_runner: 47/47（運行器不變量 ＋ 目標姿態驗證 ＋ 抽屜判定）
+  既有測試: >
+    test_scene_truth_occ 32/32、test_cmd_chain_modes 12/12，以及
+    test_wgmpc_endpoint_event／test_setpoint_margin_guard／
+    test_dist_speedup_equivalence／test_pair_exceptions／test_pipeline_pairs／
+    test_solver_safety_parity／test_tight_pair_bound／test_drawer_scene_guard／
+    test_drawer_asset／test_tcp_prim_lookup／test_wb_cmd_chain_e2 全部通過
+  既有失敗（非本輪造成）: >
+    test_wgmpc_wg2_iface 需要 Isaac 才能有權威 u_prev；以 HEAD 版的
+    wgmpc_wg2_node.py 重跑失敗方式完全相同。
+
+尚未成立:
+  - "**尚未實跑 Isaac**。以上都是程式與離線測試；離線通過不等於 Isaac 通過"
+  - 交棒的組合推論（exec_mode=1 不卡握手、n_init_cmd=0）是**讀碼得出的**，
+    還沒有實跑紀錄佐證
+  - 抽屜擾動的門檻還沒有基線趟次可依據；首測時必須顯式給 --tol-m 或先跑基線
+  - 屏障沿途核算仍以每控制週期取樣，尚無步間界（自碰已有）
+  - 運行器本身尚未在有 Isaac 的環境執行過，shell 層只核過語法與不變量

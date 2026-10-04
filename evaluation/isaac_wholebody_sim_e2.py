@@ -75,9 +75,24 @@ ap.add_argument('--wheel-a-max', type=float, default=125.0, help='rad/s²')
 ap.add_argument('--keep-limit-rows', type=int, default=4000,
                 help='存進 wb_run.json 的逐步限制記錄筆數上限')
 # solver_freespace：允許底盤與手臂，另有場景條件把關；**不解除 pregrasp 禁止**
+# ---- 抽屜場景（只在 --mode solver_drawer 使用）----
+ap.add_argument('--drawer-asset', default=os.path.join(
+    WS, 'src/my_omnibot_description/config/drawer_unit.yaml'),
+    help='抽屜資產規格；solver_drawer 模式會由它建出場景')
+ap.add_argument('--drawer-pose', default='0.0,1.45',
+                help='櫃體底面中心的世界位置 x,y')
+# ---- 起始手臂構型（基線趟次要停在階段 A 的起始姿態）----
+ap.add_argument('--init-arm-q', default='',
+                help='六軸起始關節角，逗號分隔；空 = 沿用載入後的值')
+ap.add_argument('--joint-margin', type=float, default=0.0,
+                help='**即將寫入的設定點**要留的限位餘裕（rad）。'
+                     '0 = 只看硬限位（預設，與既有趟次行為相同）。'
+                     '設為求解器的 joint_margin（0.05）時，設定點一旦會越過 '
+                     '「硬限位±0.05」就拒絕寫入並走失效閂鎖。'
+                     '**只保護設定點**；實測關節角因一階遲滯仍須另行觀察。')
 ap.add_argument('--mode', default='base',
                 choices=['base', 'arm', 'sync', 'solver_freespace',
-                         'pregrasp'],
+                         'solver_drawer', 'pregrasp'],
                 help='驗收順序：base → arm → sync → solver_freespace；'
                      'pregrasp 另由 PREGRASP_PRECONDITIONS_MET 禁止')
 # ---- 執行時錄影（模擬器內相機；**不加任何文字、不改場景**）----
@@ -135,6 +150,28 @@ PREGRASP_PRECONDITIONS_MET = False
 #
 # pregrasp 的禁止**完全不受本模式影響**。
 FREESPACE_OWN_SUBTREES = ('/World/omni_bot', '/World/ground')
+# 抽屜模式**額外**放行的子樹；其餘一律照舊擋下。
+# **必須與 drawer_asset.build_usd 的 root 相同**。先前寫 '/World/drawer'，
+# 而 build_usd 建在 '/World/drawer_unit'；路徑分段比對下前者**不會**匹配後者
+# （那正是註解裡說的「相似名稱」陷阱）⇒ 抽屜會被判為場景外物件而中止，
+# 或在沒有人建抽屜時靜默通過一個**沒有抽屜**的場景。
+DRAWER_SUBTREE = '/World/drawer_unit'
+DRAWER_PRIM = DRAWER_SUBTREE + '/drawer'      # 抽屜剛體（開度由它的世界 y 位移算）
+
+
+def _under(path: str, roots) -> bool:
+    """`path` 是否為 `roots` 之一**本身或其子樹**。
+
+    **不能用 startswith**：那會讓 `/World/ground_decoy` 通過
+    `/World/ground` 的比對（既有守衛就有這個漏洞）。
+    以路徑分段比對：相等，或以「根 + '/'」開頭。
+    """
+    p = str(path)
+    for r in roots:
+        r = str(r).rstrip('/')
+        if p == r or p.startswith(r + '/'):
+            return True
+    return False
 
 if a.mode == 'pregrasp' and not PREGRASP_PRECONDITIONS_MET:
     print('[wb] **pregrasp 仍禁止**：輪級限制雖已實作，'
@@ -389,23 +426,70 @@ def main():
     prim = import_urdf(a.urdf, ROBOT, fix_base=False)
     stage = world.stage
     # 與導航版一致：**搜尋 articulation root**，不直接寫死 prim 路徑。
-    if a.mode == 'solver_freespace':
+    # **先建抽屜，再跑場景守衛**：守衛核的是 stage 上實際存在的碰撞體，
+    # 建在守衛之後等於核了一個還沒有抽屜的場景。
+    globals()['DRAWER'] = None
+    if a.mode == 'solver_drawer':
+        sys.path.insert(0, HERE)
+        import drawer_asset as DA
+        _dspec = DA.load(a.drawer_asset)
+        _dpose = tuple(float(v) for v in a.drawer_pose.split(','))
+        _dauth = DA.build_usd(stage, _dspec, _dpose, root=DRAWER_SUBTREE)
+        # **讀回即核**：抽屜不接受任何位置／速度命令是本案例的硬性條件。
+        # 「數值很小」不通融 —— 非零即中止。
+        for _k in ('drive_stiffness', 'drive_damping', 'drive_max_force'):
+            if float(_dauth[_k]) != 0.0:
+                print(f'[wb] **抽屜 {_k} 讀回 {_dauth[_k]} 不為 0，中止**'
+                      f'（抽屜必須是被動件）')
+                return 14
+        if _dauth['root'] != DRAWER_SUBTREE:
+            print(f'[wb] **抽屜 root {_dauth["root"]} 與放行子樹 '
+                  f'{DRAWER_SUBTREE} 不符，中止**')
+            return 14
+        # **配置指紋**：門檻只對「同一份資產、同一個擺放、同一個步長、
+        # 同一套開度讀法」的趟次有效。資產內容雜湊比檔名可靠 —— 改了幾何
+        # 但檔名不變時，只比檔名會悄悄沿用另一個場景的門檻。
+        import hashlib as _hl
+        _asset_bytes = open(a.drawer_asset, 'rb').read()
+        globals()['DRAWER'] = {'authored': _dauth, 'pose_xy': list(_dpose),
+                               'asset': a.drawer_asset,
+                               'asset_sha256': _hl.sha256(_asset_bytes).hexdigest(),
+                               'schema': _dspec.get('schema'),
+                               'name': _dspec.get('name'),
+                               'physics_dt_s': float(a.physics_dt),
+                               'sim_limit_s': float(a.sim_limit)}
+        print(f'[wb] 抽屜已建於 {_dauth["root"]} @ {_dpose}；'
+              f'質量 {_dauth["mass_kg"]} kg、線性阻尼 '
+              f'{_dauth["linear_damping"]}、關節摩擦 '
+              f'{_dauth["joint_friction"]}、drive 三項皆 0（已讀回）、'
+              f'行程 [{_dauth["limit_lower"]}, {_dauth["limit_upper"]}]',
+              flush=True)
+    if a.mode in ('solver_freespace', 'solver_drawer'):
         from pxr import UsdPhysics
         own = tuple(FREESPACE_OWN_SUBTREES)
+        if a.mode == 'solver_drawer':
+            own = own + (DRAWER_SUBTREE,)
         foreign = [str(pr.GetPath()) for pr in Usd.PrimRange.Stage(
             stage, Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
             if pr.HasAPI(UsdPhysics.CollisionAPI)
-            and not str(pr.GetPath()).startswith(own)]
+            and not _under(pr.GetPath(), own)]
         n_own = sum(len(collision_prims(stage, u)) for u in own)
+        _mode_label = ('solver_freespace' if a.mode == 'solver_freespace'
+                       else 'solver_drawer')
         if foreign:
             print(f'[wb] **solver_freespace 場景條件未滿足**：'
                   f'機器人與地面以外有 {len(foreign)} 個碰撞體，'
                   f'例如 {foreign[:3]}。本模式僅適用於自由空間，中止。')
             return 8
-        print(f'[wb] solver_freespace 場景條件已核對（語意檢查，非名稱比對）：'
-              f'機器人與地面共 {n_own} 個碰撞體，其他位置 0 個', flush=True)
+        print(f'[wb] {_mode_label} 場景條件已核對（語意檢查＋路徑分段比對，'
+              f'非 startswith）：放行子樹 {list(own)} 共 {n_own} 個碰撞體，'
+              f'其他位置 0 個', flush=True)
         globals()['FREESPACE_SCENE'] = {
-            'check': 'UsdPhysics.CollisionAPI 於機器人與地面以外',
+            'check': 'UsdPhysics.CollisionAPI 於放行子樹以外',
+            'mode': _mode_label,
+            'match': '路徑分段比對（p == root 或 p.startswith(root + "/")）；'
+                     '**不是** startswith(root) —— 後者會讓 '
+                     '/World/ground_decoy 這類相似名稱通過',
             'own_subtrees': list(own), 'own_colliders': n_own,
             'foreign_colliders': 0}
 
@@ -438,7 +522,21 @@ def main():
         if n_bound == 0:
             print('[wb] **零摩擦綁定數為 0，中止**'); return 8
 
+    # **view 必須在 world.reset() 之前建立**：prepare_contact_sensors 要早於
+    # PhysX 場景建成。isaac_drawer_sim 的註解已載明「reset 之後才建，接觸力
+    # 一律回傳 0（已實測）」；本檔第一版建在 reset 之後且漏了
+    # prepare_contact_sensors，實跑 5999/5999 步讀取失敗。
+    # track_contact_forces 是**獨立的接觸證據**：開度只能說「位移超過靜止基線」，
+    # 不能證明有人碰到它。
+    drawer_v = None
+    if globals().get('DRAWER') is not None:
+        from isaacsim.core.prims import RigidPrim
+        drawer_v = RigidPrim(prim_paths_expr=DRAWER_PRIM, name='drawer_v',
+                             track_contact_forces=True, max_contact_count=128,
+                             prepare_contact_sensors=True)
     world.reset()
+    if drawer_v is not None:
+        drawer_v.initialize()           # **reset 之後**才 initialize
     robot = SingleArticulation(prim_path=ART_ROOT, name='omni_bot')
     robot.initialize()
     idx = {n: k for k, n in enumerate(robot.dof_names)}
@@ -464,17 +562,21 @@ def main():
     tcp_prim = next((pr for pr in Usd.PrimRange.Stage(
         stage, Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
         if pr.GetName() == 'link_tcp'
-        and str(pr.GetPath()).startswith(ROBOT)), None)
+        and _under(pr.GetPath(), (ROBOT,))), None)
     if tcp_prim is None:
         print('[wb] **找不到 link_tcp prim** —— 中止（判準需要它做獨立驗算）')
         return 9
     print(f'[wb] link_tcp prim {tcp_prim.GetPath()}', flush=True)
-    globals()['TCP_PRIM'] = tcp_prim
+    # **顯式傳給 loop**，不再用 globals() 夾帶。
+    # 原寫法是把它塞進模組全域再由 loop 讀取；執行上是通的
+    #（main 先跑、loop 再讀模組全域），但相依關係藏起來了：
+    # loop 若在 main 未走到這一行時被呼叫就會 NameError，
+    # 而靜態檢查也只能報 undefined name。
 
     fp = next((pr for pr in Usd.PrimRange.Stage(
         stage, Usd.TraverseInstanceProxies(Usd.PrimDefaultPredicate))
         if pr.GetName() == 'base_footprint'
-        and str(pr.GetPath()).startswith(ROBOT)), None)
+        and _under(pr.GetPath(), (ROBOT,))), None)
     if fp is None:
         print('[wb] 找不到 base_footprint prim，中止'); return 6
     print(f'[wb] base_footprint prim {fp.GetPath()}', flush=True)
@@ -591,6 +693,16 @@ def main():
         print('[wb] 相機暖機完成', flush=True)
 
     q = robot.get_joint_positions()
+    if a.init_arm_q.strip():
+        _iq = [float(v) for v in a.init_arm_q.split(',')]
+        if len(_iq) != len(ARM):
+            print(f'[wb] **--init-arm-q 需要 {len(ARM)} 個值，收到 {len(_iq)}**')
+            return 15
+        for _k, _j in enumerate(ARM):
+            q[idx[_j]] = _iq[_k]
+        print(f'[wb] 起始手臂構型由 --init-arm-q 指定：'
+              f'{[round(v, 6) for v in _iq]}', flush=True)
+        globals()['INIT_ARM_Q'] = [float(v) for v in _iq]
     kp = np.zeros(robot.num_dof, dtype=np.float32)
     kd = np.zeros(robot.num_dof, dtype=np.float32)
     for j in ARM:
@@ -599,6 +711,19 @@ def main():
     robot.get_articulation_controller().set_gains(kps=kp, kds=kd)
     robot.get_articulation_controller().apply_action(
         ArticulationAction(joint_positions=q))
+
+    # **抽屜開度的零點**：與 isaac_drawer_sim 同一套算法
+    #（opening = DY0 − 當前世界 y），所以兩邊的開度讀數可以直接比。
+    # 取在設定增益之後、進入物理迴圈之前，與階段 A 完全同一時機。
+    DY0 = None
+    if drawer_v is not None:
+        _dp0, _ = drawer_v.get_world_poses()
+        DY0 = float(_dp0[0][1])
+        globals()['DRAWER']['dy0'] = DY0
+        globals()['DRAWER']['opening_formula'] = (
+            'opening = DY0 − drawer_rigid_body_world_y；'
+            'DY0 取於設定增益之後、進入物理迴圈之前（與 isaac_drawer_sim 同式）')
+        print(f'[wb] 抽屜開度零點 DY0 = {DY0:.6f} m', flush=True)
 
     # --- **低速介面界限**（不是輪級限制功能）：越界即整筆中止，不縮命令 ---
     def low_speed_bound(vx, vy, wz):
@@ -618,7 +743,8 @@ def main():
     chain = CmdChainE2(max_cmd_age_s=a.max_cmd_age_s,
                        arm_rate_max=a.arm_rate_max, wheel_ok=low_speed_bound,
                        joint_lower=tuple(LITE6_SAFE.lower),
-                       joint_upper=tuple(LITE6_SAFE.upper), mode=a.mode,
+                       joint_upper=tuple(LITE6_SAFE.upper),
+                       joint_margin=a.joint_margin, mode=a.mode,
                        wheel_cfg=wcfg, keep_limit_rows=a.keep_limit_rows)
     print(f'[wb] **E2 輪級限制**：r={wcfg.wheel_radius} L={wcfg.wheel_base_L} '
           f'w_lim={wcfg.w_lim:.4f} m/s a_lim(dt={a.physics_dt})={wcfg.a_lim(a.physics_dt):.4f} m/s'
@@ -631,7 +757,8 @@ def main():
     ex = SingleThreadedExecutor(); ex.add_node(node)
     th = threading.Thread(target=ex.spin, daemon=True); th.start()
     print('[wb] 進入主迴圈；等待 /wb_vel_cmd', flush=True)
-    return loop(world, robot, idx, chain, node, ex, th, fp)
+    return loop(world, robot, idx, chain, node, ex, th, fp, tcp_prim,
+                drawer_v, DY0)
 
 
 # 三路同步（診斷用）：
@@ -655,11 +782,23 @@ LOG_COLS = ['t', 'recv_seq', 'cmd_age', 'vx_cmd', 'vy_cmd', 'wz_cmd',
             'tcp_x', 'tcp_y', 'tcp_z',
             'tcp_r00', 'tcp_r01', 'tcp_r02',
             'tcp_r10', 'tcp_r11', 'tcp_r12',
-            'tcp_r20', 'tcp_r21', 'tcp_r22'] + [f'{j}_sp' for j in ARM] \
+            'tcp_r20', 'tcp_r21', 'tcp_r22',
+            # 抽屜：**開度與接觸力分開記錄**。
+            # 開度只能支持「位移超過靜止基線」；它**不能**證明夾爪碰到或推了抽屜。
+            # 接觸看 drawer_contact_f_*（PhysX 接觸力合力，與開度相互獨立）。
+            # 非 solver_drawer 模式或讀不到時為 NaN —— NaN 表示**沒有量到**，
+            # 不是「沒有發生」。
+            'drawer_opening', 'drawer_vy',
+            'drawer_contact_fx', 'drawer_contact_fy', 'drawer_contact_fz',
+            'drawer_contact_fmag'] + [f'{j}_sp' for j in ARM] \
     + [f'{j}_act' for j in ARM] + [f'{j}_rate_meas' for j in ARM]
 
 
-def loop(world, robot, idx, chain, node, ex, th, fp):
+# `drawer_v` 與 `DY0` **顯式傳入**，不經 globals()：它們是 main() 的局部變數，
+# 在這裡直接引用會是 NameError（或更糟 —— 撞到某個同名全域而靜默取錯值）。
+# 這與 tcp_prim 改成顯式參數是同一個理由。
+def loop(world, robot, idx, chain, node, ex, th, fp, tcp_prim,
+         drawer_v=None, DY0=None):
     log, stop = [], 'sim_limit'
     STOP_HOLD_STEPS = 100        # 失效後續量 1.0 s，證明停止行為而非直接關掉
     fail_steps = 0
@@ -708,7 +847,7 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         v_phys = np.asarray(robot.get_linear_velocity(), float)
         # 位姿取自 **base_footprint prim 的實際世界變換**，保留完整姿態。
         xc = UsdGeom.XformCache()
-        Mt = xc.GetLocalToWorldTransform(TCP_PRIM)
+        Mt = xc.GetLocalToWorldTransform(tcp_prim)
         tt_t = Mt.ExtractTranslation()
         R3t = np.array([[Mt[r][c] for c in range(3)] for r in range(3)])
         sct = np.linalg.norm(R3t, axis=1)
@@ -934,6 +1073,40 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         if sp is None:
             sp = (float('nan'),) * 6
 
+        # ---- 抽屜：開度、速度、接觸力 ----
+        # 讀不到就留 NaN，**不補零** —— 補零會把「沒量到」偽裝成「沒有接觸」。
+        _dop = _dvy = float('nan')
+        _dcf = [float('nan')] * 3
+        if drawer_v is not None and DY0 is not None:
+            try:
+                _dp, _ = drawer_v.get_world_poses()
+                _dop = DY0 - float(_dp[0][1])
+                _dvy = -float(drawer_v.get_velocities()[0][1])
+            except Exception as _e:
+                node._drawer_read_fail = getattr(
+                    node, '_drawer_read_fail', 0) + 1
+                if getattr(node, '_drawer_read_err', None) is None:
+                    node._drawer_read_err = repr(_e)[:400]
+            try:
+                # **用 get_net_contact_forces，不用 get_contact_force_matrix。**
+                # 後者是「本 view 的剛體 對 指定過濾對象」的力矩陣，需要在
+                # 建構時給 contact_filter_prim_paths_expr；沒給就回傳 size 1
+                #（實測例外：cannot reshape array of size 1 into shape (3)）。
+                # 要問的是「有沒有**任何**東西碰到抽屜」，所以取淨接觸力；
+                # 那也不必列舉機器人每一個連桿（列舉本身很容易漏）。
+                _M = np.asarray(
+                    drawer_v.get_net_contact_forces(dt=dt), dtype=float)
+                _F = _M.reshape(-1, 3).sum(axis=0)
+                _dcf = [float(_F[0]), float(_F[1]), float(_F[2])]
+            except Exception as _e:
+                node._drawer_cf_fail = getattr(node, '_drawer_cf_fail', 0) + 1
+                # **把第一筆例外記下來**。只數次數的話，下一趟還是只能猜
+                #（第一版就是這樣：5999 次失敗而紀錄裡沒有任何原因）。
+                if getattr(node, '_drawer_cf_err', None) is None:
+                    node._drawer_cf_err = repr(_e)[:400]
+        _dcf_mag = (float(math.sqrt(sum(v * v for v in _dcf)))
+                    if all(math.isfinite(v) for v in _dcf) else float('nan'))
+
         log.append([round(t, 4),
                     s.recv_seq if s is not None else -1,
                     round(t - s.recv_sim_t, 4) if s is not None else float('nan'),
@@ -960,6 +1133,8 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
                     (float('nan') if not chain.last_limit
                      else chain.last_limit['wheel_accel_max'])]
                    + tcp_row
+                   + [round(_dop, 9), round(_dvy, 9)]
+                   + [round(v, 9) for v in _dcf] + [round(_dcf_mag, 9)]
                    + [round(float(v), 6) for v in sp]
                    + [round(float(v), 6) for v in qa]
                    + [round(float(v), 6) for v in rate])
@@ -1059,8 +1234,22 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         'limit_rows': chain.limit_rows,
         'limit_mode_codes': {'0': 'normal', '1': 'timeout',
                              '2': 'stop_unverified'},
-        'wheel_level_note': ('輪級正常輸出限制尚未實作；pregrasp 由程式常數'
-                             '無條件禁止，不提供旗標讓使用者自行宣告'),
+        # **2026-10-03 更正**：原字串寫「輪級正常輸出限制尚未實作」，那是從
+        # isaac_wholebody_sim.py（WHEEL_LIMIT_IMPLEMENTED = False）帶過來的，
+        # 在本檔是**錯的** —— 同一個字典裡 wheel_level_limiting_implemented
+        # 已是 True，且 wb_wheel_limit.limit9 確實以 λ 修改完整九維增量。
+        # 那句話誤導過一次判讀，故改為陳述實際政策並保留原文供對照。
+        'wheel_level_note': ('**兩層都在**：wheel_ok（低速介面界限，越界即閂鎖）'
+                             '→ limit9（輪速與輪加速度限制，以 '
+                             'u_out = u_prev + λ(u_req − u_prev) 修改完整九維'
+                             '增量）→ _apply。λ 只保證輪級合規，**不保證**'
+                             '修改後命令在接觸操作中仍安全順暢。'
+                             'pregrasp 由程式常數無條件禁止，'
+                             '不提供旗標讓使用者自行宣告'),
+        'wheel_level_note_superseded': ('輪級正常輸出限制尚未實作；pregrasp 由'
+                                        '程式常數無條件禁止，不提供旗標讓使用者'
+                                        '自行宣告 —— **此句在本檔為誤，'
+                                        '2026-10-03 更正**'),
         'arm_adapter': {
             'kind': 'velocity_integrated_to_position_setpoint',
             'dt_source': 'world.current_time 相鄰物理步差',
@@ -1092,6 +1281,31 @@ def loop(world, robot, idx, chain, node, ex, th, fp):
         'wall_s': time.monotonic() - w0,
         'cpu_temp_start_c': tc0, 'cpu_temp_max_c': temp_max,
         'cpu_temp_source': tsrc, 'cpu_limit_c': 92.0,
+        'drawer': globals().get('DRAWER'),
+        'init_arm_q': globals().get('INIT_ARM_Q'),
+        'drawer_read_fail_steps': getattr(node, '_drawer_read_fail', 0),
+        'drawer_contact_read_fail_steps': getattr(node, '_drawer_cf_fail', 0),
+        'drawer_contact_read_first_error': getattr(node, '_drawer_cf_err', None),
+        'drawer_read_first_error': getattr(node, '_drawer_read_err', None),
+        'drawer_contact_api': {
+            'method': 'RigidPrim.get_net_contact_forces(dt=physics_dt)',
+            'why_not_matrix': ('get_contact_force_matrix 需要建構時給 '
+                               'contact_filter_prim_paths_expr；未給時回傳 '
+                               'size 1（實測 ValueError: cannot reshape '
+                               'array of size 1 into shape (3)）'),
+            'semantics_gap': ('淨接觸力是**合力向量**；本趟未取得接觸點與法向，'
+                              '也未證實它是否含摩擦分量。不以分量投影冒充'
+                              '接觸法向或摩擦力'),
+            'view_order': ('RigidPrim 在 world.reset() **之前**建立並帶 '
+                           'prepare_contact_sensors=True，initialize() 在 '
+                           'reset 之後；順序反了接觸力讀不到'),
+        },
+        'drawer_semantics': {
+            'opening': ('DY0 − 抽屜剛體世界 y；**只能支持「位移超過靜止基線」**，'
+                        '不能證明夾爪碰到或推了抽屜'),
+            'contact': ('drawer_contact_f* 為 PhysX 接觸力合力，'
+                        '與開度**相互獨立**；接觸要看這一組'),
+            'nan': 'NaN 表示**沒有量到**，不是「沒有發生」'},
         'log_cols': LOG_COLS, 'log': log,
     }
     json.dump(out, open(os.path.join(a.out, 'wb_run.json'), 'w'),

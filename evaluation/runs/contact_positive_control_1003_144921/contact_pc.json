@@ -1,0 +1,114 @@
+{
+ "phases": {
+  "before": {
+   "commanded_gap_m": 0.02,
+   "n_steps": 200,
+   "t_span": [
+    0.029999999329447746,
+    2.0199999548494816
+   ],
+   "geom_gap_min_m": 0.019999995231630038,
+   "geom_gap_max_m": 0.019999995231630038,
+   "geom_overlapping_frac": 0.0,
+   "geom_in_contact_frac": 0.0,
+   "net_mag_max_n": 0.0,
+   "net_mag_p50_n": 0.0,
+   "net_finite_frac": 1.0,
+   "pair_mag_max_n": 0.0,
+   "pair_finite_frac": 1.0,
+   "drawer_opening_max_abs_m": 0.0
+  },
+  "press": {
+   "commanded_gap_m": -0.002,
+   "n_steps": 300,
+   "t_span": [
+    2.029999954625964,
+    5.019999887794256
+   ],
+   "geom_gap_min_m": -0.001999959945675589,
+   "geom_gap_max_m": 0.0006537580490140332,
+   "geom_overlapping_frac": 0.0033333333333333335,
+   "geom_in_contact_frac": 1.0,
+   "net_mag_max_n": 1843.258911139002,
+   "net_mag_p50_n": 1607.5904898659214,
+   "net_finite_frac": 1.0,
+   "pair_mag_max_n": 1843.258911139002,
+   "pair_finite_frac": 1.0,
+   "drawer_opening_max_abs_m": 0.0026537179946899414
+  },
+  "after": {
+   "commanded_gap_m": 0.02,
+   "n_steps": 200,
+   "t_span": [
+    5.029999887570739,
+    7.019999843090773
+   ],
+   "geom_gap_min_m": 0.019357457160951348,
+   "geom_gap_max_m": 0.020006909370423983,
+   "geom_overlapping_frac": 0.0,
+   "geom_in_contact_frac": 0.0,
+   "net_mag_max_n": 0.0,
+   "net_mag_p50_n": 0.0,
+   "net_finite_frac": 1.0,
+   "pair_mag_max_n": 0.0,
+   "pair_finite_frac": 1.0,
+   "drawer_opening_max_abs_m": 0.0006425380706787109
+  }
+ },
+ "drawer_authored": {
+  "root": "/World/drawer_unit",
+  "cabinet_prim": "/World/drawer_unit/cabinet",
+  "drawer_prim": "/World/drawer_unit/drawer",
+  "joint_prim": "/World/drawer_unit/drawer_slide",
+  "mass_kg": 2.0,
+  "linear_damping": 2.0,
+  "joint_friction": 0.0,
+  "drive_stiffness": 0.0,
+  "drive_damping": 0.0,
+  "drive_max_force": 0.0,
+  "limit_lower": 0.0,
+  "limit_upper": 0.2199999988079071
+ },
+ "probe": {
+  "prim": "/World/contact_probe",
+  "radius_m": 0.02,
+  "kinematic": true
+ },
+ "bar": {
+  "center_world": [
+   0.0,
+   1.165,
+   0.55
+  ],
+  "radius_m": 0.005
+ },
+ "independent_evidence": "接觸雙方與時刻由**位姿幾何重疊**判定（探針球心到橫桿表面的距離，由兩者位姿與已知幾何算出），**與力訊號無關**",
+ "api": {
+  "net": "RigidPrim.get_net_contact_forces(dt)",
+  "matrix": "RigidPrim.get_contact_force_matrix(dt)（contact_filter_prim_paths_expr 已給）"
+ },
+ "scope": {
+  "can_show": "感測器對**這一組受測接觸**（探針↔抽屜）有反應",
+  "cannot_show": [
+   "不能證明其他情形不會漏：淨合力互相抵銷、極短暫的接觸、以及**未覆蓋的接觸對**仍可能漏掉",
+   "不能回頭替階段 A 既有四趟補出當時沒有記錄的接觸證據"
+  ]
+ },
+ "drawer_motion_evidence": {
+  "before_opening_max_abs_m": 0.0,
+  "press_opening_max_abs_m": 0.0026537179946899414,
+  "after_opening_max_abs_m": 0.0006425380706787109,
+  "note": "press 段抽屜自身的位移是獨立於力訊號的第三條證據；after 段的殘量是被推動後未回彈的部分"
+ },
+ "force_magnitude_caveat": "力的**量級不可當成真實接觸力**：探針是運動學剛體、被強制壓入 2.0 mm，而抽屜受滑動限位約束，所以數值反映的是求解器化解穿透的反作用，不是物理上合理的接觸力。本對照只問**訊號是否響應**，不問量級是否真實。",
+ "verdict": {
+  "phases_valid": true,
+  "phase_problems": [],
+  "force_responded_to_known_contact": true,
+  "force_recovered_after_separation": true,
+  "background_net_max_n": 0.0,
+  "contact_net_max_n": 1843.258911139002,
+  "after_net_max_n": 0.0,
+  "pass": true
+ }
+}

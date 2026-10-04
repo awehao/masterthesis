@@ -58,8 +58,11 @@ def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
         compensate=0.0, comp_mode='pipe', jitter_cycles=0.0,
         seed=0, measure_comp=False, u_prev_mode='applied',
         d_pub_cycles=0.0, comp_state=None, comp_cmd=None,
-        gamma=0.0, deadband_m=0.0, deadband_rad=0.0):
-    """`delay_cycles`：命令從算出到真正套用的延遲（以控制週期計）。
+        gamma=0.0, deadband_m=0.0, deadband_rad=0.0, pre_solve=None):
+    """`T_des` 可以是 4×4 或 `f(t) -> 4×4`（移動目標；預設固定 = 既有行為）。
+    `pre_solve(t, q, cfg)`：每輪求解前呼叫（例如改協同權重）；預設 None。
+
+    `delay_cycles`：命令從算出到真正套用的延遲（以控制週期計）。
 
     實跑量到的端到端延遲 ≈ 1.40 個週期（rec7：發布延遲 0.60 ＋ cmd_age 0.60
     ＋ 一個物理步 0.01 s）。核心的預測模型**沒有這個延遲** ——
@@ -105,7 +108,12 @@ def run(cfg, K, q0, s0, T_des, t_end=60.0, reach_p=0.005, reach_r=0.02,
     pubq = [np.zeros(S.NU)] * max(n_pub, 0)   # 量測→發布的佇列
     rng = np.random.default_rng(seed)
     d_true = []          # 每輪真正的延遲（物理步），供 measure_comp 使用
+    T_fn = T_des if callable(T_des) else None
     while t < t_end:
+        if T_fn is not None:
+            T_des = T_fn(t)
+        if pre_solve is not None:
+            pre_solve(t, q, cfg)
         # **延遲抖動**：rec8 實測端到端在 0.80–1.60 個週期之間擺動
         if jitter_cycles > 0.0:
             n_del_now = max(0, int(round(

@@ -140,3 +140,47 @@ def collision_prims(stage, under: str, name_filter=None):
             continue
         out.append(pr)
     return out
+
+
+def bind_friction(stage, targets, mu_static, mu_dynamic, restitution=0.0,
+                  mat_path='/World/PhysicsMaterials/custom'):
+    """Bind an EXPLICIT friction to the given collision prims.
+
+    Same mechanism as bind_frictionless, but the value is stated rather than
+    zero. Use it where a contact has to be specified rather than inherited:
+    the gripper fingers and the handle bar carry the grasp, and leaving them
+    unbound means the grasp rests on PhysX's default (~0.5), a value that
+    appears in no spec and was never chosen.
+    """
+    from pxr import UsdPhysics, UsdShade, Sdf
+    stage.DefinePrim(Sdf.Path(mat_path).GetParentPath(), 'Scope')
+    mp = stage.DefinePrim(mat_path, 'Material')
+    m = UsdPhysics.MaterialAPI.Apply(mp)
+    m.CreateStaticFrictionAttr().Set(float(mu_static))
+    m.CreateDynamicFrictionAttr().Set(float(mu_dynamic))
+    m.CreateRestitutionAttr().Set(float(restitution))
+    n, skipped = 0, []
+    seen = set()
+    for pr in targets:
+        tgt = pr
+        # An instance proxy cannot be edited. Walk up to the nearest editable
+        # ancestor instead of skipping: a weakerThanDescendants binding there
+        # propagates down to the proxy, which is what the contact needs. The
+        # gripper fingers are exactly this case -- their collision prims sit
+        # inside an instanced reference, so skipping them silently left the
+        # grasp on PhysX's default.
+        while tgt and tgt.IsValid() and tgt.IsInstanceProxy():
+            tgt = tgt.GetParent()
+        if not tgt or not tgt.IsValid():
+            skipped.append(str(pr.GetPath()))
+            continue
+        key = str(tgt.GetPath())
+        if key in seen:
+            n += 1
+            continue
+        UsdShade.MaterialBindingAPI.Apply(tgt).Bind(
+            UsdShade.Material(mp), UsdShade.Tokens.weakerThanDescendants,
+            'physics')
+        seen.add(key)
+        n += 1
+    return n

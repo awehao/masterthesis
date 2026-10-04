@@ -1,0 +1,114 @@
+# 移動段手臂甩動與保持窗極限環的修法與驗證
+# Howard 從遠目標 B 首測的影片指出「手臂瘋狂振動」，本檔是診斷、修法與 Isaac 驗證。
+
+problem:
+  observed_by: Howard（看影片）
+  symptom: 移動段手臂大幅來回甩動
+  measured_far_B_original:      # 趟次 wgmpc_wg2_farB_171109（w_s=w_a=1e-3）
+    tcp_path_over_net: 2.046
+    arm_cmd_sign_flip_rate: 0.372
+    arm_cmd_travel_over_p2p: [41.9, 64.1, 48.8, 47.5, 63.7, 43.2]
+    cycles_error_increased: 0.213
+    wasted_backtrack_frac: 0.135
+    sqp_no_progress_frac: 0.282
+    sqp_iter_p50: 9
+
+root_cause:
+  finding: 成本函數裡命令**變化率**權重對手臂嚴重不足
+  mechanism: >
+    S = w_s / vmax² · I，**以各軸自己的速度框正規化**。
+    底盤 vmax = 0.035255 m/s ⇒ w_s=1e-3 的等效權重是 0.805；
+    手臂 vmax = 0.9999 rad/s ⇒ 等效權重只有 0.001。
+    **底盤的變化率懲罰本來就是手臂的 800 倍** —— 所以底盤一直平順、
+    手臂一直在甩。對 0.8 m 誤差，任務項是 50×0.8² = 32／步，
+    手臂滿框跳變只罰 1e-3×2² = 4e-3，差四個數量級。
+  aggravating_factor: >
+    手臂雅可比在整個移動段接近奇異（條件數 p50 3349、最小奇異值 0.0005，
+    伸長只有上限的 55% ⇒ 是內部奇異不是工作空間邊界）。
+    命令有 p50 17.6%、p90 80% 的能量落在近零奇異方向，
+    那些方向幾乎不影響 TCP，於是甩動不花任務成本。
+  hypothesis_rejected: >
+    曾猜「目標超出視界可及範圍」導致不收斂（視界 0.25 s 只能消 134 mm，
+    起始誤差 806 mm）。**資料不支持**：誤差仍在視界外時 no_progress 20.8%，
+    降到視界可及之後反而升到 41.2%，方向相反。已收回。
+
+fix:
+  change: 把變化率權重**分成底盤與手臂兩半**，只提手臂那一半
+  code:
+    - "src/ammr_wholebody_mpc/.../wgmpc_core.py：WGMPCConfig 新增
+       w_s_base / w_s_arm（預設 None = 沿用 w_s ⇒ **不傳就與既有完全相同**），
+       S() 依兩者組對角"
+    - "evaluation/wgmpc_wg2_node.py：新增 --w-s / --w-a / --w-s-arm / --w-s-base，
+       預設皆為既有值"
+    - "evaluation/run_wgmpc_wg2_free.sh：新增 W_S / W_A / W_S_ARM 環境變數"
+  selected_values:
+    w_s_base: 0.001      # 不變（等效 0.805，本來就夠）
+    w_s_arm: 0.05        # 既有 0.001
+    w_a: 0.05            # 既有 0.001；把 SQP 的 no_progress 壓到 0
+  why_not_global_w_s: >
+    全域提到 0.1 也能修甩動，但會把底盤一起壓慢：遠目標保持窗誤差 p50
+    由 0.70 升到 1.66 mm、保持窗 TCP 路徑由 5.09 升到 15.45 mm。
+    只提手臂那一半兩者都避免了。
+
+offline_selection:
+  harness: evaluation/wgmpc_closed_loop_sim.py（新增 rec['n_sqp'] / rec['sqp_stop']）
+  reproduces_isaac: >
+    離線 vs 實跑：路徑比 1.740/2.116、翻號率 42.2%/37.2%、貼框 17.1%/17.7%、
+    no_progress 108 筆/102 筆、觸頂 52.4%/46.7% ⇒ 可用於迭代。
+    **但保持窗的重現較差**（離線 7.88 mm vs 實跑 14.62 mm），
+    保持窗的調整不可只靠離線。
+  sweeps_run: [w_s 五個數量級, w_s 細掃, γ 0/1 對照, w_a, 延遲補償,
+               延遲 0.8–1.6 變動, 抖動, 五個不同目標, 底盤/手臂分開]
+  robustness_9_pairs:          # 舊 vs 新（全域 0.1 版）的 p50
+    tcp_path_over_net: [1.740, 1.042]
+    arm_flip_rate: [0.422, 0.192]
+    sqp_no_progress: [0.334, 0.103]
+    hold_tcp_path_mm: [51.645, 7.891]
+    reach_time_s: [16.550, 14.050]
+    final_err_mm: [1.145, 0.181]
+    hold_success: ['8/9', '9/9']
+  note_delay_1p6: 延遲 1.6/1.0 時**舊設定保持失敗、新設定仍成功**
+
+isaac_verification:            # 四趟實跑，皆到達並保持、封存完整
+  transit:
+    far_original:  {run: wgmpc_wg2_farB_171109,  path_ratio: 2.046, flip: 0.372,
+                    err_inc: 0.213, wasted: 0.135, no_progress: 0.282, sqp_p50: 9}
+    far_final:     {run: wgmpc_wg2_farB_v2_181023, path_ratio: 1.032, flip: 0.124,
+                    err_inc: 0.021, wasted: 0.000, no_progress: 0.000, sqp_p50: 4}
+    near_final:    {run: wgmpc_wg2_near_v2_181333, path_ratio: 1.027, flip: 0.025,
+                    err_inc: 0.061, wasted: 0.000, no_progress: 0.000, sqp_p50: 4}
+  hold_window:                 # 週期 / acf / 命令RMS / TCP路徑mm / 路徑比 / 4-7Hz / 誤差p50 mm
+    near_original: [4, 0.81, 0.2740, 51.66, 18.49, 0.1200, 0.94]
+    near_final:    [2, 0.33, 0.0030,  3.50,  1.03, 0.0001, 0.12]
+    far_original:  [2, 0.17, 0.0081,  5.09,  1.28, 0.0077, 0.70]
+    far_final:     [2, 0.47, 0.0009,  4.55,  1.02, 0.0000, 0.77]
+  headline: >
+    近目標的 5 Hz 極限環（我先前花很多篇幅診斷的那個）也一併解決：
+    命令 RMS 降 91 倍、4–7 Hz 頻帶降 1200 倍、保持窗 TCP 路徑降 14.8 倍、
+    路徑/淨位移 18.49 -> 1.03（純單向沉降，沒有來回）。
+
+criterion_C_retired:
+  what_it_asked: 移動期間底盤與手臂「同時在動」>= 80%
+  why_wrong: >
+    一支在速度框之間甩的手臂完全滿足它。原設定通過 99%、修好後只有 19%，
+    但**兩趟的手臂貢獻完全一樣**：手臂都在移動段前 16–17% 由伸長 0.111 m
+    伸到 0.458 m，貢獻 0.36 m 的 TCP 位移（佔 0.80 m 的 45%），
+    之後保持。C 量到的是甩動，不是協同。
+  replacement: C2（TCP 路徑/淨位移、命令翻號率、誤差單調性、SQP 收斂）
+  note: C2 的 TCP 速度原本除以固定 0.05 s，遇到 0.25 s 的漏槽會灌水 5 倍
+        （曾報出 1535 mm/s 的假峰值）；已改成除以實際間隔並另算 100 Hz 物理步。
+
+limits:
+  - 這是**自由空間、無接觸**的結果；接觸式操作未驗證。
+  - 保持窗的離線重現較差，相關結論以 Isaac 實跑為準。
+  - 每個設定各只跑一趟 Isaac；趟間變異未估。
+  - 近目標仍殘留週期 2（10 Hz）成分，但振幅已小到命令 RMS 0.0030 rad/s。
+  - 熱：四趟 CPU 峰值 88.4–91.0 °C，中止線 92.0。**近目標那趟只剩 1.0 °C 餘裕**；
+    連續跑趟次前要先降溫。未調整中止線。
+
+artifacts:
+  runs: [wgmpc_wg2_farB_171109, wgmpc_wg2_farB_ws_174800, wgmpc_wg2_farB_fix_175944,
+         wgmpc_wg2_near_fix_180210, wgmpc_wg2_farB_v2_181023, wgmpc_wg2_near_v2_181333]
+  video: evaluation/runs/wgmpc_wg2_farB_v2_181023/video.mp4
+  video_3x: evaluation/runs/wgmpc_wg2_farB_v2_181023/video_3x.mp4
+  verdict: evaluation/wgmpc_wg2_farB_verdict.py

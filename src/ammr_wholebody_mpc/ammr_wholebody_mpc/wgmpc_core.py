@@ -207,6 +207,17 @@ class WGMPCConfig:
     # 變化率權重可分底盤／手臂；None = 沿用 w_s（預設，行為不變）
     w_s_base: float | None = None
     w_s_arm: float | None = None
+    # **整機協同（移動中操作）**——兩項皆預設關閉（權重 0），行為與既有完全相同。
+    # 僅增廣核心（wgmpc_core_sp）實作；本核心見到非零值會拒絕求解。
+    #   底盤參考速度：w_vref·Σ_k Σ_i ((u_k,i − v_ref,i)/vmax_i)²，i ∈ 底盤三軸，
+    #     v_ref 為**本體座標**。讓底盤照外部給的剖面持續移動，TCP 由手臂補償。
+    #   手臂名目姿態：w_qn·Σ_k ‖q_arm,k − q_nom‖²（rad²）。手臂吸收短期的
+    #     差異，長期位移由底盤承擔 —— 少了它，手臂只要比底盤便宜就會一路
+    #     伸到關節餘量。
+    w_vref: float = 0.0
+    base_vref: tuple | None = None
+    w_qn: float = 0.0
+    arm_q_nom: tuple | None = None
     Qf_scale: float = 5.0
     # 速度框（逐軸）——  L1
     v_base_lin: float = 0.035255
@@ -504,6 +515,9 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
 
     SQP 的五種結果分開回報，**固定跑完 n_sqp 不代表收斂**。
     """
+    if cfg.w_vref != 0.0 or cfg.w_qn != 0.0:
+        raise ValueError('整機協同項（w_vref／w_qn）只在增廣核心 '
+                         'wgmpc_core_sp 實作；本核心不靜默忽略')
     t_all = time.monotonic()
     N, dt = cfg.N, cfg.dt
     q0 = np.asarray(q0, float)

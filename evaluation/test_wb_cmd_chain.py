@@ -208,7 +208,20 @@ check('關節集合不同 ⇒ 拒絕', not ok and '集合不同' in (why or ''),
 print('N 消費端節點可設定，預設仍為 Gazebo 控制器')
 check('預設常數為 /lite6_vel_controller',
       "CTRL_DEFAULT = '/lite6_vel_controller'" in _src)
-check('Adapter 接受 ctrl 參數', 'def __init__(self, ctrl=CTRL_DEFAULT)' in _src)
+# **改為核簽名本身**，不比字面字串：原斷言寫死
+# `def __init__(self, ctrl=CTRL_DEFAULT)`，在加入 cmd_env 參數後就失配，
+# 而 ctrl 參數其實一直都在。這是斷言太脆，不是功能退化。
+import ast as _ast
+_ini = next((n for n in _ast.walk(_ast.parse(_src))
+             if isinstance(n, _ast.FunctionDef) and n.name == '__init__'
+             and any(a.arg == 'ctrl' for a in n.args.args)), None)
+check('Adapter 接受 ctrl 參數且預設為 CTRL_DEFAULT',
+      _ini is not None
+      and [a.arg for a in _ini.args.args][1] == 'ctrl'
+      and isinstance(_ini.args.defaults[0], _ast.Name)
+      and _ini.args.defaults[0].id == 'CTRL_DEFAULT',
+      None if _ini is None else
+      f'簽名 ({", ".join(a.arg for a in _ini.args.args)})')
 check('查詢路徑用 self.ctrl', "f'{self.ctrl}/get_parameters'" in _src)
 check('新增 --consumer-node 旗標', "'--consumer-node'" in _src)
 check('order_ok 為假時仍拒絕轉送',

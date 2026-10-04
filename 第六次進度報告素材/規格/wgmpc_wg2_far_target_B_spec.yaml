@@ -1,0 +1,204 @@
+# WG2 第一個遠目標實測：候選 B
+# 本檔在實跑**之前**寫定判準。候選 A 的可行性預覽另存
+# evaluation/results/wgmpc_wg2_far_target_spec.yaml，原樣保留、不被本檔取代。
+# 重現：python3 evaluation/wgmpc_wg2_target_select.py --target 1.0 0.0 0.45
+
+purpose: >
+  檢驗 W-GMPC 在**底盤必須移動**時，能否讓底盤與手臂協同到達並保持。
+  選 B 而非 A 的理由：B 超出**已認證**的固定底盤可達上界；A 目前只有搜尋
+  結果支持不可達。離線到達時間多約 2.75 s，不足以構成改選 A 的熱負載證據。
+
+target:
+  world_m: [1.0000, 0.0000, 0.4500]
+  radius_xy_m: 1.000000
+  node_arg: "--target 1.0 0.0 0.45"      # **絕對**座標；不用 --target-offset，
+                                          # 避免結果相依於實測起始 TCP
+  recorder_marker: "1.00000,0.00000,0.45000"   # 取代 run_wgmpc_wg2_free.sh 的 REC_TARGET
+
+# ---------------- 可達上界：兩種都列，取緊者 ----------------
+reach_bounds:
+  searched_max_m: 0.699970                # 搜尋最大值，**不是上界**，不可用於宣稱
+  certified:
+    branch_and_bound:
+      ub_m: 0.8397932226511468            # **採用此值**（較緊）
+      applies_to: 任意 z（未加 z 限制）
+      lower_bound_found_m: 0.6999704990308643
+      gap_m: 0.1398
+      n_cells_expanded: 1979910
+      stopped_by: 540 s 時間上限（非收斂）
+      method: >
+        對關節箱做分枝定界。每個 cell：max r <= r(中心) + Σ hᵢ·Lᵢ，
+        Lᵢ 取關節 i **下游**固定平移長度和
+        [0.58997, 0.58997, 0.38977, 0.14610, 0.14610, 0.08360]，
+        因 |∂p/∂qᵢ| = |ωᵢ × (p − pᵢ)| <= |p − pᵢ| <= Lᵢ。
+        依最大 hᵢ·Lᵢ 的維度二分，以已找到的最佳值剪枝。
+        中止時取堆頂的上界為全域上界（其餘 cell 的界皆不大於它）。
+    triangle_inequality:
+      ub_any_z_m: 0.9434704990350699
+      ub_at_z_0.45_m: 0.9347870
+      method: Σ|tᵢ| = 0.8334704990350699，底座水平偏移 0.110、高 0.330（恆定）
+
+# ---------------- 離線閉迴路（可行性預覽，非驗證） ----------------
+offline_preview:
+  settings: 與實跑同組 —— 延遲 D_cmd 1.0 / D_pub 0.6、補償 1.6/1.0、γ=1.0
+  reached_held: true
+  t_reach_s: 15.70
+  n_cycles: 355
+  n_solver_fail: 0
+  terminal_base_xy_yaw: [0.4971, -0.2294, 0.4290]
+  # **三個量不同，判準只認第一個**（見 acceptance.B_base_participation.measurement）
+  base_net_displacement_at_t_eval_m: 0.5448   # t_eval = 第 314 輪，sim 15.70 s
+  base_net_displacement_at_end_m: 0.5476      # 相差 2.8 mm，**非判準值**
+  base_path_length_m: 0.5779                  # 與淨位移差 33.1 mm，**非判準值**
+  margin_over_certified_lower_bound_m: 0.3896 # 0.5448 − 0.155207
+  terminal_arm_rad: [-0.0002, 1.5189, 2.7781, 0.0015, 1.2594, 0.4276]
+  path_checks:
+    joint_margin_min_rad: 0.0098          # j3，**出現在起始構型**，非本目標造成
+    base_translation_margin_m: 2.003
+    wheel_speed_max_mps: 0.0842           # 上限 0.2775
+    floor_clearance_min_m: 0.400          # 連桿**原點**，非網格
+    base_cylinder_tested: false           # 從未觸發 ⇒ **未測，不是通過**
+  simultaneity:
+    both_moving_frac: 1.00
+    base_axis_saturated_frac: 0.42
+    arm_saturated_frac: 0.17
+    arm_cmd_frac_of_box: {p50: 0.44, iqr: [0.21, 0.66]}
+
+# ---------------- 實跑驗收條件（事前寫定，四項各自判定） ----------------
+acceptance:
+  A_reach_and_hold:
+    metric: 以**實測狀態**的 FK 誤差判定（不用核心預測）
+    threshold: 位置 <= 0.005 m 且姿態 <= 0.02 rad，連續 >= 2.0 s 模擬時間
+    independent_check: 另由 sim/wb_run.json 的物理步重算，步數 >= 200
+    verdict: 二分
+
+  B_base_participation:                   # **與 C 分開判**
+    measurement:                          # **量測定義要精確，否則數字不可比**
+      quantity: 底盤**淨位移**（兩點之間的直線距離），不是路徑長
+      t_ref: 任務起始的底盤位姿 —— wg2_out.json 的 start_q[:2]
+      t_eval: >
+        **TCP 進入容差的那一個物理步**（即開始持續 >= 2.0 s 保持的那一步），
+        由 sim/wb_run.json 以該步的 base_x / base_y 讀出。
+      formula: disp = hypot(base_x(t_eval) − start_q[0], base_y(t_eval) − start_q[1])
+      forbidden:
+        - 以整段底盤路徑長代入（離線 B 為 0.5779 m，淨位移才 0.5476 m，兩者不同）
+        - 以其他時刻的終點值代入（例如趟次結束時的位姿）
+    certified_lower_bound_exact_m: 0.160207      # = 1.000000 − 0.839793
+    certified_lower_bound_with_tol_m: 0.155207   # = (1.000000 − 0.005) − 0.839793
+    threshold: 實測淨位移 >= 0.155207 m          # **恰好等於下界不算違反**
+    interpretation:
+      - 位移 >= 0.160207 ⇒ 與「精確到達」的必要條件一致
+      - 0.155207 <= 位移 < 0.160207 且 TCP 在容差內 ⇒ **不是矛盾**；
+        容許 5 mm 位置誤差後 TCP 水平半徑最低可到 0.995 m，必要位移隨之下降
+      - 位移 **恰好等於** 0.155207 ⇒ 仍在必要條件之內，**不是矛盾**
+      - 位移 < 0.155207 − δ ⇒ **啟動幾何不一致調查**（不是直接宣告矛盾）
+    delta_definition: >
+      δ = 紀錄與模型的數值誤差上限，須在趟後**明確報出**，不得預設為零：
+        (a) sim log 的 base_x / base_y 以 1e-6 m 紀錄
+        (b) 可認證上界本身的浮點誤差（分枝定界已加 1e-9 保守項）
+        (c) **Isaac 回報的 TCP 與節點 FK 的差異** —— 這一項趟前未知，
+            由本趟實測（見 observation_items.model_sync），通常是 δ 的主項
+      只有當位移低於下界**且差距超過 δ** 時，才代表幾何或模型有問題。
+    relation_to_A: >
+      A 與 B **分開量測、分開回報**。但在幾何模型正確的前提下，
+      A 通過（TCP 進入容差）會對 B 施加上述必要下界。
+      因此「A 通過、B 低於下界且超過 δ」的組合，指向**幾何模型不符**
+      （URDF 與 Isaac 資產、TCP 連桿定義、或座標系），
+      而不是機器人以其他方式達成任務。
+    also_report: [t_eval 的物理步序與模擬時刻, 底盤淨位移, 底盤路徑長,
+                  終端底盤位姿, 底盤逐軸飽和比例, δ 的三個來源各自的量值]
+    traceability: >
+      以較鬆的三角不等式界計算會得到 0.065213（精確）／0.059501
+      （容 5 mm，取容差球內最鬆的 z=0.445）。此處採用較緊的分枝定界界。
+    verdict: 二分（以 >= 判定）＋ 低於下界時另記 δ 與調查結論
+
+  C_simultaneous_motion:                  # **與 B 分開判**
+    definition: >
+      移動期間（起跑到首次進入容差）每個控制週期，若
+      hypot(vx,vy)/v_base_lin > 0.05 **且** max|手臂速率|/v_arm > 0.05
+      即計為「同時運動」。
+    threshold: 同時運動週期比例 >= 0.80
+    also_report: [底盤逐軸飽和比例, 手臂飽和比例, 手臂命令佔框 p50 與 IQR]
+    caveat: >
+      「同時運動」不等於「非瑣碎的分配」。離線底盤有 42% 的時間逐軸飽和；
+      飽和期間是「底盤全速、手臂補其餘」，要照實說明。
+    verdict: 二分 + 描述
+
+  D_hold_window_vibration:
+    metric: 以 evaluation/wgmpc_wg2_hold_vibration.py 同一支程式計算
+    report: [保持窗 TCP 路徑長 mm, 各關節套用速率的 4–7 Hz 頻帶振幅,
+             整形前命令的自相關週期與峰值, 底盤位姿 p2p]
+    threshold: "**不設通過門檻**"
+    why: >
+      保持振動尚未解決，且本目標的終端手臂構型與近目標基準差異很大
+      （基準終端接近起始構型；本目標為 j2 1.52 / j3 2.78 / j5 1.26），
+      雅可比與姿態都不同 ⇒ 不能逐項對比。
+      **換了遠目標不代表振動已解決**；保持窗的可見振動仍須如實呈現。
+
+observation_items:                        # 首測**觀察項**，不作通過與否的判定
+  j3_start_margin:
+    fact: >
+      18 趟起始手臂關節角完全相同（全距 0.0）。USD 未設 physics:position ⇒
+      關節為零位。j3 限位不對稱 [-0.061087, +2.935644]，零位離硬下界僅
+      0.061 rad，扣掉求解器 joint_margin=0.05 後只剩 0.0099 rad 可往負走。
+    status: 每一趟都相同（含已到達保持的基準趟），非本目標引入
+    watch: 首測時記錄 j3 是否貼住該界、以及 joint_position 限制是否活躍
+  mesh_collision:
+    fact: >
+      離線只核到連桿**原點**的離地高度與底盤圓柱距離；底盤圓柱那一項
+      在離線路徑上從未觸發 ⇒ **未測，不是通過**。
+    watch: 由 Isaac 的接觸回報確認網格層級無碰撞
+  model_sync:
+    why: δ 的主項，且是 B 低於下界時的首要懷疑對象
+    watch: >
+      逐步比對 sim/wb_run.json 的 tcp_x/y/z（Isaac 讀回的 link_tcp 世界位姿）
+      與節點以同一時刻 q 算出的 FK。報出最大差與 p50；
+      這個差就是 δ 的 (c) 項。
+
+what_this_run_can_support:
+  if_pass_A: 自由空間**全身到達**（底盤必須移動的情形下到達並保持）
+  explicitly_not:
+    - 保持振動已解決
+    - 振動優於近目標基準（終端構型不同，不可比）
+    - 接觸式操作或抽屜任務
+
+limits:
+  - 離線通過**不等於** Isaac 會通過（與 wgmpc_closed_loop_sim 同一條界線）。
+  - 分枝定界在 540 s 時間上限中止，不是收斂；0.839793 仍是**有效上界**，
+    但不是最緊的可達上界（間隙 0.1398）。
+  - "`solve_in` 供趟後重播核對求解輸入；它本身沒有解決振動。"
+  - 分枝定界雖在時間上限中止，未展開的 cell 都保有有效上界（堆頂為全域上界）
+    ⇒ 0.839793 m 可用作認證上界；它不是最緊的界。
+
+framing:                        # **近目標的鏡位框不下遠目標**，必須改
+  why: >
+    以離線預覽軌跡逐連桿取包絡，現有 REC_AT/REC_EYE 在 vFOV 24° 下
+    垂直佔 148% ⇒ 框不下。
+  envelope_lo: [-0.455, -0.703, 0.000]      # PAD 0.20（近目標用 0.12；
+  envelope_hi: [1.268, 0.455, 0.998]        #  實跑軌跡可能與離線預覽不同）
+  envelope_source: 離線預覽軌跡（每 5 輪取樣）逐連桿 FK ＋ 目標點
+  REC_AT: "0.4065,-0.1240,0.4988"
+  REC_EYE: "3.3072,-4.4282,2.4639"
+  distance_m: 5.55
+  fov_check: {vfov_24: {h: 0.58, v: 0.89}, vfov_26: {h: 0.54, v: 0.82},
+              vfov_27p6: {h: 0.50, v: 0.77}}
+  robot_size_in_frame: >
+    底盤直徑 0.6 m 在 5.55 m 處張角 6.2°，vFOV 24° 下約 186/720 像素
+    （近目標那趟是 367/720）。場景跨度由 ~1.0 m 變成 1.72 m，
+    機器人變小是必然；本片要看的是底盤與手臂在 1.7 m 跨度上的協同。
+
+pre_launch:
+  static_check: python3 evaluation/wgmpc_wg2_entry_check.py   # 不開 Isaac、不用 GPU
+  env_for_run: |
+    ABS_TARGET="1.0 0.0 0.45" \
+    REC_TARGET="1.00000,0.00000,0.45000" \
+    REC_AT="0.4065,-0.1240,0.4988" \
+    REC_EYE="3.3072,-4.4282,2.4639" \
+    bash evaluation/run_wgmpc_wg2_free.sh
+  before_opening_isaac: 確認電源已插、人在機旁
+
+artifacts:
+  selector: evaluation/wgmpc_wg2_target_select.py
+  candidate_A_preview: evaluation/results/wgmpc_wg2_far_target_spec.yaml
+  baseline_vibration: evaluation/results/wgmpc_wg2_hold_oscillation.yaml
+  replay: evaluation/results/wgmpc_wg2_replay_outcome.yaml

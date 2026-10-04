@@ -10,10 +10,12 @@ import argparse
 import json
 import os
 import signal
+import threading
 import sys
 import time
 
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
 
@@ -30,9 +32,11 @@ class Rec(Node):
         self.n = {k: 0 for k in ENV.STAGE_NAME}
         self.n_bad = 0
         for sid, topic in ENV.TOPIC.items():
+            # **佇列深度**：四個話題各約 20 Hz。深度 100 在高負載時仍會溢位
+            # （實測：缺漏週期的牆鐘是正常週期的 2.18 倍），加大到 2000。
             self.create_subscription(
                 Float64MultiArray, topic,
-                (lambda m, _s=sid: self._on(m, _s)), 100)
+                (lambda m, _s=sid: self._on(m, _s)), 2000)
         self.f.write(json.dumps({'type': 'header',
                                  **ENV.describe()}, ensure_ascii=False) + '\n')
 
@@ -83,13 +87,27 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _sig)
     signal.signal(signal.SIGINT, _sig)
     t0 = time.monotonic()
+    # **在獨立執行緒持續 spin**。先前主迴圈是 `spin_once(timeout_sec=0.05)`，
+    # 而 spin_once **每次只處理一個回呼** —— 四個話題合計約 80 msg/s，
+    # 高負載時主迴圈被餓到就溢位丟訊息（實測漏錄集中在週期牆鐘 2.18 倍的
+    # 時段，與命令幅度無關 ⇒ 是負載不是振盪）。
+    # 改成執行緒持續 spin，主執行緒只等停止訊號；受控結束仍由 stop 旗標與
+    # finally 保證，summary 照寫。
+    ex = SingleThreadedExecutor()
+    ex.add_node(nd)
+    th = threading.Thread(target=ex.spin, daemon=True)
+    th.start()
     try:
         while (rclpy.ok() and not stop['v']
                and (a.run_s <= 0 or time.monotonic() - t0 < a.run_s)):
-            rclpy.spin_once(nd, timeout_sec=0.05)
+            time.sleep(0.02)
     except KeyboardInterrupt:
         pass
     finally:
+        # 先停 executor 並等回呼執行緒收工，**再**關檔，
+        # 否則關檔後仍可能有回呼要寫。
+        ex.shutdown()
+        th.join(timeout=3.0)
         nd.close()
         nd.destroy_node()
         rclpy.try_shutdown()

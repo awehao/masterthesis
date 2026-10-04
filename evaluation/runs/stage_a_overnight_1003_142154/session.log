@@ -1,0 +1,445 @@
+[14:21:54] === 階段 A 夜間工作計畫 SESSION=stage_a_overnight_1003_142154 domain=71 ===
+[14:21:54] 預算 牆鐘 86400s、Isaac 啟動上限 **已撤銷**
+[14:21:54] 趟次間降溫門檻 70°C（上限等 1200s）；92°C 中止線不動
+[14:21:54] 門檻檔 wgmpc_stage_a_baseline_long120_020143/drawer_threshold.json
+[14:21:54] **控制權重／視界／目標／退距／幾何／限位／驗收門檻固定；92°C 熱中止線保留**
+[14:21:54] [階段 1] 入口核對與殘留清理（**不重跑靜止基線**）
+[14:21:54]   殘留程序清理：0 個
+  threshold: {'file': 'evaluation/runs/wgmpc_stage_a_baseline_long120_020143/drawer_threshold.json', 'opening_tol_m': 1e-09, 'contact_tol_n': 1e-09, 'fingerprint_matches_asset_and_pose': True}
+  target: {'tcp_world': [0.0, 1.0597, 0.55], 'backoff_m': 0.12, 'R_des_rowmajor': [-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0]}
+  margin_and_mode: {'solver': 0.05, 'endpoint': 0.05, 'mode': 'solver_drawer'}
+  distance_node_params: {'n_obstacles': 14, 'n_approved': 14, 'pair_rows': ['link4:*', 'link5:*', 'link6:*', 'uflite_finger1:*', 'uflite_finger2:*', 'uflite_gripper_link:*'], 'scene_truth': True}
+  config_vs_runner: {'n_compared': 17, 'all_match': True}
+  handover_config: {'quiet_s': 0.4, 'max_cmd_age_s': 0.2, 'u_prev': '取自實際套用回報；**不傳 --assume-initial-rest**'}
+  files: {'all_present': True, 'n_checked': 11}
+  installed_matches_src: {'n_modules': 29, 'all_match': True, 'scene_truth_declared_in_installed': True}
+  scene_ready_marker: {'ready_marker': '[wb] articulation root', 'false_match_removed': True}
+  入口核對全部通過
+[14:21:54]   入口核對通過
+[14:21:54] [階段 2] 一趟不錄影的階段 A
+[14:21:54]   降溫完成 42.875°C <= 70°C（等了 0s）
+[14:21:54] ── 趟次 r1（錄影=0，第 1/0 次啟動，剩 86400s）
+[14:21:55] === 階段 A RUN_ID=stage_a_overnight_1003_142154_r1 domain=71 ===
+[14:21:55] 起跑前 CPU 43.375  來源 hwmon:k10temp
+[14:21:55] **成果判定從 W-GMPC 接管後的協同接近開始**；前置調姿是準備動作
+[14:21:55] 抽屜 位姿=0.0,1.45 開度=0.0 模型=drawer_unit；退讓=0.120
+[14:21:55] **抽屜位姿取真值 —— 這是階段假設，成果必須標明**
+[14:21:55] [0/9] 離線前提核對（不啟動 Isaac）
+  求解器與執行端 joint_margin 一致：0.05 == 0.05
+  模式 solver_drawer 已核
+  接觸前暫停位姿（離線預覽，位姿 (0.0, 1.45) 開度 0.0 退讓 0.120）[0.0, 1.0597, 0.55]
+[14:21:55]   距離節點參數已由 gen_drawer_obstacle_params.py 產生
+[14:21:55]   （幾何單一來源，8 個引數，逐引數傳遞不經 eval）
+啟動配置已落盤 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r1/run_config.json
+[14:21:55]   程式版本已保存 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r1/code_versions.txt
+[14:21:55]   錄影：**關閉**
+[14:21:55] [1/9] 起 Isaac 執行端（--mode solver_drawer，**場景含抽屜**）
+[14:21:55]   起 isaac PID=49200
+[14:21:55]   等 Isaac 建好場景（最多 240 s；標記 '[wb] articulation root'）
+[14:22:03]   場景已建起：[wb] articulation root /World/omni_bot/Geometry/base_footprint（剛體 107）
+[14:22:03] [2/9] 等 /clock 前進
+[14:22:04] [3/9] 起 robot_state_publisher 與距離節點（**抽屜具名幾何 ＋ 場景真值**）
+[14:22:04]   起 rsp PID=49777
+[14:22:04]   起 dist PID=49781
+[14:22:14] [4/9] 起安全層（**freespace_confirmed:=false —— 場景裡有櫃體與抽屜**）
+[14:22:14]   起 safety PID=49874
+[14:22:22] [5/9] **啟動核對（執行期讀回）**：真值模式、freespace=false、具名幾何、模式、餘裕
+[階段A] 啟動核對通過：具名幾何 14 個、scene_truth=true、freespace_confirmed=false、mode=solver_drawer、joint_margin=0.05
+[階段A] 接觸前暫停位姿 TCP [0.0, 1.0597, 0.55]（退讓 0.12 m，來源：/arm_link_distance 的 obstacles 所用的抽屜位姿（啟動核對時刻），牆鐘 2026-10-03T06:22:28.271021+00:00）
+[14:22:28] [6/9] 起 adapter 與封裝錄製器
+[14:22:28]   起 adapter PID=50079
+[14:22:28]   起 envrec PID=50083
+[14:22:33] [7/9] **[A] 前置調姿**（準備動作；run_id=stage_a_overnight_1003_142154_r1_prepos，走同一條管線）
+[14:22:33]   起 prepos PID=50210
+[14:22:33]   等前置調姿發出完成宣告（最多 120 s）
+[14:22:41]   解除前置來源（終止 prepos 節點 PID=50210）
+[14:22:44] [8/9] **交棒判定**（完成宣告 ＋ 安靜 0.4s ＋ 實測／設定點／套用回報有效）
+[階段A] 交棒通過：安靜 6.470 s、設定點與實測角最大差 2.357 mrad、u_prev 來源 applied_report
+[階段A] u_prev = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+[14:22:47]   由當步抽屜位姿算接觸前暫停位姿（六維），記來源與時間
+[14:22:47]   目標 TCP = (0.000000 1.059700 0.550000)；姿態 R_DES = (-1.000000000000 0.000000000000 0.000000000000 0.000000000000 0.000000000000 1.000000000000 0.000000000000 1.000000000000 0.000000000000)
+[14:22:47]   目標來源與時間已落盤 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r1/target.json
+[14:22:47] [9/9] **[B] 交棒後的階段 A**：W-GMPC 協同接近（u_prev 取自實際套用回報）
+[wg2] 初始化握手完成：送出 33 筆全零命令，設定點 step 2049
+[wg2] 目標姿態來源：target_rot
+[wg2] N=5 dt=0.050  起始 q [-0.01455, -0.0003, 0.00458, 0.0, 3e-05, 1.43716, 2e-05, 0.0, 0.0]
+[wg2] 起始 TCP [0.47742, 0.00196, 0.81012]  目標 TCP [0.0, 1.0597, 0.55]  偏移 （絕對）
+[wg2] 到達 ≤5.0 mm / 1.15°、保持 2.0 s（模擬時間）、u_prev 政策 strict
+[wg2] 首次進入容差 @ sim 58.700  3.62 mm / 0.175°
+[wg2] **到達並保持 2.0 s** @ sim 60.700
+[wg2] 299 輪寫入 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r1/wg2_out.json
+[wg2] {'stop_why': 'loop_end', 'delay_comp_state_cycles': 1.6, 'delay_comp_cmd_cycles': 1.0, 'use_applied_for_predict': True, 'near_target_gamma': 1.0, 'n_shaped': 0, 'shape_scale_p50': 1.0, 'shape_scale_min': 1.0, 'n_pred_applied': 958, 'n_pred_requested': 1407, 'cmd_env': True, 'n_source_seq': 331, 'slot_basis': 'simulation_clock', 'nominal_period_sim_s': 0.05, 'n_dup_skip': 0, 'n_missed_slot': 5, 'n_warm_discard': 1, 'n_sim_stall': 0, 'last_stall_s': None, 'task_sim_t0': 45.549999, 'task_sim_span_s': 15.17, 'n_step_mismatch': 0, 'last_step_mismatch': None, 'n_compose_incomplete': 3017, 'n_compose_incomplete_note': '先到的來源還湊不齊的次數；每物理步本來就有一次，**非錯誤**', 'handshake_startup': {'n_init_cmd': 33, 'states': [('init', 0.0, '介面契約未通過：尚未收到 meta'), ('armed', 45.55, '就緒（step 2049、年齡 0.0000 s）')]}, 'n_init_cmd_in_run': 0, 'gate_report': {'meta_ok': True, 'meta_why': '契約吻合', 'ever_armed': True, 'n_init_cmd': 33, 'n_hold': 1, 'last_step_id': 3566, 'last_sim_t': 60.71999864280224, 'contract_checked': ['sampling_instant', 'physics_dt_s', 'cols', 'joint_order'], 'contract_not_checked': ['G —— 模型係數，由 α 與 dt 自行計算，不是執行端量測值']}, 'composed_G': [0.008640363815601234, 0.008642683426963426, 0.008640197202005439, 0.008638858041959891, 0.008640612102437899, 0.00864113568012658], 'composed_kp': 5, 'published': 298, 'dropped_stale': 0, 'no_solution': 0, 'deadline_miss': 1, 'rate_hz': 20.0, 'reached_held': True, 'stopped_on_chain_fail': False, 'chain_fail_info': None}
+[14:23:05] [收尾 1/4] 請執行端受控停止（/wb_sim/stop_request）
+[14:23:08] [收尾 2/4] 讓封裝錄製器受控結束並關檔
+[14:23:09]   已關檔（summary 已寫入）
+[14:23:09] [收尾 3/4] 等執行端完成封存（上限 180 s）
+=== 封存內容核對（不以任意 JSON 存在判定）===
+  sim/wb_run.json 可解析                              ok  4.91 MB
+  執行端必要紀錄齊備                                        ok  12 項
+  執行端有步進紀錄                                         ok  6322 列 × 62 欄
+  停止原因已記錄                                          ok  stop_request
+  CPU 溫度已記錄且未超限                                    ok  峰 79.375 / 限 92.0
+  本趟未要求錄影                                          ok  
+  追蹤 JSONL 每行可解析                                   ok  2690 行可解析／0 行壞
+  有 header 與 **summary**（錄製器已受控關檔）                 ok  header 1／summary 1
+  summary 筆數與**實際筆數一致**                            ok  summary {'solver': 414, 'safety': 766, 'adapter': 755, 'endpoint': 753}／實際 {'safety': 766, 'adapter': 755, 'endpoint': 753, 'solver': 414}
+  錄製器未拒絕任何封裝                                       ok  拒絕 0
+  四段都有紀錄                                           ok  adapter:755 endpoint:753 safety:766 solver:414
+  **至少有一筆可逐段重建關聯**                                 ok  332 / 332 筆 source_seq 四段齊全
+  執行端事件也已落盤（wb_run.json）                           ok  753 筆
+  失效停止事件的 source_seq 一律 −1                         ok  失效事件 0 筆
+  wg2_out.json 可解析                                 ok  1.24 MB
+  節點必要紀錄齊備                                         ok  
+  實際模型選擇 == setpoint                               ok  arm_model=setpoint
+  節點確實啟動（非拒絕啟動）                                    ok  started=True　
+  有發布週期                                            ok  published=298
+
+**封存完整**
+這是封存內容核對，**不是**到達與保持的判定。
+-> /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r1/archive_check.json
+[14:23:09] [收尾 4/4] 抽屜：位移與接觸**分開**判定
+抽屜判定：displacement_within_baseline|no_contact_evidence
+  位移未超過靜止基線；接觸：可用的獨立證據**未**顯示接觸
+  位移：|開度| 最大 0.0000 mm（門檻 0.0000 mm，超出門檻的取樣 0/6322）
+    抽屜位移未超過靜止基線
+    **不能**單憑開度證明夾爪碰到或推了抽屜；接觸看獨立的接觸力／距離證據
+  接觸力：最大 0.000000 N（門檻 0.000000 N）⇒ 未顯示接觸
+  distance：**缺真值最短距離紀錄** ⇒ 這一路證據不判定
+[14:23:09] 收尾前 CPU 71.125  來源 hwmon:k10temp
+[14:23:09] === 階段 A 結束 RUN_ID=stage_a_overnight_1003_142154_r1 ===
+[14:23:09] cleanup（只針對本趟 PID）...
+[14:23:12] cleanup done
+[14:23:12]   趟次 r1 結束：腳本 rc=0、判定 pass
+[14:23:12]   **首趟達成成功判準**
+[14:23:12] [階段 3] 相同配置再兩趟、不錄影
+[14:23:13]   降溫完成 58.125°C <= 70°C（等了 0s）
+[14:23:13] ── 趟次 r2（錄影=0，第 2/0 次啟動，剩 86321s）
+[14:23:13] === 階段 A RUN_ID=stage_a_overnight_1003_142154_r2 domain=71 ===
+[14:23:13] 起跑前 CPU 58.0  來源 hwmon:k10temp
+[14:23:13] **成果判定從 W-GMPC 接管後的協同接近開始**；前置調姿是準備動作
+[14:23:13] 抽屜 位姿=0.0,1.45 開度=0.0 模型=drawer_unit；退讓=0.120
+[14:23:13] **抽屜位姿取真值 —— 這是階段假設，成果必須標明**
+[14:23:13] [0/9] 離線前提核對（不啟動 Isaac）
+  求解器與執行端 joint_margin 一致：0.05 == 0.05
+  模式 solver_drawer 已核
+  接觸前暫停位姿（離線預覽，位姿 (0.0, 1.45) 開度 0.0 退讓 0.120）[0.0, 1.0597, 0.55]
+[14:23:13]   距離節點參數已由 gen_drawer_obstacle_params.py 產生
+[14:23:13]   （幾何單一來源，8 個引數，逐引數傳遞不經 eval）
+啟動配置已落盤 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r2/run_config.json
+[14:23:13]   程式版本已保存 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r2/code_versions.txt
+[14:23:13]   錄影：**關閉**
+[14:23:13] [1/9] 起 Isaac 執行端（--mode solver_drawer，**場景含抽屜**）
+[14:23:13]   起 isaac PID=51299
+[14:23:13]   等 Isaac 建好場景（最多 240 s；標記 '[wb] articulation root'）
+[14:23:22]   場景已建起：[wb] articulation root /World/omni_bot/Geometry/base_footprint（剛體 107）
+[14:23:22] [2/9] 等 /clock 前進
+[14:23:23] [3/9] 起 robot_state_publisher 與距離節點（**抽屜具名幾何 ＋ 場景真值**）
+[14:23:23]   起 rsp PID=51839
+[14:23:23]   起 dist PID=51843
+[14:23:33] [4/9] 起安全層（**freespace_confirmed:=false —— 場景裡有櫃體與抽屜**）
+[14:23:33]   起 safety PID=51945
+[14:23:41] [5/9] **啟動核對（執行期讀回）**：真值模式、freespace=false、具名幾何、模式、餘裕
+[階段A] 啟動核對通過：具名幾何 14 個、scene_truth=true、freespace_confirmed=false、mode=solver_drawer、joint_margin=0.05
+[階段A] 接觸前暫停位姿 TCP [0.0, 1.0597, 0.55]（退讓 0.12 m，來源：/arm_link_distance 的 obstacles 所用的抽屜位姿（啟動核對時刻），牆鐘 2026-10-03T06:23:46.582553+00:00）
+[14:23:46] [6/9] 起 adapter 與封裝錄製器
+[14:23:46]   起 adapter PID=52148
+[14:23:46]   起 envrec PID=52152
+[14:23:51] [7/9] **[A] 前置調姿**（準備動作；run_id=stage_a_overnight_1003_142154_r2_prepos，走同一條管線）
+[14:23:51]   起 prepos PID=52304
+[14:23:51]   等前置調姿發出完成宣告（最多 120 s）
+[14:23:59]   解除前置來源（終止 prepos 節點 PID=52304）
+[14:24:02] [8/9] **交棒判定**（完成宣告 ＋ 安靜 0.4s ＋ 實測／設定點／套用回報有效）
+[階段A] 交棒通過：安靜 5.810 s、設定點與實測角最大差 2.359 mrad、u_prev 來源 applied_report
+[階段A] u_prev = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+[14:24:05]   由當步抽屜位姿算接觸前暫停位姿（六維），記來源與時間
+[14:24:05]   目標 TCP = (0.000000 1.059700 0.550000)；姿態 R_DES = (-1.000000000000 0.000000000000 0.000000000000 0.000000000000 0.000000000000 1.000000000000 0.000000000000 1.000000000000 0.000000000000)
+[14:24:05]   目標來源與時間已落盤 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r2/target.json
+[14:24:05] [9/9] **[B] 交棒後的階段 A**：W-GMPC 協同接近（u_prev 取自實際套用回報）
+[wg2] 初始化握手完成：送出 8 筆全零命令，設定點 step 1708
+[wg2] 目標姿態來源：target_rot
+[wg2] N=5 dt=0.050  起始 q [-0.01213, -0.00024, 0.00384, 0.0, 4e-05, 1.4397, 3e-05, 0.0, 0.0]
+[wg2] 起始 TCP [0.47975, 0.00165, 0.81108]  目標 TCP [0.0, 1.0597, 0.55]  偏移 （絕對）
+[wg2] 到達 ≤5.0 mm / 1.15°、保持 2.0 s（模擬時間）、u_prev 政策 strict
+[wg2] 首次進入容差 @ sim 58.210  4.47 mm / 0.179°
+[wg2] **到達並保持 2.0 s** @ sim 60.210
+[wg2] 318 輪寫入 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r2/wg2_out.json
+[wg2] {'stop_why': 'loop_end', 'delay_comp_state_cycles': 1.6, 'delay_comp_cmd_cycles': 1.0, 'use_applied_for_predict': True, 'near_target_gamma': 1.0, 'n_shaped': 0, 'shape_scale_p50': 1.0, 'shape_scale_min': 1.0, 'n_pred_applied': 917, 'n_pred_requested': 1600, 'cmd_env': True, 'n_source_seq': 325, 'slot_basis': 'simulation_clock', 'nominal_period_sim_s': 0.05, 'n_dup_skip': 0, 'n_missed_slot': 5, 'n_warm_discard': 1, 'n_sim_stall': 0, 'last_stall_s': None, 'task_sim_t0': 44.109998999999995, 'task_sim_span_s': 16.12, 'n_step_mismatch': 0, 'last_step_mismatch': None, 'n_compose_incomplete': 3216, 'n_compose_incomplete_note': '先到的來源還湊不齊的次數；每物理步本來就有一次，**非錯誤**', 'handshake_startup': {'n_init_cmd': 8, 'states': [('init', 0.0, '介面契約未通過：尚未收到 meta'), ('armed', 44.11, '就緒（step 1708、年齡 -0.0000 s）')]}, 'n_init_cmd_in_run': 0, 'gate_report': {'meta_ok': True, 'meta_why': '契約吻合', 'ever_armed': True, 'n_init_cmd': 8, 'n_hold': 1, 'last_step_id': 3320, 'last_sim_t': 60.22999865375459, 'contract_checked': ['sampling_instant', 'physics_dt_s', 'cols', 'joint_order'], 'contract_not_checked': ['G —— 模型係數，由 α 與 dt 自行計算，不是執行端量測值']}, 'composed_G': [0.008640363815601234, 0.008642683426963426, 0.008640197202005439, 0.008638858041959891, 0.008640612102437899, 0.00864113568012658], 'composed_kp': 5, 'published': 317, 'dropped_stale': 0, 'no_solution': 0, 'deadline_miss': 1, 'rate_hz': 20.0, 'reached_held': True, 'stopped_on_chain_fail': False, 'chain_fail_info': None}
+[14:24:23] [收尾 1/4] 請執行端受控停止（/wb_sim/stop_request）
+[14:24:24] [收尾 2/4] 讓封裝錄製器受控結束並關檔
+[14:24:25]   已關檔（summary 已寫入）
+[14:24:25] [收尾 3/4] 等執行端完成封存（上限 180 s）
+=== 封存內容核對（不以任意 JSON 存在判定）===
+  sim/wb_run.json 可解析                              ok  4.69 MB
+  執行端必要紀錄齊備                                        ok  12 項
+  執行端有步進紀錄                                         ok  6185 列 × 62 欄
+  停止原因已記錄                                          ok  stop_request
+  CPU 溫度已記錄且未超限                                    ok  峰 83.875 / 限 92.0
+  本趟未要求錄影                                          ok  
+  追蹤 JSONL 每行可解析                                   ok  2517 行可解析／0 行壞
+  有 header 與 **summary**（錄製器已受控關檔）                 ok  header 1／summary 1
+  summary 筆數與**實際筆數一致**                            ok  summary {'solver': 401, 'safety': 737, 'adapter': 691, 'endpoint': 686}／實際 {'safety': 737, 'adapter': 691, 'endpoint': 686, 'solver': 401}
+  錄製器未拒絕任何封裝                                       ok  拒絕 0
+  四段都有紀錄                                           ok  adapter:691 endpoint:686 safety:737 solver:401
+  **至少有一筆可逐段重建關聯**                                 ok  317 / 326 筆 source_seq 四段齊全
+  執行端事件也已落盤（wb_run.json）                           ok  686 筆
+  失效停止事件的 source_seq 一律 −1                         ok  失效事件 0 筆
+  wg2_out.json 可解析                                 ok  1.31 MB
+  節點必要紀錄齊備                                         ok  
+  實際模型選擇 == setpoint                               ok  arm_model=setpoint
+  節點確實啟動（非拒絕啟動）                                    ok  started=True　
+  有發布週期                                            ok  published=317
+
+**封存完整**
+這是封存內容核對，**不是**到達與保持的判定。
+-> /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r2/archive_check.json
+[14:24:25] [收尾 4/4] 抽屜：位移與接觸**分開**判定
+抽屜判定：displacement_within_baseline|no_contact_evidence
+  位移未超過靜止基線；接觸：可用的獨立證據**未**顯示接觸
+  位移：|開度| 最大 0.0000 mm（門檻 0.0000 mm，超出門檻的取樣 0/6185）
+    抽屜位移未超過靜止基線
+    **不能**單憑開度證明夾爪碰到或推了抽屜；接觸看獨立的接觸力／距離證據
+  接觸力：最大 0.000000 N（門檻 0.000000 N）⇒ 未顯示接觸
+  distance：**缺真值最短距離紀錄** ⇒ 這一路證據不判定
+[14:24:26] 收尾前 CPU 73.25  來源 hwmon:k10temp
+[14:24:26] === 階段 A 結束 RUN_ID=stage_a_overnight_1003_142154_r2 ===
+[14:24:26] cleanup（只針對本趟 PID）...
+[14:24:29] cleanup done
+[14:24:29]   趟次 r2 結束：腳本 rc=0、判定 pass
+[14:24:29]   降溫完成 59.25°C <= 70°C（等了 0s）
+[14:24:29] ── 趟次 r3（錄影=0，第 3/0 次啟動，剩 86245s）
+[14:24:29] === 階段 A RUN_ID=stage_a_overnight_1003_142154_r3 domain=71 ===
+[14:24:29] 起跑前 CPU 58.875  來源 hwmon:k10temp
+[14:24:29] **成果判定從 W-GMPC 接管後的協同接近開始**；前置調姿是準備動作
+[14:24:29] 抽屜 位姿=0.0,1.45 開度=0.0 模型=drawer_unit；退讓=0.120
+[14:24:29] **抽屜位姿取真值 —— 這是階段假設，成果必須標明**
+[14:24:29] [0/9] 離線前提核對（不啟動 Isaac）
+  求解器與執行端 joint_margin 一致：0.05 == 0.05
+  模式 solver_drawer 已核
+  接觸前暫停位姿（離線預覽，位姿 (0.0, 1.45) 開度 0.0 退讓 0.120）[0.0, 1.0597, 0.55]
+[14:24:30]   距離節點參數已由 gen_drawer_obstacle_params.py 產生
+[14:24:30]   （幾何單一來源，8 個引數，逐引數傳遞不經 eval）
+啟動配置已落盤 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r3/run_config.json
+[14:24:30]   程式版本已保存 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r3/code_versions.txt
+[14:24:30]   錄影：**關閉**
+[14:24:30] [1/9] 起 Isaac 執行端（--mode solver_drawer，**場景含抽屜**）
+[14:24:30]   起 isaac PID=53338
+[14:24:30]   等 Isaac 建好場景（最多 240 s；標記 '[wb] articulation root'）
+[14:24:59]   …等場景 30s（log 3043 bytes）CPU 45.5  來源 hwmon:k10temp
+[14:25:29]   …等場景 60s（log 3123 bytes）CPU 43.875  來源 hwmon:k10temp
+[14:26:00]   …等場景 90s（log 3205 bytes）CPU 43.0  來源 hwmon:k10temp
+[14:26:30]   …等場景 120s（log 3285 bytes）CPU 42.5  來源 hwmon:k10temp
+[14:27:00]   …等場景 150s（log 3366 bytes）CPU 42.0  來源 hwmon:k10temp
+[14:27:30]   …等場景 180s（log 3447 bytes）CPU 41.625  來源 hwmon:k10temp
+[14:28:01]   …等場景 210s（log 3530 bytes）CPU 41.625  來源 hwmon:k10temp
+[14:28:31]   …等場景 240s（log 3613 bytes）CPU 41.25  來源 hwmon:k10temp
+[14:28:32]   **場景未在 240 s 內建起**（log 無 '[wb] articulation root'）
+[14:28:32]   已採證 ⇒ /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r3/isaac_hang（程序狀態、各執行緒 wchan、開啟檔案、Kit 日誌）
+[14:28:32]   ⇒ 以「場景未建起」中止，**不**往下跑 /clock 檢查而把問題錯誤歸因
+[14:28:32] cleanup（只針對本趟 PID）...
+[14:28:35] cleanup done
+[14:28:35]   **場景未建起（碼 83，第 1 次）** ⇒ 採證已存，重試第 2 次
+[14:28:35]   降溫完成 43.5°C <= 70°C（等了 0s）
+[14:28:36] === 階段 A RUN_ID=stage_a_overnight_1003_142154_r3 domain=71 ===
+[14:28:36] 起跑前 CPU 43.75  來源 hwmon:k10temp
+[14:28:36] **成果判定從 W-GMPC 接管後的協同接近開始**；前置調姿是準備動作
+[14:28:36] 抽屜 位姿=0.0,1.45 開度=0.0 模型=drawer_unit；退讓=0.120
+[14:28:36] **抽屜位姿取真值 —— 這是階段假設，成果必須標明**
+[14:28:36] [0/9] 離線前提核對（不啟動 Isaac）
+  求解器與執行端 joint_margin 一致：0.05 == 0.05
+  模式 solver_drawer 已核
+  接觸前暫停位姿（離線預覽，位姿 (0.0, 1.45) 開度 0.0 退讓 0.120）[0.0, 1.0597, 0.55]
+[14:28:36]   距離節點參數已由 gen_drawer_obstacle_params.py 產生
+[14:28:36]   （幾何單一來源，8 個引數，逐引數傳遞不經 eval）
+啟動配置已落盤 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r3/run_config.json
+[14:28:36]   程式版本已保存 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r3/code_versions.txt
+[14:28:36]   錄影：**關閉**
+[14:28:36] [1/9] 起 Isaac 執行端（--mode solver_drawer，**場景含抽屜**）
+[14:28:36]   起 isaac PID=55045
+[14:28:36]   等 Isaac 建好場景（最多 240 s；標記 '[wb] articulation root'）
+[14:28:44]   場景已建起：[wb] articulation root /World/omni_bot/Geometry/base_footprint（剛體 107）
+[14:28:44] [2/9] 等 /clock 前進
+[14:28:45] [3/9] 起 robot_state_publisher 與距離節點（**抽屜具名幾何 ＋ 場景真值**）
+[14:28:45]   起 rsp PID=55614
+[14:28:45]   起 dist PID=55618
+[14:28:55] [4/9] 起安全層（**freespace_confirmed:=false —— 場景裡有櫃體與抽屜**）
+[14:28:55]   起 safety PID=55714
+[14:29:03] [5/9] **啟動核對（執行期讀回）**：真值模式、freespace=false、具名幾何、模式、餘裕
+[階段A] 啟動核對通過：具名幾何 14 個、scene_truth=true、freespace_confirmed=false、mode=solver_drawer、joint_margin=0.05
+[階段A] 接觸前暫停位姿 TCP [0.0, 1.0597, 0.55]（退讓 0.12 m，來源：/arm_link_distance 的 obstacles 所用的抽屜位姿（啟動核對時刻），牆鐘 2026-10-03T06:29:09.161666+00:00）
+[14:29:09] [6/9] 起 adapter 與封裝錄製器
+[14:29:09]   起 adapter PID=55928
+[14:29:09]   起 envrec PID=55932
+[14:29:14] [7/9] **[A] 前置調姿**（準備動作；run_id=stage_a_overnight_1003_142154_r3_prepos，走同一條管線）
+[14:29:14]   起 prepos PID=56054
+[14:29:14]   等前置調姿發出完成宣告（最多 120 s）
+[14:29:21]   解除前置來源（終止 prepos 節點 PID=56054）
+[14:29:24] [8/9] **交棒判定**（完成宣告 ＋ 安靜 0.4s ＋ 實測／設定點／套用回報有效）
+[階段A] 交棒通過：安靜 3.910 s、設定點與實測角最大差 2.358 mrad、u_prev 來源 applied_report
+[階段A] u_prev = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+[14:29:25]   由當步抽屜位姿算接觸前暫停位姿（六維），記來源與時間
+[14:29:25]   目標 TCP = (0.000000 1.059700 0.550000)；姿態 R_DES = (-1.000000000000 0.000000000000 0.000000000000 0.000000000000 0.000000000000 1.000000000000 0.000000000000 1.000000000000 0.000000000000)
+[14:29:25]   目標來源與時間已落盤 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r3/target.json
+[14:29:25] [9/9] **[B] 交棒後的階段 A**：W-GMPC 協同接近（u_prev 取自實際套用回報）
+[wg2] 初始化握手完成：送出 4 筆全零命令，設定點 step 1591
+[wg2] 目標姿態來源：target_rot
+[wg2] N=5 dt=0.050  起始 q [-0.01001, -0.00016, 0.00365, 0.0, 4e-05, 1.43792, 2e-05, 0.0, 0.0]
+[wg2] 起始 TCP [0.48194, 0.00165, 0.8104]  目標 TCP [0.0, 1.0597, 0.55]  偏移 （絕對）
+[wg2] 到達 ≤5.0 mm / 1.15°、保持 2.0 s（模擬時間）、u_prev 政策 strict
+[wg2] 首次進入容差 @ sim 53.670  4.46 mm / 0.180°
+[wg2] **到達並保持 2.0 s** @ sim 55.670
+[wg2] 298 輪寫入 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r3/wg2_out.json
+[wg2] {'stop_why': 'loop_end', 'delay_comp_state_cycles': 1.6, 'delay_comp_cmd_cycles': 1.0, 'use_applied_for_predict': True, 'near_target_gamma': 1.0, 'n_shaped': 0, 'shape_scale_p50': 1.0, 'shape_scale_min': 1.0, 'n_pred_applied': 694, 'n_pred_requested': 1670, 'cmd_env': True, 'n_source_seq': 302, 'slot_basis': 'simulation_clock', 'nominal_period_sim_s': 0.05, 'n_dup_skip': 0, 'n_missed_slot': 0, 'n_warm_discard': 0, 'n_sim_stall': 0, 'last_stall_s': None, 'task_sim_t0': 40.819998999999996, 'task_sim_span_s': 14.87, 'n_step_mismatch': 0, 'last_step_mismatch': None, 'n_compose_incomplete': 3006, 'n_compose_incomplete_note': '先到的來源還湊不齊的次數；每物理步本來就有一次，**非錯誤**', 'handshake_startup': {'n_init_cmd': 4, 'states': [('init', 0.0, '介面契約未通過：尚未收到 meta'), ('armed', 40.82, '就緒（step 1591、年齡 0.0000 s）')]}, 'n_init_cmd_in_run': 0, 'gate_report': {'meta_ok': True, 'meta_why': '契約吻合', 'ever_armed': True, 'n_init_cmd': 4, 'n_hold': 0, 'last_step_id': 3078, 'last_sim_t': 55.6899987552315, 'contract_checked': ['sampling_instant', 'physics_dt_s', 'cols', 'joint_order'], 'contract_not_checked': ['G —— 模型係數，由 α 與 dt 自行計算，不是執行端量測值']}, 'composed_G': [0.008640363815601234, 0.008642683426963426, 0.008640197202005439, 0.008638858041959891, 0.008640612102437899, 0.00864113568012658], 'composed_kp': 5, 'published': 298, 'dropped_stale': 0, 'no_solution': 0, 'deadline_miss': 0, 'rate_hz': 20.0, 'reached_held': True, 'stopped_on_chain_fail': False, 'chain_fail_info': None}
+[14:29:41] [收尾 1/4] 請執行端受控停止（/wb_sim/stop_request）
+[14:29:43] [收尾 2/4] 讓封裝錄製器受控結束並關檔
+[14:29:44]   已關檔（summary 已寫入）
+[14:29:44] [收尾 3/4] 等執行端完成封存（上限 180 s）
+=== 封存內容核對（不以任意 JSON 存在判定）===
+  sim/wb_run.json 可解析                              ok  4.39 MB
+  執行端必要紀錄齊備                                        ok  12 項
+  執行端有步進紀錄                                         ok  5740 列 × 62 欄
+  停止原因已記錄                                          ok  stop_request
+  CPU 溫度已記錄且未超限                                    ok  峰 80.375 / 限 92.0
+  本趟未要求錄影                                          ok  
+  追蹤 JSONL 每行可解析                                   ok  2389 行可解析／0 行壞
+  有 header 與 **summary**（錄製器已受控關檔）                 ok  header 1／summary 1
+  summary 筆數與**實際筆數一致**                            ok  summary {'solver': 423, 'safety': 662, 'adapter': 651, 'endpoint': 651}／實際 {'safety': 662, 'adapter': 651, 'endpoint': 651, 'solver': 423}
+  錄製器未拒絕任何封裝                                       ok  拒絕 0
+  四段都有紀錄                                           ok  adapter:651 endpoint:651 safety:662 solver:423
+  **至少有一筆可逐段重建關聯**                                 ok  274 / 303 筆 source_seq 四段齊全
+  執行端事件也已落盤（wb_run.json）                           ok  651 筆
+  失效停止事件的 source_seq 一律 −1                         ok  失效事件 0 筆
+  wg2_out.json 可解析                                 ok  1.23 MB
+  節點必要紀錄齊備                                         ok  
+  實際模型選擇 == setpoint                               ok  arm_model=setpoint
+  節點確實啟動（非拒絕啟動）                                    ok  started=True　
+  有發布週期                                            ok  published=298
+
+**封存完整**
+這是封存內容核對，**不是**到達與保持的判定。
+-> /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_r3/archive_check.json
+[14:29:44] [收尾 4/4] 抽屜：位移與接觸**分開**判定
+抽屜判定：displacement_within_baseline|no_contact_evidence
+  位移未超過靜止基線；接觸：可用的獨立證據**未**顯示接觸
+  位移：|開度| 最大 0.0000 mm（門檻 0.0000 mm，超出門檻的取樣 0/5740）
+    抽屜位移未超過靜止基線
+    **不能**單憑開度證明夾爪碰到或推了抽屜；接觸看獨立的接觸力／距離證據
+  接觸力：最大 0.000000 N（門檻 0.000000 N）⇒ 未顯示接觸
+  distance：**缺真值最短距離紀錄** ⇒ 這一路證據不判定
+[14:29:44] 收尾前 CPU 72.75  來源 hwmon:k10temp
+[14:29:44] === 階段 A 結束 RUN_ID=stage_a_overnight_1003_142154_r3 ===
+[14:29:44] cleanup（只針對本趟 PID）...
+[14:29:47] cleanup done
+[14:29:47]   趟次 r3 結束：腳本 rc=0、判定 pass
+[14:29:47] [階段 4] 錄影分支：先短相機診斷（10 s 模擬時間、無命令來源）
+[14:29:48]   降溫完成 59.5°C <= 70°C（等了 0s）
+[14:29:48]   相機診斷（第 5/0 次啟動）
+  相機診斷：pass；影格 100 張；收尾 sim_limit
+    讀圖套件：PIL
+    f000000.png [720, 1280, 3] 均值 198.1 標準差 63.3
+    f000050.png [720, 1280, 3] 均值 198.7 標準差 62.6
+    f000099.png [720, 1280, 3] 均值 198.7 標準差 62.5
+[14:30:17]   相機診斷通過
+[14:30:17] [階段 4b] 一趟錄影階段 A（1280x720 @ 10 fps）
+[14:30:18]   降溫完成 64.375°C <= 70°C（等了 0s）
+[14:30:18] ── 趟次 rec（錄影=1，第 6/0 次啟動，剩 85896s）
+[14:30:18] === 階段 A RUN_ID=stage_a_overnight_1003_142154_rec domain=71 ===
+[14:30:18] 起跑前 CPU 64.0  來源 hwmon:k10temp
+[14:30:18] **成果判定從 W-GMPC 接管後的協同接近開始**；前置調姿是準備動作
+[14:30:18] 抽屜 位姿=0.0,1.45 開度=0.0 模型=drawer_unit；退讓=0.120
+[14:30:18] **抽屜位姿取真值 —— 這是階段假設，成果必須標明**
+[14:30:18] [0/9] 離線前提核對（不啟動 Isaac）
+  求解器與執行端 joint_margin 一致：0.05 == 0.05
+  模式 solver_drawer 已核
+  接觸前暫停位姿（離線預覽，位姿 (0.0, 1.45) 開度 0.0 退讓 0.120）[0.0, 1.0597, 0.55]
+[14:30:18]   距離節點參數已由 gen_drawer_obstacle_params.py 產生
+[14:30:18]   （幾何單一來源，8 個引數，逐引數傳遞不經 eval）
+啟動配置已落盤 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_rec/run_config.json
+[14:30:19]   程式版本已保存 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_rec/code_versions.txt
+[14:30:19]   錄影：啟用（1280x720 @ 10fps）
+[14:30:19] [1/9] 起 Isaac 執行端（--mode solver_drawer，**場景含抽屜**）
+[14:30:19]   起 isaac PID=57993
+[14:30:19]   等 Isaac 建好場景（最多 240 s；標記 '[wb] articulation root'）
+[14:30:27]   場景已建起：[wb] articulation root /World/omni_bot/Geometry/base_footprint（剛體 107）
+[14:30:27] [2/9] 等 /clock 前進
+[14:30:29] [3/9] 起 robot_state_publisher 與距離節點（**抽屜具名幾何 ＋ 場景真值**）
+[14:30:29]   起 rsp PID=58536
+[14:30:29]   起 dist PID=58540
+[14:30:39] [4/9] 起安全層（**freespace_confirmed:=false —— 場景裡有櫃體與抽屜**）
+[14:30:39]   起 safety PID=58786
+[14:30:47] [5/9] **啟動核對（執行期讀回）**：真值模式、freespace=false、具名幾何、模式、餘裕
+[階段A] 啟動核對通過：具名幾何 14 個、scene_truth=true、freespace_confirmed=false、mode=solver_drawer、joint_margin=0.05
+[階段A] 接觸前暫停位姿 TCP [0.0, 1.0597, 0.55]（退讓 0.12 m，來源：/arm_link_distance 的 obstacles 所用的抽屜位姿（啟動核對時刻），牆鐘 2026-10-03T06:30:52.387398+00:00）
+[14:30:52] [6/9] 起 adapter 與封裝錄製器
+[14:30:52]   起 adapter PID=59137
+[14:30:52]   起 envrec PID=59141
+[14:30:57] [7/9] **[A] 前置調姿**（準備動作；run_id=stage_a_overnight_1003_142154_rec_prepos，走同一條管線）
+[14:30:57]   起 prepos PID=59284
+[14:30:57]   等前置調姿發出完成宣告（最多 120 s）
+[14:31:12]   解除前置來源（終止 prepos 節點 PID=59284）
+[14:31:15] [8/9] **交棒判定**（完成宣告 ＋ 安靜 0.4s ＋ 實測／設定點／套用回報有效）
+[階段A] 交棒通過：安靜 2.040 s、設定點與實測角最大差 2.358 mrad、u_prev 來源 applied_report
+[階段A] u_prev = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+[14:31:16]   由當步抽屜位姿算接觸前暫停位姿（六維），記來源與時間
+[14:31:16]   目標 TCP = (0.000000 1.059700 0.550000)；姿態 R_DES = (-1.000000000000 0.000000000000 0.000000000000 0.000000000000 0.000000000000 1.000000000000 0.000000000000 1.000000000000 0.000000000000)
+[14:31:16]   目標來源與時間已落盤 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_rec/target.json
+[14:31:16] [9/9] **[B] 交棒後的階段 A**：W-GMPC 協同接近（u_prev 取自實際套用回報）
+[wg2] 初始化握手完成：送出 4 筆全零命令，設定點 step 1116
+[wg2] 目標姿態來源：target_rot
+[wg2] N=5 dt=0.050  起始 q [-0.00714, -0.00012, 0.00258, 0.0, 4e-05, 1.43767, 2e-05, 0.0, 0.0]
+[wg2] 起始 TCP [0.48482, 0.00116, 0.81031]  目標 TCP [0.0, 1.0597, 0.55]  偏移 （絕對）
+[wg2] 到達 ≤5.0 mm / 1.15°、保持 2.0 s（模擬時間）、u_prev 政策 strict
+[wg2] 首次進入容差 @ sim 36.810  4.30 mm / 0.180°
+[wg2] **到達並保持 2.0 s** @ sim 38.810
+[wg2] 297 輪寫入 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_rec/wg2_out.json
+[wg2] {'stop_why': 'loop_end', 'delay_comp_state_cycles': 1.6, 'delay_comp_cmd_cycles': 1.0, 'use_applied_for_predict': True, 'near_target_gamma': 1.0, 'n_shaped': 0, 'shape_scale_p50': 1.0, 'shape_scale_min': 1.0, 'n_pred_applied': 918, 'n_pred_requested': 1448, 'cmd_env': True, 'n_source_seq': 301, 'slot_basis': 'simulation_clock', 'nominal_period_sim_s': 0.05, 'n_dup_skip': 0, 'n_missed_slot': 0, 'n_warm_discard': 0, 'n_sim_stall': 0, 'last_stall_s': None, 'task_sim_t0': 24.019999, 'task_sim_span_s': 14.8, 'n_step_mismatch': 0, 'last_step_mismatch': None, 'n_compose_incomplete': 2985, 'n_compose_incomplete_note': '先到的來源還湊不齊的次數；每物理步本來就有一次，**非錯誤**', 'handshake_startup': {'n_init_cmd': 4, 'states': [('init', 0.0, '介面契約未通過：尚未收到 meta'), ('armed', 24.02, '就緒（step 1116、年齡 -0.0000 s）')]}, 'n_init_cmd_in_run': 0, 'gate_report': {'meta_ok': True, 'meta_why': '契約吻合', 'ever_armed': True, 'n_init_cmd': 4, 'n_hold': 0, 'last_step_id': 2596, 'last_sim_t': 38.819999132305384, 'contract_checked': ['sampling_instant', 'physics_dt_s', 'cols', 'joint_order'], 'contract_not_checked': ['G —— 模型係數，由 α 與 dt 自行計算，不是執行端量測值']}, 'composed_G': [0.008640363815601234, 0.008642683426963426, 0.008640197202005439, 0.008638858041959891, 0.008640612102437899, 0.00864113568012658], 'composed_kp': 5, 'published': 297, 'dropped_stale': 0, 'no_solution': 0, 'deadline_miss': 0, 'rate_hz': 20.0, 'reached_held': True, 'stopped_on_chain_fail': False, 'chain_fail_info': None}
+[14:31:48] [收尾 1/4] 請執行端受控停止（/wb_sim/stop_request）
+[14:31:50] [收尾 2/4] 讓封裝錄製器受控結束並關檔
+[14:31:51]   已關檔（summary 已寫入）
+[14:31:51] [收尾 3/4] 等執行端完成封存（上限 180 s）
+=== 封存內容核對（不以任意 JSON 存在判定）===
+  sim/wb_run.json 可解析                              ok  3.35 MB
+  執行端必要紀錄齊備                                        ok  12 項
+  執行端有步進紀錄                                         ok  3926 列 × 62 欄
+  停止原因已記錄                                          ok  stop_request
+  CPU 溫度已記錄且未超限                                    ok  峰 84.25 / 限 92.0
+  錄影影格數 > 0                                        ok  索引 393 格
+  索引與磁碟影格數一致                                       ok  索引 393／磁碟 393
+  索引的模擬時間單調不減                                      ok  393 筆
+  所有影格檔非空                                          ok  非空 393／共 393
+    影片：393 格、158.1 MB、涵蓋模擬 39.20 s（有效 10.03 fps，以模擬時間計）
+  追蹤 JSONL 每行可解析                                   ok  2019 行可解析／0 行壞
+  有 header 與 **summary**（錄製器已受控關檔）                 ok  header 1／summary 1
+  summary 筆數與**實際筆數一致**                            ok  summary {'solver': 424, 'safety': 537, 'adapter': 529, 'endpoint': 527}／實際 {'safety': 537, 'adapter': 529, 'endpoint': 527, 'solver': 424}
+  錄製器未拒絕任何封裝                                       ok  拒絕 0
+  四段都有紀錄                                           ok  adapter:529 endpoint:527 safety:537 solver:424
+  **至少有一筆可逐段重建關聯**                                 ok  293 / 302 筆 source_seq 四段齊全
+  執行端事件也已落盤（wb_run.json）                           ok  527 筆
+  失效停止事件的 source_seq 一律 −1                         ok  失效事件 0 筆
+  wg2_out.json 可解析                                 ok  1.23 MB
+  節點必要紀錄齊備                                         ok  
+  實際模型選擇 == setpoint                               ok  arm_model=setpoint
+  節點確實啟動（非拒絕啟動）                                    ok  started=True　
+  有發布週期                                            ok  published=297
+
+**封存完整**
+這是封存內容核對，**不是**到達與保持的判定。
+-> /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154_rec/archive_check.json
+[14:31:51] [收尾 4/4] 抽屜：位移與接觸**分開**判定
+抽屜判定：displacement_over_baseline|no_contact_evidence
+  位移超過靜止基線；接觸：可用的獨立證據**未**顯示接觸
+  位移：|開度| 最大 0.0001 mm（門檻 0.0000 mm，超出門檻的取樣 3926/3926）
+    抽屜位移超過靜止基線
+    **不能**單憑開度證明夾爪碰到或推了抽屜；接觸看獨立的接觸力／距離證據
+  接觸力：最大 0.000000 N（門檻 0.000000 N）⇒ 未顯示接觸
+  distance：**缺真值最短距離紀錄** ⇒ 這一路證據不判定
+[14:31:51]   **抽屜判定未通過或未完成**（見上方原因；缺少不等於沒被碰動）
+[14:31:51] 收尾前 CPU 69.125  來源 hwmon:k10temp
+[14:31:51] === 階段 A 結束 RUN_ID=stage_a_overnight_1003_142154_rec ===
+[14:31:51] cleanup（只針對本趟 PID）...
+[14:31:54] cleanup done
+[14:31:54]   趟次 rec 結束：腳本 rc=0、判定 pass
+[14:31:54] [階段 5] 產出隔日交付 OVERNIGHT_REPORT.md
+  報告已寫出 /home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154/OVERNIGHT_REPORT.md（133 行）
+[14:31:55] 收尾清理：0 個殘留程序
+[14:31:55] === 結束（用時 601s、啟動 6 次）===
+[14:31:55] 交付：/home/howardchen/masterthesis/evaluation/runs/stage_a_overnight_1003_142154/OVERNIGHT_REPORT.md

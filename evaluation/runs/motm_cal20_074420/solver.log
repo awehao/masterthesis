@@ -1,0 +1,47 @@
+[wg2] 初始化握手完成：送出 4 筆全零命令，設定點 step 5326
+[wg2] 目標姿態來源：start_orientation
+[wg2] N=5 dt=0.050  起始 q [-0.13793, 0.55429, 1.29719, -0.0321, 0.91724, 1.4873, -0.358, -1.03245, -1.39253]
+[wg2] 起始 TCP [-0.00135, 1.14487, 0.5509]  目標 TCP [-0.00135, 1.14487, 0.5509]  偏移 [0.0, 0.0, 0.0]
+[wg2] 到達 ≤5.0 mm / 1.15°、保持 2.0 s（模擬時間）、u_prev 政策 strict＋初始靜止
+[wg2] 首次進入容差 @ sim 53.280  2.89 mm / 0.699°
+[wg2] 離開容差 @ sim 53.580  7.82 mm / 1.053° （保持計時重設）
+[wg2] 首次進入容差 @ sim 54.220  4.79 mm / 0.478°
+[wg2] **到達並保持 2.0 s** @ sim 56.220
+[wg2] 離開容差 @ sim 85.380  5.10 mm / 0.005° （保持計時重設）
+[wg2] 首次進入容差 @ sim 85.580  3.70 mm / 0.021°
+[wg2] 離開容差 @ sim 88.980  5.81 mm / 0.014° （保持計時重設）
+[wg2] 首次進入容差 @ sim 89.220  4.83 mm / 0.009°
+[wg2] 離開容差 @ sim 89.280  5.29 mm / 0.013° （保持計時重設）
+[wg2] 首次進入容差 @ sim 89.380  4.99 mm / 0.013°
+[wg2] 首次進入容差 @ sim 89.720  3.84 mm / 0.015°
+[wg2] 離開容差 @ sim 89.820  5.34 mm / 0.017° （保持計時重設）
+[wg2] 首次進入容差 @ sim 89.880  4.52 mm / 0.017°
+[wg2] **到達並保持 2.0 s** @ sim 91.880
+[wg2] 824 輪寫入 /home/howardchen/masterthesis/evaluation/runs/motm_cal20_074420/align_solver.json
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/wgmpc_wg2_node.py", line 1626, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/wgmpc_wg2_node.py", line 1566, in main
+    stats = nd.run(T_des)
+            ^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/wgmpc_wg2_node.py", line 1177, in run
+    slot, _m = self._reschedule(slot)
+               ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/wgmpc_wg2_node.py", line 1267, in _reschedule
+    self._exec.spin_once(timeout_sec=0.002)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 645, in _wait_for_ready_callbacks
+    timeout_timer = Timer(None, None, timeout_nsec, self._clock, context=self._context)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/timer.py", line 60, in __init__
+    self.__timer = _rclpy.Timer(
+                   ^^^^^^^^^^^^^
+rclpy._rclpy_pybind11.RCLError: failed to create timer: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/guard_condition.c:67

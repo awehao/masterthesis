@@ -1,0 +1,150 @@
+{
+ "schema": "wgmpc_stage_a_baseline_threshold/2",
+ "rule_file": "evaluation/results/wgmpc_stage_a_baseline_rule.yaml",
+ "rule_name": "max_abs_plus_resolution",
+ "derived_utc": "2026-10-02T18:04:35.831149+00:00",
+ "config_fingerprint": {
+  "asset_sha256": "9cad296fd6e21c435cb70fdacd87d3eaa8db06c73b466ea8e3a594238d3d5444",
+  "drawer_pose_xy": [
+   0.0,
+   1.45
+  ],
+  "physics_dt_s": 0.01,
+  "opening_formula": "opening = DY0 − drawer_rigid_body_world_y；DY0 取於設定增益之後、進入物理迴圈之前（與 isaac_drawer_sim 同式）",
+  "drawer_schema": "drawer_unit/1",
+  "drawer_name": "drawer_unit_a",
+  "asset_path": "/home/howardchen/masterthesis/src/my_omnibot_description/config/drawer_unit.yaml"
+ },
+ "baseline_run": {
+  "record": "evaluation/runs/wgmpc_stage_a_baseline_015223/sim/wb_run.json",
+  "n_steps": 5999,
+  "sim_t_span_s": [
+   0.03,
+   60.01
+  ],
+  "drawer": {
+   "authored": {
+    "root": "/World/drawer_unit",
+    "cabinet_prim": "/World/drawer_unit/cabinet",
+    "drawer_prim": "/World/drawer_unit/drawer",
+    "joint_prim": "/World/drawer_unit/drawer_slide",
+    "mass_kg": 2.0,
+    "linear_damping": 2.0,
+    "joint_friction": 0.0,
+    "drive_stiffness": 0.0,
+    "drive_damping": 0.0,
+    "drive_max_force": 0.0,
+    "limit_lower": 0.0,
+    "limit_upper": 0.2199999988079071
+   },
+   "pose_xy": [
+    0.0,
+    1.45
+   ],
+   "asset": "/home/howardchen/masterthesis/src/my_omnibot_description/config/drawer_unit.yaml",
+   "asset_sha256": "9cad296fd6e21c435cb70fdacd87d3eaa8db06c73b466ea8e3a594238d3d5444",
+   "schema": "drawer_unit/1",
+   "name": "drawer_unit_a",
+   "physics_dt_s": 0.01,
+   "sim_limit_s": 60.0,
+   "dy0": 1.4500001668930054,
+   "opening_formula": "opening = DY0 − drawer_rigid_body_world_y；DY0 取於設定增益之後、進入物理迴圈之前（與 isaac_drawer_sim 同式）"
+  },
+  "acceptance": {
+   "verdict": "pass",
+   "evidence": {
+    "sim_time_s": 60.009998658671975,
+    "observe_sim_s_required": 60.0,
+    "stop_reason": "sim_limit",
+    "drawer_read_fail_steps": 0,
+    "drawer_contact_read_fail_steps": 0,
+    "n_samples": 5999,
+    "n_samples_expected": 6000,
+    "timestamps": {
+     "n_nonfinite": 0,
+     "t_first": 0.03,
+     "t_last": 60.01,
+     "required_last": 59.98,
+     "start_allow_steps": 5.0,
+     "max_gap_s": 0.010000000000005116,
+     "max_gap_steps": 1.0000000000005116,
+     "min_gap_s": 0.00999999999999801,
+     "gap_limit_steps": 5.0
+    },
+    "drawer_opening_nonfinite": 0,
+    "drawer_contact_fmag_nonfinite": 0,
+    "cmd_chain_received": 0,
+    "n_integrating": 0,
+    "base_disp_max_m": 0.00016304907236779976,
+    "base_disp_max_at_index": 40,
+    "base_disp_first_to_last_m": 0.00016304907236779976,
+    "base_path_m": 0.00017378235937845734,
+    "base_disp_criterion": "全窗相對起點的最大位移（非首末差）",
+    "base_disp_limit_m": 0.001,
+    "base_twist_integral_m": 0.09935588000000001,
+    "base_lin_meas_max": 0.001658,
+    "base_twist_vs_disp_ratio": 609.36182314412,
+    "freeze_idx_twist": 41,
+    "freeze_idx_pose": 40,
+    "freeze_tail_samples": 5957,
+    "freeze_signature": true,
+    "freeze_note": "twist 與位置自同一步起皆不再變化 ⇒ 讀數為停更後的殘值，既不能當移動的證據也不能當靜止的證據。**機制未證實**（符合 PhysX 剛體睡眠的簽章，但未做對照實驗）",
+    "drawer_built": true
+   },
+   "required_observe_sim_s": 60.0
+  }
+ },
+ "opening_threshold": {
+  "rule": "max_abs_plus_resolution",
+  "label": "開度",
+  "baseline_peak_abs": 0.0,
+  "resolution_allowance": 1e-09,
+  "threshold": 1e-09,
+  "n_samples": 5999,
+  "n_nonfinite": 0,
+  "window": "全窗（不是末值）—— 漂移不保證單調，取末值會低估",
+  "scope": "**這次模擬配置的工程偵測門檻**，不是所有情況的漂移上界"
+ },
+ "contact_force_threshold": {
+  "rule": "max_abs_plus_resolution",
+  "label": "接觸力",
+  "baseline_peak_abs": 0.0,
+  "resolution_allowance": 1e-09,
+  "threshold": 1e-09,
+  "n_samples": 5999,
+  "n_nonfinite": 0,
+  "window": "全窗（不是末值）—— 漂移不保證單調，取末值會低估",
+  "scope": "**這次模擬配置的工程偵測門檻**，不是所有情況的漂移上界"
+ },
+ "scope": "**這次模擬配置的工程偵測門檻**，不是所有情況的漂移上界；單趟基線不提供統計區間",
+ "base_disp_limit_source": "規則檔（已核定）",
+ "wording": {
+  "threshold_name": "**紀錄變化偵測門檻** —— 量的是紀錄解析度，不是物理漂移上界。基線全窗峰值為 0，所以門檻等於解析度預留量本身",
+  "over_threshold_means": "讀值超過靜止基線",
+  "over_threshold_does_NOT_mean": [
+   "確定有接觸",
+   "確定抽屜被推動"
+  ],
+  "contact_sensing": {
+   "proven": "接觸力 API 能成功讀取（本趟 0 步失敗）",
+   "NOT_proven": [
+    "淨合力為零**不證明沒有接觸**（合力可相互抵銷；也未取得接觸點與法向）",
+    "淨合力為零**不證明有接觸時感測器一定會回報**"
+   ],
+   "needed": "已知接觸的**正向對照**（刻意接觸並確認讀數非零）"
+  },
+  "reproducibility": {
+   "may_say": "同配置下**所測趟次可重現**（位元相同）",
+   "may_NOT_say": [
+    "模擬在所有條件下都是決定性的",
+    "位移不是隨機變數"
+   ],
+   "why": "只測了同一份配置、同一台機器、同一個 Isaac 版本的數趟"
+  }
+ },
+ "not_validated_by_this_baseline": [
+  "交棒流程（前置調姿 → W-GMPC）—— 尚未實跑",
+  "協同接近、到達與保持",
+  "屏障在運動中的行為（機器人靜止）"
+ ]
+}

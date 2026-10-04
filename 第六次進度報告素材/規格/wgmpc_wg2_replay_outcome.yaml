@@ -1,0 +1,113 @@
+# WG2 保持窗求解器離線重播（第1–3步）
+# 範圍：只讀既有趟次，未開 Isaac，未改權重／模型／限制／整形參數。
+# 重現：python3 evaluation/wgmpc_wg2_replay.py <run_dir> --diagnose
+
+subject:
+  run: evaluation/runs/wgmpc_wg2_g1p0_111058
+  hold_window_cycles: [30, 70]        # 41 輪已發布，時槽連續、無跳槽、無暖啟動丟棄
+  lead_cycles_replayed: 8
+
+# ---- 第1步：重播能否重現錄到的 presolve ----
+step1_reproduction:
+  verdict_bitwise: FAIL               # 逐筆數值未達 1e-6
+  verdict_waveform: PASS              # 振盪本身重現
+  state_gate:
+    err_p_max_diff_m: 5.783e-7
+    err_r_max_diff_rad: 1.146e-6
+    note: sim log 以 1e-6 記錄 ⇒ 這就是重建底限，不可能更嚴
+  output_diff_vs_recorded:
+    max: 1.770e-2                     # = 錄到手臂命令 L_inf 的 6.5%
+    p50: 2.262e-4
+    min: 7.451e-6
+    distribution: {le_1e-4: 15, 1e-4_to_1e-3: 15, 1e-3_to_1e-2: 9, gt_1e-2: 2}
+  waveform:
+    recorded:  {period_cycles: 4, acf_peak: +0.81, rms_rad_s: 0.2740}
+    replayed:  {period_cycles: 4, acf_peak: +0.81, rms_rad_s: 0.2758}
+    correlation: +0.99992
+    residual_over_signal: 0.014
+  cross_checks_that_now_agree:
+    sqp_iterations: 41/41
+    sqp_stop_reason: 41/41
+    delay_comp_dq_arm: 34/41          # 門檻 5e-7；log 本身捨入到 1e-6，部分「不合」是捨入
+  warm_start:
+    relevance: none_measured          # None／零／×0.5／×1.5／隨機擾動，u0 展幅 0.00000
+    tightened_tolerances_change_answer: false
+  reconstruction_pitfalls_found:      # 三個我自己踩到、修正後才對的點
+    - log 的 publish_sim_t／snap_sim_t 捨入到 1e-6，但節點內部用未捨入值；
+      _predict_delay 的查表是 `tp <= tau + 1e-12`，4.7e-7 的差就選到不同那一筆。
+      未捨入來源：solver 封裝 stamp_sim_t（發布時刻）。
+    - snap.sim_t = key*1e-6 是**µs 量化值**，不是 paired.t_arm（兩者差 4.7e-7）。
+      t_snap 必須用量化值，否則 25/41 輪算錯。
+    - 歷史必須**嚴格只含更早的輪次**；多含本輪會另外弄壞 11 輪。
+    - 套用值要以「執行端回報是否已到達」為條件；不加這個條件會 100% 用套用值，
+      與節點全趟的 37.1% 不符（本窗因 modified=0，套用值等於請求值，故不改結果）。
+  remaining_gap:
+    what: 求解器實際收到的 15 維預測狀態 (q_pred, s_pred)
+    why: log 只記 dq_pos_m 與 dq_arm_max_rad 兩個純量摘要，且都捨入到 1e-6
+    consequence: 逐筆數值無法驗證到位；1e-3~1.8e-2 的殘差未能再往下歸因
+
+# ---- 第2步：哪些量也呈現同一個週期 ----
+step2_which_quantities_oscillate:
+  caveat: 以下全部來自重播，繼承其 1.4% 殘差
+  series:                             # (RMS, 週期, 自相關峰)
+    u0_qd3_output:        [0.27575, 4, +0.81]
+    s_pred_setpoint:      [0.00801, 4, +0.83]
+    e_p_x_predicted_mm:   [1.83583, 4, +0.76]
+    q_pred_joint:         [0.00356, 4, +0.72]
+    s_measured_setpoint:  [0.00452, 4, +0.74]
+    u_prev:               [0.13217, 4, +0.50]
+    q0_measured_joint:    [0.00501, 2, +0.19]   # **幾乎沒有週期4結構**
+    e_p_measured_mm:      [0.81830, 6, +0.16]   # **沒有週期4結構**
+  reading: >
+    實測關節角與實測任務誤差都沒有週期 4；預測後的狀態與預測任務誤差都有。
+    預測任務誤差的變異也比實測大（|e_p| RMS 1.264 vs 0.818 mm）。
+    實測設定點有週期 4（它是振盪命令的積分），所以平台狀態本身確實帶著它。
+
+# ---- 第3步：單一輸入敏感度（開迴路） ----
+step3_sensitivity:
+  method: 輸入維持實錄、只換一個通道；**非物理閉迴路**
+  results:                            # u0[qd3] 的 (RMS, 佔基準, 週期, 峰)
+    A_baseline:            [0.27575, 1.000, 4, +0.81]
+    B_no_delay_comp:       [0.13521, 0.490, 4, +0.65]
+    C_no_setpoint_predict: [0.19842, 0.720, 4, +0.74]
+    D_no_q_predict:        [0.18432, 0.668, 4, +0.76]
+    E_u_prev_fixed:        [0.27754, 1.006, 4, +0.81]
+  reading: >
+    延遲補償把振幅放大約一倍（關掉後剩 49%），但**週期 4 沒有消失**（峰仍 +0.65），
+    所以它是放大路徑而非唯一來源。q 與設定點兩半的貢獻相當（67%／72%）。
+    u_prev 的影響 +0.6% 小於重播自身的 1.4% 殘差，**無法與零區分**。
+
+not_claimed:
+  - 重播減少或消除振盪不等於因果已證明（開迴路，非物理閉迴路）。
+  - 未歸因於摩擦、延遲量值或權重。
+  - 未提出修法，未新增趟次。
+  - 「實測誤差沒有週期4」不排除求解器在回應關節狀態、設定點或 u_prev；
+    第3步顯示設定點通道確實有貢獻。
+
+instrumentation_added:                # 已補上（evaluation/wgmpc_wg2_node.py）
+  status: 已實作，介面測試通過；**尚未有含這些欄位的 Isaac 趟次**
+  new_field: rec['solve_in']
+  contents:
+    q_pred: 求解器實際收到的 9 維預測狀態，不捨入
+    s_pred: 同上的 6 維預測設定點（合起來就是 make_z 的 15 維輸入）
+    q_meas / s_meas: 未經延遲補償的實測值，供分離「量測」與「預測」兩段
+    u_prev: 求解當下用的那一筆（9 維）與其來源 u_prev_src
+    snap_sim_t_exact / solve_start_sim_t_exact: 原始精度，不捨入到 1e-6
+    pred_sel: 延遲補償逐步選到的 (source_seq, 'applied'/'requested'/'zeros')
+    n_pred_applied_cycle / n_pred_requested_cycle: 本輪的計數（原本只有全趟總數）
+  also: rec['publish_sim_t_exact'] —— _publish_u 內部只讀一次時鐘，記下它用的值
+  behaviour_change: >
+    `_publish_u` 原本為封裝 stamp 與 _cmd_hist 各讀一次 sim_now()，現在合併成
+    一次。模擬時鐘 10 ms 才跳一次，兩次讀值幾乎總是相同；合併是去掉重播時
+    「_cmd_hist 用的是哪一個」的歧義，不改發布內容。
+  bug_found_and_fixed: >
+    `_last_pred_sel` 在 _predict_delay 提早返回、或該輪根本不做補償時不會更新，
+    會把**上一輪的選取**寫進本輪紀錄。已在兩處清空。
+  replay_support: >
+    wgmpc_wg2_replay.py 若見到 solve_in 就直接採用，並把自行重建的 q_pred /
+    s_pred / u_prev 與之比對，重建誤差從此可量化；舊趟次則明確標示
+    「求解輸入全為重建，殘差無法與重建誤差分開」。
+
+artifacts:
+  script: evaluation/wgmpc_wg2_replay.py
+  related: evaluation/results/wgmpc_wg2_hold_oscillation.yaml

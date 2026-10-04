@@ -1,0 +1,1664 @@
+title: 導航到抽屜再協同開關 —— 實驗設計與離線可行性核對
+status: 設計已改版（見 design_revision）；離線可行性核對已完成；**尚未實跑**
+
+design_revision:
+  date: 2026-10-03
+  what_I_had_wrong: >-
+    我把階段 A 結束時的底盤位姿當成**給定條件**，於是算出「手臂伸到極限、
+    夾持位伸不到」，還把它當成實驗的限制。那是**停錯位置的症狀**，不是限制 ——
+    底盤能動，停位本來就是要設計的變數。
+  what_else_I_had_wrong: >-
+    我擔心「底盤主導、手臂幾乎不動」會違反同動判準。方向錯了：整機協調的
+    目的是**省力、順暢、快速**，手臂待在好姿態、底盤去補位移正是省力順暢。
+    該換的是判準，不是行為。
+  structural_change: >-
+    實驗不從抽屜旁邊開始。要有**空間與起點**：先導航到抽屜附近，快到時才
+    交棒給 MotM 操作。手臂在導航途中**收攏**，不是一起步就前伸。
+
+question: >-
+  給定把手真值時，W-GMPC 能否在底盤持續參與下，安全且流暢地完成被動抽屜的
+  開啟與關閉。真值定位是本實驗的**明示前提**；視覺找把手留作下一項實驗。
+
+what_stage_a_already_showed: 協同接近與對準（到達接觸前位姿、5 mm／0.02 rad、保持 2 s）
+what_stage_a_did_not_show: 抽屜**實際移動期間**底盤與手臂是否持續協同運動
+
+fixed_conditions:
+  cabinet_pose_world: [0.0, 1.45]
+  localisation: 把手位姿與抽屜開度由 Isaac **真值**提供（明示前提）
+  rail_axis: 世界 −y 開啟、+y 關閉
+  travel_range_m: [0.0, 0.220]
+  formal_target: 開到 200 mm，再關回 0 mm
+  why_200_not_220: 讓開啟目標離 220 mm 硬上限留 20 mm，目標不落在硬限位上
+  asset: src/my_omnibot_description/config/drawer_unit.yaml（schema drawer_unit/1，不改）
+  geometry_derived:
+    handle_bar_world_at_opening_d: [0.0, 1.165 − d, 0.550]
+    tcp_offset_along_tool_z_m: 0.0147
+    tcp_world_at_grasp_opening_0: [0.0, 1.1503, 0.550]
+    tcp_world_at_opening_200mm: [0.0, 0.9503, 0.550]
+    stage_a_pre_contact_pause_tcp: [0.0, 1.0597, 0.550]
+
+scene_and_start:
+  status: "**已核准定版（2026-10-03）**：以此場景進行測試"
+  approved_on: 2026-10-03
+  approval_basis: 目視核對 Isaac 算繪（evaluation/runs/room_shots/）＋ 幾何核對 19/19
+  snapshot_script: evaluation/isaac_drawer_room_snapshot.py（可重跑；**只拍照，不產生結果判定**）
+  snapshots: evaluation/runs/room_shots/（mark_ 那組帶起點與停位標記）
+  markers_are_visual_only: >-
+    標記以 0.33 m（導航足跡半徑）的薄圓盤畫出，建好後**逐一斷言沒有
+    CollisionAPI** —— 不擋路、不會被 lidar 當回波。不是靠「我沒加」這句話。
+  need: 要有空間與起點，不是從抽屜旁邊開始
+  world: src/ammr_bringup/worlds/drawer_room.sdf（新增；**不動** bigarena.sdf 與 simple_room.sdf）
+  why_new_world: >-
+    bigarena.sdf 是已凍結的導航實驗場景；simple_room.sdf 的 obstacle_1 落在
+    (0, 1.5)，正是櫃體位置，會重疊。
+  checker: evaluation/test_drawer_room.py（19/19，純幾何、不開模擬器）
+  room_interior_m: x [-4.0, +4.0]、y [-5.0, +1.70]（8.0 × 6.8）
+  wall_height_m: 1.0（與 simple_room 同，讓 lidar 掃得到）
+  cabinet_pose_world: [0.0, 1.45]
+  cabinet_against_north_wall: 北牆內面 1.70，與櫃體背面 1.675 留 25 mm
+  reserved_zone_world: x [-0.300, +0.300]、y [+0.940, +1.675]
+  reserved_zone_basis: >-
+    由 drawer_unit.yaml 推得，**含抽屜全開 0.220 m**。櫃體本身不寫進世界檔，
+    由 drawer_asset.build_usd 建進 Isaac 舞台（與階段 A 同一條路徑，
+    資產幾何單一來源）；世界檔只負責房間並把保留區留空，由核對器驗證。
+  furniture: 靠東牆長桌、靠西牆兩個箱子、房間中段一支柱（4 件）
+  furniture_not_contrived: >-
+    沒有任何一件落在起點—停位直線 0.6 m 內（最近的 box_west_b 也有 1.08 m），
+    可行區佔房間 68.7%。要繞的只是正常房間本來就有的東西。
+  start_pose: {x: -2.80, y: -3.20, yaw_rad: 1.5708}
+  park_pose: {x: -0.136412, y: 0.56, yaw_rad: 1.297349}
+  start_to_park_m: 4.6
+  nav_time_estimate_s: 約 15 s 模擬（第一階段 GMPC 的 v_nominal 0.30 m/s）
+  why_not_2m_anymore: >-
+    先前把起點定 2 m 是因為我誤以為整段都受 0.035 m/s 限制。**導航段不是** ——
+    它由第一階段 GMPC 走，vx_max 0.35／vy_max 0.25／wz_max 0.80、
+    v_nominal 0.30。所以房間可以做成正常大小。
+  clearances_measured:
+    start_nearest_obstacle_m: 0.671（box_west_b；導航足跡 0.33）
+    park_nearest_obstacle_m: 1.140（北牆）
+    park_footprint_to_reserved_zone_m: 0.380
+    park_footprint_margin_mm: 50.0
+    park_margin_is_conservative: >-
+      這 50 mm 是對**保留區**算的，而保留區假設抽屜全開 220 mm。機器人停位時
+      抽屜是關著的，把手在 y = 1.165，實際間隙是 275 mm。開啟段底盤與抽屜
+      一起退，相對間隙不變（全開時對保留區還有 250 mm）。
+    handover_zone_boundary_nearest_m: 0.840
+  arm_during_navigation: 收攏姿態（見 stow_posture），不前伸
+
+phases:
+  - name: 導航
+    do: 底盤單獨從起點開到抽屜附近；手臂保持收攏
+    advance_when: 底盤進入交棒區且速度已降進全身的框
+  - name: 交棒與展開
+    do: 控制權在明確物理步轉移給全身；手臂自收攏展開到夾持姿態，同時完成最後接近
+    advance_when: 底盤到停位、手臂到夾持姿態、把手讀值有效
+  - name: 對準與夾持
+    do: 沿把手軸接近；確認兩指對中、建立抓取
+    advance_when: 抓取關係成立，接觸與相對位姿讀值有效
+  - name: 協同開啟
+    do: 底盤沿 −y 退、手臂維持夾持姿態，使被動抽屜沿 −y 移動
+    advance_when: 實測開度進入 195–205 mm
+  - name: 開啟保持（**這是刻意的停頓**）
+    do: 維持開度不動
+    advance_when: 實測開度在帶內**連續**保持 ≥ 2 s
+  - name: 協同關閉
+    do: 保持抓取，底盤沿 +y 進、手臂維持夾持姿態，使抽屜沿 +y 返回
+    advance_when: 實測開度回到 0–5 mm
+  - name: 關閉保持
+    do: 維持關閉不動
+    advance_when: 實測開度在帶內連續保持 ≥ 2 s
+  - name: 釋放與退出
+    do: 確認解除抓取，再讓夾爪離開把手
+    advance_when: 解除後抽屜穩定、退出量達標
+  - name: 收回收攏
+    do: 手臂收回導航用的收攏姿態
+    advance_when: 與收攏姿態的最大軸差 ≤ 0.02 rad
+    why_before_navigating: >-
+      手臂前伸著跑導航，足跡與自碰都不是驗過的那一組。**先收攏再導航**。
+  - name: 交還控制權
+    do: 控制權在明確物理步從全身轉回導航（**反方向的轉移，規則相同**）
+    advance_when: 導航已持有控制權
+    note: 轉移前全身一路持有控制權，不先解除 —— 與去程同一條規則
+  - name: 導航回起點
+    do: 底盤單獨開回起點；手臂保持收攏
+    advance_when: 底盤距起點 ≤ 0.20 m（導航堆疊的精度，不是操作段的 10 mm）
+  - name: 完成
+    do: 停在起點
+
+full_task_sequence: 導航 → MotM 交棒 → 開抽屜 → 保持（停頓）→ 關抽屜 → 釋放退出 → 收攏 → 交還 → 導航回起點
+it_is_a_drawer_not_a_door: >-
+  本實驗的機構是**滑出式抽屜**（drawer_unit.yaml：滑軌沿 −y、行程 0–220 mm、
+  可夾持的把手橫桿），不是鉸鏈門。鉸鏈門的機構、抓取點與軌跡都是另一回事。
+
+park_geometry:
+  script: evaluation/feasibility/drawer_park_distance.py
+  base_park_y: 0.56
+  arm_reach_at_grasp_m: 0.590
+  compared_with_stage_a: >-
+    階段 A 停在 y=0.3775（要伸 0.773 m），夾持位根本伸不到。停到 0.56 之後，
+    夾持位可達，而且手臂在好用的區域裡。
+  base_tracks_drawer_one_to_one: true
+  what_that_buys:
+    script: evaluation/feasibility/drawer_hold_posture_and_stow.py
+    arm_reach_constant_m: 0.590
+    joint_margin_constant_rad: 0.9072
+    smallest_singular_value_constant: 0.1064
+    six_joint_total_travel_over_200mm_rad: 0.00001
+    constant_arm_posture_rad: [-0.0321, 0.9177, 1.4853, -0.3580, -1.0325, -1.3813]
+    reading: >-
+      底盤 1 比 1 跟著抽屜退，手臂就**全程待在同一個姿態**，關節餘裕恆為
+      +0.9072 rad（比先前那個 +0.128 好七倍），離奇異點的距離也不變。
+      這就是省力與順暢的運動學根據。
+
+stow_posture:
+  status: "**已核准定版（2026-10-03）**"
+  value_rad: [0.0, 0.0, 0.0, 0.0, -1.5707963, 0.0]
+  why: 讓夾爪上的相機在導航時**水平朝前**
+  camera_link: camera_color_optical_frame，掛在 link_eef（固定於 link6）
+  camera_forward_deg: 0.0（光軸恰為本體 +x）
+  camera_pitch_deg: 0.0（水平）
+  camera_pos_body: [0.2832, 0.0325, 0.6135]
+  which_joint:
+    answer: j5
+    j6_is_the_wrong_joint: >-
+      全零收攏下相機光軸恆為 (0,0,−1)（直直朝下），而**轉 j6 完全不改變它** ——
+      光軸正好平行於 j6 的旋轉軸，只會讓相機繞著轉圈。能改變俯仰的是
+      j2 = −90°、j3 = +90° 或 j5 = −90°。
+  prior_value_superseded:
+    was: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    source: src/my_omnibot_description/config/arm_initial_pose.yaml
+    why_all_zeros_was_chosen: >-
+      先前那個收攏姿態被精確三角測試查出**實際自碰**（link1 對夾爪殼與對
+      finger2 都是 0.000 m）；取樣點雲之所以回報 1–3 mm，是因為取樣點從未
+      落在相交的三角形上。全零清除所有未排除配對。
+    note: 本實驗改用 j5 = −90°；arm_initial_pose.yaml **未改**，那是別處在用的來源
+  measured_offline:
+    method: 點雲 KD-tree（verify_self_collision 的 link_clouds），取樣 6000 點／連桿
+    all_zeros_tightest_mm: 8.91（link_base↔link5）
+    method_validated_against: 資產檔記的 8.79 mm —— 吻合，方法大致準
+    chosen_tightest_mm: 2.64（link1↔link5）
+    converged: 取樣 900／6000／30000 點得 2.80／2.64／2.64 mm，未往 0 掉
+    joint_slack_rad: +0.011087（j3，與全零相同）
+  open_items:
+    footprint:
+      finding: 相機框原點水平半徑由 0.2664 → 0.2851 m，**超出 costmap 0.28 達 5.1 mm**
+      within: shield 0.30 與 GMPC 0.33 仍在內
+      status: "**使用者裁定先擱置**（2026-10-03）；不是已解決"
+      not_yet_measured: 所有手臂＋夾爪幾何的最壞 AABB 角（要在 Isaac 以實際幾何量）
+    self_clearance:
+      finding: 2.64 mm，約為全零 8.91 mm 的三分之一
+      why_it_matters: >-
+        點雲法在這支手臂上**已知會高報**餘裕（資產檔：回報 1–3 mm、精確三角
+        測試卻是 0.000 m）。2.64 mm 落在那個區間裡。
+      status: "**未以精確三角測試驗證**；使用者裁定先推進，不再測"
+    alternative_recorded_not_taken: >-
+      j3 只要離開 0 兩度，最緊配對就換成結構性的 link4↔link6、餘裕回到
+      8.9 mm，且 j3 限位餘裕由 0.011 升到 0.046 rad。j3=10°/j5=−80° 可得
+      8.74 mm 與 0.186 rad。**使用者選擇維持 j3 = 0**，此處記錄備查。
+
+motm_handover:
+  unfold_travel_largest_joint_rad: 2.6485
+  unfold_min_time_s: 2.65
+  caveat: >-
+    2.65 s 是各軸同時吃 URDF 上限 3.14 rad/s 的理想值；求解器的手臂上限是
+    1.0 rad/s，而且還要同時追位姿，實際必然更久。這個數字是**下界**。
+  handover_distance_at_base_limit_m: 0.09
+  handover_distance_note: >-
+    底盤上限只有 0.035 m/s，2.65 s 只走 0.09 m ⇒ 展開會比底盤的最後接近
+    慢得多。所以交棒區要**按手臂展開需時**定，不是按距離定：
+    建議在底盤距停位 0.30 m 時開始展開，給展開留足時間而不讓底盤乾等。
+  status: 0.30 m 是建議值，待實跑校準
+
+implementation_conditions:
+  passive_dof: >-
+    抽屜開度是**被動狀態**，不是第十個可直接命令的速度。W-GMPC 仍輸出九維
+    底盤與手臂命令，透過已確認的抓取關係帶動抽屜。控制器每輪須讀回實際開度
+    與把手位姿，隨開度更新目標與障礙物位置。
+  contact_policy: >-
+    階段 A 的一般避碰屏障會阻止手指走到夾持位（夾持點屏障餘裕 −0.17767 m/s、
+    缺口 88.8 mm）。必須先完成**按配對、按相位**的接觸政策：只允許兩指與橫桿
+    的設計接觸；面板、支柱、櫃體及其他連桿仍受避碰保護。
+
+offline_feasibility_check:
+  date: 2026-10-03
+  basis: >-
+    阻尼最小平方 IK（多種子）、姿態鎖 R_DES、高度 0.55、判準與階段 A 相同
+    （位置 ≤5 mm、姿態 ≤0.02 rad、有效限位餘裕 >0、joint_margin 0.05）；
+    起點取 spawn 趟次**保持窗結束**的實測位姿，不是首次進入容差那一步。
+  start_pose_used:
+    base: [-0.136412, 0.377503, 1.297349]
+    arm_q: [0.030291, 1.614035, 2.754512, -0.538549, -0.487832, -1.084764]
+    tcp: [0.000039, 1.059646, 0.548550]
+    err_to_target_mm: 1.452
+
+  finding_1_pre_contact_is_at_reach_boundary:
+    script: evaluation/feasibility/drawer_open_close_reach_boundary.py
+    fixed_base_reachable_y_far_boundary_m: 1.060
+    fixed_base_reachable_y_near_end_not_bracketed: >-
+      掃描從 y=0.90 起，該端全部可達 ⇒ **近端邊界沒有被夾出來**，0.900 只是
+      掃描起點。資產註解記的 z=0.55 近端界是底盤距離 0.380 m（約 y=0.758），
+      在掃描範圍之外，本核對沒有獨立驗證它。
+    pre_contact_pause_y: 1.0596
+    j_slack_there_rad: 0.13093
+    j_slack_seed_dependent: >-
+      多種子 IK 會挑到不同的解；另一次取樣得到 +0.06140。兩者都為正，
+      但這個數字**不要當成唯一值**引用。
+    grasp_y: 1.1503
+    grasp_reachable_fixed_base: false
+    shortfall_mm: 94.4
+    open_100mm_y_1p0503_reachable_fixed_base: true（j 餘裕 +0.53045）
+    open_200mm_y_0p9503_reachable_fixed_base: true（j 餘裕 +0.85230）
+    limiting_factor: 工作空間邊界（最小 j 餘裕仍有 +0.136，不是關節限位）
+    consequence: >-
+      接觸前暫停位姿**就在手臂的遠端可達邊界上**。這不是實驗的限制，是
+      **底盤停錯位置的症狀** —— 停位是設計變數，改停到 y=0.56 就沒這個問題
+      （見 park_geometry）。階段 A 的 0.120 m 退讓與該趟成果都不改；
+      本實驗另取自己的停位。
+
+  finding_2_whole_body_can_do_full_stroke:
+    grasp_reachable: true
+    base_move_to_grasp_m: 0.0948
+    base_at_grasp: [-0.1364, 0.4678]
+    stroke_0_to_200mm_reachable: true
+    min_j_slack_over_stroke_rad: 0.12855
+    base_travel_over_stroke_m: 0.1994
+    base_travel_axis: 世界 −y，與抽屜 1 比 1
+
+  finding_3_arm_only_is_also_feasible:
+    setup: 底盤停在全身解的夾持位姿 (-0.1362, +0.4677) yaw 1.3001
+    stroke_0_to_200mm_reachable: true
+    j_slack_at_full_open_rad: 0.62952
+    consequence: >-
+      **固定底盤能完成全程 200 mm。** 所以你預留的「若固定底盤根本無法完成
+      200 mm」這個退路不需要啟用，流暢度可以在完整 200 mm 行程上直接對照。
+      但對照趟次的底盤必須停在**能夾到把手的位姿**，不是階段 A 的接觸前位姿
+      （後者伸不到把手，見 finding_1）。這一點要在對照趟次的條件裡寫明。
+
+  finding_4_motion_split_is_a_controller_choice:
+    minimum_norm_solution:
+      arm_share_of_tcp_displacement_pct: 0.5
+      arm_contribution_mm: 1.1
+      base_contribution_mm: 200.1
+      six_joint_total_travel_rad: 0.02012
+      largest_single_joint_travel_rad: 0.00603
+    both_degenerate_solutions_exist: >-
+      底盤單獨（手臂幾乎不動）與手臂單獨（finding_3）**都可行** ⇒ 運動分配是
+      **控制器的設計選擇**，不是運動學決定的。
+    which_one_is_wanted: >-
+      **底盤供位移、手臂維持好姿態**那一個。它讓關節餘裕恆為 +0.9072 rad、
+      離奇異點距離不變、手臂整段只走 0.00001 rad ⇒ 省力且順暢。
+      我先前把它當成「會違反同動判準的風險」，方向錯了。
+
+  threshold_verdicts:
+    noise_floor:
+      source: wgmpc_stage_a_baseline_long120_020143（120 s 完全靜止、無命令）
+      method: 實測位姿與**實測關節角**差分（不用回報的 twist）
+      base_speed_gt_0p5mm_s_at_rest_pct: 0.15
+      arm_joint_gt_5mrad_s_at_rest_pct: 0.13
+      resolution_note: >-
+        紀錄位置四捨五入到 1 µm、角度到 1 µrad，dt 0.01 s ⇒ 速度解析度
+        0.1 mm/s 與 0.1 mrad/s。0.5 mm/s 等於 5 個量化階，5 mrad/s 等於 50 個。
+      verdict: 兩個門檻都**明顯高於噪訊底線**，可用
+    base_displacement_along_axis:
+      proposed_m: 0.10
+      whole_body_solution_gives_m: 0.1994
+      verdict: >-
+        **可凍結。** 2 倍餘裕，而且它是真正承擔 MotM 主張的那一條 ——
+        因為手臂單獨解（finding_3）會讓底盤位移為 0，所以這條門檻能排除
+        手臂單獨解。開啟段要求向外、關閉段要求向內，方向分開核。
+      not_applicable_to: 20 mm 校核趟（行程只有 20 mm，底盤位移不可能達 0.10 m）
+    co_motion_fraction_80pct:
+      proposed: 底盤 >0.5 mm/s 且任一手臂關節 >5 mrad/s 的步數比例 ≥80%
+      measured_on_stage_a_approach_with_this_definition_pct: [80.1, 94.5, 98.4]
+      margin_on_worst_existing_run_pp: 0.1
+      verdict: >-
+        **不採用為閘門。** 它會把正確行為判成失敗：底盤 1 比 1 跟退、手臂
+        維持好姿態是本任務的**省力順暢解**（整段六軸只走 0.00001 rad），
+        卻會以差兩個數量級的幅度違反這一條。而且在現有最差一趟上只剩
+        0.1 個百分點餘裕。
+      replaced_by: coordination_criterion
+      keep_as: 記錄量（照算、照報，不當及格線）
+
+  coordination_criterion:
+    insight: >-
+      手臂維持**定姿態**只有在底盤走得恰好正確時才成立。底盤任何追蹤誤差都
+      必須由手臂即時吸收 —— 所以手臂**會**動，動的是修正量。協同的證據不是
+      「兩邊都在動」，而是**底盤走了 200 mm，而夾爪對把手的相對位姿沒有漂掉**。
+      這比「兩邊都要動」有意義得多，也不會獎勵多餘的手臂動作。
+    gates:
+      - 底盤沿抽屜軸位移：開時向外、關時向內，各至少 0.10 m
+      - 夾持相對位姿漂移在整段行程中不超過容差（容差待定版）
+      - 相位內無停頓（停頓定義待定版）
+    why_base_displacement_gate_discriminates: >-
+      手臂單獨也拉得動全程 200 mm（finding_3）⇒ 底盤位移這條能排除
+      「底盤不動、只用手臂」的解。全身解走 0.1994 m，2 倍餘裕。
+
+  base_speed_limit_anatomy:
+    why_this_section: >-
+      我先前把「輪級限制」和「低速介面界限」混在一起講。分開是對的，但我接著
+      又寫錯兩句，由你複核實際路徑後糾正（見 corrections_2026_10_03）。
+    corrections_2026_10_03:
+      - wrong: 「E2 以 wheel_ok=low_speed_bound 把輪級檢查替換掉，執行端其實沒有在查輪級」
+        actual: >-
+          evaluation/wb_cmd_chain_e2.py 的 CmdChainE2.step() 順序是
+          wheel_ok()（低速界限，超過即閂鎖）→ limit9()（**再**施加輪速與輪加速度
+          限制）→ _apply()（用限制後的九維命令積分設定點、交付執行）。
+          wheel_ok 名稱容易誤導，但**兩層都在**，後者沒有被取代。
+      - wrong: 「輪級正常輸出限制還沒實作」
+        actual: >-
+          evaluation/wb_wheel_limit.py 的 limit9() 已實作正常修改：
+          u_out = u_prev + λ × (u_req − u_prev)，λ 由輪速與輪加速度決定，
+          作用於**完整九維增量**（結果帶 coupling_preserved 欄位）。
+    what_misled_me:
+      stale_string: >-
+        E2 的紀錄欄位 wheel_level_note 寫著「輪級正常輸出限制尚未實作」，
+        那是從舊檔 isaac_wholebody_sim.py（WHEEL_LIMIT_IMPLEMENTED = False）
+        帶過來的過時字串，和同一個字典裡的
+        wheel_level_limiting_implemented = True 以及 limit9 的實作互相矛盾。
+      guards_not_started_meaning: >-
+        guards_not_started = [arm_vel_gate, wheel_limit_guard] 指的是那兩個
+        **ROS 節點**沒啟動；E2 自己的說明已寫明「它們的必要檢查沒有省略 ——
+        全部由 wb_cmd_chain.CmdChain 承接」。
+      my_fault: 這兩件事讀程式就能查清，我當時只讀了紀錄欄位
+    actual_policy: >-
+      **低速介面越界則停；通過後，輪級限制必要時修改命令。** 不是二選一，
+      也不需要再接一套重複功能。
+    layer_1_low_speed_interface_bound:
+      value_mps: 0.05
+      value_rps: 0.20
+      checked_where: E2 的 low_speed_bound，檢查 hypot(vx, vy) 與 |wz|
+      on_violation: "**閂鎖，不縮命令**"
+      solver_box_per_axis: 0.035255
+      solver_box_derivation: 0.05 / √2 = 0.049858 ⇒ 讓對角量值不超過介面界限
+      nature: 軟體保守值
+    layer_2_wheel_level_limiting:
+      implemented: true
+      where: evaluation/wb_wheel_limit.py 的 limit9()
+      law: u_out = u_prev + λ × (u_req − u_prev)
+      lam_from: 輪速與輪加速度約束
+      applies_to: 完整九維增量（底盤與手臂的耦合保留）
+      stop_unverified_when: dt 不合法、dt 斷裂、或前一筆命令本身已超速
+      what_it_guarantees: 只保證**輪級合規**
+      what_it_does_not_guarantee: >-
+        不保證修改後的命令在接觸操作中仍安全、順暢。λ 縮放會同時改變底盤與
+        手臂分量，夾持相對位姿與避碰餘裕都可能受影響，這些沒有驗證過。
+    wheel_matrix_feasible_upper_bounds:
+      label: "**只考慮現有輪矩陣的本體座標可行上限**"
+      not_proven: 未證明馬達、負載與輪地接觸真的能交付這些速度
+      single_wheel_limit_mps: 0.2775
+      formula: wheel_radius × wheel_w_max = 0.05 × 5.55
+      wheel_base_L: 0.245
+      body_frame:
+        pure_y_wz_0: 0.2775
+        pure_x_wz_0: 0.2775
+        diagonal_45_wz_0: 0.3924
+      world_frame_conversion:
+        park_base_yaw_rad: 1.297349
+        park_base_yaw_deg: 74.33
+        world_minus_y_in_body_frame: [-0.9628, -0.2701]
+        note: 世界開抽屜方向在本體座標幾乎是 −x
+        feasible_along_world_minus_y_mps: 0.2882
+        with_wz_0p1999: 0.2373
+        with_wz_1p0: 0.0338
+        correction: >-
+          先前表格把「本體 +y」當成開抽屜方向、報 0.2775。換算後實際是
+          0.2882 m/s。自轉仍會吃掉預算：wz=1.0 時只剩 0.0338 m/s，
+          所以導航段要轉向時不能假設上限。
+      traced_to_urdf:
+        base_x_velocity: 0.2775
+        base_y_velocity: 0.2775
+        base_theta_velocity: 1.1327（= 0.2775 / 0.245）
+        geometry_cross_check: >-
+          滾子中心 z 的中位數正好 0.0500 m（輪軸高＝有效輪半徑）、輪組水平
+          半徑中位數 0.2466 m ⇒ 程式用的 0.05 與 0.245 對得上 URDF 幾何。
+      not_independently_verified: >-
+        **wheel_w_max = 5.55 rad/s 沒有獨立來源。** 它是馬達規格；URDF 的
+        base_x/base_y velocity 0.2775 就是這個數乘輪半徑得來的，和程式同源，
+        不算獨立驗證。幾何（0.05、0.245）核到 URDF 了，輪速沒有。
+    ruling_2026_10_03:
+      decision: "**先修正規格裡那兩個錯誤敘述，暫不據此放寬速度框。**"
+      if_speed_is_studied_later:
+        - 另立**較高速配置**，讓求解器、安全層、E2 的界限一致
+        - 核對 λ 修改後命令的避碰與夾持效果
+        - 決定要提高**哪個操作階段**的速度，以及如何驗證提高後的行為
+      wording: >-
+        限速確實有軟體保守成分，但**不是因為輪級功能漏做**。
+
+  speed_effort_tradeoff:
+    script: evaluation/feasibility/drawer_speed_effort_tradeoff.py
+    method: 底盤軌跡按分擔比例給定，手臂用 IK 補剩下的
+    table:
+      - [底盤分擔, 底盤走 mm, 歷時下界 s, 手臂六軸行程 rad, 最差關節餘裕 rad, 最差奇異值]
+      - [100%, 200, 5.67, 0.0001, 0.9072, 0.1064]
+      - [90%, 180, 5.11, 0.3159, 0.8464, 0.1064]
+      - [75%, 150, 4.25, 0.7591, 0.7645, 0.1065]
+      - [50%, 100, 2.84, 1.4562, 0.6466, 0.1066]
+      - [35%, 70, 1.99, 1.8682, 0.5853, 0.1067]
+      - [20%, 40, 1.13, 2.2876, 0.5308, 0.1068]
+      - [10%, 20, 0.57, 2.5763, 0.4985, 0.1068]
+      - [0%, 0, 0.00, 2.8762, 0.4400, 0.1069]
+    all_splits_kinematically_feasible: true
+    posture_quality_stays_healthy: >-
+      任何分擔比例下最差關節餘裕都在 +0.44 到 +0.91 rad 之間，最差奇異值幾乎
+      不變（0.1064–0.1069）⇒ 取捨的代價是**手臂行程**，不是姿態品質或安全餘裕。
+    cost_is_arm_travel: 手臂六軸累積行程由 0.0001 rad（全交底盤）升到 2.8762 rad（全交手臂）
+    caveats:
+      - 這些是**運動學下界**，不是做得到的歷時。實跑還要吃 20 Hz 控制週期、1.6 週期的延遲補償，以及維持夾持容差所需的修正。
+      - >-
+        **手臂高頻振盪尚未解決**（階段 A 已知）。把手臂推到 1.0 rad/s 正好是
+        那個問題會變嚴重的區域；上一個提交才剛把命令變化率權重分底盤／手臂
+        來壓移動段的手臂甩動。所以「拆給手臂」會和順暢直接衝突，要實測才知道。
+      - 底盤與手臂的加速度上限不是瓶頸：底盤 0.5 m/s² 達 35 mm/s 需 0.07 s，手臂 20 rad/s² 達 1.0 rad/s 需 0.05 s。
+frozen_pass_conditions:
+  operation_complete:
+    open: 實測開度進入 195–205 mm 並保持至少 2 s
+    close: 其後回到 0–5 mm 並保持至少 2 s
+    forbidden: 不得用命令值或模擬時間到期代替
+    status: 已凍結（照你給的數值）
+  coordination:
+    scope: 開啟段與關閉段**各自統計**，從相位開始到開度到達目標為止
+    basis: 實測位姿與實測關節角差分
+    forbidden: 不能只用接近段或導航段的數字充數
+    gate_base_displacement_m: 0.10（已凍結，方向分開核）
+    gate_grasp_drift: 見 offline_feasibility_check.coordination_criterion（容差待定版）
+  effort_smoothness_speed:
+    why_these: 你要的是**省力、順暢、快速**，所以判準對照**算得出來的最優值**，不是任意百分比
+    effort:
+      measure: 手臂六軸累積行程、底盤路徑長
+      computed_optimum: 手臂 0.00001 rad、底盤 0.1994 m（底盤路徑等於行程本身，不可能更短）
+      report_as: 實測除以最優值
+    smoothness:
+      measure: 每相位停頓次數與最長停頓、TCP 速度尖峰、手臂速率翻號、底盤速度變化、夾持相對位姿漂移
+      reconfiguration_count: 手臂應全程維持同一姿態 ⇒ 重構次數應為 0
+    speed:
+      status: "**記錄量，不是本實驗的目標**"
+      ruling_2026_10_03: >-
+        沿用現有速度、加速度、輪級與關節限制，一個都不放寬。**順暢不一定要快**：
+        先做到動作連續、夾持穩定、沒有明顯甩動，就已經是有價值的 MotM 成果。
+        提速留到完整流程完成後再考慮，不排進主線 —— 那會讓主線多出一輪驗證。
+      report_as: 各相位歷時照報，不設及格線，也不與理論下界對比當成績
+      limits_in_force:
+        v_base_lin_mps: 0.035255
+        v_base_ang_rps: 0.199900
+        v_arm_rps: 0.999900
+        a_base_lin: 0.50
+        a_base_ang: 2.00
+        a_arm: 19.984
+        low_speed_interface_bound: lin 0.05 m/s、ang 0.20 rad/s（越界閂鎖）
+        wheel_level: limit9 的 λ 修改（已實作，見 base_speed_limit_anatomy）
+        joint_margin: 0.05
+      why_not_speed_now: >-
+        操作段提速的驗證代價最高 —— λ 修改會同時動底盤與手臂分量，直接影響
+        夾持相對位姿與避碰餘裕，而那些在高速下都沒測過。流程還沒接通就先動
+        限制，等於同時改兩件事。
+
+  priority_2026_10_03:
+    goal: 讓機器人**走近、抓住、開抽屜、關抽屜，整段銜接順暢**
+    order:
+      - 沿用現有速度、加速度、輪級與關節限制
+      - 接好夾持、開啟、關閉、釋放的完整流程
+      - 在既有限制內改善底盤與手臂的分配，以及各階段的銜接
+    deferred: 提速（含導航段）—— 完整流程完成後再考慮
+    success_shape: 動作連續、夾持穩定、沒有明顯甩動
+
+  baseline_for_smoothness:
+    what: 同一夾持位姿、底盤固定、只用手臂操作
+    feasible_at_full_stroke: true（finding_3）
+    base_must_park_at: 能夾到把手的位姿
+    shorter_stroke_fallback: 不需要啟用
+  failure_conditions:
+    triggers:
+      - 抓取滑脫
+      - 非指定接觸
+      - 關節或屏障越界
+      - 力監看失效
+      - 命令過期或失效閂鎖
+      - 底盤命令越過低速介面界限
+    action: 停止任務並保存**首次**原因
+    force_limit_caveat: >-
+      現有接觸正向對照只證明感測器對**受測接觸**會響應；探針測出的 1843 N
+      是求解器穿透反作用，**不能**直接當夾爪力界限。
+
+run_order:
+  - step: 20 mm 開啟再關閉的接觸閉迴路校核
+    purpose: 驗證抓取、相位切換、開度方向與安全層；排除接線錯誤
+    not_a_result: true
+    criteria_differ: 開度目標 20 mm；底盤位移 0.10 m 那一條不適用
+  - step: 正式 200 mm 開啟再關閉
+    purpose: 本實驗的成果
+    same_frozen_control_and_criteria_as: 校核趟
+
+video:
+  must_show: 機器人**與**抽屜同時在畫面內
+  must_annotate: 開度及開、關相位，以同趟實錄標出
+
+what_exists_already:
+  contact_pair_phase_exception: >-
+    已實作：wholebody_safety_filter 的 contact_pairs（配對在允許相位不產生
+    屏障列，其他連桿對同物件與本連桿對其他物件都不受影響）、相位話題
+    /coman/contact_phase、contact_phase_max_age 0.25 s，**過期或未收到 ⇒
+    無任何例外**。離線測試 test_pair_exceptions.py 與 test_pipeline_pairs.py 全綠。
+  pull_solver_node: >-
+    evaluation/coman_pull_solver_node.py 已有相位化夾爪目標與
+    /coman/contact_phase 發布，但它**從未跑過任何趟次**，而且用的是**單步
+    全身 QP**（wholebody_pregrasp.WholeBody），不是 W-GMPC。
+  scene_truth_source: arm_link_distance 的 scene_truth 模式（階段 A 已用）
+
+navigation_leg:
+  stack: 第一階段 GMPC 導航鏈（omni_bot_dynamic.launch.py 啟的那一套），不改
+  node: src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node.py
+  limits_as_configured:
+    v_nominal: 0.30
+    vx_max: 0.35
+    vx_min: -0.20
+    vy_max: 0.25
+    wz_max: 0.80
+    ax_max: 1.5
+  simulator_side: >-
+    evaluation/isaac_bigarena_sim.py 已把導航介面移到 Isaac：/cmd_vel 進、
+    /scan_raw 出（360 條 PhysX raycast、10 Hz）、/clock、位姿真值，手臂以
+    位置驅動維持收攏。本實驗沿用同一條路徑，只換世界檔。
+  goal_is_the_handover_zone_not_the_park_pose: >-
+    導航目標取停位的**鄰域**（交棒區 0.30 m），容差可鬆（0.15–0.25 m）。
+    最後 0.30 m 與手臂展開由全身控制接手 —— park_tol_m 是 10 mm，
+    導航堆疊不可能也不需要達到那個精度。
+  flagged_not_changed:
+    what: nav 配置的 vx_max 0.35 **高於**輪矩陣對本體 +x 的可行上限 0.2775
+    why_not_touched: >-
+      那是動態基準已驗證過的既有導航配置，且 gz 當時直接控底盤速度、
+      沒有輪級施限。本輪不改它，只記下來：**若導航段改走會施加輪級限制的
+      執行端，命令會被 λ 縮放**，等於換了一個配置，必須另外驗證。
+
+command_path_handover:
+  status: 離線判定已完成（gate_module）；執行期接線尚未做
+  the_problem: >-
+    導航段與操作段的**命令介面與速度界限都不同**：導航是 /cmd_vel 三維、
+    0.30–0.35 m/s；操作是 /wb_vel_cmd 九維、0.035 m/s 並有低速介面界限
+    （越界即閂鎖）。同一趟要兩者都跑。
+  handover_style: "**速度匹配滾動交棒 —— 不停車**"
+  why_no_pause: >-
+    停頓會破壞整段的順暢，而且沒有必要。交棒不必發生在導航速度下：導航在進
+    交棒區前把速度**降進全身的速度框**（逐軸 0.035255 m/s、0.1999 rad/s），
+    再在底盤**仍在移動**時換手。底盤一路連續，只有發命令的來源改變。
+  deceleration_cost: >-
+    GMPC 的 ax_max 是 1.5 m/s²，從 0.30 降到 0.035 只要約 0.18 s／30 mm。
+  the_constraint_that_still_holds:
+    derivation: >-
+      導航的 v_nominal 0.30 m/s 是低速介面界限 0.05 m/s 的 6 倍。導航命令一旦
+      送進操作段的命令鏈，CmdChainE2 的 wheel_ok 回 False ⇒ _fail ⇒ **整條鏈
+      當場閂鎖**。所以導航**不能**走那條鏈，兩條路徑必須分開。
+    consequence: >-
+      底盤不在鏈上 ⇒ 交棒時**沒有底盤的套用回報**。u_prev 的底盤分量因此取
+      **實測速度**（位姿差分後轉入本體框），不是零 —— 底盤正在動，用零會讓
+      第一筆全身命令被加速度約束當成一次跳變。
+  superseded_design:
+    was: 「導航先把底盤停住 → 解除 → 全身接手」，u_prev 標 measured_rest
+    why_rejected: 使用者指出銜接不該有停頓（2026-10-03）
+    what_was_wrong_in_my_reasoning: >-
+      我由「導航命令不能進鏈」推到「必須停車」，中間漏了一步：**交棒速度不必
+      等於導航速度**。導航自己就能減速進框。
+  the_rule: >-
+    **兩個來源不得同時驅動底盤，而且任何一個物理步都不得沒有控制者。**
+    後半句是 2026-10-03 補上的 —— 「解除舊來源 → 等安靜 → 新來源上線」
+    在中間留了空窗，底盤正在移動時那段要嘛靠逾時停止（就是停頓），
+    要嘛無期限沿用最後命令（不成立）。
+  design:
+    sequence: 導航**持續控制並減速** → 全身備妥 → 執行端在**明確物理步**轉移控制權
+    nav_never_released_early: 轉移前導航一路持有控制權，不先解除
+    late_commands: 轉移後晚到的導航命令**依控制權拒絕**，不靠時間判斷
+    on_failure: 控制權**留在導航**，由它繼續負責減速；不會先解除再留空窗
+  modules:
+    authority: evaluation/control_authority.py（測試 36/36）
+    readiness_gate: ammr_wholebody_mpc.wgmpc_handover.check_nav_handover（測試 64/64）
+    chain_seeding: CmdChainE2.seed_from_handover（測試 22/22）
+  what_the_gate_checks:
+    - 導航**仍持有控制權**（已不在控制 ⇒ 中間已有空窗，那本身是缺陷）
+    - 導航的**套用回報**完整、有限、新鮮（u_prev 的來源）
+    - 底盤速度已降進全身的速度框（逐軸比，不是比合速度）
+    - 套用命令與實測速度一致（兩者本來就會不同，只擋離譜的）
+    - 在交棒區內**且**底盤足跡未侵入櫃體與全開抽屜的保留區
+    - 關節角有效、新鮮、在有效限位內，且仍在收攏姿態
+    - 執行端回報完整：**n_recv／n_rejected 缺值不得放行**（那正是證據本身）
+    - 時間戳先擋非有限值再做運算（NaN 的比較一律為假，會悄悄通過）
+  u_prev_vs_measured_velocity:
+    u_prev_source: nav_applied
+    what_it_is: 導航**上一筆真正寫進 API 的命令**（導航不經 E2，但它自己的 API 寫入處可以回報）
+    measured_velocity_is_for: "**核對**交棒狀態，不當基準"
+    why_separate: 兩者可能不同（追蹤誤差、限制器修改、外力）
+    executor_must_seed: >-
+      CmdChainE2 在 `u_prev is None` 時會**零初始化**。只把閘門輸出改成非零，
+      求解器與執行端還是用不同基準 —— 必須呼叫 `seed_from_handover()`，把
+      **最後套用命令、手臂設定點與時間**一起承接過去。
+    where_the_zero_baseline_actually_costs: >-
+      **不在輪級限制器**（它的加速度上限換算 0.3125 m/s/週期，比底盤速度框
+      0.0353 還大，不會縮）。在**求解器自己的** a_base_lin 0.5 m/s²、週期
+      0.05 s ⇒ 每週期最多 0.025 m/s；由零跳到 0.030 要約 0.06 s 才追上。
+      那就是頓挫。
+  deceleration_trigger:
+    not_frozen: true
+    the_caveat: >-
+      先前算的 0.18 s／30 mm 是**按最大減速度、立即開始減速**的理想值，
+      **不能直接當觸發距離**。實際減速點還要含命令延遲與量到的減速表現。
+    status: 待實跑量測後才定
+  acceptance_for_this_round:
+    criteria:
+      - 換手前後**每個物理步都有唯一控制者**
+      - "**晚到命令不會搶回控制**"
+      - 求解器與 E2 **承接同一份套用歷史**
+      - 換手失敗時**有持續負責減速的控制者**
+    verified_offline: 四條都已由 test_control_authority 與 test_chain_seed 釘住
+    not_yet_verified_in_run: 以上都是離線不變量；實跑接線尚未做
+
+  three_gates_now_exist:
+    check_handover: 前置調姿 → W-GMPC；u_prev 取自實際套用回報（applied）
+    check_start_posture: 生成式起步（spawn）；u_prev 取自實際套用回報（applied）
+    check_nav_handover: 導航 → 全身；u_prev 取自**導航的套用回報**（nav_applied）
+
+executor:
+  module: evaluation/isaac_drawer_room_sim.py（新增）
+  why_new: >-
+    isaac_bigarena_sim.py 有導航側、isaac_wholebody_sim_e2.py 有全身側，
+    **沒有一支同時有兩者**。E2 是階段 A 的執行端、結果已封存 —— **不動它**，
+    本檔重用共用模組（drawer_asset、isaac_common、wb_cmd_chain_e2、
+    dual_source_executor）。
+  interfaces_out: [/clock, /scan_raw, /joint_states, /odom,
+                   /coman/applied_cmd, /coman/arm_setpoint, /drawer/state,
+                   /handover/state]
+  interfaces_in: [/cmd_vel, /wb_vel_cmd, /handover/request]
+  wiring_verified_1003:
+    probe: evaluation/drawer_room_drive_probe.py（**只是接線核對，不產生結果判定**）
+    lidar: 360/360 條有回波，距離 0.674–8.337 m
+    robot_moved_m: 1.75
+    applied_report: 18 欄齊全、exec_mode=4（導航路徑）、api_applied=1
+    authority: 每物理步都有控制者（1999／3999 步皆有紀錄）
+  defect_found_and_fixed:
+    symptom: 下本體 +x、起始 yaw 90.00°，驅動 5 s 後**偏航 +21.14°**
+    cause: >-
+      沒綁零摩擦材質。URDF 的 gazebo mu1 importer 不讀，PhysX 退回預設
+      （約 0.5）；底盤被直接設速度時，支撐球與地面的摩擦抵抗橫向運動就產生
+      淨力矩。E2 的註解已記過同類後果（不綁時速度追蹤只有 37%）。
+    fix: 比照 E2 綁零摩擦，**接觸雙方都綁**（支撐球 4 + 地面 2 = 6）；只綁一邊無效
+    after: "**Δyaw +0.25°**；位移方向 +90.64° vs 本體 +x 的 +90.52°，差 0.12°"
+    guard_added: 綁定數為 0 時直接中止（碼 19），不讓它悄悄跑出偏航的趟次
+
+
+nav_handover_run_1003:
+  status: "**前半段已實跑連通**：真 GMPC 導航 → 減速 → 滾動交棒"
+  runner: evaluation/run_nav_handover.sh
+  runs:
+    - id: nav_handover_224543
+      outcome: 交棒完成（rc=0），但**不是滾動** —— 承接基準為零，底盤已停住
+      why: 計畫止於停位，GMPC 抵達目標時減速很陡（實測由 0.153 m/s 到 0 只走 6 mm），沒有任何時刻停在速度框內還在動
+    - id: nav_handover_224928
+      outcome: "**滾動交棒成立**"
+      slow_zone_entered_m: 0.7954
+      v_nominal_set_to: 0.030
+      handover_requested_step: 3452
+      handover_actual_step: 3454
+      seed_base_baseline: [-0.016777, 0.026223, -0.004884]
+      seed_base_speed_mps: 0.031131
+      inside_box: true（框 0.035255）
+      nonzero: true（切換前速度非零）
+      retraction_1003: >-
+        **先前寫的「交棒沒有停頓」必須撤回。** 該趟 room_run.json 記的命令鏈
+        received=0 —— W-GMPC 尚未接上。dual_source_executor 在鏈沒有可套用
+        命令時回傳的底盤速度就是 (0,0,0)，模擬器隨後把它寫進 API，底盤當場
+        停住。所以非零的承接基準**只證明歷史有保存，沒有證明新控制器連續
+        接手**。目前證據只支持「切換前速度非零」。
+      step_labels_corrected: >-
+        執行端完成切換是第 3452 步；3454 是**任務節點觀察到結果**的步數。
+        兩者不是同一件事，已分成 switch_committed_step 與觀察值分開標示。
+      park_dist_at_handover_m: 0.2803
+      yaw_error_at_handover_deg: 15.78
+  scope_stated:
+    controller: "**真的 gmpc_node**，控制律未改"
+    localisation: /odom 真值（本實驗的明示前提）
+    plan: 由任務節點依已知靜態房間產生，**未用 nav2 planner／map_server／amcl**
+    cbf: "**關閉** —— 沒有障礙物聚合器在發 /obstacles；房間靜態且路徑已用幾何核過淨空"
+  additive_change_to_phase1_node:
+    what: gmpc_node 加了 v_nominal 的執行期參數回呼
+    why: >-
+      原本只在初始化讀一次，最後接近要放慢就只能重啟節點 —— 那會在控制上
+      留一個空窗。滾動交棒需要底盤在**仍在移動**時被接手，而本節點抵達目標
+      時的減速是陡的，沒有任何時刻停在全身的速度框內還在動。
+    control_law_unchanged: true
+  defects_found_and_fixed:
+    - symptom: 任務節點算出的速度出現**剛好 2 倍／0.5 倍**的假值（0.2775 與 0.5551 交替）
+      cause: 用**節點時鐘**做位姿差分，它與訊息時間戳不同步，dt 時大時小
+      fix: 一律用**訊息自己的時間戳**差分與比對，並以「看過的最大 sim_t」當現在
+    - symptom: gmpc 一直報「/odometry/filtered is stale」，即使參數已設成 /odom
+      cause: 沒設 use_sim_time —— 牆鐘對模擬時間戳，差 1.79e9 秒
+      note: 那句警告把 /odometry/filtered **寫死在訊息字串裡**，即使參數已改仍照印，誤導了一次
+      fix: 啟動時加 use_sim_time:=true
+    - symptom: 計畫終點朝向用了路徑方向，與停位 yaw 差 14.8°
+      fix: 最後一個位姿改用停位的 yaw（停位朝向是手臂可達性算出來的，不是走過去的方向）
+  preflight_layer_1003:
+    why: >-
+      「收到新鮮命令」**不等於**「切換當步能成功套用」。先前的就緒檢查只核
+      收到命令、快照年齡與既有失效狀態；低速介面界限、手臂速率、輪級限制與
+      設定點積分的有效限位，**都在控制權切換之後**才執行。
+    counterexample_1: >-
+      首筆底盤命令 0.06 m/s —— 結構正確、時間新鮮、鏈未失效，就緒檢查通過；
+      切換後 E2 才因超過 0.05 而閂鎖。控制權已經交出去了。
+    counterexample_2: >-
+      會讓設定點穿過有效限位的首筆命令。j3 的有效下限是 −0.011087，收攏姿態
+      j3 = 0 只剩 0.011087 rad；j3 速率 −1.0 rad/s、dt 0.01 ⇒ 第一步到
+      −0.010（還在裡面）、**第二步 −0.020 才穿出去**。
+    design:
+      - 取最新承接資料與待套用命令快照
+      - 用**命令鏈自己的計算路徑**預核本步輸出（深拷一份鏈，不另寫判斷）
+      - "**核整個有效期**（max_cmd_age_s / dt 步），不是只核一步 —— 否則會放過反例 2"
+      - 預核**不寫入實際狀態**：拷貝丟掉，本體一個位元沒動
+      - 預核成功才提交控制權，並**核對實際套用與預核逐位元相同**
+      - 失敗則保留導航控制權，執行既定減速
+    verified:
+      counterexample_1: test_dual_source_integration X1–X5（切換被取消、真鏈未被承接、**真鏈未被閂鎖**）
+      counterexample_2: X6–X9
+      positive: X10–X11（合法命令正常切換、實際套用與預核一致）
+      fake_chain: test_dual_source_executor H1–H8
+
+  fixes_1003_after_review:
+    - what: "**接手方必須先備妥有效的首筆命令，才提交切換**"
+      why: >-
+        否則切換當步新控制者沒有可套用的命令，執行層送 (0,0,0)，底盤當場
+        停住 —— 那正是上面要撤回的那個宣稱的成因。
+      how: >-
+        排定的切換步到達時先查接手方就緒（命令鏈 n_recv > 0、有命令快照、
+        年齡在 max_cmd_age_s 內、鏈未失效）。未就緒就**取消切換**，控制權
+        留在現任、由它繼續負責減速。檢查必須在 auth.on_step 之前 ——
+        on_step 一旦執行切換就會把排程清掉。
+      tests: test_dual_source_executor G1–G12、test_dual_source_integration C4–C7
+    - what: 導航命令的逾時檢查失效
+      why: >-
+        接收時間在主迴圈每個物理步都被刷新，只要曾收到過命令就永遠算新鮮，
+        導航停止發布後舊命令會一直被沿用，逾時處置永遠不會觸發。
+      how: 接收時間**只在回呼裡**更新
+      verified: >-
+        evaluation/nav_timeout_probe.py：送 2 s 非零命令（移動 0.710 m）後
+        停發 ⇒ 模擬器記錄「導航命令逾時 1.01s > 1.0s ⇒ 歸零」，
+        **最後 3 秒（模擬）只移動 0.09 mm**。
+      claim_narrowed: >-
+        能說的是：**已量到停止距離，逾時確實觸發**。停發後的 0.3204 m
+        要把多少歸給「仍沿用舊命令」、多少歸給物理運動，**仍需逐步對帳**，
+        目前沒有做，不得寫成「與設定一致」。
+    - what: 執行端完成切換的物理步與任務節點觀察到的步數分開標示
+      how: summary 新增 switch_committed_step 與說明欄位
+
+  still_open:
+    - "**連續接手尚未證明** —— 要等 W-GMPC 接上、在切換當步就有有效命令，才有依據"
+    - 交棒當下 yaw 仍差 15.78°（全身接手後要自己修正；尚未驗證）
+    - 展開與接觸前到達尚未接（需要把相位機與目標生成接到 W-GMPC）
+    - >-
+      展開要用**實際交棒位姿**起算，含那個 15.78° 朝向誤差 ——
+      不能沿用標稱停位的路徑就認定可行
+    - 新指定的夾持摩擦 μs=1.0／μd=0.8 是**待驗證配置**，真正夾持時再量它的效果
+
+phase_machine:
+  module: evaluation/drawer_task_policy.py
+  tests: evaluation/test_drawer_task_policy.py（77/77）
+  why_new_module: >-
+    既有 coman_pull_policy.py 的 PULL 相位靠
+    `sim_t - t_pull0 >= pull_duration_s` 推進 —— **模擬時間到期**，
+    正是凍結判準明文禁止的；而且它沒有關閉相位。既有規格與測試不動。
+  phases: [NAVIGATE, UNFOLD, ALIGN, ENGAGE_WAIT, OPEN, OPEN_HOLD, CLOSE,
+           CLOSE_HOLD, RELEASE_WAIT, RETREAT, RESTOW, HANDBACK_WAIT,
+           NAVIGATE_HOME, DONE]
+  return_leg_added: >-
+    2026-10-03 補上回程三段：RESTOW（先收攏再導航）、HANDBACK_WAIT
+    （**反方向**的控制權轉移）、NAVIGATE_HOME（回起點，容差 0.20 m）。
+    先前停在退出就 DONE，沒有回程。
+  tests_now: evaluation/test_drawer_task_policy.py（95/95）
+  advance_basis: >-
+    開啟與關閉一律看**實測開度**落入帶內並**連續**保持 ≥ hold_s。
+    命令值、參考軌跡 s、經過時間都不是依據；開度無讀值時不推進
+    （缺值不等於達標）。保持計時一離開帶即歸零，不累計。
+  hold_timer_definition: >-
+    從「進帶那一刻」起算，首筆為 0 —— 與階段 A 的到達保持同義。
+  safety_phase_labels:
+    no_exception: [NAVIGATE, UNFOLD, RETREAT, RESTOW, HANDBACK_WAIT,
+                   NAVIGATE_HOME, DONE]
+    designed_contact: [ALIGN, ENGAGE_WAIT, OPEN, OPEN_HOLD, CLOSE, CLOSE_HOLD,
+                       RELEASE_WAIT]
+    unlisted_phase: 一律發 'unknown' ⇒ 濾波器端匹配不到例外（fail closed）
+  handover_needs_all_three: 底盤到停位、手臂到夾持姿態、把手讀值有效 —— 缺一不離開 UNFOLD
+  abort_conditions_latched:
+    - emergency
+    - grasp_slip（漂移超限、執行端回報未連接、或**漂移無讀值**）
+    - undesignated_contact
+    - limit_or_barrier
+    - force_monitor_failed
+    - cmd_stale_or_fail_latched
+    - base_cmd_over_low_speed_bound
+    - stall（只在需要移動的相位判；保持相位命令本來就近零）
+  first_cause_preserved: true
+  stale_state: 不推進、不完成、不中止，並留紀錄
+
+target_generation:
+  module: evaluation/drawer_target.py（新增）
+  tests: evaluation/test_drawer_target.py（30/30）
+  law: W_T_G_des = W_T_H_target · (G_T_H)^(-1)
+  grasp_relation_measured_once: >-
+    連接當下量一次 G_T_H（夾爪 → 把手）就固定，之後夾爪目標都由把手目標反推
+    ⇒ 抓取關係整段不變。直接把抽屜參考點當夾爪目標會產生固定偏差。
+  closed_on_measurement:
+    reference_opening: d_ref 由**實測開度** d_meas 加上有界超前量推進
+    target_handle_pose: 由**實測**把手位姿沿滑軌平移 (d_ref − d_meas)
+    lead_max_m: 0.010
+    rate_max_mps: 0.035255（與底盤速度框同值，不是另一個自由參數）
+  why_not_the_old_module: >-
+    既有 coman_pull_target.py 的 s(t) 是**時間的 smoothstep**（開迴路）：
+    參考值按時間前進，不管抽屜實際到哪裡。抽屜卡住時參考值仍前進，夾爪就
+    一路拉 —— 不是滑脫就是硬扯。凍結判準也明文禁止以時間到期代替實測。
+    該模組**未改**，它屬於另一個已規格化的任務。
+  bounded_lead_is_the_point:
+    behaviour: 抽屜卡住時 d_meas 不動，d_ref 停在 d_meas + lead_max，不會愈拉愈遠
+    verified: 測試 C1–C4：卡在 50 mm、推 20 s，參考值停在 60 mm（無界的話會跑到 200 mm）
+  grasp_drift_for_phase_machine: >-
+    drift_vs() 把連接當下的抓取關係套到現在的夾爪位姿，得到「把手應該在哪」，
+    再與實測把手位姿比 —— 給相位機當滑脫判定用。
+
+what_must_be_built:
+  done_this_round:
+    - 控制權轉移（control_authority.py，36/36）
+    - 交棒承接進命令鏈（CmdChainE2.seed_from_handover，22/22）
+    - 導航備妥判定（check_nav_handover，64/64）
+    - 雙來源執行層（dual_source_executor.py，32/32 ＋ 真鏈整合 12/12）
+    - 由實測開度驅動的目標生成（drawer_target.py，30/30）
+    - 雙介面執行端（isaac_drawer_room_sim.py）：接線已實跑核對，零摩擦缺陷已修
+    - 相位機含回程（drawer_task_policy.py，95/95）
+  blocking_next:
+    - 把相位機與目標生成接到 wgmpc_wg2_node.py（W-GMPC），而不是單步 QP 的求解節點
+    - 夾爪開合的命令通路與夾持成立／解除的判定
+    - 把第一階段 GMPC 導航鏈接上本執行端（/scan_raw、/odom、/cmd_vel 都已就位）
+  then:
+    - 展開軌跡（收攏 → 夾持姿態）的逐點自碰與逐點限位核對
+    - 減速觸發距離的實跑量測（理想值不能當觸發距離）
+    - 相位切換與屏障例外的**實跑**驗證
+
+not_established:
+  - 相位切換與握手從未在實跑中驗證
+  - 相對煞停能力未驗證（抽屜是被動件**不能**推論偏保守）
+  - 夾爪力界限沒有來源
+  - 保持期間的殘餘振動未解（階段 A 已知）
+
+preserved:
+  - 既有 20 mm 凍結判準不動
+  - 階段 A 成果與影片不動
+  - drawer_unit.yaml 資產幾何不動
+
+# =====================================================================
+# 滾動交棒：量測與結論（2026-10-04）
+# =====================================================================
+rolling_handover_findings:
+  date: 2026-10-04
+  scope: >
+    真 gmpc_node 原樣使用；/odom 給真值；/plan 由任務節點依已知靜態房間產生
+    （未用 nav2 planner）；CBF 關閉。以下全部是實跑量測，趟次編號可對帳。
+
+  已完成並驗證:
+    交棒逐步連續:
+      趟次: nav_handover_cap_005455
+      內容: >
+        交棒當步零命令步數 0；切換 ±200 步內控制權每步恰一個；預核結果與
+        實際套用逐位元相符；切換當步實測 21.17 mm/s（框 35.26/軸、滾動下界
+        10.0），底盤**沒有停**。
+      跳變: 由 48.76 mm/s 降到 7.071 mm/s（合量），逐軸 5.000 mm/s
+      手段: 執行層套用既有的 a_base_lin 0.50 / a_base_ang 2.00（逐軸）
+    展開:
+      趟次: nav_handover_cap_005455
+      關節最大差_rad: 0.0140
+      位置殘差_m: 0.0133
+      偏航殘差_rad: -0.00084
+      實測最小有效餘裕_rad: 0.9072
+      起步位姿: [-0.3149, 0.4340, 1.5675]
+      備註: 由**實際交棒位姿**起算，不是理想位姿
+
+  已修正的缺陷:
+    - 名稱: 計畫發布競態
+      趟次: nav_handover_ctrl5_002805（已作廢，見該目錄 VOID.md）
+      內容: >
+        mission 以 TRANSIENT_LOCAL 發 /plan，gmpc 訂閱是預設 VOLATILE。
+        兩者**相容**所以不報 QoS 不符，但 VOLATILE 收不到 latch 回放。
+        計畫只發一次 ⇒ 發布端先就緒時整趟 state='no_plan'，底盤一步沒動。
+      修法: 先等訂閱者（最多 10 s）再發、重發 5 次、記 plan_n_sub_at_publish
+    - 名稱: 交棒時機用「指定單一未來步」
+      內容: >
+        任務節點看到的狀態落後執行端數十步（實測一次 402 步），而條件成立
+        的窗口只有一個 GMPC 週期寬。三趟只中一趟，是運氣不是設計。
+      修法: >
+        改為**窗口預約**：執行端在窗口內每一步照原樣查就緒＋預核＋切換當步
+        速度框與滾動下界，第一個成立的步才提交。**不放寬任何條件**
+        （test_dual_source_executor.py J 組 12 項反例在釘這件事）。
+        未備妥的每一步都記下理由，所以失敗有精確原因而不是靜默錯過。
+    - 名稱: summary 的 seed_applied 名稱會誤導
+      內容: 它是**排程當下**的准入證據，真正承接的是 seed_used；已改名 seed_requested
+    - 名稱: 暖機底盤速度取自 /odom 位姿差分
+      內容: >
+        走 ROS 的取樣會被節點處理速率平均掉。實測交棒當步底盤真正在跑
+        85.1 mm/s，差分估出來只讓暖機送 4.3 mm/s。改用執行端的套用回報。
+
+  量化的阻塞點:
+    名稱: 導航無法以 ≤35 mm/s 穿過交棒區
+    可切窗口寬度:
+      趟次: nav_handover_smooth_005749
+      交棒區內_nav步: 18429
+      同時框內且過滾動下界的步數: 2
+      最長連續窗口: 2 步 = 0.02 s
+      輪廓: d=0.250 → 258 mm/s；d=0.128 → 267 mm/s；d=0.127 → 0.00
+    原因鏈（全部量測，非推測）:
+      - 項: 控制週期與求解器假設不符
+        證據: >
+          gmpc 自己的 solver_in 診斷（nav_handover_diag_001835）量到
+          dt_meas p50 0.1800、p90 0.1800、max 0.1900 s，而 cfg.dt = 0.05。
+          命令每週期實際作用 3.6 倍長。
+      - 項: v_nominal 本身是正確的，但不決定速度
+        證據: >
+          同一趟 xi_ref0 恆為 (+0.0240, -0.0180)＝0.0300 m/s（＝v_nominal），
+          而實際命令 |u| 29–271 mm/s。速度由位置誤差回饋主導。
+      - 項: 前視距離與 v_nom 成正比，降速會把參考點縮到機器人身上
+        證據: >
+          v_nom 0.03、dt 0.05、N 20 ⇒ 整個參考視窗只跨 30 mm；
+          X_ref[0] 離機器人的範圍 -25.0 ~ +24.7 mm。
+          001835 最後停在 d=0.202、橫向誤差 -103.6 mm、|e0| 106 mm，u = 0.0
+          —— **停住是閉環的不動點**。
+      - 項: 加固定前置量可解停死，但速度由前置量決定、不由 v_nom 決定
+        證據: >
+          離線閉環（真 GMPC＋真 build_reference_window，純運動學底盤）：
+          lead 0 ⇒ 到不了交棒區；lead 0.10–0.30 且計畫延伸過停車點
+          ⇒ 交棒區內 |u| p50 330–373 mm/s（373.5 ＝速度框角點 hypot(0.2775,0.25)，
+          已飽和）。前置量就是位置誤差，MPC 以全速消它。
+      - 項: 橫向誤差與偏航都不是主因
+        證據: 慢速區橫向誤差 p50 8.6 mm、max 52.2 mm；偏航全程只變 0.0072 rad、wz≈0.001
+    被排除的做法:
+      - 做法: 把 cfg.dt 設成實測週期（control_frequency 5 Hz）
+        結果: 不再振盪，但底盤**停死**在 d≈0.734（nav_handover_ctrl5b）
+        離線預測: 探針預測停在 d≈0.797，實跑 0.734 —— 方向一致
+      - 做法: 只加參考前置量
+        結果: 解了停死，交棒區內變全速飽和
+      - 做法: 讓全身端接受更高的進入速度
+        結果: 不採用 —— 低速介面界限 0.05 m/s 是保護，不以放寬保護換過關
+
+  下一步（結構性，不是調參）:
+    做法: 在導航與全身之間插一個**減速交接段**，用既有的控制權機制當第三個擁有者
+    理由: >
+      導航的工作以「停在自己的目標」結束，所以靠等它剛好慢慢經過是結構上
+      不可行的（窗口 0.02 s）。減速段不是 MPC：路徑已知為直線、定位是真值，
+      它只做沿路徑的速率受限斜坡，降到約 30 mm/s 後**維持**，讓全身端在仍
+      在移動時接手。
+    不動的東西: 導航控制器與其成本函數、所有速度／加速度／輪級／關節限制
+    待驗: 減速段自己的交接（導航 → 減速段）同樣要逐步連續，且全程在既有限制內
+
+# =====================================================================
+# 減速交接段（第三個控制權擁有者）—— 實跑成立（2026-10-04）
+# =====================================================================
+glide_transition_owner:
+  date: 2026-10-04
+  動機: >
+    導航控制器的成本函數本質是「到達目標並煞停」，與「流暢滾過交棒點」在
+    數學目標上衝突。實測 nav_handover_smooth_005749：交棒區內 18429 個物理
+    步，同時「在全身速度框內」且「還在動」的只有 **2 步＝0.02 s**，導航是
+    以 267 mm/s 衝到停車點再用自己的加速度上限剎到零。先前三趟交棒成功的
+    兩趟是碰上那 2 步 —— 運氣，不是設計。
+
+  架構: >
+    nav（大範圍逼近）→ glide（沿路徑速率斜坡降速並維持）→ wholebody。
+    三者共用同一個 ControlAuthority，每個物理步恰有一個擁有者。
+    nav 與 glide 走**同一條直寫路徑**（不經命令鏈 —— 它們的速度是鏈上低速
+    介面界限 0.05 m/s 的數倍），共用同一個逐軸變化率上限與同一個
+    「上一步真正寫出去的那一筆」基準，所以 nav→glide 的連續性是**結構上
+    保證**的，不靠兩邊各自算出接近的值。
+
+  減速段輪廓:
+    形式: 距離驅動的平方根減速，降到 v_roll 後維持
+    算式: v(d) = clip(sqrt(v_roll² + 2·decel·max(0, d − d_hold)), v_roll, v_cap)
+    為什麼距離驅動: 迴圈時序抖動不改變輪廓；同一個位置永遠得到同一個速度
+    v_roll_mps: 0.030          # 在全身速度框 0.035255 內，且高於滾動下界 0.010
+    decel_mps2: 0.50           # 不超過導航自己的 ax_max 1.5
+    v_cap_mps: 0.35            # 沿用導航自己的 vx_max，不放寬
+    d_hold_m: 0.25
+    d_stop_m: 0.02             # 交棒沒成立時不得繼續往櫃子推
+    只減速不加速: >
+      上界在**備妥當下閂鎖一次**。不閂鎖會先加速到輪廓值再減速
+      （實測 nav_glide_012356 由 175 加速到 350 mm/s）；
+      每步重取套用速度則變成回授迴圈，速度被凍住
+      （實測 nav_glide2_012605 全程 v_along == v_applied，153 mm/s 不降）；
+      閂鎖區間寫錯會在 d=4.6075 就鎖成 v_roll
+      （實測 nav_glide3_012738，窗口 949 步但那是 bug 的副作用）。
+      現行：只在 d ≤ arm_at 內閂鎖，實測 v_latched = 0.07458 @ d = 0.5937。
+    離線測試: evaluation/test_glide_profile.py 22/22（含上述三個反例）
+
+  實跑結果:
+    主趟: nav_glide_final_013132
+    控制權: {nav: 3382, glide: 282, wholebody: 767}  # 總 4431，每步恰一個
+    nav_to_glide:
+      物理步: 3382
+      逐軸線速度跳變_mmps: 13.147      # 上限 ax_max 1.5 × dt 0.01 = 15.000
+      偏航跳變_radps: 0.02000          # = az_max 2.0 × dt
+      當步實測_mmps: 132.75
+    glide_to_wholebody:
+      物理步: 3664
+      逐軸線速度跳變_mmps: 5.000       # = a_base_lin 0.50 × dt
+      偏航跳變_radps: 0.00688
+      當步實測_mmps: 30.24             # 框 35.26/軸、滾動下界 10.0 ⇒ 都滿足
+    兩次交接之間零命令步數: 0
+    預核與實際套用相符: true
+    窗口內等待步數: 4
+    取消次數: 0
+    展開:
+      關節最大差_rad: 0.0083
+      位置殘差_m: 0.0155
+      偏航殘差_rad: -0.0002
+      實測最小有效餘裕_rad: 0.9072
+      起步位姿: [-0.2584, 0.4060, 1.4131]   # **實際交棒位姿**，非理想位姿
+    維持段寬度的證據: >
+      本趟 glide 一進框就交棒（等待 4 步），所以「框內連續步數」反映的是
+      「它一有機會就切了」，不是上限。維持機制本身的證據在
+      nav_glide3_012738：該趟 glide 以 30 mm/s 維持了 **949 個連續物理步
+      （9.49 s）**、零命令 0 步。輪廓的設計值為
+      (d_hold − d_stop)/v_roll = 7.67 s = 767 步。
+
+  不動的東西: >
+    導航控制器與它的成本函數、v_nominal 的語意、所有速度／加速度／輪級／
+    關節限制。新增的兩個變化率上限都是**套用既有值**：直寫路徑用導航自己的
+    ax/ay/az_max（1.5/1.0/2.0，gmpc_node.py 宣告值），命令鏈用求解器自己的
+    a_base_lin/a_base_ang（0.50/2.00，wgmpc_core.py 標為「開發值，無已核准
+    來源」—— 標籤照搬，不因被執行層採用而升格）。兩者都是**逐軸**，所以
+    合速度的單步變化上限是 √2 倍，這一點在報告裡要寫明。
+
+  尚未做到:
+    - ALIGN（接觸前到達並保持）尚未接上相位機與目標產生
+    - 夾爪通路與夾持建立／釋放判定
+    - 20 mm 校正趟與正式 200 mm 開關＋返回
+    - 展開軌跡的逐點自碰與限位檢查（從未做過）
+
+# =====================================================================
+# ALIGN（接觸前到達）：目標通路接通，誤差已量出（2026-10-04）
+# =====================================================================
+align_precontact:
+  date: 2026-10-04
+  已接通:
+    求解器的執行期目標話題:
+      檔案: evaluation/wgmpc_wg2_node.py
+      改動: >
+        加 `--target-topic`（預設 '' = 關閉，既有趟次行為一位元未改）與
+        `--target-max-age-s`。原本只吃啟動參數的**固定**目標，抽屜實驗做
+        不到：接觸前的退讓目標要由實測把手位姿算出，開啟／關閉段的目標會
+        隨實測開度移動。
+      關鍵設計: >
+        **本輪的目標只解析一次**，求解與到達判定共用同一份。兩處各自取會
+        變成「用一個目標求解、用另一個目標判到達」。
+      失效處置: >
+        不合格的目標（長度不符、非有限值、最後一列不是 (0,0,0,1)、旋轉塊
+        非正交、行列式不是 +1）**記下理由**而不是靜默丟棄 —— 靜默丟棄會讓
+        「求解器還在用舊目標」看起來像「目標沒變」。過期則**沿用上一筆已
+        接受的**並記錄，不當成新鮮值。來源逐輪統計寫進 `runtime_target`。
+      測試: evaluation/test_wgmpc_runtime_target.py 18/18（含鏡射矩陣等反例）
+    把手實測位姿發布:
+      話題: /drawer/handle_pose
+      內容: "[sim_t, 開度] ＋ 列優先 4x4（USD 真值）"
+      理由: >
+        把手幾何不在第二個地方用硬編常數重算。同一個幾何在兩處各寫一次
+        遲早會漂。
+    ALIGN 目標產生:
+      檔案: evaluation/drawer_align_node.py
+      算式: "p_G_des = p_H_meas − (tcp_offset + standoff)·ŷ；R_G_des = R_grasp"
+      只量位置的理由: >
+        把手是沿世界 −y 的移動接頭，**朝向不變**，而且是沿軸的圓柱 —— 繞
+        自身軸的轉角無意義。朝向沿用設計抓取姿態的 FK 結果。
+      tcp_offset_mm: 14.700
+      tcp_offset_來源: >
+        由**求解器自己的 FK**（停車位姿 ＋ 設計抓取關節角）算出的 TCP 與
+        **實測**把手中心在 y 上的差。沒有另外編數字；與規格既有的
+        `tcp_offset_along_tool_z = 0.0147` 一致。
+      standoff_mm: 30
+      離線核對: >
+        退讓 0 重現設計抓取 TCP 到 0.02 mm；退讓 30 mm 正好退 30.00 mm。
+
+  實跑量測:
+    趟次: nav_align_020631
+    範圍限制: >
+      本趟 ALIGN 節點**只發目標並獨立量測** —— 目標話題還沒有消費者
+      （求解節點尚未接進本管線）。**不得**據此宣稱 ALIGN 已經在控制。
+    判準: 沿用 WG2 既有值 ≤5 mm / 0.02 rad（1.15°）、保持 2.0 s
+    展開結束時離接觸前目標:
+      位置誤差_mm: 16.02
+      姿態誤差_deg: 0.384
+      到達並保持: false
+    誤差來源（已對帳，不是追蹤失敗）: >
+      展開的底盤容差是 `pos_tol = 0.02 m`（20 mm），它停在 **16.4 mm** ——
+      在自己的容差內。ALIGN 的容差是 5 mm。所以 16.02 mm 的 TCP 位置誤差
+      就是這兩個容差的差距。姿態誤差 0.384° **已經在容差內**。
+    誤差軌跡: >
+      由交棒當下的 384.91 mm / 90.43° 單調收到 16.02 mm / 0.384°，
+      沒有反覆。姿態在 sim_t 48.26 進入容差並維持。
+
+  下一步:
+    - ALIGN 的控制要接上求解節點：把 /drawer/tcp_target 餵進
+      `--target-topic`，由全身同動收掉最後 16 mm 並保持 2 s。
+      這一段正是整機協調的主張所在（底盤與手臂分配）。
+    - 兩套到達判定（本節點的獨立 FK 與求解節點的 task_error）要**並列報告**，
+      一致才算站得住；不一致本身是個發現，不得挑好看的那個報。
+    - 之後才是夾爪通路、20 mm 校正趟、正式 200 mm 開關與返回。
+
+# =====================================================================
+# ALIGN 的控制接上求解節點：穩定但停在 11.8 mm（2026-10-04）
+# =====================================================================
+align_solver_in_loop:
+  date: 2026-10-04
+  範圍限制（必須隨結果一起講）:
+    - 安全層**不在**此管線內。抽屜管線本來就是直接發 /wb_vel_cmd；WG2 自由
+      空間那條是以 `freespace_confirmed:=true` 放行的 —— 櫃體就在旁邊，那在
+      抽屜房裡是假前提，不能照搬。本趟的保護是命令鏈三層：低速介面界限 →
+      輪級 λ → 底盤變化率上限。**把櫃體接進真正的障礙物來源是碰撞安全主張
+      的前置條件，尚未做。**
+    - 未帶 `--use-applied-for-predict`：那要執行端發 cmd_env 的終點封裝，
+      抽屜模擬器沒有這條。延遲補償因此用的是**請求值**而非套用值。
+
+  已接通並驗證:
+    求解設定: >
+      沿用 Stage A 已驗證的那一組（到達保持 9/10）：N=5、rate=20、
+      延遲補償 1.6/1.0、近目標整形 γ=1.0、w_s=0.001、w_a=0.05、
+      w_s_arm=0.05、餘裕守衛開。判準 ≤5 mm / 0.02 rad、保持 2.0 s。
+    握手: 閘門 ARMED，只用 3 筆全零初始化命令
+    控制: published 2398 輪；deadline_miss 2/2398；n_missed_slot 2
+    穩定性: >
+      手臂速率飽和 **0/2398**；SQP 每輪 converged_step、residual 0；
+      底盤請求 p50 0.89 mm/s；120 s 不發散。
+    兩套到達判定一致: >
+      求解節點 11.78 mm / 1.547°；ALIGN 節點（獨立 FK）11.94 mm / 1.547°。
+      差 0.16 mm / 0.000°。**並列報告，不挑好看的那個。**
+
+  結果:
+    判定: 未達判準
+    平台_mm: 11.8
+    平台_deg: 1.55
+    在容差內的輪數: 0/2398
+
+  已排除（都有量測，不是推測）:
+    - 項: 起點偏差
+      做法: 展開的底盤容差由 0.02 收到 0.005（實測殘差 0.0134 → 0.0044 m）
+      結果: >
+        起始任務誤差由 18.25 變 25.21 mm，平台仍是 11.79 mm（原 12.17）。
+        **平台與起點無關**，是閉環的吸引子。我原本的假設被量測否定。
+    - 項: 目標不可達
+      做法: 離線核算候選精確解
+      結果: >
+        底盤移到 (park_x, park_y − 0.030, park_yaw)、手臂保持設計抓取角，
+        重現目標到 **0.0155 mm / 0.00000°**，所有關節在限位內。
+        ⇒ **存在精確解**，不是可達性問題。
+        所需動作是底盤 y 再走 −25 mm、手臂不動；而求解器底盤請求只有
+        p50 0.89 mm/s。
+    - 項: 手臂設定點模型的偏差
+      結果: bias_rad 最大 2.7e-4 rad ≈ 0.14 mm，解釋不了 11.8 mm
+    - 項: 限制或整形擋住
+      結果: >
+        無飽和、無餘裕守衛動作、shape.reason = none、sqp 每輪收斂。
+        求解器是**自願**停在那裡。
+
+  待辨別（具名，不猜）: >
+    姿態誤差由 0.268° **長到** 1.549°，位置同時停在 11.8 mm —— 求解器在
+    位置與姿態之間停在一個權衡點，而精確解存在。兩個候選：
+    (1) 底盤位姿正則權重 w_bt / w_br（均 1e-3，**不是 CLI 參數**，寫死在
+        WGMPCConfig），可能把底盤拉回起始位姿；
+    (2) 視野太短：N=5、dt=0.05 ⇒ 0.25 s，遞迴視野問題的駐點。
+    辨別方式：把 w_bt 開成參數跑一趟 0，另外單獨跑一趟加長 N。
+    **一次只動一個變數。**
+
+  這一輪修掉的缺陷:
+    - 名稱: 設定點回報的 api_applied 硬編 0.0
+      後果: >
+        握手閘門把它當 ARM 的必要條件，於是永遠停在 init。實跑
+        nav_align_solve_021536：ever_armed = False、published = 0、
+        近 600 萬筆初始化命令（握手路徑沒有限速，是它的症狀）。
+      修法: 回報本步設定點是否真的寫進 API，與 isaac_wholebody_sim_e2.py 同語意
+    - 名稱: 設定點介面契約未發布
+      後果: 閘門判「介面契約未通過」
+      修法: 抽屜模擬器補發 /coman/arm_setpoint_meta，與 E2 同一份契約
+    - 名稱: 啟動參數的退路是 `--target 0 0 0`
+      後果: 目標話題失效時會瞄向原點
+      修法: 改用 `--target-offset 0 0 0`＝保持實測起始 TCP
+    - 名稱: 跑腳本等待條件抓「展開完成」
+      後果: 那行在「保持交棒」之前就印，grep 時全身端還沒進保持（競態）
+      修法: 等「保持交棒」
+    - 名稱: 展開完成後立刻停發命令
+      後果: 命令鏈走逾時路徑、中間有沒有新命令的空窗
+      修法: >
+        加 HOLD 相位持續送零速率，直到 /wb_vel_cmd **出現第二個發布者**
+        （求解節點上線）才交出。發布者數是真的信號，不是計時猜測。
+
+# =====================================================================
+# 更正：底盤命令座標系錯誤（我造成的），修正後平台不變（2026-10-04）
+# =====================================================================
+align_frame_bug_and_correction:
+  date: 2026-10-04
+  缺陷: >
+    `wgmpc_wg2_node._publish_u` 發的是**世界座標**九維命令（docstring 寫明
+    「body → world 後發給安全鏈，adapter 之後會轉回 body」）。我把它直接接
+    到 `/wb_vel_cmd`，而抽屜模擬器的命令鏈把那裡當**本體座標**（執行端自己
+    做 wx = vx·cosθ − vy·sinθ）。底盤 x/y 因此被旋轉 θ ≈ 1.2973 rad（74.3°）。
+  症狀: >
+    錯誤管線下底盤走 Δx = −59.30 mm、Δy = +6.73 mm、Δθ = −9.71°，
+    而離線精確解要的是 Δy = −25 mm、Δx = 0、Δθ = 0、手臂不動。
+    手臂分量與 wz 不受影響（body_to_world 只旋轉前兩個分量），所以誤差仍由
+    25.21 降到 11.8 mm —— 那是手臂做的，底盤在亂走。
+  作廢的趟次: [nav_align_solve2_022109, nav_align_solve4_023417, nav_align_solve5_023901]
+  作廢的結論:
+    - 「11.8 mm 是求解器自願停留的代價權衡駐點」（當時管線有座標錯誤）
+    - 「平台與起點無關」（solve4/solve5 的對照同樣帶著這個錯誤）
+    - 對候補 A（w_bt）與候補 B（視野）的一切推論
+  修法: >
+    求解節點改發中性話題 `/wgmpc/cmd_world`，由 `arm_vel_adapter` 做世界→
+    本體那一次旋轉（`--in-topic` 可指定，預設仍是安全層輸出）。轉換**只保留
+    一份**，不在下游另寫。抽屜模擬器補宣告 `joints` 參數，讓 adapter 能核對
+    關節順序 —— 順序錯置會讓每個關節拿到別人的速度而下游殘差看起來健康。
+
+  修正後的實跑:
+    趟次: nav_align_adapt_025036
+    底盤位移: {dx_mm: -2.93, dy_mm: -16.67, dyaw_deg: -1.034}
+    精確解需要: {dx_mm: 0, dy_mm: -25, dyaw_deg: 0, 手臂: 不動}
+    評語: 方向正確了（原本 Δx = −59.3 mm／Δθ = −9.71°），但只走了需要的 2/3
+    平台_mm: 12.19
+    平台_deg: 1.577
+    在容差內: 4/2400
+    deadline_miss: 0/2400
+    判定: >
+      **平台在座標修正前後都是 ~12.2 mm** ⇒ 它不是那個座標缺陷造成的，
+      是真的駐點。這一趟才是談求解器行為的有效證據。
+
+  待辨別（更新）: >
+    候補 A 的機制敘述要更正：`w_bt`/`w_br` **不是底盤位姿正則**，程式裡沒有
+    任何「相對起點位移」的懲罰項。它們進的是 `R`（速度大小權重），且以各軸
+    自己的上限正規化：`R = diag(w / vmax²)`，所以飽和代價就等於權重本身 ——
+    底盤 1e-3、手臂 w_a = 0.05，**底盤是最便宜的軸，便宜 50 倍**。
+    因此「正則把底盤拉回起點」站不住。
+    剩下的候補：
+    (1) 視野 N=5、dt=0.05 ⇒ 0.25 s 的遞迴視野駐點；
+    (2) 位置／姿態權重的權衡（w_p=50、w_r=25，**非 CLI 參數**）：姿態誤差
+        由 0.000° 長到 1.577°、位置同時停在 12.19 mm，像是停在一個折衷點，
+        而精確解同時歸零兩者。
+    下一步：**一次只動一個變數**，先單獨加長 N。
+
+# =====================================================================
+# 完整 MotM：導航→夾持→開 200 mm→停→關→停→放→退→收臂→回起點（2026-10-04）
+# =====================================================================
+motm_full_sequence:
+  date: 2026-10-04
+  明示前提: >
+    定位用 /odom 真值；把手位姿用 USD 真值（/drawer/handle_pose）。視覺找把手
+    是下一個實驗，本段不含。
+  校正趟（不是結果）:
+    趟次: motm_cal20_075044
+    開度目標_mm: 20
+    結果: 全部相位走完，DONE @ sim 142.04，無中止
+  正式趟:
+    趟次: motm_200_075305
+    影片: evaluation/runs/motm_200_075305/motm_200.mp4    # 重播渲染，乾淨無疊字
+    相位與時刻（相位機戳記，sim s）:
+      夾持成立: 96.48
+      開啟帶保持完成: 111.44
+      關閉帶保持完成: 129.80
+      確認解除: 131.38
+      退開完成: 131.96
+      收臂完成: 142.74
+      交還導航: 143.28
+      回到起點: 162.32
+    判準核對（**USD 真值逐物理步獨立核對**，不採相位機自述）:
+      開度_195_205mm_最長連續_s: 3.86        # 108.14–111.99，判準 ≥ 2 s ⇒ 成立
+      開過後_0_5mm_最長連續_s: 36.71         # 判準 ≥ 2 s ⇒ 成立
+      開度最大_mm: 202.3                      # 滑軌上限 220
+      最後開度_mm: 4.8                         # 放開後由 2.7 漂到 4.8，仍在帶內但貼近上緣
+      最後底盤距起點_m: 0.128                  # 判準 ≤ 0.20
+    夾持:
+      建立接觸_N: [3.34, 0.60]                 # 兩指 ≥ 0.5 N 連續 2 s
+      漂移最大_mm: {OPEN: 8.60, CLOSE: 4.14, CLOSE_HOLD: 2.54}   # 限值 10
+      第二指最低接觸_N: 0.00                   # CLOSE_HOLD 中；總夾持力仍 ≥ 0.5
+
+  這一段修掉或新增的東西:
+    - 名稱: ALIGN 卡在 12 mm 的根因 —— 手臂穩態下垂沒進模型
+      證據: >
+        實測 q_arm − 設定點：j2 +0.0243 rad、j3 −0.0099 rad，全程恆定。手臂若
+        真的到設定點 TCP 誤差是 3.24 mm，實測 12.13 mm。離線重現：受控對象有
+        下垂、模型不知道 ⇒ 平台 10.88 mm；加線上估計 ⇒ 0.02 mm。
+      修法: >
+        wgmpc_wg2_node `--offset-free`：d̂ ← d̂ + (dt/τ)((q−s) − d̂)，只在設定點
+        近乎靜止時更新（避開模型本來就有的一階遲滯），令 b = α⊙d̂。預設關閉。
+      實跑: align_of_071848 到達並保持；估計值 j2 +0.024296、j3 −0.010018
+    - 名稱: 夾爪手指沒有驅動增益
+      證據: URDF 匯入時記「actuator will be created without gain parameters」
+      修法: 手指 kp 1e4 / kd 1e3（沿用 isaac_drawer_sim.py）
+    - 名稱: 手指接觸力讀數全程 NaN
+      證據: 「Provided patterns for sensor and filters did not match any rigid contact entries」
+      修法: prim_paths_expr 用單一字串字元類別 `...uflite_finger[12]`，不用路徑清單
+    - 名稱: "**抓取深度方向錯了 27 mm**"
+      證據: >
+        設計姿態 FK 給「把手中心在 TCP 之外 14.7 mm」⇒ 桿心在夾爪座標 z = 98.3 mm，
+        指墊只到 81.1 mm ⇒ 桿子在指尖外 17.2 mm；實跑手指合到 1e-6 m、接觸為零。
+        那個值是附著模型用的，不需要真實接觸幾何。
+      修法: >
+        改用唯一成功過的摩擦夾持趟 grip_090257_pull20full 的實測關係：
+        結束開度 16.31 mm ⇒ 桿心 y = 8.69869，TCP y = 8.71095 ⇒ **TCP 超過桿心
+        12.26 mm**（夾爪座標 z = 71.3 mm，在指墊中段）。
+      實跑核對: 夾持時桿心在夾爪座標閉合方向上 −0.04 mm（正中）
+    - 名稱: 夾持建立期間把抽屜拉跑（正回授）
+      證據: motm_cal20_074420 在 24 s 的夾持建立中把抽屜拉開 25.69 mm
+      修法: 手指一開始閉合就**凍結**抓取目標，不再跟著實測把手
+    - 名稱: 維持判準誤判滑脫
+      證據: CLOSE_HOLD 因「兩指都 ≥ 0.5 N」不成立中止，當下漂移只有 0.35–0.40 mm
+      修法: >
+        建立仍用「兩指 ≥ 0.5 N 連續 2 s」；維持改用總夾持力 ≥ 0.5 N。真正的滑脫
+        由相位機的漂移判準（10 mm）管，那一條沒動。**不用手指位置**判桿子是否在
+        中間：夾住時手指只在 0.03–0.4 mm（碰撞網格合攏間隙約等於桿徑）。
+    - 名稱: RELEASE_WAIT 被判滑脫
+      修法: >
+        照相位機測試的語意（D2 與第 55 行）：attached 是邏輯連接狀態，一直報真
+        到「確認解除」那一步；沒有確認解除就失去連接才是滑脫。
+    - 名稱: UNFOLD→ALIGN 判定時機
+      修法: >
+        在展開節點「保持交棒」的窗口裡判（條件確實成立），之後暫停推進直到求解
+        節點上線 —— 否則 ALIGN 屬「移動中」相位，等待時命令為零會被判停滯。
+
+  必須隨結果一起講的限制:
+    - n = 1。一趟成功不是成功率。
+    - "**安全層不在此管線內**，也**沒有一般碰撞或非預期接觸的量測來源**（undesignated_contact 一律回 False）。不能說「未發生非預期接觸」。"
+    - 拉開時漂移 8.60 mm，離 10 mm 限值只剩 1.4 mm —— 餘裕薄。
+    - 夾持不對稱：第一指 3–7 N、第二指 0–3 N，關閉保持中第二指一度到 0.00 N。
+    - 抓取深度取自**單一**舊趟的實測，不是設計出來的。
+    - 夾持建立耗時約 35 s（ENGAGE_WAIT 61.40 → 96.48），主要在等第二指的力。
+    - 相位機有 829 步因狀態過期（> 0.2 s）不推進 —— 編排節點的取樣落後，
+      沒造成錯誤但拖慢推進。
+    - 放開後開度由 2.7 漂到 4.8 mm，仍在關閉帶內但貼近上緣。
+    - 延遲補償用的是請求值而非套用值（抽屜模擬器沒有 cmd_env 終點封裝）。
+
+# =====================================================================
+# 定位更正：motm_200_075305 是「停車抓取、整機開關」基線，**不是 MotM**（2026-10-04）
+# =====================================================================
+baseline_park_grasp:
+  date: 2026-10-04
+  趟次: motm_200_075305
+  名稱更正: >
+    先前稱此趟為「整套 MotM 走完」是說過頭了。MotM 的核心是底盤不停、手臂邊走
+    邊伸邊抓；此趟從到達到開始拉，底盤停了約 45 s，抓取在底盤靜止時完成。
+    正確名稱是「停車抓取、整機開關」的移動操作基線。
+  底盤速度分段（逐物理步真值）:
+    展開手臂: {時長_s: 6.6, 速度p50_mmps: 29.4, 位移_mm: 164}
+    等求解節點: {時長_s: 5.1, 速度p50_mmps: 0.6, 位移_mm: 1}
+    對準與接近把手: {時長_s: 4.5, 速度p50_mmps: 6.1, 位移_mm: 23}
+    閉合手指與等夾持: {時長_s: 35.1, 速度p50_mmps: 0.1, 位移_mm: 1.9}
+    拉開200mm: {時長_s: 12.2, 速度p50_mmps: 14.5, 位移_mm: 175}
+    推回: {時長_s: 16.2, 速度p50_mmps: 11.3, 位移_mm: 174}
+  有做到: 滾動交棒不停車；開與關是整機協同（手臂握把手、底盤一起移動約 175 mm）
+  沒做到: 接近與抓取是停車完成的
+  夾持判準更正: >
+    task.json 記「夾持成立（≥0.5 N 連續 2.0 s）」**以逐物理步資料看不成立**：
+    兩指同時 ≥ 0.5 N 的連續段共 90 段，最長 0.25 s。編排節點以 20 Hz 讀 50 Hz 的
+    /gripper/state，第二指單一物理步（10 ms）的跌落多數沒被取樣到，於是在取樣上
+    湊出 2 s。之後開與關成功，是因為漂移一直在限值內，不是因為該判準成立。
+  夾持慢的觀察: >
+    閉合後第一指 5 s 到 0.5 N、第二指 24 s，期間抽屜被慢慢拉開 1.22 mm，力與開度
+    幾乎同步上升。先前推論「力是手臂拖把手產生」**被 FK 否定**，見 grasp_wait_diagnosis。
+  判定（2026-10-04 二次更正）: >
+    完整動作序列走完，開關行程與返回成立；**抓取建立判準未通過**（逐物理步最長連續
+    0.25 s，未達雙指 ≥ 0.5 N 連續 2 s），且夾持依賴凸包近似（見 grasp_wait_diagnosis）。
+    不得稱為「全部判準通過的正式成功基線」；n = 1。
+  用途: 保留影片與實測資料作診斷與對照；不作為已通過的成功基線。
+
+# =====================================================================
+# 夾持為什麼等 35 s —— 只讀既有逐物理步資料的診斷（motm_200_075305，2026-10-04）
+# =====================================================================
+grasp_wait_diagnosis:
+  資料: runs/motm_200_075305/room_run.json（100 Hz 逐物理步）＋ FK（measured q_arm ＋ base 真值）
+  時刻（相對閉合命令 sim 62.52 s）:
+    手指到關節下限: {t_s: 1.48, q_finger_mm: [0.041, 0.046], 接觸力_N: [0.0, 0.0]}
+    首次接觸_0.01N: {finger2_s: 1.65, finger1_s: 2.06}
+    單指達0.5N: {finger1_s: 5.33, finger2_s: 24.35}
+    雙指同時達0.5N_首次: 24.35
+    逐物理步雙指連續達0.5N_最長_s: 0.25
+    任務節點宣告夾持成立: 33.84（20 Hz 取樣湊出，逐步不成立；見 baseline_park_grasp）
+  幾何（已計算）:
+    手指碰撞近似: >
+      USD 中手指為 physics:approximation = convexHull。手指網格是 L 形：根部（z 0–8 mm）
+      內面在 y≈0，指片（z 8–28 mm）內面在 y≈11.2 mm。包成凸包後，夾持面變成斜約 29°
+      的 V 形楔面（內面 y 由 z=8 mm 的 0.78 mm 線性升到 z=26 mm 的 10.86 mm）。
+    抓取深度下的間隙: >
+      TCP 超過桿心 12.26 mm ⇒ 桿心在手指座標 z = 17.04 mm。手指閉到下限 q=0 時，
+      凸包與桿面（r = 5 mm）最小距離 +0.09 mm（未接觸）。手指驅動力全部頂在關節下限，
+      **擠不到桿子**。這解釋了「閉合 1.48 s 到底、力為 0」。
+    真實網格的含意: >
+      若改用非凸近似，指片內面在 q=0 時相距 22.4 mm，大於 10 mm 桿徑，根本夾不住。
+      目前能夾，靠的是凸包把 L 形填成楔面 —— 這是模擬碰撞模型的性質，寫論文時要說明。
+  之後力怎麼來的:
+    TCP: FK 顯示等待期間 TCP 在 TCP 座標各軸位移 ≤ 0.11 mm（底盤動了約 2 mm，由手臂抵銷）
+    抽屜: 同期間開度增加 1.20 mm（朝機器人＝朝手指根部，楔面變窄的方向）
+    力與開度: {finger1_N_per_mm: 3.61, finger1_corr: 0.998, finger2_N_per_mm: 0.61, finger2_corr: 0.971}
+    手指被撐開: q_finger 上升 0.44／0.38 mm（開度上升 0.84 mm 的區間）
+    結論: >
+      是**抽屜朝機器人蠕動、把桿子推進楔面**，力隨之線性上升；不是手臂拖把手
+      （先前的推論錯了）。
+    未查明: >
+      什麼在把抽屜往外推。接觸視圖只過濾「手指↔抽屜」，其他連桿（夾爪殼、相機架、
+      link6 等）對抽屜的接觸沒有量測。不能從現有資料判定。
+  下一步（未實作）:
+    - 補量測：所有機器人剛體對抽屜的接觸力，找出外推來源
+    - 不採用「依凸包楔面調抓取深度」：那是利用碰撞近似。μs > tan 29° 也不能單獨
+      保證動態抓取不滑出（依賴楔面、受力方向與接觸條件）
+    - 順序：核實真實閉合幾何（離線）→ 逐物理步連續接觸判定 → 各部位對抽屜接觸配對量測
+      （保留位置與方向、不取淨合力）→ 再決定局部幾何修正（多凸形組件保留真實指墊，
+      或有實體依據的指墊／把手尺寸）
+    - 不提高夾力、不降低 0.5 N／2 s 判準
+
+
+# =====================================================================
+# 夾爪真實閉合幾何核實（離線，2026-10-04）
+# =====================================================================
+gripper_geometry_check:
+  結論: >
+    模擬鏈沒有發現換算錯誤；22.4 mm 閉合間隙是上游官方網格本身的幾何。
+    但它是否等於實體夾爪，現有資料無法判定（廠商規格只給行程）。
+  逐項:
+    URDF_對上游: >
+      finger_joint1/2 原點 (0,0,0.0543)、軸 ±y、行程 0–0.0089 m、effort 5、mimic 1:1
+      與 src/xarm_ros2 v1.18.1 的 uflite_gripper.urdf.xacro 完全一致
+    網格檔: install 與 src 的 finger1/2.stl md5 相同；單位為公尺（範圍 20×15.6×29.5 mm）
+    USD_碰撞形狀: >
+      以 Isaac pxr 讀 omni_bot_manip_244（基線所用）的實例化碰撞網格，換到手指連桿座標後
+      與 STL 範圍逐值相同；比例 1、無額外平移；近似 = convexHull
+    關節零點: q=0 時兩手指連桿原點重合（USD 預設姿態）
+    mimic: 基線逐步紀錄兩指位置同步（8.9 → 0.04 mm），mimic 有作用
+    行程: 每指 8.9 mm ⇒ 總行程 17.8 mm；廠商規格 16 mm（差 11%，未解釋）
+  非凸幾何（USD 網格逐帶統計，手指座標 z）:
+    z_0_8mm: 根部塊，內面 y≈0（q=0 時兩指相接）
+    z_8_28mm: 指片，內面 y = ±11.2 mm ⇒ 閉合間隙 22.4 mm、全開 40.2 mm
+    基線桿位置: 桿心 z = 17.04 mm、桿面 z 12.0–22.0 mm，全落在指片段
+  廠商規格: >
+    UFACTORY Gripper Lite（LG1000）：行程 16 mm、夾力 5 N、「switchable fingers」。
+    官方技術規格頁未給最小／最大夾持寬度或手指尺寸。
+    來源: https://docs.lite6.ufactory.cc/9.technical_specifications.html ；
+    https://www.generationrobots.com/en/404301-gripper-for-lite-6-robotic-arm.html
+  待確認: >
+    實體手指閉合時指片間距（量實物或廠商圖面）；「switchable fingers」是否代表另有
+    手指型式／安裝位置。這決定 10 mm 桿在實體上能不能夾。
+
+# =====================================================================
+# 抽屜接觸配對量測（diag_pairs_152919，2026-10-04，診斷趟，非結果）
+# =====================================================================
+drawer_contact_pairs_diag:
+  趟次: runs/diag_pairs_152919（同基線設定 OPEN_M 0.200、HEADING=1；SIM_LIMIT 130 s 截止）
+  量測: >
+    感測端 = 抽屜本體，過濾對象 = 機器人 107 個剛體各自一對；逐物理步記每對法向力向量、
+    摩擦力向量、力加權接觸點、點數、最小間距（世界座標、作用在抽屜上）。另記抽屜未過濾
+    總接觸力。讀取全程無失敗（None 列 0）。
+  核對: 未過濾總力 = 各對法向力之和（例 t+10 s：y 0.58 = 0.48 + 0.10；z −0.68 = −0.86 + 0.18）⇒ 總力只含法向、不含摩擦；法向殘差 ≈ 0
+  結果:
+    有力的部位: 只有 uflite_finger1、uflite_finger2；其餘 105 個剛體 0–130 s 對抽屜無接觸
+    閉合前: >
+      sim 49.0–49.1 s 有 finger2 配對出現但力 = 0、間距 3.4–3.7 mm —— 是接觸偏移範圍內的
+      候選配對，**不是碰觸**
+    閉合: >
+      手指閉到下限（+1.5 s，q ≈ 0.00/0.01 mm）時與桿間距約 0.1 mm，與離線凸包計算的
+      0.09 mm 一致
+    接觸位置: finger1 在桿上緣（z +4.4 mm），finger2 在桿下緣（z −4.5 mm），y 偏機器人側 2.6 mm
+    finger1_法向方向: (0, 0.49, −0.87) ＝ 偏離鉛直 29°，就是凸包斜面的法向 ⇒ 楔面接觸直接證實
+    y向分解_t+10s_finger1: {法向_N: +0.48（推進櫃內）, 摩擦_N: -0.69（拉向機器人）}
+    把抽屜往外拉的來源: >
+      finger1 對桿的**摩擦力** y 分量大於其法向力 y 分量。開度增加 ⇒ 桿更深入楔面 ⇒
+      手指被撐開（q 0 → 1.9 mm @ +60 s）、法向力與摩擦一起變大，形成正回饋。
+      抽屜關節無摩擦、阻尼 2 /s，0.015 N 量級即可推動（+1.2–1.5 s 開度 0.2 mm）
+    兩指不對稱: finger1 法向 1–3 N 量級、finger2 約 0.2 N；成因未查明
+  逐物理步判定實跑: contact_held_s 最大 0.39 s；任務節點未宣告夾持成立，停在 ENGAGE 至截止 —— 判定正確拒絕
+  求解節點提早備妥實跑: ALIGN 後 0.69 s 上線（基線 5.1 s）
+  溫度: CPU 最高 87 °C（中止線 92 °C）
+
+# =====================================================================
+# 移動中操作（MotM）實作與實跑（2026-10-04，進行中）
+# =====================================================================
+motm_implementation:
+  夾持幾何（停車流程先驗證）:
+    手指碰撞: --finger-collision split（finger_collision.py）：L 形網格拆根部／指片兩凸塊，指片內面 11.2 mm 保持平面
+    把手: src/my_omnibot_description/config/drawer_unit_bar26.yaml（只改橫桿 Ø10 → Ø26；理由與「未經實物驗證」寫在檔頭）
+    抓取深度: TCP 超過桿心 6.8 mm（桿心在手指座標 z = 22.5 mm）
+    驗證趟: >
+      grip_bar26_161806（停車流程）：閉合後兩指 5.28／4.49 N，逐物理步連續 2.23 s 成立；
+      開 200 → 停 → 關 → 放 → 退 → 收臂 → 交還 → 回起點 DONE；抽屜上只有兩指有力
+  求解器（wgmpc_core_sp，預設關閉）:
+    底盤參考速度: w_vref·Σ((u_base − v_ref)/vmax)²，v_ref 本體座標
+    手臂名目姿態: w_qn·Σ‖q_arm − q_nom‖²（手臂列嚴格線性，無線性化誤差）
+    執行期切換: wgmpc_wg2_node --coord-topic（parse_coord 版面 v1，14 欄；過期 0.5 s 即退回啟動值）
+    測試: test_wgmpc_coord.py（QP 二次式與非線性成本一致、權重 0 時逐位元相同等）
+  離線權重篩選: >
+    motm_offline.py（沿用已對照 Isaac 的 wgmpc_closed_loop_sim.run）。接近段 w_qn 必須為 0
+    （底盤未到停位時姿態彈簧與 TCP 互相拉扯，誤差 2–20 mm）；開／關段 w_qn > 0 才有手臂分擔。
+  時間軸:
+    接近: 展開節點與任務節點共用 motm_coord.approach_vref（√ 剖面＋蠕行 4 mm/s，可越過停位至多 30 mm）
+    夾持: 底盤蠕行中閉合；判準不變（逐物理步雙指 ≥ 0.5 N 連續 2 s）
+    開／關: 底盤參考速度 = 拉速（末端 √ 減速）；手臂名目姿態隨實測開度由夾持姿態內插到收回 60 mm
+    關閉後: 底盤即以 8 mm/s 倒退；放開、退開、收臂（回程計畫提早發）、交還導航全程不送零
+    交還: dual_source_executor 交還直寫路徑時，變化率基準改取全身最後套用值（反例：跳 −8 → +15 mm/s；測試 L1–L4）
+  量測修正:
+    同步狀態: 模擬器發 /drawer/sync_state（同一物理步的開度、把手、底盤、手臂）；任務節點每週期清空回呼佇列
+    原因: motm_163548 判「夾持滑脫」中止，但實體相對位移 0.00 mm —— 分開話題的時間差 × TCP 37 mm/s
+  實跑:
+    motm_163548: 夾持成立（5.36／4.31 N）後拉開 0.8 s 誤判滑脫中止（量測問題，已修）
+    motm_164012: DONE；夾持期間底盤 9.27 mm／最低 2.92 mm/s；最長低速 0.40 s；手臂分擔 38 mm；
+      但對準進場時上指壓桿頂（求解節點上線後手臂擺盪，單點門檻放行）
+    motm_164904: DONE；夾持期間底盤 9.25 mm；最長低速 0.31 s；漂移 0.94 mm；手臂分擔 47.5／46.0 mm；
+      **但求解節點上線 1 s 時指尖撞桿面 70 ms、峰值 92.7 N**（啟動擺盪，MotM 權重下垂直 −63…+48 mm）
+    處置: 接觸前位姿須連續 0.5 s 在 5 mm 內才進場；接觸前位姿穩定前用已驗證權重（軟啟動）；MotM 退讓量 60 mm
+motm_result_170405:
+  趟次: runs/motm_170405（另有同設定重複 2 趟，見 motm_repeat）
+  設定: >
+    MOTM=1 FINGER_COL=split DRAWER_ASSET=drawer_unit_bar26.yaml GRASP_DEPTH_M=0.0068 HEADING=1 OPEN_M=0.200；
+    任務節點 --approach-rate 0.02 --pre-settle-s 0.5 --motm-w-qn 0.8 --standoff-m 0.06（其餘 MotM 預設：
+    w_vref 0.03、w_a 0.01、w_p 200、蠕行 4 mm/s、越過上限 30 mm、拉速 18 mm/s、手臂收回 60 mm、倒退 8 mm/s）；
+    啟動值（軟啟動期間）w_a 0.05、w_p 50 —— 與停車流程相同
+  追加修正（本趟前）: 退開量斜坡（原一次跳 60 mm ⇒ j3 −1.0 rad/s）；提早回程計畫改不阻塞（原阻塞 0.5 s ⇒ 底盤停 0.35 s）
+  結果（motm_metrics.py，逐物理步真值）:
+    全程: {開始移動_s: 25.48, 完成_s: 115.90, '≥0.15 s 低速段': '僅 71.35–71.91（0.56 s，開與關之間，允許）', 不允許停頓: 0}
+    夾持建立期間底盤: {位移_mm: 9.33, 最低速_mmps: 2.94, 平均_mmps: 3.04}
+    首次接觸到開始拉開_s: 2.31
+    閉合前接觸: 0
+    夾持漂移最大_mm: 0.858
+    非預期接觸: 無（107 剛體配對量測，> 0.01 N）
+    開／關分擔: {OPEN: '手臂 47.2 mm／底盤 148.2 mm（8.62 s）', CLOSE: '手臂 45.9 mm／底盤 151.7 mm（8.68 s）'}
+    手臂速率貼上限: 0 步
+    交棒底盤速率_mmps: {導航到減速段: 277.5, 減速段到全身: '80.4 → 32.8', 全身到導航: '8.0 → 19.7'}
+    CPU 最高溫: 84
+  對照（同一套指標，grip_bar26_161806 停車流程、同幾何）:
+    開始移動到完成_s: {停車: 94.4, MotM: 90.4}
+    不允許停頓: {停車: '8 段（最長 5.72 s，合計約 17 s）', MotM: 0}
+    夾持期間底盤位移_mm: {停車: 0.35, MotM: 9.33}
+    首次接觸到拉開_s: {停車: 2.46, MotM: 2.31}
+    漂移_mm: {停車: 7.27, MotM: 0.86}
+    手臂分擔_mm: {停車: 15.9, MotM: 47.2}
+  說法界線: >
+    n = 3（同設定）；全程時間只省約 4 s —— MotM 的收益主要是**不停**，不是快。接近時底盤是 4 mm/s 蠕行。
+    夾持仰賴 26 mm 把手與官方手指網格（未經實物驗證）。求解節點上線時的手臂擺盪仍在
+    （用軟啟動與 60 mm 退讓避開，不是消除）。沒有安全層；非預期接觸只量了抽屜。
+motm_repeat:
+  設定: 與 motm_result_170405 完全相同
+  趟次:
+    - {run: motm_170405,     DONE: true, 不允許停頓: 0, 開關間停頓_s: 0.56, 夾持期間底盤_mm: 9.33, 最低速_mmps: 2.94, 接觸到拉開_s: 2.31, 漂移_mm: 0.86, 手臂分擔_mm: [47.2, 45.9], 閉合前接觸: 0, 全程_s: 90.4}
+    - {run: motm_rep_171114, DONE: true, 不允許停頓: 0, 開關間停頓_s: 0.44, 夾持期間底盤_mm: 9.05, 最低速_mmps: 2.30, 接觸到拉開_s: 2.32, 漂移_mm: 1.13, 手臂分擔_mm: [47.5, 47.0], 閉合前接觸: 0, 全程_s: 91.35}
+    - {run: motm_rep_171256, DONE: true, 不允許停頓: 0, 開關間停頓_s: 0.29, 夾持期間底盤_mm: 9.23, 最低速_mmps: 2.90, 接觸到拉開_s: 2.25, 漂移_mm: 0.93, 手臂分擔_mm: [47.5, 45.7], 閉合前接觸: 0, 全程_s: 90.37}
+  彙整: 3/3 完成；3/3 無不允許停頓；3/3 閉合前無接觸；3/3 無非預期接觸（抽屜配對）；手臂速率貼上限 0 步；CPU 最高 86 °C
+  影片: runs/motm_170405/motm_170405_full.mp4、motm_170405_side.mp4（重播渲染，無標註；側面 sim 45–100 s）
+
+restow_lift_fix:
+  使用者觀察: 關門後手臂有「上抬」動作
+  原因: >
+    收臂用「j3 最後動」：其他軸先收（j2 0.95→0，肩直立）、肘 j3 仍彎在 1.50 rad ⇒ 夾爪被舉高，
+    TCP 550 → 989 mm（motm_170405，86–91 s），之後 j3 才收、再落回 550 mm。停車流程也有同一行為。
+    「j3 最後」的原意：收攏值 j3 = 0 離有效下限只有 0.011 rad，防止往負方向自撞。
+  修正: >
+    drawer_task_node --restow-mode sync（預設仍為 j3_last）：整個速率向量同比例縮放 ⇒ 關節空間直線、
+    各軸同時到達；j3 在 ≤ 收攏值時不放行負向命令。離線核對：TCP 高度 546–560 mm、夾爪對把手距離
+    單調由 4 增到 270 mm。
+  實跑: {run: motm_172100, DONE: true, 收臂期間TCP高度_mm: [547, 563], j3最低_rad: 0.0215, 收臂_s: 6.48（原 11.75）, 全程_s: 86.07, 不允許停頓: 0, 漂移_mm: 0.98, 閉合前接觸: 0}
+startup_swing_investigation:
+  使用者觀察: 開之前有震盪（求解節點上線後 1–3 s 的手臂垂直擺盪）
+  現象: 週期約 0.75–1.0 s，主要 j2/j3，TCP 垂直峰對峰 29–79 mm；停車流程也有（grip_bar26_161806：46 mm）
+  已排除（有資料）:
+    偏移估計: 擺盪期間閘門全程關閉，估計停在正確靜態值（重播估計式核對，motm_181645）
+    手臂模型: 擺盪段逐物理步擬合 α = 0.104（模型 0.095），一步預測殘差 j2 ≈ 2 mrad（多為下垂，已由靜態初值補）
+    近目標整形: 第一次縮放在擺盪開始之後（42.86 vs 42.1 s），是反應不是起因
+  已修並保留:
+    目標斜坡: --pre-ramp-mps（上線前目標 = 手的當下位置，消除初始階躍）
+    偏移靜態初值: 求解節點 --offset-init-static（第一輪 q − s = 下垂量）
+    啟動期底盤釘參考速度: --motm-w-vref-pre 0.3（底盤不被拿來修 TCP；原本衝到 14 mm/s 過衝 6 mm）
+    平滑器生命週期檢查: run_nav_handover.sh（motm_180116 服務逾時、平滑器未啟用、空跑 4 分鐘）
+  試驗（頭 4 s TCP 垂直峰對峰／手臂翻號／不允許停頓）:
+    - {run: motm_172100, 設定: 原（階躍目標、估計由 0、軟啟動、退讓 60）, ptp_mm: 79.2, flips: 16, stops: 0}
+    - {run: motm_170405, 設定: 同上, ptp_mm: 37.8, flips: 8, stops: 0}
+    - {run: motm_175859, 設定: +斜坡 30 +靜態初值，退讓 60, ptp_mm: 12.1, flips: 4, stops: '1（底盤被拖到 1 mm/s 停 0.88 s）'}
+    - {run: motm_181221, 設定: 同上但無軟啟動, ptp_mm: 37.4, flips: 28, stops: 2}
+    - {run: motm_181645, 設定: 軟啟動、退讓 30、斜坡 30、靜態初值, ptp_mm: 47.6, flips: 26, stops: 0}
+    - {run: motm_182255, 設定: 同上 + w_vref_pre 0.3, ptp_mm: 29.0, flips: 20, stops: 0}
+    - {run: motm_182724, 設定: 同上但斜坡 10 mm/s, ptp_mm: 36.2, flips: 22, stops: 0}
+  結論: >
+    同設定趟間差 2 倍（172100 vs 170405），單趟比較不可靠。唯一明顯小的那趟是手臂幾乎沒動的那趟。
+    擺盪大小與激發大小（斜坡 30 vs 10 mm/s）無明顯關係 ⇒ 較像手臂迴路本身阻尼不足的振盪，
+    即 W-GMPC 記錄中「手臂高頻振盪未解」那一項。離線閉環模擬重現不出來 ⇒ 實跑迴路裡有模型沒有的東西
+    （候選：實際端到端延遲／抖動與補償 1.6／1.0 不符），尚未驗證。
+    所有試驗閉合前接觸 0 —— 擺盪在進場前結束（進場門檻：連續 0.5 s 在 5 mm 內）。
+startup_swing_root_cause:
+  date: 2026-10-04
+  根因: >
+    isaac_drawer_room_sim.py 主迴圈每個物理步只呼叫一次 rclpy.spin_once(timeout 0) ⇒ 每 10 ms 只處理一則
+    訊息；/cmd_vel、/wb_vel_cmd、/gripper/cmd 等持續發布的話題在佇列（深 10）積壓，全身命令要排隊才生效。
+  量測（求解輪的快照時刻 → 模擬器首次套用該命令的物理步）:
+    motm_182255: {p50_ms: 90, 啟動4_5s_p50_ms: 150, max_ms: 390}
+    grip_bar26_161806: {p50_ms: 180, 啟動4_5s_p50_ms: 210, max_ms: 330}
+    求解端延遲補償假設: 1.6 週期 = 80 ms
+  修正: 每物理步迴圈 spin_once 直到沒有新回呼（上限 64）；全身命令只取最新一筆。rec['ros_drain'] 記錄單步最多處理數（實測 3）
+  結果:
+    - {run: motm_185942, 延遲_ms: {p50: 70, max: 90}, 啟動擺盪峰對峰_mm: 1.4, 翻號: 1, DONE: true, 不允許停頓: 0}
+    - {run: motm_190426, 延遲_ms: {p50: 70, max: 90}, 啟動擺盪峰對峰_mm: 1.5, 翻號: 1, DONE: true, 不允許停頓: 0}
+  說明: >
+    離線閉環模擬重現不出擺盪，因為它用的就是 80 ms。此根因只屬於抽屜房模擬器；自由空間的
+    isaac_wholebody_sim_e2.py 以獨立執行緒 spin，WG2「手臂振盪未解」不因此解決。n = 2。
+  另發現（未處理，判準凍結）: >
+    關閉限位處開度量到 −2 µm（數值穿透），落在關閉帶 (0.000, 0.005) 外 ⇒ 保持計時反覆歸零；
+    motm_185942 關閉保持 8.41 s（190426 為 2.10 s）。需決定量測定義，不得逕自放寬帶。
+fair_comparison_b6:
+  date: 2026-10-04
+  設計: 停車與 MotM 各 3 趟、交錯執行；兩組同幾何（split 手指、Ø26）、同判準、同模擬修正（ROS 佇列清空、關閉限位 −10 µm 容差）、同求解啟動設定（目標斜坡、下垂靜態初值、pre-settle 0.5 s、退讓 30 mm、同步收臂）；唯一差別 MOTM 開關
+  關閉容差: 使用者 2026-10-04 核准：實測開度 [−10 µm, 0) 記為 0（drawer_task_node --opening-floor-tol-m 1e-5），關閉帶 (0.000, 0.005) 不變
+  彙總: results/motm_batch6_summary.json
+  結果（平均 ± 標準差，n = 3）:
+    完成: {停車: 3/3, MotM: 3/3}
+    不允許停頓段數: {停車: 5.0 ± 0.0（最長 6.24 ± 0.06 s）, MotM: 0}
+    夾持建立期間底盤位移_mm: {停車: 0.38 ± 0.02, MotM: 9.05 ± 0.04}
+    首次接觸到拉開_s: {停車: 2.24 ± 0.02, MotM: 2.23 ± 0.03}
+    夾持漂移_mm: {停車: 0.36 ± 0.04, MotM: 1.12 ± 0.08}
+    拉開手臂分擔_mm: {停車: 15.5 ± 0.1, MotM: 52.4 ± 3.4}
+    拉開耗時_s: {停車: 7.85 ± 0.75, MotM: 7.63 ± 0.63}
+    全程_s: {停車: 77.7 ± 1.2, MotM: 80.2 ± 1.7}
+    關閉保持_s: {停車: 2.13 ± 0.03, MotM: 2.09 ± 0.01}
+  更正: >
+    先前「MotM 全程快 4–15 s」是與未套用修正的停車流程比較；公平對照下 MotM 慢約 2.5 s。
+    MotM 的收益是不停（停頓 5 段 → 0）、夾持期間底盤持續移動、手臂分擔約 3.4 倍，不是速度。
+cleanup_20261004:
+  清單: results/cleanup_manifest_20261004.json
+  內容: >
+    刪除 95 個未被任何結果、報告、素材、程式或記憶引用的趟次（5.86 GB；其中 48 個不在 git 歷史中，
+    主要是開發期探針、煙霧測試、demo 草稿與 Stage A 過夜的失敗工作階段）；被引用工作階段的子趟保留。
+    刪除 280 份 URDF→USD 轉換產物 omni_bot_manip_N（保留 244），並加入 .gitignore。

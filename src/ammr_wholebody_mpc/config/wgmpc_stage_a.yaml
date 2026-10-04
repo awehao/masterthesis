@@ -1,0 +1,245 @@
+# W-GMPC 抽屜任務 —— 階段 A：底盤與手臂同動接近，停在接觸前暫停位姿
+#
+# 為什麼另開一份，而不是改既有設定
+# --------------------------------
+# `manipulation_cases.yaml` 的 `drawer_open_a_*` 是**底盤固定**的案例，預抓取
+# 定義在 base_footprint、接近軸沿底盤 +x。本階段是**底盤可動的全身同動**，
+# 目標定在世界座標、姿態用 R_DES。兩者不是同一個任務，混在同一個案例裡會讓
+# 已完成的固定底盤資料換了前提。`drawer_unit.yaml` 是**資產幾何**，更不動：
+# 退讓距離是任務配置，不是櫃體的尺寸。
+#
+# schema 版本：新增欄位請升版，不要就地改語意。
+schema: wgmpc_stage_a/1
+name: wgmpc_stage_a_drawer
+
+# ---- 場景 ----
+scene:
+  asset: src/my_omnibot_description/config/drawer_unit.yaml   # 幾何**不改**
+  pose_xy: [0.0, 1.45]          # 櫃體底面中心的世界位置，本地 yaw = 0
+  opening_m: 0.0                # 階段 A 全程維持關閉
+  localisation: 真值            # **階段假設**：抽屜位姿取真值，不是感知結果
+
+# ---- 終點：接觸前暫停位姿 ----
+# 刻意**不叫**「預抓取位姿」。它比既有的 0.100 m 位姿再退 20 mm，是為了讓
+# 屏障在零命令下仍有餘量而選的，不是夾持幾何反推出來的位置。
+pre_contact_pause:
+  approach_backoff_m: 0.120
+  backoff_reference: grasp_tcp_world    # 沿工具 z（世界 −y）自夾持 TCP 後退
+  tcp_world: [0.0000, 1.0597, 0.5500]   # 由資產幾何與上面的退讓推得
+  # 工具 z 指世界 +y、手指閉合方向為世界 +z、工具 x 指世界 −x
+  R_des: [[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]]
+  tol_pos_m: 0.005
+  tol_rot_rad: 0.02
+  hold_s: 2.0
+  # 為什麼是 0.120 而不是 0.100 —— 見 evaluation/results/wgmpc_wg2_pregrasp_barrier.yaml
+  # 0.100 的終點**本身**落在屏障的零速靜態間距之內：綁定列
+  # uflite_finger2|handle/bar，d = 0.084046、rho = 0.011390、d_stop = 0.080000
+  # ⇒ b = −0.014687 m/s 而 A·u = 0.000000。缺口全在右式，**不是命令過快**，
+  # 所以任何命令都過不了，零命令時安全層還會輸出 24.4 mm/s 的底盤後退。
+  # 60 個 IK 分支沒有一個餘量非負 ⇒ 不是挑錯分支。
+  # 0.120 的核算：最小屏障餘量 +0.02479 m/s，負餘量 0/209、安全層 0/209 次改命令。
+  barrier_margin_zero_cmd_m_s: 0.02486
+  barrier_margin_min_along_path_m_s: 0.02479
+  # **下一段要另行核對**：由此走向夾持位必然進入屏障之內（夾持點零命令餘量
+  # −0.17767 m/s，d = 0.00280 m，缺 88.8 mm）。那一段只能用 contact_pairs
+  # 相位例外或 g_by_pair，並且要另外核對接觸相位的屏障與握手，**不在階段 A**。
+
+# ---- 遮蔽來源：明確標記的模擬場景真值 ----
+# 為什麼需要指定：沒有這個來源時距離節點對每一列再加一條
+# blind_approach_cap = 0.03 m/s 的列，接近段**全程**由它綁定
+#（移動段餘量 −0.379、安全層改量到 0.315，152/209 週期被改命令）。
+# 那趟量到的是退化上限的行為，不是 W-GMPC 的接近行為。
+#
+# **不得**改用 freespace_confirmed := true 來消除：它的語意是「範圍內沒有東西」，
+# 而這裡明明有櫃體與抽屜；它關掉的也是 nodata_speed_cap，與遮蔽是不同的事。
+# 錄影相機外參**也不**充當機器人感知的遮蔽證據。
+occlusion_source:
+  mode: scene_truth
+  node_params:
+    scene_truth: true
+    # 'name:model'。model 留空 = 宣告為靜態（位姿由設定給定）。
+    # 抽屜與把手**不得宣告靜態**：被動滑動自由度存在，位姿要由模型話題提供。
+    scene_truth_approved:
+      - 'cabinet/side_left:'
+      - 'cabinet/side_right:'
+      - 'cabinet/back:'
+      - 'cabinet/top:'
+      - 'cabinet/shelf_below:'
+      - 'cabinet/shelf_above:'
+      - 'drawer/front_panel:drawer_unit'
+      - 'drawer/bottom:drawer_unit'
+      - 'drawer/side_l:drawer_unit'
+      - 'drawer/side_r:drawer_unit'
+      - 'drawer/back:drawer_unit'
+      - 'handle/post_l:drawer_unit'
+      - 'handle/post_r:drawer_unit'
+      - 'handle/bar:drawer_unit'
+  preconditions:
+    - 場景守衛（放行子樹以外 0 個碰撞體）必須已通過；守衛未過即中止，不進真值模式
+    - 核准清單必須涵蓋全部具名幾何且模型身分一致（啟動時由 validate_scene_truth 核對）
+    - 動態物件的位姿必須新鮮（pose_timeout 0.5 s）；過期即逐列回退，不當成看得見
+  fallback_is_real: >
+    已實跑驗證：抽屜位姿過期 0.9 s 時 33636 列回退（原因「位姿不新鮮」），
+    最小屏障餘量由 +0.02479 掉到 −0.74743 m/s、209/209 週期為負、
+    status 轉為 STALE 並套 stale_speed_cap 0.05。回退不是裝飾。
+  # **不要從自由空間趟次複製這一行**：run_wgmpc_wg2_free.sh 給安全層
+  # `-p freespace_confirmed:=true`，那是因為該趟的障礙物集合為空、場景裡
+  # 真的沒有東西。階段 A 有櫃體與抽屜，複製過來等於宣稱一件不成立的事，
+  # 並且會把 nodata_speed_cap 一併關掉。
+  safety_freespace_confirmed: false
+  # 距離節點的 obstacles／pair_rows／scene_truth_approved **由產生器輸出**，
+  # 不手抄 —— 幾何只能有一份來源（資產檔）。
+  param_generator: evaluation/gen_drawer_obstacle_params.py
+  labelling: >
+    **成果必須標明使用場景真值。** 診斷欄位 scene_truth_on / n_truth /
+    n_truth_fallback 逐週期發布，趟後據此核對，不只寫在這份設定裡。
+
+# ---- 起始構型的前置條件 ----
+# 零位起步**走不到**終點：求解失敗 1171/1201、卡在 853.8 mm、j3 有效餘裕
+# 掉到 −0.02215（見 evaluation/results/wgmpc_wg2_zero_start_block.yaml）。
+# 原因是 j3 在零位時向下只剩 0.0099 rad 的有效空間，而實際套用的命令落後兩個週期。
+start_config:
+  # ---- 起始構型怎麼來（兩條路徑，判準不同，不可混用）----
+  # spawn（**現行預設**）：機器人**直接生成**在起始構型（--init-arm-q），
+  #   起始位置**不去調 j3**。
+  # move：從實際零位以閉迴路調姿到起始構型，再交棒（已實測四趟，保留）。
+  start_mode: spawn
+  prerequisite: none_spawned_at_start_posture
+  # 選定起始構型：j3 到有效限位中點，其餘五軸維持零位
+  arm_q: [0.0, 0.0, 1.4373, 0.0, 0.0, 0.0]
+  base_xy_yaw: [0.0, 0.0, 0.0]
+  # 為什麼 j3 必須離開零位：零位時 j3 向下只剩 0.0099 rad 的有效餘裕，
+  # 而套用命令落後兩週期 ⇒ QP 的限位列不可滿足（求解失敗 1171/1201）。
+  # 病因是**起步構型**，不是目標不可達；只要 j3 離開限位即足夠。
+  why_j3_must_leave_zero: evaluation/results/wgmpc_wg2_zero_start_block.yaml
+  # ---- spawn 路徑**沒有展示**的事（明列的起始條件假設）----
+  not_demonstrated_under_spawn:
+    - 機器人能自己從實際零位移動到這個起始構型
+    - 該移動段的逐步限位與避碰（move 路徑才會實跑）
+  # move 路徑保留：那一段**本身**是受控移動段，要逐步核限位與避碰
+  move_path_segment_check: evaluation/results/wgmpc_wg2_prepositioning.yaml
+  # ---- spawn 路徑的起始閘門：**不是交棒判定**（判準組成不同，不可混用）----
+  spawn_gate:
+    script: evaluation/wgmpc_stage_a_start_check.py
+    rule: ammr_wholebody_mpc.wgmpc_handover.check_start_posture
+    checks:
+      - 實測關節角有效、新鮮、在有效限位內
+      - 實測角與要求的起始構型相符（容差同 handover.prepos_goal_tol_rad）
+      - 設定點有效、在有效限位內、與實測角相符（容差同 setpoint_meas_tol_rad）
+      - u_prev 取自**實際套用回報**（與交棒判定相同）
+      - 實際套用回報顯示手臂**確實靜止**（交棒判定不核這條）
+    rest_tol: 0.001
+    cannot_check:
+      - >-
+        沒有別的手臂命令來源 —— 運行器在此模式下不啟動前置節點，那是
+        **結構性質**（由 test_wgmpc_stage_a_runner.py 的不變量把住），
+        不是這個閘門量到的
+    u_prev: applied
+    revision_history:
+      - >-
+        初版假設此路徑下手臂「從未被命令過」，用初始靜止假設的零值當
+        u_prev。**實測否證**：adapter 一上線就持續送零命令
+        （wgmpc_stage_a_spawn_151022：n_recv=289、exec_mode=0、設定點已
+        建立，碼 26 攔下）。既然取得到實際套用回報就不需要那個假設，
+        閘門因此改強；碼 26 作廢但保留在碼表裡，讓該趟紀錄仍讀得懂。
+
+# ---- 執行模式 ----
+# **先前只寫在 run_wgmpc_stage_a.sh 裡**，設定檔因此不是階段的完整描述。
+# 入口核對會比對設定檔與腳本是否一致（避免兩邊漂移）。
+mode: solver_drawer
+
+# ---- 交棒（前置調姿 → W-GMPC）----
+# 判定規則在 ammr_wholebody_mpc.wgmpc_handover，與離線反例共用同一份。
+handover:
+  quiet_s: 0.4                 # 必須 >= endpoint.max_cmd_age_s
+  max_state_age_s: 0.1
+  # ---- 兩個**不同**的判準，不得混用 ----
+  # (1) 設定點與實測角**彼此**相符。它只證明兩份回報一致，
+  #     **不能**證明手臂到了準備姿態 —— 兩者都停在零位時也會通過。
+  setpoint_meas_tol_rad: 0.01
+  # (2) 前置調姿**真的到達**它宣告的目標構型。這一條才回答「到了沒」。
+  #     2026-10-03 的 r1 實測誤差 13.1 mrad（通過）；
+  #     同配置的 r2 只到 247 mrad（拒絕，原因見下）。
+  prepos_goal_tol_rad: 0.02
+  prepos_goal_tol_basis: >
+    0.02 rad = 20 mrad。離線核算的到達誤差為 3.9 mrad（發布延遲造成的首尾
+    積分截斷），實跑 r1 為 13.1 mrad。取 20 mrad 是在實測值之上留餘裕，
+    **不是**從物理推導出來的界。超過它表示前置調姿沒有完成，不是精度不足。
+  why_two_criteria: >
+    r1 之前的閘門只有 (1)。那一趟前置節點只發封裝而安全層聽舊九維話題，
+    手臂留在零位 —— 設定點與實測角**都是**零位，(1) 因此成立並放行，
+    接著 W-GMPC 從零位起跑、執行端第 4 筆命令就因 j3 失效閂鎖。
+    (1) 與 (2) 量的是不同的事，報告中不得互相代替。
+  timeout_s: 60
+  timeout_s: 60
+  u_prev: 取自實際套用回報；**不傳 --assume-initial-rest**
+  source_exclusivity: 前置來源必須先解除，才允許 W-GMPC 上線
+
+# ---- 前置調姿（準備動作，不計入成果）----
+prepos:
+  vel_max_rps: 0.35            # 與凍結的預抓取軌跡同值
+  acc_max_rps2: 0.7
+  tail_zero_rate_s: 1.0
+  # **發布節律按模擬時鐘**，不是牆鐘。執行端的設定點逐物理步積分 rate*dt
+  #（模擬時間），所以牆鐘節律在 RTF != 1 時會讓積分按比例短少：
+  # 實跑 r1 到達 99.1%（RTF≈0.99）、r2 只到 82.8%（RTF≈0.83）。
+  publish_cadence_basis: simulation_clock
+  # ---- 閉迴路（2026-10-03 改）----
+  control: closed_loop_on_measured_angle
+  kp: 2.0
+  reach_tol_rad: 0.005          # 比交棒的 prepos_goal_tol_rad 0.02 更緊
+  reach_cycles: 5
+  why_closed_loop: >
+    開迴路靠「發出的速率 × 控制週期 = 預期增量」，而那個等式在實跑裡不成立：
+    按牆鐘發布時 RTF != 1 會讓積分按比例短少（r2 到 82.8%）；改按模擬時鐘後
+    仍短少 8.5%，而節律只差 3.9%、無凍結、無逾時 ⇒ 還有**未完全歸因**的機制
+    （命令被提前取代的嫌疑最大）。閉迴路不需要那個等式成立。
+    速度與加速度上限沿用凍結值（0.35 / 0.7），運動約束沒有放寬。
+  residual_gap_not_explained: >
+    改按模擬時鐘後那 4.6% 的差距**尚未歸因**。本輪以閉迴路繞過整類問題，
+    **不宣稱**已解釋它。
+  pipeline: 與 W-GMPC 相同（安全層 → adapter → 執行端 E2）
+  run_id_suffix: _prepos       # 與階段 A 不同，封裝紀錄可分辨命令來自誰
+
+# ---- 求解與執行設定 ----
+solver:
+  rate_hz: 20.0
+  horizon_N: 5
+  tcp: link_tcp
+  w_p: 50.0
+  w_r: 25.0
+  w_a: 0.05
+  w_s: 1.0e-3
+  w_s_arm: 0.05          # 探索性配置，見 wgmpc_wg2_arm_thrash_fix.yaml
+  joint_margin: 0.05     # **維持原值**，不因屏障擋路而放寬
+  near_target_gamma: 1.0
+delay:
+  delay_cycles: 1.0
+  d_pub_cycles: 0.6
+  comp_state: 1.6
+  comp_cmd: 1.0
+endpoint:
+  joint_margin: 0.05     # 必須與 solver.joint_margin 一致；趟次腳本啟動時核對
+  arm_rate_max: 1.0
+  max_cmd_age_s: 0.2
+safety:
+  # 預設值，**全部維持原狀**：不靠放寬保護讓原解過關
+  d0: 0.05
+  eps: 0.03
+  tau: 0.15
+  alpha: 2.0
+  d0_by_pair: {}
+  g_by_pair: {}
+  contact_pairs: {}      # 階段 A 不含夾持 ⇒ 不啟用任何配對例外
+  phase: null
+
+# ---- 階段 A 的範圍 ----
+in_scope:
+  - 底盤與手臂同動走完一段距離
+  - 對準接觸前暫停位姿（位置與姿態）並保持
+  - 受控停止
+  - 記錄是否碰到或推到抽屜（階段 A 預期**不接觸**）
+out_of_scope:
+  - 夾持（需要 contact_pairs 相位例外與接觸相位的屏障核對）
+  - 拉開抽屜
+  - 以感知取代抽屜位姿真值

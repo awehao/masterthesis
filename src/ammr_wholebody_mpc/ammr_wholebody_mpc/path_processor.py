@@ -55,12 +55,54 @@ def path_msg_to_xyth(path_msg) -> np.ndarray:
 # Main builder
 # ---------------------------------------------------------------------------
 
+def project_arclength(path_xyth: np.ndarray, robot_xyth: np.ndarray,
+                      continuous: bool = False,
+                      s_min: float | None = None) -> float:
+    """機器人在路徑上的弧長位置。
+
+    `continuous=False`（預設）= **原行為**：取最近的**頂點**的累積弧長。
+    那會讓參考點在 5 cm 取樣間**跳動** —— 機器人在兩個頂點之間移動時 s 不變，
+    一跨過中點就整個跳一格。慢速區尤其明顯：實測相鄰命令的方向變化
+    p50 32.7°、p95 89.2°、最大 103°，而同時 v_nominal 只有 0.03 m/s。
+
+    `continuous=True` = 投影到**線段**上，s 隨機器人連續變化。
+
+    `s_min` 給**單調進度保護**：回傳值不低於它。路徑上有來回或機器人稍微
+    後退時，投影可能跳回前一段，參考點就會倒退；導航的工作是往前推進，
+    倒退的參考只會製造反向命令。不給就不保護（＝原行為）。
+    """
+    pts = path_xyth[:, :2]
+    deltas = np.diff(pts, axis=0)
+    seg_len = np.linalg.norm(deltas, axis=1)
+    cum_s = np.concatenate([[0.0], np.cumsum(seg_len)])
+    if not continuous:
+        i = int(np.argmin(np.linalg.norm(pts - robot_xyth[:2], axis=1)))
+        s = float(cum_s[i])
+    else:
+        r = np.asarray(robot_xyth[:2], float)
+        ok = seg_len > 1e-12
+        # 每段上的投影參數 t ∈ [0, 1]，再換回距離
+        w = r - pts[:-1]
+        t = np.zeros_like(seg_len)
+        t[ok] = np.clip(np.einsum('ij,ij->i', w[ok], deltas[ok])
+                        / (seg_len[ok] ** 2), 0.0, 1.0)
+        foot = pts[:-1] + deltas * t[:, None]
+        d = np.linalg.norm(foot - r, axis=1)
+        j = int(np.argmin(d))
+        s = float(cum_s[j] + t[j] * seg_len[j])
+    if s_min is not None:
+        s = max(s, float(s_min))
+    return min(s, float(cum_s[-1]))
+
+
 def build_reference_window(path_xyth : np.ndarray,
                            robot_xyth: np.ndarray,
                            N         : int,
                            dt        : float,
                            v_nom     : float,
                            desired_yaw: float | None = None,
+                           lead_m    : float = 0.0,
+                           s_start_override: float | None = None,
                            ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Parameters
@@ -127,14 +169,37 @@ def build_reference_window(path_xyth : np.ndarray,
     cum_s       = np.concatenate([[0.0], np.cumsum(seg_lengths)])
     total_s     = float(cum_s[-1])
 
-    # Closest-point projection (cheap — paths are typically <1000 pts)
-    dists        = np.linalg.norm(path_xyth[:, :2] - robot_xyth[:2], axis=1)
-    i_close      = int(np.argmin(dists))
-    s_start      = float(cum_s[i_close])
+    # Closest-point projection (cheap — paths are typically <1000 pts).
+    # `s_start_override` lets the caller supply a CONTINUOUS, monotonic
+    # arclength (see `project_arclength`); None = the original vertex pick.
+    if s_start_override is None:
+        dists        = np.linalg.norm(path_xyth[:, :2] - robot_xyth[:2], axis=1)
+        i_close      = int(np.argmin(dists))
+        s_start      = float(cum_s[i_close])
+    else:
+        s_start      = float(min(max(s_start_override, 0.0), total_s))
 
-    # Arclength targets for the N+1 horizon samples
+    # Arclength targets for the N+1 horizon samples.
+    #
+    # `lead_m` is an OPTIONAL fixed arc-length offset, default 0.0 = the exact
+    # previous behaviour. It exists because the lookahead `k·v_nom·dt` is
+    # PROPORTIONAL to v_nom: slowing the nominal speed shrinks the window
+    # itself, so there is nothing left to pull toward.
+    #
+    # Measured (`nav_handover_diag_001835`, from the node's own solver-input
+    # diagnostic): with v_nom=0.03, dt=0.05, N=20 the whole window spans 30 mm,
+    # X_ref[0] never sat more than 25 mm from the robot, and the controller
+    # settled to u = 0 while still 104 mm off the path with |e0| = 106 mm
+    # uncorrected. A slow cruise is unreachable that way -- the stopped state
+    # is a fixed point of the closed loop.
+    #
+    # A fixed lead decouples "how far ahead we aim" from "how fast we intend to
+    # go": the reference still advances at v_nom, so the steady state is a
+    # cruise AT v_nom holding a roughly constant lag, not a stop. It clamps at
+    # total_s as before, so the goal still terminates the motion.
     step      = v_nom * dt
-    targets_s = np.minimum(s_start + np.arange(N + 1) * step, total_s)
+    targets_s = np.minimum(s_start + float(lead_m) + np.arange(N + 1) * step,
+                           total_s)
 
     # Interpolate each target back to (x, y, yaw)
     sample_xyth = np.zeros((N + 1, 3))

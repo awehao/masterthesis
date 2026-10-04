@@ -1,0 +1,66 @@
+{
+ "stage": "A",
+ "stage_config": "/home/howardchen/masterthesis/src/ammr_wholebody_mpc/config/wgmpc_stage_a.yaml",
+ "scope": "成果判定從 W-GMPC 接管後的協同接近開始；前置調姿是準備動作，單獨記錄",
+ "localisation": "抽屜位姿取真值（階段假設）",
+ "occlusion_source": "scene_truth（明確標記的模擬場景真值）",
+ "drawer": {
+  "pose_xy": [
+   0.0,
+   1.45
+  ],
+  "opening_m": 0.0,
+  "model": "drawer_unit",
+  "asset": "/home/howardchen/masterthesis/src/my_omnibot_description/config/drawer_unit.yaml"
+ },
+ "pre_contact_pause": {
+  "approach_backoff_m": 0.12,
+  "note": "比既有 0.100 m 位姿再退 20 mm；由當步抽屜位姿算出，見 handover.json"
+ },
+ "mode": "solver_drawer",
+ "joint_margin": 0.05,
+ "solver": {
+  "N": 5,
+  "rate_hz": 20,
+  "w_s": 0.001,
+  "w_a": 0.05,
+  "w_s_arm": 0.05,
+  "near_target_gamma": 1.0,
+  "arm_model": "setpoint",
+  "arm_ident": "/home/howardchen/masterthesis/evaluation/results/wgmpc_arm_sp_ident_free4.json"
+ },
+ "delay": {
+  "comp_state_cycles": 1.6,
+  "comp_cmd_cycles": 1.0
+ },
+ "start_mode": "spawn",
+ "init_arm_q": "0.000000000,0.000000000,1.437278401,0.000000000,0.000000000,0.000000000",
+ "start_mode_note": "**生成式起始構型**：機器人直接生成在起始構型，不做 j3 調姿。本趟不展示「機器人自己從零位走到起始構型」，那是明列的起始條件假設。起始閘門是**起始構型核對**：判準組成與交棒判定不同 —— 無前置來源可核，但多核「起始構型真的生效」與「手臂確實靜止」；u_prev 與交棒路徑相同，取自實際套用回報。",
+ "prepos": {
+  "vel_max_rps": 0.35,
+  "acc_max_rps2": 0.7,
+  "tail_zero_rate_s": 1.0,
+  "goal": "有效限位中點",
+  "run_id": "wgmpc_stage_a_spawn_152137_prepos",
+  "pipeline": "與 W-GMPC 相同（安全層 → adapter → 執行端 E2）"
+ },
+ "handover": {
+  "quiet_s": 0.4,
+  "max_state_age_s": 0.1,
+  "setpoint_meas_tol_rad": 0.01,
+  "u_prev": "取自實際套用回報；**不傳 --assume-initial-rest**",
+  "rest_tol": 0.001
+ },
+ "reach": {
+  "pos_m": 0.005,
+  "rot_rad": 0.02,
+  "hold_s": 2.0
+ },
+ "low_speed_box_l1": {
+  "base_lin": 0.035255,
+  "base_ang": 0.1999,
+  "arm": 0.9999
+ },
+ "task_sim_s": 60,
+ "task_wall_s": 900
+}

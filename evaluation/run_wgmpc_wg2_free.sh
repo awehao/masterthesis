@@ -59,6 +59,11 @@ W_S="${W_S:-0.001}"
 W_A="${W_A:-0.001}"
 # 只壓手臂的變化率權重（空字串 = 沿用 W_S）。離線選出 0.05。
 W_S_ARM="${W_S_ARM:-}"
+# 執行端**即將寫入的設定點**要留的限位餘裕。空字串 = 0（既有行為）。
+# 階段 A 必須設成求解器的 joint_margin（0.05），否則反例會原樣重現。
+JOINT_MARGIN="${JOINT_MARGIN:-0}"
+# 節點端的在途命令餘裕守衛（1 = 啟用）
+MARGIN_GUARD="${MARGIN_GUARD:-0}"
 # **命令追蹤封裝**：身分 (run_id, source_seq) 與九維值同訊息，全鏈四段各記
 # output_seq。啟用後**三端都改走封裝**（唯一控制入口），既有九維路徑不參與。
 # 預設啟用，設 CMD_ENV=0 可退回既有九維路徑。
@@ -113,6 +118,18 @@ say "**手臂執行模型：$ARM_MODEL**（辨識檔 $(basename "$ARM_IDENT")）
 say "**迴路延遲補償（兩種時間分開）：D_state=$DELAY_STATE、D_cmd=$DELAY_CMD 個控制週期**（rec9 逐筆量到）"
 say "**近目標輸出整形 γ = $NEAR_GAMMA**（0 = 關閉）"
 say "**命令權重 w_s = $W_S / w_a = $W_A / w_s_arm = ${W_S_ARM:-（沿用 w_s）}**（既有值皆 0.001）"
+say "**執行端設定點餘裕 --joint-margin = $JOINT_MARGIN**；節點在途守衛 = $MARGIN_GUARD"
+# **兩端的有效界必須同值**：求解器的 joint_margin 是編譯進 WGMPCConfig 的
+# 0.05；執行端若用預設 0，設定點就能穿過保護線（離線反例已證）。
+SOLVER_JM=$(python3 -c "import sys;sys.path.insert(0,'src/ammr_wholebody_mpc');
+from ammr_wholebody_mpc.wgmpc_core import WGMPCConfig;print(WGMPCConfig().joint_margin)")
+if [ "$MARGIN_GUARD" = "1" ] || [ "$JOINT_MARGIN" != "0" ]; then
+  if ! python3 -c "import sys;sys.exit(0 if abs(float('$JOINT_MARGIN')-float('$SOLVER_JM'))<1e-12 else 1)"; then
+    say "**啟動中止**：執行端 --joint-margin=$JOINT_MARGIN 與求解器 joint_margin=$SOLVER_JM 不一致"
+    exit 66
+  fi
+  say "  兩端有效界一致核對通過：$JOINT_MARGIN == $SOLVER_JM"
+fi
 say "**預推命令來源：$([ "$USE_APPLIED" = 1 ] && [ "$CMD_ENV" = 1 ] && echo '實際套用值優先（安全層修改 38.1%）' || echo '發布的請求值')**"
 say "**命令追蹤封裝：$([ "$CMD_ENV" = 1 ] && echo 啟用 || echo 關閉)**"$([ "$CMD_ENV" = 1 ] && echo "（三端同時啟用；落盤 $DIR/cmd_env.jsonl）")
 say "錄影：$REC_RES @ ${REC_FPS}fps、模擬器內相機、at=$REC_AT eye=$REC_EYE target=$REC_TARGET 自 sim ${REC_FROM}s"
@@ -129,6 +146,7 @@ json.dump({'arm_model': '$ARM_MODEL', 'arm_ident': '$ARM_IDENT',
            'use_applied_for_predict': ($USE_APPLIED == 1 and $CMD_ENV == 1),
            'near_target_gamma': $NEAR_GAMMA, 'w_s': $W_S, 'w_a': $W_A,
            'w_s_arm': $([ -n "$W_S_ARM" ] && echo $W_S_ARM || echo None),
+           'joint_margin_e2': $JOINT_MARGIN, 'margin_guard': $MARGIN_GUARD,
            'delay_comp_note': ('**兩種時間分開**；值由 rec9 的逐筆序號量到'
                                '（D_pub 0.60 ＋ D_cmd 1.00 ⇒ D_state 1.60）'),
            'cmd_env': {'enabled': ($CMD_ENV == 1),
@@ -156,7 +174,8 @@ spawn isaac "$ISAAC_PY" -u evaluation/isaac_wholebody_sim_e2.py \
   --solver-label wgmpc_wg2 \
   --record-frames "$DIR/frames" --record-res "$REC_RES" \
   --record-fps "$REC_FPS" --record-at "$REC_AT" --record-eye "$REC_EYE" \
-  --record-target "$REC_TARGET" --record-from "$REC_FROM" $ENV_ISAAC \
+  --record-target "$REC_TARGET" --record-from "$REC_FROM" \
+  --joint-margin "$JOINT_MARGIN" $ENV_ISAAC \
   --run-label "WG2 自由空間閉迴路：W-GMPC N=5（$ARM_MODEL 模型）到達與保持"
 say "  等 Isaac 起 scene（最多 180 s）"
 for i in $(seq 180); do
@@ -218,6 +237,7 @@ python3 -u evaluation/wgmpc_wg2_node.py \
   $([ "$USE_APPLIED" = "1" ] && [ "$CMD_ENV" = "1" ] && echo --use-applied-for-predict) \
   --near-target-gamma "$NEAR_GAMMA" --w-s "$W_S" --w-a "$W_A" \
   $([ -n "$W_S_ARM" ] && echo --w-s-arm "$W_S_ARM") \
+  $([ "$MARGIN_GUARD" = "1" ] && echo --margin-guard) \
   $ENV_NODE --run-id "$RUN_ID" \
   --N "$N" --rate "$RATE" \
   $([ -n "$ABS_TARGET" ] && echo "--target $ABS_TARGET" || echo "--target-offset $OFFSET") \

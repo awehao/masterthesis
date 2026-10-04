@@ -97,7 +97,8 @@ def world_to_body9(d, yaw):
 
 
 class Adapter(Node):
-    def __init__(self, ctrl=CTRL_DEFAULT, cmd_env=False):
+    def __init__(self, ctrl=CTRL_DEFAULT, cmd_env=False,
+                 in_topic='/wholebody_safety/cmd_out'):
         super().__init__('arm_vel_adapter')
         self.ctrl = str(ctrl)
         self.n_in = self.n_out = self.n_bad = 0
@@ -121,9 +122,11 @@ class Adapter(Node):
             self.pub = None
         else:
             self.env_pub = None
+            # 輸入話題可指定，預設 = 安全層的輸出（既有行為）。
+            # 抽屜實驗的管線裡沒有安全層，求解節點直接發世界座標命令；
+            # **座標轉換仍然只由本節點做一次**，不在下游另寫一份。
             self.create_subscription(Float64MultiArray,
-                                     '/wholebody_safety/cmd_out',
-                                     self.on_cmd, 10)
+                                     str(in_topic), self.on_cmd, 10)
             self.pub = self.create_publisher(Float64MultiArray, OUT, 10)
         self._out_seq = 0
         self.diag = self.create_publisher(Float32MultiArray, '~/diag', 10)
@@ -236,12 +239,17 @@ def main():
                     help='實際消費端的節點名（查其 joints 參數核對順序）。'
                          '預設為 Gazebo 鏈的 ros2_control 控制器；'
                          'Isaac 鏈請指定 /isaac_wholebody_sim')
+    ap.add_argument('--in-topic', default='/wholebody_safety/cmd_out',
+                    help='世界座標九維命令的輸入話題。預設 = 安全層的'
+                         '輸出（既有行為）。抽屜實驗沒有安全層，'
+                         '直接指向求解節點的輸出')
     ap.add_argument('--cmd-env', action='store_true',
                     help='啟用 WG2 命令追蹤封裝。**兩種入口擇一**：'
                          '封裝模式只訂／只發封裝，舊話題完全不參與。')
     a, _ = ap.parse_known_args()
     rclpy.init()
-    nd = Adapter(a.consumer_node, cmd_env=a.cmd_env)
+    nd = Adapter(a.consumer_node, cmd_env=a.cmd_env,
+                 in_topic=a.in_topic)
     if not nd.order_ok:
         nd.get_logger().error('refusing to forward commands')
     try:

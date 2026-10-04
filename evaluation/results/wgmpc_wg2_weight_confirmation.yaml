@@ -1,0 +1,174 @@
+# 新權重的可重現性確認 ＋ 錄製器缺口調查
+_note: 新權重的可重現性確認（近、遠目標各一趟）＋ 錄製器缺口調查。這兩趟是可重現性檢查，不追求 p 值。γ 維持 1.0 未動（不同時改兩個因素）。
+config_under_test:
+  status: 探索性配置（非已定版參數）
+  w_s_base: 0.001
+  w_s_arm: 0.05
+  w_a: 0.05
+  gamma: 1.0
+  gamma_note: 與先前一致，本輪未動
+  delay_comp:
+    d_state: 1.6
+    d_cmd: 1.0
+recorder_investigation:
+  question: 1.5% 掉封裝是否集中在振盪或高負載時段
+  answer: 集中在高負載，與振盪無關
+  evidence:
+    cycle_wall_ms_ratio_missing_over_present:
+    - 2.18
+    - 1.53
+    solve_ms_ratio:
+    - 1.14
+    - 1.24
+    arm_cmd_Linf_ratio:
+    - 0.95
+    - 0.86
+    arm_cmd_note: 缺的命令反而較小 ⇒ 非振盪時段
+    adjacent_within_0p11s_frac:
+    - 0.36
+    - 0.55
+  solver_side_gap:
+    cause: 錄製器主迴圈是 spin_once(0.05)，每次只處理一個回呼；四話題合計約 80 msg/s，高負載時主迴圈被餓到、佇列（深度 100）溢位
+    fix: 改成在獨立執行緒以 SingleThreadedExecutor 持續 spin，主執行緒只等停止訊號；佇列深度 100 → 2000。受控結束與 summary 寫出不變。
+    result: 遠目標 solver 漏錄 15 → 2 筆；近目標 7 → 6
+    note: 漏的那些全是開頭連號 1,2,3…，即握手的全零命令發布在錄製器完成訂閱之前 —— 啟動競態，與負載無關
+  downstream_gap:
+    observation: 修正後幾乎不變（12.2% → 8.8%、9.1% → 10.0%）
+    cause: 不是錄製器。安全層以自己的節拍轉送：遠目標 solver 420 筆、安全層可歸屬輸出 426 筆（數量相當），但只對應 384 個獨立 source_seq —— 有的序號重送兩次、有的被跳過。是速率錯配，不是遺失。
+    control_path_intact:
+      recv_seq_increments:
+        1: 491
+        2: 1
+      n_rejected: 0
+      api_applied_false_cycles: 0
+    verdict: 依既定規則：物理步紀錄完整就記下缺口、不拖住控制驗證
+    remaining_work: 若要逐筆鏈路 100% 可重建，需讓安全層逐筆轉送，或在其輸出標明本筆對應哪些上游序號。本輪未做。
+confirmation_runs:
+  far:
+    run: wgmpc_wg2_farB_c1_194119
+    target:
+    - 1.0
+    - 0.0
+    - 0.45
+    domain: 123
+    cpu_peak_c: 89.25
+    A_reach_and_hold: 通過
+    A_hold_window_sim_s:
+    - 51.07
+    - 53.07
+    A_err:
+      pos_p50_mm: 0.77
+      pos_max_mm: 4.41
+      rot_p50_mrad: 1.55
+    B_base_participation: 通過
+    B_net_displacement_m: 0.630614
+    C2:
+      path_ratio: 1.032
+      arm_flip: 0.134
+      err_inc: 0.005
+      wasted: 0.0
+      sqp_p50: 4
+      no_progress: 0.0
+  near:
+    run: wgmpc_wg2_near_c1_194342
+    target: 偏移 [0.25, 0.15, 0.05]
+    domain: 124
+    cpu_peak_c: 90.0
+    A_reach_and_hold: 通過
+    A_hold_window_sim_s:
+    - 25.66
+    - 27.66
+    A_err:
+      pos_p50_mm: 0.12
+      pos_max_mm: 3.64
+      rot_p50_mrad: 0.32
+    B_base_participation: 不適用
+    B_note: 判準 B 是為遠目標算的（認證下界 0.155207 m 來自目標半徑 1.0 m 減去可達上界）。近目標半徑 0.4705 m 本來就不需要底盤移動，實測淨位移 0.062 m
+      低於該下界是預期，不是失敗。判準腳本目前不分目標就套用，這是腳本的缺陷，已記錄待修。
+    C2:
+      path_ratio: 1.02
+      arm_flip: 0.024
+      err_inc: 0.114
+      wasted: 0.0
+      sqp_p50: 4
+      no_progress: 0.0
+reproducibility:
+  _order: '[#1 首次驗證, #2 本次確認]'
+  far_hold:
+    cmd_rms:
+    - 0.0009
+    - 0.0007
+    tcp_path_mm:
+    - 4.55
+    - 4.13
+    path_over_net:
+    - 1.02
+    - 1.01
+    band_4_7hz:
+    - 0.0
+    - 0.0
+    err_p50_mm:
+    - 0.77
+    - 0.77
+  near_hold:
+    cmd_rms:
+    - 0.003
+    - 0.0027
+    tcp_path_mm:
+    - 3.5
+    - 3.77
+    path_over_net:
+    - 1.03
+    - 1.05
+    band_4_7hz:
+    - 0.0001
+    - 0.0001
+    err_p50_mm:
+    - 0.12
+    - 0.12
+  far_transit:
+    path_ratio:
+    - 1.029
+    - 1.032
+    arm_flip:
+    - 0.124
+    - 0.134
+    no_progress:
+    - 0.0
+    - 0.0
+  reading: 兩趟之間的差異遠小於新舊設定之間的差異（例如近目標保持窗 TCP 路徑：舊 51.66 mm，新兩趟 3.50 / 3.77 mm）。但每個目標仍只有兩趟，這是可重現性檢查，不是統計穩定性的證明。
+baseline_old_weights:
+  far_hold:
+    cmd_rms: 0.0081
+    tcp_path_mm: 5.09
+    path_over_net: 1.28
+    band_4_7hz: 0.0077
+    err_p50_mm: 0.7
+  near_hold:
+    period: 4
+    acf: 0.81
+    cmd_rms: 0.274
+    tcp_path_mm: 51.66
+    path_over_net: 18.49
+    band_4_7hz: 0.12
+    err_p50_mm: 0.94
+  far_transit:
+    path_ratio: 2.046
+    arm_flip: 0.372
+    err_inc: 0.213
+    wasted: 0.135
+    sqp_p50: 9
+    no_progress: 0.282
+claim_wording: 先前診斷出的 5 Hz（週期 4）極限環，在新設定的四趟中都未再出現（近目標兩趟、遠目標兩趟，週期皆為 2 且振幅小兩個數量級）。措辭維持「未再出現」，不說「已解決」—— 樣本仍少，且機制未以反例證明。
+what_this_supports:
+- 新權重在近、遠兩種目標下都能到達並保持，移動段路徑接近直線，保持窗為單向沉降。可作為進入抽屜接觸測試前的自由空間控制基線。
+- 目前的影片可展示改善，但須標明是單趟結果。
+not_supported:
+- 統計穩定性（每個目標兩趟）
+- 接觸式操作
+- γ 是否可關閉（本輪刻意未動，待依實際縮放紀錄另行決定）
+thermal:
+  far_peak_c: 89.25
+  near_peak_c: 90.0
+  limit_c: 92.0
+  note: 兩趟都先降到 58 °C 以下才起跑；中止線未調整

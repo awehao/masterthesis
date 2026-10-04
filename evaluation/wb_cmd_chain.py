@@ -64,14 +64,17 @@ class CmdChain:
     """
 
     def __init__(self, *, max_cmd_age_s, arm_rate_max, wheel_ok,
-                 joint_lower, joint_upper, mode='sync', expect_dof=N_DOF):
+                 joint_lower, joint_upper, mode='sync', expect_dof=N_DOF,
+                 joint_margin=0.0):
         if mode not in MODES:
             raise ValueError(f'未知模式 {mode}')
         self.cfg = dict(max_cmd_age_s=float(max_cmd_age_s),
                         arm_rate_max=float(arm_rate_max),
                         expect_dof=int(expect_dof), mode=str(mode),
                         joint_lower=tuple(joint_lower),
-                        joint_upper=tuple(joint_upper))
+                        joint_upper=tuple(joint_upper),
+                        # 有效限位的內縮量；0 = 只看硬限位（預設，行為不變）
+                        joint_margin=float(joint_margin or 0.0))
         self.mode = MODES[mode]
         self.wheel_ok = wheel_ok
         self.n_recv = 0

@@ -92,6 +92,9 @@ class GMPCConfig:
     # and gz's VelocityControl executes them anyway because it has no actuator
     # model. Those results did not represent the robot.
     wheel_coupling : bool  = False        # off = old box-only behaviour
+    # 'segment' = 原本的單一 λ 線段縮放（預設，行為一位元未改）。
+    # 'project' = 投影到同一組輪級集合，避免「一列貼邊就凍結三個自由度」。
+    wheel_fit_mode : str   = 'segment'
     wheel_radius   : float = 0.05         # r   [m]
     wheel_base_L   : float = 0.245        # L   [m]
     wheel_w_max    : float = 5.55         # ω_max [rad/s]
@@ -322,6 +325,80 @@ def fit_to_wheels(u, xi_prev, cfg: 'GMPCConfig', dt: float, tol: float = 1e-6):
             lam = 0.0
     lam = float(min(max(lam, 0.0), 1.0))
     return xp + lam * (u - xp), lam
+
+
+def project_to_wheels(u, xi_prev, cfg: 'GMPCConfig', dt: float,
+                      tol: float = 1e-9):
+    """Closest point to `u` inside BOTH wheel sets. Returns (v, ok).
+
+    Why this exists, when `fit_to_wheels` already enforces the same two sets:
+    that one retreats along the SEGMENT ξ_prev → u with a single scalar λ, so
+    ONE row that sits on the boundary and points outward collapses λ to 0 for
+    ALL THREE degrees of freedom -- and λ = 0 means "hold the previous
+    command", not "stop".
+
+    Measured on `demo_heading_054503`: 229 of 300 solves (76.3%) returned a
+    command bit-identical to the previous one, every one tagged
+    `wheel_scaled`, with the same (+0.1887, -0.1191, -0.3626) held for over
+    1.1 s while the QP was asking to REDUCE the yaw rate. The chassis kept
+    turning past its heading target because a command it had already finished
+    with could not be withdrawn.
+
+    The feasible set is {v : |W v| <= r*w_max, |W (v - xi_prev)| <= r*a_max*dt}
+    -- an intersection of half-spaces, convex, and (when xi_prev is itself
+    feasible) non-empty. Projecting onto it keeps EVERY limit exactly as it
+    was and lets the components that were coming back inside actually move.
+    This is not a relaxation: the returned point satisfies the same rows the
+    segment search checked, and the function verifies that before returning.
+
+    `ok=False` means the projection did not produce a feasible point -- the
+    caller must then fall back to the segment result rather than trust this.
+    """
+    u = np.asarray(u, dtype=float)
+    xp = np.asarray(xi_prev, dtype=float)
+    W = wheel_matrix(cfg)
+    w_lim = cfg.wheel_radius * cfg.wheel_w_max
+    a_lim = cfg.wheel_radius * cfg.wheel_a_max * dt
+    # **投影集合要含全部四族限制**，不只輪級。先前只放了輪速與輪加速度，
+    # 結果投影出來的解可以違反逐軸加速度框：反例是請求轉速變化 −0.1000，
+    # 投影後變成 −0.105894，超過 a_max[2]·dt = 2×0.05 = 0.1。
+    #   1. 輪速      |W v| ≤ r·ω_max
+    #   2. 輪加速度  |W (v − ξ_prev)| ≤ r·α_max·dt
+    #   3. 逐軸速度  u_min ≤ v ≤ u_max
+    #   4. 逐軸加速度 |v − ξ_prev| ≤ a_max·dt
+    I3 = np.eye(3)
+    A = sparse.csc_matrix(np.vstack([W, W, I3, I3]))
+    b_acc = W @ xp
+    ax = np.asarray(cfg.a_max, float) * float(dt)
+    lo = np.concatenate([np.full(4, -w_lim), -a_lim + b_acc,
+                         np.asarray(cfg.u_min, float), xp - ax])
+    hi = np.concatenate([np.full(4, w_lim), a_lim + b_acc,
+                         np.asarray(cfg.u_max, float), xp + ax])
+    P = sparse.csc_matrix(np.eye(3))
+    q = -u
+    try:
+        pr = osqp.OSQP()
+        pr.setup(P=P, q=q, A=A, l=lo, u=hi, verbose=False,
+                 eps_abs=1e-9, eps_rel=1e-9, polish=False)
+        r = pr.solve()
+    except Exception:                                   # pragma: no cover
+        return xp, False
+    if r.info.status_val not in (1, 2) or r.x is None or not np.all(
+            np.isfinite(r.x)):
+        return xp, False
+    v = np.asarray(r.x, dtype=float)
+    # **自己驗一次**：解算器回報成功不等於點在集合裡
+    wv = W @ v
+    if np.max(np.abs(wv)) > w_lim + 1e-6:
+        return xp, False
+    if np.max(np.abs(wv - b_acc)) > a_lim + 1e-6:
+        return xp, False
+    if np.any(v < np.asarray(cfg.u_min, float) - 1e-6) or \
+            np.any(v > np.asarray(cfg.u_max, float) + 1e-6):
+        return xp, False
+    if np.max(np.abs(v - xp) - ax) > 1e-6:
+        return xp, False
+    return v, True
 
 
 # ---------------------------------------------------------------------------
@@ -1113,7 +1190,37 @@ class GMPC:
         # It runs on the emergency-brake path too, where u = 0 trivially passes.
         if cfg.wheel_coupling and cfg.wheel_enforce_output:
             u_fit, lam = fit_to_wheels(u_opt, xi_prev, cfg, dt)
-            if lam < 1.0 - 1e-9:
+            # λ ≈ 0 代表「沿用上一筆」，不是「停止」。這在上一筆正好貼著
+            # 輪速邊界時會連續發生，把已經該收回的轉速一直送出去。
+            # 投影模式只在這個退化情形接手，而且**驗過才用**；
+            # 驗不過就退回線段結果，限制一條都不放寬。
+            # **門檻改成「只要線段會改動命令就投影」，不是只救 λ≈0。**
+            # 原本 λ < 1e-6 只擋住「完全凍結」，近乎凍結照樣發生：實測
+            # 這一趟 NAV 區間仍有 17 輪 λ < 0.05、最小 5.38e-6，
+            # sim 30.30 s 的 λ = 0.001757 只接受新命令變化量的 0.176%，
+            # 轉速維持 −0.1457 rad/s 繼續往原方向轉，隨後 30.43 s 出現
+            # 最大橫向偏差 76.19 mm。「輸出不再逐位元等於上一筆」不足以
+            # 說問題解決了。
+            #
+            # 把門檻再調大是治標；線段縮放在輪速邊界上本來就不適合 ——
+            # 它只有一個旋鈕，而投影每次都回傳**集合裡離要求最近的點**，
+            # 在 λ=1 的情形兩者相同，所以沒有理由只在退化時才用它。
+            _projected = False
+            if getattr(cfg, 'wheel_fit_mode', 'segment') == 'project' \
+                    and lam < 1.0 - 1e-9:
+                _v, _ok = project_to_wheels(u_opt, xi_prev, cfg, dt)
+                if _ok:
+                    u_fit, _projected = _v, True
+            # **寫回要用明確旗標。** 先前把 λ 設成 NaN 表示「不是線段縮放」，
+            # 但 `NaN < 1.0` 永遠是 False ⇒ 投影成功反而跳過寫回，回傳的是
+            # **投影前**的命令。改善因此不能歸因於投影，只是剛好沒走到卡住
+            # 的線段輸出。由 test_wheel_fit_stuck.py 的 E 組（核 solve() 的
+            # 實際回傳）釘住。
+            if _projected:
+                u_opt = u_fit
+                accept_scale = float('nan')      # 不是縮放比例，不冒稱
+                accept_action = 'wheel_projected'
+            elif lam < 1.0 - 1e-9:
                 u_opt, accept_scale = u_fit, lam
                 accept_action = 'wheel_scaled'
         w_cmd_max = (float(np.max(np.abs(wheel_speeds(u_opt, cfg))))

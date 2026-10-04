@@ -1,0 +1,171 @@
+# WG2 第二個自由空間案例：**需要底盤參與**的遠目標
+# 本檔在實跑**之前**寫定判準。離線挑選與核對已完成；Isaac 尚未跑。
+# 重現：python3 evaluation/wgmpc_wg2_target_select.py --target <x y z>
+
+motivation:
+  problem: >
+    現行自由空間目標的 TCP 水平半徑只有 0.4705 m，而手臂在**底盤固定**時的
+    水平可達上限是 0.7000 m（多起點最佳化，不限姿態）。也就是說不動底盤
+    本來就能到；即使到達並保持，也證明不了 W-GMPC 在分配底盤與手臂的運動。
+  current_case_role: 保留為**控制精度與保持振動的基準**，不被新案例取代。
+
+reach_bound:
+  # **兩種數字要分開，不可混用**
+  searched_max_m: 0.7000                     # 60 次多起點 L-BFGS-B 找到的最大值
+  searched_is_not_a_bound: >
+    這是**搜尋到的最大值**，不是全域可達上界。沒有任何保證不存在更遠的構型。
+    先前把它當成「超過即不可達」的充分條件是錯的，已收回。
+  certified_ub_m:                            # 可認證上界（三角不等式）
+    any_z: 0.943470
+    at_z_0.4497: 0.934830
+    derivation: >
+      串聯鏈：||p_tcp − p_mount|| <= Σ|t_i| = 0.833470 m，與各關節角無關
+      （旋轉不改變各段固定平移的長度）。手臂底座 link_base 在底盤座標
+      (0.110, 0, 0.330)，底盤只平移與繞 z 轉 ⇒ 其水平偏移恆為 0.110 m、
+      高度恆為 0.330 m。故水平半徑 <= 0.110 + Σ|t_i|；
+      若另外要求 TCP 落在高度 z，水平分量 <= sqrt(Σ|t_i|² − (z−0.330)²)。
+    link_translations_m: [0.243500, 0.0, 0.200200, 0.243670, 0.0, 0.062500,
+                          0.0, 0.0, 0.083600]
+  base_fixed_tcp_z_range_m_searched: [0.0304, 1.1635]   # 同為搜尋值
+  start_tcp_radius_m: 0.1959
+
+# ---------------- 離線挑選結果 ----------------
+candidates:                 # 兩者都通過 R1–R4；選一個實跑
+  A_recommended:
+    target_world_m: [0.8959, 0.1500, 0.4497]
+    radius_xy_m: 0.9084
+    vs_searched_max_m: +0.2084             # 超出**搜尋值** 0.7000
+    vs_certified_ub_m: -0.0264             # **低於**可認證上界 0.934830 ⇒ 未經認證
+    R1_base_fixed_infeasible: 離線搜尋支持的預期    # **不是已證明**
+    R1_evidence: >
+      多起點 IK（60 顆種子，bounded least-squares）求不到解，最佳殘差 220.4 mm；
+      半徑 0.9084 m 超過搜尋到的最大值 0.7000 m。
+      **但**：IK 找不到解不證明無解；0.7000 m 也不是上界。
+      半徑 0.9084 m 仍在可認證上界 0.934830 m 之內 ⇒ 本項**未達認證**。
+    R2_base_mobile_feasible: true          # IK 精確解（0.0000 mm），關節裕度 0.8100 rad
+    offline_closed_loop:
+      reached_held: true
+      t_reach_s: 12.95
+      n_cycles: 300
+      n_solver_fail: 0
+      terminal_base_xy_yaw: [0.3530, 0.2541, -0.1923]
+      base_displacement_m: 0.4351
+      target_radius_rel_terminal_base_m: 0.5528
+    R3_path:
+      joint_margin_min_rad: 0.0098         # j3，**出現在起始構型**，非本候選造成
+      base_translation_margin_m: 2.147
+      wheel_speed_max_mps: 0.0842          # 上限 0.2775
+      floor_clearance_min_m: 0.400
+      base_cylinder_check: 未觸發            # 手臂連桿原點全程高於 0.28 m ⇒ **非通過**
+    R4_simultaneity:
+      both_moving_frac: 1.00
+      base_axis_saturated_frac: 0.37
+      arm_saturated_frac: 0.19
+      arm_cmd_frac_of_box: {p50: 0.34, iqr: [0.18, 0.57]}
+  B_alternative:
+    target_world_m: [1.0000, 0.0000, 0.4500]
+    radius_xy_m: 1.0000
+    vs_searched_max_m: +0.3000
+    vs_certified_ub_m: +0.0652              # **超出**可認證上界 0.934787 (z=0.45)
+    R1_level: certified                     # 唯一達到認證層級的候選
+    certified_min_base_travel_m: 0.065213   # = 1.0000 − 0.934787，可作必要條件
+    note: >
+      若要讓「固定底盤必不可達」與「底盤位移下限」回到**必要條件**的層級，
+      就該選 B 而非 A。代價：認證門檻只有 0.065 m（很弱，因為上界鬆），
+      且離線到達時間較長（15.70 vs 12.95 s）。
+      半徑 1.20 m 可把認證門檻提到 0.265 m，代價是行程與時間再增加。
+    offline_closed_loop: {reached_held: true, t_reach_s: 15.70, n_cycles: 355,
+                          n_solver_fail: 0}
+    R4_simultaneity: {both_moving_frac: 1.00, base_axis_saturated_frac: 0.42,
+                      arm_saturated_frac: 0.17,
+                      arm_cmd_frac_of_box: {p50: 0.44, iqr: [0.21, 0.66]}}
+  why_A: 離線到達時間較短（12.95 vs 15.70 s），對 CPU 熱負荷較友善；裕度 0.208 m 已足。
+  rejected: 對角候選 [0.8, 0.6, 0.45] 離線出現 3 次求解失敗，不選。
+
+# ---------------- 實跑驗收條件（事前寫定） ----------------
+acceptance:
+  A_reach_and_hold:
+    metric: 以**實測狀態**的 FK 誤差判定（不用核心預測）
+    threshold: 位置 <= 0.005 m 且姿態 <= 0.02 rad，連續 >= 2.0 s 模擬時間
+    independent_check: 另由 sim/wb_run.json 的物理步重算，步數 >= 200 步
+    verdict: 二分（通過／未通過）
+  B_base_participation:
+    rationale: >
+      **事前固定的參與判準，不是必要條件。**
+      0.2084 m 來自目標半徑 0.9084 減去**搜尋到的最大值** 0.7000；
+      由於 0.7000 不是上界，這個差值不構成幾何必要條件。
+      以可認證上界 0.934830 計算，候選 A 的認證必要位移是**負的**
+      ⇒ 認證層級上，固定底盤不可達**尚未成立**。
+      此判準仍有用：它事前固定、可證偽，且離線預測位移 0.4351 m 遠高於它。
+    threshold: 實測底盤位移 > 0.2084 m（參與判準）
+    certified_alternative: >
+      若要恢復「必要條件」的說法，目標半徑須超過 0.934830 m（z=0.4497）。
+      候選 B（半徑 1.0000 m）即滿足，其**認證**必要位移為 1.0000 − 0.934787
+      = 0.0652 m —— 認證成立但門檻很弱。半徑 1.20 m 可得認證門檻 0.265 m，
+      代價是底盤行程與趟次時間都更長。
+    also_report: 終端底盤位姿、底盤路徑長、底盤逐軸飽和比例
+    verdict: 二分
+  C_simultaneous_motion:
+    definition: >
+      移動期間（起跑到首次進入容差）每個控制週期，若
+      hypot(vx,vy)/v_base_lin > 0.05 **且** max|手臂速率|/v_arm > 0.05
+      即計為「同時運動」。
+    threshold: 同時運動週期比例 >= 0.80
+    also_report: 底盤逐軸飽和比例、手臂命令佔框的 p50 與 IQR
+    caveat: >
+      「同時運動」不等於「非瑣碎的分配」。離線底盤有 37% 的時間處於逐軸
+      飽和；飽和期間的分配是「底盤全速、手臂補其餘」，要照實說明。
+    verdict: 二分 + 描述
+  D_hold_window_vibration:
+    metric: 以 evaluation/wgmpc_wg2_hold_vibration.py 同一支程式計算
+    report: [保持窗 TCP 路徑長 mm, 各關節套用速率的 4–7 Hz 頻帶振幅,
+             整形前命令的自相關週期與峰值, 底盤位姿 p2p]
+    threshold: "**不設通過門檻**"
+    why_no_threshold: >
+      保持振動尚未解決，且新案例的終端手臂構型與基準差異很大
+      （基準終端手臂接近起始構型；本候選為 j2 1.52 / j3 2.78 / j5 1.26），
+      雅可比與姿態都不同 ⇒ **不能與基準逐項對比**。此項只記錄、不判定，
+      也不得用來宣稱振動已改善。
+  E_falsification:                # 什麼情況代表這個案例沒測到它該測的
+    - 底盤位移 <= 0.2084 m 卻宣稱到達 ⇒ 參與判準未過；這**不是**幾何矛盾
+      （0.2084 不是認證下限），但代表「需要底盤」的前提只有搜尋支持而未被實測支持
+    - Isaac 回報的 TCP 與節點 FK 不一致 ⇒ 模型不同步，結果作廢
+    - 同時運動比例 < 0.80 ⇒ 是「先走再伸」而非全身協調，照實說明不改判準
+
+status: 可行性預覽              # **不是**已驗證的可行性
+limits:
+  - 離線通過**不等於** Isaac 會通過（與 wgmpc_closed_loop_sim 同一條界線）。
+  - 「固定底盤不可達」目前是**離線搜尋支持的預期**，不是已證明；
+    可認證的只有 0.934830 m 這個（較鬆的）上界。
+  - 碰撞只核到**連桿原點**，非網格層級；底盤圓柱那一項在離線路徑上從未觸發。
+    實跑由 Isaac 的接觸回報確認。
+  - 離線模型沒有接觸、沒有 Isaac 積分器細節、沒有安全層與 E2。
+  - 本案例**不取代**尚未解決的保持振動問題。
+  - "`solve_in` 只是讓趟後重播能核對求解輸入、把重建誤差與真正的殘差分開；
+    它**本身沒有解決振動**。"
+
+pre_run_checks:                 # 首測前要完成的核對
+  start_joint_angles:
+    status: 已核對
+    finding: >
+      18 趟的起始手臂關節角完全相同（全距 0.0）：
+      [-0.00064, 0.00261, -0.00122, 0.00034, 0.00002, -0.00000]。
+      USD 沒有設 physics:position ⇒ 關節為**零位**，那些 1e-3 的值是握手前
+      物理沉降的結果，因此每趟一致。
+    j3_margin: >
+      j3 限位不對稱 [-0.061087, +2.935644]：零位離硬下界只有 0.061 rad，
+      扣掉求解器的 joint_margin=0.05 後僅剩 **0.0099 rad** 可往負走。
+      這是資產與裕度設定的性質，**每一趟都相同**（含已到達保持的基準趟），
+      不是遠目標引入的新風險；但它確實很薄，首測時要留意 j3 是否貼住該界。
+  scene_geometry:
+    status: 部分核對
+    done: 場景只有 /World/ground（無限大地面）與 /World/omni_bot，無其他物體
+    not_done: >
+      **網格層級碰撞未核**。離線只核到連桿**原點**的離地高度與底盤圓柱距離，
+      而且底盤圓柱那一項在離線路徑上從未觸發（手臂連桿原點全程高於 0.28 m）
+      ⇒ 該項**非通過，是未測**。網格層級要由 Isaac 的接觸回報確認。
+
+artifacts:
+  selector: evaluation/wgmpc_wg2_target_select.py
+  baseline_vibration: evaluation/results/wgmpc_wg2_hold_oscillation.yaml
+  replay: evaluation/results/wgmpc_wg2_replay_outcome.yaml

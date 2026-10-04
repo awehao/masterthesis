@@ -37,10 +37,10 @@ import tf2_ros
 from collections import deque
 
 from .gmpc           import GMPC, GMPCConfig
-from .se2            import from_xytheta, to_xytheta
+from .se2            import from_xytheta, to_xytheta, geodesic_error
 from .detour import (DetourConfig, DetourState, apply_offset,
                      clear_reference, FREE)
-from .path_processor import (path_msg_to_xyth,
+from .path_processor import (path_msg_to_xyth, project_arclength,
                              build_reference_window,
                              blend_reference,
                              quaternion_to_yaw)
@@ -55,6 +55,18 @@ class GMPCNode(Node):
         self.declare_parameter('control_frequency', 20.0)
         self.declare_parameter('horizon',           20)
         self.declare_parameter('v_nominal',         0.30)
+        # **參考視窗的固定弧長前置量。預設 0.0 = 原行為一位元未改。**
+        # 前視距離原本是 k·v_nom·dt，與 v_nominal 成正比；把速度降進全身的
+        # 速度框時前視也一起縮掉（v_nom 0.03、dt 0.05、N 20 ⇒ 整窗 30 mm），
+        # 參考點貼在機器人身上，停住就成了閉環的不動點。詳見
+        # path_processor.build_reference_window 的註解與實測編號。
+        self.declare_parameter('reference_lead_m',  0.0)
+        # **參考點的投影方式。預設 'vertex' = 原行為一位元未改。**
+        # 'segment' 投影到線段上，s 隨機器人連續變化，不再在 5 cm 取樣間
+        # 跳格；搭配單調進度保護（參考不倒退）。實測慢速區相鄰命令方向
+        # 變化 p50 32.7°、p95 89.2°、最大 103°，就是跳格造成的左右修正。
+        self.declare_parameter('reference_projection', 'vertex')
+        self.declare_parameter('reference_monotonic', False)
 
         self.declare_parameter('vx_min', -0.20)
         self.declare_parameter('vx_max',  0.35)
@@ -215,6 +227,9 @@ class GMPCNode(Node):
         self.declare_parameter('wheel_base_L', 0.245)
         self.declare_parameter('wheel_w_max', 5.55)
         self.declare_parameter('wheel_a_max', 125.0)
+        # 'segment'（預設）＝原本的單一 λ 線段縮放；'project' 只在
+        # λ≈0 的退化情形改用投影，避免一列貼邊就凍結三個自由度。
+        self.declare_parameter('wheel_fit_mode', 'segment')
         self.declare_parameter('cbf_margin_growth', 0.0)
         # Prefer giving way FORWARD rather than backward when the CBF pushes the
         # robot off the reference. 0 = no preference (validated behaviour).
@@ -306,11 +321,25 @@ class GMPCNode(Node):
         N       = int(  self.get_parameter('horizon').value)
         self.dt = 1.0 / f
         self.v_nom = float(self.get_parameter('v_nominal').value)
+        self.ref_lead = float(self.get_parameter('reference_lead_m').value)
+        self.ref_proj = str(self.get_parameter('reference_projection').value)
+        self.ref_mono = bool(self.get_parameter('reference_monotonic').value)
+        self._s_prev = None          # 單調進度的狀態；換計畫時重設
+        # **執行期可改 v_nominal。** 原本只在這裡讀一次，所以最後接近要放慢時
+        # 只能重啟節點 —— 那會在控制上留一個空窗。這是**加法式**改動：
+        # 控制律一行未動，只是讓這個參數變成活的。
+        # 用途：滾動交棒需要底盤在**仍在移動**時被接手，而本節點抵達目標時的
+        # 減速是陡的（實測由 0.153 m/s 到 0 只走了 6 mm），沒有任何時刻停在
+        # 全身的速度框內還在動。把最後一段的 v_nominal 降進框內才做得到。
+        self.add_on_set_parameters_callback(self._on_set_params)
 
         self.global_frame     = str(self.get_parameter('global_frame').value)
         self.base_frame       = str(self.get_parameter('robot_base_frame').value)
         self.pose_lpf_alpha   = float(self.get_parameter('pose_lpf_alpha').value)
         self.pose_source      = str(self.get_parameter('pose_source').value)
+        # 留成屬性：失效訊息要講**真正訂閱的**話題，不是寫死的預設名
+        self.pose_odom_topic  = str(
+            self.get_parameter('pose_odom_topic').value)
         self.pose_max_age     = float(self.get_parameter('pose_max_age').value)
         self._odom_pose       = None      # (t, x, y, yaw) from the EKF topic
         self._pose_fallbacks  = 0         # times 'odom' had to fall back to TF
@@ -398,6 +427,8 @@ class GMPCNode(Node):
             wheel_base_L=float(self.get_parameter('wheel_base_L').value),
             wheel_w_max=float(self.get_parameter('wheel_w_max').value),
             wheel_a_max=float(self.get_parameter('wheel_a_max').value),
+            wheel_fit_mode=str(
+                self.get_parameter('wheel_fit_mode').value),
             prog_weight=float(self.get_parameter('prog_weight').value),
         )
         self.mpc = GMPC(cfg)
@@ -437,6 +468,8 @@ class GMPCNode(Node):
         self._stat_rx_n   = 0            # points in it
         self._stat_rx_seq = 0            # messages received (DDS liveness)
         self._cycle_id    = 0            # ties every diagnostic to one solve
+        self._dbg_solver_in = None       # 求解器輸入快照（純診斷）
+        self._dbg_prev_t  = None         # 上一輪控制步的節點時刻
         self._obs_rx_t    = None         # arrival time of the last dynamic msg
         self._requested_goal = None      # (t, x, y) straight off /goal_pose
         self._last_state  = None         # suppress repeated state logs
@@ -642,7 +675,31 @@ class GMPCNode(Node):
                 return True
         return False
 
+    def _on_set_params(self, params):
+        from rcl_interfaces.msg import SetParametersResult
+        for p in params:
+            if p.name == 'v_nominal':
+                v = float(p.value)
+                if not (v > 0.0):
+                    return SetParametersResult(
+                        successful=False, reason='v_nominal 必須為正')
+                old, self.v_nom = self.v_nom, v
+                self.get_logger().info(
+                    f'v_nominal {old:.4f} -> {v:.4f} m/s（執行期變更）')
+            elif p.name == 'reference_lead_m':
+                v = float(p.value)
+                if not (v >= 0.0):
+                    return SetParametersResult(
+                        successful=False, reason='reference_lead_m 不得為負')
+                old, self.ref_lead = self.ref_lead, v
+                self.get_logger().info(
+                    f'reference_lead_m {old:.4f} -> {v:.4f} m（執行期變更）')
+        return SetParametersResult(successful=True)
+
     def _plan_cb(self, msg: Path):
+        # **換計畫就重設單調狀態** —— 舊路徑的弧長套到新路徑上沒有意義，
+        # 而且會把參考卡在一個不屬於新路徑的位置。
+        self._s_prev = None
         if len(msg.poses) == 0:
             self.get_logger().warn('Received empty plan')
         if (self.plan_blend_s > 0.0 and self.latest_path is not None
@@ -793,7 +850,8 @@ class GMPCNode(Node):
         self.diag_pub.publish(d)
         # --- 版本化診斷：把「命令識別／時間／約束評估對象／原 slack」配成一組 ---
         import json as _json
-        rec = dict(schema='gmpc_diag/2', cmd_id=int(self._cycle_id), t=now_s,
+        rec = dict(schema='gmpc_diag/3', cmd_id=int(self._cycle_id), t=now_s,
+                   solver_in=self._dbg_solver_in,
                    state=state, u=None, accept_action=None, accept_scale=None,
                    wheel_w_cmd_max=None,
                    cbf_resid_solved_noslack=None, cbf_resid_solved_slack=None,
@@ -827,14 +885,22 @@ class GMPCNode(Node):
         r = tf.transform.rotation
         return np.array([t.x, t.y, quaternion_to_yaw(r.x, r.y, r.z, r.w)])
 
-    def _tf_robot_pose(self):
+    def _tf_robot_pose(self, timeout_s=None):
         """map -> base_footprint via TF composition. Kept as the fallback and,
-        whatever the active source, as the diagnostic reference."""
+        whatever the active source, as the diagnostic reference.
+
+        `timeout_s` 可覆寫等待時間。**已經有新鮮 odom 位姿時要傳 0.0** ——
+        這個查詢在 TF 不存在時會把整個等待時間用滿：本機實測
+        timeout 0.1 s ⇒ 101.9 ms、timeout 0 ⇒ 0.021 ms，而控制週期量到的
+        中位數是 160 ms，也就是**六成以上耗在等一個不存在的 TF**。
+        零等待仍會在 TF 真的存在時取到值，所以診斷不會消失。
+        """
+        _to = self.tf_timeout_s if timeout_s is None else float(timeout_s)
         try:
             tf = self.tf_buffer.lookup_transform(
                 self.global_frame, self.base_frame,
                 rclpy.time.Time(),
-                rclpy.duration.Duration(seconds=self.tf_timeout_s),
+                rclpy.duration.Duration(seconds=_to),
             )
         except (tf2_ros.LookupException,
                 tf2_ros.ConnectivityException,
@@ -864,21 +930,36 @@ class GMPCNode(Node):
         return self._tf_to_xyth(tf)
 
     def _lookup_robot_pose(self):
-        tf_pose = self._tf_robot_pose()
-        self._tf_pose_last = tf_pose            # for the per-cycle diagnostic
-        pose = tf_pose
+        # **先看 odom，再決定 TF 要不要阻塞等。**
+        # 原本無條件先做阻塞式 TF 查詢，即使 pose_source=odom 且 odom 新鮮
+        # 也照等 —— TF 不存在時每輪白等一個完整 timeout。
+        pose = None
+        have_odom = False
         if self.pose_source == 'odom':
             op = self._odom_pose
             now = self.get_clock().now().nanoseconds * 1e-9
             if op is not None and (now - op[0]) <= self.pose_max_age:
                 pose = np.array([op[1], op[2], op[3]])
-            else:
-                # No fresh EKF pose: fall back rather than steer on a stale one.
-                self._pose_fallbacks += 1
-                self.get_logger().warn(
-                    'pose_source=odom but /odometry/filtered is stale '
-                    f'({"none" if op is None else f"{now - op[0]:.2f}s"}); using TF',
-                    throttle_duration_sec=2.0)
+                have_odom = True
+        # 診斷用的 TF 仍然每輪取，但有 odom 時用**零等待**：存在就拿得到，
+        # 不存在就立刻失敗，不佔週期。
+        tf_pose = self._tf_robot_pose(timeout_s=0.0 if have_odom else None)
+        self._tf_pose_last = tf_pose            # for the per-cycle diagnostic
+        if pose is None:
+            pose = tf_pose
+        if self.pose_source == 'odom' and not have_odom:
+            # 沒有新鮮的 odom 位姿：退回 TF，而不是拿過期的去導航。
+            op = self._odom_pose
+            now = self.get_clock().now().nanoseconds * 1e-9
+            self._pose_fallbacks += 1
+            # **訊息要講真正訂閱的話題**。原本寫死 /odometry/filtered，
+            # 但話題是參數給的；先前就因為這句把「沒設 use_sim_time」
+            # 誤判成「話題不對」。
+            self.get_logger().warn(
+                f'pose_source=odom 但 {self.pose_odom_topic} 沒有新鮮位姿'
+                f'（{"從未收到" if op is None else f"{now - op[0]:.2f}s 前"}）'
+                f'⇒ 改用 TF',
+                throttle_duration_sec=2.0)
         if pose is None:
             return None
         a = self.pose_lpf_alpha
@@ -982,23 +1063,60 @@ class GMPCNode(Node):
             hm.vector.y = float('nan') if yaw_des is None else float(yaw_des)
             hm.vector.z = float(robot_xyth[2])
             self.heading_pub.publish(hm)
+        # 連續投影 ＋ 單調進度（都預設關閉；開了才改變行為）
+        _s_ov = None
+        if self.ref_proj == 'segment':
+            _s_ov = project_arclength(
+                path_xyth, robot_xyth, continuous=True,
+                s_min=(self._s_prev if self.ref_mono else None))
+            self._s_prev = _s_ov
         X_ref_win, xi_ref_win = build_reference_window(
             path_xyth, robot_xyth,
             N=self.N, dt=self.dt, v_nom=self.v_nom,
-            desired_yaw=yaw_des,
+            desired_yaw=yaw_des, lead_m=self.ref_lead,
+            s_start_override=_s_ov,
         )
         a = self._blend_alpha()
         if a is not None:
             X_old, xi_old = build_reference_window(
                 self._prev_path_xyth, robot_xyth,
                 N=self.N, dt=self.dt, v_nom=self.v_nom,
-                desired_yaw=yaw_des,
+                desired_yaw=yaw_des, lead_m=self.ref_lead,
                 )
             X_ref_win, xi_ref_win = blend_reference(
                 X_old, xi_old, X_ref_win, xi_ref_win, a)
 
         # 4. Solve
         X_now  = from_xytheta(*robot_xyth)
+        # **診斷用：把求解器這一輪真正看到的輸入留一份。**
+        # 加法式，不進任何計算。實跑量到慢速區命令在 ±a_max·dt 之間反覆
+        # 擺動（p50 81 mm/s，v_nominal 卻是 0.03），而橫向誤差 p50 僅
+        # 8.6 mm、偏航幾乎不動 —— 離線純運動學閉環重現不出來。要分清楚
+        # 到底是參考視窗沒把速度壓下去，還是 e0 一直非零在推，只能看
+        # 求解器自己的輸入。
+        _t_now = self.get_clock().now().nanoseconds * 1e-9
+        try:
+            _xr0 = X_ref_win[0]
+            self._dbg_solver_in = {
+                'robot_xyth': [float(q) for q in robot_xyth],
+                'xref0_xy': [float(_xr0[0, 2]), float(_xr0[1, 2])],
+                'e0': [float(q) for q in geodesic_error(_xr0, X_now)],
+                'xi_ref0': [float(q) for q in xi_ref_win[0]],
+                'xi_ref_last': [float(q) for q in xi_ref_win[-1]],
+                'xi_prev': [float(q) for q in self.xi_prev],
+                'v_nom': float(self.v_nom), 'dt_cfg': float(self.dt),
+                'ref_lead_m': float(self.ref_lead),
+                'ref_proj': self.ref_proj,
+                'ref_s': (None if self._s_prev is None
+                          else float(self._s_prev)),
+                'dt_meas': (None if self._dbg_prev_t is None
+                            else float(_t_now - self._dbg_prev_t)),
+                't': float(_t_now),
+            }
+            self._dbg_prev_t = float(_t_now)
+        except Exception as _e:                       # 不無聲吞掉
+            self._dbg_solver_in = {'error': repr(_e)}
+            self._dbg_prev_t = float(_t_now)
         # Derived keep-outs, sized from what each obstacle actually has to
         # absorb rather than from a tuned constant. v is the last commanded
         # body speed, so the margin collapses as the robot slows -- which is

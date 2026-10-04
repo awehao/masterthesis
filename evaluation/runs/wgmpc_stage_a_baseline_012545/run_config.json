@@ -1,0 +1,40 @@
+{
+ "kind": "stage_a_static_baseline",
+ "purpose": "量抽屜在本模擬配置下的自身漂移與接觸力讀數，據以產生工程偵測門檻",
+ "rule_file": "evaluation/results/wgmpc_stage_a_baseline_rule.yaml",
+ "rule_prereg": true,
+ "aligned_with_stage_a": {
+  "scene": "同一櫃體、抽屜與機器人；/World/drawer_unit 由 build_usd 建出",
+  "drawer_pose_xy": [
+   0.0,
+   1.45
+  ],
+  "physics_dt_s": 0.01,
+  "observe_sim_s": 60,
+  "mode": "solver_drawer",
+  "joint_margin": 0.05,
+  "opening_readout": "opening = DY0 − 抽屜剛體世界 y（與階段 A 同式同時機）",
+  "drawer_drive": "stiffness／damping／max_force 皆 0，讀回核對"
+ },
+ "robot": {
+  "init_arm_q": "0.000000000,0.000000000,1.437278401,0.000000000,0.000000000,0.000000000",
+  "base_xy_yaw": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "commands": "**不發任何移動命令**"
+ },
+ "not_validated": [
+  "交棒流程（尚未實跑）",
+  "協同接近",
+  "到達與保持",
+  "屏障在運動中的行為"
+ ],
+ "scope": "這次模擬配置的工程偵測門檻；**不是**所有情況的漂移上界",
+ "thermal": {
+  "start_temp_c": 42,
+  "abort_c": 92,
+  "note": "熱中止線不得提高；保護觸發即保留結果並停止，不自動重跑"
+ }
+}

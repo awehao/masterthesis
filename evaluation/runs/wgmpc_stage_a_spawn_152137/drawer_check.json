@@ -1,0 +1,154 @@
+{
+ "n_samples": 2296,
+ "n_finite_opening": 2296,
+ "displacement": {
+  "opening_max_abs_m": 0.0,
+  "opening_at_max_m": 0.0,
+  "t_at_max": 0.03,
+  "tol_m": 1e-09,
+  "n_samples_beyond_tol": 0,
+  "over_baseline": false,
+  "claim_supported": "抽屜位移未超過靜止基線",
+  "claim_NOT_supported": "**不能**單憑開度證明夾爪碰到或推了抽屜；接觸看獨立的接觸力／距離證據",
+  "threshold_is": "紀錄變化偵測門檻（量的是紀錄解析度），不是物理漂移上界"
+ },
+ "contact": {
+  "force": {
+   "available": true,
+   "fmag_max_n": 0.0,
+   "t_at_max": 0.03,
+   "tol_n": 1e-09,
+   "n_samples_beyond_tol": 0,
+   "contact": false
+  },
+  "distance": {
+   "available": false,
+   "note": "**缺真值最短距離紀錄** ⇒ 這一路證據不判定"
+  },
+  "sensing_limits": {
+   "zero_does_not_prove_no_contact": "淨合力為零**不證明沒有接觸**（合力可相互抵銷；未取得接觸點與法向）",
+   "zero_does_not_prove_sensor_would_report": "淨合力為零**不證明有接觸時感測器一定會回報**",
+   "needs": "已知接觸的**正向對照**（刻意接觸並確認讀數非零）"
+  },
+  "verdict": "no_contact_evidence",
+  "verdict_meaning": "可用的獨立證據**未**顯示接觸"
+ },
+ "verdict": "displacement_within_baseline|no_contact_evidence",
+ "verdict_meaning": "位移未超過靜止基線；接觸：可用的獨立證據**未**顯示接觸",
+ "threshold_source": {
+  "from": "evaluation/runs/wgmpc_stage_a_baseline_long120_020143/drawer_threshold.json",
+  "opening": {
+   "rule": "max_abs_plus_resolution",
+   "label": "開度",
+   "baseline_peak_abs": 0.0,
+   "resolution_allowance": 1e-09,
+   "threshold": 1e-09,
+   "n_samples": 11999,
+   "n_nonfinite": 0,
+   "window": "全窗（不是末值）—— 漂移不保證單調，取末值會低估",
+   "scope": "**這次模擬配置的工程偵測門檻**，不是所有情況的漂移上界"
+  },
+  "contact_force": {
+   "rule": "max_abs_plus_resolution",
+   "label": "接觸力",
+   "baseline_peak_abs": 0.0,
+   "resolution_allowance": 1e-09,
+   "threshold": 1e-09,
+   "n_samples": 11999,
+   "n_nonfinite": 0,
+   "window": "全窗（不是末值）—— 漂移不保證單調，取末值會低估",
+   "scope": "**這次模擬配置的工程偵測門檻**，不是所有情況的漂移上界"
+  },
+  "baseline_run": {
+   "record": "evaluation/runs/wgmpc_stage_a_baseline_long120_020143/sim/wb_run.json",
+   "n_steps": 11999,
+   "sim_t_span_s": [
+    0.03,
+    120.01
+   ],
+   "drawer": {
+    "authored": {
+     "root": "/World/drawer_unit",
+     "cabinet_prim": "/World/drawer_unit/cabinet",
+     "drawer_prim": "/World/drawer_unit/drawer",
+     "joint_prim": "/World/drawer_unit/drawer_slide",
+     "mass_kg": 2.0,
+     "linear_damping": 2.0,
+     "joint_friction": 0.0,
+     "drive_stiffness": 0.0,
+     "drive_damping": 0.0,
+     "drive_max_force": 0.0,
+     "limit_lower": 0.0,
+     "limit_upper": 0.2199999988079071
+    },
+    "pose_xy": [
+     0.0,
+     1.45
+    ],
+    "asset": "/home/howardchen/masterthesis/src/my_omnibot_description/config/drawer_unit.yaml",
+    "asset_sha256": "9cad296fd6e21c435cb70fdacd87d3eaa8db06c73b466ea8e3a594238d3d5444",
+    "schema": "drawer_unit/1",
+    "name": "drawer_unit_a",
+    "physics_dt_s": 0.01,
+    "sim_limit_s": 120.0,
+    "dy0": 1.4500001668930054,
+    "opening_formula": "opening = DY0 − drawer_rigid_body_world_y；DY0 取於設定增益之後、進入物理迴圈之前（與 isaac_drawer_sim 同式）"
+   },
+   "acceptance": {
+    "verdict": "pass",
+    "evidence": {
+     "sim_time_s": 120.00999731756747,
+     "observe_sim_s_required": 120.0,
+     "stop_reason": "sim_limit",
+     "drawer_read_fail_steps": 0,
+     "drawer_contact_read_fail_steps": 0,
+     "n_samples": 11999,
+     "n_samples_expected": 12000,
+     "timestamps": {
+      "n_nonfinite": 0,
+      "t_first": 0.03,
+      "t_last": 120.01,
+      "required_last": 119.98,
+      "start_allow_steps": 5.0,
+      "max_gap_s": 0.010000000000005116,
+      "max_gap_steps": 1.0000000000005116,
+      "min_gap_s": 0.009999999999990905,
+      "gap_limit_steps": 5.0
+     },
+     "drawer_opening_nonfinite": 0,
+     "drawer_contact_fmag_nonfinite": 0,
+     "cmd_chain_received": 0,
+     "n_integrating": 0,
+     "base_disp_max_m": 0.00016304907236779976,
+     "base_disp_max_at_index": 40,
+     "base_disp_first_to_last_m": 0.00016304907236779976,
+     "base_path_m": 0.00017378235937845734,
+     "base_disp_criterion": "全窗相對起點的最大位移（非首末差）",
+     "base_disp_limit_m": 0.001,
+     "base_twist_integral_m": 0.19883587999999996,
+     "base_lin_meas_max": 0.001658,
+     "base_twist_vs_disp_ratio": 1219.4848895029204,
+     "freeze_idx_twist": 41,
+     "freeze_idx_pose": 40,
+     "freeze_tail_samples": 11957,
+     "freeze_signature": true,
+     "freeze_note": "twist 與位置自同一步起皆不再變化 ⇒ 讀數為停更後的殘值，既不能當移動的證據也不能當靜止的證據。**機制未證實**（符合 PhysX 剛體睡眠的簽章，但未做對照實驗）",
+     "drawer_built": true
+    },
+    "required_observe_sim_s": 120.0
+   }
+  },
+  "config_fingerprint_matched": {
+   "asset_sha256": "9cad296fd6e21c435cb70fdacd87d3eaa8db06c73b466ea8e3a594238d3d5444",
+   "drawer_pose_xy": [
+    0.0,
+    1.45
+   ],
+   "physics_dt_s": 0.01,
+   "opening_formula": "opening = DY0 − drawer_rigid_body_world_y；DY0 取於設定增益之後、進入物理迴圈之前（與 isaac_drawer_sim 同式）",
+   "drawer_schema": "drawer_unit/1",
+   "drawer_name": "drawer_unit_a",
+   "asset_path": "/home/howardchen/masterthesis/src/my_omnibot_description/config/drawer_unit.yaml"
+  }
+ }
+}

@@ -1,0 +1,57 @@
+[07:30:38] === 導航交棒 RUN_ID=motm_cal20_073038 domain=108 ===
+[07:30:38] 範圍：真 gmpc_node；/odom 真值；/plan 本地產生（非 nav2）；**CBF 關閉**
+[07:30:38] control_frequency=20.0 Hz（dt=0.0500 s）；限制值全部沿用
+[07:30:38]   起 sim PID=425693
+[07:30:38]   等場景建起（最多 180 s）
+[07:30:47]   場景已建起
+[room] 零摩擦材質：支撐球 4 + 地面 2 → 綁定 6
+[room] 夾持面摩擦 μs=1.0 μd=0.8 → 綁定 3／3
+[room] 摩擦核對：
+[07:30:47]   起 gmpc PID=426208
+[07:30:53]   起 smoother PID=426257
+[07:30:53]   起 smlife PID=426261
+[07:30:58]   起 diag PID=426327
+[07:30:59]   起 glide PID=426346
+[07:31:00]   起 wholebody PID=426387
+[07:31:03]   起 task PID=426471
+[07:31:04] [任務] 發計畫、監看、備妥時要求轉移
+[mission] 計畫已發：93 點，-2.789,-3.181 → -0.136,0.560
+[mission] d=0.598 m ⇒ **要求轉給減速交接段**（物理步 4535，窗口 400）
+[mission] d=0.565 m  v=+0.2773,-0.0082,+0.0100  → 碼 45 底盤實測速度**超出全身的速度框** —— 導航還沒把速度降進來，此刻換手第一筆命令就會越界
+[mission] d=0.159 m  v=+0.0295,-0.0061,+0.0640  → 碼 0 導航交棒條件全部成立
+[mission] **備妥 ⇒ 要求在物理步 4708 轉移控制權**；u_prev 來源 nav_applied
+[mission] **控制權已轉移給全身** @ step 4712
+[mission] 交棒完成；最後閘門 碼 0 導航交棒條件全部成立
+[07:31:18] [展開] 等全身端完成展開（最多 120 s）
+[wb] **取得控制權** @ sim 47.130 ⇒ 展開；起步位姿 [-0.2363, 0.4353, 1.112]；暖機底盤來源 nav_applied
+[wb] j3 已離開限位至 +0.2744 rad，開始走其餘各軸
+[wb] **展開完成** 關節最大差 0.0091 rad、底盤 0.0045 m／+0.00°、實測最小餘裕 +0.9072 rad
+[wb] 展開完成 ⇒ **保持交棒**（持續送零速率，等 /wb_vel_cmd 出現第二個發布者，最多 120 s）
+[wb] **求解節點已上線**（/wb_vel_cmd 發布者 2）⇒ 交出並結束 @ sim 52.940
+[wb] 展開完成
+[07:31:22] [ALIGN] 起求解節點（目標由 /drawer/tcp_target 來；**無安全層**）
+[07:31:22]   起 adapter PID=426899
+[07:31:24]   起 solver PID=426978
+[07:31:24] [任務] 等編排節點走完全部相位（最多 900 s）
+[task] tcp_offset 14.69 mm；開到 20 mm（帶 15–25）
+[task] 相位 → **ALIGN** @ sim 52.96（底盤 6.2 mm、手臂 0.0050 rad；展開完成、求解節點上線前判定）
+[task] 求解節點已上線 @ sim 59.90 ⇒ 恢復推進
+[task] 接觸前位姿到達 ⇒ 開始收退讓量
+[task] 相位 ALIGN → **ENGAGE_WAIT** @ sim 64.36  開度    0.0 mm  
+[task] 到位 0.12 mm ⇒ 閉合手指
+[task] 結束；最終相位 ENGAGE_WAIT
+[07:44:33] [收尾] 請模擬器受控停止並封存
+Waiting for at least 1 matching subscription(s)...
+Waiting for at least 1 matching subscription(s)...
+Waiting for at least 1 matching subscription(s)...
+Waiting for at least 1 matching subscription(s)...
+Waiting for at least 1 matching subscription(s)...
+Waiting for at least 1 matching subscription(s)...
+Waiting for at least 1 matching subscription(s)...
+Waiting for at least 1 matching subscription(s)...
+Waiting for at least 1 matching subscription(s)...
+Waiting for at least 1 matching subscription(s)...
+failed to get subscription count: publisher's context is invalid, at ./src/rcl/publisher.c:423
+[07:44:44]   封存完成 18320395 bytes
+[07:44:44] === 結束 rc=0 ===
+[07:44:44] cleanup（只針對本趟 PID）

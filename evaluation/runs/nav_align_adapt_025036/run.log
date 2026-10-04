@@ -1,0 +1,47 @@
+[02:50:36] === 導航交棒 RUN_ID=nav_align_adapt_025036 domain=93 ===
+[02:50:36] 範圍：真 gmpc_node；/odom 真值；/plan 本地產生（非 nav2）；**CBF 關閉**
+[02:50:36] control_frequency=20.0 Hz（dt=0.0500 s）；限制值全部沿用
+[02:50:36]   起 sim PID=111743
+[02:50:36]   等場景建起（最多 180 s）
+[02:50:45]   場景已建起
+[room] 零摩擦材質：支撐球 4 + 地面 2 → 綁定 6
+[room] 夾持面摩擦 μs=1.0 μd=0.8 → 綁定 3／3
+[room] 摩擦核對：
+[02:50:45]   起 gmpc PID=112262
+[02:50:51]   起 diag PID=112305
+[02:50:52]   起 glide PID=112324
+[02:50:53]   起 wholebody PID=112364
+[02:50:56]   起 align PID=112446
+[02:50:57] [任務] 發計畫、監看、備妥時要求轉移
+[mission] 計畫已發：93 點，-2.800,-3.199 → -0.136,0.560
+[mission] 進入慢速區 d=0.794 m ⇒ v_nominal → 0.03（成功）
+[mission] d=0.599 m ⇒ **要求轉給減速交接段**（物理步 3387，窗口 400）
+[mission] d=0.580 m  v=+0.1210,-0.0550,-0.0080  → 碼 45 底盤實測速度**超出全身的速度框** —— 導航還沒把速度降進來，此刻換手第一筆命令就會越界
+[mission] d=0.203 m  v=+0.0291,-0.0090,-0.0387  → 碼 0 導航交棒條件全部成立
+[mission] **備妥 ⇒ 要求在物理步 3684 轉移控制權**；u_prev 來源 nav_applied
+[mission] **控制權已轉移給全身** @ step 3686
+[mission] 交棒完成；最後閘門 碼 0 導航交棒條件全部成立
+[02:51:09] [展開] 等全身端完成展開（最多 120 s）
+[wb] 暖機：送「維持實測底盤速度、手臂零速率」
+[wb] **取得控制權** @ sim 37.070 ⇒ 展開；起步位姿 [-0.2361, 0.3897, 1.4066]；暖機底盤來源 nav_applied
+[wb] j3 已離開限位至 +0.2522 rad，開始走其餘各軸
+[wb] **展開完成** 關節最大差 0.0005 rad、底盤 0.0047 m／-0.01°、實測最小餘裕 +0.9072 rad
+[wb] 展開完成 ⇒ **保持交棒**（持續送零速率，等 /wb_vel_cmd 出現第二個發布者，最多 120 s）
+[02:51:14] [ALIGN] 起求解節點（目標由 /drawer/tcp_target 來；**無安全層**）
+[02:51:14]   起 adapter PID=112883
+[wg2] 初始化握手完成：送出 3 筆全零命令，設定點 step 4768
+[wg2] 目標姿態來源：start_orientation
+[wg2] N=5 dt=0.050  起始 q [-0.13798, 0.55387, 1.29737, -0.0321, 0.91771, 1.48523, -0.358, -1.0325, -1.38082]
+[wg2] 起始 TCP [-0.00159, 1.14417, 0.54998]  目標 TCP [-0.00159, 1.14417, 0.54998]  偏移 [0.0, 0.0, 0.0]
+[wg2] 到達 ≤5.0 mm / 1.15°、保持 2.0 s（模擬時間）、u_prev 政策 strict＋初始靜止
+[wg2] 首次進入容差 @ sim 47.700  0.00 mm / 0.000°
+[wg2] 離開容差 @ sim 47.900  23.81 mm / 0.030° （保持計時重設）
+[wg2] 2400 輪寫入 /home/howardchen/masterthesis/evaluation/runs/nav_align_adapt_025036/align_solver.json
+[wg2] {'stop_why': 'sim_duration', 'delay_comp_state_cycles': 1.6, 'delay_comp_cmd_cycles': 1.0, 'use_applied_for_predict': False, 'near_target_gamma': 1.0, 'n_shaped': 3, 'shape_scale_p50': 1.0, 'shape_scale_min': 0.689073648475211, 'n_pred_applied': 0, 'n_pred_requested': 19184, 'cmd_env': False, 'n_source_seq': 0, 'slot_basis': 'simulation_clock', 'nominal_period_sim_s': 0.05, 'n_dup_skip': 0, 'n_missed_slot': 0, 'n_warm_discard': 0, 'n_sim_stall': 0, 'last_stall_s': None, 'task_sim_t0': 47.699999, 'task_sim_span_s': 120.01, 'n_step_mismatch': 0, 'last_step_mismatch': None, 'n_compose_incomplete': 18030, 'n_compose_incomplete_note': '先到的來源還湊不齊的次數；每物理步本來就有一次，**非錯誤**', 'handshake_startup': {'n_init_cmd': 3, 'states': [('init', 0.0, '介面契約未通過：尚未收到 meta'), ('armed', 47.71, '就緒（step 4769、年齡 0.0000 s）')]}, 'n_init_cmd_in_run': 0, 'gate_report': {'meta_ok': True, 'meta_why': '契約吻合', 'ever_armed': True, 'n_init_cmd': 3, 'n_hold': 0, 'last_step_id': 16768, 'last_sim_t': 167.6999962516129, 'contract_checked': ['sampling_instant', 'physics_dt_s', 'cols', 'joint_order'], 'contract_not_checked': ['G —— 模型係數，由 α 與 dt 自行計算，不是執行端量測值']}, 'composed_G': [0.008640363815601234, 0.008642683426963426, 0.008640197202005439, 0.008638858041959891, 0.008640612102437899, 0.00864113568012658], 'composed_kp': 5, 'published': 2400, 'dropped_stale': 0, 'no_solution': 0, 'deadline_miss': 0, 'rate_hz': 20.0, 'reached_held': False, 'stopped_on_chain_fail': False, 'chain_fail_info': None}
+[02:52:47] [收尾] 請模擬器受控停止並封存
+publisher: beginning loop
+publishing #1: std_msgs.msg.String(data='導航交棒與展開已結束，請封存')
+
+[02:52:48]   封存完成 2344434 bytes
+[02:52:48] === 結束 rc=0 ===
+[02:52:48] cleanup（只針對本趟 PID）

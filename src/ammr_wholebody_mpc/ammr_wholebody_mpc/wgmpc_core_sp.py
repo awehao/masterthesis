@@ -86,6 +86,7 @@ x⁺ = (1−α)x + αs + b 不再只是 x 與 s 的凸組合，穩態偏移是 b
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -377,6 +378,75 @@ def task_error_and_jacobian_sp(K, z, T_des, tcp, pi_band=1e-5):
     return e, Haug
 
 
+def coord_params(cfg: WGMPCConfig):
+    """整機協同兩項的參數，檢查後回傳 (w_v, v_ref(3), w_q, q_nom(6))。
+
+    權重為 0 時對應的參考值不需要給；權重非零而參考值缺漏或非有限 ⇒ 拒絕，
+    不以零代替（零速度參考與「沒有參考」意義不同）。
+    """
+    wv, wq = float(cfg.w_vref), float(cfg.w_qn)
+    if not (math.isfinite(wv) and wv >= 0.0 and math.isfinite(wq)
+            and wq >= 0.0):
+        raise ValueError(f'協同權重必須為有限非負：w_vref={wv} w_qn={wq}')
+    vr = qn = None
+    if wv > 0.0:
+        if cfg.base_vref is None:
+            raise ValueError('w_vref > 0 但沒有 base_vref')
+        vr = np.asarray(cfg.base_vref, float).reshape(3)
+        if not np.isfinite(vr).all():
+            raise ValueError(f'base_vref 含非有限值：{vr}')
+    if wq > 0.0:
+        if cfg.arm_q_nom is None:
+            raise ValueError('w_qn > 0 但沒有 arm_q_nom')
+        qn = np.asarray(cfg.arm_q_nom, float).reshape(NS)
+        if not np.isfinite(qn).all():
+            raise ValueError(f'arm_q_nom 含非有限值：{qn}')
+    return wv, vr, wq, qn
+
+
+def coord_cost(Z, U, cfg: WGMPCConfig) -> float:
+    """協同兩項的**非線性**成本（與 QP 內的二次式是同一個式子）。"""
+    wv, vr, wq, qn = coord_params(cfg)
+    J = 0.0
+    if wv > 0.0:
+        vb = cfg.vmax()[BASE]
+        for u in np.atleast_2d(U):
+            r = (np.asarray(u, float)[BASE] - vr) / vb
+            J += wv * float(r @ r)
+    if wq > 0.0:
+        for z in np.asarray(Z)[1:]:
+            r = np.asarray(z, float)[ARM] - qn
+            J += wq * float(r @ r)
+    return J
+
+
+def coord_qp_terms(cfg: WGMPCConfig, N, Phi, Gam, gam, z0):
+    """協同兩項在 QP 裡的 (P_add, qv_add)，與既有 P、qv 同一個決策變數 ζ。
+
+    手臂列在增廣模型裡**嚴格線性**，所以姿態項沒有線性化誤差。
+    """
+    wv, vr, wq, qn = coord_params(cfg)
+    n = N * NU
+    P = np.zeros((n, n))
+    qv = np.zeros(n)
+    if wv > 0.0:
+        w = np.zeros(NU)
+        w[BASE] = wv / cfg.vmax()[BASE] ** 2
+        r = np.zeros(NU)
+        r[BASE] = vr
+        Wb = np.kron(np.eye(N), np.diag(w))
+        P += 2.0 * Wb
+        qv += -2.0 * Wb @ np.tile(r, N)
+    if wq > 0.0:
+        rows = np.concatenate([np.arange(k * NZ + 3, k * NZ + 3 + NS)
+                               for k in range(N)])
+        Ga = Gam[rows]
+        off = (Phi @ np.asarray(z0, float) + gam)[rows] - np.tile(qn, N)
+        P += 2.0 * wq * (Ga.T @ Ga)
+        qv += 2.0 * wq * (Ga.T @ off)
+    return P, qv
+
+
 def nonlinear_cost_sp(K, z0, U, u_prev, T_des, cfg: WGMPCConfigSP) -> float:
     """與 `wgmpc_core.nonlinear_cost` **同一個成本函式**，只換 rollout。"""
     Z = rollout_sp(z0, U, cfg)
@@ -391,7 +461,7 @@ def nonlinear_cost_sp(K, z0, U, u_prev, T_des, cfg: WGMPCConfigSP) -> float:
         J += float(u @ Rw @ u)
         d = u - (up if k == 0 else U[k - 1])
         J += float(d @ Sw @ d)
-    return J
+    return J + coord_cost(Z, U, cfg)
 
 
 # ---------------------------------------------------------------- 約束組裝
@@ -586,6 +656,10 @@ def solve_sp(K, z0, u_prev, T_des, cfg: WGMPCConfigSP,
         d = e_nom + Hblk @ (Phi @ z0 + gam - z_nom_stack)
         P = 2.0 * (G.T @ Qbar @ G + Rbar + D.T @ Sbar @ D)
         qv = 2.0 * (G.T @ Qbar @ d + D.T @ Sbar @ fvec)
+        if cfg.w_vref > 0.0 or cfg.w_qn > 0.0:
+            _Pc, _qc = coord_qp_terms(cfg, N, Phi, Gam, gam, z0)
+            P = P + _Pc
+            qv = qv + _qc
         _d_eff = cfg.delta_max * 1e3 if not nominal_feasible else delta
         Am, lo, hi, blocks = build_constraints_sp(z0, U_nom, u_prev, cfg,
                                                  _d_eff, Phi, Gam, gam)

@@ -1,0 +1,166 @@
+<?xml version="1.0"?>
+<!--
+  本實驗（導航到抽屜再協同開關）專用的房間。**另立一支，不動既有場景**：
+  bigarena.sdf 是已凍結的導航實驗場景，simple_room.sdf 的 obstacle_1 剛好
+  落在 (0, 1.5) —— 正是櫃體位置，會重疊。
+
+  座標與尺寸的來源，每一個都寫出來：
+
+  櫃體位置 (0, 1.45) 是**凍結值**，與階段 A 及所有離線核對相同，本檔不改。
+  由 drawer_unit.yaml 推得的**保留區**（含抽屜全開 0.220 m）：
+      x ∈ [-0.300, +0.300]   y ∈ [+0.940, +1.675]
+  櫃體背面在 y = 1.675 ⇒ 北牆內面取 1.70（留 25 mm），牆心 1.80，厚 0.2。
+
+  **櫃體本身不寫在這裡**。它由 drawer_asset.build_usd 以 drawer_unit.yaml
+  建進 Isaac 舞台（與階段 A 同一條路徑，資產幾何單一來源）。本檔只負責房間，
+  並把上述保留區留空 —— 由 evaluation/test_drawer_room.py 核對真的沒有東西
+  侵入，不靠人眼看。
+
+  房間內部 8.0 × 6.8 m：x ∈ [-4, +4]，y ∈ [-5.0, +1.70]。
+  牆高 1.0 m（與 simple_room 同），讓 lidar 掃得到。
+
+  傢俱是**普通擺設**，不是為機器人佈的路障：靠牆的桌子與兩個箱子、一支柱。
+  沒有任何一件擺在起點到櫃體的直線上形成漏斗或迷宮；導航要繞的只是
+  正常房間本來就有的東西。
+
+  起點 (-2.80, -3.20)、朝向 +y（yaw = pi/2）。到停位 (-0.136, 0.56) 約 4.6 m，
+  以第一階段 GMPC 的 v_nominal 0.30 m/s 約 15 s 模擬時間。
+  **導航目標是停位的鄰域**，不是停位本身：最後 0.30 m 與手臂展開由全身控制
+  接手（見 drawer_task_policy 的 NAVIGATE → UNFOLD）。
+-->
+<sdf version="1.8">
+  <world name="drawer_room">
+
+    <physics name="10ms" type="ignored">
+      <max_step_size>0.01</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system"           name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"     name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system"           name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 -2 10 0 0 0</pose>
+      <diffuse>1 1 1 1</diffuse>
+      <specular>0.5 0.5 0.5 1</specular>
+      <direction>-0.3 0.2 -0.9</direction>
+    </light>
+
+    <!-- 地板 -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 北牆：緊貼櫃體背面（內面 1.70，牆心 1.80） -->
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 1.8 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>8.4 0.2 1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>8.4 0.2 1</size></box></geometry>
+          <material><ambient>0.9 0.9 0.9 1</ambient><diffuse>0.9 0.9 0.9 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 南牆 -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -5.1 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>8.4 0.2 1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>8.4 0.2 1</size></box></geometry>
+          <material><ambient>0.9 0.9 0.9 1</ambient><diffuse>0.9 0.9 0.9 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 東牆 -->
+    <model name="wall_east">
+      <static>true</static>
+      <pose>4.1 -1.7 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.2 6.8 1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.2 6.8 1</size></box></geometry>
+          <material><ambient>0.9 0.9 0.9 1</ambient><diffuse>0.9 0.9 0.9 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 西牆 -->
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-4.1 -1.7 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.2 6.8 1</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.2 6.8 1</size></box></geometry>
+          <material><ambient>0.9 0.9 0.9 1</ambient><diffuse>0.9 0.9 0.9 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 靠東牆的長桌（普通擺設；不在起點到櫃體的路徑上） -->
+    <model name="table_east">
+      <static>true</static>
+      <pose>3.2 -1.0 0.375 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.8 2.0 0.75</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.8 2.0 0.75</size></box></geometry>
+          <material><ambient>0.55 0.40 0.28 1</ambient><diffuse>0.55 0.40 0.28 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 靠西牆的兩個箱子 -->
+    <model name="box_west_a">
+      <static>true</static>
+      <pose>-3.4 0.4 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.6 0.6 0.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 0.6 0.5</size></box></geometry>
+          <material><ambient>0.45 0.45 0.50 1</ambient><diffuse>0.45 0.45 0.50 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="box_west_b">
+      <static>true</static>
+      <pose>-3.4 -4.1 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.6 0.6 0.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 0.6 0.5</size></box></geometry>
+          <material><ambient>0.45 0.45 0.50 1</ambient><diffuse>0.45 0.45 0.50 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 房間中段偏東的柱子：造成一個要繞的轉折，但不夾住任何通路 -->
+    <model name="pillar_mid">
+      <static>true</static>
+      <pose>1.3 -2.0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.18</radius><length>1.0</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.18</radius><length>1.0</length></cylinder></geometry>
+          <material><ambient>0.75 0.75 0.78 1</ambient><diffuse>0.75 0.75 0.78 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>
