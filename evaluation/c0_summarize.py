@@ -96,37 +96,39 @@ def analyse(rid):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--batch', required=True)
-    ap.add_argument('--pairs', type=int, default=3)
+    ap.add_argument('--pair-ids', default='p1,p2,p3',
+                    help='配對名稱（逗號分隔），例如 p1,p2,p3r（整對補跑見 c0b1_revision_*.yaml）')
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
+    pids = [x.strip() for x in a.pair_ids.split(',') if x.strip()]
     res = {}
-    for p in range(1, a.pairs + 1):
+    for p in pids:
         for M in ('H5', 'H1'):
-            rid = f'{a.batch}_p{p}_{M}'
+            rid = f'{a.batch}_{p}_{M}'
             res[rid] = analyse(rid)
     cfg = {}
-    for p in range(1, a.pairs + 1):
-        h5, h1 = (os.path.join(RUNS, f'{a.batch}_p{p}_{M}') for M in ('H5', 'H1'))
+    for p in pids:
+        h5, h1 = (os.path.join(RUNS, f'{a.batch}_{p}_{M}') for M in ('H5', 'H1'))
         rc, txt = sh(['horizon_config_check.py', h5, h1, '--allow', 'solver.N'])
-        cfg[f'p{p}'] = {'rc': rc, 'text': txt.strip()}
+        cfg[p] = {'rc': rc, 'text': txt.strip()}
     keys = list(next(v for v in res.values() if 'm' in v)['m'].keys())
     paired = {}
     for k in keys:
         d = []
-        for p in range(1, a.pairs + 1):
-            r5, r1 = res[f'{a.batch}_p{p}_H5'], res[f'{a.batch}_p{p}_H1']
+        for p in pids:
+            r5, r1 = res[f'{a.batch}_{p}_H5'], res[f'{a.batch}_{p}_H1']
             v5 = (r5.get('m') or {}).get(k)
             v1 = (r1.get('m') or {}).get(k)
             d.append(None if v5 is None or v1 is None else round(v1 - v5, 6))
-        h5v = [(res[f'{a.batch}_p{p}_H5'].get('m') or {}).get(k) for p in range(1, a.pairs + 1)]
-        h1v = [(res[f'{a.batch}_p{p}_H1'].get('m') or {}).get(k) for p in range(1, a.pairs + 1)]
+        h5v = [(res[f'{a.batch}_{p}_H5'].get('m') or {}).get(k) for p in pids]
+        h1v = [(res[f'{a.batch}_{p}_H1'].get('m') or {}).get(k) for p in pids]
         dd = [x for x in d if x is not None]
         paired[k] = {'H5': h5v, 'H1': h1v, 'diff_H1_minus_H5': d,
                      'diff_mean': round(float(np.mean(dd)), 6) if dd else None,
                      'diff_range': [min(dd), max(dd)] if dd else None,
-                     'same_sign_all_pairs': (len(dd) == a.pairs and
+                     'same_sign_all_pairs': (len(dd) == len(pids) and
                                              (all(x > 0 for x in dd) or all(x < 0 for x in dd)))}
-    out = {'batch': a.batch, 'runs': res, 'config_check': cfg, 'paired': paired,
+    out = {'batch': a.batch, 'pair_ids': pids, 'runs': res, 'config_check': cfg, 'paired': paired,
            'note': 'n = 3 對；只報各對差、平均與範圍，不做顯著性宣稱；樣本層級是趟次'}
     print(json.dumps({'runs': {k: {kk: v.get(kk) for kk in ('N', 'flow_final_phase', 'replay',
                                                                'physical', 'physical_failed',
