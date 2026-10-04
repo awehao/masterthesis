@@ -141,6 +141,14 @@ def parse_coord(d):
                 w_p=None if math.isnan(w_p) else w_p), None
 
 
+def is_ros_shutdown_exc(e, ros_ok):
+    """例外是否屬於「ROS 外部關閉」。只認 ExternalShutdownException，或 context 已關閉
+    （ros_ok 為 False）時 ROS 層丟出的 RCLError；其他例外不論 ros_ok 都不算。"""
+    if isinstance(e, ExternalShutdownException):
+        return True
+    return (not ros_ok) and type(e).__name__ == 'RCLError'
+
+
 @dataclass(frozen=True)
 class Snap:
     """**不可變、同時刻**狀態快照。回呼只建新的，不就地改。
@@ -784,17 +792,24 @@ class WGMPCNode(Node):
         以 stop_why='external_shutdown' 收尾，照常由計數器產生統計。
         其他例外不在此吞掉（由呼叫端保留真正原因）。"""
         try:
-            return self._run_loop(T_des)
+            out = self._run_loop(T_des)
         except Exception as e:                  # noqa: BLE001
-            # 外部關閉時丟出的不一定是 ExternalShutdownException（也可能是
-            # context 已失效的 RCLError，看當下卡在哪個呼叫）⇒ 以 rclpy.ok() 判定
-            if not (isinstance(e, ExternalShutdownException) or not rclpy.ok()):
+            # 只有 ROS 外部關閉才在這裡收尾：ExternalShutdownException，或 context 已關閉
+            # 時 ROS 呼叫丟出的 RCLError。其他錯誤（ValueError 等）一律往外拋，
+            # 由 main 保留真正原因與部分統計。
+            if not is_ros_shutdown_exc(e, rclpy.ok()):
                 raise
             self._stop_why = 'external_shutdown'
             self._shutdown_exc = f'{type(e).__name__}: {e}'[:300]
             print('[wg2] 外部關閉（ROS shutdown／SIGTERM）⇒ 以累積計數寫出統計'
                   f'（{type(e).__name__}）', flush=True)
             return self._stats()
+        # ROS 正常關閉、不拋例外而離開迴圈（while rclpy.ok() 為 False）也要標示
+        if not rclpy.ok() and self._stop_why == 'loop_end':
+            self._stop_why = 'external_shutdown'
+            self._shutdown_exc = '（無例外：rclpy.ok() 為 False，迴圈結束）'
+            out = self._stats()
+        return out
 
     def _log_solve(self, rec):
         """求解列寫入紀錄；另計數（與求解呼叫數相減 = 被中斷而未寫入的求解輪）。"""

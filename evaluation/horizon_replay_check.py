@@ -26,7 +26,8 @@
     python3 evaluation/horizon_replay_check.py runs/<RUN> [--out x.json] [--max-cycles K]
 
 離開碼：0 = 整趟通過；1 = 不通過；2 = 紀錄不足以驗收（無可用求解列）；
-       3 = 只做了部分輪次（--max-cycles），**僅供診斷，永遠不算通過**。
+       3 = PARTIAL：只做了部分輪次（--max-cycles，僅供診斷），或外部關閉中斷 1 輪
+           （已保存輪次重播通過，但不是整趟完整重播）—— **永遠不算整趟通過**。
 """
 from __future__ import annotations
 
@@ -255,6 +256,11 @@ def check(run_dir, max_cycles=None):
     if partial:
         out['verdict'] = 'PARTIAL'
         return out, 3
+    if _unlogged_ok and _unlogged == 1:
+        # 外部關閉中斷的那一輪已計入對帳，但沒有輸入、無法重播 ⇒ 不是整趟完整重播
+        out['scope'] = 'INTERRUPTED（外部關閉中斷 1 輪：已計入計數對帳，但該輪沒有輸入、無法重播）'
+        out['verdict'] = 'PARTIAL' if all(passed.values()) else 'FAIL'
+        return out, (3 if out['verdict'] == 'PARTIAL' else 1)
     out['verdict'] = 'PASS' if all(passed.values()) else 'FAIL'
     return out, 0 if out['verdict'] == 'PASS' else 1
 

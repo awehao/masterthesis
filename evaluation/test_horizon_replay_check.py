@@ -248,7 +248,8 @@ def test_unlogged_call_ok_only_at_external_shutdown(tmp_path, base_log):
     n = sum(1 for L in base_log if 'sqp_stop' in L)
     out, rc = _stats_override(tmp_path, 'un_ok', base_log, n_solve_calls=n + 1,
                               n_solve_calls_unlogged=1, stop_why='external_shutdown')
-    assert rc == 0, out['passed']
+    assert rc == 3 and out['verdict'] == 'PARTIAL', out['passed']   # 已保存輪次通過，但不算整趟完整
+    assert out['scope'].startswith('INTERRUPTED')
     assert out['stats_reconcile']['n_solve_calls']['unlogged_at_external_shutdown'] == 1
 
 

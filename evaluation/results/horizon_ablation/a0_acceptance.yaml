@@ -1,5 +1,5 @@
-# A0 中止收尾修正：驗收紀錄（草稿，待 Codex 審查）
-# 2026-10-05。凍結 freeze_a0.sha256（41 檔）；C0／C1a 凍結與結果原封不動
+# A0 中止收尾修正：驗收紀錄 —— 已封存（Codex 審查 reviews/20261005_035127_reply.md）
+# 2026-10-05。凍結 freeze_a0.sha256 v2（42 檔；v1 留底 freeze_a0_v1.sha256 = 功能確認趟的版本依據）；C0／C1a 原封不動
 schema: a0_abort_handling/1
 變更:
   wgmpc_wg2_node.py: >
@@ -33,4 +33,19 @@ Isaac功能確認（a0_func_inject_T200_H5，不計入）:
     **手臂關節實測速度未降到 1e-3 rad/s 以下**：最後 0.5 s 最大 2.9 mrad/s。
     **抽屜在停止後繼續開**：43.5 → 57.8 mm（約 14 mm）。命令皆已歸零；推測為抽屜慣性滑行（2 kg、阻尼 2 N·s/m，時間常數約 1 s）
     帶動被夾住的手臂——**未驗證**
-  結論草稿: '停止鏈路、stats、C3、分析器成立；執行端命令歸零、底盤實測停止；手臂與抽屜殘餘運動照實列出，不稱「機械完全靜止」'
+  結論（可支持的說法）: >
+    中止後停止新增控制命令，既有逾時處置生效，統計與實錄完整保存；底盤達到本趟停止判準，
+    但手臂及抽屜仍有殘餘運動。**不能稱為整機完全停止或接觸安全停止。**
+  未解項: >
+    手臂末段 2.9 mrad/s、抽屜 43.47 → 57.80 mm（停止後實測關節最小有效餘裕約 +0.91 rad）。
+    「抽屜慣性帶動手臂」維持未驗證假說；速度同步比較可作既有資料的補充診斷，同步本身不證明因果。
+    不為此改阻尼、夾力或增加自動放開動作
+v2 修正（封存前必修兩處，不追加物理趟次）:
+  例外分類: >
+    wgmpc_wg2_node.is_ros_shutdown_exc：只認 ExternalShutdownException，或 rclpy 已不 ok 時的 RCLError；
+    ValueError 等程式錯誤即使 ROS 已關閉也照拋（main 保留真正原因＋部分統計）。ROS 正常關閉、不拋例外而離開迴圈
+    ⇒ 也標 external_shutdown。反例 test_wgmpc_shutdown_classify.py 7 項
+  中斷的重播: >
+    horizon_replay_check：外部關閉中斷 1 輪 ⇒ 計數對帳可通過，但 verdict = PARTIAL（scope INTERRUPTED，
+    已保存輪次重播通過），不給 FULL／PASS。功能趟未缺輪，重核仍 PASS／FULL
+  重測: 'test_wgmpc_stop_paths 全過、iface／health 全過、replay 17 項'
