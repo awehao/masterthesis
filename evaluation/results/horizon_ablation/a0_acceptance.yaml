@@ -1,0 +1,36 @@
+# A0 中止收尾修正：驗收紀錄（草稿，待 Codex 審查）
+# 2026-10-05。凍結 freeze_a0.sha256（41 檔）；C0／C1a 凍結與結果原封不動
+schema: a0_abort_handling/1
+變更:
+  wgmpc_wg2_node.py: >
+    計數器改節點屬性、統計抽成 _stats()；主迴圈外包一層，外部關閉（ExternalShutdownException，或 rclpy 已不 ok 時的
+    RCLError 等）以 stop_why=external_shutdown 收尾並由計數器產生統計；其他例外照拋，main 以計數器組部分統計並記真正原因
+    （stats_partial）。停止檢查加在**迴圈頂端（不開始求解）**與**發布前（不發布）**；_on_stop 記 stop_rx（模擬時刻、牆鐘、原因）。
+    新增獨立計數：n_published_after_stop_rx（_publish_u 內）、n_solve_rows_logged ⇒ n_solve_calls_unlogged。SIGKILL／主機當機不在保證範圍
+  drawer_task_node.py: '任何 abort ⇒ 發 /wgmpc/stop（附原因）、不再發目標／協同設定、夾爪維持目前命令（不自動放開→退開→收臂）；新增測試用 --inject-abort-at-s（預設關閉；原因 test_injected_abort）'
+  run_nav_handover.sh: '任務結束後有上限（STOP_WAIT_S 30 s）等求解節點停止並寫出 align_solver.json，逾時記「未確認停止」不無限等；再保留物理 POST_STOP_HOLD_S 3 s（牆鐘）供核對減速，之後才 /room/stop；INJECT_ABORT_AT_S 參數入口'
+  horizon_metrics.py: '缺 stats ⇒ n_missed_slot／n_warm_discard／n_shaped 標缺＋stats_missing、證據不足說明；其他指標照算，不補造'
+  horizon_replay_check.py: 'C3：只在 stop_why=external_shutdown 且 n_solve_calls_unlogged ≤ 1 時扣除未寫入輪並明列；其他情況照舊判不符'
+離線驗收:
+  test_wgmpc_stop_paths.py（假世界＋真安全節點／adapter，不開 Isaac）: >
+    S（/wgmpc/stop）：stats 存在、stop_why=stop_topic、收到停止後發布 0、193 輪發布皆不晚於 stop_rx、對帳相符。
+    T（SIGTERM）：stop_why=external_shutdown（非部分統計）、182 發布對帳相符、未寫入 1 輪且 求解列 183 = 184 − 1、n_solve_rows_logged 一致
+  其他: 'test_horizon_replay_check 17（含未寫入輪的允許／拒絕）、physical 25、c1_summarize 16、cycle_record 9、metrics 6；test_drawer_task_policy 95/95；test_wgmpc_wg2_iface、health 全過；test_run_plan_batch 15/15'
+  horizon_metrics_對_c1a_b1_02: '缺 stats 不再崩潰，三欄標缺並註明證據不足（原分析檔未改）'
+Isaac功能確認（a0_func_inject_T200_H5，不計入）:
+  設定: '200 mm、H5、INJECT_ABORT_AT_S=2.0'
+  中止: 'OPEN 開始 54.25 s，注入於 56.30 s（OPEN 內 2.05 s，開度 43.2 mm），原因 test_injected_abort'
+  停止鏈: >
+    任務發停止 56.30 s；求解節點收到 56.31 s（+10 ms）；最後發布 56.26 s（早於收到）；收到時已解完的一輪在發布前攔下
+    （求解 265、寫入 265、發布 264、未寫入 0）；收到後發布 0；stop_why=stop_topic：drawer_task 中止：test_injected_abort
+  運行器: '「求解節點已停止並寫出 align_solver.json」即時通過；保留物理 3 s 後才停模擬器'
+  重播: 'PASS（C3：265／265、264／264、0／0）'
+  物理判定: 'FAIL（S1、S2、S5 不成立；S4 證據不足——未進 RELEASE_WAIT）＝如實判為任務未成功'
+  指標: 'horizon_metrics 正常產出'
+  執行端與實測（stop_rx 之後 10.2 s 的物理紀錄）: >
+    底盤命令（base_cmd_body）與手臂套用命令（applied_arm）在 +0.19 s 起持續 < 1e-4；
+    底盤實測速度（位姿差分）+0.29 s 起持續 < 1 mm/s。
+    **手臂關節實測速度未降到 1e-3 rad/s 以下**：最後 0.5 s 最大 2.9 mrad/s。
+    **抽屜在停止後繼續開**：43.5 → 57.8 mm（約 14 mm）。命令皆已歸零；推測為抽屜慣性滑行（2 kg、阻尼 2 N·s/m，時間常數約 1 s）
+    帶動被夾住的手臂——**未驗證**
+  結論草稿: '停止鏈路、stats、C3、分析器成立；執行端命令歸零、底盤實測停止；手臂與抽屜殘餘運動照實列出，不稱「機械完全靜止」'
