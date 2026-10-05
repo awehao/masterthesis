@@ -159,8 +159,9 @@ def label(fr, depth=None):
         rr = np.linalg.norm(pc - (pc @ ac)[..., None] * ac, axis=-1)
         cap |= np.isfinite(tc) & (tc > 0) & (rr <= R_BAR)
     from scipy.ndimage import binary_dilation, binary_erosion
-    band = binary_dilation(vis, iterations=1) & ~binary_erosion(vis, iterations=1)
-    ign = (band | dinv | behind | clipped | (cap & ~vis)) & ~(vis & ~band)
+    # 邊界帶只取遮罩**外側**一圈（抽查發現：遠距橫桿只有約 3 px 粗，內外各 1 px 的帶會把大部分前景吃成 ignore）
+    band = binary_dilation(vis, iterations=1) & ~vis
+    ign = (band | dinv | behind | clipped | (cap & ~vis)) & ~vis
     out['mask'][v0:v1 + 1, u0:u1 + 1] = vis
     out['ignore'] = np.zeros((H, W), bool)
     out['ignore'][v0:v1 + 1, u0:u1 + 1] = ign
