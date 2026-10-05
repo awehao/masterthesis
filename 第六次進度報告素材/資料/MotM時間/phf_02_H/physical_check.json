@@ -1,0 +1,105 @@
+{
+ "run": "phf_02_H",
+ "source": "room_run.json 逐物理步真值；task.json 只用於切時間窗",
+ "data": {
+  "n_steps": 12250,
+  "physics_dt_s": 0.01,
+  "n_gaps": 0,
+  "gaps_first": [],
+  "missing_or_nonfinite": {
+   "opening_m": {
+    "n": 0
+   },
+   "finger_contact_n": {
+    "n": 5703,
+    "first_sim_t": 0.02,
+    "last_sim_t": 57.04
+   },
+   "base_xyth": {
+    "n": 0
+   },
+   "q_arm_meas": {
+    "n": 0
+   }
+  }
+ },
+ "S1_open_hold": {
+  "band_mm": [
+   195.0,
+   205.0
+  ],
+  "band_source": "task.json open_band_m",
+  "longest_s": 2.81,
+  "at_sim_t": [
+   74.89,
+   77.69
+  ],
+  "max_opening_mm": 200.34
+ },
+ "S2_close_hold": {
+  "band_mm": [
+   -0.01,
+   5.0
+  ],
+  "longest_s": 35.01,
+  "at_sim_t": [
+   87.51,
+   122.51
+  ],
+  "min_opening_after_open_mm": 0.205
+ },
+ "S3_grasp": {
+  "threshold_n": 0.5,
+  "longest_both_fingers_s": 14.82,
+  "at_sim_t": [
+   62.77,
+   77.58
+  ],
+  "sim_contact_held_s_max": 14.81
+ },
+ "S4_drift": {
+  "window_sim_t": [
+   64.81,
+   89.71
+  ],
+  "n_steps": 2490,
+  "max_mm": 0.092,
+  "p95_mm": 0.078,
+  "grip_fraction_in_window": 0.9996,
+  "limit_mm": 10.0
+ },
+ "S5_home": {
+  "final_xyth": [
+   -2.7123,
+   -3.0758,
+   -2.1894
+  ],
+  "start": [
+   -2.8,
+   -3.2,
+   1.5708
+  ],
+  "dist_m": 0.152,
+  "tol_m": 0.2
+ },
+ "S6_contact": {
+  "n_bodies": 107,
+  "non_finger_over_0p01n": "無",
+  "n_steps_record_missing": 0,
+  "n_rows_invalid_or_nonfinite": 0,
+  "n_gaps": 0,
+  "not_measured": "櫃體與其他物件 ⇒ NA"
+ },
+ "results": {
+  "S1_open_hold": true,
+  "S2_close_hold": true,
+  "S3_grasp": true,
+  "S4_drift": true,
+  "S5_home": true,
+  "S6_contact": true
+ },
+ "verdict": "PASS",
+ "failed": [],
+ "insufficient": [],
+ "note": "final_phase = DONE 只是流程完成；本檔 S1–S6 是任務成功的獨立判定"
+}

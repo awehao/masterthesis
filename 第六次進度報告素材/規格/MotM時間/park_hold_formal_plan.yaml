@@ -1,0 +1,21 @@
+# 嚴格停車（PARK_HOLD v2.1）vs MOTM 正式比較：配置與分析口徑（起跑前鎖定；freeze_park_formal.sha256）
+# 依 Codex reviews/20261005_131146_reply.md。比較的是**兩個完整策略**，不宣稱唯一差別是底盤是否移動
+schema: park_hold_formal_plan/1
+排程: 'park_hold_formal_schedule.tsv：三對六趟，順序 M→H、H→M、M→H（F01 M、F02 H｜F03 H、F04 M｜F05 M、F06 H）'
+配置: 'park_hold_v21_dev_config.yaml（已通過功能確認的解析後配置）；兩組都帶 OFFSET_MOVING=1；MOTM_EXTRA_ARGS="--motm-retreat-rate 0.05"、MOTM_A_REF_SET=0.004（只作用於 MOTM）'
+規則: >
+  功能趟不併入正式樣本；任務失敗、模式違規照列，不補跑湊成功；工程／熱保護問題沿用停批規則；不調參、不放寬門檻、不改成長窗判準
+判定:
+  任務: 'motm_physical_check S1–S6（--expect-open-m 0.200）；horizon_replay_check 完整重播'
+  停車模式（只 H 組）: 'park_gate.json（PARK_HOLD）hold.verdict = PASS 且 parked_operation_audit control_window（hold）strict_stationary_full_window = True；不一致不得宣告合規'
+計時:
+  起點: 'mission.json go_sim_t（第一筆實際發布導航計畫的模擬時間；兩組同一事件）'
+  獨立終端完成: >
+    逐物理步（room_run.json）：S1 開帶連續段與 S2 關帶連續段都已完成、且控制者已交還導航之後，**第一個**底盤距起點 ≤ 0.20 m 的物理步時間；
+    DONE 事件只作交叉證據
+  分段: 'GO→停位／操作入口（實際轉給全身）、入口→夾持成立、夾持→開保持完成、→關保持完成、釋放→收臂完成（交還導航）、回程（交還→終端完成）'
+報告:
+  - '全部六趟：完成／未完成、S1–S6、模式合規（H 組）、終止原因'
+  - '只有兩組皆完成且各自模式合規的配對才計算完成時間差 T_M − T_H 與百分比；各對數值與範圍全列；排除原因列出'
+  - '品質：夾持（雙指承載、力峰值、S4 漂移）、H 組底盤逐步速度與偏離、停車伺服命令統計'
+  - 'n = 3：不宣稱顯著性、穩定成功率或泛化；S6 只涵蓋已量測抽屜配對'
