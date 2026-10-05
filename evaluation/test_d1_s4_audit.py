@@ -207,5 +207,14 @@ with open(os.path.join(R15, 'wrist_live', 'capture.jsonl'), 'a') as f:
 A, err = audit(R15)
 check('capture_exception_fails', A and '擷取端例外 1 次' in A['verdict']['通路與對帳'], A and A['verdict'])
 
+# 16 距離 < 0.1 m 的影格另列，不無聲排除
+HC_saved = HC[:]
+HC[2] = 0.05
+A, err = audit(build([1], ok_ev, ctr(**ok_c)))
+HC[2] = HC_saved[2]
+b = (A or {}).get('observation', {}).get('by_distance_source_denominator', {})
+check('below_0p1m_listed', b.get('<0.1（分箱外，另列）', {}).get('n_source_published') == 1, b)
+check('whole_run_counts', A and A['observation']['whole_run']['n_source_published'] == 1, A and A['observation'].get('whole_run'))
+
 print(f'{len(fails)} 失敗')
 sys.exit(1 if fails else 0)

@@ -230,6 +230,12 @@ def main():
             st = None
     if st is not None:
         wins.append((st, prev))
+    # 分箱下限 0.1 m 以下（ALIGN 之後近距）不得無聲排除：另列（Codex S4 結果審查）
+    lo_ns = [n for n in pubs if dist(n) is not None and dist(n) < BINS[0][0]]
+    src_bins[f'<{BINS[0][0]}（分箱外，另列）'] = {
+        'n_source_published': len(lo_ns), 'n_processed': sum(1 for n in lo_ns if n in by_n),
+        'n_L2': sum(1 for n in lo_ns if n in by_n and by_n[n]['L2'])}
+    n_l2_all = sum(1 for r in rows if r['L2'])
     pre = [r for r in rows if t_align is not None and r['src_t'] < t_align]
     out['observation'] = {
         't_ALIGN': t_align,
@@ -238,6 +244,8 @@ def main():
         'by_distance_processed_denominator': summarize(rows) if rows else None,
         'L2_continuous_windows_on_source_timeline_s': [[round(x, 2), round(y, 2)] for x, y in wins],
         'approach_window': {'n_processed': len(pre), 'n_L2': sum(1 for r in pre if r['L2'])},
+        'whole_run': {'n_source_published': len(pubs), 'n_L2': n_l2_all,
+                      '說明': '整趟中心觀測數；分距離有效率是整趟該距離箱，不是接近段有效率'},
         'n_L2_violation': sum(1 for r in rows if r['eval']['L2_violation'])}
     json.dump({'rows': rows}, open(os.path.join(R, 'd1_shadow', 'd1_s4_eval_rows.json')
                                    if os.path.isdir(os.path.join(R, 'd1_shadow')) else os.devnull, 'w'),
