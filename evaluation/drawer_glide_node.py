@@ -70,6 +70,19 @@ def along_speed(d, *, v_roll, decel, d_hold, d_stop, v_cap, v_latched=None):
     return v
 
 
+def park_stop_speed(d, *, decel, v_cap, k_lin, rev_max):
+    """PARK_FIXED：沿路徑**停在停位**的速率（有號；d < 0 為越位）。
+
+    v = sign(d) · min(v_cap, √(2·decel·|d|), k_lin·|d|)；越位時反向回正的速率另限 ≤ rev_max（有界回正）。
+    無 v_roll 維持段。接近零時由線性段主導 ⇒ 指數收斂，不在離散週期下來回過衝。
+    """
+    s = 1.0 if d >= 0.0 else -1.0
+    v = min(v_cap, math.sqrt(2.0 * decel * abs(d)), k_lin * abs(d))
+    if s < 0:
+        v = min(v, rev_max)
+    return s * v
+
+
 class Glide(Node):
     def __init__(self, a):
         super().__init__('drawer_glide')
@@ -83,6 +96,11 @@ class Glide(Node):
         # 實測差分把 85.1 mm/s 看成 4.3 mm/s。
         self.create_subscription(Float64MultiArray, '/coman/applied_cmd',
                                  self._ap, 1)
+        self.park_violation = None
+        if getattr(a, 'park_stop', False):
+            self.create_subscription(String, '/park/violation', self._park_vio, 1)
+            self.vio_pub = self.create_publisher(String, '/park/violation', 10)
+        self.park_latched = None        # 鎖存零輸出當下的診斷
         self.pose = None
         self.hs = None
         self.v_applied = None
@@ -110,6 +128,12 @@ class Glide(Node):
             self.hs = json.loads(m.data)
         except Exception:
             pass
+
+    def _park_vio(self, m):
+        try:
+            self.park_violation = json.loads(m.data)
+        except Exception:
+            self.park_violation = {'why': m.data}
 
     # ---------------------------------------------------------------- 輪廓
     def profile(self):
@@ -148,9 +172,25 @@ class Glide(Node):
                 and d <= a.arm_at):
             self.v_latched = max(a.v_roll, float(self.v_applied))
             self.latched_at_d = d
-        v = along_speed(d, v_roll=a.v_roll, decel=a.decel, d_hold=a.d_hold,
-                        d_stop=a.d_stop, v_cap=a.v_cap,
-                        v_latched=self.v_latched)
+        eyaw = wrap(a.park_yaw - yaw)
+        if a.park_stop:
+            # PARK_FIXED：停在停位；進入鎖存容差且實際速率近零 ⇒ 之後輸出**精確的零**（不再修正）
+            if self.park_latched is None and (
+                    abs(d) <= a.park_latch_d and abs(cross) <= a.park_latch_d
+                    and abs(eyaw) <= a.park_latch_yaw
+                    and self.v_applied is not None and self.v_applied <= a.park_latch_v):
+                self.park_latched = {'d': d, 'cross': cross, 'eyaw': eyaw, 'pose_t': t,
+                                     'v_applied': self.v_applied}
+            if self.park_latched is not None:
+                return (0.0, 0.0, 0.0, {'d': d, 'cross': cross, 'v_along': 0.0, 'v_cross': 0.0,
+                                        'v_applied': self.v_applied, 'v_latched': None,
+                                        'park_latched': True})
+            v = park_stop_speed(d, decel=a.decel, v_cap=a.v_cap, k_lin=a.park_k_lin,
+                                rev_max=a.park_rev_max)
+        else:
+            v = along_speed(d, v_roll=a.v_roll, decel=a.decel, d_hold=a.d_hold,
+                            d_stop=a.d_stop, v_cap=a.v_cap,
+                            v_latched=self.v_latched)
         # 橫向修正：**有界**，不讓它變成速度的主項
         vc = min(max(-a.k_cross * cross, -a.v_cross_max), a.v_cross_max)
         # 偏航修正：**有界**，把停位朝向交給全身之前先收一部分
@@ -191,6 +231,19 @@ def main():
     ap.add_argument('--wz-max', type=float, default=0.10)
     ap.add_argument('--rate', type=float, default=50.0)
     ap.add_argument('--timeout-s', type=float, default=300.0)
+    # ---- PARK_FIXED：停在停位（預設關 ⇒ 既有滾動交棒剖面不變）----
+    ap.add_argument('--park-stop', action='store_true')
+    ap.add_argument('--park-k-lin', type=float, default=1.0,
+                    help='停車剖面近零的線性增益 1/s（d = 10 mm ⇒ 10 mm/s）')
+    ap.add_argument('--park-rev-max', type=float, default=0.010,
+                    help='越位時反向回正的速率上限 m/s（有界回正）')
+    ap.add_argument('--park-latch-d', type=float, default=0.0015,
+                    help='沿路徑與橫向誤差都 ≤ 此值才鎖存零輸出（入場容差 10 mm 的內縮）')
+    ap.add_argument('--park-latch-yaw', type=float, default=0.005)
+    ap.add_argument('--park-latch-v', type=float, default=0.002,
+                    help='鎖存時實際套用速率上限 m/s')
+    ap.add_argument('--park-timeout-s', type=float, default=30.0,
+                    help='自開始發命令起，逾此（牆鐘）仍未鎖存 ⇒ 發 /park/violation 停止（事前固定，不無限等）')
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
     a.start = tuple(float(v) for v in a.start.split(','))
@@ -213,6 +266,7 @@ def main():
             vx, vy, wz, dg = pr
             if not armed and dg['d'] <= a.arm_at:
                 armed = True
+                t_armed = time.monotonic()
                 rep['events'].append({'armed_at_d': round(dg['d'], 4),
                                       'v_latched': dg['v_latched'],
                                       'latched_at_d': (
@@ -220,6 +274,18 @@ def main():
                                           else round(nd.latched_at_d, 4))})
                 print(f'[glide] **開始發命令** d={dg["d"]:.3f} m'
                       f'（還沒有控制權，會依控制權被拒）', flush=True)
+            if a.park_stop and armed and nd.park_latched is None and \
+                    time.monotonic() - t_armed > a.park_timeout_s:
+                _v = {'why': f'glide_park_timeout：{a.park_timeout_s} s 內未停妥',
+                      'd': dg['d'], 'cross': dg['cross']}
+                nd.vio_pub.publish(String(data=json.dumps(_v)))
+                rep['park_timeout'] = _v
+                print(f'[glide] **停車逾時** {_v}', flush=True)
+                break
+            if a.park_stop and nd.park_violation is not None:
+                rep['stopped_on_violation'] = nd.park_violation
+                print(f'[glide] 收到 PARK_FIXED 違規 ⇒ 停止發命令', flush=True)
+                break
             if armed:
                 m = Twist()
                 m.linear.x, m.linear.y, m.angular.z = vx, vy, wz
@@ -240,6 +306,7 @@ def main():
                 break
         time.sleep(dt)
     rep['n_pub'] = nd.n_pub
+    rep['park_latched'] = nd.park_latched
     if a.out:
         json.dump(rep, open(a.out, 'w'), ensure_ascii=False, indent=1)
     print(f'[glide] 結束；發出 {nd.n_pub} 筆', flush=True)

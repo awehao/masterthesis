@@ -82,6 +82,12 @@ class Mission(Node):
         self.create_subscription(Float64MultiArray, '/coman/applied_cmd',
                                  self._ap, 1)
         self.create_subscription(String, '/handover/state', self._hs, 1)
+        # PARK_FIXED：執行端的靜止閘門狀態與違規閂鎖（預設不用 ⇒ 既有行為不變）
+        self.park_gate = None
+        self.park_violation = None
+        if getattr(a, 'park_fixed', False):
+            self.create_subscription(String, '/park/gate', self._park_gate, 1)
+            self.create_subscription(String, '/park/violation', self._park_vio, 1)
         self.pose = None          # (x, y, yaw, t)
         self.prev_pose = None
         self.vb = None            # (vx_body, vy_body, wz)
@@ -148,6 +154,18 @@ class Mission(Node):
             self.hs = json.loads(m.data)
         except Exception:
             pass
+
+    def _park_gate(self, m):
+        try:
+            self.park_gate = json.loads(m.data)
+        except Exception:
+            pass
+
+    def _park_vio(self, m):
+        try:
+            self.park_violation = json.loads(m.data)
+        except Exception:
+            self.park_violation = {'why': m.data}
 
     # ------------------------------------------------------------ 計畫
     def publish_plan(self, start, goal, spacing=0.05, frame='odom',
@@ -233,6 +251,10 @@ def main():
     ap.add_argument('--timeout-s', type=float, default=300.0)
     ap.add_argument('--urdf', default=os.path.join(
         WS, 'evaluation/models/omni_bot_wholebody_expanded.urdf'))
+    ap.add_argument('--park-fixed', action='store_true',
+                    help='PARK_FIXED：取消滾動交棒下界；停車靜止閘門通過才請求轉給全身')
+    ap.add_argument('--park-gate-max-lag-steps', type=int, default=50,
+                    help='閘門訊息與執行端套用回報的步數差上限（新鮮度）')
     ap.add_argument('--out', default='')
     a = ap.parse_args()
 
@@ -246,7 +268,8 @@ def main():
                             joint_upper=tuple(float(x) for x in lim[1, 3:]),
                             joint_margin=0.05,
                             handover_zone_m=a.handover_zone,
-                            v_min_lin_mps=a.v_min)
+                            # PARK_FIXED：明確取消滾動交棒下界（停住才接手）；MOTM 保持原值
+                            v_min_lin_mps=(0.0 if a.park_fixed else a.v_min))
 
     rclpy.init()
     nd = Mission(a)
@@ -261,6 +284,8 @@ def main():
     if nd.n_odom == 0:
         print('[mission] **收不到 /odom** ⇒ 中止', flush=True)
         return 2
+    # **共同 GO**：首次發出導航目標的模擬時間（兩組同一事件；重發不重設）
+    rep['go_sim_t'] = nd._sim_t()
     n = nd.publish_plan(nd.pose[:2], park, goal_yaw=a.park_yaw)
     print(f'[mission] 計畫已發：{n} 點，{nd.pose[0]:.3f},{nd.pose[1]:.3f} '
           f'→ {park[0]:.3f},{park[1]:.3f}', flush=True)
@@ -434,6 +459,26 @@ def main():
             print(f'[mission] d={d_park:.3f} m  v={nd.vb[0]:+.4f},'
                   f'{nd.vb[1]:+.4f},{nd.vb[2]:+.4f}  → 碼 {v.code} {v.why}',
                   flush=True)
+        if a.park_fixed and nd.park_violation is not None:
+            rep['abort'] = f'PARK_FIXED 違規：{nd.park_violation}'
+            print(f'[mission] **{rep["abort"]}** ⇒ 停止', flush=True)
+            break
+        if v.ok and a.park_fixed:
+            # PARK_FIXED：除既有條件外，**停車靜止閘門必須已通過、當前成立、且訊息新鮮**才請求轉給全身。
+            # 執行端在提交當步會再核一次（switch_guard），本處只是不提早請求。
+            g = nd.park_gate
+            _fresh = (g is not None and int(g.get('step', -10**9))
+                      >= int(nd.ap['physics_step_id']) - a.park_gate_max_lag_steps)
+            if not (g and g.get('passed') and g.get('ok_now') and _fresh):
+                _why = ('沒有閘門訊息' if g is None else
+                        '閘門未通過' if not g.get('passed') else
+                        f'停車條件當前不成立：{g.get("why_now")}' if not g.get('ok_now') else
+                        '閘門訊息不新鮮')
+                if rep.get('park_wait_why') != _why:
+                    rep.setdefault('park_wait', []).append({'sim_t': round(nd._sim_t(), 3), 'why': _why})
+                    rep['park_wait_why'] = _why
+                continue
+            rep.setdefault('park_gate_at_request', g)
         if v.ok:
             # 切換步要留夠的餘裕：請求經話題送到執行端也要時間。
             at = int(nd.ap['physics_step_id']) + a.switch_lead_steps

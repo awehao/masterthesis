@@ -13,7 +13,9 @@
   S6 收臂       接觸前姿態 → 收攏（關節空間直線內插）
 每點核：IK 殘差（≤ 1e-6 m／1e-6 rad）、到有效限位（LITE6_SAFE ± 0.05）的最小餘裕、相鄰點關節變化、
 可操作度、自碰最小距離（URDF 碰撞點雲，排除相鄰／剛連／設計接觸對）、手臂對櫃體與**隨開度移動的抽屜本體**的
-最小距離（夾爪與手指對把手橫桿／柱子為設計接觸，另列不計）。
+最小距離。**設計接觸只限手指（uflite_finger1／2）對橫桿、且只在夾持相位**（S3 全段，S2／S5 距抓取點 ≤ 2 mm 的點）；
+夾爪殼、link_eef 對橫桿與柱子、以及其他相位的手指一律照實核（Codex 20261005_113349）。
+結論措辭：「找到目前取樣路徑上的固定底盤 IK 解」，不是完整幾何安全通過。
 **限制**：點雲距離為近似（已知會高報／低報數 mm）；關節空間內插不等於實際展開軌跡；沒有動力學與接觸力；
 通過 ≠ 物理可行的證明，失敗 ≠ 不可達（只是此路徑模型下未找到）。
 
@@ -53,6 +55,7 @@ R_GRASP = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
 STANDOFF = 0.030
 MARGIN = 0.05
 GRIPPER = ('link_eef', 'link_tcp', 'uflite_gripper_link', 'uflite_finger1', 'uflite_finger2')
+FINGERS = ('uflite_finger1', 'uflite_finger2')
 
 
 def setup(K):
@@ -96,7 +99,7 @@ def box_dist(P, c, s):
     return np.linalg.norm(np.maximum(q, 0.0), axis=1) + np.minimum(np.max(q, axis=1), 0.0)
 
 
-def check_q(K, park, qa, clouds, pairs, opening):
+def check_q(K, park, qa, clouds, pairs, opening, contact_ok=False):
     q = np.r_[park, qa]
     world = {}
     for n, P in clouds.items():
@@ -115,8 +118,8 @@ def check_q(K, park, qa, clouds, pairs, opening):
         if n == 'base_link' or n.startswith('rim') or n.startswith('roller') or n.startswith('wheel'):
             continue
         for bn, c, s, designed in boxes(opening):
-            if designed and n in GRIPPER:
-                continue                       # 夾爪對把手＝設計接觸
+            if contact_ok and n in FINGERS and bn == 'hdl_bar':
+                continue                       # 夾持相位的手指對橫桿＝設計接觸（唯一例外）
             d = float(box_dist(P, c, s).min())
             if n in GRIPPER:
                 if d < dg:
@@ -180,8 +183,10 @@ def main():
         R = []
         for p, qa, ep, er, dq in L:
             opening = float(P_GRASP[1] - p[1]) if name == 'S3_open' else 0.0
-            c = check_q(K, park, qa, clouds, pairs, opening)
-            R.append({'tcp_y': round(float(p[1]), 4), 'opening_m': round(opening, 4), 'ik_pos_m': ep,
+            contact = (name == 'S3_open') or abs(float(p[1]) - P_GRASP[1]) <= 0.002
+            c = check_q(K, park, qa, clouds, pairs, opening, contact_ok=contact)
+            R.append({'tcp_y': round(float(p[1]), 4), 'opening_m': round(opening, 4), 'contact_phase': contact,
+                      'ik_pos_m': ep,
                       'ik_rot_rad': er, 'dq_step_rad': dq, **c})
         summ[name] = summarise(R, ik=True)
         rows.append((name, R))
@@ -190,7 +195,9 @@ def main():
     out = {'park': park.tolist(), 'grasp_p': P_GRASP.tolist(), 'standoff_m': STANDOFF, 'open_max_m': a.open_max,
            'q_pre': q_pre.tolist(), 'q_grasp_fixed': q_g.tolist(),
            'q_open_max': seg['S3_open'][-1][1].tolist(), 'summary': summ, 'ik_all_ok': ok_ik,
-           'limits': '點雲距離近似；關節空間內插 ≠ 實際展開軌跡；通過 ≠ 物理可行證明，失敗 ≠ 不可達',
+           'claim': '找到目前取樣路徑上的固定底盤 IK 解；不是完整幾何安全通過',
+           'limits': ('點雲距離近似（已知高報／低報數 mm）；S1／S6 為關節空間直線，實際 UNFOLD 是 j3 先正向離限位再動其他軸；'
+                      '設計接觸只排除夾持相位的手指—橫桿；通過 ≠ 物理可行證明，失敗 ≠ 不可達'),
            'rows': {n: R for n, R in rows}}
     od = os.path.join(HERE, 'results', 'motm_speed')
     json.dump(out, open(os.path.join(od, 'park_fixed_feasibility.json'), 'w'), ensure_ascii=False, indent=1,

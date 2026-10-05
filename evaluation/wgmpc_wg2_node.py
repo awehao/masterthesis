@@ -215,6 +215,12 @@ class WGMPCNode(Node):
             self.composed_kp = None
         # **WG4-B B1**（experiment_spec_WG4B.yaml）：只換求解式，見 wg4b_b1_core.py。
         # 預設 wgmpc ⇒ 既有路徑一位元不變。b1 需要設定點快照（s_meas），故要求增廣模式的閘門。
+        # **PARK_FIXED（固定底盤）**：整個時域 u_base = 0（核心 base_fixed 等式）。預設關 ⇒ 既有行為不變。
+        self._base_fixed = bool(getattr(a, 'base_fixed', False))
+        if self._base_fixed:
+            if a.arm_model != 'setpoint':
+                raise ValueError('--base-fixed 需要 --arm-model setpoint（只在增廣核心實作）')
+            self.cfg.base_fixed = True
         self._b1 = (getattr(a, 'solver_kind', 'wgmpc') == 'b1')
         self._b1p = (B1CORE.B1Params(kp=float(a.b1_kp)) if self._b1 else None)
         self._n_b1_mu = {}
@@ -1052,6 +1058,21 @@ class WGMPCNode(Node):
                 slot, _m = self._reschedule(slot)
                 self._c_miss += _m
                 continue
+            if self._base_fixed and float(np.max(np.abs(
+                    np.asarray(u_prev, float)[:3]))) > float(self.a.park_uprev_tol):
+                # **模式閘門**：固定底盤下承接的底盤套用值超出容許 ⇒ 拒絕並停止。
+                # 不是宣稱 QP 必然無解（小的非零值本可在加速度框內降到零）；是接線／模式不符。
+                _ub = [float(x) for x in np.asarray(u_prev, float)[:3]]
+                self.log.append(dict(slot=slot, sim_t=snap.sim_t,
+                                     age_in=round(age_in, 6), age_out=None,
+                                     u_prev_src=src, ok=False,
+                                     reason='park_mode_refused', published=False,
+                                     timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall,
+                                     base_fixed=True, u_prev_base=_ub,
+                                     dropped=f'固定底盤：u_prev 底盤 {_ub} 超出 {self.a.park_uprev_tol}'))
+                self._stop_why = f'park_mode_refused：u_prev 底盤 {_ub}'
+                print(f'[wg2] **固定底盤模式閘門拒絕**：u_prev 底盤 {_ub}', flush=True)
+                break
             _solve_sim_t0 = self.sim_now()
             # **本輪的目標只解析一次**，求解與到達判定共用同一份
             T_cyc, _tgt_src, _tgt_age = self._resolve_target(
@@ -1177,6 +1198,7 @@ class WGMPCNode(Node):
                        # B1：求解器自己的原因另存（求解後閘門會覆寫 reason）
                        **({'solver_kind': 'b1', 'b1': r.b1,
                            'solver_reason': r.reason} if self._b1 else {}),
+                       **({'base_fixed': True} if self._base_fixed else {}),
                        # **時間契約的分項紀錄**（快照／求解起點／發布／牆鐘）
                        timing=dict(snap_sim_t=round(snap.sim_t, 6),
                                    solve_start_sim_t=round(_solve_sim_t0, 6),
@@ -1313,6 +1335,17 @@ class WGMPCNode(Node):
                 print(f'[wg2] 收到停止請求：{self._stop_req}（發布前，本輪不發布）',
                       flush=True)
                 break
+            if self._base_fixed and float(np.max(np.abs(
+                    np.asarray(_u_out, float)[:3]))) > float(self.a.park_out_tol):
+                # **輸出核對**：整形後的發布命令底盤分量必須為零；否則不發布、停止（不剪掉後繼續）
+                rec['published'] = False
+                rec['reason'] = 'park_mode_output'
+                rec['dropped'] = (f'固定底盤：發布命令底盤 '
+                                  f'{[float(x) for x in np.asarray(_u_out)[:3]]} 非零')
+                self._log_solve(rec)
+                self._stop_why = 'park_mode_output'
+                print(f'[wg2] **固定底盤輸出核對失敗**：{rec["dropped"]}', flush=True)
+                break
             rec['publish_sim_t'] = round(self.sim_now(), 6)
             # 四段紀錄裡的 request 段**用同一個值**，不另算一次轉換
             u_world = self._publish_u(_u_out, float(q0[2]))
@@ -1436,6 +1469,7 @@ class WGMPCNode(Node):
     def _stats(self):
         """由節點計數器組統計（正常結束、外部關閉、例外收尾共用）。"""
         return dict(stop_why=self._stop_why,
+                    base_fixed=bool(self._base_fixed),
                     stop_rx=self._stop_rx,
                     last_publish_sim_t=self._last_pub_t,
                     n_published_after_stop_rx=int(self._c_pub_after_stop),
@@ -1697,6 +1731,12 @@ def main() -> int:
     ap.add_argument('--pump-wait-s', type=float, default=0.002)
     ap.add_argument('--assume-initial-rest', action='store_true',
                     help='明確確認初始靜止時，允許第一輪以零值作 u_prev')
+    ap.add_argument('--base-fixed', action='store_true',
+                    help='PARK_FIXED：整個時域 u_base = 0（核心等式）；預設關 = 既有行為')
+    ap.add_argument('--park-uprev-tol', type=float, default=1e-6,
+                    help='固定底盤模式閘門：承接 u_prev 底盤各軸上限（超出 ⇒ 拒絕並停止）')
+    ap.add_argument('--park-out-tol', type=float, default=1e-6,
+                    help='固定底盤輸出核對：發布命令底盤各軸上限')
     ap.add_argument('--solver-kind', default='wgmpc', choices=['wgmpc', 'b1'],
                     help='wgmpc = 既有 W-GMPC（預設，不變）；b1 = WG4-B 單步 QP 對照（wg4b_b1_core.py）')
     ap.add_argument('--b1-kp', type=float, default=1.0,

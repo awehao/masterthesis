@@ -80,6 +80,12 @@ class Task(Node):
         self.grip_pub = self.create_publisher(Float64, '/gripper/cmd', 10)
         self.stop_pub = self.create_publisher(String, '/wgmpc/stop', 10)
         self.wb_pub = self.create_publisher(Float64MultiArray, '/wb_vel_cmd', 10)
+        # PARK_FIXED：執行端違規閂鎖與本節點底盤命令核對（預設不用 ⇒ 既有行為不變）
+        self.park_fixed = bool(getattr(a, 'park_fixed', False))
+        self.park_violation = None
+        self.park_base_bad = None
+        if self.park_fixed:
+            self.create_subscription(String, '/park/violation', self._park_vio, 1)
         self.ho_pub = self.create_publisher(String, '/handover/request', 10)
         self.plan_pub = self.create_publisher(Path, '/plan', lat)
         self.phase_pub = self.create_publisher(String, '/drawer/phase', 10)
@@ -216,7 +222,19 @@ class Task(Node):
         m.data = float(v)
         self.grip_pub.publish(m)
 
+    def _park_vio(self, m):
+        try:
+            self.park_violation = json.loads(m.data)
+        except Exception:
+            self.park_violation = {'why': m.data}
+
     def wb_cmd(self, u9):
+        if self.park_fixed and max(abs(float(x)) for x in list(u9)[:3]) > 0.0:
+            # PARK_FIXED 下本節點不應生成非零底盤分量 ⇒ 不發布、記錄並由主迴圈中止（不剪成零後繼續）
+            if self.park_base_bad is None:
+                self.park_base_bad = {'u_base': [float(x) for x in list(u9)[:3]],
+                                      'sim_t': self.sim_t()}
+            return
         m = Float64MultiArray()
         m.data = [float(x) for x in u9]
         self.wb_pub.publish(m)
@@ -364,7 +382,12 @@ def main():
                     help='關閉後底盤倒退速度（m/s）')
     ap.add_argument('--motm-acc-lin', type=float, default=0.05)
     ap.add_argument('--motm-acc-ang', type=float, default=0.20)
+    ap.add_argument('--park-fixed', action='store_true',
+                    help='PARK_FIXED：收到 /park/violation 或本節點生成非零底盤命令 ⇒ 走既有中止收尾')
     a = ap.parse_args()
+    if a.park_fixed and a.motm:
+        print('[task] **--park-fixed 與 --motm 不可同時指定** ⇒ 拒絕啟動', flush=True)
+        return 3
     park = [float(v) for v in a.park.split(',')]
     start = [float(v) for v in a.start.split(',')]
     qg = np.array([float(v) for v in a.q_grasp.split(',')])
@@ -702,6 +725,14 @@ def main():
             m.data = phase
             nd.phase_pub.publish(m)
             prev_phase = phase
+        # ---- PARK_FIXED：執行端違規閂鎖／本節點生成非零底盤命令 ⇒ 走既有中止收尾（任何相位）----
+        if nd.park_fixed and not out.get('abort'):
+            if nd.park_violation is not None:
+                out['abort'] = f'park_fixed_violation：{nd.park_violation.get("why")}'
+                rep['park_violation'] = nd.park_violation
+            elif nd.park_base_bad is not None:
+                out['abort'] = 'park_fixed_task_base_cmd_nonzero'
+                rep['park_base_bad'] = nd.park_base_bad
         # ---- 測試用注入中止（預設關閉；只供功能確認，原因明記，不冒稱實際滑脫）----
         if a.inject_abort_at_s >= 0.0 and phase == 'OPEN' and not out.get('abort'):
             if inj_open_t0 is None:

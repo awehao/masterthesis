@@ -218,10 +218,6 @@ class WGMPCConfig:
     base_vref: tuple | None = None
     w_qn: float = 0.0
     arm_q_nom: tuple | None = None
-    # **PARK_FIXED（固定底盤）**：True ⇒ 整個時域 u_base[k] = (0, 0, 0)（速度框底盤三軸 l = h = 0 的等式）。
-    # vmax() 不變（成本的 1/vmax² 不受影響）；只影響 vbox()。預設 False ⇒ 既有行為逐位元不變。
-    # 僅增廣核心（wgmpc_core_sp）實作；本核心見到 True 會拒絕求解。
-    base_fixed: bool = False
     Qf_scale: float = 5.0
     # 速度框（逐軸）——  L1
     v_base_lin: float = 0.035255
@@ -265,14 +261,6 @@ class WGMPCConfig:
         return np.concatenate([[self.v_base_lin, self.v_base_lin,
                                 self.v_base_ang],
                                np.full(6, self.v_arm)])
-
-    def vbox(self) -> np.ndarray:
-        """速度框的上界：base_fixed 時底盤三軸為 0（等式），否則等於 vmax()。"""
-        v = self.vmax()
-        if self.base_fixed:
-            v = v.copy()
-            v[:3] = 0.0
-        return v
 
     def amax(self) -> np.ndarray:
         return np.concatenate([[self.a_base_lin, self.a_base_lin,
@@ -527,8 +515,6 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
 
     SQP 的五種結果分開回報，**固定跑完 n_sqp 不代表收斂**。
     """
-    if getattr(cfg, 'base_fixed', False):
-        raise ValueError('base_fixed（固定底盤）只在增廣核心 wgmpc_core_sp 實作')
     if cfg.w_vref != 0.0 or cfg.w_qn != 0.0:
         raise ValueError('整機協同項（w_vref／w_qn）只在增廣核心 '
                          'wgmpc_core_sp 實作；本核心不靜默忽略')

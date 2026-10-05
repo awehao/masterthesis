@@ -38,10 +38,21 @@ say "=== 導航交棒 RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID ==="
 say "範圍：真 gmpc_node；/odom 真值；/plan 本地產生（非 nav2）；**CBF 關閉**"
 say "control_frequency=$CTRL_HZ Hz（dt=$(python3 -c "print(f'{1/$CTRL_HZ:.4f}')") s）；限制值全部沿用"
 
+# **PARK_FIXED=1**：固定底盤操作（停住再展開；展開到交還導航底盤恆為零）。預設不設 ＝ 既有行為。
+# 與 MOTM=1 同時指定 ⇒ 拒跑（不靜默選其中一個）。各節點各自帶旗標：sim --park-fixed、glide --park-stop、
+# mission／wholebody／task --park-fixed、solver --base-fixed。
+if [ "${PARK_FIXED:-0}" = "1" ] && [ "${MOTM:-0}" = "1" ]; then
+  say "**PARK_FIXED=1 與 MOTM=1 不可同時指定** ⇒ 拒跑"; exit 87; fi
+PARK_ON=$([ "${PARK_FIXED:-0}" = "1" ] && echo 1 || echo 0)
+PK_SIM=$([ "$PARK_ON" = "1" ] && echo --park-fixed || true)
+PK_GLIDE=$([ "$PARK_ON" = "1" ] && echo --park-stop || true)
+PK_NODE=$([ "$PARK_ON" = "1" ] && echo --park-fixed || true)
+PK_SOLVER=$([ "$PARK_ON" = "1" ] && echo --base-fixed || true)
+if [ "$PARK_ON" = "1" ]; then say "  **PARK_FIXED**：固定底盤操作"; fi
 spawn sim "$ISAAC_PY" -u evaluation/isaac_drawer_room_sim.py \
   --sim-limit "$SIM_LIMIT" --cam "${CAM:-false}" --cam-hz "${CAM_HZ:-10}" \
   --contact-min-n "${CONTACT_MIN_N:-0.5}" \
-  --finger-collision "${FINGER_COL:-hull}" \
+  --finger-collision "${FINGER_COL:-hull}" $PK_SIM \
   ${DRAWER_ASSET:+--drawer-asset "$DRAWER_ASSET"} --out "$DIR"
 say "  等場景建起（最多 180 s）"
 for i in $(seq 180); do grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null && break; sleep 1; done
@@ -144,7 +155,7 @@ sleep 1
 # **兩個變數不要一起動。** 先前為了吸收航向開啟後的偏航誤差，把 k_yaw/
 # wz_max 由 0.3/0.1 提到 1.0/0.35，結果 ON/OFF 兩趟差的不只是航向。
 # 現在預設回到節點預設值，要調再用環境變數明寫。
-spawn glide python3 -u evaluation/drawer_glide_node.py \
+spawn glide python3 -u evaluation/drawer_glide_node.py $PK_GLIDE \
   --k-yaw "${GLIDE_KYAW:-0.30}" --wz-max "${GLIDE_WZMAX:-0.10}" \
   --out "$DIR/glide.json"
 sleep 1
@@ -158,7 +169,7 @@ sleep 1
 # MOTM=1：移動中操作（底盤不停；只在開與關之間停頓）。預設關閉 = 既有行為。
 MOTM_FLAG=$([ "${MOTM:-0}" = "1" ] && echo --motm || true)
 spawn wholebody python3 -u evaluation/drawer_wholebody_node.py \
-  --solver-handshake --pos-tol "${WB_POS_TOL:-0.005}" $MOTM_FLAG \
+  --solver-handshake --pos-tol "${WB_POS_TOL:-0.005}" $MOTM_FLAG $PK_NODE \
   ${MOTM_A_REF:+--motm-a-ref "$MOTM_A_REF"} \
   --out "$DIR/wholebody.json"
 sleep 3
@@ -181,7 +192,7 @@ fi
 # OPEN_M：先跑 0.020 的校正趟（不是結果），再跑正式 0.200。
 spawn task python3 -u evaluation/drawer_task_node.py \
   --open-m "${OPEN_M:-0.020}" --grasp-depth-m "${GRASP_DEPTH_M:-0.01226}" \
-  --contact-min-n "${CONTACT_MIN_N:-0.5}" $MOTM_FLAG \
+  --contact-min-n "${CONTACT_MIN_N:-0.5}" $MOTM_FLAG $PK_NODE \
   ${MOTM_A_REF:+--motm-a-ref "$MOTM_A_REF"} ${MOTM_TASK_ARGS:-} \
   ${INJECT_ABORT_AT_S:+--inject-abort-at-s "$INJECT_ABORT_AT_S"} \
   --out "$DIR/task.json"
@@ -226,6 +237,8 @@ ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
     ${SOLVER_EXTRA:-} \
     `# WG4-B：SOLVER_KIND=b1 換成單步 QP 對照（預設不帶 = wgmpc，既有行為）` \
     ${SOLVER_KIND:+--solver-kind "$SOLVER_KIND"} ${B1_KP:+--b1-kp "$B1_KP"} \
+    `# PARK_FIXED：整個時域 u_base = 0（核心等式）` \
+    $PK_SOLVER \
     `# **無偏移追蹤**：手臂在抓取姿態下 j2 穩態下垂 +0.0243 rad、` \
     `# j3 −0.0099 rad，模型不知道 ⇒ ALIGN 停在 12 mm。線上估計補上。` \
     --offset-free \
@@ -242,7 +255,7 @@ say "[任務] 發計畫、監看、備妥時要求轉移"
 # 速度框並維持，v_nominal 再降一次只會讓參考視窗縮到 30 mm、參考點貼在
 # 機器人身上，反而製造左右修正。
 python3 -u evaluation/drawer_mission_node.py --out "$DIR/mission.json" \
-  --slow-zone 0.0 \
+  --slow-zone 0.0 $PK_NODE \
   2>&1 | tee -a "$DIR/run.log"
 RC=${PIPESTATUS[0]}
 say "[展開] 等全身端完成展開（最多 120 s）"

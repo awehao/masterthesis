@@ -57,3 +57,38 @@ WARMUP 延續導航底盤速度、UNFOLD 一邊展開一邊以 P 控制把底盤
 (b) 「任務 GO」的共同定義：建議用 mission 發出第一筆導航目標的模擬時間（兩組同一事件）。
 (c) 入場容差 10 mm／0.05 rad 若未達成（glide 停偏），是中止該趟還是允許 glide 再修正一次（仍在閘門前）。
 (d) 功能確認若 PARK_FIXED 物理上做不到（例如夾持或拉力不足），是否先停下回報、不調參。
+
+---
+
+## 6. 實作狀態（2026-10-05，依 Codex reviews/20261005_113349_reply.md；尚未開模擬）
+
+| 元件 | 實作 | 預設路徑 |
+|---|---|---|
+| `park_fixed.py`（新） | StaticGate／HoldMonitor 純邏輯；同一物理步真值位姿差分＋實際寫入底盤命令；證據不足另判 | — |
+| `dual_source_executor.py` | 新增可選 `switch_guard(to, step, t)`：提交切換當步多核一道條件；不取代就緒與預核，不成立照窗口順延／取消 | `None` ⇒ 不變 |
+| `isaac_drawer_room_sim.py` `--park-fixed` | 閘門（轉給全身前）、保持監看（實際轉給全身 → 實際交還導航，含 UNFOLD）、守門（已通過＋當前成立＋前一步新鮮＋未違規）、**滾動下界明確設 0**；違規閂鎖：`ex.cancel_handover`＋發 `/park/violation`；`room_run.json` 加 `park_mode` 欄、存 `park_gate.json` | 不帶 ⇒ 不變（v_min_lin 仍 0.010） |
+| `drawer_glide_node.py` `--park-stop` | 停在停位：v = sign(d)·min(v_cap, √(2·a·|d|), 1.0·|d|)，越位回正 ≤ 10 mm/s（有界）；誤差 ≤ 1.5 mm／0.005 rad 且套用速率 ≤ 2 mm/s ⇒ 鎖存精確零；牆鐘 30 s 逾時 ⇒ 發 `/park/violation` 停止。離散模擬：0.6 m 起 6.1 s 進鎖存容差、無越位 | 不帶 ⇒ 原滾動剖面 |
+| `drawer_mission_node.py` `--park-fixed` | 判斷函式的滾動下界設 0；**閘門已通過＋當前成立＋訊息新鮮**才請求轉給全身；收到違規停止；記共同 GO `go_sim_t`（首次發計畫的模擬時間，兩組都記） | 只多記 `go_sim_t` |
+| `drawer_wholebody_node.py` `--park-fixed` | WARMUP 底盤零（不承接導航速度）；UNFOLD 只動手臂、底盤恆零、不做停位修正；若生成非零底盤 ⇒ 記錄並停止（不剪）；收到違規停止；與 `--motm` 同時 ⇒ 拒絕啟動 | 不帶 ⇒ 不變 |
+| `drawer_task_node.py` `--park-fixed` | 收到 `/park/violation` 或本節點生成非零底盤命令 ⇒ 走既有中止收尾（A0 語意：停求解、不發目標、夾爪維持）；與 `--motm` 同時 ⇒ 拒絕啟動。RESTOW／HANDBACK 的零底盤生成方式不變 | 不帶 ⇒ 不變 |
+| `wgmpc_core.py`／`wgmpc_core_sp.py` | `base_fixed`：`vbox()` 底盤 0（速度框 l = h = 0 的整時域等式；名目序列同夾）；`vmax()` 不變；理想核心見 True 拒絕 | False ⇒ 逐位元不變 |
+| `wgmpc_wg2_node.py` `--base-fixed` | **模式閘門**：u_prev 底盤 > 1e-6 ⇒ 拒絕並停止（不宣稱 QP 無解）；**輸出核對**：整形後發布命令底盤 > 1e-6 ⇒ 不發布並停止；逐輪 `base_fixed`、stats `base_fixed` | 不帶 ⇒ 不變 |
+| `horizon_replay.py`／`horizon_replay_check.py` | 重播依 args 還原 `base_fixed`（舊趟次 False）；`park_mode_refused` 列入合法非求解理由 | 舊趟次不變 |
+| `run_nav_handover.sh`／`run_plan_batch.sh` | `PARK_FIXED=1` 帶齊各節點旗標；與 `MOTM=1` 同時 ⇒ 拒跑（碼 87）；批次方法 `PARK_FIXED` | 不設 ⇒ 不變 |
+
+### 離線測試
+
+- `test_park_fixed.py` 24/24：閘門（靜止通過、保持不足、零命令但移動、非零命令但靜止、原地轉、停偏、手臂未收、中途移動重起、缺步／時間不前進／非有限重起）、保持監看（靜止 PASS、出去又回來、慢漂累積、yaw 偏離、非零命令、yaw 跨 ±π、缺步 INSUFFICIENT、未交還 INSUFFICIENT、第一次違規閂鎖）、執行端守門（順延到可行步才切換、一直不行則取消留在導航、None 不變、MOTM 滾動下界仍擋停住）。
+- `test_wgmpc_base_fixed.py` 8/8：vmax 不變／vbox 底盤 0；**預設路徑與改動前核心逐位元相同**（mt_b1_02_P 實錄 10 輪；改動前核心存 `results/motm_speed/pre_park_core/`）；base_fixed 解出整時域 |U_base| ≤ 1e-12（實測約 1e-24；OSQP 不給精確 0.0）；u_prev 底盤 1e-3 m/s 仍可行並降到 0；理想核心拒絕。
+- 既有測試全過：stop_paths、shutdown_classify、cycle_record、horizon_replay_check、horizon_metrics、parked_operation_audit、control_authority、dual_source_executor、run_plan_batch 15/15；mt_b1_01_M 重播仍 PASS；求解節點建構對照只多 `_base_fixed`（False）。
+
+### 可行性腳本修正後（`park_fixed_feasibility.json`）
+
+措辭改為「**找到目前取樣路徑上的固定底盤 IK 解**」。設計接觸只排除夾持相位的手指—橫桿：
+- 開 0→210 mm：夾爪殼—橫桿最小 7.19 mm；手臂—櫃體／抽屜 63.8 mm；自碰 8.48 mm；限位餘裕 0.486 rad。
+- 對準／退開（距抓取點 > 2 mm）：**finger2—橫桿 −1.8 mm（點雲重疊）**。FK 中手指為 URDF 預設位置、未建模實際張開角，可能是原因；此段 TCP 相對把手的路徑兩組相同（MotM 與舊停車組實錄都完成接觸前對準）。列為未解限制，不追加掃描、不稱碰撞餘裕已驗收。
+- 展開／收臂：2.8 mm 自碰與 0.011 rad 照舊保留為未解限制（實際 UNFOLD 先動 j3，非表內直線）。
+
+### 尚未驗證（需功能確認趟）
+
+靜止閘門與保持監看在真實物理中的表現（展開時手臂反作用是否推動底盤）、減速段實際停車時間、`parked_operation_audit` 的整窗需改以「實際轉給全身 → 實際交還導航」為準（模擬器 `park_gate.json` 為主判定，audit 交叉核對）。

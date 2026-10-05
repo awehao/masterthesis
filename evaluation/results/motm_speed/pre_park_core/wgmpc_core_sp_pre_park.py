@@ -489,10 +489,9 @@ def build_constraints_sp(z0, U_nom, u_prev, cfg: WGMPCConfigSP, delta,
         hi.extend(u)
         blocks[name] = (i0, len(rows))
 
-    # 1 速度框（vbox：base_fixed 時底盤三軸 l = h = 0，整個時域的等式；否則 = vmax）
+    # 1 速度框
     I = np.eye(n)
-    vbox = cfg.vbox()
-    add('velocity', list(I), list(np.tile(-vbox, N)), list(np.tile(vbox, N)))
+    add('velocity', list(I), list(np.tile(-vmax, N)), list(np.tile(vmax, N)))
     # 2 加速度框
     D = _diff_operator(N)
     f = np.zeros(n)
@@ -588,7 +587,7 @@ def solve_sp(K, z0, u_prev, T_des, cfg: WGMPCConfigSP,
             _adt = cfg.amax() * cfg.dt
             _last = _W[-1] + np.clip(-_W[-1], -_adt, _adt)
             U_nom = np.vstack([_W[1:], _last[None, :]])
-    U_nom = np.clip(U_nom, -cfg.vbox(), cfg.vbox())   # base_fixed 時名目底盤亦為 0
+    U_nom = np.clip(U_nom, -cfg.vmax(), cfg.vmax())
 
     Qw, Rw, Sw = cfg.Q(), cfg.R(), cfg.S()
     Qbar = np.zeros((N * NE, N * NE))

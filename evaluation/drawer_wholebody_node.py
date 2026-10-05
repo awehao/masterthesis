@@ -75,6 +75,10 @@ class WholeBody(Node):
         self.create_subscription(Float64MultiArray, '/coman/applied_cmd',
                                  self._ap, 1)
         self.create_subscription(String, '/handover/state', self._hs, 1)
+        # PARK_FIXED：執行端違規閂鎖 ⇒ 停止發布（預設不訂 ⇒ 既有行為不變）
+        self.park_violation = None
+        if getattr(a, 'park_fixed', False):
+            self.create_subscription(String, '/park/violation', self._park_vio, 1)
         self.pose = None
         self.vb = None
         self.q = None
@@ -144,6 +148,12 @@ class WholeBody(Node):
         except Exception:
             pass
 
+    def _park_vio(self, m):
+        try:
+            self.park_violation = json.loads(m.data)
+        except Exception:
+            self.park_violation = {'why': m.data}
+
     def send(self, u9):
         m = Float64MultiArray()
         m.data = [float(x) for x in u9]
@@ -188,7 +198,12 @@ def main():
     ap.add_argument('--motm-overshoot', type=float, default=0.030)
     ap.add_argument('--solver-handshake', action='store_true',
                     help='等求解器明確回報 ready 才交出；不以發布者數判斷')
+    ap.add_argument('--park-fixed', action='store_true',
+                    help='PARK_FIXED：暖機與展開的底盤三軸恆為零（不承接導航速度、不做停位修正）')
     a = ap.parse_args()
+    if a.park_fixed and a.motm:
+        print('[wb] **--park-fixed 與 --motm 不可同時指定** ⇒ 拒絕啟動', flush=True)
+        return 3
 
     stow = np.array([float(v) for v in a.stow_q.split(',')])
     px, py, pyaw = (float(v) for v in a.park.split(','))
@@ -221,6 +236,10 @@ def main():
     j3_cleared = False
     while rclpy.ok() and time.monotonic() - t1 < a.timeout_s:
         rclpy.spin_once(nd, timeout_sec=0.0)
+        if a.park_fixed and nd.park_violation is not None:
+            rep['park_violation'] = nd.park_violation
+            print(f'[wb] 收到 PARK_FIXED 違規 ⇒ 停止發布：{nd.park_violation}', flush=True)
+            break
         owner = (nd.hs or {}).get('owner')
         q = np.array(nd.q) if nd.q is not None else stow
         u = np.zeros(9)
@@ -237,7 +256,10 @@ def main():
             # 首筆請求是**同一個值**，λ 增量為零，交棒逐位元連續。
             src = 'nav_applied'
             nap = (nd.hs or {}).get('nav_applied')
-            if nap is not None and nap.get('u_applied') is not None:
+            if a.park_fixed:
+                # PARK_FIXED：執行端靜止閘門已保證套用底盤為零；不承接導航速度
+                src, ub = 'park_fixed_zero', [0.0, 0.0, 0.0]
+            elif nap is not None and nap.get('u_applied') is not None:
                 ub = [float(x) for x in nap['u_applied'][:3]]
             elif nd.vb is not None:
                 # 後備：回報還沒到。記下來源，不要混充
@@ -318,7 +340,10 @@ def main():
             bx, by = ex * c + ey * s, -ex * s + ey * c
             eyaw = math.atan2(math.sin(pyaw - nd.pose[2]),
                               math.cos(pyaw - nd.pose[2]))
-            if a.motm:
+            if a.park_fixed:
+                # **PARK_FIXED**：只動手臂；底盤三軸恆為零、不做停位修正（停位由閘門前的減速段完成）
+                u[0] = u[1] = u[2] = 0.0
+            elif a.motm:
                 # **MotM**：底盤照剖面持續朝停位走，速度只在抵達時為零；
                 # 展開完成不要求底盤到位 —— 剩下的距離由求解節點在對準與
                 # 夾持期間走完（同一個剖面，交接時參考速度連續）。
@@ -331,8 +356,8 @@ def main():
                 u[1] = float(np.clip(1.0 * by, -a.v_base, a.v_base))
                 u[2] = float(np.clip(1.0 * eyaw, -a.w_base, a.w_base))
             done_arm = float(np.abs(err).max()) <= a.q_tol
-            done_base = a.motm or (math.hypot(ex, ey) <= a.pos_tol
-                                   and abs(eyaw) <= a.yaw_tol)
+            done_base = a.motm or a.park_fixed or (math.hypot(ex, ey) <= a.pos_tol
+                                                   and abs(eyaw) <= a.yaw_tol)
             if done_arm and done_base:
                 phase = 'UNFOLD_DONE'
                 sl = float(np.min(np.minimum(q - elo, ehi - q)))
@@ -366,6 +391,12 @@ def main():
                   f'等 /wb_vel_cmd 出現第二個發布者，最多 '
                   f'{a.hold_timeout_s:.0f} s）', flush=True)
 
+        if a.park_fixed and float(np.max(np.abs(np.asarray(u, float)[:3]))) > 0.0:
+            # PARK_FIXED 下不應生成非零底盤分量；若有 ⇒ 記錄並停止（不剪成零後繼續，避免藏住漏接）
+            rep['park_base_cmd_generated'] = {'phase': phase, 'u_base': [float(x) for x in u[:3]],
+                                              'sim_t': nd.t_seen}
+            print(f'[wb] **PARK_FIXED 下生成了非零底盤命令** {u[:3]} @ {phase} ⇒ 停止', flush=True)
+            break
         nd.send(u)
         rep['phase'] = phase
         if phase == 'HOLD' and nd.t_seen - hold_t0 > a.hold_timeout_s:

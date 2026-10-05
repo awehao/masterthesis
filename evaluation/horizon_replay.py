@@ -37,7 +37,9 @@ def base_cfg(args, ident):
                            w_s=args['w_s'], w_a=args['w_a'],
                            w_s_base=args.get('w_s_base'),
                            w_s_arm=args.get('w_s_arm'),
-                           row_scaling=not args.get('no_row_scaling', False))
+                           row_scaling=not args.get('no_row_scaling', False),
+                           # PARK_FIXED：舊趟次沒有此欄 ⇒ False（行為不變）
+                           base_fixed=bool(args.get('base_fixed', False)))
 
 
 def cfg_from_record(args, ident, rec, N_override=None):

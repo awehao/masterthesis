@@ -57,7 +57,8 @@ NON_SOLVE_REASONS = {
     'chain_fail_latched', 'inflight_unavoidable_breach', 'sp_gate_failed',
     'sp_handshake_init', 'sp_gate_hold', 'snapshot_duplicate',
     'snapshot_not_newer', 'snapshot_not_paired', 'stale_before_solve',
-    'no_u_prev'}
+    'no_u_prev',
+    'park_mode_refused'}   # PARK_FIXED 模式閘門拒絕（未呼叫求解器；2026-10-05 新增）
 # 核心在這些理由下不計算殘差（res.max_residual 維持 NaN）
 NAN_RESIDUAL_OK = {'qp_failed', 'no_accepted_candidate'}
 

@@ -61,7 +61,7 @@ class DualSourceExecutor:
                  max_seed_age_s: float = 0.1,
                  stow_setpoint=None,
                  v_box_lin=None, v_box_ang=None, v_min_lin: float = 0.0,
-                 nav_accel_max=None):
+                 nav_accel_max=None, switch_guard=None):
         self.chain = chain
         self.auth = ControlAuthority(initial, n_dof=n_dof,
                                      max_seed_age_s=max_seed_age_s)
@@ -74,6 +74,10 @@ class DualSourceExecutor:
         self.v_box_lin = None if v_box_lin is None else float(v_box_lin)
         self.v_box_ang = None if v_box_ang is None else float(v_box_ang)
         self.v_min_lin = float(v_min_lin)
+        # **額外的切換守門**（預設 None ＝ 既有行為）：callable(to, step_id, sim_t) → (ok, why)。
+        # PARK_FIXED 用它在**提交切換當步**核「停車閘門已通過、停車條件仍成立、閘門資料新鮮」。
+        # 它只多加一道條件，不取代就緒與預核；不成立時照窗口規則順延／取消。
+        self.switch_guard = switch_guard
         # ---- 導航直寫路徑的逐軸變化率上限（**預設 None = 關閉**）---------
         # 導航這條路徑**不經命令鏈**，所以鏈上的三層限制一條都沒套到它。
         # 結果：導航的命令是階梯狀的，實測單一物理步逐軸跳到 75.000 mm/s
@@ -348,6 +352,8 @@ class DualSourceExecutor:
                 and step_id >= self.auth._pending[0]):
             ready, why = self._wb_ready(sim_t)
             pre = None
+            if ready and self.switch_guard is not None:
+                ready, why = self.switch_guard(AUTH_WHOLEBODY, int(step_id), float(sim_t))
             if ready:
                 # **同一步內預核**：取最新承接資料與待套用命令，用命令鏈自己
                 # 的計算路徑算一次本步輸出（含設定點有效限位），不寫入狀態。
