@@ -27,6 +27,9 @@ import dl0_autolabel as AL            # noqa: E402
 import dl0_g1_check as G              # noqa: E402
 import dl0_train as TR                # noqa: E402
 
+# 封存測試：**凍結後才可執行**（--split test 會先核對封存與模型凍結清單）；標籤於開封時以 dl0_autolabel 產生；G0 讀開封時跑出的 D1 結果
+TEST_SRC = {'test_lateral': ('dl0_test_lateral/wrist_v0', 'd1_detect_test.json'),
+            'test_view': ('dl0_test_view/wrist_v0', 'd1_detect_test.json')}
 DEV_SRC = {'traj_wg4b_f02_P': ('d1_dev_f02P/wrist_v0', 'd1_detect_rev2.json'),
            'traj_mt_b1_02_P': ('d1_hold_mt02P/wrist_v0', 'd1_detect_hold.json')}
 BINS = G.BINS
@@ -68,25 +71,42 @@ def summarize(rows, key):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--ckpt', required=True)
-    ap.add_argument('--out', default=os.path.join(HERE, 'results', 'vision', 'DL0_dev_eval.json'))
+    ap.add_argument('--out', default=None)
+    ap.add_argument('--split', choices=('dev', 'test'), default='dev')
+    ap.add_argument('--model-freeze', default=os.path.join(HERE, 'results', 'vision', 'freeze_dl0_model.sha256'))
     a = ap.parse_args()
     dev = torch.device('cuda')
     model = TR.build_model(pretrained=False)
     model.load_state_dict(torch.load(a.ckpt, map_location='cpu'))
     model.to(dev).eval()
+    a.out = a.out or os.path.join(HERE, 'results', 'vision', f'DL0_{a.split}_eval.json')
+    if a.split == 'test':
+        import subprocess
+        ws = os.path.abspath(os.path.join(HERE, '..'))
+        for fz in (os.path.join(HERE, 'results', 'vision', 'seal_dl0_test.sha256'), a.model_freeze):
+            r = subprocess.run(['sha256sum', '-c', '--quiet', fz], cwd=ws, capture_output=True, text=True)
+            assert r.returncode == 0, f'凍結／封存核對失敗 {fz}：{r.stdout[-500:]}'
+        assert __import__('hashlib').sha256(open(a.ckpt, 'rb').read()).hexdigest() in open(a.model_freeze).read(), '檢查點不在模型凍結清單'
+    SRC = TEST_SRC if a.split == 'test' else DEV_SRC
     idx = {(r['group'], r['n']): r for r in TR.load_index() if r['split'] == 'dev'}
     res = {'schema': 'dl0_dev_eval/1', 'ckpt': a.ckpt,
            'ckpt_sha256': __import__('hashlib').sha256(open(a.ckpt, 'rb').read()).hexdigest(),
            'note': 'G1／L1 共用 g1_detect（寬度篩選略過）；G0＝凍結 D1 既有逐格結果（含寬度篩選）', 'groups': {}}
-    for grp, (cap, g0file) in DEV_SRC.items():
+    for grp, (cap, g0file) in SRC.items():
         g0 = {r['n']: r for r in json.load(open(os.path.join(HERE, 'runs', cap, g0file)))['rows']}
         rng_g1, rng_l1 = np.random.default_rng(0), np.random.default_rng(0)
         rows, lat = [], []
         for fr in AL.frames_of(cap):
             n = fr['n']
-            if (grp, n) not in idx or n not in g0:
+            if n not in g0 or (a.split == 'dev' and (grp, n) not in idx):
                 continue
-            lab = np.asarray(Image.open(os.path.join(HERE, idx[(grp, n)]['label'])))
+            if a.split == 'dev':
+                lab = np.asarray(Image.open(os.path.join(HERE, idx[(grp, n)]['label'])))
+            else:                                          # 測試：開封時才產生標籤（同一 dl0_autolabel 版本，在模型凍結清單內）
+                LL = AL.label(fr)
+                lab = np.zeros(LL['mask'].shape, np.uint8)
+                lab[LL['ignore']] = 2
+                lab[LL['mask']] = 1
             dep = AL.load_depth(fr['depth_path'])
             img = np.asarray(Image.open(fr['rgb']).convert('RGB'))
             t = torch.from_numpy(img.copy()).permute(2, 0, 1).float().to(dev) / 255.0
