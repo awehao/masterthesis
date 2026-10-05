@@ -1,0 +1,16 @@
+# DL1 物體局部座標目標生成：純函式＋離線測試結果（2026-10-06；規格 DL1_object_target_spec.md draft-2）
+schema: dl1_offline_result/1
+程式: 'evaluation/object_target_geometry.py（純函式；不含世界軸常數；輸出一律 geometry_contract: unchecked）'
+測試: 'evaluation/test_object_target_geometry.py 36/36（不跑模擬、不接節點）'
+公式: 'T_WE_pre(s) = T_WH · Trans(s·a_H) · T_HG · T_EG⁻¹；T_AB 把 B 座標的點轉到 A'
+基準相容:
+  函式層: '與 drawer_task_node.Task.target_at 逐元素一致（≤ 1e-12），grasp_depth 0.0068 與 0.01226 兩種配置、退讓 0／5／12.3／30 mm；基準 T_HG = [R_grasp | (0, +grasp_depth, 0)]、a_H = (0, −1, 0)、T_EG = I'
+  實錄: >
+    phf_01_M（grasp_depth 0.0068）：求解節點紀錄的 ENGAGE_WAIT 每輪目標 T_cyc（target_at(0, H_frozen)）與本函式以名目把手中心 (0, 1.165, 0.55) 計算者
+    最大差 ≤ 2e-7 m（把手位姿為 USD float32 讀值）。motm_200_075305（0.01226）為舊版紀錄、未保存每輪目標，**只做函式層核對**
+其他核對: >
+  非單位工具轉換下的剛體等變（20 組隨機 SO(3)＋平移）與約束 T_WE·T_EG = T_WH·Trans(s a)·T_HG；往返反推 T_WH；退讓沿 R_WH a_H、外側契約反號拒絕、未給外側標 unchecked；
+  非正交／det −1／NaN／底列錯誤／零軸拒絕；mm 數值當 m（抓取深度 6.8、退讓 30）與負退讓拒絕；部分觀測（無法向拒絕 underdetermined_roll、無軸向參考拒絕或回兩個等價候選、
+  軸向參考決定號、垂直參考仍歧義、法向近平行拒絕、非中心點拒絕）；繞橫桿軸 180° 幾何等價候選與固定選擇規則（測地距離改用 atan2 形式，避免 acos 近 0 精度約 3.7e-8）；
+  滑軌開度沿 R_WH u_H、越界與 mm 拒絕、物體整體變換等變；物體身分跳變拒絕
+不做: '不改 drawer_task_node／控制器／限制／接觸幾何；不發命令；鉸鏈、夾爪相容與碰撞模型一起轉換列後續子包；不宣稱旋轉擺放的物理可達或視覺操作'
