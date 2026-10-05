@@ -15,10 +15,10 @@ v2 允許以錨點為參考、經正常限制的**停車伺服修正命令**抵�
 `park_hold_cmd(anchor, pose)`（`park_fixed.py`）：以錨點為參考的本體座標速度
 
     e_xy_body = R(yaw)ᵀ (anchor_xy − pose_xy)，e_yaw = wrap(anchor_yaw − yaw)
-    v = clip(k_p · e_xy_body, ±v_hold_max)，ω = clip(k_yaw · e_yaw, ±w_hold_max)
+    v = k_p · e_xy_body，**向量限幅** ‖v‖ ≤ v_hold_max（合線速度），ω = clip(k_yaw · e_yaw, ±w_hold_max)
 
-事前參數（不看結果調）：k_p = 2.0 /s、k_yaw = 2.0 /s、v_hold_max = 5 mm/s、w_hold_max = 0.02 rad/s。
-理由：功能確認量到的漂移約 0.55 mm/s，穩態誤差約 v_drift/k_p ≈ 0.3 mm < 1 mm；上限遠低於既有底盤速度／加速度／輪級限制
+事前參數（**依 v1 功能確認的觀察選定、在 v2 功能確認前凍結**，不是完全未參考結果）：k_p = 2.0 /s、k_yaw = 2.0 /s、v_hold_max = 5 mm/s、w_hold_max = 0.02 rad/s。
+理由：v1 量到的漂移約 0.55 mm/s，簡化估算穩態誤差約 v_drift/k_p ≈ 0.3 mm（不是閉迴路保證）；上限遠低於既有底盤速度／加速度／輪級限制
 （全部不變）。量測 = 各節點收到的 `/odom` 真值位姿（與其他節點同源）；錨點 = 執行端 `/park/gate` 通過當步的錨點（閂鎖，不更新）。
 
 ## 3. 誰發停車伺服命令（保持期全窗：實際轉給全身 → 實際交還導航）
@@ -52,7 +52,10 @@ v2 允許以錨點為參考、經正常限制的**停車伺服修正命令**抵�
 1. `park_fixed.py`：加 `park_hold_cmd` 與參數；`HoldMonitor` 的命令核對改為上界核對（v2 模式），速率／偏離不變。
 2. `wgmpc_core*.py`：`base_fixed` 擴充為 `base_hold`（三軸等式值 = u_hold；u_hold = 0 時與 v1 逐位元相同）；名目序列同夾。
 3. `wgmpc_wg2_node.py`：`--park-hold`：每輪由 `/odom`（同時刻快照的底盤位姿）與錨點算 u_hold、寫入核心與紀錄；模式閘門與輸出核對改為 §4。
-4. `drawer_wholebody_node.py`／`drawer_task_node.py`：`--park-hold`：底盤分量用 park_hold_cmd（取代 v1 的 0），訂 `/park/gate` 取錨點；未取得錨點 ⇒ 不發命令並中止。
+4. `drawer_wholebody_node.py`／`drawer_task_node.py`：`--park-hold`：底盤分量用 park_hold_cmd（取代 v1 的 0），訂 `/park/gate` 取錨點。
+   **錨點與位姿（Codex 20261005_122919／124139 修訂）**：通過閘門前有界等待錨點（全身節點不發命令 ⇒ 執行端依窗口規則順延，不提交接手）；
+   取得錨點後先備妥有效首筆命令，再走既有預核與切換；每次計算／發布停車伺服前都核位姿有限、時間戳不在未來、年齡 ≤ 0.2 s；
+   **已進入保持後**位姿或錨點失效 ⇒ 違規中止（task 當輪不發命令、不提交交還）；違規閂鎖後執行端拒絕所有後續換手請求。
 5. 模擬器／mission／glide：與 v1 相同（閘門、守門、違規閂鎖、滾動下界 0）；`--park-hold` 只換 HoldMonitor 的命令核對語意。
 6. 重播：`horizon_replay` 由逐輪紀錄還原 u_hold。
 7. 運行器：`PARK_HOLD=1`（與 MOTM、PARK_FIXED 互斥）。
@@ -73,3 +76,10 @@ v2 允許以錨點為參考、經正常限制的**停車伺服修正命令**抵�
 ## 8. 第六次素材
 
 本輪發現另列，題名「**零底盤命令不足以維持實測停車**」（不寫成「固定底盤操作不可行」）；v2 結果出來前不寫停車與 MotM 的時間比較。
+
+## 9. 審查修訂紀錄
+
+- 20261005_122919：合速度向量限幅；整時域底盤等式（l = h = u_hold，原限制不動）＋逐輪紀錄、重播不重取 odom；PARK_HOLD 停用近目標整形；
+  錨點有界等待與保持期失效中止；違規後拒絕所有換手；MOTM 同版本功能趟重跑。
+- 20261005_124139：audit PARK_HOLD 口徑（閘門錨點＋伺服上界，實測門檻不變）；所有伺服階段先核位姿有效性；hold_output_ok 的 NaN／維度漏洞；
+  重播在 PARK_HOLD 紀錄缺失時判紀錄不足、不回退自由底盤。
