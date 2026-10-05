@@ -218,6 +218,43 @@ def fig08():
     save(fig, '08_開發評估_G0G1L1_中心有效率與誤差.png')
 
 
+# ---------------------------------------------------------------- 09
+def fig09():
+    """封存測試一次開封結果（2026-10-06，freeze_dl0_model_v2；開封紀錄 DL0_test_opening.json）。"""
+    d = json.load(open(os.path.join(VIS, 'DL0_test_eval.json')))['groups']
+    groups = [('test_lateral', '測試 test_lateral（側向接近）'), ('test_view', '測試 test_view（俯視、偏心、滾轉 30°）')]
+    fig, axs = plt.subplots(2, 2, figsize=(13, 7))
+    cols = {'G0': C1, 'G1': C2, 'L1': C3}
+    names = {'G0': 'G0 凍結 D1', 'G1': 'G1 真值輔助遮罩參考', 'L1': 'L1 學習式遮罩'}
+    for j, (g, lbl) in enumerate(groups):
+        x = np.arange(len(BINS))
+        for k, key in enumerate(('G0', 'G1', 'L1')):
+            v = d[g][key]
+            rate = [v[b]['L2_center'] / v[b]['n'] if b in v else np.nan for b in BINS]
+            err = [((v[b]['L2_err_mm'] or {}).get('median', np.nan) if b in v else np.nan) for b in BINS]
+            axs[0, j].bar(x + (k - 1) * 0.26, rate, 0.24, color=cols[key], label=names[key])
+            axs[1, j].bar(x + (k - 1) * 0.26, err, 0.24, color=cols[key], label=names[key])
+            for xi, b in zip(x, BINS):
+                if b in v:
+                    axs[0, j].text(xi + (k - 1) * 0.26, v[b]['L2_center'] / v[b]['n'] + 0.02, f"{v[b]['L2_center']}/{v[b]['n']}",
+                                   ha='center', fontsize=6.5, color=INK2)
+        iou = [(d[g]['L1'][b]['mask_iou_mean'] if b in d[g]['L1'] else None) for b in BINS]
+        axs[0, j].set_title(f"{lbl}\n中心有效率（L1 遮罩 IoU " + ' / '.join('—' if v is None else f'{v:.2f}' for v in iou) + '）', fontsize=10)
+        axs[1, j].set_title(f'接受後中心誤差中位 (mm)', fontsize=10)
+        for a in axs[:, j]:
+            a.set_xticks(x)
+            a.set_xticklabels(BIN_LBL, fontsize=8)
+            a.set_xlim(-0.6, len(BINS) - 0.4)
+        axs[0, j].set_ylim(0, 1.15)
+        axs[0, j].text(0.99, 0.97, f"負樣本 {d[g]['n_negative']} 格，誤檢 {d[g]['negative_false_positive']}",
+                       transform=axs[0, j].transAxes, ha='right', va='top', fontsize=8, color=INK2)
+    axs[0, 0].legend(frameon=False, fontsize=8, loc='center right')
+    fig.suptitle('封存測試一次開封（凍結後、未調參）：兩條同把手合成觀測序列各 82 格完整評估；三者違反與「接受但錯誤」皆 0', fontsize=11)
+    fig.text(0.01, -0.02, '同一把手、新合成觀測條件；不是跨物件泛化、實機或視覺閉迴路。G1／L1 略過寬度篩選、G0 含；各方法接受集合不同，誤差中位不可當逐格精度比較。'
+             '來源：DL0_test_eval.json、DL0_test_opening.json。', fontsize=8, color=MUTED)
+    save(fig, '09_封存測試開封_G0G1L1_中心有效率與誤差.png')
+
+
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)
     fig01()
@@ -227,3 +264,4 @@ if __name__ == '__main__':
     fig05()
     fig07()
     fig08()
+    fig09()
