@@ -28,7 +28,7 @@ def det(l2=True):
 
 
 def build(frames, node_events, counters, worker_alive=False, in_progress=None, rejected=0,
-          truth_skip=(), thermal=None, align=100.0):
+          truth_skip=(), thermal=None, align=100.0, summ_drop=(), fault=()):
     """frames：來源已發布影格 n 的清單（t = n·0.2）。node_events：(ev, n, extra) 依序。"""
     R = tempfile.mkdtemp(prefix='s4audit_')
     os.makedirs(os.path.join(R, 'wrist_live'))
@@ -64,9 +64,12 @@ def build(frames, node_events, counters, worker_alive=False, in_progress=None, r
                 if ev == 'worker_error':
                     rec.update(stage='detect', why='RuntimeError()')
             f.write(json.dumps(rec) + '\n')
-    json.dump({'why': 'SIGTERM', 'counters': counters, 'worker_alive_at_exit': worker_alive,
-               'in_progress_at_exit_n': in_progress, 'unprocessed_in_slot': 0, 'unpaired_at_exit': 0,
-               'detector_sha256': 'x' * 64}, open(os.path.join(R, 'd1_shadow', 'd1_shadow_summary.json'), 'w'))
+    summ = {'why': 'SIGTERM', 'counters': dict(counters), 'worker_alive_at_exit': worker_alive,
+            'in_progress_at_exit_n': in_progress, 'unprocessed_in_slot': 0, 'unpaired_at_exit': 0,
+            'fault_inject_n': list(fault), 'detector_sha256': 'x' * 64}
+    for k in summ_drop:                                  # 'worker_error' ⇒ 刪 counters 內的計數；其他 ⇒ 刪頂層欄位
+        (summ['counters'].pop(k) if k == 'worker_error' else summ.pop(k))
+    json.dump(summ, open(os.path.join(R, 'd1_shadow', 'd1_shadow_summary.json'), 'w'))
     json.dump({'events': [{'phase': 'ALIGN', 'sim_t': align}]}, open(os.path.join(R, 'task.json'), 'w'))
     if thermal:
         with open(os.path.join(R, 'thermal.csv'), 'w') as f:
@@ -104,7 +107,7 @@ if A:
     check('codex_case_fails', v.startswith('FAIL'), v)
     check('codex_case_no_fate_not_transport', A['reconciliation']['per_frame_fate_counts'].get('received_no_fate') == 1
           and 'transport_drop' not in A['reconciliation']['per_frame_fate_counts'], A['reconciliation'])
-    check('codex_case_reports_worker_alive', '工作執行緒仍在執行' in v, v)
+    check('codex_case_reports_worker_alive', 'worker_alive_at_exit 不是明確 False（True）' in v, v)
 
 # 2 節點完全沒收到 ⇒ transport_drop（推定）；其餘乾淨 ⇒ PASS
 ev = recv_all(1) + [('paired', 1, None), ('processed', 1, True)]
@@ -171,6 +174,31 @@ pr = (A or {}).get('processing', {})
 check('time_fields_named', 'processed_capture_cadence_hz（已處理影格的擷取時序頻率，非輸出頻率）' in pr
       and 'output_rate_sim_hz（以輸出當下模擬時間）' in pr
       and any(k.startswith('wall_age_s（模擬器讀取匹配後') for k in pr), list(pr))
+
+# 10–13 Codex 20261005_ 複核反例：收尾必要欄位與故障事件
+ok_ev = recv_all(1) + [('paired', 1, None), ('processed', 1, True)]
+ok_c = dict(received_depth=1, received_info=1, received_pose=1, received_meta=1, paired=1, processed=1, published=1)
+A, err = audit(build([1], ok_ev, ctr(**ok_c), summ_drop=('worker_alive_at_exit',)))
+check('missing_worker_alive_fails', A and 'worker_alive_at_exit 不是明確 False' in A['verdict']['通路與對帳'], A and A['verdict'])
+A, err = audit(build([1], ok_ev, ctr(**ok_c), summ_drop=('worker_error',)))
+check('missing_worker_error_counter_fails', A and '缺 worker_error 計數' in A['verdict']['通路與對帳'], A and A['verdict'])
+we_ev = recv_all(1) + recv_all(2) + [('paired', 1, None), ('processed', 1, True), ('paired', 2, None), ('worker_error', 2, None)]
+A, err = audit(build([1, 2], we_ev, ctr(received_depth=2, received_info=2, received_pose=2, received_meta=2,
+                                          paired=2, processed=1, published=1, worker_error=0)))
+check('worker_error_event_with_zero_counter_fails', A and A['verdict']['通路與對帳'].startswith('FAIL')
+      and 'worker_error 1 次（事件）' in A['verdict']['通路與對帳'] and '≠ 事件 1' in A['verdict']['通路與對帳'], A and A['verdict'])
+ip_ev = recv_all(1) + recv_all(2) + [('paired', 1, None), ('processed', 1, True), ('paired', 2, None),
+                                     ('shutdown_in_progress', 2, None)]
+A, err = audit(build([1, 2], ip_ev, ctr(received_depth=2, received_info=2, received_pose=2, received_meta=2,
+                                          paired=2, processed=1, published=1), worker_alive=False, in_progress=None))
+check('in_progress_event_with_clean_summary_fails', A and 'shutdown_in_progress 1 次（事件）' in A['verdict']['通路與對帳'], A and A['verdict'])
+# 14 功能趟的故障注入集合必須為空
+A, err = audit(build([1], ok_ev, ctr(**ok_c), fault=(7,)))
+check('nonempty_fault_inject_fails', A and '故障注入集合非空' in A['verdict']['通路與對帳'], A and A['verdict'])
+A, err = audit(build([1], ok_ev, ctr(**ok_c), summ_drop=('fault_inject_n',)))
+check('missing_fault_inject_field_fails', A and '缺 fault_inject_n' in A['verdict']['通路與對帳'], A and A['verdict'])
+A, err = audit(build([1], ok_ev, ctr(**ok_c)))
+check('clean_summary_still_passes', A and A['verdict']['通路與對帳'] == 'PASS', A and A['verdict'])
 
 print(f'{len(fails)} 失敗')
 sys.exit(1 if fails else 0)

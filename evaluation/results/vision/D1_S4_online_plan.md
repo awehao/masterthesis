@@ -92,3 +92,16 @@
 
 測試：`test_d1_s4_audit.py` 18/18（含 Codex 反例 paired=2／processed=1／worker_alive=True ⇒ FAIL、received_no_fate 不補成傳輸遺失、worker_error、in-progress、計數器不閉合、兩種分母、覆蓋中斷連續窗、缺真值證據不足、cpu_c、時間欄名）；`test_d1_shadow.py` 34/34（新增 cx=NaN、K 長度、None、位置 NaN／長度）；`test_d1_shadow_node.py`（ROS 整合）通過；`test_d1_shadow_node_fault.py`（`--fault-inject-n`，僅測試用、預設不注入）9/9。
 凍結：`freeze_d1_s4_r2.sha256`（原 `freeze_d1_s4.sha256` 保留不改）。
+
+---
+
+# 修訂 r4（依 Codex 複核；只改稽核判定與執行路徑）
+
+- 通路 PASS 另需：摘要必要欄位存在且型別正確；`worker_alive_at_exit` **明確為 False**（缺值或其他值皆不通過）；
+  `counters.worker_error` 為整數且等於 `worker_error` 事件數；**任何 `worker_error` 或 `shutdown_in_progress` 事件都不得 PASS**（不論摘要內容）；
+  `fault_inject_n` 必須存在且為空（功能趟不得注入）。
+- 測試 `test_d1_s4_audit.py` 25/25：新增摘要缺 worker_alive_at_exit、缺 worker_error 計數、事件有 worker_error 但摘要為 0、
+  事件有 shutdown_in_progress 但摘要清空、注入集合非空、缺注入欄位，以及乾淨摘要仍 PASS。
+- **執行指令（更正；批次腳本會切到工作區根目錄）**：
+  `PLAN=evaluation/results/vision/d1_s4_schedule.tsv FREEZE=evaluation/results/vision/freeze_d1_s4_r3.sha256 BATCH=d1s4 DOMAIN=94 OFFSET_MOVING=1 WRIST_LIVE=1 bash evaluation/run_plan_batch.sh`
+- 凍結 `freeze_d1_s4_r3.sha256`；`freeze_d1_s4.sha256`、`freeze_d1_s4_r2.sha256` 保留不改。

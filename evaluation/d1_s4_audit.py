@@ -96,6 +96,8 @@ def main():
     by_stamp = {tuple(c['stamp']): n for n, c in pubs.items()}
     fate = {n: [] for n in pubs}
     unknown, proc, recv_stamps = [], {}, set()
+    n_we_events = sum(1 for e in evs if e['ev'] == 'worker_error')
+    n_inprog_events = sum(1 for e in evs if e['ev'] == 'shutdown_in_progress')
     recv_by_part = {}
     for e in evs:
         k = e['ev']
@@ -126,7 +128,7 @@ def main():
     # 計數器對帳
     recon = {}
     if summ is not None:
-        C = summ['counters']
+        C = summ.get('counters') if isinstance(summ.get('counters'), dict) else {}
         paired_fates = sum(v for k, v in hist.items()
                            if k.split(':')[0] in TERMINAL_BY_N)
         recon = {
@@ -134,7 +136,8 @@ def main():
                                                  for p in ('depth', 'info', 'pose', 'meta')},
             'paired_counter_vs_terminal_fates': [C.get('paired'), paired_fates],
             'published_equals_processed': C.get('published') == C.get('processed') == len(proc),
-            'worker_error': C.get('worker_error', 0),
+            'worker_error_counter': C.get('worker_error'),
+            'worker_error_events': n_we_events, 'shutdown_in_progress_events': n_inprog_events,
             'worker_alive_at_exit': summ.get('worker_alive_at_exit'),
             'in_progress_at_exit_n': summ.get('in_progress_at_exit_n'),
             'unprocessed_in_slot': summ.get('unprocessed_in_slot'),
@@ -264,7 +267,7 @@ def main():
                         '說法': '命令／資料介面隔離；算圖同步占用模擬主迴圈，不稱算力或時序隔離'}
 
     # ================= 判定
-    rc = recon
+    rc = recon or {}
     fail = []
     if not P:
         fail.append('沒有任何 processed 影格')
@@ -274,16 +277,35 @@ def main():
         fail.append(f'{len(dup)} 格多重去向')
     if unknown:
         fail.append(f'{len(unknown)} 個節點事件對不上來源')
+    # 故障事件：只要紀錄裡出現就不得 PASS（不論摘要怎麼說）
+    if n_we_events:
+        fail.append(f'worker_error {n_we_events} 次（事件）')
+    if n_inprog_events:
+        fail.append(f'shutdown_in_progress {n_inprog_events} 次（事件）')
     if summ is None:
         fail.append('缺節點收尾摘要')
     else:
-        if rc['worker_alive_at_exit']:
-            fail.append('收尾時工作執行緒仍在執行')
-        if rc['worker_error']:
-            fail.append(f"worker_error {rc['worker_error']} 次")
-        if rc['in_progress_at_exit_n'] is not None:
-            fail.append(f"收尾時影格 {rc['in_progress_at_exit_n']} 仍在處理")
-        if not rc['counters_close']:
+        C = summ.get('counters') if isinstance(summ.get('counters'), dict) else None
+        if C is None:
+            fail.append('摘要缺 counters')
+        elif not isinstance(C.get('worker_error'), int) or isinstance(C.get('worker_error'), bool):
+            fail.append('摘要缺 worker_error 計數或型別錯誤')
+        elif C['worker_error'] != n_we_events:
+            fail.append(f"摘要 worker_error {C['worker_error']} ≠ 事件 {n_we_events}")
+        elif C['worker_error']:
+            fail.append(f"worker_error {C['worker_error']} 次（摘要）")
+        if summ.get('worker_alive_at_exit') is not False:          # 必須明確為 False；缺值或其他型別皆不通過
+            fail.append(f"worker_alive_at_exit 不是明確 False（{summ.get('worker_alive_at_exit')!r}）")
+        if 'in_progress_at_exit_n' not in summ:
+            fail.append('摘要缺 in_progress_at_exit_n')
+        elif summ['in_progress_at_exit_n'] is not None:
+            fail.append(f"收尾時影格 {summ['in_progress_at_exit_n']} 仍在處理")
+        fi = summ.get('fault_inject_n')
+        if not isinstance(fi, list):
+            fail.append('摘要缺 fault_inject_n 或型別錯誤')
+        elif fi:
+            fail.append(f'故障注入集合非空 {fi}（功能趟必須為空）')
+        if not rc.get('counters_close'):
             fail.append('節點計數器與事件不閉合')
     obs_gap = bool(out['evidence_gaps'])
     out['verdict'] = {
