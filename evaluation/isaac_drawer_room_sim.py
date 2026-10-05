@@ -970,7 +970,7 @@ def main() -> int:
     wlive = None
     _wlive_done = None
     if a.wrist_live:
-        from wrist_live import WristLive
+        from wrist_live import WristLive, guarded_step, safe_close
         wlive = WristLive(a, stage, ROBOT, walk, hprim, a.urdf, node, a.physics_dt)
     if park_on:
         node.park_gate_pub = node.create_publisher(String, '/park/gate', 10)
@@ -1342,15 +1342,10 @@ def main() -> int:
         node.step_id = step_id
         t_after = float(world.current_time)
         if wlive is not None:
-            # 感知故障不得阻塞控制：擷取端任何例外 ⇒ 記錄並停用腕部擷取，主迴圈照常（D1 S4 r5）
-            try:
-                wlive.on_step(world, t_after, step_id)
-            except Exception as _we:                          # noqa: BLE001
-                import traceback as _tb
-                print(f'[wrist_live] **擷取例外，停用腕部擷取，控制照常**：{_we!r}', flush=True)
-                wlive.fail(t_after, step_id, _we, _tb.format_exc())
-                _wlive_done = wlive
-                wlive = None
+            # 感知故障不得阻塞控制：先停用擷取，再嘗試記錄故障；記錄失敗也不再拋出（D1 S4 r6）
+            wlive, _wl_failed = guarded_step(wlive, world, t_after, step_id)
+            if _wl_failed is not None:
+                _wlive_done = _wl_failed
 
         # ---- 感測與狀態 ----
         if t_after >= next_state - 1e-9:
@@ -1486,10 +1481,9 @@ def main() -> int:
     if cam_csv is not None:
         cam_csv.close()
         print(f'[room] 錄影收尾：共 {n_frame} 幀 → {cam_dir}', flush=True)
-    if wlive is not None:
-        wlive.close()
-    elif _wlive_done is not None:
-        _wlive_done.close()
+    # 相機資料寫出失敗不得阻止 room_run.json 封存
+    if a.wrist_live:
+        safe_close(wlive if wlive is not None else _wlive_done)
     out = os.path.join(a.out, 'room_run.json')
     json.dump(rec, open(out, 'w'), ensure_ascii=False, indent=1, default=str)
     if park_on:

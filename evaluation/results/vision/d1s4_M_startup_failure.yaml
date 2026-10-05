@@ -1,7 +1,7 @@
 # D1 S4 第一趟 d1s4_M：startup_failure（保留實錄，不覆寫）2026-10-05 22:24
 schema: d1_s4_failure/1
 趟次: 'evaluation/runs/d1s4_M（批次 d1s4，凍結 freeze_d1_s4_r3.sha256；status class=startup_failure，運行器 rc 84，守護 rc 84；CPU 峰值 64 °C、熱中止 0）'
-經過: '[wrist_live] 上線（K fx 465.60、cx 320.00）→ 進入主迴圈 → 模擬時間約 18 s、第一次擷取嘗試時模擬器崩潰；導航尚未開始，shadow 節點未收到任何影格'
+經過: '[wrist_live] 上線（K fx 465.60、cx 320.00）→ 進入主迴圈 → **進入主迴圈後第一次擷取時崩潰**，導航尚未開始，shadow 節點未收到任何影格（日誌 [18,337ms] 是應用程式啟動後的牆鐘經過時間，不是模擬時間；依 Codex 更正）'
 根因: >
   wrist_live.py 的 no_new_frame 紀錄寫 list(rf)；主迴圈 render-on-demand 下 Isaac 的 rendering_frame 回傳**整數**
   （V0 每步 render 時是 dict），list(int) ⇒ TypeError。這是擷取端紀錄程式的錯誤，不是控制、偵測或任務結果

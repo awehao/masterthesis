@@ -26,6 +26,49 @@ from d1_shadow_core import OPT, WORLD, PoseHistory, norm_rendering_frame
 from wrist_v0_capture import R_to_wxyz, urdf_chain_T
 
 
+def guarded_step(wl, world, t_after, step_id, log=print):
+    """主迴圈呼叫：擷取端任何例外都不得中斷控制。回傳 (仍啟用的 wl 或 None, 已停用的 wl 或 None)。
+
+    順序固定：**先停用**（回傳 None 讓主迴圈不再呼叫），**再嘗試**記錄故障；記錄本身失敗也只印出、不再拋出。
+    """
+    try:
+        wl.on_step(world, t_after, step_id)
+        return wl, None
+    except Exception as e:                                   # noqa: BLE001
+        try:
+            import traceback
+            tb = traceback.format_exc()
+        except Exception:                                    # noqa: BLE001
+            tb = ''
+        try:
+            log(f'[wrist_live] **擷取例外，停用腕部擷取，控制照常**：{e!r}')
+        except Exception:                                    # noqa: BLE001
+            pass
+        try:
+            wl.fail(t_after, step_id, e, tb)
+        except Exception as e2:                              # noqa: BLE001
+            try:
+                log(f'[wrist_live] 故障記錄本身失敗（已停用擷取，忽略）：{e2!r}')
+            except Exception:                                # noqa: BLE001
+                pass
+        return None, wl
+
+
+def safe_close(wl, log=print):
+    """收尾：相機資料寫出失敗不得阻止任務／物理紀錄封存。回傳是否成功。"""
+    if wl is None:
+        return True
+    try:
+        wl.close()
+        return True
+    except Exception as e:                                   # noqa: BLE001
+        try:
+            log(f'[wrist_live] 收尾寫出失敗（不影響 room_run 封存）：{e!r}')
+        except Exception:                                    # noqa: BLE001
+            pass
+        return False
+
+
 class WristLive:
     def __init__(self, a, stage, robot_root, walk, hprim, urdf, node, physics_dt):
         from isaacsim.sensors.camera import Camera

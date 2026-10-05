@@ -113,3 +113,13 @@
 - rendering_frame 正規化（`norm_rendering_frame`）：主迴圈 render-on-demand 時 Isaac 回傳整數。
 - **感知故障隔離**：模擬器以 try/except 包住 `wlive.on_step`；擷取例外 ⇒ 記 `capture_exception`、停用腕部擷取、控制照常。稽核見到 capture_exception ⇒ 通路 FAIL。
 - 重跑（待 Codex 核可）：`PLAN=evaluation/results/vision/d1_s4_schedule_r2.tsv FREEZE=evaluation/results/vision/freeze_d1_s4_r4.sha256 BATCH=d1s4b DOMAIN=94 OFFSET_MOVING=1 WRIST_LIVE=1 bash evaluation/run_plan_batch.sh`；d1s4_M 保留不覆寫。
+
+---
+
+# 修訂 r6（Codex 複核：例外處置本身也要隔離）
+
+- `wrist_live.guarded_step`：**先停用擷取**（回傳 None 讓主迴圈不再呼叫），再嘗試記錄故障；`fail()` 或記錄函式本身失敗都不再拋出。
+- `wrist_live.safe_close`：相機資料寫出失敗只印出，不阻止 `room_run.json` 封存；模擬器只在 `a.wrist_live` 時呼叫。
+- `test_wrist_live_guard.py` 12/12（fail 失敗、log 失敗、停用後不再呼叫、close 失敗仍封存、靜態檢查呼叫位置與旗標保護）。
+- 重跑（Codex 核可條件：上述反例通過、新凍結吻合）：
+  `PLAN=evaluation/results/vision/d1_s4_schedule_r2.tsv FREEZE=evaluation/results/vision/freeze_d1_s4_r5.sha256 BATCH=d1s4b DOMAIN=94 OFFSET_MOVING=1 WRIST_LIVE=1 bash evaluation/run_plan_batch.sh`
