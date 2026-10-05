@@ -1,0 +1,29 @@
+# PARK_HOLD v2.1 vs MOTM 功能確認（開發版，不算正式樣本）：解析後配置。2026-10-05（由 v2 配置延伸；v1／v2 原檔保留）
+# 依 Codex reviews/20261005_115350_reply.md (d)：功能確認前保存開發版清單與解析後配置；正式凍結另建，不覆寫本檔與歷史清單
+schema: park_hold_v21_dev_config/1
+排程: 'park_hold_v21_func_schedule.tsv：01 PARK_HOLD、02 MOTM（同版本、同環境；各一趟；兩組都帶 OFFSET_MOVING=1）'
+共同:
+  批次: 'run_plan_batch.sh；DOMAIN 94；MOTM_EXTRA_ARGS="--motm-retreat-rate 0.05"（只作用於 MOTM 方法）；MOTM_A_REF_SET=0.004（只作用於 MOTM）'
+  任務: 'BASE_ARGS --standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync --approach-rate 0.02；open_m 0.200（T200）'
+  場景: 'drawer_unit_bar26.yaml；GRASP_DEPTH_M 0.0068；FINGER_COL=split（根部／指片兩凸塊）；手指張開 0.0089 m（URDF 上限）、閉合目標 0.0'
+  控制: 'H5 W-GMPC（N=5、20 Hz、延遲補償 1.6/1.0、γ=1.0、offset-free＋offset-init-static＋**offset-moving（v2.1，兩組共同）**）；限制數值全部沿用'
+  v21: '運動中偏移觀測 d_obs = (q − s) + (dt_p/α)·ṡ；窗口 0.30 s、≥ 5 樣本、各軸 |ṡ_k − 均值| ≤ 0.01 rad/s；靜止路徑不變（park_hold_v21_spec.md）'
+  安全: 'run_guarded.sh 92 °C 熱中止；模擬上限 240 s'
+PARK_HOLD:
+  方法: 'PARK_HOLD（MOTM=0；任務參數同舊 PARK；不帶 MotM 協同）'
+  旗標: 'sim --park-hold；glide --park-stop；mission --park-fixed（閘門等待、滾動下界 0）；wholebody／task --park-hold；solver --park-hold'
+  停位: '-0.136412, 0.560, 1.297349'
+  閘門: '同 v1（hold_s = max(0.5, max_cmd_age_s)；≤ 1 mm/s、≤ 0.01 rad/s、套用 ≤ 1e-6、入場 ≤ 10 mm／0.05 rad、手臂收攏）'
+  保持: '實際轉給全身 → 實際交還導航；相對閘門錨點 ≤ 1 mm／0.5°、實測 ≤ 1 mm/s、≤ 0.01 rad/s（不變）；套用命令 ≤ 伺服上界'
+  停車伺服: 'k_p 2.0 /s、k_yaw 2.0 /s、合線速度上限 5 mm/s（向量限幅）、角速度上限 0.02 rad/s；依 v1 觀察選定、本確認前凍結'
+  求解器: '整時域 u_base = u_hold（l = h）；停用近目標整形；模式閘門 u_prev 在伺服上界內；輸出核對 |發布 − u_hold| ≤ 1e-6'
+  位姿有效性: '每次伺服前核有限、時間戳不在未來、年齡 ≤ 0.2 s；保持期失效 ⇒ 違規中止'
+  減速段停車: '同 v1（k_lin 1.0、回正 ≤ 10 mm/s、鎖存 1.5 mm／0.005 rad／2 mm/s、逾時 30 s）'
+MOTM:
+  方法: 'MOTM（mt_b1 同配置：T2 退開 0.05 m/s＋T3 a_ref 0.004；不加 T1）'
+判定:
+  模式合規: 'park_gate.json（mode PARK_HOLD）hold.verdict = PASS 且 parked_operation_audit control_window（mode hold，閘門錨點、伺服上界）strict_stationary_full_window = True；兩者不一致不得宣告通過'
+  任務: 'motm_physical_check S1–S6（--expect-open-m 0.200）；重播 horizon_replay_check'
+  計時: 'mission.json go_sim_t（第一筆實際發布導航計畫）→ 獨立終端完成'
+失敗處置: '先停下回報，不自動調參、不追加趟次；區分接線／模式違規與證據完整的任務失敗'
+限制: '對準段 finger2—橫桿點雲 −1.8 mm（FK 手指在 0＝閉合；實際張開 8.9 mm）列未解；閉合前若量到非預期接觸先中止回報'
