@@ -1,0 +1,82 @@
+schema: dl0_paths_registration/1
+date: '2026-10-05'
+rule: Codex DL0 draft-2 審查：1 條開發補充＋2 條封存測試觀測序列；只渲染；腳本合成姿態照實標示；相機設定不變
+camera: URDF 掛載、640×480、hfov 69°、clipping 0.05–10 m、5 Hz（run_wrist_v0.sh 預設）
+handle: drawer_unit_bar26，抽屜關閉；把手中心 (0, 1.165, 0.55)、軸 x
+sequences:
+  dev_near:
+    用途: 開發補充（標註核對、訓練）
+    design: 正面；距離 0.40→0.20 m 兩端入鏡，0.20→0.13 m 裁切過渡；相機略高 3 cm；左右偏移 ±4 cm 正弦
+    file: evaluation/results/vision/dl0_paths/dev_near.json
+    sha256: d49adbabca7238ed7e5bee2610befc31764439f9f1bbdd54fe9e58ee9e6951b3
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 51
+    n_phys_steps: 1000
+    sim_t_window:
+    - 10.0
+    - 19.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.021
+    max_base_yaw_step_rad_per_frame: 0.038
+    dist_m_range:
+    - 0.133
+    - 0.401
+    predicted_categories（FK 投影，非渲染）:
+      full: 47
+      truncated: 4
+  test_lateral:
+    用途: 封存測試（模型與門檻凍結前不看）
+    design: 側向接近：觀看方位 35°（由 −x 側），2.0→0.2 m，再 2 s 0.2→0.12 m 裁切過渡；前 2 s 朝外、1 s 轉向；相機高於把手 5 cm
+    file: evaluation/results/vision/dl0_paths/test_lateral.json
+    sha256: 56691129763de9e1a3d6fc40864b87300ba8671b9c096f8873b7db9b6701c020
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 86
+    n_phys_steps: 1700
+    sim_t_window:
+    - 10.0
+    - 26.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.599
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.13
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 67
+      truncated: 6
+  test_view:
+    用途: 封存測試（模型與門檻凍結前不看）
+    design: 正面接近、改觀測朝向：相機高於把手（俯視，最高 0.30 m）、目標偏離把手 0.1·d、滾轉 30°；2.0→0.2 m，再 2 s 0.2→0.12 m 裁切過渡；前 2 s 朝外、1 s 轉向
+    file: evaluation/results/vision/dl0_paths/test_view.json
+    sha256: 9cb5e0366794246512afd0cc315adfe8b2c872fd6a5de04146828be40286d65f
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.25
+    n_frames_5hz: 86
+    n_phys_steps: 1700
+    sim_t_window:
+    - 10.0
+    - 26.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.089
+    ik_rot_err_deg_max: 0.003
+    max_joint_step_rad_per_frame: 0.316
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.12
+    - 2.0
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 11
+      truncated: 6
+      full: 69
+capture_commands:
+  dev_near: ROS_DOMAIN_ID=95 RUN_ID=dl0_dev_near RUNNER=evaluation/run_wrist_v0.sh WRIST_EXTRA='--wrist-replay $WS/evaluation/results/vision/dl0_paths/dev_near.json --wrist-replay-t0 10.0 --wrist-replay-t1
+    19.99' bash evaluation/run_guarded.sh
+  test_lateral: ROS_DOMAIN_ID=95 RUN_ID=dl0_test_lateral RUNNER=evaluation/run_wrist_v0.sh WRIST_EXTRA='--wrist-replay $WS/evaluation/results/vision/dl0_paths/test_lateral.json --wrist-replay-t0 10.0 --wrist-replay-t1
+    26.99' bash evaluation/run_guarded.sh
+  test_view: ROS_DOMAIN_ID=95 RUN_ID=dl0_test_view RUNNER=evaluation/run_wrist_v0.sh WRIST_EXTRA='--wrist-replay $WS/evaluation/results/vision/dl0_paths/test_view.json --wrist-replay-t0 10.0 --wrist-replay-t1
+    26.99' bash evaluation/run_guarded.sh
+test_sealing: test_lateral／test_view 擷取後只做技術完整性檢查（影格數、時間匹配、檔案雜湊）；不跑標籤、不跑辨識、不看影像做取捨；模型與門檻凍結前不查看；不得依辨識結果更換路徑

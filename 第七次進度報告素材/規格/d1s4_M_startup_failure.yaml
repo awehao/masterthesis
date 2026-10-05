@@ -1,0 +1,13 @@
+# D1 S4 第一趟 d1s4_M：startup_failure（保留實錄，不覆寫）2026-10-05 22:24
+schema: d1_s4_failure/1
+趟次: 'evaluation/runs/d1s4_M（批次 d1s4，凍結 freeze_d1_s4_r3.sha256；status class=startup_failure，運行器 rc 84，守護 rc 84；CPU 峰值 64 °C、熱中止 0）'
+經過: '[wrist_live] 上線（K fx 465.60、cx 320.00）→ 進入主迴圈 → **進入主迴圈後第一次擷取時崩潰**，導航尚未開始，shadow 節點未收到任何影格（日誌 [18,337ms] 是應用程式啟動後的牆鐘經過時間，不是模擬時間；依 Codex 更正）'
+根因: >
+  wrist_live.py 的 no_new_frame 紀錄寫 list(rf)；主迴圈 render-on-demand 下 Isaac 的 rendering_frame 回傳**整數**
+  （V0 每步 render 時是 dict），list(int) ⇒ TypeError。這是擷取端紀錄程式的錯誤，不是控制、偵測或任務結果
+暴露的設計缺口: '擷取端例外會直接終止模擬器 ⇒ 控制也中斷，違反「感知故障不得阻塞控制」'
+修正（r5）:
+  - 'd1_shadow_core.norm_rendering_frame：dict／tuple／int／None 正規化成整數串列；全零或無法解析 ⇒ None（test_d1_shadow 新增 6 項）'
+  - 'isaac_drawer_room_sim.py：wlive.on_step 以 try/except 包住；例外 ⇒ 記 capture_exception、停用腕部擷取、主迴圈照常；收尾仍寫 wrist_live/meta.json'
+  - 'd1_s4_audit.py：capture.jsonl 有 capture_exception ⇒ 通路 FAIL（test_d1_s4_audit 新增 1 項，共 26）'
+處置: '依批次規則已停批、不自動重跑；請 Codex 決定是否以新趟次 d1s4b_M（新排程 d1_s4_schedule_r2.tsv、凍結 freeze_d1_s4_r4.sha256）重跑一趟'
