@@ -968,6 +968,7 @@ def main() -> int:
     node = Bridge()
     node.wb_latest = None
     wlive = None
+    _wlive_done = None
     if a.wrist_live:
         from wrist_live import WristLive
         wlive = WristLive(a, stage, ROBOT, walk, hprim, a.urdf, node, a.physics_dt)
@@ -1341,7 +1342,15 @@ def main() -> int:
         node.step_id = step_id
         t_after = float(world.current_time)
         if wlive is not None:
-            wlive.on_step(world, t_after, step_id)
+            # 感知故障不得阻塞控制：擷取端任何例外 ⇒ 記錄並停用腕部擷取，主迴圈照常（D1 S4 r5）
+            try:
+                wlive.on_step(world, t_after, step_id)
+            except Exception as _we:                          # noqa: BLE001
+                import traceback as _tb
+                print(f'[wrist_live] **擷取例外，停用腕部擷取，控制照常**：{_we!r}', flush=True)
+                wlive.fail(t_after, step_id, _we, _tb.format_exc())
+                _wlive_done = wlive
+                wlive = None
 
         # ---- 感測與狀態 ----
         if t_after >= next_state - 1e-9:
@@ -1479,6 +1488,8 @@ def main() -> int:
         print(f'[room] 錄影收尾：共 {n_frame} 幀 → {cam_dir}', flush=True)
     if wlive is not None:
         wlive.close()
+    elif _wlive_done is not None:
+        _wlive_done.close()
     out = os.path.join(a.out, 'room_run.json')
     json.dump(rec, open(out, 'w'), ensure_ascii=False, indent=1, default=str)
     if park_on:

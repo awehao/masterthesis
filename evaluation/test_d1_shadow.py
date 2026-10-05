@@ -49,6 +49,16 @@ h3.add(1.0, [0, 0, 0], [1, 0, 0, 0])
 h3.add(1.0, [1, 0, 0], [1, 0, 0, 0])
 check('duplicate_time_ambiguous', h3.match(1.0)[1] == 'ambiguous_pose_match')
 
+# ---------------------------------------------------------------- rendering_frame 正規化（d1s4_M 崩潰：主迴圈回傳 int）
+from d1_shadow_core import norm_rendering_frame  # noqa: E402
+check('rf_int', norm_rendering_frame(42) == [42])
+check('rf_dict', norm_rendering_frame({'referenceTimeNumerator': 7, 'referenceTimeDenominator': 60}) == [7, 60])
+check('rf_tuple', norm_rendering_frame((3, 60)) == [3, 60])
+check('rf_zero_is_none', norm_rendering_frame(0) is None and norm_rendering_frame((0, 0)) is None)
+check('rf_none_and_bad', norm_rendering_frame(None) is None and norm_rendering_frame('x') is None
+      and norm_rendering_frame({'referenceTimeNumerator': None}) is None)
+check('rf_change_detect', norm_rendering_frame(42) != norm_rendering_frame(43) and norm_rendering_frame(42) == norm_rendering_frame(42))
+
 # ---------------------------------------------------------------- PairBuffer
 pb = PairBuffer(cap=3, timeout_s=1.0)
 k1 = (10, 0)

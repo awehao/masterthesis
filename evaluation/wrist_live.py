@@ -22,7 +22,7 @@ import time
 
 import numpy as np
 
-from d1_shadow_core import OPT, WORLD, PoseHistory
+from d1_shadow_core import OPT, WORLD, PoseHistory, norm_rendering_frame
 from wrist_v0_capture import R_to_wxyz, urdf_chain_T
 
 
@@ -110,13 +110,12 @@ class WristLive:
         rms = (time.perf_counter() - w0) * 1e3
         self.render_ms.append(rms)
         rfd = fr.get('rendering_frame')
-        rf = ((rfd.get('referenceTimeNumerator'), rfd.get('referenceTimeDenominator'))
-              if isinstance(rfd, dict) else rfd)
+        rf = norm_rendering_frame(rfd)               # dict／tuple／int 皆可；全零或無法解析 ⇒ None
         dep = fr.get('distance_to_image_plane')
-        if rf is None or rf == self.last_rf or rf == (0, 0) or dep is None:
+        if rf is None or rf == self.last_rf or dep is None:
             self.cnt['no_new_frame'] += 1
-            self._log(ev='no_new_frame', t_after=t_after, step=step_id, render_ms=rms,
-                      rf=None if rf is None else list(rf))
+            self._log(ev='no_new_frame', t_after=t_after, step=step_id, render_ms=rms, rf=rf,
+                      rf_raw=repr(rfd)[:80])
             return
         self.last_rf = rf
         t_r = fr.get('rendering_time')
@@ -127,7 +126,7 @@ class WristLive:
         if why is not None:
             self.cnt['rejected'] += 1
             self._log(ev='rejected', why=why, t_after=t_after, step=step_id, rendering_time=t_r,
-                      render_ms=rms, rf=list(rf))
+                      render_ms=rms, rf=rf)
             return
         self.n += 1
         n = self.n
@@ -155,7 +154,7 @@ class WristLive:
         ps.pose.position.x, ps.pose.position.y, ps.pose.position.z = (float(v) for v in hp['pos'])
         ps.pose.orientation.w, ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z = \
             (float(v) for v in hp['quat'])
-        meta = {'n': n, 'stamp': [st.sec, st.nanosec], 'rendering_frame': [int(v) for v in rf],
+        meta = {'n': n, 'stamp': [st.sec, st.nanosec], 'rendering_frame': list(rf),
                 'source_wall_t': src_wall}
         self.p_dep.publish(Im)
         self.p_ci.publish(ci)
@@ -164,12 +163,18 @@ class WristLive:
         self.cnt['published'] += 1
         self._log(ev='published', n=n, stamp=meta['stamp'], rendering_time=t_cap, pose_t=hp['t'],
                   pose_step=hp['step'], t_after=t_after, step=step_id, read_minus_render_s=t_after - t_cap,
-                  render_ms=rms, source_wall_t=src_wall, rf=list(rf))
+                  render_ms=rms, source_wall_t=src_wall, rf=rf)
         self.truth.write(json.dumps({'n': n, 'stamp': meta['stamp'], 't_cap': t_cap,
                                      'handle_center_world_at_capture': hp['truth'],
                                      'cam_pos_world': hp['pos'].tolist(),
                                      'cam_quat_wxyz_world': hp['quat'].tolist()}) + '\n')
         self.truth.flush()
+
+    def fail(self, t_after, step_id, exc, tb):
+        """擷取端例外：記錄後由主迴圈停用本物件（控制不受影響）。"""
+        self.cnt['capture_exception'] = self.cnt.get('capture_exception', 0) + 1
+        self.meta['capture_exception'] = {'t_after': t_after, 'step': step_id, 'why': repr(exc), 'traceback': tb[-2000:]}
+        self._log(ev='capture_exception', t_after=t_after, step=step_id, why=repr(exc))
 
     def close(self):
         r = np.asarray(self.render_ms, float)

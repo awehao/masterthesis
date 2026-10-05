@@ -56,6 +56,29 @@ class PoseHistory:
         return hits[0], None
 
 
+def norm_rendering_frame(rfd):
+    """Isaac 的 rendering_frame 正規化成整數串列（不可解析 ⇒ None）。
+
+    V0 重播模式（每步 render）回傳 dict（referenceTimeNumerator／Denominator）；主迴圈 render-on-demand 時
+    實測回傳**整數**（d1s4_M 2026-10-05 因 list(int) 崩潰）。也接受 tuple／list。全零視為「沒有影格」⇒ None。
+    """
+    if rfd is None:
+        return None
+    if isinstance(rfd, dict):
+        v = [rfd.get('referenceTimeNumerator'), rfd.get('referenceTimeDenominator')]
+    elif isinstance(rfd, (list, tuple)):
+        v = list(rfd)
+    else:
+        v = [rfd]
+    try:
+        v = [int(x) for x in v]
+    except (TypeError, ValueError):
+        return None
+    if not v or all(x == 0 for x in v):
+        return None
+    return v
+
+
 # ------------------------------------------------------------------ 節點端：配對
 def stamp_key(sec, nanosec):
     return (int(sec), int(nanosec))

@@ -200,5 +200,12 @@ check('missing_fault_inject_field_fails', A and '缺 fault_inject_n' in A['verdi
 A, err = audit(build([1], ok_ev, ctr(**ok_c)))
 check('clean_summary_still_passes', A and A['verdict']['通路與對帳'] == 'PASS', A and A['verdict'])
 
+# 15 模擬器端擷取例外（腕部擷取停用、控制照常）⇒ 通路不得 PASS
+R15 = build([1], ok_ev, ctr(**ok_c))
+with open(os.path.join(R15, 'wrist_live', 'capture.jsonl'), 'a') as f:
+    f.write(json.dumps({'ev': 'capture_exception', 't_after': 30.0, 'step': 3000, 'why': "TypeError('x')"}) + '\n')
+A, err = audit(R15)
+check('capture_exception_fails', A and '擷取端例外 1 次' in A['verdict']['通路與對帳'], A and A['verdict'])
+
 print(f'{len(fails)} 失敗')
 sys.exit(1 if fails else 0)

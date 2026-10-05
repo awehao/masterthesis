@@ -84,7 +84,8 @@ def main():
     pubs = {c['n']: c for c in cap if c['ev'] == 'published'}
     rej = [c for c in cap if c['ev'] == 'rejected']
     src = {'attempts': len(cap), 'published': len(pubs), 'rejected': len(rej),
-           'no_new_frame': sum(1 for c in cap if c['ev'] == 'no_new_frame'), 'rejected_why': {}}
+           'no_new_frame': sum(1 for c in cap if c['ev'] == 'no_new_frame'),
+           'capture_exception': [c for c in cap if c['ev'] == 'capture_exception'], 'rejected_why': {}}
     for c in rej:
         src['rejected_why'][c['why']] = src['rejected_why'].get(c['why'], 0) + 1
     src['new_frame_capture_rate_sim_hz'] = rate([c['rendering_time'] for c in pubs.values()])
@@ -277,6 +278,8 @@ def main():
         fail.append(f'{len(dup)} 格多重去向')
     if unknown:
         fail.append(f'{len(unknown)} 個節點事件對不上來源')
+    if src['capture_exception']:
+        fail.append(f"擷取端例外 {len(src['capture_exception'])} 次（腕部擷取中途停用）：{src['capture_exception'][0].get('why')}")
     # 故障事件：只要紀錄裡出現就不得 PASS（不論摘要怎麼說）
     if n_we_events:
         fail.append(f'worker_error {n_we_events} 次（事件）')

@@ -105,3 +105,11 @@
 - **執行指令（更正；批次腳本會切到工作區根目錄）**：
   `PLAN=evaluation/results/vision/d1_s4_schedule.tsv FREEZE=evaluation/results/vision/freeze_d1_s4_r3.sha256 BATCH=d1s4 DOMAIN=94 OFFSET_MOVING=1 WRIST_LIVE=1 bash evaluation/run_plan_batch.sh`
 - 凍結 `freeze_d1_s4_r3.sha256`；`freeze_d1_s4.sha256`、`freeze_d1_s4_r2.sha256` 保留不改。
+
+---
+
+# 修訂 r5（d1s4_M startup_failure 之後；見 d1s4_M_startup_failure.yaml）
+
+- rendering_frame 正規化（`norm_rendering_frame`）：主迴圈 render-on-demand 時 Isaac 回傳整數。
+- **感知故障隔離**：模擬器以 try/except 包住 `wlive.on_step`；擷取例外 ⇒ 記 `capture_exception`、停用腕部擷取、控制照常。稽核見到 capture_exception ⇒ 通路 FAIL。
+- 重跑（待 Codex 核可）：`PLAN=evaluation/results/vision/d1_s4_schedule_r2.tsv FREEZE=evaluation/results/vision/freeze_d1_s4_r4.sha256 BATCH=d1s4b DOMAIN=94 OFFSET_MOVING=1 WRIST_LIVE=1 bash evaluation/run_plan_batch.sh`；d1s4_M 保留不覆寫。
