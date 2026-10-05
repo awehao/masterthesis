@@ -1,0 +1,11 @@
+# GC1 測試勘誤與補核紀錄（2026-10-06）——原凍結測試與清單不改寫
+schema: gc1_test_erratum/1
+對象: 'evaluation/test_geometry_contract.py::rigid_equivariance_with_yaw（freeze_gc1_offline.sha256 所列版本）'
+問題: '距離相等判準只檢查原姿態一側配對的 AABB 標記；旋轉後另一側可能改用 AABB 下界，導致把 AABB 下界與證書距離相比。屬測試比較口徑問題，不是已證實的核心幾何錯誤；凍結當次測試恰好通過。'
+發現: 'GC2 測試第一版以相同口徑比較時失敗（7.55 mm），改為兩側皆為證書值才比較後通過。'
+補核:
+  規則: '兩側皆為證書值才比較距離；含 AABB 下界的配對略過距離相等判準，但分類須一致'
+  範圍: 'GC1 測試同四組變換（rotz 0.7、rotz −2.1、兩組 default_rng(0) 隨機剛體），開度 0.05、s 0.02，split_model 與 gap_guard、s0 與 s'
+  結果: {可比較配對: 96, 略過含AABB: 1024, 最大距離差_m: 8.18e-9, 分類全部一致: true}
+  核對者: 'Codex 先行補核（reviews/20261006_013709_reply.md）；Claude 以同規則獨立重算，數字一致'
+處置: '不另立 GC1 核心版本、不重跑模擬；原凍結測試與清單不改寫，本紀錄隨 GC2 封存。'

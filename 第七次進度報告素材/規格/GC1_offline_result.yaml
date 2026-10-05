@@ -1,0 +1,38 @@
+# GC1 手指—抽屜靜態局部幾何契約：純函式＋離線測試結果（2026-10-06；規格 GC1_geometry_contract_spec.md draft-3）
+schema: gc1_offline_result/1
+狀態: 'GC1 手指—抽屜靜態局部幾何契約：純函式離線驗收完成。基準開爪目標通過 split 模型與網格保守補查；尚未接入控制，不代表整機碰撞安全、軌跡可達或物理夾持成功。'
+審查: 'r1 未通過（reviews/20261006_010818_reply.md）；r2 核可封存（reviews/20261006_012707_reply.md）'
+凍結: 'results/vision/freeze_gc1_offline.sha256（程式、測試、契約、draft-3 規格、結果與鎖定相依檔）；NumPy／SciPy 版本見 results/vision/gc1_env_versions.txt'
+範圍說明: '52 項通過只代表已測案例；gap_guard 是離線保守補查，不是已修正的模擬碰撞模型。'
+程式: 'evaluation/geometry_contract.py；契約檔 evaluation/geometry_contract_bar26_split.yaml（鎖 7 個檔的 sha256：資產、URDF、兩手指 STL、finger_collision、drawer_asset、object_target_geometry）'
+測試: 'evaluation/test_geometry_contract.py r2 52/52（r1 38/38 未通過審查）；DL1 test_object_target_geometry 58/58、test_finger_collision 10/10 不受影響；全部約 5 s，不跑模擬'
+基準_phf_01_M:
+  設定: 'T_WO 平移 (0, 1.45, 0)、開度 0、grasp_depth 0.0068、s = 0 與 0.03'
+  抓取相容_s0: {桿心_手指z_mm: 22.5, 指片z範圍_mm: [8.3, 26.8], 首次接觸手指位置_mm: [1.80, 1.80], 每側全開餘裕_mm: [7.10, 7.10], 根部凸塊頂到桿_沿接近軸_mm: 2.7, 桿軸對夾爪x傾角_deg: 0.0031}
+  碰撞_split_model: 's0 與 s 各 56 對（4 手指凸塊 × 14 物體形狀）全 separated；手指凸塊到橫桿 7.10 mm（指片）、5.10 mm（根部）；指片到面板 35.7 mm'
+  碰撞_gap_guard: 's0 與 s 各 84 對（2 指 × 3 段 × 14）全 separated；到橫桿最近 5.10 mm'
+  餘裕語意: '每側全開餘裕＝沿閉合方向的剩餘行程（q_open − q_contact），不是一般法向淨空'
+方法: >
+  交疊：半空間 Chebyshev LP（HiGHS）。距離：6 變數凸 QP（SLSQP），不憑 success——約束殘差 ≤ 1e-9、分離平面證書上下界間隙 ≤ 1e-7 m，否則 indeterminate。
+  圓柱：內接／外切 256 邊稜柱夾擠（半徑差約 1 µm）。AABB 間距 > 50 mm 的配對只回報 AABB 下界。
+  開口相容不設角度門檻：逐手指沿閉合方向二分到首次接觸（內接／外切兩次），取每側餘裕；實錄抓取（IK 殘差）的橫桿軸與閉合方向 |cos| = 1.14×10⁻⁵，draft-2 的 |cos| ≤ 1e-6 會誤拒，故改用接觸求解；相對夾爪 x 軸的傾角約 5.38×10⁻⁵ rad（0.0031°），只回報。
+新發現:
+  split未完整包含網格: >
+    finger_collision.split_hulls 的根部凸塊頂 z = 6.8 mm、指片凸塊底 z = 8.3 mm（網格在兩者之間沒有頂點層）：(a) 31 個三角形跨越 z = 8 mm，分界帶材料不屬任一凸塊；
+    (b) 長三角形在 z 6.8／8.3 截面上的部分落在兩凸塊外，最多 2.65 mm（根部側）／2.04 mm（指片側），位置在手指外側倒角（y 11.3–15.3 mm），不在夾持內面。
+    finger_collision 註解「不留縫」不成立。不改 finger_collision、不重跑歷史趟次；契約以三段裁切凸包（gap_guard）補查並納入放行。
+    r1 的「分界帶保守凸包」只取兩頂點層，不保守（Codex 核對 84 點在外、最大 1.38 mm），已作廢、保留為測試反例。
+  根部距離: '資產檔頭的 1.5 mm 用名目分界 8 mm；模型實際（根部凸塊頂 6.8 mm）沿接近軸 2.7 mm、3D 凸體距離 5.10 mm。只回報，不稱安全餘裕。'
+  支柱位置抓取: '在 x = 0.085（支柱處）抓取靜態上不碰：支柱高 24 mm < 桿徑 26 mm，開爪時落在兩指之間。'
+  未換算H′限制: >
+    未換算的 H′ 參數（R_HH′ = diag(1,−1,−1)）只因退讓變為向內而被拒（s = 30 mm 手指穿入面板）。只看 s = 0 時，等於繞橫桿軸翻 180° 的抓取，
+    手指從桿與面板之間（40 mm 空隙）進入，對只含手指的契約幾何相容——夾爪殼未核對，本包不能排除此碰撞（GC2 處理）。
+反例: >
+  桿 Ø20 ⇒ 兩指 never_contacts；桿 Ø44 ⇒ 全開即交疊＋觸及根部＋穿透；桿心 z 6 ⇒ 深度不相容＋根部穿透；桿心 z 30 ⇒ 桿心不在指片內；
+  向內退讓 50 mm ⇒ s 目標穿透面板（s0 不受影響）；frame 標記錯 ⇒ handle_frame_mismatch；外部 T_WH 偏 1 mm ⇒ offline_input_inconsistent；
+  T_EG 非單位 ⇒ 不支援；資產改 1 byte（暫存複本）⇒ contract_version_mismatch:asset；解析方塊／圓柱距離 ≤ 1e-6 m、交疊回 penetrating 不回距離 0；
+  9 個參數位置 × 8 種雜訊輸入無原生例外。拒絕原因全部列出，不在第一個就停。
+  r2 補：契約缺 finger_collision／drawer_asset／object_target_geometry 任一項、z_split 不符、contract_id 缺、files 型別錯、路徑替換 ⇒ contract_incomplete；
+  手造 {'ok': True} 或缺鍵 ⇒ contract_incomplete；方塊交疊 1 µm 判 contact（語意＝容差內接觸或微小交疊，不是嚴格零穿透）。
+不能宣稱: '整機碰撞安全、軌跡可達、物理夾持成功；夾爪殼／手臂／展開軌跡；旋轉擺放的 USD 建置（build_usd 只支援平移，含 yaw 的只做離線等變）；實體夾爪（只代表官方網格）'
+正式說法候選: 'bar26＋split 手指在指定開爪目標下，通過局部靜態幾何契約核對；不代表整機碰撞安全、軌跡可達或物理夾持成功。'

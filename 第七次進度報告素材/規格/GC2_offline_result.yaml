@@ -1,0 +1,23 @@
+# GC2 夾爪殼＋腕部相機／支架凸包靜態核對：結果（2026-10-06；規格 GC2_gripper_shell_spec.md draft-2）
+schema: gc2_offline_result/1
+狀態: '指定基準與 30 mm 退讓目標通過手指、夾爪殼及腕部相機／支架的局部靜態核對；指定翻轉案例被殼與相機凸包核對保守拒絕。不代表原網格必然碰撞、整機碰撞安全、軌跡可達或物理夾持成功。'
+審查: 'Codex 核可封存（reviews/20261006_013709_reply.md）；GC 系列到此暫停'
+凍結: 'results/vision/freeze_gc2_offline.sha256（GC2 程式、測試、契約、規格、結果、版本紀錄、兩網格、GC1 凍結清單、GC1 測試勘誤）'
+程式: 'evaluation/gripper_shell_check.py（呼叫 GC1 凍結函式，不改 GC1）；契約 evaluation/geometry_contract_gc2_shell.yaml（鎖 shell.stl、d435_with_cam_stand.stl、GC1 凍結清單）'
+測試: 'evaluation/test_gripper_shell_check.py 22/22；GC1 52/52 不變；不跑模擬'
+形狀: >
+  夾爪殼＝URDF uflite_gripper_link collision（shell.stl，4406 頂點）；相機／支架＝link_eef collision（整個 d435_with_cam_stand.stl，96 頂點）。
+  變換由 URDF 導出：gripper_fix 零位移、兩者 collision origin 零、scale 1 ⇒ 兩網格皆直接在夾爪連桿座標；未用相機光學座標。各以整網格凸包核對（⊇ 網格，測試核對）。
+  模擬近似未讀回；只對網格凸包下結論。
+相依驗證: '載入時重算 GC2 契約三檔＋GC1 凍結清單 14 個檔案逐項；GC1 程式改 1 byte 而清單未改 ⇒ gc1_freeze_entry_mismatch'
+結果:
+  基準_s0: {整體: 通過, 手指: 通過, 殼: '14 對全 separated，殼到桿 7.15 mm', 相機支架: '14 對全 separated，到桿 35.8 mm'}
+  退讓30mm: {整體: 通過, 殼: '全 separated，到桿 37.15 mm', 相機支架: '全 separated'}
+  翻轉_未換算H′_s0: {整體: 拒絕, 手指: '通過（同 GC1 限制）', 殼: 'front_panel 凸包穿透', 相機支架: 'front_panel 凸包穿透'}
+說明: >
+  三類目標的預期在規格中是假設；以上為實測。翻轉案例的拒絕來自凸包交疊，只代表保守核對拒絕，不證明原網格或實際模擬一定碰撞。
+  只測一個翻轉案例（R_HH′ = diag(1,−1,−1)），不代表所有翻轉或對稱抓取。
+其他測試: 'indeterminate 與 penetrating 拒絕原因分開（以強制 indeterminate 分類器核對）；含 yaw 剛體等變（證書距離差 ≤ 2e-7 m）；殼 STL／GC1 凍結檔／GC1 清單竄改各自拒絕；7 參數 × 8 雜訊輸入無原生例外、無誤收'
+揭露: 'GC1 已凍結測試的等變比較口徑問題見 GC1_test_erratum.yaml：雙側證書值補核 96 對最大差 8.18e-9 m、分類一致；GC1 不改。'
+不能宣稱: '整機碰撞安全、軌跡可達、物理夾持成功；手臂連桿、展開／接近軌跡；模擬實際碰撞近似；所有翻轉或對稱抓取'
+驗收用語候選: '在指定基準與退讓目標下，夾爪殼及腕部相機／支架通過凸包靜態核對；指定翻轉案例被凸包核對拒絕（保守拒絕，非碰撞證明）。不代表整機碰撞安全、軌跡可達或物理夾持成功。'

@@ -103,3 +103,13 @@ $$T_{WE}^{pre}(s)=T_{WH}\;\mathrm{Trans}(s\,\hat a_H)\;T_{HG}\;T_{EG}^{-1}$$
 
 ### 範圍
 夾爪相容與碰撞模型一起轉換留後續子包；輸出一律標 `geometry_contract: 'unchecked'`，不能據此放行控制或宣稱可達。
+
+---
+
+# 實作審查 r1 → r2 修正（Codex 四項必修；規格增訂）
+
+1. **把手座標唯一約定**＝資產 prim 座標：x 沿橫桿、y 指向物體內側（−外側法向）、z = x×y。`handle_pose_from_partial` 的 `normal_W` 為**外側**法向，組姿採同一約定（bar26 未旋轉 ⇒ R_WH = I）。
+   若上游使用其他把手座標 H'：`reparam_grasp(T_HG, a_H, C)`，C = T_{H H'}，T_{H'G} = C⁻¹T_{HG}、a_{H'} = R_Cᵀ a_H；不得直接共用參數（混用反例：46.4 mm）。
+2. **嚴格容差**：剛體底列純絕對容差 1e-12；測試的 ≤1e-12 宣稱以最大絕對誤差判定。
+3. **拒絕介面**：所有公開函式回 dict（ok／why），不拋原生例外；中心、候選、參考旋轉皆驗證。`symmetric_equivalents` 改回 dict（`candidates`）；`choose_candidate` 改回 dict（`index`、`distances`）。
+4. **同分規則**：先算全體最小 d_min，取 d ≤ d_min + 1e-9 rad 的第一個候選。

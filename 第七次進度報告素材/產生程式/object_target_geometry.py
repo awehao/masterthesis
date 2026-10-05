@@ -2,6 +2,11 @@
 """DL1：物體局部座標的工具目標生成（純函式；第二階段計畫 §4.4、§9.13.3；規格 results/vision/DL1_object_target_spec.md）。
 
 記號：`T_AB` 把 **B 座標表示的點轉到 A**（p_A = T_AB · p_B）。
+
+**把手座標 H 的唯一約定（與資產 prim 座標相同）**：x 沿橫桿、y 指向物體內側（與前板外側法向相反）、z = x × y。
+未旋轉的 bar26 抽屜在此約定下 R_WH = I，與既有基準 `T_HG`、`a_H` 相容。若上游使用其他把手座標 H'，
+須以 `reparam_grasp(T_HG, a_H, C)`（C = T_{H H'}）同步換算抓取參數，不得直接共用。
+**公開介面一律回傳 dict（ok／why），不拋出原生例外。**
 抓取約束 T_WE·T_EG = T_WH·T_HG ⇒ 工具目標
 
     T_WE_pre(s) = T_WH · Trans(s · a_H) · T_HG · T_EG⁻¹
@@ -39,7 +44,7 @@ def rigid(T, name, t_max=None):
         raise Reject(f'{name}_shape_{T.shape}')
     if not np.isfinite(T).all():
         raise Reject(f'{name}_nonfinite')
-    if not np.allclose(T[3], [0.0, 0.0, 0.0, 1.0], atol=1e-12):
+    if float(np.max(np.abs(T[3] - np.array([0.0, 0.0, 0.0, 1.0])))) > 1e-12:     # 純絕對容差（不用 allclose 的相對容差）
         raise Reject(f'{name}_bottom_row')
     R = T[:3, :3]
     if abs(float(np.linalg.det(R)) - 1.0) > 1e-6 or np.abs(R.T @ R - np.eye(3)).max() > 1e-6:
@@ -124,7 +129,9 @@ def opened_handle_pose(T_WH0, u_H, q, q_min, q_max):
 # ------------------------------------------------------------------ 部分觀測
 def handle_pose_from_partial(center_W, axis_W, normal_W=None, axis_ref_W=None, center_is_center=True,
                              return_candidates=False):
-    """只有中心＋橫桿軸時組把手姿態：x＝橫桿軸、y＝前板法向（指向外側）、z＝x×y。
+    """只有中心＋橫桿軸時組把手姿態（**與資產 prim 約定相同**）：x＝橫桿軸、y＝指向物體內側＝−（前板外側法向）、z＝x×y。
+
+    `normal_W` 為前板**外側**法向。
 
     * 法向只補繞橫桿軸的滾轉，**不決定橫桿軸號**；號由 `axis_ref_W` 決定（夾角 > 60° ⇒ 歧義）。
     * 歧義時：return_candidates=True ⇒ 回兩個等價候選（不選號）；否則拒絕。
@@ -132,7 +139,12 @@ def handle_pose_from_partial(center_W, axis_W, normal_W=None, axis_ref_W=None, c
     try:
         if not center_is_center:
             raise Reject('point_not_center')
-        c = np.asarray(center_W, float).reshape(3)
+        try:
+            c = np.asarray(center_W, float)
+        except (TypeError, ValueError):
+            raise Reject('center_not_numeric')
+        if c.shape != (3,):
+            raise Reject(f'center_shape_{c.shape}')
         if not np.isfinite(c).all():
             raise Reject('center_nonfinite')
         ax = unit(axis_W, 'axis_W')
@@ -143,7 +155,7 @@ def handle_pose_from_partial(center_W, axis_W, normal_W=None, axis_ref_W=None, c
             raise Reject('normal_parallel_axis')
 
         def build(x):
-            y = n - (n @ x) * x
+            y = -(n - (n @ x) * x)                         # 內側＝−外側法向（資產約定）
             y /= np.linalg.norm(y)
             z = np.cross(x, y)
             T = np.eye(4)
@@ -184,23 +196,53 @@ def geodesic(Ra, Rb):
 
 def symmetric_equivalents(T_HG, sym_axis_H, order):
     """依給定對稱模型（繞把手座標 sym_axis_H 的 order 重旋轉對稱）產生**幾何等價候選**（不是已驗證可抓取）。"""
-    T_HG = rigid(T_HG, 'T_HG', T_MAX_M)
-    ax = unit(sym_axis_H, 'sym_axis_H')
-    if int(order) != order or order < 1:
-        raise Reject('order_invalid')
-    out = []
-    for k in range(int(order)):
-        S = np.eye(4)
-        S[:3, :3] = _rot_about(ax, 2 * math.pi * k / order)
-        out.append(S @ T_HG)
-    return out
+    try:
+        T_HG = rigid(T_HG, 'T_HG', T_MAX_M)
+        ax = unit(sym_axis_H, 'sym_axis_H')
+        if not isinstance(order, (int, np.integer)) or order < 1:
+            raise Reject('order_invalid')
+        out = []
+        for k in range(int(order)):
+            S = np.eye(4)
+            S[:3, :3] = _rot_about(ax, 2 * math.pi * k / order)
+            out.append(S @ T_HG)
+        return {'ok': True, 'candidates': out, 'note': '依給定對稱模型的幾何等價候選，未驗證可抓取'}
+    except Reject as r:
+        return {'ok': False, 'why': r.why}
 
 
 def choose_candidate(cands_WE, R_ref):
-    """與參考旋轉測地距離最小者；同分（差 ≤ 1e-9 rad）取索引最小者。回傳 (index, distances)。"""
-    d = [geodesic(np.asarray(R_ref, float), np.asarray(T, float)[:3, :3]) for T in cands_WE]
-    best = 0
-    for i in range(1, len(d)):
-        if d[i] < d[best] - TIE_RAD:
-            best = i
-    return best, d
+    """先算全體最小測地距離 d_min，再取 d ≤ d_min + 1e-9 rad 的**第一個**候選。回傳 dict（ok、index、distances 或 why）。"""
+    try:
+        try:
+            n_c = len(cands_WE)
+        except TypeError:
+            raise Reject('candidates_not_sequence')
+        if n_c == 0:
+            raise Reject('no_candidates')
+        Rr = np.eye(4)
+        try:
+            Rr[:3, :3] = np.asarray(R_ref, float)
+        except (TypeError, ValueError):
+            raise Reject('R_ref_shape')
+        rigid(Rr, 'R_ref')
+        Ts = [rigid(T, f'candidate_{i}') for i, T in enumerate(cands_WE)]
+        d = [geodesic(Rr[:3, :3], T[:3, :3]) for T in Ts]
+        dmin = min(d)
+        idx = next(i for i, v in enumerate(d) if v <= dmin + TIE_RAD)
+        return {'ok': True, 'index': idx, 'distances': d}
+    except Reject as r:
+        return {'ok': False, 'why': r.why}
+
+
+def reparam_grasp(T_HG, a_H, C):
+    """上游把手座標 H' 與本檔約定 H 不同時換算抓取參數。C = T_{H H'}（H' 座標的點轉到 H）。
+
+    T_{H'G} = C⁻¹ · T_{HG}，a_{H'} = R_Cᵀ · a_H。回傳 dict。"""
+    try:
+        T_HG = rigid(T_HG, 'T_HG', T_MAX_M)
+        a = unit(a_H, 'a_H')
+        C = rigid(C, 'C', T_MAX_M)
+        return {'ok': True, 'T_HG': np.linalg.inv(C) @ T_HG, 'a_H': C[:3, :3].T @ a}
+    except Reject as r:
+        return {'ok': False, 'why': r.why}

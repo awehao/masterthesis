@@ -1,0 +1,225 @@
+schema: dl3_control_config/1
+source_run: d1s4b_M（S4 正式趟，DONE；MotM、WGMPC_N 5、FINGER_COL split、bar26、GRASP_DEPTH_M 0.0068、WRIST_LIVE 1）
+source_batch_log_head:
+- '[22:30:16] === 批次 d1s4b 排程 evaluation/results/vision/d1_s4_schedule_r2.tsv（sha256 1f4a9c54ad7e91a5）domain=94 ==='
+- '[22:30:16] 批次腳本 sha256 1fc29b2187731410；凍結清單 evaluation/results/vision/freeze_d1_s4_r5.sha256（c43afda92c9574a9）；kernel 7.0.0-31-generic'
+- '[22:30:16] --- idx 01 d1s4b_M（T200 open_m=0.200 MOTM N=5，A M先）起跑'
+- '[22:30:16]     環境 {"kernel": "7.0.0-31-generic", "platform_profile": "balanced", "epp": "balance_performance", "governor": "powersave", "driver": "amd-pstate-epp", "boost": "1", "ac_online": "1", "cpu_mhz_avg_at_start":
+  1492, "cpu_c_at_start": 45.375}'
+- '[22:30:16]     方法 MOTM：MOTM=1 MOTM_A_REF=（預設） 任務參數 --standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync --approach-rate 0.02 --motm-w-qn 0.8 --motm-w-vref-pre 0.3'
+- '[22:32:55]     d1s4b_M 結束：class=executed 運行器 rc=0 守護 rc=0；[22:32:55] 運行器離開碼 0；CPU 峰值 85 °C；熱中止 0 次；守護離開碼 0'
+- '[22:32:55]   清殘留 PID=54929 /opt/ros/jazzy/lib/nav2_lifecycle_manager/lifecycle_manager --ros-args -r __node'
+- '[22:32:55]   清殘留 PID=54933 /opt/ros/jazzy/lib/nav2_velocity_smoother/velocity_smoother --ros-args -p use_si'
+batch_script:
+  path: evaluation/run_plan_batch.sh
+  sha256: 1fc29b21877314103a4dfb27645836498f6fa46f897dd41c0875a59b1dc922d3
+  note: 與 d1s4b_M 同一版（freeze_d1_s4_r5）
+guard:
+  path: evaluation/run_guarded.sh
+  sha256: e7255c87d405bac0d4c78704909a57602bf537531500941b7eb273394950910d
+  thermal_abort_c: 92
+runner:
+  path: evaluation/run_nav_handover_dl3.sh
+  sha256: 69d0504788bb28d94cdaab577ca7af1ac31edfa51e47511dde8d61909486f78d
+  derived_from:
+    path: evaluation/run_nav_handover.sh
+    sha256: 090c0eb48c9470b0dab9ae8fa07da73280dad7514155190a4a7652c5facce78a
+  diff: 視覺節點 dl3_vision_target_node.py；任務節點 dl3_drawer_task_node.py＋DL3_TASK_ARGS；求解節點 dl3_wgmpc_wg2_node.py --require-topic-target；明設 OFFSET_MOVING=1 與其餘 9 個環境值（見 pinned_env）
+task_node:
+  path: evaluation/dl3_drawer_task_node.py
+  sha256: e8c949be44b7821fffa4f29fd19fd545bd095c0305a02f7480866d83c015050d
+  derived_from:
+    path: evaluation/drawer_task_node.py
+    sha256: d158be89deab69f794e1e0ddf5192c177720a9d099051729ae0bd2c0d654d4b2
+  resolved_args_from_source_run:
+    urdf: /home/howardchen/masterthesis/evaluation/models/omni_bot_wholebody_expanded.urdf
+    tcp: link_tcp
+    park: -0.136412,0.560,1.297349
+    start: -2.80,-3.20,1.5708
+    q_grasp: -0.0321,0.9177,1.4853,-0.3580,-1.0325,-1.3813
+    open_m: 0.2
+    band_half_m: 0.005
+    grasp_depth_m: 0.0068
+    standoff_m: 0.03
+    pre_tol_m: 0.005
+    approach_rate: 0.02
+    opening_floor_tol_m: 1.0e-05
+    pre_ramp_mps: 0.03
+    pre_settle_s: 0.5
+    grip_tol_m: 0.002
+    grip_settle_s: 0.5
+    close_ramp_s: 1.0
+    finger_open: 0.0089
+    finger_closed: 0.0
+    contact_min_n: 0.5
+    attach_hold_s: 2.0
+    release_max_n: 0.1
+    release_hold_s: 0.5
+    inject_abort_at_s: -1.0
+    restow_gain: 1.0
+    restow_qd_max: 0.3
+    restow_mode: sync
+    j3_last_tol: 0.05
+    rate: 20.0
+    timeout_s: 900.0
+    motm: true
+    motm_park_tol: 0.2
+    motm_v_cap: 0.03
+    motm_a_ref: 0.002
+    motm_k_yaw: 1.0
+    motm_w_cap: 0.1
+    motm_w_vref_pre: 0.3
+    motm_no_soft_start: false
+    motm_v_creep: 0.004
+    motm_overshoot: 0.03
+    motm_w_vref: 0.03
+    motm_w_qn: 0.8
+    motm_w_a: 0.01
+    motm_w_p: 200.0
+    motm_v_pull: 0.018
+    motm_a_travel: 0.02
+    motm_arm_share: 0.06
+    motm_retreat_rate: null
+    motm_v_back: 0.008
+    motm_acc_lin: 0.05
+    motm_acc_ang: 0.2
+    park_fixed: false
+    park_hold: false
+    R_grasp:
+    - - -0.9999999985504833
+      - -1.1407633152216157e-05
+      - -5.262033151418351e-05
+    - - -5.262001424266425e-05
+      - -2.7810714503048232e-05
+      - 0.9999999982288489
+    - - -1.1409096541015185e-05
+      - 0.9999999995482147
+      - 2.781011419304107e-05
+  dl3_extra_args: --handle-source vision --stop-at-pregrasp（--pregrasp-rot-tol-rad 0.02、--post-stop-record-s 3.0、--post-stop-wall-cap-s 15.0 為預設）
+  pre_lock_targets: 鎖定前不發任何目標（審查必修 1）；不再使用地圖先驗
+solver:
+  path: evaluation/dl3_wgmpc_wg2_node.py
+  sha256: 4700373c279f6acfd9e58030de3b2ac8377f1b5381ab180bd26e726a90db040c
+  derived_from:
+    path: evaluation/wgmpc_wg2_node.py
+    sha256: 411cc26676dde618ef7320392e7e75dffd452be765e68ddd219253f7199874a7
+  extra_args: --require-topic-target
+  resolved_args_from_source_run:
+    urdf: /home/howardchen/masterthesis/evaluation/models/omni_bot_wholebody_expanded.urdf
+    tcp: link_tcp
+    N: 5
+    rate: 20.0
+    target: null
+    target_offset:
+    - 0.0
+    - 0.0
+    - 0.0
+    reach_pos_m: 0.005
+    reach_rot_rad: 0.02
+    hold_s: 2.0
+    target_rot: null
+    continuous: true
+    offset_free: true
+    offset_tau_s: 0.5
+    offset_moving: true
+    offset_gate_rad: 0.002
+    offset_init_static: true
+    offset_max_rad: 0.05
+    cmd_topic: /wgmpc/cmd_world
+    target_topic: /drawer/tcp_target
+    coord_topic: /wgmpc/coord
+    coord_max_age_s: 0.5
+    target_max_age_s: 0.5
+    target_rot_deg: 0.0
+    duration_s: 600.0
+    duration_sim_s: 400.0
+    near_target_gamma: 1.0
+    near_target_deadband_m: 0.0
+    near_target_deadband_rad: 0.0
+    cmd_env: false
+    run_id: ''
+    delay_comp_state_cycles: 1.6
+    delay_comp_cmd_cycles: 1.0
+    use_applied_for_predict: false
+    delay_comp_cycles: 0.0
+    sim_stall_wall_s: 10.0
+    max_input_age: 0.2
+    hist_age: 0.5
+    u_prev_policy: strict
+    pump_budget: 32
+    pump_wait_s: 0.002
+    assume_initial_rest: true
+    base_fixed: false
+    park_hold: false
+    park_uprev_tol: 1.0e-06
+    park_out_tol: 1.0e-06
+    solver_kind: wgmpc
+    b1_kp: 1.0
+    arm_model: setpoint
+    arm_ident: /home/howardchen/masterthesis/evaluation/results/wgmpc_arm_sp_ident_free4.json
+    w_s: 0.001
+    w_a: 0.05
+    margin_guard: true
+    mg_max_qp_fail: 10
+    mg_max_breach: 5
+    w_s_arm: 0.05
+    w_s_base: null
+    no_row_scaling: false
+    handshake_timeout_s: 20.0
+    phys_dt: 0.01
+    out: /home/howardchen/masterthesis/evaluation/runs/d1s4b_M/align_solver.json
+    wait_for_drawer_handover: true
+    drawer_start_timeout_s: 240.0
+  note: 命令列其餘與 d1s4b_M 相同；跑後以 dl3_run_check.py 逐項比對落盤參數（含 offset_moving＝True）
+vision_node:
+  path: evaluation/dl3_vision_target_node.py
+  sha256: fecf1270134f26a2de1da45265ef0a8b66c4ab3c0c4af8772ea3733f1a1c7728
+  estimator:
+    path: evaluation/dl2_obs_to_target.py
+    sha256: 71d5d3e5ef3e4a03225705ae91c7675ef437ad13f75362a5ac597511e535126c
+  latch:
+    path: evaluation/dl3_latch.py
+    sha256: bfd2b401056b19585da1d2fc7e628e1eeba26bed0457c42e3eb088bf39e6ed46
+    W_s: 5.0
+    k: 3
+    d_tol_m: 0.005
+    a_tol_deg: 3.0
+  hooks:
+    path: evaluation/dl3_task_vision.py
+    sha256: 0b3ee187ee2dd3ec5541318ca2d108d55b844dc8b70b6d77c3fb7bc482bf0a52
+    joint_margin_rad: 0.05
+environment_for_batch:
+  RUNNER: evaluation/run_nav_handover_dl3.sh
+  WRIST_LIVE: '1'
+  DL3_TASK_ARGS: --handle-source vision --stop-at-pregrasp
+  PLAN: evaluation/results/vision/dl3_schedule.tsv
+  FREEZE: evaluation/results/vision/freeze_dl3_run.sha256（核可後建立）
+  BATCH: dl3v
+  DOMAIN: 94
+  note: 其餘環境值由 run_nav_handover_dl3.sh 明設，不依賴父 shell
+success_criteria_vs_locked_target:
+  pos_m: 0.005
+  rot_rad: 0.02
+  hold_s: 0.5
+  source: pre_tol_m、求解節點 reach_rot_rad、pre_settle_s 既有值
+only_differences_from_source_run:
+- 把手目標來源（ALIGN 用視覺鎖定；鎖定前不發目標）
+- 視覺節點（S4 shadow → DL3 目標節點）
+- 求解節點待命條件（--require-topic-target）
+- --stop-at-pregrasp（pre 完成即受控停止）
+pinned_env_in_runner:
+  OFFSET_MOVING: '1'
+  CAM_HZ: '10'
+  CONTACT_MIN_N: '0.5'
+  CTRL_HZ: '20.0'
+  GLIDE_KYAW: '0.30'
+  GLIDE_WZMAX: '0.10'
+  SIM_LIMIT: '240'
+  WB_POS_TOL: '0.005'
+  WHEEL_FIT: project（來源趟未落盤，採啟動腳本預設）
+  POST_STOP_HOLD_S: '3'
+  STOP_WAIT_S: '30'
+  INJECT_ABORT_AT_S: unset
+post_run_check:
+  path: evaluation/dl3_run_check.py
+  sha256: cb166070a3bb2430abdfc60890465211a5ddea375135cf9d6eedd7b65d679b03

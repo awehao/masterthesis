@@ -1,0 +1,37 @@
+# DL2 視覺觀測 → 物體局部座標目標候選：離線串接結果（2026-10-06；規格 DL2_obs_to_target_spec.md draft-2）
+schema: dl2_dev_result/1
+狀態: 'DL2 觀測到局部座標目標：離線串接原型驗收完成。尚未接入控制；碰撞、可達性、新鮮度及閉迴路執行未驗收。'
+審查: 'r1 未通過封存（reviews/20261006_015246_reply.md）；r2 核可、拒絕列時間小修後直接封存（reviews/20261006_015650_reply.md）'
+凍結: 'results/vision/freeze_dl2_offline.sha256'
+範圍說明: '不把第二階段 DL2 全部進入條件一起打勾；只代表本離線串接原型。'
+定位: '在同一把手的兩個開發觀測序列中，幾何與學習式觀測結合明示方向及抓取先驗，可生成物體局部座標下的工具目標候選；候選生成率與接受後誤差已逐格量測。尚未驗收碰撞、可達性、新鮮度或閉迴路執行。'
+程式: 'evaluation/dl2_obs_to_target.py（估計端，輸入白名單）；evaluation/dl2_eval.py（評估端，真值只在此）'
+測試: 'evaluation/test_dl2_obs_to_target.py r3 36/36（r1 28 項＋內參形狀／深度維度／非正焦距／零軸線／相機在分界面無法判定朝向／時間戳保留＋拒絕列時間與原始時間）'
+結果檔: >
+  r2 results/vision/DL2_dev_eval_r2.json：逐格保存 T_WH、T_WE_s0、T_WE_s、normal_W、候選索引與選擇距離、geometry_contract、freshness；
+  時間分欄（t_obs＝重播擷取 rendering_time、query_t＝同一時刻、age_s 0；read_time、pose_time、來源實錄 src_record_t 另存）；共用配置（T_HG、a_H、工具參考旋轉）與 7 個程式／輸入版本雜湊。
+  與 r1（results/vision/DL2_dev_eval.json，保留不改）的分箱統計與逐格誤差逐值相同。
+  r3 results/vision/DL2_dev_eval_r3.json（封存版）：拒絕列也保存 t_obs／query_t／age_s 與原始時間 time_raw（431 筆拒絕全有時間）；與 r2 的判定、統計、候選逐值相同。r2 保留不改。
+資料: >
+  DL0_dev_eval_v3.json（雜湊在 freeze_dl0_model_v2.sha256）的兩開發群組 traj_wg4b_f02_P 87 格、traj_mt_b1_02_P 99 格，186 格全部有去向：
+  全為正樣本（負樣本 0、排除 0、證據不足 0）；真值全為逐格 handle_center_world_at_capture，未用靜態回補。偵測結果不重算。
+候選產生率_兩群組合併:
+  G0/N-obs:   {0.1-0.4: 2/54, 0.4-1.0: 37/40, 1.0-2.0: 33/34, 2.0-3.0: 12/36, '>3.0': 0/22}
+  G0/N-prior: {0.1-0.4: 2/54, 0.4-1.0: 37/40, 1.0-2.0: 33/34, 2.0-3.0: 13/36, '>3.0': 0/22}
+  L1/N-obs:   {0.1-0.4: 2/54, 0.4-1.0: 38/40, 1.0-2.0: 27/34, 2.0-3.0: 5/36, '>3.0': 0/22}
+  L1/N-prior: {0.1-0.4: 2/54, 0.4-1.0: 38/40, 1.0-2.0: 27/34, 2.0-3.0: 5/36, '>3.0': 0/22}
+拒絕覆蓋: >
+  候選缺失幾乎全來自偵測器（center_missing＝L2 不可得、no_candidate、L1 路徑的 fit_failed／mask_too_small／candidate_filter）；
+  N-obs 在偵測成功的影格中只拒絕 1 格（G0、2.6 m，normal_unobservable），其餘與 N-prior 的候選集合相同。
+誤差_0.4至3m_候選: >
+  G0（N-obs，n 82）：中心中位 2.81 mm；軸向角中位 0.46°；s = 0 TCP 位置中位 2.78／p95 5.78 mm；s = 0.03 中位 2.92 mm。
+  L1（N-obs，n 70）：中心中位 2.46 mm；軸向角中位 0.30°；s = 0 TCP 中位 2.47／p95 4.10 mm；s = 0.03 中位 2.44 mm。
+  繞軸滾轉：N-prior 0（構造上與模擬的鉛直前板一致）；N-obs 最大 0.17°（G0）／1.87°（L1）。
+  軸號一致：候選全數一致——來自 design_grasp_reference 先驗，不代表辨識出物體正反方向。
+解讀限制: >
+  滾轉誤差近 0 是因模擬前板正好鉛直、深度無雜訊，與先驗一致；不代表對傾斜前板或實機深度穩健。
+  同一把手、同一資產、開發資料（mt_b1_02_P 曾為 D1 S3 保留集，但在 DL0 已作開發用途）；不是新測試、泛化或實機。
+  目標一律 geometry_contract: unchecked、freshness: not_accepted；未呼叫 GC1／GC2。
+  G0 與 L1 的接受集合不同，不能用 2.78 與 2.47 mm 的中位數宣稱學習式方法較準。
+  本包沒有負樣本，不能支持背景誤接受能力；相機世界位姿仍來自模擬器。
+不能宣稱: '可執行、可達、無碰撞、新鮮度足以接控制、閉迴路、跨物件泛化、辨識出物體正反'

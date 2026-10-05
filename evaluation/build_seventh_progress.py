@@ -12,6 +12,13 @@
   06 抽查修正前後（12 張遠距 fix）
   07 第一版學習式遮罩訓練：開發等權 IoU 與損失
   08 開發評估：G0／G1／L1 分距離箱中心有效率與誤差中位、L1 遮罩 IoU
+  09 封存測試一次開封（DL0_test_eval.json；開封紀錄後才畫）
+  10 GC1 手指—抽屜靜態局部幾何契約：夾爪截面（全開／首次接觸）與核對值（geometry_contract.py 現算）
+
+  11 GC2 夾爪殼＋腕部相機／支架凸包靜態核對：三類指定目標側視（gripper_shell_check.py 現算）
+  12 DL2 視覺觀測 → 局部座標目標：四路徑候選率與 TCP 誤差（DL2_dev_eval.json）
+
+    python3 evaluation/build_seventh_progress.py 10      # 只重畫指定圖
 **封存測試（dl0_test_lateral／dl0_test_view）不讀、不畫。**
 """
 from __future__ import annotations
@@ -255,13 +262,181 @@ def fig09():
     save(fig, '09_封存測試開封_G0G1L1_中心有效率與誤差.png')
 
 
+
+# ---------------------------------------------------------------- 10
+def fig10():
+    from scipy.spatial import ConvexHull
+    sys.path.insert(0, os.path.join(WS, 'src', 'ammr_wholebody_mpc'))
+    import geometry_contract as GC
+    from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics
+    K = WholeBodyKinematics.from_urdf_file(os.path.join(HERE, 'models', 'omni_bot_wholebody_expanded.urdf'))
+    Rg = K.fk(np.array([-0.136412, 0.560, 1.297349, -0.0321, 0.9177, 1.4853, -0.3580, -1.0325, -1.3813]), 'link_tcp')[:3, :3]
+    C = GC.load_contract()
+    T_WO = np.eye(4)
+    T_WO[:3, 3] = [0.0, 1.45, 0.0]
+    T_HG = np.eye(4)
+    T_HG[:3, :3] = Rg
+    T_HG[:3, 3] = [0.0, 0.0068, 0.0]
+    r = GC.check(C, T_WO, 0.0, T_HG, [0.0, -1.0, 0.0], 0.03)
+    g = r['grasp_compat']
+    T_WE = r['targets']['s0']
+    z_f = C['grip']['finger_joint1']['xyz'][2]
+    T_gl = T_WE @ np.linalg.inv(GC.OT.trans(C['grip']['joint_tcp']['xyz']))
+    bar_g = np.linalg.inv(T_gl) @ np.r_[T_WO[:3, 3] + C['bar_c'], 1.0]       # 桿心在夾爪連桿座標
+    fig, axs = plt.subplots(1, 2, figsize=(10.5, 4.4), sharey=True)
+    cols = {'base': C2, 'blade': C1}
+    for ax, qf, ttl in ((axs[0], C['q_open'], f"全開（手指 {C['q_open'] * 1e3:.1f} mm）"),
+                        (axs[1], np.mean(g['finger1_contact_q_mm']) * 1e-3, f"首次接觸（手指 {np.mean(g['finger1_contact_q_mm']):.2f} mm）")):
+        for i in (1, 2):
+            off = C['grip'][f'finger_joint{i}']['axis'] * qf
+            for part in ('base', 'blade'):
+                V = C['fingers'][i][part] + off
+                P = V[:, [1, 2]] * 1e3
+                h = ConvexHull(P)
+                ax.fill(P[h.vertices, 0], P[h.vertices, 1], color=cols[part], alpha=0.35, lw=0)
+                ax.plot(np.r_[P[h.vertices, 0], P[h.vertices[0], 0]], np.r_[P[h.vertices, 1], P[h.vertices[0], 1]], color=cols[part], lw=1.2)
+        z0, z1 = C['band'][1]['z_mm']
+        ax.axhspan(z0, z1, color=MUTED, alpha=0.18, lw=0)
+        cy, cz = bar_g[1] * 1e3, (bar_g[2] - z_f) * 1e3
+        th = np.linspace(0, 2 * np.pi, 200)
+        ax.fill(cy + C['bar_r'] * 1e3 * np.cos(th), cz + C['bar_r'] * 1e3 * np.sin(th), color=C3, alpha=0.35, lw=0)
+        ax.plot(cy + C['bar_r'] * 1e3 * np.cos(th), cz + C['bar_r'] * 1e3 * np.sin(th), color=C3, lw=1.4)
+        ztcp = (C['grip']['joint_tcp']['xyz'][2] - z_f) * 1e3
+        ax.axhline(ztcp, color=INK2, lw=0.8, ls='--')
+        ax.text(27, ztcp + 0.6, f'TCP（z {ztcp:.1f}）', fontsize=8, color=INK2, ha='right')
+        ax.set_title(ttl, fontsize=10)
+        ax.set_aspect('equal')
+        ax.set_xlim(-28, 28)
+        ax.set_ylim(-2, 40)
+        ax.set_xlabel('夾爪閉合方向 y (mm)')
+    axs[0].set_ylabel('接近方向 z，手指連桿座標 (mm)')
+    axs[0].annotate('', xy=(20.1, cz), xytext=(13.0, cz), arrowprops=dict(arrowstyle='<->', color=INK, lw=0.9))
+    axs[0].text(16.5, cz + 1.0, f"{g['finger1_open_margin_mm']:.1f}", ha='center', fontsize=8.5, color=INK)
+    axs[0].text(-27, z1 + 0.5, f'分界帶 z {z0}–{z1} mm（split 凸塊未含；gap_guard 補查）', fontsize=7.5, color=INK2)
+    axs[0].text(-27, 37.5, f"桿 Ø{2 * C['bar_r'] * 1e3:.0f} mm，桿心 z {g['bar_center_z_finger_mm']:.1f} mm\n"
+                f"每側全開餘裕 {g['finger1_open_margin_mm']:.1f}／{g['finger2_open_margin_mm']:.1f} mm\n"
+                f"根部凸塊頂到桿（沿接近軸）{g['root_gap_along_approach_mm']:.1f} mm", fontsize=8, color=INK, va='top')
+    from matplotlib.patches import Patch
+    axs[1].legend(handles=[Patch(color=C1, alpha=0.5, label='指片凸塊'), Patch(color=C2, alpha=0.5, label='根部凸塊'),
+                           Patch(color=C3, alpha=0.5, label='橫桿 bar26')], frameon=False, fontsize=8, loc='upper right')
+    n_pairs = sum(len(v) for v in r['pairs'].values())
+    fig.suptitle('GC1 手指—抽屜靜態局部幾何契約：bar26＋split 手指，phf_01_M 抓取（s = 0）截面', fontsize=11)
+    fig.text(0.01, -0.08, f"凸塊投影到夾爪 y–z 平面（實際核對在 3D）。s = 0 與 s = 30 mm 共 {n_pairs} 個手指×物體配對全為 separated；gap_guard（split 兩凸塊未包含的網格材料，三段裁切凸包）168 對亦全為 separated。\n"
+             "通過＝局部靜態幾何契約核對，不代表整機碰撞安全、軌跡可達或物理夾持成功。夾爪殼、手臂不在範圍內。"
+             "\n來源：geometry_contract.py、geometry_contract_bar26_split.yaml。", fontsize=7.5, color=MUTED, wrap=True)
+    save(fig, '10_GC1_手指抽屜靜態幾何契約_截面.png')
+
+
+
+# ---------------------------------------------------------------- 11
+def fig11():
+    from scipy.spatial import ConvexHull
+    sys.path.insert(0, os.path.join(WS, 'src', 'ammr_wholebody_mpc'))
+    import geometry_contract as GC
+    import gripper_shell_check as G2
+    from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics
+    K = WholeBodyKinematics.from_urdf_file(os.path.join(HERE, 'models', 'omni_bot_wholebody_expanded.urdf'))
+    Rg = K.fk(np.array([-0.136412, 0.560, 1.297349, -0.0321, 0.9177, 1.4853, -0.3580, -1.0325, -1.3813]), 'link_tcp')[:3, :3]
+    C2 = G2.load_contract2()
+    C1 = C2['gc1']
+    T_WO = np.eye(4)
+    T_WO[:3, 3] = [0.0, 1.45, 0.0]
+    T_HG = np.eye(4)
+    T_HG[:3, :3] = Rg
+    T_HG[:3, 3] = [0.0, 0.0068, 0.0]
+    fl = GC.OT.reparam_grasp(T_HG, [0.0, -1.0, 0.0], np.diag([1.0, -1.0, -1.0, 1.0]))
+    rb = G2.check2(C2, T_WO, 0.0, T_HG, [0.0, -1.0, 0.0], 0.03)
+    rf = G2.check2(C2, T_WO, 0.0, fl['T_HG'], fl['a_H'], 0.0)
+    cases = [('基準抓取 s = 0', rb, 's0'), ('退讓 30 mm', rb, 's'), ('翻轉抓取（未換算 H′）s = 0', rf, 's0')]
+    O = GC.object_shapes(C1, T_WO, 0.0)
+    fig, axs = plt.subplots(1, 3, figsize=(12.5, 3.5), sharey=True)
+
+    def poly(ax, V, color, alpha=0.3, lw=1.0, ls='-'):
+        P = V[:, [1, 2]] * 1e3
+        h = ConvexHull(P)
+        ax.fill(P[h.vertices, 0], P[h.vertices, 1], color=color, alpha=alpha, lw=0)
+        ax.plot(np.r_[P[h.vertices, 0], P[h.vertices[0], 0]], np.r_[P[h.vertices, 1], P[h.vertices[0], 1]], color=color, lw=lw, ls=ls)
+    for ax, (ttl, r, tag) in zip(axs, cases):
+        for k, (kind, S) in O.items():
+            if kind == 'poly' and (k.startswith('drawer/front') or 'post' in k):
+                poly(ax, S['V'], MUTED, 0.25)
+        poly(ax, O['drawer/handle_bar'][1]['outer']['V'], C3, 0.4)
+        T = r['fingers']['targets'][tag]
+        S = G2.part_shapes(C2, T)
+        poly(ax, S['shell']['V'], C1c := '#2a78d6', 0.22)
+        poly(ax, S['camera_assembly']['V'], '#7a5fd0', 0.18, ls='--')
+        for k, V in GC.finger_shapes(C1, T, C1['q_open']).items():
+            poly(ax, V['V'], C2c := '#eb6834', 0.45, 0.8)
+        pen = [k.split('|')[0] + '↔' + k.split('|')[1].split('/')[-1]
+               for part in ('shell', 'camera_assembly') for k, v in r[part][tag].items() if v['status'] == 'penetrating']
+        sep = r['shell'][tag]['shell|drawer/handle_bar']
+        msg = ('凸包穿透：\n' + '\n'.join(pen)) if pen else f"全部 separated\n殼到桿 {sep['d_lo'] * 1e3:.1f} mm"
+        ax.set_title(ttl, fontsize=10)
+        ax.text(0.02, 0.03, msg, transform=ax.transAxes, fontsize=8, color=INK if not pen else '#c0392b')
+        ax.set_aspect('equal')
+        ax.set_xlim(1450 - 285 - 170, 1450 - 285 + 120)
+        ax.set_ylim(470, 640)
+        ax.set_xlabel('世界 y (mm)（右＝櫃內）')
+    axs[0].set_ylabel('世界 z (mm)')
+    from matplotlib.patches import Patch
+    fig.legend(handles=[Patch(color='#2a78d6', alpha=0.4, label='夾爪殼凸包'), Patch(color='#7a5fd0', alpha=0.35, label='相機／支架凸包'),
+                           Patch(color='#eb6834', alpha=0.5, label='手指 split 凸塊'), Patch(color=C3, alpha=0.5, label='橫桿'),
+                           Patch(color=MUTED, alpha=0.4, label='面板／支柱')], frameon=False, fontsize=8, loc='lower center', ncol=5, bbox_to_anchor=(0.5, -0.08))
+    fig.suptitle('GC2 夾爪殼＋腕部相機／支架凸包靜態核對：三類指定目標（側視投影）', fontsize=11)
+    fig.text(0.01, -0.17, '投影到世界 y–z 平面僅供示意，核對在 3D 進行。翻轉抓取時手指本身通過 GC1，但殼與相機凸包穿入面板而被拒；凸包交疊只代表保守核對拒絕，'
+             '不證明原網格或實際模擬一定碰撞。\n只測一個翻轉案例，不代表所有翻轉或對稱抓取。來源：gripper_shell_check.py、geometry_contract_gc2_shell.yaml。',
+             fontsize=7.5, color=MUTED)
+    save(fig, '11_GC2_夾爪殼相機凸包靜態核對_三類目標.png')
+
+
+
+# ---------------------------------------------------------------- 12
+def fig12():
+    d = json.load(open(os.path.join(VIS, 'DL2_dev_eval.json')))
+    routes = ['G0/N-obs', 'G0/N-prior', 'L1/N-obs', 'L1/N-prior']
+    cols = {'G0/N-obs': C1, 'G0/N-prior': '#8fb8ea', 'L1/N-obs': C2, 'L1/N-prior': '#f3b08f'}
+    bins = ['0.1-0.4', '0.4-1.0', '1.0-2.0', '2.0-3.0', '3.0-99.0']
+    lbl = ['0.1–0.4', '0.4–1.0', '1.0–2.0', '2.0–3.0', '> 3.0']
+    fig, axs = plt.subplots(1, 2, figsize=(11, 3.8))
+    x = np.arange(len(bins))
+    w = 0.2
+    for k, rt in enumerate(routes):
+        n = [sum(d['groups'][g][rt][b]['n_positive'] for g in d['groups']) for b in bins]
+        c = [sum(d['groups'][g][rt][b]['n_candidate'] for g in d['groups']) for b in bins]
+        axs[0].bar(x + (k - 1.5) * w, [ci / ni for ci, ni in zip(c, n)], w * 0.9, color=cols[rt], label=rt)
+    for i, b in enumerate(bins):
+        n = sum(d['groups'][g]['G0/N-obs'][b]['n_positive'] for g in d['groups'])
+        axs[0].text(i, 1.04, f'n={n}', ha='center', fontsize=8, color=INK2)
+    axs[0].set_xticks(x)
+    axs[0].set_xticklabels([l + ' m' for l in lbl], fontsize=8)
+    axs[0].set_ylim(0, 1.15)
+    axs[0].set_title('候選產生率（分母＝正樣本影格）', fontsize=10)
+    axs[0].legend(frameon=False, fontsize=8, loc='center right', ncol=1)
+    data, labels = [], []
+    for rt in routes:
+        v = [r['routes'][rt]['err']['tcp_s0_mm'] for g in d['groups'] for r in d['groups'][g]['rows']
+             if r['routes'][rt]['ok']]
+        data.append(v)
+        labels.append(f'{rt}\n(n={len(v)})')
+    bp = axs[1].boxplot(data, widths=0.5, patch_artist=True, showfliers=True, medianprops=dict(color=INK))
+    for patch, rt in zip(bp['boxes'], routes):
+        patch.set_facecolor(cols[rt])
+        patch.set_alpha(0.7)
+    axs[1].set_xticks(range(1, 5))
+    axs[1].set_xticklabels(labels, fontsize=8)
+    axs[1].set_ylabel('mm')
+    axs[1].set_title('抓取目標（s = 0）TCP 位置誤差', fontsize=10)
+    fig.suptitle('DL2 視覺觀測 → 物體局部座標目標候選（兩開發群組 186 格；描述性）', fontsize=11, y=1.04)
+    fig.text(0.01, -0.1, '候選缺失主要來自偵測器沒有中心（L2）；N-obs 只多拒絕 1 格。繞軸滾轉誤差近 0 是因模擬前板正好鉛直、與先驗一致，不代表對傾斜前板穩健；'
+             '軸號一致來自設計抓取參考先驗，不是辨識出正反。\n未核對碰撞、可達性、新鮮度；目標標 geometry_contract: unchecked，不可直接執行。來源：DL2_dev_eval.json。',
+             fontsize=7.5, color=MUTED)
+    save(fig, '12_DL2_觀測到局部座標目標_候選率與誤差.png')
+
+
+FIGS = {'01': lambda: fig01(), '02': lambda: fig02(), 'copies': lambda: copies(), '04': lambda: fig04(), '05': lambda: fig05(),
+        '07': lambda: fig07(), '08': lambda: fig08(), '09': lambda: fig09(), '10': lambda: fig10(), '11': lambda: fig11(), '12': lambda: fig12()}
+
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)
-    fig01()
-    fig02()
-    copies()
-    fig04()
-    fig05()
-    fig07()
-    fig08()
-    fig09()
+    for k in (sys.argv[1:] or list(FIGS)):
+        FIGS[k]()

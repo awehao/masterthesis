@@ -1,0 +1,40 @@
+schema: gc1_contract/1
+contract_id: bar26_split_v1
+scope: bar26＋split 手指；手指—抽屜靜態局部幾何；不含夾爪殼、手臂、軌跡、閉爪力學
+handle_frame: asset_prim
+z_split_m: 0.008
+files:
+  asset:
+    path: src/my_omnibot_description/config/drawer_unit_bar26.yaml
+    sha256: ef0396078012fd004734b81d91de8c22187cd101b0631d0aa69e83d56dc73530
+  urdf:
+    path: evaluation/models/omni_bot_wholebody_expanded.urdf
+    sha256: 9c9e118d8adb4907e5b0b8ee070181c461eba580650a03b3c66ea44136e74ce0
+  finger1_stl:
+    path: install/xarm_description/share/xarm_description/meshes/gripper/lite/visual/finger1.stl
+    sha256: f0db617bcbd406856460403af3393e63dec6d550b389629ef25a0b95379309ee
+  finger2_stl:
+    path: install/xarm_description/share/xarm_description/meshes/gripper/lite/visual/finger2.stl
+    sha256: 5e1ca8f278d624700dca4024ca4ef424ad4997d05e6c72823d1a493817ae363a
+  finger_collision:
+    path: evaluation/finger_collision.py
+    sha256: 55e5636212620ebf2ba6ad2e0f4781706eb2520c3cd8dba79482e47099f16949
+  drawer_asset:
+    path: evaluation/drawer_asset.py
+    sha256: 4aa3921a41a15823a828f26bae0ac63fbe1519c1f640113f6cfbbb79ac59e9c9
+  object_target_geometry:
+    path: evaluation/object_target_geometry.py
+    sha256: ec728193b0a6c24b60b9702d08215293ad266f0bd0757ba76800c12dbf8dd56f
+adopted_asset_fields:
+- handle.bar
+- handle.posts
+- cabinet
+- drawer.body
+- drawer.joint
+- grasp_surface.finger_joint_open
+- grasp_surface.enclosure_margin_min_m
+not_read:
+- drawer_unit_bar26.yaml grasp_surface.tcp_offset_along_tool_z（0.0147，10 mm 桿／凸包手指舊值）
+- drawer_unit_bar26.yaml grasp_surface.finger_gap_open_m（0.0178，同上）
+- drawer_task_node.py --grasp-depth-m 預設 0.01226 與 L462、L469 的「12.26 mm」來源字串（實錄以 task.json
+  args.grasp_depth_m 為準）
