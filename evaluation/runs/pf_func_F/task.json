@@ -1,0 +1,124 @@
+{
+ "scope": "相位由 DrawerTaskPolicy 決定，推進一律看實測；undesignated_contact **沒有量測來源**，一律 False",
+ "open_m": 0.2,
+ "open_band_m": [
+  0.195,
+  0.20500000000000002
+ ],
+ "args": {
+  "urdf": "/home/howardchen/masterthesis/evaluation/models/omni_bot_wholebody_expanded.urdf",
+  "tcp": "link_tcp",
+  "park": "-0.136412,0.560,1.297349",
+  "start": "-2.80,-3.20,1.5708",
+  "q_grasp": "-0.0321,0.9177,1.4853,-0.3580,-1.0325,-1.3813",
+  "open_m": 0.2,
+  "band_half_m": 0.005,
+  "grasp_depth_m": 0.0068,
+  "standoff_m": 0.03,
+  "pre_tol_m": 0.005,
+  "approach_rate": 0.02,
+  "opening_floor_tol_m": 1e-05,
+  "pre_ramp_mps": 0.03,
+  "pre_settle_s": 0.5,
+  "grip_tol_m": 0.002,
+  "grip_settle_s": 0.5,
+  "close_ramp_s": 1.0,
+  "finger_open": 0.0089,
+  "finger_closed": 0.0,
+  "contact_min_n": 0.5,
+  "attach_hold_s": 2.0,
+  "release_max_n": 0.1,
+  "release_hold_s": 0.5,
+  "inject_abort_at_s": -1.0,
+  "restow_gain": 1.0,
+  "restow_qd_max": 0.3,
+  "restow_mode": "sync",
+  "j3_last_tol": 0.05,
+  "rate": 20.0,
+  "timeout_s": 900.0,
+  "motm": false,
+  "motm_park_tol": 0.2,
+  "motm_v_cap": 0.03,
+  "motm_a_ref": 0.002,
+  "motm_k_yaw": 1.0,
+  "motm_w_cap": 0.1,
+  "motm_w_vref_pre": null,
+  "motm_no_soft_start": false,
+  "motm_v_creep": 0.004,
+  "motm_overshoot": 0.03,
+  "motm_w_vref": 0.03,
+  "motm_w_qn": 0.3,
+  "motm_w_a": 0.01,
+  "motm_w_p": 200.0,
+  "motm_v_pull": 0.018,
+  "motm_a_travel": 0.02,
+  "motm_arm_share": 0.06,
+  "motm_retreat_rate": null,
+  "motm_v_back": 0.008,
+  "motm_acc_lin": 0.05,
+  "motm_acc_ang": 0.2,
+  "park_fixed": true,
+  "R_grasp": [
+   [
+    -0.9999999985504833,
+    -1.1407633152216157e-05,
+    -5.262033151418351e-05
+   ],
+   [
+    -5.262001424266425e-05,
+    -2.7810714503048232e-05,
+    0.9999999982288489
+   ],
+   [
+    -1.1409096541015185e-05,
+    0.9999999995482147,
+    2.781011419304107e-05
+   ]
+  ]
+ },
+ "events": [
+  {
+   "sim_t": 47.269998943433166,
+   "solver_stop": true,
+   "reason": "abort：park_fixed_violation：v_lin 0.001256 > 0.001"
+  }
+ ],
+ "trace": [],
+ "tcp_offset_m": -0.0068,
+ "tcp_offset_fk_design_m": 0.014693,
+ "tcp_offset_source": "grip_090257_pull20full 實測：TCP 超過桿心 12.26 mm；設計姿態 FK 的 +14.7 mm 會讓桿子落在指尖外 17.2 mm，不採用",
+ "motm": null,
+ "abort": "park_fixed_violation：v_lin 0.001256 > 0.001",
+ "park_violation": {
+  "step": 4724,
+  "t": 47.25999894365668,
+  "phase": "wholebody_applied",
+  "why": "v_lin 0.001256 > 0.001"
+ },
+ "park_base_bad": null,
+ "park_abort_phase": "NAVIGATE",
+ "abort_stop": {
+  "abort_sim_t": 47.269998943433166,
+  "stop_sent_sim_t": 47.269998943433166,
+  "reason": "park_fixed_violation：v_lin 0.001256 > 0.001"
+ },
+ "opening_floor": {
+  "tol_m": 1e-05,
+  "n_cycles_clamped": 0,
+  "min_raw_in_tol_m": 0.0,
+  "note": "只影響送進相位機的開度；關閉帶未改"
+ },
+ "state_source": "drawer/sync_state（同一物理步）",
+ "n_sync": 634,
+ "policy": {
+  "phase": "NAVIGATE",
+  "done": false,
+  "abort": null,
+  "abort_detail": null,
+  "stamps": {},
+  "n_blocked_by_stale_state": 0,
+  "events": [],
+  "advance_basis": "開啟與關閉一律看**實測開度**連續保持；不用命令值、不用參考軌跡、不用時間到期"
+ },
+ "final_phase": "NAVIGATE"
+}
