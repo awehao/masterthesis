@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="670" viewBox="0 0 1600 670">
+<title>W-GMPC 求解與回授流程</title>
+<desc>任務相位提供TCP目標與協同參考。同步狀態經增廣模型與補償，透過SQP及QP求解多步序列，只執行首筆命令，經命令鏈於Isaac執行並回授。</desc>
+<defs><marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 1L8 5L0 9" fill="none" stroke="#227fb9" stroke-width="1.5"/></marker></defs>
+<g font-family="Noto Sans CJK TC, Noto Sans CJK JP, sans-serif">
+<rect x="493" y="25" width="395" height="135" rx="15" fill="#f6eff8" stroke="#b587bc" stroke-width="2"/>
+<g text-anchor="middle"><text x="690" y="66" fill="#823391" font-size="31" font-weight="700">任務相位節點</text><text x="690" y="105" fill="#526576" font-size="24">當輪 TCP 目標</text><text x="690" y="138" fill="#526576" font-size="24">底盤參考速度／手臂名目姿態</text></g>
+<path d="M690 160V222" fill="none" stroke="#227fb9" stroke-width="3" marker-end="url(#arr)"/>
+<g stroke-width="2">
+<rect x="20" y="235" width="225" height="155" rx="15" fill="#f0f6ff" stroke="#aacde9"/>
+<rect x="283" y="235" width="235" height="155" rx="15" fill="#f0f6ff" stroke="#aacde9"/>
+<rect x="556" y="235" width="270" height="155" rx="15" fill="#f6eff8" stroke="#b587bc"/>
+<rect x="864" y="235" width="200" height="155" rx="15" fill="#f0f6ff" stroke="#aacde9"/>
+<rect x="1102" y="235" width="210" height="155" rx="15" fill="#f0f6ff" stroke="#aacde9"/>
+<rect x="1350" y="235" width="230" height="155" rx="15" fill="#edf8f5" stroke="#9bcfc7"/>
+</g>
+<g text-anchor="middle" fill="#273947" font-weight="700" font-size="29">
+<text x="132" y="285">同步狀態</text><text x="400" y="285">增廣模型與補償</text><text x="691" y="285">SQP／QP 求解</text><text x="964" y="285">首筆命令</text><text x="1207" y="285">命令執行鏈</text><text x="1465" y="285">Isaac 執行</text>
+</g>
+<g text-anchor="middle" fill="#536a7b" font-size="23">
+<text x="132" y="327">實際構型 q</text><text x="132" y="363">設定點 s、u_prev</text>
+<text x="400" y="327">預測構型與設定點</text><text x="400" y="363">延遲與模型偏差補償</text>
+<text x="691" y="327">更新線性化、反覆解 QP</text><text x="691" y="363">多步序列 U*</text>
+<text x="964" y="327">只取 u₀*</text><text x="964" y="363">下一輪重新規劃</text>
+<text x="1207" y="327">限制與失效檢查</text><text x="1207" y="363">實際套用命令</text>
+<text x="1465" y="327">底盤＋手臂</text><text x="1465" y="363">取得新量測</text>
+</g>
+<g fill="none" stroke="#227fb9" stroke-width="3" marker-end="url(#arr)">
+<path d="M250 312H274"/><path d="M523 312H547"/><path d="M831 312H855"/><path d="M1069 312H1093"/><path d="M1317 312H1341"/>
+<path d="M1465 395V598H132V401"/>
+<path d="M691 428V401"/><path d="M1060 435V412H776V401"/>
+</g>
+<rect x="485" y="435" width="415" height="123" rx="12" fill="#fbfcfe" stroke="#c9d8e6" stroke-width="1.5"/>
+<g text-anchor="middle"><text x="692" y="472" fill="#823391" font-size="27" font-weight="700">成本：追蹤＋平順＋協同</text><text x="692" y="508" fill="#536a7b" font-size="22">TCP 誤差、命令大小與相鄰增量</text><text x="692" y="541" fill="#536a7b" font-size="22">底盤參考速度、手臂名目姿態</text></g>
+<rect x="933" y="435" width="360" height="123" rx="12" fill="#fbfcfe" stroke="#c9d8e6" stroke-width="1.5"/>
+<g text-anchor="middle"><text x="1113" y="472" fill="#227fb9" font-size="27" font-weight="700">求解器約束</text><text x="1113" y="508" fill="#536a7b" font-size="22">速度／加速度、預測關節角</text><text x="1113" y="541" fill="#536a7b" font-size="22">設定點限位、輪速／輪加速度</text></g>
+<rect x="480" y="577" width="760" height="40" fill="white"/>
+<text x="860" y="605" text-anchor="middle" font-size="25" fill="#008f82">狀態回授：新量測 q、s 與實際套用命令</text>
+<text x="800" y="652" text-anchor="middle" font-size="19" fill="#74828f">每輪預測窗內使用同一 TCP 目標；此圖不表示接觸力預測或全環境避碰保證。</text>
+</g></svg>
