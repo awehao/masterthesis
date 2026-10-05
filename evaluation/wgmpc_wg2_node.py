@@ -74,6 +74,7 @@ import wgmpc_cmd_envelope as ENV                                 # noqa: E402
 from wgmpc_cycle_record import solver_io_record                  # noqa: E402
 import wg4b_b1_core as B1CORE                                    # noqa: E402
 from park_fixed import HoldServo, hold_output_ok, hold_uprev_ok, park_hold_cmd  # noqa: E402
+from offset_moving import MovingCfg, MovingOffsetObserver        # noqa: E402
 from wgmpc_sp_handshake import (ARMED, FAILED, HOLD, INIT,       # noqa: E402
                                 SetpointGate, SpSample)
 
@@ -348,6 +349,14 @@ class WGMPCNode(Node):
         self._of_init = None
         self._of_s_prev = None
         self._of_n_upd = 0
+        # **v2.1 運動中偏移觀測**（--offset-moving，預設關 ⇒ 既有行為不變）
+        self._of_moving = None
+        self._of_n_upd_moving = 0
+        if getattr(a, 'offset_moving', False):
+            if a.arm_model != 'setpoint' or not a.offset_free:
+                raise ValueError('--offset-moving 需要 --arm-model setpoint 與 --offset-free')
+            self._of_moving = MovingOffsetObserver(
+                MovingCfg(), self.cfg.arm_model.alpha, self.cfg.arm_model.phys_dt)
         self._n_target_rejected = 0
         self._target_reject = {}
         self._n_by_target_src = {}
@@ -1138,6 +1147,7 @@ class WGMPCNode(Node):
             # 估計式：d̂ ← d̂ + (dt/τ)·((q_arm − s) − d̂)，**只在設定點近乎
             # 靜止時更新** —— 移動中 q 落後 s 是模型本來就有的一階遲滯，
             # 不能當成偏移。再令 b = α ⊙ d̂，模型穩態就變成 act = s + d̂。
+            _om_rec = None
             if self.a.offset_free and not self._b1:
                 _s_now = np.asarray(snap.s, float)
                 _e = np.asarray(q0[3:], float) - _s_now
@@ -1152,15 +1162,29 @@ class WGMPCNode(Node):
                     self._of_init = [float(x) for x in self._of_d]
                 _gate_ok = (self._of_s_prev is not None and float(np.max(
                     np.abs(_s_now - self._of_s_prev))) < self.a.offset_gate_rad)
+                _om = (None if self._of_moving is None else
+                       self._of_moving.observe(snap.sim_t, _s_now, np.asarray(q0[3:], float)))
+                _om_used = 'none'
                 if _gate_ok:
                     self._of_d += (self.cfg.dt / self.a.offset_tau_s) * (
                         _e - self._of_d)
                     self._of_n_upd += 1
+                    _om_used = 'static'
+                elif _om is not None and _om['ok']:
+                    # v2.1：持續等速 ⇒ 模型一致的觀測 d_obs = (q − s) + (dt_p/α)·ṡ（同一濾波、同一限幅）
+                    self._of_d += (self.cfg.dt / self.a.offset_tau_s) * (
+                        np.asarray(_om['d_obs'], float) - self._of_d)
+                    self._of_n_upd += 1
+                    self._of_n_upd_moving += 1
+                    _om_used = 'moving'
                 self._of_d = np.clip(self._of_d, -self.a.offset_max_rad,
                                      self.a.offset_max_rad)
                 self._of_s_prev = _s_now.copy()
                 self.cfg.arm_model.bias = (
                     np.asarray(self.cfg.arm_model.alpha, float) * self._of_d)
+                if _om is not None:
+                    _om_rec = dict(_om, used=_om_used,
+                                   d_hat_after=[float(x) for x in self._of_d])
             _q_sol, _s_sol, _n_comp = q0, np.asarray(snap.s, float), 0
             # 本輪若根本不做延遲補償，選取紀錄必須是空的，不是上一輪的殘留
             self._last_pred_sel = []
@@ -1247,6 +1271,7 @@ class WGMPCNode(Node):
                            'solver_reason': r.reason} if self._b1 else {}),
                        **({'base_fixed': True} if self._base_fixed else {}),
                        **({'park_hold': _park_rec} if self._park_hold else {}),
+                       **({'offset_moving': _om_rec} if self._of_moving is not None else {}),
                        # **時間契約的分項紀錄**（快照／求解起點／發布／牆鐘）
                        timing=dict(snap_sim_t=round(snap.sim_t, 6),
                                    solve_start_sim_t=round(_solve_sim_t0, 6),
@@ -1533,6 +1558,8 @@ class WGMPCNode(Node):
         return dict(stop_why=self._stop_why,
                     base_fixed=bool(self._base_fixed),
                     park_hold=bool(self._park_hold),
+                    offset_moving=bool(self._of_moving is not None),
+                    offset_n_upd_moving=int(self._of_n_upd_moving),
                     stop_rx=self._stop_rx,
                     last_publish_sim_t=self._last_pub_t,
                     n_published_after_stop_rx=int(self._c_pub_after_stop),
@@ -1717,6 +1744,8 @@ def main() -> int:
                     help='線上估計手臂恆定穩態偏移並餵進模型偏差項（預設關閉）')
     ap.add_argument('--offset-tau-s', type=float, default=0.5,
                     help='偏移估計的時間常數（模擬時間）')
+    ap.add_argument('--offset-moving', action='store_true',
+                    help='v2.1：設定點持續等速時，以 d_obs = (q − s) + (dt_p/α)·ṡ 更新偏移估計（預設關）')
     ap.add_argument('--offset-gate-rad', type=float, default=0.002,
                     help='設定點每輪變化小於此值才更新估計（避開一階遲滯）')
     ap.add_argument('--offset-init-static', action='store_true',
@@ -2017,6 +2046,8 @@ def main() -> int:
                            'd_hat_rad': [round(float(x), 6) for x in nd._of_d],
                            'init_static': getattr(nd, '_of_init', None),
                            'n_updates': int(nd._of_n_upd),
+                           'n_updates_moving': int(nd._of_n_upd_moving),
+                           'moving_enabled': bool(nd._of_moving is not None),
                            'tau_s': getattr(a, 'offset_tau_s', None),
                            'gate_rad': getattr(a, 'offset_gate_rad', None),
                            'note': '手臂恆定穩態偏移的線上估計；b = α ⊙ d̂'},

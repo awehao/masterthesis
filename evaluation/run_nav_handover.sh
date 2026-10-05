@@ -245,6 +245,8 @@ ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
     ${SOLVER_KIND:+--solver-kind "$SOLVER_KIND"} ${B1_KP:+--b1-kp "$B1_KP"} \
     `# PARK_FIXED：整個時域 u_base = 0（核心等式）` \
     $PK_SOLVER \
+    `# v2.1：運動中偏移觀測（兩組共同；預設不開）` \
+    $([ "${OFFSET_MOVING:-0}" = "1" ] && echo --offset-moving) \
     `# **無偏移追蹤**：手臂在抓取姿態下 j2 穩態下垂 +0.0243 rad、` \
     `# j3 −0.0099 rad，模型不知道 ⇒ ALIGN 停在 12 mm。線上估計補上。` \
     --offset-free \
