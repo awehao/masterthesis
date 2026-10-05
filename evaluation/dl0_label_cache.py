@@ -26,12 +26,25 @@ SPLIT = {'static_v0': 'train', 'traj_c0b1_p3r_H5': 'train', 'traj_d1s4b_M': 'tra
 OUT = os.path.join(HERE, 'dl0_ckpt', 'labels')
 
 
+TEST_CAPS = [('dl0_test_lateral/wrist_v0', 'test_lateral'), ('dl0_test_view/wrist_v0', 'test_view')]
+
+
 def main():
-    os.makedirs(OUT, exist_ok=True)
+    test = '--test' in sys.argv
+    out = OUT
+    if test:
+        # 只允許由一次開封程式在核對封存與模型凍結之後呼叫
+        assert os.environ.get('DL0_OPENING_RECORD') and os.path.exists(os.environ['DL0_OPENING_RECORD']), \
+            '測試標籤只能在開封程序內產生（缺開封紀錄）'
+        out = os.path.join(HERE, 'dl0_ckpt', 'labels_test')
+        assert not os.path.exists(out), f'測試標籤已存在，不覆寫：{out}'
+    os.makedirs(out, exist_ok=True)
     rows = []
-    for cap, grp, _ in AL.SOURCES:
-        assert 'dl0_test' not in cap, '封存測試不得列入'
-        if grp not in SPLIT:
+    srcs = ([(c, g, '') for c, g in TEST_CAPS] if test else AL.SOURCES)
+    for cap, grp, _ in srcs:
+        if not test:
+            assert 'dl0_test' not in cap, '封存測試不得列入'
+        if not test and grp not in SPLIT:
             continue
         for fr in AL.frames_of(cap):
             if fr['c'] is None:
@@ -41,17 +54,17 @@ def main():
             lab[L['ignore']] = 2
             lab[L['mask']] = 1
             key = f"{grp}__{cap.split('/')[0]}__f{fr['n']}"
-            lp = os.path.join(OUT, key + '.png')
+            lp = os.path.join(out, key + '.png')
             Image.fromarray(lab).save(lp)
             kind = ('negative' if 'no_handle_in_view' in L['flags'] else
                     'positive' if L['mask'].any() else 'excluded')
-            rows.append({'key': key, 'split': SPLIT[grp], 'group': grp, 'capture': cap, 'n': fr['n'],
+            rows.append({'key': key, 'split': ('test' if test else SPLIT[grp]), 'group': grp, 'capture': cap, 'n': fr['n'],
                          'rgb': os.path.relpath(fr['rgb'], HERE), 'label': os.path.relpath(lp, HERE),
                          'flags': L['flags'], 'dist_m': round(L['dist_m'], 4), 'kind': kind})
     idx = {'schema': 'dl0_label_index/1', 'label_code': {'0': 'background', '1': 'handle_bar（可見）', '2': 'ignore'},
            'autolabel_sha256': hashlib.sha256(open(os.path.join(HERE, 'dl0_autolabel.py'), 'rb').read()).hexdigest(),
            'rows': rows}
-    json.dump(idx, open(os.path.join(OUT, 'index.json'), 'w'), ensure_ascii=False, indent=1)
+    json.dump(idx, open(os.path.join(out, 'index.json'), 'w'), ensure_ascii=False, indent=1)
     from collections import Counter
     print(Counter((r['split'], r['kind']) for r in rows))
     print(Counter(r['group'] for r in rows))
