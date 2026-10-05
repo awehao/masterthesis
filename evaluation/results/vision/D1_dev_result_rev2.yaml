@@ -1,0 +1,29 @@
+# D1-shadow S1＋S2 開發集結果 rev2（取代 rev1＝D1_dev_result.yaml；依 Codex reviews/20261005_142344_reply.md 同步）
+# 2026-10-05。規格 D1_shadow_spec.yaml draft-2；偵測程式 evaluation/d1_handle_detect.py（偵測端不讀真值）
+schema: d1_dev_result/2
+版本對應: >
+  逐格 runs/d1_dev_f02P/wrist_v0/d1_detect_rev2.json（含 params、provenance：seed 0、Python／NumPy 版本、偵測程式與 meta 的 sha256）；
+  疊圖 d1_overlay_rev2/；彙整 D1_dev_summary_rev2.json（d1_dev_summary.py）。全部由同一次執行產生。
+  與 11:16 既有 d1_detect.json 逐格比對 87/87 相同（偵測確定性，seed 0）；只有牆鐘耗時不同。
+  rev1（D1_dev_result.yaml、d1_overlay/ 11:12）來自較早程式版本，保留不改
+參數: '同 params：max_planes 6、voxel 4 mm、候選寬度 [8, 41] mm、軸向長度 ≤ 230 mm、**plane_sub 5000**（平面假設只在 5000 點子樣本評分，內點再對全部點計算；速度參數）'
+S1_擷取: 'runs/d1_dev_f02P：Isaac 重播 wg4b_f02_P 26.0–44.0 s，只渲染、不控制；87 個新影格，5 Hz（run_wrist_v0.sh → isaac_drawer_room_sim.py --wrist-v0 --wrist-replay）'
+結果（分母＝該距離箱全部新影格；距離＝相機光心到真值橫桿中心，只供分箱）:
+  '0.4–1.0 m（門檻箱）': 'n 20；L2 18/20 = 90%；中心誤差 中位 2.36、p95 3.24、max 3.51 mm；L1 19/20，角度中位 0.33°；拒絕 ambiguous 1、center_unobservable 1'
+  '1.0–2.0 m': 'n 17；L2 17/17；中心誤差 中位 2.80、p95 6.29、max 7.58 mm；L1 角度中位 0.66°'
+  '2.0–3.0 m': 'n 18；L2 7/18 = 39%；誤差 中位 4.78、max 6.69 mm；no_candidate 10、center_unobservable 1'
+  '≥ 3.0 m': 'n 11；全部 no_candidate'
+  '0.1–0.4 m（ALIGN 前後）': 'n 21；L2 0（center_unobservable 13、no_candidate 8）；L1 13/21，角度中位 2.52°'
+  L0_抽樣評估: >
+    影格級 L0 誤認定義（開發期修訂）：該影格抽樣點中**超過 50%** 射線未交到真值橫桿。依此定義 0 格。
+    但抽樣點層級：L0 有輸出的 57 格中 **50 格命中率不足 100%**；全部抽樣點 10880 點、未命中 443 點（4.1%）；
+    0.4–1.0 m 箱 5436 點、未命中 175 點（3.2%）。射線未命中不直接證明選到另一物件（也可能是邊緣或深度量化）；
+    **不得讀成「所有點都辨識正確」**
+  L1_L2: 'L1 誤認（偏離真值軸 > 20 mm 或 > 15°）0；L2 接受但錯誤（> 30 mm）0'
+  獨立評估要求: '中心在畫面外或端點被裁切而仍輸出 L2 的違反 0'
+  連續有效窗_L2: '29.75–30.15、30.98–31.40、31.81–37.63（約 5.8 s）、38.04–39.29 s'
+門檻對照（0.4–1.0 m；開發集，非保留測試）: '有效率 90% ≥ 60% ✓；中位 2.36 ≤ 10 mm ✓；p95 3.24 ≤ 20 mm ✓；L1 角度中位 0.33° ≤ 3° ✓'
+耗時: >
+  離線單執行緒 Python、重播影格（牆鐘，非確定）：rev2 執行 0.4–1.0 m 箱中位 143.9 ms（max 232.9）；11:16 執行中位 146.2 ms（max 242.3）。
+  這是離線量，**不代表線上 5 Hz 已成立**（線上有求解、算圖與傳輸共用 CPU）；rev1 的 385 ms 說法作廢
+定位: '已知類型與尺寸（固定半徑 13 mm、長度 200 mm 先驗）的深度幾何基線；不是 DL 訓練或跨物件泛化成果；不代表可抓取、實機 D435 或線上更新率'

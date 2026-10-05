@@ -1,0 +1,16 @@
+# D1-shadow S3 保留集一次評估計畫（凍結前登錄；Codex reviews/20261005_142344_reply.md 核可方向）2026-10-05
+schema: d1_holdout_plan/1
+保留集來源: 'evaluation/runs/mt_b1_02_P（舊 PARK_GRASP_WB 停車組趟次；接近段與 MotM 同場景）'
+窗口: >
+  **由開發集窗口導出的固定事件偏移規則**（不是原本事前登錄的窗口）：起點＝減速段起點（room_run owner 首次 = glide）− 9.91 s；
+  終點＝ALIGN 事件（task.json）＋ 1.37 s。開發集 wg4b_f02_P：35.91 − 9.91 = 26.00、42.63 + 1.37 = 44.00（即開發集窗口）。
+  保留集 mt_b1_02_P：減速段起點 36.47、ALIGN 45.60 ⇒ **26.56–46.97 s**（5 Hz 約 102 格）。凍結後不因保留影格可見性調整
+稱法: '同場景、同把手幾何，不同接近軌跡／控制策略的影像序列保留評估。不稱 MotM 專屬保留測試、不稱完全未見場景（該趟軌跡與投影幾何已檢查過；保留的是未用來調偵測器的影像與辨識結果）'
+執行: >
+  擷取一次：ROS_DOMAIN_ID 獨立、RUN_ID=d1_hold_mt02P、RUNNER=evaluation/run_wrist_v0.sh、
+  WRIST_EXTRA='--wrist-replay $WS/evaluation/runs/mt_b1_02_P/room_run.json（絕對路徑） --wrist-replay-t0 26.56 --wrist-replay-t1 46.97'（run_guarded.sh 包 92 °C 熱中止）。
+  評估一次：python3 evaluation/d1_handle_detect.py runs/d1_hold_mt02P --overlay --tag hold；python3 evaluation/d1_dev_summary.py …/d1_detect_hold.json results/vision/D1_holdout_summary.json。
+  擷取若因基礎設施失敗（非偵測結果）可重擷取並照實記錄；偵測與評估不重跑、不調參
+門檻（沿用 draft-2）: '0.4–1.0 m：L2 有效率 ≥ 60%、誤差中位 ≤ 10 mm、p95 ≤ 20 mm；L1 角度中位 ≤ 3°；拒絕正確性違反 0；一律附樣本數、覆蓋率、連續有效窗、誤認數與 L0 抽樣點命中統計'
+失敗處置: '照列、不調參；若之後修改，另標開發修訂，不再稱未見保留測試'
+不做: 'S4 線上（另送審）；不接控制'

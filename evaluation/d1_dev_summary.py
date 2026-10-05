@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """D1-shadow：逐距離箱彙整 d1_detect.json（分母＝該箱全部新影格；距離＝相機光心到真值橫桿中心，只供分箱）。
 
-    python3 evaluation/d1_dev_summary.py runs/<RUN>/wrist_v0/d1_detect.json
+    python3 evaluation/d1_dev_summary.py runs/<RUN>/wrist_v0/d1_detect_<tag>.json [輸出.json]
 """
 import json
 import sys
@@ -31,7 +31,11 @@ def summarize(rows):
                                                'p95': round(float(np.percentile(e2, 95)), 2),
                                                'max': round(float(max(e2)), 2)}),
             'L1_valid': len(l1), 'L1_angle_deg_median': (round(float(np.median(a1)), 2) if a1 else None),
-            'misid_L0': sum(1 for x in r if x['eval'].get('L0_misid')),
+            'misid_L0_frames（>50% 抽樣點射線未命中）': sum(1 for x in r if x['eval'].get('L0_misid')),
+            'L0_frames': sum(1 for x in r if x['eval'].get('L0_sample_n')),
+            'L0_frames_hit_lt_100pct': sum(1 for x in r if x['eval'].get('L0_sample_n') and x['eval']['L0_sample_miss'] > 0),
+            'L0_sample_points': {'n': sum(x['eval'].get('L0_sample_n') or 0 for x in r),
+                                 'miss': sum(x['eval'].get('L0_sample_miss') or 0 for x in r)},
             'misid_L1': sum(1 for x in l1 if x['eval'].get('L1_misid')),
             'L2_wrong': sum(1 for x in l2 if x['eval'].get('L2_wrong')),
             'L2_violation': sum(1 for x in r if x['eval']['L2_violation']),
@@ -57,5 +61,10 @@ def summarize(rows):
 
 
 if __name__ == '__main__':
-    rows = json.load(open(sys.argv[1]))['rows']
-    print(json.dumps(summarize(rows), ensure_ascii=False, indent=1))
+    d = json.load(open(sys.argv[1]))
+    out = summarize(d['rows'])
+    out['source'] = {'detect_json': sys.argv[1], 'params': d.get('params'), 'provenance': d.get('provenance')}
+    s = json.dumps(out, ensure_ascii=False, indent=1)
+    if len(sys.argv) > 2:
+        open(sys.argv[2], 'w').write(s)
+    print(s)

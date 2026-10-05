@@ -155,22 +155,25 @@ def main():
     # ---- 表 4 入場拆解（park_entry_breakdown.py 產生；只讀既有紀錄） ----
     eb = json.load(open(os.path.join(MS, 'park_entry_breakdown.json')))
     L.append('## 表 4　GO→全身接手的拆解（導航段自 GO 起算，其餘欄自減速段起點起算，單位 s；由 `park_entry_breakdown.py` 從既有逐物理步紀錄重算，未另跑模擬）\n')
-    L.append('| 趟次 | 策略 | 導航段 (s) | 減速段→全身接手 (s) | 位置收斂 ≤ 1 mm | 最後一步 > 1 mm/s | 停車鎖存（鎖存時偏航誤差 rad） | 閘門窗 | 轉給全身時相對停位偏航 (rad) |')
+    L.append('| 趟次 | 策略 | 導航段 (s) | 減速段→全身接手 (s) | 相對停位首次 ≤ 1 mm（此後持續） | 最後一步 > 1 mm/s | 停車鎖存（鎖存時偏航誤差 rad） | 閘門窗 | 轉給全身時相對停位：位置 (mm)／偏航 (rad) |')
     L.append('|---|---|---|---|---|---|---|---|---|')
     for r in eb['runs']:
         lat = '—' if r['latch_s'] is None else f"{r['latch_s']:.2f}（{r['latch_eyaw_rad']:.5f}）"
         gw = '—' if 'gate_window_s' not in r else f"{r['gate_window_s'][0]:.2f}–{r['gate_window_s'][1]:.2f}"
-        L.append(f"| {r['rid']} | {NAME[r['method']]} | {r['nav_s']:.2f} | {r['glide_to_wb_s']:.2f} | {r['pos_settle_1mm_s']:.2f} | "
-                 f"{r['last_v_gt_1mmps_s']:.2f} | {lat} | {gw} | {r['yaw_err_at_wb_rad']:+.4f} |")
+        pf = ('未進入' if r['park_pos_first_1mm_s'] is None else
+              f"{r['park_pos_first_1mm_s']:.2f}（{'—' if r['park_pos_stay_1mm_s'] is None else format(r['park_pos_stay_1mm_s'], '.2f')}）")
+        L.append(f"| {r['rid']} | {NAME[r['method']]} | {r['nav_s']:.2f} | {r['glide_to_wb_s']:.2f} | {pf} | "
+                 f"{r['last_v_gt_1mmps_s']:.2f} | {lat} | {gw} | {r['park_pos_err_at_wb_mm']:.1f}／{r['yaw_err_at_wb_rad']:+.4f} |")
     Hb = [r for r in eb['runs'] if r['method'] == 'PARK_HOLD']
     Mb = [r for r in eb['runs'] if r['method'] == 'MOTM']
     L.append(f"\n讀法：導航段兩組相近（M {fmt_range([r['nav_s'] for r in Mb])}、H {fmt_range([r['nav_s'] for r in Hb])} s）。"
-             f"差距集中在減速段：H 位置在減速段起點後 {min(r['pos_settle_1mm_s'] for r in Hb):.2f}–{max(r['pos_settle_1mm_s'] for r in Hb):.2f} s 已收斂到 1 mm，"
-             f"之後再 {min(r['latch_s'] - r['pos_settle_1mm_s'] for r in Hb):.2f}–{max(r['latch_s'] - r['pos_settle_1mm_s'] for r in Hb):.2f} s "
-             f"偏航誤差才進入停車鎖存容差 0.005 rad（三趟鎖存時偏航誤差 {min(r['latch_eyaw_rad'] for r in Hb):.5f}–{max(r['latch_eyaw_rad'] for r in Hb):.5f} rad，緊貼容差；"
-             f"此段紀錄中的偏航命令約每 2 s 減半，機制未另驗證）；鎖存後閘門窗約 0.51 s。"
+             f"差距集中在減速段：H 相對預定停位的位置誤差在減速段起點後 {min(r['park_pos_first_1mm_s'] for r in Hb):.2f}–{max(r['park_pos_first_1mm_s'] for r in Hb):.2f} s 進入 1 mm 並持續，"
+             f"之後到停車鎖存還有 {min(r['latch_s'] - r['park_pos_first_1mm_s'] for r in Hb):.2f}–{max(r['latch_s'] - r['park_pos_first_1mm_s'] for r in Hb):.2f} s 的剩餘收斂／等待區段，"
+             f"鎖存條件含偏航誤差 ≤ 0.005 rad，此區段內偏航誤差持續縮小（三趟鎖存時偏航誤差 {min(r['latch_eyaw_rad'] for r in Hb):.5f}–{max(r['latch_eyaw_rad'] for r in Hb):.5f} rad，緊貼容差；"
+             f"此段紀錄中的偏航命令約每 2 s 減半；未逐項驗證此區段全部由偏航造成）；鎖存後閘門窗約 0.51 s。"
              f"M 在減速段約 {min(r['glide_to_wb_s'] for r in Mb):.1f}–{max(r['glide_to_wb_s'] for r in Mb):.1f} s 即轉給全身，"
-             f"當時相對停位偏航仍約 {min(abs(r['yaw_err_at_wb_rad']) for r in Mb):.2f}–{max(abs(r['yaw_err_at_wb_rad']) for r in Mb):.2f} rad，由全身控制邊動邊收。"
+             f"當時距嚴格停車組的停位仍約 {min(r['park_pos_err_at_wb_mm'] for r in Mb):.0f}–{max(r['park_pos_err_at_wb_mm'] for r in Mb):.0f} mm、偏航差約 "
+             f"{min(abs(r['yaw_err_at_wb_rad']) for r in Mb):.2f}–{max(abs(r['yaw_err_at_wb_rad']) for r in Mb):.2f} rad（M 不以此停位為目標，只作對照），由全身控制邊動邊收。"
              '這是**本配置停車入場剖面**的特性；本表不推論改用較快偏航收斂的停車剖面後差距會是多少（未實跑）。\n')
     L.append('\n**不能宣稱**：差異單獨來自底盤是否移動；MotM 全面品質較好（S4 漂移配對方向不一致）；顯著性、穩定成功率或跨任務泛化；'
              '偏移估計是單指承載的根因；舊 0.23 s 與本批 12.5–13.2 s 同一對照，或把兩者之差讀成同一基線上的改善量。\n')

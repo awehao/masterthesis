@@ -286,7 +286,11 @@ def evaluate(det, f, T, K, true_axis):
                 miss += 1
             else:
                 errs.append(float(np.linalg.norm(p - h)))
+        # 影格級 L0 誤認（開發期修訂定義）：抽樣點中**超過 50%** 的射線未交到真值橫桿。這是抽樣評估；
+        # 射線未命中不直接證明選到另一物件（也可能是邊緣、深度量化）。命中／未命中點數另報。
         ev['L0_misid'] = miss > 0.5 * len(det['L0']['pts_sample'])
+        ev['L0_sample_n'] = len(det['L0']['pts_sample'])
+        ev['L0_sample_miss'] = miss
         ev['L0_err_mm_median'] = float(np.median(errs) * 1e3) if errs else None
         ev['L0_frac_hit'] = 1 - miss / len(det['L0']['pts_sample'])
     if det['L1']:
@@ -310,12 +314,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('run')
     ap.add_argument('--overlay', action='store_true')
+    ap.add_argument('--tag', default=None, help='輸出 d1_detect_<tag>.json 與 d1_overlay_<tag>/（不覆寫既有結果）')
     a = ap.parse_args()
     V = os.path.join(a.run, 'wrist_v0')
     m = json.load(open(os.path.join(V, 'meta.json')))
     K = np.array(m['intrinsics_readback']['K'])
     true_axis = np.array([1.0, 0.0, 0.0])        # 評估端：資產軸 x（櫃體未旋轉）
-    rng = np.random.default_rng(0)
+    SEED = 0
+    rng = np.random.default_rng(SEED)
     rows = []
     for f in m['frames']:
         T = cam_T(f)
@@ -328,9 +334,17 @@ def main():
                      'L1': det['L1'], 'L2': det['L2'],
                      'L0_n': det['L0']['n'] if det['L0'] else None, 'eval': ev})
         if a.overlay:
-            overlay(V, f, det, ev, T, K)
-    json.dump({'spec': 'D1_shadow_spec.yaml draft-2', 'params': P, 'rows': rows},
-              open(os.path.join(V, 'd1_detect.json'), 'w'), ensure_ascii=False, indent=1,
+            overlay(V, f, det, ev, T, K, a.tag)
+    import hashlib
+    import platform
+    prov = {'seed': SEED, 'python': platform.python_version(), 'numpy': np.__version__,
+            'detector_sha256': hashlib.sha256(open(os.path.abspath(__file__), 'rb').read()).hexdigest(),
+            'meta_sha256': hashlib.sha256(open(os.path.join(V, 'meta.json'), 'rb').read()).hexdigest(),
+            'tag': a.tag,
+            'L0_misid_definition': '影格級：抽樣點中超過 50% 射線未交到真值橫桿（開發期修訂定義；抽樣評估）'}
+    name = 'd1_detect.json' if a.tag is None else f'd1_detect_{a.tag}.json'
+    json.dump({'spec': 'D1_shadow_spec.yaml draft-2', 'params': P, 'provenance': prov, 'rows': rows},
+              open(os.path.join(V, name), 'w'), ensure_ascii=False, indent=1,
               default=lambda o: o.item() if isinstance(o, np.generic) else str(o))
     for r in rows:
         e = r['eval']
@@ -339,9 +353,9 @@ def main():
     return 0
 
 
-def overlay(V, f, det, ev, T, K):
+def overlay(V, f, det, ev, T, K, tag=None):
     from PIL import Image, ImageDraw
-    od = os.path.join(V, 'd1_overlay')
+    od = os.path.join(V, 'd1_overlay' if tag is None else f'd1_overlay_{tag}')
     os.makedirs(od, exist_ok=True)
     im = Image.open(os.path.join(V, 'frames', f'f{f["n"]:02d}_rgb.png')).convert('RGB')
     dr = ImageDraw.Draw(im)

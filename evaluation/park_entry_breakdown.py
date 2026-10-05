@@ -2,7 +2,7 @@
 """正式三對的入場段（GO → 實際轉給全身）拆解。只讀實錄（room_run.json 逐物理步、glide.json、park_gate.json）。
 
 分段（自 GO）：導航（owner=nav）→ 減速段（owner=glide）→ 實際轉給全身（owner=wb 第一步）。
-減速段內再標：位置收斂（相對減速段末位姿的距離首次 ≤ 1 mm）、底盤逐步速度最後一次 > 1 mm/s、
+減速段內再標：相對預定停位（park_pose）的位置誤差首次 ≤ 1 mm 與此後持續 ≤ 1 mm 的起點、底盤逐步速度最後一次 > 1 mm/s、
 停車鎖存（glide.json park_latched.pose_t）、靜止閘門窗與通過、實際轉給全身。
 另列減速段起點與轉給全身時「相對停位偏航」（停位＝--park-pose；MotM 不要求偏航對準，僅供對照）。
 
@@ -38,11 +38,16 @@ def one(rid, park):
     gl = gl[gl < wb[0]]
     tg, tw = float(t[gl[0]]), float(t[wb[0]])
     v = np.r_[0.0, np.hypot(*np.diff(xyth[:, :2], axis=0).T) / np.diff(t)]
-    d_end = np.hypot(xyth[gl, 0] - xyth[gl[-1], 0], xyth[gl, 1] - xyth[gl[-1], 1])
-    k = np.flatnonzero(d_end <= 0.001)
+    # 相對**預定停位**（park_pose）的位置誤差；首次進入與「之後在減速段內持續 ≤ 1 mm」分開報
+    d_park = np.hypot(xyth[gl, 0] - park[0], xyth[gl, 1] - park[1])
+    k = np.flatnonzero(d_park <= 0.001)
+    out = np.flatnonzero(d_park > 0.001)
     kv = np.flatnonzero(v[gl] > 0.001)
     row = {'rid': rid, 'nav_s': round(tg - go, 2), 'glide_to_wb_s': round(tw - tg, 2),
-           'pos_settle_1mm_s': round(float(t[gl[k[0]]]) - tg, 2) if len(k) else None,
+           'park_pos_first_1mm_s': round(float(t[gl[k[0]]]) - tg, 2) if len(k) else None,
+           'park_pos_stay_1mm_s': (round(float(t[gl[out[-1] + 1]]) - tg, 2) if len(out) and out[-1] + 1 < len(gl)
+                                   else (0.0 if not len(out) else None)),
+           'park_pos_err_at_wb_mm': round(float(np.hypot(xyth[wb[0], 0] - park[0], xyth[wb[0], 1] - park[1])) * 1e3, 2),
            'last_v_gt_1mmps_s': round(float(t[gl[kv[-1]]]) - tg, 2) if len(kv) else None}
     gj = os.path.join(R, 'glide.json')
     lat = json.load(open(gj)).get('park_latched') if os.path.exists(gj) else None

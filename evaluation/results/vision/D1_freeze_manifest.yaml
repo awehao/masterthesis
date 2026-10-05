@@ -1,0 +1,15 @@
+# D1-shadow S3 凍結 manifest（freeze_d1.sha256；依 Codex reviews/20261005_142344_reply.md 第 3 項）2026-10-05
+schema: d1_freeze_manifest/1
+凍結檔: 'freeze_d1.sha256（290 檔；sha256sum -c 可驗）'
+範圍:
+  偵測與評估: 'd1_handle_detect.py（偵測＋獨立評估；評估端讀真值）、d1_dev_summary.py（彙整）'
+  擷取入口: 'run_guarded.sh（92 °C 熱中止）→ run_wrist_v0.sh → isaac_drawer_room_sim.py --wrist-v0 --wrist-replay（及其本地相依 drawer_asset、isaac_common、finger_collision、physics_contact_hold、friction_audit）→ wrist_v0_capture.py'
+  時間與姿態匹配: 'wrist_v0_capture.py（按 rendering_time 匹配相機位姿，容差 0.25·dt）、v0_time_match_check.py'
+  資產與相機: 'models/omni_bot_manip.urdf（相機掛載鏈）、omni_bot_wholebody_expanded.urdf、wholebody_kinematics.py、drawer_unit_bar26.yaml；內參讀回與掛載矩陣見開發集 meta.json'
+  規格與結果: 'D1_shadow_spec.yaml draft-2、D1_dev_result_rev2.yaml、D1_dev_summary_rev2.json、D1_holdout_plan.yaml、d1_observation_window.json'
+  開發集: 'runs/d1_dev_f02P/wrist_v0：meta.json、truth.json、d1_detect_rev2.json、frames/*（全部影格）'
+  來源實錄: 'runs/wg4b_f02_P（開發）、runs/mt_b1_02_P（保留）的 room_run.json、task.json（定窗規則用）'
+參數: '見 d1_detect_rev2.json params（含 plane_sub 5000）'
+隨機種子: 'numpy default_rng(0)（偵測確定性：重跑逐格 87/87 相同）'
+版本: 'Python 3.12.3、NumPy 1.26.4、SciPy 1.11.4、Pillow 10.2.0；擷取用 Isaac Sim 6.0.1（~/venvs/isaacsim-6.0.1）；kernel 7.0.0-31-generic'
+不含: '全工作區；控制節點（擷取不起控制）'
