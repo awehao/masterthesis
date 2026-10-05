@@ -27,6 +27,7 @@ sys.path.insert(0, HERE)
 from wrist_v0_capture import wxyz_to_R  # noqa: E402
 
 R_BAR, LEN_BAR = 0.013, 0.200
+CLIP_NEAR = 0.05          # 腕部相機近裁切面（V0／wrist_live 皆設 clipping 0.05–10 m）：比它近的表面渲染時被裁掉
 AXIS_W = np.array([1.0, 0.0, 0.0])
 W, H = 640, 480
 
@@ -53,6 +54,8 @@ def frames_of(cap_dir):
     if os.path.exists(tp):
         M = np.array(json.load(open(tp))['M_world_handle_prim'], float)
         static_c = M[:3, 3].tolist()
+    rp = (meta.get('replay') or {}).get('source')
+    task_v0 = (os.path.join(os.path.dirname(rp), 'task.json') if rp else None)
     if 'frames' in meta:                              # wrist_v0
         for f in meta['frames']:
             n = f['n']
@@ -62,7 +65,8 @@ def frames_of(cap_dir):
             yield {'n': n, 'rgb': os.path.join(D, 'frames', f'f{n:02d}_rgb.png'), 'depth_path': dp,
                    'T': _T(f['cam_pos_world'], f['cam_quat_wxyz_world']), 'K': K,
                    'c': f.get('handle_center_world_at_capture') or static_c,
-                   'c_source': 'per_frame' if f.get('handle_center_world_at_capture') else 'static_prim'}
+                   'c_source': 'per_frame' if f.get('handle_center_world_at_capture') else 'static_prim',
+                   't_src': f.get('src_record_t'), 'task': task_v0}
     else:                                             # wrist_live
         for line in open(os.path.join(D, 'truth.jsonl')):
             t = json.loads(line)
@@ -70,7 +74,8 @@ def frames_of(cap_dir):
             yield {'n': n, 'rgb': os.path.join(D, 'frames', f'f{n:04d}_rgb.png'),
                    'depth_path': os.path.join(D, 'frames', f'f{n:04d}_depth_m.npz'),
                    'T': _T(t['cam_pos_world'], t['cam_quat_wxyz_world']), 'K': K,
-                   'c': t['handle_center_world_at_capture'], 'c_source': 'per_frame'}
+                   'c': t['handle_center_world_at_capture'], 'c_source': 'per_frame',
+                   't_src': t['t_cap'], 'task': os.path.join(D, '..', 'task.json')}
 
 
 def _T(p, q):
@@ -87,7 +92,8 @@ def load_depth(p):
 
 
 def label(fr, depth=None):
-    """回傳 dict：mask(H,W) bool、expected、visible、vis_frac、ends_in_frame、ends_visible、category、dist_m。"""
+    """回傳 dict：mask、ignore(H,W) bool；expected／visible／occluding／depth_invalid／behind 像素數；vis_frac；
+    ends_in_frame；end_region_visible（端點 5 mm 區段有可見像素，代理指標）；flags（可並存）；dist_m。"""
     dep = load_depth(fr['depth_path']) if depth is None else depth
     T, K, c = fr['T'], fr['K'], np.asarray(fr['c'], float)
     Rm, t = T[:3, :3], T[:3, 3]
@@ -107,12 +113,14 @@ def label(fr, depth=None):
     uv = [proj(p) for p in pts]
     uv = np.array([u for u in uv if u is not None])
     if len(uv) == 0:
-        out.update(expected=0, visible=0, vis_frac=None, ends_visible=[False, False], category='no_handle_in_view')
+        out.update(expected=0, visible=0, occluding=0, depth_invalid=0, behind=0, vis_frac=None,
+                   end_region_visible=[False, False], flags=['no_handle_in_view'], ignore=np.zeros((H, W), bool))
         return out
     u0, v0 = np.clip(np.floor(uv.min(0)) - 3, 0, [W - 1, H - 1]).astype(int)
     u1, v1 = np.clip(np.ceil(uv.max(0)) + 3, 0, [W - 1, H - 1]).astype(int)
     if u1 <= u0 or v1 <= v0:
-        out.update(expected=0, visible=0, vis_frac=None, ends_visible=[False, False], category='no_handle_in_view')
+        out.update(expected=0, visible=0, occluding=0, depth_invalid=0, behind=0, vis_frac=None,
+                   end_region_visible=[False, False], flags=['no_handle_in_view'], ignore=np.zeros((H, W), bool))
         return out
     vv, uu = np.mgrid[v0:v1 + 1, u0:u1 + 1]
     d = np.stack([(uu - K[0, 2]) / K[0, 0], (vv - K[1, 2]) / K[1, 1], np.ones_like(uu, float)], -1)
@@ -129,21 +137,83 @@ def label(fr, depth=None):
     hit &= (tz > 0) & (np.abs(s_ax) <= LEN_BAR / 2)
     zm = dep[v0:v1 + 1, u0:u1 + 1]
     tol = np.maximum(0.003, 0.01 * tz)
-    vis = hit & np.isfinite(zm) & (np.abs(zm - tz) <= tol)
+    valid = np.isfinite(zm) & (zm > 0)
+    vis = hit & valid & (np.abs(zm - tz) <= tol)
+    clipped = hit & (tz < CLIP_NEAR)                  # 預期表面比近裁切面還近 ⇒ 渲染時被裁掉，看到的是後方（不可觀測）
+    hit_obs = hit & ~clipped
+    vis = vis & ~clipped
+    occl = hit_obs & valid & (zm < tz - tol)          # 實測較近 ⇒ 前方有東西擋住（手指、夾爪或其他）
+    behind = hit_obs & valid & (zm > tz + tol)        # 實測較遠 ⇒ 幾何或時間不符（不是遮擋）
+    dinv = hit_obs & ~valid                           # 深度無效
+    from scipy.ndimage import binary_erosion as _ero
+    interior = _ero(hit_obs, iterations=1)            # 輪廓邊緣（遠距時常混到背景深度）不計入「較遠」判旗
+    # 端蓋（圓柱兩端平面圓盤）：不在側面模型內 ⇒ ignore
+    da = d @ ac
+    cap = np.zeros_like(hit)
+    for sgn in (-1.0, 1.0):
+        with np.errstate(divide='ignore', invalid='ignore'):
+            tc = (sgn * LEN_BAR / 2 - (w @ ac)) / da
+        pc = w + tc[..., None] * d
+        rr = np.linalg.norm(pc - (pc @ ac)[..., None] * ac, axis=-1)
+        cap |= np.isfinite(tc) & (tc > 0) & (rr <= R_BAR)
+    from scipy.ndimage import binary_dilation, binary_erosion
+    band = binary_dilation(vis, iterations=1) & ~binary_erosion(vis, iterations=1)
+    ign = (band | dinv | behind | clipped | (cap & ~vis)) & ~(vis & ~band)
     out['mask'][v0:v1 + 1, u0:u1 + 1] = vis
-    e, v = int(hit.sum()), int(vis.sum())
-    ev = []
-    for p, inside in zip(pe, out['ends_in_frame']):
-        if not inside:
-            ev.append(False)
-            continue
-        a0, b0 = int(p[0]), int(p[1])
-        win = out['mask'][max(0, b0 - 6):b0 + 7, max(0, a0 - 6):a0 + 7]
-        ev.append(bool(win.any()))
-    cat = ('no_handle_in_view' if e == 0 else 'truncated' if not all(out['ends_in_frame'])
-           else 'occluded' if v < 0.5 * e else 'clean')
-    out.update(expected=e, visible=v, vis_frac=(None if e == 0 else round(v / e, 3)), ends_visible=ev, category=cat)
+    out['ignore'] = np.zeros((H, W), bool)
+    out['ignore'][v0:v1 + 1, u0:u1 + 1] = ign
+    e_all, n_clip = int(hit.sum()), int(clipped.sum())
+    e, v = int(hit_obs.sum()), int(vis.sum())         # 預期＝可觀測（未被近裁切）的預期像素
+    n_occ, n_dinv, n_beh = int(occl.sum()), int(dinv.sum()), int(behind.sum())
+    n_beh_int = int((behind & interior).sum())
+    # 端點區段可見：靠近該端 5 mm 內的軸向區段有可見像素（不等於端點本身可見，只是代理指標）
+    s_vis = np.where(vis, s_ax, np.nan)
+    erv = []
+    for sgn, inside in zip((-1.0, 1.0), out['ends_in_frame']):
+        near = np.abs(s_vis - sgn * LEN_BAR / 2) <= 0.005
+        erv.append(bool(inside and np.any(near)))
+    fr_ = (lambda n: 0.0 if e == 0 else n / e)
+    flags = []
+    if e_all == 0:
+        flags.append('no_handle_in_view')
+    elif e == 0:
+        flags.append('near_clipped')
+    else:
+        if n_clip >= 0.10 * e_all:
+            flags.append('near_clipped')
+        if not all(out['ends_in_frame']):
+            flags.append('truncated')
+        if fr_(v) < 0.5:
+            flags.append('low_visible')
+        if fr_(n_occ) >= 0.10:
+            flags.append('occluded')
+        if fr_(n_dinv) >= 0.10:
+            flags.append('depth_insufficient')
+        if fr_(n_beh_int) >= 0.10:
+            flags.append('geom_mismatch')
+        if not flags:
+            flags.append('clean')
+    out.update(expected=e, expected_incl_clipped=e_all, near_clipped=n_clip, visible=v, occluding=n_occ,
+               depth_invalid=n_dinv, behind=n_beh, behind_interior=n_beh_int,
+               vis_frac=(None if e == 0 else round(v / e, 3)), end_region_visible=erv, flags=flags)
     return out
+
+
+def phase_at(fr, cache):
+    """擷取時刻在來源趟的任務相位；回傳 {'phase', 'after_engage'} 或 None（靜態擷取無來源時間）。"""
+    if fr.get('t_src') is None or not fr.get('task') or not os.path.exists(fr['task']):
+        return None
+    tp = os.path.realpath(fr['task'])
+    if tp not in cache:
+        ev = json.load(open(tp)).get('events', [])
+        cache[tp] = sorted((float(e['sim_t']), e['phase']) for e in ev if 'phase' in e)
+    ph = cache[tp]
+    cur = None
+    for t, p in ph:
+        if t <= fr['t_src']:
+            cur = p
+    t_eng = next((t for t, p in ph if p == 'ENGAGE_WAIT'), None)
+    return {'phase': cur, 'after_engage': (t_eng is not None and fr['t_src'] >= t_eng)}
 
 
 def inventory():
@@ -154,18 +224,33 @@ def inventory():
             continue
         cats, dists, nmiss = {}, [], 0
         n = 0
+        post = {'n_frames': 0, 'handle_in_view': 0, 'visible_px_gt0': 0, 'depth_ok（無效 < 10%）': 0,
+                'occluded（遮擋 ≥ 10%）': 0, 'low_visible': 0, 'truncated': 0}
+        task_cache = {}
         for fr in frames_of(cap):
             n += 1
             if fr['c'] is None or not os.path.exists(fr['depth_path']):
                 nmiss += 1
                 continue
             L = label(fr)
-            cats[L['category']] = cats.get(L['category'], 0) + 1
+            for f_ in L['flags']:
+                cats[f_] = cats.get(f_, 0) + 1
             dists.append(L['dist_m'])
+            ph = phase_at(fr, task_cache)
+            if ph is not None and ph['after_engage']:
+                post['n_frames'] += 1
+                if 'no_handle_in_view' not in L['flags']:
+                    post['handle_in_view'] += 1
+                    post['visible_px_gt0'] += int(L['visible'] > 0)
+                    post['depth_ok（無效 < 10%）'] += int('depth_insufficient' not in L['flags'])
+                    post['occluded（遮擋 ≥ 10%）'] += int('occluded' in L['flags'])
+                    post['low_visible'] += int('low_visible' in L['flags'])
+                    post['truncated'] += int('truncated' in L['flags'])
         rows.append({'capture': cap, 'group': grp, 'note': note, 'n_frames': n, 'n_missing_truth_or_depth': nmiss,
-                     'categories': cats, 'dist_m': (None if not dists else
-                                                    {'min': round(min(dists), 3), 'p50': round(float(np.median(dists)), 3),
-                                                     'max': round(max(dists), 3)})})
+                     'flags（可並存）': cats, 'after_ENGAGE_WAIT': post,
+                     'dist_m': (None if not dists else
+                                {'min': round(min(dists), 3), 'p50': round(float(np.median(dists)), 3),
+                                 'max': round(max(dists), 3)})})
         print(rows[-1])
     groups = {}
     for r in rows:
@@ -173,7 +258,8 @@ def inventory():
         g['captures'].append(r['capture'])
         g['n_frames'] += r['n_frames']
     out = {'schema': 'dl0_inventory/1', 'asset': 'drawer_unit_bar26（全部來源同一把手幾何實例）',
-           'label_method': 'dl0_autolabel.py：真值圓柱逐像素射線求交＋實測深度可見性（含遮擋），端蓋忽略',
+           'label_method': 'dl0_autolabel.py：真值圓柱逐像素射線求交＋實測深度比對；可見／遮擋（實測較近）／深度無效／幾何不符（實測較遠）分開；'
+                           '端蓋、遮罩邊界 1 px、深度無效、幾何不符標 ignore；旗標可並存',
            'captures': rows, 'groups': groups}
     p = os.path.join(HERE, 'results', 'vision', 'DL0_inventory.json')
     json.dump(out, open(p, 'w'), ensure_ascii=False, indent=1)
@@ -195,25 +281,26 @@ def examples(dst):
             if fr['c'] is None:
                 continue
             L = label(fr)
-            if L['category'] == 'no_handle_in_view':
+            if 'no_handle_in_view' in L['flags']:
                 key = '視野外（無把手）'
             else:
                 key = next((b[0] for b in bins if b[1] <= L['dist_m'] < b[2]), None)
-            if key and key not in got and (L['category'] == 'no_handle_in_view' or L['visible'] > 0):
+            if key and key not in got and ('no_handle_in_view' in L['flags'] or L['visible'] > 0):
                 got.add(key)
-                picks.append((f"{key}｜{L['category']}", cap, fr, L))
+                picks.append((f"{key}｜{'+'.join(L['flags'])}", cap, fr, L))
     fig, axs = plt.subplots(2, 3, figsize=(15, 8))
     for ax, (key, cap, fr, L) in zip(axs.ravel(), picks):
         img = np.asarray(Image.open(fr['rgb']).convert('RGB')).astype(float) / 255
         ov = img.copy()
         ov[L['mask']] = 0.35 * ov[L['mask']] + 0.65 * np.array([1.0, 0.45, 0.1])
+        ov[L['ignore']] = 0.4 * ov[L['ignore']] + 0.6 * np.array([0.2, 0.6, 1.0])
         ax.imshow(ov)
         ax.set_title(f"{key}｜{cap.split('/')[0]} f{fr['n']}\n距離 {L['dist_m']:.2f} m　可見 {L['visible']}/{L['expected']} px"
-                     f"　端點可見 {sum(L['ends_visible'])}/2", fontsize=9)
+                     f"　端點區段可見 {sum(L['end_region_visible'])}/2　遮擋 {L['occluding']} px", fontsize=9)
         ax.axis('off')
     for ax in axs.ravel()[len(picks):]:
         ax.axis('off')
-    fig.suptitle('DL0 標註範例（真值圓柱 × 實測深度產生的可見遮罩，橘色）——原型，尚未人工抽查', fontsize=11)
+    fig.suptitle('DL0 標註範例：橘＝真值輔助可見遮罩、藍＝ignore（邊界／端蓋／深度無效／幾何不符）——初始標籤，尚未人工抽查', fontsize=11)
     fig.tight_layout()
     fig.savefig(dst, dpi=110)
     print('寫出', dst, [p[0] for p in picks])

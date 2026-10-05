@@ -1,7 +1,7 @@
 {
  "schema": "dl0_inventory/1",
  "asset": "drawer_unit_bar26（全部來源同一把手幾何實例）",
- "label_method": "dl0_autolabel.py：真值圓柱逐像素射線求交＋實測深度可見性（含遮擋），端蓋忽略",
+ "label_method": "dl0_autolabel.py：真值圓柱逐像素射線求交＋實測深度比對；可見／遮擋（實測較近）／深度無效／幾何不符（實測較遠）分開；端蓋、遮罩邊界 1 px、深度無效、幾何不符標 ignore；旗標可並存",
  "captures": [
   {
    "capture": "v0_wrist_2/wrist_v0",
@@ -9,8 +9,17 @@
    "note": "V0 靜態（瞬移擺位）",
    "n_frames": 20,
    "n_missing_truth_or_depth": 0,
-   "categories": {
+   "flags（可並存）": {
     "truncated": 20
+   },
+   "after_ENGAGE_WAIT": {
+    "n_frames": 0,
+    "handle_in_view": 0,
+    "visible_px_gt0": 0,
+    "depth_ok（無效 < 10%）": 0,
+    "occluded（遮擋 ≥ 10%）": 0,
+    "low_visible": 0,
+    "truncated": 0
    },
    "dist_m": {
     "min": 0.129,
@@ -24,8 +33,17 @@
    "note": "V0 靜態（瞬移擺位）",
    "n_frames": 20,
    "n_missing_truth_or_depth": 0,
-   "categories": {
+   "flags（可並存）": {
     "truncated": 20
+   },
+   "after_ENGAGE_WAIT": {
+    "n_frames": 0,
+    "handle_in_view": 0,
+    "visible_px_gt0": 0,
+    "depth_ok（無效 < 10%）": 0,
+    "occluded（遮擋 ≥ 10%）": 0,
+    "low_visible": 0,
+    "truncated": 0
    },
    "dist_m": {
     "min": 0.285,
@@ -39,8 +57,18 @@
    "note": "V0 動態重播；與 dyn_motm2 同軌跡",
    "n_frames": 64,
    "n_missing_truth_or_depth": 0,
-   "categories": {
-    "truncated": 64
+   "flags（可並存）": {
+    "truncated": 64,
+    "near_clipped": 30
+   },
+   "after_ENGAGE_WAIT": {
+    "n_frames": 28,
+    "handle_in_view": 28,
+    "visible_px_gt0": 28,
+    "depth_ok（無效 < 10%）": 28,
+    "occluded（遮擋 ≥ 10%）": 0,
+    "low_visible": 0,
+    "truncated": 28
    },
    "dist_m": {
     "min": 0.092,
@@ -54,9 +82,19 @@
    "note": "V0 動態重播；V1 已用",
    "n_frames": 240,
    "n_missing_truth_or_depth": 0,
-   "categories": {
+   "flags（可並存）": {
     "clean": 35,
-    "truncated": 205
+    "truncated": 205,
+    "near_clipped": 133
+   },
+   "after_ENGAGE_WAIT": {
+    "n_frames": 170,
+    "handle_in_view": 170,
+    "visible_px_gt0": 170,
+    "depth_ok（無效 < 10%）": 170,
+    "occluded（遮擋 ≥ 10%）": 0,
+    "low_visible": 0,
+    "truncated": 153
    },
    "dist_m": {
     "min": 0.092,
@@ -70,9 +108,19 @@
    "note": "同軌跡另一次擷取（容差實驗）",
    "n_frames": 214,
    "n_missing_truth_or_depth": 0,
-   "categories": {
+   "flags（可並存）": {
     "clean": 18,
-    "truncated": 196
+    "truncated": 196,
+    "near_clipped": 133
+   },
+   "after_ENGAGE_WAIT": {
+    "n_frames": 144,
+    "handle_in_view": 144,
+    "visible_px_gt0": 144,
+    "depth_ok（無效 < 10%）": 144,
+    "occluded（遮擋 ≥ 10%）": 0,
+    "low_visible": 0,
+    "truncated": 144
    },
    "dist_m": {
     "min": 0.092,
@@ -86,9 +134,18 @@
    "note": "D1 開發集（已看過）",
    "n_frames": 87,
    "n_missing_truth_or_depth": 0,
-   "categories": {
+   "flags（可並存）": {
     "clean": 66,
     "truncated": 21
+   },
+   "after_ENGAGE_WAIT": {
+    "n_frames": 0,
+    "handle_in_view": 0,
+    "visible_px_gt0": 0,
+    "depth_ok（無效 < 10%）": 0,
+    "occluded（遮擋 ≥ 10%）": 0,
+    "low_visible": 0,
+    "truncated": 0
    },
    "dist_m": {
     "min": 0.16,
@@ -102,9 +159,18 @@
    "note": "D1 S3 保留集（已看過，不能再當盲測）",
    "n_frames": 99,
    "n_missing_truth_or_depth": 0,
-   "categories": {
+   "flags（可並存）": {
     "clean": 67,
     "truncated": 32
+   },
+   "after_ENGAGE_WAIT": {
+    "n_frames": 0,
+    "handle_in_view": 0,
+    "visible_px_gt0": 0,
+    "depth_ok（無效 < 10%）": 0,
+    "occluded（遮擋 ≥ 10%）": 0,
+    "low_visible": 0,
+    "truncated": 0
    },
    "dist_m": {
     "min": 0.11,
@@ -118,10 +184,20 @@
    "note": "D1 S4 線上（已看過，不能再當盲測）",
    "n_frames": 438,
    "n_missing_truth_or_depth": 0,
-   "categories": {
+   "flags（可並存）": {
     "truncated": 222,
     "clean": 113,
+    "near_clipped": 115,
     "no_handle_in_view": 103
+   },
+   "after_ENGAGE_WAIT": {
+    "n_frames": 261,
+    "handle_in_view": 158,
+    "visible_px_gt0": 158,
+    "depth_ok（無效 < 10%）": 158,
+    "occluded（遮擋 ≥ 10%）": 0,
+    "low_visible": 0,
+    "truncated": 136
    },
    "dist_m": {
     "min": 0.092,
