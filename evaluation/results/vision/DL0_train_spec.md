@@ -54,3 +54,19 @@ G0（凍結 D1）、G1（真值輔助遮罩參考）、L1（學習式遮罩）�
 2. 群組均衡取樣、訓練上限與模型選擇規則（開發 IoU、固定門檻 0.5）。
 3. 抽查由 Claude 目視初查（非人工）是否足夠作為本包前提，或需 Howard 複查後才訓練。
 4. 建立 `~/venvs/dl0` 並下載 torch（約 3 GB）與 COCO 權重是否核可。
+
+---
+
+# draft-2（依 Codex 審查必修；核可建環境與訓練）
+
+1. **影像尺寸**：`maskrcnn_resnet50_fpn_v2(min_size=480, max_size=640)`；啟動時以 `model.transform` 核對內部尺寸＝(480, 640)，輸出遮罩座標＝輸入（測試）。
+2. **ignore 排除於遮罩損失**（不是所有損失）：目標遮罩三值（0／1／2），nearest 通過內部 resize（倍率 1）；`maskrcnn_loss_ignore` 取代 `roi_heads.maskrcnn_loss`，
+   前景與 ignore 各自 RoI 投影，ignore 投影 ≥ 0.5 權重 0，損失＝Σ(w·BCE)／max(Σw,1)。翻轉時影像、前景、ignore 一起翻，框由翻後前景重算。
+   測試（`test_dl0_train.py` 14/14）：不忽略＝原損失、全忽略＝0、**改變被忽略位置 logits 損失不變且該處梯度為 0**、含正負樣本 batch 前向／反向、翻轉一致、IoU 定義。
+3. **選模型 IoU**：有可評估前景的影格逐格 IoU（ignore 排除；分數最高單一實例、門檻 0.5、二值化 0.5；漏檢＝0），兩開發群組各自平均後等權平均；
+   負樣本另報誤檢率；無可評估前景者另列排除；空對空不計入。
+- 群組均衡取樣：每格權重＝1／該群組訓練影格數。
+- 環境：工作區 `.venv-dl0`（torch 2.11.0+cu128、torchvision 0.26.0+cu128、numpy 2.5.2、scipy 1.18.1；RTX 5060 可用、NMS 正常）；不動 Isaac venv；`.gitignore` 排除 `.venv-dl0/` 與 `evaluation/dl0_ckpt/`。
+- 標籤：抽查修正版 `dl0_autolabel.py`（ignore 只取外側一圈；12 張 fix 全數以修正版複核）；快取 `dl0_label_cache.py` → `dl0_ckpt/labels/`（訓練正 942／負 103、開發正 186、排除 0）。
+- 流程：先短程試跑（確認記憶體與熱保護；OOM 或環境不符即停，不換模型、不改 batch）→ 依本規格完整訓練（上限 12,000 次迭代）。
+- 凍結：`freeze_dl0_train.sha256`（舊 `freeze_dl0_capture.sha256`、`freeze_dl0_analysis.sha256` 保留）。
