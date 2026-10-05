@@ -823,7 +823,9 @@ def main() -> int:
     park_gate = StaticGate(park_cfg) if park_on else None
     park_hold = None
     park_done = False
-    park_state = {'violation': None, 'transfer_without_gate': False}
+    park_state = {'violation': None, 'transfer_without_gate': False, 'external': None}
+    park_prev_cmd = (float('nan'),) * 3      # 上一物理步實際寫入的底盤命令（閘門用）
+    park_last_sample = None                  # 上一物理步 (step, t, x, y, yaw)（保持監看承接用）
     # 規格：PARK_FIXED **明確取消滾動交棒下界**（停住反而不能接手）；MOTM 保持原值。其他預核照做。
     v_min_lin_eff = 0.0 if park_on else a.v_min_lin
 
@@ -835,8 +837,9 @@ def main() -> int:
             return False, '停車靜止閘門尚未通過'
         if not park_gate.ok_now:
             return False, f'停車條件當前不成立：{park_gate.why_now}'
-        if park_gate.last is None or park_gate.last['step'] != int(sid) - 1:
-            return False, (f'停車閘門資料不新鮮（最後一筆 '
+        # **本步**的停車量測（ex.step 之前已以本步位姿更新閘門）；不以前一步的 ok_now 充當當步核對
+        if park_gate.last is None or park_gate.last['step'] != int(sid):
+            return False, (f'停車閘門沒有本步量測（最後一筆 '
                            f'{None if park_gate.last is None else park_gate.last["step"]}，本步 {sid}）')
         return True, None
 
@@ -960,6 +963,14 @@ def main() -> int:
     if park_on:
         node.park_gate_pub = node.create_publisher(String, '/park/gate', 10)
         node.park_vio_pub = node.create_publisher(String, '/park/violation', 10)
+        node.park_ext_vio = None
+
+        def _ext_vio(m):
+            try:
+                node.park_ext_vio = json.loads(m.data)
+            except Exception:
+                node.park_ext_vio = {'why': m.data}
+        node.create_subscription(String, '/park/violation', _ext_vio, 10)
         print(f'[room] **PARK_FIXED**：停位 {_pk}；閘門保持 {park_cfg.hold_s:.3f} s；'
               f'滾動交棒下界取消（v_min_lin {a.v_min_lin} → 0）', flush=True)
     print('[room] 進入主迴圈', flush=True)
@@ -1083,6 +1094,22 @@ def main() -> int:
             _mvb_now = [(_ddx * _cc + _ddy * _ss) / a.physics_dt,
                         (-_ddx * _ss + _ddy * _cc) / a.physics_dt,
                         (_yw0 - prev_pose[2]) / a.physics_dt]
+        if park_on:
+            # 外部違規（減速段逾時、全身／任務節點）⇒ 同一條閂鎖：取消待提交切換、拒絕後續換手
+            if node.park_ext_vio is not None and park_state['violation'] is None:
+                _v = {'step': step_id, 't': t, 'phase': 'external',
+                      'why': f'external：{node.park_ext_vio.get("why")}', 'source': node.park_ext_vio}
+                park_state['violation'] = _v
+                park_state['external'] = node.park_ext_vio
+                ex.cancel_handover(f'PARK_FIXED 違規：{_v["why"]}')
+                rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'violation', **_v})
+                print(f'[room] **PARK_FIXED 外部違規**（閂鎖中止）@ step {step_id}：{_v["why"]}', flush=True)
+            # 閘門以**本步**實測位姿與上一步實際寫入的底盤命令更新（守門在 ex.step 內核本步）
+            if park_hold is None and not park_done and ex.owner != AUTH_WHOLEBODY:
+                _stowed = max(abs(float(q_arm[k]) - float(stow[k]))
+                              for k in range(len(stow))) <= a.park_stow_tol
+                park_gate.update(step_id, t, float(_p0[0]), float(_p0[1]), float(_yw0),
+                                 park_prev_cmd, _stowed)
         res = ex.step(step_id, t, a.physics_dt, nav_cmd=nav, glide_cmd=gld,
                       q_arm_measured=q_arm, meas_vb=_mvb_now)
 
@@ -1107,44 +1134,52 @@ def main() -> int:
             robot.get_articulation_controller().apply_action(
                 ArticulationAction(joint_positions=tgt))
 
-        # ---- PARK_FIXED：本步的靜止閘門／保持監看（同一物理步的真值位姿與實際寫入的底盤命令）----
+        # ---- PARK_FIXED：本步的保持監看（同一物理步的真值位姿與實際寫入的底盤命令）----
         _pmode = None
         if park_on:
             _cmd3 = [float(x) for x in res.base_cmd]
             _x, _y = float(p_now[0]), float(p_now[1])
-            if park_hold is None and not park_done:
-                if res.owner == AUTH_WHOLEBODY:
-                    # 實際切換給全身的第一步 ⇒ 開始保持監看；錨點＝閘門錨點（之後不更新）
-                    if park_gate.anchor is None:
-                        park_state['transfer_without_gate'] = True
-                    park_hold = HoldMonitor(park_cfg, park_gate.anchor or (_x, _y, float(yw)),
-                                            step_id, t)
-                    rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'hold_start',
-                                          'anchor': park_hold.anchor,
-                                          'gate_pass_step': park_gate.pass_step})
-                else:
-                    _stowed = max(abs(float(q_arm[k]) - float(stow[k]))
-                                  for k in range(len(stow))) <= a.park_stow_tol
-                    park_gate.update(step_id, t, _x, _y, float(yw), _cmd3, _stowed)
+            if park_hold is None and not park_done and res.owner == AUTH_WHOLEBODY:
+                # 實際切換給全身的第一步 ⇒ 開始保持監看；錨點＝閘門錨點（之後不更新）；
+                # **承接切換前一物理步的位姿**，切換當步的速度才核得到
+                if park_gate.anchor is None:
+                    park_state['transfer_without_gate'] = True
+                park_hold = HoldMonitor(park_cfg, park_gate.anchor or (_x, _y, float(yw)),
+                                        step_id, t, prev=park_last_sample)
+                rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'hold_start',
+                                      'anchor': park_hold.anchor,
+                                      'gate_pass_step': park_gate.pass_step,
+                                      'prev_sample': park_last_sample})
             if park_hold is not None and park_hold.end is None:
                 if res.owner == AUTH_WHOLEBODY:
                     _v = park_hold.update(step_id, t, _x, _y, float(yw), _cmd3, phase=res.kind)
-                    if (_v is not None or park_state['transfer_without_gate']) \
-                            and park_state['violation'] is None:
-                        _v = _v or {'step': step_id, 't': t, 'phase': res.kind,
-                                    'why': '未通過停車閘門即切換給全身'}
-                        park_state['violation'] = _v
-                        # **閂鎖本趟中止**：取消待提交切換、通知所有命令來源停止；不靜默改寫命令
-                        ex.cancel_handover(f'PARK_FIXED 違規：{_v["why"]}')
-                        node.park_vio_pub.publish(String(data=json.dumps(_v)))
-                        rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'violation', **_v})
-                        print(f'[room] **PARK_FIXED 違規**（閂鎖中止）@ step {step_id}：{_v["why"]}',
-                              flush=True)
-                else:
-                    park_hold.close(step_id, t)
+                elif res.owner == AUTH_NAV:
+                    # **交還導航當步**：核最後一個全身控制區間（位姿 k−1→k），不核導航首筆命令；
+                    # 交還時手臂須已收攏才算正常結束
+                    _v = park_hold.update(step_id, t, _x, _y, float(yw), None, phase='handback')
+                    _stowed_hb = max(abs(float(q_arm[k]) - float(stow[k]))
+                                     for k in range(len(stow))) <= a.park_stow_tol
+                    park_hold.close(step_id, t, stowed=_stowed_hb)
                     park_done = True
                     rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'hold_end',
-                                          'verdict': park_hold.verdict()})
+                                          'verdict': park_hold.verdict(),
+                                          'handback_stowed': _stowed_hb})
+                else:
+                    _v = {'step': step_id, 't': t, 'phase': res.kind,
+                          'why': f'保持期內控制者變成 {res.owner}（不是交還導航）'}
+                if (_v is not None or park_state['transfer_without_gate']) \
+                        and park_state['violation'] is None:
+                    _v = _v or {'step': step_id, 't': t, 'phase': res.kind,
+                                'why': '未通過停車閘門即切換給全身'}
+                    park_state['violation'] = _v
+                    # **閂鎖本趟中止**：取消待提交切換、通知所有命令來源停止；不靜默改寫命令
+                    ex.cancel_handover(f'PARK_FIXED 違規：{_v["why"]}')
+                    node.park_vio_pub.publish(String(data=json.dumps(_v)))
+                    rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'violation', **_v})
+                    print(f'[room] **PARK_FIXED 違規**（閂鎖中止）@ step {step_id}：{_v["why"]}',
+                          flush=True)
+            park_prev_cmd = tuple(_cmd3)
+            park_last_sample = (step_id, t, _x, _y, float(yw))
             _pmode = ('hold' if (park_hold is not None and park_hold.end is None)
                       else 'post' if park_done else 'gate')
             if step_id % 2 == 0:

@@ -84,6 +84,56 @@ def interval_metrics(t, pose, cmd, start, end, rates, limits=None):
     }
 
 
+def control_window_metrics(t, pose, cmd, owner, rates, limits=None):
+    """PARK_FIXED 全窗：**實際轉給全身**（owner 首次 = 1）→ **實際交還導航**（之後首次 owner = 0）。
+
+    與執行端 park_fixed.HoldMonitor 同一口徑（Codex 20261005_115350）：位姿與速率含切換當步（以切換前一步為起點）
+    與交還當步（最後一個全身控制區間 k−1→k）；命令只核全身控制的步，不核導航首筆命令；偏離以切換前一步位姿為準。
+    沒有交還 ⇒ 證據不足（不是通過）。
+    """
+    limits = LIMITS if limits is None else limits
+    linear, angular, yaw = rates
+    owner = np.asarray(owner)
+    wb = np.flatnonzero(owner == 1)
+    if len(wb) == 0:
+        return {"status": "no_wholebody_control"}
+    i0 = int(wb[0])
+    later_nav = np.flatnonzero((np.arange(len(owner)) > i0) & (owner == 0))
+    if i0 == 0:
+        return {"status": "insufficient: no pre-switch sample"}
+    if len(later_nav) == 0:
+        return {"status": "insufficient: no handback to nav", "transfer_sim_t": float(t[i0])}
+    i1 = int(later_nav[0])
+    other = np.flatnonzero((np.arange(len(owner)) > i0) & (np.arange(len(owner)) < i1) & (owner != 1))
+    ix = np.arange(i0, i1 + 1)                       # 位姿／速率：含交還當步（k−1→k）
+    ic = np.arange(i0, i1)                           # 命令：只核全身控制的步
+    if not (np.isfinite(linear[ix]).all() and np.isfinite(angular[ix]).all() and np.isfinite(cmd[ic]).all()):
+        return {"status": "insufficient: nonfinite evidence"}
+    ref = pose[i0 - 1]
+    exc = np.linalg.norm(pose[ix, :2] - ref[:2], axis=1)
+    yexc = np.abs(yaw[ix] - yaw[i0 - 1])
+    stationary = (linear[ix] <= limits["linear_speed_mps"]) & (angular[ix] <= limits["angular_speed_radps"])
+    czero = ((np.linalg.norm(cmd[ic, :2], axis=1) <= limits["command_linear_mps"])
+             & (np.abs(cmd[ic, 2]) <= limits["command_angular_radps"]))
+    gaps_ok = bool(np.max(np.diff(t[i0 - 1:i1 + 1])) <= 0.01001)
+    ok = bool(gaps_ok and len(other) == 0 and stationary.all() and czero.all()
+              and exc.max() <= limits["operation_excursion_m"]
+              and yexc.max() <= limits["operation_yaw_excursion_rad"])
+    return {
+        "status": "evaluated",
+        "transfer_sim_t": float(t[i0]), "handback_sim_t": float(t[i1]),
+        "n_physics_samples": int(len(ix)), "gaps_ok": gaps_ok,
+        "other_owner_steps_inside": int(len(other)),
+        "max_excursion_mm": float(exc.max() * 1000),
+        "max_yaw_excursion_deg": float(np.rad2deg(yexc.max())),
+        "physics_speed_max_mmps": float(linear[ix].max() * 1000),
+        "physics_angular_speed_max_radps": float(angular[ix].max()),
+        "max_applied_linear_command_mmps": float(np.linalg.norm(cmd[ic, :2], axis=1).max() * 1000),
+        "max_applied_angular_command_radps": float(np.abs(cmd[ic, 2]).max()),
+        "strict_stationary_full_window": ok,
+    }
+
+
 def audit_run(run):
     run = Path(run)
     paths = {name: run / name for name in ("room_run.json", "task.json", "wholebody.json")}
@@ -97,6 +147,7 @@ def audit_run(run):
     if cmd.shape != (len(t), 3) or not np.isfinite(cmd).all():
         raise ValueError("nonfinite or malformed base command")
     rates = pose_rates(t, pose)
+    owner = np.array([r[cols.index("owner(0=nav,1=wb,2=glide)")] for r in rows])
     phases = {}
     for event in task["events"]:
         if "phase" in event:
@@ -119,6 +170,8 @@ def audit_run(run):
         "recorded_motm": task["args"]["motm"],
         "completed": task.get("final_phase") == "DONE",
         "operation_scope": "ALIGN inclusive to HANDBACK_WAIT exclusive; UNFOLD reported separately",
+        # PARK_FIXED 全窗（與執行端 park_gate.json 同口徑；兩者不一致不得宣告模式通過）
+        "control_window": control_window_metrics(t, pose, cmd, owner, rates),
         "per_phase": per_phase,
         "operation": operation,
         "grasp_close_to_attach": (interval_metrics(t, pose, cmd, grasp, attached, rates)

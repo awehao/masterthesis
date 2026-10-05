@@ -13,6 +13,9 @@
               提交當步核「停車條件仍成立」。
   HoldMonitor 從**實際切換給全身**到**實際交還導航**，逐步核：線速度、yaw 速率、套用命令、相對錨點的平移 ≤ 1 mm、
               yaw ≤ 0.5°。第一次違規閂鎖（步、時間、相位、原因）；不重設錨點、不以連續計數延後。
+              **邊界**（Codex 20261005_115350）：開始時承接切換前一物理步的位姿（prev），切換當步的速度才核得到；
+              交還當步呼叫 update(cmd3=None)——核最後一個全身控制區間（位姿 k−1→k），不核導航首筆命令——再 close；
+              只有交還時手臂已收攏才算正常結束（否則 INSUFFICIENT）。
 
 證據不足（任一）：物理步不連續、時間不前進、非有限值 ⇒ StaticGate 重新起算；HoldMonitor 閂鎖 evidence_insufficient
 （判定不得為 PASS），但不當成底盤移動。
@@ -135,11 +138,16 @@ class StaticGate:
 
 
 class HoldMonitor:
-    def __init__(self, cfg: ParkCfg, anchor, start_step: int, start_t: float):
+    def __init__(self, cfg: ParkCfg, anchor, start_step: int, start_t: float, prev=None):
+        """prev = 切換前一物理步的 (step, t, x, y, yaw)；給了才核得到切換當步的速度。"""
         self.cfg = cfg
         self.anchor = tuple(float(a) for a in anchor)
         self.start = (int(start_step), float(start_t))
         self.diff = _Diff()
+        if prev is not None and _finite(*prev[1:]):
+            self.diff.prev = (int(prev[0]), float(prev[1]), float(prev[2]), float(prev[3]), float(prev[4]))
+        self.seeded = prev is not None
+        self.handback_stowed = None
         self.violation = None            # 第一次違規（閂鎖）
         self.evidence_insufficient = None
         self.n = 0
@@ -147,7 +155,7 @@ class HoldMonitor:
         self.end = None
 
     def update(self, step, t, x, y, yaw, cmd3, phase=None):
-        """回傳本步新發生的違規（只在第一次），否則 None。"""
+        """回傳本步新發生的違規（只在第一次），否則 None。cmd3 = None ⇒ 本步不核命令（交還當步）。"""
         c = self.cfg
         self.n += 1
         ok_d, v, w, why = self.diff.update(step, t, x, y, yaw)
@@ -161,7 +169,9 @@ class HoldMonitor:
                 reasons.append(f'v_lin {v:.6f} > {c.v_lin_max}')
             if w > c.w_max:
                 reasons.append(f'yaw_rate {w:.6f} > {c.w_max}')
-        if _finite(*cmd3):
+        if cmd3 is None:
+            pass
+        elif _finite(*cmd3):
             m = max(abs(float(u)) for u in cmd3)
             self.max['cmd'] = max(self.max['cmd'], m)
             if m > c.cmd_max:
@@ -183,18 +193,21 @@ class HoldMonitor:
             return self.violation
         return None
 
-    def close(self, step, t):
+    def close(self, step, t, stowed=None):
         self.end = (int(step), float(t))
+        self.handback_stowed = None if stowed is None else bool(stowed)
 
     def verdict(self):
         if self.violation is not None:
             return 'VIOLATION'
-        if self.evidence_insufficient is not None or self.end is None or self.n == 0:
+        if (self.evidence_insufficient is not None or self.end is None or self.n == 0
+                or not self.seeded or self.handback_stowed is not True):
             return 'INSUFFICIENT'
         return 'PASS'
 
     def report(self):
         return {'anchor': self.anchor, 'start': self.start, 'end': self.end, 'n_steps': self.n,
+                'seeded_with_pre_switch_pose': self.seeded, 'handback_stowed': self.handback_stowed,
                 'verdict': self.verdict(), 'first_violation': self.violation,
                 'evidence_insufficient': self.evidence_insufficient,
                 'max': {'v_lin_mps': self.max['v_lin'], 'yaw_rate_rps': self.max['yaw_rate'],

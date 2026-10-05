@@ -79,6 +79,7 @@ class WholeBody(Node):
         self.park_violation = None
         if getattr(a, 'park_fixed', False):
             self.create_subscription(String, '/park/violation', self._park_vio, 1)
+            self.vio_pub = self.create_publisher(String, '/park/violation', 10)
         self.pose = None
         self.vb = None
         self.q = None
@@ -238,6 +239,7 @@ def main():
         rclpy.spin_once(nd, timeout_sec=0.0)
         if a.park_fixed and nd.park_violation is not None:
             rep['park_violation'] = nd.park_violation
+            phase = 'PARK_VIOLATION'          # 結尾判失敗，不因已到 HOLD 而回傳成功
             print(f'[wb] 收到 PARK_FIXED 違規 ⇒ 停止發布：{nd.park_violation}', flush=True)
             break
         owner = (nd.hs or {}).get('owner')
@@ -396,6 +398,13 @@ def main():
             rep['park_base_cmd_generated'] = {'phase': phase, 'u_base': [float(x) for x in u[:3]],
                                               'sim_t': nd.t_seen}
             print(f'[wb] **PARK_FIXED 下生成了非零底盤命令** {u[:3]} @ {phase} ⇒ 停止', flush=True)
+            # 通知其他命令來源（執行端、任務、減速段、mission）同一條違規閂鎖
+            nd.vio_pub.publish(String(data=json.dumps(
+                {'why': 'wholebody_base_cmd_nonzero', 'phase': phase,
+                 'u_base': [float(x) for x in u[:3]], 'sim_t': nd.t_seen})))
+            for _ in range(5):
+                rclpy.spin_once(nd, timeout_sec=0.02)
+            phase = 'PARK_VIOLATION'
             break
         nd.send(u)
         rep['phase'] = phase

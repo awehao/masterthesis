@@ -543,6 +543,26 @@ def main():
         for _ in range(64):
             rclpy.spin_once(nd, timeout_sec=0.0)
         st = nd.sim_t()
+        # ---- PARK_FIXED：違規閂鎖 **最先檢查**（在任何目標發布、求解器啟動與提前 continue 之前）----
+        # 執行端違規或本節點生成非零底盤命令 ⇒ 走既有中止收尾：停求解、不發目標、夾爪維持、不追加恢復動作。
+        if nd.park_fixed and (nd.park_violation is not None or nd.park_base_bad is not None):
+            _why = (f'park_fixed_violation：{nd.park_violation.get("why")}'
+                    if nd.park_violation is not None else 'park_fixed_task_base_cmd_nonzero')
+            rep['abort'] = _why
+            rep['park_violation'] = nd.park_violation
+            rep['park_base_bad'] = nd.park_base_bad
+            rep['park_abort_phase'] = pol.phase
+            print(f'[task] **中止：{_why}** @ sim {st} 相位 {pol.phase}', flush=True)
+            if not stop_sent:
+                m = String()
+                m.data = f'drawer_task 中止：{_why}'
+                nd.stop_pub.publish(m)
+                stop_sent = True
+                rep['events'].append({'sim_t': st, 'solver_stop': True, 'reason': f'abort：{_why}'})
+                rep['abort_stop'] = {'abort_sim_t': st, 'stop_sent_sim_t': nd.sim_t(), 'reason': _why}
+                for _ in range(10):
+                    rclpy.spin_once(nd, timeout_sec=0.05)
+            break
         if st is None or nd.H is None:
             time.sleep(dt)
             continue
@@ -725,14 +745,6 @@ def main():
             m.data = phase
             nd.phase_pub.publish(m)
             prev_phase = phase
-        # ---- PARK_FIXED：執行端違規閂鎖／本節點生成非零底盤命令 ⇒ 走既有中止收尾（任何相位）----
-        if nd.park_fixed and not out.get('abort'):
-            if nd.park_violation is not None:
-                out['abort'] = f'park_fixed_violation：{nd.park_violation.get("why")}'
-                rep['park_violation'] = nd.park_violation
-            elif nd.park_base_bad is not None:
-                out['abort'] = 'park_fixed_task_base_cmd_nonzero'
-                rep['park_base_bad'] = nd.park_base_bad
         # ---- 測試用注入中止（預設關閉；只供功能確認，原因明記，不冒稱實際滑脫）----
         if a.inject_abort_at_s >= 0.0 and phase == 'OPEN' and not out.get('abort'):
             if inj_open_t0 is None:

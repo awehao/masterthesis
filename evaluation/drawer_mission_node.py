@@ -209,6 +209,9 @@ class Mission(Node):
             rclpy.spin_once(self, timeout_sec=0.05)
         self.plan_n_sub_at_publish = n_sub
         for _ in range(5):
+            if getattr(self, 'go_sim_t', None) is None:
+                # **共同 GO**＝第一筆實際 plan_pub.publish() 當下的模擬時間；重發不更新，兩組共用
+                self.go_sim_t = self._sim_t()
             self.plan_pub.publish(p)
             self.goal_pub.publish(gp)
             rclpy.spin_once(self, timeout_sec=0.0)
@@ -284,9 +287,9 @@ def main():
     if nd.n_odom == 0:
         print('[mission] **收不到 /odom** ⇒ 中止', flush=True)
         return 2
-    # **共同 GO**：首次發出導航目標的模擬時間（兩組同一事件；重發不重設）
-    rep['go_sim_t'] = nd._sim_t()
     n = nd.publish_plan(nd.pose[:2], park, goal_yaw=a.park_yaw)
+    # **共同 GO**：第一筆實際發出導航計畫的模擬時間（publish_plan 內記；等訂閱者的時間不算進 GO 之前）
+    rep['go_sim_t'] = getattr(nd, 'go_sim_t', None)
     print(f'[mission] 計畫已發：{n} 點，{nd.pose[0]:.3f},{nd.pose[1]:.3f} '
           f'→ {park[0]:.3f},{park[1]:.3f}', flush=True)
     rep['plan_points'] = n
