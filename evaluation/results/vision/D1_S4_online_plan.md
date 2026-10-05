@@ -39,3 +39,44 @@
 1. 在 5 Hz 擷取點才 `world.render()`（不每步渲染）是否可接受？rendering_time 與步時間不一致的影格一律拒絕。
 2. RGB 不發布、只存檔是否可以（偵測只用深度，RGB 僅疊圖）？
 3. S4 的「通過」定義：我提「各段對帳閉合、無積壓（待處理槽最多一張、年齡不隨時間增長）、控制話題零交集、任務 S1–S6 仍通過」；感知品質只報告。
+
+---
+
+# 修訂 r2（依 Codex reviews/20261005_144036_reply.md；實作與離線測試完成，待審後才跑）
+
+## 時間匹配
+- 模擬器每物理步在 `world.step()` **之後**以實際時間記相機 optical 世界位姿＋把手真值到有界 `PoseHistory`（1.0 s）；擷取排程也用 step 之後的時間。
+- 新影格以 `rendering_time` 找**唯一**匹配步（容差 0.25·dt；多步命中＝ambiguous 拒絕；早於歷史＝older_than_history；其餘 no_pose_at_render_time）；發布擷取步的位姿與原始擷取戳。
+- 不加暖機步、不瞬移、不呼叫 hold()：相機暖機在正常迴圈中發生，早期影格照實拒絕計數。
+- 只在擷取點 `world.render()`；`rendering_frame` 未變記 no_new_frame；實際新影格率由稽核量測（不假設每次 render 都有新影格）。相機不設 frequency。
+
+## 資料路徑界限與輸入契約
+| 段 | 界限 | 淘汰／原因 |
+|---|---|---|
+| ROS 發布（模擬器） | KEEP_LAST 2 | 傳輸端丟棄在節點不可見 ⇒ 稽核以來源影格序號推為 transport_drop |
+| ROS 接收（節點，每話題） | KEEP_LAST 2、RELIABLE | 同上 |
+| 同戳四段配對 PairBuffer | 3 組、逾時 1.0 s（牆鐘，自第一段到達） | pair_timeout／pair_overflow／duplicate_<part>／shutdown_unpaired |
+| 待處理槽 LatestSlot | 1 張 | 處理中來新影格 ⇒ 舊待處理影格 overwritten（記其 n、stamp 與覆蓋者 n） |
+| 工作執行緒 | 1 | 收尾時槽內剩餘 ⇒ shutdown_unprocessed |
+
+- 深度：`32FC1`、公尺、光軸深度（distance_to_image_plane 原值），little-endian，640×480，step 2560；非有限或 ≤ 0 無效（detect 只用 [0.1, 3.0] m）。frame_id `camera_color_optical_frame`。
+- camera_info：同 frame_id、讀回 K。
+- `/wrist/pose`：PoseStamped，**header.frame_id = odom（世界參考框）**，pose＝optical frame 在 odom 的位姿；四元數長度偏離 1 超過 1e-6 視為無效（不默默正規化）；位姿矩陣建構與 S3 `cam_T` 相同。
+- `/wrist/capture_meta`：String JSON（n、stamp、rendering_frame、source_wall_t）。四段以完全相同的擷取戳配對。
+- 牆鐘年齡＝輸出牆鐘 − 來源擷取匹配牆鐘（source_wall_t）；模擬年齡＝輸出當下 /clock − 擷取戳。
+- 重現：影格序號 n、rendering_frame、處理順序（processing_order_n）、seed 0、偵測程式 sha256 都寫入紀錄；深度另存 `wrist_live/frames/fNNNN_depth_m.npz`（float32 m）。
+
+## 通過定義（三部分；d1_s4_audit.py）
+1. **通路與對帳**：至少 1 格 processed 並發布；以來源影格序號逐格對帳，每格恰一個去向（processed／overwritten／shutdown_unprocessed／contract_reject／evicted:<原因>／transport_drop），無重複、無無法對應的節點事件；節點有界收尾摘要存在。
+2. **有效觀測**：ALIGN 之前至少 1 格 L2；全部拒絕 ⇒ 只能說通路連通。有效率與誤差只報告，不設門檻。
+3. **任務與隔離**：S1–S6、求解節點時槽（n_missed_slot、n_dup_skip、n_warm_discard、n_sim_stall）、熱紀錄各自報告；節點只發布 `/d1/handle_obs`（靜態核對）；控制仍用真值。只稱**命令／資料介面隔離**（算圖同步占用模擬主迴圈）。年齡趨勢只作診斷。與 phf_0*_M（無相機，n_missed_slot 3／0／1）比較只作參考。
+- 正常結束與 TERM 都有界收尾（工作執行緒最多等 1.5 s，運行器 TERM 後 3 s 才 KILL）。
+
+## 執行
+- 一趟：`PLAN=results/vision/d1_s4_schedule.tsv FREEZE=results/vision/freeze_d1_s4.sha256 BATCH=d1s4 OFFSET_MOVING=1 WRIST_LIVE=1 bash evaluation/run_plan_batch.sh`（MOTM、open 0.200、N 5，其餘與 phf 正式 MotM 相同）。
+- 事後：motm_physical_check（S1–S6）、horizon_replay_check（重播）、`d1_s4_audit.py`。
+
+## 已完成的離線測試
+- `test_d1_shadow.py` 29/29：延遲 2 步且 float32 時間的唯一匹配、步間／早於歷史／缺時間／NaN 拒絕、歷史有界、重複時間 ambiguous；配對任意順序、逾時、溢位、重複段、收尾；待處理槽覆蓋回傳舊影格識別、戳不改寫；32FC1 往返（含 inf／NaN）、16UC1／frame_id／尺寸／endianness／長度／四元數拒絕；**S3 開發集 87 格經線上契約路徑與 d1_detect_rev2 逐格相同**。
+- `test_d1_shadow_node.py`（ROS，不起模擬器，連跑兩次皆通過）：端到端配對、連發覆蓋、缺段逾時、16UC1 契約拒絕、TERM 後 3 s 內有界收尾並記錄未處理影格、輸出數＝處理數、觀測話題收齊、戳不改寫、處理順序、來源牆鐘年齡；稽核以來源影格逐格對帳閉合（連發時 ROS 接收佇列丟棄的影格歸為 transport_drop 或配對逾時）。
+- 模擬器端 `--wrist-live` 未實跑（Isaac 才能驗）：render 節奏與新影格率、每步取位姿的負載只能在 S4 趟量測。

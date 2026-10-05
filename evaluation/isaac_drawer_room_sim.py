@@ -70,6 +70,8 @@ ap.add_argument('--wrist-hz', type=float, default=5.0,
 ap.add_argument('--wrist-replay', default=None,
                 help='重播既有實錄（room_run.json）的一段運動來擷取動態腕部影像（不跑控制）')
 ap.add_argument('--wrist-replay-t0', type=float, default=0.0)
+ap.add_argument('--wrist-live', action='store_true',
+                help='D1 S4：與控制同跑的腕部深度擷取＋發布（D1_S4_online_plan.md；預設關，關時不進入）')
 ap.add_argument('--wrist-replay-t1', type=float, default=1e9)
 ap.add_argument('--wrist-base', default='-0.136412,0.560,1.297349',
                 help='擺位底盤 x,y,yaw（預設＝基準停位）')
@@ -965,6 +967,10 @@ def main() -> int:
     rclpy.init()
     node = Bridge()
     node.wb_latest = None
+    wlive = None
+    if a.wrist_live:
+        from wrist_live import WristLive
+        wlive = WristLive(a, stage, ROBOT, walk, hprim, a.urdf, node, a.physics_dt)
     if park_on:
         node.park_gate_pub = node.create_publisher(String, '/park/gate', 10)
         node.park_vio_pub = node.create_publisher(String, '/park/violation', 10)
@@ -1334,6 +1340,8 @@ def main() -> int:
         step_id += 1
         node.step_id = step_id
         t_after = float(world.current_time)
+        if wlive is not None:
+            wlive.on_step(world, t_after, step_id)
 
         # ---- 感測與狀態 ----
         if t_after >= next_state - 1e-9:
@@ -1469,6 +1477,8 @@ def main() -> int:
     if cam_csv is not None:
         cam_csv.close()
         print(f'[room] 錄影收尾：共 {n_frame} 幀 → {cam_dir}', flush=True)
+    if wlive is not None:
+        wlive.close()
     out = os.path.join(a.out, 'room_run.json')
     json.dump(rec, open(out, 'w'), ensure_ascii=False, indent=1, default=str)
     if park_on:

@@ -59,6 +59,7 @@ spawn sim "$ISAAC_PY" -u evaluation/isaac_drawer_room_sim.py \
   --sim-limit "$SIM_LIMIT" --cam "${CAM:-false}" --cam-hz "${CAM_HZ:-10}" \
   --contact-min-n "${CONTACT_MIN_N:-0.5}" \
   --finger-collision "${FINGER_COL:-hull}" $PK_SIM \
+  $([ "${WRIST_LIVE:-0}" = "1" ] && echo --wrist-live) \
   ${DRAWER_ASSET:+--drawer-asset "$DRAWER_ASSET"} --out "$DIR"
 say "  等場景建起（最多 180 s）"
 for i in $(seq 180); do grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null && break; sleep 1; done
@@ -66,6 +67,12 @@ if ! grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null; then
   say "**場景未建起** ⇒ 中止"; exit 83; fi
 say "  場景已建起"
 grep -E '^\[room\] (零摩擦|夾持面|摩擦核對)' "$DIR/sim.log" | tee -a "$DIR/run.log"
+# **WRIST_LIVE=1**（D1 S4，D1_S4_online_plan.md）：模擬器 --wrist-live 擷取腕部深度；shadow 節點在場景建起後
+# 立即上線（涵蓋導航接近窗口），只發布 /d1/handle_obs，不接控制。預設關閉 = 既有行為。
+if [ "${WRIST_LIVE:-0}" = "1" ]; then
+  grep -E '^\[wrist_live\]' "$DIR/sim.log" | tee -a "$DIR/run.log"
+  spawn d1shadow python3 -u evaluation/d1_shadow_node.py --out "$DIR/d1_shadow"
+fi
 
 spawn gmpc python3 -u -c "
 import sys; sys.path.insert(0,'src/ammr_wholebody_mpc')
