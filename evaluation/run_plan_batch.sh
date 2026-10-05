@@ -213,6 +213,7 @@ while IFS=$'\t' read -r IDX RID CASE OPEN_M METHOD N PAIR ORDERTAG <&3; do
   case "$METHOD" in
     PARK) MOTM_V=0; TASK_ARGS="$BASE_ARGS"; AREF="" ;;
     PARK_FIXED) MOTM_V=0; TASK_ARGS="$BASE_ARGS"; AREF=""; PKF=1 ;;
+    PARK_HOLD) MOTM_V=0; TASK_ARGS="$BASE_ARGS"; AREF=""; PKF=2 ;;
     B1)   MOTM_V=1; TASK_ARGS="$BASE_ARGS --motm-w-qn 0.8 --motm-w-vref-pre 0.3 ${MOTM_EXTRA_ARGS:-}"; AREF="${MOTM_A_REF_SET:-}"
           SK=b1; BKP="${B1_KP_SET:-1.0}" ;;
     MOTM) MOTM_V=1; TASK_ARGS="$BASE_ARGS --motm-w-qn 0.8 --motm-w-vref-pre 0.3 ${MOTM_EXTRA_ARGS:-}"; AREF="${MOTM_A_REF_SET:-}" ;;
@@ -222,8 +223,9 @@ while IFS=$'\t' read -r IDX RID CASE OPEN_M METHOD N PAIR ORDERTAG <&3; do
   if [ -n "$AREF" ]; then export MOTM_A_REF="$AREF"; else unset MOTM_A_REF; fi
   if [ -n "$SK" ]; then export SOLVER_KIND="$SK" B1_KP="$BKP"; say "    求解節點：$SK kp=$BKP"
   else unset SOLVER_KIND B1_KP; fi
-  if [ "$PKF" = "1" ]; then export PARK_FIXED=1; say "    **PARK_FIXED**：固定底盤操作"
-  else unset PARK_FIXED; fi
+  if [ "$PKF" = "1" ]; then export PARK_FIXED=1; unset PARK_HOLD; say "    **PARK_FIXED**：固定底盤操作"
+  elif [ "$PKF" = "2" ]; then export PARK_HOLD=1; unset PARK_FIXED; say "    **PARK_HOLD**：停車伺服保持"
+  else unset PARK_FIXED PARK_HOLD; fi
   C1_RUN_TAG="${BATCH}:${IDX}" ROS_DOMAIN_ID="$DOMAIN" RUN_ID="$RID" WGMPC_N="$N" HEADING=1 MOTM="$MOTM_V" CAM=false OPEN_M="$OPEN_M" \
   FINGER_COL=split \
   DRAWER_ASSET="$WS/src/my_omnibot_description/config/drawer_unit_bar26.yaml" \

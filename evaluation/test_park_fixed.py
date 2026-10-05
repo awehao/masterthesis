@@ -236,5 +236,107 @@ check('audit_cw_last_wb_interval_caught', r.get('strict_stationary_full_window')
 r = cw([0.0] * 9, OWN[:9], ZC[:9])                # 沒有交還
 check('audit_cw_no_handback_insufficient', str(r.get('status', '')).startswith('insufficient'), r)
 
-print(f'{34 - len(fails)} 通過、{len(fails)} 失敗')
+# ===================== PARK_HOLD（v2）=====================
+from park_fixed import HoldServo, hold_output_ok, hold_uprev_ok, park_hold_cmd  # noqa: E402
+
+SV = HoldServo()
+u = park_hold_cmd((0.0, 0.0, 1.0), (0.0, 0.0, 1.0), SV)
+check('servo_zero_at_anchor', max(abs(x) for x in u) == 0.0, u)
+# 錨點在本體 +x 方向 1 mm（yaw = 0）⇒ vx = 2 mm/s > 0、vy ≈ 0
+u = park_hold_cmd((0.001, 0.0, 0.0), (0.0, 0.0, 0.0), SV)
+check('servo_direction_body_x', abs(u[0] - 0.002) < 1e-12 and abs(u[1]) < 1e-12, u)
+# yaw = π/2 時錨點在世界 +x ⇒ 本體 −y
+u = park_hold_cmd((0.001, 0.0, math.pi / 2), (0.0, 0.0, math.pi / 2), SV)
+check('servo_direction_body_frame', abs(u[0]) < 1e-12 and abs(u[1] + 0.002) < 1e-12, u)
+u = park_hold_cmd((0.1, 0.1, 0.0), (0.0, 0.0, 0.0), SV)
+check('servo_vector_limit', abs(math.hypot(u[0], u[1]) - SV.v_max) < 1e-12, u)
+u = park_hold_cmd((0.0, 0.0, -math.pi + 0.01), (0.0, 0.0, math.pi - 0.01), SV)
+check('servo_yaw_wrap', u[2] > 0 and abs(u[2] - 0.02 * 2.0) < 1e-9 or abs(u[2] - SV.w_max) < 1e-12, u)
+try:
+    park_hold_cmd((float('nan'), 0.0, 0.0), (0.0, 0.0, 0.0), SV)
+    check('servo_nonfinite_raises', False)
+except ValueError:
+    check('servo_nonfinite_raises', True)
+CFG2 = ParkCfg(park_x=0.0, park_y=0.0, park_yaw=1.0, hold_s=0.5, hold_mode=True)
+
+
+def run_hold2(seq):
+    m2 = HoldMonitor(CFG2, (0.0, 0.0, 1.0), 0, 0.0, prev=(-1, -DT, 0.0, 0.0, 1.0))
+    f2 = None
+    for k, (x, y, yaw, cmd) in enumerate(seq):
+        v = m2.update(k, k * DT, x, y, yaw, cmd, phase='OPEN')
+        f2 = f2 or v
+    m2.close(len(seq) - 1, (len(seq) - 1) * DT, stowed=True)
+    return m2, f2
+
+
+m2, _ = run_hold2([(0.0, 0.0, 1.0, (0.003, -0.002, 0.01))] * 50)
+check('hold_v2_servo_cmd_static_pass', m2.verdict() == 'PASS', m2.report())
+m2, f2 = run_hold2([(0.0, 0.0, 1.0, (0.004, 0.004, 0.0))] * 50)      # 合速度 5.66 mm/s > 5
+check('hold_v2_cmd_over_bound_violates', m2.verdict() == 'VIOLATION' and 'hold_cmd' in f2['why'], f2)
+m2, f2 = run_hold2([(0.000009 * k, 0.0, 1.0, (0.0, 0.0, 0.0)) for k in range(200)])
+check('hold_v2_drift_still_violates', m2.verdict() == 'VIOLATION' and 'dev_pos' in f2['why'], f2)
+check('uprev_within_ok', hold_uprev_ok((0.003, 0.004, 0.02), SV)[0])
+check('uprev_over_rejected', not hold_uprev_ok((0.004, 0.004, 0.0), SV)[0])
+check('uprev_nonfinite_rejected', not hold_uprev_ok((float('nan'), 0.0, 0.0), SV)[0])
+check('output_equal_ok', hold_output_ok((0.001, 0.0, 0.0), (0.001, 0.0, 0.0))[0])
+check('output_mismatch_rejected', not hold_output_ok((0.0, 0.0, 0.0), (0.001, 0.0, 0.0))[0])
+
+# ---- Codex 20261005_124139 的四個缺口 ----
+from park_fixed import hold_pose_ok                                     # noqa: E402
+# 1 audit PARK_HOLD：位姿完全靜止、修正命令 0.5 mm/s ⇒ PASS；超上界 ⇒ violation；漂移 ⇒ violation；缺錨點 ⇒ insufficient
+OWN2 = [0, 0, 2, 2, 1, 1, 1, 1, 1, 0, 0]
+
+
+def cw2(xs, cmds, anchor=(0.0, 0.0, 1.0)):
+    t = np.arange(len(xs)) * DT
+    pose = np.array([[x, 0.0, 1.0] for x in xs])
+    return control_window_metrics(t, pose, np.array(cmds, float), np.array(OWN2),
+                                  pose_rates(t, pose), mode='hold', anchor=anchor)
+
+
+C05 = [[0.0005, 0.0, 0.0]] * len(OWN2)
+r = cw2([0.0] * len(OWN2), C05)
+check('audit_hold_servo_cmd_static_pass', r.get('strict_stationary_full_window') is True, r)
+r = cw([0.0] * len(OWN2), OWN2, C05)
+check('audit_fixed_mode_still_rejects_nonzero', r.get('strict_stationary_full_window') is False, r)
+r = cw2([0.0] * len(OWN2), [[0.004, 0.004, 0.0]] * len(OWN2))
+check('audit_hold_cmd_over_bound_violation', r.get('status') == 'violation', r)
+r = cw2([0.0] * 4 + [0.0015] * 7, C05)
+check('audit_hold_drift_violation', r.get('status') == 'violation', r)
+r = cw2([0.0] * len(OWN2), C05, anchor=None)
+check('audit_hold_needs_anchor', str(r.get('status', '')).startswith('insufficient'), r)
+# 3 hold_output_ok：NaN、維度錯 ⇒ 拒絕
+check('output_nan_rejected', not hold_output_ok((0.0, float('nan'), 0.0), (0.0, 0.0, 0.0))[0])
+check('output_nan_hold_rejected', not hold_output_ok((0.0, 0.0, 0.0), (0.0, float('nan'), 0.0))[0])
+check('output_wrong_len_rejected', not hold_output_ok((0.0, 0.0), (0.0, 0.0, 0.0))[0])
+# 2 位姿有效性：過期、時間戳在未來、非有限、缺時間戳
+check('pose_ok_fresh', hold_pose_ok((0.0, 0.0, 1.0, 10.0), 10.05, 0.2)[0])
+check('pose_stale_rejected', not hold_pose_ok((0.0, 0.0, 1.0, 10.0), 10.5, 0.2)[0])
+check('pose_future_rejected', not hold_pose_ok((0.0, 0.0, 1.0, 10.1), 10.0, 0.2)[0])
+check('pose_nonfinite_rejected', not hold_pose_ok((float('nan'), 0.0, 1.0, 10.0), 10.0, 0.2)[0])
+check('pose_missing_t_rejected', not hold_pose_ok((0.0, 0.0, 1.0), 10.0, 0.2)[0])
+# 4 重播：args.park_hold = True 而紀錄缺 park_hold／形狀錯 ⇒ MissingInput（不得回退自由底盤）
+import horizon_replay as HRP                                            # noqa: E402
+_args = {'N': 5, 'rate': 20.0, 'tcp': 'link_tcp', 'w_s': 0.001, 'w_a': 0.05, 'park_hold': True}
+_ident = {'alpha': [0.095] * 6, 'bias_rad': [0.0] * 6, 'phys_dt_measured_s': 0.01}
+_si = {k: [0.0] * 9 for k in HRP.REQUIRED}
+_si.update({'arm_bias': [0.0] * 6, 'solver_N': 5})
+for name, rec in (('missing', {'solve_in': _si}),
+                  ('bad_shape', {'solve_in': _si, 'park_hold': {'u_hold': [0.0, 0.0], 'pose': [0, 0, 0],
+                                                                'anchor': [0, 0, 0], 'servo': {}}}),
+                  ('nonfinite', {'solve_in': _si, 'park_hold': {'u_hold': [float('nan'), 0, 0], 'pose': [0, 0, 0],
+                                                                'anchor': [0, 0, 0], 'servo': {}}})):
+    try:
+        HRP.cfg_from_record(_args, _ident, rec)
+        check(f'replay_park_hold_{name}_insufficient', False, '未拒絕')
+    except HRP.MissingInput:
+        check(f'replay_park_hold_{name}_insufficient', True)
+_ok = {'solve_in': _si, 'park_hold': {'u_hold': [0.001, 0.0, 0.0], 'pose': [0, 0, 0], 'anchor': [0, 0, 0],
+                                      'servo': {'k_p': 2.0}}}
+check('replay_park_hold_restores_u_hold', HRP.cfg_from_record(_args, _ident, _ok).base_hold == (0.001, 0.0, 0.0))
+_old = dict(_args); _old.pop('park_hold')
+check('replay_old_run_unchanged', HRP.cfg_from_record(_old, _ident, {'solve_in': _si}).base_hold is None)
+
+print(f'{68 - len(fails)} 通過、{len(fails)} 失敗')
 sys.exit(1 if fails else 0)

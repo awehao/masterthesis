@@ -73,6 +73,7 @@ from ammr_wholebody_mpc.wholebody_kinematics import (            # noqa: E402
 import wgmpc_cmd_envelope as ENV                                 # noqa: E402
 from wgmpc_cycle_record import solver_io_record                  # noqa: E402
 import wg4b_b1_core as B1CORE                                    # noqa: E402
+from park_fixed import HoldServo, hold_output_ok, hold_uprev_ok, park_hold_cmd  # noqa: E402
 from wgmpc_sp_handshake import (ARMED, FAILED, HOLD, INIT,       # noqa: E402
                                 SetpointGate, SpSample)
 
@@ -221,6 +222,15 @@ class WGMPCNode(Node):
             if a.arm_model != 'setpoint':
                 raise ValueError('--base-fixed 需要 --arm-model setpoint（只在增廣核心實作）')
             self.cfg.base_fixed = True
+        # **PARK_HOLD（v2）**：整個時域 u_base = u_hold（停車伺服律，錨點來自執行端 /park/gate）
+        self._park_hold = bool(getattr(a, 'park_hold', False))
+        self._park_anchor = None
+        self._park_servo = HoldServo()
+        if self._park_hold:
+            if a.arm_model != 'setpoint':
+                raise ValueError('--park-hold 需要 --arm-model setpoint')
+            if self._base_fixed:
+                raise ValueError('--park-hold 與 --base-fixed 不可同時指定')
         self._b1 = (getattr(a, 'solver_kind', 'wgmpc') == 'b1')
         self._b1p = (B1CORE.B1Params(kp=float(a.b1_kp)) if self._b1 else None)
         self._n_b1_mu = {}
@@ -359,6 +369,8 @@ class WGMPCNode(Node):
             self.create_subscription(Float64MultiArray,
                                      str(self.a.coord_topic),
                                      self._on_coord, 1)
+        if getattr(self.a, 'park_hold', False):
+            self.create_subscription(String, '/park/gate', self._on_park_gate, 1)
         self.create_subscription(String, '/coman/applied_fail',
                                  self._on_applied_fail, _lat)
         # **輸出話題可指定，預設 '/wholebody_safety/cmd_in' = 既有行為。**
@@ -753,6 +765,17 @@ class WGMPCNode(Node):
         self._coord_t = self.sim_now()
         self._n_coord_rx += 1
 
+    def _on_park_gate(self, m):
+        """錨點只取一次（閘門通過當步的實測位姿），之後不更新。"""
+        if self._park_anchor is not None:
+            return
+        try:
+            g = json.loads(m.data)
+        except Exception:
+            return
+        if g.get('passed') and g.get('anchor') is not None:
+            self._park_anchor = tuple(float(x) for x in g['anchor'])
+
     def b1_report(self) -> dict:
         """WG4-B B1 的每趟一次紀錄（參數、限制、整形、OSQP 設定）；非 b1 時回空 dict。"""
         if not self._b1:
@@ -1058,6 +1081,30 @@ class WGMPCNode(Node):
                 slot, _m = self._reschedule(slot)
                 self._c_miss += _m
                 continue
+            _park_rec = None
+            if self._park_hold:
+                _ub = [float(x) for x in np.asarray(u_prev, float)[:3]]
+                _why = None
+                if self._park_anchor is None:
+                    _why = '沒有停車錨點（/park/gate 未通過或未收到）'
+                else:
+                    _okp, _why = hold_uprev_ok(_ub, self._park_servo, float(self.a.park_uprev_tol))
+                if _why is not None:
+                    self.log.append(dict(slot=slot, sim_t=snap.sim_t, age_in=round(age_in, 6),
+                                         age_out=None, u_prev_src=src, ok=False,
+                                         reason='park_mode_refused', published=False,
+                                         timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall,
+                                         park_hold=True, u_prev_base=_ub, dropped=f'PARK_HOLD：{_why}'))
+                    self._stop_why = f'park_mode_refused：{_why}'
+                    print(f'[wg2] **PARK_HOLD 模式閘門拒絕**：{_why}', flush=True)
+                    break
+                # 停車伺服律：同時刻快照的實測底盤位姿 → u_hold（本輪整個時域的底盤等式值）
+                _pose = [float(q0[0]), float(q0[1]), float(q0[2])]
+                _uh = park_hold_cmd(self._park_anchor, _pose, self._park_servo)
+                self.cfg.base_hold = tuple(float(x) for x in _uh)
+                _park_rec = {'u_hold': [float(x) for x in _uh], 'pose': _pose,
+                             'anchor': list(self._park_anchor),
+                             'servo': dict(self._park_servo.__dict__)}
             if self._base_fixed and float(np.max(np.abs(
                     np.asarray(u_prev, float)[:3]))) > float(self.a.park_uprev_tol):
                 # **模式閘門**：固定底盤下承接的底盤套用值超出容許 ⇒ 拒絕並停止。
@@ -1199,6 +1246,7 @@ class WGMPCNode(Node):
                        **({'solver_kind': 'b1', 'b1': r.b1,
                            'solver_reason': r.reason} if self._b1 else {}),
                        **({'base_fixed': True} if self._base_fixed else {}),
+                       **({'park_hold': _park_rec} if self._park_hold else {}),
                        # **時間契約的分項紀錄**（快照／求解起點／發布／牆鐘）
                        timing=dict(snap_sim_t=round(snap.sim_t, 6),
                                    solve_start_sim_t=round(_solve_sim_t0, 6),
@@ -1307,7 +1355,10 @@ class WGMPCNode(Node):
             # ---- **近目標輸出整形**（求解之後，發布之前）----
             # 與離線模擬共用 `shape_near_target`，不各寫一份。
             _u_out, _shape_sc, _shape_rs = r.u0, 1.0, 'off'
-            if (self.a.near_target_gamma > 0.0
+            if self._park_hold:
+                # PARK_HOLD：近目標整形會縮放完整九維（死區還會歸零），會改掉 u_hold ⇒ 停用（策略差異，照實記錄）
+                _shape_rs = 'disabled_park_hold'
+            elif (self.a.near_target_gamma > 0.0
                     or self.a.near_target_deadband_m > 0.0):
                 _u_out, _shape_sc, _shape_rs = shape_near_target(
                     r.u0, self.K.jacobian(q0, self.cfg.tcp), float(q0[2]),
@@ -1334,6 +1385,17 @@ class WGMPCNode(Node):
                 self._stop_why = f'stop_topic：{self._stop_req}'
                 print(f'[wg2] 收到停止請求：{self._stop_req}（發布前，本輪不發布）',
                       flush=True)
+                break
+            _hok, _hwhy = ((True, None) if not (self._park_hold and _park_rec is not None) else
+                           hold_output_ok(np.asarray(_u_out, float)[:3], _park_rec['u_hold'],
+                                          float(self.a.park_out_tol)))
+            if not _hok:
+                rec['published'] = False
+                rec['reason'] = 'park_mode_output'
+                rec['dropped'] = f'PARK_HOLD：{_hwhy}'
+                self._log_solve(rec)
+                self._stop_why = 'park_mode_output'
+                print(f'[wg2] **PARK_HOLD 輸出核對失敗**：{rec["dropped"]}', flush=True)
                 break
             if self._base_fixed and float(np.max(np.abs(
                     np.asarray(_u_out, float)[:3]))) > float(self.a.park_out_tol):
@@ -1470,6 +1532,7 @@ class WGMPCNode(Node):
         """由節點計數器組統計（正常結束、外部關閉、例外收尾共用）。"""
         return dict(stop_why=self._stop_why,
                     base_fixed=bool(self._base_fixed),
+                    park_hold=bool(self._park_hold),
                     stop_rx=self._stop_rx,
                     last_publish_sim_t=self._last_pub_t,
                     n_published_after_stop_rx=int(self._c_pub_after_stop),
@@ -1733,6 +1796,8 @@ def main() -> int:
                     help='明確確認初始靜止時，允許第一輪以零值作 u_prev')
     ap.add_argument('--base-fixed', action='store_true',
                     help='PARK_FIXED：整個時域 u_base = 0（核心等式）；預設關 = 既有行為')
+    ap.add_argument('--park-hold', action='store_true',
+                    help='PARK_HOLD（v2）：整個時域 u_base = 停車伺服 u_hold；停用近目標整形；錨點取自 /park/gate')
     ap.add_argument('--park-uprev-tol', type=float, default=1e-6,
                     help='固定底盤模式閘門：承接 u_prev 底盤各軸上限（超出 ⇒ 拒絕並停止）')
     ap.add_argument('--park-out-tol', type=float, default=1e-6,

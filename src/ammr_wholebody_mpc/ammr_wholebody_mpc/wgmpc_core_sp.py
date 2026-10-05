@@ -465,6 +465,16 @@ def nonlinear_cost_sp(K, z0, U, u_prev, T_des, cfg: WGMPCConfigSP) -> float:
 
 
 # ---------------------------------------------------------------- 約束組裝
+def _base_hold_vec(cfg):
+    """PARK_HOLD 的底盤等式值；與 base_fixed 互斥、須有限且在原速度框內。"""
+    uh = np.asarray(cfg.base_hold, float).reshape(3)
+    if cfg.base_fixed:
+        raise ValueError('base_hold 與 base_fixed 不可同時設定')
+    if not np.isfinite(uh).all() or np.any(np.abs(uh) > cfg.vmax()[:3]):
+        raise ValueError(f'base_hold 非有限或超出原速度框：{uh}')
+    return uh
+
+
 def build_constraints_sp(z0, U_nom, u_prev, cfg: WGMPCConfigSP, delta,
                          Phi, Gam, gam):
     """回傳 (A, lo, hi, blocks)。
@@ -492,7 +502,14 @@ def build_constraints_sp(z0, U_nom, u_prev, cfg: WGMPCConfigSP, delta,
     # 1 速度框（vbox：base_fixed 時底盤三軸 l = h = 0，整個時域的等式；否則 = vmax）
     I = np.eye(n)
     vbox = cfg.vbox()
-    add('velocity', list(I), list(np.tile(-vbox, N)), list(np.tile(vbox, N)))
+    v_lo, v_hi = np.tile(-vbox, N), np.tile(vbox, N)
+    if cfg.base_hold is not None:
+        # PARK_HOLD：底盤三軸 l = h = u_hold（整個時域的等式）；手臂列照原速度框
+        _uh = _base_hold_vec(cfg)
+        for k in range(N):
+            v_lo[k * NU:k * NU + 3] = _uh
+            v_hi[k * NU:k * NU + 3] = _uh
+    add('velocity', list(I), list(v_lo), list(v_hi))
     # 2 加速度框
     D = _diff_operator(N)
     f = np.zeros(n)
@@ -589,6 +606,8 @@ def solve_sp(K, z0, u_prev, T_des, cfg: WGMPCConfigSP,
             _last = _W[-1] + np.clip(-_W[-1], -_adt, _adt)
             U_nom = np.vstack([_W[1:], _last[None, :]])
     U_nom = np.clip(U_nom, -cfg.vbox(), cfg.vbox())   # base_fixed 時名目底盤亦為 0
+    if cfg.base_hold is not None:
+        U_nom[:, :3] = _base_hold_vec(cfg)                # PARK_HOLD：名目底盤 = u_hold
 
     Qw, Rw, Sw = cfg.Q(), cfg.R(), cfg.S()
     Qbar = np.zeros((N * NE, N * NE))

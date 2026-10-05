@@ -39,6 +39,7 @@ from std_msgs.msg import Bool, Float64MultiArray, String
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from motm_coord import approach_vref                            # noqa: E402
+from park_fixed import HoldServo, hold_cmd_within, hold_pose_ok, park_hold_cmd  # noqa: E402
 from rclpy.qos import DurabilityPolicy, QoSProfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,9 +78,12 @@ class WholeBody(Node):
         self.create_subscription(String, '/handover/state', self._hs, 1)
         # PARK_FIXED：執行端違規閂鎖 ⇒ 停止發布（預設不訂 ⇒ 既有行為不變）
         self.park_violation = None
-        if getattr(a, 'park_fixed', False):
+        self.park_anchor = None
+        if getattr(a, 'park_fixed', False) or getattr(a, 'park_hold', False):
             self.create_subscription(String, '/park/violation', self._park_vio, 1)
             self.vio_pub = self.create_publisher(String, '/park/violation', 10)
+        if getattr(a, 'park_hold', False):
+            self.create_subscription(String, '/park/gate', self._park_gate, 1)
         self.pose = None
         self.vb = None
         self.q = None
@@ -155,6 +159,17 @@ class WholeBody(Node):
         except Exception:
             self.park_violation = {'why': m.data}
 
+    def _park_gate(self, m):
+        """PARK_HOLD 錨點：執行端閘門通過當步的實測位姿，只取一次。"""
+        if self.park_anchor is not None:
+            return
+        try:
+            g = json.loads(m.data)
+        except Exception:
+            return
+        if g.get('passed') and g.get('anchor') is not None:
+            self.park_anchor = tuple(float(x) for x in g['anchor'])
+
     def send(self, u9):
         m = Float64MultiArray()
         m.data = [float(x) for x in u9]
@@ -201,10 +216,16 @@ def main():
                     help='等求解器明確回報 ready 才交出；不以發布者數判斷')
     ap.add_argument('--park-fixed', action='store_true',
                     help='PARK_FIXED：暖機與展開的底盤三軸恆為零（不承接導航速度、不做停位修正）')
+    ap.add_argument('--park-hold', action='store_true',
+                    help='PARK_HOLD（v2）：展開期底盤＝以錨點為參考的停車伺服命令；取得錨點前不發命令')
+    ap.add_argument('--park-pose-max-age-s', type=float, default=0.2,
+                    help='PARK_HOLD：伺服用 /odom 位姿的最大年齡（模擬時間），超過 ⇒ 中止')
     a = ap.parse_args()
-    if a.park_fixed and a.motm:
-        print('[wb] **--park-fixed 與 --motm 不可同時指定** ⇒ 拒絕啟動', flush=True)
+    if sum(bool(x) for x in (a.park_fixed, a.park_hold, a.motm)) > 1:
+        print('[wb] **--park-fixed／--park-hold／--motm 只能擇一** ⇒ 拒絕啟動', flush=True)
         return 3
+    park_on = a.park_fixed or a.park_hold
+    servo = HoldServo()
 
     stow = np.array([float(v) for v in a.stow_q.split(',')])
     px, py, pyaw = (float(v) for v in a.park.split(','))
@@ -237,7 +258,7 @@ def main():
     j3_cleared = False
     while rclpy.ok() and time.monotonic() - t1 < a.timeout_s:
         rclpy.spin_once(nd, timeout_sec=0.0)
-        if a.park_fixed and nd.park_violation is not None:
+        if park_on and nd.park_violation is not None:
             rep['park_violation'] = nd.park_violation
             phase = 'PARK_VIOLATION'          # 結尾判失敗，不因已到 HOLD 而回傳成功
             print(f'[wb] 收到 PARK_FIXED 違規 ⇒ 停止發布：{nd.park_violation}', flush=True)
@@ -258,7 +279,23 @@ def main():
             # 首筆請求是**同一個值**，λ 增量為零，交棒逐位元連續。
             src = 'nav_applied'
             nap = (nd.hs or {}).get('nav_applied')
-            if a.park_fixed:
+            if a.park_hold and nd.park_anchor is None:
+                # PARK_HOLD：取得錨點前不發命令 ⇒ 執行端無新鮮命令、依窗口規則順延切換（有界等待）
+                time.sleep(dt)
+                continue
+            if a.park_hold:
+                _pok, _pwhy = hold_pose_ok(nd.pose, nd.t_seen, a.park_pose_max_age_s)
+                if not _pok:
+                    if owner == 'wholebody':
+                        rep['park_pose_invalid'] = {'why': _pwhy, 'phase': phase}
+                        nd.vio_pub.publish(String(data=json.dumps(
+                            {'why': f'wholebody_pose_invalid：{_pwhy}', 'phase': phase})))
+                        phase = 'PARK_VIOLATION'
+                        break
+                    time.sleep(dt)          # 未接手：位姿無效就不發命令（有界等待，由執行端窗口規則處理）
+                    continue
+                src, ub = 'park_hold_servo', list(park_hold_cmd(nd.park_anchor, nd.pose, servo))
+            elif a.park_fixed:
                 # PARK_FIXED：執行端靜止閘門已保證套用底盤為零；不承接導航速度
                 src, ub = 'park_fixed_zero', [0.0, 0.0, 0.0]
             elif nap is not None and nap.get('u_applied') is not None:
@@ -342,7 +379,17 @@ def main():
             bx, by = ex * c + ey * s, -ex * s + ey * c
             eyaw = math.atan2(math.sin(pyaw - nd.pose[2]),
                               math.cos(pyaw - nd.pose[2]))
-            if a.park_fixed:
+            if a.park_hold:
+                # **PARK_HOLD**：只動手臂；底盤＝以錨點為參考的停車伺服命令（不做停位修正、不追新目標）
+                _pok, _pwhy = hold_pose_ok(nd.pose, nd.t_seen, a.park_pose_max_age_s)
+                if not _pok:
+                    rep['park_pose_invalid'] = {'why': _pwhy, 'phase': phase}
+                    nd.vio_pub.publish(String(data=json.dumps(
+                        {'why': f'wholebody_pose_invalid：{_pwhy}', 'phase': phase})))
+                    phase = 'PARK_VIOLATION'
+                    break
+                u[0], u[1], u[2] = park_hold_cmd(nd.park_anchor, nd.pose, servo)
+            elif a.park_fixed:
                 # **PARK_FIXED**：只動手臂；底盤三軸恆為零、不做停位修正（停位由閘門前的減速段完成）
                 u[0] = u[1] = u[2] = 0.0
             elif a.motm:
@@ -358,7 +405,7 @@ def main():
                 u[1] = float(np.clip(1.0 * by, -a.v_base, a.v_base))
                 u[2] = float(np.clip(1.0 * eyaw, -a.w_base, a.w_base))
             done_arm = float(np.abs(err).max()) <= a.q_tol
-            done_base = a.motm or a.park_fixed or (math.hypot(ex, ey) <= a.pos_tol
+            done_base = a.motm or park_on or (math.hypot(ex, ey) <= a.pos_tol
                                                    and abs(eyaw) <= a.yaw_tol)
             if done_arm and done_base:
                 phase = 'UNFOLD_DONE'
@@ -393,7 +440,20 @@ def main():
                   f'等 /wb_vel_cmd 出現第二個發布者，最多 '
                   f'{a.hold_timeout_s:.0f} s）', flush=True)
 
-        if a.park_fixed and float(np.max(np.abs(np.asarray(u, float)[:3]))) > 0.0:
+        if a.park_hold and phase == 'HOLD':
+            # 保持交棒期間同樣伺服；每次先核錨點與位姿，失效 ⇒ 違規中止（不發布）
+            _pok, _pwhy = hold_pose_ok(nd.pose, nd.t_seen, a.park_pose_max_age_s)
+            if nd.park_anchor is None or not _pok:
+                _w = '沒有錨點' if nd.park_anchor is None else _pwhy
+                rep['park_pose_invalid'] = {'why': _w, 'phase': phase}
+                nd.vio_pub.publish(String(data=json.dumps(
+                    {'why': f'wholebody_pose_invalid：{_w}', 'phase': phase})))
+                phase = 'PARK_VIOLATION'
+                break
+            u[0], u[1], u[2] = park_hold_cmd(nd.park_anchor, nd.pose, servo)
+        _bad = ((a.park_fixed and float(np.max(np.abs(np.asarray(u, float)[:3]))) > 0.0)
+                or (a.park_hold and not hold_cmd_within(u[:3], servo.v_max, servo.w_max)))
+        if _bad:
             # PARK_FIXED 下不應生成非零底盤分量；若有 ⇒ 記錄並停止（不剪成零後繼續，避免藏住漏接）
             rep['park_base_cmd_generated'] = {'phase': phase, 'u_base': [float(x) for x in u[:3]],
                                               'sim_t': nd.t_seen}

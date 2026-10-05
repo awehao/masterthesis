@@ -106,6 +106,8 @@ ap.add_argument('--v-min-lin', type=float, default=0.010,
 # **PARK_FIXED（固定底盤操作）**：預設關 ⇒ 既有行為不變。開啟時執行端做靜止閘門（轉給全身前）與
 # 保持監看（實際轉給全身 → 實際交還導航），並取消滾動交棒下界（MOTM 保持原值）。見 park_fixed.py。
 ap.add_argument('--park-fixed', action='store_true')
+ap.add_argument('--park-hold', action='store_true',
+                help='PARK_HOLD（v2）：閘門／監看同 PARK_FIXED，保持期的套用命令改核停車伺服上界')
 ap.add_argument('--park-pose', default='-0.136412,0.560,1.297349',
                 help='PARK_FIXED 共同停位 x,y,yaw（入場容差的參考）')
 ap.add_argument('--park-stow-tol', type=float, default=0.02,
@@ -816,10 +818,13 @@ def main() -> int:
                        base_accel_max_ang=(a.base_accel_ang
                                            if a.base_accel_ang > 0 else None))
     # ---- PARK_FIXED：靜止閘門與保持監看（純邏輯在 park_fixed.py）----
-    park_on = bool(a.park_fixed)
+    if a.park_fixed and a.park_hold:
+        print('[room] **--park-fixed 與 --park-hold 只能擇一** ⇒ 中止', flush=True)
+        return 3
+    park_on = bool(a.park_fixed or a.park_hold)
     _pk = [float(v) for v in a.park_pose.split(',')]
     park_cfg = ParkCfg(park_x=_pk[0], park_y=_pk[1], park_yaw=_pk[2],
-                       hold_s=max(0.5, float(a.max_cmd_age_s)))
+                       hold_s=max(0.5, float(a.max_cmd_age_s)), hold_mode=bool(a.park_hold))
     park_gate = StaticGate(park_cfg) if park_on else None
     park_hold = None
     park_done = False
@@ -971,7 +976,7 @@ def main() -> int:
             except Exception:
                 node.park_ext_vio = {'why': m.data}
         node.create_subscription(String, '/park/violation', _ext_vio, 10)
-        print(f'[room] **PARK_FIXED**：停位 {_pk}；閘門保持 {park_cfg.hold_s:.3f} s；'
+        print(f'[room] **{"PARK_HOLD" if a.park_hold else "PARK_FIXED"}**：停位 {_pk}；閘門保持 {park_cfg.hold_s:.3f} s；'
               f'滾動交棒下界取消（v_min_lin {a.v_min_lin} → 0）', flush=True)
     print('[room] 進入主迴圈', flush=True)
 
@@ -1038,7 +1043,12 @@ def main() -> int:
         if node.ho_req is not None:
             r = node.ho_req
             node.ho_req = None
-            if r.get('action') == 'cancel':
+            if park_on and park_state['violation'] is not None and r.get('action') != 'cancel':
+                # **違規閂鎖後拒絕所有後續正常換手請求**（不只轉給全身）
+                rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'handover_refused_after_violation',
+                                      'request': r})
+                print(f'[room] PARK 違規已閂鎖 ⇒ 拒絕換手請求 {r}', flush=True)
+            elif r.get('action') == 'cancel':
                 ex.cancel_handover(r.get('why', ''))
             else:
                 ex.request_handover(r.get('to', AUTH_WHOLEBODY),
@@ -1464,7 +1474,8 @@ def main() -> int:
     if park_on:
         if park_hold is not None and park_hold.end is None:
             pass                          # 未交還導航 ⇒ HoldMonitor 判定 INSUFFICIENT（不是 PASS）
-        json.dump({'spec': 'park_fixed_vs_motm_spec.md', 'park_pose': _pk,
+        json.dump({'spec': ('park_hold_v2_spec.md' if a.park_hold else 'park_fixed_vs_motm_spec.md'),
+                   'mode': ('PARK_HOLD' if a.park_hold else 'PARK_FIXED'), 'park_pose': _pk,
                    'cfg': park_cfg.__dict__, 'v_min_lin_set': a.v_min_lin,
                    'v_min_lin_effective': v_min_lin_eff,
                    'gate': park_gate.state(), 'gate_last': park_gate.last,

@@ -50,6 +50,22 @@ def cfg_from_record(args, ident, rec, N_override=None):
     cfg = base_cfg(args, ident)
     cfg.N = int(N_override if N_override is not None else si['solver_N'])
     cfg.arm_model.bias = np.asarray(si['arm_bias'], float)
+    # PARK_HOLD：本輪底盤等式值由逐輪紀錄還原（不重新取 odom）。args.park_hold = True 時紀錄**必須**完整有效，
+    # 缺失／形狀錯／非有限 ⇒ 紀錄不足（不得回退成自由底盤）。舊趟次（無 park_hold）照舊。
+    ph = rec.get('park_hold')
+    if args.get('park_hold') or ph is not None:
+        import math as _m
+        _need = ('u_hold', 'pose', 'anchor', 'servo')
+        if not isinstance(ph, dict) or any(k not in ph for k in _need):
+            raise MissingInput(f'PARK_HOLD 紀錄缺 {[k for k in _need if not isinstance(ph, dict) or k not in ph]}')
+        for k in ('u_hold', 'pose', 'anchor'):
+            v = ph[k]
+            if not isinstance(v, (list, tuple)) or len(v) != 3 or not all(
+                    isinstance(x, (int, float)) and _m.isfinite(float(x)) for x in v):
+                raise MissingInput(f'PARK_HOLD 紀錄 {k} 形狀錯或非有限：{v}')
+        if not isinstance(ph['servo'], dict):
+            raise MissingInput('PARK_HOLD 紀錄 servo 不是 dict')
+        cfg.base_hold = tuple(float(x) for x in ph['u_hold'])
     c = rec.get('coord')
     if c is not None:
         for k in ('w_vref', 'base_vref', 'w_qn', 'arm_q_nom', 'w_a', 'w_p'):

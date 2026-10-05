@@ -9,6 +9,7 @@
 不再有 /drawer/tcp_target、從未收到 solver_start=True、從未收到 /handover/request。
 
     source /opt/ros/jazzy/setup.bash; python3 evaluation/test_park_abort_integration.py
+    PARK_TEST_FLAG=--park-hold python3 evaluation/test_park_abort_integration.py   （v2）
 """
 import json
 import os
@@ -49,7 +50,9 @@ class Probe(Node):
 
 def main():
     out = os.path.join(tempfile.mkdtemp(prefix='park_abort_'), 'task.json')
-    cmd = [sys.executable, '-u', os.path.join(HERE, 'drawer_task_node.py'), '--park-fixed',
+    # 模式旗標：預設 v1 --park-fixed；PARK_TEST_FLAG=--park-hold 測 v2（違規停止語意相同）
+    cmd = [sys.executable, '-u', os.path.join(HERE, 'drawer_task_node.py'),
+           os.environ.get('PARK_TEST_FLAG', '--park-fixed'),
            '--open-m', '0.200', '--out', out]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     rclpy.init()

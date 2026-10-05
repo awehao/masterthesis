@@ -55,6 +55,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src',
 from ammr_wholebody_mpc.wholebody_kinematics import (         # noqa: E402
     WholeBodyKinematics)
 from drawer_target import DrawerTarget, DrawerTargetConfig      # noqa: E402
+from park_fixed import HoldServo, hold_cmd_within, hold_pose_ok, park_hold_cmd  # noqa: E402
 from drawer_task_policy import (DrawerState, DrawerTaskConfig,  # noqa: E402
                                 DrawerTaskPolicy)
 from physics_contact_hold import contact_established             # noqa: E402
@@ -82,10 +83,16 @@ class Task(Node):
         self.wb_pub = self.create_publisher(Float64MultiArray, '/wb_vel_cmd', 10)
         # PARK_FIXED：執行端違規閂鎖與本節點底盤命令核對（預設不用 ⇒ 既有行為不變）
         self.park_fixed = bool(getattr(a, 'park_fixed', False))
+        self.park_hold = bool(getattr(a, 'park_hold', False))
+        self.park_on = self.park_fixed or self.park_hold
         self.park_violation = None
         self.park_base_bad = None
-        if self.park_fixed:
+        self.park_anchor = None
+        self.park_servo = HoldServo()
+        if self.park_on:
             self.create_subscription(String, '/park/violation', self._park_vio, 1)
+        if self.park_hold:
+            self.create_subscription(String, '/park/gate', self._park_gate, 1)
         self.ho_pub = self.create_publisher(String, '/handover/request', 10)
         self.plan_pub = self.create_publisher(Path, '/plan', lat)
         self.phase_pub = self.create_publisher(String, '/drawer/phase', 10)
@@ -228,8 +235,32 @@ class Task(Node):
         except Exception:
             self.park_violation = {'why': m.data}
 
+    def _park_gate(self, m):
+        """PARK_HOLD 錨點：執行端閘門通過當步的實測位姿，只取一次。"""
+        if self.park_anchor is not None:
+            return
+        try:
+            g = json.loads(m.data)
+        except Exception:
+            return
+        if g.get('passed') and g.get('anchor') is not None:
+            self.park_anchor = tuple(float(x) for x in g['anchor'])
+
+    def hold_base(self, max_age=0.2):
+        """PARK_HOLD 的底盤伺服命令與失效原因 (cmd, why)：沒有錨點、位姿非有限／過期／時間戳在未來 ⇒ (None, 原因)。"""
+        if self.park_anchor is None:
+            return None, '沒有停車錨點'
+        ok, why = hold_pose_ok(self.pose, self.sim_t(), max_age)
+        if not ok:
+            return None, why
+        return park_hold_cmd(self.park_anchor, self.pose, self.park_servo), None
+
     def wb_cmd(self, u9):
-        if self.park_fixed and max(abs(float(x)) for x in list(u9)[:3]) > 0.0:
+        _b = list(u9)[:3]
+        _bad = ((self.park_fixed and max(abs(float(x)) for x in _b) > 0.0)
+                or (self.park_hold and not hold_cmd_within(_b, self.park_servo.v_max,
+                                                           self.park_servo.w_max)))
+        if _bad:
             # PARK_FIXED 下本節點不應生成非零底盤分量 ⇒ 不發布、記錄並由主迴圈中止（不剪成零後繼續）
             if self.park_base_bad is None:
                 self.park_base_bad = {'u_base': [float(x) for x in list(u9)[:3]],
@@ -384,9 +415,11 @@ def main():
     ap.add_argument('--motm-acc-ang', type=float, default=0.20)
     ap.add_argument('--park-fixed', action='store_true',
                     help='PARK_FIXED：收到 /park/violation 或本節點生成非零底盤命令 ⇒ 走既有中止收尾')
+    ap.add_argument('--park-hold', action='store_true',
+                    help='PARK_HOLD（v2）：RESTOW／HANDBACK 底盤＝停車伺服命令；違規與 v1 同處置')
     a = ap.parse_args()
-    if a.park_fixed and a.motm:
-        print('[task] **--park-fixed 與 --motm 不可同時指定** ⇒ 拒絕啟動', flush=True)
+    if sum(bool(x) for x in (a.park_fixed, a.park_hold, a.motm)) > 1:
+        print('[task] **--park-fixed／--park-hold／--motm 只能擇一** ⇒ 拒絕啟動', flush=True)
         return 3
     park = [float(v) for v in a.park.split(',')]
     start = [float(v) for v in a.start.split(',')]
@@ -545,7 +578,7 @@ def main():
         st = nd.sim_t()
         # ---- PARK_FIXED：違規閂鎖 **最先檢查**（在任何目標發布、求解器啟動與提前 continue 之前）----
         # 執行端違規或本節點生成非零底盤命令 ⇒ 走既有中止收尾：停求解、不發目標、夾爪維持、不追加恢復動作。
-        if nd.park_fixed and (nd.park_violation is not None or nd.park_base_bad is not None):
+        if nd.park_on and (nd.park_violation is not None or nd.park_base_bad is not None):
             _why = (f'park_fixed_violation：{nd.park_violation.get("why")}'
                     if nd.park_violation is not None else 'park_fixed_task_base_cmd_nonzero')
             rep['abort'] = _why
@@ -877,6 +910,14 @@ def main():
                 stop_sent = True
                 rep['events'].append({'sim_t': st, 'solver_stop': True})
             u = np.zeros(9)
+            if a.park_hold:
+                _hb, _hw = nd.hold_base()
+                if _hb is None:
+                    # **當輪停止**：不發收臂命令；下一輪開頭走中止收尾
+                    nd.park_base_bad = {'why': f'RESTOW：{_hw}', 'sim_t': st}
+                    time.sleep(dt)
+                    continue
+                u[:3] = _hb               # PARK_HOLD：收臂期間底盤＝停車伺服命令
             if a.motm:
                 if vr_now is not None:
                     u[:3] = vr_now        # 收臂時底盤繼續倒退，不停
@@ -920,6 +961,14 @@ def main():
             nd.wb_cmd(u)
         elif phase == 'HANDBACK_WAIT':
             _u = np.zeros(9)
+            if a.park_hold:
+                _hb, _hw = nd.hold_base()
+                if _hb is None:
+                    # **當輪停止**：不發命令、不提交交還；下一輪開頭走中止收尾
+                    nd.park_base_bad = {'why': f'HANDBACK_WAIT：{_hw}', 'sim_t': st}
+                    time.sleep(dt)
+                    continue
+                _u[:3] = _hb                  # PARK_HOLD：交還前底盤＝停車伺服命令
             if a.motm and vr_now is not None:
                 _u[:3] = vr_now               # MotM：交還前底盤繼續走
             nd.wb_cmd(_u)                     # 交還前持續送命令，鏈保持新鮮

@@ -222,6 +222,9 @@ class WGMPCConfig:
     # vmax() 不變（成本的 1/vmax² 不受影響）；只影響 vbox()。預設 False ⇒ 既有行為逐位元不變。
     # 僅增廣核心（wgmpc_core_sp）實作；本核心見到 True 會拒絕求解。
     base_fixed: bool = False
+    # **PARK_HOLD（v2）**：(vx, vy, wz) 本體座標 ⇒ 整個時域 u_base[k] = base_hold（速度列 l = h = base_hold 的等式；
+    # 原速度框、加速度、輪級限制照留）。每輪由停車伺服律算出、寫入紀錄供重播還原。None ⇒ 不啟用。
+    base_hold: tuple | None = None
     Qf_scale: float = 5.0
     # 速度框（逐軸）——  L1
     v_base_lin: float = 0.035255
@@ -527,8 +530,8 @@ def solve(K, q0, u_prev, T_des, cfg: WGMPCConfig, U_warm=None) -> WGMPCResult:
 
     SQP 的五種結果分開回報，**固定跑完 n_sqp 不代表收斂**。
     """
-    if getattr(cfg, 'base_fixed', False):
-        raise ValueError('base_fixed（固定底盤）只在增廣核心 wgmpc_core_sp 實作')
+    if getattr(cfg, 'base_fixed', False) or getattr(cfg, 'base_hold', None) is not None:
+        raise ValueError('base_fixed／base_hold（停車模式）只在增廣核心 wgmpc_core_sp 實作')
     if cfg.w_vref != 0.0 or cfg.w_qn != 0.0:
         raise ValueError('整機協同項（w_vref／w_qn）只在增廣核心 '
                          'wgmpc_core_sp 實作；本核心不靜默忽略')

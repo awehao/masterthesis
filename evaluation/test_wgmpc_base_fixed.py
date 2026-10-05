@@ -77,7 +77,7 @@ def main():
             U_warm = np.asarray(si['U_warm'], float)
             rn = S.solve_sp(K, z0, si['u_prev'], np.asarray(si['T_cyc']).reshape(4, 4), cfg_new, U_warm=U_warm)
             cfg_old = SO.WGMPCConfigSP(**{k: getattr(cfg_new, k) for k in cfg_new.__dataclass_fields__
-                                          if k != 'base_fixed'})
+                                          if k in SO.WGMPCConfigSP.__dataclass_fields__})
             ro = SO.solve_sp(K, SO.make_z(si['q_pred'], si['s_pred']), si['u_prev'],
                              np.asarray(si['T_cyc']).reshape(4, 4), cfg_old, U_warm=U_warm)
             n += 1
@@ -114,6 +114,37 @@ def main():
                      np.asarray(si['T_cyc']).reshape(4, 4), c, U_warm=None)
     check('small_nonzero_uprev_still_feasible_to_zero',
           bool(res.ok) and np.abs(np.asarray(res.U)[:, :3]).max() <= 1e-12, res.reason)
+    # 6 PARK_HOLD：u_hold = 0 與 base_fixed 逐位元相同；u_hold ≠ 0 ⇒ 整時域底盤 = u_hold；非法值拒絕
+    r = rows[1]
+    si = r['solve_in']
+    up = np.asarray(si['u_prev'], float).copy()
+    up[:3] = 0.0
+    z0 = S.make_z(si['q_pred'], si['s_pred'])
+    T = np.asarray(si['T_cyc']).reshape(4, 4)
+    ca = HR.cfg_from_record(args, ident, r); ca.base_fixed = True
+    cb = HR.cfg_from_record(args, ident, r); cb.base_hold = (0.0, 0.0, 0.0)
+    ra = S.solve_sp(K, z0, up, T, ca, U_warm=None)
+    rb = S.solve_sp(K, z0, up, T, cb, U_warm=None)
+    check('hold_zero_equals_fixed', ra.ok and rb.ok and np.array_equal(ra.U, rb.U), f'{ra.reason} {rb.reason}')
+    uh = (0.003, -0.002, 0.01)
+    up2 = up.copy(); up2[:3] = uh
+    cc = HR.cfg_from_record(args, ident, r); cc.base_hold = uh
+    rc = S.solve_sp(K, z0, up2, T, cc, U_warm=None)
+    check('hold_nonzero_equality_whole_horizon', bool(rc.ok) and
+          np.abs(np.asarray(rc.U)[:, :3] - np.asarray(uh)).max() <= 1e-12, rc.reason)
+    for bad, why in (((0.5, 0.0, 0.0), '超出速度框'), ((float('nan'), 0.0, 0.0), '非有限')):
+        cd = HR.cfg_from_record(args, ident, r); cd.base_hold = bad
+        try:
+            S.solve_sp(K, z0, up, T, cd, U_warm=None)
+            check(f'hold_rejects_{why}', False, '未拒絕')
+        except ValueError:
+            check(f'hold_rejects_{why}', True)
+    ce = HR.cfg_from_record(args, ident, r); ce.base_hold = (0.0, 0.0, 0.0); ce.base_fixed = True
+    try:
+        S.solve_sp(K, z0, up, T, ce, U_warm=None)
+        check('hold_and_fixed_exclusive', False, '未拒絕')
+    except ValueError:
+        check('hold_and_fixed_exclusive', True)
     # 5 舊核心拒絕
     try:
         cc = C.WGMPCConfig(N=5, dt=0.05)

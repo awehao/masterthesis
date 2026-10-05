@@ -41,14 +41,20 @@ say "control_frequency=$CTRL_HZ Hz（dt=$(python3 -c "print(f'{1/$CTRL_HZ:.4f}')
 # **PARK_FIXED=1**：固定底盤操作（停住再展開；展開到交還導航底盤恆為零）。預設不設 ＝ 既有行為。
 # 與 MOTM=1 同時指定 ⇒ 拒跑（不靜默選其中一個）。各節點各自帶旗標：sim --park-fixed、glide --park-stop、
 # mission／wholebody／task --park-fixed、solver --base-fixed。
-if [ "${PARK_FIXED:-0}" = "1" ] && [ "${MOTM:-0}" = "1" ]; then
-  say "**PARK_FIXED=1 與 MOTM=1 不可同時指定** ⇒ 拒跑"; exit 87; fi
-PARK_ON=$([ "${PARK_FIXED:-0}" = "1" ] && echo 1 || echo 0)
-PK_SIM=$([ "$PARK_ON" = "1" ] && echo --park-fixed || true)
-PK_GLIDE=$([ "$PARK_ON" = "1" ] && echo --park-stop || true)
-PK_NODE=$([ "$PARK_ON" = "1" ] && echo --park-fixed || true)
-PK_SOLVER=$([ "$PARK_ON" = "1" ] && echo --base-fixed || true)
-if [ "$PARK_ON" = "1" ]; then say "  **PARK_FIXED**：固定底盤操作"; fi
+# **PARK_HOLD=1**（v2）：閘門／監看同 PARK_FIXED；保持期底盤＝以錨點為參考的停車伺服命令（park_hold_v2_spec.md）。
+_NMODE=$(( ${MOTM:-0} + ${PARK_FIXED:-0} + ${PARK_HOLD:-0} ))
+if [ "$_NMODE" -gt 1 ]; then
+  say "**MOTM／PARK_FIXED／PARK_HOLD 只能擇一** ⇒ 拒跑"; exit 87; fi
+PARK_ON=$([ "${PARK_FIXED:-0}" = "1" ] || [ "${PARK_HOLD:-0}" = "1" ] && echo 1 || echo 0)
+if [ "${PARK_HOLD:-0}" = "1" ]; then
+  PK_SIM=--park-hold; PK_GLIDE=--park-stop; PK_MISSION=--park-fixed; PK_NODE=--park-hold; PK_SOLVER=--park-hold
+  say "  **PARK_HOLD**：停車伺服保持"
+elif [ "${PARK_FIXED:-0}" = "1" ]; then
+  PK_SIM=--park-fixed; PK_GLIDE=--park-stop; PK_MISSION=--park-fixed; PK_NODE=--park-fixed; PK_SOLVER=--base-fixed
+  say "  **PARK_FIXED**：固定底盤操作"
+else
+  PK_SIM=""; PK_GLIDE=""; PK_MISSION=""; PK_NODE=""; PK_SOLVER=""
+fi
 spawn sim "$ISAAC_PY" -u evaluation/isaac_drawer_room_sim.py \
   --sim-limit "$SIM_LIMIT" --cam "${CAM:-false}" --cam-hz "${CAM_HZ:-10}" \
   --contact-min-n "${CONTACT_MIN_N:-0.5}" \
@@ -255,7 +261,7 @@ say "[任務] 發計畫、監看、備妥時要求轉移"
 # 速度框並維持，v_nominal 再降一次只會讓參考視窗縮到 30 mm、參考點貼在
 # 機器人身上，反而製造左右修正。
 python3 -u evaluation/drawer_mission_node.py --out "$DIR/mission.json" \
-  --slow-zone 0.0 $PK_NODE \
+  --slow-zone 0.0 $PK_MISSION \
   2>&1 | tee -a "$DIR/run.log"
 RC=${PIPESTATUS[0]}
 say "[展開] 等全身端完成展開（最多 120 s）"
