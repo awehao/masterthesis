@@ -23,7 +23,8 @@ import d1_handle_detect as D1          # noqa: E402  凍結版：只呼叫，不
 import dl0_autolabel as AL            # noqa: E402
 
 DEV = [('d1_dev_f02P/wrist_v0', 'd1_detect_rev2.json', 'traj_wg4b_f02_P'),
-       ('d1_hold_mt02P/wrist_v0', 'd1_detect_hold.json', 'traj_mt_b1_02_P')]
+       ('d1_hold_mt02P/wrist_v0', 'd1_detect_hold.json', 'traj_mt_b1_02_P'),
+       ('dl0_dev_near/wrist_v0', 'd1_detect_dl0dev.json', 'synth_dev_near')]
 BINS = [(0.1, 0.4), (0.4, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 99.0)]
 
 

@@ -41,6 +41,8 @@ SOURCES = [
     ('d1_dev_f02P/wrist_v0', 'traj_wg4b_f02_P', 'D1 開發集（已看過）'),
     ('d1_hold_mt02P/wrist_v0', 'traj_mt_b1_02_P', 'D1 S3 保留集（已看過，不能再當盲測）'),
     ('d1s4b_M/wrist_live', 'traj_d1s4b_M', 'D1 S4 線上（已看過，不能再當盲測）'),
+    ('dl0_dev_near/wrist_v0', 'synth_dev_near', 'DL0 開發補充（腳本合成觀測路徑，非控制軌跡）'),
+    # 封存測試 dl0_test_lateral／dl0_test_view **刻意不列入**：模型與門檻凍結前不產生標籤、不查看
 ]
 
 
