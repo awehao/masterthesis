@@ -80,3 +80,15 @@
 - `test_d1_shadow.py` 29/29：延遲 2 步且 float32 時間的唯一匹配、步間／早於歷史／缺時間／NaN 拒絕、歷史有界、重複時間 ambiguous；配對任意順序、逾時、溢位、重複段、收尾；待處理槽覆蓋回傳舊影格識別、戳不改寫；32FC1 往返（含 inf／NaN）、16UC1／frame_id／尺寸／endianness／長度／四元數拒絕；**S3 開發集 87 格經線上契約路徑與 d1_detect_rev2 逐格相同**。
 - `test_d1_shadow_node.py`（ROS，不起模擬器，連跑兩次皆通過）：端到端配對、連發覆蓋、缺段逾時、16UC1 契約拒絕、TERM 後 3 s 內有界收尾並記錄未處理影格、輸出數＝處理數、觀測話題收齊、戳不改寫、處理順序、來源牆鐘年齡；稽核以來源影格逐格對帳閉合（連發時 ROS 接收佇列丟棄的影格歸為 transport_drop 或配對逾時）。
 - 模擬器端 `--wrist-live` 未實跑（Isaac 才能驗）：render 節奏與新影格率、每步取位姿的負載只能在 S4 趟量測。
+
+---
+
+# 修訂 r3（依 Codex reviews/20261005_145312_reply.md 四項必修；偵測器與控制設定不變）
+
+1. **對帳**：節點逐段記 `received` 事件（擷取戳、段名）。稽核去向新增 `received_no_fate`（節點收到但無去向 ⇒ 證據不足、FAIL），`transport_drop` 只用於節點完全沒收到任何一段（推定）。工作執行緒以 try/except 包住偵測與發布，例外記 `worker_error`（n、stage、原因）後繼續；收尾時仍在處理的影格記 `shutdown_in_progress`。通路 PASS 另需：worker_alive_at_exit = False、worker_error = 0、無 in-progress、received 各段／paired／published=processed 計數器與事件閉合。
+2. **分母與連續窗**：有效率分「來源新影格（含覆蓋、逾時、傳輸遺失）」與「已處理影格」兩種；擷取端拒絕者距離未知另列。連續有效窗沿來源時序（已發布＋擷取端拒絕），任何非有效影格或間隔 > 0.4 s 中斷。已處理影格缺真值或內參 ⇒ 證據不足，不靜默略過。
+3. **內參契約**：K 必須 9 個有限值且 fx、fy > 0（cx=NaN、長度 8、None 皆拒絕）；位置非有限或長度錯 ⇒ bad_pose。
+4. **欄位**：溫度按欄名讀 `cpu_c`；`processed_capture_cadence_hz`（已處理影格的擷取時序頻率）與 `output_rate_sim_hz`（以節點輸出當下 /clock 的 out_sim_t）分開；`wall_age_s` 明示為「模擬器讀取匹配後 → 節點輸出，不含算圖延遲」。
+
+測試：`test_d1_s4_audit.py` 18/18（含 Codex 反例 paired=2／processed=1／worker_alive=True ⇒ FAIL、received_no_fate 不補成傳輸遺失、worker_error、in-progress、計數器不閉合、兩種分母、覆蓋中斷連續窗、缺真值證據不足、cpu_c、時間欄名）；`test_d1_shadow.py` 34/34（新增 cx=NaN、K 長度、None、位置 NaN／長度）；`test_d1_shadow_node.py`（ROS 整合）通過；`test_d1_shadow_node_fault.py`（`--fault-inject-n`，僅測試用、預設不注入）9/9。
+凍結：`freeze_d1_s4_r2.sha256`（原 `freeze_d1_s4.sha256` 保留不改）。

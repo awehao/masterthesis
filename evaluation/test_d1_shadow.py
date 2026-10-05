@@ -107,6 +107,17 @@ check('contract_size_mismatch', check_contract(*msgs(w=320))[3] in ('size_mismat
 check('contract_bigendian_rejected', check_contract(*msgs(big=1))[3] == 'bigendian')
 check('contract_length_mismatch', check_contract(*msgs(data=b'\0' * 10))[3] == 'step_or_length_mismatch')
 check('contract_bad_quat', check_contract(*msgs(q=(0, 0, 0, 0)))[3] == 'bad_pose')
+_d, _i, _p = msgs()
+_i_nan = dict(_i, k=[465.6, 0, float('nan'), 0, 465.6, 240, 0, 0, 1])      # cx = NaN（Codex 反例）
+check('contract_intrinsics_nan_rejected', check_contract(_d, _i_nan, _p)[3] == 'bad_intrinsics')
+_i_len = dict(_i, k=[465.6, 0, 320, 0, 465.6, 240, 0, 0])                    # K 長度 8
+check('contract_intrinsics_wrong_length_rejected', check_contract(_d, _i_len, _p)[3] == 'bad_intrinsics')
+_i_none = dict(_i, k=None)
+check('contract_intrinsics_none_rejected', check_contract(_d, _i_none, _p)[3] == 'bad_intrinsics')
+_p_nan = dict(_p, pos=[float('nan'), 0.0, 0.0])
+check('contract_pose_nan_rejected', check_contract(_d, _i, _p_nan)[3] == 'bad_pose')
+_p_len = dict(_p, pos=[1.0, 2.0])
+check('contract_pose_wrong_length_rejected', check_contract(_d, _i, _p_len)[3] == 'bad_pose')
 # 四元數 → 旋轉：繞 z 90°
 T = quat_to_T([0, 0, 0], [np.cos(np.pi / 4), 0, 0, np.sin(np.pi / 4)])
 check('quat_to_T_z90', np.allclose(T[:3, :3] @ [1, 0, 0], [0, 1, 0]))

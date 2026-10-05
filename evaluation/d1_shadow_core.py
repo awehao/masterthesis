@@ -163,7 +163,13 @@ def check_contract(depth, info, pose, expect_wh=(640, 480)):
     if depth['step'] != W * 4 or len(depth['data']) != W * H * 4:
         return None, None, None, 'step_or_length_mismatch'
     dep = np.frombuffer(bytes(depth['data']), dtype='<f4').reshape(H, W)
-    K = np.asarray(info['k'], float).reshape(3, 3)
+    try:
+        kk = np.asarray(info['k'], float).reshape(-1)
+    except (TypeError, ValueError):
+        return None, None, None, 'bad_intrinsics'
+    if kk.size != 9 or not np.isfinite(kk).all():
+        return None, None, None, 'bad_intrinsics'
+    K = kk.reshape(3, 3)
     if not (K[0, 0] > 0 and K[1, 1] > 0):
         return None, None, None, 'bad_intrinsics'
     try:

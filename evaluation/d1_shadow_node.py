@@ -50,6 +50,8 @@ def main():
     ap.add_argument('--pair-cap', type=int, default=3)
     ap.add_argument('--pair-timeout-s', type=float, default=1.0)
     ap.add_argument('--qos-depth', type=int, default=2)
+    ap.add_argument('--fault-inject-n', type=int, nargs='*', default=[],
+                    help='僅測試用：處理這些影格序號時令偵測丟例外（驗證 worker_error 記錄）；預設不注入')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
@@ -65,7 +67,7 @@ def main():
     log_lock = threading.Lock()
     C = {k: 0 for k in ('received_depth', 'received_info', 'received_pose', 'received_meta', 'paired',
                         'evicted', 'contract_reject', 'overwritten', 'processed', 'published',
-                        'detect_reject', 'L2', 'L1', 'L0')}
+                        'detect_reject', 'L2', 'L1', 'L0', 'worker_error')}
 
     def ev(kind, **kw):
         rec = {'ev': kind, 'wall_t': time.time(), **kw}
@@ -92,6 +94,7 @@ def main():
     def on_part(part, key, msg):
         C['received_' + part] += 1
         now = time.time()
+        ev('received', stamp=list(key), part=part, n=(msg.get('n') if part == 'meta' else None))
         with pb_lock:
             done, evicted = pb.put(key, part, msg, now)
         for k, why, parts in evicted:
@@ -148,30 +151,48 @@ def main():
     nd.create_subscription(String, '/wrist/capture_meta', meta_cb, qos)
     nd.create_subscription(Clock, '/clock', clock_cb, 10)
 
+    inflight = {'item': None}
+    fault = set(a.fault_inject_n or [])
+
     def worker():
         while not stop.is_set():
             it = slot.take(timeout=0.1)
             if it is None:
                 continue
-            w0 = time.time()
-            det, ms = D1.detect(it['dep'], it['K'], it['T'], rng)
-            order.append(it['n'])
+            inflight['item'] = it
+            stage = 'detect'
+            try:
+                w0 = time.time()
+                if it['n'] in fault:
+                    raise RuntimeError(f'fault-inject n={it["n"]}')
+                det, ms = D1.detect(it['dep'], it['K'], it['T'], rng)
+                order.append(it['n'])
+                lvl = 'L2' if det['L2'] else ('L1' if det['L1'] else ('L0' if det['L0'] else None))
+                w1 = time.time()
+                out_sim = sim_now['t']
+                sim_age = None if out_sim is None else out_sim - it['t_cap']
+                # 牆鐘年齡＝模擬器「讀取並匹配影格」之後 → 本節點輸出；**不含**此前的算圖延遲
+                wall_age = None if it['src_wall'] is None else w1 - it['src_wall']
+                obs = {'n': it['n'], 'stamp': it['stamp'], 'level': lvl, 'reject': det['reject'],
+                       'reject_L2': det['reject_L2'], 'L1': det['L1'], 'L2': det['L2'],
+                       'detect_ms': round(ms, 2), 'out_sim_t': out_sim, 'sim_age_s': sim_age,
+                       'wall_age_s': wall_age}
+                stage = 'publish'
+                pub.publish(String(data=json.dumps(obs, ensure_ascii=False, default=_js)))
+            except Exception as e:                                   # noqa: BLE001
+                C['worker_error'] += 1
+                ev('worker_error', n=it['n'], stamp=it['stamp'], stage=stage, why=repr(e))
+                inflight['item'] = None
+                continue
             C['processed'] += 1
-            lvl = 'L2' if det['L2'] else ('L1' if det['L1'] else ('L0' if det['L0'] else None))
+            C['published'] += 1
             if lvl:
                 C[lvl] += 1
             else:
                 C['detect_reject'] += 1
-            w1 = time.time()
-            sim_age = None if sim_now['t'] is None else sim_now['t'] - it['t_cap']
-            wall_age = None if it['src_wall'] is None else w1 - it['src_wall']
-            obs = {'n': it['n'], 'stamp': it['stamp'], 'level': lvl, 'reject': det['reject'],
-                   'reject_L2': det['reject_L2'], 'L1': det['L1'], 'L2': det['L2'],
-                   'detect_ms': round(ms, 2), 'sim_age_s': sim_age, 'wall_age_s': wall_age}
-            pub.publish(String(data=json.dumps(obs, ensure_ascii=False, default=_js)))
-            C['published'] += 1
             ev('processed', **obs, proc_index=len(order) - 1, wait_wall_s=w0 - it['recv_wall'],
                det=det, T=it['T'].tolist())
+            inflight['item'] = None
 
     th = threading.Thread(target=worker, daemon=True)
     th.start()
@@ -181,6 +202,9 @@ def main():
     def finish(why):
         stop.set()
         th.join(timeout=1.5)
+        busy = inflight['item'] if th.is_alive() else None
+        if busy is not None:
+            ev('shutdown_in_progress', n=busy['n'], stamp=busy['stamp'])
         left = slot.drain()
         if left is not None:
             ev('shutdown_unprocessed', n=left['n'], stamp=left['stamp'])
@@ -190,6 +214,9 @@ def main():
             ev('evicted', stamp=list(k), why=w, parts=parts)
         summ = {'why': why, 'seed': SEED, 'counters': C, 'worker_alive_at_exit': th.is_alive(),
                 'unprocessed_in_slot': 0 if left is None else 1, 'unpaired_at_exit': len(un),
+                'in_progress_at_exit_n': None if busy is None else busy['n'],
+                'fault_inject_n': sorted(fault),
+                'wall_age_definition': '模擬器讀取匹配影格之後 → 節點輸出（不含算圖延遲）',
                 'processing_order_n': order,
                 'detector_sha256': __import__('hashlib').sha256(open(D1.__file__, 'rb').read()).hexdigest(),
                 'params': D1.P}
