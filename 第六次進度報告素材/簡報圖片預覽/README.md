@@ -23,6 +23,8 @@
 | 11 | `11_next.png` | 未來工作 |
 | 12 | `12_conclusion.png` | 結語 |
 
+第 4 頁只回顧第五次的全身模型、Isaac 閉迴路、底盤朝向與定點操作，不與本次成果並列；第六次實作從第 5 頁開始。
+
 ## 資料與展示界線
 
 - 第 8 頁來源為 `evaluation/results/motm_speed/park_hold_formal_summary.yaml` 及正式比較表；平均 80.72／93.62 s 是三趟平均，配對差來自正式各趟結果。
