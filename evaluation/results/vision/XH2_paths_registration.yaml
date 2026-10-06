@@ -1,0 +1,833 @@
+schema: xh2_paths_registration/1
+date: '2026-10-06'
+rule: 沿用凍結 dl0_paths 的 IK、內插與前距選擇（先最少 IK 不合格格數、再最小最大位置誤差、同分取候選順序較前者）；設計姿態數 ≠ 物理步數（內插不含最後端點：步數 = (設計姿態數 − 1) × 20）≠ 實際擷取新影格數（另有暖機與拒絕，擷取後分開記錄）
+drawer_pose:
+- 0.0
+- 1.45
+not_rendered_until_freeze:
+- R_x25_150
+- R_x40_300
+- N_k40
+sequences:
+  R_bar26_A_front:
+    file: evaluation/results/vision/xh_paths/R_bar26_A_front.json
+    sha256: f28a9110307ed4ee0d0afe6fce8bb12ba8b21aa1d64c3a73ee599b11730b5762
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.008
+    max_base_yaw_step_rad_per_frame: 0.019
+    dist_m_range:
+    - 0.206
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 81
+    asset: R_bar26
+    split: train
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 4.222300526424682
+    n_design_poses: 81
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_bar26_B_oblique:
+    file: evaluation/results/vision/xh_paths/R_bar26_B_oblique.json
+    sha256: 4b3bce3c9faa56231968821a3de2f9462865c18da137e0aaaae6ee3a97d41c8e
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: R_bar26
+    split: train
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 4.222300526424682
+    n_design_poses: 66
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_t22_160_A_front:
+    file: evaluation/results/vision/xh_paths/R_t22_160_A_front.json
+    sha256: c52195b94823f5c79d2995fbc2f6375576723b1a3215d85bb679efd84a88596a
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.01
+    max_base_yaw_step_rad_per_frame: 0.023
+    dist_m_range:
+    - 0.203
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 81
+    asset: R_t22_160
+    split: train
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 2.2242475987415737
+    n_design_poses: 81
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_t22_160_B_oblique:
+    file: evaluation/results/vision/xh_paths/R_t22_160_B_oblique.json
+    sha256: 28d32ca11279e9050c324fde503e7b3ea9a1c928003b05629941a542185261b1
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: R_t22_160
+    split: train
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 2.2242475987415737
+    n_design_poses: 66
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_t24_280_A_front:
+    file: evaluation/results/vision/xh_paths/R_t24_280_A_front.json
+    sha256: 54f238fd739d389b81270a76d056d6e907e113f9b22c854114f0fd21628c4bbf
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.009
+    max_base_yaw_step_rad_per_frame: 0.023
+    dist_m_range:
+    - 0.205
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 77
+      truncated: 4
+    asset: R_t24_280
+    split: train
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 3.600265181013903
+    n_design_poses: 81
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_t24_280_B_oblique:
+    file: evaluation/results/vision/xh_paths/R_t24_280_B_oblique.json
+    sha256: 8a98f787aaf19ffdecb53a47d19435a82855a576d7673ca167a7e4910716a59f
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: R_t24_280
+    split: train
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 3.600265181013903
+    n_design_poses: 66
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_t30_240_A_front:
+    file: evaluation/results/vision/xh_paths/R_t30_240_A_front.json
+    sha256: 1f34ad6a9cedaad2ccaf26b4f5cbc1ff023fbb23631baacff2b889e05ae2ecd5
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.009
+    max_base_yaw_step_rad_per_frame: 0.018
+    dist_m_range:
+    - 0.206
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 81
+    asset: R_t30_240
+    split: train
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 4.322831491339556
+    n_design_poses: 81
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_t30_240_B_oblique:
+    file: evaluation/results/vision/xh_paths/R_t30_240_B_oblique.json
+    sha256: cae35a3bf58680507da449a2f710f8d54aec6bf319ffc0f4809ff549942284fe
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: R_t30_240
+    split: train
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 4.322831491339556
+    n_design_poses: 66
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_t34_180_A_front:
+    file: evaluation/results/vision/xh_paths/R_t34_180_A_front.json
+    sha256: fb002a48d9feef025a864a1fe4e62860854de27dc4ebc0f8e4b154c79dec4090
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.01
+    max_base_yaw_step_rad_per_frame: 0.022
+    dist_m_range:
+    - 0.203
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 81
+    asset: R_t34_180
+    split: train
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 2.1299998191338796
+    n_design_poses: 81
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_t34_180_B_oblique:
+    file: evaluation/results/vision/xh_paths/R_t34_180_B_oblique.json
+    sha256: f9bdbb2b44b09a79f3178c5c9953c5a2635d5593d4c962321fcb9b72279d3b07
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: R_t34_180
+    split: train
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 2.1299998191338796
+    n_design_poses: 66
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_t38_220_A_front:
+    file: evaluation/results/vision/xh_paths/R_t38_220_A_front.json
+    sha256: 2405a950cb43a3b8d45b0085dee1a436b2e4f7687d6724af89825c3ac23331c0
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.011
+    max_base_yaw_step_rad_per_frame: 0.017
+    dist_m_range:
+    - 0.204
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 81
+    asset: R_t38_220
+    split: train
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 1.8472564803107985
+    n_design_poses: 81
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_t38_220_B_oblique:
+    file: evaluation/results/vision/xh_paths/R_t38_220_B_oblique.json
+    sha256: 85772e179ef1d4e3c6dcbc0188c1972842c5387ed5bbcb4817c6f1e47e957b07
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: R_t38_220
+    split: train
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 1.8472564803107985
+    n_design_poses: 66
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_d28_200_A_front:
+    file: evaluation/results/vision/xh_paths/R_d28_200_A_front.json
+    sha256: eddff4f9274983f4e57ae9d3e6afcaab594754d573a42b3ea64a054f763d05e8
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.01
+    max_base_yaw_step_rad_per_frame: 0.025
+    dist_m_range:
+    - 0.202
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 81
+    asset: R_d28_200
+    split: dev
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 2.73318560862312
+    n_design_poses: 81
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_d28_200_B_oblique:
+    file: evaluation/results/vision/xh_paths/R_d28_200_B_oblique.json
+    sha256: 4329de84925d853c48ac168a6f96e1dbe590ddbff9fb67604af09bd10fef65d0
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: R_d28_200
+    split: dev
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 2.73318560862312
+    n_design_poses: 66
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_d32_260_A_front:
+    file: evaluation/results/vision/xh_paths/R_d32_260_A_front.json
+    sha256: 3733b36f0db5e1c9dcc67c47a68d07af4cf7fff187f84658da23a5a27c789dca
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.009
+    max_base_yaw_step_rad_per_frame: 0.015
+    dist_m_range:
+    - 0.204
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 79
+      truncated: 2
+    asset: R_d32_260
+    split: dev
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 4.863185427757
+    n_design_poses: 81
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_d32_260_B_oblique:
+    file: evaluation/results/vision/xh_paths/R_d32_260_B_oblique.json
+    sha256: aaf7c26c7200ada6d3855cc681daacd0fde09e1565ca32a5a48539b71782bfdf
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: R_d32_260
+    split: dev
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 4.863185427757
+    n_design_poses: 66
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_x25_150_A_front:
+    file: evaluation/results/vision/xh_paths/R_x25_150_A_front.json
+    sha256: ffec69744878c30ef0dab7f5337150b57dff917833812f370fe8437d73ab177e
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.011
+    max_base_yaw_step_rad_per_frame: 0.018
+    dist_m_range:
+    - 0.204
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 81
+    asset: R_x25_150
+    split: test
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 1.8598228509251575
+    n_design_poses: 81
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_x25_150_B_oblique:
+    file: evaluation/results/vision/xh_paths/R_x25_150_B_oblique.json
+    sha256: 0fc92c2964b2056e00e8b25b692dba103ef1ab5d6615302cd7854b3fffa033dc
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: R_x25_150
+    split: test
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 1.8598228509251575
+    n_design_poses: 66
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_x40_300_A_front:
+    file: evaluation/results/vision/xh_paths/R_x40_300_A_front.json
+    sha256: a506aa61d57b21f3429e389c53ec61d919205a960593db0bdc6b8393baee0aa5
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.009
+    max_base_yaw_step_rad_per_frame: 0.018
+    dist_m_range:
+    - 0.206
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 75
+      truncated: 6
+    asset: R_x40_300
+    split: test
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 4.41079608564007
+    n_design_poses: 81
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  R_x40_300_B_oblique:
+    file: evaluation/results/vision/xh_paths/R_x40_300_B_oblique.json
+    sha256: a4bcc3da94c4c586c54c262863e98984a5bb5c81499054c688bf5f74ee69b047
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: R_x40_300
+    split: test
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.165
+    - 0.55
+    ref_kind: R：橫桿中心
+    phase_rad: 4.41079608564007
+    n_design_poses: 66
+    fk_prediction_note: R：橫桿兩端 FK 投影
+  N_k35_A_front:
+    file: evaluation/results/vision/xh_paths/N_k35_A_front.json
+    sha256: 784f712c39d7f452a65e7b00f055b013987ad829a055a38434f263f7d049b48a
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.01
+    max_base_yaw_step_rad_per_frame: 0.025
+    dist_m_range:
+    - 0.202
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 81
+    asset: N_k35
+    split: train
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.1749999999999998
+    - 0.55
+    ref_kind: N：圓鈕外端面中心
+    phase_rad: 2.557256420022092
+    n_design_poses: 81
+    fk_prediction_note: N：以圓鈕直徑作虛擬線段的 FK 粗估，只供參考
+  N_k35_B_oblique:
+    file: evaluation/results/vision/xh_paths/N_k35_B_oblique.json
+    sha256: 182709f8b1ec662933baefb4b6427d427fd5e3817ce2588ad7311c1d5a8c5fff
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: N_k35
+    split: train
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.1749999999999998
+    - 0.55
+    ref_kind: N：圓鈕外端面中心
+    phase_rad: 2.557256420022092
+    n_design_poses: 66
+    fk_prediction_note: N：以圓鈕直徑作虛擬線段的 FK 粗估，只供參考
+  N_k30_A_front:
+    file: evaluation/results/vision/xh_paths/N_k30_A_front.json
+    sha256: ae9645bd1ba6ceefd1460a20b29bc85ec8afaa517c9ae9c22623b9e11ef94bc8
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.009
+    max_base_yaw_step_rad_per_frame: 0.022
+    dist_m_range:
+    - 0.206
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 81
+    asset: N_k30
+    split: dev
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.177
+    - 0.55
+    ref_kind: N：圓鈕外端面中心
+    phase_rad: 3.80132711084365
+    n_design_poses: 81
+    fk_prediction_note: N：以圓鈕直徑作虛擬線段的 FK 粗估，只供參考
+  N_k30_B_oblique:
+    file: evaluation/results/vision/xh_paths/N_k30_B_oblique.json
+    sha256: 4ea2e50b5e3d2e70c4a7ba6e13ddbec5c1096aea419f4e8649c5441df4292f7c
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: N_k30
+    split: dev
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.177
+    - 0.55
+    ref_kind: N：圓鈕外端面中心
+    phase_rad: 3.80132711084365
+    n_design_poses: 66
+    fk_prediction_note: N：以圓鈕直徑作虛擬線段的 FK 粗估，只供參考
+  N_k40_A_front:
+    file: evaluation/results/vision/xh_paths/N_k40_A_front.json
+    sha256: eda3c0a744c5a6c9eaa28487b29854b3cb0050589e2edac90563ac429812b2db
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 81
+    n_phys_steps: 1600
+    sim_t_window:
+    - 10.0
+    - 25.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.01
+    max_base_yaw_step_rad_per_frame: 0.022
+    dist_m_range:
+    - 0.203
+    - 3.0
+    predicted_categories（FK 投影，非渲染）:
+      full: 81
+    asset: N_k40
+    split: test
+    template: A_front
+    design: 正面：d = smooth(3.0→0.4, i/60)（i ≤ 60）、smooth(0.4→0.2, (i−60)/20)；x 偏移 0.04·sin(2π·0.1·t + φ)；高 +0.03 m；全程朝參考中心
+    observation_ref_center_world:
+    - 0.0
+    - 1.173
+    - 0.55
+    ref_kind: N：圓鈕外端面中心
+    phase_rad: 5.277875658030853
+    n_design_poses: 81
+    fk_prediction_note: N：以圓鈕直徑作虛擬線段的 FK 粗估，只供參考
+  N_k40_B_oblique:
+    file: evaluation/results/vision/xh_paths/N_k40_B_oblique.json
+    sha256: 975abdba344ef620b895e76ac65fabe8a159a8c663d89692f6aefc39eef4c287
+    base_standoff_m（相機後方，沿朝向把手方向）: 0.3
+    n_frames_5hz: 66
+    n_phys_steps: 1300
+    sim_t_window:
+    - 10.0
+    - 22.99
+    ik_bad_frames: []
+    ik_pos_err_mm_max: 0.0
+    ik_rot_err_deg_max: 0.0
+    max_joint_step_rad_per_frame: 0.725
+    max_base_yaw_step_rad_per_frame: 0.0
+    dist_m_range:
+    - 0.306
+    - 2.001
+    predicted_categories（FK 投影，非渲染）:
+      no_handle: 13
+      full: 53
+    asset: N_k40
+    split: test
+    template: B_oblique
+    design: 斜向：方位 u = (sin30°, −cos30°, 0)（相機在 +x 側前方）；d = 2.0（i < 15）、smooth(2.0→0.3, (i−15)/50)；高 +0.06 m；觀看目標 smooth(朝外點, 參考中心, (i−10)/5)，朝外點＝相機 + 1.5·(0.6, 0.8, −0.1)
+    observation_ref_center_world:
+    - 0.0
+    - 1.173
+    - 0.55
+    ref_kind: N：圓鈕外端面中心
+    phase_rad: 5.277875658030853
+    n_design_poses: 66
+    fk_prediction_note: N：以圓鈕直徑作虛擬線段的 FK 粗估，只供參考

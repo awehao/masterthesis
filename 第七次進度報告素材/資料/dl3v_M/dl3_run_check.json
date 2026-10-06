@@ -1,0 +1,148 @@
+{
+ "run": "/home/howardchen/masterthesis/evaluation/runs/dl3v_M",
+ "checks": {
+  "first_solve_rot_equals_lock_rad": 0.0,
+  "first_solve_target_src": "topic",
+  "first_solve_ok": true,
+  "solver_first_rx_equals_task_first_pub": true,
+  "no_target_before_lock": true,
+  "task_args_diff_vs_source": {},
+  "solver_args_diff_vs_source": {},
+  "solver_offset_moving": true,
+  "solver_n_published_after_stop_rx": 0,
+  "solver_stop_why": "stop_topic：drawer_task：PREGRASP_COMPLETE 受控停止",
+  "replay_and_physical_checks": "另跑 horizon_replay_check.py 與 motm_physical_check.py（analysis/），結果分列",
+  "result": "PREGRASP_COMPLETE",
+  "abort": null,
+  "success_vs_lock": true,
+  "pregrasp": {
+   "sim_t": 39.23999912291765,
+   "held_s": 0.5099999886006117,
+   "pos_err_m": 0.0018295573948458464,
+   "rot_err_rad": 0.0015994938121615687,
+   "target": [
+    [
+     -0.9999944404979135,
+     -0.0009176739351716731,
+     0.003205752300733406,
+     -0.0012432131358069932
+    ],
+    [
+     0.0032022577029087156,
+     0.0037845750858001804,
+     0.9999877111930044,
+     1.1440460862752355
+    ],
+    [
+     -0.0009297950683423892,
+     0.9999924174042362,
+     -0.003781615417019309,
+     0.5511166331686882
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "tcp": [
+    [
+     -0.9999957598602053,
+     -0.00010716851917064174,
+     0.0029101162380243966,
+     -0.0007898498407142405
+    ],
+    [
+     0.0029095280331822263,
+     0.005131281775641236,
+     0.9999826021456388,
+     1.1456842890188894
+    ],
+    [
+     -0.00012209928108553036,
+     0.999986829144388,
+     -0.0051309482084781815,
+     0.5504398512581863
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "criteria": {
+    "pos_m": 0.005,
+    "rot_rad": 0.02,
+    "hold_s": 0.5
+   }
+  },
+  "post_stop_record_complete": true,
+  "post_stop_record_incomplete": null,
+  "post_stop_tcp_drift_mm": 0.9536184591861729
+ },
+ "eval_truth_only": {
+  "lock_center_err_mm": 2.732030507989013,
+  "lock_rot_err_deg": 0.2919340364074154,
+  "lock_target_vs_truth_target_mm": 2.799481626726183,
+  "lock_target_vs_truth_target_deg": 0.2919340364074154,
+  "tcp_at_complete_vs_truth_target_mm": 3.988075353581995,
+  "tcp_at_complete_vs_truth_target_deg": 0.34090574059024104,
+  "gc2_actual_pregrasp_pose_collision": {
+   "statuses": {
+    "shell": [
+     "separated"
+    ],
+    "camera_assembly": [
+     "separated"
+    ],
+    "fingers_split": [
+     "separated"
+    ],
+    "fingers_gap_guard": [
+     "separated"
+    ]
+   },
+   "note": "停止時實測 TCP 位姿對真值物體的靜態凸模型核對（評估用、不回饋）"
+  },
+  "gc2_hypothetical_advance30_grasp": {
+   "statuses": {
+    "shell": [
+     "separated"
+    ],
+    "camera_assembly": [
+     "separated"
+    ],
+    "fingers_split": [
+     "separated"
+    ],
+    "fingers_gap_guard": [
+     "separated"
+    ]
+   },
+   "grasp_compat": {
+    "bar_center_z_finger_mm": 18.6181,
+    "blade_z_range_mm": [
+     8.3,
+     26.8
+    ],
+    "root_gap_along_approach_mm": -1.1819,
+    "bar_tilt_vs_gripper_x_deg": 0.16685063787631996,
+    "finger1_contact_q_mm": [
+     1.306,
+     1.3069
+    ],
+    "finger1_open_margin_mm": 7.5931,
+    "finger2_contact_q_mm": [
+     2.2952,
+     2.2962
+    ],
+    "finger2_open_margin_mm": 6.6038
+   },
+   "overall_ok": false,
+   "why": "fingers:depth_incompatible:reaches_root_block",
+   "note": "假想由實測位姿沿接近軸再前進 30 mm 的抓取相容與碰撞；與實際預抓取位姿碰撞**分開解讀**"
+  }
+ }
+}

@@ -433,8 +433,243 @@ def fig12():
     save(fig, '12_DL2_觀測到局部座標目標_候選率與誤差.png')
 
 
+
+# ---------------------------------------------------------------- 13
+def fig13():
+    d = json.load(open(os.path.join(VIS, 'EB1_error_budget_r2.json')))
+    runs = d['tiers']['A'] + d['tiers']['B']
+    fig, axs = plt.subplots(1, 2, figsize=(12, 4.2))
+    x = np.arange(len(runs))
+    adv = [(d['runs'][r].get('pregrasp') or {}).get('hypothetical_advance30', {}).get('root_gap_mm') for r in runs]
+    act = [((d['runs'][r].get('pre_close') or {}).get('measured_tcp_static_model_margin') or {}).get('root_gap_mm') for r in runs]
+    w = 0.38
+    axs[0].bar(x - w / 2, [v if v is not None else 0 for v in adv], w * 0.9, color=C2, label='預抓取位姿固定搬移前進 30 mm')
+    axs[0].bar(x + w / 2, [v if v is not None else 0 for v in act], w * 0.9, color=C1, label='閉爪前實測 TCP 位姿（靜態模型）')
+    for i, v in enumerate(act):
+        if v is None:
+            axs[0].text(x[i] + w / 2, 0.15, '未執行', ha='center', fontsize=7.5, color=INK2, rotation=90)
+    axs[0].axhline(2.7, color=MUTED, lw=1, ls='--')
+    axs[0].text(len(runs) - 0.5, 2.78, '名目根部餘裕 2.7 mm', ha='right', fontsize=8, color=INK2)
+    axs[0].axhline(0, color=INK, lw=0.8)
+    lbl = [f"{r}\n({'A' if r in d['tiers']['A'] else 'B'}{'、視覺' if d['runs'][r]['vision'] else '、真值目標'})" for r in runs]
+    axs[0].set_xticks(x)
+    axs[0].set_xticklabels(lbl, fontsize=7.5)
+    axs[0].set_ylabel('根部餘裕 (mm)（負＝未通過根部深度相容）')
+    axs[0].set_title('根部規則餘裕：預抓取位姿固定搬移 30 mm vs 閉爪前實測位姿', fontsize=10)
+    axs[0].legend(frameon=False, fontsize=8, loc='lower right')
+    bins = ['0.4-1.0', '1.0-2.0', '2.0-3.0']
+    for k, (rt, col) in enumerate((('G0/N-obs', C1), ('L1/N-obs', C2))):
+        S = d['est_dev_signed_mm'][rt]
+        for i, b in enumerate(bins):
+            if b not in S:
+                continue
+            v = S[b]['tool_target_s0']
+            xx = i + (k - 0.5) * 0.3
+            axs[1].plot([xx, xx], [v['min'], v['max']], color=col, lw=1)
+            axs[1].plot([xx, xx], [v['p5'], v['p95']], color=col, lw=5, alpha=0.5, solid_capstyle='butt')
+            axs[1].plot(xx, v['median'], 'o', color=col, ms=5, label=rt if i == 0 else None)
+            axs[1].text(xx, v['max'] + 0.12, f"n={v['n']}", ha='center', fontsize=7, color=INK2)
+    lock = d['runs']['dl3v_M']['pregrasp']['gen_approach_mm']['median']
+    axs[1].axhline(lock, color=C3, lw=1.2)
+    axs[1].text(0.5, lock - 0.12, f'DL3 鎖定目標\n生成誤差 {lock:.2f}', ha='center', va='top', fontsize=7.5, color=INK2)
+    axs[1].axhline(2.7, color=MUTED, lw=1, ls='--')
+    axs[1].axhline(0, color=INK, lw=0.8)
+    axs[1].set_xticks(range(len(bins)))
+    axs[1].set_xticklabels([b.replace('-', '–') + ' m' for b in bins], fontsize=8)
+    axs[1].set_ylabel('沿接近軸有號誤差 (mm)（正＝偏向櫃內）')
+    axs[1].set_title('工具目標生成誤差（DL2 開發資料，中位／p5–p95／已觀察範圍）', fontsize=10)
+    axs[1].legend(frameon=False, fontsize=8, loc='lower right')
+    fig.suptitle('EB1 接近方向誤差預算：追蹤誤差在接近段收斂；目標生成（估計）偏差不受追蹤修正', fontsize=11, y=1.02)
+    fig.text(0.01, -0.1, '五趟真值目標實錄閉爪前追蹤偏差 −1.40～+0.14 mm、實測位姿靜態模型根部餘裕 2.65–2.77 mm（B 層為名目中心參考）；固定搬移不等同閉迴路接近，視覺目標下未驗證。'
+             '\n本開發資料已接受樣本的工具目標生成誤差呈正向，已觀察最大 3.41 mm；極值組合只是情境，非可靠最壞界限，估計誤差界尚未建立。A 層＝與 S4 正式趟同配置、B 層＝只差 motm_a_ref／退開速率。來源：EB1_error_budget_r2.json。',
+             fontsize=7.5, color=MUTED)
+    save(fig, '13_EB1_接近方向誤差預算_根部餘裕.png')
+
+
+
+# ---------------------------------------------------------------- 14
+def fig14():
+    d = json.load(open(os.path.join(VIS, 'BL1_bias_localization.json')))
+    rows = [r for g in d['groups'].values() for r in g['rows'] if 'e_F_mm' in r]
+    x = np.array([r['dist'] for r in rows])
+    fig, axs = plt.subplots(1, 2, figsize=(12, 4.2))
+    ax = axs[0]
+    ser = [('D_panel', lambda r: r['D_panel']['along_ray_median_mm'], MUTED, '深度：前板平面（沿射線）'),
+           ('D_bar', lambda r: r['D']['along_ray_median_mm'], C3, '深度：橫桿可見面（沿射線）'),
+           ('e_F', lambda r: r['e_F_mm'], C1, '擬合軸線偏移（沿接近軸）'),
+           ('repl', lambda r: r['replace_diag'].get('e_F_mm'), C2, '真值表面替換診斷（沿接近軸）')]
+    for _, f, col, lab in ser:
+        xs = [r['dist'] for r in rows if f(r) is not None]
+        ys = [f(r) for r in rows if f(r) is not None]
+        ax.plot(xs, ys, 'o', ms=3.5, color=col, alpha=0.75, label=lab)
+    yp = np.array([r['D_panel']['along_ray_median_mm'] for r in rows])
+    k = np.polyfit(x, yp, 1)
+    xx = np.linspace(x.min(), x.max(), 10)
+    ax.plot(xx, np.polyval(k, xx), color=MUTED, lw=1)
+    ax.text(xx[-1], np.polyval(k, xx[-1]) - 0.35, f'前板：{k[1]:+.2f} + {k[0]:.2f}·距離 (mm)', ha='right', fontsize=8, color=INK2)
+    ax.axhline(0, color=INK, lw=0.8)
+    ax.set_xlabel('相機到把手距離 (m)')
+    ax.set_ylabel('mm（正＝偏深／偏向櫃內）')
+    ax.set_title('各段有號誤差 vs 距離（G0，兩開發群組）', fontsize=10)
+    ax.legend(frameon=False, fontsize=8, loc='upper left')
+    ax = axs[1]
+    bins = [(0.4, 1.0), (1.0, 2.0), (2.0, 3.0)]
+    comp = [('e_F_mm', C1, '擬合軸線偏移 e_F'), ('e_C_mm', C2, '沿軸中心 e_C'), ('e_T_mm', C3, '目標轉換 e_T')]
+    w = 0.25
+    for j, (kk, col, lab) in enumerate(comp):
+        vals = []
+        for lo, hi in bins:
+            v = [r[kk] for r in rows if lo <= r['dist'] < hi and r.get(kk) is not None]
+            vals.append(np.median(v) if v else 0)
+        ax.bar(np.arange(len(bins)) + (j - 1) * w, vals, w * 0.9, color=col, label=lab)
+    eg = [np.median([r['e_goal_mm'] for r in rows if lo <= r['dist'] < hi and 'e_goal_mm' in r]) for lo, hi in bins]
+    ax.plot(np.arange(len(bins)), eg, 'k_', ms=26, mew=2, label='工具目標生成誤差 e_goal（中位）')
+    for i, (lo, hi) in enumerate(bins):
+        n = sum(1 for r in rows if lo <= r['dist'] < hi)
+        ax.text(i, max(eg[i], 0) + 0.15, f'n={n}', ha='center', fontsize=8, color=INK2)
+    ax.axhline(0, color=INK, lw=0.8)
+    ax.set_xticks(range(len(bins)))
+    ax.set_xticklabels([f'{lo}–{hi} m' for lo, hi in bins], fontsize=8)
+    ax.set_ylabel('沿接近軸 (mm)')
+    ax.set_title('幾何分解 e_goal = e_F + e_C + e_T（中位；84 格逐格閉合 0）', fontsize=10)
+    ax.set_ylim(min(0, min(eg)) - 0.2, max(eg) * 1.25)
+    ax.legend(frameon=False, fontsize=8, loc='upper left')
+    fig.suptitle('BL1 估計偏差定位：工具目標誤差主要表現在擬合軸線偏移；上游反投影差異的成因未確認', fontsize=11, y=1.02)
+    fig.text(0.01, -0.1, '186 格全部以凍結偵測器重現；85 格有中心（左圖與 e_F／e_C），其中 84 格有工具目標（e_goal／e_T）。深度為目前內參、位姿與解析幾何參考下的反投影差異；前板對照為分析期間新增的探索性診斷。'
+             '\n真值表面替換診斷同時改變點位與採樣幾何，不能單獨證明擬合無偏；深度、投影、位姿、擬合各自貢獻未區分。本包只定位、不補償、不調參。來源：BL1_bias_localization.json。',
+             fontsize=7.5, color=MUTED)
+    save(fig, '14_BL1_估計偏差定位_分段誤差.png')
+
+
+
+# ---------------------------------------------------------------- 15
+def fig15():
+    d = json.load(open(os.path.join(VIS, 'CP1_camera_contract.json')))
+    fig, axs = plt.subplots(1, 2, figsize=(12, 4.0), gridspec_kw={'width_ratios': [1.5, 1]})
+    ax = axs[0]
+    cols = {'traj_wg4b_f02_P': C1, 'traj_mt_b1_02_P': C2}
+    for g, G in d['groups'].items():
+        rr = [r for r in G['rows'] if 'integer' in r]
+        ax.plot([r['dist'] for r in rr], [r['integer']['median_mm'] for r in rr], 'o', ms=3.5, color=cols[g], alpha=0.8, label=f'整數像素索引（{g}）')
+        ax.plot([r['dist'] for r in rr], [r['half_pixel']['median_mm'] for r in rr], 's', ms=3.5, mfc='none', color=cols[g], alpha=0.9, label=f'像素中心 +0.5（{g}）')
+    S = d['summary']['combined']
+    for name, ls in (('integer', '-'), ('half_pixel', '--')):
+        f = S[name]
+        xx = np.linspace(0.3, 2.8, 10)
+        ax.plot(xx, f['intercept_mm'] + f['slope_mm_per_m'] * xx, color=INK2, lw=1, ls=ls)
+    ax.text(2.75, S['integer']['intercept_mm'] + S['integer']['slope_mm_per_m'] * 2.2 - 0.25,
+            f"整數：{S['integer']['intercept_mm']:+.2f} + {S['integer']['slope_mm_per_m']:.3f}·距離", ha='right', fontsize=8, color=INK2)
+    ax.text(2.75, 0.1, f"+0.5：斜率 {S['half_pixel']['slope_mm_per_m']:+.1e} mm/m、殘差 sd {S['half_pixel']['resid_sd_mm']:.0e} mm", ha='right', fontsize=8, color=INK2)
+    ax.axhline(0, color=INK, lw=0.8)
+    ax.set_xlabel('相機到把手距離 (m)')
+    ax.set_ylabel('前板：量測點 − 真值交點，沿射線 (mm)')
+    ax.set_title(f"同一批像素與深度值，只換射線約定（{S['integer']['n']} 格）", fontsize=10)
+    ax.legend(frameon=False, fontsize=7.5, loc='upper left')
+    ax = axs[1]
+    rows = [r for G in d['groups'].values() for r in G['rows'] if 'integer' in r]
+    keys = ['r0-100px', 'r100-200px', 'r200-400px']
+    vals = [np.median([r['integer']['radial_bins'][k]['median_mm'] for r in rows if r['integer']['radial_bins'][k]['median_mm'] is not None]) for k in keys]
+    ax.bar(range(3), vals, 0.6, color=C1)
+    for i, v in enumerate(vals):
+        ax.text(i, v + 0.01, f'{v:.2f}', ha='center', fontsize=8, color=INK2)
+    ax.set_xticks(range(3))
+    ax.set_xticklabels(['0–100', '100–200', '200–400'], fontsize=8)
+    ax.set_xlabel('像素到主點距離 (px)')
+    ax.set_ylabel('整數約定下逐格中位 (mm)')
+    ax.set_title('整數約定的差異集中在主點附近', fontsize=10)
+    fig.suptitle('CP1 相機契約核對：前板深度與「像素中心在 +0.5」的射線約定吻合；偵測器以整數索引反投影', fontsize=11, y=1.03)
+    fig.text(0.01, -0.1, '只表示該約定與資料較相容，不排除其他內參／位姿差異；渲染投影矩陣與像素中心約定的官方定義未保存（證據缺項）。'
+             '單純 float32 儲存捨入不足以解釋毫米級差異；近遠裁切 0.05–10 m 已記錄。\n35 格因前板像素 < 200 排除。不改偵測器、不補償。來源：CP1_camera_contract.json。',
+             fontsize=7.5, color=MUTED)
+    save(fig, '15_CP1_相機契約_像素中心約定.png')
+
+
+
+# ---------------------------------------------------------------- 16
+def fig16():
+    d = json.load(open(os.path.join(VIS, 'PC2_compare.json')))
+    both = [r for r in d['rows'] if r['old_DL2'].get('ok') and r['new_DL2'].get('ok')]
+    fig, axs = plt.subplots(1, 2, figsize=(12, 4.2))
+    ax = axs[0]
+    for r in both:
+        ax.plot([r['dist'], r['dist']], [r['old_DL2']['tool_signed_mm'], r['new_DL2']['tool_signed_mm']], color=GRID, lw=0.8, zorder=1)
+    ax.plot([r['dist'] for r in both], [r['old_DL2']['tool_signed_mm'] for r in both], 'o', ms=3.5, color=C2, label='凍結舊版（整數索引）')
+    ax.plot([r['dist'] for r in both], [r['new_DL2']['tool_signed_mm'] for r in both], 'o', ms=3.5, color=C1, label='新版（像素中心 +0.5）')
+    ax.axhline(2.7, color=MUTED, lw=1, ls='--')
+    ax.text(2.6, 2.78, '名目根部餘裕 2.7 mm', ha='right', fontsize=8, color=INK2)
+    ax.axhline(0, color=INK, lw=0.8)
+    ax.set_xlabel('相機到把手距離 (m)')
+    ax.set_ylabel('工具目標生成誤差，沿接近軸 (mm)（正＝偏深）')
+    ax.set_title(f'共同接受集合配對（{len(both)} 格；線連同一影格）', fontsize=10)
+    ax.legend(frameon=False, fontsize=8, loc='lower left')
+    ax = axs[1]
+    og = [r['old_DL2']['gc1_fixed_truth_object']['root_gap_mm'] for r in both]
+    ng = [r['new_DL2']['gc1_fixed_truth_object']['root_gap_mm'] for r in both]
+    os_ = [r['old_DL2']['gc1_fixed_truth_object']['shallow_margin_mm'] for r in both]
+    ns = [r['new_DL2']['gc1_fixed_truth_object']['shallow_margin_mm'] for r in both]
+    bp = ax.boxplot([og, ng, os_, ns], widths=0.5, patch_artist=True, medianprops=dict(color=INK))
+    for patch, col in zip(bp['boxes'], [C2, C1, C2, C1]):
+        patch.set_facecolor(col)
+        patch.set_alpha(0.6)
+    ax.axhline(0, color=INK, lw=0.8)
+    ax.set_xticks(range(1, 5))
+    ax.set_xticklabels(['根部\n舊版', '根部\n新版', '淺側\n舊版', '淺側\n新版'], fontsize=8)
+    ax.set_ylabel('靜態模型餘裕 (mm)')
+    S = d['summary']['combined']['DL2']
+    ax.set_title(f"固定真值物體的 GC1 靜態核對（通過 {S['old_gc1_n_ok']}→{S['new_gc1_n_ok']}／{S['n_common']}）", fontsize=10)
+    fig.suptitle('PC2 像素座標契約新版（離線）：有號偏差縮小、根部餘裕增加，但未消除；部分影格絕對誤差變大', fontsize=11, y=1.02)
+    fig.text(0.01, -0.1, f"共同集合有號中位 {S['common_old_signed']['median']:+.2f} → {S['common_new_signed']['median']:+.2f} mm；絕對中位 {S['common_old_abs']['median']:.2f} → {S['common_new_abs']['median']:.2f} mm；"
+             f"絕對誤差變大 {S['n_abs_worse']} 格、號變翻 {S['n_sign_flip']} 格。G0 有中心 85→85、DL2 候選 84→83（各有獨有接受，見 JSON）。"
+             '\n靜態模型相容性不代表可實際抓取；凍結舊版保留不改；不線上替換、不重新鎖定。來源：PC2_compare.json。', fontsize=7.5, color=MUTED)
+    save(fig, '16_PC2_像素契約新版對照_誤差與餘裕.png')
+
+
+
+# ---------------------------------------------------------------- 17
+def fig17():
+    d = json.load(open(os.path.join(VIS, 'XH3_dev_eval.json')))
+    log = [json.loads(l) for l in open(os.path.join(WS, '第七次進度報告素材', '資料', 'XH3_train_log.jsonl'))]
+    ev = [x['eval'] for x in log if 'eval' in x]
+    fig, axs = plt.subplots(1, 2, figsize=(12, 4.0), gridspec_kw={'width_ratios': [1, 1.4]})
+    ax = axs[0]
+    ax.plot([e['epoch'] for e in ev], [e['per_group_mean_iou']['R_d28_200'] for e in ev], 'o-', ms=3, color=C1, label='R_d28_200（未見直徑值）')
+    ax.plot([e['epoch'] for e in ev], [e['per_group_mean_iou']['R_d32_260'] for e in ev], 's-', ms=3, color=C2, label='R_d32_260（未見直徑與長度值）')
+    ax.axvline(11, color=MUTED, lw=1, ls='--')
+    ax.text(11.3, 0.9665, '選出 ep11', fontsize=8, color=INK2)
+    ax.set_xlabel('epoch')
+    ax.set_ylabel('開發遮罩 IoU（漏檢計 0）')
+    ax.set_title('學習式遮罩：開發 R 資產 IoU（N 與朝外負例誤檢 0）', fontsize=10)
+    ax.legend(frameon=False, fontsize=8, loc='lower right')
+    ax = axs[1]
+    S = d['summary']
+    bins = ['0.1-0.4', '0.4-1.0', '1.0-2.0', '2.0-3.1']
+    cols = {'L1': C1, 'G1': C3, 'G0K': C2}
+    labs = {'L1': '學習式遮罩＋K 後端', 'G1': '真值遮罩＋K 後端', 'G0K': 'G0-K（改編幾何基線）'}
+    w = 0.25
+    for j, pth in enumerate(('L1', 'G1', 'G0K')):
+        rate = []
+        for b in bins:
+            n = sum(S[a][pth]['bins'][b]['n'] for a in ('R_d28_200', 'R_d32_260'))
+            k = sum(S[a][pth]['bins'][b]['L2'] for a in ('R_d28_200', 'R_d32_260'))
+            rate.append(k / n if n else 0)
+        ax.bar(np.arange(4) + (j - 1) * w, rate, w * 0.9, color=cols[pth], label=labs[pth])
+    for pth, j in (('L1', 0), ('G1', 1), ('G0K', 2)):
+        nb = [r for r in d['rows'] if r['type'] == 'R' and isinstance(r[pth], dict) and r[pth].get('L2') and r[pth]['center_err_mm'] > 10]
+        ax.text(3 + (j - 1) * w, 0.03, f'{len(nb)}', ha='center', fontsize=8, color='white')
+    ax.set_xticks(range(4))
+    ax.set_xticklabels([b.replace('-', '–') + ' m' for b in bins], fontsize=8)
+    ax.set_ylim(0, 1.3)
+    ax.set_ylabel('中心輸出率（兩開發 R 資產合併；含錯誤中心）')
+    ax.set_title('K 條件中心可得性；遠距白字＝接受但中心誤差 > 10 mm 的格數（全距離）', fontsize=10)
+    ax.legend(frameon=False, fontsize=8, loc='upper center', ncol=3)
+    fig.suptitle('XH3 跨把手首版（開發資產）：遮罩辨識良好；遠距中心輸出率下降並出現朝相機側的大誤差', fontsize=11, y=1.03)
+    fig.text(0.01, -0.1, '輸出且中心誤差 ≤ 10 mm（分母 256）：學習式 190、真值遮罩 200、G0-K 214。三條管線均有朝相機側約 25.5–29.5 mm 的遠距中心誤差，與固定半徑擬合的鏡像圓心二義性相容（候選解釋，未逐格確認）。'
+             '\n不是跨把手泛化結論；test 資產未渲染。來源：XH3_dev_eval.json、XH3_train_log.jsonl。', fontsize=7.5, color=MUTED)
+    save(fig, '17_XH3_跨把手開發評估_遮罩與中心可得性.png')
+
+
 FIGS = {'01': lambda: fig01(), '02': lambda: fig02(), 'copies': lambda: copies(), '04': lambda: fig04(), '05': lambda: fig05(),
-        '07': lambda: fig07(), '08': lambda: fig08(), '09': lambda: fig09(), '10': lambda: fig10(), '11': lambda: fig11(), '12': lambda: fig12()}
+        '07': lambda: fig07(), '08': lambda: fig08(), '09': lambda: fig09(), '10': lambda: fig10(), '11': lambda: fig11(), '12': lambda: fig12(), '13': lambda: fig13(), '14': lambda: fig14(), '15': lambda: fig15(), '16': lambda: fig16(), '17': lambda: fig17()}
 
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)

@@ -1,0 +1,205 @@
+schema: xh2_capture_result/1
+狀態: 已完成六個圓桿訓練資產、兩個圓桿開發資產及兩個圓鈕干擾物資產的多視角模擬資料採集與自動標註。測試資產尚未渲染；目前是資料準備成果，尚非跨把手辨識或抓取泛化成果。（Codex 接受並封存，reviews/20261006_042137_reply.md；共 1,400 張新影格）
+凍結: 採集前 results/vision/freeze_xh2_capture.sha256（58 檔，每條前核對）；採集後資料 results/vision/freeze_xh2_data.sha256
+執行: run_xh_capture.sh：先跑 R_bar26_A_front、N_k35_A_front 核對通路（計入 20 條），正常後完成其餘 18 條；全部 rc 0、熱中止 0、CPU 峰值 81–88 °C
+核對: xh_capture_check.py 逐條：資產雜湊與模擬器載入路徑吻合；實際 prim 尺寸（R 半徑／長度／X 軸；N 半徑／高／Y 軸）正確；R 逐格 handle_center、N 逐格圓鈕中心／朝外軸／觀測參考中心齊全（N 無 handle_center 欄位）；真值對資產幾何最大差 < 0.001 mm；渲染時間嚴格遞增、影格唯一、位姿與渲染時間差 < 4e-7 s；frames_of_xh＋label_xh
+  全部可讀
+分母: 設計姿態數與實際新影格數不同（A_front 81 設計姿態 → 77、B_oblique 66 → 63）；各條拒絕 1 張，實際影格數依 meta 計；meta 實測更新率約 4.816／4.817 Hz，並有起始匹配拒絕與端點未內插——不把差額全部歸因於暖機
+逐條:
+  N_k30_A_front:
+    split: dev
+    設計姿態: 81
+    物理步: 1600
+    新影格: 77
+    拒絕: 1
+    標註類別:
+      negative: 77
+    真值對資產幾何最大差_mm: 6.0e-05
+  N_k30_B_oblique:
+    split: dev
+    設計姿態: 66
+    物理步: 1300
+    新影格: 63
+    拒絕: 1
+    標註類別:
+      negative: 63
+    真值對資產幾何最大差_mm: 6.0e-05
+  N_k35_A_front:
+    split: train
+    設計姿態: 81
+    物理步: 1600
+    新影格: 77
+    拒絕: 1
+    標註類別:
+      negative: 77
+    真值對資產幾何最大差_mm: 0.00029
+  N_k35_B_oblique:
+    split: train
+    設計姿態: 66
+    物理步: 1300
+    新影格: 63
+    拒絕: 1
+    標註類別:
+      negative: 63
+    真值對資產幾何最大差_mm: 0.00029
+  R_bar26_A_front:
+    split: train
+    設計姿態: 81
+    物理步: 1600
+    新影格: 77
+    拒絕: 1
+    標註類別:
+      positive: 77
+    真值對資產幾何最大差_mm: 0.00012
+  R_bar26_B_oblique:
+    split: train
+    設計姿態: 66
+    物理步: 1300
+    新影格: 63
+    拒絕: 1
+    標註類別:
+      negative: 12
+      positive: 51
+    真值對資產幾何最大差_mm: 0.00012
+  R_d28_200_A_front:
+    split: dev
+    設計姿態: 81
+    物理步: 1600
+    新影格: 77
+    拒絕: 1
+    標註類別:
+      positive: 77
+    真值對資產幾何最大差_mm: 5.0e-05
+  R_d28_200_B_oblique:
+    split: dev
+    設計姿態: 66
+    物理步: 1300
+    新影格: 63
+    拒絕: 1
+    標註類別:
+      negative: 12
+      positive: 51
+    真值對資產幾何最大差_mm: 5.0e-05
+  R_d32_260_A_front:
+    split: dev
+    設計姿態: 81
+    物理步: 1600
+    新影格: 77
+    拒絕: 1
+    標註類別:
+      positive: 77
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_d32_260_B_oblique:
+    split: dev
+    設計姿態: 66
+    物理步: 1300
+    新影格: 63
+    拒絕: 1
+    標註類別:
+      negative: 12
+      positive: 51
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_t22_160_A_front:
+    split: train
+    設計姿態: 81
+    物理步: 1600
+    新影格: 77
+    拒絕: 1
+    標註類別:
+      positive: 77
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_t22_160_B_oblique:
+    split: train
+    設計姿態: 66
+    物理步: 1300
+    新影格: 63
+    拒絕: 1
+    標註類別:
+      negative: 12
+      positive: 51
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_t24_280_A_front:
+    split: train
+    設計姿態: 81
+    物理步: 1600
+    新影格: 77
+    拒絕: 1
+    標註類別:
+      positive: 77
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_t24_280_B_oblique:
+    split: train
+    設計姿態: 66
+    物理步: 1300
+    新影格: 63
+    拒絕: 1
+    標註類別:
+      negative: 12
+      positive: 51
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_t30_240_A_front:
+    split: train
+    設計姿態: 81
+    物理步: 1600
+    新影格: 77
+    拒絕: 1
+    標註類別:
+      positive: 77
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_t30_240_B_oblique:
+    split: train
+    設計姿態: 66
+    物理步: 1300
+    新影格: 63
+    拒絕: 1
+    標註類別:
+      negative: 12
+      positive: 51
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_t34_180_A_front:
+    split: train
+    設計姿態: 81
+    物理步: 1600
+    新影格: 77
+    拒絕: 1
+    標註類別:
+      positive: 77
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_t34_180_B_oblique:
+    split: train
+    設計姿態: 66
+    物理步: 1300
+    新影格: 63
+    拒絕: 1
+    標註類別:
+      negative: 12
+      positive: 51
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_t38_220_A_front:
+    split: train
+    設計姿態: 81
+    物理步: 1600
+    新影格: 77
+    拒絕: 1
+    標註類別:
+      positive: 77
+    真值對資產幾何最大差_mm: 6.0e-05
+  R_t38_220_B_oblique:
+    split: train
+    設計姿態: 66
+    物理步: 1300
+    新影格: 63
+    拒絕: 1
+    標註類別:
+      negative: 12
+      positive: 51
+    真值對資產幾何最大差_mm: 6.0e-05
+合計_影格類別:
+  dev/N/negative: 140
+  dev/R/negative: 24
+  dev/R/positive: 256
+  train/N/negative: 140
+  train/R/negative: 72
+  train/R/positive: 768
+說明: R 類 B_oblique 前段朝外 12 格為負例；本批無 excluded（A_front 最近 0.2 m 時橫桿仍完整入鏡）。N 類全為負例並有圓鈕干擾物遮罩。
+尚未做: 標註抽查、訓練、test 資產渲染（凍結前不渲染）

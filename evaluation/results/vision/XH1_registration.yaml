@@ -1,0 +1,152 @@
+schema: xh1_registration/1
+date: '2026-10-06'
+status: 封存（Codex 核可，reviews/20261006_034921_reply.md；兩處必改已改）；test 資產在模型／門檻／後端規則凍結前不渲染
+task_definition: 首版辨識類別＝「直線桿式把手」（R 圓桿的橫桿表面）；N 圓鈕為非目標干擾物（不代表圓鈕不是把手或不可抓取）
+label_semantics:
+  target: R 類橫桿圓柱可見像素（DL0 自動標註同法：真值圓柱射線 × 量測深度）
+  posts: 支柱不屬目標，標背景（與 DL0 一致）
+  distractor: N 圓鈕可見像素標背景（非目標），另存 distractor 遮罩供誤檢分析
+  ignore: 沿用 DL0（外圈 1 px、無效深度、背面、近裁切）；**端蓋 ignore 只限 R 橫桿既有規則**；N 圓鈕可見正面／端面是背景並納入干擾物遮罩，不得整片忽略
+  frame_kinds: positive：有效影格中有可評分目標；negative：有效影格中沒有目標（含只見 N、朝外影格）；excluded：有 R 但目標像素全被 ignore、無法評分者——不得把純 N／朝外影格因「無前景」排除
+nominal_opening_screen:
+  definition: 直徑 d 滿足 22.4 < d 且 (40.2 − d)/2 ≥ 2 ⇒ 22.4 < d ≤ 36.2 mm（同 GC1 名目條件）
+  meaning: 只是名目開口篩選；完整相容性另受抓取深度、支柱、閉合方向與根部幾何影響；篩選外資產只做辨識，不生成抓取放行
+geometry_backend: 只做 K 條件：明示使用型號目錄尺寸（半徑、長度）；RGB 分割模型不讀尺寸。這評估未見資產上的辨識，不是未知尺寸下的完整抓取泛化
+pixel_contract: PC2 像素中心 +0.5（新管線一律使用）
+asset_schema:
+  R: drawer_unit/1 既有欄位即可（bar.radius、bar.length、posts 位置與尺寸隨長度與直徑調整）
+  N: 需 drawer_unit/2（新增 distractors：y 向圓柱圓鈕；可無橫桿）——新增形狀另立版本，不覆寫 /1
+post_rule: 支柱中心 x = ±(L/2 − 15 mm)、尺寸 16（x）×40（y）×(d − 2)（z） mm；橫桿中心與 bar26 相同（櫃體本地 (0, −0.285, 0.55)）
+placement: 所有資產同一櫃體擺放（drawer-pose 0.0,1.45、yaw 0）、抽屜關閉；不在本版混入擺放變因
+appearance: 所有資產使用 bar26 既有材質與場景（外觀變因本版不納入，避免與幾何混淆；另列後續）
+assets:
+- id: R_bar26
+  type: R
+  split: train
+  diameter_mm: 26
+  length_mm: 200
+  opening_screen: in
+  note: 既有 bar26（DL0 資料可用於訓練）
+  seed: 25252672
+- id: R_t22_160
+  type: R
+  split: train
+  diameter_mm: 22
+  length_mm: 160
+  opening_screen: out
+  note: ''
+  seed: 3664997354
+- id: R_t24_280
+  type: R
+  split: train
+  diameter_mm: 24
+  length_mm: 280
+  opening_screen: in
+  note: ''
+  seed: 1147356573
+- id: R_t30_240
+  type: R
+  split: train
+  diameter_mm: 30
+  length_mm: 240
+  opening_screen: in
+  note: ''
+  seed: 3703488688
+- id: R_t34_180
+  type: R
+  split: train
+  diameter_mm: 34
+  length_mm: 180
+  opening_screen: in
+  note: ''
+  seed: 353785339
+- id: R_t38_220
+  type: R
+  split: train
+  diameter_mm: 38
+  length_mm: 220
+  opening_screen: out
+  note: ''
+  seed: 3655932294
+- id: R_d28_200
+  type: R
+  split: dev
+  diameter_mm: 28
+  length_mm: 200
+  opening_screen: in
+  note: 未見直徑值、已見長度
+  seed: 324350435
+- id: R_d32_260
+  type: R
+  split: dev
+  diameter_mm: 32
+  length_mm: 260
+  opening_screen: in
+  note: 未見直徑值與長度值
+  seed: 3755743774
+- id: R_x25_150
+  type: R
+  split: test
+  diameter_mm: 25
+  length_mm: 150
+  opening_screen: in
+  note: 名目開口篩選內；直徑與長度皆未見（長度低於訓練範圍＝外插）
+  seed: 132463296
+- id: R_x40_300
+  type: R
+  split: test
+  diameter_mm: 40
+  length_mm: 300
+  opening_screen: out
+  note: 名目開口篩選外；直徑與長度皆外插
+  seed: 3388385702
+- id: N_k35
+  type: N
+  split: train
+  knob_diameter_mm: 35
+  protrusion_mm: 30
+  note: 非目標干擾物；整個資產無橫桿
+  seed: 1072600407
+- id: N_k30
+  type: N
+  split: dev
+  knob_diameter_mm: 30
+  protrusion_mm: 28
+  note: 非目標干擾物；整個資產無橫桿
+  seed: 1961979605
+- id: N_k40
+  type: N
+  split: test
+  knob_diameter_mm: 40
+  protrusion_mm: 32
+  note: 非目標干擾物；整個資產無橫桿
+  seed: 3589651840
+sequences:
+  per_asset: 2
+  templates:
+    A_front: 正面接近：距離 3.0→0.4 m（12 s）再 0.4→0.2 m（4 s）；左右偏移 ±4 cm 正弦（相位由資產種子決定）；相機高於把手 3 cm；5 Hz
+    B_oblique: 斜向接近：觀看方位 30°（由 +x 側），2.0→0.3 m（10 s）；相機高於把手 6 cm；前 2 s 朝外、1 s 轉向（負例影格）；5 Hz
+  note: 所有資產使用同一組路徑模板（相對把手中心），故測試資產結果稱「未見資產的多視角表現」，不歸因於視角泛化；未見尺寸值與未見尺寸組合分開標示
+reporting:
+  unit: 資產為單位分報＋資產等權彙總；影格不是獨立樣本
+  layers:
+  - 遮罩辨識（先）
+  - K 條件的中心／軸可得性（其次）
+  - 抓取相容（GC 延伸，最後；不阻擋資料與模型工作）
+splits_count:
+  train:
+    R: 6
+    N: 1
+  dev:
+    R: 2
+    N: 1
+  test:
+    R: 2
+    N: 1
+not_in_this_version:
+- S 方／扁桿
+- D 弧形
+- T／U 先驗條件後端
+- 外觀變因
+- 擺放變因
+- 控制接入

@@ -1,0 +1,24 @@
+schema: xh3_review_summary/1
+reviewer: Claude 目視初查（非人工）
+sample: results/vision/xh_review_r2/xh_review_sample.json（固定種子 0；6 頁拼頁）
+r1_note: results/vision/xh_review/（r1）分層定義錯誤：以「端點區段可見」代理端蓋可見，斜視下恆成立；不用於抽查，保留不刪
+strata_result:
+  抽出: 48
+  缺: 8 格＝每個 R 資產的「其他斜視正例」。**更正**：規格只要求「其他斜視正例 1」，並未要求端蓋不可見；缺格是我在抽樣時自加「端蓋不可見」排除條件所致，不是沒有其他斜視正例（B_oblique 所有正例都看得到 +x 端蓋）。照實保留此限制，不補採集、不重抽（Codex 20261006_043134 裁定）
+  分層計數:
+    A_far: 8
+    A_mid: 8
+    A_near: 8
+    B_outward_negative: 8
+    B_endcap_visible: 8
+    N_A_face: 2
+    N_B_face: 2
+    N_A_side: 2
+    N_B_side: 2
+findings:
+- 目標遮罩在遠（> 2 m）、中、近（< 0.5 m）與斜視下都貼合橫桿；ignore 只在遮罩外一圈與端蓋（斜視時端蓋為藍）；支柱未被標成目標
+- 朝外負例 8 格目標像素皆 0；其中數格右緣的米色區塊是場景物體（原始 RGB 核對），不是遮罩
+- N 圓鈕：外端面與側面可見像素皆以干擾物遮罩（紫）標出，目標遮罩為空、類別 negative
+- 近距影格的前板有模糊／殘影紋理（渲染外觀），不影響標註；照實記錄
+corrections: 無（未發現需修標的影格或規則性錯誤）
+limits: 抽查為 Claude 目視初查，不是人工驗證；48 格不代表全部 1,400 格無誤
