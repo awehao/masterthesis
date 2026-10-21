@@ -2,7 +2,7 @@
 """XH3 測試資產一次開封編排（取代 xh_open_test.sh）。只執行一次；開封紀錄存在即拒跑；任一步失敗即停止後續、保存原因並以非 0 結束。
 
     python3 evaluation/xh_open_test.py
-步驟：核對 freeze_xh3_model_r3.sha256 → 寫開封紀錄 opened（寫入失敗即停）→ 渲染 6 條 test 序列 → 擷取核對（報告）→ 擷取閘門（明確判定）
+步驟：核對 freeze_xh3_model_r5.sha256 → 寫開封紀錄 opened（寫入失敗即停）→ 渲染 6 條 test 序列 → 擷取核對（報告）→ 擷取閘門（明確判定）
      → 測試評估（完整分母、complete）→ 紀錄 complete／failed（含失敗步驟與原因）。SIGINT／SIGTERM 中斷：紀錄 interrupted，不留可繼續的 opened。
 """
 import hashlib
@@ -15,7 +15,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WS = os.path.abspath(os.path.join(HERE, '..'))
-FRZ = 'evaluation/results/vision/freeze_xh3_model_r3.sha256'
+FRZ = 'evaluation/results/vision/freeze_xh3_model_r5.sha256'
 OPEN = os.path.join(HERE, 'results', 'vision', 'XH_test_opening.json')
 SEQS = ['R_x25_150_A_front', 'R_x25_150_B_oblique', 'R_x40_300_A_front', 'R_x40_300_B_oblique', 'N_k40_A_front', 'N_k40_B_oblique']
 
@@ -30,7 +30,8 @@ def default_steps():
 
 def write(rec, path):
     tmp = path + '.tmp'
-    json.dump(rec, open(tmp, 'w'), ensure_ascii=False, indent=1)
+    with open(tmp, 'w') as fh:
+        json.dump(rec, fh, ensure_ascii=False, indent=1)
     os.replace(tmp, path)
 
 
@@ -51,49 +52,86 @@ def run(steps=None, opening=OPEN, freeze=FRZ, cwd=WS, check_freeze=True):
         print(f'開封紀錄寫入失敗：{e} ⇒ 停止')
         return 96
 
-    cur = {'p': None, 'step': None}
+    cur = {'p': None, 'step': None, 'stopping': False}
 
     def kill_tree(p, grace=5.0):
         """有界停止本次子程序與其後代（子程序在自己的程序群組）；不碰其他程序。"""
-        if p is None or p.poll() is not None:
+        if p is None:
             return 'not_running'
+        # 父程序已退出不代表整個群組已退出；仍須處理持有管線的孫程序。
+        def group_alive():
+            p.poll()  # 回收本次直接子程序，避免它的 zombie 維持群組存在。
+            try:
+                os.killpg(p.pid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+
         try:
             os.killpg(p.pid, signal.SIGTERM)
         except ProcessLookupError:
-            return 'gone'
-        t0 = time.time()
-        while time.time() - t0 < grace and p.poll() is None:
+            p.wait(timeout=1)
+            return 'not_running'
+        deadline = time.monotonic() + grace
+        while group_alive() and time.monotonic() < deadline:
             time.sleep(0.1)
-        if p.poll() is None:
+        if group_alive():
             try:
                 os.killpg(p.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            p.wait(timeout=5)
+            p.wait(timeout=1)
             return 'killed'
+        p.wait(timeout=1)
         return 'terminated'
 
     def on_sig(s, _f):
-        how = kill_tree(cur['p'])
+        if cur['stopping']:
+            return
+        cur['stopping'] = True
+        try:
+            how = kill_tree(cur['p'])
+        except Exception as e:  # 清理失敗必須記錄，不能冒充已停止。
+            how = f'cleanup_failed:{type(e).__name__}: {e}'
         rec.update({'state': 'interrupted', 'signal': signal.Signals(s).name, 'interrupted_step': cur['step'],
                     'child_stop': how, 'finished_at': time.strftime('%Y-%m-%dT%H:%M:%S')})
-        write(rec, opening)
-        os._exit(130)
+        try:
+            write(rec, opening)
+        finally:
+            os._exit(128 + s)
     old = {s: signal.signal(s, on_sig) for s in (signal.SIGINT, signal.SIGTERM)}
     try:
         for name, cmd in steps:
             t0 = time.time()
             cur['step'] = name
             try:
-                p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
-                cur['p'] = p
+                # 「建立子程序＋登記控制代碼」期間阻擋 SIGINT／SIGTERM：否則訊號落在 Popen 與登記之間時，處理器拿不到
+                # 已出生的子程序。恢復遮罩後待決訊號才送達，此時 cur['p'] 已登記。子程序在 exec 前恢復原遮罩，不繼承阻擋。
+                prev = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+                try:
+                    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                         start_new_session=True,
+                                         preexec_fn=lambda: signal.pthread_sigmask(signal.SIG_SETMASK, prev))
+                    cur['p'] = p
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, prev)
                 rec['running'] = {'step': name, 'pid': p.pid}
                 write(rec, opening)
                 out, err = p.communicate()
                 rc_ = p.returncode
+                # 即使父程序成功退出，也不允許把仍運行的同群組後代帶到下一步。
+                cleanup = kill_tree(p)
+                if cleanup != 'not_running':
+                    rec['child_cleanup'] = cleanup
+                    rc_ = rc_ or 1
             except Exception as e:                       # noqa: BLE001  編排例外（例如找不到指令）⇒ failed
+                try:
+                    cleanup = kill_tree(cur['p'])
+                except Exception as stop_e:
+                    cleanup = f'cleanup_failed:{type(stop_e).__name__}: {stop_e}'
                 rec['steps'].append({'step': name, 'rc': None, 'exception': f'{type(e).__name__}: {e}'})
-                rec.update({'state': 'failed', 'failed_step': name, 'finished_at': time.strftime('%Y-%m-%dT%H:%M:%S')})
+                rec.update({'state': 'failed', 'failed_step': name, 'child_stop': cleanup,
+                            'finished_at': time.strftime('%Y-%m-%dT%H:%M:%S')})
                 write(rec, opening)
                 print(f'**步驟 {name} 編排例外：{type(e).__name__}** ⇒ 停止；紀錄 failed')
                 return 1
@@ -112,6 +150,15 @@ def run(steps=None, opening=OPEN, freeze=FRZ, cwd=WS, check_freeze=True):
         write(rec, opening)
         print('開封完成：', json.dumps([(s['step'], s['rc']) for s in rec['steps']], ensure_ascii=False))
         return 0
+    except Exception as e:
+        rec.update({'state': 'failed', 'failed_step': cur['step'],
+                    'exception': f'{type(e).__name__}: {e}',
+                    'finished_at': time.strftime('%Y-%m-%dT%H:%M:%S')})
+        try:
+            write(rec, opening)
+        except OSError as record_error:
+            print(f'無法保存 failed 狀態：{record_error}；不得視為未開封重跑', file=sys.stderr)
+        return 1
     finally:
         for s, h in old.items():
             signal.signal(s, h)

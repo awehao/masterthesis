@@ -165,13 +165,21 @@ def run(infer, assets, asset_ids, runs_root, asset_dir, res=None):
     res['closure'] = {'n_source': len(src), 'n_evaluated': len(ev), 'n_issue': len(iss), 'disjoint': not (ev & iss),
                       'closed': src == (ev | iss) and not (ev & iss), 'rows_match_evaluated': len(res['rows']) == len(ev)}
     res['complete'] = (not res['evidence_issues']) and res['closure']['closed'] and res['closure']['rows_match_evaluated']
-    res['summary'] = summarize(res['rows'], assets, asset_ids)
+    try:
+        res['summary'] = summarize(res['rows'], assets, asset_ids)
+    except Exception as e:                                   # noqa: BLE001  彙總例外：保留逐格結果、標記未完成
+        res['summary'] = NA
+        res['evidence_issues'].append({'key': '*', 'why': f'summary_error {type(e).__name__}: {e}'})
+        res['complete'] = False
     return res
 
 
 def summarize(rows, assets, asset_ids):
     summ = {}
     for aid in asset_ids:
+        if aid not in assets:
+            summ[aid] = {'n': 0, 'n_positive': 0, 'registration': 'NA（未登錄資產）'}
+            continue
         rr = [r for r in rows if r['asset'] == aid]
         pos = [r for r in rr if r['kind'] == 'positive']
         s = {'n': len(rr), 'n_positive': len(pos)}
@@ -201,11 +209,37 @@ def summarize(rows, assets, asset_ids):
                               'L1_false_positive': sum(1 for r in negs if r['neg_reason'] == k and r['L1_detected'])}
                           for k in sorted({r['neg_reason'] for r in negs})}
         summ[aid] = s
-    Rs = [a for a in asset_ids if assets[a]['type'] == 'R' and summ[a]['n_positive']]
+    Rs = [a for a in asset_ids if a in assets and assets[a]['type'] == 'R' and summ[a]['n_positive']]
     summ['asset_equal_weight_R'] = ({'L1_mask_iou': float(np.mean([summ[a]['L1_mask_iou_mean_missed0'] for a in Rs])),
                                      **{f'{p}_output_rate': float(np.mean([summ[a][p]['output_rate'] for a in Rs])) for p in ('L1', 'G1', 'G0K')}}
                                     if Rs else NA)
     return summ
+
+
+DEV_RERUN_ENV = os.path.join(HERE, 'results', 'vision', 'XH3_dev_eval_rerun_20261021_env.json')
+
+
+def env_compare(env, ref_path):
+    """與開發同環境參照（2026-10-21 重跑）逐欄比對；只記錄，不阻擋評估。"""
+    try:
+        ref = json.load(open(ref_path))['env']
+    except Exception as e:                               # noqa: BLE001
+        return {'match': False, 'why': f'ref_unreadable {type(e).__name__}: {e}'}
+    diff = {k: {'dev_rerun': ref.get(k), 'now': env.get(k)} for k in sorted(set(ref) | set(env)) if ref.get(k) != env.get(k)}
+    return {'match': not diff, 'ref': os.path.relpath(ref_path, WS), 'diff': diff}
+
+
+def env_fingerprint(torch):
+    """執行環境指紋。學習式遮罩的浮點結果跨環境不逐位元重現（2026-10-21 實測：封存開發評估原樣重跑，84 格 L1 IoU 差 ≤ 1/32、
+    中心差 ≤ 1.33 mm，計數不變），故結果須連同環境一起記錄。"""
+    def _read(p):
+        try:
+            return open(p).readline().strip()
+        except OSError as e:
+            return f'NA（{type(e).__name__}）'
+    return {'torch': torch.__version__, 'cuda': torch.version.cuda, 'cudnn': torch.backends.cudnn.version(),
+            'cudnn_deterministic': torch.backends.cudnn.deterministic, 'cudnn_benchmark': torch.backends.cudnn.benchmark,
+            'gpu': torch.cuda.get_device_name(0), 'nvidia_driver': _read('/proc/driver/nvidia/version'), 'kernel': os.uname().release}
 
 
 def main():
@@ -226,6 +260,8 @@ def main():
         model.load_state_dict(torch.load(a.ckpt, map_location='cpu'))
         model.to(dev).eval()
         res.update({'ckpt_sha256': hashlib.sha256(open(a.ckpt, 'rb').read()).hexdigest(), 'score_t': TR.SCORE_T, 'bin_t': TR.BIN_T})
+        res['env'] = env_fingerprint(torch)
+        res['env_vs_dev_rerun'] = env_compare(res['env'], DEV_RERUN_ENV)
 
         def infer(img):
             with torch.no_grad():

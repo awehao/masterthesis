@@ -128,6 +128,19 @@ check('sequence_load_error_keeps_previous_rows', len(shared['rows']) == 1
       and shared['fates'].get('xh_R_x25_150_B_oblique:*', '').startswith('sequence_load_error:JSONDecodeError')
       and shared['fates'].get('xh_R_unknown_A_front:*', '').startswith('sequence_load_error:asset')
       and shared['complete'] is False and 'xh_R_x25_150_B_oblique' in shared['unfinished_sequences'], shared['fates'])
+check('unregistered_asset_summary_NA', shared['summary']['R_unknown'].get('registration', '').startswith('NA'), shared['summary'])
+
+# 2c 彙總階段例外 ⇒ 逐格結果保留、summary NA、complete False（不崩潰）
+_orig = TE.summarize
+TE.summarize = lambda *a_, **k_: (_ for _ in ()).throw(RuntimeError('boom'))
+sh2 = {}
+try:
+    TE.run(lambda img: (False, np.zeros(img.shape[:2], bool)), assets, ['R_x25_150'], root,
+           os.path.join(WS, 'src/my_omnibot_description/config/xh'), res=sh2)
+finally:
+    TE.summarize = _orig
+check('summary_exception_recorded', sh2['summary'] == 'NA' and sh2['complete'] is False and len(sh2['rows']) == 1
+      and any(i['why'].startswith('summary_error RuntimeError') for i in sh2['evidence_issues']), sh2.get('summary'))
 
 # 3 擷取閘門
 seqs = sorted(p.split('/runs/xh_')[1].split('/analysis')[0] for p in

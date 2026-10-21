@@ -57,6 +57,40 @@ pr.wait(timeout=30)
 r2 = json.load(open(op2))
 check('sigterm_records_interrupted', pr.returncode != 0 and r2['state'] == 'interrupted', (pr.returncode, r2.get('state')))
 
+# 1b 編排例外：找不到指令 ⇒ failed、rc 非 0
+op3 = os.path.join(tmp, 'opening3.json')
+rc3 = OPN.run(steps=[('capture', ['/nonexistent/cmd_xyz'])], opening=op3, cwd=tmp, check_freeze=False)
+r3 = json.load(open(op3))
+check('orchestration_exception_failed', rc3 != 0 and r3['state'] == 'failed' and 'FileNotFoundError' in r3['steps'][0]['exception'], r3)
+# 1c SIGTERM：子程序及其後代有界回收、編排器迅速退出
+op4 = os.path.join(tmp, 'opening4.json')
+code4 = (f"import sys; sys.path.insert(0, {HERE!r}); import xh_open_test as O; "
+         f"sys.exit(O.run(steps=[('capture', ['bash', '-c', 'sleep 60 & sleep 60'])], opening={op4!r}, cwd={tmp!r}, check_freeze=False))")
+pr4 = subprocess.Popen([sys.executable, '-c', code4])
+t0 = time.time()
+pid = None
+while time.time() - t0 < 10:
+    try:
+        pid = json.load(open(op4)).get('running', {}).get('pid')
+    except Exception:                                    # noqa: BLE001
+        pid = None
+    if pid:
+        break
+    time.sleep(0.1)
+time.sleep(0.5)
+ts = time.time()
+pr4.send_signal(signal.SIGTERM)
+pr4.wait(timeout=20)
+dt = time.time() - ts
+r4 = json.load(open(op4))
+try:
+    os.killpg(pid, 0)
+    alive = True
+except ProcessLookupError:
+    alive = False
+check('sigterm_kills_child_tree_bounded', pid and not alive and dt < 8 and r4['state'] == 'interrupted'
+      and r4.get('child_stop') in ('terminated', 'killed'), (pid, alive, round(dt, 2), r4.get('state'), r4.get('child_stop')))
+
 # 2 測試評估 run()：合成 R_x25_150 擷取（相機朝外 ⇒ 無正樣本）
 reg = yaml.safe_load(open(os.path.join(HERE, 'results', 'vision', 'XH1_registration.yaml')))
 assets = {x['id']: x for x in reg['assets']}
@@ -81,6 +115,32 @@ check('closure_and_incomplete', res['closure']['closed'] and res['closure']['row
 s = res['summary']['R_x25_150']
 check('no_positive_stats_NA', s['n_positive'] == 0 and s['L1'] == 'NA' and s['L1_mask_iou_mean_missed0'] == 'NA'
       and res['summary']['asset_equal_weight_R'] == 'NA', s)
+
+# 2b 後一條序列的 truth.json 損壞 ⇒ 先前序列結果保留、該序列記 sequence_load_error、complete False
+D2 = os.path.join(root, 'xh_R_x25_150_B_oblique', 'wrist_v0')
+os.makedirs(os.path.join(D2, 'frames'))
+json.dump(meta, open(os.path.join(D2, 'meta.json'), 'w'))
+open(os.path.join(D2, 'truth.json'), 'w').write('{broken')
+shared = {}
+TE.run(lambda img: (False, np.zeros(img.shape[:2], bool)), assets, ['R_x25_150', 'R_unknown'], root,
+       os.path.join(WS, 'src/my_omnibot_description/config/xh'), res=shared)
+check('sequence_load_error_keeps_previous_rows', len(shared['rows']) == 1
+      and shared['fates'].get('xh_R_x25_150_B_oblique:*', '').startswith('sequence_load_error:JSONDecodeError')
+      and shared['fates'].get('xh_R_unknown_A_front:*', '').startswith('sequence_load_error:asset')
+      and shared['complete'] is False and 'xh_R_x25_150_B_oblique' in shared['unfinished_sequences'], shared['fates'])
+check('unregistered_asset_summary_NA', shared['summary']['R_unknown'].get('registration', '').startswith('NA'), shared['summary'])
+
+# 2c 彙總階段例外 ⇒ 逐格結果保留、summary NA、complete False（不崩潰）
+_orig = TE.summarize
+TE.summarize = lambda *a_, **k_: (_ for _ in ()).throw(RuntimeError('boom'))
+sh2 = {}
+try:
+    TE.run(lambda img: (False, np.zeros(img.shape[:2], bool)), assets, ['R_x25_150'], root,
+           os.path.join(WS, 'src/my_omnibot_description/config/xh'), res=sh2)
+finally:
+    TE.summarize = _orig
+check('summary_exception_recorded', sh2['summary'] == 'NA' and sh2['complete'] is False and len(sh2['rows']) == 1
+      and any(i['why'].startswith('summary_error RuntimeError') for i in sh2['evidence_issues']), sh2.get('summary'))
 
 # 3 擷取閘門
 seqs = sorted(p.split('/runs/xh_')[1].split('/analysis')[0] for p in
