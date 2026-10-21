@@ -96,6 +96,29 @@ class K3(unittest.TestCase):
             np.testing.assert_allclose(Tg, G.handle_pose(D, d['q_ref'], 0.85) @ T_HG, atol=1e-12)
             q = d['q_ref']
 
+    # ---- Codex 20261021_181050 第 3 項：OPEN 銜接
+    def test_first_output_equals_last_published_and_no_advance(self):
+        H0 = G.handle_pose(D, 0.0, 0.85)
+        T_HG = np.eye(4)
+        T_HG[:3, :3] = [[-1, 0, 0], [0, 0, 1], [0, 1, 0]]
+        T_HG[:3, 3] = [0, 0.0068, 0]
+        T_last = H0 @ T_HG
+        T_last[:3, 3] += (0.0031, -0.0012, 0.0024)                  # 上一筆 HOLD 目標與實測抓取差數 mm
+        t = T3.DoorTargetK3(T_last, H0, CFG, G_T_H_grasp=np.eye(4))
+        Tg, d = t.step(H0, 0.0, 0.05)                                 # dt>0 也不推進
+        self.assertEqual(d['q_ref'], 0.0)
+        np.testing.assert_allclose(Tg, T_last, atol=1e-12)
+        np.testing.assert_allclose(t.G_T_H_grasp, np.eye(4))
+        Tg2, d2 = t.step(H0, 0.0, 0.05)                               # 第二步才推進，且相鄰目標位移受限速約束
+        self.assertGreater(d2['q_ref'], 0.0)
+        r = np.linalg.norm(T_last[:3, 3] - np.array([0, 0, T_last[2, 3]]))
+        self.assertLessEqual(np.linalg.norm(Tg2[:3, 3] - Tg[:3, 3]), CFG.r_max_rps * 0.05 * r + 1e-9)
+
+    def test_start_outside_range_conflicts(self):
+        t, _ = tgt()
+        with self.assertRaises(T3.DoorTargetK3Conflict):
+            t.step_ref(D2R(-1.2), 0.05)
+
     def test_invalid(self):
         with self.assertRaises(ValueError):
             T3.K3TargetConfig((0, 0, 0), (0, 0, -1), D2R(8), r_min_rps=0.0).validate()

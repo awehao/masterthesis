@@ -4,11 +4,14 @@
 q_ref 每步取三個區間的**交集**（Codex 20261021 K3 審查）：
   限速區間  R = [q_ref_prev − r(q_ref_prev)·dt, q_ref_prev + r(q_ref_prev)·dt]
   超前區間  L = [q_meas − lead, q_meas + lead]
-  登錄範圍  G = [q_min, θ_goal]               （q_ref ≤ θ_goal 恆成立）
+  登錄範圍  G = [q_min, θ_goal]，q_min = −1°  （q_ref ≤ θ_goal 恆成立）
 交集為空 ⇒ 拋 DoorTargetK3Conflict（**不最後裁切、不重建**）。非空 ⇒ 取交集上界（朝 θ_goal 前進的最大允許值）。
 減速律（依 **q_ref**，事前登錄）：r(q_ref) = r_min + (r_max − r_min)·clip((θ_goal − q_ref)/d_slow, 0, 1)。
 到達＝q_ref 由同一規則走到 θ_goal（不跳設）；之後保持（交集上界即 θ_goal）。
-目標把手位姿＝實測把手位姿繞鉸鏈轉 (q_ref − q_meas)；夾爪目標＝目標把手位姿 × G_T_H⁻¹（抓取關係量一次固定）。
+目標把手位姿＝實測把手位姿繞鉸鏈轉 (q_ref − q_meas)；夾爪目標＝目標把手位姿 × G_T_H_open⁻¹。
+OPEN 銜接（Codex 20261021_181050 第 3 項）：G_T_H_open＝（OPEN 前最後一筆**已發布目標**）⁻¹ ×（同一步的把手位姿），
+⇒ 首筆輸出＝上一筆已發布目標（連續，無 5 mm 跳變）；夾持成立時量到的 G_T_H_grasp 另存、不被覆蓋，只供漂移監看。
+首次呼叫只建立 q_ref := q_meas、**不推進**（不論 dt）。
 """
 from __future__ import annotations
 
@@ -29,7 +32,7 @@ class K3TargetConfig:
     hinge_point_world: tuple
     hinge_axis_world: tuple          # 右手定則 q 增加＝開門
     theta_goal_rad: float
-    q_min_rad: float = 0.0
+    q_min_rad: float = math.radians(-1.0)   # 與 OPEN 監看下界 −1° 一致；起始微小負角不衝突
     r_max_rps: float = math.radians(1.0)
     r_min_rps: float = math.radians(0.25)
     d_slow_rad: float = math.radians(2.0)
@@ -51,10 +54,11 @@ class K3TargetConfig:
 
 
 class DoorTargetK3:
-    def __init__(self, W_T_G0, W_T_H0, cfg: K3TargetConfig):
+    def __init__(self, W_T_G_last_published, W_T_H_entry, cfg: K3TargetConfig, G_T_H_grasp=None):
         cfg.validate()
         self.cfg = cfg
-        self.G_T_H = np.linalg.inv(np.asarray(W_T_G0, float)) @ np.asarray(W_T_H0, float)
+        self.G_T_H = np.linalg.inv(np.asarray(W_T_G_last_published, float)) @ np.asarray(W_T_H_entry, float)   # G_T_H_open
+        self.G_T_H_grasp = None if G_T_H_grasp is None else np.array(G_T_H_grasp, float)                       # 夾持成立時量測，另存
         self.q_ref = None
         self.reached = False
         self.last = {}
@@ -64,7 +68,12 @@ class DoorTargetK3:
         if not (math.isfinite(q_meas) and math.isfinite(dt) and dt >= 0.0):
             raise ValueError('q_meas／dt 非有限或 dt < 0')
         if self.q_ref is None:
-            self.q_ref = float(q_meas)                     # 第一輪由實測建立
+            self.q_ref = float(q_meas)                     # 第一輪由實測建立，不推進
+            if not (c.q_min_rad <= self.q_ref <= c.theta_goal_rad):
+                raise DoorTargetK3Conflict(f'起始門角 {self.q_ref:.6f} 不在登錄範圍')
+            self.last = {'q_meas': q_meas, 'q_ref_prev': None, 'q_ref': self.q_ref, 'rate': c.rate(self.q_ref), 'lo': None, 'hi': None, 'init': True}
+            self.reached = False
+            return self.q_ref
         r = c.rate(self.q_ref) * dt
         lo = max(self.q_ref - r, q_meas - c.lead_max_rad, c.q_min_rad)
         hi = min(self.q_ref + r, q_meas + c.lead_max_rad, c.theta_goal_rad)
