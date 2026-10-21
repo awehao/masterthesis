@@ -13,7 +13,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_k2_dev.sha256
+FRZ=evaluation/results/door/freeze_door_k2_dev_r2.sha256
 STAND='0.6,-0.5332,1.570796'
 K2_READY='0,0,0.035,0,-1.5707963,0'
 Q_PRE='-0.9471,0.0758,1.6024,-1.539,-0.9479,-0.0544'
@@ -54,15 +54,27 @@ spawn solver python3 -u evaluation/dl3_wgmpc_wg2_node.py --require-topic-target 
   --u-prev-policy strict --assume-initial-rest --out "$DIR/align_solver.json"
 
 say "[任務] 等 K2 任務節點結束（牆鐘最多 660 s）"
-TASK_PID="${PIDS[2]}"
+SIM_PID="${PIDS[0]}"; WB_PID="${PIDS[1]}"; TASK_PID="${PIDS[2]}"; SOLVER_PID="${PIDS[4]}"
 for i in $(seq 660); do kill -0 "$TASK_PID" 2>/dev/null || break; sleep 1; done
+if kill -0 "$TASK_PID" 2>/dev/null; then say "**任務節點 660 s 未結束** ⇒ 終止"; kill -TERM "$TASK_PID"; fi
+wait "$TASK_PID"; RC_TASK=$?
 grep -E '^\[k2\]' "$DIR/task.log" | tee -a "$DIR/run.log"
-SOLVER_PID="${PIDS[4]}"
 say "[收尾] 等求解節點停止並封存（最多 30 s）"
-for i in $(seq 30); do { [ -s "$DIR/align_solver.json" ] && ! kill -0 "$SOLVER_PID" 2>/dev/null; } && break; sleep 1; done
+for i in $(seq 30); do kill -0 "$SOLVER_PID" 2>/dev/null || break; sleep 1; done
+if kill -0 "$SOLVER_PID" 2>/dev/null; then say "  **求解節點 30 s 未停止** ⇒ 終止"; kill -TERM "$SOLVER_PID"; fi
+wait "$SOLVER_PID"; RC_SOLVER=$?
+for i in $(seq 10); do kill -0 "$WB_PID" 2>/dev/null || break; sleep 1; done
+kill -0 "$WB_PID" 2>/dev/null && kill -TERM "$WB_PID"
+wait "$WB_PID"; RC_WB=$?
 say "[收尾] 等執行端封存 room_run.json（最多 60 s；任務節點已送 /room/stop）"
-for i in $(seq 60); do [ -s "$DIR/room_run.json" ] && ! kill -0 "${PIDS[0]}" 2>/dev/null && break; sleep 1; done
-[ -s "$DIR/room_run.json" ] && say "  room_run.json 已封存" || say "  **room_run.json 未在 60 s 內封存**"
-grep -q '^\[k2\] 結束：DONE' "$DIR/task.log" && RC=0 || RC=1
-say "=== 結束 rc=$RC ==="
+for i in $(seq 60); do kill -0 "$SIM_PID" 2>/dev/null || break; sleep 1; done
+if kill -0 "$SIM_PID" 2>/dev/null; then say "  **執行端 60 s 未結束** ⇒ 終止"; kill -TERM "$SIM_PID"; fi
+wait "$SIM_PID"; RC_SIM=$?
+OK_ROOM=0; [ -s "$DIR/room_run.json" ] && OK_ROOM=1
+OK_SOLVER=0; [ -s "$DIR/align_solver.json" ] && OK_SOLVER=1
+OK_DONE=0; grep -q '^\[k2\] 結束：DONE' "$DIR/task.log" && OK_DONE=1
+say "  rc：task $RC_TASK、solver $RC_SOLVER、wholebody $RC_WB、sim $RC_SIM；room_run $OK_ROOM、align_solver $OK_SOLVER、DONE $OK_DONE"
+RC=1
+[ "$RC_TASK" = 0 ] && [ "$RC_SOLVER" = 0 ] && [ "$RC_WB" = 0 ] && [ "$RC_SIM" = 0 ] && [ "$OK_ROOM" = 1 ] && [ "$OK_SOLVER" = 1 ] && [ "$OK_DONE" = 1 ] && RC=0
+say "=== 結束 rc=$RC（0 只表示所有節點正常結束且到 DONE；通過與否由 door_k2_check.py 判定）==="
 exit "$RC"
