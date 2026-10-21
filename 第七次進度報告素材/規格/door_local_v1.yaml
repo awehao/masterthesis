@@ -1,0 +1,35 @@
+# 局部通行門 v1（K0 資產候選，2026-10-21）。**幾何與 door_local_v0.yaml 完全相同**（v0 已被離線核對 v0／v1 以雜湊登錄，不改）；
+# 本版只新增：handle.height（候選 0.85）、grasp 改記實錄基準、physics、placement。物理值是候選，K1 讀回／短測後才凍結。
+# 局部座標：鉸鏈軸在原點（牆的機器人側面），牆沿 x、機器人在 −y 側；門洞 x ∈ [0, frame_clear_width]。
+# 門角 q（rad）＝門扇繞 +z 轉 −q：q > 0 時門扇朝機器人側（−y）拉開。門扇方向 u(q) = (cos q, −sin q, 0)，
+# 機器人側法向 n(q) = (−sin q, −cos q, 0)。
+name: door_local_v1
+wall: {thickness: 0.12, height: 2.4, extent_x: [-1.5, 2.5]}     # 牆佔 y ∈ [0, thickness]，門洞處挖空
+frame_clear_width: 1.00
+leaf:
+  length: 0.95          # 沿 u，自鉸鏈起
+  thickness: 0.04       # 沿 −n（門扇在牆內側方向：v ∈ [0, thickness]）
+  z: [0.01, 2.01]
+  limit_q_deg: [0.0, 110.0]
+handle:                 # 與 drawer_unit_bar26 同型（同摩擦夾持判準）：橫桿沿 u、桿心在門扇機器人側面前 40 mm
+  from_hinge: 0.80      # 桿心沿 u 的距離（桿端 0.90 < 門扇 0.95）
+  standoff: 0.040       # 桿心離門扇面（沿 n）
+  bar: {radius: 0.013, length: 0.20}
+  posts: {along_u: [-0.085, 0.085], size: [0.016, 0.04, 0.024]}   # (沿 u, 沿 n, 沿 z)
+  height_candidates: [0.55, 0.65, 0.75, 0.85, 0.95]
+  height: 0.85          # K0 候選（離線 v1 只核到關門抓取與固定底盤小角度；不稱最佳）
+grasp:                  # 實錄基準（runs/phf_01_M/task.json args）；T_HG = [R_grasp | (0, +grasp_depth, 0)]（把手 prim）
+  basis: runs/phf_01_M/task.json
+  grasp_depth_m: 0.0068
+  not_used: tcp_offset_along_tool_z 0.0147（GC1 not_read 舊值；v0 曾誤用）
+robot:
+  base_radius: 0.30
+physics:                # 候選值：已知機構、無門鎖／門閂、無閉門器的被動鉸鏈門
+  leaf_mass_kg: 8.0     # 輕型室內門扇（日常門多 15–25 kg；首版取輕，K1 讀回後依手腕 30 N 保護評估再定）
+  inertia: explicit_box # 質心＝門扇方盒中心；慣量＝方盒對質心主慣量（把手立柱與橫桿質量忽略，揭露）
+  angular_damping: 2.0  # PhysX 剛體角阻尼（1/s）；類比抽屜 linear_damping 2.0
+  joint_friction: 0.0
+  drive: none           # 明寫零剛度／零阻尼／零最大力的角驅動並讀回：不得有隱藏位置保持
+  handle_material: {static_friction: 1.0, dynamic_friction: 0.8}   # 與抽屜把手同（由模擬端套用、讀回）
+placement:              # 局部場景：門根座標在世界原點、yaw 0（局部座標＝世界座標）
+  pose: {x: 0.0, y: 0.0, yaw_deg: 0.0}
