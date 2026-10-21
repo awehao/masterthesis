@@ -77,6 +77,9 @@ class WholeBody(Node):
         self.create_subscription(Float64MultiArray, '/coman/applied_cmd',
                                  self._ap, 1)
         self.create_subscription(String, '/handover/state', self._hs, 1)
+        # **K2 中止閂鎖**（latched）：收到即停止發布任何展開／保持命令並結束（不再套用展開速率）
+        self.k2_abort = None
+        self.create_subscription(String, '/door/k2_abort', self._k2a, QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         # PARK_FIXED：執行端違規閂鎖 ⇒ 停止發布（預設不訂 ⇒ 既有行為不變）
         self.park_violation = None
         self.park_anchor = None
@@ -147,6 +150,9 @@ class WholeBody(Node):
             'owner': (self.hs or {}).get('owner')})
         if len(self.trace) > 20000:
             self.trace = self.trace[-20000:]
+
+    def _k2a(self, m):
+        self.k2_abort = str(m.data)
 
     def _hs(self, m):
         try:
@@ -263,6 +269,11 @@ def main():
     j3_cleared = False
     while rclpy.ok() and time.monotonic() - t1 < a.timeout_s:
         rclpy.spin_once(nd, timeout_sec=0.0)
+        if nd.k2_abort is not None:
+            rep['k2_abort'] = {'msg': nd.k2_abort, 'phase_at_abort': phase}
+            phase = 'K2_ABORTED'
+            print(f'[wb] 收到 K2 中止閂鎖 ⇒ 停止發布並結束：{nd.k2_abort}', flush=True)
+            break
         if park_on and nd.park_violation is not None:
             rep['park_violation'] = nd.park_violation
             phase = 'PARK_VIOLATION'          # 結尾判失敗，不因已到 HOLD 而回傳成功

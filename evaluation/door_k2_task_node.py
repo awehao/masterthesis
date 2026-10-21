@@ -30,6 +30,7 @@ WS = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(WS, 'src', 'ammr_wholebody_mpc'))
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics   # noqa: E402
+import door_k2_io as KIO                                                  # noqa: E402
 import door_k2_policy as P                                                # noqa: E402
 from physics_contact_hold import contact_established                     # noqa: E402
 
@@ -47,6 +48,10 @@ class Node2(Node):
         self.ho_pub = self.create_publisher(String, '/handover/request', 10)
         self.phase_pub = self.create_publisher(String, '/door/k2_phase', 10)
         self.room_stop_pub = self.create_publisher(String, '/room/stop', 10)
+        # **K2 中止閂鎖**（latched）：展開端與執行端都訂閱；送出後不收回
+        self.abort_pub = self.create_publisher(String, '/door/k2_abort', lat)
+        self.sync_tr = KIO.SyncTracker()
+        self.ct_agg = KIO.ContactsAggregator()
         self.sync = None          # (t, step, q, H, pose(3), q_arm(6), qdot)
         self.contacts = None      # dict＋接收時的模擬時間
         self.gs = None
@@ -68,14 +73,17 @@ class Node2(Node):
     def _sync(self, m):
         d = [float(x) for x in m.data]
         if len(d) != 29:
+            self.sync_tr.anomalies.append(('bad_length', time.monotonic()))
             return
-        self.sync = (d[0], d[1], d[2], np.asarray(d[3:19]).reshape(4, 4), d[19:22], np.asarray(d[22:28]), d[28])
+        if self.sync_tr.on_msg(d[1], d[0], time.monotonic()):       # 只接受步號嚴格遞增的新狀態
+            self.sync = (d[0], d[1], d[2], np.asarray(d[3:19]).reshape(4, 4), d[19:22], np.asarray(d[22:28]), d[28])
 
     def _ct(self, m):
         try:
-            self.contacts = json.loads(m.data)
+            d = json.loads(m.data)
         except Exception:
-            self.contacts = None
+            d = {}
+        self.ct_agg.on_msg(d, time.monotonic())                     # 未消費的窗口全部合併（短脈衝不被覆蓋）
 
     def _gs(self, m):
         d = list(m.data)
@@ -95,7 +103,7 @@ class Node2(Node):
 
     def _ws(self, m):
         self.n_ws += 1
-        self.ws_t = self.sync[0] if self.sync is not None else None
+        self.ws_t = time.monotonic()                                # 獨立牆鐘
 
     def _af(self, m):
         self.fail = str(m.data)
@@ -147,18 +155,36 @@ def main():
     w_abort = None
     dt_w = 1.0 / a.rate
     last_phase = None
+    abort_sent = False
+    sync_once = False
+    last_ct = None
     try:
         while rclpy.ok():
             for _ in range(64):
                 rclpy.spin_once(nd, timeout_sec=0.0)
-            if time.monotonic() - w0 > a.wall_total_s:
+            wnow = time.monotonic()
+            if wnow - w0 > a.wall_total_s and pol.phase not in ('ABORTED', 'DONE'):
                 rep['wall_timeout'] = True
-                pol._abort('wall_total_timeout', t_prev or 0.0)
+                pol._abort('wall_total_timeout', t_prev if t_prev is not None else float('nan'))
+                w_abort = w_abort or wnow
+            if pol.phase == 'ABORTED' and not abort_sent:
+                nd.abort_pub.publish(String(data=json.dumps({'why': pol.abort, 't': pol.t_abort}, default=float)))
+                nd.stop_pub.publish(String(data=f'door_k2 中止：{pol.abort}'))
+                abort_sent = True
+                w_abort = w_abort or wnow
             if nd.sync is None:
+                # 從未收到同步狀態：只能等牆鐘上限；中止後的觀察亦受牆鐘上限
+                if w_abort is not None and wnow - w_abort > min(a.wall_post_abort_s, 5.0):
+                    rep['ended_without_sync'] = True
+                    break
                 time.sleep(dt_w)
                 continue
+            sync_once = True
             t, step, q, H, pose, q_arm, qdot = nd.sync
-            ct = nd.contacts
+            _ctn = nd.ct_agg.consume()
+            if _ctn is not None:
+                last_ct = _ctn                     # 新窗口（已合併所有未消費窗口）
+            ct = last_ct                           # 無新窗口 ⇒ 沿用上一份；是否過期由獨立牆鐘年齡判斷（contacts_age）
             gate = nd.gate or {}
             anchor = gate.get('anchor')
             if anchor is not None:
@@ -170,11 +196,14 @@ def main():
             gs = nd.gs
             ev = contact_established(gs, now=t, close_started=pol.close_t0, contact_min_n=cfg.contact_min_n,
                                      hold_s=cfg.attach_hold_s) if (gs is not None and pol.close_t0 is not None) else False
+            st_age = nd.sync_tr.age(wnow)
+            if not nd.sync_tr.ok():
+                st_age = float('inf')                                 # 倒退／非有限 ⇒ 監看失效
             m = P.Meas(t=t, owner=(nd.hs or {}).get('owner'),
                        unfold_done=(nd.wb or {}).get('phase') in ('UNFOLD_DONE', 'RELEASED'),
                        solver_up=nd.n_ws > 0, solver_failed=nd.fail,
-                       solver_status_age=(None if nd.ws_t is None else t - nd.ws_t), state_age=0.0,
-                       contacts_age=(None if ct is None else t - float(ct.get('sim_t', -1e9))),
+                       solver_status_age=(None if nd.ws_t is None else wnow - nd.ws_t), state_age=st_age,
+                       contacts_age=nd.ct_agg.age(wnow),
                        q_door=q, qdot_door=qdot, H=H, T_tcp=T_tcp,
                        finger_bar_min=None if ct is None else tuple(ct['finger_bar_min_n']),
                        finger_bar_max=None if ct is None else tuple(ct['finger_bar_max_n']),
@@ -189,10 +218,14 @@ def main():
                 nd.ho_pub.publish(String(data=json.dumps({'to': 'wholebody', 'at_step': int(step) + 5, 'window_steps': 50})))
                 ho_sent = True
                 rep['events'].append({'t': t, 'handover_requested_at_step': int(step) + 5, 'gate': gate})
-            if act['target'] is not None:
+            if pol.phase == 'ABORTED' and not abort_sent:
+                nd.abort_pub.publish(String(data=json.dumps({'why': pol.abort, 't': pol.t_abort}, default=float)))
+                abort_sent = True
+                w_abort = w_abort or wnow
+            if act['target'] is not None and pol.phase != 'ABORTED':
                 nd.tgt_pub.publish(Float64MultiArray(data=[float(x) for x in np.asarray(act['target']).reshape(-1)]))
             nd.grip_pub.publish(Float64(data=float(act['grip'])))
-            if act['solver_start']:
+            if act['solver_start'] and pol.phase != 'ABORTED':
                 nd.start_pub.publish(Bool(data=True))
             if act['stop_solver']:
                 nd.stop_pub.publish(String(data=f'door_k2 {pol.phase}：{pol.abort or "done"}'))
@@ -200,20 +233,28 @@ def main():
                 nd.phase_pub.publish(String(data=pol.phase))
                 print(f'[k2] 相位 → {pol.phase} @ sim {t:.2f}' + (f'（中止：{pol.abort}）' if pol.abort else ''), flush=True)
                 last_phase = pol.phase
-            if pol.phase == 'ABORTED' and w_abort is None:
-                w_abort = time.monotonic()
+            if pol.H_frozen is not None and 'H_frozen' not in rep:
+                rep['H_frozen'] = pol.H_frozen.tolist()
+                rep['H_frozen_t'] = t
+            if pol.G_T_H is not None and 'G_T_H' not in rep:
+                rep['G_T_H'] = pol.G_T_H.tolist()
+                rep['G_T_H_t'] = t
             rep['trace'].append({'t': t, 'step': step, 'phase': pol.phase, 'q_door': q, 'qdot_door': qdot, 's': pol.s, 'grip': act['grip'],
+                                 'target': (None if act['target'] is None or pol.phase == 'ABORTED' else np.asarray(act['target']).reshape(-1).tolist()),
                                  'err_p': (None if pol.last_target is None else float(np.linalg.norm(T_tcp[:3, 3] - pol.last_target[:3, 3]))),
-                                 'base_drift_m': bd, 'base_drift_yaw': byaw, 'contacts': ct, 'evidence': bool(ev)})
+                                 'base_drift_m': bd, 'base_drift_yaw': byaw, 'contacts': ct, 'evidence': bool(ev),
+                                 'state_age_wall': st_age, 'contacts_age_wall': nd.ct_agg.age(wnow)})
             if len(rep['trace']) % 100 == 0:
                 save()
-            if act['finish'] or (w_abort is not None and time.monotonic() - w_abort > a.wall_post_abort_s):
+            if act['finish'] or (w_abort is not None and wnow - w_abort > a.wall_post_abort_s):
                 if w_abort is not None and not act['finish']:
                     rep['post_abort_wall_cap_hit'] = True
                 break
             time.sleep(dt_w)
     finally:
         rep['wall_s'] = round(time.monotonic() - w0, 2)
+        rep['sync_anomalies'] = {'n_dup': nd.sync_tr.n_dup, 'n_back': nd.sync_tr.n_back, 'list': nd.sync_tr.anomalies[:20]}
+        rep['received_any_sync'] = sync_once
         save()
         try:
             nd.stop_pub.publish(String(data='door_k2 結束'))

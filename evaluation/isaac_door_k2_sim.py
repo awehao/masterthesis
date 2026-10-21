@@ -125,7 +125,11 @@ ap.add_argument('--finger-collision', default='hull', choices=['hull', 'split'],
                 help='hull = 匯入時的單一凸包（既有行為）；split = 根部／指片兩個'
                      '凸塊，保留真實的指片開口（finger_collision.py）')
 ap.add_argument('--bar-class-tol', type=float, default=0.006,
-                help='接觸點到橫桿軸距離 ≤ 半徑＋此值 ⇒ 歸為橫桿接觸（其餘為門板／立柱）')
+                help='接觸分類容差（door_k2_io.classify_contacts）：橫桿自由段且徑向 ≤ 半徑＋此值 ⇒ bar；支柱 u 範圍或超出橫桿端 ⇒ ambiguous')
+ap.add_argument('--park-dev-pos-max', type=float, default=0.020,
+                help='K2 登錄的保持期相對錨點位置上限（m；K2 規格 draft-2 §F）——取代 ParkCfg 預設 1 mm')
+ap.add_argument('--park-dev-yaw-max-deg', type=float, default=2.0,
+                help='K2 登錄的保持期相對錨點偏航上限（度）——取代 ParkCfg 預設 0.5°')
 ap.add_argument('--contact-min-n', type=float, default=0.5,
                 help='逐物理步連續接觸計時的每指門檻（N）')
 ap.add_argument('--pub-tf', default='false',
@@ -174,6 +178,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(WS, 'src/ammr_wholebody_mpc'))
 import door_asset_v2 as DA                                       # noqa: E402
 import door_geom_v2 as DG                                        # noqa: E402
+import door_k2_io as KIO                                         # noqa: E402
 from isaac_common import (bind_friction, bind_frictionless,     # noqa: E402
                           collision_prims, import_urdf,
                           physics_parts, walk)
@@ -313,6 +318,10 @@ class Bridge(Node):
         # **受控停止**：收到就跳出主迴圈並封存。沒有這條，運行器在任務結束後
         # cleanup 會在封存寫出前把模擬器殺掉 —— 逐步紀錄就全沒了。
         self.create_subscription(String, '/room/stop', self._counted(self._stop), 10)
+        # **K2 中止閂鎖**（latched）：收到後不再把全身命令送進命令鏈、夾爪凍結（door_k2_io.K2AbortLatch）
+        self.k2_abort_msg = None
+        self.create_subscription(String, '/door/k2_abort', self._counted(self._k2_abort),
+                                 QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.stop_req = None
         self.n_cb = 0
         self.n_drain_max = 0
@@ -370,6 +379,9 @@ class Bridge(Node):
 
     def _stop(self, m: String):
         self.stop_req = str(m.data)
+
+    def _k2_abort(self, m: String):
+        self.k2_abort_msg = str(m.data)
 
     def _ho(self, m: String):
         try:
@@ -612,23 +624,18 @@ def main() -> int:
     _bar_half = float(Hd['bar']['length']) / 2.0
 
     def leaf_contacts(T_WH):
-        """門扇 ↔ 機器人各剛體：每個接觸點依到橫桿軸線段的距離分類（≤ r＋tol ⇒ bar，否則 panel）。
-        回傳 {剛體名: {'bar': N, 'panel': N}}（法向力大小之和）；讀不到回 None。"""
+        """門扇 ↔ 機器人各剛體：door_k2_io.classify_contacts（bar／ambiguous／panel）。讀不到回 None。"""
         try:
             fn, pts, nrm, dist, cnt, start = (_np(v) for v in leaf_pair_v.get_contact_force_data(dt=a.physics_dt))
             cnt, start = cnt.reshape(-1), start.reshape(-1)
-            c, u = T_WH[:3, 3], T_WH[:3, 0]
             out = {}
             for jb in range(len(cnt)):
                 k, s0 = int(cnt[jb]), int(start[jb])
                 if k == 0:
                     continue
-                P = pts[s0:s0 + k].reshape(-1, 3)
-                f = np.abs(fn[s0:s0 + k, 0])
-                sp = np.clip((P - c) @ u, -_bar_half, _bar_half)
-                d = np.linalg.norm(P - (c + sp[:, None] * u), axis=1)
-                on_bar = d <= _bar_r + a.bar_class_tol
-                out[pair_names[jb]] = {'bar': float(f[on_bar].sum()), 'panel': float(f[~on_bar].sum())}
+                out[pair_names[jb]] = KIO.classify_contacts(pts[s0:s0 + k].reshape(-1, 3), np.abs(fn[s0:s0 + k, 0]), T_WH, _bar_r, _bar_half,
+                                                            [float(x) for x in Hd['posts']['along_u']], float(Hd['posts']['size'][0]) / 2.0,
+                                                            a.bar_class_tol)
             return out
         except Exception as _e:
             if not _lc_warned[0]:
@@ -652,7 +659,15 @@ def main() -> int:
             return None
     _wc_warned = [False]
 
-    _j6_row = names.index('joint6') + 1        # measured_joint_forces 的列：該連桿上游關節＝joint index + 1（同 isaac_drawer_sim.py）
+    # joint6 反作用力列：**只用 articulation metadata**（同 isaac_drawer_sim.py；固定關節會改變索引）。讀不到 ⇒ 拒跑，不退回 DOF 順序。
+    try:
+        _md = robot._articulation_view._metadata
+        _j6_row = int(_md.joint_indices['joint6']) + 1
+        _jnames = list(_md.joint_names)
+    except Exception as _e:
+        print(f'[door] **讀不到 articulation metadata（{_e!r}）⇒ 無法確認腕力列號，拒跑**', flush=True)
+        return 27
+    print(f'[door] joint6 反作用力列號 {_j6_row}（metadata.joint_indices；關節 {_jnames}）', flush=True)
 
     def wrist_force():
         try:
@@ -773,7 +788,10 @@ def main() -> int:
     park_on = bool(a.park_fixed or a.park_hold)
     _pk = [float(v) for v in a.park_pose.split(',')]
     park_cfg = ParkCfg(park_x=_pk[0], park_y=_pk[1], park_yaw=_pk[2],
-                       hold_s=max(0.5, float(a.max_cmd_age_s)), hold_mode=bool(a.park_hold))
+                       hold_s=max(0.5, float(a.max_cmd_age_s)), hold_mode=bool(a.park_hold),
+                       dev_pos_max=float(a.park_dev_pos_max), dev_yaw_max=math.radians(float(a.park_dev_yaw_max_deg)))
+    print(f'[door] 停車保持條件（K2 登錄）：相對錨點 ≤ {park_cfg.dev_pos_max} m、≤ {a.park_dev_yaw_max_deg}°；'
+          f'伺服上限 {park_cfg.hold_v_max} m/s、{park_cfg.hold_w_max} rad/s', flush=True)
     park_gate = StaticGate(park_cfg) if park_on else None
     park_hold = None
     park_done = False
@@ -836,6 +854,7 @@ def main() -> int:
         return {'n': 0, 'invalid': 0, 'fb': [0.0, 0.0], 'fb_min': [float('inf'), float('inf')], 'unexp': 0.0,
                 'unexp_who': None, 'wall': 0.0, 'wrist': 0.0}
     node.contacts_win = _new_win()
+    k2_latch = KIO.K2AbortLatch()
     print('[door] 進入主迴圈', flush=True)
 
     se = max(1, int(round((1.0 / a.scan_rate) / a.physics_dt)))
@@ -887,9 +906,17 @@ def main() -> int:
         node.n_drain_max = max(node.n_drain_max, _n_this)
         node.publish_clock(t)
 
-        # 全身命令進鏈
+        # K2 中止閂鎖：收到即閂鎖（之後全身命令不進鏈、夾爪凍結；命令鏈逾時歸零 ⇒ 底盤零速、手臂設定點保持）
+        if node.k2_abort_msg is not None and k2_latch.latched is None:
+            _gnow = (a.finger_open if node.grip_cmd is None else min(max(float(node.grip_cmd), a.finger_closed), a.finger_open))
+            k2_latch.on_msg(node.k2_abort_msg, step_id, t, _gnow)
+            rec['events'].append({'sim_t': t, 'step': step_id, 'k2_abort_latched': k2_latch.latched, 'grip_frozen': _gnow})
+            print(f'[door] **K2 中止閂鎖** @ step {step_id}：{node.k2_abort_msg}；夾爪凍結 {_gnow}', flush=True)
+        # 全身命令進鏈（閂鎖後丟棄）
         if node.wb_latest is not None:
-            chain.receive(list(node.wb_latest[0]), t)
+            _wbc = k2_latch.filter_wb(list(node.wb_latest[0]))
+            if _wbc is not None:
+                chain.receive(_wbc, t)
             node.wb_latest = None
 
         # 交棒請求
@@ -984,9 +1011,9 @@ def main() -> int:
         wy = vx * math.sin(yw) + vy * math.cos(yw)
         robot.set_linear_velocity(np.array([wx, wy, 0.0], dtype=np.float32))
         robot.set_angular_velocity(np.array([0.0, 0.0, wz], dtype=np.float32))
-        _fcmd = (a.finger_open if node.grip_cmd is None
-                 else min(max(float(node.grip_cmd), a.finger_closed),
-                          a.finger_open))
+        _fcmd = k2_latch.grip(a.finger_open if node.grip_cmd is None
+                              else min(max(float(node.grip_cmd), a.finger_closed),
+                                       a.finger_open))
         if res.arm_setpoint is not None:
             tgt = robot.get_joint_positions()
             for k, j in enumerate(ARM):
@@ -1136,7 +1163,7 @@ def main() -> int:
         _unexp, _unexp_who = 0.0, None
         if _lc is not None:
             for _b, _v in _lc.items():
-                _x = _v['panel'] + (0.0 if _b in ('uflite_finger1', 'uflite_finger2') else _v['bar'])
+                _x = _v['panel'] + _v['ambiguous'] + (0.0 if _b in ('uflite_finger1', 'uflite_finger2') else _v['bar'])
                 if _x > _unexp:
                     _unexp, _unexp_who = _x, _b
         _wmax = max(_wc.values()) if _wc else (float('nan') if _wc is None else 0.0)
@@ -1153,7 +1180,8 @@ def main() -> int:
         if _wf is not None and _wf > cw['wrist']:
             cw['wrist'] = _wf
         # 與本列 q 同一個物理步。不得在 50 Hz 發布分支內計時。
-        _contact = finger_contact_n() if FJ else (float('nan'), float('nan'))
+        # **夾持證據只用確認的橫桿接觸**（不是整個門扇剛體合力；Codex 20261021）
+        _contact = (_fb1, _fb2) if FJ else (float('nan'), float('nan'))
         _contact_held = contact_hold.update(
             step_id, t, *_contact,
             closing=(node.grip_cmd is not None
@@ -1327,6 +1355,9 @@ def main() -> int:
                      'low_speed_bound_applies_to': '**只有全身那條路徑**；'
                                                    '導航不經命令鏈',
                      'door': dauth, 'q_door0_rad': q_door0, 'frictionless': fric, 'bar_class_tol': a.bar_class_tol,
+                     'wrist_row': {'joint6_row': _j6_row, 'source': 'metadata.joint_indices', 'joint_names': _jnames},
+                     'park_cfg': park_cfg.__dict__, 'k2_abort_latch': k2_latch.latched,
+                     'grip_evidence_source': '確認的橫桿接觸力（classify_contacts bar），非整個門扇剛體合力',
                      'nav_cmd_timeout_s': a.cmd_timeout,
                      'switch_speed_check': {'v_box_lin': a.v_box_lin,
                                             'v_box_ang': a.v_box_ang,

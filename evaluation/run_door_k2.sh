@@ -39,7 +39,7 @@ grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null || { say "**場景未建起
 grep -E '^\[(room|door)\] (零摩擦|夾持面|摩擦核對|門建於|初始門角|門扇接觸|牆接觸)' "$DIR/sim.log" | tee -a "$DIR/run.log"
 
 spawn wholebody python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --park-hold --pos-tol 0.005 \
-  --stow-q "$K2_READY" --park "$STAND" --q-unfold "$Q_PRE" --out "$DIR/wholebody.json"
+  --stow-q "$K2_READY" --park "$STAND" --q-unfold="$Q_PRE" --out "$DIR/wholebody.json"
 spawn task python3 -u evaluation/door_k2_task_node.py --out "$DIR/task.json"
 ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
 [ -f "$ARM_IDENT" ] || { say "**找不到手臂辨識檔** ⇒ 中止"; exit 85; }
