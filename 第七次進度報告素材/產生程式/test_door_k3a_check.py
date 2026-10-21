@@ -93,7 +93,7 @@ def good():
     ev = [{'t': t0, 'from': 'x', 'to': p} for p, t0 in PH]
     trace = []
     tt = 19.5
-    while tt < T_OPEN - 1e-9:
+    while tt < T_OPEN - 1e-3 - 1e-9:
         trace.append({'t': round(tt, 4), 'phase': 'HOLD', 'q_door': 0.0, 'q_ref': None, 'target': T_HOLD.reshape(-1).tolist()})
         tt += 0.05
     trace.append({'t': T_OPEN - 1e-3, 'phase': 'OPEN', 'q_door': 0.0, 'q_ref': None, 'target': T_HOLD.reshape(-1).tolist()})
@@ -103,9 +103,20 @@ def good():
     while tt < T_END - 1e-9:
         trace.append({'t': round(tt, 4), 'phase': 'SETTLE', 'q_door': REF[-1][1], 'q_ref': REF[-1][1], 'target': REF[-1][2].reshape(-1).tolist()})
         tt += 0.05
-    trace.append({'t': T_DONE + 0.1})
+    while tt < T_DONE - 1e-9:
+        trace.append({'t': round(tt, 4), 'phase': 'END_HOLD', 'q_door': REF[-1][1], 'q_ref': REF[-1][1], 'target': REF[-1][2].reshape(-1).tolist()})
+        tt += 0.05
+    trace.append({'t': T_DONE, 'phase': 'DONE', 'q_door': REF[-1][1], 'q_ref': REF[-1][1], 'target': None})
+    n = 0
+    for e in trace:
+        e['grip'] = 0.0
+        if e['target'] is not None:
+            n += 1
+            e['pub_seq'] = n
+        else:
+            e['pub_seq'] = None
     task = {'schema': 'door_k3a_task/1', 'policy_events': ev, 'abort': None, 'final_phase': 'DONE', 'received_any_sync': True,
-            'trace': trace, 'G_T_H': G_T_H.tolist(), 'H_frozen': H0.tolist(), 'grasp_basis': {'T_HG': T_HG.tolist()}}
+            'trace': trace, 'n_target_published': n, 'G_T_H': G_T_H.tolist(), 'H_frozen': H0.tolist(), 'grasp_basis': {'T_HG': T_HG.tolist()}}
     steps, held, qprev = [], 0.0, 0.0
     for k in range(0, int((T_DONE + 0.5) / 0.01)):
         t = round(k * 0.01, 4)
@@ -270,6 +281,112 @@ class Judge(unittest.TestCase):
         def f(t, r, g):
             r['steps'][2700][10] = float('nan')
         self.fails_with(f, 'missing_or_nonfinite')
+
+    # ---- Codex 20261021 K3-A 實作審查的三個誤收反例
+    def test_fingers_open_after_done(self):
+        def f(t, r, g):
+            for s_ in r['steps']:
+                if s_[1] >= T_DONE + 0.1:
+                    s_[11] = [0.0089, 0.0089]
+                    s_[12] = [0.0, 0.0]
+                    s_[14] = {}
+        res = KC3.judge(*self._mut(f))
+        self.assertFalse(res['pass'])
+        self.assertTrue({'grasp_finger_contact_below_min', 'fingers_opened_after_grasp'} <= set(res['why']), res['why'])
+
+    def test_end_hold_grip_open_and_target_moving(self):
+        def f(t, r, g):
+            for e in t['trace']:
+                if e['phase'] == 'END_HOLD':
+                    e['grip'] = 0.0089
+                    T = np.asarray(e['target']).reshape(4, 4)
+                    T[1, 3] -= 0.01 * (e['t'] - T_END)
+                    e['target'] = T.reshape(-1).tolist()
+        res = KC3.judge(*self._mut(f))
+        self.assertFalse(res['pass'])
+        self.assertTrue({'grip_command_not_closed_after_grasp', 'end_hold_target_not_fixed'} <= set(res['why']), res['why'])
+
+    def test_reference_trace_thinned_to_two_rows(self):
+        def f(t, r, g):
+            o = [e for e in t['trace'] if e['phase'] in ('OPEN', 'SETTLE') and e.get('q_ref') is not None]
+            keep = {id(o[0]), id(o[-1])}
+            t['trace'] = [e for e in t['trace'] if not (e['phase'] in ('OPEN', 'SETTLE') and e.get('q_ref') is not None) or id(e) in keep]
+        res = KC3.judge(*self._mut(f))
+        self.assertFalse(res['pass'])
+        self.assertTrue({'publish_sequence_mismatch', 'trace_gap'} & set(res['why']), res['why'])
+
+    def test_reference_row_missing_q_ref(self):
+        def f(t, r, g):
+            o = [e for e in t['trace'] if e['phase'] == 'OPEN' and e.get('q_ref') is not None]
+            o[30]['q_ref'] = None
+        self.fails_with(f, 'reference_evidence_incomplete')
+
+    def test_publish_count_mismatch(self):
+        def f(t, r, g):
+            t['n_target_published'] += 3
+        self.fails_with(f, 'publish_sequence_mismatch')
+
+    def test_end_hold_rows_missing(self):
+        def f(t, r, g):
+            t['trace'] = [e for e in t['trace'] if e['phase'] != 'END_HOLD']
+        res = KC3.judge(*self._mut(f))
+        self.assertFalse(res['pass'])
+        self.assertIn('end_hold_evidence_missing', res['why'])
+
+    def test_grip_missing(self):
+        def f(t, r, g):
+            t['trace'][-5].pop('grip')
+        self.fails_with(f, 'grip_command_not_closed_after_grasp')
+
+    def test_drift_after_done(self):
+        def f(t, r, g):
+            for s_ in r['steps']:
+                if s_[1] >= T_DONE + 0.2:
+                    s_[9] += math.radians(0.6)
+        self.fails_with(f, 'grasp_drift_over_limit')
+
+    def test_policy_trace_format_accepted(self):
+        """相位機合成世界跑一趟，依任務節點格式組 trace：判定器的參考角與 trace 對帳應無誤（格式假設一致）。"""
+        import test_door_k3a_policy as TP
+        sim = TP.Sim()
+        sim.run()
+        pol = sim.pol
+        self.assertEqual(pol.phase, 'DONE')
+        tr, n = [], 0
+        for t_, ph, a, m in sim.acts:
+            tgt = None if (a['target'] is None or ph == 'ABORTED') else np.asarray(a['target']).reshape(-1).tolist()
+            seq = None
+            if tgt is not None:
+                n += 1
+                seq = n
+            tr.append({'t': t_, 'phase': ph, 'q_door': m.q_door, 'q_ref': None, 'target': tgt,
+                       'grip': a['grip'], 'pub_seq': seq})
+        # q_ref 依節點：記錄「該輪 step 之後」的 pol.q_ref ⇒ 重跑一次逐輪擷取
+        sim2 = TP.Sim()
+        qrefs = []
+        orig = sim2.pol.step
+
+        def wrap(m, dt):
+            a = orig(m, dt)
+            qrefs.append(sim2.pol.q_ref)
+            return a
+        sim2.pol.step = wrap
+        sim2.run()
+        self.assertEqual(len(qrefs), len(tr))
+        for e, q in zip(tr, qrefs):
+            e['q_ref'] = q
+        task = {'trace': tr, 'policy_events': pol.events, 'n_target_published': n}
+        W = KC.phase_windows(task)
+        why, st = [], {}
+        KC3.check_reference(task, why, st)
+        KC3.check_trace(task, W, why, st)
+        self.assertEqual(why, [], (why, st))
+        self.assertLess(st['open_first_vs_last_hold_m'], 1e-12)
+
+    def _mut(self, f):
+        t, r, g = G()
+        f(t, r, g)
+        return t, r, g
 
     def test_G_T_H_invalid(self):
         def f(t, r, g):

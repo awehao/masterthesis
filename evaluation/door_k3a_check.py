@@ -7,7 +7,10 @@ door_k2_check.py 不改；共用其輔助函式（FK、門幾何、剛體核對�
   門角：OPEN 前 |q| ≤ 1°（同 K2 判定）；OPEN 起 −1° ≤ q ≤ θ_goal＋1°；|q̇| ≤ 0.05 rad/s 全程；
   非預期接觸（含 ambiguous）≤ 0.1 N；牆 ≤ 0.1 N；腕力 < 30 N；底盤 ≤ 20 mm／2°；
   手指—橫桿只在 ENGAGE、HOLD、OPEN、SETTLE、END_HOLD、DONE 允許；
-  HOLD～END_HOLD 兩指橫桿接觸逐步 ≥ 0.5 N；抓取漂移（夾持成立時 G_T_H_grasp）逐步 ≤ 5 mm、≤ 2°。
+  HOLD～紀錄結束（含 DONE 後）兩指橫桿接觸逐步 ≥ 0.5 N、實測手指 ≤ 50% 開度；抓取漂移（G_T_H_grasp）逐步 ≤ 5 mm、≤ 2°。
+任務 trace 對帳（Codex 20261021 實作審查 2、3）：HOLD 起每列夾爪命令＝閉合；已發布目標序號 1…N 連續且 N＝n_target_published；
+  HOLD～DONE trace 相鄰間隔 ≤ 0.25 s；OPEN／SETTLE 每列都有 q_ref 與目標（唯一例外＝HOLD→OPEN 轉換列，其目標＝HOLD 目標）；
+  END_HOLD 每列目標＝SETTLE 最後已發布目標，涵蓋 END_HOLD 起到 DONE。
 事件：ENGAGE → HOLD → OPEN → SETTLE → END_HOLD → DONE；無 RELEASE／RETREAT；無中止；HOLD ≥ 1.0 s、END_HOLD ≥ 3.0 s。
 參考角（task trace 逐筆）：q_ref ≤ θ_goal；相鄰差 ≤ r(q_ref_prev)·dt；|q_ref − q_meas| ≤ 0.5°；q_ref 到達 θ_goal；
   OPEN 首筆目標＝最後一筆 HOLD 目標（≤ 1e-9）；OPEN／SETTLE 目標＝首筆目標繞鉸鏈轉 (q_ref − q_ref₀)（≤ 1e-5 m／1e-5 rad）。
@@ -36,7 +39,9 @@ DRIFT_M, DRIFT_R = CFG.drift_abort_m, CFG.drift_rot_abort_rad
 BASE_M, BASE_YAW = 0.020, math.radians(2.0)
 SEQ = ['ENGAGE', 'HOLD', 'OPEN', 'SETTLE', 'END_HOLD', 'DONE']
 ALLOWED = ('ENGAGE', 'HOLD', 'OPEN', 'SETTLE', 'END_HOLD', 'DONE')
-GRASP = ('HOLD', 'OPEN', 'SETTLE', 'END_HOLD')
+GRASP = ('HOLD', 'OPEN', 'SETTLE', 'END_HOLD', 'DONE')   # 夾持保留到紀錄結束（Codex 20261021 實作審查 1）
+OPEN_MAX_FRAC, FINGER_OPEN = 0.5, 0.0089                 # 夾持後實測手指 ≤ 50% 開度視為未張爪
+TRACE_GAP_S = 0.25
 FINGERS = KC.FINGERS
 AX = np.asarray(CFG.hinge_axis, float)
 PT = np.asarray(CFG.hinge_point, float)
@@ -56,7 +61,10 @@ def check_reference(task, why, stats):
     if not hold or not opn:
         why.append('reference_trace_missing')
         return
-    # 相位轉換那一輪的 trace 已標新相位：OPEN 首個「有參考角」的 trace 才是 OPEN 第一筆輸出
+    # 相位轉換那一輪的 trace 已標新相位：唯一允許缺 q_ref 的是第一列 OPEN（HOLD→OPEN 轉換列，目標＝HOLD 目標）
+    miss = [i for i, e in enumerate(opn) if e.get('q_ref') is None or _tgt(e.get('target')) is None]
+    if miss and not (miss == [0] and opn[0]['phase'] == 'OPEN' and opn[0].get('q_ref') is None and _tgt(opn[0].get('target')) is not None):
+        why.append('reference_evidence_incomplete')
     opn = [e for e in opn if e.get('q_ref') is not None]
     if not opn:
         why.append('reference_trace_missing')
@@ -107,6 +115,45 @@ def check_reference(task, why, stats):
         why.append('target_not_rigid_rotation_of_first')
     if abs(opn[-1]['q_ref'] - THETA) > 1e-12:
         why.append('reference_not_reached')
+
+
+def check_trace(task, W, why, st):
+    tr = [e for e in (task.get('trace') or []) if 'phase' in e]
+    t_hold = (W.get('HOLD') or [(None, None)])[0][0]
+    t_end = (W.get('END_HOLD') or [(None, None)])[0][0]
+    t_done = (W.get('DONE') or [(None, None)])[0][0]
+    if t_hold is None or t_end is None or t_done is None or not tr:
+        why.append('trace_unverifiable')
+        return
+    # 發布序號對帳
+    seqs = [e.get('pub_seq') for e in tr if e.get('pub_seq') is not None]
+    n = task.get('n_target_published')
+    if any((e.get('pub_seq') is None) != (_tgt(e.get('target')) is None) for e in tr) or not isinstance(n, int) \
+            or seqs != list(range(1, len(seqs) + 1)) or len(seqs) != n:
+        why.append('publish_sequence_mismatch')
+    st['n_target_published'] = n
+    # HOLD～DONE 覆蓋與間隔
+    win = [e for e in tr if t_hold - 1e-9 <= e['t'] <= t_done + 1e-9]
+    ts = [e['t'] for e in win]
+    if not ts or ts[0] > t_hold + TRACE_GAP_S or ts[-1] < t_done - 1e-9 or any(b_ - a_ > TRACE_GAP_S for a_, b_ in zip(ts, ts[1:])):
+        why.append('trace_gap')
+    st['max_trace_gap_s'] = max([b_ - a_ for a_, b_ in zip(ts, ts[1:])] or [math.inf])
+    # 夾爪命令：HOLD 起全部閉合
+    g = [e.get('grip') for e in tr if e['t'] >= t_hold - 1e-9]
+    if not g or any(x is None or not math.isfinite(x) or x > CFG.finger_closed + 1e-9 for x in g):
+        why.append('grip_command_not_closed_after_grasp')
+    # END_HOLD：目標固定＝SETTLE 最後已發布目標
+    settle = [e for e in tr if e['phase'] == 'SETTLE' and _tgt(e.get('target')) is not None]
+    eh = [e for e in tr if e['phase'] == 'END_HOLD']
+    if not settle or not eh or any(_tgt(e.get('target')) is None for e in eh) or eh[0]['t'] > t_end + TRACE_GAP_S \
+            or eh[-1]['t'] < t_done - TRACE_GAP_S:
+        why.append('end_hold_evidence_missing')
+    else:
+        Ts = _tgt(settle[-1]['target'])
+        dev = max(float(np.abs(_tgt(e['target']) - Ts).max()) for e in eh)
+        st['end_hold_target_dev'] = dev
+        if dev > 1e-9:
+            why.append('end_hold_target_not_fixed')
 
 
 def judge(task, room, gate):
@@ -193,6 +240,7 @@ def judge(task, room, gate):
             st['max_finger_bar_outside_n'] = max(st['max_finger_bar_outside_n'], max(fb))
         if ph in GRASP:
             st['n_grasp_steps'] += 1
+            st['max_finger_q_grasp'] = max(st.get('max_finger_q_grasp', 0.0), max(qf_))
             st['min_grasp_finger_bar_n'] = [min(st['min_grasp_finger_bar_n'][k], fb[k]) for k in range(2)]
             if GTH is not None:
                 dp, dr = KP.grasp_drift(KC._tcp(b, qa_), GTH, KC._H_of(q))     # **逐物理步**
@@ -247,7 +295,10 @@ def judge(task, room, gate):
                 abs(r[1] - THETA) <= math.radians(CFG.settle_tol_deg) and abs(r[2]) <= CFG.settle_rate and r[3] <= DRIFT_M
                 and r[4] >= GRIP_MIN_N for r in last):
             why.append('settle_condition_not_held_1s')
+    if st.get('max_finger_q_grasp', math.inf) > OPEN_MAX_FRAC * FINGER_OPEN:
+        why.append('fingers_opened_after_grasp')
     check_reference(task, why, st)
+    check_trace(task, W, why, st)
     return {'pass': not why, 'why': why, 'stats': st, 'phase_sequence': seq, 'n_steps_window': len(steps)}
 
 

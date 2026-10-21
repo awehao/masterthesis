@@ -146,6 +146,7 @@ def main():
     def save():
         rep['policy_events'] = pol.events
         rep['final_phase'], rep['abort'], rep['max_abs_q_door_rad'] = pol.phase, pol.abort, pol.max_abs_q
+        rep.setdefault('n_target_published', 0)
         rep['open_entry'], rep['max_grasp_drift'] = pol.open_entry, {'pos_m': pol.max_drift[0], 'rot_rad': pol.max_drift[1]}
         tmp = a.out + '.tmp'
         json.dump(rep, open(tmp, 'w'), ensure_ascii=False, indent=1, default=float)
@@ -162,6 +163,7 @@ def main():
     abort_sent = False
     sync_once = False
     last_ct = None
+    n_pub = 0                              # 已發布目標的序號（判定器對帳用）
     try:
         while rclpy.ok():
             for _ in range(64):
@@ -226,8 +228,12 @@ def main():
                 nd.abort_pub.publish(String(data=json.dumps({'why': pol.abort, 't': pol.t_abort}, default=float)))
                 abort_sent = True
                 w_abort = w_abort or wnow
+            pub_seq = None
             if act['target'] is not None and pol.phase != 'ABORTED':
                 nd.tgt_pub.publish(Float64MultiArray(data=[float(x) for x in np.asarray(act['target']).reshape(-1)]))
+                n_pub += 1
+                pub_seq = n_pub
+                rep['n_target_published'] = n_pub
             nd.grip_pub.publish(Float64(data=float(act['grip'])))
             if act['solver_start'] and pol.phase != 'ABORTED':
                 nd.start_pub.publish(Bool(data=True))
@@ -246,7 +252,7 @@ def main():
             rep['trace'].append({'t': t, 'step': step, 'phase': pol.phase, 'q_door': q, 'qdot_door': qdot, 's': pol.s, 'grip': act['grip'],
                                  'target': (None if act['target'] is None or pol.phase == 'ABORTED' else np.asarray(act['target']).reshape(-1).tolist()),
                                  'err_p': (None if pol.last_target is None else float(np.linalg.norm(T_tcp[:3, 3] - pol.last_target[:3, 3]))),
-                                 'q_ref': pol.q_ref, 'ref': (None if pol.ref_info is None else {k: pol.ref_info.get(k) for k in ('q_ref_prev', 'rate', 'lo', 'hi', 'init')}),
+                                 'pub_seq': pub_seq, 'q_ref': pol.q_ref, 'ref': (None if pol.ref_info is None else {k: pol.ref_info.get(k) for k in ('q_ref_prev', 'rate', 'lo', 'hi', 'init')}),
                                  'base_drift_m': bd, 'base_drift_yaw': byaw, 'contacts': ct, 'evidence': bool(ev),
                                  'state_age_wall': st_age, 'contacts_age_wall': nd.ct_agg.age(wnow)})
             if len(rep['trace']) % 100 == 0:
