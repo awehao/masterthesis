@@ -1,0 +1,58 @@
+# E2E 住宅整合場景 v1（draft-1，2026-10-21）——座標／尺度登錄。只是規格草稿，未建模、未模擬。
+# 依據：《第六次進度報告.pdf》第 3 頁住宅示意（任務配置參考；原圖無精確尺寸，以下數值是本草稿自訂）。
+# 世界座標：原點＝房屋內牆西南角，x 向東、y 向北，單位 m；牆厚 0.10；牆高 2.4。
+# 標 TBD 的量由離線核對（G6 通行幾何、G8 門把可達性）決定，送審後才凍結。
+schema: e2e_scene/1
+frame: world（= map；地圖原點對齊此原點）
+interior: {x: [0.0, 10.4], y: [0.0, 5.0]}
+rooms:
+  bedroom: {x: [0.0, 3.2], y: [0.0, 5.0], role: 起點區}
+  living:  {x: [3.3, 7.0], y: [0.0, 5.0], role: 導航區（已知家具＋未知靜態＋一個登錄的動態干擾）}
+  study:   {x: [7.1, 10.4], y: [0.0, 5.0], role: 抽屜操作區}
+walls_internal:
+  W1_bedroom_living: {x: [3.2, 3.3], y: [0.0, 5.0], opening: {y: [1.8, 2.8], kind: 通行門}}
+  W2_living_study:   {x: [7.0, 7.1], y: [0.0, 5.0], opening: {y: [0.5, 1.7], kind: 無門開口（1.20 m）}}
+start: {x: 1.2, y: 2.3, yaw: 0.0}
+home: 同 start（返程終點；到達容差沿用導航 goal tolerance 0.30）
+door:
+  type: 單扇、已解鎖、無閉門器、被動 revolute
+  frame_clear_width: 1.00          # 門洞淨寬（y 1.8–2.8）
+  hinge: {x: 3.20, y: 1.80, axis: [0, 0, 1]}   # 南側門框、臥室側牆面
+  leaf: {length: 0.95, thickness: 0.04, height: 2.0}   # 門扇與門框留 0.05 縫
+  closed_angle: 0.0                # 門扇沿 +y（x≈3.18）
+  open_direction: 朝臥室（−x）拉開；q_d 正向＝繞 +z 轉；完全打開時門扇沿 −x（2.25–3.20, y=1.80）
+  swing_region: 以鉸鏈為圓心、半徑 0.95 的四分之一圓（臥室內 x 2.25–3.20、y 1.80–2.75）——不得放家具
+  limit_q: [0.0, TBD]              # 機械限位（≥ θ_open，含裕度）
+  mass_inertia_damping_friction: TBD（建資產時讀回登錄）
+  handle:
+    type: 沿用 bar26 橫桿（與抽屜同摩擦夾持判準）
+    side: 臥室側（拉側）
+    pos_on_leaf: {from_hinge: TBD（候選 0.80–0.85）, height: TBD（G8；候選 0.55–0.95，低於日常門把時須揭露）}
+  theta_open: TBD（由 G6：收攏姿態整機＋門扇厚＋門框淨寬反推，保守側；不固定假設 90°）
+  theta_pass: TBD（返程與穿門期間門角下界；< theta_open）
+furniture_known:      # 在地圖內（靜態 CBF 由地圖最近牆格產生）
+  - {name: bed,          room: bedroom, x: [0.2, 2.2], y: [3.0, 4.9], h: 0.55}
+  - {name: desk,         room: bedroom, x: [0.2, 1.6], y: [0.1, 0.7], h: 0.75}
+  - {name: sofa,         room: living,  x: [4.0, 6.0], y: [4.1, 4.9], h: 0.85}
+  - {name: coffee_table, room: living,  x: [4.5, 5.7], y: [3.0, 3.6], h: 0.45}
+  - {name: tv_stand,     room: living,  x: [4.2, 6.2], y: [0.1, 0.5], h: 0.55}
+  - {name: bookshelf,    room: study,   x: [10.0, 10.3], y: [1.2, 3.8], h: 1.8}
+  - {name: drawer_unit,  room: study,   pose: {x: 8.75, y: 4.60}, note: 沿用現行抽屜資產；前板朝 −y，前板 y ≈ 4.315；停位以現行相對停位平移}
+unknown_static:       # 不在地圖內（由雷射追蹤器偵測），高度必須高於掃描平面 0.215 m
+  items:
+    - {name: box_A, x: 4.6, y: 1.3, size: [0.40, 0.30, 0.40]}
+    - {name: box_B, x: 8.0, y: 2.2, size: [0.30, 0.30, 0.35]}
+  note: 低於 0.215 m 的地上雜物（鞋、書）2D 雷射看不到 ⇒ 本版不放；若放，須另有感測來源，不得宣稱已避開
+dynamic:              # 登錄的一個有界動態干擾；位置由模擬時間排程（scheduled 模式），不是朝機器人追
+  - {name: person_1, shape: 圓柱 r 0.25 h 1.70, path: [[6.4, 4.6], [6.4, 0.7]], speed: 0.4, start: TBD（相對 /case_start，事前登錄，不因結果調整）, after: 停在終點, clearance: 路徑 x=6.4 避開沙發（x≤6.0）、茶几（x≤5.7）、電視櫃（x≤6.2）}
+nav_goals:            # 全域路徑由 Nav2 GridBased 在地圖上產生；以下只是目標
+  - {id: G1_door_park,   x: TBD, y: TBD, yaw: TBD, note: 門前停位（G8），交棒給 W-GMPC}
+  - {id: G2_entry,       x: 3.9, y: 2.3, yaw: 0.0, note: 穿門後入口區；整機越界餘裕 c_exit 判定}
+  - {id: G3_drawer_park, note: 現行抽屜停位平移至 study 座標}
+  - {id: G4_door_inner,  x: 3.9, y: 2.3, yaw: 3.1416, note: 返程門前內側；量門角 ≥ theta_pass 才穿門}
+  - {id: G5_exit,        x: 2.4, y: 2.6, yaw: 3.1416, note: 返程穿門後出口區}
+  - {id: G6_home,        x: 1.2, y: 2.3, yaw: 0.0}
+map:
+  doorway_in_map: 空（門洞在地圖中為可通行）；門扇不畫入地圖，由雷射偵測為未知靜態／移動物
+  reason: 靜態 CBF 取自地圖最近牆格；若地圖畫入關閉的門，開門後門洞永久被擋（過期地圖）
+  door_closed_phase: 導航只到 G1（門前），不規劃穿門；穿門前的全域規劃須在門角 ≥ theta_open 且釋放收臂後才發出
