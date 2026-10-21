@@ -234,3 +234,44 @@ t_conf 之前（手指仍可能夾著）照 draft-1：不放、不退，只停�
 2. Z(s)＝4／6／7 mm 與 |x| 3 mm、轉角 0.5° 作為執行期偏移界（依 K2 單趟；K3 在 8° 下可能不同，超出即判失敗）。
 3. 解除確認改為 ≥ 95% 開度；CLEAR 直接退到 0.10 m 再觀察 3 s。
 4. §D3：t_conf 之後越界時改為「完成既定退離後停、判失敗」。
+
+---
+
+# K3-A（2026-10-21；依 Codex 20261021 draft-3 裁定縮小範圍；已實作待審，**未核可實跑**）
+
+**只回答**：K2 夾持關係下，固定停位的機器人能否以受控速率把門由 0° 帶到 8°，並在保持夾持下減速、穩定、受控停止。
+**不張爪、不退離、不稱完整開門流程完成。** 解除清空另列 K3-B（draft-2／3 的 §B3～§D3 移到 K3-B，K3-A 不用）。
+成果名稱限定為「小角度開門／保持」。
+
+## 相位
+WAIT_HANDOVER → UNFOLD → ALIGN_PRE → ALIGN_HOLD → APPROACH → ENGAGE（以上沿用 K2Policy 原邏輯）
+→ HOLD（夾持保持 1.0 s）→ OPEN（上限 30 s）→ SETTLE（上限 10 s）→ END_HOLD（固定 3.0 s）→ DONE。
+- OPEN／SETTLE 目標：DoorTargetK3（R∩L∩G 取上界；空集合即中止；減速律依 q_ref⁻）。
+  - 首次呼叫不推進，首筆＝最後一筆 HOLD 目標。
+  - 目標**只由門角決定**：上一筆已發布目標繞模型鉸鏈轉 (q_ref − q_entry)。實測把手 prim 位姿只用於漂移監看。
+- SETTLE → END_HOLD：|q − 8°| ≤ 0.5°、|q̇| ≤ 0.002 rad/s、漂移 ≤ 5 mm、雙指 ≥ 0.5 N，**持續 1.0 s**（逐步重算）。
+- END_HOLD：目標固定為最後一筆已發布目標（受控停止），夾爪保持閉合命令。
+- DONE：停止求解器、要求執行端封存；夾持保留。
+
+## 監看（中止處置同 K2：凍結相位與夾爪命令，不放爪、不退離）
+- 門角：OPEN 以前 |q| ≤ 2°；OPEN 起 −1° ≤ q ≤ 9°；|q̇| ≤ 0.05 rad/s 全程。
+- 抓取漂移以夾持成立時的 G_T_H_grasp 為基準（另存、不覆蓋）：≤ 5 mm、≤ 2°（HOLD～END_HOLD）。
+- 單指 < 0.5 N 持續 0.2 s 即中止。
+- 手指—橫桿允許相位：ENGAGE～DONE。
+- 其餘沿用 K2：腕力 30 N、非預期（含 ambiguous）／牆 0.1 N、底盤 20 mm／2°、求解失效／狀態逾時、閂鎖鏈。
+
+## 判定（door_k3a_check.py；逐物理步，缺資料不通過）
+- 相位序列 ENGAGE→HOLD→OPEN→SETTLE→END_HOLD→DONE，且無 RELEASE／RETREAT；HOLD ≥ 1.0 s、END_HOLD ≥ 3.0 s；終止 DONE。
+- 門角：OPEN 前 |q| ≤ 1°；OPEN 起 −1°～9°；|q̇| ≤ 0.05。
+- 抓取：HOLD～END_HOLD 逐步雙指 ≥ 0.5 N；逐步漂移 ≤ 5 mm／2°。
+- 參考角（task trace 逐筆）：
+  - q_ref ≤ 8°；限速、超前逐筆成立；q_ref 到達 8°；
+  - OPEN 首筆＝最後 HOLD 目標（1e-9）；
+  - 各目標＝首筆繞鉸鏈轉 (q_ref − q_ref₀)（1e-5 m／rad）。
+- 到達：SETTLE 末 |q − 8°| ≤ 0.5°，SETTLE 末 1.0 s 逐物理步滿足穩定條件。
+- 其餘同 K2：夾持證據、接觸、腕力、底盤、紀錄覆蓋、步號連續。
+
+## 檔案
+- 新檔：`door_k3a_policy.py`（繼承 K2Policy）、`door_k3a_task_node.py`、`door_k3a_check.py`、`run_door_k3a.sh`、
+  `test_door_k3a_policy.py`（18）、`test_door_k3a_check.py`（22）、`door_target_k3.py`／`test_door_target_k3.py`（11）。
+- 凍結：`results/door/freeze_door_k3a_dev.sha256`（92 項＝K2 r3 全部 80 項＋新檔與相依）。K2 檔與 r3 凍結不改，核對仍通過。
