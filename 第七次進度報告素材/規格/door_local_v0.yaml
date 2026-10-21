@@ -1,0 +1,22 @@
+# 局部通行門 v0（候選；只供離線核對，未建 USD、未模擬）。2026-10-21。
+# 局部座標：鉸鏈軸在原點（牆的機器人側面），牆沿 x、機器人在 −y 側；門洞 x ∈ [0, frame_clear_width]。
+# 門角 q（rad）＝門扇繞 +z 轉 −q：q > 0 時門扇朝機器人側（−y）拉開。門扇方向 u(q) = (cos q, −sin q, 0)，
+# 機器人側法向 n(q) = (−sin q, −cos q, 0)。
+name: door_local_v0
+wall: {thickness: 0.12, height: 2.4, extent_x: [-1.5, 2.5]}     # 牆佔 y ∈ [0, thickness]，門洞處挖空
+frame_clear_width: 1.00
+leaf:
+  length: 0.95          # 沿 u，自鉸鏈起
+  thickness: 0.04       # 沿 −n（門扇在牆內側方向：v ∈ [0, thickness]）
+  z: [0.01, 2.01]
+  limit_q_deg: [0.0, 110.0]
+handle:                 # 與 drawer_unit_bar26 同型（同摩擦夾持判準）：橫桿沿 u、桿心在門扇機器人側面前 40 mm
+  from_hinge: 0.80      # 桿心沿 u 的距離（桿端 0.90 < 門扇 0.95）
+  standoff: 0.040       # 桿心離門扇面（沿 n）
+  bar: {radius: 0.013, length: 0.20}
+  posts: {along_u: [-0.085, 0.085], size: [0.016, 0.04, 0.024]}   # (沿 u, 沿 n, 沿 z)
+  height_candidates: [0.55, 0.65, 0.75, 0.85, 0.95]
+grasp:
+  tcp_offset_along_tool_z: 0.0147   # 同抽屜：TCP 比桿心深 14.7 mm（工具 z＝朝門扇的法向 −n）
+robot:
+  base_radius: 0.30
