@@ -44,13 +44,13 @@ axs[0, 0].set_ylabel('門角 q (°)', fontsize=8)
 axs[1, 0].set_ylabel('q̇ (rad/s)', fontsize=8)
 axs[2, 0].set_ylabel('門扇對牆接觸力 (N)', fontsize=8)
 axs[2, 0].legend(fontsize=7)
-v = {k: chk[k] for k in ('direction', 'lower_limit', 'upper_limit', 'passivity')}
-fig.suptitle(f"K1 被動門資產的腳本外力診斷（door_k1_1；非機器人開門）　判定：方向 {v['direction']}、下限 {v['lower_limit']}、上限 {v['upper_limit']}、"
-             f"被動 {v['passivity']}；讀回全 verified；阻尼不可解讀（{', '.join(chk['damping_report']['flags'])}）　黃底＝施力時窗",
+v = {k: chk.get(k, '—') for k in ('direction', 'lower_limit', 'upper_limit', 'passivity', 'frame_contact_excluded')}
+fig.suptitle(f"K1 被動門資產的腳本外力診斷（{os.path.basename(os.path.normpath(run))}；非機器人開門）　判定：方向 {v['direction']}、下限 {v['lower_limit']}、上限 {v['upper_limit']}、"
+             f"被動 {v['passivity']}、門框接觸排除 {v['frame_contact_excluded']}；讀回全 verified；阻尼不可解讀（{', '.join(chk['damping_report']['flags'])}）　黃底＝施力時窗",
              fontsize=9, x=0.01, ha='left')
 fig.tight_layout()
 out = os.path.join(run, 'analysis', 'door_k1_curves.png')
 fig.savefig(out)
 ws = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-shutil.copy(out, os.path.join(ws, '第七次進度報告素材', '圖表', 'fig_door_k1_1_curves.png'))
+shutil.copy(out, os.path.join(ws, '第七次進度報告素材', '圖表', f'fig_{os.path.basename(os.path.normpath(run))}_curves.png'))
 print('寫出', out)
