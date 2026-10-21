@@ -102,6 +102,16 @@ class K2AbortLatch:
             self.grip_frozen = grip_now
         return self.latched
 
+    @staticmethod
+    def expire_chain(chain):
+        """閂鎖當步：使命令鏈內**既有**命令立即過期 ⇒ 之後每步走鏈既有的逾時停止路徑（手臂速率立即歸零、設定點凍結；
+        底盤經輪級限制減速，limit9_timeout）。不等舊命令自然逾時。回傳是否有命令被過期。"""
+        snap = getattr(chain, 'snap', None)
+        if snap is None:
+            return False
+        snap.recv_sim_t = float('-inf')
+        return True
+
     def filter_wb(self, cmd):
         """閂鎖後全身命令一律不進命令鏈（回 None）。"""
         return None if self.latched is not None else cmd

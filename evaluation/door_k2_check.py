@@ -55,6 +55,20 @@ SEQ = ['ENGAGE', 'HOLD', 'RELEASE', 'RETREAT', 'DONE']
 FINGERS = ('uflite_finger1', 'uflite_finger2')
 
 
+def _rigid(T):
+    """4×4、有限、旋轉正交且行列式 +1、末列 (0,0,0,1)；否則回 None。"""
+    try:
+        T = np.asarray(T, float)
+    except (TypeError, ValueError):
+        return None
+    if T.shape != (4, 4) or not np.isfinite(T).all():
+        return None
+    R = T[:3, :3]
+    if abs(float(np.linalg.det(R)) - 1.0) > 1e-6 or np.abs(R.T @ R - np.eye(3)).max() > 1e-6 or np.abs(T[3] - [0, 0, 0, 1]).max() > 1e-9:
+        return None
+    return T
+
+
 def _fin(x):
     try:
         if isinstance(x, dict):
@@ -135,6 +149,10 @@ def judge(task, room, gate):
             bad.add('missing_or_nonfinite')
             continue
         stats['max_abs_qdot'] = max(stats.get('max_abs_qdot', 0.0), abs(qd_))
+        _vb = s[cols.index('meas_vb_body')] if 'meas_vb_body' in cols else None
+        if _vb is not None and _fin(_vb):
+            stats['report_max_base_speed_m_s'] = max(stats.get('report_max_base_speed_m_s', 0.0), math.hypot(_vb[0], _vb[1]))
+            stats['report_max_base_yaw_rate'] = max(stats.get('report_max_base_yaw_rate', 0.0), abs(_vb[2]))
         stats['max_abs_q_deg'] = max(stats['max_abs_q_deg'], abs(math.degrees(q)))
         ph = ph_at(t)
         fb = [lc.get(f, {}).get('bar', 0.0) for f in FINGERS]
@@ -166,16 +184,21 @@ def judge(task, room, gate):
     if not pre or not _fin(pre[-1][ix['contact_held_s']]) or pre[-1][ix['contact_held_s']] < ATTACH_S - 1e-6 \
             or not _fin(pre[-1][ix['finger_contact_n']]) or min(pre[-1][ix['finger_contact_n']]) < GRIP_MIN_N:
         why.append('grasp_evidence_missing')
-    GTH, HF = task.get('G_T_H'), task.get('H_frozen')
+    GTH, HF = _rigid(task.get('G_T_H')), _rigid(task.get('H_frozen'))
+    THG = _rigid((task.get('grasp_basis') or {}).get('T_HG'))
+    if GTH is None or HF is None or THG is None:
+        why.append('grasp_matrices_missing_or_invalid')
     if not hold_steps or GTH is None or HF is None:
         why.append('hold_drift_unverifiable')
     else:
-        GTH = np.asarray(GTH, float)
         dr = [float(np.linalg.norm((_tcp(s[ix['base_xyth']], s[ix['q_arm_meas']]) @ GTH)[:3, 3] - _H_of(s[ix['door_q_rad']])[:3, 3]))
-              for s in hold_steps[::5]]
-        stats['max_hold_drift_m'] = max(dr)
-        if max(dr) > DRIFT_M:
-            why.append('hold_drift_over_5mm')
+              for s in hold_steps]                                   # **逐物理步**，不抽樣
+        if not all(math.isfinite(x) for x in dr):
+            why.append('hold_drift_nonfinite')
+        else:
+            stats['max_hold_drift_m'] = max(dr)
+            if max(dr) > DRIFT_M:
+                why.append('hold_drift_over_5mm')
     t_ret = (W.get('RETREAT') or [(None, None)])[0][0]
     rel = [s for s in steps if t_ret is not None and t_ret - RELEASE_S <= s[ix['sim_t']] < t_ret]
     if not rel:
@@ -185,14 +208,14 @@ def judge(task, room, gate):
         ok_free = all(max(s[ix['leaf_contacts']].get(f, {}).get('bar', 0.0) for f in FINGERS) < CONTACT_N for s in rel)
         if not (ok_open and ok_free):
             why.append('release_not_confirmed')
-    if HF is not None and t_done is not None:
+    if HF is not None and THG is not None and t_done is not None:
         last = [s for s in steps if s[ix['sim_t']] <= t_done + 1e-9]
         if last:
             import door_k2_policy as KP
-            Tt = KP.K2Policy(KP.K2Config(), np.asarray(task['grasp_basis']['T_HG'], float)).target(np.asarray(HF, float), S_PRE)
+            Tt = KP.K2Policy(KP.K2Config(), THG).target(HF, S_PRE)
             e = float(np.linalg.norm(_tcp(last[-1][ix['base_xyth']], last[-1][ix['q_arm_meas']])[:3, 3] - Tt[:3, 3]))
             stats['retreat_err_m'] = e
-            if e >= RETREAT_TOL:
+            if not math.isfinite(e) or e >= RETREAT_TOL:
                 why.append('retreat_not_reached')
         else:
             why.append('retreat_unverifiable')

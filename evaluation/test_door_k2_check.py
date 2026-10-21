@@ -46,6 +46,7 @@ def good():
     ev = [{'t': t, 'from': 'x', 'to': p} for p, t in PH]
     task = {'schema': 'door_k2_task/1', 'policy_events': ev, 'abort': None, 'final_phase': 'DONE', 'received_any_sync': True,
             'trace': [{'t': 28.7}], 'G_T_H': G_T_H.tolist(), 'H_frozen': H0.tolist(), 'grasp_basis': {'T_HG': T_HG.tolist()}}
+    task = copy.deepcopy(task)
     steps, held = [], 0.0
     for k in range(0, 2880):
         t = round(k * 0.01, 4)
@@ -171,6 +172,29 @@ class Judge(unittest.TestCase):
         def f(t, r, g):
             del r['steps'][1500]
         self.fails_with(f, 'step_discontinuity')
+
+    # ---- Codex r2 的三個誤收反例
+    def test_unsampled_step_drift(self):
+        def f(t, r, g):
+            hold = [s for s in r['steps'] if 19.5 <= s[1] < 22.6]
+            s = hold[3]                                              # 不在每 5 步的抽樣上
+            s[9] = math.radians(0.9)                                  # 把手移 ~12.6 mm，TCP 不動
+        self.fails_with(f, 'hold_drift_over_5mm')
+
+    def test_G_T_H_nan(self):
+        def f(t, r, g):
+            t['G_T_H'][0][3] = float('nan')
+        self.fails_with(f, 'grasp_matrices_missing_or_invalid')
+
+    def test_H_frozen_nan(self):
+        def f(t, r, g):
+            t['H_frozen'][1][3] = float('nan')
+        self.fails_with(f, 'grasp_matrices_missing_or_invalid')
+
+    def test_G_T_H_not_rigid(self):
+        def f(t, r, g):
+            t['G_T_H'][0][0] *= 1.1
+        self.fails_with(f, 'grasp_matrices_missing_or_invalid')
 
     def test_no_anchor(self):
         t, r, g = good()

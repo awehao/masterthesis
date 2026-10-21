@@ -792,7 +792,10 @@ def main() -> int:
                        dev_pos_max=float(a.park_dev_pos_max), dev_yaw_max=math.radians(float(a.park_dev_yaw_max_deg)))
     print(f'[door] 停車保持條件（K2 登錄）：相對錨點 ≤ {park_cfg.dev_pos_max} m、≤ {a.park_dev_yaw_max_deg}°；'
           f'伺服上限 {park_cfg.hold_v_max} m/s、{park_cfg.hold_w_max} rad/s', flush=True)
-    park_gate = StaticGate(park_cfg) if park_on else None
+    park_gate = StaticGate(park_cfg) if park_on else None       # 入場靜止閘門：沿用 ParkCfg 既有嚴格靜止條件
+    # K2 保持期監看：只核 K2 登錄的相對錨點 20 mm／2° 與伺服命令上界；**實測速率只另報、不中止**（K2 規格 draft-2 §F）
+    import dataclasses as _dc
+    hold_cfg = _dc.replace(park_cfg, v_lin_max=math.inf, w_max=math.inf)
     park_hold = None
     park_done = False
     park_state = {'violation': None, 'transfer_without_gate': False, 'external': None}
@@ -910,7 +913,11 @@ def main() -> int:
         if node.k2_abort_msg is not None and k2_latch.latched is None:
             _gnow = (a.finger_open if node.grip_cmd is None else min(max(float(node.grip_cmd), a.finger_closed), a.finger_open))
             k2_latch.on_msg(node.k2_abort_msg, step_id, t, _gnow)
-            rec['events'].append({'sim_t': t, 'step': step_id, 'k2_abort_latched': k2_latch.latched, 'grip_frozen': _gnow})
+            # 閂鎖當步：鏈內既有命令立即過期 ⇒ 鏈既有逾時停止路徑（手臂速率歸零、底盤經輪級限制減速）；取消待提交交棒
+            _expired = k2_latch.expire_chain(chain)
+            ex.cancel_handover('K2 中止閂鎖')
+            rec['events'].append({'sim_t': t, 'step': step_id, 'k2_abort_latched': k2_latch.latched, 'grip_frozen': _gnow,
+                                  'chain_cmd_expired': _expired, 'handover_cancelled': True})
             print(f'[door] **K2 中止閂鎖** @ step {step_id}：{node.k2_abort_msg}；夾爪凍結 {_gnow}', flush=True)
         # 全身命令進鏈（閂鎖後丟棄）
         if node.wb_latest is not None:
@@ -923,7 +930,10 @@ def main() -> int:
         if node.ho_req is not None:
             r = node.ho_req
             node.ho_req = None
-            if park_on and park_state['violation'] is not None and r.get('action') != 'cancel':
+            if k2_latch.latched is not None and r.get('action') != 'cancel':
+                rec['events'].append({'sim_t': t, 'step': step_id, 'k2': 'handover_refused_after_abort', 'request': r})
+                print(f'[door] K2 中止已閂鎖 ⇒ 拒絕換手請求 {r}', flush=True)
+            elif park_on and park_state['violation'] is not None and r.get('action') != 'cancel':
                 # **違規閂鎖後拒絕所有後續正常換手請求**（不只轉給全身）
                 rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'handover_refused_after_violation',
                                       'request': r})
@@ -1034,7 +1044,7 @@ def main() -> int:
                 # **承接切換前一物理步的位姿**，切換當步的速度才核得到
                 if park_gate.anchor is None:
                     park_state['transfer_without_gate'] = True
-                park_hold = HoldMonitor(park_cfg, park_gate.anchor or (_x, _y, float(yw)),
+                park_hold = HoldMonitor(hold_cfg, park_gate.anchor or (_x, _y, float(yw)),
                                         step_id, t, prev=park_last_sample)
                 rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'hold_start',
                                       'anchor': park_hold.anchor,
@@ -1356,7 +1366,9 @@ def main() -> int:
                                                    '導航不經命令鏈',
                      'door': dauth, 'q_door0_rad': q_door0, 'frictionless': fric, 'bar_class_tol': a.bar_class_tol,
                      'wrist_row': {'joint6_row': _j6_row, 'source': 'metadata.joint_indices', 'joint_names': _jnames},
-                     'park_cfg': park_cfg.__dict__, 'k2_abort_latch': k2_latch.latched,
+                     'park_cfg': park_cfg.__dict__, 'park_hold_cfg': {k: (str(v) if isinstance(v, float) and math.isinf(v) else v) for k, v in hold_cfg.__dict__.items()},
+                     'park_split': '入場閘門＝park_cfg（嚴格靜止）；保持監看＝hold_cfg（20 mm／2°＋伺服上界；實測速率只另報）',
+                     'k2_abort_latch': k2_latch.latched,
                      'grip_evidence_source': '確認的橫桿接觸力（classify_contacts bar），非整個門扇剛體合力',
                      'nav_cmd_timeout_s': a.cmd_timeout,
                      'switch_speed_check': {'v_box_lin': a.v_box_lin,
