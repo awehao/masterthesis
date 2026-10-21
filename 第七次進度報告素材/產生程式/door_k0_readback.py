@@ -22,7 +22,7 @@ import door_asset as DA                                # noqa: E402
 import door_geom as G                                  # noqa: E402
 
 SPEC_P = os.path.join(WS, 'src/my_omnibot_description/config/door_local_v1.yaml')
-OUT = os.path.join(HERE, 'results', 'door', 'door_k0_readback.json')
+OUT = os.path.join(HERE, 'results', 'door', 'door_k0_readback_r2.json')   # r2：加把手材質讀回（r1＝door_k0_readback.json 保留）
 
 
 def qmat(wxyz):
@@ -85,6 +85,10 @@ def checks(d, rb):
         bar_w = trw + R_leaf @ np.asarray(rb['handle_bar']['center_leaf_local'])
         sem.append(near(bar_w, trw + Rr @ T_loc[:3, 3], 1e-5))
     out['joint_semantics_q_positive_pulls'] = all(sem)
+    hm = rb.get('handle_material') or {}
+    out['handle_material'] = (hm.get('bound_at') == '/World/door/leaf/handle_bar'
+                               and near(hm.get('static_friction'), ph['handle_material']['static_friction'])
+                               and near(hm.get('dynamic_friction'), ph['handle_material']['dynamic_friction']))
     out['collision_prims'] = sorted(x.split('/')[-1] for x in rb['collision_prims']) == ['handle_bar', 'leaf_box', 'post0', 'post1',
                                                                                          'wall_hinge_side', 'wall_latch_side']
     return out

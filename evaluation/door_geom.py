@@ -59,8 +59,9 @@ def box_dist(P, c, R, hs):
     return np.linalg.norm(np.maximum(d, 0.0), axis=1) + np.minimum(np.max(d, axis=1), 0.0)
 
 
-def bar_dist(D, P, q, h):
-    """點到橫桿（有限圓柱、端面平切的近似：到線段距離 − 半徑）的距離。"""
+def bar_capsule_dist(D, P, q, h):
+    """點到橫桿的**膠囊體**距離（到桿軸線段的距離 − 半徑）。不是平端有限圓柱：端面外的點會比真實圓柱距離小
+    （例：端面外 30 mm 回傳 17 mm）——作為保守近似使用（低估間距），名稱如實標示。"""
     H = D['handle']
     T = handle_pose(D, q, h)
     u, c = T[:3, 0], T[:3, 3]
@@ -83,3 +84,6 @@ def pass_angle(D, envelope_r, clear, step_deg=0.5):
         if L * math.cos(q) + t * math.sin(q) <= need:
             return float(qd), float(need)
     return None, float(need)
+
+
+bar_dist = bar_capsule_dist   # 相容別名（door_offline_check_v1 以此名稱登錄於輸出）；語意＝膠囊體距離

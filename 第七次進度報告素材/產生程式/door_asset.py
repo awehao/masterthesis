@@ -121,7 +121,41 @@ def build_usd(stage, d: dict, root: str = '/World/door'):
     drv = UsdPhysics.DriveAPI.Apply(j.GetPrim(), 'angular')
     for a, v in (('Stiffness', 0.0), ('Damping', 0.0), ('TargetPosition', 0.0), ('TargetVelocity', 0.0), ('MaxForce', 0.0)):
         getattr(drv, f'Create{a}Attr')().Set(v)
+    bind_handle_material(stage, d, root)
     return readback(stage, root)
+
+
+def bind_handle_material(stage, d, root='/World/door', mat_path='/World/PhysicsMaterials/door_handle'):
+    """把手橫桿的摩擦**明確指定**（與 isaac_common.bind_friction 同機制：physics 用途、weakerThanDescendants）。
+    模擬端若另以夾持材質同時綁手指＋橫桿，會覆寫本綁定——K2 讀回時以實際綁定為準並核對數值等於規格。"""
+    from pxr import Sdf, UsdPhysics, UsdShade
+    m = d['physics']['handle_material']
+    stage.DefinePrim(Sdf.Path(mat_path).GetParentPath(), 'Scope')
+    mp = stage.DefinePrim(mat_path, 'Material')
+    api = UsdPhysics.MaterialAPI.Apply(mp)
+    api.CreateStaticFrictionAttr().Set(float(m['static_friction']))
+    api.CreateDynamicFrictionAttr().Set(float(m['dynamic_friction']))
+    api.CreateRestitutionAttr().Set(0.0)
+    bar = stage.GetPrimAtPath(f'{root}/leaf/handle_bar')
+    UsdShade.MaterialBindingAPI.Apply(bar).Bind(UsdShade.Material(mp), UsdShade.Tokens.weakerThanDescendants, 'physics')
+
+
+def handle_material_readback(stage, root='/World/door'):
+    """讀回把手橫桿**實際生效**的 physics 材質（沿祖先找直接綁定）與其摩擦值。"""
+    from pxr import UsdPhysics, UsdShade
+    pr = stage.GetPrimAtPath(f'{root}/leaf/handle_bar')
+    cur = pr
+    while cur and cur.IsValid():
+        rel = UsdShade.MaterialBindingAPI(cur).GetDirectBindingRel('physics')
+        if rel and rel.GetTargets():
+            mp = stage.GetPrimAtPath(rel.GetTargets()[0])
+            api = UsdPhysics.MaterialAPI(mp)
+            return {'bound_at': str(cur.GetPath()), 'material': str(mp.GetPath()),
+                    'static_friction': float(api.GetStaticFrictionAttr().Get()),
+                    'dynamic_friction': float(api.GetDynamicFrictionAttr().Get()),
+                    'restitution': float(api.GetRestitutionAttr().Get())}
+        cur = cur.GetParent()
+    return {'bound_at': None}
 
 
 def readback(stage, root='/World/door'):
@@ -151,6 +185,7 @@ def readback(stage, root='/World/door'):
         'drive_max_force': float(drv.GetMaxForceAttr().Get()),
         'handle_bar': {'axis': bar.GetAxisAttr().Get(), 'radius': float(bar.GetRadiusAttr().Get()), 'length': float(bar.GetHeightAttr().Get()),
                        'center_leaf_local': [float(x) for x in bar_t]},
+        'handle_material': handle_material_readback(stage, root),
         'collision_prims': sorted(str(p.GetPath()) for p in stage.Traverse()
                                   if str(p.GetPath()).startswith(root) and p.HasAPI(UsdPhysics.CollisionAPI)),
     }

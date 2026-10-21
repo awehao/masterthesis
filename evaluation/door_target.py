@@ -7,7 +7,8 @@
 把手方向隨門扇一起轉，不能沿用抽屜「夾爪方向不變」的軌跡。
 
 `DoorTarget` 與 `DrawerTarget` 同結構：抓取關係 G_T_H 在連接當下量一次固定；
-參考門角 q_ref 閉在**實測門角**上（有界超前 lead_max_rad、限速 rate_max_rps）；
+參考門角 q_ref 閉在**實測門角**上（有界超前 lead_max_rad、限速 rate_max_rps，**同時成立**：q_ref 取兩區間交集內最接近目標者；
+無交集時依 on_conflict 拒絕或明示重建，不先限速再夾超前——那會破壞限速，Codex 20261021 反例）；
 目標把手位姿＝**實測**把手位姿繞鉸鏈軸再轉 (q_ref − q_meas)；夾爪目標＝目標把手位姿 × G_T_H⁻¹。
 門角是物體狀態，不是門的致動命令。
 """
@@ -61,6 +62,7 @@ class DoorTargetConfig:
     q_max_rad: float
     lead_max_rad: float                # 有界超前：q_ref 與 q_meas 的差不得超過
     rate_max_rps: float                # q_ref 每秒最多推進
+    on_conflict: str = 'reject'        # 限速區間與超前區間無交集時：'reject'（拋 DoorTargetConflict）或 'rebuild'（明示重建）
 
     def validate(self):
         c = np.asarray(self.hinge_point_world, float)
@@ -75,10 +77,16 @@ class DoorTargetConfig:
             v = float(getattr(self, nm))
             if not (math.isfinite(v) and v > 0.0):
                 raise ValueError(f'{nm} 必須為正有限值')
+        if self.on_conflict not in ('reject', 'rebuild'):
+            raise ValueError("on_conflict 只能是 'reject' 或 'rebuild'")
 
     def axis(self):
         a = np.asarray(self.hinge_axis_world, float)
         return a / float(np.linalg.norm(a))
+
+
+class DoorTargetConflict(RuntimeError):
+    """限速區間 [q_ref_prev ± rate·dt] 與超前區間 [q_meas ± lead] 無交集：兩項限制不可能同時成立。"""
 
 
 def _rigid_or_value_error(T, name):
@@ -114,19 +122,30 @@ class DoorTarget:
         if self.q_ref is None:
             self.q_ref = q_meas                       # 第一輪由實測建立
         step_max = cfg.rate_max_rps * float(dt)
+        r_lo, r_hi = self.q_ref - step_max, self.q_ref + step_max          # 限速區間
+        l_lo, l_hi = q_meas - cfg.lead_max_rad, q_meas + cfg.lead_max_rad  # 超前區間
+        rebuilt = False
+        if max(r_lo, l_lo) > min(r_hi, l_hi) + 1e-15:
+            # **兩區間無交集**（實測快速前進／跳變或倒退）：先限速再夾超前會破壞限速，不得宣稱兩者同時成立
+            if cfg.on_conflict == 'reject':
+                raise DoorTargetConflict(f'限速區間 [{r_lo:.6f}, {r_hi:.6f}] 與超前區間 [{l_lo:.6f}, {l_hi:.6f}] 無交集')
+            # 'rebuild'：明示重建——參考門角重錨到實測（零超前＝目標即實測把手位姿，不產生推進），本輪不受限速約束並標記
+            q_ref, rebuilt = q_meas, True
+            lead_clamped = False
+        else:
+            lo, hi = max(r_lo, l_lo), min(r_hi, l_hi)                       # 交集內朝目標
+            q_ref = min(max(q_goal, lo), hi)
+            lead_clamped = q_ref != min(max(q_goal, r_lo), r_hi)            # 只受限速時的落點被超前區間改變
+        q_final = min(max(q_ref, cfg.q_min_rad), cfg.q_max_rad)
+        range_clamped = q_final != q_ref
         delta = q_goal - self.q_ref
-        q_ref = self.q_ref + max(-step_max, min(step_max, delta))
-        lo, hi = q_meas - cfg.lead_max_rad, q_meas + cfg.lead_max_rad
-        q_clamped = min(max(q_ref, lo), hi)
-        lead_clamped = q_clamped != q_ref
-        q_final = min(max(q_clamped, cfg.q_min_rad), cfg.q_max_rad)
-        range_clamped = q_final != q_clamped
         self.q_ref = q_final
         T_h = rotate_about_hinge(W_T_H_meas, np.asarray(cfg.hinge_point_world, float), cfg.axis(), self.q_ref - q_meas)
         T_g = T_h @ np.linalg.inv(self.G_T_H)
         self.n_step += 1
         self.last = {'q_meas': q_meas, 'q_ref': self.q_ref, 'q_goal': q_goal, 'lead_rad': self.q_ref - q_meas,
                      'lead_clamped': bool(lead_clamped), 'range_clamped': bool(range_clamped), 'rate_limited': abs(delta) > step_max,
+                     'rebuilt_from_measurement': rebuilt,
                      'basis': '參考門角閉在實測門角上；目標把手位姿由實測位姿繞鉸鏈軸旋轉'}
         return T_g, dict(self.last)
 

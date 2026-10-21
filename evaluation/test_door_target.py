@@ -105,7 +105,7 @@ class DoorTargetTest(unittest.TestCase):
 
     def test_target_keeps_grasp_relation(self):
         for k in range(20):
-            q = 0.01 * k
+            q = 0.002 * k              # 0.04 rad/s：在限速 0.044 rad/s 以內（舊版用 0.2 rad/s，修正後屬衝突，見 conflict 測試）
             Tg, d = self.tg.step(G.handle_pose(D, q, 0.85), q, math.radians(90), 0.05)
             np.testing.assert_allclose(Tg, G.handle_pose(D, d['q_ref'], 0.85) @ self.T_HG, atol=1e-12)
 
@@ -142,6 +142,50 @@ class DoorTargetTest(unittest.TestCase):
         slipped[:3, 3] += [0.0, 0.0, 0.01]
         self.assertAlmostEqual(self.tg.drift_vs(slipped, Hm), 0.01, places=9)
 
+    def test_conflict_reproduction_rejects(self):
+        """Codex 反例：上輪 q_ref = 0.0022、本輪實測 0.1 ⇒ 限速區間與超前區間無交集，舊實作單輪推進 0.0853 rad。"""
+        tg = DT.DoorTarget(self.H0 @ self.T_HG, self.H0, self.cfg)
+        tg.step(self.H0, 0.0, 1.0, 0.05)
+        _, d = tg.step(G.handle_pose(D, 0.0, 0.85), 0.0, 1.0, 0.05)
+        self.assertAlmostEqual(d['q_ref'], 0.0044, places=12)
+        with self.assertRaises(DT.DoorTargetConflict):
+            tg.step(G.handle_pose(D, 0.1, 0.85), 0.1, 1.0, 0.05)
+        self.assertAlmostEqual(tg.q_ref, 0.0044, places=12)                  # 拒絕時狀態不變
+
+    def test_conflict_rebuild_is_explicit(self):
+        cfg = DT.DoorTargetConfig(C0, A_OPEN, 0.0, math.radians(110), 0.0125, 0.044, on_conflict='rebuild')
+        tg = DT.DoorTarget(self.H0 @ self.T_HG, self.H0, cfg)
+        tg.step(self.H0, 0.0, 1.0, 0.05)
+        Hm = G.handle_pose(D, 0.1, 0.85)
+        Tg, d = tg.step(Hm, 0.1, 1.0, 0.05)
+        self.assertTrue(d['rebuilt_from_measurement'])
+        self.assertAlmostEqual(d['q_ref'], 0.1, places=12)
+        np.testing.assert_allclose(Tg, Hm @ self.T_HG, atol=1e-12)          # 零超前：目標＝實測把手位姿
+
+    def test_backward_jump_also_conflicts(self):
+        tg = DT.DoorTarget(self.H0 @ self.T_HG, self.H0, self.cfg)
+        q = 0.5
+        tg.step(G.handle_pose(D, q, 0.85), q, q, 0.05)
+        with self.assertRaises(DT.DoorTargetConflict):
+            tg.step(G.handle_pose(D, 0.4, 0.85), 0.4, q, 0.05)              # 門被推回 0.1 rad
+
+    def test_property_both_limits_hold_every_step(self):
+        rng = np.random.default_rng(1)
+        for trial in range(30):
+            tg = DT.DoorTarget(self.H0 @ self.T_HG, self.H0, self.cfg)
+            q_meas, prev = 0.0, None
+            for k in range(200):
+                dt = float(rng.uniform(0.01, 0.1))
+                q_meas = float(np.clip(q_meas + rng.normal(0.0, 0.002), 0.0, math.radians(110)))
+                try:
+                    _, d = tg.step(G.handle_pose(D, q_meas, 0.85), q_meas, float(rng.uniform(0, 2)), dt)
+                except DT.DoorTargetConflict:
+                    continue
+                self.assertLessEqual(abs(d['q_ref'] - q_meas), 0.0125 + 1e-12)
+                if prev is not None:
+                    self.assertLessEqual(abs(d['q_ref'] - prev), 0.044 * dt + 1e-12)
+                prev = d['q_ref']
+
     def test_invalid_inputs(self):
         with self.assertRaises(ValueError):
             self.tg.step(self.H0, float('nan'), 0.1, 0.05)
@@ -151,6 +195,8 @@ class DoorTargetTest(unittest.TestCase):
             DT.DoorTargetConfig(C0, A_OPEN, 0.0, 1.0, 0.0, 0.1).validate()
         with self.assertRaises(ValueError):
             DT.DoorTargetConfig(C0, (0, 0, 0), 0.0, 1.0, 0.01, 0.1).validate()
+        with self.assertRaises(ValueError):
+            DT.DoorTargetConfig(C0, A_OPEN, 0.0, 1.0, 0.01, 0.1, on_conflict='ignore').validate()
 
 
 class DistanceCounterexamples(unittest.TestCase):
@@ -196,14 +242,16 @@ class DistanceCounterexamples(unittest.TestCase):
         self.assertLess(float(G.box_dist(p[None, :], c, R, hs)[0]), 0.0)
         self.assertGreater(float(G.box_dist(p[None, :], c, np.eye(3), hs)[0]), 0.05)
 
-    def test_bar_distance(self):
+    def test_bar_capsule_distance(self):
         T = G.handle_pose(D, 0.4, 0.85)
         c, u, y = T[:3, 3], T[:3, 0], T[:3, 1]
         r = D['handle']['bar']['radius']
-        self.assertAlmostEqual(float(G.bar_dist(D, (c + y * r)[None, :], 0.4, 0.85)[0]), 0.0, places=12)
-        self.assertAlmostEqual(float(G.bar_dist(D, (c + y * 0.05)[None, :], 0.4, 0.85)[0]), 0.05 - r, places=12)
+        self.assertAlmostEqual(float(G.bar_capsule_dist(D, (c + y * r)[None, :], 0.4, 0.85)[0]), 0.0, places=12)
+        self.assertAlmostEqual(float(G.bar_capsule_dist(D, (c + y * 0.05)[None, :], 0.4, 0.85)[0]), 0.05 - r, places=12)
         end = c + u * (D['handle']['bar']['length'] / 2 + 0.03)
-        self.assertAlmostEqual(float(G.bar_dist(D, end[None, :], 0.4, 0.85)[0]), 0.03 - r, places=12)
+        # 膠囊體：端面外 30 mm 回傳 30 − 13 = 17 mm（平端圓柱應為 30 mm）⇒ 低估間距，保守
+        self.assertAlmostEqual(float(G.bar_capsule_dist(D, end[None, :], 0.4, 0.85)[0]), 0.03 - r, places=12)
+        self.assertIs(G.bar_dist, G.bar_capsule_dist)
 
     def test_disc_clear(self):
         name, c, R, hs = G.shapes(D, 0.0, 0.85)[0]
