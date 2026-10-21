@@ -1,0 +1,15 @@
+# K2 封存（Codex 20261021 核可用語）
+run: evaluation/runs/door_k2_1
+freeze: evaluation/results/door/freeze_door_k2_dev_r3.sha256   # 執行前後核對皆通過
+verdict: 限定配置下的單次夾持功能確認通過
+statement: >-
+  在門 v2、K2_READY 起點與指定停位 (前距 0.50, 側向 −0.20) 下，本趟完成把手對準、雙指夾持、保持 3 s、解除及退離，
+  符合事前登錄的 K2 判準。尚未驗證開門承載、導航進場、原 STOW 展開或重複成功率。
+judge: {pass: true, why: []}
+key_numbers: {hold_drift_max_mm: 0.029, retreat_err_mm: 4.566, wrist_peak_n: 10.78, door_q_max_deg: 0.178, door_qdot_max: 0.0166,
+              unexpected_contact_n: 0.0, wall_contact_n: 0.0, hold_finger_bar_min_n: [4.485, 4.229], base_drift: {mm: 2.0, deg: 0.13}}
+notes:
+  - 未觸發 K2 中止條件（不寫「無異常」）；求解器另有漏時槽 3、deadline miss 1、stale 丟棄 1（見 align_solver.json）
+  - 退離誤差 4.566 mm 通過但不稱餘裕充足（門檻 5 mm）
+  - 門角變動不是 DONE 後才開始：RELEASE 結束約 0.063°、RETREAT 結束約 0.1775°、最後 0.1782°；機制未確認
+  - park_gate.json 保持 verdict 為 INSUFFICIENT（未交還導航、原保持窗未閉合）；K2 任務窗判定通過不等於嚴格停車驗收通過
