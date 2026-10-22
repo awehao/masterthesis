@@ -1,1 +1,46 @@
 Queued message 01a16178-7d34-78f2-9171-82352a4429b5 for thread 01a105a已排入 01a105a3-84d4-7f40-90be-5847b88ffa77；等待回覆（最多 2400 s）…
+/home/howardchen/.codex/sessions/2026/10/05/rollout-2026-10-05T11-25-25-01a105a3-84d4-7f40-90be-5847b88ffa77_01a10a18-4827-7fd3-b7f4-2559783fc44c.jsonl
+回覆已存：/home/howardchen/masterthesis/reviews/20261022_103728_reply.md
+-----
+裁定：**準入一致性的方向同意；補兩項後可做版本化接入與離線測試，再送審，這輪尚不核可重跑。** 本輪未改檔、未開模擬。
+
+### 已確認
+
+- 新增測試 **11/11**、原運動觀測器測試 **12/12** 通過。
+- legacy 重放 **289 輪估計值與實錄完全一致**。
+- consistent 擋住 OPEN 期間那 **7 次觀測器拒絕、static 分支仍更新**的情形。
+- 原 K3-A 凍結清單核對通過。
+
+### 接入前兩項必修
+
+1. **`init_static` 仍繞過準入。**  
+   [offset_admission.py:64](/home/howardchen/masterthesis/evaluation/offset_admission.py:64) 在窗口未滿前就改寫估計值。我重現首輪 `om.ok=False`、`used='held'`，但 `d_hat` 已由零變成各軸 **17 mrad**，紀錄與行為不符。
+
+   最小處置：**consistent 模式拒絕搭配 `init_static=True`**；legacy 保留原行為。新增反例，不再用「兩模式初始化相同」作通過條件。
+
+2. **時間解析失敗須保持並記錄，不能拋出例外。**  
+   [offset_admission.py:59](/home/howardchen/masterthesis/evaluation/offset_admission.py:59) 的 `float(t)` 不在解析保護內；`t='bad-time'` 會直接 `ValueError`。consistent 模式應回報拒絕原因，估計值不變，並補測試。
+
+另外，檔頭「加速度補償 `k·ṡ`」應改為「**速度造成的追蹤落後補償**」。
+
+### 診斷 v3 與重放的說法
+
+主要口徑修正可接受：
+
+- 物理步首次力差越界 **20.55 s**、首次單指低於門檻 **21.77 s**。
+- 同步設定點追蹤差與延遲預測增量已分開。
+- 中止後 **316 步、至 25.19 s** 已補報，沒有延填偏移估計。
+
+但 `trace` 的 `t` 仍是**來源量測時間，不是發布時間**。檔頭「最後一筆已發布」請改為「依 task trace 來源時間選取的目標」；真正求解目標仍以 `T_cyc` 為準。
+
+OPEN 的 j2 估計首末變化確為 **7.639 → 6.630 mrad**。只能說：
+
+> 同一實錄輸入的開迴路重放下，更新準入與估計軌跡發生改變。
+
+**不能說估計較準、卸載根因已證實，或閉迴路夾持已改善。**
+
+### 下一步
+
+補上述兩項後，做**預設維持 legacy、新旗標啟用 consistent 的薄接入版本**，補節點層的預設回歸、拒絕時保持與紀錄一致性測試，再送審。
+
+其他開門參數、接觸判準與中止鏈全部不動；不進 K3-B。

@@ -7,10 +7,11 @@
 - admission='legacy'（預設）：**逐位元**照 dl3_wgmpc_wg2_node.py 1157–1193 行：
     設定點逐週期變化 < gate ⇒ static 更新 d̂ ← d̂ + (dt/τ)((q − s) − d̂)；
     否則運動觀測器准入 ⇒ moving 更新（d_obs）；兩者皆否 ⇒ 不更新。限幅 ±max。
-- admission='consistent'：**只有運動觀測器准入**才更新（觀測＝同時刻 q − s 加速度補償 k·ṡ；靜止時 ṡ＝0 ⇒ 補償為零，
+- admission='consistent'：**只有運動觀測器准入**才更新（觀測＝同時刻 q − s 加上速度造成的追蹤落後補償 k·ṡ；靜止時 ṡ＝0 ⇒ 補償為零，
   與 static 觀測相同）；觀測器未准入（非等速、窗口未滿、缺資料、時間不前進）⇒ **保持 d̂**，不由 static 繞過。
   需要運動觀測器（moving=True）。
-init_static（第一輪以 q − s 為初值）兩模式相同。輸入非有限 ⇒ consistent 保持並記錄；legacy 照原式（呼叫端負責）。
+init_static（第一輪以 q − s 為初值）只限 legacy：consistent 搭配 init_static 拒絕建構（初值會在窗口未滿前改寫估計，繞過準入；
+Codex 20261022）。輸入（含時間）解析失敗或非有限 ⇒ consistent 保持並記錄原因、不拋例外；legacy 照原式（呼叫端負責）。
 """
 from __future__ import annotations
 
@@ -28,6 +29,8 @@ class OffsetEstimator:
             raise ValueError(f'admission 不明：{admission}')
         if admission == 'consistent' and not moving:
             raise ValueError("admission='consistent' 需要運動觀測器（moving=True）")
+        if admission == 'consistent' and init_static:
+            raise ValueError("admission='consistent' 不可搭配 init_static（初值會繞過準入）")
         if not (dt > 0 and tau_s > 0 and gate_rad > 0 and max_rad > 0):
             raise ValueError('dt／tau／gate／max 須為正')
         self.alpha = np.asarray(alpha, float).reshape(6)
@@ -49,16 +52,21 @@ class OffsetEstimator:
     def update(self, t, s, q):
         """一個求解週期。s＝同步量測的設定點、q＝同時刻實測手臂角（皆 6 軸）。回傳紀錄 dict。"""
         rec = {'used': 'none', 'why': None, 'om': None}
-        s_ok = q_ok = False
+        s_ok = q_ok = t_ok = False
         try:
             s_now = np.asarray(s, float).reshape(6)
             q_now = np.asarray(q, float).reshape(6)
             s_ok, q_ok = bool(np.isfinite(s_now).all()), bool(np.isfinite(q_now).all())
         except (TypeError, ValueError):
             s_now = q_now = None
-        if self.admission == 'consistent' and not (s_ok and q_ok and t is not None and math.isfinite(float(t))):
+        try:
+            t_ok = t is not None and math.isfinite(float(t))
+        except (TypeError, ValueError):
+            t_ok = False
+        if self.admission == 'consistent' and not (s_ok and q_ok and t_ok):
             self.n_held += 1
-            rec.update(used='held', why='missing_or_nonfinite', d_hat_after=self.d.tolist())
+            why = 'time_unparsable_or_nonfinite' if (s_ok and q_ok) else 'missing_or_nonfinite'
+            rec.update(used='held', why=why, d_hat_after=self.d.tolist(), gate_ok=False)
             return rec
         e = q_now - s_now
         if self.init_static and self.n_upd == 0 and self.s_prev is None:

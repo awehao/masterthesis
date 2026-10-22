@@ -115,11 +115,40 @@ class Admission(unittest.TestCase):
         simulate(e, lambda t: np.zeros(6), 6.0, d=np.array([0.0, 0.2, 0, 0, 0, 0]))
         self.assertAlmostEqual(e.d[1], 0.05)
 
-    def test_init_static_same_both(self):
-        for adm in ('legacy', 'consistent'):
-            e = est(adm, init_static=True)
-            e.update(0.0, np.zeros(6), D_TRUE)
-            np.testing.assert_allclose(e.init, D_TRUE)
+    def test_init_static_legacy_only(self):
+        e = est('legacy', init_static=True)
+        e.update(0.0, np.zeros(6), D_TRUE)
+        np.testing.assert_allclose(e.init, D_TRUE)
+        with self.assertRaises(ValueError):                                   # Codex 反例：初值會在窗口未滿前改寫估計
+            est('consistent', init_static=True)
+
+    def test_consistent_first_cycle_held_and_unchanged(self):
+        """首輪觀測器未准入 ⇒ used='held' 且 d̂ 確實不變（紀錄與行為一致）。"""
+        e = est('consistent')
+        r = e.update(0.0, np.zeros(6), D_TRUE)
+        self.assertEqual(r['used'], 'held')
+        np.testing.assert_allclose(e.d, 0.0)
+        np.testing.assert_allclose(r['d_hat_after'], 0.0)
+
+    def test_bad_time_held_not_raise(self):
+        e = est('consistent')
+        simulate(e, lambda t: np.zeros(6), 3.0)
+        d0 = e.d.copy()
+        for bad_t in ('bad-time', None, float('inf'), [1, 2]):
+            r = e.update(bad_t, np.zeros(6), D_TRUE)
+            self.assertEqual(r['used'], 'held')
+            self.assertEqual(r['why'], 'time_unparsable_or_nonfinite')
+            np.testing.assert_allclose(e.d, d0)
+
+    def test_held_record_matches_state_every_cycle(self):
+        e = est('consistent')
+        acc = np.array([0.0, 0.1, 0.0, 0.0, 0.0, 0.0])
+        prev = e.d.copy()
+        for t, r, _, _ in simulate(e, lambda t: acc * max(0.0, t - 3.0) if t < 3.4 else acc * 0.4, 4.0):
+            now = np.asarray(r['d_hat_after'])
+            if r['used'] == 'held':
+                np.testing.assert_allclose(now, prev, atol=0)
+            prev = now.copy()
 
     def test_legacy_reproduces_door_k3a_1_log(self):
         """舊模式預設不變：依 door_k3a_1 求解紀錄的同步輸入重放，d̂ 與更新類別逐週期與實錄一致。"""
