@@ -128,7 +128,7 @@ class Snapshot(unittest.TestCase):
         T = V2.C.target(0.0, 0.0)
         q = V2.C.ik(np.array(base), T, None)[V2.C.IDX]
         self.base, self.q = base, [round(float(x), 6) for x in q]
-        self.room = {'steps_cols': ['step', 'base_xyth', 'q_arm_meas'], 'steps': [[100, base, self.q]]}
+        self.room = {'steps_cols': ['step', 'sim_t', 'base_xyth', 'q_arm_meas', 'door_qdot_rad_s'], 'steps': [[100, 1.0, base, self.q, 0.0]]}
 
     def task(self, T_tcp, step=100):
         return {'policy_events': [{'t': 1.0, 'unload_capture': {'t': 1.0, 'step': step, 'T_tcp': T_tcp.tolist()}}]}

@@ -8,6 +8,13 @@
   - 已發布目標（task trace）：擷取前＝T_ref0；擷取起＝p_ref0＋a·δ·σ((t−t_cap)/0.5)（≤ 1e-9 m），姿態＝T_ref0（≤ 1e-12），直到 OPEN。
   - 斜坡結束與保持結束事件存在；OPEN 時刻＝保持結束時刻且 ≥ t_cap＋1.0；HOLD ≥ 1.5 s。
   - 中止於保持結束之前 ⇒ 不得有 OPEN，中止後不得有已發布目標。
+r2（Codex 20261022_122517 完整 judge 誤收）：
+  - 時間契約：擷取事件外層／內層時間都有限且一致（≤ 1e-9）；擷取落在 HOLD 起 [0.5, 1.5] s（下界 −1e-9、上界＋1e-9：
+    相位機在 τ > 1.5 時中止，故 1.5 為硬上界）；unload_ramp_end、unload_hold_end 各恰一次、時間有限；
+    斜坡結束 − t_cap ∈ [0.5, 0.5＋Δ]、保持結束 − t_cap ∈ [1.0, 1.0＋Δ]（Δ＝一個控制週期 0.05 s＋1e-6，離散取樣誤差）；
+    次序 t_cap < 斜坡結束 ≤ 保持結束＝OPEN。
+  - 快照：擷取步號對應物理步的 sim_t 與 t_cap 差 ≤ 1e-4 s（room 的 sim_t 四捨五入至 1e-4）；FK 位置 ≤ 5e-5 m、
+    旋轉（Frobenius 最大元素差）≤ 1e-4（room 的 q 四捨五入至 1e-6 rad）；該步門角速率 |q̇| ≤ 0.002 rad/s（＋1e-9）。
 
     python3 evaluation/door_k3au_check.py <run_dir>    # 寫 <run_dir>/analysis/door_k3au_check.json；結束碼 0＝通過
 """
@@ -64,10 +71,49 @@ def check_unload_structure(task, why, st):
         why.append('unload_axis_not_tool_z')
     if abs(float(a @ (Ttcp[:3, 3] - T0[:3, 3])) - d) > 1e-12:
         why.append('unload_delta_not_projection')
-    t_cap = float(c['t'])
+    outer = next(e for e in task.get('policy_events', []) if 'unload_capture' in e)
+    try:
+        t_cap, t_out = float(c.get('t')), float(outer.get('t'))
+    except (TypeError, ValueError):
+        why.append('unload_capture_time_invalid')
+        return
+    if not (math.isfinite(t_cap) and math.isfinite(t_out)) or abs(t_cap - t_out) > 1e-9:
+        why.append('unload_capture_time_invalid')
+        return
     st['t_capture'] = t_cap
-    marks = [e for e in task.get('policy_events', []) if 'unload_ramp_end' in e or 'unload_hold_end' in e]
-    t_hold_end = next((e['t'] for e in marks if 'unload_hold_end' in e), None)
+    if t_hold is None or not math.isfinite(float(t_hold)):
+        why.append('unload_hold_time_missing')
+        return
+    tau = t_cap - t_hold
+    st['capture_tau_s'] = tau
+    if tau < CFG.unload_settle_s - 1e-9 or tau > CFG.unload_capture_deadline_s + 1e-9:
+        why.append('unload_capture_outside_window')
+    ramp_ev = [e for e in task.get('policy_events', []) if 'unload_ramp_end' in e]
+    hold_ev = [e for e in task.get('policy_events', []) if 'unload_hold_end' in e]
+    marks = ramp_ev + hold_ev
+    DT = 0.05 + 1e-6
+    t_ramp_end = t_hold_end = None
+    for nm, lst in (('ramp', ramp_ev), ('hold', hold_ev)):
+        if len(lst) > 1:
+            why.append(f'unload_{nm}_end_count:{len(lst)}')
+        for e in lst:
+            try:
+                ok = math.isfinite(float(e.get('t')))
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                why.append(f'unload_{nm}_end_time_invalid')
+    if len(ramp_ev) == 1 and math.isfinite(float(ramp_ev[0]['t'])):
+        t_ramp_end = float(ramp_ev[0]['t'])
+        if not (CFG.unload_ramp_s - 1e-9 <= t_ramp_end - t_cap <= CFG.unload_ramp_s + DT):
+            why.append('unload_ramp_end_timing')
+    if len(hold_ev) == 1 and math.isfinite(float(hold_ev[0]['t'])):
+        t_hold_end = float(hold_ev[0]['t'])
+        if not (CFG.unload_ramp_s + CFG.unload_hold_s - 1e-9 <= t_hold_end - t_cap <= CFG.unload_ramp_s + CFG.unload_hold_s + DT):
+            why.append('unload_hold_end_timing')
+    if t_ramp_end is not None and t_hold_end is not None and not (t_cap < t_ramp_end <= t_hold_end):
+        why.append('unload_marks_order')
+    st['t_ramp_end'], st['t_hold_end'] = t_ramp_end, t_hold_end
     # 已發布目標逐筆
     rows = [e for e in (task.get('trace') or []) if e.get('target') is not None and t_hold is not None and e['t'] >= t_hold - 1e-9
             and (t_open is None or e['t'] <= t_open + 1e-9) and (e.get('q_ref') is None)]
@@ -93,7 +139,7 @@ def check_unload_structure(task, why, st):
         if any(e.get('target') is not None and e['t'] > abort['t'] + 1e-9 for e in (task.get('trace') or [])):
             why.append('targets_after_abort')
         return
-    if not any('unload_ramp_end' in e for e in marks) or t_hold_end is None:
+    if t_ramp_end is None or t_hold_end is None:
         why.append('unload_marks_missing')
     if t_open is None or t_hold_end is None or abs(t_open - t_hold_end) > 1e-9 or t_open - t_cap < CFG.unload_ramp_s + CFG.unload_hold_s - 1e-9:
         why.append('open_before_unload_complete')
@@ -101,7 +147,7 @@ def check_unload_structure(task, why, st):
         why.append('hold_shorter_than_unload')
 
 
-def check_unload_snapshot(task, room, why, st, tol=5e-5):
+def check_unload_snapshot(task, room, why, st, tol_p=5e-5, tol_r=1e-4, tol_t=1e-4):
     caps = [e['unload_capture'] for e in task.get('policy_events', []) if 'unload_capture' in e]
     if len(caps) != 1:
         return
@@ -112,11 +158,27 @@ def check_unload_snapshot(task, room, why, st, tol=5e-5):
     if s is None:
         why.append('unload_capture_step_missing_in_room')
         return
-    T = KC._tcp(s[I['base_xyth']], s[I['q_arm_meas']])
-    dev = float(np.linalg.norm(T[:3, 3] - np.asarray(c['T_tcp'], float)[:3, 3]))
-    st['capture_fk_dev_m'] = dev
-    if not math.isfinite(dev) or dev > tol:
+    Te = KC._rigid(c.get('T_tcp'))
+    if Te is None:
         why.append('unload_capture_not_from_snapshot')
+        return
+    T = KC._tcp(s[I['base_xyth']], s[I['q_arm_meas']])
+    dev = float(np.linalg.norm(T[:3, 3] - Te[:3, 3]))
+    rdev = float(np.abs(T[:3, :3] - Te[:3, :3]).max())
+    st['capture_fk_dev_m'], st['capture_fk_rot_dev'] = dev, rdev
+    if not math.isfinite(dev) or dev > tol_p or not math.isfinite(rdev) or rdev > tol_r:
+        why.append('unload_capture_not_from_snapshot')
+    try:
+        dt = abs(float(s[I['sim_t']]) - float(c.get('t')))
+    except (TypeError, ValueError, KeyError):
+        dt = math.inf
+    st['capture_snapshot_dt_s'] = dt
+    if not math.isfinite(dt) or dt > tol_t:
+        why.append('unload_capture_time_not_snapshot')
+    qd = s[I['door_qdot_rad_s']] if 'door_qdot_rad_s' in I else None
+    st['capture_qdot'] = qd
+    if qd is None or not math.isfinite(float(qd)) or abs(float(qd)) > CFG.settle_rate + 1e-9:
+        why.append('unload_capture_qdot_over')
 
 
 def judge(task, room, gate):
