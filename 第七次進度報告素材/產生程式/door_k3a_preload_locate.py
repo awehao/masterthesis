@@ -10,8 +10,13 @@
   (a) 夾合只能是壓力：若 fn·n 是「作用在門扇上的力」，finger1（橫桿上方）的 z 分量應 < 0、finger2（下方）應 > 0；
   (b) 開門（q 增大）時門扇須受朝機器人方向（把手 −y）的力；若 ft 也是作用在門扇上，Σft_y 由正轉負的時刻應與門開始轉動相近。
 兩項皆只作一致性檢驗；不一致則保留「作用側未核」。
+r2（Codex 20261022_121137）：
+  - 合量只在**每指都讀取成功**時計算；任一指資料缺失 ⇒ 合量記 NA，並保存每指有效性（valid／no_contact／missing）。讀取成功但無接觸點＝確定無接觸（0）。
+  - 14.96 s 類的「首次」若等於分析窗第一步，標為「分析窗起點已超過門檻，起始時刻未定位」；其餘稱「窗內首次超過」，不稱物理起始。
+  - trace.t＝任務所用狀態的來源時間（非發布／接收時間）；snap_sim_t_exact＝求解快照時間；兩者不還原命令生效先後。
+  - 法向壓力方向支持「作用在門扇上」；**切向作用側仍是推論**。不以 y 分量代替完整鉸鏈力矩。輸出 *_r2，原輸出保留。
 
-    python3 evaluation/door_k3a_preload_locate.py <run_dir>   # 寫 <run_dir>/analysis/door_k3a_preload_locate.json（已存在則拒絕覆寫）
+    python3 evaluation/door_k3a_preload_locate.py <run_dir>   # 寫 <run_dir>/analysis/door_k3a_preload_locate_r2.json（已存在則拒絕覆寫）
 """
 import json
 import math
@@ -27,9 +32,53 @@ import door_k2_check as KC                            # noqa: E402
 FINGERS = ('uflite_finger1', 'uflite_finger2')
 
 
+def finger_sums(x, R):
+    """每指 Σfn·n、Σft（把手座標）與有效性；合量只在每指都讀取成功時計算，否則 NA（不合成零）。"""
+    out = {}
+    con_ok = x.get('contacts') is not None and not x.get('contacts_err')
+    fri_ok = x.get('friction') is not None and not x.get('friction_err')
+    tot_n, tot_t, all_ok = np.zeros(3), np.zeros(3), True
+    for b in FINGERS:
+        d = {}
+        if not con_ok:
+            d['contacts_validity'], d['fn_n_handle'] = 'missing', None
+        else:
+            raw = x['contacts'].get(b, [])
+            cl = [c for c in raw if c.get('fn') is not None and c.get('n') is not None and None not in c['n']]
+            if len(cl) < len(raw):
+                d['contacts_validity'], d['fn_n_handle'] = 'missing', None
+            elif not cl:
+                d['contacts_validity'], d['fn_n_handle'] = 'no_contact', [0.0, 0.0, 0.0]
+            else:
+                d['contacts_validity'] = 'valid'
+                d['fn_n_handle'] = (R.T @ np.sum([c['fn'] * np.array(c['n']) for c in cl], axis=0)).tolist()
+        if not fri_ok:
+            d['friction_validity'], d['ft_handle'] = 'missing', None
+        else:
+            raw = x['friction'].get(b, [])
+            fl = [f['ft'] for f in raw if f.get('ft') is not None and None not in f['ft']]
+            if len(fl) < len(raw):
+                d['friction_validity'], d['ft_handle'] = 'missing', None
+            elif not fl:
+                d['friction_validity'], d['ft_handle'] = 'no_contact', [0.0, 0.0, 0.0]
+            else:
+                d['friction_validity'] = 'valid'
+                d['ft_handle'] = (R.T @ np.sum(np.array(fl), axis=0)).tolist()
+        if d['fn_n_handle'] is None or d['ft_handle'] is None:
+            all_ok = False
+        else:
+            tot_n += np.array(d['fn_n_handle'])
+            tot_t += np.array(d['ft_handle'])
+        out[b] = d
+    out['sum_fn_n_handle'] = tot_n.tolist() if all_ok else None
+    out['sum_ft_handle'] = tot_t.tolist() if all_ok else None
+    out['sums_valid'] = all_ok
+    return out
+
+
 def main():
     run = sys.argv[1]
-    out = os.path.join(run, 'analysis', 'door_k3a_preload_locate.json')
+    out = os.path.join(run, 'analysis', 'door_k3a_preload_locate_r2.json')
     if os.path.exists(out):
         raise SystemExit(f'{out} 已存在，不覆寫')
     t = json.load(open(os.path.join(run, 'task.json')))
@@ -59,19 +108,7 @@ def main():
         T_WH = np.array(x['T_WH']).reshape(4, 4)
         R = T_WH[:3, :3]
         row = {'t': tt, 'q_deg': math.degrees(s[I['door_q_rad']]), 'qdot': s[I['door_qdot_rad_s']]}
-        tot_n, tot_t = np.zeros(3), np.zeros(3)
-        for b in FINGERS:
-            cl = [c for c in (x.get('contacts') or {}).get(b, []) if c['fn'] is not None and None not in c['n']]
-            fl = [f['ft'] for f in (x.get('friction') or {}).get(b, []) if f.get('ft') is not None and None not in f['ft']]
-            Fn = R.T @ np.sum([c['fn'] * np.array(c['n']) for c in cl], axis=0) if cl else None
-            Ft = R.T @ np.sum(np.array(fl), axis=0) if fl else None
-            row[b] = {'fn_n_handle': None if Fn is None else Fn.tolist(), 'ft_handle': None if Ft is None else Ft.tolist()}
-            if Fn is not None:
-                tot_n += Fn
-            if Ft is not None:
-                tot_t += Ft
-        row['sum_fn_n_handle'] = tot_n.tolist()
-        row['sum_ft_handle'] = tot_t.tolist()
+        row.update(finger_sums(x, R))
         H = KC._H_of(s[I['door_q_rad']])
         Tm = KC._tcp(s[I['base_xyth']], s[I['q_arm_meas']])
         row['grasp_off_mm'] = ((np.linalg.inv(H) @ Tm @ G)[:3, 3] * 1e3).tolist()
@@ -94,13 +131,13 @@ def main():
                'finger2_z_positive_frac': (float(np.mean(np.array(f2z) > 0)) if f2z else None), 'n2': len(f2z)}
     # (b) Σft_y 由正轉負 vs 門開始轉動
     op = [rw for rw in rows if rw['t'] >= t_open]
-    t_ft_cross = next((rw['t'] for rw in op if rw['sum_ft_handle'][1] < 0), None)
+    t_ft_cross = next((rw['t'] for rw in op if rw['sum_ft_handle'] is not None and rw['sum_ft_handle'][1] < 0), None)
     q0 = op[0]['q_deg'] if op else None
     t_move = next((rw['t'] for rw in op if rw['q_deg'] - q0 > 0.01), None)
     t_move_rate = next((rw['t'] for rw in op if rw['qdot'] > 0.005), None)
     # 預載建立時刻
     pre = [rw for rw in rows if rw['t'] < t_open]
-    t_build = next((rw['t'] for rw in pre if rw['sum_ft_handle'][1] > 2.0), None)
+    t_build = next((rw['t'] for rw in pre if rw['sum_ft_handle'] is not None and rw['sum_ft_handle'][1] > 2.0), None)
     t_tgt = next((rw['t'] for rw in pre if rw.get('trace_tgt_minus_fk_mm') and rw['trace_tgt_minus_fk_mm'][1] > 0.5), None)
 
     def win(lo, hi):
@@ -120,8 +157,15 @@ def main():
     res = {'run': os.path.basename(os.path.normpath(run)), 'phase_t': ph_t, 't_first_low_phys': t_low,
            'action_side_checks': {'a_clamp_compression': check_a,
                                   'b_pull_reversal': {'t_sum_ft_y_first_negative_after_open': t_ft_cross, 't_door_q_up_0.01deg': t_move,
-                                                      't_door_qdot_over_0.005': t_move_rate}},
-           'preload_build': {'t_sum_ft_y_over_2N_first': t_build, 't_trace_target_deeper_than_fk_0.5mm_first': t_tgt},
+                                                      't_door_qdot_over_0.005': t_move_rate,
+                                                      'note': '時刻相近只表示相容；門角速率越門檻（早）與切向 y 轉負不分先後因果；切向作用側為推論，y 分量不代表完整鉸鏈力矩'}},
+           'preload_build': {'t_sum_ft_y_over_2N_first_in_window': t_build,
+                             't_trace_target_deeper_than_fk_0.5mm_first_in_window': t_tgt,
+                             'window_start_t': rows[0]['t'] if rows else None,
+                             'target_deeper_label': ('分析窗起點已超過門檻，起始時刻未定位' if (t_tgt is not None and rows and abs(t_tgt - rows[0]['t']) < 1e-9)
+                                                     else '窗內首次超過（非物理起始時刻）'),
+                             'n_rows_sums_invalid': sum(1 for rw in rows if not rw['sums_valid'])},
+           'time_semantics': 'trace.t＝任務所用狀態的來源時間（非發布／接收時間）；snap_sim_t_exact＝求解快照時間；不還原命令生效先後。',
            'windows': {'pre_engage': win(t_eng - 1.0, t_eng), 'engage': win(t_eng, t_hold), 'hold': win(t_hold, t_open),
                        'open_first_0.5s': win(t_open, t_open + 0.5), 'open_to_low': win(t_open + 0.5, t_low)},
            'note': '把手座標 y：+y 指向門扇內（−y＝朝機器人＝開門方向）。fn·n、ft 的作用側由物理一致性推論，非 SDK 文件。只讀、不判定。',
