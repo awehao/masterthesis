@@ -18,7 +18,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_k3a_ev_dev.sha256
+FRZ=evaluation/results/door/freeze_door_k3a_ev_dev_r2.sha256
 STAND='0.6,-0.5332,1.570796'
 K2_READY='0,0,0.035,0,-1.5707963,0'
 Q_PRE='-0.9471,0.0758,1.6024,-1.539,-0.9479,-0.0544'

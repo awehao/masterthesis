@@ -185,6 +185,7 @@ import door_asset_v2 as DA                                       # noqa: E402
 import door_geom_v2 as DG                                        # noqa: E402
 import door_k2_io as KIO                                         # noqa: E402
 import door_k3_evidence as KEV                                   # noqa: E402  EV 版：取證擷取（純邏輯）
+import time as _ev_time                                          # noqa: E402  EV 版：取證耗時
 from isaac_common import (bind_friction, bind_frictionless,     # noqa: E402
                           collision_prims, import_urdf,
                           physics_parts, walk)
@@ -688,13 +689,14 @@ def main() -> int:
     _wf_warned = [False]
 
     # ---- **EV 版取證**（--evidence-out；未給 ⇒ 不建檔、不讀任何新 API）----
-    _ev_f = open(a.evidence_out, 'w') if a.evidence_out else None
-    _ev_stat = {'n': 0, 'n_err': {}, 'path': a.evidence_out or None}
-    try:
-        _ev_dofs = list(robot.dof_names) if _ev_f is not None else None
-    except Exception as _e:
-        _ev_dofs = None
-        print(f'[door] **取證：讀不到 dof_names**：{_e!r}', flush=True)
+    # 開檔／寫出／flush／關檔全由 KEV.EvidenceWriter 隔離故障；任何失敗只記入摘要，不中斷模擬、不阻擋 room_run.json 封存。
+    _ev_w = KEV.EvidenceWriter(a.evidence_out) if a.evidence_out else None
+    _ev_f = _ev_w if (_ev_w is not None and _ev_w.active) else None
+    if _ev_w is not None and _ev_f is None:
+        print(f'[door] **取證開檔失敗**：{_ev_w.status["errors"]}（取證停用，摘要標為不完整）', flush=True)
+    _ev_dofs, _why = (KEV.safe(lambda: list(robot.dof_names)) if _ev_f is not None else (None, None))
+    if _why:
+        _ev_w.count_err('dof_names')
 
     def _ev_write(step_id, t, T_WH, arm_sp):
         rec_ev = {'step': int(step_id), 't': KEV._r(t, 6), 'T_WH': [KEV._r(x, 9) for x in np.asarray(T_WH, float).reshape(-1)],
@@ -709,14 +711,8 @@ def main() -> int:
         rec_ev['dof_measured_efforts'], rec_ev['dof_measured_efforts_err'] = ef, why
         for k in ('contacts_err', 'friction_err', 'j6_reaction_wrench_err', 'dof_measured_efforts_err'):
             if rec_ev[k]:
-                _ev_stat['n_err'][k] = _ev_stat['n_err'].get(k, 0) + 1
-        try:
-            _ev_f.write(json.dumps(rec_ev, ensure_ascii=False, allow_nan=False, default=float) + '\n')
-            _ev_stat['n'] += 1
-        except Exception as _e:                            # 取證不得中斷模擬
-            _ev_stat['n_err']['write'] = _ev_stat['n_err'].get('write', 0) + 1
-            if _ev_stat['n_err']['write'] == 1:
-                print(f'[door] **取證寫出失敗**：{_e!r}', flush=True)
+                _ev_w.count_err(k)
+        _ev_w.write(rec_ev)
 
     def door_q_qd():
         """門角 q（門扇繞 +z 轉 −q；placement yaw 須為 0）與 q̇＝−ω_z。"""
@@ -1204,10 +1200,12 @@ def main() -> int:
         _wc = wall_contacts()
         _wf = wrist_force()
         if _ev_f is not None:                              # EV 版：同一物理步、同一把手位姿
+            _ev_t0 = _ev_time.perf_counter()
             try:
                 _ev_write(step_id, t, _HM_s, getattr(res, 'arm_setpoint', None))
             except Exception as _e:                        # 取證不得中斷模擬
-                _ev_stat['n_err']['record'] = _ev_stat['n_err'].get('record', 0) + 1
+                _ev_w.count_err('record')
+            _ev_w.add_time(_ev_time.perf_counter() - _ev_t0)
         # 窗口內逐物理步最大值（50 Hz 發布時送出並清空）；讀不到記 invalid，不當成零
         _ok_fb = _lc is not None
         _fb1 = (_lc or {}).get('uflite_finger1', {}).get('bar', 0.0) if _ok_fb else float('nan')
@@ -1436,9 +1434,8 @@ def main() -> int:
         cam_csv.close()
         print(f'[room] 錄影收尾：共 {n_frame} 幀 → {cam_dir}', flush=True)
     # 相機資料寫出失敗不得阻止 room_run.json 封存
-    if _ev_f is not None:                                  # EV 版：取證檔收尾與摘要
-        _ev_f.close()
-        rec['evidence'] = dict(_ev_stat, semantics={'contacts': 'get_contact_force_data：逐點法向力、點、法向、分離（法向正負未核，原樣）',
+    if _ev_w is not None:                                  # EV 版：取證檔收尾與摘要（開檔失敗也封存錯誤摘要，標為不完整）
+        rec['evidence'] = dict(_ev_w.close(), semantics={'contacts': 'get_contact_force_data：逐點法向力、點、法向、分離（法向正負未核，原樣）',
                                                     'friction': 'get_friction_data：逐錨點切向力向量與位置',
                                                     'j6_reaction_wrench': 'get_measured_joint_forces joint6 列：入射關節反作用力＋力矩（子關節座標），非馬達輸出',
                                                     'dof_measured_efforts': 'get_measured_joint_efforts：解算器 DOF 方向關節力，非馬達命令'})

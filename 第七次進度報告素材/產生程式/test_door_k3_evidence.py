@@ -84,9 +84,102 @@ class Evidence(unittest.TestCase):
         con = {'uflite_finger1': [{'p': [1.0, 2.5, 3.0], 'n': [0.0, 1.0, 0.0], 'fn': 2.0, 'sep': 0.0},
                                   {'p': [1.0, 2.5, 3.2], 'n': [0.0, 1.0, 0.0], 'fn': 2.0, 'sep': 0.0}]}
         s = EV.summarize_contacts(con, T)['uflite_finger1']
-        np.testing.assert_allclose(s['p_handle_mean'], [0.5, 0.0, 0.1], atol=1e-12)
-        np.testing.assert_allclose(s['n_handle_mean'], [1.0, 0.0, 0.0], atol=1e-12)
-        self.assertEqual(s['fn_sum'], 4.0)
+        np.testing.assert_allclose(s['p_handle_absw'], [0.5, 0.0, 0.1], atol=1e-12)
+        np.testing.assert_allclose(s['n_handle_absw'], [1.0, 0.0, 0.0], atol=1e-12)
+        self.assertEqual(s['fn_abs_sum'], 4.0)
+        self.assertEqual(s['weight'], 'abs(fn)')
+
+    # ---- Codex 20261022_115319 必修 2：pair 索引
+    def test_pair_index_validation(self):
+        fn, pts, nrm, sep, cnt, start = stream()
+        bad = []
+        c = cnt.astype(float).copy(); s_ = start.astype(float).copy(); s_[0, 2] = -1.0; bad.append(('start=-1', c, s_))
+        c = cnt.astype(float).copy(); c[0, 2] = -1.0; bad.append(('count=-1', c, start))
+        c = cnt.astype(float).copy(); c[0, 2] = 1.5; bad.append(('count=1.5', c, start))
+        c = cnt.astype(float).copy(); c[0, 3] = 5.0; bad.append(('slice beyond buffer', c, start))
+        c = cnt.astype(float).copy(); c[0, 1] = float('nan'); bad.append(('count=nan', c, start))
+        for name, c, s_ in bad:
+            v, why = EV.safe(EV.extract_contacts, fn, pts, nrm, sep, c, s_, NAMES)
+            self.assertIsNone(v, name)                                                 # 不當成零接觸
+            self.assertIn('ValueError', why, name)
+        # 不在 keep 的 pair 越界也要報錯（索引整體不可信）
+        c = cnt.astype(float).copy(); c[0, 4] = 9.0
+        v, why = EV.safe(EV.extract_contacts, fn, pts, nrm, sep, c, start, NAMES)
+        self.assertIsNone(v)
+        ff, fp = np.zeros((2, 3)), np.zeros((2, 3))
+        v, why = EV.safe(EV.extract_friction, ff, fp, np.array([[0, 0, 3, 0, 0]]), np.array([[0, 0, 0, 0, 0]]), NAMES)
+        self.assertIsNone(v)
+
+    # ---- 必修 3：幅值權重
+    def test_abs_weighting_and_undefined(self):
+        T = np.eye(4)
+        con = {'uflite_finger1': [{'p': [0.0, 0.0, 0.0], 'n': [0, 0, 1.0], 'fn': -1.0, 'sep': 0.0},
+                                  {'p': [1.0, 0.0, 0.0], 'n': [0, 0, 1.0], 'fn': -3.0, 'sep': 0.0}]}
+        s = EV.summarize_contacts(con, T)['uflite_finger1']
+        self.assertAlmostEqual(s['p_handle_absw'][0], 0.75)                            # Codex 反例：不是 0.5
+        self.assertEqual(s['fn_signed_sum'], -4.0)
+        self.assertEqual(s['fn_abs_sum'], 4.0)
+        self.assertAlmostEqual(s['p_handle_unweighted'][0], 0.5)
+        con0 = {'uflite_finger2': [{'p': [0.0, 0.0, 0.0], 'n': [0, 0, 1.0], 'fn': 0.0, 'sep': 0.0}]}
+        s0 = EV.summarize_contacts(con0, T)['uflite_finger2']
+        self.assertIsNone(s0['p_handle_absw'])                                          # 全零 ⇒ 未定
+        self.assertIsNone(s0['n_handle_absw'])
+
+    # ---- 必修 1：開檔／寫出／flush／關檔故障隔離
+    def test_writer_open_failure(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        w = EV.EvidenceWriter(d)                                                         # 目錄 ⇒ 開檔失敗
+        self.assertFalse(w.active)
+        self.assertFalse(w.write({'a': 1}))
+        st = w.close()
+        self.assertFalse(st['complete'])
+        self.assertIn('open', st['n_err'])
+        self.assertTrue(st['enabled'])
+
+    def test_writer_write_flush_close_failures(self):
+        class F:
+            def __init__(self, fail):
+                self.fail = fail
+                self.buf = []
+
+            def write(self, x):
+                if 'write' in self.fail:
+                    raise OSError('disk full')
+                self.buf.append(x)
+
+            def flush(self):
+                if 'flush' in self.fail:
+                    raise OSError('flush')
+
+            def close(self):
+                if 'close' in self.fail:
+                    raise OSError('close')
+        for fail in ({'write'}, {'flush'}, {'close'}):
+            w = EV.EvidenceWriter('x.jsonl', flush_every=1, opener=lambda p, m, f=fail: F(f))
+            w.write({'a': 1})
+            w.write({'b': float('nan')})                                                 # allow_nan=False ⇒ 記 write 錯誤，不拋
+            st = w.close()
+            self.assertFalse(st['complete'], fail)
+            self.assertTrue(st['n_err'], fail)
+        ok = EV.EvidenceWriter('x.jsonl', opener=lambda p, m: F(set()))
+        ok.write({'a': 1})
+        st = ok.close()
+        self.assertTrue(st['complete'])
+        self.assertEqual(st['n'], 1)
+
+    def test_writer_disabled_and_errors_count_incomplete(self):
+        w = EV.EvidenceWriter('')
+        self.assertFalse(w.active)
+        self.assertFalse(w.close()['complete'])
+        class F:
+            def write(self, x): pass
+            def flush(self): pass
+            def close(self): pass
+        w = EV.EvidenceWriter('x', opener=lambda p, m: F())
+        w.write({'a': 1})
+        w.count_err('friction_err')                                                      # 欄位讀取錯誤 ⇒ 不完整
+        self.assertFalse(w.close()['complete'])
 
     def test_torch_like_input(self):
         class T:
