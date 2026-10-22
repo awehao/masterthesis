@@ -56,6 +56,21 @@ class Replay(unittest.TestCase):
         self.assertIsNone(d0)
         self.assertEqual(ts, 1.0)
 
+    def test_d0_published_conservative(self):
+        """快照在 OPEN 前、但發布在 OPEN 後 ⇒ 不可用；取 OPEN 前已發布者。"""
+        log = [{'published': True, 'publish_sim_t_exact': 19.97, 'solve_in': {'snap_sim_t_exact': 19.95, 'solve_start_sim_t_exact': 19.96, 'offset_d_hat': [1] * 6}},
+               {'published': True, 'publish_sim_t_exact': 20.03, 'solve_in': {'snap_sim_t_exact': 20.00, 'solve_start_sim_t_exact': 20.02, 'offset_d_hat': [2] * 6}},
+               {'published': False, 'publish_sim_t_exact': 19.99, 'solve_in': {'snap_sim_t_exact': 19.98, 'offset_d_hat': [3] * 6}}]
+        D = MR.d0_published(log, 20.0)
+        self.assertEqual(D['d_hat'], [1] * 6)
+        self.assertEqual((D['snap_t'], D['solve_start_t'], D['publish_t']), (19.95, 19.96, 19.97))
+        self.assertIsNone(MR.d0_published(log, 19.0)['d_hat'])
+
+    def test_windows_separate_trigger(self):
+        w = [MR.window_of(k, 10, 15) for k in (9, 10, 11, 14, 15)]
+        self.assertEqual(w, ['main', 'first_low', 'intermittent', 'intermittent', 'trigger'])
+        self.assertEqual(MR.window_of(20, None, None), 'main')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

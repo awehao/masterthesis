@@ -22,6 +22,12 @@
 **窗口（來源物理步）**：主窗＝[s_open, 首次單指 bar < 0.5 N 的物理步)；首次低值步另列；
   [首次低值步＋1, 觸發步) 為後續間歇承載窗另列；觸發步（第一列 phase＝ABORTED 的 step）另列。
   r4 的相鄰區間條件殘差只作參照，不相加成整段偏轉。
+r2（Codex 20261022_132631；r1 輸出 door_k3a_model_replay.json 保留，程式見 git 歷史）：
+  - d₀ 改為**保守初始化**：OPEN 步 sim_t 之前**已發布**（published 且 publish_sim_t_exact ≤ t_open）的最後一個求解週期的 d̂，
+    保存其快照／求解開始／發布時間。r1 的「快照時刻 ≤ OPEN」只表示來源時間，不等於當時已取得；另存為參照 d0_snapshot_rule。
+  - 窗口：主窗 [OPEN, first_low)、首次低值一列、間歇窗 (first_low, trigger)、觸發步一列，四者分開。
+  - HOLD 參照窗存檔：[HOLD 步＋50, OPEN 步)，同一模型、同一保守 d₀ 規則（以窗起點時刻）、窗起點實測初值；保存逐步與窗末。
+    只稱「所選 HOLD 窗末的 x／y 殘差」，不當模型驗證通過；U／X 的此窗含介入斜坡（列出擷取步），不稱靜止設定點。
 
     python3 evaluation/door_k3a_model_replay.py <out_json> <run_dir> [...]   # 已存在則拒絕覆寫
 """
@@ -68,6 +74,26 @@ def d0_at(log, t_open):
     return si.get('offset_d_hat'), si['snap_sim_t_exact']
 
 
+def d0_published(log, t_ref):
+    """t_ref 之前已發布的最後一個求解週期的 d̂（保守：發布時刻 ≤ t_ref）。缺 ⇒ d_hat None。"""
+    c = [x for x in log if x.get('solve_in') and x.get('published') and x.get('publish_sim_t_exact') is not None
+         and x['publish_sim_t_exact'] <= t_ref + 1e-9]
+    if not c:
+        return {'d_hat': None, 'snap_t': None, 'solve_start_t': None, 'publish_t': None}
+    x = max(c, key=lambda x: x['publish_sim_t_exact'])
+    si = x['solve_in']
+    return {'d_hat': si.get('offset_d_hat'), 'snap_t': si['snap_sim_t_exact'], 'solve_start_t': si.get('solve_start_sim_t_exact'),
+            'publish_t': x['publish_sim_t_exact']}
+
+
+def window_of(k, s_low, s_trig):
+    if s_trig is not None and k == s_trig:
+        return 'trigger'
+    if s_low is None or k < s_low:
+        return 'main'
+    return 'first_low' if k == s_low else 'intermittent'
+
+
 def run_one(run, alpha):
     t = json.load(open(os.path.join(run, 'task.json')))
     r = json.load(open(os.path.join(run, 'room_run.json')))
@@ -84,11 +110,14 @@ def run_one(run, alpha):
     t_open = room[s_open][I['sim_t']]
     s_low = next((k for k in sorted(room) if k >= s_open and (s_trig is None or k < s_trig)
                   and min(((room[k][I['leaf_contacts']] or {}).get(f, {}) or {}).get('bar', 0.0) for f in FINGERS) < 0.5), None)
-    d0, d0_snap = d0_at(a['log'], t_open)
-    base = {'run': os.path.basename(os.path.normpath(run)), 'steps': {'OPEN': s_open, 'first_low': s_low, 'trigger': s_trig},
-            't_open': t_open, 'd0': d0, 'd0_snapshot_t': d0_snap}
+    s_hold = int(next(e['step'] for e in tr if e.get('phase') == 'HOLD'))
+    D0 = d0_published(a['log'], t_open)
+    d0 = D0['d_hat']
+    ref_d, ref_snap = d0_at(a['log'], t_open)
+    base = {'run': os.path.basename(os.path.normpath(run)), 'steps': {'HOLD': s_hold, 'OPEN': s_open, 'first_low': s_low, 'trigger': s_trig},
+            't_open': t_open, 'd0': d0, 'd0_source': D0, 'd0_snapshot_rule': {'d_hat': ref_d, 'snap_t': ref_snap}}
     if d0 is None:
-        return {**base, 'status': 'NA：OPEN 前無可取得的 offset_d_hat，不重播'}
+        return {**base, 'status': 'NA：OPEN 前無已發布的 offset_d_hat，不重播'}
     k_end = s_trig if s_trig is not None else max(room)
 
     def sp_of(k):
@@ -108,26 +137,19 @@ def run_one(run, alpha):
     snaps = sorted([x['solve_in'] for x in a['log'] if x.get('solve_in') and x['solve_in'].get('T_cyc') is not None],
                    key=lambda s: s['snap_sim_t_exact'])
     snap_t = np.array([s['snap_sim_t_exact'] for s in snaps])
-    rows = []
-    for k in sorted(qh):
-        s = room[k]
-        ts = s[I['sim_t']]
-        H = KC._H_of(s[I['door_q_rad']])
-        b = s[I['base_xyth']]
-        qm = np.asarray(s[I['q_arm_meas']], float)
-        Rq = (np.linalg.inv(H) @ KC._tcp(b, list(qh[k])) @ G)[:3, :3]
-        Rm = (np.linalg.inv(H) @ KC._tcp(b, list(qm)) @ G)[:3, :3]
-        j = int(np.searchsorted(snap_t, ts + 1e-9, side='right') - 1)
-        if j >= 0:
-            Rc = (np.linalg.inv(H) @ np.array(snaps[j]['T_cyc']).reshape(4, 4) @ G)[:3, :3]
-            dec = decompose(Rc, Rq, Rm)
-            dec = {'D_MC_deg': dec['D_MC_deg'], 'D_QC_deg': dec['D_SC_deg'], 'D_MQ_deg': dec['D_MS_deg'], 'closure_err': dec['closure_err']}
-        else:
-            dec = {'D_MC_deg': None, 'D_QC_deg': None, 'D_MQ_deg': np.degrees(rotvec(Rm @ Rq.T)).tolist(), 'closure_err': None}
-        win = ('main' if s_low is None or k < s_low else 'first_low' if k == s_low else 'intermittent')
-        rows.append({'step': k, 't': ts, 'q_deg': math.degrees(s[I['door_q_rad']]), 'window': win,
-                     'model_rot_deg': np.degrees(rotvec(Rq)).tolist(), 'meas_rot_deg': np.degrees(rotvec(Rm)).tolist(),
-                     **dec, 'joint_res_rad': (qm - qh[k]).tolist(), 'cmd_snapshot_t': None if j < 0 else float(snap_t[j])})
+    rows = compare_rows(qh, room, I, G, snaps, snap_t, lambda k: window_of(k, s_low, s_trig))
+    # ---- HOLD 參照窗（存檔；不當模型驗證）
+    k0h = s_hold + 50
+    Dh = d0_published(a['log'], room[k0h][I['sim_t']]) if k0h in room else {'d_hat': None}
+    cap = next((e['unload_capture'] for e in t.get('policy_events') or [] if 'unload_capture' in e), None)
+    hold = {'step0': k0h, 'step1': s_open, 'd0_source': Dh, 'intervention_capture_step': None if cap is None else cap.get('step'),
+            'note': '所選 HOLD 窗末的 x／y 殘差；U／X 此窗含介入斜坡，不稱靜止設定點；不當模型驗證通過。'}
+    if Dh['d_hat'] is not None and k0h < s_open:
+        qhh, stop_h = replay(room[k0h][I['q_arm_meas']], sp_of, Dh['d_hat'], alpha, k0h, s_open)
+        hr = compare_rows(qhh, room, I, G, snaps, snap_t, lambda k: 'hold_ref')
+        hold.update({'q0': room[k0h][I['q_arm_meas']], 'replay_stop': stop_h, 'end_row': hr[-1] if hr else None, 'rows': hr})
+    else:
+        hold['status'] = 'NA'
     main = [x for x in rows if x['window'] == 'main']
     bins = {}
     for x in main:
@@ -144,14 +166,37 @@ def run_one(run, alpha):
         summ[kq] = d
     ce = [x['closure_err'] for x in rows if x['closure_err'] is not None]
     pick = lambda w: next((x for x in rows if x['window'] == w), None)
+    inter = [x for x in rows if x['window'] == 'intermittent']
     return {**base, 'status': 'ok', 'replay_stop': stop, 'n_replayed_steps': len(qh) - 1,
             'last_step_covered': max(qh), 'closure_err_max': max(ce) if ce else None,
             'main_window': {'step0': s_open, 'step1': s_low, 'n_rows': len(main), 'last_row': main[-1] if main else None},
             'first_low_row': pick('first_low'),
-            'intermittent_window': {'n_rows': sum(1 for x in rows if x['window'] == 'intermittent'),
-                                    'last_row': next((x for x in reversed(rows) if x['window'] == 'intermittent'), None)},
-            'trigger_row_covered': s_trig is not None and s_trig in qh,
-            'bins_main': summ, 'rows': rows}
+            'intermittent_window': {'step0_excl': s_low, 'step1_excl': s_trig, 'n_rows': len(inter), 'last_row': inter[-1] if inter else None},
+            'trigger_row': pick('trigger'),
+            'hold_reference': hold, 'bins_main': summ, 'rows': rows}
+
+
+def compare_rows(qh, room, I, G, snaps, snap_t, win_of):
+    rows = []
+    for k in sorted(qh):
+        s = room[k]
+        ts = s[I['sim_t']]
+        H = KC._H_of(s[I['door_q_rad']])
+        b = s[I['base_xyth']]
+        qm = np.asarray(s[I['q_arm_meas']], float)
+        Rq = (np.linalg.inv(H) @ KC._tcp(b, list(qh[k])) @ G)[:3, :3]
+        Rm = (np.linalg.inv(H) @ KC._tcp(b, list(qm)) @ G)[:3, :3]
+        j = int(np.searchsorted(snap_t, ts + 1e-9, side='right') - 1)
+        if j >= 0:
+            Rc = (np.linalg.inv(H) @ np.array(snaps[j]['T_cyc']).reshape(4, 4) @ G)[:3, :3]
+            dec = decompose(Rc, Rq, Rm)
+            dec = {'D_MC_deg': dec['D_MC_deg'], 'D_QC_deg': dec['D_SC_deg'], 'D_MQ_deg': dec['D_MS_deg'], 'closure_err': dec['closure_err']}
+        else:
+            dec = {'D_MC_deg': None, 'D_QC_deg': None, 'D_MQ_deg': np.degrees(rotvec(Rm @ Rq.T)).tolist(), 'closure_err': None}
+        rows.append({'step': k, 't': ts, 'q_deg': math.degrees(s[I['door_q_rad']]), 'window': win_of(k),
+                     'model_rot_deg': np.degrees(rotvec(Rq)).tolist(), 'meas_rot_deg': np.degrees(rotvec(Rm)).tolist(),
+                     **dec, 'joint_res_rad': (qm - qh[k]).tolist(), 'cmd_snapshot_t': None if j < 0 else float(snap_t[j])})
+    return rows
 
 
 def main():
@@ -160,7 +205,7 @@ def main():
         raise SystemExit(f'{out} 已存在，不覆寫')
     ident = json.load(open(IDENT))
     alpha = [float(x) for x in ident['alpha']]
-    res = {'version': 1, 'model': {'alpha': alpha, 'phys_dt_s': float(ident['phys_dt_measured_s']), 'tau_s': ident['tau_s'],
+    res = {'version': 2, 'model': {'alpha': alpha, 'phys_dt_s': float(ident['phys_dt_measured_s']), 'tau_s': ident['tau_s'],
                                    'ident_file': os.path.relpath(IDENT, HERE), 'bias_used': False},
            'bin_deg': BIN, 'runs': [run_one(r, alpha) for r in sys.argv[2:]],
            'note': '既有實際設定點條件下的一階模型重播（不是無負載反事實：設定點來自原閉迴路、d₀ 可能已含接觸負載）。'
@@ -172,8 +217,15 @@ def main():
         if R['status'] != 'ok':
             print('==', R['run'], R['status'])
             continue
+        D = R['d0_source']
         print(f"== {R['run']} 步 {R['steps']}、重播 {R['n_replayed_steps']} 步、停止 {R['replay_stop']}、閉合誤差最大 {R['closure_err_max']:.2e}、"
-              f"d₀ 快照 {R['d0_snapshot_t']:.3f}（OPEN {R['t_open']:.3f}）")
+              f"d₀ 快照 {D['snap_t']:.3f}／求解 {D['solve_start_t']:.3f}／發布 {D['publish_t']:.3f}（OPEN {R['t_open']:.3f}）、"
+              f"窗 main {R['main_window']['n_rows']}、first_low {R['first_low_row']['step'] if R['first_low_row'] else None}、"
+              f"intermittent {R['intermittent_window']['n_rows']}、trigger {R['trigger_row']['step'] if R['trigger_row'] else None}")
+        h = R['hold_reference']
+        if h.get('end_row'):
+            print(f"  HOLD 參照 {h['step0']}→{h['step1']}（擷取步 {h['intervention_capture_step']}）窗末 D_MQ {f(h['end_row']['D_MQ_deg'])} "
+                  f"joint_res(mrad) {f([x*1e3 for x in h['end_row']['joint_res_rad']])}")
         for kq, d in R['bins_main'].items():
             print(f"  q {kq}° n{d['n']:3d} model {f(d['model_rot_deg'])} meas {f(d['meas_rot_deg'])} D_MQ {f(d['D_MQ_deg'])} D_QC {f(d['D_QC_deg'])}")
         lr = R['main_window']['last_row']
