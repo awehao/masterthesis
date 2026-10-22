@@ -13,6 +13,12 @@ IntervalFeed（每個求解快照呼叫一次 on_snapshot）：
     起訖快照 s 與緩衝設定點相等（1e-9）；s_{j+1} − s_j 與 dt_p·u_{j+1} 之差 ≤ 1e-6 rad。合格 ⇒ observer.update_setpoints。
   - **不論合格與否，錨點都移到當前快照**（從新的合格快照重新起算，不累積成超長區間、不重複提交同一區間）。
   - 每次回傳紀錄：t0／t1、步號範圍、m、used（updated／held／anchor_set）、why、d_before／d_after、d_obs、樣本外殘差。
+修訂（Codex 20261022_112752 三項缺口）：
+  - **單調高水位**：記錄已處理的最大快照步號 high_water。步號 ≤ high_water 的快照一律保持，且不改錨點；
+    清錨點後重設錨點也須 step > high_water ⇒ 倒退或重播資料不能重開舊區間，區間不重疊、每區間至多提交一次。
+  - **端點時間綁定**：|t_snapshot − t_buffer(step)| ≤ 1e-6（起訖兩端）且 t1 > t0；不符 ⇒ 保持。
+  - **訊息頭驗證在轉型之前**：步號須為有限、整數值（不接受 1.5、inf、nan、bool、字串）；時間須有限；mode 須為有限整數值；
+    旗標只接受 bool 或 0／1。非法 ⇒ 緩衝拒收（n_bad）、快照記 snapshot_invalid，不拋例外。
 """
 from __future__ import annotations
 
@@ -21,6 +27,40 @@ import math
 import numpy as np
 
 MODE_NORMAL = 0
+T_BIND_TOL = 1e-6
+
+
+def as_step(x):
+    """有限、整數值、非 bool ⇒ int；否則 None（不截斷小數）。"""
+    if isinstance(x, bool):
+        return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v) or v != math.floor(v):
+        return None
+    return int(v)
+
+
+def as_time(x):
+    if isinstance(x, bool):
+        return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def as_flag(x):
+    if isinstance(x, (bool, np.bool_)):
+        return bool(x)
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return bool(v) if v in (0.0, 1.0) else None
 
 
 def _fin6(x):
@@ -44,9 +84,8 @@ class StepBuffer:
         self.n_bad = 0
 
     def _put(self, store, step, val):
-        try:
-            step = int(step)
-        except (TypeError, ValueError):
+        step = as_step(step)
+        if step is None or val is None:
             self.n_bad += 1
             return
         if self.evicted_below is not None and step < self.evicted_below:
@@ -75,12 +114,14 @@ class StepBuffer:
             self.evicted_below = cut
 
     def on_setpoint(self, step, t, ready, sp, mode, api):
-        v = _fin6(sp)
-        self._put(self.sp, step, (tuple(v.tolist()) if v is not None else None, float(t), bool(ready), int(mode), bool(api)))
+        v, tt, rd, md, ap = _fin6(sp), as_time(t), as_flag(ready), as_step(mode), as_flag(api)
+        ok = tt is not None and rd is not None and md is not None and ap is not None
+        self._put(self.sp, step, (tuple(v.tolist()) if v is not None else None, tt, rd, md, ap) if ok else None)
 
     def on_applied(self, step, t, u_arm, mode, api):
-        v = _fin6(u_arm)
-        self._put(self.ap, step, (tuple(v.tolist()) if v is not None else None, float(t), int(mode), bool(api)))
+        v, tt, md, ap = _fin6(u_arm), as_time(t), as_step(mode), as_flag(api)
+        ok = tt is not None and md is not None and ap is not None
+        self._put(self.ap, step, (tuple(v.tolist()) if v is not None else None, tt, md, ap) if ok else None)
 
     def confirmed(self, step):
         """回傳 (ok, why, sp6, u6, t)。"""
@@ -113,6 +154,7 @@ class IntervalFeed:
         self.dtp = float(dt_p)
         self.s_tol, self.integ_tol, self.dt_tol = float(s_tol), float(integ_tol), float(dt_tol)
         self.anchor = None                 # (t, step, s6, q6)
+        self.high_water = None             # 已處理（設為錨點或區間終點）的最大快照步號
         self.n_updated = 0
         self.n_held = 0
         self.held_reasons = {}
@@ -131,26 +173,23 @@ class IntervalFeed:
             self.anchor = None
             return self._held(rec, f'blocked:{blocked}')
         s1, q1 = _fin6(s_meas), _fin6(q_meas)
-        try:
-            step = int(step)
-            t = float(t)
-        except (TypeError, ValueError):
-            step = None
-        if s1 is None or q1 is None or step is None or step < 0 or not math.isfinite(t):
+        step, t = as_step(step), as_time(t)
+        if s1 is None or q1 is None or step is None or step < 0 or t is None:
             self.anchor = None
             return self._held(rec, 'snapshot_invalid')
+        if self.high_water is not None and step <= self.high_water:
+            # 倒退、重播或未前進：不提交、**不改錨點**，舊區間不能重開
+            return self._held(rec, 'snapshot_not_advancing' if (self.anchor is not None and step == self.anchor[1]) else 'step_not_after_processed')
         a = self.anchor
         if a is None:
             self.anchor = (t, step, s1, q1)
+            self.high_water = step
             rec.update(used='anchor_set', d_after=self.obs.d.tolist())
             return rec
         t0, step0, s0, q0 = a
         rec.update(t0=t0, step0=step0, m=step - step0)
-        if step == step0:
-            return self._held(rec, 'snapshot_not_advancing')        # 錨點不變；不重複提交
         self.anchor = (t, step, s1, q1)                             # 不論合格與否，錨點移到當前快照
-        if step < step0:
-            return self._held(rec, 'step_backwards')
+        self.high_water = step
         m = step - step0
         if m > self.obs.m_max:
             return self._held(rec, f'interval_too_long（m={m} > {self.obs.m_max}）')
@@ -164,6 +203,8 @@ class IntervalFeed:
             ts.append(tj)
         if any(abs((tb - ta) - self.dtp) > self.dt_tol for ta, tb in zip(ts, ts[1:])):
             return self._held(rec, 'step_spacing')
+        if not (t > t0) or abs(t0 - ts[0]) > T_BIND_TOL or abs(t - ts[-1]) > T_BIND_TOL:
+            return self._held(rec, 'snapshot_time_mismatch')
         if float(np.abs(sps[0] - s0).max()) > self.s_tol or float(np.abs(sps[-1] - s1).max()) > self.s_tol:
             return self._held(rec, 'snapshot_setpoint_mismatch')
         for j in range(m):

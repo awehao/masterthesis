@@ -731,8 +731,8 @@ class WGMPCNode(Node):
         if len(m.data) >= 11:
             d = m.data
             if self._of_feed is not None:                 # 逐步緩衝：手臂套用速率、exec_mode、api_applied
-                self._of_feed.buf.on_applied(int(d[0]), float(d[1]), [float(x) for x in d[5:11]],
-                                             int(d[11]) if len(d) > 11 else -1, bool(d[15] > 0.5) if len(d) > 15 else False)
+                self._of_feed.buf.on_applied(d[0], d[1], list(d[5:11]),                   # 原樣轉發；驗證在緩衝內（不在此轉型）
+                                             d[11] if len(d) > 11 else None, d[15] if len(d) > 15 else None)
             # **執行健康狀態**與套用值分開。零值本身不是錯 ——
             # 正常模式下的零命令合法；exec_mode 才說明停止原因。
             h = {'exec_mode': int(d[11]) if len(d) > 11 else 0,

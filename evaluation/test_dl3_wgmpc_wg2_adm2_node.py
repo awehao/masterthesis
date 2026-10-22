@@ -194,5 +194,31 @@ class Wiring(unittest.TestCase):
         self.assertTrue(ok, why)
 
 
+class Headers(unittest.TestCase):
+    def test_forwarding_illegal_header_does_not_raise_in_insert(self):
+        """轉發段原樣交給緩衝：非整數步號（1.5）被緩衝拒收（n_bad），而不是在轉發處截斷成 1。"""
+        m = load()
+        C = node_cls(m)
+        fs = fake_self(m)
+        x = TF.World(n_steps=3).steps[1]
+        msg = ap_msg(x)
+        msg.data[0] = 1.5
+        C._on_applied(fs, msg)
+        self.assertEqual(fs._of_feed.buf.n_bad, 1)
+        self.assertEqual(fs._of_feed.buf.ap, {})
+        msg2 = ap_msg(x)
+        msg2.data[15] = float('nan')                                       # api 非 0／1
+        C._on_applied(fs, msg2)
+        self.assertEqual(fs._of_feed.buf.n_bad, 2)
+
+    def test_forwarding_code_has_no_casts(self):
+        src = open(COPY).read()
+        i = src.index('self._of_feed.buf.on_applied(')
+        seg = src[i:src.index(')', src.index('d[15]', i)) + 1]
+        self.assertNotIn('int(', seg)
+        self.assertNotIn('float(', seg)
+        self.assertNotIn('bool(', seg)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

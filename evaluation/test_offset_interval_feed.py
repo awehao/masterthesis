@@ -240,8 +240,82 @@ class Feed(unittest.TestCase):
         self.assertEqual(recs[2]['why'], 'snapshot_not_advancing')
         self.assertEqual(recs[3]['used'], 'updated')
         self.assertEqual((recs[3]['step0'], recs[3]['step1']), (w.steps[14]['step'], w.steps[20]['step']))
-        self.assertEqual(recs[4]['why'], 'step_backwards')
+        self.assertEqual(recs[4]['why'], 'step_not_after_processed')
         self.assertEqual(recs[5]['used'], 'updated')
+        self.assertEqual((recs[5]['step0'], recs[5]['step1']), (w.steps[20]['step'], w.steps[22]['step']))   # 錨點未被倒退快照改動
+
+    # ---- Codex 20261022_112752 三項缺口
+    def test_backwards_then_replay_same_pair_not_resubmitted(self):
+        """1010→1014 updated；倒退到 1010（held）；再重播 1014 ⇒ 不得再次提交。"""
+        w = World()
+        obs, buf, feed = mk()
+        recs = run(w, feed, buf, [10, 14, 10, 14, 20])
+        self.assertEqual([r['used'] for r in recs], ['anchor_set', 'updated', 'held', 'held', 'updated'])
+        self.assertEqual(recs[2]['why'], 'step_not_after_processed')
+        self.assertEqual(recs[3]['why'], 'snapshot_not_advancing')
+        pairs = [(r['step0'], r['step1']) for r in recs if r['used'] == 'updated']
+        self.assertEqual(pairs, [(w.steps[10]['step'], w.steps[14]['step']), (w.steps[14]['step'], w.steps[20]['step'])])
+        self.assertEqual(obs.n_upd, 2)
+
+    def test_backwards_after_block_cannot_reopen(self):
+        """清錨點（停止）後來了比已處理更早的快照 ⇒ 不得設錨點、不得重開舊區間。"""
+        w = World()
+        obs, buf, feed = mk()
+        recs = run(w, feed, buf, [10, 14, 20, 12, 16, 24, 30], blocked_at=lambda k: ('stop_rx' if k == 20 else None))
+        self.assertEqual(recs[2]['why'], 'blocked:stop_rx')
+        self.assertEqual(recs[3]['why'], 'step_not_after_processed')      # 12 ≤ 已處理 14
+        self.assertEqual(recs[4]['used'], 'anchor_set')                   # 16 > 14 ⇒ 新錨點
+        self.assertEqual([r['used'] for r in recs[5:]], ['updated', 'updated'])
+        upd = [(r['step0'], r['step1']) for r in recs if r['used'] == 'updated']
+        self.assertTrue(all(b0 >= a1 for (_, a1), (b0, _) in zip(upd, upd[1:])))   # 區間不重疊
+
+    def test_overlapping_interval_rejected(self):
+        w = World()
+        obs, buf, feed = mk()
+        recs = run(w, feed, buf, [10, 16, 13, 20])
+        self.assertEqual(recs[2]['why'], 'step_not_after_processed')
+        self.assertEqual((recs[3]['step0'], recs[3]['step1']), (w.steps[16]['step'], w.steps[20]['step']))
+
+    def test_snapshot_time_bound_to_buffer(self):
+        """Codex 反例：兩個快照時間都 +1 s、其他不變 ⇒ 不得 updated。"""
+        w = World()
+        obs, buf, feed = mk()
+        for k in range(30):
+            w.feed_step(buf, k)
+        r0 = feed.on_snapshot(w.steps[10]['t'] + 1.0, w.steps[10]['step'], w.steps[10]['s'], w.steps[10]['q'])
+        r1 = feed.on_snapshot(w.steps[14]['t'] + 1.0, w.steps[14]['step'], w.steps[14]['s'], w.steps[14]['q'])
+        self.assertEqual(r0['used'], 'anchor_set')
+        self.assertEqual(r1['why'], 'snapshot_time_mismatch')
+        obs, buf, feed = mk()
+        for k in range(30):
+            w.feed_step(buf, k)
+        feed.on_snapshot(w.steps[10]['t'], w.steps[10]['step'], w.steps[10]['s'], w.steps[10]['q'])
+        r = feed.on_snapshot(w.steps[10]['t'], w.steps[14]['step'], w.steps[14]['s'], w.steps[14]['q'])   # 時間未前進
+        self.assertEqual(r['why'], 'snapshot_time_mismatch')
+
+    def test_illegal_headers_no_exception(self):
+        obs, buf, feed = mk()
+        for bad_step in (float('inf'), float('nan'), 1.5, True, 'x', None, [1]):
+            r = feed.on_snapshot(1.0, bad_step, np.zeros(6), np.zeros(6))
+            self.assertEqual(r['why'], 'snapshot_invalid', bad_step)
+        r = feed.on_snapshot(float('inf'), 5, np.zeros(6), np.zeros(6))
+        self.assertEqual(r['why'], 'snapshot_invalid')
+        n0 = buf.n_bad
+        cases = [dict(step=1.5), dict(step=float('inf')), dict(t=float('nan')), dict(mode='a'), dict(mode=float('inf')),
+                 dict(ready=2), dict(api='yes'), dict(step=True)]
+        for c in cases:
+            kw = dict(step=7, t=0.07, ready=True, sp=np.zeros(6), mode=0, api=True)
+            kw.update(c)
+            buf.on_setpoint(**kw)
+        self.assertEqual(buf.n_bad - n0, len(cases))
+        self.assertNotIn(7, buf.sp)
+        self.assertNotIn(1, buf.sp)
+        buf.on_applied(float('nan'), 0.07, np.zeros(6), 0, 1.0)
+        buf.on_applied(8, 0.08, np.zeros(6), None, 1.0)
+        buf.on_applied(9, 0.09, np.zeros(6), 0.0, float('nan'))
+        self.assertEqual(buf.ap, {})
+        buf.on_applied(10.0, 0.10, np.zeros(6), 0.0, 1.0)                   # 整數值浮點、0／1 旗標 ⇒ 接受
+        self.assertIn(10, buf.ap)
 
     def test_snapshot_setpoint_mismatch_and_integration(self):
         w = World()
