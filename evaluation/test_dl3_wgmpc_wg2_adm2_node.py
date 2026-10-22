@@ -220,5 +220,109 @@ class Headers(unittest.TestCase):
         self.assertNotIn('bool(', seg)
 
 
+class Entry(unittest.TestCase):
+    """Codex 20261022_113301：入口級反例（真正的 _on_sp／_on_applied）。"""
+
+    def counting_self(self, m, with_feed=True):
+        fs = fake_self(m, with_feed)
+        fs.n_gate = 0
+        fs.n_put = 0
+
+        def gfeed(smp):
+            fs.n_gate += 1
+
+        def put(*a, **k):
+            fs.n_put += 1
+        fs._gate = types.SimpleNamespace(feed=gfeed)
+        fs._put = put
+        return fs
+
+    def test_bad_setpoint_headers_rejected_before_any_parse(self):
+        m = load()
+        C = node_cls(m)
+        fs = self.counting_self(m)
+        x = TF.World(n_steps=3).steps[1]
+        cases = {'step_1.5': (0, 1.5), 'step_inf': (0, float('inf')), 'step_nan': (0, float('nan')), 'ready_2': (2, 2.0),
+                 'mode_0.5': (9, 0.5), 'mode_inf': (9, float('inf')), 'api_nan': (10, float('nan')), 't_inf': (1, float('inf'))}
+        for name, (i, v) in cases.items():
+            msg = sp_msg(x)
+            msg.data[i] = v
+            C._on_sp(fs, msg)                                              # 不得拋例外
+        self.assertEqual(fs.n_gate, 0)
+        self.assertEqual(fs.n_put, 0)
+        self.assertEqual(fs._of_feed.buf.sp, {})
+        self.assertEqual(fs._of_feed.buf.n_bad, len(cases))
+        msg = sp_msg(x)
+        msg.data = msg.data[:-1]                                           # 欄數不符
+        C._on_sp(fs, msg)
+        self.assertIn('sp_bad_length', fs._of_feed.buf.entry_rejects)
+
+    def test_bad_applied_headers_rejected_before_any_parse(self):
+        m = load()
+        C = node_cls(m)
+        fs = self.counting_self(m)
+        x = TF.World(n_steps=3).steps[1]
+        cases = {'step_inf': (0, float('inf')), 'step_1.5': (0, 1.5), 'mode_inf': (11, float('inf')), 'api_2': (15, 2.0),
+                 'n_recv_inf': (13, float('inf')), 't_nan': (1, float('nan'))}
+        for name, (i, v) in cases.items():
+            msg = ap_msg(x)
+            msg.data[i] = v
+            C._on_applied(fs, msg)                                         # 不得拋例外
+        self.assertEqual(fs._step_t, {})
+        self.assertIsNone(fs._applied)
+        self.assertEqual(fs._of_feed.buf.ap, {})
+        msg = ap_msg(x)
+        msg.data[12] = float('nan')                                        # 診斷欄位 NaN 合法 ⇒ 接受
+        msg.data[17] = float('nan')
+        C._on_applied(fs, msg)
+        self.assertIn(x['step'], fs._of_feed.buf.ap)
+        self.assertEqual(fs._step_t, {x['step']: x['t']})
+
+    def test_recovers_after_rejects(self):
+        """穿插非法訊息後，有效訊息照收、更新正常恢復。"""
+        m = load()
+        C = node_cls(m)
+        fs = fake_self(m)
+        w = TF.World(n_steps=300)
+        snaps = TF.snap_idx(280)
+        recs, fed = [], 0
+        for k in snaps:
+            while fed <= k:
+                x = w.steps[fed]
+                bad = sp_msg(x)
+                bad.data[0] = float('inf')
+                C._on_sp(fs, bad)
+                bad2 = ap_msg(x)
+                bad2.data[11] = float('inf')
+                C._on_applied(fs, bad2)
+                C._on_sp(fs, sp_msg(x))
+                C._on_applied(fs, ap_msg(x))
+                fed += 1
+            x = w.steps[k]
+            recs.append(C._offset_update_interval(fs, types.SimpleNamespace(sim_t=x['t'], sp_step_id=x['step'], s=x['s']),
+                                                  np.concatenate([np.zeros(3), x['q']])))
+        self.assertTrue(all(r['used'] == 'updated' for r in recs[1:]), [r['why'] for r in recs if r['used'] == 'held'][:3])
+        self.assertGreater(fs._of_feed.buf.n_bad, 0)
+
+    def test_default_none_path_unchanged(self):
+        """預設 none：入口驗證不介入 ⇒ 既有行為照舊（1.5 由 SpSample 截斷、inf 由既有轉型拋例外）。"""
+        m = load()
+        C = node_cls(m)
+        fs = self.counting_self(m, with_feed=False)
+        x = TF.World(n_steps=3).steps[1]
+        msg = sp_msg(x)
+        msg.data[0] = 1.5
+        C._on_sp(fs, msg)
+        self.assertEqual(fs.n_gate, 1)
+        msg = sp_msg(x)
+        msg.data[0] = float('inf')
+        with self.assertRaises(OverflowError):
+            C._on_sp(fs, msg)
+        msg = ap_msg(x)
+        msg.data[0] = float('inf')
+        with self.assertRaises(OverflowError):
+            C._on_applied(fs, msg)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
