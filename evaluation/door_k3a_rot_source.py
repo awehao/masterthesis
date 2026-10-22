@@ -12,10 +12,17 @@
   - cmd＝rotvec(H⁻¹·T_cyc·G)：目標相對當下把手的轉動（命令所要求）。依設計只應有繞鉸鏈（−z）的超前角，x／y 應≈初值。
   - sp＝rotvec(H⁻¹·FK(s＋d̂)·G)：設定點加偏移估計後的靜態平衡參考（模型允許一階落後，不是動態預測）。
   - meas＝rotvec(H⁻¹·FK(q_meas)·G)：實測相對轉動。
-  - exec＝rotvec((H⁻¹T_cycG)⁻¹·(H⁻¹FK(q)G))：命令 → 實測的執行偏差（同快照）。
-  回答：若 |cmd_x|、|cmd_y| 遠小於 |meas_x|、|meas_y| 且 exec≈meas ⇒ 偏轉**非目標要求**、在執行時產生；
-  再以 sp−cmd 與 meas−sp 分出「設定點已偏」與「設定點到實測之間」兩段（後者含負載下順應與模型允許的落後，未區分）。
+  - （r1，已由下方 r2 取代）exec＝rotvec((H⁻¹T_cycG)⁻¹·(H⁻¹FK(q)G))，並以 sp−cmd、meas−sp 分段。
+  回答：若 |cmd_x|、|cmd_y| 遠小於 |meas_x|、|meas_y| ⇒ 偏轉**非目標要求**、在執行時產生。
   只描述，不推因果；不調觀測器、不提出補償。
+r2（Codex 20261022_131054）：
+  - 殘差改在**共同把手座標**以旋轉矩陣閉合：R_c、R_s、R_m 為 Ec、Es、Em 的旋轉部分，
+    D_SC＝R_s·R_cᵀ、D_MS＝R_m·R_sᵀ、D_MC＝R_m·R_cᵀ（左乘＝空間座標），逐筆驗證 D_MC＝D_MS·D_SC（閉合誤差另存）後各取旋轉向量。
+    舊版的 exec＝rotvec(R_cᵀR_m) 是命令局部座標，作廢。旋轉向量不相減、不以分箱中位數閉合。
+  - 移除物理來源百分比分攤：sp 為靜態平衡參考、d̂ 由量測更新 ⇒ 只陳述「目標沒有要求增加的 x／y 偏轉；靜態平衡參考也有部分偏轉，
+    但與實測仍有差距；此差距包含動態落後、接觸負載、模型及估計誤差等尚未分離的因素」。
+  - 缺 offset_d_hat ⇒ sp 相關量記 NA（不默認零）。觸發快照只收步號**恰等於**觸發步者；之後的快照另列 post_trigger。
+  - 先保存逐筆分解與閉合誤差，再產生分箱摘要。
 
     python3 evaluation/door_k3a_rot_source.py <out_json> <run_dir> [...]   # 已存在則拒絕覆寫
 """
@@ -38,6 +45,18 @@ def rel(H, T, G):
     return np.linalg.inv(H) @ T @ G
 
 
+def decompose(Rc, Rs, Rm):
+    """共同（空間＝把手）座標的旋轉殘差與閉合誤差。Rs 可為 None（缺 d̂ ⇒ NA）。回傳度。"""
+    D_MC = Rm @ Rc.T
+    out = {'D_MC_deg': np.degrees(rotvec(D_MC)).tolist(), 'D_SC_deg': None, 'D_MS_deg': None, 'closure_err': None}
+    if Rs is not None:
+        D_SC, D_MS = Rs @ Rc.T, Rm @ Rs.T
+        out['D_SC_deg'] = np.degrees(rotvec(D_SC)).tolist()
+        out['D_MS_deg'] = np.degrees(rotvec(D_MS)).tolist()
+        out['closure_err'] = float(np.abs(D_MS @ D_SC - D_MC).max())
+    return out
+
+
 def run_one(run):
     t = json.load(open(os.path.join(run, 'task.json')))
     r = json.load(open(os.path.join(run, 'room_run.json')))
@@ -49,7 +68,7 @@ def run_one(run):
     s_open = next(e['step'] for e in tr if e.get('phase') == 'OPEN')
     s_trig = next((e['step'] for e in tr if e.get('phase') == 'ABORTED'), None)
     G = np.array(t['G_T_H'])
-    rows, n_unpaired, trig = [], 0, None
+    rows, post, n_unpaired, trig = [], [], 0, None
     for L in a['log']:
         si = L.get('solve_in')
         if not si or si.get('T_cyc') is None:
@@ -67,16 +86,21 @@ def run_one(run):
         qm = np.array(si['q_meas'])
         Tc = np.array(si['T_cyc']).reshape(4, 4)
         Tm = KC._tcp(qm[:3], qm[3:9])
-        Ts = KC._tcp(qm[:3], np.array(si['s_meas']) + np.array(si.get('offset_d_hat') or np.zeros(6)))
-        Ec, Es, Em = rel(H, Tc, G), rel(H, Ts, G), rel(H, Tm, G)
+        dh = si.get('offset_d_hat')
+        Ts = None if dh is None else KC._tcp(qm[:3], np.array(si['s_meas']) + np.array(dh))
+        Ec, Em = rel(H, Tc, G), rel(H, Tm, G)
+        Es = None if Ts is None else rel(H, Ts, G)
+        dec = decompose(Ec[:3, :3], None if Es is None else Es[:3, :3], Em[:3, :3])
         row = {'snap_t': ts, 'step': step, 'q_deg': math.degrees(q),
-               'cmd_deg': np.degrees(rotvec(Ec[:3, :3])).tolist(), 'sp_deg': np.degrees(rotvec(Es[:3, :3])).tolist(),
-               'meas_deg': np.degrees(rotvec(Em[:3, :3])).tolist(),
-               'exec_deg': np.degrees(rotvec(Ec[:3, :3].T @ Em[:3, :3])).tolist(),
+               'cmd_deg': np.degrees(rotvec(Ec[:3, :3])).tolist(),
+               'sp_deg': None if Es is None else np.degrees(rotvec(Es[:3, :3])).tolist(),
+               'meas_deg': np.degrees(rotvec(Em[:3, :3])).tolist(), **dec,
                'cmd_p_mm': (Ec[:3, 3] * 1e3).tolist(), 'meas_p_mm': (Em[:3, 3] * 1e3).tolist()}
-        if s_trig is not None and step >= s_trig:
-            if trig is None:
-                trig = row
+        if s_trig is not None and step == s_trig:
+            trig = row
+            continue
+        if s_trig is not None and step > s_trig:
+            post.append(row)
             continue
         rows.append(row)
     bins = {}
@@ -86,11 +110,20 @@ def run_one(run):
     out = {}
     for k in sorted(bins):
         L = bins[k]
-        med = lambda key: np.median(np.array([x[key] for x in L]), axis=0).tolist()
-        out[k] = {'n': len(L), **{key: med(key) for key in ('cmd_deg', 'sp_deg', 'meas_deg', 'exec_deg', 'cmd_p_mm', 'meas_p_mm')}}
+        def med(key):
+            v = [x[key] for x in L if x[key] is not None]
+            return (None if not v else np.median(np.array(v), axis=0).tolist()), len(v)
+        d = {'n': len(L)}
+        for key in ('cmd_deg', 'sp_deg', 'meas_deg', 'D_MC_deg', 'D_SC_deg', 'D_MS_deg', 'cmd_p_mm', 'meas_p_mm'):
+            d[key], d[key + '_n'] = med(key)
+        ce = [x['closure_err'] for x in L if x['closure_err'] is not None]
+        d['closure_err_max'] = max(ce) if ce else None
+        out[k] = d
     first = rows[0] if rows else None
+    ce = [x['closure_err'] for x in rows if x['closure_err'] is not None]
     return {'run': os.path.basename(os.path.normpath(run)), 'step_open': s_open, 'step_trigger': s_trig, 'n_snapshots': len(rows),
-            'n_unpaired': n_unpaired, 'first_snapshot': first, 'trigger_snapshot': trig, 'bins': out}
+            'n_unpaired': n_unpaired, 'n_sp_na': sum(1 for x in rows if x['sp_deg'] is None), 'closure_err_max': max(ce) if ce else None,
+            'first_snapshot': first, 'trigger_snapshot': trig, 'post_trigger_snapshots': post, 'rows': rows, 'bins': out}
 
 
 def main():
@@ -99,15 +132,17 @@ def main():
         raise SystemExit(f'{out} 已存在，不覆寫')
     res = {'bin_deg': BIN, 'runs': [run_one(r) for r in sys.argv[2:]],
            'note': '純離線分解（只讀）。旋轉向量為把手座標（x 沿桿、y 門扇法向、z 鉛直），度；夾持剛性下的機構應有相對轉動＝0。'
-                   'cmd＝目標相對把手、sp＝設定點加 d̂ 的靜態參考、meas＝實測、exec＝命令到實測。配對以求解快照時刻與物理步 sim_t（≤ 1e-4 s）。'}
+                   'cmd＝目標相對把手、sp＝設定點加 d̂ 的靜態平衡參考、meas＝實測。殘差 D_SC＝R_sR_cᵀ、D_MS＝R_mR_sᵀ、D_MC＝R_mR_cᵀ（共同把手座標），'
+                   '逐筆閉合 D_MC＝D_MS·D_SC。不作物理來源百分比分攤。配對以求解快照時刻與物理步 sim_t（≤ 1e-4 s）。', 'version': 2}
     json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1, default=float)
     f = lambda v: '[' + ', '.join(f'{x:+.3f}' for x in v) + ']'
     for R in res['runs']:
-        print(f"== {R['run']} 快照 {R['n_snapshots']}、未配對 {R['n_unpaired']}、OPEN 步 {R['step_open']}、觸發 {R['step_trigger']}")
+        print(f"== {R['run']} 快照 {R['n_snapshots']}、未配對 {R['n_unpaired']}、sp NA {R['n_sp_na']}、閉合誤差最大 {R['closure_err_max']:.2e}、"
+              f"觸發 {'有' if R['trigger_snapshot'] else '無'}、觸發後 {len(R['post_trigger_snapshots'])}")
         for k in ('0.00', '0.10', '0.25', '0.40', '0.45', '0.50'):
             d = R['bins'].get(k)
             if d:
-                print(f"  q {k}° n{d['n']:2d} cmd {f(d['cmd_deg'])} sp {f(d['sp_deg'])} meas {f(d['meas_deg'])} exec {f(d['exec_deg'])}")
+                print(f"  q {k}° n{d['n']:2d} cmd {f(d['cmd_deg'])} meas {f(d['meas_deg'])} D_MC {f(d['D_MC_deg'])} D_SC {f(d['D_SC_deg'])} D_MS {f(d['D_MS_deg'])}")
 
 
 if __name__ == '__main__':
