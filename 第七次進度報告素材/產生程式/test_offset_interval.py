@@ -109,6 +109,39 @@ class Interval(unittest.TestCase):
         with self.assertRaises(ValueError):
             OI.IntervalOffsetObserver(ALPHA, DTP, tau_s=0.0)
 
+    # ---- Codex 20261022 必修
+    def test_nonfinite_config_and_init_rejected(self):
+        for kw in ({'d0': [float('nan')] * 6}, {'d0': [0, float('inf'), 0, 0, 0, 0]}, {'tau_s': float('inf')}, {'max_rad': float('inf')},
+                   {'tau_s': float('nan')}):
+            with self.assertRaises(ValueError, msg=str(kw)):
+                OI.IntervalOffsetObserver(ALPHA, DTP, **kw)
+        with self.assertRaises(ValueError):
+            OI.IntervalOffsetObserver(ALPHA, float('inf'))
+        a = ALPHA.copy()
+        a[2] = float('nan')
+        with self.assertRaises(ValueError):
+            OI.IntervalOffsetObserver(a, DTP)
+
+    def test_nonfinite_result_not_committed(self):
+        o = mk()
+        run(o, 20, lambda k, j: np.zeros(6))
+        d0 = o.d.copy()
+        r = o.update(np.full(6, -1e308), np.full(6, 1e308), [np.zeros(6)] * 3, np.zeros(6))   # 輸入有限、s − q 溢位 ⇒ 結果非有限
+        self.assertEqual(r['used'], 'held')
+        np.testing.assert_array_equal(o.d, d0)
+
+    def test_overlong_interval_held(self):
+        """Codex 反例：100 步區間（m·dt_p/τ＝2）若照套增益會把估計翻號；登錄上限 m_max＝10 ⇒ 保持。"""
+        o = mk(d0=np.array([0.0, 0.01, 0, 0, 0, 0]))
+        recs = run(o, 1, lambda k, j: np.zeros(6), m_of_k=lambda k: 100)
+        self.assertEqual(recs[0]['used'], 'held')
+        self.assertIn('interval_too_long', recs[0]['why'])
+        self.assertAlmostEqual(o.d[1], 0.01)
+        ok = run(mk(), 1, lambda k, j: np.zeros(6), m_of_k=lambda k: 10)
+        self.assertEqual(ok[0]['used'], 'updated')
+        with self.assertRaises(ValueError):
+            OI.IntervalOffsetObserver(ALPHA, DTP, tau_s=0.05, m_max=10)                 # 10·0.01/0.05＝2 > 1
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
