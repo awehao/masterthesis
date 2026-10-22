@@ -85,6 +85,7 @@ def main() -> int:
         ck('紀錄 d_hat_after＝報告末值', not upd or [round(x, 6) for x in upd[-1]['d_hat_after']] == of.get('d_hat_rad'),
            f"{upd[-1]['d_hat_after'] if upd else None} vs {of.get('d_hat_rad')}")
         ck('緩衝無衝突', ((iv.get('buffer') or {}).get('n_conflict') or 0) == 0, str(iv.get('buffer')))
+        ck('報告含入口拒收原因計數', 'entry_rejects' in (iv.get('buffer') or {}), str((iv.get('buffer') or {}).get('entry_rejects')))
 
     print('\nR3  interval＋失效閂鎖（exec_mode 3）⇒ 失效之後不再提交')
     w = scenario('r3', ['--ready-after', '1.0', '--fail-at', '6.0'], ['--offset-observer', 'interval'], dom=2)
