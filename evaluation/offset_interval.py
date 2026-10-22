@@ -59,21 +59,25 @@ class IntervalOffsetObserver:
             s = s + self.dtp * u
         return q, s
 
-    def update(self, q0, s0, applied, q1):
-        """一個完整區間。回傳紀錄：used（updated／held）、why、m、pred_residual（樣本外，更新前 d̂）、d_obs、d_hat_before／after。"""
+    def update_setpoints(self, q0, s_seq, q1):
+        """同 update，但輸入為區間內**逐步實際設定點** s_j（j＝step_k … step_{k+1}−1，長度 m），不積分套用速度。"""
         rec = {'used': 'held', 'why': None, 'm': None, 'pred_residual': None, 'd_obs': None, 'd_hat_before': self.d.tolist()}
         try:
-            applied = list(applied) if applied is not None else None
-            if not applied:
+            s_seq = [self._vec(x) for x in (s_seq or [])]
+            if not s_seq:
                 raise ValueError('no_steps')
-            with np.errstate(over='ignore', invalid='ignore'):          # 溢位交給下方有限性檢查（不提交）
-                q_pred, _ = self.predict(q0, s0, applied)
+            q = self._vec(q0).copy()
             q1 = self._vec(q1)
         except (TypeError, ValueError) as e:
             self.n_held += 1
             rec.update(why=f'incomplete:{e}', d_hat_after=self.d.tolist())
             return rec
-        m = len(applied)
+        with np.errstate(over='ignore', invalid='ignore'):
+            for sj in s_seq:
+                q = q + self.alpha * (sj - q) + self.alpha * self.d
+        return self._commit(rec, len(s_seq), q, q1)
+
+    def _commit(self, rec, m, q_pred, q1):
         rec['m'] = m
         if m > self.m_max:
             self.n_held += 1
@@ -90,5 +94,21 @@ class IntervalOffsetObserver:
             return rec
         self.d = d_new
         self.n_upd += 1
-        rec.update(used='updated', m=m, pred_residual=res.tolist(), d_obs=d_obs.tolist(), d_hat_after=self.d.tolist())
+        rec.update(used='updated', pred_residual=res.tolist(), d_obs=d_obs.tolist(), d_hat_after=self.d.tolist())
         return rec
+
+    def update(self, q0, s0, applied, q1):
+        """一個完整區間。回傳紀錄：used（updated／held）、why、m、pred_residual（樣本外，更新前 d̂）、d_obs、d_hat_before／after。"""
+        rec = {'used': 'held', 'why': None, 'm': None, 'pred_residual': None, 'd_obs': None, 'd_hat_before': self.d.tolist()}
+        try:
+            applied = list(applied) if applied is not None else None
+            if not applied:
+                raise ValueError('no_steps')
+            with np.errstate(over='ignore', invalid='ignore'):          # 溢位交給下方有限性檢查（不提交）
+                q_pred, _ = self.predict(q0, s0, applied)
+            q1 = self._vec(q1)
+        except (TypeError, ValueError) as e:
+            self.n_held += 1
+            rec.update(why=f'incomplete:{e}', d_hat_after=self.d.tolist())
+            return rec
+        return self._commit(rec, len(applied), q_pred, q1)

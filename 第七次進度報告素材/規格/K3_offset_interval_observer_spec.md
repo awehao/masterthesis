@@ -106,3 +106,63 @@ d_obs 是「區間內近似恆定的等效偏移」，**不是真實負載**。
 - 再出一版求解節點（ADM 版的複本，只做插入），旗標例如 `--offset-observer {admission,interval}`，預設不變。
 - interval 模式只取代偏移估計的更新；其餘控制與安全參數不動。
 - 逐輪紀錄：區間步號範圍、m、保持原因、d_obs、更新前後的 d̂、樣本外殘差。
+
+---
+
+# 修訂 2（2026-10-22；依 Codex 20261022_111624 三點補清；已實作薄接入，**未實跑**）
+
+## 9. 三點補清
+1. **雙向配對**（`offset_interval_feed.StepBuffer`）：
+   - 兩話題各自依步號入緩衝，兩者齊全才確認該步，與到達順序無關；
+   - 同一來源同步號再到：內容相同就忽略（計 dup），內容不同就把該步**永久判為衝突**，不覆寫；
+   - 確認條件：sim_t 一致（1e-9）、ready、**兩端 api_applied 都為真**、兩端 exec_mode＝0（全身控制正常）、值有限；
+   - 相鄰步的 sim_t 差＝dt_p（1e-6），在組區間時核對；
+   - 緩衝只留最近 256 步，被淘汰的視同缺漏，已淘汰範圍的遲到訊息不收。
+2. **推進與優先序**（`IntervalFeed.on_snapshot`）：
+   - **停止（_stop_rx）、失效停止（_stopped_on_fail）、握手閘門非 ARMED 優先**：保持並清除錨點，不依 exec_mode 數值放行。
+   - 快照無效（非有限、步號 < 0）：保持並清錨點。步號未前進：保持、錨點不變、不重複提交。步號倒退：保持並重設錨點。
+   - 其餘情況，**不論區間合格與否，錨點都移到當前快照**：不累積成超長區間，同一區間至多提交一次。
+3. **回放時間口徑**（`door_k3a_interval_replay_full.py` r2 → `door_k3a_interval_replay_full_r2.json`；原輸出保留）：
+   - 首次可提交更新為區間**終點**：兩趟都是 7.60→7.66 s、7.58→7.66 s，可提交時刻 **7.66 s**；
+   - 逐列保存 t0／t1／d_before／d_after；
+   - 相位起點比較改用「t1 ≤ 相位起點的最後一筆 d_after」（當時已可取得），實錄 d̂ 取 ≤ 相位起點的最後快照。
+
+## 10. 索引約定核對
+執行端的設定點在「本步寫入後」取樣；替身執行端先更新 s 再更新 q（約定 B），離線模型是先以舊 s 更新 q 再推進 s（約定 A）。
+以兩趟實錄比較兩種約定的相鄰殘差平均 |·|（mrad）：
+- door_k3a_1：HOLD 兩者相同；OPEN 時 A 為 0.47, 0.66, 0.89, 0.52，B 為 0.54, 0.80, 0.77, 0.54；
+- door_k3a_adm_1：OPEN 時 A 為 0.65, 1.02, 0.52, 0.50，B 為 0.71, 1.17, 0.42, 0.52。
+⇒ OPEN 期間殘差放大**不是**索引錯位造成的。沿用 A（與求解器既有預測一致）。
+
+## 11. 薄接入：`evaluation/dl3_wgmpc_wg2_adm2_node.py`（ADM 版的複本）
+- 只做插入，外加唯一一處替換：`if self._of_est …` 改為前置 `if self._of_feed …: _offset_update_interval` 再接 `elif self._of_est …`。
+- `--offset-observer {none,interval}`，預設 none ⇒ ADM 版行為逐字不變（不建物件、回呼不轉發）。
+- interval 模式需要 --offset-free 與 --arm-model setpoint；不可搭配 --offset-init-static；不可與 --offset-admission consistent 併用。
+- `_on_sp`、`_on_applied` 轉發給緩衝。applied 的手臂部分取 d[5:11]、mode 取 d[11]、api 取 d[15]。
+- 逐輪紀錄新增 `offset_interval` 欄位：t0、t1、step0、step1、m、used、why、d_before、d_after、d_obs、樣本外殘差。
+  報告的 offset_free 欄位加 observer 與 interval（計數、保持原因、緩衝 dup／conflict）。
+
+## 12. 測試
+- `test_offset_interval.py` 12/12（含嚴格模式）。
+- `test_offset_interval_feed.py` **14/14**：
+  - 兩種到達順序都收斂、d_obs 恰為真值；
+  - applied 永遠沒到、或快照後才到（只有當下區間保持，下一區間恢復）；
+  - 缺步後恢復；
+  - 衝突重複不覆寫、完全相同的重送忽略；
+  - 兩來源時間不符；步距錯誤；api_applied 無效（任一端）；exec_mode 異常；
+  - 停止優先（之後只重設錨點，不跨停止組區間）；
+  - 淘汰視同缺漏；過長區間不累積；快照未前進或倒退；
+  - 快照設定點不符、積分對帳不符；無效快照。
+- `test_dl3_wgmpc_wg2_adm2_node.py` **8/8**：
+  - 結構回歸：相對 ADM 版只有插入加一處替換，並逐行比對；
+  - 參數預設 none、choices；模式函式五種拒絕組合；
+  - 以節點真正的 `_on_sp`、`_on_applied`（假 self）餵兩種到達順序：收斂、b＝α⊙d̂ 逐位元、計數一致；
+  - 停止、閘門非 ARMED、失效停止都優先；
+  - 預設 none 時回呼不轉發，原有交叉核對照常；api 與 mode 轉發正確。
+- `test_dl3_wgmpc_wg2_adm2_ros.py`（ROS 假世界，用替身執行端、真正的 ADM2 節點）**全部通過**：
+  - R1 預設：observer none，無 offset_interval，正常發布；
+  - R2 interval：218 次更新；報告計數＝紀錄計數；m ∈ {5, 6}；每區間至多提交一次；d̂ 末值一致；緩衝無衝突（唯一保持為啟動時缺設定點）；
+  - R3 失效閂鎖後無更新；
+  - R4 api_applied 失效後無更新。
+  - 替身沒有物理，手臂靜止、無偏移（d̂＝0）：這只核接線，不核估計值。
+- 這些都只是結構回歸、節點方法離線測試與 ROS 假世界接線測試，**不等於 Isaac 閉迴路已驗證**。

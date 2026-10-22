@@ -4,9 +4,11 @@
 自第一個求解快照起到最後一個快照，d̂₀＝0，逐相鄰快照區間更新（m＝兩快照之間的物理步數；> m_max ⇒ 保持）。
 離線以「快照設定點＋區間內各物理步套用速度積分」代替逐步設定點歷史（room 紀錄無逐步設定點；積分對帳先前驗證 ≤ 3e-8 rad，本檔逐區間再報）。
 報：區間步數分布、保持次數與原因、首次更新時刻、各相位起點的 d̂ 與實錄 d̂ 比較、樣本外區間條件預測殘差分布（依相位）。
+r2（Codex 20261022_111624 口徑修正）：首次可提交更新時刻＝首個有效區間的**終點** t1（不是起點）；逐列保存 t0／t1／d_before／d_after；
+相位起點比較用**當時已可取得**的估計（t1 ≤ 相位起點的最後一筆 d_after），實錄 d̂ 取 ≤ 相位起點的最後一個快照。
 開迴路：手臂軌跡不隨估計改變，不得稱閉迴路行為。
 
-    python3 evaluation/door_k3a_interval_replay_full.py <run_dir> [...]   # 寫 <run_dir>/analysis/door_k3a_interval_replay_full.json（已存在則拒絕覆寫）
+    python3 evaluation/door_k3a_interval_replay_full.py <run_dir> [...]   # 寫 <run_dir>/analysis/door_k3a_interval_replay_full_r2.json（已存在則拒絕覆寫）
 """
 import json
 import os
@@ -21,7 +23,7 @@ import offset_interval as OI                          # noqa: E402
 
 
 def one(run):
-    out = os.path.join(run, 'analysis', 'door_k3a_interval_replay_full.json')
+    out = os.path.join(run, 'analysis', 'door_k3a_interval_replay_full_r2.json')
     if os.path.exists(out):
         raise SystemExit(f'{out} 已存在，不覆寫')
     t = json.load(open(os.path.join(run, 'task.json')))
@@ -54,18 +56,24 @@ def one(run):
         if rec['used'] == 'held':
             key = (rec['why'] or '').split('（')[0]
             held[key] = held.get(key, 0) + 1
-        rows.append({'t0': si['snap_sim_t_exact'], 'phase': phase_at(si['snap_sim_t_exact']), 'm': len(applied), 'used': rec['used'],
+        rows.append({'t0': si['snap_sim_t_exact'], 't1': sn['snap_sim_t_exact'], 'd_before': rec['d_hat_before'],
+                     'd_logged_t0': si.get('offset_d_hat'),
+                     'phase': phase_at(si['snap_sim_t_exact']), 'm': len(applied), 'used': rec['used'],
                      'why': rec['why'], 's_int_mismatch': float(np.abs(s_int - np.array(sn['s_meas'])).max()),
                      'pred_residual': rec.get('pred_residual'), 'd_after': rec['d_hat_after'], 'd_logged_next': sn.get('offset_d_hat')})
     m_counts = {}
     for x in rows:
         m_counts[str(x['m'])] = m_counts.get(str(x['m']), 0) + 1
-    first_upd = next((x['t0'] for x in rows if x['used'] == 'updated'), None)
+    first_upd = next(({'t0': x['t0'], 't1': x['t1']} for x in rows if x['used'] == 'updated'), None)
     at_phase = {}
     for e in ev:
-        w = [x for x in rows if x['t0'] >= e['t']]
-        if w:
-            at_phase[e['to']] = {'t': w[0]['t0'], 'd_interval': w[0]['d_after'], 'd_logged': w[0]['d_logged_next']}
+        avail = [x for x in rows if x['t1'] <= e['t'] + 1e-9]
+        logged = [x for x in rows if x['t0'] <= e['t'] + 1e-9]
+        at_phase[e['to']] = {'phase_t': e['t'],
+                             'd_interval_available': (avail[-1]['d_after'] if avail else [0.0] * 6),
+                             'd_interval_available_since_t1': (avail[-1]['t1'] if avail else None),
+                             'd_logged': (logged[-1]['d_logged_t0'] if logged else None),
+                             'd_logged_snapshot_t': (logged[-1]['t0'] if logged else None)}
     by_phase = {}
     for ph in sorted({x['phase'] for x in rows if x['phase']}):
         w = [x for x in rows if x['phase'] == ph and x['used'] == 'updated']
