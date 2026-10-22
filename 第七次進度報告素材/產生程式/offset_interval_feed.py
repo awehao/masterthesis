@@ -82,6 +82,7 @@ class StepBuffer:
         self.n_dup = 0
         self.n_conflict = 0
         self.n_bad = 0
+        self.entry_rejects = {}
 
     def _put(self, store, step, val):
         step = as_step(step)
@@ -112,6 +113,56 @@ class StepBuffer:
                 self.ap.pop(k, None)
                 self.conflict.discard(k)
             self.evicted_below = cut
+
+    # ---- 入口級原始驗證（節點回呼最前面呼叫；非法 ⇒ 回呼直接返回，不進任何既有解析）----
+    def _reject_entry(self, why):
+        self.n_bad += 1
+        self.entry_rejects[why] = self.entry_rejects.get(why, 0) + 1
+        return False
+
+    def accept_raw_setpoint(self, data, n_cols=11):
+        """/coman/arm_setpoint 原始資料：[step, t, ready, sp×6, mode, api]。只驗契約必要欄位（步號、時間、ready、mode、api、欄數）；
+        sp 值的有限性由後續 confirmed() 處理，不在入口要求。"""
+        try:
+            d = list(data)
+        except TypeError:
+            return self._reject_entry('sp_not_sequence')
+        if len(d) != n_cols:
+            return self._reject_entry('sp_bad_length')
+        if as_step(d[0]) is None:
+            return self._reject_entry('sp_step')
+        if as_time(d[1]) is None:
+            return self._reject_entry('sp_time')
+        if as_flag(d[2]) is None:
+            return self._reject_entry('sp_ready')
+        if as_step(d[9]) is None:
+            return self._reject_entry('sp_mode')
+        if as_flag(d[10]) is None:
+            return self._reject_entry('sp_api')
+        return True
+
+    def accept_raw_applied(self, data):
+        """/coman/applied_cmd 原始資料（18 欄契約）。契約必要欄位：步號 d[0]、時間 d[1]、mode d[11]、api d[15]（須有 ≥ 16 欄）。
+        另外既有解析會對 d[13]、d[14]、d[16] 做 int()：這三欄只要求「有限」（避免既有轉型崩潰），不要求整數值或語意；
+        d[12]、d[17] 等診斷欄位可合法為 NaN，不驗。手臂速率有限性由 confirmed() 處理。"""
+        try:
+            d = list(data)
+        except TypeError:
+            return self._reject_entry('ap_not_sequence')
+        if len(d) < 16:
+            return self._reject_entry('ap_bad_length')
+        if as_step(d[0]) is None:
+            return self._reject_entry('ap_step')
+        if as_time(d[1]) is None:
+            return self._reject_entry('ap_time')
+        if as_step(d[11]) is None:
+            return self._reject_entry('ap_mode')
+        if as_flag(d[15]) is None:
+            return self._reject_entry('ap_api')
+        for i in (13, 14, 16):
+            if i < len(d) and as_time(d[i]) is None:
+                return self._reject_entry(f'ap_field{i}_nonfinite')
+        return True
 
     def on_setpoint(self, step, t, ready, sp, mode, api):
         v, tt, rd, md, ap = _fin6(sp), as_time(t), as_flag(ready), as_step(mode), as_flag(api)

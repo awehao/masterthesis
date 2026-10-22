@@ -90,6 +90,7 @@ import offset_interval as OINT                                   # noqa: E402
 import offset_interval_feed as OFEED                             # noqa: E402
 from wgmpc_sp_handshake import (ARMED, FAILED, HOLD, INIT,       # noqa: E402
                                 SetpointGate, SpSample)
+from wgmpc_sp_handshake import SP_COLS                         # noqa: E402  ADM2：入口欄數驗證
 
 
 def _offset_admission_mode(a):
@@ -678,6 +679,8 @@ class WGMPCNode(Node):
 
     def _on_sp(self, m):
         """`/coman/arm_setpoint`。**只寫緩衝與閘門，不在此下任何裁示。**"""
+        if self._of_feed is not None and not self._of_feed.buf.accept_raw_setpoint(m.data, len(SP_COLS)):
+            return                                        # interval 模式：契約欄位非法 ⇒ 在任何既有解析前拒收
         try:
             smp = SpSample.from_data(m.data)
         except ValueError:
@@ -728,6 +731,8 @@ class WGMPCNode(Node):
         底盤為**本體**座標；手臂是**套用設定點對應的命令速率**，
         不是實測關節速度。
         """
+        if self._of_feed is not None and not self._of_feed.buf.accept_raw_applied(m.data):
+            return                                        # interval 模式：契約欄位非法 ⇒ 在任何既有解析前拒收
         if len(m.data) >= 11:
             d = m.data
             if self._of_feed is not None:                 # 逐步緩衝：手臂套用速率、exec_mode、api_applied

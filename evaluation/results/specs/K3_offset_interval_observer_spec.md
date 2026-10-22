@@ -195,3 +195,24 @@ d_obs 是「區間內近似恆定的等效偏移」，**不是真實負載**。
 - `test_offset_interval_feed.py` **19/19**（含嚴格模式）；`test_dl3_wgmpc_wg2_adm2_node.py` **10/10**。
 - ROS 假世界 `test_dl3_wgmpc_wg2_adm2_ros.py` **全部通過**（R2：219 次更新、無保持）。
 - 回歸：offset_interval 12、ADM 節點 5、admission 14。
+
+---
+
+# 修訂 4（2026-10-22；依 Codex 20261022_113301；未實跑）
+
+## 15. 入口級拒收（interval 模式）
+- `_on_sp`、`_on_applied` **最開頭**（任何既有解析、`SpSample.from_data`、閘門餵入、狀態寫入之前）呼叫
+  `StepBuffer.accept_raw_setpoint`／`accept_raw_applied`。非法就記錄（n_bad、entry_rejects[原因]）並返回。
+- 只驗契約必要欄位：
+  - setpoint：欄數＝11；步號（有限整數值）、時間（有限）、ready（bool 或 0／1）、mode（有限整數值）、api（bool 或 0／1）。sp 值的有限性留給 confirmed()。
+  - applied：欄數 ≥ 16；步號、時間、mode d[11]、api d[15]。另外，既有解析會 int() 的 d[13]、d[14]、d[16] 只要求有限（避免既有轉型崩潰），不要求語意。
+    d[12]、d[17] 等診斷欄位可合法為 NaN，不驗。
+- 預設 none 路徑不經過入口驗證，行為照舊。測試記錄了既有行為：1.5 由 SpSample 截斷，inf 由既有轉型拋 OverflowError。
+
+## 16. 測試
+- `test_dl3_wgmpc_wg2_adm2_node.py` **14/14**，新增 4 項入口級反例：
+  - setpoint 八種非法組合（步號 1.5、inf、nan，ready＝2，mode 0.5、inf，api nan，t inf）加欄數不符：不拋例外，閘門與 _put 都未被呼叫，緩衝無資料；
+  - applied 六種非法組合（步號 inf、1.5，mode inf，api＝2，n_recv inf，t nan）：不拋例外，_step_t 與 _applied 未被寫入；診斷欄位 NaN 的有效訊息照收；
+  - 每步穿插非法訊息後，有效訊息照收，更新完全恢復；
+  - 預設 none 的既有行為不變。
+- feed 19/19；ROS 假世界全過。
