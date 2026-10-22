@@ -1,1 +1,23 @@
 Queued message 01a161fa-63a7-7c91-b49e-1235273a22df for thread 01a105a已排入 01a105a3-84d4-7f40-90be-5847b88ffa77；等待回覆（最多 2400 s）…
+/home/howardchen/.codex/sessions/2026/10/05/rollout-2026-10-05T11-25-25-01a105a3-84d4-7f40-90be-5847b88ffa77_01a10a18-4827-7fd3-b7f4-2559783fc44c.jsonl
+回覆已存：/home/howardchen/masterthesis/reviews/20261022_125921_reply.md
+-----
+裁定：**實作審查通過，核可依現有凍結執行一次 K3-A-X。**本輪未改檔、未啟動模擬。
+
+已確認：
+
+- X 相位機 **7/7**、完整判定器 **21/21** 通過；原 K3-A／U 回歸測試均通過。
+- 旋轉把手座標下仍只沿桿軸移動；錯軸與疊加 y 位移均被拒絕。
+- 新凍結 **130 項核對成功**，U 版凍結仍吻合；運行器接線正確，趟次目錄尚不存在。
+
+核可一次：
+
+```bash
+RUN_ID=door_k3ax_ev_1 ROS_DOMAIN_ID=97 \
+RUNNER=evaluation/run_door_k3ax_ev.sh \
+bash evaluation/run_guarded_v2.sh
+```
+
+跑後用 `door_k3ax_check.py` 判定，回報擷取與時序、OPEN 首筆連續性、重對齊前後的 **x 參考差及 x 回報切向合量**、同門角承載分布、首次低接觸及終止原因。不要直接沿用 U 報告的 y 欄位；窗口按來源物理步對齊，觸發步及中止後另列。
+
+**不調參、不補跑、不疊加 y 卸載。**無論結果，都先保留原始資料送審；通過也只是一趟沿桿單軸介入觀察，不代表根因已確認。
