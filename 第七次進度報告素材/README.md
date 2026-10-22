@@ -238,5 +238,6 @@
 | 20 | K3-A door_k3a_adm_1（偏移準入 consistent；同樣中止 finger_contact_lost）：門角／參考角、兩指接觸、抓取偏移、手指開度與腕力，與圖 18 對照 |
 | 21 | K3-A door_k3a_int_1（區間等效偏移觀測 interval；同樣中止 finger_contact_lost，單指卸載於門 0.48°）：與圖 18、20 對照 |
 | 22 | door_k3a_ev_1 接觸承載取證：兩指 Σ|fn|、接觸重心（把手座標 x／y／z）、法向、切向／法向代理比（μs 1.0、μd 0.8） |
+| 23 | door_k3au_ev_1 接近軸參考卸載介入（δ −1.06 mm）：HOLD 切向 y 7.7→3.3 N、目標−FK y 1.08→0.10 mm，但仍單指卸載中止 |
 
 模型檢查點（約 170 MB／個）與訓練環境不入版本控制（`.gitignore`）；選定檢查點 sha256 見 `資料/dl0_train_run1_result.json`。
