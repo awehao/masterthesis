@@ -7,8 +7,11 @@
 另列 j6 反作用旋量原始值（子關節座標、參考點在 joint6；**不與接觸合量比較分量符號**）與 DOF 方向量測力。
 窗口：HOLD、OPEN→首次單指 < 0.5 N（物理步，依 room 的 bar 分類力）、首次低接觸→中止、中止後。
 結果只稱「取證觀察」；法向作用側未核清 ⇒ 不宣稱物理合力矩。
+r2（Codex 20261022_120507）：切向無有效資料 ⇒ NA 並記有效數（不補零）；「有回報點」與「有非零法向力」分開計；
+HOLD 切向量報兩指「回報切向合量」的把手 y 分量中位與範圍；幾何中心遷移只稱「承載分布重新分配」，不稱滑移距離。
+輸出改為 *_r2，原輸出保留。
 
-    python3 evaluation/door_k3a_evidence_report.py <run_dir>   # 寫 <run_dir>/analysis/door_k3a_evidence_report.{json,png}（已存在則拒絕覆寫）
+    python3 evaluation/door_k3a_evidence_report.py <run_dir>   # 寫 <run_dir>/analysis/door_k3a_evidence_report_r2.{json,png}（已存在則拒絕覆寫）
 """
 import json
 import math
@@ -36,10 +39,16 @@ def per_step(row):
     for nm, s in summ.items():
         out[nm] = dict(s)
     for nm, lst in (row.get('friction') or {}).items():
-        ft = np.array([x['ft'] for x in lst if None not in x['ft']] or [[0.0, 0.0, 0.0]])
-        v = R.T @ ft.sum(axis=0)
-        out.setdefault(nm, {})['ft_handle_sum'] = v.tolist()
-        out[nm]['n_friction'] = len(lst)
+        valid = [x['ft'] for x in lst if x.get('ft') is not None and None not in x['ft']]
+        d = out.setdefault(nm, {})
+        d['n_friction'] = len(lst)
+        d['n_friction_valid'] = len(valid)
+        # 無有效切向資料 ⇒ NA（不補零）；Codex 20261022_120507
+        d['ft_handle_sum'] = (R.T @ np.array(valid).sum(axis=0)).tolist() if valid else None
+    for nm, lst in (row.get('contacts') or {}).items():
+        d = out.setdefault(nm, {})
+        d['n_points_reported'] = len(lst)
+        d['n_points_nonzero_fn'] = sum(1 for x in lst if x.get('fn') is not None and abs(x['fn']) > 0.0)
     for nm, d in out.items():
         fa = d.get('fn_abs_sum')
         ft = d.get('ft_handle_sum')
@@ -49,8 +58,8 @@ def per_step(row):
 
 def main():
     run = sys.argv[1]
-    out_j = os.path.join(run, 'analysis', 'door_k3a_evidence_report.json')
-    out_p = os.path.join(run, 'analysis', 'door_k3a_evidence_report.png')
+    out_j = os.path.join(run, 'analysis', 'door_k3a_evidence_report_r2.json')
+    out_p = os.path.join(run, 'analysis', 'door_k3a_evidence_report_r2.png')
     for p in (out_j, out_p):
         if os.path.exists(p):
             raise SystemExit(f'{p} 已存在，不覆寫')
@@ -87,7 +96,9 @@ def main():
         d = {'n_steps': len(w), 't0': w[0]['t'] if w else None, 't1': w[-1]['t'] if w else None}
         for b in FINGERS + ('uflite_gripper_link', 'link_eef', 'link6'):
             g = [x['bodies'].get(b) for x in w]
-            d[b] = {'n_steps_in_contact': sum(1 for v in g if v and v.get('n')),
+            d[b] = {'n_steps_with_points': sum(1 for v in g if v and v.get('n_points_reported')),
+                    'n_steps_with_nonzero_fn': sum(1 for v in g if v and v.get('n_points_nonzero_fn')),
+                    'n_points_nonzero_fn': stat([v.get('n_points_nonzero_fn') for v in g if v]),
                     'n_points': stat([v.get('n') for v in g if v]),
                     'fn_signed_sum': stat([v.get('fn_signed_sum') for v in g if v]),
                     'fn_abs_sum': stat([v.get('fn_abs_sum') for v in g if v]),
@@ -95,12 +106,16 @@ def main():
                     'n_handle_absw': stat([v.get('n_handle_absw') for v in g if v]),
                     'ft_handle_sum': stat([v.get('ft_handle_sum') for v in g if v]),
                     'proxy_ratio': stat([v.get('proxy_ratio') for v in g if v])}
+        # 兩指「回報切向合量」的把手 y 分量合計（作用側未核前不稱拉門力）
+        hy = [sum((x['bodies'].get(b) or {}).get('ft_handle_sum')[1] for b in FINGERS)
+              for x in w if all((x['bodies'].get(b) or {}).get('ft_handle_sum') is not None for b in FINGERS)]
+        d['fingers_ft_hy_reported_sum'] = (None if not hy else {'median': float(np.median(hy)), 'min': float(min(hy)), 'max': float(max(hy)), 'n': len(hy)})
         d['j6_reaction_wrench_raw'] = stat([x['j6'] for x in w])
         d['dof_measured_efforts'] = stat([[x['eff'][k] for k in EV.ARM_DOF] for x in w if x['eff']])
         W[name] = d
     res = {'run': os.path.basename(os.path.normpath(run)), 't_hold': t_hold, 't_open': t_open, 't_first_low_phys': t_low, 'abort': ab,
            'windows': W,
-           'note': '取證觀察（只讀）。把手座標 x 沿桿、y 門扇法向、z 鉛直，原點＝把手 prim 原點。fn 可帶負號；幾何權重＝|fn|。'
+           'note': '取證觀察（只讀）。中心遷移＝承載分布重新分配（非滑移距離）；有回報點≠有承載。把手座標 x 沿桿、y 門扇法向、z 鉛直，原點＝把手 prim 原點。fn 可帶負號；幾何權重＝|fn|。'
                    '代理比＝|Σft|/Σ|fn|（pair 層級），不代表局部摩擦錐或滑移。j6 旋量為子關節座標、參考點 joint6，不與接觸合量比分量符號。'
                    '法向作用側未核 ⇒ 不宣稱物理合力矩。',
            'series_every_5': [{'t': x['t'], 'q_deg': x['q_deg'], 'bodies': {b: x['bodies'].get(b) for b in FINGERS}, 'j6': x['j6']} for x in rows[::5]]}
@@ -141,8 +156,9 @@ def main():
     brief = {}
     for name in ('HOLD', 'OPEN→first_low', 'first_low→abort'):
         d = W[name]
-        brief[name] = {b: {k: d[b][k] for k in ('n_steps_in_contact', 'n_points', 'fn_abs_sum', 'p_handle_absw_mm', 'n_handle_absw', 'ft_handle_sum', 'proxy_ratio')}
-                       for b in FINGERS}
+        brief[name] = {b: {k: d[b][k] for k in ('n_steps_with_points', 'n_steps_with_nonzero_fn', 'n_points', 'fn_abs_sum', 'p_handle_absw_mm',
+                                                'n_handle_absw', 'ft_handle_sum', 'proxy_ratio')} for b in FINGERS}
+        brief[name]['fingers_ft_hy_reported_sum'] = d['fingers_ft_hy_reported_sum']
     print(json.dumps({'t_open': t_open, 't_first_low_phys': t_low, 'abort_t': t_ab, 'windows': brief}, ensure_ascii=False, default=float))
 
 
