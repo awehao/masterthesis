@@ -3,7 +3,7 @@
 
     python3 evaluation/door_k3a_model_replay_check.py <run_dir> [...]   # 只印出，不寫檔
 """
-import json, os, sys, math
+import json, sys
 import numpy as np
 sys.path.insert(0, 'evaluation')
 import door_k3a_model_replay as MR, door_k2_check as KC
