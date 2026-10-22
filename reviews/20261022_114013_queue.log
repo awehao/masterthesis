@@ -1,0 +1,28 @@
+Queued message 01a161b1-f1e3-7c63-90db-b0ed95dc6a99 for thread 01a105a已排入 01a105a3-84d4-7f40-90be-5847b88ffa77；等待回覆（最多 2400 s）…
+/home/howardchen/.codex/sessions/2026/10/05/rollout-2026-10-05T11-25-25-01a105a3-84d4-7f40-90be-5847b88ffa77_01a10a18-4827-7fd3-b7f4-2559783fc44c.jsonl
+回覆已存：/home/howardchen/masterthesis/reviews/20261022_114013_reply.md
+-----
+**核可單次 `door_k3a_int_1` 功能確認。** 本輪僅唯讀核對，未啟動模擬。
+
+確認：105 項凍結核對通過、運行器語法通過、新趟次目錄不存在；新版只替換求解節點與觀測器旗標，`entry_rejects` 已納入落盤摘要，原物理判定器與中止鏈不變。
+
+由 Claude 執行一次：
+
+```bash
+RUN_ID=door_k3a_int_1 ROS_DOMAIN_ID=97 \
+RUNNER=evaluation/run_door_k3a_int.sh \
+bash evaluation/run_guarded_v2.sh
+```
+
+完成後：
+
+```bash
+python3 evaluation/door_k3a_check.py evaluation/runs/door_k3a_int_1
+```
+
+執行界線：
+
+- 不設測試覆寫；92 °C 熱中止不變，凍結前後皆核對。
+- 核對落盤 `observer=interval`、逐區間更新／保持原因及計數閉合；若沒有有效更新，不能當成觀測器效果驗證。
+- 維持 K3-A：不張爪、不退離、不進 K3-B。
+- **成功或失敗都先回報，不調參、不自動補跑。**
