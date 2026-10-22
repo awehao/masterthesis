@@ -8,6 +8,12 @@
   - 力矩**幾何代理量**：每指 Σ (p − o) × F，F＝fn·n（接觸點）與 ft（摩擦錨點）分開計，o＝把手 prim 原點或 TCP；把手座標 N·m。
     作用側：法向 fn·n 依夾合一致性推論為作用於門扇；切向作用側仍未完全確認 ⇒ 只稱代理量，不套用局部摩擦錐。
 任一指資料缺失 ⇒ 該步該量 NA（不補零），並報每箱有效筆數。
+r2（Codex 20261022_124707）：
+  - 窗口以 task trace 的**來源步號**對齊：OPEN 步＝第一列 phase＝OPEN 的 step；中止觸發步＝第一列 phase＝ABORTED 的 step；
+    窗＝[OPEN 步, 觸發步)，觸發步另列（trigger）。不再用浮點時間比較。
+  - 力矩先**逐步相加**（法向＋切向、兩指合計）再統計；另報各部分。仍是幾何代理量（切向作用側未完全確認），不是已驗證的物理淨力矩。
+  - 時間語意：task trace.t＝任務所用狀態的來源時間，非目標生效時間；精細先後應另用求解器同快照的 T_cyc／q_meas。
+    力重心變化只稱「承載重新分配」。
 
     python3 evaluation/door_k3a_open_bins.py <out_json> <run_dir> [...]   # 已存在則拒絕覆寫
 """
@@ -71,6 +77,15 @@ def per_step(x, s, I, tr, tr_t, G):
             d['M_t_handle'] = (R.T @ np.sum([np.cross(p - c, f) for p, f in zip(Pt, Ft)], axis=0)).tolist() if fl else [0.0, 0.0, 0.0]
             d['M_t_tcp'] = (R.T @ np.sum([np.cross(p - Tm[:3, 3], f) for p, f in zip(Pt, Ft)], axis=0)).tolist() if fl else [0.0, 0.0, 0.0]
         out[b] = d
+    # 逐步相加：兩指 × (法向＋切向)；任一部分 NA ⇒ NA
+    for o in ('handle', 'tcp'):
+        parts = [(out[b].get(f'M_n_{o}'), out[b].get(f'M_t_{o}')) for b in FINGERS]
+        if all(pn is not None and pt is not None for pn, pt in parts):
+            out[f'M_total_{o}'] = np.sum([np.array(pn) + np.array(pt) for pn, pt in parts], axis=0).tolist()
+            out[f'M_n_sum_{o}'] = np.sum([np.array(pn) for pn, _ in parts], axis=0).tolist()
+            out[f'M_t_sum_{o}'] = np.sum([np.array(pt) for _, pt in parts], axis=0).tolist()
+        else:
+            out[f'M_total_{o}'] = out[f'M_n_sum_{o}'] = out[f'M_t_sum_{o}'] = None
     return out
 
 
@@ -79,20 +94,28 @@ def run_bins(run):
     r = json.load(open(os.path.join(run, 'room_run.json')))
     I = {c: i for i, c in enumerate(r['steps_cols'])}
     ph = {e['to']: e['t'] for e in t['policy_events'] if 'to' in e}
-    ab = next((e for e in t['policy_events'] if 'abort' in e), None)
-    t_open, t_end = ph['OPEN'], (ab['t'] if ab else math.inf)
+    tr_all = t.get('trace') or []
+    s_open = next(e['step'] for e in tr_all if e.get('phase') == 'OPEN')
+    s_trig = next((e['step'] for e in tr_all if e.get('phase') == 'ABORTED'), None)
+    t_open = ph['OPEN']
     G = np.array(t['G_T_H'])
     room = {s[I['step']]: s for s in r['steps']}
     tr = sorted([e for e in t['trace'] if e.get('target') is not None], key=lambda e: e['t'])
     tr_t = np.array([e['t'] for e in tr])
     rows = []
+    trigger_row = None
     for ln in open(os.path.join(run, 'evidence.jsonl')):
         x = json.loads(ln)
-        if x['t'] is None or not (t_open <= x['t'] < t_end):
+        if x['t'] is None or x['step'] < s_open or (s_trig is not None and x['step'] > s_trig):
             continue
         s = room.get(x['step'])
         if s is not None:
-            rows.append(per_step(x, s, I, tr, tr_t, G))
+            rw = per_step(x, s, I, tr, tr_t, G)
+            rw['step'] = x['step']
+            if s_trig is not None and x['step'] == s_trig:
+                trigger_row = rw
+                continue
+            rows.append(rw)
     bins = {}
     for rw in rows:
         k = round(math.floor(max(rw['q_deg'], 0.0) / BIN) * BIN, 3)
@@ -108,11 +131,14 @@ def run_bins(run):
         d = {'n': len(L), 't0': L[0]['t'], 't1': L[-1]['t']}
         for key in ('tgt_fk_p_mm', 'tgt_fk_r_deg', 'grasp_p_mm', 'grasp_r_deg'):
             d[key], d[key + '_n'] = med(L, lambda x, key=key: x.get(key))
+        for key in ('M_total_handle', 'M_n_sum_handle', 'M_t_sum_handle', 'M_total_tcp', 'M_n_sum_tcp', 'M_t_sum_tcp'):
+            d[key], d[key + '_n'] = med(L, lambda x, key=key: x.get(key))
         for b in FINGERS:
             for key in ('fn_abs', 'centroid_mm', 'ft_handle', 'M_n_handle', 'M_t_handle', 'M_n_tcp', 'M_t_tcp'):
                 d[f'{b}.{key}'], d[f'{b}.{key}_n'] = med(L, lambda x, b=b, key=key: (x.get(b) or {}).get(key))
         out[f'{k:.2f}'] = d
-    return {'run': os.path.basename(os.path.normpath(run)), 't_open': t_open, 't_end': t_end, 'n_rows': len(rows), 'bins': out}
+    return {'run': os.path.basename(os.path.normpath(run)), 't_open': t_open, 'step_open': s_open, 'step_trigger': s_trig,
+            'n_rows': len(rows), 'trigger_row': trigger_row, 'bins': out}
 
 
 def main():
@@ -121,13 +147,16 @@ def main():
         raise SystemExit(f'{out} 已存在，不覆寫')
     res = {'bin_deg': BIN, 'runs': [run_bins(r) for r in sys.argv[2:]],
            'note': '只讀定位。把手座標 x 沿桿、y 門扇法向（+y 指向門內）、z 鉛直。力矩為幾何代理量（法向作用側由夾合一致性推論；切向作用側未完全確認）。'
-                   'tgt_fk_r＝目標相對 FK 的旋轉（把手座標旋轉向量）。不判定、不推因果。'}
+                   'tgt_fk_r＝目標相對 FK 的旋轉（把手座標旋轉向量）。窗口以來源步號對齊、觸發步另列；力矩先逐步相加再統計。'
+                   'trace.t 為來源時間（非生效時間）。不判定、不推因果。', 'version': 2}
     json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1, default=float)
     for R in res['runs']:
         print('==', R['run'], 'rows', R['n_rows'])
         for k, d in R['bins'].items():
             f = lambda v, s=1: None if v is None else [round(x * s, 2) for x in v]
-            print(f"  q {k}° n{d['n']:3d} tgt-fk p{f(d['tgt_fk_p_mm'])} r{f(d['tgt_fk_r_deg'])} grasp p{f(d['grasp_p_mm'])} r{f(d['grasp_r_deg'])}")
+            print(f"  q {k}° n{d['n']:3d} tgt-fk p{f(d['tgt_fk_p_mm'])} grasp p{f(d['grasp_p_mm'])} r{f(d['grasp_r_deg'])} "
+                  f"M_y(total/n/t, mN·m) {None if d['M_total_handle'] is None else round(d['M_total_handle'][1]*1e3,1)}/"
+                  f"{None if d['M_n_sum_handle'] is None else round(d['M_n_sum_handle'][1]*1e3,1)}/{None if d['M_t_sum_handle'] is None else round(d['M_t_sum_handle'][1]*1e3,1)}")
             for b in FINGERS:
                 print(f"      {b[-7:]} |fn| {None if d[b+'.fn_abs'] is None else round(d[b+'.fn_abs'],2)} cen{f(d[b+'.centroid_mm'])} ft{f(d[b+'.ft_handle'])} "
                       f"Mn_h{f(d[b+'.M_n_handle'], 1e3)} Mt_h{f(d[b+'.M_t_handle'], 1e3)} (mN·m)")
