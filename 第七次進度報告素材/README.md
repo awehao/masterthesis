@@ -237,5 +237,6 @@
 | 19 | door_k3a_1 承載／姿態對齊診斷（求解週期）：兩指力與腕力、抓取轉角（把手三軸）、目標−FK 與超前、設定點−實測、偏移估計 d̂ |
 | 20 | K3-A door_k3a_adm_1（偏移準入 consistent；同樣中止 finger_contact_lost）：門角／參考角、兩指接觸、抓取偏移、手指開度與腕力，與圖 18 對照 |
 | 21 | K3-A door_k3a_int_1（區間等效偏移觀測 interval；同樣中止 finger_contact_lost，單指卸載於門 0.48°）：與圖 18、20 對照 |
+| 22 | door_k3a_ev_1 接觸承載取證：兩指 Σ|fn|、接觸重心（把手座標 x／y／z）、法向、切向／法向代理比（μs 1.0、μd 0.8） |
 
 模型檢查點（約 170 MB／個）與訓練環境不入版本控制（`.gitignore`）；選定檢查點 sha256 見 `資料/dl0_train_run1_result.json`。
