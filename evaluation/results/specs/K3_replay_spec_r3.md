@@ -45,3 +45,20 @@ r2（`K3_replay_spec_r2.md`）的其餘內容不變。本文件只列這次的�
 - 姿態同步核對失敗時，可另存一次 step 後備。
 - 取景不當時，只改相機另存一次。
 - 第一次的失敗輸出全部保留。
+
+## 6. 增補（10/24，第一支 r2 重播後）
+**`door_k3ab_lw_1_replay_side_r2`**（Codex 20261024_002630 核可的第一支；nostep、92 °C 守護）：
+- 工具修正有效：317 幀中產出 315 張；tensor view 未失效、無例外。
+- 八類姿態偏差全部為 0（關節最大 1e-4 mrad；USD 端根、門扇、夾爪皆 0）。
+- 抽看收攏、對準、夾持、OPEN、中止後的畫面：非空白、非停格，姿態隨時間變化。
+- **缺圖 2 張：第 1、2 幀**（模擬 0.00 與 0.10 s，相機剛建立）⇒ `replay_check.complete=False`（`missing_images_2`）。
+- 依放行條件（complete=True），**其餘三支未放行**。
+- 已用這支產出**預覽影片**：明標「重播不完整（缺圖 2）」，首幀用佔位畫面；不作正式版本。片長 15.88 s，等於 31.6 s ÷ 2 倍速。
+
+**修正（ev2rp r3，只影響重播）**：
+- 某幀 `cam.get_rgba()` 取不到影像時，對同一姿態重新 `world.render()` 最多 3 次（不推進物理），次數記入 frames.csv 的 `render_retry` 欄。
+- 3 次後仍無圖，照舊記 img_ok=0，不靜默。
+
+**凍結**：`freeze_door_replay_dev_r3.sha256`。
+
+**申請**：用 r3 重跑 lw_1 side，RUN_ID `door_k3ab_lw_1_replay_side_r3`；通過 complete=True 後，再依序跑其餘三支。side_r2 的輸出與預覽影片保留。

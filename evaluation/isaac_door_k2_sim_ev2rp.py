@@ -896,7 +896,7 @@ def main() -> int:
         cam_csv.close()
         cam_csv = open(os.path.join(a.out, 'frames.csv'), 'w')
         cam_csv.write('frame,sim_t,step,owner,kind,door_q_deg,x,y,yaw,img_ok,pose_ok,dev_base_mm,dev_yaw_deg,dev_joint_mrad,dev_door_deg,'
-                      'usd_base_mm,usd_yaw_deg,usd_door_deg,usd_grip_mm,mode\n')
+                      'usd_base_mm,usd_yaw_deg,usd_door_deg,usd_grip_mm,mode,render_retry\n')
         _n_bad_img = _n_bad_pose = 0
         for _n, _sr in enumerate(_rows, start=1):
             _bx, _by, _byaw = (float(v) for v in _sr[_ib])
@@ -955,6 +955,11 @@ def main() -> int:
                            and _usd_b <= _TOL['base_mm'] and _usd_y <= _TOL['yaw_deg'] and _usd_d <= _TOL['door_deg']
                            and _usd_g <= _TOL['base_mm'])
             _img = cam.get_rgba()
+            _retry = 0                                           # r3：相機暖機——同一姿態最多重新 render 3 次（不推進物理），次數入 CSV
+            while not (_img is not None and bool(getattr(_img, 'size', 0))) and _retry < 3:
+                _retry += 1
+                world.render()
+                _img = cam.get_rgba()
             _img_ok = int(_img is not None and bool(getattr(_img, 'size', 0)))
             if _img_ok:
                 _imageio.imwrite(os.path.join(cam_dir, f'f_{_n:05d}.png'), _img[:, :, :3].astype(np.uint8))
@@ -962,7 +967,7 @@ def main() -> int:
             _n_bad_pose += 1 - _pose_ok
             _ow = {0: 'nav', 1: 'wholebody', 2: 'glide'}.get(_sr[2], '?')
             cam_csv.write(f'{_n},{_sr[1]:.4f},{_sr[0]},{_ow},{_sr[3]},{math.degrees(float(_sr[_iqd])):.4f},{_bx:.5f},{_by:.5f},{_byaw:.5f},'
-                          f'{_img_ok},{_pose_ok},{_dev_b:.4f},{_dev_y:.4f},{_dev_j:.4f},{_dev_d:.5f},{_usd_b:.4f},{_usd_y:.4f},{_usd_d:.5f},{_usd_g:.4f},{a.replay_mode}\n')
+                          f'{_img_ok},{_pose_ok},{_dev_b:.4f},{_dev_y:.4f},{_dev_j:.4f},{_dev_d:.5f},{_usd_b:.4f},{_usd_y:.4f},{_usd_d:.5f},{_usd_g:.4f},{a.replay_mode},{_retry}\n')
             if _n % 50 == 0:
                 cam_csv.flush()
                 print(f'  [重播] {_n}/{len(_rows)} 幀；缺圖 {_n_bad_img}、姿態超差 {_n_bad_pose}', flush=True)
