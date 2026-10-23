@@ -13,6 +13,8 @@ K3-A 判準照用（door_k3a_check.judge），兩處調整：
   4. 執行端走廊紀錄：自切換步起逐步連續、到紀錄結束；每步偏差與 room 重算一致（≤ 1e-5）；room.k3m.violation 為 None。
   5. 幾何證據（r3）：自執行端 ack 到達起、OPEN～END_HOLD 的每列都要有完整 k3m_geom（四類距離與預測皆有限、耗時非負）、有效的 state_step
      與狀態年齡（含計算後年齡）、k3m_corr；依 task.geom_config **重算**每列的預測距離與決策並與紀錄比對（不採信記錄的 dec）；重算決策不得為 stop。
+     r4：geom_config 必須等於登錄值（GEOM_REG）且型別合法；每列 state_step 對到 room 同一步、sim_t 相同。
+  6. r4：模式的牆鐘證據（wall_req、兩個 wall_*_recv）必須齊全、有限、先後正確，且接收 ≤ wall_req＋2.0 s；不採信 result。
 
     python3 evaluation/door_k3m_check.py <run_dir>    # 寫 <run_dir>/analysis/door_k3m_check.json；結束碼 0＝通過
 """
@@ -30,6 +32,13 @@ import door_k3a_check as KC3                          # noqa: E402
 import door_k3m_corridor as CO                         # noqa: E402
 
 INNER_MM, INNER_DEG = 20.0, 0.8
+MODE_WALL_TIMEOUT_S = 2.0
+# r4：幾何監看的**登錄值**（door_k3m_offline_geom_monitor_r3.json 與 GeomMonitorConfig 預設）；task.geom_config 必須與之一致
+GEOM_REG = {'d_min': {'nonfinger': 0.005, 'finger': 0.005, 'base': 0.020, 'self': 0.005},
+            'v_floor': {'nonfinger': 0.002, 'finger': 0.002, 'base': 0.010, 'self': 0.002},
+            'ds_err': {'nonfinger': 0.000226, 'finger': 0.0, 'base': 0.0, 'self': 0.001342},
+            'warn_margin_m': 0.001, 'age_max_s': 0.2, 't_cycle_s': 0.05, 't_stop_s': 0.02}
+GEOM_TOL = {'ds_err': 5e-7}
 ENVELOPE = (-0.15, 0.02, -0.05, 0.10, 6.0)
 BASE_M, BASE_YAW_DEG = 0.020, 2.0
 MODE_TIMEOUT_S = 1.0
@@ -86,6 +95,12 @@ def check_mode(task, room, solver, why, st):
     t_e, t_s = k.get('t_exec_recv'), k.get('t_solver_recv')
     if not (_num(t_e) and _num(t_s)) or max(t_e, t_s) > req['req_t'] + MODE_TIMEOUT_S + 1e-9:
         why.append('mode_ack_late_or_missing')
+    # r4（Codex 20261023_221949 ①）：牆鐘期限獨立核對，不採信 result
+    w_r, w_e, w_s = k.get('wall_req'), k.get('wall_exec_recv'), k.get('wall_solver_recv')
+    if not (_num(w_r) and _num(w_e) and _num(w_s)):
+        why.append('mode_wall_evidence_missing')
+    elif not (w_r <= w_e and w_r <= w_s) or max(w_e, w_s) > w_r + MODE_WALL_TIMEOUT_S + 1e-9:
+        why.append('mode_wall_deadline')
     if k.get('result') != 'confirmed':
         why.append('mode_not_confirmed')
     st['mode'] = {'req_t': req['req_t'], 'switch_step': ea['switch_step'], 'switch_t': ea['switch_t'], 't_exec_recv': t_e, 't_solver_recv': t_s,
@@ -195,14 +210,32 @@ def check_base(task, room, gate, M, why, st):
 GEOM_CLASSES = ('nonfinger', 'finger', 'base', 'self')
 
 
-def check_geom(task, M, why, st):
-    """r3（Codex 20261023_210920 第 3 項）：不採信記錄中的 dec；依凍結設定（task.geom_config）逐列重算預測距離與決策。"""
+def geom_config_ok(gc):
+    """r4（Codex 20261023_221949 ②）：task.geom_config 必須存在、型別合法，且與登錄值一致（不直接信任）。"""
+    if not isinstance(gc, dict):
+        return False
+    for k, v in GEOM_REG.items():
+        g = gc.get(k)
+        if isinstance(v, dict):
+            if not isinstance(g, dict) or set(g) != set(v) or any(not _num(g[c]) for c in v):
+                return False
+            if any(abs(float(g[c]) - v[c]) > GEOM_TOL.get(k, 1e-12) for c in v):
+                return False
+        elif not _num(g) or abs(float(g) - v) > 1e-12:
+            return False
+    return True
+
+
+def check_geom(task, M, why, st, room=None):
+    """r3（Codex 20261023_210920 第 3 項）：不採信記錄中的 dec；依凍結設定（task.geom_config）逐列重算預測距離與決策。
+    r4：設定須等於登錄值；每列 state_step 須存在於 room，且 room 該步 sim_t＝列的 t（≤ 1e-4）。"""
     gc = task.get('geom_config')
-    need = ('d_min', 'v_floor', 'ds_err', 'warn_margin_m', 'age_max_s', 't_cycle_s', 't_stop_s')
-    if not isinstance(gc, dict) or any(k not in gc for k in need) or any(
-            not isinstance(gc[k], dict) or any(not _num(gc[k].get(c)) for c in GEOM_CLASSES) for k in ('d_min', 'v_floor', 'ds_err')):
-        why.append('geometry_config_missing')
+    if not geom_config_ok(gc):
+        why.append('geometry_config_not_registered')
         return
+    cols = (room or {}).get('steps_cols') or []
+    I = {c: i for i, c in enumerate(cols)}
+    rstep = {s[I['step']]: s[I['sim_t']] for s in (room or {}).get('steps', [])} if 'step' in I and 'sim_t' in I else {}
     tr = [e for e in task.get('trace') or [] if e.get('phase') in OPENING and e['t'] >= M['t_exec'] - 1e-9]
     bad = stop = mism = 0
     prev = None                                   # (t, {class: d}, 原始 k3m_geom)
@@ -214,7 +247,8 @@ def check_geom(task, M, why, st):
                                                 and _num(cls[c][1]) for c in GEOM_CLASSES)
               and _num(e.get('state_age_wall')) and 0.0 <= e['state_age_wall'] <= gc['age_max_s']
               and e['state_age_wall'] + g['compute_s'] <= gc['age_max_s'] + 1e-12
-              and isinstance(e.get('state_step'), int) and not isinstance(e.get('state_step'), bool) and e.get('k3m_corr') is not None)
+              and isinstance(e.get('state_step'), int) and not isinstance(e.get('state_step'), bool) and e.get('k3m_corr') is not None
+              and e['state_step'] in rstep and _num(e.get('t')) and abs(rstep[e['state_step']] - e['t']) <= 1e-4)
         if not ok:
             bad += 1
             continue
@@ -263,7 +297,7 @@ def judge(task, room, gate, solver):
         check_waiting(task, M, why, st)
         check_solver_rows(solver, M, why, st)
         check_base(task, room, gate, M, why, st)
-        check_geom(task, M, why, st)
+        check_geom(task, M, why, st, room)
     return {'pass': not why, 'why': why, 'stats': st, 'phase_sequence': res.get('phase_sequence')}
 
 

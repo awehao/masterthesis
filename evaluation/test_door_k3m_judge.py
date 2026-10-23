@@ -108,7 +108,8 @@ def build():
     ev = [{'t': t0, 'from': 'x', 'to': p} for p, t0 in PH]
     task = {'schema': 'door_k3m_task/1', 'geom_config': dataclasses.asdict(GCFG), 'policy_events': ev, 'abort': None, 'final_phase': 'DONE', 'received_any_sync': True,
             'trace': trace, 'n_target_published': n, 'G_T_H': B.G_T_H.tolist(), 'H_frozen': B.H0.tolist(), 'grasp_basis': {'T_HG': B.T_HG.tolist()},
-            'k3m': {'request': req, 'exec_ack': ea, 'solver_ack': sa, 't_exec_recv': t_e, 't_solver_recv': t_s, 'result': 'confirmed'}}
+            'k3m': {'request': req, 'exec_ack': ea, 'solver_ack': sa, 't_exec_recv': t_e, 't_solver_recv': t_s, 'result': 'confirmed',
+                    'wall_req': 1000.0, 'wall_exec_recv': 1000.03, 'wall_solver_recv': 1000.09}}
     steps, held, qprev = [], 0.0, 0.0
     for k in range(0, int((T_DONE + 0.5) / 0.01)):
         t = round(k * 0.01, 4)
@@ -295,13 +296,51 @@ class FullJudge(unittest.TestCase):
 
         def cfg(t, r, g, s):
             del t['geom_config']
-        self.fails_with(cfg, 'geometry_config_missing')
+        self.fails_with(cfg, 'geometry_config_not_registered')
 
     def test_k3a_safety_still_applies(self):
         def m(t, r, g, s):
             I = {c: i for i, c in enumerate(r['steps_cols'])}
             r['steps'][2400][I['wrist_force_n']] = 31.0
         self.fails_with(m, 'wrist_force')
+
+    def test_codex_wall_deadline(self):
+        """Codex 反例：wall_req 100、兩接收 103 ⇒ 不通過；刪掉牆鐘欄位 ⇒ 不通過（不採信 result）；接收早於請求 ⇒ 不通過。"""
+        def late(t, r, g, s):
+            t['k3m'].update(wall_req=100.0, wall_exec_recv=103.0, wall_solver_recv=103.0)
+        self.fails_with(late, 'mode_wall_deadline')
+
+        def gone(t, r, g, s):
+            for k in ('wall_req', 'wall_exec_recv', 'wall_solver_recv'):
+                del t['k3m'][k]
+        self.fails_with(gone, 'mode_wall_evidence_missing')
+
+        def order(t, r, g, s):
+            t['k3m']['wall_exec_recv'] = 999.0
+        self.fails_with(order, 'mode_wall_deadline')
+
+    def test_codex_geom_config_and_source_step(self):
+        """Codex 反例：非手指門檻改 −1 m、來源步 −99、age_max_s 改文字 ⇒ 都不通過且不崩潰。"""
+        def thr(t, r, g, s):
+            t['geom_config']['d_min']['nonfinger'] = -1.0
+        self.fails_with(thr, 'geometry_config_not_registered')
+
+        def txt(t, r, g, s):
+            t['geom_config']['age_max_s'] = '0.2'
+        self.fails_with(txt, 'geometry_config_not_registered')
+
+        def extra(t, r, g, s):
+            t['geom_config']['v_floor']['other'] = 0.1
+        self.fails_with(extra, 'geometry_config_not_registered')
+
+        def step(t, r, g, s):
+            [e for e in t['trace'] if e.get('k3m_geom')][10]['state_step'] = -99
+        self.fails_with(step, 'geometry_evidence_missing')
+
+        def step_time(t, r, g, s):
+            e = [e for e in t['trace'] if e.get('k3m_geom')][10]
+            e['state_step'] = e['state_step'] + 3                                # 步號存在但時刻對不上
+        self.fails_with(step_time, 'geometry_evidence_missing')
 
     def test_schema(self):
         def m(t, r, g, s):
