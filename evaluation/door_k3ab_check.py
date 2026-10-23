@@ -20,6 +20,9 @@ r2（Codex 20261023_194140 第 1、2、4 項）：
   - 逐步紀錄的 e、ef、u、v、delta、sat 全部型別核對並重算（數值 ≤ 1e-12、sat 精確）。
   - room 來源缺 finger1／finger2 或其 'bar' 欄位 ⇒ pair_source_field_missing（不以零代替）。
   - SETTLE→END_HOLD 轉換列（ph0＝SETTLE、phase＝END_HOLD）與 END_HOLD 列一樣須凍結、不消費。
+r3（Codex 20261023_195051）：**作用期間覆蓋**——每個需更新的 OPEN／SETTLE 列（排除首個 OPEN 列、轉入 END_HOLD 的凍結列及之後、
+  無發布目標的列）獨立核對：截至該列最後已消費紀錄的 sim_t（尚無紀錄時取 t0）不得落後該列狀態時間超過 0.10 s；
+  該列 pairs_age_wall 必須有限、非負且 ≤ 0.2 s。排除「整批紀錄遺失／尾段截斷」仍判通過。
 
     python3 evaluation/door_k3ab_check.py <run_dir>    # 寫 <run_dir>/analysis/door_k3ab_check.json；結束碼 0＝通過
 """
@@ -252,6 +255,28 @@ def check_balance(task, room, why, st):
         if e.get('ph0') in ('OPEN', 'SETTLE') and e.get('target') is not None and e is not first_open:
             if not _num(e.get('delta_m')) or not math.isfinite(d_prev) or abs(e['delta_m'] - d_prev) > 1e-12:
                 mism = True
+    # 作用期間覆蓋（r3）
+    STALE_WALL = 0.2
+    last_t = float(t0) if _num(t0) else math.nan
+    cov_dev, n_upd, bad_wall = 0.0, 0, False
+    for e in tr:
+        c = e.get('bal_consumed')
+        if isinstance(c, list) and len(c) == 2 and c[1] in by_t:
+            last_t = by_t[c[1]]
+        if e is first_open or e.get('ph0') not in ('OPEN', 'SETTLE') or e.get('phase') in ('END_HOLD', 'DONE', 'ABORTED') \
+                or e.get('target') is None:
+            continue
+        n_upd += 1
+        lag = (e['t'] - last_t) if math.isfinite(last_t) else math.inf
+        cov_dev = max(cov_dev, lag)
+        w = e.get('pairs_age_wall')
+        if not _num(w) or w < 0.0 or w > STALE_WALL:
+            bad_wall = True
+    st['max_consumed_lag_s'], st['n_update_rows'] = cov_dev, n_upd
+    if cov_dev > REG['stale_sim_s'] + 1e-9:
+        why.append('balance_coverage_stale')
+    if bad_wall:
+        why.append('pairs_age_wall_invalid_or_stale')
     flat = [s for a, b in cons for s in range(a, b + 1)]
     if flat != steps:
         why.append('bal_consumed_not_each_step_once')

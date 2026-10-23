@@ -65,6 +65,7 @@ def build():
         else:
             e['ph0'] = 'OPEN'
         e['bal_consumed'] = None
+        e['pairs_age_wall'] = 0.02
         T = None if e['target'] is None else np.asarray(e['target'], float).reshape(4, 4)
         if T is None:
             e.update(base_target=None, delta_m=law.delta, e12_world=None)
@@ -381,6 +382,72 @@ class FullJudge(unittest.TestCase):
         res = ABC.judge(t, r, g)
         self.assertIn('end_hold_published_not_frozen', res['why'])
         self.assertIsNotNone(prev)
+
+    # ---- r3（Codex 20261023_195051）：作用期間覆蓋
+    def _republish(self, e, d):
+        e['delta_m'] = d
+        Tb = np.asarray(e['base_target']).reshape(4, 4)
+        T = Tb.copy()
+        T[:3, 3] += d * np.asarray(e['e12_world'])
+        e['target'] = T.reshape(-1).tolist()
+
+    def test_records_cleared(self):
+        def m(t, r, g):
+            t['balance']['records'] = []
+            for e in t['trace']:
+                e['bal_consumed'] = None
+                if e.get('target') is not None and e.get('base_target') is not None:
+                    self._republish(e, 0.0)
+        self.fails_with(m, 'balance_coverage_stale')
+
+    def test_tail_truncated(self):
+        def m(t, r, g):
+            recs = t['balance']['records'][:10]
+            t['balance']['records'] = recs
+            keep, d_last = True, 0.0
+            for e in t['trace']:
+                c = e.get('bal_consumed')
+                if c is not None:
+                    if keep and c[1] <= recs[-1]['step']:
+                        d_last = e['delta_m']
+                        continue
+                    keep = False
+                    e['bal_consumed'] = None
+                if not keep and e.get('target') is not None and e.get('ph0') in ('OPEN', 'SETTLE', 'END_HOLD'):
+                    self._republish(e, d_last)
+        self.fails_with(m, 'balance_coverage_stale')
+
+    def test_short_delay_passes(self):
+        """某一輪沒有新配對、下一輪一起消費（落後 0.05 s ≤ 0.10 s）⇒ 仍通過。"""
+        t, r, g = G()
+        op = rows(t, 'OPEN')
+        k = 10
+        a, b = op[k], op[k + 1]
+        prev_d = op[k - 1]['delta_m']
+        b['bal_consumed'] = [a['bal_consumed'][0], b['bal_consumed'][1]]
+        a['bal_consumed'] = None
+        self._republish(a, prev_d)
+        res = ABC.judge(t, r, g)
+        self.assertTrue(res['pass'], res['why'])
+        self.assertGreater(res['stats']['max_consumed_lag_s'], 0.04)
+
+    def test_long_delay_fails(self):
+        def m(t, r, g):
+            op = rows(t, 'OPEN')
+            k = 10
+            prev_d = op[k - 1]['delta_m']
+            first = op[k]['bal_consumed'][0]
+            for e in op[k:k + 3]:
+                e['bal_consumed'] = None
+                self._republish(e, prev_d)
+            op[k + 3]['bal_consumed'] = [first, op[k + 3]['bal_consumed'][1]]
+        self.fails_with(m, 'balance_coverage_stale')
+
+    def test_pairs_age_wall(self):
+        for v in (None, float('nan'), -0.01, 0.25):
+            def m(t, r, g, v=v):
+                rows(t, 'SETTLE')[2]['pairs_age_wall'] = v
+            self.fails_with(m, 'pairs_age_wall_invalid_or_stale')
 
 
 if __name__ == '__main__':

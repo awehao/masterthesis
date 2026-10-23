@@ -7,7 +7,8 @@ SETTLE 起點＝第一列 phase＝SETTLE 的 step；主窗＝[OPEN 步, min(觸�
   2. 首次任一指 < 0.5 N 的物理步與門角（room leaf_contacts，主窗內；無 ⇒ None）；
   3. 主窗內 F1、F2 最小值；4. 主窗內 |F2 − F1| ≤ 2 N 的步數比例；5. Δ 飽和累計時間（sat 步數 × 0.01 s）；
   6. 對照 run（無柔順）以同一定義列 2–4；7. Δ 與求解輸入 d̂ 的同窗時序（快照時刻、d̂ 六軸）：
-     - delta_published_m＝task trace 中狀態時間 ≤ 快照時刻的最後一筆**實際發布列**的 delta_m（發布時序；r2，Codex 20261023_194140 第 4 項）；
+     - delta_published_by_state_time_m＝**按來源狀態時間對齊的發布列**：task trace 中狀態時間 ≤ 快照時刻的最後一筆實際發布列的 delta_m。
+       trace t 是來源狀態時間，不是獨立量得的發布／接收時間 ⇒ 不能據此證明求解器當時已收到該 Δ（Codex 20261023_195051）；
      - delta_by_pair_source_time_m＝依配對來源 sim_t 回填的 Δ（批次稍後才消費，**不等於當時已發布的 Δ**，另名保存，只作參考）。
 不判定、不推因果；不宣稱根因已定位，也不把承載平衡結果當成任務通過。
 
@@ -68,7 +69,7 @@ def dhat_series(run, task, records):
             continue
         dp = [v for t_, v in pub if t_ <= ts + 1e-9]
         ds = [v for t_, v in rt if t_ <= ts + 1e-9]
-        out.append({'snap_t': ts, 'd_hat': si['offset_d_hat'], 'delta_published_m': dp[-1] if dp else None,
+        out.append({'snap_t': ts, 'd_hat': si['offset_d_hat'], 'delta_published_by_state_time_m': dp[-1] if dp else None,
                     'delta_by_pair_source_time_m': ds[-1] if ds else None})
     return out
 

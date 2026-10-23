@@ -7,6 +7,8 @@
 4. 判定器對逐步紀錄 e、ef、u、v、delta、sat 全部型別核對並重算；room 來源缺手指或 'bar' 欄位不以零代替（pair_source_field_missing）；報告的 Δ／d̂ 對齊改用 task trace 實際發布列（delta_published_m），來源時間回填另名 delta_by_pair_source_time_m。
 凍結改為 `freeze_door_k3ab_ev_dev_r2.sha256`（跑法 FRZ 同步指向；r1 清單保留為紀錄）。
 
+實作 r3（Codex 20261023_195051 唯一必修，只改判定器與報告用語）：判定器逐列核對**作用期間覆蓋**——每個需更新的 OPEN／SETTLE 列（排除首個 OPEN 列、轉入 END_HOLD 的凍結列及之後、無發布目標的列）截至該列最後已消費紀錄的 sim_t（尚無紀錄取 t0）落後該列狀態時間 ≤ 0.10 s，且該列 pairs_age_wall 有限、非負、≤ 0.2 s；加入「紀錄刪空」「尾段截斷」「長延遲」反例與「0.05 s 短暫延遲」正例。報告欄位改名 delta_published_by_state_time_m＝**按來源狀態時間對齊的發布列**（trace t 是來源狀態時間，不是獨立量得的發布／接收時間，不能據此證明求解器當時已收到該 Δ）。凍結改為 `freeze_door_k3ab_ev_dev_r3.sha256`。
+
 draft-3（Codex 20261023_192620：draft-2 可進入版本化實作與離線測試，**尚未核可實跑**）：SETTLE 繼續調整、END_HOLD 凍結完整已發布目標、DONE 照原策略停止發布；量測消費與積分時序明確化（§2、§4）；判定器獨立重算（§7）；雙向幾何核對結果（§3）；§1、§3、§5 措辭補正。
 
 draft-2（Codex 20261022_133343 三項）：開門首筆目標連續、END_HOLD 固定目標不動、新判定器分開核對基礎目標與柔順位移（§4、§5、§7 修訂）。
@@ -113,7 +115,7 @@ draft-2（Codex 20261022_133343 三項）：開門首筆目標連續、END_HOLD 
      逐步紀錄自 s0＋1 連續；每筆 f1／f2、sim_t 與 room 同一步 leaf_contacts 相同（≤ 1e-9）；重算 ẽ 與 Δ（≤ 1e-12）；
      每列 bal_consumed 連續、不重疊、合起來＝全部紀錄、上界 ≤ 該列 state_step；該列 delta_m＝重算 Δ 於其最後消費步。
   5. **證據完整**：缺 base_target、delta_m、e12_world、ph0、balance 紀錄或含非有限值 ⇒ 不通過；balance 停止或緩衝 fault ⇒ 不通過。
-  每一項都有完整判定流程的反例測試（`test_door_k3ab_judge.py`，r2 共 38 項）。
+  每一項都有完整判定流程的反例測試（`test_door_k3ab_judge.py`，r3 共 43 項）。
 - **承載平衡觀察**（事前登錄、只描述、一趟介入觀察）：
   1. OPEN 期間逐步的 F1、F2、e、ẽ、Δ 時序；
   2. 首次單指 < 0.5 N 的物理步與門角（若有）；
@@ -148,7 +150,7 @@ draft-2（Codex 20261022_133343 三項）：開門首筆目標連續、END_HOLD 
 | `door_k3ab_policy.py` | K3ABPolicy(K3APolicy)：OPEN 第二輪至 SETTLE 作用、轉換輪起凍結完整發布目標、DONE 停止發布、future_time 停止 | `test_door_k3ab_policy.py` 16 |
 | `isaac_door_k2_sim_ev2.py` | EV 執行端只插入 /door/finger_pair（逐步、與 room 同源同 4 位小數） | `test_door_k3ab_nodes.py` 10（含節點、跑法、報告與 Δ／d̂ 對齊） |
 | `door_k3ab_task_node.py` | 訂閱配對流直送緩衝；Meas 帶 state_step、pairs_age_wall；trace／balance 紀錄 | 同上＋`test_door_k3ab_task_node_ros.py` 1（ROS 接線） |
-| `door_k3ab_check.py` | 版本化判定器（§7＋實作 r2） | `test_door_k3ab_judge.py` 38 |
+| `door_k3ab_check.py` | 版本化判定器（§7＋實作 r2、r3） | `test_door_k3ab_judge.py` 43 |
 | `door_k3ab_report.py` | 承載平衡觀察（§7；含對照 run 與 Δ／d̂ 同窗） | 結構測試在對照實錄上可跑 |
 | `door_k3ab_offline_geom.py` | 雙向幾何核對（§3） | 結果 40/40 |
 | `run_door_k3ab_ev.sh` | 相對 run_door_k3ax_ev.sh 只換執行端、任務節點、凍結清單與字樣；求解器參數全同 | 同上 |

@@ -98,7 +98,7 @@ class Runner(unittest.TestCase):
         src = '\n'.join(b)
         self.assertIn('evaluation/isaac_door_k2_sim_ev2.py', src)
         self.assertIn('evaluation/door_k3ab_task_node.py', src)
-        self.assertIn('freeze_door_k3ab_ev_dev_r2.sha256', src)
+        self.assertIn('freeze_door_k3ab_ev_dev_r3.sha256', src)
         self.assertFalse(any('door_k3ax_task_node' in ln for ln in b if not ln.lstrip().startswith('#')))   # 只允許出現在沿革註解
 
 
@@ -130,7 +130,7 @@ class Report(unittest.TestCase):
                               {'t': 1.05, 'ph0': 'OPEN', 'target': [0.0] * 16, 'delta_m': 5e-5}]}
             recs = [{'sim_t': round(1.0 + 0.01 * k, 4), 'delta': 1e-5 * k} for k in range(1, 6)]
             out = R.dhat_series(d, task, recs)
-            self.assertEqual(out[0]['delta_published_m'], 0.0)                # 1.03 時已發布的仍是 1.00 那筆
+            self.assertEqual(out[0]['delta_published_by_state_time_m'], 0.0)                # 1.03 時已發布的仍是 1.00 那筆
             self.assertAlmostEqual(out[0]['delta_by_pair_source_time_m'], 3e-5)   # 來源時間回填另名保存
         finally:
             shutil.rmtree(d)
