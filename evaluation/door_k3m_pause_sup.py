@@ -165,6 +165,18 @@ class PauseSupervisor:
         self.seq.note_published(seq, zero)
 
     def applied(self, phys_step, t, base3, arm6, src_seq):
+        """套用回報。CONFIRM 中交給 PauseSequencer 計數；STOPPED 後（停止發布）任何非零套用值，或來源序號 ≥ 0 但早於零速第一筆
+        （舊命令重新生效）⇒ FAIL 'old_command_after_stop'。來源序號 −1（逾時減速／停止）只要值為零就接受。"""
+        s = self.seq
+        if s.state == 'STOPPED':
+            try:
+                vals = [abs(float(v)) for v in list(base3) + list(arm6)]
+            except (TypeError, ValueError):
+                return self._fail('applied_invalid', t)
+            src_old = src_seq is not None and src_seq >= 0 and (s.zero_seq0 is None or src_seq < s.zero_seq0)
+            if src_old or max(vals) > self.c.applied_tol:
+                return self._fail('old_command_after_stop', t)
+            return
         self.seq.applied(phys_step, t, base3, arm6, src_seq)
 
     def outcome(self, t_end=None):
