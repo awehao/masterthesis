@@ -6,7 +6,8 @@
       （對準＝ALIGN_PRE／ALIGN_HOLD、夾持＝ENGAGE／HOLD、OPEN、失接觸／中止（策略中止）、閂鎖、停止後漂移＝閂鎖後）。
 另寫 <out>.keymoments.json：關鍵時刻（模擬時間、影片時間）供 README 引用。
 播放（r2；Codex 20261023_235904）：每幀顯示時長＝（下一幀模擬時間 − 本幀模擬時間）÷ 倍速，依**實際影格**的模擬時間編碼（ffmpeg concat），
-缺圖時沿用前一幀並在頂欄標「缺圖」，不把缺幀壓縮成固定倍速；關鍵時刻的影片時間依實際影格累計。
+缺圖時（r3；Codex 20261024_002150）：**當下**產生一張帶目前時間與標註的畫面——底圖沿用前一張原始影格並加「缺圖／沿用前幀」橫條；
+首幀就缺圖則用明示佔位畫面（灰底＋「缺圖：無前幀可沿用」），時長照實保留；不把缺幀壓縮成固定倍速；關鍵時刻的影片時間依實際影格累計。
 完整性取自同目錄 replay_check.json（door_replay_check.py）；不完整時頂欄標「重播不完整」並寫入 keymoments.json。
 
     python3 evaluation/door_replay_video.py <replay_run_id> <src_run_id> <out.mp4> [--fps 20] [--title 文字]
@@ -73,18 +74,22 @@ def main():
     try:
         n = 0
         t_first = float(rows[0][1]) if rows else 0.0
-        concat, last_png, n_missing = [], None, 0
+        concat, last_raw, n_missing, size = [], None, 0, None
         for i, r in enumerate(rows):
             fr, st, step = int(r[0]), float(r[1]), int(r[2])
             src = os.path.join(RD, 'frames', f'f_{fr:05d}.png')
             t_next = float(rows[i + 1][1]) if i + 1 < len(rows) else st + 0.1
             dur = max(1e-3, (t_next - st) / speed)
-            if not os.path.exists(src):                          # 缺圖：沿用前一幀（若有），時間照實保留
+            missing_now = not os.path.exists(src)
+            if not missing_now:
+                im = Image.open(src).convert('RGB')
+                last_raw, size = im.copy(), im.size
+            else:                                                # 缺圖：當下產生帶時間的標示畫面，時長照實
                 n_missing += 1
-                if last_png is not None:
-                    concat.append((last_png, dur))
-                continue
-            im = Image.open(src).convert('RGB')
+                if last_raw is not None:
+                    im = last_raw.copy()
+                else:
+                    im = Image.new('RGB', size or (1280, 720), (70, 70, 70))
             d = ImageDraw.Draw(im, 'RGBA')
             ph = None
             for t, p in ev:
@@ -104,14 +109,18 @@ def main():
                 flag += f'　缺圖 {n_missing}'
             d.text((16, 8), f"{a.src}　該趟實錄重播（非即時錄影；{speed:g} 倍速）{('　' + a.title) if a.title else ''}{flag}", font=f_mid, fill=(255, 255, 255))
             d.text((16, 46), line2, font=f_mid, fill=(255, 235, 160))
+            if missing_now:
+                msg = f'缺圖（影格 {fr}）：沿用前幀' if last_raw is not None else f'缺圖（影格 {fr}）：無前幀可沿用（佔位畫面）'
+                d.rectangle([0, im.height // 2 - 40, im.width, im.height // 2 + 40], fill=(200, 120, 0, 190))
+                d.text((16, im.height // 2 - 28), msg, font=f_big, fill=(255, 255, 255))
             cur = [k for k in km if k['sim_t'] <= st + 1e-9 and st - k['sim_t'] < 1.5]
             if cur:
                 d.rectangle([0, im.height - 64, im.width, im.height], fill=(150, 30, 30, 170))
                 d.text((16, im.height - 54), cur[-1]['label'], font=f_big, fill=(255, 255, 255))
             n += 1
-            last_png = os.path.join(tmp, f'{n:05d}.png')
-            im.save(last_png)
-            concat.append((last_png, dur))
+            out_png = os.path.join(tmp, f'{n:05d}.png')
+            im.save(out_png)
+            concat.append((out_png, dur))
         if n == 0:
             raise SystemExit('沒有任何幀')
         lst = os.path.join(tmp, 'concat.txt')

@@ -20,8 +20,11 @@ import door_replay_check as RC                          # noqa: E402
 STEPS = [[k, round(0.01 * k, 4)] for k in range(100)]
 
 
+DEV0 = {k: '0.0' for k in RC.TOL}
+
+
 def rows_for(exp, over=None):
-    rows = [{'frame': str(i), 'step': str(s), 'sim_t': f'{t:.4f}', 'img_ok': '1', 'pose_ok': '1'} for i, (s, t) in enumerate(exp, start=1)]
+    rows = [{'frame': str(i), 'step': str(s), 'sim_t': f'{t:.4f}', 'img_ok': '1', 'pose_ok': '1', **DEV0} for i, (s, t) in enumerate(exp, start=1)]
     for (i, k), v in (over or {}).items():
         rows[i][k] = v
     return rows
@@ -40,7 +43,7 @@ class Check(unittest.TestCase):
         cases = [
             (rows_for(self.exp, {(3, 'img_ok'): '0'}), lambda f: True, 'missing_images_1'),
             (rows_for(self.exp), lambda f: f != 5, 'missing_images_1'),
-            (rows_for(self.exp, {(2, 'pose_ok'): '0'}), lambda f: True, 'pose_out_of_tolerance_1'),
+            (rows_for(self.exp, {(2, 'pose_ok'): '0'}), lambda f: True, 'flag_inconsistent_1'),   # 旗標說超差但數值在容差內
             (rows_for(self.exp, {(4, 'step'): '41'}), lambda f: True, 'frame_step_mismatch_1'),
             (rows_for(self.exp)[:-1], lambda f: True, 'frame_count_9_vs_expected_10'),
             (rows_for(self.exp) + [{'frame': '11', 'step': '100', 'sim_t': '1.0', 'img_ok': '1', 'pose_ok': '1'}], lambda f: True,
@@ -50,6 +53,16 @@ class Check(unittest.TestCase):
             r = RC.check(self.exp, rows, png, 'a' * 64, 'a' * 64)
             self.assertFalse(r['complete'], why)
             self.assertIn(why, r['reasons'])
+        # Codex 20261024_002150 反例：旗標說 OK 但數值不 OK
+        for over, why in (({(2, 'sim_t'): 'nan'}, 'sim_t_nonfinite_1'), ({(3, 'dev_base_mm'): '999'}, 'pose_out_of_tolerance_1'),
+                          ({(3, 'dev_base_mm'): '999'}, 'flag_inconsistent_1'), ({(4, 'usd_grip_mm'): 'nan'}, 'pose_out_of_tolerance_1'),
+                          ({(5, 'usd_door_deg'): ''}, 'pose_out_of_tolerance_1'), ({(6, 'img_ok'): '0'}, 'flag_inconsistent_1')):
+            r = RC.check(self.exp, rows_for(self.exp, over), lambda f: True, 'a' * 64, 'a' * 64)
+            self.assertFalse(r['complete'], why)
+            self.assertIn(why, r['reasons'])
+        rows = rows_for(self.exp)
+        del rows[1]['dev_joint_mrad']
+        self.assertIn('pose_out_of_tolerance_1', RC.check(self.exp, rows, lambda f: True, 'a' * 64, 'a' * 64)['reasons'])
         self.assertIn('source_sha_not_logged', RC.check(self.exp, rows_for(self.exp), lambda f: True, None, 'a' * 64)['reasons'])
         self.assertIn('source_sha_mismatch', RC.check(self.exp, rows_for(self.exp), lambda f: True, 'b' * 64, 'a' * 64)['reasons'])
 
@@ -67,7 +80,7 @@ class Video(unittest.TestCase):
         with open(os.path.join(D, 'frames.csv'), 'w') as f:
             f.write('frame,sim_t,step,owner,kind,door_q_deg,x,y,yaw,img_ok,pose_ok\n')
             for i, s in enumerate(S, start=1):
-                ok = 0 if i == 20 else 1
+                ok = 0 if i in (1, 20) else 1                        # 首幀與中段各缺一張
                 if ok:
                     Image.new('RGB', (320, 180), (80, 80, 80)).save(os.path.join(D, 'frames', f'f_{i:05d}.png'))
                 f.write(f'{i},{s[1]:.4f},{s[0]},wholebody,x,0,0,0,0,{ok},1\n')
@@ -79,9 +92,12 @@ class Video(unittest.TestCase):
             dur = float(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', out],
                                        capture_output=True, text=True).stdout)
             expect = (S[-1][1] - S[0][1]) / 2 + 0.1 / 2
-            self.assertAlmostEqual(dur, expect, delta=0.15)          # 缺一幀不縮短影片
+            self.assertAlmostEqual(dur, expect, delta=0.15)          # 缺幀（含首幀）不縮短影片
             km = json.load(open(out + '.keymoments.json'))
-            self.assertEqual(km['n_missing_images'], 1)
+            self.assertEqual(km['n_missing_images'], 2)
+            nfr = int(subprocess.run(['ffprobe', '-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries',
+                                      'stream=nb_read_frames', '-of', 'csv=p=0', out], capture_output=True, text=True).stdout.strip())
+            self.assertGreaterEqual(nfr, len(S))                     # 每列都有自己的畫面（缺圖幀為當下生成的標示畫面）
             self.assertFalse(km['replay_complete'])
         finally:
             shutil.rmtree(D, ignore_errors=True)

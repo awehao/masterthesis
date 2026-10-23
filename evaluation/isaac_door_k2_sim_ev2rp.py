@@ -585,6 +585,13 @@ def main() -> int:
     print(f'[door] 牆接觸視圖：{len(wall_views)} 個剛體 ↔ {WALLS}', flush=True)
     leaf_v = _RigidPrim(prim_paths_expr=dauth['leaf_prim'], name='leaf_state')
 
+    # EV2RP r2：重播用夾爪視圖必須在 world.reset() 之前建、且不重設 xform；reset 後才建會改動 stage、
+    # 使 simulation view 失效（第一次四支重播即因此 0 幀，見 runs/*_replay_* 的 sim.log）。只在 --replay 時建，非重播路徑不變。
+    _grip_v, _gpath = None, None
+    if a.replay:
+        _gpath = next((str(_pr.GetPath()) for _pr in walk(stage, ROBOT) if _pr.GetName() == 'uflite_gripper_link'), None)
+        if _gpath is not None:
+            _grip_v = _RigidPrim(prim_paths_expr=_gpath, name='grip_replay', reset_xform_properties=False)
     world.reset()
     robot = SingleArticulation(prim_path=art_root, name='omni_bot')
     robot.initialize()
@@ -870,14 +877,11 @@ def main() -> int:
             _m = xfc.GetLocalToWorldTransform(stage.GetPrimAtPath(path))
             _t = _m.ExtractTranslation()
             return float(_t[0]), float(_t[1]), math.atan2(float(_m[0][1]), float(_m[0][0]))
-        _gpath = next((str(_pr.GetPath()) for _pr in walk(stage, ROBOT) if _pr.GetName() == 'uflite_gripper_link'), None)
-        _grip_v = None
-        if _gpath is not None:
+        if _grip_v is not None:
             try:
-                _grip_v = _RigidPrim(prim_paths_expr=_gpath, name='grip_replay')
                 _grip_v.initialize()
             except Exception as _e:
-                print(f'[door] 重播無法建立夾爪視圖：{_e!r}（夾爪渲染端核對記 NaN ⇒ pose_ok＝0）', flush=True)
+                print(f'[door] 重播無法初始化夾爪視圖：{_e!r}（夾爪渲染端核對記 NaN ⇒ pose_ok＝0）', flush=True)
                 _grip_v = None
         _px = None
         if a.replay_mode == 'nostep':

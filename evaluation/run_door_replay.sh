@@ -13,7 +13,7 @@ cd "$WS"
 : "${SRC_RUN:?SRC_RUN 未設定}"
 VIEW="${VIEW:-side}"
 REPLAY_MODE="${REPLAY_MODE:-nostep}"
-FRZ=evaluation/results/door/freeze_door_replay_dev_r1.sha256
+FRZ=evaluation/results/door/freeze_door_replay_dev_r2.sha256
 T0="${T0:-0}"; T1="${T1:-1000000000}"; HZ="${HZ:-10}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
