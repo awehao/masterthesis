@@ -12,7 +12,7 @@
 # **LW 版（長窗隔離診斷；規格 K3_stop_longwindow_diag_spec.md draft-2）**（run_door_k3ab_ev.sh 的複本）：差異只有
 #   (1) 任務節點改用 door_k3ab_lw_task_node.py 並傳 --post-abort-observe-s 10（原 3.0）；
 #   (2) 另起獨立觀察器 door_k3ab_lw_observer.py（中止後的實驗保護；觸發 ⇒ /door/lw_guard＋/room/stop，記為觀察提前終止）；
-#   (3) 凍結清單 freeze_door_k3ab_lw_dev_r2.sha256（r2：觀察器心跳、任務節點就緒閘與心跳監看、closing／finish 分開、分析器交叉核對）。求解器、執行端、展開、轉接與所有參數不改。單趟；未核可前不得執行。
+#   (3) 凍結清單 freeze_door_k3ab_lw_dev_r3.sha256（r3：分析器另查 sim_rc；r2：觀察器心跳、任務節點就緒閘與心跳監看、closing／finish 分開、分析器交叉核對）。求解器、執行端、展開、轉接與所有參數不改。單趟；未核可前不得執行。
 # 由 run_guarded_v2.sh 包 92 °C 熱中止：
 #   RUN_ID=door_k3ab_lw_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_k3ab_lw.sh bash evaluation/run_guarded_v2.sh
 # 節點：門場景執行端（PARK_HOLD）→ 展開節點（K2_READY → Q_PRE_DOOR）→ K2 任務節點 → 轉接器 → W-GMPC 求解器。
@@ -26,7 +26,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_k3ab_lw_dev_r2.sha256
+FRZ=evaluation/results/door/freeze_door_k3ab_lw_dev_r3.sha256
 STAND='0.6,-0.5332,1.570796'
 K2_READY='0,0,0.035,0,-1.5707963,0'
 Q_PRE='-0.9471,0.0758,1.6024,-1.539,-0.9479,-0.0544'

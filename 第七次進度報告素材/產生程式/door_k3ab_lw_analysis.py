@@ -195,8 +195,9 @@ def protection(task, room, obs, health, latched):
         for k in ('sim', 'obs'):
             if health.get(k) != 'exited':
                 inc.append(f'runner_{k}_{health.get(k)}')
-        if health.get('obs_rc') not in ('0', 0):
-            inc.append(f"runner_obs_rc_{health.get('obs_rc')}")
+        for k in ('obs_rc', 'sim_rc'):                                        # r3：執行端結束碼也須為 0（Codex 20261023_232145）
+            if health.get(k) not in ('0', 0):
+                inc.append(f"runner_{k}_{health.get(k)}")
     return src, inc
 
 

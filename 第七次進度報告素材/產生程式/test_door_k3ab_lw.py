@@ -214,7 +214,7 @@ def task(**kw):
 
 OBS_OK = {'trip': None, 'ended_by': 'TERM', 'closed': {'why': 'runner_TERM'}, 'loop_exception': None, 'n_heartbeat': 500,
           'armed_wall': 1.0, 'n_anomalies': 0}
-HEALTH_OK = {'sim': 'exited', 'obs': 'exited', 'obs_rc': '0'}
+HEALTH_OK = {'sim': 'exited', 'sim_rc': '0', 'obs': 'exited', 'obs_rc': '0'}
 
 
 def an(t, r, obs=OBS_OK, health=HEALTH_OK, **kw):
@@ -285,7 +285,10 @@ class Analysis(unittest.TestCase):
                                  ({**OBS_OK, 'armed_wall': None}, HEALTH_OK, 'observer_not_armed_despite_latch'),
                                  ({**OBS_OK, 'n_heartbeat': 0}, HEALTH_OK, 'observer_no_heartbeat'),
                                  (OBS_OK, None, 'runner_health_missing'), (OBS_OK, {**HEALTH_OK, 'obs': 'killed'}, 'runner_obs_killed'),
-                                 (OBS_OK, {**HEALTH_OK, 'sim': 'terminated'}, 'runner_sim_terminated')):
+                                 (OBS_OK, {**HEALTH_OK, 'sim': 'terminated'}, 'runner_sim_terminated'),
+                                 (OBS_OK, {**HEALTH_OK, 'sim_rc': '27'}, 'runner_sim_rc_27'),          # Codex 反例
+                                 (OBS_OK, {k: v for k, v in HEALTH_OK.items() if k != 'sim_rc'}, 'runner_sim_rc_None'),
+                                 (OBS_OK, {**HEALTH_OK, 'obs_rc': '1'}, 'runner_obs_rc_1')):
             R = an(task(), room(100 + 1101, decay), obs=obs, health=health)
             self.assertEqual(R['stop_result'], 'unverified_protection_incomplete', why)
             self.assertIn(why, R['protection_incomplete'])
