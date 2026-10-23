@@ -1092,15 +1092,6 @@ class WGMPCNode(Node):
                 print(f'[wg2] 收到停止請求：{self._stop_req}（迴圈頂端，本輪不求解）',
                       flush=True)
                 break
-            if self._pause_active() and self._pause_sup.state in ('STOPPED', 'DONE', 'FAIL'):   # ADM4：停止發布後只觀察
-                if self._pause_sup.state == 'STOPPED':
-                    self._pause_sup.cycle(self.sim_now(), True, True)
-                _o4 = self._pause_status(slot, note='observe_no_publish')
-                self.log.append(dict(slot=slot, sim_t=self.sim_now(), ok=False, reason='pause_observe', published=False,
-                                     timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall, pause_state=_o4['state']))
-                slot, _m = self._reschedule(slot)
-                self._c_miss += _m
-                continue
             if self._halt:
                 # 等待時槽時由 `_reschedule` 設定（牆鐘上限或模擬時鐘停滯）
                 break
@@ -1125,6 +1116,15 @@ class WGMPCNode(Node):
                       f'{self._chain_fail_info}', flush=True)
                 self._stopped_on_fail = True
                 break
+            if self._pause_active() and self._pause_sup.state in ('STOPPED', 'DONE', 'FAIL'):   # ADM4：停止發布後只觀察（置於時間上限／halt／鏈失效檢查之後、gate 之前）
+                if self._pause_sup.state == 'STOPPED':
+                    self._pause_sup.cycle(self.sim_now(), True, True)
+                _o4 = self._pause_status(slot, note='observe_no_publish')
+                self.log.append(dict(slot=slot, sim_t=self.sim_now(), ok=False, reason='pause_observe', published=False,
+                                     timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall, pause_state=_o4['state']))
+                slot, _m = self._reschedule(slot)
+                self._c_miss += _m
+                continue
             # ---- 在途命令的關節餘裕守衛 ----
             # **即使此刻立刻全停**，已發布尚未生效完畢的那幾筆仍會把某軸
             # 推過有效餘裕線 ⇒ 本輪再怎麼求解都來不及補救，立即記錄並收尾。
@@ -1277,8 +1277,9 @@ class WGMPCNode(Node):
                                                                  stopped=self._stop_req is not None, snap_t=snap.sim_t):
                 self._mode_events.append({'sim_t': snap.sim_t, 'slot': slot, 'applied_free': True, 'u_prev': [float(x) for x in u_prev]})
                 print(f'[wg2] **K3-M 切入 free** @ slot {slot} snap {snap.sim_t:.3f}', flush=True)
-            if self._pause_sw is not None and self._pause_sw.pending is not None and self._T_rx is not None:   # ADM4：切入 pause
-                _Tf = np.array(self._T_rx, float)
+            _Tsrc4 = self._T_rx if self._T_rx is not None else self._T_last                # ADM4：話題目標；無話題時＝上一輪實際使用的目標
+            if self._pause_sw is not None and self._pause_sw.pending is not None and _Tsrc4 is not None:   # ADM4：切入 pause
+                _Tf = np.array(_Tsrc4, float)
                 if self._pause_sw.apply([float(v) for v in _Tf[:3, 3]], stopped=self._stop_req is not None, snap_t=snap.sim_t):
                     self._pause.update(stage='decel', T=_Tf, anchor=None, zero_mode=False)
                     self._pause['events'].append({'sim_t': snap.sim_t, 'slot': slot, 'applied_pause': True,
