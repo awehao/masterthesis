@@ -112,7 +112,7 @@ class TaskNodeAndRunner(unittest.TestCase):
         src = '\n'.join(b)
         for tok in ('isaac_door_k2_sim_ev3.py --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID"',
                     'dl3_wgmpc_wg2_adm3_node.py --require-topic-target --park-hold --offset-observer interval --mode-switch-run-id "$RUN_ID"',
-                    'door_k3m_task_node.py --out "$DIR/task.json" --run-id "$RUN_ID"', 'freeze_door_k3m_ev_dev_r2.sha256'):
+                    'door_k3m_task_node.py --out "$DIR/task.json" --run-id "$RUN_ID"', 'freeze_door_k3m_ev_dev_r3.sha256'):
             self.assertIn(tok, src)
 
 
