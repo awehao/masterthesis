@@ -204,6 +204,7 @@ import door_geom_v2 as DG                                        # noqa: E402
 import door_k2_io as KIO                                         # noqa: E402
 import door_k3_evidence as KEV                                   # noqa: E402  EV 版：取證擷取（純邏輯）
 import door_root_evidence as REV                                 # noqa: E402  EV2R：根／門扇三點讀取（純邏輯）
+import door_replay_capture as REPC                                # noqa: E402  EV2RP r3：擷取順序（純邏輯）
 import time as _ev_time                                          # noqa: E402  EV 版：取證耗時
 from isaac_common import (bind_friction, bind_frictionless,     # noqa: E402
                           collision_prims, import_urdf,
@@ -925,42 +926,40 @@ def main() -> int:
                 world.render()
             else:
                 world.step(render=True)
-            # ---- 擷取前回讀實際姿態，對來源計偏差 ----
-            _p, _o = robot.get_world_pose()
-            _p, _o = np.asarray(_p, float).copy(), np.asarray(_o, float).copy()
-            _qa = np.asarray(robot.get_joint_positions(), float).copy()
-            _lp, _lo = (np.asarray(x, float).reshape(-1).copy() for x in leaf_v.get_world_poses())
-            _dev_b = math.hypot(_p[0] - _bx, _p[1] - _by) * 1e3
-            _dev_y = abs(math.degrees(math.atan2(math.sin(_yaw_wxyz(_o) - _byaw), math.cos(_yaw_wxyz(_o) - _byaw))))
-            _src_j = [float(_sr[_iq][_k]) for _k in range(len(ARM))] + ([float(v) for v in _sr[_iqf]] if _sr[_iqf] is not None else [])
-            _got_j = [_qa[idx[_j]] for _j in ARM] + ([_qa[fidx[_j]] for _j in FJ] if _sr[_iqf] is not None else [])
-            _dev_j = max(abs(u - v) for u, v in zip(_got_j, _src_j)) * 1e3
-            _dev_d = abs(math.degrees(-_yaw_wxyz(_lo) - float(_sr[_iqd])))
-            try:
-                _ux, _uy, _uyaw = _usd_xy_yaw(art_root)
-                _usd_b = math.hypot(_ux - _bx, _uy - _by) * 1e3
-                _usd_y = abs(math.degrees(math.atan2(math.sin(_uyaw - _byaw), math.cos(_uyaw - _byaw))))
-                _lx, _ly, _lyaw = _usd_xy_yaw(dauth['leaf_prim'])
-                _usd_d = abs(math.degrees(-_lyaw - float(_sr[_iqd])))
-            except Exception:                                    # USD 讀不到 ⇒ NaN ⇒ pose_ok＝0
-                _usd_b = _usd_y = _usd_d = float('nan')
-            try:                                                 # 夾爪連桿：PhysX tensor 位姿 vs 渲染端 USD 世界變換（手臂連桿是否跟上）
-                _gp = np.asarray(_grip_v.get_world_poses()[0], float).reshape(-1)
-                xfc.Clear()
-                _gt = xfc.GetLocalToWorldTransform(stage.GetPrimAtPath(_gpath)).ExtractTranslation()
-                _usd_g = math.sqrt(sum((float(_gt[_k]) - _gp[_k]) ** 2 for _k in range(3))) * 1e3
-            except Exception:
-                _usd_g = float('nan')
-            _pose_ok = int(_dev_b <= _TOL['base_mm'] and _dev_y <= _TOL['yaw_deg'] and _dev_j <= _TOL['joint_mrad'] and _dev_d <= _TOL['door_deg']
-                           and _usd_b <= _TOL['base_mm'] and _usd_y <= _TOL['yaw_deg'] and _usd_d <= _TOL['door_deg']
-                           and _usd_g <= _TOL['base_mm'])
-            _img = cam.get_rgba()
-            _retry = 0                                           # r3：相機暖機——同一姿態最多重新 render 3 次（不推進物理），次數入 CSV
-            while not (_img is not None and bool(getattr(_img, 'size', 0))) and _retry < 3:
-                _retry += 1
-                world.render()
-                _img = cam.get_rgba()
-            _img_ok = int(_img is not None and bool(getattr(_img, 'size', 0)))
+            # ---- 擷取：取影像→（無圖）同一姿態重 render ≤3 次（不推進物理）→ 最後一次 render 之後回讀實際姿態（door_replay_capture）----
+            def _read_pose():                                    # r3：由 REPC.capture 在最後一次 render 之後呼叫
+                _p, _o = robot.get_world_pose()
+                _p, _o = np.asarray(_p, float).copy(), np.asarray(_o, float).copy()
+                _qa = np.asarray(robot.get_joint_positions(), float).copy()
+                _lp, _lo = (np.asarray(x, float).reshape(-1).copy() for x in leaf_v.get_world_poses())
+                _dev_b = math.hypot(_p[0] - _bx, _p[1] - _by) * 1e3
+                _dev_y = abs(math.degrees(math.atan2(math.sin(_yaw_wxyz(_o) - _byaw), math.cos(_yaw_wxyz(_o) - _byaw))))
+                _src_j = [float(_sr[_iq][_k]) for _k in range(len(ARM))] + ([float(v) for v in _sr[_iqf]] if _sr[_iqf] is not None else [])
+                _got_j = [_qa[idx[_j]] for _j in ARM] + ([_qa[fidx[_j]] for _j in FJ] if _sr[_iqf] is not None else [])
+                _dev_j = max(abs(u - v) for u, v in zip(_got_j, _src_j)) * 1e3
+                _dev_d = abs(math.degrees(-_yaw_wxyz(_lo) - float(_sr[_iqd])))
+                try:
+                    _ux, _uy, _uyaw = _usd_xy_yaw(art_root)
+                    _usd_b = math.hypot(_ux - _bx, _uy - _by) * 1e3
+                    _usd_y = abs(math.degrees(math.atan2(math.sin(_uyaw - _byaw), math.cos(_uyaw - _byaw))))
+                    _lx, _ly, _lyaw = _usd_xy_yaw(dauth['leaf_prim'])
+                    _usd_d = abs(math.degrees(-_lyaw - float(_sr[_iqd])))
+                except Exception:                                    # USD 讀不到 ⇒ NaN ⇒ pose_ok＝0
+                    _usd_b = _usd_y = _usd_d = float('nan')
+                try:                                                 # 夾爪連桿：PhysX tensor 位姿 vs 渲染端 USD 世界變換（手臂連桿是否跟上）
+                    _gp = np.asarray(_grip_v.get_world_poses()[0], float).reshape(-1)
+                    xfc.Clear()
+                    _gt = xfc.GetLocalToWorldTransform(stage.GetPrimAtPath(_gpath)).ExtractTranslation()
+                    _usd_g = math.sqrt(sum((float(_gt[_k]) - _gp[_k]) ** 2 for _k in range(3))) * 1e3
+                except Exception:
+                    _usd_g = float('nan')
+                _pose_ok = int(_dev_b <= _TOL['base_mm'] and _dev_y <= _TOL['yaw_deg'] and _dev_j <= _TOL['joint_mrad'] and _dev_d <= _TOL['door_deg']
+                               and _usd_b <= _TOL['base_mm'] and _usd_y <= _TOL['yaw_deg'] and _usd_d <= _TOL['door_deg']
+                               and _usd_g <= _TOL['base_mm'])
+                return _dev_b, _dev_y, _dev_j, _dev_d, _usd_b, _usd_y, _usd_d, _usd_g, _pose_ok
+            _img, _retry, (_dev_b, _dev_y, _dev_j, _dev_d, _usd_b, _usd_y, _usd_d, _usd_g, _pose_ok) = REPC.capture(
+                cam.get_rgba, world.render, _read_pose, max_retry=3)
+            _img_ok = int(REPC.has_image(_img))
             if _img_ok:
                 _imageio.imwrite(os.path.join(cam_dir, f'f_{_n:05d}.png'), _img[:, :, :3].astype(np.uint8))
             _n_bad_img += 1 - _img_ok

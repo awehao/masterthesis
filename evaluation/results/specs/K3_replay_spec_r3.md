@@ -62,3 +62,9 @@ r2（`K3_replay_spec_r2.md`）的其餘內容不變。本文件只列這次的�
 **凍結**：`freeze_door_replay_dev_r3.sha256`。
 
 **申請**：用 r3 重跑 lw_1 side，RUN_ID `door_k3ab_lw_1_replay_side_r3`；通過 complete=True 後，再依序跑其餘三支。side_r2 的輸出與預覽影片保留。
+
+## 7. 增補 r4（Codex 20261024_003051）
+- 姿態回讀移到**最後一次 render 之後、存影格之前**：擷取順序抽成純函式 `door_replay_capture.capture()`（取影像 →（無圖）同一姿態重 render ≤3 次、不推進物理 → 回讀姿態），ev2rp 呼叫它。
+- `test_door_replay_capture.py` 3 項：姿態回讀一定在最後一次 render 之後；重試上限 3；有圖不重試；仍無圖回傳 None 並記 retry=3。
+- 凍結 `freeze_door_replay_dev_r4.sha256`。
+- 放行順序：side_r3 → complete=True 且抽看正常 → 立即產正式影片並更新 README → 依序跑其餘三支。再缺圖或出現工具例外就停批，不自行增加重試次數。
