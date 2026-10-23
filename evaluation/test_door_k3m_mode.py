@@ -135,13 +135,13 @@ class Task(unittest.TestCase):
     SA = {'run_id': RUN, 'seq': 1, 'mode': 'free', 'switch_step': 2002, 'switch_t': 20.02, 'first_free_slot': 17,
           'first_free_sim_t': 20.05, 'publish_sim_t': 20.06, 'published': True}
 
-    def run_waiter(self, exec_msg, solver_msg, t_end=20.5, t_e=20.03, t_s=20.07, wall_end=100.2):
+    def run_waiter(self, exec_msg, solver_msg, t_end=20.5, t_e=20.03, t_s=20.07, wall_end=100.2, w_e=100.03, w_s=100.07):
         W = M.TaskModeWaiter(RUN, timeout_s=1.0, wall_timeout_s=2.0)
         W.make_request(2000, 20.0, 100.0)
         if exec_msg is not None:
-            W.on_executor(exec_msg, t_e)
+            W.on_executor(exec_msg, t_e, w_e)
         if solver_msg is not None:
-            W.on_solver(solver_msg, t_s)
+            W.on_solver(solver_msg, t_s, w_s)
         return W.status(t_end, wall_end)
 
     def test_confirmed_only_with_consistent_acks(self):
@@ -175,6 +175,14 @@ class Task(unittest.TestCase):
         self.assertEqual(self.run_waiter(ea, dict(sa, first_free_sim_t=20.01)), ('abort', 'solver_ack_invalid'))
         self.assertEqual(self.run_waiter(ea, dict(sa, publish_sim_t=20.04)), ('abort', 'solver_ack_invalid'))
 
+    def test_codex_wall_deadline_with_both_acks(self):
+        """Codex 反例：模擬時間停在 ~20.1 s、牆鐘已到 103 s 時雙 ack 才到齊 ⇒ 不可確認；準時收到、稍晚查詢 ⇒ 仍確認；時間 NaN ⇒ 不可確認。"""
+        self.assertEqual(self.run_waiter(self.EA, self.SA, t_end=20.1, t_e=20.08, t_s=20.09, w_e=102.9, w_s=103.0, wall_end=103.0),
+                         ('abort', 'mode_switch_wall_timeout'))
+        self.assertEqual(self.run_waiter(self.EA, self.SA, t_end=20.1, w_e=100.5, w_s=100.6, wall_end=103.0), 'confirmed')
+        self.assertEqual(self.run_waiter(self.EA, self.SA, t_e=float('nan')), ('abort', 'mode_ack_time_invalid'))
+        self.assertEqual(self.run_waiter(self.EA, self.SA, w_s=float('nan')), ('abort', 'mode_ack_time_invalid'))
+
     def test_wall_timeout_when_sim_clock_stalls(self):
         self.assertEqual(self.run_waiter(self.EA, None, t_end=20.05, wall_end=102.5), ('abort', 'mode_switch_wall_timeout'))
 
@@ -189,12 +197,12 @@ class Task(unittest.TestCase):
         E, S, W = M.ExecutorModeAuthority(RUN), M.SolverModeSwitch(RUN), M.TaskModeWaiter(RUN)
         r = W.make_request(2000, 20.0, 100.0)
         k, ea = E.on_request(r, 2001, 20.01, aborted=False, owner_wholebody=True)
-        W.on_executor(ea, 20.02)
+        W.on_executor(ea, 20.02, 100.02)
         self.assertEqual(W.status(20.02, 100.02), 'waiting')              # 求解器尚未確認 ⇒ 策略不推進
         S.on_executor_ack(ea, stopped=False, park_hold_active=True)
         cfg = FakeCfg()
         S.apply(cfg, shaping_enabled=False)
-        W.on_solver(S.note_first_solution(18, 20.05, [0.0] * 9, [0.0] * 9, published=True, publish_sim_t=20.06), 20.07)
+        W.on_solver(S.note_first_solution(18, 20.05, [0.0] * 9, [0.0] * 9, published=True, publish_sim_t=20.06), 20.07, 100.07)
         self.assertEqual(W.status(20.08, 100.08), 'confirmed')
 
 

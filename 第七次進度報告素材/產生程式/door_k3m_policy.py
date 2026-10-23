@@ -2,7 +2,7 @@
 """K3-M 相位機：底盤可動的小角度協同開門（規格 K3_mobile_coop_small_open_spec.md draft-3＋Codex 20261023_204354）。door_k3a_policy.py 不改。
 
 繼承 K3APolicy（不疊加 B／U／X）。UNFOLD～HOLD 完全同 K3-A。差異只在 OPEN 起：
-  - **OPEN 第一輪**：提出模式切換請求（TaskModeWaiter；放進 outbox 由節點發布），之後保持最後已發布目標、**不建立 DoorTargetK3、不推進參考**，
+  - **OPEN 第一輪**：本輪監看與夾持檢查通過後才提出模式切換請求（TaskModeWaiter；放進 outbox，由節點經 take_outbox() 發布——已中止則清除不發），之後保持最後已發布目標、**不建立 DoorTargetK3、不推進參考**，
     直到收到一致的執行端＋求解器 ack（confirmed）；nack、不一致、逾時（模擬 1.0 s／牆鐘 2.0 s）、中止 ⇒ 中止 mode_switch:<why>。
   - confirmed 的那一輪起交回父類 OPEN 邏輯（首輪 DoorTargetK3 不推進 ⇒ 首筆目標＝最後 HOLD 目標）。
   - **監看替換**：收到有效的執行端 ack（執行端已在明確物理步關閉 HoldMonitor）起，父類的底盤 20 mm／2° 漂移檢查改由
@@ -46,12 +46,20 @@ class K3MPolicy(P.K3APolicy):
         self.corr_last = None
         self.n_geom_warn = 0
 
-    # ---- 節點轉入的 ack（t_recv＝收到時的最新狀態模擬時間）
-    def on_executor_ack(self, msg, t_recv):
-        self.waiter.on_executor(msg, t_recv)
+    # ---- 節點轉入的 ack（t_recv＝收到時最新同步狀態的來源模擬時間，非獨立量測；wall_recv＝回呼內實測單調牆鐘）
+    def on_executor_ack(self, msg, t_recv, wall_recv):
+        self.waiter.on_executor(msg, t_recv, wall_recv)
 
-    def on_solver_ack(self, msg, t_recv):
-        self.waiter.on_solver(msg, t_recv)
+    def on_solver_ack(self, msg, t_recv, wall_recv):
+        self.waiter.on_solver(msg, t_recv, wall_recv)
+
+    def take_outbox(self):
+        """節點發布出口：已中止 ⇒ 清除待發請求、不發布（Codex 20261023_210920 第 2 項）。"""
+        if self.phase == 'ABORTED':
+            self.outbox.clear()
+            return []
+        out, self.outbox = list(self.outbox), []
+        return out
 
     @property
     def exec_switched(self):
@@ -89,16 +97,18 @@ class K3MPolicy(P.K3APolicy):
             return super().step(m, dt)
         act = {'target': None, 'grip': self.grip_cmd, 'request_handover': False, 'solver_start': False,
                'stop_solver': False, 'finish': False}
+        self.monitor(m)                                      # r3：先通過本輪監看與夾持檢查，才排入請求
+        if self.phase == 'ABORTED':
+            self.outbox.clear()
+            return self._aborted_act(act, m)
+        self._grasp_checks(m)
+        if self.phase == 'ABORTED':
+            self.outbox.clear()
+            return self._aborted_act(act, m)
         if self.mode_state == 'hold':
             self.outbox.append(self.waiter.make_request(int(getattr(m, 'state_step')), m.t, float(getattr(m, 'wall'))))
             self.mode_state = 'waiting'
             self.events.append({'t': m.t, 'k3m_mode_request': dict(self.waiter.request)})
-        self.monitor(m)
-        if self.phase == 'ABORTED':
-            return self._aborted_act(act, m)
-        self._grasp_checks(m)
-        if self.phase == 'ABORTED':
-            return self._aborted_act(act, m)
         st = self.waiter.status(m.t, float(getattr(m, 'wall')))
         if isinstance(st, tuple):
             self._abort(f'mode_switch:{st[1]}', m.t)

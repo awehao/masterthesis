@@ -22,6 +22,9 @@ r2（Codex 20261023_204354 第 1 項）：
   - 執行端：已中止優先於重送冪等（中止後即使同一請求也回 nack）。
   - 求解器：只有**有效且實際已發布**的首筆 free 解才產生 ack（note_first_solution 的 published 為 False ⇒ 不回 ack、繼續等）；
     pending ack 到真正套用前若已停止 ⇒ 丟棄、不切入 free（apply 回 False 並記錄）。「已發布」與「已套用」分開取證（套用由執行端紀錄）。
+r3（Codex 20261023_210920 第 1 項）：每個 ack 另帶**實際單調牆鐘接收時間** wall_recv（任務節點回呼內 time.monotonic()），保存並驗證；
+  確認前同時核對兩種期限：t_state_recv ≤ t_req＋timeout（模擬）且 wall_recv ≤ wall_req＋wall_timeout（牆鐘），四個時間都必須有限。
+  t_state_recv 是「收到時最新同步狀態的來源模擬時間」，**不是**獨立量得的 ack 到達模擬時刻；牆鐘接收時間才是本端實際量到的。
 """
 from __future__ import annotations
 
@@ -173,8 +176,10 @@ class TaskModeWaiter:
         self.wall_req = None
         self.exec_ack = None
         self.solver_ack = None
-        self.t_exec = None           # ack 到達時刻（模擬時間）
+        self.t_exec = None           # 收到 ack 時最新同步狀態的來源模擬時間（非獨立量測）
         self.t_solver = None
+        self.wall_exec = None        # 實際單調牆鐘接收時間
+        self.wall_solver = None
         self.result = None           # 'confirmed' 或 ('abort', why)
 
     def make_request(self, state_step: int, t: float, wall: float):
@@ -188,7 +193,7 @@ class TaskModeWaiter:
         if self.result is None:
             self.result = ('abort', why)
 
-    def on_executor(self, msg, t_recv: float):
+    def on_executor(self, msg, t_recv: float, wall_recv: float):
         if self.result is not None or self.request is None:
             return
         if not isinstance(msg, dict) or msg.get('run_id') != self.run_id or msg.get('seq') != 1:
@@ -202,9 +207,9 @@ class TaskModeWaiter:
             if self.exec_ack != msg:
                 return self._abort('executor_ack_conflict')
             return
-        self.exec_ack, self.t_exec = dict(msg), float(t_recv)
+        self.exec_ack, self.t_exec, self.wall_exec = dict(msg), float(t_recv), float(wall_recv)
 
-    def on_solver(self, msg, t_recv: float):
+    def on_solver(self, msg, t_recv: float, wall_recv: float):
         if self.result is not None or self.request is None:
             return
         if not isinstance(msg, dict) or msg.get('run_id') != self.run_id or msg.get('seq') != 1:
@@ -219,7 +224,7 @@ class TaskModeWaiter:
             if self.solver_ack != msg:
                 return self._abort('solver_ack_conflict')
             return
-        self.solver_ack, self.t_solver = dict(msg), float(t_recv)
+        self.solver_ack, self.t_solver, self.wall_solver = dict(msg), float(t_recv), float(wall_recv)
 
     def status(self, t: float, wall: float, aborted: bool = False):
         if self.result is not None:
@@ -230,9 +235,15 @@ class TaskModeWaiter:
             self._abort('aborted_while_waiting')
             return self.result
         deadline = self.t_req + self.timeout + 1e-9
+        wdeadline = self.wall_req + self.wall_timeout + 1e-9
         if self.exec_ack is not None and self.solver_ack is not None:
-            if max(self.t_exec, self.t_solver) > deadline:
+            ts = (self.t_exec, self.t_solver, self.wall_exec, self.wall_solver)
+            if not all(isinstance(v, float) and math.isfinite(v) for v in ts):
+                self._abort('mode_ack_time_invalid')
+            elif max(self.t_exec, self.t_solver) > deadline:
                 self._abort('mode_switch_timeout')                     # 逾期到達的 ack 不能確認
+            elif max(self.wall_exec, self.wall_solver) > wdeadline:
+                self._abort('mode_switch_wall_timeout')                # 牆鐘期限同樣以實際接收時間判定
             elif (self.solver_ack['switch_step'] != self.exec_ack['switch_step']
                   or abs(self.solver_ack['switch_t'] - self.exec_ack['switch_t']) > 1e-9):
                 self._abort('ack_switch_mismatch')
@@ -242,7 +253,7 @@ class TaskModeWaiter:
         if t > deadline:
             self._abort('mode_switch_timeout')
             return self.result
-        if not math.isfinite(wall) or wall - self.wall_req > self.wall_timeout + 1e-9:
+        if not math.isfinite(wall) or wall > wdeadline:
             self._abort('mode_switch_wall_timeout')
             return self.result
         return 'waiting'

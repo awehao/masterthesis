@@ -6,7 +6,8 @@
   - finger：兩指 對 門扇／立柱／兩側牆（盒）的最小距離——**只排除手指—橫桿設計接觸**，不排除整個手指；
   - base：底盤圓盤（半徑 C.RB）對上述各盒的水平淨空。
   - self：自碰，沿用 door_offline_check_v1.self_clear 的配對規則（非相鄰、非同一剛體、非設計接觸〔兩指互相〕的 53 個連桿對），
-    以同一份 900 點點雲的最近點距離近似（點雲最近點不等於三角面距離）；近配對每次算、遠配對輪流更新（default_backend 說明）。
+    以同一份 900 點點雲的最近點距離近似（點雲最近點不等於三角面距離）；每輪以當前構型的外接球下界篩選精確計算的配對（default_backend 說明；
+    r3 取消 r2 的跨輪快取——遠配對沿用舊距離沒有逐配對年齡或運動量扣減，偏離名目時不成立）。
     （r2：原寫「自碰由關節餘裕與 margin guard 承擔」已刪除——關節限位不能替代連桿間距檢查。）
 **判定**（每個任務週期）：
   - 輸入任一非有限、缺值、量測年齡（牆鐘）> age_max_s，或距離計算失敗 ⇒ stop（**幾何結果過期或無法取得不當作淨空**）；
@@ -78,15 +79,16 @@ def downsample(clouds, n, seed=0):
     return out
 
 
-SELF_NEAR_M = 0.030          # 近配對門檻：低於此值的配對每次都算
-SELF_REFRESH_CALLS = 4       # 遠配對輪流全量更新的週期（呼叫次數）
+SELF_NEAR_M = 0.030          # 外接球下界低於此值的配對做精確點雲距離
 
 
-def default_backend(q_finger_unused=None, clouds=None, self_clouds=None, self_cache=True):
+def default_backend(q_finger_unused=None, clouds=None, self_clouds=None, self_mode='sphere'):
     """以離線同一套模組組成距離計算（door_k2_offline_v2 的點雲、door_geom_v2 的門幾何）。clouds 可替換（例如完整點雲）。
-    self_clouds：自碰用點雲（預設＝線上同一份 900 點點雲；**不降採樣**——降採樣在此手臂上會漏掉最近點，離線見
-    door_k3m_offline_geom_monitor_r2.json）。self_cache：近配對（上次 < SELF_NEAR_M）每次都算，遠配對分 SELF_REFRESH_CALLS 組輪流全量更新；
-    第一次呼叫全量。假設：遠配對在 SELF_REFRESH_CALLS 次呼叫內的接近量 < SELF_NEAR_M − d_min（離線核對接近率）。"""
+    self_clouds：自碰用點雲（預設＝線上同一份 900 點點雲；不降採樣——降採樣在此手臂上會漏掉最近點）。
+    self_mode（r3，Codex 20261023_210920 第 4 項；取代 r2 的跨輪快取）：
+      'full'   ＝每輪 53 對全部精確計算；
+      'sphere' ＝每輪以**當前構型**的連桿外接球算每對下界 LB＝|c_x − c_y| − r_x − r_y（≤ 真實點雲距離）；LB < SELF_NEAR_M 的配對做精確計算，
+                 其餘以 LB 代入。⇒ 最小值 < SELF_NEAR_M 時與 'full' 完全相同；否則回報值 ≤ 真實值（保守）。不沿用前一輪任何距離。"""
     import door_k2_offline_v2 as V2
     import door_geom_v2 as G2
     from scipy.spatial import cKDTree
@@ -95,31 +97,9 @@ def default_backend(q_finger_unused=None, clouds=None, self_clouds=None, self_ca
     pairs = self_pairs()
     s_names = sorted({n for p in pairs for n in p})
     SC = self_clouds if self_clouds is not None else {n: C.CL[n] for n in s_names}
-    cache = {'d': {}, 'n_call': 0}
-
-    def world_pts(qf, n, P, q_finger):
-        T = C.K.fk(qf, n)
-        P = P + (C.FINGER_AXIS[n] * q_finger if n in C.FINGER_AXIS else 0.0)
-        return (T[:3, :3] @ P.T).T + T[:3, 3]
-
-    def self_dist(qf, q_finger):
-        k = cache['n_call']
-        cache['n_call'] += 1
-        if not self_cache or not cache['d']:
-            todo = list(range(len(pairs)))
-        else:
-            todo = [i for i in range(len(pairs)) if cache['d'].get(i, 0.0) < SELF_NEAR_M or i % SELF_REFRESH_CALLS == k % SELF_REFRESH_CALLS]
-        need = sorted({n for i in todo for n in pairs[i]})
-        W = {n: world_pts(qf, n, SC[n], q_finger) for n in need}
-        trees = {}
-        for i in todo:
-            x, y = pairs[i]
-            if x not in trees:
-                trees[x] = cKDTree(W[x])
-            cache['d'][i] = float(trees[x].query(W[y], k=1)[0].min())
-        i_best = min(cache['d'], key=lambda i: cache['d'][i])
-        x, y = pairs[i_best]
-        return cache['d'][i_best], f'{x}|{y}'
+    cen = {n: SC[n].mean(axis=0) for n in s_names}
+    rad = {n: float(np.linalg.norm(SC[n] - cen[n], axis=1).max()) for n in s_names}
+    stats = {'n_exact': 0, 'n_calls': 0}
 
     def world_fn(qf, names, q_finger):
         out = {}
@@ -128,6 +108,37 @@ def default_backend(q_finger_unused=None, clouds=None, self_clouds=None, self_ca
             P = CL[n] + (C.FINGER_AXIS[n] * q_finger if n in C.FINGER_AXIS else 0.0)
             out[n] = (T[:3, :3] @ P.T).T + T[:3, 3]
         return out
+
+    def self_dist(qf, q_finger):
+        stats['n_calls'] += 1
+        T = {n: C.K.fk(qf, n) for n in s_names}
+        best = (math.inf, None)
+        todo = []
+        for x, y in pairs:
+            if self_mode == 'full':
+                todo.append((x, y))
+                continue
+            cx = T[x][:3, :3] @ (cen[x] + (C.FINGER_AXIS[x] * q_finger if x in C.FINGER_AXIS else 0.0)) + T[x][:3, 3]
+            cy = T[y][:3, :3] @ (cen[y] + (C.FINGER_AXIS[y] * q_finger if y in C.FINGER_AXIS else 0.0)) + T[y][:3, 3]
+            lb = float(np.linalg.norm(cx - cy)) - rad[x] - rad[y]
+            if lb < SELF_NEAR_M:
+                todo.append((x, y))
+            elif lb < best[0]:
+                best = (lb, f'{x}|{y}:lb')
+        need = sorted({n for p in todo for n in p})
+        W = {}
+        for n in need:
+            P = SC[n] + (C.FINGER_AXIS[n] * q_finger if n in C.FINGER_AXIS else 0.0)
+            W[n] = (T[n][:3, :3] @ P.T).T + T[n][:3, 3]
+        trees = {}
+        for x, y in todo:
+            if x not in trees:
+                trees[x] = cKDTree(W[x])
+            d = float(trees[x].query(W[y], k=1)[0].min())
+            stats['n_exact'] += 1
+            if d < best[0]:
+                best = (d, f'{x}|{y}')
+        return best
 
     def make(q_door):
         sh = G2.shapes(K1.D2, q_door, K1.H)
@@ -149,6 +160,8 @@ def default_backend(q_finger_unused=None, clouds=None, self_clouds=None, self_ca
         out['self'] = self_dist(qf, q_finger)
         return out
     fn.pairs = pairs
+    fn.self_stats = stats
+    fn.self_mode = self_mode
     return fn
 
 

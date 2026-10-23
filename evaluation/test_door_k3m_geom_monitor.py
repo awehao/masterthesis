@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""door_k3m_geom_monitor 的反例（r2）：與離線 parts_clearance／self_clear 同值（四類）、手指只排除橫桿、自碰快取＝全量，
+"""door_k3m_geom_monitor 的反例（r2）：與離線 parts_clearance／self_clear 同值（四類）、手指只排除橫桿、自碰外接球法＝全量且偏離名目時保守、不沿用前一輪，
 輸入無效（含 Codex 反例：錯誤長度 qf、文字輸入）／過期／時間不遞增／計算失敗／結果結構錯／結果年齡過期 ⇒ stop，
 耗時一律內部實測（不補零）、以實測接近率與 v_floor 預測停止前距離、warn 只記錄、ds_err 計入。
 
@@ -108,7 +108,7 @@ class Backend(unittest.TestCase):
 
     def test_equals_offline_parts_clearance_and_self_clear(self):
         import door_k3au_offline_geom as GA
-        fn = GM.default_backend(self_cache=False)
+        fn = GM.default_backend(self_mode='full')
         for r in self.rows[::60]:
             q, qd = np.array(r['q']), math.radians(r['q_door_deg'])
             d = fn(q, qd, 0.00166)
@@ -121,11 +121,31 @@ class Backend(unittest.TestCase):
             self.assertAlmostEqual(d['base'][0], bc, places=12)
             self.assertAlmostEqual(d['self'][0], sc, places=12)
 
-    def test_self_cache_equals_full_along_candidate(self):
-        fc, ff = GM.default_backend(), GM.default_backend(self_cache=False)
+    def test_self_sphere_equals_full_along_candidate(self):
+        fs, ff = GM.default_backend(self_mode='sphere'), GM.default_backend(self_mode='full')
         for r in self.rows[::3]:
             q, qd = np.array(r['q']), math.radians(r['q_door_deg'])
-            self.assertEqual(fc(q, qd, 0.00166)['self'][0], ff(q, qd, 0.00166)['self'][0])
+            self.assertEqual(fs(q, qd, 0.00166)['self'][0], ff(q, qd, 0.00166)['self'][0])
+
+    def test_self_sphere_conservative_off_nominal_and_not_stale(self):
+        """偏離名目的隨機構型：外接球法回報值 ≤ 全量；< SELF_NEAR_M 時完全相等；換構型後不沿用前一輪（Codex r3 第 4 項）。"""
+        fs, ff = GM.default_backend(self_mode='sphere'), GM.default_backend(self_mode='full')
+        rng = np.random.default_rng(3)
+        q0 = np.array(self.rows[100]['q'])
+        n_near = 0
+        for _ in range(25):
+            q = q0.copy()
+            q[3:9] += rng.uniform(-0.6, 0.6, 6)
+            a, b = fs(q, 0.05, 0.00166)['self'][0], ff(q, 0.05, 0.00166)['self'][0]
+            self.assertLessEqual(a, b + 1e-12)
+            if b < GM.SELF_NEAR_M:
+                n_near += 1
+                self.assertEqual(a, b)
+        self.assertGreater(n_near, 0)
+        qa, qb = q0.copy(), q0.copy()
+        qb[3:9] += np.array([0.0, 0.5, -0.5, 0.0, 0.4, 0.0])
+        fs(qa, 0.0, 0.00166)
+        self.assertEqual(fs(qb, 0.0, 0.00166)['self'][0], ff(qb, 0.0, 0.00166)['self'][0])
 
     def test_fingers_exclude_only_bar(self):
         import door_k2_offline_v2 as V2

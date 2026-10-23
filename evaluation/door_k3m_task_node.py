@@ -112,7 +112,7 @@ class Node2(Node):
             d = None
         self.mode_msgs.append({'src': 'executor', 't_recv': self._t_now(), 'wall': time.monotonic(), 'msg': d})
         if self.pol is not None:
-            self.pol.on_executor_ack(d, self._t_now())
+            self.pol.on_executor_ack(d, self._t_now(), time.monotonic())
 
     def _mode_solver(self, m):
         try:
@@ -121,7 +121,7 @@ class Node2(Node):
             d = None
         self.mode_msgs.append({'src': 'solver', 't_recv': self._t_now(), 'wall': time.monotonic(), 'msg': d})
         if self.pol is not None:
-            self.pol.on_solver_ack(d, self._t_now())
+            self.pol.on_solver_ack(d, self._t_now(), time.monotonic())
 
     def _pviol(self, m):
         try:
@@ -168,7 +168,7 @@ def main():
     ap.add_argument('--rate', type=float, default=20.0)
     ap.add_argument('--run-id', required=True)
     ap.add_argument('--corridor-table', default=os.path.join(HERE, 'results', 'door', 'door_k3m_corridor_table.json'))
-    ap.add_argument('--geom-config', default=os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r2.json'))
+    ap.add_argument('--geom-config', default=os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r3.json'))
     ap.add_argument('--wall-total-s', type=float, default=600.0)
     ap.add_argument('--wall-post-abort-s', type=float, default=60.0)
     a = ap.parse_args()
@@ -204,7 +204,9 @@ def main():
         rep['open_entry'], rep['max_grasp_drift'] = pol.open_entry, {'pos_m': pol.max_drift[0], 'rot_rad': pol.max_drift[1]}
         W = pol.waiter
         rep['k3m'] = {'mode_state': pol.mode_state, 'request': W.request, 'exec_ack': W.exec_ack, 'solver_ack': W.solver_ack,
-                      't_exec_recv': W.t_exec, 't_solver_recv': W.t_solver, 'result': W.result, 'n_geom_warn': pol.n_geom_warn,
+                      't_exec_recv': W.t_exec, 't_solver_recv': W.t_solver, 'wall_req': W.wall_req, 'wall_exec_recv': W.wall_exec,
+                      'wall_solver_recv': W.wall_solver, 't_recv_semantics': '收到時最新同步狀態的來源模擬時間（非獨立量測）',
+                      'result': W.result, 'n_geom_warn': pol.n_geom_warn,
                       'mode_msgs': nd.mode_msgs, 'executor_violation': nd.exec_violation}
         tmp = a.out + '.tmp'
         json.dump(rep, open(tmp, 'w'), ensure_ascii=False, indent=1, default=float)
@@ -284,10 +286,9 @@ def main():
             dt = 0.0 if t_prev is None else max(0.0, t - t_prev)
             t_prev = t
             act = pol.step(m, dt)
-            for _rq in pol.outbox:
+            for _rq in pol.take_outbox():                      # 已中止 ⇒ take_outbox 清除、不發布
                 nd.mode_req_pub.publish(String(data=json.dumps(_rq, default=float)))
                 rep['events'].append({'t': t, 'k3m_mode_request_published': _rq})
-            pol.outbox.clear()
             _g = pol.geom_last
             if act['request_handover'] and not ho_sent and gate.get('passed') and gate.get('ok_now'):
                 nd.ho_pub.publish(String(data=json.dumps({'to': 'wholebody', 'at_step': int(step) + 5, 'window_steps': 50})))

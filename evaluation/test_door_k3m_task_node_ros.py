@@ -70,6 +70,7 @@ class Wiring(unittest.TestCase):
             ps.publish(String(data=json.dumps(sa)))
             self.assertTrue(self.spin([nd, peer], lambda: pol.waiter.solver_ack is not None))
             self.assertEqual(pol.waiter.status(20.38, time.monotonic()), 'confirmed')
+            self.assertTrue(pol.waiter.wall_exec is not None and pol.waiter.wall_solver >= pol.waiter.wall_exec)   # 回呼內實測牆鐘
             pv.publish(String(data=json.dumps({'why': 'corridor'})))
             self.assertTrue(self.spin([nd, peer], lambda: nd.exec_violation is not None))
             self.assertEqual(nd.exec_violation['why'], 'corridor')

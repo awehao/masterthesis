@@ -1,5 +1,13 @@
 # K3-M：底盤可動的小角度協同開門（規格 draft-4＋版本化接入與接入層離線測試；不開模擬）
 
+draft-4 r3 依 Codex 20261023_210920（接入必修四項＋ADM3 假世界測試＋停止小規格；仍不核可實跑）：
+- 握手：每個 ack 另存**回呼內實測單調牆鐘接收時間**，確認前同時核模擬與牆鐘兩種期限（以接收時間判定，準時收到、稍晚查詢仍可確認）；任一接收時間非有限 ⇒ 中止；t_state_recv 改稱「收到時最新同步狀態的來源模擬時間」（非獨立量測）；
+- 策略：本輪監看與夾持檢查通過後才排入切換請求；節點經 take_outbox() 發布，已中止即清除不發；
+- 判定器：依 task.geom_config 逐列**重算**幾何預測與決策（四類完整有限、耗時非負、年齡與步號有效），不採信記錄的 dec；
+- 自碰：取消跨輪快取，改為每輪以**當前構型**的外接球下界篩選精確計算（最小值 < 30 mm 時與全量相同，否則保守；p99 16.1 ms）；
+- ADM3 ROS 假世界測試（實際節點發布鏈）3 情境通過；執行端停止順序以 mock 鏈鎖定「偵測後以原命令多走恰 1 個控制區間」；
+- 停止小規格 `K3_stop_admissibility_spec.md`：原停止方式幾何餘裕不足，進入條件**未解除**，候選「跟隨減速保持」未實作。
+
 draft-4 依 Codex 20261023_204354（可繼續版本化接入開發與接入層離線測試；本輪不是純函式完整驗收、不核可實跑）：
 - 握手 r2：期限以 ack 到達時刻判定、必要欄位與時間先後、中止優先於重送、牆鐘逾時、首筆**已發布** free 解才回 ack、pending 遇停止不切入、
   求解器等快照時刻 ≥ switch_t 才切入；
@@ -255,9 +263,9 @@ draft-2 依 Codex 20261023_202016 的四項修正與交接 `reviews/20261023_lit
 
 | 檔案 | 內容 | 測試 |
 |---|---|---|
-| `door_k3m_mode.py` | 三段握手 r2 | `test_door_k3m_mode.py` 18（含 W-GMPC 核心首筆 free 命令） |
+| `door_k3m_mode.py` | 三段握手 r3（雙期限以接收時間判定） | `test_door_k3m_mode.py` 19（含 W-GMPC 核心首筆 free 命令） |
 | `door_k3m_corridor.py`、`door_k3m_corridor_build.py` | 走廊表、SE(2) 偏差 | `test_door_k3m_corridor.py` 9 |
-| `door_k3m_geom_monitor.py` | 四類距離（含自碰快取）、預測式停止、失效即停 r2 | `test_door_k3m_geom_monitor.py` 13（含與離線 parts_clearance／self_clear 同值、快取＝全量） |
+| `door_k3m_geom_monitor.py` | 四類距離（自碰外接球篩選，r3）、預測式停止、失效即停 | `test_door_k3m_geom_monitor.py` 14（含與離線同值、外接球＝全量、偏離名目時保守、不沿用前輪） |
 
 **版本化接入**
 
@@ -265,16 +273,17 @@ draft-2 依 Codex 20261023_202016 的四項修正與交接 `reviews/20261023_lit
 |---|---|---|
 | `isaac_door_k2_sim_ev3.py` | 由 EV 只插入：`--park-gate-mobile`、模式權威、切換步關 HoldMonitor、逐物理步走廊＋包絡監看、越界即 K2 閂鎖＋發布 | `test_door_k3m_nodes.py`（插入比對、關鍵行與順序） |
 | `dl3_wgmpc_wg2_adm3_node.py` | 由 ADM2 只插入：只認執行端 ack、快照 ≥ switch_t 切入、清 base_hold、跳過伺服核對、整形維持停用、首筆已發布 free 才回 ack | 同上 |
-| `door_k3m_policy.py` | K3MPolicy(K3APolicy)：OPEN 首輪請求、等待保持目標、confirmed 才推進；收到執行端 ack 起走廊第二層＋幾何監看取代 20 mm／2° | `test_door_k3m_policy.py` 10 |
+| `door_k3m_policy.py` | K3MPolicy(K3APolicy)：OPEN 首輪（通過監看後）請求、等待保持目標、confirmed 才推進；take_outbox 擋中止；走廊第二層＋幾何監看 | `test_door_k3m_policy.py` 12 |
 | `door_k3m_task_node.py` | 請求發布、兩 ack 與 /park/violation 路由（t_recv＝最新狀態模擬時間）、Meas 擴充、trace／k3m 紀錄 | 同 nodes＋`test_door_k3m_task_node_ros.py` 1（ROS 接線） |
-| `door_k3m_check.py` | 版本化判定器（§6；waiting 列視為 HOLD、切換前 20 mm／2°、切換後走廊＋包絡重算、模式證據、求解器紀錄、執行端紀錄、幾何證據） | `test_door_k3m_judge.py` 17（完整判定反例） |
+| `door_k3m_check.py` | 版本化判定器（§6；r3 幾何逐列重算） | `test_door_k3m_judge.py` 18（完整判定反例，含 Codex 幾何缺損反例） |
 | `door_k3m_report.py` | 觀察報告 | 在合成實錄上試跑 |
 | `run_door_k3m_ev.sh` | 相對 `run_door_k3a_int_ev.sh` 只換三個節點與旗標 | nodes 測試 |
 
-**尚未做**
-- ADM3 的 ROS 假世界接線測試（求解器握手目前只有純函式與插入點結構測試）；
-- 門餘轉的停止後幾何不相容（§3.3，實跑前進入條件）；
-- 帶寬定版（§3.3）。
+另有 `test_dl3_wgmpc_wg2_adm3_ros.py`（ROS 假世界，實際 ADM3 節點；3 情境）與 `test_door_k3m_stop_order.py`（mock 執行鏈；2 項）。
+
+**尚未做或未解除**
+- 停止後幾何不相容（`K3_stop_admissibility_spec.md`：原停止方式在常見中止情境餘裕不足；實跑前進入條件**未解除**）；
+- 帶寬定版（§3.3：策略端 4.574° > 4.5°，仍為候選）。
 
 ## 8. 不宣稱
 - 不是穿門、不是完整開門，也不證明底盤可動能解決卸載。

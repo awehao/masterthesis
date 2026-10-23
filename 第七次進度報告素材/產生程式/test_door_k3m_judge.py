@@ -19,12 +19,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import door_k3m_check as MC                            # noqa: E402
 import door_k3m_corridor as CO                         # noqa: E402
+import door_k3m_geom_monitor as GM                     # noqa: E402
+import dataclasses                                      # noqa: E402
 import door_target_k3 as T3                            # noqa: E402
 import door_k2_check as KC                             # noqa: E402
 import test_door_k3a_check as B                        # noqa: E402
 
 D = 0.15
 RUN = 'door_k3m_syn'
+GCFG = GM.GeomMonitorConfig(v_floor={'nonfinger': 0.002, 'finger': 0.002, 'base': 0.010, 'self': 0.002},
+                            ds_err={'nonfinger': 0.000226, 'finger': 0.0, 'base': 0.0, 'self': 0.001342})
+NOMD = {'nonfinger': 0.00717, 'finger': 0.0356, 'base': 0.2026, 'self': 0.00981}
 
 
 def build():
@@ -83,22 +88,25 @@ def build():
     trace.append({'t': T_DONE, 'phase': 'DONE', 'q_door': REF[-1][1], 'q_ref': REF[-1][1], 'target': None, 'k3m_mode': 'free'})
     n = 0
     for e in trace:
-        e['step'] = int(round(e['t'] * 100))
+        e['step'] = e['state_step'] = int(round(e['t'] * 100))
         e['grip'] = 0.0
         if e['target'] is not None:
             n += 1
             e['pub_seq'] = n
         else:
             e['pub_seq'] = None
+        e['state_age_wall'] = 0.03
         if e['phase'] in MC.OPENING and e['t'] >= t_e - 1e-9:
-            e['k3m_geom'] = {'dec': 'ok', 'why': None, 'compute_s': 0.012, 'cls': {}}
+            T = GCFG.t_cycle_s + 0.03 + 0.0137 + GCFG.t_stop_s
+            e['k3m_geom'] = {'dec': 'ok', 'why': None, 'compute_s': 0.0137,
+                             'cls': {c: [NOMD[c], NOMD[c] - GCFG.v_floor[c] * T - GCFG.ds_err[c]] for c in MC.GEOM_CLASSES}}
             e['k3m_corr'] = [0.0, 0.0, 0.0]
     req = {'run_id': RUN, 'seq': 1, 'mode': 'free', 'req_step': 2050, 'req_t': req_t}
     ea = {'run_id': RUN, 'seq': 1, 'mode': 'free', 'switch_step': k_sw, 'switch_t': t_sw}
     sa = {'run_id': RUN, 'seq': 1, 'mode': 'free', 'switch_step': k_sw, 'switch_t': t_sw, 'first_free_slot': 412,
           'first_free_sim_t': 20.55, 'publish_sim_t': 20.56, 'published': True}
     ev = [{'t': t0, 'from': 'x', 'to': p} for p, t0 in PH]
-    task = {'schema': 'door_k3m_task/1', 'policy_events': ev, 'abort': None, 'final_phase': 'DONE', 'received_any_sync': True,
+    task = {'schema': 'door_k3m_task/1', 'geom_config': dataclasses.asdict(GCFG), 'policy_events': ev, 'abort': None, 'final_phase': 'DONE', 'received_any_sync': True,
             'trace': trace, 'n_target_published': n, 'G_T_H': B.G_T_H.tolist(), 'H_frozen': B.H0.tolist(), 'grasp_basis': {'T_HG': B.T_HG.tolist()},
             'k3m': {'request': req, 'exec_ack': ea, 'solver_ack': sa, 't_exec_recv': t_e, 't_solver_recv': t_s, 'result': 'confirmed'}}
     steps, held, qprev = [], 0.0, 0.0
@@ -238,13 +246,56 @@ class FullJudge(unittest.TestCase):
 
     def test_geometry(self):
         def m(t, r, g, s):
-            next(e for e in t['trace'] if e.get('k3m_geom'))['k3m_geom']['dec'] = 'stop'
+            e = [e for e in t['trace'] if e.get('k3m_geom')][-1]                   # 最後一列：重算與紀錄一致的 stop
+            T = GCFG.t_cycle_s + 0.03 + 0.0137 + GCFG.t_stop_s
+            e['k3m_geom']['cls']['self'] = [0.004, 0.004 - GCFG.v_floor['self'] * T - GCFG.ds_err['self']]
+            e['k3m_geom']['dec'] = 'stop'
         self.fails_with(m, 'geometry_stop')
+
+        def m_only_dec(t, r, g, s):
+            next(e for e in t['trace'] if e.get('k3m_geom'))['k3m_geom']['dec'] = 'stop'
+        self.fails_with(m_only_dec, 'geometry_recompute_mismatch')
 
         def m2(t, r, g, s):
             e = [e for e in t['trace'] if e.get('k3m_geom')][20]
             del e['k3m_geom']
         self.fails_with(m2, 'geometry_evidence_missing')
+
+    def test_codex_geometry_defects(self):
+        """Codex 反例：compute_s＝−1、距離 NaN、cls＝{} 都必須不通過；記錄 dec＝ok 但重算為 stop、d_pred 竄改、年齡超限也不通過。"""
+        def row(t):
+            return [e for e in t['trace'] if e.get('k3m_geom')][30]
+
+        def neg(t, r, g, s):
+            row(t)['k3m_geom']['compute_s'] = -1.0
+        self.fails_with(neg, 'geometry_evidence_missing')
+
+        def nan(t, r, g, s):
+            row(t)['k3m_geom']['cls']['self'][0] = float('nan')
+        self.fails_with(nan, 'geometry_evidence_missing')
+
+        def empty(t, r, g, s):
+            row(t)['k3m_geom']['cls'] = {}
+        self.fails_with(empty, 'geometry_evidence_missing')
+
+        def lie(t, r, g, s):
+            e = row(t)
+            T = GCFG.t_cycle_s + 0.03 + 0.0137 + GCFG.t_stop_s
+            d = 0.004
+            e['k3m_geom']['cls']['self'] = [d, d - GCFG.v_floor['self'] * T - GCFG.ds_err['self']]   # 一致的預測，但決策仍寫 ok
+        self.fails_with(lie, 'geometry_recompute_mismatch')
+
+        def dpred(t, r, g, s):
+            row(t)['k3m_geom']['cls']['base'][1] += 1e-6
+        self.fails_with(dpred, 'geometry_recompute_mismatch')
+
+        def age(t, r, g, s):
+            row(t)['state_age_wall'] = 0.195
+        self.fails_with(age, 'geometry_evidence_missing')
+
+        def cfg(t, r, g, s):
+            del t['geom_config']
+        self.fails_with(cfg, 'geometry_config_missing')
 
     def test_k3a_safety_still_applies(self):
         def m(t, r, g, s):

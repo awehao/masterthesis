@@ -15,7 +15,10 @@ r2（Codex 20261023_204354 第 2、3 項；r1 輸出保留）：
   - (e) 自碰在走廊內帶邊界樣本（door_k3m_offline_corridor_inner20_edge 的同一組底盤偏移、重新 IK）上的最小值；
   - v_floor／ds_err 是**名目軌跡上的選值／已觀察差異**，不是全域上界；完整網格頂點不等於完整三角面距離。
 
-    python3 evaluation/door_k3m_offline_geom_monitor.py   # 寫 results/door/door_k3m_offline_geom_monitor_r2.json（已存在則拒絕覆寫）
+r3（Codex 20261023_210920 第 4 項；r2 輸出保留）：自碰取消跨輪快取，線上改用當前構型的外接球下界篩選（door_k3m_geom_monitor
+  self_mode='sphere'）；(a)(b) 以 self_mode='full' 為基準；另報 sphere 與 full 的差異與每輪精確配對數。
+
+    python3 evaluation/door_k3m_offline_geom_monitor.py   # 寫 results/door/door_k3m_offline_geom_monitor_r3.json（已存在則拒絕覆寫）
 """
 import json
 import math
@@ -29,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import door_k3m_geom_monitor as GM                     # noqa: E402
 
-OUT = os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r2.json')
+OUT = os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r3.json')
 Q_FINGER = 0.00166
 FLOOR = {'nonfinger': 0.002, 'finger': 0.002, 'base': 0.010, 'self': 0.002}
 
@@ -41,7 +44,7 @@ def main():
     C = V2.C
     rp = json.load(open(os.path.join(HERE, 'results', 'door', 'door_k3m_offline_replay_r2.json')))
     cfgs = {c['name']: c['rows'] for c in rp['configs'] if c['name'] in ('free', 'fixed')}
-    fn = GM.default_backend(self_cache=False)
+    fn = GM.default_backend(self_mode='full')
     # (a)＋(c)
     rates, timing, series = {}, [], {}
     for name, rows in cfgs.items():
@@ -65,7 +68,7 @@ def main():
     full = C.link_clouds(open(C.URDF).read(), max_pts=10 ** 7)
     full_all = full
     full = {n: P for n, P in full_all.items() if n in C.ARM_LINKS}
-    fn_full = GM.default_backend(clouds=full, self_clouds=full_all, self_cache=False)
+    fn_full = GM.default_backend(clouds=full, self_clouds=full_all, self_mode='full')
     ds = {k: [] for k in GM.CLASSES}
     for name, rows in cfgs.items():
         for r in rows[::10]:
@@ -78,7 +81,8 @@ def main():
     t_p99 = float(np.percentile(tm, 99))
     # (d)
     cfg = GM.GeomMonitorConfig(v_floor=v_floor, ds_err=ds_err)
-    M = GM.GeometryMonitor(cfg, GM.default_backend())                         # 線上用的快取後端
+    online = GM.default_backend(self_mode='sphere')
+    M = GM.GeometryMonitor(cfg, online)                                       # 線上用的外接球後端
     dec = {'ok': 0, 'warn': 0, 'stop': 0}
     first_stop = None
     comp = []
@@ -89,22 +93,11 @@ def main():
         if dd == 'stop' and first_stop is None:
             first_stop = det
     comp = np.array(comp)
-    # 遠配對接近率（快取假設）：沿 free 名目逐週期全量自碰，各配對距離序列的最大接近率（只計 ≥ SELF_NEAR_M 者）
+    sphere_dev = 0.0
+    for r in cfgs['free'][::2]:
+        q, qd = np.array(r['q']), math.radians(r['q_door_deg'])
+        sphere_dev = max(sphere_dev, abs(online(q, qd, Q_FINGER)['self'][0] - fn(q, qd, Q_FINGER)['self'][0]))
     import door_k3m_geom_monitor as _G
-    pairs = _G.self_pairs()
-    from scipy.spatial import cKDTree
-    prevd, far_rate = None, 0.0
-    for r in cfgs['free']:
-        q = np.array(r['q'])
-        W = {n: (lambda T, P: (T[:3, :3] @ P.T).T + T[:3, 3])(C.K.fk(q, n), C.CL[n] + (C.FINGER_AXIS[n] * Q_FINGER if n in C.FINGER_AXIS else 0.0))
-             for n in sorted({n for p_ in pairs for n in p_})}
-        dd_ = [float(cKDTree(W[x]).query(W[y], k=1)[0].min()) for x, y in pairs]
-        if prevd is not None:
-            for a_, b_ in zip(prevd[1], dd_):
-                if a_ >= _G.SELF_NEAR_M:
-                    far_rate = max(far_rate, max(0.0, (a_ - b_) / (r['t'] - prevd[0])))
-        prevd = (r['t'], dd_)
-    far_budget = _G.SELF_NEAR_M - cfg.d_min['self']
     # (e) 走廊內帶邊界樣本的自碰
     import door_k3m_offline_corridor as CR
     from door_target import rotate_about_hinge
@@ -136,16 +129,15 @@ def main():
            'nominal_free_run': {'decisions': dec, 'first_stop': first_stop, 'state_age_s': 0.05, 'backend': '線上快取後端',
                                 'compute_ms_internal': {'p50': float(np.nanpercentile(comp, 50)), 'p99': float(np.nanpercentile(comp, 99)),
                                                         'max': float(np.nanmax(comp))}},
-           'self_cache_assumption': {'near_m': _G.SELF_NEAR_M, 'refresh_calls': _G.SELF_REFRESH_CALLS, 'far_pairs_max_closing_rate_mps': far_rate,
-                                     'budget_m': far_budget, 'closing_over_refresh_m': far_rate * _G.SELF_REFRESH_CALLS * cfg.t_cycle_s,
-                                     'holds_on_nominal': far_rate * _G.SELF_REFRESH_CALLS * cfg.t_cycle_s < far_budget,
-                                     'note': '名目軌跡上的觀察；不是遠配對接近率的全域上界'},
+           'self_sphere': {'near_m': _G.SELF_NEAR_M, 'max_abs_diff_vs_full_m': sphere_dev,
+                           'exact_pairs_per_call': online.self_stats['n_exact'] / max(1, online.self_stats['n_calls']),
+                           'note': '外接球下界 ≤ 真實點雲距離；最小值 < near_m 時與全量相同，否則保守；不沿用前一輪'},
            'self_on_corridor_inner_edge': {'n': len(edge), 'n_ik_fail': sum(1 for x in edge if not x['ik']),
                                            'min_self_m': min(x['self_m'] for x in ok_e), 'min_who': min(ok_e, key=lambda x: x['self_m'])['who'],
                                            'n_below_5mm': sum(1 for x in ok_e if x['self_m'] < 0.005)},
            'min_distance_m': {name: {k: min(x[k] for x in s) for k in GM.CLASSES} for name, s in series.items()},
            'min_who': {name: {k: min(s, key=lambda x: x[k])['who'][k] for k in GM.CLASSES} for name, s in series.items()},
-           'self_collision': '線上啟用 self 類：door_offline_check_v1.self_clear 的 53 對、900 點點雲最近點（近似；點雲 ≠ 三角面），近配對快取',
+           'self_collision': '線上啟用 self 類：door_offline_check_v1.self_clear 的 53 對、900 點點雲最近點（近似；點雲 ≠ 三角面），每輪外接球下界篩選（無跨輪快取）',
            'labels': {'v_floor_registered': '名目軌跡上的選值（不是接近率全域上界）', 'ds_err_registered': '名目軌跡上已觀察的降採樣差異（相對完整網格頂點；不等於三角面距離）'},
            'note': '近似幾何、名目無接觸軌跡、本機計時；選值只支援規格，不是實跑上界。'}
     json.dump(res, open(OUT, 'w'), ensure_ascii=False, indent=1, default=float)
@@ -153,7 +145,7 @@ def main():
     print('v_floor 登錄 (mm/s)：', {k: round(v * 1e3, 2) for k, v in v_floor.items()})
     print('降採樣 d900−dfull (mm) 最大／最小：', {k: (round(max(ds[k]) * 1e3, 3), round(min(ds[k]) * 1e3, 3)) for k in GM.CLASSES})
     print('全量計時 ms：', res['timing_ms_full_no_cache'], '；線上快取內部計時 ms：', res['nominal_free_run']['compute_ms_internal'])
-    print('遠配對快取假設：', res['self_cache_assumption'])
+    print('外接球法：', res['self_sphere'])
     print('走廊內帶邊界自碰：', res['self_on_corridor_inner_edge'])
     print('名目 free 監看：', dec, first_stop)
     print('最小距離：', {n: {k: round(v * 1e3, 2) for k, v in m.items()} for n, m in res['min_distance_m'].items()}, res['min_who'])

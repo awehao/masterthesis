@@ -11,7 +11,8 @@ K3-A 判準照用（door_k3a_check.judge），兩處調整：
   2. 等待列：每列目標逐元素＝最後 HOLD 目標、無 q_ref；第一列有 q_ref 的時刻 ≥ 兩 ack 到達時刻。
   3. 求解器紀錄：首筆 free 解（slot）之前的已發布列 k3m_mode＝hold；之後全部 free 且 park_hold 為 None。
   4. 執行端走廊紀錄：自切換步起逐步連續、到紀錄結束；每步偏差與 room 重算一致（≤ 1e-5）；room.k3m.violation 為 None。
-  5. 幾何證據：自執行端 ack 到達起、OPEN～END_HOLD 的每列都有 k3m_geom（決策、有限的計算耗時）與 k3m_corr；決策不得為 stop。
+  5. 幾何證據（r3）：自執行端 ack 到達起、OPEN～END_HOLD 的每列都要有完整 k3m_geom（四類距離與預測皆有限、耗時非負）、有效的 state_step
+     與狀態年齡（含計算後年齡）、k3m_corr；依 task.geom_config **重算**每列的預測距離與決策並與紀錄比對（不採信記錄的 dec）；重算決策不得為 stop。
 
     python3 evaluation/door_k3m_check.py <run_dir>    # 寫 <run_dir>/analysis/door_k3m_check.json；結束碼 0＝通過
 """
@@ -191,18 +192,61 @@ def check_base(task, room, gate, M, why, st):
         why.append('executor_corridor_log_mismatch')
 
 
+GEOM_CLASSES = ('nonfinger', 'finger', 'base', 'self')
+
+
 def check_geom(task, M, why, st):
+    """r3（Codex 20261023_210920 第 3 項）：不採信記錄中的 dec；依凍結設定（task.geom_config）逐列重算預測距離與決策。"""
+    gc = task.get('geom_config')
+    need = ('d_min', 'v_floor', 'ds_err', 'warn_margin_m', 'age_max_s', 't_cycle_s', 't_stop_s')
+    if not isinstance(gc, dict) or any(k not in gc for k in need) or any(
+            not isinstance(gc[k], dict) or any(not _num(gc[k].get(c)) for c in GEOM_CLASSES) for k in ('d_min', 'v_floor', 'ds_err')):
+        why.append('geometry_config_missing')
+        return
     tr = [e for e in task.get('trace') or [] if e.get('phase') in OPENING and e['t'] >= M['t_exec'] - 1e-9]
-    bad = stop = 0
+    bad = stop = mism = 0
+    prev = None                                   # (t, {class: d}, 原始 k3m_geom)
     for e in tr:
         g = e.get('k3m_geom')
-        if not isinstance(g, dict) or g.get('dec') not in ('ok', 'warn', 'stop') or not _num(g.get('compute_s')) or e.get('k3m_corr') is None:
+        cls = g.get('cls') if isinstance(g, dict) else None
+        ok = (isinstance(g, dict) and g.get('dec') in ('ok', 'warn', 'stop') and _num(g.get('compute_s')) and g['compute_s'] >= 0.0
+              and isinstance(cls, dict) and all(isinstance(cls.get(c), (list, tuple)) and len(cls[c]) == 2 and _num(cls[c][0])
+                                                and _num(cls[c][1]) for c in GEOM_CLASSES)
+              and _num(e.get('state_age_wall')) and 0.0 <= e['state_age_wall'] <= gc['age_max_s']
+              and e['state_age_wall'] + g['compute_s'] <= gc['age_max_s'] + 1e-12
+              and isinstance(e.get('state_step'), int) and not isinstance(e.get('state_step'), bool) and e.get('k3m_corr') is not None)
+        if not ok:
             bad += 1
-        elif g['dec'] == 'stop':
+            continue
+        if prev is not None and e['t'] == prev[0]:
+            if g != prev[2]:
+                mism += 1                              # 同一狀態時刻只算一次 ⇒ 證據須相同
+            continue
+        if prev is not None and e['t'] < prev[0]:
+            bad += 1
+            continue
+        T = gc['t_cycle_s'] + e['state_age_wall'] + g['compute_s'] + gc['t_stop_s']
+        dec = 'ok'
+        for c in GEOM_CLASSES:
+            d = float(cls[c][0])
+            rate = 0.0 if prev is None else max(0.0, (prev[1][c] - d) / (e['t'] - prev[0]))
+            dp = d - max(rate, gc['v_floor'][c]) * T - gc['ds_err'][c]
+            if abs(dp - float(cls[c][1])) > 1e-9:
+                mism += 1
+            if dp < gc['d_min'][c]:
+                dec = 'stop'
+            elif dp < gc['d_min'][c] + gc['warn_margin_m'] and dec == 'ok':
+                dec = 'warn'
+        if dec != g['dec']:
+            mism += 1
+        if dec == 'stop':
             stop += 1
-    st['geom_rows'], st['geom_rows_missing'], st['geom_stop_rows'] = len(tr), bad, stop
+        prev = (e['t'], {c: float(cls[c][0]) for c in GEOM_CLASSES}, g)
+    st['geom_rows'], st['geom_rows_invalid'], st['geom_recompute_mismatch'], st['geom_stop_rows'] = len(tr), bad, mism, stop
     if not tr or bad:
         why.append('geometry_evidence_missing')
+    if mism:
+        why.append('geometry_recompute_mismatch')
     if stop:
         why.append('geometry_stop')
 

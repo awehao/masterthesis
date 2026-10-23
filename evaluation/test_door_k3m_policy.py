@@ -39,6 +39,7 @@ class MSim(TP.Sim):
         self.n_since = 0
         self.base_pose = ANCHOR
         self.rows = []
+        self.published = []
         self.wall = 100.0
 
     def meas(self):
@@ -53,15 +54,15 @@ class MSim(TP.Sim):
             self.n_since += 1
             if self.exec_delay is not None and self.n_since == self.exec_delay:
                 if self.exec_nack:
-                    self.pol.on_executor_ack({'run_id': RUN, 'seq': 1, 'why': self.exec_nack}, self.t)
+                    self.pol.on_executor_ack({'run_id': RUN, 'seq': 1, 'why': self.exec_nack}, self.t, self.wall)
                 else:
                     k, ack = self.E.on_request(self.req, m.state_step, self.t, aborted=False, owner_wholebody=True)
-                    self.pol.on_executor_ack(ack, self.t)
+                    self.pol.on_executor_ack(ack, self.t, self.wall)
                     self.S.on_executor_ack(ack, stopped=False, park_hold_active=True)
             if self.solver_delay is not None and self.n_since == self.solver_delay and self.S.pending is not None:
                 cfg = type('C', (), {'base_hold': (0, 0, 0), 'base_fixed': False})()
                 self.S.apply(cfg, shaping_enabled=False, snap_t=self.t)
-                self.pol.on_solver_ack(self.S.note_first_solution(7, self.t, [0.0] * 9, [0.0] * 9, published=True, publish_sim_t=self.t), self.t)
+                self.pol.on_solver_ack(self.S.note_first_solution(7, self.t, [0.0] * 9, [0.0] * 9, published=True, publish_sim_t=self.t), self.t, self.wall)
         if self.hook:
             self.hook(self, m)
         return m
@@ -72,9 +73,9 @@ class MSim(TP.Sim):
         def wrapped(m, dt):
             ph0 = self.pol.phase
             a = orig(m, dt)
-            for r in self.pol.outbox:
+            for r in self.pol.take_outbox():
                 self.req = r
-            self.pol.outbox.clear()
+                self.published.append((m.t, self.pol.phase, r))
             self.rows.append((m.t, ph0, self.pol.phase, self.pol.mode_state, a['target'], self.pol.dtk is not None))
             self.wall += 0.05
             return a
@@ -153,6 +154,26 @@ class Policy(unittest.TestCase):
                 m.wrist_max = 31.0
         s = MSim(exec_delay=None, solver_delay=None, inject=inj)
         self.assertEqual(s.run().abort, 'wrist_force')
+
+    def test_codex_abort_on_first_open_cycle_does_not_publish_request(self):
+        """Codex 反例：OPEN 首輪腕力 35 N ⇒ wrist_force 中止，且不得發布切換請求（outbox 也被清空）。"""
+        def inj(sim, m):
+            if sim.pol.phase == 'OPEN':
+                m.wrist_max = 35.0
+        s = MSim(inject=inj)
+        pol = s.run()
+        self.assertEqual(pol.abort, 'wrist_force')
+        self.assertEqual(s.published, [])
+        self.assertEqual(pol.outbox, [])
+        self.assertIsNone(pol.waiter.request)
+
+    def test_take_outbox_blocks_after_abort(self):
+        s = MSim()
+        pol = s.pol
+        pol.outbox.append({'x': 1})
+        pol.phase = 'ABORTED'
+        self.assertEqual(pol.take_outbox(), [])
+        self.assertEqual(pol.outbox, [])
 
     def test_run_id_required(self):
         with self.assertRaises(ValueError):

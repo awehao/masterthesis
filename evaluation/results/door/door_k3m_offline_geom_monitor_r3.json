@@ -1,0 +1,126 @@
+{
+ "schema": "door_k3m_offline_geom_monitor/1",
+ "q_finger": 0.00166,
+ "max_closing_rate_mps": {
+  "fixed": {
+   "nonfinger": 0.0001457256111275783,
+   "finger": 2.2417967282528332e-05,
+   "base": 0.012575157879112276,
+   "self": 3.730126569949313e-05
+  },
+  "free": {
+   "nonfinger": 2.1693978074082934e-05,
+   "finger": 4.2073772154870806e-05,
+   "base": 0.0021223963915173454,
+   "self": 1.3377182869825354e-05
+  }
+ },
+ "v_floor_registered": {
+  "nonfinger": 0.002,
+  "finger": 0.002,
+  "base": 0.01,
+  "self": 0.002
+ },
+ "downsampling": {
+  "n_pairs": 68,
+  "d900_minus_dfull_max_m": {
+   "nonfinger": 0.00022585642787535318,
+   "finger": 0.0,
+   "base": 0.0,
+   "self": 0.0013416365245026915
+  },
+  "d900_minus_dfull_min_m": {
+   "nonfinger": 1.2127628116347794e-05,
+   "finger": 0.0,
+   "base": 0.0,
+   "self": 0.0
+  },
+  "ds_err_registered": {
+   "nonfinger": 0.00022585642787535318,
+   "finger": 0.0,
+   "base": 0.0,
+   "self": 0.0013416365245026915
+  },
+  "full_points_per_link": {
+   "link_base": 4188,
+   "link1": 2538,
+   "link2": 3684,
+   "link3": 2166,
+   "link4": 22746,
+   "link5": 21168,
+   "link6": 1074,
+   "link_eef": 564,
+   "uflite_gripper_link": 26436,
+   "uflite_finger1": 3357,
+   "uflite_finger2": 3351
+  }
+ },
+ "timing_ms_full_no_cache": {
+  "n": 668,
+  "p50": 27.820677499221347,
+  "p99": 34.579142810998775,
+  "max": 47.05671400006395
+ },
+ "nominal_free_run": {
+  "decisions": {
+   "ok": 334,
+   "warn": 0,
+   "stop": 0
+  },
+  "first_stop": null,
+  "state_age_s": 0.05,
+  "backend": "線上快取後端",
+  "compute_ms_internal": {
+   "p50": 13.660126500326442,
+   "p99": 16.120010879694753,
+   "max": 18.97882400044182
+  }
+ },
+ "self_sphere": {
+  "near_m": 0.03,
+  "max_abs_diff_vs_full_m": 0.0,
+  "exact_pairs_per_call": 13.0,
+  "note": "外接球下界 ≤ 真實點雲距離；最小值 < near_m 時與全量相同，否則保守；不沿用前一輪"
+ },
+ "self_on_corridor_inner_edge": {
+  "n": 297,
+  "n_ik_fail": 6,
+  "min_self_m": 0.009634308716432944,
+  "min_who": "link4|link6",
+  "n_below_5mm": 0
+ },
+ "min_distance_m": {
+  "fixed": {
+   "nonfinger": 0.007174544269407139,
+   "finger": 0.035619447634324675,
+   "base": 0.10823507079932787,
+   "self": 0.009826245626538522
+  },
+  "free": {
+   "nonfinger": 0.00717493214306744,
+   "finger": 0.035619447634324675,
+   "base": 0.20260892169004135,
+   "self": 0.009805304102701778
+  }
+ },
+ "min_who": {
+  "fixed": {
+   "nonfinger": "uflite_gripper_link:bar",
+   "finger": "uflite_finger2:leaf",
+   "base": "post0",
+   "self": "link4|link6"
+  },
+  "free": {
+   "nonfinger": "uflite_gripper_link:bar",
+   "finger": "uflite_finger2:leaf",
+   "base": "post0",
+   "self": "link4|link6"
+  }
+ },
+ "self_collision": "線上啟用 self 類：door_offline_check_v1.self_clear 的 53 對、900 點點雲最近點（近似；點雲 ≠ 三角面），每輪外接球下界篩選（無跨輪快取）",
+ "labels": {
+  "v_floor_registered": "名目軌跡上的選值（不是接近率全域上界）",
+  "ds_err_registered": "名目軌跡上已觀察的降採樣差異（相對完整網格頂點；不等於三角面距離）"
+ },
+ "note": "近似幾何、名目無接觸軌跡、本機計時；選值只支援規格，不是實跑上界。"
+}

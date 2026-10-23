@@ -99,7 +99,8 @@ class TaskNodeAndRunner(unittest.TestCase):
             self.assertIn(tok, s)
         i_m = s.index('m.executor_violation = nd.exec_violation')
         self.assertLess(i_m, s.index('act = pol.step(m, dt)'))
-        self.assertLess(s.index('act = pol.step(m, dt)'), s.index('for _rq in pol.outbox:'))
+        self.assertLess(s.index('act = pol.step(m, dt)'), s.index('for _rq in pol.take_outbox():'))
+        self.assertNotIn('for _rq in pol.outbox:', s)
         r = subprocess.run([sys.executable, '-m', 'pyflakes', os.path.join(HERE, 'door_k3m_task_node.py')], capture_output=True, text=True)
         self.assertEqual((r.stdout + r.stderr).strip(), '')
 
@@ -111,7 +112,7 @@ class TaskNodeAndRunner(unittest.TestCase):
         src = '\n'.join(b)
         for tok in ('isaac_door_k2_sim_ev3.py --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID"',
                     'dl3_wgmpc_wg2_adm3_node.py --require-topic-target --park-hold --offset-observer interval --mode-switch-run-id "$RUN_ID"',
-                    'door_k3m_task_node.py --out "$DIR/task.json" --run-id "$RUN_ID"', 'freeze_door_k3m_ev_dev.sha256'):
+                    'door_k3m_task_node.py --out "$DIR/task.json" --run-id "$RUN_ID"', 'freeze_door_k3m_ev_dev_r2.sha256'):
             self.assertIn(tok, src)
 
 
