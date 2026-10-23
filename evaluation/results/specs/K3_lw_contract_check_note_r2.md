@@ -50,7 +50,7 @@ r1 把固定的 18–19.5 s 稱為 HOLD，那段含 ENGAGE；ev_1 的 OPEN 起�
   - 刪除 r1 的「方向上會較早觸發」，保留：兩種量的幅值不一致，現有結果不足以判定保護保守或失效。
 
 ## 2. API 語意查核（只讀程式與本機安裝版；未讀執行期設定）
-**實際載入版本**：`~/venvs/isaacsim-6.0.1`，isaacsim 6.0.1.0。執行端 import 的 `isaacsim.core.prims`（`RigidPrim`、`SingleArticulation`）與 `isaacsim.core.api.World`，來源在 `extsDeprecated/isaacsim.core.prims` 與 `extsDeprecated/isaacsim.core.api`。
+**依啟動路徑與本機安裝檔查核**（Codex 20261023_234952 修正措辭）：啟動路徑 `ISAAC_PY=~/venvs/isaacsim-6.0.1/bin/python`，本機安裝 isaacsim 6.0.1.0。歷史趟未保存執行期模組來源與 handle 狀態，**不補寫成已驗證**。執行端 import 的 `isaacsim.core.prims`（`RigidPrim`、`SingleArticulation`）與 `isaacsim.core.api.World`，來源在 `extsDeprecated/isaacsim.core.prims` 與 `extsDeprecated/isaacsim.core.api`。
 
 | 項目 | 程式語意 | 本趟狀態 |
 |---|---|---|
@@ -64,7 +64,7 @@ r1 把固定的 18–19.5 s 稱為 HOLD，那段含 ENGAGE；ev_1 的 OPEN 起�
 | 讀取時序 | 每步：讀位姿 → ex.step → 寫根速度 → 手臂 apply_action → 讀門角門速與根位姿並記錄 → world.step | 同列的門角、門速與根位姿都是**寫入後、步進前**的讀值 |
 
 - **推論界線**：若 handle 有效，姿態與速度同出自 PhysX tensor view，不能直接歸因於「USD 姿態與 PhysX 速度不同步」。
-- 若 handle 無效，USD 回退路徑在 `update_fabric=False` 下可能讀到未更新的值。兩種情況目前都不能排除，需要取證。
+- 若 handle 無效則走 USD 回退路徑；`update_fabric=False` 本身**不能證明** USD 未更新，只列為待核對的回退路徑。兩種情況目前都不能排除，需要取證。
 
 ## 3. 門速候選離線比較（`door_rate_candidates_offline.py` → `results/door/door_rate_candidates_offline.json`）
 - **資料**：8 趟（k3a_1、adm_1、int_1、ev_1、au_ev_1、ax_ev_1、ab_ev_1、ab_lw_1）。
