@@ -12,8 +12,8 @@
 
 | RUN_ID | 目的 | 結果 | 影片 | 種類 | 狀態 |
 |---|---|---|---|---|---|
-| door_k3ab_lw_1 | K2 閂鎖後長窗停止診斷（固定底盤 K3-A-B） | 任務未通過（finger_contact_lost）；閂鎖後 10.11 s 未確認停止：門 0.68→3.16°、底盤約 29 mm；殼—橫桿取樣最小 4.39 mm、非設計接觸 0 | [側視](door_k3ab_lw_1_側視_實錄重播.mp4)（正式；重播 RUN_ID door_k3ab_lw_1_replay_side_r3：317/317 幀，姿態核對 0 偏差，replay_check complete）；近景（產出中） | 該趟實錄重播（2 倍速） | 側視完成 |
-| door_k3ab_lw_ev2r_1 | 根／門扇三點讀取取證（同 lw 配置，只加紀錄） | 已跑（10/24）：任務未通過（finger_contact_lost）；取證完整；閂鎖後 10.11 s 未確認停止：門 3.12°、底盤 28.4 mm；殼—橫桿取樣最小 4.43 mm | side／close（待產出） | 該趟實錄重播 | 同上 |
+| door_k3ab_lw_1 | K2 閂鎖後長窗停止診斷（固定底盤 K3-A-B） | 任務未通過（finger_contact_lost）；閂鎖後 10.11 s 未確認停止：門 0.68→3.16°、底盤約 29 mm；殼—橫桿取樣最小 4.39 mm、非設計接觸 0 | [側視](door_k3ab_lw_1_側視_實錄重播.mp4)（正式；重播 RUN_ID door_k3ab_lw_1_replay_side_r3：317/317 幀，姿態核對 0 偏差，replay_check complete）；[近景](door_k3ab_lw_1_近景_實錄重播.mp4)（正式；door_k3ab_lw_1_replay_close_r3：317/317 幀，姿態 0 偏差，complete） | 該趟實錄重播（2 倍速） | 完成 |
+| door_k3ab_lw_ev2r_1 | 根／門扇三點讀取取證（同 lw 配置，只加紀錄） | 已跑（10/24）：任務未通過（finger_contact_lost）；取證完整；閂鎖後 10.11 s 未確認停止：門 3.12°、底盤 28.4 mm；殼—橫桿取樣最小 4.43 mm | [側視](door_k3ab_lw_ev2r_1_側視_實錄重播.mp4)、[近景](door_k3ab_lw_ev2r_1_近景_實錄重播.mp4)（正式；replay_side_r3／close_r3：320/320 幀，姿態 0 偏差，complete） | 該趟實錄重播（2 倍速） | 完成 |
 
 **預覽（不完整，非正式；已被正式側視版取代）**：`預覽_不完整/door_k3ab_lw_1_side_r2_預覽_不完整.mp4`
 - 來源 door_k3ab_lw_1，側視，2 倍速，15.9 s。
@@ -23,6 +23,12 @@
 
 第一次重播失敗紀錄（重播工具失敗）：`evaluation/runs/door_k3ab_lw_1_replay_side`、`_close`，`evaluation/runs/door_k3ab_lw_ev2r_1_replay_side`、`_close`。原因與修正見 `規格/K3_replay_spec_r3.md`。
 
-**door_k3ab_lw_1 側視關鍵時刻（影片時間，2 倍速）**：對準開始 3.5 s、夾持開始 7.8 s、夾持保持 9.3 s、OPEN 開始 9.9 s、策略中止（finger_contact_lost）10.7 s、執行端閂鎖（命令歸零）10.7 s、停止後漂移 11.2 s 起至片尾（15.9 s）。
+**關鍵時刻（影片時間，2 倍速；側視與近景相同）**
+- door_k3ab_lw_1（15.9 s）：對準開始 3.5、夾持開始 7.8、夾持保持 9.3、OPEN 開始 9.9、策略中止（finger_contact_lost）10.7、執行端閂鎖（命令歸零）10.7、停止後漂移 11.2 s 起至片尾。
+- door_k3ab_lw_ev2r_1（16.0 s）：對準開始 3.5、夾持開始 8.0、夾持保持 9.5、OPEN 開始 10.0、策略中止（finger_contact_lost）10.9、執行端閂鎖 10.9、停止後漂移 11.4 s 起至片尾。
 
-關鍵時刻（產出後填影片時間）：對準開始、夾持開始、夾持保持、OPEN 開始、策略中止（失接觸）、執行端閂鎖、停止後漂移。
+**看影片時要注意**：
+- 開門只到約 3°，門縫變寬要看近景右側的亮縫；中止後門與底盤仍緩慢移動（見停止後漂移段的閂鎖後底盤位移字幕）。
+- 重播只渲染紀錄的姿態，不重新模擬；姿態核對逐幀 0 偏差（replay_check.json）。
+
+
