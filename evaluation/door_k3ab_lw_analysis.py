@@ -16,6 +16,11 @@
 **幾何**：沿實測軌跡逐步重算（door_k3m_geom_monitor 後端＋夾爪殼—橫桿、手指—橫桿），取樣最小值；手指開度取兩指平均（近似）。
   閂鎖後殼—橫桿 < 5 mm 的區段逐段列出（起訖、最小值、當時非設計／牆接觸與腕力）——只讀觀察，不恢復控制、不改判通過、不稱監看觸發。
 **段 A**（策略中止→閂鎖）另列，同 door_k3m_stop_diag_r2。
+**保護交叉核對**（r2；Codex 20261023_231357 第 4 項）：讀 lw_observer.json、task、room.stop_reason、運行器健康列（run.log 的 LW_HEALTH）。
+  - 任一來源記錄保護觸發（task.lw_guard、觀察器 trip、room.stop_reason 含 experiment_guard、task.lw_observer_unhealthy／not_ready）
+    ⇒ 分支 observation_terminated_early，停止判定記為未驗證；列出各來源。
+  - 觀察器缺報告、未正常收尾（ended_by≠TERM、無 closed、主迴圈例外）、無心跳、閂鎖分支卻未 arm、運行器健康列缺失或
+    觀察器／執行端非正常結束 ⇒ protection_complete=False，停止判定記 unverified_protection_incomplete（偵測結果仍列出供參考）。
 
     python3 evaluation/door_k3ab_lw_analysis.py <run_dir> <out_json>   # 已存在則拒絕覆寫
 """
@@ -157,14 +162,54 @@ def geometry(rows, i0, fn, parts_fn):
     return {'sampled_min_m': mins, 'shell_bar_below_5mm_segments': segs, 'n_skipped_steps': n_skip}
 
 
-def analyse(task, room, fn=None, parts_fn=None):
+def protection(task, room, obs, health, latched):
+    """回傳 (guard_sources, incomplete_reasons)。"""
+    src, inc = [], []
+    if task.get('lw_guard') is not None:
+        src.append({'source': 'task.lw_guard', 'value': task['lw_guard']})
+    for k in ('lw_observer_unhealthy', 'lw_observer_not_ready'):
+        if task.get(k) is not None:
+            src.append({'source': f'task.{k}', 'value': task[k]})
+    if 'experiment_guard' in str(room.get('stop_reason') or ''):
+        src.append({'source': 'room.stop_reason', 'value': room.get('stop_reason')})
+    if obs is None:
+        inc.append('observer_report_missing')
+    else:
+        if obs.get('trip') is not None:
+            src.append({'source': 'observer.trip', 'value': obs['trip']})
+        if obs.get('ended_by') != 'TERM':
+            inc.append(f"observer_ended_by_{obs.get('ended_by')}")
+        if obs.get('closed') is None:
+            inc.append('observer_not_closed')
+        if obs.get('loop_exception'):
+            inc.append('observer_loop_exception')
+        if not obs.get('n_heartbeat'):
+            inc.append('observer_no_heartbeat')
+        if latched and obs.get('armed_wall') is None:
+            inc.append('observer_not_armed_despite_latch')
+        if obs.get('n_anomalies'):
+            inc.append(f"observer_anomalies_{obs.get('n_anomalies')}")
+    if health is None:
+        inc.append('runner_health_missing')
+    else:
+        for k in ('sim', 'obs'):
+            if health.get(k) != 'exited':
+                inc.append(f'runner_{k}_{health.get(k)}')
+        if health.get('obs_rc') not in ('0', 0):
+            inc.append(f"runner_obs_rc_{health.get('obs_rc')}")
+    return src, inc
+
+
+def analyse(task, room, fn=None, parts_fn=None, obs=None, health=None):
     rows = rows_of(room)
     lat = [e['k2_abort_latched'] for e in room.get('events', []) if 'k2_abort_latched' in e]
     ab = next((e for e in task.get('policy_events', []) if 'abort' in e), None)
-    out = {'schema': 'door_k3ab_lw_analysis/1', 'thresholds': TH, 'win_steps': WIN, 'hold_s': HOLD_S, 'target_window_s': TARGET_S}
-    if task.get('lw_guard') is not None:
+    out = {'schema': 'door_k3ab_lw_analysis/2', 'thresholds': TH, 'win_steps': WIN, 'hold_s': HOLD_S, 'target_window_s': TARGET_S}
+    src, inc = protection(task, room, obs, health, len(lat) == 1)
+    out.update({'guard_sources': src, 'protection_incomplete': inc, 'protection_complete': not inc, 'room_stop_reason': room.get('stop_reason')})
+    if src:
         out['branch'] = 'observation_terminated_early'
-        out['lw_guard'] = task['lw_guard']
+        out['lw_guard'] = task.get('lw_guard')
     elif len(lat) == 1:
         out['branch'] = 'latched'
     elif not lat and task.get('final_phase') == 'DONE':
@@ -205,6 +250,10 @@ def analyse(task, room, fn=None, parts_fn=None):
     a = det['all']
     if out['branch'] == 'observation_terminated_early':
         out['stop_result'] = 'unverified_observation_terminated_early'
+    elif inc:
+        out['stop_result'] = 'unverified_protection_incomplete'
+        out['stop_result_if_protection_ok'] = ('stopped_confirmed' + ('_then_re_motion' if a['re_motion'] else '')) if a['confirm'] else \
+            f'not_stopped_within_covered_{covered:.2f}_s'
     elif a['confirm'] is None:
         out['stop_result'] = f'not_stopped_within_covered_{covered:.2f}_s'
     else:
@@ -232,7 +281,15 @@ def main():
     def parts_fn(qf, qd, qfg):
         p, _ = GA.parts_clearance(qf, qd, qfg)
         return p['uflite_gripper_link']['min_to_bar_m'], min(p[f]['min_to_bar_m'] for f in FINGERS)
-    res = analyse(task, room, fn, parts_fn)
+    obs_p = os.path.join(run, 'lw_observer.json')
+    obs = json.load(open(obs_p)) if os.path.exists(obs_p) else None
+    health = None
+    log_p = os.path.join(run, 'run.log')
+    if os.path.exists(log_p):
+        for ln in open(log_p, encoding='utf-8', errors='replace'):
+            if 'LW_HEALTH' in ln:
+                health = dict(kv.split('=', 1) for kv in ln.split('LW_HEALTH', 1)[1].split() if '=' in kv)
+    res = analyse(task, room, fn, parts_fn, obs, health)
     if res.get('latch_t') is not None and res.get('policy_abort_t') is not None:
         _, r, ev = SD.load(run)
         I = {c: i for i, c in enumerate(r['steps_cols'])}
@@ -241,7 +298,8 @@ def main():
     res['run'] = os.path.basename(os.path.normpath(run))
     res['note'] = '只讀分析；單趟介入觀察；不做根因主張；不是 K3-M 停止的證據；結束模擬只是實驗保護。'
     json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1, default=float)
-    print(json.dumps({k: res.get(k) for k in ('run', 'branch', 'stop_result', 'covered_s', 'window_short', 'window_end')}, ensure_ascii=False, default=float))
+    print(json.dumps({k: res.get(k) for k in ('run', 'branch', 'stop_result', 'protection_incomplete', 'guard_sources', 'covered_s', 'window_short',
+                                              'window_end')}, ensure_ascii=False, default=float))
 
 
 if __name__ == '__main__':

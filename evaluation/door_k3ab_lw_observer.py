@@ -3,8 +3,13 @@
 
 只在收到 /door/k2_abort（latched）後生效；不改任何控制、不重設中止、不恢復操作。
 觸發實驗保護 ⇒ 發 /door/lw_guard（latched，JSON：原因、來源步、來源模擬時間、接收與觸發牆鐘）與 /room/stop（要求執行端受控停止並封存），
-寫報告後結束。任務節點（door_k3ab_lw_task_node.py）收到 /door/lw_guard 即 finish。
+寫報告。任務節點（door_k3ab_lw_task_node.py）收到 /door/lw_guard 即 finish。
 結束模擬只是實驗保護，不是控制器成功停住的證據。
+r2（Codex 20261023_231357）：
+  - 心跳 /door/lw_observer/heartbeat（JSON：seq 遞增、armed、trip、closing），主迴圈每 20 ms 發一次；第一筆心跳前印「[lw_obs] 就緒」。
+    任務節點在就緒前不推進，之後心跳年齡 > 1.0 s（退出或卡住）⇒ 任務節點有界結束本趟並記 lw_observer_unhealthy。
+  - 回呼內任何例外 ⇒ 記 observer_exception（觸發保護），不讓程序崩潰。
+  - 他方 /room/stop ⇒ closing（只停用停更告警，硬界照判、照發）；收到 TERM（運行器在執行端行程結束後才送）⇒ finish（closed）。
 
 訂閱深度：/door/contacts 100、/door/sync_state 100（不以 depth 1 丟窗口）；每 20 ms（牆鐘）檢查新鮮度。
 
@@ -36,6 +41,7 @@ class Obs(Node):
         self.g = guard
         lat = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.guard_pub = self.create_publisher(String, '/door/lw_guard', lat)
+        self.hb_pub = self.create_publisher(String, '/door/lw_observer/heartbeat', 10)
         self.room_stop_pub = self.create_publisher(String, '/room/stop', 10)
         self.create_subscription(Float64MultiArray, '/door/sync_state', self._sync, 100)
         self.create_subscription(String, '/door/contacts', self._ct, 100)
@@ -45,18 +51,26 @@ class Obs(Node):
         self.abort_msg = None
         self.events = []
 
+    def _safe(self, fn, *a):
+        try:
+            fn(*a)
+        except Exception as e:                              # 不讓觀察器崩潰；記為保護觸發
+            self.g._bad('observer_exception', repr(e)[:200], time.monotonic())
+
     def _sync(self, m):
-        self.g.on_state([float(x) for x in m.data], time.monotonic())
+        self._safe(lambda: self.g.on_state(list(m.data), time.monotonic()))
 
     def _ct(self, m):
-        try:
-            d = json.loads(m.data)
-        except Exception:
-            d = {}
-        self.g.on_contacts(d, time.monotonic())
+        def f():
+            try:
+                d = json.loads(m.data)
+            except Exception:
+                d = None
+            self.g.on_contacts(d, time.monotonic())
+        self._safe(f)
 
     def _room_stop(self, m):
-        if not self.sent:                                   # 他方的正常結束：關閉保護（之後停更不算觸發）
+        if not self.sent:                                   # 他方的結束請求：closing（只停用停更告警；硬界照判）
             w = time.monotonic()
             self.g.close(w, str(m.data))
             self.events.append({'room_stop_seen_wall': w, 'msg': str(m.data)})
@@ -64,7 +78,7 @@ class Obs(Node):
     def _abort(self, m):
         w = time.monotonic()
         self.abort_msg = str(m.data)
-        self.g.arm(w, {'abort_msg': self.abort_msg, 'wall_recv': w})
+        self._safe(lambda: self.g.arm(w, {'abort_msg': self.abort_msg, 'wall_recv': w}))
         self.events.append({'armed_wall': w, 'abort_msg': self.abort_msg})
 
 
@@ -80,7 +94,7 @@ def main():
     rclpy.init()
     nd = Obs(g)
     w0 = time.monotonic()
-    rep = {'schema': 'door_k3ab_lw_observer/1', 'config': dataclasses.asdict(g.cfg), 'guard_sha256': None}
+    rep = {'schema': 'door_k3ab_lw_observer/2', 'config': dataclasses.asdict(g.cfg), 'guard_sha256': None}
     try:
         import hashlib
         rep['guard_sha256'] = hashlib.sha256(open(G.__file__, 'rb').read()).hexdigest()
@@ -90,17 +104,22 @@ def main():
     signal.signal(signal.SIGTERM, lambda s, f: stop.__setitem__('sig', 'TERM'))
 
     def save():
-        rep.update({'armed_wall': g.armed_wall, 'armed_info': g.armed_info, 'trip': g.trip, 'closed': g.closed, 'n_state': g.n_state, 'n_contacts': g.n_ct,
-                    'n_state_dup': g.n_dup, 'events': nd.events, 'wall_start': w0, 'wall_end': time.monotonic(), 'ended_by': stop['sig']})
+        rep.update({**g.report(), 'events': nd.events[:200], 'n_heartbeat': hb['seq'], 'wall_start': w0, 'wall_end': time.monotonic(),
+                    'ended_by': stop['sig'], 'loop_exception': hb['exc']})
         tmp = a.out + '.tmp'
         json.dump(rep, open(tmp, 'w'), ensure_ascii=False, indent=1, default=float)
         os.replace(tmp, a.out)
 
+    hb = {'seq': 0, 'exc': None}
+    print('[lw_obs] 就緒', flush=True)
     try:
         while rclpy.ok() and stop['sig'] is None and time.monotonic() - w0 < a.wall_max_s:
             for _ in range(64):
                 rclpy.spin_once(nd, timeout_sec=0.0)
             g.check(time.monotonic())
+            hb['seq'] += 1
+            nd.hb_pub.publish(String(data=json.dumps({'seq': hb['seq'], 'wall': time.monotonic(), 'armed': g.armed_wall is not None,
+                                                      'trip': None if g.trip is None else g.trip['why'], 'closing': g.closing is not None})))
             if g.trip is not None and not nd.sent:
                 nd.sent = True
                 msg = json.dumps({'experiment_guard': g.trip, 'abort_msg': nd.abort_msg}, default=float)
@@ -110,7 +129,12 @@ def main():
                 print(f'[lw_obs] 實驗保護觸發：{g.trip}', flush=True)
                 save()
             time.sleep(0.02)
+    except Exception as e:
+        hb['exc'] = repr(e)[:300]
+        raise
     finally:
+        if stop['sig'] == 'TERM':
+            g.finish(time.monotonic(), 'runner_TERM')         # 運行器在執行端行程結束後才送 TERM
         save()
         nd.destroy_node()
         rclpy.try_shutdown()

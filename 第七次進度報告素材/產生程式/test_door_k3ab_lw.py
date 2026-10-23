@@ -99,12 +99,88 @@ class Guard(unittest.TestCase):
             g.on_state(st(k, 0.01 * k), 0.01 * k)
         self.assertEqual(g.check(0.29)['why'], 'contacts_stale')
 
-    def test_closed_after_normal_end(self):
+    def test_closing_keeps_hard_bounds(self):
+        """Codex 231357 第 3 項：結束請求只停用停更告警；在途資料的硬界照判。"""
         g = self.armed()
         g.close(0.1, 'door_k3a 結束：ABORTED')
-        self.assertIsNone(g.check(5.0))
-        g.on_contacts(ct(2, 0.02, unexp=3.0), 5.0)
+        self.assertIsNone(g.check(5.0))                                    # 停更不告警
+        g.on_contacts(ct(2, 0.02, unexp=1.0), 5.0)
+        self.assertEqual(g.trip['why'], 'unexpected_contact')
+        self.assertTrue(g.trip['during_closing'])
+        g = self.armed()
+        g.close(0.1, 'x')
+        g.on_state(st(2, 0.02, q=math.radians(6)), 0.2)
+        self.assertEqual(g.trip['why'], 'door_range')
+        g = self.armed()
+        g.close(0.1, 'x')
+        g.finish(0.3, 'runner_TERM')                                       # 有界收尾完成後不再判定
+        g.on_contacts(ct(2, 0.02, unexp=3.0), 0.4)
         self.assertIsNone(g.trip)
+        self.assertTrue(g.closed['after_closing'])
+
+    def test_contacts_resend_does_not_refresh(self):
+        """Codex 反例：同一窗口重送 1 s 不得掩蓋停更。"""
+        g = self.armed()
+        g.on_state(st(2, 0.02), 0.05)
+        w = ct(2, 0.02)
+        for k in range(50):
+            g.on_contacts(dict(w), 0.06 + 0.02 * k)
+            g.on_state(st(3 + k, 0.03 + 0.01 * k), 0.06 + 0.02 * k)
+            g.check(0.06 + 0.02 * k)
+            if g.trip:
+                break
+        self.assertEqual(g.trip['why'], 'contacts_stale')
+        self.assertGreater(g.n_ct_dup, 5)
+
+    def test_contacts_bad_fields_no_exception(self):
+        cases = [{**ct(2, 0.02), 'step': None}, {k: v for k, v in ct(2, 0.02).items() if k != 'step'},
+                 {**ct(2, 0.02), 'n_invalid': float('inf')}, {**ct(2, 0.02), 'n_invalid': 1.5}, {**ct(2, 0.02), 'n_invalid': -1},
+                 {**ct(2, 0.02), 'step': 10 ** 30}, {**ct(2, 0.02), 'wrist_max_n': 'x'}, {**ct(2, 0.02), 'sim_t': float('nan')},
+                 {**ct(2, 0.02), 'unexpected_max_n': True}, None, [1, 2]]
+        for d in cases:
+            g = self.armed()
+            g.on_contacts(d, 0.06)                                         # 不拋例外
+            self.assertEqual(g.trip['why'], 'contacts_invalid', d)
+
+    def test_contacts_conflict_and_backward(self):
+        g = self.armed()
+        g.on_contacts(ct(5, 0.05), 0.06)
+        g.on_contacts(ct(5, 0.05, wrist=11.0), 0.07)                       # 同步號內容衝突
+        self.assertEqual((g.trip['why'], g.trip['detail']), ('contacts_invalid', 'same_step_conflict'))
+        g = self.armed()
+        g.on_contacts(ct(5, 0.05), 0.06)
+        g.on_contacts(ct(4, 0.04), 0.07)
+        self.assertEqual((g.trip['why'], g.trip['detail']), ('contacts_invalid', 'backward'))
+        g = self.armed()
+        g.on_state(st(5, 0.05), 0.06)
+        bad = st(5, 0.05, q=0.02)
+        g.on_state(bad, 0.07)
+        self.assertEqual((g.trip['why'], g.trip['detail']), ('state_invalid', 'same_step_conflict'))
+
+    def test_pre_arm_anomaly_recorded_not_tripped(self):
+        g = G.LWGuard()
+        g.on_contacts({'x': 1}, 0.0)
+        self.assertIsNone(g.trip)
+        self.assertEqual(len(g.anomalies), 1)
+
+
+class Heartbeat(unittest.TestCase):
+    def test_ready_healthy_stale(self):
+        h = G.HeartbeatWatch(max_age_s=1.0)
+        self.assertFalse(h.ready())
+        self.assertFalse(h.healthy(0.0))
+        h.on_beat({'seq': 1}, 0.0)
+        self.assertTrue(h.healthy(0.9))
+        self.assertFalse(h.healthy(1.01))                                  # 心跳停止（程序可能仍在）
+        h.on_beat({'seq': 1}, 1.0)                                         # 重複不刷新
+        self.assertFalse(h.healthy(1.01))
+        h.on_beat({'seq': 0}, 1.0)
+        h.on_beat({'seq': 'x'}, 1.0)
+        h.on_beat(None, 1.0)
+        self.assertFalse(h.healthy(1.01))
+        self.assertEqual(len(h.bad), 4)
+        h.on_beat({'seq': 2}, 1.05)
+        self.assertTrue(h.healthy(1.1))
 
 
 COLS = ['step', 'sim_t', 'base_xyth', 'q_arm_meas', 'door_q_rad', 'door_qdot_rad_s', 'q_finger', 'leaf_contacts', 'wall_contacts', 'wrist_force_n']
@@ -136,13 +212,22 @@ def task(**kw):
     return t
 
 
+OBS_OK = {'trip': None, 'ended_by': 'TERM', 'closed': {'why': 'runner_TERM'}, 'loop_exception': None, 'n_heartbeat': 500,
+          'armed_wall': 1.0, 'n_anomalies': 0}
+HEALTH_OK = {'sim': 'exited', 'obs': 'exited', 'obs_rc': '0'}
+
+
+def an(t, r, obs=OBS_OK, health=HEALTH_OK, **kw):
+    return A.analyse(t, r, obs=obs, health=health, **kw)
+
+
 def decay(t):
     return (0.004 if t < 2.0 else 0.0, 0.01 if t < 2.0 else 0.0)
 
 
 class Analysis(unittest.TestCase):
     def test_stop_confirmed_split_times(self):
-        R = A.analyse(task(), room(100 + 1101, decay))
+        R = an(task(), room(100 + 1101, decay))
         self.assertEqual(R['branch'], 'latched')
         self.assertEqual(R['stop_result'], 'stopped_confirmed')
         a = R['detect']['all']
@@ -153,35 +238,58 @@ class Analysis(unittest.TestCase):
         self.assertFalse(R['window_short'])
 
     def test_missing_step_blocks_stop(self):
-        R = A.analyse(task(), room(100 + 1101, decay, drop=range(400, 1300, 80)))   # 每 0.8 s 缺一步 ⇒ 永遠湊不滿 1 s
+        R = an(task(), room(100 + 1101, decay, drop=range(400, 1300, 80)))   # 每 0.8 s 缺一步 ⇒ 永遠湊不滿 1 s
         self.assertTrue(R['stop_result'].startswith('not_stopped_within_covered_'))
-        R2 = A.analyse(task(), room(100 + 1101, decay, dup=range(400, 1300, 80)))
+        R2 = an(task(), room(100 + 1101, decay, dup=range(400, 1300, 80)))
         self.assertTrue(R2['stop_result'].startswith('not_stopped_within_covered_'))
-        R3 = A.analyse(task(), room(100 + 1101, decay, nan=range(400, 1300, 80)))
+        R3 = an(task(), room(100 + 1101, decay, nan=range(400, 1300, 80)))
         self.assertTrue(R3['stop_result'].startswith('not_stopped_within_covered_'))
 
     def test_re_motion_flagged(self):
         def v(t):
             return (0.004 if t < 2.0 or 5.0 <= t < 5.5 else 0.0, 0.0)
-        R = A.analyse(task(), room(100 + 1101, v))
+        R = an(task(), room(100 + 1101, v))
         self.assertEqual(R['stop_result'], 'stopped_confirmed_then_re_motion')
         self.assertTrue(R['detect']['all']['re_motion'][0]['t'] >= 5.0 - 1e-9)
 
     def test_window_short_wording(self):
-        R = A.analyse(task(), room(100 + 300, lambda t: (0.004, 0.0)))
+        R = an(task(), room(100 + 300, lambda t: (0.004, 0.0)))
         self.assertTrue(R['window_short'])
         self.assertEqual(R['stop_result'], 'not_stopped_within_covered_2.99_s')
 
     def test_no_latch_branches(self):
-        R = A.analyse(task(final_phase='DONE', policy_events=[]), room(500, decay, latch_step=None))
+        R = an(task(final_phase='DONE', policy_events=[]), room(500, decay, latch_step=None))
         self.assertEqual((R['branch'], R['stop_result']), ('done_branch_observation_insufficient', 'observation_insufficient'))
-        R = A.analyse(task(), room(500, decay, latch_step=None))
+        R = an(task(), room(500, decay, latch_step=None))
         self.assertEqual((R['branch'], R['stop_result']), ('no_latch_other', 'not_applicable'))
 
     def test_guard_terminated_is_unverified(self):
-        R = A.analyse(task(lw_guard={'msg': '{"experiment_guard": {"why": "wrist"}}', 'wall_recv': 1.0}), room(100 + 1101, decay))
+        R = an(task(lw_guard={'msg': '{"experiment_guard": {"why": "wrist"}}', 'wall_recv': 1.0}), room(100 + 1101, decay))
         self.assertEqual(R['branch'], 'observation_terminated_early')
         self.assertEqual(R['stop_result'], 'unverified_observation_terminated_early')
+
+    def test_cross_check_sources(self):
+        """Codex 反例：room.stop_reason 記保護、task 未記 ⇒ 仍須提前終止。"""
+        r = room(100 + 1101, decay)
+        r['stop_reason'] = 'lw_observer experiment_guard：wrist'
+        R = an(task(), r)
+        self.assertEqual((R['branch'], R['stop_result']), ('observation_terminated_early', 'unverified_observation_terminated_early'))
+        R = an(task(), room(100 + 1101, decay), obs={**OBS_OK, 'trip': {'why': 'wrist'}})
+        self.assertEqual(R['branch'], 'observation_terminated_early')
+        R = an(task(lw_observer_unhealthy={'age_s': 1.2}), room(100 + 1101, decay))
+        self.assertEqual(R['branch'], 'observation_terminated_early')
+
+    def test_protection_incomplete(self):
+        for obs, health, why in ((None, HEALTH_OK, 'observer_report_missing'), ({**OBS_OK, 'ended_by': None}, HEALTH_OK, 'observer_ended_by_None'),
+                                 ({**OBS_OK, 'closed': None}, HEALTH_OK, 'observer_not_closed'),
+                                 ({**OBS_OK, 'armed_wall': None}, HEALTH_OK, 'observer_not_armed_despite_latch'),
+                                 ({**OBS_OK, 'n_heartbeat': 0}, HEALTH_OK, 'observer_no_heartbeat'),
+                                 (OBS_OK, None, 'runner_health_missing'), (OBS_OK, {**HEALTH_OK, 'obs': 'killed'}, 'runner_obs_killed'),
+                                 (OBS_OK, {**HEALTH_OK, 'sim': 'terminated'}, 'runner_sim_terminated')):
+            R = an(task(), room(100 + 1101, decay), obs=obs, health=health)
+            self.assertEqual(R['stop_result'], 'unverified_protection_incomplete', why)
+            self.assertIn(why, R['protection_incomplete'])
+            self.assertEqual(R['stop_result_if_protection_ok'], 'stopped_confirmed')
 
     def test_geometry_segments(self):
         def fn(qf, qd, qfg):
@@ -191,7 +299,7 @@ class Analysis(unittest.TestCase):
         def parts(qf, qd, qfg):
             calls['k'] += 1
             return (0.004 if 50 <= calls['k'] < 60 else 0.006), -0.0003
-        R = A.analyse(task(), room(100 + 200, decay), fn, parts)
+        R = an(task(), room(100 + 200, decay), fn=fn, parts_fn=parts)
         segs = R['geometry']['shell_bar_below_5mm_segments']
         self.assertEqual(len(segs), 1)
         self.assertEqual(segs[0]['n_steps'], 10)

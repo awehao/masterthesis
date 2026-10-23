@@ -2,6 +2,8 @@
 """K3-A-B 長窗隔離診斷任務節點（door_k3ab_task_node.py 的版本化複本，**只插入**；規格 K3_stop_longwindow_diag_spec.md draft-2）：
   - 新增 --post-abort-observe-s（預設 3.0＝原 K2Config 值；跑法傳 10）；
   - 訂閱 /door/lw_guard（latched；獨立觀察器的實驗保護）：收到即 finish，task.json 記 lw_guard（訊息與接收牆鐘）。
+  - r2（Codex 20261023_231357 第 2 項）：訂閱 /door/lw_observer/heartbeat；觀察器**就緒前不推進**相位機（牆鐘 --lw-ready-timeout-s 內未就緒 ⇒
+    記 lw_observer_not_ready 並結束）；就緒後心跳年齡 > --lw-heartbeat-max-age-s（觀察器退出或卡住）⇒ 記 lw_observer_unhealthy、有界結束本趟。
 其餘相位機、判準、話題全同。
 原說明：K3-A-B 任務節點（door_k3a_task_node.py 的版本化複本；K3-A 檔不改；相位機換成 door_k3ab_policy：OPEN 期間兩指承載平衡有界目標微調）。
 另訂閱 /door/finger_pair（逐步兩指配對；原始訊息直接送入策略的 PairBuffer，入口驗證在緩衝內）；Meas 另帶 state_step、pairs_age_wall；
@@ -44,6 +46,7 @@ import door_k2_io as KIO                                                  # noqa
 import door_k3ab_policy as P                                              # noqa: E402
 import door_k3ab_balance as BAL                                           # noqa: E402
 import door_target_k3 as T3                                              # noqa: E402
+import door_k3ab_lw_guard as G                                            # noqa: E402（LW r2）
 from physics_contact_hold import contact_established                     # noqa: E402
 
 ARM = [f'joint{i}' for i in range(1, 7)]
@@ -85,6 +88,8 @@ class Node2(Node):
         self.create_subscription(String, '/park/gate', self._gate, 1)
         self.lw_guard = None                                                  # LW：獨立觀察器的實驗保護
         self.lw_guard_wall = None
+        self.hbw = G.HeartbeatWatch()                                         # LW r2：觀察器心跳
+        self.create_subscription(String, '/door/lw_observer/heartbeat', self._lw_hb, 10)
         self.create_subscription(String, '/door/lw_guard', self._lw_guard,
                                  QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
@@ -98,6 +103,13 @@ class Node2(Node):
 
     def _ct(self, m):
         self._ct0(m)
+
+    def _lw_hb(self, m):
+        try:
+            d = json.loads(m.data)
+        except Exception:
+            d = None
+        self.hbw.on_beat(d, time.monotonic())
 
     def _lw_guard(self, m):
         if self.lw_guard is None:
@@ -158,6 +170,8 @@ def main():
     ap.add_argument('--wall-total-s', type=float, default=600.0)
     ap.add_argument('--wall-post-abort-s', type=float, default=60.0)
     ap.add_argument('--post-abort-observe-s', type=float, default=3.0)       # LW：中止後觀察（模擬時間；原 K2Config 值 3.0）
+    ap.add_argument('--lw-ready-timeout-s', type=float, default=60.0)         # LW r2：等觀察器就緒（牆鐘）
+    ap.add_argument('--lw-heartbeat-max-age-s', type=float, default=1.0)      # LW r2：心跳最大年齡（牆鐘）
     a = ap.parse_args()
     if os.path.exists(a.out):
         print(f'[k3a] {a.out} 已存在 ⇒ 拒絕覆寫', flush=True)
@@ -210,6 +224,17 @@ def main():
             wnow = time.monotonic()
             if nd.lw_guard is not None:                                       # LW：實驗保護 ⇒ 提前結束觀察（不是成功停住）
                 rep['lw_guard'] = {'msg': nd.lw_guard, 'wall_recv': nd.lw_guard_wall}
+                break
+            nd.hbw.max_age_s = a.lw_heartbeat_max_age_s                     # LW r2：觀察器就緒與健康
+            if not nd.hbw.ready():
+                if wnow - w0 > a.lw_ready_timeout_s:
+                    rep['lw_observer_not_ready'] = {'wall_waited_s': wnow - w0}
+                    break
+                time.sleep(dt_w)
+                continue
+            if not nd.hbw.healthy(wnow):
+                rep['lw_observer_unhealthy'] = {'wall': wnow, 'last_beat_wall': nd.hbw.last_wall, 'last_seq': nd.hbw.last_seq,
+                                                'age_s': wnow - nd.hbw.last_wall, 'phase': pol.phase}
                 break
             if wnow - w0 > a.wall_total_s and pol.phase not in ('ABORTED', 'DONE'):
                 rep['wall_timeout'] = True
@@ -313,6 +338,7 @@ def main():
                 break
             time.sleep(dt_w)
     finally:
+        rep['lw_heartbeat'] = {'ready_wall': nd.hbw.ready_wall, 'last_seq': nd.hbw.last_seq, 'last_wall': nd.hbw.last_wall, 'bad': nd.hbw.bad[:20]}
         rep['wall_s'] = round(time.monotonic() - w0, 2)
         rep['sync_anomalies'] = {'n_dup': nd.sync_tr.n_dup, 'n_back': nd.sync_tr.n_back, 'list': nd.sync_tr.anomalies[:20]}
         rep['received_any_sync'] = sync_once
