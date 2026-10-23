@@ -1,0 +1,157 @@
+{
+ "schema": "door_k3m_offline_stop/1",
+ "dt": 0.01,
+ "wheel_cfg": {
+  "wheel_radius": 0.05,
+  "wheel_base_L": 0.245,
+  "wheel_w_max": 5.55,
+  "wheel_a_max": 125.0,
+  "arm_rate_max": 1.0,
+  "dt_max": 0.05,
+  "tol": 1e-09
+ },
+ "starts_body": {
+  "box": [
+   0.035255,
+   0.035255,
+   0.1999
+  ],
+  "latch": [
+   0.035355339059327376,
+   0.035355339059327376,
+   0.2
+  ],
+  "replay": [
+   0.011957919967130947,
+   0.00834377068654019,
+   0.02002998560227758
+  ]
+ },
+ "reaction_s": {
+  "executor_per_step": 0.01,
+  "policy_worst": 0.25,
+  "chain_timeout": 0.21
+ },
+ "cases": [
+  {
+   "reaction_s": 0.01,
+   "decel_steps": 2,
+   "fwd_mm": 0.44350384421320066,
+   "lat_mm": 0.44350384421320066,
+   "disp_mm": 0.6272091514509127,
+   "yaw_deg": 0.14408278554536,
+   "arm_rate_after": 0.0,
+   "start": "box",
+   "reaction": "executor_per_step"
+  },
+  {
+   "reaction_s": 0.25,
+   "decel_steps": 2,
+   "fwd_mm": 8.9047038442132,
+   "lat_mm": 8.9047038442132,
+   "disp_mm": 12.593152945402146,
+   "yaw_deg": 2.8929051034649986,
+   "arm_rate_after": 0.0,
+   "start": "box",
+   "reaction": "policy_worst"
+  },
+  {
+   "reaction_s": 0.21,
+   "decel_steps": 2,
+   "fwd_mm": 7.4945038442132015,
+   "lat_mm": 7.4945038442132015,
+   "disp_mm": 10.598828979743606,
+   "yaw_deg": 2.434768050478392,
+   "arm_rate_after": 0.0,
+   "start": "box",
+   "reaction": "chain_timeout"
+  },
+  {
+   "reaction_s": 0.01,
+   "decel_steps": 2,
+   "fwd_mm": 0.4451543409676936,
+   "lat_mm": 0.4451543409676936,
+   "disp_mm": 0.6295433063457693,
+   "yaw_deg": 0.14428069789729617,
+   "arm_rate_after": 0.0,
+   "start": "latch",
+   "reaction": "executor_per_step"
+  },
+  {
+   "reaction_s": 0.25,
+   "decel_steps": 2,
+   "fwd_mm": 8.930435715206261,
+   "lat_mm": 8.930435715206261,
+   "disp_mm": 12.629543306345765,
+   "yaw_deg": 2.894478114525249,
+   "arm_rate_after": 0.0,
+   "start": "latch",
+   "reaction": "policy_worst"
+  },
+  {
+   "reaction_s": 0.21,
+   "decel_steps": 2,
+   "fwd_mm": 7.516222152833165,
+   "lat_mm": 7.516222152833165,
+   "disp_mm": 10.629543306345763,
+   "yaw_deg": 2.4361118784205904,
+   "arm_rate_after": 0.0,
+   "start": "latch",
+   "reaction": "chain_timeout"
+  },
+  {
+   "reaction_s": 0.01,
+   "decel_steps": 1,
+   "fwd_mm": 0.11957919967130948,
+   "lat_mm": 0.0834377068654019,
+   "disp_mm": 0.14581164535450397,
+   "yaw_deg": 0.011476336387183097,
+   "arm_rate_after": 0.0,
+   "start": "replay",
+   "reaction": "executor_per_step"
+  },
+  {
+   "reaction_s": 0.25,
+   "decel_steps": 1,
+   "fwd_mm": 2.989479991782736,
+   "lat_mm": 2.0859426716350478,
+   "disp_mm": 3.645291133862598,
+   "yaw_deg": 0.28690840967957754,
+   "arm_rate_after": 0.0,
+   "start": "replay",
+   "reaction": "policy_worst"
+  },
+  {
+   "reaction_s": 0.21,
+   "decel_steps": 1,
+   "fwd_mm": 2.5111631930974987,
+   "lat_mm": 1.7521918441734405,
+   "disp_mm": 3.0620445524445836,
+   "yaw_deg": 0.24100306413084505,
+   "arm_rate_after": 0.0,
+   "start": "replay",
+   "reaction": "chain_timeout"
+  }
+ ],
+ "worst": {
+  "executor_per_step": {
+   "disp_mm": 0.6295433063457693,
+   "yaw_deg": 0.14428069789729617,
+   "fwd_mm": 0.4451543409676936,
+   "lat_mm": 0.4451543409676936
+  },
+  "policy_worst": {
+   "disp_mm": 12.629543306345765,
+   "yaw_deg": 2.894478114525249,
+   "fwd_mm": 8.930435715206261,
+   "lat_mm": 8.930435715206261
+  },
+  "chain_timeout": {
+   "disp_mm": 10.629543306345763,
+   "yaw_deg": 2.4361118784205904,
+   "fwd_mm": 7.516222152833165,
+   "lat_mm": 7.516222152833165
+  }
+ },
+ "note": "既有 E2 逾時路徑的純離線推進；不改減速律或門檻。用來選內側中止界限（外側核對範圍減去最壞剩餘位移）。"
+}
