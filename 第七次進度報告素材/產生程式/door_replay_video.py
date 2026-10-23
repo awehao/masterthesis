@@ -5,7 +5,9 @@
 標註：RUN_ID、「該趟實錄重播」（不是即時錄影）、模擬時間、任務相位、門角、閂鎖後底盤位移、關鍵時刻橫幅
       （對準＝ALIGN_PRE／ALIGN_HOLD、夾持＝ENGAGE／HOLD、OPEN、失接觸／中止（策略中止）、閂鎖、停止後漂移＝閂鎖後）。
 另寫 <out>.keymoments.json：關鍵時刻（模擬時間、影片時間）供 README 引用。
-播放：重播 10 Hz（模擬時間）以 --fps 播放（預設 20 ⇒ 2 倍速），標註寫明倍速。
+播放（r2；Codex 20261023_235904）：每幀顯示時長＝（下一幀模擬時間 − 本幀模擬時間）÷ 倍速，依**實際影格**的模擬時間編碼（ffmpeg concat），
+缺圖時沿用前一幀並在頂欄標「缺圖」，不把缺幀壓縮成固定倍速；關鍵時刻的影片時間依實際影格累計。
+完整性取自同目錄 replay_check.json（door_replay_check.py）；不完整時頂欄標「重播不完整」並寫入 keymoments.json。
 
     python3 evaluation/door_replay_video.py <replay_run_id> <src_run_id> <out.mp4> [--fps 20] [--title 文字]
 """
@@ -49,8 +51,7 @@ def main():
     ap.add_argument('replay')
     ap.add_argument('src')
     ap.add_argument('out')
-    ap.add_argument('--fps', type=float, default=20.0)
-    ap.add_argument('--hz', type=float, default=10.0)
+    ap.add_argument('--speed', type=float, default=2.0, help='倍速（模擬時間 ÷ 影片時間）')
     ap.add_argument('--title', default='')
     a = ap.parse_args()
     if os.path.exists(a.out):
@@ -64,16 +65,24 @@ def main():
     by_step = {int(s[I['step']]): s for s in room['steps']}
     b_lat = None if lat is None else by_step[int(lat['step'])][I['base_xyth']]
     rows = [r for r in csv.reader(open(os.path.join(RD, 'frames.csv'))) if r and not r[0].startswith('#') and r[0] != 'frame']
+    chk_p = os.path.join(RD, 'replay_check.json')
+    chk = json.load(open(chk_p)) if os.path.exists(chk_p) else {'complete': False, 'reasons': ['replay_check_missing']}
     f_big, f_mid = ImageFont.truetype(FONT, 30), ImageFont.truetype(FONT, 24)
-    speed = a.fps / a.hz
+    speed = a.speed
     tmp = tempfile.mkdtemp(prefix='doorvid_')
     try:
         n = 0
         t_first = float(rows[0][1]) if rows else 0.0
-        for r in rows:
+        concat, last_png, n_missing = [], None, 0
+        for i, r in enumerate(rows):
             fr, st, step = int(r[0]), float(r[1]), int(r[2])
             src = os.path.join(RD, 'frames', f'f_{fr:05d}.png')
-            if not os.path.exists(src):
+            t_next = float(rows[i + 1][1]) if i + 1 < len(rows) else st + 0.1
+            dur = max(1e-3, (t_next - st) / speed)
+            if not os.path.exists(src):                          # 缺圖：沿用前一幀（若有），時間照實保留
+                n_missing += 1
+                if last_png is not None:
+                    concat.append((last_png, dur))
                 continue
             im = Image.open(src).convert('RGB')
             d = ImageDraw.Draw(im, 'RGBA')
@@ -90,23 +99,35 @@ def main():
                 bx = s[I['base_xyth']]
                 line2 += f"　閂鎖後底盤位移 {math.hypot(bx[0] - b_lat[0], bx[1] - b_lat[1]) * 1e3:.1f} mm"
             d.rectangle([0, 0, im.width, 92], fill=(0, 0, 0, 150))
-            d.text((16, 8), f"{a.src}　該趟實錄重播（非即時錄影；{speed:.0f} 倍速）{('　' + a.title) if a.title else ''}", font=f_mid, fill=(255, 255, 255))
+            flag = '' if chk.get('complete') else f"　重播不完整（{'、'.join(chk.get('reasons', []))[:40]}）"
+            if n_missing:
+                flag += f'　缺圖 {n_missing}'
+            d.text((16, 8), f"{a.src}　該趟實錄重播（非即時錄影；{speed:g} 倍速）{('　' + a.title) if a.title else ''}{flag}", font=f_mid, fill=(255, 255, 255))
             d.text((16, 46), line2, font=f_mid, fill=(255, 235, 160))
             cur = [k for k in km if k['sim_t'] <= st + 1e-9 and st - k['sim_t'] < 1.5]
             if cur:
                 d.rectangle([0, im.height - 64, im.width, im.height], fill=(150, 30, 30, 170))
                 d.text((16, im.height - 54), cur[-1]['label'], font=f_big, fill=(255, 255, 255))
             n += 1
-            im.save(os.path.join(tmp, f'{n:05d}.png'))
+            last_png = os.path.join(tmp, f'{n:05d}.png')
+            im.save(last_png)
+            concat.append((last_png, dur))
         if n == 0:
             raise SystemExit('沒有任何幀')
-        subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-framerate', f'{a.fps}', '-i', os.path.join(tmp, '%05d.png'),
+        lst = os.path.join(tmp, 'concat.txt')
+        with open(lst, 'w') as f:
+            for pth, dur in concat:
+                f.write(f"file '{pth}'\nduration {dur:.6f}\n")
+            f.write(f"file '{concat[-1][0]}'\n")                    # concat 規格：最後一格重複以套用時長
+        subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', lst, '-vsync', 'vfr',
                         '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', a.out], check=True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     for k in km:
         k['video_t_s'] = max(0.0, (k['sim_t'] - t_first) / speed)
-    json.dump({'replay': a.replay, 'src': a.src, 'n_frames': n, 'fps': a.fps, 'sim_hz': a.hz, 'speed_x': speed,
+    json.dump({'replay': a.replay, 'src': a.src, 'n_frames': n, 'n_missing_images': n_missing, 'speed_x': speed,
+               'replay_complete': chk.get('complete'), 'replay_check_reasons': chk.get('reasons'),
+               'timing': '每幀時長＝相鄰影格模擬時間差 ÷ 倍速（依實際影格）',
                'kind': '該趟實錄重播（render-only replay of the same run）', 'key_moments': km},
               open(a.out + '.keymoments.json', 'w'), ensure_ascii=False, indent=1)
     print(f'{a.out}：{n} 幀；關鍵時刻 {[(k["label"], round(k["video_t_s"], 1)) for k in km]}')
