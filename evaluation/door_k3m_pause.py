@@ -10,7 +10,7 @@
 ③ **完成序列**（PauseSequencer）：
      LOWSPEED  → 量測低速條件連續 hold_s（底盤線／角速度、門速、手臂套用速率）
      ZERO_PUB  → 發布零速命令（arm 0；底盤＝decel_step 朝 0）直到底盤命令為 0
-     CONFIRM   → 執行端套用回報：底盤與手臂套用值都 ≤ tol，連續 n_confirm 物理步，且對應的發布序號 ≥ 零速第一筆
+     CONFIRM   → 執行端套用回報：底盤與手臂套用值都 ≤ tol，連續 n_confirm 個不同的實際物理步（重送不累計），且來源發布序號 ≥ 零速第一筆
      STOPPED   → 停止發布；之後觀察 observe_s，量測仍低速 ⇒ DONE
    任一週期求解失敗、量測無效或逾時 ⇒ FAIL（不算健康暫停成功；閉迴路工具在求解失敗時代入零命令，這條退化路徑也判 FAIL）。
 """
@@ -115,6 +115,8 @@ class PauseSequencer:
         self.zero_seq0 = None
         self.n_ok = 0
         self.t_stop = None
+        self.last_phys = None
+        self.last_t = None
         self.why = None
         self.log = []
 
@@ -172,17 +174,29 @@ class PauseSequencer:
         if zero and self.zero_seq0 is None:
             self.zero_seq0 = int(seq)
 
-    def applied(self, t, applied_base, applied_arm, src_seq):
-        """執行端每物理步的套用回報（來源發布序號 src_seq）。CONFIRM 中連續 n_confirm 步為零且序號 ≥ 零速第一筆 ⇒ STOPPED。"""
+    def applied(self, phys_step, t, applied_base, applied_arm, src_seq):
+        """執行端每**實際**物理步的套用回報（r2：依 Codex 20261023_225057 第 2 節）。
+        確認須來自 n_confirm 個**連續、不同**的物理步（phys_step 每次 +1、t 遞增）；同一步重送不累計；跳步則重新計數；
+        步序倒退、時間不遞增、維度不是 3＋6、值非有限 ⇒ FAIL。每步的套用值 ≤ tol 且來源序號 ≥ 零速第一筆才算數。"""
         if self.state != 'CONFIRM':
             return
+        if self.last_phys is not None and phys_step == self.last_phys:
+            return                                                          # 重送：不累計
+        if len(applied_base) != 3 or len(applied_arm) != 6:
+            self._fail('applied_dims', t)
+            return
         a = list(applied_base) + list(applied_arm)
-        if not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in a):
+        if not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in a) or not isinstance(phys_step, int):
             self._fail('applied_invalid', t)
+            return
+        if self.last_phys is not None and (phys_step < self.last_phys or not t > self.last_t):
+            self._fail('applied_order', t)
             return
         ok = (self.zero_seq0 is not None and src_seq is not None and int(src_seq) >= self.zero_seq0
               and max(abs(float(v)) for v in a) <= self.c.applied_tol)
-        self.n_ok = self.n_ok + 1 if ok else 0
+        consecutive = self.last_phys is not None and phys_step == self.last_phys + 1
+        self.n_ok = (self.n_ok + 1 if consecutive else 1) if ok else 0
+        self.last_phys, self.last_t = phys_step, t
         if self.n_ok >= self.c.n_confirm:
             self.state, self.t_stop = 'STOPPED', t
             self.log.append((t, 'STOPPED', None))

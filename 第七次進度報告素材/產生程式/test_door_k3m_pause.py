@@ -90,7 +90,7 @@ class Sequencer(unittest.TestCase):
                 S.note_published(seq, r['zero'])
             t += 0.05
         for k in range(10):
-            S.applied(t + 0.01 * k, [0.0] * 3, [0.0] * 6, seq)
+            S.applied(1000 + k, t + 0.01 * k, [0.0] * 3, [0.0] * 6, seq)
         t2 = S.t_stop
         while S.state == 'STOPPED':
             t2 += 0.05
@@ -118,10 +118,49 @@ class Sequencer(unittest.TestCase):
                 S.note_published(seq, r['zero'])
             t += 0.05
         for k in range(10):
-            S.applied(t, [0.0] * 3, [0.0] * 6, S.zero_seq0 - 1)          # 舊序號的套用不算
+            S.applied(100 + k, t + 0.01 * k, [0.0] * 3, [0.0] * 6, S.zero_seq0 - 1)   # 舊序號的套用不算
         self.assertEqual(S.state, 'CONFIRM')
         for k in range(10):
-            S.applied(t, [0.0, 0.0, 0.0], [2e-6] + [0.0] * 5, seq)          # 手臂未歸零
+            S.applied(200 + k, t + 0.2 + 0.01 * k, [0.0, 0.0, 0.0], [2e-6] + [0.0] * 5, seq)   # 手臂未歸零
+        self.assertEqual(S.state, 'CONFIRM')
+        for k in range(10):
+            S.applied(300, t + 0.4, [0.0] * 3, [0.0] * 6, seq)          # Codex 反例：同一步重送五次以上不累計
+        self.assertEqual(S.state, 'CONFIRM')
+        for k in (301, 302, 304, 305, 306, 307):                         # 跳步（303 缺）重新計數：300–302 只有 3、304–307 只有 4
+            S.applied(k, t + 0.4 + 0.01 * (k - 300), [0.0] * 3, [0.0] * 6, seq)
+        self.assertEqual(S.state, 'CONFIRM')
+        S.applied(308, t + 0.48, [0.0] * 3, [0.0] * 6, seq)               # 304–308 連續 5 個不同步
+        self.assertEqual(S.state, 'STOPPED')
+
+    def _to_confirm(self):
+        S = PZ.PauseSequencer()
+        t, seq = 0.0, 0
+        while S.state in ('LOWSPEED', 'ZERO_PUB'):
+            r = S.cycle(t, M(), True, True)
+            if r['publish']:
+                seq += 1
+                S.note_published(seq, r['zero'])
+            t += 0.05
+        return S, t, seq
+
+    def test_applied_dims_order_invalid(self):
+        S, t, seq = self._to_confirm()
+        S.applied(10, t, [0.0] * 3, [0.0] * 5, seq)
+        self.assertEqual(S.why, 'applied_dims')
+        S, t, seq = self._to_confirm()
+        S.applied(10, t, [0.0] * 3, [0.0] * 6, seq)
+        S.applied(9, t + 0.01, [0.0] * 3, [0.0] * 6, seq)
+        self.assertEqual(S.why, 'applied_order')
+        S, t, seq = self._to_confirm()
+        S.applied(10, t, [0.0] * 3, [0.0] * 6, seq)
+        S.applied(11, t, [0.0] * 3, [0.0] * 6, seq)                       # 時間不遞增
+        self.assertEqual(S.why, 'applied_order')
+        S, t, seq = self._to_confirm()
+        S.applied(10, t, [float('nan')] * 3, [0.0] * 6, seq)
+        self.assertEqual(S.why, 'applied_invalid')
+        S, t, seq = self._to_confirm()
+        for k in range(10):
+            S.applied(10 + k, t + 0.01 * k, [0.0] * 3, [0.0] * 6, None)     # 無來源序號不算
         self.assertEqual(S.state, 'CONFIRM')
 
     def test_moved_after_stop_and_timeout_and_invalid(self):
@@ -143,7 +182,7 @@ class Sequencer(unittest.TestCase):
                 S4.note_published(seq, r['zero'])
             t += 0.05
         for k in range(10):
-            S4.applied(t, [0.0] * 3, [0.0] * 6, seq)
+            S4.applied(500 + k, t + 0.01 * k, [0.0] * 3, [0.0] * 6, seq)
         S4.cycle(S4.t_stop + 0.05, M(dr=0.01), True, True)
         self.assertEqual(S4.why, 'moved_after_stop')
 
