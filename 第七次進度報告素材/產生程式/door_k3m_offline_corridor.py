@@ -10,7 +10,10 @@
 內側中止帶 ±25 mm／±1.5° 與外側 ±40 mm／±4.5° 之差，涵蓋 door_k3m_offline_stop.json 的最壞剩餘位移（策略端 12.6 mm／2.9°）。
 近似：點雲／盒／膠囊、取樣之間未核、TCP 精確到達；IK 失敗不等於已證明不可達（只標「未核」）。
 
-    python3 evaluation/door_k3m_offline_corridor.py   # 寫 results/door/door_k3m_offline_corridor.json（已存在則拒絕覆寫）
+r2（Codex 20261023_203036 第 3 項）：可用 --offsets-mm／--yaw-offsets／--inner-mm／--inner-deg／--out 指定，補內側帶邊界樣本；r1 輸出保留。
+
+    python3 evaluation/door_k3m_offline_corridor.py [--offsets-mm -20 0 20 --yaw-offsets -0.8 0.8 --inner-mm 20 --inner-deg 0.8 --out ...]
+    （預設同 r1：寫 results/door/door_k3m_offline_corridor.json；已存在則拒絕覆寫）
 """
 import itertools
 import json
@@ -51,8 +54,19 @@ def ref_at(cand, qd):
 
 
 def main():
-    if os.path.exists(OUT):
-        raise SystemExit(f'{OUT} 已存在，不覆寫')
+    import argparse
+    global OFF_MM, YAW_OFF, INNER
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--offsets-mm', type=float, nargs='+', default=OFF_MM)
+    ap.add_argument('--yaw-offsets', type=float, nargs='+', default=YAW_OFF)
+    ap.add_argument('--inner-mm', type=float, default=INNER['mm'])
+    ap.add_argument('--inner-deg', type=float, default=INNER['deg'])
+    ap.add_argument('--out', default=OUT)
+    a = ap.parse_args()
+    OFF_MM, YAW_OFF, INNER = list(a.offsets_mm), list(a.yaw_offsets), {'mm': a.inner_mm, 'deg': a.inner_deg}
+    out = a.out if os.path.isabs(a.out) else os.path.join(os.path.dirname(HERE), a.out)
+    if os.path.exists(out):
+        raise SystemExit(f'{out} 已存在，不覆寫')
     rp = json.load(open(os.path.join(HERE, 'results', 'door', 'door_k3m_offline_replay_r2.json')))
     cand = rp['candidate']
     t = json.load(open(os.path.join(RUN, 'task.json')))
@@ -111,7 +125,7 @@ def main():
            'thresholds': {'env_m': GA.ENV_M, 'base_m': GA.BASE_M}, 'all': stats(lambda x: True), 'inner': stats(lambda x: x['inner']),
            'per_q': {f'{qd:.0f}': stats(lambda x, qd=qd: x['q_deg'] == qd) for qd in Q_DEG}, 'samples': rows,
            'note': '靜態取樣、同構型分支暖啟動、取樣之間未核；IK 失敗只標未核，不等於已證明不可達；不是碰撞安全證明。'}
-    json.dump(res, open(OUT, 'w'), ensure_ascii=False, indent=1, default=float)
+    json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1, default=float)
     for k in ('all', 'inner'):
         s = res[k]
         print(k, {kk: (vv if not isinstance(vv, dict) else {a: round(b * (1e3 if 'm' == a[-1] else 1), 2) for a, b in vv.items()}) for kk, vv in s.items()})
