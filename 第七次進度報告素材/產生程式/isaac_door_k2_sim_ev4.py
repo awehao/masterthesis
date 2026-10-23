@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # EV4 版（K3-M 受控暫停接入；規格 K3M_pause_integration_spec_draft1.md）：isaac_door_k2_sim_ev3.py 的複本。變更：
-#   (1) --cmd-env：**擇一入口**——不建立 /wb_vel_cmd 訂閱（唯一非插入的修改：把該訂閱包進條件），只收 adapter 封裝 /wb_vel_cmd_env；
-#       進鏈時以 E2 鏈 recv_seq 對照封裝 source_seq；
+#   (1) --cmd-env：求解端命令只經 adapter 封裝 /wb_vel_cmd_env（進鏈時以 E2 鏈 recv_seq 對照封裝 source_seq）；
+#       /wb_vel_cmd 照舊保留給展開節點（UNFOLD；求解端在封裝模式不走這條）。第一筆封裝後舊路徑仍收到命令 ⇒ 記 n_plain_after_env（判定器要求 0）；
 #   (2) 每個實際物理步發布 /door/applied_src：[step, sim_t, source_seq（非正常套用／非全身控制 ⇒ −1）, 鏈模式（0 正常、1 逾時、2 停止、3 失效）,
 #       底盤本體 3, 手臂 6]，並寫入 room steps 新欄 applied_src＝[step, sim_t, source_seq, 鏈模式]；
 #   (3) 受控暫停握手的執行端權威（door_k3m_pause_mode.ExecutorPauseAuthority；/door/pause_req → /door/pause_ack_exec）；
@@ -346,10 +346,9 @@ class Bridge(Node):
         self.grip_pub = self.create_publisher(Float64MultiArray,
                                               '/gripper/state', 10)
         self.wb_env_latest = None                                                   # EV4
-        if not a.cmd_env:
-            self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
-                                     self._counted(self._wb_cmd), 10)
-        else:                                                                      # EV4：封裝入口（擇一；不建立 /wb_vel_cmd 訂閱）
+        self.create_subscription(Float64MultiArray, '/wb_vel_cmd',
+                                 self._counted(self._wb_cmd), 10)                  # 展開節點的路徑（求解端在封裝模式不走這條）
+        if a.cmd_env:                                                              # EV4：求解端命令只經封裝入口
             self.create_subscription(Float64MultiArray, ENV.TOPIC[ENV.ST_ADAPTER], self._counted(self._wb_env), 10)
             self.applied_src_pub = self.create_publisher(Float64MultiArray, '/door/applied_src', 100)
         self.create_subscription(String, '/handover/request', self._counted(self._ho), 10)
@@ -1026,6 +1025,10 @@ def main() -> int:
                                   'chain_cmd_expired': _expired, 'handover_cancelled': True})
             print(f'[door] **K2 中止閂鎖** @ step {step_id}：{node.k2_abort_msg}；夾爪凍結 {_gnow}', flush=True)
         # 全身命令進鏈（閂鎖後丟棄）
+        if node.wb_latest is not None and a.cmd_env and env_in.n_recv > 0:         # EV4：第一筆封裝後舊路徑仍有命令 ⇒ 記為重疊（照原行為進鏈）
+            env_stats['n_plain_after_env'] = env_stats.get('n_plain_after_env', 0) + 1
+            if env_stats['n_plain_after_env'] <= 20:
+                rec['events'].append({'sim_t': t, 'step': step_id, 'ev4': 'plain_wb_cmd_after_envelope'})
         if node.wb_latest is not None:
             _wbc = k2_latch.filter_wb(list(node.wb_latest[0]))
             if _wbc is not None:
@@ -1584,7 +1587,7 @@ def main() -> int:
         rec['k3m']['rejections'] = k3m_auth.rejections
         rec['k3m']['pause_switch'] = k3m.get('pause_switch')                        # EV4
         rec['k3m']['pause_rejections'] = k3m_pauth.rejections
-    if a.cmd_env:                                                                   # EV4：封裝與套用來源統計
+    if a.cmd_env:                                                                   # EV4：封裝與套用來源統計（含 n_plain_after_env）
         rec['cmd_env'] = dict(env_stats, n_env_recv=env_in.n_recv, n_env_into_chain=env_in.n_into_chain, n_env_bad=getattr(node, 'wb_env_bad', 0), applied_src_cols=['step', 'sim_t', 'source_seq', 'chain_mode'],
                               chain_mode={'0': 'normal', '1': 'timeout', '2': 'stop_unverified', '3': 'fail'},
                               note='source_seq＝−1：本步不是正常套用的全身命令（逾時減速、停止、非全身控制或對照表外）')

@@ -2,7 +2,8 @@
 # K3-M 暫停版任務節點（door_k3m_task_node.py 的版本化複本；規格 K3M_pause_integration_spec_draft1.md）：
 #   策略換為 door_k3m_policy_p.K3MPPolicy（完整 SETTLE ⇒ PAUSE、暫停期間監看照舊、求解端 DONE 才 DONE、FAIL ⇒ 中止）；
 #   另發 /door/pause_req（latched；策略 pause_outbox，已中止不發），訂閱 /door/pause_ack_exec（執行端，權威）、/door/pause_ack_solver（求解端）、
-#   /wgmpc/pause_status（求解端監督狀態）；每輪把目前已發布目標序號交給策略（凍結目標 seq）；task.json 另記 k3m_pause。其餘同原檔。
+#   /wgmpc/pause_status（求解端監督狀態）；每輪把目前已發布目標序號交給策略（凍結目標 seq）；task.json 另記 k3m_pause。
+#   實驗保護（同長窗版）：/door/lw_guard（獨立觀察器觸發）⇒ 立即結束並記錄；觀察器心跳就緒前不推進，就緒後心跳 > 1.0 s ⇒ 記 lw_observer_unhealthy、有界結束。其餘同原檔。
 """K3-M 任務節點（door_k3a_task_node.py 的版本化複本；K3-A 檔不改；相位機換成 door_k3m_policy：OPEN 起底盤可動協同開門）。
 另發 /door/base_mode_req（latched；策略 outbox），訂閱 /door/base_mode_ack（執行端，權威）、/wgmpc/base_mode_ack（求解器）、/park/violation（執行端越界）；
 Meas 另帶 state_step、wall、base_pose、qf（底盤＋手臂）、q_finger（兩指平均）、executor_violation；ack 的 t_recv＝收到時最新狀態的模擬時間。
@@ -44,6 +45,7 @@ from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics   # noqa
 import door_k2_io as KIO                                                  # noqa: E402
 import door_k3m_policy as P                                               # noqa: E402
 import door_k3m_policy_p as PP                                            # noqa: E402  暫停版策略
+import door_k3ab_lw_guard as G                                            # noqa: E402  觀察器心跳監看
 import door_k3m_corridor as K3MCOR                                        # noqa: E402
 import door_k3m_geom_monitor as K3MGEO                                    # noqa: E402
 import door_target_k3 as T3                                              # noqa: E402
@@ -96,6 +98,10 @@ class Node2(Node):
         self.create_subscription(String, '/door/pause_ack_exec', self._pause_exec, lat)
         self.create_subscription(String, '/door/pause_ack_solver', self._pause_solver, lat)
         self.create_subscription(String, '/wgmpc/pause_status', self._pause_status, lat)
+        self.lw_guard = self.lw_guard_wall = None                                 # 實驗保護（獨立觀察器）
+        self.hbw = G.HeartbeatWatch()
+        self.create_subscription(String, '/door/lw_observer/heartbeat', self._lw_hb, 10)
+        self.create_subscription(String, '/door/lw_guard', self._lw_guard, lat)
 
     def _sync(self, m):
         d = [float(x) for x in m.data]
@@ -135,6 +141,17 @@ class Node2(Node):
 
     def _pviol(self, m):
         self._pviol0(m)
+
+    def _lw_hb(self, m):
+        try:
+            d = json.loads(m.data)
+        except Exception:
+            d = None
+        self.hbw.on_beat(d, time.monotonic())
+
+    def _lw_guard(self, m):
+        if self.lw_guard is None:
+            self.lw_guard, self.lw_guard_wall = str(m.data), time.monotonic()
 
     def _pause_msg(self, m, src):                                                 # 暫停版：ack 與狀態
         try:
@@ -213,6 +230,8 @@ def main():
     ap.add_argument('--geom-config', default=os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r3.json'))
     ap.add_argument('--wall-total-s', type=float, default=600.0)
     ap.add_argument('--wall-post-abort-s', type=float, default=60.0)
+    ap.add_argument('--lw-ready-timeout-s', type=float, default=60.0)         # 等觀察器就緒（牆鐘）
+    ap.add_argument('--lw-heartbeat-max-age-s', type=float, default=1.0)      # 觀察器心跳最大年齡（牆鐘）
     a = ap.parse_args()
     if os.path.exists(a.out):
         print(f'[k3a] {a.out} 已存在 ⇒ 拒絕覆寫', flush=True)
@@ -278,6 +297,20 @@ def main():
             for _ in range(64):
                 rclpy.spin_once(nd, timeout_sec=0.0)
             wnow = time.monotonic()
+            if nd.lw_guard is not None:                                       # 實驗保護 ⇒ 提前結束（不是成功停住）
+                rep['lw_guard'] = {'msg': nd.lw_guard, 'wall_recv': nd.lw_guard_wall}
+                break
+            nd.hbw.max_age_s = a.lw_heartbeat_max_age_s
+            if not nd.hbw.ready():
+                if wnow - w0 > a.lw_ready_timeout_s:
+                    rep['lw_observer_not_ready'] = {'wall_waited_s': wnow - w0}
+                    break
+                time.sleep(dt_w)
+                continue
+            if not nd.hbw.healthy(wnow):
+                rep['lw_observer_unhealthy'] = {'wall': wnow, 'last_beat_wall': nd.hbw.last_wall, 'last_seq': nd.hbw.last_seq,
+                                                'age_s': wnow - nd.hbw.last_wall, 'phase': pol.phase}
+                break
             if wnow - w0 > a.wall_total_s and pol.phase not in ('ABORTED', 'DONE'):
                 rep['wall_timeout'] = True
                 pol._abort('wall_total_timeout', t_prev if t_prev is not None else float('nan'))
@@ -390,6 +423,7 @@ def main():
             time.sleep(dt_w)
     finally:
         rep['wall_s'] = round(time.monotonic() - w0, 2)
+        rep['lw_heartbeat'] = {'ready_wall': nd.hbw.ready_wall, 'last_seq': nd.hbw.last_seq, 'last_wall': nd.hbw.last_wall, 'bad': nd.hbw.bad[:20]}
         rep['sync_anomalies'] = {'n_dup': nd.sync_tr.n_dup, 'n_back': nd.sync_tr.n_back, 'list': nd.sync_tr.anomalies[:20]}
         rep['received_any_sync'] = sync_once
         save()
