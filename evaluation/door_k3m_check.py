@@ -212,7 +212,7 @@ GEOM_CLASSES = ('nonfinger', 'finger', 'base', 'self')
 
 def geom_config_ok(gc):
     """r4（Codex 20261023_221949 ②）：task.geom_config 必須存在、型別合法，且與登錄值一致（不直接信任）。"""
-    if not isinstance(gc, dict):
+    if not isinstance(gc, dict) or set(gc) != set(GEOM_REG):                # r5：最外層鍵集合也須一致
         return False
     for k, v in GEOM_REG.items():
         g = gc.get(k)

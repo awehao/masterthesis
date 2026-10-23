@@ -333,6 +333,10 @@ class FullJudge(unittest.TestCase):
             t['geom_config']['v_floor']['other'] = 0.1
         self.fails_with(extra, 'geometry_config_not_registered')
 
+        def extra_top(t, r, g, s):
+            t['geom_config']['loosen'] = True                                      # Codex 小漏項：最外層多出鍵
+        self.fails_with(extra_top, 'geometry_config_not_registered')
+
         def step(t, r, g, s):
             [e for e in t['trace'] if e.get('k3m_geom')][10]['state_step'] = -99
         self.fails_with(step, 'geometry_evidence_missing')
