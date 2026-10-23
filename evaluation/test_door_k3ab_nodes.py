@@ -98,7 +98,7 @@ class Runner(unittest.TestCase):
         src = '\n'.join(b)
         self.assertIn('evaluation/isaac_door_k2_sim_ev2.py', src)
         self.assertIn('evaluation/door_k3ab_task_node.py', src)
-        self.assertIn('freeze_door_k3ab_ev_dev.sha256', src)
+        self.assertIn('freeze_door_k3ab_ev_dev_r2.sha256', src)
         self.assertFalse(any('door_k3ax_task_node' in ln for ln in b if not ln.lstrip().startswith('#')))   # 只允許出現在沿革註解
 
 
@@ -117,6 +117,21 @@ class Report(unittest.TestCase):
             w = res['references'][0]['window']
             self.assertEqual(w['first_low']['step'], 2122)                     # 與既有 K3-A-X 報告一致
             self.assertEqual(res['balance']['n_steps'], 0)
+        finally:
+            shutil.rmtree(d)
+
+    def test_delta_vs_dhat_uses_published_trace(self):
+        sys.path.insert(0, HERE)
+        import door_k3ab_report as R
+        d = tempfile.mkdtemp()
+        try:
+            json.dump({'log': [{'solve_in': {'snap_sim_t_exact': 1.03, 'offset_d_hat': [0.0] * 6}}]}, open(os.path.join(d, 'align_solver.json'), 'w'))
+            task = {'trace': [{'t': 1.0, 'ph0': 'OPEN', 'target': [0.0] * 16, 'delta_m': 0.0},
+                              {'t': 1.05, 'ph0': 'OPEN', 'target': [0.0] * 16, 'delta_m': 5e-5}]}
+            recs = [{'sim_t': round(1.0 + 0.01 * k, 4), 'delta': 1e-5 * k} for k in range(1, 6)]
+            out = R.dhat_series(d, task, recs)
+            self.assertEqual(out[0]['delta_published_m'], 0.0)                # 1.03 時已發布的仍是 1.00 那筆
+            self.assertAlmostEqual(out[0]['delta_by_pair_source_time_m'], 3e-5)   # 來源時間回填另名保存
         finally:
             shutil.rmtree(d)
 

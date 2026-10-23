@@ -9,8 +9,11 @@
   - 已消費或已待處理的步號重送：值完全相同 ⇒ 忽略（重送不重積分）；不同 ⇒ fault＝'conflict'。
   - take(upto)：只取步號 ≤ upto（本輪狀態步號）的待處理筆，依步號遞增回傳並移除；較晚的步留在緩衝（不提前使用、不丟棄）。
   - discard_upto(s0)：OPEN 第一輪把 ≤ s0 的筆標為已消費但不積分；之後到達的 ≤ s0 筆只計數、不積分。
+  - 牆鐘新鮮度（r2，Codex 20261023_194140 第 2 項）：只有「來源資料確實向前進展」才刷新 last_wall——
+    收到步號大於以往所有步號、且 valid 為真、f1／f2 皆有限的新筆；重送、遲到丟棄、無效內容都不刷新。
 **BalanceLaw**（每個來源步只消費一次，依步號順序；登錄值固定）：
-  - start(s0, t0)：首個可更新步＝s0＋1；之前 Δ ≡ 0。
+  - start(s0, t0)：首個可更新步＝s0＋1；之前 Δ ≡ 0。t0＝OPEN 第一輪的狀態 sim_t（執行端契約：狀態步 s 的 sim_t＝配對步 s 的 sim_t）；
+    **首個積分步也核對** sim_t − t0 ＝ dt_p（r2）。
   - 每步：步號須＝上一步＋1、sim_t 差＝dt_p（容差 1e-4）、valid 且 f1、f2 有限 ≥ 0；否則停止（stop），之後不再更新、不恢復、不跨缺口補積分。
   - e＝f2 − f1；濾波 ẽ：第一個積分步 ẽ＝e（登錄初值），之後 ẽ ← ẽ＋β(e − ẽ)，β＝1 − exp(−dt_p/τ_f)。
   - 死區 u＝sign(ẽ)·max(|ẽ| − e_db, 0)；速率 v＝clip(k_i·u, ±v_max)；Δ ← clip(Δ＋v·dt_p, ±Δ_max)（條件積分＝截斷，反向立即可動）。
@@ -72,18 +75,18 @@ class PairBuffer:
         self.last_wall = None
         self.n_dup = 0
         self.n_late_discarded = 0
+        self.max_step = None      # 收過的最大步號（新鮮度只在超過它時刷新）
 
     def push(self, msg, wall):
         if not isinstance(msg, dict) or not isinstance(msg.get('pairs'), list):
             self.fault = self.fault or 'malformed'
             return
-        got = False
+        progressed = False
         for raw in msg['pairs']:
             e = parse_entry(raw)
             if e is None:
                 self.fault = self.fault or 'malformed'
                 continue
-            got = True
             s = e[0]
             old = self.seen.get(s, self.pending.get(s))
             if old is not None:
@@ -97,7 +100,10 @@ class PairBuffer:
                 self.seen[s] = e
                 continue
             self.pending[s] = e
-        if got:
+            if (self.max_step is None or s > self.max_step) and e[4] and e[2] is not None and e[3] is not None:
+                progressed = True
+            self.max_step = s if self.max_step is None else max(self.max_step, s)
+        if progressed:
             self.last_wall = wall
 
     def discard_upto(self, s0):
@@ -133,7 +139,7 @@ class BalanceLaw:
 
     def start(self, s0, t0):
         self.s0, self.t0 = int(s0), float(t0)
-        self.last_step, self.last_t = int(s0), None
+        self.last_step, self.last_t = int(s0), float(t0)
 
     def stop(self, why, **kw):
         if self.stopped is None:
@@ -150,7 +156,7 @@ class BalanceLaw:
             if s != self.last_step + 1:
                 self.stop('gap', expected=self.last_step + 1, got=s)
                 return
-            if self.last_t is not None and abs((t - self.last_t) - c.dt_p_s) > c.dt_tol_s:
+            if abs((t - self.last_t) - c.dt_p_s) > c.dt_tol_s:
                 self.stop('time_step', step=s, dt=t - self.last_t)
                 return
             if not valid or f1 is None or f2 is None or f1 < 0.0 or f2 < 0.0:

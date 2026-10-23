@@ -97,7 +97,7 @@ def build():
         last_pub, last_base = pub, base
     task['schema'] = 'door_k3ab_task/1'
     task['config'] = {'balance': dict(ABC.REG)}
-    task['balance'] = {'s0': s0, 't0': None, 'records': law.records, 'stopped': None, 'pairs_fault': None}
+    task['balance'] = {'s0': s0, 't0': law.t0, 'records': law.records, 'stopped': None, 'pairs_fault': None}
     task['policy_events'] = sorted(task['policy_events'] + [{'t': B.T_OPEN, 'balance_start': {'s0': s0, 't0': B.T_OPEN}}],
                                    key=lambda e: e['t'])
     return task, room, gate
@@ -285,6 +285,102 @@ class FullJudge(unittest.TestCase):
         def m(t, r, g):
             t['schema'] = 'door_k3a_task/1'
         self.fails_with(m, 'task_schema')
+
+    # ---- r2（Codex 20261023_194140）
+    def test_published_target_nan(self):
+        def m(t, r, g):
+            e = rows(t, 'OPEN')[12]
+            e['target'] = list(e['target'])
+            e['target'][3] = float('nan')
+        self.fails_with(m, 'published_target_invalid')
+
+    def test_published_target_wrong_shape(self):
+        def m(t, r, g):
+            rows(t, 'OPEN')[12]['target'] = [0.0]
+        self.fails_with(m, 'published_target_invalid')
+
+    def test_record_e_nan(self):
+        def m(t, r, g):
+            t['balance']['records'][15]['e'] = float('nan')
+        self.fails_with(m, 'balance_records_invalid')
+
+    def test_record_e_tampered(self):
+        def m(t, r, g):
+            t['balance']['records'][15]['e'] += 0.1
+        self.fails_with(m, 'balance_recompute_mismatch')
+
+    def test_record_uv_tampered(self):
+        for k in ('u', 'v'):
+            def m(t, r, g, k=k):
+                t['balance']['records'][25][k] += 1e-6
+            self.fails_with(m, 'balance_recompute_mismatch')
+
+    def test_record_sat_flipped(self):
+        def m(t, r, g):
+            rec = t['balance']['records'][25]
+            rec['sat'] = not rec['sat']
+        self.fails_with(m, 'balance_recompute_mismatch')
+
+    def test_record_sat_not_bool(self):
+        def m(t, r, g):
+            t['balance']['records'][25]['sat'] = 0
+        self.fails_with(m, 'balance_records_invalid')
+
+    def test_room_finger_missing(self):
+        def m(t, r, g):
+            I = {c: i for i, c in enumerate(r['steps_cols'])}
+            k = t['balance']['records'][30]['step']
+            s = next(x for x in r['steps'] if x[I['step']] == k)
+            del s[I['leaf_contacts']]['uflite_finger1']
+            t['balance']['records'][30]['f1'] = 0.0
+        self.fails_with(m, 'pair_source_field_missing')
+
+    def test_room_bar_missing(self):
+        def m(t, r, g):
+            I = {c: i for i, c in enumerate(r['steps_cols'])}
+            k = t['balance']['records'][30]['step']
+            s = next(x for x in r['steps'] if x[I['step']] == k)
+            del s[I['leaf_contacts']]['uflite_finger2']['bar']
+        self.fails_with(m, 'pair_source_field_missing')
+
+    def test_first_record_time_vs_t0(self):
+        def m(t, r, g):
+            t['balance']['records'][0]['sim_t'] += 0.5
+        self.fails_with(m, 'balance_record_time_contract')
+
+    def test_t0_mismatch(self):
+        def m(t, r, g):
+            t['balance']['t0'] += 0.05
+        self.fails_with(m, 'balance_t0_mismatch')
+
+    def test_adjacent_time(self):
+        def m(t, r, g):
+            t['balance']['records'][50]['sim_t'] += 0.003
+        self.fails_with(m, 'balance_record_time_contract')
+
+    def test_consumed_later_than_row_time(self):
+        def m(t, r, g):
+            e = rows(t, 'OPEN')[7]
+            e['t'] -= 0.02
+        self.fails_with(m, 'bal_consumed_future_step')
+
+    def test_transition_row_frozen_passes_and_moving_fails(self):
+        t, r, g = G()
+        st = rows(t, 'SETTLE')
+        last = st[-1]
+        prev = st[-2]
+        last['phase'] = 'END_HOLD'                                        # 轉換列：本輪開始為 SETTLE、轉入 END_HOLD
+        self.assertEqual(last['bal_consumed'] is None, False)
+        res = ABC.judge(t, r, g)                                          # 轉換列仍有消費 ⇒ 應不通過
+        self.assertIn('end_hold_consumed_pairs', res['why'])
+        t, r, g = G()
+        st = rows(t, 'SETTLE')
+        last, prev = st[-1], st[-2]
+        last['phase'] = 'END_HOLD'
+        shift(last, 1.25e-6 * np.asarray(last['e12_world']))
+        res = ABC.judge(t, r, g)
+        self.assertIn('end_hold_published_not_frozen', res['why'])
+        self.assertIsNotNone(prev)
 
 
 if __name__ == '__main__':

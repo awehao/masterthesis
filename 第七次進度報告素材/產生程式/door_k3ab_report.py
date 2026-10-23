@@ -6,7 +6,9 @@ SETTLE 起點＝第一列 phase＝SETTLE 的 step；主窗＝[OPEN 步, min(觸�
   1. 逐步 F1、F2、e、ẽ、Δ（task.json balance.records）；
   2. 首次任一指 < 0.5 N 的物理步與門角（room leaf_contacts，主窗內；無 ⇒ None）；
   3. 主窗內 F1、F2 最小值；4. 主窗內 |F2 − F1| ≤ 2 N 的步數比例；5. Δ 飽和累計時間（sat 步數 × 0.01 s）；
-  6. 對照 run（無柔順）以同一定義列 2–4；7. Δ 與求解輸入 d̂ 的同窗時序（快照時刻、d̂ 六軸、該時刻最後一筆 Δ）。
+  6. 對照 run（無柔順）以同一定義列 2–4；7. Δ 與求解輸入 d̂ 的同窗時序（快照時刻、d̂ 六軸）：
+     - delta_published_m＝task trace 中狀態時間 ≤ 快照時刻的最後一筆**實際發布列**的 delta_m（發布時序；r2，Codex 20261023_194140 第 4 項）；
+     - delta_by_pair_source_time_m＝依配對來源 sim_t 回填的 Δ（批次稍後才消費，**不等於當時已發布的 Δ**，另名保存，只作參考）。
 不判定、不推因果；不宣稱根因已定位，也不把承載平衡結果當成任務通過。
 
     python3 evaluation/door_k3ab_report.py <run_dir> [對照 run_dir ...]   # 寫 <run_dir>/analysis/door_k3ab_report.json（已存在則拒絕覆寫）
@@ -49,11 +51,12 @@ def window_stats(task, room):
             'frac_abs_e_le_2N': None if not len(F) else float((np.abs(F[:, 1] - F[:, 0]) <= 2.0).mean())}
 
 
-def dhat_series(run, records):
+def dhat_series(run, task, records):
     p = os.path.join(run, 'align_solver.json')
     if not os.path.exists(p):
         return None
     a = json.load(open(p))
+    pub = [(e['t'], e.get('delta_m')) for e in task.get('trace') or [] if e.get('target') is not None and e.get('ph0') in ('OPEN', 'SETTLE', 'END_HOLD')]
     rt = [(r['sim_t'], r['delta']) for r in records]
     out = []
     for x in a.get('log', []):
@@ -61,10 +64,12 @@ def dhat_series(run, records):
         if si.get('offset_d_hat') is None or si.get('snap_sim_t_exact') is None:
             continue
         ts = si['snap_sim_t_exact']
-        if not rt or ts < rt[0][0]:
+        if not pub or ts < pub[0][0]:
             continue
-        d = [v for t_, v in rt if t_ <= ts + 1e-9]
-        out.append({'snap_t': ts, 'd_hat': si['offset_d_hat'], 'delta_m': d[-1] if d else None})
+        dp = [v for t_, v in pub if t_ <= ts + 1e-9]
+        ds = [v for t_, v in rt if t_ <= ts + 1e-9]
+        out.append({'snap_t': ts, 'd_hat': si['offset_d_hat'], 'delta_published_m': dp[-1] if dp else None,
+                    'delta_by_pair_source_time_m': ds[-1] if ds else None})
     return out
 
 
@@ -83,7 +88,7 @@ def main():
                                                      'delta_max_abs_m': max([abs(x['delta']) for x in recs] or [0.0]),
                                                      'saturated_s': 0.01 * sum(1 for x in recs if x.get('sat')),
                                                      'records': recs},
-           'delta_vs_dhat': dhat_series(run, recs), 'references': [],
+           'delta_vs_dhat': dhat_series(run, t, recs), 'references': [],
            'note': '一趟介入觀察（描述性）。承載平衡觀察與 K3-A 任務判定分開；不宣稱根因已定位；回授方向是依幾何提出的候選方向。'}
     for ref in refs:
         t2 = json.load(open(os.path.join(ref, 'task.json')))

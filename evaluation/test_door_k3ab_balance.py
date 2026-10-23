@@ -93,6 +93,18 @@ class Law(unittest.TestCase):
             self.assertEqual(L.stopped['why'], 'invalid')
             self.assertEqual(L.delta, 0.0)
 
+    def test_first_step_time_checked_against_t0(self):
+        """Codex 反例：start(100, 1.0) 後 (101, 99.0, …) ⇒ 首步也要停。"""
+        L = B.BalanceLaw()
+        L.start(100, 1.0)
+        L.update([(101, 99.0, 2.0, 3.0, True)])
+        self.assertEqual(L.stopped['why'], 'time_step')
+        self.assertEqual(L.records, [])
+        L = B.BalanceLaw()
+        L.start(100, 1.0)
+        L.update([(101, 1.01, 2.0, 3.0, True)])
+        self.assertIsNone(L.stopped)
+
     def test_batch_equals_one_by_one(self):
         es = entries(1, 120, f=lambda k: (2.0 - 0.01 * k, 2.0 + 0.01 * k))
         A = B.BalanceLaw()
@@ -152,6 +164,26 @@ class Buffer(unittest.TestCase):
         b.push(raw([(0, 0.0, 2.0, 2.0, True)]), 0.1)                        # 丟棄區的遲到筆 ⇒ 只計數
         self.assertEqual(b.n_late_discarded, 1)
         self.assertEqual(b.take(5), [])
+
+    def test_freshness_only_on_progress(self):
+        b = B.PairBuffer()
+        es = entries(1, 5)
+        b.push(raw(es), 1.0)
+        self.assertAlmostEqual(b.age(1.5), 0.5)
+        b.push(raw(es), 1.4)                                                # 同值重送：不刷新
+        self.assertAlmostEqual(b.age(1.5), 0.5)
+        b.take(5)
+        b.push(raw([(3, 0.03, 2.0, 2.0, True)]), 1.45)                       # 已消費步重送：不刷新
+        self.assertAlmostEqual(b.age(1.5), 0.5)
+        b.push(raw([(6, 0.06, None, None, False)]), 1.46)                    # 新步但無效：不刷新
+        self.assertAlmostEqual(b.age(1.5), 0.5)
+        b2 = B.PairBuffer()
+        b2.push(raw(entries(10, 2)), 1.0)
+        b2.discard_upto(20)
+        b2.push(raw([(15, 0.15, 2.0, 2.0, True)]), 1.3)                      # 丟棄區遲到筆：不刷新
+        self.assertAlmostEqual(b2.age(1.5), 0.5)
+        b.push(raw([(7, 0.07, 2.0, 2.0, True)]), 1.49)                       # 真正向前進展：刷新
+        self.assertAlmostEqual(b.age(1.5), 0.01)
 
     def test_age(self):
         b = B.PairBuffer()

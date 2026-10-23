@@ -55,7 +55,7 @@ class ABSim(TP.Sim):
 
         def wrapped(m, dt):
             a = orig(m, dt)
-            self.rows.append((m.t, m.state_step, dict(self.pol.row or {}), a['target'], self.pol.q_ref, a))
+            self.rows.append((m.t, m.state_step, dict(self.pol.row or {}), a['target'], self.pol.q_ref, a, self.pol.phase))
             return a
         self.pol.step = wrapped
         return super().run(t_max)
@@ -74,7 +74,7 @@ class Policy(unittest.TestCase):
         s = ABSim()
         pol = s.run()
         self.assertEqual(pol.phase, 'DONE', pol.events[-3:])
-        for t, st, row, T, _, _ in s.rows:
+        for t, st, row, T, *_ in s.rows:
             if T is not None and row.get('base') is not None:
                 np.testing.assert_allclose(T, row['base'], atol=0)
         self.assertEqual(pol.bal.delta, 0.0)
@@ -84,7 +84,7 @@ class Policy(unittest.TestCase):
         pol = s.run()
         self.assertEqual(pol.phase, 'DONE', pol.events[-3:])
         prev = None
-        for t, st, row, T, _, _ in rows_of(s, 'OPEN') + rows_of(s, 'SETTLE'):
+        for t, st, row, T, *_ in rows_of(s, 'OPEN') + rows_of(s, 'SETTLE'):
             base, d, e12 = np.asarray(row['base']), row['delta'], np.asarray(row['e12'])
             np.testing.assert_allclose(e12, base[:3, :3] @ E12, atol=1e-15)
             np.testing.assert_allclose(T[:3, :3], base[:3, :3], atol=0)
@@ -135,10 +135,37 @@ class Policy(unittest.TestCase):
         self.assertIsNone(last[3])                                          # DONE：停止發布、停止求解器
         self.assertTrue(last[5]['stop_solver'] and last[5]['finish'])
 
+    def test_transition_cycle_frozen(self):
+        """Codex 反例：SETTLE 輪內切到 END_HOLD 的那一輪不得再消費、不得移動目標（未飽和的小承載差）。"""
+        s = ABSim(f=lambda sim, k: (2.0, 2.8) if sim.pol.phase in ('OPEN', 'SETTLE', 'END_HOLD') else (2.0, 2.0))
+        pol = s.run()
+        self.assertEqual(pol.phase, 'DONE')
+        i = next(i for i, r in enumerate(s.rows) if r[2].get('ph0') == 'SETTLE' and r[6] == 'END_HOLD')
+        tr, prev = s.rows[i], s.rows[i - 1]
+        self.assertIsNone(tr[2]['consumed'])
+        np.testing.assert_array_equal(tr[3], prev[3])                       # 精確等於上一筆實際已發布目標
+        self.assertEqual(tr[2]['delta'], prev[2]['delta'])
+        self.assertLess(abs(tr[2]['delta']), 0.9e-3)                        # 未飽和（否則此反例無意義）
+        self.assertGreater(abs(tr[2]['delta']), 1e-5)
+        for r in s.rows[i:]:
+            if r[3] is not None:
+                np.testing.assert_array_equal(r[3], prev[3])
+        self.assertLessEqual(pol.bal.records[-1]['step'], prev[1])
+
+    def test_future_time_aborts(self):
+        def hook(sim, m, msg):
+            if sim.pol.phase == 'OPEN' and sim.pol.dtk is not None and sim.t > sim.pol.open_entry['t'] + 0.3:
+                msg = {'pairs': [[e[0], round(e[1] + 0.03, 4), e[2], e[3], e[4]] for e in msg['pairs']]}
+            return msg
+        s = ABSim(hook=hook, ahead=0)
+        pol = s.run()
+        self.assertEqual(pol.abort, 'balance_meas_invalid')
+        self.assertEqual(pol.bal.stopped['why'], 'future_time')
+
     def test_no_future_data_consumed(self):
         s = ABSim(f=imbalance, ahead=4)
         s.run(t_max=25.0)
-        for t, st, row, T, _, _ in s.rows:
+        for t, st, row, T, *_ in s.rows:
             c = row.get('consumed')
             if c:
                 self.assertLessEqual(c[1], st)

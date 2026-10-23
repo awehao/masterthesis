@@ -8,6 +8,9 @@ door_k3a_policy.py 不改；繼承 K3APolicy（不繼承 K3-A-U／X，HOLD 不�
     緩衝無 fault），取步號 ≤ 本輪狀態步號的配對逐步更新 Δ；任何停止 ⇒ 中止 balance_meas_invalid（不補值、不恢復）。
   - 發布目標＝基礎目標（DoorTargetK3，只由門角決定，不含 Δ）⊕ 平移 Δ·R_base·e₁₂ᵀ。
   - END_HOLD：父類固定發布最後一筆**實際已發布**的完整目標（含 Δ）；Δ 不再更新。DONE：照父類停止發布並停止求解器。
+r2（Codex 20261023_194140 第 2、3 項）：
+  - **SETTLE → END_HOLD 轉換輪**（本輪開始為 SETTLE、父類在本輪內切到 END_HOLD）即不消費配對，發布上一筆實際已發布的完整目標。
+  - 消費的配對 sim_t 不得晚於本輪狀態 sim_t（＋dt_tol）⇒ 否則停止（future_time）。
 抓取漂移與安全監看全部沿用父類（對原始 G_T_H_grasp，不重新初始化）。
 """
 from __future__ import annotations
@@ -50,6 +53,7 @@ class K3ABPolicy(P.K3APolicy):
     def step(self, m: Meas, dt: float):
         ph0 = self.phase
         first_open = ph0 == 'OPEN' and self.dtk is None
+        pub_prev, base_prev = self.last_target, self.last_base
         act = super().step(m, dt)
         self.row = {'ph0': ph0, 'base': None, 'delta': self.bal.delta, 'e12': None, 'consumed': None}
         if act['target'] is None or self.phase == 'ABORTED':
@@ -57,6 +61,11 @@ class K3ABPolicy(P.K3APolicy):
         base = np.asarray(act['target'], float)
         if ph0 == 'END_HOLD':                                 # 父類已給最後實際發布目標；基礎目標同樣凍結
             self.row.update(base=self.last_base, e12=None if self.last_base is None else self.e12_world(self.last_base))
+            return act
+        if ph0 == 'SETTLE' and self.phase == 'END_HOLD':               # 轉換輪：即凍結上一筆實際已發布目標
+            act['target'] = np.array(pub_prev, float)
+            self.last_target = act['target']
+            self.row.update(base=base_prev, e12=None if base_prev is None else self.e12_world(base_prev))
             return act
         if ph0 not in BALANCE_PHASES:
             self.last_base = base
@@ -78,6 +87,8 @@ class K3ABPolicy(P.K3APolicy):
                 return self._balance_fail(m, act, f'buffer_{self.pairs.fault}')
             n0 = len(self.bal.records)
             entries = self.pairs.take(int(state_step))
+            if any(e[1] > m.t + c.dt_tol_s for e in entries):
+                return self._balance_fail(m, act, 'future_time')
             self.bal.update(entries)
             if self.bal.stopped is not None:
                 self._abort('balance_meas_invalid', m.t, detail=self.bal.stopped)

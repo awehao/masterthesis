@@ -13,6 +13,13 @@ K3-A 判準照用（door_k3a_check.judge），但參考角／純鉸鏈旋轉／E
      - 每列 bal_consumed 範圍連續、不重疊（每步只消費一次）、合起來＝全部紀錄、上界 ≤ 該列 state_step（不提前使用）；
        該列 delta_m＝重算 Δ 於其最後消費步（無消費 ⇒ 沿用前值）。
   4. balance.stopped 或緩衝 fault 存在 ⇒ 不通過。任何欄位缺漏或非有限 ⇒ 不通過。
+r2（Codex 20261023_194140 第 1、2、4 項）：
+  - 替換基礎目標**之前**獨立驗證原始發布證據：pub_seq 非空或 target 非空的列，target 必須是 16 個有限值；否則 published_target_invalid。
+  - 時間契約：balance.t0＝首個 OPEN 列的狀態時間；首筆紀錄 sim_t − t0 ＝ dt_p、相鄰紀錄差＝dt_p（容差 1e-4）；
+    每列消費的最後一筆 sim_t ≤ 該列狀態時間（＋1e-4）。
+  - 逐步紀錄的 e、ef、u、v、delta、sat 全部型別核對並重算（數值 ≤ 1e-12、sat 精確）。
+  - room 來源缺 finger1／finger2 或其 'bar' 欄位 ⇒ pair_source_field_missing（不以零代替）。
+  - SETTLE→END_HOLD 轉換列（ph0＝SETTLE、phase＝END_HOLD）與 END_HOLD 列一樣須凍結、不消費。
 
     python3 evaluation/door_k3ab_check.py <run_dir>    # 寫 <run_dir>/analysis/door_k3ab_check.json；結束碼 0＝通過
 """
@@ -56,7 +63,7 @@ def _num(x):
 
 
 def recompute(records):
-    """依登錄常數逐步重算 (ef, delta)。"""
+    """依登錄常數逐步重算 (e, ef, u, v, delta, sat)。"""
     beta = 1.0 - math.exp(-REG['dt_p_s'] / REG['tau_f_s'])
     ef, d, out = None, 0.0, []
     for r in records:
@@ -64,9 +71,21 @@ def recompute(records):
         ef = e if ef is None else ef + beta * (e - ef)
         u = math.copysign(max(abs(ef) - REG['deadband_n'], 0.0), ef)
         v = max(-REG['v_max_mps'], min(REG['v_max_mps'], REG['k_i_m_per_ns'] * u))
-        d = max(-REG['delta_max_m'], min(REG['delta_max_m'], d + v * REG['dt_p_s']))
-        out.append((ef, d))
+        raw = d + v * REG['dt_p_s']
+        d = max(-REG['delta_max_m'], min(REG['delta_max_m'], raw))
+        out.append((e, ef, u, v, d, raw != d))
     return out
+
+
+def check_raw_published(task, why, st):
+    n_bad = 0
+    for e in task.get('trace') or []:
+        if e.get('pub_seq') is not None or e.get('target') is not None:
+            if _M(e.get('target')) is None or not isinstance(e.get('target'), list) or len(e['target']) != 16:
+                n_bad += 1
+    st['n_published_target_invalid'] = n_bad
+    if n_bad:
+        why.append('published_target_invalid')
 
 
 def base_task(task, why):
@@ -134,8 +153,9 @@ def check_timing(task, why, st):
         st['open_first_published_dev'] = float(np.abs(T1 - _M(prev['target'])).max())
         if st['open_first_published_dev'] > TOL:
             why.append('open_first_published_discontinuous')
-    eh = [e for e in rows if e['ph0'] == 'END_HOLD']
-    i_eh = next((i for i, e in enumerate(rows) if e['ph0'] == 'END_HOLD'), None)
+    frozen = lambda e: e['ph0'] == 'END_HOLD' or (e['ph0'] == 'SETTLE' and e.get('phase') == 'END_HOLD')
+    eh = [e for e in rows if frozen(e)]
+    i_eh = next((i for i, e in enumerate(rows) if frozen(e)), None)
     if i_eh is not None:
         last = next((e for e in reversed(rows[:i_eh]) if _M(e.get('target')) is not None), None)
         for e in eh:
@@ -170,11 +190,24 @@ def check_balance(task, room, why, st):
     recs = bal['records']
     try:
         steps = [int(r['step']) for r in recs]
-        if any(not all(_num(r[k]) for k in ('sim_t', 'f1', 'f2', 'ef', 'delta')) for r in recs):
+        if any(not isinstance(r['step'], int) or isinstance(r['step'], bool) or not isinstance(r['sat'], bool)
+               or not all(_num(r[k]) for k in ('sim_t', 'f1', 'f2', 'e', 'ef', 'u', 'v', 'delta')) for r in recs):
             raise ValueError
     except (KeyError, TypeError, ValueError):
         why.append('balance_records_invalid')
         return
+    t0 = bal.get('t0')
+    tdev = 0.0
+    if not _num(t0) or abs(float(t0) - float(first_open['t'])) > 1e-9:
+        why.append('balance_t0_mismatch')
+    else:
+        prev_t = float(t0)
+        for r in recs:
+            tdev = max(tdev, abs((r['sim_t'] - prev_t) - REG['dt_p_s']))
+            prev_t = r['sim_t']
+    st['record_dt_dev_s'] = tdev
+    if tdev > REG['dt_tol_s']:
+        why.append('balance_record_time_contract')
     if steps != list(range(s0 + 1, s0 + 1 + len(steps))):
         why.append('balance_records_not_contiguous')
     cols = room.get('steps_cols') or []
@@ -187,17 +220,22 @@ def check_balance(task, room, why, st):
             src = math.inf
             break
         lc = s[I['leaf_contacts']]
-        fb = [(lc.get(f) or {}).get('bar', 0.0) for f in FINGERS]
+        if any(not isinstance(lc.get(f), dict) or not _num(lc[f].get('bar')) for f in FINGERS):
+            why.append('pair_source_field_missing')
+            src = math.inf
+            break
+        fb = [lc[f]['bar'] for f in FINGERS]
         src = max(src, abs(fb[0] - r['f1']), abs(fb[1] - r['f2']), abs(s[I['sim_t']] - r['sim_t']))
     st['pair_vs_room_dev'] = src
     if src > TOL:
         why.append('pairs_not_same_step_room_source')
     rc = recompute(recs)
-    dev = max([max(abs(a[0] - r['ef']), abs(a[1] - r['delta'])) for a, r in zip(rc, recs)] or [0.0])
+    dev = max([max(abs(a[k] - r[n]) for k, n in enumerate(('e', 'ef', 'u', 'v', 'delta'))) for a, r in zip(rc, recs)] or [0.0])
     st['recompute_dev'] = dev
-    if dev > 1e-12:
+    if dev > 1e-12 or any(a[5] != r['sat'] for a, r in zip(rc, recs)):
         why.append('balance_recompute_mismatch')
-    by_step = {r['step']: a[1] for r, a in zip(recs, rc)}
+    by_step = {r['step']: a[4] for r, a in zip(recs, rc)}
+    by_t = {r['step']: r['sim_t'] for r in recs}
     cons = []
     d_prev = 0.0
     future = mism = False
@@ -208,7 +246,7 @@ def check_balance(task, room, why, st):
                 why.append('bal_consumed_invalid')
                 return
             cons.append(c)
-            if not isinstance(e.get('state_step'), int) or c[1] > e['state_step']:
+            if not isinstance(e.get('state_step'), int) or c[1] > e['state_step'] or by_t.get(c[1], math.inf) > e['t'] + REG['dt_tol_s']:
                 future = True
             d_prev = by_step.get(c[1], math.nan)
         if e.get('ph0') in ('OPEN', 'SETTLE') and e.get('target') is not None and e is not first_open:
@@ -222,18 +260,20 @@ def check_balance(task, room, why, st):
     if mism:
         why.append('row_delta_not_recomputed')
     st['n_balance_steps'] = len(recs)
-    st['delta_final_m'] = rc[-1][1] if rc else 0.0
+    st['delta_final_m'] = rc[-1][4] if rc else 0.0
     st['n_saturated_steps'] = sum(1 for r in recs if r.get('sat'))
 
 
 def judge(task, room, gate):
-    why = []
+    why, st0 = [], {}
+    check_raw_published(task, why, st0)
     t2 = base_task(task, why)
     res = KC3.judge(t2, room, gate)
     why += list(res['why'])
     if task.get('schema') != 'door_k3ab_task/1':
         why.append('task_schema_k3ab')
     st = dict(res.get('stats') or {})
+    st.update(st0)
     check_composition(task, why, st)
     check_timing(task, why, st)
     check_balance(task, room, why, st)

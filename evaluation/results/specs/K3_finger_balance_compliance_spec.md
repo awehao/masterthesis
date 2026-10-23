@@ -1,4 +1,11 @@
-# K3-A-B：兩指承載差驅動的有界法向位移柔順（小規格 draft-3）
+# K3-A-B：兩指承載差驅動的有界法向位移柔順（小規格 draft-3，實作 r2）
+
+實作 r2（Codex 20261023_194140 四項必修；增益、位移上限、模型與安全門檻均不改）：
+1. 判定器在替換基礎目標**之前**獨立驗證原始發布證據（應發布列的 target 缺失、形狀錯誤或非有限 ⇒ published_target_invalid）。
+2. 時間契約：首個積分步也核對 sim_t − t0 ＝ dt_p（t0＝OPEN 第一輪狀態時間；執行端契約：狀態步 s 的 sim_t＝配對步 s 的 sim_t）；消費配對的 sim_t 不得晚於本輪狀態時間（future_time）；牆鐘新鮮度只在來源步號確實向前進展且內容有效時刷新（重送、遲到丟棄、無效內容不刷新）；判定器同步核對 t0、首步與相鄰步時間、每列最後消費時間 ≤ 該列狀態時間。
+3. SETTLE→END_HOLD **轉換輪**即不消費、發布上一筆實際已發布的完整目標；判定器把轉換列（ph0＝SETTLE、phase＝END_HOLD）納入凍結核對。
+4. 判定器對逐步紀錄 e、ef、u、v、delta、sat 全部型別核對並重算；room 來源缺手指或 'bar' 欄位不以零代替（pair_source_field_missing）；報告的 Δ／d̂ 對齊改用 task trace 實際發布列（delta_published_m），來源時間回填另名 delta_by_pair_source_time_m。
+凍結改為 `freeze_door_k3ab_ev_dev_r2.sha256`（跑法 FRZ 同步指向；r1 清單保留為紀錄）。
 
 draft-3（Codex 20261023_192620：draft-2 可進入版本化實作與離線測試，**尚未核可實跑**）：SETTLE 繼續調整、END_HOLD 凍結完整已發布目標、DONE 照原策略停止發布；量測消費與積分時序明確化（§2、§4）；判定器獨立重算（§7）；雙向幾何核對結果（§3）；§1、§3、§5 措辭補正。
 
@@ -106,7 +113,7 @@ draft-2（Codex 20261022_133343 三項）：開門首筆目標連續、END_HOLD 
      逐步紀錄自 s0＋1 連續；每筆 f1／f2、sim_t 與 room 同一步 leaf_contacts 相同（≤ 1e-9）；重算 ẽ 與 Δ（≤ 1e-12）；
      每列 bal_consumed 連續、不重疊、合起來＝全部紀錄、上界 ≤ 該列 state_step；該列 delta_m＝重算 Δ 於其最後消費步。
   5. **證據完整**：缺 base_target、delta_m、e12_world、ph0、balance 紀錄或含非有限值 ⇒ 不通過；balance 停止或緩衝 fault ⇒ 不通過。
-  每一項都有完整判定流程的反例測試（`test_door_k3ab_judge.py`，24 項）。
+  每一項都有完整判定流程的反例測試（`test_door_k3ab_judge.py`，r2 共 38 項）。
 - **承載平衡觀察**（事前登錄、只描述、一趟介入觀察）：
   1. OPEN 期間逐步的 F1、F2、e、ẽ、Δ 時序；
   2. 首次單指 < 0.5 N 的物理步與門角（若有）；
@@ -137,11 +144,11 @@ draft-2（Codex 20261022_133343 三項）：開門首筆目標連續、END_HOLD 
 ## 9. 實作狀態（draft-3，2026-10-23；離線測試全部通過，未開跑）
 | 檔案 | 內容 | 測試 |
 |---|---|---|
-| `door_k3ab_balance.py` | PairBuffer（入口驗證、重送、take ≤ 狀態步、丟棄區）＋BalanceLaw（逐步、停止不恢復） | `test_door_k3ab_balance.py` 13 |
-| `door_k3ab_policy.py` | K3ABPolicy(K3APolicy)：OPEN 第二輪至 SETTLE 作用、END_HOLD 凍結完整發布目標、DONE 停止發布 | `test_door_k3ab_policy.py` 14 |
-| `isaac_door_k2_sim_ev2.py` | EV 執行端只插入 /door/finger_pair（逐步、與 room 同源同 4 位小數） | `test_door_k3ab_nodes.py` 9（含節點、跑法、報告） |
+| `door_k3ab_balance.py` | PairBuffer（入口驗證、重送、take ≤ 狀態步、丟棄區、只在進展時刷新新鮮度）＋BalanceLaw（逐步、首步核 t0、停止不恢復） | `test_door_k3ab_balance.py` 15 |
+| `door_k3ab_policy.py` | K3ABPolicy(K3APolicy)：OPEN 第二輪至 SETTLE 作用、轉換輪起凍結完整發布目標、DONE 停止發布、future_time 停止 | `test_door_k3ab_policy.py` 16 |
+| `isaac_door_k2_sim_ev2.py` | EV 執行端只插入 /door/finger_pair（逐步、與 room 同源同 4 位小數） | `test_door_k3ab_nodes.py` 10（含節點、跑法、報告與 Δ／d̂ 對齊） |
 | `door_k3ab_task_node.py` | 訂閱配對流直送緩衝；Meas 帶 state_step、pairs_age_wall；trace／balance 紀錄 | 同上＋`test_door_k3ab_task_node_ros.py` 1（ROS 接線） |
-| `door_k3ab_check.py` | 版本化判定器（§7） | `test_door_k3ab_judge.py` 24 |
+| `door_k3ab_check.py` | 版本化判定器（§7＋實作 r2） | `test_door_k3ab_judge.py` 38 |
 | `door_k3ab_report.py` | 承載平衡觀察（§7；含對照 run 與 Δ／d̂ 同窗） | 結構測試在對照實錄上可跑 |
 | `door_k3ab_offline_geom.py` | 雙向幾何核對（§3） | 結果 40/40 |
 | `run_door_k3ab_ev.sh` | 相對 run_door_k3ax_ev.sh 只換執行端、任務節點、凍結清單與字樣；求解器參數全同 | 同上 |
