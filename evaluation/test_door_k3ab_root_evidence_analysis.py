@@ -38,14 +38,14 @@ def make(n=400, latch=200, drift=0.003, wz_door=0.004, yaw=math.pi / 2):
         x += vlin[0] * 0.01
         q += wz_door * 0.01
         D_pose = [x, y, 0.0] + quat_z(yaw)
-        r.update({'handle_leaf_D': True, 'handle_robot_D': True, 'D_t': [t + 0.01], 'D_root_post_step': D_pose + A_vel,
+        r.update({'handle_leaf_D': True, 'handle_robot_D': True, 'D_t': [t + 0.01], 'D_time': [round(t + 0.01, 6)], 'D_root_post_step': D_pose + A_vel,
                   'D_leaf_post_step': [0.4, 0.0, 1.0] + quat_z(-q) + [0, 0, 0, 0, 0, -wz_door], 'evidence_s': [0.0004], 'missing': []})
         rows.append(r)
         steps.append([k, t])
-    room = {'steps': steps, 'events': [{'k2_abort_latched': {'step': latch, 'sim_t': 0.01 * latch}}],
+    room = {'steps_cols': ['step', 'sim_t'], 'steps': steps, 'events': [{'k2_abort_latched': {'step': latch, 'sim_t': 0.01 * latch}}],
             'root_evidence': {'complete': True, 'n': n, 'n_err': {}, 'errors': []}}
     task = {'policy_events': [{'to': 'OPEN', 't': 0.5}, {'t': 1.97, 'abort': 'x'}]}
-    snap = {'modules': {'objects': {'RigidPrim': {'file': 'x'}}}}
+    snap = {'modules': {'objects': {'RigidPrim': {'file': 'x', 'sha256': 'a' * 64}}, 'packages': {'isaacsim': '6.0.1.0'}}}
     return rows, room, task, snap
 
 
@@ -74,7 +74,7 @@ class T(unittest.TestCase):
         R = A.analyse(rows, room, task, None)
         rs = R['completeness']['incomplete_reasons']
         self.assertFalse(R['completeness']['evidence_complete'])
-        for k in ('missing_steps_1', 'duplicate_steps_1', 'rows_with_missing_or_errors_1', 'writer_not_complete', 'physics_snapshot_missing'):
+        for k in ('missing_steps_1', 'duplicate_steps_1', 'self_reported_missing_or_errors_1', 'writer_not_complete', 'physics_snapshot_missing'):
             self.assertIn(k, rs)
 
     def test_handle_false_counted_and_api_mismatch(self):
@@ -83,8 +83,58 @@ class T(unittest.TestCase):
         rows[6]['handle_leaf_C'] = None
         rows[7]['api_args'] = [1.0] + rows[7]['api_args'][1:]
         R = A.analyse(rows, room, task, snap)
-        self.assertEqual((R['handle']['handle_leaf_C']['false'], R['handle']['handle_leaf_C']['none']), (1, 1))
+        self.assertEqual((R['handle']['handle_leaf_C']['false'], R['handle']['handle_leaf_C']['other_or_missing']), (1, 1))
         self.assertGreater(R['api_vs_cmd_maxabs']['max'], 0.9)
+
+    def test_codex_counterexamples_independent_checks(self):
+        """Codex 20261023_235904 的四個反例，以及時間、型別：列內 missing 不更新也必須判不完整。"""
+        cases = []
+        rows, room, task, snap = make()
+        del rows[30]['C_leaf_pre_step']                              # 刪欄但 missing 仍為 []
+        cases.append(((rows, room, task, snap), 'field_invalid:C_leaf_pre_step:1'))
+        rows, room, task, snap = make()
+        extra = dict(rows[-1]); extra['step'] = 9999                 # room 不存在的步號
+        rows.append(extra)
+        cases.append(((rows, room, task, snap), 'extra_steps_1'))
+        rows, room, task, snap = make()
+        rows[40]['B_root_vel_post_write'] = [0.0]                    # 六維改一維
+        cases.append(((rows, room, task, snap), 'field_invalid:B_root_vel_post_write:1'))
+        rows, room, task, snap = make()
+        snap['modules']['objects'] = {'RigidPrim': {}}               # 模組來源空殼
+        cases.append(((rows, room, task, snap), 'module_info_entry_empty:RigidPrim'))
+        rows, room, task, snap = make()
+        snap['modules'] = {}
+        cases.append(((rows, room, task, snap), 'module_info_missing_or_empty'))
+        rows, room, task, snap = make()
+        rows[50]['t'] += 0.003                                      # 與 room 時間不一致
+        cases.append(((rows, room, task, snap), 'time_mismatch_1'))
+        rows, room, task, snap = make()
+        rows[60]['D_time'] = [rows[60]['D_time'][0] + 0.01]          # 步進後實際時間 ≠ t＋dt
+        cases.append(((rows, room, task, snap), 'D_time_vs_expected_1'))
+        rows, room, task, snap = make()
+        rows[70]['handle_leaf_C'] = 'True'                           # 型別錯
+        cases.append(((rows, room, task, snap), 'field_invalid:handle_leaf_C:1'))
+        rows, room, task, snap = make()
+        rows[10], rows[11] = rows[11], rows[10]                      # 順序錯
+        cases.append(((rows, room, task, snap), 'order_violations_1'))
+        rows, room, task, snap = make()
+        rows[80]['A_root_pre'][2] = float('nan')
+        cases.append(((rows, room, task, snap), 'field_invalid:A_root_pre:1'))
+        for args, why in cases:
+            R = A.analyse(*args)
+            self.assertFalse(R['completeness']['evidence_complete'], why)
+            self.assertIn(why, R['completeness']['incomplete_reasons'])
+            self.assertNotIn('analysis_error', R, why)              # 部分結果仍輸出，不因索引例外中斷
+            self.assertIn('zero_command_after_latch', R)
+
+    def test_garbage_rows_do_not_crash(self):
+        rows, room, task, snap = make()
+        rows[5] = {'step': None}
+        rows[6] = 'not a dict'
+        rows[7]['D_leaf_post_step'] = [1, 2]
+        R = A.analyse(rows, room, task, snap)
+        self.assertFalse(R['completeness']['evidence_complete'])
+        self.assertIn('door', R)
 
     def test_velocity_inconsistent_door(self):
         rows, room, task, snap = make()

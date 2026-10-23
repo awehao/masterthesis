@@ -718,7 +718,7 @@ def main() -> int:
         print(f'[door] **根取證開檔失敗**：{_re_w.status["errors"]}（取證停用，摘要標為不完整）', flush=True)
     _re_req = ('handle_leaf_A', 'handle_robot_A', 'A_root_pre', 'A_root_vel_pre', 'A_leaf_pre', 'api_args', 'api_yaw',
                'B_root_vel_post_write', 'handle_leaf_C', 'C_leaf_pre_step', 'C_root_pre_step',
-               'handle_leaf_D', 'handle_robot_D', 'D_root_post_step', 'D_leaf_post_step', 'D_t')
+               'handle_leaf_D', 'handle_robot_D', 'D_root_post_step', 'D_leaf_post_step', 'D_t', 'D_time')
     if a.physics_snapshot_out:
         def _authored(path):
             _p = stage.GetPrimAtPath(path)
@@ -1417,7 +1417,8 @@ def main() -> int:
         # ---- 錄影：到時間才渲染一次（渲染很貴，不是每個物理步都做）----
         if _re_row is not None:                                # EV2R：D 點（world.step 後立即；時間＝t＋physics_dt）
             _re_t0 = _ev_time.perf_counter()
-            _re_row.set('D_t', [t + a.physics_dt])
+            _re_row.set('D_t', [t + a.physics_dt])           # 預期值（t＋dt）
+            _re_row.put('D_time', lambda: [world.current_time])  # 步進後實際模擬時間
             _re_row.put('handle_leaf_D', leaf_v.is_physics_handle_valid, kind='bool')
             _re_row.put('handle_robot_D', lambda: robot._articulation_view.is_physics_handle_valid(), kind='bool')
             _re_row.put('D_root_post_step', lambda: (robot.get_world_pose(), robot.get_linear_velocity(), robot.get_angular_velocity()))
@@ -1598,7 +1599,7 @@ def main() -> int:
         rec['root_evidence'] = dict(_re_w.close(), points={
             'A': 'ex.step 之後、API 寫入之前（本步時間 t）', 'api_args': '實際傳給 set_linear_velocity／set_angular_velocity 的 float32 向量（世界座標）',
             'B': '兩個 setter 之後、apply_action 之前的根速度回讀', 'C': '記錄列讀取點（寫入後、world.step 前；時間 t）',
-            'D': 'world.step 之後立即（時間 t＋physics_dt）'},
+            'D': 'world.step 之後立即（D_time＝world.current_time 實際值；D_t＝t＋physics_dt 預期值）'},
             semantics='位姿＝(位置 3, 四元數 wxyz 4)；速度＝(線 3, 角 3)，世界座標；根速度參考點（根連桿原點或質心）未釐清；'
                       'handle_*＝讀取當下的 is_physics_handle_valid()，只能據以判定「預期分支」')
     out = os.path.join(a.out, 'room_run.json')

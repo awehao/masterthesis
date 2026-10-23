@@ -11,7 +11,7 @@
 #   執行端改用 isaac_door_k2_sim_ev2.py（另發 /door/finger_pair 逐步兩指配對）。判定器 door_k3ab_check.py。
 # **LW-EV2R 版（根／門扇三點讀取取證；規格 K3_root_evidence_spec_draft2.md）**（run_door_k3ab_lw.sh 的複本）：差異只有
 #   (a) 執行端改用 isaac_door_k2_sim_ev2r.py（ev2 的只插入複本）並加 --root-evidence-out、--physics-snapshot-out；
-#   (b) 凍結清單 freeze_door_k3ab_lw_ev2r_dev_r1.sha256。任務節點、觀察器、求解器與所有參數同 LW r3。單趟；未核可前不得執行。
+#   (b) 凍結清單 freeze_door_k3ab_lw_ev2r_dev_r2.sha256（r2：D_time、分析器獨立完整性核對）。任務節點、觀察器、求解器與所有參數同 LW r3。單趟；未核可前不得執行。
 #   影片：不即時錄影（錄影會拖慢 RTF、改變控制時序）；跑完以 run_door_replay.sh 對本趟實錄重播（另行核可）。
 # 原說明：**LW 版（長窗隔離診斷；規格 K3_stop_longwindow_diag_spec.md draft-2）**（run_door_k3ab_ev.sh 的複本）：差異只有
 #   (1) 任務節點改用 door_k3ab_lw_task_node.py 並傳 --post-abort-observe-s 10（原 3.0）；
@@ -30,7 +30,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_k3ab_lw_ev2r_dev_r1.sha256
+FRZ=evaluation/results/door/freeze_door_k3ab_lw_ev2r_dev_r2.sha256
 STAND='0.6,-0.5332,1.570796'
 K2_READY='0,0,0.035,0,-1.5707963,0'
 Q_PRE='-0.9471,0.0758,1.6024,-1.539,-0.9479,-0.0544'
