@@ -13,7 +13,10 @@
 **停止後門餘轉**：既有 7 趟中止後 3 s 內門續轉 +0.87～+1.05°（最大門速 0.0365 rad/s）；登錄經驗預算 +2°（不是上界）。
   以走廊中心構型（door_k3m_offline_replay_r2 free 候選）凍結手臂與底盤，門角 q0＋{0.5, 1, 2}° 時核淨空（夾持已失時手指—橫桿不豁免，另列）。
 
-    python3 evaluation/door_k3m_offline_stop_r2.py [--inner-mm 25 --inner-deg 1.5 --out results/door/door_k3m_offline_stop_r2.json]
+r3（Codex 20261023_204354 第 4 項）：反應步數改**向上取整**（ceil，不用 round）；幾何耗時改讀 door_k3m_offline_geom_monitor_r2.json
+  的線上快取後端內部實測 p99（--geom 指定；r2 的 6.6 ms 是全量未含自碰、且非內部計時）。p99 不是硬上界；RTF ≤ 1 的條件須逐窗口成立才算上界。
+
+    python3 evaluation/door_k3m_offline_stop_r2.py [--inner-mm 25 --inner-deg 1.5 --geom r2 --out results/door/door_k3m_offline_stop_r2.json]
     （預設輸出 results/door/door_k3m_offline_stop_r2.json；已存在則拒絕覆寫）
 """
 import itertools
@@ -48,7 +51,7 @@ def run_case(C, q0_deg, e0, u0, sgn_q, t_react, cfg):
     def step_pose(b, ub):
         c, s = math.cos(b[2]), math.sin(b[2])
         return (b[0] + (c * ub[0] - s * ub[1]) * DT, b[1] + (s * ub[0] + c * ub[1]) * DT, b[2] + ub[2] * DT)
-    n_r = int(round(t_react / DT))
+    n_r = int(math.ceil(t_react / DT - 1e-9))
     k = 0
     while True:
         if k >= n_r:
@@ -72,19 +75,25 @@ def main():
     ap.add_argument('--inner-mm', type=float, default=INNER_MM)
     ap.add_argument('--inner-deg', type=float, default=INNER_DEG)
     ap.add_argument('--out', default=OUT)
+    ap.add_argument('--geom', default='r1', choices=['r1', 'r2'])
     a = ap.parse_args()
     INNER_MM, INNER_DEG = a.inner_mm, a.inner_deg
     out = a.out if os.path.isabs(a.out) else os.path.join(os.path.dirname(HERE), a.out)
     if os.path.exists(out):
         raise SystemExit(f'{out} 已存在，不覆寫')
     C = CO.Corridor.from_json(json.load(open(os.path.join(HERE, 'results', 'door', 'door_k3m_corridor_table.json')))['table'])
-    gm = json.load(open(os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor.json')))
-    t_geom = gm['timing_ms']['p99'] * 1e-3
+    if a.geom == 'r1':
+        gm = json.load(open(os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor.json')))
+        t_geom = gm['timing_ms']['p99'] * 1e-3
+    else:
+        gm = json.load(open(os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r2.json')))
+        t_geom = gm['nominal_free_run']['compute_ms_internal']['p99'] * 1e-3
     react = {'executor': 0.01, 'policy': 0.05 + 0.2 + t_geom + 0.01, 'chain_timeout': 0.21}
     cfg = WL.WheelLimitConfig()
     corners = list(itertools.product((-1, 1), repeat=3))
     signs = list(itertools.product((-1, 1), repeat=3))
-    res = {'schema': 'door_k3m_offline_stop_r2/1', 'reaction_s': react, 'reaction_basis': {
+    res = {'schema': 'door_k3m_offline_stop_r2/1', 'geom_timing_source': a.geom, 't_geom_s': t_geom, 'reaction_steps_rounding': 'ceil',
+           'reaction_s': react, 'reaction_basis': {
         'executor': '物理迴圈逐步（模擬時間）', 'policy': '牆鐘 20 Hz＋狀態年齡上限 0.2 s＋幾何 p99＋1 步；RTF ≤ 1 時為模擬時間上界',
         'chain_timeout': 'max_cmd_age_s 0.2 s＋1 步'},
         'inner_band': {'mm': INNER_MM, 'deg': INNER_DEG}, 'outer_band': {'mm': OUTER_MM, 'deg': OUTER_DEG}, 'qdot_rad_s': QDOT, 'cases': {}}

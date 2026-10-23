@@ -13,6 +13,15 @@
 拒絕／中止條件（一律不切換，任務端轉為中止）：錯趟（run_id 不符）、序號不是 1 或與已切換者衝突、mode 不是 free、
   請求過期（執行端當下步號 − req_step ＞ max_req_age_steps）、請求步號在未來、已中止後收到、未轉交全身前收到、
   任務端等待逾時（模擬時間 timeout_s）、收到 nack、兩個 ack 不一致。重送同一請求 ⇒ 冪等（回同一 ack，不重切）。
+r2（Codex 20261023_204354 第 1 項）：
+  - 期限以 **ack 到達時刻**判定：兩個 ack 都須在 t_req＋timeout_s（模擬時間）以內到達；晚查詢不能補救已逾期的確認。
+    另設牆鐘期限 wall_timeout_s：等待期間模擬時鐘停更時，以牆鐘逾時中止。
+  - 必要欄位：執行端 ack 須有 switch_step（整數）與 switch_t（有限）；求解器 ack 須有 switch_step、switch_t（照抄）、first_free_slot（整數）、
+    first_free_sim_t、publish_sim_t（有限）與 published＝True。時間先後：req_t ≤ switch_t ≤ first_free_sim_t ≤ publish_sim_t；
+    switch_step ≥ req_step；求解器的 switch_step／switch_t 須等於執行端。
+  - 執行端：已中止優先於重送冪等（中止後即使同一請求也回 nack）。
+  - 求解器：只有**有效且實際已發布**的首筆 free 解才產生 ack（note_first_solution 的 published 為 False ⇒ 不回 ack、繼續等）；
+    pending ack 到真正套用前若已停止 ⇒ 丟棄、不切入 free（apply 回 False 並記錄）。「已發布」與「已套用」分開取證（套用由執行端紀錄）。
 """
 from __future__ import annotations
 
@@ -66,14 +75,14 @@ class ExecutorModeAuthority:
             return nack(why)
         if req['run_id'] != self.run_id:
             return nack('wrong_run')
+        if aborted:
+            return nack('after_abort')                        # 中止優先於重送冪等
         if self.mode == MODE_FREE:
             if req == self.request:
                 return 'repeat', dict(self.ack)
             return nack('conflict_after_switch')
         if req['seq'] != 1:
             return nack('seq_not_1')
-        if aborted:
-            return nack('after_abort')
         if not owner_wholebody:
             return nack('not_wholebody_owner')
         if req['req_step'] > step:
@@ -114,9 +123,16 @@ class SolverModeSwitch:
         self.pending = dict(msg)
         return None
 
-    def apply(self, cfg, shaping_enabled: bool):
-        """求解週期開頭呼叫：若有待套用的 ack ⇒ 切入 free。回傳 True 表示本週期是第一個 free 週期。"""
+    def apply(self, cfg, shaping_enabled: bool, stopped: bool = False, snap_t: float | None = None):
+        """求解週期開頭呼叫：若有待套用的 ack ⇒ 切入 free。回傳 True 表示本週期是第一個 free 週期。
+        已停止 ⇒ 丟棄 pending、不切入（回 False）。snap_t（本輪狀態快照時刻）早於執行端 switch_t ⇒ 延到下一輪（快照必須是切換後的狀態）。"""
         if self.pending is None:
+            return False
+        if snap_t is not None and (not _num(snap_t) or float(snap_t) < float(self.pending['switch_t']) - 1e-9) and not stopped:
+            return False
+        if stopped:
+            self.rejections.append({'run_id': self.run_id, 'seq': self.pending.get('seq'), 'why': 'stopped_before_apply'})
+            self.pending = None
             return False
         if getattr(cfg, 'base_fixed', False):
             raise ValueError('切入 free 時 base_fixed 必須為 False')
@@ -128,62 +144,84 @@ class SolverModeSwitch:
         self.pending = None
         return True
 
-    def note_first_solution(self, slot, sim_t, u0, u_prev_applied):
-        self.record.update(first_free_slot=slot, first_free_sim_t=float(sim_t), u0=[float(x) for x in u0],
-                           u_prev_applied=[float(x) for x in u_prev_applied])
+    def note_first_solution(self, slot, sim_t, u0, u_prev_applied, published: bool, publish_sim_t):
+        """首筆 free 解：只有 published 為 True 且時間有效才回 ack；否則回 None（繼續等下一筆已發布的 free 解）。"""
+        if not self.active or self.record.get('ack') is not None:
+            return None
+        if not published or not _num(publish_sim_t) or not _num(sim_t) or not _int_value(slot):
+            self.record.setdefault('unpublished_free_cycles', []).append({'slot': slot, 'sim_t': sim_t})
+            return None
+        u0 = [float(x) for x in u0]
+        up = [float(x) for x in u_prev_applied]
+        if len(u0) != 9 or len(up) != 9 or not all(math.isfinite(x) for x in u0 + up):
+            self.record.setdefault('invalid_free_cycles', []).append({'slot': slot})
+            return None
         a = self.record['executor_ack']
-        return {'run_id': self.run_id, 'seq': a['seq'], 'mode': MODE_FREE, 'switch_step': a['switch_step'],
-                'first_free_slot': slot, 'first_free_sim_t': float(sim_t)}
+        ack = {'run_id': self.run_id, 'seq': a['seq'], 'mode': MODE_FREE, 'switch_step': a['switch_step'], 'switch_t': a['switch_t'],
+               'first_free_slot': slot, 'first_free_sim_t': float(sim_t), 'publish_sim_t': float(publish_sim_t), 'published': True}
+        self.record.update(first_free_slot=slot, first_free_sim_t=float(sim_t), u0=u0, u_prev_applied=up, ack=ack)
+        return dict(ack)
 
 
 class TaskModeWaiter:
-    def __init__(self, run_id: str, timeout_s: float = 1.0):
+    def __init__(self, run_id: str, timeout_s: float = 1.0, wall_timeout_s: float = 2.0):
         self.run_id = run_id
         self.timeout = float(timeout_s)
+        self.wall_timeout = float(wall_timeout_s)
         self.request = None
         self.t_req = None
+        self.wall_req = None
         self.exec_ack = None
         self.solver_ack = None
+        self.t_exec = None           # ack 到達時刻（模擬時間）
+        self.t_solver = None
         self.result = None           # 'confirmed' 或 ('abort', why)
 
-    def make_request(self, state_step: int, t: float):
+    def make_request(self, state_step: int, t: float, wall: float):
         if self.request is not None:
             raise RuntimeError('切換請求只能提出一次')
         self.request = {'run_id': self.run_id, 'seq': 1, 'mode': MODE_FREE, 'req_step': int(state_step), 'req_t': float(t)}
-        self.t_req = float(t)
+        self.t_req, self.wall_req = float(t), float(wall)
         return dict(self.request)
 
     def _abort(self, why):
         if self.result is None:
             self.result = ('abort', why)
 
-    def on_executor(self, msg):
+    def on_executor(self, msg, t_recv: float):
         if self.result is not None or self.request is None:
             return
         if not isinstance(msg, dict) or msg.get('run_id') != self.run_id or msg.get('seq') != 1:
             return self._abort('executor_msg_mismatch')
         if 'why' in msg:
             return self._abort(f"executor_nack:{msg['why']}")
-        if msg.get('mode') != MODE_FREE or not _int_value(msg.get('switch_step')) or msg['switch_step'] < self.request['req_step']:
+        if (msg.get('mode') != MODE_FREE or not _int_value(msg.get('switch_step')) or not _num(msg.get('switch_t'))
+                or msg['switch_step'] < self.request['req_step'] or msg['switch_t'] < self.request['req_t'] - 1e-9):
             return self._abort('executor_ack_invalid')
-        if self.exec_ack is not None and self.exec_ack != msg:
-            return self._abort('executor_ack_conflict')
-        self.exec_ack = dict(msg)
+        if self.exec_ack is not None:
+            if self.exec_ack != msg:
+                return self._abort('executor_ack_conflict')
+            return
+        self.exec_ack, self.t_exec = dict(msg), float(t_recv)
 
-    def on_solver(self, msg):
+    def on_solver(self, msg, t_recv: float):
         if self.result is not None or self.request is None:
             return
         if not isinstance(msg, dict) or msg.get('run_id') != self.run_id or msg.get('seq') != 1:
             return self._abort('solver_msg_mismatch')
         if 'why' in msg:
             return self._abort(f"solver_nack:{msg['why']}")
-        if msg.get('mode') != MODE_FREE or not _int_value(msg.get('switch_step')):
+        ok = (msg.get('mode') == MODE_FREE and _int_value(msg.get('switch_step')) and _int_value(msg.get('first_free_slot'))
+              and all(_num(msg.get(k)) for k in ('switch_t', 'first_free_sim_t', 'publish_sim_t')) and msg.get('published') is True)
+        if not ok or not (msg['switch_t'] <= msg['first_free_sim_t'] + 1e-9 <= msg['publish_sim_t'] + 2e-9):
             return self._abort('solver_ack_invalid')
-        if self.solver_ack is not None and self.solver_ack != msg:
-            return self._abort('solver_ack_conflict')
-        self.solver_ack = dict(msg)
+        if self.solver_ack is not None:
+            if self.solver_ack != msg:
+                return self._abort('solver_ack_conflict')
+            return
+        self.solver_ack, self.t_solver = dict(msg), float(t_recv)
 
-    def status(self, t: float, aborted: bool = False):
+    def status(self, t: float, wall: float, aborted: bool = False):
         if self.result is not None:
             return self.result
         if self.request is None:
@@ -191,13 +229,20 @@ class TaskModeWaiter:
         if aborted:
             self._abort('aborted_while_waiting')
             return self.result
+        deadline = self.t_req + self.timeout + 1e-9
         if self.exec_ack is not None and self.solver_ack is not None:
-            if self.solver_ack['switch_step'] != self.exec_ack['switch_step']:
-                self._abort('ack_switch_step_mismatch')
+            if max(self.t_exec, self.t_solver) > deadline:
+                self._abort('mode_switch_timeout')                     # 逾期到達的 ack 不能確認
+            elif (self.solver_ack['switch_step'] != self.exec_ack['switch_step']
+                  or abs(self.solver_ack['switch_t'] - self.exec_ack['switch_t']) > 1e-9):
+                self._abort('ack_switch_mismatch')
             else:
                 self.result = 'confirmed'
             return self.result
-        if t - self.t_req > self.timeout + 1e-9:
+        if t > deadline:
             self._abort('mode_switch_timeout')
+            return self.result
+        if not math.isfinite(wall) or wall - self.wall_req > self.wall_timeout + 1e-9:
+            self._abort('mode_switch_wall_timeout')
             return self.result
         return 'waiting'

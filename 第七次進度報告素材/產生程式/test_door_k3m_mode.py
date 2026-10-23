@@ -50,6 +50,12 @@ class Executor(unittest.TestCase):
             self.assertEqual(n['why'], why)
             self.assertEqual(E.mode, 'hold')
 
+    def test_codex_abort_beats_repeat(self):
+        E = M.ExecutorModeAuthority(RUN)
+        E.on_request(req(), 2002, 20.02, aborted=False, owner_wholebody=True)
+        k, n = E.on_request(req(), 2010, 20.10, aborted=True, owner_wholebody=True)
+        self.assertEqual((k, n['why']), ('reject', 'after_abort'))
+
     def test_conflict_after_switch(self):
         E = M.ExecutorModeAuthority(RUN)
         E.on_request(req(), 2002, 20.02, aborted=False, owner_wholebody=True)
@@ -75,8 +81,10 @@ class Solver(unittest.TestCase):
         self.assertTrue(S.apply(cfg, shaping_enabled=False))
         self.assertIsNone(cfg.base_hold)
         self.assertFalse(S.apply(cfg, shaping_enabled=False))              # 只切一次
-        a = S.note_first_solution(17, 20.05, [0.0] * 9, [0.0] * 9)
-        self.assertEqual(a['switch_step'], 2002)
+        self.assertIsNone(S.note_first_solution(17, 20.05, [0.0] * 9, [0.0] * 9, published=False, publish_sim_t=None))   # 未發布不回 ack
+        a = S.note_first_solution(18, 20.10, [0.0] * 9, [0.0] * 9, published=True, publish_sim_t=20.11)
+        self.assertEqual((a['switch_step'], a['switch_t'], a['published'], a['first_free_slot']), (2002, 20.02, True, 18))
+        self.assertIsNone(S.note_first_solution(19, 20.15, [0.0] * 9, [0.0] * 9, published=True, publish_sim_t=20.16))  # 只回一次
 
     def test_apply_refuses_base_fixed_or_shaping(self):
         for cfg, sh in ((FakeCfg(base_fixed=True), False), (FakeCfg(), True)):
@@ -97,6 +105,24 @@ class Solver(unittest.TestCase):
             self.assertEqual(n['why'], why)
             self.assertIsNone(S.pending)
 
+    def test_apply_waits_for_post_switch_snapshot(self):
+        S = M.SolverModeSwitch(RUN)
+        S.on_executor_ack(self.ack(), stopped=False, park_hold_active=True)
+        cfg = FakeCfg(base_hold=(0.001, 0.0, 0.0))
+        self.assertFalse(S.apply(cfg, shaping_enabled=False, snap_t=20.01))       # 快照早於 switch_t 20.02 ⇒ 延後
+        self.assertEqual(cfg.base_hold, (0.001, 0.0, 0.0))
+        self.assertTrue(S.apply(cfg, shaping_enabled=False, snap_t=20.02))
+        self.assertIsNone(cfg.base_hold)
+
+    def test_stopped_before_apply_does_not_switch(self):
+        S = M.SolverModeSwitch(RUN)
+        S.on_executor_ack(self.ack(), stopped=False, park_hold_active=True)
+        cfg = FakeCfg(base_hold=(0.001, 0.0, 0.0))
+        self.assertFalse(S.apply(cfg, shaping_enabled=False, stopped=True))
+        self.assertEqual(cfg.base_hold, (0.001, 0.0, 0.0))
+        self.assertFalse(S.active)
+        self.assertEqual(S.rejections[-1]['why'], 'stopped_before_apply')
+
     def test_solver_ignores_identical_repeat_but_rejects_conflict(self):
         S = M.SolverModeSwitch(RUN)
         S.on_executor_ack(self.ack(), stopped=False, park_hold_active=True)
@@ -105,46 +131,71 @@ class Solver(unittest.TestCase):
 
 
 class Task(unittest.TestCase):
-    def run_waiter(self, exec_msg, solver_msg, t_end=20.5):
-        W = M.TaskModeWaiter(RUN, timeout_s=1.0)
-        W.make_request(2000, 20.0)
+    EA = {'run_id': RUN, 'seq': 1, 'mode': 'free', 'switch_step': 2002, 'switch_t': 20.02}
+    SA = {'run_id': RUN, 'seq': 1, 'mode': 'free', 'switch_step': 2002, 'switch_t': 20.02, 'first_free_slot': 17,
+          'first_free_sim_t': 20.05, 'publish_sim_t': 20.06, 'published': True}
+
+    def run_waiter(self, exec_msg, solver_msg, t_end=20.5, t_e=20.03, t_s=20.07, wall_end=100.2):
+        W = M.TaskModeWaiter(RUN, timeout_s=1.0, wall_timeout_s=2.0)
+        W.make_request(2000, 20.0, 100.0)
         if exec_msg is not None:
-            W.on_executor(exec_msg)
+            W.on_executor(exec_msg, t_e)
         if solver_msg is not None:
-            W.on_solver(solver_msg)
-        return W.status(t_end)
+            W.on_solver(solver_msg, t_s)
+        return W.status(t_end, wall_end)
 
     def test_confirmed_only_with_consistent_acks(self):
-        ea = {'run_id': RUN, 'seq': 1, 'mode': 'free', 'switch_step': 2002, 'switch_t': 20.02}
-        sa = {'run_id': RUN, 'seq': 1, 'mode': 'free', 'switch_step': 2002, 'first_free_slot': 17, 'first_free_sim_t': 20.05}
+        ea, sa = self.EA, self.SA
         self.assertEqual(self.run_waiter(ea, sa), 'confirmed')
         self.assertEqual(self.run_waiter(ea, None), 'waiting')
         self.assertEqual(self.run_waiter(None, sa), 'waiting')
-        self.assertEqual(self.run_waiter(ea, dict(sa, switch_step=2003)), ('abort', 'ack_switch_step_mismatch'))
+        self.assertEqual(self.run_waiter(ea, dict(sa, switch_step=2003)), ('abort', 'ack_switch_mismatch'))
+        self.assertEqual(self.run_waiter(ea, dict(sa, switch_t=20.03, first_free_sim_t=20.05)), ('abort', 'ack_switch_mismatch'))
         self.assertEqual(self.run_waiter(ea, None, t_end=21.2), ('abort', 'mode_switch_timeout'))
         self.assertEqual(self.run_waiter({'run_id': RUN, 'seq': 1, 'why': 'request_stale'}, None), ('abort', 'executor_nack:request_stale'))
         self.assertEqual(self.run_waiter(dict(ea, run_id='old'), sa), ('abort', 'executor_msg_mismatch'))
         self.assertEqual(self.run_waiter(dict(ea, switch_step=1990), sa), ('abort', 'executor_ack_invalid'))
         self.assertEqual(self.run_waiter(ea, {'run_id': RUN, 'seq': 1, 'why': 'not_in_park_hold'}), ('abort', 'solver_nack:not_in_park_hold'))
 
+    def test_codex_late_query_cannot_bypass_timeout(self):
+        """Codex 反例：請求 20 s，兩 ack 都到後於 22 s 才查詢 ⇒ 若 ack 到達已逾期仍須中止；準時到達則確認。"""
+        self.assertEqual(self.run_waiter(self.EA, self.SA, t_end=22.0, t_e=21.5, t_s=21.6), ('abort', 'mode_switch_timeout'))
+        self.assertEqual(self.run_waiter(self.EA, self.SA, t_end=22.0, t_e=20.03, t_s=20.07), 'confirmed')
+
+    def test_codex_missing_fields_rejected(self):
+        ea, sa = self.EA, self.SA
+        self.assertEqual(self.run_waiter({k: v for k, v in ea.items() if k != 'switch_t'}, sa), ('abort', 'executor_ack_invalid'))
+        for k in ('switch_t', 'first_free_slot', 'first_free_sim_t', 'publish_sim_t', 'published'):
+            self.assertEqual(self.run_waiter(ea, {kk: v for kk, v in sa.items() if kk != k}), ('abort', 'solver_ack_invalid'), k)
+        self.assertEqual(self.run_waiter(ea, dict(sa, published=False)), ('abort', 'solver_ack_invalid'))
+
+    def test_time_order(self):
+        ea, sa = self.EA, self.SA
+        self.assertEqual(self.run_waiter(dict(ea, switch_t=19.9), sa), ('abort', 'executor_ack_invalid'))
+        self.assertEqual(self.run_waiter(ea, dict(sa, first_free_sim_t=20.01)), ('abort', 'solver_ack_invalid'))
+        self.assertEqual(self.run_waiter(ea, dict(sa, publish_sim_t=20.04)), ('abort', 'solver_ack_invalid'))
+
+    def test_wall_timeout_when_sim_clock_stalls(self):
+        self.assertEqual(self.run_waiter(self.EA, None, t_end=20.05, wall_end=102.5), ('abort', 'mode_switch_wall_timeout'))
+
     def test_abort_while_waiting_and_single_request(self):
         W = M.TaskModeWaiter(RUN)
-        W.make_request(2000, 20.0)
-        self.assertEqual(W.status(20.1, aborted=True), ('abort', 'aborted_while_waiting'))
+        W.make_request(2000, 20.0, 100.0)
+        self.assertEqual(W.status(20.1, 100.1, aborted=True), ('abort', 'aborted_while_waiting'))
         with self.assertRaises(RuntimeError):
-            W.make_request(2001, 20.01)
+            W.make_request(2001, 20.01, 100.0)
 
     def test_end_to_end_three_parties(self):
         E, S, W = M.ExecutorModeAuthority(RUN), M.SolverModeSwitch(RUN), M.TaskModeWaiter(RUN)
-        r = W.make_request(2000, 20.0)
+        r = W.make_request(2000, 20.0, 100.0)
         k, ea = E.on_request(r, 2001, 20.01, aborted=False, owner_wholebody=True)
-        W.on_executor(ea)
-        self.assertEqual(W.status(20.02), 'waiting')                      # 求解器尚未確認 ⇒ 策略不推進
+        W.on_executor(ea, 20.02)
+        self.assertEqual(W.status(20.02, 100.02), 'waiting')              # 求解器尚未確認 ⇒ 策略不推進
         S.on_executor_ack(ea, stopped=False, park_hold_active=True)
         cfg = FakeCfg()
         S.apply(cfg, shaping_enabled=False)
-        W.on_solver(S.note_first_solution(18, 20.05, [0.0] * 9, [0.0] * 9))
-        self.assertEqual(W.status(20.06), 'confirmed')
+        W.on_solver(S.note_first_solution(18, 20.05, [0.0] * 9, [0.0] * 9, published=True, publish_sim_t=20.06), 20.07)
+        self.assertEqual(W.status(20.08, 100.08), 'confirmed')
 
 
 class FirstFreeCommand(unittest.TestCase):
