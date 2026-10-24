@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""W1a 離線：底盤路徑引導能否抑制走廊偏航累積（無 Isaac、無接觸；剛性夾持運動學閉迴路，同 door_wide_offline_sweep）。
+"""W1a 離線：底盤路徑引導能否抑制走廊偏航累積。
+r2（Codex 20261024_231908 B1）：參考改為線上同一走廊表 door_wide_corridor_table_90.json（CorridorRef），輸出記 sha256，檔名加 _r2；r1 輸出保留。
+原說明：W1a 離線：底盤路徑引導能否抑制走廊偏航累積（無 Isaac、無接觸；剛性夾持運動學閉迴路，同 door_wide_offline_sweep）。
 
 擾動：受控體每物理步底盤偏航加 YAW_DRIFT（rad/s；K3-M 實跑 OPEN 中走廊偏航偏差約 −0.0008 rad/s，取 −0.001 保守），
 其餘同 door_k3m_offline_replay（延遲、底盤增益 0.9／0.9／0.82、權重）。
@@ -26,7 +28,7 @@ import door_wide_guidance as G                        # noqa: E402
 
 CL, GA, KP, KC, C = R.CL, R.GA, R.KP, R.KC, R.C
 YAW_DRIFT = -0.001
-TABLE = os.path.join(HERE, 'results', 'door', 'door_wide_offline_sweep_90.json')
+TABLE = os.path.join(HERE, 'results', 'door', 'door_wide_corridor_table_90.json')   # r2：與線上走廊監看同一表（Codex 20261024_231908 B1）
 _orig_plant = CL.plant_step
 
 
@@ -94,7 +96,7 @@ def main():
     if len(sys.argv) > 2:
         YAW_DRIFT = float(sys.argv[2])
         sfx = f'_d{abs(YAW_DRIFT):g}'
-    out = os.path.join(HERE, 'results', 'door', f'door_wide_guidance_offline_{int(round(theta))}{sfx}.json')
+    out = os.path.join(HERE, 'results', 'door', f'door_wide_guidance_offline_r2_{int(round(theta))}{sfx}.json')
     if os.path.exists(out):
         raise SystemExit(f'{out} 已存在，不覆寫')
     ident = json.load(open(R.IDENT))
@@ -114,8 +116,11 @@ def main():
     s0 = q0[3:9] - bias / alpha
     K = CL.WholeBodyKinematics.from_urdf_file(C.URDF)
     CL.BASE_GAIN = np.array([0.9, 0.9, 0.82])
-    table = G.RefTable.from_json(TABLE)
-    res = {'schema': 'door_wide_guidance_offline/1', 'table': os.path.relpath(TABLE, HERE), 'yaw_drift_rad_s': YAW_DRIFT,
+    import hashlib
+    import door_k3m_corridor as COR
+    table = G.CorridorRef(COR.Corridor.from_json(json.load(open(TABLE))['table']))
+    res = {'schema': 'door_wide_guidance_offline/2', 'table': os.path.relpath(TABLE, HERE), 'table_sha256': hashlib.sha256(open(TABLE, 'rb').read()).hexdigest(),
+           'yaw_drift_rad_s': YAW_DRIFT,
            'guidance_cfg': vars(G.GuidanceCfg()), 'configs': []}
     for name, w, dr in (('A_noguide_nodrift', 0.0, 0.0), ('B_noguide_drift', 0.0, YAW_DRIFT),
                         ('C_guide1_drift', 1.0, YAW_DRIFT), ('D_guide5_drift', 5.0, YAW_DRIFT)):

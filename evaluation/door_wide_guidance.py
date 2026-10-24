@@ -110,3 +110,24 @@ def guidance(table, cfg: GuidanceCfg, pose, q_door, q_rate):
     qn = table.arm_nom(q_door) if cfg.w_qn > 0 else [float('nan')] * 6
     coord = [1.0, cfg.w_vref, vb[0], vb[1], vb[2], cfg.w_qn] + [float(v) for v in qn] + [float('nan'), float('nan')]
     return coord, {'ref_pose': pr, 'err': e, 'v_world': vw, 'v_body': vb}
+
+
+GUIDE_PHASES = ('OPEN', 'SETTLE')
+
+
+def off_coord():
+    """協同關閉（w_vref＝0、w_qn＝0、參考與 w_a／w_p 皆 NaN ＝ 求解器沿用啟動值）。"""
+    return [1.0, 0.0, float('nan'), float('nan'), float('nan'), 0.0] + [float('nan')] * 6 + [float('nan'), float('nan')]
+
+
+def phase_coord(table, cfg: GuidanceCfg, phase, mode_state, pose, q_door, q_rate):
+    """W1b 每輪的協同訊息。回傳 (coord, 細節或 None, 錯誤字串或 None)。
+    只有 phase ∈ GUIDE_PHASES 且底盤模式已切 free 才引導；其他（含 PAUSE、ABORTED、DONE、尚未切 free）⇒ 關閉。
+    計算失敗（非有限、表查詢錯誤）⇒ 關閉並回報錯誤；不拋例外、不新增命令來源。"""
+    if phase not in GUIDE_PHASES or mode_state != 'free':
+        return off_coord(), None, None
+    try:
+        coord, info = guidance(table, cfg, pose, q_door, q_rate)
+    except (ValueError, TypeError) as e:
+        return off_coord(), None, str(e)
+    return coord, info, None
