@@ -1,3 +1,35 @@
 [16:27:32] === K3-M（底盤可動協同＋EV3 取證＋INT）RUN_ID=door_k3m_pause_p2c_2 domain=97；停位 0.6,-0.5332,1.570796；起始 K2_READY；夾持→開到 8°→保持（不張爪、不退離）===
 [16:27:32]   起 sim PID=26959
 [16:27:32]   等場景建起（最多 180 s）
+[door] 門建於 /World/door；限位 0.0–110.0°；牆端面 {'wall_hinge_side': -0.014999999999999902, 'wall_latch_side': 1.0}；碰撞偏移 [(0.004000000189989805, 0.0)]
+[room] 零摩擦材質：支撐球 4 + 地面 2 → 綁定 6
+[room] 夾持面摩擦 μs=1.0 μd=0.8 → 綁定 7／7
+[room] 摩擦核對：
+[door] 門扇接觸配對：107 個機器人剛體
+[door] 牆接觸視圖：107 個剛體 ↔ ('/World/door/frame/wall_hinge_side', '/World/door/frame/wall_latch_side')
+[door] 初始門角 0.0000°
+[16:27:42]   起 wholebody PID=27828
+[16:27:42]   起 task PID=27832
+[16:27:42]   起 adapter PID=27836
+[16:27:42]   起 solver PID=27840
+[16:27:42]   起 lw_observer PID=27844
+[16:27:42] [任務] 等 K3-A 任務節點結束（牆鐘最多 660 s）
+[k3a] 相位 → WAIT_HANDOVER @ sim 4.24
+[k3a] 相位 → UNFOLD @ sim 4.30
+[k3a] 相位 → ALIGN_PRE @ sim 10.38
+[k3a] 相位 → ALIGN_HOLD @ sim 10.56
+[k3a] 相位 → APPROACH @ sim 10.64
+[k3a] 相位 → ENGAGE @ sim 19.24
+[k3a] 相位 → HOLD @ sim 22.26
+[k3a] 相位 → OPEN @ sim 23.30
+[k3a] 相位 → SETTLE @ sim 33.10
+[k3a] 相位 → PAUSE @ sim 34.70
+[k3a] 相位 → ABORTED @ sim 42.90（中止：pause_failed:timeout）
+[k3a] 結束：ABORTED（中止 pause_failed:timeout）
+[16:28:29] [收尾] 等求解節點停止並封存（最多 30 s，之後 TERM→10 s→KILL）
+[16:28:29] [收尾] 等執行端封存 room_run.json（最多 60 s；任務節點已送 /room/stop）
+[16:28:31] LW_HEALTH sim=exited sim_rc=0 obs=exited obs_rc=0 task=exited task_rc=1
+[16:28:31]   結束方式：task exited、solver exited、wholebody exited、sim exited（非 exited 即非正常結束）
+[16:28:31]   rc：task 1、solver 0、wholebody 0、sim 0；room_run 1、align_solver 1、DONE 0
+[16:28:31] === 結束 rc=1（0 只表示所有節點正常結束且到 DONE；通過與否由 door_k3m_check_p2.py 判定（K3-M、SETTLE 完成訊號、命令停止、實際停止分報））===
+[16:28:31] cleanup（只針對本趟 PID；TERM → 3 s → KILL）
