@@ -36,3 +36,8 @@
 ## 4. 凍結與單趟
 - 凍結 `freeze_door_k3m_pause_p4b_dev_r1.sha256`：p4 r1 的 193 檔＋本版 7 檔。
 - 單趟 `door_k3m_pause_p4b_1`：乾淨環境、92 °C、失敗不補跑；附 side／close 實錄重播。
+
+## 5. 補記：實跑後的判定器修正 p4b2（door_k3m_pause_p4b_1 之後；Claude 依授權裁定）
+- p4b_1 首次到 DONE。凍結版判定器 p4b 只剩兩個 PAUSE→END_HOLD 對應的假象理由：策略同一時刻記 SETTLE→END_HOLD 與 END_HOLD→PAUSE，形成零長度 END_HOLD 事件。
+- 新增 `door_k3m_check_p4b2.py`：只刪該零長度事件，其餘判準不變；`test_door_k3m_check_p4b2.py` 2 項通過，含先前各趟重判結論不變。
+- 這是**看過結果後**的修正，報告必須揭露。凍結版 p4b 的輸出保留。
