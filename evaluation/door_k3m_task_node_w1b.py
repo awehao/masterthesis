@@ -301,7 +301,7 @@ def main():
         raise SystemExit('W1b：--corridor-table 與登錄檔的走廊表或 sha256 不符 ⇒ 拒跑')
     cfg = PP.K3MPConfig(theta_goal_deg=float(_tp['theta_goal_deg']), over_goal_deg=float(_tp['over_goal_deg']))
     cfg.timeouts['OPEN'] = float(_tp['open_timeout_s'])
-    _gc = WG.GuidanceCfg(**w1b['control_cost_change']['guidance'])
+    w1b_gcfg = WG.GuidanceCfg(**w1b['control_cost_change']['guidance'])   # r2：不與下方幾何設定 _gc 同名（Codex 20261024_234630 第 1 項）
     corridor = K3MCOR.Corridor.from_json(json.load(open(a.corridor_table))['table'])
     _gc = json.load(open(a.geom_config))
     gcfg = K3MGEO.GeomMonitorConfig(v_floor=dict(_gc['v_floor_registered']), ds_err=dict(_gc['downsampling']['ds_err_registered']))
@@ -321,7 +321,7 @@ def main():
     rep['handover_precondition'] = {'n_required': WB_READY_N, 'max_age_s': WB_READY_AGE_S}
     rep['policy_p2_sha256'] = hashlib.sha256(open(PP2.__file__, 'rb').read()).hexdigest()
     rep['w1b'] = {'params_path': os.path.relpath(a.w1b_params, WS), 'params_sha256': hashlib.sha256(open(a.w1b_params, 'rb').read()).hexdigest(),
-                  'guidance_module_sha256': hashlib.sha256(open(WG.__file__, 'rb').read()).hexdigest(), 'guidance_cfg': vars(_gc),
+                  'guidance_module_sha256': hashlib.sha256(open(WG.__file__, 'rb').read()).hexdigest(), 'guidance_cfg': vars(w1b_gcfg),
                   'theta_goal_deg': cfg.theta_goal_deg, 'open_timeout_s': cfg.timeouts['OPEN'], 'n_on': 0, 'n_off': 0, 'n_err': 0, 'errors': []}
     _gref = WG.CorridorRef(corridor)
     rep['settle_sig_sha256'] = hashlib.sha256(open(SSIG.__file__, 'rb').read()).hexdigest()
@@ -452,7 +452,7 @@ def main():
                 nd.coord_pub = nd.create_publisher(Float64MultiArray, w1b['control_cost_change']['coord_topic'], 1)
             _qr = pol.q_ref if pol.q_ref is not None else q
             _rate = 0.0 if (g_qref_prev is None or dt <= 0) else (_qr - g_qref_prev) / dt
-            _coord, _ginfo, _gerr = WG.phase_coord(_gref, _gc, pol.phase, pol.mode_state, m.base_pose, q, _rate)
+            _coord, _ginfo, _gerr = WG.phase_coord(_gref, w1b_gcfg, pol.phase, pol.mode_state, m.base_pose, q, _rate)
             rep['w1b']['n_on' if _ginfo is not None else 'n_off'] += 1
             if _gerr is not None:
                 rep['w1b']['n_err'] += 1

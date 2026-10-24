@@ -4,7 +4,9 @@
   J2 判完（含例外）door_k3a_check／door_k3m_check 的模組常數一定還原；
   J3 登錄不符（θ、包絡、觀察器上限、走廊表雜湊）⇒ 各自理由；
   J4 引導相位：PAUSE 中 w＞0、OPEN 未切 free 時 w＞0 ⇒ guide_phase_violation；OPEN 已切 free 卻從未開啟 ⇒ guide_never_on；
-  J5 以 30° 登錄判 8° 資料 ⇒ 出現未達目標類理由（證明 30° 常數確實生效、未暗用 8°）。
+  J5 以 30° 登錄判 8° 資料 ⇒ 出現未達目標類理由（證明 30° 常數確實生效、未暗用 8°）；
+  J6（r2，Codex 20261024_234630 第 3 項）缺證據不誤收：刪 task θ、內帶或包絡元素 NaN、觀察器上限缺、走廊表雜湊非法 ⇒ *_missing_or_invalid；
+     PAUSE 列引導權重 NaN、權重非登錄值、開啟列 v_body 非有限 ⇒ guide_phase_violation。
 
     python3 evaluation/test_door_k3m_check_w1b.py
 """
@@ -34,13 +36,14 @@ def params(theta=8.0, envelope=(-0.15, 0.02, -0.05, 0.10, 6.0), obs=12.0, sha=No
     return {'task_param_extension': {'theta_goal_deg': theta, 'over_goal_deg': 1.0, 'open_timeout_s': 30.0},
             'protection_scope_change': {'corridor_table_sha256': sha or kc['corridor_table_sha256'], 'corridor_inner_mm': 20.0,
                                         'corridor_inner_deg': 0.8, 'observer_door_max_deg': obs,
-                                        'envelope': dict(zip(('fwd_lo', 'fwd_hi', 'lat_lo', 'lat_hi', 'yaw_abs_deg'), envelope))}}
+                                        'envelope': dict(zip(('fwd_lo', 'fwd_hi', 'lat_lo', 'lat_hi', 'yaw_abs_deg'), envelope))},
+            'control_cost_change': {'guidance': {'w_vref': 1.0}}}
 
 
 def with_guide(task, rule):
     t = copy.deepcopy(task)
     for x in t['trace']:
-        x['guide'] = {'w': rule(x), 'v_body': [0.0, 0.0, 0.0], 'err': None}
+        x['guide'] = {'w': rule(x), 'v_body': [0.0, 0.0, 0.0] if rule(x) else [float('nan')] * 3, 'err': None}
     return t
 
 
@@ -94,6 +97,33 @@ class T(unittest.TestCase):
         self.assertTrue(any(w in why for w in ('not_reached_goal', 'settle_p2_condition_not_held_1s', 'reference_not_at_goal')) or
                         any('goal' in w for w in why), why)
 
+
+    def test_j6_missing_or_invalid(self):
+        p = params(room=self.room)
+        t = with_guide(self.task, GOOD)
+        t1 = copy.deepcopy(t)
+        del t1['config']['theta_goal_deg']
+        self.assertIn('w1b_theta_missing_or_invalid', C.judge_with(t1, self.room, self.gate, self.solver, self.obs, p)['why'])
+        for key, val, w in (('inner_mm', float('nan'), 'w1b_inner_mm_missing_or_invalid'),
+                            ('corridor_table_sha256', 'xyz', 'w1b_corridor_table_missing_or_invalid')):
+            r = copy.deepcopy(self.room)
+            r['k3m']['config'][key] = val
+            self.assertIn(w, C.judge_with(t, r, self.gate, self.solver, self.obs, p)['why'])
+        r = copy.deepcopy(self.room)
+        r['k3m']['config']['envelope'][2] = float('nan')
+        self.assertIn('w1b_envelope_missing_or_invalid', C.judge_with(t, r, self.gate, self.solver, self.obs, p)['why'])
+        self.assertIn('w1b_observer_limit_missing_or_invalid', C.judge_with(t, self.room, self.gate, self.solver, {'config': {}}, p)['why'])
+        for rule in ((lambda x: float('nan') if x.get('phase') == 'PAUSE' else GOOD(x)),
+                     (lambda x: 0.5 if GOOD(x) else 0.0)):
+            why = C.judge_with(with_guide(self.task, rule), self.room, self.gate, self.solver, self.obs, p)['why']
+            self.assertTrue(any(w_.startswith('guide_phase_violation') for w_ in why), why)
+        t2 = with_guide(self.task, GOOD)
+        for x in t2['trace']:
+            if x['guide']['w']:
+                x['guide']['v_body'] = [0.0, float('nan'), 0.0]
+                break
+        why = C.judge_with(t2, self.room, self.gate, self.solver, self.obs, p)['why']
+        self.assertTrue(any(w_.startswith('guide_phase_violation') for w_ in why), why)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

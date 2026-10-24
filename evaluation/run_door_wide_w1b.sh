@@ -21,7 +21,7 @@
 # **W1b 版**（run_door_k3m_pause_p4b.sh 的複本；Codex 20261024_231908 B 節，規格 W1b_wide_open_30_spec.md）：大角度協同開門 θ（預設 30°）＋p4b 受控暫停。
 #   唯一參數來源＝results/door/w1b_params_<θ>.json（door_w1b_params.py 推得）：任務節點 door_k3m_task_node_w1b.py --w1b-params；
 #   延伸走廊表 door_wide_corridor_table_90.json（執行端與任務端同一表）；執行端 --envelope＝登錄包絡；觀察器 --door-max-deg＝θ＋4°；
-#   求解器 ADM8 另加 --coord-topic（底盤路徑引導，軟成本）；判定器 door_k3m_check_w1b.py；凍結 freeze_door_wide_w1b_dev_r1。
+#   求解器 ADM8 另加 --coord-topic（底盤路徑引導，軟成本）；判定器 door_k3m_check_w1b.py（r2）；凍結 freeze_door_wide_w1b_dev_r2。
 #   env -u VIRTUAL_ENV PATH=<去掉 .venv-dl0> RUN_ID=door_wide_w1b_30_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_wide_w1b.sh bash evaluation/run_guarded_v2.sh
 # **p4b 版**（run_door_k3m_pause_p4.sh 的複本；Howard 2026-10-24 選定手臂 0.5 s 窗口，規格 K3M_pause_p4b_arm_window.md）：
 #   唯一差異＝求解器改 dl3_wgmpc_wg2_adm8_node.py＋--pause-arm-win-s 0.5；判定器 door_k3m_check_p4b.py；凍結 freeze_door_k3m_pause_p4b_dev_r1。
@@ -57,9 +57,9 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_wide_w1b_dev_r1.sha256
+FRZ=evaluation/results/door/freeze_door_wide_w1b_dev_r2.sha256
 W1B_THETA="${W1B_THETA:-30}"
-PRM=evaluation/results/door/w1b_params_${W1B_THETA}.json
+PRM=evaluation/results/door/w1b_params_${W1B_THETA}_r2.json   # r2：SE(2) 角點包絡（Codex 20261024_234630）
 STAND='0.6,-0.5332,1.570796'
 K2_READY='0,0,0.035,0,-1.5707963,0'
 Q_PRE='-0.9471,0.0758,1.6024,-1.539,-0.9479,-0.0544'

@@ -10,6 +10,11 @@
 三、引導相位（控制成本項的使用範圍）：trace 每列 guide.w＞0 只能出現在 phase ∈ {OPEN, SETTLE} 且 k3m_mode＝free；
   PAUSE 及其後各列 guide.w＝0；曾進入 OPEN 且切 free 卻從未開啟引導 ⇒ guide_never_on。
 
+r2（Codex 20261024_234630 第 3 項）：缺證據不得誤收——登錄核對先驗證必要欄位存在、型別正確且有限
+  （task config θ／over_goal／OPEN 逾時；room 走廊表 sha256（64 位十六進位）、內帶、包絡 5 元素；觀察器上限），缺漏／NaN／非法 ⇒
+  w1b_<欄位>_missing_or_invalid；引導相位：每列 guide.w 必須有限且等於登錄的開（w_vref）或關（0）值；開啟列的 v_body 必須 3 個有限值；
+  開啟只能在 OPEN／SETTLE 且 free、PAUSE 之後不得開啟。
+
     python3 evaluation/door_k3m_check_w1b.py <run_dir>   # 寫 <run_dir>/analysis/door_k3m_check_w1b.json；不覆寫
 """
 from __future__ import annotations
@@ -43,34 +48,44 @@ def target_constants(theta_deg, over_goal_deg, envelope):
         KC3.CFG, KC3.TCFG, KC3.THETA, KM.ENVELOPE = saved
 
 
+def _num(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(float(x))
+
+
 def check_registration(task, room, observer, params, why, st):
     tp, ps = params['task_param_extension'], params['protection_scope_change']
     cfg = task.get('config') or {}
-    if abs(float(cfg.get('theta_goal_deg', math.nan)) - float(tp['theta_goal_deg'])) > 1e-9:
-        why.append('w1b_theta_mismatch')
-    if abs(float(cfg.get('over_goal_deg', math.nan)) - float(tp['over_goal_deg'])) > 1e-9:
-        why.append('w1b_over_goal_mismatch')
-    if abs(float((cfg.get('timeouts') or {}).get('OPEN', math.nan)) - float(tp['open_timeout_s'])) > 1e-9:
-        why.append('w1b_open_timeout_mismatch')
-    kc = (room.get('k3m') or {}).get('config') or {}
-    if kc.get('corridor_table_sha256') != ps['corridor_table_sha256']:
-        why.append('w1b_corridor_table_mismatch')
-    if abs(float(kc.get('inner_mm', math.nan)) - float(ps['corridor_inner_mm'])) > 1e-9 or \
-            abs(float(kc.get('inner_deg', math.nan)) - float(ps['corridor_inner_deg'])) > 1e-9:
-        why.append('w1b_inner_band_mismatch')
     e = ps['envelope']
     reg = [e['fwd_lo'], e['fwd_hi'], e['lat_lo'], e['lat_hi'], e['yaw_abs_deg']]
-    env = kc.get('envelope') or []
-    if len(env) != 5 or any(abs(float(a) - float(b)) > 1e-4 for a, b in zip(env, reg)):
+
+    def same(name, got, want, tol=1e-9):
+        if not _num(got):
+            why.append(f'w1b_{name}_missing_or_invalid')
+        elif abs(float(got) - float(want)) > tol:
+            why.append(f'w1b_{name}_mismatch')
+    same('theta', cfg.get('theta_goal_deg'), tp['theta_goal_deg'])
+    same('over_goal', cfg.get('over_goal_deg'), tp['over_goal_deg'])
+    same('open_timeout', (cfg.get('timeouts') or {}).get('OPEN'), tp['open_timeout_s'])
+    kc = (room.get('k3m') or {}).get('config') or {}
+    sha = kc.get('corridor_table_sha256')
+    if not (isinstance(sha, str) and len(sha) == 64 and all(c in '0123456789abcdef' for c in sha)):
+        why.append('w1b_corridor_table_missing_or_invalid')
+    elif sha != ps['corridor_table_sha256']:
+        why.append('w1b_corridor_table_mismatch')
+    same('inner_mm', kc.get('inner_mm'), ps['corridor_inner_mm'])
+    same('inner_deg', kc.get('inner_deg'), ps['corridor_inner_deg'])
+    env = kc.get('envelope')
+    if not (isinstance(env, (list, tuple)) and len(env) == 5 and all(_num(v) for v in env)):
+        why.append('w1b_envelope_missing_or_invalid')
+    elif any(abs(float(a_) - float(b_)) > 1e-4 for a_, b_ in zip(env, reg)):
         why.append('w1b_envelope_mismatch')
-    om = ((observer or {}).get('config') or {}).get('door_max_deg')
-    if om is None or abs(float(om) - float(ps['observer_door_max_deg'])) > 1e-9:
-        why.append('w1b_observer_limit_mismatch')
-    st['w1b_registration'] = {'theta': cfg.get('theta_goal_deg'), 'envelope_room': env, 'envelope_registered': reg, 'observer_door_max_deg': om}
+    same('observer_limit', ((observer or {}).get('config') or {}).get('door_max_deg'), ps['observer_door_max_deg'])
+    st['w1b_registration'] = {'theta': cfg.get('theta_goal_deg'), 'envelope_room': env, 'envelope_registered': reg,
+                              'observer_door_max_deg': ((observer or {}).get('config') or {}).get('door_max_deg')}
     return reg
 
 
-def check_guidance(task, why, st):
+def check_guidance(task, why, st, w_on):
     tr = task.get('trace') or []
     bad, n_on, after_pause, seen_free_open = [], 0, False, False
     for x in tr:
@@ -79,15 +94,22 @@ def check_guidance(task, why, st):
             after_pause = True
         if x.get('phase') == 'OPEN' and x.get('k3m_mode') == 'free':
             seen_free_open = True
-        if not isinstance(g, dict):
-            bad.append((x.get('t'), 'missing'))
+        if not isinstance(g, dict) or not _num(g.get('w')):
+            bad.append((x.get('t'), 'missing_or_nonfinite'))
             continue
-        w = float(g.get('w') or 0.0)
-        if w > 0:
-            n_on += 1
-            if x.get('phase') not in ('OPEN', 'SETTLE') or x.get('k3m_mode') != 'free' or after_pause:
-                bad.append((x.get('t'), x.get('phase')))
-    st['w1b_guidance'] = {'n_rows': len(tr), 'n_on': n_on, 'n_bad': len(bad), 'first_bad': bad[:5]}
+        w = float(g['w'])
+        if w == 0.0:
+            continue
+        if w != float(w_on):
+            bad.append((x.get('t'), f'weight_not_registered:{w}'))
+            continue
+        n_on += 1
+        vb = g.get('v_body')
+        if not (isinstance(vb, (list, tuple)) and len(vb) == 3 and all(_num(v) for v in vb)):
+            bad.append((x.get('t'), 'v_body_invalid'))
+        if x.get('phase') not in ('OPEN', 'SETTLE') or x.get('k3m_mode') != 'free' or after_pause:
+            bad.append((x.get('t'), x.get('phase')))
+    st['w1b_guidance'] = {'n_rows': len(tr), 'n_on': n_on, 'n_bad': len(bad), 'first_bad': bad[:5], 'w_on_registered': w_on}
     if bad:
         why.append(f'guide_phase_violation_{len(bad)}')
     if seen_free_open and n_on == 0:
@@ -103,7 +125,7 @@ def judge_with(task, room, gate, solver, observer, params):
     st = dict(res['stats'])
     st.update(st_r)
     why_g = []
-    check_guidance(task, why_g, st)
+    check_guidance(task, why_g, st, params['control_cost_change']['guidance']['w_vref'])
     why = why_r + list(res['why']) + why_g
     return dict(res, why=why, stats=st, **{'pass': not why, 'w1b_registration_ok': not why_r, 'w1b_guidance_ok': not why_g,
                                            'theta_goal_deg': tp['theta_goal_deg']})

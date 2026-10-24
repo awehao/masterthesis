@@ -13,6 +13,9 @@
     獨立觀察器門角上限＝θ_goal＋4°（固定角度餘裕，與任務上界 θ_goal＋1° 分開登錄）。
   控制成本項變更：引導 w_vref 1、w_qn 0（GuidanceCfg 預設），協同話題 /door/wide_coord。
 核對：每個門角（0.1° 步）參考 ± (內帶＋停止餘量) 的四角點都在包絡內；並列 8° 舊包絡供對照。
+r2（Codex 20261024_234630 第 2 項）：偏移改在**參考位姿座標**以 SE(2) 合成（ref(q) ⊕ (d前, d左, d偏航)，與線上走廊偏差定義一致），
+  再轉回走廊表錨點座標：包絡＝完整外帶（±40 mm、±40 mm、±4.5° 的 8 個角點）在 [0, θ+1°] 的範圍；
+  核對「內帶＋停止餘量」角點與包絡邊界的最小餘裕。輸出 w1b_params_<θ>_r2.json（r1 輸出保留）。停止餘量仍只是情境假設。
 
     python3 evaluation/door_w1b_params.py 30
 """
@@ -41,7 +44,7 @@ OLD_ENVELOPE = (-0.15, 0.02, -0.05, 0.10, 6.0)
 
 def main():
     theta = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
-    out = os.path.join(HERE, 'results', 'door', f'w1b_params_{int(round(theta))}.json')
+    out = os.path.join(HERE, 'results', 'door', f'w1b_params_{int(round(theta))}_r2.json')   # r2
     if os.path.exists(out):
         raise SystemExit(f'{out} 已存在，不覆寫')
     t = json.load(open(os.path.join(R.RUN, 'task.json')))
@@ -53,18 +56,26 @@ def main():
     C = COR.Corridor.from_json(tbl['table'])
     qs = np.arange(0.0, theta + 1.0 + 1e-9, 0.1)
     L = np.array([C.ref_local(q) for q in qs])
-    env = (float(L[:, 0].min() - M_LIN), float(L[:, 0].max() + M_LIN), float(L[:, 1].min() - M_LIN), float(L[:, 1].max() + M_LIN),
-           float(np.abs(L[:, 2]).max() + M_YAW))
+    ainv = COR.se2_inv(C.anchor)
+
+    def corners(q, m, my):
+        ref = C.ref_pose(q)
+        out = []
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                for sw in (-1, 1):
+                    w = COR.se2_compose(ainv, COR.se2_compose(ref, (sx * m, sy * m, math.radians(sw * my))))
+                    out.append((w[0], w[1], math.degrees(w[2])))
+        return out
+    P = np.array([c for q in qs for c in corners(q, M_LIN, M_YAW)])
+    env = (float(P[:, 0].min()), float(P[:, 0].max()), float(P[:, 1].min()), float(P[:, 1].max()), float(np.abs(P[:, 2]).max()))
     dl, dy = INNER[0] + STOP_RES[0], INNER[1] + STOP_RES[1]
-    worst = {'fwd_lo': math.inf, 'fwd_hi': math.inf, 'lat_lo': math.inf, 'lat_hi': math.inf, 'yaw': math.inf}
-    for f, l, y in L:                                    # 參考 ± (內帶＋停止餘量)：以參考座標偏移近似（小偏航下）
-        worst['fwd_lo'] = min(worst['fwd_lo'], (f - dl) - env[0])
-        worst['fwd_hi'] = min(worst['fwd_hi'], env[1] - (f + dl))
-        worst['lat_lo'] = min(worst['lat_lo'], (l - dl) - env[2])
-        worst['lat_hi'] = min(worst['lat_hi'], env[3] - (l + dl))
-        worst['yaw'] = min(worst['yaw'], env[4] - (abs(y) + dy))
+    Q = np.array([c for q in qs for c in corners(q, dl, dy)])
+    worst = {'fwd_lo': float(Q[:, 0].min() - env[0]), 'fwd_hi': float(env[1] - Q[:, 0].max()),
+             'lat_lo': float(Q[:, 1].min() - env[2]), 'lat_hi': float(env[3] - Q[:, 1].max()),
+             'yaw': float(env[4] - np.abs(Q[:, 2]).max())}
     gc = G.GuidanceCfg()
-    doc = {'schema': 'w1b_params/1', 'theta_goal_deg': theta,
+    doc = {'schema': 'w1b_params/2', 'theta_goal_deg': theta,
            'task_param_extension': {'theta_goal_deg': theta, 'over_goal_deg': 1.0, 'policy_upper_deg': theta + 1.0,
                                     'ramp_s': ramp, 'ramp_8deg_s': ramp8, 'open_margin_s_from_8deg': OPEN_MARGIN_8,
                                     'open_timeout_s': open_to, 'rule': 'OPEN 逾時＝完整斜坡（含末段減速）＋ 8° 版絕對餘裕 20.3 s'},
@@ -73,8 +84,8 @@ def main():
                'corridor_inner_mm': INNER[0] * 1e3, 'corridor_inner_deg': INNER[1],
                'envelope': {'fwd_lo': env[0], 'fwd_hi': env[1], 'lat_lo': env[2], 'lat_hi': env[3], 'yaw_abs_deg': env[4],
                             'cli': ','.join(f'{v:.4f}' for v in env),
-                            'rule': f'走廊參考在 [0, θ+1°] 的範圍，每側加外側取樣帶 {M_LIN * 1e3:.0f} mm／{M_YAW}°'},
-               'envelope_margin_check': {'inner_plus_stop_residual': [dl, dy], 'min_margin_m_or_deg': worst,
+                            'rule': f'完整外帶 ±{M_LIN * 1e3:.0f} mm／±{M_YAW}° 在參考位姿座標以 SE(2) 合成的角點，於 [0, θ+1°] 轉回走廊表錨點座標後的範圍'},
+               'envelope_margin_check': {'inner_plus_stop_residual': [dl, dy], 'composition': 'SE2：ref(q) ⊕ 偏移（參考位姿座標）', 'min_margin_m_or_deg': worst,
                                          'ok': all(v >= 0 for v in worst.values())},
                'old_envelope_8deg': OLD_ENVELOPE,
                'observer_door_max_deg': theta + 4.0, 'observer_rule': '固定角度餘裕 θ＋4°（與任務上界 θ＋1° 分開登錄）',

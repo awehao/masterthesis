@@ -3,6 +3,8 @@
 參考＝results/door/door_wide_offline_sweep_90.json 的 trajectory（同建表來源 door_wide_corridor_table_90.json）；門角 −1…--q-max（整數度）。
 r2（Codex 20261024_231908 第 B1 項：線上引導、走廊監看與離線驗證用同一表）：--table 給定時，底盤參考 (前進, 側移, 偏航) 改由該走廊表
 （door_k3m_corridor.Corridor.ref_local，與線上同一函式）取值，手臂暖啟動構型仍取掃描軌跡；輸出記表的 sha256。
+r3（Codex 20261024_234630 第 2 項）：--table 時偏移改在**參考位姿座標**合成：base＝SE2_compose(ref_pose(q), (d前, d左, d偏航))，
+與線上走廊偏差定義（ref⁻¹∘base）一致；輸出檔名加 _ref。r2 輸出（錨點座標相加）保留。
 原說明：K3-M 前置離線核對：局部參考走廊取樣（無 Isaac、無接觸；依 Codex 20261023_202016 第 1、2 項）。
 
 走廊參考＝door_k3m_offline_replay_r2.json 的 free 候選軌跡：底盤相對停車錨點的 (前進, 側向, 偏航) 與手臂構型，以推得門角為索引
@@ -32,6 +34,7 @@ sys.path.insert(0, HERE)
 import door_k3au_offline_geom as GA                   # noqa: E402
 import door_k3ax_offline_geom as GX                   # noqa: E402
 from door_target import rotate_about_hinge            # noqa: E402
+import door_k3m_corridor as COR                       # noqa: E402
 
 C = GA.C
 OUT = None
@@ -72,7 +75,7 @@ def main():
     OFF_MM, YAW_OFF, INNER = list(a.offsets_mm), list(a.yaw_offsets), {'mm': a.inner_mm, 'deg': a.inner_deg}
     Q_DEG = [float(x) for x in range(-1, a.q_max + 1)]
     if a.out is None:
-        a.out = os.path.join('evaluation', 'results', 'door', f'door_wide_offline_corridor_{a.q_max}_o{int(max(abs(v) for v in OFF_MM))}' + ('_tbl' if a.table else '') + '.json')
+        a.out = os.path.join('evaluation', 'results', 'door', f'door_wide_offline_corridor_{a.q_max}_o{int(max(abs(v) for v in OFF_MM))}' + ('_tbl_ref' if a.table else '') + '.json')
     out = a.out if os.path.isabs(a.out) else os.path.join(os.path.dirname(HERE), a.out)
     if os.path.exists(out):
         raise SystemExit(f'{out} 已存在，不覆寫')
@@ -91,7 +94,6 @@ def main():
     corr, table_sha = None, None
     if a.table:
         import hashlib
-        import door_k3m_corridor as COR
         tp = a.table if os.path.isabs(a.table) else os.path.join(os.path.dirname(HERE), a.table)
         table_sha = hashlib.sha256(open(tp, 'rb').read()).hexdigest()
         td = json.load(open(tp))['table']
@@ -106,8 +108,11 @@ def main():
             ref['fwd_m'], ref['lat_m'], ref['dyaw_deg'] = corr.ref_local(qd)
         T = rotate_about_hinge(T_hold, np.zeros(3), AX, math.radians(qd))
         for df, dl, dy in itertools.product(OFF_MM, OFF_MM, YAW_OFF):
-            fwd, lat = ref['fwd_m'] + df * 1e-3, ref['lat_m'] + dl * 1e-3
-            base = np.array([ax + ca * fwd - sa * lat, ay + sa * fwd + ca * lat, ath + math.radians(ref['dyaw_deg'] + dy)])
+            if corr is not None:                                      # r3：參考位姿座標合成
+                base = np.array(COR.se2_compose(corr.ref_pose(qd), (df * 1e-3, dl * 1e-3, math.radians(dy))), float)
+            else:
+                fwd, lat = ref['fwd_m'] + df * 1e-3, ref['lat_m'] + dl * 1e-3
+                base = np.array([ax + ca * fwd - sa * lat, ay + sa * fwd + ca * lat, ath + math.radians(ref['dyaw_deg'] + dy)])
             qf = C.ik(base, T, np.array(ref['q_arm']), only_prev=True)
             inner = abs(df) <= INNER['mm'] and abs(dl) <= INNER['mm'] and abs(dy) <= INNER['deg']
             row = {'q_deg': qd, 'd_fwd_mm': df, 'd_lat_mm': dl, 'd_yaw_deg': dy, 'inner': inner, 'ik': qf is not None}
