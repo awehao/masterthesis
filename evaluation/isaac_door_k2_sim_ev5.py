@@ -3,6 +3,9 @@
 #   --pause-finger-max-effort N（預設 0 ⇒ 與 EV4 同行為，只多記一筆啟動讀回）：執行端暫停切換那一步（world.step 之前）把兩指 finger_joint1／2 的
 #   有效驅動輸出上限（ArticulationController.set_max_efforts）設為 N 並讀回，之後每 1 s 讀回核對；閉合目標、kp／kd、摩擦、手臂／底盤控制與判準不變。
 #   紀錄 room_run finger_effort：啟動讀回、旗標值、暫停切換時的 old／set／readback／ok 與定期讀回（door_k3m_finger_effort）。需 --park-gate-mobile。
+#   r2（Codex 20261025_024339 必修①③）：啟動讀回缺失／非法／不是兩指各 --pause-finger-original-effort（5）⇒ 啟用時拒跑（38）；
+#   切換設定／讀回失敗、非有限、不符或非手指上限被改 ⇒ 保存原因、走既有 K2 中止閂鎖（/door/k3m_abort），暫停 ack 改回覆拒絕；
+#   定期讀回失敗或被改回 ⇒ 同樣中止。不自動重試、不加力、不放爪；原停止與保護門檻不變。切換前後記完整 DOF 上限向量與名稱。
 # EV4 版（K3-M 受控暫停接入；規格 K3M_pause_integration_spec_draft1.md）：isaac_door_k2_sim_ev3.py 的複本。變更：
 #   (1) --cmd-env：求解端命令只經 adapter 封裝 /wb_vel_cmd_env（進鏈時以 E2 鏈 recv_seq 對照封裝 source_seq）；
 #       /wb_vel_cmd 照舊保留給展開節點（UNFOLD；求解端在封裝模式不走這條）。r2：第一筆封裝進鏈＝求解端接管，之後舊路徑命令**不進鏈**並走既有閂鎖中止；
@@ -192,6 +195,8 @@ ap.add_argument('--cmd-env', action='store_true',                               
                 help='（EV4）只收 adapter 封裝 /wb_vel_cmd_env（不訂 /wb_vel_cmd）；逐物理步發布 /door/applied_src')
 ap.add_argument('--pause-finger-max-effort', type=float, default=0.0,             # EV5
                 help='（EV5）暫停切換那一步起兩指有效驅動輸出上限（N）；0＝不改（URDF effort 5）')
+ap.add_argument('--pause-finger-original-effort', type=float, default=5.0,        # EV5 r2
+                help='（EV5）啟動讀回應有的兩指原上限（URDF effort）；啟用時不符即拒跑')
 ap.add_argument('--headless', default='true')
 a = ap.parse_args()
 
@@ -796,12 +801,15 @@ def main() -> int:
         ArticulationAction(joint_positions=q0))
     print(f'[room] 手臂收攏於 {[round(v, 6) for v in stow]}', flush=True)
     _fe_idx = [fidx[j] for j in FJ]                                                   # EV5：啟動讀回（不改值）
-    fin_eff_init = FEFF.read_init(robot.get_articulation_controller(), _fe_idx, FJ)
+    fin_eff_init = FEFF.read_init(robot.get_articulation_controller(), _fe_idx, FJ, names, a.pause_finger_original_effort)
     fin_eff = FEFF.PauseFingerEffort(a.pause_finger_max_effort, _fe_idx, FJ)
     print(f'[room] 手指驅動輸出上限讀回 {fin_eff_init["readback"]}（{FJ}）；暫停期設定 {a.pause_finger_max_effort or "不改"}', flush=True)
     if fin_eff.enabled and (not a.park_gate_mobile or len(_fe_idx) != 2):
         print('[room] **--pause-finger-max-effort 需要 --park-gate-mobile 與兩隻手指關節** ⇒ 中止', flush=True)
         return 37
+    if fin_eff.enabled and not fin_eff_init['ok']:
+        print(f'[room] **手指驅動上限啟動讀回不合格**（{fin_eff_init["why"]}）⇒ 拒跑', flush=True)
+        return 38
 
     from pxr import Gf as _Gf
     from pxr import UsdGeom as _UG
@@ -1005,6 +1013,17 @@ def main() -> int:
            'owner_codes': {'0': AUTH_NAV, '1': AUTH_WHOLEBODY,
                            '2': AUTH_GLIDE}}
 
+    def _w1e_abort(_why5, _step5, _t5):                                             # EV5 r2：W1e 讀回異常 ⇒ 既有 K2 中止閂鎖
+        rec['events'].append({'sim_t': _t5, 'step': _step5, 'w1e_finger_effort_abort': _why5})
+        if k2_latch.latched is None:
+            _gnow5 = (a.finger_open if node.grip_cmd is None else min(max(float(node.grip_cmd), a.finger_closed), a.finger_open))
+            k2_latch.on_msg(f'w1e_finger_effort：{_why5}', _step5, _t5, _gnow5)
+            k2_latch.expire_chain(chain)
+            ex.cancel_handover(f'w1e_finger_effort：{_why5}')
+            node.k3m_abort_pub.publish(String(data=json.dumps({'why': f'w1e_finger_effort：{_why5}', 't': _t5,
+                                                               'source': 'executor_w1e'}, default=float)))
+        print(f'[door] **W1e 手指驅動上限異常 ⇒ 中止閂鎖**（{_why5}）@ step {_step5}', flush=True)
+
     while rclpy.ok():
         t = float(world.current_time)
         if t >= a.sim_limit:
@@ -1165,7 +1184,9 @@ def main() -> int:
             env_stats['n_applied_src_reports'] += 1
 
         if fin_eff.record is not None:                                               # EV5：切換後每 1 s 讀回核對（不改值）
-            fin_eff.periodic(robot.get_articulation_controller(), step_id, t)
+            _pe5 = fin_eff.periodic(robot.get_articulation_controller(), step_id, t)
+            if _pe5 is not None and _pe5['ok'] is not True:
+                _w1e_abort(f'periodic：{_pe5["why"]}', step_id, t)
         # ---- 真正寫進 API ----
         p_now, qn = robot.get_world_pose()
         yw = yaw_of(qn)
@@ -1260,6 +1281,11 @@ def main() -> int:
                             _fer = fin_eff.on_pause_switch(robot.get_articulation_controller(), step_id, t)
                             print(f'[door] **W1e 手指驅動輸出上限** {_fer["old"]} → {_fer["set"]}，讀回 {_fer["readback"]}'
                                   f'（{"生效" if _fer["ok"] else "**讀回不符**"}）@ step {step_id}', flush=True)
+                            if _fer['ok'] is not True:                               # EV5 r2：不回覆正常暫停 ack
+                                _w1e_abort(f'switch：{_fer["why"]}', step_id, t)
+                                k3m['pause_switch_w1e_failed'] = dict(_ackp, why=_fer['why'])
+                                _kp, _ackp = 'reject', {'run_id': _ackp.get('run_id'), 'seq': _ackp.get('seq'),
+                                                        'why': f'w1e_finger_effort：{_fer["why"]}', 'step': step_id}
                     k3m['events'].append({'step': step_id, 't': t, 'kind': 'pause_' + _kp, 'msg': _ackp})
                     node.k3m_pause_ack_pub.publish(String(data=json.dumps(_ackp, default=float)))
                 if k3m['active'] and k3m['violation'] is None:
@@ -1624,7 +1650,8 @@ def main() -> int:
         rec['k3m']['pause_switch'] = k3m.get('pause_switch')                        # EV4
         rec['k3m']['pause_rejections'] = k3m_pauth.rejections
     rec['finger_effort'] = {'init': fin_eff_init, 'arg_pause_max_effort': a.pause_finger_max_effort,   # EV5
-                            'pause': fin_eff.record, 'tol': FEFF.TOL}
+                            'arg_original_effort': a.pause_finger_original_effort,
+                            'pause': fin_eff.record, 'pause_switch_failed': k3m.get('pause_switch_w1e_failed'), 'tol': FEFF.TOL}
     if a.cmd_env:                                                                   # EV4：封裝與套用來源統計（含 n_plain_after_env）
         rec['cmd_env'] = dict(env_stats, n_env_recv=env_in.n_recv, n_env_into_chain=env_in.n_into_chain, n_env_dup=env_in.n_dup,
                               takeover_t=env_in.takeover_t, intake_violations=env_in.violations[:50], n_env_bad=getattr(node, 'wb_env_bad', 0), applied_src_cols=['step', 'sim_t', 'source_seq', 'chain_mode'],

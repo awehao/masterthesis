@@ -20,7 +20,7 @@
 # 不接 --coord-topic（無 MotM）。收尾只停本趟 PID。
 # **W1e 版**（run_door_wide_w1c.sh 的複本；Codex 20261025_023608，規格 W1e_pause_finger_effort_spec.md）：W1c r2 全部設定不變（不疊加 W1d），
 #   唯一差異＝執行端改 isaac_door_k2_sim_ev5.py＋--pause-finger-max-effort（取自登錄 executor_change，20 N；暫停切換那一步起兩指驅動輸出上限 5→20 N）；
-#   登錄 w1e_params_30.json；判定器 door_k3m_check_w1e.py；凍結 freeze_door_wide_w1e_dev_r1。單一變因候選，非已確認解法；未核可前不得執行。
+#   登錄 w1e_params_30.json；判定器 door_k3m_check_w1e.py；凍結 freeze_door_wide_w1e_dev_r2（Codex 20261025_024339 條件式核可單趟）。單一變因候選，非已確認解法；報告標為執行器上限變更。
 #   env -u VIRTUAL_ENV PATH=<去掉 .venv-dl0> RUN_ID=door_wide_w1e_30_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_wide_w1e.sh bash evaluation/run_guarded_v2.sh
 # **W1c 版**（run_door_wide_w1b.sh 的複本；Codex 20261025_002129，規格 W1c_offset_hold_spec.md）：w1b r2 全部設定不變，
 #   唯一差異＝求解器改 dl3_wgmpc_wg2_adm9_node.py＋--offset-hold-on-free（首次切 free 起偏移估計保持）；登錄 w1c_params_30.json；
@@ -65,7 +65,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_wide_w1e_dev_r1.sha256
+FRZ=evaluation/results/door/freeze_door_wide_w1e_dev_r2.sha256
 W1B_THETA="${W1B_THETA:-30}"
 PRM=evaluation/results/door/w1e_params_${W1B_THETA}.json   # W1e：w1c 內容＋executor_change
 STAND='0.6,-0.5332,1.570796'
@@ -92,11 +92,12 @@ W1B_ENV=$(python3 -c "import json;print(json.load(open('$PRM'))['protection_scop
 W1B_OBS=$(python3 -c "import json;print(json.load(open('$PRM'))['protection_scope_change']['observer_door_max_deg'])")
 W1B_COORD=$(python3 -c "import json;print(json.load(open('$PRM'))['control_cost_change']['coord_topic'])")
 W1E_FEFF=$(python3 -c "import json;print(json.load(open('$PRM'))['executor_change']['pause_finger_max_effort'])")
-say "W1e 執行端變更：暫停期手指驅動輸出上限 ${W1E_FEFF} N（ev5）"
+W1E_FEFF0=$(python3 -c "import json;print(json.load(open('$PRM'))['executor_change']['original_effort'])")
+say "W1e 執行端變更：暫停期手指驅動輸出上限 ${W1E_FEFF0} → ${W1E_FEFF} N（ev5 r2；啟動讀回不符拒跑、切換／定期讀回異常走中止閂鎖）"
 say "W1b 登錄：$PRM（sha256 $(sha256sum "$PRM" | cut -c1-16)）θ=${W1B_THETA}° 走廊表 $W1B_TABLE 包絡 $W1B_ENV 觀察器上限 ${W1B_OBS}° 協同 $W1B_COORD"
 say "=== K3-M（底盤可動協同＋EV3 取證＋INT）RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID；停位 $STAND；起始 K2_READY；夾持→開到 8°→保持（不張爪、不退離）==="
 
-spawn sim "$ISAAC_PY" -u evaluation/isaac_door_k2_sim_ev5.py --pause-finger-max-effort "$W1E_FEFF" --cmd-env --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID" --corridor-table "$W1B_TABLE" --envelope="$W1B_ENV" --sim-limit 240 --contact-min-n 0.5 \
+spawn sim "$ISAAC_PY" -u evaluation/isaac_door_k2_sim_ev5.py --pause-finger-max-effort "$W1E_FEFF" --pause-finger-original-effort "$W1E_FEFF0" --cmd-env --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID" --corridor-table "$W1B_TABLE" --envelope="$W1B_ENV" --sim-limit 240 --contact-min-n 0.5 \
   --finger-collision split --park-hold --start-pose "$STAND" --park-pose "$STAND" --stow-q "$K2_READY" --out "$DIR"
 say "  等場景建起（最多 180 s）"
 for i in $(seq 180); do grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null && break; kill -0 "${PIDS[0]}" 2>/dev/null || break; sleep 1; done
