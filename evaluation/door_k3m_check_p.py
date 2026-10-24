@@ -21,7 +21,8 @@ r2（Codex 20261024_095031 第 4 節）：
   - 分項以**自身必要證據**明確判定（check_pause 回傳 cmd_ok／phys_ok 布林）；缺證據 ⇒ False（未驗證），不由理由字首反推。
   - 趟別：request、兩個 ack、room.k3m.config 的 run_id 都須等於 task.args.run_id。
   - 求解端 ack 的 published 須為 True。
-  - 凍結目標：請求時刻以前**最後一筆**已發布目標（trace 中 t ≤ req_t、有 target 的最後一列）的 pub_seq 須等於 frozen_target_seq，
+  - 凍結目標（r3：依實際發布順序，Codex 20261024_100321）：trace 中第一列 PAUSE（提出請求的那一輪；同輪先發請求、後重發目標）
+    **之前**最後一筆已發布目標的 pub_seq 須等於 frozen_target_seq，
     其完整 4×4 須等於請求的 frozen_target_T（位置 ≤ 1e-9 m、旋轉 ≤ 1e-9 rad）；求解端 ack 的 frozen_target_T 與請求比較（≤ 1e-6）。
 
     python3 evaluation/door_k3m_check_p.py <run_dir>    # 寫 <run_dir>/analysis/door_k3m_check_p.json；結束碼 0＝通過
@@ -125,8 +126,13 @@ def check_pause(task, room, solver, why, st):
             and abs(ea['switch_t'] - sa['switch_t']) <= 1e-9):
         why.append('pause_ack_mismatch')
     T_req, T_sa = _T16(req.get('frozen_target_T')), _T16(sa.get('frozen_target_T'))
-    prior = [e for e in task.get('trace') or [] if e.get('target') is not None and isinstance(e.get('pub_seq'), int)
-             and _num(e.get('t')) and _num(req.get('req_t')) and e['t'] <= req['req_t'] + 1e-9]
+    trace = task.get('trace') or []
+    i_pause = next((i for i, e in enumerate(trace) if e.get('phase') == 'PAUSE'), None)   # r3：請求所在的那一輪（轉入 PAUSE 的紀錄邊界）
+    if i_pause is None:
+        why.append('pause_phase_missing_in_trace')
+        prior = []
+    else:                                                                  # 依實際發布順序：該輪之前的已發布目標（同輪請求後重發的不算）
+        prior = [e for e in trace[:i_pause] if e.get('target') is not None and isinstance(e.get('pub_seq'), int)]
     last = prior[-1] if prior else None
     T_last = None if last is None else _T16(last['target'])
     if (T_req is None or T_last is None or last.get('pub_seq') != req.get('frozen_target_seq')

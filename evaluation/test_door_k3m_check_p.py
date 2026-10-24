@@ -26,8 +26,10 @@ def make(t_cmd_step=1015, n_end=2700, drift=None, gap=None):
     T_old = T.copy()
     T_old[0, 3] -= 0.001
     task = {'schema': 'door_k3m_task_p/1', 'final_phase': 'DONE', 'args': {'run_id': 'r'},
-            'trace': [{'t': 9.90, 'pub_seq': 399, 'target': T_old.tolist()}, {'t': 9.95, 'pub_seq': 400, 'target': T.tolist()},
-                      {'t': 10.05, 'pub_seq': 401, 'target': T.tolist()}],
+            'trace': [{'t': 9.90, 'phase': 'SETTLE', 'pub_seq': 399, 'target': T_old.tolist()},
+                      {'t': 9.95, 'phase': 'SETTLE', 'pub_seq': 400, 'target': T.tolist()},
+                      {'t': 10.0, 'phase': 'PAUSE', 'pub_seq': 401, 'target': T.tolist()},          # 同輪：先發請求、後重發相同目標
+                      {'t': 10.05, 'phase': 'PAUSE', 'pub_seq': 402, 'target': T.tolist()}],
             'k3m_pause': {'request': {'run_id': 'r', 'seq': 2, 'mode': 'pause', 'req_t': 10.0, 'frozen_target_seq': 400, 'frozen_target_xyz': XYZ,
                                       'frozen_target_T': TF},
                           't_exec_recv': 10.05, 't_solver_recv': 10.1, 'wall_req': 1.0, 'wall_exec_recv': 1.05, 'wall_solver_recv': 1.1,
@@ -85,6 +87,19 @@ class T(unittest.TestCase):
         t, r, s = make()                                                    # 請求前已有更新的目標（400），卻引用較舊的 399
         t['k3m_pause']['request']['frozen_target_seq'] = 399
         self.assertIn('pause_frozen_target_not_last_published', reasons(t, r, s))
+        t, r, s = make()                                                    # Codex 反例一：請求後同輪重發相同目標（401，t＝req_t）不得誤拒
+        self.assertNotIn('pause_frozen_target_not_last_published', reasons(t, r, s))
+        t, r, s = make()                                                    # Codex 反例二：請求前同一時刻已有更新目標，仍須攔下舊序號
+        t['trace'].insert(2, {'t': 10.0, 'phase': 'SETTLE', 'pub_seq': 400, 'target': t['trace'][1]['target']})
+        t['trace'][1]['pub_seq'] = 399
+        t['trace'][1]['target'] = t['trace'][0]['target']
+        t['trace'][0]['pub_seq'] = 398
+        t['k3m_pause']['request']['frozen_target_seq'] = 399
+        self.assertIn('pause_frozen_target_not_last_published', reasons(t, r, s))
+        t, r, s = make()
+        for e in t['trace']:
+            e['phase'] = 'SETTLE'
+        self.assertIn('pause_phase_missing_in_trace', reasons(t, r, s))
         t, r, s = make()                                                    # 位置相同、旋轉不同
         import math
         c, s_ = math.cos(0.01), math.sin(0.01)
