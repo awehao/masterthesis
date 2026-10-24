@@ -2,7 +2,8 @@
 """W1b 30° 單趟（door_wide_w1b_30_1）的接觸承載分析（Codex 20261025_001336：只讀既有資料、不擷取、不調參、不跑模擬）。
 
 對齊：以物理步號配對 room_run.json（門角、底盤、實測手臂、手指開度、相位）與 evidence.jsonl（把手位姿 T_WH、逐點接觸 p／n／fn、
-逐點摩擦 ft、joint6 反作用旋量）；求解紀錄以發布時刻配對（引導是否開啟）。
+逐點摩擦 ft、joint6 反作用旋量）；求解紀錄以 **publish_sim_t_exact（已發布列）** 配對引導是否開啟（r2，Codex 20261025_002129 第 2 點；r1 誤用快照 sim_t）。
+姿態變化稱「RPY 參數變化」。輸出 r2 檔（r1 保留）。
 分段：HOLD、OPEN（至 finger1 首次低於 0.5 N 前）、首次低於門檻、持續低值至中止、中止後。
 座標：接觸點與法向、摩擦切向力轉到**把手座標**（T_WH：x 沿橫桿、z 向上；原點＝橫桿中心）；
   每指：法向力幅值和 Σ|fn|、承載點（只取 |fn| > 0.05 N 的點，以 |fn| 加權；零承載點不定義承載方向）、
@@ -26,7 +27,7 @@ sys.path.insert(0, HERE)
 import door_k2_check as KC                             # noqa: E402
 
 RUN = os.path.join(HERE, 'runs', 'door_wide_w1b_30_1')
-OUT = os.path.join(HERE, 'results', 'door', 'w1b_30_1_load_analysis.json')
+OUT = os.path.join(HERE, 'results', 'door', 'w1b_30_1_load_analysis_r2.json')
 FIG_DIR = os.path.join(os.path.dirname(HERE), '第七次進度報告素材', '圖表')
 FINGERS = ('uflite_finger1', 'uflite_finger2')
 FN_MIN = 0.05
@@ -51,8 +52,8 @@ def main():
     I = {c: i for i, c in enumerate(room['steps_cols'])}
     pe = {e['to']: e['t'] for e in task['policy_events'] if 'to' in e}
     t_hold, t_open, t_abort = pe['HOLD'], pe['OPEN'], task.get('t_abort') or next(e['t'] for e in task['policy_events'] if e.get('abort'))
-    glog = sorted((x['sim_t'], bool((x.get('coord') or {}).get('w_vref'))) for x in solver.get('log') or []
-                  if x.get('published') and isinstance(x.get('coord'), dict))
+    glog = sorted((x['publish_sim_t_exact'], bool((x.get('coord') or {}).get('w_vref'))) for x in solver.get('log') or []
+                  if x.get('published') and isinstance(x.get('coord'), dict) and x.get('publish_sim_t_exact') is not None)
     rows = []
     T_base = None
     for s in room['steps']:
@@ -119,7 +120,7 @@ def main():
         out['tcp_d_mm_last'] = xs[-1]['tcp_d_mm']
         out['tcp_d_rpy_deg_last'] = xs[-1]['tcp_d_rpy_deg']
         return out
-    res = {'schema': 'w1b_load_analysis/1', 'run': 'door_wide_w1b_30_1', 'frames': {
+    res = {'schema': 'w1b_load_analysis/2', 'run': 'door_wide_w1b_30_1', 'solver_pairing': 'publish_sim_t_exact（已發布列）', 'frames': {
         'handle': 'T_WH（evidence；x 沿橫桿、z 向上，原點＝把手 prim）', 'contacts': '世界座標 → 把手座標',
         'j6': '子關節座標、子關節原點（規格登錄）；作用側未核清 ⇒ 轉把手座標與力平衡標 NA'},
         'thresholds': {'fn_point_min_n': FN_MIN, 'finger_low_n': LOW_N}, 't_events': {'HOLD': t_hold, 'OPEN': t_open,
@@ -157,7 +158,7 @@ def figs(rows, t_open, t_low, t_sust, t_abort):
     ax[1].set_ylabel('mm（相對 OPEN 起點）')
     ax[1].legend(loc='upper left', fontsize=8, frameon=False)
     for k, lab in ((0, 'roll（繞橫桿）'), (1, 'pitch'), (2, 'yaw')):
-        ax[2].plot(t, [r['tcp_d_rpy_deg'][k] for r in xs], lw=1.4, label=f'Δ{lab}')
+        ax[2].plot(t, [r['tcp_d_rpy_deg'][k] for r in xs], lw=1.4, label=f'RPY 參數變化 {lab}')
     ax[2].set_ylabel('°（相對 OPEN 起點）')
     ax[2].set_xlabel('模擬時間 s')
     ax[2].legend(loc='upper left', fontsize=8, frameon=False)
@@ -170,7 +171,7 @@ def figs(rows, t_open, t_low, t_sust, t_abort):
     sec.set_xlabel('門角 °')
     fig.suptitle('door_wide_w1b_30_1：兩指承載與夾爪相對把手位姿（虛線：OPEN、finger1 首次／持續低於 0.5 N、中止）', fontsize=10)
     fig.tight_layout()
-    fig.savefig(os.path.join(FIG_DIR, 'w1b_30_1_承載與相對位姿.png'), dpi=140)
+    fig.savefig(os.path.join(FIG_DIR, 'w1b_30_1_承載與相對位姿_r2.png'), dpi=140)
     plt.close(fig)
     fig, ax = plt.subplots(1, 2, figsize=(10, 4))
     for f, c in (('uflite_finger1', '#2a6fdb'), ('uflite_finger2', '#d9822b')):
@@ -184,7 +185,7 @@ def figs(rows, t_open, t_low, t_sust, t_abort):
         a.grid(alpha=0.25)
     fig.suptitle('承載點位置（只取 |fn| > 0.05 N 的接觸點，以法向力加權）', fontsize=10)
     fig.tight_layout()
-    fig.savefig(os.path.join(FIG_DIR, 'w1b_30_1_承載點位置.png'), dpi=140)
+    fig.savefig(os.path.join(FIG_DIR, 'w1b_30_1_承載點位置_r2.png'), dpi=140)
     plt.close(fig)
 
 

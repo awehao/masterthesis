@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""door_wide_w1b_30_1：驅動推送、兩指承載差與偏移估計 d̂ 的對齊圖與統計（只讀既有資料；W1b 承載分析附錄）。
+"""door_wide_w1b_30_1：自由模型等效位姿差指標、兩指承載差與偏移估計 d̂ 的對齊圖與統計（只讀既有資料；W1b 承載分析附錄）。
 
-驅動推送＝FK(設定點自由平衡 s＋b/α) − FK(實測關節)，轉到把手座標（mm）。b、α 取自 wgmpc_arm_sp_ident_free4.json（已辨識的靜態偏置）。
+r2（Codex 20261025_002129）：「驅動推送」改稱**自由模型等效位姿差指標**——依自由空間辨識模型計算的診斷量，不是實測推力、變形或接觸預載；
+d̂ 分三種值：觀測器更新值（快照 sim_t）、本輪求解使用值（同一輪更新後送入求解，求解紀錄 sim_t）、已發布週期的值（publish_sim_t_exact）；
+「OPEN 時 d̂」取 OPEN 之前最後一筆**已發布**週期的值（不用最近鄰）。輸出 r2 檔（r1 保留）。
+
+指標＝FK(設定點自由平衡 s＋b/α) − FK(實測關節)，轉到把手座標（mm）。b、α 取自 wgmpc_arm_sp_ident_free4.json（已辨識的靜態偏置）。
 注意：設定點本身已含求解端對 d̂ 的補償，故「推送」與 d̂ 的高相關接近同義反覆，**不是獨立的物理成因證據**；
 獨立的事實是實測 TCP 相對把手幾乎不動（≤ 0.9 mm）而推送與承載差同步增加。
 輸出：results/door/w1b_30_1_push.json、第七次素材／圖表／w1b_30_1_推送與承載差.png。
@@ -20,8 +24,8 @@ sys.path.insert(0, HERE)
 import door_k2_check as KC                             # noqa: E402
 
 RUN = os.path.join(HERE, 'runs', 'door_wide_w1b_30_1')
-OUT = os.path.join(HERE, 'results', 'door', 'w1b_30_1_push.json')
-FIG = os.path.join(os.path.dirname(HERE), '第七次進度報告素材', '圖表', 'w1b_30_1_推送與承載差.png')
+OUT = os.path.join(HERE, 'results', 'door', 'w1b_30_1_push_r2.json')
+FIG = os.path.join(os.path.dirname(HERE), '第七次進度報告素材', '圖表', 'w1b_30_1_等效位姿差與承載差_r2.png')
 
 
 def main():
@@ -58,6 +62,11 @@ def main():
     s = json.load(open(os.path.join(RUN, 'align_solver.json')))
     D = np.array([[x['sim_t']] + list(x['offset_interval']['d_after']) for x in s['log']
                   if isinstance(x.get('offset_interval'), dict) and x['offset_interval'].get('d_after') and pe['HOLD'] <= x['sim_t'] <= t_abort])
+    Dpub = [(x['publish_sim_t_exact'], list(x['offset_interval']['d_after'])) for x in s['log']
+            if x.get('published') and x.get('publish_sim_t_exact') is not None and isinstance(x.get('offset_interval'), dict)
+            and x['offset_interval'].get('d_after')]
+    pre_open = [d for tp, d in Dpub if tp <= pe['OPEN']]
+    pre_abort = [d for tp, d in Dpub if tp <= t_abort]
     n_upd = sum(1 for x in s['log'] if isinstance(x.get('offset_interval'), dict) and x['offset_interval'].get('used') == 'updated'
                 and x['sim_t'] >= pe['ENGAGE'])
     mo = A[:, 0] >= pe['OPEN']
@@ -70,12 +79,16 @@ def main():
     hold = A[:, 0] < pe['OPEN']
     pz = np.interp(D[:, 0], A[:, 0], A[:, 5])
     md = D[:, 0] >= pe['OPEN']
-    res = {'schema': 'w1b_push/1', 'definition': 'FK(s＋b/α) − FK(q_meas)，把手座標 mm；s 已含 d̂ 補償（同義反覆注意）',
+    res = {'schema': 'w1b_push/2', 'name': '自由模型等效位姿差指標（診斷量，非實測推力／變形／預載）',
+           'definition': 'FK(s＋b/α) − FK(q_meas)，把手座標 mm；s 已含 d̂ 補償（同義反覆注意）',
+           'dhat_kinds': {'observer_update': '快照 sim_t 的 d_after', 'solve_used': '同輪更新後送入求解（求解紀錄 sim_t）',
+                          'published': 'publish_sim_t_exact 已發布週期'},
            'hold': {'f2_minus_f1_n': float(A[hold, 2].mean()), 'push_mm': A[hold, 3:].mean(0).tolist()}, 'open_bins_2deg': bins,
            'corr_open': {'f2mf1_vs_push_z': float(np.corrcoef(A[mo, 2], A[mo, 5])[0, 1]),
                          'f2mf1_vs_push_x': float(np.corrcoef(A[mo, 2], A[mo, 3])[0, 1])},
-           'dhat': {'n_updates_from_engage': n_upd, 'at_open_mrad': (D[np.argmin(abs(D[:, 0] - pe['OPEN'])), 1:] * 1e3).tolist(),
-                    'at_abort_mrad': (D[-1, 1:] * 1e3).tolist(),
+           'dhat': {'n_updates_from_engage': n_upd,
+                    'last_published_before_open_mrad': None if not pre_open else [v * 1e3 for v in pre_open[-1]],
+                    'last_published_before_abort_mrad': None if not pre_abort else [v * 1e3 for v in pre_abort[-1]],
                     'corr_with_push_z_open': [float(np.corrcoef(D[md, 1 + j], pz[md])[0, 1]) for j in range(6)]}}
     json.dump(res, open(OUT, 'w'), ensure_ascii=False, indent=1)
     import matplotlib
@@ -92,7 +105,7 @@ def main():
     ax[1].plot(q, A[mo, 5], color='#2a6fdb', lw=1.0, label='z（向上）')
     ax[1].plot(q, A[mo, 4], color='#4a9a5a', lw=1.0, label='y')
     ax[1].plot(q, A[mo, 3], color='#888', lw=1.0, label='x（沿橫桿）')
-    ax[1].set_ylabel('驅動推送（mm，把手座標）')
+    ax[1].set_ylabel('自由模型等效位姿差（mm）')
     ax[1].legend(fontsize=8, frameon=False)
     qd = np.interp(D[md, 0], A[:, 0], A[:, 1])
     ax[2].plot(qd, D[md, 2] * 1e3, color='#2a6fdb', lw=1.2, label='d_hat j2')
@@ -103,7 +116,7 @@ def main():
     ax[2].legend(fontsize=8, frameon=False)
     for a in ax:
         a.grid(alpha=0.25)
-    fig.suptitle('door_wide_w1b_30_1 OPEN：兩指承載差、驅動推送與偏移估計（推送含 d_hat 補償，相關不是獨立成因證據）', fontsize=9.5)
+    fig.suptitle('door_wide_w1b_30_1 OPEN：兩指承載差、自由模型等效位姿差指標（診斷量）與偏移估計（求解紀錄 sim_t）', fontsize=9.5)
     fig.tight_layout()
     fig.savefig(FIG, dpi=140)
     print(json.dumps(res, ensure_ascii=False, indent=1)[:2500])
