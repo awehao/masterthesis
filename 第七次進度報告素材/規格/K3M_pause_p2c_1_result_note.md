@@ -20,3 +20,7 @@
   - 下一趟 `door_k3m_pause_p2c_2` 以乾淨環境執行：移除 venv 路徑、`unset VIRTUAL_ENV`。起跑前確認 `python3` 為 `/usr/bin/python3` 且可匯入 osqp。
   - 程式與凍結不變。
 - **保護**：完整（LW_HEALTH sim exited/0、obs exited/0）。
+
+## 更正（Codex 20261024_231908）
+- 本趟為**環境失敗**，排除於有效操作比較，但保留在全部嘗試紀錄中。
+- 機器人**有動作**：交棒、展開完成並進入 ALIGN_HOLD；因求解器未啟動而底盤偏航漂移，觸發保護。
