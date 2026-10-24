@@ -49,3 +49,10 @@
 - **跑法**：`RUN_ID=door_k3m_pause_p2b_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_k3m_pause_p2b.sh bash evaluation/run_guarded_v2.sh`
 - **保護**：既有閂鎖與監看、獨立觀察器、92 °C。走廊偏航若再越界，照實失敗，不延長等待、不補跑。
 - **分報**：開門、SETTLE（含每輪實收筆數）、命令停止、實際停止、保護完整性；附 side／close 該趟實錄重播（新命名規則）。
+
+## 6. 補記：p2b_1 啟動競態 ⇒ 不改程式重試一次（Claude 依授權裁定）
+- door_k3m_pause_p2b_1 在 WAIT_HANDOVER 逾時中止，沒有進入受測流程。
+  - 原因：重開機後模擬冷啟動 20 s，交棒請求落在模擬 1.64 s，0.5 s 窗口內命令鏈未收到全身命令。
+  - 詳見該趟 NOTE。
+- 送達修正在該趟資料中已確認：實收與同步間隔數相同；step_mismatch 1.8%，屬保守重設。
+- 核可 `door_k3m_pause_p2b_2`：同凍結、同跑法，只換 RUN_ID，只重試一次。再發生同一取消就停，另立交棒前置條件版本。
