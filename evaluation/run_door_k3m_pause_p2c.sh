@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# K3-A：局部通行門 v2 的夾持 → 小角度開門 8° → SETTLE → 保留抓持受控停止（不張爪、不退離）。
+# 規格 evaluation/results/specs/K3_door_small_open_spec.md（draft-1～3；範圍依 Codex 20261021 draft-3 審查縮為 K3-A）。
+# run_door_k2.sh 的版本化複本：只換任務節點（door_k3a_task_node.py）、凍結清單與紀錄字樣；執行端／展開／轉接／求解器與參數同 K2。
+# **INT 版**（run_door_k3a.sh 的複本）：唯一差異＝求解節點改用 dl3_wgmpc_wg2_adm2_node.py 並加 --offset-observer interval
+# （有限區間等效偏移觀測；Codex 20261022 ADM2 接入審查通過）。其餘參數、K3-A 範圍、判定器全同；不帶 --offset-admission。
+# **EV 版**（run_door_k3a_int.sh 的複本）：唯一差異＝執行端改用 isaac_door_k2_sim_ev.py 並加 --evidence-out（接觸承載取證，只加紀錄、不改控制）。
+# **K3-M 版**（run_door_k3a_int_ev.sh 的複本）：底盤可動的小角度協同開門（規格 K3_mobile_coop_small_open_spec.md）。差異只有：執行端改 isaac_door_k2_sim_ev3.py
+#   ＋--park-gate-mobile --run-id --corridor-table（模式權威、逐步走廊監看）；求解器改 dl3_wgmpc_wg2_adm3_node.py＋--mode-switch-run-id（握手後切入 free）；
+#   任務節點改 door_k3m_task_node.py＋--run-id。其餘參數全同（含 --park-hold：HOLD 前照 PARK_HOLD）。判定器 door_k3m_check.py。
+# **K3-M 受控暫停版**（run_door_k3m_ev.sh 的複本；規格 K3M_pause_integration_spec_draft1.md）：差異只有
+#   執行端 isaac_door_k2_sim_ev4.py＋--cmd-env（封裝入口、/door/applied_src、暫停握手權威）；adapter arm_vel_adapter_k3m.py＋--cmd-env --env-in-topic /wgmpc/cmd_env；
+#   求解器 dl3_wgmpc_wg2_adm4_node.py＋--cmd-env --run-id --pause；任務節點 door_k3m_task_node_p.py（完整 SETTLE ⇒ PAUSE）；
+#   獨立觀察器 door_k3m_observer.py --door-max-deg 12（中止後實驗保護；心跳由任務節點監看）；凍結 freeze_door_k3m_pause_dev_r1；判定器 door_k3m_check_p.py。
+#   增益、權重、限制、門檻、走廊與幾何監看不改。單趟；未核可前不得執行。結束模擬不算實際停止。
+# 由 run_guarded_v2.sh 包 92 °C 熱中止：
+#   RUN_ID=door_k3m_pause_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_k3m_pause.sh bash evaluation/run_guarded_v2.sh
+# 節點：門場景執行端（PARK_HOLD）→ 展開節點（K2_READY → Q_PRE_DOOR）→ K2 任務節點 → 轉接器 → W-GMPC 求解器。
+# **不起導航**（直接生成在停位）。求解器參數＝runs/dl3v_M/align_solver.json args，**只差**：--park-hold（K2 底盤停車伺服）、
+# 不接 --coord-topic（無 MotM）。收尾只停本趟 PID。
+# **p2c 版**（run_door_k3m_pause_p2b.sh 的複本；Codex 無法使用，經 Howard 授權由 Claude 裁定，規格 K3M_pause_p2c_handover_precondition.md）：
+#   唯一差異＝任務節點改 door_k3m_task_node_p2c.py（交棒請求前需已收到展開端 ≥ 20 筆新鮮 /wb_vel_cmd）；凍結 freeze_door_k3m_pause_p2c_dev_r1。
+#   RUN_ID=door_k3m_pause_p2c_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_k3m_pause_p2c.sh bash evaluation/run_guarded_v2.sh
+# **p2b 版**（run_door_k3m_pause_p2.sh 的複本；2026-10-24 Codex 無法使用，經 Howard 授權由 Claude 裁定，規格 K3M_pause_p2b_delivery_fix.md）：
+#   唯一差異＝任務節點改 door_k3m_task_node_p2b.py（SETTLE 窗口另開深度 64 的 /door/sync_state 訂閱，修正 p2 的送達缺陷）；凍結 freeze_door_k3m_pause_p2b_dev_r1。
+#   判定器仍為 door_k3m_check_p2.py。判準、窗口參數、保護、走廊、增益全同。單趟。
+#   RUN_ID=door_k3m_pause_p2b_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_k3m_pause_p2b.sh bash evaluation/run_guarded_v2.sh
+# **p2 版**（run_door_k3m_pause.sh 的複本；Codex 20261024_101421 (a)）：唯一控制差異＝任務節點改 door_k3m_task_node_p2.py
+#   （SETTLE 完成判斷的角速子條件改用 50 Hz 同步流的 0.1 s 因果後向門角差分；tensor 門速 0.05 保護、其餘條件、連續 1 s、監看、握手全同）；
+#   凍結 freeze_door_k3m_pause_p2_dev_r1；判定器 door_k3m_check_p2.py。不加偏航保持、不放寬走廊。單趟；未核可前不得執行。
+#   RUN_ID=door_k3m_pause_p2_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_k3m_pause_p2.sh bash evaluation/run_guarded_v2.sh
+OFFSET_MOVING=1
+set -u
+WS="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$WS"
+: "${ROS_DOMAIN_ID:?ROS_DOMAIN_ID 未設定}"
+: "${RUN_ID:?RUN_ID 未設定}"
+ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
+DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
+FRZ=evaluation/results/door/freeze_door_k3m_pause_p2c_dev_r1.sha256
+STAND='0.6,-0.5332,1.570796'
+K2_READY='0,0,0.035,0,-1.5707963,0'
+Q_PRE='-0.9471,0.0758,1.6024,-1.539,-0.9479,-0.0544'
+PIDS=(); NAMES=()
+source "$WS/evaluation/k2_proc.sh"
+say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$DIR/run.log"; }
+spawn(){ local n="$1"; shift; "$@" >>"$DIR/$n.log" 2>&1 & PIDS+=("$!"); NAMES+=("$n"); say "  起 $n PID=${PIDS[-1]}"; }
+cleanup(){ say "cleanup（只針對本趟 PID；TERM → 3 s → KILL）"
+  for i in "${!PIDS[@]}"; do kill -TERM "${PIDS[$i]}" 2>/dev/null || true; done
+  sleep 3
+  for i in "${!PIDS[@]}"; do kill -KILL "${PIDS[$i]}" 2>/dev/null || true; done; }
+trap cleanup EXIT
+trap 'say "收到 TERM"; exit 143' TERM
+trap 'say "收到 INT"; exit 130' INT
+
+sha256sum -c --quiet "$FRZ" >> "$DIR/run.log" 2>&1 || { say "**K3-M 暫停 p2c 版開發凍結不符** ⇒ 拒跑"; exit 95; }
+say "=== K3-M（底盤可動協同＋EV3 取證＋INT）RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID；停位 $STAND；起始 K2_READY；夾持→開到 8°→保持（不張爪、不退離）==="
+
+spawn sim "$ISAAC_PY" -u evaluation/isaac_door_k2_sim_ev4.py --cmd-env --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID" --corridor-table evaluation/results/door/door_k3m_corridor_table.json --sim-limit 240 --contact-min-n 0.5 \
+  --finger-collision split --park-hold --start-pose "$STAND" --park-pose "$STAND" --stow-q "$K2_READY" --out "$DIR"
+say "  等場景建起（最多 180 s）"
+for i in $(seq 180); do grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null && break; kill -0 "${PIDS[0]}" 2>/dev/null || break; sleep 1; done
+grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null || { say "**場景未建起** ⇒ 中止"; tail -8 "$DIR/sim.log" | tee -a "$DIR/run.log"; exit 83; }
+grep -E '^\[(room|door)\] (零摩擦|夾持面|摩擦核對|門建於|初始門角|門扇接觸|牆接觸)' "$DIR/sim.log" | tee -a "$DIR/run.log"
+
+spawn wholebody python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --park-hold --pos-tol 0.005 \
+  --stow-q "$K2_READY" --park "$STAND" --q-unfold="$Q_PRE" --out "$DIR/wholebody.json"
+spawn task python3 -u evaluation/door_k3m_task_node_p2c.py --out "$DIR/task.json" --run-id "$RUN_ID"
+ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
+[ -f "$ARM_IDENT" ] || { say "**找不到手臂辨識檔** ⇒ 中止"; exit 85; }
+spawn adapter python3 -u evaluation/arm_vel_adapter_k3m.py --in-topic /wgmpc/cmd_world --consumer-node /door_k2_sim --cmd-env --env-in-topic /wgmpc/cmd_env
+spawn solver python3 -u evaluation/dl3_wgmpc_wg2_adm4_node.py --require-topic-target --park-hold --offset-observer interval --mode-switch-run-id "$RUN_ID" --cmd-env --run-id "$RUN_ID" --pause \
+  --offset-moving --offset-free \
+  --continuous --wait-for-drawer-handover --arm-model setpoint --arm-ident "$ARM_IDENT" \
+  --cmd-topic /wgmpc/cmd_world --target-topic /drawer/tcp_target --target-offset 0 0 0 \
+  --N 5 --rate 20 --delay-comp-state-cycles 1.6 --delay-comp-cmd-cycles 1.0 \
+  --near-target-gamma 1.0 --w-s 0.001 --w-a 0.05 --w-s-arm 0.05 --margin-guard \
+  --reach-pos-m 0.005 --reach-rot-rad 0.02 --hold-s 2.0 --duration-s 600 --duration-sim-s 400 \
+  --u-prev-policy strict --assume-initial-rest --out "$DIR/align_solver.json"
+spawn lw_observer python3 -u evaluation/door_k3m_observer.py --out "$DIR/lw_observer.json" --door-max-deg 12
+
+say "[任務] 等 K3-A 任務節點結束（牆鐘最多 660 s）"
+SIM_PID="${PIDS[0]}"; WB_PID="${PIDS[1]}"; TASK_PID="${PIDS[2]}"; SOLVER_PID="${PIDS[4]}"; OBS_PID="${PIDS[5]}"
+sleep 5; kill -0 "$OBS_PID" 2>/dev/null || { say "**獨立觀察器未存活** ⇒ 中止（沒有觀察期保護不得繼續）"; exit 86; }
+wait_or_stop "$TASK_PID" 660 10; RC_TASK=$STOP_RC; HOW_TASK=$STOP_HOW
+grep -E '^\[k3a\]' "$DIR/task.log" | tee -a "$DIR/run.log"
+say "[收尾] 等求解節點停止並封存（最多 30 s，之後 TERM→10 s→KILL）"
+wait_or_stop "$SOLVER_PID" 30 10; RC_SOLVER=$STOP_RC; HOW_SOLVER=$STOP_HOW
+wait_or_stop "$WB_PID" 10 10; RC_WB=$STOP_RC; HOW_WB=$STOP_HOW
+say "[收尾] 等執行端封存 room_run.json（最多 60 s；任務節點已送 /room/stop）"
+wait_or_stop "$SIM_PID" 60 15; RC_SIM=$STOP_RC; HOW_SIM=$STOP_HOW
+kill -TERM "$OBS_PID" 2>/dev/null || true
+wait_or_stop "$OBS_PID" 10 5; RC_OBS=$STOP_RC; HOW_OBS=$STOP_HOW
+say "LW_HEALTH sim=$HOW_SIM sim_rc=$RC_SIM obs=$HOW_OBS obs_rc=$RC_OBS task=$HOW_TASK task_rc=$RC_TASK"
+grep -qE '"lw_observer_(unhealthy|not_ready)"' "$DIR/task.json" 2>/dev/null && say "**觀察器失效（任務節點記錄）** ⇒ 本趟記觀察提前終止"
+say "  結束方式：task $HOW_TASK、solver $HOW_SOLVER、wholebody $HOW_WB、sim $HOW_SIM（非 exited 即非正常結束）"
+OK_ROOM=0; [ -s "$DIR/room_run.json" ] && OK_ROOM=1
+OK_SOLVER=0; [ -s "$DIR/align_solver.json" ] && OK_SOLVER=1
+OK_DONE=0; grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && OK_DONE=1
+say "  rc：task $RC_TASK、solver $RC_SOLVER、wholebody $RC_WB、sim $RC_SIM；room_run $OK_ROOM、align_solver $OK_SOLVER、DONE $OK_DONE"
+RC=1
+[ "$HOW_TASK" = exited ] && [ "$HOW_SOLVER" = exited ] && [ "$HOW_WB" = exited ] && [ "$HOW_SIM" = exited ] && [ "$RC_TASK" = 0 ] && [ "$RC_SOLVER" = 0 ] && [ "$RC_WB" = 0 ] && [ "$RC_SIM" = 0 ] && [ "$OK_ROOM" = 1 ] && [ "$OK_SOLVER" = 1 ] && [ "$OK_DONE" = 1 ] && RC=0
+say "=== 結束 rc=$RC（0 只表示所有節點正常結束且到 DONE；通過與否由 door_k3m_check_p2.py 判定（K3-M、SETTLE 完成訊號、命令停止、實際停止分報））==="
+exit "$RC"
