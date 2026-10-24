@@ -75,7 +75,25 @@ class RefTable:
         return ((b[0] - a[0]) / (2 * h), (b[1] - a[1]) / (2 * h), wrap(b[2] - a[2]) / (2 * h))
 
 
-def guidance(table: RefTable, cfg: GuidanceCfg, pose, q_door, q_rate):
+class CorridorRef:
+    """以 door_k3m_corridor.Corridor 為參考（線上用）：引導目標＝走廊監看用的同一參考位姿，故引導直接把走廊偏差推向 0。
+    介面同 RefTable（門角 rad）；沒有手臂構型 ⇒ 只能 w_qn＝0。"""
+
+    def __init__(self, corridor):
+        self.c = corridor
+
+    def pose(self, q):
+        return self.c.ref_pose(math.degrees(q))
+
+    def dpose_dq(self, q, h=math.radians(0.25)):
+        a, b = self.pose(q - h), self.pose(q + h)
+        return ((b[0] - a[0]) / (2 * h), (b[1] - a[1]) / (2 * h), wrap(b[2] - a[2]) / (2 * h))
+
+    def arm_nom(self, q):
+        raise ValueError('CorridorRef 沒有手臂構型（w_qn 必須為 0）')
+
+
+def guidance(table, cfg: GuidanceCfg, pose, q_door, q_rate):
     """回傳 (coord 14 元素, 細節)。pose＝實測底盤 (x, y, yaw)；q_door＝實測門角；q_rate＝門角參考速率（rad/s，前饋用）。"""
     x, y, th = (float(v) for v in pose)
     if not all(math.isfinite(v) for v in (x, y, th, q_door, q_rate)):
