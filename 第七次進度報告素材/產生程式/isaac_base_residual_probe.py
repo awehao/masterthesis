@@ -7,6 +7,8 @@
 逐步（與 ev4 同順序）：讀位姿 → 命令（core.CommandSource）→ set_linear_velocity(R(yaw)·cmd)／set_angular_velocity → 讀回 →
   apply_action（手臂固定姿態、手指固定開度）→ world.step → 讀步進後位姿與根速度。輪框／滾子關節速度可讀就記，讀不到記 None。
 不做偏差補償、不調伺服、不改任何門檻。輸出 <out>/probe.json。
+r2（Codex 20261025_021820）：每步記實際步進前後模擬時間（world.current_time）；收到 SIGTERM／SIGINT ⇒ 結束迴圈並保存已得資料，
+標 incomplete 與原因；例外同樣保存；彙整由 core.summarize 核完整性（不完整不分類）。
 """
 from __future__ import annotations
 
@@ -14,7 +16,9 @@ import argparse
 import json
 import math
 import os
+import signal
 import sys
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WS = os.path.dirname(HERE)
@@ -58,6 +62,17 @@ def yaw_of(q):
 
 def _l(v):
     return None if v is None else [float(x) for x in np.asarray(v).reshape(-1)]
+
+
+STOP = {'why': None}
+
+
+def _on_signal(signum, frame):
+    STOP['why'] = f'signal_{signum}'
+
+
+signal.signal(signal.SIGTERM, _on_signal)
+signal.signal(signal.SIGINT, _on_signal)
 
 
 def main() -> int:
@@ -117,10 +132,41 @@ def main() -> int:
     src = C.CommandSource(MODE)
     n_steps = int(round((C.WARMUP_S + C.OBSERVE_S) / C.PHYSICS_DT))
     rows = []
+    rep = {'schema': 'b0_base_residual_probe/2', 'condition': a.condition, 'pose': POSE_NAME, 'mode': MODE,
+           'pose_source': C.POSES[POSE_NAME]['source'], 'q_arm_target': qarm, 'steps_cols': C.STEP_COLS, 'steps': rows,
+           'incomplete': None}
     print(f'[probe] 條件 {a.condition}：姿態 {POSE_NAME}（{C.POSES[POSE_NAME]["source"]}）模式 {MODE}；'
           f'輪框關節 {len(rim_idx)}、滾子關節 {len(roller_idx)}；進入主迴圈', flush=True)
+    try:
+        _loop(world, robot, src, n_steps, idx, names, FJ, rim_idx, roller_idx, tgt, rows)
+    except Exception as e:                                       # noqa: BLE001  例外也保存已得資料
+        rep['incomplete'] = f'exception：{type(e).__name__}：{e}'
+        traceback.print_exc()
+    if STOP['why'] and rep['incomplete'] is None:
+        rep['incomplete'] = STOP['why']
+    summ = C.summarize(rows)
+    if MODE == 'park_hold':
+        summ['park_steady'] = C.park_steady(rows, src.anchor)
+    if rep['incomplete'] and summ.get('complete'):
+        summ = {'complete': False, 'why': [rep['incomplete']], 'class': None}
+    rep.update({'anchor': src.anchor, 'servo_updates': src.n_updates,
+                'config': {'physics_dt': C.PHYSICS_DT, 'warmup_s': C.WARMUP_S, 'observe_s': C.OBSERVE_S, 'stand': C.STAND,
+                           'kp': KP, 'kd': KD, 'finger_kp': FKP, 'finger_kd': FKD, 'finger_open': FOPEN, 'grip_mu': [MU_S, MU_D],
+                           'frictionless_bound': nb, 'grip_bound': n_grip, 'finger_collision': 'split',
+                           'servo_period_steps': C.SERVO_PERIOD_STEPS, 'urdf': a.urdf},
+                'dof': {'rim': [names[i] for i in rim_idx], 'n_roller': len(roller_idx)},
+                'finger_collision': fcol, 'summary': summ})
+    json.dump(rep, open(os.path.join(a.out, 'probe.json'), 'w'), ensure_ascii=False, default=float)
+    print('[probe] 彙整 ' + json.dumps(summ, ensure_ascii=False, default=float), flush=True)
+    return 0 if summ.get('complete') else 3
+
+
+def _loop(world, robot, src, n_steps, idx, names, FJ, rim_idx, roller_idx, tgt, rows):
     for step in range(n_steps):
+        if STOP['why']:
+            break
         t = step * C.PHYSICS_DT
+        t_before = float(world.current_time)
         p, q = robot.get_world_pose()
         yaw = yaw_of(q)
         pose = [float(p[0]), float(p[1]), yaw]
@@ -133,29 +179,16 @@ def main() -> int:
         robot.get_articulation_controller().apply_action(ArticulationAction(joint_positions=tgt))
         qj, qd = robot.get_joint_positions(), robot.get_joint_velocities()
         world.step(render=False)
+        t_after = float(world.current_time)
         p2, q2 = robot.get_world_pose()
         qd_np = None if qd is None else np.asarray(qd, float)
-        rows.append([step, t, pose, [float(p2[0]), float(p2[1]), yaw_of(q2)], list(cmd), [wx, wy, 0.0], float(cmd[2]),
+        rows.append([step, t, t_before, t_after, pose, [float(p2[0]), float(p2[1]), yaw_of(q2)], list(cmd), [wx, wy, 0.0], float(cmd[2]),
                      v_rb, w_rb, v_before, _l(robot.get_linear_velocity()), _l(robot.get_angular_velocity()),
                      [float(qj[idx[j]]) for j in ARM], None if qd_np is None else [float(qd_np[idx[j]]) for j in ARM],
                      [float(qj[names.index(j)]) for j in FJ],
                      None if (qd_np is None or not rim_idx) else [float(qd_np[i]) for i in rim_idx],
                      None if (qd_np is None or not roller_idx) else float(np.abs(qd_np[roller_idx]).max()),
                      'warmup' if t < C.WARMUP_S - 1e-9 else 'observe'])
-    summ = C.summarize(rows)
-    if MODE == 'park_hold':
-        summ['park_steady'] = C.park_steady(rows, src.anchor)
-    rep = {'schema': 'b0_base_residual_probe/1', 'condition': a.condition, 'pose': POSE_NAME, 'mode': MODE,
-           'pose_source': C.POSES[POSE_NAME]['source'], 'q_arm_target': qarm, 'anchor': src.anchor, 'servo_updates': src.n_updates,
-           'config': {'physics_dt': C.PHYSICS_DT, 'warmup_s': C.WARMUP_S, 'observe_s': C.OBSERVE_S, 'stand': C.STAND,
-                      'kp': KP, 'kd': KD, 'finger_kp': FKP, 'finger_kd': FKD, 'finger_open': FOPEN, 'grip_mu': [MU_S, MU_D],
-                      'frictionless_bound': nb, 'grip_bound': n_grip, 'finger_collision': 'split',
-                      'servo_period_steps': C.SERVO_PERIOD_STEPS, 'urdf': a.urdf},
-           'dof': {'rim': [names[i] for i in rim_idx], 'n_roller': len(roller_idx)},
-           'finger_collision': fcol, 'summary': summ, 'steps_cols': C.STEP_COLS, 'steps': rows}
-    json.dump(rep, open(os.path.join(a.out, 'probe.json'), 'w'), ensure_ascii=False, default=float)
-    print('[probe] 彙整 ' + json.dumps(summ, ensure_ascii=False, default=float), flush=True)
-    return 0
 
 
 if __name__ == '__main__':

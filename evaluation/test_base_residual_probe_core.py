@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """base_residual_probe_core 離線測試（合成資料；B0 規格 §5）。
+r2（Codex 20261025_021820 必修①）反例：刪一步、重複時間、觀察只有 1 s、位姿 NaN、相鄰步位姿不銜接、必要欄位缺 ⇒ complete False 且不分類；
+API 回讀全缺／部分缺 ⇒ NA＋有效筆數（不補成零差）；輪／滾子讀值缺 ⇒ 仍完整（選配）。
 
     python3 evaluation/test_base_residual_probe_core.py
 """
@@ -26,7 +28,7 @@ def synth(mode, bias_body=(-2.0e-3, 1.5e-3), yaw=1.570796, cmd_fn=None, n=1100, 
         bx, by = C.world_of(bias_body, yaw)
         vx, vy = wx + bx, wy + by
         x2, y2 = x + vx * C.PHYSICS_DT, y + vy * C.PHYSICS_DT
-        rows.append([k, t, pose, [x2, y2, yaw], list(cmd), [wx, wy, 0.0], cmd[2], [wx + readback_err, wy, 0.0], [0, 0, cmd[2]],
+        rows.append([k, t, t, t + C.PHYSICS_DT, pose, [x2, y2, yaw], list(cmd), [wx, wy, 0.0], cmd[2], [wx + readback_err, wy, 0.0], [0, 0, cmd[2]],
                      None, [vx, vy, 0.0], [0, 0, 0], [0] * 6, [0] * 6, [0.0089, 0.0089], [0.0] * 4, 0.0,
                      'warmup' if t < C.WARMUP_S - 1e-9 else 'observe'])
         x, y = x2, y2
@@ -90,14 +92,97 @@ class T(unittest.TestCase):
 
     def test_api_readback_diff(self):
         rows, _ = synth('zero', readback_err=1e-4)
-        self.assertAlmostEqual(C.summarize(rows)['api_write_readback_maxdiff_mm_s'], 0.1, places=6)
+        s = C.summarize(rows)
+        self.assertAlmostEqual(s['api_write_readback_maxdiff_mm_s'], 0.1, places=6)
+        self.assertEqual(s['api_write_readback_n_valid'], 1000)
 
     def test_discontinuous_rejected(self):
         rows, _ = synth('zero')
         I = {c: i for i, c in enumerate(C.STEP_COLS)}
         rows[500][I['phase']] = 'warmup'
-        with self.assertRaises(ValueError):
-            C.summarize(rows)
+        s = C.summarize(rows)
+        self.assertFalse(s['complete'])
+        self.assertIn('phase_order_invalid', s['why'])
+
+    # r2 反例
+    def I(self):
+        return {c: i for i, c in enumerate(C.STEP_COLS)}
+
+    def assert_incomplete(self, rows, key):
+        s = C.summarize(rows)
+        self.assertFalse(s['complete'])
+        self.assertIsNone(s['class'])
+        self.assertNotIn('residual_body_mm_s', s)
+        self.assertTrue(any(w.startswith(key) for w in s['why']), s['why'])
+
+    def test_r2_drop_step(self):
+        rows, _ = synth('zero')
+        del rows[600]
+        self.assert_incomplete(rows, 'step_not_consecutive')
+
+    def test_r2_duplicate_time(self):
+        rows, _ = synth('zero')
+        I = self.I()
+        rows[600][I['t_before']] = rows[599][I['t_before']]
+        rows[600][I['t_after']] = rows[599][I['t_after']]
+        s = C.summarize(rows)
+        self.assertFalse(s['complete'])
+        self.assertIn('time_not_continuous', s['why'])
+
+    def test_r2_short_observe(self):
+        rows, _ = synth('zero', n=200)                                                   # 暖機 1 s＋觀察 1 s
+        self.assert_incomplete(rows, 'observe_coverage')
+
+    def test_r2_nan_pose(self):
+        rows, _ = synth('zero')
+        I = self.I()
+        rows[700][I['pose_after']] = [float('nan'), 0.0, 0.0]
+        self.assert_incomplete(rows, 'required_field_invalid')
+
+    def test_r2_pose_jump(self):
+        rows, _ = synth('zero')
+        I = self.I()
+        rows[700][I['pose_before']] = [rows[700][I['pose_before']][0] + 1e-4] + rows[700][I['pose_before']][1:]
+        self.assert_incomplete(rows, 'pose_not_continuous')
+
+    def test_r2_missing_required(self):
+        rows, _ = synth('zero')
+        I = self.I()
+        rows[300][I['cmd_body']] = None
+        self.assert_incomplete(rows, 'required_field_invalid')
+        rows, _ = synth('zero')
+        rows[300] = rows[300][:-1]
+        self.assert_incomplete(rows, 'row_shape')
+
+    def test_r2_api_readback_na(self):
+        rows, _ = synth('zero')
+        I = self.I()
+        for r in rows:
+            r[I['v_readback_after_write']] = None
+        s = C.summarize(rows)
+        self.assertTrue(s['complete'])
+        self.assertEqual(s['api_write_readback_maxdiff_mm_s'], 'NA')
+        self.assertEqual(s['api_write_readback_n_valid'], 0)
+        rows, _ = synth('zero')
+        rows[900][I['v_readback_after_write']] = [float('nan'), 0, 0]
+        s = C.summarize(rows)
+        self.assertEqual(s['api_write_readback_maxdiff_mm_s'], 'NA')
+        self.assertEqual(s['api_write_readback_n_valid'], 999)
+
+    def test_r2_optional_wheel_na(self):
+        rows, _ = synth('zero')
+        I = self.I()
+        for r in rows:
+            r[I['rim_qd']], r[I['roller_qd_absmax']], r[I['v_after_step']] = None, None, None
+        s = C.summarize(rows)
+        self.assertTrue(s['complete'])
+        self.assertEqual(s['class'], 'same_kind')
+        self.assertEqual(s['step_dv_after_minus_written_median_mm_s'], 'NA')
+
+    def test_r2_park_steady_incomplete(self):
+        rows, src = synth('park_hold')
+        del rows[600]
+        self.assertIsNone(C.park_steady(rows, src.anchor))
 
     def test_unknown_mode(self):
         with self.assertRaises(ValueError):
