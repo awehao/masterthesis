@@ -11,3 +11,9 @@
 - **保護**：完整（LW_HEALTH sim exited/0、obs exited/0）。
 - **處置**：依 p2b §6 停止重試，另立 p2c 交棒前置條件（`results/specs/K3M_pause_p2c_handover_precondition.md`）。
 - **影片**：機器人無動作，仍依規定交 side／close 實錄重播。
+
+## 更正（2026-10-24，p2c_1 之後查到）
+- 本趟執行時 `python3` 指向專案虛擬環境 `.venv-dl0`（numpy 2.5.2、無 osqp），不是先前各趟所用的系統 Python。原因是重開機後 VS Code 終端自動啟用該環境。
+- 因此本趟屬**環境錯誤**，不計入受測結果。展開端啟動較慢與這個環境的關係未驗證。
+- 「冷啟動」「系統負載」都只是同期觀察，不作為原因。
+- 見 `runs/door_k3m_pause_p2c_1/analysis/NOTE_k3m_pause_p2c_1_result.md`。

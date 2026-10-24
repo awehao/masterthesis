@@ -45,3 +45,9 @@
 完整：觀察器存活、未觸發；LW_HEALTH 為 sim exited／0、obs exited／0。
 
 影片：本趟機器人沒有動作（停在停位 31.7 s），仍依規定交 side／close 實錄重播，與 p2b_2 一起產生。
+
+## 更正（2026-10-24，p2c_1 之後查到）
+- 本趟執行時 `python3` 指向專案虛擬環境 `.venv-dl0`（numpy 2.5.2、無 osqp），不是先前各趟所用的系統 Python。原因是重開機後 VS Code 終端自動啟用該環境。
+- 因此本趟屬**環境錯誤**，不計入受測結果。展開端啟動較慢與這個環境的關係未驗證。
+- 「冷啟動」「系統負載」都只是同期觀察，不作為原因。
+- 見 `runs/door_k3m_pause_p2c_1/analysis/NOTE_k3m_pause_p2c_1_result.md`。
