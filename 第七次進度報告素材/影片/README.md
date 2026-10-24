@@ -14,6 +14,7 @@
 |---|---|---|---|---|---|
 | door_k3ab_lw_1 | K2 閂鎖後長窗停止診斷（固定底盤 K3-A-B） | 任務未通過（finger_contact_lost）；閂鎖後 10.11 s 未確認停止：門 0.68→3.16°、底盤約 29 mm；殼—橫桿取樣最小 4.39 mm、非設計接觸 0 | [側視](door_k3ab_lw_1_側視_實錄重播.mp4)（正式；重播 RUN_ID door_k3ab_lw_1_replay_side_r3：317/317 幀，姿態核對 0 偏差，replay_check complete）；[近景](door_k3ab_lw_1_近景_實錄重播.mp4)（正式；door_k3ab_lw_1_replay_close_r3：317/317 幀，姿態 0 偏差，complete） | 該趟實錄重播（2 倍速） | 完成 |
 | door_k3ab_lw_ev2r_1 | 根／門扇三點讀取取證（同 lw 配置，只加紀錄） | 已跑（10/24）：任務未通過（finger_contact_lost）；取證完整；閂鎖後 10.11 s 未確認停止：門 3.12°、底盤 28.4 mm；殼—橫桿取樣最小 4.43 mm | [側視](door_k3ab_lw_ev2r_1_側視_實錄重播.mp4)、[近景](door_k3ab_lw_ev2r_1_近景_實錄重播.mp4)（正式；replay_side_r3／close_r3：320/320 幀，姿態 0 偏差，complete） | 該趟實錄重播（2 倍速） | 完成 |
+| door_k3m_pause_1 | K3-M 底盤可動小角度協同開門＋受控暫停（單趟） | **OPEN 首次完整**：門開到 8.05°（23.1→33.0 s），進 SETTLE；38.3 s 被執行端走廊偏航內側帶（−0.80° > 0.8°）閂鎖中止；受控暫停**未執行**。SETTLE 角速子條件因門速欄位（≈0.016 rad/s）與門角實際變化（≈0.00015 rad/s）不一致而未成立 | [側視](door_k3m_pause_1_側視_實錄重播.mp4)、[近景](door_k3m_pause_1_近景_實錄重播.mp4)（414/414 幀，姿態 0 偏差，complete） | 該趟實錄重播（2 倍速） | 完成 |
 
 **預覽（不完整，非正式；已被正式側視版取代）**：`預覽_不完整/door_k3ab_lw_1_side_r2_預覽_不完整.mp4`
 - 來源 door_k3ab_lw_1，側視，2 倍速，15.9 s。
@@ -24,6 +25,7 @@
 第一次重播失敗紀錄（重播工具失敗）：`evaluation/runs/door_k3ab_lw_1_replay_side`、`_close`，`evaluation/runs/door_k3ab_lw_ev2r_1_replay_side`、`_close`。原因與修正見 `規格/K3_replay_spec_r3.md`。
 
 **關鍵時刻（影片時間，2 倍速；側視與近景相同）**
+- door_k3m_pause_1（20.7 s）：對準開始 5.1、夾持開始 9.5、夾持保持 11.0、OPEN 開始 11.5（之後底盤後退、門開到 8°，約 16.5 s 進入穩定相位）、策略中止（executor_violation：走廊偏航）19.1 s。
 - door_k3ab_lw_1（15.9 s）：對準開始 3.5、夾持開始 7.8、夾持保持 9.3、OPEN 開始 9.9、策略中止（finger_contact_lost）10.7、執行端閂鎖（命令歸零）10.7、停止後漂移 11.2 s 起至片尾。
 - door_k3ab_lw_ev2r_1（16.0 s）：對準開始 3.5、夾持開始 8.0、夾持保持 9.5、OPEN 開始 10.0、策略中止（finger_contact_lost）10.9、執行端閂鎖 10.9、停止後漂移 11.4 s 起至片尾。
 
