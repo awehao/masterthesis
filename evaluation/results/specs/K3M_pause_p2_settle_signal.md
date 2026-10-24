@@ -1,0 +1,69 @@
+# K3-M 暫停 p2：SETTLE 完成訊號改用門角差分（已實作＋測試＋凍結 p2 r1；**未開跑**）
+
+依 Codex 20261024_101421：
+- (a) 只更換 SETTLE 完成判斷的門速來源；
+- (b) 不加偏航保持，也不放寬走廊。
+
+door_k3m_pause_1 仍依原規則判失敗，不回頭改判。
+
+## 1. 改動（只有這一處控制差異）
+- **新訊號**：`door_k3m_settle_sig.SettleRateWindow`。
+  - 輸入：執行端 `/door/sync_state`，50 Hz（偶數物理步）。只收被 SyncTracker 接受的新狀態。
+  - 計算：0.1 s 因果後向差分，rate＝(q₁−q₀)/(t₁−t₀)。樣本 1＝最新樣本，必須正是本輪量測所用的步號；樣本 0＝t ≤ t₁−0.1 的最晚樣本。
+  - **不算低速**（valid=False）：
+    - no_sample；
+    - step_mismatch；
+    - stale（最新樣本牆鐘年齡 > 0.2 s）；
+    - short_window；
+    - long_window（t₁−t₀ > 0.13 s）；
+    - gap（窗口內相鄰間隔 > 0.03 s，即缺步）；
+    - nonfinite。
+  - 重送：不進窗口，不會製造零差分。倒退或非有限：清空窗口，要重新累積滿 0.1 s。
+- **策略**：`door_k3m_policy_p2.K3MP2Policy`，繼承 p 版。
+  - 只在 SETTLE 相位把角速子條件換成 `|settle_sig.rate| ≤ 0.002 且 valid`。
+  - 角度 ±0.5°、抓取漂移、兩指 ≥ 0.5 N、連續 1 s 都照舊。訊號無效時不算低速，連續計時重設（記錄原因）。
+  - **`m.qdot_door` 不覆寫**：tensor 門速 0.05 rad/s 保護、走廊、幾何、K2 閂鎖照舊執行（K3MPolicy.monitor）。
+  - 條件成立後與 p 版相同：轉 PAUSE，以最後一筆已發布目標（完整 4×4）提出請求，握手不變。
+- **任務節點** `door_k3m_task_node_p2.py`（p 版複本）：
+  - 同步回呼另餵窗口；每輪 `m.settle_sig`；
+  - trace 每列記 `settle_sig` 與 `settle`（子條件、連續時間）；
+  - task.json 另記 `k3m_settle`（重設、窗口異常）；schema 改為 `door_k3m_task_p2/1`。
+- **判定器** `door_k3m_check_p2.py`：
+  - K3-M 判準與暫停 P1–P4 照用 check_p，原始門速全程 ≤ 0.05 的核對保留。
+  - **只移除**父判定器的 `settle_condition_not_held_1s`（它含 raw q̇ ≤ 0.002），改由 S1／S2 重算：
+    - **S1**：PAUSE 前 1 s 逐物理步重算角度、漂移、兩指；同步節奏（偶數步）上每步 10 步後向差分 ≤ 0.002（窗口步號連續）。
+    - **S2**：trace 各列 settle_sig 與 room 同步號的門角、時間、rate 一致；轉換事件的訊號 valid 且 ≤ 0.002；轉換前 1 s 的 SETTLE 列全部 valid 且低速。
+  - 未進 PAUSE ⇒ `settle_p2_unverifiable`。
+- **跑法** `run_door_k3m_pause_p2.sh`（p 版複本）：只換任務節點、凍結與判定器字樣。
+
+增益、權重、限制、門檻、走廊、幾何監看、求解器、執行端、adapter 都不改。
+
+## 2. 以 door_k3m_pause_1 離線重播（只讀；`runs/door_k3m_pause_1/analysis/settle_p2_offline_replay.json`）
+- 輸入對照：trace 494 列的步號全為偶數，門角與房間逐步紀錄相差 ≤ 5e-9 rad。
+- 結果（SETTLE 共 63 列，33.02–38.20 s）：
+  - 窗口 63 列全部 valid，窗口異常 0；
+  - rate ≤ 0.002 有 59 列（tensor 欄位只有 1 列）；
+  - 角度與兩指子條件 63 列都成立。
+- 連續成立自 **33.38 s** 起，**34.40 s** 滿 1 s，期間重設 0 次。這與 Codex 的描述性核對一致。
+- 只描述候選觸發條件在該趟資料上的行為，不代表改後軌跡或暫停會成功。
+- 限制：stale 在離線無法重現（牆鐘以模擬時間代入）。漂移子條件在未中止期間恆成立（同一門檻即中止），不另重算。
+
+## 3. 測試（全部通過）
+| 測試 | 項目 |
+|---|---|
+| `test_door_k3m_settle_p2.py` 窗口 5 | 正常差分；重送不進窗口；倒退／非有限清空需重新累積；short_window、gap、step_mismatch、stale、no_sample；判定器重算函式 |
+| 同檔策略 6 | **N1** tensor 欄位固定 0.016：p 版 `timeout:SETTLE`，p2 進 PAUSE→DONE，事件 qdot 仍是 0.016（未覆寫）；**N2** 同步流中斷 ⇒ 不進 PAUSE；**N3** 短暫低速後門再動 ⇒ 重設（rate），PAUSE 晚於最後重設 ≥ 1 s；**N4** 差分低但 tensor 0.06 ⇒ `door_rate` 中止；**N5** 缺步 ⇒ 重設 `sig_invalid:gap`；**N6** 凍結目標＝PAUSE 期間目標（4×4）、seq＝2、兩 ack 照舊 |
+| `test_door_k3m_check_p2.py` 8 | 一致 ⇒ 無理由；差分 0.003；0.1 s 內短暫移動；窗口缺步；覆蓋不足；trace 訊號竄改或缺欄；轉換訊號 invalid；轉換前 1 s 有 invalid 列；未進 PAUSE；judge 只移除父理由、`door_rate` 等保留 |
+| `test_door_k3m_task_node_p2_ros.py` 2 | 暫停握手路由照舊（p 版複本）；`/door/sync_state` 的重送與倒退不進窗口，窗口值＝0.1 s 差分 |
+| 回歸 | test_door_k3m_policy_p 5、check_p 4、pause_sup 13、pause_mode 4、applied_src 5、task_node_p_ros 1、k3m_policy 12、k3a_policy 18 |
+| 本趟紀錄 | check_p2 對 door_k3m_pause_1：理由與 check_p 相同，另加 `settle_p2_unverifiable`（未進 PAUSE） |
+
+## 4. 凍結
+`evaluation/results/door/freeze_door_k3m_pause_p2_dev_r1.sha256`，172 檔：
+- r3 的 163 檔原樣保留；
+- 新增 9 檔：settle_sig、policy_p2、task_node_p2、check_p2、run p2、離線重播、三個測試。
+
+## 5. 申請單趟 `door_k3m_pause_p2_1`
+- **跑法**：`RUN_ID=door_k3m_pause_p2_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_k3m_pause_p2.sh bash evaluation/run_guarded_v2.sh`
+- **保護**：既有閂鎖與監看、獨立觀察器、92 °C。若仍走廊越界，照實失敗，不延長等待。
+- **分報**：任務、SETTLE 完成訊號、命令停止、實際停止、保護完整性。附 side／close 該趟實錄重播。
