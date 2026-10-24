@@ -20,7 +20,7 @@
 # 不接 --coord-topic（無 MotM）。收尾只停本趟 PID。
 # **W1d 版**（run_door_wide_w1c.sh 的複本；Codex 20261025_010414，規格 W1d_pause_reanchor_spec.md）：W1c r2 全部設定不變（含偏移保持），
 #   唯一差異＝求解器改 dl3_wgmpc_wg2_adm10_node.py＋--pause-hold-reanchor --pause-reanchor-max-age-s 0.2（首次 ZERO_PUB 以實測底盤位姿一次性重設保持伺服錨點）；
-#   登錄 w1d_params_30.json；判定器 door_k3m_check_w1d.py；凍結 freeze_door_wide_w1d_dev_r1。單一變因候選，非已確認解法；未核可前不得執行。
+#   登錄 w1d_params_30.json；判定器 door_k3m_check_w1d.py（r2）；凍結 freeze_door_wide_w1d_dev_r2（Codex 20261025_012250 條件式核可單趟）。單一變因候選，非已確認解法。
 #   env -u VIRTUAL_ENV PATH=<去掉 .venv-dl0> RUN_ID=door_wide_w1d_30_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_wide_w1d.sh bash evaluation/run_guarded_v2.sh
 # **W1c 版**（run_door_wide_w1b.sh 的複本；Codex 20261025_002129，規格 W1c_offset_hold_spec.md）：w1b r2 全部設定不變，
 #   唯一差異＝求解器改 dl3_wgmpc_wg2_adm9_node.py＋--offset-hold-on-free（首次切 free 起偏移估計保持）；登錄 w1c_params_30.json；
@@ -65,7 +65,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_wide_w1d_dev_r1.sha256
+FRZ=evaluation/results/door/freeze_door_wide_w1d_dev_r2.sha256
 W1B_THETA="${W1B_THETA:-30}"
 PRM=evaluation/results/door/w1d_params_${W1B_THETA}.json   # W1d：w1c 內容＋solver_change.pause_hold_reanchor
 STAND='0.6,-0.5332,1.570796'

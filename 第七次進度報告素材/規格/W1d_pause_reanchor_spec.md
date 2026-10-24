@@ -1,4 +1,4 @@
-# W1d：主動保持段伺服錨點一次性重設（單一變因候選）——差異規格＋實作＋測試＋凍結 w1d r1（**未開跑**）
+# W1d：主動保持段伺服錨點一次性重設（單一變因候選）——差異規格＋實作＋測試＋凍結 w1d r1／r2（r2 經 Codex 條件式核可單趟）
 
 依 Codex 20261025_010414：
 - 同意將「保持段伺服錨點一次性重設」做成版本化規格＋實作＋測試；
@@ -105,3 +105,38 @@
   - 重設前後的底盤保持命令、底盤實測速度、TCP 相對把手位移、殼—桿淨空、門續轉速率。
 - 對照 w1c_30_1 暫停期，只作單趟描述，不作統計結論。
 - 附 side／close 影片。
+
+## 7. r2（Codex 20261025_012250：條件式核可單趟；只補判定器，不改控制）
+- Codex 確認：
+  - 下一輪生效可以。精確措辭：「邊緣輪已按舊錨點算好命令，稍後發布該命令；新錨點自下一次求解使用」。
+  - 中止優先只涵蓋已收到的停止請求與監督器 FAIL，不宣稱能提前知道尚未送達的幾何中止。
+  - 來源 q0＝snap.q，不是延遲預測位姿。
+  - 不算放寬或新增補償。但「在加速度框內」不等於物理上平順，仍須通過輪級與最終發布可行性核對。
+  - 1e-5 是紀錄一致性容差，不是物理精度保證。
+- Codex 在 r1 夾具上做了記憶體內反例，以下情況 r1 判定器仍誤收：
+  - 刪生效後列的錨點欄位；
+  - 刪全部發布可行性；
+  - source_step 改成不存在；
+  - effective.sim_t 改成 −99、goal_u 改成 NaN。
+- 判定器 w1d r2：
+  - **作用期覆蓋**：
+    - 自 applied_pause 那一輪起，每個求解列（帶 solve_in）都必須有 pause_state、pause_anchor_used、park_anchor，缺欄不篩掉。暫停觀察診斷列（無 solve_in）另計。
+    - 暫停期已發布列必須是求解列。
+    - 錨點依 slot 判定：hold 事件 slot 前（減速段）必須為空；之後 < effective＝old、≥ effective＝new。不靠數值是否相同，所以 old＝new 合法。
+    - 已發布列 pause_published_feasible.ok 必須**明確為 True**；未發布的求解列只容許 pause_no_publish。
+  - **來源**：
+    - source_step.slot／snap_sim_t＝邊緣列 slot／sim_t；source_sim_t＝snap_sim_t。
+    - 底盤來源以同輪快照時間定位，設定點步號只作註記，不當底盤步號。
+    - 邊緣列 pause_reanchor_edge 與 stats 逐欄相同；reanchor 事件 slot／sim_t 在邊緣列。
+    - age_s 重算＝edge_sim_t − source_sim_t，須 ≤ 登錄上限，且 stats max_age＝登錄值。
+    - edge_sim_t 落在邊緣列的 [sim_t, publish_sim_t_exact]。
+  - **生效**：
+    - effective.slot／sim_t＝邊緣之後第一筆求解紀錄列。
+    - goal_u＝以新錨點、該列 room_run 實測位姿、求解端伺服參數重算的 park_hold_cmd（≤ 1e-4）。
+  - 時間對位容差改為 5e-6 s：w1c_30_1 實測求解紀錄與 room_run 的 sim_t 差 1.0e-6，正好卡在原 1e-6 邊界；物理步 0.01 s，不會配錯步。
+- `test_door_k3m_check_w1d.py` 擴為 22 項：
+  - 新增 D16–D22：Codex 的四類反例、邊緣紀錄、事件、時間越界、減速段非空錨點、ok 非明確 True、age 超過登錄上限。
+  - **D20 old＝new 合法零位移重設 ⇒ 通過**。
+- 回歸全過：純邏輯 22、假世界 R0–R3、w1c、w1b 判定器、ADM9 保持邏輯。
+- ADM10、登錄、增益、門檻、保護與 r1 相同；凍結 `freeze_door_wide_w1d_dev_r2.sha256`。
+- 核可：起跑前核對通過即可直接跑一次 `door_wide_w1d_30_1`。這趟回答「重設參考後是否改善暫停期相對位移與淨空下降」，不推進 W2。
