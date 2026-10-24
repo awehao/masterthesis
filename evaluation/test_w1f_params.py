@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """W1f 60° 登錄與跑法的離線測試（Codex 20261025_030420：差異規格＋離線核對＋最小實作／測試）。
   P1 θ 相關項逐字＝door_w1b_params.py 60 的推得結果（w1b_params_60_r2.json），且 derived_from sha256 對上；
+     r2（Codex 20261025_031137）：登錄 w1f_params_60_r2 只更正停止餘量說明並登錄 31–64° 內帶核對（新增 891 樣本 IK 未核 0、淨空不符 0、走廊表 sha 一致）；
   P2 solver_change／executor_change 與 W1e 登錄逐字相同（OPEN 5 N、暫停期 20 N、ADM9 偏移保持）；
   P3 規則值：θ 60、任務上界 61、觀察器 64、OPEN 逾時＝斜坡＋20.3 s（82.0）、包絡餘裕核對 ok、內帶 20 mm／0.8° 不變；
   P4 走廊表角度涵蓋 ≥ 觀察器上限 64°，表 sha256＝登錄；
@@ -29,11 +30,26 @@ def ld(n):
 class T(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.f, cls.b, cls.e = ld('w1f_params_60.json'), ld('w1b_params_60_r2.json'), ld('w1e_params_30.json')
+        cls.f, cls.b, cls.e = ld('w1f_params_60_r2.json'), ld('w1b_params_60_r2.json'), ld('w1e_params_30.json')
+        cls.f1 = ld('w1f_params_60.json')
 
     def test_p1_theta_items_from_rule(self):
-        for k in ('theta_goal_deg', 'task_param_extension', 'protection_scope_change', 'control_cost_change', 'pause', 'reference_table_note'):
+        for k in ('theta_goal_deg', 'task_param_extension', 'control_cost_change', 'pause', 'reference_table_note'):
             self.assertEqual(self.f[k], self.b[k], k)
+        pc, pb = dict(self.f['protection_scope_change']), dict(self.b['protection_scope_change'])
+        chk = pc.pop('corridor_inner_offline_check')
+        self.assertIn('不是 60° 停止安全保證', pc.pop('stop_residual_source'))
+        pb.pop('stop_residual_source')
+        self.assertEqual(pc, pb)                                                    # r2 只更正說明並登錄核對
+        self.assertEqual(chk['new_range'], dict(chk['new_range'], n_ik_unverified=0, n_clear_fail=0))
+        cf = json.load(open(os.path.join(WS, chk['file'])))
+        new = [x for x in cf['samples'] if 32 <= x['q_deg'] <= 64 and x['inner']]
+        self.assertEqual(len(new), chk['new_range']['n_inner'])
+        self.assertTrue(all(x['ik'] and x.get('ok') for x in new))
+        self.assertEqual(cf['table_sha256'], pc['corridor_table_sha256'])
+        for k in self.f1:                                                           # r1 其餘逐字相同
+            if k not in ('schema', 'protection_scope_change'):
+                self.assertEqual(self.f[k], self.f1[k], k)
         df = self.f['derived_from']
         self.assertEqual(df['w1b_params_60_r2'], hashlib.sha256(open(os.path.join(D, 'w1b_params_60_r2.json'), 'rb').read()).hexdigest())
         self.assertEqual(df['w1e_params_30'], hashlib.sha256(open(os.path.join(D, 'w1e_params_30.json'), 'rb').read()).hexdigest())

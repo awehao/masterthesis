@@ -1,0 +1,121 @@
+{
+ "schema": "w1f_params/2",
+ "theta_goal_deg": 60.0,
+ "task_param_extension": {
+  "theta_goal_deg": 60.0,
+  "over_goal_deg": 1.0,
+  "policy_upper_deg": 61.0,
+  "ramp_s": 61.7,
+  "ramp_8deg_s": 9.700000000000001,
+  "open_margin_s_from_8deg": 20.3,
+  "open_timeout_s": 82.0,
+  "rule": "OPEN 逾時＝完整斜坡（含末段減速）＋ 8° 版絕對餘裕 20.3 s"
+ },
+ "protection_scope_change": {
+  "corridor_table": "evaluation/results/door/door_wide_corridor_table_90.json",
+  "corridor_table_sha256": "c237ecd8adcfa1a2a526adfa59e678064710579bb8912d2ab2aa478471c1c3c8",
+  "corridor_inner_mm": 20.0,
+  "corridor_inner_deg": 0.8,
+  "envelope": {
+   "fwd_lo": -0.44561046113299985,
+   "fwd_hi": 0.03849223930511797,
+   "lat_lo": -0.03913624466754678,
+   "lat_hi": 0.6945775973187062,
+   "yaw_abs_deg": 20.01898683227073,
+   "cli": "-0.4456,0.0385,-0.0391,0.6946,20.0190",
+   "rule": "完整外帶 ±40 mm／±4.5° 在參考位姿座標以 SE(2) 合成的角點，於 [0, θ+1°] 轉回走廊表錨點座標後的範圍"
+  },
+  "envelope_margin_check": {
+   "inner_plus_stop_residual": [
+    0.032600000000000004,
+    3.7
+   ],
+   "composition": "SE2：ref(q) ⊕ 偏移（參考位姿座標）",
+   "min_margin_m_or_deg": {
+    "fwd_lo": 0.009110136551689019,
+    "fwd_hi": 0.007402150118709538,
+    "lat_lo": 0.007402150118709573,
+    "lat_hi": 0.009110136551689019,
+    "yaw": 0.8000000000000007
+   },
+   "ok": true
+  },
+  "old_envelope_8deg": [
+   -0.15,
+   0.02,
+   -0.05,
+   0.1,
+   6.0
+  ],
+  "observer_door_max_deg": 64.0,
+  "observer_rule": "固定角度餘裕 θ＋4°（與任務上界 θ＋1° 分開登錄）",
+  "stop_residual_source": "door_k3m_offline_stop（8° 情境 12.6 mm／2.9°；60° 斜坡速率與 8° 版相同，停止餘量沿用 8° 情境假設——**不是 60° 停止安全保證**）",
+  "corridor_inner_offline_check": {
+   "file": "evaluation/results/door/door_wide_offline_corridor_64_o20_tbl_ref.json",
+   "range_deg": [
+    -1,
+    64
+   ],
+   "new_range_deg": [
+    32,
+    64
+   ],
+   "new_range": {
+    "n_inner": 891,
+    "n_ik_unverified": 0,
+    "n_clear_fail": 0,
+    "min_non_finger_env_m": 0.0072,
+    "min_fingers_to_door_parts_m": 0.0357,
+    "min_to_posts_m": 0.0529,
+    "min_base_clear_m": 0.1219,
+    "min_joint_margin_rad": 0.7932
+   },
+   "method": "door_wide_offline_corridor.py r3（同一走廊表、參考位姿座標 SE(2) 合成、內帶 ±20 mm／±0.8° 中心與邊界、既有 IK only_prev 與淨空判準）"
+  }
+ },
+ "control_cost_change": {
+  "guidance": {
+   "k_lin": 1.0,
+   "k_yaw": 1.0,
+   "v_cap": 0.02,
+   "w_cap": 0.05,
+   "w_vref": 1.0,
+   "w_qn": 0.0
+  },
+  "coord_topic": "/door/wide_coord",
+  "phases_on": [
+   "OPEN",
+   "SETTLE"
+  ],
+  "phases_off_weight": 0.0,
+  "note": "只經求解器既有協同輸入（parse_coord v1）作為軟成本，不新增獨立底盤命令來源；PAUSE 起 w_vref＝0"
+ },
+ "pause": "p4b（主動保持停止、手臂 0.5 s 窗口）＋判定器 p4b2（起跑前凍結）",
+ "reference_table_note": "延伸表與 8° 舊表在 0–6° 一致；8° 參考偏航相差約 0.116°（舊表含 8° 目標前減速），不稱完全相同",
+ "solver_change": {
+  "offset_hold_on_free": true,
+  "node": "dl3_wgmpc_wg2_adm9_node.py",
+  "rule": "底盤模式首次切入 free 的那一輪（本輪觀測器更新之前）凍結 d̂＝當時已可取得值；觀測器內部、延遲預測、QP 偏差一致保持，持續到 PAUSE／DONE 或中止",
+  "source": "Codex 20261025_002129：單一變因候選，非已確認解法"
+ },
+ "executor_change": {
+  "pause_finger_max_effort": 20.0,
+  "original_effort": 5.0,
+  "joints": [
+   "finger_joint1",
+   "finger_joint2"
+  ],
+  "node": "isaac_door_k2_sim_ev5.py",
+  "switch": "執行端暫停切換那一步（world.step 之前；與 /door/pause_ack_exec 同一步），只設一次；之後每 1 s 讀回核對",
+  "rule": "只改兩指有效驅動輸出上限（ArticulationController.set_max_efforts）；閉合目標、kp 1e4／kd 1e3、摩擦、手臂／底盤控制與所有判準不變；不是直接設定接觸法向力",
+  "value_basis": "原上限＝URDF finger_joint1／2 effort 5（Codex 20261025_023608 查得）；W1c 暫停期手指開度約 1.67 mm ⇒ 位置驅動需求 kp·Δq ≈ 16.7 N > 5；取 20 N 使該需求不被上限截斷。夾爪實機額定未查，揭露",
+  "source": "Codex 20261025_023608：單一變因候選，非已確認解法；基準 W1c r2，不疊加 W1d 重設"
+ },
+ "derived_from": {
+  "w1b_params_60_r2": "23993d8c9105e5a08822002da736383b5ad23c84f5828003d5fb7a7f982dac4e",
+  "w1e_params_30": "4088f1f795022681ac244878933d075f10f7f95ada29ab71c973da2b859ded84",
+  "rule": "θ 相關項（任務參數、走廊／包絡／觀察器、逾時）＝door_w1b_params.py 60 推得（r2 規則，不手調）；solver_change／executor_change 與 W1e 逐字相同"
+ },
+ "note_w1f": "W1f＝W1e 控制配置不變（ADM9 偏移保持、p4b 暫停、引導、暫停期手指上限 20 N、OPEN 5 N），只把 θ_goal 由 30° 延伸到 60°（Codex 20261025_030420）。",
+ "note_w1f_r2": "r2（Codex 20261025_031137）：只更正 stop_residual_source 殘留說明並登錄 31–64° 內帶偏移構型離線核對；其餘逐字同 w1f_params_60.json（r1 保留）。"
+}

@@ -19,8 +19,8 @@
 # **不起導航**（直接生成在停位）。求解器參數＝runs/dl3v_M/align_solver.json args，**只差**：--park-hold（K2 底盤停車伺服）、
 # 不接 --coord-topic（無 MotM）。收尾只停本趟 PID。
 # **W1f 版**（run_door_wide_w1e_r3.sh 的複本；Codex 20261025_030420，規格 W1f_wide_open_60_spec.md）：W1e 控制配置不變，唯一差異＝θ 60°
-#   （登錄 w1f_params_60.json＝door_w1b_params.py 60 推得＋W1e 的 solver_change／executor_change）；判定器 w1e2（登錄驅動）；凍結 freeze_door_wide_w1f_dev_r1。
-#   未核可前不得執行。env -u VIRTUAL_ENV PATH=<去掉 .venv-dl0> RUN_ID=door_wide_w1f_60_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_wide_w1f.sh bash evaluation/run_guarded_v2.sh
+#   （登錄 w1f_params_60.json＝door_w1b_params.py 60 推得＋W1e 的 solver_change／executor_change）；判定器 w1e2（登錄驅動）；凍結 freeze_door_wide_w1f_dev_r2（Codex 20261025_031137 條件式核可單趟）。60° 不作通行成果。
+#  env -u VIRTUAL_ENV PATH=<去掉 .venv-dl0> RUN_ID=door_wide_w1f_60_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_wide_w1f.sh bash evaluation/run_guarded_v2.sh
 # **W1e r3 版**（run_door_wide_w1e.sh 的複本；Codex 20261025_025410 條件式核可重複一趟 door_wide_w1e_30_2）：唯一差異＝凍結 freeze_door_wide_w1e_dev_r3
 #   （w1e r2 全部＋判定器 w1e2 與其測試）、結尾判定器名稱 w1e2。控制、20 N 切換時機、模型、判準全部不變。
 #   env -u VIRTUAL_ENV PATH=<去掉 .venv-dl0> RUN_ID=door_wide_w1e_30_2 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_wide_w1e_r3.sh bash evaluation/run_guarded_v2.sh
@@ -71,9 +71,9 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_wide_w1f_dev_r1.sha256
+FRZ=evaluation/results/door/freeze_door_wide_w1f_dev_r2.sha256
 W1B_THETA="${W1B_THETA:-60}"
-PRM=evaluation/results/door/w1f_params_${W1B_THETA}.json   # W1f：60° 推得＋W1e 的 solver_change／executor_change
+PRM=evaluation/results/door/w1f_params_${W1B_THETA}_r2.json   # W1f r2：60° 推得＋W1e 的 solver_change／executor_change＋停止餘量說明更正與 31–64° 內帶核對登錄
 STAND='0.6,-0.5332,1.570796'
 K2_READY='0,0,0.035,0,-1.5707963,0'
 Q_PRE='-0.9471,0.0758,1.6024,-1.539,-0.9479,-0.0544'
