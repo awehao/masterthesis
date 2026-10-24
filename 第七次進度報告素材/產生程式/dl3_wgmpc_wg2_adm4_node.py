@@ -899,22 +899,23 @@ class WGMPCNode(Node):
         if not self._pause_active():
             return
         d = list(m.data)
-        if len(d) != 13:
-            self._pause['events'].append({'sim_t': self.sim_now(), 'applied_src_bad_len': len(d)})
-            return
         try:
+            if len(d) != 13 or not all(math.isfinite(float(x)) for x in d) or float(d[0]) != int(d[0]) or float(d[2]) != int(d[2]):
+                raise ValueError(f'applied_src 格式不合（長度 {len(d)}）')
             self._pause_sup.applied(int(d[0]), float(d[1]), d[4:7], d[7:13], int(d[2]))
-        except (TypeError, ValueError) as e:
+        except (TypeError, ValueError, OverflowError) as e:                         # r2：錯誤回呼 ⇒ 明確 FAIL（不只記事件）
             self._pause['events'].append({'sim_t': self.sim_now(), 'applied_src_error': repr(e)[:120]})
+            self._pause_sup._fail('applied_invalid', self.sim_now())
 
     def _on_sync_pause(self, m):                                                      # ADM4：實際停止的量測來源
         if not self._pause_active():
             return
         d = list(m.data)
+        w = time.monotonic()
         if len(d) != 29:
-            self._pause_sup.ws.n_bad += 1
+            self._pause_sup.feed_state(float('nan'), float('nan'), 0, 0, 0, 0, [0] * 6, w)   # 斷點（不補值）
             return
-        self._pause_sup.feed_state(d[1], d[0], d[19], d[20], d[21], d[2], d[22:28])
+        self._pause_sup.feed_state(d[1], d[0], d[19], d[20], d[21], d[2], d[22:28], w)
 
     def _pause_status(self, slot, note=None):                                         # ADM4
         o = self._pause_sup.outcome(t_end=self.sim_now())
@@ -1118,7 +1119,7 @@ class WGMPCNode(Node):
                 break
             if self._pause_active() and self._pause_sup.state in ('STOPPED', 'DONE', 'FAIL'):   # ADM4：停止發布後只觀察（置於時間上限／halt／鏈失效檢查之後、gate 之前）
                 if self._pause_sup.state == 'STOPPED':
-                    self._pause_sup.cycle(self.sim_now(), True, True)
+                    self._pause_sup.cycle(self.sim_now(), True, True, wall=time.monotonic())
                 _o4 = self._pause_status(slot, note='observe_no_publish')
                 self.log.append(dict(slot=slot, sim_t=self.sim_now(), ok=False, reason='pause_observe', published=False,
                                      timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall, pause_state=_o4['state']))
@@ -1280,7 +1281,7 @@ class WGMPCNode(Node):
             _Tsrc4 = self._T_rx if self._T_rx is not None else self._T_last                # ADM4：話題目標；無話題時＝上一輪實際使用的目標
             if self._pause_sw is not None and self._pause_sw.pending is not None and _Tsrc4 is not None:   # ADM4：切入 pause
                 _Tf = np.array(_Tsrc4, float)
-                if self._pause_sw.apply([float(v) for v in _Tf[:3, 3]], stopped=self._stop_req is not None, snap_t=snap.sim_t):
+                if self._pause_sw.apply(_Tf, stopped=self._stop_req is not None, snap_t=snap.sim_t):   # r2：完整 4×4
                     self._pause.update(stage='decel', T=_Tf, anchor=None, zero_mode=False)
                     self._pause['events'].append({'sim_t': snap.sim_t, 'slot': slot, 'applied_pause': True,
                                                   'frozen_xyz': [float(v) for v in _Tf[:3, 3]], 'u_prev': [float(x) for x in u_prev]})
@@ -1315,7 +1316,7 @@ class WGMPCNode(Node):
                     _park_rec = None                                                  # ⇒ 不做停車伺服輸出核對
             if self._pause_active():                                                  # ADM4：底盤＝同一求解的等式（decel／hold／零速）
                 _ub4 = np.asarray(u_prev, float)[:3]
-                _sp4 = self._pause_sup.ws.speeds()
+                _sp4 = self._pause_sup.ws.speeds(snap.sim_t, time.monotonic())
                 _pose4 = [float(q0[0]), float(q0[1]), float(q0[2])]
                 if (self._pause['stage'] == 'decel' and _sp4 is not None and _sp4[0] <= self._park_servo.v_max
                         and _sp4[1] <= self._park_servo.w_max):
@@ -1550,7 +1551,7 @@ class WGMPCNode(Node):
             if not r.ok:
                 self._c_no_sol += 1
                 if self._pause_active():                                              # ADM4：暫停中求解失敗 ⇒ 監督器判失敗
-                    self._pause_sup.cycle(self.sim_now(), False, False)
+                    self._pause_sup.cycle(self.sim_now(), False, False, wall=time.monotonic())
                     self._pause_status(slot, note='solve_failed')
                 rec['published'] = False
                 self._log_solve(rec)
@@ -1663,7 +1664,8 @@ class WGMPCNode(Node):
             _zero4 = False
             if self._pause_active():                                                  # ADM4：監督器決定是否發布、是否零速
                 _act4 = self._pause_sup.cycle(self.sim_now(), True,
-                                              bool(self._pause['zero_mode'] and not any(self._pause['last_uh'] or [1.0])))
+                                              bool(self._pause['zero_mode'] and not any(self._pause['last_uh'] or [1.0])),
+                                              wall=time.monotonic())
                 rec['pause_state'] = self._pause_sup.state
                 if not _act4['publish']:
                     rec['published'] = False
@@ -1677,6 +1679,19 @@ class WGMPCNode(Node):
                     self._pause['zero_mode'] = True
                     _zero4 = True
                     _u_out = np.concatenate([np.asarray(self._pause['last_uh'], float), np.zeros(NU - 3)])
+                rec['pause_u_solve'] = [float(x) for x in np.asarray(r.u0, float)]       # r2：QP 求解值
+                rec['pause_u_published'] = [float(x) for x in np.asarray(_u_out, float)]  # r2：暫停處理後的最終發布值（零速段手臂為 0）
+                _fok4, _fwhy4 = PSUP.publish_feasible(_u_out, u_prev, self.cfg)
+                rec['pause_published_feasible'] = {'ok': _fok4, 'why': _fwhy4}
+                if not _fok4:                                                      # 最終發布值不在既有限制內 ⇒ 不發布、暫停失敗
+                    self._pause_sup._fail('published_infeasible:' + '+'.join(_fwhy4), self.sim_now())
+                    rec['published'] = False
+                    rec['reason'] = 'pause_published_infeasible'
+                    self._log_solve(rec)
+                    self._pause_status(slot, note='published_infeasible')
+                    slot, _m = self._reschedule(slot)
+                    self._c_miss += _m
+                    continue
             rec['publish_sim_t'] = round(self.sim_now(), 6)
             # 四段紀錄裡的 request 段**用同一個值**，不另算一次轉換
             u_world = self._publish_u(_u_out, float(q0[2]))

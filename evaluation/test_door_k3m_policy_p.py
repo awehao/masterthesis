@@ -47,7 +47,7 @@ class PSim(TM.MSim):
                     self.pol.on_pause_executor(ack, self.t, self.wall)
                     self.PS.on_executor_ack(ack, stopped=False, free_active=True)
             if self.pn == 2 and self.pause_solver and self.PS.pending is not None:
-                self.PS.apply(self.preq['frozen_target_xyz'], snap_t=self.t)
+                self.PS.apply(self.preq['frozen_target_T'], snap_t=self.t)
                 self.pol.on_pause_solver(self.PS.note_first_solution(9, self.t, True, self.t), self.t, self.wall)
             if self.pol.pause_state == 'active':
                 self.n_conf = self.n_conf if self.n_conf is not None else self.pn
@@ -86,6 +86,7 @@ class T(unittest.TestCase):
         req = next(e['k3m_pause_request'] for e in pol.events if 'k3m_pause_request' in e)
         T0 = s.pause_rows[0][1]
         np.testing.assert_allclose(req['frozen_target_xyz'], T0[:3, 3], atol=1e-12)
+        np.testing.assert_allclose(np.asarray(req['frozen_target_T']).reshape(4, 4), T0, atol=1e-12)   # 位置＋旋轉
         for t, T in s.pause_rows:
             np.testing.assert_array_equal(T, T0)                              # PAUSE 期間目標保持
         self.assertEqual(pol.pause_outcome['state'], 'DONE')

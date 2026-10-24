@@ -79,7 +79,7 @@ class K3MPPolicy(PM.K3MPolicy):
                 self.pause_t0 = m.t
                 T = self.last_target
                 req = self.pwaiter.make_request(int(getattr(m, 'state_step')), m.t, float(getattr(m, 'wall')),
-                                                int(self.pub_seq), [float(v) for v in T[:3, 3]])
+                                                int(self.pub_seq), T)                       # r2：完整 4×4（位置＋旋轉）
                 self.pause_outbox.append(req)
                 self.pause_state = 'waiting'
                 self.events.append({'t': m.t, 'k3m_pause_request': dict(req)})

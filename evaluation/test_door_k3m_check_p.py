@@ -22,13 +22,18 @@ XYZ = [0.8, -0.05, 0.85]
 def make(t_cmd_step=1015, n_end=2700, drift=None, gap=None):
     T = np.eye(4)
     T[:3, 3] = XYZ
-    task = {'schema': 'door_k3m_task_p/1', 'final_phase': 'DONE',
-            'trace': [{'pub_seq': 400, 'target': T.tolist()}],
-            'k3m_pause': {'request': {'run_id': 'r', 'seq': 2, 'mode': 'pause', 'req_t': 10.0, 'frozen_target_seq': 400, 'frozen_target_xyz': XYZ},
+    TF = [float(v) for v in T.reshape(-1)]
+    T_old = T.copy()
+    T_old[0, 3] -= 0.001
+    task = {'schema': 'door_k3m_task_p/1', 'final_phase': 'DONE', 'args': {'run_id': 'r'},
+            'trace': [{'t': 9.90, 'pub_seq': 399, 'target': T_old.tolist()}, {'t': 9.95, 'pub_seq': 400, 'target': T.tolist()},
+                      {'t': 10.05, 'pub_seq': 401, 'target': T.tolist()}],
+            'k3m_pause': {'request': {'run_id': 'r', 'seq': 2, 'mode': 'pause', 'req_t': 10.0, 'frozen_target_seq': 400, 'frozen_target_xyz': XYZ,
+                                      'frozen_target_T': TF},
                           't_exec_recv': 10.05, 't_solver_recv': 10.1, 'wall_req': 1.0, 'wall_exec_recv': 1.05, 'wall_solver_recv': 1.1,
                           'result': 'confirmed', 'outcome': {'state': 'DONE'}}}
     ea = {'run_id': 'r', 'seq': 2, 'mode': 'pause', 'switch_step': 1001, 'switch_t': 10.01}
-    sa = dict(ea, first_pause_slot=5, first_pause_sim_t=10.02, publish_sim_t=10.03, published=True, frozen_target_xyz=XYZ)
+    sa = dict(ea, first_pause_slot=5, first_pause_sim_t=10.02, publish_sim_t=10.03, published=True, frozen_target_xyz=XYZ, frozen_target_T=TF)
     steps = []
     for k in range(900, n_end):
         if gap and gap[0] <= k < gap[1]:
@@ -39,7 +44,7 @@ def make(t_cmd_step=1015, n_end=2700, drift=None, gap=None):
         src = 50 if zero else 40
         steps.append([k, t, [x, -0.53, 1.57], [0.0] * 6, 0.14, [0.0, 0.0, 0.0] if zero else [0.001, 0.0, 0.0],
                       [0.0] * 6 if zero else [0.01] + [0.0] * 5, [k, t, src, 0]])
-    room = {'steps_cols': COLS, 'steps': steps, 'k3m': {'pause_switch': ea}}
+    room = {'steps_cols': COLS, 'steps': steps, 'k3m': {'pause_switch': ea, 'config': {'run_id': 'r'}}}
     log = [{'published': True, 'sim_t': 10.05, 'pause_zero': False, 'pause_source_seq': 40},
            {'published': True, 'sim_t': 10.10, 'pause_zero': True, 'pause_source_seq': 50},
            {'published': True, 'sim_t': 10.15, 'pause_zero': True, 'pause_source_seq': 51}]
@@ -55,9 +60,40 @@ def reasons(task, room, solver):
     return why
 
 
+def flags(task, room, solver):
+    return C.check_pause(task, room, solver, [], {})
+
+
 class T(unittest.TestCase):
     def test_consistent(self):
         self.assertEqual(reasons(*make()), [])
+        self.assertEqual(flags(*make()), (True, True))
+
+    def test_codex_counterexamples(self):
+        t, r, s = make()                                                    # 完全缺暫停證據 ⇒ 分項皆 False
+        del t['k3m_pause']
+        self.assertEqual(flags(t, r, s), (False, False))
+        t, r, s = make()
+        r['k3m']['pause_switch']['run_id'] = 'other'
+        s['stats']['k3m_pause']['record']['ack']['run_id'] = 'other'
+        self.assertIn('pause_run_id_mismatch', reasons(t, r, s))
+        self.assertEqual(flags(t, r, s)[0], False)
+        t, r, s = make()
+        s['stats']['k3m_pause']['record']['ack']['published'] = False
+        self.assertIn('pause_solver_ack_not_published', reasons(t, r, s))
+        self.assertEqual(flags(t, r, s)[0], False)
+        t, r, s = make()                                                    # 請求前已有更新的目標（400），卻引用較舊的 399
+        t['k3m_pause']['request']['frozen_target_seq'] = 399
+        self.assertIn('pause_frozen_target_not_last_published', reasons(t, r, s))
+        t, r, s = make()                                                    # 位置相同、旋轉不同
+        import math
+        c, s_ = math.cos(0.01), math.sin(0.01)
+        Tr = list(t['k3m_pause']['request']['frozen_target_T'])
+        Tr[0], Tr[1], Tr[4], Tr[5] = c, -s_, s_, c
+        s['stats']['k3m_pause']['record']['ack']['frozen_target_T'] = Tr
+        self.assertIn('pause_solver_frozen_target_mismatch', reasons(t, r, s))
+        t, r, s = make(drift=0.003)                                         # 實際移動 ⇒ 命令停止 True、實際停止 False
+        self.assertEqual(flags(t, r, s), (True, False))
 
     def test_failures(self):
         t, r, s = make()
@@ -75,9 +111,6 @@ class T(unittest.TestCase):
         self.assertIn('pause_observation_incomplete', reasons(t, r, s))
         t, r, s = make(gap=(1500, 1503))
         self.assertTrue(any(w.startswith('pause_physical_data_invalid') for w in reasons(t, r, s)))
-        t, r, s = make()
-        t['trace'][0]['pub_seq'] = 399
-        self.assertIn('pause_frozen_target_not_last_published', reasons(t, r, s))
         t, r, s = make()
         r['k3m']['pause_switch'] = dict(r['k3m']['pause_switch'], switch_step=1002)
         self.assertIn('pause_ack_mismatch', reasons(t, r, s))

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # EV4 版（K3-M 受控暫停接入；規格 K3M_pause_integration_spec_draft1.md）：isaac_door_k2_sim_ev3.py 的複本。變更：
 #   (1) --cmd-env：求解端命令只經 adapter 封裝 /wb_vel_cmd_env（進鏈時以 E2 鏈 recv_seq 對照封裝 source_seq）；
-#       /wb_vel_cmd 照舊保留給展開節點（UNFOLD；求解端在封裝模式不走這條）。第一筆封裝後舊路徑仍收到命令 ⇒ 記 n_plain_after_env（判定器要求 0）；
+#       /wb_vel_cmd 照舊保留給展開節點（UNFOLD；求解端在封裝模式不走這條）。r2：第一筆封裝進鏈＝求解端接管，之後舊路徑命令**不進鏈**並走既有閂鎖中止；
+#       封裝進鏈前核對本趟 run_id、段別（adapter）、種類（normal）、derived 與序號（同序同值冪等、同序異值或倒序 ⇒ 違規中止）；
 #   (2) 每個實際物理步發布 /door/applied_src：[step, sim_t, source_seq（非正常套用／非全身控制 ⇒ −1）, 鏈模式（0 正常、1 逾時、2 停止、3 失效）,
 #       底盤本體 3, 手臂 6]，並寫入 room steps 新欄 applied_src＝[step, sim_t, source_seq, 鏈模式]；
 #   (3) 受控暫停握手的執行端權威（door_k3m_pause_mode.ExecutorPauseAuthority；/door/pause_req → /door/pause_ack_exec）；
@@ -949,7 +950,8 @@ def main() -> int:
     node.contacts_win = _new_win()
     k2_latch = KIO.K2AbortLatch()
     k3m = {'active': False, 'switch': None, 'violation': None, 'log': [], 'events': []}           # EV3
-    env_in, env_stats = K3MSRC.EnvIntake(), {'n_applied_src_reports': 0}    # EV4
+    env_in = K3MSRC.EnvIntake(run_id_num=ENV.run_id_num(a.run_id) if a.run_id else None, stage_id=ENV.ST_ADAPTER, kinds=(ENV.K_NORMAL,))   # EV4 r2
+    env_stats = {'n_applied_src_reports': 0}
     if a.park_gate_mobile:
         if not a.park_hold or not a.run_id or not a.corridor_table:
             print('[door] **--park-gate-mobile 需要 --park-hold、--run-id、--corridor-table** ⇒ 中止', flush=True)
@@ -1025,10 +1027,22 @@ def main() -> int:
                                   'chain_cmd_expired': _expired, 'handover_cancelled': True})
             print(f'[door] **K2 中止閂鎖** @ step {step_id}：{node.k2_abort_msg}；夾爪凍結 {_gnow}', flush=True)
         # 全身命令進鏈（閂鎖後丟棄）
-        if node.wb_latest is not None and a.cmd_env and env_in.n_recv > 0:         # EV4：第一筆封裝後舊路徑仍有命令 ⇒ 記為重疊（照原行為進鏈）
+        def _ev4_violation(_why4):                                                # EV4 r2：入口違規 ⇒ 既有 K2 閂鎖中止
+            env_stats.setdefault('violations', []).append({'sim_t': t, 'step': step_id, 'why': _why4})
+            if k2_latch.latched is None:
+                _gnow4 = (a.finger_open if node.grip_cmd is None else min(max(float(node.grip_cmd), a.finger_closed), a.finger_open))
+                k2_latch.on_msg(f'cmd_entry：{_why4}', step_id, t, _gnow4)
+                k2_latch.expire_chain(chain)
+                ex.cancel_handover(f'cmd_entry：{_why4}')
+                if a.park_gate_mobile:
+                    node.k3m_abort_pub.publish(String(data=json.dumps({'why': f'cmd_entry：{_why4}', 't': t, 'source': 'executor_ev4'},
+                                                                      default=float)))
+                rec['events'].append({'sim_t': t, 'step': step_id, 'k2_abort_latched_by_ev4': _why4})
+                print(f'[door] **EV4 命令入口違規**（閂鎖中止）@ step {step_id}：{_why4}', flush=True)
+        if node.wb_latest is not None and a.cmd_env and not env_in.plain_allowed():   # EV4 r2：接管後舊路徑命令不得進鏈
             env_stats['n_plain_after_env'] = env_stats.get('n_plain_after_env', 0) + 1
-            if env_stats['n_plain_after_env'] <= 20:
-                rec['events'].append({'sim_t': t, 'step': step_id, 'ev4': 'plain_wb_cmd_after_envelope'})
+            node.wb_latest = None
+            _ev4_violation('plain_cmd_after_takeover')
         if node.wb_latest is not None:
             _wbc = k2_latch.filter_wb(list(node.wb_latest[0]))
             if _wbc is not None:
@@ -1036,7 +1050,9 @@ def main() -> int:
             node.wb_latest = None
         if a.cmd_env and node.wb_env_latest is not None:                           # EV4：封裝入口；以 recv_seq 對照 source_seq
             _e4, node.wb_env_latest = node.wb_env_latest, None
-            env_in.receive(_e4, chain, t, filt=k2_latch.filter_wb)
+            _st4 = env_in.receive(_e4, chain, t, filt=k2_latch.filter_wb)
+            if _st4.startswith('violation:'):
+                _ev4_violation(_st4.split(':', 1)[1])
 
         # 交棒請求
         if node.ho_req is not None:
@@ -1588,7 +1604,8 @@ def main() -> int:
         rec['k3m']['pause_switch'] = k3m.get('pause_switch')                        # EV4
         rec['k3m']['pause_rejections'] = k3m_pauth.rejections
     if a.cmd_env:                                                                   # EV4：封裝與套用來源統計（含 n_plain_after_env）
-        rec['cmd_env'] = dict(env_stats, n_env_recv=env_in.n_recv, n_env_into_chain=env_in.n_into_chain, n_env_bad=getattr(node, 'wb_env_bad', 0), applied_src_cols=['step', 'sim_t', 'source_seq', 'chain_mode'],
+        rec['cmd_env'] = dict(env_stats, n_env_recv=env_in.n_recv, n_env_into_chain=env_in.n_into_chain, n_env_dup=env_in.n_dup,
+                              takeover_t=env_in.takeover_t, intake_violations=env_in.violations[:50], n_env_bad=getattr(node, 'wb_env_bad', 0), applied_src_cols=['step', 'sim_t', 'source_seq', 'chain_mode'],
                               chain_mode={'0': 'normal', '1': 'timeout', '2': 'stop_unverified', '3': 'fail'},
                               note='source_seq＝−1：本步不是正常套用的全身命令（逾時減速、停止、非全身控制或對照表外）')
     out = os.path.join(a.out, 'room_run.json')

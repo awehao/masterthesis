@@ -5,6 +5,8 @@
   - 求解端只認執行端 ack；套用後的**第一筆已發布** pause 解才回 ack，並帶回求解端實際凍結的目標位置 frozen_target_xyz。
   - 任務端核對：兩 ack 一致（switch_step／switch_t）、雙期限（到達時的同步狀態模擬時間 ≤ t_req＋timeout；牆鐘接收 ≤ wall_req＋wall_timeout）、
     求解端凍結目標位置與請求的 frozen_target_xyz 相差 ≤ 1e-6 m。任一不符 ⇒ abort（轉 K2 閂鎖）。
+r2（Codex 20261024_095031 第 4 節）：請求與求解端 ack 另帶完整 4×4 凍結目標 frozen_target_T（16，列優先）；
+  任務端比較位置（≤ 1e-6 m）與旋轉（相對旋轉角 ≤ 1e-6 rad）；frozen_target_xyz 須等於 T 的平移。
 """
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ import math
 MODE_PAUSE = 'pause'
 SEQ_PAUSE = 2
 TARGET_TOL_M = 1e-6
+TARGET_TOL_RAD = 1e-6
 
 
 def _int_value(x):
@@ -27,6 +30,24 @@ def _xyz(x):
     return isinstance(x, (list, tuple)) and len(x) == 3 and all(_num(v) for v in x)
 
 
+def _T16(x):
+    return isinstance(x, (list, tuple)) and len(x) == 16 and all(_num(v) for v in x)
+
+
+def rot_angle(Ta, Tb):
+    """兩個 4×4（列優先 16）旋轉部分的相對旋轉角（rad）。"""
+    Ra = [[float(Ta[4 * i + j]) for j in range(3)] for i in range(3)]
+    Rb = [[float(Tb[4 * i + j]) for j in range(3)] for i in range(3)]
+    tr = sum(Ra[k][i] * Rb[k][i] for i in range(3) for k in range(3))     # trace(Raᵀ Rb)
+    return math.acos(max(-1.0, min(1.0, (tr - 1.0) / 2.0)))
+
+
+def target_diff(Ta, Tb):
+    """(位置差 m, 旋轉角 rad)。"""
+    dp = math.sqrt(sum((float(Ta[4 * i + 3]) - float(Tb[4 * i + 3])) ** 2 for i in range(3)))
+    return dp, rot_angle(Ta, Tb)
+
+
 def parse_request(msg):
     if not isinstance(msg, dict):
         return None, 'not_dict'
@@ -38,9 +59,12 @@ def parse_request(msg):
         return None, 'mode_invalid'
     if not _int_value(msg.get('req_step')) or not _num(msg.get('req_t')):
         return None, 'req_time_invalid'
-    if not _int_value(msg.get('frozen_target_seq')) or not _xyz(msg.get('frozen_target_xyz')):
+    if not _int_value(msg.get('frozen_target_seq')) or not _xyz(msg.get('frozen_target_xyz')) or not _T16(msg.get('frozen_target_T')):
         return None, 'frozen_target_invalid'
-    return {k: msg[k] for k in ('run_id', 'seq', 'mode', 'req_step', 'req_t', 'frozen_target_seq', 'frozen_target_xyz')}, None
+    T = msg['frozen_target_T']
+    if max(abs(float(T[4 * i + 3]) - float(msg['frozen_target_xyz'][i])) for i in range(3)) > 1e-12:
+        return None, 'frozen_target_xyz_not_T'
+    return {k: msg[k] for k in ('run_id', 'seq', 'mode', 'req_step', 'req_t', 'frozen_target_seq', 'frozen_target_xyz', 'frozen_target_T')}, None
 
 
 class ExecutorPauseAuthority:
@@ -111,8 +135,9 @@ class SolverPauseSwitch:
         self.pending = dict(msg)
         return None
 
-    def apply(self, frozen_xyz, stopped: bool = False, snap_t: float | None = None):
-        """求解週期開頭呼叫：有待套用 ack ⇒ 切入 pause，凍結目前目標（frozen_xyz＝求解端正在用的目標位置）。回傳 True 表示本週期是第一個 pause 週期。"""
+    def apply(self, frozen_T, stopped: bool = False, snap_t: float | None = None):
+        """求解週期開頭呼叫：有待套用 ack ⇒ 切入 pause，凍結目前目標（frozen_T＝求解端正在用的 4×4 目標，列優先 16 或 4×4）。
+        回傳 True 表示本週期是第一個 pause 週期。"""
         if self.pending is None:
             return False
         if stopped:
@@ -121,10 +146,14 @@ class SolverPauseSwitch:
             return False
         if snap_t is not None and (not _num(snap_t) or float(snap_t) < float(self.pending['switch_t']) - 1e-9):
             return False
-        if not _xyz(frozen_xyz):
-            raise ValueError('凍結目標位置無效')
+        try:
+            T = [float(v) for row in frozen_T for v in (row if isinstance(row, (list, tuple)) or hasattr(row, '__len__') else [row])]
+        except TypeError:
+            T = None
+        if T is None or not _T16(T):
+            raise ValueError('凍結目標無效（須為 4×4）')
         self.active = True
-        self.record = {'executor_ack': self.pending, 'frozen_target_xyz': [float(v) for v in frozen_xyz]}
+        self.record = {'executor_ack': self.pending, 'frozen_target_T': T, 'frozen_target_xyz': [T[3], T[7], T[11]]}
         self.pending = None
         return True
 
@@ -137,7 +166,7 @@ class SolverPauseSwitch:
         a = self.record['executor_ack']
         ack = {'run_id': self.run_id, 'seq': SEQ_PAUSE, 'mode': MODE_PAUSE, 'switch_step': a['switch_step'], 'switch_t': a['switch_t'],
                'first_pause_slot': slot, 'first_pause_sim_t': float(sim_t), 'publish_sim_t': float(publish_sim_t), 'published': True,
-               'frozen_target_xyz': list(self.record['frozen_target_xyz'])}
+               'frozen_target_xyz': list(self.record['frozen_target_xyz']), 'frozen_target_T': list(self.record['frozen_target_T'])}
         self.record['ack'] = ack
         return dict(ack)
 
@@ -152,13 +181,15 @@ class TaskPauseWaiter:
         self.t_exec = self.t_solver = self.wall_exec = self.wall_solver = None
         self.result = None
 
-    def make_request(self, state_step: int, t: float, wall: float, frozen_target_seq: int, frozen_target_xyz):
+    def make_request(self, state_step: int, t: float, wall: float, frozen_target_seq: int, frozen_target):
+        """frozen_target：最後一筆已發布的 4×4 目標（列優先 16 或 4×4）。"""
         if self.request is not None:
             raise RuntimeError('暫停請求只能提出一次')
-        if not _xyz(list(frozen_target_xyz)) or not _int_value(frozen_target_seq):
+        T = [float(v) for row in frozen_target for v in (row if hasattr(row, '__len__') else [row])]
+        if not _T16(T) or not _int_value(frozen_target_seq):
             raise ValueError('凍結目標無效')
         self.request = {'run_id': self.run_id, 'seq': SEQ_PAUSE, 'mode': MODE_PAUSE, 'req_step': int(state_step), 'req_t': float(t),
-                        'frozen_target_seq': int(frozen_target_seq), 'frozen_target_xyz': [float(v) for v in frozen_target_xyz]}
+                        'frozen_target_seq': int(frozen_target_seq), 'frozen_target_xyz': [T[3], T[7], T[11]], 'frozen_target_T': T}
         self.t_req, self.wall_req = float(t), float(wall)
         return dict(self.request)
 
@@ -189,7 +220,7 @@ class TaskPauseWaiter:
             return self._abort(f"solver_nack:{msg['why']}")
         ok = (msg.get('mode') == MODE_PAUSE and _int_value(msg.get('switch_step')) and _int_value(msg.get('first_pause_slot'))
               and all(_num(msg.get(k)) for k in ('switch_t', 'first_pause_sim_t', 'publish_sim_t')) and msg.get('published') is True
-              and _xyz(msg.get('frozen_target_xyz')))
+              and _xyz(msg.get('frozen_target_xyz')) and _T16(msg.get('frozen_target_T')))
         if not ok or not (msg['switch_t'] <= msg['first_pause_sim_t'] + 1e-9 <= msg['publish_sim_t'] + 2e-9):
             return self._abort('solver_ack_invalid')
         if self.solver_ack is not None:
@@ -217,7 +248,8 @@ class TaskPauseWaiter:
             elif (self.solver_ack['switch_step'] != self.exec_ack['switch_step']
                   or abs(self.solver_ack['switch_t'] - self.exec_ack['switch_t']) > 1e-9):
                 self._abort('ack_switch_mismatch')
-            elif max(abs(u - v) for u, v in zip(self.solver_ack['frozen_target_xyz'], self.request['frozen_target_xyz'])) > TARGET_TOL_M:
+            elif (lambda d: d[0] > TARGET_TOL_M or d[1] > TARGET_TOL_RAD)(target_diff(self.solver_ack['frozen_target_T'],
+                                                                                    self.request['frozen_target_T'])):
                 self._abort('frozen_target_mismatch')
             else:
                 self.result = 'confirmed'

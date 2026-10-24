@@ -17,6 +17,12 @@
      獨立 t_cmd_stop 與求解端 STOPPED 時刻相差 ≤ 0.1 s；暫停期間不可行 base_hold 輪數 0；
      room.cmd_env.n_plain_after_env＝0（第一筆封裝後，展開節點的舊路徑不得再有命令）。
 結論分報：k3m_pass（K3-M 部分）、pause_command_stop、pause_physical_stop；整體 pass＝全部通過。
+r2（Codex 20261024_095031 第 4 節）：
+  - 分項以**自身必要證據**明確判定（check_pause 回傳 cmd_ok／phys_ok 布林）；缺證據 ⇒ False（未驗證），不由理由字首反推。
+  - 趟別：request、兩個 ack、room.k3m.config 的 run_id 都須等於 task.args.run_id。
+  - 求解端 ack 的 published 須為 True。
+  - 凍結目標：請求時刻以前**最後一筆**已發布目標（trace 中 t ≤ req_t、有 target 的最後一列）的 pub_seq 須等於 frozen_target_seq，
+    其完整 4×4 須等於請求的 frozen_target_T（位置 ≤ 1e-9 m、旋轉 ≤ 1e-9 rad）；求解端 ack 的 frozen_target_T 與請求比較（≤ 1e-6）。
 
     python3 evaluation/door_k3m_check_p.py <run_dir>    # 寫 <run_dir>/analysis/door_k3m_check_p.json；結束碼 0＝通過
 """
@@ -33,6 +39,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import door_k3m_check as KM                            # noqa: E402
+import door_k3m_pause_mode as PMODE                    # noqa: E402
 
 TH = {'base_lin': 0.001, 'base_ang': 0.005, 'door': 0.002, 'arm': 1e-3}
 WIN, N_CONFIRM, TOL_APPLIED, OBS_S = 10, 5, 1e-6, 10.0
@@ -88,7 +95,16 @@ def low(v):
     return v is not None and v[0] <= TH['base_lin'] and v[1] <= TH['base_ang'] and v[2] <= TH['door'] and v[3] <= TH['arm']
 
 
+def _T16(x):
+    try:
+        v = [float(a) for a in np.asarray(x, float).reshape(-1)]
+    except (TypeError, ValueError):
+        return None
+    return v if len(v) == 16 and all(math.isfinite(a) for a in v) else None
+
+
 def check_pause(task, room, solver, why, st):
+    """回傳 (cmd_ok, phys_ok)：各分項只在自身必要證據齊全且核對通過時為 True。"""
     kp_t = task.get('k3m_pause') or {}
     kp_s = (solver.get('stats') or {}).get('k3m_pause') or {}
     rk = room.get('k3m') or {}
@@ -96,17 +112,27 @@ def check_pause(task, room, solver, why, st):
     # ---- P1 握手 ----
     if not (isinstance(req, dict) and isinstance(ea, dict) and isinstance(sa, dict)):
         why.append('pause_evidence_missing')
-        return None
+        return False, False
+    rid = ((task.get('args') or {}).get('run_id'))
+    rid_room = ((rk.get('config') or {}).get('run_id'))
+    if not rid or any(x != rid for x in (req.get('run_id'), ea.get('run_id'), sa.get('run_id'), rid_room)):
+        why.append('pause_run_id_mismatch')
     if req.get('seq') != 2 or req.get('mode') != 'pause' or ea.get('seq') != 2 or sa.get('seq') != 2:
         why.append('pause_seq_or_mode')
+    if sa.get('published') is not True:
+        why.append('pause_solver_ack_not_published')
     if not (ea.get('switch_step') == sa.get('switch_step') and _num(ea.get('switch_t')) and _num(sa.get('switch_t'))
             and abs(ea['switch_t'] - sa['switch_t']) <= 1e-9):
         why.append('pause_ack_mismatch')
-    tr = [e for e in task.get('trace') or [] if e.get('pub_seq') == req.get('frozen_target_seq') and e.get('target') is not None]
-    if not tr or max(abs(float(u) - float(v)) for u, v in zip(np.asarray(tr[0]['target'], float).reshape(4, 4)[:3, 3],
-                                                                   req.get('frozen_target_xyz') or [math.inf] * 3)) > 1e-9:
+    T_req, T_sa = _T16(req.get('frozen_target_T')), _T16(sa.get('frozen_target_T'))
+    prior = [e for e in task.get('trace') or [] if e.get('target') is not None and isinstance(e.get('pub_seq'), int)
+             and _num(e.get('t')) and _num(req.get('req_t')) and e['t'] <= req['req_t'] + 1e-9]
+    last = prior[-1] if prior else None
+    T_last = None if last is None else _T16(last['target'])
+    if (T_req is None or T_last is None or last.get('pub_seq') != req.get('frozen_target_seq')
+            or (lambda d: d[0] > 1e-9 or d[1] > 1e-9)(PMODE.target_diff(T_last, T_req))):
         why.append('pause_frozen_target_not_last_published')
-    if max(abs(float(u) - float(v)) for u, v in zip(sa.get('frozen_target_xyz') or [math.inf] * 3, req.get('frozen_target_xyz') or [0] * 3)) > 1e-6:
+    if T_req is None or T_sa is None or (lambda d: d[0] > 1e-6 or d[1] > 1e-6)(PMODE.target_diff(T_sa, T_req)):
         why.append('pause_solver_frozen_target_mismatch')
     ok_t = all(_num(x) for x in (req.get('req_t'), ea.get('switch_t'), sa.get('first_pause_sim_t'), sa.get('publish_sim_t')))
     if not ok_t or not (req['req_t'] <= ea['switch_t'] + 1e-9 <= sa['first_pause_sim_t'] + 2e-9 <= sa['publish_sim_t'] + 3e-9):
@@ -117,15 +143,16 @@ def check_pause(task, room, solver, why, st):
     if kp_t.get('result') != 'confirmed':
         why.append('pause_not_confirmed')
     # ---- P2 命令停止 ----
+    n_why_p1 = len(why)
     S, I = room_rows(room)
     if S is None:
         why.append('room_applied_src_missing')
-        return None
+        return False, False
     log = solver.get('log') or []
     zl = [x for x in log if x.get('published') and x.get('pause_zero')]
     if not zl or not isinstance(zl[0].get('pause_source_seq'), int):
         why.append('pause_zero_publication_missing')
-        return None
+        return False, False
     zero_seq0 = zl[0]['pause_source_seq']
     i_cmd, run = None, 0
     prev_step = None
@@ -141,7 +168,7 @@ def check_pause(task, room, solver, why, st):
             break
     if i_cmd is None:
         why.append('pause_command_stop_not_confirmed')
-        return None
+        return False, False
     t_cmd = S[i_cmd][I['sim_t']]
     bad_after = [s[I['step']] for s in S[i_cmd + 1:]
                  if (s[I['applied_src']] is not None and 0 <= s[I['applied_src']][2] < zero_seq0)
@@ -154,10 +181,15 @@ def check_pause(task, room, solver, why, st):
     pub_after = [x for x in log if x.get('published') and _num(t_stop_solver) and x.get('sim_t', 0) > t_stop_solver + 0.06]
     if pub_after:
         why.append(f'pause_published_after_stop_{len(pub_after)}')
+    if not _num(t_stop_solver):
+        why.append('pause_solver_stop_time_missing')
+    cmd_ok = (len(why) == n_why_p1 and not bad_after and not pub_after and _num(t_stop_solver)
+              and not any(w.startswith('pause_') for w in why))          # P1 握手亦須無理由
     # ---- P3 實際停止 ----
+    n_why_p3 = len(why)
     if not _num(t_zero):
         why.append('pause_zero_pub_time_missing')
-        return None
+        return cmd_ok, False
     t_end_req = t_cmd + OBS_S
     covered = S[-1][I['sim_t']] - t_cmd
     moved, invalid = [], []
@@ -176,6 +208,7 @@ def check_pause(task, room, solver, why, st):
         why.append(f'pause_physical_data_invalid_{len(invalid)}')
     if moved:
         why.append(f'pause_moved_{len(moved)}')
+    phys_ok = cmd_ok and len(why) == n_why_p3
     # ---- P4 一致性 ----
     if not (o.get('state') == 'DONE' and o.get('command_stop_confirmed') and o.get('physical_stop_confirmed')):
         why.append('pause_solver_outcome_not_done')
@@ -190,8 +223,9 @@ def check_pause(task, room, solver, why, st):
         why.append('plain_cmd_after_envelope')                         # 展開路徑與封裝入口重疊
     st['pause'] = {'zero_seq0': zero_seq0, 't_zero_pub_solver': t_zero, 't_cmd_stop_independent': t_cmd, 't_stopped_solver': t_stop_solver,
                    'observation_covered_s': covered, 'n_moved': len(moved), 'first_moved': moved[:5], 'n_invalid': len(invalid),
-                   'n_old_or_nonzero_after_stop': len(bad_after), 'solver_outcome': o}
-    return st['pause']
+                   'n_old_or_nonzero_after_stop': len(bad_after), 'solver_outcome': o,
+                   'command_stop_independent': cmd_ok, 'physical_stop_independent': phys_ok}
+    return cmd_ok, phys_ok
 
 
 def judge(task, room, gate, solver):
@@ -202,11 +236,7 @@ def judge(task, room, gate, solver):
     if task.get('schema') != 'door_k3m_task_p/1':
         why_k.append('task_schema_k3m_p')
     why_p = []
-    check_pause(task, room, solver, why_p, st)
-    cmd_ok = not any(w.startswith(('pause_command', 'pause_old', 'pause_published', 'pause_zero_publication', 'room_applied'))
-                     for w in why_p)
-    phys_ok = cmd_ok and not any(w.startswith(('pause_moved', 'pause_physical', 'pause_observation', 'pause_zero_pub_time'))
-                                 for w in why_p)
+    cmd_ok, phys_ok = check_pause(task, room, solver, why_p, st)
     return {'pass': not why_k and not why_p, 'k3m_pass': not why_k, 'pause_command_stop': cmd_ok, 'pause_physical_stop': phys_ok,
             'why': why_k + why_p, 'stats': st, 'phase_sequence': res.get('phase_sequence')}
 

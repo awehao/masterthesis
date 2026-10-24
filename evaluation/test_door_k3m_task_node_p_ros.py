@@ -65,7 +65,9 @@ class Wiring(unittest.TestCase):
             freq = pol.waiter.make_request(2030, 20.30, time.monotonic())             # 原 free 路由照舊
             nd.mode_req_pub.publish(String(data=json.dumps(freq)))
             self.assertTrue(self.spin([nd, peer], lambda: len(gotf) == 1))
-            req = pol.pwaiter.make_request(3030, 30.30, time.monotonic(), 400, XYZ)
+            TF = np.eye(4)
+            TF[:3, 3] = XYZ
+            req = pol.pwaiter.make_request(3030, 30.30, time.monotonic(), 400, TF)
             nd.pause_req_pub.publish(String(data=json.dumps(req)))
             self.assertTrue(self.spin([nd, peer], lambda: len(got) == 1))
             self.assertEqual(got[0], req)
@@ -73,7 +75,8 @@ class Wiring(unittest.TestCase):
             pe.publish(String(data=json.dumps(ea)))
             self.assertTrue(self.spin([nd, peer], lambda: pol.pwaiter.exec_ack is not None))
             self.assertEqual(pol.pwaiter.t_exec, 30.37)
-            sa = dict(ea, first_pause_slot=9, first_pause_sim_t=30.33, publish_sim_t=30.35, published=True, frozen_target_xyz=XYZ)
+            sa = dict(ea, first_pause_slot=9, first_pause_sim_t=30.33, publish_sim_t=30.35, published=True, frozen_target_xyz=XYZ,
+                      frozen_target_T=[float(v) for v in TF.reshape(-1)])
             ps.publish(String(data=json.dumps(sa)))
             self.assertTrue(self.spin([nd, peer], lambda: pol.pwaiter.solver_ack is not None))
             self.assertEqual(pol.pwaiter.status(30.38, time.monotonic()), 'confirmed')

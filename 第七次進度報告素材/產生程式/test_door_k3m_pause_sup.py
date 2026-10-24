@@ -102,7 +102,7 @@ class T(unittest.TestCase):
 
     def test_gap_invalid_and_observation_incomplete(self):
         o = drive(PS.PauseSupervisor(), STILL, 8.0, gap=(3.0, 3.2))
-        self.assertEqual(o['fail_why'], 'measurement_invalid')
+        self.assertEqual(o['fail_why'], 'measurement_stale')                   # 缺樣本 ⇒ 最新合法樣本不新鮮
         o = drive(PS.PauseSupervisor(), STILL, 6.0)
         self.assertTrue(o['command_stop_confirmed'])
         self.assertFalse(o['physical_stop_confirmed'])
@@ -113,6 +113,76 @@ class T(unittest.TestCase):
         o = drive(PS.PauseSupervisor(timeout_s=5.0), STILL, 12.0, applied_zero=False)
         self.assertEqual(o['fail_why'], 'timeout')
         self.assertFalse(o['command_stop_confirmed'])
+
+    def test_codex_stale_window_never_confirms(self):
+        """Codex 反例：只餵 0.10 s 靜止狀態後停餵，不得一路確認到實際停止。"""
+        sup = PS.PauseSupervisor()
+        for k in range(6):
+            sup.feed_state(2 * k, round(0.02 * k, 4), 0.6, -0.53, 1.57, 0.01, [0.0] * 6)
+        seq, phys, t = 0, 0, 0.1
+        while t < 14.0:
+            r = sup.cycle(round(t, 4), True, True)
+            if r['publish']:
+                seq += 1
+                sup.note_published(seq, r['zero'])
+            if sup.state == 'CONFIRM':
+                for _ in range(5):
+                    phys += 1
+                    sup.applied(phys, round(t, 4) + 1e-4 * phys, [0.0] * 3, [0.0] * 6, seq)
+            t += 0.05
+        o = sup.outcome(t_end=t)
+        self.assertFalse(o['physical_stop_confirmed'], o)
+        self.assertFalse(o['command_stop_confirmed'], o)
+
+    def test_invalid_then_valid_no_exception(self):
+        w = PS.WindowSpeed()
+        w.feed(0, 0.0, 0, 0, 0, 0, [0] * 6)
+        w.feed(2, 0.02, float('nan'), 0, 0, 0, [0] * 6)
+        self.assertTrue(w.feed(4, 0.04, 0, 0, 0, 0, [0] * 6))                 # 不拋例外
+        self.assertIsNone(w.speeds())                                         # 斷點 ⇒ 窗口無值
+
+    def test_applied_strict_all_stages(self):
+        for state in ('LOWSPEED', 'ZERO_PUB', 'CONFIRM', 'STOPPED'):
+            sup = PS.PauseSupervisor()
+            sup.seq.state, sup.seq.zero_seq0 = state, 1
+            sup.applied(10, 1.0, [0.0, float('nan'), 0.0], [0.0] * 6, 1)
+            self.assertEqual((sup.state, sup.seq.why), ('FAIL', 'applied_invalid'), state)
+        sup = PS.PauseSupervisor()
+        sup.seq.state = 'STOPPED'
+        sup.applied(10, 1.0, [0.0] * 3, [0.0] * 5, 1)
+        self.assertEqual(sup.seq.why, 'applied_invalid')
+
+    def test_failure_checks_before_window(self):
+        sup = PS.PauseSupervisor()                                            # 沒有任何樣本（無窗口）
+        sup.cycle(0.0, True, False)
+        sup.cycle(0.05, False, False)
+        self.assertEqual(sup.seq.why, 'solve_failed')
+        sup = PS.PauseSupervisor(timeout_s=1.0)
+        for k in range(30):
+            sup.cycle(0.05 * k, True, False)
+        self.assertEqual(sup.seq.why, 'timeout')
+
+    def test_resend_does_not_refresh_and_wall_freshness(self):
+        w = PS.WindowSpeed()
+        for k in range(8):
+            w.feed(2 * k, 0.02 * k, 0, 0, 0, 0, [0] * 6, wall=100.0 + 0.02 * k)
+        self.assertTrue(w.fresh(0.15, 100.15))
+        for _ in range(20):
+            w.feed(14, 0.14, 0, 0, 0, 0, [0] * 6, wall=100.5)                  # 同一步重送
+        self.assertFalse(w.fresh(0.5, 100.5))                                 # 模擬時間不新鮮
+        self.assertFalse(w.fresh(0.15, 100.5))                                # 牆鐘不新鮮（重送未刷新）
+        self.assertEqual(w.n_dup, 20)
+
+    def test_publish_feasible_uses_solver_limits(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
+        from ammr_wholebody_mpc.wgmpc_core import WGMPCConfig
+        c = WGMPCConfig()
+        z = [0.0] * 9
+        self.assertEqual(PS.publish_feasible(z, z, c), (True, []))
+        self.assertIn('accel_box', PS.publish_feasible([0.03, 0, 0] + [0] * 6, z, c)[1])          # 底盤一步跳 0.03 m/s > 0.5·0.05
+        self.assertIn('velocity_box', PS.publish_feasible([0.05, 0, 0] + [0] * 6, [0.05, 0, 0] + [0] * 6, c)[1])
+        self.assertIn('accel_box', PS.publish_feasible(z, [0.0] * 3 + [1.5] + [0] * 5, c)[1])     # 手臂零速段由 1.5 rad/s 跳 0
+        self.assertEqual(PS.publish_feasible([1, 2], z, c), (False, ['shape_or_nonfinite']))
 
     def test_window_speed_rejects(self):
         w = PS.WindowSpeed()

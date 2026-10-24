@@ -14,17 +14,24 @@ import door_k3m_pause_mode as M                          # noqa: E402
 
 RID = 'k3m_p_1'
 XYZ = [0.8, -0.05, 0.85]
+TF = [1.0, 0.0, 0.0, XYZ[0], 0.0, 1.0, 0.0, XYZ[1], 0.0, 0.0, 1.0, XYZ[2], 0.0, 0.0, 0.0, 1.0]
 
 
-def handshake(exec_kwargs=None, solver_xyz=XYZ, t_exec=20.05, t_solver=20.10, w_exec=1.0, w_solver=1.1):
+def rotz(a, xyz=XYZ):
+    import math
+    c, s_ = math.cos(a), math.sin(a)
+    return [c, -s_, 0.0, xyz[0], s_, c, 0.0, xyz[1], 0.0, 0.0, 1.0, xyz[2], 0.0, 0.0, 0.0, 1.0]
+
+
+def handshake(exec_kwargs=None, solver_T=TF, t_exec=20.05, t_solver=20.10, w_exec=1.0, w_solver=1.1):
     T = M.TaskPauseWaiter(RID)
-    req = T.make_request(1000, 20.0, 0.9, 77, XYZ)
+    req = T.make_request(1000, 20.0, 0.9, 77, TF)
     E = M.ExecutorPauseAuthority(RID)
     kind, ea = E.on_request(req, 1002, 20.02, **(exec_kwargs or {'aborted': False, 'base_mode_free': True}))
     S = M.SolverPauseSwitch(RID)
     if kind == 'switch':
         assert S.on_executor_ack(ea, stopped=False, free_active=True) is None
-        assert S.apply(solver_xyz, snap_t=20.03)
+        assert S.apply(solver_T, snap_t=20.03)
         sa = S.note_first_solution(400, 20.05, True, 20.08)
         T.on_executor(ea, t_exec, w_exec)
         T.on_solver(sa, t_solver, w_solver)
@@ -45,12 +52,15 @@ class T(unittest.TestCase):
             self.assertEqual((kind, ea['why']), ('reject', why))
             self.assertEqual(Tw.status(20.2, 1.2), ('abort', f'executor_nack:{why}'))
         E = M.ExecutorPauseAuthority(RID)
-        req = {'run_id': RID, 'seq': 2, 'mode': 'pause', 'req_step': 10, 'req_t': 0.1, 'frozen_target_seq': 1, 'frozen_target_xyz': XYZ}
+        req = {'run_id': RID, 'seq': 2, 'mode': 'pause', 'req_step': 10, 'req_t': 0.1, 'frozen_target_seq': 1, 'frozen_target_xyz': XYZ,
+               'frozen_target_T': TF}
         self.assertEqual(E.on_request(dict(req, run_id='x'), 12, 0.12, False, True)[1]['why'], 'wrong_run')
         self.assertEqual(E.on_request(dict(req, seq=1), 12, 0.12, False, True)[1]['why'], 'seq_not_2')
         self.assertEqual(E.on_request(dict(req, req_step=50), 12, 0.12, False, True)[1]['why'], 'request_from_future')
         self.assertEqual(E.on_request(req, 40, 0.4, False, True)[1]['why'], 'request_stale')
         self.assertEqual(E.on_request(dict(req, frozen_target_xyz=[1, 2]), 12, 0.12, False, True)[1]['why'], 'frozen_target_invalid')
+        self.assertEqual(E.on_request(dict(req, frozen_target_T=TF[:12]), 12, 0.12, False, True)[1]['why'], 'frozen_target_invalid')
+        self.assertEqual(E.on_request(dict(req, frozen_target_xyz=[0.8, -0.05, 0.9]), 12, 0.12, False, True)[1]['why'], 'frozen_target_xyz_not_T')
         k, a = E.on_request(req, 12, 0.12, False, True)
         self.assertEqual(k, 'switch')
         self.assertEqual(E.on_request(req, 13, 0.13, False, True)[0], 'repeat')
@@ -61,27 +71,29 @@ class T(unittest.TestCase):
         ack = {'run_id': RID, 'seq': 2, 'mode': 'pause', 'switch_step': 5, 'switch_t': 0.05}
         self.assertEqual(S.on_executor_ack(ack, stopped=False, free_active=False)['why'], 'not_in_free')
         self.assertIsNone(S.on_executor_ack(ack, stopped=False, free_active=True))
-        self.assertFalse(S.apply(XYZ, snap_t=0.04))                        # 快照早於切換 ⇒ 延後
-        self.assertTrue(S.apply(XYZ, snap_t=0.06))
+        self.assertFalse(S.apply(TF, snap_t=0.04))                         # 快照早於切換 ⇒ 延後
+        self.assertTrue(S.apply(TF, snap_t=0.06))
         self.assertIsNone(S.note_first_solution(10, 0.06, False, None))     # 未發布 ⇒ 不回 ack
         self.assertIsNotNone(S.note_first_solution(11, 0.11, True, 0.12))
         S2 = M.SolverPauseSwitch(RID)
         S2.on_executor_ack(ack, stopped=False, free_active=True)
-        self.assertFalse(S2.apply(XYZ, stopped=True))                      # 已停止 ⇒ 丟棄
+        self.assertFalse(S2.apply(TF, stopped=True))                       # 已停止 ⇒ 丟棄
         self.assertFalse(S2.active)
 
     def test_task_aborts(self):
-        Tw, *_ = handshake(solver_xyz=[0.8, -0.05, 0.86])
+        Tw, *_ = handshake(solver_T=rotz(0.0, [0.8, -0.05, 0.86]))
+        self.assertEqual(Tw.status(20.2, 1.2), ('abort', 'frozen_target_mismatch'))
+        Tw, *_ = handshake(solver_T=rotz(0.01))                             # 位置相同、旋轉不同（Codex 第 4 節）
         self.assertEqual(Tw.status(20.2, 1.2), ('abort', 'frozen_target_mismatch'))
         Tw, *_ = handshake(t_solver=21.5)
         self.assertEqual(Tw.status(21.6, 1.2), ('abort', 'pause_switch_timeout'))
         Tw, *_ = handshake(w_solver=3.5)
         self.assertEqual(Tw.status(20.2, 3.6), ('abort', 'pause_switch_wall_timeout'))
         Tw = M.TaskPauseWaiter(RID)
-        Tw.make_request(1, 1.0, 1.0, 3, XYZ)
+        Tw.make_request(1, 1.0, 1.0, 3, TF)
         self.assertEqual(Tw.status(2.5, 1.5), ('abort', 'pause_switch_timeout'))
         Tw = M.TaskPauseWaiter(RID)
-        Tw.make_request(1, 1.0, 1.0, 3, XYZ)
+        Tw.make_request(1, 1.0, 1.0, 3, TF)
         self.assertEqual(Tw.status(1.2, 1.2, aborted=True), ('abort', 'aborted_while_waiting'))
 
 

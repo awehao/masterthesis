@@ -150,7 +150,8 @@ def main() -> int:
         o = kp.get('supervisor_outcome') or {}
         ok_acks = [g for g in st['acks'] if 'why' not in g]
         ck('求解器已切入 pause', kp.get('active') is True, str(kp.get('rejections')))
-        ck('恰一筆成功 pause ack，帶凍結目標位置', len(ok_acks) == 1 and len(ok_acks[0].get('frozen_target_xyz') or []) == 3, str(ok_acks)[:200])
+        ck('恰一筆成功 pause ack，帶凍結目標（位置＋完整 4×4）', len(ok_acks) == 1 and len(ok_acks[0].get('frozen_target_xyz') or []) == 3
+           and len(ok_acks[0].get('frozen_target_T') or []) == 16, str(ok_acks)[:200])
         ck('命令停止確認', o.get('command_stop_confirmed') is True, str(o)[:300])
         ck('實際停止確認（觀察 ≥ 10 s）', o.get('physical_stop_confirmed') is True and (o.get('observation_covered_s') or 0) >= 10.0 - 1e-6, str(o)[:300])
         log = w.get('log') or []
