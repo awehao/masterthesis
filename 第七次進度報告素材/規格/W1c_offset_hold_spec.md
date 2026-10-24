@@ -46,3 +46,15 @@
 - **分報**：開門（θ）、承載（F1／F2、F2−F1、承載點）、追蹤（抓取漂移、指標）、引導與走廊、SETTLE、主動保持命令確認、實際停止、保護、偏移估計保持證據。
 - 附 side／close 影片。
 - 舊幾何餘裕只作參考，不當成新軌跡的保證。
+
+## 6. r2（Codex 20261025_003515 條件式核可：只補判定器與測試，不改控制律）
+- 判定器 w1c r2 補三個誤收缺口：
+  - **H3'**：凍結起每個實際求解列（帶 solve_in）都必須有 offset_interval，不得篩掉；不帶 solve_in 的診斷列（暫停觀察）另列計數；已發布列必須是求解列。
+  - **H6**：實際使用值 solve_in.offset_d_hat＝d_frozen、arm_bias＝α⊙d_frozen；α 取求解端 args.arm_ident，讀不到 ⇒ 不通過。
+  - **H4'**：first_published 須精確對上凍結後第一筆真實已發布列的 slot 與 publish_sim_t_exact，且 d_hat_in＝該列 solve_in.offset_d_hat＝d_frozen。
+- `test_door_k3m_check_w1c.py` 12 項：原 8 項，加 K10 刪已發布列 offset_interval、K11 改 offset_d_hat／arm_bias、K12 first_published slot／時間不存在、K13 診斷列另計。
+- 新增 `test_dl3_adm9_offset_hold_logic.py` 3 項：**六軸非零 d̂**，直接取用 ADM9 節點的 `_offset_update_interval`，配真 IntervalOffsetObserver／IntervalFeed。
+  - 凍結值＝當時非零 d̂；之後 20 輪 blocked:offset_hold；觀測器內部 d、_of_d、bias＝α⊙d 都不變；更新計數不變；錨點清除。
+  - 保持中停止 ⇒ stop_rx 優先、值仍保持；未啟用不凍結。
+- ADM9 控制邏輯、跑法、登錄與其餘設定**與 r1 相同**（r1 凍結清單中除判定器與測試外逐檔雜湊不變）。
+- 凍結 `freeze_door_wide_w1c_dev_r2.sha256`。

@@ -10,6 +10,11 @@
      沒有 used＝updated，d_after 逐元素等於 d_frozen（≤ 1e-12）；凍結前最後一筆 d_after＝d_frozen；
   H4 first_published 存在，publish_sim_t_exact ≥ 凍結 sim_t，d_hat_in＝d_frozen；凍結後已發布列都標 offset_hold；
   H5 報告 offset_free.n_updates＝n_upd_before（凍結後計數不再增加）。
+r2（Codex 20261025_003515：保持證據誤收缺口）：
+  H3' 凍結起**每個實際求解列**（帶 solve_in）都必須有 offset_interval，缺欄不得被篩掉；不帶 solve_in 的診斷列（例如暫停觀察）另列計數；
+      已發布列必須是求解列；
+  H6  實際使用值：每個求解列 solve_in.offset_d_hat＝d_frozen、solve_in.arm_bias＝α⊙d_frozen（α 取求解端 args.arm_ident 的辨識檔；讀不到 ⇒ 不通過）；
+  H4' first_published 必須精確對上凍結後第一筆真實已發布列：slot、publish_sim_t_exact 相同，d_hat_in＝該列 solve_in.offset_d_hat＝d_frozen。
 
     python3 evaluation/door_k3m_check_w1c.py <run_dir>   # 寫 <run_dir>/analysis/door_k3m_check_w1c.json；不覆寫
 """
@@ -48,29 +53,54 @@ def check_offset_hold(solver, why, st):
     if not W1B._num(tf) or not (tf - 1e-9 <= th <= tf + 0.06 + 1e-9):
         why.append('offset_hold_boundary_mismatch')
         ok = False
-    rows = [x for x in (solver.get('log') or []) if isinstance(x.get('offset_interval'), dict) and W1B._num(x.get('sim_t'))]
+    log = [x for x in (solver.get('log') or []) if W1B._num(x.get('sim_t'))]
+    rows = [x for x in log if isinstance(x.get('offset_interval'), dict)]
     pre = [x for x in rows if x['sim_t'] < th - 1e-9 and x['offset_interval'].get('d_after') is not None]
-    post = [x for x in rows if x['sim_t'] >= th - 1e-9]
     if not pre or not _fin6(pre[-1]['offset_interval']['d_after']) or \
             max(abs(a - b) for a, b in zip(pre[-1]['offset_interval']['d_after'], dz)) > TOL:
         why.append('offset_hold_frozen_value_not_last_available')
         ok = False
-    bad = []
-    for x in post:
-        oi = x['offset_interval']
-        da = oi.get('d_after')
-        if oi.get('used') == 'updated' or not str(oi.get('why') or '').startswith('blocked:') or \
+    after = [x for x in log if x['sim_t'] >= th - 1e-9]
+    solve_rows = [x for x in after if isinstance(x.get('solve_in'), dict)]
+    diag_rows = [x for x in after if not isinstance(x.get('solve_in'), dict)]
+    alpha = None
+    try:
+        alpha = [float(v) for v in json.load(open(((solver.get('args') or {}).get('arm_ident'))))['alpha']]
+    except (TypeError, OSError, KeyError, ValueError):
+        alpha = None
+    if alpha is None or len(alpha) != 6:
+        why.append('offset_hold_alpha_unavailable')
+        ok = False
+    bias_ref = None if alpha is None else [a_ * d_ for a_, d_ in zip(alpha, dz)]
+    bad, bad_use = [], []
+    for x in solve_rows:
+        oi = x.get('offset_interval')
+        da = None if not isinstance(oi, dict) else oi.get('d_after')
+        if not isinstance(oi, dict) or oi.get('used') == 'updated' or not str(oi.get('why') or '').startswith('blocked:') or \
                 not _fin6(da) or max(abs(a - b) for a, b in zip(da, dz)) > TOL:
-            bad.append((x['sim_t'], oi.get('used'), oi.get('why')))
-    if not post or bad:
-        why.append(f'offset_hold_not_held_{len(bad)}' if post else 'offset_hold_no_rows_after_freeze')
+            bad.append((x['sim_t'], None if not isinstance(oi, dict) else oi.get('used'), None if not isinstance(oi, dict) else oi.get('why')))
+        si = x['solve_in']
+        dh, bb = si.get('offset_d_hat'), si.get('arm_bias')
+        if not _fin6(dh) or max(abs(a - b) for a, b in zip(dh, dz)) > TOL or bias_ref is None or not _fin6(bb) or \
+                max(abs(a - b) for a, b in zip(bb, bias_ref)) > 1e-12:
+            bad_use.append(x['sim_t'])
+    pub_not_solve = [x['sim_t'] for x in after if x.get('published') and not isinstance(x.get('solve_in'), dict)]
+    if not solve_rows or bad or pub_not_solve:
+        why.append(f'offset_hold_not_held_{len(bad) + len(pub_not_solve)}' if solve_rows else 'offset_hold_no_rows_after_freeze')
+        ok = False
+    if bad_use:
+        why.append(f'offset_hold_solve_input_mismatch_{len(bad_use)}')
         ok = False
     fp = h.get('first_published')
-    if not isinstance(fp, dict) or not W1B._num(fp.get('publish_sim_t_exact')) or fp['publish_sim_t_exact'] < th - 1e-9 or \
-            not _fin6(fp.get('d_hat_in')) or max(abs(a - b) for a, b in zip(fp['d_hat_in'], dz)) > TOL:
+    first_pub = next((x for x in after if x.get('published') and W1B._num(x.get('publish_sim_t_exact'))), None)
+    if not isinstance(fp, dict) or first_pub is None or fp.get('slot') != first_pub.get('slot') or \
+            fp.get('publish_sim_t_exact') != first_pub.get('publish_sim_t_exact') or not _fin6(fp.get('d_hat_in')) or \
+            not isinstance(first_pub.get('solve_in'), dict) or not _fin6(first_pub['solve_in'].get('offset_d_hat')) or \
+            max(abs(a - b) for a, b in zip(fp['d_hat_in'], first_pub['solve_in']['offset_d_hat'])) > TOL or \
+            max(abs(a - b) for a, b in zip(fp['d_hat_in'], dz)) > TOL:
         why.append('offset_hold_first_published_invalid')
         ok = False
-    pubs = [x for x in post if x.get('published')]
+    pubs = [x for x in after if x.get('published')]
     if not pubs or not all(x.get('offset_hold') for x in pubs):
         why.append('offset_hold_published_rows_unmarked')
         ok = False
@@ -78,7 +108,8 @@ def check_offset_hold(solver, why, st):
     if not (isinstance(n_rep, int) and n_rep == h['n_upd_before']):
         why.append('offset_hold_update_count_mismatch')
         ok = False
-    st['offset_hold_check'] = {'freeze_sim_t': th, 'free_applied_sim_t': tf, 'n_rows_after': len(post), 'n_bad': len(bad),
+    st['offset_hold_check'] = {'freeze_sim_t': th, 'free_applied_sim_t': tf, 'n_solve_rows_after': len(solve_rows),
+                               'n_diag_rows_after': len(diag_rows), 'n_bad': len(bad), 'n_bad_solve_input': len(bad_use),
                                'first_bad': bad[:5], 'n_updates_report': n_rep, 'n_upd_before': h['n_upd_before'], 'ok': ok}
     return ok
 

@@ -61,7 +61,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_wide_w1c_dev_r1.sha256
+FRZ=evaluation/results/door/freeze_door_wide_w1c_dev_r2.sha256
 W1B_THETA="${W1B_THETA:-30}"
 PRM=evaluation/results/door/w1c_params_${W1B_THETA}.json   # W1c：w1b r2 內容＋solver_change
 STAND='0.6,-0.5332,1.570796'
