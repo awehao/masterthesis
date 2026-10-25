@@ -71,7 +71,7 @@ def mk(geo=None):
     p.k3b = KR.TaskReleaseMonitor()
     p.pair = Pair(p)
     p.retreat_rate, p.eff_ack_timeout_s, p.sync_hist_s = 0.02, 1.0, 1.0
-    p.rel = {'state': 'none', 't': {}, 's_cmd': 0.0, 'H_rel': None, 'E_rel': None, 'q_rel': None, 'step_open': None,
+    p.rel = {'state': 'none', 't': {}, 's_cmd': 0.0, 'H_rel': None, 'E_rel': None, 'q_rel': None, 'step_open': None, 'base_anchor': None,
              'eff_req': None, 'eff_ack': None, 'eff_done': None, 'n_samples': 0, 'events': []}
     p.eff_outbox, p.sync_hist = [], []
     p.geom, p.geom_last, p.geom_t = (geo or Geo()), None, None

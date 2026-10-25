@@ -39,6 +39,7 @@ DOM0 = int(os.environ.get('K3BR_DOMAIN', '220'))
 RUN = 'k3b_route'
 FAIL = []
 FO = 0.0089
+GATE_ANCHOR = [0.6000019907951355, -0.5331917405128479, 1.571134844677191]   # 30_1 park_gate 錨點（開門前停位）
 
 LAUNCH = r'''
 import runpy, sys
@@ -153,7 +154,7 @@ def scenario(tag, dom, eff_reject=False, release_fail=False, run_s=40.0):
                                                           'finger_bar_min_n': [fb, fb], 'unexpected_max_n': 0.0, 'unexpected_who': None,
                                                           'wall_max_n': 0.0, 'wrist_max_n': 3.0})))
                 pub['gs'].publish(Float64MultiArray(data=[ts, FO * f, FO * f, fb, fb, float(step), 1.0, 0.5]))
-                pub['gate'].publish(String(data=json.dumps({'passed': True, 'ok_now': True, 'anchor': list(base)})))
+                pub['gate'].publish(String(data=json.dumps({'passed': True, 'ok_now': True, 'anchor': GATE_ANCHOR})))   # 實跑：開門前停位（≠ HELD 底盤）
                 if st['k'] % 5 == 0:
                     st['seq'] += 1
                     pub['hb'].publish(String(data=json.dumps({'seq': st['seq']})))

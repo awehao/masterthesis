@@ -46,7 +46,7 @@ class K3MReleasePolicy(PW2.K3MW2Policy):
         self.k3b = KR.TaskReleaseMonitor()
         self.pair = pair_geom if pair_geom is not None else PG.PairGeom()
         self.retreat_rate, self.eff_ack_timeout_s, self.sync_hist_s = float(retreat_rate), float(effort_ack_timeout_s), float(sync_hist_s)
-        self.rel = {'state': 'none', 't': {}, 's_cmd': 0.0, 'H_rel': None, 'E_rel': None, 'q_rel': None, 'step_open': None,
+        self.rel = {'state': 'none', 't': {}, 's_cmd': 0.0, 'H_rel': None, 'E_rel': None, 'q_rel': None, 'step_open': None, 'base_anchor': None,
                     'eff_req': None, 'eff_ack': None, 'eff_done': None, 'n_samples': 0, 'events': []}
         self.eff_outbox = []
         self.sync_hist = []                      # (state_step, t, H, T_tcp, q_door)
@@ -84,7 +84,9 @@ class K3MReleasePolicy(PW2.K3MW2Policy):
     def step(self, m: Meas, dt: float):
         H, T = getattr(m, 'H', None), getattr(m, 'T_tcp', None)
         if H is not None and T is not None and type(getattr(m, 'state_step', None)) is int:
-            self.sync_hist.append((m.state_step, m.t, np.array(H, float), np.array(T, float), float(m.q_door)))
+            bp = getattr(m, 'base_pose', None)
+            self.sync_hist.append((m.state_step, m.t, np.array(H, float), np.array(T, float), float(m.q_door),
+                                   None if bp is None else tuple(float(x) for x in bp)))
             self.sync_hist = [x for x in self.sync_hist if x[1] >= m.t - self.sync_hist_s]
         if self.phase == 'RELEASE':
             return self._release_step(m, dt)
@@ -138,15 +140,25 @@ class K3MReleasePolicy(PW2.K3MW2Policy):
         cand = [x for x in self.sync_hist if type(k_open) is int and x[0] <= k_open]
         if t_open is None or not cand:
             return self._w2_abort('k3b_open_baseline_missing', m, act)
-        stp, ts, H, T, q = cand[-1]
+        stp, ts, H, T, q, bp = cand[-1]
+        if bp is None:
+            return self._w2_abort('k3b_open_base_missing', m, act)
         E = np.linalg.inv(H) @ T
-        self.rel.update(state='release', H_rel=H, E_rel=E, q_rel=q, step_open=k_open)
+        self.rel.update(state='release', H_rel=H, E_rel=E, q_rel=q, step_open=k_open, base_anchor=bp)
         self.rel['t']['open'], self.rel['t']['baseline'] = t_open, ts
         self.k3b.open(float(t_open), int(stp), q, E)
         self._go('RELEASE', m.t, t_open=t_open, baseline_step=stp)
         self._ev(m.t, to='RELEASE', baseline_step=stp, baseline_t=ts)
         act = dict(act, grip=self.c.finger_open if hasattr(self.c, 'finger_open') else act.get('grip'), target=self._target())
         return act
+
+    def _base_dev(self, m):
+        """相對 t_open 基準那一步的實測底盤位姿（不是 /park/gate 的開門前停位錨點：開門時底盤已協同移動）。"""
+        bp, a0 = getattr(m, 'base_pose', None), self.rel.get('base_anchor')
+        if bp is None or a0 is None:
+            return math.nan, math.nan
+        dyaw = math.atan2(math.sin(bp[2] - a0[2]), math.cos(bp[2] - a0[2]))
+        return math.hypot(bp[0] - a0[0], bp[1] - a0[1]), dyaw
 
     def _target(self):
         Tr = np.eye(4)
@@ -236,8 +248,7 @@ class K3MReleasePolicy(PW2.K3MW2Policy):
                  'nonfinger_d': min(cls['nonfinger']['d'], cls['finger']['d']),
                  'nonfinger_d_pred': min(cls['nonfinger']['d_pred'], cls['finger']['d_pred']),
                  'self_d': cls['self']['d'], 'self_d_pred': cls['self']['d_pred'], 'base_d': cls['base']['d'], 'base_d_pred': cls['base']['d_pred'],
-                 'base_dev_m': float(m.base_drift_m) if m.base_drift_m is not None else math.nan,
-                 'base_dev_yaw': float(m.base_drift_yaw) if m.base_drift_yaw is not None else math.nan,
+                 'base_dev_m': self._base_dev(m)[0], 'base_dev_yaw': self._base_dev(m)[1],
                  'wrist_n': m.wrist_max, 'unexpected_n': max(m.unexpected_max, m.wall_max),
                  'exec_state': rel.get('state'), 't_conf': rel.get('t_conf')}
         self.rel['n_samples'] += 1
