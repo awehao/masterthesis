@@ -35,7 +35,8 @@ ib('# EV6 r3 版（Codex 20261025_223632；',
 ia("import door_w2_exec2 as W2X2                                     # noqa: E402  EV6 r2：執行端接線 r2（與假世界共用）\n",
    "import door_w2_mode5 as W2M5                                     # noqa: E402  EV7：多段模式權威\n"
    "import door_k3b_release2 as K3BR                                 # noqa: E402  EV7：解除監看與 5 N 恢復權威\n"
-   "import door_k3b_finger_restore as K3BF                           # noqa: E402  EV7：手指上限恢復\n")
+   "import door_k3b_finger_restore as K3BF                           # noqa: E402  EV7：手指上限恢復\n"
+   "import door_w2_exec3 as W2X3                                     # noqa: E402  EV7：逐步列記手指目標\n")
 ia("ap.add_argument('--w2-post-commit-timeout-s', type=float, default=0.25)            # EV6\n",
    "ap.add_argument('--w2-release', action='store_true',                               # EV7\n"
    "                help='（EV7）K3-B 受控釋放：模式 2／3、逐步解除監看、5 N 恢復權威（需 --w2-mode-run-id 與 --pause-finger-max-effort）')\n")
@@ -63,7 +64,7 @@ ia("        w2x = W2X2.W2Exec2(w2_auth, env_in, filt=lambda u: k2_latch.filter_w
    "                                          post_commit_timeout_s=a.w2_post_commit_timeout_s, dt=a.physics_dt,\n"
    "                                          a_lin=a.base_accel_lin, a_ang=a.base_accel_ang, arm_rate_max=a.arm_rate_max,\n"
    "                                          gate3=lambda _s7: w2_xm.confirmed_fresh(_s7))\n"
-   "            w2x = W2X2.W2Exec2(w2_auth, env_in, filt=lambda u: k2_latch.filter_wb(u))\n"
+   "            w2x = W2X3.W2Exec3(w2_auth, env_in, filt=lambda u: k2_latch.filter_wb(u))\n"
    "            w2_effa = K3BR.EffortRestoreAuthority(a.w2_mode_run_id)\n"
    "            w2_auth.extra_state = lambda: {'release': {'state': w2_xm.state, 'why': w2_xm.why, 't_open': w2_xm.t.get('open'),\n"
    "                                                       't_conf': w2_xm.t.get('B_CONFIRMED'), 'step_conf': w2_xm.step_conf,\n"

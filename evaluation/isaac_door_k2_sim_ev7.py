@@ -263,6 +263,7 @@ import door_w2_exec2 as W2X2                                     # noqa: E402  E
 import door_w2_mode5 as W2M5                                     # noqa: E402  EV7：多段模式權威
 import door_k3b_release2 as K3BR                                 # noqa: E402  EV7：解除監看與 5 N 恢復權威
 import door_k3b_finger_restore as K3BF                           # noqa: E402  EV7：手指上限恢復
+import door_w2_exec3 as W2X3                                     # noqa: E402  EV7：逐步列記手指目標
 import collections as _w2_col                                    # noqa: E402  EV6
 from isaac_common import (bind_friction, bind_frictionless,     # noqa: E402
                           collision_prims, import_urdf,
@@ -1073,7 +1074,7 @@ def main() -> int:
                                           post_commit_timeout_s=a.w2_post_commit_timeout_s, dt=a.physics_dt,
                                           a_lin=a.base_accel_lin, a_ang=a.base_accel_ang, arm_rate_max=a.arm_rate_max,
                                           gate3=lambda _s7: w2_xm.confirmed_fresh(_s7))
-            w2x = W2X2.W2Exec2(w2_auth, env_in, filt=lambda u: k2_latch.filter_wb(u))
+            w2x = W2X3.W2Exec3(w2_auth, env_in, filt=lambda u: k2_latch.filter_wb(u))
             w2_effa = K3BR.EffortRestoreAuthority(a.w2_mode_run_id)
             w2_auth.extra_state = lambda: {'release': {'state': w2_xm.state, 'why': w2_xm.why, 't_open': w2_xm.t.get('open'),
                                                        't_conf': w2_xm.t.get('B_CONFIRMED'), 'step_conf': w2_xm.step_conf,
