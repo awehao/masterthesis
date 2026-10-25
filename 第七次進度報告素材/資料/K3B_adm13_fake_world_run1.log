@@ -1,0 +1,28 @@
+暫存 /tmp/claude-1000/-home-howardchen-masterthesis/2a47f71f-1a91-4ff0-9dbf-1892d8540042/scratchpad/k3b_adm13_ros　domain 214+
+
+L0  ADM13、門不動
+  三次提交皆確認                                                          ok  {1: (1869, True), 2: (1924, True), 3: (2010, True)} aborted=None rej=None
+  監督器：release_open 已切換、之後交接                                        ok  sub=release_open state=HANDED_OVER why=None checks={'t_commit': 19.240000000000002, 't_known': 19.240000000000002, 'door_rate_pre': 0.0, 't_defer0': None}
+  mode 2 提交後無停發（pause_no_publish／observe 0）                        ok  []
+
+L1  ADM13、門 1°/s、狀態延遲 0.1 s
+  三次提交皆確認                                                          ok  {1: (1869, True), 2: (1924, True), 3: (2010, True)} aborted=None rej=None
+  監督器：release_open 已切換、之後交接                                        ok  sub=release_open state=HANDED_OVER why=None checks={'t_commit': 19.240000000000002, 't_known': 19.380000000000003, 'door_rate_pre': 0.0, 't_defer0': 19.3}
+  mode 2 提交後無停發（pause_no_publish／observe 0）                        ok  []
+  提交時刻＝權威 mode 2 提交                                                ok  19.240000000000002 vs 19.240000000000002
+  得知晚於提交（延遲有效）                                                     ok  19.380000000000003
+
+L2  ADM13、門 0.06 rad/s
+  FAIL door_rate_in_release                                        ok  FAIL door_rate_in_release
+  之後停發                                                             ok  
+  mode 3 未提交                                                       ok  mode=2 aborted={'why': 'post_commit_source_lost', 'step': 1959, 't': 19.59}
+
+L3  ADM12（對照）、門 1°/s
+  FAIL moved_in_held（重現實跑）                                         ok  FAIL moved_in_held
+  mode 3 未提交                                                       ok  mode=2
+
+L4  ADM13、門 1°/s、狀態中斷 0.5 s
+  FAIL moved_in_held（暫緩逾時）                                         ok  FAIL moved_in_held sub=held defer=[{'t': 19.19, 'pending2': True}, {'t': 19.28, 'defer_start': True, 'door_rate': 0.0069813170079770625}, {'t': 19.53, 'defer_expired': True, 't_defer0': 19.28}]
+  mode 3 未提交                                                       ok  mode=2
+
+全部通過
