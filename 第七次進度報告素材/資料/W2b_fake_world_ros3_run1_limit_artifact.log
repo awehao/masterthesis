@@ -1,0 +1,52 @@
+暫存 /tmp/claude-1000/w2_mode_ros3　domain 175+
+
+M0  參數相依
+  --w2-held 缺前置 ⇒ 參數錯誤（exit 2）                                   ok  OUT_S]
+dl3_wgmpc_wg2_adm11_node.py: error: --w2-held 需要 --pause-active-hold 與 --pause-arm-win-s > 0
+
+  --w2-mode-run-id 缺前置 ⇒ 參數錯誤（exit 2）                            ok  AWER_START_TIMEOUT_S]
+dl3_wgmpc_wg2_adm11_node.py: error: --w2-mode-run-id 需要 --w2-held 與 --cmd-env
+
+M1  正常
+  M1 有產出且曾進 HELD                                                 **錯**  t_held=None
+
+M2  權威狀態遺失 1 s
+  M2 有提交                                                         **錯**  
+
+M3  延遲舊命令
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/test_w2_held_mode_ros3.py", line 156, in scenario
+    rclpy.spin_once(peer, timeout_sec=0.002)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 226, in spin_once
+    executor.spin_once(timeout_sec=timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 757, in _wait_for_ready_callbacks
+    wait_set = _rclpy.WaitSet(
+               ^^^^^^^^^^^^^^^
+rclpy._rclpy_pybind11.RCLError: failed to initialize wait set: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/wait.c:130
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/test_w2_held_mode_ros3.py", line 431, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/test_w2_held_mode_ros3.py", line 353, in main
+    w, st, a = scenario('m3', 2, inject_stale=True)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/test_w2_held_mode_ros3.py", line 223, in scenario
+    rclpy.shutdown()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+    _shutdown(context=context)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+    context.shutdown()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+    self.__context.shutdown()
+rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333
