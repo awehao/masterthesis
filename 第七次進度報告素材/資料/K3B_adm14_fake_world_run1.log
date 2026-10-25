@@ -1,0 +1,31 @@
+暫存 /tmp/claude-1000/-home-howardchen-masterthesis/2a47f71f-1a91-4ff0-9dbf-1892d8540042/scratchpad/k3b_adm14_ros　domain 120+
+
+M0  ADM14（無卸載）、門 1°/s、狀態延遲 0.1 s
+  三次提交皆確認                                                          ok  {1: (1869, True), 2: (1924, True), 3: (2010, True)} aborted=None rej=None
+  監督器 release_open 後交接                                             ok  sub=release_open state=HANDED_OVER why=None checks={'2': {'k': 2, 't_commit': 19.240000000000002, 't_known': 19.380000000000003, 't_exc_first': 19.28, 'sub_before': 'held', 'pre_speeds': [0.0, 0.0, 0.0, 0.0], 'ok': True}}
+  mode 2 提交後無停發                                                    ok  []
+  得知晚於提交 ≥ 0.1 s                                                   ok  {'2': 19.380000000000003}
+
+M1  ADM14＋卸載
+  三次提交皆確認                                                          ok  {1: (1869, True), 2: (2059, True), 3: (2145, True)} aborted=None rej=None
+  監督器 release_open 後交接                                             ok  sub=release_open state=HANDED_OVER why=None checks={'1': {'k': 1, 't_commit': 18.69, 't_known': 18.700000000000003, 't_exc_first': None, 'sub_before': 'held', 'pre_speeds': [0.0, 0.0, 0.0, 0.0], 'ok': True}, '2': {'k': 2, 't_commit': 20.59, 't_known': 20.6, 't_exc_first': None, 'sub_before': 'unloaded', 'pre_speeds': [0.0001515902049042982, 0.0, 0.00021165985514868152, 0.0003137265276181257], 'ok': True}}
+  mode 1 提交後無停發                                                    ok  []
+  子狀態 unload → unloaded → release_open                             ok  {'UNLOAD': 18.700000000000003, 'UNLOADED': 20.53, 'RELEASE_OPEN': 20.6}
+  mode 2 提交晚於求解端 unloaded（task_gate 等兩端）                           ok  unloaded=20.53 c2=20.59
+  執行端 UNLOADED 早於 mode 2 請求、交給釋放監看                                 ok  {'RAMPING': 18.69, 'SETTLING': 19.69, 'UNLOADED': 20.51, 'HANDED_TO_RELEASE': 20.59} req2=20.53
+  卸載斜坡讀回 20→5                                                      ok  20.0→5.0
+
+M2  Codex 跨趟重現
+  不切換、暫緩逾時 FAIL moved_in_held                                      ok  FAIL moved_in_held sub=held rej={'2': {'commits_missing': 15}} other=25
+  他趟訊息被濾除                                                          ok  25
+  mode 3 未提交                                                       ok  mode=2
+
+M3  卸載中底盤偏離 25 mm
+  執行端 unload FAILED base_dev                                       ok  FAILED base_dev
+  mode 2 未請求                                                       ok  {1: 18.68}
+  求解端 FAIL base_dev_in_unload                                      ok  FAIL base_dev_in_unload
+
+M4  ADM12（對照）＋卸載瞬態
+  mode 1 提交後 FAIL moved_in_held                                    ok  FAIL moved_in_held FAIL@18.73 c1=18.69
+
+全部通過
