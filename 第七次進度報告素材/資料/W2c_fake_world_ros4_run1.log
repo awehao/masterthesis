@@ -1,0 +1,72 @@
+暫存 /tmp/claude-1000/w2_mode_ros4　domain 200+
+
+M0  參數相依
+  --w2-held 缺前置 ⇒ 參數錯誤（exit 2）                                   ok  OUT_S]
+dl3_wgmpc_wg2_adm11_node.py: error: --w2-held 需要 --pause-active-hold 與 --pause-arm-win-s > 0
+
+  --w2-mode-run-id 缺前置 ⇒ 參數錯誤（exit 2）                            ok  AWER_START_TIMEOUT_S]
+dl3_wgmpc_wg2_adm11_node.py: error: --w2-mode-run-id 需要 --w2-held 與 --cmd-env
+
+M1  正常
+  M1 有產出且曾進 HELD                                                 ok  t_held=17.68
+  C0–C11 逐步證據全過（真鏈）                                              ok  [] k=1869 first=374
+  鏈無失效、無入口違規、提交步實際首筆＝first_source_seq                            ok  {'n_recv': 633, 'n_rejected': 0, 'fail': None, 'n_timeout_decel': 0, 'n_base_rate_capped': 8, 'intake_violations': [], 'feed': {'fed': 633, 'duplicate': 2534}, 'filt_blocked': 0}
+  觀察通過且結束時仍在 HELD（持續發布）                                          ok  HELD
+
+M2  權威狀態遺失 1 s
+  求解端仍得知提交、證據全過                                                  ok  []
+
+M3  延遲舊命令
+  被扣住的請求後舊模式命令於提交後送達 ⇒ stale、計數                                  ok  stale n_stale=1 intake={'buffered_current': 634, 'buffered_candidate': 1}
+  C5 舊命令未套用、證據全過                                                 ok  []
+  提交後每步套用皆為 mode 1                                               ok  1332
+
+M4  重送／衝突
+  重送 ⇒ repeat、另一請求 ⇒ conflict                                    ok  repeat ('reject', {'run_id': 'w2_mode_ros4', 'req_seq': 2, 'why': 'conflict_after_commit', 'step': 1873, 't': 18.73})
+  恰一次提交                                                          ok  
+
+M5  切換前失效（HELD 前請求）＋HELD 有界超時
+  求解端忽略（ignored_not_held）                                        ok  [{'kind': 'ignored_not_held', 't': 7.500000000000001, 'req_seq': 1}]
+  候選逾時拒絕、保持 mode 0、無提交                                           ok  {'run_id': 'w2_mode_ros4', 'req_seq': 1, 'why': 'candidate_timeout', 'step': 851, 't': 8.51}
+  HELD 有界超時結束（held_end＝timeout）                                  ok  timeout
+  HELD 期間持續發布（無逾時步）                                              ok  575
+
+M6  切換後失效
+  post_commit_source_lost 中止                                     ok  {'why': 'post_commit_source_lost', 'step': 1944, 't': 19.44}
+  不回切（mode_seq 仍 1）                                              ok  
+  中止後無新模式以外的套用（無回切）                                              ok  1256
+
+M7  中止優先
+  不提交、mode 0                                                     ok  [{'kind': 'pending', 'step': 1868, 't': 18.68, 'req_seq': 1, 'mode_seq': 1}, {'run_id': 'w2_mode_ros4', 'req_seq': 1, 'why': 'after_abort', 'step': 1868, 't': 18.68, 'kind': 'nack'}, {'kind': 'abort',
+  無 mode 1 命令被套用；求解端未發候選或候選判 stale                               ok  n_by_mode={'0': 376} n_stale=4
+  求解端撤回（reverted）                                                ok  [{'kind': 'prepare', 't': 18.68, 'req_seq': 1, 'mode_seq': 1}, {'kind': 'reverted', 't': 18.68, 'why': 'after_abort'}]
+
+M8  候選延遲 0.5 s（> 命令逾時 0.2 s、< 候選期限 1 s）
+  候選被延遲期間舊模式持續套用（無逾時步）                                           ok  pre=51 dropped=10
+  延遲後提交（提交晚於請求＋0.5 s）                                            ok  18.68→19.19
+  C0–C11 全過                                                      ok  []
+
+M9  提交步 K2 過濾擋下候選（真鏈）
+  過濾生效一次                                                         ok  {'n_recv': 367, 'n_rejected': 0, 'fail': None, 'n_timeout_decel': 1317, 'n_base_rate_capped': 8, 'intake_violations': [], 'feed': {'fed': 367, 'duplicate': 1472, 'filtered': 1}, 'filt_blocked': 1}
+  commit_not_applied 中止、applied_confirmed False                  ok  {'why': 'commit_not_applied:src_ne_first_source_seq', 'step': 1869, 't': 18.69}
+  不回切（mode_seq 仍 1）                                              ok  
+  提交步實際套用為 mode 0 舊快照（由鏈讀出，非測試指定）                                ok  {'step': 1869, 't': 18.69, 'src': 372, 'mode_seq': 0, 'chain_mode': 0, 'profile': 'release_prep_test', 'auth_mode_seq': 1, 'sel_src': 374, 'fed': 'filtered', 'c
+  中止後權威不再選定任何命令                                                  ok  1331
+
+M10  Codex 重現：提交後持續收到但全部被擋（真鏈）
+  提交步確認通過                                                        ok  1869
+  post_commit_not_applied 中止、0.25 s 內                            ok  {'why': 'post_commit_not_applied', 'step': 1914, 't': 19.14}
+  期間 mode 1 命令持續被收下（非斷流）                                         ok  35
+  不回切（mode_seq 仍 1）                                              ok  
+
+M11  同一步已知中止＋請求
+  權威中止 external:test_abort、無提交                                   ok  {'why': 'external:test_abort', 'step': 1868, 't': 18.68}
+  請求 nack after_abort、未轉送                                        ok  {'run_id': 'w2_mode_ros4', 'req_seq': 1, 'why': 'after_abort', 'step': 1868, 't': 18.68}
+  求解端未準備、無 mode 1 命令                                             ok  {'0': 376}
+
+R0  ADM11 關閉 W2 旗標（ADM9 行為回歸）
+  暫停照常 DONE（觀察 10 s、停發）                                          ok  DONE
+  stats.w2 為 None、無 HELD 轉移                                      ok  
+  無任何 v3 封裝發布                                                    ok  0
+
+全部通過

@@ -1,0 +1,21 @@
+暫存 /tmp/claude-1000/w2_task_routing　domain 190+
+
+T1  正常路由
+  exit 0、最終 DONE                                                   ok  rc=0 phase=DONE
+  恰一筆請求（latched /door/w2_mode_req_task）、內容正確                       ok  [{'run_id': 'w2_route', 'req_seq': 1, 'from_mode': 'PAUSE_HELD', 'to_mode': 'RELEASE_PREP_TEST', 'mode_seq': 1}]
+  請求在 HELD 之後約 1 s                                                 ok  1.087148728000102
+  節點不發求解端話題 /door/w2_mode_req                                      ok  []
+  /room/stop 只在保持 3 s 之後                                           ok  3.075485903000299
+  task.json w2.state＝done、提交時刻與保持 3 s                              ok  {'held_wait': 3.02, 'requested': 4.08, 'committed': 4.34, 'done': 7.36}
+  trace 每列含 w2                                                     ok  103
+  他趟 run_id 狀態不計入（計數 ≤ 本趟送出數、最後狀態為本趟）                              ok  n_state_msgs=172 own_sent=190 other_sent=190
+  trace 上 w2 狀態序 none→held_wait→requested→committed→done           ok  
+
+T2  請求被拒
+  中止 w2_request_rejected:candidate_invalid:accel_box               ok  w2_request_rejected:candidate_invalid:accel_box
+  exit 1、最終 ABORTED、發 /door/k2_abort                               ok  rc=1 ['{"why": "w2_request_rejected:candidate_invalid:accel_box", "t": 4.16}']
+
+T3  關閉旗標
+  無請求發布、task.json 無 w2                                             ok  rc=1
+
+全部通過

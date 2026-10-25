@@ -139,7 +139,29 @@
 - **K3-B 解除清空判準**：須在真實受控釋放實作前定版。
 
 ## 7. 假世界 r4 結果
-（跑完後填入。）
+`/tmp/claude-1000/w2_mode_ros4`：M0–M11＋R0 一次全過（`全部通過`），無殘留程序。
+
+**M1–M9 與 r3 一致**
+- M1：提交 k＝1869、first＝374，C0–C11 全過。
+- M6：post_commit_source_lost 於 19.44。
+- M7：
+  - 請求先登記並轉送；
+  - 同步 sync_after 中止 ⇒ 不提交、無 mode 1 套用、求解端 reverted。
+- M9：commit_not_applied:src_ne_first_source_seq。
+
+**M10：Codex 重現（ROS 層）**
+- 經過：
+  - 提交步 1869（18.69）確認通過；
+  - 之後 mode 1 命令持續被收下，鏈內過濾 35 次；
+  - 19.14 中止 `post_commit_not_applied`，mode_seq 仍 1。
+- 時間分解（照實記）：提交後 0.45 s 才中止。
+  - 前 0.2 s：鏈仍在其 0.2 s 有效期內，實際套用提交步那筆快照（src 為該筆、鏈正常），屬真實的有效套用證據；
+  - 後 0.25 s：自最後有效套用起算的期限。
+  - 所以「新命令被擋到中止」最長約 0.45 s，**不是 0.25 s**。
+
+**M11：同一步已知中止＋請求**
+- external:test_abort、請求 nack after_abort、未轉送。
+- 求解端無 prepare、n_by_mode 只有 mode 0、無提交。
 
 ## 8. 凍結
 `results/door/freeze_door_wide_w2c_dev_r1.sha256`，收錄：
