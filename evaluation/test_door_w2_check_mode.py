@@ -4,6 +4,7 @@
   K1 提交步套用的 src≠first_source_seq ⇒ C1；K2 切換附近一步逾時 ⇒ C2；K3 mode_seq 倒退 ⇒ C3；K4 k 之前出現 mode 1 ⇒ C3；
   K5 命令 mode_seq≠權威 ⇒ C3；K6 profile 晚一步切換 ⇒ C4；K7 注入舊命令出現在 k 之後 ⇒ C5；K8 n_stale 少於注入數 ⇒ C5；
   K9 求解端未得知提交 ⇒ C6；K10 HELD 期間（觀察通過後、請求前）有逾時步 ⇒ C7；K11 提交兩次 ⇒ commit_count_2。
+  r2 覆蓋：刪切換後 40 步、截斷在提交步、交換相鄰列、時間 NaN、缺觀察通過起區段、提交未確認套用、事件不符、觀察通過後 0.1 s 逾時 ⇒ 各自不通過。
   V1 v3 編解碼往返、mode_seq 保留；V2 mode_seq 負數／非整數／缺欄、schema 不符 ⇒ 拒絕；V3 v2 的身分規則照樣檢查（derived＝0 但 source_seq≠−1）。
 
     python3 evaluation/test_door_w2_check_mode.py
@@ -33,8 +34,8 @@ def synth():
             src = 200                                                             # 首筆新模式 src
         rows.append({'step': s, 't': t, 'src': src, 'mode_seq': ms, 'chain_mode': 0,
                      'profile': 'release_prep_test' if s >= K else 'pause_hold', 'auth_mode_seq': ms})
-    auth = {'commit': {'step': K, 't': K * 0.01, 'first_source_seq': 200, 'mode_seq': 1},
-            'events': [{'kind': 'pending'}, {'kind': 'commit', 'step': K}], 'n_stale': 0}
+    auth = {'commit': {'step': K, 't': K * 0.01, 'first_source_seq': 200, 'mode_seq': 1, 'applied_confirmed': True},
+            'events': [{'kind': 'pending'}, {'kind': 'commit', 'step': K, 'first_source_seq': 200}], 'n_stale': 0}
     sw = {'committed': 1, 'first_src_by_mode': {'0': 1, '1': 200}}
     return rows, auth, sw
 
@@ -70,6 +71,27 @@ class T(unittest.TestCase):
         rows, auth, sw = synth()
         auth['events'].append({'kind': 'commit', 'step': K + 50})
         self.assertIn('commit_count_2', run(rows, auth, sw)['why'])
+
+    def test_r2_coverage(self):
+        """Codex 20261025_211640 重現的誤收：刪切換後連續 40 步、截斷在提交步、交換相鄰兩列；另加時間 NaN、提交未確認套用、事件與提交不符。"""
+        def chk(f, tag):
+            rows, auth, sw = synth()
+            rows = f(rows, auth) or rows
+            r = run(rows, auth, sw)
+            self.assertFalse(r['ok'], tag)
+            self.assertIn(tag, r['why'], (tag, r['why']))
+        chk(lambda R, A: [r for r in R if not (K + 5 <= r['step'] < K + 45)], 'C0_steps_not_unique_consecutive_or_time_not_increasing')
+        chk(lambda R, A: [r for r in R if r['step'] <= K], 'C0_window_not_covered')
+        def swap(R, A):
+            i = next(n for n, r in enumerate(R) if r['step'] == K + 10)
+            R[i], R[i + 1] = R[i + 1], R[i]
+            return R
+        chk(swap, 'C0_steps_not_unique_consecutive_or_time_not_increasing')
+        chk(lambda R, A: R[30].__setitem__('t', float('nan')), 'C0_steps_not_unique_consecutive_or_time_not_increasing')
+        chk(lambda R, A: [r for r in R if r['t'] >= 9.0], 'C0_window_not_covered')                     # 缺 OBS_PASSED 起的區段
+        chk(lambda R, A: A['commit'].__setitem__('applied_confirmed', None), 'C1_commit_event_inconsistent')
+        chk(lambda R, A: A['events'][1].__setitem__('first_source_seq', 199), 'C1_commit_event_inconsistent')
+        chk(lambda R, A: next(r for r in R if r['step'] == 860).update(chain_mode=1, src=-1), 'C7_held_not_publishing')   # 觀察通過後 0.1 s 的逾時（不再豁免）
 
     def test_v1_v3_roundtrip(self):
         d = E3.encode3(12345.0, 7, V2.ST_ADAPTER, 3, 7, True, 1.5, [0.1] * 9, 4)

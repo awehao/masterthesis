@@ -35,7 +35,8 @@ assert out.count(OLD) == 1
 out = out.replace(OLD, NEW)
 ib('"""Thin adapter: the safety filter',
    '# W2 版（arm_vel_adapter_k3m.py 的版本化複本；Codex 20261025_201543）：--cmd-env-v3 ⇒ 只訂 /wgmpc/cmd_env3、只發 /wb_vel_cmd_env3（cmd_envelope_v3，19 欄）；\n'
-   '#   轉送時 **mode_seq 原樣保留**（與 source_seq 同封裝），轉換與檢查同 on_env；不訂 v2、不訂舊九維。預設關 ⇒ 與 k3m 版同行為。\n')
+   '#   轉送時 **mode_seq 原樣保留**（與 source_seq 同封裝），轉換與檢查同 on_env；不訂 v2、不訂舊九維。預設關 ⇒ 與 k3m 版同行為。\n'
+   '#   r2（Codex 20261025_211640）：v3 的 stamp_sim_t 沿用求解端模擬時間戳（不改用 adapter 節點時鐘），供執行端以模擬時間核對新鮮度與未來時間。\n')
 ia("import wgmpc_cmd_envelope as ENV                                  # noqa: E402\n",
    "import cmd_envelope_v3 as E3                                     # noqa: E402  W2：v3 封裝\n")
 OLD2 = """    def __init__(self, ctrl=CTRL_DEFAULT, cmd_env=False,
@@ -65,7 +66,7 @@ ib("    def on_odom(self, m):\n",
         self._out_seq += 1
         om = Float64MultiArray()
         om.data = E3.encode3(e['run_id'], e['source_seq'], ENV.ST_ADAPTER, self._out_seq, e['output_seq'], e['derived'],
-                             self.get_clock().now().nanoseconds * 1e-9, v, e['mode_seq'], kind=e['kind'])
+                             e['stamp_sim_t'], v, e['mode_seq'], kind=e['kind'])          # r2：沿用求解端模擬時間戳（執行端以模擬時間核對新鮮度與未來時間）
         if E3.decode3(om.data)['mode_seq'] != e['mode_seq']:
             self.n_v3_mode_mismatch += 1
             return

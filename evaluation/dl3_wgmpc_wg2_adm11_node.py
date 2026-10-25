@@ -5,6 +5,7 @@
 #   --w2-mode-run-id（需 --w2-held 與 --cmd-env）：door_w2_mode.SolverModeSource；訂閱 /door/w2_mode_req（只在 HELD 接受、準備新模式首筆）與
 #   /door/w2_mode_state（執行端權威狀態，ack 遺失時亦以此為準）；每筆發布另以 v3 封裝（cmd_envelope_v3，同一 source_seq＋mode_seq）發到
 #   /wgmpc/cmd_env3。本包只有測試模式 RELEASE_PREP_TEST（命令與 HELD 相同，不張爪、不退離）。既有 v2 封裝與話題不變。
+#   r2（Codex 20261025_211640）：一般流 mode_seq＝已提交序號（候選準備期間舊模式持續供應）；候選旁路另發一筆（獨立 source_seq、新 mode_seq）。
 # ADM9（W1c：夾持期間偏移估計保持；Codex 20261025_002129，規格 W1c_offset_hold_spec.md）：dl3_wgmpc_wg2_adm8_node.py 的版本化複本，**只做插入**：
 #   --offset-hold-on-free（預設關 ⇒ 與 ADM8 同行為；需 --offset-observer interval 與 --mode-switch-run-id）：底盤模式首次切入 free 的那一輪
 #   （本輪觀測器更新之前）凍結 d̂＝當時已可取得的值（上一輪更新後），之後每輪以阻擋理由 offset_hold 呼叫既有 IntervalFeed
@@ -610,7 +611,7 @@ class WGMPCNode(Node):
                                   self._source_seq, True, _t, u_world)
             self.env_pub.publish(_em)
             if self._w2src is not None:                                                # ADM11：同一 source_seq 另發 v3（mode_seq 綁定）
-                _ms11 = int(self._w2src.tag())
+                _ms11 = int(self._w2src.tag_normal())                                       # r2：一般流＝已提交序號
                 _e3 = Float64MultiArray()
                 _e3.data = E3.encode3(self._run_id_n, self._source_seq, ENV.ST_SOLVER, self._source_seq,
                                       self._source_seq, True, _t, u_world, _ms11)
@@ -629,6 +630,17 @@ class WGMPCNode(Node):
         self._cmd_hist.append((_tpub,
                                np.asarray(u_body, float).copy(),
                                int(self._source_seq)))
+        if self._w2src is not None and self._w2src.tag_candidate() is not None:          # ADM11 r2：候選旁路（獨立 source_seq、新 mode_seq）
+            self._source_seq += 1
+            _msc = int(self._w2src.tag_candidate())
+            _e3c = Float64MultiArray()
+            _e3c.data = E3.encode3(self._run_id_n, self._source_seq, ENV.ST_SOLVER, self._source_seq,
+                                   self._source_seq, True, _tpub, u_world, _msc)
+            self._env3_pub.publish(_e3c)
+            self._cmd_hist.append((_tpub, np.asarray(u_body, float).copy(), int(self._source_seq)))
+            self._w2_pub['n_by_mode'][_msc] = self._w2_pub['n_by_mode'].get(_msc, 0) + 1
+            self._w2_pub['first_src_by_mode'].setdefault(_msc, int(self._source_seq))
+            self._w2_pub['n_candidate'] = self._w2_pub.get('n_candidate', 0) + 1
         if len(self._cmd_hist) > 128:
             self._cmd_hist.pop(0)
         return u_world
@@ -1918,7 +1930,7 @@ class WGMPCNode(Node):
                         {'events': self._w2src.events[:200], 'committed': self._w2src.committed,
                          'n_by_mode': {str(k): v for k, v in self._w2_pub['n_by_mode'].items()},
                          'first_src_by_mode': {str(k): v for k, v in self._w2_pub['first_src_by_mode'].items()},
-                         'last_pub': self._w2_pub['last']}),
+                         'last_pub': self._w2_pub['last'], 'n_candidate': self._w2_pub.get('n_candidate', 0)}),
                     k3m_mode=(None if self._mode_sw is None else                      # ADM3：握手紀錄
                               {'active': bool(self._mode_sw.active), 'record': self._mode_sw.record,
                                'rejections': self._mode_sw.rejections, 'events': self._mode_events}),

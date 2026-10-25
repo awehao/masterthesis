@@ -103,3 +103,67 @@
 
 ## 4. 凍結
 `results/door/freeze_w2a_dev_r1.sha256`：新檔、相依模組（暫停監督器、封裝、ADM9、adapter_k3m、替身端點）與生成腳本。所有文件改完後最後建立。
+
+## 5. r2（Codex 20261025_211640：四項必修＋ADM11 關閉旗標回歸；仍不實跑）
+**① 準備候選期間，舊模式持續供應**（求解端雙流）
+- SolverModeSource.tag_normal()＝已提交序號：一般命令流（v2＋v3）在準備候選期間照常以舊 mode_seq 發布。
+- 候選走**旁路**：
+  - 同週期在一般發布之後另發一筆 v3，帶獨立 source_seq 與新 mode_seq，並記入 _cmd_hist；
+  - 權威狀態顯示提交後，候選流才成為一般流。
+- ADM11 r2 仍為 ADM9 只插入（2454 → 2517）。
+- 揭露：
+  - 測試模式下候選內容與一般命令相同；真實模式之後須另算候選內容與對應的 _cmd_hist。
+  - 暫停監督器 note_published 與 rec['pause_source_seq'] 記到的是同週期最後一筆（候選）的序號；序號仍單調。
+
+**② 接收與物理步提交分開；入口驗證完整**（ModeAuthority r2）
+- 三個介面分工：
+  - on_env：只做入口驗證與緩衝；
+  - select(step, t, applied u_prev)：在物理步選擇套用，並在此提交；
+  - confirm_applied：核對實際套用來源，提交步不符 ⇒ 中止 commit_not_applied（不回切）。
+- 同一步連到多筆，以最後緩衝者為準；commit 記錄的就是實際選定那筆。
+- 入口規則：
+  - 身分：本趟 run_id、stage（adapter）、kind normal、derived；
+  - source_seq 為非負整數，每個 mode 單調；
+  - 同序同值重送冪等、不刷新；同序異值、跨 mode 同序 ⇒ 違規；亂序、過期 ⇒ stale；
+  - 未來時間戳 ⇒ 違規；
+  - 候選須在命令新鮮期（0.2 s）內被選定，候選期限 1 s；
+  - **缺或非法的 applied u_prev ⇒ 拒絕候選**。
+- adapter_w2 r2：v3 的 stamp_sim_t 沿用求解端的模擬時間戳。adapter 節點時鐘不是模擬時間，所以執行端改以模擬時間核對新鮮度與未來時間。
+
+**③ 判定器核對證據覆蓋**（door_w2_check_mode r2）
+- C0：
+  - 覆蓋登錄窗口 [OBS_PASSED, 提交步＋window]；
+  - 步號唯一且逐步連續；時間有限且嚴格遞增。
+- C1'：唯一 commit 事件與 auth.commit 一致；applied_confirmed 為 True。
+- C7 移除 OBS_PASSED＋0.3 s 豁免。
+
+**④ HELD 不削弱套用回報驗證**
+- 保留 3＋6 維、有限、整數步號與來源序號（排除 bool）、時間有限的檢查。
+- 同步同值重送不刷新；同步異值 ⇒ applied_conflict；倒退 ⇒ applied_order。
+- 無效資料一律 applied_invalid，不拋例外。
+
+**測試（全過）**
+- **`test_door_w2_mode.py` 20 項**，新增：
+  - 候選延遲超過命令逾時時舊模式持續套用；
+  - 同一步多筆候選；
+  - 提交步實際套用不符 ⇒ 中止；
+  - 過期候選與候選逾時；
+  - 缺或非法 u_prev ⇒ 拒絕；
+  - 候選內容不合格；
+  - 入口 11 種違規，以及冪等、同序異值、跨 mode、亂序、過期；
+  - 提交後舊序號 stale 與斷流中止；
+  - 請求規則；
+  - HELD 回報 6 種無效輸入與重送、衝突、倒退；
+  - 雙流 tag。
+- **`test_door_w2_check_mode.py` 6 項**，新增 Codex 的三個誤收反例（刪切換後 40 步、截斷在提交步、交換相鄰列），以及時間 NaN、缺觀察通過起區段、提交未確認、事件不符、觀察通過後 0.1 s 逾時。
+- **`test_w2_held_mode_ros.py` M0–M8＋R0**（假世界）：
+  - 端點改用 r2 介面：每物理步 select，並以 confirm_applied 回報。
+  - **M3 r2**：扣住請求後的一筆 mode 0 命令，提交後 0.3 s 才送達 ⇒ stale、計數、未套用；提交後 1332 步皆為 mode 1。
+  - **M8 新增**：候選延遲 0.5 s（丟 10 筆）。期間 51 步舊模式持續套用、無逾時步；請求後 0.51 s 才提交（18.68 → 19.19 s）；C0–C7 全過。
+  - **R0 新增**：ADM11 不帶 --w2-*（比照 ADM9，v2 直接作套用來源）⇒ 暫停照常 DONE；stats.w2 為 None；/wgmpc/cmd_env3 無任何訊息。
+  - 測試時序：連續多情境時 DDS 探索較慢，改為替身 3.0 s 就緒、free 4.0 s、pause 6.0 s。
+    - 第一次全跑時，M7、M8、R0 因 ADM9 既有保護 park_mode_refused（就緒時尚未收到 /park/gate）而提前結束。這屬於測試時序，與 W2 無關；M7 單獨跑可通過。
+
+**仍未驗證**：Isaac 執行端（ev6）接線、任務端 HELD_WAIT 與請求、真實張爪／退離（K3-B 須先定版）。
+
+**凍結**：`results/door/freeze_w2a_dev_r2.sha256`，所有文件改完後最後建立；r1 保留。

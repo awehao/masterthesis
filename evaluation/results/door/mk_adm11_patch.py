@@ -1,4 +1,6 @@
-"""ADM9 → ADM11（W2 HELD／模式來源；Codex 20261025_201543）：只插入（每個錨點恰好一次；核對 ADM9 每行依序在新檔中）。"""
+"""ADM9 → ADM11（W2 HELD／模式來源；Codex 20261025_201543；r2＝Codex 20261025_211640）：只插入（每個錨點恰好一次；核對 ADM9 每行依序在新檔中）。
+r2：一般命令流的 v3 mode_seq＝已提交序號（準備候選期間舊模式持續供應）；候選走旁路——同週期在一般發布之後另發一筆 v3、獨立 source_seq、
+新 mode_seq，並記入 _cmd_hist（測試模式候選內容與一般命令相同）。"""
 src = open('dl3_wgmpc_wg2_adm9_node.py').read()
 out = src
 
@@ -21,7 +23,8 @@ ib('# ADM9（W1c：夾持期間偏移估計保持；',
    '#   觀察通過記 OBS_PASSED 並進 HELD，持續發布保持命令與監看（不以觀察通過停發）；HELD 超過 --w2-held-max-s ⇒ HELD_TIMEOUT_END 後 DONE。\n'
    '#   --w2-mode-run-id（需 --w2-held 與 --cmd-env）：door_w2_mode.SolverModeSource；訂閱 /door/w2_mode_req（只在 HELD 接受、準備新模式首筆）與\n'
    '#   /door/w2_mode_state（執行端權威狀態，ack 遺失時亦以此為準）；每筆發布另以 v3 封裝（cmd_envelope_v3，同一 source_seq＋mode_seq）發到\n'
-   '#   /wgmpc/cmd_env3。本包只有測試模式 RELEASE_PREP_TEST（命令與 HELD 相同，不張爪、不退離）。既有 v2 封裝與話題不變。\n')
+   '#   /wgmpc/cmd_env3。本包只有測試模式 RELEASE_PREP_TEST（命令與 HELD 相同，不張爪、不退離）。既有 v2 封裝與話題不變。\n'
+   '#   r2（Codex 20261025_211640）：一般流 mode_seq＝已提交序號（候選準備期間舊模式持續供應）；候選旁路另發一筆（獨立 source_seq、新 mode_seq）。\n')
 ia('import door_k3m_pause as PZ                                      # noqa: E402  ADM4：decel_step（可行集合）\n',
    'import door_w2_mode as W2M                                       # noqa: E402  ADM11：HELD／模式來源\n'
    'import cmd_envelope_v3 as E3                                     # noqa: E402  ADM11：v3 封裝（mode_seq）\n')
@@ -51,7 +54,7 @@ ib("    def _pause_status(self, slot, note=None):                               
    "\n")
 ia("""            self.env_pub.publish(_em)
 """, """            if self._w2src is not None:                                                # ADM11：同一 source_seq 另發 v3（mode_seq 綁定）
-                _ms11 = int(self._w2src.tag())
+                _ms11 = int(self._w2src.tag_normal())                                       # r2：一般流＝已提交序號
                 _e3 = Float64MultiArray()
                 _e3.data = E3.encode3(self._run_id_n, self._source_seq, ENV.ST_SOLVER, self._source_seq,
                                       self._source_seq, True, _t, u_world, _ms11)
@@ -65,7 +68,7 @@ ia("                    offset_hold=self._of_hold,                              
    "                        {'events': self._w2src.events[:200], 'committed': self._w2src.committed,\n"
    "                         'n_by_mode': {str(k): v for k, v in self._w2_pub['n_by_mode'].items()},\n"
    "                         'first_src_by_mode': {str(k): v for k, v in self._w2_pub['first_src_by_mode'].items()},\n"
-   "                         'last_pub': self._w2_pub['last']}),\n")
+   "                         'last_pub': self._w2_pub['last'], 'n_candidate': self._w2_pub.get('n_candidate', 0)}),\n")
 ib("    ap.add_argument('--park-uprev-tol', type=float, default=1e-6,\n",
    "    ap.add_argument('--w2-held', action='store_true',\n"
    "                    help='ADM11：觀察通過後進 HELD 持續保持發布與監看（需 --pause-active-hold 與 --pause-arm-win-s > 0）')\n"
@@ -76,6 +79,21 @@ ib("    rclpy.init()\n    nd = WGMPCNode(a)\n",
    "        ap.error('--w2-held 需要 --pause-active-hold 與 --pause-arm-win-s > 0')\n"
    "    if a.w2_mode_run_id and not (a.w2_held and a.cmd_env):\n"
    "        ap.error('--w2-mode-run-id 需要 --w2-held 與 --cmd-env')\n")
+ia("""        self._cmd_hist.append((_tpub,
+                               np.asarray(u_body, float).copy(),
+                               int(self._source_seq)))
+""", """        if self._w2src is not None and self._w2src.tag_candidate() is not None:          # ADM11 r2：候選旁路（獨立 source_seq、新 mode_seq）
+            self._source_seq += 1
+            _msc = int(self._w2src.tag_candidate())
+            _e3c = Float64MultiArray()
+            _e3c.data = E3.encode3(self._run_id_n, self._source_seq, ENV.ST_SOLVER, self._source_seq,
+                                   self._source_seq, True, _tpub, u_world, _msc)
+            self._env3_pub.publish(_e3c)
+            self._cmd_hist.append((_tpub, np.asarray(u_body, float).copy(), int(self._source_seq)))
+            self._w2_pub['n_by_mode'][_msc] = self._w2_pub['n_by_mode'].get(_msc, 0) + 1
+            self._w2_pub['first_src_by_mode'].setdefault(_msc, int(self._source_seq))
+            self._w2_pub['n_candidate'] = self._w2_pub.get('n_candidate', 0) + 1
+""")
 open('dl3_wgmpc_wg2_adm11_node.py', 'w').write(out)
 a_, b_ = src.splitlines(), out.splitlines()
 j = 0
