@@ -41,7 +41,8 @@ def order(s, keys):
 class TW(unittest.TestCase):
     def test_w1_regen(self):
         for mk, outp in (('results/door/mk_adm12_patch.py', 'dl3_wgmpc_wg2_adm12_node.py'), ('results/door/mk_ev7r2_patch.py', 'isaac_door_k2_sim_ev7r2.py'),
-                         ('results/door/mk_task_k3b_patch.py', 'door_k3m_task_node_k3b.py')):
+                         ('results/door/mk_task_k3b_patch.py', 'door_k3m_task_node_k3b.py'),
+                         ('results/door/mk_task_k3b2_patch.py', 'door_k3m_task_node_k3b2.py')):
             h0 = hashlib.sha256(rd(outp).encode()).hexdigest()
             r = subprocess.run([sys.executable, mk], cwd=HERE, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -87,6 +88,17 @@ class TW(unittest.TestCase):
         self.assertIn("'by': 'applied_candidate'", blk2)
         self.assertIn("T_cyc, _tgt_src = np.array(_T12, float), f'w2_retreat:{_src12}'", s)
         self.assertLess(s.index("rec['w2_retreat_out'] = True"), s.index("rec['pause_u_solve'] = [float(x) for x in np.asarray(r.u0, float)]"))
+
+    def test_w6_r2_files(self):
+        s = rd('isaac_door_k2_sim_ev7r2.py')
+        self.assertIn('import door_k3b_release3 as K3BR', s)
+        self.assertNotIn('import door_k3b_release2 as K3BR', s)
+        self.assertIn("rec['w2']['grip_gate'] = w2_grip.report()", s)
+        n = rd('door_k3m_task_node_k3b2.py')
+        i = n.index('        pol = PK3B2.K3MReleasePolicy2(')
+        self.assertGreater(i, n.index('        pol = PK3B.K3MReleasePolicy('))   # r2 物件取代 r1 物件（之後才建）
+        self.assertIn('import door_k3b_release3 as KR', rd('door_k3m_policy_k3b2.py'))
+        self.assertIn('import door_k3b_release3 as KR', rd('door_k3m_check_k3b2.py'))
 
     def test_w5_task_node(self):
         s = rd('door_k3m_task_node_k3b.py')
