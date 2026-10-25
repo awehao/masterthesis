@@ -24,7 +24,8 @@ ib('# ADM11（W2 保持／待交接；',
    '#   (2) mode 3 候選：準備期間於一般發布之後，以**話題退離目標**對同一快照、同一 u_prev、同一 base_hold 另解一次（冷啟動，不改暖啟動、\n'
    '#       偏移估計、u_prev、一般流目標），通過既有 publish_feasible 才以獨立 source_seq 發 v3 mode 3；**不寫入延遲預測歷史**，\n'
    '#       只有執行端回報該 source_seq 已實際套用（/door/applied_src）時才插入歷史（不同內容的候選不當作已套用命令）。\n'
-   '#   (3) 權威狀態顯示已提交 mode 3 ⇒ 監督器 handover（HELD 結束、held_end handover）；之後目標＝話題退離目標，\n'
+   '#   (3) 權威狀態顯示已提交 mode 3，或執行端回報 mode 3 候選已實際套用（先到者；後者在監督器核對該筆之前）⇒ 監督器 handover\n'
+   '#       （HELD 結束、held_end handover）；之後目標＝話題退離目標，\n'
    '#       底盤仍為原暫停錨點的保持伺服（不重設錨點、不回 PARK_HOLD 路徑），手臂不再歸零。\n')
 ia('import cmd_envelope_v3 as E3                                     # noqa: E402  ADM11：v3 封裝（mode_seq）\n',
    'import door_w2_mode5 as W2M5                                     # noqa: E402  ADM12：多段模式、HELD 交接、模式來源 r5\n')
@@ -110,7 +111,11 @@ ia("    def _on_applied_src(self, m):                                           
    "                while _i12 > 0 and self._cmd_hist[_i12 - 1][0] > _c12[0]:\n"
    "                    _i12 -= 1\n"
    "                self._cmd_hist.insert(_i12, (_c12[0], np.asarray(_c12[1], float).copy(), _sq12))\n"
-   "                self._w2r['n_hist_insert'] += 1\n")
+   "                self._w2r['n_hist_insert'] += 1\n"
+   "                if self._w2r['handover'] is None and self._pause_sup is not None and self._pause_sup.state == 'HELD' \\\n"
+   "                        and self._pause_sup.handover(self.sim_now()):                    # 候選被實際套用＝執行端已提交 ⇒ 先交接再核\n"
+   "                    self._w2r['handover'] = {'sim_t': self.sim_now(), 'slot': None, 'by': 'applied_candidate', 'source_seq': _sq12,\n"
+   "                                             'anchor': (None if self._pause.get('anchor') is None else [float(x) for x in self._pause['anchor']])}\n")
 ia("                         'last_pub': self._w2_pub['last'], 'n_candidate': self._w2_pub.get('n_candidate', 0)}),\n",
    "                    w2_retreat=(None if self._w2r is None else                          # ADM12\n"
    "                                dict({k: v for k, v in self._w2r.items() if k != 'cand_hist'}, n_cand_hist_left=len(self._w2r['cand_hist']))),\n")

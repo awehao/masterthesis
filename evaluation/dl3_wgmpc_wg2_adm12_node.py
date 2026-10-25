@@ -5,7 +5,8 @@
 #   (2) mode 3 候選：準備期間於一般發布之後，以**話題退離目標**對同一快照、同一 u_prev、同一 base_hold 另解一次（冷啟動，不改暖啟動、
 #       偏移估計、u_prev、一般流目標），通過既有 publish_feasible 才以獨立 source_seq 發 v3 mode 3；**不寫入延遲預測歷史**，
 #       只有執行端回報該 source_seq 已實際套用（/door/applied_src）時才插入歷史（不同內容的候選不當作已套用命令）。
-#   (3) 權威狀態顯示已提交 mode 3 ⇒ 監督器 handover（HELD 結束、held_end handover）；之後目標＝話題退離目標，
+#   (3) 權威狀態顯示已提交 mode 3，或執行端回報 mode 3 候選已實際套用（先到者；後者在監督器核對該筆之前）⇒ 監督器 handover
+#       （HELD 結束、held_end handover）；之後目標＝話題退離目標，
 #       底盤仍為原暫停錨點的保持伺服（不重設錨點、不回 PARK_HOLD 路徑），手臂不再歸零。
 # ADM11（W2 保持／待交接；Codex 20261025_201543，設計 W2_hold_handover_design_draft2.md，規格 W2a_held_mode_spec.md）：dl3_wgmpc_wg2_adm9_node.py 的版本化複本，**只做插入**：
 #   --w2-held（需 --pause-active-hold 與 --pause-arm-win-s > 0；預設關 ⇒ 與 ADM9 同行為）：監督器改 door_w2_mode.HeldSupervisorP4b——
@@ -982,6 +983,10 @@ class WGMPCNode(Node):
                     _i12 -= 1
                 self._cmd_hist.insert(_i12, (_c12[0], np.asarray(_c12[1], float).copy(), _sq12))
                 self._w2r['n_hist_insert'] += 1
+                if self._w2r['handover'] is None and self._pause_sup is not None and self._pause_sup.state == 'HELD' \
+                        and self._pause_sup.handover(self.sim_now()):                    # 候選被實際套用＝執行端已提交 ⇒ 先交接再核
+                    self._w2r['handover'] = {'sim_t': self.sim_now(), 'slot': None, 'by': 'applied_candidate', 'source_seq': _sq12,
+                                             'anchor': (None if self._pause.get('anchor') is None else [float(x) for x in self._pause['anchor']])}
         if not self._pause_active():
             return
         d = list(m.data)
