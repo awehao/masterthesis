@@ -203,3 +203,16 @@ class HeldSupervisorP4b5(W2M.HeldSupervisorP4b):
             if o.get('transitions', {}).get('HELD') is not None:
                 o['held_s'] = self.t_handover - o['transitions']['HELD']
         return o
+
+
+class SolverModeSource5(W2M.SolverModeSource):
+    """求解端模式來源 r5：ADM11 的旁路候選（候選＝一般命令內容）只用於保持形模式 1、2；
+    mode 3（退離）的候選由 ADM12 以退離目標另解並另行發布 ⇒ tag_candidate() 對 3 回 None，改由 tag_candidate3() 提供。"""
+
+    def tag_candidate(self):
+        m = super().tag_candidate()
+        return None if m == 3 else m
+
+    def tag_candidate3(self):
+        m = super().tag_candidate()
+        return 3 if m == 3 else None
