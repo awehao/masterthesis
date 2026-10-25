@@ -2,8 +2,12 @@
 """K3-B 受控釋放整體判定器（規格 K3B_release_clear_spec_draft2.md §8 R1–R8；設計 K3B_impl_design_draft1.md D5；起跑前凍結）。
 
 一、既有判準：door_k3m_check_w1f2.judge 全部照跑；只取代下列明列項（K3B_REPLACED），其餘一律保留：
-  - pause_solver_outcome_not_done／pause_task_not_done（同 W2c：監督器 HELD→HANDED_OVER，task pause_outcome 不是 DONE）；
-  - grip_command_not_closed_after_grasp（受控釋放於 t_open 起張爪；改由 K1 核「t_open 之前閉、之後開」）。
+  - pause_solver_outcome_not_done／pause_task_not_done（同 W2c：監督器 HELD→HANDED_OVER，task pause_outcome 不是 DONE）。
+  取代清單依實驗決定：
+  - 做法：以 W2c2 的合成趟（60_3 實錄＋合成 W2）把 t_open 後改為 RELEASE 列、夾爪命令張開、目標退離，再跑 W1f2 鏈；
+  - 結果：只出現上述兩項。
+  - 原擬一併取代的 grip_command_not_closed_after_grasp、可能的 end_hold_evidence_missing 均未觸發，故**不預先取代**。
+  - 實跑若出現新舊理由即不通過，不事後放寬。
 二、W2 多段提交（執行端逐步紀錄，不信任務端）：
   M1 commits 恰為 mode 1、2、3 依序、皆 applied_confirmed；各提交步實際套用＝first_source_seq、mode_seq 相符、鏈正常。
   M2 自 mode 1 提交起逐步連續；有來源列 mode_seq 不減；profile 與 finger_target 等於該步權威模式的對照值；
@@ -43,7 +47,7 @@ import door_k3m_check_w1f2 as F2                       # noqa: E402
 import door_k3m_check_w2c as W2C                       # noqa: E402
 import door_w2_mode5 as M5                             # noqa: E402
 
-K3B_REPLACED = tuple(W2C.W2_REPLACED) + ('grip_command_not_closed_after_grasp',)
+K3B_REPLACED = tuple(W2C.W2_REPLACED)
 R = KR.REG
 FINGERS = ('uflite_finger1', 'uflite_finger2')
 
