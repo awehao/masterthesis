@@ -56,3 +56,47 @@
 - 凍結 `freeze_door_wide_w1f2_dev_r1.sha256`：w1f r2 全部＋新增檔。
 - 執行腳本 `run_door_wide_w1f2.sh`：與 run_door_wide_w1f.sh 只差任務節點、凍結、判定器名稱。
 - **核可後**才申請單趟 60° 驗證 `door_wide_w1f_60_2`。本輪不跑、不推進角度。
+
+## 6. r2（Codex 20261025_144446：同步號重複處理接受；補三項後條件式核可單趟 60°）
+**① 寫入器完成與期限可信**（`bounded_trace_writer.py` r2）
+- 最後 flush／close 移到寫入端執行緒；close(deadline) 只做有期限等待，不做任何 I/O。
+- 寫入、flush、close、開檔失敗都計數並記原因 ⇒ complete False。
+- 心跳寫入失敗計數並記原因：不影響 complete，但留狀態。
+- **收尾順序**（任務節點 r2，刪改 D2）：
+  1. 先送 /wgmpc/stop 與 /room/stop；
+  2. 再有期限（2 s）關閉紀錄器；
+  3. 寫一次完整 task.json；
+  4. spin 送出。
+- 控制停止不等紀錄排空。task.json 記 shutdown（順序與時間）。
+- 原檔的 save() 本來就在停止之前；r2 讓停止不再等待任何寫檔。
+- 生成腳本：`results/door/mk_w1b2_patch_r2.py`。核對：除 D1（每 100 筆 save 兩行）與 D2（收尾區塊搬移）外，其餘行依序全在新檔中（544 → 569 行）。
+
+**② JSONL 與時序完整核對**（判定器 w1f2 r2）
+- 完整列一致：正規化 JSON 字串相同，含 target 等所有欄位。
+- 序號：enq_seq、trace_seq 為 int 且連續；loop_seq 為 int 且嚴格遞增。
+- 時間：
+  - wall_mono 有限且嚴格遞增；
+  - enq_wall_mono 有限、不倒退，且不早於該列 wall_mono；
+  - 來源時間 t 有限、不倒退。
+- 迴圈起點移到回呼處理之前；計時改在入列之後（含結束輪）；loop_timing.n＝trace 筆數。
+- 收尾順序：停止發布時間 ≤ 紀錄器關閉時間。
+- **L3 重複來源步**＝多輪讀到同一狀態：t、q_door、qdot_door、settle_sig 相同，state_age_wall 不減。
+  - 既有三趟共 7 次重複全部符合。
+  - 這不是接受重複量測冒充新資料。
+- 原 trace_gap＝0.25 s 不變；牆鐘間隔只報告定位。
+
+**③ 測試**（`test_bounded_trace_writer.py` 16 項，全過）
+- **r1 的 10 項**：皆改用新格式。
+- **寫入器新增 4 項**：
+  - flush 拋例外 ⇒ incomplete；
+  - flush 卡住 3 s 時 close(0.3) 在 < 0.6 s 內返回，drain_timeout，incomplete；
+  - 心跳失敗有計數；
+  - 開檔失敗 ⇒ incomplete。
+- **判定器新增反例**：wall_mono 為 NaN 或倒退、缺 loop_seq 或不遞增、target 不一致（完整列）、入列早於該輪起點、來源時間倒退、trace_seq 錯、loop_timing 筆數不符、收尾順序錯或缺、flush 失敗；重複步號但量測不同、年齡被刷新或 settle_sig 不同 ⇒ 各自不通過。
+- **判定器正向**：重複步號且為同一狀態 ⇒ 通過並計數。
+
+**實跑**
+- 凍結 `freeze_door_wide_w1f2_dev_r2.sha256`；起跑前核對通過即可直接跑一次 `door_wide_w1f_60_2`。
+- 控制、模型、策略、上限與門檻不變；乾淨環境、92 °C、起跑前後凍結核對；失敗保留不補跑。
+- 分報：任務、停止、trace 完整性與迴圈／寫入時序。
+- 只交本趟代表性側視／近景影片。

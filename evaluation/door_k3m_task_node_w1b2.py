@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# W1b2 任務節點（door_k3m_task_node_w1b.py 的版本化複本；Codex 20261025_034022：任務端最小紀錄修正）：
-#   唯一刪改＝移除迴圈內「每 100 筆在同一迴圈同步重寫整份 task.json」（w1f_60_1 第 1000 筆後 0.30 s 更新間隙的候選原因，未確認根因）；
-#   改為 bounded_trace_writer.BoundedTraceWriter：每列深拷貝後 put_nowait 進有界佇列（容量 4096），背景執行緒序列化、append 到
-#   <out 去 .json>_trace.jsonl、定期 flush、覆寫心跳檔 <…>_trace_hb.json；佇列滿 ⇒ 丟棄並計數。trace 每列另記 wall_mono（本輪迴圈起點
-#   單調時間）、loop_seq（迴圈輪序）、trace_seq；LoopTimer 記每輪迴圈耗時（最大、p99、> 0.1 s 次數）。收尾：先有期限（5 s）關閉寫入端，
-#   再在迴圈外寫一次完整 task.json；task.json 另記 trace_log（入列／寫入／丟棄／寫入失敗／未寫完／逾期、complete）與 loop_timing。
-#   任務邏輯、策略、話題、門檻全部不變。
+# W1b2 任務節點（door_k3m_task_node_w1b.py 的版本化複本；Codex 20261025_034022／20261025_144446：任務端最小紀錄修正）：
+#   刪改兩處：(D1) 移除迴圈內「每 100 筆在同一迴圈同步重寫整份 task.json」（w1f_60_1 第 1000 筆後 0.30 s 更新間隙的候選原因，未確認根因）；
+#   (D2) 收尾順序改為先送 /wgmpc/stop 與 /room/stop，再有期限（2 s）關閉紀錄器、寫一次完整 task.json（控制停止不等紀錄）。
+#   紀錄改用 bounded_trace_writer.BoundedTraceWriter（r2）：每列深拷貝後 put_nowait 進有界佇列（容量 4096），背景執行緒序列化、append 到
+#   <out 去 .json>_trace.jsonl、定期 flush、覆寫心跳檔、收尾 flush／close；佇列滿 ⇒ 丟棄計數；寫入／flush／close 失敗 ⇒ incomplete。
+#   trace 每列另記 wall_mono（本輪迴圈起點，回呼處理之前的單調時間）、loop_seq、trace_seq；LoopTimer 記每輪（起點→入列）耗時。
+#   task.json 另記 trace_log、loop_timing、shutdown（收尾順序與時間）。任務邏輯、策略、話題、門檻全部不變。
 # W1b 任務節點（door_k3m_task_node_p2c.py 的版本化複本；Codex 20261024_231908 B 節，規格 W1b_wide_open_30_spec.md）：
 #   --w1b-params（results/door/w1b_params_<θ>.json）為唯一參數來源：θ_goal、OPEN 逾時、走廊表（核對 sha256，不符 ⇒ 拒跑）、引導設定與協同話題。
 #   引導（door_wide_guidance.CorridorRef，與走廊監看同一參考位姿）：OPEN／SETTLE 且底盤模式已切 free 時每輪發布 w_vref＝1；
@@ -383,10 +383,10 @@ def main():
     g_qref_prev = None                     # W1b
     try:
         while rclpy.ok():
+            _w2_loop0 = time.monotonic()                                       # W1b2 r2：本輪迴圈起點（回呼處理之前）
+            _loop_seq2 += 1
             for _ in range(64):
                 rclpy.spin_once(nd, timeout_sec=0.0)
-            _w2_loop0 = time.monotonic()                                       # W1b2：本輪迴圈起點
-            _loop_seq2 += 1
             wnow = time.monotonic()
             if nd.lw_guard is not None:                                       # 實驗保護 ⇒ 提前結束（不是成功停住）
                 rep['lw_guard'] = {'msg': nd.lw_guard, 'wall_recv': nd.lw_guard_wall}
@@ -529,24 +529,31 @@ def main():
                                                                      'cls': {k: [v['d'], v['d_pred']] for k, v in (_g[1].get('classes') or {}).items()}}})
             rep['trace'][-1].update(wall_mono=_w2_loop0, loop_seq=_loop_seq2, trace_seq=len(rep['trace']))   # W1b2
             _tw2.put(rep['trace'][-1])                                          # W1b2：有界非阻塞逐列紀錄（取代每 100 筆同步 save）
+            _lt2.record(_w2_loop0, time.monotonic(), _loop_seq2)                # W1b2 r2：本輪起點（回呼處理前）至入列；結束輪也計入
             if act['finish'] or (w_abort is not None and wnow - w_abort > a.wall_post_abort_s):
                 if w_abort is not None and not act['finish']:
                     rep['post_abort_wall_cap_hit'] = True
                 break
-            _lt2.record(_w2_loop0, time.monotonic(), _loop_seq2)                # W1b2：完整一輪的耗時（不含 sleep）
             time.sleep(dt_w)
     finally:
         rep['wall_s'] = round(time.monotonic() - w0, 2)
         rep['lw_heartbeat'] = {'ready_wall': nd.hbw.ready_wall, 'last_seq': nd.hbw.last_seq, 'last_wall': nd.hbw.last_wall, 'bad': nd.hbw.bad[:20]}
         rep['sync_anomalies'] = {'n_dup': nd.sync_tr.n_dup, 'n_back': nd.sync_tr.n_back, 'list': nd.sync_tr.anomalies[:20]}
-        rep['trace_log'] = _tw2.close(deadline_s=5.0)                           # W1b2：有期限收尾，再寫一次完整 task.json
-        rep['trace_log']['jsonl_semantics'] = '每行 {enq_seq, enq_wall_mono, row}；row＝該筆 trace（含 wall_mono／loop_seq／trace_seq）'
-        rep['loop_timing'] = _lt2.stats()
         rep['received_any_sync'] = sync_once
-        save()
+        _w2_sd = {'order': ['stop_and_room_stop_published', 'trace_writer_closed', 'task_json_saved', 'spin_flush']}   # W1b2 r2：收尾順序
         try:
             nd.stop_pub.publish(String(data='door_k3a 結束'))
             nd.room_stop_pub.publish(String(data=f'door_k3a 結束：{pol.phase} {pol.abort or ""}'))
+            _w2_sd['stop_published_wall'] = time.monotonic()
+        except Exception as _e2:                                                # noqa: BLE001
+            _w2_sd['stop_publish_error'] = f'{type(_e2).__name__}: {_e2}'
+        rep['trace_log'] = _tw2.close(deadline_s=2.0)                           # W1b2 r2：呼叫端只做有期限等待（不做 I/O）
+        rep['trace_log']['jsonl_semantics'] = '每行 {enq_seq, enq_wall_mono, row}；row＝該筆 trace（含 wall_mono／loop_seq／trace_seq）'
+        rep['loop_timing'] = dict(_lt2.stats(), semantics='每筆 trace 一輪：本輪起點（回呼處理前）至入列完成', n_loops_total=_loop_seq2)
+        _w2_sd['writer_closed_wall'] = time.monotonic()
+        rep['shutdown'] = _w2_sd
+        save()
+        try:
             for _ in range(10):
                 rclpy.spin_once(nd, timeout_sec=0.05)
         except Exception:

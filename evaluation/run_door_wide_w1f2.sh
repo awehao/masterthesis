@@ -20,7 +20,7 @@
 # 不接 --coord-topic（無 MotM）。收尾只停本趟 PID。
 # **W1f2 版**（run_door_wide_w1f.sh 的複本；Codex 20261025_034022：任務端最小紀錄修正）：唯一差異＝任務節點改 door_k3m_task_node_w1b2.py
 #   （有界非阻塞逐列紀錄，取代迴圈內每 100 筆同步重寫 task.json）、判定器 door_k3m_check_w1f2.py（w1e2 全部＋紀錄完整性；trace_gap 0.25 s 不變）、
-#   凍結 freeze_door_wide_w1f2_dev_r1。登錄、控制、模型、門檻全部同 W1f r2。**未核可前不得執行**（核可後才申請單趟 60° 驗證）。
+#   凍結 freeze_door_wide_w1f2_dev_r2（Codex 20261025_144446 條件式核可單趟 60°）。登錄、控制、模型、門檻全部同 W1f r2。
 #   env -u VIRTUAL_ENV PATH=<去掉 .venv-dl0> RUN_ID=door_wide_w1f_60_2 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_wide_w1f2.sh bash evaluation/run_guarded_v2.sh
 # **W1f 版**（run_door_wide_w1e_r3.sh 的複本；Codex 20261025_030420，規格 W1f_wide_open_60_spec.md）：W1e 控制配置不變，唯一差異＝θ 60°
 #   （登錄 w1f_params_60.json＝door_w1b_params.py 60 推得＋W1e 的 solver_change／executor_change）；判定器 w1e2（登錄驅動）；凍結 freeze_door_wide_w1f_dev_r2（Codex 20261025_031137 條件式核可單趟）。60° 不作通行成果。
@@ -75,7 +75,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_wide_w1f2_dev_r1.sha256
+FRZ=evaluation/results/door/freeze_door_wide_w1f2_dev_r2.sha256
 W1B_THETA="${W1B_THETA:-60}"
 PRM=evaluation/results/door/w1f_params_${W1B_THETA}_r2.json   # W1f r2：60° 推得＋W1e 的 solver_change／executor_change＋停止餘量說明更正與 31–64° 內帶核對登錄
 STAND='0.6,-0.5332,1.570796'
