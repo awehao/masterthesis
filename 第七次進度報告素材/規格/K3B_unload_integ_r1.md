@@ -1,0 +1,150 @@
+# K3-B 閉爪卸載候選：整合版 r1（Codex 20261026_025647；**未實跑**）
+
+前包 `K3B_unload_spec_draft1.md`（mode7、unload r1、ADM14、check_unload r1）不改。本包依 Codex 必修完成執行端、任務端、求解端、判定器與整合測試，並建凍結 k3b r4。
+- 不跑 Isaac、不新增影片、不修改 door_wide_k3b_30_1 判定。
+
+## 0. 候選數值登錄（Codex §2）
+| 參數 | 值 | 依據與限定 |
+|---|---|---|
+| ramp_s | 1.0 s | **試驗選值，尚無實測依據** |
+| unload_max_s | 4.0 s | 失敗收尾期限，**不是保證收斂時間**。本趟 5→20 N 切換約 2 s 收斂，但不能證明 20→5 N 對稱，也不能保證 4 s 足夠 |
+| quiet_s | 0.5 s | 同 HELD 手臂長窗 |
+
+- 卸載後的重新低速確認**不取代**前段 10 s 主動保持停止觀察；HELD 觀察照舊在前。
+- 三者登錄為**待驗證候選**，不升格為能力保證。
+
+## 1. 版本對照
+| 新版 | 取代／基底 | 內容 |
+|---|---|---|
+| `door_k3b_unload2.py` | unload r1 | 必修 A、B（§2） |
+| `door_k3b_transient.py` | 新 | 卸載／釋放瞬態監看（§3） |
+| `door_k3b_unload_ctrl.py` | 新 | 斜坡逐步 set_max_efforts＋讀回；非手指不變；定期讀回參考值隨斜坡；不寫 restore 紀錄 |
+| `door_w2_mode8.py` | mode7（子類） | 監督器 r8（§1、§3）；ModeAuthority8（unload 時 gate2 必要） |
+| `door_k3m_check_unload2.py` | check_unload r1 | 必修 C（§4） |
+| `door_k3m_check_k3b4.py` | check_k3b3（組合） | 必修 D（§5） |
+| `door_k3m_policy_k3b4.py` | policy_k3b3（子類） | 任務端 r4（§6） |
+| `isaac_door_k2_sim_ev8.py`（`mk_ev8_patch.py`） | ev7r2，只插入 1878→1942 | 執行端整合（§7） |
+| `door_k3m_task_node_k3b4.py`（`mk_task_k3b4_patch.py`） | k3b3／w1b2，只插入 659 | `--w2-unload` ⇒ 策略 r4 |
+| `dl3_wgmpc_wg2_adm15_node.py`（`mk_adm15_patch.py`） | ADM12，只插入 2607→2665 | 監督器 r8＋tcp_fn（本節點 K.fk）、validated_commit、t_settling 掛鉤 |
+| `run_door_wide_k3b_r4.sh` | r3 跑法 | 只換上列節點與旗標、判定器 k3b4、凍結 r4；說明行改正 |
+
+## 2. 必修 A、B（door_k3b_unload2）
+- **A1**：缺步計入連續無效時間。下一筆有效資料到達時，若距上一筆有效 > 0.2 s ⇒ data_invalid，不洗掉。
+  - 反例 R1：缺 30 步 ⇒ data_invalid；缺 15 步 ⇒ 低速窗歸零、延後。
+- **A2**：門 0.1 s 保護獨立運作，不等手臂 0.5 s 長窗。
+  - 反例 R2：初段門 0.06 rad/s 轉 0.30 s 後停 ⇒ 0.25 s 內 door_rate。
+  - 原 tensor 門速保護保留（另一訊號）。
+- **B1**：`confirmed_fresh(step, t)`：
+  - 步號須 ∈ [last_step, last_step＋1]；
+  - 給 t 時另核 last_t ≤ t ≤ last_t＋dt；
+  - 反例 R3：last_step−100、−1、+2、NaN、超前、落後、bool 皆 False。
+- **B2**：`task_gate` 先拒非法／倒退時間與逾時，再拒他趟與過期狀態（兩端訊息來源時刻年齡 ≤ 0.2 s、不得為未來），之後才判兩端完成。反例 R4。
+- **B3**：卸載啟用缺 gate2 ⇒ ModeAuthority8 建構即 ValueError；執行期缺失 ⇒ 拒絕准入（gate2_missing）。
+- **B4**：中止優先：`abort()` 後 `command()` 回 None；ev8 在本步設定上限之前核既有中止（W2 權威、K2 閂鎖、`_w2_known_abort()`）。反例 R5。
+- base0 改取第一筆有效步實測，與 room step0 同源。
+- 報告增 t_settling。
+
+## 3. 求解端 r8：重新收斂窗與瞬態監看（Codex §1、§4）
+**重新收斂窗與執行端統一**
+- 求解端須先由**已驗證的本趟權威狀態**得知執行端 t_settling（斜坡完成且讀回 5 N），之後才累積 quiet_s；斜坡期間的低速不計入。
+- t_settling 須在 [t_c1＋ramp_s−0.02, 現在]，否則不採用。
+- 反例：
+  - X1：r7 斜坡一結束即 unloaded；r8 ≥ t_settling＋0.5。
+  - X2：未得知 ⇒ unload_timeout。X3：早或未來 ⇒ 不採用。
+  - 假世界 N4：不帶 t_settling ⇒ unload_timeout、mode 2 未請求。
+
+**瞬態監看**（door_k3b_transient；與停止確認明確區分，收斂後回到舊門檻）
+| 規則 | 界限 | 來源 |
+|---|---|---|
+| TCP 位移（相對提交前最後一筆） | ≤ 5 mm、≤ 2° | 既有夾持漂移中止界 drift_abort_m／drift_rot_abort_rad |
+| TCP 線速（0.1 s 窗） | ≤ 0.02 m/s | 策略登錄退離速度：瞬態不得快於有意退離 |
+| 收斂時限 | 卸載 4.0 s；釋放 1.5 s | unload_max_s；ExecReleaseMonitor t_conf_max_s |
+| 收斂 | 手臂 0.5 s 窗 ≤ 0.001 rad/s 且 TCP ≤ 0.001 m/s，連續 0.5 s | 舊 HELD 手臂門檻、底盤線速門檻 |
+| 失效 | 非有限、時間不遞增、缺樣本 > 0.2 s ⇒ data_invalid | |
+
+- unload 子狀態：瞬態監看取代手臂停止門檻；門 ≤ 保護；底盤偏離 ≤ 20 mm／2°。
+- release_open：瞬態監看取代手臂門檻；底盤仍為舊 HELD 速度門檻（主動保持）。收斂後 sub＝release_settled，手臂回到 0.001。
+- mode 3 交接只准自 release_settled：release_open 中交接 ⇒ handover_before_transient_converged；未得知張爪 ⇒ handover_without_release。
+- **新增設計要素（請審）：暫緩期手臂暫定瞬態監看。**
+  - 問題：mode 2 提交到求解端得知之間（狀態延遲），手臂已開始回彈。r7 的暫緩只容許門動，會立即 FAIL；純測試 X6 首版即重現。
+  - 處置：暫緩中手臂以同一位移／速度界的暫定監看約束，起點為首次超限前 0.1 s 的最後一筆樣本。暫緩期限 0.2 s 與「首次超限不清除」沿用 r7。
+  - 反例 X11：延遲 0.1 s＋回彈 ⇒ 切換；暫緩中手臂 0.2 rad/s ⇒ moved_in_held。
+- TCP 為世界座標，含底盤運動。假世界 N3：底盤 25 mm、初速約 50 mm/s 時，求解端先以 unload_transient:tcp_speed 失敗，執行端以 base_dev 失敗。
+
+## 4. 必修 C：判定器 check_unload2
+- 型別與有限性檢查。
+- set_log 每筆 (int, 有限, 有限, 兩指有限)，**步號唯一**，不先轉字典，且與 room 列時間逐步對帳（≤ 1e−6）。
+- solver_outcome 必要；求解端 UNLOADED 不得晚於任務端請求。
+- 低速窗起點 ≥ t_settling。
+- U8 卸載瞬態重算。
+- 例外改回理由。
+- Codex 四種竄改都有反例：最後讀回 NaN、set_log 時間 NaN、缺 solver_outcome、求解端 UNLOADED 晚於請求。另有重複步、時間不對帳、TCP 偏移 > 5 mm、欄位型別錯、t_settling 缺等反例。
+
+## 5. 必修 D：整體判定 check_k3b4（版本化組合，明列替換）
+- **保留**：
+  - 既有開門／停止／保護／紀錄鏈（w1f2，只取代兩項舊 DONE 理由）；
+  - K0、K1–K3、K5'、K10–K13（三維）、K6–K7、K9、錨點。
+- **替換**：
+  - K4'（C_CLEAR 後 20→5 N 恢復動作）→ E1–E6 分段證據：
+    - E1：暫停切換 5→20 N；
+    - E2：卸載前定期讀回 20、間隔 ≤ 1.1 s；
+    - E3：斜坡紀錄全 ok、不增；
+    - E4：斜坡中讀回＝斜坡值；t_settling 後至紀錄末讀回 5、涵蓋；
+    - E5：**不存在 5 N 恢復動作**（W1e restore 為空、5 N 權威無 pending／done）；
+    - E6：非手指上限不變。
+  - K8 → K8b：eff_verify 讀回 5、晚於 C_CLEAR；無 5 N 請求；unload_gate go；mode 3 於 release_settled 後；DONE。
+  - X1／X3 → X1b／X3b：
+    - 加核求解端 --w2-hold-r8／--w2-unload、任務端 --w2-unload、卸載登錄；
+    - effort_times 改為：mode 2 請求 ≥ 兩端 UNLOADED、eff_verify ∈ [C_CLEAR, COMPLETE]。
+- **新增**：
+  - U（check_unload2）。
+  - RT 釋放瞬態重算：位移、速度；RELEASE_SETTLED − t_open ≤ 1.5 s；settled 至 mode 3 提交手臂 ≤ 0.001 rad/s。
+  - S8 求解端：r8、轉移序、兩段瞬態 CONVERGED、t_settling。
+- 新項皆以 `_guard` 包住：例外 ⇒ 理由。
+
+## 6. 任務端 r4（policy_k3b4；unload＝False 與 r3 完全相同）
+- mode 1 提交後不跑測試保持，只跑暫停層監看。以 task_gate 請求 mode 2，任一端失敗或逾時 ⇒ 中止。
+- mode 3 另等求解端 release_settled。
+- 不送 5 N 請求。C_CLEAR 起核執行端最近定期讀回：兩指 5、ok、年齡 ≤ 1.5 s；不成立 > 1.0 s ⇒ 中止。COMPLETE 須讀回核對。
+- `_release_step` 為 r3 的版本化複本，只改上述兩段，不以遮蔽方式繞過父類 5 N 流程。
+
+## 7. 執行端 ev8
+每物理步次序（靜態 W2 核對）：
+1. step_begin → mode 2 提交開解除監看 → mode 1 提交 start／mode 2 提交 handoff；
+2. 既有中止優先（abort）→ 斜坡 set_ramp（world.step 前；失敗走既有中止）→ W1e 定期讀回（參考值為目前斜坡值）；
+3. 手指閘門 → 解除監看 step → 卸載監看 step（同一步接觸、門角、底盤、手臂與讀回）→ world.step。
+- 卸載模式不受理 5 N 恢復請求。
+- 權威狀態附 unload（state_brief）與 finger_effort。
+- room 紀錄 w2.unload、w2.unload_ctrl（每 10 步、失敗步與 5 N 步）。
+
+## 8. 待裁定事項
+1. **時序預算衝突**：
+   - 近區退出期限 near_exit_max_s＝t_conf＋2.0 s（draft-2 候選，未改）；
+   - 新流程在 B_CONFIRMED 後還要等釋放瞬態收斂（≤ t_open＋1.5 s）、mode 3 提交約 0.15 s、退離 1 s 到 2 cm；
+   - 最壞時 t_conf＝t_open＋0.5，退出約在 t_conf＋2.15 s，會超時。
+   - 策略純測試 P4 的 +1.6 s 例重現 near_exit_timeout。我未改登錄值。
+2. **釋放收斂時限 1.5 s 偏緊**：
+   - 假世界 N0（τ 0.2 s、0.004 rad 回彈）release_settled 距張爪 1.44 s。
+   - 觀察（不作調整依據）：把 door_wide_k3b_30_1 張爪後實錄送入瞬態監看，1.5 s 內位移 4.3 mm、最大速度 10.8 mm/s、未收斂即逾時。該段閂鎖後底盤命令為 0，不代表正常流程。
+3. §3 暫緩期手臂暫定瞬態監看是否可接受。
+4. 路由替身 IK：
+   - k3b3 路由測試（已凍結）每輪重解 IK；IK 接受 1 mm 位置誤差，在固定目標下會產生 ≤ 1 mm 假抖動，與 core r4 三維收斂門檻 1 mm 同量級。
+   - k3b4 路由 R1 因此間歇 retreat_timeout（4 次中 3 次），改為目標未變不重解後 3 次全過。
+   - k3b3 路由先前通過屬偶然，該檔不改。
+
+## 9. 測試總表（均不需 Isaac）
+- **新增純測試**：
+  - unload2 16、unload_ctrl 2、mode8 9；
+  - check_unload2 6 組（含 Codex 竄改反例）；
+  - policy_k3b4 5 組、check_k3b4 6 組、靜態 r4 6 項。
+- **回歸純測試**：unload r1 10、mode7 10、check_unload r1 5、adm14 靜態 4、mode6 11、adm13 靜態 4、w2_mode 20、mode3 11、mode5_chain 8、release4 17、policy_k3b3 5、check_k3b3 9、靜態 r3 7、grip_gate 4、finger_restore 4、finger_effort 9、release3 16、靜態 r2 6。全過。
+- **ROS**：
+  - ADM15 假世界 N0–N4 全過（兩次）；
+  - 真任務節點 k3b4 路由 R1–R4 全過；
+  - ADM12 假世界 K1–K4 回歸全過。
+- 合成資料皆標明，不是實跑結果。
+
+## 10. 申請
+請裁定 §8 四題。
+- 若 §8-1、8-2 需先修，本包不申請實跑。
+- 若可接受現值，請核可單趟（建議 RUN_ID `door_wide_k3b4_30_1`；跑法 `run_door_wide_k3b_r4.sh`；凍結 k3b r4）。條件比照前趟：乾淨環境、ROS_DOMAIN_ID 97、92 °C 守護、起跑前後凍結核對、失敗保留不補跑、不新增影片。

@@ -1,6 +1,6 @@
 """WG2 的**薄執行介面**：把 WG1 的純數值核心接上既有安全鏈。
 # ADM15（K3-B：監督器 r8＋卸載／釋放瞬態；Codex 20261026_025647，door_w2_mode8）：
-#   dl3_wgmpc_wg2_adm12_node.py 的版本化複本，**只做插入**（不以 ADM13／ADM15 為基底）。--w2-hold-r8（需 --w2-retreat；預設關 ⇒ 與 ADM12 同行為）：
+#   dl3_wgmpc_wg2_adm12_node.py 的版本化複本，**只做插入**（不以 r6／r7 掛鉤的節點版本為基底）。--w2-hold-r8（需 --w2-retreat；預設關 ⇒ 與 ADM12 同行為）：
 #   (1) 監督器改 HeldSupervisorP4b8（外層 HELD；held →〔--w2-unload：unload → unloaded〕→ release_open → release_settled；
 #       瞬態監看 TCP 以本節點 WholeBodyKinematics 計算；mode 3 交接只准自 release_settled）。
 #   (1b) 已驗證的本趟權威狀態 unload.t_settling（斜坡完成、讀回 5 N）⇒ set_exec_settling，重新收斂窗自此起算。
