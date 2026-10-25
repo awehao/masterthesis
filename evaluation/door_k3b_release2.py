@@ -18,6 +18,9 @@ door_k3b_release.py（r1）保留供追溯；r1 的三個缺陷由本檔修正�
     底盤錨點、退出近區證據（C_CLEAR）、退離終點與收斂、完成保持。
   - 執行端狀態（exec_state、t_conf、exec_step）也由 sample 帶入，任務端不自行判定解除。
   - r1 缺陷 (3) 修正：STOW_READY／COMPLETE 之後監看持續，直到呼叫 end()；之後的超力、淨空不足仍判失敗。
+  - 沿退離軸（把手 y）監看改為**追蹤落後界限** |s_cmd − s_meas| ≤ y_track_max_m＝5 mm（候選；對應 0.25 s 的落後預算）。
+    規格 draft-2 §4 原寫 |y − y_ref(s_cmd)| ≤ 1 mm：小於一個控制週期的退離行程（0.02 m/s × 0.05 s＝1 mm），加上求解延遲必然超出。
+    門角帶以實測 s_meas 查表（向下取格），沿軸落後不影響淨空依據；離線 ey ±1 mm 對應 s 的格點量化。此變更待 Codex 裁定。
   - 本包止於退離終點（Codex D2）：
     - RETREAT_DONE＝s_meas ≥ 0.095 且運動收斂（最近 0.5 s 工具位移 ≤ 1 mm）；
     - COMPLETE＝RETREAT_DONE 後保持 ≥ 3 s；
@@ -39,7 +42,7 @@ REG = {
     'invalid_max_s': 0.2, 'f_design_max_n': 18.0, 'dt': 0.01,
     'near_s_m': 0.02, 'near_exit_max_s': 2.0, 'pair_exit_m': 0.005, 'restore_quiet_s': 0.5,
     'lower_deg': -1.0, 't_pred_s': 0.2, 'age_max_s': 0.2, 'stale_max_s': 0.2,
-    'x_max_m': 0.003, 'y_max_m': 0.001, 'rot_max_deg': 0.5,
+    'x_max_m': 0.003, 'y_track_max_m': 0.005, 'rot_max_deg': 0.5,
     's_end_m': 0.10, 's_done_m': 0.095, 'retreat_max_s': 15.0, 'converge_win_s': 0.5, 'converge_max_m': 0.001,
     'complete_hold_s': 3.0, 'stow_lo_deg': -3.0, 'stow_hi_deg': 2.5,
     'nonfinger_m': 0.005, 'self_m': 0.005, 'base_m': 0.020, 'base_dev_m': 0.020, 'base_dev_deg': 2.0,
@@ -269,7 +272,7 @@ class TaskReleaseMonitor(_Latch):
                 return self._fail(why, t, sst)
         self.worst['nonfinger_min_m'] = min(self.worst['nonfinger_min_m'], x['nonfinger_d'])
         s_meas, dx, dy, dz, rot = tool_offsets(x['E'], self.E_rel, x['s_cmd'])
-        if abs(dx) > r['x_max_m'] or abs(dy) > r['y_max_m'] or abs(dz) > z_max_m(max(s_meas, 0.0)) or rot > r['rot_max_deg']:
+        if abs(dx) > r['x_max_m'] or abs(dy) > r['y_track_max_m'] or abs(dz) > z_max_m(max(s_meas, 0.0)) or rot > r['rot_max_deg']:
             return self._fail('tool_offset', t, sst, off=[dx, dy, dz, rot])
         dq = math.degrees(x['door_q'] - self.q_rel)
         dq_pred = dq + math.degrees(max(x['door_qd'], 0.0)) * r['t_pred_s']

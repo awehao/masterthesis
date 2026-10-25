@@ -159,6 +159,9 @@ class ModeAuthority5(M4.ModeAuthority4):
         m['finger_target'] = self.finger_target()
         m['commits'] = [{k: c.get(k) for k in ('step', 't', 'first_source_seq', 'mode_seq', 'applied_confirmed')} for c in self.commits]
         m['commit_req_seqs'] = [c['request']['req_seq'] for c in self.commits]
+        ex = getattr(self, 'extra_state', None)                                # 執行端附加（解除監看、5 N 恢復狀態）
+        if ex is not None:
+            m.update(ex())
         return m
 
     def stats(self):
