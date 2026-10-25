@@ -103,7 +103,27 @@
 - `test_w2_held_mode_ros4.py`：W2 回歸。
 
 ## 5. 假世界結果
-（跑完後填入。）
+最終全量重跑（2026-10-26）三套皆 `全部通過`，紀錄另存素材資料夾。
+
+**`test_k3b_adm12_ros.py`**
+| 情境 | 結果 |
+|---|---|
+| K1 正常 1→2→3 | 三提交皆確認；mode 2 提交步手指目標轉 open；HELD 期手臂套用恆 0；mode 3 後手臂有非零套用且底盤保持形；交接由 applied_candidate 觸發、錨點不變；候選另解 1 筆並在實際套用後插入延遲歷史；held_end handover；退離期目標來源為話題 |
+| K2 手指只開到 90 % | 執行端 confirm_timeout ⇒ 已知中止 ⇒ mode 3 未提交；求解端未發任何 mode 3 候選 |
+| K3 權威 arm_rate_max 1e-4 | candidate_invalid:arm_rate；求解端 reverted；HELD 期手臂恆 0；延遲歷史插入 0 |
+| K4 不帶 --w2-retreat | stats.w2_retreat None；mode 1 照 ADM11 提交；無交接 |
+
+**`test_task_node_k3b_routing.py`**
+- N1：
+  - 真節點由 HELD 走到 DONE、exit 0；請求序 1、2、3。
+  - 5 N 請求恰一筆：證據 s 20.8 mm、配對 13.2 mm、band_ok。
+  - monitor COMPLETE、rel done、讀回 True；trace 每列含 k3b，s_cmd 單調到 0.10。
+  - 近區配對最小 5.69 mm、非手指最小 7.96 mm、門角帶最小餘量 +0.1°（起點，門不動）。
+  - 錨點改用實跑 gate 錨點（開門前停位）仍通過。
+- N2：5 N 被拒 ⇒ k3b_effort_reject 中止、exit 1、發 /door/k2_abort。
+- N3：執行端確認逾時 ⇒ k3b_exec_release:confirm_timeout，未請求 mode 3。
+
+**`test_w2_held_mode_ros4.py`** M0–M11＋R0 全過（W2 回歸）。
 
 ## 6. 揭露與限制
 - **未在 Isaac 執行**：ev7 主迴圈只經靜態次序核對、py_compile、pyflakes（與 ev5 同一組既有警告）；整條開門→暫停→HELD→釋放→退離串接未實跑。
