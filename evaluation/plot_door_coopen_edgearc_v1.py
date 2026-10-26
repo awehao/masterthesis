@@ -50,9 +50,9 @@ def main():
     ax.plot(0, 0, 's', color=INK, ms=6)
     ax.text(-0.17, -0.07, '鉸鏈', fontsize=9, color=INK)
     hs, rel = b['hold'], b['release']
-    ax.set_title(f"去程繞緣夾法（φ 60°）：邊開邊繞，46° 放手轉向 {rel['turn_deg']:.0f}° 直通\n"
-                 f"持握 {hs['path_len_m']:.2f} m／{hs['duration_s']:.0f} s；放手後 {rel['len_m']:.2f} m；瓶頸淨空 28 mm（最寬路徑）",
-                 fontsize=10.5, color=INK)
+    ax.set_title(f"去程繞緣夾法（φ 60°）邊開邊繞候選：0→46° 持握，46° 放手\n"
+                 f"持握 {hs['path_len_m']:.2f} m／{hs['duration_s']:.0f} s；放手後最短路徑 {rel['len_m']:.2f} m、與持握末段弦方向差 {rel['turn_deg']:.0f}°（貼 20 mm 門檻）",
+                 fontsize=10, color=INK)
     ax.set_xlim(-1.2, 1.9)
     ax.set_ylim(-1.5, 0.9)
     ax.set_aspect('equal')
@@ -60,7 +60,7 @@ def main():
     ax.set_xlabel('x (m)')
     ax.set_ylabel('y (m)（門向 −y 開；機器人起於 −y 側）')
     ax.legend(loc='lower left', fontsize=9, frameon=False)
-    fig.text(0.01, 0.005, '離線靜態運動學核驗（剛性夾持、無接觸力）；放手後門視為靜止；手臂收攏、張爪後門餘轉未核', fontsize=7.5, color=MUTED)
+    fig.text(0.01, 0.005, '離線靜態運動學核驗（剛性夾持、無接觸力）；最寬路徑瓶頸 28 mm 屬另一條未重建路徑；放手後門視為靜止；手臂收攏、張爪後門餘轉未核', fontsize=7.5, color=MUTED)
     fig.tight_layout()
     fig.savefig(out, dpi=150)
 
