@@ -227,9 +227,9 @@ def run(cand):
 
 
 def main():
-    if os.path.exists(OUT):
-        raise SystemExit(f'{OUT} 已存在，不覆寫')
     global OUT
+    if os.path.exists(OUT) and not (len(sys.argv) > 1 and sys.argv[1].endswith('.json')):
+        raise SystemExit(f'{OUT} 已存在，不覆寫')
     src = SRC
     args = sys.argv[1:]
     if args and args[0].endswith('.json'):
