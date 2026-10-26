@@ -1,0 +1,58 @@
+{
+ "schema": "door_coopen_arc/3",
+ "source": "results/door/door_coopen_reach_v1.json",
+ "start": [
+  0.6,
+  -0.53,
+  90.0
+ ],
+ "joint_step_rad": 0.1,
+ "subdivide_depth": 4,
+ "rates": {
+  "door_deg_s": 1.0,
+  "arm_rad_s": 0.1,
+  "base_m_s": 0.1,
+  "yaw_deg_s": 15.0
+ },
+ "per_q_release": [
+  {
+   "q_release_deg": 45,
+   "status": "verify_fail_last_at_13_ik",
+   "n_dp_iters": 40,
+   "verify_fail_reasons": {
+    "ik": 40
+   }
+  },
+  {
+   "q_release_deg": 50,
+   "status": "verify_fail_last_at_21_ik",
+   "n_dp_iters": 40,
+   "verify_fail_reasons": {
+    "ik": 40
+   }
+  },
+  {
+   "q_release_deg": 55,
+   "status": "verify_fail_last_at_27_ik",
+   "n_dp_iters": 40,
+   "verify_fail_reasons": {
+    "ik": 40
+   }
+  },
+  {
+   "q_release_deg": 60,
+   "status": "dp_no_path",
+   "n_dp_iters": 1,
+   "verify_fail_reasons": {}
+  }
+ ],
+ "disclosure": "v2 驗證以每 1° 手臂 ≤ 0.10 rad 判定，全數失敗；本版不放寬該值，改為細分步並以時間縮放計時（看過 v2 結果後的驗證方式變更）",
+ "not_modeled": [
+  "格點與內插間碰撞",
+  "接觸力、夾持柔順",
+  "BFS 為格點最短路徑（非平滑）",
+  "放手後門的餘轉",
+  "手臂收攏",
+  "控制器追蹤與延遲"
+ ]
+}
