@@ -1,0 +1,32 @@
+暫存 /tmp/claude-1000/-home-howardchen-masterthesis/2a47f71f-1a91-4ff0-9dbf-1892d8540042/scratchpad/k3b_adm16_ros　domain 130+
+
+N0  卸載＋張爪後門 1°/s＋手臂回彈收斂
+  三次提交皆確認                                                          ok  {1: (1869, True), 2: (2059, True), 3: (2210, True)} aborted=None rej=None
+  子狀態序 unload → unloaded → release_open → release_settled → 交接     ok  {'UNLOAD': 18.700000000000003, 'UNLOADED': 20.53, 'RELEASE_OPEN': 20.6, 'RELEASE_SETTLED': 22.03, 'HANDOVER': 22.1} state=HANDED_OVER why=None
+  重新收斂窗自執行端 t_settling 起算                                          ok  t_settling=19.69 unloaded=20.53
+  mode 1 提交後無停發                                                    ok  []
+  釋放瞬態收斂、位移在界內                                                     ok  {'version': 'door_k3b_transient/2', 'name': 'release', 'state': 'CONVERGED', 'why': None, 't0': 20.58, 't_conv': 22.0, 't_max_s': 1.5, 'worst': {'disp_m': 0.00029340748161165136, 'rot_rad': 0.004082487406269702, 'v_m_s': 0.0011970509484059816}, 'reg': {'disp_max_m': 0.005, 'rot_max_rad': 0.03490658503988659, 'v_max_m_s': 0.02, 'win_s': 0.1, 'arm_win_s': 0.5, 'quiet_arm': 0.001, 'quiet_tcp_m_s': 0.001, 'quiet_s': 0.5, 'invalid_max_s': 0.2}, 'n_invalid': 0}
+  mode 3 請求晚於 release_settled                                      ok  req3=22.03 settled=22.03
+
+N1  張爪後手臂持續漂移（不收斂）
+  FAIL release_transient:timeout                                   ok  FAIL release_transient:timeout
+  mode 3 未提交                                                       ok  mode=2 aborted={'why': 'post_commit_source_lost', 'step': 2234, 't': 22.34}
+
+N2  Codex 跨趟重現
+  不切換、暫緩逾時 FAIL moved_in_held                                      ok  FAIL moved_in_held sub=held rej={'2': {'commits_missing': 15}} other=25
+  mode 3 未提交                                                       ok  mode=2
+
+N3  卸載中底盤偏離 25 mm
+  執行端 unload FAILED base_dev                                       ok  FAILED base_dev
+  mode 2 未請求                                                       ok  {1: 18.68}
+  求解端 FAIL（base_dev_in_unload 或世界座標 TCP 速度 unload_transient:tcp_speed，先到者） ok  FAIL unload_transient:tcp_speed
+
+N4  權威狀態不帶 t_settling
+  求解端 unload_timeout（不以斜坡期低速宣告）                                    ok  FAIL unload_timeout
+  mode 2 未請求                                                       ok  {1: 18.68}
+
+N5  卸載＋張爪後手臂回彈＋mode 2 後權威狀態延遲 0.1 s（延遲得知、重放提交後樣本）
+  三次提交皆確認、交接                                                       ok  [1, 2, 3] HANDED_OVER None
+  mode 2 得知晚於提交、重放提交後樣本                                            ok  {'t_commit': 20.59, 't_known': 20.700000000000003, 'replay_n': 5, 'replay_worst': {'disp_m': 0.00011513108393613597, 'rot_rad': 0.0014660356021988573, 'v_m_s': 0.0011513108393613435}}
+
+全部通過
