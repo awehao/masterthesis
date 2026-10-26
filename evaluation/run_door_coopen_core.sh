@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 連續協同通行：核心段接觸驗證跑法（run_door_wide_w1f2.sh 的版本化複本；規格 evaluation/results/specs/COOPEN_core_spec_draft2.md；
-#   Codex 20261026_235425 核可準備，**未核可 Isaac 前不得執行**）。
+# 連續協同通行：核心段接觸驗證跑法（run_door_wide_w1f2.sh 的版本化複本；規格 evaluation/results/specs/COOPEN_core_spec_draft3.md；
+#   Codex 20261026_235425 核可準備；Codex 20261027_002013 條件式核可單趟 door_coopen_core_1，只跑一次）。
 # 只驗：繞緣持握（φ 60°、s 0.85、roll 0）成立後協同開門到 48°（門速 0.6 °/s、底盤引導 w_vref 1、引導限幅 0.035 m/s／0.10 rad/s），
 #   觀察開門末段的出口繞行，再沿既有受控結束路徑（SETTLE → 受控暫停 → 主動保持停止 → DONE）收尾；不放手、不收臂、不穿越。
 # 實驗初始化（揭露）：底盤以 --start-pose 直接放在停位（候選 0° 底盤位姿），不經導航接近；手臂由 K2_READY 經既有展開節點到繞緣預抓取。
@@ -15,7 +15,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-FRZ=evaluation/results/door/freeze_door_coopen_core_dev_r2.sha256   # r1 漏列執行時讀取的 4 檔（稽核掛勾查得），作廢保留
+FRZ=evaluation/results/door/freeze_door_coopen_core_dev_r3.sha256   # r3＝r2＋判定器 r2＋規格 draft-3（Codex 20261027_002013）；r1（漏 4 檔）、r2 保留
 PRM=evaluation/results/door/coopen_core_params_48_r5.json   # 核心段：固定登錄（不由環境變數改）
 GB=evaluation/results/door/coopen_core_grasp_basis_r4.json
 PIDS=(); NAMES=()
@@ -95,5 +95,5 @@ OK_DONE=0; grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && OK_DONE=1
 say "  rc：task $RC_TASK、solver $RC_SOLVER、wholebody $RC_WB、sim $RC_SIM；room_run $OK_ROOM、align_solver $OK_SOLVER、DONE $OK_DONE"
 RC=1
 [ "$HOW_TASK" = exited ] && [ "$HOW_SOLVER" = exited ] && [ "$HOW_WB" = exited ] && [ "$HOW_SIM" = exited ] && [ "$RC_TASK" = 0 ] && [ "$RC_SOLVER" = 0 ] && [ "$RC_WB" = 0 ] && [ "$RC_SIM" = 0 ] && [ "$OK_ROOM" = 1 ] && [ "$OK_SOLVER" = 1 ] && [ "$OK_DONE" = 1 ] && RC=0
-say "=== 結束 rc=$RC（0 只表示所有節點正常結束且到 DONE；通過與否由 door_coopen_check_core.py 判定（w1f2 全部判準＋門速重建＋抓取登錄；A-2 量測只報告））==="
+say "=== 結束 rc=$RC（0 只表示所有節點正常結束且到 DONE；舊鏈通過與否由 door_coopen_check_core2.py 的 chain_pass 判定；核心動作（邊開邊繞）證據另報 core，不自動通過）==="
 exit "$RC"
