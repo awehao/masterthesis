@@ -1,0 +1,141 @@
+# K3-B 閉爪卸載候選：整合版 r2（Codex 20261026_034842 三組必修；**未實跑**）
+
+r1（`K3B_unload_integ_r1.md`、凍結 k3b r4）不改；本文件為 r2 增補，凍結 k3b r5。
+- 不跑 Isaac、不新增影片、不回改既有結果。
+- 執行端 ev8 不變。換求解器（ADM16）、判定器（k3b5），另因 §5b 換任務節點 k3b5（核心 release5）。
+
+## 0. §8 四項裁定的處置
+1. 近區退出 2.0 s、釋放收斂 1.5 s **維持不放寬**，期限到即失敗、不繼續等交接。
+   - 部分允許的瞬態因此無法完成全流程，這是預期的失敗，不保證所有情境都能成功。
+   - 邊界反例：
+     - 瞬態 Y4：停於 0.44 s ⇒ 1.5 s 內收斂；停於 0.56 s ⇒ timeout。
+     - 策略 P4：release_settled 晚於 t_open＋1.6 s ⇒ near_exit_timeout。
+     - 假世界 N1：不收斂 ⇒ release_transient:timeout、mode 3 未提交。
+2. 1.5 s 保留為**候選失敗期限**，不稱已驗證足夠；不因假世界 1.44 s 或失敗趟重放而加大。
+3. 暫緩期瞬態監看：證據連續性已補（§2），請確認。
+4. 替身固定目標不重解 IK：改稱「**舊測試受替身數值抖動影響、結果不穩定**」。
+   - k3b3 路由的舊通過不作穩定證據，也不外推真實追蹤能力。
+   - 本輪另發現第二個替身假象，見 §5。
+
+## 1. 必修 1：整體判定分段（door_k3m_check_k3b5）
+**舊判準鏈以張爪前視圖執行**（prerelease_view；分段，不廣泛刪除理由）
+- 截斷點＝執行端 mode 2 **實際提交步** k2。
+- room：
+  - steps 與 w2.rows／auth_rows 只留步號 < k2；
+  - W1e 定期讀回只留卸載起點 t0 之前。
+- task：
+  - trace 以**來源步號** state_step < k2 截斷，不以浮點時刻比較。首版以時刻比較時，71.3399984 < 71.34 但其步號＝k2，造成舊鏈 geometry_evidence_missing。
+  - 視圖終點 t_end＝最後一筆 trace 的時刻。
+  - trace_log 另寫截斷版；n_target_published 與 loop_timing.n 改為截斷後一致的計數。這三項不一致時，舊鏈會誤報 publish_sequence_mismatch／trace_gap／loop_timing_coverage_invalid；已實測並修正。
+  - policy_events 只留 ≤ t_end。期間若有 RELEASE／DONE／ABORTED 照留，由舊鏈照報相序異常（反例 F5）。
+  - 真趟 DONE 時才於 t_end 附加標明的視圖 DONE（k3b5_view: prerelease_end）；真趟 DONE 另由 K8b 要求。
+- solver：supervisor_outcome 改為張爪前對應視圖（state HELD、轉移只留 ≤ t_end）；log 只留 ≤ t_end。
+
+**排除的舊理由**（明列）
+- K3B_REPLACED 兩項：舊 DONE 理由。
+- W1e `finger_effort_periodic_invalid_*`／`finger_effort_periodic_short_*`：改由 E2（卸載前 20 N、間隔 ≤ 1.1 s）、E3（斜坡）、E4（斜坡值／5 N、涵蓋到紀錄末）承接，三者都更嚴。
+- 其餘舊理由一律保留，例如 finger_effort_not_effective、phase_sequence、grasp_finger_contact_below_min、termination、step_discontinuity，各有反例。
+
+**時間精度**
+- 卸載判定 r3：步號一致，加量化容差 TIME_Q＝5.1e−5 s（room sim_t 以 1e−4 s 四捨五入）。
+- 邊界：1.5125e−6（Codex 實例）與 5.0e−5 通過；5.2e−5 拒。set_log 同。
+
+**最外層 judge() 完整合成通過例**（`door_k3b5_synth.py`；**合成資料，不是實跑結果**）
+- 基底為實跑 door_wide_w2c_30_1：
+  - HELD 與 mode 1 提交 69.71 s 後的 3.1 s 實跑列承載卸載段；接觸力依斜坡等比縮放，定期讀回改為斜坡值／5 N。
+  - 張爪後逐物理步合成：張爪曲線、接觸歸零、手臂 j2 回彈 0.0015 rad；退離以離線 IK 追蹤任務端每週期目標（一週期落後），終點保持。
+- 各紀錄由真監看邏輯逐步產生：ExecUnloadMonitor、ExecReleaseMonitor，以及帶真配對幾何與一般幾何監看的 TaskReleaseMonitor。
+- 時間軸：
+  - mode 1 69.71、t_settling 70.71；
+  - 執行端 UNLOADED 71.21、求解端 71.23；
+  - mode 2 提交 71.34（k2 7132）；
+  - B_CONFIRMED 72.15；釋放收斂重算 72.50、宣告 72.52；
+  - mode 3 提交 72.67；C_CLEAR 73.80；DONE 81.25。
+- 結果：**pass True、why 空**；排除的舊理由恰為三項（舊 DONE 兩項＋finger_effort_periodic_short_13）。
+- 反例 F1–F11 經最外層 judge 全部不通過。
+- 對照 F12：k3b4.judge 在同一合成趟報出 phase_sequence、door_angle_pre_open_over_1deg、grasp_finger_contact_below_min、fingers_opened_after_grasp、finger_effort_periodic_invalid／short 等舊鏈衝突，重現 Codex 指出的問題。
+
+## 2. 必修 2：瞬態監看連續性（door_k3b_transient2、door_w2_mode9、ADM16）
+- 無效樣本**中斷收斂證據**：低速計時歸零、速度窗清空；恢復後重新成窗、重新計時；連續無效 > 0.2 s ⇒ data_invalid。
+  - Y1：Codex 重現（0.90–1.06 s 無效）在 r1 恢復即收斂，r2 須 ≥ 1.06＋0.5＋0.5 s；無效 0.26 s ⇒ data_invalid。
+- 監督器 r9 把量測失效也送入瞬態監看（重送／倒退不算）。
+- **延遲得知提交時重放**：瞬態監看由提交前最後一筆樣本起算，並依序重放緩衝內已收到的提交後樣本（含失效斷點）。重放中超限 ⇒ 當下 FAIL。
+  - 暫定監看紀錄存入 checks[k].provisional。
+  - Y2：Codex 重現（得知前 6 mm 去回）在 r8 worst 0、接受；r9 ⇒ release_transient 失敗。
+  - 假世界 N5：mode 2 後狀態延遲 0.1 s，重放 5 筆後仍交接。
+- 提交前運動、暫緩期限、首次超限不清除、中止優先照舊。r8 全部 9 組反例改以 r9 執行皆過。
+- ADM16 對 ADM12 只插入（2607→2666），旗標 `--w2-hold-r9`。
+
+## 3. 必修 3：兩段瞬態收斂獨立重算
+共用 `door_k3m_check_unload3.recompute_transient`：以 transient2 規則逐 room 列重算位移、速度、資料有效、收斂窗與持續時間。
+
+| 段 | 重算 | 交叉核對宣告 |
+|---|---|---|
+| 卸載（U8） | 起點＝t0 前最後一列；期限 4.0 s | 求解端 UNLOADED ≥ max(重算收斂, t_settling＋0.5) − 0.06 |
+| 釋放（RT5） | 起點＝k2−1 列；期限 1.5 s | 求解端 RELEASE_SETTLED ≥ 重算收斂 − 0.06；settled − t_open ≤ 1.5；settled 至 mode 3 提交手臂 0.5 s 窗 ≤ 0.001 |
+
+- DECL_TOL 0.06 s＝求解端 20 Hz 週期＋同步 50 Hz 間隔。只防「宣告早於證據」，晚於證據為保守方向。
+- 反例：
+  - F1：Codex 的 settled＝t_open＋0.01 ⇒ RT5_settled_declared_before_recomputed_convergence。
+  - B3：UNLOADED 宣告早 0.1 s ⇒ U8。
+  - F7：6 mm 去回 ⇒ RT5_release_transient_displacement。
+  - F8：settled 後再動 ⇒ RT5_arm_not_quiet_before_retreat。
+
+## 4. 版本對照（本輪新增）
+| 檔案 | 內容 |
+|---|---|
+| `door_k3b_transient2.py` | 瞬態 r2 |
+| `door_w2_mode9.py` | 監督器 r9 |
+| `dl3_wgmpc_wg2_adm16_node.py`（`mk_adm16_patch.py`） | 求解器 |
+| `door_k3m_check_unload3.py` | 卸載判定 r3 |
+| `door_k3m_check_k3b5.py` | 整體判定 r5 |
+| `door_k3b5_synth.py` | 完整合成趟產生器 |
+| `run_door_wide_k3b_r5.sh` | 跑法：只換求解器、判定器、凍結 |
+| 測試 | mode9、check_unload3、check_k3b5、靜態 r5、假世界 ADM16、路由 k3b5（k3b4 路由的版本化複本，替身修正） |
+
+## 5. 替身假象（第二個）
+- 路由 k3b4 的替身每輪只 `spin_once` 一次。IK 一輪約 70 ms，回呼積壓，間歇漏收 /drawer/tcp_target：本輪重現時第 68 筆後即不再收到，任務端 pub_seq 照常遞增。
+- 結果手臂停在中途，出現 retreat_timeout。
+- 改為每輪處理完積壓回呼後，連續三次全過。此為替身問題，不外推真實追蹤能力。
+- **流程更正（須告知）**：此修正我起初直接改在 `test_task_node_k3b4_routing.py`，但該檔已列入凍結 k3b r4。
+  - 發現後以 git 還原，凍結 r4 核對恢復一致。
+  - 修正移入版本化複本 `test_task_node_k3b5_routing.py`，列入凍結 r5。
+  - 上述三次通過是在原檔修改版上跑的；複本另跑結果見 §6。
+
+## 5b. 新發現：核心 release4 終點收斂窗缺陷（**須審**）
+**發現經過**：查 §5 的間歇 retreat_timeout 時，在任務節點子程序內逐樣本記錄（僅除錯，不改檔）：
+- 手臂 12.88 s 已靜止於 s＝0.100、三維位移 0；
+- 追蹤窗跨度卻停在 0.44–0.46 s；
+- RETREAT_DONE 延到 17.2 s，另兩次 19.96 s、21.86 s；最壞時超過期限 t_open＋16.5 s。
+
+**原因**：release4 只保留 t ≥ t_now − 0.5 s 的樣本，卻要求跨度 ≥ 0.5 s。
+- 只有恰好有一筆樣本落在 0.5 s 前時才成立。任務端取樣間隔 0.06–0.09 s 時常常湊不滿。
+- 實跑 door_wide_k3b_30_1 的任務端 trace 也有 0.08 s 間隔，所以 Isaac 實跑同樣可能延後或逾時。
+- 這不是替身問題。§5 的兩個替身修正只讓 IK 與收訊正常，前三次「通過」其實是在 RETREAT_DONE 晚到但未逾時的情況下通過。
+
+**處置（版本化，門檻不變）**
+- `door_k3b_release5.py`：追蹤軌跡改為「窗內樣本＋窗外最新一筆」，跨度 ≥ 0.5 s 一有足夠歷史即成立。位移以此略長於 0.5 s 的窗計，屬保守方向。
+- `door_k3m_policy_k3b5.py`：K3MReleasePolicy5，只換監看核心。
+- `door_k3m_task_node_k3b5.py`（`mk_task_k3b5_patch.py`，對 k3b4／w1b2 只插入，665 行）；跑法 r5 改用此節點。
+- 反例 `test_door_k3b_release5.py`：
+  - V1：0.06／0.09 s 交替取樣（連續區間和不會恰為 0.50 s）下，r4 不成立，r5 於到達後 ≤ 0.6 s 成立並 COMPLETE。
+  - V2：同取樣下 x ±2.5 mm 振盪，r5 仍拒。
+  - R：release4 全部 17 項以 r5 執行皆過。
+- 策略 r5：r4 全部反例以 r5 執行皆過。
+- 判定器 K13 由 room 逐物理步重算，不受此缺陷影響，未改。
+- 合成產生器的任務端監看改用 release5。
+- 路由 k3b5（節點 k3b5）連續三次全過，RETREAT_DONE 分別在 13.04、13.00、13.02 s，即到達後約 0.1 s。
+
+## 6. 測試總表（均不需 Isaac）
+- **純測試**：
+  - 新增：mode9 5 組（含 r8 全部 9 組回歸）、check_unload3 7 組、check_k3b5 7 組（最外層 judge）、靜態 r5 4 項。
+  - 回歸：unload2 16、unload_ctrl 2、mode8 9、check_unload2 6、policy_k3b4 5、check_k3b4 6、靜態 r4 6、unload 10、mode7 10、check_unload 5、adm14 靜態 4、mode6 11、adm13 靜態 4、w2_mode 20、mode3 11、mode5_chain 8、release4 17、policy_k3b3 5、check_k3b3 9、靜態 r3 7、grip_gate 4、finger_restore 4、finger_effort 9、release3 16、靜態 r2 6。
+  - 共 29 個測試檔全過。
+- 另：release5 3 組、policy_k3b5 1 組（含 r4 全部 5 組回歸）、靜態 r5 5 項；release4、policy_k3b4、check_k3b3、check_k3b5（以 release5 合成）重跑皆過。
+- **ROS**：假世界 ADM16 N0–N5 全過；真任務節點 k3b5 路由 R1–R4 連續三次全過。
+
+## 7. 申請
+請短複核。若可接受，請核可單趟：
+- RUN_ID `door_wide_k3b4_30_1`；跑法 `run_door_wide_k3b_r5.sh`；凍結 k3b r5。
+- 條件比照前趟：乾淨環境、ROS_DOMAIN_ID 97、92 °C 守護、起跑前後凍結核對、失敗保留不補跑、不新增影片。
+- 執行端 ev8 的 Isaac 實際行為仍只有靜態接線核對，實跑是第一次整合驗證。

@@ -1,0 +1,21 @@
+暫存 /tmp/claude-1000/-home-howardchen-masterthesis/2a47f71f-1a91-4ff0-9dbf-1892d8540042/scratchpad/k3b5n_rt1　domain 100+
+
+R1  正常（閉爪卸載後張爪、讀回核對、退離終點保持後 DONE）
+  exit 0、最終 DONE                                                   ok  rc=0 phase=DONE abort=None
+  請求序 1、2、3                                                        ok  [1, 2, 3]
+  mode 2 請求晚於兩端完成（gate go）                                         ok  {'t': 5.98, 'gate': 'go', 't_c1': 4.19, 'state_t': 5.96, 'solver_t': 5.96, 'exec_unload': {'state': 'UNLOADED', 'why': None, 't_settling': 5.19}, 'solver_sub': 'unloaded'}
+  未送 5 N 恢復請求                                                      ok  []
+  eff_verify 讀回 5、晚於 C_CLEAR                                       ok  {'t': 8.540000000000001, 'readback': [5.0, 5.0], 'readback_t': 8.0, 'ok': True}
+  mode 3 於 release_settled 後請求                                     ok  release_settled
+  monitor COMPLETE                                                 ok  COMPLETE n_ik=68 ik_fail=0
+
+R2  執行端 unload FAILED
+  中止 k3b_unload:unload_failed:contact_lost、未請求 mode 2              ok  k3b_unload:unload_failed:contact_lost [1]
+
+R3  C_CLEAR 時讀回仍 20
+  中止 k3b_effort_verify:readback_not_5                              ok  k3b_effort_verify:readback_not_5
+
+R4  求解端未曾 release_settled
+  未請求 mode 3、中止                                                    ok  [1, 2] k3b_release:near_exit_timeout
+
+全部通過
