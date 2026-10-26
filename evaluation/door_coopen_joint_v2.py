@@ -9,8 +9,10 @@ v1（door_coopen_joint_v1，正向 beam、評分 −D）診斷：φ45 s0.80 第�
   關 1（背面放手狀態）：底盤格點每 0.04 m，門扇背面（side ≥ 0.05 m）、門角包絡 [q_rel − 2, q_rel + 5]° 淨空場 ≥ 30 mm 且最寬路徑瓶頸 ≥ 30 mm；
     偏航＝「底盤→抓取點」方位 ±{0, 15, 30, 45, 60}°，粗篩同 edgegrasp_v1；IK（多種子）、判準同 traj_v1＋底盤 ≥ 30 mm；
     再核門靜止時仍握持沿出口路徑（pass_smooth_v1.dijkstra）前進 ≥ 3 cm（至多 10 cm），前進終點同樣滿足包絡淨空與瓶頸 ≥ 30 mm。
-  關 2（末段推進）：自持握末端反向 N＝10°（beam 寬 5、每親 8），評分＝反向時 D_q_rel 增加（＝正向 D 下降），D_q_rel＝包絡場上到出口的測地距離；
-    成立條件：正向末 10° D 下降 ≥ 0.05 m，且開門末 3 步方向與握持前進方向轉角 ≤ 60°。
+  關 2（末段推進）：自持握末端反向 N＝10°（beam 寬 5、每親 8），評分＝反向時 D_q_rel 增加（＝正向 D 下降），D_q_rel＝包絡場上到出口的測地距離
+    （引導評分對不可通行格點加「到最近可通行格點距離＋1.0 m」）；**推進量只用真實測地距離計算**：正向末 10° 兩端都在可通行區才計，
+    否則記 blend_start_not_on_exit_route（首跑誤用含懲罰值，φ60 s0.85 q50 報出 1.34 m 假推進——底盤是在讓出門扇將掃過的位置，不是朝出口；已停止並重跑）；
+    成立條件：真實 D 下降 ≥ 0.05 m，且開門末 3 步方向與握持前進方向轉角 ≤ 60°。
   關 3（完整持握）：關 2 成立者依 D 下降排序取前 3，自其第 10° 狀態續反向到 0°（評分往門前側 (0.5, −1.0)，同 edgehold_v2）。
 每關報淘汰計數；找不到就如實報告卡在哪一關。
 **界線**：格點與取樣（非距離下界）；剛性夾持、靜態；門餘轉以包絡代替；只在本範圍。
@@ -70,7 +72,7 @@ def d_map(F):
                         heapq.heappush(pq, (nd, ni, nj))
     fin = np.isfinite(D)
     dist, (ii, jj) = ndimage.distance_transform_edt(~fin, return_indices=True, sampling=(XS[1] - XS[0], YS[1] - YS[0]))
-    return np.where(fin, D, D[ii, jj] + dist + 1.0)
+    return np.where(fin, D, D[ii, jj] + dist + 1.0), D
 
 
 def D_at(Dm, b):
@@ -148,7 +150,7 @@ def stage1(g, q_rel, F, rej):
     return out
 
 
-def blend(g, q_rel, s1, Dm):
+def blend(g, q_rel, s1, Dm, Dtrue):
     T_of = lambda q: EG.grasp_T(q, *g)                 # noqa: E731
     st0 = {'base': s1['base'], 'qa': s1['qa'], 'jm': s1['jm'], 'clear': s1['clear'], 'D': D_at(Dm, s1['base'])}
     layer = [dict(st0, path=[dict(st0, q=q_rel)])]
@@ -188,13 +190,15 @@ def blend(g, q_rel, s1, Dm):
                 break
     best = layer[0]
     fw = best['path'][::-1]
-    drop = fw[0]['D'] - fw[-1]['D']
+    d0, d1 = D_at(Dtrue, fw[0]['base']), D_at(Dtrue, fw[-1]['base'])
+    drop = (d0 - d1) if (math.isfinite(d0) and math.isfinite(d1)) else None
     v_open = np.array(fw[-1]['base'][:2]) - np.array(fw[-4]['base'][:2])
     vf = np.array(s1['v_fwd'])
     turn = None
     if np.linalg.norm(v_open) > 1e-3 and np.linalg.norm(vf) > 1e-3:
         turn = math.degrees(math.acos(float(np.clip(v_open @ vf / np.linalg.norm(v_open) / np.linalg.norm(vf), -1, 1))))
-    return {'D_drop_m': float(drop), 'turn_open_fwd_deg': turn, 'state10': best, 'fw': fw}
+    return {'D_drop_m': None if drop is None else float(drop), 'D_guided_drop_m': float(fw[0]['D'] - fw[-1]['D']),
+            'turn_open_fwd_deg': turn, 'state10': best, 'fw': fw}
 
 
 def main():
@@ -202,7 +206,7 @@ def main():
         raise SystemExit(f'{OUT} 已存在，不覆寫')
     t0 = time.time()
     fields = {q: RS.field(float(q)) for q in Q_RELS}
-    dmaps = {q: d_map(fields[q]) for q in Q_RELS}
+    dmaps = {q: d_map(fields[q]) for q in Q_RELS}     # (引導用含懲罰, 真實測地距離)
     survivors, summary = [], []
     for g in GRASPS:
         for q_rel in Q_RELS:
@@ -210,10 +214,13 @@ def main():
             s1 = stage1(g, q_rel, fields[q_rel], rej)
             n2, ok2 = 0, []
             for c in s1:
-                b = blend(g, q_rel, c, dmaps[q_rel])
+                b = blend(g, q_rel, c, *dmaps[q_rel])
                 n2 += 1
                 if b is None:
                     rej['blend_infeasible'] = rej.get('blend_infeasible', 0) + 1
+                    continue
+                if b['D_drop_m'] is None:
+                    rej['blend_start_not_on_exit_route'] = rej.get('blend_start_not_on_exit_route', 0) + 1
                     continue
                 if b['D_drop_m'] < 0.05:
                     rej['blend_D_drop_lt5cm'] = rej.get('blend_D_drop_lt5cm', 0) + 1
