@@ -2,10 +2,9 @@
 """連續協同通行：候選軌跡搜尋 v1（Codex 20261026_141054 §3；無 Isaac、無接觸力；單一程序、IK 以上一步為種子）。
 
 候選接觸模式「拉 → 換側 → 推著通過」：
-  A 拉門（抓持把手）：自現停位握持狀態（door_wide_offline_sweep_90 起點）起，門角每 1° 一步，底盤每步可動
-    Δx、Δy ∈ {−0.03, 0, +0.03} m、Δ偏航 ∈ {−3°, 0, +3°}（門 1°/s 時底盤 ≤ 0.042 m/s）；IK 以上一步手臂為唯一種子（構型連續），
-    可行＝底盤圓盤 ≥ 20 mm、非手指 ≥ 5 mm、手指（不含設計接觸）≥ 5 mm、自碰 ≥ 5 mm、關節餘裕 ≥ 0.05 rad、相鄰步手臂關節變化 ≤ 0.10 rad；
-    目標：底盤盡量往門閂側（+x）與前方（+y）——為換側推門預作位置。束寬 6。
+  A 拉門（抓持把手）：採用既有 W-GMPC 閉迴路運動學重播（door_wide_offline_sweep_90：剛性夾持、底盤可動、門跟隨夾爪）的軌跡，
+    取每 1° 最接近的一列，逐列以同一組判準重核：底盤圓盤 ≥ 20 mm、非手指 ≥ 5 mm、手指（不含設計接觸）≥ 5 mm、自碰 ≥ 5 mm、
+    關節餘裕 ≥ 0.05 rad；並報相鄰列手臂關節變化。（首版以貪婪束搜尋自造 A 相，15° 即無可行子節點而停；改用本方法實際產生的軌跡。）
   T 換側（門靜止於 q_A）：放開把手；在門閂側格點找可推門扇背面的起始位姿（door_coopen_push_v1.push_pose，接觸點距鉸鏈 r_c）；
     底盤由抓持終點到推門起點的直線（或經前方中途點）在 q_A 下全程 ≥ 20 mm。手臂換位路徑未核（只核兩端）。
   B 推門前進：門角每 1° 一步（由推觸帶動，假設門跟著推觸點；無力學），底盤 Δ ∈ {−0.04…+0.04}²（0.02 步）、Δ偏航 ±4°，
@@ -16,7 +15,7 @@
 最小淨空、關節餘裕、相鄰步最大關節變化與換算速度（門 1°/s）。
 **界線**：無接觸力與摩擦、門被推動的動力學、取樣間碰撞、底盤外凸物、手臂換位與收臂路徑；只是幾何候選，不代表 Isaac 可行。
 
-    python3 evaluation/door_coopen_traj_v1.py [q_A ...]   # 寫 results/door/door_coopen_traj_v1.json（不覆寫）
+    python3 evaluation/door_coopen_traj_v1.py [q_A ...]   # 寫 results/door/door_coopen_traj_v1_sweepA.json（不覆寫）
 """
 from __future__ import annotations
 
@@ -34,7 +33,7 @@ import door_coopen_push_v1 as PU                       # noqa: E402
 import door_coopen_reach_v1 as RV                      # noqa: E402
 import door_k2_check as KC                             # noqa: E402
 
-OUT = os.path.join(HERE, 'results', 'door', 'door_coopen_traj_v1.json')
+OUT = os.path.join(HERE, 'results', 'door', 'door_coopen_traj_v1_sweepA.json')   # 首版（貪婪 A 相）輸出 door_coopen_traj_v1.json 保留
 C, V2, GM = RV.C, RV.V2, RV.GM
 LIM = dict(RV.LIM, finger_push_min_m=0.001, joint_step_rad=0.10)
 BAND = (0.35, 0.68)
@@ -163,9 +162,19 @@ def main():
     dA = lambda st: [(dx, dy, dyaw, {}) for dx in (-0.03, 0.0, 0.03) for dy in (-0.03, 0.0, 0.03) for dyaw in (-3, 0, 3)]   # noqa: E731
     sA = lambda b, ext, qd: float(b[0] + 0.5 * b[1])                            # noqa: E731
     qa_list = [int(a) for a in sys.argv[1:]] or [20, 25, 30, 35, 40]
-    layerA, qA_reached, whyA = beam(start, 0, max(qa_list), gT, sA, dA)
-    print(f'A：抓持可達 q {qA_reached}°（{whyA}），{time.time() - t0:.0f} s', flush=True)
-    best_A = layerA[0]['path']
+    best_A, qA_reached, whyA = [], 0, 'end'
+    tr = sw['trajectory']
+    for qd in range(0, max(qa_list) + 1):
+        row = min(tr, key=lambda r_: abs(r_['q_door_deg'] - qd))
+        qq = np.array(row['q'], float)
+        q_ = math.radians(row['q_door_deg'])
+        r_ = check(qq[:3], q_, KC._H_of(q_) @ THG, qq[3:], full=True)
+        if r_ is None:
+            whyA = f'sweep_row_infeasible_at_{qd}'
+            break
+        best_A.append({'base': qq[:3], 'qa': r_['qa'], 'extra': {}, 'jm': r_['jm'], 'clear': r_['clear'], 'q': qd, 'q_door_row_deg': row['q_door_deg']})
+        qA_reached = qd
+    print(f'A：W-GMPC 重播軌跡逐 1° 重核可行至 q {qA_reached}°（{whyA}），{time.time() - t0:.0f} s', flush=True)
     cands = []
     for qa_ in qa_list:
         if qa_ > qA_reached:
