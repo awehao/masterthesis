@@ -26,7 +26,11 @@ XS, YS = PO.DG.XS, PO.DG.YS
 
 
 def widest(qd, b):
-    F = PO.grid(float(qd))
+    return widest_field(PO.grid(float(qd)), b)
+
+
+def widest_field(F, b):
+    """F：底盤圓盤淨空場（XS × YS）。"""
     i0 = int(np.argmin([abs(x - b[0]) for x in XS]))
     j0 = int(np.argmin([abs(y - b[1]) for y in YS]))
     best = {(i0, j0): F[i0, j0]}
