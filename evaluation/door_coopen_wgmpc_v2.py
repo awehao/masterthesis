@@ -17,6 +17,8 @@
 **界線**：離線閉迴路模型（門角由 TCP 推得，非嚴格剛性持握受控體）；無接觸、門動力學、E2／安全層；不含放手與收臂。
 
     python3 evaluation/door_coopen_wgmpc_v2.py   # 寫 results/door/door_coopen_wgmpc_v2.json（不覆寫）
+    python3 evaluation/door_coopen_wgmpc_v2.py results/door/door_coopen_core_table_48_r2.json   # 以登錄表為參考重跑（核心段登錄核驗）
+    python3 evaluation/door_coopen_wgmpc_v2.py results/door/door_coopen_core_table_48_r3.json results/door/coopen_core_h0_r3.json   # 另以 h0 的停位＋抓取構型起始
 """
 import json
 import math
@@ -76,7 +78,24 @@ def rot_angle(Ra, Rb):
     return math.degrees(math.acos(float(np.clip((np.trace(Ra.T @ Rb) - 1) / 2, -1, 1))))
 
 
+def rows_from_table(path):
+    t = json.load(open(path))['table']
+    ax, ay, ath = t['anchor']
+    c, s_ = math.cos(ath), math.sin(ath)
+    out = []
+    for q, f, l, dy in zip(t['q_door_deg'], t['fwd_m'], t['lat_m'], t['dyaw_deg']):
+        out.append({'q_door_deg': q, 'fwd_m': ax + c * f - s_ * l, 'lat_m': ay + s_ * f + c * l, 'dyaw_deg': math.degrees(ath) + dy,
+                    'q': [ax + c * f - s_ * l, ay + s_ * f + c * l, ath + math.radians(dy)] + [0.0] * 6})
+    return out
+
+
 def main():
+    global OUT
+    table_path = sys.argv[1] if len(sys.argv) > 1 else None   # 登錄表核驗：以給定走廊／引導表（世界座標轉換後）為參考，輸出另檔
+    if table_path:
+        OUT = OUT.replace('.json', '_' + os.path.basename(table_path).replace('.json', '') + '.json')
+    if len(sys.argv) > 3:
+        OUT = OUT.replace('.json', f'_t{int(float(sys.argv[3]))}.json')
     if os.path.exists(OUT):
         raise SystemExit(f'{OUT} 已存在，不覆寫')
     t0 = time.time()
@@ -85,10 +104,13 @@ def main():
     theta = float(cand['q_rel_deg'])
     T_hold = EG.grasp_T(0.0, *g)
     tr = cand['trajectory']
-    rows = smooth_rows(tr)
+    rows = rows_from_table(table_path) if table_path else smooth_rows(tr)
     table = G.RefTable(rows, (0.0, 0.0, 0.0))
     ident = json.load(open(R.IDENT))
     q0 = np.array(list(tr[0]['base']) + list(tr[0]['qa']), float)
+    if len(sys.argv) > 2:                                      # 起始構型覆寫：h0 檔的停位＋抓取構型（核心段登錄核驗）
+        h0 = json.load(open(sys.argv[2]))
+        q0 = np.array(list(h0['stand']) + list(h0['qa_grasp']), float)
     alpha, bias = np.asarray(ident['alpha'], float), np.asarray(ident['bias_rad'], float)
     s0 = q0[3:9] - bias / alpha
     K = CL.WholeBodyKinematics.from_urdf_file(C.URDF)
@@ -126,6 +148,9 @@ def main():
 
     ref = R.reference(T_hold, cfgp)
     t_end = ref[-1][0] + 3.0 + R.HOLD_AFTER_S
+    if len(sys.argv) > 3:                                      # 時長覆寫：以登錄的 OPEN 逾時為上限核驗（例：105）
+        t_end = float(sys.argv[3])
+    OUT_T = OUT
     rec = CL.run(cfg, K, q0, s0, lambda t: st['T'], t_end=t_end, reach_p=0.005, reach_r=0.02, hold_s=1e9, pre_solve=pre,
                  delay_cycles=1.4, d_pub_cycles=0.6, comp_state=1.6, comp_cmd=1.0, comp_mode='hist', gamma=0.0)['rec']
     n = len(rec['t'])
@@ -188,7 +213,11 @@ def main():
           f"D 38→48 {res['D_38_m']}→{res['D_48_m']}（降 {res['D_drop_38_48_m']}；門在開的占比 {open_share}）；"
           f"飽和占比 {res['sat_share']:.2f}、最長 {res['sat_longest_s']:.2f} s、世界 |v| {res['v_world_max_m_s']:.3f}；"
           f"閉合殘差 {({k: round(v, 1) for k, v in res['closure_residual_max'].items()})}；取樣淨空 {({k: round(v, 1) for k, v in res['geo_min_mm'].items()})} mm；{time.time() - t0:.0f} s", flush=True)
-    json.dump(res, open(OUT, 'w'), ensure_ascii=False, indent=1, default=lambda o: o.tolist() if hasattr(o, 'tolist') else float(o))
+    res['t_end_s'] = float(t_end)
+    i48 = next((i for i in range(n) if qdeg[i] >= theta - 0.05), None)
+    res['t_reach_goal_s'] = None if i48 is None else float(rec['t'][i48])
+    print(f"  到達 {theta - 0.05:.2f}° 的時刻：{res['t_reach_goal_s']} s（上限 {t_end:.0f} s）", flush=True)
+    json.dump(res, open(OUT_T, 'w'), ensure_ascii=False, indent=1, default=lambda o: o.tolist() if hasattr(o, 'tolist') else float(o))
 
 
 if __name__ == '__main__':
