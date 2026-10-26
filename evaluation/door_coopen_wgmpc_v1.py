@@ -13,6 +13,7 @@
 **界線**：運動學閉迴路、剛性持握、無接觸力與門動力學；不含放手與收臂（完整通行缺口照列）；不是 Isaac 結果。
 
     python3 evaluation/door_coopen_wgmpc_v1.py   # 寫 results/door/door_coopen_wgmpc_v1.json（不覆寫）
+    python3 evaluation/door_coopen_wgmpc_v1.py 0.035 0.10   # E：引導限幅 v_cap／w_cap 覆寫（A–D 後追加；B、C 偏差相同推測為引導限幅 0.02 m/s 所致）
 """
 import json
 import math
@@ -38,6 +39,9 @@ OUT = os.path.join(HERE, 'results', 'door', 'door_coopen_wgmpc_v1.json')
 TH = {'nonfinger': 0.005, 'finger': 0.005, 'self': 0.005, 'base': 0.020}
 
 
+V_CAP, W_CAP = None, None      # 引導限幅覆寫（None＝GuidanceCfg 預設 0.02 m/s、0.05 rad/s）
+
+
 def run_cfg(name, guide_w, w_qn, ident, K, q0, s0, T_hold, q_finger, table, theta, Dtrue):
     cfg = CL.make_cfg(ident, w_s=0.001, w_a=0.05, w_s_arm=0.05, base_fixed=False)
     cfgp = KP.K3AConfig(theta_goal_deg=theta)
@@ -45,6 +49,8 @@ def run_cfg(name, guide_w, w_qn, ident, K, q0, s0, T_hold, q_finger, table, thet
     G_T_H = np.linalg.inv(T_hold) @ H0
     a0 = math.atan2(H0[1, 3], H0[0, 3])
     gcfg = G.GuidanceCfg(w_vref=guide_w, w_qn=w_qn)
+    if V_CAP is not None:
+        gcfg.v_cap, gcfg.w_cap = V_CAP, W_CAP
     st = {'dtk': T3.DoorTargetK3(T_hold, H0, cfgp.target_cfg()), 'T': T_hold, 'q_ref_prev': None, 'log': {}, 'conflict': None}
 
     def pre(t, q, c):
@@ -107,6 +113,12 @@ def run_cfg(name, guide_w, w_qn, ident, K, q0, s0, T_hold, q_finger, table, thet
 
 
 def main():
+    global OUT, V_CAP, W_CAP
+    cfgs = (('A_noguide', 0.0, 0.0), ('B_guide1', 1.0, 0.0), ('C_guide5', 5.0, 0.0), ('D_guide5_qn1', 5.0, 1.0))
+    if len(sys.argv) > 2:                              # E：引導限幅放寬到求解器界限（只改引導參數，不動保護與限制）
+        V_CAP, W_CAP = float(sys.argv[1]), float(sys.argv[2])
+        OUT = OUT.replace('.json', f'_vcap{V_CAP:g}_wcap{W_CAP:g}.json')
+        cfgs = (('E_guide1_cap', 1.0, 0.0), ('E_guide5_cap', 5.0, 0.0))
     if os.path.exists(OUT):
         raise SystemExit(f'{OUT} 已存在，不覆寫')
     t0 = time.time()
@@ -133,7 +145,8 @@ def main():
     _, Dtrue = J2.d_map(RS.field(theta))
     res = {'schema': 'door_coopen_wgmpc/1', 'source': os.path.relpath(SRC, HERE), 'grasp': list(g), 'theta_goal_deg': theta, 'q_finger': q_finger,
            'ref_D_drop_38_48_m': cand['D_drop_last10_m'], 'configs': []}
-    for name, w, wq in (('A_noguide', 0.0, 0.0), ('B_guide1', 1.0, 0.0), ('C_guide5', 5.0, 0.0), ('D_guide5_qn1', 5.0, 1.0)):
+    res['guidance_cap_override'] = None if V_CAP is None else {'v_cap': V_CAP, 'w_cap': W_CAP}
+    for name, w, wq in cfgs:
         c = run_cfg(name, w, wq, ident, K, q0, s0, T_hold, q_finger, table, theta, Dtrue)
         res['configs'].append(c)
         print(f"{name}：門角 {c['q_door_max_deg']:.1f}°、求解失敗 {c['n_solve_fail']}、目標衝突 {c['target_conflict'] is not None}、閉合 {c['closure_max_mm']:.1f} mm；"
