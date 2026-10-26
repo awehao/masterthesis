@@ -125,11 +125,13 @@ def release_eval(st, prev3, q_deg, g):
     q = math.radians(q_deg)
     b = st['base']
     if side_m(b[0], b[1], q) < 0.05:
-        return None
+        return 'front_side'
     F = RS.field(float(q_deg))
+    if PS.F_at(F, b[:2]) < PLAN:
+        return 'hold_end_in_envelope_lt30'
     gp = PS.dijkstra(F, b[:2])
     if gp is None:
-        return None
+        return 'no_exit_path'
     P, s = PS.smooth(F, gp, b[:2])
     T = EG.grasp_T(q, *g)
     seed, fwd = st['qa'], []
@@ -142,13 +144,15 @@ def release_eval(st, prev3, q_deg, g):
         seed = r['qa']
         fwd.append({'base': bb.tolist(), 'qa': r['qa'].tolist(), 'clear': r['clear'], 'jm': r['jm']})
     if len(fwd) < 3:
-        return None
+        return 'fwd_lt_3cm'
     rb = np.array(fwd[-1]['base'])
     fr = PS.F_at(F, rb[:2])
     k_rel = len(fwd)
     W = WD.widest_field(F, rb[:2])
-    if fr < PLAN or W is None or W < PLAN:
-        return None
+    if fr < PLAN:
+        return 'release_F_lt30'
+    if W is None or W < PLAN:
+        return 'bottleneck_lt30'
     v_open = np.array(b[:2]) - np.array(prev3[:2])
     v_fwd = rb[:2] - np.array(b[:2])
     v_pass = P[min(k_rel + 10, len(P) - 1)] - P[k_rel]
@@ -176,6 +180,7 @@ def main():
             T_of = lambda q: EG.grasp_T(q, *g)        # noqa: E731
             layer = [dict(s0, path=[dict(s0, q=0)])]
             cands, why, qend = [], 'end', Q_END
+            rej, trace = {}, []
             for qd in range(1, Q_END + 1):
                 TJ.cool()
                 q = math.radians(qd)
@@ -211,11 +216,17 @@ def main():
                         layer.append(c_)
                     if len(layer) >= 6:
                         break
+                if qd % 5 == 0 or qd == Q_END:
+                    trace.append({'q_deg': qd, 'base0': [float(v) for v in layer[0]['base']], 'D0': layer[0]['D'],
+                                  'side_max': max(side_m(c_['base'][0], c_['base'][1], q) for c_ in layer)})
                 if qd >= 44:
                     for st in layer:
                         TJ.cool()
                         prev = st['path'][max(0, len(st['path']) - 4)]['base']
                         e = release_eval(st, prev, qd, g)
+                        if isinstance(e, str):
+                            rej[e] = rej.get(e, 0) + 1
+                            continue
                         if e is not None:
                             Ds = [p['D'] for p in st['path'] if 'D' in p]
                             e['D_drop_last3_m'] = float(st['path'][max(0, len(st['path']) - 4)].get('D', math.nan) - st['D'])
@@ -227,14 +238,15 @@ def main():
                             cands.append(e)
             best = min(cands, key=lambda c: max(c['turn_open_fwd_deg'] or 180, c['turn_fwd_pass_deg'] or 180), default=None)
             rec = {'grasp': list(g), 'start': s0['base'].tolist(), 'start_D': s0['D'], 'reached_q_deg': qend, 'why': why,
-                   'n_release_cands': len(cands), 'best': best,
+                   'n_release_cands': len(cands), 'reject_counts': rej, 'trace': trace, 'best': best,
                    'others': [{k: c[k] for k in ('q_deg', 'release_base', 'release_F_m', 'bottleneck_m', 'turn_open_fwd_deg', 'turn_fwd_pass_deg', 'fwd_m', 'D_drop_last3_m')}
                               for c in sorted(cands, key=lambda c: max(c['turn_open_fwd_deg'] or 180, c['turn_fwd_pass_deg'] or 180))[:10]]}
             res.append(rec)
             bs = '' if best is None else (f"；最佳放手 {best['q_deg']}° 於 {np.round(best['release_base'][:2], 2)}，握持前進 {best['fwd_m']:.2f} m，"
                                           f"轉角 開→前 {best['turn_open_fwd_deg']}／前→過 {best['turn_fwd_pass_deg']}，F {best['release_F_m'] * 1000:.0f}、瓶頸 {best['bottleneck_m'] * 1000:.0f} mm、"
                                           f"末 3 步 D 降 {best['D_drop_last3_m']:.3f} m")
-            print(f"  起點 {np.round(s0['base'][:2], 2)}：持握到 {qend}°（{why}），放手候選 {len(cands)}{bs}；{time.time() - t0:.0f} s", flush=True)
+            tr = '、'.join(f"{t['q_deg']}°({t['base0'][0]:.2f},{t['base0'][1]:.2f}) side≤{t['side_max']:.2f}" for t in trace if t['q_deg'] in (20, 40, 50, 60, 65))
+            print(f"  起點 {np.round(s0['base'][:2], 2)}：持握到 {qend}°（{why}），放手候選 {len(cands)}{bs}；淘汰 {rej}；軌跡 {tr}；{time.time() - t0:.0f} s", flush=True)
     json.dump({'schema': 'door_coopen_joint/1', 'q_ref_deg': Q_REF, 'plan_m': PLAN, 'grasps': GRASPS, 'q_end_deg': Q_END, 'per_start': res,
                'search_range': '夾法 6 種 × 每種至多 3 起點；beam 寬 6、每親 8；放手評估 q ≥ 44°',
                'not_modeled': ['格點與取樣（非距離下界）', '剛性夾持、靜態', '門餘轉以包絡代替', '本範圍外的夾法與起點']},
