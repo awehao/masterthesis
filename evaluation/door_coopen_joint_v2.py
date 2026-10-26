@@ -18,6 +18,7 @@ v1（door_coopen_joint_v1，正向 beam、評分 −D）診斷：φ45 s0.80 第�
 **界線**：格點與取樣（非距離下界）；剛性夾持、靜態；門餘轉以包絡代替；只在本範圍。
 
     python3 evaluation/door_coopen_joint_v2.py   # 寫 results/door/door_coopen_joint_v2.json（不覆寫）
+    python3 evaluation/door_coopen_joint_v2.py 60 0.85 48   # 只跑單組，寫 door_coopen_joint_v2_phi60_s0.85_q48.json
 """
 from __future__ import annotations
 
@@ -202,6 +203,11 @@ def blend(g, q_rel, s1, Dm, Dtrue):
 
 
 def main():
+    global OUT, GRASPS, Q_RELS
+    if len(sys.argv) > 1:                              # 單組：phi s q_rel（與全掃描同一程式，輸出另檔）
+        phi, s_, qr = float(sys.argv[1]), float(sys.argv[2]), int(sys.argv[3])
+        GRASPS, Q_RELS = [(phi, s_, 0)], (qr,)
+        OUT = OUT.replace('.json', f'_phi{phi:g}_s{s_:g}_q{qr}.json')
     if os.path.exists(OUT):
         raise SystemExit(f'{OUT} 已存在，不覆寫')
     t0 = time.time()

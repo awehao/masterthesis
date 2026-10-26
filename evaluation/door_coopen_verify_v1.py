@@ -229,9 +229,17 @@ def run(cand):
 def main():
     if os.path.exists(OUT):
         raise SystemExit(f'{OUT} 已存在，不覆寫')
-    d = json.load(open(SRC))
+    global OUT
+    src = SRC
+    args = sys.argv[1:]
+    if args and args[0].endswith('.json'):
+        src = args.pop(0)
+        OUT = OUT.replace('.json', '_' + os.path.basename(src).replace('door_coopen_joint_v2_', ''))
+        if os.path.exists(OUT):
+            raise SystemExit(f'{OUT} 已存在，不覆寫')
+    d = json.load(open(src))
     full = [f for f in d['full'] if f.get('trajectory')]
-    idx = [int(a) for a in sys.argv[1:]] or list(range(len(full)))
+    idx = [int(a) for a in args] or list(range(len(full)))
     res = []
     for i in idx:
         r = run(full[i])
@@ -242,7 +250,7 @@ def main():
                          + (f" δ+≤{v['delta_plus_ok_min_deg']} δ−≥{v['delta_minus_ok_max_deg']}" if 'delta_plus_ok_min_deg' in v else '')
                          for ph, v in s.items())
               + f"；交界 {({k: round(v['dv_m_s'], 3) for k, v in r['junction'].items()})}；末 10° D 降 {r['exit_progress']['D_drop_last10_m']}", flush=True)
-    json.dump({'schema': 'door_coopen_verify/1', 'source': os.path.relpath(SRC, HERE), 'thresholds_m': TH, 'e_base_m': E_BASE, 'deltas_deg': DS,
+    json.dump({'schema': 'door_coopen_verify/1', 'source': os.path.relpath(src, HERE), 'thresholds_m': TH, 'e_base_m': E_BASE, 'deltas_deg': DS,
                'candidates': res, 'not_modeled': ['接觸力、夾持穩定性', '門餘轉動力學（δ 包絡代替）', '模型與定位誤差（只有底盤 10 mm 壓力等級）', '控制器追蹤']},
               open(OUT, 'w'), ensure_ascii=False, indent=1, default=lambda o: o.tolist() if hasattr(o, 'tolist') else float(o))
 
