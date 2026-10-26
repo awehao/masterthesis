@@ -4,7 +4,7 @@
 v1（door_coopen_edgehold_v1 → edgearc_v1 q45 roll 0）在 10 mm 底盤誤差下不成立（door_coopen_budget_v1）。本版：
   終點＝door_coopen_release_set_v1 的可持握放手狀態（放手後門角在 [q_rel − 2°, q_rel + 5°] 任意時，放手位姿淨空與到通過的最寬路徑瓶頸
     皆 ≥ 30 mm＝門檻 20＋誤差 10），**再限放手底盤位於門扇背面一側**（side_m ≥ 0.05 m：放手後往前即可，不是繞過自由端再切入）；
-    每個 q_rel 取 min(F, 瓶頸) 最大的 2 個，至多 8 個終點。
+    每個 q_rel 取 min(F, 瓶頸) 最大的 2 個，至多 5 個終點。
   反向持握：自終點門角每 1° 往 0° 延伸（夾法固定 φ 60°、s 0.85、roll 0），判準同 v1，**另加規劃餘裕：持握各步底盤 ≥ 30 mm**；
     底盤 Δx、Δy ∈ {−0.04…0.04}（0.02 步）、Δ偏航 ±4°；評分＝往門前側 (0.5, −1.0) 靠近（同 v1 close 方向）。
   握回 0° 者倒序即開門軌跡。報：持握段各類最小淨空與餘裕、底盤往 +x／−x／後退／停住步數、時長（arc_v3.timing），
@@ -34,7 +34,7 @@ SRC = os.path.join(HERE, 'results', 'door', 'door_coopen_release_set_v1.json')
 OUT = os.path.join(HERE, 'results', 'door', 'door_coopen_edgehold_v2.json')
 BASE_PLAN = 0.030
 SIDE_MIN = 0.05
-PER_Q, N_MAX = 2, 8
+PER_Q, N_MAX = 2, 5
 
 
 def side_m(x, y, q):
