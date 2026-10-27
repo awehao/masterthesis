@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """換抓參考時間化 v4（Codex r54 §2、§4）：依既有預測淨空判定逐段降速，直到 20 Hz 取樣全部滿足（不改監看門檻）。
-來源：door_regrasp_replan_v5.json 的串接列（release_outer＋M＋A＋I＋G），最前補 bench_6 110.0 s 實測初態列（同 retime_v2）。
+來源：door_regrasp_replan_v7_phi+30.json 的串接列（抓取 φ＋30°、B1 (0.65,−0.05,270°)）（release_outer＋M＋A＋I＋G），最前補 bench_6 110.0 s 實測初態列（同 retime_v2）。
 時間參數化同 door_coopen_pass_close_inner_retime_v3（經過點版 LSPB、有號速度、接點混合、底盤車體座標取偏航區間精確最大、規劃 0.995 倍加速度），
 差異：**速度比例逐段可調**（初值 0.5＝v3 自由段），反覆：
   取樣 20 Hz → 每點以 door_k3m_geom_monitor_v3 後端（目標：release_outer 的 W1 段 out、其後 None；A 未到預抓取 None、到後與 I、G in）算四類距離，
@@ -26,7 +26,7 @@ import door_coopen_pass_close_inner_v1 as PI           # noqa: E402
 import door_coopen_traj_v1 as TJ                       # noqa: E402
 import door_k3m_geom_monitor_v3 as GM3                 # noqa: E402
 
-SRC = os.path.join(HERE, 'results', 'door', 'door_regrasp_replan_v5.json')
+SRC = os.path.join(HERE, 'results', 'door', 'door_regrasp_replan_v7_phi+30.json')
 REL = os.path.join(HERE, 'results', 'door', 'door_coopen_release_bench6_v4.json')
 OUT = os.path.join(HERE, 'results', 'door', 'door_regrasp_retime_v4.json')
 C = PI.C
