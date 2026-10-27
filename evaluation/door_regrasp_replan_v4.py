@@ -5,6 +5,8 @@
      每條邊另核 1/3、2/3 中間姿態（平移與斜向連接皆核）；
   M2（M1 失敗才做）先移後轉：保持起始偏航整機 A* 平移到 B1 位置，最後原地轉到 225°（每 0.5° 核）。
   兩者都失敗 ⇒ 報阻點，不增位置／偏航／抓法。
+  A* 有界：搜尋框 x ∈ [−0.5, 2.0]、y ∈ [−1.6, 0.0] m、節點檢查上限 40000（超過記 budget_exhausted、視為無路徑）。
+  節點檢查效能：只用 v3 後端 sphere 自碰模式（與 full 在 < 30 mm 時相同、否則保守）；選定路徑再以 full＋PI.check 逐點覆核，覆核失敗即不成立。
   另修 v3 判定錯誤（r56 §3）：經過點候選的後段（V→預抓取）檢查失敗時，v3 仍記 ok 並以 −1 分入選；v4 以 via_candidate_ok() 判定，任一段失敗即排除，
   整包成功只在有候選通過全部檢查時（test_door_regrasp_replan_v4 反例）。
 以下為 v3 說明：
@@ -50,14 +52,22 @@ def via_candidate_ok(front, back):
 
 
 _NODE_CACHE = {}
+BOX = (-0.5, 2.0, -1.6, 0.0)          # A* 搜尋框（x0, x1, y0, y1）：退臂終點與 B1 都在內；有界
+NODE_BUDGET = 40000
+_FN_SPHERE = R2.GM3.backend_v3(self_mode='sphere')
 
 
 def node_ok(px, py, yaw, q_deg):
+    """M 段節點（手臂 STOW、目標 None）：只用 v3 後端（sphere 自碰模式——最小值 < 30 mm 時與 full 相同，否則為保守下界）。
+    PI.check 在此省略：STOW 關節餘裕為常數（已核）、底盤圓盤與兩支橫桿（手指類）皆由同一後端涵蓋。選定路徑另以 R2.margins（full＋PI.check）逐點覆核。"""
     key = (round(px, 5), round(py, 5), round(yaw, 5))
     if key not in _NODE_CACHE:
         x = np.r_[px, py, yaw, TJ.STOW]
-        ok, m, det = R2.margins(x, q_deg, PI.OPEN, None, 'M')
-        _NODE_CACHE[key] = (ok, m, det)
+        _FN_SPHERE.set_target(None)
+        d = _FN_SPHERE(x, math.radians(q_deg), PI.OPEN)
+        m = min((float(d[c][0]) - R2.FLOOR[c]) / R2.FLOOR[c] for c in R2.FLOOR)
+        w = min(R2.FLOOR, key=lambda c: (float(d[c][0]) - R2.FLOOR[c]) / R2.FLOOR[c])
+        _NODE_CACHE[key] = (m >= 0.0, m, {'worst': w, 'd': float(d[w][0]), 'who': d[w][1]})
     return _NODE_CACHE[key]
 
 
@@ -81,8 +91,11 @@ def astar_wb(b0, b1, yaw, q_deg, res=0.0125):
     stats = {'n_node_checks': 0, 'n_edge_rejects': 0}
 
     def nok(c):
+        px, py = c[0] * res, c[1] * res
+        if not (BOX[0] <= px <= BOX[1] and BOX[2] <= py <= BOX[3]):
+            return False
         stats['n_node_checks'] += 1
-        return node_ok(c[0] * res, c[1] * res, yaw, q_deg)[0]
+        return node_ok(px, py, yaw, q_deg)[0]
     dist, prev, pq, closed = {s: 0.0}, {}, [(0.0, s)], set()
     nb = [(a, b) for a in (-1, 0, 1) for b in (-1, 0, 1) if (a, b) != (0, 0)]
     while pq:
@@ -91,6 +104,9 @@ def astar_wb(b0, b1, yaw, q_deg, res=0.0125):
             continue
         closed.add(u)
         if u == g:
+            break
+        if stats['n_node_checks'] > NODE_BUDGET:
+            stats['budget_exhausted'] = True
             break
         for a, b in nb:
             v = (u[0] + a, u[1] + b)
@@ -190,6 +206,15 @@ def main():
                 n2_try.append({'method': mname, 'ok': False, 'block': dict(badr, part='rotate_at_B1')})
                 continue
             rows_m += rr
+        rv = None
+        for xx in rows_m:                                                     # 選定路徑以 full＋PI.check 逐點覆核
+            okf, mf, detf = R2.margins(xx, q_deg, PI.OPEN, None, 'M')
+            if not okf:
+                rv = dict(detf, at=xx[:3].tolist())
+                break
+        if rv is not None:
+            n2_try.append({'method': mname, 'ok': False, 'block': dict(rv, part='full_recheck')})
+            continue
         n2_try.append({'method': mname, 'ok': True, 'n_points': len(rows_m), 'astar_stats': st_})
         m_rows = [{'stage': 'M', 'x': xx.tolist(), 'q': q_deg, 'qf': PI.OPEN} for xx in rows_m]
         break
