@@ -288,7 +288,17 @@ Howard 10/26：要「邊開門、邊通過、用到全身自由度」，不要�
     - STOPPED 後設定點固定、命令為零，j2 仍 +0.49 mrad；
     - 持握有 33–50 Hz 接觸顫動，手指上限切到 20 N 後變大；
     - j2 去趨勢峰峰 0.505 mrad，約相當於判定窗口 1e-3 rad/s（先前通過暫停的 w1f_60_3 為 0.041 mrad）。
-  - 一次性 gc.freeze 候選已準備，與上述分析合併送 Codex r31，尚未實跑。
+  - Codex r31：核可一次性 gc.freeze（失敗須拒跑）與「暫停期手指上限維持 5 N」，聯合配置跑一次。
+- **bench_6**（bench9 聯合配置＝偏移更新＋gc.freeze＋暫停上限 5 N；`資料/door_coopen_core_bench_6_compare.json`、`資料/door_coopen_core_bench_6_stall_analysis.json`、`資料/door_coopen_core_bench_6_pause_summary.json`、`資料/bench_6_door_coopen_check_core12.json`）：
+  - **走到 DONE**，所有節點正常結束。
+  - OPEN 實測 47.74°（參考 48°）→ SETTLE → 暫停 → 10.05 s 停止觀察，求解端監督 DONE；出口距離降 0.176 m。
+  - **GC**：gen2 GC 只有 1 次、0.019 s（bench_5 0.238 s）；任務端最大時效 0.109 s，96.4 s 的停頓未再出現。
+  - 共同門角區間的漂移改善三趟重現。
+  - 判定器仍不通過（只剩兩條）：
+    - 獨立重算 2 個手臂樣本略超 0.001 rad/s；
+    - 夾持窗口 29 步單步 < 0.5 N（暫停期合力 9.9 N，約為 20 N 時的一半）。
+  - 末段漂移最大 4.82 mm，距 5 mm 只剩 0.18 mm。
+  - 聯合配置，不作單變因歸因。已送 Codex r32。
 
 ## 素材清單
 
