@@ -268,7 +268,14 @@ Howard 10/26：要「邊開門、邊通過、用到全身自由度」，不要�
   - 求解端 ADM17r4 `--offset-update-in-open`：保持改由暫停觸發，停止／失效／閘門仍優先；
   - 登錄 r10、判定器 r12（只在鏈判定期間以 U1–U8 取代原全程凍結判準，接觸／漂移／幾何／停止判準不變；另報兩指承載、命令粗糙度、估計變化）；
   - 跑法 bench6、凍結 r6、規格 `規格/COOPEN_core_spec_draft14.md`。
-  - 已送 Codex r28，尚未實跑。
+  - Codex r28 核可單趟。
+- **bench_4**（bench6；`資料/door_coopen_core_bench_4_compare.json`、`資料/door_coopen_core_bench_4_abort_analysis.json`、`資料/door_coopen_check_core12.json`）：
+  - OPEN 期間偏移估計更新 1835 次、未觸限。
+  - 共同門角區間（0–43.72°）持握漂移在九箱都變小：40–43.7° 平均 4.48→1.33 mm，把手 z −3.92→−0.45 mm。
+  - 中止前最大漂移 3.76 mm；實測門角 45.70°，越過 bench_3 的中止點，未達 48°；出口距離降 0.151 m。
+  - 96.36 s 因執行端牆鐘停頓 0.26 s＞0.2 s（monitor_stale_or_missing）中止。bench_3 在 96.40 s 有同一停頓 0.18 s；原因未定位。
+  - 不利訊號：finger1 < 2 N 的步數 15→63（無 < 0.5 N），兩指不平衡變大。
+  - 單趟，不能排除趟間差異；未完成受控收尾。已送 Codex r29。
 
 ## 素材清單
 
