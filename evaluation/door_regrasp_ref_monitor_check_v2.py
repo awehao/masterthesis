@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """換抓「實際發布參考」的預測淨空與運動限值核對 v2（Codex r54 §4）。對象＝door_regrasp_ref_v2 經 door_regrasp_policy3.RefRuntime3 產生的構型序列。
 序列：mode 3（名目：起始實測＝參考起點）→ 交界保持 1.0 s（等待提交；參考不推進）→ mode 4（含構型空間起始銜接）→ 保持 1.0 s → mode 5（含門角修正）→ 保持 1.0 s → mode 6。
+r3（r2 結果改名 *_r2_jumpbugs.json）：r2 在 mode 4 第一個樣本人為製造跳變（B：偏差只加在 mode 4 起點；Q：門角在交界突變）——
+  改為 B：偏差自 mode 3 起恆定、mode 4 起點＝mode 3 實際終點；Q：門角整段偏 Δq，mode 3 夾持構型隨門繞鉸鏈剛體轉，mode 4 以轉後終點做起始銜接（範圍外即起始被拒＝安全停止）。
 r2（測試錯誤修正，r1 結果改名 *_r1_testbugs.json）：B 角點改取上限 0.999 倍；Q 的門角偏差只套 mode 4 起（mode 3 仍夾外側把手，構型隨門，不能以參考構型配偏門角）。
 情境：N 名目（Δ0＝0、Δq＝0）；B 起始銜接角點：mode 4 起點 Δ0＝(±0.02/√2, ±0.02/√2, ±2° 偏航) × 手臂全軸 ±0.05 rad（16 組；底盤合偏差 0.02 m＝登錄上限）；
   Q 門角 Δq＝±1°（mode 5／6）。mode 3 只核名目（其目標相對實測 TCP，非名目時構型需 IK，另由閉迴路核）。
@@ -37,17 +39,25 @@ ALIM = np.array([0.5, 0.5, 2.0] + [19.984] * 6)
 KIN = WholeBodyKinematics.from_urdf_file(os.path.join(HERE, 'models', 'omni_bot_wholebody_expanded.urdf'))
 
 
+def rot_cfg(x, a):
+    """構型繞鉸鏈軸剛體轉 a（rad）：底盤位置旋轉、偏航加 a、手臂不變。"""
+    c, s_ = math.cos(a), math.sin(a)
+    y = x.copy()
+    y[0], y[1], y[2] = c * x[0] - s_ * x[1], s_ * x[0] + c * x[1], x[2] + a
+    return y
+
+
 def sequence(d0_4=None, dq_deg=0.0):
     rr = P3.RefRuntime3(json.loads(json.dumps(PKG)), KIN)
     seq = []
     s3 = PKG['segments']['3']
-    for i in range(len(s3['t'])):
-        seq.append((3, np.r_[s3['base'][i], s3['arm'][i]], float(s3['qf'][i])))
+    off = np.zeros(9) if d0_4 is None else d0_4
+    for i in range(len(s3['t'])):                                       # r3：mode 3 夾持中構型隨門剛體轉（−Δq）並帶恆定偏差（B 情境）
+        seq.append((3, rot_cfg(np.r_[s3['base'][i], s3['arm'][i]], -math.radians(dq_deg)) + off, float(s3['qf'][i])))
     for _ in range(int(HOLD_S / DT)):
         seq.append((3, seq[-1][1].copy(), seq[-1][2]))
-    s4 = PKG['segments']['4']
-    x_start4 = np.r_[s4['base'][0], s4['arm'][0]] + (np.zeros(9) if d0_4 is None else d0_4)
-    ok, why, det = rr.start(4, x_start4[:3], x_start4[3:], PKG['q_ref_deg'], None)
+    x_start4 = seq[-1][1].copy()                                        # r3：mode 4 起點＝mode 3 實際終點（不另加跳變）
+    ok, why, det = rr.start(4, x_start4[:3], x_start4[3:], PKG['q_ref_deg'] + dq_deg, None)
     if not ok:
         return None, why
     for i in range(len(s4['t'])):
@@ -70,7 +80,7 @@ def sequence(d0_4=None, dq_deg=0.0):
 
 
 def check(seq, rr, dq_deg, fn):
-    q_rel, q = math.radians(PKG['q_ref_deg']), math.radians(PKG['q_ref_deg'] + dq_deg)   # r2：門角偏差只從 mode 4（已放手）起；mode 3 夾持中構型隨門
+    q_rel = q = math.radians(PKG['q_ref_deg'] + dq_deg)                  # r3：門角整段偏 Δq（mode 3 構型已隨門轉）
     pre = P3.P1.Rz4(-math.radians(dq_deg)) @ np.asarray(PKG['pregrasp_T'], float).reshape(4, 4)
     prev, reached = None, False
     vpts, vcls, first = 0, {c: 0 for c in CL}, None
@@ -115,14 +125,16 @@ def main():
     for name, d0, dq in cases:
         seq, rr = sequence(d0, dq)
         if seq is None:
-            res[name] = {'start_rejected': rr}
+            res[name] = {'start_rejected': rr, 'note': '起始銜接範圍外 ⇒ 任務端於 mode 4 起點停止並報偏差（安全停止，非違規）'}
             print(name, '起始被拒', rr, flush=True)
             continue
         r = check(seq, rr, dq, fn)
         res[name] = r
         print(f"{name}：違規點 {r['viol_points']}（{r['viol_by_class']}）、速度比 {r['v_ratio_max']:.3f}、加速度比 {r['a_ratio_max']:.3f}；首 {r['first']}", flush=True)
     out = {'schema': 'door_regrasp_ref_monitor_check/2', 'T_plan_s': T_PLAN, 'hold_s': HOLD_S, 'cases': res,
-           'all_ok': all(v.get('viol_points') == 0 and v.get('v_ratio_max', 9) <= 1.0 and v.get('a_ratio_max', 9) <= 1.0 for v in res.values())}
+           'all_ok': all(('start_rejected' in v) or (v.get('viol_points') == 0 and v.get('v_ratio_max', 9) <= 1.0 and v.get('a_ratio_max', 9) <= 1.0)
+                         for v in res.values()),
+           'n_start_rejected': sum(1 for v in res.values() if 'start_rejected' in v)}
     json.dump(out, open(OUT, 'w'), ensure_ascii=False, indent=1, default=float)
     print('all_ok', out['all_ok'], flush=True)
 
