@@ -1,0 +1,290 @@
+{
+ "schema": "coopen_core_params/6",
+ "spec": "evaluation/results/specs/COOPEN_core_spec_draft1.md",
+ "theta_goal_deg": 48.0,
+ "task_param_extension": {
+  "theta_goal_deg": 48.0,
+  "over_goal_deg": 1.0,
+  "policy_upper_deg": 49.0,
+  "r_max_dps": 0.6,
+  "r_min_dps": 0.25,
+  "ramp_s": 84.66666666666667,
+  "open_margin_s": 20.3,
+  "open_timeout_s": 105,
+  "rule": "OPEN 逾時＝完整斜坡（含末段 2° 以 0.25 °/s 減速）＋W1e 同一絕對餘裕 20.3 s"
+ },
+ "grasp": {
+  "basis": "evaluation/results/door/coopen_core_grasp_basis_r4.json",
+  "basis_sha256": "743e282d40740d5ea18b08446638c9bbe3637580635328d3d04f6b6ecb369097",
+  "phi_deg": 60.0,
+  "s_m": 0.85,
+  "roll_deg": 0
+ },
+ "protection_scope_change": {
+  "corridor_table": "evaluation/results/door/door_coopen_core_table_48_r4.json",
+  "corridor_table_sha256": "a5fce4b9275269aaeff1b2ccd1ee94f76d4776aa38d7e48aec90b0de7ee523a0",
+  "corridor_inner_mm": 20.0,
+  "corridor_inner_deg": 0.8,
+  "envelope": {
+   "fwd_lo": -0.039999999999999966,
+   "fwd_hi": 0.24519071248530927,
+   "lat_lo": -0.04000000000000003,
+   "lat_hi": 0.6065725945694137,
+   "yaw_abs_deg": 30.214285714285765,
+   "cli": "-0.0400,0.2452,-0.0400,0.6066,30.2143",
+   "rule": "完整外帶 ±40 mm／±4.5° 在參考位姿座標以 SE(2) 合成的角點，於表全範圍 [0, θ] 轉回錨點座標後的範圍（同 W1e；θ＋1° 取端點值）"
+  },
+  "observer_door_max_deg": 52.0,
+  "observer_rule": "固定角度餘裕 θ＋4°（同 W1e）"
+ },
+ "control_cost_change": {
+  "guidance": {
+   "k_lin": 1.0,
+   "k_yaw": 1.0,
+   "v_cap": 0.035,
+   "w_cap": 0.1,
+   "w_vref": 1.0,
+   "w_qn": 0.0
+  },
+  "coord_topic": "/door/wide_coord",
+  "phases_on": [
+   "OPEN"
+  ],
+  "phases_off_weight": 0.0,
+  "note": "引導參考速度限幅變更（世界座標每軸 0.035 m/s、偏航 0.10 rad/s；求解器本體方框 0.035255 m/s 不變）；PAUSE 起 w_vref＝0"
+ },
+ "start": {
+  "stand": [
+   1.02,
+   -0.49999999999999956,
+   3.034362472655968
+  ],
+  "stand_cli": "1.020000,-0.500000,3.034362",
+  "k2_ready_cli": "0,0,0.035,0,-1.5708,0",
+  "q_pre_cli": "1.8604,-2.1462,1.3806,-0.6077,-0.1593,2.0141",
+  "experimental_initialization": "底盤以 --start-pose 直接放在停位（不經導航接近），須揭露",
+  "experimental_initialization_iso": "手臂以 --stow-q 直接生成於 qa_grasp（手指張開）；展開目標＝同一構型（零位移）；不經 ALIGN／APPROACH"
+ },
+ "unchanged": [
+  "求解器與權重",
+  "E2",
+  "手指暫停期上限 20 N",
+  "幾何監看門檻",
+  "暫停／停止定義",
+  "判準"
+ ],
+ "pause": "p4b（主動保持停止、手臂 0.5 s 窗口）＋判定器 p4b2（起跑前凍結）",
+ "solver_change": {
+  "offset_hold_on_free": true,
+  "node": "dl3_wgmpc_wg2_adm9_node.py",
+  "rule": "底盤模式首次切入 free 的那一輪（本輪觀測器更新之前）凍結 d̂＝當時已可取得值；觀測器內部、延遲預測、QP 偏差一致保持，持續到 PAUSE／DONE 或中止",
+  "source": "Codex 20261025_002129：單一變因候選，非已確認解法"
+ },
+ "executor_change": {
+  "pause_finger_max_effort": 20.0,
+  "original_effort": 5.0,
+  "joints": [
+   "finger_joint1",
+   "finger_joint2"
+  ],
+  "node": "isaac_door_k2_sim_ev5.py",
+  "switch": "執行端暫停切換那一步（world.step 之前；與 /door/pause_ack_exec 同一步），只設一次；之後每 1 s 讀回核對",
+  "rule": "只改兩指有效驅動輸出上限（ArticulationController.set_max_efforts）；閉合目標、kp 1e4／kd 1e3、摩擦、手臂／底盤控制與所有判準不變；不是直接設定接觸法向力",
+  "value_basis": "原上限＝URDF finger_joint1／2 effort 5（Codex 20261025_023608 查得）；W1c 暫停期手指開度約 1.67 mm ⇒ 位置驅動需求 kp·Δq ≈ 16.7 N > 5；取 20 N 使該需求不被上限截斷。夾爪實機額定未查，揭露",
+  "source": "Codex 20261025_023608：單一變因候選，非已確認解法；基準 W1c r2，不疊加 W1d 重設"
+ },
+ "derived_from": {
+  "r4": "results/door/coopen_core_params_48_r4.json",
+  "r4_sha256": "484ab1a581545feb4facb57b0542246c2e879eb423db784de1a661688e80dc32",
+  "chain_settings_from": "results/door/w1f_params_60_r2.json",
+  "chain_settings_sha256": "a71638e9d9f6cd7f6f5def6e9ecc320bc9e9210ada4094d267261470692b5c06",
+  "copied_keys": [
+   "pause",
+   "solver_change",
+   "executor_change"
+  ]
+ },
+ "approach_gate": {
+  "perp_pause_m": 0.003,
+  "perp_resume_m": 0.002,
+  "resume_hold_s": 0.5,
+  "along_resume_m": 0.005,
+  "rot_resume_rad": 0.02,
+  "align_confirm_s": 0.5
+ },
+ "approach_gate_basis": {
+  "perp_pause_m／perp_resume_m／resume_hold_s": "Codex 20261027_003024 登錄單一候選",
+  "along_resume_m": "K2Config.pre_tol_m",
+  "rot_resume_rad": "求解器 reach_rot_rad",
+  "align_confirm_s": "K2Config.grip_settle_s",
+  "approach_timeout_s": "K3AConfig timeouts APPROACH 15 s（不改）"
+ },
+ "derived_from_r5": {
+  "path": "results/door/coopen_core_params_48_r5.json",
+  "sha256": "0db45feea4ed4a1d3791336dad66483e59957b92bdf9604bfd6371a24a083d1a"
+ },
+ "grasp_init": {
+  "qa_grasp": [
+   1.8368194724331057,
+   -1.5951662032816973,
+   2.0320772026119536,
+   -1.1819994417809456,
+   -0.08548366591308558,
+   2.613687063883051
+  ],
+  "qa_grasp_cli": "1.836819,-1.595166,2.032077,-1.181999,-0.085484,2.613687",
+  "init_check_timeout_s": 15.0,
+  "source": {
+   "path": "results/door/coopen_core_h0_r4.json",
+   "sha256": "9e3d02250449fe0b00424403b7a68991cae12f2dbac29d935afaae57a805b8f4",
+   "key": "qa_grasp"
+  },
+  "clearance_offline_mm": {
+   "nonfinger": 7.276573794036364,
+   "finger": 16.991775264295413,
+   "self": 11.418370012774327,
+   "base": 177.2095975564611
+  },
+  "grip_tol_m": 0.002,
+  "grip_settle_s": 0.5
+ },
+ "grasp_init_basis": {
+  "qa_grasp": "coopen_core_h0_r4.json（候選 0° 抓取構型，grasp_ik_mode continuation）",
+  "init_check_timeout_s": "K3AConfig timeouts APPROACH 15 s（沿用）",
+  "scope": "Howard 2026-10-27／Codex r15：指定初態隔離驗證；跳過自主接近，不代表接近已解決"
+ },
+ "derived_from_r6": {
+  "path": "results/door/coopen_core_params_48_r6.json",
+  "sha256": "be27cf8c46bf5681984688a2f9aafbbb9f3948086ca93eedd2c25da2571bd389"
+ },
+ "bench": {
+  "q_nominal": [
+   1.8368194724331057,
+   -1.5951662032816973,
+   2.0320772026119536,
+   -1.1819994417809456,
+   -0.08548366591308558,
+   2.613687063883051
+  ],
+  "d_init": [
+   -0.00013800171428569874,
+   -0.02752529536607144,
+   0.006835744428571425,
+   0.0031676418035714326,
+   -0.0005796149375000003,
+   -0.003921589419642839
+  ],
+  "s_init": [
+   1.8369574741473915,
+   -1.567640907915626,
+   2.025241458183382,
+   -1.1851670835845172,
+   -0.08490405097558558,
+   2.617608653302694
+  ],
+  "uncertainty": [
+   0.00015250288097116751,
+   0.0014055488470958771,
+   0.0015684907382646457,
+   0.002549163718619976,
+   0.00017213064257938217,
+   0.002399441798283622
+  ],
+  "q_nominal_cli": "1.836819472,-1.595166203,2.032077203,-1.181999442,-0.085483666,2.613687064",
+  "s_init_cli": "1.836957474,-1.567640908,2.025241458,-1.185167084,-0.084904051,2.617608653",
+  "release_timeout_wall_s": 120.0,
+  "source": {
+   "path": "results/door/door_coopen_bench_release_offline_r2.json",
+   "sha256": "ea409af95a3bb6da92d460e1da8584b982019d5aa18aba07847062a4153c374d",
+   "window": {
+    "run": "door_coopen_core_g3_1",
+    "interval_s": [
+     25.28,
+     26.4
+    ],
+    "n": 112,
+    "n_rejected": 0,
+    "sep_min_m": 0.0038242,
+    "mean": [
+     -0.00013800171428569874,
+     -0.02752529536607144,
+     0.006835744428571425,
+     0.0031676418035714326,
+     -0.0005796149375000003,
+     -0.003921589419642839
+    ],
+    "std": [
+     0.00015250288097116751,
+     0.0014055488470958771,
+     0.0015684907382646457,
+     0.00031103740855555696,
+     0.00017213064257938217,
+     0.0002151882983200353
+    ]
+   },
+   "cross_check_windows": [
+    {
+     "run": "door_coopen_core_g3_1",
+     "interval_s": [
+      21.06,
+      24.6
+     ],
+     "n": 354,
+     "n_rejected": 0,
+     "sep_min_m": 0.0044534,
+     "mean": [
+      -0.00020079457909603798,
+      -0.02682382641807909,
+      0.007464111824858748,
+      0.002943580062146894,
+      -0.000618178903954803,
+      -0.003680603805084741
+     ],
+     "std": [
+      0.00011758933215128556,
+      0.0013146092492962239,
+      0.0015507048117078186,
+      0.0009473585263456197,
+      0.0002155188969199182,
+      0.0009990495095508688
+     ]
+    },
+    {
+     "run": "door_coopen_core_g_1",
+     "interval_s": [
+      21.48,
+      25.6
+     ],
+     "n": 412,
+     "n_rejected": 0,
+     "sep_min_m": null,
+     "mean": [
+      -0.00015626366019417124,
+      -0.026309227398058226,
+      0.007579993160194189,
+      0.0006184780849514563,
+      -0.0007097961456310677,
+      -0.001522147621359217
+     ],
+     "std": [
+      0.00013587653159683865,
+      0.0013012914483319115,
+      0.0015287107606372482,
+      0.00023173733795877103,
+      0.00019800215810531532,
+      0.00022945815595508035
+     ]
+    }
+   ]
+  },
+  "status": "待驗證的初始化估計（含動態追蹤落後；非已辨識靜態偏移）"
+ },
+ "bench_basis": {
+  "scope": "Codex r19／r20：台架初態啟動；不偽稱停車閘門或導航交棒通過；初值不冒充觀測更新",
+  "offset_max_rad": "須 ≤ 求解端 --offset-max-rad 0.05（超界拒跑，不截斷）"
+ },
+ "derived_from_r8": {
+  "path": "results/door/coopen_core_params_48_r8.json",
+  "sha256": "52596efb0b8e3caae9048da1019b839e5643eaad2e7cdfe09b559979328581f3"
+ }
+}
