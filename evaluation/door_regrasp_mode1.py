@@ -30,7 +30,7 @@ import math
 import door_w2_mode as W2M
 import door_w2_mode8 as M8
 
-VERSION = 'door_regrasp_mode1/r1'
+VERSION = 'door_regrasp_mode1/r2'   # r2：新增 allowed_finger_classes（只加函式，權威行為不變）
 MODE_OF = {0: 'PAUSE_HELD', 1: 'RELEASE_PREP_TEST', 2: 'RELEASE_OPEN', 3: 'RETREAT_WB', 4: 'STOW_MOVE', 5: 'APPROACH_INNER', 6: 'CLOSE_INNER'}
 PROFILE_OF = {0: 'pause_hold', 1: 'release_prep_test', 2: 'release_open', 3: 'regrasp_retreat_wb', 4: 'regrasp_stow_move',
               5: 'regrasp_approach_inner', 6: 'regrasp_close_inner'}
@@ -48,6 +48,20 @@ assert all(k not in W2M.MODE_OF_SEQ for k in (4, 5, 6))
 
 def _fin(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def allowed_finger_classes(mode, exited=False):
+    """手指允許接觸的 v3 類別（Codex r53 §2；執行端保護與任務端監看共用，規則唯一來源）。
+    指定持握只認橫桿；立柱、panel、ambiguous 一律依非預期接觸保護（解除確認時保守加總它們的力，不等於允許接觸）。
+    mode 0–2：('bar_out',)；mode 3：未離開前 ('bar_out',)，離開（exited，單向閂鎖，由執行端 Gate4 的退開量 ≥ S_EXIT 首次成立時設定）後 ()；
+    mode 4、5：()（閉爪前不允許任何接觸）；mode 6：('bar_in',)。非手指部位任何類別都不允許。"""
+    if mode in (0, 1, 2):
+        return ('bar_out',)
+    if mode == 3:
+        return () if exited else ('bar_out',)
+    if mode == 6:
+        return ('bar_in',)
+    return ()
 
 
 class RegraspAuthority(M8.ModeAuthority8):

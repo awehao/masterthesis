@@ -283,6 +283,16 @@ class TR3(unittest.TestCase):
                 break
         return g
 
+    def test_c9_exit_latch(self):
+        g = GT.Gate4Exit()
+        g.start(0, 0.0, T_tcp0=T0)
+        for k in range(1, 300):
+            t = round(k * DT, 6)
+            s_ = 0.025 if k < 100 else 0.01                                  # 退開過 S_EXIT 後回落
+            g.step(k, t, Tz(T0[:3, 3] - s_ * T0[:3, 2]), rec(step=k, t=t))
+        self.assertTrue(g.exited)
+        self.assertAlmostEqual(g.t['exited'], 0.01, delta=1e-9)
+
     def test_c8(self):
         G = Tz([0.8, 0.0, 0.85])
         g = GT.Gate6Admit()

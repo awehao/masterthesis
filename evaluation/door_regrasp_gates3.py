@@ -3,6 +3,7 @@
   r2 只在跳步／時間不一致時先核；逐步送來無效、再恢復時，_hold 直接清除 invalid_t0（反例：0.01 有效 → 0.02–0.21 無效 → 0.22 恢復，
   距最後有效 0.21 s > 0.2 卻未 FAILED）。r3：_hold 收到有效樣本時，若 invalid_t0 存在且 t − invalid_t0 > invalid_max_s ⇒ FAILED data_invalid（不清計時）。
   Gate3Release 同規則：上一步無效、本步有效時先核 t − last_valid_t。
+  另（r53 §2）：Gate4 加 exited 單向閂鎖（有效樣本退開量首次 ≥ S_EXIT 即設，之後不因退開量回落而撤銷），供 allowed_finger_classes(3, exited)。
 以下為 r2 說明：
 r2（Codex r52 §1–§4；door_regrasp_gates1.py 保留供追溯）：
   (1) 接觸紀錄綁定當步：link_class_force(rec, step, t) 要求 rec['step']＝當步、|rec['t'] − t| ≤ 1e-6；缺欄、錯步、未來或過期 ⇒ 無效。
@@ -248,6 +249,7 @@ class Gate4Exit(_Gate):
             return self._fail('tcp0_invalid', t, step)
         r = super().start(step, t)
         self.p0, self.z0 = T[:3, 3].copy(), T[:3, 2].copy()
+        self.exited = False
         self.win = _Window(self.r['converge_win_s'])
         return r
 
@@ -271,6 +273,9 @@ class Gate4Exit(_Gate):
         conv = self.win.span_ok(t) and self.win.max_disp() <= self.r['converge_max_m']
         ok = s >= self.r['s_done_m'] and s >= self.r['s_exit_m'] and conv and quiet
         self.last_s = s
+        if s >= self.r['s_exit_m'] and not getattr(self, 'exited', False):          # r3（r53 §2）：離開外側把手的單向閂鎖（只由有效樣本設定）
+            self.exited, self.t['exited'] = True, float(t)
+            self.events.append({'t': t, 'step': step, 'exited': True, 's': s})
         return self._hold(ok, step, t)
 
 
