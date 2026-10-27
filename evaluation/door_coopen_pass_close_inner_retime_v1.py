@@ -4,12 +4,12 @@
 本版（只改時間化，不改構型路徑）：
   時間參數化＝經過點版「線性段＋拋物線混合」（LSPB）：每段有號速度 v_k＝Δ_k／dt_k，dt_k 由各軸速度上限決定；接點 j 混合時長
     τ_j＝max_i |v_{k+1,i} − v_{k,i}| / a_i（底盤 x、y 以接點偏航轉到車體座標），混合內 p(t)＝p_j＋v_k(t−t_j)＋Δv(t−t_j＋τ/2)²/(2τ)；
-    起訖由靜止混合。若某段兩端混合半長和 ＞ dt_k 則拉長該段（×1.1）並重算，直到成立。混合使軌跡不精確經過接點（偏差 Δv·τ/8），故全部取樣重核。
+    起訖由靜止混合。底盤車體 x、y 速度取該段偏航區間內的精確最大值；規劃用 0.995 倍上限，核對用 1.0 倍。若某段兩端混合半長和 ＞ dt_k 則拉長該段（×1.1）並重算，直到成立。混合使軌跡不精確經過接點（偏差 Δv·τ/8），故全部取樣重核。
   速度上限：底盤車體 x、y 0.035255 m/s、偏航 0.1999 rad/s；手臂 0.9999 rad/s；加速度 底盤 0.5 m/s²、偏航 2.0 rad/s²、手臂 19.984 rad/s²（同 RB3）；
     門角（P 段由持握帶動）≤ 0.6 °/s＝已登錄開門參考上限 r_max_dps（bench_6 config），遠低於保護值 door_abort_rate 0.05 rad/s（不放寬）；
     門角加速度無登錄值 ⇒ 不設門檻、只報；手指開度 ≤ finger_open／close_ramp_s＝0.0089 m/s，不混合（位置命令）。
   20 Hz（控制週期 0.05 s）取樣後核：有號差分速度、二階差分加速度（底盤以取樣點偏航轉車體座標）、門速；每取樣點淨空以 door_coopen_pass_close_inner_v1.check
-    （階段＝該時刻所在段的終點列階段）重核；抓持段（G 閉爪完成後、P、R_open 張爪前）核「當時 TCP 對當時內側把手」相對位姿與 T_HG 的誤差：
+    （階段＝該時刻所在段的終點列階段；release_outer 段手指—外側橫桿沿用 release_bench6_v4 只禁止穿入）重核；抓持段（G 閉爪完成後、P、R_open 張爪前）核「當時 TCP 對當時內側把手」相對位姿與 T_HG 的誤差：
     門檻＝已登錄 drift_abort_m 5 mm／drift_rot_abort 2°，另對照 grip_tol_m 2 mm。重疊指標與整機清空在取樣上重算。
 只處理 static（Codex r42：先做一組 static 名目閉迴路；有門餘轉的情境需另核把手追蹤）。輸出含 20 Hz 參考（供 W-GMPC 名目追蹤）。
 
@@ -34,10 +34,11 @@ OUT = os.path.join(HERE, 'results', 'door', 'door_coopen_pass_close_inner_retime
 C = PI.C
 VB, WB, AB, AW = 0.035255, 0.1999, 0.5, 2.0
 VA, AA = 0.9999, 19.984
-VQ = math.radians(0.6)                       # r_max_dps
+VQ = 0.6                                     # r_max_dps（°/s；門角 Q 以度計）
 VF = 0.0089 / 1.0                            # finger_open / close_ramp_s
 DT_CTRL = 0.05
 DRIFT_M, DRIFT_RAD, GRIP_TOL = 0.005, math.radians(2.0), 0.002
+TIGHT = 0.995                                # 規劃時速度／加速度用 0.995 倍上限（20 Hz 取樣與偏航旋轉的離散誤差留邊；核對仍用 1.0 倍）
 VMAX = np.array([VB, VB, WB] + [VA] * 6)
 AMAX = np.array([AB, AB, AW] + [AA] * 6)
 
@@ -50,11 +51,21 @@ def body(v, yaw):
     return o
 
 
+def body_xy_max(d, y0, y1):
+    """偏航在 [y0, y1] 內時車體 x、y 分量絕對值的最大值（端點＋極值角）。"""
+    lo, hi = min(y0, y1), max(y0, y1)
+    a = math.atan2(d[1], d[0])
+    cand = [lo, hi] + [c + m * math.pi for c in (a, a - math.pi / 2) for m in range(-4, 5) if lo <= c + m * math.pi <= hi]
+    return (max(abs(math.cos(y) * d[0] + math.sin(y) * d[1]) for y in cand),
+            max(abs(-math.sin(y) * d[0] + math.cos(y) * d[1]) for y in cand))
+
+
 def seg_dt(P, Q, F, k):
     d = P[k + 1] - P[k]
-    yaw = 0.5 * (P[k][2] + P[k + 1][2])
-    db = np.abs(body(d, yaw))
-    return max(float(np.max(db / VMAX)), abs(Q[k + 1] - Q[k]) / VQ, abs(F[k + 1] - F[k]) / VF, 1e-3)
+    bx, by = body_xy_max(d, float(P[k][2]), float(P[k + 1][2]))
+    db = np.abs(d)
+    db[0], db[1] = bx, by
+    return max(float(np.max(db / (VMAX * TIGHT))), abs(Q[k + 1] - Q[k]) / (VQ * TIGHT), abs(F[k + 1] - F[k]) / VF, 1e-3)
 
 
 def plan(P, Q, F):
@@ -67,7 +78,7 @@ def plan(P, Q, F):
         tau = np.zeros(n)
         for j in range(n):
             dv = body(vext[j + 1] - vext[j], float(P[j][2]))
-            tau[j] = float(np.max(np.abs(dv) / AMAX))
+            tau[j] = float(np.max(np.abs(dv) / (AMAX * TIGHT)))
         bad = [k for k in range(n - 1) if 0.5 * (tau[k] + tau[k + 1]) > dt[k] * (1 - 1e-9)]
         if not bad:
             return dt, tau, v, vq, it
@@ -165,7 +176,7 @@ def main():
            'stage_t_start': {st: next((float(tw[i - 1]) for i, s in enumerate(stages) if s == st and i > 0), None)
                              for st in ('M', 'A', 'I', 'G', 'P', 'R_open', 'R_slide', 'R_stow')},
            'max_ratio_v': dict(zip(names, vr.tolist())), 'max_ratio_a': dict(zip(names, ar.tolist())),
-           'door_rate_max_deg_s': float(np.degrees(qd.max())), 'door_acc_max_deg_s2_report_only': float(np.degrees(qdd.max())),
+           'door_rate_max_deg_s': float(qd.max()), 'door_acc_max_deg_s2_report_only': float(qdd.max()),
            'clearance_fail': bad[:30], 'n_clearance_fail': len(bad), 'min_clear_m': mins,
            'grip_err_max': {'pos_m': err_p, 'rot_rad': err_r, 'ok_drift': bool(err_p <= DRIFT_M and err_r <= DRIFT_RAD), 'within_grip_tol': bool(err_p <= GRIP_TOL),
                             'window_s': [float(t_hold0), float(t_hold1)]},
