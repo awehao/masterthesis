@@ -78,11 +78,9 @@ def main():
     seg = {3: list(range(0, i3_end + 1)), 4: [i for i in range(i3_end + 1, len(R)) if st[i] in ('release_outer', 'M')],
            5: [i for i, s in enumerate(st) if s in ('A', 'I')], 6: [i for i, s in enumerate(st) if s == 'G']}
     assert seg[4][0] == i3_end + 1 and seg[5][0] == seg[4][-1] + 1 and seg[6][0] == seg[5][-1] + 1
-    i_pre = max(i for i in seg[5] if st[i] == 'A')
     _rows_rp = json.load(open(REPLAN))['rows']
     T_pre_exact = np.asarray(C.K.fk([float(v) for v in [r for r in _rows_rp if r['stage'] == 'A'][-1]['x']], 'link_tcp'), float)
     T_g_exact = np.asarray(C.K.fk([float(v) for v in [r for r in _rows_rp if r['stage'] == 'I'][-1]['x']], 'link_tcp'), float)
-    i_grasp = seg[5][-1]
 
     def pack(idx, with_s=False):
         tb = tt[idx[0]]
