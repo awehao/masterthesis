@@ -7,6 +7,7 @@
   C5 非法輸入：NaN 點、NaN 力、負純量力 ⇒ invalid、不計入力和；status no_data／query_failed ⇒ sums None；門角 NaN ⇒ query_failed；ok 而無點 ⇒ 全 0；
   C6 對帳：隨機混合點，各類點數和＋invalid＝N、各類力和＝有效總量；向量力反向不抵銷（取大小）；
   C7 門根位姿：同一組點經 T_world_door 平移旋轉後分類不變。
+  C8（r2）全無效 ⇒ complete False（status 仍 ok、有效小計 0）；門根變換 NaN／縮放／非 4×4／反射／末列錯 ⇒ query_failed；extras、spec_id、變換原樣保存。
 
     python3 evaluation/test_door_contact_v3.py
     DC_TOL=0.006 python3 evaluation/test_door_contact_v3.py   # 模擬端現用容差
@@ -131,6 +132,20 @@ r0 = DC.classify_step(pts, fs, q, D, TOL)
 Pw = [Tw[:3, :3] @ np.asarray(p) + Tw[:3, 3] if np.all(np.isfinite(p)) else p for p in pts]
 r1 = DC.classify_step(Pw, fs, q, D, TOL, T_world_door=Tw)
 ok([p['class'] for p in r0['points']] == [p['class'] for p in r1['points']], 'C7 門根位姿改變分類')
+
+# C8（r2）：完整旗標、門根變換核對、extras 原樣保存
+r = DC.classify_step([[np.nan, 0, 0], pg], [1.0, np.nan], q, D, TOL)
+ok(r['status'] == 'ok' and r['complete'] is False and r['counts']['invalid'] == 2, f"C8 全無效 complete {r['complete']}")
+r = DC.classify_step([pg], [1.0], q, D, TOL)
+ok(r['complete'] is True, 'C8 有效 complete')
+Tbad = {'nan': np.full((4, 4), np.nan), 'scale': np.diag([2.0, 1.0, 1.0, 1.0]), 'shape': np.eye(3),
+        'reflect': np.diag([1.0, -1.0, 1.0, 1.0]), 'lastrow': np.vstack([np.eye(4)[:3], [0, 0, 1, 1]])}
+for k_, T_ in Tbad.items():
+    r = DC.classify_step([pg], [1.0], q, D, TOL, T_world_door=T_)
+    ok(r['status'] == 'query_failed' and r['sums'] is None and r['complete'] is False, f"C8 變換 {k_} → {r['status']}")
+r = DC.classify_step([pg, pg], [1.5, 2.0], q, D, TOL, extras={'fn_signed': [-1.5, 2.0], 'normal': [[0, 0, 1], [0, 1, 0]]}, spec_id='door_local_v3:test')
+ok(r['points'][0]['fn_signed'] == -1.5 and r['points'][1]['normal'] == [0.0, 1.0, 0.0] and r['spec_id'] == 'door_local_v3:test'
+   and r['T_world_door'] == [float(v) for v in np.eye(4).reshape(-1)], 'C8 extras／spec_id／變換保存')
 
 print(f"tol {TOL}：{'全部通過' if not fails else f'失敗 {len(fails)}'}；C6 分類計數 {DC.classify_step(pts, fs, q, D, TOL)['counts']}")
 for f in fails[:30]:
