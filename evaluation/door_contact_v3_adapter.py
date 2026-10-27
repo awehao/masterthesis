@@ -8,6 +8,9 @@
 緩衝完整性：四個緩衝長度一致；forces 第二維須為 1；count／start 為有限非負整數、長度＝機器人剛體名數；有資料切片落在緩衝內且互不重疊。
   任一不符 ⇒ 該步 status query_failed（附原因），不記零力。
 每步紀錄＝door_contact_v3.classify_step 的輸出＋dt_s、force_semantics、names_sha（剛體名清單）。
+r2（Codex r48 §1）：dt 須為有限正數（否則 query_failed：力＝衝量 ÷ dt 無意義）；get_data 回 None 或非序列 ⇒ query_failed（不拋例外）；
+  法向、分離量列為必要證據欄位（required_extras），失效 ⇒ complete False；failure_record 供呼叫端在任何例外時仍寫一列帶步號／時刻的失敗紀錄；
+  Summary.as_dict(expected_steps, n_written) 對帳預期物理步數、累計步數與實際寫入列數。
 """
 from __future__ import annotations
 
@@ -68,12 +71,18 @@ def names_sha(names):
 
 def step_record(get_data, get_q, get_T, D, tol, dt, names, step=None, t=None, spec_id=None):
     """同一物理步：取接觸緩衝、門角（rad）、門根變換，分類。任何讀取／核對失敗 ⇒ status query_failed＋原因（不拋例外、不記零）。"""
-    base = {'dt_s': float(dt), 'force_semantics': FORCE_SEMANTICS, 'names_sha': names_sha(names)}
-    why = None
     try:
-        data = get_data()
-    except Exception as e:                                # noqa: BLE001
-        data, why = None, f'讀取接觸緩衝失敗：{type(e).__name__}: {e}'[:200]
+        dtf = float(dt)
+    except (TypeError, ValueError):
+        dtf = float('nan')
+    base = {'dt_s': dtf if math.isfinite(dtf) else None, 'force_semantics': FORCE_SEMANTICS, 'names_sha': names_sha(names)}
+    why = None if (math.isfinite(dtf) and dtf > 0) else f'dt 不是有限正數（{dt!r}）'
+    data = None
+    if why is None:
+        try:
+            data = get_data()
+        except Exception as e:                            # noqa: BLE001
+            why = f'讀取接觸緩衝失敗：{type(e).__name__}: {e}'[:200]
     q = T = None
     if why is None:
         try:
@@ -88,10 +97,10 @@ def step_record(get_data, get_q, get_T, D, tol, dt, names, step=None, t=None, sp
     sl = None
     if why is None:
         try:
-            if len(data) != 6:
-                raise ValueError(f'接觸緩衝回傳 {len(data)} 項（應為 6）')
+            if data is None or not hasattr(data, '__len__') or len(data) != 6:
+                raise ValueError(f'接觸緩衝回傳 {type(data).__name__}（應為 6 項序列）')
             sl = slice_all(*data, names)
-        except ValueError as e:
+        except (ValueError, TypeError) as e:
             why = f'緩衝不完整：{e}'[:200]
     if why is not None:
         r = DC.classify_step([], [], q, D, tol, T_world_door=None, status='query_failed', step=step, t=t, spec_id=spec_id)
@@ -100,9 +109,16 @@ def step_record(get_data, get_q, get_T, D, tol, dt, names, step=None, t=None, sp
         return r
     r = DC.classify_step(sl['P'], np.abs(sl['fn_signed']), q, D, tol, robot_links=sl['links'], T_world_door=T, status='ok', step=step, t=t,
                          source='isaac_contact_force_data:normal', spec_id=spec_id,
-                         extras={'fn_signed': sl['fn_signed'], 'normal': sl['normal'], 'sep': sl['sep']})
+                         extras={'fn_signed': sl['fn_signed'], 'normal': sl['normal'], 'sep': sl['sep']}, required_extras=('normal', 'sep'))
     r.update(base)
     return r
+
+
+def failure_record(step, t, why, spec_id=None):
+    """呼叫端在 step_record 以外的任何例外時寫的失敗列（帶步號、時刻）。"""
+    return {'status': 'query_failed', 'step': step, 't': t, 'why': str(why)[:200], 'spec_id': spec_id, 'sums': None, 'counts': None,
+            'n_invalid': None, 'total_valid': None, 'reconciled': None, 'complete': False, 'n_evidence_incomplete': None, 'points': [],
+            'force_semantics': FORCE_SEMANTICS}
 
 
 class Summary:
@@ -128,7 +144,9 @@ class Summary:
                 s['max_sum_by_class'][k] = max(s['max_sum_by_class'][k], v)
                 s['n_steps_with'][k] += int(v > 0)
 
-    def as_dict(self):
+    def as_dict(self, expected_steps=None, n_written=None):
         d = dict(self.s)
         d['complete_all_steps'] = bool(d['n_steps'] > 0 and d['n_complete'] == d['n_steps'])
+        d['expected_steps'], d['n_written'] = expected_steps, n_written
+        d['coverage_ok'] = bool(expected_steps is not None and n_written is not None and d['n_steps'] == expected_steps == n_written)
         return d

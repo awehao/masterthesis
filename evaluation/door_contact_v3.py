@@ -21,6 +21,8 @@ r2（Codex r47）：
   - 門根變換核對：有限、4×4、末列 [0,0,0,1]、旋轉正交（‖RᵀR−I‖∞ ≤ 1e-6）、det ≈ +1（|det−1| ≤ 1e-6）；不符 ⇒ status query_failed＋原因。
   - 紀錄保存實際使用的變換（列主序 16 值）與規格識別 spec_id（呼叫端給，例如規格名＋sha256），可獨立重算。
   - extras：每點附加原始資料（例：fn_signed 有號法向力、normal、sep 分離量）原樣保存；分類只用力大小。
+r3（Codex r48 §1）：required_extras 指定的欄位（例：normal、sep）在有效點上須全為有限值，否則該點 evidence_ok False、整步 complete False
+  （力大小分類照做、小計保留；不完整的步不能作解除或抓持證據）。n_evidence_incomplete 計數。
 """
 from __future__ import annotations
 
@@ -70,7 +72,7 @@ def check_T(T):
 
 
 def classify_step(P, F, q, D, tol, robot_links=None, T_world_door=None, status='ok', step=None, t=None, source='geom_v3',
-                  spec_id=None, extras=None):
+                  spec_id=None, extras=None, required_extras=()):
     """回傳 {'status','step','t','points':[...],'sums':{類:力和}|None,'counts':{類:點數}|None,'n_invalid','total_valid','reconciled'}。"""
     if status not in STATUS:
         raise ValueError(f'status 須為 {STATUS}')
@@ -81,7 +83,8 @@ def classify_step(P, F, q, D, tol, robot_links=None, T_world_door=None, status='
     out = {'status': status, 'step': step, 't': t, 'source': source, 'tol_m': float(tol), 'q_door_rad': None, 'spec_id': spec_id,
            'T_world_door': [float(v) for v in np.asarray(Tw, float).reshape(-1)] if tok else None,
            'reconciled_scope': '只表示有效點帳目相符'}
-    none = {'points': [], 'sums': None, 'counts': None, 'n_invalid': None, 'total_valid': None, 'reconciled': None, 'complete': False}
+    none = {'points': [], 'sums': None, 'counts': None, 'n_invalid': None, 'total_valid': None, 'reconciled': None, 'complete': False,
+            'n_evidence_incomplete': None}
     try:
         qf = float(q)
     except (TypeError, ValueError):
@@ -122,6 +125,9 @@ def classify_step(P, F, q, D, tol, robot_links=None, T_world_door=None, status='
         if len(a_) != n:
             raise ValueError(f'extras[{k_}] 長度與點數不符')
         ex[k_] = a_
+    for k_ in required_extras:
+        if k_ not in ex:
+            raise ValueError(f'required_extras 的 {k_} 未提供')
     pbad = ~np.all(np.isfinite(P), axis=1)
     Pl = np.where(pbad[:, None], 0.0, P) @ Ti[:3, :3].T + Ti[:3, 3]           # 門局部
     H, h = D['handle'], float(D['handle']['height'])
@@ -166,11 +172,16 @@ def classify_step(P, F, q, D, tol, robot_links=None, T_world_door=None, status='
         return float(x) if math.isfinite(float(x)) else None
 
     pts_out = []
+    n_inc = 0
     for i in range(n):
         d_ = {'p_world': [fin(v) for v in P[i]], 'f': fin(fmag[i]), 'robot_link': links[i], 'class': cls[i], 'why': why[i]}
+        if cls[i] != 'invalid' and required_extras:
+            ev_ok = all(bool(np.all(np.isfinite(ex[k_][i]))) for k_ in required_extras)
+            d_['evidence_ok'] = ev_ok
+            n_inc += int(not ev_ok)
         for k_, a_ in ex.items():
             d_[k_] = [fin(v) for v in np.atleast_1d(a_[i])] if np.ndim(a_[i]) else fin(a_[i])
         pts_out.append(d_)
     out.update({'points': pts_out, 'sums': sums, 'counts': counts, 'n_invalid': counts['invalid'], 'total_valid': tot, 'reconciled': bool(rec),
-                'complete': bool(counts['invalid'] == 0)})
+                'complete': bool(counts['invalid'] == 0 and n_inc == 0), 'n_evidence_incomplete': n_inc})
     return out

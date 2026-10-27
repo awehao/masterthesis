@@ -8,6 +8,7 @@
   A5 某點法向力 NaN ⇒ 該點 invalid、complete False、有效小計保留；
   A6 Summary 累計：狀態數、完整步數、invalid 點數、各類最大力和；
   A7 類 torch 張量（.cpu().numpy()）可讀。
+  A8（r2）法向／分離 NaN ⇒ complete False；dt 0／負／NaN／None ⇒ query_failed；get_data 回 None ⇒ query_failed（帶步號、時刻）；failure_record；覆蓋對帳。
 
     python3 evaluation/test_door_contact_v3_adapter.py
 """
@@ -119,6 +120,30 @@ class FakeT:
 
 r = rec(tuple(FakeT(x) for x in buffers()))
 ok(r['status'] == 'ok' and [p['class'] for p in r['points']] == ['bar_in', 'ambiguous', 'bar_in'], 'A7 類張量')
+
+# A8（r2，Codex r48 §1）
+d_ = list(buffers())
+d_[2] = d_[2].copy()
+d_[2][2] = [np.nan, 0.0, 1.0]                     # finger1 第一點（緩衝第 2 筆）法向 NaN
+r = rec(tuple(d_))
+ok(r['status'] == 'ok' and r['complete'] is False and r['n_evidence_incomplete'] == 1 and r['points'][0]['evidence_ok'] is False, f"A8 法向 NaN {r.get('complete')}")
+d_ = list(buffers())
+d_[3] = d_[3].copy()
+d_[3][0] = np.nan                                  # finger2 點的分離量 NaN
+r = rec(tuple(d_))
+ok(r['status'] == 'ok' and r['complete'] is False and r['n_evidence_incomplete'] == 1, 'A8 分離 NaN')
+for bad_dt in (0.0, -0.01, float('nan'), None):
+    r = AD.step_record(lambda: buffers(), lambda: Q, lambda: np.eye(4), D, TOL, bad_dt, NAMES, step=3, t=0.2)
+    ok(r['status'] == 'query_failed' and r['sums'] is None and 'dt' in r['why'] and r['step'] == 3, f'A8 dt {bad_dt}')
+r = AD.step_record(lambda: None, lambda: Q, lambda: np.eye(4), D, TOL, DT, NAMES, step=9, t=0.9)
+ok(r['status'] == 'query_failed' and r['step'] == 9 and r['t'] == 0.9 and r['sums'] is None, f"A8 get_data None {r['status']}")
+fr = AD.failure_record(11, 1.1, RuntimeError('x'))
+ok(fr['status'] == 'query_failed' and fr['step'] == 11 and fr['complete'] is False and fr['sums'] is None, 'A8 failure_record')
+S = AD.Summary()
+for _ in range(3):
+    S.add(rec(buffers()))
+ok(S.as_dict(expected_steps=3, n_written=3)['coverage_ok'] and not S.as_dict(expected_steps=4, n_written=3)['coverage_ok']
+   and not S.as_dict(expected_steps=3, n_written=2)['coverage_ok'] and not S.as_dict()['coverage_ok'], 'A8 覆蓋對帳')
 
 print('全部通過' if not fails else f'失敗 {len(fails)}')
 for f in fails:
