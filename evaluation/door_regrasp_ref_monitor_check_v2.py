@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """換抓「實際發布參考」的預測淨空與運動限值核對 v2（Codex r54 §4）。對象＝door_regrasp_ref_v2 經 door_regrasp_policy3.RefRuntime3 產生的構型序列。
 序列：mode 3（名目：起始實測＝參考起點）→ 交界保持 1.0 s（等待提交；參考不推進）→ mode 4（含構型空間起始銜接）→ 保持 1.0 s → mode 5（含門角修正）→ 保持 1.0 s → mode 6。
+r2（測試錯誤修正，r1 結果改名 *_r1_testbugs.json）：B 角點改取上限 0.999 倍；Q 的門角偏差只套 mode 4 起（mode 3 仍夾外側把手，構型隨門，不能以參考構型配偏門角）。
 情境：N 名目（Δ0＝0、Δq＝0）；B 起始銜接角點：mode 4 起點 Δ0＝(±0.02/√2, ±0.02/√2, ±2° 偏航) × 手臂全軸 ±0.05 rad（16 組；底盤合偏差 0.02 m＝登錄上限）；
   Q 門角 Δq＝±1°（mode 5／6）。mode 3 只核名目（其目標相對實測 TCP，非名目時構型需 IK，另由閉迴路核）。
 每 20 Hz 樣本：door_k3m_geom_monitor_v3 後端（目標 mode 3 out、4 None、5 None→距預抓取 ≤ 5 mm 後 in、6 in），接近率＝相鄰樣本差分（**跨交界不重置**），
@@ -69,7 +70,7 @@ def sequence(d0_4=None, dq_deg=0.0):
 
 
 def check(seq, rr, dq_deg, fn):
-    q = math.radians(PKG['q_ref_deg'] + dq_deg)
+    q_rel, q = math.radians(PKG['q_ref_deg']), math.radians(PKG['q_ref_deg'] + dq_deg)   # r2：門角偏差只從 mode 4（已放手）起；mode 3 夾持中構型隨門
     pre = P3.P1.Rz4(-math.radians(dq_deg)) @ np.asarray(PKG['pregrasp_T'], float).reshape(4, 4)
     prev, reached = None, False
     vpts, vcls, first = 0, {c: 0 for c in CL}, None
@@ -79,7 +80,7 @@ def check(seq, rr, dq_deg, fn):
         if k == 5 and not reached:
             reached = float(np.linalg.norm(KIN.fk(x, 'link_tcp')[:3, 3] - pre[:3, 3])) <= 0.005
         fn.set_target({3: 'out', 4: None, 5: ('in' if reached else None), 6: 'in'}[k])
-        d = fn(x, q, qf)
+        d = fn(x, q_rel if k == 3 else q, qf)
         bad = False
         for c in CL:
             dc = float(d[c][0])
@@ -108,9 +109,9 @@ def main():
     fn = GM3.backend_v3(self_mode='full')
     res = {}
     cases = [('N', None, 0.0), ('Q-1', None, -1.0), ('Q+1', None, 1.0)]
-    r2 = 0.02 / math.sqrt(2)
+    r2 = 0.999 * 0.02 / math.sqrt(2)                      # r2：角點取上限 0.999 倍（r1 恰在上限，浮點略超 ⇒ 全被拒）
     for sx, sy, sw, sa in itertools.product((1, -1), (1, -1), (1, -1), (1, -1)):
-        cases.append((f'B{sx:+d}{sy:+d}{sw:+d}{sa:+d}', np.r_[sx * r2, sy * r2, sw * math.radians(2.0), [sa * 0.05] * 6], 0.0))
+        cases.append((f'B{sx:+d}{sy:+d}{sw:+d}{sa:+d}', np.r_[sx * r2, sy * r2, sw * math.radians(0.999 * 2.0), [sa * 0.999 * 0.05] * 6], 0.0))
     for name, d0, dq in cases:
         seq, rr = sequence(d0, dq)
         if seq is None:
