@@ -1,0 +1,176 @@
+{
+ "schema": "door_coopen_core_bench_4_abort_analysis/1",
+ "abort": {
+  "t": 96.35999784618616,
+  "abort": "monitor_stale_or_missing",
+  "phase": "OPEN",
+  "state_age": 0.2604631740005061,
+  "contacts_age": 0.26037488600013603
+ },
+ "chain_why": [
+  "aborted:monitor_stale_or_missing",
+  "phase_sequence:['BENCH_START', 'INIT_CHECK', 'ENGAGE', 'HOLD', 'OPEN']",
+  "end_hold_too_short_or_missing",
+  "termination:ABORTED",
+  "record_does_not_cover_task_window",
+  "grasp_drift_over_limit",
+  "door_angle_pre_open_over_1deg",
+  "finger_bar_outside_allowed_phase",
+  "settle_unverifiable",
+  "reference_not_reached",
+  "trace_unverifiable",
+  "geometry_evidence_missing",
+  "settle_p2_unverifiable",
+  "pause_evidence_missing",
+  "finger_effort_pause_missing",
+  "state_step_repeat_not_same_state_2"
+ ],
+ "stall": {
+  "bench_4": {
+   "state_age_wall_gt_0p09": [
+    [
+     0.019999999552965164,
+     0.1529848509999283
+    ],
+    [
+     0.019999999552965164,
+     0.22016474199972436
+    ],
+    [
+     96.35999784618616,
+     0.10917633500048396
+    ],
+    [
+     96.35999784618616,
+     0.18186938200051372
+    ],
+    [
+     96.35999784618616,
+     0.2604631740005061
+    ]
+   ],
+   "task_loops_seeing_same_sim_t": [
+    {
+     "sim_t": 96.35999784618616,
+     "n_loops_same_t": 4,
+     "wall_span_s": 0.22903288300040003,
+     "wall_since_trace_start_s": 133.4021090639999
+    }
+   ],
+   "room_sim_t_gaps": [],
+   "evidence_write_s_max": 0.07230793300004734,
+   "stale_s": 0.2
+  },
+  "bench_3": {
+   "state_age_wall_gt_0p09": [
+    [
+     0.019999999552965164,
+     0.09383814700049697
+    ],
+    [
+     0.019999999552965164,
+     0.15959285700046166
+    ],
+    [
+     0.019999999552965164,
+     0.22473432300012064
+    ],
+    [
+     0.019999999552965164,
+     0.29719960700003867
+    ],
+    [
+     96.39999784529209,
+     0.11209511200013367
+    ],
+    [
+     96.39999784529209,
+     0.18068221700013964
+    ]
+   ],
+   "task_loops_seeing_same_sim_t": [
+    {
+     "sim_t": 96.39999784529209,
+     "n_loops_same_t": 3,
+     "wall_span_s": 0.140426042999934,
+     "wall_since_trace_start_s": 134.12322746799964
+    }
+   ],
+   "room_sim_t_gaps": [],
+   "evidence_write_s_max": 0.05495002999941789,
+   "stale_s": 0.2
+  }
+ },
+ "classify": {
+  "grasp_drift_over_limit": {
+   "pre_abort_max_mm": [
+    49.17,
+    3.7643648921344646
+   ],
+   "post_abort_first_gt5mm": [
+    97.86,
+    5.000236426301658
+   ],
+   "post_abort_max_mm": [
+    99.42,
+    6.486871169948449
+   ],
+   "class": "post_abort"
+  },
+  "geometry_evidence_missing": {
+   "rows": [
+    [
+     96.35999784618616,
+     0.18186938200051372,
+     0.023199186000056216
+    ]
+   ],
+   "class": "stall（與中止同一停頓）"
+  },
+  "state_step_repeat": {
+   "rows": [
+    [
+     0.019999999552965164,
+     "BENCH_START",
+     0
+    ],
+    [
+     0.019999999552965164,
+     "BENCH_START",
+     0
+    ],
+    [
+     96.35999784618616,
+     "OPEN",
+     9635
+    ],
+    [
+     96.35999784618616,
+     "OPEN",
+     9635
+    ],
+    [
+     96.35999784618616,
+     "ABORTED",
+     9635
+    ]
+   ],
+   "class": "frozen_period（BENCH_START）＋stall（96.36 s）"
+  },
+  "finger_bar_outside_allowed_phase": {
+   "first_after_abort": [
+    96.36,
+    6.3061
+   ],
+   "class": "post_abort"
+  },
+  "door_angle_pre_open_over_1deg": {
+   "q_pre_open_max_deg": 0.05406143275956883,
+   "class": "post_abort_phase_classification（OPEN 前實測未超過 1°）"
+  },
+  "termination": {
+   "class": "consequence（aborted:monitor_stale_or_missing、termination:ABORTED、end_hold／settle／pause／reference／trace 等收尾項）"
+  }
+ },
+ "note": "停頓原因未定位；只報時序證據"
+}
