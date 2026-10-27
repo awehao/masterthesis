@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """換抓「實際發布參考」的預測淨空與運動限值核對 v2（Codex r54 §4）。對象＝door_regrasp_ref_v2 經 door_regrasp_policy3.RefRuntime3 產生的構型序列。
 序列：mode 3（名目：起始實測＝參考起點）→ 交界保持 1.0 s（等待提交；參考不推進）→ mode 4（含構型空間起始銜接）→ 保持 1.0 s → mode 5（含門角修正）→ 保持 1.0 s → mode 6。
+r4（r3 結果改名 *_r3_edge.json）：r3 除名目外全部於 mode 4 起點被拒——B 取 0.999 倍時 mode 3 末與 mode 4 起點的一樣本差即超界；
+  Q ±1°：退臂終點距鉸鏈約 1.56 m，門差 1° ⇒ 底盤約 27 mm > 0.02 m（登錄的門角 1° 與底盤 0.02 m 不一致；可容許門角約 0.73°）。
+  r4 加 B 角點 0.8 倍與 Q ±0.7° 以覆蓋範圍內部；±1° 的被拒保留為發現。
 r3（r2 結果改名 *_r2_jumpbugs.json）：r2 在 mode 4 第一個樣本人為製造跳變（B：偏差只加在 mode 4 起點；Q：門角在交界突變）——
   改為 B：偏差自 mode 3 起恆定、mode 4 起點＝mode 3 實際終點；Q：門角整段偏 Δq，mode 3 夾持構型隨門繞鉸鏈剛體轉，mode 4 以轉後終點做起始銜接（範圍外即起始被拒＝安全停止）。
 r2（測試錯誤修正，r1 結果改名 *_r1_testbugs.json）：B 角點改取上限 0.999 倍；Q 的門角偏差只套 mode 4 起（mode 3 仍夾外側把手，構型隨門，不能以參考構型配偏門角）。
@@ -119,10 +122,11 @@ def main():
         raise SystemExit(f'{OUT} 已存在，不覆寫')
     fn = GM3.backend_v3(self_mode='full')
     res = {}
-    cases = [('N', None, 0.0), ('Q-1', None, -1.0), ('Q+1', None, 1.0)]
-    r2 = 0.999 * 0.02 / math.sqrt(2)                      # r2：角點取上限 0.999 倍（r1 恰在上限，浮點略超 ⇒ 全被拒）
+    cases = [('N', None, 0.0), ('Q-1', None, -1.0), ('Q+1', None, 1.0), ('Q-0.7', None, -0.7), ('Q+0.7', None, 0.7)]
+    FR = 0.8                                             # r4：角點取登錄範圍 0.8 倍（r3 取 0.999 倍時，mode 3 末與 mode 4 起點本身的一樣本差使全部超界）
+    r2 = FR * 0.02 / math.sqrt(2)
     for sx, sy, sw, sa in itertools.product((1, -1), (1, -1), (1, -1), (1, -1)):
-        cases.append((f'B{sx:+d}{sy:+d}{sw:+d}{sa:+d}', np.r_[sx * r2, sy * r2, sw * math.radians(0.999 * 2.0), [sa * 0.999 * 0.05] * 6], 0.0))
+        cases.append((f'B{sx:+d}{sy:+d}{sw:+d}{sa:+d}', np.r_[sx * r2, sy * r2, sw * math.radians(FR * 2.0), [sa * FR * 0.05] * 6], 0.0))
     for name, d0, dq in cases:
         seq, rr = sequence(d0, dq)
         if seq is None:
