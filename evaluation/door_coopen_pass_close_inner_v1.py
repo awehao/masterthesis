@@ -100,6 +100,8 @@ def check(x, q_deg, qfi, stage, prev=None):
         return False, f"base:{d['base'][1]}", d
     for f, dd in d['fingers'].items():
         for k, v in dd.items():
+            if k == 'bar_out' and stage == 'release_outer_c':        # 指定初始接觸：此處不判，由呼叫端依 v4 規則（離開後不得重新穿入）另核
+                continue
             if k == 'bar_out' and stage == 'release_outer':          # 沿用 release_bench6_v4：外側橫桿為指定配對，只禁止穿入
                 if v < 0.0:
                     return False, f'finger:{f}:bar_out 穿入 {v * 1e3:.1f}mm', d
