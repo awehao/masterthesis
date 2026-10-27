@@ -4,7 +4,7 @@
 每步動作：底盤平移 (dx, dy) ∈ {−0.025, 0, 0.025}²、偏航 Δ ∈ {−0.08, 0, 0.08} rad、門角 Δ ∈ {0, −1.0°}；子狀態以 door_coopen_traj_v1.check 核
   （底盤淨空 ≥ 20 mm、IK 以父步手臂解為種子、單步關節 ≤ 0.10 rad、關節餘裕 ≥ 0.05、非手指／手指／自碰 ≥ 5 mm）。
 評分（越小越好）：未到門洞前 ＝ 到門洞入口 W(0.62, −0.15) 的距離＋0.6；到門洞後（y ≥ −0.15）＝0.6 − (y＋0.15)；另加 0.002·門角（偏好通過中關門）。
-束寬 12、每父 8 子、最多 160 步；到 y ≥ 0.44（整機越過牆厚）即停。走不通 ⇒ 報最深前緣狀態與其子狀態失敗原因分布（具體阻點）。
+束寬 12、每父 8 子、最多 160 步；到 y ≥ 0.44（整機越過牆厚）即停；最佳評分連續 15 步未改善即提前停（重開機後重跑加入）。走不通 ⇒ 報最深前緣狀態與其子狀態失敗原因分布（具體阻點）。
 界線：同 v1（離線運動學；取樣間不連續；無接觸力；持握剛性跟隨；放手、退縫、末段關門接觸另報）。
 
     python3 evaluation/door_coopen_pass_close_v2.py   # 寫 results/door/door_coopen_pass_close_v2.json（不覆寫）
@@ -107,6 +107,11 @@ def main():
         hit = [k for k in beam if k['b'][1] >= Y_CLEAR]
         if hit:
             done = min(hit, key=lambda k: k['q'])
+            break
+        stall = 0 if score(beam[0]['b'][0], beam[0]['b'][1], beam[0]['q']) <= score(best_depth['b'][0], best_depth['b'][1], best_depth['q']) + 1e-12 and \
+            best_depth is beam[0] else locals().get('stall', 0) + 1
+        if stall >= 15:
+            print(f'  步 {it}：最佳評分連續 15 步未改善 ⇒ 提前停', flush=True)
             break
         if it % 10 == 0:
             print(f"  步 {it}：最佳 底盤 ({beam[0]['b'][0]:.3f}, {beam[0]['b'][1]:.3f}, {beam[0]['b'][2]:.2f}) 門 {beam[0]['q']:.1f}°", flush=True)
