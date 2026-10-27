@@ -10,6 +10,7 @@
 讀回：door_asset_v2.readback 全部欄位＋內側橫桿（軸、半徑、長度、門扇局部桿心）、內側立柱（中心、半尺寸）、兩支橫桿各自實際生效的 physics 材質、
   分別的 prim 路徑（handle_bar_prim／handle_bar_inner_prim、post_prims／post_inner_prims），供模擬端把接觸分到「外側橫桿／內側橫桿／立柱／門扇」而不混稱。
 界線：只建舞台與讀回；不啟動物理演化、不含接觸行為驗證。
+狀態（Codex r46）：v3 離線 USD 資產已建構並完成靜態讀回；尚未整合模擬端接觸分類，也未驗證物理接觸。
 """
 from __future__ import annotations
 

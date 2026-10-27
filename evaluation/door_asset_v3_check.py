@@ -118,7 +118,7 @@ def main():
             if dmin < worst[0]:
                 worst = (dmin, qd, n)
     chk['inner_handle_vs_walls_min_m'] = {'d': worst[0], 'q_deg': worst[1], 'wall': worst[2], 'need': need, 'ok': worst[0] >= need,
-                                          'method': '橫桿表面 21×16 點＋立柱角點與內部取樣，門角 0–110° 每 1°；保守離散'}
+                                          'method': '橫桿表面 21×16 點＋立柱角點與內部取樣，門角 0–110° 每 1°；離散取樣未見越界（取樣最小值，非連續保證）'}
     chk['walls_in_geom'] = [w[0] for w in walls]
     ok_keys = ['inner_bar_center_vs_geom', 'inner_bar_axis_is_u', 'outer_bar_center_vs_geom', 'inner_posts_vs_geom', 'outer_posts_vs_geom',
                'bars_mirror_about_leaf_midplane', 'bars_same_type', 'posts_mirror', 'v2_fields_unchanged', 'only_inner_added', 'v2_collision_prims_kept',
