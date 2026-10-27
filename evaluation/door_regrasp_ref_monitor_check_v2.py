@@ -70,7 +70,7 @@ def sequence(d0_4=None, dq_deg=0.0):
 
 def check(seq, rr, dq_deg, fn):
     q = math.radians(PKG['q_ref_deg'] + dq_deg)
-    pre = P3.Rz4(-math.radians(dq_deg)) @ np.asarray(PKG['pregrasp_T'], float).reshape(4, 4)
+    pre = P3.P1.Rz4(-math.radians(dq_deg)) @ np.asarray(PKG['pregrasp_T'], float).reshape(4, 4)
     prev, reached = None, False
     vpts, vcls, first = 0, {c: 0 for c in CL}, None
     mins = {c: {'d': math.inf, 'd_pred': math.inf} for c in CL}
