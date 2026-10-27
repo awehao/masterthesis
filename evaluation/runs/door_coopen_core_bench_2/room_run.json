@@ -1,0 +1,1001 @@
+{
+ "steps": [],
+ "events": [
+  {
+   "sim_t": 0.019999999552965164,
+   "step": 0,
+   "park": "hold_start",
+   "bench": true,
+   "anchor": [
+    1.0199946165084839,
+    -0.49999934434890747,
+    3.0343620719234905
+   ],
+   "gate_pass_step": null,
+   "prev_sample": null
+  }
+ ],
+ "steps_cols": [
+  "step",
+  "sim_t",
+  "owner(0=nav,1=wb,2=glide)",
+  "kind",
+  "base_cmd_body",
+  "meas_vb_body",
+  "applied_arm",
+  "base_xyth",
+  "q_arm_meas",
+  "door_q_rad",
+  "door_qdot_rad_s",
+  "q_finger",
+  "finger_contact_n",
+  "contact_held_s",
+  "leaf_contacts",
+  "wall_contacts",
+  "wrist_force_n",
+  "park_mode",
+  "applied_src"
+ ],
+ "leaf_contacts": {
+  "source": "every_physics_step",
+  "row": "{robot_body: {bar: N, panel: N}}（法向力大小和）",
+  "classification": "接觸點到橫桿軸線段距離 ≤ 半徑＋0.006 m ⇒ bar",
+  "none_means": "讀不到（不是零）"
+ },
+ "wall_contacts": {
+  "source": "every_physics_step",
+  "row": "{robot_body: N}",
+  "none_means": "讀不到（不是零）"
+ },
+ "wrist_force": {
+  "source": "robot.get_measured_joint_forces()[joint6 row][:3] 之大小",
+  "none_means": "讀不到"
+ },
+ "contact_hold": {
+  "source": "every_physics_step",
+  "physics_dt": 0.01,
+  "contact_min_n": 0.5
+ },
+ "owner_codes": {
+  "0": "nav",
+  "1": "wholebody",
+  "2": "glide"
+ },
+ "bench": {
+  "q_nominal": [
+   1.8368194724331057,
+   -1.5951662032816973,
+   2.0320772026119536,
+   -1.1819994417809456,
+   -0.08548366591308558,
+   2.613687063883051
+  ],
+  "s_init_written": [
+   1.836957474,
+   -1.567640908,
+   2.025241458,
+   -1.185167084,
+   -0.084904051,
+   2.617608653
+  ],
+  "d_init": [
+   -0.00013800171428569874,
+   -0.02752529536607144,
+   0.006835744428571425,
+   0.0031676418035714326,
+   -0.0005796149375000003,
+   -0.003921589419642839
+  ],
+  "q_arm_meas_t0": [
+   1.8368195295333862,
+   -1.5951662063598633,
+   2.0320773124694824,
+   -1.1819994449615479,
+   -0.08548366278409958,
+   2.613687038421631
+  ],
+  "anchor": [
+   1.0199946165084839,
+   -0.49999934434890747,
+   3.0343620719234905
+  ],
+  "t0": 0.019999999552965164,
+  "chain_seed": {
+   "source": "bench_start",
+   "u_applied": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "arm_setpoint": [
+    1.836957474,
+    -1.567640908,
+    2.025241458,
+    -1.185167084,
+    -0.084904051,
+    2.617608653
+   ],
+   "sim_t": 0.019999999552965164,
+   "physics_step_id": -1
+  },
+  "params": "evaluation/results/door/coopen_core_params_48_r9.json",
+  "release": {
+   "state": "aborted",
+   "t0": 0.019999999552965164,
+   "announced": {
+    "source_seq": 2,
+    "sim_t": 0.02
+   },
+   "released": {
+    "why": "release_timeout",
+    "wall_s": 120.00117837200014
+   },
+   "rejects": {},
+   "n_frozen_iters": 9841,
+   "n_env_before_announce": 0
+  }
+ },
+ "summary": {
+  "owner": "wholebody",
+  "switch_step": null,
+  "pending": null,
+  "seed_requested": null,
+  "seed_requested_note": "**排程當下**交上來的那一筆，只是准入證據。鏈真正承接的基準是執行層在切換當步重取的 seed_used，兩者不同是正常的 —— 排程到切換之間導航還在控制、還在改命令。已封存的趟次裡這個欄位叫 seed_applied，語意相同",
+  "rejected": {},
+  "n_steps_recorded": 0,
+  "events": [],
+  "contract": "每個物理步恰有一個控制者；切換在明確物理步發生；晚到命令依控制權拒絕，不靠時間；切換失敗時控制權留在現任，由它繼續負責減速",
+  "chain_seeded": true,
+  "switch_committed_step": null,
+  "switch_step_note": "**執行端完成切換**的物理步。任務節點觀察到結果的步數會晚一點，兩者不是同一件事",
+  "n_switch_cancelled_not_ready": 0,
+  "n_steps_not_ready": 0,
+  "not_ready_reasons": {},
+  "not_ready_first": null,
+  "not_ready_last": null,
+  "not_ready_note": "窗口預約下「這一步還沒備妥」是等待，不是取消；窗口整段過完才會取消，條件一字未放寬",
+  "direct_applied_owner": null,
+  "glide_last_rx": null,
+  "nav_rate_cap": {
+   "a_max_per_axis": [
+    1.5,
+    1.0,
+    2.0
+   ],
+   "source": "gmpc_node.py 宣告的 ax_max/ay_max/az_max",
+   "n_capped": 0,
+   "max_cut_mps": 0.0,
+   "note": "導航這條路徑不經命令鏈，這是它唯一的變化率限制；套用的是導航自己的既有值，按真實物理步長執行"
+  },
+  "vetted_result": null,
+  "vetted_matched": null,
+  "preflight_detail": null,
+  "preflight_note": "切換前以命令鏈自己的計算路徑預核（含低速介面界限、手臂速率、輪級限制與設定點有效限位），預核不寫入狀態；提交後核對實際套用與預核一致。**核的命題是「若後續沒有新命令，這一筆持續作用到逾時，設定點仍不穿線」** —— 較保守的接手條件：被拒不代表整條任務路徑不可行，通過也不保證後續新命令或實測角永遠合規",
+  "seed_admission": null,
+  "seed_used": {
+   "u_applied": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "arm_setpoint": [
+    1.836957474,
+    -1.567640908,
+    2.025241458,
+    -1.185167084,
+    -0.084904051,
+    2.617608653
+   ],
+   "sim_t": 0.019999999552965164,
+   "physics_step_id": -1,
+   "source": "bench_start"
+  },
+  "seed_note": "承接的是**切換當下**最新的套用回報；排程當下那一筆只是准入證據",
+  "nav_applied_last": null,
+  "n_steps": 0,
+  "executor_events": [
+   [
+    0.019999999552965164,
+    "chain_seeded",
+    "bench_start：u＝0、設定點＝s_init（不經交棒）"
+   ]
+  ],
+  "path_note": "導航三維直接寫入、不經輪級限制與低速介面界限；全身九維走 CmdChainE2。兩條都產生套用回報。"
+ },
+ "chain": {
+  "config": {
+   "max_cmd_age_s": 0.2,
+   "arm_rate_max": 1.0,
+   "expect_dof": 9,
+   "mode": "solver_drawer",
+   "joint_lower": [
+    -2.935643802,
+    -2.443457075,
+    -0.061087,
+    -2.935643802,
+    -1.989667075,
+    -2.935643802
+   ],
+   "joint_upper": [
+    2.935643802,
+    2.443457075,
+    2.935643802,
+    2.935643802,
+    1.989667075,
+    2.935643802
+   ],
+   "joint_margin": 0.05
+  },
+  "received": 0,
+  "rejected": 0,
+  "last_reject": null,
+  "frozen_steps": 0,
+  "fail": null,
+  "events": [
+   [
+    0.02,
+    "seeded_from_handover",
+    "來源 bench_start、物理步 -1；底盤基準 [0.0, 0.0, 0.0]"
+   ]
+  ],
+  "recv_seq_note": "recv_seq / recv_sim_t 是**接收端**編號與時間，不是來源發布時間，也不能據此宣稱端到端延遲",
+  "mode": "solver_drawer",
+  "mode_note": "不符模式的命令由接收端**整筆拒收**；不在事後切掉分量",
+  "fail_note": "整體失效：不原樣執行，也不只縮底盤分量後宣稱全身安全仍成立。失效後每步送 stop_command()：底盤停止、手臂保持設定點，並**繼續量測**",
+  "version": "wb_cmd_chain_e2/1",
+  "seeded_from_handover": {
+   "source": "bench_start",
+   "u_applied": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "arm_setpoint": [
+    1.836957474,
+    -1.567640908,
+    2.025241458,
+    -1.185167084,
+    -0.084904051,
+    2.617608653
+   ],
+   "sim_t": 0.019999999552965164,
+   "physics_step_id": -1
+  },
+  "u_prev_baseline": "承接自交棒",
+  "wheel_limit": {
+   "policy": "evaluation/results/specs/wb_wheel_limit_policy_v2.md",
+   "frame": "底盤三分量為**本體座標**（adapter 已轉換）",
+   "wheel_radius": 0.05,
+   "wheel_base_L": 0.245,
+   "w_lim_mps": 0.2775,
+   "a_max_rad_s2": 125.0,
+   "dt_max_s": 0.05,
+   "modified_steps": 0,
+   "timeout_decel_steps": 0,
+   "stop_unverified_steps": 0,
+   "last_limit": null,
+   "rows_kept": 0,
+   "note": "λ 由底盤輪級約束決定、施加於完整 9 維增量；保留的是**增量方向**，不是請求命令的底盤／手臂比例。**逾時是例外**：手臂速率立即歸零，不保留耦合方向。",
+   "not_claimed": "u_out 不是求解器的輸出；上游距離約束是對 u_req 算的。**不宣稱上游全身安全性不變**。"
+  }
+ },
+ "ros_drain": {
+  "max_callbacks_in_one_step": 0,
+  "n_callbacks": 1660
+ },
+ "config": {
+  "finger_collision": {
+   "mode": "split",
+   "z_split_m": 0.008,
+   "fingers": {
+    "uflite_finger1": {
+     "disabled": "/World/omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link/uflite_finger1/finger1_1/finger1",
+     "parts": {
+      "base": {
+       "path": "/World/omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link/uflite_finger1/grip_col_base",
+       "n_vertices": 30,
+       "y_range_mm": [
+        -0.0,
+        15.6
+       ],
+       "z_range_mm": [
+        -2.7,
+        6.8
+       ]
+      },
+      "blade": {
+       "path": "/World/omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link/uflite_finger1/grip_col_blade",
+       "n_vertices": 80,
+       "y_range_mm": [
+        11.2,
+        15.4
+       ],
+       "z_range_mm": [
+        8.3,
+        26.8
+       ]
+      }
+     }
+    },
+    "uflite_finger2": {
+     "disabled": "/World/omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link/uflite_finger2/finger2_1/finger2",
+     "parts": {
+      "base": {
+       "path": "/World/omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link/uflite_finger2/grip_col_base",
+       "n_vertices": 30,
+       "y_range_mm": [
+        -15.6,
+        -0.0
+       ],
+       "z_range_mm": [
+        -2.7,
+        6.8
+       ]
+      },
+      "blade": {
+       "path": "/World/omni_bot/Geometry/base_footprint/base_link/link_base/link1/link2/link3/link4/link5/link6/link_eef/uflite_gripper_link/uflite_finger2/grip_col_blade",
+       "n_vertices": 80,
+       "y_range_mm": [
+        -15.4,
+        -11.2
+       ],
+       "z_range_mm": [
+        8.3,
+        26.8
+       ]
+      }
+     }
+    }
+   }
+  },
+  "door_asset": "/home/howardchen/masterthesis/src/my_omnibot_description/config/door_local_v2.yaml",
+  "door_asset_sha256": "3818333d45625f96e3710f39668dd794a8af9335f3a589f686791a6d282b5b39",
+  "world": "/home/howardchen/masterthesis/src/ammr_bringup/worlds/door_local.sdf",
+  "start_pose": "1.020000,-0.500000,3.034362",
+  "stow_q": [
+   1.836819472,
+   -1.595166203,
+   2.032077203,
+   -1.181999442,
+   -0.085483666,
+   2.613687064
+  ],
+  "physics_dt": 0.01,
+  "low_speed_bound": {
+   "lin": 0.05,
+   "ang": 0.2
+  },
+  "low_speed_bound_applies_to": "**只有全身那條路徑**；導航不經命令鏈",
+  "door": {
+   "root": "/World/door",
+   "leaf_prim": "/World/door/leaf",
+   "joint_prim": "/World/door/hinge",
+   "handle_bar_prim": "/World/door/leaf/handle_bar",
+   "is_rigid_body": true,
+   "mass_kg": 8.0,
+   "center_of_mass": [
+    0.4749999940395355,
+    0.019999999552965164,
+    1.0099999904632568
+   ],
+   "diagonal_inertia": [
+    2.6677334308624268,
+    3.2683334350585938,
+    0.602733314037323
+   ],
+   "angular_damping": 2.0,
+   "joint_type": "PhysicsRevoluteJoint",
+   "joint_axis": "Z",
+   "joint_body0": [],
+   "joint_body1": [
+    "/World/door/leaf"
+   ],
+   "joint_local_pos0": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_rot0_wxyz": [
+    0.0,
+    1.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_rot1_wxyz": [
+    0.0,
+    1.0,
+    0.0,
+    0.0
+   ],
+   "limit_lower_deg": 0.0,
+   "limit_upper_deg": 110.0,
+   "joint_friction": 0.0,
+   "drive_stiffness": 0.0,
+   "drive_damping": 0.0,
+   "drive_max_force": 0.0,
+   "handle_bar": {
+    "axis": "X",
+    "radius": 0.013,
+    "length": 0.2,
+    "center_leaf_local": [
+     0.8,
+     -0.04,
+     0.85
+    ]
+   },
+   "handle_material": {
+    "bound_at": "/World/door/leaf/handle_bar",
+    "material": "/World/PhysicsMaterials/door_handle",
+    "static_friction": 1.0,
+    "dynamic_friction": 0.800000011920929,
+    "restitution": 0.0
+   },
+   "linear_damping": 0.0,
+   "collision_offsets": {
+    "wall_hinge_side": [
+     0.004000000189989805,
+     0.0
+    ],
+    "wall_latch_side": [
+     0.004000000189989805,
+     0.0
+    ],
+    "leaf_box": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post0": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post1": [
+     0.004000000189989805,
+     0.0
+    ],
+    "handle_bar": [
+     0.004000000189989805,
+     0.0
+    ]
+   },
+   "wall_end_faces_x": {
+    "wall_hinge_side": -0.014999999999999902,
+    "wall_latch_side": 1.0
+   },
+   "collision_prims": [
+    "/World/door/frame/wall_hinge_side",
+    "/World/door/frame/wall_latch_side",
+    "/World/door/leaf/handle_bar",
+    "/World/door/leaf/leaf_box",
+    "/World/door/leaf/post0",
+    "/World/door/leaf/post1"
+   ]
+  },
+  "q_door0_rad": 1.6896759599122069e-13,
+  "frictionless": {
+   "support_spheres": 4,
+   "ground": 2,
+   "bound": 6
+  },
+  "bar_class_tol": 0.006,
+  "wrist_row": {
+   "joint6_row": 100,
+   "source": "metadata.joint_indices",
+   "joint_names": [
+    "base_joint",
+    "base_link_rim_a_joint",
+    "base_link_rim_b_joint",
+    "base_link_rim_c_joint",
+    "base_link_rim_d_joint",
+    "support_fx_joint",
+    "support_bx_joint",
+    "support_ly_joint",
+    "support_ry_joint",
+    "base_link_lidar_joint",
+    "arm_base_joint",
+    "base_camera_link_joint",
+    "roller_1_rim_a_joint",
+    "roller_2_rim_a_joint",
+    "roller_3_rim_a_joint",
+    "roller_4_rim_a_joint",
+    "roller_5_rim_a_joint",
+    "roller_6_rim_a_joint",
+    "roller_7_rim_a_joint",
+    "roller_8_rim_a_joint",
+    "roller_9_rim_a_joint",
+    "roller_10_rim_a_joint",
+    "roller_11_rim_a_joint",
+    "roller_12_rim_a_joint",
+    "roller_13_rim_a_joint",
+    "roller_14_rim_a_joint",
+    "roller_15_rim_a_joint",
+    "roller_16_rim_a_joint",
+    "roller_17_rim_a_joint",
+    "roller_18_rim_a_joint",
+    "roller_1_rim_b_joint",
+    "roller_2_rim_b_joint",
+    "roller_3_rim_b_joint",
+    "roller_4_rim_b_joint",
+    "roller_5_rim_b_joint",
+    "roller_6_rim_b_joint",
+    "roller_7_rim_b_joint",
+    "roller_8_rim_b_joint",
+    "roller_9_rim_b_joint",
+    "roller_10_rim_b_joint",
+    "roller_11_rim_b_joint",
+    "roller_12_rim_b_joint",
+    "roller_13_rim_b_joint",
+    "roller_14_rim_b_joint",
+    "roller_15_rim_b_joint",
+    "roller_16_rim_b_joint",
+    "roller_17_rim_b_joint",
+    "roller_18_rim_b_joint",
+    "roller_1_rim_c_joint",
+    "roller_2_rim_c_joint",
+    "roller_3_rim_c_joint",
+    "roller_4_rim_c_joint",
+    "roller_5_rim_c_joint",
+    "roller_6_rim_c_joint",
+    "roller_7_rim_c_joint",
+    "roller_8_rim_c_joint",
+    "roller_9_rim_c_joint",
+    "roller_10_rim_c_joint",
+    "roller_11_rim_c_joint",
+    "roller_12_rim_c_joint",
+    "roller_13_rim_c_joint",
+    "roller_14_rim_c_joint",
+    "roller_15_rim_c_joint",
+    "roller_16_rim_c_joint",
+    "roller_17_rim_c_joint",
+    "roller_18_rim_c_joint",
+    "roller_1_rim_d_joint",
+    "roller_2_rim_d_joint",
+    "roller_3_rim_d_joint",
+    "roller_4_rim_d_joint",
+    "roller_5_rim_d_joint",
+    "roller_6_rim_d_joint",
+    "roller_7_rim_d_joint",
+    "roller_8_rim_d_joint",
+    "roller_9_rim_d_joint",
+    "roller_10_rim_d_joint",
+    "roller_11_rim_d_joint",
+    "roller_12_rim_d_joint",
+    "roller_13_rim_d_joint",
+    "roller_14_rim_d_joint",
+    "roller_15_rim_d_joint",
+    "roller_16_rim_d_joint",
+    "roller_17_rim_d_joint",
+    "roller_18_rim_d_joint",
+    "joint1",
+    "detect0_1_joint",
+    "detect0_2_joint",
+    "joint2",
+    "detect1_joint",
+    "joint3",
+    "detect2_1_joint",
+    "detect2_2_joint",
+    "detect2_3_joint",
+    "joint4",
+    "detect3_1_joint",
+    "detect3_2_joint",
+    "joint5",
+    "detect4_1_joint",
+    "detect4_2_joint",
+    "joint6",
+    "detect5_joint",
+    "joint_eef",
+    "detect6_joint",
+    "gripper_fix",
+    "finger_joint1",
+    "finger_joint2"
+   ]
+  },
+  "park_cfg": {
+   "park_x": 1.02,
+   "park_y": -0.5,
+   "park_yaw": 3.034362,
+   "hold_s": 0.5,
+   "entry_pos_tol": 0.01,
+   "entry_yaw_tol": 0.05,
+   "v_lin_max": 0.001,
+   "w_max": 0.01,
+   "cmd_max": 1e-06,
+   "dev_pos_max": 0.02,
+   "dev_yaw_max": 0.03490658503988659,
+   "hold_mode": true,
+   "hold_v_max": 0.005,
+   "hold_w_max": 0.02
+  },
+  "park_hold_cfg": {
+   "park_x": 1.02,
+   "park_y": -0.5,
+   "park_yaw": 3.034362,
+   "hold_s": 0.5,
+   "entry_pos_tol": 0.01,
+   "entry_yaw_tol": 0.05,
+   "v_lin_max": "inf",
+   "w_max": "inf",
+   "cmd_max": 1e-06,
+   "dev_pos_max": 0.02,
+   "dev_yaw_max": 0.03490658503988659,
+   "hold_mode": true,
+   "hold_v_max": 0.005,
+   "hold_w_max": 0.02
+  },
+  "park_split": "入場閘門＝park_cfg（嚴格靜止）；保持監看＝hold_cfg（20 mm／2°＋伺服上界；實測速率只另報）",
+  "k2_abort_latch": null,
+  "grip_evidence_source": "確認的橫桿接觸力（classify_contacts bar），非整個門扇剛體合力",
+  "nav_cmd_timeout_s": 1.0,
+  "switch_speed_check": {
+   "v_box_lin": 0.035255,
+   "v_box_ang": 0.1999,
+   "v_min_lin": 0.01
+  },
+  "nav_rate_cap": {
+   "a_max_per_axis": [
+    1.5,
+    1.0,
+    2.0
+   ],
+   "source": "gmpc_node.py 宣告的 ax_max/ay_max/az_max",
+   "n_capped": 0,
+   "max_cut_mps": 0.0,
+   "note": "導航這條路徑不經命令鏈，這是它唯一的變化率限制；套用的是導航自己的既有值，按真實物理步長執行"
+  },
+  "base_rate_cap": {
+   "a_lin": 0.5,
+   "a_ang": 2.0,
+   "source": "wgmpc_core.py 的 a_base_lin/a_base_ang，原註標為「**開發值**，無已核准來源」；被執行層採用不改變這個標籤",
+   "per_axis": true,
+   "combined_implication_mps": 0.007071,
+   "n_capped": 0,
+   "max_cut_mps": 0.0
+  },
+  "friction_audit": {
+   "ok": true,
+   "n_faces": 30,
+   "violations": []
+  }
+ },
+ "evidence": {
+  "path": "/home/howardchen/masterthesis/evaluation/runs/door_coopen_core_bench_2/evidence.jsonl",
+  "enabled": true,
+  "opened": true,
+  "closed": true,
+  "n": 0,
+  "n_err": {},
+  "errors": [],
+  "write_s_total": 0.0,
+  "write_s_max": 0.0,
+  "complete": true,
+  "semantics": {
+   "contacts": "get_contact_force_data：逐點法向力、點、法向、分離（法向正負未核，原樣）",
+   "friction": "get_friction_data：逐錨點切向力向量與位置",
+   "j6_reaction_wrench": "get_measured_joint_forces joint6 列：入射關節反作用力＋力矩（子關節座標），非馬達輸出",
+   "dof_measured_efforts": "get_measured_joint_efforts：解算器 DOF 方向關節力，非馬達命令"
+  }
+ },
+ "k3m": {
+  "config": {
+   "run_id": "door_coopen_core_bench_2",
+   "corridor_table": "evaluation/results/door/door_coopen_core_table_48_r4.json",
+   "corridor_table_sha256": "a5fce4b9275269aaeff1b2ccd1ee94f76d4776aa38d7e48aec90b0de7ee523a0",
+   "inner_mm": 20.0,
+   "inner_deg": 0.8,
+   "envelope": [
+    -0.04,
+    0.2452,
+    -0.04,
+    0.6066,
+    30.2143
+   ],
+   "corridor_table_json": {
+    "anchor": [
+     1.02,
+     -0.49999999999999956,
+     3.034362472655968
+    ],
+    "q_door_deg": [
+     0.0,
+     1.0,
+     2.0,
+     3.0,
+     4.0,
+     5.0,
+     6.0,
+     7.0,
+     8.0,
+     9.0,
+     10.0,
+     11.0,
+     12.0,
+     13.0,
+     14.0,
+     15.0,
+     16.0,
+     17.0,
+     18.0,
+     19.0,
+     20.0,
+     21.0,
+     22.0,
+     23.0,
+     24.0,
+     25.0,
+     26.0,
+     27.0,
+     28.0,
+     29.0,
+     30.0,
+     31.0,
+     32.0,
+     33.0,
+     34.0,
+     35.0,
+     36.0,
+     37.0,
+     38.0,
+     39.0,
+     40.0,
+     41.0,
+     42.0,
+     43.0,
+     44.0,
+     45.0,
+     46.0,
+     47.0,
+     48.0
+    ],
+    "fwd_m": [
+     0.0,
+     0.0007957232956872545,
+     0.004100097120667518,
+     0.003462305828187206,
+     0.004529257056205457,
+     0.008131155558891344,
+     0.006357374355948447,
+     0.009959272858634134,
+     0.01640190379228107,
+     0.020003802294966747,
+     0.026140648072320184,
+     0.03511822628063443,
+     0.038720124783320126,
+     0.050538435422595326,
+     0.05698106635624218,
+     0.05520728515329928,
+     0.056274236381317524,
+     0.0630226524712577,
+     0.06693033613023668,
+     0.08189516435676616,
+     0.09685999258329564,
+     0.11491040866226207,
+     0.13549577201589627,
+     0.1532404029385696,
+     0.16530356899932097,
+     0.17452600262911144,
+     0.18090770382794102,
+     0.17623226045922005,
+     0.17439754952146028,
+     0.17540357101466134,
+     0.17925032493882326,
+     0.18593781129394613,
+     0.1872496179434404,
+     0.1831857448873063,
+     0.1901790163987226,
+     0.19179660820451017,
+     0.18803852030466928,
+     0.1789047526991999,
+     0.16439530538810204,
+     0.1501916432332974,
+     0.13629376623478606,
+     0.11195031498131108,
+     0.09044759615879695,
+     0.0720913949235373,
+     0.05434676400086383,
+     0.039748650665444876,
+     0.03244959399773539,
+     0.025779840847476594,
+     0.024647526583425353
+    ],
+    "lat_m": [
+     0.0,
+     0.006623203487490033,
+     0.01485748158863563,
+     0.020560071011179674,
+     0.03267240166438358,
+     0.04793124990484176,
+     0.05973779540175209,
+     0.07499664364221002,
+     0.09056127703896164,
+     0.10582012527941967,
+     0.12422549110713188,
+     0.14293664209113763,
+     0.15819549033159555,
+     0.1772124264718946,
+     0.19277705986864588,
+     0.2045836053655562,
+     0.21669593601876022,
+     0.22941983698455068,
+     0.24183795279404785,
+     0.25831994165967903,
+     0.2748019305253104,
+     0.2939868212051292,
+     0.316318229472202,
+     0.3383438525829819,
+     0.3597579053811748,
+     0.3808661730230746,
+     0.4016686555086807,
+     0.41840726493815295,
+     0.43545165952391857,
+     0.4528018392659774,
+     0.4704578041643296,
+     0.4884195542189749,
+     0.5029290015300728,
+     0.5139861460976232,
+     0.529107163721308,
+     0.5407758786014448,
+     0.5489922907380343,
+     0.5537564001310761,
+     0.5550682067805705,
+     0.5535392809991039,
+     0.5491696227866766,
+     0.535054626656193,
+     0.5212454156820029,
+     0.5049012574331451,
+     0.48287563432236547,
+     0.45831506393691807,
+     0.44603477874419445,
+     0.4332475040965375,
+     0.4250794036804415
+    ],
+    "dyaw_deg": [
+     0.0,
+     1.0000000000000142,
+     1.7333333333333443,
+     2.885714285714313,
+     4.800000000000007,
+     5.571428571428614,
+     6.914285714285739,
+     7.685714285714321,
+     8.457142857142877,
+     8.657142857142889,
+     7.714285714285713,
+     6.771428571428539,
+     6.971428571428552,
+     6.600000000000022,
+     6.8000000000000345,
+     7.57142857142854,
+     8.914285714285716,
+     10.828571428571435,
+     12.171428571428587,
+     12.371428571428599,
+     12.000000000000018,
+     10.285714285714286,
+     7.428571428571443,
+     4.000000000000005,
+     0.0,
+     -4.000000000000005,
+     -7.999999999999986,
+     -10.857142857142879,
+     -13.714285714285722,
+     -16.57142857142859,
+     -19.42857142857146,
+     -22.285714285714324,
+     -24.000000000000036,
+     -24.571428571428598,
+     -25.71428571428574,
+     -25.714285714285765,
+     -24.571428571428598,
+     -22.857142857142897,
+     -20.571428571428598,
+     -18.28571428571435,
+     -16.00000000000002,
+     -13.142857142857155,
+     -10.857142857142879,
+     -8.57142857142858,
+     -5.714285714285737,
+     -2.2857142857142745,
+     -0.6666666666666592,
+     0.8000000000000012,
+     2.0000000000000027
+    ]
+   }
+  },
+  "active": false,
+  "switch": null,
+  "violation": null,
+  "events": [],
+  "log": [],
+  "rejections": [],
+  "pause_switch": null,
+  "pause_rejections": []
+ },
+ "finger_effort": {
+  "init": {
+   "joints": [
+    "finger_joint1",
+    "finger_joint2"
+   ],
+   "indices": [
+    6,
+    7
+   ],
+   "names": [
+    "joint1",
+    "joint2",
+    "joint3",
+    "joint4",
+    "joint5",
+    "joint6",
+    "finger_joint1",
+    "finger_joint2"
+   ],
+   "original": 5.0,
+   "full": [
+    50.0,
+    50.0,
+    32.0,
+    32.0,
+    32.0,
+    20.0,
+    5.0,
+    5.0
+   ],
+   "readback": [
+    5.0,
+    5.0
+   ],
+   "ok": true,
+   "why": null
+  },
+  "arg_pause_max_effort": 20.0,
+  "arg_original_effort": 5.0,
+  "pause": null,
+  "pause_switch_failed": null,
+  "tol": 0.001
+ },
+ "cmd_env": {
+  "n_applied_src_reports": 0,
+  "n_env_recv": 0,
+  "n_env_into_chain": 0,
+  "n_env_dup": 0,
+  "takeover_t": null,
+  "intake_violations": [],
+  "n_env_bad": 0,
+  "applied_src_cols": [
+   "step",
+   "sim_t",
+   "source_seq",
+   "chain_mode"
+  ],
+  "chain_mode": {
+   "0": "normal",
+   "1": "timeout",
+   "2": "stop_unverified",
+   "3": "fail"
+  },
+  "note": "source_seq＝−1：本步不是正常套用的全身命令（逾時減速、停止、非全身控制或對照表外）"
+ }
+}
