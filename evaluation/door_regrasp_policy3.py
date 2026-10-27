@@ -151,12 +151,16 @@ class RegraspPolicy3(P2.RegraspPolicy2):
             return self._rg_abort('rg_executor_violation', m, act, detail=m.executor_violation)
         if self.geom_v3_fn is None or getattr(self, 'geom', None) is None:
             return self._rg_abort('rg_geometry_backend_missing', m, act)
-        self.geom_v3_fn.set_target(self.rg['geom_target'])
-        dec, det = self.geom.step(m.t, getattr(m, 'qf', None), m.q_door, getattr(m, 'q_finger', None), m.state_age)
+        dec, det = self._geom_step(m)
         self.geom_last, self.geom_t = (dec, det), m.t
         if dec == 'stop':
             return self._rg_abort(f"rg_geometry:{det.get('why')}", m, act, detail=det)
         return None
+
+    def _geom_step(self, m):
+        """幾何判定掛點（子類可換成切換包裝）；本類行為＝設目標後直接呼叫 GeometryMonitor。"""
+        self.geom_v3_fn.set_target(self.rg['geom_target'])
+        return self.geom.step(m.t, getattr(m, 'qf', None), m.q_door, getattr(m, 'q_finger', None), m.state_age)
 
     def _pair_clear(self, m):
         fn = self.geom_v3_fn
