@@ -283,7 +283,12 @@ Howard 10/26：要「邊開門、邊通過、用到全身自由度」，不要�
   - 出口距離降 0.176 m。
   - 43.7–47.75° 漂移回升，最大 4.80 mm，距 5 mm 只剩 0.2 mm。
   - 108.04 s 暫停失敗（moved_after_stop）：停止後命令為零，j2 緩移，0.5 s 窗口手臂速度 1.43e-3 > 1e-3 rad/s。暫停期兩指合力約 18 N。
-  - 已送 Codex r30。
+  - Codex r30：成果可報告（口徑見 `規格/COOPEN_core_spec_draft16.md` §1），但不宣稱穩健性、完整通行或停止驗證通過。
+  - **暫停緩移對時**（`資料/door_coopen_core_bench_5_pause_creep.json`、`資料/door_coopen_core_bench_5_pause_osc.json`）：
+    - STOPPED 後設定點固定、命令為零，j2 仍 +0.49 mrad；
+    - 持握有 33–50 Hz 接觸顫動，手指上限切到 20 N 後變大；
+    - j2 去趨勢峰峰 0.505 mrad，約相當於判定窗口 1e-3 rad/s（先前通過暫停的 w1f_60_3 為 0.041 mrad）。
+  - 一次性 gc.freeze 候選已準備，與上述分析合併送 Codex r31，尚未實跑。
 
 ## 素材清單
 
