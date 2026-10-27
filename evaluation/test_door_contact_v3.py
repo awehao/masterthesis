@@ -9,6 +9,7 @@
   C7 門根位姿：同一組點經 T_world_door 平移旋轉後分類不變。
 
     python3 evaluation/test_door_contact_v3.py
+    DC_TOL=0.006 python3 evaluation/test_door_contact_v3.py   # 模擬端現用容差
 """
 import math
 import os
@@ -24,7 +25,7 @@ import door_geom_v3 as G3                              # noqa: E402
 
 D = yaml.safe_load(open(os.path.join(os.path.dirname(HERE), 'src', 'my_omnibot_description', 'config', 'door_local_v3.yaml')))
 H = D['handle']
-TOL = 0.002
+TOL = float(os.environ.get('DC_TOL', '0.002'))   # 另以模擬端現用 --bar-class-tol 0.006 跑：DC_TOL=0.006
 QS = [0.0, 20.0, 47.9, 90.0]
 fails = []
 
@@ -131,7 +132,7 @@ Pw = [Tw[:3, :3] @ np.asarray(p) + Tw[:3, 3] if np.all(np.isfinite(p)) else p fo
 r1 = DC.classify_step(Pw, fs, q, D, TOL, T_world_door=Tw)
 ok([p['class'] for p in r0['points']] == [p['class'] for p in r1['points']], 'C7 門根位姿改變分類')
 
-print(f"{'全部通過' if not fails else f'失敗 {len(fails)}'}；C6 分類計數 {DC.classify_step(pts, fs, q, D, TOL)['counts']}")
+print(f"tol {TOL}：{'全部通過' if not fails else f'失敗 {len(fails)}'}；C6 分類計數 {DC.classify_step(pts, fs, q, D, TOL)['counts']}")
 for f in fails[:30]:
     print('  ', f)
 sys.exit(1 if fails else 0)
