@@ -6,6 +6,9 @@
 #     摩擦資料（get_friction_data）仍由取證單獨讀（不同緩衝）。
 #   * 旁路：step_record 外的任何例外也寫一列帶步號／時刻的失敗紀錄（failure_record）；摘要對帳預期物理步數與實際寫入列數（coverage_ok）。
 #   * room_run.json 加 contact_snapshot 統計（take 次數、每步最多讀取次數、讀取例外、過期取用）。
+#   * 啟用 --contact-v3-out 時：所有材質綁定（含夾持摩擦）完成後讀回兩支橫桿實際生效的 physics 材質；登錄值＝規格 physics.handle_material
+#     （μs 1.0、μd 0.8），要求綁定位置為橫桿本身、讀回值＝登錄值、且 --grip-mu-static／--grip-mu-dynamic＝登錄值；不符 ⇒ 拒跑（return 64）。
+#     （夾持摩擦綁定以子字串 'handle_bar' 選取，v3 下同時綁到內側橫桿；此讀回把該結果從副作用變成登錄並核對的事實。）
 # EV9 r6（isaac_door_k2_sim_ev9r5.py 的版本化複本；Codex r47 §3：雙把手接觸分類**旁路紀錄**，只做插入，預設關閉 ⇒ 與 ev9r5 同行為）：
 #   --contact-v3-out PATH（預設空＝關閉）：啟用時
 #     * 門規格須為 door_local_v3（--door-asset 指向 door_local_v3.yaml），門以 door_asset_v3 建（多內側橫桿＋兩根內側立柱；v2 欄位不變）；不符 ⇒ 拒跑（return 63）；
@@ -644,6 +647,18 @@ def main() -> int:
         return 20
     json.dump(fr_rep, open(os.path.join(a.out, 'friction_audit.json'), 'w'),
               ensure_ascii=False, indent=1, default=str)
+    _bar_mat = None
+    if a.contact_v3_out:                                                            # EV9r7：雙橫桿摩擦登錄＋所有綁定完成後讀回
+        _hm = dspec['physics']['handle_material']
+        _bar_mat = {b: DA3._material_of(stage, f'{DOOR_ROOT}/leaf/{b}') for b in ('handle_bar', 'handle_bar_inner')}
+        _bar_mat_ok = (abs(a.grip_mu_static - _hm['static_friction']) < 1e-9 and abs(a.grip_mu_dynamic - _hm['dynamic_friction']) < 1e-9
+                       and all(m.get('bound_at') == f'{DOOR_ROOT}/leaf/{b}'
+                               and abs(m.get('static_friction', float('nan')) - _hm['static_friction']) < 1e-6
+                               and abs(m.get('dynamic_friction', float('nan')) - _hm['dynamic_friction']) < 1e-6 for b, m in _bar_mat.items()))
+        print(f'[door] 雙橫桿摩擦讀回（登錄 μs {_hm["static_friction"]}、μd {_hm["dynamic_friction"]}）：{_bar_mat}', flush=True)
+        if not _bar_mat_ok:
+            print('[door] **雙橫桿摩擦讀回與登錄不符** ⇒ 拒跑', flush=True)
+            return 64
 
     _k = UsdLux.DistantLight.Define(stage, '/World/key')
     _k.CreateIntensityAttr(3000.0)
@@ -1901,7 +1916,7 @@ def main() -> int:
     if _c3_w is not None:                                  # EV9r6：雙把手分類旁路收尾與摘要
         _c3_ws = _c3_w.close()
         rec['contact_v3'] = {'writer': _c3_ws, 'summary': _c3_sum.as_dict(expected_steps=_c3_expected[0], n_written=_c3_ws.get('n')),
-                             'spec_id': _c3_spec_id, 'tol_m': a.bar_class_tol,
+                             'spec_id': _c3_spec_id, 'tol_m': a.bar_class_tol, 'bar_materials_readback': _bar_mat,
                              'asset': 'door_asset_v3', 'semantics': DCA.FORCE_SEMANTICS, 'note': '旁路紀錄；不接入控制、准入或中止'}
     rec['contact_snapshot'] = dict(_snap.stats, note='EV9r7：每步一次接觸快照，舊分類／取證／旁路共用')
     if a.park_gate_mobile:                                                          # EV3：模式與走廊紀錄
