@@ -79,6 +79,9 @@ def main():
            5: [i for i, s in enumerate(st) if s in ('A', 'I')], 6: [i for i, s in enumerate(st) if s == 'G']}
     assert seg[4][0] == i3_end + 1 and seg[5][0] == seg[4][-1] + 1 and seg[6][0] == seg[5][-1] + 1
     i_pre = max(i for i in seg[5] if st[i] == 'A')
+    _rows_rp = json.load(open(REPLAN))['rows']
+    T_pre_exact = np.asarray(C.K.fk([float(v) for v in [r for r in _rows_rp if r['stage'] == 'A'][-1]['x']], 'link_tcp'), float)
+    T_g_exact = np.asarray(C.K.fk([float(v) for v in [r for r in _rows_rp if r['stage'] == 'I'][-1]['x']], 'link_tcp'), float)
     i_grasp = seg[5][-1]
 
     def pack(idx, with_s=False):
@@ -100,7 +103,8 @@ def main():
            'replan': {'B1_deg': rp['B1'], 'chosen': rp.get('chosen'), 'N1_seed': (rp.get('N1') or {}).get('seed'),
                                                       'M_method': (rp.get('N2') or {}).get('method')}, 'source': os.path.relpath(SRC, HERE), 'source_sha256': hashlib.sha256(raw).hexdigest(),
            'dt': 0.05, 'q_ref_deg': float(R[0][2]), 'bridge': BRIDGE, 'stow': list(TJ.STOW), 'B1': X[seg[5][0], :3].tolist(),
-           'pregrasp_T': TCP[i_pre].reshape(-1).tolist(), 'grasp_T': TCP[i_grasp].reshape(-1).tolist(),
+           'pregrasp_T': T_pre_exact.reshape(-1).tolist(), 'grasp_T': T_g_exact.reshape(-1).tolist(),
+           'endpoint_source': 'replan 串接列精確構型的 FK（20 Hz 取樣在 A／I 交界有 LSPB 混合切角，r1 自驗差 3.14 mm）',
            'mode3_s_end_m': float(s_all[i_rel.index(i3_end)]), 'segments': {str(k): pack(v, with_s=(k == 3)) for k, v in seg.items()}}
     # 門角銜接的路徑影響：mode 5 TCP 目標 Rz(−Δq) 修正後 IK 重解＋v3 分階段淨空
     dq_res = {}

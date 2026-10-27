@@ -10,7 +10,7 @@ age_max 放寬為 10 s 僅供離線），每個 20 Hz 取樣以 state_age＝0.2 
   取樣 20 Hz → 每點以 door_k3m_geom_monitor_v3 後端（目標：release_outer 的 W1 段 out、其後 None；A 未到預抓取 None、到後與 I、G in）算四類距離，
   接近率＝相鄰取樣差分（**跨模式交界不重置**），預測 d − max(接近率, v_floor)·T_plan − ds_err，T_plan＝0.29 s（規劃壓力值；有效結果上界 0.27）；
   不足 d_min＋warn 的取樣，所在段與前後各一段的速度比例 ×0.7，重新時間化；另每點核 door_coopen_pass_close_inner_v1.check（分階段規則、關節餘裕、底盤 20 mm）。
-  任何段速度比例 < 0.02 仍不足 ⇒ 報阻擋（類別、位置），不改其他參數。
+  任何段速度比例 < 0.005（r2；原 0.02）仍不足 ⇒ 報阻擋（類別、位置），不改其他參數。
 報：違規取樣點數與各類違規數分開；各類最小 d 與最小預測值；總時長；各段速度比例分佈；20 Hz 參考（供參考包 v2）。
 
     python3 -u evaluation/door_regrasp_retime_v4.py   # 寫 results/door/door_regrasp_retime_v4.json（不覆寫）
@@ -41,6 +41,7 @@ VF, DS = G['v_floor_registered'], G['downsampling']['ds_err_registered']
 DMIN = {'nonfinger': 0.005, 'finger': 0.005, 'base': 0.020, 'self': 0.005}
 WARN, T_PLAN, DT_CTRL = 0.001, 0.29, 0.05
 CL = ('nonfinger', 'finger', 'base', 'self')
+RATIO_FLOOR = 0.005                  # r2：速度比例下限 0.02 → 0.005（r1 在插入末／閉爪交界剩 1 點：殘餘接近率 0.0033 m/s＋實測 T_pred 0.295 s；近橫桿處再放慢屬合理，r1 結果改名 *_r1_floor002.json）
 F0 = (0.001686, 0.001704)
 
 
@@ -149,7 +150,7 @@ def main():
             break
         for kk in bad_segs:
             ratio[kk] *= 0.7
-        if ratio.min() < 0.02:
+        if ratio.min() < RATIO_FLOOR:
             break
     ok = viol_pts == 0 and not pi_fail
     out = {'schema': 'door_regrasp_retime/5', 'switch_events': gsw.events[:50], 'source': os.path.relpath(SRC, HERE), 'ok': ok, 'T_plan_s': T_PLAN, 'warn_m': WARN,
