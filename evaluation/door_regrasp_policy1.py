@@ -235,6 +235,10 @@ class RegraspPolicy(PW2.K3MW2Policy):
                 return self._rg_abort(f"rg_geometry:{det.get('why')}", m, act, detail=det)
         return None
 
+    def _extra_ready(self, k, m):
+        """子類可加的請求下一模式前置（預設無）。回傳 (ok, why)。"""
+        return True, None
+
     def _allowed(self):
         """手指允許接觸的類別：依**目前已提交、正在執行**的模式（請求中未提交仍沿用目前模式）。"""
         kc = self.rg.get('k_committed', 1)
@@ -326,7 +330,8 @@ class RegraspPolicy(PW2.K3MW2Policy):
         gs = gates.get(gk) if isinstance(gates.get(gk), dict) else {}
         act['rg'] = {'k': k, 'state': 'running', 'tau': tau, 'gate': gs.get('state')}
         if done_ref:
-            if gs.get('state') == 'CONFIRMED' and gs.get('fresh') is True:
+            xr, xwhy = self._extra_ready(k, m)
+            if gs.get('state') == 'CONFIRMED' and gs.get('fresh') is True and xr:
                 if k == 6:
                     self._go('DONE', m.t, rg='inner_grasp_hold_confirmed', hold=gs)
                     self.done = True

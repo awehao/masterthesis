@@ -115,6 +115,7 @@ def backend_v3(clouds=None, self_clouds=None, self_mode='sphere', D3=None):
         out['base'] = best
         out['self'] = self_dist(qf, q_finger)
         out['target_bar'] = (float('nan'), tgt)
+        fn.last = out                                     # 供呼叫端讀 finger_bar_out／finger_bar_in（不參與判定）
         return out
 
     def set_target(t):
@@ -122,6 +123,7 @@ def backend_v3(clouds=None, self_clouds=None, self_mode='sphere', D3=None):
             raise ValueError(f'目標橫桿須為 {TARGETS}')
         state['target'] = t
 
+    fn.last = None
     fn.set_target = set_target
     fn.get_target = lambda: state['target']
     fn.pairs = pairs
