@@ -57,6 +57,7 @@ def sequence(d0_4=None, dq_deg=0.0):
     for _ in range(int(HOLD_S / DT)):
         seq.append((3, seq[-1][1].copy(), seq[-1][2]))
     x_start4 = seq[-1][1].copy()                                        # r3：mode 4 起點＝mode 3 實際終點（不另加跳變）
+    s4 = PKG['segments']['4']
     ok, why, det = rr.start(4, x_start4[:3], x_start4[3:], PKG['q_ref_deg'] + dq_deg, None)
     if not ok:
         return None, why
