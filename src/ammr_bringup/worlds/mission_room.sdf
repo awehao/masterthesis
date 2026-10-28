@@ -1,0 +1,117 @@
+<?xml version="1.0"?>
+<!-- 第七次整體任務測試地圖 mission_room（2026-10-28）：門局部座標（door_local_v3：鉸鏈在原點、牆沿 x、門洞 x∈[0,1]）。
+     A 房（外側、y<0、門向此側開）：起點 S (-2.2,-4.3, 90°)；B 房（內側）：抽屜櫃 drawer_unit_bar26 於 (2.4, 5.05)（面向 −y，由執行端依 drawer_asset 建）。
+     門與門資產牆（x∈[-1.5,2.5]）由 door_asset_v3 建，此檔只補隔牆延伸、外牆與家具。家具靠牆、不形成漏斗、不擋 S→門→櫃 路徑。 -->
+<sdf version="1.9">
+  <world name="mission_room">
+    <model name="ground_plane"><static>true</static><link name="link"><collision name="collision"><geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry></collision></link></model>
+    <!-- 北牆（B 房） -->
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0.5 5.55 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>9.4 0.2 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>9.4 0.2 1.0</size></box></geometry><material><ambient>0.9 0.9 0.9 1</ambient><diffuse>0.9 0.9 0.9 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- 南牆（A 房） -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0.5 -5.55 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>9.4 0.2 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>9.4 0.2 1.0</size></box></geometry><material><ambient>0.9 0.9 0.9 1</ambient><diffuse>0.9 0.9 0.9 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- 東牆 -->
+    <model name="wall_east">
+      <static>true</static>
+      <pose>5.1 0.0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.2 11.3 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.2 11.3 1.0</size></box></geometry><material><ambient>0.9 0.9 0.9 1</ambient><diffuse>0.9 0.9 0.9 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- 西牆 -->
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-4.1 0.0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.2 11.3 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.2 11.3 1.0</size></box></geometry><material><ambient>0.9 0.9 0.9 1</ambient><diffuse>0.9 0.9 0.9 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- 隔牆西段（接門資產牆 x=-1.5） -->
+    <model name="partition_w">
+      <static>true</static>
+      <pose>-2.75 0.06 1.2 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>2.5 0.12 2.4</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>2.5 0.12 2.4</size></box></geometry><material><ambient>0.85 0.82 0.78 1</ambient><diffuse>0.85 0.82 0.78 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- 隔牆東段（接門資產牆 x=2.5） -->
+    <model name="partition_e">
+      <static>true</static>
+      <pose>3.75 0.06 1.2 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>2.5 0.12 2.4</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>2.5 0.12 2.4</size></box></geometry><material><ambient>0.85 0.82 0.78 1</ambient><diffuse>0.85 0.82 0.78 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- A 房桌（東南，不在路徑上） -->
+    <model name="table_a">
+      <static>true</static>
+      <pose>3.4 -3.6 0.375 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>1.2 0.8 0.75</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>1.2 0.8 0.75</size></box></geometry><material><ambient>0.55 0.4 0.3 1</ambient><diffuse>0.55 0.4 0.3 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- A 房靠西牆矮櫃 -->
+    <model name="shelf_a">
+      <static>true</static>
+      <pose>-3.6 -1.6 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.6 1.4 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 1.4 1.0</size></box></geometry><material><ambient>0.5 0.5 0.6 1</ambient><diffuse>0.5 0.5 0.6 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- A 房東側箱 -->
+    <model name="box_a">
+      <static>true</static>
+      <pose>4.3 -1.0 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.6 0.6 0.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 0.6 0.5</size></box></geometry><material><ambient>0.6 0.55 0.4 1</ambient><diffuse>0.6 0.55 0.4 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- B 房沙發（西） -->
+    <model name="sofa_b">
+      <static>true</static>
+      <pose>-3.2 3.2 0.225 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.9 2.0 0.45</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.9 2.0 0.45</size></box></geometry><material><ambient>0.35 0.45 0.55 1</ambient><diffuse>0.35 0.45 0.55 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- B 房桌 -->
+    <model name="table_b">
+      <static>true</static>
+      <pose>-1.4 2.4 0.375 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>1.2 0.8 0.75</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>1.2 0.8 0.75</size></box></geometry><material><ambient>0.55 0.4 0.3 1</ambient><diffuse>0.55 0.4 0.3 1</diffuse></material></visual>
+      </link>
+    </model>
+    <!-- B 房東側箱 -->
+    <model name="box_b">
+      <static>true</static>
+      <pose>4.4 2.0 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.6 0.6 0.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 0.6 0.5</size></box></geometry><material><ambient>0.6 0.55 0.4 1</ambient><diffuse>0.6 0.55 0.4 1</diffuse></material></visual>
+      </link>
+    </model>
+  </world>
+</sdf>
