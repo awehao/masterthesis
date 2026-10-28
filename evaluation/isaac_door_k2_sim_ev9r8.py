@@ -9,7 +9,8 @@
 #   (3) 換抓中止原因（接觸違規、資料失效 > 0.2 s、gate／短保持 FAILED）⇒ 既有 K2 閂鎖（鏈內命令過期、取消交棒、/door/k3m_abort）。
 #   (4) 台架首筆：W2 唯一入口＝v3，凍結期以收件匣 mode_seq 0 的序號判斷；釋放時只把宣告那一筆經 W2Exec.on_env3→pre_step 進鏈（bench_release_w2），
 #       較新者留在收件匣；第 1 物理步不消化收件匣（首筆固定，同 v2 路徑）。
-#   (5) mode 3 提交步起 K3-M 走廊／包絡監看結束（判定保存至該步，k3m.regrasp_end）；之後由換抓保護接手（不關閉其他保護）。
+#   (5) mode 3 提交步 k 起 K3-M 走廊／包絡監看不再判（最後判定於 k−1；k3m.regrasp_end＝core.handover 的 last_old_step／first_new_step），
+#       換抓保護自 k 起接手（提交當下須有有效 v3 證據，否則中止）；不關閉其他保護。
 #   **修改既有敘述 3 處**（其餘只插入）：收件匣 while 條件（首筆固定）、走廊監看 if 條件（交接後不再判）、台架 release_intake 呼叫改為 RG8／原路徑二選一。
 # ---- 以下為 ev9r7 線說明 ----
 # EV9 r7（isaac_door_k2_sim_ev9r6.py 的版本化複本；Codex r48 §1–§2：資料流修正，控制規則不變）：

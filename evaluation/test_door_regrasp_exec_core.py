@@ -8,7 +8,9 @@
   X5 HoldConfirm：TCP＝H_in·T_HG、兩指 bar_in 0.6 N ⇒ 2 s 後 hold_confirmed；之後一指降到 0.3 N ⇒ 中止 rg_hold:hold_lost_after_confirm；E0 只設一次；
   X6 bench_release_w2：宣告序號的 mode_seq 0 封裝經 W2Exec 進鏈 ⇒ ok、chain n_recv 1；序號不符／mode_seq≠0／同輪中止 ⇒ 拒絕且不進鏈；
   X7 參考包 v2（無 inner_grasp）⇒ 建構 ValueError；
-  X8 Gate4 啟動後退開量一直 0 ⇒ 15 s 後中止 rg_gate4:retreat_timeout。
+  X8 Gate3 確認後提交 mode 3、Gate4 啟動後退開量一直 0 ⇒ 15 s 後中止 rg_gate4:retreat_timeout；
+  X9（r2，Codex r65 §3）交接：Gate3 無有效證據即提交 mode 3 ⇒ 當步中止 rg_handover_no_valid_evidence；有證據 ⇒ handover.last_old_step＝k−1、
+     first_new_step＝k、evidence_step ∈ {k−1, k}。
 
     python3 evaluation/test_door_regrasp_exec_core.py
 """
@@ -136,14 +138,33 @@ class TX(unittest.TestCase):
         with self.assertRaises(ValueError):
             XC.RegraspExecCore(auth, V2, H, dt=DT)
 
-    def test_x8_gate_timeout(self):
+    def _to_mode3(self):
         auth, c = mk()
         w = Run(c)
         c.on_commit(1, 0.01, 1, w.T)
-        c.on_commit(1, 0.01, 3, w.T)
         w.k = 1
+        c.on_commit(2, 0.02, 2, w.T)
+        w.fq = (c.g[3].r['finger_open_m'],) * 2
+        w.go(150, 2)
+        c.on_commit(w.k, round(w.k * DT, 6), 3, w.T)
+        return auth, c, w
+
+    def test_x8_gate_timeout(self):
+        auth, c, w = self._to_mode3()
+        self.assertIsNone(c.abort)
         why = w.go(1600, 3)
         self.assertEqual(why, 'rg_gate4:retreat_timeout')
+
+    def test_x9_handover(self):
+        auth, c, w = self._to_mode3()
+        h = c.handover
+        self.assertEqual((h['last_old_step'], h['first_new_step']), (w.k - 1, w.k))
+        self.assertIn(h['evidence_step'], (w.k - 1, w.k))
+        auth2, c2 = mk()
+        c2.on_commit(1, 0.01, 1, np.eye(4))
+        c2.on_commit(5, 0.05, 3, np.eye(4))
+        self.assertEqual(c2.abort, 'rg_handover_no_valid_evidence')
+        self.assertEqual(c2.step(6, 0.06, 3, rec(6), np.eye(4), np.zeros(3), np.zeros(6), (0.0, 0.0), Q), 'rg_handover_no_valid_evidence')
 
 
 if __name__ == '__main__':

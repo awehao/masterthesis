@@ -11,7 +11,9 @@
   2. 接觸保護：換抓啟用後（mode ≥ 1 提交起）每步 ContactWindow.step(mode＝本步權威選定模式, exited＝Gate4 閂鎖)；第一筆違規 ⇒ 中止原因。
   3. 失效處置：mode ≥ 1 期間 rec 不綁定當步（缺、query_failed、不完整、invalid）連續 > invalid_max_s 0.2 s ⇒ 中止 rg_contact_data_invalid
      （不當作無接觸）；進行中 gate／HoldConfirm 轉 FAILED ⇒ 中止 rg_<gate>:<why>。中止原因由呼叫端走既有 K2 閂鎖（不另設停止路徑）。
-  4. 保護交接：mode 3 提交步起 K3-M 走廊／包絡監看由呼叫端結束（判定保存至該步；protection_handover 回報），之後由本類保護＋權威形狀＋任務端 v3 監看接手。
+  4. 保護交接：mode 3 提交步 k 起 K3-M 走廊／包絡監看由呼叫端結束——最後一次舊判定＝k−1（handover.last_old_step），本類保護自 k 起
+     （first_new_step；ContactWindow 自 mode 1 提交起已逐步在跑、Gate4 自 k 起）。r2（Codex r65 §3）：提交當下要求新保護有有效證據——
+     Gate3 最後有效紀錄步 ∈ {k−1, k}（同 confirmed_fresh 的同一份紀錄）且接觸資料無進行中的失效；不符 ⇒ 中止 rg_handover_no_valid_evidence。
   5. 對任務端：gates_state(step)（權威狀態 extra_state 的 'gates'）與 ContactWindow.take_summary()（每週期摘要）。
 另：bench_release_w2——台架首筆在 W2 唯一入口（v3 封裝）下經 W2Exec.on_env3→pre_step 進鏈（同 BENCH.release_intake 的檢核）。
 """
@@ -23,7 +25,7 @@ import door_regrasp_contact_window as RCW
 import door_regrasp_gates3 as GT
 import door_regrasp_ref_registry as REGY
 
-VERSION = 'door_regrasp_exec_core/r1'
+VERSION = 'door_regrasp_exec_core/r2'
 GATE_KEY = {3: 'gate3', 4: 'gate4', 5: 'gate5', 6: 'gate6'}
 
 
@@ -71,9 +73,13 @@ class RegraspExecCore:
         elif mode in (3, 4, 5, 6):
             self._end(mode, step, t)
             if mode == 3:
+                ev = self.g[3].last_valid_step
+                self.handover = {'step': step, 't': t, 'last_old_step': step - 1, 'first_new_step': step, 'evidence_step': ev,
+                                 'what': 'K3-M 走廊／包絡監看最後判定於 k−1；換抓保護（ContactWindow、Gate4、權威全身形）自 k 起'}
+                if ev not in (step - 1, step) or self.inv_t0 is not None:
+                    self._abort('rg_handover_no_valid_evidence', step, t)
                 self.g[4].start(step, t, T_tcp0=np.asarray(T_tcp, float))
                 self.active.add(4)
-                self.handover = {'step': step, 't': t, 'what': 'K3-M 走廊／包絡監看結束（判定保存至本步）；換抓保護接手'}
             elif mode == 4:
                 self.g[5].start(step, t, base_goal=self.B1, arm_stow=self.STOW)
                 self.active.add(5)
