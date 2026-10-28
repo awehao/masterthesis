@@ -70,7 +70,7 @@ class TE(unittest.TestCase):
         self.assertEqual(i, sorted(i))
         j = SRC.index("node.w2_state_pub.publish(String(data=json.dumps(w2_auth.state_msg(step_id, t), default=float)))\n                if rg8_core is not None:")
         self.assertGreater(SRC.index('node.rg8_c3_pub.publish(', j), j)
-        k1 = SRC.index("_ok, _why, _irec, rg8_rt['rel_sel'] = RGX.bench_release_w2(w2x, chain, _e8, _as8, 0, t_b0, _ab)")
+        k1 = SRC.index("_ok, _why, _irec, rg8_rt['rel_sel'] = RGX.bench_release_w2(w2x, chain, _e8, _as8, 1, t_b0, _ab)")
         k2 = SRC.index('_ok, _why, _irec = BENCH.release_intake(env_in, chain, node.wb_env_latest')
         self.assertLess(k1, k2)
 

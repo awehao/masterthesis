@@ -297,7 +297,7 @@ def main() -> int:
                 keep = [(x, w) for x, w in nd.w2_inbox if not (x.get('source_seq') is not None and aseq is not None and x['source_seq'] <= aseq)]
                 nd.w2_inbox.clear()
                 nd.w2_inbox.extend(keep)
-                ok, why, irec, rel_sel = RGX.bench_release_w2(w2x, chain, e8, aseq, 0, 0.0, nd.k2_abort_msg is not None or nd.stop_req is not None)
+                ok, why, irec, rel_sel = RGX.bench_release_w2(w2x, chain, e8, aseq, 1, 0.0, nd.k2_abort_msg is not None or nd.stop_req is not None)   # 同 ev9r8：步號＝台架首步 1
                 rec['bench']['first_intake'] = {'ok': ok, 'why': why, **(irec or {}), 'n_inbox_kept': len(keep)}
                 if not ok:
                     bench_rel.state, bench_rel.released = 'aborted', {'why': f'release_intake：{why}'}
@@ -318,7 +318,7 @@ def main() -> int:
         rec['faults'].append({'kind': 'newer_before_step1', 'n_inbox_before_step1': len(nd.w2_inbox),
                               'seqs': [e.get('source_seq') for e, _ in nd.w2_inbox][:10]})
     # ---- 主迴圈 ----
-    step, t = 0, 0.0                                                          # 同 ev9r8：釋放後第一圈仍是步 0、t＝t0
+    step, t = 1, 0.0                                                          # 同 ev9r8：台架模式主迴圈首步 step_id＝1、t＝t0（不推進）
     first_pending = True
     prev_pose = None
     cw = {'n': 0, 'invalid': 0, 'fb': [0.0, 0.0], 'fb_min': [math.inf, math.inf]}
@@ -451,7 +451,7 @@ def main() -> int:
             gap_done = True
             rec['faults'].append({'kind': 'stop_gap', 'skipped_step': step, 't': t})
             step += 1
-            t = round(step * dt, 6)
+            t = round((step - 1) * dt, 6)
         # ---- 合成 v3 紀錄（同一物理步）----
         pts = [{'robot_link': FINGERS[i], 'class': 'bar_out', 'f': f_out[i]} for i in range(2) if f_out[i] > 0] + \
               [{'robot_link': FINGERS[i], 'class': 'bar_in', 'f': f_in[i]} for i in range(2) if f_in[i] > 0]
@@ -530,7 +530,7 @@ def main() -> int:
                              [round(float(v), 6) for v in W['qf']], [round(x, 4) for x in fb], float(held), lc, {}, 0.0,
                              'hold' if park_hold.end is None else 'post', [step, round(t, 6), int(src4), int(mc4)], auth.mode_seq])
         step += 1
-        t = round(step * dt, 6)
+        t = round((step - 1) * dt, 6)
         if step % 2 == 0:
             publish_state(t, step)
             nd.contacts_pub.publish(String(data=json.dumps({'sim_t': t, 'step': step, 'n_steps': cw['n'], 'n_invalid': cw['invalid'],

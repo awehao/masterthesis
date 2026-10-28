@@ -1432,7 +1432,7 @@ def main() -> int:
                                                                                  and _x8.get('source_seq') <= _as8)]
                         node.w2_inbox.clear()
                         node.w2_inbox.extend(_keep8)
-                        _ok, _why, _irec, rg8_rt['rel_sel'] = RGX.bench_release_w2(w2x, chain, _e8, _as8, 0, t_b0, _ab)
+                        _ok, _why, _irec, rg8_rt['rel_sel'] = RGX.bench_release_w2(w2x, chain, _e8, _as8, 1, t_b0, _ab)   # 步號＝主迴圈台架首步（下方 step_id＝1）
                     else:
                         _ok, _why, _irec = BENCH.release_intake(env_in, chain, node.wb_env_latest, (bench_rel.announced or {}).get('source_seq'),
                                                                 t_b0, k2_latch.filter_wb, _ab)
