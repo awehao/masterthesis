@@ -28,6 +28,7 @@ ap.add_argument('--robot-at', default='S')
 ap.add_argument('--shots', default=os.path.join(HERE, 'results', 'mission'))
 ap.add_argument('--headless', default='false')
 ap.add_argument('--markers', default='false')
+ap.add_argument('--obstacles', default=os.path.join(HERE, 'results', 'mission', 'mission_obstacles_seed1.json'))   # 空字串＝不放
 a = ap.parse_args()
 
 from isaacsim import SimulationApp                               # noqa: E402
@@ -35,13 +36,14 @@ sim_app = SimulationApp({'headless': a.headless.lower() == 'true', 'width': 1600
 
 import numpy as np                                               # noqa: E402
 from isaacsim.core.api import World                              # noqa: E402
-from isaacsim.core.api.objects import FixedCuboid, GroundPlane, VisualCuboid   # noqa: E402
+from isaacsim.core.api.objects import FixedCuboid, FixedCylinder, GroundPlane, VisualCuboid   # noqa: E402
 from isaacsim.core.prims import SingleArticulation               # noqa: E402
 from pxr import Gf, UsdGeom, UsdLux                              # noqa: E402
 
 import door_asset_v3 as DA3                                      # noqa: E402
 import drawer_asset as DRA                                       # noqa: E402
 from isaac_common import import_urdf                             # noqa: E402
+import mission_walkers as MW                                     # noqa: E402
 
 ROBOT = '/World/omni_bot'
 STOW = [0.0, 0.0, 0.035, 0.0, -1.5707963, 0.0]
@@ -77,6 +79,19 @@ def main():
     DA3.build_usd(stage, DA3.load(a.door_asset), root='/World/door')
     dpose = tuple(float(v) for v in a.drawer_pose.split(','))
     DRA.build_usd(stage, DRA.load(a.drawer_asset), dpose, root='/World/drawer_unit')
+    walkers = []
+    if a.obstacles:
+        ob = json.load(open(a.obstacles))
+        for o in ob['static_unknown']:                     # 未知靜態：外觀同一般雜物（不特別標色）
+            y2 = math.radians(o['yaw_deg']) / 2
+            col = [0.62, 0.48, 0.32] if o['kind'] == 'box' else [0.3, 0.3, 0.32]
+            FixedCuboid(prim_path=f"/World/unknown/{o['name']}", name=o['name'], position=np.array([o['x'], o['y'], o['size'][2] / 2]),
+                        scale=np.array(o['size']), orientation=np.array([math.cos(y2), 0.0, 0.0, math.sin(y2)]), color=np.array(col))
+        for w in ob['walkers']:
+            x, y = MW.position(w, 0.0)
+            walkers.append((w, FixedCylinder(prim_path=f"/World/walkers/{w['name']}", name=w['name'], position=np.array([x, y, w['height'] / 2]),
+                                             radius=w['radius'], height=w['height'], color=np.array([0.85, 0.35, 0.25]))))
+        print(f"[preview] 未知靜態 {len(ob['static_unknown'])}、行人 {len(walkers)}（{os.path.basename(a.obstacles)}）", flush=True)
     P = json.load(open(a.poses))['poses']
     for k, v in (P.items() if a.markers.lower() == 'true' else ()):
         marker(k, v['x'], v['y'], math.radians(v['yaw_deg']), v['rgb'])
@@ -112,7 +127,12 @@ def main():
         print(f'[preview] 截圖 {name}', flush=True)
     set_camera_view(eye=np.array(views[0][1], float), target=np.array(views[0][2], float))
     print('[preview] 場景就緒；關閉視窗結束', flush=True)
-    while sim_app.is_running():
+    t = 0.0
+    while sim_app.is_running():                            # 行人依 mission_walkers 於渲染時間移動（預覽，不步進物理）
+        t += 1.0 / 60.0
+        for w, h in walkers:
+            x, y = MW.position(w, t)
+            h.set_world_pose(position=np.array([x, y, w['height'] / 2]))
         world.render()
     sim_app.close()
 
