@@ -9,7 +9,7 @@
 # 以下為 extf 版說明。extf 版（2026-10-29；Codex 核可單一候選、新 RUN_ID 單跑一次連續展示）：diag 跑法＋執行端 ev9r8e --ext-forces-every-iter（場景 enableExternalForcesEveryIteration＝True）；其餘同 diag。
 # 以下為 diag 版說明。診斷版（2026-10-28；Codex 核可一次）：＝pb1_4 的跑法（commit 285ccb94e：登錄 r3、正面深度 6.8 mm、ref pb1、node10、ADM20、暫停上限 5 N、偏移凍結、速度迭代預設 1）
 # 只把執行端換成 ev9r8d --diag-6d（取證另記門扇／兩指／掌心 6 維狀態；不改控制）。保護觸發即停，不為補資料延後中止。
-# 用法：RUN_ID=door_pullback_extf_iter2_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_pullback_diag.sh bash evaluation/run_guarded.sh
+# 用法：RUN_ID=door_pullback_extf_iter2_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_pullback_extf_iter2.sh bash evaluation/run_guarded.sh
 # 往後拉開 48° ＋換抓＋通過中拉關＋放手退出 Isaac 功能展示 pb1（Howard 10/28「不要邊繞，往後拉開」；Codex 20261028_195306 條件式核可一次新 RUN_ID）。
 # run_door_regrasp_bench1.sh 的版本化複本（bench1 不改），只換三個登錄：
 #   PRM＝results/door/pullback_params_48_r1.json（W1 正面開門配置：走廊表 door_wide_corridor_table_90、包絡 θ 48 重算、停位 W1、抓取初態／初始偏移取 w1f_60_3 夾持靜止窗、暫停期手指上限 20 N）；
