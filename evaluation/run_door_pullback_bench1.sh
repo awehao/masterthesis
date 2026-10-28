@@ -13,7 +13,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-PRM=evaluation/results/door/pullback_params_48_r2.json   # pb1 r2：偏移估計 OPEN 不更新（W1 語義；pb1_2 教訓）
+PRM=evaluation/results/door/pullback_params_48_r3.json   # pb1 r3：r2＋暫停期手指上限 5 N（pb1_3 張爪中止後，Codex 選 (a)）
 GB=evaluation/runs/phf_01_M/task.json
 PIDS=(); NAMES=()
 source "$WS/evaluation/k2_proc.sh"
@@ -53,7 +53,7 @@ W1E_FEFF=$(python3 -c "import json;print(json.load(open('$PRM'))['executor_chang
 W1E_FEFF0=$(python3 -c "import json;print(json.load(open('$PRM'))['executor_change']['original_effort'])")
 say "W1e 執行端變更：暫停期手指驅動輸出上限 ${W1E_FEFF0} → ${W1E_FEFF} N（ev5 r2；啟動讀回不符拒跑、切換／定期讀回異常走中止閂鎖）"
 say "W1b 登錄：$PRM（sha256 $(sha256sum "$PRM" | cut -c1-16)）θ=${W1B_THETA}° 走廊表 $W1B_TABLE 包絡 $W1B_ENV 觀察器上限 ${W1B_OBS}° 協同 $W1B_COORD"
-say "=== 往後拉開＋換抓＋拉關 pb1（ev9r8＋v10＋ADM20＋k3m3；ref pb1；W1 正面開門配置＋偏移更新＋一次性 gc.freeze（失敗拒跑）＋暫停上限 ${W1E_FEFF} N；台架初態 Q_INIT $Q_INIT、寫入設定點 $S_INIT，實際閉爪取證＋正對門往後拉開）RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID；停位 $STAND（實驗初始化）；起始＝指定抓取初態（不經 K2_READY／Q_PRE 與接近段）；夾持→開到 ${W1B_THETA}°→受控暫停→HELD→換抓 1–6→通過中拉關 7→放手退出 8 ==="
+say "=== 往後拉開＋換抓＋拉關 pb1（ev9r8＋v10＋ADM20＋k3m3；ref pb1；W1 正面開門配置＋開門段偏移凍結＋一次性 gc.freeze（失敗拒跑）＋暫停上限 ${W1E_FEFF} N；台架初態 Q_INIT $Q_INIT、寫入設定點 $S_INIT，實際閉爪取證＋正對門往後拉開）RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID；停位 $STAND（實驗初始化）；起始＝指定抓取初態（不經 K2_READY／Q_PRE 與接近段）；夾持→開到 ${W1B_THETA}°→受控暫停→HELD→換抓 1–6→通過中拉關 7→放手退出 8 ==="
 
 spawn sim "$ISAAC_PY" -u evaluation/isaac_door_k2_sim_ev9r8.py --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --contact-v3-out "$DIR/contact_v3.jsonl" --door-asset "$DOOR3" --gc-freeze-before-release --bench-start --bench-params "$PRM" --bench-setpoint="$S_INIT" --pause-finger-max-effort "$W1E_FEFF" --pause-finger-original-effort "$W1E_FEFF0" --cmd-env --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID" --corridor-table "$W1B_TABLE" --envelope="$W1B_ENV" --sim-limit 400 --contact-min-n 0.5 \
   --finger-collision split --park-hold --start-pose "$STAND" --park-pose "$STAND" --stow-q="$Q_INIT" --out "$DIR"

@@ -1,0 +1,251 @@
+{
+ "schema": "coopen_core_params/8",
+ "variant": "pullback_w1",
+ "theta_goal_deg": 48.0,
+ "task_param_extension": {
+  "theta_goal_deg": 48.0,
+  "over_goal_deg": 1.0,
+  "policy_upper_deg": 49.0,
+  "ramp_s": 49.7,
+  "ramp_8deg_s": 9.700000000000001,
+  "open_margin_s_from_8deg": 20.3,
+  "open_timeout_s": 70.0,
+  "rule": "OPEN 逾時＝完整斜坡（含末段減速）＋ 8° 版絕對餘裕 20.3 s"
+ },
+ "grasp": {
+  "basis": "evaluation/runs/phf_01_M/task.json",
+  "basis_sha256": "236cd55f6a95efb85340e4a9504f4fcb06947a4f055d4e1e3a6a119e86631179",
+  "kind": "front（正面抓法；無 T_HG_full）"
+ },
+ "protection_scope_change": {
+  "corridor_table": "evaluation/results/door/door_wide_corridor_table_90.json",
+  "corridor_table_sha256": "c237ecd8adcfa1a2a526adfa59e678064710579bb8912d2ab2aa478471c1c3c8",
+  "corridor_inner_mm": 20.0,
+  "corridor_inner_deg": 0.8,
+  "envelope": {
+   "fwd_lo": -0.41531542387124176,
+   "fwd_hi": 0.03849223930511797,
+   "lat_lo": -0.03913624466754678,
+   "lat_hi": 0.545392477999894,
+   "yaw_abs_deg": 18.91702566738617,
+   "cli": "-0.4153,0.0385,-0.0391,0.5454,18.9170",
+   "rule": "完整外帶 ±40 mm／±4.5° 在參考位姿座標以 SE(2) 合成的角點，於 [0, θ+1°] 轉回走廊表錨點座標後的範圍"
+  },
+  "envelope_margin_check": {
+   "inner_plus_stop_residual": [
+    0.032600000000000004,
+    3.7
+   ],
+   "composition": "SE2：ref(q) ⊕ 偏移（參考位姿座標）",
+   "min_margin_m_or_deg": {
+    "fwd_lo": 0.00900940316122989,
+    "fwd_hi": 0.007402150118709538,
+    "lat_lo": 0.007402150118709573,
+    "lat_hi": 0.00900940316122989,
+    "yaw": 0.8000000000000043
+   },
+   "ok": true
+  },
+  "old_envelope_8deg": [
+   -0.15,
+   0.02,
+   -0.05,
+   0.1,
+   6.0
+  ],
+  "observer_door_max_deg": 52.0,
+  "observer_rule": "固定角度餘裕 θ＋4°（與任務上界 θ＋1° 分開登錄）",
+  "stop_residual_source": "door_k3m_offline_stop（8° 情境 12.6 mm／2.9°；30° 斜坡速率相同，沿用並揭露為假設）"
+ },
+ "control_cost_change": {
+  "guidance": {
+   "k_lin": 1.0,
+   "k_yaw": 1.0,
+   "v_cap": 0.02,
+   "w_cap": 0.05,
+   "w_vref": 1.0,
+   "w_qn": 0.0
+  },
+  "coord_topic": "/door/wide_coord",
+  "phases_on": [
+   "OPEN",
+   "SETTLE"
+  ],
+  "phases_off_weight": 0.0,
+  "note": "只經求解器既有協同輸入（parse_coord v1）作為軟成本，不新增獨立底盤命令來源；PAUSE 起 w_vref＝0"
+ },
+ "start": {
+  "stand": [
+   0.6,
+   -0.5332,
+   1.5707963267948966
+  ],
+  "stand_cli": "0.600000,-0.533200,1.570796",
+  "k2_ready_cli": "0,0,0.035,0,-1.5708,0",
+  "q_pre_cli": null,
+  "experimental_initialization": "底盤以 --start-pose 直接放在停位（不經導航接近），須揭露",
+  "experimental_initialization_iso": "手臂以 --stow-q 直接生成於 qa_grasp（手指張開）；不經 K2_READY／APPROACH",
+  "w1_run_args": {
+   "grasp_basis": "/home/howardchen/masterthesis/evaluation/runs/phf_01_M/task.json",
+   "corridor_table": "evaluation/results/door/door_wide_corridor_table_90.json",
+   "w1b_params": "evaluation/results/door/w1f_params_60_r2.json"
+  }
+ },
+ "unchanged": [
+  "求解器與權重",
+  "E2",
+  "手指暫停期上限 20 N",
+  "幾何監看門檻",
+  "暫停／停止定義",
+  "判準"
+ ],
+ "pause": "p4b（主動保持停止、手臂 0.5 s 窗口）＋判定器 p4b2（起跑前凍結）",
+ "solver_change": {
+  "offset_hold_on_free": true,
+  "node": "dl3_wgmpc_wg2_adm20_node.py",
+  "rule": "底盤模式首次切入 free 的那一輪（本輪觀測器更新之前）凍結 d̂＝當時已可取得值；觀測器內部、延遲預測、QP 偏差一致保持，持續到 PAUSE／DONE 或中止",
+  "source": "Codex 20261025_002129：單一變因候選，非已確認解法",
+  "offset_update_in_open": false,
+  "rule_r2": "W1 語義：底盤模式首次切入 free 的那一輪凍結 d̂，持續到 PAUSE／DONE 或中止；OPEN 期間不更新（不加 --offset-update-in-open）",
+  "basis_r2": "door_pullback_pb1_2：OPEN 期間 d̂ 學習（j2 0.0171→0.0270、j3 −0.0088→−0.0146）⇒ finger_contact_lost"
+ },
+ "executor_change": {
+  "pause_finger_max_effort": 5.0,
+  "original_effort": 5.0,
+  "joints": [
+   "finger_joint1",
+   "finger_joint2"
+  ],
+  "node": "isaac_door_k2_sim_ev5.py",
+  "switch": "執行端暫停切換那一步（world.step 之前；與 /door/pause_ack_exec 同一步），只設一次；之後每 1 s 讀回核對",
+  "rule": "只改兩指有效驅動輸出上限（ArticulationController.set_max_efforts）；閉合目標、kp 1e4／kd 1e3、摩擦、手臂／底盤控制與所有判準不變；不是直接設定接觸法向力",
+  "value_basis": "原上限＝URDF finger_joint1／2 effort 5（Codex 20261025_023608 查得）；W1c 暫停期手指開度約 1.67 mm ⇒ 位置驅動需求 kp·Δq ≈ 16.7 N > 5；取 20 N 使該需求不被上限截斷。夾爪實機額定未查，揭露",
+  "source": "Codex 20261025_023608：單一變因候選，非已確認解法；基準 W1c r2，不疊加 W1d 重設",
+  "rule_r3": "暫停期手指驅動輸出上限 20 → 5 N（＝原上限；暫停切換時不再提高）；5 N 為致動器輸出上限，非保證接觸力",
+  "basis_r3": "door_pullback_pb1_3：張爪後門角增加、橫桿朝掌心接近，預測淨空不足中止（衝量來源未證）"
+ },
+ "approach_gate": {
+  "perp_pause_m": 0.003,
+  "perp_resume_m": 0.002,
+  "resume_hold_s": 0.5,
+  "along_resume_m": 0.005,
+  "rot_resume_rad": 0.02,
+  "align_confirm_s": 0.5
+ },
+ "approach_gate_basis": {
+  "perp_pause_m／perp_resume_m／resume_hold_s": "Codex 20261027_003024 登錄單一候選",
+  "along_resume_m": "K2Config.pre_tol_m",
+  "rot_resume_rad": "求解器 reach_rot_rad",
+  "align_confirm_s": "K2Config.grip_settle_s",
+  "approach_timeout_s": "K3AConfig timeouts APPROACH 15 s（不改）"
+ },
+ "grasp_init": {
+  "qa_grasp": [
+   -0.6878695421052632,
+   0.4859664894736846,
+   2.1124055684210523,
+   -1.6376007789473679,
+   -0.6886211947368417,
+   0.08646258947368422
+  ],
+  "qa_grasp_cli": "-0.687870,0.485966,2.112406,-1.637601,-0.688621,0.086463",
+  "init_check_timeout_s": 15.0,
+  "source": {
+   "path": "runs/door_wide_w1f_60_3/room_run.json",
+   "window_s": [
+    18.5,
+    20.4
+   ],
+   "q_std": [
+    8.974294175905233e-05,
+    0.0006998346100816562,
+    0.0010260358376077442,
+    0.0005144837305789826,
+    7.112086801379991e-05,
+    0.0006369495971918663
+   ],
+   "door_abs_max_deg": 0.020588665410231,
+   "finger_n_min": 4.4167
+  }
+ },
+ "grasp_init_basis": {
+  "qa_grasp": "w1f_60_3 夾持靜止窗實測關節平均（實際抓到把手的構型，含重力下垂）",
+  "scope": "指定初態隔離驗證；跳過自主接近，不代表接近已解決"
+ },
+ "bench": {
+  "q_nominal": [
+   -0.6878695421052632,
+   0.4859664894736846,
+   2.1124055684210523,
+   -1.6376007789473679,
+   -0.6886211947368417,
+   0.08646258947368422
+  ],
+  "d_init": [
+   -5.206352631576276e-06,
+   0.01707306774736842,
+   -0.00876271263684211,
+   -0.0008696609631579138,
+   -0.0008430274578947352,
+   -8.245132105263153e-05
+  ],
+  "s_init": [
+   -0.6878643357526316,
+   0.46889342172631615,
+   2.1211682810578942,
+   -1.63673111798421,
+   -0.6877781672789469,
+   0.08654504079473685
+  ],
+  "uncertainty": [
+   0.00012486948340082534,
+   0.0030242268910931278,
+   0.0016448302016194329,
+   9.434303238868536e-05,
+   0.0008843817578947364,
+   0.000647735663562753
+  ],
+  "q_nominal_cli": "-0.687869542,0.485966489,2.112405568,-1.637600779,-0.688621195,0.086462589",
+  "s_init_cli": "-0.687864336,0.468893422,2.121168281,-1.636731118,-0.687778167,0.086545041",
+  "release_timeout_wall_s": 120.0,
+  "source": {
+   "path": "runs/door_wide_w1f_60_3/evidence.jsonl",
+   "sha256": "bc4e4b0dabaa70cc471069efeb1208c9869cb935d83a1dc2e421f22945a7084e",
+   "window": [
+    18.5,
+    20.4
+   ],
+   "cross_check_window": [
+    15.6,
+    16.9
+   ],
+   "cross_check_d_mean": [
+    0.00011966313076924905,
+    0.02009729463846155,
+    -0.010407542838461542,
+    -0.0007753179307692285,
+    4.135430000000119e-05,
+    -0.0007301869846153845
+   ]
+  },
+  "status": "待驗證的初始化估計（W1 求解端接手前、閉爪靜止；非已辨識靜態偏移）"
+ },
+ "bench_basis": {
+  "scope": "Codex r19／r20：台架初態啟動；不偽稱停車閘門或導航交棒通過；初值不冒充觀測更新",
+  "offset_max_rad": "須 ≤ 求解端 --offset-max-rad 0.05（超界拒跑，不截斷）"
+ },
+ "derived_from": {
+  "w1b_params_48_r2": "704327fe48acd08eeaafbedfdf0e4683678fdfa9402d46270a6b63a0b6a44fb4",
+  "w1f_params_60_r2": "a71638e9d9f6cd7f6f5def6e9ecc320bc9e9210ada4094d267261470692b5c06",
+  "coopen_core_params_48_r11": "23a7629015224aa0f3eb7ab07232e7d91992d5370b0880ae60fc1fc30df9acec",
+  "source_note": "Codex 20261028_195306"
+ },
+ "derived_from_r1": {
+  "path": "results/door/pullback_params_48_r1.json",
+  "sha256": "72cc7e3956f914adda2add8e75dfe45f9a40f6d57a37d3bf414b5e0490b409cf"
+ },
+ "derived_from_r2": {
+  "path": "results/door/pullback_params_48_r2.json",
+  "sha256": "7936a59d0a2f9514c5a1f2e88b9f5870f517d129fc818e7427d141f17a85b363"
+ }
+}
