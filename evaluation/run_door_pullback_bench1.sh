@@ -13,7 +13,7 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-PRM=evaluation/results/door/pullback_params_48_r1.json   # pb1：往後拉開登錄 r1（不由環境變數改）
+PRM=evaluation/results/door/pullback_params_48_r2.json   # pb1 r2：偏移估計 OPEN 不更新（W1 語義；pb1_2 教訓）
 GB=evaluation/runs/phf_01_M/task.json
 PIDS=(); NAMES=()
 source "$WS/evaluation/k2_proc.sh"
@@ -36,7 +36,7 @@ say "python3＝$(command -v python3)；VIRTUAL_ENV=${VIRTUAL_ENV:-（無）}"
 python3 -c "import osqp" 2>/dev/null || { say "**python3 環境錯誤（無法匯入 osqp；可能誤啟用虛擬環境）** ⇒ 拒跑"; exit 96; }
 [ -s "$PRM" ] || { say "**核心段登錄檔不存在：$PRM** ⇒ 拒跑"; exit 97; }
 [ -s "$GB" ] || { say "**抓取基準不存在：$GB** ⇒ 拒跑"; exit 97; }
-[ "$(python3 -c "import json;print(json.load(open('$PRM'))['solver_change'].get('offset_update_in_open') is True)")" = True ] || { say "**登錄 r10 未設 offset_update_in_open** ⇒ 拒跑"; exit 97; }
+[ "$(python3 -c "import json;print(json.load(open('$PRM'))['solver_change'].get('offset_update_in_open') is True)")" = False ] || { say "**登錄 r2 須 offset_update_in_open 非 True（W1 語義）** ⇒ 拒跑"; exit 97; }
 GB_SHA=$(python3 -c "import json;print(json.load(open('$PRM'))['grasp']['basis_sha256'])")
 [ "$(sha256sum "$GB" | cut -d' ' -f1)" = "$GB_SHA" ] || { say "**抓取基準 sha256 與登錄不符** ⇒ 拒跑"; exit 97; }
 W1B_THETA=$(python3 -c "import json;print(json.load(open('$PRM'))['theta_goal_deg'])")
@@ -66,7 +66,7 @@ spawn task python3 -u evaluation/door_coopen_core_task_node10.py --out "$DIR/tas
 ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
 [ -f "$ARM_IDENT" ] || { say "**找不到手臂辨識檔** ⇒ 中止"; exit 85; }
 spawn adapter python3 -u evaluation/arm_vel_adapter_k3m3.py --in-topic /wgmpc/cmd_world --consumer-node /door_k2_sim --cmd-env --cmd-env-v3 --env-in-topic /wgmpc/cmd_env --bench-ready-run-id "$RUN_ID"
-spawn solver python3 -u evaluation/dl3_wgmpc_wg2_adm20_node.py --w2-retreat --w2-hold-r9 --w2-held --w2-held-max-s 60 --w2-mode-run-id "$RUN_ID" --regrasp --bench-start --bench-params "$PRM" --require-topic-target --park-hold --offset-observer interval --mode-switch-run-id "$RUN_ID" --cmd-env --run-id "$RUN_ID" --pause --pause-arm-zero --pause-active-hold --pause-arm-win-s 0.5 --coord-topic "$W1B_COORD" --offset-hold-on-free --offset-update-in-open \
+spawn solver python3 -u evaluation/dl3_wgmpc_wg2_adm20_node.py --w2-retreat --w2-hold-r9 --w2-held --w2-held-max-s 60 --w2-mode-run-id "$RUN_ID" --regrasp --bench-start --bench-params "$PRM" --require-topic-target --park-hold --offset-observer interval --mode-switch-run-id "$RUN_ID" --cmd-env --run-id "$RUN_ID" --pause --pause-arm-zero --pause-active-hold --pause-arm-win-s 0.5 --coord-topic "$W1B_COORD" --offset-hold-on-free \
   --offset-moving --offset-free \
   --continuous --arm-model setpoint --arm-ident "$ARM_IDENT" \
   --cmd-topic /wgmpc/cmd_world --target-topic /drawer/tcp_target --target-offset 0 0 0 \
