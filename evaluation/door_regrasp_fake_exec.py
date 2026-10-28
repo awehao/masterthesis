@@ -52,7 +52,7 @@ import door_k3m_corridor as K3MCOR                      # noqa: E402
 import door_k3m_mode as K3MMODE                         # noqa: E402
 import door_k3m_pause_mode as K3MP                      # noqa: E402
 import door_regrasp_exec_core as RGX                    # noqa: E402
-import door_regrasp_mode2 as RGM2                       # noqa: E402
+import door_regrasp_mode3 as RG3                        # noqa: E402
 import door_regrasp_ref_registry as RGREG               # noqa: E402
 import door_w2_exec3 as W2X3                            # noqa: E402
 import wgmpc_cmd_envelope as ENV                        # noqa: E402
@@ -212,7 +212,7 @@ def main() -> int:
     ex.wb_seeded = True
     env_in = K3MSRC.EnvIntake(run_id_num=ENV.run_id_num(a.run_id), stage_id=ENV.ST_ADAPTER, kinds=(ENV.K_NORMAL,))
     k2_latch = KIO.K2AbortLatch()
-    auth = RGM2.RegraspAuthority2(a.run_id, run_id_num=ENV.run_id_num(a.run_id), stage_id=ENV.ST_ADAPTER, cand_timeout_s=1.0, cmd_max_age_s=0.2,
+    auth = RG3.RegraspAuthority(a.run_id, run_id_num=ENV.run_id_num(a.run_id), stage_id=ENV.ST_ADAPTER, cand_timeout_s=1.0, cmd_max_age_s=0.2,
                                   post_commit_timeout_s=0.25, dt=dt, a_lin=0.5, a_ang=2.0, arm_rate_max=1.0)
     w2x = W2X3.W2Exec3(auth, env_in, filt=lambda u: k2_latch.filter_wb(u))
     grip = K3BG.GripGate(0.0089, 0.0)
@@ -230,7 +230,7 @@ def main() -> int:
     # ---- 受控體 ----
     sp = [float(v) for v in a.spawn.split(',')]
     W = {'base': np.array(sp, float), 'q': np.asarray(q_nom, float).copy(), 's': np.asarray(s_init, float).copy(), 'qf': np.array([0.0089, 0.0089]),
-         'door': 0.0, 'G_T_H': None, 'grasp': None}
+         'door': 0.0, 'G_T_H': None, 'G_T_H_in': None, 'grasp': None}
     anchor = [float(W['base'][0]), float(W['base'][1]), float(W['base'][2])]
     park_hold = HoldMonitor(hold_cfg, tuple(anchor), 0, 0.0, prev=None)
     rclpy.init()
@@ -428,6 +428,16 @@ def main() -> int:
         elif W['G_T_H'] is not None and max(f_out) == 0:
             W['G_T_H'] = None
             rec['events'].append({'sim_t': t, 'step': step, 'grasp_outer_released': True})
+        if min(f_in) > 0 and W['G_T_H_in'] is None:                           # 內側夾持成立 ⇒ 門隨 TCP（mode 7 拉關）
+            W['G_T_H_in'] = np.linalg.inv(T) @ H_in(W['door'])
+            rec['events'].append({'sim_t': t, 'step': step, 'grasp_inner_coupled': True})
+        if W['G_T_H_in'] is not None and min(f_in) > 0:
+            Hm = T @ W['G_T_H_in']
+            h0 = H_in(0.0)
+            W['door'] = wrap(math.atan2(h0[1, 3], h0[0, 3]) - math.atan2(Hm[1, 3], Hm[0, 3]))
+        elif W['G_T_H_in'] is not None and max(f_in) == 0:
+            W['G_T_H_in'] = None
+            rec['events'].append({'sim_t': t, 'step': step, 'grasp_inner_released': True})
         # ---- 停止准入故障注入（ZERO_PUB 宣告後）----
         z8 = (((nd.rg8_pause_status or {}).get('outcome') or {}).get('transitions') or {}).get('ZERO_PUB')
         if z8 is not None and zero_t is None:
@@ -533,6 +543,9 @@ def main() -> int:
         if lag > 0:
             time.sleep(lag)
     rec['t_end'] = t
+    rec['door_final_deg'] = math.degrees(W['door'])
+    rec['base_final'] = [float(v) for v in W['base']]
+    rec['arm_final'] = [float(v) for v in W['q']]
     rec['t_mode'] = t_mode
     rec['k3m'] = k3m
     rec['w2'] = {'auth': auth.stats(), 'rows_tail': w2x.rows[-50:], 'auth_rows_n': len(auth.applied_rows), 'n_env3': nd.n_env3}

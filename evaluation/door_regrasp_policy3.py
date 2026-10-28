@@ -96,6 +96,7 @@ class RefRuntime3(P1.RefRuntime):
 
 
 class RegraspPolicy3(P2.RegraspPolicy2):
+    ALLOWED_FN = staticmethod(RGM.allowed_finger_classes)   # r3 表驅動（關門版換 mode3 規則）
     def __init__(self, *a, kin=None, **kw):
         super().__init__(*a, **kw)
         self.r = dict(REG, **{k: v for k, v in self.r.items() if k in P1.REG})
@@ -128,7 +129,8 @@ class RegraspPolicy3(P2.RegraspPolicy2):
                 mode = int(mode_s)
             except (TypeError, ValueError):
                 return self._rg_abort('rg_contact_v3_malformed', m, act)
-            allowed = RGM.allowed_finger_classes(mode, bool(c['exited3']))
+            ex = (c.get('exited_by_mode') or {}).get(str(mode), c['exited3'] if mode == 3 else False)
+            allowed = self.ALLOWED_FN(mode, bool(ex))
             for link, cl in (links or {}).items():
                 for cls, f in (cl or {}).items():
                     if not (isinstance(f, (int, float)) and math.isfinite(f)):

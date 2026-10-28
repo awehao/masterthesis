@@ -15,20 +15,21 @@ from __future__ import annotations
 import door_regrasp_gates3 as GT
 import door_regrasp_mode1 as RGM
 
-VERSION = 'door_regrasp_contact_window/r1'
+VERSION = 'door_regrasp_contact_window/r2'   # r2：規則函式可注入（allowed_fn；預設 mode1）、摘要另附 exited_by_mode（行為預設不變）
 FINGERS = ('uflite_finger1', 'uflite_finger2')
 
 
 class ContactWindow:
-    def __init__(self, f_max=0.1, dt=0.01, tol=1e-6):
+    def __init__(self, f_max=0.1, dt=0.01, tol=1e-6, allowed_fn=None):
         self.f_max, self.dt, self.tol = float(f_max), float(dt), float(tol)
+        self.allowed_fn = allowed_fn or RGM.allowed_finger_classes
         self.violation = None
         self.last = None
         self._reset()
         self.n = {'steps': 0, 'incomplete': 0, 'gap': 0}
 
     def _reset(self):
-        self.w = {'lo': None, 'hi': None, 't': None, 'n': 0, 'complete': True, 'by_mode': {}, 'exited': False}
+        self.w = {'lo': None, 'hi': None, 't': None, 'n': 0, 'complete': True, 'by_mode': {}, 'exited': False, 'exited_by_mode': {}}
 
     def step(self, step, t, mode, rec, exited):
         self.n['steps'] += 1
@@ -48,7 +49,8 @@ class ContactWindow:
         if lcf is None or type(mode) is not int:
             return self.violation
         bm = w['by_mode'].setdefault(mode, {})
-        allowed = RGM.allowed_finger_classes(mode, bool(exited))
+        w['exited_by_mode'][str(mode)] = bool(exited)
+        allowed = self.allowed_fn(mode, bool(exited))
         for (link, cls), f in lcf.items():
             d = bm.setdefault(link, {})
             d[cls] = max(d.get(cls, 0.0), float(f))
@@ -61,6 +63,7 @@ class ContactWindow:
         if w['n'] == 0:
             return None
         out = {'version': VERSION, 'src_step_lo': w['lo'], 'src_step': w['hi'], 'src_t': w['t'], 'n_steps': w['n'], 'complete': bool(w['complete']),
-               'by_mode': {str(k): v for k, v in w['by_mode'].items()}, 'exited3': w['exited'], 'violation': self.violation}
+               'by_mode': {str(k): v for k, v in w['by_mode'].items()}, 'exited3': w['exited'], 'exited_by_mode': dict(w['exited_by_mode']),
+               'violation': self.violation}
         self._reset()
         return out

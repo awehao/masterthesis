@@ -128,6 +128,13 @@ class RefRuntime:
 
 
 class RegraspPolicy(PW2.K3MW2Policy):
+    # r3（行為不變的表驅動重構，供關門版子類換表）：模式表、提交後幾何目標、各模式完成所看的 gate、終止模式、無參考（保持形）模式
+    RGT = RG
+    GEOM_FOR = {2: 'out', 3: 'out', 4: None, 5: None, 6: 'in'}
+    GATE_FOR = {2: 'gate3', 3: 'gate4', 4: 'gate5', 5: 'gate6', 6: 'hold'}
+    FINAL_MODE = 6
+    HOLD_REF = (2, 6)
+
     def __init__(self, *a, ref_pkg, geom_v3_fn=None, reg=None, **kw):
         super().__init__(*a, **kw)
         self.r = dict(REG, **(reg or {}))
@@ -184,7 +191,7 @@ class RegraspPolicy(PW2.K3MW2Policy):
         return act
 
     def _request(self, k, m):
-        req = {'run_id': self.w2_run_id, 'req_seq': k, 'from_mode': RG.MODE_OF[k - 1], 'to_mode': RG.MODE_OF[k], 'mode_seq': k}
+        req = {'run_id': self.w2_run_id, 'req_seq': k, 'from_mode': self.RGT.MODE_OF[k - 1], 'to_mode': self.RGT.MODE_OF[k], 'mode_seq': k}
         self.rg_outbox.append(dict(req))
         self.rg['req'][k], self.rg['t_req'][k] = req, m.t
         self.rg['events'].append({'t': m.t, 'request': k})
@@ -297,7 +304,7 @@ class RegraspPolicy(PW2.K3MW2Policy):
                     return self._rg_abort(f'rg{k}_{why}', m, act, detail=det)
                 self.rg['k_committed'] = k
                 self.rg['t_commit'][k], self.rg['t_seen'][k], self.rg['t_ref0'][k] = c.get('t'), m.t, m.t
-                self.rg['geom_target'] = {2: 'out', 3: 'out', 4: None, 5: None, 6: 'in'}[k]
+                self.rg['geom_target'] = self.GEOM_FOR[k]
                 self.rg['events'].append({'t': m.t, 'committed': k, 't_commit': c.get('t'), 'bridge': det})
                 self._go(f'RG{k}', m.t)
             elif m.t - self.rg['t_req'][k] > self.r['commit_timeout_s']:
@@ -307,10 +314,10 @@ class RegraspPolicy(PW2.K3MW2Policy):
             return act
         # 已提交：目標與完成判斷
         tau = m.t - self.rg['t_ref0'][k]
-        if k in RG.MOTION_MODES or k == 6:
+        if k in self.RGT.MOTION_MODES or k == 6:
             T, b_ref, ff = self.ref.at(k, tau)
             act['target'] = T
-            if k in RG.MOTION_MODES:
+            if k in self.RGT.MOTION_MODES:
                 act['coord'] = self._coord(m, b_ref, ff)
             if k == 3 and m.T_tcp is not None:
                 c3 = self.ref.ctx[3]
@@ -325,14 +332,14 @@ class RegraspPolicy(PW2.K3MW2Policy):
             act['target'] = self.rg['last_T']
         self.rg['last_T'] = np.asarray(act['target'], float)
         act['geom_target'] = self.rg['geom_target']
-        done_ref = (k in (2, 6)) or tau >= self.ref.length_s(k) - 1e-9
-        gk = {2: 'gate3', 3: 'gate4', 4: 'gate5', 5: 'gate6', 6: 'hold'}[k]
+        done_ref = (k in self.HOLD_REF) or tau >= self.ref.length_s(k) - 1e-9
+        gk = self.GATE_FOR[k]
         gs = gates.get(gk) if isinstance(gates.get(gk), dict) else {}
         act['rg'] = {'k': k, 'state': 'running', 'tau': tau, 'gate': gs.get('state')}
         if done_ref:
             xr, xwhy = self._extra_ready(k, m)
             if gs.get('state') == 'CONFIRMED' and gs.get('fresh') is True and xr:
-                if k == 6:
+                if k == self.FINAL_MODE:
                     self._go('DONE', m.t, rg='inner_grasp_hold_confirmed', hold=gs)
                     self.done = True
                     act.update(finish=True, stop_solver=False)

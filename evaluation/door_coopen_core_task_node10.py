@@ -146,7 +146,7 @@ import door_coopen_approach_gate2 as AG2                                  # noqa
 import door_coopen_init_grasp2 as IG2                                     # noqa: E402  B1／D1：指定抓取初態 r2
 import door_coopen_bench_grasp2 as BG                                     # noqa: E402  E1／F1：台架初態起始相位 r2
 import door_bench_start2 as BENCH                                         # noqa: E402  E1／F2：台架契約 r2
-import door_regrasp_policy7 as RP7                                        # noqa: E402  RG10：換抓策略 r7（r6＋mode 3 前等求解端 release_settled）
+import door_regrasp_policy8 as RP8                                        # noqa: E402  RG10：換抓＋關門策略 r8（mode 1–8）
 import door_k3m_geom_monitor_v3 as GM3                                    # noqa: E402  RG10：v3 監看後端（雙把手）
 import door_regrasp_ref_registry as REGY                                  # noqa: E402  RG10：參考包登錄核驗
 from physics_contact_hold import contact_established                     # noqa: E402
@@ -433,7 +433,7 @@ def main():
         if not _okr:
             raise SystemExit(f'換抓參考包登錄核驗不過：{_whyr} ⇒ 拒跑')
         rg_fn = GM3.backend_v3(self_mode=a.regrasp_geom_self_mode)
-        pol = BG.bench_grasp2(IG2.init_grasp2(AG2.gated2(RP7.RegraspPolicy7)))(
+        pol = BG.bench_grasp2(IG2.init_grasp2(AG2.gated2(RP8.RegraspPolicy8)))(
             cfg, T_HG, a.run_id, corridor, K3MGEO.GeometryMonitor(gcfg, K3MGEO.default_backend()), a_H=a_H,
             w2_run_id=a.w2_mode_run_id, req_delay_s=a.w2_req_delay_s, commit_timeout_s=a.w2_commit_timeout_s,
             test_hold_s=a.w2_test_hold_s, state_stale_s=a.w2_state_stale_s,

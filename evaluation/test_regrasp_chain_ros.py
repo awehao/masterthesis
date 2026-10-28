@@ -24,7 +24,7 @@ TMP = os.environ.get('RGC_TMP', '/tmp/claude-1000/regrasp_chain_ros')
 DOM0 = int(os.environ.get('RGC_DOMAIN', '120'))
 PRM = os.path.join(HERE, 'results', 'door', 'coopen_core_params_48_r11.json')
 GB = os.path.join(HERE, 'results', 'door', 'coopen_core_grasp_basis_r4.json')
-REF = os.path.join(HERE, 'results', 'door', 'door_regrasp_ref_v4.json')
+REF = os.path.join(HERE, 'results', 'door', 'door_regrasp_ref_v5.json')
 IDENT = os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json')
 P = json.load(open(PRM))
 TABLE = os.path.join(WS, P['protection_scope_change']['corridor_table'])
@@ -58,7 +58,7 @@ def run(tag, dom):
     procs['task'] = spawn([py, '-u', os.path.join(HERE, 'door_coopen_core_task_node10.py'), '--out', os.path.join(d, 'task.json'), '--run-id', run_id,
                            '--grasp-basis', GB, '--w1b-params', PRM, '--corridor-table', TABLE, '--regrasp', '--regrasp-ref', REF,
                            '--w2-mode-run-id', run_id], env, os.path.join(d, 'task.log'))
-    procs['solver'] = spawn([py, '-u', os.path.join(HERE, 'dl3_wgmpc_wg2_adm19_node.py'), '--bench-start', '--bench-params', PRM, '--require-topic-target',
+    procs['solver'] = spawn([py, '-u', os.path.join(HERE, 'dl3_wgmpc_wg2_adm20_node.py'), '--bench-start', '--bench-params', PRM, '--require-topic-target',
                              '--park-hold', '--offset-observer', 'interval', '--mode-switch-run-id', run_id, '--cmd-env', '--run-id', run_id, '--pause',
                              '--pause-arm-zero', '--pause-active-hold', '--pause-arm-win-s', '0.5', '--coord-topic', COORD, '--offset-hold-on-free',
                              '--offset-update-in-open', '--offset-moving', '--offset-free', '--continuous', '--arm-model', 'setpoint', '--arm-ident', IDENT,
@@ -105,7 +105,7 @@ def summarize(r):
            'gates_ended': rg.get('ended'), 'hold': {k: (rg.get('hold') or {}).get(k) for k in ('state', 'why', 't')},
            'gate2': {k: ((rg.get('gates') or {}).get('gate2') or {}).get(k) for k in ('state', 'why', 't_zero', 't_cmd', 't')},
            'handover': rg.get('handover'), 'task_phase': tk.get('final_phase'), 'task_abort': tk.get('abort'),
-           'task_phases': [e.get('to') for e in tk.get('policy_events', []) if 'to' in e][:30], 'synthetic': f.get('synthetic')}
+           'task_phases': [e.get('to') for e in tk.get('policy_events', []) if 'to' in e][:30], 'door_final_deg': f.get('door_final_deg'), 'base_final': f.get('base_final'), 'synthetic': f.get('synthetic')}
     return out
 
 

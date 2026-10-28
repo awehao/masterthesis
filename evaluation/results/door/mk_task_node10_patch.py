@@ -44,7 +44,7 @@ POL = ours.replace(
     "        if not _okr:\n"
     "            raise SystemExit(f'換抓參考包登錄核驗不過：{_whyr} ⇒ 拒跑')\n"
     "        rg_fn = GM3.backend_v3(self_mode=a.regrasp_geom_self_mode)\n"
-    "        pol = BG.bench_grasp2(IG2.init_grasp2(AG2.gated2(RP7.RegraspPolicy7)))(\n"
+    "        pol = BG.bench_grasp2(IG2.init_grasp2(AG2.gated2(RP8.RegraspPolicy8)))(\n"
     "            cfg, T_HG, a.run_id, corridor, K3MGEO.GeometryMonitor(gcfg, K3MGEO.default_backend()), a_H=a_H,\n"
     "            w2_run_id=a.w2_mode_run_id, req_delay_s=a.w2_req_delay_s, commit_timeout_s=a.w2_commit_timeout_s,\n"
     "            test_hold_s=a.w2_test_hold_s, state_stale_s=a.w2_state_stale_s,\n"
@@ -79,7 +79,7 @@ ia("    ap.add_argument('--w2-unload', action='store_true')                     
    "    ap.add_argument('--regrasp-ref', default='')                                 # RG10：已登錄參考包\n"
    "    ap.add_argument('--regrasp-geom-self-mode', default='full', choices=('full', 'sphere'))   # RG10：v3 監看自碰模式（離線核對用 full）\n")
 ia("import door_bench_start2 as BENCH                                         # noqa: E402  E1／F2：台架契約 r2\n",
-   "import door_regrasp_policy7 as RP7                                        # noqa: E402  RG10：換抓策略 r7（r6＋mode 3 前等求解端 release_settled）\n"
+   "import door_regrasp_policy8 as RP8                                        # noqa: E402  RG10：換抓＋關門策略 r8（mode 1–8）\n"
    "import door_k3m_geom_monitor_v3 as GM3                                    # noqa: E402  RG10：v3 監看後端（雙把手）\n"
    "import door_regrasp_ref_registry as REGY                                  # noqa: E402  RG10：參考包登錄核驗\n")
 ia("        nd.create_subscription(String, '/door/w2_mode_state', _w2_state_cb, 50)\n",

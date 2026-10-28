@@ -22,6 +22,11 @@
      FAILED stop_obs_data_invalid（不跳過、不補）；確認後至 mode 2 提交仍逐步核（失去即 FAILED）。ZERO_PUB 未宣告 ⇒ 不確認。
      權威改 door_regrasp_mode2.RegraspAuthority2（gates[2]＝本 gate）；mode 2 提交即結束（保存判定）。gate 2 FAILED 不觸發中止
      （開門前綴暫停期行為不變）：只使 mode 2 請求／提交被拒（gate2:<why>），由任務端依既有規則中止換抓。
+  7. r4（Codex r67；參考包含 segments 7／8 時啟用，權威須為 door_regrasp_mode3）關門與解除：
+     gate 7（請求 mode 7 PASS_CLOSE）＝HoldConfirm 確認且新鮮；HoldConfirm **延續整個 mode 7**（E0 不重設；失力或漂移超界 ⇒ 中止 rg_hold）；
+     gate 8（請求 mode 8 RELEASE_RETREAT）＝HoldConfirm 仍確認且新鮮，且本步實測門角 ≤ 參考 mode 7 終點門角＋0.5°；
+     mode 8 提交 ⇒ HoldConfirm 結束（張爪前最後判定保存）、Exit8（Gate4Exit 同規則：沿提交時工具 −z 退出量、收斂、無接觸）啟動；
+     接觸規則改 door_regrasp_mode3.allowed_finger_classes（7：bar_in；8：離開前 bar_in、Exit8 離開閂鎖後 ()）；Exit8 FAILED ⇒ 中止 rg_exit8。
 另：bench_release_w2——台架首筆在 W2 唯一入口（v3 封裝）下經 W2Exec.on_env3→pre_step 進鏈（同 BENCH.release_intake 的檢核）。
 """
 from __future__ import annotations
@@ -34,9 +39,10 @@ import door_k3m_check_p as CP
 import door_k3m_pause_sup_p4 as P4
 import door_regrasp_contact_window as RCW
 import door_regrasp_gates3 as GT
+import door_regrasp_mode3 as RG3
 import door_regrasp_ref_registry as REGY
 
-VERSION = 'door_regrasp_exec_core/r3'
+VERSION = 'door_regrasp_exec_core/r4'
 GATE_KEY = {2: 'gate2', 3: 'gate3', 4: 'gate4', 5: 'gate5', 6: 'gate6'}
 MARGIN_S = 0.2
 
@@ -120,13 +126,34 @@ class RegraspExecCore:
         self.hold = GT.HoldConfirm(reg=reg)
         self.active = {2}                         # 正在逐步更新的 gate（2–6）與 'hold'；gate 2 自建構起緩衝、至 mode 2 提交
         self.ended = {}                           # gate → {'step','t','state'}
-        self.cw = RCW.ContactWindow(f_max=GT.REG['contact_abort_n'], dt=self.dt)
+        self.close = '7' in pkg.get('segments', {}) and '8' in pkg.get('segments', {})
+        self.cw = RCW.ContactWindow(f_max=GT.REG['contact_abort_n'], dt=self.dt,
+                                    allowed_fn=(RG3.allowed_finger_classes if self.close else None))
+        self.exit8 = GT.Gate4Exit(reg=reg)
+        self.q_end7 = float(pkg['segments']['7']['q_door_deg'][-1]) if self.close else None
+        self.door_deg = None
         self.engaged = False                      # mode ≥ 1 提交後
         self.inv_t0 = None
         self.abort = None
         self.commits = []
         self.handover = None
         auth.gates = {k: (lambda s, _k=k: self._fresh(_k, s)) for k in (2, 3, 4, 5, 6)}
+        if self.close:
+            auth.gates[7] = self._gate7
+            auth.gates[8] = self._gate8
+
+    def _gate7(self, step):
+        if 'hold' not in self.active:
+            return False, 'hold_inactive'
+        return (True, None) if self.hold.confirmed_fresh(step) else (False, f'hold_{self.hold.state}')
+
+    def _gate8(self, step):
+        ok, why = self._gate7(step)
+        if not ok:
+            return ok, why
+        if self.door_deg is None or self.door_deg > self.q_end7 + 0.5:
+            return False, f'door_not_at_close_end:{self.door_deg}'
+        return True, None
 
     def _fresh(self, k, step):
         g = self.g[k]
@@ -168,6 +195,10 @@ class RegraspExecCore:
             else:
                 self.hold.start(step, t)
                 self.active.add('hold')
+        elif mode == 8 and self.close:
+            self._end('hold', step, t)
+            self.exit8.start(step, t, T_tcp0=np.asarray(T_tcp, float))
+            self.active.add('exit8')
 
     def step(self, step, t, mode_sel, rec, T_tcp, base, arm_q, finger_q, door_q, base_cmd=None, arm_cmd=None):
         """回傳本步中止原因（None＝無）。第一個中止原因閂鎖。"""
@@ -176,7 +207,7 @@ class RegraspExecCore:
         lcf = GT.link_class_force(rec, step, t)
         valid = lcf is not None
         if self.engaged:
-            exited = bool(getattr(self.g[4], 'exited', False))
+            exited = bool(getattr(self.exit8, 'exited', False)) if mode_sel == 8 else bool(getattr(self.g[4], 'exited', False))
             self.cw.step(step, t, int(mode_sel) if mode_sel is not None else -1, rec, exited)
             v = self.cw.violation
             if v is not None:
@@ -188,6 +219,7 @@ class RegraspExecCore:
                 if float(t) - self.inv_t0 > self.invalid_max_s + 1e-9:
                     return self._abort('rg_contact_data_invalid', step, t)
         H_in = self.H_in_fn(float(door_q))
+        self.door_deg = float(np.degrees(float(door_q)))
         if 2 in self.active:
             self.g[2].step(step, t, base, door_q, arm_q, base_cmd if base_cmd is not None else [float('nan')] * 3,
                            arm_cmd if arm_cmd is not None else [float('nan')] * 6)
@@ -202,9 +234,13 @@ class RegraspExecCore:
             self.g[6].step(step, t, T_tcp, H_in @ self.T_HG, rec)
         if 'hold' in self.active:
             self.hold.step(step, t, T_tcp, H_in, rec)
-        for k in sorted(x for x in self.active if x not in ('hold', 2)):              # gate 2 失敗不在此中止：只使 mode 2 永不准入（權威 nack）
+        for k in sorted(x for x in self.active if isinstance(x, int) and x != 2):              # gate 2 失敗不在此中止：只使 mode 2 永不准入（權威 nack）
             if self.g[k].state == 'FAILED':
                 return self._abort(f'rg_{GATE_KEY[k]}:{self.g[k].why}', step, t)
+        if 'exit8' in self.active:
+            self.exit8.step(step, t, T_tcp, rec)
+            if self.exit8.state == 'FAILED':
+                return self._abort(f'rg_exit8:{self.exit8.why}', step, t)
         if 'hold' in self.active and self.hold.state == 'FAILED':
             return self._abort(f'rg_hold:{self.hold.why}', step, t)
         return None
@@ -229,6 +265,13 @@ class RegraspExecCore:
         out['hold'] = {'state': h.state if ('hold' in self.active or 'hold' in self.ended) else 'IDLE',
                        'fresh': bool('hold' in self.active and h.confirmed_fresh(step)), 'why': h.why, 'active': 'hold' in self.active,
                        'E0_set': getattr(h, 'E0', None) is not None}
+        if self.close:
+            g7, g8 = self._gate7(step), self._gate8(step)
+            out['gate7'] = {'state': 'CONFIRMED' if g7[0] else 'WAITING', 'fresh': bool(g7[0]), 'why': g7[1], 'active': 'hold' in self.active}
+            out['gate8'] = {'state': 'CONFIRMED' if g8[0] else 'WAITING', 'fresh': bool(g8[0]), 'why': g8[1], 'active': 'hold' in self.active}
+            e = self.exit8
+            out['exit8'] = {'state': e.state if 'exit8' in self.active else 'IDLE', 'fresh': bool('exit8' in self.active and e.confirmed_fresh(step)),
+                            'why': e.why, 'active': 'exit8' in self.active, 'exited': bool(getattr(e, 'exited', False))}
         return out
 
     def summary(self):
@@ -236,7 +279,7 @@ class RegraspExecCore:
 
     def report(self):
         return {'version': VERSION, 'abort': getattr(self, 'abort_at', None), 'commits': self.commits, 'handover': self.handover,
-                'ended': self.ended, 'gates': {GATE_KEY[k]: self.g[k].report() for k in self.g}, 'hold': self.hold.report(),
+                'ended': self.ended, 'exit8': self.exit8.report() if self.close else None, 'gates': {GATE_KEY[k]: self.g[k].report() for k in self.g}, 'hold': self.hold.report(),
                 'contact_window': {'n': dict(self.cw.n), 'violation': self.cw.violation}}
 
 
