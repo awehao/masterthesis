@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """第七次整體任務測試地圖 mission_room 的 Isaac 場景預覽（只看場景，不跑控制、不步進物理）。
 建：地面＋mission_room.sdf（外牆、隔牆延伸、家具）＋門 door_local_v3（door_asset_v3）＋抽屜櫃 drawer_unit_bar26（drawer_asset，於 --drawer-pose）
-＋機器人（固定底盤、手臂 STOW）於起點 S＋各關鍵停位色塊（只有外觀、無碰撞；長條指向＝朝向）。
+＋機器人（固定底盤、手臂 STOW）於起點 S。關鍵停位只寫在 results/mission/mission_room_poses.json（Howard 10/28：地板不放色塊）；--markers true 才畫。
 開視窗（--headless false）後先存兩張截圖到 --shots，之後持續渲染到視窗關閉。
 
     ~/venvs/isaacsim-6.0.1/bin/python evaluation/isaac_mission_scene_preview.py
@@ -27,6 +27,7 @@ ap.add_argument('--poses', default=os.path.join(HERE, 'results', 'mission', 'mis
 ap.add_argument('--robot-at', default='S')
 ap.add_argument('--shots', default=os.path.join(HERE, 'results', 'mission'))
 ap.add_argument('--headless', default='false')
+ap.add_argument('--markers', default='false')
 a = ap.parse_args()
 
 from isaacsim import SimulationApp                               # noqa: E402
@@ -77,7 +78,7 @@ def main():
     dpose = tuple(float(v) for v in a.drawer_pose.split(','))
     DRA.build_usd(stage, DRA.load(a.drawer_asset), dpose, root='/World/drawer_unit')
     P = json.load(open(a.poses))['poses']
-    for k, v in P.items():
+    for k, v in (P.items() if a.markers.lower() == 'true' else ()):
         marker(k, v['x'], v['y'], math.radians(v['yaw_deg']), v['rgb'])
     r = P[a.robot_at]
     import_urdf(a.urdf, ROBOT, fix_base=True)
