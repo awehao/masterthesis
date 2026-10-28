@@ -53,7 +53,7 @@ def build():
                     "-frames:v", "1", "-update", "1", str(drawer_frame)], check=True)
     video60 = next((MAT/"影片").glob("door_wide_w1f_60_3*成功_側視_實錄重播.mp4"))
     video48 = next((MAT/"影片").glob("door_coopen_core_bench_6*側視_實錄重播.mp4"))
-    evidence = "第七次進度報告簡報/文獻差異與改善證據_v2.md"
+    evidence = "第七次進度報告素材/第七次進度報告簡報/文獻差異與改善證據_v2.md"
     drawer_sources = ["第六次講稿.md", "第六次進度報告素材/簡報用實驗比較表.md",
                       "evaluation/results/motm_speed/park_hold_formal_summary.yaml"]
 

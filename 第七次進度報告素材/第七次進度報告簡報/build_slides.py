@@ -17,7 +17,7 @@ from pathlib import Path
 import uno
 from PIL import Image, ImageDraw, ImageFont
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 OUT = Path(__file__).resolve().parent
 ASSETS = OUT / "素材"
 MAT = ROOT / "第七次進度報告素材"
