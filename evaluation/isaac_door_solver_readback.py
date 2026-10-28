@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """門場景物理求解設定讀回（Codex pb1_4 回覆第 1 步）：與執行端同一建法（World physics_dt 0.01＋door_asset_v3），
-讀 PhysicsScene 的 PhysxSceneAPI（solverType、min／max position／velocity iteration、stabilization）與門扇 PhysxRigidBodyAPI
+讀 PhysicsScene 的 PhysxSceneAPI（solverType、min／max position／velocity iteration、stabilization、r2：enableExternalForcesEveryIteration、enhancedDeterminism、timeStepsPerSecond）與門扇 PhysxRigidBodyAPI
 （solverPositionIterationCount／solverVelocityIterationCount；authored 或 fallback）。只讀，不步進控制。
 
     ~/venvs/isaacsim-6.0.1/bin/python evaluation/isaac_door_solver_readback.py [--door-vel-iters N]
@@ -44,7 +44,8 @@ for p in st.Traverse():
     if p.IsA(UsdPhysics.Scene):
         s = PhysxSchema.PhysxSceneAPI(p) if p.HasAPI(PhysxSchema.PhysxSceneAPI) else PhysxSchema.PhysxSceneAPI.Apply(p)
         out['scenes'].append({'path': str(p.GetPath()), **{n: attr(s, n) for n in ('SolverType', 'MinPositionIterationCount', 'MaxPositionIterationCount',
-                                                                                  'MinVelocityIterationCount', 'MaxVelocityIterationCount', 'EnableStabilization')}})
+                                                                                  'MinVelocityIterationCount', 'MaxVelocityIterationCount', 'EnableStabilization',
+                                                                                  'EnableExternalForcesEveryIteration', 'EnableEnhancedDeterminism', 'TimeStepsPerSecond')}})
 rb = PhysxSchema.PhysxRigidBodyAPI(leaf)
 out['leaf'] = {n: attr(rb, n) for n in ('SolverPositionIterationCount', 'SolverVelocityIterationCount', 'AngularDamping')}
 out['leaf']['has_api'] = leaf.HasAPI(PhysxSchema.PhysxRigidBodyAPI)
