@@ -64,3 +64,41 @@ class GripDual:
     def report(self):
         return {'version': VERSION, 'delta_m': self.delta, 'f_min': self.f_min, 'arm_hold_s': self.arm_hold_s, 'registered': self.registered,
                 'cleared': self.cleared, 'frozen': None if self.frozen is None else list(self.frozen), 'n': dict(self.n)}
+
+
+class GripDual2(GripDual):
+    """r2（Codex 20261029 extf_grip_1 回覆）：登錄改由**任務端真正的 HOLD 確認**觸發（執行端收到 /door/k2_phase＝HOLD 的那一步呼叫 trigger）。
+    確認窗定義不變（閉合命令＋兩指 ≥ f_min 連續；滾動保留最近 arm_hold_s）；觸發時窗已滿 ⇒ 當步以窗內平均登錄；未滿 ⇒ 待窗滿時登錄。
+    只登錄一次、之後固定；觸發前不改目標（純量命令照舊）。r1 自行以接觸滿 2 s 觸發（extf_grip_1：4.00 s 仍在 ENGAGE），已撤換。"""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.trigger_t = None
+
+    def trigger(self, t, why='task_hold'):
+        if self.trigger_t is None and self.basis is None and self.cleared is None:
+            self.trigger_t = {'t': float(t), 'why': why}
+
+    def observe(self, t, q1, q2, f1, f2, valid, grip_cmd):
+        if self.basis is not None or self.cleared is not None:
+            return
+        ok = bool(valid) and all(x is not None and math.isfinite(float(x)) for x in (q1, q2, f1, f2))
+        if not self._is_closed(grip_cmd) or not ok or min(float(f1), float(f2)) < self.f_min:
+            self.win = []
+            return
+        self.win.append((float(t), float(q1), float(q2)))
+        while self.win and self.win[-1][0] - self.win[0][0] + self.dt > self.arm_hold_s + 1e-9:
+            self.win.pop(0)
+        full = self.win[-1][0] - self.win[0][0] + self.dt >= self.arm_hold_s - 1e-9
+        if self.trigger_t is not None and full:
+            n = len(self.win)
+            b = (sum(w[1] for w in self.win) / n, sum(w[2] for w in self.win) / n)
+            self.basis = b
+            self.registered = {'t': float(t), 'trigger': dict(self.trigger_t), 'window_s': [self.win[0][0], self.win[-1][0]], 'n': n,
+                               'basis_m': list(b), 'target_m': [b[0] - self.delta, b[1] - self.delta]}
+            self.win = []
+
+    def report(self):
+        r = super().report()
+        r.update(version='door_grip_dual/r2', trigger=self.trigger_t)
+        return r
