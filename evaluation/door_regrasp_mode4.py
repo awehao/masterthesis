@@ -36,3 +36,37 @@ class RegraspAuthority4(RG3.RegraspAuthority):
         m['semantics'] = SEMANTICS.get(self.mode_seq)
         m['version'] = VERSION
         return m
+
+
+class RegraspAuthority4T(RegraspAuthority4):
+    """r6（Codex 20261028 pb1_6 回覆）：mode 3 提交後先維持 closed（閉爪沿既有方向退離起步），由執行端核心以**實測 TCP 沿退離方向速度**
+    確認運動已建立後呼叫 trigger_open(step, t)，本權威自該步起 finger_target＝open（同一權威、單一來源）。觸發只在 mode 3、只一次。"""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.open_trigger = None
+
+    def trigger_open(self, step, t, info=None):
+        if self.mode_seq != 3 or self.open_trigger is not None:
+            return False
+        self.open_trigger = {'step': int(step), 't': float(t), 'info': info}
+        return True
+
+    def finger_target(self):
+        if self.mode_seq == 3 and self.open_trigger is None:
+            return 'closed'
+        return FINGER_OF[self.mode_seq]
+
+    def select(self, step, t, u_prev_applied):
+        n0 = len(self.commits)
+        out = super().select(step, t, u_prev_applied)
+        for c in self.commits[n0:]:
+            if c['mode_seq'] == 3:
+                c['finger_target'] = 'closed_until_retreat_established'
+        out['finger_target'] = self.finger_target()
+        return out
+
+    def state_msg(self, step, t):
+        m = super().state_msg(step, t)
+        m['open_trigger'] = self.open_trigger
+        return m

@@ -136,3 +136,71 @@ class RegraspExecCoreB(RX.RegraspExecCore):
         r = super().report()
         r.update(version=VERSION, base_version=RX.VERSION, pre3=self.pre3.report(), semantics=RG4.SEMANTICS)
         return r
+
+
+V_TRIG = 0.025          # m/s：實測 TCP 沿退離方向速度門檻（Codex 單一候選）
+N_TRIG = 3              # 連續步數
+K_DIFF = 5              # 差分跨距（步；0.05 s）
+T_TRIG_MAX = 1.5        # s：mode 3 提交後未建立退離 ⇒ 中止（不張爪硬試）
+
+
+class RegraspExecCoreBT(RegraspExecCoreB):
+    """r7（Codex 20261028 pb1_6 回覆）：mode 3 提交後**先閉爪退離**，以實測 TCP 沿提交時工具 −z 的速度（K_DIFF 步差分）連續 N_TRIG 步
+    ≥ V_TRIG 確認運動已建立，才呼叫權威 trigger_open（同一權威發出張爪）並自該步開啟放手監看 Gate3Release（計時自真正張爪起）。
+    Gate4Exit 仍自 mode 3 提交步起算（退離量、收斂、離開後無接觸）；mode 4 准入同 r6（Gate3Release 確認新鮮＋Gate4Exit）。
+    提交後 T_TRIG_MAX 內未建立 ⇒ 中止 rg_retreat_not_established；張爪前 Gate4 已離開閂鎖 ⇒ 中止 rg_exited_before_open（不繞過接觸規則）。"""
+
+    def __init__(self, auth, pkg, H_in_fn, dt=0.01, invalid_max_s=0.2, reg=None):
+        if not isinstance(auth, RG4.RegraspAuthority4T):
+            raise ValueError('r7 核心需權威 door_regrasp_mode4.RegraspAuthority4T')
+        super().__init__(auth, pkg, H_in_fn, dt=dt, invalid_max_s=invalid_max_s, reg=reg)
+        self.rt = None
+
+    def on_commit(self, step, t, mode, T_tcp):
+        if mode != 3:
+            return super().on_commit(step, t, mode, T_tcp)
+        self.commits.append({'step': step, 't': t, 'mode': mode})
+        self.engaged = True
+        self._end('pre3', step, t)
+        ev = self.pre3.last_valid_step
+        self.handover = {'step': step, 't': t, 'last_old_step': step - 1, 'first_new_step': step, 'evidence_step': ev, 'evidence': 'pre3_release_still',
+                         'what': 'K3-M 走廊／包絡監看最後判定於 k−1；換抓保護自 k 起；閉爪退離自 k 起、張爪待實測退離建立'}
+        if ev not in (step - 1, step) or self.inv_t0 is not None:
+            self._abort('rg_handover_no_valid_evidence', step, t)
+        T0 = RX.np.asarray(T_tcp, float)
+        self.rt = {'t0': float(t), 'step0': int(step), 'p0': T0[:3, 3].copy(), 'z0': T0[:3, 2].copy(), 'hist': [], 'n_ok': 0, 'trigger': None, 'v_max': 0.0}
+        self.g[4].start(step, t, T_tcp0=T0)
+        self.active.add(4)
+
+    def step(self, step, t, mode_sel, rec, T_tcp, base, arm_q, finger_q, door_q, base_cmd=None, arm_cmd=None):
+        rt = self.rt
+        if self.abort is None and rt is not None and rt['trigger'] is None and T_tcp is not None:
+            p = RX.np.asarray(T_tcp, float)[:3, 3]
+            s = float((rt['p0'] - p) @ rt['z0'])
+            rt['hist'].append((int(step), float(t), s))
+            v = None
+            if len(rt['hist']) > K_DIFF:
+                (k0, t0, s0), (k1, t1, s1) = rt['hist'][-1 - K_DIFF], rt['hist'][-1]
+                if k1 - k0 == K_DIFF and t1 > t0:
+                    v = (s1 - s0) / (t1 - t0)
+            if v is not None:
+                rt['v_max'] = max(rt['v_max'], v)
+            rt['n_ok'] = rt['n_ok'] + 1 if (v is not None and v >= V_TRIG) else 0
+            if bool(getattr(self.g[4], 'exited', False)):
+                return self._abort('rg_exited_before_open', step, t)
+            if rt['n_ok'] >= N_TRIG:
+                info = {'v_mps': v, 's_m': s, 'dt_since_commit_s': float(t) - rt['t0']}
+                if self.auth.trigger_open(step, t, info):
+                    rt['trigger'] = dict(info, step=int(step), t=float(t))
+                    self.g[3].open(step, t)
+                    self.active.add(3)
+            elif float(t) - rt['t0'] > T_TRIG_MAX + 1e-9:
+                return self._abort('rg_retreat_not_established', step, t)
+        return super().step(step, t, mode_sel, rec, T_tcp, base, arm_q, finger_q, door_q, base_cmd=base_cmd, arm_cmd=arm_cmd)
+
+    def report(self):
+        r = super().report()
+        r['version'] = 'door_regrasp_exec_core_b/r7'
+        r['retreat_trigger'] = None if self.rt is None else {k: v for k, v in self.rt.items() if k not in ('hist', 'p0', 'z0')}
+        r['retreat_trigger_reg'] = {'V_TRIG': V_TRIG, 'N_TRIG': N_TRIG, 'K_DIFF': K_DIFF, 'T_TRIG_MAX': T_TRIG_MAX}
+        return r

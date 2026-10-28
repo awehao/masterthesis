@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # node11（2026-10-28；Codex 切法 B）：node10 的版本化複本，只加 --release-at-mode3（策略改 door_regrasp_policy8b.RegraspPolicy8B）。
+# node11 r2：--release-trigger（策略 door_regrasp_policy8c；先閉爪退離、實測建立後張爪）與 --door-dev-m3。
 # 核心段任務節點 v10（Codex r63／r64）：v8（台架開門線）與 k3b5（W2／K3-B 線）以 w1b2 為祖先三方合併；衝突 3 處（檔頭、策略建構、紀錄欄位）。
 #   策略：--regrasp 時 BG.bench_grasp2(IG2.init_grasp2(AG2.gated2(door_regrasp_policy6.RegraspPolicy6)))——開門前綴的台架初態、INIT_CHECK、
 #   接近閘控與 v2 監看照 v8；PAUSE → HELD（W2 mode 1 測試保持）→ 換抓 mode 2–6（policy6：v3 監看器獨立、mode 5 預抓取時鐘、張爪前銜接預檢、
@@ -149,6 +150,7 @@ import door_coopen_bench_grasp2 as BG                                     # noqa
 import door_bench_start2 as BENCH                                         # noqa: E402  E1／F2：台架契約 r2
 import door_regrasp_policy8 as RP8                                        # noqa: E402  RG10：換抓＋關門策略 r8（mode 1–8）
 import door_regrasp_policy8b as RP8B                                      # noqa: E402  node11：切法 B 策略
+import door_regrasp_policy8c as RP8C                                      # noqa: E402  node11 r2：先退再張
 import door_k3m_geom_monitor_v3 as GM3                                    # noqa: E402  RG10：v3 監看後端（雙把手）
 import door_regrasp_ref_registry as REGY                                  # noqa: E402  RG10：參考包登錄核驗
 from physics_contact_hold import contact_established                     # noqa: E402
@@ -359,6 +361,12 @@ class Node2(Node):
             pass
 
 
+
+def _pol8_cls(a):                                                                  # node11 r2
+    if a.release_trigger:
+        return type('RegraspPolicy8CRun', (RP8C.RegraspPolicy8C,), {'DOOR_DEV_M3': a.door_dev_m3})
+    return RP8B.RegraspPolicy8B if a.release_at_mode3 else RP8.RegraspPolicy8
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
@@ -381,6 +389,8 @@ def main():
     ap.add_argument('--w2-state-stale-s', type=float, default=1.5)
     ap.add_argument('--w2-release', action='store_true')                         # K3-B：需 --w2-mode-run-id
     ap.add_argument('--w2-unload', action='store_true')                          # K3-B r4：需 --w2-release
+    ap.add_argument('--release-trigger', action='store_true')                  # node11 r2：先閉爪退離、實測建立後張爪（策略 8c）
+    ap.add_argument('--door-dev-m3', type=float, default=None)                 # node11 r2：mode 3 門角監看上限（未給＝沿用登錄）
     ap.add_argument('--release-at-mode3', action='store_true')                 # node11：切法 B（mode 2 夾持靜止確認、mode 3 張爪＋退離）
     ap.add_argument('--regrasp', action='store_true')                            # RG10：換抓 mode 2–6（需 --w2-mode-run-id、--regrasp-ref）
     ap.add_argument('--regrasp-ref', default='')                                 # RG10：已登錄參考包
@@ -436,7 +446,7 @@ def main():
         if not _okr:
             raise SystemExit(f'換抓參考包登錄核驗不過：{_whyr} ⇒ 拒跑')
         rg_fn = GM3.backend_v3(self_mode=a.regrasp_geom_self_mode)
-        pol = BG.bench_grasp2(IG2.init_grasp2(AG2.gated2(RP8B.RegraspPolicy8B if a.release_at_mode3 else RP8.RegraspPolicy8)))(
+        pol = BG.bench_grasp2(IG2.init_grasp2(AG2.gated2(_pol8_cls(a))))(
             cfg, T_HG, a.run_id, corridor, K3MGEO.GeometryMonitor(gcfg, K3MGEO.default_backend()), a_H=a_H,
             w2_run_id=a.w2_mode_run_id, req_delay_s=a.w2_req_delay_s, commit_timeout_s=a.w2_commit_timeout_s,
             test_hold_s=a.w2_test_hold_s, state_stale_s=a.w2_state_stale_s,
