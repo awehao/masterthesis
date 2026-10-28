@@ -1,7 +1,9 @@
-# ADM21（2026-10-29；leader_sc_4 applied_not_mode_shaped:arm_not_zero）：ADM20 的版本化複本，只改一處——一般命令流 v3 封裝的 mode_seq
-#   改用**本輪開頭決定輸出形態時**的已提交序號快照（與 _rgk18 同時讀取），不在發布當下重讀 tag_normal()。
-#   缺陷：狀態回呼可在本輪求解後、發布前把 committed 由 5 更新為 6 ⇒ 以 mode 5 運動形算出的解被標成 mode 6 送出（sc_4 來源 4788）。
-#   修正後此類解標 5 ⇒ 執行端依既有規則判 old_mode_seq 丟棄、續用 mode 6 保持形現值。其他呼叫點（台架初始、閘控初始命令）無快照 ⇒ 照舊。
+# ADM21（2026-10-29；leader_sc_4 applied_not_mode_shaped:arm_not_zero；Codex 20261029_075409 核可）：ADM20 的版本化複本，只改模式標籤來源——
+#   缺陷：主迴圈開頭讀 committed 決定 _rgk18／輸出形態，求解後 _pump() 處理狀態回呼可把 committed 由 5 更新為 6，發布時 _publish_u 再重讀
+#   tag_normal() 當 v3 mode_seq ⇒ mode 5 運動解被標 mode 6 送出（sc_4 來源 4788）。
+#   修正：主迴圈每輪**只讀一次** committed（區域變數 _c21），同時決定 _rgk18、輸出形態與發布的 mode_seq；以 _publish_u(..., mode_tag=_c21) 明確傳入
+#   （只有一般求解發布傳入；台架初始、閘控初始命令等其他入口不傳 ⇒ 照舊讀 tag_normal()）。模式已切換時舊解仍標舊模式，由執行端既有 old_mode_seq 規則丟棄；
+#   保持形檢查、斷流期限、套用確認全部不變，不把錯形命令裁成零。紀錄：發布標籤（本輪模式）與發布時最新模式不同時記 n_tag_cycle_ne_latest 與前 50 筆。
 # ADM20（Codex r67；ADM19 只改兩類）：模式來源改 door_regrasp_mode3（受理到 8；運動候選 3、4、5、7、8）；底盤自由、暫停保持略過、k_free 的運動模式集合 (3, 4, 5) → (3, 4, 5, 7, 8)（三處）。
 # ADM19（換抓聯測 i-a 發現；ADM18 只改一處）：台架轉接器就緒判準的「本節點封裝話題訂閱者 ≥ 1」改依實際啟用的出口——W2（v3 唯一入口）時看
 #   _env3_pub，否則照舊 env_pub（v2）。ADM18 在 --bench-start＋W2 下因轉接器 k3m3 v3 模式只訂 v3 而永遠判未就緒（拒跑 8）。其餘逐字同 ADM18。
@@ -681,7 +683,7 @@ class WGMPCNode(Node):
     def _on_drawer_start(self, msg):
         self._drawer_start = bool(msg.data)
 
-    def _publish_u(self, u_body: np.ndarray, theta: float) -> np.ndarray:
+    def _publish_u(self, u_body: np.ndarray, theta: float, mode_tag=None) -> np.ndarray:
         """**body → world** 後發給安全鏈（adapter 之後會轉回 body）。回傳世界系命令。
 
         握手的全零命令與求解結果走**同一條發布路徑**，
@@ -710,15 +712,13 @@ class WGMPCNode(Node):
             self.env_pub.publish(_em)
             if self._w2src is not None:                                                # ADM11：同一 source_seq 另發 v3（mode_seq 綁定）
                 _ms11 = int(self._w2src.tag_normal())                                       # r2：一般流＝已提交序號
-                _snap21 = getattr(self, '_tag_cycle21', None)                                # ADM21：主迴圈發布用本輪快照（用一次即清）
-                if _snap21 is not None:
-                    if _snap21 != _ms11:
-                        self._w2_pub['n_tag_snapshot_differs'] = self._w2_pub.get('n_tag_snapshot_differs', 0) + 1
-                        _d21 = self._w2_pub.setdefault('tag_snapshot_differs', [])
+                if mode_tag is not None:                                                    # ADM21：一般求解發布＝本輪模式（只讀一次的 committed）
+                    if int(mode_tag) != _ms11:
+                        self._w2_pub['n_tag_cycle_ne_latest'] = self._w2_pub.get('n_tag_cycle_ne_latest', 0) + 1
+                        _d21 = self._w2_pub.setdefault('tag_cycle_ne_latest', [])
                         if len(_d21) < 50:
-                            _d21.append((int(self._source_seq), _snap21, _ms11, float(_t)))
-                    _ms11 = _snap21
-                    self._tag_cycle21 = None
+                            _d21.append({'source_seq': int(self._source_seq), 'tag_cycle': int(mode_tag), 'latest': _ms11, 'sim_t': float(_t)})
+                    _ms11 = int(mode_tag)
                 _e3 = Float64MultiArray()
                 _e3.data = E3.encode3(self._run_id_n, self._source_seq, ENV.ST_SOLVER, self._source_seq,
                                       self._source_seq, True, _t, u_world, _ms11)
@@ -1568,8 +1568,8 @@ class WGMPCNode(Node):
                 if self._mode_sw is not None and self._mode_sw.active:
                     self.cfg.base_hold = None                                         # ADM3：free ⇒ 底盤由 W-GMPC 決定
                     _park_rec = None                                                  # ⇒ 不做停車伺服輸出核對
-            _rgk18 = (self._w2src.committed if (self._rg is not None and self._w2r is not None and self._w2r['handover'] is not None) else None)
-            self._tag_cycle21 = int(self._w2src.tag_normal()) if self._w2src is not None else None    # ADM21：本輪模式標籤快照
+            _c21 = (int(self._w2src.committed) if self._w2src is not None else None)        # ADM21：本輪只讀一次 committed
+            _rgk18 = (_c21 if (self._rg is not None and self._w2r is not None and self._w2r['handover'] is not None) else None)
             if _rgk18 == 6 and self._rg['anchor6'] is None:                              # ADM18 (5)：mode 6 首輪設錨點
                 self._rg['anchor6'] = [float(q0[0]), float(q0[1]), float(q0[2])]
                 self._pause.update(stage='hold', anchor=tuple(self._rg['anchor6']))
@@ -1615,7 +1615,7 @@ class WGMPCNode(Node):
             T_cyc, _tgt_src, _tgt_age = self._resolve_target(
                 T_des, _solve_sim_t0)
             _T12, _src12 = T_cyc, _tgt_src                                              # ADM12：話題目標（退離用，暫停凍結前）
-            if self._w2r is not None and self._w2r['handover'] is None and self._w2src.committed >= 3 \
+            if self._w2r is not None and self._w2r['handover'] is None and _c21 is not None and _c21 >= 3 \
                     and self._pause_sup.state == 'HELD' and self._pause_sup.handover(self.sim_now()):
                 self._w2r['handover'] = {'sim_t': self.sim_now(), 'slot': slot,
                                          'anchor': (None if self._pause.get('anchor') is None else [float(x) for x in self._pause['anchor']])}
@@ -1968,7 +1968,7 @@ class WGMPCNode(Node):
                     _u_out = np.concatenate([np.asarray(self._pause['last_uh'], float), np.zeros(NU - 3)])
                     self._rg['n_hold6_cycles'] += 1
                 if self._rg is not None:
-                    rec['rg'] = {'mode': self._w2src.committed, 'k_free': _rgk18 in (3, 4, 5, 7, 8), 'hold6': _rgk18 == 6}
+                    rec['rg'] = {'mode': _c21, 'mode_latest': self._w2src.committed, 'k_free': _rgk18 in (3, 4, 5, 7, 8), 'hold6': _rgk18 == 6}
                 rec['pause_u_solve'] = [float(x) for x in np.asarray(r.u0, float)]       # r2：QP 求解值
                 rec['pause_u_published'] = [float(x) for x in np.asarray(_u_out, float)]  # r2：暫停處理後的最終發布值（零速段手臂為 0）
                 _fok4, _fwhy4 = PSUP.publish_feasible(_u_out, u_prev, self.cfg)
@@ -1984,7 +1984,7 @@ class WGMPCNode(Node):
                     continue
             rec['publish_sim_t'] = round(self.sim_now(), 6)
             # 四段紀錄裡的 request 段**用同一個值**，不另算一次轉換
-            u_world = self._publish_u(_u_out, float(q0[2]))
+            u_world = self._publish_u(_u_out, float(q0[2]), mode_tag=_c21)              # ADM21
             if self._bench is not None and self._bench['announced'] is None and self.env_pub is not None:   # ADM17 (C3)
                 self._bench['announced'] = {'run_id': self.a.run_id, 'source_seq': int(self._source_seq), 'sim_t': float(snap.sim_t),
                                             'kind': 'solution', 'd_hat': [float(x) for x in self._of_d]}
