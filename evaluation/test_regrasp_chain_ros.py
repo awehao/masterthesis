@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""換抓 ROS 聯測（Codex r65／r66；無 Isaac）：**真**任務節點 v10（--regrasp）＋**真** ADM18（bench9 參數＋W2＋--regrasp）＋**真**轉接器 k3m3（v3＋台架就緒）
+"""換抓 ROS 聯測（Codex r65／r66；無 Isaac）：**真**任務節點 v10（--regrasp）＋**真** ADM19（bench9 參數＋W2＋--regrasp）＋**真**轉接器 k3m3（v3＋台架就緒）
 ＋**真**觀察器 door_k3m_observer ＋ 替身執行端 door_regrasp_fake_exec（三情境共用；受控體為名目運動學、接觸為合成並標記）。
 情境（各自網域、各自結果目錄；不以一情境代替另一情境）：
   i   啟動短測：凍結 → 轉接器就緒 → 首解宣告 → v3 封裝經 W2Exec 進鏈 → 第 1 步套用確認（scenario start）；
@@ -58,7 +58,7 @@ def run(tag, dom):
     procs['task'] = spawn([py, '-u', os.path.join(HERE, 'door_coopen_core_task_node10.py'), '--out', os.path.join(d, 'task.json'), '--run-id', run_id,
                            '--grasp-basis', GB, '--w1b-params', PRM, '--corridor-table', TABLE, '--regrasp', '--regrasp-ref', REF,
                            '--w2-mode-run-id', run_id], env, os.path.join(d, 'task.log'))
-    procs['solver'] = spawn([py, '-u', os.path.join(HERE, 'dl3_wgmpc_wg2_adm18_node.py'), '--bench-start', '--bench-params', PRM, '--require-topic-target',
+    procs['solver'] = spawn([py, '-u', os.path.join(HERE, 'dl3_wgmpc_wg2_adm19_node.py'), '--bench-start', '--bench-params', PRM, '--require-topic-target',
                              '--park-hold', '--offset-observer', 'interval', '--mode-switch-run-id', run_id, '--cmd-env', '--run-id', run_id, '--pause',
                              '--pause-arm-zero', '--pause-active-hold', '--pause-arm-win-s', '0.5', '--coord-topic', COORD, '--offset-hold-on-free',
                              '--offset-update-in-open', '--offset-moving', '--offset-free', '--continuous', '--arm-model', 'setpoint', '--arm-ident', IDENT,
