@@ -4,6 +4,7 @@
 #   PRM＝results/door/pullback_params_48_r1.json（W1 正面開門配置：走廊表 door_wide_corridor_table_90、包絡 θ 48 重算、停位 W1、抓取初態／初始偏移取 w1f_60_3 夾持靜止窗、暫停期手指上限 20 N）；
 #   GB＝runs/phf_01_M/task.json（正面抓法）；REF＝results/door/door_regrasp_ref_pb1.json（mode 3／4 由 W1 47.89° 實測末態重規劃，mode 5–8 同 ref v5 演算法）。
 #   節點、旗標、模擬上限、守護與收尾全同 bench1。
+# r4（Codex pb1_4 回覆）：執行端 ev9r9 --door-vel-iters 4（門扇速度求解迭代 1→4；其餘同 pb1_4）。
 # 用法：RUN_ID=door_pullback_pb1_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_pullback_bench1.sh bash evaluation/run_guarded.sh
 OFFSET_MOVING=1
 set -u
@@ -29,7 +30,7 @@ trap 'say "收到 INT"; exit 130' INT
 
 REF="${PB1_REF:-evaluation/results/door/door_regrasp_ref_pb1.json}"   # 加速變體可用 PB1_REF 指定 *_wp.json
 DOOR3=src/my_omnibot_description/config/door_local_v3.yaml
-sha256sum evaluation/isaac_door_k2_sim_ev9r8.py evaluation/door_coopen_core_task_node10.py evaluation/dl3_wgmpc_wg2_adm20_node.py evaluation/arm_vel_adapter_k3m3.py \
+sha256sum evaluation/isaac_door_k2_sim_ev9r9.py evaluation/door_coopen_core_task_node10.py evaluation/dl3_wgmpc_wg2_adm20_node.py evaluation/arm_vel_adapter_k3m3.py \
   evaluation/door_regrasp_*.py evaluation/door_k3m_observer.py "$PRM" "$GB" "$REF" "$DOOR3" > "$DIR/versions.sha256" || { say "**版本紀錄失敗** ⇒ 拒跑"; exit 95; }
 say "版本紀錄 $DIR/versions.sha256（$(wc -l < "$DIR/versions.sha256") 檔；git $(git rev-parse --short HEAD)）"
 say "python3＝$(command -v python3)；VIRTUAL_ENV=${VIRTUAL_ENV:-（無）}"
@@ -55,12 +56,12 @@ say "W1e 執行端變更：暫停期手指驅動輸出上限 ${W1E_FEFF0} → ${
 say "W1b 登錄：$PRM（sha256 $(sha256sum "$PRM" | cut -c1-16)）θ=${W1B_THETA}° 走廊表 $W1B_TABLE 包絡 $W1B_ENV 觀察器上限 ${W1B_OBS}° 協同 $W1B_COORD"
 say "=== 往後拉開＋換抓＋拉關 pb1（ev9r8＋v10＋ADM20＋k3m3；ref pb1；W1 正面開門配置＋開門段偏移凍結＋一次性 gc.freeze（失敗拒跑）＋暫停上限 ${W1E_FEFF} N；台架初態 Q_INIT $Q_INIT、寫入設定點 $S_INIT，實際閉爪取證＋正對門往後拉開）RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID；停位 $STAND（實驗初始化）；起始＝指定抓取初態（不經 K2_READY／Q_PRE 與接近段）；夾持→開到 ${W1B_THETA}°→受控暫停→HELD→換抓 1–6→通過中拉關 7→放手退出 8 ==="
 
-spawn sim "$ISAAC_PY" -u evaluation/isaac_door_k2_sim_ev9r8.py --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --contact-v3-out "$DIR/contact_v3.jsonl" --door-asset "$DOOR3" --gc-freeze-before-release --bench-start --bench-params "$PRM" --bench-setpoint="$S_INIT" --pause-finger-max-effort "$W1E_FEFF" --pause-finger-original-effort "$W1E_FEFF0" --cmd-env --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID" --corridor-table "$W1B_TABLE" --envelope="$W1B_ENV" --sim-limit 400 --contact-min-n 0.5 \
+spawn sim "$ISAAC_PY" -u evaluation/isaac_door_k2_sim_ev9r9.py --door-vel-iters 4 --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --contact-v3-out "$DIR/contact_v3.jsonl" --door-asset "$DOOR3" --gc-freeze-before-release --bench-start --bench-params "$PRM" --bench-setpoint="$S_INIT" --pause-finger-max-effort "$W1E_FEFF" --pause-finger-original-effort "$W1E_FEFF0" --cmd-env --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID" --corridor-table "$W1B_TABLE" --envelope="$W1B_ENV" --sim-limit 400 --contact-min-n 0.5 \
   --finger-collision split --park-hold --start-pose "$STAND" --park-pose "$STAND" --stow-q="$Q_INIT" --out "$DIR"
 say "  等場景建起（最多 180 s）"
 for i in $(seq 180); do grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null && break; kill -0 "${PIDS[0]}" 2>/dev/null || break; sleep 1; done
 grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null || { say "**場景未建起** ⇒ 中止"; tail -8 "$DIR/sim.log" | tee -a "$DIR/run.log"; exit 83; }
-grep -E '^\[(room|door)\] (零摩擦|夾持面|摩擦核對|門建於|初始門角|門扇接觸|牆接觸)' "$DIR/sim.log" | tee -a "$DIR/run.log"
+grep -E '^\[(room|door)\] (零摩擦|夾持面|摩擦核對|門建於|門扇求解迭代|初始門角|門扇接觸|牆接觸)' "$DIR/sim.log" | tee -a "$DIR/run.log"
 
 spawn task python3 -u evaluation/door_coopen_core_task_node10.py --out "$DIR/task.json" --run-id "$RUN_ID" --grasp-basis "$GB" --w1b-params "$PRM" --corridor-table "$W1B_TABLE" --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --wall-total-s 1500
 ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
