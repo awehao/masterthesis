@@ -102,3 +102,34 @@ class GripDual2(GripDual):
         r = super().report()
         r.update(version='door_grip_dual/r2', trigger=self.trigger_t)
         return r
+
+
+class GripDual3(GripDual2):
+    """r3（Codex 20261029 extf_grip2_1 回覆）：修正 r2 的滾動窗裁切／時間精度衝突——r2 以名目 dt 補長度後裁切，浮點時戳使 200 筆窗長 1.99999995 s < 門檻、
+    第 201 筆又先被裁掉，整趟滿窗 0 次（extf_grip2_1 重播）。r3：只用實際時間差——裁切只在「去掉最舊一筆後窗長仍 ≥ arm_hold_s」時進行（保留跨越窗邊界的樣本），
+    滿窗＝最新與最舊樣本時間差 ≥ arm_hold_s − 1e-6。HOLD 只作登錄許可，沿用先前已累積的有效確認窗，不另起等待。Δ、門檻、固定基準、清除、凍結不變。"""
+    TOL = 1e-6
+
+    def observe(self, t, q1, q2, f1, f2, valid, grip_cmd):
+        if self.basis is not None or self.cleared is not None:
+            return
+        ok = bool(valid) and all(x is not None and math.isfinite(float(x)) for x in (q1, q2, f1, f2))
+        if not self._is_closed(grip_cmd) or not ok or min(float(f1), float(f2)) < self.f_min:
+            self.win = []
+            return
+        self.win.append((float(t), float(q1), float(q2)))
+        while len(self.win) >= 2 and self.win[-1][0] - self.win[1][0] >= self.arm_hold_s - self.TOL:
+            self.win.pop(0)
+        full = self.win[-1][0] - self.win[0][0] >= self.arm_hold_s - self.TOL
+        if self.trigger_t is not None and full:
+            n = len(self.win)
+            b = (sum(w[1] for w in self.win) / n, sum(w[2] for w in self.win) / n)
+            self.basis = b
+            self.registered = {'t': float(t), 'trigger': dict(self.trigger_t), 'window_s': [self.win[0][0], self.win[-1][0]], 'n': n,
+                               'span_s': self.win[-1][0] - self.win[0][0], 'basis_m': list(b), 'target_m': [b[0] - self.delta, b[1] - self.delta]}
+            self.win = []
+
+    def report(self):
+        r = super().report()
+        r['version'] = 'door_grip_dual/r3'
+        return r
