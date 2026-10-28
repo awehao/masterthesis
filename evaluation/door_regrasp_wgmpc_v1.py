@@ -18,7 +18,7 @@
   起始銜接（RefRuntime3.start）不過 ⇒ **被拒**（安全停止），不搜尋、不改參考。
   mode 6：閉爪 close_ramp 1.0 s 後以實測 TCP 對內側把手相對位姿為 E0，再 attach_hold 2.0 s 核漂移 ≤ 5 mm／2°（HoldConfirm 的幾何部分；接觸力未模擬）。
 逐控制週期核（受控體實際狀態）：PI.check 分階段淨空／關節餘裕；GeometryMonitor 原設定（age_max 0.2）＋切換包裝、來源年齡 0.0251 s（bench_6 p99），
-  stop／warn 即違規（＝線上任務端會中止處）；套用命令速度／相鄰加速度對求解器方框；求解失敗逐模式計數。另記固定 T_plan 0.29 的規劃壓力最小值（只報）。
+  stop／warn 皆計違規（較線上嚴：任務端只在 stop 中止；warn＝距 d_min 不足 1 mm，與時間化要求一致；兩者分開記 kind）；套用命令速度／相鄰加速度對求解器方框；求解失敗逐模式計數。另記固定 T_plan 0.29 的規劃壓力最小值（只報）。
 分報：被拒、違規（第一個違規前為有效前綴）、有效完成（全程無違規且 mode 6 漂移核通過）。門角固定 q_ref（放手後不推門；static 假設）。
 
     python3 -u evaluation/door_regrasp_wgmpc_v1.py results/door/door_regrasp_ref_v4.json   # 寫 *_wgmpc_v1.json（不覆寫）
