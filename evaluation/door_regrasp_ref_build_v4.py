@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""v4（Codex r61 §2；v3 保留）：來源改 door_regrasp_retime_v6（同一張時間表對門角 名目／±0.7° 規劃壓力核對皆 0 違規）；
+"""v4（Codex r61 §2、r62 §1；v3 保留）：來源改 door_regrasp_retime_v7（同一張時間表對門角 名目／±0.7° 規劃壓力核對皆 0 違規＋發布偏航率 ≤ 0.0738 rad/s；
+  v6 停於 it 0、無下游，本檔未曾以 v6 執行）；
 切段與每點欄位改用 door_regrasp_ref_split（與時間化 v6 記憶體建包同一函式；規則不變）。其餘（登錄、門角修正靜態核、自驗）同 v3。以下為 v3 說明：
 v3（Codex r60 §1–§2；v2 保留——v2 的 T_HG 仍為舊抓法、replan 指向失敗的 v5，與實際構型來源 v7 φ＋30° 錯配 3.49 mm／30°）。
 來源：door_regrasp_retime_v5（replan v8：φ＋30°、B1 (0.65, −0.05, 270°)、M 段門角包絡）。
@@ -43,7 +44,7 @@ import door_coopen_pass_close_inner_v1 as PI           # noqa: E402
 import door_coopen_traj_v1 as TJ                       # noqa: E402
 import door_regrasp_ref_split as RS                    # noqa: E402
 
-SRC = os.path.join(HERE, 'results', 'door', 'door_regrasp_retime_v6.json')
+SRC = os.path.join(HERE, 'results', 'door', 'door_regrasp_retime_v7.json')
 REPLAN = os.path.join(HERE, 'results', 'door', 'door_regrasp_replan_v8_phi+30.json')
 OUTER_GB = 'evaluation/results/door/coopen_core_grasp_basis_r4.json'
 OUT = os.path.join(HERE, 'results', 'door', 'door_regrasp_ref_v4.json')
