@@ -81,14 +81,14 @@ class TE(unittest.TestCase):
                   "'source': 'executor_rg8'", "w2_auth.extra_state = lambda: {'gates': rg8_core.gates_state(rg8_rt['step'])"):
             self.assertIn(k, SRC)
         blk = SRC[SRC.index("if getattr(a, 'regrasp', False):                                            # RG8"):SRC.index('        w2_rt = {\'abort_handled\': False}')]
-        self.assertLess(blk.index('sys.exit(66)'), blk.index('RGM2.RegraspAuthority2('))
+        self.assertLess(blk.index('sys.exit(66)'), blk.index('RGM3.RegraspAuthority('))
 
     def test_e7_gate2(self):
-        for k in ('RGM2.RegraspAuthority2(a.w2_mode_run_id,', "self.create_subscription(String, '/wgmpc/pause_status', self._counted(self._rg8_ps), _lat_w2)",
+        for k in ('RGM3.RegraspAuthority(a.w2_mode_run_id,', "self.create_subscription(String, '/wgmpc/pause_status', self._counted(self._rg8_ps), _lat_w2)",
                   "rg8_core.g[2].set_zero(_z8)", 'base_cmd=[float(x) for x in res.base_cmd], arm_cmd=[float(x) for x in res.u_applied[3:]])'):
             self.assertIn(k, SRC)
         self.assertLess(SRC.index('rg8_core.g[2].set_zero(_z8)'), SRC.index('_why8s = rg8_core.step(step_id, t,'))
-        self.assertNotIn('RGM.RegraspAuthority(', SRC)
+        self.assertNotIn('RGM2.RegraspAuthority2(', SRC)
 
     def test_e6_record(self):
         self.assertIn("rec['regrasp'] = {'config': rg8_cfg, 'core': rg8_core.report(), 'runtime': dict(rg8_rt), 'grip_gate': w2_grip.report(),", SRC)
