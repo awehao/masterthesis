@@ -3,9 +3,9 @@
 #   唯一文字衝突＝檔頭說明，兩段並存如下）；其上只插入 --regrasp（見 RG8 標記）。--regrasp 未給 ⇒ 回歸基準＝ev9r7 接觸資料流＋原控制行為。
 #   RG8（--regrasp，需 --w2-mode-run-id、--bench-start、--contact-v3-out、--regrasp-ref；與 --w2-release／--w2-unload 互斥，不符 ⇒ 拒跑 66）：
 #   (1) 啟動核：參考包 door_regrasp_ref_registry.validate；門規格＝登錄核驗所用 door_local_v3.yaml（sha256）；門根變換＝單位（參考包座標＝門局部座標）。
-#   (2) 權威改 door_regrasp_mode1.RegraspAuthority（W2Exec3、GripGate 同 K3-B）；gate 3–6 與 HoldConfirm 由 door_regrasp_exec_core.RegraspExecCore
-#       每物理步以**同一份 v3 快照分類紀錄**驅動（與假執行端共用類別）；提交當步（world.step 之前）on_commit 啟動／結束 gate；
-#       gate 狀態經權威 extra_state 'gates' 發給任務端；v3 接觸窗口摘要每 2 步發 /door/contact_v3_summary。
+#   (2) 權威改 door_regrasp_mode2.RegraspAuthority2（mode1 子類，另加 mode 2 停止准入 gate 2；W2Exec3、GripGate 同 K3-B）；
+#       gate 2–6 與 HoldConfirm 由 door_regrasp_exec_core.RegraspExecCore（gate 2＝Gate2StopObs：訂閱 /wgmpc/pause_status 取 ZERO_PUB 為窗起點，
+#       逐物理步以判定器 P2／P3 同一套程式核停止與證據覆蓋；不合格只使 mode 2 不准入）
 #   (3) 換抓中止原因（接觸違規、資料失效 > 0.2 s、gate／短保持 FAILED）⇒ 既有 K2 閂鎖（鏈內命令過期、取消交棒、/door/k3m_abort）。
 #   (4) 台架首筆：W2 唯一入口＝v3，凍結期以收件匣 mode_seq 0 的序號判斷；釋放時只把宣告那一筆經 W2Exec.on_env3→pre_step 進鏈（bench_release_w2），
 #       較新者留在收件匣；第 1 物理步不消化收件匣（首筆固定，同 v2 路徑）。
@@ -362,7 +362,8 @@ import door_k3b_unload2 as K3BU                                  # noqa: E402  E
 import door_k3b_unload_ctrl as K3BUC                             # noqa: E402  EV8：卸載斜坡設定與讀回
 import door_w2_mode8 as W2M8                                     # noqa: E402  EV8：權威 r8（gate2）
 import collections as _w2_col                                    # noqa: E402  EV6
-import door_regrasp_mode1 as RGM                                 # noqa: E402  RG8：換抓權威
+import door_regrasp_mode1 as RGM                                 # noqa: E402  RG8：換抓權威（版本名）
+import door_regrasp_mode2 as RGM2                                # noqa: E402  RG8：換抓權威 r3（mode 2 停止准入 gate 2）
 import door_regrasp_exec_core as RGX                             # noqa: E402  RG8：換抓執行端核心（與假執行端共用）
 import door_regrasp_ref_registry as RGREG                        # noqa: E402  RG8：參考包登錄核驗
 import door_geom_v3 as G3R                                       # noqa: E402  RG8：內側把手位姿
@@ -519,6 +520,8 @@ class Bridge(Node):
             self.w2_eff_q = []                                                         # EV7：5 N 恢復請求
             if getattr(a, 'regrasp', False):                                           # RG8：v3 接觸窗口摘要給任務端
                 self.rg8_c3_pub = self.create_publisher(String, '/door/contact_v3_summary', 50)
+                self.rg8_pause_status = None                                           # RG8：求解端暫停監督（ZERO_PUB 宣告 ⇒ gate 2 窗起點）
+                self.create_subscription(String, '/wgmpc/pause_status', self._counted(self._rg8_ps), _lat_w2)
             self.create_subscription(String, '/door/finger_effort_req', self._counted(self._w2_eff_req), _lat_w2)
             self.w2_eff_ack_pub = self.create_publisher(String, '/door/finger_effort_ack', _lat_w2)
         self.create_subscription(String, '/handover/request', self._counted(self._ho), 10)
@@ -630,6 +633,12 @@ class Bridge(Node):
             self.w2_n_overflow += 1
             return
         self.w2_inbox.append((e, _ev_time.monotonic()))
+
+    def _rg8_ps(self, m: String):                                                   # RG8
+        try:
+            self.rg8_pause_status = json.loads(m.data)
+        except Exception:
+            self.rg8_pause_status = {'_unparsable': str(m.data)[:200]}
 
     def _w2_eff_req(self, m: String):                                               # EV7
         try:
@@ -1286,7 +1295,7 @@ def main() -> int:
                 print(f'[door] **RG8 拒跑**：{_why8}', flush=True)
                 sys.exit(66)
             rg8_spec = yaml.safe_load(open(a.door_asset))
-            w2_auth = RGM.RegraspAuthority(a.w2_mode_run_id, run_id_num=ENV.run_id_num(a.run_id), stage_id=ENV.ST_ADAPTER,
+            w2_auth = RGM2.RegraspAuthority2(a.w2_mode_run_id, run_id_num=ENV.run_id_num(a.run_id), stage_id=ENV.ST_ADAPTER,
                                            cand_timeout_s=a.w2_cand_timeout_s, cmd_max_age_s=a.max_cmd_age_s,
                                            post_commit_timeout_s=a.w2_post_commit_timeout_s, dt=a.physics_dt,
                                            a_lin=a.base_accel_lin, a_ang=a.base_accel_ang, arm_rate_max=a.arm_rate_max)
@@ -1295,8 +1304,8 @@ def main() -> int:
             rg8_core = RGX.RegraspExecCore(w2_auth, rg8_pkg, lambda _q8: _door_T() @ G3R.handle_pose_inner(rg8_spec, _q8), dt=a.physics_dt)
             w2_auth.extra_state = lambda: {'gates': rg8_core.gates_state(rg8_rt['step']), 'regrasp_abort': rg8_core.abort}
             rg8_cfg = {'ref': os.path.relpath(a.regrasp_ref, WS), 'ref_sha256': hashlib.sha256(open(a.regrasp_ref, 'rb').read()).hexdigest(),
-                       'core_version': RGX.VERSION, 'authority_version': RGM.VERSION, 'door_spec_sha256': hashlib.sha256(open(a.door_asset, 'rb').read()).hexdigest()}
-            print(f'[door] **RG8 換抓**：權威 {RGM.VERSION}、核心 {RGX.VERSION}、參考包 {rg8_cfg["ref"]}', flush=True)
+                       'core_version': RGX.VERSION, 'authority_version': RGM2.VERSION, 'door_spec_sha256': hashlib.sha256(open(a.door_asset, 'rb').read()).hexdigest()}
+            print(f'[door] **RG8 換抓**：權威 {RGM2.VERSION}、核心 {RGX.VERSION}、參考包 {rg8_cfg["ref"]}', flush=True)
         w2_rt = {'abort_handled': False}
 
     def _w2_known_abort():                                                          # EV6 r2：既有中止彙整（無 ⇒ None）
@@ -2053,9 +2062,13 @@ def main() -> int:
                        [float(p_now[0]), float(p_now[1]), float(yw)], [float(x) for x in q_arm])
         if rg8_core is not None and _w2sel is not None:                                # RG8：同一物理步資料（同一份 v3 快照分類紀錄）
             rg8_rt['step'] = step_id
+            _z8 = (((node.rg8_pause_status or {}).get('outcome') or {}).get('transitions') or {}).get('ZERO_PUB')
+            if _z8 is not None:                                                     # gate 2 窗起點＝求解端宣告的 ZERO_PUB
+                rg8_core.g[2].set_zero(_z8)
             _T8 = np.asarray(K.fk([float(p_now[0]), float(p_now[1]), float(yw)] + [float(x) for x in q_arm], 'link_tcp'), float)
             _why8s = rg8_core.step(step_id, t, _w2sel.get('mode_seq'), _c3_r, _T8, [float(p_now[0]), float(p_now[1]), float(yw)],
-                                   [float(x) for x in q_arm], [float(q_meas[fidx[j]]) for j in FJ] if FJ else None, float(_qd_rec))
+                                   [float(x) for x in q_arm], [float(q_meas[fidx[j]]) for j in FJ] if FJ else None, float(_qd_rec),
+                                   base_cmd=[float(x) for x in res.base_cmd], arm_cmd=[float(x) for x in res.u_applied[3:]])
             if _why8s is not None and not rg8_rt['abort_handled']:
                 rg8_rt['abort_handled'] = True
                 if k2_latch.latched is None:

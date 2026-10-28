@@ -6,7 +6,9 @@
   E4 每物理步次序：step_begin → RG8 on_commit → … → _snap.take → _c3_r 重設 → v3 step_record → RG8 core.step → world.step；
      state 發布處同時發 v3 摘要；台架凍結期 RG8 路徑在原 release_intake 之前判斷；
   E5 啟動核：互斥與必要旗標、registry.validate、門規格 sha、門根單位、拒跑碼 66；換抓中止走 K2 閂鎖（expire_chain、k3m_abort）；
-  E6 room_run 記 regrasp（config、core.report、grip_gate、k3m_regrasp_end）。
+  E6 room_run 記 regrasp（config、core.report、grip_gate、k3m_regrasp_end）；
+  E7 gate 2 接線（Codex r66 §3）：權威 RegraspAuthority2；--regrasp 時訂閱 /wgmpc/pause_status（latched）；core.step 前以 ZERO_PUB set_zero；
+     core.step 傳入本步實際套用的底盤／手臂命令（res.base_cmd、res.u_applied[3:]，與 room 紀錄同源）。
 
     python3 evaluation/test_ev9r8_static.py
 """
@@ -38,7 +40,7 @@ def hunks():
     return [(tag, A[i1:i2], B[j1:j2]) for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag != 'equal'], (a0, b0, c0)
 
 
-GUARDS = ('rg8_core is not None', "getattr(a, 'regrasp', False)", 'import ', 'ap.add_argument', 'rg8_core, rg8_rt', 'def _rg8_tcp',
+GUARDS = ('def _rg8_ps', 'rg8_core is not None', "getattr(a, 'regrasp', False)", 'import ', 'ap.add_argument', 'rg8_core, rg8_rt', 'def _rg8_tcp',
           '_c3_r = None', 'while node.w2_inbox and not (rg8_core', "'regrasp_end' not in k3m")
 
 
@@ -78,7 +80,14 @@ class TE(unittest.TestCase):
                   "'source': 'executor_rg8'", "w2_auth.extra_state = lambda: {'gates': rg8_core.gates_state(rg8_rt['step'])"):
             self.assertIn(k, SRC)
         blk = SRC[SRC.index("if getattr(a, 'regrasp', False):                                            # RG8"):SRC.index('        w2_rt = {\'abort_handled\': False}')]
-        self.assertLess(blk.index('sys.exit(66)'), blk.index('RGM.RegraspAuthority('))
+        self.assertLess(blk.index('sys.exit(66)'), blk.index('RGM2.RegraspAuthority2('))
+
+    def test_e7_gate2(self):
+        for k in ('RGM2.RegraspAuthority2(a.w2_mode_run_id,', "self.create_subscription(String, '/wgmpc/pause_status', self._counted(self._rg8_ps), _lat_w2)",
+                  "rg8_core.g[2].set_zero(_z8)", 'base_cmd=[float(x) for x in res.base_cmd], arm_cmd=[float(x) for x in res.u_applied[3:]])'):
+            self.assertIn(k, SRC)
+        self.assertLess(SRC.index('rg8_core.g[2].set_zero(_z8)'), SRC.index('_why8s = rg8_core.step(step_id, t,'))
+        self.assertNotIn('RGM.RegraspAuthority(', SRC)
 
     def test_e6_record(self):
         self.assertIn("rec['regrasp'] = {'config': rg8_cfg, 'core': rg8_core.report(), 'runtime': dict(rg8_rt), 'grip_gate': w2_grip.report(),", SRC)

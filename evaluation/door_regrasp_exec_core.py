@@ -15,18 +15,96 @@
      （first_new_step；ContactWindow 自 mode 1 提交起已逐步在跑、Gate4 自 k 起）。r2（Codex r65 §3）：提交當下要求新保護有有效證據——
      Gate3 最後有效紀錄步 ∈ {k−1, k}（同 confirmed_fresh 的同一份紀錄）且接觸資料無進行中的失效；不符 ⇒ 中止 rg_handover_no_valid_evidence。
   5. 對任務端：gates_state(step)（權威狀態 extra_state 的 'gates'）與 ContactWindow.take_summary()（每週期摘要）。
+  6. r3（Codex r66 §3）停止准入 gate 2（張爪前，逐物理步、有效證據）：Gate2StopObs——判定器 door_k3m_check_p4b 的 P2／P3 同一套程式
+     （window_speeds、low、hold_cmd_ok、TH／WIN／N_CONFIRM／OBS_S）逐步重算：窗起點＝求解端宣告的 ZERO_PUB（/wgmpc/pause_status，set_zero），
+     命令停止時刻 t_cmd＝自 ZERO_PUB 起套用命令連續 N_CONFIRM 步保持形；確認＝t ≥ t_cmd＋OBS_S＋MARGIN（0.2 s，使線上窗涵蓋判定器窗：
+     判定器 t_cmd 另要求來源 ≥ 零速段首序號，至多晚一條命令管線延遲）；窗內任一步速度超標 ⇒ FAILED stop_obs_moved、缺步或非有限 ⇒
+     FAILED stop_obs_data_invalid（不跳過、不補）；確認後至 mode 2 提交仍逐步核（失去即 FAILED）。ZERO_PUB 未宣告 ⇒ 不確認。
+     權威改 door_regrasp_mode2.RegraspAuthority2（gates[2]＝本 gate）；mode 2 提交即結束（保存判定）。gate 2 FAILED 不觸發中止
+     （開門前綴暫停期行為不變）：只使 mode 2 請求／提交被拒（gate2:<why>），由任務端依既有規則中止換抓。
 另：bench_release_w2——台架首筆在 W2 唯一入口（v3 封裝）下經 W2Exec.on_env3→pre_step 進鏈（同 BENCH.release_intake 的檢核）。
 """
 from __future__ import annotations
 
 import numpy as np
 
+import collections
+
+import door_k3m_check_p as CP
+import door_k3m_pause_sup_p4 as P4
 import door_regrasp_contact_window as RCW
 import door_regrasp_gates3 as GT
 import door_regrasp_ref_registry as REGY
 
-VERSION = 'door_regrasp_exec_core/r2'
-GATE_KEY = {3: 'gate3', 4: 'gate4', 5: 'gate5', 6: 'gate6'}
+VERSION = 'door_regrasp_exec_core/r3'
+GATE_KEY = {2: 'gate2', 3: 'gate3', 4: 'gate4', 5: 'gate5', 6: 'gate6'}
+MARGIN_S = 0.2
+
+
+class Gate2StopObs:
+    """張爪前停止准入（判定器 P2／P3 同一套程式逐物理步重算）。狀態 WAIT → CONFIRMED／FAILED。"""
+    name = 'gate2_stop_obs'
+
+    def __init__(self, dt=0.01):
+        self.dt = float(dt)
+        self.buf = collections.deque(maxlen=CP.WIN + 1)
+        self.I = {'step': 0, 'sim_t': 1, 'base_xyth': 2, 'q_arm_meas': 3, 'door_q_rad': 4}
+        self.t_zero = self.t_cmd = None
+        self.run = 0
+        self.prev_step = None
+        self.state, self.why = 'WAIT', None
+        self.t, self.events = {}, []
+        self.last_valid_step = None
+        self.n = {'steps': 0, 'checked': 0, 'max_v': [0.0, 0.0, 0.0, 0.0]}
+
+    def set_zero(self, t_zero):
+        if self.t_zero is None and isinstance(t_zero, (int, float)) and not isinstance(t_zero, bool) and np.isfinite(t_zero):
+            self.t_zero = float(t_zero)
+            self.events.append({'t_zero': self.t_zero})
+
+    def _fail(self, why, step, t, **kw):
+        if self.state != 'FAILED':
+            self.state, self.why = 'FAILED', why
+            self.t['failed'] = t
+            self.events.append(dict({'step': step, 't': t, 'to': 'FAILED', 'why': why}, **kw))
+        return self.state
+
+    def step(self, step, t, base3, door_q, arm6, base_cmd3, arm_cmd6):
+        if self.state == 'FAILED':
+            return self.state
+        self.n['steps'] += 1
+        self.buf.append([step, float(t), list(base3), list(arm6), float(door_q)])
+        if self.t_zero is None or float(t) < self.t_zero - 1e-9:
+            return self.state
+        v = CP.window_speeds(list(self.buf), self.I, len(self.buf) - 1)
+        self.n['checked'] += 1
+        if v is None:
+            return self._fail('stop_obs_data_invalid', step, t)
+        self.n['max_v'] = [max(a, b) for a, b in zip(self.n['max_v'], v)]
+        if not CP.low(v):
+            return self._fail('stop_obs_moved', step, t, v=[float(x) for x in v])
+        self.last_valid_step = step
+        if self.t_cmd is None:
+            ok = P4.hold_cmd_ok(base_cmd3, arm_cmd6, CP.TOL_APPLIED)
+            consec = self.prev_step is not None and step == self.prev_step + 1
+            self.run = (self.run + 1 if consec else 1) if ok else 0
+            if self.run >= CP.N_CONFIRM:
+                self.t_cmd = float(t)
+                self.events.append({'step': step, 't_cmd': self.t_cmd})
+        self.prev_step = step
+        if self.state == 'WAIT' and self.t_cmd is not None and float(t) >= self.t_cmd + CP.OBS_S + MARGIN_S - 1e-9:
+            self.state = 'CONFIRMED'
+            self.t['CONFIRMED'] = float(t)
+            self.events.append({'step': step, 't': t, 'to': 'CONFIRMED'})
+        return self.state
+
+    def confirmed_fresh(self, step):
+        return self.state == 'CONFIRMED' and self.last_valid_step in (step - 1, step)
+
+    def report(self):
+        return {'gate': self.name, 'state': self.state, 'why': self.why, 't_zero': self.t_zero, 't_cmd': self.t_cmd, 't': dict(self.t),
+                'events': self.events[:50], 'n': dict(self.n), 'reg': {'TH': dict(CP.TH), 'WIN': CP.WIN, 'N_CONFIRM': CP.N_CONFIRM,
+                                                                       'OBS_S': CP.OBS_S, 'MARGIN_S': MARGIN_S, 'HOLD_V': P4.HOLD_V, 'HOLD_W': P4.HOLD_W}}
 
 
 class RegraspExecCore:
@@ -38,9 +116,9 @@ class RegraspExecCore:
         self.T_HG = np.asarray(pkg['inner_grasp']['T_HG'], float).reshape(4, 4)
         self.B1, self.STOW = np.asarray(pkg['B1'], float), np.asarray(pkg['stow'], float)
         reg = dict(reg or {}, dt=self.dt)
-        self.g = {3: GT.Gate3Release(reg=reg), 4: GT.Gate4Exit(reg=reg), 5: GT.Gate5Arrive(reg=reg), 6: GT.Gate6Admit(reg=reg)}
+        self.g = {2: Gate2StopObs(dt=self.dt), 3: GT.Gate3Release(reg=reg), 4: GT.Gate4Exit(reg=reg), 5: GT.Gate5Arrive(reg=reg), 6: GT.Gate6Admit(reg=reg)}
         self.hold = GT.HoldConfirm(reg=reg)
-        self.active = set()                       # 正在逐步更新的 gate（3–6）與 'hold'
+        self.active = {2}                         # 正在逐步更新的 gate（2–6）與 'hold'；gate 2 自建構起緩衝、至 mode 2 提交
         self.ended = {}                           # gate → {'step','t','state'}
         self.cw = RCW.ContactWindow(f_max=GT.REG['contact_abort_n'], dt=self.dt)
         self.engaged = False                      # mode ≥ 1 提交後
@@ -48,7 +126,7 @@ class RegraspExecCore:
         self.abort = None
         self.commits = []
         self.handover = None
-        auth.gates = {k: (lambda s, _k=k: self._fresh(_k, s)) for k in (3, 4, 5, 6)}
+        auth.gates = {k: (lambda s, _k=k: self._fresh(_k, s)) for k in (2, 3, 4, 5, 6)}
 
     def _fresh(self, k, step):
         g = self.g[k]
@@ -68,6 +146,7 @@ class RegraspExecCore:
         if mode >= 1:
             self.engaged = True
         if mode == 2:
+            self._end(2, step, t)
             self.g[3].open(step, t)
             self.active.add(3)
         elif mode in (3, 4, 5, 6):
@@ -90,7 +169,7 @@ class RegraspExecCore:
                 self.hold.start(step, t)
                 self.active.add('hold')
 
-    def step(self, step, t, mode_sel, rec, T_tcp, base, arm_q, finger_q, door_q):
+    def step(self, step, t, mode_sel, rec, T_tcp, base, arm_q, finger_q, door_q, base_cmd=None, arm_cmd=None):
         """回傳本步中止原因（None＝無）。第一個中止原因閂鎖。"""
         if self.abort is not None:
             return self.abort
@@ -109,6 +188,9 @@ class RegraspExecCore:
                 if float(t) - self.inv_t0 > self.invalid_max_s + 1e-9:
                     return self._abort('rg_contact_data_invalid', step, t)
         H_in = self.H_in_fn(float(door_q))
+        if 2 in self.active:
+            self.g[2].step(step, t, base, door_q, arm_q, base_cmd if base_cmd is not None else [float('nan')] * 3,
+                           arm_cmd if arm_cmd is not None else [float('nan')] * 6)
         if 3 in self.active:
             pf = None if not valid else [GT.finger_force(lcf, f, GT.OUTER) for f in GT.FINGERS]
             self.g[3].step(step, t, finger_q, pf, valid, door_q)
@@ -120,7 +202,7 @@ class RegraspExecCore:
             self.g[6].step(step, t, T_tcp, H_in @ self.T_HG, rec)
         if 'hold' in self.active:
             self.hold.step(step, t, T_tcp, H_in, rec)
-        for k in sorted(x for x in self.active if x != 'hold'):
+        for k in sorted(x for x in self.active if x not in ('hold', 2)):              # gate 2 失敗不在此中止：只使 mode 2 永不准入（權威 nack）
             if self.g[k].state == 'FAILED':
                 return self._abort(f'rg_{GATE_KEY[k]}:{self.g[k].why}', step, t)
         if 'hold' in self.active and self.hold.state == 'FAILED':
