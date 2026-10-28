@@ -138,6 +138,17 @@ def scan(pkg, kin, seq, dq_deg, fn, kind='plan', sa=0.2):
              'v_ratio_max': float(np.max(np.abs(Vb) / VLIM)), 'a_ratio_max': float(np.max(np.abs(A) / ALIM))}, bad_src)
 
 
+def yaw_rate(seq, lim):
+    """發布序列（含銜接、門角修正、保持）相鄰樣本偏航率；回傳 (最大值 rad/s, 超過 lim 的來源索引集合)。（Codex r62 §1：核真正發布值）"""
+    mx, bad = 0.0, set()
+    for j in range(1, len(seq)):
+        w = abs(math.remainder(float(seq[j][1][2] - seq[j - 1][1][2]), 2 * math.pi)) / DT
+        mx = max(mx, w)
+        if w > lim + 1e-12:
+            bad.add(int(seq[j][3]))
+    return mx, bad
+
+
 def cases():
     out = [('N', None, 0.0), ('Q-0.7', None, -0.7), ('Q+0.7', None, 0.7)]
     for tag, r, yaw in (('Bs', 0.002, 0.2), ('B0.8', 0.8 * 0.02, 0.8 * 2.0)):

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """換抓 20 Hz 參考 → 各模式段（自 door_regrasp_ref_build_v3 抽出；切段規則不變，供時間化 v6 於記憶體建包與參考包建置 v4 共用）。
+  r2：每點加 stage（來源階段；mode 5 預抓取節點閘控用）。
   mode 3：release_outer 自起點到 TCP 沿起點工具 −z 退開量第一次達 0.06 m；mode 4：release_outer 其餘＋M；mode 5：A＋I；mode 6：G。
 """
 from __future__ import annotations
@@ -34,7 +35,7 @@ def pack(R, seg, info):
         tb = tt[idx[0]]
         d = {'t': [float(tt[i] - tb) for i in idx], 'tcp': [TCP[i].reshape(-1).tolist() for i in idx], 'base': [X[i, :3].tolist() for i in idx],
              'arm': [X[i, 3:].tolist() for i in idx], 'qf': [float(R[i][3]) for i in idx], 'q_door_deg': [float(R[i][2]) for i in idx],
-             'src_index': [int(i) for i in idx]}
+             'src_index': [int(i) for i in idx], 'stage': [R[i][4] for i in idx]}
         if with_s:
             d['s'] = [float((p0 - TCP[i][:3, 3]) @ z0) for i in idx]
         return d
