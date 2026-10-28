@@ -270,6 +270,7 @@ def main() -> int:
                                                    'joint_order': ARM, 'sampling_instant': '**本步寫入後**（apply_action 之後）', 'physics_dt_s': dt,
                                                    'physics_dt_nominal_s': dt})))
     bench_rel = BENCH.BenchRelease(a.run_id, 0.0, bench_cfg.release_timeout_wall_s, time.monotonic())
+    rel_sel = None
     nd.bench_state_pub.publish(String(data=json.dumps({'state': 'frozen', 't0': 0.0, 'run_id': a.run_id})))
     w_start = time.monotonic()
     while rclpy.ok():
@@ -296,7 +297,7 @@ def main() -> int:
                 keep = [(x, w) for x, w in nd.w2_inbox if not (x.get('source_seq') is not None and aseq is not None and x['source_seq'] <= aseq)]
                 nd.w2_inbox.clear()
                 nd.w2_inbox.extend(keep)
-                ok, why, irec, _ = RGX.bench_release_w2(w2x, chain, e8, aseq, 0, 0.0, nd.k2_abort_msg is not None or nd.stop_req is not None)
+                ok, why, irec, rel_sel = RGX.bench_release_w2(w2x, chain, e8, aseq, 0, 0.0, nd.k2_abort_msg is not None or nd.stop_req is not None)
                 rec['bench']['first_intake'] = {'ok': ok, 'why': why, **(irec or {}), 'n_inbox_kept': len(keep)}
                 if not ok:
                     bench_rel.state, bench_rel.released = 'aborted', {'why': f'release_intake：{why}'}
@@ -343,7 +344,11 @@ def main() -> int:
         rq, nd.w2_req_q = list(nd.w2_req_q), []
         known = (f"k2_latch:{k2_latch.latched.get('why')}" if k2_latch.latched is not None else
                  (f"k3m_violation:{k3m['violation'].get('why')}" if k3m['violation'] is not None else None))
-        sel, relay, nv = w2x.step_begin(step, t, chain, known_abort=known, inbox=ib, requests=rq)
+        if first_pending and rel_sel is not None:                               # 首步：釋放時已 select（步 0），不再 select（否則 confirm_missing）
+            sel, relay, nv = rel_sel, [], []
+            nd.w2_req_q = rq + nd.w2_req_q
+        else:
+            sel, relay, nv = w2x.step_begin(step, t, chain, known_abort=known, inbox=ib, requests=rq)
         if (sel.get('event') or {}).get('kind') == 'commit':
             core.on_commit(step, t, auth.mode_seq, tcp())
             t_mode[auth.mode_seq] = t

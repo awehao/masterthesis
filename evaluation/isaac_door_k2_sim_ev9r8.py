@@ -11,7 +11,8 @@
 #       較新者留在收件匣；第 1 物理步不消化收件匣（首筆固定，同 v2 路徑）。
 #   (5) mode 3 提交步 k 起 K3-M 走廊／包絡監看不再判（最後判定於 k−1；k3m.regrasp_end＝core.handover 的 last_old_step／first_new_step），
 #       換抓保護自 k 起接手（提交當下須有有效 v3 證據，否則中止）；不關閉其他保護。
-#   **修改既有敘述 3 處**（其餘只插入）：收件匣 while 條件（首筆固定）、走廊監看 if 條件（交接後不再判）、台架 release_intake 呼叫改為 RG8／原路徑二選一。
+#   **修改既有敘述 4 處**（其餘只插入）：收件匣 while 條件（首筆固定）、走廊監看 if 條件（交接後不再判）、台架 release_intake 呼叫改為 RG8／原路徑二選一、
+#       首步 step_begin 改為 RG8 時沿用釋放當下的 select 結果（聯測 iii 發現：步 0 二次 select 未經 confirm ⇒ 權威 confirm_missing 中止）。
 # ---- 以下為 ev9r7 線說明 ----
 # EV9 r7（isaac_door_k2_sim_ev9r6.py 的版本化複本；Codex r48 §1–§2：資料流修正，控制規則不變）：
 #   * 每物理步在舊分類之前以 contact_snapshot.ContactSnapshot 讀**一次** get_contact_force_data（唯讀 numpy），舊分類（leaf_contacts）、
@@ -1431,7 +1432,7 @@ def main() -> int:
                                                                                  and _x8.get('source_seq') <= _as8)]
                         node.w2_inbox.clear()
                         node.w2_inbox.extend(_keep8)
-                        _ok, _why, _irec, _ = RGX.bench_release_w2(w2x, chain, _e8, _as8, 0, t_b0, _ab)
+                        _ok, _why, _irec, rg8_rt['rel_sel'] = RGX.bench_release_w2(w2x, chain, _e8, _as8, 0, t_b0, _ab)
                     else:
                         _ok, _why, _irec = BENCH.release_intake(env_in, chain, node.wb_env_latest, (bench_rel.announced or {}).get('source_seq'),
                                                                 t_b0, k2_latch.filter_wb, _ab)
@@ -1568,7 +1569,11 @@ def main() -> int:
             while node.w2_inbox and not (rg8_core is not None and bench_first_pending):   # RG8：第 1 步首筆固定（同 v2 路徑）
                 _ib6.append(node.w2_inbox.popleft())
             _rq6, node.w2_req_q = list(node.w2_req_q), []
-            _w2sel, _relay6, _nv6 = w2x.step_begin(step_id, t, chain, known_abort=_w2_known_abort(), inbox=_ib6, requests=_rq6)
+            if rg8_core is not None and bench_first_pending and rg8_rt.get('rel_sel') is not None:   # RG8：首步已於釋放時 select（步 0），不再 select
+                _w2sel, _relay6, _nv6 = rg8_rt['rel_sel'], [], []
+                node.w2_req_q = _rq6 + node.w2_req_q
+            else:
+                _w2sel, _relay6, _nv6 = w2x.step_begin(step_id, t, chain, known_abort=_w2_known_abort(), inbox=_ib6, requests=_rq6)
             if rg8_core is not None and (_w2sel.get('event') or {}).get('kind') == 'commit':   # RG8：提交當步（world.step 之前）啟動／結束 gate
                 rg8_core.on_commit(step_id, t, w2_auth.mode_seq, _rg8_tcp())
             if w2_xm is not None and (_w2sel.get('event') or {}).get('kind') == 'commit' and w2_auth.mode_seq == 2:

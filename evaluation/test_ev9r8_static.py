@@ -41,7 +41,7 @@ def hunks():
 
 
 GUARDS = ('def _rg8_ps', 'rg8_core is not None', "getattr(a, 'regrasp', False)", 'import ', 'ap.add_argument', 'rg8_core, rg8_rt', 'def _rg8_tcp',
-          '_c3_r = None', 'while node.w2_inbox and not (rg8_core', "'regrasp_end' not in k3m")
+          '_c3_r = None', 'while node.w2_inbox and not (rg8_core', "'regrasp_end' not in k3m", 'if rg8_core is not None and bench_first_pending')
 
 
 class TE(unittest.TestCase):
@@ -54,7 +54,8 @@ class TE(unittest.TestCase):
         removed = [ln.strip() for _, old, _ in hs for ln in old]
         self.assertEqual(sorted(removed), sorted([
             "_ok, _why, _irec = BENCH.release_intake(env_in, chain, node.wb_env_latest, (bench_rel.announced or {}).get('source_seq'),",
-            't_b0, k2_latch.filter_wb, _ab)', 'while node.w2_inbox:', "if k3m['active'] and k3m['violation'] is None:"]))
+            't_b0, k2_latch.filter_wb, _ab)', 'while node.w2_inbox:', "if k3m['active'] and k3m['violation'] is None:",
+            '_w2sel, _relay6, _nv6 = w2x.step_begin(step_id, t, chain, known_abort=_w2_known_abort(), inbox=_ib6, requests=_rq6)']))
         for tag, old, new in hs:
             txt = ''.join(new)
             self.assertIn('RG8', txt, txt[:200])
@@ -69,7 +70,7 @@ class TE(unittest.TestCase):
         self.assertEqual(i, sorted(i))
         j = SRC.index("node.w2_state_pub.publish(String(data=json.dumps(w2_auth.state_msg(step_id, t), default=float)))\n                if rg8_core is not None:")
         self.assertGreater(SRC.index('node.rg8_c3_pub.publish(', j), j)
-        k1 = SRC.index('_ok, _why, _irec, _ = RGX.bench_release_w2(w2x, chain, _e8, _as8, 0, t_b0, _ab)')
+        k1 = SRC.index("_ok, _why, _irec, rg8_rt['rel_sel'] = RGX.bench_release_w2(w2x, chain, _e8, _as8, 0, t_b0, _ab)")
         k2 = SRC.index('_ok, _why, _irec = BENCH.release_intake(env_in, chain, node.wb_env_latest')
         self.assertLess(k1, k2)
 
