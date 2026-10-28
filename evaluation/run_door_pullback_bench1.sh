@@ -5,6 +5,7 @@
 #   GB＝runs/phf_01_M/task.json（正面抓法）；REF＝results/door/door_regrasp_ref_pb1.json（mode 3／4 由 W1 47.89° 實測末態重規劃，mode 5–8 同 ref v5 演算法）。
 #   節點、旗標、模擬上限、守護與收尾全同 bench1。
 # r4（Codex pb1_4 回覆）：執行端 ev9r9 --door-vel-iters 4（pb1_5 開門段淨空退化，已撤回，門扇速度迭代回預設 1）。
+# r6（Codex pb1_6 後回覆）：抓取深度 6.8 → 3 mm（登錄 r4、基準 pullback_grasp_basis_d3、參考 ref pb1d）；其餘同 r5。
 # r5（Codex 切法 B）：執行端 ev9r10 --release-at-mode3、任務節點 node11 --release-at-mode3、參考 ref pb1b（mode 2 夾持靜止確認；mode 3 提交步張爪＋退離同步）。
 # 用法：RUN_ID=door_pullback_pb1_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_pullback_bench1.sh bash evaluation/run_guarded.sh
 OFFSET_MOVING=1
@@ -15,8 +16,8 @@ cd "$WS"
 : "${RUN_ID:?RUN_ID 未設定}"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
-PRM=evaluation/results/door/pullback_params_48_r3.json   # pb1 r3：r2＋暫停期手指上限 5 N（pb1_3 張爪中止後，Codex 選 (a)）
-GB=evaluation/runs/phf_01_M/task.json
+PRM=evaluation/results/door/pullback_params_48_r4.json   # pb1 r3：r2＋暫停期手指上限 5 N（pb1_3 張爪中止後，Codex 選 (a)）
+GB=evaluation/results/door/pullback_grasp_basis_d3.json   # r6：抓取深度 3 mm（Codex 單一候選）
 PIDS=(); NAMES=()
 source "$WS/evaluation/k2_proc.sh"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$DIR/run.log"; }
@@ -29,7 +30,7 @@ trap cleanup EXIT
 trap 'say "收到 TERM"; exit 143' TERM
 trap 'say "收到 INT"; exit 130' INT
 
-REF="${PB1_REF:-evaluation/results/door/door_regrasp_ref_pb1b.json}"   # 加速變體可用 PB1_REF 指定 *_wp.json
+REF="${PB1_REF:-evaluation/results/door/door_regrasp_ref_pb1d.json}"   # 加速變體可用 PB1_REF 指定 *_wp.json
 DOOR3=src/my_omnibot_description/config/door_local_v3.yaml
 sha256sum evaluation/isaac_door_k2_sim_ev9r10.py evaluation/door_coopen_core_task_node11.py evaluation/dl3_wgmpc_wg2_adm20_node.py evaluation/arm_vel_adapter_k3m3.py \
   evaluation/door_regrasp_*.py evaluation/door_k3m_observer.py "$PRM" "$GB" "$REF" "$DOOR3" > "$DIR/versions.sha256" || { say "**版本紀錄失敗** ⇒ 拒跑"; exit 95; }
