@@ -1,5 +1,7 @@
 # Claude 交付計畫：移動中開門，並在通過過程中關門
 
+> **2026-10-28 最新更正，優先於下文舊目標：正常開門，不要邊開邊繞；開到位後再通過，並在通過途中關門。** 詳見 [Howard 最新動作要求](20261028_howard_normal_open_then_pass_close.md)。舊 coopen 開門繞行參考不能直接視為符合新要求；先作最小必要參考與銜接修改，成果優先，不擴大測試評估前置。
+
 日期：2026-10-27，Asia/Taipei。
 
 正式交付位置：`reviews/20261027_howard_confirmed_plan.md`。本檔與 Codex／Claude 審查往返一同保存；下文相對路徑均以 `/home/howardchen/masterthesis` 為基準。
