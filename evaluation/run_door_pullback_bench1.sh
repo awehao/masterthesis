@@ -27,7 +27,7 @@ trap cleanup EXIT
 trap 'say "收到 TERM"; exit 143' TERM
 trap 'say "收到 INT"; exit 130' INT
 
-REF=evaluation/results/door/door_regrasp_ref_pb1.json
+REF="${PB1_REF:-evaluation/results/door/door_regrasp_ref_pb1.json}"   # 加速變體可用 PB1_REF 指定 *_wp.json
 DOOR3=src/my_omnibot_description/config/door_local_v3.yaml
 sha256sum evaluation/isaac_door_k2_sim_ev9r8.py evaluation/door_coopen_core_task_node10.py evaluation/dl3_wgmpc_wg2_adm20_node.py evaluation/arm_vel_adapter_k3m3.py \
   evaluation/door_regrasp_*.py evaluation/door_k3m_observer.py "$PRM" "$GB" "$REF" "$DOOR3" > "$DIR/versions.sha256" || { say "**版本紀錄失敗** ⇒ 拒跑"; exit 95; }
