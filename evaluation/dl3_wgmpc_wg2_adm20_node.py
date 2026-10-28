@@ -1,4 +1,4 @@
-# ADM20（Codex r67；ADM19 只改兩類）：模式來源改 door_regrasp_mode3（受理到 8；運動候選 3、4、5、7、8）；底盤自由／k_free 的運動模式集合 (3, 4, 5) → (3, 4, 5, 7, 8)。
+# ADM20（Codex r67；ADM19 只改兩類）：模式來源改 door_regrasp_mode3（受理到 8；運動候選 3、4、5、7、8）；底盤自由、暫停保持略過、k_free 的運動模式集合 (3, 4, 5) → (3, 4, 5, 7, 8)（三處）。
 # ADM19（換抓聯測 i-a 發現；ADM18 只改一處）：台架轉接器就緒判準的「本節點封裝話題訂閱者 ≥ 1」改依實際啟用的出口——W2（v3 唯一入口）時看
 #   _env3_pub，否則照舊 env_pub（v2）。ADM18 在 --bench-start＋W2 下因轉接器 k3m3 v3 模式只訂 v3 而永遠判未就緒（拒跑 8）。其餘逐字同 ADM18。
 # ADM18（換抓；Codex r50–r52；規格 REGRASP_inner_contact_prep_draft2.md §7）：
@@ -1563,7 +1563,7 @@ class WGMPCNode(Node):
             if _rgk18 in (3, 4, 5, 7, 8):                                                      # ADM18 (4)：運動模式底盤自由（coord 引導）
                 self.cfg.base_hold = None
                 self._rg['n_free_cycles'] += 1
-            if self._pause_active() and _rgk18 not in (3, 4, 5):                          # ADM4：底盤＝同一求解的等式（decel／hold／零速）；ADM18：運動模式略過
+            if self._pause_active() and _rgk18 not in (3, 4, 5, 7, 8):                          # ADM4：底盤＝同一求解的等式（decel／hold／零速）；ADM18：運動模式略過
                 _ub4 = np.asarray(u_prev, float)[:3]
                 _sp4 = self._pause_sup.ws.speeds(snap.sim_t, time.monotonic())
                 _pose4 = [float(q0[0]), float(q0[1]), float(q0[2])]
