@@ -15,7 +15,9 @@
      （first_new_step；ContactWindow 自 mode 1 提交起已逐步在跑、Gate4 自 k 起）。r2（Codex r65 §3）：提交當下要求新保護有有效證據——
      Gate3 最後有效紀錄步 ∈ {k−1, k}（同 confirmed_fresh 的同一份紀錄）且接觸資料無進行中的失效；不符 ⇒ 中止 rg_handover_no_valid_evidence。
   5. 對任務端：gates_state(step)（權威狀態 extra_state 的 'gates'）與 ContactWindow.take_summary()（每週期摘要）。
-  6. r3（Codex r66 §3）停止准入 gate 2（張爪前，逐物理步、有效證據）：Gate2StopObs——判定器 door_k3m_check_p4b 的 P2／P3 同一套程式
+  6. r5（Codex r70 (a)，取代 r3 的「窗內任一步超標即 FAILED」）：gate 2 改為宣告 ZERO_PUB 起最近連續 10 s 每步合格才確認，速度改用 p4b（手臂 0.5 s 窗）；
+     超標／缺步撤銷並清窗、不 FAILED（見 Gate2StopObs 說明）。以下為 r3 原說明。
+     r3（Codex r66 §3）停止准入 gate 2（張爪前，逐物理步、有效證據）：Gate2StopObs——判定器 door_k3m_check_p4b 的 P2／P3 同一套程式
      （window_speeds、low、hold_cmd_ok、TH／WIN／N_CONFIRM／OBS_S）逐步重算：窗起點＝求解端宣告的 ZERO_PUB（/wgmpc/pause_status，set_zero），
      命令停止時刻 t_cmd＝自 ZERO_PUB 起套用命令連續 N_CONFIRM 步保持形；確認＝t ≥ t_cmd＋OBS_S＋MARGIN（0.2 s，使線上窗涵蓋判定器窗：
      判定器 t_cmd 另要求來源 ≥ 零速段首序號，至多晚一條命令管線延遲）；窗內任一步速度超標 ⇒ FAILED stop_obs_moved、缺步或非有限 ⇒
@@ -36,81 +38,85 @@ import numpy as np
 import collections
 
 import door_k3m_check_p as CP
+import door_k3m_check_p4b as P4B
 import door_k3m_pause_sup_p4 as P4
 import door_regrasp_contact_window as RCW
 import door_regrasp_gates3 as GT
 import door_regrasp_mode3 as RG3
 import door_regrasp_ref_registry as REGY
 
-VERSION = 'door_regrasp_exec_core/r4'
+VERSION = 'door_regrasp_exec_core/r5'
 GATE_KEY = {2: 'gate2', 3: 'gate3', 4: 'gate4', 5: 'gate5', 6: 'gate6'}
-MARGIN_S = 0.2
 
 
 class Gate2StopObs:
-    """張爪前停止准入（判定器 P2／P3 同一套程式逐物理步重算）。狀態 WAIT → CONFIRMED／FAILED。"""
+    """張爪前停止准入 r5（Codex r70 (a)）：宣告 ZERO_PUB 起，**最近連續 OBS_S（10 s）**每物理步皆合格才確認。
+    合格＝door_k3m_check_p4b.window_speeds（底盤／門 10 步窗、手臂 0.5 s＝50 步窗；步號連續、時間遞增、有限）全部 ≤ 門檻（CP.low，門檻不變）
+          且本步實際套用命令為保持形（P4.hold_cmd_ok）。任一步不合格、缺步或非有限 ⇒ 撤銷確認、清空連續窗（不拼接零碎合格時間），
+    恢復後重新累積；不判 FAILED（總期限由 HELD 有界時限負責，重置窗不重置期限）。確認後至 mode 2 提交仍逐步核（失去即撤銷）。
+    記錄每次重置與准入窗起訖（t_win0、t_conf），供判定器另報；原判定器 P3 不因此視為通過。"""
     name = 'gate2_stop_obs'
 
     def __init__(self, dt=0.01):
         self.dt = float(dt)
-        self.buf = collections.deque(maxlen=CP.WIN + 1)
+        self.buf = collections.deque(maxlen=P4B.ARM_WIN + 1)
         self.I = {'step': 0, 'sim_t': 1, 'base_xyth': 2, 'q_arm_meas': 3, 'door_q_rad': 4}
-        self.t_zero = self.t_cmd = None
-        self.run = 0
-        self.prev_step = None
+        self.t_zero = None
+        self.win0 = None
         self.state, self.why = 'WAIT', None
         self.t, self.events = {}, []
         self.last_valid_step = None
-        self.n = {'steps': 0, 'checked': 0, 'max_v': [0.0, 0.0, 0.0, 0.0]}
+        self.n = {'steps': 0, 'checked': 0, 'resets': 0, 'max_v': [0.0, 0.0, 0.0, 0.0]}
 
     def set_zero(self, t_zero):
         if self.t_zero is None and isinstance(t_zero, (int, float)) and not isinstance(t_zero, bool) and np.isfinite(t_zero):
             self.t_zero = float(t_zero)
             self.events.append({'t_zero': self.t_zero})
 
-    def _fail(self, why, step, t, **kw):
-        if self.state != 'FAILED':
-            self.state, self.why = 'FAILED', why
-            self.t['failed'] = t
-            self.events.append(dict({'step': step, 't': t, 'to': 'FAILED', 'why': why}, **kw))
-        return self.state
+    def _reset(self, step, t, why, v=None):
+        self.n['resets'] += 1
+        if len(self.events) < 200:
+            self.events.append({'step': step, 't': t, 'reset': why, 'v': None if v is None else [float(x) for x in v], 'was': self.state})
+        self.win0 = None
+        self.last_valid_step = None
+        if self.state == 'CONFIRMED':
+            self.state = 'WAIT'
+            self.t['revoked'] = float(t)
 
     def step(self, step, t, base3, door_q, arm6, base_cmd3, arm_cmd6):
-        if self.state == 'FAILED':
-            return self.state
         self.n['steps'] += 1
         self.buf.append([step, float(t), list(base3), list(arm6), float(door_q)])
         if self.t_zero is None or float(t) < self.t_zero - 1e-9:
             return self.state
-        v = CP.window_speeds(list(self.buf), self.I, len(self.buf) - 1)
         self.n['checked'] += 1
+        v = P4B.window_speeds(list(self.buf), self.I, len(self.buf) - 1)
         if v is None:
-            return self._fail('stop_obs_data_invalid', step, t)
+            self._reset(step, t, 'data_invalid_or_gap')
+            return self.state
         self.n['max_v'] = [max(a, b) for a, b in zip(self.n['max_v'], v)]
         if not CP.low(v):
-            return self._fail('stop_obs_moved', step, t, v=[float(x) for x in v])
+            self._reset(step, t, 'moved', v)
+            return self.state
+        if not P4.hold_cmd_ok(base_cmd3, arm_cmd6, CP.TOL_APPLIED):
+            self._reset(step, t, 'applied_not_hold')
+            return self.state
+        self.win0 = self.win0 if self.win0 is not None else float(t)
         self.last_valid_step = step
-        if self.t_cmd is None:
-            ok = P4.hold_cmd_ok(base_cmd3, arm_cmd6, CP.TOL_APPLIED)
-            consec = self.prev_step is not None and step == self.prev_step + 1
-            self.run = (self.run + 1 if consec else 1) if ok else 0
-            if self.run >= CP.N_CONFIRM:
-                self.t_cmd = float(t)
-                self.events.append({'step': step, 't_cmd': self.t_cmd})
-        self.prev_step = step
-        if self.state == 'WAIT' and self.t_cmd is not None and float(t) >= self.t_cmd + CP.OBS_S + MARGIN_S - 1e-9:
+        if self.state == 'WAIT' and float(t) - self.win0 >= CP.OBS_S - 1e-9:
             self.state = 'CONFIRMED'
             self.t['CONFIRMED'] = float(t)
-            self.events.append({'step': step, 't': t, 'to': 'CONFIRMED'})
+            self.t['win0'] = self.win0
+            self.events.append({'step': step, 't': t, 'to': 'CONFIRMED', 'win0': self.win0})
         return self.state
 
     def confirmed_fresh(self, step):
         return self.state == 'CONFIRMED' and self.last_valid_step in (step - 1, step)
 
     def report(self):
-        return {'gate': self.name, 'state': self.state, 'why': self.why, 't_zero': self.t_zero, 't_cmd': self.t_cmd, 't': dict(self.t),
-                'events': self.events[:50], 'n': dict(self.n), 'reg': {'TH': dict(CP.TH), 'WIN': CP.WIN, 'N_CONFIRM': CP.N_CONFIRM,
-                                                                       'OBS_S': CP.OBS_S, 'MARGIN_S': MARGIN_S, 'HOLD_V': P4.HOLD_V, 'HOLD_W': P4.HOLD_W}}
+        return {'gate': self.name, 'version': 'r5', 'state': self.state, 'why': self.why, 't_zero': self.t_zero, 'win0': self.win0, 't': dict(self.t),
+                'events': self.events[:200], 'n': dict(self.n),
+                'reg': {'TH': dict(CP.TH), 'WIN_base_door': CP.WIN, 'WIN_arm': P4B.ARM_WIN, 'OBS_S': CP.OBS_S, 'HOLD_V': P4.HOLD_V, 'HOLD_W': P4.HOLD_W,
+                        'speeds': 'door_k3m_check_p4b.window_speeds'}}
 
 
 class RegraspExecCore:

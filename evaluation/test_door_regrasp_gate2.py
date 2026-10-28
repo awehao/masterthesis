@@ -44,22 +44,22 @@ def run(g, n, zero_at=1.0, mutate=None, skip=None):
             b, a = mutate(k, b, a)
         if zero_at is not None and t >= zero_at - 1e-9:
             g.set_zero(zero_at)
-        st = g.step(k, t, b, door, a, [0.0, 0.0, 0.0], [0.0] * 6)
+        g.step(k, t, b, door, a, [0.0, 0.0, 0.0], [0.0] * 6)
         rows.append([k, t, list(b), list(a), door])
-        if st == 'FAILED':
-            break
     return rows, k
 
 
 class TQ(unittest.TestCase):
+    """r5（Codex r70 (a)）：最近連續 OBS_S 合格才確認；超標／缺步 ⇒ 撤銷並清空窗、之後重新累積（不 FAILED）。"""
+
     def test_q1_confirm(self):
         g = XC.Gate2StopObs()
-        rows, k = run(g, 1200)
-        self.assertAlmostEqual(g.t_cmd, 1.0 + (CP.N_CONFIRM - 1) * DT, places=6)
+        run(g, 1200)
         self.assertEqual(g.state, 'CONFIRMED')
-        self.assertGreaterEqual(g.t['CONFIRMED'], g.t_cmd + CP.OBS_S + XC.MARGIN_S - 1e-9)
+        self.assertAlmostEqual(g.t['win0'], 1.0, places=6)
+        self.assertGreaterEqual(g.t['CONFIRMED'], g.t['win0'] + CP.OBS_S - 1e-9)
         g2 = XC.Gate2StopObs()
-        run(g2, int(round((g.t_cmd + CP.OBS_S + XC.MARGIN_S) / DT)) - 2)
+        run(g2, int(round((1.0 + CP.OBS_S) / DT)) - 2)
         self.assertEqual(g2.state, 'WAIT')
 
     def test_q2_between_checks(self):
@@ -69,10 +69,13 @@ class TQ(unittest.TestCase):
             return b, a
         g = XC.Gate2StopObs()
         rows, _ = run(g, 1300, mutate=m)
-        self.assertEqual((g.state, g.why), ('FAILED', 'stop_obs_moved'))
-        g_sparse = XC.Gate2StopObs()
-        rows_all, _ = run(g_sparse, 1300, mutate=m)
-        S = rows_all
+        self.assertEqual(g.state, 'WAIT')                                       # 超標 ⇒ 窗重啟，13 s 時尚未滿 10 s
+        self.assertTrue(any(e.get('reset') == 'moved' for e in g.events))
+        g3 = XC.Gate2StopObs()
+        run(g3, 1800, mutate=m)
+        self.assertEqual(g3.state, 'CONFIRMED')
+        self.assertGreater(g3.t['win0'], 5.02)
+        S = rows
         I = {'step': 0, 'sim_t': 1, 'base_xyth': 2, 'q_arm_meas': 3, 'door_q_rad': 4}
         full = [i for i in range(len(S)) if S[i][1] >= 1.0]
         sparse = [i for i in full if S[i][0] % 5 == 0]
@@ -82,7 +85,12 @@ class TQ(unittest.TestCase):
     def test_q3_gap(self):
         g = XC.Gate2StopObs()
         run(g, 1100, skip=400)
-        self.assertEqual((g.state, g.why), ('FAILED', 'stop_obs_data_invalid'))
+        self.assertEqual(g.state, 'WAIT')
+        self.assertTrue(any(e.get('reset') == 'data_invalid_or_gap' for e in g.events))
+        g2 = XC.Gate2StopObs()
+        run(g2, 1700, skip=400)
+        self.assertEqual(g2.state, 'CONFIRMED')
+        self.assertGreater(g2.t['win0'], 4.0)
 
     def test_q4_no_zero(self):
         g = XC.Gate2StopObs()
@@ -97,16 +105,16 @@ class TQ(unittest.TestCase):
             return b, a
         g = XC.Gate2StopObs()
         run(g, 1200, mutate=m)
-        self.assertEqual((g.state, g.why), ('FAILED', 'stop_obs_moved'))
+        self.assertEqual(g.state, 'WAIT')
+        self.assertIn('revoked', g.t)
         self.assertFalse(g.confirmed_fresh(1200))
 
-    def test_q6_covers_judge(self):
+    def test_q6_window_record(self):
         g = XC.Gate2StopObs()
-        rows, _ = run(g, 1200)
-        I = {'step': 0, 'sim_t': 1, 'base_xyth': 2, 'q_arm_meas': 3, 'door_q_rad': 4}
-        win = [i for i in range(len(rows)) if 1.0 - 1e-9 <= rows[i][1] <= g.t_cmd + CP.OBS_S + 1e-9]
-        self.assertTrue(all(CP.low(CP.window_speeds(rows, I, i)) for i in win))
-        self.assertGreaterEqual(g.t['CONFIRMED'], g.t_cmd + CP.OBS_S)
+        run(g, 1200)
+        r = g.report()
+        self.assertEqual((r['version'], r['reg']['WIN_arm'], r['reg']['speeds']), ('r5', 50, 'door_k3m_check_p4b.window_speeds'))
+        self.assertIsNotNone(r['t'].get('win0'))
 
 
 class TA(unittest.TestCase):
@@ -151,7 +159,7 @@ class TA(unittest.TestCase):
             b = [0.95 + (0.001 if k == 15 else 0.0), -0.92, 3.07]
             why = c.step(k, round(k * DT, 6), 0, TX.rec(k), T, b, [0.0] * 6, (0.0, 0.0), TX.Q, [0.0] * 3, [0.0] * 6)
             self.assertIsNone(why)
-        self.assertEqual(c.g[2].state, 'FAILED')
+        self.assertEqual(c.g[2].state, 'WAIT')
         self.assertEqual(auth.gates[2](30)[0], False)
 
 
