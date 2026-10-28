@@ -55,8 +55,8 @@ say "W1e 執行端變更：暫停期手指驅動輸出上限 ${W1E_FEFF0} → ${
 say "W1b 登錄：$PRM（sha256 $(sha256sum "$PRM" | cut -c1-16)）θ=${W1B_THETA}° 走廊表 $W1B_TABLE 包絡 $W1B_ENV 觀察器上限 ${W1B_OBS}° 協同 $W1B_COORD"
 say "=== 往後拉開＋換抓＋拉關 pb1（ev9r8＋v10＋ADM20＋k3m3；ref pb1；W1 正面開門配置＋偏移更新＋一次性 gc.freeze（失敗拒跑）＋暫停上限 ${W1E_FEFF} N；台架初態 Q_INIT $Q_INIT、寫入設定點 $S_INIT，實際閉爪取證＋正對門往後拉開）RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID；停位 $STAND（實驗初始化）；起始＝指定抓取初態（不經 K2_READY／Q_PRE 與接近段）；夾持→開到 ${W1B_THETA}°→受控暫停→HELD→換抓 1–6→通過中拉關 7→放手退出 8 ==="
 
-spawn sim "$ISAAC_PY" -u evaluation/isaac_door_k2_sim_ev9r8.py --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --contact-v3-out "$DIR/contact_v3.jsonl" --door-asset "$DOOR3" --gc-freeze-before-release --bench-start --bench-params "$PRM" --bench-setpoint "$S_INIT" --pause-finger-max-effort "$W1E_FEFF" --pause-finger-original-effort "$W1E_FEFF0" --cmd-env --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID" --corridor-table "$W1B_TABLE" --envelope="$W1B_ENV" --sim-limit 400 --contact-min-n 0.5 \
-  --finger-collision split --park-hold --start-pose "$STAND" --park-pose "$STAND" --stow-q "$Q_INIT" --out "$DIR"
+spawn sim "$ISAAC_PY" -u evaluation/isaac_door_k2_sim_ev9r8.py --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --contact-v3-out "$DIR/contact_v3.jsonl" --door-asset "$DOOR3" --gc-freeze-before-release --bench-start --bench-params "$PRM" --bench-setpoint="$S_INIT" --pause-finger-max-effort "$W1E_FEFF" --pause-finger-original-effort "$W1E_FEFF0" --cmd-env --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID" --corridor-table "$W1B_TABLE" --envelope="$W1B_ENV" --sim-limit 400 --contact-min-n 0.5 \
+  --finger-collision split --park-hold --start-pose "$STAND" --park-pose "$STAND" --stow-q="$Q_INIT" --out "$DIR"
 say "  等場景建起（最多 180 s）"
 for i in $(seq 180); do grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null && break; kill -0 "${PIDS[0]}" 2>/dev/null || break; sleep 1; done
 grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null || { say "**場景未建起** ⇒ 中止"; tail -8 "$DIR/sim.log" | tee -a "$DIR/run.log"; exit 83; }
