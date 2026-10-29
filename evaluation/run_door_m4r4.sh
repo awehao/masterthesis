@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # m4r4（2026-10-29；door_m4r_3 後發現：各趟導航的 ros2 run 子程序未被收尾，累積 88 個孤兒在 domain 97，干擾導航）：run_door_m4r3.sh 的複本，只改程序管理：
 #   (1) 每個 spawn 以 setsid 開新 session（PGID＝登錄 PID）；(2) cleanup 對整個程序群組 TERM → 3 s → KILL；
-#   (3) 起跑前掃描同 ROS_DOMAIN_ID、帶 --ros-args 的既有程序，有即拒跑（exit 99）。控制、保護、參數與 m4r3 完全相同。
+#   (3) 起跑前掃描衝突程序（同 ROS_DOMAIN_ID 或無 domain 設定，且帶 --ros-args 或屬已知節點：模擬、求解、任務、轉接、nav1、展開、觀察器、GMPC），有即拒跑（exit 99），不自動清除；
+#   (4) Codex 20261029_183843：procs.tsv 記每個登錄程序的 PID／PGID；收尾只對 PGID＝登錄 PID 的群組動作，之後逐群組核殘留；
+#       關鍵話題發布者（/cmd_vel、/cmd_vel_pre_mux、/cmd_vel_pre_shield、/cmd_vel_nav、/scan、/tf、/tf_static、/plan）身分與數量於起跑後與第二段導航開始時各存一次（topic_pubs_*.txt）。
+#   控制、保護、參數與 m4r3 完全相同。
 # 用法：RUN_ID=door_m4r_4 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_m4r4.sh bash evaluation/run_guarded.sh
 # m4r3（2026-10-29；door_m4r_2 R3 銜接只剩橫向 0.109 m）：run_door_m4r2.sh 的複本，只把 nav1 換成 r6（第二段 GLIDE 橫向上限 0.010→0.03 m/s、
 #   HANDOVER_READY 另需橫向 ≤ 0.03 m）。其餘配置、保護、溫度守護同 door_m4r_2。
@@ -62,12 +65,14 @@ GB=evaluation/runs/phf_01_M/task.json
 PIDS=(); NAMES=()
 source "$WS/evaluation/k2_proc.sh"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$DIR/run.log"; }
-spawn(){ local n="$1"; shift; setsid "$@" >>"$DIR/$n.log" 2>&1 & PIDS+=("$!"); NAMES+=("$n"); say "  起 $n PID=${PIDS[-1]}（setsid，群組＝PID）"; }
+spawn(){ local n="$1"; shift; setsid "$@" >>"$DIR/$n.log" 2>&1 & PIDS+=("$!"); NAMES+=("$n"); sleep 0.2; local g; g=$(ps -o pgid= -p "${PIDS[-1]}" 2>/dev/null | tr -d " "); printf "%s\t%s\t%s\n" "$n" "${PIDS[-1]}" "${g:-NA}" >> "$DIR/procs.tsv"; say "  起 $n PID=${PIDS[-1]} PGID=${g:-NA}"; }
 cleanup(){ say "cleanup（只針對本趟 PID；TERM → 3 s → KILL）"
-  for i in "${!PIDS[@]}"; do kill -TERM -- "-${PIDS[$i]}" 2>/dev/null || kill -TERM "${PIDS[$i]}" 2>/dev/null || true; done
+  for i in "${!PIDS[@]}"; do _g=$(awk -v p="${PIDS[$i]}" '$2==p{print $3}' "$DIR/procs.tsv"); if [ "$_g" = "${PIDS[$i]}" ]; then kill -TERM -- "-${PIDS[$i]}" 2>/dev/null || true; else kill -TERM "${PIDS[$i]}" 2>/dev/null || true; fi; done
   sleep 3
-  for i in "${!PIDS[@]}"; do kill -KILL -- "-${PIDS[$i]}" 2>/dev/null || kill -KILL "${PIDS[$i]}" 2>/dev/null || true; done
-  _left=$(for i in "${!PIDS[@]}"; do pgrep -g "${PIDS[$i]}" 2>/dev/null; done | wc -l); say "cleanup 後本趟群組殘留 $_left 個程序"; }
+  for i in "${!PIDS[@]}"; do _g=$(awk -v p="${PIDS[$i]}" '$2==p{print $3}' "$DIR/procs.tsv"); if [ "$_g" = "${PIDS[$i]}" ]; then kill -KILL -- "-${PIDS[$i]}" 2>/dev/null || true; else kill -KILL "${PIDS[$i]}" 2>/dev/null || true; fi; done
+  sleep 1; : > "$DIR/cleanup_residual.tsv"
+  for i in "${!PIDS[@]}"; do _r=$(pgrep -g "${PIDS[$i]}" 2>/dev/null | tr '\n' ' '); printf "%s\t%s\t%s\n" "${NAMES[$i]}" "${PIDS[$i]}" "${_r:-none}" >> "$DIR/cleanup_residual.tsv"; done
+  say "cleanup 後各群組殘留：$(awk '$3!="none"' "$DIR/cleanup_residual.tsv" | wc -l) 組有殘留（cleanup_residual.tsv）"; }
 trap cleanup EXIT
 trap 'say "收到 TERM"; exit 143' TERM
 trap 'say "收到 INT"; exit 130' INT
@@ -93,13 +98,17 @@ for p in os.listdir('/proc'):
         cmd = open(f'/proc/{p}/cmdline', 'rb').read().replace(b'\0', b' ').decode(errors='ignore')
     except OSError:
         continue
-    if f'ROS_DOMAIN_ID={dom}'.encode() in env and '--ros-args' in cmd:
+    dm = [e for e in env if e.startswith(b'ROS_DOMAIN_ID=')]
+    same = (not dm) or dm[0] == f'ROS_DOMAIN_ID={dom}'.encode()
+    known = any(k in cmd for k in ('isaac_door_k2_sim', 'dl3_wgmpc', 'door_coopen_core_task', 'arm_vel_adapter', 'door_nav1_mission',
+                                   'door_k2_wholebody', 'door_k3m_observer', 'gmpc_node'))
+    if same and ('--ros-args' in cmd or known) and 'run_door_' not in cmd and 'run_guarded' not in cmd:
         n.append(f'{p}:{cmd[:80]}')
 print(len(n)); [print(x) for x in n[:10]]
 PYEOF
 )
 [ "$(echo "$ORPH" | head -1)" = 0 ] || { say "**domain $ROS_DOMAIN_ID 已有 $(echo "$ORPH" | head -1) 個 ROS 程序（可能是前趟孤兒）⇒ 拒跑**"; echo "$ORPH" | tail -n +2 | tee -a "$DIR/run.log"; exit 99; }
-say "起跑前核對：domain $ROS_DOMAIN_ID 無既有 ROS 程序"
+say "起跑前核對：domain $ROS_DOMAIN_ID 未發現衝突程序（帶 --ros-args 或已知節點名；只代表此掃描範圍）"
 SHIELD_INST=$(python3 -c "import ammr_wholebody_mpc.scan_safety_shield as m;print(m.__file__)" 2>/dev/null)
 grep -q "self_return_radius" "$SHIELD_INST" 2>/dev/null || { say "**已安裝的護盾不含 self_return_radius（$SHIELD_INST）⇒ 須先 colcon build（不用 --symlink-install）** ⇒ 拒跑"; exit 98; }
 python3 -c "import json;p=json.load(open('$REF'));assert 'm4r' in p and '41' in p['segments'] and 'r3_pre' in p['m4r']" 2>/dev/null || { say "**參考包不是 pb1h（缺 m4r.r3_pre／段 41）：$REF** ⇒ 拒跑"; exit 97; }
@@ -178,6 +187,9 @@ spawn solver python3 -u evaluation/dl3_wgmpc_wg2_adm23_node.py --tenure-loop --r
   --u-prev-policy strict --assume-initial-rest --out "$DIR/align_solver.json"
 spawn lw_observer python3 -u evaluation/door_k3m_observer.py --out "$DIR/lw_observer.json" --door-max-deg "$W1B_OBS"
 
+tsnap(){ local tag="$1"; { for _t in /cmd_vel /cmd_vel_pre_mux /cmd_vel_pre_shield /cmd_vel_nav /scan /tf /tf_static /plan; do echo "== $_t"; timeout 10 ros2 topic info -v "$_t" 2>&1 | grep -E "Publisher count|Subscription count|Node name|Endpoint type" ; done; } > "$DIR/topic_pubs_$tag.txt" 2>&1; say "  話題發布者快照 $tag：$(grep -c 'Node name' "$DIR/topic_pubs_$tag.txt") 筆（topic_pubs_$tag.txt）"; }
+( sleep 8; tsnap start ) &
+( until [ "$(grep -c '分段 → CRUISE' "$DIR/nav1.log" 2>/dev/null)" -ge 2 ]; do kill -0 "$(awk '$1=="task"{print $2}' "$DIR/procs.tsv")" 2>/dev/null || exit 0; sleep 1; done; tsnap mission2 ) &
 say "[任務] 等任務節點結束（牆鐘最多 1600 s）"
 pid_of(){ local i; for i in "${!NAMES[@]}"; do [ "${NAMES[$i]}" = "$1" ] && echo "${PIDS[$i]}"; done; }
 SIM_PID=$(pid_of sim); TASK_PID=$(pid_of task); SOLVER_PID=$(pid_of solver); OBS_PID=$(pid_of lw_observer); WB_PID=$(pid_of wholebody); NAV1_PID=$(pid_of nav1)
