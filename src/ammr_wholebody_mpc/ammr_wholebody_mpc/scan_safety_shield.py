@@ -94,6 +94,10 @@ class ScanSafetyShield(Node):
         p('eps_footprint', 0.02)        # m, footprint fit allowance
         p('range_of_interest', 2.0)     # m, ignore returns further than this
         p('self_return_m', 0.02)        # m, drop hits inside the footprint+this
+        # Self-return exclusion radius, decoupled from the protection radius:
+        # enlarging robot_radius to cover a stowed arm must not widen the blind
+        # zone. < 0 keeps the old behaviour (exclusion uses robot_radius).
+        p('self_return_radius', -1.0)   # m
         p('neighbour_consistency', True)
         p('emergency_d', 0.15)          # m, below this a lone return still counts
         p('scan_timeout', 0.5)          # s, stale scan -> clamp
@@ -114,6 +118,8 @@ class ScanSafetyShield(Node):
         self.eps = float(g('eps_scan')) + float(g('eps_footprint'))
         self.roi = float(g('range_of_interest'))
         self.self_m = float(g('self_return_m'))
+        rs = float(g('self_return_radius'))
+        self.R_self = self.R if rs < 0.0 else rs
         self.neigh = bool(g('neighbour_consistency'))
         self.emerg = float(g('emergency_d'))
         self.scan_timeout = float(g('scan_timeout'))
@@ -195,7 +201,7 @@ class ScanSafetyShield(Node):
             bx, by = xs, ys
 
         d = np.hypot(bx, by)
-        keep = d > self.R + self.self_m
+        keep = d > self.R_self + self.self_m
         self._pts = np.stack([bx[keep], by[keep]], axis=1)
         self._scan_t = self.get_clock().now().nanoseconds * 1e-9
 
