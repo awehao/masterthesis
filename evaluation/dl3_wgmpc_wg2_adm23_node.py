@@ -6,6 +6,7 @@
 #       成立 ⇒ 在途表改由實際套用歷史建立（生效時刻 − D_cmd 當發布時刻、source_seq 為負）、清實際套用對照、暖啟動、W2 候選快取，k＋1；
 #       不足 ⇒ 等待；逾 --tenure-rearm-timeout-s ⇒ 安全停止（stop_why tenure_rearm_failed），不重設整趟期限、不清故障閂鎖；
 #   (4) u_prev：k ≥ 1 時，exec_mode 4 但 api_applied 為真的回報（導航直寫實際套用）算權威套用值（不用零值初始靜止）。
+#   (5) 封存／等待承接期間每輪仍發 /wgmpc/status 心跳（[sim_t, NaN, NaN, 0, 0]；任務端只用它判存活）。
 #   RG／W2 已提交階段、交接證據、凍結偏移、故障閂鎖原樣保留。--tenure-loop 未給 ⇒ 與 ADM22 同。
 # ADM22（2026-10-29；Codex 20261029_090630 選 B）：ADM21 的版本化複本，只加 --rolling-approach（需 --park-hold --mode-switch-run-id）：
 #   (1) 交棒後至 hold 確認前＝接近段：跳過停車錨點／u_prev 伺服核對，cfg.base_hold＝None（底盤由 W-GMPC 決定，coord 話題給底盤參考；同抽屜 MotM）；
@@ -1457,6 +1458,10 @@ class WGMPCNode(Node):
                 else:
                     self.log.append(dict(slot=slot, sim_t=self.sim_now(), ok=False, reason=f'tenure_{_r23}', published=False,
                                          timing_ms={'total': 0.0}, cycle_wall_ms=_cycle_wall, wait=_d23))
+                    if self.status_pub is not None:                                     # 封存期間維持狀態心跳（任務端只看存活；誤差欄 NaN＝本輪未求解）
+                        _sm23 = Float64MultiArray()
+                        _sm23.data = [float(self.sim_now()), float('nan'), float('nan'), 0.0, 0.0]
+                        self.status_pub.publish(_sm23)
                     slot, _m = self._reschedule(slot)
                     self._c_miss += _m
                     continue
