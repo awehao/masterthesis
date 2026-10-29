@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # node10m（2026-10-30；door_m4r_14 RG7 sim 335.06：/clock 送達落後狀態 0.07 s > 超前容許 0.05 ⇒ 年齡 inf ⇒ rg_monitor_stale 誤中止）：node10l 的版本化複本，
-#   只改 AHEAD10K_S 0.05 → 0.2（＝stale_s；m4r_14 整趟 state−clock p99.9 0.030、max 0.070）；倒退拒絕、1.0 s 看門狗、其餘不變。
+#   只改 AHEAD10K_S 0.05 → 0.2（＝stale_s；m4r_14 整趟 state−clock p99.9 0.030、max 0.070）；年齡改以最新已知模擬時間 max(clock, state, contacts) 計（Codex m4s）；
+#   倒退拒絕、1.0 s 看門狗、其餘不變。
 # node10l（2026-10-30；door_m4r_13 RG8 rg_door_moved；Codex m4r 選 A）：node10k 的版本化複本，只改：換抓策略外包 door_regrasp_close_settle.close_settle
 #   （mode 7 參考走完後保持終點與抓握，|qdot| ≤ 0.002 rad/s 連續 0.5 s 才請求 RG8；期限自參考結束 5 s 不重設，逾時中止）。其餘不變。
 # node10k（2026-10-30；door_m4r_11 RG7 單一主機停頓 0.23 s ⇒ rg_monitor_stale；Codex 20261030 m4p 核可 A 的模擬專用版本）：node10j 的版本化複本，只改：
@@ -474,12 +475,16 @@ def _ages10k(nd, wnow):
         if out[k] is None or not math.isfinite(out[k]) or out[k] > WD10K_S:
             out['why'].append(f'wd_{k[2:]}')
 
-    def _sim(src_t):
-        if c['t'] is None or src_t is None or not (math.isfinite(c['t']) and math.isfinite(src_t)):
-            return inf
-        d = c['t'] - src_t
-        return inf if d < -AHEAD10K_S else max(d, 0.0)
-    out['s_state'], out['s_contacts'] = _sim(tr.last_t), _sim(ct['t'])
+    def _fin(x):
+        return x is not None and isinstance(x, (int, float)) and math.isfinite(x)
+    if _fin(c['t']) and _fin(tr.last_t) and _fin(ct['t']):
+        latest = max(c['t'], tr.last_t, ct['t'])                                                  # node10m（Codex m4s）：最新已知模擬時間
+        out['latest_t'] = latest
+        out['s_state'] = inf if tr.last_t - c['t'] > AHEAD10K_S else latest - tr.last_t
+        out['s_contacts'] = inf if ct['t'] - c['t'] > AHEAD10K_S else latest - ct['t']
+    else:
+        out['latest_t'] = None
+        out['s_state'] = out['s_contacts'] = inf
     bad = bool(out['why'])
     out['state_eff'] = inf if bad else out['s_state']
     out['contacts_eff'] = inf if bad else out['s_contacts']
