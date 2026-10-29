@@ -3,6 +3,8 @@
 #   換抓策略鏈改非台架 AG2.gated2(RP8.RegraspPolicy8)（不套 bench_grasp／init_grasp2）＋cont_loss＋settle_cont ⇒ 起於 WAIT_HANDOVER，經停車閘門＋交棒、
 #   UNFOLD、W1 正面 ALIGN／APPROACH／ENGAGE 實際接近與閉爪取證後進開門；--wait-handover-timeout-s 給 WAIT_HANDOVER 上限（導航＋末端對位時間；原 30 s）。
 #   紀錄：init_stats／bench_stats 缺 ⇒ 記 None（非台架不經該相位）。其餘同 node10f。
+#   r2（Codex 20261029_082724）：訂閱 /nav1/state；--nav-start 下相位仍未離開 WAIT_HANDOVER 而 NAV1 分段為 NAV_TIMEOUT／ALIGN_TIMEOUT ⇒
+#   立即 pol._abort('nav1_failed:<seg>')、照原路徑發中止並受控收尾（不再空等 WAIT_HANDOVER 期限）。
 # 以下為 node10f 說明。
 # node10f（2026-10-29；Codex 20261029_074108）：node10e 的版本化複本，只補「執行端 K2 中止傳回任務端」：每輪 spin 後、任何提前結束分支（實驗保護、
 # 觀察器失效、牆鐘）之前，若最新 /w2 狀態帶 aborted 且相位未結束 ⇒ 立即 pol._abort('rg_authority_aborted:<why>')（與換抓策略逐步檢查同名同語義）、
@@ -223,6 +225,8 @@ class Node2(Node):
         self.create_subscription(Float64MultiArray, '/wgmpc/status', self._ws, 1)
         self.create_subscription(String, '/coman/applied_fail', self._af, 10)
         self.create_subscription(String, '/park/gate', self._gate, 1)
+        self.nav1 = None                                                          # node10g r2
+        self.create_subscription(String, '/nav1/state', self._nav1, 10)
         self.pause_msgs = []                                                      # 暫停版
         self.pause_req_pub = self.create_publisher(String, '/door/pause_req', lat)
         self.coord_pub = None                                              # W1b：main() 依登錄檔建立
@@ -370,6 +374,12 @@ class Node2(Node):
         if self.bench_filter is not None and self.bench_filter.on_msg(msg):
             self.bench = {'state': self.bench_filter.state, 't0': self.bench_filter.t0}
 
+    def _nav1(self, m):                                                       # node10g r2
+        try:
+            self.nav1 = json.loads(m.data)
+        except ValueError:
+            self.nav1 = {'raw': m.data}
+
     def _gate(self, m):
         try:
             self.gate = json.loads(m.data)
@@ -512,6 +522,7 @@ def main():
     def save():
         rep['policy_events'] = pol.events
         rep['approach_gate_stats'] = dict(pol.gate_stats)                     # G5
+        rep['nav1_last'] = nd.nav1                                            # node10g r2
         rep['init_stats'] = dict(getattr(pol, 'init_stats', None) or {}) or None   # B5（node10g：非台架 ⇒ None）
         rep['bench']['stats'] = dict(getattr(pol, 'bench_stats', None) or {}) or None   # E5
         rep['bench']['wait'] = dict(getattr(pol, 'bench_wait', None) or {'enabled': False})   # node10e
@@ -608,6 +619,17 @@ def main():
                 pol._abort(f"rg_authority_aborted:{_ab10f.get('why')}", float(_t10f), source='w2_state_loop_node10f')
                 rep['executor_abort_relayed'] = {'why': _ab10f.get('why'), 't': _t10f, 'wall': wnow}
                 print(f'[k3a] 相位 → {pol.phase} @ sim {float(_t10f):.2f}（中止：{pol.abort}）', flush=True)
+                if not abort_sent:
+                    nd.abort_pub.publish(String(data=json.dumps({'why': pol.abort, 't': pol.t_abort}, default=float)))
+                    nd.stop_pub.publish(String(data=f'door_k3a 中止：{pol.abort}'))
+                    abort_sent = True
+                w_abort = w_abort or wnow
+            _n1 = nd.nav1 if a.nav_start else None                            # node10g r2：NAV1 失敗 ⇒ 任務失敗
+            if isinstance(_n1, dict) and _n1.get('seg') in ('NAV_TIMEOUT', 'ALIGN_TIMEOUT') and pol.phase == 'WAIT_HANDOVER':
+                _tn1 = float(t_prev) if t_prev is not None else float('nan')
+                pol._abort(f"nav1_failed:{_n1.get('seg')}", _tn1, nav1=dict(_n1))
+                rep['nav1_failure_relayed'] = {'nav1': dict(_n1), 'wall': wnow}
+                print(f'[k3a] 相位 → {pol.phase} @ sim {_tn1:.2f}（中止：{pol.abort}）', flush=True)
                 if not abort_sent:
                     nd.abort_pub.publish(String(data=json.dumps({'why': pol.abort, 't': pol.t_abort}, default=float)))
                     nd.stop_pub.publish(String(data=f'door_k3a 中止：{pol.abort}'))

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""r2（door_nav1_door_2：GMPC 到達容差 goal_tolerance_xy 0.20 m ⇒ 停在 0.146 m 起保持零，r1 切換半徑 0.10 m 永遠未進 PARK_ALIGN ⇒ NAV_TIMEOUT）：
+"""r3（Codex 20261029_082724）：(a) 起步前須有新鮮里程與有效掃描（最近一筆 /scan 牆鐘年齡 ≤ 1.0 s、frame_id 非空）才發計畫進 CRUISE；
+  (b) 每 0.2 s 發 /nav1/state（JSON：seg、t、result、dist）供任務端把 NAV_TIMEOUT／ALIGN_TIMEOUT 轉成任務失敗受控收尾。
+r2（door_nav1_door_2：GMPC 到達容差 goal_tolerance_xy 0.20 m ⇒ 停在 0.146 m 起保持零，r1 切換半徑 0.10 m 永遠未進 PARK_ALIGN ⇒ NAV_TIMEOUT）：
   切換半徑預設 0.10 → 0.25 m（須大於 GMPC 到達容差）；/scan 訂閱改感測器 QoS（scan_relay 為 BEST_EFFORT；r1 收 0 筆＝證據缺口，非護盾未收）。其餘不變。
 NAV1 任務節點（Codex 20261029_081047／081705）：起點 → W1 停位 D1 的導航段；**唯一命令選擇器**＋明確分段的 PARK_ALIGN 末端對位。
 
@@ -36,7 +38,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profi
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
-VERSION = 'door_nav1_mission_node/r2'
+VERSION = 'door_nav1_mission_node/r3'
 
 
 def wrap(a):
@@ -59,6 +61,9 @@ class Nav1(Node):
         lat = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.plan_pub = self.create_publisher(Path, '/plan', lat)
         self.out_pub = self.create_publisher(Twist, a.out_topic, 10)
+        self.state_pub = self.create_publisher(String, '/nav1/state', 10)        # r3
+        self.create_timer(0.2, self._pub_state)
+        self.dist = None
         self.create_subscription(Odometry, '/odom', self._odom, 10)
         self.create_subscription(Twist, a.in_topic, self._cin, 10)
         self.create_subscription(Twist, '/cmd_vel', self._shield_out, 10)
@@ -151,6 +156,11 @@ class Nav1(Node):
         if self.pose is None or self.t is None:
             return
         if self.seg == 'WAIT_ODOM':
+            sc = self.rep['scan']                                               # r3：起步前掃描須有效且新鮮
+            if sc['last_wall'] is None or time.monotonic() - sc['last_wall'] > 1.0 or not sc['frame_id']:
+                return
+            self.rep['start_check'] = {'t': self.t, 'scan_frame': sc['frame_id'], 'scan_age_wall_s': time.monotonic() - sc['last_wall'],
+                                       'scan_stamp': sc['last_stamp'], 'odom_t': self.t, 'pose': list(self.pose)}
             self._plan()
             self.t_plan = self.t
             self._go('CRUISE')
@@ -160,6 +170,7 @@ class Nav1(Node):
         x, y, th = self.pose
         ex, ey, eyaw = gx - x, gy - y, wrap(gyaw - th)
         dist = math.hypot(ex, ey)
+        self.dist = dist
         ho = self.rep['handover_last'] or {}
         if self.seg not in ('ZERO', 'ALIGN_TIMEOUT', 'NAV_TIMEOUT', 'HANDED_OVER') and str(ho.get('owner', '')).lower().startswith('wholebody'):
             self._go('HANDED_OVER')
@@ -203,6 +214,9 @@ class Nav1(Node):
         self.out_last, self.out_last_t = u, self.t
         k = self.seg if self.seg in self.rep['n_out'] else 'ZERO'
         self.rep['n_out'][k] += 1
+
+    def _pub_state(self):                                                    # r3
+        self.state_pub.publish(String(data=json.dumps({'seg': self.seg, 't': self.t, 'result': self.rep['result'], 'dist': self.dist}, default=float)))
 
     def save(self):
         r = dict(self.rep)
