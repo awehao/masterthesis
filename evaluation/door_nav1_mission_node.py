@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""NAV1 任務節點（Codex 20261029_081047／081705）：起點 → W1 停位 D1 的導航段；**唯一命令選擇器**＋明確分段的 PARK_ALIGN 末端對位。
+"""r2（door_nav1_door_2：GMPC 到達容差 goal_tolerance_xy 0.20 m ⇒ 停在 0.146 m 起保持零，r1 切換半徑 0.10 m 永遠未進 PARK_ALIGN ⇒ NAV_TIMEOUT）：
+  切換半徑預設 0.10 → 0.25 m（須大於 GMPC 到達容差）；/scan 訂閱改感測器 QoS（scan_relay 為 BEST_EFFORT；r1 收 0 筆＝證據缺口，非護盾未收）。其餘不變。
+NAV1 任務節點（Codex 20261029_081047／081705）：起點 → W1 停位 D1 的導航段；**唯一命令選擇器**＋明確分段的 PARK_ALIGN 末端對位。
 
 命令鏈（本節點只在中間一格）：
     gmpc_node（GMPC＋horizon CBF）→ /cmd_vel_nav → velocity_smoother → /cmd_vel_pre_mux
@@ -8,7 +10,7 @@
 本節點不寫 /cmd_vel（不繞過護盾）；同一時刻只有一個來源被輸出。
 
 分段（單向，不回切）：
-  - CRUISE：發直線計畫（odom 框；末點航向＝停位航向）；選擇器轉送平滑器輸出。距 D1 ≤ switch_r（0.10 m）⇒ PARK_ALIGN。
+  - CRUISE：發直線計畫（odom 框；末點航向＝停位航向）；選擇器轉送平滑器輸出。距 D1 ≤ switch_r（r2 預設 0.25 m）⇒ PARK_ALIGN。
   - PARK_ALIGN：P 伺服（世界誤差轉本體；|v| ≤ v_max 0.03 m/s、|w| ≤ w_max 0.1 rad/s；逐軸加速度 ≤ a_lin 0.5 m/s²／a_ang 2.0 rad/s²）。
     到 ≤ tol_pos（5 mm）且 ≤ tol_yaw（1°）⇒ ZERO。期限 align_timeout_s（30 s，模擬時間）⇒ ALIGN_TIMEOUT（輸出零，記失敗）。
   - ZERO：持續輸出精確零。**交棒與否由執行端 PARK 閘門以實測速度、實際套用命令持續 0.5 s 判定**；本節點的到位只代表提出零命令。
@@ -30,11 +32,11 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
-VERSION = 'door_nav1_mission_node/r1'
+VERSION = 'door_nav1_mission_node/r2'
 
 
 def wrap(a):
@@ -60,7 +62,7 @@ class Nav1(Node):
         self.create_subscription(Odometry, '/odom', self._odom, 10)
         self.create_subscription(Twist, a.in_topic, self._cin, 10)
         self.create_subscription(Twist, '/cmd_vel', self._shield_out, 10)
-        self.create_subscription(LaserScan, a.scan_topic, self._scan, 10)
+        self.create_subscription(LaserScan, a.scan_topic, self._scan, qos_profile_sensor_data)   # r2
         self.create_subscription(String, '/handover/state', self._ho, 10)
         self.create_subscription(String, '/park/gate', self._gate, 1)
         self.pose = None
@@ -217,7 +219,7 @@ def main():
     ap.add_argument('--in-topic', default='/cmd_vel_pre_mux')
     ap.add_argument('--out-topic', default='/cmd_vel_pre_shield')
     ap.add_argument('--scan-topic', default='/scan')
-    ap.add_argument('--switch-r', type=float, default=0.10)
+    ap.add_argument('--switch-r', type=float, default=0.25)                   # r2：> gmpc goal_tolerance_xy 0.20
     ap.add_argument('--tol-pos', type=float, default=0.005)
     ap.add_argument('--tol-yaw-deg', type=float, default=1.0)
     ap.add_argument('--k-lin', type=float, default=1.0)
