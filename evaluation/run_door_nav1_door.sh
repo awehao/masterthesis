@@ -70,7 +70,7 @@ say "=== NAV1＋門段同趟（ev9r8n＋node10g＋ADM21＋k3m3；ref pb1f；導�
 say "揭露：/odom 真值無 AMCL；直線計畫；精停段＝P 伺服＋掃描 barrier（非 GMPC）；無移動／未知障礙；A 房無外牆"
 
 spawn sim "$ISAAC_PY" -u evaluation/isaac_door_k2_sim_ev9r8n.py --nav-start --pub-tf true --hold-confirm-cont --finger-leader-only --finger-loss-cont --ext-forces-every-iter --diag-6d --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --contact-v3-out "$DIR/contact_v3.jsonl" --door-asset "$DOOR3" --gc-freeze-before-release --pause-finger-max-effort "$W1E_FEFF" --pause-finger-original-effort "$W1E_FEFF0" --cmd-env --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID" --corridor-table "$W1B_TABLE" --envelope="$W1B_ENV" --sim-limit 560 --contact-min-n 0.5 \
-  --finger-collision split --park-hold --start-pose "$START_S" --park-pose "$STAND" --stow-q="$K2_READY" --out "$DIR"
+  --finger-collision split --park-hold --start-pose="$START_S" --park-pose="$STAND" --stow-q="$K2_READY" --out "$DIR"
 say "  等場景建起（最多 180 s）"
 for i in $(seq 180); do grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null && break; kill -0 "${PIDS[0]}" 2>/dev/null || break; sleep 1; done
 grep -q '進入主迴圈' "$DIR/sim.log" 2>/dev/null || { say "**場景未建起** ⇒ 中止"; tail -8 "$DIR/sim.log" | tee -a "$DIR/run.log"; exit 83; }
@@ -100,8 +100,8 @@ spawn smlife ros2 run nav2_lifecycle_manager lifecycle_manager --ros-args -r __n
 sleep 3
 spawn shield ros2 run ammr_wholebody_mpc scan_safety_shield --ros-args -p use_sim_time:=true -p enable:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_shield -p cmd_out_topic:=/cmd_vel -p robot_radius:=0.30 -p alpha:=2.0 -p a_brake:=6.25 -p tau:=0.15 -p vx_max:=0.2775 -p vy_max:=0.2775 -p wz_max:=1.1327
 sleep 3
-spawn nav1 python3 -u evaluation/door_nav1_mission_node.py --goal "$STAND" --out "$DIR/nav1.json" --align-timeout-s 30 --nav-timeout-s 150
-spawn wholebody python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --park-hold --pos-tol 0.005 --stow-q "$K2_READY" --park "$STAND" --q-unfold="$Q_PRE" --out "$DIR/wholebody.json"
+spawn nav1 python3 -u evaluation/door_nav1_mission_node.py --goal="$STAND" --out "$DIR/nav1.json" --align-timeout-s 30 --nav-timeout-s 150
+spawn wholebody python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --park-hold --pos-tol 0.005 --stow-q "$K2_READY" --park="$STAND" --q-unfold="$Q_PRE" --out "$DIR/wholebody.json"
 spawn task python3 -u evaluation/door_coopen_core_task_node10g.py --nav-start --wait-handover-timeout-s 240 --out "$DIR/task.json" --run-id "$RUN_ID" --grasp-basis "$GB" --w1b-params "$PRM" --corridor-table "$W1B_TABLE" --finger-loss-cont --settle-cont --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --wall-total-s 1500
 ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
 [ -f "$ARM_IDENT" ] || { say "**找不到手臂辨識檔** ⇒ 中止"; exit 85; }
