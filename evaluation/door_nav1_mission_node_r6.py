@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """r6（door_m4r_2：R3 銜接只剩橫向 0.109 m）：r5 的版本化複本，只改**第二段** GLIDE：
-  - approach_vref 的橫向上限 v_lat_cap 0.010 → --m2-v-lat-cap（預設 0.03 m/s；同一函式、同一進場直線＝過交回點、朝向 ψr；第一段不變）；
-  - 第二段 HANDOVER_READY 另需 |橫向| ≤ --m2-ready-lat-max（預設 0.03 m）；不成立留在 GLIDE，期限照舊 ⇒ GLIDE_TIMEOUT。
+  - approach_vref（已按目標朝向分解縱向／橫向）只在第二段改：k_lat 1.0 → --m2-k-lat 0.5 /s、橫向上限 v_lat_cap 0.010 → --m2-v-lat-cap 0.03 m/s（Codex 20261029_181857）；第一段不變；
+  - 第二段 HANDOVER_READY 另需 |橫向| ≤ --m2-ready-lat-max（0.03 m）且沿線剩餘距離 d_s ≤ --m2-pre-max（0.40 m＝R3 前置區間）；原速度、偏航、d_s ≥ ready_d_min 照舊；
+  - 橫向未收斂（> 0.03）且 d_s ≤ --m2-slow-ds（0.15 m）⇒ 沿線分量乘 clip((d_s − ready_d_min)/(slow_ds − ready_d_min), 0, 1)：不走過可接手區才等對位；
+    合成命令仍經既有減速限幅、選擇器與護盾；期限照舊 ⇒ GLIDE_TIMEOUT。
   - /nav1/state 增欄 lat（第二段 GLIDE 時的橫向偏差）。
 r5（mode 4 重設計 R2；Codex 20261029_145418／151139）：door_nav1_mission_node.py（r4）的版本化複本，**只加第二段任務**，第一段行為不變。
   第一段 HANDED_OVER 後保持輸出零並等 /nav1/mission（JSON：{"id": 2, "vertices": [[x, y], …], "goal": [x, y, yaw]}，TRANSIENT_LOCAL）。
@@ -268,7 +270,8 @@ class Nav1(Node):
         if a.rolling and self.seg == 'GLIDE':
             vm = self.vmeas
             self.lat = abs(-ex * math.sin(gyaw) + ey * math.cos(gyaw))                                        # r6：到進場直線的橫向
-            lat_ok = self.mission != 2 or self.lat <= a.m2_ready_lat_max
+            ds_ = ex * math.cos(gyaw) + ey * math.sin(gyaw)
+            lat_ok = self.mission != 2 or (self.lat <= a.m2_ready_lat_max and ds_ <= a.m2_pre_max)
             if vm is not None and a.ready_v_min <= vm[0] <= a.ready_v_max and vm[1] <= a.ready_w \
                     and abs(eyaw) <= math.radians(a.ready_yaw_deg) and dist >= a.ready_d_min and lat_ok:
                 self._go('HANDOVER_READY', dist=dist, yaw_err_deg=math.degrees(eyaw), vmeas=vm, lat=self.lat, mission=self.mission)
@@ -290,9 +293,21 @@ class Nav1(Node):
         if self.seg == 'CRUISE':
             u = self.cin if (self.cin_t is not None and self.t - self.cin_t <= 0.5) else (0.0, 0.0, 0.0)
         elif self.seg in ('GLIDE', 'HANDOVER_READY'):                           # r4：approach_vref 剖面＋平順減速
-            _vl = {'v_lat_cap': a.m2_v_lat_cap} if self.mission == 2 else {}                                   # r6
+            _vl = {'v_lat_cap': a.m2_v_lat_cap, 'k_lat': a.m2_k_lat} if self.mission == 2 else {}             # r6
             (bx, by, bw), _ = MC.approach_vref(self.pose, self.goal, v_cap=a.motm_v_cap, a_ref=a.motm_a_ref, k_yaw=a.motm_k_yaw,
                                                w_cap=a.motm_w_cap, v_creep=a.motm_v_creep, overshoot=a.motm_overshoot, **_vl)
+            if self.mission == 2:                                                                             # r6：未對齊不走過可接手區
+                _gx, _gy, _gyaw = self.goal
+                _ds = (_gx - x) * math.cos(_gyaw) + (_gy - y) * math.sin(_gyaw)
+                _lat = abs(-(_gx - x) * math.sin(_gyaw) + (_gy - y) * math.cos(_gyaw))
+                if _lat > a.m2_ready_lat_max and _ds <= a.m2_slow_ds:
+                    f = clip((_ds - a.ready_d_min) / max(a.m2_slow_ds - a.ready_d_min, 1e-6), 0.0, 1.0)
+                    c_, s_ = math.cos(th), math.sin(th)
+                    wx, wy = c_ * bx - s_ * by, s_ * bx + c_ * by
+                    al = wx * math.cos(_gyaw) + wy * math.sin(_gyaw)
+                    wx, wy = wx - (1.0 - f) * al * math.cos(_gyaw), wy - (1.0 - f) * al * math.sin(_gyaw)
+                    bx, by = c_ * wx + s_ * wy, -s_ * wx + c_ * wy
+                    self.rep.setdefault('m2_slow', {'n': 0})['n'] += 1
             dt = (self.t - self.out_last_t) if self.out_last_t is not None else 1.0 / a.rate
             dt = max(dt, 1e-3)
             lx, ly, lw = self.out_last
@@ -368,6 +383,9 @@ def main():
     ap.add_argument('--glide-timeout-s', type=float, default=30.0)
     ap.add_argument('--m2-v-lat-cap', type=float, default=0.03)                # r6
     ap.add_argument('--m2-ready-lat-max', type=float, default=0.03)            # r6
+    ap.add_argument('--m2-k-lat', type=float, default=0.5)                     # r6
+    ap.add_argument('--m2-pre-max', type=float, default=0.40)                  # r6
+    ap.add_argument('--m2-slow-ds', type=float, default=0.15)                  # r6
     ap.add_argument('--motm-v-cap', type=float, default=0.030)
     ap.add_argument('--motm-a-ref', type=float, default=0.002)
     ap.add_argument('--motm-k-yaw', type=float, default=1.0)
