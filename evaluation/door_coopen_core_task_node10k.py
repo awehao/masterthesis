@@ -271,6 +271,7 @@ class Node2(Node):
         self.lw_guard = self.lw_guard_wall = None                                 # 實驗保護（獨立觀察器）
         self.hbw = G.HeartbeatWatch()
         self.create_subscription(String, '/door/lw_observer/heartbeat', self._lw_hb, 10)
+        self.create_subscription(String, '/door/lw_guard', self._lw_guard, lat)
         from rosgraph_msgs.msg import Clock as _Clock10k                                      # node10k
         self.clk10k = {'t': None, 'wall': None, 'n_back': 0, 'n_nonfinite': 0}
         self.ct10k = {'t': None, 'wall': None}
@@ -287,7 +288,6 @@ class Node2(Node):
                 c['n_back'] += 1
             return
         c['t'], c['wall'] = t, time.monotonic()
-        self.create_subscription(String, '/door/lw_guard', self._lw_guard, lat)
 
     def _sync(self, m):
         d = [float(x) for x in m.data]
