@@ -60,8 +60,10 @@ Q_PRE=$(python3 -c "import json;print(json.load(open('$PRM'))['start']['q_pre_cl
 # （run_door_wide_w1f2.sh；door_wide_w1f_60_3 UNFOLD→ALIGN→APPROACH→ENGAGE 實跑；pullback 登錄衍生自 w1f_params_60_r2）；登錄有值時以登錄為準。
 Q_PRE_W1='-0.9471,0.0758,1.6024,-1.539,-0.9479,-0.0544'
 [ "$Q_PRE" = None ] && Q_PRE="$Q_PRE_W1"
-python3 -c "import sys;v=[float(x) for x in '$Q_PRE'.split(',')];assert len(v)==6" 2>/dev/null || { say "**Q_PRE 不合法：$Q_PRE** ⇒ 拒跑"; exit 97; }
-say "Q_PRE（展開目標）＝$Q_PRE"
+Q_PRE_SRC=registry; [ "$Q_PRE" = "$Q_PRE_W1" ] && Q_PRE_SRC='run_door_wide_w1f2.sh（door_wide_w1f_60_3 實跑）'
+python3 -c "import math;v=[float(x) for x in '$Q_PRE'.split(',')];assert len(v)==6 and all(math.isfinite(x) for x in v)" 2>/dev/null || { say "**Q_PRE 不合法（須六個有限數）：$Q_PRE** ⇒ 拒跑"; exit 97; }
+python3 -c "import json;json.dump({'q_pre':[float(x) for x in '$Q_PRE'.split(',')],'source':'$Q_PRE_SRC','registry_q_pre_cli':None},open('$DIR/q_pre.json','w'),ensure_ascii=False)"
+say "Q_PRE（展開目標）＝$Q_PRE；來源 $Q_PRE_SRC（記入 q_pre.json）"
 Q_INIT=$(python3 -c "import json;print(json.load(open('$PRM'))['bench']['q_nominal_cli'])")   # bench：名目初態（關節生成）
 S_INIT=$(python3 -c "import json;print(json.load(open('$PRM'))['bench']['s_init_cli'])")   # bench：寫入致動器初始設定點（q_nominal − d_init）
 W1B_TABLE=$(python3 -c "import json;print(json.load(open('$PRM'))['protection_scope_change']['corridor_table'])")
@@ -126,6 +128,7 @@ say "[任務] 等任務節點結束（牆鐘最多 1600 s）"
 pid_of(){ local i; for i in "${!NAMES[@]}"; do [ "${NAMES[$i]}" = "$1" ] && echo "${PIDS[$i]}"; done; }
 SIM_PID=$(pid_of sim); TASK_PID=$(pid_of task); SOLVER_PID=$(pid_of solver); OBS_PID=$(pid_of lw_observer); WB_PID=$(pid_of wholebody); NAV1_PID=$(pid_of nav1)
 say "  PID：sim $SIM_PID task $TASK_PID solver $SOLVER_PID observer $OBS_PID wholebody $WB_PID nav1 $NAV1_PID"
+( while kill -0 "$TASK_PID" 2>/dev/null; do kill -0 "$WB_PID" 2>/dev/null || { say "**展開節點已退出**（任務仍在跑；任務端 r3 依命令缺席判定）"; break; }; sleep 1; done ) &
 sleep 5; kill -0 "$OBS_PID" 2>/dev/null || { say "**獨立觀察器未存活** ⇒ 中止（沒有觀察期保護不得繼續）"; exit 86; }
 wait_or_stop "$TASK_PID" 1600 10; RC_TASK=$STOP_RC; HOW_TASK=$STOP_HOW
 grep -E '^\[k3a\]' "$DIR/task.log" | tee -a "$DIR/run.log"

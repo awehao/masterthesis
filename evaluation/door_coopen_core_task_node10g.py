@@ -5,6 +5,8 @@
 #   紀錄：init_stats／bench_stats 缺 ⇒ 記 None（非台架不經該相位）。其餘同 node10f。
 #   r2（Codex 20261029_082724）：訂閱 /nav1/state；--nav-start 下相位仍未離開 WAIT_HANDOVER 而 NAV1 分段為 NAV_TIMEOUT／ALIGN_TIMEOUT ⇒
 #   立即 pol._abort('nav1_failed:<seg>')、照原路徑發中止並受控收尾（不再空等 WAIT_HANDOVER 期限）。
+#   r3（Codex 20261029_083502）：--nav-start 下仍在 WAIT_HANDOVER 時，展開端命令「啟動 20 s 仍 0 筆」或「曾有命令後中斷 > 2 s」⇒ 立即
+#   pol._abort('wholebody_absent_before_handover:<no_cmd|cmd_stopped>') 受控收尾。交棒條件 passed＋ok_now＋全身命令就緒不變。
 # 以下為 node10f 說明。
 # node10f（2026-10-29；Codex 20261029_074108）：node10e 的版本化複本，只補「執行端 K2 中止傳回任務端」：每輪 spin 後、任何提前結束分支（實驗保護、
 # 觀察器失效、牆鐘）之前，若最新 /w2 狀態帶 aborted 且相位未結束 ⇒ 立即 pol._abort('rg_authority_aborted:<why>')（與換抓策略逐步檢查同名同語義）、
@@ -635,6 +637,19 @@ def main():
                     nd.stop_pub.publish(String(data=f'door_k3a 中止：{pol.abort}'))
                     abort_sent = True
                 w_abort = w_abort or wnow
+            if a.nav_start and pol.phase == 'WAIT_HANDOVER' and not ho_sent:    # node10g r3：展開端缺席 ⇒ 任務失敗
+                _wb_why = ('no_cmd' if (nd.wb_cmd_n == 0 and wnow - w0 > 20.0) else
+                           'cmd_stopped' if (nd.wb_cmd_n > 0 and nd.wb_cmd_wall is not None and wnow - nd.wb_cmd_wall > 2.0) else None)
+                if _wb_why is not None:
+                    _twb = float(t_prev) if t_prev is not None else float('nan')
+                    pol._abort(f'wholebody_absent_before_handover:{_wb_why}', _twb, n_wb_cmd=nd.wb_cmd_n)
+                    rep['wholebody_absent'] = {'why': _wb_why, 'n_wb_cmd': nd.wb_cmd_n, 'wall': wnow}
+                    print(f'[k3a] 相位 → {pol.phase} @ sim {_twb:.2f}（中止：{pol.abort}）', flush=True)
+                    if not abort_sent:
+                        nd.abort_pub.publish(String(data=json.dumps({'why': pol.abort, 't': pol.t_abort}, default=float)))
+                        nd.stop_pub.publish(String(data=f'door_k3a 中止：{pol.abort}'))
+                        abort_sent = True
+                    w_abort = w_abort or wnow
             if nd.lw_guard is not None:                                       # 實驗保護 ⇒ 提前結束（不是成功停住）
                 rep['lw_guard'] = {'msg': nd.lw_guard, 'wall_recv': nd.lw_guard_wall}
                 break
