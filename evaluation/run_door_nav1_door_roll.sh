@@ -5,6 +5,9 @@
 #   執行端 ev9r8o --rolling-handover --gate6-log；求解端 ADM22 --rolling-approach；任務端 node10h --rolling；nav1 r4 --rolling；展開節點 --motm（取代 --park-hold）。
 #   approach_vref 參數三處一致：v_cap 0.030、a_ref 0.002、k_yaw 1.0、w_cap 0.10、v_creep 0、overshoot 0（抽屜為 0.004／0.030：門端要在 hold 前停下，揭露）。
 #   保護：接近段＝執行端接近走廊（線段偏離 ≤50 mm、偏航 ≤5°）＋任務端線段偏離代入 base_drift（20 mm／2°）＋幾何／接觸／資料年齡；hold 後同既有 PARK_HOLD；OPEN 起同既有。
+# r2（Codex 20261029_123819，自 door_nav1_roll_3 起）：交棒確認後（nav1 記 HANDED_OVER＝其觀察到執行端 /handover/state owner＝wholebody）由跑法以**任務安排停止**結束
+#   本趟登錄的 gmpc、tracker、smoother、smlife（TERM 本程序及其直接子程序；不用廣域 pkill、不用 SIGSTOP）；保留 scan relay、TF、地圖、護盾、nav1（零輸出）、觀察器。
+#   導航 CBF 設定不關閉（導航有權威時才作用；全身接手期間由操作保護負責）。NAV2 前須重新啟動導航計算（本趟不含 NAV2）。
 # 用法：RUN_ID=door_nav1_roll_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_nav1_door_roll.sh bash evaluation/run_guarded.sh
 # 以下為 run_door_nav1_door.sh 說明。
 # NAV1＋門段同趟（2026-10-29；Codex 20261029_081047／081705 核可單跑一次新 RUN_ID）：起點 S → NAV1 → W1 停位 D1 精停 → PARK 閘門＋權威交棒 →
@@ -138,6 +141,11 @@ say "[任務] 等任務節點結束（牆鐘最多 1600 s）"
 pid_of(){ local i; for i in "${!NAMES[@]}"; do [ "${NAMES[$i]}" = "$1" ] && echo "${PIDS[$i]}"; done; }
 SIM_PID=$(pid_of sim); TASK_PID=$(pid_of task); SOLVER_PID=$(pid_of solver); OBS_PID=$(pid_of lw_observer); WB_PID=$(pid_of wholebody); NAV1_PID=$(pid_of nav1)
 say "  PID：sim $SIM_PID task $TASK_PID solver $SOLVER_PID observer $OBS_PID wholebody $WB_PID nav1 $NAV1_PID"
+( until grep -q "分段 → HANDED_OVER" "$DIR/nav1.log" 2>/dev/null; do kill -0 "$TASK_PID" 2>/dev/null || exit 0; sleep 0.5; done
+  say "**任務安排停止**：交棒已確認（nav1 HANDED_OVER＝執行端 owner wholebody）⇒ 結束本趟導航計算 gmpc／tracker／smoother／smlife"
+  for _n in gmpc tracker smoother smlife; do _p=$(pid_of "$_n"); [ -n "$_p" ] || continue; pkill -TERM -P "$_p" 2>/dev/null; kill -TERM "$_p" 2>/dev/null; done
+  sleep 3
+  for _n in gmpc tracker smoother smlife; do _p=$(pid_of "$_n"); _st=gone; kill -0 "$_p" 2>/dev/null && _st=alive; say "  任務安排停止 $_n PID=$_p → $_st"; done ) &
 ( while kill -0 "$TASK_PID" 2>/dev/null; do kill -0 "$WB_PID" 2>/dev/null || { say "**展開節點已退出**（任務仍在跑；任務端 r3 依命令缺席判定）"; break; }; sleep 1; done ) &
 sleep 5; kill -0 "$OBS_PID" 2>/dev/null || { say "**獨立觀察器未存活** ⇒ 中止（沒有觀察期保護不得繼續）"; exit 86; }
 wait_or_stop "$TASK_PID" 1600 10; RC_TASK=$STOP_RC; HOW_TASK=$STOP_HOW
