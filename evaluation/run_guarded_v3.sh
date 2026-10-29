@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# 【v3，2026-10-29】run_guarded.sh 的複本，只把取樣器換成 thermal_sampler_v3.sh（GPU 查詢改背景快取，避免 nvidia-smi 阻塞造成監看失效誤中止）。
-#   中止線 92 °C、讀值逾 5 s 未更新即中止、判斷與離開碼完全相同。
+# 【v3，2026-10-29】run_guarded_v2.sh 的複本，只把取樣器換成 thermal_sampler_v3.sh（v2 取樣器＋GPU 查詢背景快取）。中止線、失效判斷、離開碼、cpu_src 紀錄完全相同。
+# 【v2，2026-10-21】run_guarded.sh（凍結，不改）的複本。差異：①取樣器改 thermal_sampler_v3.sh（k10temp → coretemp，CSV 多 cpu_src 欄）；
+#   ②守護紀錄寫出溫度來源；③GUARD_RUNS_DIR 只供離線測試覆寫趟次根目錄（預設 evaluation/runs）。中止線、判斷與離開碼完全相同。
 # 以 92 °C 牆鐘熱中止包住 run_nav_handover.sh（不改運行器本身）。
 #
 # 取樣器先起（場景載入期間也在量），模擬器 PID 一出現就交給它監看；
@@ -24,13 +25,14 @@ if ! [[ "$LIMIT" =~ ^[1-9][0-9]*$ ]] || [ "$LIMIT" -gt 92 ]; then
 fi
 STALE_S=5
 RUNNER="${RUNNER:-$WS/evaluation/run_nav_handover.sh}"
-DIR="$WS/evaluation/runs/$RUN_ID"
+DIR="${GUARD_RUNS_DIR:-$WS/evaluation/runs}/$RUN_ID"
 if [ -e "$DIR" ]; then echo "$DIR 已存在，拒跑（不覆寫既有實錄）"; exit 91; fi
 mkdir -p "$DIR"
 G="$DIR/guard.log"
 CSV="$DIR/thermal.csv"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$G"; }
 last_c(){ tail -1 "$CSV" 2>/dev/null | awk -F, '{print $3}'; }
+last_src(){ tail -1 "$CSV" 2>/dev/null | awk -F, '{print $7}'; }
 csv_age(){ echo $(( $(date +%s) - $(stat -c %Y "$CSV" 2>/dev/null || echo 0) )); }
 
 PIDF="$DIR/sim.pid"; : > "$PIDF"
@@ -46,7 +48,7 @@ if ! kill -0 "$TS" 2>/dev/null || ! [[ "$c" =~ ^[0-9]+$ ]] || [ "$c" -le 0 ]; th
   say "熱取樣器沒有有效讀值（cpu_c='${c:-}'），不起跑"
   kill "$TS" 2>/dev/null; exit 92
 fi
-say "熱中止啟用：上限 ${LIMIT} °C，目前 ${c} °C，取樣器 PID=$TS，讀值逾 ${STALE_S} s 未更新即中止"
+say "熱中止啟用：上限 ${LIMIT} °C，目前 ${c} °C（來源 $(last_src)），取樣器 PID=$TS，讀值逾 ${STALE_S} s 未更新即中止"
 
 bash "$RUNNER" & RN=$!
 say "運行器 PID=$RN（$RUNNER）"
