@@ -11,6 +11,8 @@
 #     velocity_smoother → /cmd_vel_pre_mux → **door_nav1_mission_node 選擇器**（CRUISE 轉送｜PARK_ALIGN P 伺服 ≤0.03 m/s、≤0.1 rad/s｜ZERO）→
 #     /cmd_vel_pre_shield → scan_safety_shield（掃描 barrier）→ /cmd_vel。
 # 揭露：/odom 真值（無 AMCL）；直線計畫（非 nav2 planner）；精停段＝P 伺服＋掃描 barrier（不是 GMPC）；本場景無移動／未知障礙（本輪不加）；門外 A 房無外牆。
+# r2（Codex 20261029_084216；自 door_nav1_door_5 起）：Howard「移動時車頭朝前、操作前才對位」⇒ gmpc heading_enable＝true（參考航向＝路徑前視弦方向，
+#   不要求終點航向；定版其他參數不變），PARK_ALIGN 內才轉至操作朝向 90°；PARK_ALIGN 位置容差 5 → 1 mm（--tol-pos 0.001；限速、期限、閘門不變）。
 # 用法：RUN_ID=door_nav1_door_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_nav1_door.sh bash evaluation/run_guarded.sh
 OFFSET_MOVING=1
 set -u
@@ -75,7 +77,7 @@ W1E_FEFF0=$(python3 -c "import json;print(json.load(open('$PRM'))['executor_chan
 say "W1e 執行端變更：暫停期手指驅動輸出上限 ${W1E_FEFF0} → ${W1E_FEFF} N（ev5 r2；啟動讀回不符拒跑、切換／定期讀回異常走中止閂鎖）"
 say "W1b 登錄：$PRM（sha256 $(sha256sum "$PRM" | cut -c1-16)）θ=${W1B_THETA}° 走廊表 $W1B_TABLE 包絡 $W1B_ENV 觀察器上限 ${W1B_OBS}° 協同 $W1B_COORD"
 say "=== NAV1＋門段同趟（ev9r8n＋node10g＋ADM21＋k3m3；ref pb1f；導航 GMPC＋CBF→平滑器→選擇器〔巡航／PARK_ALIGN〕→掃描 barrier 護盾）RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID；起點 $START_S → 停位 $STAND；交棒後 K2_READY→Q_PRE→W1 正面實際接近閉爪→開門 ${W1B_THETA}°→換抓→穿門拉關→放手退出 ==="
-say "揭露：/odom 真值無 AMCL；直線計畫；精停段＝P 伺服＋掃描 barrier（非 GMPC）；無移動／未知障礙；A 房無外牆"
+say "揭露：/odom 真值無 AMCL；直線計畫；巡航 heading 開（路徑前視弦）；精停段＝P 伺服＋掃描 barrier（非 GMPC，含轉至 90°，容差 1 mm／1°）；無移動／未知障礙；A 房無外牆"
 
 spawn sim "$ISAAC_PY" -u evaluation/isaac_door_k2_sim_ev9r8n.py --nav-start --pub-tf true --hold-confirm-cont --finger-leader-only --finger-loss-cont --ext-forces-every-iter --diag-6d --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --contact-v3-out "$DIR/contact_v3.jsonl" --door-asset "$DOOR3" --gc-freeze-before-release --pause-finger-max-effort "$W1E_FEFF" --pause-finger-original-effort "$W1E_FEFF0" --cmd-env --evidence-out "$DIR/evidence.jsonl" --park-gate-mobile --run-id "$RUN_ID" --corridor-table "$W1B_TABLE" --envelope="$W1B_ENV" --sim-limit 560 --contact-min-n 0.5 \
   --finger-collision split --park-hold --start-pose="$START_S" --park-pose="$STAND" --stow-q="$K2_READY" --out "$DIR"
@@ -100,7 +102,7 @@ sys.argv=['gmpc_node','--ros-args','-p','use_sim_time:=true','-p','pose_source:=
  '-p','cmd_vel_topic:=/cmd_vel_nav','-p','obstacles_topic:=/gmpc/obstacles','-p','cbf_enable:=true','-p','cbf_alpha:=0.5','-p','cbf_safe_margin:=0.60',
  '-p','static_cbf_safe_margin:=0.38','-p','cbf_prune_range:=1.2','-p','cbf_near_steps:=6','-p','cbf_far_stride:=2','-p','horizon:=20','-p','control_frequency:=20.0',
  '-p','Q_xy:=15.0','-p','Qf_mult:=5.0','-p','R_vx:=2.0','-p','R_vy:=2.0','-p','R_w:=1.0','-p','S_vx:=15.0','-p','S_vy:=15.0','-p','S_w:=8.0',
- '-p','heading_enable:=false','-p','vx_min:=-0.35','-p','ax_max:=1.5','-p','ay_max:=1.0','-p','az_max:=2.0','-p','plan_blend_s:=0.0']
+ '-p','heading_enable:=true','-p','vx_min:=-0.35','-p','ax_max:=1.5','-p','ay_max:=1.0','-p','az_max:=2.0','-p','plan_blend_s:=0.0']
 from ammr_wholebody_mpc.gmpc_node import main; main()"
 sleep 4
 spawn smoother ros2 run nav2_velocity_smoother velocity_smoother --ros-args -p use_sim_time:=true -p max_velocity:="[0.35, 0.25, 0.80]" -p min_velocity:="[-0.35, -0.25, -0.80]" -p max_accel:="[1.5, 1.0, 2.0]" -p max_decel:="[-1.5, -1.0, -2.0]" -p feedback:=OPEN_LOOP -p odom_topic:=/odom -r cmd_vel:=cmd_vel_nav -r cmd_vel_smoothed:=cmd_vel_pre_mux
@@ -108,7 +110,7 @@ spawn smlife ros2 run nav2_lifecycle_manager lifecycle_manager --ros-args -r __n
 sleep 3
 spawn shield ros2 run ammr_wholebody_mpc scan_safety_shield --ros-args -p use_sim_time:=true -p enable:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_shield -p cmd_out_topic:=/cmd_vel -p robot_radius:=0.30 -p alpha:=2.0 -p a_brake:=6.25 -p tau:=0.15 -p vx_max:=0.2775 -p vy_max:=0.2775 -p wz_max:=1.1327
 sleep 3
-spawn nav1 python3 -u evaluation/door_nav1_mission_node.py --goal="$STAND" --out "$DIR/nav1.json" --align-timeout-s 30 --nav-timeout-s 150
+spawn nav1 python3 -u evaluation/door_nav1_mission_node.py --goal="$STAND" --out "$DIR/nav1.json" --tol-pos 0.001 --align-timeout-s 30 --nav-timeout-s 150
 spawn wholebody python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --park-hold --pos-tol 0.005 --stow-q "$K2_READY" --park="$STAND" --q-unfold="$Q_PRE" --out "$DIR/wholebody.json"
 spawn task python3 -u evaluation/door_coopen_core_task_node10g.py --nav-start --wait-handover-timeout-s 240 --out "$DIR/task.json" --run-id "$RUN_ID" --grasp-basis "$GB" --w1b-params "$PRM" --corridor-table "$W1B_TABLE" --finger-loss-cont --settle-cont --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --wall-total-s 1500
 ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
