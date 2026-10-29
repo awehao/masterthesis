@@ -52,6 +52,7 @@ class T(unittest.TestCase):
         rq1['mode'] = 'hold'
         self.assertEqual(ex.on_request(rq1, 6, 0.06, True, True, pose=(0, 0, 0), base_slow=True)[1]['why'], 'after_abort')
         self.assertEqual(ex.on_request(rq1, 6, 0.06, False, False, pose=(0, 0, 0), base_slow=True)[1]['why'], 'not_wholebody_owner')
+        self.assertEqual(ex.on_request(rq1, 6, 0.06, False, True, pose=(0, 0, 0), base_slow=True, at_goal=False)[1]['why'], 'base_not_at_goal')
 
 
 if __name__ == '__main__':

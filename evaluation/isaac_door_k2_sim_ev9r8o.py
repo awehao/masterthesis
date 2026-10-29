@@ -7,6 +7,8 @@
 #          越過停位或退回起點外 ≤ 同值、偏航對停位朝向 ≤ --approach-yaw-deg；越界 ⇒ 同 K3-M 越界閂鎖中止；
 #     (R3) 模式權威改 door_k3m_mode2.ExecutorModeAuthority2：seq 1 hold（當步套用底盤命令須 ≤ 停車伺服上界＝base_slow，否則 nack）⇒ 以**當步實測位姿**為錨點
 #          啟動 HoldMonitor（之後 PARK_HOLD 語義不變）、結束接近走廊；seq 2 free ⇒ 既有 HoldMonitor 結束＋走廊監看（同 r3 的 seq 1）。
+#     (R5，Codex 122531) hold 提交當步另核實測位姿距登錄停位 ≤ --hold-goal-pos-m（3 mm）且偏航 ≤ --hold-goal-yaw-deg（0.5°），否則 nack base_not_at_goal；
+#          錨點仍＝提交當步實測位姿（不寫成停位），另記 anchor_dev_from_goal。
 #     (R4) /park/gate：hold 前 passed False、mode 'approach'；hold 後 passed True、anchor＝hold 錨點、mode 'hold'。
 # 以下為 ev9r8n 說明。
 # EV9r8n（2026-10-29；Codex 20261029_081047：NAV1＋門段同趟）：ev9r8m 的版本化複本，只加 --nav-start（與 --bench-start 互斥）：
@@ -220,6 +222,8 @@ ap.add_argument('--stow-q', default='0,0,0.035,0,-1.5707963,0',
                 help='K2_READY（K2 規格 draft-3：其餘同 STOW、j3 = 0.035）；起始姿態與停車閘門的參考')
 ap.add_argument('--rolling-handover', action='store_true', help='（EV9r8o）滾動交棒＋接近走廊＋hold／free 兩步模式')
 ap.add_argument('--approach-tube-m', type=float, default=0.05)
+ap.add_argument('--hold-goal-pos-m', type=float, default=0.003)
+ap.add_argument('--hold-goal-yaw-deg', type=float, default=0.5)
 ap.add_argument('--approach-yaw-deg', type=float, default=5.0)
 ap.add_argument('--gate6-log', action='store_true', help='（EV9r8o）Gate6 逐步誤差紀錄')
 ap.add_argument('--nav-start', action='store_true', help='（EV9r8n）非台架：導航起步＋換抓（與 --bench-start 互斥）')
@@ -2049,8 +2053,11 @@ def main() -> int:
                             _kind, _ack = 'reject', {'run_id': a.run_id, 'seq': 2, 'why': 'hold_monitor_not_active', 'step': step_id}
                         else:
                             _slow = (math.hypot(_cmd3[0], _cmd3[1]) <= hold_cfg.hold_v_max + 1e-9 and abs(_cmd3[2]) <= hold_cfg.hold_w_max + 1e-9)
+                            _dg = math.hypot(_x - _pk[0], _y - _pk[1])                # r2（Codex 122531）：提交當步核距登錄停位
+                            _dgy = abs(math.atan2(math.sin(float(yw) - _pk[2]), math.cos(float(yw) - _pk[2])))
+                            _atg = (_dg <= a.hold_goal_pos_m + 1e-9 and _dgy <= math.radians(a.hold_goal_yaw_deg) + 1e-9)
                             _kind, _ack = k3m_auth.on_request(_rq, step_id, t, aborted=_abt, owner_wholebody=(res.owner == AUTH_WHOLEBODY),
-                                                              pose=(_x, _y, float(yw)), base_slow=_slow)
+                                                              pose=(_x, _y, float(yw)), base_slow=_slow, at_goal=_atg)
                     elif not k3m['active'] and (park_hold is None or park_hold.end is not None):
                         _kind, _ack = 'reject', {'run_id': a.run_id, 'seq': _rq.get('seq') if isinstance(_rq, dict) else None,
                                                  'why': 'hold_monitor_not_active', 'step': step_id}
@@ -2058,7 +2065,9 @@ def main() -> int:
                         _kind, _ack = k3m_auth.on_request(_rq, step_id, t, aborted=_abt, owner_wholebody=(res.owner == AUTH_WHOLEBODY))
                     if _kind == 'switch' and a.rolling_handover and _ack.get('mode') == 'hold':   # EV9r8o (R3)：hold 錨點＝當步實測位姿
                         park_hold = HoldMonitor(hold_cfg, tuple(_ack['anchor']), step_id, t, prev=park_last_sample)
-                        roll['hold'] = dict(_ack, approach_max=list(roll['max']))
+                        roll['hold'] = dict(_ack, approach_max=list(roll['max']),
+                                            anchor_dev_from_goal={'pos_m': math.hypot(_ack['anchor'][0] - _pk[0], _ack['anchor'][1] - _pk[1]),
+                                                                  'yaw_deg': math.degrees(math.atan2(math.sin(_ack['anchor'][2] - _pk[2]), math.cos(_ack['anchor'][2] - _pk[2])))})
                         rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'hold_start_rolling', 'ack': _ack, 'approach_max': roll['max']})
                         print(f"[door] **K3-M hold（滾動）**（權威）@ step {step_id}：錨點 {_ack['anchor']}；接近走廊最大 {roll['max']}", flush=True)
                     elif _kind == 'switch':

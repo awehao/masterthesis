@@ -7,6 +7,9 @@
 #       代入既有 base_drift_m／base_drift_yaw（K3A 監看門檻 20 mm／2° 不變）；hold 後照 /park/gate 錨點（＝hold 錨點）；
 #   (4) 接近 coord：UNFOLD／ALIGN_PRE／ALIGN_HOLD／APPROACH／ENGAGE（hold 確認前）以 motm_coord.approach_vref（與展開節點同一組參數）給底盤參考速度，
 #       斜坡 acc_lin／acc_ang（UNFOLD 不經斜坡、直接取剖面值，同抽屜），w_vref 照參數；其他相位照舊（W1b／換抓）。
+#   r2（Codex 20261029_122531）：(4') 距停位 ≤ --fine-r（20 mm）首次成立即閂住「末段雙向精對位」直到 hold 確認：底盤參考＝世界誤差轉本體的 P 回授
+#       （可前可後，合速度 ≤ --fine-v-max 5 mm/s；偏航 P ≤ --fine-w-max），經同一斜坡（既有加速度限制），該段 coord w_vref＝--fine-w-vref（1.0，已核可登錄）；
+#       其餘接近段 w_vref 0.03 不變；不改 TCP 權重。策略 hold 准入另核距停位 ≤3 mm／偏航 ≤0.5°（door_rolling_task r2）。
 #   (5) NAV1 失敗分段另含 GLIDE_TIMEOUT。task.json 記 rolling。--rolling 未給 ⇒ 與 node10g 同。
 # node10g（2026-10-29；Codex 20261029_081047：NAV1＋門段同趟）：node10f 的版本化複本，只加 --nav-start（需 --regrasp；不得 --bench-wait-contacts）：
 #   換抓策略鏈改非台架 AG2.gated2(RP8.RegraspPolicy8)（不套 bench_grasp／init_grasp2）＋cont_loss＋settle_cont ⇒ 起於 WAIT_HANDOVER，經停車閘門＋交棒、
@@ -433,6 +436,14 @@ def main():
     ap.add_argument('--motm-w-vref', type=float, default=0.03)
     ap.add_argument('--motm-acc-lin', type=float, default=0.05)
     ap.add_argument('--motm-acc-ang', type=float, default=0.20)
+    ap.add_argument('--fine-r', type=float, default=0.020)                     # node10h r2
+    ap.add_argument('--fine-k', type=float, default=1.0)
+    ap.add_argument('--fine-v-max', type=float, default=0.005)
+    ap.add_argument('--fine-k-yaw', type=float, default=1.0)
+    ap.add_argument('--fine-w-max', type=float, default=0.02)
+    ap.add_argument('--fine-w-vref', type=float, default=1.0)
+    ap.add_argument('--hold-goal-pos-m', type=float, default=0.003)
+    ap.add_argument('--hold-goal-yaw-deg', type=float, default=0.5)
     ap.add_argument('--nav-start', action='store_true')                         # node10g：非台架換抓鏈（WAIT_HANDOVER 起）
     ap.add_argument('--wait-handover-timeout-s', type=float, default=30.0)      # node10g
     ap.add_argument('--bench-wait-contacts', action='store_true')              # node10e：BENCH_START 首筆接觸有界等待（bench_grasp3）
@@ -507,11 +518,13 @@ def main():
         if a.rolling and not a.nav_start:
             raise SystemExit('--rolling 需要 --nav-start ⇒ 拒跑')
         _pcls = SCT.settle_cont(_pcls) if a.settle_cont else _pcls
+        _rkw = ({'roll_goal': tuple(float(v) for v in a.roll_goal.split(',')), 'goal_pos_m': a.hold_goal_pos_m, 'goal_yaw_deg': a.hold_goal_yaw_deg}
+                if a.rolling else {})
         pol = (DRT.rolling(_pcls) if a.rolling else _pcls)(
             cfg, T_HG, a.run_id, corridor, K3MGEO.GeometryMonitor(gcfg, K3MGEO.default_backend()), a_H=a_H,
             w2_run_id=a.w2_mode_run_id, req_delay_s=a.w2_req_delay_s, commit_timeout_s=a.w2_commit_timeout_s,
             test_hold_s=a.w2_test_hold_s, state_stale_s=a.w2_state_stale_s,
-            ref_pkg=rg_pkg, kin=WholeBodyKinematics.from_urdf_file(a.urdf), geom_v3_fn=rg_fn)
+            ref_pkg=rg_pkg, kin=WholeBodyKinematics.from_urdf_file(a.urdf), geom_v3_fn=rg_fn, **_rkw)
     else:
         pol = (BG3.bench_grasp3 if a.bench_wait_contacts else BG.bench_grasp2)(IG2.init_grasp2(AG2.gated2(PP2.K3MP2Policy)))(cfg, T_HG, a.run_id, corridor, K3MGEO.GeometryMonitor(gcfg, K3MGEO.default_backend()), a_H=a_H)   # C1／G2
     pol.gate_init(AG.ApproachGateConfig(**{k: float(v) for k, v in _agp.items()}))
@@ -623,7 +636,7 @@ def main():
             nd.create_subscription(String, '/door/finger_effort_ack', _eff_ack_cb, _lat_w2)
     w0 = time.monotonic()
     roll_goal = tuple(float(v) for v in a.roll_goal.split(','))                # node10h
-    roll_n = {'start': None, 'max_bd': 0.0, 'vr': None, 'n_coord': 0, 'trace': []}
+    roll_n = {'start': None, 'max_bd': 0.0, 'vr': None, 'n_coord': 0, 'trace': [], 'fine': False, 'fine_t0': None}
     ROLL_PHASES = ('UNFOLD', 'ALIGN_PRE', 'ALIGN_HOLD', 'APPROACH', 'ENGAGE')
     t_prev = None
     ho_sent = False
@@ -789,15 +802,31 @@ def main():
                 rep.setdefault('regrasp_coord', {'n': 0})['n'] += 1
             if a.rolling and pol.phase in ROLL_PHASES and not (pol.phase == 'ENGAGE' and pol.hold_waiter.result == 'confirmed') \
                     and m.base_pose is not None:                                 # node10h (4)：接近 coord
-                _vt, _ds = MC.approach_vref(m.base_pose, roll_goal, v_cap=a.motm_v_cap, a_ref=a.motm_a_ref, k_yaw=a.motm_k_yaw,
-                                             w_cap=a.motm_w_cap, v_creep=a.motm_v_creep, overshoot=a.motm_overshoot)
-                _vt = np.array(_vt, float)
+                _dg = math.hypot(m.base_pose[0] - roll_goal[0], m.base_pose[1] - roll_goal[1])
+                if not roll_n['fine'] and _dg <= a.fine_r:                     # r2：末段雙向精對位（閂住至 hold 確認）
+                    roll_n['fine'] = True
+                    roll_n['fine_t0'] = t
+                    rep.setdefault('rolling_fine', {})['t0'] = t
+                    rep['rolling_fine'].update(pose=[float(v) for v in m.base_pose], dist=_dg, phase=pol.phase)
+                if roll_n['fine']:
+                    _th = float(m.base_pose[2])
+                    _ex, _ey = roll_goal[0] - m.base_pose[0], roll_goal[1] - m.base_pose[1]
+                    _bx, _by = a.fine_k * (math.cos(_th) * _ex + math.sin(_th) * _ey), a.fine_k * (-math.sin(_th) * _ex + math.cos(_th) * _ey)
+                    _nb = math.hypot(_bx, _by)
+                    if _nb > a.fine_v_max:
+                        _bx, _by = _bx * a.fine_v_max / _nb, _by * a.fine_v_max / _nb
+                    _bw = max(-a.fine_w_max, min(a.fine_w_max, a.fine_k_yaw * math.atan2(math.sin(roll_goal[2] - _th), math.cos(roll_goal[2] - _th))))
+                    _vt, _ds = np.array([_bx, _by, _bw], float), _dg
+                else:
+                    _vt, _ds = MC.approach_vref(m.base_pose, roll_goal, v_cap=a.motm_v_cap, a_ref=a.motm_a_ref, k_yaw=a.motm_k_yaw,
+                                                 w_cap=a.motm_w_cap, v_creep=a.motm_v_creep, overshoot=a.motm_overshoot)
+                    _vt = np.array(_vt, float)
                 if roll_n['vr'] is None or pol.phase == 'UNFOLD':
                     roll_n['vr'] = _vt.copy()
                 else:
                     _lim = np.array([a.motm_acc_lin, a.motm_acc_lin, a.motm_acc_ang]) * max(dt, 0.0)
                     roll_n['vr'] = roll_n['vr'] + np.clip(_vt - roll_n['vr'], -_lim, _lim)
-                _coord = MC.coord_msg(w_vref=a.motm_w_vref, vref=[float(x) for x in roll_n['vr']])
+                _coord = MC.coord_msg(w_vref=(a.fine_w_vref if roll_n['fine'] else a.motm_w_vref), vref=[float(x) for x in roll_n['vr']])
                 roll_n['n_coord'] += 1
                 if roll_n['n_coord'] % 10 == 1 and len(roll_n['trace']) < 600:
                     roll_n['trace'].append([round(t, 3), pol.phase, [round(float(x), 5) for x in roll_n['vr']], round(float(_ds), 4),

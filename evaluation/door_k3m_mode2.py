@@ -8,6 +8,7 @@
 執行端 hold ack 另帶 anchor（[x, y, yaw]，即 switch_step 的實測位姿）；求解端以此為停車錨點（不另讀 /park/gate、不重設成登錄停位）。
 拒絕（nack）：錯趟、序號不是預期的下一步、mode 與序號不符、請求過期／來自未來、已中止後、未轉交全身前；
   hold 另需 base_slow（呼叫端傳入：當步套用底盤命令合速度 ≤ 停車伺服上界且角速度 ≤ 上界），否則 nack 'base_not_slow'。
+  r2（Codex 20261029_122531）：hold 另可傳 at_goal（提交當步實測位姿距登錄停位 ≤3 mm 且偏航 ≤0.5°）；at_goal is False ⇒ nack 'base_not_at_goal'（None＝不核，r1 行為）。
 """
 from __future__ import annotations
 
@@ -48,7 +49,7 @@ class ExecutorModeAuthority2:
         self.requests = {}
         self.rejections = []
 
-    def on_request(self, msg, step: int, sim_t: float, aborted: bool, owner_wholebody: bool, pose=None, base_slow=None):
+    def on_request(self, msg, step: int, sim_t: float, aborted: bool, owner_wholebody: bool, pose=None, base_slow=None, at_goal=None):
         """回傳 ('switch', ack)、('repeat', ack)、('reject', nack)。'switch' ⇒ 本物理步即 switch_step。"""
         req, why = parse_request(msg)
         seq = msg.get('seq') if isinstance(msg, dict) else None
@@ -79,6 +80,8 @@ class ExecutorModeAuthority2:
         if req['mode'] == 'hold':
             if base_slow is not True:
                 return nack('base_not_slow')
+            if at_goal is False:
+                return nack('base_not_at_goal')
             if pose is None or len(pose) != 3 or not all(_num(v) for v in pose):
                 return nack('pose_invalid')
             ack['anchor'] = [float(v) for v in pose]
