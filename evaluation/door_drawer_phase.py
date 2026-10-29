@@ -132,8 +132,22 @@ def run_drawer_phase(c):
     node.drawer_state_pub = node.create_publisher(M['Float64MultiArray'], '/drawer/state', 10)
     node.drawer_handle_pub = node.create_publisher(M['Float64MultiArray'], '/drawer/handle_pose', 10)
     node.drawer_sync_pub = node.create_publisher(M['Float64MultiArray'], '/drawer/sync_state', 10)
-    node.wb_latest = None
-    node.ho_req = None
+    cleared = {}                                                                        # Codex m5b：入口切換時清除舊段緩存／待處理命令（不動設定點與套用值）
+    for _k in ('wb_latest', 'wb_env_latest', 'ho_req', 'k3m_req', 'k3m_pause_req'):
+        if getattr(node, _k, None) is not None:
+            cleared[_k] = 'set'
+        setattr(node, _k, None)
+    for _k in ('w2_inbox', 'w2_req_q', 'w2_eff_q'):
+        _v = getattr(node, _k, None)
+        if _v:
+            cleared[_k] = len(_v)
+            _v.clear()
+    _lv0, _av0 = robot.get_linear_velocity(), robot.get_angular_velocity()
+    _q00 = robot.get_joint_positions()
+    start_state = {'base_lin_vel_world': [float(v) for v in _lv0], 'base_ang_vel_world': [float(v) for v in _av0],
+                   'q_arm': [float(_q00[idx[j]]) for j in ARM], 'cleared': cleared,
+                   'chain_setpoint': None if getattr(chain, 'setpoint', None) is None else [float(x) for x in chain.setpoint],
+                   'chain_u_prev': None if getattr(chain, 'u_prev', None) is None else [float(x) for x in chain.u_prev]}
     print(f'[drawer] **抽屜段開始** @ step {step_id}：控制者 {ex.owner}；PARK_HOLD 停位 {_pk}；收臂判準 {stow}；'
           f'執行層 switch_guard→抽屜停位閘、v_min_lin {ex_prev["v_min_lin"]}→0', flush=True)
 
@@ -143,7 +157,7 @@ def run_drawer_phase(c):
     next_scan = next_state = next_grip = t0
     contact_hold = PhysicsContactHold(physics_dt=a.physics_dt, contact_min_n=a.contact_min_n)
     prev_pose = None
-    rec = {'version': VERSION, 'phase': 'drawer', 'start': {'step': step_id, 'sim_t': t0, 'owner': ex.owner, 'ex_prev': ex_prev},
+    rec = {'version': VERSION, 'phase': 'drawer', 'start': {'step': step_id, 'sim_t': t0, 'owner': ex.owner, 'ex_prev': ex_prev, 'state': start_state},
            'steps': [], 'events': [],
            'steps_cols': ['step', 'sim_t', 'owner(0=nav,1=wb,2=glide)', 'kind',
                           'base_cmd_body', 'meas_vb_body', 'applied_arm',

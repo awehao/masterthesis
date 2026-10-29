@@ -282,7 +282,9 @@ if grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && grep -q '門段交回導�
     for i in $(seq 20); do
       _bad=""
       for _t in /drawer/tcp_target /drawer/solver_start /gripper/cmd /handover/request /plan /cmd_vel_pre_shield /cmd_vel_nav /wgmpc/cmd_world /wgmpc/cmd_env; do
-        _c=$(timeout 8 ros2 topic info "$_t" 2>/dev/null | awk '/Publisher count/{print $3}'); [ "${_c:-0}" != "0" ] && _bad="$_bad $_t:$_c"
+        _o=$(timeout 8 ros2 topic info "$_t" 2>&1); _rc=$?                    # 只有「確讀到 0」或「確認話題不存在」才放行；逾時／查詢失敗算不通過
+        if echo "$_o" | grep -q 'Publisher count: 0'; then :; elif echo "$_o" | grep -qi 'Unknown topic'; then :;
+        else _bad="$_bad $_t:$(echo "$_o" | awk '/Publisher count/{print $3}')${_rc:+(rc$_rc)}"; fi
       done
       [ -z "$_bad" ] && { _ok_iso=1; break; }; sleep 1
     done

@@ -1847,10 +1847,19 @@ def main() -> int:
         if a.subtask_handoff and node.subtask_req is not None:                      # EV9r8t：交接請求 ⇒ 只在已交回導航、無待決、無閂鎖時結束門段
             _pi = ex.handover_pending_info()
             _hready = (ex.owner == AUTH_NAV and not _pi.get('pending') and k2_latch.latched is None
-                       and node.subtask_req.get('subtask') == 'door' and node.subtask_req.get('final_phase') == 'DONE')
+                       and node.subtask_req.get('subtask') == 'door' and node.subtask_req.get('final_phase') == 'DONE'
+                       and str(node.subtask_req.get('run_id')) == str(a.run_id))                    # Codex m5b：核對本趟身分
             if _hready:
                 rec['stop_reason'] = 'subtask_handoff'
-                rec['subtask_handoff'] = {'step': step_id, 'sim_t': t, 'req': node.subtask_req, 'owner': ex.owner}
+                _lv, _av = robot.get_linear_velocity(), robot.get_angular_velocity()            # Codex m5b：實際低速／靜止狀態紀錄
+                _qh = robot.get_joint_positions()
+                rec['subtask_handoff'] = {'step': step_id, 'sim_t': t, 'req': node.subtask_req, 'owner': ex.owner,
+                                          'base_lin_vel_world': [float(v) for v in _lv], 'base_ang_vel_world': [float(v) for v in _av],
+                                          'q_arm': [float(_qh[idx[j]]) for j in ARM], 'q_finger': [float(_qh[fidx[j]]) for j in FJ],
+                                          'chain': {'u_prev': None if getattr(chain, 'u_prev', None) is None else [float(x) for x in chain.u_prev],
+                                                    'setpoint': None if getattr(chain, 'setpoint', None) is None else [float(x) for x in chain.setpoint],
+                                                    'tenure': getattr(chain, 'tenure', None), 'tenure_open': getattr(chain, 'tenure_open', None)},
+                                          'nav_applied': ex.nav_applied_report()}
                 print(f'[door] **門段交接**（subtask_done）@ step {step_id} sim {t:.2f}：控制者 {ex.owner} ⇒ 結束門段迴圈、續抽屜段', flush=True)
                 break
             if not getattr(node, '_subtask_wait_logged', False):
