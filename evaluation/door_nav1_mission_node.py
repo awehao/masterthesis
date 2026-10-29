@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""r3（Codex 20261029_082724）：(a) 起步前須有新鮮里程與有效掃描（最近一筆 /scan 牆鐘年齡 ≤ 1.0 s、frame_id 非空）才發計畫進 CRUISE；
+"""r4（Codex 20261029_090630 選 B：滾動交棒）：--rolling ⇒ CRUISE 距停位 ≤ glide_r 起改 GLIDE（不進 PARK_ALIGN）：
+  目標速度＝motm_coord.approach_vref（與展開節點同參數；v_creep 0、overshoot 0），自巡航速度以 a_dec_lin／a_dec_ang 平順減速（不直接裁切）、航向轉至停位朝向；
+  實測（位姿差分）線速度 ∈ [ready_v_min, ready_v_max]、|w| ≤ ready_w、偏航誤差 ≤ ready_yaw_deg、距停位 ≥ ready_d_min ⇒ HANDOVER_READY（仍照 GLIDE 命令移動，
+  等執行端滾動交棒）；計畫改折線 S→P0→停位（P0＝停位沿停位朝向後退 pre_d），使最後一段沿操作朝向直線進場（交棒時橫向偏離小）；/handover/state 轉 wholebody ⇒ HANDED_OVER（零）；GLIDE 期限 glide_timeout_s ⇒ GLIDE_TIMEOUT（零、任務端轉失敗）。命令仍經同一選擇器與護盾。
+r3（Codex 20261029_082724）：(a) 起步前須有新鮮里程與有效掃描（最近一筆 /scan 牆鐘年齡 ≤ 1.0 s、frame_id 非空）才發計畫進 CRUISE；
   (b) 每 0.2 s 發 /nav1/state（JSON：seg、t、result、dist）供任務端把 NAV_TIMEOUT／ALIGN_TIMEOUT 轉成任務失敗受控收尾。
 r2（door_nav1_door_2：GMPC 到達容差 goal_tolerance_xy 0.20 m ⇒ 停在 0.146 m 起保持零，r1 切換半徑 0.10 m 永遠未進 PARK_ALIGN ⇒ NAV_TIMEOUT）：
   切換半徑預設 0.10 → 0.25 m（須大於 GMPC 到達容差）；/scan 訂閱改感測器 QoS（scan_relay 為 BEST_EFFORT；r1 收 0 筆＝證據缺口，非護盾未收）。其餘不變。
@@ -31,6 +35,7 @@ import signal
 import time
 
 import rclpy
+import motm_coord as MC                                                # r4
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
@@ -38,7 +43,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profi
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
-VERSION = 'door_nav1_mission_node/r3'
+VERSION = 'door_nav1_mission_node/r4'
 
 
 def wrap(a):
@@ -64,6 +69,8 @@ class Nav1(Node):
         self.state_pub = self.create_publisher(String, '/nav1/state', 10)        # r3
         self.create_timer(0.2, self._pub_state)
         self.dist = None
+        self._vp = None                                                          # r4：位姿差分速度
+        self.vmeas = None
         self.create_subscription(Odometry, '/odom', self._odom, 10)
         self.create_subscription(Twist, a.in_topic, self._cin, 10)
         self.create_subscription(Twist, '/cmd_vel', self._shield_out, 10)
@@ -78,7 +85,7 @@ class Nav1(Node):
         self.out_last = (0.0, 0.0, 0.0)
         self.out_last_t = None
         self.t_plan = None
-        self.rep = {'version': VERSION, 'args': vars(a), 'goal': list(self.goal), 'segments': [], 'n_out': {'CRUISE': 0, 'PARK_ALIGN': 0, 'ZERO': 0},
+        self.rep = {'version': VERSION, 'args': vars(a), 'goal': list(self.goal), 'segments': [], 'n_out': {'CRUISE': 0, 'PARK_ALIGN': 0, 'ZERO': 0, 'GLIDE': 0, 'HANDOVER_READY': 0},
                     'shield': {'n_out': 0, 'last_wall': None, 'n_modified': 0, 'max_abs_diff': 0.0},
                     'scan': {'topic': a.scan_topic, 'n': 0, 'frame_id': None, 'last_wall': None, 'last_stamp': None},
                     'in': {'topic': a.in_topic, 'n': 0}, 'gate_last': None, 'handover_last': None, 'align': {}, 'result': None}
@@ -90,6 +97,13 @@ class Nav1(Node):
         self.t = m.header.stamp.sec + 1e-9 * m.header.stamp.nanosec
         p = m.pose.pose
         self.pose = (p.position.x, p.position.y, yaw_of(p.orientation))
+        cur = (self.t,) + self.pose                                             # r4：實測速度（0.1 s 以上的位姿差分）
+        if self._vp is None:
+            self._vp = cur
+        elif cur[0] - self._vp[0] >= 0.1:
+            dt = cur[0] - self._vp[0]
+            self.vmeas = (math.hypot(cur[1] - self._vp[1], cur[2] - self._vp[2]) / dt, abs(wrap(cur[3] - self._vp[3])) / dt)
+            self._vp = cur
 
     def _cin(self, m):
         self.cin = (m.linear.x, m.linear.y, m.angular.z)
@@ -128,21 +142,30 @@ class Nav1(Node):
     def _plan(self):
         sx, sy, _ = self.pose
         gx, gy, gyaw = self.goal
-        n = max(2, int(math.hypot(gx - sx, gy - sy) / 0.05) + 1)
-        yaw_path = math.atan2(gy - sy, gx - sx)
+        verts = [(sx, sy), (gx, gy)]
+        if self.a.rolling and self.a.pre_d > 0:                                   # r4：折線，最後一段沿停位朝向
+            verts = [(sx, sy), (gx - self.a.pre_d * math.cos(gyaw), gy - self.a.pre_d * math.sin(gyaw)), (gx, gy)]
         p = Path()
         p.header.frame_id = 'odom'
         p.header.stamp = self.get_clock().now().to_msg()
-        for k in range(n):
-            ps = PoseStamped()
-            ps.header = p.header
-            ps.pose.position.x = sx + (gx - sx) * k / (n - 1)
-            ps.pose.position.y = sy + (gy - sy) * k / (n - 1)
-            yw = gyaw if k == n - 1 else yaw_path
-            ps.pose.orientation.z, ps.pose.orientation.w = math.sin(yw / 2), math.cos(yw / 2)
-            p.poses.append(ps)
+        n_tot = 0
+        for i in range(len(verts) - 1):
+            (ax, ay), (bx, by) = verts[i], verts[i + 1]
+            n = max(2, int(math.hypot(bx - ax, by - ay) / 0.05) + 1)
+            yaw_seg = math.atan2(by - ay, bx - ax)
+            for k in range(0 if i == 0 else 1, n):
+                ps = PoseStamped()
+                ps.header = p.header
+                ps.pose.position.x = ax + (bx - ax) * k / (n - 1)
+                ps.pose.position.y = ay + (by - ay) * k / (n - 1)
+                last = (i == len(verts) - 2 and k == n - 1)
+                yw = gyaw if last else yaw_seg
+                ps.pose.orientation.z, ps.pose.orientation.w = math.sin(yw / 2), math.cos(yw / 2)
+                p.poses.append(ps)
+                n_tot += 1
         self.plan_msg = p
-        self.rep['plan'] = {'start': [sx, sy], 'goal': list(self.goal), 'n': n, 'frame': 'odom', 'kind': 'straight_line'}
+        self.rep['plan'] = {'start': [sx, sy], 'goal': list(self.goal), 'vertices': [list(v) for v in verts], 'n': n_tot, 'frame': 'odom',
+                            'kind': 'polyline' if len(verts) > 2 else 'straight_line'}
 
     def _go(self, seg, **kw):
         self.seg = seg
@@ -172,12 +195,24 @@ class Nav1(Node):
         dist = math.hypot(ex, ey)
         self.dist = dist
         ho = self.rep['handover_last'] or {}
-        if self.seg not in ('ZERO', 'ALIGN_TIMEOUT', 'NAV_TIMEOUT', 'HANDED_OVER') and str(ho.get('owner', '')).lower().startswith('wholebody'):
+        if self.seg not in ('ZERO', 'ALIGN_TIMEOUT', 'NAV_TIMEOUT', 'HANDED_OVER', 'GLIDE_TIMEOUT') and str(ho.get('owner', '')).lower().startswith('wholebody'):
             self._go('HANDED_OVER')
-        if self.seg in ('CRUISE', 'PARK_ALIGN') and self.t - self.t_plan > a.nav_timeout_s:
+        if self.seg in ('CRUISE', 'PARK_ALIGN', 'GLIDE', 'HANDOVER_READY') and self.t - self.t_plan > a.nav_timeout_s:
             self._go('NAV_TIMEOUT', dist=dist)
             self.rep['result'] = 'nav_timeout'
-        if self.seg == 'CRUISE' and dist <= a.switch_r:
+        if a.rolling and self.seg == 'CRUISE' and dist <= a.glide_r:          # r4
+            self._go('GLIDE', dist=dist, yaw_err_deg=math.degrees(eyaw), vmeas=self.vmeas)
+            self.rep['glide'] = {'t0': self.t}
+        if a.rolling and self.seg == 'GLIDE':
+            vm = self.vmeas
+            if vm is not None and a.ready_v_min <= vm[0] <= a.ready_v_max and vm[1] <= a.ready_w \
+                    and abs(eyaw) <= math.radians(a.ready_yaw_deg) and dist >= a.ready_d_min:
+                self._go('HANDOVER_READY', dist=dist, yaw_err_deg=math.degrees(eyaw), vmeas=vm)
+                self.rep['glide'].update(t_ready=self.t, ready_dist=dist, ready_v=vm)
+            elif self.t - self.rep['glide']['t0'] > a.glide_timeout_s:
+                self._go('GLIDE_TIMEOUT', dist=dist, vmeas=vm)
+                self.rep['result'] = 'glide_timeout'
+        if not a.rolling and self.seg == 'CRUISE' and dist <= a.switch_r:
             self._go('PARK_ALIGN', dist=dist, yaw_err_deg=math.degrees(eyaw))
             self.rep['align']['t0'] = self.t
         if self.seg == 'PARK_ALIGN':
@@ -190,6 +225,14 @@ class Nav1(Node):
                 self.rep['result'] = 'align_timeout'
         if self.seg == 'CRUISE':
             u = self.cin if (self.cin_t is not None and self.t - self.cin_t <= 0.5) else (0.0, 0.0, 0.0)
+        elif self.seg in ('GLIDE', 'HANDOVER_READY'):                           # r4：approach_vref 剖面＋平順減速
+            (bx, by, bw), _ = MC.approach_vref(self.pose, self.goal, v_cap=a.motm_v_cap, a_ref=a.motm_a_ref, k_yaw=a.motm_k_yaw,
+                                               w_cap=a.motm_w_cap, v_creep=a.motm_v_creep, overshoot=a.motm_overshoot)
+            dt = (self.t - self.out_last_t) if self.out_last_t is not None else 1.0 / a.rate
+            dt = max(dt, 1e-3)
+            lx, ly, lw = self.out_last
+            u = (clip(bx, lx - a.a_dec_lin * dt, lx + a.a_dec_lin * dt), clip(by, ly - a.a_dec_lin * dt, ly + a.a_dec_lin * dt),
+                 clip(bw, lw - a.a_dec_ang * dt, lw + a.a_dec_ang * dt))
         elif self.seg == 'PARK_ALIGN':
             c, s = math.cos(th), math.sin(th)
             vx, vy = a.k_lin * (c * ex + s * ey), a.k_lin * (-s * ex + c * ey)
@@ -206,7 +249,7 @@ class Nav1(Node):
             u = (vx, vy, w)
         else:
             u = (0.0, 0.0, 0.0)
-        if self.seg == 'ZERO' or self.seg in ('ALIGN_TIMEOUT', 'NAV_TIMEOUT', 'HANDED_OVER'):
+        if self.seg == 'ZERO' or self.seg in ('ALIGN_TIMEOUT', 'NAV_TIMEOUT', 'HANDED_OVER', 'GLIDE_TIMEOUT'):
             u = (0.0, 0.0, 0.0)
         tw = Twist()
         tw.linear.x, tw.linear.y, tw.angular.z = (float(v) for v in u)
@@ -244,6 +287,23 @@ def main():
     ap.add_argument('--a-ang', type=float, default=2.0)
     ap.add_argument('--align-timeout-s', type=float, default=30.0)
     ap.add_argument('--nav-timeout-s', type=float, default=150.0)
+    ap.add_argument('--rolling', action='store_true')                         # r4
+    ap.add_argument('--glide-r', type=float, default=0.45)
+    ap.add_argument('--pre-d', type=float, default=0.6)
+    ap.add_argument('--a-dec-lin', type=float, default=0.3)
+    ap.add_argument('--a-dec-ang', type=float, default=1.0)
+    ap.add_argument('--ready-v-min', type=float, default=0.012)
+    ap.add_argument('--ready-v-max', type=float, default=0.030)
+    ap.add_argument('--ready-w', type=float, default=0.05)
+    ap.add_argument('--ready-yaw-deg', type=float, default=1.5)
+    ap.add_argument('--ready-d-min', type=float, default=0.06)
+    ap.add_argument('--glide-timeout-s', type=float, default=30.0)
+    ap.add_argument('--motm-v-cap', type=float, default=0.030)
+    ap.add_argument('--motm-a-ref', type=float, default=0.002)
+    ap.add_argument('--motm-k-yaw', type=float, default=1.0)
+    ap.add_argument('--motm-w-cap', type=float, default=0.10)
+    ap.add_argument('--motm-v-creep', type=float, default=0.0)
+    ap.add_argument('--motm-overshoot', type=float, default=0.0)
     ap.add_argument('--rate', type=float, default=20.0)
     ap.add_argument('--out', required=True)
     a, _ = ap.parse_known_args()
