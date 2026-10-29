@@ -7,6 +7,9 @@
   以多種子 IK 解抓取位姿 H_in(q)·T_HG，check(stage='P'，手指閉合)；記每個門角的可行格點與最佳淨空，及「最小 y／最大 y」。
   另核接近姿態：q＝48° 的預抓取（沿工具 −z 0.06 m、手指張開，stage 'A'）。
 輸出 results/door/door_regrasp_fwd_probe.json（不覆寫）：每門角可行格點、y 範圍；第一個無可行格點的門角與各格點最常見的失敗原因。
+r3（Howard 20261029 §0 補充）：偏航改 {90, 45, 135, 0, 180}°、門角 {48, 32, 16, 2}°（控制計算量），目的為找可行區、再選自行進姿態平順轉入的路徑。
+r2：格點先以可達預篩（肩部＝link_base 上方 0.243 m 到抓取點距離 ≤ REACH 0.48 m；Lite 6 工作半徑約 0.44 m）只解可能可達者，並輸出進度；
+  r1 全格點每位姿 10 種子約 0.8 s、7 個門角需數小時（已中止，無輸出）。
 界線：離線運動學、靜態逐點可行性，不是連續路徑規劃；連續候選需另以全身追蹤串接。
 """
 import collections
@@ -24,10 +27,16 @@ import door_geom_v3 as G3                              # noqa: E402
 
 OUT = os.path.join(HERE, 'results', 'door', 'door_regrasp_fwd_probe.json')
 REF = os.path.join(HERE, 'results', 'door', 'door_regrasp_ref_pb1f.json')
-QS = (48.0, 40.0, 32.0, 24.0, 16.0, 8.0, 2.0)
-YAWS = (90.0, 70.0, 110.0)
+QS = (48.0, 32.0, 16.0, 2.0)
+YAWS = (90.0, 45.0, 135.0, 0.0, 180.0)                 # r3：Howard 補充 §0——操作朝向可在接近區平順調整，不鎖死單一車頭角度 ⇒ 看較寬偏航可行區
 XS = np.round(np.arange(0.30, 0.901, 0.05), 3)
 YS = np.round(np.arange(-0.80, 0.601, 0.05), 3)
+REACH = 0.48
+
+
+def reachable(base, T):
+    lb = np.asarray(PI.C.K.fk(list(base) + [0.0] * 6, 'link_base'))[:3, 3] + np.array([0.0, 0.0, 0.243])
+    return float(np.linalg.norm(T[:3, 3] - lb)) <= REACH
 
 
 def solve(base, T, qfi, stage, q):
@@ -59,16 +68,23 @@ def main():
     for q in QS:
         T = G3.handle_pose_inner(PI.D3, math.radians(q)) @ THG
         feas, fails = [], collections.Counter()
+        n_try = 0
         for yw in YAWS:
             for bx in XS:
                 for by in YS:
-                    best, wc = solve(np.array([bx, by, math.radians(yw)]), T, PI.CLOSED, 'P', q)
+                    b = np.array([bx, by, math.radians(yw)])
+                    if not reachable(b, T):
+                        fails['prefilter_reach'] += 1
+                        continue
+                    n_try += 1
+                    best, wc = solve(b, T, PI.CLOSED, 'P', q)
                     if best is not None:
                         feas.append({'x': float(bx), 'y': float(by), 'yaw_deg': yw, 'score': float(best[0]),
                                      'nonfinger_mm': best[2]['nonfinger'][0] * 1e3, 'self_mm': best[2]['self'][0] * 1e3,
                                      'base_mm': best[2]['base'][0] * 1e3, 'jm': best[2]['jm'], 'qa': best[1][3:].tolist()})
                     else:
                         fails.update(wc)
+        print(f'  q {q}：預篩後求解 {n_try} 個位姿', flush=True)
         ys = [f['y'] for f in feas]
         res['per_q'][str(q)] = {'n_feasible': len(feas), 'y_min': min(ys) if ys else None, 'y_max': max(ys) if ys else None,
                                 'by_yaw': {str(yw): sum(1 for f in feas if f['yaw_deg'] == yw) for yw in YAWS},
@@ -84,7 +100,10 @@ def main():
     for yw in YAWS:
         for bx in XS:
             for by in YS:
-                best, wc = solve(np.array([bx, by, math.radians(yw)]), Tpre, PI.OPEN, 'A', 48.0)
+                b = np.array([bx, by, math.radians(yw)])
+                if not reachable(b, Tpre):
+                    continue
+                best, wc = solve(b, Tpre, PI.OPEN, 'A', 48.0)
                 if best is not None:
                     feas_a.append({'x': float(bx), 'y': float(by), 'yaw_deg': yw, 'score': float(best[0])})
                 else:
