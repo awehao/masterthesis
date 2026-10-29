@@ -156,3 +156,17 @@ def test_chain_rebase_guards():
         assert False
     except RuntimeError:
         pass
+
+
+def test_envelope_v4_roundtrip():
+    import cmd_envelope_v4 as E4
+    import wgmpc_cmd_envelope as V2
+    d = E4.encode4(7.0, 12, V2.ST_SOLVER, 12, 12, True, 3.5, [0.01] * 9, 4, 1)
+    e = E4.decode4(d)
+    assert e['tenure'] == 1 and e['mode_seq'] == 4 and e['source_seq'] == 12 and len(d) == E4.NFIELD4
+    for bad in (d[:-1], d[:-1] + [-1.0], d[:-1] + [0.5]):
+        try:
+            E4.decode4(bad)
+            assert False
+        except ValueError:
+            pass
