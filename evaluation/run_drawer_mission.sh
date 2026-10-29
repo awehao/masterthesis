@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 抽屜流程・完整地圖版（2026-10-30；Howard：先用完整地圖跑一次抽屜流程並錄影，之後與門串接）：run_nav_handover.sh（10/5 MotM 抽屜流程）的複本，只改：
 #   (1) 場景 mission_room_drawerframe.sdf（第七次整體任務地圖平移 (−2.4, −3.6)；抽屜櫃落在抽屜房同一位置；補門兩側牆、門洞無門扇——本趟不經過門）；
-#   (2) 起點 B 房 (−1.8, −2.6, 90°)＝mission (0.6, 1.0)（門後方、離隔牆 0.88 m）；任務節點／減速段 --start 同步；
+#   (2) 起點 B 房 (−1.8, −2.6, 90°)＝mission (0.6, 1.0)（門後方、離隔牆 0.88 m）；任務節點／減速段／任務編排（回程目標）--start 同步
+#       （drawer_mission_1 漏傳任務編排 --start，回程目標落在舊起點 (−2.8, −3.2)＝離門牆 0.28 m，未回到起點；r2 補上）；
 #   (3) 導航加地圖＋掃描轉送＋追蹤器＋CBF（α 0.5、動態 0.69／靜態 0.47）＋原始掃描護盾（robot_radius 0.39、self_return_radius 0.30）；鏈：gmpc→平滑器→護盾→/cmd_vel；
 #   (4) 預設 MOTM=1（移動中操作）、CAM=true（鏡頭在 B 房東南往西北）；setsid＋整群組收尾＋起跑前同 domain 衝突程序拒跑；以 run_guarded_v3.sh 執行。
 #   抽屜操作（展開、ALIGN、夾持、開關、放、退、收臂）、求解端、任務編排參數與 10/5 版完全相同。OPEN_M 預設 0.020（同原跑法）。
@@ -254,7 +255,7 @@ fi
 # drawer_task_policy 決定、推進一律看實測。提早起，求解節點一上線就有
 # 接觸前目標可跟，不必走「保持起始 TCP」的退路。
 # OPEN_M：先跑 0.020 的校正趟（不是結果），再跑正式 0.200。
-spawn task python3 -u evaluation/drawer_task_node.py \
+spawn task python3 -u evaluation/drawer_task_node.py --start="$START_POSE" \
   --open-m "${OPEN_M:-0.020}" --grasp-depth-m "${GRASP_DEPTH_M:-0.01226}" \
   --contact-min-n "${CONTACT_MIN_N:-0.5}" $MOTM_FLAG $PK_NODE \
   ${MOTM_A_REF:+--motm-a-ref "$MOTM_A_REF"} ${MOTM_TASK_ARGS:-} \
