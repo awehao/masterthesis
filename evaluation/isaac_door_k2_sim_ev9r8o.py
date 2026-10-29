@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 # EV9r8o（2026-10-29；Codex 20261029_085448）：ev9r8n 的版本化複本。--gate6-log：換抓核心建構後把 Gate6 換成 door_regrasp_gates4.Gate6AdmitLog
 #   （判定同 gates3；逐步記 ep／er／no_touch／ok_t0／名目目標，存於 room_run regrasp.core.gates.gate6.step_log）。讀回類別不符 ⇒ 拒跑 73。
+#   --rolling-handover（Codex 20261029_090630 選 B；需 --nav-start --park-hold --park-gate-mobile）：
+#     (R1) 交棒不經 PARK 靜止閘門：switch_guard 不用、滾動下界 v_min_lin 照參數（既有 DualSourceExecutor 預核：實測本體速度在 v_box 內且 ≥ v_min_lin）；
+#     (R2) 轉交全身後不立即啟動 HoldMonitor，改「接近走廊」逐步監看：底盤到「交棒位姿→登錄停位」線段的橫向偏離 ≤ --approach-tube-m、
+#          越過停位或退回起點外 ≤ 同值、偏航對停位朝向 ≤ --approach-yaw-deg；越界 ⇒ 同 K3-M 越界閂鎖中止；
+#     (R3) 模式權威改 door_k3m_mode2.ExecutorModeAuthority2：seq 1 hold（當步套用底盤命令須 ≤ 停車伺服上界＝base_slow，否則 nack）⇒ 以**當步實測位姿**為錨點
+#          啟動 HoldMonitor（之後 PARK_HOLD 語義不變）、結束接近走廊；seq 2 free ⇒ 既有 HoldMonitor 結束＋走廊監看（同 r3 的 seq 1）。
+#     (R4) /park/gate：hold 前 passed False、mode 'approach'；hold 後 passed True、anchor＝hold 錨點、mode 'hold'。
 # 以下為 ev9r8n 說明。
 # EV9r8n（2026-10-29；Codex 20261029_081047：NAV1＋門段同趟）：ev9r8m 的版本化複本，只加 --nav-start（與 --bench-start 互斥）：
 #   (1) RG8 啟動核改為「需 --bench-start 或 --nav-start」（其餘 contact-v3-out、regrasp-ref、互斥、登錄核驗不變）；
@@ -211,6 +218,9 @@ ap.add_argument('--wrist-q', default='-0.383712,0.301253,0.428917,-0.661155,-1.4
                      '真值橫桿中心投影約 (375,354)、光軸距離 0.275 m）')
 ap.add_argument('--stow-q', default='0,0,0.035,0,-1.5707963,0',
                 help='K2_READY（K2 規格 draft-3：其餘同 STOW、j3 = 0.035）；起始姿態與停車閘門的參考')
+ap.add_argument('--rolling-handover', action='store_true', help='（EV9r8o）滾動交棒＋接近走廊＋hold／free 兩步模式')
+ap.add_argument('--approach-tube-m', type=float, default=0.05)
+ap.add_argument('--approach-yaw-deg', type=float, default=5.0)
 ap.add_argument('--gate6-log', action='store_true', help='（EV9r8o）Gate6 逐步誤差紀錄')
 ap.add_argument('--nav-start', action='store_true', help='（EV9r8n）非台架：導航起步＋換抓（與 --bench-start 互斥）')
 ap.add_argument('--bench-start', action='store_true', help='BENCH：台架初態啟動（預設關 ⇒ 與 EV5 同行為）')
@@ -378,6 +388,7 @@ import door_k2_io as KIO                                         # noqa: E402
 import door_k3_evidence as KEV                                   # noqa: E402  EV 版：取證擷取（純邏輯）
 import time as _ev_time                                          # noqa: E402  EV 版：取證耗時
 import door_k3m_mode as K3MMODE                                  # noqa: E402  EV3：模式握手（純邏輯）
+import door_k3m_mode2 as K3MMODE2                                # noqa: E402  EV9r8o：滾動兩步模式
 import door_k3m_pause_mode as K3MP                               # noqa: E402  EV4：暫停握手（純邏輯）
 import wgmpc_cmd_envelope as ENV                                 # noqa: E402  EV4：命令追蹤封裝
 import door_bench_start2 as BENCH                                 # noqa: E402  BENCH (R1)：台架初態啟動 r2
@@ -1138,6 +1149,9 @@ def main() -> int:
             return 69
         mfc = MFC.MimicFollowCheck()
     _tgt0, bench_cfg, bench_sp = q0, None, None                                       # BENCH (B1)
+    if a.rolling_handover and not (a.nav_start and a.park_hold and a.park_gate_mobile):   # EV9r8o
+        print('[room] **--rolling-handover 需 --nav-start --park-hold --park-gate-mobile** ⇒ 拒跑', flush=True)
+        return 72
     if a.nav_start and a.bench_start:                                                # EV9r8n
         print('[room] **--nav-start 與 --bench-start 互斥** ⇒ 拒跑', flush=True)
         return 72
@@ -1280,10 +1294,11 @@ def main() -> int:
     park_hold = None
     park_done = False
     park_state = {'violation': None, 'transfer_without_gate': False, 'external': None}
+    roll = {'start': None, 'violation': None, 'max': [0.0, -1e9, -1e9, 0.0], 'log': [], 'hold': None}   # EV9r8o (R2)
     park_prev_cmd = (float('nan'),) * 3      # 上一物理步實際寫入的底盤命令（閘門用）
     park_last_sample = None                  # 上一物理步 (step, t, x, y, yaw)（保持監看承接用）
     # 規格：PARK_FIXED **明確取消滾動交棒下界**（停住反而不能接手）；MOTM 保持原值。其他預核照做。
-    v_min_lin_eff = 0.0 if park_on else a.v_min_lin
+    v_min_lin_eff = a.v_min_lin if a.rolling_handover else (0.0 if park_on else a.v_min_lin)   # EV9r8o (R1)
 
     def _park_guard(to, sid, st_):
         """提交切換當步：停車閘門已通過、停車條件仍成立、閘門資料是前一步（新鮮）、未違規。"""
@@ -1304,7 +1319,7 @@ def main() -> int:
                             max_seed_age_s=max(5.0 * a.physics_dt, 0.05),
                             v_box_lin=a.v_box_lin, v_box_ang=a.v_box_ang,
                             v_min_lin=v_min_lin_eff,
-                            switch_guard=(_park_guard if park_on else None),
+                            switch_guard=(_park_guard if (park_on and not a.rolling_handover) else None),   # EV9r8o (R1)
                             nav_accel_max=(None if a.nav_accel_x <= 0 else
                                            (a.nav_accel_x, a.nav_accel_y,
                                             a.nav_accel_w)))
@@ -1472,7 +1487,7 @@ def main() -> int:
         if not a.park_hold or not a.run_id or not a.corridor_table:
             print('[door] **--park-gate-mobile 需要 --park-hold、--run-id、--corridor-table** ⇒ 中止', flush=True)
             sys.exit(21)
-        k3m_auth = K3MMODE.ExecutorModeAuthority(a.run_id)
+        k3m_auth = K3MMODE2.ExecutorModeAuthority2(a.run_id) if a.rolling_handover else K3MMODE.ExecutorModeAuthority(a.run_id)   # EV9r8o (R3)
         k3m_pauth = K3MP.ExecutorPauseAuthority(a.run_id)                           # EV4
         k3m_cor = K3MCOR.Corridor.from_json(json.load(open(a.corridor_table))['table'])
         k3m_env = [float(v) for v in a.envelope.split(',')]
@@ -1952,7 +1967,40 @@ def main() -> int:
         if park_on:
             _cmd3 = [float(x) for x in res.base_cmd]
             _x, _y = float(p_now[0]), float(p_now[1])
-            if park_hold is None and not park_done and res.owner == AUTH_WHOLEBODY:
+            if a.rolling_handover and park_hold is None and not park_done and res.owner == AUTH_WHOLEBODY:   # EV9r8o (R2)
+                if roll['start'] is None:
+                    roll['start'] = (park_last_sample[2], park_last_sample[3], park_last_sample[4]) if park_last_sample else (_x, _y, float(yw))
+                    rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'approach_start', 'start': roll['start'], 'goal': list(_pk)})
+                    print(f"[door] **滾動交棒後接近走廊監看**：起 {roll['start']} → 停位 {_pk}", flush=True)
+                if roll['violation'] is None and park_state['violation'] is None:
+                    _sx, _sy, _ = roll['start']
+                    _gx, _gy, _gyaw = _pk
+                    _L = math.hypot(_gx - _sx, _gy - _sy)
+                    _ux, _uy = ((_gx - _sx) / _L, (_gy - _sy) / _L) if _L > 1e-6 else (math.cos(_gyaw), math.sin(_gyaw))
+                    _al = (_x - _sx) * _ux + (_y - _sy) * _uy
+                    _lat = abs(-(_x - _sx) * _uy + (_y - _sy) * _ux)
+                    _dyaw = abs(math.atan2(math.sin(float(yw) - _gyaw), math.cos(float(yw) - _gyaw)))
+                    _tube = a.approach_tube_m
+                    roll['max'] = [max(roll['max'][0], _lat), max(roll['max'][1], _al - _L), max(roll['max'][2], -_al), max(roll['max'][3], math.degrees(_dyaw))]
+                    if step_id % 10 == 0:
+                        roll['log'].append([step_id, round(t, 4), round(_lat, 5), round(_al, 5), round(math.degrees(_dyaw), 4)])
+                    _whyr = ('lateral' if _lat > _tube else 'overshoot' if _al - _L > _tube else 'behind_start' if -_al > _tube
+                             else 'yaw' if _dyaw > math.radians(a.approach_yaw_deg) else None)
+                    if _whyr is not None:
+                        _vr = {'step': step_id, 't': t, 'phase': 'approach', 'why': f'接近走廊越界：{_whyr}',
+                               'dev': [_lat, _al - _L, -_al, math.degrees(_dyaw)]}
+                        roll['violation'] = _vr
+                        park_state['violation'] = _vr
+                        if k2_latch.latched is None:
+                            _gnr = (a.finger_open if node.grip_cmd is None else min(max(float(node.grip_cmd), a.finger_closed), a.finger_open))
+                            k2_latch.on_msg(_vr['why'], step_id, t, _gnr)
+                            k2_latch.expire_chain(chain)
+                        ex.cancel_handover(_vr['why'])
+                        node.k3m_abort_pub.publish(String(data=json.dumps({'why': _vr['why'], 't': t, 'source': 'executor_approach'}, default=float)))
+                        node.park_vio_pub.publish(String(data=json.dumps(_vr, default=float)))
+                        rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'violation', **_vr})
+                        print(f"[door] **接近走廊越界**（閂鎖中止）@ step {step_id}：{_whyr} {_vr['dev']}", flush=True)
+            elif park_hold is None and not park_done and res.owner == AUTH_WHOLEBODY:
                 # 實際切換給全身的第一步 ⇒ 開始保持監看；錨點＝閘門錨點（之後不更新）；
                 # **承接切換前一物理步的位姿**，切換當步的速度才核得到
                 if park_gate.anchor is None:
@@ -1995,12 +2043,25 @@ def main() -> int:
                 if node.k3m_req_msg is not None:
                     _rq, node.k3m_req_msg = node.k3m_req_msg, None
                     _abt = k2_latch.latched is not None or park_state['violation'] is not None
-                    if not k3m['active'] and (park_hold is None or park_hold.end is not None):
+                    if a.rolling_handover:                                           # EV9r8o (R3)：seq 1 hold 不需既有 HoldMonitor；seq 2 free 需 hold 中
+                        _seqr = _rq.get('seq') if isinstance(_rq, dict) else None
+                        if _seqr == 2 and not (park_hold is not None and park_hold.end is None):
+                            _kind, _ack = 'reject', {'run_id': a.run_id, 'seq': 2, 'why': 'hold_monitor_not_active', 'step': step_id}
+                        else:
+                            _slow = (math.hypot(_cmd3[0], _cmd3[1]) <= hold_cfg.hold_v_max + 1e-9 and abs(_cmd3[2]) <= hold_cfg.hold_w_max + 1e-9)
+                            _kind, _ack = k3m_auth.on_request(_rq, step_id, t, aborted=_abt, owner_wholebody=(res.owner == AUTH_WHOLEBODY),
+                                                              pose=(_x, _y, float(yw)), base_slow=_slow)
+                    elif not k3m['active'] and (park_hold is None or park_hold.end is not None):
                         _kind, _ack = 'reject', {'run_id': a.run_id, 'seq': _rq.get('seq') if isinstance(_rq, dict) else None,
                                                  'why': 'hold_monitor_not_active', 'step': step_id}
                     else:
                         _kind, _ack = k3m_auth.on_request(_rq, step_id, t, aborted=_abt, owner_wholebody=(res.owner == AUTH_WHOLEBODY))
-                    if _kind == 'switch':
+                    if _kind == 'switch' and a.rolling_handover and _ack.get('mode') == 'hold':   # EV9r8o (R3)：hold 錨點＝當步實測位姿
+                        park_hold = HoldMonitor(hold_cfg, tuple(_ack['anchor']), step_id, t, prev=park_last_sample)
+                        roll['hold'] = dict(_ack, approach_max=list(roll['max']))
+                        rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'hold_start_rolling', 'ack': _ack, 'approach_max': roll['max']})
+                        print(f"[door] **K3-M hold（滾動）**（權威）@ step {step_id}：錨點 {_ack['anchor']}；接近走廊最大 {roll['max']}", flush=True)
+                    elif _kind == 'switch':
                         park_hold.close(step_id, t)
                         park_done = True
                         k3m['active'], k3m['switch'] = True, dict(_ack, hold_verdict=park_hold.verdict())
@@ -2062,6 +2123,11 @@ def main() -> int:
                       else 'post' if park_done else 'gate')
             if step_id % 2 == 0:
                 _gs = park_gate.state()
+                if a.rolling_handover:                                              # EV9r8o (R4)
+                    _hl = park_hold is not None
+                    _gs = dict(_gs, passed=_hl, ok_now=_hl, why_now=None if _hl else 'rolling_approach', pass_step=None,
+                               anchor=(list(park_hold.anchor) if _hl else None))
+                    _pmode = _pmode if _hl or park_done else 'approach'
                 node.park_gate_pub.publish(String(data=json.dumps({
                     'step': step_id, 'sim_t': t, 'passed': _gs['passed'], 'ok_now': _gs['ok_now'],
                     'why_now': _gs['why_now'], 'pass_step': _gs['pass_step'], 'anchor': _gs['anchor'],
@@ -2460,6 +2526,10 @@ def main() -> int:
     if a.park_gate_mobile:                                                          # EV3：模式與走廊紀錄
         rec['k3m'] = {k: k3m[k] for k in ('config', 'active', 'switch', 'violation', 'events', 'log')}
         rec['k3m']['rejections'] = k3m_auth.rejections
+        if a.rolling_handover:                                                       # EV9r8o
+            rec['rolling'] = {'start': roll['start'], 'violation': roll['violation'], 'approach_max': roll['max'], 'hold': roll['hold'],
+                              'log_cols': ['step', 't', 'lateral_m', 'along_m', 'yaw_dev_deg'], 'log': roll['log'],
+                              'tube_m': a.approach_tube_m, 'yaw_deg': a.approach_yaw_deg, 'v_min_lin': a.v_min_lin, 'v_box': [a.v_box_lin, a.v_box_ang]}
         rec['k3m']['pause_switch'] = k3m.get('pause_switch')                        # EV4
         rec['k3m']['pause_rejections'] = k3m_pauth.rejections
     rec['finger_effort'] = {'init': fin_eff_init, 'arg_pause_max_effort': a.pause_finger_max_effort,   # EV5
