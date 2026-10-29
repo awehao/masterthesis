@@ -97,3 +97,38 @@ class HoldConfirmCont(GT.HoldConfirm):
         r['cont'] = {'version': VERSION, 'semantics': SEMANTICS, 'finger_loss_s': self.finger_loss_s, 'n_low_tolerated': self.n_low_tolerated,
                      'low_max_s': self.low_max_s, 'E0_set': getattr(self, 'E0', None) is not None}
         return r
+
+
+GATE6_LOG_VERSION = 'door_regrasp_gates4.Gate6AdmitLog/r1'
+
+
+class Gate6AdmitLog(GT.Gate6Admit):
+    """Gate6Admit（gates3，判定不改）＋逐步紀錄（Codex 20261029_085448：補存 ep、er、no_touch、成立窗起點與當步名目目標）。
+    super().step 之後以同一當步輸入重算 ep／er／no_touch（同式），並記 ok_t0（_hold 的成立窗起點）、名目目標位置；上限 n_cap 筆（超過只計數）。"""
+
+    def __init__(self, *a, n_cap=6000, **kw):
+        super().__init__(*a, **kw)
+        self.log, self.n_cap, self.n_log_dropped = [], int(n_cap), 0
+
+    def step(self, step, t, T_tcp, T_grasp_nominal, rec):
+        st = super().step(step, t, T_tcp, T_grasp_nominal, rec)
+        try:
+            T, G = np.asarray(T_tcp, float), np.asarray(T_grasp_nominal, float)
+            lcf = link_class_force(rec, step, t, self.r['time_tol'])
+            row = {'step': int(step), 't': float(t), 'state': st,
+                   'ep_m': float(np.linalg.norm(T[:3, 3] - G[:3, 3])), 'er_rad': rot_angle(T[:3, :3], G[:3, :3]),
+                   'no_touch': None if lcf is None else bool(all(finger_force(lcf, f, ALL) <= self.r['contact_abort_n'] for f in FINGERS)
+                                                             and nonfinger_force(lcf) <= self.r['unexpected_max_n']),
+                   'ok_t0': getattr(self, 'ok_t0', None), 'G_xyz': [float(v) for v in G[:3, 3]], 'T_xyz': [float(v) for v in T[:3, 3]]}
+        except (TypeError, ValueError):
+            row = {'step': step, 't': t, 'state': st, 'err': 'unrecordable'}
+        if len(self.log) < self.n_cap:
+            self.log.append(row)
+        else:
+            self.n_log_dropped += 1
+        return st
+
+    def report(self):
+        r = dict(super().report())
+        r['step_log'] = {'version': GATE6_LOG_VERSION, 'rows': self.log, 'n_dropped': self.n_log_dropped}
+        return r
