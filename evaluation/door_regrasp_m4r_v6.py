@@ -262,7 +262,7 @@ def main():
 
     # ---- R3：偏航動態規劃
     ks = list(range(i_r, len(Pr)))
-    ygrid = np.radians(np.arange(-180.0, 180.0, YAW_STEP))
+    ygrid = np.array([wrap(float(B1[2]) + math.radians(YAW_STEP) * k) for k in range(int(round(360.0 / YAW_STEP)))])   # v6：格點含 B1 偏航（60° 版 B1 −102° 不在 −180＋5k 格點上）
     NY = len(ygrid)
     feas = np.zeros((len(ks), NY), bool)
     nchk = 0
