@@ -56,6 +56,12 @@ W1B_THETA=$(python3 -c "import json;print(json.load(open('$PRM'))['theta_goal_de
 STAND=$(python3 -c "import json;print(json.load(open('$PRM'))['start']['stand_cli'])")
 K2_READY=$(python3 -c "import json;print(json.load(open('$PRM'))['start']['k2_ready_cli'])")
 Q_PRE=$(python3 -c "import json;print(json.load(open('$PRM'))['start']['q_pre_cli'])")
+# door_nav1_door_3：登錄 start.q_pre_cli＝null（台架流程不經展開）⇒ 展開節點 --q-unfold 收到 'None' 崩潰。改用 W1 線實跑過的 Q_PRE
+# （run_door_wide_w1f2.sh；door_wide_w1f_60_3 UNFOLD→ALIGN→APPROACH→ENGAGE 實跑；pullback 登錄衍生自 w1f_params_60_r2）；登錄有值時以登錄為準。
+Q_PRE_W1='-0.9471,0.0758,1.6024,-1.539,-0.9479,-0.0544'
+[ "$Q_PRE" = None ] && Q_PRE="$Q_PRE_W1"
+python3 -c "import sys;v=[float(x) for x in '$Q_PRE'.split(',')];assert len(v)==6" 2>/dev/null || { say "**Q_PRE 不合法：$Q_PRE** ⇒ 拒跑"; exit 97; }
+say "Q_PRE（展開目標）＝$Q_PRE"
 Q_INIT=$(python3 -c "import json;print(json.load(open('$PRM'))['bench']['q_nominal_cli'])")   # bench：名目初態（關節生成）
 S_INIT=$(python3 -c "import json;print(json.load(open('$PRM'))['bench']['s_init_cli'])")   # bench：寫入致動器初始設定點（q_nominal − d_init）
 W1B_TABLE=$(python3 -c "import json;print(json.load(open('$PRM'))['protection_scope_change']['corridor_table'])")
