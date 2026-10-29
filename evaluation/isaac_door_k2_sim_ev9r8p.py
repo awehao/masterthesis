@@ -6,6 +6,8 @@
 #        導航備妥（/nav1/state：mission 2、seg CRUISE、cin_age ≤ 0.25 s、plan_n > 0、牆鐘年齡 ≤ 0.5 s）才提交，否則窗口內順延、過完取消（全身續管）；
 #   (T4) 每 2 步發 /handover/tenure（run_id、step、sim_t、owner、chain_tenure(_open)、expected_tenure、pending_to、arm_hold、direct_applied）供求解端承接；
 #   (T5) 導航期間逐步包絡監看（door_nav_envelope_monitor r2）；違反 ⇒ 執行層減速到零＋既有 K2 閂鎖中止（executor_nav_envelope）。
+#   (T6) W2 權威包 door_w2_tenure_auth.tenure_suspend：封存當步暫停兩個提交後逾時（離線核對：不暫停則交給導航約 0.25 s 後必中止 post_commit_*），
+#        暫停中照常選取新鮮命令、拒新模式請求；以新任期交回當步恢復、套用逾時基準重設。
 #   換抓核心（RG8）、K3-M、W2 監看照舊每步執行（導航段不停）。--tenure-loop 未給 ⇒ 與 ev9r8o 同。
 # EV9r8o（2026-10-29；Codex 20261029_085448）：ev9r8n 的版本化複本。--gate6-log：換抓核心建構後把 Gate6 換成 door_regrasp_gates4.Gate6AdmitLog
 #   （判定同 gates3；逐步記 ep／er／no_touch／ok_t0／名目目標，存於 room_run regrasp.core.gates.gate6.step_log）。讀回類別不符 ⇒ 拒跑 73。
@@ -444,6 +446,7 @@ from wb_cmd_chain_e2t import CmdChainE2T                          # noqa: E402  
 import door_k3m_applied_src_t as K3MSRCT                         # noqa: E402  EV9r8p
 import cmd_envelope_v4 as E4                                     # noqa: E402  EV9r8p
 import door_nav_envelope_monitor as NAVENV                       # noqa: E402  EV9r8p
+import door_w2_tenure_auth as W2TEN                              # noqa: E402  EV9r8p (T6)
 from park_fixed import HoldMonitor, ParkCfg, StaticGate            # noqa: E402
 from wb_cmd_chain_e2 import CmdChainE2                           # noqa: E402
 from wb_wheel_limit import WheelLimitConfig                      # noqa: E402
@@ -1368,7 +1371,8 @@ def main() -> int:
                 return False, '導航計畫未發布'
             return True, None
         _r2kw = dict(envelope=NAVENV.EnvelopeMonitor(r_env=a.nav_env_r), nav_ready_fn=_nav_ready,
-                     on_tenure_close=lambda k, t_: env_in.set_expected(k, t_),
+                     on_tenure_close=lambda k, t_: (env_in.set_expected(k, t_), w2_auth.tenure_suspend(step_id, t_)),
+                     on_tenure_open=lambda k, t_: w2_auth.tenure_resume(step_id, t_, k),
                      on_envelope_violation=lambda first, t_: navenv_hit.update(first=dict(first or {}, t=t_)))
     ex = (DualSourceExecutorR2 if a.tenure_loop else DualSourceExecutor)(chain, initial=(AUTH_WHOLEBODY if a.bench_start else AUTH_NAV),   # BENCH (B2)／EV9r8p
                             **_r2kw,
@@ -1501,7 +1505,7 @@ def main() -> int:
                 print(f'[door] **RG8 拒跑**：{_why8}', flush=True)
                 sys.exit(66)
             rg8_spec = yaml.safe_load(open(a.door_asset))
-            w2_auth = RGM3.RegraspAuthority(a.w2_mode_run_id, run_id_num=ENV.run_id_num(a.run_id), stage_id=ENV.ST_ADAPTER,
+            w2_auth = (W2TEN.tenure_suspend(RGM3.RegraspAuthority) if a.tenure_loop else RGM3.RegraspAuthority)(a.w2_mode_run_id, run_id_num=ENV.run_id_num(a.run_id), stage_id=ENV.ST_ADAPTER,   # EV9r8p (T6)
                                            cand_timeout_s=a.w2_cand_timeout_s, cmd_max_age_s=a.max_cmd_age_s,
                                            post_commit_timeout_s=a.w2_post_commit_timeout_s, dt=a.physics_dt,
                                            a_lin=a.base_accel_lin, a_ang=a.base_accel_ang, arm_rate_max=a.arm_rate_max)
