@@ -67,6 +67,7 @@ class Nd(Node):
         self.start_pub = self.create_publisher(Bool, '/drawer/solver_start', lat)
         self.stop_pub = self.create_publisher(String, '/wgmpc/stop', 10)
         self.ho_pub = self.create_publisher(String, '/handover/request', 10)
+        self.hold_pub = self.create_publisher(Bool, '/return/offset_hold', lat)
         self.sync, self.state, self.hs, self.n_ws = None, None, None, 0
         self.sync_wall, self.clk_t, self.clk_wall = None, None, None
         self.create_subscription(Clock, '/clock', self._clk, QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
@@ -163,6 +164,7 @@ def main():
     t_wait = None
     last_hb = 0.0
     fresh, n_fresh = False, [0, -1.0]
+    hold = False                                                               # 求解端 d̂ 保持：閉爪請求起、退出抓持止（rt_5：接觸中更新致側向力累積）
     if True:
         while rclpy.ok():
             for _ in range(8):                                                 # 先清佇列，年齡才不被未處理訊息墊高
@@ -222,6 +224,8 @@ def main():
                 return fail(t, f"geometry:{det.get('why')}")
             if rep['monitor']['n'] == 1:
                 print('[return] READY 狀態新鮮、幾何監看首輪通過', flush=True)
+
+            nd.hold_pub.publish(Bool(data=hold))
 
             def xref(i):
                 f = float(np.clip(np.interp(i, [i_of[move_][0], i_of[move_][-1]], [0.0, 1.0]), 0, 1))
@@ -294,6 +298,7 @@ def main():
                     if not last:
                         idx += 1
                     else:
+                        hold = True
                         nd.req(kind='close', T=[float(v) for v in K.fk(xref(idx), 'link_tcp').reshape(-1)])
                         if gs == 'CLOSING':
                             ev(t, gate=gs)
@@ -325,6 +330,7 @@ def main():
                         nd.req(kind='retreat')
                     elif gs == 'RETREAT':
                         ev(t, gate=gs)
+                        hold = False
                         go_next(sn)
                     elif waited():
                         return fail(t, 'release_not_confirmed')
