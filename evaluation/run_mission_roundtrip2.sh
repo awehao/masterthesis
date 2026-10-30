@@ -277,7 +277,7 @@ spawn shield_shadow ros2 run ammr_wholebody_mpc scan_safety_shield --ros-args -r
 boot_wait shields shield shield_shadow -- shield "scan shield ON" shield_shadow "scan shield ON"
 spawn nav1 python3 -u evaluation/door_nav1_mission_node_r11.py --bumpless --start-turn --goal="$STAND" --out "$DIR/nav1.json" --rolling --nav-timeout-s 150
 spawn wholebody python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --motm --motm-v-cap 0.030 --motm-a-ref 0.002 --motm-k-yaw 1.0 --motm-w-cap 0.10 --motm-v-creep 0.0 --motm-overshoot 0.0 --pos-tol 0.005 --stow-q "$K2_READY" --park="$STAND" --q-unfold="$Q_PRE" --out "$DIR/wholebody.json"
-spawn task python3 -u evaluation/door_coopen_core_task_node10p.py --subtask-mode --m4r --rolling --roll-goal="$STAND" --nav-start --wait-handover-timeout-s 240 --out "$DIR/task.json" --run-id "$RUN_ID" --grasp-basis "$GB" --w1b-params "$PRM" --corridor-table "$W1B_TABLE" --finger-loss-cont --settle-cont --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --wall-total-s 1500
+spawn task python3 -u evaluation/door_coopen_core_task_node10p.py --subtask-mode --m4r --rolling --roll-goal="$STAND" --nav-start --wait-handover-timeout-s 240 --out "$DIR/task.json" --run-id "$RUN_ID" --grasp-basis "$GB" --w1b-params "$PRM" --corridor-table "$W1B_TABLE" --finger-loss-cont --settle-cont --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --w2-req-delay-s 0.1 --w2-test-hold-s 0.5 --wall-total-s 1500
 ARM_IDENT="$WS/evaluation/results/wgmpc_arm_sp_ident_free4.json"
 [ -f "$ARM_IDENT" ] || { say "**找不到手臂辨識檔** ⇒ 中止"; exit 85; }
 spawn adapter python3 -u evaluation/arm_vel_adapter_k3m4.py --in-topic /wgmpc/cmd_world --consumer-node /door_k2_sim --cmd-env --cmd-env-v4 --env-in-topic /wgmpc/cmd_env
