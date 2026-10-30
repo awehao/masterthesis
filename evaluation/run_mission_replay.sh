@@ -27,7 +27,7 @@ SRC="$WS/evaluation/runs/$SRC_RUN/room_run_mission_merged.json"
 STAND='0.6,-0.5332,1.570796'
 K2_READY='0,0,0.035,0,-1.5707963,0'
 case "$VIEW" in
-  mission) EYE="${EYE:-5.6,-3.4,6.4}"; AT="${AT:-0.9,1.1,0.3}"; FOC="${FOC:-13}" ;;
+  mission) EYE="${EYE:-2.4,-4.0,10.5}"; AT="${AT:-0.9,0.9,0.0}"; FOC="${FOC:-13}" ;;
   side)  EYE='2.4,-2.3,1.7';  AT='0.55,-0.25,0.75'; FOC=18 ;;
   close) EYE='1.55,-0.95,1.3'; AT='0.8,-0.1,0.85';  FOC=24 ;;
   coopen_wide)  EYE='2.3,-2.9,2.6';  AT='0.55,-0.55,0.45'; FOC=15 ;;
