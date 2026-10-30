@@ -5,7 +5,7 @@
        → (request open＋門停穩) → OPENING → (張開＋橫桿無力連續 0.5 s) → RELEASED → (request retreat) → RETREAT → (request done) → FREE
 准入與監看：
   - 閉爪：張爪就緒、TCP 誤差 ≤ tcp_tol、無非指定接觸；
-  - 接觸：FREE 不准任何門接觸；CLOSING／RETREAT／OPENING 只准手指碰指定橫桿；GRASPED／MOVING 同，且雙指連續低於門檻逾 finger_loss_s ⇒ 中止；非手指連桿或門板／立柱力 > contact_abort_n ⇒ 中止；
+  - 接觸：未武裝 FREE 不准任何門接觸；arm 後至 done 前手指可碰指定橫桿（滑入接近含在內）；CLOSING／RETREAT／OPENING 只准手指碰指定橫桿；GRASPED／MOVING 同，且雙指連續低於門檻逾 finger_loss_s ⇒ 中止；非手指連桿或門板／立柱力 > contact_abort_n ⇒ 中止；
   - 抓持期限：閉爪斜坡完成後 grasp_timeout_s 未建立證據 ⇒ 中止；每個 op 只起算一次，不因請求重送重設；
   - 門速 > door_rate_abort、腕力 ≥ wrist_abort_n、接觸紀錄無效 > invalid_max_s、任務心跳逾 hb_max_s（牆鐘）⇒ 中止；
   - 中止第一原因閂鎖；同輪中止優先於任何轉移；閂鎖後 finger_target 凍結最後實際值。
@@ -55,6 +55,7 @@ class ReturnGate:
         self.t_ev0 = self.t_low = self.t_rel0 = self.t_ramp = self.t_bad = self.t_settle0 = None
         self.q_prev = None
         self.n_ops = 0
+        self.armed = False
 
     def _ev(self, t, **kw):
         self.events.append(dict(kw, t=float(t), op=self.op, state=self.state))
@@ -74,6 +75,7 @@ class ReturnGate:
         self.op, self.bar = int(op), bar
         self.t_ev0 = self.t_low = self.t_rel0 = self.t_ramp = self.t_settle0 = None
         self.n_ops += 1
+        self.armed = True
         self._ev(t, armed=bar)
         return True, None
 
@@ -96,7 +98,7 @@ class ReturnGate:
         if self.abort is not None:
             return self.abort
         if hb_age is None or not math.isfinite(float(hb_age)) or float(hb_age) > c['hb_max_s']:
-            if self.state != 'FREE':
+            if self.state != 'FREE' or self.armed:
                 return self._abort('task_heartbeat_stale', t, age=hb_age)
         if not (isinstance(wrist_n, (int, float)) and math.isfinite(wrist_n)) or wrist_n >= c['wrist_abort_n']:
             return self._abort('wrist_force', t, n=wrist_n)
@@ -114,7 +116,7 @@ class ReturnGate:
             return None
         self.t_bad = None
         cls = None if self.bar is None else BAR[self.bar]
-        allow = () if self.state == 'FREE' or cls is None else (cls,)
+        allow = (cls,) if (cls is not None and (self.state != 'FREE' or self.armed)) else ()
         for (lk, cl), f in F['other'].items():
             if f > c['contact_abort_n']:
                 return self._abort('contact_not_designated', t, link=lk, cls=cl, n=f)
@@ -174,6 +176,7 @@ class ReturnGate:
         elif st == 'RETREAT':
             if r == 'done':
                 self.state = 'FREE'
+                self.armed = False
                 self.req = None
                 self._ev(t, to='FREE')
         return None

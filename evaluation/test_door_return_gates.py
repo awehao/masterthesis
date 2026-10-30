@@ -94,6 +94,20 @@ def t_nonfinger_aborts():
     assert ab and ab['why'] == 'contact_not_designated'
 
 
+def t_armed_free_allows_designated_finger():
+    s = Sim()
+    s.g.arm(1, 'in', s.t)
+    assert s.run(0.2, rec([('uflite_finger1', 'bar_in', 1.0)])) is None
+    ab = s.run(0.05, rec([('uflite_finger1', 'bar_out', 1.0)]))
+    assert ab and ab['cls'] == 'bar_out'
+
+
+def t_armed_heartbeat_checked():
+    s = Sim()
+    s.g.arm(1, 'in', s.t)
+    assert s.run(0.1, hb=2.0)['why'] == 'task_heartbeat_stale'
+
+
 def t_free_contact_aborts():
     s = Sim()
     ab = s.run(0.05, rec([('uflite_finger1', 'bar_in', 1.0)]))

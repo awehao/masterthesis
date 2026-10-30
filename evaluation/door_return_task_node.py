@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""返程門操作任務節點（規格 results/specs/door_return_phase3_r1.md；Codex m6e）。單一節點、順向序號；--seg A＝推開穿越（bar_in）、B＝推關（bar_out）。
+不用 W2 模式表、不倒放模式機：抓放與推動的准入在執行端 door_return_gates，本節點只請求並等確認；同時跑 GeometryMonitor（登錄 ds_err），stop ⇒ 通知執行端中止。
+流程：等滾動進場（owner wholebody、底盤與手臂到位）→ solver_start → 由實測 TCP 橋接到首列 → 操作段逐列發 TCP 目標＋協同 → 交回導航（to nav，執行端 R2 包絡准入）→ 結束。
+門角差：δ＝首列名目門角 − 當趟實測，繞鉸鏈剛體轉 δ，隨操作段推進衰減到 0。任一中止不重試、不補跑。
+    python3 -u evaluation/door_return_task_node.py --ref ... --seg A --op 1 --out ...
+"""
+import argparse
+import json
+import math
+import os
+import sys
+import time
+
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
+from std_msgs.msg import Bool, Float64MultiArray, String
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
+import door_k3m_geom_monitor as GM                     # noqa: E402
+import door_k3m_geom_monitor_v3 as GM3                 # noqa: E402
+import door_regrasp_geom_switch as GS                  # noqa: E402
+import motm_coord as MC                                # noqa: E402
+from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
+
+
+def rot(x, d):
+    c, s = math.cos(d), math.sin(d)
+    y = np.array(x, float)
+    y[0], y[1], y[2] = c * x[0] - s * x[1], s * x[0] + c * x[1], x[2] + d
+    return y
+
+
+class Nd(Node):
+    def __init__(self):
+        super().__init__('door_return_task')
+        lat = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.req_pub = self.create_publisher(String, '/return/req', 50)
+        self.tgt_pub = self.create_publisher(Float64MultiArray, '/drawer/tcp_target', 10)
+        self.coord_pub = self.create_publisher(Float64MultiArray, '/wgmpc/coord', 10)
+        self.start_pub = self.create_publisher(Bool, '/drawer/solver_start', lat)
+        self.stop_pub = self.create_publisher(String, '/wgmpc/stop', 10)
+        self.ho_pub = self.create_publisher(String, '/handover/request', 10)
+        self.sync, self.state, self.hs, self.n_ws = None, None, None, 0
+        self.create_subscription(Float64MultiArray, '/return/sync', self._sync, 10)
+        self.create_subscription(String, '/return/state', lambda m: setattr(self, 'state', json.loads(m.data)), 10)
+        self.create_subscription(String, '/handover/state', lambda m: setattr(self, 'hs', json.loads(m.data)), 10)
+        self.create_subscription(Float64MultiArray, '/wgmpc/status', self._ws, 10)
+
+    def _sync(self, m):
+        self.sync = np.asarray(m.data, float)
+
+    def _ws(self, m):
+        self.n_ws += 1
+
+    def req(self, **kw):
+        self.req_pub.publish(String(data=json.dumps(kw, default=float)))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--ref', required=True)
+    ap.add_argument('--seg', required=True, choices=['A', 'B'])
+    ap.add_argument('--op', type=int, required=True)
+    ap.add_argument('--out', required=True)
+    ap.add_argument('--bridge-s', type=float, default=4.0)
+    ap.add_argument('--entry-timeout-s', type=float, default=240.0)
+    ap.add_argument('--park-tol', type=float, default=0.20)
+    ap.add_argument('--arm-tol', type=float, default=0.03)
+    ap.add_argument('--door-track-deg', type=float, default=2.0)
+    ap.add_argument('--gate-timeout-s', type=float, default=15.0)
+    ap.add_argument('--w-vref', type=float, default=0.03)                # MotM 定版
+    ap.add_argument('--w-vref-pre', type=float, default=0.3)             # 橋接（軟啟動）
+    ap.add_argument('--w-qn', type=float, default=0.8)                   # C0 定版
+    ap.add_argument('--w-a', type=float, default=0.01)
+    ap.add_argument('--w-p', type=float, default=200.0)
+    a = ap.parse_args()
+    if os.path.exists(a.out):
+        raise SystemExit(f'{a.out} 已存在，不覆寫')
+    P = json.load(open(a.ref))
+    rows, ent = P[a.seg], P['entry'][a.seg]
+    bar, grp = ent['bar'], ('S', 'C')[a.seg == 'B']
+    name = {'A': ('S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8'), 'B': ('C2', 'C3', 'C4', 'C5', 'C6', 'C7')}[a.seg]
+    X = np.array([r['x'] for r in rows], float)
+    Qd = np.array([r['q_deg'] for r in rows], float)
+    st = [r['stage'][:2] for r in rows]
+    i_of = {n: [i for i, s in enumerate(st) if s == n] for n in name}
+    move_ = grp + '4'
+    K = WholeBodyKinematics.from_urdf_file(os.path.join(HERE, 'models', 'omni_bot_wholebody_expanded.urdf'))
+    g = json.load(open(os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r3.json')))
+    cfg = GM.GeomMonitorConfig(v_floor=dict(g['v_floor_registered']), ds_err=dict(g['downsampling']['ds_err_registered']))
+    fn = GM3.backend_v3(self_mode='full')
+    mon = GS.SwitchAwareGeom(GM.GeometryMonitor(cfg, fn), fn)
+    rclpy.init()
+    nd = Nd()
+    rep = {'args': vars(a), 'events': [], 'result': None, 'monitor': {'n': 0, 'n_stop': 0, 'n_warn': 0, 'pred_min': {}}}
+
+    def ev(t, **kw):
+        rep['events'].append(dict(kw, t=t))
+        print(f'[return] {kw} @ sim {t:.2f}', flush=True)
+
+    def finish(result, why=None):
+        rep['result'] = result
+        rep['why'] = why
+        nd.stop_pub.publish(String(data=f'door_return {a.seg} {result}'))
+        json.dump(rep, open(a.out, 'w'), ensure_ascii=False, indent=1, default=float)
+        print(f'[return] 結束 seg {a.seg}：{result} {why or ""}', flush=True)
+        rclpy.spin_once(nd, timeout_sec=0.1)
+        return 0 if result == 'DONE' else 1
+
+    def fail(t, why):
+        nd.req(kind='abort', why=why)
+        return finish('ABORTED', why)
+
+    w0 = time.monotonic()
+    wait = {'t': None}
+    armed = False
+    phase, idx, t_tick, delta = 'ENTRY', 0, None, None
+    T_b0, t_b0 = None, None
+    tgt_row = 0
+    t_wait = None
+    last_hb = 0.0
+    if True:
+        while rclpy.ok():
+            rclpy.spin_once(nd, timeout_sec=0.0)
+            if time.monotonic() - last_hb >= 0.05:
+                nd.req(kind='hb')
+                last_hb = time.monotonic()
+            if nd.sync is None:
+                if time.monotonic() - w0 > 60.0:
+                    return finish('ABORTED', 'no_sync')
+                time.sleep(0.005)
+                continue
+            s = nd.sync
+            t, q_d = float(s[0]), math.degrees(float(s[2]))
+            x_m = np.r_[s[4:7], s[7:13]]
+            if nd.state and nd.state.get('abort'):
+                return finish('ABORTED', f"gate:{nd.state['abort'].get('why')}")
+            if t_tick is not None and t < t_tick + 0.05 - 1e-9:
+                time.sleep(0.002)
+                continue
+            t_tick = t
+            if not armed:
+                nd.req(kind='arm', op=a.op, bar=bar)
+                armed = True
+                ev(t, armed=bar, q_door=q_d)
+            r = rows[tgt_row]
+            dec, det = mon.step(t, x_m, float(s[2]), float(s[15]), 0.03, r['target'] if phase != 'ENTRY' else None)
+            rep['monitor']['n'] += 1
+            rep['monitor']['n_warn'] += dec == 'warn'
+            for c_, v_ in (det.get('classes') or {}).items():
+                rep['monitor']['pred_min'][c_] = min(rep['monitor']['pred_min'].get(c_, 9.0), float(v_['d_pred']))
+            if dec == 'stop':
+                rep['monitor']['n_stop'] += 1
+                return fail(t, f"geometry:{det.get('why')}")
+
+            def xref(i):
+                f = float(np.clip(np.interp(i, [i_of[move_][0], i_of[move_][-1]], [0.0, 1.0]), 0, 1))
+                return rot(X[i], (delta or 0.0) * (1.0 - f))
+
+            def pub_target(T):
+                nd.tgt_pub.publish(Float64MultiArray(data=[float(v) for v in np.asarray(T, float).reshape(-1)]))
+
+            def pub_coord(i, soft=False):
+                x0, x1 = xref(max(i - 1, 0)), xref(i)
+                dv = (x1 - x0) / 0.05
+                dv[2] = math.atan2(math.sin(x1[2] - x0[2]), math.cos(x1[2] - x0[2])) / 0.05
+                vx, vy = MC.world_to_body(float(dv[0]), float(dv[1]), float(x_m[2]))
+                nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref_pre if soft else a.w_vref, vref=[vx, vy, float(dv[2])], w_qn=a.w_qn, q_nom=[float(v) for v in x1[3:]],
+                                                                         w_a=None if soft else a.w_a, w_p=None if soft else a.w_p)))
+            if phase == 'ENTRY':
+                delta = math.radians(float(Qd[0]) - q_d)
+                pub_target(K.fk(xref(0), 'link_tcp'))
+                own = str((nd.hs or {}).get('owner', '')).lower()
+                bpe = float(np.hypot(*(x_m[:2] - xref(0)[:2])))
+                ape = float(np.max(np.abs(x_m[3:] - X[0][3:])))
+                if own.startswith('wholebody') and bpe <= a.park_tol and ape <= a.arm_tol:
+                    nd.start_pub.publish(Bool(data=True))
+                    if nd.n_ws > 0:
+                        T_b0, t_b0 = K.fk(x_m, 'link_tcp'), t
+                        phase = 'BRIDGE'
+                        ev(t, to='BRIDGE', bpe=bpe, ape=ape, delta_deg=math.degrees(delta))
+                if time.monotonic() - w0 > a.entry_timeout_s:
+                    return fail(t, 'entry_timeout')
+            elif phase == 'BRIDGE':
+                Tr = K.fk(xref(0), 'link_tcp')
+                f = min(1.0, (t - t_b0) / a.bridge_s)
+                f = 10 * f ** 3 - 15 * f ** 4 + 6 * f ** 5
+                T = Tr.copy()
+                T[:3, 3] = T_b0[:3, 3] + (Tr[:3, 3] - T_b0[:3, 3]) * f
+                pub_target(T)
+                pub_coord(0, soft=True)
+                if t - t_b0 >= a.bridge_s:
+                    if float(np.linalg.norm(K.fk(x_m, 'link_tcp')[:3, 3] - Tr[:3, 3])) <= 0.005:
+                        phase, idx = 'RUN', 0
+                        ev(t, to='RUN')
+                    elif t - t_b0 > a.bridge_s + a.gate_timeout_s:
+                        return fail(t, 'bridge_timeout')
+            elif phase == 'RUN':
+                sn = st[idx]
+                last = idx == i_of[sn][-1]
+                pub_target(K.fk(xref(idx), 'link_tcp'))
+                pub_coord(idx)
+                tgt_row = idx
+                gs = (nd.state or {}).get('state')
+
+                def go_next(stage_now):
+                    nonlocal idx, t_wait
+                    k = name.index(stage_now) + 1
+                    idx = i_of[name[k]][0]
+                    t_wait = None
+
+                def waited():
+                    nonlocal t_wait
+                    t_wait = t if t_wait is None else t_wait
+                    return t - t_wait > a.gate_timeout_s
+                if sn == grp + '2':
+                    if not last:
+                        idx += 1
+                    else:
+                        nd.req(kind='close', T=[float(v) for v in K.fk(xref(idx), 'link_tcp').reshape(-1)])
+                        if gs == 'CLOSING':
+                            ev(t, gate=gs)
+                            go_next(sn)
+                        elif waited():
+                            return fail(t, f'close_not_admitted:{gs}')
+                elif sn == grp + '3':
+                    if gs == 'GRASPED':
+                        nd.req(kind='move')
+                    elif gs == 'MOVING':
+                        ev(t, gate=gs, q=q_d)
+                        go_next(sn)
+                elif sn == move_:
+                    _f = float(np.clip(np.interp(idx, [i_of[move_][0], i_of[move_][-1]], [0.0, 1.0]), 0, 1))
+                    _qr = float(Qd[idx]) - math.degrees((delta or 0.0) * (1.0 - _f))
+                    if abs(q_d - _qr) > a.door_track_deg:
+                        return fail(t, f'door_track:{q_d:.2f} vs {_qr:.2f}')
+                    if not last:
+                        idx += 1
+                    else:
+                        nd.req(kind='open')
+                        if gs == 'OPENING':
+                            ev(t, gate=gs, q=q_d)
+                            go_next(sn)
+                        elif waited():
+                            return fail(t, 'door_not_settled')
+                elif sn == grp + '5':
+                    if gs == 'RELEASED':
+                        nd.req(kind='retreat')
+                    elif gs == 'RETREAT':
+                        ev(t, gate=gs)
+                        go_next(sn)
+                    elif waited():
+                        return fail(t, 'release_not_confirmed')
+                elif not last:
+                    idx += 1
+                elif sn != name[-1]:
+                    go_next(sn)
+                else:
+                    nd.req(kind='done')
+                    phase = 'TO_NAV'
+                    wait['t'] = t
+                    ev(t, to='TO_NAV', q=q_d, x=[round(float(v), 3) for v in x_m[:3]])
+            elif phase == 'TO_NAV':
+                pub_target(K.fk(xref(len(rows) - 1), 'link_tcp'))
+                own = str((nd.hs or {}).get('owner', '')).lower()
+                if own == 'nav' and not (nd.hs or {}).get('pending'):
+                    ev(t, owner='nav', step=(nd.hs or {}).get('step'))
+                    return finish('DONE')
+                if not (nd.hs or {}).get('pending') and (t - wait['t']) % 3.0 < 0.06:
+                    nd.ho_pub.publish(String(data=json.dumps({'to': 'nav', 'at_step': int(s[1]) + 5, 'window_steps': 300, 'why': f'return {a.seg} done'})))
+                if t - wait['t'] > 45.0:
+                    return fail(t, 'to_nav_timeout')
+    return finish('ABORTED', 'loop_exit')
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
