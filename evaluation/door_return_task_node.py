@@ -186,10 +186,11 @@ def main():
             x_m = np.r_[s[4:7], s[7:13]]
             if nd.state and nd.state.get('abort'):
                 return finish('ABORTED', f"gate:{nd.state['abort'].get('why')}")
-            if t_tick is not None and t < t_tick + 0.05 - 1e-9:
+            if t_tick is not None and t < t_tick + 0.05 - 1e-4:
                 time.sleep(0.002)
                 continue
-            t_tick = t if t_tick is None or t > t_tick + 0.1 else t_tick + 0.05  # 節拍鎖 20 Hz：不累積取樣晚到（rt_3 實測每列 0.06 s）
+            # 節拍鎖 20 Hz（rt_3 實測每列 0.06 s）：落後時跳過過期槽，同一筆狀態只處理一次、參考只進一列
+            t_tick = t if t_tick is None else t_tick + 0.05 * max(1, int((t - t_tick + 1e-4) / 0.05))
             if not armed:
                 nd.req(kind='arm', op=a.op, bar=bar)
                 armed = True
