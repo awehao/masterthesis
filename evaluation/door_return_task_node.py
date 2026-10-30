@@ -178,7 +178,7 @@ def main():
     last_hb = 0.0
     fresh, n_fresh = False, [0, -1.0]
     last_arm, t_arm0, ready = 0.0, None, False
-    t_rel = None
+    t_rel, t_s5 = None, None
     hold, hold_noted = False, False                                            # 求解端 d̂ 保持：閉爪請求起、退出抓持止（rt_5：接觸中更新致側向力累積）
     if True:
         while rclpy.ok():
@@ -256,7 +256,7 @@ def main():
 
             def tcp_ref(i):
                 T = K.fk(xref(i), 'link_tcp')
-                _xb = 0.0 if t_rel is None else float(np.clip((t - t_rel - a.rel_backoff_delay_s) * a.rel_backoff_v, 0.0, a.rel_backoff_max))
+                _xb = 0.0 if t_rel is None else float(np.clip((t - t_rel) * a.rel_backoff_v, 0.0, a.rel_backoff_max))
                 T[:3, 3] -= (a.tcp_backoff_m + _xb) * T[:3, 2]                 # 沿工具軸退（rt_9：實際比參考深約 1.5 mm，掌面間隙翻過監看）
                 return T
 
@@ -316,8 +316,16 @@ def main():
             elif phase == 'RUN':
                 sn = st[idx]
                 last = idx == i_of[sn][-1]
-                if sn == grp + '5' and t_rel is None:
-                    t_rel = t
+                if sn == grp + '5':                                            # 放手退離：最早 delay 後，且新鮮完整接觸證據兩指皆 <0.1 N 才啟動；啟動後再受力即中止
+                    t_s5 = t if t_s5 is None else t_s5
+                    _st = nd.state or {}
+                    _ev = abs(t - float(_st.get('sim_t', -1e9))) <= 0.1 and _st.get('ev_ok') is True
+                    _fm = max(_st.get('fb') or [9.0])
+                    if t_rel is None and t - t_s5 >= a.rel_backoff_delay_s and _ev and _fm < 0.1:
+                        t_rel = t
+                        ev(t, rel_backoff_start=True, q=q_d)
+                    elif t_rel is not None and _ev and _fm >= 0.1:
+                        return fail(t, f'contact_during_rel_backoff:{_fm:.3f}')
                 pub_target(tcp_ref(idx))
                 pub_coord(idx, contact=sn in (grp + '3', move_, grp + '5'))
                 tgt_row = idx

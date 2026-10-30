@@ -267,6 +267,7 @@ def run_drawer_phase(c):
                 _F = c['forces'](_rc)
                 _b = c['bar'].get(_bb)
                 ret['fb'] = (0.0, 0.0) if (_F is None or _b is None) else tuple(_F['fingers'][f_].get(_b, 0.0) for f_ in c['fingers'])
+                ret['ev_ok'] = _F is not None and _b is not None                # fb 的 0 只有在此為真時才是「量到無力」
             if ret['gate'].abort is not None and not ret['abort_done']:
                 ret['abort_done'] = True
                 rec['return_abort'] = dict(ret['gate'].abort, step=step_id)
@@ -547,7 +548,7 @@ def run_drawer_phase(c):
                 node.ret_sync_pub.publish(M['Float64MultiArray'](data=[float(t_after), float(step_id), float(_qs), float(_qds), float(p2[0]), float(p2[1]), _ys]
                                                                  + [float(qm[idx[j]]) for j in ARM_] + [float(ret['fb'][0]), float(ret['fb'][1]), float(qm[fidx[FJ[0]]])]))
                 node.ret_state_pub.publish(M['String'](data=json.dumps({'sim_t': t_after, 'step': step_id, 'state': ret['gate'].state, 'op': ret['gate'].op, 'abort': ret['gate'].abort,
-                                                                        'n_msg': ret['n_msg'], 'cmd': ret['cmd']}, default=float)))
+                                                                        'n_msg': ret['n_msg'], 'cmd': ret['cmd'], 'fb': list(ret['fb']), 'ev_ok': bool(ret.get('ev_ok'))}, default=float)))
             node.ho_pub.publish(M['String'](data=json.dumps({'owner': ex.owner, 'step': step_id, 'sim_t': t_after,
                                                               'chain_seeded': ex.wb_seeded, **ex.handover_pending_info(),
                                                               'nav_applied': ex.nav_applied_report()}, default=float)))

@@ -107,7 +107,7 @@ def main():
         nd.clk_pub.publish(_c)
         if n % 2 == 0 and (a.stall_state_at is None or t < a.stall_state_at):
             nd.sync_pub.publish(Float64MultiArray(data=[t, float(n), qs, 0.0] + [float(v) for v in x] + [fb, fb, qf]))
-            nd.st_pub.publish(String(data=json.dumps({'sim_t': t, 'state': g.state, 'op': g.op, 'abort': None}, default=float)))
+            nd.st_pub.publish(String(data=json.dumps({'sim_t': t, 'state': g.state, 'op': g.op, 'abort': None, 'fb': [fb, fb], 'ev_ok': True}, default=float)))
             nd.ho_pub.publish(String(data=json.dumps({'owner': owner, 'step': n, 'sim_t': t, 'pending': None})))
             if nd.started:
                 nd.ws_pub.publish(Float64MultiArray(data=[1.0]))
