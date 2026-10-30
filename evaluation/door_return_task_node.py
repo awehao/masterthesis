@@ -34,6 +34,7 @@ from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa:
 
 WD_S = 1.0                       # 狀態／時鐘看門狗（牆鐘，只認前進）
 HEAD_TOL = 0.35                  # 弦方向與本段計畫首段方向容差（rad）
+HEAD_FRESH_S = 0.3               # 航向訊息相對 /clock 的新鮮界線（模擬時間）
 NAV_READY_V = 0.01               # 導航備妥的最小命令速度（m/s）
 LAG_S = 0.2                      # 狀態相對 /clock 落後或超前的界線（模擬時間，同 GeomMonitorConfig.age_max_s）
 
@@ -107,6 +108,7 @@ class Nd(Node):
         self.hold_pub = self.create_publisher(Bool, '/return/offset_hold', lat)
         self.plan_pub = self.create_publisher(Path, '/plan', QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.plan_h, self.n_adopt, self.n_cmd = None, 0, 0
+        self.h_last, self.h_ts = None, -1.0
         self.create_subscription(Twist, '/cmd_vel', self._nav_cmd, 10)
         self.create_subscription(Vector3Stamped, '/gmpc/heading', self._nav_head, 10)
         self.hold_ack = None
@@ -125,8 +127,15 @@ class Nd(Node):
             return                                                          # 重複舊狀態不刷新
         self.sync, self.sync_wall = d, time.monotonic()
 
-    def _nav_head(self, m):                                                     # GMPC 弦方向對準本段計畫＝已採用；只在發計畫後計
-        if self.plan_h is not None and abs(wrap(m.vector.x - self.plan_h)) <= HEAD_TOL:
+    def _nav_head(self, m):                                                     # 診斷航向當固定路線的限定判據（不是計畫 ID 回報）：只計發計畫後、時間戳遞增且新鮮；不符或過期即清除
+        ts = float(m.header.stamp.sec) + 1e-9 * float(m.header.stamp.nanosec)
+        self.h_last = float(m.vector.x)
+        if self.plan_h is None or ts <= self.h_ts:
+            return
+        self.h_ts = ts
+        if self.clk_t is None or abs(self.clk_t - ts) > HEAD_FRESH_S or abs(wrap(m.vector.x - self.plan_h)) > HEAD_TOL:
+            self.n_adopt, self.n_cmd = 0, 0
+        else:
             self.n_adopt += 1
 
     def _nav_cmd(self, m):                                                      # 採用確認後才逐筆計新收到的非零命令（不重複計快取）
@@ -476,9 +485,12 @@ def main():
                     if wait['p'] is None:
                         wait['p'] = plan_msg(x_m[:2], a.nav_wp)
                         _w0 = [float(v) for v in a.nav_wp.split(';')[0].split(',')]
-                        nd.plan_h = math.atan2(_w0[1] - float(x_m[1]), _w0[0] - float(x_m[0]))
+                        _hn = math.atan2(_w0[1] - float(x_m[1]), _w0[0] - float(x_m[0]))
+                        ev(t, plan_sent=True, x=[round(float(v), 3) for v in x_m[:3]], h=_hn, h_old=nd.h_last)
+                        if nd.h_last is None or abs(wrap(nd.h_last - _hn)) <= HEAD_TOL:   # 舊計畫航向落在容差內就分不出採用
+                            return fail(t, f'heading_ambiguous:{nd.h_last}/{_hn:.3f}')
+                        nd.plan_h, nd.h_ts = _hn, float(nd.clk_t)
                         nd.n_adopt, nd.n_cmd = 0, 0
-                        ev(t, plan_sent=True, x=[round(float(v), 3) for v in x_m[:3]], h=nd.plan_h)
                     _ns = nd.plan_pub.get_subscription_count()
                     if _ns > wait['ns']:
                         nd.plan_pub.publish(wait['p'])

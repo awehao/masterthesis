@@ -118,14 +118,17 @@ def main():
             nd.ho_pub.publish(String(data=json.dumps({'owner': owner, 'step': n, 'sim_t': t, 'pending': None})))
             if nd.started:
                 nd.ws_pub.publish(Float64MultiArray(data=[1.0]))
-        if nd.plan_seen is not None and n % 5 == 0:                                # 代替導航：收到計畫後弦方向對準、才有非零命令
-            _p0, _p1 = nd.plan_seen.poses[0].pose.position, nd.plan_seen.poses[-1 if len(nd.plan_seen.poses) < 6 else 5].pose.position
+        if n % 5 == 0:                                                             # 代替導航：計畫前舊航向 2.0 rad、收到計畫後弦方向對準才有非零命令
             _h = Vector3Stamped()
-            _h.vector.x = math.atan2(_p1.y - _p0.y, _p1.x - _p0.x)
+            _h.header.stamp = _c.clock
+            _h.vector.x = 2.0
+            if nd.plan_seen is not None:
+                _p0, _p1 = nd.plan_seen.poses[0].pose.position, nd.plan_seen.poses[-1 if len(nd.plan_seen.poses) < 6 else 5].pose.position
+                _h.vector.x = math.atan2(_p1.y - _p0.y, _p1.x - _p0.x)
+                _tw = Twist()
+                _tw.linear.x = 0.1
+                nd.nav_pub.publish(_tw)
             nd.head_pub.publish(_h)
-            _tw = Twist()
-            _tw.linear.x = 0.1
-            nd.nav_pub.publish(_tw)
         if nd.ho_req and nd.ho_req.get('to') == 'nav' and g.state == 'FREE':
             owner = 'nav'
         if owner == 'nav' and n % 500 == 0:
