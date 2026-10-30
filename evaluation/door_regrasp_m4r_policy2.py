@@ -242,7 +242,15 @@ def m4r(Base):
                 tau3 = self.m4['tau0'] + (m.t - self.m4['t_ref3'])
                 T, b_ref, ff = self.ref.at(SEG_R3, tau3)
                 act['target'] = T
-                act['coord'] = self._coord(m, b_ref, ff)
+                if mp.get('r3_w_cap') is not None:                     # R3v2：只在 R3 放寬引導偏航上限（參考包給；離段即還原）
+                    _wc = self.r['w_cap']
+                    self.r['w_cap'] = float(mp['r3_w_cap'])
+                    try:
+                        act['coord'] = self._coord(m, b_ref, ff)
+                    finally:
+                        self.r['w_cap'] = _wc
+                else:
+                    act['coord'] = self._coord(m, b_ref, ff)
                 self.m4['last_T'] = np.asarray(T, float)
             self.rg['last_T'] = np.asarray(act['target'], float)
             act['geom_target'] = self.rg['geom_target']
