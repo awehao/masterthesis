@@ -434,7 +434,7 @@ if grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && grep -q '門段交回導�
             [ "$rc" = 0 ] || { RET_WHY="${RET_WHY:-末端對位 rc $rc}"; return 1; }; return 0; }
           pyget(){ python3 -c "import json;p=json.load(open('$RET_REF'))['entry']['$1'];print(','.join(f'{v:.6f}' for v in p['$2'][$3]))"; }
           _pA=$(pyget A park :2); _yA=$(pyget A park 2:); _qA=$(pyget A q_unfold :); _pB=$(pyget B park :2); _yB=$(pyget B park 2:); _qB=$(pyget B q_unfold :)
-          { iso_ok task_d solver_d wholebody_d glide_d adapter_d && prep A 1 "$_pA" "$_yA" "$_qA" 0.35 0.001 50 "--end-row 578 --pre-nav-roll --nav-wp 0.90,-1.55;0.55,-1.86;0.2535,-1.8864" fresh \
+          { iso_ok task_d solver_d wholebody_d glide_d adapter_d && prep A 1 "$_pA" "$_yA" "$_qA" 0.35 0.001 50 "--end-row 578 --pre-rel-backoff-m 0.001 --pre-rel-backoff-s 1.5 --pre-nav-roll --nav-wp 0.90,-1.55;0.55,-1.86;0.2535,-1.8864" fresh \
             && nav_leg stageA "0.20,1.55" 120 0.45 && go A stageA && iso_ok task_A solver_A wholebody_A glide_A adapter_A mission_A \
             && prep B 2 "$_pB" "$_yB" "$_qB" 0.10 0.002 100 "--pre-rel-backoff-m 0.001 --pre-rel-backoff-s 1.5 --nav-wp=-0.6,-2.8 --nav-entry-clear 0.55" "0.42,-1.88" \
             && nav_leg stageB "0.2535,-1.8864" 150 && go B stageB && iso_ok task_B solver_B wholebody_B glide_B adapter_B mission_B \

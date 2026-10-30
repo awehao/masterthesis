@@ -207,8 +207,8 @@ def main():
     i_end = i_of[name[-1]][-1]                                                 # 本趟實際末列（TO_NAV 目標不得追被截掉的舊終點）
     move_ = grp + '4'
     n_pre = int(round(a.pre_rel_backoff_s / 0.05))
-    if a.pre_rel_backoff_m > 0.0 and (a.seg != 'B' or not 1 <= n_pre < len(i_of[move_])):
-        raise SystemExit('--pre-rel-backoff-m 只用於 B，且時長須短於移動段')
+    if a.pre_rel_backoff_m > 0.0 and not 1 <= n_pre < len(i_of[move_]):
+        raise SystemExit('--pre-rel-backoff-s 須至少一拍且短於移動段')
     K = WholeBodyKinematics.from_urdf_file(os.path.join(HERE, 'models', 'omni_bot_wholebody_expanded.urdf'))
     g = json.load(open(os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r3.json')))
     cfg = GM.GeomMonitorConfig(v_floor=dict(g['v_floor_registered']), ds_err=dict(g['downsampling']['ds_err_registered']))
@@ -336,6 +336,13 @@ def main():
                 T[:3, 3] -= (a.tcp_backoff_m + _xp + _xb) * _f7 * T[:3, 2]           # 沿工具軸退（rt_9：實際比參考深約 1.5 mm，掌面間隙翻過監看）
                 return T
 
+            def tcp_meas(i):                                                   # 實測 TCP 對本拍參考的誤差（世界）與工具軸分量（正＝比參考更深）、新鮮受力
+                Tr_, Tm_ = tcp_ref(i), K.fk(x_m, 'link_tcp')
+                e_ = Tm_[:3, 3] - Tr_[:3, 3]
+                _st = nd.state or {}
+                return {'e_mm': round(float(np.linalg.norm(e_)) * 1e3, 3), 'e_axis_mm': round(float(e_ @ Tr_[:3, 2]) * 1e3, 3), 'fb': _st.get('fb'),
+                        'fb_fresh': abs(t - float(_st.get('sim_t', -1e9))) <= 0.1 and _st.get('ev_ok') is True}
+
             def pub_target(T):
                 nd.tgt_pub.publish(Float64MultiArray(data=[float(v) for v in np.asarray(T, float).reshape(-1)]))
 
@@ -448,13 +455,13 @@ def main():
                     if abs(q_d - _qr) > a.door_track_deg:
                         return fail(t, f'door_track:{q_d:.2f} vs {_qr:.2f}')
                     if a.pre_rel_backoff_m > 0.0 and idx == i_of[move_][-1] - n_pre:
-                        ev(t, pre_rel_start=True, q=q_d, row=idx)
+                        ev(t, pre_rel_start=True, q=q_d, row=idx, **tcp_meas(idx))
                     if not last:
                         idx += 1
                     else:
                         if a.pre_rel_backoff_m > 0.0 and not pre_noted:                # 預退到位後才請求張爪
                             pre_noted = True
-                            ev(t, pre_rel_done=True, q=q_d, row=idx)
+                            ev(t, pre_rel_ref_done=True, q=q_d, row=idx, **tcp_meas(idx))    # 參考預退完成（非實測到位；實測見 e_axis）
                         nd.req(kind='open')
                         if gs == 'OPENING':
                             ev(t, gate=gs, q=q_d)
