@@ -104,6 +104,9 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--bridge-s', type=float, default=4.0)
     ap.add_argument('--tcp-backoff-m', type=float, default=0.0)
+    ap.add_argument('--rel-backoff-v', type=float, default=0.008)        # 放手段 TCP 沿工具軸主動退（放手後門漂移朝掌面：rt_12、rt_16）
+    ap.add_argument('--rel-backoff-max', type=float, default=0.012)
+    ap.add_argument('--rel-backoff-delay-s', type=float, default=0.2)
     ap.add_argument('--bridge-speed', type=float, default=0.015)         # 橋接時長下限＝入口位置差／此值
     ap.add_argument('--bridge-k', type=float, default=0.5)               # 橋接底盤 P 增益（rt_6 B：參考速度 0 時底盤不走、手臂硬伸）
     ap.add_argument('--bridge-v-max', type=float, default=0.03)
@@ -175,6 +178,7 @@ def main():
     last_hb = 0.0
     fresh, n_fresh = False, [0, -1.0]
     last_arm, t_arm0, ready = 0.0, None, False
+    t_rel = None
     hold, hold_noted = False, False                                            # 求解端 d̂ 保持：閉爪請求起、退出抓持止（rt_5：接觸中更新致側向力累積）
     if True:
         while rclpy.ok():
@@ -252,7 +256,8 @@ def main():
 
             def tcp_ref(i):
                 T = K.fk(xref(i), 'link_tcp')
-                T[:3, 3] -= a.tcp_backoff_m * T[:3, 2]                         # 沿工具軸退（rt_9：實際比參考深約 1.5 mm，掌面間隙翻過監看）
+                _xb = 0.0 if t_rel is None else float(np.clip((t - t_rel - a.rel_backoff_delay_s) * a.rel_backoff_v, 0.0, a.rel_backoff_max))
+                T[:3, 3] -= (a.tcp_backoff_m + _xb) * T[:3, 2]                 # 沿工具軸退（rt_9：實際比參考深約 1.5 mm，掌面間隙翻過監看）
                 return T
 
             def pub_target(T):
@@ -311,6 +316,8 @@ def main():
             elif phase == 'RUN':
                 sn = st[idx]
                 last = idx == i_of[sn][-1]
+                if sn == grp + '5' and t_rel is None:
+                    t_rel = t
                 pub_target(tcp_ref(idx))
                 pub_coord(idx, contact=sn in (grp + '3', move_, grp + '5'))
                 tgt_row = idx
