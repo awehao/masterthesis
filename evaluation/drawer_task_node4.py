@@ -566,7 +566,7 @@ def main():
             phase in ('NAVIGATE', 'UNFOLD')
             or (phase == 'ALIGN' and stage == 'pre'))
         m = Float64MultiArray()
-        _cn = phase in ('OPEN', 'OPEN_HOLD', 'CLOSE', 'CLOSE_HOLD') and a.motm_w_vref_contact is not None   # 抽屜接觸段比照推門：底盤吃前饋，不靠 TCP 誤差帶動
+        _cn = phase in ('OPEN', 'OPEN_HOLD', 'CLOSE') and a.motm_w_vref_contact is not None   # 抽屜接觸段比照推門：底盤吃前饋，不靠 TCP 誤差帶動
         _wv = (a.motm_w_vref_contact if _cn else
                (a.motm_w_vref_pre if (soft and a.motm_w_vref_pre is not None) else a.motm_w_vref))
         m.data = MC.coord_msg(w_vref=_wv, vref=vr,
