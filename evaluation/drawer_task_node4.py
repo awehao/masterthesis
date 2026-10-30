@@ -409,6 +409,7 @@ def main():
     ap.add_argument('--done-at-handback', action='store_true')
     ap.add_argument('--motm-w-vref-contact', type=float, default=None)
     ap.add_argument('--motm-w-p-contact', type=float, default=100.0)
+    ap.add_argument('--motm-fine-align', action='store_true')            # 接近末段（ALIGN 收退讓量起、閉爪）同用接觸段權重，比照門段 fine 模式
     ap.add_argument('--motm-open-lead-m', type=float, default=0.0)
     ap.add_argument('--motm-w-a-grip', type=float, default=0.05)         # 閉爪至夾持成立：只加大 w_a、保留 w_p（rt_15 w_p 50 時受力起伏大、保持斷續）
     ap.add_argument('--motm-v-pull', type=float, default=0.018)
@@ -567,7 +568,8 @@ def main():
             phase in ('NAVIGATE', 'UNFOLD')
             or (phase == 'ALIGN' and stage == 'pre'))
         m = Float64MultiArray()
-        _cn = phase in ('OPEN', 'OPEN_HOLD', 'CLOSE') and a.motm_w_vref_contact is not None   # 抽屜接觸段比照推門：底盤吃前饋，不靠 TCP 誤差帶動
+        _cn = a.motm_w_vref_contact is not None and (phase in ('OPEN', 'OPEN_HOLD', 'CLOSE')
+                                                     or (a.motm_fine_align and not soft and phase in ('ALIGN', 'ENGAGE_WAIT')))   # 抽屜接觸段比照推門：底盤吃前饋，不靠 TCP 誤差帶動
         _wv = (a.motm_w_vref_contact if _cn else
                (a.motm_w_vref_pre if (soft and a.motm_w_vref_pre is not None) else a.motm_w_vref))
         m.data = MC.coord_msg(w_vref=_wv, vref=vr,
