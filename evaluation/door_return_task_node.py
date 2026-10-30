@@ -220,6 +220,8 @@ def main():
                 rep['monitor']['n_stop'] += 1
                 rep['monitor']['stop_detail'] = det
                 return fail(t, f"geometry:{det.get('why')}")
+            if rep['monitor']['n'] == 1:
+                print('[return] READY 狀態新鮮、幾何監看首輪通過', flush=True)
 
             def xref(i):
                 f = float(np.clip(np.interp(i, [i_of[move_][0], i_of[move_][-1]], [0.0, 1.0]), 0, 1))

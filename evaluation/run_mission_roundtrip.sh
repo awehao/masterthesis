@@ -467,6 +467,15 @@ p=r[-1].pose.pose.position; print(f'{p.x:.6f},{p.y:.6f}')"; }
               --margin-guard --coord-topic /wgmpc/coord --offset-init-static --offset-free --reach-pos-m 0.005 --reach-rot-rad 0.02 --hold-s 2.0 \
               --duration-s 1200 --duration-sim-s 700 --u-prev-policy strict --assume-initial-rest --out "$DIR/align_solver_$seg.json"
             spawn task_$seg python3 -u evaluation/door_return_task_node.py --ref "$RET_REF" --seg "$seg" --op "$op" --out "$DIR/task_return_$seg.json"
+            local _rdy=0 _w; for _w in $(seq 400); do    # 任務端確認新鮮＋監看就緒才准起交棒鏈；未就緒不續進場，導航保持持有
+              grep -q 'READY' "$DIR/task_$seg.log" 2>/dev/null && { _rdy=1; break; }
+              kill -0 "$(pid_of task_$seg)" 2>/dev/null || break
+              kill -0 "$SIM_PID" 2>/dev/null || break
+              sleep 0.1
+            done
+            if [ "$_rdy" != 1 ]; then RET_WHY="task_$seg 未就緒，不續進場"; say "[返程 $seg] $RET_WHY"
+              for _n in task_$seg solver_$seg adapter_$seg; do _p=$(pid_of $_n); [ -n "$_p" ] && { kill -TERM -- "-$(ps -o pgid= -p "$_p" | tr -d ' ')" 2>/dev/null || kill -TERM "$_p" 2>/dev/null; }; done
+              return 1; fi
             spawn glide_$seg python3 -u evaluation/drawer_glide_node.py --start="$sxy" --park="$pxy" --park-yaw "$pyaw" --k-yaw 1.0 --wz-max 0.35 --out "$DIR/glide_$seg.json"
             sleep 1
             spawn wholebody_$seg python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --motm --motm-v-cap 0.030 --motm-a-ref 0.002 --motm-k-yaw 1.0 --motm-w-cap 0.10 --motm-v-creep 0.0 --motm-overshoot 0.0 --pos-tol 0.005 --stow-q="$D_STOW" --park="$pxy,$pyaw" --q-unfold="$qu" --out "$DIR/wholebody_$seg.json"
