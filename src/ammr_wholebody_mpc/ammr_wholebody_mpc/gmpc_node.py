@@ -533,6 +533,8 @@ class GMPCNode(Node):
         # 版本化的診斷。舊 /gmpc/diag 是位置索引陣列，22 欄/29 欄曾被混淆；
         # 這裡改用自描述的 JSON 並帶 schema 版本，讀取端遇未知版本應直接失敗。
         self.diag2_pub      = self.create_publisher(String, '/gmpc/diag_v2', 10)
+        # 計畫採用回報：回傳 header.stamp，發計畫端據此確認 GMPC 已換上這份計畫
+        self.plan_ack_pub   = self.create_publisher(String, '/gmpc/plan_ack', 10)
         self.cbf_zone_pub   = self.create_publisher(
             MarkerArray, str(self.get_parameter('cbf_zone_topic').value), 10)
 
@@ -710,6 +712,8 @@ class GMPCNode(Node):
             self._prev_path_xyth = path_msg_to_xyth(self.latest_path)
             self._blend_t0 = self.get_clock().now()
         self.latest_path = msg
+        if hasattr(self, 'plan_ack_pub'):
+            self.plan_ack_pub.publish(String(data=f'{msg.header.stamp.sec}.{msg.header.stamp.nanosec:09d}'))
         # New plan means a new goal (or continuous replan) — re-arm the arrival
         # detector so the next arrival also gets logged.
         self._arrived = False

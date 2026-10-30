@@ -15,7 +15,7 @@ import time
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped, Twist, Vector3Stamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from rosgraph_msgs.msg import Clock
@@ -33,8 +33,6 @@ from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa:
 
 
 WD_S = 1.0                       # 狀態／時鐘看門狗（牆鐘，只認前進）
-HEAD_TOL = 0.35                  # 弦方向與本段計畫首段方向容差（rad）
-HEAD_FRESH_S = 0.3               # 航向訊息相對 /clock 的新鮮界線（模擬時間）
 NAV_READY_V = 0.01               # 導航備妥的最小命令速度（m/s）
 LAG_S = 0.2                      # 狀態相對 /clock 落後或超前的界線（模擬時間，同 GeomMonitorConfig.age_max_s）
 
@@ -107,10 +105,9 @@ class Nd(Node):
         self.ho_pub = self.create_publisher(String, '/handover/request', 10)
         self.hold_pub = self.create_publisher(Bool, '/return/offset_hold', lat)
         self.plan_pub = self.create_publisher(Path, '/plan', QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-        self.plan_h, self.n_adopt, self.n_cmd = None, 0, 0
-        self.h_last, self.h_ts = None, -1.0
+        self.plan_id, self.adopted, self.n_cmd = None, False, 0
         self.create_subscription(Twist, '/cmd_vel', self._nav_cmd, 10)
-        self.create_subscription(Vector3Stamped, '/gmpc/heading', self._nav_head, 10)
+        self.create_subscription(String, '/gmpc/plan_ack', self._plan_ack, 10)
         self.hold_ack = None
         self.create_subscription(String, '/return/offset_hold_ack', lambda m: setattr(self, 'hold_ack', json.loads(m.data)), 10)
         self.sync, self.state, self.hs, self.n_ws = None, None, None, 0
@@ -127,19 +124,12 @@ class Nd(Node):
             return                                                          # 重複舊狀態不刷新
         self.sync, self.sync_wall = d, time.monotonic()
 
-    def _nav_head(self, m):                                                     # 診斷航向當固定路線的限定判據（不是計畫 ID 回報）：只計發計畫後、時間戳遞增且新鮮；不符或過期即清除
-        ts = float(m.header.stamp.sec) + 1e-9 * float(m.header.stamp.nanosec)
-        self.h_last = float(m.vector.x)
-        if self.plan_h is None or ts <= self.h_ts:
-            return
-        self.h_ts = ts
-        if self.clk_t is None or abs(self.clk_t - ts) > HEAD_FRESH_S or abs(wrap(m.vector.x - self.plan_h)) > HEAD_TOL:
-            self.n_adopt, self.n_cmd = 0, 0
-        else:
-            self.n_adopt += 1
+    def _plan_ack(self, m):
+        if self.plan_id is not None and m.data == self.plan_id and not self.adopted:
+            self.adopted, self.n_cmd = True, 0
 
-    def _nav_cmd(self, m):                                                      # 採用確認後才逐筆計新收到的非零命令（不重複計快取）
-        if self.n_adopt >= 3:
+    def _nav_cmd(self, m):                                                      # GMPC 回報採用本份計畫後才逐筆計新收到的非零命令（不重複計快取）
+        if self.adopted:
             self.n_cmd = self.n_cmd + 1 if math.hypot(m.linear.x, m.linear.y) >= NAV_READY_V else 0
 
     def _clk(self, m):
@@ -487,13 +477,10 @@ def main():
                 if _dec <= 0.0:
                     if wait['p'] is None:
                         wait['p'] = plan_msg(x_m[:2], a.nav_wp)
-                        _w0 = [float(v) for v in a.nav_wp.split(';')[0].split(',')]
-                        _hn = math.atan2(_w0[1] - float(x_m[1]), _w0[0] - float(x_m[0]))
-                        ev(t, plan_sent=True, x=[round(float(v), 3) for v in x_m[:3]], h=_hn, h_old=nd.h_last)
-                        if nd.h_last is None or abs(wrap(nd.h_last - _hn)) <= HEAD_TOL:   # 舊計畫航向落在容差內就分不出採用
-                            return fail(t, f'heading_ambiguous:{nd.h_last}/{_hn:.3f}')
-                        nd.plan_h, nd.h_ts = _hn, float(nd.clk_t)
-                        nd.n_adopt, nd.n_cmd = 0, 0
+                        _sec, _nsec = int(t), int((t % 1) * 1e9)
+                        wait['p'].header.stamp.sec, wait['p'].header.stamp.nanosec = _sec, _nsec
+                        nd.plan_id, nd.adopted, nd.n_cmd = f'{_sec}.{_nsec:09d}', False, 0
+                        ev(t, plan_sent=True, x=[round(float(v), 3) for v in x_m[:3]], plan_id=nd.plan_id)
                     _ns = nd.plan_pub.get_subscription_count()
                     if _ns > wait['ns']:
                         nd.plan_pub.publish(wait['p'])
@@ -505,9 +492,9 @@ def main():
                         nd.req(kind='done')
                         phase = 'TO_NAV'
                         wait['t'] = t
-                        ev(t, to='TO_NAV', q=q_d, x=[round(float(v), 3) for v in x_m[:3]], n_adopt=nd.n_adopt, n_cmd=nd.n_cmd, clear=_cl, arm_err=_ae)
+                        ev(t, to='TO_NAV', q=q_d, x=[round(float(v), 3) for v in x_m[:3]], adopted=nd.adopted, n_cmd=nd.n_cmd, clear=_cl, arm_err=_ae)
                     elif t - wait['t'] > a.pre_nav_decel_s + a.nav_ready_s:
-                        return fail(t, f'nav_entry_not_ready:adopt{nd.n_adopt}/cmd{nd.n_cmd}/clear{_cl:.3f}/arm{_ae:.3f}')
+                        return fail(t, f'nav_entry_not_ready:adopt{nd.adopted}/cmd{nd.n_cmd}/clear{_cl:.3f}/arm{_ae:.3f}')
             elif phase == 'TO_NAV':
                 if wait.get('T_hold') is not None:                             # 經 PRE_NAV：導航接管前維持同一收攏目標、名目姿態與零速度參考
                     pub_target(wait['T_hold'])
