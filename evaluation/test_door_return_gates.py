@@ -317,6 +317,23 @@ def t_latched_freezes_finger():
     assert s.g.abort and s.g.finger_target() == 0.004
 
 
+def t_second_op_requires_arm():
+    s = Sim()
+    full_cycle(s, 'in', 1)
+    s.g.request('close', s.t)
+    assert s.run(0.1) is None and s.g.state == 'FREE' and s.g.abort is None
+
+
+def t_arm_idempotent_and_second_op_fresh_timers():
+    s = Sim()
+    full_cycle(s, 'in', 1)
+    assert s.g.arm(2, 'out', s.t)[0] and s.g.arm(2, 'out', s.t)[0] and s.g.n_ops == 2 and s.g.t_ramp is None
+    assert not s.g.arm(1, 'out', s.t)[0]
+    s.g.request('close', s.t)
+    assert s.run(0.2, ramp=True) is None and s.g.state == 'CLOSING'
+    assert s.run(3.0, grip('bar_out'), qf=(0.002, 0.002), ramp=True) is None and s.g.state == 'GRASPED'
+
+
 if __name__ == '__main__':
     fs = [(k, v) for k, v in list(globals().items()) if k.startswith('t_') and callable(v)]
     for k, f in fs:

@@ -77,6 +77,8 @@ class ReturnGate:
 
     def arm(self, op, bar, t):
         """開始新 op；只准在 FREE；序號必須遞增。"""
+        if self.armed and self.op == int(op) and self.bar == bar and self.abort is None:
+            return True, None                                                   # 重送：冪等（任務端等確認前可重送），不重設計時
         if self.abort is not None or self.state != 'FREE':
             return False, f'不可 arm（state {self.state}，abort {self.abort}）'
         if bar not in BAR or not (self.op is None or int(op) > int(self.op)):
@@ -145,7 +147,7 @@ class ReturnGate:
         none = max(fb) < c['contact_abort_n']
         r, st = self.req, self.state
         if st == 'FREE':
-            if r == 'close' and self.op is not None:
+            if r == 'close' and self.armed:                                     # 未武裝不准閉爪（rt_10：B 的 arm 遺失卻沿用 A 的計時）
                 if min(qf) < c['finger_open'] - c['open_tol'] * 10:
                     return None
                 if not (isinstance(tcp_err, (int, float)) and tcp_err <= c['tcp_tol']):

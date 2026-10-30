@@ -174,6 +174,7 @@ def main():
     t_wait = None
     last_hb = 0.0
     fresh, n_fresh = False, [0, -1.0]
+    last_arm, t_arm0, ready = 0.0, None, False
     hold, hold_noted = False, False                                            # 求解端 d̂ 保持：閉爪請求起、退出抓持止（rt_5：接觸中更新致側向力累積）
     if True:
         while rclpy.ok():
@@ -216,10 +217,17 @@ def main():
                 continue
             # 節拍鎖 20 Hz（rt_3 實測每列 0.06 s）：落後時跳過過期槽，同一筆狀態只處理一次、參考只進一列
             t_tick = t if t_tick is None else t_tick + 0.05 * max(1, int((t - t_tick + 1e-4) / 0.05))
-            if not armed:
-                nd.req(kind='arm', op=a.op, bar=bar)
-                armed = True
-                ev(t, armed=bar, q_door=q_d)
+            if not armed:                                                      # 重送到閘門回報本 op（rt_10：單發遺失）
+                if time.monotonic() - last_arm >= 0.2:
+                    nd.req(kind='arm', op=a.op, bar=bar)
+                    last_arm = time.monotonic()
+                if (nd.state or {}).get('op') == a.op:
+                    armed = True
+                    ev(t, armed=bar, q_door=q_d)
+                elif t_arm0 is None:
+                    t_arm0 = time.monotonic()
+                elif time.monotonic() - t_arm0 > 10.0:
+                    return fail(t, 'arm_not_acked')
             r = rows[tgt_row]
             _age = max(0.0, float(nd.clk_t) - t)                               # 模擬時間年齡（/clock − 狀態時戳）
             dec, det = mon.step(t, x_m, float(s[2]), float(s[15]), _age, r['target'] if phase != 'ENTRY' else None)
@@ -232,8 +240,9 @@ def main():
                 rep['monitor']['n_stop'] += 1
                 rep['monitor']['stop_detail'] = det
                 return fail(t, f"geometry:{det.get('why')}")
-            if rep['monitor']['n'] == 1:
-                print('[return] READY 狀態新鮮、幾何監看首輪通過', flush=True)
+            if armed and not ready:
+                ready = True
+                print('[return] READY 已武裝、狀態新鮮、幾何監看通過', flush=True)
 
             nd.hold_pub.publish(Bool(data=hold))
 
