@@ -15,6 +15,8 @@ import time
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from geometry_msgs.msg import PoseStamped, Twist
+from nav_msgs.msg import Path
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from rosgraph_msgs.msg import Clock
 from rclpy.qos import ReliabilityPolicy
@@ -57,6 +59,23 @@ def rot(x, d):
     return y
 
 
+def plan_msg(xy, wps):
+    """同 nav_goal_plan_node：點距 ≤5 cm 的折線計畫，起點為目前位置。"""
+    w = [tuple(float(v) for v in xy)] + [tuple(float(v) for v in p.split(',')) for p in wps.split(';')]
+    p = Path()
+    p.header.frame_id = 'odom'
+    for (x0, y0), (x1, y1) in zip(w[:-1], w[1:]):
+        n = max(1, int(math.ceil(math.hypot(x1 - x0, y1 - y0) / 0.05)))
+        h = math.atan2(y1 - y0, x1 - x0)
+        for k in range(n + 1):
+            ps = PoseStamped()
+            ps.header.frame_id = 'odom'
+            ps.pose.position.x, ps.pose.position.y = x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n
+            ps.pose.orientation.z, ps.pose.orientation.w = math.sin(h / 2), math.cos(h / 2)
+            p.poses.append(ps)
+    return p
+
+
 class Nd(Node):
     def __init__(self):
         super().__init__('door_return_task')
@@ -68,6 +87,9 @@ class Nd(Node):
         self.stop_pub = self.create_publisher(String, '/wgmpc/stop', 10)
         self.ho_pub = self.create_publisher(String, '/handover/request', 10)
         self.hold_pub = self.create_publisher(Bool, '/return/offset_hold', lat)
+        self.plan_pub = self.create_publisher(Path, '/plan', QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.nav_v, self.nav_wall = 0.0, None
+        self.create_subscription(Twist, '/cmd_vel', self._nav_cmd, 10)
         self.hold_ack = None
         self.create_subscription(String, '/return/offset_hold_ack', lambda m: setattr(self, 'hold_ack', json.loads(m.data)), 10)
         self.sync, self.state, self.hs, self.n_ws = None, None, None, 0
@@ -83,6 +105,9 @@ class Nd(Node):
         if self.sync is not None and not (d[1] > self.sync[1] and d[0] > self.sync[0]):
             return                                                          # 重複舊狀態不刷新
         self.sync, self.sync_wall = d, time.monotonic()
+
+    def _nav_cmd(self, m):
+        self.nav_v, self.nav_wall = math.hypot(m.linear.x, m.linear.y), time.monotonic()
 
     def _clk(self, m):
         t = float(m.clock.sec) + 1e-9 * float(m.clock.nanosec)
@@ -103,7 +128,11 @@ def main():
     ap.add_argument('--op', type=int, required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--bridge-s', type=float, default=4.0)
-    ap.add_argument('--end-stage', default='')                           # 提前交導航：此段結束即 TO_NAV（S8 全程距門板 >0.5 m，無需低速參考）
+    ap.add_argument('--end-row', type=int, default=-1)                   # 末段只走到此列（列號相對該段；rt_21 基準 S8 第 800 列起距牆／門板 ≥0.69 m）
+    ap.add_argument('--end-skip', type=int, default=1)                   # 末段每拍進幾列（無接觸縮時）
+    ap.add_argument('--nav-wp', default='')                              # 交權前先發本段導航計畫，確認導航有非零命令才請求交棒
+    ap.add_argument('--nav-ready-v', type=float, default=0.01)
+    ap.add_argument('--nav-ready-s', type=float, default=15.0)
     ap.add_argument('--tcp-backoff-m', type=float, default=0.0)
     ap.add_argument('--rel-backoff-v', type=float, default=0.008)        # 放手段 TCP 沿工具軸主動退（放手後門漂移朝掌面：rt_12、rt_16）
     ap.add_argument('--rel-backoff-max', type=float, default=0.012)
@@ -138,12 +167,13 @@ def main():
     rows, ent = P[a.seg], P['entry'][a.seg]
     bar, grp = ent['bar'], ('S', 'C')[a.seg == 'B']
     name = {'A': ('S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8'), 'B': ('C2', 'C3', 'C4', 'C5', 'C6', 'C7')}[a.seg]
-    if a.end_stage:
-        name = name[:name.index(a.end_stage) + 1]
     X = np.array([r['x'] for r in rows], float)
     Qd = np.array([r['q_deg'] for r in rows], float)
     st = [r['stage'][:2] for r in rows]
     i_of = {n: [i for i, s in enumerate(st) if s == n] for n in name}
+    if a.end_row >= 0:
+        i_of[name[-1]] = i_of[name[-1]][:a.end_row + 1]
+    i_end = i_of[name[-1]][-1]                                                 # 本趟實際末列（TO_NAV 目標不得追被截掉的舊終點）
     move_ = grp + '4'
     K = WholeBodyKinematics.from_urdf_file(os.path.join(HERE, 'models', 'omni_bot_wholebody_expanded.urdf'))
     g = json.load(open(os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r3.json')))
@@ -269,8 +299,8 @@ def main():
 
             def pub_coord(i, soft=False, contact=False):
                 x0, x1 = xref(max(i - 1, 0)), xref(i)
-                dv = (x1 - x0) / 0.05
-                dv[2] = math.atan2(math.sin(x1[2] - x0[2]), math.cos(x1[2] - x0[2])) / 0.05
+                dv = (x1 - x0) / 0.05 * (a.end_skip if st[i] == name[-1] else 1)
+                dv[2] = math.atan2(math.sin(x1[2] - x0[2]), math.cos(x1[2] - x0[2])) / 0.05 * (a.end_skip if st[i] == name[-1] else 1)
                 if contact:
                     dv[:2] += np.clip(a.k_base * (x1[:2] - x_m[:2]), -a.base_fix_max, a.base_fix_max)
                     dv[2] += float(np.clip(a.k_base * math.atan2(math.sin(x1[2] - x_m[2]), math.cos(x1[2] - x_m[2])), -a.yaw_fix_max, a.yaw_fix_max))
@@ -394,16 +424,37 @@ def main():
                     elif waited():
                         return fail(t, 'release_not_confirmed')
                 elif not last:
-                    idx += 1
+                    idx = min(idx + (a.end_skip if sn == name[-1] else 1), i_of[sn][-1])
                 elif sn != name[-1]:
                     go_next(sn)
+                elif a.nav_wp:
+                    phase = 'PRE_NAV'
+                    wait['t'], wait['n'], wait['ns'] = t, 0, -1
+                    wait['p'] = plan_msg(x_m[:2], a.nav_wp)
+                    ev(t, to='PRE_NAV', x=[round(float(v), 3) for v in x_m[:3]])
                 else:
                     nd.req(kind='done')
                     phase = 'TO_NAV'
                     wait['t'] = t
                     ev(t, to='TO_NAV', q=q_d, x=[round(float(v), 3) for v in x_m[:3]])
+            elif phase == 'PRE_NAV':                                           # 全身保持末列；本段計畫送達且導航確有非零命令才請求交棒（舊計畫的新鮮命令不算）
+                pub_target(tcp_ref(i_end))
+                nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref, vref=[0.0, 0.0, 0.0], w_qn=a.w_qn, q_nom=[float(v) for v in X[i_end][3:]], w_a=a.w_a, w_p=a.w_p)))
+                _ns = nd.plan_pub.get_subscription_count()
+                if _ns > wait['ns']:
+                    nd.plan_pub.publish(wait['p'])
+                    wait['ns'] = _ns
+                _fresh = nd.nav_wall is not None and time.monotonic() - nd.nav_wall < 0.3 and nd.nav_v >= a.nav_ready_v
+                wait['n'] = wait['n'] + 1 if _fresh else 0
+                if wait['n'] >= 5:
+                    nd.req(kind='done')
+                    phase = 'TO_NAV'
+                    wait['t'] = t
+                    ev(t, to='TO_NAV', q=q_d, x=[round(float(v), 3) for v in x_m[:3]], nav_v=nd.nav_v)
+                elif t - wait['t'] > a.nav_ready_s:
+                    return fail(t, 'nav_plan_not_ready')
             elif phase == 'TO_NAV':
-                pub_target(tcp_ref(len(rows) - 1))
+                pub_target(tcp_ref(i_end))
                 own = str((nd.hs or {}).get('owner', '')).lower()
                 if own == 'nav' and not (nd.hs or {}).get('pending'):
                     ev(t, owner='nav', step=(nd.hs or {}).get('step'))
