@@ -4,6 +4,9 @@
 #   任務節點 node10o --subtask-mode；模擬上限 1400 s。門段 DONE＋執行端「門段交接」後：門段節點（solver／wholebody／nav1／lw_observer／gmpc）受控結束、
 #   核對門段發布者全數消失，才起抽屜段：GMPC 以抽屜定版參數重啟（heading 開；機器人靜止）、cmd_relay（取代 nav1 選擇器 CRUISE 轉送）、
 #   drawer_glide／drawer_wholebody／drawer_task／arm_vel_adapter（consumer /door_k2_sim）／wgmpc_wg2／drawer_mission（MOTM；常數平移到門座標；起點＝/odom 實際位姿；收臂 STOW_F）。
+# r2（2026-10-30；mission_dd_1 抽屜段導航命令全零、起點距門扇 0.514 m < 動態 CBF 邊距 0.69；Codex m5c 核可 A＋B）：
+#   抽屜段 GMPC 起動即錄 /gmpc/diag（gmpc_diag_d.log）；relay 後先跑離門短段 nav_escape_plan_node（實際位姿沿 +y 0.4 m、GMPC＋CBF 照舊、期限 40 s 模擬時間），
+#   成功才以離門後實測位姿起抽屜段節點，失敗即 /room/stop；退出碼依抽屜任務 DONE、編排 rc 0、模擬器正常結束判定（不再無條件 0）。
 # 用法：RUN_ID=mission_dd_1 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_mission_door_drawer.sh bash evaluation/run_guarded_v3.sh
 # m4r14（2026-10-30；door_m4r_15 回報門速不可靠＋逾時路徑 TypeError）：run_door_m4r13.sh 的複本，只改：執行端 ev9r8r → ev9r8s、任務節點 node10m → node10n（close_settle r2）。
 # 用法：RUN_ID=door_m4r_16 ROS_DOMAIN_ID=97 RUNNER=evaluation/run_door_m4r14.sh bash evaluation/run_guarded_v3.sh
@@ -331,8 +334,33 @@ sys.argv=['gmpc_node','--ros-args','-p','use_sim_time:=true',
           '-p','heading_lookahead_m:=1.2',
           '-p','heading_rate_max:=1.0']
 from ammr_wholebody_mpc.gmpc_node import main; main()"
+        spawn gmpc_diag_d ros2 topic echo --csv /gmpc/diag std_msgs/msg/Float32MultiArray
         sleep 6
         spawn relay_d python3 -u evaluation/cmd_relay_node.py
+        sleep 1
+        say "[抽屜段] 離門短段（+y 0.4 m；GMPC＋CBF；期限 40 s 模擬時間）"
+        python3 -u evaluation/nav_escape_plan_node.py --dy 0.4 --min-progress-m 0.25 --timeout-s 40 --out "$DIR/escape.json" >>"$DIR/escape.log" 2>&1; RC_ESC=$?
+        grep -E '^\[escape\]' "$DIR/escape.log" | tee -a "$DIR/run.log"
+        ESC_OK=0; [ "$RC_ESC" = 0 ] && ESC_OK=1
+        if [ "$ESC_OK" = 1 ]; then
+          sleep 3
+          DPOSE=$(timeout 15 python3 -c "
+import rclpy,math
+from nav_msgs.msg import Odometry
+rclpy.init(); n=rclpy.create_node('pose_once2'); r=[]
+n.create_subscription(Odometry,'/odom',lambda m:r.append(m),1)
+import time; t0=time.time()
+while not r and time.time()-t0<10: rclpy.spin_once(n,timeout_sec=0.1)
+m=r[-1].pose.pose; q=m.orientation; y=math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))
+print(f'{m.position.x:.6f},{m.position.y:.6f},{y:.6f}')")
+          DSTART_XY=$(echo "$DPOSE" | cut -d, -f1,2)
+          say "[抽屜段] 離門後實測位姿 $DPOSE ⇒ 抽屜段起點"
+        else
+          say "**離門短段失敗**（rc $RC_ESC；見 escape.json、gmpc_diag_d.log）⇒ 不起抽屜段，整體受控停止"
+          timeout 5 ros2 topic pub --once /room/stop std_msgs/msg/String "{data: 'escape failed'}" >/dev/null 2>&1
+        fi
+      fi
+      if [ "$DRAWER_PHASE" = 1 ] && [ "${ESC_OK:-0}" = 1 ]; then
         spawn glide_d python3 -u evaluation/drawer_glide_node.py --start="$DSTART_XY" --park="$D_PARK_XY" --park-yaw "$D_PARK_YAW" --k-yaw 1.0 --wz-max 0.35 --out "$DIR/glide_drawer.json"
         sleep 1
         spawn wholebody_d python3 -u evaluation/drawer_wholebody_node.py --solver-handshake --pos-tol 0.005 --motm --park="$D_PARK" --stow-q="$D_STOW" --out "$DIR/wholebody_drawer.json"
@@ -362,9 +390,10 @@ fi
 if [ "$DRAWER_PHASE" = 1 ]; then
   say "[收尾] 等執行端封存 room_run.json／room_run_drawer.json（最多 90 s）"
   wait_or_stop "$SIM_PID" 90 15; RC_SIM=$STOP_RC; HOW_SIM=$STOP_HOW
-  OK_DDONE=0; grep -qE '完成|DONE' "$DIR/mission_d.log" 2>/dev/null && OK_DDONE=1
-  say "=== 結束（抽屜段）：mission rc=$RC_DMISSION、sim $HOW_SIM rc=$RC_SIM；room_run_drawer $( [ -s "$DIR/room_run_drawer.json" ] && echo 1 || echo 0)；判讀以 mission_drawer.json／task_drawer.json 為準 ==="
-  exit 0
+  OK_DDONE=0; grep -q '"final_phase": "DONE"' "$DIR/task_drawer.json" 2>/dev/null && OK_DDONE=1
+  RC=1; [ "$OK_DDONE" = 1 ] && [ "$RC_DMISSION" = 0 ] && [ "$HOW_SIM" = exited ] && [ "$RC_SIM" = 0 ] && RC=0
+  say "=== 結束 rc=$RC（抽屜段）：離門 ${ESC_OK:-na}、抽屜任務 DONE $OK_DDONE、mission rc=$RC_DMISSION、sim $HOW_SIM rc=$RC_SIM；room_run_drawer $( [ -s "$DIR/room_run_drawer.json" ] && echo 1 || echo 0)；返程門與回起點不在本趟範圍 ==="
+  exit "$RC"
 fi
 say "[收尾] 等求解節點停止並封存（最多 30 s，之後 TERM→10 s→KILL）"
 wait_or_stop "$SOLVER_PID" 30 10; RC_SOLVER=$STOP_RC; HOW_SOLVER=$STOP_HOW
