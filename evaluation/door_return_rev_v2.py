@@ -29,7 +29,7 @@ import door_regrasp_geom_switch as GS                  # noqa: E402
 REF = os.path.join(HERE, 'results', 'door', 'door_regrasp_ref_pb60h.json')
 GCFG = os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r3.json')
 OUT = os.path.join(HERE, 'results', 'door', 'door_return_rev_v2.json')
-OUT_S = os.path.join(HERE, 'results', 'door', 'door_return_rev_v2b.json')   # v2b：--slide-stretch > 1（S2 滑入時間軸放慢；路徑不變）
+OUT_S = os.path.join(HERE, 'results', 'door', 'door_return_rev_v2c.json')   # v2c：--slide-stretch > 1＋六軸關節加速度（Codex m6c）；v2b.json 為 2 倍版封存
 DRAWER_END = [0.712977, 0.961491, -1.982732]             # mission_dd_7 末步底盤
 DT = 0.05
 V_BOX, W_BOX, ARM_RATE, A_LIN, A_ANG = 0.035255, 0.1999, 1.0, 0.50, 2.00
@@ -136,7 +136,7 @@ def main():
         x, name = r['x'], r['name']
         R = res.setdefault(name, {'n': 0, 'rule': r['rule'], 'target': r['target'], 'T_s': 0.0, 'n_check_fail': 0, 'first_check_fail': None,
                                   'n_stop': 0, 'first_stop': None, 'n_warn': 0, 'd_min': {}, 'd_pred_min': {}, 'jm_min': 9.0, 'v_max': 0.0, 'w_max': 0.0,
-                                  'arm_rate_max': 0.0, 'a_lin_max': 0.0, 'a_ang_max': 0.0, 'grasp_pos_max_mm': None, 'grasp_rot_max_deg': None})
+                                  'arm_rate_max': 0.0, 'a_lin_max': 0.0, 'a_ang_max': 0.0, 'arm_acc_max': 0.0, 'grasp_pos_max_mm': None, 'grasp_rot_max_deg': None})
         if name not in i_stage_start:
             i_stage_start[name] = k
             if prev is not None:
@@ -156,6 +156,7 @@ def main():
                 acc = (dv - prev2) / DT
                 R['a_lin_max'] = max(R['a_lin_max'], float(np.hypot(acc[0], acc[1])))
                 R['a_ang_max'] = max(R['a_ang_max'], abs(float(acc[2])))
+                R['arm_acc_max'] = max(R['arm_acc_max'], float(np.max(np.abs(acc[3:]))))
             prev2 = dv
         prev = x.copy()
         ok, why, info = PI.check(x, r['q'], r['qfi'], r['rule'])
@@ -203,7 +204,7 @@ def main():
     print(f"ok {out['ok']}；first_block {block}；限值違反 {out['limit_violations']}；總長 {tt:.1f} s；{len(plan)} 列；牆鐘 {out['wall_s']:.0f} s")
     for n, R in res.items():
         print(f"{n:14s} {R['rule']:7s} {str(R['target']):4s} n {R['n']:4d} chkF {R['n_check_fail']:3d} stop {R['n_stop']:3d} warn {R['n_warn']:3d} "
-              f"pred {[(c[:2], round(v * 1e3, 1)) for c, v in R['d_pred_min'].items()]} v {R['v_max']:.4f} w {R['w_max']:.4f} arm {R['arm_rate_max']:.3f} a {R['a_lin_max']:.3f}/{R['a_ang_max']:.3f}"
+              f"pred {[(c[:2], round(v * 1e3, 1)) for c, v in R['d_pred_min'].items()]} v {R['v_max']:.4f} w {R['w_max']:.4f} arm {R['arm_rate_max']:.3f} a {R['a_lin_max']:.3f}/{R['a_ang_max']:.3f} armacc {R['arm_acc_max']:.3f}"
               + (f" grasp {R['grasp_pos_max_mm']:.2f}mm/{R['grasp_rot_max_deg']:.2f}°" if R['grasp_pos_max_mm'] is not None else ''))
     print('junctions', json.dumps(junc, ensure_ascii=False, default=float))
     print('exit', json.dumps(out['exit'], ensure_ascii=False, default=float))
