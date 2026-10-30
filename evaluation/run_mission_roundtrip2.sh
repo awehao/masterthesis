@@ -209,15 +209,30 @@ fi
 grep -E '^\[(room|door)\] (零摩擦|夾持面|摩擦核對|門建於|場景求解|主從讀回|初始門角|門扇接觸|牆接觸)' "$DIR/sim.log" | tee -a "$DIR/run.log"
 
 say "[導航] map_server／scan_relay／tracker／gmpc（定版）／平滑器→選擇器→護盾"
+# P2（Codex 20261031）：啟動固定 sleep 改就緒字樣等待；順序不變、不並行。每項上限 BOOT_WAIT_S；逾時、該程序或模擬器退出 ⇒ 非零結束走 cleanup。
+# 字樣只是階段就緒訊號；資料新鮮度仍由 nav1 WAIT_ODOM、任務 fresh 起動、執行端核對負責。
+BOOT_WAIT_S=20
+pid_of(){ local i; for i in "${!NAMES[@]}"; do [ "${NAMES[$i]}" = "$1" ] && { echo "${PIDS[$i]}"; return; }; done; }
+boot_wait(){ local tag="$1"; shift; local t0 i j ok pids=() a _bw
+  t0=$(date +%s.%N)
+  while [ "$1" != "--" ]; do pids+=("$(pid_of "$1")"); shift; done; shift
+  for i in $(seq $((BOOT_WAIT_S * 10))); do
+    kill -0 "${PIDS[0]}" 2>/dev/null || { say "**啟動等待 $tag：模擬器已退出** ⇒ 中止"; exit 87; }
+    for j in "${pids[@]}"; do kill -0 "$j" 2>/dev/null || { say "**啟動等待 $tag：程序 $j 已退出** ⇒ 中止"; exit 87; }; done
+    ok=1; a=("$@"); while [ "${#a[@]}" -ge 2 ]; do grep -aqF "${a[1]}" "$DIR/${a[0]}.log" 2>/dev/null || ok=0; a=("${a[@]:2}"); done
+    [ "$ok" = 1 ] && { _bw=$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.2f", b-a}'); printf "%s\t%s\n" "$tag" "$_bw" >> "$DIR/boot_waits.tsv"; say "  就緒 $tag（${_bw} s）"; return 0; }
+    sleep 0.1
+  done
+  say "**啟動等待 $tag 逾時 ${BOOT_WAIT_S} s** ⇒ 中止"; exit 87; }
 spawn rsp ros2 run robot_state_publisher robot_state_publisher "$URDF" --ros-args -p use_sim_time:=true
 spawn tf_map ros2 run tf2_ros static_transform_publisher --x 0 --y 0 --z 0 --qx 0 --qy 0 --qz 0 --qw 1 --frame-id map --child-frame-id odom --ros-args -p use_sim_time:=true
 spawn map ros2 run nav2_map_server map_server --ros-args -p use_sim_time:=true -p yaml_filename:="$MAP"
-sleep 3
+boot_wait map_launched map -- map "map_server lifecycle node launched"
 spawn maplife ros2 run nav2_lifecycle_manager lifecycle_manager --ros-args -r __node:=lifecycle_manager_map -p use_sim_time:=true -p autostart:=true -p node_names:="['map_server']"
 spawn relay ros2 run ammr_bringup scan_relay --ros-args -p use_sim_time:=true
-sleep 3
+boot_wait map_active map maplife relay -- maplife "Managed nodes are active"
 spawn tracker ros2 run ammr_wholebody_mpc scan_obstacle_tracker --ros-args -p use_sim_time:=true -p scan_topic:=/scan -p map_topic:=/map -p global_frame:=odom -p publish_frame:=odom -p use_map_subtraction:=true -p cluster_gap:=0.30 -p max_radius:=1.20 -p min_cluster_pts:=2 -p static_window:=2.0 -p min_net_speed:=0.05 -p surface_max_pts:=4 -p surface_range:=2.5 -p surface_min_sep:=0.20
-sleep 3
+boot_wait tracker_map tracker relay -- tracker "map received"
 spawn gmpc python3 -u -c "
 import sys; sys.path.insert(0,'src/ammr_wholebody_mpc')
 sys.argv=['gmpc_node','--ros-args','-p','use_sim_time:=true','-p','pose_source:=odom','-p','global_frame:=odom','-p','pose_odom_topic:=/odom','-p','plan_topic:=/plan',
@@ -227,7 +242,7 @@ sys.argv=['gmpc_node','--ros-args','-p','use_sim_time:=true','-p','pose_source:=
  '-p','heading_enable:=true','-p','wheel_fit_mode:=project','-p','vx_min:=-0.35','-p','ax_max:=1.5','-p','ay_max:=1.0','-p','az_max:=2.0','-p','plan_blend_s:=0.0',
  '-p','reference_projection:=segment','-p','reference_monotonic:=true']
 from ammr_wholebody_mpc.gmpc_node import main; main()"
-sleep 4
+boot_wait gmpc_up gmpc -- gmpc "gmpc state -> no_plan"
 spawn smoother ros2 run nav2_velocity_smoother velocity_smoother --ros-args -p use_sim_time:=true -p max_velocity:="[0.35, 0.25, 0.80]" -p min_velocity:="[-0.35, -0.25, -0.80]" -p max_accel:="[1.5, 1.0, 2.0]" -p max_decel:="[-1.5, -1.0, -2.0]" -p feedback:=OPEN_LOOP -p odom_topic:=/odom -r cmd_vel:=cmd_vel_nav -r cmd_vel_smoothed:=cmd_vel_pre_mux
 spawn smlife ros2 run nav2_lifecycle_manager lifecycle_manager --ros-args -r __node:=lifecycle_manager_smoother -p use_sim_time:=true -p autostart:=true -p node_names:="['velocity_smoother']"
 # **確認平滑器真的啟用。** 生命週期服務偶爾回應逾時（motm_180116：
@@ -255,11 +270,11 @@ if [ "$SM_OK" != 1 ]; then
     say "**平滑器仍未啟用（${ST:-讀不到}）⇒ 中止，不空跑**"; exit 86; fi
   say "  平滑器已手動啟用"
 fi
-sleep 3
+kill -0 "$(pid_of smoother)" 2>/dev/null || { say "**平滑器程序已退出** ⇒ 中止"; exit 87; }
 spawn gmpc_diag ros2 topic echo --csv /gmpc/diag std_msgs/msg/Float32MultiArray
 spawn shield ros2 run ammr_wholebody_mpc scan_safety_shield --ros-args -p use_sim_time:=true -p enable:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_shield -p cmd_out_topic:=/cmd_vel -p robot_radius:=0.39 -p self_return_radius:=0.30 -p alpha:=2.0 -p a_brake:=6.25 -p tau:=0.15 -p vx_max:=0.2775 -p vy_max:=0.2775 -p wz_max:=1.1327
 spawn shield_shadow ros2 run ammr_wholebody_mpc scan_safety_shield --ros-args -r __node:=scan_safety_shield_shadow -r /shield/diag:=/shield_shadow/diag -p use_sim_time:=true -p enable:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_mux -p cmd_out_topic:=/cmd_vel_shadow -p robot_radius:=0.39 -p self_return_radius:=0.30 -p alpha:=2.0 -p a_brake:=6.25 -p tau:=0.15 -p vx_max:=0.2775 -p vy_max:=0.2775 -p wz_max:=1.1327
-sleep 3
+boot_wait shields shield shield_shadow -- shield "scan shield ON" shield_shadow "scan shield ON"
 spawn nav1 python3 -u evaluation/door_nav1_mission_node_r11.py --bumpless --start-turn --goal="$STAND" --out "$DIR/nav1.json" --rolling --nav-timeout-s 150
 spawn wholebody python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --motm --motm-v-cap 0.030 --motm-a-ref 0.002 --motm-k-yaw 1.0 --motm-w-cap 0.10 --motm-v-creep 0.0 --motm-overshoot 0.0 --pos-tol 0.005 --stow-q "$K2_READY" --park="$STAND" --q-unfold="$Q_PRE" --out "$DIR/wholebody.json"
 spawn task python3 -u evaluation/door_coopen_core_task_node10p.py --subtask-mode --m4r --rolling --roll-goal="$STAND" --nav-start --wait-handover-timeout-s 240 --out "$DIR/task.json" --run-id "$RUN_ID" --grasp-basis "$GB" --w1b-params "$PRM" --corridor-table "$W1B_TABLE" --finger-loss-cont --settle-cont --regrasp --regrasp-ref "$REF" --w2-mode-run-id "$RUN_ID" --wall-total-s 1500
