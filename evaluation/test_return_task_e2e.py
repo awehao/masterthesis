@@ -13,7 +13,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rosgraph_msgs.msg import Clock
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, Vector3Stamped
 from nav_msgs.msg import Path
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Float64MultiArray, String
@@ -35,8 +35,9 @@ class Fake(Node):
         self.clk_pub = self.create_publisher(Clock, '/clock', 10)
         self.hold_ack = self.create_publisher(String, '/return/offset_hold_ack', 10)      # 代替求解端確認 d̂ 保持
         self.nav_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.plan_seen = False
-        self.create_subscription(Path, '/plan', lambda m: setattr(self, 'plan_seen', True), QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.plan_seen = None
+        self.head_pub = self.create_publisher(Vector3Stamped, '/gmpc/heading', 10)
+        self.create_subscription(Path, '/plan', lambda m: setattr(self, 'plan_seen', m), QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.create_subscription(Bool, '/return/offset_hold', lambda m: self.hold_ack.publish(String(data=json.dumps({'hold': bool(m.data), 'n_upd': 0, 'd_hat': [0.0] * 6}))), 10)
         self.q, self.tgt, self.started, self.ho_req = [], None, False, None
         self.create_subscription(String, '/return/req', lambda m: self.q.append(json.loads(m.data)), 100)
@@ -117,7 +118,11 @@ def main():
             nd.ho_pub.publish(String(data=json.dumps({'owner': owner, 'step': n, 'sim_t': t, 'pending': None})))
             if nd.started:
                 nd.ws_pub.publish(Float64MultiArray(data=[1.0]))
-        if nd.plan_seen:                                                           # 代替導航：收到計畫後才有非零命令
+        if nd.plan_seen is not None and n % 5 == 0:                                # 代替導航：收到計畫後弦方向對準、才有非零命令
+            _p0, _p1 = nd.plan_seen.poses[0].pose.position, nd.plan_seen.poses[-1 if len(nd.plan_seen.poses) < 6 else 5].pose.position
+            _h = Vector3Stamped()
+            _h.vector.x = math.atan2(_p1.y - _p0.y, _p1.x - _p0.x)
+            nd.head_pub.publish(_h)
             _tw = Twist()
             _tw.linear.x = 0.1
             nd.nav_pub.publish(_tw)

@@ -15,7 +15,7 @@ import time
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PoseStamped, Twist, Vector3Stamped
 from nav_msgs.msg import Path
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from rosgraph_msgs.msg import Clock
@@ -33,6 +33,8 @@ from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa:
 
 
 WD_S = 1.0                       # 狀態／時鐘看門狗（牆鐘，只認前進）
+HEAD_TOL = 0.35                  # 弦方向與本段計畫首段方向容差（rad）
+NAV_READY_V = 0.01               # 導航備妥的最小命令速度（m/s）
 LAG_S = 0.2                      # 狀態相對 /clock 落後或超前的界線（模擬時間，同 GeomMonitorConfig.age_max_s）
 
 
@@ -57,6 +59,22 @@ def rot(x, d):
     y = np.array(x, float)
     y[0], y[1], y[2] = c * x[0] - s * x[1], s * x[0] + c * x[1], x[2] + d
     return y
+
+
+def wrap(a):
+    return math.atan2(math.sin(a), math.cos(a))
+
+
+def seg_dist(p, a, b):
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    u = float(np.clip((p - a) @ (b - a) / ((b - a) @ (b - a)), 0.0, 1.0))
+    return float(np.linalg.norm(p - (a + u * (b - a))))
+
+
+def nav_clear(xy, q_deg):
+    """底盤中心到門板（鉸鏈原點、寬 1.0、向 −y 開）與門洞兩側牆的最小距離（m）。"""
+    q = math.radians(q_deg)
+    return min(seg_dist(xy, (0.0, 0.0), (math.cos(q), -math.sin(q))), seg_dist(xy, (1.0, 0.0), (6.0, 0.0)), seg_dist(xy, (-6.0, 0.0), (0.0, 0.0)))
 
 
 def plan_msg(xy, wps):
@@ -88,8 +106,9 @@ class Nd(Node):
         self.ho_pub = self.create_publisher(String, '/handover/request', 10)
         self.hold_pub = self.create_publisher(Bool, '/return/offset_hold', lat)
         self.plan_pub = self.create_publisher(Path, '/plan', QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-        self.nav_v, self.nav_wall = 0.0, None
+        self.plan_h, self.n_adopt, self.n_cmd = None, 0, 0
         self.create_subscription(Twist, '/cmd_vel', self._nav_cmd, 10)
+        self.create_subscription(Vector3Stamped, '/gmpc/heading', self._nav_head, 10)
         self.hold_ack = None
         self.create_subscription(String, '/return/offset_hold_ack', lambda m: setattr(self, 'hold_ack', json.loads(m.data)), 10)
         self.sync, self.state, self.hs, self.n_ws = None, None, None, 0
@@ -106,8 +125,13 @@ class Nd(Node):
             return                                                          # 重複舊狀態不刷新
         self.sync, self.sync_wall = d, time.monotonic()
 
-    def _nav_cmd(self, m):
-        self.nav_v, self.nav_wall = math.hypot(m.linear.x, m.linear.y), time.monotonic()
+    def _nav_head(self, m):                                                     # GMPC 弦方向對準本段計畫＝已採用；只在發計畫後計
+        if self.plan_h is not None and abs(wrap(m.vector.x - self.plan_h)) <= HEAD_TOL:
+            self.n_adopt += 1
+
+    def _nav_cmd(self, m):                                                      # 採用確認後才逐筆計新收到的非零命令（不重複計快取）
+        if self.n_adopt >= 3:
+            self.n_cmd = self.n_cmd + 1 if math.hypot(m.linear.x, m.linear.y) >= NAV_READY_V else 0
 
     def _clk(self, m):
         t = float(m.clock.sec) + 1e-9 * float(m.clock.nanosec)
@@ -131,8 +155,10 @@ def main():
     ap.add_argument('--end-row', type=int, default=-1)                   # 末段只走到此列（列號相對該段；rt_21 基準 S8 第 800 列起距牆／門板 ≥0.69 m）
     ap.add_argument('--end-skip', type=int, default=1)                   # 末段每拍進幾列（無接觸縮時）
     ap.add_argument('--nav-wp', default='')                              # 交權前先發本段導航計畫，確認導航有非零命令才請求交棒
-    ap.add_argument('--nav-ready-v', type=float, default=0.01)
     ap.add_argument('--nav-ready-s', type=float, default=15.0)
+    ap.add_argument('--nav-entry-clear', type=float, default=0.69)       # 實測入口：底盤中心距門板／牆（GMPC 動態 margin）
+    ap.add_argument('--nav-arm-tol', type=float, default=0.02)
+    ap.add_argument('--pre-nav-decel-s', type=float, default=1.5)        # 末列後沿參考有界減速，停穩才發計畫
     ap.add_argument('--tcp-backoff-m', type=float, default=0.0)
     ap.add_argument('--rel-backoff-v', type=float, default=0.008)        # 放手段 TCP 沿工具軸主動退（放手後門漂移朝掌面：rt_12、rt_16）
     ap.add_argument('--rel-backoff-max', type=float, default=0.012)
@@ -429,30 +455,43 @@ def main():
                     go_next(sn)
                 elif a.nav_wp:
                     phase = 'PRE_NAV'
-                    wait['t'], wait['n'], wait['ns'] = t, 0, -1
-                    wait['p'] = plan_msg(x_m[:2], a.nav_wp)
+                    wait['t'], wait['ns'], wait['r'], wait['p'] = t, -1, float(i_end), None
                     ev(t, to='PRE_NAV', x=[round(float(v), 3) for v in x_m[:3]])
                 else:
                     nd.req(kind='done')
                     phase = 'TO_NAV'
                     wait['t'] = t
                     ev(t, to='TO_NAV', q=q_d, x=[round(float(v), 3) for v in x_m[:3]])
-            elif phase == 'PRE_NAV':                                           # 全身保持末列；本段計畫送達且導航確有非零命令才請求交棒（舊計畫的新鮮命令不算）
+            elif phase == 'PRE_NAV':                                           # 沿參考有界減速→全身保持→本段計畫送達、GMPC 採用、確有新命令、實測入口成立，才請求交棒
+                _dec = max(0.0, 1.0 - (t - wait['t']) / a.pre_nav_decel_s)
+                if _dec > 0.0:
+                    wait['r'] = min(wait['r'] + _dec, float(len(rows) - 1))
+                    i_end = int(wait['r'])
                 pub_target(tcp_ref(i_end))
-                nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref, vref=[0.0, 0.0, 0.0], w_qn=a.w_qn, q_nom=[float(v) for v in X[i_end][3:]], w_a=a.w_a, w_p=a.w_p)))
-                _ns = nd.plan_pub.get_subscription_count()
-                if _ns > wait['ns']:
-                    nd.plan_pub.publish(wait['p'])
-                    wait['ns'] = _ns
-                _fresh = nd.nav_wall is not None and time.monotonic() - nd.nav_wall < 0.3 and nd.nav_v >= a.nav_ready_v
-                wait['n'] = wait['n'] + 1 if _fresh else 0
-                if wait['n'] >= 5:
-                    nd.req(kind='done')
-                    phase = 'TO_NAV'
-                    wait['t'] = t
-                    ev(t, to='TO_NAV', q=q_d, x=[round(float(v), 3) for v in x_m[:3]], nav_v=nd.nav_v)
-                elif t - wait['t'] > a.nav_ready_s:
-                    return fail(t, 'nav_plan_not_ready')
+                x0, x1 = xref(max(i_end - 1, 0)), xref(i_end)
+                _dv = (x1[:2] - x0[:2]) / 0.05 * _dec
+                _vx, _vy = MC.world_to_body(float(_dv[0]), float(_dv[1]), float(x_m[2]))
+                nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref, vref=[_vx, _vy, wrap(x1[2] - x0[2]) / 0.05 * _dec], w_qn=a.w_qn, q_nom=[float(v) for v in x1[3:]], w_a=a.w_a, w_p=a.w_p)))
+                if _dec <= 0.0:
+                    if wait['p'] is None:
+                        wait['p'] = plan_msg(x_m[:2], a.nav_wp)
+                        _w0 = [float(v) for v in a.nav_wp.split(';')[0].split(',')]
+                        nd.plan_h = math.atan2(_w0[1] - float(x_m[1]), _w0[0] - float(x_m[0]))
+                        nd.n_adopt, nd.n_cmd = 0, 0
+                        ev(t, plan_sent=True, x=[round(float(v), 3) for v in x_m[:3]], h=nd.plan_h)
+                    _ns = nd.plan_pub.get_subscription_count()
+                    if _ns > wait['ns']:
+                        nd.plan_pub.publish(wait['p'])
+                        wait['ns'] = _ns
+                    _cl = nav_clear(x_m[:2], q_d)
+                    _ae = float(np.max(np.abs(x_m[3:] - X[i_end][3:])))
+                    if nd.n_cmd >= 5 and _cl >= a.nav_entry_clear and _ae <= a.nav_arm_tol:
+                        nd.req(kind='done')
+                        phase = 'TO_NAV'
+                        wait['t'] = t
+                        ev(t, to='TO_NAV', q=q_d, x=[round(float(v), 3) for v in x_m[:3]], n_adopt=nd.n_adopt, n_cmd=nd.n_cmd, clear=_cl, arm_err=_ae)
+                    elif t - wait['t'] > a.pre_nav_decel_s + a.nav_ready_s:
+                        return fail(t, f'nav_entry_not_ready:adopt{nd.n_adopt}/cmd{nd.n_cmd}/clear{_cl:.3f}/arm{_ae:.3f}')
             elif phase == 'TO_NAV':
                 pub_target(tcp_ref(i_end))
                 own = str((nd.hs or {}).get('owner', '')).lower()
