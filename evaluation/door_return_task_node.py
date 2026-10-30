@@ -166,7 +166,8 @@ def main():
     ap.add_argument('--nav-wp', default='')                              # 交權前先發本段導航計畫，確認導航有非零命令才請求交棒
     ap.add_argument('--nav-ready-s', type=float, default=15.0)
     ap.add_argument('--nav-entry-clear', type=float, default=0.69)       # 實測入口：底盤中心距門板／牆（GMPC 動態 margin）
-    ap.add_argument('--nav-arm-tol', type=float, default=0.02)
+    ap.add_argument('--nav-arm-tol', type=float, default=0.015)          # 對 --nav-stow；下一段交棒閘門上限 0.02 rad
+    ap.add_argument('--nav-stow', default='0,0,0.15,0,-1.10,0')
     ap.add_argument('--pre-nav-decel-s', type=float, default=1.5)        # 末列後沿參考有界減速，停穩才發計畫
     ap.add_argument('--tcp-backoff-m', type=float, default=0.0)
     ap.add_argument('--rel-backoff-v', type=float, default=0.008)        # 放手段 TCP 沿工具軸主動退（放手後門漂移朝掌面：rt_12、rt_16）
@@ -476,11 +477,13 @@ def main():
                 if _dec > 0.0:
                     wait['r'] = min(wait['r'] + _dec, float(len(rows) - 1))
                     i_end = int(wait['r'])
-                pub_target(tcp_ref(i_end))
+                _qs = np.array([float(v) for v in a.nav_stow.split(',')])
+                # 減速中沿參考；停穩後 TCP 目標＝實測底盤＋收攏姿態（參考列的 TCP 會在底盤有誤差時把手臂拉離收攏：rt_22 交棒碼 51）
+                pub_target(tcp_ref(i_end) if _dec > 0.0 else K.fk(np.r_[x_m[:3], _qs], 'link_tcp'))
                 x0, x1 = xref(max(i_end - 1, 0)), xref(i_end)
                 _dv = (x1[:2] - x0[:2]) / 0.05 * _dec
                 _vx, _vy = MC.world_to_body(float(_dv[0]), float(_dv[1]), float(x_m[2]))
-                nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref, vref=[_vx, _vy, wrap(x1[2] - x0[2]) / 0.05 * _dec], w_qn=a.w_qn, q_nom=[float(v) for v in x1[3:]], w_a=a.w_a, w_p=a.w_p)))
+                nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref, vref=[_vx, _vy, wrap(x1[2] - x0[2]) / 0.05 * _dec], w_qn=a.w_qn, q_nom=[float(v) for v in (x1[3:] if _dec > 0.0 else _qs)], w_a=a.w_a, w_p=a.w_p)))
                 if _dec <= 0.0:
                     if wait['p'] is None:
                         wait['p'] = plan_msg(x_m[:2], a.nav_wp)
@@ -496,7 +499,7 @@ def main():
                         nd.plan_pub.publish(wait['p'])
                         wait['ns'] = _ns
                     _cl = nav_clear(x_m[:2], q_d)
-                    _ae = float(np.max(np.abs(x_m[3:] - X[i_end][3:])))
+                    _ae = float(np.max(np.abs(x_m[3:] - _qs)))
                     if nd.n_cmd >= 5 and _cl >= a.nav_entry_clear and _ae <= a.nav_arm_tol:
                         nd.req(kind='done')
                         phase = 'TO_NAV'
