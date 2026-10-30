@@ -103,6 +103,7 @@ def main():
     ap.add_argument('--op', type=int, required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--bridge-s', type=float, default=4.0)
+    ap.add_argument('--tcp-backoff-m', type=float, default=0.0)
     ap.add_argument('--bridge-speed', type=float, default=0.015)         # 橋接時長下限＝入口位置差／此值
     ap.add_argument('--bridge-k', type=float, default=0.5)               # 橋接底盤 P 增益（rt_6 B：參考速度 0 時底盤不走、手臂硬伸）
     ap.add_argument('--bridge-v-max', type=float, default=0.03)
@@ -240,6 +241,11 @@ def main():
                 f = float(np.clip(np.interp(i, [i_of[move_][0], i_of[move_][-1]], [0.0, 1.0]), 0, 1))
                 return rot(X[i], (delta or 0.0) * (1.0 - f))
 
+            def tcp_ref(i):
+                T = K.fk(xref(i), 'link_tcp')
+                T[:3, 3] -= a.tcp_backoff_m * T[:3, 2]                         # 沿工具軸退（rt_9：實際比參考深約 1.5 mm，掌面間隙翻過監看）
+                return T
+
             def pub_target(T):
                 nd.tgt_pub.publish(Float64MultiArray(data=[float(v) for v in np.asarray(T, float).reshape(-1)]))
 
@@ -258,7 +264,7 @@ def main():
                                                                          w_a=None if soft else a.w_a, w_p=None if soft else a.w_p)))
             if phase == 'ENTRY':
                 delta = math.radians(float(Qd[0]) - q_d)
-                pub_target(K.fk(xref(0), 'link_tcp'))
+                pub_target(tcp_ref(0))
                 own = str((nd.hs or {}).get('owner', '')).lower()
                 bpe = float(np.hypot(*(x_m[:2] - xref(0)[:2])))
                 ape = float(np.max(np.abs(x_m[3:] - X[0][3:])))
@@ -272,7 +278,7 @@ def main():
                 if time.monotonic() - w0 > a.entry_timeout_s:
                     return fail(t, 'entry_timeout')
             elif phase == 'BRIDGE':
-                Tr = K.fk(xref(0), 'link_tcp')
+                Tr = tcp_ref(0)
                 f = min(1.0, (t - t_b0) / bridge_s)
                 f = 10 * f ** 3 - 15 * f ** 4 + 6 * f ** 5
                 T = Tr.copy()
@@ -296,7 +302,7 @@ def main():
             elif phase == 'RUN':
                 sn = st[idx]
                 last = idx == i_of[sn][-1]
-                pub_target(K.fk(xref(idx), 'link_tcp'))
+                pub_target(tcp_ref(idx))
                 pub_coord(idx, contact=sn in (grp + '3', move_, grp + '5'))
                 tgt_row = idx
                 gs = (nd.state or {}).get('state')
@@ -324,7 +330,7 @@ def main():
                             if not hold_noted:
                                 hold_noted = True
                                 ev(t, offset_hold=nd.hold_ack)
-                            nd.req(kind='close', T=[float(v) for v in K.fk(xref(idx), 'link_tcp').reshape(-1)])
+                            nd.req(kind='close', T=[float(v) for v in tcp_ref(idx).reshape(-1)])
                             if gs == 'CLOSING':
                                 ev(t, gate=gs)
                                 go_next(sn)
@@ -369,7 +375,7 @@ def main():
                     wait['t'] = t
                     ev(t, to='TO_NAV', q=q_d, x=[round(float(v), 3) for v in x_m[:3]])
             elif phase == 'TO_NAV':
-                pub_target(K.fk(xref(len(rows) - 1), 'link_tcp'))
+                pub_target(tcp_ref(len(rows) - 1))
                 own = str((nd.hs or {}).get('owner', '')).lower()
                 if own == 'nav' and not (nd.hs or {}).get('pending'):
                     ev(t, owner='nav', step=(nd.hs or {}).get('step'))
