@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mp
 import door_k3m_geom_monitor as GM                     # noqa: E402
 import door_k3m_geom_monitor_v3 as GM3                 # noqa: E402
 import door_regrasp_geom_switch as GS                  # noqa: E402
+import door_return_gates as DRG                        # noqa: E402
 import motm_coord as MC                                # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
 
@@ -162,6 +163,8 @@ def main():
     ap.add_argument('--pre-nav-decel-s', type=float, default=1.5)        # 末列後沿參考有界減速，停穩才發計畫
     ap.add_argument('--pre-nav-roll', action='store_true')               # 不減速：沿參考續走，途中發計畫、備妥即滾動交棒
     ap.add_argument('--tcp-backoff-m', type=float, default=0.0)
+    ap.add_argument('--pre-rel-backoff-m', type=float, default=0.0)      # 只 B：抓持建立後、移動段末加入的工具軸預退，帶入放手與退離（rt_34：靜態 3 mm 抓持 9 s）
+    ap.add_argument('--pre-rel-backoff-s', type=float, default=1.5)
     ap.add_argument('--rel-backoff-v', type=float, default=0.008)        # 放手段 TCP 沿工具軸主動退（放手後門漂移朝掌面：rt_12、rt_16）
     ap.add_argument('--rel-backoff-max', type=float, default=0.012)
     ap.add_argument('--rel-backoff-delay-s', type=float, default=0.2)
@@ -203,6 +206,9 @@ def main():
         i_of[name[-1]] = i_of[name[-1]][:a.end_row + 1]
     i_end = i_of[name[-1]][-1]                                                 # 本趟實際末列（TO_NAV 目標不得追被截掉的舊終點）
     move_ = grp + '4'
+    n_pre = int(round(a.pre_rel_backoff_s / 0.05))
+    if a.pre_rel_backoff_m > 0.0 and (a.seg != 'B' or not 1 <= n_pre < len(i_of[move_])):
+        raise SystemExit('--pre-rel-backoff-m 只用於 B，且時長須短於移動段')
     K = WholeBodyKinematics.from_urdf_file(os.path.join(HERE, 'models', 'omni_bot_wholebody_expanded.urdf'))
     g = json.load(open(os.path.join(HERE, 'results', 'door', 'door_k3m_offline_geom_monitor_r3.json')))
     cfg = GM.GeomMonitorConfig(v_floor=dict(g['v_floor_registered']), ds_err=dict(g['downsampling']['ds_err_registered']))
@@ -240,6 +246,7 @@ def main():
     fresh, n_fresh = False, [0, -1.0]
     last_arm, t_arm0, ready = 0.0, None, False
     t_rel, t_s5 = None, None
+    pre_noted = False
     hold, hold_noted = False, False                                            # 求解端 d̂ 保持：閉爪請求起、退出抓持止（rt_5：接觸中更新致側向力累積）
     if True:
         while rclpy.ok():
@@ -303,6 +310,9 @@ def main():
                 rep['monitor']['warn_log'].append({'t': t, 'phase': phase, 'stage': st[idx] if phase == 'RUN' else None, 'row': idx, 'q': q_d, 'gate': (nd.state or {}).get('state'),
                                                    'x': [round(float(v), 4) for v in x_m[:3]], 'classes': {k_: {'d': v_['d'], 'd_pred': v_['d_pred'], 'who': v_['who'], 'rate': v_['closing_rate']} for k_, v_ in (det.get('classes') or {}).items()}})
             for c_, v_ in (det.get('classes') or {}).items():
+                if float(v_['d_pred']) < rep['monitor']['pred_min'].get(c_, 9.0):
+                    rep['monitor'].setdefault('pred_min_at', {})[c_] = {'t': t, 'stage': st[idx] if phase == 'RUN' else None, 'row': idx, 'q': q_d, 'gate': (nd.state or {}).get('state'),
+                                                                        'd': v_['d'], 'who': v_['who'], 'rate': v_['closing_rate']}
                 rep['monitor']['pred_min'][c_] = min(rep['monitor']['pred_min'].get(c_, 9.0), float(v_['d_pred']))
             if dec == 'stop':
                 rep['monitor']['n_stop'] += 1
@@ -321,8 +331,9 @@ def main():
             def tcp_ref(i):
                 T = K.fk(xref(i), 'link_tcp')
                 _xb = 0.0 if t_rel is None else float(np.clip((t - t_rel) * a.rel_backoff_v, 0.0, a.rel_backoff_max))
+                _xp = DRG.pre_release_offset(i, i_of[move_][-1], n_pre, a.pre_rel_backoff_m)
                 _f7 = float(np.clip(np.interp(i, [i_of[grp + '7'][0], i_of[grp + '7'][-1]], [1.0, 0.0]), 0.0, 1.0))  # 收臂段歸零，終點回參考收攏姿態（rt_17 B 交棒碼 51）
-                T[:3, 3] -= (a.tcp_backoff_m + _xb) * _f7 * T[:3, 2]           # 沿工具軸退（rt_9：實際比參考深約 1.5 mm，掌面間隙翻過監看）
+                T[:3, 3] -= (a.tcp_backoff_m + _xp + _xb) * _f7 * T[:3, 2]           # 沿工具軸退（rt_9：實際比參考深約 1.5 mm，掌面間隙翻過監看）
                 return T
 
             def pub_target(T):
@@ -436,9 +447,14 @@ def main():
                     _qr = float(Qd[idx]) - math.degrees((delta or 0.0) * (1.0 - _f))
                     if abs(q_d - _qr) > a.door_track_deg:
                         return fail(t, f'door_track:{q_d:.2f} vs {_qr:.2f}')
+                    if a.pre_rel_backoff_m > 0.0 and idx == i_of[move_][-1] - n_pre:
+                        ev(t, pre_rel_start=True, q=q_d, row=idx)
                     if not last:
                         idx += 1
                     else:
+                        if a.pre_rel_backoff_m > 0.0 and not pre_noted:                # 預退到位後才請求張爪
+                            pre_noted = True
+                            ev(t, pre_rel_done=True, q=q_d, row=idx)
                         nd.req(kind='open')
                         if gs == 'OPENING':
                             ev(t, gate=gs, q=q_d)

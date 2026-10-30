@@ -334,6 +334,17 @@ def t_arm_idempotent_and_second_op_fresh_timers():
     assert s.run(3.0, grip('bar_out'), qf=(0.002, 0.002), ramp=True) is None and s.g.state == 'GRASPED'
 
 
+def t_pre_release_offset():
+    f = G.pre_release_offset
+    assert f(0, 100, 30, 0.0) == 0.0 and f(100, 100, 30, 0.0) == 0.0
+    assert f(70, 100, 30, 0.001) == 0.0 and f(0, 100, 30, 0.001) == 0.0
+    assert abs(f(100, 100, 30, 0.001) - 0.001) < 1e-12 and f(150, 100, 30, 0.001) == f(100, 100, 30, 0.001)
+    y = [f(i, 100, 30, 0.001) for i in range(60, 120)]
+    d = [b - a for a, b in zip(y, y[1:])]
+    assert min(d) >= 0.0 and max(d) <= 1.876 * 0.001 / 30
+    assert d[10] < 5e-7 and d[39] < 5e-7                                        # 端點速度近 0
+
+
 if __name__ == '__main__':
     fs = [(k, v) for k, v in list(globals().items()) if k.startswith('t_') and callable(v)]
     for k, f in fs:

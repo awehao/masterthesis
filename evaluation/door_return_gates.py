@@ -43,6 +43,14 @@ def forces(rec):
     return {'fingers': fg, 'other': other}
 
 
+def pre_release_offset(i, i_end, n_rows, m):
+    """移動段末預退量（m）：列 i_end−n_rows→i_end 由 0 平滑升到 m（端點速度 0），之後維持 m。"""
+    if m <= 0.0:
+        return 0.0
+    f = min(1.0, max(0.0, (i - (i_end - n_rows)) / n_rows))
+    return m * (10 * f ** 3 - 15 * f ** 4 + 6 * f ** 5)
+
+
 class ReturnGate:
     def __init__(self, contact_min_n=0.5, contact_abort_n=0.1, hold_s=2.0, grasp_timeout_s=10.0, release_hold_s=0.5, finger_loss_s=0.2,
                  door_rate_abort=0.05, wrist_abort_n=30.0, invalid_max_s=0.2, hb_max_s=1.0, tcp_tol=0.005, finger_open=0.0089, finger_closed=0.0,
