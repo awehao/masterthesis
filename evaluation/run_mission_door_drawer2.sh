@@ -378,7 +378,19 @@ print(f'{m.position.x:.6f},{m.position.y:.6f},{y:.6f}')")
         sleep 2
         say "[抽屜段] 編排節點（最多 900 s 牆鐘）"
         spawn mission_d python3 -u evaluation/drawer_mission_node.py --out "$DIR/mission_drawer.json" --start="$DSTART_XY" --park="$D_PARK_XY" --park-yaw "$D_PARK_YAW" --stow-q="$D_STOW" --slow-zone 0.0
-        wait_or_stop "$(pid_of mission_d)" 900 10; RC_DMISSION=$STOP_RC
+        _MPID=$(pid_of mission_d); _w=0; _abort_why=""                          # 編排、模擬器、包絡違反三者同看（不空等）
+        while kill -0 "$_MPID" 2>/dev/null; do
+          kill -0 "$SIM_PID" 2>/dev/null || { _abort_why="模擬器已結束"; break; }
+          grep -q '導航包絡違反' "$DIR/sim.log" && { _abort_why="導航包絡違反"; break; }
+          [ "$_w" -ge 900 ] && { _abort_why="編排逾時 900 s"; break; }
+          sleep 1; _w=$((_w+1))
+        done
+        if [ -n "$_abort_why" ]; then
+          say "**抽屜段中止**：$_abort_why ⇒ 結束編排（失敗）"
+          wait_or_stop "$_MPID" 15 5; RC_DMISSION=fail
+        else
+          wait "$_MPID" 2>/dev/null; RC_DMISSION=$?
+        fi
         grep -E '^\[(mission|task|drawer)\]' "$DIR/mission_d.log" 2>/dev/null | tail -12 | tee -a "$DIR/run.log"
         wait_or_stop "$(pid_of task_d)" 60 10
         wait_or_stop "$(pid_of solver_d)" 30 10

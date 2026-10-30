@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """r2（2026-10-30；mission_dd_1／2 抽屜段導航命令全零的真因：ex.step 漏傳 fingers ⇒ R2 線上包絡監看「手指讀值缺資料」fail-closed、首步即判違反，
 之後導航一律減速到零；且違反未處理（無聲）。我的實作錯誤）：r1 的版本化複本，只改：(1) ex.step 傳兩指量測（同門段 T5）；
-(2) 包絡違反 ⇒ 比照門段：中止閂鎖語義、受控停止並記錄（不再無聲輸出零）。
+(2) 包絡違反 ⇒ 記錄、取消交棒、發 /park/violation；**照常寫入 R2 回傳的減速命令**（既有變化率上限減到零），實際寫入連續 0.2 s 為零才結束（Codex m5d）。
 r1：門→抽屜同趟串接：抽屜段主迴圈（設計 results/specs/door_drawer_chain_s1_r1.md；Codex m5a 核可 S1 修正版）。
 由 isaac_door_k2_sim_ev9r8t.py 在門段主迴圈以 subtask_handoff 結束（控制者已交回導航）後呼叫；**同一 world／robot／命令鏈／執行層**，不重設任何狀態。
 主迴圈逐段照 isaac_drawer_room_sim.py（抽屜管線驗證過的那份）：命令入口（/wb_vel_cmd 一般路徑）、交棒請求、導航／減速段逾時、
@@ -267,12 +267,23 @@ def run_drawer_phase(c):
         _fq = [float(q_meas[fidx[j]]) for j in FJ] if len(FJ) == 2 else None          # r2：同門段 T5（R2 包絡監看需兩指）
         res = ex.step(step_id, t, a.physics_dt, nav_cmd=nav, glide_cmd=gld, q_arm_measured=q_arm, meas_vb=_mvb_now,
                       **({'fingers': _fq} if hasattr(ex, 'envelope') else {}))
-        if getattr(ex, 'env_violated', False) and 'nav_envelope_violation' not in rec:  # r2：包絡違反 ⇒ 受控停止（比照門段閂鎖）
-            rec['nav_envelope_violation'] = {'step': step_id, 'sim_t': t, 'first': dict(getattr(ex.envelope, 'first', None) or {})}
+        if getattr(ex, 'env_violated', False) and 'nav_envelope_violation' not in rec:  # r2：包絡違反 ⇒ 既有減速路徑到零再結束
+            rec['nav_envelope_violation'] = {'step': step_id, 'sim_t': t, 'first': dict(getattr(ex.envelope, 'first', None) or {}),
+                                             'base_cmd_at_detect': [float(x) for x in res.base_cmd]}
             ex.cancel_handover('導航包絡違反')
-            print(f"[drawer] **導航包絡違反**（閂鎖中止）@ step {step_id}：{rec['nav_envelope_violation']['first']} ⇒ 受控停止", flush=True)
-            rec['stop_reason'] = 'nav_envelope_violation'
-            break
+            node.park_vio_pub.publish(M['String'](data=json.dumps({'step': step_id, 't': t, 'why': 'nav_envelope_violation',
+                                                                    'first': rec['nav_envelope_violation']['first']}, default=float)))
+            print(f"[drawer] **導航包絡違反**（閂鎖）@ step {step_id}：{rec['nav_envelope_violation']['first']} ⇒ 既有減速路徑到零後停止", flush=True)
+        if 'nav_envelope_violation' in rec:
+            _z = max(abs(float(x)) for x in res.base_cmd) < 1e-9
+            _zs = rec['nav_envelope_violation'].setdefault('zero_since', None)
+            rec['nav_envelope_violation']['zero_since'] = (_zs if _zs is not None else t) if _z else None
+            if _z and t - rec['nav_envelope_violation']['zero_since'] >= 0.2 - 1e-9:
+                _lv1 = robot.get_linear_velocity()
+                rec['nav_envelope_violation'].update(stopped_t=t, base_lin_vel_world=[float(v) for v in _lv1])
+                print(f"[drawer] **包絡違反減速完成**（實際寫入連續 0.2 s 為零）@ sim {t:.2f} ⇒ 停止", flush=True)
+                rec['stop_reason'] = 'nav_envelope_violation_stopped'
+                break
 
         p_now, qn = robot.get_world_pose()
         yw = yaw_of(qn)
