@@ -299,6 +299,9 @@ def main():
             rep['monitor']['n'] += 1
             rep['monitor']['age_max'] = max(rep['monitor'].get('age_max', 0.0), _age)
             rep['monitor']['n_warn'] += dec == 'warn'
+            if dec == 'warn' and len(rep['monitor'].setdefault('warn_log', [])) < 50:   # 位置與餘裕：供品質對帳
+                rep['monitor']['warn_log'].append({'t': t, 'phase': phase, 'stage': st[idx] if phase == 'RUN' else None, 'row': idx, 'q': q_d, 'gate': (nd.state or {}).get('state'),
+                                                   'x': [round(float(v), 4) for v in x_m[:3]], 'classes': {k_: {'d': v_['d'], 'd_pred': v_['d_pred'], 'who': v_['who'], 'rate': v_['closing_rate']} for k_, v_ in (det.get('classes') or {}).items()}})
             for c_, v_ in (det.get('classes') or {}).items():
                 rep['monitor']['pred_min'][c_] = min(rep['monitor']['pred_min'].get(c_, 9.0), float(v_['d_pred']))
             if dec == 'stop':
