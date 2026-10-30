@@ -31,6 +31,7 @@ def main():
     ap.add_argument('--tol', type=float, default=0.25)
     ap.add_argument('--timeout-s', type=float, default=120.0)
     ap.add_argument('--out', required=True)
+    ap.add_argument('--watch', action='store_true')                      # 只看到達、不發計畫（計畫已由上一段在交權前發布）
     a = ap.parse_args()
     rclpy.init()
     nd = Nd()
@@ -54,7 +55,7 @@ def main():
     while rclpy.ok():
         rclpy.spin_once(nd, timeout_sec=0.05)
         ns = nd.pub.get_subscription_count()
-        if ns > ns0:
+        if ns > ns0 and not a.watch:
             nd.pub.publish(p)
             ns0 = ns
         d = math.hypot(nd.xy[0] - wp[-1][0], nd.xy[1] - wp[-1][1])

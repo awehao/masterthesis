@@ -34,7 +34,7 @@ class Fake(Node):
         self.ws_pub = self.create_publisher(Float64MultiArray, '/wgmpc/status', 10)
         self.clk_pub = self.create_publisher(Clock, '/clock', 10)
         self.hold_ack = self.create_publisher(String, '/return/offset_hold_ack', 10)      # 代替求解端確認 d̂ 保持
-        self.nav_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.nav_pub = self.create_publisher(Twist, '/cmd_vel_pre_mux', 10)
         self.plan_seen = None
         self.ack_pub = self.create_publisher(String, '/gmpc/plan_ack', 10)
         self.create_subscription(Path, '/plan', lambda m: setattr(self, 'plan_seen', m), QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))

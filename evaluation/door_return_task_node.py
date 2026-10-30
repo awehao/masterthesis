@@ -106,7 +106,7 @@ class Nd(Node):
         self.hold_pub = self.create_publisher(Bool, '/return/offset_hold', lat)
         self.plan_pub = self.create_publisher(Path, '/plan', QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.plan_id, self.adopted, self.n_cmd = None, False, 0
-        self.create_subscription(Twist, '/cmd_vel', self._nav_cmd, 10)
+        self.create_subscription(Twist, '/cmd_vel_pre_mux', self._nav_cmd, 10)      # 平滑器輸出：relay 待命時 /cmd_vel 是套用值，不能當導航命令
         self.create_subscription(String, '/gmpc/plan_ack', self._plan_ack, 10)
         self.hold_ack = None
         self.create_subscription(String, '/return/offset_hold_ack', lambda m: setattr(self, 'hold_ack', json.loads(m.data)), 10)
@@ -150,7 +150,8 @@ def main():
     ap.add_argument('--seg', required=True, choices=['A', 'B'])
     ap.add_argument('--op', type=int, required=True)
     ap.add_argument('--out', required=True)
-    ap.add_argument('--bridge-s', type=float, default=4.0)
+    ap.add_argument('--bridge-s', type=float, default=1.0)               # 下限；實際依入口偏差（底盤 bridge-speed、TCP bridge-tcp-speed）
+    ap.add_argument('--bridge-tcp-speed', type=float, default=0.01)
     ap.add_argument('--end-row', type=int, default=-1)                   # 末段只走到此列（列號相對該段；rt_21 基準 S8 第 800 列起距牆／門板 ≥0.69 m）
     ap.add_argument('--end-skip', type=int, default=1)                   # 末段每拍進幾列（無接觸縮時）
     ap.add_argument('--nav-wp', default='')                              # 交權前先發本段導航計畫，確認導航有非零命令才請求交棒
@@ -159,6 +160,7 @@ def main():
     ap.add_argument('--nav-arm-tol', type=float, default=0.015)          # 對 --nav-stow；下一段交棒閘門上限 0.02 rad
     ap.add_argument('--nav-stow', default='0,0,0.15,0,-1.10,0')
     ap.add_argument('--pre-nav-decel-s', type=float, default=1.5)        # 末列後沿參考有界減速，停穩才發計畫
+    ap.add_argument('--pre-nav-roll', action='store_true')               # 不減速：沿參考續走，途中發計畫、備妥即滾動交棒
     ap.add_argument('--tcp-backoff-m', type=float, default=0.0)
     ap.add_argument('--rel-backoff-v', type=float, default=0.008)        # 放手段 TCP 沿工具軸主動退（放手後門漂移朝掌面：rt_12、rt_16）
     ap.add_argument('--rel-backoff-max', type=float, default=0.012)
@@ -346,7 +348,7 @@ def main():
                     nd.start_pub.publish(Bool(data=True))
                     if nd.n_ws > 0:
                         T_b0, t_b0 = K.fk(x_m, 'link_tcp'), t
-                        bridge_s = max(a.bridge_s, bpe / a.bridge_speed)
+                        bridge_s = max(a.bridge_s, bpe / a.bridge_speed, float(np.linalg.norm(T_b0[:3, 3] - tcp_ref(0)[:3, 3])) / a.bridge_tcp_speed)
                         phase = 'BRIDGE'
                         ev(t, to='BRIDGE', bpe=bpe, ape=ape, delta_deg=math.degrees(delta))
                 if time.monotonic() - w0 > a.entry_timeout_s:
@@ -463,18 +465,19 @@ def main():
                     wait['t'] = t
                     ev(t, to='TO_NAV', q=q_d, x=[round(float(v), 3) for v in x_m[:3]])
             elif phase == 'PRE_NAV':                                           # 沿參考有界減速→全身保持→本段計畫送達、GMPC 採用、確有新命令、實測入口成立，才請求交棒
-                _dec = max(0.0, 1.0 - (t - wait['t']) / a.pre_nav_decel_s)
+                _dec = 1.0 if a.pre_nav_roll else max(0.0, 1.0 - (t - wait['t']) / a.pre_nav_decel_s)
                 if _dec > 0.0:
                     wait['r'] = min(wait['r'] + _dec, float(len(rows) - 1))
                     i_end = int(wait['r'])
                 _qs = np.array([float(v) for v in a.nav_stow.split(',')])
                 # 減速中沿參考；停穩後 TCP 目標＝實測底盤＋收攏姿態（參考列的 TCP 會在底盤有誤差時把手臂拉離收攏：rt_22 交棒碼 51）
-                pub_target(tcp_ref(i_end) if _dec > 0.0 else K.fk(np.r_[x_m[:3], _qs], 'link_tcp'))
+                pub_target(K.fk(np.r_[x_m[:3], _qs], 'link_tcp') if (a.pre_nav_roll or _dec <= 0.0) else tcp_ref(i_end))
                 x0, x1 = xref(max(i_end - 1, 0)), xref(i_end)
                 _dv = (x1[:2] - x0[:2]) / 0.05 * _dec
                 _vx, _vy = MC.world_to_body(float(_dv[0]), float(_dv[1]), float(x_m[2]))
-                nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref, vref=[_vx, _vy, wrap(x1[2] - x0[2]) / 0.05 * _dec], w_qn=a.w_qn, q_nom=[float(v) for v in (x1[3:] if _dec > 0.0 else _qs)], w_a=a.w_a, w_p=a.w_p)))
-                if _dec <= 0.0:
+                nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref_contact if a.pre_nav_roll else a.w_vref, vref=[_vx, _vy, wrap(x1[2] - x0[2]) / 0.05 * _dec], w_qn=a.w_qn,
+                                                                         q_nom=[float(v) for v in (_qs if (a.pre_nav_roll or _dec <= 0.0) else x1[3:])], w_a=a.w_a, w_p=a.w_p)))
+                if _dec <= 0.0 or a.pre_nav_roll:
                     if wait['p'] is None:
                         wait['p'] = plan_msg(x_m[:2], a.nav_wp)
                         _sec, _nsec = int(t), int((t % 1) * 1e9)
@@ -489,6 +492,7 @@ def main():
                     _ae = float(np.max(np.abs(x_m[3:] - _qs)))
                     if nd.n_cmd >= 5 and _cl >= a.nav_entry_clear and _ae <= a.nav_arm_tol:
                         wait['T_hold'], wait['q_hold'] = K.fk(np.r_[x_m[:3], _qs], 'link_tcp'), [float(v) for v in _qs]
+                        wait['v_hold'] = [_vx, _vy, wrap(x1[2] - x0[2]) / 0.05 * _dec] if a.pre_nav_roll else [0.0, 0.0, 0.0]
                         nd.req(kind='done')
                         phase = 'TO_NAV'
                         wait['t'] = t
@@ -497,8 +501,8 @@ def main():
                         return fail(t, f'nav_entry_not_ready:adopt{nd.adopted}/cmd{nd.n_cmd}/clear{_cl:.3f}/arm{_ae:.3f}')
             elif phase == 'TO_NAV':
                 if wait.get('T_hold') is not None:                             # 經 PRE_NAV：導航接管前維持同一收攏目標、名目姿態與零速度參考
-                    pub_target(wait['T_hold'])
-                    nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref, vref=[0.0, 0.0, 0.0], w_qn=a.w_qn, q_nom=wait['q_hold'], w_a=a.w_a, w_p=a.w_p)))
+                    pub_target(K.fk(np.r_[x_m[:3], wait['q_hold']], 'link_tcp') if a.pre_nav_roll else wait['T_hold'])   # 滾動時目標隨實測底盤，手臂維持收攏
+                    nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref_contact if a.pre_nav_roll else a.w_vref, vref=wait['v_hold'], w_qn=a.w_qn, q_nom=wait['q_hold'], w_a=a.w_a, w_p=a.w_p)))
                 else:
                     pub_target(tcp_ref(i_end))
                 own = str((nd.hs or {}).get('owner', '')).lower()
