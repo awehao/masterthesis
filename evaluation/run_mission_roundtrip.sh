@@ -458,7 +458,7 @@ n.create_subscription(Odometry,'/odom',lambda m:r.append(m),1)
 import time; t0=time.time()
 while not r and time.time()-t0<10: rclpy.spin_once(n,timeout_sec=0.1)
 p=r[-1].pose.pose.position; print(f'{p.x:.6f},{p.y:.6f}')"; }
-          entry(){ local seg="$1" op="$2" pxy="$3" pyaw="$4" qu="$5" qm="$6" tb="$7" wpc="$8"; local sxy; sxy=$(odom_xy); [ -n "$sxy" ] || { RET_WHY="讀不到 odom"; return 1; }
+          entry(){ local seg="$1" op="$2" pxy="$3" pyaw="$4" qu="$5" qm="$6" tb="$7" wpc="$8" es="${9:-}"; local sxy; sxy=$(odom_xy); [ -n "$sxy" ] || { RET_WHY="讀不到 odom"; return 1; }
             say "[返程 $seg] 進場：$sxy → 停位 $pxy,$pyaw；展臂 $qu"
             spawn adapter_$seg python3 -u evaluation/arm_vel_adapter.py --in-topic /wgmpc/cmd_world --consumer-node /door_k2_sim
             spawn solver_$seg python3 -u evaluation/wgmpc_wg2_node2.py --offset-hold-topic /return/offset_hold --continuous --wait-for-drawer-handover --arm-model setpoint --arm-ident "$ARM_IDENT" \
@@ -466,7 +466,7 @@ p=r[-1].pose.pose.position; print(f'{p.x:.6f},{p.y:.6f}')"; }
               --delay-comp-state-cycles 1.6 --delay-comp-cmd-cycles 1.0 --near-target-gamma 1.0 --w-s 0.001 --w-a 0.05 --w-s-arm 0.05 \
               --margin-guard --coord-topic /wgmpc/coord --offset-init-static --offset-free --reach-pos-m 0.005 --reach-rot-rad 0.02 --hold-s 2.0 \
               --duration-s 1200 --duration-sim-s 700 --u-prev-policy strict --assume-initial-rest --out "$DIR/align_solver_$seg.json"
-            spawn task_$seg python3 -u evaluation/door_return_task_node.py --ref "$RET_REF" --seg "$seg" --op "$op" --tcp-backoff-m "$tb" --w-p-contact "$wpc" --out "$DIR/task_return_$seg.json"
+            spawn task_$seg python3 -u evaluation/door_return_task_node.py --ref "$RET_REF" --seg "$seg" --op "$op" --tcp-backoff-m "$tb" --w-p-contact "$wpc" ${es:+--end-stage "$es"} --out "$DIR/task_return_$seg.json"
             local _rdy=0 _w; for _w in $(seq 400); do    # 任務端確認新鮮＋監看就緒才准起交棒鏈；未就緒不續進場，導航保持持有
               grep -q 'READY' "$DIR/task_$seg.log" 2>/dev/null && { _rdy=1; break; }
               kill -0 "$(pid_of task_$seg)" 2>/dev/null || break
@@ -494,8 +494,8 @@ p=r[-1].pose.pose.position; print(f'{p.x:.6f},{p.y:.6f}')"; }
             [ "$rc" = 0 ] && grep -q '"result": "DONE"' "$DIR/task_return_$seg.json" || { RET_WHY="${RET_WHY:-seg $seg 失敗 rc $rc}"; return 1; }; return 0; }
           pyget(){ python3 -c "import json;p=json.load(open('$RET_REF'))['entry']['$1'];print(','.join(f'{v:.6f}' for v in p['$2'][$3]))"; }
           { iso_ok && nav_leg stageA "-0.05,1.36" 120 && iso_ok \
-            && entry A 1 "$(pyget A park :2)" "$(pyget A park 2:)" "$(pyget A q_unfold :)" 0.35 0.001 50 && iso_ok \
-            && nav_leg stageB "0.90,-1.55;0.55,-1.86;0.2535,-1.8864" 150 \
+            && entry A 1 "$(pyget A park :2)" "$(pyget A park 2:)" "$(pyget A q_unfold :)" 0.35 0.001 50 S7 && iso_ok \
+            && nav_leg stageB "1.05,-0.90;0.90,-1.55;0.55,-1.86;0.2535,-1.8864" 150 \
             && entry B 2 "$(pyget B park :2)" "$(pyget B park 2:)" "$(pyget B q_unfold :)" 0.10 0.002 100 && iso_ok \
             && nav_leg home "-0.6,-2.8" 150; } && RET_OK=1
           say "[返程] 結束：RET_OK=$RET_OK ${RET_WHY}"

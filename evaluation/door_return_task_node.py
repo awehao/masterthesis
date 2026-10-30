@@ -103,6 +103,7 @@ def main():
     ap.add_argument('--op', type=int, required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--bridge-s', type=float, default=4.0)
+    ap.add_argument('--end-stage', default='')                           # 提前交導航：此段結束即 TO_NAV（S8 全程距門板 >0.5 m，無需低速參考）
     ap.add_argument('--tcp-backoff-m', type=float, default=0.0)
     ap.add_argument('--rel-backoff-v', type=float, default=0.008)        # 放手段 TCP 沿工具軸主動退（放手後門漂移朝掌面：rt_12、rt_16）
     ap.add_argument('--rel-backoff-max', type=float, default=0.012)
@@ -137,6 +138,8 @@ def main():
     rows, ent = P[a.seg], P['entry'][a.seg]
     bar, grp = ent['bar'], ('S', 'C')[a.seg == 'B']
     name = {'A': ('S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8'), 'B': ('C2', 'C3', 'C4', 'C5', 'C6', 'C7')}[a.seg]
+    if a.end_stage:
+        name = name[:name.index(a.end_stage) + 1]
     X = np.array([r['x'] for r in rows], float)
     Qd = np.array([r['q_deg'] for r in rows], float)
     st = [r['stage'][:2] for r in rows]
