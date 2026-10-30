@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# drawer_task_node4（2026-10-31；交棒銜接包）：drawer_task_node3 的版本化複本，只加 --done-at-handback：控制權交回導航即結束本任務（DONE），回程計畫已於收臂中發布，導航繼續走，不等到達；其餘不變。
+# drawer_task_node4（2026-10-31；交棒銜接包）：drawer_task_node3 的版本化複本，只加 --done-at-handback 與 --motm-w-vref-contact／--motm-w-p-contact（抽屜接觸段權重）。--done-at-handback：控制權交回導航即結束本任務（DONE），回程計畫已於收臂中發布，導航繼續走，不等到達；其餘不變。
 # drawer_task_node3（2026-10-30；mission_rt_11／rt_14 閉爪 5 Hz 極限環、夾持逾時）：drawer_task_node2 的版本化複本，只改：閉爪開始至 CLOSE_HOLD 結束（抽屜接觸全段）coord 的 w_a 改 0.05、w_p 維持 200；其餘不變。
 # drawer_task_node2（2026-10-30；mission_dd_7 RESTOW 走模組預設 (0,0,0,0,−π/2,0) 而非 STOW_F；Codex 20261030 m6b 第 2 點）：drawer_task_node 的版本化複本，
 #   只加 --stow-q（覆寫模組常數 STOW：RESTOW 目標與 stow_err 同一份），由原控制流程收攏；未給 ⇒ 與原版同。
@@ -407,6 +407,8 @@ def main():
     ap.add_argument('--motm-w-a', type=float, default=0.01)
     ap.add_argument('--motm-w-p', type=float, default=200.0)
     ap.add_argument('--done-at-handback', action='store_true')
+    ap.add_argument('--motm-w-vref-contact', type=float, default=None)
+    ap.add_argument('--motm-w-p-contact', type=float, default=100.0)
     ap.add_argument('--motm-w-a-grip', type=float, default=0.05)         # 閉爪至夾持成立：只加大 w_a、保留 w_p（rt_15 w_p 50 時受力起伏大、保持斷續）
     ap.add_argument('--motm-v-pull', type=float, default=0.018)
     ap.add_argument('--motm-a-travel', type=float, default=0.02,
@@ -564,13 +566,14 @@ def main():
             phase in ('NAVIGATE', 'UNFOLD')
             or (phase == 'ALIGN' and stage == 'pre'))
         m = Float64MultiArray()
-        _wv = (a.motm_w_vref_pre if (soft and a.motm_w_vref_pre is not None)
-               else a.motm_w_vref)
+        _cn = phase in ('OPEN', 'OPEN_HOLD', 'CLOSE', 'CLOSE_HOLD') and a.motm_w_vref_contact is not None   # 抽屜接觸段比照推門：底盤吃前饋，不靠 TCP 誤差帶動
+        _wv = (a.motm_w_vref_contact if _cn else
+               (a.motm_w_vref_pre if (soft and a.motm_w_vref_pre is not None) else a.motm_w_vref))
         m.data = MC.coord_msg(w_vref=_wv, vref=vr,
                               w_qn=wq if qn is not None else 0.0,
                               q_nom=qn if qn is not None else None,
                               w_a=None if soft else (a.motm_w_a_grip if ((phase == 'ENGAGE_WAIT' and close_t0 is not None) or phase in ('OPEN', 'OPEN_HOLD', 'CLOSE', 'CLOSE_HOLD')) else a.motm_w_a),
-                              w_p=None if soft else a.motm_w_p)
+                              w_p=None if soft else (a.motm_w_p_contact if _cn else a.motm_w_p))
         nd.coord_pub.publish(m)
         if int(st * 10) % 2 == 0:
             rep['motm_trace'].append({
