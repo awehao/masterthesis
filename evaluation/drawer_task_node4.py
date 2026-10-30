@@ -523,7 +523,7 @@ def main():
         """本相位的 (底盤參考速度目標, q_nom, w_qn)。"""
         yaw = nd.pose[2]
         if a.motm_grip_stop and phase == 'ENGAGE_WAIT' and close_t0 is not None:
-            return np.zeros(3), None, 0.0                                       # 閉爪起底盤參考歸零（經既有斜坡）；w_vref 1 下續走會剪切爪子（rt_31）
+            return np.zeros(3), None, 0.0                                       # 閉爪起底盤參考歸零（經既有斜坡）；候選處置，rt_31 掉力原因未定
         if phase in ('NAVIGATE', 'UNFOLD', 'ALIGN', 'ENGAGE_WAIT'):
             v, _ = MC.approach_vref(nd.pose, park, v_cap=a.motm_v_cap,
                                     a_ref=a.motm_a_ref, k_yaw=a.motm_k_yaw,
