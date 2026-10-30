@@ -180,7 +180,15 @@ def m4r(Base):
                     b_ref = np.asarray(b_ref, float) + np.array([d * math.cos(psi), d * math.sin(psi), 0.0])
                     ff = np.array([v * math.cos(psi), v * math.sin(psi), 0.0])
                 act['target'] = T
-                act['coord'] = self._coord(m, b_ref, ff)
+                if mp.get('r1_w_cap') is not None:                 # R1v3：只在 R1 放寬引導偏航上限（參考包給；仍 < W-GMPC 框 0.1999）
+                    _wc = self.r['w_cap']
+                    self.r['w_cap'] = float(mp['r1_w_cap'])
+                    try:
+                        act['coord'] = self._coord(m, b_ref, ff)
+                    finally:
+                        self.r['w_cap'] = _wc
+                else:
+                    act['coord'] = self._coord(m, b_ref, ff)
                 if not self.m4['mission_sent'] and tau >= L - c['mission_lead_s']:
                     self.m4['mission_sent'] = True
                     self.m4_outbox.append(('mission', {'id': 2, 'vertices': mp['R2']['vertices'], 'goal': mp['R2']['goal']}))
