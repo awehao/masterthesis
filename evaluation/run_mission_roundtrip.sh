@@ -492,13 +492,24 @@ p=r[-1].pose.pose.position; print(f'{p.x:.6f},{p.y:.6f}')"; }
             for _n in wholebody_$seg glide_$seg mission_$seg adapter_$seg; do _p=$(pid_of $_n); [ -n "$_p" ] && { kill -TERM -- "-$(ps -o pgid= -p "$_p" | tr -d ' ')" 2>/dev/null || kill -TERM "$_p" 2>/dev/null; }; done
             sleep 3
             [ "$rc" = 0 ] && grep -q '"result": "DONE"' "$DIR/task_return_$seg.json" || { RET_WHY="${RET_WHY:-seg $seg 失敗 rc $rc}"; return 1; }; return 0; }
+          align_home(){ local _p _i _o _ok=0 tp   # 末端對位（非 GMPC）：停 relay、確認護盾入口無其他發布者，才起對位；納入程序登錄與收尾
+            _p=$(pid_of relay_d); [ -n "$_p" ] && kill -TERM -- "-$(ps -o pgid= -p "$_p" | tr -d ' ')" 2>/dev/null
+            for _i in $(seq 50); do [ -z "$_p" ] && break; kill -0 "$_p" 2>/dev/null || break; sleep 0.1; done
+            [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && { RET_WHY="relay 未退出"; return 1; }
+            for _i in $(seq 20); do _o=$(timeout 8 ros2 topic info /cmd_vel_pre_shield 2>&1); echo "$_o" | grep -q 'Publisher count: 0' && { _ok=1; break; }; sleep 0.5; done
+            [ "$_ok" = 1 ] || { RET_WHY="護盾入口仍有其他發布者"; say "**$RET_WHY**"; return 1; }
+            spawn nav_align python3 -u evaluation/nav_align_node.py --goal="-0.6,-2.8,1.570796" --out "$DIR/nav_align.json"
+            tp=$(pid_of nav_align)
+            while kill -0 "$tp" 2>/dev/null; do kill -0 "$SIM_PID" 2>/dev/null || { RET_WHY="模擬器已結束（對位）"; break; }; sleep 1; done
+            wait_or_stop "$tp" 10 5; local rc=$STOP_RC; grep '^\[nav\]' "$DIR/nav_align.log" | tee -a "$DIR/run.log"
+            [ "$rc" = 0 ] || { RET_WHY="${RET_WHY:-末端對位 rc $rc}"; return 1; }; return 0; }
           pyget(){ python3 -c "import json;p=json.load(open('$RET_REF'))['entry']['$1'];print(','.join(f'{v:.6f}' for v in p['$2'][$3]))"; }
           { iso_ok && nav_leg stageA "-0.05,1.36" 120 && iso_ok \
             && entry A 1 "$(pyget A park :2)" "$(pyget A park 2:)" "$(pyget A q_unfold :)" 0.35 0.001 50 "--end-row 800 --nav-wp 0.90,-1.55;0.55,-1.86;0.2535,-1.8864" && iso_ok \
             && nav_leg stageB "0.90,-1.55;0.55,-1.86;0.2535,-1.8864" 150 \
             && entry B 2 "$(pyget B park :2)" "$(pyget B park 2:)" "$(pyget B q_unfold :)" 0.10 0.002 100 "--nav-wp=-0.6,-2.8 --nav-entry-clear 0.55" && iso_ok \
             && nav_leg home "-0.6,-2.8" 150 \
-            && { _p=$(pid_of relay_d); [ -n "$_p" ] && kill -TERM -- "-$(ps -o pgid= -p "$_p" | tr -d ' ')" 2>/dev/null; sleep 1; python3 -u evaluation/nav_align_node.py --goal="-0.6,-2.8,1.570796" --out "$DIR/nav_align.json" >>"$DIR/nav_align.log" 2>&1; _ra=$?; grep '^\[nav\]' "$DIR/nav_align.log" | tee -a "$DIR/run.log"; [ "$_ra" = 0 ] || RET_WHY="末端對位 rc $_ra"; [ "$_ra" = 0 ]; }; } && RET_OK=1
+            && align_home; } && RET_OK=1
           say "[返程] 結束：RET_OK=$RET_OK ${RET_WHY}"
         else
           say "[返程] 抽屜未 DONE ⇒ 不進第三階段"
