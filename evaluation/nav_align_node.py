@@ -83,7 +83,9 @@ def main():
     print(f'[nav] 末端對位 起 {nd.p[0]:.3f},{nd.p[1]:.3f},{nd.p[2]:.3f} → {gx},{gy},{gth}', flush=True)
     why, goal_ok = None, False
     while rclpy.ok():
-        rclpy.spin_once(nd, timeout_sec=0.02)
+        for _ in range(40):                                                     # 先清佇列：一次一筆時 /clock 先追上、odom 顯得過期（rt_24）
+            rclpy.spin_once(nd, timeout_sec=0.0)
+        time.sleep(0.002)
         why = nd.stale()
         if why:
             break
@@ -116,7 +118,9 @@ def main():
     wl, still_t, still_p, held = time.monotonic(), None, None, False
     w_end = wl + 5.0
     while rclpy.ok() and time.monotonic() < w_end:
-        rclpy.spin_once(nd, timeout_sec=0.02)
+        for _ in range(40):
+            rclpy.spin_once(nd, timeout_sec=0.0)
+        time.sleep(0.005)
         w = time.monotonic()
         dt, wl = w - wl, w
         for i, lim in ((0, a.a_lin), (1, a.a_lin), (2, a.a_ang)):
