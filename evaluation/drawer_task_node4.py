@@ -409,6 +409,7 @@ def main():
     ap.add_argument('--done-at-handback', action='store_true')
     ap.add_argument('--motm-w-vref-contact', type=float, default=None)
     ap.add_argument('--motm-w-p-contact', type=float, default=100.0)
+    ap.add_argument('--motm-w-p-fine', type=float, default=100.0)        # ALIGN／ENGAGE_WAIT 的 w_p（門段接觸定版 50）
     ap.add_argument('--motm-fine-align', action='store_true')            # 接近末段（ALIGN 收退讓量起、閉爪）同用接觸段權重，比照門段 fine 模式
     ap.add_argument('--motm-open-lead-m', type=float, default=0.0)
     ap.add_argument('--motm-w-a-grip', type=float, default=0.05)         # 閉爪至夾持成立：只加大 w_a、保留 w_p（rt_15 w_p 50 時受力起伏大、保持斷續）
@@ -576,7 +577,7 @@ def main():
                               w_qn=wq if qn is not None else 0.0,
                               q_nom=qn if qn is not None else None,
                               w_a=None if soft else (a.motm_w_a_grip if ((phase == 'ENGAGE_WAIT' and close_t0 is not None) or phase in ('OPEN', 'OPEN_HOLD', 'CLOSE', 'CLOSE_HOLD')) else a.motm_w_a),
-                              w_p=None if soft else (a.motm_w_p_contact if _cn else a.motm_w_p))
+                              w_p=None if soft else ((a.motm_w_p_fine if phase in ('ALIGN', 'ENGAGE_WAIT') else a.motm_w_p_contact) if _cn else a.motm_w_p))
         nd.coord_pub.publish(m)
         if int(st * 10) % 2 == 0:
             rep['motm_trace'].append({
