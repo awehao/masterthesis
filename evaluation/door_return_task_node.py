@@ -257,7 +257,8 @@ def main():
             def tcp_ref(i):
                 T = K.fk(xref(i), 'link_tcp')
                 _xb = 0.0 if t_rel is None else float(np.clip((t - t_rel) * a.rel_backoff_v, 0.0, a.rel_backoff_max))
-                T[:3, 3] -= (a.tcp_backoff_m + _xb) * T[:3, 2]                 # 沿工具軸退（rt_9：實際比參考深約 1.5 mm，掌面間隙翻過監看）
+                _f7 = float(np.clip(np.interp(i, [i_of[grp + '7'][0], i_of[grp + '7'][-1]], [1.0, 0.0]), 0.0, 1.0))  # 收臂段歸零，終點回參考收攏姿態（rt_17 B 交棒碼 51）
+                T[:3, 3] -= (a.tcp_backoff_m + _xb) * _f7 * T[:3, 2]           # 沿工具軸退（rt_9：實際比參考深約 1.5 mm，掌面間隙翻過監看）
                 return T
 
             def pub_target(T):
