@@ -398,22 +398,34 @@ print(f'{m.position.x:.6f},{m.position.y:.6f},{y:.6f}')")
         fi
         grep -E '^\[(mission|task|drawer)\]' "$DIR/mission_d.log" 2>/dev/null | tail -12 | tee -a "$DIR/run.log"
         if [ -z "$_abort_why" ]; then                                            # r5：照 run_drawer_mission.sh 收尾順序
-          say "[抽屜段] 等全身端完成展開／進保持（最多 120 s）"
-          for i in $(seq 120); do grep -q '保持交棒\|停在\|保持交棒逾時' "$DIR/wholebody_d.log" 2>/dev/null && break; sleep 1; done
-          say "[抽屜段] 等抽屜任務走完全部相位（最多 900 s；同看模擬器與包絡違反）"
-          _TPID=$(pid_of task_d)
-          for i in $(seq 900); do
-            grep -qE '\[task\] 結束' "$DIR/task_d.log" 2>/dev/null && break
-            kill -0 "$SIM_PID" 2>/dev/null || { say "**模擬器已結束**（抽屜任務未完）"; break; }
-            grep -q '導航包絡違反' "$DIR/sim.log" && { say "**導航包絡違反**（抽屜任務未完）"; break; }
-            sleep 1
+          _TPID=$(pid_of task_d); _SPID=$(pid_of solver_d); _dfail=""
+          _chk(){ kill -0 "$SIM_PID" 2>/dev/null || { _dfail="模擬器已結束"; return 1; }
+                  kill -0 "$_TPID" 2>/dev/null || { grep -qE '\[task\] 結束' "$DIR/task_d.log" 2>/dev/null || _dfail="抽屜任務程序提早結束（未印結束）"; return 1; }
+                  grep -q '導航包絡違反' "$DIR/sim.log" && { _dfail="導航包絡違反"; return 1; }
+                  return 0; }
+          say "[抽屜段] 等全身端完成展開／進保持（最多 120 s；同看模擬器／任務程序／包絡違反）"
+          for i in $(seq 120); do
+            grep -q '保持交棒逾時' "$DIR/wholebody_d.log" 2>/dev/null && { _dfail="保持交棒逾時"; break; }
+            grep -q '保持交棒\|停在' "$DIR/wholebody_d.log" 2>/dev/null && break
+            _chk || break; sleep 1
           done
+          [ -n "$_dfail" ] && say "**抽屜段失敗**：$_dfail"
+          if [ -z "$_dfail" ]; then
+            say "[抽屜段] 等抽屜任務走完全部相位（最多 900 s；同看模擬器／任務程序／包絡違反）"
+            for i in $(seq 900); do
+              grep -qE '\[task\] 結束' "$DIR/task_d.log" 2>/dev/null && break
+              _chk || { say "**抽屜段失敗**：$_dfail"; break; }
+              sleep 1
+              [ "$i" = 900 ] && { _dfail="抽屜任務 900 s 未結束"; say "**抽屜段失敗**：$_dfail"; }
+            done
+          fi
           grep -E '^\[task\]' "$DIR/task_d.log" | tail -16 | tee -a "$DIR/run.log"
           for i in $(seq 30); do [ -s "$DIR/align_solver_drawer.json" ] && ! kill -0 "$(pid_of solver_d)" 2>/dev/null && break; sleep 1; done
           sleep 3
         fi
-        wait_or_stop "$(pid_of task_d)" 20 5
-        wait_or_stop "$(pid_of solver_d)" 20 5
+        wait_or_stop "$(pid_of task_d)" 20 5; RC_TASKD=$STOP_RC; HOW_TASKD=$STOP_HOW
+        wait_or_stop "$(pid_of solver_d)" 20 5; RC_SOLVERD=$STOP_RC; HOW_SOLVERD=$STOP_HOW
+        say "  抽屜段結束方式：task_d $HOW_TASKD rc=$RC_TASKD、solver_d $HOW_SOLVERD rc=$RC_SOLVERD；失敗原因 ${_dfail:-無}"
         timeout 5 ros2 topic pub --once /room/stop std_msgs/msg/String "{data: 'mission door+drawer end'}" >/dev/null 2>&1
       fi
     fi
@@ -425,8 +437,9 @@ if [ "$DRAWER_PHASE" = 1 ]; then
   say "[收尾] 等執行端封存 room_run.json／room_run_drawer.json（最多 90 s）"
   wait_or_stop "$SIM_PID" 90 15; RC_SIM=$STOP_RC; HOW_SIM=$STOP_HOW
   OK_DDONE=0; grep -q '"final_phase": "DONE"' "$DIR/task_drawer.json" 2>/dev/null && OK_DDONE=1
-  RC=1; [ "$OK_DDONE" = 1 ] && [ "$RC_DMISSION" = 0 ] && [ "$HOW_SIM" = exited ] && [ "$RC_SIM" = 0 ] && RC=0
-  say "=== 結束 rc=$RC（抽屜段）：離門 ${ESC_OK:-na}、抽屜任務 DONE $OK_DDONE、mission rc=$RC_DMISSION、sim $HOW_SIM rc=$RC_SIM；room_run_drawer $( [ -s "$DIR/room_run_drawer.json" ] && echo 1 || echo 0)；返程門與回起點不在本趟範圍 ==="
+  RC=1; [ "$OK_DDONE" = 1 ] && [ "$RC_DMISSION" = 0 ] && [ "$HOW_SIM" = exited ] && [ "$RC_SIM" = 0 ] && [ -z "${_dfail:-}" ] \
+    && [ "${HOW_TASKD:-}" = exited ] && [ "${RC_TASKD:-1}" = 0 ] && RC=0
+  say "=== 結束 rc=$RC（抽屜段）：離門 ${ESC_OK:-na}、抽屜任務 DONE $OK_DDONE（task_d ${HOW_TASKD:-na} rc ${RC_TASKD:-na}、solver_d ${HOW_SOLVERD:-na} rc ${RC_SOLVERD:-na}、失敗 ${_dfail:-無}）、mission rc=$RC_DMISSION、sim $HOW_SIM rc=$RC_SIM；room_run_drawer $( [ -s "$DIR/room_run_drawer.json" ] && echo 1 || echo 0)；返程門與回起點不在本趟範圍 ==="
   exit "$RC"
 fi
 say "[收尾] 等求解節點停止並封存（最多 30 s，之後 TERM→10 s→KILL）"
