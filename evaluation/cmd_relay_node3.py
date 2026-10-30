@@ -80,8 +80,12 @@ def main():
             super().__init__(a_)
             lat = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
             self.create_subscription(String, '/mission/subtask_done', lambda m: setattr(self, 'done', m.data), lat)
-            self.create_subscription(Odometry, '/odom', lambda m: setattr(self, 'od', m), 10)
+            self.od_wall = None
+            self.create_subscription(Odometry, '/odom', self._od, 10)
             self.create_subscription(String, '/gmpc/plan_ack', lambda m: setattr(self, 'ack', m.data), 10)
+
+        def _od(self, m):
+            self.od, self.od_wall = m, time.monotonic()
 
     nd = Nd(a)
     print(f'[relay] 待命：{a.zero} 隔離後接手；計畫 → {a.plan_wp}', flush=True)
@@ -118,7 +122,16 @@ def main():
         if not spin_until(iso, a.iso_timeout_s):
             print(f'[relay] **隔離未通過**：{[p for p in a.dead_pgids if alive(p)]} {[t for t in a.zero if nd.count_publishers(t) > 0]}', flush=True)
             return 2
-        spin_until(lambda: nd.od is not None, 3.0)
+        def od_fresh():                                                         # 計畫起點：時間戳新鮮、有限、晚於隔離完成
+            if nd.od is None or nd.t is None or nd.od_wall is None or nd.od_wall < t_iso:
+                return False
+            ps, h = nd.od.pose.pose.position, nd.od.header.stamp
+            ts = float(h.sec) + 1e-9 * float(h.nanosec)
+            return all(math.isfinite(v) for v in (ps.x, ps.y)) and abs(float(nd.t) - ts) <= 0.2
+        t_iso = time.monotonic()
+        if not spin_until(od_fresh, 3.0):
+            print('[relay] **無新鮮里程** ⇒ 不發計畫、不輸出', flush=True)
+            return 2
         p = nd.od.pose.pose.position
         t = float(nd.t)
         st = (int(t), int((t % 1) * 1e9))
@@ -129,6 +142,7 @@ def main():
         if not spin_until(lambda: nd.ack == pid, a.ack_timeout_s):
             print(f'[relay] **計畫未獲採用** id {pid} 收到 {nd.ack}', flush=True)
             return 2
+        nd.destroy_publisher(pub)                                              # 採用後不留舊的 transient-local 計畫
         nd._create_out()
         print(f'[relay] ODOM {p.x:.6f},{p.y:.6f}；隔離＋計畫 {time.monotonic() - t_d:.2f} s（牆鐘）；開放輸出 @ sim {nd.t}', flush=True)
         rclpy.spin(nd)
