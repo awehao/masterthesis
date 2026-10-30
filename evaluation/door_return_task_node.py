@@ -110,6 +110,12 @@ def main():
     ap.add_argument('--w-qn', type=float, default=0.8)                   # C0 定版
     ap.add_argument('--w-a', type=float, default=0.01)
     ap.add_argument('--w-p', type=float, default=200.0)
+    ap.add_argument('--w-vref-contact', type=float, default=1.0)         # 抓持接觸段：去程移動中拉關實測權重（mission_rt_3 用 MotM 權重時推門 5 Hz 極限環）
+    ap.add_argument('--w-a-contact', type=float, default=0.05)
+    ap.add_argument('--w-p-contact', type=float, default=50.0)
+    ap.add_argument('--k-base', type=float, default=0.3)                 # 接觸段底盤位置修正（前饋之外）
+    ap.add_argument('--base-fix-max', type=float, default=0.005)
+    ap.add_argument('--yaw-fix-max', type=float, default=0.02)
     a = ap.parse_args()
     if os.path.exists(a.out):
         raise SystemExit(f'{a.out} 已存在，不覆寫')
@@ -183,7 +189,7 @@ def main():
             if t_tick is not None and t < t_tick + 0.05 - 1e-9:
                 time.sleep(0.002)
                 continue
-            t_tick = t
+            t_tick = t if t_tick is None or t > t_tick + 0.1 else t_tick + 0.05  # 節拍鎖 20 Hz：不累積取樣晚到（rt_3 實測每列 0.06 s）
             if not armed:
                 nd.req(kind='arm', op=a.op, bar=bar)
                 armed = True
@@ -206,11 +212,17 @@ def main():
             def pub_target(T):
                 nd.tgt_pub.publish(Float64MultiArray(data=[float(v) for v in np.asarray(T, float).reshape(-1)]))
 
-            def pub_coord(i, soft=False):
+            def pub_coord(i, soft=False, contact=False):
                 x0, x1 = xref(max(i - 1, 0)), xref(i)
                 dv = (x1 - x0) / 0.05
                 dv[2] = math.atan2(math.sin(x1[2] - x0[2]), math.cos(x1[2] - x0[2])) / 0.05
+                if contact:
+                    dv[:2] += np.clip(a.k_base * (x1[:2] - x_m[:2]), -a.base_fix_max, a.base_fix_max)
+                    dv[2] += float(np.clip(a.k_base * math.atan2(math.sin(x1[2] - x_m[2]), math.cos(x1[2] - x_m[2])), -a.yaw_fix_max, a.yaw_fix_max))
                 vx, vy = MC.world_to_body(float(dv[0]), float(dv[1]), float(x_m[2]))
+                if contact:
+                    nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref_contact, vref=[vx, vy, float(dv[2])], w_qn=0.0, w_a=a.w_a_contact, w_p=a.w_p_contact)))
+                    return
                 nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref_pre if soft else a.w_vref, vref=[vx, vy, float(dv[2])], w_qn=a.w_qn, q_nom=[float(v) for v in x1[3:]],
                                                                          w_a=None if soft else a.w_a, w_p=None if soft else a.w_p)))
             if phase == 'ENTRY':
@@ -246,7 +258,7 @@ def main():
                 sn = st[idx]
                 last = idx == i_of[sn][-1]
                 pub_target(K.fk(xref(idx), 'link_tcp'))
-                pub_coord(idx)
+                pub_coord(idx, contact=sn in (grp + '3', move_, grp + '5'))
                 tgt_row = idx
                 gs = (nd.state or {}).get('state')
 
