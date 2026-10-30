@@ -380,7 +380,7 @@ print(f'{m.position.x:.6f},{m.position.y:.6f},{y:.6f}')")
         sleep 1
         spawn wholebody_d python3 -u evaluation/drawer_wholebody_node.py --solver-handshake --pos-tol 0.005 --motm --park="$D_PARK" --stow-q="$D_STOW" --out "$DIR/wholebody_drawer.json"
         sleep 3
-        spawn task_d python3 -u evaluation/drawer_task_node3.py --stow-q="$D_STOW" --start="$DPOSE" --park="$D_PARK" --open-m 0.200 --grasp-depth-m 0.0068 --contact-min-n 0.5 --motm --standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync --approach-rate 0.02 --motm-w-qn 0.8 --motm-w-vref-pre 0.3 --out "$DIR/task_drawer.json"
+        spawn task_d python3 -u evaluation/drawer_task_node3.py --motm-w-a 0.05 --stow-q="$D_STOW" --start="$DPOSE" --park="$D_PARK" --open-m 0.200 --grasp-depth-m 0.0068 --contact-min-n 0.5 --motm --standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync --approach-rate 0.02 --motm-w-qn 0.8 --motm-w-vref-pre 0.3 --out "$DIR/task_drawer.json"
         sleep 1
         spawn adapter_d python3 -u evaluation/arm_vel_adapter.py --in-topic /wgmpc/cmd_world --consumer-node /door_k2_sim
         spawn solver_d python3 -u evaluation/wgmpc_wg2_node.py --continuous --wait-for-drawer-handover --arm-model setpoint --arm-ident "$ARM_IDENT" \
