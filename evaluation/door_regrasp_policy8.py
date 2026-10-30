@@ -64,6 +64,12 @@ class RegraspPolicy8(P7.RegraspPolicy7):
                 sg = self.ref.seg[7]
                 i = min(int(round(max(0.0, m.t - self.rg['t_ref0'][7]) / self.ref.dt)), len(sg['t']) - 1)
                 self.rg['q_rel_deg'], self.r['door_dev_deg'] = float(sg['q_door_deg'][i]), DOOR_TRACK_DEG
+                if m.q_door is not None and math.isfinite(m.q_door):              # 只記錄：線上門角追蹤誤差最大值與位置（判定仍由父類）
+                    _e = math.degrees(m.q_door) - self.rg['q_rel_deg']
+                    _tr = self.rg.setdefault('track7', {'max_abs': 0.0, 'n': 0})
+                    _tr['n'] += 1
+                    if abs(_e) > _tr['max_abs']:
+                        _tr.update(max_abs=abs(_e), e=_e, i=i, n_rows=len(sg['t']), t=m.t, q_ref=self.rg['q_rel_deg'], q_meas=math.degrees(m.q_door))
             else:
                 self.rg.setdefault('q_rel8_deg', math.degrees(m.q_door) if m.q_door is not None else None)
                 self.rg['q_rel_deg'] = self.rg['q_rel8_deg']
@@ -77,4 +83,5 @@ class RegraspPolicy8(P7.RegraspPolicy7):
         r = super().rg_report()
         r['version'] = VERSION
         r['door_track_deg'] = DOOR_TRACK_DEG
+        r['track7'] = self.rg.get('track7')
         return r

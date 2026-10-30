@@ -452,6 +452,10 @@ def main():
                 elif sn == move_:
                     _f = float(np.clip(np.interp(idx, [i_of[move_][0], i_of[move_][-1]], [0.0, 1.0]), 0, 1))
                     _qr = float(Qd[idx]) - math.degrees((delta or 0.0) * (1.0 - _f))
+                    _dt_ = rep.setdefault('door_track', {'max_abs': 0.0, 'n': 0, 'lim': a.door_track_deg})   # 只記錄：補償後參考與追蹤誤差最大值／位置
+                    _dt_['n'] += 1
+                    if abs(q_d - _qr) > _dt_['max_abs']:
+                        _dt_.update(max_abs=abs(q_d - _qr), e=q_d - _qr, row=idx, row_in_stage=idx - i_of[move_][0], n_stage=len(i_of[move_]), t=t, q_ref_comp=_qr, q_meas=q_d)
                     if abs(q_d - _qr) > a.door_track_deg:
                         return fail(t, f'door_track:{q_d:.2f} vs {_qr:.2f}')
                     if a.pre_rel_backoff_m > 0.0 and idx == i_of[move_][-1] - n_pre:
