@@ -447,7 +447,7 @@ print(f'{m.position.x:.6f},{m.position.y:.6f},{y:.6f}')")
                 echo "$_o" | grep -q 'Publisher count: 0' || echo "$_o" | grep -qi 'Unknown topic' || _bad="$_bad $_t"
               done
               [ -z "$_bad" ] && return 0; sleep 1; done; say "**隔離未通過**：$_bad"; return 1; }
-          nav_leg(){ local tag="$1" wp="$2" to="$3"; python3 -u evaluation/nav_goal_plan_node.py --wp "$wp" --tol 0.25 --timeout-s "$to" --out "$DIR/nav_$tag.json" >>"$DIR/nav_$tag.log" 2>&1 & local p=$!
+          nav_leg(){ local tag="$1" wp="$2" to="$3"; python3 -u evaluation/nav_goal_plan_node.py --wp="$wp" --tol 0.25 --timeout-s "$to" --out "$DIR/nav_$tag.json" >>"$DIR/nav_$tag.log" 2>&1 & local p=$!
             while kill -0 $p 2>/dev/null; do kill -0 "$SIM_PID" 2>/dev/null || { RET_WHY="模擬器已結束（nav $tag）"; kill $p 2>/dev/null; return 1; }; grep -q '返程閘門中止\|導航包絡違反' "$DIR/sim.log" && { RET_WHY="中止（nav $tag）"; kill $p 2>/dev/null; return 1; }; sleep 1; done
             wait $p; local rc=$?; grep '^\[nav\]' "$DIR/nav_$tag.log" | tee -a "$DIR/run.log"; [ "$rc" = 0 ] || RET_WHY="導航 $tag 失敗 rc $rc"; return $rc; }
           odom_xy(){ timeout 15 python3 -c "
