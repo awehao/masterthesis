@@ -29,7 +29,7 @@ import os
 
 import numpy as np
 
-VERSION = 'door_drawer_phase/r6'
+VERSION = 'door_drawer_phase/r6b'
 GRASP_HOLD_S = 2.0      # r4：抽屜任務原定夾持判準（兩指各 ≥ contact_min_n 連續 2 s）
 
 
@@ -249,6 +249,30 @@ def run_drawer_phase(c):
                     ret['gate'].request(_k, t)
                 elif _k == 'abort':
                     ret['gate']._abort(f"task:{_m.get('why')}", t)
+            if ret['on'] and ret['gate'].abort is None:                                 # 先判定、再選命令、最後寫入
+                _qm0 = robot.get_joint_positions()
+                _pp0, _qq0 = robot.get_world_pose()
+                _x9 = np.r_[float(_pp0[0]), float(_pp0[1]), float(yaw_of(_qq0)), [float(_qm0[idx[j]]) for j in ARM_]]
+                _T9 = np.asarray(c['fk'](_x9), float)
+                _rc = c['door_rec'](step_id, t)
+                _qd, _ = c['door_qd']()
+                _terr = _trot = None
+                if ret['T'] is not None:
+                    _terr = float(np.linalg.norm(_T9[:3, 3] - ret['T'][:3, 3]))
+                    _trot = float(np.arccos(np.clip((np.trace(ret['T'][:3, :3].T @ _T9[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)))
+                _bb = ret['gate'].bar
+                _rel = None if _bb is None else np.linalg.solve(np.asarray(c['handle_T'](_bb), float), _T9)
+                ret['gate'].step(t, _rc, float(_qd), [float(_qm0[fidx[j]]) for j in FJ], _terr, c['wrist'](), c['wall']() - ret['hb'], ret['cmd'] <= a.finger_closed + 1e-9,
+                                 fcmd=ret['cmd'], tcp_rot=_trot, rel=_rel)
+                _F = c['forces'](_rc)
+                _b = c['bar'].get(_bb)
+                ret['fb'] = (0.0, 0.0) if (_F is None or _b is None) else tuple(_F['fingers'][f_].get(_b, 0.0) for f_ in c['fingers'])
+            if ret['gate'].abort is not None and not ret['abort_done']:
+                ret['abort_done'] = True
+                rec['return_abort'] = dict(ret['gate'].abort, step=step_id)
+                ex.cancel_handover(f"返程閘門中止：{ret['gate'].abort['why']}")
+                c['expire_chain']()
+                print(f"[return] **返程閘門中止** @ step {step_id} sim {t:.2f}：{ret['gate'].abort} ⇒ 既有減速到零後停止", flush=True)
         _r_abort = ret is not None and ret['gate'].abort is not None
         if node.wb_latest is not None:
             if not _r_abort:
@@ -390,30 +414,13 @@ def run_drawer_phase(c):
                 node.park_vio_pub.publish(M['String'](data=json.dumps(_v, default=float)))
                 rec['events'].append({'sim_t': t, 'step': step_id, 'park': 'violation', **_v})
                 print(f'[drawer] **PARK 違規**（閂鎖中止）@ step {step_id}：{_v["why"]}', flush=True)
-        if ret is not None and ret['on']:                                               # r6：本步監看
-            _fq2 = [float(q_meas[fidx[j]]) for j in FJ]
-            _rc = c['door_rec'](step_id, t)
-            _qd, _ = c['door_qd']()
-            _terr = None
-            if ret['T'] is not None:
-                _terr = float(np.linalg.norm(np.asarray(c['fk'](np.r_[_x, _y, float(yw), q_arm]))[:3, 3] - ret['T'][:3, 3]))
-            _ab0 = ret['gate'].abort
-            _ab = ret['gate'].step(t, _rc, float(_qd), _fq2, _terr, c['wrist'](), c['wall']() - ret['hb'], ret['cmd'] <= a.finger_closed + 1e-9, fcmd=ret['cmd'])
-            _F = c['forces'](_rc)
-            _b = c['bar'].get(ret['gate'].bar)
-            ret['fb'] = (0.0, 0.0) if (_F is None or _b is None) else tuple(_F['fingers'][f_].get(_b, 0.0) for f_ in c['fingers'])
-            if _ab is not None and _ab0 is None:
-                rec['return_abort'] = dict(_ab, step=step_id)
-                ex.cancel_handover(f"返程閘門中止：{_ab['why']}")
-                c['expire_chain']()
-                print(f"[return] **返程閘門中止** @ step {step_id} sim {t:.2f}：{_ab} ⇒ 既有減速到零後停止", flush=True)
-            if _ab is not None:
-                _zr = max(abs(float(v)) for v in res.base_cmd) < 1e-9
-                ret['zero_since'] = (ret['zero_since'] if ret['zero_since'] is not None else t) if _zr else None
-                if ret['zero_since'] is not None and t - ret['zero_since'] >= 0.2 - 1e-9:
-                    print(f"[return] 減速完成 ⇒ 停止世界 @ sim {t:.2f}", flush=True)
-                    rec['stop_reason'] = f"return_abort:{_ab['why']}"
-                    break
+        if ret is not None and ret['gate'].abort is not None:                           # r6：所有中止來源同一條停止路徑（寫入後核零）
+            _zr = max(abs(float(v)) for v in res.base_cmd) < 1e-9
+            ret['zero_since'] = (ret['zero_since'] if ret['zero_since'] is not None else t) if _zr else None
+            if ret['zero_since'] is not None and t - ret['zero_since'] >= 0.2 - 1e-9:
+                print(f"[return] 減速完成 ⇒ 停止世界 @ sim {t:.2f}", flush=True)
+                rec['stop_reason'] = f"return_abort:{ret['gate'].abort['why']}"
+                break
         park_prev_cmd = tuple(_cmd3)
         park_last_sample = (step_id, t, _x, _y, float(yw))
         _pmode = (('hold' if (park_hold is not None and park_hold.end is None) else 'post' if park_done else 'gate') if park_on else None)

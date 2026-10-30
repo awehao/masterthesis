@@ -16,6 +16,8 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from rosgraph_msgs.msg import Clock
+from rclpy.qos import ReliabilityPolicy
 from std_msgs.msg import Bool, Float64MultiArray, String
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +28,25 @@ import door_k3m_geom_monitor_v3 as GM3                 # noqa: E402
 import door_regrasp_geom_switch as GS                  # noqa: E402
 import motm_coord as MC                                # noqa: E402
 from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
+
+
+WD_S = 1.0                       # 狀態／時鐘看門狗（牆鐘，只認前進）
+
+
+def rodrigues(w):
+    th = float(np.linalg.norm(w))
+    if th < 1e-12:
+        return np.eye(3)
+    k = np.asarray(w) / th
+    Kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + math.sin(th) * Kx + (1 - math.cos(th)) * Kx @ Kx
+
+
+def log_so3(R):
+    th = float(np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1)))
+    if th < 1e-9:
+        return np.zeros(3)
+    return th / (2 * math.sin(th)) * np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
 
 
 def rot(x, d):
@@ -46,13 +67,23 @@ class Nd(Node):
         self.stop_pub = self.create_publisher(String, '/wgmpc/stop', 10)
         self.ho_pub = self.create_publisher(String, '/handover/request', 10)
         self.sync, self.state, self.hs, self.n_ws = None, None, None, 0
+        self.sync_wall, self.clk_t, self.clk_wall = None, None, None
+        self.create_subscription(Clock, '/clock', self._clk, QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.create_subscription(Float64MultiArray, '/return/sync', self._sync, 10)
         self.create_subscription(String, '/return/state', lambda m: setattr(self, 'state', json.loads(m.data)), 10)
         self.create_subscription(String, '/handover/state', lambda m: setattr(self, 'hs', json.loads(m.data)), 10)
         self.create_subscription(Float64MultiArray, '/wgmpc/status', self._ws, 10)
 
     def _sync(self, m):
-        self.sync = np.asarray(m.data, float)
+        d = np.asarray(m.data, float)
+        if self.sync is not None and not (d[1] > self.sync[1] and d[0] > self.sync[0]):
+            return                                                          # 重複舊狀態不刷新
+        self.sync, self.sync_wall = d, time.monotonic()
+
+    def _clk(self, m):
+        t = float(m.clock.sec) + 1e-9 * float(m.clock.nanosec)
+        if self.clk_t is None or t > self.clk_t:
+            self.clk_t, self.clk_wall = t, time.monotonic()
 
     def _ws(self, m):
         self.n_ws += 1
@@ -127,14 +158,18 @@ def main():
     if True:
         while rclpy.ok():
             rclpy.spin_once(nd, timeout_sec=0.0)
-            if time.monotonic() - last_hb >= 0.05:
-                nd.req(kind='hb')
-                last_hb = time.monotonic()
-            if nd.sync is None:
+            if nd.sync is None or nd.clk_t is None:
                 if time.monotonic() - w0 > 60.0:
                     return finish('ABORTED', 'no_sync')
                 time.sleep(0.005)
                 continue
+            _wa, _wc = time.monotonic() - nd.sync_wall, time.monotonic() - nd.clk_wall
+            if _wa > WD_S or _wc > WD_S:                                       # 看門狗：不再送心跳 ⇒ 執行端閘門逾時
+                nd.req(kind='abort', why=f'state_stale:{_wa:.2f}/{_wc:.2f}')
+                return finish('ABORTED', f'state_stale:{_wa:.2f}/{_wc:.2f}')
+            if time.monotonic() - last_hb >= 0.05:
+                nd.req(kind='hb')
+                last_hb = time.monotonic()
             s = nd.sync
             t, q_d = float(s[0]), math.degrees(float(s[2]))
             x_m = np.r_[s[4:7], s[7:13]]
@@ -149,7 +184,8 @@ def main():
                 armed = True
                 ev(t, armed=bar, q_door=q_d)
             r = rows[tgt_row]
-            dec, det = mon.step(t, x_m, float(s[2]), float(s[15]), 0.03, r['target'] if phase != 'ENTRY' else None)
+            _age = max(0.0, float(nd.clk_t) - t)                               # 模擬時間年齡（/clock − 狀態時戳）
+            dec, det = mon.step(t, x_m, float(s[2]), float(s[15]), _age, r['target'] if phase != 'ENTRY' else None)
             rep['monitor']['n'] += 1
             rep['monitor']['n_warn'] += dec == 'warn'
             for c_, v_ in (det.get('classes') or {}).items():
@@ -192,6 +228,7 @@ def main():
                 f = 10 * f ** 3 - 15 * f ** 4 + 6 * f ** 5
                 T = Tr.copy()
                 T[:3, 3] = T_b0[:3, 3] + (Tr[:3, 3] - T_b0[:3, 3]) * f
+                T[:3, :3] = T_b0[:3, :3] @ rodrigues(log_so3(T_b0[:3, :3].T @ Tr[:3, :3]) * f)    # 姿態同步內插，不直接跳到終點
                 pub_target(T)
                 pub_coord(0, soft=True)
                 if t - t_b0 >= a.bridge_s:

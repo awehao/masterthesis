@@ -9,26 +9,31 @@
   - 抓持期限：閉爪斜坡完成後 grasp_timeout_s 未建立證據 ⇒ 中止；每個 op 只起算一次，不因請求重送重設；
   - 門速 > door_rate_abort、腕力 ≥ wrist_abort_n、接觸紀錄無效 > invalid_max_s、任務心跳逾 hb_max_s（牆鐘）⇒ 中止；
   - 中止第一原因閂鎖；同輪中止優先於任何轉移；閂鎖後 finger_target 凍結最後實際值。
+r2（Codex m6g）：證據只採 status ok、complete 且 evidence_ok；缺證據步重置所有連續計時並算入失抓；閉爪另核姿態；抓持成立固定 E0（把手系下 TCP），持握期核 5 mm／2° 不重設；失抓 0.2 s（同去程）；停穩用 0.1 s 跨距位置差分。
 力只算 evidence_ok 的點。時間皆模擬秒（心跳例外，呼叫端給牆鐘年齡）。
 """
 from __future__ import annotations
 
 import math
 
-VERSION = 'door_return_gates/r1'
+import numpy as np
+
+from door_regrasp_close_settle2 import RateFromPos
+
+VERSION = 'door_return_gates/r2'
 FINGERS = ('uflite_finger1', 'uflite_finger2')
 BAR = {'in': 'bar_in', 'out': 'bar_out'}
 
 
 def forces(rec):
     """接觸紀錄 → {'fingers': {finger: 指定類別→力}, 'other': [(link, class, f)]}；status 非 ok 回 None。"""
-    if not isinstance(rec, dict) or rec.get('status') != 'ok':
+    if not isinstance(rec, dict) or rec.get('status') != 'ok' or rec.get('complete') is not True:
         return None
     fg = {f: {} for f in FINGERS}
     other = {}
     for p in rec.get('points') or []:
         f = float(p.get('f', 0.0) or 0.0)
-        if not math.isfinite(f):
+        if not math.isfinite(f) or p.get('evidence_ok') is not True:
             return None
         lk, cl = p.get('robot_link'), p.get('class')
         if lk in fg:
@@ -39,12 +44,13 @@ def forces(rec):
 
 
 class ReturnGate:
-    def __init__(self, contact_min_n=0.5, contact_abort_n=0.1, hold_s=2.0, grasp_timeout_s=10.0, release_hold_s=0.5, finger_loss_s=0.5,
+    def __init__(self, contact_min_n=0.5, contact_abort_n=0.1, hold_s=2.0, grasp_timeout_s=10.0, release_hold_s=0.5, finger_loss_s=0.2,
                  door_rate_abort=0.05, wrist_abort_n=30.0, invalid_max_s=0.2, hb_max_s=1.0, tcp_tol=0.005, finger_open=0.0089, finger_closed=0.0,
-                 settle_rate=0.002, settle_hold_s=0.5, open_tol=1e-4):
+                 settle_rate=0.002, settle_hold_s=0.5, open_tol=1e-4, tcp_rot_tol=math.radians(2.0), drift_pos=0.005, drift_rot=math.radians(2.0)):
         self.c = dict(contact_min_n=contact_min_n, contact_abort_n=contact_abort_n, hold_s=hold_s, grasp_timeout_s=grasp_timeout_s, release_hold_s=release_hold_s,
                       finger_loss_s=finger_loss_s, door_rate_abort=door_rate_abort, wrist_abort_n=wrist_abort_n, invalid_max_s=invalid_max_s, hb_max_s=hb_max_s, tcp_tol=tcp_tol,
-                      finger_open=finger_open, finger_closed=finger_closed, settle_rate=settle_rate, settle_hold_s=settle_hold_s, open_tol=open_tol)
+                      finger_open=finger_open, finger_closed=finger_closed, settle_rate=settle_rate, settle_hold_s=settle_hold_s, open_tol=open_tol,
+                      tcp_rot_tol=tcp_rot_tol, drift_pos=drift_pos, drift_rot=drift_rot)
         self.state = 'FREE'
         self.op = None
         self.bar = None
@@ -56,6 +62,9 @@ class ReturnGate:
         self.q_prev = None
         self.n_ops = 0
         self.armed = False
+        self.E0 = None
+        self.drift_max = (0.0, 0.0)
+        self.rate_pos = RateFromPos(span_s=0.1, gap_max_s=0.05)
 
     def _ev(self, t, **kw):
         self.events.append(dict(kw, t=float(t), op=self.op, state=self.state))
@@ -74,6 +83,7 @@ class ReturnGate:
             return False, f'op／bar 不合法（{op}, {bar}）'
         self.op, self.bar = int(op), bar
         self.t_ev0 = self.t_low = self.t_rel0 = self.t_ramp = self.t_settle0 = None
+        self.E0 = None
         self.n_ops += 1
         self.armed = True
         self._ev(t, armed=bar)
@@ -89,7 +99,7 @@ class ReturnGate:
             return self.cmd
         return self.c['finger_closed'] if self.state in ('CLOSING', 'GRASPED', 'MOVING') else self.c['finger_open']
 
-    def step(self, t, rec, q_door, qf, tcp_err, wrist_n, hb_age, ramp_done, fcmd=None):
+    def step(self, t, rec, q_door, qf, tcp_err, wrist_n, hb_age, ramp_done, fcmd=None, tcp_rot=None, rel=None):
         """每物理步一次。回傳 self.abort（None＝無）。ramp_done＝閉爪命令已到全閉。"""
         c = self.c
         t = float(t)
@@ -108,10 +118,16 @@ class ReturnGate:
         self.q_prev = (t, float(q_door))
         if rate is not None and abs(rate) > c['door_rate_abort']:
             return self._abort('door_rate', t, rate=rate)
+        v_pos = self.rate_pos.feed(t, float(q_door))
         F = forces(rec)
         if F is None:
             self.t_bad = self.t_bad if self.t_bad is not None else t
-            if t - self.t_bad > c['invalid_max_s']:
+            self.t_ev0 = self.t_rel0 = self.t_settle0 = None            # 缺證據不累計
+            if self.state in ('GRASPED', 'MOVING'):
+                self.t_low = self.t_low if self.t_low is not None else t
+                if t - self.t_low > c['finger_loss_s'] + 1e-9:
+                    return self._abort('finger_loss', t, why2='no_evidence')
+            if t - self.t_bad > c['invalid_max_s'] + 1e-9:
                 return self._abort('contact_record_invalid', t)
             return None
         self.t_bad = None
@@ -134,6 +150,8 @@ class ReturnGate:
                     return None
                 if not (isinstance(tcp_err, (int, float)) and tcp_err <= c['tcp_tol']):
                     return None
+                if not (isinstance(tcp_rot, (int, float)) and tcp_rot <= c['tcp_rot_tol']):
+                    return None
                 self.state = 'CLOSING'
                 self.req = None
                 self._ev(t, to='CLOSING', tcp_err=tcp_err)
@@ -142,8 +160,11 @@ class ReturnGate:
                 self.t_ramp = t
             self.t_ev0 = (self.t_ev0 if self.t_ev0 is not None else t) if both else None
             if self.t_ev0 is not None and t - self.t_ev0 >= c['hold_s'] - 1e-9:
+                if rel is None:
+                    return self._abort('no_relative_pose', t)
                 self.state = 'GRASPED'
                 self.t_low = None
+                self.E0 = np.array(rel, float)                                  # 固定基準，持握期間不重設
                 self._ev(t, to='GRASPED', fb=fb)
             elif self.t_ramp is not None and t - self.t_ramp >= c['grasp_timeout_s'] - 1e-9:
                 return self._abort('grasp_no_contact', t, fb=fb)
@@ -151,12 +172,20 @@ class ReturnGate:
             self.t_low = None if both else (self.t_low if self.t_low is not None else t)
             if self.t_low is not None and t - self.t_low > c['finger_loss_s'] + 1e-9:
                 return self._abort('finger_loss', t, fb=fb)
+            if rel is None:
+                return self._abort('no_relative_pose', t)
+            Tr = np.asarray(rel, float)
+            dp = float(np.linalg.norm(Tr[:3, 3] - self.E0[:3, 3]))
+            dr = float(np.arccos(np.clip((np.trace(self.E0[:3, :3].T @ Tr[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)))
+            self.drift_max = (max(self.drift_max[0], dp), max(self.drift_max[1], dr))
+            if dp > c['drift_pos'] or dr > c['drift_rot']:
+                return self._abort('grasp_drift', t, dp=dp, dr=dr)
             if st == 'GRASPED' and r == 'move':
                 self.state = 'MOVING'
                 self.req = None
                 self._ev(t, to='MOVING')
             elif st == 'MOVING' and r == 'open':
-                ok = rate is not None and abs(rate) <= c['settle_rate']
+                ok = v_pos is not None and math.isfinite(v_pos) and abs(v_pos) <= c['settle_rate']
                 self.t_settle0 = (self.t_settle0 if self.t_settle0 is not None else t) if ok else None
                 if self.t_settle0 is not None and t - self.t_settle0 >= c['settle_hold_s'] - 1e-9:
                     self.state = 'OPENING'
@@ -182,4 +211,4 @@ class ReturnGate:
         return None
 
     def report(self):
-        return {'version': VERSION, 'cfg': self.c, 'state': self.state, 'op': self.op, 'bar': self.bar, 'abort': self.abort, 'events': self.events[:200], 'n_ops': self.n_ops}
+        return {'version': VERSION, 'cfg': self.c, 'state': self.state, 'op': self.op, 'bar': self.bar, 'abort': self.abort, 'events': self.events[:200], 'n_ops': self.n_ops, 'drift_max': self.drift_max}

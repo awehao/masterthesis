@@ -12,6 +12,7 @@ import time
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rosgraph_msgs.msg import Clock
 from std_msgs.msg import Bool, Float64MultiArray, String
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +29,7 @@ class Fake(Node):
         self.st_pub = self.create_publisher(String, '/return/state', 10)
         self.ho_pub = self.create_publisher(String, '/handover/state', 10)
         self.ws_pub = self.create_publisher(Float64MultiArray, '/wgmpc/status', 10)
+        self.clk_pub = self.create_publisher(Clock, '/clock', 10)
         self.q, self.tgt, self.started, self.ho_req = [], None, False, None
         self.create_subscription(String, '/return/req', lambda m: self.q.append(json.loads(m.data)), 100)
         self.create_subscription(Float64MultiArray, '/drawer/tcp_target', lambda m: setattr(self, 'tgt', np.asarray(m.data).reshape(4, 4)), 10)
@@ -82,10 +84,10 @@ def main():
         st = g.state
         qf = max(cmd, 0.0017)
         fb = 2.0 if (st in ('CLOSING', 'GRASPED', 'MOVING') and cmd < 0.003 and not (a.break_grasp and st == 'MOVING')) else 0.0
-        rc = {'status': 'ok', 'points': [{'f': fb, 'robot_link': f_, 'class': cls} for f_ in DRG.FINGERS] if fb else []}
+        rc = {'status': 'ok', 'complete': True, 'points': [{'f': fb, 'robot_link': f_, 'class': cls, 'evidence_ok': True} for f_ in DRG.FINGERS] if fb else []}
         err = float(np.linalg.norm(K.fk(x, 'link_tcp')[:3, 3] - nd.tgt[:3, 3])) if nd.tgt is not None else 1.0
         qs += (math.radians(float(Qd[i])) - qs) * 0.2                                   # 一列 0.05 s 內走完（物理步 0.01 s）
-        ab = g.step(t, rc, qs, (qf, qf), err, 5.0, time.monotonic() - hb, cmd <= 1e-9 or fb > 0, fcmd=cmd)
+        ab = g.step(t, rc, qs, (qf, qf), err, 5.0, time.monotonic() - hb, cmd <= 1e-9 or fb > 0, fcmd=cmd, tcp_rot=0.0, rel=np.eye(4))
         t += 0.01
         n += 1
         if ab:
@@ -97,6 +99,9 @@ def main():
                 nd.st_pub.publish(String(data=json.dumps({'state': g.state, 'abort': ab}, default=float)))
                 time.sleep(0.02)
             return 3
+        _c = Clock()
+        _c.clock.sec, _c.clock.nanosec = int(t), int((t % 1) * 1e9)
+        nd.clk_pub.publish(_c)
         if n % 2 == 0:
             nd.sync_pub.publish(Float64MultiArray(data=[t, float(n), qs, 0.0] + [float(v) for v in x] + [fb, fb, qf]))
             nd.st_pub.publish(String(data=json.dumps({'sim_t': t, 'state': g.state, 'op': g.op, 'abort': None}, default=float)))

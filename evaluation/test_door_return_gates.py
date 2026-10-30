@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """door_return_gates 純邏輯測試。python3 evaluation/test_door_return_gates.py"""
+import math
+
+import numpy as np
+
 import door_return_gates as G
 
 OPEN, CLOSED = 0.0089, 0.0
@@ -7,7 +11,7 @@ DT = 0.01
 
 
 def rec(pts=()):
-    return {'status': 'ok', 'points': [{'f': f, 'robot_link': lk, 'class': cl} for lk, cl, f in pts]}
+    return {'status': 'ok', 'complete': True, 'points': [{'f': f, 'robot_link': lk, 'class': cl, 'evidence_ok': True} for lk, cl, f in pts]}
 
 
 def grip(cl='bar_in', f=(2.0, 2.5)):
@@ -19,13 +23,13 @@ class Sim:
         self.g = G.ReturnGate(**kw)
         self.t, self.q = 100.0, 0.03
 
-    def run(self, s, r=None, qf=(OPEN, OPEN), tcp=0.001, wrist=5.0, hb=0.1, ramp=False, dq=0.0, ramp_at=None):
+    def run(self, s, r=None, qf=(OPEN, OPEN), tcp=0.001, wrist=5.0, hb=0.1, ramp=False, dq=0.0, ramp_at=None, rot=0.001, rel=None):
         n = int(round(s / DT))
         for _ in range(n):
             self.t += DT
             self.q += dq * DT
             rd = ramp or (ramp_at is not None and self.t >= ramp_at)
-            ab = self.g.step(self.t, r if r is not None else rec(), self.q, qf, tcp, wrist, hb, rd)
+            ab = self.g.step(self.t, r if r is not None else rec(), self.q, qf, tcp, wrist, hb, rd, tcp_rot=rot, rel=np.eye(4) if rel is None else rel)
             if ab:
                 return ab
         return None
@@ -165,13 +169,75 @@ def t_open_needs_settle():
     assert s.run(0.7, grip(), qf=(0.002, 0.002)) is None and s.g.state == 'OPENING'
 
 
+def t_close_refused_rotation():
+    s = Sim()
+    s.g.arm(1, 'in', s.t)
+    s.g.request('close', s.t)
+    assert s.run(0.2, rot=0.05) is None and s.g.state == 'FREE'
+    assert s.run(0.02) is None and s.g.state == 'CLOSING'
+
+
+def _grasped():
+    s = Sim()
+    s.g.arm(1, 'in', s.t)
+    s.g.request('close', s.t)
+    s.run(0.02)
+    s.run(2.2, grip(), qf=(0.002, 0.002), ramp=True)
+    assert s.g.state == 'GRASPED'
+    return s
+
+
+def t_drift_pos_aborts_and_no_rebase():
+    s = _grasped()
+    T = np.eye(4)
+    T[0, 3] = 0.004
+    assert s.run(1.0, grip(), qf=(0.002, 0.002), rel=T) is None
+    T[0, 3] = 0.006
+    ab = s.run(0.05, grip(), qf=(0.002, 0.002), rel=T)
+    assert ab and ab['why'] == 'grasp_drift'
+
+
+def t_drift_rot_aborts():
+    s = _grasped()
+    a = math.radians(3.0)
+    T = np.eye(4)
+    T[:2, :2] = [[math.cos(a), -math.sin(a)], [math.sin(a), math.cos(a)]]
+    ab = s.run(0.05, grip(), qf=(0.002, 0.002), rel=T)
+    assert ab and ab['why'] == 'grasp_drift'
+
+
+def t_incomplete_evidence_no_accumulate():
+    s = Sim()
+    s.g.arm(1, 'in', s.t)
+    s.g.request('close', s.t)
+    s.run(0.02)
+    bad = dict(grip(), complete=False)
+    for _ in range(4):
+        assert s.run(0.6, grip(), qf=(0.002, 0.002), ramp=True) is None
+        assert s.run(0.1, bad, qf=(0.002, 0.002), ramp=True) is None
+    assert s.g.state == 'CLOSING'
+
+
+def t_point_not_evidence_ok_invalid():
+    r = grip()
+    r['points'][0]['evidence_ok'] = False
+    assert G.forces(r) is None
+
+
+def t_missing_evidence_counts_as_finger_loss():
+    s = _grasped()
+    ab = s.run(0.3, dict(grip(), complete=False), qf=(0.002, 0.002))
+    assert ab and ab['why'] == 'finger_loss'
+
+
 def t_finger_loss():
     s = Sim()
     s.g.arm(1, 'in', s.t)
     s.g.request('close', s.t)
     s.run(0.02)
     s.run(2.2, grip(), qf=(0.002, 0.002), ramp=True)
-    ab = s.run(0.7, rec([('uflite_finger1', 'bar_in', 2.0)]), qf=(0.002, 0.002))
+    assert s.run(0.15, rec([('uflite_finger1', 'bar_in', 2.0)]), qf=(0.002, 0.002)) is None
+    ab = s.run(0.1, rec([('uflite_finger1', 'bar_in', 2.0)]), qf=(0.002, 0.002))
     assert ab and ab['why'] == 'finger_loss'
 
 
@@ -247,7 +313,7 @@ def t_latched_freezes_finger():
     s.g.arm(1, 'in', s.t)
     s.g.request('close', s.t)
     s.run(0.02)
-    s.g.step(s.t + DT, rec([('link5', 'panel', 5.0)]), s.q, (0.004, 0.004), 0.001, 5.0, 0.1, False, fcmd=0.004)
+    s.g.step(s.t + DT, rec([('link5', 'panel', 5.0)]), s.q, (0.004, 0.004), 0.001, 5.0, 0.1, False, fcmd=0.004, tcp_rot=0.0, rel=np.eye(4))
     assert s.g.abort and s.g.finger_target() == 0.004
 
 

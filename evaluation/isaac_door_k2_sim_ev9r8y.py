@@ -2805,6 +2805,12 @@ def main() -> int:
         import door_return_gates as DRG
         _fcn_d, _dp_d = DDP.make_drawer_contact_fns(finger_v_d, drawer_pair_v, a.physics_dt)
         a.stow_q_drawer = [float(v) for v in a.drawer_stow_q.split(',')]
+        _hp_rt = {'in': stage.GetPrimAtPath(f'{DOOR_ROOT}/leaf/handle_bar_inner'), 'out': stage.GetPrimAtPath(f'{DOOR_ROOT}/leaf/handle_bar')}
+
+        def _handle_T(bar_):                                                        # EV9r8y：指定橫桿世界位姿（抓持漂移的相對基準）
+            xfc.Clear()
+            _m = xfc.GetLocalToWorldTransform(_hp_rt[bar_])
+            return np.array([[float(_m[r_][c_]) for r_ in range(4)] for c_ in range(4)], float)
         DDP.run_drawer_phase({
             'a': a, 'world': world, 'robot': robot, 'node': node, 'ex': ex, 'chain': chain,
             'idx': idx, 'fidx': fidx, 'ARM': ARM, 'FJ': FJ, 'xfc': xfc, 'dprim': dprim_d, 'hprim': hprim_d, 'DY0': DY0_d,
@@ -2817,7 +2823,7 @@ def main() -> int:
             'apply_pos': _apply_pos, 'grip_latch': k2_latch.grip, 'latched': (lambda: k2_latch.latched is not None),
             'door_q_fn': (lambda: door_q_qd()[0]), 'step_id0': step_id,
             'ReturnGate': DRG.ReturnGate, 'forces': DRG.forces, 'bar': DRG.BAR, 'fingers': DRG.FINGERS, 'wall': _ev_time.monotonic,
-            'door_qd': door_q_qd, 'wrist': wrist_force, 'fk': (lambda x_: K.fk(np.asarray(x_, float), 'link_tcp')), 'expire_chain': (lambda: k2_latch.expire_chain(chain)),
+            'handle_T': _handle_T, 'door_qd': door_q_qd, 'wrist': wrist_force, 'fk': (lambda x_: K.fk(np.asarray(x_, float), 'link_tcp')), 'expire_chain': (lambda: k2_latch.expire_chain(chain)),
             'door_rec': (lambda sid_, t_: (_snap.take(sid_, lambda: leaf_pair_v.get_contact_force_data(dt=a.physics_dt)),
                                            DCA.step_record(lambda: _snap.get(sid_), lambda: door_q_qd()[0], _door_T, dspec, a.bar_class_tol, a.physics_dt, pair_names, step=int(sid_), t=float(t_)))[1]),
             'lidar_prim': lidar_prim, 'query': query, 'excluded': excluded,
