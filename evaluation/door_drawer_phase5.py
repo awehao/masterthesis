@@ -490,7 +490,9 @@ def run_drawer_phase(c):
     rec['summary'] = ex.summary()
     rec['chain'] = chain.summary()
     rec['tenure_log'] = tenure_log
-    rec['grasp'] = dict(grasp, timeout_s=_gto, hold_s=GRASP_HOLD_S)
+    rec['grasp'] = dict(grasp, timeout_s=_gto, hold_s=GRASP_HOLD_S,
+                        seen_open_semantics='seen_open_t＝本階段首次「無夾爪命令（預設張開）或命令 ≥ finger_open」的時刻；不代表已收到抽屜任務張開命令，也不代表實測已張開',
+                        ramp_semantics='t_ramp_done 只設一次、不延後；期限自此起算')
     rec['park'] = {'park_pose': _pk, 'cfg': park_cfg.__dict__, 'gate': park_gate.state(), 'gate_last': park_gate.last,
                    'hold': None if park_hold is None else park_hold.report(), 'violation': park_state['violation'],
                    'transfer_without_gate': park_state['transfer_without_gate']}
