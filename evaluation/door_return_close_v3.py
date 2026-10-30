@@ -48,9 +48,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--q-end', type=float, default=2.0)
     ap.add_argument('--c2-stretch', type=float, default=1.0)
+    ap.add_argument('--export', default=None, help='只匯出參考列到此 JSON')
     a = ap.parse_args()
     out_path = OUT_B if a.c2_stretch > 1.0 else OUT
-    if os.path.exists(out_path):
+    if os.path.exists(out_path) and not a.export:
         raise SystemExit(f'{out_path} 已存在，不覆寫')
     t00 = time.time()
     r = json.load(open(os.path.join(RUN, 'room_run.json')))
@@ -137,6 +138,10 @@ def main():
         x[3:] = x_last[3:] + (STOW_F - x_last[3:]) * (10 * (k / n7) ** 3 - 15 * (k / n7) ** 4 + 6 * (k / n7) ** 5)
         add('C7_stow', 'R_stow', None, x, qe, PI.OPEN)
 
+    if a.export:                                                                        # 匯出 20 Hz 列（不核對、不寫結果）
+        json.dump([{'stage': r['name'], 'rule': r['rule'], 'target': r['target'], 'x': [float(v) for v in r['x']], 'q_deg': r['q'], 'qfi': r['qfi']} for r in plan], open(a.export, 'w'))
+        print(f'匯出 {len(plan)} 列 → {a.export}')
+        return
     g = json.load(open(GCFG))
     cfg = GM.GeomMonitorConfig(v_floor=dict(g['v_floor_registered']), ds_err=dict(g['downsampling']['ds_err_registered']))
     fn = GM3.backend_v3(self_mode='full')

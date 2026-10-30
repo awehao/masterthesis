@@ -58,10 +58,11 @@ def leaf_dist(p, q_deg, L=1.0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--q0', type=float, default=1.527)
+    ap.add_argument('--export', default=None, help='只匯出參考列到此 JSON')
     ap.add_argument('--slide-stretch', type=float, default=1.0, help='S2 滑入時間軸放慢倍數（v2 實際監看：順向遠離、反向接近 ⇒ 閉合速率進預測）')
     a = ap.parse_args()
     out_path = OUT_S if a.slide_stretch > 1.0 else OUT
-    if os.path.exists(out_path):
+    if os.path.exists(out_path) and not a.export:
         raise SystemExit(f'{out_path} 已存在，不覆寫')
     t00 = time.time()
     P = json.load(open(REF))
@@ -124,6 +125,10 @@ def main():
         s_ = f * sl[-1]
         add('S8_exit', 'R_stow', None, np.r_[np.interp(s_, sl, b41[:, 0]), np.interp(s_, sl, b41[:, 1]), y0 + dy * f, arm], q_e, PI.OPEN)
 
+    if a.export:                                                                        # 匯出 20 Hz 列（不核對、不寫結果）
+        json.dump([{'stage': r['name'], 'rule': r['rule'], 'target': r['target'], 'x': [float(v) for v in r['x']], 'q_deg': r['q'], 'qfi': r['qfi']} for r in plan], open(a.export, 'w'))
+        print(f'匯出 {len(plan)} 列 → {a.export}')
+        return
     g = json.load(open(GCFG))
     cfg = GM.GeomMonitorConfig(v_floor=dict(g['v_floor_registered']), ds_err=dict(g['downsampling']['ds_err_registered']))
     fn = GM3.backend_v3(self_mode='full')
