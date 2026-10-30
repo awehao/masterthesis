@@ -501,6 +501,7 @@ def main():
                     _cl = nav_clear(x_m[:2], q_d)
                     _ae = float(np.max(np.abs(x_m[3:] - _qs)))
                     if nd.n_cmd >= 5 and _cl >= a.nav_entry_clear and _ae <= a.nav_arm_tol:
+                        wait['T_hold'], wait['q_hold'] = K.fk(np.r_[x_m[:3], _qs], 'link_tcp'), [float(v) for v in _qs]
                         nd.req(kind='done')
                         phase = 'TO_NAV'
                         wait['t'] = t
@@ -508,7 +509,11 @@ def main():
                     elif t - wait['t'] > a.pre_nav_decel_s + a.nav_ready_s:
                         return fail(t, f'nav_entry_not_ready:adopt{nd.n_adopt}/cmd{nd.n_cmd}/clear{_cl:.3f}/arm{_ae:.3f}')
             elif phase == 'TO_NAV':
-                pub_target(tcp_ref(i_end))
+                if wait.get('T_hold') is not None:                             # 經 PRE_NAV：導航接管前維持同一收攏目標、名目姿態與零速度參考
+                    pub_target(wait['T_hold'])
+                    nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.w_vref, vref=[0.0, 0.0, 0.0], w_qn=a.w_qn, q_nom=wait['q_hold'], w_a=a.w_a, w_p=a.w_p)))
+                else:
+                    pub_target(tcp_ref(i_end))
                 own = str((nd.hs or {}).get('owner', '')).lower()
                 if own == 'nav' and not (nd.hs or {}).get('pending'):
                     ev(t, owner='nav', step=(nd.hs or {}).get('step'))
