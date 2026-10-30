@@ -458,7 +458,7 @@ n.create_subscription(Odometry,'/odom',lambda m:r.append(m),1)
 import time; t0=time.time()
 while not r and time.time()-t0<10: rclpy.spin_once(n,timeout_sec=0.1)
 p=r[-1].pose.pose.position; print(f'{p.x:.6f},{p.y:.6f}')"; }
-          entry(){ local seg="$1" op="$2" pxy="$3" pyaw="$4" qu="$5"; local sxy; sxy=$(odom_xy); [ -n "$sxy" ] || { RET_WHY="讀不到 odom"; return 1; }
+          entry(){ local seg="$1" op="$2" pxy="$3" pyaw="$4" qu="$5" qm="$6"; local sxy; sxy=$(odom_xy); [ -n "$sxy" ] || { RET_WHY="讀不到 odom"; return 1; }
             say "[返程 $seg] 進場：$sxy → 停位 $pxy,$pyaw；展臂 $qu"
             spawn adapter_$seg python3 -u evaluation/arm_vel_adapter.py --in-topic /wgmpc/cmd_world --consumer-node /door_k2_sim
             spawn solver_$seg python3 -u evaluation/wgmpc_wg2_node2.py --offset-hold-topic /return/offset_hold --continuous --wait-for-drawer-handover --arm-model setpoint --arm-ident "$ARM_IDENT" \
@@ -478,7 +478,7 @@ p=r[-1].pose.pose.position; print(f'{p.x:.6f},{p.y:.6f}')"; }
               return 1; fi
             spawn glide_$seg python3 -u evaluation/drawer_glide_node.py --start="$sxy" --park="$pxy" --park-yaw "$pyaw" --k-yaw 1.0 --wz-max 0.35 --out "$DIR/glide_$seg.json"
             sleep 1
-            spawn wholebody_$seg python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --motm --motm-v-cap 0.030 --motm-a-ref 0.002 --motm-k-yaw 1.0 --motm-w-cap 0.10 --motm-v-creep 0.0 --motm-overshoot 0.0 --pos-tol 0.005 --stow-q="$D_STOW" --park="$pxy,$pyaw" --q-unfold="$qu" --out "$DIR/wholebody_$seg.json"
+            spawn wholebody_$seg python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --motm --motm-v-cap 0.030 --motm-a-ref 0.002 --motm-k-yaw 1.0 --motm-w-cap 0.10 --motm-v-creep 0.0 --motm-overshoot 0.0 --pos-tol 0.005 --qd-max "$qm" --stow-q="$D_STOW" --park="$pxy,$pyaw" --q-unfold="$qu" --out "$DIR/wholebody_$seg.json"
             sleep 3
             spawn mission_$seg python3 -u evaluation/drawer_mission_node.py --out "$DIR/mission_$seg.json" --start="$sxy" --park="$pxy" --park-yaw "$pyaw" --stow-q="$D_STOW" --slow-zone 0.0
             local tp; tp=$(pid_of task_$seg); local i
@@ -494,9 +494,9 @@ p=r[-1].pose.pose.position; print(f'{p.x:.6f},{p.y:.6f}')"; }
             [ "$rc" = 0 ] && grep -q '"result": "DONE"' "$DIR/task_return_$seg.json" || { RET_WHY="${RET_WHY:-seg $seg 失敗 rc $rc}"; return 1; }; return 0; }
           pyget(){ python3 -c "import json;p=json.load(open('$RET_REF'))['entry']['$1'];print(','.join(f'{v:.6f}' for v in p['$2'][$3]))"; }
           { iso_ok && nav_leg stageA "-0.05,1.36" 120 && iso_ok \
-            && entry A 1 "$(pyget A park :2)" "$(pyget A park 2:)" "$(pyget A q_unfold :)" && iso_ok \
+            && entry A 1 "$(pyget A park :2)" "$(pyget A park 2:)" "$(pyget A q_unfold :)" 0.35 && iso_ok \
             && nav_leg stageB "0.90,-1.55;0.55,-1.86;0.2535,-1.8864" 150 \
-            && entry B 2 "$(pyget B park :2)" "$(pyget B park 2:)" "$(pyget B q_unfold :)" && iso_ok \
+            && entry B 2 "$(pyget B park :2)" "$(pyget B park 2:)" "$(pyget B q_unfold :)" 0.10 && iso_ok \
             && nav_leg home "-0.6,-2.8" 150; } && RET_OK=1
           say "[返程] 結束：RET_OK=$RET_OK ${RET_WHY}"
         else
