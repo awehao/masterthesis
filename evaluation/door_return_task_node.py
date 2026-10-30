@@ -106,7 +106,7 @@ class Nd(Node):
         self.hold_pub = self.create_publisher(Bool, '/return/offset_hold', lat)
         self.plan_pub = self.create_publisher(Path, '/plan', QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.plan_id, self.adopted, self.n_cmd = None, False, 0
-        self.create_subscription(Twist, '/cmd_vel_pre_mux', self._nav_cmd, 10)      # 平滑器輸出：relay 待命時 /cmd_vel 是套用值，不能當導航命令
+        self.create_subscription(Twist, '/cmd_vel_shadow', self._nav_cmd, 10)       # 影子護盾輸出：候選導航命令經同一安全處理的結果；/cmd_vel 待命時只是套用值回送
         self.create_subscription(String, '/gmpc/plan_ack', self._plan_ack, 10)
         self.hold_ack = None
         self.create_subscription(String, '/return/offset_hold_ack', lambda m: setattr(self, 'hold_ack', json.loads(m.data)), 10)

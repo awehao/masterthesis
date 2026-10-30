@@ -118,6 +118,7 @@ PRM=evaluation/results/door/pullback_params_60_r1.json   # pb1 r3：r2＋暫停�
 GB=evaluation/runs/phf_01_M/task.json
 PIDS=(); NAMES=()
 source "$WS/evaluation/k2_proc.sh"
+wait_or_stop(){ local pid="$1" w="$2" grace="$3" i; for i in $(seq $((w * 10))); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done; stop_bounded "$pid" "$grace"; }   # 輪詢 0.1 s（交接不多等）
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$DIR/run.log"; }
 spawn(){ local n="$1"; shift; setsid "$@" >>"$DIR/$n.log" 2>&1 & PIDS+=("$!"); NAMES+=("$n"); sleep 0.2; local g; g=$(ps -o pgid= -p "${PIDS[-1]}" 2>/dev/null | tr -d " "); printf "%s\t%s\t%s\n" "$n" "${PIDS[-1]}" "${g:-NA}" >> "$DIR/procs.tsv"; say "  起 $n PID=${PIDS[-1]} PGID=${g:-NA}"; }
 cleanup(){ say "cleanup（只針對本趟 PID；TERM → 3 s → KILL）"
@@ -133,7 +134,7 @@ trap 'say "收到 INT"; exit 130' INT
 
 REF="${PB1_REF:-evaluation/results/door/door_regrasp_ref_pb60h.json}"   # 加速變體可用 PB1_REF 指定 *_wp.json
 DOOR3=src/my_omnibot_description/config/door_local_v3.yaml
-sha256sum evaluation/ros_graph_gate.py evaluation/cmd_relay_node2.py evaluation/drawer_task_node4.py evaluation/nav_align_node.py evaluation/isaac_door_k2_sim_ev9r8z.py evaluation/door_drawer_phase6.py evaluation/door_return_gates.py evaluation/door_return_task_node.py evaluation/wgmpc_wg2_node2.py evaluation/nav_goal_plan_node.py evaluation/drawer_task_node4.py evaluation/results/door/door_return_ref_v1.json evaluation/isaac_door_k2_sim_ev9r8x.py evaluation/door_drawer_phase5.py evaluation/isaac_door_k2_sim_ev9r8w.py evaluation/door_drawer_phase4.py src/my_omnibot_description/config/drawer_unit_bar26.yaml evaluation/isaac_door_k2_sim_ev9r8v.py evaluation/door_drawer_phase3.py evaluation/isaac_door_k2_sim_ev9r8u.py evaluation/door_drawer_phase2.py evaluation/isaac_door_k2_sim_ev9r8t.py evaluation/door_coopen_core_task_node10p.py evaluation/door_drawer_phase.py evaluation/cmd_relay_node.py evaluation/drawer_glide_node.py evaluation/drawer_wholebody_node.py evaluation/drawer_task_node.py evaluation/drawer_mission_node.py evaluation/arm_vel_adapter.py evaluation/wgmpc_wg2_node.py src/ammr_bringup/worlds/mission_room.sdf src/ammr_bringup/maps/mission_room.yaml src/ammr_bringup/maps/mission_room.pgm src/my_omnibot_description/config/drawer_unit.yaml evaluation/isaac_door_k2_sim_ev9r8s.py evaluation/door_coopen_core_task_node10n.py evaluation/door_regrasp_close_settle2.py evaluation/isaac_door_k2_sim_ev9r8r.py evaluation/door_coopen_core_task_node10m.py evaluation/door_coopen_core_task_node10l.py evaluation/door_regrasp_close_settle.py evaluation/isaac_door_k2_sim_ev9r8q.py evaluation/door_k3m_applied_src_tb.py evaluation/isaac_door_k2_sim_ev9r8p.py evaluation/dl3_wgmpc_wg2_adm23_node.py evaluation/door_coopen_core_task_node10i.py evaluation/door_nav1_mission_node_r5.py evaluation/door_nav1_mission_node_r6.py evaluation/door_nav1_mission_node_r7.py evaluation/door_nav1_mission_node_r8.py evaluation/door_nav1_mission_node_r9.py evaluation/arm_vel_adapter_k3m4.py evaluation/dual_source_executor_r2.py evaluation/wb_cmd_chain_e2t.py evaluation/door_k3m_applied_src_t.py evaluation/cmd_envelope_v4.py evaluation/door_solver_tenure.py evaluation/door_nav_envelope_monitor.py evaluation/door_regrasp_m4r_policy.py evaluation/door_regrasp_m4r_policy2.py evaluation/door_coopen_core_task_node10j.py evaluation/door_coopen_core_task_node10k.py evaluation/door_w2_tenure_auth.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py evaluation/isaac_door_k2_sim_ev9r8o.py evaluation/dl3_wgmpc_wg2_adm22_node.py evaluation/door_coopen_core_task_node10h.py evaluation/door_rolling_task.py evaluation/door_k3m_mode2.py evaluation/motm_coord.py evaluation/isaac_door_k2_sim_ev9r8n.py evaluation/door_coopen_core_task_node10g.py evaluation/door_nav1_mission_node.py src/ammr_bringup/scripts/generate_door_scene_map.py src/ammr_bringup/maps/door_scene_v3.yaml src/ammr_bringup/maps/door_scene_v3.pgm src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node.py evaluation/door_k2_wholebody_node.py evaluation/isaac_door_k2_sim_ev9r8m.py evaluation/isaac_door_k2_sim_ev9r8j.py evaluation/door_coopen_core_task_node10f.py evaluation/door_coopen_core_task_node10e.py evaluation/door_coopen_bench_grasp3.py evaluation/door_coopen_bench_grasp2.py evaluation/door_coopen_core_task_node10d.py evaluation/door_settle_cont.py evaluation/door_coopen_core_task_node10c.py evaluation/dl3_wgmpc_wg2_adm21_node.py evaluation/arm_vel_adapter_k3m3.py \
+sha256sum evaluation/wgmpc_wg2_node3.py evaluation/ros_graph_gate.py evaluation/cmd_relay_node2.py evaluation/drawer_task_node4.py evaluation/nav_align_node.py evaluation/isaac_door_k2_sim_ev9r8z.py evaluation/door_drawer_phase6.py evaluation/door_return_gates.py evaluation/door_return_task_node.py evaluation/wgmpc_wg2_node2.py evaluation/nav_goal_plan_node.py evaluation/drawer_task_node4.py evaluation/results/door/door_return_ref_v1.json evaluation/isaac_door_k2_sim_ev9r8x.py evaluation/door_drawer_phase5.py evaluation/isaac_door_k2_sim_ev9r8w.py evaluation/door_drawer_phase4.py src/my_omnibot_description/config/drawer_unit_bar26.yaml evaluation/isaac_door_k2_sim_ev9r8v.py evaluation/door_drawer_phase3.py evaluation/isaac_door_k2_sim_ev9r8u.py evaluation/door_drawer_phase2.py evaluation/isaac_door_k2_sim_ev9r8t.py evaluation/door_coopen_core_task_node10p.py evaluation/door_drawer_phase.py evaluation/cmd_relay_node.py evaluation/drawer_glide_node.py evaluation/drawer_wholebody_node.py evaluation/drawer_task_node.py evaluation/drawer_mission_node.py evaluation/arm_vel_adapter.py evaluation/wgmpc_wg2_node.py src/ammr_bringup/worlds/mission_room.sdf src/ammr_bringup/maps/mission_room.yaml src/ammr_bringup/maps/mission_room.pgm src/my_omnibot_description/config/drawer_unit.yaml evaluation/isaac_door_k2_sim_ev9r8s.py evaluation/door_coopen_core_task_node10n.py evaluation/door_regrasp_close_settle2.py evaluation/isaac_door_k2_sim_ev9r8r.py evaluation/door_coopen_core_task_node10m.py evaluation/door_coopen_core_task_node10l.py evaluation/door_regrasp_close_settle.py evaluation/isaac_door_k2_sim_ev9r8q.py evaluation/door_k3m_applied_src_tb.py evaluation/isaac_door_k2_sim_ev9r8p.py evaluation/dl3_wgmpc_wg2_adm23_node.py evaluation/door_coopen_core_task_node10i.py evaluation/door_nav1_mission_node_r5.py evaluation/door_nav1_mission_node_r6.py evaluation/door_nav1_mission_node_r7.py evaluation/door_nav1_mission_node_r8.py evaluation/door_nav1_mission_node_r9.py evaluation/arm_vel_adapter_k3m4.py evaluation/dual_source_executor_r2.py evaluation/wb_cmd_chain_e2t.py evaluation/door_k3m_applied_src_t.py evaluation/cmd_envelope_v4.py evaluation/door_solver_tenure.py evaluation/door_nav_envelope_monitor.py evaluation/door_regrasp_m4r_policy.py evaluation/door_regrasp_m4r_policy2.py evaluation/door_coopen_core_task_node10j.py evaluation/door_coopen_core_task_node10k.py evaluation/door_w2_tenure_auth.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py evaluation/isaac_door_k2_sim_ev9r8o.py evaluation/dl3_wgmpc_wg2_adm22_node.py evaluation/door_coopen_core_task_node10h.py evaluation/door_rolling_task.py evaluation/door_k3m_mode2.py evaluation/motm_coord.py evaluation/isaac_door_k2_sim_ev9r8n.py evaluation/door_coopen_core_task_node10g.py evaluation/door_nav1_mission_node.py src/ammr_bringup/scripts/generate_door_scene_map.py src/ammr_bringup/maps/door_scene_v3.yaml src/ammr_bringup/maps/door_scene_v3.pgm src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node.py evaluation/door_k2_wholebody_node.py evaluation/isaac_door_k2_sim_ev9r8m.py evaluation/isaac_door_k2_sim_ev9r8j.py evaluation/door_coopen_core_task_node10f.py evaluation/door_coopen_core_task_node10e.py evaluation/door_coopen_bench_grasp3.py evaluation/door_coopen_bench_grasp2.py evaluation/door_coopen_core_task_node10d.py evaluation/door_settle_cont.py evaluation/door_coopen_core_task_node10c.py evaluation/dl3_wgmpc_wg2_adm21_node.py evaluation/arm_vel_adapter_k3m3.py \
   evaluation/door_regrasp_*.py evaluation/door_finger_loss_*.py evaluation/door_mimic_follow.py evaluation/door_k3m_observer.py "$PRM" "$GB" "$REF" "$DOOR3" > "$DIR/versions.sha256" || { say "**版本紀錄失敗** ⇒ 拒跑"; exit 95; }
 say "版本紀錄 $DIR/versions.sha256（$(wc -l < "$DIR/versions.sha256") 檔；git $(git rev-parse --short HEAD)）"
 say "python3＝$(command -v python3)；VIRTUAL_ENV=${VIRTUAL_ENV:-（無）}"
@@ -257,6 +258,7 @@ fi
 sleep 3
 spawn gmpc_diag ros2 topic echo --csv /gmpc/diag std_msgs/msg/Float32MultiArray
 spawn shield ros2 run ammr_wholebody_mpc scan_safety_shield --ros-args -p use_sim_time:=true -p enable:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_shield -p cmd_out_topic:=/cmd_vel -p robot_radius:=0.39 -p self_return_radius:=0.30 -p alpha:=2.0 -p a_brake:=6.25 -p tau:=0.15 -p vx_max:=0.2775 -p vy_max:=0.2775 -p wz_max:=1.1327
+spawn shield_shadow ros2 run ammr_wholebody_mpc scan_safety_shield --ros-args -r __node:=scan_safety_shield_shadow -r /shield/diag:=/shield_shadow/diag -p use_sim_time:=true -p enable:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_mux -p cmd_out_topic:=/cmd_vel_shadow -p robot_radius:=0.39 -p self_return_radius:=0.30 -p alpha:=2.0 -p a_brake:=6.25 -p tau:=0.15 -p vx_max:=0.2775 -p vy_max:=0.2775 -p wz_max:=1.1327
 sleep 3
 spawn nav1 python3 -u evaluation/door_nav1_mission_node_r9.py --goal="$STAND" --out "$DIR/nav1.json" --rolling --nav-timeout-s 150
 spawn wholebody python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --motm --motm-v-cap 0.030 --motm-a-ref 0.002 --motm-k-yaw 1.0 --motm-w-cap 0.10 --motm-v-creep 0.0 --motm-overshoot 0.0 --pos-tol 0.005 --stow-q "$K2_READY" --park="$STAND" --q-unfold="$Q_PRE" --out "$DIR/wholebody.json"
@@ -279,6 +281,7 @@ tsnap(){ local tag="$1"; { for _t in /cmd_vel /cmd_vel_pre_mux /cmd_vel_pre_shie
 ( until [ "$(grep -c '^\[nav1\] 分段 → CRUISE' "$DIR/nav1.log" 2>/dev/null)" -ge 2 ]; do kill -0 "$(awk '$1=="task"{print $2}' "$DIR/procs.tsv")" 2>/dev/null || exit 0; sleep 1; done; tsnap mission2 ) &
 say "[任務] 等任務節點結束（牆鐘最多 1600 s）"
 wait_logs(){ local _i _a _ok; for _i in $(seq 200); do _ok=1; _a=("$@"); while [ "${#_a[@]}" -ge 2 ]; do grep -q "${_a[1]}" "${_a[0]}" 2>/dev/null || _ok=0; _a=("${_a[@]:2}"); done; [ "$_ok" = 1 ] && return 0; sleep 0.1; done; return 1; }
+pgids(){ local _n _p; for _n in "$@"; do _p=$(pid_of "$_n"); [ -n "$_p" ] && awk -v p="$_p" '$2==p{print $3}' "$DIR/procs.tsv"; done; }
 pid_of(){ local i; for i in "${!NAMES[@]}"; do [ "${NAMES[$i]}" = "$1" ] && echo "${PIDS[$i]}"; done; }
 SIM_PID=$(pid_of sim); TASK_PID=$(pid_of task); SOLVER_PID=$(pid_of solver); OBS_PID=$(pid_of lw_observer); WB_PID=$(pid_of wholebody); NAV1_PID=$(pid_of nav1)
 say "  PID：sim $SIM_PID task $TASK_PID solver $SOLVER_PID observer $OBS_PID wholebody $WB_PID nav1 $NAV1_PID"
@@ -298,30 +301,37 @@ if grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && grep -q '門段交回導�
     wait_or_stop "$SOLVER_PID" 30 10; RC_SOLVER=$STOP_RC; HOW_SOLVER=$STOP_HOW
     wait_or_stop "$WB_PID" 20 5; RC_WB=$STOP_RC; HOW_WB=$STOP_HOW
     for _n in nav1 lw_observer adapter; do _p=$(pid_of $_n); [ -n "$_p" ] && { kill -TERM -- "-$(ps -o pgid= -p "$_p" | tr -d ' ')" 2>/dev/null || kill -TERM "$_p" 2>/dev/null; }; done
-    _ok_iso=0; python3 -u evaluation/ros_graph_gate.py --zero /drawer/tcp_target /drawer/solver_start /gripper/cmd /handover/request /plan /cmd_vel_pre_shield /wgmpc/cmd_world /wgmpc/cmd_env --timeout-s 12 2>&1 | tee -a "$DIR/run.log"; [ "${PIPESTATUS[0]}" = 0 ] && _ok_iso=1
+    _ok_iso=0; _go=$(python3 -u evaluation/ros_graph_gate.py --zero /drawer/tcp_target /drawer/solver_start /gripper/cmd /handover/request /plan /cmd_vel_pre_shield /wgmpc/cmd_world /wgmpc/cmd_env --dead-pgids $(pgids task solver wholebody nav1 lw_observer adapter) --print-odom --timeout-s 15 2>&1); _rc=$?; echo "$_go" | tee -a "$DIR/run.log"
+    DSTART_XY=$(echo "$_go" | awk '/^ODOM/{print $2}' | cut -d, -f1,2); [ "$_rc" = 0 ] && [ -n "$DSTART_XY" ] && _ok_iso=1
     if [ "$_ok_iso" != 1 ]; then
       say "**門段發布者未全數消失** ⇒ 不起抽屜段，整體受控停止"
       timeout 5 ros2 topic pub --once /room/stop std_msgs/msg/String "{data: 'drawer phase refused: door publishers alive'}" >/dev/null 2>&1
     else
       say "[交接] 門段發布者全數消失（隔離核對通過）"
-      DSTART_XY="0.655,0.81"; ESC_OK=1; DRAWER_PHASE=1
+      ESC_OK=1; DRAWER_PHASE=1
+      spawn nav_drawer python3 -u evaluation/nav_goal_plan_node.py --wp="$D_PARK_XY" --tol 1.2 --timeout-s 60 --out "$DIR/nav_drawer.json"   # 先換計畫再接通輸出：舊計畫不得帶車
+      wait_logs "$DIR/nav_drawer.log" '\[nav\] 計畫' || say "**導航計畫未發**"
       spawn relay_d python3 -u evaluation/cmd_relay_node2.py
-      spawn nav_drawer python3 -u evaluation/nav_goal_plan_node.py --wp="$D_PARK_XY" --tol 1.2 --timeout-s 60 --out "$DIR/nav_drawer.json"
       say "[抽屜段] 導航即刻起步（單一 GMPC，不重啟）；途中備妥抽屜節點；停位 $D_PARK；收臂 $D_STOW"
       if [ "$DRAWER_PHASE" = 1 ] && [ "${ESC_OK:-0}" = 1 ]; then
         spawn glide_d python3 -u evaluation/drawer_glide_node.py --start="$DSTART_XY" --park="$D_PARK_XY" --park-yaw "$D_PARK_YAW" --k-yaw 1.0 --wz-max 0.35 --out "$DIR/glide_drawer.json"
         spawn wholebody_d python3 -u evaluation/drawer_wholebody_node.py --solver-handshake --pos-tol 0.005 --motm --park="$D_PARK" --stow-q="$D_STOW" --out "$DIR/wholebody_drawer.json"
         spawn task_d python3 -u evaluation/drawer_task_node4.py --done-at-handback --motm-w-a 0.05 --stow-q="$D_STOW" --start="0.20,1.55,-2.24" --park="$D_PARK" --open-m 0.200 --grasp-depth-m 0.0068 --contact-min-n 0.5 --motm --standoff-m 0.03 --pre-ramp-mps 0.03 --pre-settle-s 0.5 --restow-mode sync --approach-rate 0.02 --motm-w-qn 0.8 --motm-w-vref-pre 0.3 --out "$DIR/task_drawer.json"
         spawn adapter_d python3 -u evaluation/arm_vel_adapter.py --in-topic /wgmpc/cmd_world --consumer-node /door_k2_sim
-        spawn solver_d python3 -u evaluation/wgmpc_wg2_node.py --continuous --wait-for-drawer-handover --arm-model setpoint --arm-ident "$ARM_IDENT" \
+        spawn solver_d python3 -u evaluation/wgmpc_wg2_node3.py --seed-applied-hist --continuous --wait-for-drawer-handover --arm-model setpoint --arm-ident "$ARM_IDENT" \
           --cmd-topic /wgmpc/cmd_world --target-topic /drawer/tcp_target --target-offset 0 0 0 --N 5 --rate 20 \
           --delay-comp-state-cycles 1.6 --delay-comp-cmd-cycles 1.0 --near-target-gamma 1.0 --w-s 0.001 --w-a 0.05 --w-s-arm 0.05 \
           --margin-guard --coord-topic /wgmpc/coord --offset-init-static --offset-free --reach-pos-m 0.005 --reach-rot-rad 0.02 --hold-s 2.0 \
-          --duration-s 600 --duration-sim-s 400 --u-prev-policy strict --assume-initial-rest --out "$DIR/align_solver_drawer.json"
-        wait_logs "$DIR/solver_d.log" '已初始化' "$DIR/wholebody_d.log" '暖機' "$DIR/glide_d.log" '備妥距離' "$DIR/task_d.log" '\[task\]' || say "**抽屜節點 20 s 未就緒**（照舊起編排，由閘門判）"
+          --duration-s 600 --duration-sim-s 400 --u-prev-policy strict --out "$DIR/align_solver_drawer.json"
+        _nodes_ok=1; wait_logs "$DIR/solver_d.log" '已初始化' "$DIR/wholebody_d.log" '暖機' "$DIR/glide_d.log" '備妥距離' "$DIR/task_d.log" '\[task\]' || _nodes_ok=0
         say "[抽屜段] 編排節點（最多 900 s 牆鐘）"
-        spawn mission_d python3 -u evaluation/drawer_mission_node.py --out "$DIR/mission_drawer.json" --start="$DSTART_XY" --park="$D_PARK_XY" --park-yaw "$D_PARK_YAW" --stow-q="$D_STOW" --slow-zone 0.0
-        _MPID=$(pid_of mission_d); _w=0; _abort_why=""                          # 編排、模擬器、包絡違反三者同看（不空等）
+        _MPID=""; _w=0; _abort_why=""                                           # 編排、模擬器、包絡違反三者同看（不空等）
+        if [ "$_nodes_ok" = 1 ]; then
+          spawn mission_d python3 -u evaluation/drawer_mission_node.py --out "$DIR/mission_drawer.json" --start="$DSTART_XY" --park="$D_PARK_XY" --park-yaw "$D_PARK_YAW" --stow-q="$D_STOW" --slow-zone 0.0
+          _MPID=$(pid_of mission_d)
+        else
+          _abort_why="抽屜節點 20 s 未就緒，不起編排"
+        fi
         while kill -0 "$_MPID" 2>/dev/null; do
           kill -0 "$SIM_PID" 2>/dev/null || { _abort_why="模擬器已結束"; break; }
           grep -q '導航包絡違反' "$DIR/sim.log" && { _abort_why="導航包絡違反"; break; }
@@ -330,7 +340,7 @@ if grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && grep -q '門段交回導�
         done
         if [ -n "$_abort_why" ]; then
           say "**抽屜段中止**：$_abort_why ⇒ 結束編排（失敗）"
-          wait_or_stop "$_MPID" 15 5; RC_DMISSION=fail
+          [ -n "$_MPID" ] && wait_or_stop "$_MPID" 15 5; RC_DMISSION=fail
         else
           wait "$_MPID" 2>/dev/null; RC_DMISSION=$?
         fi
@@ -369,8 +379,8 @@ if grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && grep -q '門段交回導�
           say "[返程] 抽屜 DONE；抽屜段節點受控結束、隔離核對"
           wait_or_stop "$(pid_of task_d)" 20 5; wait_or_stop "$(pid_of solver_d)" 20 5
           for _n in wholebody_d glide_d adapter_d; do _p=$(pid_of $_n); [ -n "$_p" ] && { kill -TERM -- "-$(ps -o pgid= -p "$_p" | tr -d ' ')" 2>/dev/null || kill -TERM "$_p" 2>/dev/null; }; done
-          iso_ok(){ python3 -u evaluation/ros_graph_gate.py --zero /drawer/tcp_target /drawer/solver_start /gripper/cmd /handover/request /wgmpc/cmd_world /wgmpc/coord --timeout-s 12 2>&1 | tee -a "$DIR/run.log"; [ "${PIPESTATUS[0]}" = 0 ]; }
-          nav_leg(){ local tag="$1" wp="$2" to="$3"; python3 -u evaluation/nav_goal_plan_node.py --watch --wp="$wp" --tol 0.25 --timeout-s "$to" --out "$DIR/nav_$tag.json" >>"$DIR/nav_$tag.log" 2>&1 & local p=$!
+          iso_ok(){ python3 -u evaluation/ros_graph_gate.py --zero /drawer/tcp_target /drawer/solver_start /gripper/cmd /handover/request /wgmpc/cmd_world /wgmpc/coord --dead-pgids $(pgids "$@") --timeout-s 15 2>&1 | tee -a "$DIR/run.log"; [ "${PIPESTATUS[0]}" = 0 ]; }
+          nav_leg(){ local tag="$1" wp="$2" to="$3" tl="${4:-0.25}"; python3 -u evaluation/nav_goal_plan_node.py --watch --wp="$wp" --tol "$tl" --timeout-s "$to" --out "$DIR/nav_$tag.json" >>"$DIR/nav_$tag.log" 2>&1 & local p=$!
             while kill -0 $p 2>/dev/null; do kill -0 "$SIM_PID" 2>/dev/null || { RET_WHY="模擬器已結束（nav $tag）"; kill $p 2>/dev/null; return 1; }; grep -q '返程閘門中止\|導航包絡違反' "$DIR/sim.log" && { RET_WHY="中止（nav $tag）"; kill $p 2>/dev/null; return 1; }; sleep 0.1; done
             wait $p; local rc=$?; grep '^\[nav\]' "$DIR/nav_$tag.log" | tee -a "$DIR/run.log"; [ "$rc" = 0 ] || RET_WHY="導航 $tag 失敗 rc $rc"; return $rc; }
           # 進場拆兩步：prep 在導航途中備妥節點（等 READY、求解器與全身端就緒），go 起編排節點開始滾動交棒
@@ -378,13 +388,13 @@ if grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && grep -q '門段交回導�
             ENTRY_ARGS="$pxy|$pyaw|$sxy"
             say "[返程 $seg] 備妥：起點線 $sxy → 停位 $pxy,$pyaw；展臂 $qu"
             spawn adapter_$seg python3 -u evaluation/arm_vel_adapter.py --in-topic /wgmpc/cmd_world --consumer-node /door_k2_sim
-            spawn solver_$seg python3 -u evaluation/wgmpc_wg2_node2.py --offset-hold-topic /return/offset_hold --continuous --wait-for-drawer-handover --arm-model setpoint --arm-ident "$ARM_IDENT" \
+            spawn solver_$seg python3 -u evaluation/wgmpc_wg2_node3.py --seed-applied-hist --offset-hold-topic /return/offset_hold --continuous --wait-for-drawer-handover --arm-model setpoint --arm-ident "$ARM_IDENT" \
               --cmd-topic /wgmpc/cmd_world --target-topic /drawer/tcp_target --target-offset 0 0 0 --N 5 --rate 20 \
               --delay-comp-state-cycles 1.6 --delay-comp-cmd-cycles 1.0 --near-target-gamma 1.0 --w-s 0.001 --w-a 0.05 --w-s-arm 0.05 \
               --margin-guard --coord-topic /wgmpc/coord --offset-init-static --offset-free --reach-pos-m 0.005 --reach-rot-rad 0.02 --hold-s 2.0 \
-              --duration-s 1200 --duration-sim-s 700 --u-prev-policy strict --assume-initial-rest --out "$DIR/align_solver_$seg.json"
+              --duration-s 1200 --duration-sim-s 700 --u-prev-policy strict --out "$DIR/align_solver_$seg.json"
             spawn task_$seg python3 -u evaluation/door_return_task_node.py --ref "$RET_REF" --seg "$seg" --op "$op" --tcp-backoff-m "$tb" --w-p-contact "$wpc" $es --out "$DIR/task_return_$seg.json"
-            spawn glide_$seg python3 -u evaluation/drawer_glide_node.py --start="$sxy" --park="$pxy" --park-yaw "$pyaw" --k-yaw 1.0 --wz-max 0.35 --out "$DIR/glide_$seg.json"
+            [ "$sxy" = fresh ] || spawn glide_$seg python3 -u evaluation/drawer_glide_node.py --start="$sxy" --park="$pxy" --park-yaw "$pyaw" --k-yaw 1.0 --wz-max 0.35 --out "$DIR/glide_$seg.json"
             spawn wholebody_$seg python3 -u evaluation/door_k2_wholebody_node.py --solver-handshake --motm --motm-v-cap 0.030 --motm-a-ref 0.002 --motm-k-yaw 1.0 --motm-w-cap 0.10 --motm-v-creep 0.0 --motm-overshoot 0.0 --pos-tol 0.005 --qd-max "$qm" --stow-q="$D_STOW" --park="$pxy,$pyaw" --q-unfold="$qu" --out "$DIR/wholebody_$seg.json"
             local tp _w; tp=$(pid_of task_$seg)
             for _w in $(seq 200); do
@@ -397,6 +407,11 @@ if grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && grep -q '門段交回導�
             for _n in task_$seg solver_$seg adapter_$seg glide_$seg wholebody_$seg; do _p=$(pid_of $_n); [ -n "$_p" ] && { kill -TERM -- "-$(ps -o pgid= -p "$_p" | tr -d ' ')" 2>/dev/null || kill -TERM "$_p" 2>/dev/null; }; done
             return 1; }
           go(){ local seg="$1" pxy pyaw sxy; IFS='|' read -r pxy pyaw sxy <<<"$ENTRY_ARGS"
+            if [ "$sxy" = fresh ]; then                                          # 進場線取到達判定當下的實測位置
+              sxy=$(python3 -c "import json;d=json.load(open('$DIR/nav_$2.json'));print(f\"{d['xy'][0]:.6f},{d['xy'][1]:.6f}\")"); [ -n "$sxy" ] || { RET_WHY="讀不到進場實測位置"; return 1; }
+              spawn glide_$seg python3 -u evaluation/drawer_glide_node.py --start="$sxy" --park="$pxy" --park-yaw "$pyaw" --k-yaw 1.0 --wz-max 0.35 --out "$DIR/glide_$seg.json"
+              wait_logs "$DIR/glide_$seg.log" '備妥距離' || { RET_WHY="glide_$seg 未就緒"; return 1; }
+            fi
             spawn mission_$seg python3 -u evaluation/drawer_mission_node.py --out "$DIR/mission_$seg.json" --start="$sxy" --park="$pxy" --park-yaw "$pyaw" --stow-q="$D_STOW" --slow-zone 0.0
             local tp; tp=$(pid_of task_$seg); local i
             for i in $(seq 9000); do
@@ -421,10 +436,10 @@ if grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && grep -q '門段交回導�
             [ "$rc" = 0 ] || { RET_WHY="${RET_WHY:-末端對位 rc $rc}"; return 1; }; return 0; }
           pyget(){ python3 -c "import json;p=json.load(open('$RET_REF'))['entry']['$1'];print(','.join(f'{v:.6f}' for v in p['$2'][$3]))"; }
           _pA=$(pyget A park :2); _yA=$(pyget A park 2:); _qA=$(pyget A q_unfold :); _pB=$(pyget B park :2); _yB=$(pyget B park 2:); _qB=$(pyget B q_unfold :)
-          { iso_ok && prep A 1 "$_pA" "$_yA" "$_qA" 0.35 0.001 50 "--end-row 800 --pre-nav-roll --nav-wp 0.90,-1.55;0.55,-1.86;0.2535,-1.8864" "0.355,1.745" \
-            && nav_leg stageA "0.20,1.55" 120 && go A && iso_ok \
+          { iso_ok task_d solver_d wholebody_d glide_d adapter_d && prep A 1 "$_pA" "$_yA" "$_qA" 0.35 0.001 50 "--end-row 800 --pre-nav-roll --nav-wp 0.90,-1.55;0.55,-1.86;0.2535,-1.8864" fresh \
+            && nav_leg stageA "0.20,1.55" 120 0.45 && go A stageA && iso_ok task_A solver_A wholebody_A glide_A adapter_A mission_A \
             && prep B 2 "$_pB" "$_yB" "$_qB" 0.10 0.002 100 "--nav-wp=-0.6,-2.8 --nav-entry-clear 0.55" "0.42,-1.88" \
-            && nav_leg stageB "0.2535,-1.8864" 150 && go B && iso_ok \
+            && nav_leg stageB "0.2535,-1.8864" 150 && go B stageB && iso_ok task_B solver_B wholebody_B glide_B adapter_B mission_B \
             && nav_leg home "-0.6,-2.8" 150 \
             && align_home; } && RET_OK=1
           say "[返程] 結束：RET_OK=$RET_OK ${RET_WHY}"
