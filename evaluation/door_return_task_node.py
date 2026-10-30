@@ -103,6 +103,13 @@ def main():
     ap.add_argument('--op', type=int, required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--bridge-s', type=float, default=4.0)
+    ap.add_argument('--bridge-speed', type=float, default=0.015)         # 橋接時長下限＝入口位置差／此值
+    ap.add_argument('--bridge-k', type=float, default=0.5)               # 橋接底盤 P 增益（rt_6 B：參考速度 0 時底盤不走、手臂硬伸）
+    ap.add_argument('--bridge-v-max', type=float, default=0.03)
+    ap.add_argument('--bridge-w-max', type=float, default=0.10)
+    ap.add_argument('--bridge-base-tol', type=float, default=0.02)
+    ap.add_argument('--bridge-yaw-tol', type=float, default=0.03)
+    ap.add_argument('--bridge-w-vref', type=float, default=1.0)
     ap.add_argument('--entry-timeout-s', type=float, default=240.0)
     ap.add_argument('--park-tol', type=float, default=0.20)
     ap.add_argument('--arm-tol', type=float, default=0.03)
@@ -161,7 +168,7 @@ def main():
     wait = {'t': None}
     armed = False
     phase, idx, t_tick, delta = 'ENTRY', 0, None, None
-    T_b0, t_b0 = None, None
+    T_b0, t_b0, bridge_s = None, None, a.bridge_s
     tgt_row = 0
     t_wait = None
     last_hb = 0.0
@@ -259,24 +266,32 @@ def main():
                     nd.start_pub.publish(Bool(data=True))
                     if nd.n_ws > 0:
                         T_b0, t_b0 = K.fk(x_m, 'link_tcp'), t
+                        bridge_s = max(a.bridge_s, bpe / a.bridge_speed)
                         phase = 'BRIDGE'
                         ev(t, to='BRIDGE', bpe=bpe, ape=ape, delta_deg=math.degrees(delta))
                 if time.monotonic() - w0 > a.entry_timeout_s:
                     return fail(t, 'entry_timeout')
             elif phase == 'BRIDGE':
                 Tr = K.fk(xref(0), 'link_tcp')
-                f = min(1.0, (t - t_b0) / a.bridge_s)
+                f = min(1.0, (t - t_b0) / bridge_s)
                 f = 10 * f ** 3 - 15 * f ** 4 + 6 * f ** 5
                 T = Tr.copy()
                 T[:3, 3] = T_b0[:3, 3] + (Tr[:3, 3] - T_b0[:3, 3]) * f
                 T[:3, :3] = T_b0[:3, :3] @ rodrigues(log_so3(T_b0[:3, :3].T @ Tr[:3, :3]) * f)    # 姿態同步內插，不直接跳到終點
                 pub_target(T)
-                pub_coord(0, soft=True)
-                if t - t_b0 >= a.bridge_s:
-                    if float(np.linalg.norm(K.fk(x_m, 'link_tcp')[:3, 3] - Tr[:3, 3])) <= 0.005:
+                x0 = xref(0)
+                e_b, e_y = x0[:2] - x_m[:2], math.atan2(math.sin(x0[2] - x_m[2]), math.cos(x0[2] - x_m[2]))
+                v_b = a.bridge_k * e_b
+                n_b = float(np.linalg.norm(v_b))
+                v_b = v_b * min(1.0, a.bridge_v_max / max(n_b, 1e-9))
+                vx, vy = MC.world_to_body(float(v_b[0]), float(v_b[1]), float(x_m[2]))
+                nd.coord_pub.publish(Float64MultiArray(data=MC.coord_msg(w_vref=a.bridge_w_vref, vref=[vx, vy, float(np.clip(a.bridge_k * e_y, -a.bridge_w_max, a.bridge_w_max))],
+                                                                         w_qn=a.w_qn, q_nom=[float(v) for v in x0[3:]])))
+                if t - t_b0 >= bridge_s:
+                    if float(np.linalg.norm(K.fk(x_m, 'link_tcp')[:3, 3] - Tr[:3, 3])) <= 0.005 and float(np.linalg.norm(e_b)) <= a.bridge_base_tol and abs(e_y) <= a.bridge_yaw_tol:
                         phase, idx = 'RUN', 0
-                        ev(t, to='RUN')
-                    elif t - t_b0 > a.bridge_s + a.gate_timeout_s:
+                        ev(t, to='RUN', bpe=float(np.linalg.norm(e_b)), yaw_e=e_y)
+                    elif t - t_b0 > bridge_s + a.gate_timeout_s:
                         return fail(t, 'bridge_timeout')
             elif phase == 'RUN':
                 sn = st[idx]
