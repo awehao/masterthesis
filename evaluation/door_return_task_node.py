@@ -162,6 +162,7 @@ def main():
     tgt_row = 0
     t_wait = None
     last_hb = 0.0
+    fresh, n_fresh = False, [0, -1.0]
     if True:
         while rclpy.ok():
             for _ in range(8):                                                 # 先清佇列，年齡才不被未處理訊息墊高
@@ -176,6 +177,18 @@ def main():
                 nd.req(kind='abort', why=f'state_stale:{_wa:.2f}/{_wc:.2f}')
                 return finish('ABORTED', f'state_stale:{_wa:.2f}/{_wc:.2f}')
             _lag = float(nd.clk_t) - float(nd.sync[0])                         # 斷流時 sync 不更新也要在此攔下，先於心跳
+            if not fresh:                                                      # 起動：佇列舊狀態排空、連續 5 筆新狀態追上時鐘才武裝與開始監看（rt_4 首輪年齡超限）
+                if abs(_lag) <= LAG_S / 4 and nd.sync[1] > n_fresh[1]:
+                    n_fresh = [n_fresh[0] + 1, float(nd.sync[1])]
+                elif abs(_lag) > LAG_S / 4:
+                    n_fresh = [0, float(nd.sync[1])]
+                fresh = n_fresh[0] >= 5
+                if not fresh and time.monotonic() - w0 > 30.0:
+                    return finish('ABORTED', f'state_not_fresh:{_lag:.3f}')
+                if not fresh:
+                    time.sleep(0.002)
+                    continue
+                rep['monitor']['fresh_lag_s'] = _lag
             if abs(_lag) > LAG_S:
                 return fail(float(nd.sync[0]), f'state_lag:{_lag:.3f}')
             if time.monotonic() - last_hb >= 0.05:
@@ -199,11 +212,13 @@ def main():
             _age = max(0.0, float(nd.clk_t) - t)                               # 模擬時間年齡（/clock − 狀態時戳）
             dec, det = mon.step(t, x_m, float(s[2]), float(s[15]), _age, r['target'] if phase != 'ENTRY' else None)
             rep['monitor']['n'] += 1
+            rep['monitor']['age_max'] = max(rep['monitor'].get('age_max', 0.0), _age)
             rep['monitor']['n_warn'] += dec == 'warn'
             for c_, v_ in (det.get('classes') or {}).items():
                 rep['monitor']['pred_min'][c_] = min(rep['monitor']['pred_min'].get(c_, 9.0), float(v_['d_pred']))
             if dec == 'stop':
                 rep['monitor']['n_stop'] += 1
+                rep['monitor']['stop_detail'] = det
                 return fail(t, f"geometry:{det.get('why')}")
 
             def xref(i):
