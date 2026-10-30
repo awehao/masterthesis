@@ -410,6 +410,7 @@ def main():
     ap.add_argument('--motm-w-vref-contact', type=float, default=None)
     ap.add_argument('--motm-w-p-contact', type=float, default=100.0)
     ap.add_argument('--motm-w-p-fine', type=float, default=100.0)        # ALIGN／ENGAGE_WAIT 的 w_p（門段接觸定版 50）
+    ap.add_argument('--motm-grip-stop', action='store_true')
     ap.add_argument('--motm-fine-align', action='store_true')            # 接近末段（ALIGN 收退讓量起、閉爪）同用接觸段權重，比照門段 fine 模式
     ap.add_argument('--motm-open-lead-m', type=float, default=0.0)
     ap.add_argument('--motm-w-a-grip', type=float, default=0.05)         # 閉爪至夾持成立：只加大 w_a、保留 w_p（rt_15 w_p 50 時受力起伏大、保持斷續）
@@ -521,6 +522,8 @@ def main():
     def motm_coord(phase):
         """本相位的 (底盤參考速度目標, q_nom, w_qn)。"""
         yaw = nd.pose[2]
+        if a.motm_grip_stop and phase == 'ENGAGE_WAIT' and close_t0 is not None:
+            return np.zeros(3), None, 0.0                                       # 閉爪起底盤參考歸零（經既有斜坡）；w_vref 1 下續走會剪切爪子（rt_31）
         if phase in ('NAVIGATE', 'UNFOLD', 'ALIGN', 'ENGAGE_WAIT'):
             v, _ = MC.approach_vref(nd.pose, park, v_cap=a.motm_v_cap,
                                     a_ref=a.motm_a_ref, k_yaw=a.motm_k_yaw,
