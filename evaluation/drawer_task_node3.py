@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# drawer_task_node3（2026-10-30；mission_rt_11／rt_14 閉爪 5 Hz 極限環、夾持逾時）：drawer_task_node2 的版本化複本，只改：閉爪開始至夾持成立（ENGAGE_WAIT 且 close_t0 已設）coord 的 w_a／w_p 取求解端啟動值（0.05／50，去程接觸段同值）；OPEN 起回 MotM 權重，其餘不變。
+# drawer_task_node3（2026-10-30；mission_rt_11／rt_14 閉爪 5 Hz 極限環、夾持逾時）：drawer_task_node2 的版本化複本，只改：閉爪開始至夾持成立（ENGAGE_WAIT 且 close_t0 已設）coord 的 w_a 改 0.05、w_p 維持 200；OPEN 起回 MotM 權重，其餘不變。
 # drawer_task_node2（2026-10-30；mission_dd_7 RESTOW 走模組預設 (0,0,0,0,−π/2,0) 而非 STOW_F；Codex 20261030 m6b 第 2 點）：drawer_task_node 的版本化複本，
 #   只加 --stow-q（覆寫模組常數 STOW：RESTOW 目標與 stow_err 同一份），由原控制流程收攏；未給 ⇒ 與原版同。
 """抽屜任務編排：ALIGN → 夾持 → 開 → 停 → 關 → 停 → 放 → 退 → 收臂 → 交還導航 → 回起點。
@@ -405,6 +405,7 @@ def main():
     ap.add_argument('--motm-w-qn', type=float, default=0.3)
     ap.add_argument('--motm-w-a', type=float, default=0.01)
     ap.add_argument('--motm-w-p', type=float, default=200.0)
+    ap.add_argument('--motm-w-a-grip', type=float, default=0.05)         # 閉爪至夾持成立：只加大 w_a、保留 w_p（rt_15 w_p 50 時受力起伏大、保持斷續）
     ap.add_argument('--motm-v-pull', type=float, default=0.018)
     ap.add_argument('--motm-a-travel', type=float, default=0.02,
                     help='開／關行程末端的 √ 減速（m/s²）')
@@ -565,8 +566,8 @@ def main():
         m.data = MC.coord_msg(w_vref=_wv, vref=vr,
                               w_qn=wq if qn is not None else 0.0,
                               q_nom=qn if qn is not None else None,
-                              w_a=None if (soft or (phase == 'ENGAGE_WAIT' and close_t0 is not None)) else a.motm_w_a,
-                              w_p=None if (soft or (phase == 'ENGAGE_WAIT' and close_t0 is not None)) else a.motm_w_p)
+                              w_a=None if soft else (a.motm_w_a_grip if (phase == 'ENGAGE_WAIT' and close_t0 is not None) else a.motm_w_a),
+                              w_p=None if soft else a.motm_w_p)
         nd.coord_pub.publish(m)
         if int(st * 10) % 2 == 0:
             rep['motm_trace'].append({
