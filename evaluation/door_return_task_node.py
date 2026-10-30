@@ -250,7 +250,7 @@ def main():
     hold, hold_noted = False, False                                            # 求解端 d̂ 保持：閉爪請求起、退出抓持止（rt_5：接觸中更新致側向力累積）
     if True:
         while rclpy.ok():
-            for _ in range(8):                                                 # 先清佇列，年齡才不被未處理訊息墊高
+            for _ in range(40):                                                # 先清佇列，年齡才不被未處理訊息墊高（訂閱增多後 8 筆不足：長拍後 clock 先清完、sync 仍舊）
                 rclpy.spin_once(nd, timeout_sec=0.0)
             if nd.sync is None or nd.clk_t is None:
                 if time.monotonic() - w0 > 60.0:
