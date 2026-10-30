@@ -168,6 +168,7 @@ class ReturnGate:
         elif st == 'CLOSING':
             if ramp_done and self.t_ramp is None:
                 self.t_ramp = t
+                self._ev(t, ramp_done=True)                                     # 抓持期限起算點（只記錄，不改判定）
             self.t_ev0 = (self.t_ev0 if self.t_ev0 is not None else t) if both else None
             if self.t_ev0 is not None and t - self.t_ev0 >= c['hold_s'] - 1e-9:
                 if rel is None:
@@ -175,7 +176,7 @@ class ReturnGate:
                 self.state = 'GRASPED'
                 self.t_low = None
                 self.E0 = np.array(rel, float)                                  # 固定基準，持握期間不重設
-                self._ev(t, to='GRASPED', fb=fb)
+                self._ev(t, to='GRASPED', fb=fb, remaining_s=None if self.t_ramp is None else c['grasp_timeout_s'] - (t - self.t_ramp))
             elif self.t_ramp is not None and t - self.t_ramp >= c['grasp_timeout_s'] - 1e-9:
                 return self._abort('grasp_no_contact', t, fb=fb)
         elif st in ('GRASPED', 'MOVING'):

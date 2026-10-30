@@ -111,7 +111,7 @@ if [ -f "$WS/install/setup.bash" ]; then set +u; source "$WS/install/setup.bash"
 START_S="${START_S:--0.6,-2.8,1.570796}"
 MAP="$WS/src/ammr_bringup/maps/mission_room.yaml"
 WORLD="$WS/src/ammr_bringup/worlds/mission_room.sdf"
-D_PARK_XY="2.263588,4.16"; D_PARK_YAW="1.297349"; D_PARK="$D_PARK_XY,$D_PARK_YAW"; D_STOW="0,0,0.15,0,-1.10,0"; RET_REF=evaluation/results/door/door_return_ref_v2.json
+D_PARK_XY="2.263588,4.16"; D_PARK_YAW="1.297349"; D_PARK="$D_PARK_XY,$D_PARK_YAW"; D_STOW="0,0,0.15,0,-1.10,0"; RET_REF=evaluation/results/door/door_return_ref_v3.json
 URDF="$WS/evaluation/models/omni_bot_manip.urdf"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
 PRM=evaluation/results/door/pullback_params_60_r1.json   # pb1 r3：r2＋暫停期手指上限 5 N（pb1_3 張爪中止後，Codex 選 (a)）
