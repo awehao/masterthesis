@@ -409,6 +409,7 @@ def main():
     ap.add_argument('--done-at-handback', action='store_true')
     ap.add_argument('--motm-w-vref-contact', type=float, default=None)
     ap.add_argument('--motm-w-p-contact', type=float, default=100.0)
+    ap.add_argument('--motm-open-lead-m', type=float, default=0.0)
     ap.add_argument('--motm-w-a-grip', type=float, default=0.05)         # 閉爪至夾持成立：只加大 w_a、保留 w_p（rt_15 w_p 50 時受力起伏大、保持斷續）
     ap.add_argument('--motm-v-pull', type=float, default=0.018)
     ap.add_argument('--motm-a-travel', type=float, default=0.02,
@@ -531,7 +532,7 @@ def main():
         qn_open = (None if q_att is None else
                    MC.lerp_posture(q_att, q_ret, frac))
         if phase == 'OPEN':
-            spd = MC.sqrt_profile(a.open_m - float(nd.H[1]), a.motm_v_pull,
+            spd = MC.sqrt_profile(a.open_m - a.motm_open_lead_m - float(nd.H[1]), a.motm_v_pull,    # 底盤前饋提前收尾，手臂補完（rt_27 過衝 205.5 mm 出開啟帶）
                                   a.motm_a_travel)
             return (np.array(MC.axis_vref(yaw, pull_ax, spd)), qn_open,
                     a.motm_w_qn)
