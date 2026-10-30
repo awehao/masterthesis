@@ -436,7 +436,7 @@ print(f'{m.position.x:.6f},{m.position.y:.6f},{y:.6f}')")
         say "  抽屜段結束方式：task_d $HOW_TASKD rc=$RC_TASKD、solver_d $HOW_SOLVERD rc=$RC_SOLVERD；失敗原因 ${_dfail:-無}"
         # ================= 第三階段：返程推開＋回程關門（規格 door_return_phase3_r1.md）=================
         RET_OK=0; RET_WHY=""
-        if [ -z "${_dfail:-}" ] && grep -q '"final_phase": "DONE"' "$DIR/task_drawer.json" 2>/dev/null; then
+        if [ -z "${_dfail:-}" ] && [ "${RC_TASKD:-1}" = 0 ] && grep -q '"final_phase": "DONE"' "$DIR/task_drawer.json" 2>/dev/null; then
           say "[返程] 抽屜 DONE；抽屜段節點受控結束、隔離核對"
           wait_or_stop "$(pid_of task_d)" 20 5; wait_or_stop "$(pid_of solver_d)" 20 5
           for _n in wholebody_d glide_d adapter_d; do _p=$(pid_of $_n); [ -n "$_p" ] && { kill -TERM -- "-$(ps -o pgid= -p "$_p" | tr -d ' ')" 2>/dev/null || kill -TERM "$_p" 2>/dev/null; }; done
