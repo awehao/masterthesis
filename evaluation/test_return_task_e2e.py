@@ -30,6 +30,8 @@ class Fake(Node):
         self.ho_pub = self.create_publisher(String, '/handover/state', 10)
         self.ws_pub = self.create_publisher(Float64MultiArray, '/wgmpc/status', 10)
         self.clk_pub = self.create_publisher(Clock, '/clock', 10)
+        self.hold_ack = self.create_publisher(String, '/return/offset_hold_ack', 10)      # 代替求解端確認 d̂ 保持
+        self.create_subscription(Bool, '/return/offset_hold', lambda m: self.hold_ack.publish(String(data=json.dumps({'hold': bool(m.data), 'n_upd': 0, 'd_hat': [0.0] * 6}))), 10)
         self.q, self.tgt, self.started, self.ho_req = [], None, False, None
         self.create_subscription(String, '/return/req', lambda m: self.q.append(json.loads(m.data)), 100)
         self.create_subscription(Float64MultiArray, '/drawer/tcp_target', lambda m: setattr(self, 'tgt', np.asarray(m.data).reshape(4, 4)), 10)

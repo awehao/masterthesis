@@ -68,6 +68,8 @@ class Nd(Node):
         self.stop_pub = self.create_publisher(String, '/wgmpc/stop', 10)
         self.ho_pub = self.create_publisher(String, '/handover/request', 10)
         self.hold_pub = self.create_publisher(Bool, '/return/offset_hold', lat)
+        self.hold_ack = None
+        self.create_subscription(String, '/return/offset_hold_ack', lambda m: setattr(self, 'hold_ack', json.loads(m.data)), 10)
         self.sync, self.state, self.hs, self.n_ws = None, None, None, 0
         self.sync_wall, self.clk_t, self.clk_wall = None, None, None
         self.create_subscription(Clock, '/clock', self._clk, QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
@@ -164,7 +166,7 @@ def main():
     t_wait = None
     last_hb = 0.0
     fresh, n_fresh = False, [0, -1.0]
-    hold = False                                                               # 求解端 d̂ 保持：閉爪請求起、退出抓持止（rt_5：接觸中更新致側向力累積）
+    hold, hold_noted = False, False                                            # 求解端 d̂ 保持：閉爪請求起、退出抓持止（rt_5：接觸中更新致側向力累積）
     if True:
         while rclpy.ok():
             for _ in range(8):                                                 # 先清佇列，年齡才不被未處理訊息墊高
@@ -299,12 +301,20 @@ def main():
                         idx += 1
                     else:
                         hold = True
-                        nd.req(kind='close', T=[float(v) for v in K.fk(xref(idx), 'link_tcp').reshape(-1)])
-                        if gs == 'CLOSING':
-                            ev(t, gate=gs)
-                            go_next(sn)
-                        elif waited():
-                            return fail(t, f'close_not_admitted:{gs}')
+                        nd.hold_pub.publish(Bool(data=True))                   # 求解端確認凍結後才送 close
+                        if not (nd.hold_ack or {}).get('hold'):
+                            if waited():
+                                return fail(t, 'offset_hold_not_acked')
+                        else:
+                            if not hold_noted:
+                                hold_noted = True
+                                ev(t, offset_hold=nd.hold_ack)
+                            nd.req(kind='close', T=[float(v) for v in K.fk(xref(idx), 'link_tcp').reshape(-1)])
+                            if gs == 'CLOSING':
+                                ev(t, gate=gs)
+                                go_next(sn)
+                            elif waited():
+                                return fail(t, f'close_not_admitted:{gs}')
                 elif sn == grp + '3':
                     if gs == 'GRASPED':
                         nd.req(kind='move')

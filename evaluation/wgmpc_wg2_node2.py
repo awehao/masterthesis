@@ -352,6 +352,7 @@ class WGMPCNode(Node):
         self._of_hold_on, self._of_hold_log = False, []
         if getattr(a, 'offset_hold_topic', ''):
             self.create_subscription(Bool, a.offset_hold_topic, self._on_offset_hold, 10)
+            self._of_hold_ack = self.create_publisher(String, a.offset_hold_topic + '_ack', 10)
         # **v2.1 運動中偏移觀測**（--offset-moving，預設關 ⇒ 既有行為不變）
         self._of_moving = None
         self._of_n_upd_moving = 0
@@ -813,6 +814,7 @@ class WGMPCNode(Node):
         if v != self._of_hold_on:
             self._of_hold_on = v
             self._of_hold_log.append({'hold': v, 'n_upd': int(self._of_n_upd), 'd_hat': [float(x) for x in self._of_d]})
+        self._of_hold_ack.publish(String(data=json.dumps({'hold': v, 'n_upd': int(self._of_n_upd), 'd_hat': [float(x) for x in self._of_d]})))
 
     def _apply_coord(self, sim_t):
         """本輪的協同設定寫進 cfg。**過期或沒有 ⇒ 退回啟動值（協同關閉）**，
