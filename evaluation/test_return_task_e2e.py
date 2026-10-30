@@ -41,6 +41,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--seg', default='A')
     ap.add_argument('--break-grasp', action='store_true')
+    ap.add_argument('--stall-state-at', type=float, default=None)         # 模擬時間到此後狀態斷流、/clock 照走
     ap.add_argument('--limit-s', type=float, default=400.0)
     a = ap.parse_args()
     P = json.load(open(os.path.join(HERE, 'results', 'door', 'door_return_ref_v1.json')))
@@ -102,7 +103,7 @@ def main():
         _c = Clock()
         _c.clock.sec, _c.clock.nanosec = int(t), int((t % 1) * 1e9)
         nd.clk_pub.publish(_c)
-        if n % 2 == 0:
+        if n % 2 == 0 and (a.stall_state_at is None or t < a.stall_state_at):
             nd.sync_pub.publish(Float64MultiArray(data=[t, float(n), qs, 0.0] + [float(v) for v in x] + [fb, fb, qf]))
             nd.st_pub.publish(String(data=json.dumps({'sim_t': t, 'state': g.state, 'op': g.op, 'abort': None}, default=float)))
             nd.ho_pub.publish(String(data=json.dumps({'owner': owner, 'step': n, 'sim_t': t, 'pending': None})))

@@ -31,6 +31,7 @@ from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa:
 
 
 WD_S = 1.0                       # 狀態／時鐘看門狗（牆鐘，只認前進）
+LAG_S = 0.2                      # 狀態相對 /clock 落後或超前的界線（模擬時間，同 GeomMonitorConfig.age_max_s）
 
 
 def rodrigues(w):
@@ -157,7 +158,8 @@ def main():
     last_hb = 0.0
     if True:
         while rclpy.ok():
-            rclpy.spin_once(nd, timeout_sec=0.0)
+            for _ in range(8):                                                 # 先清佇列，年齡才不被未處理訊息墊高
+                rclpy.spin_once(nd, timeout_sec=0.0)
             if nd.sync is None or nd.clk_t is None:
                 if time.monotonic() - w0 > 60.0:
                     return finish('ABORTED', 'no_sync')
@@ -167,6 +169,9 @@ def main():
             if _wa > WD_S or _wc > WD_S:                                       # 看門狗：不再送心跳 ⇒ 執行端閘門逾時
                 nd.req(kind='abort', why=f'state_stale:{_wa:.2f}/{_wc:.2f}')
                 return finish('ABORTED', f'state_stale:{_wa:.2f}/{_wc:.2f}')
+            _lag = float(nd.clk_t) - float(nd.sync[0])                         # 斷流時 sync 不更新也要在此攔下，先於心跳
+            if abs(_lag) > LAG_S:
+                return fail(float(nd.sync[0]), f'state_lag:{_lag:.3f}')
             if time.monotonic() - last_hb >= 0.05:
                 nd.req(kind='hb')
                 last_hb = time.monotonic()
