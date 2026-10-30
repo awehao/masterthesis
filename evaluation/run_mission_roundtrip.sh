@@ -494,7 +494,7 @@ p=r[-1].pose.pose.position; print(f'{p.x:.6f},{p.y:.6f}')"; }
             [ "$rc" = 0 ] && grep -q '"result": "DONE"' "$DIR/task_return_$seg.json" || { RET_WHY="${RET_WHY:-seg $seg 失敗 rc $rc}"; return 1; }; return 0; }
           pyget(){ python3 -c "import json;p=json.load(open('$RET_REF'))['entry']['$1'];print(','.join(f'{v:.6f}' for v in p['$2'][$3]))"; }
           { iso_ok && nav_leg stageA "-0.05,1.36" 120 && iso_ok \
-            && entry A 1 "$(pyget A park :2)" "$(pyget A park 2:)" "$(pyget A q_unfold :)" 0.35 0.0 && iso_ok \
+            && entry A 1 "$(pyget A park :2)" "$(pyget A park 2:)" "$(pyget A q_unfold :)" 0.35 0.001 && iso_ok \
             && nav_leg stageB "0.90,-1.55;0.55,-1.86;0.2535,-1.8864" 150 \
             && entry B 2 "$(pyget B park :2)" "$(pyget B park 2:)" "$(pyget B q_unfold :)" 0.10 0.003 && iso_ok \
             && nav_leg home "-0.6,-2.8" 150; } && RET_OK=1
