@@ -51,6 +51,7 @@ Stacked into OSQP standard form  l ≤ A_total z ≤ u.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Optional, Tuple
@@ -90,10 +91,28 @@ def arm_prediction(q0, s0, N, dt, model):
     return Mq, cq, Ms, cs
 
 
+def qp_kkt_check(P, q, A, l, u, x, y, tol_p=1e-8, tol_d=1e-6, tol_c=1e-6):
+    """在原問題上核對解：有限值、原始可行、對偶可行（y>0 只在上界作用、y<0 只在下界作用）、站立性、互補。
+    回傳 dict(ok, why, 各殘差)。門檻為原單位或相對 max(1,‖q‖∞)／max(1,‖y‖∞)；不通過的解不得採用。"""
+    if x is None or y is None or not (np.isfinite(x).all() and np.isfinite(y).all()):
+        return dict(ok=False, why='nonfinite')
+    z = A @ x
+    prim = float(np.max(np.maximum(l - z, z - u))) if z.size else 0.0
+    stat = float(np.abs(P @ x + q + A.T @ y).max())
+    gap_u, gap_l = np.where(np.isfinite(u), u - z, np.inf), np.where(np.isfinite(l), z - l, np.inf)
+    yp, ym = np.maximum(y, 0.0), np.maximum(-y, 0.0)
+    dual = float(max(np.max(yp[~np.isfinite(u)], initial=0.0), np.max(ym[~np.isfinite(l)], initial=0.0)))      # 無界側不得有乘子
+    comp = float(max(np.max(yp * np.where(np.isfinite(gap_u), np.abs(gap_u), 0.0), initial=0.0), np.max(ym * np.where(np.isfinite(gap_l), np.abs(gap_l), 0.0), initial=0.0)))
+    sq, sy = max(1.0, float(np.abs(q).max())), max(1.0, float(np.abs(y).max()))
+    out = dict(prim=prim, stat=stat, dual=dual, comp=comp)
+    why = 'primal' if prim > tol_p else 'stationarity' if stat > tol_d * sq else 'dual' if dual > 0.0 else 'complementarity' if comp > tol_c * sy else None
+    return dict(out, ok=why is None, why=why)
+
+
 def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800):
-    """Goldfarb–Idnani 對偶作用集法：min ½xᵀPx＋qᵀx s.t. l ≤ Ax ≤ u（P 正定）。有限步終止、不循環；可判定不可行。
-    耦合問題的主求解器：CBF slack 懲罰使 P 對角跨 0.2–2e8，OSQP 在作用集轉變時要數千至數萬次迭代（max 381 ms、D1 到迭代上限），本法同批難題 max 5.1 ms、目標值差 ≤4e-14。
-    回傳 (x, y, info)；x 為 None 表示未得解（交由 OSQP 備援）。解須通過原始可行、乘子非負（演算法內含）與穩定性核對才回傳。"""
+    """Goldfarb–Idnani 對偶作用集法：min ½xᵀPx＋qᵀx s.t. l ≤ Ax ≤ u（P 正定）。實驗用，尚未定版。
+    耦合問題的主求解器：CBF slack 懲罰使 P 對角跨 0.2–2e8，OSQP 在作用集轉變時要數千至數萬次迭代（max 381 ms、D1 到迭代上限），本實作於該批難題 max 5.1 ms。
+    回傳 (x, y, info)；x 為 None 表示未得解或未過 qp_kkt_check，一律交由 OSQP 備援，不接受可疑解。回傳 infeasible 只代表本實作未找到解，不作不可行證明。"""
     from scipy.linalg import cho_factor, cho_solve
     Pd = P.toarray()
     try:
@@ -146,12 +165,10 @@ def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800):
     y = np.zeros(A.shape[0])
     for i, sg, m in zip(act, sgn, mu):
         y[i] = -sg * m
-    z = As @ x
-    viol = float(np.max(np.maximum(l - z, z - u)))
-    stat = float(np.abs(Pd @ x + q + As.T @ y).max())
-    if viol > 1e-8 or stat > 1e-6 * max(1.0, float(np.abs(q).max())):
-        return None, None, dict(ok=False, why='verify', viol=viol, stat=stat, solver='gi')
-    return x, y, dict(ok=True, steps=step, n_active=len(act), viol=viol, stat=stat, solver='gi')
+    ck = qp_kkt_check(P, q, A, l, u, x, y)
+    if not ck['ok']:
+        return None, None, dict(ck, ok=False, why='verify:' + str(ck['why']), steps=step, solver='gi')
+    return x, y, dict(ck, steps=step, n_active=len(act), solver='gi')
 
 
 def arm_stop_sequence(arm, N, dt, tol=1e-9):
@@ -1358,15 +1375,19 @@ class GMPC:
             arm_info = dict(nz=nz, A=A_arm, l=np.concatenate(rows_l), u=np.concatenate(rows_u), Mq=Mq, cq=cq, U0=U0)
 
         # 6. OSQP solve（耦合問題先用對偶作用集法，未得解才走 OSQP；底盤問題維持封存設定）
-        import time
         t0 = time.perf_counter()
         res, qp_info = None, None
         P_sp = sparse.csc_matrix(P_dense)
         if n_arm:
-            gx, gy, qp_info = qp_dual_active(P_sp, q_vec, A_total, lb_total, ub_total)
-            if gx is not None:
-                res = SimpleNamespace(x=gx, y=gy, info=SimpleNamespace(status='solved'))
+            qp_info = dict(solver='osqp', gi_why='disabled', gi_ms=0.0, osqp_ms=None)
+            if arm.get('qp_solver', 'gi') == 'gi':
+                t_gi = time.perf_counter()
+                gx, gy, gi = qp_dual_active(P_sp, q_vec, A_total, lb_total, ub_total)
+                qp_info = dict(solver='gi' if gx is not None else 'osqp', gi_why=gi.get('why'), gi_ms=(time.perf_counter() - t_gi) * 1e3, osqp_ms=None, gi_steps=gi.get('steps'))
+                if gx is not None:
+                    res = SimpleNamespace(x=gx, y=gy, info=SimpleNamespace(status='solved'))
         if res is None:
+            t_os = time.perf_counter()
             prob = osqp.OSQP()
             # 耦合問題備援比照 W-GMPC：QP 容差須緊於殘差核對門檻 1e-6（eps 1e-5 實測手臂限制殘差 6.3e-6）
             prob.setup(P=P_sp, q=q_vec, A=A_total, l=lb_total, u=ub_total,
@@ -1374,6 +1395,8 @@ class GMPC:
                        eps_abs=1e-7 if n_arm else 1e-5, eps_rel=1e-7 if n_arm else 1e-5,        # looser tolerance for speed
                        polish=bool(n_arm), max_iter=20000 if n_arm else 8000)        # more iter for hard cases
             res = prob.solve()
+            if n_arm:
+                qp_info['osqp_ms'] = (time.perf_counter() - t_os) * 1e3
         solve_time = time.perf_counter() - t0
 
         status = res.info.status

@@ -58,7 +58,7 @@ def heuristic_speed(task, st, t, T_tcp, x, x_we, v_c):
 
 class S0bController(C.S0aController):
     def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, x_start, x_win, x_end, v_c=0.03, x_pre=None, t_blend=T_BLEND, lift_m=0.05, reg=None, required=(),
-                 obstacles_fn=None, cbf_cfg=None, arm_mode='active', v_replay=None, log_cbf=False):
+                 obstacles_fn=None, cbf_cfg=None, arm_mode='active', v_replay=None, log_cbf=False, qp_solver='gi'):
         x_pre = x_win[0] + 0.05 if x_pre is None else x_pre
         t_pre = max((x_pre - x_start) / v_c, 4.0)
         super().__init__(K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, t_reach=t_pre, lift_m=lift_m, reg=reg, required=required)
@@ -69,7 +69,7 @@ class S0bController(C.S0aController):
         self.mpc_nc = GW.GMPC(self.nav) if log_cbf else None   # 同狀態移除 CBF 重解用；獨立物件，不干擾主求解器的暖啟動
         self.obstacles_fn, self.arm_mode, self.v_replay, self.log_cbf = obstacles_fn, arm_mode, v_replay, log_cbf
         self.y_ref, self.th_ref, self.cbf_log = 0.0, 0.0, []
-        self.done_anchored, self.n_gate = False, 0
+        self.done_anchored, self.n_gate, self.qp_solver, self.qp_log = False, 0, qp_solver, []
         self.x_ws, self.x_we, self.x_end, self.v_c = float(x_win[0]), float(x_win[1]), float(x_end), float(v_c)
         self.s_ref, self.v_b, self.n_tick = float(x_start), float(v_c), 0
         self.n_fallback, self.v_b_hist = 0, []
@@ -134,7 +134,7 @@ class S0bController(C.S0aController):
             X_ref.append(X_ref[-1] @ exp_(xi_ref[j] * DT))
         w_p = C.W_NEAR if st.phase in ('PREGRASP', 'INSERT', 'CLOSE', 'LIFT') else C.W_FAR
         arm = dict(mode='active', K=self.K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=cfg.arm_model, T_seq=T_seq, w_p=w_p,
-                   lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=(st.phase == 'CARRY'), **W_ARM) if self.arm_mode == 'active' else dict(mode='hold')
+                   lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=(st.phase == 'CARRY'), qp_solver=self.qp_solver, **W_ARM) if self.arm_mode == 'active' else dict(mode='hold')
         obs = None if self.obstacles_fn is None else self.obstacles_fn(t_eff)
         solve_kw = dict(X_now=from_xytheta(*qp[:3]), X_ref_win=np.array(X_ref), xi_ref_win=xi_ref, xi_prev=self.u_prev[:3], arm=arm)
         r = self.mpc.solve(obstacles=obs, **solve_kw)
@@ -142,6 +142,7 @@ class S0bController(C.S0aController):
         if self.mpc_fail_inject is not None:
             ck.update(self.mpc_fail_inject(self.t) or {})
         self.solve_ms.append((time.perf_counter() - t0) * 1e3)
+        self.qp_log.append(dict(ck.get('qp') or dict(solver='fallback' if ck.get('fallback') else 'hold')))
         if self.log_cbf and obs:
             u_nc = np.asarray(self.mpc_nc.solve(obstacles=None, **solve_kw).u_opt, float)
             u_op = np.asarray(r.u_opt, float)
@@ -188,6 +189,13 @@ class S0bController(C.S0aController):
         r = super().report()
         vb = np.array(self.v_b_hist) if self.v_b_hist else np.zeros(1)
         ms = np.array(self.solve_ms) if self.solve_ms else np.zeros(1)
+        cnt, why = {}, {}
+        for e in self.qp_log:
+            cnt[e['solver']] = cnt.get(e['solver'], 0) + 1
+            if e.get('gi_why'):
+                why[e['gi_why']] = why.get(e['gi_why'], 0) + 1
+        os_ms = [e['osqp_ms'] for e in self.qp_log if e.get('osqp_ms') is not None]
+        r.update(qp_solver=self.qp_solver, qp_counts=cnt, gi_fail=why, backup_ms_max=max(os_ms, default=None), qp_log=[[e.get('solver'), e.get('gi_why'), round(float(e.get('gi_ms') or 0.0), 2), None if e.get('osqp_ms') is None else round(float(e['osqp_ms']), 2)] for e in self.qp_log])
         r.update(n_gate=self.n_gate, core='gmpc_wb', obstacles=None if self.obstacles_fn is None else 'obstacles_fn', arm_mode=self.arm_mode, solve_ms_all=[round(float(v), 2) for v in self.solve_ms], n_over_50ms=int((ms > 50.0).sum()), window=[self.x_ws, self.x_we], n_fallback=self.n_fallback, end_effect=self.end_ok, v_c=self.v_c, v_b_min=float(vb.min()), v_b_max=float(vb.max()), s_ref_end=self.s_ref, n_tick=self.n_tick)
         return r
 

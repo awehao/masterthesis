@@ -298,7 +298,7 @@ def main():
     rep['cols'] = cols
     rep['reached_end'] = bool(ctrl.done or ctrl.judge.stop is not None)
     json.dump(rep, open(os.path.join(a.out, 's0b_report.json'), 'w'), ensure_ascii=False, indent=1, default=float)
-    print(f"[s0b] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 收尾 {rep['end_effect']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']} fallback {rep['n_fallback']}", flush=True)
+    print(f"[s0b] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 收尾 {rep['end_effect']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']} fallback {rep['n_fallback']} 求解器 {rep['qp_counts']} GI 未採用 {rep['gi_fail']} >50ms {rep['n_over_50ms']}", flush=True)
     print(f"[s0b] 事件 {rep['events']}", flush=True)
     return C2.exit_code(rep)
 

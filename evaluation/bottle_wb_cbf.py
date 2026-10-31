@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CBF 實際介入且手臂作用的離線閉迴路（Codex 20261031_195839：少量案例、不開矩陣、不跑 Isaac）。
 控制器是實跑 S0b 那份 S0bController＋gmpc_wb，受控對象是 test_bottle_s0b.Fake（理想底盤、設定點模型、合成接觸）。結果只驗控制邏輯與約束介入，不驗物理。
-CBF 參數同 run_mission_roundtrip4.sh（α 0.5、動態邊距 0.69、靜態 0.47、剪枝 1.2、near 6、stride 2）；代價權重沿用 r3 的 nav_cfg，與任務導航不同（須揭露）。無 Raw-scan 護盾。
+有效 CBF 參數：α 0.5、動態邊距 0.69、靜態 0.47、剪枝 1.2、near 6、stride 2 取自 run_mission_roundtrip4.sh；cbf_margin_growth、cbf_vel_margin_gain 為 0（動態膨脹未啟用）；代價權重沿用 r3 的 nav_cfg。與任務導航不是整組相同（須揭露）。無 Raw-scan 護盾。
 介入證據不看「有加入 CBF」：逐週期記回傳命令的 CBF 殘差與 slack、實測最小距離，並於相同狀態移除 CBF 重解，比較命令差。
 hold 對照：相同初態、限制與重播的 v_b 參考，手臂不動，只比較底盤。
 案例：S1 靜態障礙在路徑上迫使減速；D1 反向來車貼近路徑迫使改變底盤運動；F1 窗內突現障礙且 k0 硬約束不可行；F2 CBF 作用中求解失敗。
@@ -22,7 +22,7 @@ import test_bottle_s0b as T                             # noqa: E402
 
 X0, V_C = -0.75, 0.05
 DU_BOUND = 1e-3         # 命令差 ≥ 此值（m/s 範數）才算 CBF 確實改變命令；事前指定
-R_PHYS = 0.39           # 護盾保護半徑（僅報實體距離）
+R_PHYS = 0.39           # 0.39 m 圓盤模型（同護盾保護半徑），不是整機淨空
 
 
 def static_on_path(t):
@@ -43,7 +43,7 @@ def make(obs, arm_mode='active', v_replay=None, cbf_extra=None, log=True):
 
 
 def clearance(f, obs):
-    """實測底盤中心對障礙：回傳 (對 r_eff 的餘裕 m, 對實體 radius＋R_PHYS 的餘裕 m, 時刻)。"""
+    """實測底盤中心對障礙：回傳 (對 r_eff 的餘裕 m, 對 radius＋0.39 m 圓盤模型的餘裕 m, 時刻)。"""
     best = (float('inf'), float('inf'), None)
     for h in f.hist:
         for o in obs(h['t']):
@@ -71,6 +71,7 @@ def summarize(name, f, obs):
              vx_max=round(float(np.max(np.gradient(xs[:, 0], 0.01))), 4), vx_min=round(float(np.min(np.gradient(xs[:, 0], 0.01))), 4),
              ms=dict(p50=round(float(np.percentile(rep['solve_ms_all'], 50)), 1), p95=round(float(np.percentile(rep['solve_ms_all'], 95)), 1), max=round(float(np.max(rep['solve_ms_all'])), 1)) if rep['solve_ms_all'] else None,
              n_over_50ms=rep['n_over_50ms'], stop_effect=rep['stop_effect'], slip_mm=round(rep['slip_max_mm_deg'][0], 3))
+    s['qp_counts'], s['gi_fail'], s['backup_ms_max'] = rep['qp_counts'], rep['gi_fail'], rep['backup_ms_max']
     s['n_gate'], s['done_t'] = rep['n_gate'], next((e['t'] for e in rep['events'] if e['what'] == 'done'), None)
     if s['done_t'] is not None:
         vm = np.gradient(xs[:, 0], 0.01)
@@ -100,7 +101,7 @@ def summarize(name, f, obs):
 def show(s):
     print(f"\n[{s['case']}／{s['arm_mode']}] success {s['success']} stop {s['stop']} 離開碼 {s['exit']} fallback {s['n_fallback']} 事件 {s['events']}")
     print(f"   CBF 週期 {s['n_ticks']}、作用列 >0 {s['n_cbf_active']}、確實改變命令 {s['n_cbf_bound']} {s['phase_bound']}（|Δu|峰 {s['du_max']}）；slack 峰 {s['eps0_max']}；回傳殘差 無slack {s['resid_noslack_min']}／含slack {s['resid_slack_min']}")
-    print(f"   實測最小餘裕：對 r_eff {s['clear_eff_mm']} mm、對實體 {s['clear_phys_mm']} mm @ {s['t_clear']}；x 末 {s['x_end']}、y 峰 {s['y_peak_mm']} mm、偏航峰 {s['yaw_peak_deg']}°；vx {s['vx_min']}…{s['vx_max']}")
+    print(f"   實測最小餘裕：對 r_eff {s['clear_eff_mm']} mm、對 0.39 m 圓盤模型 {s['clear_phys_mm']} mm @ {s['t_clear']}；x 末 {s['x_end']}、y 峰 {s['y_peak_mm']} mm、偏航峰 {s['yaw_peak_deg']}°；vx {s['vx_min']}…{s['vx_max']}")
     print(f"   耗時 {s['ms']}、>50 ms {s['n_over_50ms']}；停止有效 {s['stop_effect']}；滑移 {s['slip_mm']} mm；夾持期 TCP 漂移 {s.get('tcp_drift_mm')} mm、底盤移動 {s.get('base_move_grasp_mm')} mm、速度 {s.get('v_grasp_minmax')}；管外擋 INSERT {s['n_gate']} 週期；倒退 完成前 {s.get('back_s_before_done')} s／後 {s.get('back_s_after_done')} s；持瓶相對底盤漂移 {s.get('carry_rel_drift_mm')} mm；幾何 {s.get('geom')}", flush=True)
 
 
@@ -126,7 +127,7 @@ def main():
     s = summarize('F2 CBF 作用中求解失敗', f, static_on_path)
     show(s)
     res.append(s)
-    out = os.path.join(HERE, 'results', 'bottle', 'wb_cbf_r3.json')
+    out = os.path.join(HERE, 'results', 'bottle', 'wb_cbf_r4.json')
     json.dump(dict(note='假受控對象、理想底盤、合成接觸；CBF 參數同任務、代價權重同 r3；無護盾；耦合 QP 主求解器 GI；CARRY 目標跟實際底盤、S_LEAD 0.02、INSERT 放行管（r1 OSQP、r2 未修持瓶參考，皆保留）', du_bound=DU_BOUND, cases=res), open(out, 'w'), ensure_ascii=False, indent=1, default=float)
     print('寫入', os.path.relpath(out, os.path.dirname(HERE)))
 

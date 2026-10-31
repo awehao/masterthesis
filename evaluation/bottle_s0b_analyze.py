@@ -65,6 +65,8 @@ def main():
         mk = (t >= t0) & (t < t1)
         if mk.any():
             print(f"  {nm:<12} {t0:6.2f}–{t1:6.2f} s：均 {vs[mk].mean():.4f}、最低 {vs[mk].min():.4f}、最高 {vs[mk].max():.4f}；近停 {float((vs[mk] < 0.01).sum()) * 0.01:.2f} s／{float(mk.sum()) * 0.01:.2f} s")
+    ms_all = np.array(rep.get('solve_ms_all') or [float('nan')])
+    print(f"求解器：{rep.get('qp_counts')}；GI 未採用原因 {rep.get('gi_fail')}；備援耗時峰 {rep.get('backup_ms_max')} ms；端到端 ms p50 {np.nanmedian(ms_all):.1f}、p95 {np.nanpercentile(ms_all, 95):.1f}、p99 {np.nanpercentile(ms_all, 99):.1f}、max {np.nanmax(ms_all):.1f}；>50 ms {int((ms_all > 50.0).sum())}／{ms_all.size} 週期；管外擋 INSERT {rep.get('n_gate')} 週期")
     print(f"實際終點 x {x[-1]:.4f}（參考終點 {rep.get('x_end', 0.15)}）；終點未到不算到達參考終點")
     print(f"手指：指1 末 {c['finger1_q'][-1]:.5f}、指2 末 {c['finger2_q'][-1]:.5f} m；主從差峰 {np.abs(c['finger1_q'] - c['finger2_q']).max() * 1e3:.3f} mm；命令末 {c['finger_cmd'][-1]:.4f}")
     print('d̂', np.round(rep['d_hat'], 4).tolist(), '求解 ms', rep['solve_ms'], '求解失敗', rep['n_solve_fail'], '禁止脈衝', {k: v for k, v in rep['forbidden_pulses'].items() if v['peak'] > 0})

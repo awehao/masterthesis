@@ -131,6 +131,7 @@ def main():
     # N1 正常流程
     f = Fake(ctrl()).run(40.0)
     r = f.c.report()
+    hist_n1 = f.hist
     LOG.append(('N1', r['result'], [(e['t'], e.get('to', e['what'])) for e in r['events']], r['solve_ms'], r['end_effect'], round(f.hist[-1]['x'], 3), r['v_b_min'], r['v_b_max']))
     chk('N1 成功', r['success'], f"{r['result']} stop {r['stop']}")
     chk('N1 離開碼 0', B.exit_code(r) == 0, str(r['end_effect']))
@@ -290,6 +291,16 @@ def main():
     chk('N19f 回到管內 ⇒ INSERT', cg.st.phase == 'INSERT', cg.st.phase)
     # N19d 紀錄逐週期耗時
     chk('N19d 逐週期耗時與 >50 ms 次數', len(r['solve_ms_all']) == r['n_tick'] and isinstance(r['n_over_50ms'], int), str((len(r['solve_ms_all']), r['n_tick'])))
+
+    # N19g 逐週期記錄實際求解器；OSQP-only 無障礙回歸與 GI 同事件、同軌跡
+    chk('N19g 求解器紀錄逐週期', len(r['qp_log']) == r['n_tick'] and r['qp_counts'].get('gi', 0) == r['n_tick'], str(r['qp_counts']))
+    f_o = Fake(ctrl(qp_solver='osqp')).run(40.0)
+    r_o = f_o.c.report()
+    chk('N19g OSQP-only 成功', r_o['success'] and r_o['qp_counts'].get('osqp', 0) == r_o['n_tick'], str(r_o['qp_counts']))
+    chk('N19g 兩求解器事件相同', [(e['t'], e.get('to', e['what'])) for e in r_o['events']] == [(e['t'], e.get('to', e['what'])) for e in r['events']], '')
+    dx_q = max(np.abs(a['q'] - b['q']).max() for a, b in zip(hist_n1, f_o.hist))
+    chk('N19g 兩求解器軌跡差 ≤0.1 mm／0.1 mrad', dx_q <= 1e-4, str(dx_q))
+    LOG.append(('N19g GI／OSQP 軌跡差峰', dx_q, 'OSQP 耗時 max', round(max(r_o['solve_ms_all']), 1), 'GI 耗時 max', round(max(r['solve_ms_all']), 1)))
 
     # N20 離開碼：完成但底盤未驗證停下不算 0
     rep = dict(success=True, stop=None, end_effect=None, stop_effect=None)

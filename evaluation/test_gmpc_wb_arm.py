@@ -221,6 +221,19 @@ def main():
     ra2 = GW.GMPC(cfg()).solve(X_now=Xr_r[0], X_ref_win=Xr_r, xi_ref_win=xr_r, xi_prev=np.zeros(3), arm=arm_dict(T_rel * 1.0))
     chk('R3 世界座標模式底盤命令確實不同（對照）', np.abs(np.asarray(ra2.u_opt) - np.asarray(rh.u_opt)).max() > 1e-3, f'{ra2.u_opt}')
 
+    # ---- Q 求解器：OSQP-only 回歸入口、GI 失敗走備援並記錄
+    rq_g = GW.GMPC(cfg()).solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.05, 0, 0]), arm=arm_dict(T_seq4))
+    rq_o = GW.GMPC(cfg()).solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.05, 0, 0]), arm=arm_dict(T_seq4, qp_solver='osqp'))
+    chk('Q1 記錄實際求解器', rq_g.arm_check['qp']['solver'] == 'gi' and rq_o.arm_check['qp']['solver'] == 'osqp', str(rq_o.arm_check['qp']))
+    chk('Q2 OSQP-only 與 GI 同解', np.abs(np.asarray(rq_g.u_opt) - np.asarray(rq_o.u_opt)).max() < 1e-5 and np.abs(rq_g.u_arm_seq - rq_o.u_arm_seq).max() < 1e-4, f'{np.abs(rq_g.u_arm_seq - rq_o.u_arm_seq).max()}')
+    gi0 = GW.qp_dual_active
+    GW.qp_dual_active = lambda *a, **k: (None, None, dict(ok=False, why='verify:dual'))
+    rq_b = GW.GMPC(cfg()).solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.05, 0, 0]), arm=arm_dict(T_seq4))
+    GW.qp_dual_active = gi0
+    qb = rq_b.arm_check['qp']
+    chk('Q3 GI 未過核對 ⇒ OSQP 備援且記原因與耗時', qb['solver'] == 'osqp' and qb['gi_why'] == 'verify:dual' and qb['osqp_ms'] is not None, str(qb))
+    chk('Q4 備援解仍可用', rq_b.arm_check.get('fallback') is None and np.abs(np.asarray(rq_b.u_opt) - np.asarray(rq_g.u_opt)).max() < 1e-5, str(rq_b.u_opt))
+
     print(f'A7 耗時：保持 {t_hold * 1e3:.1f} ms、作用 {t_act * 1e3:.1f} ms（N＝20；含建構與安全外層的底盤解）；A4 作用 {ea * 1e3:.1f}／保持 {eh * 1e3:.1f} mm；L1 相對誤差 {worst:.1e}')
     print(f'記錄：A1 靜止參考底盤命令 {a1_split[0]}、手臂峰 {a1_split[1]:.3f} rad/s；A4 底盤 vx {a4_vx:.4f}（參考 0.05）；A1/A4 fallback {ra.arm_check.get("fallback")}／{r4a.arm_check.get("fallback")}')
     print(f'gmpc_wb 手臂作用模式測試 {NCHK} 項：' + ('全過' if not BAD else '失敗 ' + '；'.join(BAD)))

@@ -11,7 +11,7 @@ from scipy import sparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
-from ammr_wholebody_mpc.gmpc_wb import qp_dual_active as G     # noqa: E402
+from ammr_wholebody_mpc.gmpc_wb import qp_dual_active as G, qp_kkt_check as CK     # noqa: E402
 
 n_ok = 0
 
@@ -78,4 +78,20 @@ chk('正反列同時作用', x is not None and abs(x[0] - 0.5) < 1e-9, str(info)
 Pn = sparse.csc_matrix(np.diag([1.0, -1.0, 1.0]))
 x, y, info = G(Pn, q2, A2, np.full(3, -1.0), np.full(3, 1.0))
 chk('P 非正定不回傳解', x is None and info['why'] == 'P_not_pd', str(info))
+# qp_kkt_check 負測：好解通過；各類破壞都被擋下（不接受可疑解）
+Pg = sparse.csc_matrix(np.diag([2.0, 3.0]))
+qg = np.array([-4.0, 1.0])
+Ag = sparse.csc_matrix(np.array([[1.0, 0.0], [0.0, 1.0]]))
+lg, ug = np.array([-np.inf, -1.0]), np.array([1.0, np.inf])
+xg, yg, ig = G(Pg, qg, Ag, lg, ug)
+chk('KKT 好解通過', ig['ok'] is True and CK(Pg, qg, Ag, lg, ug, xg, yg)['ok'], str(ig))
+chk('KKT 上界作用乘子為正', yg[0] > 0.0, str(yg))
+bad = dict(nan_x=(xg * np.array([np.nan, 1.0]), yg, 'nonfinite'), inf_y=(xg, yg * np.array([np.inf, 1.0]), 'nonfinite'), none_x=(None, yg, 'nonfinite'),
+           primal=(xg + np.array([1e-3, 0.0]), yg, 'primal'), stat=(xg - np.array([0.0, 1e-3]), yg, 'stationarity'),
+           comp=(np.array([0.5, xg[1]]), np.array([yg[0] - 3.0 * 0.5 * 0 - 2.0 * (0.5 - xg[0]), yg[1]]), 'complementarity'))
+for nm, (bx, by, want) in bad.items():
+    r_ = CK(Pg, qg, Ag, lg, ug, bx, by)
+    chk(f'KKT 破壞 {nm} 被擋', r_['ok'] is False and r_['why'] == want, str(r_))
+r_ = CK(Pg, qg + np.array([2.0 * yg[0], 0.0]) * 0, Ag, lg, ug, xg, np.array([yg[0], -1e-3 * 0 + 1e-3]))
+chk('KKT 無界側乘子被擋', r_['ok'] is False, str(r_))
 print(f'qp_dual_active {n_ok} 項：全過；對 OSQP 相對目標差峰 {worst:.1e}')

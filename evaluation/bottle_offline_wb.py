@@ -150,7 +150,7 @@ def main():
         r = run(v, pa, ca, label=lab)
         res.append(r)
         print(f"{lab} v {v}：{r['result']}/{r['why']} 結束 {r['t_end']} s；事件 {r['events']}\n    耗時 ms {r['ms']}、>50 ms {r['n_over_50ms']} 輪；fallback {r['fallback']}；手臂殘差峰 {r['arm_violation_max']}；TCP mm {r['tcp_err_mm']}；底盤 mm {r['base_err_mm']}；抓取期 v_min {r['v_min_grasp']}、慢 {r['t_slow_grasp']} s", flush=True)
-    out = os.path.join(HERE, 'results', 'bottle', 'offline_wb_short_r4.json')
+    out = os.path.join(HERE, 'results', 'bottle', 'offline_wb_short_r5.json')
     json.dump({'model': '設定點模型＋底盤運動學；注入延遲 8 物理步；無接觸；抓持代理；啟發式調速', 't_blend': T_BLEND, 'branch': 'window_branch', 'qp': 'GI 主求解器（r3 為 OSQP 1e-7＋polish）', 'results': res}, open(out, 'w'), ensure_ascii=False, indent=1)
     print('寫入', os.path.relpath(out, WS))
 
