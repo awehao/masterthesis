@@ -55,7 +55,7 @@ class DetourPath:
 
 class S1Controller(B.S0bController):
     def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, x_start, x_win, path, exit_c, exit_r, obstacles_fn,
-                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, t_insert=None, no_tcp_preview=False, no_inflight=False, body_boxes=None, d_body=0.05, body_links=(), **kw):
+                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, t_insert=None, no_tcp_preview=False, no_inflight=False, body_boxes=None, d_body=0.05, body_links=(), carry_no_yaw=False, **kw):
         x_stop = exit_c[0] if x_exit_stop is None else x_exit_stop
         super().__init__(K, ident, T_grasp, T_ready_rel, q_ready if q_tuck is None else q_tuck, table_top_z, bottle_radius, x_start, x_win, x_stop, v_c=v_c, obstacles_fn=obstacles_fn,
                          cbf_cfg=dict(B.CBF_MISSION, **kw.pop('cbf_extra', {})), **kw)
@@ -67,6 +67,8 @@ class S1Controller(B.S0bController):
             self.task.t_insert = float(t_insert)               # 插入放慢：TCP 速度低，追蹤落後與停止續行都變小，不動已驗證的抓取幾何
         self.x_blend = self.x_pre - v_c * self.t_blend         # 朝瓶漸變起點：以接近速度倒推，位置事件觸發
         self.st.t_pre, self.st.t_cruise0 = float('inf'), 0.0
+        self.carry_no_yaw, self.mpc_nav0 = bool(carry_no_yaw), self.mpc
+        self.mpc_noyaw = None if not carry_no_yaw else B.GW.GMPC(B.dataclasses.replace(self.nav, u_min=self.nav.u_min * np.array([1.0, 1.0, 0.0]), u_max=self.nav.u_max * np.array([1.0, 1.0, 0.0])))   # 持瓶段底盤不旋轉：工程假設，圓形底盤的轉向側牆擋不住
         self.q_tuck, self.q_arm_ready, self.t_unfold, self.t_u0 = (None if q_tuck is None else np.array(q_tuck, float)), np.array(q_ready, float), float(t_unfold), None
         self.x_unfold = (self.x_blend - v_c * (self.t_unfold + float(t_settle))) if x_unfold is None else float(x_unfold)   # 展完靜止 t_settle 再朝瓶：d̂ 隨姿態變，停止點預測要用備妥姿態的靜態值；展臂在底盤座標，可在高速段進行
         self.blending, self.mission_done, self.t_exit_in = False, False, None
@@ -110,6 +112,11 @@ class S1Controller(B.S0bController):
             lo, hi = Pt.min(axis=0), Pt.max(axis=0)
             self._grip_corners = [(x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
         return self._grip_corners
+
+    def _solve(self, q):
+        if self.carry_no_yaw:
+            self.mpc = self.mpc_noyaw if self.st.phase in ('LIFT', 'CARRY') else self.mpc_nav0
+        return super()._solve(q)
 
     def _arm_extra(self):
         if not self.body_boxes:
@@ -265,7 +272,7 @@ class S1Controller(B.S0bController):
         r.update(clear_bottle=dict(reject_m=CLEAR_REJECT, guard_m=CLEAR_GUARD, meas_min=None if cm['n'] == 0 else cm['meas'], pred_min=None if cm['n'] == 0 else cm['pred'], next_min=cm.get('next'), t_meas=cm['t_meas'], t_pred=cm['t_pred'], n=cm['n']), n_compact=None if self.compact is None else len(self.compact))
         if self.chain is not None:
             r.update(nav_chain=self.chain.report())
-        r.update(body_rows_by=getattr(self, 'ob_body_rows', {}), body_rows_max=getattr(self, 'ob_rows', 0), body_planes=getattr(self, 'ob_plane_count', {}), body_cfg=None if not self.body_boxes else dict(d_body=self.d_body, slope=0.5, d_act=0.60, stride=2, grip_corners=[list(map(float, c_)) for c_ in self._obb_tcp()], boxes=[[np.asarray(c_).tolist(), np.asarray(z_).tolist()] for c_, z_ in self.body_boxes]), no_inflight=self.no_inflight, no_tcp_preview=self.no_tcp_preview, preview_range_mm={k: round(v * 1e3, 2) for k, v in self.preview.items()})
+        r.update(body_bind=getattr(self, 'ob_body_bind', {}), body_rows_by=getattr(self, 'ob_body_rows', {}), body_rows_max=getattr(self, 'ob_rows', 0), body_planes=getattr(self, 'ob_plane_count', {}), body_cfg=None if not self.body_boxes else dict(d_body=self.d_body, slope=0.5, d_act=0.60, stride=2, grip_corners=[list(map(float, c_)) for c_ in self._obb_tcp()], boxes=[[np.asarray(c_).tolist(), np.asarray(z_).tolist()] for c_, z_ in self.body_boxes]), no_inflight=self.no_inflight, no_tcp_preview=self.no_tcp_preview, preview_range_mm={k: round(v * 1e3, 2) for k, v in self.preview.items()})
         r.update(exit_reached=self.t_exit_in is not None, t_exit_in=self.t_exit_in, mission_done=self.mission_done, blending=self.blending,
                  nav_source='truth_obstacle_to_cbf' if self.chain is None else 'lidar_tracker_to_cbf', shield=self.chain is not None, success_s0_judge=r['success'], success=bool(r['success'] and self.mission_done))
         return r

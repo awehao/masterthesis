@@ -171,6 +171,9 @@ class S0bController(C.S0aController):
             bb = self.__dict__.setdefault('ob_body_rows', {})
             for k_, v_ in ck['ob_by_body'].items():
                 bb[k_] = dict(ticks=bb.get(k_, {}).get('ticks', 0) + 1, rows_max=max(bb.get(k_, {}).get('rows_max', 0), int(v_)))
+        for k_ in (ck.get('ob_bind') or {}):
+            bd = self.__dict__.setdefault('ob_body_bind', {})
+            bd[k_] = bd.get(k_, 0) + 1
         if ck.get('ob_planes'):
             pl = self.__dict__.setdefault('ob_plane_count', {})
             for k_ in ck['ob_planes']:

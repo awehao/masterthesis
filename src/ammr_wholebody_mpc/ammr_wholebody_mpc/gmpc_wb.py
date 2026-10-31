@@ -1480,7 +1480,7 @@ class GMPC:
             arm_info = dict(nz=nz, A=A_arm, l=np.concatenate(rows_l), u=np.concatenate(rows_u), Mq=Mq, cq=cq, U0=U0)
             bo = arm.get('body_obst')
             if bo:                                              # 三維障礙：TCP 剛連點（夾爪、持瓶）的預測距離約束，底盤與手臂都在列內，耦合問題自己分配誰讓路
-                r_ob, l_ob, planes, by_body = [], [], [], {}
+                r_ob, l_ob, planes, by_body, row_body = [], [], [], {}, []
                 k_idx = list(range(0, N, bo.get('stride', 2)))  # 含第一個未來控制步
                 preds = [(np.r_[_pose_from_err(X_ref_win[k + 1], e_nom[k]), Mq[k] @ U0 + cq[k]], _pose_jac(X_ref_win[k + 1], e_nom[k]) @ Gamma[k * n:(k + 1) * n, :], Mq[k]) for k in k_idx]
                 # 每個本體是一組包圍盒角點（各用自己連桿的 FK／Jacobian），共用一個分隔面
@@ -1511,6 +1511,7 @@ class GMPC:
                                 r_ob.append(row)
                                 l_ob.append(req + float(row[nz:] @ U0))
                                 by_body[bname] = by_body.get(bname, 0) + 1
+                                row_body.append(bname)
                 if r_ob:
                     Aob = np.array(r_ob)
                     lob = np.array(l_ob)
@@ -1518,7 +1519,7 @@ class GMPC:
                     lb_total = np.concatenate([lb_total, lob])
                     ub_total = np.concatenate([ub_total, np.full(len(lob), np.inf)])
                     arm_info['ob'] = (Aob, lob)
-                arm_info['planes'], arm_info['by_body'] = planes, by_body
+                arm_info['planes'], arm_info['by_body'], arm_info['row_body'] = planes, by_body, row_body
 
         # 6. OSQP solve（耦合問題先用對偶作用集法，未得解才走 OSQP；底盤問題維持封存設定）
         t0 = time.perf_counter()
@@ -1596,9 +1597,14 @@ class GMPC:
                 r_arm = arm_info['A'] @ ua
                 viol = float(max(np.max(arm_info['l'] - r_arm), np.max(r_arm - arm_info['u'])))
                 if 'ob' in arm_info:                  # 三維障礙列也進回傳核對：違反走既有退回路徑
-                    viol = max(viol, float(np.max(arm_info['ob'][1] - arm_info['ob'][0] @ np.asarray(res.x)[:arm_info['nz'] + n_arm])))
+                    r_ob_ = arm_info['ob'][0] @ np.asarray(res.x)[:arm_info['nz'] + n_arm] - arm_info['ob'][1]
+                    viol = max(viol, float(np.max(-r_ob_)))
+                    arm_info['bind'] = {}                 # 實際貼到作用邊界的列（殘差 ≤1e-6），與「列有加入」分開記
+                    for b_, g_ in zip(arm_info['row_body'], r_ob_):
+                        if g_ <= 1e-6:
+                            arm_info['bind'][b_] = arm_info['bind'].get(b_, 0) + 1
                 u_arm_seq = ua.reshape(N, ARM_N)
-                arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info, ob_rows=int(len(arm_info['ob'][1])) if 'ob' in arm_info else 0, ob_planes=arm_info.get('planes'), ob_by_body=arm_info.get('by_body'))
+                arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info, ob_rows=int(len(arm_info['ob'][1])) if 'ob' in arm_info else 0, ob_planes=arm_info.get('planes'), ob_by_body=arm_info.get('by_body'), ob_bind=arm_info.get('bind'))
             else:
                 u_arm_seq = np.zeros((N, ARM_N))
                 arm_check = dict(max_violation=float('nan'), finite=False, rows=int(arm_rows), qp=qp_info, note='底盤煞停路徑：手臂命令歸零（未求得序列）')

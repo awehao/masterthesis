@@ -46,8 +46,9 @@ def scene_boxes():
 
 def make_lidar(boxes=None, **kw):
     """掃描鏈版本：障礙只來自離線射線 → 追蹤器；底盤命令經 Shield。"""
-    ch = NC.NavChain(map_boxes=[(b[1], b[2]) for b in G.table_boxes() if b[0] != 'table_top'])
-    bx = scene_boxes() if boxes is None else boxes
+    extra = kw.pop('extra_boxes', [])                   # 已知結構（如側牆）：同時進掃描、地圖與 CBF
+    ch = NC.NavChain(map_boxes=[(b[1], b[2]) for b in G.table_boxes() if b[0] != 'table_top'] + list(extra))
+    bx = (scene_boxes() if boxes is None else boxes) + list(extra)
     fn = kw.pop('scan_fn', lambda t, q: NC.ray_boxes(q[:2], float(q[2]), bx, G.LIDAR_Z))
     return make(path=kw.pop('path', PATH_P2), obs=kw.pop('obs', ch.obstacles), chain=ch, scan_fn=fn, **SC_FAST(kw))
 
