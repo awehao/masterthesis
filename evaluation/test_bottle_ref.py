@@ -25,7 +25,7 @@ T_rel = np.eye(4)
 T_rel[:3, :3] = task.T_grasp[:3, :3]
 T_rel[:3, 3] = [0.0, 0.25, 0.75]
 task.T_ready_rel = T_rel
-ts = np.linspace(0, 20, 401)
+ts = np.linspace(0, 60, 1201)
 plan = (ts, -0.6 + 0.05 * ts, 0.0)
 N, dt = 5, 0.05
 
@@ -69,10 +69,16 @@ chk('E4 證據成立 ⇒ LIFT', st.phase == 'LIFT' and st.grasp_ok, st.phase)
 T_seq, _ = BR.horizon(task, st, plan, 40.3, N, dt)
 chk('G5 LIFT 預覽上升', T_seq[-1, 2, 3] > T_seq[0, 2, 3] > task.T_grasp[2, 3] - 1e-12)
 chk('G6 LIFT 末端＝抬升位姿', np.allclose(BR.target_at(task, st, plan, 41.0 + 5.0), task.T_lift))
+b_meas = BR.base_pose_at(plan, 41.2)
+BR.step_phase(task, st, 41.2, task.T_lift, True, True, base_meas=b_meas)
+chk('C1 LIFT 完成 ⇒ CARRY', st.phase == 'CARRY', st.phase)
+Tc0, Tc1 = BR.target_at(task, st, plan, 41.2), BR.target_at(task, st, plan, 43.2)
+chk('C2 CARRY 起點＝抬升位姿', np.allclose(Tc0, task.T_lift, atol=1e-9))
+chk('C3 CARRY 目標隨底盤前進', abs((Tc1[0, 3] - Tc0[0, 3]) - 0.05 * 2.0) < 1e-9 and np.allclose(Tc1[1:3, 3], Tc0[1:3, 3]))
 
 # 6 相位不得倒退
 try:
-    st.go('CLOSE', 41.0)
+    st.go('LIFT', 44.0)
     chk('E5 倒退應拒絕', False)
 except ValueError:
     chk('E5 倒退拒絕', True)

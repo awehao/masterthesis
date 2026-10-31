@@ -86,6 +86,7 @@ class PhaseState:
     t_pre: float = 5.0             # 外層協調給的 PREGRASP 到達時刻（絕對）
     T_start: np.ndarray | None = None   # 目前相位剖面起點的 TCP 目標（世界）
     grasp_ok: bool = False
+    T_carry_rel: np.ndarray | None = None   # 進 CARRY 時把抬升位姿換到底盤座標，之後隨底盤移動
     events: list = field(default_factory=list)
 
     def go(self, phase, t, T_start=None, **kw):
@@ -131,7 +132,9 @@ def target_at(task: BottleTask, st: PhaseState, plan, tau):
         if not st.grasp_ok:                                     # 防呆：無證據不得抬升
             return task.T_grasp.copy()
         if st.phase == 'CARRY':
-            return task.T_lift.copy()
+            if st.T_carry_rel is None:
+                raise ValueError('CARRY 缺 T_carry_rel')
+            return pose_world(base_pose_at(plan, tau), st.T_carry_rel)
         return interp_pose(task.T_grasp, task.T_lift, min_jerk((tau - st.t_phase) / task.t_lift))
     raise ValueError(st.phase)
 
@@ -152,7 +155,15 @@ def pose_err(T_meas, T_des):
     return float(np.linalg.norm(T_des[:3, 3] - T_meas[:3, 3])), float(np.linalg.norm(so3_log(T_meas[:3, :3].T @ T_des[:3, :3])))
 
 
-def step_phase(task: BottleTask, st: PhaseState, t, T_tcp_meas, grasp_evidence_ok: bool, close_done: bool):
+def base_inv(base):
+    c, s_ = math.cos(base[2]), math.sin(base[2])
+    Tb = np.eye(4)
+    Tb[:3, :3] = [[c, -s_, 0], [s_, c, 0], [0, 0, 1]]
+    Tb[:3, 3] = [base[0], base[1], 0.0]
+    return np.linalg.inv(Tb)
+
+
+def step_phase(task: BottleTask, st: PhaseState, t, T_tcp_meas, grasp_evidence_ok: bool, close_done: bool, base_meas=None):
     """事件推進（每輪一次）。抓持證據由呼叫端依設計 §6／§9 的判準給（本函式不判定接觸）。"""
     if st.phase == 'CRUISE' and t >= st.t_pre:
         st.go('PREGRASP', t)
@@ -168,5 +179,8 @@ def step_phase(task: BottleTask, st: PhaseState, t, T_tcp_meas, grasp_evidence_o
         st.grasp_ok = True
         st.go('LIFT', t)
     elif st.phase == 'LIFT' and t - st.t_phase >= task.t_lift:
+        if base_meas is None:
+            raise ValueError('進 CARRY 需實測底盤位姿（換算持瓶相對位姿）')
+        st.T_carry_rel = base_inv(base_meas) @ task.T_lift
         st.go('CARRY', t)
     return st.phase
