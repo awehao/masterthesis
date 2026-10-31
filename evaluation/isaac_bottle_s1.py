@@ -255,7 +255,7 @@ def main():
     penetration = 0.0
     for k in range(n):
         t = k * dt
-        if t >= a.sim_s and not ctrl.done and ctrl.judge.stop is None:
+        if t >= a.sim_s and not ctrl.mission_done and ctrl.judge.stop is None:
             ctrl._trigger_stop('sim_limit')
         q, jp = q9()
         # 瓶位姿（幾何中心 → 底心座標：z 軸＝瓶軸）
