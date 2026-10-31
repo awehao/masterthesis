@@ -19,7 +19,7 @@ OPT, PARENT = 'base_camera_color_optical_frame', 'base_link'
 W_, H_, HFOV, AP = 640, 480, 1.518, 0.020
 DEPTH_RANGE = (0.3, 8.0)
 LOG_COLS = ('stamp', 'task_t', 'phase', 'dist', 'expected', 'tb_x', 'tb_y', 'tb_z', 'ta_x', 'ta_y', 'ta_z', 'received', 'age', 'valid', 'cx', 'cy', 'z_support', 'z_top',
-            'ax', 'ay', 'az', 'n_pts', 'rms', 'proc_ms', 'why', 'n_drop', 'z_top_valid', 'pose_dev_mm', 'pose_dev_deg', 'n_valid_px')
+            'ax', 'ay', 'az', 'n_pts', 'rms', 'proc_ms', 'why', 'n_drop', 'z_top_valid', 'dist_est', 'pose_dev_mm', 'pose_dev_deg', 'n_valid_px', 'lag', 'dp_x', 'dp_y', 'dp_z')
 
 
 class V1Capture:
@@ -91,7 +91,8 @@ class V1Capture:
             self.K = np.asarray(self.cam.get_intrinsics_matrix(), float)
         T_wc = G.C.K.fk(h['q'], PARENT) @ self.T_mount                # 擷取那一步的量測底盤位姿（歷史值）× 固定外參
         R_r = W0.wxyz_to_R(h['cam_quat'])                             # 擷取那一步存下的渲染端回讀
-        dev_mm = float(np.linalg.norm(h['cam_pos'] - T_wc[:3, 3])) * 1e3
+        dp = (h['cam_pos'] - T_wc[:3, 3]) * 1e3                        # 渲染端回讀 − 量測底盤×外參（mm，世界座標）
+        dev_mm = float(np.linalg.norm(dp))
         dev_deg = float(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(R_r.T @ T_wc[:3, :3]) - 1) / 2)))))
         lag = int(round((self.latest_world_t - h['world_t']) / self.dt)) if self.latest_world_t is not None else None
         if dry:
@@ -119,10 +120,12 @@ class V1Capture:
                 u, v = fx * pc[0] / pc[2] + self.K[0, 2], self.K[1, 1] * pc[1] / pc[2] + self.K[1, 2]
                 vis.append(DEPTH_RANGE[0] <= pc[2] <= DEPTH_RANGE[1] and 0 <= u < W_ and 0 <= v < H_ and not any(VZ.seg_hits_box(T_wc[:3, 3], pw, bc, bs) for bc, bs in self.boxes))
         self.frames[round(st, 6)] = dict(task_t=h['task_t'], phase=h['phase'], dist=float(np.linalg.norm(T_wc[:3, 3] - (b0 + 0.1 * ax))), expected=bool(vis and np.mean(vis) >= 0.5),
-                                         b0=b0, ax=ax, dev_mm=dev_mm, dev_deg=dev_deg, n_valid_px=int((dep > 0).sum()), lag=lag)
-        if h['task_t'] - self.t_sparse >= 1.0:                          # 稀疏存影格（每 1 s），只供事後檢視
+                                         b0=b0, ax=ax, dev_mm=dev_mm, dev_deg=dev_deg, n_valid_px=int((dep > 0).sum()), lag=lag, dp=dp)
+        d_true = self.frames[round(st, 6)]['dist']
+        keep = (0.5 <= d_true <= 2.0 and len(self.sparse) < 60) or h['task_t'] - self.t_sparse >= 1.0   # 0.5–2 m 段多存（上限 60），其餘每 1 s；只供事後定位
+        if keep:
             self.t_sparse = h['task_t']
-            self.sparse.append((st, rgb, dep.astype(np.float16)))
+            self.sparse.append((st, rgb, dep.astype(np.float32), T_wc))
 
     def _publish(self, st_f, rgb, dep, T_wc):
         M = self.M
@@ -148,14 +151,15 @@ class V1Capture:
         rows = []
         for st, f in sorted(self.frames.items()):
             e = self.ests.get(st)
-            d = e[1] if e else [nan] * 15
-            d = d + [nan] * (15 - len(d))
+            d = e[1] if e else [nan] * 16
+            d = d + [nan] * (16 - len(d))
             rows.append([st, f['task_t'], f['phase'], f['dist'], float(f['expected']), *f['b0'], *f['ax'], float(e is not None), (e[0] - st) if e else nan,
-                         *(d[1:15] if e else [nan] * 14), f['dev_mm'], f['dev_deg'], f['n_valid_px']])
+                         *(d[1:16] if e else [nan] * 15), f['dev_mm'], f['dev_deg'], f['n_valid_px'], nan if f.get('lag') is None else float(f['lag']), *f['dp']])
         R = np.array(rows, float).reshape(-1, len(LOG_COLS))
         np.savez_compressed(os.path.join(out, 'v1_log.npz'), rows=R, cols=np.array(LOG_COLS))
         if self.sparse:
-            np.savez_compressed(os.path.join(out, 'v1_frames.npz'), stamp=np.array([s[0] for s in self.sparse]), rgb=np.stack([s[1] for s in self.sparse]), depth=np.stack([s[2] for s in self.sparse]))
+            np.savez_compressed(os.path.join(out, 'v1_frames.npz'), stamp=np.array([s[0] for s in self.sparse]), rgb=np.stack([s[1] for s in self.sparse]), depth=np.stack([s[2] for s in self.sparse]),
+                                T_wc=np.stack([s[3] for s in self.sparse]), K=np.array(self.K))
         rec = R[:, LOG_COLS.index('received')] > 0 if len(R) else np.zeros(0, bool)
         val = R[:, LOG_COLS.index('valid')] == 1 if len(R) else np.zeros(0, bool)
         exp = R[:, LOG_COLS.index('expected')] > 0 if len(R) else np.zeros(0, bool)
