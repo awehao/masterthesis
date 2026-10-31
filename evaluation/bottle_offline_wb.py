@@ -27,6 +27,7 @@ import bottle_branch as BB                                            # noqa: E4
 import bottle_offline as BO                                           # noqa: E402
 import bottle_ref as BR                                               # noqa: E402
 import bottle_s0_ctrl as C                                            # noqa: E402
+import bottle_s0b_ctrl as S0B                                         # noqa: E402
 
 K = BO.K
 N, DT, PHYS, NPH, D_STEPS = 20, 0.05, 0.01, 5, 8
@@ -34,11 +35,6 @@ SCN = dict(BO.SCN)
 T_CLOSE, T_EV, T_LIFT, T_LIFT_SETTLE, DEADLINE = 0.5, 1.0, 1.0, 0.5, 5.0
 TOL_EV = (0.003, math.radians(2.0))
 T_BLEND = 5.0     # r2：展臂漸變只在抵達預抓前 5 s。r1 全程漸變（t_cruise0＝0）時名目底盤軌跡上 8 個時間點 IK 無解，手臂被拉到 j3 上限（offline_wb_short.json 保留）
-
-
-def nav_cfg():
-    return GW.GMPCConfig(N=N, dt=DT, u_min=np.array([-0.20, -0.25, -0.8]), u_max=np.array([0.35, 0.25, 0.8]), a_max=np.array([1.5, 1.0, 2.0]),
-                         Q=np.diag([10.0, 10.0, 5.0]), R=np.diag([0.5, 0.5, 0.2]), Qf=np.diag([50.0, 50.0, 25.0]), wheel_coupling=True)
 
 
 def run(v_c, plant_alpha=1.0, ctrl_alpha=1.0, w_near=200.0, w_far=50.0, label='', t_max=80.0, trace=None, t_blend=T_BLEND, use_window_branch=True):
@@ -56,7 +52,7 @@ def run(v_c, plant_alpha=1.0, ctrl_alpha=1.0, w_near=200.0, w_far=50.0, label=''
     task = BR.BottleTask(T_grasp=T_g, T_ready_rel=T_ready_rel)
     t_pre = max((base_pre[0] - SCN['x_start']) / v_c, 4.0)
     st = BR.PhaseState(t_cruise0=max(t_pre - t_blend, 0.0), t_pre=t_pre)
-    mpc = GW.GMPC(nav_cfg())
+    mpc = GW.GMPC(S0B.nav_cfg())
     q = np.r_[SCN['x_start'], 0.0, 0.0, q_ready]
     s = np.array(q_ready, float)
     pipe = [np.zeros(9) for _ in range(D_STEPS)]
@@ -89,15 +85,8 @@ def run(v_c, plant_alpha=1.0, ctrl_alpha=1.0, w_near=200.0, w_far=50.0, label=''
         if st.phase == 'CARRY' and q[0] >= SCN['x_end']:
             result = 'done'
             break
-        if k % 2 == 0:                                                     # 啟發式進度調速（同 bottle_offline r3）
-            if BR.PHASES.index(st.phase) <= BR.PHASES.index('LIFT'):
-                t_rem = {'CRUISE': max(st.t_pre - t, 0.0) + 0.3 + task.t_insert, 'PREGRASP': BR.pose_err(Tm, task.T_pre)[0] / 0.05 + 0.3 + task.t_insert,
-                         'INSERT': max(task.t_insert - (t - st.t_phase), 0.0) + 0.2}.get(st.phase, 0.0)
-                need = (max(T_LIFT - (t - st.t_phase), 0.0) + T_LIFT_SETTLE if st.phase == 'LIFT' else
-                        max(T_CLOSE + T_EV - (t - st.t_phase), 0.0) + T_LIFT + T_LIFT_SETTLE if st.phase == 'CLOSE' else T_CLOSE + T_EV + T_LIFT + T_LIFT_SETTLE)
-                v_b = float(np.clip((x_we - 0.02 - q[0]) / max(t_rem + need, 1e-3), 0.0, v_c))
-            else:
-                v_b = v_c
+        if k % 2 == 0:                                                     # 啟發式進度調速（與 S0b 同一份）
+            v_b = S0B.heuristic_speed(task, st, t, Tm, q[0], x_we, v_c)
         t0 = time.perf_counter()
         qp, sp = q.copy(), s.copy()
         for u_in in pipe:
