@@ -21,6 +21,8 @@ ap.add_argument('--out', required=True)
 ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_manip.urdf'))
 ap.add_argument('--x-start', type=float, default=-3.6, help='底盤起點 x（瓶軸在 x＝0）')
 ap.add_argument('--no-tcp-preview', action='store_true', help='消融：時域 TCP 目標固定為 T_seq[0]，其餘不變')
+ap.add_argument('--s2-box', default='', help='S2 三維障礙 cx,cy,cz,sx,sy,sz；模擬真值進控制器，LiDAR 看不到')
+ap.add_argument('--s2-active', action='store_true', help='開啟預測距離約束（無此旗標時障礙在場但控制器不知道）')
 ap.add_argument('--no-inflight', action='store_true', help='消融：求解初態不沿在途命令前推；實際延遲與安全核對不變')
 ap.add_argument('--group', default='G', choices=['G', 'P', 'M'], help='對照組：G gmpc_wb（凍結）、P 停車操作、M MotM 式單步 QP')
 ap.add_argument('--m-kp', type=float, default=4.0)
@@ -149,6 +151,11 @@ def main():
             leg_paths.append(pth)
     OB_C, OB_S = np.array([a.obst_x, 0.0, 0.25]), np.array([0.40, 0.40, 0.50])
     FixedCuboid(prim_path='/World/obstacle', name='obstacle', position=OB_C, scale=OB_S, color=np.array([0.7, 0.25, 0.2]))
+    S2 = None
+    if a.s2_box:
+        v_ = [float(x) for x in a.s2_box.split(',')]
+        S2 = (np.array(v_[:3]), np.array(v_[3:6]))
+        FixedCuboid(prim_path='/World/s2_box', name='s2_box', position=S2[0], scale=S2[1], color=np.array([0.2, 0.7, 0.3]))
     BX, BY = float(B['center_xy'][0]) + a.bottle_dx, float(B['center_xy'][1]) + a.bottle_dy
     bottle = DynamicCylinder(prim_path='/World/bottle', name='bottle', position=np.array([BX, BY, T['top_z'] + B['height'] / 2]),
                              radius=B['radius'], height=B['height'], mass=B['mass'], color=np.array([0.2, 0.6, 0.9]))
@@ -188,7 +195,7 @@ def main():
         print(f'[s1] 剛體不符：手指 {fingers} 連桿 {links} ⇒ 拒跑', flush=True)
         return 16
     print(f'[s1] 剛體 {len(bodies)}；手指 {fingers}；附加 {extra}；手指拆塊 {list(fc.get("fingers", {}))}', flush=True)
-    table_paths = ['/World/table/top'] + leg_paths + ['/World/obstacle']          # 含障礙：禁止接觸對涵蓋 桌＋障礙
+    table_paths = ['/World/table/top'] + leg_paths + ['/World/obstacle'] + (['/World/s2_box'] if S2 else [])   # 含障礙：禁止接觸對涵蓋 桌＋障礙
     # 接觸視圖（須在 world.reset 前建；用字元類別，不用路徑清單）
     v_finger = RigidPrim(prim_paths_expr=str(fingers[0])[:-1] + '[12]', name='v_finger', track_contact_forces=True, max_contact_count=128,
                          prepare_contact_sensors=True, contact_filter_prim_paths_expr=['/World/bottle'] + table_paths)
@@ -254,7 +261,7 @@ def main():
         print(f'[s1] 視角設定失敗（不影響物理）：{e!r}', flush=True)
     readback = dict(solver_type=str(sapi.GetSolverTypeAttr().Get()), ext_forces_every_iter=bool(sapi.GetEnableExternalForcesEveryIterationAttr().Get()),
                     physics_dt=float(world.get_physics_dt()), bottle_mass=float(bottle.get_mass()), kp=a.kp, kd=a.kd, base=[float(v) for v in base],
-                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], group=a.group, no_tcp_preview=a.no_tcp_preview, no_inflight=a.no_inflight, m=dict(kp=a.m_kp, mu=a.m_mu) if a.group == 'M' else None, perturb=dict(bottle_dx=a.bottle_dx, bottle_dy=a.bottle_dy, x_start=a.x_start, y_start=a.y_start, yaw_start_deg=a.yaw_start_deg), speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
+                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], group=a.group, s2_box=a.s2_box, s2_active=a.s2_active, no_tcp_preview=a.no_tcp_preview, no_inflight=a.no_inflight, m=dict(kp=a.m_kp, mu=a.m_mu) if a.group == 'M' else None, perturb=dict(bottle_dx=a.bottle_dx, bottle_dy=a.bottle_dy, x_start=a.x_start, y_start=a.y_start, yaw_start_deg=a.yaw_start_deg), speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
     print(f'[s1] 讀回 {readback}', flush=True)
     if abs(readback['physics_dt'] - dt) > 1e-12 or readback['ext_forces_every_iter'] != bool(PH.get('ext_forces_every_iter')):
         print('[s1] 物理設定讀回不符 ⇒ 拒跑', flush=True)
@@ -312,7 +319,7 @@ def main():
     p_ = [float(v) for v in a.path.split(',')]
     cls_ = dict(G=C2.S1Controller, P=GR.S1Parked, M=GR.S1MotM)[a.group]
     ctrl = cls_(C.S0_K(), ident, T_g, T_ready_rel, q_ready, float(T['top_z']), float(B['radius']), a.x_start, (a.win_lo, a.win_hi), C2.DetourPath(*p_),
-                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, chain.obstacles, chain=chain, scan_fn=scan_fn, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert, no_tcp_preview=a.no_tcp_preview, no_inflight=a.no_inflight, reg=None, required=required, **(dict(kp=a.m_kp) if a.group == 'M' else {}))
+                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, chain.obstacles, chain=chain, scan_fn=scan_fn, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert, no_tcp_preview=a.no_tcp_preview, no_inflight=a.no_inflight, body_boxes=[S2] if (S2 and a.s2_active) else None, reg=None, required=required, **(dict(kp=a.m_kp) if a.group == 'M' else {}))
     if a.group == 'M':
         ctrl.p1.mu_post = a.m_mu
     ctrl.compact = []                                                         # CBF 證據；反事實重解在實跑後（bottle_s1_cbf_replay.py）
@@ -359,7 +366,7 @@ def main():
             Pb = (Tb[:3, :3].T @ (Pl - Tb[:3, 3]).T).T
             dmin = float(G.cyl_dist(Pb, 0.0, 0.0, 0.0, float(B['height']), float(B['radius'])).min())
             tb = G.table_boxes()
-            dmin = min(dmin, min(float(G.box_dist(Pl, c, sz).min()) for _, c, sz in tb), float(G.box_dist(Pl, OB_C, OB_S).min()))
+            dmin = min(dmin, min(float(G.box_dist(Pl, c, sz).min()) for _, c, sz in tb), float(G.box_dist(Pl, OB_C, OB_S).min()), float(G.box_dist(Pl, S2[0], S2[1]).min()) if S2 else 9.9)
             penetration = max(0.0, -dmin)
         out = ctrl.step(t, q, f_fingers=ff, t_contact=(t if ff is not None else None), T_bottle=Tb if ok_b else None, t_bottle=t if ok_b else None,
                         f_table=ft, forbidden=forb, penetration=penetration)

@@ -55,7 +55,7 @@ class DetourPath:
 
 class S1Controller(B.S0bController):
     def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, x_start, x_win, path, exit_c, exit_r, obstacles_fn,
-                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, t_insert=None, no_tcp_preview=False, no_inflight=False, **kw):
+                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, t_insert=None, no_tcp_preview=False, no_inflight=False, body_boxes=None, d_body=0.05, **kw):
         x_stop = exit_c[0] if x_exit_stop is None else x_exit_stop
         super().__init__(K, ident, T_grasp, T_ready_rel, q_ready if q_tuck is None else q_tuck, table_top_z, bottle_radius, x_start, x_win, x_stop, v_c=v_c, obstacles_fn=obstacles_fn,
                          cbf_cfg=dict(B.CBF_MISSION, **kw.pop('cbf_extra', {})), **kw)
@@ -72,6 +72,7 @@ class S1Controller(B.S0bController):
         self.blending, self.mission_done, self.t_exit_in = False, False, None
         self.n_still, self.T_b_now, self.d_static, self.d_p_prev = 0, None, None, None
         self.no_tcp_preview, self.preview, self.no_inflight = bool(no_tcp_preview), {}, bool(no_inflight)
+        self.body_boxes, self.d_body = body_boxes, float(d_body)   # S2：三維障礙（模擬真值，LiDAR 看不到）
         self.t_ms = dict(scan=[], shield=[], advance=[])     # 分項耗時：solve_ms 不含這些，也不含物理與渲染
         self.chain, self.scan_fn, self.t_next_scan = chain, scan_fn, 0.0   # 有 chain 時：障礙只來自掃描鏈，底盤命令只經 Shield 寫出
         self.clear_min = dict(meas=float('inf'), pred=float('inf'), t_meas=None, t_pred=None, n=0)
@@ -97,6 +98,14 @@ class S1Controller(B.S0bController):
         d = float(np.linalg.norm(T[:, :3, 3] - T[0, :3, 3], axis=1).max())
         self.preview[ph] = max(self.preview.get(ph, 0.0), d)   # 記該相位 TCP 目標在時域內實際變化多少；消融時也照原序列記
         return np.stack([T[0]] * (N + 1)) if self.no_tcp_preview else T   # 消融：只拿掉 TCP 未來參考，N、dt、設定點模型、延遲補償、底盤參考與安全預測不變
+
+    def _arm_extra(self):
+        if not self.body_boxes:
+            return {}
+        pts = [(0.0, 0.0, 0.0), (0.0, 0.0, -0.05), (0.0, 0.0, -0.10)]   # TCP、夾爪本體（TCP 座標）
+        if self.judge.T_rel is not None:                       # 抓持後加瓶軸三點（瓶座標 z 0、0.10、0.20，半徑併入邊距）
+            pts = pts + [tuple((self.judge.T_rel @ np.array([0.0, 0.0, z, 1.0]))[:3]) for z in (0.0, 0.10, 0.20)]
+        return dict(body_obst=dict(boxes=self.body_boxes, pts=pts, d_safe=self.d_body + 0.015, d_act=0.45, d_near=0.10, stride=2))
 
     def _rel_target(self, tau):
         if self.q_tuck is None:
@@ -241,7 +250,7 @@ class S1Controller(B.S0bController):
         r.update(clear_bottle=dict(reject_m=CLEAR_REJECT, guard_m=CLEAR_GUARD, meas_min=None if cm['n'] == 0 else cm['meas'], pred_min=None if cm['n'] == 0 else cm['pred'], next_min=cm.get('next'), t_meas=cm['t_meas'], t_pred=cm['t_pred'], n=cm['n']), n_compact=None if self.compact is None else len(self.compact))
         if self.chain is not None:
             r.update(nav_chain=self.chain.report())
-        r.update(no_inflight=self.no_inflight, no_tcp_preview=self.no_tcp_preview, preview_range_mm={k: round(v * 1e3, 2) for k, v in self.preview.items()})
+        r.update(body_rows_max=getattr(self, 'ob_rows', 0), no_inflight=self.no_inflight, no_tcp_preview=self.no_tcp_preview, preview_range_mm={k: round(v * 1e3, 2) for k, v in self.preview.items()})
         r.update(exit_reached=self.t_exit_in is not None, t_exit_in=self.t_exit_in, mission_done=self.mission_done, blending=self.blending,
                  nav_source='truth_obstacle_to_cbf' if self.chain is None else 'lidar_tracker_to_cbf', shield=self.chain is not None, success_s0_judge=r['success'], success=bool(r['success'] and self.mission_done))
         return r

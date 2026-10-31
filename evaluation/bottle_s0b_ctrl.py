@@ -102,6 +102,9 @@ class S0bController(C.S0aController):
     def _rel_task(self):
         return self.st.phase == 'CARRY'
 
+    def _arm_extra(self):
+        return {}
+
     def _speed(self, T_tcp, x):
         if self.v_replay is not None:
             return float(self.v_replay[min(self.n_tick, len(self.v_replay) - 1)])
@@ -152,7 +155,7 @@ class S0bController(C.S0aController):
         X_ref, xi_ref = self._ref_window(xs_eff)
         w_p = C.W_NEAR if st.phase in ('PREGRASP', 'INSERT', 'CLOSE', 'LIFT') else C.W_FAR
         arm = dict(mode='active', K=self.K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=cfg.arm_model, T_seq=T_seq, w_p=w_p,
-                   lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=self._rel_task(), qp_solver=self.qp_solver, **W_ARM) if self.arm_mode == 'active' else dict(mode='hold')
+                   lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=self._rel_task(), qp_solver=self.qp_solver, **W_ARM, **self._arm_extra()) if self.arm_mode == 'active' else dict(mode='hold')
         obs = None if self.obstacles_fn is None else self.obstacles_fn(t_eff)
         solve_kw = dict(X_now=from_xytheta(*qp[:3]), X_ref_win=X_ref, xi_ref_win=xi_ref, xi_prev=self.u_prev[:3], arm=arm)
         r = self.mpc.solve(obstacles=obs, **solve_kw)
@@ -163,6 +166,7 @@ class S0bController(C.S0aController):
         self.u_arm_plan = None if r.u_arm_seq is None else np.array(r.u_arm_seq, float)
         self.base_plan = xi_ref[:N] + np.asarray(r.delta_xi_all, float)
         self.qp_log.append(dict(ck.get('qp') or dict(solver='fallback' if ck.get('fallback') else 'hold')))
+        self.ob_rows = max(getattr(self, 'ob_rows', 0), int(ck.get('ob_rows') or 0))
         if self.compact is not None and self.arm_mode == 'active' and r.u_arm_seq is not None:
             self.compact.append(dict(obs=obs, t=self.t, phase=BR.PHASES.index(st.phase), qp=qp.copy(), sp=sp.copy(), u_prev=self.u_prev.copy(), X_ref=X_ref.copy(), xi_ref=xi_ref.copy(), T_seq=np.array(T_seq), rel=bool(arm['tcp_rel_base']), w_p=float(w_p),
                                      bias=np.array(cfg.arm_model.bias, float), u=np.r_[np.asarray(r.u_opt, float), r.u_arm_seq[0]], cbf_active=int(r.cbf_active), min_h=float(r.min_h), eps0=float(r.eps0), resid_ns=float(r.cbf_resid_post_noslack), resid_s=float(r.cbf_resid_post_slack)))

@@ -1471,6 +1471,45 @@ class GMPC:
             lb_total = np.concatenate([lb_total, np.concatenate(rows_l)])
             ub_total = np.concatenate([ub_total, np.concatenate(rows_u)])
             arm_info = dict(nz=nz, A=A_arm, l=np.concatenate(rows_l), u=np.concatenate(rows_u), Mq=Mq, cq=cq, U0=U0)
+            bo = arm.get('body_obst')
+            if bo:                                              # 三維障礙：TCP 剛連點（夾爪、持瓶）的預測距離約束，底盤與手臂都在列內，耦合問題自己分配誰讓路
+                fc, r_ob, l_ob, ks = FastChain.of(Kk, tcp), [], [], []
+                for k in range(bo.get('stride', 2) - 1, N, bo.get('stride', 2)):
+                    xb = _pose_from_err(X_ref_win[k + 1], e_nom[k])
+                    Tc, J = fc.fk_jac(np.r_[xb, Mq[k] @ U0 + cq[k]])
+                    Bk = _pose_jac(X_ref_win[k + 1], e_nom[k])
+                    Gm = Gamma[k * n:(k + 1) * n, :]
+                    ks.append((Tc, J[:3, :3] @ Bk @ Gm, J[3:, :3] @ Bk @ Gm, J[:3, 3:] @ Mq[k], J[3:, 3:] @ Mq[k]))
+                for off in bo['pts']:
+                    rws = [T_[:3, :3] @ np.asarray(off, float) for T_, *_ in ks]
+                    P_ = np.array([T_[:3, 3] + rw for (T_, *_), rw in zip(ks, rws)])
+                    for c, sz in bo['boxes']:
+                        h_ = np.asarray(sz, float) / 2.0
+                        dd = np.abs(P_ - c) - h_
+                        if float(np.linalg.norm(np.maximum(dd, 0.0), axis=1).min()) > bo['d_act']:
+                            continue
+                        # 全時域用同一個分隔面：取餘裕最大的面。逐步取最近面時，薄箱遠端的預測點會選到另一側，近端與遠端列互相矛盾
+                        best = max(((float((sg * (P_[:, ax] - c[ax]) - h_[ax]).min()), ax, sg) for ax in range(3) for sg in (-1.0, 1.0)))
+                        _, ax, sg = best
+                        tang = [i for i in range(3) if i != ax]
+                        for j, ((T_, GB, GW_, GA, WA), rw) in enumerate(zip(ks, rws)):
+                            if float(np.linalg.norm(np.maximum(dd[j, tang], 0.0))) > bo['d_near']:
+                                continue                        # 只在預測點真的靠近箱子的時間步施加：提前平滑讓路，不要求下一步就跳到位
+                            Sk = np.array([[0.0, -rw[2], rw[1]], [rw[2], 0.0, -rw[0]], [-rw[1], rw[0], 0.0]])   # v_p＝v＋ω×r＝v−[r]×ω
+                            nv = np.zeros(3)
+                            nv[ax] = sg
+                            row = np.zeros(nz + n_arm)
+                            row[:Nm] = nv @ (GB - Sk @ GW_)
+                            row[nz:] = nv @ (GA - Sk @ WA)
+                            r_ob.append(row)
+                            l_ob.append(float(bo['d_safe']) - float(sg * (P_[j, ax] - c[ax]) - h_[ax]) + float(row[nz:] @ U0))
+                if r_ob:
+                    Aob = np.array(r_ob)
+                    lob = np.array(l_ob)
+                    A_total = sparse.vstack([A_total, sparse.csc_matrix(Aob)], format='csc')
+                    lb_total = np.concatenate([lb_total, lob])
+                    ub_total = np.concatenate([ub_total, np.full(len(lob), np.inf)])
+                    arm_info['ob'] = (Aob, lob)
 
         # 6. OSQP solve（耦合問題先用對偶作用集法，未得解才走 OSQP；底盤問題維持封存設定）
         t0 = time.perf_counter()
@@ -1547,8 +1586,10 @@ class GMPC:
                 ua = np.asarray(res.x)[arm_info['nz']:arm_info['nz'] + n_arm]
                 r_arm = arm_info['A'] @ ua
                 viol = float(max(np.max(arm_info['l'] - r_arm), np.max(r_arm - arm_info['u'])))
+                if 'ob' in arm_info:                  # 三維障礙列也進回傳核對：違反走既有退回路徑
+                    viol = max(viol, float(np.max(arm_info['ob'][1] - arm_info['ob'][0] @ np.asarray(res.x)[:arm_info['nz'] + n_arm])))
                 u_arm_seq = ua.reshape(N, ARM_N)
-                arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info)
+                arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info, ob_rows=int(len(arm_info['ob'][1])) if 'ob' in arm_info else 0)
             else:
                 u_arm_seq = np.zeros((N, ARM_N))
                 arm_check = dict(max_violation=float('nan'), finite=False, rows=int(arm_rows), qp=qp_info, note='底盤煞停路徑：手臂命令歸零（未求得序列）')
