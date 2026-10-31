@@ -31,8 +31,8 @@ trap cleanup EXIT
 trap 'say "收到 TERM"; exit 143' TERM
 trap 'say "收到 INT"; exit 130' INT
 say "=== 瓶子 N1 真話題鏈路 模式 $SIM_MODE 參數［${S1_ARGS:-無}］ RUN_ID=$RUN_ID 網域 $ROS_DOMAIN_ID；git $(git rev-parse --short HEAD)"
-sha256sum evaluation/isaac_bottle_ros.py evaluation/bottle_ros_chain.py evaluation/bottle_tracker_stamped.py evaluation/bottle_map_write.py evaluation/bottle_s1_ctrl.py evaluation/bottle_s1_groups.py evaluation/motm_b1_port.py evaluation/wg4b_b1_core.py evaluation/bottle_s0b_ctrl.py evaluation/bottle_branch.py evaluation/bottle_s0_ctrl.py evaluation/bottle_s0_logic.py evaluation/bottle_ref.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py evaluation/run_bottle_ros.sh evaluation/bottle_n2_path.py evaluation/bottle_n2_ctrl.py evaluation/bottle_n2_ros.py evaluation/bottle_n2_planner.yaml evaluation/bottle_ros_fake.py evaluation/isaac_bottle_n2.py "$ASSET" > "$DIR/versions.sha256"
-python3 evaluation/bottle_map_write.py "$DIR/map" ${S1_ARGS:-} | tee -a "$DIR/run.log"
+sha256sum evaluation/isaac_bottle_ros.py evaluation/bottle_ros_chain.py evaluation/bottle_tracker_stamped.py evaluation/bottle_map_write.py evaluation/bottle_s1_ctrl.py evaluation/bottle_s1_groups.py evaluation/motm_b1_port.py evaluation/wg4b_b1_core.py evaluation/bottle_s0b_ctrl.py evaluation/bottle_branch.py evaluation/bottle_s0_ctrl.py evaluation/bottle_s0_logic.py evaluation/bottle_ref.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py evaluation/run_bottle_ros.sh evaluation/bottle_n2_path.py evaluation/bottle_n2_ctrl.py evaluation/bottle_n2_ros.py evaluation/bottle_n2_planner.yaml evaluation/bottle_ros_fake.py evaluation/isaac_bottle_n2.py evaluation/bottle_place_ctrl.py evaluation/bottle_place_ros.py evaluation/bottle_place_fake.py evaluation/isaac_bottle_place.py "$ASSET" > "$DIR/versions.sha256"
+python3 evaluation/bottle_map_write.py "$DIR/map" ${S1_ARGS:-} ${MAP_ARGS:-} | tee -a "$DIR/run.log"
 PRM=$(python3 - <<'PY'
 import sys; sys.path.insert(0,'evaluation')
 import bottle_nav_chain as N
@@ -56,7 +56,7 @@ if [ "${PLAN:-0}" = 1 ]; then                                  # N2：planner_se
   PLAN_ARGS="--plan"
 fi
 if [ "$SIM_MODE" = fake ]; then
-  spawn sim python3 -u evaluation/bottle_ros_fake.py --out "$DIR" --mode "${FAKE_MODE:-full}" $PLAN_ARGS ${FAKE_GOAL:+--goal="$FAKE_GOAL"}
+  spawn sim python3 -u "${FAKE_SCRIPT:-evaluation/bottle_ros_fake.py}" --out "$DIR" --mode "${FAKE_MODE:-full}" $PLAN_ARGS ${FAKE_GOAL:+--goal="$FAKE_GOAL"}
   say "起 sim PID=${PIDS[-1]}"
 else
   spawn sim "$ISAAC_PY" -u "${ISAAC_SCRIPT:-evaluation/isaac_bottle_ros.py}" --asset "$ASSET" --out "$DIR" --headless false ${S1_ARGS:-}

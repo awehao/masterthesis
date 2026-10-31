@@ -18,11 +18,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('out')
     ap.add_argument('--wall-box', default='')
+    ap.add_argument('--table2', default='', help='第二桌位移 dx,dy（同一桌子資產；只放桌腳，桌面在掃描面之上）')
     a, _ = ap.parse_known_args()
     boxes = [(b[1], b[2]) for b in G.table_boxes() if b[0] != 'table_top']
     if a.wall_box:
         v = [float(x) for x in a.wall_box.split(',')]
         boxes.append((np.array(v[:3]), np.array(v[3:])))
+    if a.table2:
+        dx, dy = (float(v) for v in a.table2.split(','))
+        boxes += [(c + np.array([dx, dy, 0.0]), sz) for n, c, sz in G.table_boxes() if n != 'table_top']
     g = NC.occupancy(boxes)
     nx, ny = g.info.width, g.info.height
     occ = np.array(g.data, np.int8).reshape(ny, nx)

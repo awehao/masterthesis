@@ -172,14 +172,17 @@ class PlaceController(N2C.S1Planned):
         if st.phase == 'LIFT' and self.carry_req is None and self.judge.T_rel is not None:
             self.park, _ = self._park_solve(q)                          # LIFT 開始：瓶還在第一桌，只取停車 xy 當規劃目標
             goal = (self.park[0] - self.place['entry_back'], float(self.park[1]))
-            self.carry_req = dict(t_req=self.t, start=q[:3].tolist(), goal=goal, park=self.park.tolist(), h_lift=self.h_lift)
-            self.carry_planner.request(tuple(q[:3]), goal, self.t)
+            vb = float(self._vb_meas(q)) if np.isfinite(self._vb_meas(q)) else self.v_b      # 起點：實測位姿沿實測速度外推到 CARRY 開始（LIFT 名目時長）
+            start = q[:3] + np.array([math.cos(q[2]), math.sin(q[2]), 0.0]) * vb * float(self.task.t_lift)
+            self.carry_req = dict(t_req=self.t, start=start.tolist(), q_meas=q[:3].tolist(), v_meas=vb, goal=goal, park=self.park.tolist())
+            self.carry_planner.request(tuple(start), goal, self.t)
             self._ev('carry_plan_request', **self.carry_req)
         if st.phase == 'CARRY' and self.pph is None:
             res = self.carry_planner.poll()
             if res is None or not res.get('ok'):
                 self._pstop('carry_plan_missing' if res is None else 'carry_plan_invalid', detail=None if res is None else res.get('why'))
                 return
+            self.carry_info = dict(plan=res.get('info'))                # 被拒也留下原始路徑與規劃資訊
             qp, _ = self._inflight(q)
             v = np.asarray(self.base_plan[0][:2], float) if self.base_plan is not None else np.array([1.0, 0.0])
             c_, s_ = math.cos(qp[2]), math.sin(qp[2])
