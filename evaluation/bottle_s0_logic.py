@@ -9,6 +9,8 @@
   禁止接觸：力 ≥ 0.05 N 連續 ≥ 3 物理步 或 穿透 ≥ 1 mm ⇒ 停止；未達門檻的短脈衝照錄（只稱未觸發判定，不稱未碰撞）。
   失抓（證據成立後）：任一指 < 0.2 N 連續 0.2 s（較門段兩指判準保守）。資料失效：接觸或瓶位姿過期 > 0.1 s。
   抬離期限：抬升開始後 4 s 內離桌判據未成立 ⇒ 停止（候選；瓶子卡住或判據矛盾時記未通過，不調門檻）。
+  必要接觸對（required）：逐對追蹤最後有效時刻；缺鍵、None、NaN 都算無效，過期 > stale_s ⇒ 停止，且不得判 no_forbidden 成立（Codex 20261031_185332 (1)）。
+  閉爪請求前手指碰瓶：手指對瓶力視為禁止接觸對 finger_bottle_preclose（同 0.05 N／3 步），CLOSE 後才是指定接觸（同回覆 (2)）。
 """
 from __future__ import annotations
 
@@ -52,8 +54,11 @@ class Meas:
 
 
 class S0Judge:
-    def __init__(self, table_top_z, bottle_radius, reg=None):
+    def __init__(self, table_top_z, bottle_radius, reg=None, required=()):
         self.r = dict(REG, **(reg or {}))
+        self.required = tuple(required)
+        self.t_valid = {k: None for k in self.required}
+        self.t_first = None
         self.top_z, self.br = float(table_top_z), float(bottle_radius)
         self.t_close = None
         self.T_b0 = None                      # 初始瓶位姿（推瓶基準）
@@ -111,11 +116,38 @@ class S0Judge:
         contact_ok = finite(m.f_fingers) and self._fresh(t, m.t_contact, r['stale_s'])
         if self.T_b0 is None and pose_ok:
             self.T_b0 = np.array(m.T_bottle, float)
-        # 資料失效
-        if self.T_b0 is not None and not pose_ok:
-            self._stop(t, 'data_stale_bottle_pose')
-        if self.t_close is not None and not contact_ok:
-            self._stop(t, 'data_stale_contact')
+        # 資料失效（瓶位姿、手指對瓶自第一步起都須有效；閉爪前手指力也是禁止接觸判據）
+        if self.t_first is None:
+            self.t_first = t
+        # 有效時刻取**資料自身的量測時刻**（時間戳停住即會過期）
+        if finite(m.t_bottle) and finite(m.T_bottle):
+            self.t_valid['__pose'] = max(float(m.t_bottle), self.t_valid.get('__pose') or float('-inf'))
+        if finite(m.t_contact) and finite(m.f_fingers):
+            self.t_valid['__contact'] = max(float(m.t_contact), self.t_valid.get('__contact') or float('-inf'))
+        for k, why in (('__pose', 'data_stale_bottle_pose'), ('__contact', 'data_stale_contact')):
+            t0_ = self.t_valid.get(k)
+            if t - (self.t_first if t0_ is None else t0_) > r['stale_s']:
+                self._stop(t, why)
+        # 必要接觸對：缺鍵／None／NaN 都算無效
+        for k in self.required:
+            v = (m.forbidden or {}).get(k)
+            if v is not None and math.isfinite(float(v)):
+                self.t_valid[k] = t
+            t0_ = self.t_valid.get(k)
+            if t - (self.t_first if t0_ is None else t0_) > r['stale_s']:
+                self.res['no_forbidden'] = None if self.res['no_forbidden'] is True else self.res['no_forbidden']   # 資料不足：不得判成立
+                self._stop(t, f'data_stale_forbidden:{k}')
+        # 閉爪請求前手指碰瓶＝禁止接觸
+        if self.t_close is None and contact_ok:
+            fm = max(float(x) for x in m.f_fingers)
+            p = self.pulses.setdefault('finger_bottle_preclose', dict(peak=0.0, steps=0, n_nodata=0))
+            p['peak'] = max(p['peak'], fm)
+            if fm > 0.0:
+                p['steps'] += 1
+            self.forbid_cnt['finger_bottle_preclose'] = self.forbid_cnt.get('finger_bottle_preclose', 0) + 1 if fm >= r['forbid_n'] else 0
+            if self.forbid_cnt['finger_bottle_preclose'] >= r['forbid_steps']:
+                self.res['no_forbidden'] = False
+                self._stop(t, 'forbidden_contact:finger_bottle_preclose', force=fm)
         # 禁止接觸（含脈衝紀錄；NaN＝無資料，不當零也不當碰撞，另記）
         for k, f in (m.forbidden or {}).items():
             p = self.pulses.setdefault(k, dict(peak=0.0, steps=0, n_nodata=0))

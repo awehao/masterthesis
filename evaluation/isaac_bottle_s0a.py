@@ -3,7 +3,7 @@
 控制邏輯全在 bottle_s0_ctrl.S0aController／bottle_s0_logic（與 test_bottle_s0a.py 負測同一份）；本檔只做 Isaac 轉接：場景、量測、套用命令、紀錄。
 機器人設定沿用實跑 ev9r9a：omni_bot_manip.urdf、手臂 kp 600／kd 60、手指 kp 1e4／kd 1e3、finger_leader_only、手指拆塊碰撞 split、支撐球零摩擦、物理 dt 0.01、TGS、
   ext_forces_every_iter；夾持面 μs／μd 同瓶子資產。與實跑的差異（須揭露）：**無 ROS 命令鏈、無幾何監看節點；命令延遲 8 物理步是注入設定**；底盤每步下零速度（同執行端 set velocity 寫法，非 PARK_HOLD 伺服）。
-量測有缺一律給 None／NaN（不當零）。禁止接觸以接觸過濾對讀力；穿透以連桿點雲對瓶／桌幾何距離估計（每控制週期）。
+量測有缺一律給 None／NaN（不當零）；必要接觸對全程有效，起跑前形狀／有限值核對失敗即拒跑；僅完整成功回 0。禁止接觸以接觸過濾對讀力；穿透以連桿點雲對瓶／桌幾何距離估計（每控制週期）。
 不自動補跑；不延伸 S0b。
     $ISAAC_PY evaluation/isaac_bottle_s0a.py --asset src/my_omnibot_description/config/bottle_s0.yaml --out <dir>
 """
@@ -207,17 +207,26 @@ def main():
         world.step(render=True)
     q_s, _ = q9()
     d0 = q_s[3:] - np.asarray(q_ready, float)
-    ctrl = C.S0aController(C.S0_K(), ident, T_g, T_ready_rel, q_ready, float(T['top_z']), float(B['radius']), reg=None)
+    n_filters = 1 + len(table_paths)
+    required = ['finger_table', 'arm_bottle', 'arm_table'] + [f'extra{i}_{w}' for i in range(len(v_extra)) for w in ('bottle', 'table')]
+    # 動作前：所有接觸視圖形狀、感測數、有限值都須有效，否則拒跑（不當成沒有接觸）
+    for nm, v, ns, nf in [('finger', v_finger, 2, n_filters), ('arm', v_arm, 6, n_filters), ('bottle_table', v_bt, 1, 1)] + [(f'extra{i}', v, 1, n_filters) for i, v in enumerate(v_extra)]:
+        M = read_pairs(v, nf, dt)
+        if M is None or M.shape != (ns, nf, 3) or not np.isfinite(M).all():
+            print(f'[s0a] 接觸視圖 {nm} 無效（形狀 {None if M is None else M.shape}，期望 {(ns, nf, 3)}）⇒ 拒跑', flush=True)
+            return 68
+    ctrl = C.S0aController(C.S0_K(), ident, T_g, T_ready_rel, q_ready, float(T['top_z']), float(B['radius']), reg=None, required=required)
     ctrl.obs.d = np.clip(d0, -ctrl.obs.max, ctrl.obs.max)
     ctrl.cfg.arm_model.bias = ctrl.bias0 + np.asarray(ctrl.cfg.arm_model.alpha, float) * ctrl.obs.d
     print(f'[s0a] 靜態偏移 d̂₀ {np.round(ctrl.obs.d, 4).tolist()}；底盤 {np.round(q_s[:3], 4).tolist()}', flush=True)
-    n_filters = 1 + len(table_paths)
     rows = []
     t_end_tail = None
-    n = int(round(a.sim_s / dt))
+    n = int(round((a.sim_s + a.stop_tail_s + 1.5) / dt))                      # 總期限後仍走停止尾段
     penetration = 0.0
     for k in range(n):
         t = k * dt
+        if t >= a.sim_s and not ctrl.done and ctrl.judge.stop is None:
+            ctrl._trigger_stop('sim_limit')
         q, jp = q9()
         # 瓶位姿（幾何中心 → 底心座標：z 軸＝瓶軸）
         pb, qb = bottle.get_world_pose()
@@ -259,19 +268,23 @@ def main():
         base_zero()
         world.step(render=True)
         rows.append([t, *q, *out['arm_target'], float(jp[f1]), float(jp[f2]), out['finger_target'], *(ff if ff else (float('nan'),) * 2),
-                     float('nan') if ft is None else ft, *Tb[:3, 3], float(Rb[2, 2]), BR_PH.index(out['phase']), float(out['stopped']),
+                     float('nan') if ft is None else ft, *Tb[:3, 3], *[float(v) for v in qb], BR_PH.index(out['phase']), float(out['stopped']),
                      *[forb[kk] for kk in sorted(forb)]])
         if (out['stopped'] or out['done']) and t_end_tail is None:
-            t_end_tail = t + a.stop_tail_s
+            t_end_tail = t + (a.stop_tail_s if out['done'] else max(a.stop_tail_s, 1.2))  # 停止尾段須涵蓋 1 s 停止有效性
         if t_end_tail is not None and t >= t_end_tail:
             break
     rep = ctrl.report()
     rep.update(readback=readback, asset=S, forb_keys=sorted(forb), d0=[float(v) for v in d0], n_steps=len(rows), note='命令延遲 8 物理步為注入設定；無 ROS 命令鏈；停止處置為腳本自有')
-    np.savez_compressed(os.path.join(a.out, 's0a_steps.npz'), rows=np.array(rows, float))
+    cols = ['t', 'base_x', 'base_y', 'base_yaw'] + [f'q{i}' for i in range(1, 7)] + [f's{i}' for i in range(1, 7)] + ['finger1_q', 'finger2_q', 'finger_cmd', 'f_finger1_bottle', 'f_finger2_bottle',
+            'f_bottle_table', 'bottle_base_x', 'bottle_base_y', 'bottle_base_z', 'bottle_qw', 'bottle_qx', 'bottle_qy', 'bottle_qz', 'phase_index', 'stopped'] + [f'forb_{kk}' for kk in sorted(forb)]
+    np.savez_compressed(os.path.join(a.out, 's0a_steps.npz'), rows=np.array(rows, float), cols=np.array(cols), phases=np.array(BR_PH))
+    rep['cols'] = cols
+    rep['reached_end'] = bool(ctrl.done or ctrl.judge.stop is not None)
     json.dump(rep, open(os.path.join(a.out, 's0a_report.json'), 'w'), ensure_ascii=False, indent=1, default=float)
     print(f"[s0a] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']}", flush=True)
     print(f"[s0a] 事件 {rep['events']}", flush=True)
-    return 0
+    return C.exit_code(rep)
 
 
 BR_PH = ['CRUISE', 'PREGRASP', 'INSERT', 'CLOSE', 'LIFT', 'CARRY']

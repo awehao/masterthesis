@@ -40,11 +40,11 @@ def make_cfg(ident):
 
 
 class S0aController:
-    def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, t_reach=4.0, lift_m=0.05, t_hold_end=6.0, reg=None):
+    def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, t_reach=4.0, lift_m=0.05, t_hold_end=6.0, reg=None, required=()):
         self.K, self.cfg = K, make_cfg(ident)
         self.task = BR.BottleTask(T_grasp=np.array(T_grasp, float), lift_m=lift_m, T_ready_rel=np.array(T_ready_rel, float))
         self.st = BR.PhaseState(t_cruise0=0.0, t_pre=float(t_reach))
-        self.judge = L.S0Judge(table_top_z, bottle_radius, reg=reg)
+        self.judge = L.S0Judge(table_top_z, bottle_radius, reg=reg, required=required)
         self.s = np.array(q_ready, float)                  # 手臂設定點（積分結果）
         self.pipe = [np.zeros(9) for _ in range(D_STEPS)]
         self.u_prev, self.u_last, self.U_warm = np.zeros(9), np.zeros(9), None
@@ -167,8 +167,9 @@ class S0aController:
         # 停止有效性
         if self.stopped_t is not None and self.q_last is not None and T_tcp is not None:
             dq = float(np.abs(q[3:] - self.q_last[3:]).max()) / PHYS
+            vb = float(np.hypot(*(q[:2] - self.q_last[:2]))) / PHYS            # 實測底盤速度（位姿差分），不以下零命令代替
             if self.t - self.stopped_t >= 1.0 and self.stop_ok is None:
-                self.stop_ok = dict(t=self.t, arm_rate=dq, ok=bool(dq < 1e-3))
+                self.stop_ok = dict(t=self.t, arm_rate=dq, base_speed=vb, ok=bool(dq < 1e-3 and vb < 0.01))
         self.q_last = q.copy()
         self.n_step += 1
         return dict(arm_target=self.s.copy(), finger_target=float(self.f_cmd), base_twist=np.zeros(3), phase=self.st.phase,
@@ -214,4 +215,11 @@ def grasp_target(xb, yb, h):
     return T
 
 
-__all__ = ['S0aController', 'grasp_target', 'make_cfg', 'math']
+def exit_code(rep):
+    """只有完整成功回 0；中止、逾時未完成、停止有效性未通過都非零（Codex 20261031_185332 (3)）。"""
+    if rep.get('success') is True and rep.get('stop') is None:
+        return 0
+    return 3 if (rep.get('stop_effect') or {}).get('ok') is True else 4     # 3：已停止且停止有效；4：停止未驗證／無效
+
+
+__all__ = ['S0aController', 'grasp_target', 'make_cfg', 'exit_code', 'math']

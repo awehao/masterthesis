@@ -69,7 +69,7 @@ class Fake:
 
 
 def ctrl():
-    return C.S0aController(K, ID, C.grasp_target(BX, BY, HG), T_READY, Q_READY, TOP, R_B, t_reach=4.0)
+    return C.S0aController(K, ID, C.grasp_target(BX, BY, HG), T_READY, Q_READY, TOP, R_B, t_reach=4.0, required=('nonfinger_bottle', 'robot_table'))
 
 
 BAD, NCHK, LOG = [], 0, []
@@ -131,8 +131,27 @@ def main():
     chk('S5 2 步脈衝不觸發但照錄', stop_of(f) is None and p['peak'] == 0.2 and p['steps'] == 2, str(p))
     f = Fake(ctrl()).run(30.0, lambda t, s: dict(forbidden={'nonfinger_bottle': 0.2, 'robot_table': 0.0}) if 5.0 <= t < 5.035 else {})
     chk('S5b 連續 3 步 ⇒ 停止', stop_of(f) == 'forbidden_contact:nonfinger_bottle', str(stop_of(f)))
-    f = Fake(ctrl()).run(30.0, lambda t, s: dict(forbidden={'nonfinger_bottle': float('nan'), 'robot_table': 0.0}) if t < 2.0 else {})
-    chk('S5c NaN 記無資料、不當零也不當碰撞', f.c.report()['forbidden_pulses']['nonfinger_bottle']['n_nodata'] > 100)
+    f = Fake(ctrl()).run(30.0, lambda t, s: dict(forbidden={'nonfinger_bottle': float('nan'), 'robot_table': 0.0}) if 2.0 <= t < 2.05 else {})
+    chk('S5c 短暫 NaN 照錄、未過期不停', stop_of(f) is None and f.c.report()['forbidden_pulses']['nonfinger_bottle']['n_nodata'] >= 4, str(stop_of(f)))
+    for lab, fv in (('整路 NaN', dict(forbidden={'nonfinger_bottle': float('nan'), 'robot_table': 0.0})), ('缺鍵', dict(forbidden={'robot_table': 0.0})),
+                    ('None', dict(forbidden={'nonfinger_bottle': None, 'robot_table': 0.0})), ('全空', dict(forbidden={}))):
+        f = Fake(ctrl()).run(30.0, lambda t, s, _v=fv: _v)
+        chk(f'S13 必要接觸對{lab} ⇒ 停止、不判成功', (stop_of(f) or '').startswith('data_stale_forbidden') and not f.c.judge.success()
+            and f.c.judge.res['no_forbidden'] is not True and f.c.st.phase == 'CRUISE', f'{stop_of(f)} {f.c.judge.res}')
+    f = Fake(ctrl()).run(30.0, lambda t, s: dict(forbidden={'nonfinger_bottle': float('nan'), 'robot_table': 0.0}) if t > t_l else {})
+    chk('S13b 抬升中資料失效 ⇒ 停止、不判成功', (stop_of(f) or '').startswith('data_stale_forbidden') and not f.c.judge.success(), str(stop_of(f)))
+    t_i = r['events'][1]['t'] + 0.3                                    # INSERT 中
+    f = Fake(ctrl()).run(30.0, lambda t, s: dict(f_fingers=(0.2, 0.0)) if t_i <= t < t_i + 0.035 else {})
+    chk('S14 閉爪前手指碰瓶 3 步 ⇒ 停止', stop_of(f) == 'forbidden_contact:finger_bottle_preclose' and f.c.judge.t_close is None, str(stop_of(f)))
+    f = Fake(ctrl()).run(30.0, lambda t, s: dict(f_fingers=(0.2, 0.0)) if t_i <= t < t_i + 0.02 else {})
+    p = f.c.report()['forbidden_pulses']['finger_bottle_preclose']
+    chk('S14b 2 步脈衝不觸發但照錄', stop_of(f) is None and p['peak'] == 0.2 and p['steps'] == 2, str(p))
+    f = Fake(ctrl()).run(30.0, lambda t, s: dict(f_fingers=None) if t > 2.0 else {})
+    chk('S14c 閉爪前手指資料失效 ⇒ 停止', stop_of(f) == 'data_stale_contact', str(stop_of(f)))
+    for lab, rp, want in (('成功', dict(success=True, stop=None), 0), ('中止且停止有效', dict(success=False, stop={'why': 'x'}, stop_effect={'ok': True}), 3),
+                          ('中止停止未驗', dict(success=False, stop={'why': 'x'}, stop_effect=None), 4), ('逾時未完成', dict(success=False, stop=None), 4),
+                          ('成功旗標但有阻點', dict(success=True, stop={'why': 'x'}, stop_effect={'ok': True}), 3)):
+        chk(f'S15 離開碼 {lab}', C.exit_code(rp) == want, str(C.exit_code(rp)))
     f = Fake(ctrl()).run(30.0, lambda t, s: dict(penetration=0.002) if t > 5.0 else {})
     chk('S5d 穿透 ≥ 1 mm ⇒ 停止', stop_of(f) == 'forbidden_penetration', str(stop_of(f)))
     # S6 閉爪前推瓶
