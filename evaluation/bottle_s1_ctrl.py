@@ -26,9 +26,10 @@ import bottle_s1_geom as G                                            # noqa: E4
 
 N, DT = B.N, B.DT
 CLEAR_REJECT = 0.005      # 非手指↔瓶拒絕線（m），事前指定，不因任務調整
-CLEAR_GUARD = 0.0         # 下一拍計畫已涵蓋晚一拍；保護帶不重複計算。拒絕線 CLEAR_REJECT 不變
+CLEAR_GUARD = 0.0005      # 觸發線＝拒絕線＋此值；餘量不足時增加幾何或降低插入速度，不動此值與拒絕線
 CLEAR_NEAR = 0.25         # TCP 離瓶超過此距離不核（省算）
 A_SLEW = 0.4              # 參考速度斜率（m/s²），工程設定
+SHIELD_DV = 1e-3          # Shield 改寫超過此值（m/s 範數）視為非微量
 SCAN_HZ, OBS_MAX_AGE = 10.0, 0.5   # 同 bottle_nav_chain
 N_STILL = 20              # 出口停住須連續低速的物理步數
 
@@ -53,7 +54,7 @@ class DetourPath:
 
 class S1Controller(B.S0bController):
     def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, x_start, x_win, path, exit_c, exit_r, obstacles_fn,
-                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, **kw):
+                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, t_insert=None, **kw):
         x_stop = exit_c[0] if x_exit_stop is None else x_exit_stop
         super().__init__(K, ident, T_grasp, T_ready_rel, q_ready if q_tuck is None else q_tuck, table_top_z, bottle_radius, x_start, x_win, x_stop, v_c=v_c, obstacles_fn=obstacles_fn,
                          cbf_cfg=dict(B.CBF_MISSION, **kw.pop('cbf_extra', {})), **kw)
@@ -61,6 +62,8 @@ class S1Controller(B.S0bController):
         self.v_nav, self.v_carry, self.x_slow = float(v_nav), float(v_carry), float(x_slow)
         self.x_pre = float(x_win[0]) + 0.05
         self.t_blend = float(t_blend)
+        if t_insert is not None:
+            self.task.t_insert = float(t_insert)               # 插入放慢：TCP 速度低，追蹤落後與停止續行都變小，不動已驗證的抓取幾何
         self.x_blend = self.x_pre - v_c * self.t_blend         # 朝瓶漸變起點：以接近速度倒推，位置事件觸發
         self.st.t_pre, self.st.t_cruise0 = float('inf'), 0.0
         self.q_tuck, self.q_arm_ready, self.t_unfold, self.t_u0 = (None if q_tuck is None else np.array(q_tuck, float)), np.array(q_ready, float), float(t_unfold), None
@@ -134,9 +137,11 @@ class S1Controller(B.S0bController):
         q_rest[:3] += np.array([c_ * dx[0] - s_ * dx[1], s_ * dx[0] + c_ * dx[1], dx[2]])
         d_s = np.asarray(self.obs.d if self.d_static is None else self.d_static, float)   # 穩態 q＝s＋d：用展臂前手臂靜止時的 d̂，運動中的 d̂ 在伺服變慢時被追蹤落後汙染（α×0.4 預測誤差 1.4 mm）
         q_rest[3:] = sp + d_s + u[3:] * np.abs(u[3:]) / (2.0 * C0.A_ARM)
-        q_next = q_rest.copy()                             # 下一拍才停的停止點：照 MPC 計畫的下一筆命令走一拍再減速（含計畫中的減速，線性外推會把快到位時當成全速續衝）
-        if self.u_arm_plan is not None and len(self.u_arm_plan) > 1:
-            u1 = self.u_arm_plan[1]
+        q_next = q_rest.copy()                             # 下一拍才停的停止點：底盤與手臂都照 MPC 計畫走一拍再減速（線性外推會把快到位時當成全速續衝）
+        if self.u_arm_plan is not None and len(self.u_arm_plan) > 1 and self.base_plan is not None:
+            u1, v1 = self.u_arm_plan[1], self.base_plan[1]
+            d_b = DT * v1 + v1 * np.abs(v1) / (2.0 * B.A_BASE)
+            q_next[:3] = qp[:3] + np.array([c_ * d_b[0] - s_ * d_b[1], s_ * d_b[0] + c_ * d_b[1], d_b[2]])
             q_next[3:] = sp + DT * u1 + d_s + u1 * np.abs(u1) / (2.0 * C0.A_ARM)
         return qp, q_rest, q_next
 
@@ -158,7 +163,9 @@ class S1Controller(B.S0bController):
         if d_p < cm['pred']:
             cm['pred'], cm['t_pred'] = d_p, self.t
         d_next = self._bottle_clear(q_next, T_b)
-        if min(d_m, d_next) < CLEAR_REJECT + CLEAR_GUARD:
+        d_all = min(d_m, d_p, d_next)                      # 實測、在途構型、當下停止點、下一拍停止點全核
+        cm['next'] = min(cm.get('next', float('inf')), d_next)
+        if d_all < CLEAR_REJECT + CLEAR_GUARD:
             self.judge._stop(self.t, 'clearance_bottle', meas=d_m, pred=d_p, pred_next=d_next)
 
     def _advance(self, T_tcp, close_done, q):
@@ -189,7 +196,11 @@ class S1Controller(B.S0bController):
                 self.chain.on_scan(t, r_, q[:3])
         out = super().step(t, q, **kw)
         if self.chain is not None:
-            out['base_twist'] = self.chain.shield(t, out['base_twist'])   # 最終底盤命令：含停止路徑，無旁路
+            u_in = np.array(out['base_twist'], float)
+            out['base_twist'] = self.chain.shield(t, u_in)     # 最終底盤命令：含停止路徑，無旁路
+            dv = float(np.linalg.norm(out['base_twist'] - u_in))
+            if dv > SHIELD_DV and self.judge.stop is None:     # 改寫後實際底盤與 MPC 計畫不再一致，不當原全身序列繼續：走受控停止
+                self.judge._stop(self.t, 'shield_intervened', dv=dv, u_in=u_in.tolist(), u_out=out['base_twist'].tolist())
         if np.isfinite(q).all():
             in_zone = float(np.hypot(*(q[:2] - self.exit_c))) <= self.exit_r
             if in_zone and self.t_exit_in is None and self.st.phase == 'CARRY':
@@ -206,7 +217,7 @@ class S1Controller(B.S0bController):
     def report(self):
         r = super().report()
         cm = self.clear_min
-        r.update(clear_bottle=dict(reject_m=CLEAR_REJECT, guard_m=CLEAR_GUARD, meas_min=None if cm['n'] == 0 else cm['meas'], pred_min=None if cm['n'] == 0 else cm['pred'], t_meas=cm['t_meas'], t_pred=cm['t_pred'], n=cm['n']), n_compact=None if self.compact is None else len(self.compact))
+        r.update(clear_bottle=dict(reject_m=CLEAR_REJECT, guard_m=CLEAR_GUARD, meas_min=None if cm['n'] == 0 else cm['meas'], pred_min=None if cm['n'] == 0 else cm['pred'], next_min=cm.get('next'), t_meas=cm['t_meas'], t_pred=cm['t_pred'], n=cm['n']), n_compact=None if self.compact is None else len(self.compact))
         if self.chain is not None:
             r.update(nav_chain=self.chain.report())
         r.update(exit_reached=self.t_exit_in is not None, t_exit_in=self.t_exit_in, mission_done=self.mission_done, blending=self.blending,

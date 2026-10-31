@@ -26,7 +26,7 @@ R_OBST, M_STATIC, R_DISC = 0.2 * math.sqrt(2.0), 0.47, 0.39
 PATH = (-3.4, -0.6, -0.92)         # 升餘弦繞行，對稱於障礙；CLEAR_MIN 由 path_clearance 硬性核對
 PATH_P2 = (-3.4, -0.6, -0.81)      # 貼近路徑：CBF 實際介入
 Q_TUCK = (0.0, 0.0, 0.035, 0.0, -1.5708, 0.0)   # 起始與行進姿態：K2_READY（Howard 指定，10/31），同門任務起始
-FAST = dict(q_tuck=Q_TUCK, v_nav=0.35, v_c=0.10, v_carry=0.25, x_slow=-0.90, x_unfold=-1.55, t_unfold=3.4, t_blend=3.0)   # Howard 指定速度；展臂在高速段進行，只有朝瓶段降速
+FAST = dict(q_tuck=Q_TUCK, v_nav=0.35, v_c=0.10, v_carry=0.25, x_slow=-0.90, x_unfold=-1.55, t_unfold=3.4, t_blend=3.0, t_insert=1.5)   # Howard 指定速度；展臂在高速段進行，只有朝瓶段降速
 CLEAR_MIN = 0.03                   # 參考路徑對 r_eff 的最小餘裕（m）：路徑穿進 keep-out 時底盤與參考會一起停在邊界（r1 死鎖）
 EXIT_C, EXIT_R = (1.0, 0.0), 0.30
 

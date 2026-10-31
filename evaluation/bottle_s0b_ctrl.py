@@ -72,7 +72,7 @@ class S0bController(C.S0aController):
         self.obstacles_fn, self.arm_mode, self.v_replay, self.log_cbf = obstacles_fn, arm_mode, v_replay, log_cbf
         self.y_ref, self.th_ref, self.cbf_log = 0.0, 0.0, []
         self.done_anchored, self.n_gate, self.qp_solver, self.qp_log = False, 0, qp_solver, []
-        self.u_arm_plan = None
+        self.u_arm_plan, self.base_plan = None, None
         self.compact = None                                # list 時逐週期存實際命令、CBF 殘差、slack 與重解輸入（反事實重解在實跑後做）
         self.x_ws, self.x_we, self.x_end, self.v_c = float(x_win[0]), float(x_win[1]), float(x_end), float(v_c)
         self.s_ref, self.v_b, self.n_tick = float(x_start), float(v_c), 0
@@ -159,6 +159,7 @@ class S0bController(C.S0aController):
             ck.update(self.mpc_fail_inject(self.t) or {})
         self.solve_ms.append((time.perf_counter() - t0) * 1e3)
         self.u_arm_plan = None if r.u_arm_seq is None else np.array(r.u_arm_seq, float)
+        self.base_plan = xi_ref[:N] + np.asarray(r.delta_xi_all, float)
         self.qp_log.append(dict(ck.get('qp') or dict(solver='fallback' if ck.get('fallback') else 'hold')))
         if self.compact is not None and self.arm_mode == 'active' and r.u_arm_seq is not None:
             self.compact.append(dict(obs=obs, t=self.t, phase=BR.PHASES.index(st.phase), qp=qp.copy(), sp=sp.copy(), u_prev=self.u_prev.copy(), X_ref=X_ref.copy(), xi_ref=xi_ref.copy(), T_seq=np.array(T_seq), rel=bool(arm['tcp_rel_base']), w_p=float(w_p),

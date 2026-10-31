@@ -12,6 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bottle_nav_chain as NC                           # noqa: E402
 import bottle_s1_cand as SC                             # noqa: E402
+import bottle_s1_cbf_replay as RP                       # noqa: E402
 import bottle_s1_ctrl as S1                             # noqa: E402
 import test_bottle_s0b as T                             # noqa: E402
 
@@ -42,6 +43,7 @@ def clear_disc(f):
 def main():
     # 名目 P2：掃描鏈全程
     c = SC.make_lidar(log_cbf=True)
+    c.compact = []
     f = fake(c, 45.0)
     r = c.report()
     n = r['nav_chain']
@@ -58,6 +60,13 @@ def main():
     print('名目', r['success'], S1.exit_code(r), r['stop'], [(round(e['t'], 1), e.get('to', e['what'])) for e in r['events'] if e['what'] in ('phase', 'unfold_start', 'blend_start', 'exit_enter', 'mission_done')])
     print('  掃描鏈', {k: n[k] for k in ('n_scan', 'n_dyn_max', 'n_static_max')}, n['shield'], n['shield_first'], n['shield_last'])
     print(f"  CBF 改命令 {len(L)}／{len(c.cbf_log)} {ph}；真值：對方塊表面 {(d_c.min() - 0.2) * 1e3:.0f} mm 級、底盤圓盤 0.30 對環境淨空 {clear_disc(f) * 1e3:.1f} mm；速度峰 {sp.max():.3f}、夾持 {sp[mk].min() if mk.any() else 0:.3f}–{sp[mk].max() if mk.any() else 0:.3f}；滑移 {r['slip_max_mm_deg']}；瓶 {r['clear_bottle']['meas_min']}；ms p95 {np.percentile(ms, 95):.1f} max {ms.max():.1f} >50 {r['n_over_50ms']}；{r['qp_counts']}；總 {t[-1]:.1f} s；末 ({q[-1, 0]:.3f}, {q[-1, 1]:.3f})")
+    pth = os.path.join(os.environ.get('TMPDIR', '/tmp'), 's1_chain_cbf.npz')
+    S1.save_compact(c, pth)
+    rp = RP.replay(pth)
+    os.remove(pth)
+    print(f"  同輸入反事實：重現差 {rp['reproduce_max']:.1e}；改命令 {rp['n_bound']}／{rp['n']} {rp['phase_bound']}；|Δu| 峰 {rp['du_max']:.3f}；k0 slack 峰 {rp['eps0_max']:.2e}；殘差 無slack {rp['resid_ns_min']:.2e}／含slack {rp['resid_s_min']:.2e}")
+    print('  瓶淨空', {k: (round(v * 1e3, 2) if isinstance(v, float) and k != 't_meas' and k != 't_pred' else v) for k, v in r['clear_bottle'].items()})
+    chk('C1b 同輸入重解重現實際命令', rp['reproduce_max'] <= 1e-6, str(rp['reproduce_max']))
     chk('C1 名目完整任務成功', r['success'] and S1.exit_code(r) == 0, str(r['stop']))
     chk('C1 標明資料來源', r['nav_source'] == 'lidar_tracker_to_cbf' and r['shield'] is True)
     chk('C2 Shield 無旁路（每物理步都過）', n['shield']['n'] == len(f.hist), f"{n['shield']['n']} {len(f.hist)}")
@@ -70,7 +79,7 @@ def main():
     # 掃描過期：不繞過，走停止路徑
     c = SC.make_lidar(scan_fn=lambda t, q, B=SC.scene_boxes(): None if t >= 5.0 else NC.ray_boxes(q[:2], float(q[2]), B, SC.G.LIDAR_Z))
     f = fake(c, 12.0)
-    chk('C4 掃描中斷 ⇒ scan_stale 停止', (c.judge.stop or {}).get('why') == 'scan_stale', str(c.judge.stop))
+    chk('C4 掃描中斷 ⇒ 受控停止（Shield 過期限速先到時第一阻點為 shield_intervened）', (c.judge.stop or {}).get('why') in ('scan_stale', 'shield_intervened'), str(c.judge.stop))
     chk('C4 不報成功、停止有效', c.report()['success'] is False and (c.stop_ok or {}).get('ok') is True, str(c.stop_ok))
     after = [h for h in f.hist if h['t'] >= 5.5]
     chk('C4 Shield 過期限速 ≤0.05 m/s', max(float(np.hypot(*h['u'][:2])) for h in after) <= 0.05 + 1e-9, str(max(float(np.hypot(*h['u'][:2])) for h in after)))
@@ -82,8 +91,22 @@ def main():
     dmin = min(math.hypot(max(abs(h['q'][0] + 2.0) - 0.2, 0.0), max(abs(h['q'][1]) - 0.2, 0.0)) for h in f.hist)
     chk('C5 CBF 失明 ⇒ Shield 介入', c.chain.report()['shield']['active'] > 0, str(c.chain.report()['shield']))
     chk('C5 底盤未撞（0.30 圓盤淨空 >0）', dmin - 0.30 > 0.0, str(dmin))
-    chk('C5 不報成功', c.report()['success'] is False, str(c.report()['stop']))
+    chk('C5 Shield 非微量改寫 ⇒ 受控停止、不報成功', (c.judge.stop or {}).get('why') == 'shield_intervened' and c.report()['success'] is False, str(c.report()['stop']))
+    chk('C5 停止有效', (c.stop_ok or {}).get('ok') is True, str(c.stop_ok))
     print(f'  C5 底盤中心到方塊面最小 {dmin:.3f} m；x 末 {f.hist[-1]["x"]:.3f}')
+
+    # 強制改寫：Shield 速度盒突然變小（模擬保護介入），不得繞過、不得繼續原計畫
+    c = SC.make_lidar()
+
+    def squeeze(t, s):
+        if t >= 6.0:
+            s.c.chain.sh.u_max = np.array([0.02, 0.02, 0.1])
+        return {}
+    f = fake(c, 12.0, squeeze)
+    st = (c.judge.stop or {})
+    chk('C8 強制改寫 ⇒ shield_intervened 停止', st.get('why') == 'shield_intervened', str(st))
+    chk('C8 記下實際輸入輸出', 'u_in' in st and 'u_out' in st)
+    chk('C8 不報成功、輸出受限', c.report()['success'] is False and max(float(abs(h['u'][0])) for h in f.hist if h['t'] >= 6.1) <= 0.02 + 1e-9, str(c.report()['stop']))
 
     # 停止路徑也經 Shield
     c = SC.make_lidar()

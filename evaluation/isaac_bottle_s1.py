@@ -32,6 +32,7 @@ ap.add_argument('--v-carry', type=float, default=0.25)
 ap.add_argument('--x-unfold', type=float, default=-1.55)
 ap.add_argument('--t-unfold', type=float, default=3.4)
 ap.add_argument('--t-blend', type=float, default=3.0)
+ap.add_argument('--t-insert', type=float, default=1.5)
 ap.add_argument('--x-slow', type=float, default=-0.90)
 ap.add_argument('--q-tuck', default='0,0,0.035,0,-1.5708,0', help='起始與行進姿態：K2_READY（Howard 指定）；開始後不直接設定關節')
 ap.add_argument('--sim-s', type=float, default=90.0)
@@ -242,7 +243,7 @@ def main():
         print(f'[s1] 視角設定失敗（不影響物理）：{e!r}', flush=True)
     readback = dict(solver_type=str(sapi.GetSolverTypeAttr().Get()), ext_forces_every_iter=bool(sapi.GetEnableExternalForcesEveryIterationAttr().Get()),
                     physics_dt=float(world.get_physics_dt()), bottle_mass=float(bottle.get_mass()), kp=a.kp, kd=a.kd, base=[float(v) for v in base],
-                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
+                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
     print(f'[s1] 讀回 {readback}', flush=True)
     if abs(readback['physics_dt'] - dt) > 1e-12 or readback['ext_forces_every_iter'] != bool(PH.get('ext_forces_every_iter')):
         print('[s1] 物理設定讀回不符 ⇒ 拒跑', flush=True)
@@ -299,7 +300,7 @@ def main():
         return 69
     p_ = [float(v) for v in a.path.split(',')]
     ctrl = C2.S1Controller(C.S0_K(), ident, T_g, T_ready_rel, q_ready, float(T['top_z']), float(B['radius']), a.x_start, (a.win_lo, a.win_hi), C2.DetourPath(*p_),
-                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, chain.obstacles, chain=chain, scan_fn=scan_fn, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, reg=None, required=required)
+                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, chain.obstacles, chain=chain, scan_fn=scan_fn, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert, reg=None, required=required)
     ctrl.compact = []                                                         # CBF 證據；反事實重解在實跑後（bottle_s1_cbf_replay.py）
     ctrl.obs.d = np.clip(d0, -ctrl.obs.max, ctrl.obs.max)
     ctrl.cfg.arm_model.bias = ctrl.bias0 + np.asarray(ctrl.cfg.arm_model.alpha, float) * ctrl.obs.d
