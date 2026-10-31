@@ -153,7 +153,9 @@ class S1MotM(S1.S1Controller):
             self.judge._stop(self.t, 'm_residual', res=max(res.values()))
             return None
         self.s_ref += self.v_b * DT
-        return np.asarray(r.x, float)
+        u = np.asarray(r.x, float)
+        self.base_plan, self.u_arm_plan = np.stack([u[:3], u[:3]]), np.stack([u[3:], u[3:]])   # 單步：命令維持一個控制週期再減速，給 _stop_rest 算下一拍停止點，與 G 同等核對
+        return u
 
     def report(self):
         r = super().report()
