@@ -82,6 +82,15 @@ class FakePlace(T.Fake):
             if over and pen >= 0.0:
                 cand[2, 3] += pen
                 fz = T.MASS * 9.81 + 2000.0 * pen
+                k_ = int(round(self.t / 0.01))
+                if self.mode == 'share':                                # 夾爪仍握持：桌面只承約 1/3 重量（bottle_p1_2 實測）
+                    fz = T.MASS * 9.81 / 3.0
+                elif self.mode == 'flicker':                            # 逐步交替 0 與 2/3 mg（平均 1/3 mg）
+                    fz = 2.0 * T.MASS * 9.81 / 3.0 if k_ % 2 else 0.0
+                elif self.mode == 'dropout':                            # 每 30 步掉力 10 步；其餘 mg/2，使窗口平均仍高於 0.25 mg，單獨驗連續掉力
+                    fz = 0.0 if k_ % 30 < 10 else T.MASS * 9.81 / 2.0
+                elif self.mode == 'low':                                # 桌面只承 0.15 mg：低於首次接觸門檻
+                    fz = 0.15 * T.MASS * 9.81
                 self.f_place = np.array([0.0, fz, 0.0]) if self.mode == 'side' else np.array([0.0, 0.0, -fz if self.mode == 'reverse' else fz])
                 if self.mode == 'side':
                     cand[2, 3] -= pen
@@ -116,12 +125,12 @@ def run(c, f, t_end=75.0, hook=None):
         if t >= t_end - 3.0 and not s.c.mission_done:
             s.c._trigger_stop('sim_limit')
         return {}
-    f.run(t_end, fault)
+    f.run(t_end, fault, tail=2.0)                        # 停穩判定要停止後 1.5 s 的資料
     return c.report()
 
 
 def summary(name, r, c, f):
-    ev = [(round(e['t'], 2), e.get('to', e['what'])) for e in r['events'] if e['what'] in ('phase', 'place_phase', 'carry_plan_request', 'support_first', 'mission_done', 'stop')]
+    ev = [(round(e['t'], 2), e.get('to', e['what'])) for e in r['events'] if e['what'] in ('phase', 'place_phase', 'carry_plan_request', 'contact_first', 'mission_done', 'stop')]
     q = np.array([h['q'][:3] for h in f.hist])
     print(f"[{name}] 完成 {r['mission_done']} 判定成功 {r['success']} 阻點 {r['stop'] and r['stop']['why']} 停止有效 {r['stop_effect'] and r['stop_effect']['ok']}")
     print(f"   事件 {ev}")
@@ -146,7 +155,7 @@ def case_nominal():
     seq = [e['to'] for e in r['events'] if e['what'] == 'place_phase']
     chk('名目：放置完成', r['mission_done'] is True and r['stop'] is None, r['stop'])
     chk('名目：相位依序', seq == list(PC.PPH), seq)
-    chk('名目：支撐先於鬆爪', r['place']['events']['RELEASE']['t'] > next(e['t'] for e in r['events'] if e['what'] == 'support_first'))
+    chk('名目：支撐先於鬆爪', r['place']['events']['RELEASE']['t'] > next(e['t'] for e in r['events'] if e['what'] == 'contact_first'))
     ta = r['place']['events']['CARRY_NAV']['t']
     U = np.array([h['u'] for h in f.hist])[::5]
     tt = np.array([h['t'] for h in f.hist])[::5]
@@ -274,7 +283,65 @@ def case_early():
     chk('LOWER 前接觸 ⇒ forbidden_contact:bottle_table2', (r['stop'] or {}).get('why') == 'forbidden_contact:bottle_table2' and c.pph in ('CARRY_NAV', 'PLACE_APPROACH'), (r['stop'], c.pph))
 
 
-CASES = dict(reverse=case_reverse, early=case_early, nominal=case_nominal, gap=case_gap, gap_short=case_gap_short, plan_fail=case_plan_fail, blocked_grid=case_blocked_grid, blocked_mid=case_blocked_mid, no_support=case_no_support, side=case_side, sticky=case_sticky)
+def case_share():
+    c, f = build(mode='share')
+    r = run(c, f)
+    summary('桌面只承 1/3 mg（夾爪仍握持）', r, c, f)
+    chk('分擔重量：接觸就緒後鬆爪，HOLD 驗到獨立承重而完成', r['mission_done'] is True and r['stop'] is None, r['stop'])
+
+
+def case_flicker():
+    c, f = build(mode='flicker')
+    r = run(c, f)
+    summary('接觸力逐步交替 0／2/3 mg', r, c, f)
+    chk('逐步交替（單步掉力）不阻擋就緒，任務完成', r['mission_done'] is True and r['stop'] is None, r['stop'])
+
+
+def case_dropout():
+    c, f = build(mode='dropout')
+    r = run(c, f, 70.0)
+    summary('接觸中每 30 步掉力 10 步', r, c, f)
+    chk('連續掉力超過 5 步 ⇒ 不就緒、未鬆爪、停止', c.t_release is None and r['stop'] is not None and r['place']['ready_why'] == 'dropout', (r['stop'], r['place']['ready_why']))
+
+
+def case_low():
+    c, f = build(mode='low')
+    r = run(c, f, 70.0)
+    summary('桌面只承 0.15 mg', r, c, f)
+    chk('低於首次接觸門檻 ⇒ 不凍結、繼續下降，以 no_support 或滑移受控停止，未鬆爪', ((r['stop'] or {}).get('why') == 'no_support' or str((r['stop'] or {}).get('why', '')).startswith('slip')) and c.t_release is None and c.d_freeze is None, r['stop'])
+
+
+def case_stop_unit():
+    """有界微動停穩：合成停止後軌跡。"""
+    R = PC.REG
+    q0 = np.r_[2.3, -0.99, 0.0, 0.0, 0.3, 1.1, 0.0, -1.4, 0.0]
+    s0 = q0[3:].copy()
+
+    def rows(fn, cmd=0.0, pipe=0.0, sp_drift=0.0, gap=None):
+        out = []
+        for k in range(0, 201):
+            t = 10.0 + k * 0.01
+            if gap and gap[0] <= k < gap[1]:
+                continue
+            q = q0 + fn(k * 0.01)
+            out.append((t, q, s0 + sp_drift * k, np.r_[cmd, np.zeros(8)], pipe))
+        return out
+    rng = np.random.default_rng(0)
+    jit = lambda tt: np.r_[0, 0, 0, rng.normal(0, 1e-5, 6)]                     # noqa: E731
+    cases = [('微抖 1e-5 rad', rows(jit), True),
+             ('持續漂移 2e-3 rad/s', rows(lambda tt: np.r_[0, 0, 0, 0, 0, 0, 2e-3 * tt, 0, 0]), False),
+             ('往返抵消但峰峰 3e-3 rad', rows(lambda tt: np.r_[0, 0, 0, 0, 0, 0, 1.5e-3 * np.sin(2 * np.pi * 4 * tt), 0, 0]), False),
+             ('底盤漂移 0.02 m/s', rows(lambda tt: np.r_[0.02 * tt, 0, 0, 0, 0, 0, 0, 0, 0]), False),
+             ('資料中斷 0.2 s', rows(jit, gap=(80, 100)), None),
+             ('命令仍非零', rows(jit, cmd=1e-4), False),
+             ('在途佇列非零', rows(jit, pipe=1e-4), False),
+             ('設定點仍在變', rows(jit, sp_drift=1e-6), False)]
+    for name, rr, want in cases:
+        res = PC.stop_settled(rr, 10.0, R)
+        chk(f'停穩：{name} ⇒ {want}', res['ok'] is want, {k: v for k, v in res.items() if k in ('ok', 'fails', 'why', 'arm_rate', 'arm_ptp', 'base_rate')})
+
+
+CASES = dict(stop_unit=case_stop_unit, share=case_share, flicker=case_flicker, dropout=case_dropout, low=case_low, reverse=case_reverse, early=case_early, nominal=case_nominal, gap=case_gap, gap_short=case_gap_short, plan_fail=case_plan_fail, blocked_grid=case_blocked_grid, blocked_mid=case_blocked_mid, no_support=case_no_support, side=case_side, sticky=case_sticky)
 
 
 def main():

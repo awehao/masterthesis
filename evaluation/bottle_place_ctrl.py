@@ -33,11 +33,70 @@ REG = dict(park_v=0.01, park_w=0.02, park_s=0.5, park_pos=0.020, park_yaw_deg=1.
            v_fast=0.02, v_slow=0.005, slow_above=0.010, extra_down=0.010, sup_fz=0.98, sup_h_ratio=0.3, sup_gap=0.003, sup_s=0.3, tilt_deg=3.0, edge_m=0.010,
            rel_open=0.8, rel_f=0.05, rel_s=0.5, rel_deadline=2.0, ret_back=0.06, ret_t1=1.5, ret_t2=3.4, ret_clear=0.010,
            hold_s=3.0, st_disp=0.005, st_tilt=3.0, st_v=0.001, st_fz_ratio=0.9, place_tol_report=0.030,
+           ready_frac=0.25, ready_win=0.3, drop_fz=0.05, drop_run=5, rev_tol=0.05,
+           st_win=(0.5, 1.5), st_slide=0.5, st_arm_rate=1e-3, st_arm_ptp=1e-3, st_base_rate=0.01, st_base_ptp=0.005, st_yaw_ptp=0.002, st_cover=0.95,
            join_lat=0.05, conn_len=0.8, conn_turn_deg=3.0, a_lat=0.5, a_axis=(1.5, 1.0), kappa_win=0.3, smooth_iters=100, ref_jump=0.05, v_ref_jump=0.075, a_dec=0.15, t_mult=3.0, stale_s=0.1, v_win=0.1)
 PPH = ('CARRY_NAV', 'PLACE_APPROACH', 'PARKED', 'LOWER', 'RELEASE', 'RETREAT', 'HOLD', 'DONE')
 PLOG_COLS = ('t', 'pph', 'fraw_x', 'fraw_y', 'fraw_z', 'f_x', 'f_y', 'f_z', 'ok_f', 'ok_b', 'fz', 'fh_ratio', 'gap', 'tilt', 'inside', 'good', 'fail_mask', 'n_sup',
-             'd_cmd', 'd_freeze', 'ff1_x', 'ff1_y', 'ff1_z', 'ff2_x', 'ff2_y', 'ff2_z', 'q_f1', 'q_f2')
+             'd_cmd', 'd_freeze', 'ff1_x', 'ff1_y', 'ff1_z', 'ff2_x', 'ff2_y', 'ff2_z', 'q_f1', 'q_f2', 'ready', 'win_fz')
 FAIL_BITS = dict(nodata=1, fz=2, fh=4, gap=8, tilt=16, inside=32)   # 支撐條件逐項：不成立的位元
+
+
+def contact_ready(win, fz_need, reg):
+    """接觸就緒（draft-3，Codex 20261101_043002）：鬆爪准入，不是「已獨立承重」。win＝首次接觸後最近 ready_win 秒的逐步樣本 (ok, fz, fh, gap, tilt, inside)。
+    窗內樣本全有效、平均 fz ≥ fz_need、平均水平 ≤ sup_h_ratio×平均 fz、每筆瓶底間隙／傾角／在區內都成立、無反向力、連續掉力不超過 drop_run 步。"""
+    n_need = int(round(reg['ready_win'] / C0.PHYS))
+    if len(win) < n_need:
+        return False, 'window_short'
+    W = win[-n_need:]
+    if not all(w[0] for w in W):
+        return False, 'nodata'
+    fz = np.array([w[1] for w in W])
+    fh = np.array([w[2] for w in W])
+    if float(fz.mean()) < fz_need:
+        return False, 'fz_mean'
+    if float(fh.mean()) > reg['sup_h_ratio'] * float(fz.mean()):
+        return False, 'side'
+    if any(w[3] > reg['sup_gap'] for w in W) or any(w[4] > reg['tilt_deg'] for w in W) or not all(w[5] for w in W):
+        return False, 'geometry'
+    if float(fz.min()) < -reg['rev_tol']:
+        return False, 'reverse'
+    run = best = 0
+    for v in fz:
+        run = run + 1 if v < reg['drop_fz'] else 0
+        best = max(best, run)
+    if best > reg['drop_run']:
+        return False, 'dropout'
+    return True, 'ok'
+
+
+def stop_settled(rows, t_stop, reg):
+    """有界微動下的停穩（draft-3，Codex 20261101_043002；判準變更，不是證明瞬時速度低於原門檻）。
+    rows：停止後逐步 (t, q9, s6, u_last9, pipe_max)。核：命令歸零、在途走完、設定點固定；第 0.5–1.5 s 內所有滑動 0.5 s 窗的位移速率與整窗峰峰值（手臂各關節、底盤平移與偏航）。
+    資料不足（覆蓋率 < st_cover 或含非有限值）回 ok=None（未驗證）。"""
+    a, b = reg['st_win']
+    W = [r_ for r_ in rows if t_stop + a - 1e-9 <= r_[0] <= t_stop + b + 1e-9]
+    n_exp = int(round((b - a) / C0.PHYS)) + 1
+    out = dict(t=round(t_stop + b, 3), n=len(W), n_exp=n_exp, method='bounded_micromotion_v1')
+    if len(W) < reg['st_cover'] * n_exp or not all(np.isfinite(r_[1]).all() and np.isfinite(r_[2]).all() for r_ in W):
+        return dict(out, ok=None, why='insufficient_data')
+    Q = np.array([r_[1] for r_ in W])
+    Sp = np.array([r_[2] for r_ in W])
+    cmd = max(float(np.abs(r_[3]).max()) for r_ in W)
+    pipe = max(float(r_[4]) for r_ in W)
+    sp_d = float(np.abs(Sp - Sp[0]).max())
+    k = int(round(reg['st_slide'] / C0.PHYS))
+    D = np.abs(Q[k:] - Q[:-k]) / reg['st_slide']
+    arm_rate = float(D[:, 3:].max()) if len(D) else float('nan')
+    base_rate = float(np.hypot(Q[k:, 0] - Q[:-k, 0], Q[k:, 1] - Q[:-k, 1]).max() / reg['st_slide']) if len(D) else float('nan')
+    arm_ptp = float(np.ptp(Q[:, 3:], axis=0).max())
+    base_ptp = float(max(np.ptp(Q[:, 0]), np.ptp(Q[:, 1])))
+    yaw_ptp = float(np.ptp(np.unwrap(Q[:, 2])))
+    out.update(cmd_max=cmd, pipe_max=pipe, setpoint_change=sp_d, arm_rate=arm_rate, arm_ptp=arm_ptp, base_rate=base_rate, base_ptp=base_ptp, yaw_ptp=yaw_ptp)
+    fails = [n_ for n_, bad in (('command', cmd > 1e-9), ('inflight', pipe > 1e-9), ('setpoint', sp_d > 1e-12), ('arm_rate', arm_rate > reg['st_arm_rate']),
+                                ('arm_ptp', arm_ptp > reg['st_arm_ptp']), ('base_rate', base_rate > reg['st_base_rate']), ('base_ptp', base_ptp > reg['st_base_ptp']),
+                                ('yaw_ptp', yaw_ptp > reg['st_yaw_ptp'])) if bad]
+    return dict(out, ok=not fails, fails=fails)
 
 
 class PlaceJudge(L.S0Judge):
@@ -185,6 +244,7 @@ class PlaceController(N2C.S1Planned):
         self.f_place, self.q_fingers, self.T_ret0, self.q_ret0 = None, None, None, None
         self.vcap = lambda s_: float('inf')
         self.plog = []
+        self.cwin, self.ready_ok, self.ready_why, self.stop_rows, self.stop_v2 = [], False, None, [], False
         self.bottle_mass = 0.20                             # 資產 bottle_s0.yaml；跑法讀回後覆寫
         self.t_ok = {}
 
@@ -316,7 +376,7 @@ class PlaceController(N2C.S1Planned):
                 self.d_cmd = min(self.d_cmd + self.v_desc * DT, self.h_lift + R['extra_down'])
                 if self.d_cmd >= self.h_lift + R['extra_down'] - 1e-9 and self.t_sup0 is None:
                     self._pstop('no_support', d_cmd=self.d_cmd, h_lift=self.h_lift)
-            if self.t_sup0 is not None and (self.t - self.t_sup0) >= R['sup_s'] - 1e-9 and self.n_sup * C0.PHYS >= R['sup_s'] - 1e-9:
+            if self.t_sup0 is not None and self.ready_ok:                    # 接觸就緒（不是已獨立承重；承重在 HOLD 驗）
                 self.T_b_rel0 = None if self.T_b_now is None else np.array(self.T_b_now)
                 self.judge.release(self.t)
                 self.t_release = self.t
@@ -443,16 +503,25 @@ class PlaceController(N2C.S1Planned):
             fv2 = np.asarray(f_finger_vec, float).reshape(2, 3) if f_finger_vec is not None else np.full((2, 3), np.nan)
             qf = np.asarray(q_fingers, float) if q_fingers is not None else np.full(2, np.nan)
             lg = [float(t), float(PPH.index(self.pph)), *fr, *fv, float(ok_f), float(ok_b), fz_, fh_ / fz_ if fz_ > 0 else float('nan'), gap_, tl_, float(ins_), float(mask == 0), float(mask),
-                  0.0, float(self.d_cmd), float('nan') if self.d_freeze is None else float(self.d_freeze), *fv2[0], *fv2[1], *qf]
+                  0.0, float(self.d_cmd), float('nan') if self.d_freeze is None else float(self.d_freeze), *fv2[0], *fv2[1], *qf, 0.0, float('nan')]
         if self.pph == 'LOWER' and self.judge.stop is None and ok_b and ok_f:
             fz, fh = float(f_place[2]), float(np.hypot(f_place[0], f_place[1]))
             gap = bottle_bottom_z(T_b, self.judge.br) - self.place['top']
             inside = self._inside(T_b)
-            good = fz >= R['sup_fz'] and fh <= R['sup_h_ratio'] * fz and gap <= R['sup_gap'] and tilt_deg(T_b) <= R['tilt_deg'] and inside
+            fz_need = R['ready_frac'] * float(self.bottle_mass) * 9.81
+            good = fz >= fz_need and fh <= R['sup_h_ratio'] * fz and gap <= R['sup_gap'] and tilt_deg(T_b) <= R['tilt_deg'] and inside
             if good and self.d_freeze is None:
-                self.d_freeze, self.t_sup0 = self.d_cmd, float(t)          # 首次有效支撐：不再加深
-                self._ev('support_first', fz=fz, fh=fh, gap=gap, d_cmd=self.d_cmd)
+                self.d_freeze, self.t_sup0 = self.d_cmd, float(t)          # 首次有效接觸（≥0.25 mg）：不再加深
+                self._ev('contact_first', fz=fz, fh=fh, gap=gap, d_cmd=self.d_cmd)
             self.n_sup = self.n_sup + 1 if good else 0
+        if self.pph == 'LOWER' and self.judge.stop is None and self.t_sup0 is not None:
+            if ok_b and ok_f:
+                fv_ = np.asarray(f_place, float)
+                self.cwin.append((True, float(fv_[2]), float(np.hypot(fv_[0], fv_[1])), bottle_bottom_z(T_b, self.judge.br) - self.place['top'], tilt_deg(T_b), self._inside(T_b)))
+            else:
+                self.cwin.append((False, float('nan'), float('nan'), float('nan'), float('nan'), False))
+            self.cwin = self.cwin[-int(round(R['ready_win'] / C0.PHYS)):]
+            self.ready_ok, self.ready_why = contact_ready(self.cwin, R['ready_frac'] * float(self.bottle_mass) * 9.81, R)
         if self.pph == 'RELEASE' and ok_q:
             opened = min(q_fingers) >= R['rel_open'] * C0.FINGER_OPEN
             free = max(kw['f_fingers']) < R['rel_f']
@@ -462,8 +531,14 @@ class PlaceController(N2C.S1Planned):
             self.st_log.append((float(t), np.r_[T_b[:3, 3]] if ok_b else np.full(3, np.nan), tilt_deg(T_b) if ok_b else float('nan'), fz))
         if lg is not None:
             lg[PLOG_COLS.index('n_sup')] = float(self.n_sup)                    # 本步更新後的連續計數
+            lg[PLOG_COLS.index('ready')] = float(self.ready_ok)
+            lg[PLOG_COLS.index('win_fz')] = float(np.mean([w[1] for w in self.cwin])) if self.cwin and all(w[0] for w in self.cwin) else float('nan')
             self.plog.append(lg)
         out = super().step(t, q, **kw)
+        if self.stopped_t is not None and not self.stop_v2:                  # 停止後逐步紀錄，第 1.5 s 用有界微動停穩判定覆寫 S0a 的單步判定
+            self.stop_rows.append((float(t), np.asarray(q, float).copy(), self.s.copy(), self.u_last.copy(), float(max((np.abs(u_).max() for u_ in self.pipe), default=0.0))))
+            if float(t) >= self.stopped_t + R['st_win'][1] - 1e-9:
+                self.stop_ok, self.stop_v2 = stop_settled(self.stop_rows, self.stopped_t, R), True
         if self.t_release is not None:
             f = min((float(t) - self.t_release) / C0.T_CLOSE_RAMP, 1.0)
             self.f_cmd = C0.FINGER_CLOSED + (C0.FINGER_OPEN - C0.FINGER_CLOSED) * f
@@ -570,7 +645,9 @@ class PlaceController(N2C.S1Planned):
 
     def report(self):
         r = super().report()
-        r.update(place=dict(pph=self.pph, events=self.place_ev, carry_req=self.carry_req, carry=self.carry_info, park=None if self.park is None else [float(v) for v in self.park],
+        if self.stopped_t is not None and not self.stop_v2:
+            r['stop_effect'] = dict(ok=None, why='insufficient_tail', method='bounded_micromotion_v1')
+        r.update(place=dict(pph=self.pph, ready_why=self.ready_why, events=self.place_ev, carry_req=self.carry_req, carry=self.carry_info, park=None if self.park is None else [float(v) for v in self.park],
                             h_lift=self.h_lift, d_freeze=self.d_freeze, metrics=getattr(self, 'place_metrics', None), reg=self.preg, place=self.place,
                             carry_path=None if self.cpath is None else self.cpath.P.round(5).tolist(), monitor=None if self.cmon is None else dict(n_check=self.cmon.n_check, max_cost=self.cmon.max_cost, why=self.cmon.why)))
         return r
