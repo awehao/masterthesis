@@ -35,6 +35,9 @@ REG = dict(park_v=0.01, park_w=0.02, park_s=0.5, park_pos=0.020, park_yaw_deg=1.
            hold_s=3.0, st_disp=0.005, st_tilt=3.0, st_v=0.001, st_fz_ratio=0.9, place_tol_report=0.030,
            join_lat=0.05, conn_len=0.8, conn_turn_deg=3.0, a_lat=0.5, a_axis=(1.5, 1.0), kappa_win=0.3, smooth_iters=100, ref_jump=0.05, v_ref_jump=0.075, a_dec=0.15, t_mult=3.0, stale_s=0.1, v_win=0.1)
 PPH = ('CARRY_NAV', 'PLACE_APPROACH', 'PARKED', 'LOWER', 'RELEASE', 'RETREAT', 'HOLD', 'DONE')
+PLOG_COLS = ('t', 'pph', 'fraw_x', 'fraw_y', 'fraw_z', 'f_x', 'f_y', 'f_z', 'ok_f', 'ok_b', 'fz', 'fh_ratio', 'gap', 'tilt', 'inside', 'good', 'fail_mask', 'n_sup',
+             'd_cmd', 'd_freeze', 'ff1_x', 'ff1_y', 'ff1_z', 'ff2_x', 'ff2_y', 'ff2_z', 'q_f1', 'q_f2')
+FAIL_BITS = dict(nodata=1, fz=2, fh=4, gap=8, tilt=16, inside=32)   # 支撐條件逐項：不成立的位元
 
 
 class PlaceJudge(L.S0Judge):
@@ -181,6 +184,7 @@ class PlaceController(N2C.S1Planned):
         self.T_b_rel0, self.n_still_p, self.place_ev, self.st_log = None, 0, {}, []
         self.f_place, self.q_fingers, self.T_ret0, self.q_ret0 = None, None, None, None
         self.vcap = lambda s_: float('inf')
+        self.plog = []
         self.bottle_mass = 0.20                             # 資產 bottle_s0.yaml；跑法讀回後覆寫
         self.t_ok = {}
 
@@ -395,9 +399,10 @@ class PlaceController(N2C.S1Planned):
         return min(T_b[0, 3] - (cx - sx / 2), (cx + sx / 2) - T_b[0, 3], T_b[1, 3] - (cy - sy / 2), (cy + sy / 2) - T_b[1, 3]) >= self.judge.br + self.preg['edge_m']
 
     # ---- 每物理步：支撐、鬆爪、穩定量測
-    def step(self, t, q, f_place=None, q_fingers=None, **kw):
+    def step(self, t, q, f_place=None, q_fingers=None, f_place_raw=None, f_finger_vec=None, **kw):
         self.f_place, self.q_fingers = f_place, q_fingers
         R = self.preg
+        lg = None
         T_b = kw.get('T_bottle')
         ok_b = T_b is not None and np.isfinite(T_b).all()
         ok_f = f_place is not None and np.isfinite(np.asarray(f_place, float)).all()
@@ -426,6 +431,19 @@ class PlaceController(N2C.S1Planned):
                 self.n_sup = 0
             if not ok_q:
                 self.n_rel = 0
+        if self.pph is not None:                                             # 逐物理步放置紀錄（bottle_p1_1 缺支撐力時序；Codex 20261101_042523）
+            fv = np.asarray(f_place, float) if ok_f else np.full(3, np.nan)
+            fz_, fh_ = float(fv[2]), float(np.hypot(fv[0], fv[1]))
+            gap_ = bottle_bottom_z(T_b, self.judge.br) - self.place['top'] if ok_b else float('nan')
+            tl_ = tilt_deg(T_b) if ok_b else float('nan')
+            ins_ = self._inside(T_b) if ok_b else False
+            mask = (0 if (ok_f and ok_b) else FAIL_BITS['nodata']) | (0 if fz_ >= R['sup_fz'] else FAIL_BITS['fz']) | (0 if fh_ <= R['sup_h_ratio'] * fz_ else FAIL_BITS['fh']) \
+                | (0 if gap_ <= R['sup_gap'] else FAIL_BITS['gap']) | (0 if tl_ <= R['tilt_deg'] else FAIL_BITS['tilt']) | (0 if ins_ else FAIL_BITS['inside'])
+            fr = np.asarray(f_place_raw, float) if f_place_raw is not None else np.full(3, np.nan)
+            fv2 = np.asarray(f_finger_vec, float).reshape(2, 3) if f_finger_vec is not None else np.full((2, 3), np.nan)
+            qf = np.asarray(q_fingers, float) if q_fingers is not None else np.full(2, np.nan)
+            lg = [float(t), float(PPH.index(self.pph)), *fr, *fv, float(ok_f), float(ok_b), fz_, fh_ / fz_ if fz_ > 0 else float('nan'), gap_, tl_, float(ins_), float(mask == 0), float(mask),
+                  0.0, float(self.d_cmd), float('nan') if self.d_freeze is None else float(self.d_freeze), *fv2[0], *fv2[1], *qf]
         if self.pph == 'LOWER' and self.judge.stop is None and ok_b and ok_f:
             fz, fh = float(f_place[2]), float(np.hypot(f_place[0], f_place[1]))
             gap = bottle_bottom_z(T_b, self.judge.br) - self.place['top']
@@ -442,6 +460,9 @@ class PlaceController(N2C.S1Planned):
         if self.t_release is not None:
             fz = float(f_place[2]) if ok_f else float('nan')
             self.st_log.append((float(t), np.r_[T_b[:3, 3]] if ok_b else np.full(3, np.nan), tilt_deg(T_b) if ok_b else float('nan'), fz))
+        if lg is not None:
+            lg[PLOG_COLS.index('n_sup')] = float(self.n_sup)                    # 本步更新後的連續計數
+            self.plog.append(lg)
         out = super().step(t, q, **kw)
         if self.t_release is not None:
             f = min((float(t) - self.t_release) / C0.T_CLOSE_RAMP, 1.0)

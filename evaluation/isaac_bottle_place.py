@@ -468,6 +468,7 @@ def main():
         Mb = read_pairs(v_base, 1 + len(leg_paths) + len(leg2_paths) + (1 if WALL else 0), dt)
         M2 = read_pairs(v_b2, 1, dt)
         fp = None if M2 is None or not np.isfinite(M2).all() else np.asarray(M2[0, 0], float)
+        fp_raw = None if M2 is None else np.asarray(M2[0, 0], float).copy()
         if fp is not None:
             fp = F_SIGN * fp                                                  # 固定方向約定（起始靜置時瓶↔第一桌量得的符號），反向力不會被翻成支撐
         forb['bottle_table1'] = float('nan') if ft is None else (float(ft) if ctrl.judge.t_lift_ok is not None else 0.0)   # 抬離成立後瓶不得再碰第一桌
@@ -498,7 +499,7 @@ def main():
                 dmin = float('nan')                                           # 瓶位姿無效：不當零，由資料失效判定處理
             penetration = max(0.0, -dmin) if np.isfinite(dmin) else float('nan')
         out = ctrl.step(t, q, f_fingers=ff, t_contact=(t if ff is not None else None), T_bottle=Tb if ok_b else None, t_bottle=t if ok_b else None,
-                        f_table=ft, forbidden=forb, penetration=penetration, f_place=fp, q_fingers=(float(jp[f1]), float(jp[f2])))
+                        f_table=ft, forbidden=forb, penetration=penetration, f_place=fp, q_fingers=(float(jp[f1]), float(jp[f2])), f_place_raw=fp_raw, f_finger_vec=None if Mf is None else np.asarray(Mf[:, 0], float))
         tgt = np.array(jp, float)
         for j, i in enumerate(idx):
             tgt[i] = float(out['arm_target'][j])
@@ -522,6 +523,13 @@ def main():
             'f_bottle_table', 'bottle_base_x', 'bottle_base_y', 'bottle_base_z', 'bottle_qw', 'bottle_qx', 'bottle_qy', 'bottle_qz', 'phase_index', 'stopped'] + [f'forb_{kk}' for kk in sorted(forb)]
     np.savez_compressed(os.path.join(a.out, 's1_steps.npz'), rows=np.array(rows, float), cols=np.array(cols), phases=np.array(BR_PH))
     rep['cols'] = cols
+    try:                                                                      # 逐物理步放置紀錄（與 s1_steps 同一個 t）
+        PL = np.array(ctrl.plog, float).reshape(-1, len(PCm.PLOG_COLS))
+        np.savez_compressed(os.path.join(a.out, 'place_log.npz'), rows=PL, cols=np.array(PCm.PLOG_COLS), fail_bits=np.array(json.dumps(PCm.FAIL_BITS)))
+        rep['place_log'] = dict(n=int(PL.shape[0]), cols=len(PCm.PLOG_COLS))
+    except Exception as e:
+        print(f'[s1] 放置紀錄存檔失敗：{e!r}', flush=True)
+        rep['place_log'] = dict(error=repr(e))
     rep['reached_end'] = bool(ctrl.mission_done or ctrl.judge.stop is not None)
     if not RC.write_report(rep, a.out):                                       # bottle_n1_1 寫到一半崩潰；失敗另存診斷檔、不算完成
         node.destroy_node()
