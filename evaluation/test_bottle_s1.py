@@ -13,6 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bottle_s0b_ctrl as B                             # noqa: E402
 import bottle_s1_cand as SC                             # noqa: E402
+import bottle_s1_cbf_replay as RP                       # noqa: E402
 import bottle_s1_ctrl as S1                             # noqa: E402
 import test_bottle_s0b as T                             # noqa: E402
 
@@ -109,6 +110,83 @@ def main():
     q_y = np.r_[-0.40, 0.0, math.radians(4.0), T.Q_READY]
     c._advance(T.K.fk(q_y, 'link_tcp'), False, q_y)
     chk('N7 偏航超出不開始展臂', c.blending is False)
+    # N9 出口判定：在出口內、參考已歸零但底盤仍動 ⇒ 不得 mission_done
+    c = SC.make()
+    c.done, c.v_b, c.t_exit_in, c.st.phase, c.st.grasp_ok = True, 0.0, 1.0, 'CARRY', True
+    c.st.T_carry_rel = np.eye(4)
+    c.u_prev, c.u_last = np.zeros(9), np.zeros(9)
+    c.judge.res['hold_ok'] = True
+    q_e = np.r_[0.9, 0.0, 0.0, T.Q_READY]
+    Tb0 = T.bottle_T()
+    for k in range(200):
+        q_e[0] += 0.05 * 0.01                                          # 底盤實際 0.05 m/s
+        c.q_prev2 = q_e - np.array([0.05 * 0.01] + [0.0] * 8)
+        r0 = c.n_still
+        v = float(np.hypot(*(q_e[:2] - c.q_prev2[:2]))) / 0.01
+        c.n_still = c.n_still + 1 if v < 0.01 else 0
+    chk('N9 速度計算用更新前位置（底盤動 ⇒ 不累計）', c.n_still == 0 and c.mission_done is False, str(c.n_still))
+    f = run(SC.make())
+    h_end = [h for h in f.hist if h['t'] >= next(e['t'] for e in f.c.events if e['what'] == 'mission_done') - 0.2]
+    chk('N9 mission_done 時實測確實停住', max(float(abs(h['u'][0])) for h in h_end) < 0.02, str(max(float(abs(h['u'][0])) for h in h_end)))
+
+    # 直接餵量測：出口內、參考已歸零、底盤實測仍 0.05 m/s ⇒ 不得完成；真的停住 0.2 s 後才完成
+    c = SC.make()
+    fk = T.Fake(c, x0=0.9)
+    c.done, c.v_b, c.t_exit_in, c.st.phase, c.st.grasp_ok, c.st.T_carry_rel, c.done_anchored = True, 0.0, 1.0, 'CARRY', True, c.task.T_lift.copy(), True
+    c.judge.res['hold_ok'] = True
+    c.st.T_carry_rel = np.linalg.inv(T.K.fk(np.r_[0.0, 0.0, 0.0, T.Q_READY], 'link_tcp')) @ T.K.fk(np.r_[0.0, 0.0, 0.0, T.Q_READY], 'link_tcp')
+    c.st.T_carry_rel = T.K.fk(np.r_[0.0, 0.0, 0.0, T.Q_READY], 'link_tcp')
+    t_ = 0.0
+    for k in range(60):
+        fk.t = t_
+        c.step(t_, fk.q.copy(), **fk.meas())
+        fk.q[0] += 0.0005
+        t_ += 0.01
+    chk('N9 出口內實測仍動 ⇒ 不 mission_done', c.mission_done is False and c.v_b == 0.0, f'{c.mission_done} v_b {c.v_b} still {c.n_still}')
+    for k in range(40):
+        fk.t = t_
+        c.step(t_, fk.q.copy(), **fk.meas())
+        t_ += 0.01
+    chk('N9 真的停住才完成', c.mission_done is True and c.n_still >= S1.N_STILL, f'{c.mission_done} still {c.n_still}')
+
+    # N10 非手指↔瓶線上拒絕：慢伺服觸發、停止點不跨 5 mm；名目不觸發
+    f = run(SC.make(path=SC.PATH_P2), 60.0)
+    r = f.c.report()
+    print('名目瓶淨空', r['clear_bottle'])
+    chk('N10 名目不觸發且成功', r['success'] and r['clear_bottle']['pred_min'] >= S1.CLEAR_REJECT + S1.CLEAR_GUARD, str(r['clear_bottle']))
+    worst_rest = float('inf')
+    for al in (0.6, 0.5, 0.4, 0.3):
+        f = run(SC.make(path=SC.PATH_P2), 60.0, alpha_scale=al)
+        r = f.c.report()
+        chk(f'N10 α×{al} ⇒ clearance_bottle 停止', stop_of(f) == 'clearance_bottle', str(stop_of(f)))
+        chk(f'N10 α×{al} 不成功、離開碼非零', r['success'] is False and S1.exit_code(r) != 0, str(f.c.stop_ok))
+        if al >= 0.6:                                                  # 更慢時受控對象 1 s 內尚未靜止，回報停止未驗證（離開碼 4）才是正確行為
+            chk(f'N10 α×{al} 停止有效、離開碼 3', (f.c.stop_ok or {}).get('ok') is True and S1.exit_code(r) == 3, str(f.c.stop_ok))
+        d_rest = min(f.c._bottle_clear(h['q'], T.bottle_T()) for h in f.hist if h['t'] >= f.c.judge.stop['t'] - 0.1)
+        worst_rest = min(worst_rest, d_rest)
+        chk(f'N10 α×{al} 停止全程實測 ≥ 5 mm', d_rest >= S1.CLEAR_REJECT, str(d_rest))
+    print('慢伺服停止段實測最小', round(worst_rest * 1e3, 2), 'mm')
+    # N11 不同抵達時機的拒絕：注入瓶位姿朝夾爪偏 3 mm，淨空變窄也要拒絕
+    Tbad = T.bottle_T()
+    Tbad[1, 3] -= 0.003
+    f = run(SC.make(path=SC.PATH_P2), 60.0, lambda t, s: dict(T_bottle=Tbad.copy()) if t >= 20.0 else {})
+    chk('N11 瓶位姿偏近 ⇒ 不成功', f.c.report()['success'] is False, str(stop_of(f)))
+    # N12 放行管排除已知角落
+    c = SC.make()
+    chk('N12 y<0、yaw<0 且 x 過角落界 ⇒ 不放行', not c._in_tube(np.r_[0.05, -0.02, -0.01, T.Q_READY]))
+    chk('N12 同 x、y>0 可放行', bool(c._in_tube(np.r_[0.05, 0.02, -0.01, T.Q_READY])))
+    # N13 CBF 緊湊紀錄：同狀態重解重現實際命令；移除 CBF 的反事實與線上重解一致
+    c = SC.make(path=SC.PATH_P2, log_cbf=True)
+    c.compact = []
+    f = T.Fake(c, x0=SC.X0).run(30.0, None, tail=0.0)
+    pth = os.path.join(os.environ.get('TMPDIR', '/tmp'), 's1_cbf_test.npz')
+    S1.save_compact(c, pth)
+    rep = RP.replay(pth, n_stride=5)
+    chk('N13 重解重現實際命令', rep['reproduce_max'] <= 1e-6, str(rep['reproduce_max']))
+    du_on = np.array([e['du'] for e in c.cbf_log])[::5]
+    chk('N13 反事實與線上一致', np.abs(np.array(rep['du'])[:len(du_on)] - du_on[:len(rep['du'])]).max() <= 1e-5, str(np.abs(np.array(rep['du'])[:len(du_on)] - du_on[:len(rep['du'])]).max()))
+    chk('N13 確實記到 CBF 改命令', rep['n_bound'] > 0, str(rep['n_bound']))
+    os.remove(pth)
     # N8 離開碼
     chk('N8 未中止未完成 ⇒ 4', S1.exit_code(dict(stop=None, success=False)) == 4)
     chk('N8 中止有效 ⇒ 3', S1.exit_code(dict(stop=dict(why='x'), success=False, stop_effect=dict(ok=True))) == 3)

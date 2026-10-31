@@ -23,6 +23,7 @@ X0, X_END = -3.6, 0.85
 OBST = dict(c=np.array([-2.0, 0.0, 0.25]), sz=np.array([0.40, 0.40, 0.50]))
 R_OBST, M_STATIC, R_DISC = 0.2 * math.sqrt(2.0), 0.47, 0.39
 PATH = (-3.4, -0.6, -0.92)         # 升餘弦繞行，對稱於障礙；CLEAR_MIN 由 path_clearance 硬性核對
+PATH_P2 = (-3.4, -0.6, -0.81)      # 貼近路徑：CBF 實際介入
 CLEAR_MIN = 0.03                   # 參考路徑對 r_eff 的最小餘裕（m）：路徑穿進 keep-out 時底盤與參考會一起停在邊界（r1 死鎖）
 EXIT_C, EXIT_R = (1.0, 0.0), 0.30
 
@@ -85,7 +86,7 @@ def metrics(name, f, oc=None):
     k0 = min(keys, key=lambda k_: mins[k_][0])
     ms = np.array(r['solve_ms_all'])
     return dict(case=name,
-                task=dict(success=r['success'], exit_code=S1.exit_code(r), judge=r['result'], exit_reached=r['exit_reached'], t_exit_in=r['t_exit_in'], mission_done=r['mission_done'], stop=(r['stop'] or {}).get('why')),
+                task=dict(success=r['success'], exit_code=S1.exit_code(r), clear_bottle=r['clear_bottle'], judge=r['result'], exit_reached=r['exit_reached'], t_exit_in=r['t_exit_in'], mission_done=r['mission_done'], stop=(r['stop'] or {}).get('why')),
                 safety=dict(forbidden=r['forbidden_pulses'], cbf_changed=len(bound), cbf_ticks=len(L), cbf_phase=ph, k0_slack=round(max([e['eps0'] for e in L], default=0.0), 6), clear_r_eff_mm=round(float(d_c.min() - R_OBST - M_STATIC) * 1e3, 1), clear_disc_model_mm=round(float(d_c.min() - R_OBST - R_DISC) * 1e3, 1),
                             obstacle_geom=obstacle_geom(f, oc), slip_mm_deg=[round(v, 3) for v in r['slip_max_mm_deg']], geom_min=dict(key=k0, mm=round(mins[k0][0] * 1e3, 1)), self_mm=round(sm[0] * 1e3, 1), joint_margin=round(marg, 3), fallback=r['n_fallback'], yaw_peak_deg=round(math.degrees(float(np.abs(q[:, 2]).max())), 2)),
                 efficiency=dict(t_total=round(float(t[-1]), 2), t_grasp_window=[tc, tl], v_grasp=[round(float(sp[mk].min()), 4), round(float(sp[mk].max()), 4)] if mk.any() else None, near_stop_grasp_s=round(float((sp[mk] < 0.01).sum()) * 0.01, 2) if mk.any() else None, near_stop_total_s=round(float((sp < 0.01).sum()) * 0.01, 2), v_peak=round(float(sp.max()), 4), a_peak=round(float(np.abs(ax).max()), 3), x_end=round(float(q[-1, 0]), 4), y_end=round(float(q[-1, 1]), 4), n_gate=r['n_gate'],
@@ -99,9 +100,8 @@ def main():
     if pc < CLEAR_MIN:
         print(f'參考路徑餘裕低於 {CLEAR_MIN * 1e3:.0f} mm ⇒ 拒跑')
         return 2
-    A_tight = next(a for a in np.arange(0.86, 0.60, -0.005) if path_clearance((PATH[0], PATH[1], -float(a))) < 0.015)
-    tight = (PATH[0], PATH[1], -float(A_tight))
-    print(f'貼近路徑 A＝{A_tight:.3f}，對 r_eff 餘裕 {path_clearance(tight) * 1e3:.1f} mm')
+    tight = PATH_P2
+    print(f'貼近路徑 P2，對 r_eff 餘裕 {path_clearance(tight) * 1e3:.1f} mm')
     D_SHIFT = 0.12
     shifted = lambda t: [dict(obstacles(t)[0], y=float(OBST['c'][1]) - D_SHIFT)]
     for name, kw, ckw in (('P1 名目路徑', {}, {}), ('P1 伺服慢未知 α×0.6', dict(alpha_scale=0.6), {}), ('P1 底盤打折 ×0.8', dict(v_scale=0.8), {}),
@@ -113,8 +113,8 @@ def main():
         m = metrics(name, f, OBST['c'] - np.array([0.0, D_SHIFT, 0.0]) if name.startswith('N1') else None)
         res.append(m)
         print(f"\n[{name}]\n  任務 {m['task']}\n  安全 {m['safety']}\n  效率 {m['efficiency']}", flush=True)
-    out = os.path.join(HERE, 'results', 'bottle', 's1_cand_r4.json')
-    json.dump(dict(note='假受控對象、理想底盤、合成接觸；真值障礙注入 CBF、無 LiDAR、無 Raw-scan Shield；參考路徑工程給定；r1 路徑穿進 keep-out 死鎖、r3 N1 餘裕誤用名目障礙位置（皆保留）', obstacle=dict(c=OBST['c'].tolist(), sz=OBST['sz'].tolist(), r_cbf=R_OBST, margin=M_STATIC), exit=dict(c=EXIT_C, r=EXIT_R), path=PATH, cases=res), open(out, 'w'), ensure_ascii=False, indent=1, default=float)
+    out = os.path.join(HERE, 'results', 'bottle', 's1_cand_r5.json')
+    json.dump(dict(note='假受控對象、理想底盤、合成接觸；真值障礙注入 CBF、無 LiDAR、無 Raw-scan Shield；參考路徑工程給定；r1 路徑穿進 keep-out 死鎖、r3 N1 餘裕誤用名目障礙位置、r4 無線上淨空拒絕（皆保留）', obstacle=dict(c=OBST['c'].tolist(), sz=OBST['sz'].tolist(), r_cbf=R_OBST, margin=M_STATIC), exit=dict(c=EXIT_C, r=EXIT_R), path=PATH, cases=res), open(out, 'w'), ensure_ascii=False, indent=1, default=float)
     print('寫入', os.path.relpath(out, os.path.dirname(HERE)))
 
 

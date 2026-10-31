@@ -33,7 +33,8 @@ N, DT = 20, 0.05
 T_CLOSE, T_EV, T_LIFT, T_LIFT_SETTLE = 0.5, 1.0, 1.0, 0.5
 A_BASE = np.array([1.5, 1.0, 2.0])     # 同 nav_cfg a_max；停止時底盤用此界，不用手臂的 19.984
 S_LEAD = 0.02                          # 參考不得領先實測超過此距離（m）：底盤被 CBF 擋住時 s_ref 不累積，否則放行後追趕（0.05 時夾持中 0.09 m/s）。bottle_s0b_1 全程 x−s_ref 峰 5.19 mm，此界不作用
-YAW_TUBE = math.radians(3.0)           # 放行偏航：±3° 全窗可行（例外：y≈−0.04 且負偏航時抬升位姿在 x≥0.14 失敗）；±5° 起開始失敗
+YAW_TUBE = math.radians(3.0)           # 放行偏航：採樣 y∈{−0.04,0,0.10}、±2/3/5/10°；±5° 起開始失敗。工程准入，非可行性證明；角落見 X_CORNER
+X_CORNER = 0.02                        # 放行管排除角落的 x 上限
 A_REF = 0.2                            # 完成或到終點後參考降速斜率（m/s²）
 Y_TUBE = (-0.04, 0.10)                 # 放行 INSERT 的底盤側向管：bottle_branch 全窗連續可解的範圍（y ±0.05 步進掃描；y≥0.15 或 ≤−0.10 失敗）
 T_BLEND = 5.0                          # 展臂漸變只在抵達預抓前 5 s（全程漸變時目標超出可達，見 offline_wb_short.json）
@@ -71,6 +72,7 @@ class S0bController(C.S0aController):
         self.obstacles_fn, self.arm_mode, self.v_replay, self.log_cbf = obstacles_fn, arm_mode, v_replay, log_cbf
         self.y_ref, self.th_ref, self.cbf_log = 0.0, 0.0, []
         self.done_anchored, self.n_gate, self.qp_solver, self.qp_log = False, 0, qp_solver, []
+        self.compact = None                                # list 時逐週期存實際命令、CBF 殘差、slack 與重解輸入（反事實重解在實跑後做）
         self.x_ws, self.x_we, self.x_end, self.v_c = float(x_win[0]), float(x_win[1]), float(x_end), float(v_c)
         self.s_ref, self.v_b, self.n_tick = float(x_start), float(v_c), 0
         self.n_fallback, self.v_b_hist = 0, []
@@ -108,6 +110,8 @@ class S0bController(C.S0aController):
 
     # ---- 相位
     def _in_tube(self, q):
+        if q[1] < 0.0 and q[2] < 0.0 and q[0] > X_CORNER:  # 已知不可行角落：y≈−0.04、負偏航時抬升位姿在 x≥0.14 失敗；INSERT 到抬升完成底盤再走約 0.1 m
+            return False
         return self.x_ws <= q[0] <= self.x_we and Y_TUBE[0] <= q[1] <= Y_TUBE[1] and abs(q[2]) <= YAW_TUBE
 
     def _advance(self, T_tcp, close_done, q):
@@ -154,6 +158,9 @@ class S0bController(C.S0aController):
             ck.update(self.mpc_fail_inject(self.t) or {})
         self.solve_ms.append((time.perf_counter() - t0) * 1e3)
         self.qp_log.append(dict(ck.get('qp') or dict(solver='fallback' if ck.get('fallback') else 'hold')))
+        if self.compact is not None and self.arm_mode == 'active' and r.u_arm_seq is not None:
+            self.compact.append(dict(t=self.t, phase=BR.PHASES.index(st.phase), qp=qp.copy(), sp=sp.copy(), u_prev=self.u_prev.copy(), X_ref=X_ref.copy(), xi_ref=xi_ref.copy(), T_seq=np.array(T_seq), rel=bool(arm['tcp_rel_base']), w_p=float(w_p),
+                                     bias=np.array(cfg.arm_model.bias, float), u=np.r_[np.asarray(r.u_opt, float), r.u_arm_seq[0]], cbf_active=int(r.cbf_active), min_h=float(r.min_h), eps0=float(r.eps0), resid_ns=float(r.cbf_resid_post_noslack), resid_s=float(r.cbf_resid_post_slack)))
         if self.log_cbf and obs:
             u_nc = np.asarray(self.mpc_nc.solve(obstacles=None, **solve_kw).u_opt, float)
             u_op = np.asarray(r.u_opt, float)

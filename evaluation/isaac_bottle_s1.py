@@ -246,6 +246,7 @@ def main():
     p_ = [float(v) for v in a.path.split(',')]
     ctrl = C2.S1Controller(C.S0_K(), ident, T_g, T_ready_rel, q_ready, float(T['top_z']), float(B['radius']), a.x_start, (a.win_lo, a.win_hi), C2.DetourPath(*p_),
                            tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, lambda t: obst, x_exit_stop=a.x_end, v_c=a.v_c, reg=None, required=required)
+    ctrl.compact = []                                                         # CBF 證據；反事實重解在實跑後（bottle_s1_cbf_replay.py）
     ctrl.obs.d = np.clip(d0, -ctrl.obs.max, ctrl.obs.max)
     ctrl.cfg.arm_model.bias = ctrl.bias0 + np.asarray(ctrl.cfg.arm_model.alpha, float) * ctrl.obs.d
     print(f'[s1] 靜態偏移 d̂₀ {np.round(ctrl.obs.d, 4).tolist()}；底盤 {np.round(q_s[:3], 4).tolist()}', flush=True)
@@ -315,7 +316,11 @@ def main():
     rep['cols'] = cols
     rep['reached_end'] = bool(ctrl.mission_done or ctrl.judge.stop is not None)
     json.dump(rep, open(os.path.join(a.out, 's1_report.json'), 'w'), ensure_ascii=False, indent=1, default=float)
-    print(f"[s1] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 出口 {rep['exit_reached']}@{rep['t_exit_in']} 任務 {rep['mission_done']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']} fallback {rep['n_fallback']} 求解器 {rep['qp_counts']} GI 未採用 {rep['gi_fail']} >50ms {rep['n_over_50ms']}", flush=True)
+    try:                                                                      # 主紀錄存好後才存 CBF 證據：這裡失敗不影響主紀錄
+        C2.save_compact(ctrl, os.path.join(a.out, 's1_cbf.npz'))
+    except Exception as e:
+        print(f'[s1] CBF 紀錄存檔失敗：{e!r}', flush=True)
+    print(f"[s1] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 出口 {rep['exit_reached']}@{rep['t_exit_in']} 任務 {rep['mission_done']} 瓶淨空 {rep['clear_bottle']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']} fallback {rep['n_fallback']} 求解器 {rep['qp_counts']} GI 未採用 {rep['gi_fail']} >50ms {rep['n_over_50ms']}", flush=True)
     print(f"[s1] 事件 {rep['events']}", flush=True)
     return C2.exit_code(rep)
 

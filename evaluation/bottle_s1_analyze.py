@@ -74,7 +74,8 @@ def main():
     in_z = de <= ex['r']
     print(f"障礙：中心距最小 {dc.min():.4f} m @ {t[dc.argmin()]:.2f} s；對 r_eff（外接圓＋0.47）餘裕 {(dc.min() - ob['r_cbf'] - ob['margin']) * 1e3:.1f} mm；對 0.39 m 圓盤模型 {(dc.min() - ob['r_cbf'] - 0.39) * 1e3:.1f} mm")
     print(f"出口區（由位姿重算）：進入 {'%.2f s' % t[np.argmax(in_z)] if in_z.any() else '未進入'}；末位置 ({x[-1]:.4f}, {c['base_y'][-1]:.4f})、距圓心 {de[-1]:.4f} m（半徑 {ex['r']}）；末速 {abs(vx_m[-5:]).max():.4f} m/s")
-    print(f"總時長 {t[-1]:.2f} s；底盤速度峰 {np.hypot(vx_m, np.gradient(c['base_y'], t)).max():.4f} m/s；任務完成 {rep['mission_done']}；CBF 改變命令逐週期未在實跑重解（僅離線有）")
+    print(f"非手指↔瓶線上核對：{rep.get('clear_bottle')}")
+    print(f"總時長 {t[-1]:.2f} s；底盤速度峰 {np.hypot(vx_m, np.gradient(c['base_y'], t)).max():.4f} m/s；任務完成 {rep['mission_done']}；CBF 反事實見 bottle_s1_cbf_replay.py")
     print(f"手指：指1 末 {c['finger1_q'][-1]:.5f}、指2 末 {c['finger2_q'][-1]:.5f} m；主從差峰 {np.abs(c['finger1_q'] - c['finger2_q']).max() * 1e3:.3f} mm；命令末 {c['finger_cmd'][-1]:.4f}")
     print('d̂', np.round(rep['d_hat'], 4).tolist(), '求解 ms', rep['solve_ms'], '求解失敗', rep['n_solve_fail'], '禁止脈衝', {k: v for k, v in rep['forbidden_pulses'].items() if v['peak'] > 0})
 
