@@ -25,7 +25,11 @@ ap.add_argument('--exit-c', default='1.0,0.0')
 ap.add_argument('--exit-r', type=float, default=0.30)
 ap.add_argument('--win-lo', type=float, default=-0.35)
 ap.add_argument('--win-hi', type=float, default=0.15)
-ap.add_argument('--v-c', type=float, default=0.03, help='接近速度上限 m/s（啟發式調速只減速不加速）')
+ap.add_argument('--v-c', type=float, default=0.05, help='接近／抓取參考速度上限 m/s（啟發式調速只減速不加速）')
+ap.add_argument('--v-nav', type=float, default=0.25)
+ap.add_argument('--v-carry', type=float, default=0.15)
+ap.add_argument('--x-slow', type=float, default=-0.90)
+ap.add_argument('--q-tuck', default='0.2,-0.8,1.29,-0.96,-1.16,1.72', help='行進收臂姿態；起始即此姿態（登錄並記錄），開始後不直接設定關節')
 ap.add_argument('--sim-s', type=float, default=90.0)
 ap.add_argument('--settle-s', type=float, default=1.0, help='開始前保持（量靜態偏移 d̂ 初值）')
 ap.add_argument('--stop-tail-s', type=float, default=2.0, help='停止或完成後續跑（核停止有效性）')
@@ -183,10 +187,11 @@ def main():
     T_p[:3, 3] -= 0.06 * T_g[:3, 2]
     br = BB.window_branch(T_p, T_g, BRF.lift_pose(T_g, 0.05), a.win_lo, a.win_hi)
     q_ready, T_ready_rel, _ = BB.ready_in_branch(np.array([a.win_lo + 0.05, 0.0, 0.0]), T_p, br['q_mid'], br['x_mid'])
+    q_tuck = np.array([float(v) for v in a.q_tuck.split(',')])
     q0 = robot.get_joint_positions()
     kp, kd = np.zeros(robot.num_dof, np.float32), np.zeros(robot.num_dof, np.float32)
     for i, j in zip(idx, range(6)):
-        q0[i] = float(q_ready[j])
+        q0[i] = float(q_tuck[j])
         kp[i], kd[i] = a.kp, a.kd
     q0[f1], q0[f2] = C.FINGER_OPEN, C.FINGER_OPEN
     kp[f1], kd[f1] = a.finger_kp, a.finger_kd                                     # 主從：只驅動 finger_joint1（同 --finger-leader-only）
@@ -214,7 +219,7 @@ def main():
         print(f'[s1] 視角設定失敗（不影響物理）：{e!r}', flush=True)
     readback = dict(solver_type=str(sapi.GetSolverTypeAttr().Get()), ext_forces_every_iter=bool(sapi.GetEnableExternalForcesEveryIterationAttr().Get()),
                     physics_dt=float(world.get_physics_dt()), bottle_mass=float(bottle.get_mass()), kp=a.kp, kd=a.kd, base=[float(v) for v in base],
-                    q_ready=[float(v) for v in q_ready], branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
+                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
     print(f'[s1] 讀回 {readback}', flush=True)
     if abs(readback['physics_dt'] - dt) > 1e-12 or readback['ext_forces_every_iter'] != bool(PH.get('ext_forces_every_iter')):
         print('[s1] 物理設定讀回不符 ⇒ 拒跑', flush=True)
@@ -232,7 +237,7 @@ def main():
         base_zero()
         world.step(render=True)
     q_s, _ = q9()
-    d0 = q_s[3:] - np.asarray(q_ready, float)
+    d0 = q_s[3:] - q_tuck
     n_filters = 1 + len(table_paths)
     required = ['finger_table', 'arm_bottle', 'arm_table', 'base_env'] + [f'extra{i}_{w}' for i in range(len(v_extra)) for w in ('bottle', 'table')]
     # 動作前：所有接觸視圖形狀、感測數、有限值都須有效，否則拒跑（不當成沒有接觸）
@@ -245,7 +250,7 @@ def main():
     obst = [dict(x=float(OB_C[0]), y=float(OB_C[1]), radius=0.2 * math.sqrt(2.0), margin=0.47, static=True)]
     p_ = [float(v) for v in a.path.split(',')]
     ctrl = C2.S1Controller(C.S0_K(), ident, T_g, T_ready_rel, q_ready, float(T['top_z']), float(B['radius']), a.x_start, (a.win_lo, a.win_hi), C2.DetourPath(*p_),
-                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, lambda t: obst, x_exit_stop=a.x_end, v_c=a.v_c, reg=None, required=required)
+                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, lambda t: obst, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, reg=None, required=required)
     ctrl.compact = []                                                         # CBF 證據；反事實重解在實跑後（bottle_s1_cbf_replay.py）
     ctrl.obs.d = np.clip(d0, -ctrl.obs.max, ctrl.obs.max)
     ctrl.cfg.arm_model.bias = ctrl.bias0 + np.asarray(ctrl.cfg.arm_model.alpha, float) * ctrl.obs.d

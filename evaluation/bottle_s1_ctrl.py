@@ -27,6 +27,7 @@ N, DT = B.N, B.DT
 CLEAR_REJECT = 0.005      # 非手指↔瓶拒絕線（m），事前指定，不因任務調整
 CLEAR_GUARD = 0.0005      # 觸發線＝拒絕線＋此值：預測停止點跨線前就停
 CLEAR_NEAR = 0.25         # TCP 離瓶超過此距離不核（省算）
+A_SLEW = 0.4              # 參考速度斜率（m/s²），工程設定
 N_STILL = 20              # 出口停住須連續低速的物理步數
 
 
@@ -50,15 +51,17 @@ class DetourPath:
 
 class S1Controller(B.S0bController):
     def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, x_start, x_win, path, exit_c, exit_r, obstacles_fn,
-                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, **kw):
+                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, **kw):
         x_stop = exit_c[0] if x_exit_stop is None else x_exit_stop
-        super().__init__(K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, x_start, x_win, x_stop, v_c=v_c, obstacles_fn=obstacles_fn,
+        super().__init__(K, ident, T_grasp, T_ready_rel, q_ready if q_tuck is None else q_tuck, table_top_z, bottle_radius, x_start, x_win, x_stop, v_c=v_c, obstacles_fn=obstacles_fn,
                          cbf_cfg=dict(B.CBF_MISSION, **kw.pop('cbf_extra', {})), **kw)
         self.path, self.exit_c, self.exit_r = path, np.asarray(exit_c, float), float(exit_r)
         self.v_nav, self.v_carry, self.x_slow = float(v_nav), float(v_carry), float(x_slow)
         self.x_pre = float(x_win[0]) + 0.05
         self.x_blend = self.x_pre - v_c * B.T_BLEND            # 展臂起點：以接近速度倒推，位置事件觸發
         self.st.t_pre, self.st.t_cruise0 = float('inf'), 0.0
+        self.q_tuck, self.q_arm_ready, self.t_unfold, self.t_u0 = (None if q_tuck is None else np.array(q_tuck, float)), np.array(q_ready, float), float(t_unfold), None
+        self.x_unfold = self.x_blend - v_c * (self.t_unfold + float(t_settle))   # 展完靜止 t_settle 再朝瓶：d̂ 隨姿態變，停止點預測要用備妥姿態的靜態值
         self.blending, self.mission_done, self.t_exit_in = False, False, None
         self.n_still, self.T_b_now, self.d_static, self.d_p_prev = 0, None, None, None
         self.clear_min = dict(meas=float('inf'), pred=float('inf'), t_meas=None, t_pred=None, n=0)
@@ -76,16 +79,35 @@ class S1Controller(B.S0bController):
         return self.st.phase == 'CARRY' or (self.st.phase == 'CRUISE' and not self.blending)
 
     def _T_seq(self, q, t_eff):
-        if self.st.phase == 'CRUISE' and not self.blending:    # 導航段：手臂維持備妥姿態（底盤座標）
-            return np.stack([self.task.T_ready_rel] * (N + 1))
+        if self.st.phase == 'CRUISE' and not self.blending:    # 導航段：手臂在底盤座標（收臂、關節空間展臂、備妥）
+            return np.stack([self._rel_target(t_eff + k * DT) for k in range(N + 1)])
         return super()._T_seq(q, t_eff)
+
+    def _rel_target(self, tau):
+        if self.q_tuck is None:
+            return self.task.T_ready_rel
+        s_ = 0.0 if self.t_u0 is None else BR.min_jerk((tau - self.t_u0) / self.t_unfold)
+        return self.K.fk(np.r_[0.0, 0.0, 0.0, self.q_tuck + (self.q_arm_ready - self.q_tuck) * s_], 'link_tcp')
+
+    def _unfolded(self):
+        return self.q_tuck is None or (self.t_u0 is not None and self.t >= self.t_u0 + self.t_unfold)
 
     def _speed(self, T_tcp, x):
         if x >= self.x_end:
             return max(self.v_b - B.A_REF * 2.0 * DT, 0.0)
+        return self._slew(self._v_target(T_tcp, x))
+
+    def _slew(self, v):
+        """參考速度斜率限制：起步、減速點、進持瓶段不做階躍（持瓶時階躍會直接傳到瓶子）。啟發式調速要減速時不受限，避免越窗。"""
+        da = A_SLEW * 2.0 * DT
+        return min(v, self.v_b + da) if self.blending else float(np.clip(v, self.v_b - da, self.v_b + da))
+
+    def _v_target(self, T_tcp, x):
         if self.st.phase == 'CARRY':
             return self.v_carry
         if not self.blending:
+            if x >= self.x_blend and not self._unfolded():     # 手臂還沒展完：底盤等手臂，不靠時間賭
+                return max(self.v_b - B.A_REF * 2.0 * DT, 0.0)
             v = self.v_nav if x < self.x_slow else self.v_c
             return v / math.sqrt(1.0 + self.path.dy(x) ** 2)   # v 是路徑速度；參考以 x 前進
         return B.heuristic_speed(self.task, self.st, self.t, T_tcp, x, self.x_we, self.v_c)
@@ -134,7 +156,10 @@ class S1Controller(B.S0bController):
 
     def _advance(self, T_tcp, close_done, q):
         self._clear_check(T_tcp, q)
-        if self.st.phase == 'CRUISE' and not self.blending and q[0] >= self.x_blend:
+        if self.q_tuck is not None and self.t_u0 is None and q[0] >= self.x_unfold:
+            self.t_u0 = self.t
+            self._ev('unfold_start', x=float(q[0]), y=float(q[1]))
+        if self.st.phase == 'CRUISE' and not self.blending and q[0] >= self.x_blend and self._unfolded():
             if self._in_tube(np.r_[max(q[0], self.x_ws), q[1:3]]):
                 self.blending = True
                 self.d_static = np.array(self.obs.d, float)
