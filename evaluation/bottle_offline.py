@@ -29,6 +29,9 @@ sys.path.insert(0, os.path.join(WS, 'src', 'ammr_wholebody_mpc'))
 from ammr_wholebody_mpc import wgmpc_core_sp as S                     # noqa: E402
 from ammr_wholebody_mpc import wgmpc_core_sp_fr as FR                 # noqa: E402
 import bottle_ref as BR                                               # noqa: E402
+import bottle_models as BM                                            # noqa: E402
+import motm_b1_port as C1P                                            # noqa: E402
+import wg4b_b1_core as B1                                             # noqa: E402
 import bottle_reach_scan as RS                                        # noqa: E402
 
 K = RS.K
@@ -64,10 +67,14 @@ def ready_posture():
     return g[2], T
 
 
-def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', grasp_w=None):
-    """grasp_w＝(w_p, w_vref)：PREGRASP～LIFT 相位改用的權重（None＝全程 R3 權重 50／1）。"""
+def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', grasp_w=None, method='C3', c1=(1.0, 1.0)):
+    """grasp_w＝(w_p, w_vref)：PREGRASP～LIFT 相位改用的權重（None＝全程 R3 權重 50／1）。
+    method：C3（設定點模型＋在途命令前推）｜C2（理想速度模型 bottle_models，前推也用理想模型）｜C1（MotM 式移植 motm_b1_port，
+    以當下實測狀態單步 QP、參考前饋、無前推；c1＝(kp, w_vref)）。受控對象、延遲、參考產生器、判定三組相同。"""
     cfg_p = make_cfg(plant_alpha)
     cfg_c = make_cfg(ctrl_alpha)
+    if method == 'C2':
+        cfg_c = BM.WGMPCConfigSPIdeal(**{f: getattr(cfg_c, f) for f in cfg_c.__dataclass_fields__})
     q_ready, T_ready_rel = ready_posture()
     task = BR.BottleTask(T_grasp=BR.grasp_pose(SCN['xb'], SCN['yb'], SCN['h']), T_ready_rel=T_ready_rel)
     x_we = SCN['xb'] + SCN['win'][1]
@@ -84,7 +91,9 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
     u_prev = np.zeros(9)
     U_warm = None
     v_b = v_c
-    rec = dict(t=[], x=[], vx=[], phase=[], ep=[], er=[], ep_old=[], v_b=[], fail=0, solve_ms=[])
+    rec = dict(t=[], x=[], vx=[], phase=[], ep=[], er=[], ep_old=[], v_b=[], fail=0, solve_ms=[], pred_err=[])
+    pend, n_phys, ua = [], 0, np.zeros(9)
+    p1 = B1.B1Params(kp=float(c1[0]), q_pref=tuple(float(v) for v in q_ready))
     t = 0.0
     ev_t0 = None
     close_t0 = None
@@ -153,12 +162,21 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
         if grasp_w is not None:
             gw = st.phase in ('PREGRASP', 'INSERT', 'CLOSE', 'LIFT')
             cfg_c.w_p, cfg_c.w_vref = (grasp_w if gw else (50.0, 1.0))
-        # 延遲補償：以控制器模型把 (q,s) 推過在途命令
+        # 延遲補償：以控制器模型把 (q,s) 推過在途命令（C1 不前推）
         qp, sp = q.copy(), s.copy()
-        for u_in in pipe:
-            qp, sp = S.plant_phys_step(qp, sp, u_in, cfg_c, 1)
+        if method in ('C3', 'C2'):
+            for u_in in pipe:
+                qp, sp = (S.plant_phys_step(qp, sp, u_in, cfg_c, 1) if method == 'C3' else BM.ideal_phys_step(qp, sp, u_in, PHYS))
+            pend.append((n_phys + D_STEPS, K.fk(qp, 'link_tcp')[:3, 3].copy()))
         t0 = time.perf_counter()
-        r = FR.solve_sp_fr(K, S.make_z(qp, sp), u_prev, T_seq, cfg_c, U_warm=U_warm)
+        if method == 'C1':
+            plan_t = (np.array([t - 1.0, t + 30.0]), np.array([q[0] - v_b, q[0] + 30.0 * v_b]), 0.0)   # C1：以當下時刻 t、實測 x 為錨
+            Tfn = (lambda tau, _p=plan_t: BR.target_at(task, st, _p, tau))
+            cfg_c.base_vref = tuple(float(v) for v in vb_body[0])
+            cfg_c.w_p, cfg_c.w_vref = 50.0, float(c1[1])
+            r = C1P.solve_c1(K, q, s, ua, Tfn(t), C1P.ref_twist(Tfn, t), cfg_c, p1)
+        else:
+            r = FR.solve_sp_fr(K, S.make_z(qp, sp), u_prev, T_seq, cfg_c, U_warm=U_warm)
         rec['solve_ms'].append((time.perf_counter() - t0) * 1e3)
         if r.ok:
             u, U_warm = r.u0, r.U
@@ -170,6 +188,9 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
             pipe.append(u.copy())
             ua = pipe.pop(0)
             q, s = S.plant_phys_step(q, s, ua, cfg_p, 1)
+            n_phys += 1
+            while pend and pend[0][0] == n_phys:
+                rec['pred_err'].append(float(np.linalg.norm(K.fk(q, 'link_tcp')[:3, 3] - pend.pop(0)[1])))
         T_now = BR.target_at(task, st, (ts, plan[1], 0.0), t + DT)          # 同一時刻（物理推進後 t＋DT）的參考
         ep, er = BR.pose_err(K.fk(q, 'link_tcp'), T_now)
         rec['ep_old'].append(BR.pose_err(K.fk(q, 'link_tcp'), T_seq[0])[0])
@@ -187,7 +208,7 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
     if 'CLOSE' in ev:
         i = int(np.searchsorted(tt, ev['CLOSE']))
         ep_close = round(rec['ep'][min(i, len(rec['ep']) - 1)] * 1e3, 2)
-    out = dict(label=label, grasp_w=grasp_w, v_c=v_c, coord=coord, plant_alpha=plant_alpha, ctrl_alpha=ctrl_alpha, result=result, why=why, degraded=degraded,
+    out = dict(label=label, method=method, c1=list(c1) if method == 'C1' else None, grasp_w=grasp_w, v_c=v_c, coord=coord, plant_alpha=plant_alpha, ctrl_alpha=ctrl_alpha, result=result, why=why, degraded=degraded,
                t_end=round(t, 2), events=ev, t_pre=round(t_pre, 2), n_fail=rec['fail'],
                v_min_grasp=round(float(vx[m_g].min()), 4) if m_g.any() else None,
                t_slow_grasp=round(float(np.sum(m_g & (vx < 0.01)) * DT), 2),
@@ -195,7 +216,8 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
                ep_close_start_mm=ep_close, ep_p95_mm=round(float(np.percentile(rec['ep'], 95)) * 1e3, 2),
                ep_old_p95_mm=round(float(np.percentile(rec['ep_old'], 95)) * 1e3, 2),
                x_at_close=None if 'CLOSE' not in ev else round(float(np.interp(ev['CLOSE'], tt, x)), 3),
-               solve_ms_p95=round(float(np.percentile(rec['solve_ms'], 95)), 1))
+               solve_ms_p95=round(float(np.percentile(rec['solve_ms'], 95)), 1),
+               pred_err_p95_mm=round(float(np.percentile(rec['pred_err'], 95)) * 1e3, 2) if rec['pred_err'] else None)
     return out
 
 
