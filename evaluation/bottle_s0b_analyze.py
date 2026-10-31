@@ -58,6 +58,14 @@ def main():
     print(f"抓取關鍵時刻底盤 x：閉爪 {np.interp(tc, t, x):.4f}、證據 {np.interp(tg, t, x):.4f}、抬升 {np.interp(tl, t, x):.4f}、離桌 {np.interp(tok, t, x):.4f}；可達窗 {win_lo}–{win_hi}")
     m_g = (t >= tc) & (t <= tl)
     print(f"閉爪至抬升期間底盤移動 {(x[m_g].max() - x[m_g].min()) * 1e3:.2f} mm（TCP 目標世界固定）；瓶子同期水平位移見上")
+    # 分段實測速度與近停（Codex 20261031_195504）：速度由位姿差分，5 點移動平均；近停門檻 0.01 m/s（事前沿用 V_MIN，不是判定項）
+    vs = np.convolve(np.gradient(x, t), np.ones(5) / 5, mode='same')
+    print('分段實測底盤速度（m/s）與近停（< 0.01 m/s）：')
+    for nm, t0, t1 in (('接近至閉爪', 0.0, tc), ('閉爪至證據', tc, tg), ('證據至抬升開始', tg, tl), ('抬升開始至離桌成立', tl, tok), ('離桌成立至結束', tok, t[-1])):
+        mk = (t >= t0) & (t < t1)
+        if mk.any():
+            print(f"  {nm:<12} {t0:6.2f}–{t1:6.2f} s：均 {vs[mk].mean():.4f}、最低 {vs[mk].min():.4f}、最高 {vs[mk].max():.4f}；近停 {float((vs[mk] < 0.01).sum()) * 0.01:.2f} s／{float(mk.sum()) * 0.01:.2f} s")
+    print(f"實際終點 x {x[-1]:.4f}（參考終點 {rep.get('x_end', 0.15)}）；終點未到不算到達參考終點")
     print(f"手指：指1 末 {c['finger1_q'][-1]:.5f}、指2 末 {c['finger2_q'][-1]:.5f} m；主從差峰 {np.abs(c['finger1_q'] - c['finger2_q']).max() * 1e3:.3f} mm；命令末 {c['finger_cmd'][-1]:.4f}")
     print('d̂', np.round(rep['d_hat'], 4).tolist(), '求解 ms', rep['solve_ms'], '求解失敗', rep['n_solve_fail'], '禁止脈衝', {k: v for k, v in rep['forbidden_pulses'].items() if v['peak'] > 0})
 
