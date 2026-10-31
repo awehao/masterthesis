@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """V1 瓶子估計節點（旁路，獨立程序；不進控制）。訂 /v1/color（rgb8）、/v1/depth（32FC1，光軸 Z 公尺，0＝無效）、/v1/camera_info、/v1/cam_pose（擷取時刻相機光學座標世界位姿），
 四者以同一個來源時間戳配對（佇列有界：只保留最近 MAX_PENDING 個戳，舊的丟棄並計數）。估計用 bottle_v1_est.estimate：不用瓶位姿真值或真值遮罩；相機位姿來自真值定位，桌子是地圖先驗（--table）。
-發 /v1/bottle_estimate（Float64MultiArray）：[擷取戳, valid, cx, cy, z_support, z_top, ax, ay, az, n_pts, circle_rms, proc_ms, why_code, n_dropped, z_top_valid]，無效欄 NaN。
+發 /v1/bottle_estimate（Float64MultiArray）：[擷取戳, valid, cx, cy, z_support, z_top, ax, ay, az, n_pts, circle_rms, proc_ms, why_code, n_dropped, z_top_valid, dist_est]，無效欄 NaN。
+dist_est＝估計瓶中心（z 取桌面＋0.1 m）到該影格相機位置的距離：只用估計值與相機位姿，不用真值。
     python3 evaluation/bottle_v1_est_node.py --table top_z,xlo,ylo,xhi,yhi --ros-args -p use_sim_time:=true
 """
 import argparse
@@ -69,12 +70,17 @@ class V1Est(Node):
             self.get_logger().warn(f'估計失敗：{ex!r}')
             r = dict(valid=False, why='bad_message')
         ms = (time.perf_counter() - w0) * 1e3
+        try:
+            cpos = np.array([e['pose'].pose.position.x, e['pose'].pose.position.y, e['pose'].pose.position.z])
+            dist = float(np.linalg.norm(np.array([r['center_xy'][0], r['center_xy'][1], r['z_from_support'] + 0.1]) - cpos)) if r.get('valid') else float('nan')
+        except Exception:
+            dist = float('nan')
         nan = float('nan')
         c = r.get('center_xy') or [nan, nan]
         ax = r.get('axis') or [nan, nan, nan]
         out = Float64MultiArray()
         out.data = [st, float(bool(r['valid'])), float(c[0]), float(c[1]), float(r.get('z_from_support', nan)), float(r.get('z_from_top', nan)), *[float(v) for v in ax],
-                    float(r.get('n_pts', 0)), float(r.get('circle_rms', nan)), ms, float(WHY.index(r['why']) if r.get('why') in WHY else -1), float(self.n_drop), float(bool(r.get('z_top_valid', False)))]
+                    float(r.get('n_pts', 0)), float(r.get('circle_rms', nan)), ms, float(WHY.index(r['why']) if r.get('why') in WHY else -1), float(self.n_drop), float(bool(r.get('z_top_valid', False))), dist]
         self.pub.publish(out)
         self.n_done += 1
 
