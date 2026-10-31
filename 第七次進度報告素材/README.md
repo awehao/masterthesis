@@ -397,6 +397,7 @@ Howard 10/31 定案的新主線。各條件 n＝1，Isaac 物理，只用既有�
 - 一頁摘要：`規格/瓶子主線_成果摘要.md`
 - 逐趟總表、程式版本、run 與資料來源：`規格/瓶子主線_總表與來源.md`（產生檔，勿手改）
 - 開發過程細節：`規格/瓶子S1_總表.md`、`規格/瓶子S1_候選規格.md`、`規格/瓶子S1_對照最小規格.md`、`規格/瓶子S0_物理抓持設計.md`
+- 影片（1 倍速、三視角、實錄重播）：`影片/20261031_235054_…bottle_s1_5…mp4`、`影片/20261101_005458_…bottle_s3_1…mp4`，`evaluation/isaac_bottle_replay.py`＋`evaluation/bottle_replay_video.py` 產生
 - 資料：`資料/瓶子主線總表.json`，由 `產生程式/bottle_mainline_table.py` 從 `evaluation/runs/` 重算；`產生程式/bottle_mainline_render.py` 產生總表與單頁 HTML。
 
 ## 素材清單
