@@ -201,6 +201,12 @@ def ready_from_pre(base, T_pre, back=0.14, up=0.08):
     return np.asarray(g[2], float), np.linalg.inv(Tb) @ Tr
 
 
+def S0_K():
+    """與離線一致的全身運動學（evaluation/models/omni_bot_wholebody_expanded.urdf）。"""
+    from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics
+    return WholeBodyKinematics.from_urdf_file(os.path.join(HERE, 'models', 'omni_bot_wholebody_expanded.urdf'))
+
+
 def grasp_target(xb, yb, h):
     """側向抓取目標：TCP 越過瓶軸 GRASP_DEPTH（沿工具軸 +y）。"""
     T = BR.grasp_pose(xb, yb, h)
