@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# run_bottle_ros（N1，2026-11-01；Codex 條件核可一趟）：瓶子任務走真 ROS 話題。獨立節點：RSP、map→odom、map_server、scan_relay、追蹤器（bottle_tracker_stamped）、Shield；模擬端同程序發 /clock /odom /tf /scan_raw。
+# Isaac：RUN_ID=bottle_n1_1 ROS_DOMAIN_ID=95 RUNNER=evaluation/run_bottle_ros.sh bash evaluation/run_guarded_v3.sh
+# 假世界驗收（真節點、無 Isaac）：RUN_ID=bottle_n1_fake1 ROS_DOMAIN_ID=93 SIM_MODE=fake FAKE_MODE=full bash evaluation/run_bottle_ros.sh
+# 同一 Isaac 程序開視窗持續更新；不錄影、不逐步寫圖。收尾只動本趟程序群組。
+set -u
+WS="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$WS"
+: "${RUN_ID:?RUN_ID 未設定}"
+: "${ROS_DOMAIN_ID:?ROS_DOMAIN_ID 未設定}"
+SIM_MODE="${SIM_MODE:-isaac}"
+DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
+unset VIRTUAL_ENV
+export PATH=/opt/ros/jazzy/bin:/usr/local/bin:/usr/bin:/bin
+set +u; source /opt/ros/jazzy/setup.bash; [ -f "$WS/install/setup.bash" ] && source "$WS/install/setup.bash"; set -u
+ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
+ASSET=src/my_omnibot_description/config/bottle_s0.yaml
+URDF="$WS/evaluation/models/omni_bot_manip.urdf"
+say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$DIR/run.log"; }
+PIDS=(); NAMES=()
+: > "$DIR/procs.tsv"
+spawn(){ local n="$1"; shift; setsid "$@" >>"$DIR/$n.log" 2>&1 & PIDS+=("$!"); NAMES+=("$n"); sleep 0.2; local g; g=$(ps -o pgid= -p "${PIDS[-1]}" 2>/dev/null | tr -d ' '); printf "%s\t%s\t%s\n" "$n" "${PIDS[-1]}" "${g:-?}" >> "$DIR/procs.tsv"; }
+cleanup(){ say "cleanup（只針對本趟 PID；TERM → 3 s → KILL）"
+  for i in "${!PIDS[@]}"; do kill -TERM -- "-${PIDS[$i]}" 2>/dev/null; done
+  read -t 3 < /dev/zero
+  for i in "${!PIDS[@]}"; do kill -KILL -- "-${PIDS[$i]}" 2>/dev/null; done
+  read -t 1 < /dev/zero; : > "$DIR/cleanup_residual.tsv"
+  for i in "${!PIDS[@]}"; do _r=$(pgrep -g "${PIDS[$i]}" 2>/dev/null | tr '\n' ' '); printf "%s\t%s\t%s\n" "${NAMES[$i]}" "${PIDS[$i]}" "${_r:-none}" >> "$DIR/cleanup_residual.tsv"; done
+  say "cleanup 後殘留 $(awk '$3!="none"' "$DIR/cleanup_residual.tsv" | wc -l) 組"; }
+trap cleanup EXIT
+trap 'say "收到 TERM"; exit 143' TERM
+trap 'say "收到 INT"; exit 130' INT
+say "=== 瓶子 N1 真話題鏈路 模式 $SIM_MODE 參數［${S1_ARGS:-無}］ RUN_ID=$RUN_ID 網域 $ROS_DOMAIN_ID；git $(git rev-parse --short HEAD)"
+sha256sum evaluation/isaac_bottle_ros.py evaluation/bottle_ros_chain.py evaluation/bottle_tracker_stamped.py evaluation/bottle_map_write.py evaluation/bottle_s1_ctrl.py evaluation/bottle_s1_groups.py evaluation/motm_b1_port.py evaluation/wg4b_b1_core.py evaluation/bottle_s0b_ctrl.py evaluation/bottle_branch.py evaluation/bottle_s0_ctrl.py evaluation/bottle_s0_logic.py evaluation/bottle_ref.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py evaluation/run_bottle_ros.sh "$ASSET" > "$DIR/versions.sha256"
+python3 evaluation/bottle_map_write.py "$DIR/map" ${S1_ARGS:-} | tee -a "$DIR/run.log"
+PRM=$(python3 - <<'PY'
+import sys; sys.path.insert(0,'evaluation')
+import bottle_nav_chain as N
+def f(d): return ' '.join(f"-p {k}:={str(v).lower() if isinstance(v,bool) else v}" for k,v in d.items())
+print(f(dict(N.TRACKER, use_map_subtraction=True))); print(f(N.SHIELD))
+PY
+)
+TR_P=$(sed -n 1p <<<"$PRM"); SH_P=$(sed -n 2p <<<"$PRM")
+say "追蹤器參數 $TR_P"; say "Shield 參數 $SH_P"
+spawn rsp ros2 run robot_state_publisher robot_state_publisher "$URDF" --ros-args -p use_sim_time:=true
+spawn tf_map ros2 run tf2_ros static_transform_publisher --x 0 --y 0 --z 0 --qx 0 --qy 0 --qz 0 --qw 1 --frame-id map --child-frame-id odom --ros-args -p use_sim_time:=true
+spawn map ros2 run nav2_map_server map_server --ros-args -p use_sim_time:=true -p yaml_filename:="$DIR/map.yaml"
+spawn maplife ros2 run nav2_lifecycle_manager lifecycle_manager --ros-args -r __node:=lifecycle_manager_map -p use_sim_time:=true -p autostart:=true -p node_names:="['map_server']"
+spawn relay ros2 run ammr_bringup scan_relay --ros-args -p use_sim_time:=true
+spawn tracker python3 -u evaluation/bottle_tracker_stamped.py --ros-args -p use_sim_time:=true -p scan_topic:=/scan -p map_topic:=/map $TR_P
+spawn shield python3 -u -c "import sys; sys.path.insert(0,'src/ammr_wholebody_mpc'); from ammr_wholebody_mpc.scan_safety_shield import main; main()" --ros-args -p use_sim_time:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_shield -p cmd_out_topic:=/cmd_vel $SH_P
+if [ "$SIM_MODE" = fake ]; then
+  spawn sim python3 -u evaluation/bottle_ros_fake.py --out "$DIR" --mode "${FAKE_MODE:-full}"
+  say "起 sim PID=${PIDS[-1]}"
+else
+  spawn sim "$ISAAC_PY" -u evaluation/isaac_bottle_ros.py --asset "$ASSET" --out "$DIR" --headless false ${S1_ARGS:-}
+  SIM=${PIDS[-1]}
+  say "起 sim PID=$SIM"
+  (
+    for i in $(seq 1 90); do
+      W=$(xdotool search --onlyvisible --name "Isaac Sim" 2>/dev/null | tail -1)
+      if [ -n "$W" ]; then
+        xdotool windowmap "$W" windowraise "$W" windowactivate "$W" 2>/dev/null
+        say "視窗 $W 已置前（第 $i 秒）"
+        break
+      fi
+      kill -0 "$SIM" 2>/dev/null || break
+      read -t 1 < /dev/zero
+    done
+  ) &
+fi
+wait "${PIDS[-1]}"; RC=$?
+RC2=$(cat "$DIR/exit_rc.txt" 2>/dev/null || echo 99)
+say "程序離開碼 $RC；腳本結果碼 $RC2（0＝完整成功、3＝已停止且有效、4＝停止未驗／無效、70＝握手未過、99＝無結果檔）"
+grep -aE "\[s1\]|\[fake\]" "$DIR/sim.log" | tee -a "$DIR/run.log"
+[ "$RC2" = 99 ] && [ "$RC" -ne 0 ] && exit "$RC"
+exit "$RC2"

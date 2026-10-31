@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""瓶子 N1 地圖：把 bottle_nav_chain.occupancy 同一份已知家具（桌腳、側牆）寫成 map_server 可讀的 pgm／yaml。障礙方塊是未知物，不進地圖。
+    python3 evaluation/bottle_map_write.py <輸出基名> [--wall-box cx,cy,cz,sx,sy,sz]
+"""
+import argparse
+import os
+import sys
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import bottle_nav_chain as NC                           # noqa: E402
+import bottle_s1_geom as G                              # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('out')
+    ap.add_argument('--wall-box', default='')
+    a, _ = ap.parse_known_args()
+    boxes = [(b[1], b[2]) for b in G.table_boxes() if b[0] != 'table_top']
+    if a.wall_box:
+        v = [float(x) for x in a.wall_box.split(',')]
+        boxes.append((np.array(v[:3]), np.array(v[3:])))
+    g = NC.occupancy(boxes)
+    nx, ny = g.info.width, g.info.height
+    occ = np.array(g.data, np.int8).reshape(ny, nx)
+    img = np.where(occ > 50, 0, 254).astype(np.uint8)[::-1]        # pgm 第一列是最大 y
+    with open(a.out + '.pgm', 'wb') as f:
+        f.write(f'P5\n{nx} {ny}\n255\n'.encode())
+        f.write(img.tobytes())
+    o = g.info.origin.position
+    with open(a.out + '.yaml', 'w') as f:
+        f.write(f'image: {os.path.basename(a.out)}.pgm\nmode: trinary\nresolution: {g.info.resolution}\norigin: [{o.x}, {o.y}, 0.0]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n')
+    print(f'地圖 {nx}×{ny}、佔據格 {int((occ > 50).sum())}、家具 {len(boxes)} 件')
+
+
+if __name__ == '__main__':
+    sys.exit(main())
