@@ -17,14 +17,18 @@ ABOVE = (0.02, 0.25)
 MIN_PLANE, MIN_CLUSTER = 200, 15
 
 
-def backproject(depth, K):
-    """光軸 Z 深度 → 相機座標點（N×3）與其像素。"""
+PIX_OFS = 0.5      # Isaac 渲染的像素中心在 (u＋0.5, v＋0.5)：門任務 CP1（results/vision/CP1_result.yaml）加半約定殘差 ~1e-5 mm，整數約定 ~0.8 mm/m
+
+
+def backproject(depth, K, ofs=None):
+    """光軸 Z 深度 → 相機座標點（N×3）與其像素。ofs：像素中心偏移（預設 PIX_OFS）。"""
+    ofs = PIX_OFS if ofs is None else ofs
     H, W = depth.shape
     v, u = np.mgrid[0:H, 0:W]
     z = depth.astype(float)
     ok = np.isfinite(z) & (z > 0)
-    x = (u[ok] - K[0, 2]) * z[ok] / K[0, 0]
-    y = (v[ok] - K[1, 2]) * z[ok] / K[1, 1]
+    x = (u[ok] + ofs - K[0, 2]) * z[ok] / K[0, 0]
+    y = (v[ok] + ofs - K[1, 2]) * z[ok] / K[1, 1]
     return np.column_stack([x, y, z[ok]]), np.column_stack([u[ok], v[ok]])
 
 
@@ -43,10 +47,10 @@ def circle_fixed_r(P2, r, c0):
     return c, float(np.sqrt(np.mean((np.linalg.norm(P2 - c, axis=1) - r) ** 2)))
 
 
-def estimate(depth, K, T_wc, table):
+def estimate(depth, K, T_wc, table, ofs=None):
     """table：地圖先驗 dict(top_z, lo=(x, y), hi=(x, y))。"""
     out = dict(valid=False, why=None)
-    Pc, UV = backproject(depth, K)
+    Pc, UV = backproject(depth, K, ofs)
     if len(Pc) == 0:
         return dict(out, why='no_depth')
     Pw = (T_wc[:3, :3] @ Pc.T).T + T_wc[:3, 3]

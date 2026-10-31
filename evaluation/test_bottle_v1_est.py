@@ -36,7 +36,7 @@ def chk(name, cond, info=''):
 
 def rays_cam():
     v, u = np.mgrid[0:H_, 0:W_]
-    d = np.stack([(u + 0.0 - K[0, 2]) / K[0, 0], (v + 0.0 - K[1, 2]) / K[1, 1], np.ones_like(u, float)], axis=-1).reshape(-1, 3)   # z 分量 1：t＝光軸 Z
+    d = np.stack([(u + EST.PIX_OFS - K[0, 2]) / K[0, 0], (v + EST.PIX_OFS - K[1, 2]) / K[1, 1], np.ones_like(u, float)], axis=-1).reshape(-1, 3)   # z 分量 1：t＝光軸 Z；像素中心同 Isaac（加半，CP1）
     return d
 
 
@@ -94,7 +94,7 @@ def t_convention():
     Z = render(T_wc, box, (np.array([9.0, 9.0, 0.0]), np.array([0, 0, 1.0]), 0.01, 0.01), 0.05, 10.0)
     Ti = np.linalg.inv(T_wc)
     pc = Ti[:3, :3] @ p + Ti[:3, 3]
-    u, v = K[0, 0] * pc[0] / pc[2] + K[0, 2], K[1, 1] * pc[1] / pc[2] + K[1, 2]
+    u, v = K[0, 0] * pc[0] / pc[2] + K[0, 2] - EST.PIX_OFS, K[1, 1] * pc[1] / pc[2] + K[1, 2] - EST.PIX_OFS
     zpix = Z[int(round(v)), int(round(u))]
     chk('約定：像素深度＝光軸 Z（立方體前面 = 中心 Z − 0.01）', abs(zpix - (pc[2] - 0.01)) < 2e-3, (zpix, pc[2]))
     ray_len = np.linalg.norm(pc)
