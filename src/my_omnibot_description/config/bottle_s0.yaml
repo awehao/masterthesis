@@ -1,0 +1,25 @@
+# 瓶子 S0／S1 候選資產（2026-10-31，版本 r1；Codex 20261031 核可凍結候選並做一次「只放桌子與瓶子」冒煙）
+# 數值為**候選**：冒煙只核瓶子靜置與桌面支撐，不驗機器人接觸或抓持。幾何見 第七次進度報告素材/規格/瓶子S1_候選規格.md。
+# 座標：桌與瓶的相對配置（世界擺放於建 S1 場景時另定）；長度 m、質量 kg。
+version: bottle_s0_r1
+table:
+  top_z: 0.60            # 桌面頂高
+  thick: 0.03
+  size_x: 0.80
+  size_y: 0.50
+  near_y: 0.36           # 近機器人側桌緣 y
+  leg: 0.04              # 方柱邊長
+  leg_inset_near: 0.20   # 近側兩腳內縮（導航只看得到桌腳；底盤↔腳 ≥ 0.49 m）
+  leg_inset_far: 0.05
+  leg_inset_x: 0.05
+  fixed: true
+  material: {static_friction: 0.6, dynamic_friction: 0.5, restitution: 0.0}   # 桌面候選（一般木／塑膠桌量級）
+bottle:
+  radius: 0.015          # 30 mm 細圓柱代理物（夾爪名目開口 22.4–36.2 mm）
+  height: 0.20
+  mass: 0.20
+  center_xy: [0.0, 0.42] # 軸心；立於桌面
+  material: {static_friction: 1.0, dynamic_friction: 0.8, restitution: 0.0}  # 同既有夾持面登錄值（--grip-mu-static／dynamic）
+physics:                 # 與既有實跑一致（讀回核對，不符即拒跑）
+  dt: 0.01
+  ext_forces_every_iter: true
