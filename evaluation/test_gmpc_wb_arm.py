@@ -209,6 +209,18 @@ def main():
         rt = mt.solve(X_now=np.eye(3), X_ref_win=Xr0, xi_ref_win=xr0, xi_prev=np.zeros(3), arm=arm_dict(T_seq))
         chk(f'N4 回傳 {kind} ⇒ 退回 {want}', rt.arm_check['fallback'] == want and np.isfinite(rt.u_arm_seq).all(), str(rt.arm_check.get('fallback')))
 
+    # ---- R 底盤座標任務（tcp_rel_base）：TCP 任務與底盤解耦
+    m_rh, m_ra = GW.GMPC(cfg()), GW.GMPC(cfg())
+    T_rel = np.stack([K.fk(np.r_[0.0, 0.0, 0.0, Q_READY], 'link_tcp')] * (N + 1))
+    T_rel[:, 2, 3] += 0.01
+    Xr_r, xr_r = Xr4, xr4
+    rh = m_rh.solve(X_now=Xr_r[0], X_ref_win=Xr_r, xi_ref_win=xr_r, xi_prev=np.zeros(3), arm={'mode': 'hold'})
+    ra = m_ra.solve(X_now=Xr_r[0], X_ref_win=Xr_r, xi_ref_win=xr_r, xi_prev=np.zeros(3), arm=arm_dict(T_rel, tcp_rel_base=True))
+    chk('R1 底盤座標任務 ⇒ 底盤命令與 hold 相同（解耦）', np.abs(np.asarray(ra.u_opt) - np.asarray(rh.u_opt)).max() < 1e-4, f'{ra.u_opt} {rh.u_opt}')
+    chk('R2 手臂仍作用', np.abs(ra.u_arm_seq).max() > 1e-3, str(np.abs(ra.u_arm_seq).max()))
+    ra2 = GW.GMPC(cfg()).solve(X_now=Xr_r[0], X_ref_win=Xr_r, xi_ref_win=xr_r, xi_prev=np.zeros(3), arm=arm_dict(T_rel * 1.0))
+    chk('R3 世界座標模式底盤命令確實不同（對照）', np.abs(np.asarray(ra2.u_opt) - np.asarray(rh.u_opt)).max() > 1e-3, f'{ra2.u_opt}')
+
     print(f'A7 耗時：保持 {t_hold * 1e3:.1f} ms、作用 {t_act * 1e3:.1f} ms（N＝20；含建構與安全外層的底盤解）；A4 作用 {ea * 1e3:.1f}／保持 {eh * 1e3:.1f} mm；L1 相對誤差 {worst:.1e}')
     print(f'記錄：A1 靜止參考底盤命令 {a1_split[0]}、手臂峰 {a1_split[1]:.3f} rad/s；A4 底盤 vx {a4_vx:.4f}（參考 0.05）；A1/A4 fallback {ra.arm_check.get("fallback")}／{r4a.arm_check.get("fallback")}')
     print(f'gmpc_wb 手臂作用模式測試 {NCHK} 項：' + ('全過' if not BAD else '失敗 ' + '；'.join(BAD)))

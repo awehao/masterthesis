@@ -98,13 +98,13 @@ class PhaseState:
 
 
 def base_pose_at(plan, t):
-    """plan：(ts, xs) 底盤沿 +x 的時間—位置表（y、偏航為常數）；回傳 (x, y, θ)。"""
-    ts, xs, y0 = plan
-    return np.array([float(np.interp(t, ts, xs)), y0, 0.0])
+    """plan：(ts, xs, y0[, yaw0]) 底盤沿世界 +x 的時間—位置表（y、偏航為常數，yaw0 省略時為 0）；回傳 (x, y, θ)。"""
+    ts, xs, y0, *yaw = plan
+    return np.array([float(np.interp(t, ts, xs)), y0, float(yaw[0]) if yaw else 0.0])
 
 
 def base_vel_at(plan, t):
-    ts, xs, _ = plan
+    ts, xs = plan[:2]
     v = np.gradient(xs, ts)
     return np.array([float(np.interp(t, ts, v)), 0.0, 0.0])
 

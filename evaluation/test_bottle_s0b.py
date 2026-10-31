@@ -31,6 +31,7 @@ BASE_PRE = np.array([WIN[0] + 0.05, 0.0, 0.0])
 Q_READY, T_READY, _ = BB.ready_in_branch(BASE_PRE, T_P, _br['q_mid'], _br['x_mid'])
 D_TRUE = np.array([0.0, 0.018, -0.008, 0.0, 0.0, 0.0])
 REQ = ('nonfinger_bottle', 'robot_table')
+Y_TUBE_HI = B.Y_TUBE[1]
 
 
 def bottle_T():
@@ -40,8 +41,8 @@ def bottle_T():
 
 
 class Fake:
-    def __init__(self, ctrl, f_hold=2.5, alpha_scale=1.0, v_scale=1.0):
-        self.c, self.q = ctrl, np.r_[X0, 0.0, 0.0, Q_READY]
+    def __init__(self, ctrl, f_hold=2.5, alpha_scale=1.0, v_scale=1.0, x0=X0):
+        self.c, self.q = ctrl, np.r_[x0, 0.0, 0.0, Q_READY]
         self.t, self.Tb, self.grasped, self.Trel = 0.0, bottle_T(), False, None
         self.f_hold, self.alpha, self.v_scale = f_hold, ALPHA * alpha_scale, v_scale
         self.hist = []
@@ -256,6 +257,39 @@ def main():
     f = Fake(ctrl()).run(40.0, nan_q)
     chk('N19 量測非有限 ⇒ 停止', stop_of(f) == 'joint_state_nonfinite', str(stop_of(f)))
     chk('N19 末段底盤命令為零', np.abs(f.hist[-1]['u']).max() < 1e-9, str(f.hist[-1]['u']))
+
+    # N19b 參考領先上限：底盤被擋住時 s_ref 不累積
+    c19 = ctrl()
+    q19 = np.r_[X0, 0.0, 0.0, Q_READY]
+    c19.t, c19.s_ref, c19.n_tick = 1.0, X0 + 0.5, 1
+    c19._solve(q19)
+    chk('N19b 參考領先受 S_LEAD 限制', c19.s_ref <= X0 + B.S_LEAD + c19.v_b * B.DT + 1e-9, str(c19.s_ref))
+    # N19c CARRY 錨定完整 SE(2)：y、θ 非零時目標仍連續，參考取實測
+    c20 = ctrl()
+    q20 = np.r_[-0.10, 0.04, 0.05, Q_READY]
+    c20.t, c20.st.phase, c20.st.t_phase, c20.st.grasp_ok = 2.0, 'LIFT', 0.0, True
+    c20._advance(c20.task.T_lift, True, q20)
+    chk('N19c 進 CARRY', c20.st.phase == 'CARRY')
+    chk('N19c 參考取實測 SE(2)', (c20.s_ref, c20.y_ref, c20.th_ref) == (-0.10, 0.04, 0.05), str((c20.s_ref, c20.y_ref, c20.th_ref)))
+    Trel = c20.st.T_carry_rel
+    chk('N19c 相對目標等於進入時的 T_lift（底盤座標）', BR.pose_err(BR.pose_world(q20[:3], Trel), c20.task.T_lift)[0] < 1e-9 and BR.pose_err(BR.pose_world(q20[:3], Trel), c20.task.T_lift)[1] < 1e-9)
+    # N19e CARRY 是底盤座標任務：目標不隨參考、命令或底盤位置改變
+    c20.s_ref, c20.v_b = q20[0] + B.S_LEAD, V_C
+    c20.u_prev[:3] = [0.3, 0.0, 0.0]
+    q20b = q20.copy()
+    q20b[0] += 0.03
+    chk('N19e CARRY 目標與底盤無關', np.array_equal(c20._T_seq(q20, 2.08), c20._T_seq(q20b, 2.08)))
+    chk('N19e CARRY 目標全段相同', np.abs(c20._T_seq(q20, 2.08) - Trel).max() == 0.0)
+    # N19f 底盤不在管內不放行 INSERT，回到管內才放行
+    for name, qg in (('窗前', np.r_[WIN[0] - 0.02, 0.0, 0.0, Q_READY]), ('側向超出', np.r_[-0.2, Y_TUBE_HI + 0.01, 0.0, Q_READY]), ('負向超出', np.r_[-0.2, B.Y_TUBE[0] - 0.01, 0.0, Q_READY])):
+        cg = ctrl()
+        cg.t, cg.st.phase, cg.st.t_phase = 9.0, 'PREGRASP', 8.0
+        cg._advance(cg.task.T_pre, False, qg)
+        chk(f'N19f {name} ⇒ 維持 PREGRASP', cg.st.phase == 'PREGRASP' and cg.n_gate == 1, cg.st.phase)
+    cg._advance(cg.task.T_pre, False, np.r_[-0.2, 0.0, 0.0, Q_READY])
+    chk('N19f 回到管內 ⇒ INSERT', cg.st.phase == 'INSERT', cg.st.phase)
+    # N19d 紀錄逐週期耗時
+    chk('N19d 逐週期耗時與 >50 ms 次數', len(r['solve_ms_all']) == r['n_tick'] and isinstance(r['n_over_50ms'], int), str((len(r['solve_ms_all']), r['n_tick'])))
 
     # N20 離開碼：完成但底盤未驗證停下不算 0
     rep = dict(success=True, stop=None, end_effect=None, stop_effect=None)

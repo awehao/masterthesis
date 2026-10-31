@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Optional, Tuple
 
 import numpy as np
@@ -87,6 +88,70 @@ def arm_prediction(q0, s0, N, dt, model):
         s_M, s_c = s_M + dt * Uk, s_c.copy()
         Mq[k], cq[k], Ms[k], cs[k] = q_M, q_c, s_M, s_c
     return Mq, cq, Ms, cs
+
+
+def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800):
+    """Goldfarb–Idnani 對偶作用集法：min ½xᵀPx＋qᵀx s.t. l ≤ Ax ≤ u（P 正定）。有限步終止、不循環；可判定不可行。
+    耦合問題的主求解器：CBF slack 懲罰使 P 對角跨 0.2–2e8，OSQP 在作用集轉變時要數千至數萬次迭代（max 381 ms、D1 到迭代上限），本法同批難題 max 5.1 ms、目標值差 ≤4e-14。
+    回傳 (x, y, info)；x 為 None 表示未得解（交由 OSQP 備援）。解須通過原始可行、乘子非負（演算法內含）與穩定性核對才回傳。"""
+    from scipy.linalg import cho_factor, cho_solve
+    Pd = P.toarray()
+    try:
+        cf = cho_factor(Pd)
+    except np.linalg.LinAlgError:
+        return None, None, dict(ok=False, why='P_not_pd', solver='gi')
+    As = A.tocsr()
+    x = -cho_solve(cf, q)
+    act, sgn, Nr, PiN, mu = [], [], [], [], np.zeros(0)
+    for step in range(max_steps):
+        z = As @ x
+        vl, vu = l - z, z - u
+        il, iu = int(np.argmax(vl)), int(np.argmax(vu))
+        if max(vl[il], vu[iu]) <= tol:
+            break
+        i, sg = (il, 1.0) if vl[il] >= vu[iu] else (iu, -1.0)         # 列寫成 n·x ≥ b
+        n = sg * np.asarray(As[i].todense()).ravel()
+        b = sg * (l[i] if sg > 0 else u[i])
+        Hn = cho_solve(cf, n)
+        up = 0.0
+        while True:
+            if act:
+                N_, Pi = np.array(Nr), np.array(PiN).T
+                try:
+                    r = np.linalg.solve(N_ @ Pi, N_ @ Hn)
+                except np.linalg.LinAlgError:
+                    return None, None, dict(ok=False, why='singular', steps=step, solver='gi')
+                zd = Hn - Pi @ r
+            else:
+                r, zd = np.zeros(0), Hn
+            nz = float(n @ zd)
+            t2 = (b - float(n @ x)) / nz if nz > 1e-14 else float('inf')
+            t1, drop = float('inf'), None
+            for j, rj in enumerate(r):
+                if rj > 1e-14 and mu[j] / rj < t1:
+                    t1, drop = mu[j] / rj, j
+            t = min(t1, t2)
+            if not np.isfinite(t):
+                return None, None, dict(ok=False, why='infeasible', steps=step, solver='gi')
+            if np.isfinite(t2):
+                x = x + t * zd
+            mu = mu - t * r
+            up += t
+            if t2 <= t1:
+                act.append(i); sgn.append(sg); Nr.append(n); PiN.append(Hn); mu = np.r_[mu, up]
+                break
+            act.pop(drop); sgn.pop(drop); Nr.pop(drop); PiN.pop(drop); mu = np.delete(mu, drop)
+    else:
+        return None, None, dict(ok=False, why='steps', steps=max_steps, solver='gi')
+    y = np.zeros(A.shape[0])
+    for i, sg, m in zip(act, sgn, mu):
+        y[i] = -sg * m
+    z = As @ x
+    viol = float(np.max(np.maximum(l - z, z - u)))
+    stat = float(np.abs(Pd @ x + q + As.T @ y).max())
+    if viol > 1e-8 or stat > 1e-6 * max(1.0, float(np.abs(q).max())):
+        return None, None, dict(ok=False, why='verify', viol=viol, stat=stat, solver='gi')
+    return x, y, dict(ok=True, steps=step, n_active=len(act), viol=viol, stat=stat, solver='gi')
 
 
 def arm_stop_sequence(arm, N, dt, tol=1e-9):
@@ -1247,17 +1312,19 @@ class GMPC:
             Wt = np.diag([arm['w_p']] * 3 + [arm['w_r']] * 3)
             Pzz = np.zeros((nz + n_arm, nz + n_arm))
             qz = np.zeros(nz + n_arm)
+            rel_base = bool(arm.get('tcp_rel_base'))      # True：T_seq 是底盤座標目標，TCP 任務與底盤解耦（持瓶相對底盤）；世界座標代價會讓 QP 以為動底盤能消除誤差
             for k in range(N):
-                xb = _pose_from_err(X_ref_win[k + 1], e_nom[k])
+                xb = np.zeros(3) if rel_base else _pose_from_err(X_ref_win[k + 1], e_nom[k])
                 qa = Mq[k] @ U0 + cq[k]
                 qf = np.r_[xb, qa]
                 Tc = Kk.fk(qf, tcp)
                 Td = T_seq[k + 1]
                 ek = np.r_[Td[:3, 3] - Tc[:3, 3], _rot_err_world(Tc[:3, :3], Td[:3, :3])]
                 J = Kk.jacobian(qf, tcp)
-                Bk = _pose_jac(X_ref_win[k + 1], e_nom[k])                  # ∂(x,y,θ)/∂e（X_ref·exp(e)；含 SE(2) 右 Jacobian）
                 L = np.zeros((6, nz + n_arm))
-                L[:, :Nm] = J[:, :3] @ Bk @ Gamma[k * n:(k + 1) * n, :]
+                if not rel_base:
+                    Bk = _pose_jac(X_ref_win[k + 1], e_nom[k])              # ∂(x,y,θ)/∂e（X_ref·exp(e)；含 SE(2) 右 Jacobian）
+                    L[:, :Nm] = J[:, :3] @ Bk @ Gamma[k * n:(k + 1) * n, :]
                 L[:, nz:] = J[:, 3:] @ Mq[k]
                 r0 = ek + L[:, nz:] @ U0                                  # e_k ≈ r0 − L·z
                 Pzz += 2.0 * L.T @ Wt @ L
@@ -1290,17 +1357,23 @@ class GMPC:
             ub_total = np.concatenate([ub_total, np.concatenate(rows_u)])
             arm_info = dict(nz=nz, A=A_arm, l=np.concatenate(rows_l), u=np.concatenate(rows_u), Mq=Mq, cq=cq, U0=U0)
 
-        # 6. OSQP solve
-        P_sp = sparse.csc_matrix(P_dense)
-        prob = osqp.OSQP()
-        # 耦合問題比照 W-GMPC：QP 容差須緊於殘差核對門檻 1e-6（eps 1e-5 實測手臂限制殘差 6.3e-6）；底盤問題（n_arm＝0）維持封存設定
-        prob.setup(P=P_sp, q=q_vec, A=A_total, l=lb_total, u=ub_total,
-                   verbose=False,
-                   eps_abs=1e-7 if n_arm else 1e-5, eps_rel=1e-7 if n_arm else 1e-5,        # looser tolerance for speed
-                   polish=bool(n_arm), max_iter=20000 if n_arm else 8000)        # more iter for hard cases
+        # 6. OSQP solve（耦合問題先用對偶作用集法，未得解才走 OSQP；底盤問題維持封存設定）
         import time
         t0 = time.perf_counter()
-        res = prob.solve()
+        res, qp_info = None, None
+        P_sp = sparse.csc_matrix(P_dense)
+        if n_arm:
+            gx, gy, qp_info = qp_dual_active(P_sp, q_vec, A_total, lb_total, ub_total)
+            if gx is not None:
+                res = SimpleNamespace(x=gx, y=gy, info=SimpleNamespace(status='solved'))
+        if res is None:
+            prob = osqp.OSQP()
+            # 耦合問題備援比照 W-GMPC：QP 容差須緊於殘差核對門檻 1e-6（eps 1e-5 實測手臂限制殘差 6.3e-6）
+            prob.setup(P=P_sp, q=q_vec, A=A_total, l=lb_total, u=ub_total,
+                       verbose=False,
+                       eps_abs=1e-7 if n_arm else 1e-5, eps_rel=1e-7 if n_arm else 1e-5,        # looser tolerance for speed
+                       polish=bool(n_arm), max_iter=20000 if n_arm else 8000)        # more iter for hard cases
+            res = prob.solve()
         solve_time = time.perf_counter() - t0
 
         status = res.info.status
@@ -1353,7 +1426,7 @@ class GMPC:
                 r_arm = arm_info['A'] @ ua
                 viol = float(max(np.max(arm_info['l'] - r_arm), np.max(r_arm - arm_info['u'])))
                 u_arm_seq = ua.reshape(N, ARM_N)
-                arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows))
+                arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info)
             else:
                 u_arm_seq = np.zeros((N, ARM_N))
                 arm_check = dict(max_violation=float('nan'), finite=False, rows=int(arm_rows), note='底盤煞停路徑：手臂命令歸零（未求得序列）')
