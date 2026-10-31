@@ -72,9 +72,11 @@ def main():
     ec = [float(v) for v in ex['c'].split(',')]
     de = np.hypot(x - ec[0], c['base_y'] - ec[1])
     in_z = de <= ex['r']
-    print(f"障礙：中心距最小 {dc.min():.4f} m @ {t[dc.argmin()]:.2f} s；對 r_eff（外接圓＋0.47）餘裕 {(dc.min() - ob['r_cbf'] - ob['margin']) * 1e3:.1f} mm；對 0.39 m 圓盤模型 {(dc.min() - ob['r_cbf'] - 0.39) * 1e3:.1f} mm")
+    print(f"障礙：中心距最小 {dc.min():.4f} m @ {t[dc.argmin()]:.2f} s；對 r_eff（外接圓＋0.47）餘裕 {(dc.min() - ob['r_cbf'] - ob['margin']) * 1e3:.1f} mm；對 0.39 m 圓盤模型 {(dc.min() - ob['r_cbf'] - 0.39) * 1e3:.1f} mm（外接圓口徑）；底盤中心到方塊面 {float(np.hypot(np.maximum(np.abs(x - ob['c'][0]) - ob['sz'][0] / 2, 0), np.maximum(np.abs(c['base_y'] - ob['c'][1]) - ob['sz'][1] / 2, 0)).min()):.4f} m（真值，僅評估）")
     print(f"出口區（由位姿重算）：進入 {'%.2f s' % t[np.argmax(in_z)] if in_z.any() else '未進入'}；末位置 ({x[-1]:.4f}, {c['base_y'][-1]:.4f})、距圓心 {de[-1]:.4f} m（半徑 {ex['r']}）；末速 {abs(vx_m[-5:]).max():.4f} m/s")
     print(f"非手指↔瓶線上核對：{rep.get('clear_bottle')}")
+    nc = rep.get('nav_chain') or {}
+    print(f"掃描鏈：掃描 {nc.get('n_scan')} 幀、動態點峰 {nc.get('n_dyn_max')}、靜態點峰 {nc.get('n_static_max')}；Shield {nc.get('shield')}；首末介入 {nc.get('shield_first')} {nc.get('shield_last')}")
     print(f"總時長 {t[-1]:.2f} s；底盤速度峰 {np.hypot(vx_m, np.gradient(c['base_y'], t)).max():.4f} m/s；任務完成 {rep['mission_done']}；CBF 反事實見 bottle_s1_cbf_replay.py")
     print(f"手指：指1 末 {c['finger1_q'][-1]:.5f}、指2 末 {c['finger2_q'][-1]:.5f} m；主從差峰 {np.abs(c['finger1_q'] - c['finger2_q']).max() * 1e3:.3f} mm；命令末 {c['finger_cmd'][-1]:.4f}")
     print('d̂', np.round(rep['d_hat'], 4).tolist(), '求解 ms', rep['solve_ms'], '求解失敗', rep['n_solve_fail'], '禁止脈衝', {k: v for k, v in rep['forbidden_pulses'].items() if v['peak'] > 0})

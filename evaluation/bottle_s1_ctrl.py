@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import sys
@@ -25,9 +26,10 @@ import bottle_s1_geom as G                                            # noqa: E4
 
 N, DT = B.N, B.DT
 CLEAR_REJECT = 0.005      # 非手指↔瓶拒絕線（m），事前指定，不因任務調整
-CLEAR_GUARD = 0.0005      # 觸發線＝拒絕線＋此值：預測停止點跨線前就停
+CLEAR_GUARD = 0.0         # 下一拍計畫已涵蓋晚一拍；保護帶不重複計算。拒絕線 CLEAR_REJECT 不變
 CLEAR_NEAR = 0.25         # TCP 離瓶超過此距離不核（省算）
 A_SLEW = 0.4              # 參考速度斜率（m/s²），工程設定
+SCAN_HZ, OBS_MAX_AGE = 10.0, 0.5   # 同 bottle_nav_chain
 N_STILL = 20              # 出口停住須連續低速的物理步數
 
 
@@ -51,7 +53,7 @@ class DetourPath:
 
 class S1Controller(B.S0bController):
     def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, x_start, x_win, path, exit_c, exit_r, obstacles_fn,
-                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, **kw):
+                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, **kw):
         x_stop = exit_c[0] if x_exit_stop is None else x_exit_stop
         super().__init__(K, ident, T_grasp, T_ready_rel, q_ready if q_tuck is None else q_tuck, table_top_z, bottle_radius, x_start, x_win, x_stop, v_c=v_c, obstacles_fn=obstacles_fn,
                          cbf_cfg=dict(B.CBF_MISSION, **kw.pop('cbf_extra', {})), **kw)
@@ -65,6 +67,7 @@ class S1Controller(B.S0bController):
         self.x_unfold = (self.x_blend - v_c * (self.t_unfold + float(t_settle))) if x_unfold is None else float(x_unfold)   # 展完靜止 t_settle 再朝瓶：d̂ 隨姿態變，停止點預測要用備妥姿態的靜態值；展臂在底盤座標，可在高速段進行
         self.blending, self.mission_done, self.t_exit_in = False, False, None
         self.n_still, self.T_b_now, self.d_static, self.d_p_prev = 0, None, None, None
+        self.chain, self.scan_fn, self.t_next_scan = chain, scan_fn, 0.0   # 有 chain 時：障礙只來自掃描鏈，底盤命令只經 Shield 寫出
         self.clear_min = dict(meas=float('inf'), pred=float('inf'), t_meas=None, t_pred=None, n=0)
 
     # ---- 參考
@@ -131,7 +134,11 @@ class S1Controller(B.S0bController):
         q_rest[:3] += np.array([c_ * dx[0] - s_ * dx[1], s_ * dx[0] + c_ * dx[1], dx[2]])
         d_s = np.asarray(self.obs.d if self.d_static is None else self.d_static, float)   # 穩態 q＝s＋d：用展臂前手臂靜止時的 d̂，運動中的 d̂ 在伺服變慢時被追蹤落後汙染（α×0.4 預測誤差 1.4 mm）
         q_rest[3:] = sp + d_s + u[3:] * np.abs(u[3:]) / (2.0 * C0.A_ARM)
-        return qp, q_rest
+        q_next = q_rest.copy()                             # 下一拍才停的停止點：照 MPC 計畫的下一筆命令走一拍再減速（含計畫中的減速，線性外推會把快到位時當成全速續衝）
+        if self.u_arm_plan is not None and len(self.u_arm_plan) > 1:
+            u1 = self.u_arm_plan[1]
+            q_next[3:] = sp + DT * u1 + d_s + u1 * np.abs(u1) / (2.0 * C0.A_ARM)
+        return qp, q_rest, q_next
 
     def _clear_check(self, T_tcp, q):
         """抓持前的非手指↔瓶線上拒絕：核實測、命令生效時刻與停止點構型，預測停止點跨線前停。抓持後瓶隨夾爪，不適用。"""
@@ -142,7 +149,7 @@ class S1Controller(B.S0bController):
         if np.linalg.norm(T_tcp[:3, 3] - c) > CLEAR_NEAR:
             return
         d_m = self._bottle_clear(q, T_b)
-        qp, q_rest = self._stop_rest(q)
+        qp, q_rest, q_next = self._stop_rest(q)
         d_p = min(self._bottle_clear(qp, T_b), self._bottle_clear(q_rest, T_b))
         cm = self.clear_min
         cm['n'] += 1
@@ -150,12 +157,13 @@ class S1Controller(B.S0bController):
             cm['meas'], cm['t_meas'] = d_m, self.t
         if d_p < cm['pred']:
             cm['pred'], cm['t_pred'] = d_p, self.t
-        d_next = d_p + min(d_p - (d_p if self.d_p_prev is None else self.d_p_prev), 0.0)   # 一拍線性前瞻：插入中預測點每週期掉約 1 mm，等跨線才停已來不及
-        self.d_p_prev = d_p
+        d_next = self._bottle_clear(q_next, T_b)
         if min(d_m, d_next) < CLEAR_REJECT + CLEAR_GUARD:
             self.judge._stop(self.t, 'clearance_bottle', meas=d_m, pred=d_p, pred_next=d_next)
 
     def _advance(self, T_tcp, close_done, q):
+        if self.chain is not None and self.chain.age(self.t) > OBS_MAX_AGE:
+            self.judge._stop(self.t, 'scan_stale', age=self.chain.age(self.t))   # 比 Shield 限速更保守：看不到環境就不繼續任務；Shield 仍在輸出端
         self._clear_check(T_tcp, q)
         if self.q_tuck is not None and self.t_u0 is None and q[0] >= self.x_unfold:
             self.t_u0 = self.t
@@ -173,8 +181,15 @@ class S1Controller(B.S0bController):
     def step(self, t, q, **kw):
         q_prev = getattr(self, 'q_prev2', None)            # 須在基底 step 更新前取，否則當步差分恆為 0
         self.T_b_now = kw.get('T_bottle')
-        out = super().step(t, q, **kw)
         q = np.asarray(q, float)
+        if self.chain is not None and t >= self.t_next_scan - 1e-9 and np.isfinite(q).all():
+            self.t_next_scan = t + 1.0 / SCAN_HZ
+            r_ = self.scan_fn(t, q)
+            if r_ is not None:                                 # None＝這幀掃描沒來（資料失效測試、感測中斷）
+                self.chain.on_scan(t, r_, q[:3])
+        out = super().step(t, q, **kw)
+        if self.chain is not None:
+            out['base_twist'] = self.chain.shield(t, out['base_twist'])   # 最終底盤命令：含停止路徑，無旁路
         if np.isfinite(q).all():
             in_zone = float(np.hypot(*(q[:2] - self.exit_c))) <= self.exit_r
             if in_zone and self.t_exit_in is None and self.st.phase == 'CARRY':
@@ -192,16 +207,19 @@ class S1Controller(B.S0bController):
         r = super().report()
         cm = self.clear_min
         r.update(clear_bottle=dict(reject_m=CLEAR_REJECT, guard_m=CLEAR_GUARD, meas_min=None if cm['n'] == 0 else cm['meas'], pred_min=None if cm['n'] == 0 else cm['pred'], t_meas=cm['t_meas'], t_pred=cm['t_pred'], n=cm['n']), n_compact=None if self.compact is None else len(self.compact))
+        if self.chain is not None:
+            r.update(nav_chain=self.chain.report())
         r.update(exit_reached=self.t_exit_in is not None, t_exit_in=self.t_exit_in, mission_done=self.mission_done, blending=self.blending,
-                 nav_source='truth_obstacle_to_cbf', shield=False, success_s0_judge=r['success'], success=bool(r['success'] and self.mission_done))
+                 nav_source='truth_obstacle_to_cbf' if self.chain is None else 'lidar_tracker_to_cbf', shield=self.chain is not None, success_s0_judge=r['success'], success=bool(r['success'] and self.mission_done))
         return r
 
 
 def save_compact(c, path):
     """存實跑 CBF 證據：實際命令、殘差、slack 與重解輸入；反事實重解由 bottle_s1_cbf_replay.py 在實跑後做。"""
     L = c.compact or []
+    obs = np.array([json.dumps(e.get('obs') or []) for e in L])
     keys_arr = ('t', 'phase', 'qp', 'sp', 'u_prev', 'X_ref', 'xi_ref', 'T_seq', 'rel', 'w_p', 'bias', 'u', 'cbf_active', 'min_h', 'eps0', 'resid_ns', 'resid_s')
-    np.savez_compressed(path, **{k: np.array([e[k] for e in L]) for k in keys_arr})
+    np.savez_compressed(path, obs_json=obs, **{k: np.array([e[k] for e in L]) for k in keys_arr})
 
 
 def exit_code(rep):

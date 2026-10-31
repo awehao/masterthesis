@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """瓶子 S1 候選：繞障 → 回到可操作區 → 移動抓取 → 持瓶進出口區（核心 gmpc_wb；開 Isaac 視窗）。規格：第七次進度報告素材/規格/瓶子S1_候選規格.md。
 控制邏輯全在 bottle_s1_ctrl.S1Controller（繼承 S0bController、S0aController、S0Judge，與 test_bottle_s1.py 負測同一份）；本檔只做 Isaac 轉接。
-場景同 S0b 加一個固定方塊障礙。**導航資料來源：障礙真值注入 CBF（外接圓＋靜態邊距 0.47），底盤位姿取真值；無 LiDAR、無地圖、無 Raw-scan Shield、無 ROS 命令鏈。** 不得稱完整感知導航整合。
+場景同 S0b 加一個固定方塊障礙。**導航資料來源：PhysX 射線掃描 → 既有 scan_obstacle_tracker → gmpc_wb；底盤命令一律經既有 scan_safety_shield 才寫入（bottle_nav_chain，原始節點程式、同程序同步）。** 地圖只有桌腳，方塊是未知物。障礙真值只留作評估，不進控制器。
+底盤位姿與瓶位姿仍取真值（無定位、無視覺）；無 ROS 命令鏈與 DDS 延遲；參數差異見 bottle_nav_chain。不得稱完整感知導航整合。
 參考路徑是工程給定的升餘弦繞行，不是規劃器輸出；命令延遲 8 物理步是注入設定；底盤速度為工程設定與啟發式調速。
 量測有缺一律給 None／NaN；必要接觸對全程有效，起跑前形狀／有限值核對失敗即拒跑；僅完整任務（抓持五項＋實際進入出口區＋底盤停下）回 0。不自動補跑。
     $ISAAC_PY evaluation/isaac_bottle_s1.py --asset src/my_omnibot_description/config/bottle_s0.yaml --out <dir>
@@ -59,6 +60,7 @@ sys.path.insert(0, os.path.join(WS, 'src', 'ammr_wholebody_mpc'))
 from isaac_common import bind_friction, bind_frictionless, collision_prims, import_urdf, physics_parts   # noqa: E402
 from finger_collision import apply_split                             # noqa: E402
 import bottle_branch as BB                                           # noqa: E402
+import bottle_nav_chain as NC                                        # noqa: E402
 import bottle_ref as BRF                                             # noqa: E402
 import bottle_s0_ctrl as C                                           # noqa: E402
 import bottle_s1_ctrl as C2                                          # noqa: E402
@@ -78,6 +80,24 @@ def quat_R(q):
     return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
                      [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
                      [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+
+
+def ray_range(query, origin, direction, max_range, excluded):
+    """同 ev9r9a：回傳 (距離, 命中路徑)，未命中為 inf。"""
+    best = [float('inf'), None]
+
+    def report(hit):
+        coll = str(getattr(hit, 'collision', '') or '')
+        body = str(getattr(hit, 'rigidBody', '') or '')
+        d = float(getattr(hit, 'distance', 0.0))
+        if any(coll == e or (body and e.startswith(body + '/')) for e in excluded):
+            return True
+        if 0.0 <= d < best[0]:
+            best[0], best[1] = d, (coll or body)
+        return True
+
+    query.raycast_all(origin, direction, max_range, report)
+    return best[0], best[1]
 
 
 def read_pairs(view, n_filters, dt):
@@ -250,10 +270,36 @@ def main():
         if M is None or M.shape != (ns, nf, 3) or not np.isfinite(M).all():
             print(f'[s1] 接觸視圖 {nm} 無效（形狀 {None if M is None else M.shape}，期望 {(ns, nf, 3)}）⇒ 拒跑', flush=True)
             return 68
-    obst = [dict(x=float(OB_C[0]), y=float(OB_C[1]), radius=0.2 * math.sqrt(2.0), margin=0.47, static=True)]
+    # 掃描鏈：障礙只從這裡進控制器；OB_C 真值只留作評估
+    lidar_prim = next((pr for pr in stage.Traverse() if str(pr.GetPath()).startswith(ROBOT) and pr.GetName() == 'lidar_link'), None)
+    if lidar_prim is None:
+        print('[s1] 找不到 lidar_link ⇒ 拒跑', flush=True)
+        return 18
+    excl = [str(pr.GetPath()) for pr in stage.Traverse() if str(pr.GetPath()).startswith(ROBOT) and pr.HasAPI(UsdPhysics.CollisionAPI)
+            and (str(pr.GetPath()).endswith('/base_link/cylinder') or '/lidar_link/' in str(pr.GetPath()))]
+    from omni.physx import get_physx_scene_query_interface
+    query = get_physx_scene_query_interface()
+    xfc = UsdGeom.XformCache()
+
+    def scan_fn(t_, q_):
+        xfc.Clear()
+        o5 = xfc.GetLocalToWorldTransform(lidar_prim).ExtractTranslation()
+        org = [float(o5[0]), float(o5[1]), float(o5[2])]
+        ang = NC.scan_angles() + float(q_[2])
+        return np.array([ray_range(query, org, [math.cos(v), math.sin(v), 0.0], NC.RANGE_MAX, excl)[0] for v in ang])
+
+    leg_boxes = [(b[1], b[2]) for b in G.table_boxes() if b[0] != 'table_top']
+    chain = NC.NavChain(map_boxes=leg_boxes)
+    q_chk, _ = q9()
+    r0 = scan_fn(0.0, q_chk)
+    hits = [ray_range(query, [float(q_chk[0]), float(q_chk[1]), 0.2652], [math.cos(v + float(q_chk[2])), math.sin(v + float(q_chk[2])), 0.0], 1.0, excl) for v in NC.scan_angles()[::30]]
+    print(f"[s1] 掃描核對：有效 {int(np.isfinite(r0).sum())}／{r0.size}、最近 {np.nanmin(np.where(np.isfinite(r0), r0, np.nan)) if np.isfinite(r0).any() else float('nan'):.3f} m；近距命中 {[h for h in hits if h[1]][:3]}；排除 {excl}", flush=True)
+    if np.isfinite(r0).any() and float(np.min(r0[np.isfinite(r0)])) < 0.32:
+        print('[s1] 掃描打到自身（<0.32 m）⇒ 拒跑', flush=True)
+        return 69
     p_ = [float(v) for v in a.path.split(',')]
     ctrl = C2.S1Controller(C.S0_K(), ident, T_g, T_ready_rel, q_ready, float(T['top_z']), float(B['radius']), a.x_start, (a.win_lo, a.win_hi), C2.DetourPath(*p_),
-                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, lambda t: obst, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, reg=None, required=required)
+                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, chain.obstacles, chain=chain, scan_fn=scan_fn, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, reg=None, required=required)
     ctrl.compact = []                                                         # CBF 證據；反事實重解在實跑後（bottle_s1_cbf_replay.py）
     ctrl.obs.d = np.clip(d0, -ctrl.obs.max, ctrl.obs.max)
     ctrl.cfg.arm_model.bias = ctrl.bias0 + np.asarray(ctrl.cfg.arm_model.alpha, float) * ctrl.obs.d
@@ -317,7 +363,7 @@ def main():
         if t_end_tail is not None and t >= t_end_tail:
             break
     rep = ctrl.report()
-    rep.update(readback=readback, asset=S, forb_keys=sorted(forb), d0=[float(v) for v in d0], n_steps=len(rows), obstacle=dict(c=OB_C.tolist(), sz=OB_S.tolist(), r_cbf=obst[0]['radius'], margin=obst[0]['margin']), exit=dict(c=a.exit_c, r=a.exit_r), path=p_, note='核心 gmpc_wb；障礙真值注入 CBF、底盤位姿真值；無 LiDAR、無地圖、無 Raw-scan Shield、無 ROS 命令鏈；參考路徑工程給定；命令延遲 8 物理步為注入設定；停止處置為腳本自有')
+    rep.update(readback=readback, asset=S, forb_keys=sorted(forb), d0=[float(v) for v in d0], n_steps=len(rows), obstacle=dict(c=OB_C.tolist(), sz=OB_S.tolist(), r_cbf=0.2 * math.sqrt(2.0), margin=0.47, truth_for_eval_only=True), exit=dict(c=a.exit_c, r=a.exit_r), path=p_, note='核心 gmpc_wb；PhysX 射線掃描＋既有追蹤器與 Shield（同程序）；底盤與瓶位姿真值；地圖只有桌腳；無 ROS 命令鏈；參考路徑工程給定；命令延遲 8 物理步為注入設定；停止處置為腳本自有')
     cols = ['t', 'base_x', 'base_y', 'base_yaw'] + [f'q{i}' for i in range(1, 7)] + [f's{i}' for i in range(1, 7)] + ['base_cmd_vx', 'base_cmd_vy', 'base_cmd_wz', 'v_b', 's_ref', 'finger1_q', 'finger2_q', 'finger_cmd', 'f_finger1_bottle', 'f_finger2_bottle',
             'f_bottle_table', 'bottle_base_x', 'bottle_base_y', 'bottle_base_z', 'bottle_qw', 'bottle_qx', 'bottle_qy', 'bottle_qz', 'phase_index', 'stopped'] + [f'forb_{kk}' for kk in sorted(forb)]
     np.savez_compressed(os.path.join(a.out, 's1_steps.npz'), rows=np.array(rows, float), cols=np.array(cols), phases=np.array(BR_PH))
@@ -328,7 +374,7 @@ def main():
         C2.save_compact(ctrl, os.path.join(a.out, 's1_cbf.npz'))
     except Exception as e:
         print(f'[s1] CBF 紀錄存檔失敗：{e!r}', flush=True)
-    print(f"[s1] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 出口 {rep['exit_reached']}@{rep['t_exit_in']} 任務 {rep['mission_done']} 瓶淨空 {rep['clear_bottle']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']} fallback {rep['n_fallback']} 求解器 {rep['qp_counts']} GI 未採用 {rep['gi_fail']} >50ms {rep['n_over_50ms']}", flush=True)
+    print(f"[s1] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 出口 {rep['exit_reached']}@{rep['t_exit_in']} 任務 {rep['mission_done']} 瓶淨空 {rep['clear_bottle']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']} fallback {rep['n_fallback']} 求解器 {rep['qp_counts']} GI 未採用 {rep['gi_fail']} >50ms {rep['n_over_50ms']} 掃描鏈 { {k: rep['nav_chain'][k] for k in ('n_scan', 'n_dyn_max', 'n_static_max', 'shield')} }", flush=True)
     print(f"[s1] 事件 {rep['events']}", flush=True)
     return C2.exit_code(rep)
 

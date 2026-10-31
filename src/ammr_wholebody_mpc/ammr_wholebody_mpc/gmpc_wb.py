@@ -144,10 +144,11 @@ def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800):
             else:
                 r, zd = np.zeros(0), Hn
             nz = float(n @ zd)
-            t2 = (b - float(n @ x)) / nz if nz > 1e-14 else float('inf')
+            t2 = (b - float(n @ x)) / nz if nz > 1e-12 * float(n @ Hn) else float('inf')   # 相對容差：P 對角到 1e8 時 n·P⁻¹n 本身就小，絕對容差會把合法步長判成 0
             t1, drop = float('inf'), None
+            r_tol = 1e-12 * max(float(np.abs(r).max()), 1e-300) if r.size else 0.0
             for j, rj in enumerate(r):
-                if rj > 1e-14 and mu[j] / rj < t1:
+                if rj > r_tol and mu[j] / rj < t1:
                     t1, drop = mu[j] / rj, j
             t = min(t1, t2)
             if not np.isfinite(t):
@@ -162,6 +163,16 @@ def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800):
             act.pop(drop); sgn.pop(drop); Nr.pop(drop); PiN.pop(drop); mu = np.delete(mu, drop)
     else:
         return None, None, dict(ok=False, why='steps', steps=max_steps, solver='gi')
+    if act:                                                             # 作用集固定做殘差精修：剛性座標（P 對角 1e8）上 x 差 1e-8 就是站立性殘差 1；不改作用集、不放寬驗收
+        N_ = np.array(Nr)
+        b_ = np.array([sg * (l[i] if sg > 0 else u[i]) for i, sg in zip(act, sgn)])
+        Pi = cho_solve(cf, N_.T)
+        S_ = N_ @ Pi
+        for _ in range(3):
+            rd, rp = Pd @ x + q - N_.T @ mu, N_ @ x - b_
+            dm = np.linalg.lstsq(S_, N_ @ cho_solve(cf, rd) - rp, rcond=None)[0]
+            x = x + cho_solve(cf, N_.T @ dm - rd)
+            mu = mu + dm
     y = np.zeros(A.shape[0])
     for i, sg, m in zip(act, sgn, mu):
         y[i] = -sg * m
@@ -1105,19 +1116,19 @@ class GMPC:
             import dataclasses as _dc
             r_hold = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm={'mode': 'hold'})
             N_ = self.cfg.N
-            def _fb(why, coupled_status=None):
+            def _fb(why, coupled_status=None, qp=None):
                 U_s, ck = arm_stop_sequence(arm, N_, self.cfg.dt)
                 # ck 只驗手臂限制；回傳底盤來自 hold 問題（可能已被煞停或後處理改過），與手臂減速序列不是同一問題的解 ⇒ seq_consistent 一律 False，兩者分列
                 return _dc.replace(r_hold, arm_mode='active', u_arm_seq=U_s,
                                    arm_check=dict(fallback=why, coupled_status=coupled_status, finite=True, seq_consistent=False, arm_decel_valid=bool(ck['verified']),
-                                                  base_as_is=bool(r_hold.accept_action == 'as_is'), failed=not ck['verified'],
+                                                  base_as_is=bool(r_hold.accept_action == 'as_is'), failed=not ck['verified'], qp=qp,
                                                   max_violation=max(ck['violations'].values()), fallback_check=ck,
                                                   note='退回 hold 底盤解；手臂有界減速序列（未驗證通過 ⇒ failed，呼叫端須終止）'))
             if r_hold.accept_action == 'brake':
                 return _fb('base_brake')
             r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=dict(arm, _inner=True))
             if r.status != 'solved':
-                return _fb('coupled_not_solved', r.status)
+                return _fb('coupled_not_solved', r.status, (r.arm_check or {}).get('qp'))
             ck = r.arm_check or {}
             # 實際回傳命令核對：有限值、手臂限制原單位違反、底盤後處理未改動；任一不過即退回，不只記錄
             if not (np.isfinite(np.asarray(r.u_opt, float)).all() and r.u_arm_seq is not None and np.isfinite(r.u_arm_seq).all() and ck.get('finite') is True):
@@ -1452,7 +1463,7 @@ class GMPC:
                 arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info)
             else:
                 u_arm_seq = np.zeros((N, ARM_N))
-                arm_check = dict(max_violation=float('nan'), finite=False, rows=int(arm_rows), note='底盤煞停路徑：手臂命令歸零（未求得序列）')
+                arm_check = dict(max_violation=float('nan'), finite=False, rows=int(arm_rows), qp=qp_info, note='底盤煞停路徑：手臂命令歸零（未求得序列）')
         u_opt = xi_ref_win[0] + delta[0]
         u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
         accept_action, accept_scale = ('as_is' if usable else 'brake'), 1.0

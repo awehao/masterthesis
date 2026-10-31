@@ -13,6 +13,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import bottle_nav_chain as NC                           # noqa: E402
 import bottle_s0b_ctrl as B                             # noqa: E402
 import bottle_s0b_path_check as PC                      # noqa: E402
 import bottle_s1_ctrl as S1                             # noqa: E402
@@ -37,6 +38,22 @@ def obstacles(t):
 def make(**kw):
     p = S1.DetourPath(*kw.pop('path', PATH))
     return S1.S1Controller(T.K, T.ID, T.T_G, T.T_READY, T.Q_READY, T.TOP, T.R_B, X0, T.WIN, p, EXIT_C, EXIT_R, kw.pop('obs', obstacles), x_exit_stop=X_END, required=T.REQ, **kw)
+
+
+def scene_boxes():
+    return [(OBST['c'], OBST['sz'])] + [(b[1], b[2]) for b in G.table_boxes()]
+
+
+def make_lidar(boxes=None, **kw):
+    """掃描鏈版本：障礙只來自離線射線 → 追蹤器；底盤命令經 Shield。"""
+    ch = NC.NavChain(map_boxes=[(b[1], b[2]) for b in G.table_boxes() if b[0] != 'table_top'])
+    bx = scene_boxes() if boxes is None else boxes
+    fn = kw.pop('scan_fn', lambda t, q: NC.ray_boxes(q[:2], float(q[2]), bx, G.LIDAR_Z))
+    return make(path=kw.pop('path', PATH_P2), obs=kw.pop('obs', ch.obstacles), chain=ch, scan_fn=fn, **SC_FAST(kw))
+
+
+def SC_FAST(kw):
+    return dict(FAST, **kw)
 
 
 def path_clearance(path=PATH):

@@ -38,7 +38,8 @@ def replay(path, n_stride=1, obst=None, ident=None):
         arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=Z['qp'][i][3:], s_arm=Z['sp'][i], u_arm_prev=Z['u_prev'][i][3:], model=cfg.arm_model, T_seq=Z['T_seq'][i], w_p=float(Z['w_p'][i]),
                    lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=bool(Z['rel'][i]), qp_solver='gi', **B.W_ARM)
         kw = dict(X_now=from_xytheta(*Z['qp'][i][:3]), X_ref_win=Z['X_ref'][i], xi_ref_win=Z['xi_ref'][i], xi_prev=Z['u_prev'][i][:3], arm=arm)
-        r_o, r_n = m_o.solve(obstacles=obs, **kw), m_n.solve(obstacles=None, **kw)
+        ob_i = json.loads(str(Z['obs_json'][i])) if 'obs_json' in Z.files and obst is None else obs
+        r_o, r_n = m_o.solve(obstacles=ob_i, **kw), m_n.solve(obstacles=None, **kw)
         rep.append(float(np.abs(np.asarray(r_o.u_opt, float) - Z['u'][i][:3]).max()))
         d = float(np.linalg.norm(np.asarray(r_o.u_opt, float) - np.asarray(r_n.u_opt, float)))
         du.append(d)
