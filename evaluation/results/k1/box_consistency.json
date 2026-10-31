@@ -1,0 +1,396 @@
+{
+ "values": {
+  "solver_lin": 0.035255,
+  "solver_ang": 0.1999,
+  "solver_arm": 0.9999,
+  "wheel_r": 0.05,
+  "wheel_L": 0.245,
+  "wheel_w_max": 5.55,
+  "exec_lin_max": 0.05,
+  "exec_ang_max": 0.2,
+  "exec_arm_max": 1.0,
+  "exec_switch_lin": 0.035255,
+  "exec_switch_ang": 0.1999,
+  "intake_lin": 0.035255,
+  "intake_ang": 0.1999,
+  "pause_lin": 0.035255,
+  "pause_ang": 0.1999,
+  "handover_lin": 0.035255,
+  "handover_ang": 0.1999,
+  "rg1_lin": 0.035255,
+  "rg1_ang": 0.1999,
+  "rg1_world": 0.05,
+  "rg3_lin": 0.035255,
+  "rg3_ang": 0.1999,
+  "rg3_world": 0.05,
+  "drawer_rate": 0.035255,
+  "guide_v_cap": 0.035,
+  "guide_w_cap": 0.1,
+  "r1_w_cap": 0.19,
+  "r3_w_cap": 0.19,
+  "r3_ref_v": 0.03,
+  "nav1_glide_v": 0.03,
+  "nav1_ready_v": 0.03,
+  "nav1_ready_w": 0.05,
+  "nav1_motm_v": 0.03,
+  "wb_motm_v": 0.03,
+  "wb_motm_w": 0.1,
+  "task_motm_v": 0.03,
+  "ret_bridge_v": 0.03,
+  "ret_bridge_w": 0.1,
+  "glide_v_roll": 0.03,
+  "dm_slow_v": 0.03,
+  "drawer_motm_v": 0.03
+ },
+ "source": {
+  "solver_lin": "wgmpc_core.WGMPCConfig.v_base_lin（求解節點未覆寫）",
+  "solver_ang": "wgmpc_core.WGMPCConfig.v_base_ang",
+  "solver_arm": "wgmpc_core.WGMPCConfig.v_arm",
+  "wheel_r": "wgmpc_core.wheel_radius",
+  "wheel_L": "wgmpc_core.wheel_base_L",
+  "wheel_w_max": "wgmpc_core.wheel_w_max",
+  "exec_lin_max": "ev9r8z --base-lin-max（default）",
+  "exec_ang_max": "ev9r8z --base-ang-max（default）",
+  "exec_arm_max": "ev9r8z --arm-rate-max（default）",
+  "exec_switch_lin": "ev9r8z --v-box-lin（default）",
+  "exec_switch_ang": "ev9r8z --v-box-ang（default）",
+  "intake_lin": "door_k3m_applied_src_tb.V_LIN（模組常數）",
+  "intake_ang": "door_k3m_applied_src_tb.V_ANG",
+  "pause_lin": "door_k3m_pause.BaseLimits.v_lin",
+  "pause_ang": "door_k3m_pause.BaseLimits.v_ang",
+  "handover_lin": "wgmpc_handover.NavHandoverConfig（drawer_mission_node 用預設）",
+  "handover_ang": "wgmpc_handover.NavHandoverConfig",
+  "rg1_lin": "door_regrasp_mode1.RegraspAuthority v_lin（建構未覆寫）",
+  "rg1_ang": "door_regrasp_mode1.RegraspAuthority v_ang",
+  "rg1_world": "door_regrasp_mode1.RegraspAuthority v_world",
+  "rg3_lin": "door_regrasp_mode3.RegraspAuthority v_lin（建構未覆寫）",
+  "rg3_ang": "door_regrasp_mode3.RegraspAuthority v_ang",
+  "rg3_world": "door_regrasp_mode3.RegraspAuthority v_world",
+  "drawer_rate": "drawer_target.DrawerTargetConfig.rate_max_mps",
+  "guide_v_cap": "door_regrasp_policy1.REG v_cap（世界每軸截斷）",
+  "guide_w_cap": "door_regrasp_policy1.REG w_cap",
+  "r1_w_cap": "pb60o m4r.r1_w_cap",
+  "r3_w_cap": "pb60o m4r.r3_w_cap",
+  "r3_ref_v": "pb60o r3_retime2.v_max（重時間化參考）",
+  "nav1_glide_v": "door_nav1_mission_node_r11.py --v-max（default）",
+  "nav1_ready_v": "door_nav1_mission_node_r11.py --ready-v-max（default）",
+  "nav1_ready_w": "door_nav1_mission_node_r11.py --ready-w（default）",
+  "nav1_motm_v": "door_nav1_mission_node_r11.py --motm-v-cap（default）",
+  "wb_motm_v": "door_k2_wholebody_node.py --motm-v-cap（runner）",
+  "wb_motm_w": "door_k2_wholebody_node.py --motm-w-cap（runner）",
+  "task_motm_v": "door_coopen_core_task_node10p.py --motm-v-cap（default）",
+  "ret_bridge_v": "door_return_task_node.py --bridge-v-max（default）",
+  "ret_bridge_w": "door_return_task_node.py --bridge-w-max（default）",
+  "glide_v_roll": "drawer_glide_node.py --v-roll（default）",
+  "dm_slow_v": "drawer_mission_node.py --slow-v（default）",
+  "drawer_motm_v": "drawer_task_node4.py --motm-v-cap（default）"
+ },
+ "cases": {
+  "current": [
+   [
+    "exec_switch_lin＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "exec_switch_ang＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "intake_lin＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "intake_ang＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "pause_lin＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "pause_ang＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "handover_lin＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "handover_ang＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "rg1_lin＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "rg1_ang＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "rg3_lin＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "rg3_ang＝求解框",
+    "same_box",
+    true
+   ],
+   [
+    "執行端合速度界 ≥ √2·框（框角落不閂鎖）",
+    "latch",
+    true
+   ],
+   [
+    "執行端角速度界 ≥ 框",
+    "latch",
+    true
+   ],
+   [
+    "執行端手臂界 ≥ 框",
+    "latch",
+    true
+   ],
+   [
+    "換抓權威 v_world ≥ √2·框（mode1）",
+    "latch",
+    true
+   ],
+   [
+    "換抓權威 v_world ≥ √2·框（mode3）",
+    "latch",
+    true
+   ],
+   [
+    "輪速：框單軸＋L·框角 ≤ r·ω_max",
+    "wheel",
+    true
+   ],
+   [
+    "nav1 READY 線速上界 ≤ 框（合速度≤逐軸框）",
+    "handover",
+    true
+   ],
+   [
+    "nav1 READY 角速上界 ≤ 框",
+    "handover",
+    true
+   ],
+   [
+    "nav1 GLIDE v_max ≤ READY 上界（進得了窗）",
+    "handover",
+    true
+   ],
+   [
+    "返程 GLIDE v_roll ≤ 框",
+    "handover",
+    true
+   ],
+   [
+    "抽屜交棒 slow_v ≤ 框",
+    "handover",
+    true
+   ],
+   [
+    "全身端進場 v_cap ≤ 框",
+    "guide",
+    true
+   ],
+   [
+    "全身端進場 w_cap ≤ 框",
+    "guide",
+    true
+   ],
+   [
+    "換抓引導 v_cap（世界逐軸）≤ 框",
+    "guide",
+    true
+   ],
+   [
+    "換抓引導 v_cap 轉車體最壞 √2·v_cap ≤ 框",
+    "guide_body",
+    false
+   ],
+   [
+    "R1／R3 局部 w_cap ≤ 框",
+    "guide",
+    true
+   ],
+   [
+    "返程橋接 v／w ≤ 框",
+    "guide",
+    true
+   ],
+   [
+    "R3 重時間化參考 v_max ≤ 框",
+    "ref",
+    true
+   ],
+   [
+    "抽屜目標移動率 ≤ 框",
+    "ref",
+    true
+   ]
+  ],
+  "x1.5": {
+   "solver_only_broken": [
+    [
+     "exec_switch_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "exec_switch_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "intake_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "intake_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "pause_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "pause_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "handover_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "handover_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "rg1_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "rg1_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "rg3_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "rg3_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "執行端合速度界 ≥ √2·框（框角落不閂鎖）",
+     "latch"
+    ],
+    [
+     "執行端角速度界 ≥ 框",
+     "latch"
+    ],
+    [
+     "換抓權威 v_world ≥ √2·框（mode1）",
+     "latch"
+    ],
+    [
+     "換抓權威 v_world ≥ √2·框（mode3）",
+     "latch"
+    ]
+   ],
+   "box_and_bounds_broken": [],
+   "all_scaled_broken": []
+  },
+  "x2.0": {
+   "solver_only_broken": [
+    [
+     "exec_switch_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "exec_switch_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "intake_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "intake_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "pause_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "pause_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "handover_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "handover_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "rg1_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "rg1_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "rg3_lin＝求解框",
+     "same_box"
+    ],
+    [
+     "rg3_ang＝求解框",
+     "same_box"
+    ],
+    [
+     "執行端合速度界 ≥ √2·框（框角落不閂鎖）",
+     "latch"
+    ],
+    [
+     "執行端角速度界 ≥ 框",
+     "latch"
+    ],
+    [
+     "換抓權威 v_world ≥ √2·框（mode1）",
+     "latch"
+    ],
+    [
+     "換抓權威 v_world ≥ √2·框（mode3）",
+     "latch"
+    ]
+   ],
+   "box_and_bounds_broken": [],
+   "all_scaled_broken": []
+  }
+ },
+ "wheel": {
+  "r_w_max": 0.2775,
+  "corner_now": 0.0842305,
+  "k_max_uniform": 3.29453107840984
+ },
+ "n_places": {
+  "box_and_bounds": 18,
+  "speed_knobs": 12
+ }
+}
