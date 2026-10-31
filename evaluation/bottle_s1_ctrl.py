@@ -264,7 +264,7 @@ class S1Controller(B.S0bController):
         r.update(clear_bottle=dict(reject_m=CLEAR_REJECT, guard_m=CLEAR_GUARD, meas_min=None if cm['n'] == 0 else cm['meas'], pred_min=None if cm['n'] == 0 else cm['pred'], next_min=cm.get('next'), t_meas=cm['t_meas'], t_pred=cm['t_pred'], n=cm['n']), n_compact=None if self.compact is None else len(self.compact))
         if self.chain is not None:
             r.update(nav_chain=self.chain.report())
-        r.update(body_rows_max=getattr(self, 'ob_rows', 0), no_inflight=self.no_inflight, no_tcp_preview=self.no_tcp_preview, preview_range_mm={k: round(v * 1e3, 2) for k, v in self.preview.items()})
+        r.update(body_rows_max=getattr(self, 'ob_rows', 0), body_planes=getattr(self, 'ob_plane_count', {}), body_cfg=None if not self.body_boxes else dict(d_body=self.d_body, slope=0.5, d_act=0.60, stride=2, grip_corners=[list(map(float, c_)) for c_ in self._obb_tcp()], boxes=[[np.asarray(c_).tolist(), np.asarray(z_).tolist()] for c_, z_ in self.body_boxes]), no_inflight=self.no_inflight, no_tcp_preview=self.no_tcp_preview, preview_range_mm={k: round(v * 1e3, 2) for k, v in self.preview.items()})
         r.update(exit_reached=self.t_exit_in is not None, t_exit_in=self.t_exit_in, mission_done=self.mission_done, blending=self.blending,
                  nav_source='truth_obstacle_to_cbf' if self.chain is None else 'lidar_tracker_to_cbf', shield=self.chain is not None, success_s0_judge=r['success'], success=bool(r['success'] and self.mission_done))
         return r

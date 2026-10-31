@@ -167,6 +167,10 @@ class S0bController(C.S0aController):
         self.base_plan = xi_ref[:N] + np.asarray(r.delta_xi_all, float)
         self.qp_log.append(dict(ck.get('qp') or dict(solver='fallback' if ck.get('fallback') else 'hold')))
         self.ob_rows = max(getattr(self, 'ob_rows', 0), int(ck.get('ob_rows') or 0))
+        if ck.get('ob_planes'):
+            pl = self.__dict__.setdefault('ob_plane_count', {})
+            for k_ in ck['ob_planes']:
+                pl[k_] = pl.get(k_, 0) + 1
         if self.compact is not None and self.arm_mode == 'active' and r.u_arm_seq is not None:
             self.compact.append(dict(obs=obs, t=self.t, phase=BR.PHASES.index(st.phase), qp=qp.copy(), sp=sp.copy(), u_prev=self.u_prev.copy(), X_ref=X_ref.copy(), xi_ref=xi_ref.copy(), T_seq=np.array(T_seq), rel=bool(arm['tcp_rel_base']), w_p=float(w_p),
                                      bias=np.array(cfg.arm_model.bias, float), u=np.r_[np.asarray(r.u_opt, float), r.u_arm_seq[0]], cbf_active=int(r.cbf_active), min_h=float(r.min_h), eps0=float(r.eps0), resid_ns=float(r.cbf_resid_post_noslack), resid_s=float(r.cbf_resid_post_slack)))
