@@ -31,7 +31,7 @@ trap cleanup EXIT
 trap 'say "收到 TERM"; exit 143' TERM
 trap 'say "收到 INT"; exit 130' INT
 say "=== 瓶子 N1 真話題鏈路 模式 $SIM_MODE 參數［${S1_ARGS:-無}］ RUN_ID=$RUN_ID 網域 $ROS_DOMAIN_ID；git $(git rev-parse --short HEAD)"
-sha256sum evaluation/isaac_bottle_ros.py evaluation/bottle_ros_chain.py evaluation/bottle_tracker_stamped.py evaluation/bottle_map_write.py evaluation/bottle_s1_ctrl.py evaluation/bottle_s1_groups.py evaluation/motm_b1_port.py evaluation/wg4b_b1_core.py evaluation/bottle_s0b_ctrl.py evaluation/bottle_branch.py evaluation/bottle_s0_ctrl.py evaluation/bottle_s0_logic.py evaluation/bottle_ref.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py evaluation/run_bottle_ros.sh evaluation/bottle_n2_path.py evaluation/bottle_n2_ctrl.py evaluation/bottle_n2_ros.py evaluation/bottle_n2_planner.yaml evaluation/bottle_ros_fake.py evaluation/isaac_bottle_n2.py evaluation/bottle_place_ctrl.py evaluation/bottle_place_ros.py evaluation/bottle_place_fake.py evaluation/isaac_bottle_place.py evaluation/isaac_bottle_v1.py evaluation/isaac_bottle_v1c.py evaluation/bottle_v2_ctrl.py evaluation/bottle_v1_cam.py evaluation/bottle_v1_est.py evaluation/bottle_v1_est_node.py evaluation/isaac_bottle_v2.py evaluation/bottle_v2_link.py "$ASSET" > "$DIR/versions.sha256"
+sha256sum evaluation/isaac_bottle_ros.py evaluation/bottle_ros_chain.py evaluation/bottle_tracker_stamped.py evaluation/bottle_map_write.py evaluation/bottle_s1_ctrl.py evaluation/bottle_s1_groups.py evaluation/motm_b1_port.py evaluation/wg4b_b1_core.py evaluation/bottle_s0b_ctrl.py evaluation/bottle_branch.py evaluation/bottle_s0_ctrl.py evaluation/bottle_s0_logic.py evaluation/bottle_ref.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py evaluation/run_bottle_ros.sh evaluation/bottle_n2_path.py evaluation/bottle_n2_ctrl.py evaluation/bottle_n2_ros.py evaluation/bottle_n2_planner.yaml evaluation/bottle_ros_fake.py evaluation/isaac_bottle_n2.py evaluation/bottle_place_ctrl.py evaluation/bottle_place_ros.py evaluation/bottle_place_fake.py evaluation/isaac_bottle_place.py evaluation/isaac_bottle_v1.py evaluation/isaac_bottle_v1c.py evaluation/bottle_v2_ctrl.py evaluation/bottle_v1_cam.py evaluation/bottle_v1_est.py evaluation/bottle_v1_est_node.py evaluation/isaac_bottle_v2.py evaluation/bottle_v2_link.py evaluation/isaac_bottle_w1c.py evaluation/bottle_w1_cam.py "$ASSET" > "$DIR/versions.sha256"
 python3 evaluation/bottle_map_write.py "$DIR/map" ${S1_ARGS:-} ${MAP_ARGS:-} | tee -a "$DIR/run.log"
 PRM=$(python3 - <<'PY'
 import sys; sys.path.insert(0,'evaluation')
@@ -54,6 +54,9 @@ if [ "${V1:-0}" = 1 ]; then                                    # V1 視覺旁路
   V1_TABLE=$(python3 -c "import sys;sys.path.insert(0,'evaluation');import bottle_s1_geom as G;n,c,s=[b for b in G.table_boxes() if b[0]=='table_top'][0];print(f'{c[2]+s[2]/2},{c[0]-s[0]/2},{c[1]-s[1]/2},{c[0]+s[0]/2},{c[1]+s[1]/2}')")
   say "V1 桌子先驗 $V1_TABLE"
   spawn v1est python3 -u evaluation/bottle_v1_est_node.py --table "$V1_TABLE" --ros-args -p use_sim_time:=true
+  if [ "${W1:-0}" = 1 ]; then                                  # W1 手腕相機估計節點：同估計器、/w1/* 話題，與底盤分開
+    spawn w1est python3 -u evaluation/bottle_v1_est_node.py --table "$V1_TABLE" --ns w1 --ros-args -p use_sim_time:=true
+  fi
 fi
 if [ "${PLAN:-0}" = 1 ]; then                                  # N2：planner_server 只供路徑（SmacPlanner2D），不起控制器
   spawn planner ros2 run nav2_planner planner_server --ros-args --params-file evaluation/bottle_n2_planner.yaml -p use_sim_time:=true
@@ -82,7 +85,7 @@ else
 fi
 wait "${PIDS[-1]}"; RC=$?
 RC2=$(cat "$DIR/exit_rc.txt" 2>/dev/null || echo 99)
-say "程序離開碼 $RC；腳本結果碼 $RC2（0＝完整成功、3＝已停止且有效、4＝停止未驗／無效、70＝握手未過、72＝無有效路徑未起跑、73＝V1 第一張影格未過、74＝V1 採集不成立、71＝報告序列化失敗（另存 _diag）、99＝無結果檔）"
+say "程序離開碼 $RC；腳本結果碼 $RC2（0＝完整成功、3＝已停止且有效、4＝停止未驗／無效、70＝握手未過、72＝無有效路徑未起跑、73＝V1／W1 第一張影格未過、74＝V1／W1 採集不成立、71＝報告序列化失敗（另存 _diag）、99＝無結果檔）"
 grep -aE "\[s1\]|\[fake\]" "$DIR/sim.log" | tee -a "$DIR/run.log"
 [ "$RC2" = 99 ] && [ "$RC" -ne 0 ] && exit "$RC"
 exit "$RC2"

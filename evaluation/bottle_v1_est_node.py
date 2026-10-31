@@ -3,7 +3,8 @@
 四者以同一個來源時間戳配對（佇列有界：只保留最近 MAX_PENDING 個戳，舊的丟棄並計數）。估計用 bottle_v1_est.estimate：不用瓶位姿真值或真值遮罩；相機位姿來自真值定位，桌子是地圖先驗（--table）。
 發 /v1/bottle_estimate（Float64MultiArray）：[擷取戳, valid, cx, cy, z_support, z_top, ax, ay, az, n_pts, circle_rms, proc_ms, why_code, n_dropped, z_top_valid, dist_est]，無效欄 NaN。
 dist_est＝估計瓶中心（z 取桌面＋0.1 m）到該影格相機位置的距離：只用估計值與相機位姿，不用真值。
-    python3 evaluation/bottle_v1_est_node.py --table top_z,xlo,ylo,xhi,yhi --ros-args -p use_sim_time:=true
+--ns（預設 v1）：話題前綴與節點名；手腕相機用 --ns w1（/w1/*、節點 bottle_w1_est），兩台相機的影像與估計分開、不互串。
+    python3 evaluation/bottle_v1_est_node.py --table top_z,xlo,ylo,xhi,yhi [--ns w1] --ros-args -p use_sim_time:=true
 """
 import argparse
 import os
@@ -36,12 +37,12 @@ def quat_R(w, x, y, z):
 
 
 class V1Est(Node):
-    def __init__(self, table):
-        super().__init__('bottle_v1_est')
+    def __init__(self, table, ns='v1'):
+        super().__init__(f'bottle_{ns}_est')
         self.table, self.pend, self.n_drop, self.n_done = table, {}, 0, 0
-        for topic, typ, key in (('/v1/color', Image, 'rgb'), ('/v1/depth', Image, 'depth'), ('/v1/camera_info', CameraInfo, 'info'), ('/v1/cam_pose', PoseStamped, 'pose')):
+        for topic, typ, key in ((f'/{ns}/color', Image, 'rgb'), (f'/{ns}/depth', Image, 'depth'), (f'/{ns}/camera_info', CameraInfo, 'info'), (f'/{ns}/cam_pose', PoseStamped, 'pose')):
             self.create_subscription(typ, topic, lambda m, k=key: self._in(k, m), 5)
-        self.pub = self.create_publisher(Float64MultiArray, '/v1/bottle_estimate', 10)
+        self.pub = self.create_publisher(Float64MultiArray, f'/{ns}/bottle_estimate', 10)
 
     def _in(self, key, m):
         st = stamp_of(m.header)
@@ -88,10 +89,11 @@ class V1Est(Node):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--table', required=True)
+    ap.add_argument('--ns', default='v1', choices=['v1', 'w1'])
     a, ros_args = ap.parse_known_args()
     v = [float(x) for x in a.table.split(',')]
     rclpy.init(args=ros_args)
-    node = V1Est(dict(top_z=v[0], lo=(v[1], v[2]), hi=(v[3], v[4])))
+    node = V1Est(dict(top_z=v[0], lo=(v[1], v[2]), hi=(v[3], v[4])), ns=a.ns)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
