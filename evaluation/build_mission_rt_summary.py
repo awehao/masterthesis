@@ -177,6 +177,8 @@ def run_summary(R):
         loc['RG7_s'] = door['RG8'] - door['RG7']
     if evA and 'MOVING' in evA and 'OPENING' in evA:
         loc['A_S4_s'] = evA['OPENING'] - evA['MOVING']
+    if evA and 'RETREAT' in evA and 'PRE_NAV' in evA:                     # 10/31：A 放手退離＋S8 前綴（RETREAT→PRE_NAV）
+        loc['A_S8_s'] = evA['PRE_NAV'] - evA['RETREAT']
     if al.get('t0') is not None and al.get('t1') is not None:
         loc['nav_align_s'] = al['t1'] - al['t0']
     loc['start_s'] = t0
@@ -228,7 +230,9 @@ ITEMS = [('R1R2_back_s', 'R1→R2 移動方向與車頭夾角 >90° 時間', 'mi
          ('obs_to_mode2_s', 'PAUSE：OBS_PASSED→mode 2 提交', 'mission_rt_39', 'mission_rt_40'),
          ('A_S4_s', '返程 A 推開（MOVING→OPENING）', 'mission_rt_40', 'mission_rt_41'),
          ('RG7_s', '去程穿門拉關（RG7→RG8）', 'mission_rt_41', 'mission_rt_42'),
-         ('nav_align_s', '回家末端對位（非 GMPC）', 'mission_rt_42', 'mission_rt_43')]
+         ('nav_align_s', '回家末端對位（非 GMPC）', 'mission_rt_42', 'mission_rt_43'),
+         ('R3_s', 'R3（框容量 ×2＋段 41 ×1.5）', 'mission_rt_43', 'mission_rt_44'),
+         ('A_S8_s', '返程 A 放手退離→PRE_NAV（框 ×2＋S8 ×1.5）', 'mission_rt_43', 'mission_rt_44')]
 
 
 def fig35(S):
