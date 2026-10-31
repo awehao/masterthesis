@@ -72,7 +72,7 @@ class S0bController(C.S0aController):
         self.obstacles_fn, self.arm_mode, self.v_replay, self.log_cbf = obstacles_fn, arm_mode, v_replay, log_cbf
         self.y_ref, self.th_ref, self.cbf_log = 0.0, 0.0, []
         self.done_anchored, self.n_gate, self.qp_solver, self.qp_log = False, 0, qp_solver, []
-        self.u_arm_plan, self.base_plan = None, None
+        self.u_arm_plan, self.base_plan, self.no_inflight = None, None, False
         self.compact = None                                # list 時逐週期存實際命令、CBF 殘差、slack 與重解輸入（反事實重解在實跑後做）
         self.x_ws, self.x_we, self.x_end, self.v_c = float(x_win[0]), float(x_win[1]), float(x_end), float(v_c)
         self.s_ref, self.v_b, self.n_tick = float(x_start), float(v_c), 0
@@ -140,6 +140,8 @@ class S0bController(C.S0aController):
         qp, sp = q.copy(), self.s.copy()
         for u_in in self.pipe:
             qp, sp = S.plant_phys_step(qp, sp, u_in, cfg, 1)
+        if self.no_inflight:                               # 消融：求解初態用當下量測，不沿佇列前推；實際延遲、佇列、參考時標與安全核對都不變
+            qp, sp = q.copy(), self.s.copy()
         if self.done and self.v_b == 0.0 and not self.done_anchored:      # 降速完成：參考落回命令生效時刻的預測位置，否則領先的參考位姿落在 keep-out 內，CBF 列把底盤往回推
             self.s_ref, self.done_anchored = float(qp[0]), True
         t_eff = self.t + C.D_STEPS * C.PHYS

@@ -55,7 +55,7 @@ class DetourPath:
 
 class S1Controller(B.S0bController):
     def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, x_start, x_win, path, exit_c, exit_r, obstacles_fn,
-                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, t_insert=None, no_tcp_preview=False, **kw):
+                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, t_insert=None, no_tcp_preview=False, no_inflight=False, **kw):
         x_stop = exit_c[0] if x_exit_stop is None else x_exit_stop
         super().__init__(K, ident, T_grasp, T_ready_rel, q_ready if q_tuck is None else q_tuck, table_top_z, bottle_radius, x_start, x_win, x_stop, v_c=v_c, obstacles_fn=obstacles_fn,
                          cbf_cfg=dict(B.CBF_MISSION, **kw.pop('cbf_extra', {})), **kw)
@@ -71,7 +71,7 @@ class S1Controller(B.S0bController):
         self.x_unfold = (self.x_blend - v_c * (self.t_unfold + float(t_settle))) if x_unfold is None else float(x_unfold)   # 展完靜止 t_settle 再朝瓶：d̂ 隨姿態變，停止點預測要用備妥姿態的靜態值；展臂在底盤座標，可在高速段進行
         self.blending, self.mission_done, self.t_exit_in = False, False, None
         self.n_still, self.T_b_now, self.d_static, self.d_p_prev = 0, None, None, None
-        self.no_tcp_preview, self.preview = bool(no_tcp_preview), {}
+        self.no_tcp_preview, self.preview, self.no_inflight = bool(no_tcp_preview), {}, bool(no_inflight)
         self.t_ms = dict(scan=[], shield=[], advance=[])     # 分項耗時：solve_ms 不含這些，也不含物理與渲染
         self.chain, self.scan_fn, self.t_next_scan = chain, scan_fn, 0.0   # 有 chain 時：障礙只來自掃描鏈，底盤命令只經 Shield 寫出
         self.clear_min = dict(meas=float('inf'), pred=float('inf'), t_meas=None, t_pred=None, n=0)
@@ -241,7 +241,7 @@ class S1Controller(B.S0bController):
         r.update(clear_bottle=dict(reject_m=CLEAR_REJECT, guard_m=CLEAR_GUARD, meas_min=None if cm['n'] == 0 else cm['meas'], pred_min=None if cm['n'] == 0 else cm['pred'], next_min=cm.get('next'), t_meas=cm['t_meas'], t_pred=cm['t_pred'], n=cm['n']), n_compact=None if self.compact is None else len(self.compact))
         if self.chain is not None:
             r.update(nav_chain=self.chain.report())
-        r.update(no_tcp_preview=self.no_tcp_preview, preview_range_mm={k: round(v * 1e3, 2) for k, v in self.preview.items()})
+        r.update(no_inflight=self.no_inflight, no_tcp_preview=self.no_tcp_preview, preview_range_mm={k: round(v * 1e3, 2) for k, v in self.preview.items()})
         r.update(exit_reached=self.t_exit_in is not None, t_exit_in=self.t_exit_in, mission_done=self.mission_done, blending=self.blending,
                  nav_source='truth_obstacle_to_cbf' if self.chain is None else 'lidar_tracker_to_cbf', shield=self.chain is not None, success_s0_judge=r['success'], success=bool(r['success'] and self.mission_done))
         return r
