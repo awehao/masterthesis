@@ -10,9 +10,9 @@ DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
 ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 ASSET=src/my_omnibot_description/config/bottle_s0.yaml
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$DIR/run.log"; }
-say "=== 瓶子 S1 候選完整任務（gmpc_wb，掃描鏈＋Shield） RUN_ID=$RUN_ID 資產 $ASSET sha256 $(sha256sum $ASSET | cut -c1-16)；git $(git rev-parse --short HEAD) ==="
+say "=== 瓶子 S1 候選完整任務（gmpc_wb，掃描鏈＋Shield） 擾動參數［${S1_ARGS:-無}］ RUN_ID=$RUN_ID 資產 $ASSET sha256 $(sha256sum $ASSET | cut -c1-16)；git $(git rev-parse --short HEAD) ==="
 sha256sum evaluation/isaac_bottle_s1.py evaluation/bottle_s1_ctrl.py evaluation/bottle_nav_chain.py evaluation/ros_stub.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py evaluation/bottle_s0b_ctrl.py evaluation/bottle_branch.py evaluation/bottle_s0_ctrl.py evaluation/bottle_s0_logic.py evaluation/bottle_ref.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py evaluation/run_bottle_s1.sh "$ASSET" > "$DIR/versions.sha256"
-"$ISAAC_PY" -u evaluation/isaac_bottle_s1.py --asset "$ASSET" --out "$DIR" --headless false > "$DIR/sim.log" 2>&1 &
+"$ISAAC_PY" -u evaluation/isaac_bottle_s1.py --asset "$ASSET" --out "$DIR" --headless false ${S1_ARGS:-} > "$DIR/sim.log" 2>&1 &
 SIM=$!
 say "起 sim PID=$SIM"
 # 視窗置前（Howard 10/31 沒看到畫面）：分離程序起的視窗會被 GNOME 放在其他視窗後面。只動視窗，不影響物理；結果寫進紀錄

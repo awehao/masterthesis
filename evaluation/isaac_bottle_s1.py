@@ -20,6 +20,10 @@ ap.add_argument('--asset', required=True)
 ap.add_argument('--out', required=True)
 ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_manip.urdf'))
 ap.add_argument('--x-start', type=float, default=-3.6, help='底盤起點 x（瓶軸在 x＝0）')
+ap.add_argument('--y-start', type=float, default=0.0, help='幾何擾動：底盤起點 y')
+ap.add_argument('--yaw-start-deg', type=float, default=0.0, help='幾何擾動：底盤起始偏航')
+ap.add_argument('--bottle-dx', type=float, default=0.0, help='幾何擾動：瓶位置 x（瓶位姿仍是真值進控制器）')
+ap.add_argument('--bottle-dy', type=float, default=0.0)
 ap.add_argument('--x-end', type=float, default=0.85, help='底盤參考終點 x（出口區內）')
 ap.add_argument('--obst-x', type=float, default=-2.0)
 ap.add_argument('--path', default='-3.4,-0.6,-0.81', help='升餘弦繞行 x1,x2,A')
@@ -139,7 +143,7 @@ def main():
             leg_paths.append(pth)
     OB_C, OB_S = np.array([a.obst_x, 0.0, 0.25]), np.array([0.40, 0.40, 0.50])
     FixedCuboid(prim_path='/World/obstacle', name='obstacle', position=OB_C, scale=OB_S, color=np.array([0.7, 0.25, 0.2]))
-    BX, BY = float(B['center_xy'][0]), float(B['center_xy'][1])
+    BX, BY = float(B['center_xy'][0]) + a.bottle_dx, float(B['center_xy'][1]) + a.bottle_dy
     bottle = DynamicCylinder(prim_path='/World/bottle', name='bottle', position=np.array([BX, BY, T['top_z'] + B['height'] / 2]),
                              radius=B['radius'], height=B['height'], mass=B['mass'], color=np.array([0.2, 0.6, 0.9]))
     bind_friction(stage, [stage.GetPrimAtPath('/World/table/top')] + [stage.GetPrimAtPath(p) for p in leg_paths], T['material']['static_friction'],
@@ -147,12 +151,12 @@ def main():
     bind_friction(stage, [stage.GetPrimAtPath('/World/bottle')], B['material']['static_friction'], B['material']['dynamic_friction'],
                   B['material']['restitution'], mat_path='/World/PhysicsMaterials/bottle')
     # 機器人（同 ev9r9a）
-    base = np.array([a.x_start, 0.0, 0.0])
+    base = np.array([a.x_start, a.y_start, math.radians(a.yaw_start_deg)])
     import_urdf(a.urdf, ROBOT, fix_base=False)
     xf = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT))
     xf.ClearXformOpOrder()
     xf.AddTranslateOp().Set(Gf.Vec3d(float(base[0]), float(base[1]), 0.0))
-    xf.AddRotateZOp().Set(0.0)
+    xf.AddRotateZOp().Set(float(a.yaw_start_deg))
     fc = apply_split(stage, ROBOT)
     sph = collision_prims(stage, ROBOT, lambda p: 'support_' in p)
     gr = collision_prims(stage, '/World/ground')
@@ -244,7 +248,7 @@ def main():
         print(f'[s1] 視角設定失敗（不影響物理）：{e!r}', flush=True)
     readback = dict(solver_type=str(sapi.GetSolverTypeAttr().Get()), ext_forces_every_iter=bool(sapi.GetEnableExternalForcesEveryIterationAttr().Get()),
                     physics_dt=float(world.get_physics_dt()), bottle_mass=float(bottle.get_mass()), kp=a.kp, kd=a.kd, base=[float(v) for v in base],
-                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
+                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], perturb=dict(bottle_dx=a.bottle_dx, bottle_dy=a.bottle_dy, x_start=a.x_start, y_start=a.y_start, yaw_start_deg=a.yaw_start_deg), speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
     print(f'[s1] 讀回 {readback}', flush=True)
     if abs(readback['physics_dt'] - dt) > 1e-12 or readback['ext_forces_every_iter'] != bool(PH.get('ext_forces_every_iter')):
         print('[s1] 物理設定讀回不符 ⇒ 拒跑', flush=True)
