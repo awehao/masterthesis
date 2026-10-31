@@ -194,8 +194,10 @@ class RosChain:
         if k < D_STEPS:                                  # 佇列起始全零，同 pipe
             return np.zeros(3)
         e = self.by_k[((k - D_STEPS) // NPH) * NPH]
-        if np.abs(e['u'] - np.asarray(u_in, float)).max() > 1e-9:
+        if np.abs(e['u'] - np.asarray(u_in, float)).max() > 1e-9:   # 送出的命令和控制器佇列本步生效的不同：對應關係壞了
             self.n_pipe_bad += 1
+            self._stop('cmd_queue_mismatch', seq=e['seq'], sent=e['u'].tolist(), queued=np.asarray(u_in, float).tolist())
+            return self._decel()
         if e['out'] is None:
             self.n_late += 1
             self._stop('cmd_timeout', seq=e['seq'], age=float(t) - e['t'], n_reply=self.n_reply, n_sent=len(self.sent))
@@ -204,9 +206,10 @@ class RosChain:
         if ok is False:
             self._stop('cmd_seq_mismatch', seq=e['seq'], u=e['u'].tolist(), out=e['out'].tolist())
             return self._decel()
-        if ok is None and e.get('dm') is None:
-            e['dm'] = True
+        if ok is None:                                   # 生效期限到了還無法核對是哪一筆的輸出：不套用
             self.n_diag_missing += 1
+            self._stop('cmd_unverified', seq=e['seq'], age=float(t) - e['t'])
+            return self._decel()
         self.u_applied = e['out'].copy()
         return e['out'].copy()
 
@@ -221,8 +224,30 @@ class RosChain:
                     ros=dict(T0=self.T0, n_cmd=len(ms), n_sent=len(self.sent), n_reply=self.n_reply, n_late_steps=self.n_late, n_extra=self.n_extra, n_bad_cmd=self.n_bad_cmd, n_seq_bad=self.n_seq_bad, n_diag_missing=self.n_diag_missing,
                              n_pipe_bad=self.n_pipe_bad, n_obs=self.n_obs, n_no_output=self.n_no_output, n_bad_obs=self.n_bad_obs, n_obs_gap=self.n_obs_gap, n_old_obs=self.n_old_obs,
                              cmd_budget_ms=budget, cmd_rtt_sim_ms=stats(rtt_s), cmd_rtt_wall_ms=stats(rtt_w), injected_fill_ms=stats([budget - v for v in rtt_s]),
-                             shield_scan_age_s=stats([v[1] * 1e3 for v in self.sh_age]), shield_age_top=sorted(self.sh_age, key=lambda v: -abs(v[1]))[:12], obs_lat_sim_ms=stats(self.lat_obs_sim), obs_lat_wall_ms=stats(self.lat_obs_wall), graph=self.graph,
+                             shield_scan_age_ms=stats([v[1] * 1e3 for v in self.sh_age]), shield_age_top_s=sorted(self.sh_age, key=lambda v: -abs(v[1]))[:12], obs_lat_sim_ms=stats(self.lat_obs_sim), obs_lat_wall_ms=stats(self.lat_obs_wall), graph=self.graph,
                              note='命令總延遲固定 8 物理步（模型假設）：cmd_rtt 是實測往返，injected_fill 是補足到 8 步的注入量；物理與控制同步，非即時部署驗證'))
+
+
+def write_report(rep, out_dir, name='s1_report.json'):
+    """先序列化成字串再寫檔：寫到一半拋例外時檔案沒關、被 sim_app.close() 結束，會截斷且沒有 traceback（bottle_n1_1）。
+    numpy 陣列轉成清單，數值仍是數值。仍失敗：印 traceback、另存診斷檔（default=repr，不是正式報告），回 False，不寫正式報告。"""
+    import json
+    import os
+    import traceback
+
+    def conv(o):
+        return o.tolist() if hasattr(o, 'tolist') else float(o)
+    try:
+        txt = json.dumps(rep, ensure_ascii=False, indent=1, default=conv)
+    except Exception:
+        tb = traceback.format_exc()
+        print('[s1] 報告序列化失敗：' + tb.replace('\n', ' | '), flush=True)
+        with open(os.path.join(out_dir, name.replace('.json', '_diag.json')), 'w') as fh:
+            fh.write(json.dumps(dict(serialize_error=tb, report=rep), ensure_ascii=False, indent=1, default=repr))
+        return False
+    with open(os.path.join(out_dir, name), 'w') as fh:
+        fh.write(txt)
+    return True
 
 
 def make_bridge(chain):

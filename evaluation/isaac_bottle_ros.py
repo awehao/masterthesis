@@ -449,14 +449,17 @@ def main():
     np.savez_compressed(os.path.join(a.out, 's1_steps.npz'), rows=np.array(rows, float), cols=np.array(cols), phases=np.array(BR_PH))
     rep['cols'] = cols
     rep['reached_end'] = bool(ctrl.mission_done or ctrl.judge.stop is not None)
-    json.dump(rep, open(os.path.join(a.out, 's1_report.json'), 'w'), ensure_ascii=False, indent=1, default=float)
+    if not RC.write_report(rep, a.out):                                       # bottle_n1_1 寫到一半崩潰；失敗另存診斷檔、不算完成
+        node.destroy_node()
+        rclpy.shutdown()
+        return 71
     try:                                                                      # 主紀錄存好後才存 CBF 證據：這裡失敗不影響主紀錄
         C2.save_compact(ctrl, os.path.join(a.out, 's1_cbf.npz'))
     except Exception as e:
         print(f'[s1] CBF 紀錄存檔失敗：{e!r}', flush=True)
     print(f"[s1] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 出口 {rep['exit_reached']}@{rep['t_exit_in']} 任務 {rep['mission_done']} 瓶淨空 {rep['clear_bottle']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']} fallback {rep['n_fallback']} 求解器 {rep['qp_counts']} GI 未採用 {rep['gi_fail']} >50ms {rep['n_over_50ms']} 掃描鏈 { {k: rep['nav_chain'][k] for k in ('n_scan', 'n_dyn_max', 'n_static_max', 'shield')} } 分項 {rep['timing']}", flush=True)
     print(f"[s1] 事件 {rep['events']}", flush=True)
-    print(f"[s1] ROS { {k: v for k, v in rep['nav_chain']['ros'].items() if k not in ('graph', 'note', 'shield_age_top')} }", flush=True)
+    print(f"[s1] ROS { {k: v for k, v in rep['nav_chain']['ros'].items() if k not in ('graph', 'note', 'shield_age_top_s')} }", flush=True)
     node.destroy_node()
     rclpy.shutdown()
     return C2.exit_code(rep)
@@ -468,6 +471,9 @@ if __name__ == '__main__':
     rc = 1
     try:
         rc = main()
+    except BaseException:
+        import traceback
+        print('[s1] 例外：' + traceback.format_exc().replace('\n', ' | '), flush=True)
     finally:
         # sim_app.close() 會直接結束程序、sys.exit 到不了（bottle_s0a_1 拒跑卻回 0）⇒ 先寫離開碼檔，由跑法讀回
         with open(os.path.join(a.out, 'exit_rc.txt'), 'w') as fh:

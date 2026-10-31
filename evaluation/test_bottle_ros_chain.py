@@ -174,12 +174,50 @@ def t_ready():
     chk('還有未回覆命令時不就緒', not ch.ready())
 
 
+def t_unverified():
+    ctrl, ch = rig()
+    u = np.array([0.2, 0.0, 0.0])
+    ctrl.u_last = np.r_[u, np.zeros(6)]
+    for k in range(RC.D_STEPS):
+        ch.shield(k * RC.PHYS, np.zeros(3))
+        if k % RC.NPH == 0:
+            ch.cb_cmd(u)                                 # 回覆到了，但 Shield diag 沒到：無法核對是哪一筆
+    out = ch.shield(RC.D_STEPS * RC.PHYS, u)
+    chk('生效時無法核對 ⇒ 受控停止', ctrl.judge.stop is not None and ctrl.judge.stop['why'] == 'cmd_unverified', ctrl.judge.stop)
+    chk('無法核對時不套用回覆', out[0] < 0.2 - 1e-9 or out[0] == 0.0, out)
+
+
+def t_queue_mismatch():
+    ctrl, ch = rig()
+    out, _ = run(ctrl, ch, 12, lambda t: np.array([0.2, 0.0, 0.0]))
+    out2 = ch.shield(0.12, np.array([0.15, 0.0, 0.0]))   # 控制器佇列本步生效的命令和送出的不同
+    chk('佇列不一致 ⇒ 受控停止', ctrl.judge.stop is not None and ctrl.judge.stop['why'] == 'cmd_queue_mismatch', ctrl.judge.stop)
+    chk('佇列不一致時不套用回覆', out2[0] <= out[-1][0], (out2, out[-1]))
+
+
+def t_report_write():
+    import json
+    import tempfile
+    d = tempfile.mkdtemp()
+    base = os.path.join(HERE, 'runs', 'bottle_n1_v2_full', 'fake_report.json')
+    rep = json.load(open(base)) if os.path.exists(base) else dict(nav_chain=dict(ros={}))
+    rep.update(arr=np.arange(3, dtype=np.float32), m=np.eye(2), f32=np.float32(1.5), note='中文說明')
+    chk('真實報告＋numpy 陣列可寫', RC.write_report(rep, d), d)
+    r2 = json.load(open(os.path.join(d, 's1_report.json')))
+    chk('陣列仍是數值', r2['arr'] == [0.0, 1.0, 2.0] and r2['m'] == [[1.0, 0.0], [0.0, 1.0]] and r2['f32'] == 1.5 and r2['note'] == '中文說明', (r2['arr'], r2['m']))
+    d2 = tempfile.mkdtemp()
+    ok = RC.write_report(dict(rep, bad=object()), d2)
+    chk('無法序列化 ⇒ 回 False、不寫正式報告', ok is False and not os.path.exists(os.path.join(d2, 's1_report.json')))
+    dg = json.load(open(os.path.join(d2, 's1_report_diag.json')))
+    chk('診斷檔含 traceback', 'TypeError' in dg['serialize_error'], dg['serialize_error'][-120:])
+
+
 def t_constants():
     chk('掃描常數同 bottle_nav_chain', (RC.SCAN_N, RC.SCAN_MIN, RC.SCAN_MAX, RC.RANGE_MIN, RC.RANGE_MAX, RC.SCAN_HZ, RC.OBS_MAX_AGE, RC.M_STATIC) == (NC.SCAN_N, NC.SCAN_MIN, NC.SCAN_MAX, NC.RANGE_MIN, NC.RANGE_MAX, NC.SCAN_HZ, NC.OBS_MAX_AGE, NC.M_STATIC))
 
 
 def main():
-    for f in (t_constants, t_ready, t_timing, t_cmd_timeout, t_bad_cmd, t_seq_mismatch, t_scan):
+    for f in (t_constants, t_ready, t_unverified, t_queue_mismatch, t_report_write, t_timing, t_cmd_timeout, t_bad_cmd, t_seq_mismatch, t_scan):
         f()
     print(f'{N[0] - len(BAD)}／{N[0]} 通過')
     for b in BAD:
