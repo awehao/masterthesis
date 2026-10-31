@@ -19,7 +19,7 @@ OPT, PARENT = 'base_camera_color_optical_frame', 'base_link'
 W_, H_, HFOV, AP = 640, 480, 1.518, 0.020
 DEPTH_RANGE = (0.3, 8.0)
 LOG_COLS = ('stamp', 'task_t', 'phase', 'dist', 'expected', 'tb_x', 'tb_y', 'tb_z', 'ta_x', 'ta_y', 'ta_z', 'received', 'age', 'valid', 'cx', 'cy', 'z_support', 'z_top',
-            'ax', 'ay', 'az', 'n_pts', 'rms', 'proc_ms', 'why', 'n_drop', 'pose_dev_mm', 'pose_dev_deg', 'n_valid_px')
+            'ax', 'ay', 'az', 'n_pts', 'rms', 'proc_ms', 'why', 'n_drop', 'z_top_valid', 'pose_dev_mm', 'pose_dev_deg', 'n_valid_px')
 
 
 class V1Capture:
@@ -33,12 +33,14 @@ class V1Capture:
         self.cam.set_clipping_range(0.1, 10.0)
         self.cam.set_local_pose(translation=self.T_mount[:3, 3], orientation=W0.R_to_wxyz(self.T_mount[:3, :3]), camera_axes='ros')
         self.K = None
-        self.node, self.dt, self.boxes, self.M = node, float(dt), boxes, msgs
+        self.node, self.dt, self.boxes, self.M, self.hz_ = node, float(dt), boxes, msgs, float(hz)
         self.pub = dict(rgb=node.create_publisher(msgs['Image'], '/v1/color', 5), depth=node.create_publisher(msgs['Image'], '/v1/depth', 5),
                         info=node.create_publisher(msgs['CameraInfo'], '/v1/camera_info', 5), pose=node.create_publisher(msgs['PoseStamped'], '/v1/cam_pose', 5))
         node.create_subscription(msgs['Float64MultiArray'], '/v1/bottle_estimate', self._est, 10)
         self.hist, self.frames, self.ests, self.sparse = {}, {}, {}, []
-        self.last_rf, self.n_rej, self.rej = None, 0, {}
+        self.last_rf, self.n_rej, self.rej, self.n_new, self.n_pub, self.save_error = None, 0, {}, 0, 0, None
+        self.t_first, self.t_last = None, None
+        self.latest_world_t = None
         self.ros_now = 0.0
         self.t_sparse = -1e9
 
@@ -48,6 +50,7 @@ class V1Capture:
 
     def record_step(self, world_t, ros_t, task_t, q9, T_b, phase):
         self.ros_now = float(ros_t)
+        self.latest_world_t = float(world_t)
         self.hist[int(round(world_t / self.dt))] = dict(world_t=float(world_t), ros_t=float(ros_t), task_t=float(task_t), q=np.asarray(q9, float).copy(),
                                                         Tb=None if T_b is None else np.asarray(T_b, float).copy(), phase=int(phase))
 
@@ -59,7 +62,8 @@ class V1Capture:
         self.n_rej += 1
         self.rej[why] = self.rej.get(why, 0) + 1
 
-    def poll(self):
+    def poll(self, dry=False):
+        """dry：只核對（起跑前第一張），不發布、不記錄；回傳核對結果或 None（沒有新影格）。"""
         fr = self.cam.get_current_frame()
         rfd = fr.get('rendering_frame')
         rf = (rfd.get('referenceTimeNumerator'), rfd.get('referenceTimeDenominator')) if isinstance(rfd, dict) else rfd
@@ -67,26 +71,38 @@ class V1Capture:
         if rf is None or rf == self.last_rf or rf == (0, 0) or col is None or fr.get('distance_to_image_plane') is None:
             return
         self.last_rf = rf
+        self.n_new += 0 if dry else 1
         t_r = fr.get('rendering_time')
         if t_r is None:
-            return self._rej('no_rendering_time')
+            return dict(ok=False, why='no_rendering_time') if dry else self._rej('no_rendering_time')
         h = self.hist.get(int(round(float(t_r) / self.dt)))
         if h is None or abs(h['world_t'] - float(t_r)) > 0.25 * self.dt:
-            return self._rej('no_pose_at_capture')
+            return dict(ok=False, why='no_pose_at_capture', t_r=float(t_r)) if dry else self._rej('no_pose_at_capture')
         rgb = np.asarray(col)[..., :3].astype(np.uint8)
         dep = np.asarray(fr['distance_to_image_plane'], dtype=np.float32).copy()
-        if rgb.size == 0 or dep.shape != (H_, W_):
-            return self._rej('empty_or_shape')
+        if rgb.size == 0 or dep.shape != (H_, W_) or rgb.shape[:2] != (H_, W_):
+            return dict(ok=False, why='empty_or_shape', shape=list(dep.shape)) if dry else self._rej('empty_or_shape')
         dep[~np.isfinite(dep) | (dep < DEPTH_RANGE[0]) | (dep > DEPTH_RANGE[1])] = 0.0
         if self.K is None:
             self.K = np.asarray(self.cam.get_intrinsics_matrix(), float)
-        T_wc = G.C.K.fk(h['q'], PARENT) @ self.T_mount                # 量測底盤位姿 × 固定外參
-        p_r, q_r = self.cam.get_world_pose(camera_axes='ros')          # 渲染端回讀（本步＝擷取那一步的狀態）
-        R_r = W0.wxyz_to_R(np.asarray(q_r, float))
-        dev_mm = float(np.linalg.norm(np.asarray(p_r, float) - T_wc[:3, 3])) * 1e3
-        dev_deg = float(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(R_r.T @ T_wc[:3, :3]) - 1) / 2)))))
+        T_wc = G.C.K.fk(h['q'], PARENT) @ self.T_mount                # 擷取那一步的量測底盤位姿（歷史值）× 固定外參
+        if abs(h['world_t'] - (self.latest_world_t if self.latest_world_t is not None else -1)) <= 0.25 * self.dt:   # 只有影格就是最新一步時，回讀位姿才對應同一時刻
+            p_r, q_r = self.cam.get_world_pose(camera_axes='ros')
+            R_r = W0.wxyz_to_R(np.asarray(q_r, float))
+            dev_mm = float(np.linalg.norm(np.asarray(p_r, float) - T_wc[:3, 3])) * 1e3
+            dev_deg = float(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(R_r.T @ T_wc[:3, :3]) - 1) / 2)))))
+        else:
+            dev_mm = dev_deg = float('nan')                           # 舊影格：不拿目前位姿互核
+        if dry:
+            okK = bool(np.isfinite(self.K).all() and self.K[0, 0] > 0 and self.K[1, 1] > 0)
+            nv = int((dep > 0).sum())
+            return dict(ok=bool(okK and nv > 1000 and (np.isnan(dev_mm) or dev_mm < 1.0)), why='checked', shape=list(dep.shape), n_valid_px=nv, K=self.K.tolist(),
+                        t_r=float(t_r), pose_dev_mm=dev_mm, pose_dev_deg=dev_deg)
         st = h['ros_t']
         self._publish(st, rgb, dep, T_wc)
+        self.n_pub += 1
+        self.t_first = h['task_t'] if self.t_first is None else self.t_first
+        self.t_last = h['task_t']
         Tb = h['Tb']
         ax = Tb[:3, 2] if Tb is not None else np.full(3, np.nan)
         b0 = Tb[:3, 3] if Tb is not None else np.full(3, np.nan)
@@ -131,9 +147,10 @@ class V1Capture:
         rows = []
         for st, f in sorted(self.frames.items()):
             e = self.ests.get(st)
-            d = e[1] if e else [nan] * 14
+            d = e[1] if e else [nan] * 15
+            d = d + [nan] * (15 - len(d))
             rows.append([st, f['task_t'], f['phase'], f['dist'], float(f['expected']), *f['b0'], *f['ax'], float(e is not None), (e[0] - st) if e else nan,
-                         *(d[1:14] if e else [nan] * 13), f['dev_mm'], f['dev_deg'], f['n_valid_px']])
+                         *(d[1:15] if e else [nan] * 14), f['dev_mm'], f['dev_deg'], f['n_valid_px']])
         R = np.array(rows, float).reshape(-1, len(LOG_COLS))
         np.savez_compressed(os.path.join(out, 'v1_log.npz'), rows=R, cols=np.array(LOG_COLS))
         if self.sparse:
@@ -146,7 +163,12 @@ class V1Capture:
             v = m_ & val
             return dict(n=int(m_.sum()), received=int((m_ & rec).sum()), valid=int(v.sum()), rate=round(float(v.sum()) / max(int(m_.sum()), 1), 3),
                         err_xy_mm=None if not v.any() else [round(float(np.percentile(err[v], q_)), 2) for q_ in (50, 95, 100)])
-        return dict(n_frames=len(R), rejected=self.rej, all=s_(np.ones(len(R), bool)), expected=s_(exp),
+        n_plan = int(round((self.t_last - self.t_first) * self.hz_)) + 1 if self.t_first is not None else 0
+        zt = (R[:, LOG_COLS.index('z_top_valid')] == 1) & val if len(R) else np.zeros(0, bool)
+        counts = dict(planned=n_plan, acquired=self.n_new, rejected=self.n_rej, published=self.n_pub, received=int(rec.sum()), valid=int(val.sum()), z_top_valid=int(zt.sum()))
+        collect_ok = bool(self.n_pub > 0 and n_plan > 0 and self.n_pub >= 0.9 * n_plan and self.rej.get('no_pose_at_capture', 0) <= 0.1 * max(self.n_new, 1)
+                          and rec.sum() >= 0.9 * self.n_pub)
+        return dict(collect_ok=collect_ok, counts=counts, n_frames=len(R), rejected=self.rej, all=s_(np.ones(len(R), bool)), expected=s_(exp),
                     age_s=None if not rec.any() else [round(float(np.nanpercentile(R[rec, LOG_COLS.index('age')], q_)), 3) for q_ in (50, 95, 100)],
                     proc_ms=None if not rec.any() else [round(float(np.nanpercentile(R[rec, LOG_COLS.index('proc_ms')], q_)), 1) for q_ in (50, 95, 100)],
                     pose_dev_mm_max=None if not len(R) else round(float(np.nanmax(R[:, LOG_COLS.index('pose_dev_mm')])), 3),

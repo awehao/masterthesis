@@ -372,6 +372,21 @@ def main():
     from std_msgs.msg import Float64MultiArray
     v1_boxes = [(c_, sz_) for _, c_, sz_ in G.table_boxes()] + [(OB_C, OB_S)] + [(c_ + T2D, sz_) for _, c_, sz_ in G.table_boxes()]
     v1 = V1C.V1Capture(Camera, str(b_base[0]), a.urdf, node, a.v1_hz, dt, v1_boxes, dict(Image=Image, CameraInfo=CameraInfo, PoseStamped=PoseStamped, Float64MultiArray=Float64MultiArray))
+    v1_first = None                                                           # 起跑前保持期確認第一張影格：尺寸、有效深度、內參、時間可配對；不過即拒跑
+    for _k in range(int(round(2.0 / dt))):
+        apply(tgt)
+        base_zero()
+        world.step(render=True)
+        q_c, _ = q9()
+        v1.record_step(float(world.current_time), float('nan'), float('nan'), q_c, None, -1)
+        v1_first = v1.poll(dry=True)
+        if v1_first is not None and v1_first.get('ok'):
+            break
+    v1.hist.clear()
+    print(f"[s1] V1 第一張影格核對：{ {k: v for k, v in (v1_first or {}).items() if k != 'K'} }", flush=True)
+    if not (v1_first and v1_first.get('ok')):
+        print('[s1] V1 第一張影格未通過 ⇒ 拒跑', flush=True)
+        return 73
     print(f"[s1] V1 底盤相機：{v1.meta()['T_mount'][0][3]:.4f},{v1.meta()['T_mount'][1][3]:.4f},{v1.meta()['T_mount'][2][3]:.4f}；外參與可見度程式一致 {v1.meta()['vis_T_matches_urdf']}", flush=True)
     q_chk, _ = q9()
     r0 = scan_fn(0.0, q_chk)
@@ -546,10 +561,11 @@ def main():
     rep['reached_end'] = bool(ctrl.mission_done or ctrl.judge.stop is not None)
     try:
         rep['v1'] = v1.save(a.out)
+        rep['v1']['first_frame'] = v1_first
         print(f"[s1] V1 { {k: v for k, v in rep['v1'].items() if k != 'meta'} }", flush=True)
     except Exception as e:
         print(f'[s1] V1 存檔失敗：{e!r}', flush=True)
-        rep['v1'] = dict(error=repr(e))
+        rep['v1'] = dict(error=repr(e), collect_ok=False)
     if not RC.write_report(rep, a.out):                                       # bottle_n1_1 寫到一半崩潰；失敗另存診斷檔、不算完成
         node.destroy_node()
         rclpy.shutdown()
@@ -563,7 +579,11 @@ def main():
     print(f"[s1] ROS { {k: v for k, v in rep['nav_chain']['ros'].items() if k not in ('graph', 'note', 'shield_age_top_s')} }", flush=True)
     node.destroy_node()
     rclpy.shutdown()
-    return C2.exit_code(rep)
+    rc_task = C2.exit_code(rep)
+    if not (rep.get('v1') or {}).get('collect_ok'):                          # 採集與任務分開：採集不成立就不能回 0
+        print(f"[s1] V1 採集不成立（任務碼 {rc_task}）⇒ 回 74", flush=True)
+        return 74
+    return rc_task
 
 
 BR_PH = ['CRUISE', 'PREGRASP', 'INSERT', 'CLOSE', 'LIFT', 'CARRY']
