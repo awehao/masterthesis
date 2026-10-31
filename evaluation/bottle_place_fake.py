@@ -89,7 +89,8 @@ def main():
             gx = c.park[0] - c.place['entry_back'] if c.park is not None else 1.7
             bx.append((np.array([gx, float(c.park[1]) if c.park is not None else -1.0, 0.25]), np.array([0.5, 0.5, 0.5])))
             print(f'[fake] carry_block：t {t:.2f} 在持瓶目標附近 ({gx:.2f}) 加 0.5 m 方塊', flush=True)
-        mon.check_age(T0 + t, c.sig_robot)
+        if c.pph is None:                                # 承接後代價圖只餵持瓶段監看器；導航段監看器到此結束
+            mon.check_age(T0 + t, c.sig_robot)
         if c.cmon is not None:
             c.cmon.check_age(T0 + t, c.csig)
         if t >= a.t_end - 3.0 and not c.mission_done:

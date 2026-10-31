@@ -2,7 +2,7 @@
 """第二桌放置第一包的離線幾何核對（假受控對象名目軌跡，非物理）：
 持瓶路線上手臂／瓶對兩張桌與方塊的淨空、停車後各相位的關節餘裕、下降段手臂與手指對第二桌、退離段手臂全連桿對瓶。
 未鬆爪時手指↔瓶是指定接觸，不列入；瓶底↔第二桌面自 LOWER 起是指定支撐。只報數，跨線的門檻在設計內，不在這裡改。
-    python3 evaluation/bottle_place_geom_check.py
+    python3 evaluation/bottle_place_geom_check.py [取真規劃原始路徑的 RUN_ID]
 """
 import json
 import os
@@ -20,7 +20,17 @@ from ammr_wholebody_mpc.arm_limits import LITE6_SAFE    # noqa: E402
 
 
 def main():
-    c, f = TP.build()
+    raw = None
+    if len(sys.argv) > 1:                                # 用真節點假世界那趟 planner_server 的原始持瓶路徑（經同一套平滑、承接、接直線）
+        raw = np.array(json.load(open(os.path.join(HERE, 'runs', sys.argv[1], 'fake_report.json')))['place']['carry']['plan']['raw'])
+
+    class RawPlanner(TP.FakePlanner):
+        def poll(self):
+            r = super().poll()
+            if r is not None and r.get('ok') and raw is not None:
+                r['P'] = raw
+            return r
+    c, f = TP.build(planner=RawPlanner())
     H = []
     TP.run(c, f, hook=lambda t, s: H.append((t, s.q.copy(), s.Tb.copy(), float(c.f_cmd), c.pph, c.st.phase)))
     r = c.report()
@@ -69,8 +79,9 @@ def main():
         print(f'  退離中 {nm}↔瓶（相位內秒、mm）', tr[::12], '末', tr[-1])
     print('  關節餘裕（rad，各相位最小）', {k: round(v, 3) for k, v in marg.items()})
     print('  持瓶路徑', r['place']['carry'] and {k: v for k, v in r['place']['carry'].items() if k != 'plan'}, '停車', np.round(r['place']['park'], 3).tolist())
+    print('  完成', r['mission_done'], '阻點', r['stop'], '剖面', (r['place']['carry'] or {}).get('profile'))
     json.dump(dict(mins={k: [round(v[0] * 1e3, 1), v[1], v[2]] for k, v in out.items()}, joint_margin=marg, success=r['mission_done'], carry=r['place']['carry'], park=r['place']['park'],
-                   note='假受控對象名目軌跡、合成支撐；非物理'), open(os.path.join(HERE, 'results', 'bottle', 'place_geom_check.json'), 'w'), ensure_ascii=False, indent=1, default=float)
+                   note='假受控對象名目軌跡、合成支撐；非物理'), open(os.path.join(HERE, 'results', 'bottle', 'place_geom_check' + ('_' + sys.argv[1] if len(sys.argv) > 1 else '') + '.json'), 'w'), ensure_ascii=False, indent=1, default=float)
     return 0
 
 

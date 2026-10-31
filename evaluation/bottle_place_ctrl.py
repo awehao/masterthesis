@@ -33,7 +33,7 @@ REG = dict(park_v=0.01, park_w=0.02, park_s=0.5, park_pos=0.020, park_yaw_deg=1.
            v_fast=0.02, v_slow=0.005, slow_above=0.010, extra_down=0.010, sup_fz=0.98, sup_h_ratio=0.3, sup_gap=0.003, sup_s=0.3, tilt_deg=3.0, edge_m=0.010,
            rel_open=0.8, rel_f=0.05, rel_s=0.5, rel_deadline=2.0, ret_back=0.06, ret_t1=1.5, ret_t2=3.4, ret_clear=0.010,
            hold_s=3.0, st_disp=0.005, st_tilt=3.0, st_v=0.001, st_fz_ratio=0.9, place_tol_report=0.030,
-           join_lat=0.05, conn_len=0.8, conn_turn_deg=3.0, a_lat=0.5, ref_jump=0.05, a_dec=0.15, t_mult=3.0, stale_s=0.1, v_win=0.1)
+           join_lat=0.05, conn_len=0.8, conn_turn_deg=3.0, a_lat=0.5, a_axis=(1.5, 1.0), kappa_win=0.3, smooth_iters=100, ref_jump=0.05, v_ref_jump=0.075, a_dec=0.15, t_mult=3.0, stale_s=0.1, v_win=0.1)
 PPH = ('CARRY_NAV', 'PLACE_APPROACH', 'PARKED', 'LOWER', 'RELEASE', 'RETREAT', 'HOLD', 'DONE')
 
 
@@ -74,9 +74,19 @@ def max_turn_deg(P):
     return float(np.degrees(np.abs(np.diff(a))).max()) if len(a) > 1 else 0.0
 
 
+def smooth_path(P, iters, lam=0.5):
+    """固定兩端的拉普拉斯平滑（0.02 m 取樣，100 次約等於 0.2 m 的平滑半徑）。會切角，呼叫端須重新核對代價與幾何。"""
+    Q = NP.resample(P).copy()
+    for _ in range(int(iters)):
+        Q[1:-1] += lam * (Q[:-2] + Q[2:] - 2.0 * Q[1:-1])
+    return NP.resample(Q)
+
+
 def build_carry(raw, p_pred, dir_pred, x_entry, lane_y, reg=REG, v_max=0.25):
-    """規劃原始路徑 → 承接接段＋規劃段＋接直線段。回傳 (CarryPath, 資訊) 或 (None, 原因)。"""
-    raw = NP.resample(raw)
+    """規劃原始路徑 → 平滑 → 承接接段＋規劃段＋接直線段。回傳 (CarryPath, 資訊) 或 (None, 原因)。
+    轉角每 20 mm 只報告（draft-3：Codex 20261101_040958 改用物理量驗收，見 ref_profile_check）。"""
+    raw0 = NP.resample(raw)
+    raw = smooth_path(raw0, reg['smooth_iters'])
     s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(raw, axis=0), axis=1))]
     d = np.linalg.norm(raw - p_pred, axis=1)
     k = int(np.argmin(d[s <= 1.0])) if (s <= 1.0).any() else int(np.argmin(d))
@@ -90,15 +100,50 @@ def build_carry(raw, p_pred, dir_pred, x_entry, lane_y, reg=REG, v_max=0.25):
     t3 = t3 / max(np.linalg.norm(t3), 1e-9)
     conn = bezier(np.asarray(p_pred, float), np.asarray(dir_pred, float), raw[k2], t3)
     turn = max_turn_deg(conn)
-    if turn > reg['conn_turn_deg']:
-        return None, dict(why='carry_connector_turn', turn_deg=turn, lateral=lat)
     P = np.vstack([conn, raw[k2 + 1:]])
     J = join_lane_y(P, x_entry, lane_y, reg['conn_len'])
-    kappa = math.radians(max_turn_deg(J)) / NP.DS
-    a_lat = kappa * v_max ** 2                                        # 以持瓶參考速度上限估最大橫向加速度（底盤偏航固定，全向移動）
-    if a_lat > reg['a_lat']:
-        return None, dict(why='carry_lateral_accel', a_lat=a_lat, kappa=kappa)
-    return CarryPath(J, x_entry, lane_y), dict(lateral=lat, conn_turn_deg=turn, n=len(J), turn_max_deg=max_turn_deg(J), kappa_max=kappa, a_lat_max=a_lat)
+    return CarryPath(J, x_entry, lane_y), dict(lateral=lat, conn_turn_deg=turn, n=len(J), turn_max_deg=max_turn_deg(J), raw_turn_max_deg=max_turn_deg(raw0),
+                                               smooth_shift_max=float(np.linalg.norm(raw - NP.resample(raw0)[np.linspace(0, len(raw0) - 1, len(raw)).round().astype(int)], axis=1).max()) if len(raw0) else None)
+
+
+def curvature_grid(cp, win):
+    """規劃段（σ0 到直線入口）的離散曲率，取 ±win/2 內最大值；直線段 0。"""
+    sig = np.arange(cp.sig0, cp.x_lane + 1e-9, NP.DS)
+    T = np.diff(cp.xy(sig), axis=0)
+    h = np.unwrap(np.arctan2(T[:, 1], T[:, 0]))
+    k = np.r_[0.0, np.abs(np.diff(h)) / NP.DS, 0.0]
+    w = max(int(round(win / 2 / NP.DS)), 1)
+    km = np.array([k[max(i - w, 0):i + w + 1].max() for i in range(len(k))])
+    return sig, km
+
+
+def speed_target(s, v_b, rem, vcap_fn, v_carry, a_dec, slew):
+    v = min(v_carry, math.sqrt(2.0 * a_dec * max(rem, 0.0)), vcap_fn(s))
+    v = float(np.clip(v, v_b - slew, v_b + slew)) if rem > 0.02 else min(v, v_b)
+    return 0.0 if rem <= 1e-4 or v < 1e-4 else v
+
+
+def ref_profile_check(cp, s0, v0, s_park, vcap_fn, v_carry, reg):
+    """用控制器同一套速度更新（每 2 週期改速）模擬參考到停車，逐控制週期算參考速度向量的變化：逐軸加速度、橫向加速度。"""
+    s, v, k, W, alat = s0, v0, 0, [], 0.0
+    sig_k, km = curvature_grid(cp, reg['kappa_win'])
+    slew = S1.A_SLEW * 2.0 * DT
+    while k < 4000:
+        if k % 2 == 0:
+            v_new = speed_target(s, v, s_park - s, vcap_fn, v_carry, reg['a_dec'], slew)
+            s += (v - v_new) * C0.D_STEPS * C0.PHYS
+            v = v_new
+        s += v * DT
+        se = s + v * C0.D_STEPS * C0.PHYS
+        W.append(v * cp.tangent(se)[0])
+        alat = max(alat, v * v * float(np.interp(se, sig_k, km, right=0.0)))
+        k += 1
+        if v == 0.0 and s >= s_park - 0.02:
+            break
+    A = np.abs(np.diff(np.array(W), axis=0)) / DT
+    ax, ay = (float(A[:, 0].max()), float(A[:, 1].max())) if len(A) else (0.0, 0.0)
+    ok = ax <= reg['a_axis'][0] + 1e-9 and ay <= reg['a_axis'][1] + 1e-9 and alat <= reg['a_lat'] + 1e-9
+    return ok, dict(a_x_max=ax, a_y_max=ay, a_lat_max=alat, n=len(W), v_cap_min=float(min(vcap_fn(x_) for x_ in sig_k)))
 
 
 def join_lane_y(P, x_lane, lane_y, L_=NP.JOIN_LEN):
@@ -135,6 +180,7 @@ class PlaceController(N2C.S1Planned):
         self.t_release, self.n_rel, self.T_lower = None, 0, None
         self.T_b_rel0, self.n_still_p, self.place_ev, self.st_log = None, 0, {}, []
         self.f_place, self.q_fingers, self.T_ret0, self.q_ret0 = None, None, None, None
+        self.vcap = lambda s_: float('inf')
         self.bottle_mass = 0.20                             # 資產 bottle_s0.yaml；跑法讀回後覆寫
         self.t_ok = {}
 
@@ -172,9 +218,10 @@ class PlaceController(N2C.S1Planned):
         if st.phase == 'LIFT' and self.carry_req is None and self.judge.T_rel is not None:
             self.park, _ = self._park_solve(q)                          # LIFT 開始：瓶還在第一桌，只取停車 xy 當規劃目標
             goal = (self.park[0] - self.place['entry_back'], float(self.park[1]))
-            vb = float(self._vb_meas(q)) if np.isfinite(self._vb_meas(q)) else self.v_b      # 起點：實測位姿沿實測速度外推到 CARRY 開始（LIFT 名目時長）
-            start = q[:3] + np.array([math.cos(q[2]), math.sin(q[2]), 0.0]) * vb * float(self.task.t_lift)
-            self.carry_req = dict(t_req=self.t, start=start.tolist(), q_meas=q[:3].tolist(), v_meas=vb, goal=goal, park=self.park.tolist())
+            qv = getattr(self, 'q_prev2', None)                             # 起點只是規劃猜測：實測位姿＋世界座標實測速度向量×LIFT 名目時長
+            vw = np.zeros(2) if qv is None else (np.asarray(q[:2], float) - np.asarray(qv[:2], float)) / C0.PHYS
+            start = np.r_[np.asarray(q[:2], float) + vw * float(self.task.t_lift), q[2]]
+            self.carry_req = dict(t_req=self.t, start=start.tolist(), q_meas=q[:3].tolist(), v_world=vw.tolist(), goal=goal, park=self.park.tolist())
             self.carry_planner.request(tuple(start), goal, self.t)
             self._ev('carry_plan_request', **self.carry_req)
         if st.phase == 'CARRY' and self.pph is None:
@@ -209,8 +256,20 @@ class PlaceController(N2C.S1Planned):
             if jump > R['ref_jump']:
                 self._pstop('carry_ref_discontinuous', jump=jump)
                 return
-            info.update(ref_jump=jump, lead=lead, v_b=self.v_b, v_meas=float(self._vb_meas(q)))
-            self.cpath, self.carry_info, self.csig = cp, dict(info, plan=res.get('info')), csig
+            v_old = self.v_b * np.array([math.cos(self.th_ref), math.sin(self.th_ref)])
+            v_new = self.v_b * cp.tangent(s_new + self.v_b * C0.D_STEPS * C0.PHYS)[0]
+            dv = float(np.linalg.norm(v_new - v_old))
+            if dv > R['v_ref_jump']:
+                self._pstop('carry_ref_discontinuous', dv=dv)
+                return
+            sig_k, km = curvature_grid(cp, R['kappa_win'])
+            vcap = lambda s_, sk=sig_k, kk=km: min(self.v_carry, math.sqrt(R['a_lat'] / max(float(np.interp(s_, sk, kk, right=0.0)), 1e-9)))   # noqa: E731  局部降速：曲率處橫向加速度 ≤ a_lat
+            ok, prof = ref_profile_check(cp, s_new, self.v_b, float(self.park[0]), vcap, self.v_carry, R)
+            if not ok:
+                self._pstop('carry_ref_accel', **prof)
+                return
+            info.update(ref_jump=jump, v_ref_jump=dv, lead=lead, v_b=self.v_b, v_meas=float(self._vb_meas(q)), profile=prof)
+            self.cpath, self.carry_info, self.csig, self.vcap = cp, dict(info, plan=res.get('info')), csig, vcap
             self.s_ref, self.done_anchored = s_new, True                     # 參考速度 v_b 沿用承接前的值：位置與速度都連續
             self.th_ref = self.place['theta']
             if res.get('monitor') is not None:
@@ -385,11 +444,7 @@ class PlaceController(N2C.S1Planned):
         R = self.preg
         if self.pph not in ('CARRY_NAV', 'PLACE_APPROACH'):
             return 0.0
-        rem = float(self.park[0]) - self.s_ref
-        v = min(self.v_carry, math.sqrt(2.0 * R['a_dec'] * max(rem, 0.0)))
-        da = S1.A_SLEW * 2.0 * DT
-        v = float(np.clip(v, self.v_b - da, self.v_b + da)) if rem > 0.02 else min(v, self.v_b)
-        return 0.0 if rem <= 1e-4 or v < 1e-4 else v
+        return speed_target(self.s_ref, self.v_b, float(self.park[0]) - self.s_ref, self.vcap, self.v_carry, R['a_dec'], S1.A_SLEW * 2.0 * DT)
 
     def _T_seq_place(self, qp, t_eff):
         R, ph = self.preg, self.pph
