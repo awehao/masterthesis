@@ -141,14 +141,15 @@ def main():
     # 接觸視圖（須在 world.reset 前建；用字元類別，不用路徑清單）
     v_finger = RigidPrim(prim_paths_expr=str(fingers[0])[:-1] + '[12]', name='v_finger', track_contact_forces=True, max_contact_count=128,
                          prepare_contact_sensors=True, contact_filter_prim_paths_expr=['/World/bottle'] + table_paths)
-    v_arm = RigidPrim(prim_paths_expr=str(links[0])[:-1] + '[1-6]', name='v_arm', track_contact_forces=True, max_contact_count=128,
-                      prepare_contact_sensors=True, contact_filter_prim_paths_expr=['/World/bottle'] + table_paths)
+    # 連桿路徑是巢狀的（link1/link2/…），字元類別只比對到 link1（bottle_s0a_1 拒跑）⇒ 每根連桿各一個視圖
+    v_arm = [RigidPrim(prim_paths_expr=str(b), name=f'v_arm{i}', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True,
+                       contact_filter_prim_paths_expr=['/World/bottle'] + table_paths) for i, b in enumerate(links)]
     v_extra = [RigidPrim(prim_paths_expr=str(b), name=f'v_extra{i}', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True,
                          contact_filter_prim_paths_expr=['/World/bottle'] + table_paths) for i, b in enumerate(extra)]
     v_bt = RigidPrim(prim_paths_expr='/World/bottle', name='v_bt', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True,
                      contact_filter_prim_paths_expr=['/World/table/top'])
     world.reset()
-    for v in [v_finger, v_arm, v_bt] + v_extra:
+    for v in [v_finger, v_bt] + v_arm + v_extra:
         v.initialize()
     robot = SingleArticulation(prim_path=arts[0], name='omni_bot')
     robot.initialize()
@@ -210,7 +211,8 @@ def main():
     n_filters = 1 + len(table_paths)
     required = ['finger_table', 'arm_bottle', 'arm_table'] + [f'extra{i}_{w}' for i in range(len(v_extra)) for w in ('bottle', 'table')]
     # 動作前：所有接觸視圖形狀、感測數、有限值都須有效，否則拒跑（不當成沒有接觸）
-    for nm, v, ns, nf in [('finger', v_finger, 2, n_filters), ('arm', v_arm, 6, n_filters), ('bottle_table', v_bt, 1, 1)] + [(f'extra{i}', v, 1, n_filters) for i, v in enumerate(v_extra)]:
+    for nm, v, ns, nf in [('finger', v_finger, 2, n_filters), ('bottle_table', v_bt, 1, 1)] + [(f'arm{i}', v, 1, n_filters) for i, v in enumerate(v_arm)] \
+            + [(f'extra{i}', v, 1, n_filters) for i, v in enumerate(v_extra)]:
         M = read_pairs(v, nf, dt)
         if M is None or M.shape != (ns, nf, 3) or not np.isfinite(M).all():
             print(f'[s0a] 接觸視圖 {nm} 無效（形狀 {None if M is None else M.shape}，期望 {(ns, nf, 3)}）⇒ 拒跑', flush=True)
@@ -237,7 +239,8 @@ def main():
         ok_b = bool(np.isfinite(Tb).all())
         # 接觸
         Mf = read_pairs(v_finger, n_filters, dt)
-        Ma = read_pairs(v_arm, n_filters, dt)
+        Ma_l = [read_pairs(v, n_filters, dt) for v in v_arm]
+        Ma = None if any(x is None for x in Ma_l) else np.concatenate(Ma_l, axis=0)   # 任一連桿讀不到 ⇒ 整對無效（不當零）
         Me = [read_pairs(v, n_filters, dt) for v in v_extra]
         Mt = read_pairs(v_bt, 1, dt)
         ff = None if Mf is None or not np.isfinite(Mf[:, 0]).all() else tuple(float(x) for x in np.linalg.norm(Mf[:, 0], axis=1))
@@ -294,5 +297,8 @@ if __name__ == '__main__':
     try:
         rc = main()
     finally:
+        # sim_app.close() 會直接結束程序、sys.exit 到不了（bottle_s0a_1 拒跑卻回 0）⇒ 先寫離開碼檔，由跑法讀回
+        with open(os.path.join(a.out, 'exit_rc.txt'), 'w') as fh:
+            fh.write(str(rc))
         sim_app.close()
     sys.exit(rc)

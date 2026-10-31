@@ -16,6 +16,8 @@ sha256sum evaluation/isaac_bottle_s0a.py evaluation/bottle_s0_ctrl.py evaluation
 SIM=$!
 say "起 sim PID=$SIM"
 wait $SIM; RC=$?
-say "模擬器離開碼 $RC"
+RC2=$(cat "$DIR/exit_rc.txt" 2>/dev/null || echo 99)   # sim_app.close() 會吞掉離開碼；檔案缺失算失敗
+say "程序離開碼 $RC；腳本結果碼 $RC2（0＝完整成功、3＝已停止且有效、4＝停止未驗／無效、68＝接觸視圖拒跑、99＝無結果檔）"
 grep -aE "\[s0a\]" "$DIR/sim.log" | tee -a "$DIR/run.log"
-exit $RC
+[ "$RC" -ne 0 ] && exit "$RC"
+exit "$RC2"
