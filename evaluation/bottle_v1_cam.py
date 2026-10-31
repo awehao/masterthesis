@@ -51,8 +51,12 @@ class V1Capture:
     def record_step(self, world_t, ros_t, task_t, q9, T_b, phase):
         self.ros_now = float(ros_t)
         self.latest_world_t = float(world_t)
+        p_r, q_r = self.cam.get_world_pose(camera_axes='ros')          # 本步渲染端相機位姿（bottle_v1_1：影格比當下晚一步，不能在取影格時才回讀）
         self.hist[int(round(world_t / self.dt))] = dict(world_t=float(world_t), ros_t=float(ros_t), task_t=float(task_t), q=np.asarray(q9, float).copy(),
-                                                        Tb=None if T_b is None else np.asarray(T_b, float).copy(), phase=int(phase))
+                                                        Tb=None if T_b is None else np.asarray(T_b, float).copy(), phase=int(phase),
+                                                        cam_pos=np.asarray(p_r, float).copy(), cam_quat=np.asarray(q_r, float).copy())
+        for k_ in [k_ for k_ in self.hist if k_ < int(round(world_t / self.dt)) - 200]:   # 只留最近 2 s
+            del self.hist[k_]
 
     def _est(self, m):
         d = list(m.data)
@@ -86,18 +90,15 @@ class V1Capture:
         if self.K is None:
             self.K = np.asarray(self.cam.get_intrinsics_matrix(), float)
         T_wc = G.C.K.fk(h['q'], PARENT) @ self.T_mount                # 擷取那一步的量測底盤位姿（歷史值）× 固定外參
-        if abs(h['world_t'] - (self.latest_world_t if self.latest_world_t is not None else -1)) <= 0.25 * self.dt:   # 只有影格就是最新一步時，回讀位姿才對應同一時刻
-            p_r, q_r = self.cam.get_world_pose(camera_axes='ros')
-            R_r = W0.wxyz_to_R(np.asarray(q_r, float))
-            dev_mm = float(np.linalg.norm(np.asarray(p_r, float) - T_wc[:3, 3])) * 1e3
-            dev_deg = float(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(R_r.T @ T_wc[:3, :3]) - 1) / 2)))))
-        else:
-            dev_mm = dev_deg = float('nan')                           # 舊影格：不拿目前位姿互核
+        R_r = W0.wxyz_to_R(h['cam_quat'])                             # 擷取那一步存下的渲染端回讀
+        dev_mm = float(np.linalg.norm(h['cam_pos'] - T_wc[:3, 3])) * 1e3
+        dev_deg = float(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(R_r.T @ T_wc[:3, :3]) - 1) / 2)))))
+        lag = int(round((self.latest_world_t - h['world_t']) / self.dt)) if self.latest_world_t is not None else None
         if dry:
             okK = bool(np.isfinite(self.K).all() and self.K[0, 0] > 0 and self.K[1, 1] > 0)
             nv = int((dep > 0).sum())
-            return dict(ok=bool(okK and nv > 1000 and (np.isnan(dev_mm) or dev_mm < 1.0)), why='checked', shape=list(dep.shape), n_valid_px=nv, K=self.K.tolist(),
-                        t_r=float(t_r), pose_dev_mm=dev_mm, pose_dev_deg=dev_deg)
+            return dict(ok=bool(okK and nv > 1000 and dev_mm < 1.0 and dev_deg < 0.1), why='checked', shape=list(dep.shape), n_valid_px=nv, K=self.K.tolist(),
+                        t_r=float(t_r), pose_dev_mm=dev_mm, pose_dev_deg=dev_deg, frame_lag_steps=lag)
         st = h['ros_t']
         self._publish(st, rgb, dep, T_wc)
         self.n_pub += 1
@@ -118,7 +119,7 @@ class V1Capture:
                 u, v = fx * pc[0] / pc[2] + self.K[0, 2], self.K[1, 1] * pc[1] / pc[2] + self.K[1, 2]
                 vis.append(DEPTH_RANGE[0] <= pc[2] <= DEPTH_RANGE[1] and 0 <= u < W_ and 0 <= v < H_ and not any(VZ.seg_hits_box(T_wc[:3, 3], pw, bc, bs) for bc, bs in self.boxes))
         self.frames[round(st, 6)] = dict(task_t=h['task_t'], phase=h['phase'], dist=float(np.linalg.norm(T_wc[:3, 3] - (b0 + 0.1 * ax))), expected=bool(vis and np.mean(vis) >= 0.5),
-                                         b0=b0, ax=ax, dev_mm=dev_mm, dev_deg=dev_deg, n_valid_px=int((dep > 0).sum()))
+                                         b0=b0, ax=ax, dev_mm=dev_mm, dev_deg=dev_deg, n_valid_px=int((dep > 0).sum()), lag=lag)
         if h['task_t'] - self.t_sparse >= 1.0:                          # 稀疏存影格（每 1 s），只供事後檢視
             self.t_sparse = h['task_t']
             self.sparse.append((st, rgb, dep.astype(np.float16)))
@@ -172,4 +173,5 @@ class V1Capture:
                     age_s=None if not rec.any() else [round(float(np.nanpercentile(R[rec, LOG_COLS.index('age')], q_)), 3) for q_ in (50, 95, 100)],
                     proc_ms=None if not rec.any() else [round(float(np.nanpercentile(R[rec, LOG_COLS.index('proc_ms')], q_)), 1) for q_ in (50, 95, 100)],
                     pose_dev_mm_max=None if not len(R) else round(float(np.nanmax(R[:, LOG_COLS.index('pose_dev_mm')])), 3),
-                    pose_dev_deg_max=None if not len(R) else round(float(np.nanmax(R[:, LOG_COLS.index('pose_dev_deg')])), 4), meta=self.meta())
+                    pose_dev_deg_max=None if not len(R) else round(float(np.nanmax(R[:, LOG_COLS.index('pose_dev_deg')])), 4),
+                    frame_lag_steps=sorted({f['lag'] for f in self.frames.values() if f.get('lag') is not None}), meta=self.meta())
