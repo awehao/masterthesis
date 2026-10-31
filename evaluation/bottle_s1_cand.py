@@ -37,7 +37,7 @@ def obstacles(t):
 
 def make(**kw):
     p = S1.DetourPath(*kw.pop('path', PATH))
-    return S1.S1Controller(T.K, T.ID, T.T_G, T.T_READY, T.Q_READY, T.TOP, T.R_B, X0, T.WIN, p, EXIT_C, EXIT_R, kw.pop('obs', obstacles), x_exit_stop=X_END, required=T.REQ, **kw)
+    return kw.pop('cls', S1.S1Controller)(T.K, T.ID, T.T_G, T.T_READY, T.Q_READY, T.TOP, T.R_B, X0, T.WIN, p, EXIT_C, EXIT_R, kw.pop('obs', obstacles), x_exit_stop=X_END, required=T.REQ, **kw)
 
 
 def scene_boxes():

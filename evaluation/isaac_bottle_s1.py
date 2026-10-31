@@ -20,6 +20,9 @@ ap.add_argument('--asset', required=True)
 ap.add_argument('--out', required=True)
 ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_manip.urdf'))
 ap.add_argument('--x-start', type=float, default=-3.6, help='底盤起點 x（瓶軸在 x＝0）')
+ap.add_argument('--group', default='G', choices=['G', 'P', 'M'], help='對照組：G gmpc_wb（凍結）、P 停車操作、M MotM 式單步 QP')
+ap.add_argument('--m-kp', type=float, default=4.0)
+ap.add_argument('--m-mu', type=float, default=0.01)
 ap.add_argument('--y-start', type=float, default=0.0, help='幾何擾動：底盤起點 y')
 ap.add_argument('--yaw-start-deg', type=float, default=0.0, help='幾何擾動：底盤起始偏航')
 ap.add_argument('--bottle-dx', type=float, default=0.0, help='幾何擾動：瓶位置 x（瓶位姿仍是真值進控制器）')
@@ -70,6 +73,7 @@ import bottle_nav_chain as NC                                        # noqa: E40
 import bottle_ref as BRF                                             # noqa: E402
 import bottle_s0_ctrl as C                                           # noqa: E402
 import bottle_s1_ctrl as C2                                          # noqa: E402
+import bottle_s1_groups as GR                                        # noqa: E402
 import bottle_s1_geom as G                                           # noqa: E402
 
 ROBOT = '/World/omni_bot'
@@ -248,7 +252,7 @@ def main():
         print(f'[s1] 視角設定失敗（不影響物理）：{e!r}', flush=True)
     readback = dict(solver_type=str(sapi.GetSolverTypeAttr().Get()), ext_forces_every_iter=bool(sapi.GetEnableExternalForcesEveryIterationAttr().Get()),
                     physics_dt=float(world.get_physics_dt()), bottle_mass=float(bottle.get_mass()), kp=a.kp, kd=a.kd, base=[float(v) for v in base],
-                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], perturb=dict(bottle_dx=a.bottle_dx, bottle_dy=a.bottle_dy, x_start=a.x_start, y_start=a.y_start, yaw_start_deg=a.yaw_start_deg), speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
+                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], group=a.group, m=dict(kp=a.m_kp, mu=a.m_mu) if a.group == 'M' else None, perturb=dict(bottle_dx=a.bottle_dx, bottle_dy=a.bottle_dy, x_start=a.x_start, y_start=a.y_start, yaw_start_deg=a.yaw_start_deg), speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
     print(f'[s1] 讀回 {readback}', flush=True)
     if abs(readback['physics_dt'] - dt) > 1e-12 or readback['ext_forces_every_iter'] != bool(PH.get('ext_forces_every_iter')):
         print('[s1] 物理設定讀回不符 ⇒ 拒跑', flush=True)
@@ -304,8 +308,11 @@ def main():
         print('[s1] 掃描打到自身（<0.32 m）⇒ 拒跑', flush=True)
         return 69
     p_ = [float(v) for v in a.path.split(',')]
-    ctrl = C2.S1Controller(C.S0_K(), ident, T_g, T_ready_rel, q_ready, float(T['top_z']), float(B['radius']), a.x_start, (a.win_lo, a.win_hi), C2.DetourPath(*p_),
-                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, chain.obstacles, chain=chain, scan_fn=scan_fn, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert, reg=None, required=required)
+    cls_ = dict(G=C2.S1Controller, P=GR.S1Parked, M=GR.S1MotM)[a.group]
+    ctrl = cls_(C.S0_K(), ident, T_g, T_ready_rel, q_ready, float(T['top_z']), float(B['radius']), a.x_start, (a.win_lo, a.win_hi), C2.DetourPath(*p_),
+                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, chain.obstacles, chain=chain, scan_fn=scan_fn, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert, reg=None, required=required, **(dict(kp=a.m_kp) if a.group == 'M' else {}))
+    if a.group == 'M':
+        ctrl.p1.mu_post = a.m_mu
     ctrl.compact = []                                                         # CBF 證據；反事實重解在實跑後（bottle_s1_cbf_replay.py）
     ctrl.obs.d = np.clip(d0, -ctrl.obs.max, ctrl.obs.max)
     ctrl.cfg.arm_model.bias = ctrl.bias0 + np.asarray(ctrl.cfg.arm_model.alpha, float) * ctrl.obs.d
