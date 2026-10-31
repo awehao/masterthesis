@@ -131,6 +131,19 @@ def m4r(Base):
                        'tau0': None, 'preview': None, 'n_preview': 0}
             self.m4_outbox = []
 
+        def _coord_body(self, m, b_ref, ff, v_cap, w_cap):
+            """同 policy1._coord 的 v＝ff＋k·e（世界），但先轉當下本體座標再逐軸限幅 ±v_cap（偏航 ±w_cap）。只供 R3 參考包欄位 r3_v_cap_body 使用。"""
+            r = self.r
+            bp = getattr(m, 'base_pose', None)
+            if bp is None or not all(math.isfinite(float(v)) for v in bp):
+                return None
+            x, y, th = (float(v) for v in bp)
+            e = np.array([b_ref[0] - x, b_ref[1] - y, math.atan2(math.sin(b_ref[2] - th), math.cos(b_ref[2] - th))])
+            vw = np.asarray(ff, float) + np.array([r['k_lin'], r['k_lin'], r['k_yaw']]) * e
+            c, s = math.cos(th), math.sin(th)
+            vb = (float(np.clip(c * vw[0] + s * vw[1], -v_cap, v_cap)), float(np.clip(-s * vw[0] + c * vw[1], -v_cap, v_cap)), float(np.clip(vw[2], -w_cap, w_cap)))
+            return [1.0, r['w_vref'], vb[0], vb[1], vb[2], 0.0] + [float('nan')] * 6 + [float('nan'), float('nan')]
+
         def take_m4r_outbox(self):
             out, self.m4_outbox = ([], []) if self.phase == 'ABORTED' else (self.m4_outbox, [])
             return out
@@ -242,7 +255,9 @@ def m4r(Base):
                 tau3 = self.m4['tau0'] + (m.t - self.m4['t_ref3'])
                 T, b_ref, ff = self.ref.at(SEG_R3, tau3)
                 act['target'] = T
-                if mp.get('r3_w_cap') is not None:                     # R3v2：只在 R3 放寬引導偏航上限（參考包給；離段即還原）
+                if mp.get('r3_v_cap_body') is not None:                # 10/31（Codex 20261031_153959）：R3 局部引導上限，轉當下本體座標後逐軸限幅（參考包給；未給 ⇒ 原路徑）
+                    act['coord'] = self._coord_body(m, b_ref, ff, float(mp['r3_v_cap_body']), float(mp.get('r3_w_cap', self.r['w_cap'])))
+                elif mp.get('r3_w_cap') is not None:                   # R3v2：只在 R3 放寬引導偏航上限（參考包給；離段即還原）
                     _wc = self.r['w_cap']
                     self.r['w_cap'] = float(mp['r3_w_cap'])
                     try:

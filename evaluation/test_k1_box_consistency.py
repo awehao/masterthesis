@@ -99,6 +99,75 @@ def collect():
     return v, src
 
 
+RUNNER3 = os.path.join(HERE, 'run_mission_roundtrip3.sh')
+REF3 = os.path.join(HERE, 'results', 'door', 'door_regrasp_ref_pb60p.json')
+
+
+def collect3():
+    """--runner3：讀 run_mission_roundtrip3.sh 的實際生效值（框 ×2 介面＋R3／S8 ×1.5）。"""
+    global RUNNER
+    RUNNER = RUNNER3
+    v, src = collect()
+    c = WGMPCConfig()
+    P = json.load(open(REF3))
+    sc = {f: effective(f, '--base-box-scale') for f in ('dl3_wgmpc_wg2_adm24_node.py', 'wgmpc_wg2_node4.py')}
+    if len({x[0] for x in sc.values()}) != 1:
+        raise SystemExit(f'兩個求解節點框倍率不一致：{sc}')
+    k = next(iter(sc.values()))[0]
+    c.base_box_scale = k
+    vb = c.vbox()
+
+    def put(key, val, where):
+        v[key] = float(val)
+        src[key] = where
+    put('solver_lin', vb[0], f'WGMPCConfig.vbox()（base_box_scale {k}，ADM24／node4 --base-box-scale）')
+    put('solver_ang', vb[2], 'WGMPCConfig.vbox() 角')
+    put('solver_arm', vb[3], 'WGMPCConfig.vbox() 手臂（不放大）')
+    for key, opt in (('exec_lin_max', '--base-lin-max'), ('exec_ang_max', '--base-ang-max'), ('exec_arm_max', '--arm-rate-max'),
+                     ('exec_switch_lin', '--v-box-lin'), ('exec_switch_ang', '--v-box-ang')):
+        val, how = effective('isaac_door_k2_sim_ev9r9a.py', opt)
+        put(key, val, f'ev9r9a {opt}（{how}）')
+    for key, opt in (('intake_lin', '--wb-box-lin'), ('intake_ang', '--wb-box-ang'), ('rg3_lin', '--wb-box-lin'), ('rg3_ang', '--wb-box-ang'), ('rg3_world', '--wb-v-world')):
+        val, how = effective('isaac_door_k2_sim_ev9r9a.py', opt)
+        put(key, val, f'ev9r9a {opt}（{how}）→ 入口投影／換抓權威 mode3')
+    for nm in ('rg1_lin', 'rg1_ang', 'rg1_world'):                       # mode1 權威未在執行端建構
+        v.pop(nm, None)
+        src.pop(nm, None)
+    put('pause_lin', vb[0], 'ADM24 PAUSE BaseLimits v_lin＝cfg.vbox()')
+    put('pause_ang', vb[2], 'ADM24 PAUSE BaseLimits v_ang＝cfg.vbox()')
+    for key, opt in (('handover_lin', '--v-box-lin'), ('handover_ang', '--v-box-ang')):
+        val, how = effective('drawer_mission_node2.py', opt)
+        put(key, val, f'drawer_mission_node2 {opt}（{how}）')
+    put('r1_w_cap', P['m4r']['r1_w_cap'], 'pb60p m4r.r1_w_cap')
+    put('r3_w_cap', P['m4r']['r3_w_cap'], 'pb60p m4r.r3_w_cap')
+    put('r3_v_cap_body', P['m4r']['r3_v_cap_body'], 'pb60p m4r.r3_v_cap_body（R3 本體逐軸）')
+    put('r3_ref_v', P['r3_retime2']['v_max'], 'pb60p r3_retime2.v_max')
+    pk = P['k1_splice']['offline']['body_vel_peak']
+    put('r3_ref_body_peak_lin', max(pk[0], pk[1]), 'pb60p 段 41 本體差分速度峰')
+    put('r3_ref_body_peak_ang', pk[2], 'pb60p 段 41 本體差分角速度峰')
+    R4 = json.load(open(os.path.join(HERE, 'results', 'door', 'door_return_ref_v4.json')))
+    pk8 = R4['k1_splice']['offline']['body_vel_peak']
+    put('s8_ref_body_peak_lin', max(pk8[0], pk8[1]), 'v4 S8 前綴本體速度峰')
+    put('s8_ref_body_peak_ang', pk8[2], 'v4 S8 前綴本體角速度峰')
+    put('s8_end_row', R4['s8_overlap']['end_row'], 'v4 s8_overlap.end_row')
+    m = re.search(r'--end-row (\d+) ', open(RUNNER3, encoding='utf-8').read())
+    put('runner_end_row', int(m.group(1)), 'roundtrip3 A --end-row')
+    return v, src
+
+
+def relations3(v):
+    R = [r for r in relations(v) if not r[0].startswith('rg1_') and 'mode1' not in r[0]]
+    R += [
+        ('R3 引導本體上限 ≤ 框', 'guide', lambda v: v['r3_v_cap_body'] <= v['solver_lin'] + 1e-12 and v['r3_w_cap'] <= v['solver_ang'] + 1e-12),
+        ('R3 引導本體上限 ≥ R3 參考本體速度峰（留回授空間）', 'guide', lambda v: v['r3_v_cap_body'] >= v['r3_ref_body_peak_lin'] and v['r3_w_cap'] >= v['r3_ref_body_peak_ang']),
+        ('R3 參考本體速度峰 ≤ 框', 'ref', lambda v: v['r3_ref_body_peak_lin'] <= v['solver_lin'] and v['r3_ref_body_peak_ang'] <= v['solver_ang']),
+        ('S8 參考本體速度峰 ≤ 框', 'ref', lambda v: v['s8_ref_body_peak_lin'] <= v['solver_lin'] and v['s8_ref_body_peak_ang'] <= v['solver_ang']),
+        ('跑法 A --end-row＝v4 s8 end_row', 'ref', lambda v: v['runner_end_row'] == v['s8_end_row']),
+        ('角速度界只對角速度框（不乘 √2）且不低於框', 'latch', lambda v: v['solver_ang'] <= v['exec_ang_max'] <= v['solver_ang'] * 1.01),
+    ]
+    return R
+
+
 # 關係：(名稱, 層別, 函式, 說明)。b＝求解框（lin, ang, arm）
 def relations(v):
     L = v['wheel_L']
@@ -150,7 +219,20 @@ def evaluate(v):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=os.path.join(HERE, 'results', 'k1', 'box_consistency.json'))
+    ap.add_argument('--runner3', action='store_true', help='核 run_mission_roundtrip3.sh 實際生效值（只核關係、不做倍率情境）')
     a = ap.parse_args()
+    if a.runner3:
+        v3, src3 = collect3()
+        res = [(n, layer, bool(f(v3))) for n, layer, f in relations3(v3)]
+        for k in v3:
+            print(f'  {k:<22} {v3[k]:<10.6g} {src3[k]}')
+        for n, layer, ok in res:
+            print(f'  {"OK  " if ok else "FAIL"} [{layer}] {n}')
+        nf = sum(not ok for _, _, ok in res)
+        print(f'roundtrip3：{len(res)} 條，失敗 {nf}')
+        out3 = os.path.join(HERE, 'results', 'k1', 'box_consistency_rt3.json')
+        json.dump({'values': v3, 'source': src3, 'relations': res}, open(out3, 'w'), ensure_ascii=False, indent=1)
+        return 0 if nf == 0 else 1
     v0, src = collect()
     out = {'values': v0, 'source': src, 'cases': {}}
     print('現行生效值：')

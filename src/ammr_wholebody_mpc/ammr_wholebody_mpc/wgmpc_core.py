@@ -230,6 +230,9 @@ class WGMPCConfig:
     v_base_lin: float = 0.035255
     v_base_ang: float = 0.199900
     v_arm: float = 0.999900
+    # **底盤框容量倍率**（10/31 Howard 同意放寬低速介面；Codex 20261031_153959）：只放大 vbox() 的底盤三軸（約束界），
+    # vmax()（成本 1/vmax² 正規化、欄縮放、信賴域步長）不變 ⇒ 有效權重不變。預設 1.0 ⇒ 既有行為逐位元不變。
+    base_box_scale: float = 1.0
     # 加速度框
     a_base_lin: float = 0.50      # **開發值**，無已核准來源
     a_base_ang: float = 2.00      # **開發值**
@@ -270,8 +273,13 @@ class WGMPCConfig:
                                np.full(6, self.v_arm)])
 
     def vbox(self) -> np.ndarray:
-        """速度框的上界：base_fixed 時底盤三軸為 0（等式），否則等於 vmax()。"""
+        """速度框的上界：base_fixed 時底盤三軸為 0（等式），否則等於 vmax()（底盤三軸再乘 base_box_scale）。"""
         v = self.vmax()
+        if self.base_box_scale != 1.0:
+            if not (math.isfinite(self.base_box_scale) and self.base_box_scale >= 1.0):
+                raise ValueError(f'base_box_scale 須為 ≥ 1 的有限值：{self.base_box_scale}')
+            v = v.copy()
+            v[:3] *= self.base_box_scale
         if self.base_fixed:
             v = v.copy()
             v[:3] = 0.0

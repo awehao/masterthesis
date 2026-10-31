@@ -1,6 +1,6 @@
-# ADM24（2026-10-30；door_m4r_7 R3：OSQP 解貼箱界、超出 < 5e-7 被權威 tol 1e-9 判 base_box）：ADM23 的版本化複本，只加 --box-project：
-#   _publish_u 入口把九維本體命令逐軸投影回求解器自己宣告的速度框（底盤 |vx|,|vy| ≤ cfg.v_base_lin、|ω| ≤ cfg.v_base_ang、手臂 ≤ cfg.v_arm）；
-#   只會縮小、幅度＝OSQP 容差等級；發布、在途表、封裝都用投影後的值；記錄投影步數與最大修正量（box_project）。未給旗標 ⇒ 與 ADM23 同。
+# ADM24（2026-10-31；Howard 同意放寬低速介面、Codex 20261031_153959）：前一版的版本化複本，只加 --base-box-scale（預設 1.0 ⇒ 行為逐位元不變）：
+#   cfg.base_box_scale＝倍率，只放大求解速度框的底盤三軸（vbox），vmax（成本正規化、欄縮放、信賴域）不變 ⇒ 有效權重不變、不需權重換算。
+#   PAUSE 減速可行集合 BaseLimits 的 v_lin／v_ang 取同一 vbox（停止／觀察門檻不動）。
 # ADM23（2026-10-29；mode 4 重設計 R1–R3；Codex 20261029_154350 選 (i)）：ADM22 的版本化複本，只加 --tenure-loop（需 W2 v3 路徑）：
 #   (1) 封裝改 cmd_envelope_v4（v3＋tenure；/wgmpc/cmd_env4），三處發布點都標求解端當下任期 k（door_solver_tenure.SolverTenure）；
 #   (2) 訂 /handover/tenure（執行端公告）：交給導航且封存 ⇒ closed：主迴圈頂端（暫停觀察之後、在途守衛之前）**不求解、不發布**，只收執行端套用回報；
@@ -371,6 +371,7 @@ class WGMPCNode(Node):
                                      w_s=a.w_s, w_a=a.w_a,
                                      w_s_base=a.w_s_base, w_s_arm=a.w_s_arm,
                                      row_scaling=not a.no_row_scaling)
+            self.cfg.base_box_scale = float(a.base_box_scale)
             # G 由模型自行計算 —— **不從執行端 meta 取**
             _P, _Q, _G, _h, _kp = self.cfg.composed()
             self.composed_G = [float(x) for x in _G]
@@ -380,6 +381,7 @@ class WGMPCNode(Node):
             self.cfg = WGMPCConfig(N=a.N, dt=1.0 / a.rate, tcp=a.tcp,
                                    w_s=a.w_s, w_a=a.w_a,
                                    w_s_base=a.w_s_base, w_s_arm=a.w_s_arm)
+            self.cfg.base_box_scale = float(a.base_box_scale)
             self.composed_G = None
             self.composed_kp = None
         # **WG4-B B1**（experiment_spec_WG4B.yaml）：只換求解式，見 wg4b_b1_core.py。
@@ -679,7 +681,6 @@ class WGMPCNode(Node):
         self._chain_failed = False
         self._chain_fail_info = None
         self._stopped_on_fail = False
-        self._boxp = {'n': 0, 'max': 0.0, 'log': []}                                       # ADM24
         self._ten = None                                                                   # ADM23
         if getattr(a, 'tenure_loop', False):
             if self._w2src is None:
@@ -735,17 +736,6 @@ class WGMPCNode(Node):
         握手的全零命令與求解結果走**同一條發布路徑**，
         避免兩條路徑的座標約定日後分歧。零向量旋轉後仍是零。
         """
-        if getattr(self.a, 'box_project', False):                                        # ADM24：投影回求解器自己的速度框
-            _ub = np.asarray(u_body, float)
-            _lim = np.array([self.cfg.v_base_lin, self.cfg.v_base_lin, self.cfg.v_base_ang] + [self.cfg.v_arm] * 6)
-            _uc = np.clip(_ub, -_lim, _lim)
-            _dmax = float(np.max(np.abs(_uc - _ub)))
-            if _dmax > 0.0:
-                self._boxp['n'] += 1
-                self._boxp['max'] = max(self._boxp['max'], _dmax)
-                if len(self._boxp['log']) < 50:
-                    self._boxp['log'].append({'sim_t': self.sim_now(), 'd': _dmax, 'axis': int(np.argmax(np.abs(_uc - _ub)))})
-            u_body = _uc
         u_world = body_to_world(float(theta)) @ np.asarray(u_body, float)
         if self._ten is not None and not self._ten.publish_allowed():                    # ADM23：任期封存後不發布（防線）
             self._ten.n_suppressed += 1
@@ -1262,7 +1252,7 @@ class WGMPCNode(Node):
         return {'solver_kind': 'b1',
                 'b1': {'params': self._b1p.record(),
                        'mu_reason_counts': dict(self._n_b1_mu),
-                       'limits': {'vmax': c.vmax().tolist(), 'amax': c.amax().tolist(),
+                       'limits': {'vmax': c.vmax().tolist(), 'vbox': c.vbox().tolist(), 'base_box_scale': float(getattr(c, 'base_box_scale', 1.0)), 'amax': c.amax().tolist(),
                                   'joint_margin': c.joint_margin,
                                   'wheel_radius': c.wheel_radius,
                                   'wheel_w_max': c.wheel_w_max,
@@ -1699,7 +1689,7 @@ class WGMPCNode(Node):
                     _goal4 = np.zeros(3)
                 else:
                     _goal4 = np.asarray(park_hold_cmd(self._pause['anchor'], _pose4, self._park_servo), float)
-                _lim4 = PZ.BaseLimits(a_lin=self.cfg.a_base_lin, a_ang=self.cfg.a_base_ang, dt=self.cfg.dt)
+                _lim4 = PZ.BaseLimits(v_lin=float(self.cfg.vbox()[0]), v_ang=float(self.cfg.vbox()[2]), a_lin=self.cfg.a_base_lin, a_ang=self.cfg.a_base_ang, dt=self.cfg.dt)   # ADM24：可行集合用同一 vbox
                 _uh4 = PZ.decel_step(_ub4, _goal4, _lim4)
                 if not PZ.feasible(_ub4, _uh4, _lim4):
                     self._pause['infeasible'] += 1
@@ -2329,7 +2319,6 @@ class WGMPCNode(Node):
                                'rolling': (None if self._roll_hold is None else {'state': self._roll_hold.state, 'record': self._roll_hold.record,
                                                                                'rejections': self._roll_hold.rejections, 'events': self._roll_events[:200]})}),
                     tenure=(None if self._ten is None else self._ten.report()),     # ADM23
-                    box_project=(dict(self._boxp, limits=[self.cfg.v_base_lin, self.cfg.v_base_ang, self.cfg.v_arm]) if getattr(self.a, 'box_project', False) else None),   # ADM24
                     k3m_pause=(None if self._pause_sw is None else                    # ADM4：暫停紀錄
                                {'active': bool(self._pause_sw.active), 'record': self._pause_sw.record,
                                 'rejections': self._pause_sw.rejections, 'events': self._pause['events'][:500],
@@ -2621,7 +2610,6 @@ def main() -> int:
                     help='PARK_FIXED：整個時域 u_base = 0（核心等式）；預設關 = 既有行為')
     ap.add_argument('--rolling-approach', action='store_true')                 # ADM22
     ap.add_argument('--tenure-loop', action='store_true')                      # ADM23
-    ap.add_argument('--box-project', action='store_true')                      # ADM24
     ap.add_argument('--tenure-rearm-timeout-s', type=float, default=2.0)       # ADM23
     ap.add_argument('--park-hold', action='store_true',
                     help='PARK_HOLD（v2）：整個時域 u_base = 停車伺服 u_hold；停用近目標整形；錨點取自 /park/gate')
@@ -2691,6 +2679,7 @@ def main() -> int:
                          '甩動只發生在手臂 ⇒ 分開設才對症')
     ap.add_argument('--w-s-base', type=float, default=None,
                     help='只給**底盤**的變化率權重；None = 沿用 --w-s')
+    ap.add_argument('--base-box-scale', type=float, default=1.0, help='（10/31）求解速度框底盤三軸倍率；vmax 正規化不變')
     ap.add_argument('--no-row-scaling', action='store_true',
                     help='關閉等價正值列縮放（對照用）')
     ap.add_argument('--handshake-timeout-s', type=float, default=20.0,
