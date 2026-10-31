@@ -25,7 +25,7 @@ class V2PlaceController(PC.PlaceController):
     def __init__(self, *a, v2=None, top_z=0.60, win=(-0.35, 0.15), **kw):
         super().__init__(*a, **kw)
         self.v2, self.top_z, self.win = dict(V2REG, **(v2 or {})), float(top_z), tuple(win)
-        self.vbuf, self.vfix, self.vlog, self.vrej = [], None, [], {}
+        self.vbuf, self.vfix, self.vlog, self.vrej, self.v_last = [], None, [], {}, None
 
     def _vrej(self, why):
         self.vrej[why] = self.vrej.get(why, 0) + 1
@@ -36,20 +36,29 @@ class V2PlaceController(PC.PlaceController):
         self.vlog.append((float(t_cap), float(t_recv), bool(e.get('valid')), e.get('cx'), e.get('cy'), e.get('dist')))
         if self.judge.stop is not None:
             return
-        if not e.get('valid') or not all(np.isfinite([e['cx'], e['cy'], e['dist'], *e['ax']])):
-            return self._vrej('invalid')
+        if not (np.isfinite(t_cap) and np.isfinite(t_recv)):
+            return self._vrej('time_nonfinite')
+        if t_cap > t_recv + 1e-9:
+            return self._vrej('time_future')
+        if self.v_last is not None and t_cap <= self.v_last + 1e-9:          # 重複或倒序影格一律拒收
+            return self._vrej('time_not_increasing')
+        self.v_last = float(t_cap)
         if t_recv - t_cap > R['max_age']:
             return self._vrej('stale')
+        if not e.get('valid') or not all(np.isfinite([e['cx'], e['cy'], e['dist'], *e['ax']])):
+            return self._vrej('invalid')
+        ax = np.asarray(e['ax'], float)
+        if float(np.linalg.norm(ax)) < 1e-6:
+            return self._vrej('axis_zero')
+        ax = ax / np.linalg.norm(ax)
         if not (R['dist'][0] <= e['dist'] <= R['dist'][1]):
             return self._vrej('distance')
-        if math.degrees(math.acos(min(1.0, abs(float(e['ax'][2]))))) > R['tilt_deg']:
+        if math.degrees(math.acos(min(1.0, abs(float(ax[2]))))) > R['tilt_deg']:
             return self._vrej('tilt')
         xy = np.array([e['cx'], e['cy']], float)
         if self.vfix is None:
-            if any(abs(b[0] - t_cap) < 1e-9 for b in self.vbuf):
-                return self._vrej('duplicate_stamp')
             self.vbuf.append((float(t_cap), xy))
-            W = [b for b in self.vbuf if b[0] >= t_cap - R['win_s'] - 1e-9]
+            W = [b for b in self.vbuf if t_cap - R['win_s'] - 1e-9 <= b[0] <= t_cap + 1e-9]   # 來源時間窗口兩端都限定
             if len(W) >= R['n_need']:
                 P = np.array([b[1] for b in W[-R['n_need']:]])
                 spread = max(float(np.linalg.norm(P[i] - P[j])) for i in range(len(P)) for j in range(i + 1, len(P)))

@@ -34,7 +34,7 @@ REG = dict(park_v=0.01, park_w=0.02, park_s=0.5, park_pos=0.020, park_yaw_deg=1.
            rel_open=0.8, rel_f=0.05, rel_s=0.5, rel_deadline=2.0, ret_back=0.06, ret_t1=1.5, ret_t2=3.4, ret_clear=0.010,
            hold_s=3.0, st_disp=0.005, st_tilt=3.0, st_v=0.001, st_fz_ratio=0.9, place_tol_report=0.030,
            ready_frac=0.25, ready_win=0.3, drop_fz=0.05, drop_run=5, rev_tol=0.05,
-           st_win=(0.5, 1.5), st_slide=0.5, st_arm_rate=1e-3, st_arm_ptp=1e-3, st_base_rate=0.01, st_base_ptp=0.005, st_yaw_ptp=0.002, st_cover=0.95,
+           st_win=(1.0, 2.0), st_win_old=(0.5, 1.5), st_slide=0.5, st_arm_rate=1e-3, st_arm_ptp=1e-3, st_base_rate=0.01, st_base_ptp=0.005, st_yaw_ptp=0.002, st_cover=0.95,
            join_lat=0.05, conn_len=0.8, conn_turn_deg=3.0, a_lat=0.5, a_axis=(1.5, 1.0), kappa_win=0.3, smooth_iters=100, ref_jump=0.05, v_ref_jump=0.075, a_dec=0.15, t_mult=3.0, stale_s=0.1, v_win=0.1)
 PPH = ('CARRY_NAV', 'PLACE_APPROACH', 'PARKED', 'LOWER', 'RELEASE', 'RETREAT', 'HOLD', 'DONE')
 PLOG_COLS = ('t', 'pph', 'fraw_x', 'fraw_y', 'fraw_z', 'f_x', 'f_y', 'f_z', 'ok_f', 'ok_b', 'fz', 'fh_ratio', 'gap', 'tilt', 'inside', 'good', 'fail_mask', 'n_sup',
@@ -551,8 +551,13 @@ class PlaceController(N2C.S1Planned):
         out = super().step(t, q, **kw)
         if self.stopped_t is not None and not self.stop_v2:                  # 停止後逐步紀錄，第 1.5 s 用有界微動停穩判定覆寫 S0a 的單步判定
             self.stop_rows.append((float(t), np.asarray(q, float).copy(), self.s.copy(), self.u_last.copy(), float(max((np.abs(u_).max() for u_ in self.pipe), default=0.0))))
-            if float(t) >= self.stopped_t + R['st_win'][1] - 1e-9:
+            if float(t) >= self.stopped_t + R['st_win'][1] - 1e-9:      # 1.0–2.0 s 窗（Codex 20261101_053807）；另記舊窗結果與完整時序
                 self.stop_ok, self.stop_v2 = stop_settled(self.stop_rows, self.stopped_t, R), True
+                self.stop_ok['old_window'] = {k: v for k, v in stop_settled(self.stop_rows, self.stopped_t, dict(R, st_win=R['st_win_old'])).items() if k in ('ok', 'fails', 'arm_rate', 'arm_ptp', 'why')}
+                Q = np.array([r_[1] for r_ in self.stop_rows])
+                T_ = np.array([r_[0] for r_ in self.stop_rows])
+                self.stop_ok['timeline'] = [(round(float(T_[k] - self.stopped_t), 2), round(float(np.abs(Q[k, 3:] - Q[k - 1, 3:]).max() / (T_[k] - T_[k - 1])), 5),
+                                             round(float(np.hypot(*(Q[k, :2] - Q[k - 1, :2])) / (T_[k] - T_[k - 1])), 5)) for k in range(1, len(T_), 5)]
         if self.t_release is not None:
             f = min((float(t) - self.t_release) / C0.T_CLOSE_RAMP, 1.0)
             self.f_cmd = C0.FINGER_CLOSED + (C0.FINGER_OPEN - C0.FINGER_CLOSED) * f

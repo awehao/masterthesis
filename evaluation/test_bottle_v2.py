@@ -79,7 +79,7 @@ def run(c, f, bias=(0.43e-3, 1.66e-3), noise=(0.33e-3, 0.43e-3), age=0.02, off=T
         if t >= t_end - 3.0 and not s.c.mission_done:
             s.c._trigger_stop('sim_limit')
         return {}
-    f.run(t_end, hook, tail=2.0)
+    f.run(t_end, hook, tail=2.6)
     return c.report()
 
 
@@ -136,7 +136,44 @@ def case_deep():
     print(f"   瓶淨空 實測／預測／下一拍 mm {[round((r['clear_bottle'][k] or float('nan')) * 1e3, 2) for k in ('meas_min', 'pred_min', 'next_min')]}")
 
 
-CASES = dict(nominal=case_nominal, no_est=case_no_est, jitter=case_jitter, stale=case_stale, inconsistent=case_inconsistent, deep=case_deep)
+def case_time():
+    """估計接收的時間防呆（直接呼叫 vision_intake）。"""
+    c, f = build()
+    c.t = 5.0
+    good = lambda: dict(valid=True, cx=0.0, cy=0.42, ax=[0.0, 0.0, 1.0], dist=1.2)   # noqa: E731
+    c.vision_intake(4.98, 5.0, good())
+    n0 = len(c.vbuf)
+    c.vision_intake(float('nan'), 5.0, good())
+    c.vision_intake(5.5, 5.0, good())
+    c.vision_intake(4.98, 5.0, good())
+    c.vision_intake(4.90, 5.0, good())
+    e = good()
+    e['ax'] = [0.0, 0.0, 0.0]
+    c.vision_intake(4.99, 5.0, e)
+    e = good()
+    e['ax'] = [0.0, 0.0, 5.0]
+    c.vision_intake(4.995, 5.0, e)
+    rj = c.vrej
+    chk('時間：非有限、未來、重複、倒序都拒收', rj.get('time_nonfinite') == 1 and rj.get('time_future') == 1 and rj.get('time_not_increasing') == 2, rj)
+    chk('軸：零向量拒收，非單位向量正規化後照收', rj.get('axis_zero') == 1 and len(c.vbuf) == n0 + 1, (rj, len(c.vbuf)))
+
+
+def case_transition():
+    """凍結後「既有備妥姿態→新預抓目標」的實際過渡軌跡淨空（目標偏到預算邊界）。"""
+    import bottle_s0b_path_check as PCK
+    for bias in ((0.43e-3, 1.66e-3), (-5.0e-3, 0.0), (4.5e-3, 0.0), (0.0, -2.0e-3), (0.0, 3.0e-3)):
+        c, f = build()
+        r = run(c, f, bias=bias, noise=(0.0, 0.0), t_end=40.0)
+        mins, sm, ns, rate, marg = PCK.check(f)
+        keys = [k for k in mins if ('bottle' in k or 'table' in k) and 'LIFT' not in k and not k.startswith('sp:') and 'held' not in k]
+        worst = {k: round(mins[k][0] * 1e3, 2) for k in keys}
+        fb = [k for k in keys if 'nonfinger↔bottle' in k]
+        print(f"   偏移 {np.round(np.array(bias) * 1e3, 2).tolist()} mm：完成 {r['mission_done']} 阻點 {r['stop'] and r['stop']['why']}；淨空 {worst}；自碰 {sm[0] * 1e3:.1f} mm")
+        chk(f'過渡淨空：偏移 {np.round(np.array(bias) * 1e3, 1).tolist()} mm 時非手指↔瓶 ≥ 5.5 mm 或由拒絕線受控停止',
+            all(mins[k][0] >= 0.0055 for k in fb) or str((r['stop'] or {}).get('why', '')).startswith('clearance'), (worst, r['stop']))
+
+
+CASES = dict(time=case_time, transition=case_transition, nominal=case_nominal, no_est=case_no_est, jitter=case_jitter, stale=case_stale, inconsistent=case_inconsistent, deep=case_deep)
 
 
 def main():

@@ -513,7 +513,7 @@ def main():
                      float('nan') if ft is None else ft, *Tb[:3, 3], *[float(v) for v in qb], BR_PH.index(out['phase']), float(out['stopped']),
                      *[forb[kk] for kk in sorted(forb)]])
         if (out['stopped'] or out['done']) and t_end_tail is None:
-            t_end_tail = t + (a.stop_tail_s if out['done'] else max(a.stop_tail_s, 1.2))  # 停止尾段須涵蓋 1 s 停止有效性
+            t_end_tail = t + (a.stop_tail_s if out['done'] else max(a.stop_tail_s, 2.6))   # 停穩判定 1.0–2.0 s 窗，尾段 ≥ 2.5 s  # 停止尾段須涵蓋 1 s 停止有效性
         if t_end_tail is not None and t >= t_end_tail:
             break
     rep = ctrl.report()

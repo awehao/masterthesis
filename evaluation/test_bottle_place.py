@@ -125,7 +125,7 @@ def run(c, f, t_end=75.0, hook=None):
         if t >= t_end - 3.0 and not s.c.mission_done:
             s.c._trigger_stop('sim_limit')
         return {}
-    f.run(t_end, fault, tail=2.0)                        # 停穩判定要停止後 1.5 s 的資料
+    f.run(t_end, fault, tail=2.6)                        # 停穩判定要停止後 2.0 s 的資料
     return c.report()
 
 
