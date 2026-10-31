@@ -10,8 +10,10 @@ POSE_MM, POSE_DEG = 1.0, 0.1
 
 
 class V2Link:
-    def __init__(self, cap, ctrl, pose_mm=POSE_MM, pose_deg=POSE_DEG):
+    def __init__(self, cap, ctrl, pose_mm=POSE_MM, pose_deg=POSE_DEG, sink=None):
+        """sink：轉送目標（預設 ctrl.vision_intake＝底盤相機；手腕相機用 ctrl.wrist_intake）。"""
         self.cap, self.ctrl, self.pose_mm, self.pose_deg = cap, ctrl, float(pose_mm), float(pose_deg)
+        self.sink = ctrl.vision_intake if sink is None else sink
         self.seen, self.n_fwd, self.rej, self.log = set(), 0, {}, []
 
     def _rej(self, st, why):
@@ -33,7 +35,7 @@ class V2Link:
                 self._rej(st, 'short_message')
                 continue
             e = dict(valid=d[1] == 1.0, cx=float(d[2]), cy=float(d[3]), ax=[float(v) for v in d[6:9]], dist=float(d[15]))
-            self.ctrl.vision_intake(float(f['task_t']), float(t_now), e)
+            self.sink(float(f['task_t']), float(t_now), e)
             self.n_fwd += 1
             self.log.append((float(st), 'forwarded'))
 
