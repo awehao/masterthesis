@@ -157,8 +157,10 @@ def main():
     Xr5, xr5 = ref([0.30, 0.20, 0.6])
     r5 = m5.solve(X_now=from_xytheta(0, 0.05, 0), X_ref_win=Xr5, xi_ref_win=xr5, xi_prev=np.array([0.25, 0.15, 0.4]),
                   arm=arm_dict(np.tile(tcp_at(np.zeros(3), Q_READY), (N + 1, 1, 1))))
-    modified = r5.accept_action != 'as_is' or not np.allclose(r5.u_opt, xr5[0] + r5.delta_xi_all[0], atol=1e-12, rtol=0)
-    chk('A5 旗標與實際改動一致', r5.arm_check['seq_consistent'] == (not modified), f"{r5.accept_action} seq_consistent {r5.arm_check['seq_consistent']}")
+    if r5.arm_check['fallback'] is None:
+        chk('A5 未退回時序列一致', r5.arm_check['seq_consistent'] is True and r5.accept_action == 'as_is', str(r5.arm_check))
+    else:
+        chk('A5 後處理改動 ⇒ 退回', r5.arm_check['fallback'] in ('base_postprocess_changed', 'coupled_not_solved'), str(r5.arm_check['fallback']))
 
     # ---- A6 煞停路徑
     m6 = GW.GMPC(cfg(cbf_hard_k0=True))
@@ -166,6 +168,45 @@ def main():
                   obstacles=[dict(x=0.25, y=0.0, radius=0.2, vx=-0.5, vy=0.0)], arm=arm_dict(T_seq4))
     chk('A6 底盤不可行 ⇒ 照封存版煞停、手臂歸零', r6.accept_action == 'brake' and np.allclose(r6.u_opt, 0) and not np.any(r6.u_arm_seq)
         and (r6.arm_check or {}).get('fallback') == 'base_brake', f'{r6.status} {r6.accept_action} {r6.arm_check}')
+
+    # ---- N 退回與回傳核對負測（Codex 20261031_183817）
+    up = np.array([0.6, -0.4, 0.3, 0.0, 0.2, -0.5])                     # 上一筆手臂命令非零
+    s_lag = Q_READY - 0.02                                              # 設定點尚未追上
+    r_n1 = m6.solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.3, 0, 0]), obstacles=[dict(x=0.25, y=0.0, radius=0.2, vx=-0.5, vy=0.0)],
+                    arm=arm_dict(T_seq4, s=s_lag, u_prev=up))
+    ck = r_n1.arm_check
+    chk('N1 非零前速 ⇒ 退回序列已驗證', ck['fallback'] == 'base_brake' and ck['failed'] is False and ck['seq_consistent'] is True, str(ck))
+    chk('N1 首筆不違反加速度上限（不是直接歸零）', np.abs(r_n1.u_arm_seq[0] - up).max() <= 19.984 * DT + 1e-9 and np.abs(r_n1.u_arm_seq[0]).max() > 0 or np.abs(up).max() <= 19.984 * DT, str(r_n1.u_arm_seq[0]))
+    r_n1b = m6.solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.3, 0, 0]), obstacles=[dict(x=0.25, y=0.0, radius=0.2, vx=-0.5, vy=0.0)],
+                     arm=arm_dict(T_seq4, s=s_lag, u_prev=up, a_arm=2.0))    # 加速度上限小：一步降不到零
+    chk('N2 低加速度上限：逐步減速、首筆非零、差 ≤ a·dt', np.abs(r_n1b.u_arm_seq[0]).max() > 0.4 and np.abs(r_n1b.u_arm_seq[0] - up).max() <= 2.0 * DT + 1e-9, str(r_n1b.u_arm_seq[0]))
+    chk('N2 序列結束前歸零', r_n1b.arm_check['fallback_check']['reaches_zero'] is True, str(r_n1b.arm_check['fallback_check']))
+    q_lim = Q_READY.copy()
+    q_lim[1] = hi[1] - 0.0505                                           # 離 margin 界 0.5 mm、上一筆命令仍朝外
+    r_n3 = m6.solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.3, 0, 0]), obstacles=[dict(x=0.25, y=0.0, radius=0.2, vx=-0.5, vy=0.0)],
+                    arm=arm_dict(T_seq4, q=q_lim, u_prev=np.array([0, 0.8, 0, 0, 0, 0]), a_arm=2.0))
+    ck = r_n3.arm_check
+    chk('N3 減速仍越限 ⇒ failed、不標一致', ck['failed'] is True and ck['seq_consistent'] is False, str(ck))
+
+    class Tamper(GW.GMPC):
+        kind = None
+
+        def solve(self, *a_, **k_):
+            r = super().solve(*a_, **k_)
+            arm = k_.get('arm') if 'arm' in k_ else (a_[5] if len(a_) > 5 else None)
+            if arm and arm.get('_inner'):
+                if self.kind == 'nan':
+                    r.u_arm_seq = np.full((N, 6), np.nan)
+                elif self.kind == 'viol':
+                    r.arm_check['max_violation'] = 1e-3
+                elif self.kind == 'post':
+                    r.arm_check['seq_consistent'] = False
+            return r
+    for kind, want in (('nan', 'returned_nonfinite'), ('viol', 'arm_limit_violation'), ('post', 'base_postprocess_changed')):
+        mt = Tamper(cfg())
+        mt.kind = kind
+        rt = mt.solve(X_now=np.eye(3), X_ref_win=Xr0, xi_ref_win=xr0, xi_prev=np.zeros(3), arm=arm_dict(T_seq))
+        chk(f'N4 回傳 {kind} ⇒ 退回 {want}', rt.arm_check['fallback'] == want and np.isfinite(rt.u_arm_seq).all(), str(rt.arm_check.get('fallback')))
 
     print(f'A7 耗時：保持 {t_hold * 1e3:.1f} ms、作用 {t_act * 1e3:.1f} ms（N＝20；含建構與安全外層的底盤解）；A4 作用 {ea * 1e3:.1f}／保持 {eh * 1e3:.1f} mm；L1 相對誤差 {worst:.1e}')
     print(f'記錄：A1 靜止參考底盤命令 {a1_split[0]}、手臂峰 {a1_split[1]:.3f} rad/s；A4 底盤 vx {a4_vx:.4f}（參考 0.05）；A1/A4 fallback {ra.arm_check.get("fallback")}／{r4a.arm_check.get("fallback")}')

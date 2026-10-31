@@ -89,6 +89,29 @@ def arm_prediction(q0, s0, N, dt, model):
     return Mq, cq, Ms, cs
 
 
+def arm_stop_sequence(arm, N, dt, tol=1e-9):
+    """退回用手臂序列：自 u_arm_prev 以 a_arm·dt 有界減速到 0，並核速度框、加速度框、預測實測角與設定點限位（±margin）。
+    零速度命令不保證實體手臂立即停止，也可能違反對上一筆的加速度限制（Codex 20261031_183817），所以不直接給零。
+    回傳 (U (N,6), check)；check['verified'] False ⇒ 呼叫端不得當成可行序列。"""
+    up = np.asarray(arm['u_arm_prev'], float).copy()
+    da, va = float(arm['a_arm']) * dt, float(arm['v_arm'])
+    U = np.zeros((N, ARM_N))
+    u = up
+    for k in range(N):
+        u = u + np.clip(-u, -da, da)
+        U[k] = u
+    Mq, cq, Ms, cs = arm_prediction(arm['q_arm'], arm['s_arm'], N, dt, arm['model'])
+    v = U.reshape(-1)
+    lo = np.asarray(arm['lo'], float) + arm['margin']
+    hi = np.asarray(arm['hi'], float) - arm['margin']
+    viol = {'velocity': float(np.abs(U).max() - va),
+            'acceleration': float(np.abs(np.diff(np.vstack([up, U]), axis=0)).max() - da),
+            'measured_position': max(float(max((lo - (Mq[k] @ v + cq[k])).max(), ((Mq[k] @ v + cq[k]) - hi).max())) for k in range(N)),
+            'setpoint_position': max(float(max((lo - (Ms[k] @ v + cs[k])).max(), ((Ms[k] @ v + cs[k]) - hi).max())) for k in range(N))}
+    ok = all(x <= tol for x in viol.values()) and bool(np.isfinite(U).all())
+    return U, dict(verified=bool(ok), violations=viol, reaches_zero=bool(np.abs(U[-1]).max() <= tol))
+
+
 def _rot_err_world(R_cur, R_des):
     Re = R_cur.T @ R_des
     c = float(np.clip((np.trace(Re) - 1.0) * 0.5, -1.0, 1.0))
@@ -321,7 +344,7 @@ class GMPCResult:
     # （gmpc_wb）手臂：arm_mode None＝未使用手臂（與封存版相同）；'hold'＝手臂速度序列固定 0（u_arm_seq (N,6) 全零）
     arm_mode          : str | None = None
     u_arm_seq         : np.ndarray | None = None
-    arm_check         : dict | None = None      # active：手臂限制於回傳序列的原單位最大違反、有限值、底盤後處理是否改動（seq_consistent）
+    arm_check         : dict | None = None      # active：回傳序列的原單位最大違反、有限值、seq_consistent、fallback 原因、failed（退回未驗證 ⇒ 呼叫端須終止）
 
 
 # ---------------------------------------------------------------------------
@@ -1001,15 +1024,25 @@ class GMPC:
             r_hold = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm={'mode': 'hold'})
             N_ = self.cfg.N
             def _fb(why, coupled_status=None):
-                return _dc.replace(r_hold, arm_mode='active', u_arm_seq=np.zeros((N_, 6)),
-                                   arm_check=dict(fallback=why, coupled_status=coupled_status, finite=True, max_violation=float('nan'),
-                                                  seq_consistent=True, note='手臂保持（退回 hold 底盤解）'))
+                U_s, ck = arm_stop_sequence(arm, N_, self.cfg.dt)
+                return _dc.replace(r_hold, arm_mode='active', u_arm_seq=U_s,
+                                   arm_check=dict(fallback=why, coupled_status=coupled_status, finite=True, seq_consistent=bool(ck['verified']),
+                                                  failed=not ck['verified'], max_violation=max(ck['violations'].values()), fallback_check=ck,
+                                                  note='退回 hold 底盤解；手臂有界減速序列（未驗證通過 ⇒ failed，呼叫端須終止）'))
             if r_hold.accept_action == 'brake':
                 return _fb('base_brake')
             r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=dict(arm, _inner=True))
             if r.status != 'solved':
                 return _fb('coupled_not_solved', r.status)
-            r.arm_check = dict(r.arm_check or {}, fallback=None, hold_status=r_hold.status)
+            ck = r.arm_check or {}
+            # 實際回傳命令核對：有限值、手臂限制原單位違反、底盤後處理未改動；任一不過即退回，不只記錄
+            if not (np.isfinite(np.asarray(r.u_opt, float)).all() and r.u_arm_seq is not None and np.isfinite(r.u_arm_seq).all() and ck.get('finite') is True):
+                return _fb('returned_nonfinite', r.status)
+            if not (ck.get('max_violation', float('inf')) <= arm.get('r_tol', 1e-6)):
+                return _fb('arm_limit_violation', r.status)
+            if ck.get('seq_consistent') is not True:
+                return _fb('base_postprocess_changed', r.status)
+            r.arm_check = dict(ck, fallback=None, failed=False, hold_status=r_hold.status)
             return r
         cfg = self.cfg
         N, dt = cfg.N, cfg.dt
@@ -1258,10 +1291,11 @@ class GMPC:
         # 6. OSQP solve
         P_sp = sparse.csc_matrix(P_dense)
         prob = osqp.OSQP()
+        # 耦合問題比照 W-GMPC：QP 容差須緊於殘差核對門檻 1e-6（eps 1e-5 實測手臂限制殘差 6.3e-6）；底盤問題（n_arm＝0）維持封存設定
         prob.setup(P=P_sp, q=q_vec, A=A_total, l=lb_total, u=ub_total,
                    verbose=False,
-                   eps_abs=1e-5, eps_rel=1e-5,        # looser tolerance for speed
-                   polish=False, max_iter=8000)        # more iter for hard cases
+                   eps_abs=1e-7 if n_arm else 1e-5, eps_rel=1e-7 if n_arm else 1e-5,        # looser tolerance for speed
+                   polish=bool(n_arm), max_iter=20000 if n_arm else 8000)        # more iter for hard cases
         import time
         t0 = time.perf_counter()
         res = prob.solve()
