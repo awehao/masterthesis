@@ -94,7 +94,7 @@ def main():
                 mins[key] = (float(d), float(T[i]), str(PH[i]))
         for i, q in enumerate(Q):
             ph = PH[i]
-            q_f = Q_OPEN if ph in ('CRUISE', 'PREGRASP', 'INSERT') else 0.0075   # 閉爪後兩指約貼 30 mm 瓶（名目 (36.2−30)/2 mm 內縮）
+            q_f = Q_OPEN if ph in ('CRUISE', 'PREGRASP', 'INSERT') else 0.0038   # 閉爪後兩指貼 30 mm 瓶：q＝(30−22.4)/2 mm（10/31 更正，原誤用 0.0075）
             W = link_world(q, q_f)
             for n, P in W.items():
                 fing = n in C.FINGERS
