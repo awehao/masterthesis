@@ -6,7 +6,7 @@
 輸出：
   第七次進度報告素材/資料/mission_rt_summary.json   各趟結束碼、第一阻點（失敗趟）、成功趟的分段時刻與末態
   第七次進度報告素材/圖表/34_完整往返_各趟時間組成.png
-  第七次進度報告素材/圖表/35_完整往返_各包局部縮時.png
+  第七次進度報告素材/圖表/35_完整往返_各包局部縮時.png（局部改善／時長對照）
 """
 from __future__ import annotations
 
@@ -23,8 +23,20 @@ from matplotlib.patches import Patch                               # noqa: E402
 import numpy as np                                                 # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WS = os.path.abspath(os.path.join(HERE, '..'))
-RUNS = os.path.join(HERE, 'runs')
+
+
+def _find_ws(d):
+    """往上找含 evaluation/runs 的工作區根（本檔在 evaluation/ 或素材「產生程式/」副本皆可直接執行）。"""
+    while True:
+        if os.path.isdir(os.path.join(d, 'evaluation', 'runs')):
+            return d
+        if os.path.dirname(d) == d:
+            raise SystemExit('找不到含 evaluation/runs 的工作區根')
+        d = os.path.dirname(d)
+
+
+WS = _find_ws(HERE)
+RUNS = os.path.join(WS, 'evaluation', 'runs')
 MAT = os.path.join(WS, '第七次進度報告素材')
 SURF, INK, INK2, MUTED, GRID = '#fcfcfb', '#0b0b0b', '#52514e', '#898781', '#e1e0d9'
 CAT = ['#898781', '#2a78d6', '#eb6834', '#1baf7a', '#8a5cd0', '#d4a72c']   # 起跑（中性灰）＋五段，固定順序
@@ -187,7 +199,7 @@ def run_summary(R):
 def fig34(S):
     ok = [s for s in S if s.get('rc') == 0 and s.get('segments')]
     fig, ax = plt.subplots(figsize=(10.5, 0.42 * len(ok) + 1.6))
-    names = [n for n, _, _ in ok[0]['segments']]
+    names = [n if n in ('起跑', '回家') else n + '區間' for n, _, _ in ok[0]['segments']]
     for i, s in enumerate(ok):
         y = len(ok) - 1 - i
         for j, (n, a, c) in enumerate(s['segments']):
@@ -204,8 +216,8 @@ def fig34(S):
     ax.grid(axis='y', visible=False)
     ax.legend(handles=[Patch(color=CAT[j], label=n) for j, n in enumerate(names)], ncol=6, frameon=False, loc='lower left',
               bbox_to_anchor=(0.0, 1.0), fontsize=8.5)
-    ax.set_title('完整往返各趟時間組成（rc 0 趟；配置逐包變動，n＝1／趟，不合併為可靠性）', loc='left', fontsize=10.5, pad=26)
-    fig.text(0.01, -0.06, '起跑＝模擬開始→導航起步；門段＝→門段 DONE；抽屜段＝→抽屜交回導航；返程 A／B＝→各段交回導航；回家＝→本趟結束（含末端對位，非 GMPC）。'
+    ax.set_title('完整往返各趟任務區間組成（rc 0 趟；配置逐包變動，n＝1／趟，不合併為可靠性）', loc='left', fontsize=10.5, pad=26)
+    fig.text(0.01, -0.06, '各區間含導航、進場、交接與操作（不是純操作時間）。起跑＝模擬開始→導航起步；門段＝→門段 DONE；抽屜段＝→抽屜交回導航；返程 A／B＝→各段交回導航；回家＝→本趟結束（含末端對位，非 GMPC）。'
              '來源：evaluation/runs/mission_rt_*（task.log、task_d.log、task_return_*.json、room_run_mission_merged.json）。', fontsize=7.5, color=INK2, wrap=True)
     return fig
 
@@ -244,7 +256,7 @@ def fig35(S):
     ax.scatter([], [], s=40, color='#898781', label='改動前一趟')
     ax.scatter([], [], s=40, color='#2a78d6', label='改動後一趟')
     ax.legend(frameon=False, loc='lower right', fontsize=8.5)
-    ax.set_title('各包局部縮時（相鄰兩趟實測，各 n＝1；局部量不等於整趟差）', loc='left', fontsize=10.5)
+    ax.set_title('各包局部改善／時長對照（相鄰兩趟實測，各 n＝1；局部量不等於整趟差；R1 列為反向時間，非提速）', loc='left', fontsize=10.5)
     return fig
 
 
