@@ -33,7 +33,7 @@ REG = dict(park_v=0.01, park_w=0.02, park_s=0.5, park_pos=0.020, park_yaw_deg=1.
            v_fast=0.02, v_slow=0.005, slow_above=0.010, extra_down=0.010, sup_fz=0.98, sup_h_ratio=0.3, sup_gap=0.003, sup_s=0.3, tilt_deg=3.0, edge_m=0.010,
            rel_open=0.8, rel_f=0.05, rel_s=0.5, rel_deadline=2.0, ret_back=0.06, ret_t1=1.5, ret_t2=3.4, ret_clear=0.010,
            hold_s=3.0, st_disp=0.005, st_tilt=3.0, st_v=0.001, st_fz_ratio=0.9, place_tol_report=0.030,
-           join_lat=0.05, conn_len=0.8, conn_turn_deg=3.0, a_dec=0.15, t_mult=3.0)
+           join_lat=0.05, conn_len=0.8, conn_turn_deg=3.0, a_lat=0.5, ref_jump=0.05, a_dec=0.15, t_mult=3.0, stale_s=0.1, v_win=0.1)
 PPH = ('CARRY_NAV', 'PLACE_APPROACH', 'PARKED', 'LOWER', 'RELEASE', 'RETREAT', 'HOLD', 'DONE')
 
 
@@ -74,7 +74,7 @@ def max_turn_deg(P):
     return float(np.degrees(np.abs(np.diff(a))).max()) if len(a) > 1 else 0.0
 
 
-def build_carry(raw, p_pred, dir_pred, x_entry, lane_y, reg=REG):
+def build_carry(raw, p_pred, dir_pred, x_entry, lane_y, reg=REG, v_max=0.25):
     """規劃原始路徑 → 承接接段＋規劃段＋接直線段。回傳 (CarryPath, 資訊) 或 (None, 原因)。"""
     raw = NP.resample(raw)
     s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(raw, axis=0), axis=1))]
@@ -94,7 +94,11 @@ def build_carry(raw, p_pred, dir_pred, x_entry, lane_y, reg=REG):
         return None, dict(why='carry_connector_turn', turn_deg=turn, lateral=lat)
     P = np.vstack([conn, raw[k2 + 1:]])
     J = join_lane_y(P, x_entry, lane_y, reg['conn_len'])
-    return CarryPath(J, x_entry, lane_y), dict(lateral=lat, conn_turn_deg=turn, n=len(J), turn_max_deg=max_turn_deg(J))
+    kappa = math.radians(max_turn_deg(J)) / NP.DS
+    a_lat = kappa * v_max ** 2                                        # 以持瓶參考速度上限估最大橫向加速度（底盤偏航固定，全向移動）
+    if a_lat > reg['a_lat']:
+        return None, dict(why='carry_lateral_accel', a_lat=a_lat, kappa=kappa)
+    return CarryPath(J, x_entry, lane_y), dict(lateral=lat, conn_turn_deg=turn, n=len(J), turn_max_deg=max_turn_deg(J), kappa_max=kappa, a_lat_max=a_lat)
 
 
 def join_lane_y(P, x_lane, lane_y, L_=NP.JOIN_LEN):
@@ -132,6 +136,7 @@ class PlaceController(N2C.S1Planned):
         self.T_b_rel0, self.n_still_p, self.place_ev, self.st_log = None, 0, {}, []
         self.f_place, self.q_fingers, self.T_ret0, self.q_ret0 = None, None, None, None
         self.bottle_mass = 0.20                             # 資產 bottle_s0.yaml；跑法讀回後覆寫
+        self.t_ok = {}
 
     # ---- 共用
     def _set(self, ph, **info):
@@ -185,16 +190,25 @@ class PlaceController(N2C.S1Planned):
                 self._pstop('carry_plan_rejected', detail=why)
                 return
             self.park, _ = self._park_solve(q)                          # CARRY 開始：抬升後的實際構型重算停車位，直線段 y＝停車 y
-            cp, info = build_carry(res['P'], qp[:2], dw, self.carry_req['goal'][0], float(self.park[1]), R)
+            cp, info = build_carry(res['P'], qp[:2], dw, self.carry_req['goal'][0], float(self.park[1]), R, v_max=self.v_carry)
             if cp is None:
                 self._pstop(info.pop('why'), **info)
                 return
-            if res.get('grid') is not None and NP.blocked(res['grid'].cost(cp.P)).any():
-                self._pstop('carry_plan_rejected', detail='承接後路徑有內切以上或未知格')
+            full = np.vstack([cp.P, cp.xy(np.arange(cp.x_lane, float(self.park[0]) + 1e-9, NP.DS))])   # 規劃段＋接段＋直線段到停車位
+            if res.get('grid') is not None and NP.blocked(res['grid'].cost(full)).any():
+                self._pstop('carry_plan_rejected', detail='承接後（含直線段到停車位）有內切以上或未知格')
                 return
-            self.cpath, self.carry_info = cp, dict(info, plan=res.get('info'))
-            self.csig = cp.project(qp[:2], cp.sig0, back=0.0, ahead=0.3)
-            self.s_ref, self.v_b, self.done_anchored = self.csig, float(self._vb_meas(q) if np.isfinite(self._vb_meas(q)) else self.v_b), True
+            csig = cp.project(q[:2], cp.sig0, back=0.0, ahead=0.3)       # 實測位置的投影（領先量同 S0b 以實測為準）
+            lead = min(max(self.s_ref - float(q[0]), 0.0), B.S_LEAD)         # 承接前參考對實測的領先量，沿用
+            ref_old = np.array([self.s_ref + self.v_b * C0.D_STEPS * C0.PHYS, self.y_ref])   # 承接前的參考（生效時刻）
+            s_new = csig + lead
+            jump = float(np.linalg.norm(cp.xy(s_new + self.v_b * C0.D_STEPS * C0.PHYS)[0] - ref_old))
+            if jump > R['ref_jump']:
+                self._pstop('carry_ref_discontinuous', jump=jump)
+                return
+            info.update(ref_jump=jump, lead=lead, v_b=self.v_b, v_meas=float(self._vb_meas(q)))
+            self.cpath, self.carry_info, self.csig = cp, dict(info, plan=res.get('info')), csig
+            self.s_ref, self.done_anchored = s_new, True                     # 參考速度 v_b 沿用承接前的值：位置與速度都連續
             self.th_ref = self.place['theta']
             if res.get('monitor') is not None:
                 self.cmon = res['monitor'](cp)
@@ -290,12 +304,17 @@ class PlaceController(N2C.S1Planned):
         if not L_:
             return False, dict(ok=False, why='no_log')
         P = np.array([e[1] for e in L_])
-        disp = float(np.linalg.norm(P[:, :3] - P[0, :3], axis=1).max())
-        tilt = float(max(e[2] for e in L_))
-        tail = [e for e in L_ if e[0] >= L_[-1][0] - 1.0]
-        v_end = float(np.linalg.norm(tail[-1][1][:3] - tail[0][1][:3]) / max(tail[-1][0] - tail[0][0], 1e-6)) if len(tail) > 1 else float('inf')
+        tt = np.array([e[0] for e in L_])
+        valid = bool(np.isfinite(P).all() and all(math.isfinite(e[2]) for e in L_))
+        disp = float(np.linalg.norm(P[:, :3] - P[0, :3], axis=1).max()) if valid else float('nan')
+        tilt = float(max(e[2] for e in L_)) if valid else float('nan')
+        tail = (tt >= tt[-1] - 1.0)
+        k_ = max(int(round(R['v_win'] / C0.PHYS)), 1)                        # 末 1 s 逐 0.1 s 段速度的最大值（不讓往返互相抵消）
+        Pt = P[tail]
+        v_end = float((np.linalg.norm(Pt[k_:] - Pt[:-k_], axis=1) / (k_ * C0.PHYS)).max()) if valid and len(Pt) > k_ else float('nan')
         hold = [e for e in L_ if self.place_ev.get('HOLD') and e[0] >= self.place_ev['HOLD']['t']]
-        fz_min = min((e[3] for e in hold), default=float('nan'))
+        fz_h = np.array([e[3] for e in hold], float)
+        fz_min = float(fz_h.min()) if len(fz_h) and np.isfinite(fz_h).all() else float('nan')   # 全窗須有效：有 NaN 就不成立
         mg = float(self.bottle_mass) * 9.81
         x, y = P[-1, 0], P[-1, 1]
         cx, cy = self.place['c']
@@ -303,7 +322,8 @@ class PlaceController(N2C.S1Planned):
         edge = min(x - (cx - sx / 2), (cx + sx / 2) - x, y - (cy - sy / 2), (cy + sy / 2) - y)
         off = float(np.hypot(x - self.place['target'][0], y - self.place['target'][1]))
         met = dict(disp=disp, tilt=tilt, v_end=v_end, fz_min=fz_min, fz_need=R['st_fz_ratio'] * mg, edge=edge, edge_need=self.judge.br + R['edge_m'], offset=off)
-        ok = disp <= R['st_disp'] and tilt <= R['st_tilt'] and v_end < R['st_v'] and fz_min >= R['st_fz_ratio'] * mg and edge >= self.judge.br + R['edge_m']
+        ok = valid and disp <= R['st_disp'] and tilt <= R['st_tilt'] and v_end < R['st_v'] and fz_min >= R['st_fz_ratio'] * mg and edge >= self.judge.br + R['edge_m']
+        met['valid'] = valid
         met['ok'] = bool(ok)
         return bool(ok), met
 
@@ -312,7 +332,20 @@ class PlaceController(N2C.S1Planned):
         self.f_place, self.q_fingers = f_place, q_fingers
         R = self.preg
         T_b = kw.get('T_bottle')
-        if self.pph == 'LOWER' and self.judge.stop is None and T_b is not None and f_place is not None and np.isfinite(f_place).all():
+        ok_b = T_b is not None and np.isfinite(T_b).all()
+        ok_f = f_place is not None and np.isfinite(np.asarray(f_place, float)).all()
+        ok_q = q_fingers is not None and np.isfinite(np.asarray(q_fingers, float)).all() and kw.get('f_fingers') is not None and np.isfinite(np.asarray(kw['f_fingers'], float)).all()
+        if self.pph in ('LOWER', 'RELEASE', 'RETREAT', 'HOLD') and self.judge.stop is None:   # 放置量測缺失：連續計數歸零；過期即停（同既有資料失效規則）
+            for k_, ok_ in (('place_force', ok_f and ok_b), ('fingers', ok_q)):
+                if ok_:
+                    self.t_ok[k_] = float(t)
+                elif float(t) - self.t_ok.setdefault(k_, float(t)) > R['stale_s']:
+                    self.judge._stop(float(t), f'data_stale_{k_}')
+            if not (ok_f and ok_b):
+                self.n_sup = 0
+            if not ok_q:
+                self.n_rel = 0
+        if self.pph == 'LOWER' and self.judge.stop is None and ok_b and ok_f:
             fz, fh = float(f_place[2]), float(np.hypot(f_place[0], f_place[1]))
             gap = bottle_bottom_z(T_b, self.judge.br) - self.place['top']
             cx, cy = self.place['c']
@@ -323,13 +356,13 @@ class PlaceController(N2C.S1Planned):
                 self.d_freeze, self.t_sup0 = self.d_cmd, float(t)          # 首次有效支撐：不再加深
                 self._ev('support_first', fz=fz, fh=fh, gap=gap, d_cmd=self.d_cmd)
             self.n_sup = self.n_sup + 1 if good else 0
-        if self.pph == 'RELEASE' and q_fingers is not None and kw.get('f_fingers') is not None:
+        if self.pph == 'RELEASE' and ok_q:
             opened = min(q_fingers) >= R['rel_open'] * C0.FINGER_OPEN
             free = max(kw['f_fingers']) < R['rel_f']
             self.n_rel = self.n_rel + 1 if (opened and free) else 0
-        if self.t_release is not None and T_b is not None:
-            fz = float(f_place[2]) if f_place is not None and np.isfinite(f_place).all() else float('nan')
-            self.st_log.append((float(t), np.r_[T_b[:3, 3]], tilt_deg(T_b), fz))
+        if self.t_release is not None:
+            fz = float(f_place[2]) if ok_f else float('nan')
+            self.st_log.append((float(t), np.r_[T_b[:3, 3]] if ok_b else np.full(3, np.nan), tilt_deg(T_b) if ok_b else float('nan'), fz))
         out = super().step(t, q, **kw)
         if self.t_release is not None:
             f = min((float(t) - self.t_release) / C0.T_CLOSE_RAMP, 1.0)

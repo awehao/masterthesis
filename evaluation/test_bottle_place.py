@@ -145,6 +145,14 @@ def case_nominal():
     chk('名目：放置完成', r['mission_done'] is True and r['stop'] is None, r['stop'])
     chk('名目：相位依序', seq == list(PC.PPH), seq)
     chk('名目：支撐先於鬆爪', r['place']['events']['RELEASE']['t'] > next(e['t'] for e in r['events'] if e['what'] == 'support_first'))
+    ta = r['place']['events']['CARRY_NAV']['t']
+    U = np.array([h['u'] for h in f.hist])[::5]
+    tt = np.array([h['t'] for h in f.hist])[::5]
+    dU = np.abs(np.diff(U[:, :2], axis=0)).max(axis=1)
+    near = (tt[1:] >= ta - 0.5) & (tt[1:] <= ta + 0.5)
+    car = (tt[1:] >= ta) & (tt[1:] <= r['place']['events']['PLACE_APPROACH']['t'])
+    print(f'   底盤命令每週期跳變：承接 ±0.5 s 內最大 {dU[near].max():.4f}、持瓶導航段最大 {dU[car].max():.4f} m/s')
+    chk('名目：承接前後命令跳變不大於持瓶段其他時候', dU[near].max() <= dU[car].max() + 1e-9, (dU[near].max(), dU[car].max()))
     chk('名目：停車後底盤命令為 0', max(float(np.abs(h['u']).max()) for h in f.hist if h['t'] > r['place']['events']['LOWER']['t'] + 0.2) < 1e-6)
     return r, c, f
 
@@ -207,7 +215,50 @@ def case_sticky():
     chk('鬆爪未確認 ⇒ 不退離、停止', (r['stop'] or {}).get('why') == 'release_not_confirmed' and r['place']['pph'] == 'RELEASE', r['stop'])
 
 
-CASES = dict(nominal=case_nominal, plan_fail=case_plan_fail, blocked_grid=case_blocked_grid, blocked_mid=case_blocked_mid, no_support=case_no_support, side=case_side, sticky=case_sticky)
+def case_gap():
+    c, f = build()
+    st = dict(n=0)
+
+    def hook(t, s):
+        if c.pph == 'LOWER' and c.t_sup0 is not None and c.t_release is None and st['n'] < 25:
+            st['n'] += 1
+            s.gap = True
+        else:
+            s.gap = False
+    orig = f.meas
+
+    def meas(**ov):
+        m = orig(**ov)
+        if getattr(f, 'gap', False):
+            m['f_place'] = np.full(3, np.nan)
+        return m
+    f.meas = meas
+    r = run(c, f, 70.0, hook)
+    summary('支撐確認中力資料中斷 0.25 s', r, c, f)
+    chk('資料中斷 > 0.1 s ⇒ data_stale_place_force 停止、未鬆爪', (r['stop'] or {}).get('why') == 'data_stale_place_force' and c.t_release is None, r['stop'])
+
+
+def case_gap_short():
+    c, f = build()
+    st = dict(n=0)
+
+    def hook(t, s):
+        s.gap = c.pph == 'LOWER' and c.t_sup0 is not None and c.t_release is None and st.__setitem__('n', st['n'] + 1) is None and st['n'] <= 5
+    orig = f.meas
+
+    def meas(**ov):
+        m = orig(**ov)
+        if getattr(f, 'gap', False):
+            m['f_place'] = np.full(3, np.nan)
+        return m
+    f.meas = meas
+    r = run(c, f, 75.0, hook)
+    summary('支撐確認中力資料中斷 0.05 s', r, c, f)
+    t_rel = r['place']['events'].get('RELEASE', {}).get('t')
+    chk('短暫中斷不跨過：計數歸零後重新累計 0.3 s 才鬆爪', t_rel is not None and t_rel - c.t_sup0 >= 0.3 + 0.05 - 1e-6, (t_rel, c.t_sup0))
+
+
+CASES = dict(nominal=case_nominal, gap=case_gap, gap_short=case_gap_short, plan_fail=case_plan_fail, blocked_grid=case_blocked_grid, blocked_mid=case_blocked_mid, no_support=case_no_support, side=case_side, sticky=case_sticky)
 
 
 def main():
