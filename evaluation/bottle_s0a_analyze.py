@@ -33,9 +33,11 @@ def main():
     print(f'閉爪前手指力峰 {np.nanmax(np.r_[f1[pre], f2[pre]]):.4f} N')
     t_first = t[np.argmax((f1 > 0.5) & (f2 > 0.5))]
     print(f'兩指首次皆 ≥0.5 N：{t_first:.2f} s（閉爪後 {t_first - tc:.2f} s）')
-    z = c['bottle_base_z']
     top = rep['asset']['table']['top_z']
-    print(f'瓶底高度：起 {z[0] - top:.5f}、抬升前 {z[t < tl][-1] - top:.5f}、峰 {z.max() - top:.4f}、末 {z[-1] - top:.4f} m；≥40 mm 自 {t[np.argmax(z - top >= 0.04)]:.2f} s 起')
+    _qx, _qy = c['bottle_qx'], c['bottle_qy']
+    _axz = 1 - 2 * (_qx ** 2 + _qy ** 2)                               # 瓶軸 z 分量
+    z = c['bottle_base_z'] - float(rep['asset']['bottle']['radius']) * np.sqrt(np.clip(1 - _axz ** 2, 0, 1))   # 傾斜後瓶底最低點（Codex 20261031_190217）
+    print(f'瓶底最低點高度：起 {z[0] - top:.5f}、抬升前 {z[t < tl][-1] - top:.5f}、峰 {z.max() - top:.4f}、末 {z[-1] - top:.4f} m；≥40 mm 自 {t[np.argmax(z - top >= 0.04)]:.2f} s 起')
     ft = c['f_bottle_table']
     print(f'瓶↔桌力：抬升前均 {np.nanmean(ft[t < tc]):.3f} N（瓶重 1.962）；離桌成立後 max {np.nanmax(ft[t >= tok]):.4f} N；NaN 步 {int(np.isnan(ft).sum())}')
     qw, qx, qy, qz = c['bottle_qw'], c['bottle_qx'], c['bottle_qy'], c['bottle_qz']

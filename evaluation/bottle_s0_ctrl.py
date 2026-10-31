@@ -74,6 +74,14 @@ class S0aController:
     def _trigger_stop(self, why):
         self.judge._stop(self.t, why)
 
+    # 掛鉤（受控碰觸 ProbeController 覆寫；判定與停止路徑共用）
+    def _T_seq(self, q, t_eff):
+        T_seq, _ = BR.horizon(self.task, self.st, self._plan(q), t_eff, self.cfg.N, self.cfg.dt)
+        return T_seq
+
+    def _advance(self, T_tcp, close_done, q):
+        BR.step_phase(self.task, self.st, self.t, T_tcp, grasp_evidence_ok=self.judge.t_grasp is not None, close_done=close_done, base_meas=q[:3])
+
     def _solve(self, q):
         cfg, st = self.cfg, self.st
         cfg.w_p = W_NEAR if st.phase in ('PREGRASP', 'INSERT', 'CLOSE', 'LIFT') else W_FAR
@@ -81,7 +89,7 @@ class S0aController:
         for u_in in self.pipe:
             qp, sp = S.plant_phys_step(qp, sp, u_in, cfg, 1)
         t_eff = self.t + D_STEPS * PHYS
-        T_seq, _ = BR.horizon(self.task, st, self._plan(q), t_eff, cfg.N, cfg.dt)
+        T_seq = self._T_seq(q, t_eff)
         if self.fail_inject is not None and self.fail_inject(self.t):
             return None
         r = FR.solve_sp_fr(self.K, S.make_z(qp, sp), self.u_prev, T_seq, cfg, U_warm=self.U_warm)
@@ -119,7 +127,7 @@ class S0aController:
             self._offset_update(q)
             ph0 = self.st.phase
             close_done = self.t_close_req is not None and self.t - self.t_close_req >= T_CLOSE_RAMP
-            BR.step_phase(self.task, self.st, self.t, T_tcp, grasp_evidence_ok=self.judge.t_grasp is not None, close_done=close_done, base_meas=q[:3])
+            self._advance(T_tcp, close_done, q)
             if self.st.phase != ph0:
                 self._ev('phase', to=self.st.phase)
             if self.st.phase == 'CLOSE' and self.t_close_req is None:
