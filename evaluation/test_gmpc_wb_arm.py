@@ -9,7 +9,6 @@ N＝20、dt＝0.05（導航原設定）；手臂設定點模型取 free4 辨識�
   A5 輪級後處理改動底盤命令時 seq_consistent＝False；A6 煞停路徑（不可行）手臂歸零並註記；A7 耗時（保持 vs 作用）。
 """
 import json
-import math
 import os
 import sys
 import time
@@ -73,7 +72,6 @@ def main():
     # ---- L1 線性化一致（有限差分）
     Xr, xr = ref([0.05, 0.0, 0.1])
     e0 = np.array([0.01, -0.02, 0.03])
-    _X_now = Xr[0] @ exp_(e0)                                          # （僅說明 e0 對應的實際位姿）
     A_d = np.stack([np.eye(3) - DT * GW.ad(xr[k]) for k in range(N)])
     Phi, Gamma = GW._build_prediction(A_d, DT)
     Mq, cq, Ms, cs = GW.arm_prediction(Q_READY, Q_READY, N, DT, MODEL)
