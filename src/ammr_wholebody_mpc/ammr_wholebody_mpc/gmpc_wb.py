@@ -1480,14 +1480,14 @@ class GMPC:
             arm_info = dict(nz=nz, A=A_arm, l=np.concatenate(rows_l), u=np.concatenate(rows_u), Mq=Mq, cq=cq, U0=U0)
             bo = arm.get('body_obst')
             if bo:                                              # 三維障礙：TCP 剛連點（夾爪、持瓶）的預測距離約束，底盤與手臂都在列內，耦合問題自己分配誰讓路
-                fc, r_ob, l_ob, ks, planes = FastChain.of(Kk, tcp), [], [], [], []
-                for k in range(0, N, bo.get('stride', 2)):      # 含第一個未來控制步
-                    xb = _pose_from_err(X_ref_win[k + 1], e_nom[k])
-                    Tc, J = fc.fk_jac(np.r_[xb, Mq[k] @ U0 + cq[k]])
-                    ks.append((Tc, J, _pose_jac(X_ref_win[k + 1], e_nom[k]) @ Gamma[k * n:(k + 1) * n, :], Mq[k]))
-                # 每個本體是一組包圍盒角點，共用一個分隔面：半空間是凸集，所有角點在面外 ⇒ 包圍盒內每一點都在面外，不靠點間距
-                for pts in bo['bodies']:
-                    pj = [[point_jac(T_, J_, off) for off in pts] for T_, J_, _, _ in ks]
+                r_ob, l_ob, planes, by_body = [], [], [], {}
+                k_idx = list(range(0, N, bo.get('stride', 2)))  # 含第一個未來控制步
+                preds = [(np.r_[_pose_from_err(X_ref_win[k + 1], e_nom[k]), Mq[k] @ U0 + cq[k]], _pose_jac(X_ref_win[k + 1], e_nom[k]) @ Gamma[k * n:(k + 1) * n, :], Mq[k]) for k in k_idx]
+                # 每個本體是一組包圍盒角點（各用自己連桿的 FK／Jacobian），共用一個分隔面
+                for body in bo['bodies']:
+                    fc, pts, bname = FastChain.of(Kk, body['link']), body['pts'], body.get('name', body['link'])
+                    fj = [fc.fk_jac(qf_) for qf_, _, _ in preds]
+                    pj = [[point_jac(T_, J_, off) for off in pts] for T_, J_ in fj]
                     P3 = np.array([[p_ for p_, _ in row_] for row_ in pj])      # (步, 點, 3)
                     for c, sz in bo['boxes']:
                         h_ = np.asarray(sz, float) / 2.0
@@ -1499,7 +1499,7 @@ class GMPC:
                         _, ax, sg = max(((float((sg_ * (P3[:, :, a_] - c[a_]) - h_[a_]).min()), a_, sg_) for a_ in axes for sg_ in (-1.0, 1.0)))
                         tang = [i for i in range(3) if i != ax]
                         planes.append(f"{'+' if sg > 0 else '-'}{'xyz'[ax]}")
-                        for j, (_, _, BG, Mk) in enumerate(ks):
+                        for j, (_, BG, Mk) in enumerate(preds):
                             for i_p, (_, Jp) in enumerate(pj[j]):
                                 # 斜坡邊界：允許深入量隨切向距離線性放寬，約束連續收緊；到箱角的真實距離是 d_safe／√(1＋slope²)，d_safe 由呼叫端補償
                                 req = float(bo['d_safe']) - float(bo['slope']) * float(np.linalg.norm(np.maximum(dd3[j, i_p, tang], 0.0))) - float(sg * (P3[j, i_p, ax] - c[ax]) - h_[ax])
@@ -1510,6 +1510,7 @@ class GMPC:
                                 row[nz:] = sg * (Jp[ax, 3:] @ Mk)
                                 r_ob.append(row)
                                 l_ob.append(req + float(row[nz:] @ U0))
+                                by_body[bname] = by_body.get(bname, 0) + 1
                 if r_ob:
                     Aob = np.array(r_ob)
                     lob = np.array(l_ob)
@@ -1517,7 +1518,7 @@ class GMPC:
                     lb_total = np.concatenate([lb_total, lob])
                     ub_total = np.concatenate([ub_total, np.full(len(lob), np.inf)])
                     arm_info['ob'] = (Aob, lob)
-                arm_info['planes'] = planes
+                arm_info['planes'], arm_info['by_body'] = planes, by_body
 
         # 6. OSQP solve（耦合問題先用對偶作用集法，未得解才走 OSQP；底盤問題維持封存設定）
         t0 = time.perf_counter()
@@ -1597,7 +1598,7 @@ class GMPC:
                 if 'ob' in arm_info:                  # 三維障礙列也進回傳核對：違反走既有退回路徑
                     viol = max(viol, float(np.max(arm_info['ob'][1] - arm_info['ob'][0] @ np.asarray(res.x)[:arm_info['nz'] + n_arm])))
                 u_arm_seq = ua.reshape(N, ARM_N)
-                arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info, ob_rows=int(len(arm_info['ob'][1])) if 'ob' in arm_info else 0, ob_planes=arm_info.get('planes'))
+                arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info, ob_rows=int(len(arm_info['ob'][1])) if 'ob' in arm_info else 0, ob_planes=arm_info.get('planes'), ob_by_body=arm_info.get('by_body'))
             else:
                 u_arm_seq = np.zeros((N, ARM_N))
                 arm_check = dict(max_violation=float('nan'), finite=False, rows=int(arm_rows), qp=qp_info, note='底盤煞停路徑：手臂命令歸零（未求得序列）')

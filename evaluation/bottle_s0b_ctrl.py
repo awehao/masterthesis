@@ -167,6 +167,10 @@ class S0bController(C.S0aController):
         self.base_plan = xi_ref[:N] + np.asarray(r.delta_xi_all, float)
         self.qp_log.append(dict(ck.get('qp') or dict(solver='fallback' if ck.get('fallback') else 'hold')))
         self.ob_rows = max(getattr(self, 'ob_rows', 0), int(ck.get('ob_rows') or 0))
+        if ck.get('ob_by_body'):
+            bb = self.__dict__.setdefault('ob_body_rows', {})
+            for k_, v_ in ck['ob_by_body'].items():
+                bb[k_] = dict(ticks=bb.get(k_, {}).get('ticks', 0) + 1, rows_max=max(bb.get(k_, {}).get('rows_max', 0), int(v_)))
         if ck.get('ob_planes'):
             pl = self.__dict__.setdefault('ob_plane_count', {})
             for k_ in ck['ob_planes']:

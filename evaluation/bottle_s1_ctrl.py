@@ -55,7 +55,7 @@ class DetourPath:
 
 class S1Controller(B.S0bController):
     def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, x_start, x_win, path, exit_c, exit_r, obstacles_fn,
-                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, t_insert=None, no_tcp_preview=False, no_inflight=False, body_boxes=None, d_body=0.05, **kw):
+                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, chain=None, scan_fn=None, t_insert=None, no_tcp_preview=False, no_inflight=False, body_boxes=None, d_body=0.05, body_links=(), **kw):
         x_stop = exit_c[0] if x_exit_stop is None else x_exit_stop
         super().__init__(K, ident, T_grasp, T_ready_rel, q_ready if q_tuck is None else q_tuck, table_top_z, bottle_radius, x_start, x_win, x_stop, v_c=v_c, obstacles_fn=obstacles_fn,
                          cbf_cfg=dict(B.CBF_MISSION, **kw.pop('cbf_extra', {})), **kw)
@@ -72,7 +72,7 @@ class S1Controller(B.S0bController):
         self.blending, self.mission_done, self.t_exit_in = False, False, None
         self.n_still, self.T_b_now, self.d_static, self.d_p_prev = 0, None, None, None
         self.no_tcp_preview, self.preview, self.no_inflight = bool(no_tcp_preview), {}, bool(no_inflight)
-        self.body_boxes, self.d_body, self._grip_corners = body_boxes, float(d_body), None   # S2：三維障礙（模擬真值，LiDAR 看不到）
+        self.body_boxes, self.d_body, self._grip_corners, self.body_links = body_boxes, float(d_body), None, tuple(body_links)   # S2：三維障礙（模擬真值，LiDAR 看不到）
         self.t_ms = dict(scan=[], shield=[], advance=[])     # 分項耗時：solve_ms 不含這些，也不含物理與渲染
         self.chain, self.scan_fn, self.t_next_scan = chain, scan_fn, 0.0   # 有 chain 時：障礙只來自掃描鏈，底盤命令只經 Shield 寫出
         self.clear_min = dict(meas=float('inf'), pred=float('inf'), t_meas=None, t_pred=None, n=0)
@@ -114,10 +114,11 @@ class S1Controller(B.S0bController):
     def _arm_extra(self):
         if not self.body_boxes:
             return {}
-        bodies = [self._obb_tcp()]
+        bodies = [dict(link='link_tcp', name='grip', pts=self._obb_tcp())]
         if self.judge.T_rel is not None:                       # 抓持後加瓶身包圍盒 8 角（瓶座標 ±r、±r、0–h），用實際抓持的瓶對 TCP
             r_, h_ = self.judge.br, G.BOTTLE['h']
-            bodies.append([tuple((self.judge.T_rel @ np.array([x, y, z, 1.0]))[:3]) for x in (-r_, r_) for y in (-r_, r_) for z in (0.0, h_)])
+            bodies.append(dict(link='link_tcp', name='bottle', pts=[tuple((self.judge.T_rel @ np.array([x, y, z, 1.0]))[:3]) for x in (-r_, r_) for y in (-r_, r_) for z in (0.0, h_)]))
+        bodies += [dict(link=n_, name=n_, pts=link_aabb(n_)) for n_ in self.body_links]
         slope = 0.5
         return dict(body_obst=dict(boxes=self.body_boxes, bodies=bodies, d_safe=self.d_body * math.sqrt(1.0 + slope ** 2), d_act=0.60, slope=slope, stride=2))   # d_safe 補償斜坡：到箱角真實距離＝d_safe／√(1＋slope²)＝d_body；slope 是提前量，不是安全門檻
 
@@ -264,10 +265,17 @@ class S1Controller(B.S0bController):
         r.update(clear_bottle=dict(reject_m=CLEAR_REJECT, guard_m=CLEAR_GUARD, meas_min=None if cm['n'] == 0 else cm['meas'], pred_min=None if cm['n'] == 0 else cm['pred'], next_min=cm.get('next'), t_meas=cm['t_meas'], t_pred=cm['t_pred'], n=cm['n']), n_compact=None if self.compact is None else len(self.compact))
         if self.chain is not None:
             r.update(nav_chain=self.chain.report())
-        r.update(body_rows_max=getattr(self, 'ob_rows', 0), body_planes=getattr(self, 'ob_plane_count', {}), body_cfg=None if not self.body_boxes else dict(d_body=self.d_body, slope=0.5, d_act=0.60, stride=2, grip_corners=[list(map(float, c_)) for c_ in self._obb_tcp()], boxes=[[np.asarray(c_).tolist(), np.asarray(z_).tolist()] for c_, z_ in self.body_boxes]), no_inflight=self.no_inflight, no_tcp_preview=self.no_tcp_preview, preview_range_mm={k: round(v * 1e3, 2) for k, v in self.preview.items()})
+        r.update(body_rows_by=getattr(self, 'ob_body_rows', {}), body_rows_max=getattr(self, 'ob_rows', 0), body_planes=getattr(self, 'ob_plane_count', {}), body_cfg=None if not self.body_boxes else dict(d_body=self.d_body, slope=0.5, d_act=0.60, stride=2, grip_corners=[list(map(float, c_)) for c_ in self._obb_tcp()], boxes=[[np.asarray(c_).tolist(), np.asarray(z_).tolist()] for c_, z_ in self.body_boxes]), no_inflight=self.no_inflight, no_tcp_preview=self.no_tcp_preview, preview_range_mm={k: round(v * 1e3, 2) for k, v in self.preview.items()})
         r.update(exit_reached=self.t_exit_in is not None, t_exit_in=self.t_exit_in, mission_done=self.mission_done, blending=self.blending,
                  nav_source='truth_obstacle_to_cbf' if self.chain is None else 'lidar_tracker_to_cbf', shield=self.chain is not None, success_s0_judge=r['success'], success=bool(r['success'] and self.mission_done))
         return r
+
+
+def link_aabb(name):
+    """連桿點雲在該連桿座標的軸對齊包圍盒 8 角（幾何近似，取自點雲）。"""
+    P = G.C.CL[name]
+    lo, hi = P.min(axis=0), P.max(axis=0)
+    return [(x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
 
 
 def save_compact(c, path):

@@ -22,6 +22,7 @@ ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_m
 ap.add_argument('--x-start', type=float, default=-3.6, help='底盤起點 x（瓶軸在 x＝0）')
 ap.add_argument('--no-tcp-preview', action='store_true', help='消融：時域 TCP 目標固定為 T_seq[0]，其餘不變')
 ap.add_argument('--s2-box', default='', help='S2 三維障礙 cx,cy,cz,sx,sy,sz；模擬真值進控制器，LiDAR 看不到')
+ap.add_argument('--s2-links', default='', help='納入約束的連桿，逗號分隔，例如 link3,link4,link5')
 ap.add_argument('--s2-active', action='store_true', help='開啟預測距離約束（無此旗標時障礙在場但控制器不知道）')
 ap.add_argument('--no-inflight', action='store_true', help='消融：求解初態不沿在途命令前推；實際延遲與安全核對不變')
 ap.add_argument('--group', default='G', choices=['G', 'P', 'M'], help='對照組：G gmpc_wb（凍結）、P 停車操作、M MotM 式單步 QP')
@@ -323,7 +324,7 @@ def main():
     p_ = [float(v) for v in a.path.split(',')]
     cls_ = dict(G=C2.S1Controller, P=GR.S1Parked, M=GR.S1MotM)[a.group]
     ctrl = cls_(C.S0_K(), ident, T_g, T_ready_rel, q_ready, float(T['top_z']), float(B['radius']), a.x_start, (a.win_lo, a.win_hi), C2.DetourPath(*p_),
-                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, chain.obstacles, chain=chain, scan_fn=scan_fn, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert, no_tcp_preview=a.no_tcp_preview, no_inflight=a.no_inflight, body_boxes=[S2] if (S2 and a.s2_active) else None, reg=None, required=required, **(dict(kp=a.m_kp) if a.group == 'M' else {}))
+                           tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, chain.obstacles, chain=chain, scan_fn=scan_fn, x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert, no_tcp_preview=a.no_tcp_preview, no_inflight=a.no_inflight, body_boxes=[S2] if (S2 and a.s2_active) else None, body_links=tuple(x for x in a.s2_links.split(',') if x), reg=None, required=required, **(dict(kp=a.m_kp) if a.group == 'M' else {}))
     if a.group == 'M':
         ctrl.p1.mu_post = a.m_mu
     ctrl.compact = []                                                         # CBF 證據；反事實重解在實跑後（bottle_s1_cbf_replay.py）
