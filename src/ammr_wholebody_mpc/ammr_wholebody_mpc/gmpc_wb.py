@@ -924,10 +924,13 @@ class GMPC:
               xi_ref_win : np.ndarray,
               xi_prev    : np.ndarray,
               obstacles  : list | None = None,
+              arm        : dict | None = None,
               ) -> GMPCResult:
         """
         obstacles : optional list of dicts {x, y, radius} in world frame.
                     If non-empty, a CBF inequality is added per obstacle on δξ_0.
+        arm       : （gmpc_wb）None ⇒ 與封存 gmpc.py 完全相同的問題。{'mode': 'hold'} ⇒ 決策向量末端附加手臂速度 u_a（N×6），
+                    以等式 u_a＝0 固定、無成本；底盤區塊（δξ、鬆弛、全部原限制）逐元素不變。其他模式尚未實作 ⇒ ValueError。
         """
         cfg = self.cfg
         N, dt = cfg.N, cfg.dt
@@ -1111,6 +1114,20 @@ class GMPC:
                     # way to rather than making the whole QP infeasible.
                     eps_ub[N] = 0.0
                 ub_total = np.concatenate([ub_total, eps_ub])
+
+        # 5c. （gmpc_wb）手臂區塊：附加在決策向量最後（δξ、鬆弛之後），原有列不動，只補零欄＋手臂列。
+        n_arm = 0
+        if arm is not None:
+            if arm.get('mode') != 'hold':
+                raise ValueError(f"gmpc_wb：arm mode {arm.get('mode')!r} 尚未實作（目前只有 hold）")
+            n_arm = 6 * N
+            nz = P_dense.shape[0]
+            P_dense = np.block([[P_dense, np.zeros((nz, n_arm))], [np.zeros((n_arm, nz)), np.zeros((n_arm, n_arm))]])
+            q_vec = np.concatenate([q_vec, np.zeros(n_arm)])
+            A_total = sparse.vstack([sparse.hstack([A_total, sparse.csc_matrix((A_total.shape[0], n_arm))]),
+                                     sparse.hstack([sparse.csc_matrix((n_arm, nz)), sparse.identity(n_arm, format='csc')])], format='csc')
+            lb_total = np.concatenate([lb_total, np.zeros(n_arm)])
+            ub_total = np.concatenate([ub_total, np.zeros(n_arm)])
 
         # 6. OSQP solve
         P_sp = sparse.csc_matrix(P_dense)
