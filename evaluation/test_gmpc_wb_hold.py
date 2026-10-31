@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """gmpc_wb（導航 GMPC 複本）手臂保持模式的等價回歸（Codex 20261031 同步回覆 §3；封存 gmpc.py 不動、只作對照）。
+r2（Codex 20261031 下一包回覆 (a)）：保持模式改為**消去**手臂變數（QP 與封存版相同）；補 K 輪級耦合（輪速／輪加速度與輸出投影實際介入）；
+  補 Q6：**回傳命令**的原單位殘差（速度框、對上一筆命令的加速度框、輪速、輪加速度）兩版逐一相等，並記是否 ≤ 0；手臂序列全零。
+r1 結果（附加零變數版：問題逐元素等價 10/10、J 未收斂命令差 2.3e-5 未過）保留於 results/bottle/gmpc_wb_hold_regression_r1.txt。
 構造案例（同一份完整輸入同時餵封存 GMPC 與 gmpc_wb(arm={'mode':'hold'})）：
   A 靜止、B 直行參考、C 側向偏差、D 轉向參考、E 靜態牆（split slack／static 列）、F 動態障礙迎面、
   G 已進入保護區（鬆弛作用）、H 硬 k0＋過近（預期不可行 → 煞停路徑）、I 加速度框貼邊（上一筆命令與參考差大）、J 時空成本＋邊距成長。
@@ -76,6 +79,9 @@ def cases():
     out.append(('H 硬 k0＋過近', dict(cbf_hard_k0=True), dict(X_now=Xr[0], X_ref_win=Xr, xi_ref_win=xr, xi_prev=np.array([0.3, 0, 0]),
                                                              obstacles=[dict(x=0.25, y=0.0, radius=0.2, vx=-0.5, vy=0.0)])))
     out.append(('I 加速度框貼邊', {}, dict(X_now=Xr[0], X_ref_win=Xr, xi_ref_win=xr, xi_prev=np.array([-0.15, 0.2, -0.7]), obstacles=None)))
+    Xw, xw = ref([0.30, 0.20, 0.6])
+    out.append(('K 輪級耦合介入', dict(wheel_coupling=True, u_max=np.array([0.35, 0.25, 0.8])),
+                dict(X_now=from_xytheta(0, 0.05, 0.0), X_ref_win=Xw, xi_ref_win=xw, xi_prev=np.array([0.25, 0.15, 0.4]), obstacles=None)))
     out.append(('J 時空成本＋邊距成長', dict(st_weight=2.0, cbf_margin_growth=0.05, cbf_vel_margin_gain=0.5),
                 dict(X_now=from_xytheta(0, -0.05, 0), X_ref_win=Xr, xi_ref_win=xr, xi_prev=np.array([0.3, 0, 0]),
                      obstacles=[dict(x=1.0, y=0.3, radius=0.2, vx=0.0, vy=-0.3), dict(x=1.5, y=-0.2, radius=0.15, vx=-0.2, vy=0.1)])))
@@ -96,6 +102,18 @@ def solve(mod, cfgkw, kw, arm=None):
     return r, dict(CAP[0]) if CAP else None, dt
 
 
+def cmd_resid(u, xi_prev, cfgkw):
+    """回傳命令的原單位殘差（正＝超出）：速度框、對 xi_prev 的加速度框、輪速、輪加速度（四捨五入到 1e-12 以便兩版比較）。"""
+    c = G0.GMPCConfig(**cfg_base(**cfgkw))
+    u, xp = np.asarray(u, float), np.asarray(xi_prev, float)
+    r_v = float(max((u - c.u_max).max(), (c.u_min - u).max()))
+    r_a = float((np.abs(u - xp) - c.a_max * c.dt).max())
+    W = G0.wheel_matrix(c)
+    r_w = float((np.abs(W @ u) - c.wheel_radius * c.wheel_w_max).max())
+    r_wa = float((np.abs(W @ (u - xp)) - c.wheel_radius * c.wheel_a_max * c.dt).max())
+    return tuple(round(x, 12) for x in (r_v, r_a, r_w, r_wa))
+
+
 def dense(M):
     return M.toarray() if hasattr(M, 'toarray') else np.asarray(M)
 
@@ -108,16 +126,19 @@ def main():
         P0, P1 = dense(q0['P']), dense(q1['P'])
         A0, A1 = dense(q0['A']), dense(q1['A'])
         nz, m = P0.shape[0], A0.shape[0]
-        na = P1.shape[0] - nz
-        ok_qp = (na == 120 and np.array_equal(P1[:nz, :nz], P0) and not P1[nz:, :].any() and not P1[:, nz:].any()
-                 and np.array_equal(np.asarray(q1['q'])[:nz], np.asarray(q0['q'])) and not np.asarray(q1['q'])[nz:].any()
-                 and np.array_equal(A1[:m, :nz], A0) and not A1[:m, nz:].any() and not A1[m:, :nz].any() and np.array_equal(A1[m:, nz:], np.eye(na))
-                 and np.array_equal(np.asarray(q1['l'])[:m], np.asarray(q0['l'])) and np.array_equal(np.asarray(q1['u'])[:m], np.asarray(q0['u']))
-                 and not np.asarray(q1['l'])[m:].any() and not np.asarray(q1['u'])[m:].any())
+        ok_qp = (np.array_equal(P1, P0) and np.array_equal(A1, A0) and all(np.array_equal(np.asarray(q1[k]), np.asarray(q0[k])) for k in ('q', 'l', 'u')))
+        res0, res1 = cmd_resid(r0.u_opt, kw['xi_prev'], cfgkw), cmd_resid(r1.u_opt, kw['xi_prev'], cfgkw)
+        if res0 != res1:
+            bad.append(f'{name}: Q6 回傳命令殘差不同 {res0}／{res1}')
+        if r1.arm_mode != 'hold' or r1.u_arm_seq is None or np.any(r1.u_arm_seq):
+            bad.append(f'{name}: Q6 手臂序列非全零')
+        for f in ('cbf_resid_post_noslack', 'cbf_resid_post_slack', 'wheel_w_cmd_max', 'accept_scale'):
+            a_, b_ = getattr(r0, f, None), getattr(r1, f, None)
+            if not (a_ == b_ or (isinstance(a_, float) and isinstance(b_, float) and np.isnan(a_) and np.isnan(b_))):
+                bad.append(f'{name}: Q4 {f} 不同 {a_}／{b_}')
         du = float(np.abs(np.asarray(r1.u_opt) - np.asarray(r0.u_opt)).max())
-        brake0, brake1 = r0.accept_action == 'brake' if hasattr(r0, 'accept_action') else None, r1.accept_action == 'brake' if hasattr(r1, 'accept_action') else None
         same_status = (r0.status == r1.status)
-        rows.append((name, nz, m, ok_qp, r0.status, r1.status, du, bool(du == 0.0), t1 / max(t0, 1e-9), getattr(r0, 'cbf_active', None)))
+        rows.append((name, nz, m, ok_qp, r0.status, r1.status, du, bool(du == 0.0), t1 / max(t0, 1e-9), getattr(r0, 'cbf_active', None), res0))
         if not ok_qp:
             bad.append(f'{name}: Q1 問題不等價')
         if du > TOL_U:
@@ -127,18 +148,10 @@ def main():
         for f in ('accept_action', 'cbf_active'):
             if getattr(r0, f, None) != getattr(r1, f, None):
                 bad.append(f'{name}: Q4 {f} 不同 {getattr(r0, f, None)}／{getattr(r1, f, None)}')
-    for name, nz, m, ok_qp, s0, s1, du, bit, tr, nc in rows:
-        print(f'{name:<20} 變數 {nz}＋120 列 {m}＋120 CBF列 {nc}：問題等價 {ok_qp}；狀態 {s0}／{s1}；命令差 {du:.1e}（逐位元 {bit}）；耗時比 {tr:.2f}')
+    for name, nz, m, ok_qp, s0, s1, du, bit, tr, nc, rs in rows:
+        print(f'{name:<20} 變數 {nz} 列 {m} CBF列 {nc}：問題相同 {ok_qp}；狀態 {s0}／{s1}；命令差 {du:.1e}（逐位元 {bit}）；回傳殘差 {rs}；耗時比 {tr:.2f}')
     print(f'gmpc_wb 手臂保持等價回歸 {len(rows)} 案（事前容差 {TOL_U}）：' + ('全過' if not bad else '失敗 ' + '；'.join(bad)))
-    # 診斷（不改判定）：未收斂案在兩版同時加嚴 OSQP（max_iter 400000、eps 1e-9、polish）後的命令差
-    Spy.override = dict(max_iter=400000, eps_abs=1e-9, eps_rel=1e-9, polish=True)
-    for name, cfgkw, kw in cases():
-        if not any(n == name and ('maximum' in s0 or 'maximum' in s1) for n, _, _, _, s0, s1, *_ in rows):
-            continue
-        r0, _, _ = solve(G0, cfgkw, kw)
-        r1, _, _ = solve(GW, cfgkw, kw, arm={'mode': 'hold'})
-        print(f'  診斷 {name}：加嚴後狀態 {r0.status}／{r1.status}；命令差 {float(np.abs(np.asarray(r1.u_opt) - np.asarray(r0.u_opt)).max()):.1e}')
-    Spy.override = None
+    # r1 的加嚴求解診斷已移除（r2 保持模式消去手臂變數，QP 與封存版相同；Codex：不以提高迭代數追求通過）
     return 0 if not bad else 1
 
 

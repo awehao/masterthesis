@@ -266,6 +266,9 @@ class GMPCResult:
     cmd_id                 : int   = -1
     accept_scale      : float = 1.0       # λ applied along the segment to ξ_prev
     wheel_w_cmd_max   : float = 0.0       # worst |ω| the RETURNED command implies
+    # （gmpc_wb）手臂：arm_mode None＝未使用手臂（與封存版相同）；'hold'＝手臂速度序列固定 0（u_arm_seq (N,6) 全零）
+    arm_mode          : str | None = None
+    u_arm_seq         : np.ndarray | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -929,8 +932,9 @@ class GMPC:
         """
         obstacles : optional list of dicts {x, y, radius} in world frame.
                     If non-empty, a CBF inequality is added per obstacle on δξ_0.
-        arm       : （gmpc_wb）None ⇒ 與封存 gmpc.py 完全相同的問題。{'mode': 'hold'} ⇒ 決策向量末端附加手臂速度 u_a（N×6），
-                    以等式 u_a＝0 固定、無成本；底盤區塊（δξ、鬆弛、全部原限制）逐元素不變。其他模式尚未實作 ⇒ ValueError。
+        arm       : （gmpc_wb）None ⇒ 與封存 gmpc.py 完全相同的問題。{'mode': 'hold'} ⇒ 手臂速度序列固定為 0：依結構**消去**這些
+                    等式為零的決策變數（r2，Codex 20261031：不交 120 個零變數給 OSQP），QP 與封存版相同；結果另帶 arm_mode、u_arm_seq＝0。
+                    r1（已撤）曾附加 u_a 並以等式固定，底盤區塊逐元素等價但未收斂案求解路徑不同。其他模式尚未實作 ⇒ ValueError。
         """
         cfg = self.cfg
         N, dt = cfg.N, cfg.dt
@@ -1116,18 +1120,9 @@ class GMPC:
                 ub_total = np.concatenate([ub_total, eps_ub])
 
         # 5c. （gmpc_wb）手臂區塊：附加在決策向量最後（δξ、鬆弛之後），原有列不動，只補零欄＋手臂列。
-        n_arm = 0
-        if arm is not None:
-            if arm.get('mode') != 'hold':
-                raise ValueError(f"gmpc_wb：arm mode {arm.get('mode')!r} 尚未實作（目前只有 hold）")
-            n_arm = 6 * N
-            nz = P_dense.shape[0]
-            P_dense = np.block([[P_dense, np.zeros((nz, n_arm))], [np.zeros((n_arm, nz)), np.zeros((n_arm, n_arm))]])
-            q_vec = np.concatenate([q_vec, np.zeros(n_arm)])
-            A_total = sparse.vstack([sparse.hstack([A_total, sparse.csc_matrix((A_total.shape[0], n_arm))]),
-                                     sparse.hstack([sparse.csc_matrix((n_arm, nz)), sparse.identity(n_arm, format='csc')])], format='csc')
-            lb_total = np.concatenate([lb_total, np.zeros(n_arm)])
-            ub_total = np.concatenate([ub_total, np.zeros(n_arm)])
+        if arm is not None and arm.get('mode') != 'hold':
+            raise ValueError(f"gmpc_wb：arm mode {arm.get('mode')!r} 尚未實作（目前只有 hold）")
+        # hold：手臂速度序列≡0，依結構消去，不改 QP（見 docstring r2）
 
         # 6. OSQP solve
         P_sp = sparse.csc_matrix(P_dense)
@@ -1274,7 +1269,9 @@ class GMPC:
                           wheel_w_cmd_max=w_cmd_max,
                           cbf_resid_post_noslack=resid_post_ns,
                           cbf_resid_post_slack=resid_post_s,
-                          cbf_resid_evaluated_on=evaluated_on)
+                          cbf_resid_evaluated_on=evaluated_on,
+                          arm_mode=None if arm is None else arm.get('mode'),
+                          u_arm_seq=None if arm is None else np.zeros((N, 6)))
 
 
 # ---------------------------------------------------------------------------
