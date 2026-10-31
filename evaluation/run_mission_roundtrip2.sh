@@ -442,7 +442,7 @@ if grep -q '^\[k3a\] 結束：DONE' "$DIR/task.log" && grep -q '門段交回導�
             [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && { RET_WHY="relay 未退出"; return 1; }
             for _i in $(seq 20); do _o=$(timeout 8 ros2 topic info /cmd_vel_pre_shield 2>&1); echo "$_o" | grep -q 'Publisher count: 0' && { _ok=1; break; }; sleep 0.5; done
             [ "$_ok" = 1 ] || { RET_WHY="護盾入口仍有其他發布者"; say "**$RET_WHY**"; return 1; }
-            spawn nav_align python3 -u evaluation/nav_align_node.py --goal="-0.6,-2.8,1.570796" --out "$DIR/nav_align.json"
+            spawn nav_align python3 -u evaluation/nav_align_node.py --goal="-0.6,-2.8,1.570796" --w-max 0.80 --a-ang 2.0 --out "$DIR/nav_align.json"
             tp=$(pid_of nav_align)
             while kill -0 "$tp" 2>/dev/null; do kill -0 "$SIM_PID" 2>/dev/null || { RET_WHY="模擬器已結束（對位）"; break; }; sleep 1; done
             wait_or_stop "$tp" 10 5; local rc=$STOP_RC; grep '^\[nav\]' "$DIR/nav_align.log" | tee -a "$DIR/run.log"
