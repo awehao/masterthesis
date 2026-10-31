@@ -31,7 +31,7 @@ trap cleanup EXIT
 trap 'say "收到 TERM"; exit 143' TERM
 trap 'say "收到 INT"; exit 130' INT
 say "=== 瓶子 N1 真話題鏈路 模式 $SIM_MODE 參數［${S1_ARGS:-無}］ RUN_ID=$RUN_ID 網域 $ROS_DOMAIN_ID；git $(git rev-parse --short HEAD)"
-sha256sum evaluation/isaac_bottle_ros.py evaluation/bottle_ros_chain.py evaluation/bottle_tracker_stamped.py evaluation/bottle_map_write.py evaluation/bottle_s1_ctrl.py evaluation/bottle_s1_groups.py evaluation/motm_b1_port.py evaluation/wg4b_b1_core.py evaluation/bottle_s0b_ctrl.py evaluation/bottle_branch.py evaluation/bottle_s0_ctrl.py evaluation/bottle_s0_logic.py evaluation/bottle_ref.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py evaluation/run_bottle_ros.sh evaluation/bottle_n2_path.py evaluation/bottle_n2_ctrl.py evaluation/bottle_n2_ros.py evaluation/bottle_n2_planner.yaml evaluation/bottle_ros_fake.py evaluation/isaac_bottle_n2.py evaluation/bottle_place_ctrl.py evaluation/bottle_place_ros.py evaluation/bottle_place_fake.py evaluation/isaac_bottle_place.py "$ASSET" > "$DIR/versions.sha256"
+sha256sum evaluation/isaac_bottle_ros.py evaluation/bottle_ros_chain.py evaluation/bottle_tracker_stamped.py evaluation/bottle_map_write.py evaluation/bottle_s1_ctrl.py evaluation/bottle_s1_groups.py evaluation/motm_b1_port.py evaluation/wg4b_b1_core.py evaluation/bottle_s0b_ctrl.py evaluation/bottle_branch.py evaluation/bottle_s0_ctrl.py evaluation/bottle_s0_logic.py evaluation/bottle_ref.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py evaluation/run_bottle_ros.sh evaluation/bottle_n2_path.py evaluation/bottle_n2_ctrl.py evaluation/bottle_n2_ros.py evaluation/bottle_n2_planner.yaml evaluation/bottle_ros_fake.py evaluation/isaac_bottle_n2.py evaluation/bottle_place_ctrl.py evaluation/bottle_place_ros.py evaluation/bottle_place_fake.py evaluation/isaac_bottle_place.py evaluation/isaac_bottle_v1.py evaluation/bottle_v1_cam.py evaluation/bottle_v1_est.py evaluation/bottle_v1_est_node.py "$ASSET" > "$DIR/versions.sha256"
 python3 evaluation/bottle_map_write.py "$DIR/map" ${S1_ARGS:-} ${MAP_ARGS:-} | tee -a "$DIR/run.log"
 PRM=$(python3 - <<'PY'
 import sys; sys.path.insert(0,'evaluation')
@@ -50,6 +50,11 @@ spawn relay ros2 run ammr_bringup scan_relay --ros-args -p use_sim_time:=true
 spawn tracker python3 -u evaluation/bottle_tracker_stamped.py --ros-args -p use_sim_time:=true -p scan_topic:=/scan -p map_topic:=/map $TR_P
 spawn shield python3 -u -c "import sys; sys.path.insert(0,'src/ammr_wholebody_mpc'); from ammr_wholebody_mpc.scan_safety_shield import main; main()" --ros-args -p use_sim_time:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_shield -p cmd_out_topic:=/cmd_vel $SH_P
 PLAN_ARGS=""
+if [ "${V1:-0}" = 1 ]; then                                    # V1 視覺旁路估計節點（桌子＝地圖先驗）
+  V1_TABLE=$(python3 -c "import sys;sys.path.insert(0,'evaluation');import bottle_s1_geom as G;n,c,s=[b for b in G.table_boxes() if b[0]=='table_top'][0];print(f'{c[2]+s[2]/2},{c[0]-s[0]/2},{c[1]-s[1]/2},{c[0]+s[0]/2},{c[1]+s[1]/2}')")
+  say "V1 桌子先驗 $V1_TABLE"
+  spawn v1est python3 -u evaluation/bottle_v1_est_node.py --table "$V1_TABLE" --ros-args -p use_sim_time:=true
+fi
 if [ "${PLAN:-0}" = 1 ]; then                                  # N2：planner_server 只供路徑（SmacPlanner2D），不起控制器
   spawn planner ros2 run nav2_planner planner_server --ros-args --params-file evaluation/bottle_n2_planner.yaml -p use_sim_time:=true
   spawn planlife ros2 run nav2_lifecycle_manager lifecycle_manager --ros-args -r __node:=lifecycle_manager_planner -p use_sim_time:=true -p autostart:=true -p node_names:="['planner_server']"
