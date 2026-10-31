@@ -71,24 +71,38 @@ def contact_ready(win, fz_need, reg):
 
 
 def stop_settled(rows, t_stop, reg):
-    """有界微動下的停穩（draft-3，Codex 20261101_043002；判準變更，不是證明瞬時速度低於原門檻）。
-    rows：停止後逐步 (t, q9, s6, u_last9, pipe_max)。核：命令歸零、在途走完、設定點固定；第 0.5–1.5 s 內所有滑動 0.5 s 窗的位移速率與整窗峰峰值（手臂各關節、底盤平移與偏航）。
-    資料不足（覆蓋率 < st_cover 或含非有限值）回 ok=None（未驗證）。"""
+    """有界微動下的停穩（draft-3，Codex 20261101_043002／043404；判準變更，不是證明瞬時速度低於原門檻）。
+    rows：停止後逐步 (t, q9, s6, u_last9, pipe_max)。核：命令歸零、在途走完、設定點固定；第 0.5–1.5 s 內所有滑動 0.5 s 窗（依實際時間戳）的位移速率與整窗峰峰值。
+    時間、q、設定點、命令、在途量任一非有限，或時間戳不嚴格遞增，或依時間戳的覆蓋率 < st_cover ⇒ ok=None（未驗證），不得通過。"""
     a, b = reg['st_win']
-    W = [r_ for r_ in rows if t_stop + a - 1e-9 <= r_[0] <= t_stop + b + 1e-9]
+    out = dict(method='bounded_micromotion_v1', t=round(t_stop + b, 3))
+    W = [r_ for r_ in rows if np.isfinite(r_[0]) and t_stop + a - 1e-9 <= r_[0] <= t_stop + b + 1e-9]
+    if any(not np.isfinite(r_[0]) for r_ in rows):
+        return dict(out, ok=None, why='time_nonfinite')
+    T = np.array([r_[0] for r_ in W], float)
+    if len(T) > 1 and not (np.diff(T) > 0).all():
+        return dict(out, ok=None, why='time_not_increasing')
     n_exp = int(round((b - a) / C0.PHYS)) + 1
-    out = dict(t=round(t_stop + b, 3), n=len(W), n_exp=n_exp, method='bounded_micromotion_v1')
-    if len(W) < reg['st_cover'] * n_exp or not all(np.isfinite(r_[1]).all() and np.isfinite(r_[2]).all() for r_ in W):
+    cover = len(np.unique(np.round(T / C0.PHYS))) / n_exp
+    out.update(n=len(W), n_exp=n_exp, cover=round(cover, 3), dt_max=float(np.diff(T).max()) if len(T) > 1 else None)
+    if cover < reg['st_cover'] or (len(T) > 1 and float(np.diff(T).max()) > 2.5 * C0.PHYS):
         return dict(out, ok=None, why='insufficient_data')
+    if not all(np.isfinite(r_[1]).all() and np.isfinite(r_[2]).all() and np.isfinite(r_[3]).all() and np.isfinite(r_[4]) for r_ in W):
+        return dict(out, ok=None, why='nonfinite')
     Q = np.array([r_[1] for r_ in W])
     Sp = np.array([r_[2] for r_ in W])
     cmd = max(float(np.abs(r_[3]).max()) for r_ in W)
     pipe = max(float(r_[4]) for r_ in W)
     sp_d = float(np.abs(Sp - Sp[0]).max())
-    k = int(round(reg['st_slide'] / C0.PHYS))
-    D = np.abs(Q[k:] - Q[:-k]) / reg['st_slide']
-    arm_rate = float(D[:, 3:].max()) if len(D) else float('nan')
-    base_rate = float(np.hypot(Q[k:, 0] - Q[:-k, 0], Q[k:, 1] - Q[:-k, 1]).max() / reg['st_slide']) if len(D) else float('nan')
+    j = np.searchsorted(T, T + reg['st_slide'] - 1e-9)                # 每個樣本往後 0.5 s 的樣本（依時間戳，不靠固定索引差）
+    ok_i = j < len(T)
+    ii, jj = np.where(ok_i)[0], j[ok_i]
+    if len(ii) == 0:
+        return dict(out, ok=None, why='insufficient_data')
+    dt_ = (T[jj] - T[ii])[:, None]
+    D = np.abs(Q[jj] - Q[ii]) / dt_
+    arm_rate = float(D[:, 3:].max())
+    base_rate = float((np.hypot(Q[jj, 0] - Q[ii, 0], Q[jj, 1] - Q[ii, 1]) / dt_[:, 0]).max())
     arm_ptp = float(np.ptp(Q[:, 3:], axis=0).max())
     base_ptp = float(max(np.ptp(Q[:, 0]), np.ptp(Q[:, 1])))
     yaw_ptp = float(np.ptp(np.unwrap(Q[:, 2])))

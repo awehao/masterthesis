@@ -336,6 +336,22 @@ def case_stop_unit():
              ('命令仍非零', rows(jit, cmd=1e-4), False),
              ('在途佇列非零', rows(jit, pipe=1e-4), False),
              ('設定點仍在變', rows(jit, sp_drift=1e-6), False)]
+    r1 = rows(jit)
+    r1[60] = (r1[60][0], r1[60][1], r1[60][2], np.r_[np.nan, np.zeros(8)], 0.0)
+    cases.append(('命令非有限', r1, None))
+    r2 = rows(jit)
+    r2[70] = (r2[70][0], r2[70][1], r2[70][2], r2[70][3], float('nan'))
+    cases.append(('在途量非有限', r2, None))
+    r3 = rows(jit)
+    r3[90] = (r3[89][0], *r3[90][1:])
+    cases.append(('時間戳重複', r3, None))
+    r4 = rows(jit)
+    r4[100], r4[101] = (r4[101][0], *r4[100][1:]), (r4[100][0], *r4[101][1:])
+    cases.append(('時間戳倒退', r4, None))
+    r5 = [(float('nan'), *rr_[1:]) if k == 120 else rr_ for k, rr_ in enumerate(rows(jit))]
+    cases.append(('時間戳非有限', r5, None))
+    r6 = [rr_ for k, rr_ in enumerate(rows(jit)) if not (60 <= k < 64)]
+    cases.append(('時間缺 4 步（覆蓋率夠但間隔 > 2.5 步）', r6, None))
     for name, rr, want in cases:
         res = PC.stop_settled(rr, 10.0, R)
         chk(f'停穩：{name} ⇒ {want}', res['ok'] is want, {k: v for k, v in res.items() if k in ('ok', 'fails', 'why', 'arm_rate', 'arm_ptp', 'base_rate')})
