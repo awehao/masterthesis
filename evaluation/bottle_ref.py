@@ -68,6 +68,7 @@ class BottleTask:
     t_lift: float = 1.0
     tol_pre: tuple = (0.005, math.radians(2.0))
     tol_ins: tuple = (0.003, math.radians(2.0))
+    tol_lift: tuple = (0.005, math.radians(3.0))   # 進 CARRY：實測 TCP 須到抬升位姿（Codex 20261031：不能只看抬升時間經過）
 
     @property
     def T_pre(self):
@@ -178,7 +179,8 @@ def step_phase(task: BottleTask, st: PhaseState, t, T_tcp_meas, grasp_evidence_o
     elif st.phase == 'CLOSE' and close_done and grasp_evidence_ok:
         st.grasp_ok = True
         st.go('LIFT', t)
-    elif st.phase == 'LIFT' and t - st.t_phase >= task.t_lift:
+    elif st.phase == 'LIFT' and t - st.t_phase >= task.t_lift and all(
+            e <= tol for e, tol in zip(pose_err(T_tcp_meas, task.T_lift), task.tol_lift)):
         if base_meas is None:
             raise ValueError('進 CARRY 需實測底盤位姿（換算持瓶相對位姿）')
         st.T_carry_rel = base_inv(base_meas) @ task.T_lift

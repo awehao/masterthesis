@@ -4,16 +4,16 @@
   延遲：命令算出後 8 個物理步（發布 0.6＋命令 1.0 週期）才生效；控制器以在途命令前推 8 步（pipe 補償）。
 控制器 C3：wgmpc_core_sp_fr（時域內未來參考 T_seq／v_ref 序列；bottle_ref 產生），權重 CRUISE／CARRY 同 rt_43 R3（w_p 50、w_vref 1、w_a 0.05），
   PREGRASP～LIFT 改 w_p 200（GRASP_W），
-  base_box_scale 2.0；外層進度協調（10 Hz）：底盤速度 v_b＝min(v_c, (窗末 − x)／(到閉爪剩餘時間＋T_need))，
-  T_need＝閉爪 0.5＋證據 1.0＋抬升 1.0 s；v_b < v_min ⇒ 記為降級（允許減到 0，不剔除）。
+  base_box_scale 2.0；外層**啟發式進度協調器**（10 Hz；不是設定點模型的完整到達預測——t_arm 以 IK 關節差／速率與誤差／固定速度估計）：底盤速度 v_b＝min(v_c, (窗末 − x)／(到閉爪剩餘時間＋T_need))，
+  T_need＝閉爪 0.5＋證據 1.0＋抬升 1.0＋抬升收斂 0.5 s（r3；r2 無收斂預留且只作用到 CLOSE）；v_b < v_min ⇒ 記為降級（允許減到 0，不剔除）。
 消融 C3−prog：v_b＝v_c 定速。
 抓持**代理**：閉爪 0.5 s 後，TCP 對抓取位姿連續 1.0 s 在 3 mm／2° 內 ⇒ grasp_ok（無接觸模型：只驗追蹤與候選可行性，不能驗抓持成功）；
-  CLOSE 起 5 s 內未成立 ⇒ 失敗；LIFT 前底盤越過可達窗末 ⇒ 失敗（window_passed）。
+  CLOSE 起 5 s 內未成立 ⇒ 失敗；**抬升完成（進 CARRY）前**底盤越過可達窗末 ⇒ 失敗（window_passed）；進 CARRY 須實測 TCP 到抬升位姿（bottle_ref tol_lift）。
+誤差紀錄（r2，Codex 20261031）：ep_aligned＝物理推進後實測 TCP 對**同一時刻**參考 target_at(t＋DT)；舊口徑 ep_tseq0（對延遲補償後未來時刻的 T_seq[0]）另存，不覆寫。
 執行擾動：plant α×0.6；mismatch＝控制器仍用名目 α（未知失配），known＝控制器也用 α×0.6（已知新參數）。
     python3 evaluation/bottle_offline.py [--cases quick|all]
 """
 import argparse
-import copy
 import json
 import math
 import os
@@ -28,7 +28,6 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(WS, 'src', 'ammr_wholebody_mpc'))
 from ammr_wholebody_mpc import wgmpc_core_sp as S                     # noqa: E402
 from ammr_wholebody_mpc import wgmpc_core_sp_fr as FR                 # noqa: E402
-from ammr_wholebody_mpc.wholebody_kinematics import WholeBodyKinematics  # noqa: E402
 import bottle_ref as BR                                               # noqa: E402
 import bottle_reach_scan as RS                                        # noqa: E402
 
@@ -39,6 +38,7 @@ NPH = int(round(DT / PHYS))
 D_STEPS = 8
 SCN = dict(xb=0.0, yb=0.42, h=0.70, x_start=-1.30, x_end=0.60, win=(-0.35, 0.15))
 T_CLOSE, T_EV, T_LIFT, DEADLINE = 0.5, 1.0, 1.0, 5.0
+T_LIFT_SETTLE = 0.5     # r3：抬升到位收斂預留（tol_lift）
 TOL_EV = (0.003, math.radians(2.0))
 V_MIN = 0.01
 GRASP_W = (200.0, 1.0)     # PREGRASP～LIFT 權重（w_p, w_vref）；10/31 離線比較 50／1 vs 200／1 選定（同返程 S8 的 w_p 200），各組須同調參預算後凍結
@@ -84,7 +84,7 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
     u_prev = np.zeros(9)
     U_warm = None
     v_b = v_c
-    rec = dict(t=[], x=[], vx=[], phase=[], ep=[], er=[], v_b=[], fail=0, solve_ms=[])
+    rec = dict(t=[], x=[], vx=[], phase=[], ep=[], er=[], ep_old=[], v_b=[], fail=0, solve_ms=[])
     t = 0.0
     ev_t0 = None
     close_t0 = None
@@ -111,7 +111,7 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
                       base_meas=q[:3])
         if st.phase != ph0 and st.phase == 'CARRY':
             pass
-        if BR.PHASES.index(st.phase) < BR.PHASES.index('LIFT') and q[0] > x_we:
+        if BR.PHASES.index(st.phase) < BR.PHASES.index('CARRY') and q[0] > x_we:
             result, why = 'fail', 'window_passed'
             break
         if st.phase == 'CARRY' and q[0] >= SCN['x_end']:
@@ -119,7 +119,7 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
             break
         # 外層進度協調（10 Hz）
         if k % 2 == 0:
-            if coord and BR.PHASES.index(st.phase) <= BR.PHASES.index('CLOSE'):
+            if coord and BR.PHASES.index(st.phase) <= BR.PHASES.index('LIFT'):            # r3：涵蓋到抬升完成（r2 只到 CLOSE）
                 if st.phase == 'CRUISE':
                     t_rem = max(st.t_pre - t, 0.0) + 0.3 + task.t_insert
                 elif st.phase == 'PREGRASP':
@@ -127,9 +127,14 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
                     t_rem = ep / 0.05 + 0.3 + task.t_insert
                 elif st.phase == 'INSERT':
                     t_rem = max(task.t_insert - (t - st.t_phase), 0.0) + 0.2
-                else:
+                else:                                                       # CLOSE／LIFT
                     t_rem = 0.0
-                need = T_CLOSE + T_EV + T_LIFT if st.phase != 'CLOSE' else max(T_CLOSE + T_EV - (t - st.t_phase), 0.0) + T_LIFT
+                if st.phase == 'LIFT':
+                    need = max(T_LIFT - (t - st.t_phase), 0.0) + T_LIFT_SETTLE
+                elif st.phase == 'CLOSE':
+                    need = max(T_CLOSE + T_EV - (t - st.t_phase), 0.0) + T_LIFT + T_LIFT_SETTLE
+                else:
+                    need = T_CLOSE + T_EV + T_LIFT + T_LIFT_SETTLE
                 v_need = (x_we - 0.02 - q[0]) / max(t_rem + need, 1e-3)
                 v_b = float(np.clip(min(v_c, v_need), 0.0, v_c))
                 if v_b < V_MIN:
@@ -165,7 +170,9 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
             pipe.append(u.copy())
             ua = pipe.pop(0)
             q, s = S.plant_phys_step(q, s, ua, cfg_p, 1)
-        ep, er = BR.pose_err(K.fk(q, 'link_tcp'), T_seq[0])
+        T_now = BR.target_at(task, st, (ts, plan[1], 0.0), t + DT)          # 同一時刻（物理推進後 t＋DT）的參考
+        ep, er = BR.pose_err(K.fk(q, 'link_tcp'), T_now)
+        rec['ep_old'].append(BR.pose_err(K.fk(q, 'link_tcp'), T_seq[0])[0])
         rec['t'].append(t); rec['x'].append(float(q[0])); rec['phase'].append(st.phase)
         rec['ep'].append(ep); rec['er'].append(er); rec['v_b'].append(v_b)
         t += DT
@@ -186,6 +193,7 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
                t_slow_grasp=round(float(np.sum(m_g & (vx < 0.01)) * DT), 2),
                decel_peak=round(float(-np.min(np.gradient(vx, tt))), 3) if len(vx) > 2 else None,
                ep_close_start_mm=ep_close, ep_p95_mm=round(float(np.percentile(rec['ep'], 95)) * 1e3, 2),
+               ep_old_p95_mm=round(float(np.percentile(rec['ep_old'], 95)) * 1e3, 2),
                x_at_close=None if 'CLOSE' not in ev else round(float(np.interp(ev['CLOSE'], tt, x)), 3),
                solve_ms_p95=round(float(np.percentile(rec['solve_ms'], 95)), 1))
     return out
@@ -208,7 +216,7 @@ def main():
         res.append(r)
         print(f"{lab:<20} v_c {v:.2f}：{r['result']}/{r['why']} 降級 {r['degraded']} 結束 {r['t_end']} s；事件 {r['events']}；閉爪時 x {r['x_at_close']}；"
               f"抓取期 v_min {r['v_min_grasp']}、<0.01 m/s {r['t_slow_grasp']} s、減速峰 {r['decel_peak']}；閉爪起誤差 {r['ep_close_start_mm']} mm；失敗 {r['n_fail']}；求解 p95 {r['solve_ms_p95']} ms", flush=True)
-    out = os.path.join(HERE, 'results', 'bottle', f'offline_c3_{a.cases}.json')
+    out = os.path.join(HERE, 'results', 'bottle', f'offline_c3_{a.cases}_r3.json')     # r3：協調器涵蓋到抬升完成＋抬升收斂預留（r1、r2 檔保留）
     json.dump({'scenario': SCN, 'model': '設定點模型＋底盤運動學；延遲 8 物理步；無接觸（抓持為代理）', 'results': res}, open(out, 'w'), ensure_ascii=False, indent=1)
     print('寫入', os.path.relpath(out, WS))
 
