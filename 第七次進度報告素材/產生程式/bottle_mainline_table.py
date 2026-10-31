@@ -23,9 +23,10 @@ OUT = os.path.join(ROOT, '第七次進度報告素材', '資料', '瓶子主線�
 RUNS = [('bottle_s1_5', 'G 凍結配置'), ('bottle_s1_g1', 'G 瓶 (+5,+5) mm'), ('bottle_s1_g2', 'G 瓶 (−5,−5) mm'),
         ('bottle_s1_g3', 'G 底盤 (+20,−20) mm、+1°'), ('bottle_s1_g4', 'G 底盤 (−20,+20) mm、−1°'),
         ('bottle_s1_p1', 'P 停車操作'), ('bottle_s1_m1', 'M MotM 式單步 QP'), ('bottle_s1_a1', 'G 拿掉 TCP 未來參考'),
-        ('bottle_s2_1', 'S2 懸空方塊，6 點約束'), ('bottle_s2_2', 'S2 懸空方塊，包圍盒約束'), ('bottle_s3_1', 'S3 側牆＋懸空方塊')]
+        ('bottle_s2_1', 'S2 懸空方塊，6 點約束'), ('bottle_s2_2', 'S2 懸空方塊，包圍盒約束'), ('bottle_s3_1', 'S3 側牆＋懸空方塊'),
+        ('bottle_n1_2', 'N1 真 ROS 掃描鏈'), ('bottle_n2_1', 'N2 真 ROS 掃描鏈＋Smac 路徑')]
 DEV = ['bottle_probe_1', 'bottle_smoke_1', 'bottle_s0a_1', 'bottle_s0a_2', 'bottle_s0b_1', 'bottle_s0b_2',
-       'bottle_s1_1', 'bottle_s1_2', 'bottle_s1_3', 'bottle_s1_4', 'bottle_s1_6', 'bottle_s1_7']
+       'bottle_s1_1', 'bottle_s1_2', 'bottle_s1_3', 'bottle_s1_4', 'bottle_s1_6', 'bottle_s1_7', 'bottle_n1_1']
 NEAR_STOP, T_DEC = 0.01, 0.10                           # 近停門檻 m/s；峰值減速度的差分窗 s
 
 
@@ -104,6 +105,7 @@ def metrics(run):
                ms=dict(p50=float(np.percentile(ms, 50)), p95=float(np.percentile(ms, 95)), max=float(ms.max()), n=int(ms.size), over50=int((ms > 50).sum())),
                world_ms=r['timing']['world_step'], scan_ms=r['timing'].get('scan'), shield_ms=r['timing'].get('shield'),
                qp=r['qp_counts'], fallback=r.get('n_fallback'), gi_fail=r.get('gi_fail'),
+               ros=r['nav_chain'].get('ros'), plan=r.get('plan') and {k: v for k, v in r['plan'].items() if k not in ('raw', 'joined', 'log')},
                shield=r['nav_chain']['shield'], n_dyn=r['nav_chain']['n_dyn_max'], body_bind=r.get('body_bind'), body_rows=r.get('body_rows_by'))
     rp = os.path.join(D, 's1_cbf_replay.json')
     if os.path.exists(rp):
