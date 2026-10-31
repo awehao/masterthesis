@@ -1,0 +1,258 @@
+{
+ "values": {
+  "solver_lin": 0.07051,
+  "solver_ang": 0.3998,
+  "solver_arm": 0.9999,
+  "wheel_r": 0.05,
+  "wheel_L": 0.245,
+  "wheel_w_max": 5.55,
+  "exec_lin_max": 0.0998,
+  "exec_ang_max": 0.4,
+  "exec_arm_max": 1.0,
+  "exec_switch_lin": 0.035255,
+  "exec_switch_ang": 0.1999,
+  "intake_lin": 0.07051,
+  "intake_ang": 0.3998,
+  "pause_lin": 0.07051,
+  "pause_ang": 0.3998,
+  "handover_lin": 0.035255,
+  "handover_ang": 0.1999,
+  "rg3_lin": 0.07051,
+  "rg3_ang": 0.3998,
+  "rg3_world": 0.0998,
+  "drawer_rate": 0.035255,
+  "guide_v_cap": 0.035,
+  "guide_w_cap": 0.1,
+  "r1_w_cap": 0.19,
+  "r3_w_cap": 0.285,
+  "r3_ref_v": 0.045,
+  "nav1_glide_v": 0.03,
+  "nav1_ready_v": 0.03,
+  "nav1_ready_w": 0.05,
+  "nav1_motm_v": 0.03,
+  "wb_motm_v": 0.03,
+  "wb_motm_w": 0.1,
+  "task_motm_v": 0.03,
+  "ret_bridge_v": 0.03,
+  "ret_bridge_w": 0.1,
+  "glide_v_roll": 0.03,
+  "dm_slow_v": 0.03,
+  "drawer_motm_v": 0.03,
+  "r3_v_cap_body": 0.0525,
+  "r3_ref_body_peak_lin": 0.045,
+  "r3_ref_body_peak_ang": 0.1754,
+  "s8_ref_body_peak_lin": 0.0425,
+  "s8_ref_body_peak_ang": 0.0399,
+  "s8_end_row": 398.0,
+  "runner_end_row": 398.0
+ },
+ "source": {
+  "solver_lin": "WGMPCConfig.vbox()（base_box_scale 2.0，ADM24／node4 --base-box-scale）",
+  "solver_ang": "WGMPCConfig.vbox() 角",
+  "solver_arm": "WGMPCConfig.vbox() 手臂（不放大）",
+  "wheel_r": "wgmpc_core.wheel_radius",
+  "wheel_L": "wgmpc_core.wheel_base_L",
+  "wheel_w_max": "wgmpc_core.wheel_w_max",
+  "exec_lin_max": "ev9r9a --base-lin-max（runner）",
+  "exec_ang_max": "ev9r9a --base-ang-max（runner）",
+  "exec_arm_max": "ev9r9a --arm-rate-max（default）",
+  "exec_switch_lin": "ev9r9a --v-box-lin（runner）",
+  "exec_switch_ang": "ev9r9a --v-box-ang（runner）",
+  "intake_lin": "ev9r9a --wb-box-lin（runner）→ 入口投影／換抓權威 mode3",
+  "intake_ang": "ev9r9a --wb-box-ang（runner）→ 入口投影／換抓權威 mode3",
+  "pause_lin": "ADM24 PAUSE BaseLimits v_lin＝cfg.vbox()",
+  "pause_ang": "ADM24 PAUSE BaseLimits v_ang＝cfg.vbox()",
+  "handover_lin": "drawer_mission_node2 --v-box-lin（runner）",
+  "handover_ang": "drawer_mission_node2 --v-box-ang（runner）",
+  "rg3_lin": "ev9r9a --wb-box-lin（runner）→ 入口投影／換抓權威 mode3",
+  "rg3_ang": "ev9r9a --wb-box-ang（runner）→ 入口投影／換抓權威 mode3",
+  "rg3_world": "ev9r9a --wb-v-world（runner）→ 入口投影／換抓權威 mode3",
+  "drawer_rate": "drawer_target.DrawerTargetConfig.rate_max_mps",
+  "guide_v_cap": "door_regrasp_policy1.REG v_cap（世界每軸截斷）",
+  "guide_w_cap": "door_regrasp_policy1.REG w_cap",
+  "r1_w_cap": "pb60p m4r.r1_w_cap",
+  "r3_w_cap": "pb60p m4r.r3_w_cap",
+  "r3_ref_v": "pb60p r3_retime2.v_max",
+  "nav1_glide_v": "door_nav1_mission_node_r11.py --v-max（default）",
+  "nav1_ready_v": "door_nav1_mission_node_r11.py --ready-v-max（default）",
+  "nav1_ready_w": "door_nav1_mission_node_r11.py --ready-w（default）",
+  "nav1_motm_v": "door_nav1_mission_node_r11.py --motm-v-cap（default）",
+  "wb_motm_v": "door_k2_wholebody_node.py --motm-v-cap（runner）",
+  "wb_motm_w": "door_k2_wholebody_node.py --motm-w-cap（runner）",
+  "task_motm_v": "door_coopen_core_task_node10p.py --motm-v-cap（default）",
+  "ret_bridge_v": "door_return_task_node.py --bridge-v-max（default）",
+  "ret_bridge_w": "door_return_task_node.py --bridge-w-max（default）",
+  "glide_v_roll": "drawer_glide_node.py --v-roll（default）",
+  "dm_slow_v": "drawer_mission_node.py --slow-v（default）",
+  "drawer_motm_v": "drawer_task_node4.py --motm-v-cap（default）",
+  "r3_v_cap_body": "pb60p m4r.r3_v_cap_body（R3 本體逐軸）",
+  "r3_ref_body_peak_lin": "pb60p 段 41 本體差分速度峰",
+  "r3_ref_body_peak_ang": "pb60p 段 41 本體差分角速度峰",
+  "s8_ref_body_peak_lin": "v4 S8 前綴本體速度峰",
+  "s8_ref_body_peak_ang": "v4 S8 前綴本體角速度峰",
+  "s8_end_row": "v4 s8_overlap.end_row",
+  "runner_end_row": "roundtrip3 A --end-row"
+ },
+ "relations": [
+  [
+   "intake_lin＝求解框",
+   "same_box",
+   true
+  ],
+  [
+   "intake_ang＝求解框",
+   "same_box",
+   true
+  ],
+  [
+   "pause_lin＝求解框",
+   "same_box",
+   true
+  ],
+  [
+   "pause_ang＝求解框",
+   "same_box",
+   true
+  ],
+  [
+   "rg3_lin＝求解框",
+   "same_box",
+   true
+  ],
+  [
+   "rg3_ang＝求解框",
+   "same_box",
+   true
+  ],
+  [
+   "執行端合速度界 ≥ √2·框（框角落不閂鎖）",
+   "latch",
+   true
+  ],
+  [
+   "執行端角速度界 ≥ 框",
+   "latch",
+   true
+  ],
+  [
+   "執行端手臂界 ≥ 框",
+   "latch",
+   true
+  ],
+  [
+   "換抓權威 v_world ≥ √2·框（mode3）",
+   "latch",
+   true
+  ],
+  [
+   "輪速：框單軸＋L·框角 ≤ r·ω_max",
+   "wheel",
+   true
+  ],
+  [
+   "nav1 READY 線速上界 ≤ 框（合速度≤逐軸框）",
+   "handover",
+   true
+  ],
+  [
+   "nav1 READY 角速上界 ≤ 框",
+   "handover",
+   true
+  ],
+  [
+   "nav1 GLIDE v_max ≤ READY 上界（進得了窗）",
+   "handover",
+   true
+  ],
+  [
+   "返程 GLIDE v_roll ≤ 框",
+   "handover",
+   true
+  ],
+  [
+   "抽屜交棒 slow_v ≤ 框",
+   "handover",
+   true
+  ],
+  [
+   "全身端進場 v_cap ≤ 框",
+   "guide",
+   true
+  ],
+  [
+   "全身端進場 w_cap ≤ 框",
+   "guide",
+   true
+  ],
+  [
+   "換抓引導 v_cap（世界逐軸）≤ 框",
+   "guide",
+   true
+  ],
+  [
+   "換抓引導 v_cap 轉車體最壞 √2·v_cap ≤ 框",
+   "guide_body",
+   true
+  ],
+  [
+   "R1／R3 局部 w_cap ≤ 框",
+   "guide",
+   true
+  ],
+  [
+   "返程橋接 v／w ≤ 框",
+   "guide",
+   true
+  ],
+  [
+   "R3 重時間化參考 v_max ≤ 框",
+   "ref",
+   true
+  ],
+  [
+   "抽屜目標移動率 ≤ 框",
+   "ref",
+   true
+  ],
+  [
+   "執行端准入 ⊆ 求解框",
+   "admission",
+   true
+  ],
+  [
+   "編排端准入 ＝ 執行端准入",
+   "admission",
+   true
+  ],
+  [
+   "R3 引導本體上限 ≤ 框",
+   "guide",
+   true
+  ],
+  [
+   "R3 引導本體上限 ≥ R3 參考本體速度峰（留回授空間）",
+   "guide",
+   true
+  ],
+  [
+   "R3 參考本體速度峰 ≤ 框",
+   "ref",
+   true
+  ],
+  [
+   "S8 參考本體速度峰 ≤ 框",
+   "ref",
+   true
+  ],
+  [
+   "跑法 A --end-row＝v4 s8 end_row",
+   "ref",
+   true
+  ],
+  [
+   "角速度界只對角速度框（不乘 √2）且不低於框",
+   "latch",
+   true
+  ]
+ ]
+}

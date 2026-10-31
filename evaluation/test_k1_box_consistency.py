@@ -103,10 +103,10 @@ RUNNER3 = os.path.join(HERE, 'run_mission_roundtrip3.sh')
 REF3 = os.path.join(HERE, 'results', 'door', 'door_regrasp_ref_pb60p.json')
 
 
-def collect3():
-    """--runner3：讀 run_mission_roundtrip3.sh 的實際生效值（框 ×2 介面＋R3／S8 ×1.5）。"""
+def collect3(runner=None):
+    """--runner3／--runner4：讀 run_mission_roundtrip3／4.sh 的實際生效值（框 ×2 介面＋R3／S8 ×1.5；4 另把交棒准入恢復舊框）。"""
     global RUNNER
-    RUNNER = RUNNER3
+    RUNNER = runner or RUNNER3
     v, src = collect()
     c = WGMPCConfig()
     P = json.load(open(REF3))
@@ -150,13 +150,17 @@ def collect3():
     put('s8_ref_body_peak_lin', max(pk8[0], pk8[1]), 'v4 S8 前綴本體速度峰')
     put('s8_ref_body_peak_ang', pk8[2], 'v4 S8 前綴本體角速度峰')
     put('s8_end_row', R4['s8_overlap']['end_row'], 'v4 s8_overlap.end_row')
-    m = re.search(r'--end-row (\d+) ', open(RUNNER3, encoding='utf-8').read())
+    m = re.search(r'--end-row (\d+) ', open(RUNNER, encoding='utf-8').read())
     put('runner_end_row', int(m.group(1)), 'roundtrip3 A --end-row')
     return v, src
 
 
-def relations3(v):
+def relations3(v, admission_subset=False):
     R = [r for r in relations(v) if not r[0].startswith('rg1_') and 'mode1' not in r[0]]
+    if admission_subset:                                                # b2：准入框 ⊆ 求解可行框（不必相等）；編排端＝執行端
+        R = [r for r in R if not r[0].startswith(('exec_switch_', 'handover_'))]
+        R += [('執行端准入 ⊆ 求解框', 'admission', lambda v: v['exec_switch_lin'] <= v['solver_lin'] and v['exec_switch_ang'] <= v['solver_ang']),
+              ('編排端准入 ＝ 執行端准入', 'admission', lambda v: v['handover_lin'] == v['exec_switch_lin'] and v['handover_ang'] == v['exec_switch_ang'])]
     R += [
         ('R3 引導本體上限 ≤ 框', 'guide', lambda v: v['r3_v_cap_body'] <= v['solver_lin'] + 1e-12 and v['r3_w_cap'] <= v['solver_ang'] + 1e-12),
         ('R3 引導本體上限 ≥ R3 參考本體速度峰（留回授空間）', 'guide', lambda v: v['r3_v_cap_body'] >= v['r3_ref_body_peak_lin'] and v['r3_w_cap'] >= v['r3_ref_body_peak_ang']),
@@ -220,17 +224,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=os.path.join(HERE, 'results', 'k1', 'box_consistency.json'))
     ap.add_argument('--runner3', action='store_true', help='核 run_mission_roundtrip3.sh 實際生效值（只核關係、不做倍率情境）')
+    ap.add_argument('--runner4', action='store_true', help='核 run_mission_roundtrip4.sh（b2：准入 ⊆ 求解框）')
     a = ap.parse_args()
-    if a.runner3:
-        v3, src3 = collect3()
-        res = [(n, layer, bool(f(v3))) for n, layer, f in relations3(v3)]
+    if a.runner3 or a.runner4:
+        v3, src3 = collect3(os.path.join(HERE, 'run_mission_roundtrip4.sh') if a.runner4 else None)
+        res = [(n, layer, bool(f(v3))) for n, layer, f in relations3(v3, admission_subset=a.runner4)]
         for k in v3:
             print(f'  {k:<22} {v3[k]:<10.6g} {src3[k]}')
         for n, layer, ok in res:
             print(f'  {"OK  " if ok else "FAIL"} [{layer}] {n}')
         nf = sum(not ok for _, _, ok in res)
-        print(f'roundtrip3：{len(res)} 條，失敗 {nf}')
-        out3 = os.path.join(HERE, 'results', 'k1', 'box_consistency_rt3.json')
+        tag = 'rt4' if a.runner4 else 'rt3'
+        print(f'roundtrip{tag[-1]}：{len(res)} 條，失敗 {nf}')
+        out3 = os.path.join(HERE, 'results', 'k1', f'box_consistency_{tag}.json')
         json.dump({'values': v3, 'source': src3, 'relations': res}, open(out3, 'w'), ensure_ascii=False, indent=1)
         return 0 if nf == 0 else 1
     v0, src = collect()
