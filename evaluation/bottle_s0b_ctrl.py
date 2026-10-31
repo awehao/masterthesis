@@ -33,6 +33,7 @@ N, DT = 20, 0.05
 T_CLOSE, T_EV, T_LIFT, T_LIFT_SETTLE = 0.5, 1.0, 1.0, 0.5
 A_BASE = np.array([1.5, 1.0, 2.0])     # 同 nav_cfg a_max；停止時底盤用此界，不用手臂的 19.984
 S_LEAD = 0.02                          # 參考不得領先實測超過此距離（m）：底盤被 CBF 擋住時 s_ref 不累積，否則放行後追趕（0.05 時夾持中 0.09 m/s）。bottle_s0b_1 全程 x−s_ref 峰 5.19 mm，此界不作用
+YAW_TUBE = math.radians(3.0)           # 放行偏航：±3° 全窗可行（例外：y≈−0.04 且負偏航時抬升位姿在 x≥0.14 失敗）；±5° 起開始失敗
 A_REF = 0.2                            # 完成或到終點後參考降速斜率（m/s²）
 Y_TUBE = (-0.04, 0.10)                 # 放行 INSERT 的底盤側向管：bottle_branch 全窗連續可解的範圍（y ±0.05 步進掃描；y≥0.15 或 ≤−0.10 失敗）
 T_BLEND = 5.0                          # 展臂漸變只在抵達預抓前 5 s（全程漸變時目標超出可達，見 offline_wb_short.json）
@@ -87,6 +88,17 @@ class S0bController(C.S0aController):
         T_seq, _ = BR.horizon(self.task, self.st, self._plan_at(t_eff), t_eff, N, DT)
         return T_seq
 
+    def _ref_window(self, xs_eff):
+        c_, s_ = math.cos(self.th_ref), math.sin(self.th_ref)
+        xi_ref = np.tile([self.v_b * c_, -self.v_b * s_, 0.0], (N + 1, 1))   # 參考沿世界 +x、偏航固定（與 plan 一致）
+        X_ref = [from_xytheta(xs_eff, self.y_ref, self.th_ref)]
+        for j in range(N):
+            X_ref.append(X_ref[-1] @ exp_(xi_ref[j] * DT))
+        return np.array(X_ref), xi_ref
+
+    def _rel_task(self):
+        return self.st.phase == 'CARRY'
+
     def _speed(self, T_tcp, x):
         if self.v_replay is not None:
             return float(self.v_replay[min(self.n_tick, len(self.v_replay) - 1)])
@@ -95,9 +107,12 @@ class S0bController(C.S0aController):
         return heuristic_speed(self.task, self.st, self.t, T_tcp, x, self.x_we, self.v_c)
 
     # ---- 相位
+    def _in_tube(self, q):
+        return self.x_ws <= q[0] <= self.x_we and Y_TUBE[0] <= q[1] <= Y_TUBE[1] and abs(q[2]) <= YAW_TUBE
+
     def _advance(self, T_tcp, close_done, q):
         ph0 = self.st.phase
-        if ph0 == 'PREGRASP' and not (self.x_ws <= q[0] <= self.x_we and Y_TUBE[0] <= q[1] <= Y_TUBE[1]):
+        if ph0 == 'PREGRASP' and not self._in_tube(q):
             self.n_gate += 1                               # 底盤不在驗證過的管內：不放行 INSERT，TCP 維持預抓
             return
         BR.step_phase(self.task, self.st, self.t, T_tcp, grasp_evidence_ok=self.judge.t_grasp is not None, close_done=close_done, base_meas=q[:3].copy())
@@ -127,16 +142,12 @@ class S0bController(C.S0aController):
         if self.fail_inject is not None and self.fail_inject(self.t):
             return None
         xs_eff = self.s_ref + self.v_b * C.D_STEPS * C.PHYS
-        c_, s_ = math.cos(self.th_ref), math.sin(self.th_ref)
-        xi_ref = np.tile([self.v_b * c_, -self.v_b * s_, 0.0], (N + 1, 1))   # 參考沿世界 +x、偏航固定（與 plan 一致）
-        X_ref = [from_xytheta(xs_eff, self.y_ref, self.th_ref)]
-        for j in range(N):
-            X_ref.append(X_ref[-1] @ exp_(xi_ref[j] * DT))
+        X_ref, xi_ref = self._ref_window(xs_eff)
         w_p = C.W_NEAR if st.phase in ('PREGRASP', 'INSERT', 'CLOSE', 'LIFT') else C.W_FAR
         arm = dict(mode='active', K=self.K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=cfg.arm_model, T_seq=T_seq, w_p=w_p,
-                   lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=(st.phase == 'CARRY'), qp_solver=self.qp_solver, **W_ARM) if self.arm_mode == 'active' else dict(mode='hold')
+                   lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=self._rel_task(), qp_solver=self.qp_solver, **W_ARM) if self.arm_mode == 'active' else dict(mode='hold')
         obs = None if self.obstacles_fn is None else self.obstacles_fn(t_eff)
-        solve_kw = dict(X_now=from_xytheta(*qp[:3]), X_ref_win=np.array(X_ref), xi_ref_win=xi_ref, xi_prev=self.u_prev[:3], arm=arm)
+        solve_kw = dict(X_now=from_xytheta(*qp[:3]), X_ref_win=X_ref, xi_ref_win=xi_ref, xi_prev=self.u_prev[:3], arm=arm)
         r = self.mpc.solve(obstacles=obs, **solve_kw)
         ck = dict(r.arm_check or {})
         if self.mpc_fail_inject is not None:
