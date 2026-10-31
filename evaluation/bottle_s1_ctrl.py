@@ -72,7 +72,7 @@ class S1Controller(B.S0bController):
         self.blending, self.mission_done, self.t_exit_in = False, False, None
         self.n_still, self.T_b_now, self.d_static, self.d_p_prev = 0, None, None, None
         self.no_tcp_preview, self.preview, self.no_inflight = bool(no_tcp_preview), {}, bool(no_inflight)
-        self.body_boxes, self.d_body = body_boxes, float(d_body)   # S2：三維障礙（模擬真值，LiDAR 看不到）
+        self.body_boxes, self.d_body, self._grip_corners = body_boxes, float(d_body), None   # S2：三維障礙（模擬真值，LiDAR 看不到）
         self.t_ms = dict(scan=[], shield=[], advance=[])     # 分項耗時：solve_ms 不含這些，也不含物理與渲染
         self.chain, self.scan_fn, self.t_next_scan = chain, scan_fn, 0.0   # 有 chain 時：障礙只來自掃描鏈，底盤命令只經 Shield 寫出
         self.clear_min = dict(meas=float('inf'), pred=float('inf'), t_meas=None, t_pred=None, n=0)
@@ -99,13 +99,27 @@ class S1Controller(B.S0bController):
         self.preview[ph] = max(self.preview.get(ph, 0.0), d)   # 記該相位 TCP 目標在時域內實際變化多少；消融時也照原序列記
         return np.stack([T[0]] * (N + 1)) if self.no_tcp_preview else T   # 消融：只拿掉 TCP 未來參考，N、dt、設定點模型、延遲補償、底盤參考與安全預測不變
 
+    def _obb_tcp(self):
+        """夾爪（gripper、link_eef、link6、開爪手指）點雲在 TCP 座標的軸對齊包圍盒 8 角點，只算一次。"""
+        if self._grip_corners is None:
+            q0 = np.r_[0.0, 0.0, 0.0, self.q_arm_ready]
+            Ti = np.linalg.inv(self.K.fk(q0, 'link_tcp'))
+            W = G.link_world(q0, G.Q_OPEN)
+            P = np.vstack([v for k, v in W.items() if k in ('link6', 'link_eef', 'uflite_gripper_link', 'uflite_finger1', 'uflite_finger2')])
+            Pt = (Ti[:3, :3] @ P.T).T + Ti[:3, 3]
+            lo, hi = Pt.min(axis=0), Pt.max(axis=0)
+            self._grip_corners = [(x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+        return self._grip_corners
+
     def _arm_extra(self):
         if not self.body_boxes:
             return {}
-        pts = [(0.0, 0.0, 0.0), (0.0, 0.0, -0.05), (0.0, 0.0, -0.10)]   # TCP、夾爪本體（TCP 座標）
-        if self.judge.T_rel is not None:                       # 抓持後加瓶軸三點（瓶座標 z 0、0.10、0.20，半徑併入邊距）
-            pts = pts + [tuple((self.judge.T_rel @ np.array([0.0, 0.0, z, 1.0]))[:3]) for z in (0.0, 0.10, 0.20)]
-        return dict(body_obst=dict(boxes=self.body_boxes, pts=pts, d_safe=self.d_body + 0.015, d_act=0.60, slope=0.5, stride=2))   # slope：貼近箱子時邊距仍是完整 d_safe，離得遠才放寬；是提前量，不是安全門檻
+        bodies = [self._obb_tcp()]
+        if self.judge.T_rel is not None:                       # 抓持後加瓶身包圍盒 8 角（瓶座標 ±r、±r、0–h），用實際抓持的瓶對 TCP
+            r_, h_ = self.judge.br, G.BOTTLE['h']
+            bodies.append([tuple((self.judge.T_rel @ np.array([x, y, z, 1.0]))[:3]) for x in (-r_, r_) for y in (-r_, r_) for z in (0.0, h_)])
+        slope = 0.5
+        return dict(body_obst=dict(boxes=self.body_boxes, bodies=bodies, d_safe=self.d_body * math.sqrt(1.0 + slope ** 2), d_act=0.60, slope=slope, stride=2))   # d_safe 補償斜坡：到箱角真實距離＝d_safe／√(1＋slope²)＝d_body；slope 是提前量，不是安全門檻
 
     def _rel_target(self, tau):
         if self.q_tuck is None:
