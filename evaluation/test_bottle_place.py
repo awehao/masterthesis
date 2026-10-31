@@ -77,10 +77,12 @@ class FakePlace(T.Fake):
             sx, sy = PC.PLACE['size']
             over = abs(cand[0, 3] - cx) <= sx / 2 and abs(cand[1, 3] - cy) <= sy / 2
             pen = self.top2 - PC.bottle_bottom_z(cand, T.R_B)
+            if self.mode == 'early' and c.pph == 'PLACE_APPROACH':      # 假世界：持瓶接近時瓶身擦到第二桌面
+                self.f_place = np.array([0.0, 0.3, 0.2])
             if over and pen >= 0.0:
                 cand[2, 3] += pen
                 fz = T.MASS * 9.81 + 2000.0 * pen
-                self.f_place = np.array([0.0, fz, 0.0]) if self.mode == 'side' else np.array([0.0, 0.0, fz])
+                self.f_place = np.array([0.0, fz, 0.0]) if self.mode == 'side' else np.array([0.0, 0.0, -fz if self.mode == 'reverse' else fz])
                 if self.mode == 'side':
                     cand[2, 3] -= pen
             self.Tb = cand
@@ -205,7 +207,7 @@ def case_side():
     c, f = build(mode='side')
     r = run(c, f, 70.0)
     summary('只有水平接觸（側碰）', r, c, f)
-    chk('側碰不算支撐 ⇒ 未鬆爪、停止', c.t_release is None and r['stop'] is not None, r['stop'])
+    chk('側碰不算支撐，且為第二桌禁止接觸 ⇒ 未鬆爪、停止', c.t_release is None and (r['stop'] or {}).get('why') in ('forbidden_contact:bottle_table2', 'no_support'), r['stop'])
 
 
 def case_sticky():
@@ -258,7 +260,21 @@ def case_gap_short():
     chk('短暫中斷不跨過：計數歸零後重新累計 0.3 s 才鬆爪', t_rel is not None and t_rel - c.t_sup0 >= 0.3 + 0.05 - 1e-6, (t_rel, c.t_sup0))
 
 
-CASES = dict(nominal=case_nominal, gap=case_gap, gap_short=case_gap_short, plan_fail=case_plan_fail, blocked_grid=case_blocked_grid, blocked_mid=case_blocked_mid, no_support=case_no_support, side=case_side, sticky=case_sticky)
+def case_reverse():
+    c, f = build(mode='reverse')
+    r = run(c, f, 70.0)
+    summary('支撐力方向相反', r, c, f)
+    chk('反向力不成立支撐 ⇒ 未鬆爪、停止', c.t_release is None and r['stop'] is not None and c.d_freeze is None, r['stop'])
+
+
+def case_early():
+    c, f = build(mode='early')
+    r = run(c, f, 60.0)
+    summary('LOWER 前瓶碰第二桌面', r, c, f)
+    chk('LOWER 前接觸 ⇒ forbidden_contact:bottle_table2', (r['stop'] or {}).get('why') == 'forbidden_contact:bottle_table2' and c.pph in ('CARRY_NAV', 'PLACE_APPROACH'), (r['stop'], c.pph))
+
+
+CASES = dict(reverse=case_reverse, early=case_early, nominal=case_nominal, gap=case_gap, gap_short=case_gap_short, plan_fail=case_plan_fail, blocked_grid=case_blocked_grid, blocked_mid=case_blocked_mid, no_support=case_no_support, side=case_side, sticky=case_sticky)
 
 
 def main():

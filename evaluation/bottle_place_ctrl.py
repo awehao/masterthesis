@@ -389,6 +389,11 @@ class PlaceController(N2C.S1Planned):
         met['ok'] = bool(ok)
         return bool(ok), met
 
+    def _inside(self, T_b):
+        cx, cy = self.place['c']
+        sx, sy = self.place['size']
+        return min(T_b[0, 3] - (cx - sx / 2), (cx + sx / 2) - T_b[0, 3], T_b[1, 3] - (cy - sy / 2), (cy + sy / 2) - T_b[1, 3]) >= self.judge.br + self.preg['edge_m']
+
     # ---- 每物理步：支撐、鬆爪、穩定量測
     def step(self, t, q, f_place=None, q_fingers=None, **kw):
         self.f_place, self.q_fingers = f_place, q_fingers
@@ -397,6 +402,20 @@ class PlaceController(N2C.S1Planned):
         ok_b = T_b is not None and np.isfinite(T_b).all()
         ok_f = f_place is not None and np.isfinite(np.asarray(f_place, float)).all()
         ok_q = q_fingers is not None and np.isfinite(np.asarray(q_fingers, float)).all() and kw.get('f_fingers') is not None and np.isfinite(np.asarray(kw['f_fingers'], float)).all()
+        # 瓶↔第二桌面依相位准入（走既有禁止接觸判定）：LOWER 前任何接觸都禁止；LOWER 起只允許像瓶底支撐的接觸（法向向上、水平小、瓶底貼桌面、在放置區內）
+        forb = dict(kw.get('forbidden') or {})
+        if not ok_f:
+            forb['bottle_table2'] = float('nan')
+        else:
+            fv = np.asarray(f_place, float)
+            fn = float(np.linalg.norm(fv))
+            if self.pph not in ('LOWER', 'RELEASE', 'RETREAT', 'HOLD', 'DONE'):   # 放好之後瓶仍靠第二桌支撐
+                forb['bottle_table2'] = fn
+            else:
+                bottom = ok_b and fv[2] > 0.0 and float(np.hypot(fv[0], fv[1])) <= R['sup_h_ratio'] * fv[2] + self.judge.r['forbid_n'] \
+                    and bottle_bottom_z(T_b, self.judge.br) - self.place['top'] <= R['sup_gap'] and self._inside(T_b)
+                forb['bottle_table2'] = 0.0 if bottom else fn
+        kw['forbidden'] = forb
         if self.pph in ('LOWER', 'RELEASE', 'RETREAT', 'HOLD') and self.judge.stop is None:   # 放置量測缺失：連續計數歸零；過期即停（同既有資料失效規則）
             for k_, ok_ in (('place_force', ok_f and ok_b), ('fingers', ok_q)):
                 if ok_:
@@ -410,9 +429,7 @@ class PlaceController(N2C.S1Planned):
         if self.pph == 'LOWER' and self.judge.stop is None and ok_b and ok_f:
             fz, fh = float(f_place[2]), float(np.hypot(f_place[0], f_place[1]))
             gap = bottle_bottom_z(T_b, self.judge.br) - self.place['top']
-            cx, cy = self.place['c']
-            sx, sy = self.place['size']
-            inside = min(T_b[0, 3] - (cx - sx / 2), (cx + sx / 2) - T_b[0, 3], T_b[1, 3] - (cy - sy / 2), (cy + sy / 2) - T_b[1, 3]) >= self.judge.br + R['edge_m']
+            inside = self._inside(T_b)
             good = fz >= R['sup_fz'] and fh <= R['sup_h_ratio'] * fz and gap <= R['sup_gap'] and tilt_deg(T_b) <= R['tilt_deg'] and inside
             if good and self.d_freeze is None:
                 self.d_freeze, self.t_sup0 = self.d_cmd, float(t)          # 首次有效支撐：不再加深

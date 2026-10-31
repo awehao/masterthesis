@@ -321,8 +321,16 @@ def main():
         world.step(render=True)
     q_s, _ = q9()
     d0 = q_s[3:] - q_tuck
+    M_ = read_pairs(v_bt, 1, dt)                                              # 力方向約定：瓶靜置第一桌時桌面給瓶的力應向上
+    fz0 = float('nan') if M_ is None else float(M_[0, 0, 2])
+    if not np.isfinite(fz0) or abs(fz0) < 0.5 * float(B['mass']) * 9.81:
+        print(f'[s1] 起始瓶↔第一桌力 {fz0} 無法定方向 ⇒ 拒跑', flush=True)
+        return 68
+    F_SIGN = 1.0 if fz0 > 0.0 else -1.0
+    readback['f_sign'] = dict(fz0=fz0, sign=F_SIGN, mg=float(B['mass']) * 9.81)
+    print(f'[s1] 接觸力方向約定：起始瓶↔第一桌 fz {fz0:.3f} N ⇒ 符號 {F_SIGN:+.0f}', flush=True)
     n_filters = 1 + len(table_paths)
-    required = ['finger_table', 'arm_bottle', 'arm_table', 'base_env', 'bottle_table1'] + (['bottle_env'] if b_env else []) + [f'extra{i}_{w}' for i in range(len(v_extra)) for w in ('bottle', 'table')]
+    required = ['finger_table', 'arm_bottle', 'arm_table', 'base_env', 'bottle_table1', 'bottle_table2'] + (['bottle_env'] if b_env else []) + [f'extra{i}_{w}' for i in range(len(v_extra)) for w in ('bottle', 'table')]
     # 動作前：所有接觸視圖形狀、感測數、有限值都須有效，否則拒跑（不當成沒有接觸）
     for nm, v, ns, nf in [('finger', v_finger, 2, n_filters), ('bottle_table', v_bt, 1, 1), ('bottle_table2', v_b2, 1, 1), ('base', v_base, 1, 1 + len(leg_paths) + len(leg2_paths) + (1 if WALL else 0))] + ([('bottle_env', v_bs, 1, len(b_env))] if b_env else []) + [(f'arm{i}', v, 1, n_filters) for i, v in enumerate(v_arm)] \
             + [(f'extra{i}', v, 1, n_filters) for i, v in enumerate(v_extra)]:
@@ -460,8 +468,8 @@ def main():
         Mb = read_pairs(v_base, 1 + len(leg_paths) + len(leg2_paths) + (1 if WALL else 0), dt)
         M2 = read_pairs(v_b2, 1, dt)
         fp = None if M2 is None or not np.isfinite(M2).all() else np.asarray(M2[0, 0], float)
-        if fp is not None and fp[2] < 0.0:
-            fp = -fp                                                          # 方向約定：取桌面給瓶的力（+z）
+        if fp is not None:
+            fp = F_SIGN * fp                                                  # 固定方向約定（起始靜置時瓶↔第一桌量得的符號），反向力不會被翻成支撐
         forb['bottle_table1'] = float('nan') if ft is None else (float(ft) if ctrl.judge.t_lift_ok is not None else 0.0)   # 抬離成立後瓶不得再碰第一桌
         forb['base_env'] = float('nan') if Mb is None else float(np.linalg.norm(Mb, axis=2).max())
         forb['finger_table'] = float('nan') if Mf is None else float(np.linalg.norm(Mf[:, 1:], axis=2).max())
@@ -479,6 +487,9 @@ def main():
             tb = G.table_boxes()
             tb = tb + [(n_, c_ + T2D, sz_) for n_, c_, sz_ in G.table_boxes()]
             dmin = min(dmin, min(float(G.box_dist(Pl, c, sz).min()) for _, c, sz in tb), float(G.box_dist(Pl, OB_C, OB_S).min()), float(G.box_dist(Pl, S2[0], S2[1]).min()) if S2 else 9.9, float(G.box_dist(Pl, WALL[0], WALL[1]).min()) if WALL else 9.9)
+            if ok_b:                                                          # 瓶身對第二桌面與桌腳的穿透（瓶底支撐的正常接觸遠小於 1 mm 判準）
+                Pb_w2 = (Tb[:3, :3] @ BP_S.T).T + Tb[:3, 3]
+                dmin = min(dmin, min(float(G.box_dist(Pb_w2, c_ + T2D, sz_).min()) for _, c_, sz_ in G.table_boxes()))
             if (S2 or WALL) and ok_b:                                         # 實測瓶位姿對 S2 方塊與側牆
                 Pb_w = (Tb[:3, :3] @ BP_S.T).T + Tb[:3, 3]
                 for box_ in [b_ for b_ in (S2, WALL) if b_ is not None]:
