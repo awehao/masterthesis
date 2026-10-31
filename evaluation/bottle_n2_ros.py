@@ -75,6 +75,15 @@ class PlanRos:
                            planning_time=float(r.result.planning_time.sec + 1e-9 * r.result.planning_time.nanosec), wall_ms=(time.perf_counter() - p['wall']) * 1e3)
 
 
+def planner_params():
+    import hashlib
+    import os
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bottle_n2_planner.yaml')
+    b = open(f, 'rb').read()
+    return dict(file='evaluation/bottle_n2_planner.yaml', sha256=hashlib.sha256(b).hexdigest()[:16], join_len=NP.JOIN_LEN, ds=NP.DS, start_tol=NP.START_TOL, goal_tol=NP.GOAL_TOL,
+                gap_max=NP.GAP_MAX, cost_block=NP.COST_BLOCK, costmap_max_age=NP.COSTMAP_MAX_AGE)
+
+
 def plan_before_start(node, chain, pr, hold_step, get_state, scan_ranges, goal_xy, x_lane, t0, wall_limit_s=60.0):
     """回傳 (PlannedPath, 資訊) 或 (None, 原因)。t0 是握手結束時的 ROS 時間；之後每步 hold_step 推進物理、/clock 前進。"""
     t, k, w0 = float(t0), 0, time.perf_counter()
@@ -96,6 +105,9 @@ def plan_before_start(node, chain, pr, hold_step, get_state, scan_ranges, goal_x
             info = {k_: v for k_, v in res.items() if k_ != 'P'}
             if not res['ok']:
                 return None, dict(why='no_valid_path', **info)
+            age = t - pr.grid.stamp
+            if age > NP.COSTMAP_MAX_AGE:
+                return None, dict(why='plan_rejected', detail=f'採用時代價圖已 {age:.2f} s 未更新', **info)
             ok, why = NP.validate_plan(res['frame'], res['P'], np.array(p[:2], float), np.array(goal_xy, float), pr.grid)
             if not ok:
                 return None, dict(why='plan_rejected', detail=why, **info)
@@ -103,7 +115,8 @@ def plan_before_start(node, chain, pr, hold_step, get_state, scan_ranges, goal_x
             c = pr.grid.cost(J)
             if NP.blocked(c).any():
                 return None, dict(why='plan_rejected', detail=f'接直線段後 {int(NP.blocked(c).sum())} 點在內切以上', **info)
-            info.update(t_ready=t, n_raw=len(res['P']), cost_max=int(c.max()), raw=res['P'][::5].round(4).tolist())
+            info.update(t_ready=t, n_raw=len(res['P']), cost_max=int(c.max()), grid_stamp=pr.grid.stamp, grid_age=round(age, 3), start=[float(v) for v in p[:2]], goal=list(goal_xy),
+                        raw=res['P'].round(5).tolist(), joined=J.round(5).tolist(), params=planner_params(), log=pr.log)
             return NP.PlannedPath(J, x_lane), info
         if time.perf_counter() - w0 > wall_limit_s:
             return None, dict(why='plan_timeout', sent=sent, n_grid=pr.n_grid, server=pr.ac.server_is_ready())

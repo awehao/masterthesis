@@ -46,7 +46,7 @@ class S1Planned(S1.S1Controller):
     def report(self):
         r = super().report()
         m = self.monitor
-        r.update(planned_path=dict(L=self.path.L, sig0=self.path.sig0, x_lane=self.path.x_lane, n_pts=len(self.path.P), pts=self.path.P[::5].round(4).tolist(),
+        r.update(planned_path=dict(L=self.path.L, sig0=self.path.sig0, x_lane=self.path.x_lane, n_pts=len(self.path.P), pts=self.path.P.round(5).tolist(),
                                    monitor=None if m is None else dict(n_check=m.n_check, max_cost=m.max_cost, why=m.why),
                                    lag_max=max((r_[2] - r_[1] for r_ in self.sig_log), default=None), lead_max=max((r_[1] - r_[2] for r_ in self.sig_log), default=None)))
         return r
