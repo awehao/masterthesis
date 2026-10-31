@@ -105,7 +105,7 @@ class S1Controller(B.S0bController):
         pts = [(0.0, 0.0, 0.0), (0.0, 0.0, -0.05), (0.0, 0.0, -0.10)]   # TCP、夾爪本體（TCP 座標）
         if self.judge.T_rel is not None:                       # 抓持後加瓶軸三點（瓶座標 z 0、0.10、0.20，半徑併入邊距）
             pts = pts + [tuple((self.judge.T_rel @ np.array([0.0, 0.0, z, 1.0]))[:3]) for z in (0.0, 0.10, 0.20)]
-        return dict(body_obst=dict(boxes=self.body_boxes, pts=pts, d_safe=self.d_body + 0.015, d_act=0.45, d_near=0.10, stride=2))
+        return dict(body_obst=dict(boxes=self.body_boxes, pts=pts, d_safe=self.d_body + 0.015, d_act=0.60, slope=0.5, stride=2))   # slope：貼近箱子時邊距仍是完整 d_safe，離得遠才放寬；是提前量，不是安全門檻
 
     def _rel_target(self, tau):
         if self.q_tuck is None:

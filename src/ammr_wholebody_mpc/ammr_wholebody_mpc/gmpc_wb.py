@@ -149,6 +149,13 @@ class FastChain:
         return T, J
 
 
+def point_jac(Tc, J, off):
+    """TCP 剛連點（TCP 座標 off）的世界位置與位置 Jacobian：v_p＝v＋ω×r＝v−[r]×ω。"""
+    rw = Tc[:3, :3] @ np.asarray(off, float)
+    Sk = np.array([[0.0, -rw[2], rw[1]], [rw[2], 0.0, -rw[0]], [-rw[1], rw[0], 0.0]])
+    return Tc[:3, 3] + rw, J[:3] - Sk @ J[3:]
+
+
 def qp_kkt_check(P, q, A, l, u, x, y, tol_p=1e-8, tol_d=1e-6, tol_c=1e-6):
     """在原問題上核對解：有限值、原始可行、對偶可行（y>0 只在上界作用、y<0 只在下界作用）、站立性、互補。
     回傳 dict(ok, why, 各殘差)。門檻為原單位或相對 max(1,‖q‖∞)／max(1,‖y‖∞)；不通過的解不得採用。"""
@@ -1474,35 +1481,34 @@ class GMPC:
             bo = arm.get('body_obst')
             if bo:                                              # 三維障礙：TCP 剛連點（夾爪、持瓶）的預測距離約束，底盤與手臂都在列內，耦合問題自己分配誰讓路
                 fc, r_ob, l_ob, ks = FastChain.of(Kk, tcp), [], [], []
-                for k in range(bo.get('stride', 2) - 1, N, bo.get('stride', 2)):
+                for k in range(0, N, bo.get('stride', 2)):      # 含第一個未來控制步
                     xb = _pose_from_err(X_ref_win[k + 1], e_nom[k])
                     Tc, J = fc.fk_jac(np.r_[xb, Mq[k] @ U0 + cq[k]])
-                    Bk = _pose_jac(X_ref_win[k + 1], e_nom[k])
-                    Gm = Gamma[k * n:(k + 1) * n, :]
-                    ks.append((Tc, J[:3, :3] @ Bk @ Gm, J[3:, :3] @ Bk @ Gm, J[:3, 3:] @ Mq[k], J[3:, 3:] @ Mq[k]))
+                    ks.append((Tc, J, _pose_jac(X_ref_win[k + 1], e_nom[k]) @ Gamma[k * n:(k + 1) * n, :], Mq[k]))
                 for off in bo['pts']:
-                    rws = [T_[:3, :3] @ np.asarray(off, float) for T_, *_ in ks]
-                    P_ = np.array([T_[:3, 3] + rw for (T_, *_), rw in zip(ks, rws)])
+                    pj = [point_jac(T_, J_, off) for T_, J_, _, _ in ks]
+                    P_ = np.array([p_ for p_, _ in pj])
                     for c, sz in bo['boxes']:
                         h_ = np.asarray(sz, float) / 2.0
                         dd = np.abs(P_ - c) - h_
                         if float(np.linalg.norm(np.maximum(dd, 0.0), axis=1).min()) > bo['d_act']:
                             continue
                         # 全時域用同一個分隔面：取餘裕最大的面。逐步取最近面時，薄箱遠端的預測點會選到另一側，近端與遠端列互相矛盾
-                        best = max(((float((sg * (P_[:, ax] - c[ax]) - h_[ax]).min()), ax, sg) for ax in range(3) for sg in (-1.0, 1.0)))
-                        _, ax, sg = best
+                        dP = P_[-1] - P_[0]                     # 行進中不選迎面的面：迎面代表停在前面，側面才是繞過；靜止時六面都可選
+                        axes = [a_ for a_ in range(3) if float(np.linalg.norm(dP)) < 0.02 or abs(float(dP[a_])) <= 0.5 * float(np.linalg.norm(dP))]
+                        _, ax, sg = max(((float((sg_ * (P_[:, a_] - c[a_]) - h_[a_]).min()), a_, sg_) for a_ in axes for sg_ in (-1.0, 1.0)))
                         tang = [i for i in range(3) if i != ax]
-                        for j, ((T_, GB, GW_, GA, WA), rw) in enumerate(zip(ks, rws)):
-                            if float(np.linalg.norm(np.maximum(dd[j, tang], 0.0))) > bo['d_near']:
-                                continue                        # 只在預測點真的靠近箱子的時間步施加：提前平滑讓路，不要求下一步就跳到位
-                            Sk = np.array([[0.0, -rw[2], rw[1]], [rw[2], 0.0, -rw[0]], [-rw[1], rw[0], 0.0]])   # v_p＝v＋ω×r＝v−[r]×ω
-                            nv = np.zeros(3)
-                            nv[ax] = sg
+                        for j, (_, _, BG, Mk) in enumerate(ks):
+                            # 斜坡邊界：允許深入量隨切向距離線性放寬，約束連續收緊；開關式施加會在某一步突然要求整段讓路而不可行
+                            req = float(bo['d_safe']) - float(bo['slope']) * float(np.linalg.norm(np.maximum(dd[j, tang], 0.0))) - float(sg * (P_[j, ax] - c[ax]) - h_[ax])
+                            if req < -0.05:
+                                continue
+                            Jp = pj[j][1]
                             row = np.zeros(nz + n_arm)
-                            row[:Nm] = nv @ (GB - Sk @ GW_)
-                            row[nz:] = nv @ (GA - Sk @ WA)
+                            row[:Nm] = sg * (Jp[ax, :3] @ BG)
+                            row[nz:] = sg * (Jp[ax, 3:] @ Mk)
                             r_ob.append(row)
-                            l_ob.append(float(bo['d_safe']) - float(sg * (P_[j, ax] - c[ax]) - h_[ax]) + float(row[nz:] @ U0))
+                            l_ob.append(req + float(row[nz:] @ U0))
                 if r_ob:
                     Aob = np.array(r_ob)
                     lob = np.array(l_ob)

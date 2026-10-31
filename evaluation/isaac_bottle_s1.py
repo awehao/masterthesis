@@ -212,7 +212,11 @@ def main():
                        contact_filter_prim_paths_expr=['/World/obstacle'] + leg_paths)
     v_bt = RigidPrim(prim_paths_expr='/World/bottle', name='v_bt', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True,
                      contact_filter_prim_paths_expr=['/World/table/top'])
+    v_bs = RigidPrim(prim_paths_expr='/World/bottle', name='v_bs', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True,
+                     contact_filter_prim_paths_expr=['/World/s2_box']) if S2 else None      # 瓶↔S2 方塊：缺資料不當零
     world.reset()
+    if v_bs is not None:
+        v_bs.initialize()
     for v in [v_finger, v_bt, v_base] + v_arm + v_extra:
         v.initialize()
     robot = SingleArticulation(prim_path=arts[0], name='omni_bot')
@@ -281,9 +285,9 @@ def main():
     q_s, _ = q9()
     d0 = q_s[3:] - q_tuck
     n_filters = 1 + len(table_paths)
-    required = ['finger_table', 'arm_bottle', 'arm_table', 'base_env'] + [f'extra{i}_{w}' for i in range(len(v_extra)) for w in ('bottle', 'table')]
+    required = ['finger_table', 'arm_bottle', 'arm_table', 'base_env'] + (['bottle_s2'] if S2 else []) + [f'extra{i}_{w}' for i in range(len(v_extra)) for w in ('bottle', 'table')]
     # 動作前：所有接觸視圖形狀、感測數、有限值都須有效，否則拒跑（不當成沒有接觸）
-    for nm, v, ns, nf in [('finger', v_finger, 2, n_filters), ('bottle_table', v_bt, 1, 1), ('base', v_base, 1, 1 + len(leg_paths))] + [(f'arm{i}', v, 1, n_filters) for i, v in enumerate(v_arm)] \
+    for nm, v, ns, nf in [('finger', v_finger, 2, n_filters), ('bottle_table', v_bt, 1, 1), ('base', v_base, 1, 1 + len(leg_paths))] + ([('bottle_s2', v_bs, 1, 1)] if S2 else []) + [(f'arm{i}', v, 1, n_filters) for i, v in enumerate(v_arm)] \
             + [(f'extra{i}', v, 1, n_filters) for i, v in enumerate(v_extra)]:
         M = read_pairs(v, nf, dt)
         if M is None or M.shape != (ns, nf, 3) or not np.isfinite(M).all():
@@ -326,6 +330,7 @@ def main():
     ctrl.obs.d = np.clip(d0, -ctrl.obs.max, ctrl.obs.max)
     ctrl.cfg.arm_model.bias = ctrl.bias0 + np.asarray(ctrl.cfg.arm_model.alpha, float) * ctrl.obs.d
     print(f'[s1] 靜態偏移 d̂₀ {np.round(ctrl.obs.d, 4).tolist()}；底盤 {np.round(q_s[:3], 4).tolist()}', flush=True)
+    BP_S = G.bottle_points()
     rows, step_ms = [], []                                                    # step_ms：物理＋渲染，分開計時
     t_end_tail = None
     n = int(round((a.sim_s + a.stop_tail_s + 1.5) / dt))                      # 總期限後仍走停止尾段
@@ -351,6 +356,9 @@ def main():
         ff = None if Mf is None or not np.isfinite(Mf[:, 0]).all() else tuple(float(x) for x in np.linalg.norm(Mf[:, 0], axis=1))
         ft = None if Mt is None or not np.isfinite(Mt).all() else float(abs(Mt[0, 0, 2]))
         forb = {}
+        if S2:
+            Ms = read_pairs(v_bs, 1, dt)
+            forb['bottle_s2'] = float('nan') if Ms is None or not np.isfinite(Ms).all() else float(np.linalg.norm(Ms, axis=2).max())
         Mb = read_pairs(v_base, 1 + len(leg_paths), dt)
         forb['base_env'] = float('nan') if Mb is None else float(np.linalg.norm(Mb, axis=2).max())
         forb['finger_table'] = float('nan') if Mf is None else float(np.linalg.norm(Mf[:, 1:], axis=2).max())
@@ -367,7 +375,11 @@ def main():
             dmin = float(G.cyl_dist(Pb, 0.0, 0.0, 0.0, float(B['height']), float(B['radius'])).min())
             tb = G.table_boxes()
             dmin = min(dmin, min(float(G.box_dist(Pl, c, sz).min()) for _, c, sz in tb), float(G.box_dist(Pl, OB_C, OB_S).min()), float(G.box_dist(Pl, S2[0], S2[1]).min()) if S2 else 9.9)
-            penetration = max(0.0, -dmin)
+            if S2 and ok_b:                                                   # 實測瓶位姿對 S2 方塊
+                dmin = min(dmin, float(G.box_dist((Tb[:3, :3] @ BP_S.T).T + Tb[:3, 3], S2[0], S2[1]).min()))
+            elif S2:
+                dmin = float('nan')                                           # 瓶位姿無效：不當零，由資料失效判定處理
+            penetration = max(0.0, -dmin) if np.isfinite(dmin) else float('nan')
         out = ctrl.step(t, q, f_fingers=ff, t_contact=(t if ff is not None else None), T_bottle=Tb if ok_b else None, t_bottle=t if ok_b else None,
                         f_table=ft, forbidden=forb, penetration=penetration)
         tgt = np.array(jp, float)
