@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""底盤受限案例：側牆限制底盤側移，懸空方塊要求持瓶後退，手臂須改姿態。先證明手臂保持原姿態、只靠底盤過不去，再跑耦合控制名目一次。假受控對象，非物理；牆進掃描、地圖與 CBF，方塊取真值。
+"""側牆案例：側牆限制底盤側移，懸空方塊擋持瓶，底盤與手臂由耦合問題共同讓路。「缺 N mm」的算式假設偏航 0；圓形底盤偏航不受牆限制，手臂不動、偏航約 −31° 幾何上可過，所以這裡不宣稱純底盤解不存在。假受控對象，非物理；牆進掃描、地圖與 CBF，方塊取真值。
     python3 evaluation/bottle_s3_check.py
 """
 import json
@@ -35,7 +35,7 @@ def base_wall(f):
 
 
 def main():
-    # 只靠底盤：手臂保持持瓶姿態，瓶最遠端 y 需 ≤ 面－距離目標；底盤 y 下限由牆決定
+    # 偏航 0 時的底盤側移需求（只是這個假設下的算式，不代表純底盤解不存在）
     q_carry = None
     y_limit = -0.55 + WALL_M
     c = SC.make_lidar(extra_boxes=[WALL])
@@ -46,11 +46,11 @@ def main():
     Tt = T.K.fk(np.r_[0.0, 0.0, 0.0, car[0]['q'][3:]], 'link_tcp')
     y_rel = float(Tt[1, 3])
     y_need = Y_FACE - D_TARGET - 0.015
-    print(f'  幾何：TCP 相對底盤 y {y_rel:.3f}；持瓶須 y ≤ {y_need:.3f}（面 {Y_FACE}−目標 {D_TARGET}−半徑 0.015）；底盤須 y ≤ {y_need - y_rel:.3f}，但牆使 y ≥ {y_limit:.3f} ⇒ 只靠底盤缺 {(y_limit - (y_need - y_rel)) * 1e3:.0f} mm')
+    print(f'  幾何：TCP 相對底盤 y {y_rel:.3f}；持瓶須 y ≤ {y_need:.3f}（面 {Y_FACE}−目標 {D_TARGET}−半徑 0.015）；底盤須 y ≤ {y_need - y_rel:.3f}，但牆使 y ≥ {y_limit:.3f} ⇒ 偏航 0 時側移缺 {(y_limit - (y_need - y_rel)) * 1e3:.0f} mm')
     print(f"  無約束實測：{g0}；底盤 y 最低 {min(h['q'][1] for h in car):.3f}")
     c = SC.make_lidar(extra_boxes=[WALL], body_boxes=[S2.S2_BOX], body_links=LINKS)
     f = CK.fake(c, 50.0)
-    r = CK.summary('耦合控制（手臂須讓路）', c, f)
+    r = CK.summary('耦合控制（底盤與手臂共同讓路）', c, f)
     g = S2.box_min(f, S2.S2_BOX)
     car = [h for h in f.hist if h['phase'] == 'CARRY'] or f.hist[-20:]
     rel0 = T.K.fk(np.r_[0.0, 0.0, 0.0, car[0]['q'][3:]], 'link_tcp')[:3, 3]
