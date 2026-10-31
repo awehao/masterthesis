@@ -221,6 +221,16 @@ def main():
     ra2 = GW.GMPC(cfg()).solve(X_now=Xr_r[0], X_ref_win=Xr_r, xi_ref_win=xr_r, xi_prev=np.zeros(3), arm=arm_dict(T_rel * 1.0))
     chk('R3 世界座標模式底盤命令確實不同（對照）', np.abs(np.asarray(ra2.u_opt) - np.asarray(rh.u_opt)).max() > 1e-3, f'{ra2.u_opt}')
 
+    # ---- F 快速 FK／Jacobian 與共用運動學一致
+    fc = GW.FastChain.of(K, 'link_tcp')
+    rng_f = np.random.default_rng(5)
+    e_t, e_j = 0.0, 0.0
+    for _ in range(200):
+        qr = np.r_[rng_f.uniform(-3, 3, 2), rng_f.uniform(-3.1, 3.1), rng_f.uniform(-3.0, 3.0, 6)]
+        Tf, Jf = fc.fk_jac(qr)
+        e_t, e_j = max(e_t, float(np.abs(Tf - K.fk(qr, 'link_tcp')).max())), max(e_j, float(np.abs(Jf - K.jacobian(qr, 'link_tcp')).max()))
+    chk('F1 FastChain FK、Jacobian 與 wholebody_kinematics 一致（<1e-12）', e_t < 1e-12 and e_j < 1e-12, f'{e_t} {e_j}')
+
     # ---- Q 求解器：OSQP-only 回歸入口、GI 失敗走備援並記錄
     rq_g = GW.GMPC(cfg()).solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.05, 0, 0]), arm=arm_dict(T_seq4))
     rq_o = GW.GMPC(cfg()).solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.05, 0, 0]), arm=arm_dict(T_seq4, qp_solver='osqp'))

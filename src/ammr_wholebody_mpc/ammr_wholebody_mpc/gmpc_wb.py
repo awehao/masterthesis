@@ -91,6 +91,64 @@ def arm_prediction(q0, s0, N, dt, model):
     return Mq, cq, Ms, cs
 
 
+class FastChain:
+    """（gmpc_wb）同一條運動鏈一次前向掃描得 FK 與幾何 Jacobian，取代 K.fk＋K.jacobian 的重複計算。
+    數值與 wholebody_kinematics 相同（誤差 <1e-12，test_gmpc_wb_arm 核對）；不改共用檔。相鄰固定關節先合併。"""
+    _cache = {}
+
+    @classmethod
+    def of(cls, K, link):
+        key = (id(K), link)
+        c = cls._cache.get(key)
+        if c is None:
+            c = cls._cache[key] = cls(K, link)
+        return c
+
+    def __init__(self, K, link):
+        self.n = len(K.dof_names)
+        self.steps = []                                 # (T_origin, axis, 類型, dof 索引)
+        pend = np.eye(4)
+        for jn in K.chain(link):
+            j = K.joints[jn]
+            O = np.eye(4)
+            O[:3, :3], O[:3, 3] = j.origin_rot, j.origin_xyz
+            pend = pend @ O
+            if jn in K.dof_names:
+                ax = np.asarray(j.axis, float)
+                self.steps.append((pend, ax / (np.linalg.norm(ax) if j.jtype != 'prismatic' else 1.0), ax, j.jtype, K.dof_names.index(jn)))
+                pend = np.eye(4)
+        self.tail = pend
+
+    def fk_jac(self, q):
+        T = np.eye(4)
+        cols = []
+        for O, k, ax, jt, i in self.steps:
+            Tj = T @ O
+            Rj = Tj[:3, :3]
+            B = np.eye(4)
+            if jt == 'prismatic':
+                axw = Rj @ ax
+                B[:3, 3] = ax * q[i]
+            else:
+                axw = Rj @ ax
+                sn, cs = math.sin(q[i]), math.cos(q[i])
+                K_ = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+                B[:3, :3] += sn * K_ + (1.0 - cs) * (K_ @ K_)
+            cols.append((i, jt, axw, Tj[:3, 3]))
+            T = Tj @ B
+        T = T @ self.tail
+        pe = T[:3, 3]
+        J = np.zeros((6, self.n))
+        for i, jt, a, p in cols:
+            if jt == 'prismatic':
+                J[:3, i] = a
+            else:
+                r = pe - p
+                J[0, i], J[1, i], J[2, i] = a[1] * r[2] - a[2] * r[1], a[2] * r[0] - a[0] * r[2], a[0] * r[1] - a[1] * r[0]
+                J[3:, i] = a
+        return T, J
+
+
 def qp_kkt_check(P, q, A, l, u, x, y, tol_p=1e-8, tol_d=1e-6, tol_c=1e-6):
     """在原問題上核對解：有限值、原始可行、對偶可行（y>0 只在上界作用、y<0 只在下界作用）、站立性、互補。
     回傳 dict(ok, why, 各殘差)。門檻為原單位或相對 max(1,‖q‖∞)／max(1,‖y‖∞)；不通過的解不得採用。"""
@@ -163,20 +221,23 @@ def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800):
             act.pop(drop); sgn.pop(drop); Nr.pop(drop); PiN.pop(drop); mu = np.delete(mu, drop)
     else:
         return None, None, dict(ok=False, why='steps', steps=max_steps, solver='gi')
-    if act:                                                             # 作用集固定做殘差精修：剛性座標（P 對角 1e8）上 x 差 1e-8 就是站立性殘差 1；不改作用集、不放寬驗收
+    y = np.zeros(A.shape[0])
+    for i, sg, m in zip(act, sgn, mu):
+        y[i] = -sg * m
+    ck = qp_kkt_check(P, q, A, l, u, x, y)
+    if not ck['ok'] and act:                            # 作用集固定做殘差精修：剛性座標（P 對角 1e8）上 x 差 1e-8 就是站立性殘差 1；不改作用集、不放寬驗收
         N_ = np.array(Nr)
         b_ = np.array([sg * (l[i] if sg > 0 else u[i]) for i, sg in zip(act, sgn)])
-        Pi = cho_solve(cf, N_.T)
-        S_ = N_ @ Pi
+        S_ = N_ @ cho_solve(cf, N_.T)
         for _ in range(3):
             rd, rp = Pd @ x + q - N_.T @ mu, N_ @ x - b_
             dm = np.linalg.lstsq(S_, N_ @ cho_solve(cf, rd) - rp, rcond=None)[0]
             x = x + cho_solve(cf, N_.T @ dm - rd)
             mu = mu + dm
-    y = np.zeros(A.shape[0])
-    for i, sg, m in zip(act, sgn, mu):
-        y[i] = -sg * m
-    ck = qp_kkt_check(P, q, A, l, u, x, y)
+        y = np.zeros(A.shape[0])
+        for i, sg, m in zip(act, sgn, mu):
+            y[i] = -sg * m
+        ck = qp_kkt_check(P, q, A, l, u, x, y)
     if not ck['ok']:
         return None, None, dict(ck, ok=False, why='verify:' + str(ck['why']), steps=step, solver='gi')
     return x, y, dict(ck, steps=step, n_active=len(act), solver='gi')
@@ -678,6 +739,44 @@ def _build_smoothness_terms(S: np.ndarray, xi_ref_win: np.ndarray,
 # Constraints (velocity + acceleration)
 # ---------------------------------------------------------------------------
 
+_A_CACHE = {}
+
+
+def _constraint_matrix(cfg):
+    """（gmpc_wb）約束矩陣只由 N 與輪距決定，每週期相同；lil 逐格賦值佔求解時間最大宗，快取後上下界仍每週期重算。"""
+    key = (cfg.N, bool(cfg.wheel_coupling), float(cfg.wheel_base_L) if cfg.wheel_coupling else 0.0)
+    A = _A_CACHE.get(key)
+    if A is not None:
+        return A
+    N, m = cfg.N, 3
+    Nm = N * m
+    A_acc = sparse.lil_matrix((Nm, Nm))
+    A_acc[0:m, 0:m] = sparse.eye(m)
+    for k in range(1, N):
+        A_acc[k*m:(k+1)*m, (k-1)*m:k*m] = -sparse.eye(m)
+        A_acc[k*m:(k+1)*m, k*m:(k+1)*m] =  sparse.eye(m)
+    blocks = [sparse.eye(Nm), A_acc.tocsr()]
+    if cfg.wheel_coupling:
+        L = cfg.wheel_base_L
+        W = np.array([[0.0,  1.0, L],
+                      [-1.0, 0.0, L],
+                      [0.0, -1.0, L],
+                      [1.0,  0.0, L]])
+        nw = 4
+        A_wv = sparse.lil_matrix((N * nw, Nm))
+        A_wa = sparse.lil_matrix((N * nw, Nm))
+        for k in range(N):
+            r0, r1 = k * nw, (k + 1) * nw
+            A_wv[r0:r1, k*m:(k+1)*m] = W
+            A_wa[r0:r1, k*m:(k+1)*m] = W
+            if k > 0:
+                A_wa[r0:r1, (k-1)*m:k*m] = -W
+        blocks += [A_wv.tocsr(), A_wa.tocsr()]
+    A = sparse.vstack(blocks, format='csc')
+    _A_CACHE[key] = A
+    return A
+
+
 def _build_constraints(cfg: GMPCConfig,
                        xi_ref_win: np.ndarray,
                        xi_prev: np.ndarray):
@@ -690,7 +789,6 @@ def _build_constraints(cfg: GMPCConfig,
     Nm = N * m
 
     # ---- Velocity: identity on z ---------------------------------------
-    A_vel = sparse.eye(Nm)
     lb_vel = np.zeros(Nm)
     ub_vel = np.zeros(Nm)
     for k in range(N):
@@ -700,21 +798,16 @@ def _build_constraints(cfg: GMPCConfig,
     # ---- Acceleration: first row uses ξ_prev, rest are δξ_k - δξ_{k-1} -
     # row 0:    δξ_0           ∈ [-a·dt - ξ_ref(0) + ξ_prev,  +a·dt - ξ_ref(0) + ξ_prev]
     # row k>0:  δξ_k - δξ_{k-1} ∈ [-a·dt - ξ_ref(k) + ξ_ref(k-1), +a·dt - ξ_ref(k) + ξ_ref(k-1)]
-    A_acc = sparse.lil_matrix((Nm, Nm))
     lb_acc = np.zeros(Nm)
     ub_acc = np.zeros(Nm)
 
-    A_acc[0:m, 0:m] = sparse.eye(m)
     lb_acc[0:m] = -cfg.a_max * dt - xi_ref_win[0] + xi_prev
     ub_acc[0:m] =  cfg.a_max * dt - xi_ref_win[0] + xi_prev
 
     for k in range(1, N):
-        A_acc[k*m:(k+1)*m, (k-1)*m:k*m] = -sparse.eye(m)
-        A_acc[k*m:(k+1)*m, k*m:(k+1)*m] =  sparse.eye(m)
         lb_acc[k*m:(k+1)*m] = -cfg.a_max * dt - xi_ref_win[k] + xi_ref_win[k-1]
         ub_acc[k*m:(k+1)*m] =  cfg.a_max * dt - xi_ref_win[k] + xi_ref_win[k-1]
 
-    blocks = [A_vel, A_acc.tocsr()]
     lbs    = [lb_vel, lb_acc]
     ubs    = [ub_vel, ub_acc]
 
@@ -732,32 +825,26 @@ def _build_constraints(cfg: GMPCConfig,
         a_lim = cfg.wheel_radius * cfg.wheel_a_max * dt     # r·α_max·dt
 
         nw = 4
-        A_wv = sparse.lil_matrix((N * nw, Nm))
         lb_wv = np.zeros(N * nw); ub_wv = np.zeros(N * nw)
-        A_wa = sparse.lil_matrix((N * nw, Nm))
         lb_wa = np.zeros(N * nw); ub_wa = np.zeros(N * nw)
 
         for k in range(N):
             r0, r1 = k * nw, (k + 1) * nw
-            A_wv[r0:r1, k*m:(k+1)*m] = W
             off = W @ xi_ref_win[k]
             lb_wv[r0:r1] = -w_lim - off
             ub_wv[r0:r1] =  w_lim - off
 
-            A_wa[r0:r1, k*m:(k+1)*m] = W
             if k == 0:
                 d_ref = W @ (xi_ref_win[0] - xi_prev)
             else:
-                A_wa[r0:r1, (k-1)*m:k*m] = -W
                 d_ref = W @ (xi_ref_win[k] - xi_ref_win[k-1])
             lb_wa[r0:r1] = -a_lim - d_ref
             ub_wa[r0:r1] =  a_lim - d_ref
 
-        blocks += [A_wv.tocsr(), A_wa.tocsr()]
         lbs    += [lb_wv, lb_wa]
         ubs    += [ub_wv, ub_wa]
 
-    A_total  = sparse.vstack(blocks, format='csc')
+    A_total  = _constraint_matrix(cfg)
     lb_total = np.concatenate(lbs)
     ub_total = np.concatenate(ubs)
     return A_total, lb_total, ub_total
@@ -1327,6 +1414,7 @@ class GMPC:
             raise ValueError(f"gmpc_wb：arm mode {arm.get('mode')!r} 未實作（hold／active）")
         # hold：手臂速度序列≡0，依結構消去，不改 QP（見 docstring r2）
         n_arm, arm_rows, arm_info = 0, 0, {}
+        t_arm0 = time.perf_counter()
         if arm is not None and arm['mode'] == 'active':
             nz = P_dense.shape[0]
             n_arm = ARM_N * N
@@ -1345,10 +1433,9 @@ class GMPC:
                 xb = np.zeros(3) if rel_base else _pose_from_err(X_ref_win[k + 1], e_nom[k])
                 qa = Mq[k] @ U0 + cq[k]
                 qf = np.r_[xb, qa]
-                Tc = Kk.fk(qf, tcp)
+                Tc, J = FastChain.of(Kk, tcp).fk_jac(qf)
                 Td = T_seq[k + 1]
                 ek = np.r_[Td[:3, 3] - Tc[:3, 3], _rot_err_world(Tc[:3, :3], Td[:3, :3])]
-                J = Kk.jacobian(qf, tcp)
                 L = np.zeros((6, nz + n_arm))
                 if not rel_base:
                     Bk = _pose_jac(X_ref_win[k + 1], e_nom[k])              # ∂(x,y,θ)/∂e（X_ref·exp(e)；含 SE(2) 右 Jacobian）
@@ -1390,11 +1477,12 @@ class GMPC:
         res, qp_info = None, None
         P_sp = sparse.csc_matrix(P_dense)
         if n_arm:
-            qp_info = dict(solver='osqp', gi_why='disabled', gi_ms=0.0, osqp_ms=None)
+            qp_info = dict(solver='osqp', gi_why='disabled', gi_ms=0.0, osqp_ms=None, asm_ms=None)
+            t_asm = time.perf_counter() - t_arm0
             if arm.get('qp_solver', 'gi') == 'gi':
                 t_gi = time.perf_counter()
                 gx, gy, gi = qp_dual_active(P_sp, q_vec, A_total, lb_total, ub_total)
-                qp_info = dict(solver='gi' if gx is not None else 'osqp', gi_why=gi.get('why'), gi_ms=(time.perf_counter() - t_gi) * 1e3, osqp_ms=None, gi_steps=gi.get('steps'))
+                qp_info = dict(solver='gi' if gx is not None else 'osqp', gi_why=gi.get('why'), gi_ms=(time.perf_counter() - t_gi) * 1e3, osqp_ms=None, gi_steps=gi.get('steps'), asm_ms=t_asm * 1e3)
                 if gx is not None:
                     res = SimpleNamespace(x=gx, y=gy, info=SimpleNamespace(status='solved'))
         if res is None:

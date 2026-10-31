@@ -11,6 +11,7 @@ import json
 import math
 import os
 import sys
+import time
 
 import numpy as np
 
@@ -70,6 +71,7 @@ class S1Controller(B.S0bController):
         self.x_unfold = (self.x_blend - v_c * (self.t_unfold + float(t_settle))) if x_unfold is None else float(x_unfold)   # 展完靜止 t_settle 再朝瓶：d̂ 隨姿態變，停止點預測要用備妥姿態的靜態值；展臂在底盤座標，可在高速段進行
         self.blending, self.mission_done, self.t_exit_in = False, False, None
         self.n_still, self.T_b_now, self.d_static, self.d_p_prev = 0, None, None, None
+        self.t_ms = dict(scan=[], shield=[], advance=[])     # 分項耗時：solve_ms 不含這些，也不含物理與渲染
         self.chain, self.scan_fn, self.t_next_scan = chain, scan_fn, 0.0   # 有 chain 時：障礙只來自掃描鏈，底盤命令只經 Shield 寫出
         self.clear_min = dict(meas=float('inf'), pred=float('inf'), t_meas=None, t_pred=None, n=0)
 
@@ -169,6 +171,11 @@ class S1Controller(B.S0bController):
             self.judge._stop(self.t, 'clearance_bottle', meas=d_m, pred=d_p, pred_next=d_next)
 
     def _advance(self, T_tcp, close_done, q):
+        t_s = time.perf_counter()
+        self._advance_inner(T_tcp, close_done, q)
+        self.t_ms['advance'].append((time.perf_counter() - t_s) * 1e3)
+
+    def _advance_inner(self, T_tcp, close_done, q):
         if self.chain is not None and self.chain.age(self.t) > OBS_MAX_AGE:
             self.judge._stop(self.t, 'scan_stale', age=self.chain.age(self.t))   # 比 Shield 限速更保守：看不到環境就不繼續任務；Shield 仍在輸出端
         self._clear_check(T_tcp, q)
@@ -191,13 +198,17 @@ class S1Controller(B.S0bController):
         q = np.asarray(q, float)
         if self.chain is not None and t >= self.t_next_scan - 1e-9 and np.isfinite(q).all():
             self.t_next_scan = t + 1.0 / SCAN_HZ
+            t_s = time.perf_counter()
             r_ = self.scan_fn(t, q)
             if r_ is not None:                                 # None＝這幀掃描沒來（資料失效測試、感測中斷）
                 self.chain.on_scan(t, r_, q[:3])
+            self.t_ms['scan'].append((time.perf_counter() - t_s) * 1e3)
         out = super().step(t, q, **kw)
         if self.chain is not None:
             u_in = np.array(out['base_twist'], float)
+            t_s = time.perf_counter()
             out['base_twist'] = self.chain.shield(t, u_in)     # 最終底盤命令：含停止路徑，無旁路
+            self.t_ms['shield'].append((time.perf_counter() - t_s) * 1e3)
             dv = float(np.linalg.norm(out['base_twist'] - u_in))
             if dv > SHIELD_DV and self.judge.stop is None:     # 改寫後實際底盤與 MPC 計畫不再一致，不當原全身序列繼續：走受控停止
                 self.judge._stop(self.t, 'shield_intervened', dv=dv, u_in=u_in.tolist(), u_out=out['base_twist'].tolist())
@@ -216,6 +227,10 @@ class S1Controller(B.S0bController):
 
     def report(self):
         r = super().report()
+        pc = lambda v: None if not v else dict(p50=round(float(np.percentile(v, 50)), 2), p95=round(float(np.percentile(v, 95)), 2), max=round(float(np.max(v)), 2), n=len(v))
+        asm = [e['asm_ms'] for e in self.qp_log if e.get('asm_ms') is not None]
+        gi = [e['gi_ms'] for e in self.qp_log if e.get('gi_ms')]
+        r.update(timing=dict(solve=pc(self.solve_ms), assemble=pc(asm), gi=pc(gi), **{k: pc(v) for k, v in self.t_ms.items()}))
         cm = self.clear_min
         r.update(clear_bottle=dict(reject_m=CLEAR_REJECT, guard_m=CLEAR_GUARD, meas_min=None if cm['n'] == 0 else cm['meas'], pred_min=None if cm['n'] == 0 else cm['pred'], next_min=cm.get('next'), t_meas=cm['t_meas'], t_pred=cm['t_pred'], n=cm['n']), n_compact=None if self.compact is None else len(self.compact))
         if self.chain is not None:

@@ -12,6 +12,7 @@ import json
 import math
 import os
 import sys
+import time
 
 WS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ap = argparse.ArgumentParser()
@@ -305,7 +306,7 @@ def main():
     ctrl.obs.d = np.clip(d0, -ctrl.obs.max, ctrl.obs.max)
     ctrl.cfg.arm_model.bias = ctrl.bias0 + np.asarray(ctrl.cfg.arm_model.alpha, float) * ctrl.obs.d
     print(f'[s1] 靜態偏移 d̂₀ {np.round(ctrl.obs.d, 4).tolist()}；底盤 {np.round(q_s[:3], 4).tolist()}', flush=True)
-    rows = []
+    rows, step_ms = [], []                                                    # step_ms：物理＋渲染，分開計時
     t_end_tail = None
     n = int(round((a.sim_s + a.stop_tail_s + 1.5) / dt))                      # 總期限後仍走停止尾段
     penetration = 0.0
@@ -355,7 +356,9 @@ def main():
         tgt[f1] = out['finger_target']
         apply(tgt)
         base_cmd(out['base_twist'], float(q[2]))
+        t_w = time.perf_counter()
         world.step(render=True)
+        step_ms.append((time.perf_counter() - t_w) * 1e3)
         rows.append([t, *q, *out['arm_target'], *out['base_twist'], ctrl.v_b, ctrl.s_ref, float(jp[f1]), float(jp[f2]), out['finger_target'], *(ff if ff else (float('nan'),) * 2),
                      float('nan') if ft is None else ft, *Tb[:3, 3], *[float(v) for v in qb], BR_PH.index(out['phase']), float(out['stopped']),
                      *[forb[kk] for kk in sorted(forb)]])
@@ -364,6 +367,7 @@ def main():
         if t_end_tail is not None and t >= t_end_tail:
             break
     rep = ctrl.report()
+    rep['timing']['world_step'] = dict(p50=round(float(np.percentile(step_ms, 50)), 2), p95=round(float(np.percentile(step_ms, 95)), 2), max=round(float(np.max(step_ms)), 2), n=len(step_ms))
     rep.update(readback=readback, asset=S, forb_keys=sorted(forb), d0=[float(v) for v in d0], n_steps=len(rows), obstacle=dict(c=OB_C.tolist(), sz=OB_S.tolist(), r_cbf=0.2 * math.sqrt(2.0), margin=0.47, truth_for_eval_only=True), exit=dict(c=a.exit_c, r=a.exit_r), path=p_, note='核心 gmpc_wb；PhysX 射線掃描＋既有追蹤器與 Shield（同程序）；底盤與瓶位姿真值；地圖只有桌腳；無 ROS 命令鏈；參考路徑工程給定；命令延遲 8 物理步為注入設定；停止處置為腳本自有')
     cols = ['t', 'base_x', 'base_y', 'base_yaw'] + [f'q{i}' for i in range(1, 7)] + [f's{i}' for i in range(1, 7)] + ['base_cmd_vx', 'base_cmd_vy', 'base_cmd_wz', 'v_b', 's_ref', 'finger1_q', 'finger2_q', 'finger_cmd', 'f_finger1_bottle', 'f_finger2_bottle',
             'f_bottle_table', 'bottle_base_x', 'bottle_base_y', 'bottle_base_z', 'bottle_qw', 'bottle_qx', 'bottle_qy', 'bottle_qz', 'phase_index', 'stopped'] + [f'forb_{kk}' for kk in sorted(forb)]
@@ -375,7 +379,7 @@ def main():
         C2.save_compact(ctrl, os.path.join(a.out, 's1_cbf.npz'))
     except Exception as e:
         print(f'[s1] CBF 紀錄存檔失敗：{e!r}', flush=True)
-    print(f"[s1] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 出口 {rep['exit_reached']}@{rep['t_exit_in']} 任務 {rep['mission_done']} 瓶淨空 {rep['clear_bottle']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']} fallback {rep['n_fallback']} 求解器 {rep['qp_counts']} GI 未採用 {rep['gi_fail']} >50ms {rep['n_over_50ms']} 掃描鏈 { {k: rep['nav_chain'][k] for k in ('n_scan', 'n_dyn_max', 'n_static_max', 'shield')} }", flush=True)
+    print(f"[s1] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 出口 {rep['exit_reached']}@{rep['t_exit_in']} 任務 {rep['mission_done']} 瓶淨空 {rep['clear_bottle']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']} fallback {rep['n_fallback']} 求解器 {rep['qp_counts']} GI 未採用 {rep['gi_fail']} >50ms {rep['n_over_50ms']} 掃描鏈 { {k: rep['nav_chain'][k] for k in ('n_scan', 'n_dyn_max', 'n_static_max', 'shield')} } 分項 {rep['timing']}", flush=True)
     print(f"[s1] 事件 {rep['events']}", flush=True)
     return C2.exit_code(rep)
 
