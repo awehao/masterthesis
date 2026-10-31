@@ -65,6 +65,58 @@ from .se2 import ad, geodesic_error
 # Configuration
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# （gmpc_wb）手臂作用模式：設定點模型預測＋末端任務線性化（單次線性化，非 SQP）
+# ---------------------------------------------------------------------------
+ARM_N = 6
+
+
+def arm_prediction(q0, s0, N, dt, model):
+    """設定點模型（wgmpc_core_sp.ArmSetpointModel.compose(dt) 的 P,Q,G,h）的線性預測。
+    回傳 (Mq, cq, Ms, cs)：q_k＝Mq[k]·U＋cq[k]、s_k＝Ms[k]·U＋cs[k]（k＝1..N；U＝u_a 堆疊 6N）。"""
+    P, Q, G, h, _ = model.compose(dt)
+    n = ARM_N * N
+    Mq, Ms = np.zeros((N, ARM_N, n)), np.zeros((N, ARM_N, n))
+    cq, cs = np.zeros((N, ARM_N)), np.zeros((N, ARM_N))
+    q_M, q_c = np.zeros((ARM_N, n)), np.asarray(q0, float).copy()
+    s_M, s_c = np.zeros((ARM_N, n)), np.asarray(s0, float).copy()
+    for k in range(N):
+        Uk = np.zeros((ARM_N, n))
+        Uk[:, ARM_N * k:ARM_N * (k + 1)] = np.eye(ARM_N)
+        q_M, q_c = P[:, None] * q_M + Q[:, None] * s_M + G[:, None] * Uk, P * q_c + Q * s_c + h
+        s_M, s_c = s_M + dt * Uk, s_c.copy()
+        Mq[k], cq[k], Ms[k], cs[k] = q_M, q_c, s_M, s_c
+    return Mq, cq, Ms, cs
+
+
+def _rot_err_world(R_cur, R_des):
+    Re = R_cur.T @ R_des
+    c = float(np.clip((np.trace(Re) - 1.0) * 0.5, -1.0, 1.0))
+    th = math.acos(c)
+    if th < 1e-9:
+        return np.zeros(3)
+    w = np.array([Re[2, 1] - Re[1, 2], Re[0, 2] - Re[2, 0], Re[1, 0] - Re[0, 1]]) * (th / (2.0 * math.sin(th)))
+    return R_cur @ w
+
+
+def _pose_from_err(X_ref, e):
+    from .se2 import exp_
+    X = X_ref @ exp_(e)
+    return np.array([X[0, 2], X[1, 2], math.atan2(X[1, 0], X[0, 0])])
+
+
+def _pose_jac(X_ref, e, h=1e-7):
+    """∂(x, y, θ)/∂e 於 e（中央差分；θ 差取 wrap）。"""
+    J = np.zeros((3, 3))
+    for i in range(3):
+        d = np.zeros(3); d[i] = h
+        a, b = _pose_from_err(X_ref, e + d), _pose_from_err(X_ref, e - d)
+        dd = a - b
+        dd[2] = math.atan2(math.sin(dd[2]), math.cos(dd[2]))
+        J[:, i] = dd / (2 * h)
+    return J
+
+
 @dataclass
 class GMPCConfig:
     N      : int                          # horizon length (number of input steps)
@@ -269,6 +321,7 @@ class GMPCResult:
     # （gmpc_wb）手臂：arm_mode None＝未使用手臂（與封存版相同）；'hold'＝手臂速度序列固定 0（u_arm_seq (N,6) 全零）
     arm_mode          : str | None = None
     u_arm_seq         : np.ndarray | None = None
+    arm_check         : dict | None = None      # active：手臂限制於回傳序列的原單位最大違反、有限值、底盤後處理是否改動（seq_consistent）
 
 
 # ---------------------------------------------------------------------------
@@ -934,8 +987,30 @@ class GMPC:
                     If non-empty, a CBF inequality is added per obstacle on δξ_0.
         arm       : （gmpc_wb）None ⇒ 與封存 gmpc.py 完全相同的問題。{'mode': 'hold'} ⇒ 手臂速度序列固定為 0：依結構**消去**這些
                     等式為零的決策變數（r2，Codex 20261031：不交 120 個零變數給 OSQP），QP 與封存版相同；結果另帶 arm_mode、u_arm_seq＝0。
-                    r1（已撤）曾附加 u_a 並以等式固定，底盤區塊逐元素等價但未收斂案求解路徑不同。其他模式尚未實作 ⇒ ValueError。
+                    r1（已撤）曾附加 u_a 並以等式固定，底盤區塊逐元素等價但未收斂案求解路徑不同。
+                    {'mode': 'active', 'K', 'tcp', 'q_arm', 's_arm', 'u_arm_prev', 'model', 'T_seq'(N+1,4,4), 'w_p', 'w_r', 'w_a', 'w_s',
+                     'v_arm', 'a_arm', 'lo', 'hi', 'margin', 'u_arm_nom'(可省, N×6)} ⇒ 決策末端加 u_a（N×6）：設定點模型預測（實測角＋設定點）、
+                    每步 TCP 誤差在名目點（底盤沿參考＋e_nom、手臂 u_arm_nom）單次線性化，底盤增量 δe 經 X_ref·exp 轉世界位移後與手臂
+                    共用同一全身 Jacobian；手臂速度框、對上一筆的加速度框、實測角與設定點限位（±margin）。底盤原成本／限制／CBF 不動。
         """
+        if arm is not None and arm.get('mode') == 'active' and not arm.get('_inner'):
+            # （gmpc_wb）手臂作用模式不得削弱封存導航的安全判定：先解與封存版相同的底盤問題（hold，已證逐位元相同）。
+            #   底盤不可行（煞停）⇒ 照封存版煞停、手臂歸零；耦合問題未完全收斂（status ≠ solved）⇒ 退回 hold 底盤解、手臂保持。
+            #   動機：硬 k0 過近案封存版判 primal infeasible 煞停，耦合問題卻在迭代上限回傳朝障礙前進的命令（CBF 殘差 −0.55）。
+            import dataclasses as _dc
+            r_hold = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm={'mode': 'hold'})
+            N_ = self.cfg.N
+            def _fb(why, coupled_status=None):
+                return _dc.replace(r_hold, arm_mode='active', u_arm_seq=np.zeros((N_, 6)),
+                                   arm_check=dict(fallback=why, coupled_status=coupled_status, finite=True, max_violation=float('nan'),
+                                                  seq_consistent=True, note='手臂保持（退回 hold 底盤解）'))
+            if r_hold.accept_action == 'brake':
+                return _fb('base_brake')
+            r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=dict(arm, _inner=True))
+            if r.status != 'solved':
+                return _fb('coupled_not_solved', r.status)
+            r.arm_check = dict(r.arm_check or {}, fallback=None, hold_status=r_hold.status)
+            return r
         cfg = self.cfg
         N, dt = cfg.N, cfg.dt
         n = 3
@@ -1120,9 +1195,65 @@ class GMPC:
                 ub_total = np.concatenate([ub_total, eps_ub])
 
         # 5c. （gmpc_wb）手臂區塊：附加在決策向量最後（δξ、鬆弛之後），原有列不動，只補零欄＋手臂列。
-        if arm is not None and arm.get('mode') != 'hold':
-            raise ValueError(f"gmpc_wb：arm mode {arm.get('mode')!r} 尚未實作（目前只有 hold）")
+        if arm is not None and arm.get('mode') not in ('hold', 'active'):  # active 只在外層安全檢查後以 _inner 進入
+            raise ValueError(f"gmpc_wb：arm mode {arm.get('mode')!r} 未實作（hold／active）")
         # hold：手臂速度序列≡0，依結構消去，不改 QP（見 docstring r2）
+        n_arm, arm_rows, arm_info = 0, 0, {}
+        if arm is not None and arm['mode'] == 'active':
+            nz = P_dense.shape[0]
+            n_arm = ARM_N * N
+            Kk, tcp = arm['K'], arm.get('tcp', 'link_tcp')
+            Mq, cq, Ms, cs = arm_prediction(arm['q_arm'], arm['s_arm'], N, dt, arm['model'])
+            U0 = np.zeros(n_arm) if arm.get('u_arm_nom') is None else np.asarray(arm['u_arm_nom'], float).reshape(-1)
+            T_seq = np.asarray(arm['T_seq'], float)
+            if T_seq.shape != (N + 1, 4, 4) or not np.isfinite(T_seq).all():
+                raise ValueError(f'arm T_seq 形狀須為 ({N + 1},4,4) 且有限，收到 {T_seq.shape}')
+            e_nom = (Phi @ e0).reshape(N, n)
+            Wt = np.diag([arm['w_p']] * 3 + [arm['w_r']] * 3)
+            Pzz = np.zeros((nz + n_arm, nz + n_arm))
+            qz = np.zeros(nz + n_arm)
+            for k in range(N):
+                xb = _pose_from_err(X_ref_win[k + 1], e_nom[k])
+                qa = Mq[k] @ U0 + cq[k]
+                qf = np.r_[xb, qa]
+                Tc = Kk.fk(qf, tcp)
+                Td = T_seq[k + 1]
+                ek = np.r_[Td[:3, 3] - Tc[:3, 3], _rot_err_world(Tc[:3, :3], Td[:3, :3])]
+                J = Kk.jacobian(qf, tcp)
+                Bk = _pose_jac(X_ref_win[k + 1], e_nom[k])                  # ∂(x,y,θ)/∂e（X_ref·exp(e)；含 SE(2) 右 Jacobian）
+                L = np.zeros((6, nz + n_arm))
+                L[:, :Nm] = J[:, :3] @ Bk @ Gamma[k * n:(k + 1) * n, :]
+                L[:, nz:] = J[:, 3:] @ Mq[k]
+                r0 = ek + L[:, nz:] @ U0                                  # e_k ≈ r0 − L·z
+                Pzz += 2.0 * L.T @ Wt @ L
+                qz += -2.0 * L.T @ Wt @ r0
+            va = float(arm['v_arm'])
+            Ra = np.eye(n_arm) * (float(arm['w_a']) / va ** 2)
+            D = np.eye(n_arm) - np.eye(n_arm, k=-ARM_N)
+            Sa = np.eye(n_arm) * (float(arm['w_s']) / va ** 2)
+            f0 = np.zeros(n_arm); f0[:ARM_N] = -np.asarray(arm['u_arm_prev'], float)
+            Pzz[nz:, nz:] += 2.0 * (Ra + D.T @ Sa @ D)
+            qz[nz:] += 2.0 * D.T @ Sa @ f0
+            P_new = np.zeros((nz + n_arm, nz + n_arm)); P_new[:nz, :nz] = P_dense
+            P_dense = P_new + Pzz
+            q_vec = np.concatenate([q_vec, np.zeros(n_arm)]) + qz
+            lo_j, hi_j = np.asarray(arm['lo'], float) + arm['margin'], np.asarray(arm['hi'], float) - arm['margin']
+            aa = float(arm['a_arm']) * dt
+            up = np.asarray(arm['u_arm_prev'], float)
+            rows_A = [np.eye(n_arm), D]
+            rows_l = [np.full(n_arm, -va), np.r_[up - aa, np.full(n_arm - ARM_N, -aa)]]
+            rows_u = [np.full(n_arm, va), np.r_[up + aa, np.full(n_arm - ARM_N, aa)]]
+            for k in range(N):
+                rows_A += [Mq[k], Ms[k]]
+                rows_l += [lo_j - cq[k], lo_j - cs[k]]
+                rows_u += [hi_j - cq[k], hi_j - cs[k]]
+            A_arm = np.vstack(rows_A)
+            arm_rows = A_arm.shape[0]
+            A_total = sparse.vstack([sparse.hstack([A_total, sparse.csc_matrix((A_total.shape[0], n_arm))]),
+                                     sparse.hstack([sparse.csc_matrix((arm_rows, nz)), sparse.csc_matrix(A_arm)])], format='csc')
+            lb_total = np.concatenate([lb_total, np.concatenate(rows_l)])
+            ub_total = np.concatenate([ub_total, np.concatenate(rows_u)])
+            arm_info = dict(nz=nz, A=A_arm, l=np.concatenate(rows_l), u=np.concatenate(rows_u), Mq=Mq, cq=cq, U0=U0)
 
         # 6. OSQP solve
         P_sp = sparse.csc_matrix(P_dense)
@@ -1149,8 +1280,8 @@ class GMPC:
         # Check the object before trusting the label.
         if usable:
             _sol = np.asarray(res.x) if res.x is not None else None
-            if (_sol is None or _sol.size < Nm
-                    or not np.all(np.isfinite(_sol[:Nm]))):
+            if (_sol is None or _sol.size < Nm + n_arm + (n_slack if n_arm else 0)
+                    or not np.all(np.isfinite(_sol))):
                 usable = False
                 status = f'{status} (rejected: non-finite or short solution)'
         if not usable:
@@ -1179,6 +1310,17 @@ class GMPC:
                     eps0 = float(max(eps_v[0], eps_v[N]) if n_slack >= 2 * N
                                  else eps_v[0])
 
+        u_arm_seq, arm_check = (None if arm is None else np.zeros((N, 6))), None
+        if n_arm:
+            if usable:
+                ua = np.asarray(res.x)[arm_info['nz']:arm_info['nz'] + n_arm]
+                r_arm = arm_info['A'] @ ua
+                viol = float(max(np.max(arm_info['l'] - r_arm), np.max(r_arm - arm_info['u'])))
+                u_arm_seq = ua.reshape(N, ARM_N)
+                arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows))
+            else:
+                u_arm_seq = np.zeros((N, ARM_N))
+                arm_check = dict(max_violation=float('nan'), finite=False, rows=int(arm_rows), note='底盤煞停路徑：手臂命令歸零（未求得序列）')
         u_opt = xi_ref_win[0] + delta[0]
         u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
         accept_action, accept_scale = ('as_is' if usable else 'brake'), 1.0
@@ -1258,6 +1400,8 @@ class GMPC:
             except Exception:
                 pass
 
+        if arm_check is not None:                     # 後處理若改了底盤命令，手臂序列不再與回傳底盤同解（不宣稱整串可行）
+            arm_check['seq_consistent'] = bool(accept_action == 'as_is' and np.allclose(u_opt, xi_ref_win[0] + delta[0], atol=1e-12, rtol=0))
         return GMPCResult(u_opt=u_opt, delta_xi_all=delta,
                           e0=e0, solve_time_s=solve_time, status=status,
                           cbf_active=cbf_active, min_h=min_h,
@@ -1271,7 +1415,7 @@ class GMPC:
                           cbf_resid_post_slack=resid_post_s,
                           cbf_resid_evaluated_on=evaluated_on,
                           arm_mode=None if arm is None else arm.get('mode'),
-                          u_arm_seq=None if arm is None else np.zeros((N, 6)))
+                          u_arm_seq=u_arm_seq, arm_check=arm_check)
 
 
 # ---------------------------------------------------------------------------
