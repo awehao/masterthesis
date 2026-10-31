@@ -67,7 +67,7 @@ def ready_posture():
     return g[2], T
 
 
-def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', grasp_w=None, method='C3', c1=(1.0, 1.0)):
+def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', grasp_w=None, method='C3', c1=(1.0, 1.0), keep_q=False):
     """grasp_w＝(w_p, w_vref)：PREGRASP～LIFT 相位改用的權重（None＝全程 R3 權重 50／1）。
     method：C3（設定點模型＋在途命令前推）｜C2（理想速度模型 bottle_models，前推也用理想模型）｜C1（MotM 式移植 motm_b1_port，
     以當下實測狀態單步 QP、參考前饋、無前推；c1＝(kp, w_vref)）。受控對象、延遲、參考產生器、判定三組相同。"""
@@ -195,6 +195,8 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
         ep, er = BR.pose_err(K.fk(q, 'link_tcp'), T_now)
         rec['ep_old'].append(BR.pose_err(K.fk(q, 'link_tcp'), T_seq[0])[0])
         rec['t'].append(t); rec['x'].append(float(q[0])); rec['phase'].append(st.phase)
+        if keep_q:
+            rec.setdefault('q', []).append([float(v) for v in q])
         rec['ep'].append(ep); rec['er'].append(er); rec['v_b'].append(v_b)
         t += DT
     if result is None:
@@ -218,6 +220,8 @@ def run(v_c, coord=True, plant_alpha=1.0, ctrl_alpha=1.0, t_max=80.0, label='', 
                x_at_close=None if 'CLOSE' not in ev else round(float(np.interp(ev['CLOSE'], tt, x)), 3),
                solve_ms_p95=round(float(np.percentile(rec['solve_ms'], 95)), 1),
                pred_err_p95_mm=round(float(np.percentile(rec['pred_err'], 95)) * 1e3, 2) if rec['pred_err'] else None)
+    if keep_q:
+        out.update(q_hist=rec['q'], t_hist=rec['t'], phase_hist=rec['phase'])
     return out
 
 
