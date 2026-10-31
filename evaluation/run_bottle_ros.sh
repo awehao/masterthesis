@@ -32,6 +32,10 @@ trap 'say "收到 TERM"; exit 143' TERM
 trap 'say "收到 INT"; exit 130' INT
 say "=== 瓶子 N1 真話題鏈路 模式 $SIM_MODE 參數［${S1_ARGS:-無}］ RUN_ID=$RUN_ID 網域 $ROS_DOMAIN_ID；git $(git rev-parse --short HEAD)"
 sha256sum evaluation/isaac_bottle_ros.py evaluation/bottle_ros_chain.py evaluation/bottle_tracker_stamped.py evaluation/bottle_map_write.py evaluation/bottle_s1_ctrl.py evaluation/bottle_s1_groups.py evaluation/motm_b1_port.py evaluation/wg4b_b1_core.py evaluation/bottle_s0b_ctrl.py evaluation/bottle_branch.py evaluation/bottle_s0_ctrl.py evaluation/bottle_s0_logic.py evaluation/bottle_ref.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py evaluation/run_bottle_ros.sh evaluation/bottle_n2_path.py evaluation/bottle_n2_ctrl.py evaluation/bottle_n2_ros.py evaluation/bottle_n2_planner.yaml evaluation/bottle_ros_fake.py evaluation/isaac_bottle_n2.py evaluation/bottle_place_ctrl.py evaluation/bottle_place_ros.py evaluation/bottle_place_fake.py evaluation/isaac_bottle_place.py evaluation/isaac_bottle_v1.py evaluation/isaac_bottle_v1c.py evaluation/bottle_v2_ctrl.py evaluation/bottle_v1_cam.py evaluation/bottle_v1_est.py evaluation/bottle_v1_est_node.py evaluation/isaac_bottle_v2.py evaluation/bottle_v2_link.py evaluation/isaac_bottle_w1c.py evaluation/bottle_w1_cam.py "$ASSET" > "$DIR/versions.sha256"
+case "${ISAAC_SCRIPT:-}${FAKE_SCRIPT:-}" in                      # 有第二桌的場景（放置、V1、V2、W1）：地圖必須含第二桌腳，否則追蹤器把桌腳當未知物（bottle_w1c_1 漏帶 ⇒ 假動態障礙）
+  *place*|*_v1*|*_v2*|*_w1*)
+    case "${MAP_ARGS:-}" in *--table2*) ;; *) say "場景有第二桌但 MAP_ARGS 未帶 --table2 ⇒ 拒跑"; echo 76 > "$DIR/exit_rc.txt"; exit 76;; esac;;
+esac
 python3 evaluation/bottle_map_write.py "$DIR/map" ${S1_ARGS:-} ${MAP_ARGS:-} | tee -a "$DIR/run.log"
 PRM=$(python3 - <<'PY'
 import sys; sys.path.insert(0,'evaluation')
@@ -85,7 +89,7 @@ else
 fi
 wait "${PIDS[-1]}"; RC=$?
 RC2=$(cat "$DIR/exit_rc.txt" 2>/dev/null || echo 99)
-say "程序離開碼 $RC；腳本結果碼 $RC2（0＝完整成功、3＝已停止且有效、4＝停止未驗／無效、70＝握手未過、72＝無有效路徑未起跑、73＝V1／W1 第一張影格未過、74＝V1／W1 採集不成立、71＝報告序列化失敗（另存 _diag）、99＝無結果檔）"
+say "程序離開碼 $RC；腳本結果碼 $RC2（0＝完整成功、3＝已停止且有效、4＝停止未驗／無效、70＝握手未過、72＝無有效路徑未起跑、73＝V1／W1 第一張影格未過、74＝V1／W1 採集不成立、76＝有第二桌的場景地圖未帶第二桌腳、71＝報告序列化失敗（另存 _diag）、99＝無結果檔）"
 grep -aE "\[s1\]|\[fake\]" "$DIR/sim.log" | tee -a "$DIR/run.log"
 [ "$RC2" = 99 ] && [ "$RC" -ne 0 ] && exit "$RC"
 exit "$RC2"
