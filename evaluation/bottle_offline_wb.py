@@ -137,7 +137,7 @@ def run(v_c, plant_alpha=1.0, ctrl_alpha=1.0, w_near=200.0, w_far=50.0, label=''
         rec['phase'].append(st.phase)
         if trace is not None:
             T_now, T_d = K.fk(q, 'link_tcp'), BR.target_at(task, st, plan, t)
-            trace.append(dict(t=t, phase=st.phase, ms=rec['ms'][-1], q=q.copy(), s=s.copy(), v_b=v_b, s_ref=s_ref, ub=ub.copy(), ua0=ua0.copy(), dp=T_now[:3, 3] - T_d[:3, 3], er=BR.pose_err(T_now, T_d)[1], arm_check={k_: v_ for k_, v_ in ck.items() if k_ != 'u_arm'}))
+            trace.append(dict(t=t, phase=st.phase, ms=rec['ms'][-1], qp=qp.copy(), sp=sp.copy(), u_arm_seq=np.array(r.u_arm_seq), xi_seq=xi_ref[:N] + np.asarray(r.delta_xi_all, float), q=q.copy(), s=s.copy(), v_b=v_b, s_ref=s_ref, ub=ub.copy(), ua0=ua0.copy(), dp=T_now[:3, 3] - T_d[:3, 3], er=BR.pose_err(T_now, T_d)[1], arm_check={k_: v_ for k_, v_ in ck.items() if k_ != 'u_arm'}))
     if result is None:
         result, why = 'fail', 'timeout'
     ms = np.array(rec['ms'])
