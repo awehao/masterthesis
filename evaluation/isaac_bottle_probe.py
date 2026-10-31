@@ -281,9 +281,9 @@ def main():
     rep['cols'] = cols
     rep['reached_end'] = bool(ctrl.done or ctrl.judge.stop is not None)
     json.dump(rep, open(os.path.join(a.out, 'probe_report.json'), 'w'), ensure_ascii=False, indent=1, default=float)
-    print(f"[s0a] 結果 success={rep['success']} 判定 {rep['result']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} 滑移 {rep['slip_max_mm_deg']} 求解 {rep['solve_ms']}", flush=True)
+    print(f"[s0a] 結果 probe_pass={rep['probe_pass']} 第一阻點 {rep['stop']} 停止有效 {rep['stop_effect']} t_descend {rep['t_descend']} 求解 {rep['solve_ms']}", flush=True)
     print(f"[s0a] 事件 {rep['events']}", flush=True)
-    rc_p = PR.probe_exit_code(rep)
+    rc_p = rep['probe_exit']
     print(f"[s0a] 碰觸結果碼 {rc_p}；進給 {rep['feed_at_stop_m']}；脈衝 {rep['forbidden_pulses']}", flush=True)
     return rc_p
 

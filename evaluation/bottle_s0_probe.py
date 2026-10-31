@@ -5,7 +5,8 @@
   預期觸發：EXPECTED（夾爪殼／link_eef 對桌面；點雲名目下降 43 mm，Isaac 凸包可能不同）。
   進給上限 feed_max：超過仍未觸發 ⇒ 停止 probe_no_contact（通道未驗證）。
 一個通道觸發只代表該通道與共用停止路徑，不替其他通道背書。
-結果碼：0＝預期通道觸發且停止有效；5＝其他判定先觸發（穿透、別的通道）；6＝未接觸；7＝觸發但停止有效性未通過／未驗。
+結果碼：0＝已通過起點准入開始下降、觸發不早於 t_descend、預期通道觸發且停止有效；5＝其他判定先觸發（穿透、別的通道、下降前就觸發）；6＝未接觸；7＝觸發但停止有效性未通過／未驗。
+報告另列 probe_pass（結果碼 0），與抓取任務的 success 分開。
 """
 from __future__ import annotations
 
@@ -65,6 +66,9 @@ class ProbeController(C.S0aController):
     def report(self):
         r = super().report()
         r.update(feed_at_stop_m=self.feed_at_stop, t_descend=self.t_desc, v_down=self.v_down, feed_max=self.feed_max, expected=list(EXPECTED))
+        r['success_grasp_task'] = r.pop('success')                     # 碰觸不是抓取任務，不用 success
+        r['probe_exit'] = probe_exit_code(r)
+        r['probe_pass'] = r['probe_exit'] == 0
         return r
 
 
@@ -72,6 +76,9 @@ def probe_exit_code(rep):
     why = (rep.get('stop') or {}).get('why') or ''
     if why == 'probe_no_contact' or not why:
         return 6
+    t_d, t_s = rep.get('t_descend'), (rep.get('stop') or {}).get('t')
+    if t_d is None or t_s is None or float(t_s) < float(t_d):             # 進場途中或靜置時就觸發 ⇒ 不算預期碰觸
+        return 5
     if why not in tuple(f'forbidden_contact:{k}' for k in EXPECTED):
         return 5
     return 0 if (rep.get('stop_effect') or {}).get('ok') is True else 7

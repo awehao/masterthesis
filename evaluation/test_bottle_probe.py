@@ -66,7 +66,15 @@ chk('P3 其他通道先觸發 ⇒ 結果碼 5', r['stop']['why'] == 'forbidden_c
 c, z, f = run(fault=lambda t: dict(forbidden={k: float('nan') for k in REQ}) if t > 7.0 else {})
 r = c.report()
 chk('P4 通道資料失效 ⇒ 停止、非 0', (r['stop']['why']).startswith('data_stale_forbidden') and P.probe_exit_code(r) == 5, str(r['stop']))
-chk('P5 觸發但停止未驗 ⇒ 7', P.probe_exit_code(dict(stop={'why': 'forbidden_contact:extra1_table'}, stop_effect=None)) == 7)
+chk('P5 觸發但停止未驗 ⇒ 7', P.probe_exit_code(dict(stop={'why': 'forbidden_contact:extra1_table', 't': 9.0}, t_descend=8.0, stop_effect=None)) == 7)
+c, z, f = run(z_contact=2.0)                                        # 進場途中就有接觸力
+r = c.report()
+chk('P7 下降前預期通道觸發 ⇒ 非 0、probe_pass False', r['stop']['why'] == 'forbidden_contact:extra1_table' and r['t_descend'] is None and r['probe_exit'] == 5 and r['probe_pass'] is False,
+    f"{r['stop']} {r['t_descend']} {r['probe_exit']}")
+chk('P8 觸發早於 t_descend ⇒ 非 0', P.probe_exit_code(dict(stop={'why': 'forbidden_contact:extra1_table', 't': 7.0}, t_descend=8.0, stop_effect={'ok': True})) == 5)
+c, z, f = run()
+r = c.report()
+chk('P9 正常 probe_pass True、不用 success 鍵', r['probe_pass'] is True and 'success' not in r, str(r.get('probe_exit')))
 chk('P6 無阻點 ⇒ 非 0', P.probe_exit_code(dict(stop=None)) == 6)
 print(f'受控碰觸邏輯測試 {N} 項：' + ('全過' if not BAD else '失敗 ' + '；'.join(BAD)))
 sys.exit(0 if not BAD else 1)
