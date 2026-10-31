@@ -54,31 +54,38 @@ def stats(R):
         return dict(n=0)
     e = np.hypot(R[:, 1], R[:, 2])
     return dict(n=len(R), ex_mean=float(R[:, 1].mean()), ey_mean=float(R[:, 2].mean()), ex_std=float(R[:, 1].std()), ey_std=float(R[:, 2].std()),
-                e_p50=float(np.median(e)), e_max=float(e.max()), ez_top_p50=float(np.nanmedian(np.abs(R[:, 3]))) if np.isfinite(R[:, 3]).any() else None)
+                ex_range=[float(R[:, 1].min()), float(R[:, 1].max())], ey_range=[float(R[:, 2].min()), float(R[:, 2].max())], e_p50=float(np.median(e)), e_max=float(e.max()), ez_top_p50=float(np.nanmedian(np.abs(R[:, 3]))) if np.isfinite(R[:, 3]).any() else None)
+
+
+def per_frame(run, ofs_list=(0.0, 0.5)):
+    """回傳 ({ofs: [(擷取戳, 估計距離, ex mm, ey mm, z_top 誤差 mm)]}, 整數約定重估對線上紀錄的逐格差 mm, 位姿來源, 影格數)。"""
+    TB = table1()
+    F, c, K, Tw, src = load(run)
+    res, same = {o: [] for o in ofs_list}, []
+    for k, st in enumerate(F['stamp']):
+        i = int(np.argmin(np.abs(c['stamp'] - st)))
+        if abs(c['stamp'][i] - st) > 1e-6:
+            continue
+        for ofs in ofs_list:
+            e = EST.estimate(F['depth'][k].astype(float), K, Tw[k], TB, ofs=ofs)
+            if not e['valid']:
+                continue
+            cam = Tw[k][:3, 3]
+            de = float(np.linalg.norm(np.array([e['center_xy'][0], e['center_xy'][1], e['z_from_support'] + 0.1]) - cam))
+            ezt = (e['z_from_top'] - c['tb_z'][i]) * 1e3 if e.get('z_top_valid') else np.nan
+            res[ofs].append((float(st), de, (e['center_xy'][0] - c['tb_x'][i]) * 1e3, (e['center_xy'][1] - c['tb_y'][i]) * 1e3, ezt))
+            if ofs == 0.0 and c['valid'][i] == 1:
+                same.append(max(abs(e['center_xy'][0] - c['cx'][i]), abs(e['center_xy'][1] - c['cy'][i])) * 1e3)
+    return res, same, src, int(len(F['stamp']))
 
 
 def main():
-    TB = table1()
     out = dict(pix_ofs_default=EST.PIX_OFS, source='CP1 半像素約定（results/vision/CP1_result.yaml）', runs={})
     for run in RUNS:
-        F, c, K, Tw, src = load(run)
-        res, same = {0.0: [], 0.5: []}, []
-        for k, st in enumerate(F['stamp']):
-            i = int(np.argmin(np.abs(c['stamp'] - st)))
-            if abs(c['stamp'][i] - st) > 1e-6:
-                continue
-            for ofs in (0.0, 0.5):
-                e = EST.estimate(F['depth'][k].astype(float), K, Tw[k], TB, ofs=ofs)
-                if not e['valid']:
-                    continue
-                cam = Tw[k][:3, 3]
-                de = float(np.linalg.norm(np.array([e['center_xy'][0], e['center_xy'][1], e['z_from_support'] + 0.1]) - cam))
-                ezt = (e['z_from_top'] - c['tb_z'][i]) * 1e3 if e.get('z_top_valid') else np.nan
-                res[ofs].append((de, (e['center_xy'][0] - c['tb_x'][i]) * 1e3, (e['center_xy'][1] - c['tb_y'][i]) * 1e3, ezt))
-                if ofs == 0.0 and c['valid'][i] == 1:
-                    same.append(max(abs(e['center_xy'][0] - c['cx'][i]), abs(e['center_xy'][1] - c['cy'][i])) * 1e3)
-        r_ = dict(pose_source=src, n_frames=int(len(F['stamp'])), online_vs_reest_int_max_mm=float(max(same)) if same else None, n_compared=len(same))
-        print(f'[{run}] 位姿來源 {src}；影格 {len(F["stamp"])}；整數約定重估 vs 線上紀錄 最大差 {r_["online_vs_reest_int_max_mm"]} mm（{len(same)} 格）')
+        res, same, src, nf = per_frame(run)
+        res = {o: [r[1:] for r in R] for o, R in res.items()}
+        r_ = dict(pose_source=src, n_frames=nf, online_vs_reest_int_max_mm=float(max(same)) if same else None, n_compared=len(same))
+        print(f'[{run}] 位姿來源 {src}；影格 {nf}；整數約定重估 vs 線上紀錄 最大差 {r_["online_vs_reest_int_max_mm"]} mm（{len(same)} 格）')
         for ofs, R in res.items():
             R = np.array(R)
             s = dict(all=stats(R), budget_band=stats(R[(R[:, 0] >= 0.5) & (R[:, 0] <= 2.0)]) if len(R) else dict(n=0))

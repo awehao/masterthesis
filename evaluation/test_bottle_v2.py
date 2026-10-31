@@ -32,10 +32,21 @@ def chk(name, cond, info=''):
     print(('  ✓ ' if cond else '  ✗ ') + name + ('' if cond else f' {info}'))
 
 
-def build():
+BIAS_R2, NOISE_R2 = (0.45e-3, 0.36e-3), (0.06e-3, 0.07e-3)      # bottle_v1_2 半像素重估、估計距離 0.5–2.0 m（v2_budget_r2.json）
+BIAS_R1, NOISE_R1 = (0.43e-3, 1.66e-3), (0.33e-3, 0.43e-3)      # 舊：bottle_v1_1 線上、整數約定（壓力案例）
+
+
+def build(no_truth_target=False):
+    """no_truth_target：建構時抓取目標就是 NaN（不先放真值再由視覺覆寫）；凍結前任何讀到它的地方都會變成非有限值。"""
     plan = json.load(open(os.path.join(HERE, 'runs', 'bottle_n2_smoke2', 'plan.json')))['plan']
     pp = NP.PlannedPath(np.array(plan['joined']), -0.9)
-    c = SC.make_lidar(cls=V2.V2PlaceController, extra_boxes=[(c_, sz) for n, c_, sz in TP.table2_boxes() if n != 'table_top'], carry_planner=TP.FakePlanner())
+    tg0 = T.T_G
+    if no_truth_target:
+        T.T_G = np.full((4, 4), np.nan)
+    try:
+        c = SC.make_lidar(cls=V2.V2PlaceController, extra_boxes=[(c_, sz) for n, c_, sz in TP.table2_boxes() if n != 'table_top'], carry_planner=TP.FakePlanner())
+    finally:
+        T.T_G = tg0
     c.path, c.s_ref, c.sig_robot = pp, pp.sig0, pp.sig0
     c.exit_c = np.array([99.0, 99.0])
     f = TP.FakePlace(c, x0=SC.X0)
@@ -59,7 +70,7 @@ def visible(q):
     return float(np.mean(vis)) >= 0.5, T_wc[:3, 3]
 
 
-def run(c, f, bias=(0.43e-3, 1.66e-3), noise=(0.33e-3, 0.43e-3), age=0.02, off=True, inject=None, t_end=75.0, seed=0):
+def run(c, f, bias=BIAS_R2, noise=NOISE_R2, age=0.02, off=True, inject=None, t_end=75.0, seed=0):
     rng = np.random.default_rng(seed)
     st = dict(next=0.0, pend=[])
 
@@ -94,10 +105,91 @@ def show(name, r, c):
 def case_nominal():
     c, f = build()
     r = run(c, f)
-    err = show('名目（v1_1 偏差＋雜訊）', r, c)
+    err = show('名目（v1_2 半像素重估的偏差＋雜訊）', r, c)
     chk('名目：凍結、完成放置', r['mission_done'] and r['v2']['fix'] is not None, r['stop'])
     chk('名目：凍結在朝瓶漸變前', r['v2']['fix'] and r['v2']['fix']['t'] < next(e['t'] for e in r['events'] if e['what'] == 'blend_start'))
     chk('名目：凍結誤差在插入軸預算內（−2.0～+3.0 mm）與閉合軸（−5.0～+4.5）', err and -2.0 <= err[1] <= 3.0 and -5.0 <= err[0] <= 4.5, err)
+
+
+def case_old_int():
+    """壓力案例：舊整數約定的偏差（插入軸 +1.66 mm），按原判準照實記錄。"""
+    c, f = build()
+    r = run(c, f, bias=BIAS_R1, noise=NOISE_R1)
+    err = show('壓力：舊整數約定偏差（v1_1 線上）', r, c)
+    print(f"   瓶淨空 實測／預測／下一拍 mm {[round((r['clear_bottle'][k] or float('nan')) * 1e3, 2) for k in ('meas_min', 'pred_min', 'next_min')]}")
+    chk('壓力：完成或由拒絕線／視覺條件受控停止（不得未受控）', r['mission_done'] or (r['stop'] is not None and r['stop_effect'] and r['stop_effect'].get('ok')), (r['stop'], r['stop_effect']))
+
+
+class FakeCap:
+    """V1Capture 的替身：只有 ests（擷取戳 → (收到時 ROS 時間, 訊息)）與 frames（擷取戳 → 任務時間、位姿互核差）。"""
+    def __init__(self):
+        self.ests, self.frames = {}, {}
+
+
+def run_link(c, f, dev=(0.0, 0.0), t_end=75.0, render=True):
+    """全流程：合成深度（同 test_bottle_v1_est.render）→ 估計函式 → 估計訊息 → V2Link（位姿互核閘）→ 控制器。真值只用來合成影格。"""
+    import bottle_v1_est as EST
+    import bottle_v2_link as VL
+    import test_bottle_v1_est as TV
+    cap, st = FakeCap(), dict(next=0.0, pend=[], n=0)
+    link = VL.V2Link(cap, c)
+    boxes = TV.scene_boxes()
+
+    def hook(t, s):
+        for p_ in [p_ for p_ in st['pend'] if p_[0] <= t + 1e-9]:
+            cap.ests[p_[1]] = (p_[0], p_[2])
+            st['pend'].remove(p_)
+        link.tick(t)
+        if t >= st['next'] - 1e-9 and s.c.st.phase == 'CRUISE':
+            st['next'] = t + 0.2
+            T_wc = G.C.K.fk(s.q, 'base_link') @ T_CAM
+            D = TV.render(T_wc, boxes, (np.array([T.BX, T.BY, T.TOP]), np.array([0.0, 0.0, 1.0]), G.BOTTLE['r'], G.BOTTLE['h']), TV.CAM['near'], TV.CAM['far']) if render else np.zeros((480, 640))
+            e = EST.estimate(D, TV.K, T_wc, TV.TABLE1)
+            nan = float('nan')
+            if e['valid']:
+                dist = float(np.linalg.norm(np.array([e['center_xy'][0], e['center_xy'][1], e['z_from_support'] + 0.1]) - T_wc[:3, 3]))
+                d = [t, 1.0, *e['center_xy'], e['z_from_support'], e.get('z_from_top', nan), *e['axis'], e['n_pts'], e['circle_rms'], 0.0, 0.0, 0.0, float(bool(e.get('z_top_valid'))), dist]
+            else:
+                d = [t, 0.0] + [nan] * 14
+            key = round(t, 6)
+            cap.frames[key] = dict(task_t=t, dev_mm=dev[0], dev_deg=dev[1])
+            st['pend'].append((t + 0.02, key, d))
+            st['n'] += 1
+        if t >= t_end - 3.0 and not s.c.mission_done:
+            s.c._trigger_stop('sim_limit')
+        return {}
+    f.run(t_end, hook, tail=2.6)
+    return c.report(), link, st['n']
+
+
+def finite_cmds(f):
+    return all(np.isfinite(h['u']).all() and np.isfinite(h['s']).all() for h in f.hist)
+
+
+def case_truth_free():
+    """目標只來自估計：建構時抓取目標為 NaN；合成深度經估計函式與 V2Link 進控制器，全流程完成。"""
+    c, f = build(no_truth_target=True)
+    chk('建構時抓取目標為 NaN（沒有先放真值）', bool(np.isnan(c.task.T_grasp).all()))
+    r, link, n = run_link(c, f)
+    err = show('全流程：合成深度→估計→V2Link→控制器（目標建構為 NaN）', r, c)
+    print(f"   影格 {n}；轉送 {link.report()}")
+    chk('全流程：凍結、完成放置、命令全程有限', r['mission_done'] and r['v2']['fix'] is not None and finite_cmds(f), (r['stop'], finite_cmds(f)))
+    chk('全流程：凍結誤差在預算內', err and -2.0 <= err[1] <= 3.0 and -5.0 <= err[0] <= 4.5, err)
+    import bottle_s0_ctrl as C0
+    fx = r['v2']['fix']
+    Tg = None if fx is None else C0.grasp_target(fx['xy'][0], fx['xy'][1], c.top_z + 0.10)
+    chk('全流程：凍結後抓取目標有限且等於由凍結值算出的位姿', bool(np.isfinite(c.task.T_grasp).all()) and Tg is not None and np.allclose(c.task.T_grasp, Tg, atol=1e-12))
+
+
+def case_pose_gate():
+    """位姿互核失敗的影格不送控制：估計本身正確，但每格互核差 2 mm ⇒ 全數擋下 ⇒ vision_no_fix、未閉爪、命令有限。"""
+    c, f = build(no_truth_target=True)
+    r, link, n = run_link(c, f, dev=(2.0, 0.0), t_end=30.0)
+    show('位姿互核失敗（2 mm）', r, c)
+    lr = link.report()
+    print(f"   影格 {n}；轉送 {lr}")
+    chk('互核失敗 ⇒ 一筆都不送控制', lr['n_forwarded'] == 0 and lr['rejected'].get('pose_check', 0) > 0 and r['v2']['n_intake'] == 0, lr)
+    chk('互核失敗 ⇒ vision_no_fix、未閉爪、命令有限', (r['stop'] or {}).get('why') == 'vision_no_fix' and c.t_close_req is None and finite_cmds(f), (r['stop'], c.t_close_req))
 
 
 def case_no_est():
@@ -161,7 +253,7 @@ def case_time():
 def case_transition():
     """凍結後「既有備妥姿態→新預抓目標」的實際過渡軌跡淨空（目標偏到預算邊界）。"""
     import bottle_s0b_path_check as PCK
-    for bias in ((0.43e-3, 1.66e-3), (-5.0e-3, 0.0), (4.5e-3, 0.0), (0.0, -2.0e-3), (0.0, 3.0e-3)):
+    for bias in (BIAS_R2, BIAS_R1, (-5.0e-3, 0.0), (4.5e-3, 0.0), (0.0, -2.0e-3), (0.0, 3.0e-3)):
         c, f = build()
         r = run(c, f, bias=bias, noise=(0.0, 0.0), t_end=40.0)
         mins, sm, ns, rate, marg = PCK.check(f)
@@ -173,7 +265,8 @@ def case_transition():
             all(mins[k][0] >= 0.0055 for k in fb) or str((r['stop'] or {}).get('why', '')).startswith('clearance'), (worst, r['stop']))
 
 
-CASES = dict(time=case_time, transition=case_transition, nominal=case_nominal, no_est=case_no_est, jitter=case_jitter, stale=case_stale, inconsistent=case_inconsistent, deep=case_deep)
+CASES = dict(time=case_time, transition=case_transition, nominal=case_nominal, old_int=case_old_int, truth_free=case_truth_free, pose_gate=case_pose_gate, no_est=case_no_est, jitter=case_jitter,
+             stale=case_stale, inconsistent=case_inconsistent, deep=case_deep)
 
 
 def main():
