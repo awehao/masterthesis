@@ -51,17 +51,18 @@ class DetourPath:
 
 class S1Controller(B.S0bController):
     def __init__(self, K, ident, T_grasp, T_ready_rel, q_ready, table_top_z, bottle_radius, x_start, x_win, path, exit_c, exit_r, obstacles_fn,
-                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, **kw):
+                 x_exit_stop=None, v_nav=0.15, v_c=0.03, v_carry=0.10, x_slow=-0.60, q_tuck=None, t_unfold=3.0, t_settle=1.0, x_unfold=None, t_blend=B.T_BLEND, **kw):
         x_stop = exit_c[0] if x_exit_stop is None else x_exit_stop
         super().__init__(K, ident, T_grasp, T_ready_rel, q_ready if q_tuck is None else q_tuck, table_top_z, bottle_radius, x_start, x_win, x_stop, v_c=v_c, obstacles_fn=obstacles_fn,
                          cbf_cfg=dict(B.CBF_MISSION, **kw.pop('cbf_extra', {})), **kw)
         self.path, self.exit_c, self.exit_r = path, np.asarray(exit_c, float), float(exit_r)
         self.v_nav, self.v_carry, self.x_slow = float(v_nav), float(v_carry), float(x_slow)
         self.x_pre = float(x_win[0]) + 0.05
-        self.x_blend = self.x_pre - v_c * B.T_BLEND            # 展臂起點：以接近速度倒推，位置事件觸發
+        self.t_blend = float(t_blend)
+        self.x_blend = self.x_pre - v_c * self.t_blend         # 朝瓶漸變起點：以接近速度倒推，位置事件觸發
         self.st.t_pre, self.st.t_cruise0 = float('inf'), 0.0
         self.q_tuck, self.q_arm_ready, self.t_unfold, self.t_u0 = (None if q_tuck is None else np.array(q_tuck, float)), np.array(q_ready, float), float(t_unfold), None
-        self.x_unfold = self.x_blend - v_c * (self.t_unfold + float(t_settle))   # 展完靜止 t_settle 再朝瓶：d̂ 隨姿態變，停止點預測要用備妥姿態的靜態值
+        self.x_unfold = (self.x_blend - v_c * (self.t_unfold + float(t_settle))) if x_unfold is None else float(x_unfold)   # 展完靜止 t_settle 再朝瓶：d̂ 隨姿態變，停止點預測要用備妥姿態的靜態值；展臂在底盤座標，可在高速段進行
         self.blending, self.mission_done, self.t_exit_in = False, False, None
         self.n_still, self.T_b_now, self.d_static, self.d_p_prev = 0, None, None, None
         self.clear_min = dict(meas=float('inf'), pred=float('inf'), t_meas=None, t_pred=None, n=0)
@@ -163,7 +164,7 @@ class S1Controller(B.S0bController):
             if self._in_tube(np.r_[max(q[0], self.x_ws), q[1:3]]):
                 self.blending = True
                 self.d_static = np.array(self.obs.d, float)
-                self.st.t_cruise0, self.st.t_pre = self.t, self.t + B.T_BLEND
+                self.st.t_cruise0, self.st.t_pre = self.t, self.t + self.t_blend
                 self._ev('blend_start', x=float(q[0]), y=float(q[1]))
             else:
                 self.n_gate += 1

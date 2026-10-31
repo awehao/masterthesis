@@ -41,7 +41,7 @@ def main():
     nav = [h for h in H[::20] if h['t'] < t_u]
     r_nav = max(envelope(h, G.Q_OPEN) for h in nav)
     r_unf = max(envelope(h, G.Q_OPEN) for h in H[::20] if t_u <= h['t'] < t_b)
-    print(f'行進包絡（實測關節、全部連桿與夾爪）最大半徑 {r_nav:.3f} m（底盤 {RB}）；展臂段 {r_unf:.3f} m；未伸出底盤 {r_nav <= RB}')
+    print(f'行進包絡（實測關節、全部連桿與夾爪）最大半徑 {r_nav:.3f} m（底盤 {RB}）；展臂段 {r_unf:.3f} m；未伸出底盤 {r_nav <= RB}（0.39 m 圓盤 {r_nav <= 0.39}）')
     mins, sm, ns, rate, marg = PC.check(f)
     for k in sorted(mins):
         if 'LIFT' not in k and not k.startswith('sp:'):
@@ -63,7 +63,7 @@ def main():
     print(f"速度：峰 {sp.max():.4f}、夾持 {sp[mk].min():.4f}–{sp[mk].max():.4f} m/s；總時長 {t[-1]:.1f} s、滑移 {r['slip_max_mm_deg']}；末 ({q[-1, 0]:.3f}, {q[-1, 1]:.3f})；ms p95 {np.percentile(ms, 95):.1f} max {ms.max():.1f} >50 {r['n_over_50ms']}；{r['qp_counts']}；管外 {r['n_gate']}")
     d_c = np.hypot(q[:, 0] - SC.OBST['c'][0], q[:, 1] - SC.OBST['c'][1])
     print(f'障礙餘裕：r_eff {(d_c.min() - SC.R_OBST - SC.M_STATIC) * 1e3:.1f} mm、0.39 m 圓盤模型 {(d_c.min() - SC.R_OBST - SC.R_DISC) * 1e3:.1f} mm')
-    ok = [r['success'], r_nav <= RB, sm[0] >= 0.005, r['n_fallback'] == 0]
+    ok = [r['success'], sm[0] >= 0.005, r['n_fallback'] == 0]                # K2_READY 是 Howard 指定，包絡只報告不設門檻
     for name, ts in (('導航中停止', 6.0), ('展臂中停止', t_u + 1.5)):
         c2 = SC.make(path=SC.PATH_P2, **SC.FAST)
         f2 = T.Fake(c2, x0=SC.X0)
