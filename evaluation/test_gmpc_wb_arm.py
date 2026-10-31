@@ -175,7 +175,8 @@ def main():
     r_n1 = m6.solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.3, 0, 0]), obstacles=[dict(x=0.25, y=0.0, radius=0.2, vx=-0.5, vy=0.0)],
                     arm=arm_dict(T_seq4, s=s_lag, u_prev=up))
     ck = r_n1.arm_check
-    chk('N1 非零前速 ⇒ 退回序列已驗證', ck['fallback'] == 'base_brake' and ck['failed'] is False and ck['seq_consistent'] is True, str(ck))
+    chk('N1 非零前速 ⇒ 手臂減速已驗證', ck['fallback'] == 'base_brake' and ck['failed'] is False and ck['arm_decel_valid'] is True, str(ck))
+    chk('N1b 手臂減速有效不等於全身序列一致', ck['seq_consistent'] is False and ck['base_as_is'] is False, str(ck))
     chk('N1 首筆不違反加速度上限（不是直接歸零）', np.abs(r_n1.u_arm_seq[0] - up).max() <= 19.984 * DT + 1e-9 and np.abs(r_n1.u_arm_seq[0]).max() > 0 or np.abs(up).max() <= 19.984 * DT, str(r_n1.u_arm_seq[0]))
     r_n1b = m6.solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.3, 0, 0]), obstacles=[dict(x=0.25, y=0.0, radius=0.2, vx=-0.5, vy=0.0)],
                      arm=arm_dict(T_seq4, s=s_lag, u_prev=up, a_arm=2.0))    # 加速度上限小：一步降不到零
@@ -186,7 +187,7 @@ def main():
     r_n3 = m6.solve(X_now=Xr4[0], X_ref_win=Xr4, xi_ref_win=xr4, xi_prev=np.array([0.3, 0, 0]), obstacles=[dict(x=0.25, y=0.0, radius=0.2, vx=-0.5, vy=0.0)],
                     arm=arm_dict(T_seq4, q=q_lim, u_prev=np.array([0, 0.8, 0, 0, 0, 0]), a_arm=2.0))
     ck = r_n3.arm_check
-    chk('N3 減速仍越限 ⇒ failed、不標一致', ck['failed'] is True and ck['seq_consistent'] is False, str(ck))
+    chk('N3 減速仍越限 ⇒ failed、不標一致', ck['failed'] is True and ck['arm_decel_valid'] is False and ck['seq_consistent'] is False, str(ck))
 
     class Tamper(GW.GMPC):
         kind = None

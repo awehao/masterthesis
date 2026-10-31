@@ -344,7 +344,7 @@ class GMPCResult:
     # （gmpc_wb）手臂：arm_mode None＝未使用手臂（與封存版相同）；'hold'＝手臂速度序列固定 0（u_arm_seq (N,6) 全零）
     arm_mode          : str | None = None
     u_arm_seq         : np.ndarray | None = None
-    arm_check         : dict | None = None      # active：回傳序列的原單位最大違反、有限值、seq_consistent、fallback 原因、failed（退回未驗證 ⇒ 呼叫端須終止）
+    arm_check         : dict | None = None      # active：回傳序列的原單位最大違反、有限值、seq_consistent（全身序列一致，退回時恆 False）、fallback 原因、arm_decel_valid（退回：手臂減速限制驗證）、base_as_is（退回：hold 底盤未被改動）、failed（手臂減速未驗證 ⇒ 呼叫端須終止）
 
 
 # ---------------------------------------------------------------------------
@@ -1025,9 +1025,11 @@ class GMPC:
             N_ = self.cfg.N
             def _fb(why, coupled_status=None):
                 U_s, ck = arm_stop_sequence(arm, N_, self.cfg.dt)
+                # ck 只驗手臂限制；回傳底盤來自 hold 問題（可能已被煞停或後處理改過），與手臂減速序列不是同一問題的解 ⇒ seq_consistent 一律 False，兩者分列
                 return _dc.replace(r_hold, arm_mode='active', u_arm_seq=U_s,
-                                   arm_check=dict(fallback=why, coupled_status=coupled_status, finite=True, seq_consistent=bool(ck['verified']),
-                                                  failed=not ck['verified'], max_violation=max(ck['violations'].values()), fallback_check=ck,
+                                   arm_check=dict(fallback=why, coupled_status=coupled_status, finite=True, seq_consistent=False, arm_decel_valid=bool(ck['verified']),
+                                                  base_as_is=bool(r_hold.accept_action == 'as_is'), failed=not ck['verified'],
+                                                  max_violation=max(ck['violations'].values()), fallback_check=ck,
                                                   note='退回 hold 底盤解；手臂有界減速序列（未驗證通過 ⇒ failed，呼叫端須終止）'))
             if r_hold.accept_action == 'brake':
                 return _fb('base_brake')
