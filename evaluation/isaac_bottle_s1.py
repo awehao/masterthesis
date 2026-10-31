@@ -22,6 +22,7 @@ ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_m
 ap.add_argument('--x-start', type=float, default=-3.6, help='底盤起點 x（瓶軸在 x＝0）')
 ap.add_argument('--no-tcp-preview', action='store_true', help='消融：時域 TCP 目標固定為 T_seq[0]，其餘不變')
 ap.add_argument('--s2-box', default='', help='S2 三維障礙 cx,cy,cz,sx,sy,sz；模擬真值進控制器，LiDAR 看不到')
+ap.add_argument('--wall-box', default='', help='側牆 cx,cy,cz,sx,sy,sz：進場景、掃描、地圖與接觸判定')
 ap.add_argument('--s2-links', default='', help='納入約束的連桿，逗號分隔，例如 link3,link4,link5')
 ap.add_argument('--s2-active', action='store_true', help='開啟預測距離約束（無此旗標時障礙在場但控制器不知道）')
 ap.add_argument('--no-inflight', action='store_true', help='消融：求解初態不沿在途命令前推；實際延遲與安全核對不變')
@@ -152,6 +153,11 @@ def main():
             leg_paths.append(pth)
     OB_C, OB_S = np.array([a.obst_x, 0.0, 0.25]), np.array([0.40, 0.40, 0.50])
     FixedCuboid(prim_path='/World/obstacle', name='obstacle', position=OB_C, scale=OB_S, color=np.array([0.7, 0.25, 0.2]))
+    WALL = None
+    if a.wall_box:
+        v_ = [float(x) for x in a.wall_box.split(',')]
+        WALL = (np.array(v_[:3]), np.array(v_[3:6]))
+        FixedCuboid(prim_path='/World/wall', name='wall', position=WALL[0], scale=WALL[1], color=np.array([0.5, 0.5, 0.55]))
     S2 = None
     if a.s2_box:
         v_ = [float(x) for x in a.s2_box.split(',')]
@@ -196,7 +202,7 @@ def main():
         print(f'[s1] 剛體不符：手指 {fingers} 連桿 {links} ⇒ 拒跑', flush=True)
         return 16
     print(f'[s1] 剛體 {len(bodies)}；手指 {fingers}；附加 {extra}；手指拆塊 {list(fc.get("fingers", {}))}', flush=True)
-    table_paths = ['/World/table/top'] + leg_paths + ['/World/obstacle'] + (['/World/s2_box'] if S2 else [])   # 含障礙：禁止接觸對涵蓋 桌＋障礙
+    table_paths = ['/World/table/top'] + leg_paths + ['/World/obstacle'] + (['/World/s2_box'] if S2 else []) + (['/World/wall'] if WALL else [])   # 含障礙：禁止接觸對涵蓋 桌＋障礙
     # 接觸視圖（須在 world.reset 前建；用字元類別，不用路徑清單）
     v_finger = RigidPrim(prim_paths_expr=str(fingers[0])[:-1] + '[12]', name='v_finger', track_contact_forces=True, max_contact_count=128,
                          prepare_contact_sensors=True, contact_filter_prim_paths_expr=['/World/bottle'] + table_paths)
@@ -210,7 +216,7 @@ def main():
         print(f'[s1] base_link 剛體不符 {b_base} ⇒ 拒跑', flush=True)
         return 16
     v_base = RigidPrim(prim_paths_expr=str(b_base[0]), name='v_base', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True,
-                       contact_filter_prim_paths_expr=['/World/obstacle'] + leg_paths)
+                       contact_filter_prim_paths_expr=['/World/obstacle'] + leg_paths + (['/World/wall'] if WALL else []))
     v_bt = RigidPrim(prim_paths_expr='/World/bottle', name='v_bt', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True,
                      contact_filter_prim_paths_expr=['/World/table/top'])
     v_bs = RigidPrim(prim_paths_expr='/World/bottle', name='v_bs', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True,
@@ -266,7 +272,7 @@ def main():
         print(f'[s1] 視角設定失敗（不影響物理）：{e!r}', flush=True)
     readback = dict(solver_type=str(sapi.GetSolverTypeAttr().Get()), ext_forces_every_iter=bool(sapi.GetEnableExternalForcesEveryIterationAttr().Get()),
                     physics_dt=float(world.get_physics_dt()), bottle_mass=float(bottle.get_mass()), kp=a.kp, kd=a.kd, base=[float(v) for v in base],
-                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], group=a.group, s2_box=a.s2_box, s2_active=a.s2_active, no_tcp_preview=a.no_tcp_preview, no_inflight=a.no_inflight, m=dict(kp=a.m_kp, mu=a.m_mu) if a.group == 'M' else None, perturb=dict(bottle_dx=a.bottle_dx, bottle_dy=a.bottle_dy, x_start=a.x_start, y_start=a.y_start, yaw_start_deg=a.yaw_start_deg), speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
+                    q_ready=[float(v) for v in q_ready], q_tuck=[float(v) for v in q_tuck], group=a.group, wall_box=a.wall_box, s2_box=a.s2_box, s2_active=a.s2_active, no_tcp_preview=a.no_tcp_preview, no_inflight=a.no_inflight, m=dict(kp=a.m_kp, mu=a.m_mu) if a.group == 'M' else None, perturb=dict(bottle_dx=a.bottle_dx, bottle_dy=a.bottle_dy, x_start=a.x_start, y_start=a.y_start, yaw_start_deg=a.yaw_start_deg), speeds=dict(v_nav=a.v_nav, v_c=a.v_c, v_carry=a.v_carry, x_slow=a.x_slow, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert), branch_margin=float(br['margin']), finger_split=bool(fc.get('fingers')))
     print(f'[s1] 讀回 {readback}', flush=True)
     if abs(readback['physics_dt'] - dt) > 1e-12 or readback['ext_forces_every_iter'] != bool(PH.get('ext_forces_every_iter')):
         print('[s1] 物理設定讀回不符 ⇒ 拒跑', flush=True)
@@ -288,7 +294,7 @@ def main():
     n_filters = 1 + len(table_paths)
     required = ['finger_table', 'arm_bottle', 'arm_table', 'base_env'] + (['bottle_s2'] if S2 else []) + [f'extra{i}_{w}' for i in range(len(v_extra)) for w in ('bottle', 'table')]
     # 動作前：所有接觸視圖形狀、感測數、有限值都須有效，否則拒跑（不當成沒有接觸）
-    for nm, v, ns, nf in [('finger', v_finger, 2, n_filters), ('bottle_table', v_bt, 1, 1), ('base', v_base, 1, 1 + len(leg_paths))] + ([('bottle_s2', v_bs, 1, 1)] if S2 else []) + [(f'arm{i}', v, 1, n_filters) for i, v in enumerate(v_arm)] \
+    for nm, v, ns, nf in [('finger', v_finger, 2, n_filters), ('bottle_table', v_bt, 1, 1), ('base', v_base, 1, 1 + len(leg_paths) + (1 if WALL else 0))] + ([('bottle_s2', v_bs, 1, 1)] if S2 else []) + [(f'arm{i}', v, 1, n_filters) for i, v in enumerate(v_arm)] \
             + [(f'extra{i}', v, 1, n_filters) for i, v in enumerate(v_extra)]:
         M = read_pairs(v, nf, dt)
         if M is None or M.shape != (ns, nf, 3) or not np.isfinite(M).all():
@@ -312,7 +318,7 @@ def main():
         ang = NC.scan_angles() + float(q_[2])
         return np.array([ray_range(query, org, [math.cos(v), math.sin(v), 0.0], NC.RANGE_MAX, excl)[0] for v in ang])
 
-    leg_boxes = [(b[1], b[2]) for b in G.table_boxes() if b[0] != 'table_top']
+    leg_boxes = [(b[1], b[2]) for b in G.table_boxes() if b[0] != 'table_top'] + ([WALL] if WALL else [])   # 地圖：桌腳＋側牆
     chain = NC.NavChain(map_boxes=leg_boxes)
     q_chk, _ = q9()
     r0 = scan_fn(0.0, q_chk)
@@ -360,7 +366,7 @@ def main():
         if S2:
             Ms = read_pairs(v_bs, 1, dt)
             forb['bottle_s2'] = float('nan') if Ms is None or not np.isfinite(Ms).all() else float(np.linalg.norm(Ms, axis=2).max())
-        Mb = read_pairs(v_base, 1 + len(leg_paths), dt)
+        Mb = read_pairs(v_base, 1 + len(leg_paths) + (1 if WALL else 0), dt)
         forb['base_env'] = float('nan') if Mb is None else float(np.linalg.norm(Mb, axis=2).max())
         forb['finger_table'] = float('nan') if Mf is None else float(np.linalg.norm(Mf[:, 1:], axis=2).max())
         forb['arm_bottle'] = float('nan') if Ma is None else float(np.linalg.norm(Ma[:, 0], axis=1).max())
