@@ -390,6 +390,15 @@ rt_21／23 尚無末端對位（終點距起點 139／145 mm）。**各趟配置
   ——**該趟實錄重播**（render-only，非即時錄影），俯視、4 倍速、160.5 s；6418 幀、缺圖 0、重播完整性核對通過（evaluation/runs/mission_rt_44_replay）；關鍵時刻見同名 .keymoments.json。
 - 附帶更正：九支參考產生工具的「最小 d_pred」實為末列值（stop／warn 判定不受影響），現行五段真最小值見 `evaluation/results/door/ref_offline_min_correction_20261031.json` 與上述草稿；舊 offline.min 不可引用。
 
+# 第十四部分　瓶子主線：安全導航接入全身最佳化（2026-10-31～11-01）
+
+Howard 10/31 定案的新主線。各條件 n＝1，Isaac 物理，只用既有紀錄整理，未新增實跑。
+
+- 一頁摘要：`規格/瓶子主線_成果摘要.md`
+- 逐趟總表、程式版本、run 與資料來源：`規格/瓶子主線_總表與來源.md`（產生檔，勿手改）
+- 開發過程細節：`規格/瓶子S1_總表.md`、`規格/瓶子S1_候選規格.md`、`規格/瓶子S1_對照最小規格.md`、`規格/瓶子S0_物理抓持設計.md`
+- 資料：`資料/瓶子主線總表.json`，由 `產生程式/bottle_mainline_table.py` 從 `evaluation/runs/` 重算；`產生程式/bottle_mainline_render.py` 產生總表與單頁 HTML。
+
 ## 素材清單
 
 | 圖 | 內容 |
