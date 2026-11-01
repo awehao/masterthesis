@@ -298,14 +298,14 @@ def main():
                 if as_.get('enough') or t - t_arrive >= a.obs_timeout:
                     if not as_.get('enough'):
                         as_ = dict(enough=True, n=as_['n'], complete=False, deficits=['no_target'], known_type_candidate=False, frac=None)
-                    act, arg = VP.next_view(tried, as_)
+                    dec, arg = VP.next_view(tried, as_)          # 不可用 act：act 是 apply() 的關節索引
                     trace.append(dict(view=view, t_arrive=t_arrive, t_decide=t, n=as_['n'], complete=as_['complete'], deficits=as_['deficits'], known_type_candidate=as_['known_type_candidate'],
-                                      frac=as_.get('frac'), action=act, arg=arg))
+                                      frac=as_.get('frac'), action=dec, arg=arg))
                     print(f'[col] 視點 {view}：{trace[-1]}', flush=True)
-                    if act == 'move':
+                    if dec == 'move':
                         state, seg_, view_next = 'move', dict(t0=t, T=T_between(view, arg), qa=VQ[view], qb=VQ[arg]), arg
                     else:
-                        final = dict(action=act, deficits=arg, view=view)
+                        final = dict(action=dec, deficits=arg, view=view)
                         chain_ = ([dict(T=T_between(view, 'V0'), qa=VQ[view], qb=VQ['V0'])] if view != 'V0' else []) + [dict(T=T_tr, qa=VQ['V0'], qb=q_ready), dict(T=T_tk, qa=q_ready, qb=q_tuck)]
                         state, seg_ = 'return', dict(chain_.pop(0), t0=t)
             elif state == 'return':
