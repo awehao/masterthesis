@@ -316,6 +316,9 @@ class GMPCConfig:
     # optimiser will still accept a hard acceleration burst when the CBF demands
     # it (safety preserved). Default 0 = disabled (identical to old behaviour).
     S      : np.ndarray = field(default_factory=lambda: np.zeros((3, 3)))
+    # （gmpc_wb，2026-11-01 候選）輸入二階差分權重：Σ Δ²u_kᵀ S2 Δ²u_k，Δ²u_k = u_k − 2u_{k−1} + u_{k−2}，
+    # u_{−1}＝xi_prev、u_{−2}＝xi_prev2（預測起點之前兩筆已套用／在途命令，由呼叫端給）。預設 0＝不加任何項（問題與先前相同）。
+    S2     : np.ndarray = field(default_factory=lambda: np.zeros((3, 3)))
     # ---- Wheel-speed coupling ---------------------------------------------
     # u_min/u_max/a_max form an axis-aligned BOX, but the chassis's feasible set
     # is not a box: the two translation axes drive different wheel pairs and so
@@ -738,6 +741,31 @@ def _build_smoothness_terms(S: np.ndarray, xi_ref_win: np.ndarray,
     S_bar = np.zeros((N * m, N * m))
     for k in range(N):
         S_bar[k*m:(k+1)*m, k*m:(k+1)*m] = S
+    DtS = D.T @ S_bar
+    return 2.0 * (DtS @ D), 2.0 * (DtS @ c)
+
+
+def _build_jerk_terms(S2: np.ndarray, xi_ref_win: np.ndarray, xi_prev: np.ndarray, xi_prev2: np.ndarray, N: int):
+    """（gmpc_wb 候選）輸入二階差分成本 Σ_{k=0}^{N-1} Δ²u_kᵀ S2 Δ²u_k 的 P／q 增量，寫法同 _build_smoothness_terms。
+    u_k = ξ_ref(k) + δξ_k，u_{-1} = xi_prev，u_{-2} = xi_prev2：
+        Δ²u_0 = δξ_0                   + (ξ_ref(0) − 2ξ_prev + ξ_prev2)
+        Δ²u_1 = δξ_1 − 2δξ_0            + (ξ_ref(1) − 2ξ_ref(0) + ξ_prev)
+        Δ²u_k = δξ_k − 2δξ_{k-1} + δξ_{k-2} + (ξ_ref(k) − 2ξ_ref(k-1) + ξ_ref(k-2)),  k ≥ 2
+    """
+    m = S2.shape[0]
+    D = np.zeros((N * m, N * m))
+    c = np.zeros(N * m)
+    I = np.eye(m)
+    for k in range(N):
+        D[k*m:(k+1)*m, k*m:(k+1)*m] = I
+        if k >= 1:
+            D[k*m:(k+1)*m, (k-1)*m:k*m] = -2.0 * I
+        if k >= 2:
+            D[k*m:(k+1)*m, (k-2)*m:(k-1)*m] = I
+        um1 = xi_ref_win[k - 1] if k >= 1 else xi_prev
+        um2 = xi_ref_win[k - 2] if k >= 2 else (xi_prev if k == 1 else xi_prev2)
+        c[k*m:(k+1)*m] = xi_ref_win[k] - 2.0 * um1 + um2
+    S_bar = np.kron(np.eye(N), S2)
     DtS = D.T @ S_bar
     return 2.0 * (DtS @ D), 2.0 * (DtS @ c)
 
@@ -1191,6 +1219,7 @@ class GMPC:
               xi_prev    : np.ndarray,
               obstacles  : list | None = None,
               arm        : dict | None = None,
+              xi_prev2   : np.ndarray | None = None,
               ) -> GMPCResult:
         """
         obstacles : optional list of dicts {x, y, radius} in world frame.
@@ -1208,7 +1237,7 @@ class GMPC:
             #   底盤不可行（煞停）⇒ 照封存版煞停、手臂歸零；耦合問題未完全收斂（status ≠ solved）⇒ 退回 hold 底盤解、手臂保持。
             #   動機：硬 k0 過近案封存版判 primal infeasible 煞停，耦合問題卻在迭代上限回傳朝障礙前進的命令（CBF 殘差 −0.55）。
             import dataclasses as _dc
-            r_hold = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm={'mode': 'hold'})
+            r_hold = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm={'mode': 'hold'}, xi_prev2=xi_prev2)
             N_ = self.cfg.N
             def _fb(why, coupled_status=None, qp=None):
                 U_s, ck = arm_stop_sequence(arm, N_, self.cfg.dt)
@@ -1220,7 +1249,7 @@ class GMPC:
                                                   note='退回 hold 底盤解；手臂有界減速序列（未驗證通過 ⇒ failed，呼叫端須終止）'))
             if r_hold.accept_action == 'brake':
                 return _fb('base_brake')
-            r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=dict(arm, _inner=True))
+            r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=dict(arm, _inner=True), xi_prev2=xi_prev2)
             if r.status != 'solved':
                 return _fb('coupled_not_solved', r.status, (r.arm_check or {}).get('qp'))
             ck = r.arm_check or {}
@@ -1300,6 +1329,13 @@ class GMPC:
             P_s, q_s = _build_smoothness_terms(cfg.S, xi_ref_win, xi_prev, N)
             P_dense = P_dense + P_s
             q_vec   = q_vec + q_s
+        # （候選）輸入二階差分成本：S2＝0 時整段跳過，問題與先前逐位元相同；S2 非零卻沒給前兩筆命令 ⇒ 拒絕，不默默降成一階
+        if np.any(cfg.S2):
+            if xi_prev2 is None:
+                raise ValueError('S2 非零需要 xi_prev2（預測起點前第二筆已套用／在途命令）')
+            P_j, q_j = _build_jerk_terms(cfg.S2, xi_ref_win, xi_prev, xi_prev2, N)
+            P_dense = P_dense + P_j
+            q_vec   = q_vec + q_j
         # Symmetrise to absorb floating-point asymmetry (OSQP wants symmetric P)
         P_dense = 0.5 * (P_dense + P_dense.T)
 
