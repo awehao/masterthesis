@@ -359,6 +359,11 @@ class GMPCConfig:
     # both) until it fits. A converged solve already satisfies the rows to
     # eps_abs, so λ = 1 and nothing is touched.
     wheel_enforce_output : bool = True
+    # （gmpc_wb，2026-11-01 候選）輸出端輪級後處理的數值邊界容差 [m/s，同 fit_to_wheels 的 r·ω 單位]。0＝原行為。
+    # >0：原始命令的輪速 |W·u| ≤ r·ω_max＋tol 且輪加速度 |W·(u−ξ_prev)| ≤ r·α_max·dt＋tol 時視為可行、不做後處理。
+    # 起因（bottle_w1_dyn2b_g1）：QP 解與上一筆都貼在輪速邊界（殘差 1e-11～1e-9 rad/s），線段縮放的 (w_lim − b) 因捨入為負，λ 塌成 0。
+    # 超出容差的真正違反仍照原線段縮放／投影，回傳被標成後處理改動。
+    wheel_fit_boundary_tol : float = 0.0
     # ---- Control Barrier Function safety filter ----------------------------
     cbf_alpha        : float = 1.0        # decay rate α in  ḣ + α·h ≥ 0
     cbf_safe_margin  : float = 0.30       # extra clearance added to obstacle radius [m]
@@ -531,6 +536,14 @@ def wheel_matrix(cfg: 'GMPCConfig') -> np.ndarray:
 def wheel_speeds(u, cfg: 'GMPCConfig') -> np.ndarray:
     """The four wheel speeds [rad/s] a body twist u implies."""
     return (wheel_matrix(cfg) @ np.asarray(u, dtype=float)) / cfg.wheel_radius
+
+
+def wheels_within(u, xi_prev, cfg: 'GMPCConfig', dt: float, tol: float) -> bool:
+    """（gmpc_wb 候選）命令是否在兩組輪級界內（容差 tol，r·ω 單位 m/s）：|W·u| ≤ r·ω_max＋tol 且 |W·(u−ξ_prev)| ≤ r·α_max·dt＋tol。"""
+    W = wheel_matrix(cfg)
+    u, xp = np.asarray(u, dtype=float), np.asarray(xi_prev, dtype=float)
+    return bool(np.max(np.abs(W @ u)) <= cfg.wheel_radius * cfg.wheel_w_max + tol
+                and np.max(np.abs(W @ (u - xp))) <= cfg.wheel_radius * cfg.wheel_a_max * dt + tol)
 
 
 def fit_to_wheels(u, xi_prev, cfg: 'GMPCConfig', dt: float, tol: float = 1e-6):
@@ -1693,7 +1706,8 @@ class GMPC:
         # own interval while the wheel they share is asked for twice ω_max -- so
         # this is the only check between a non-converged QP and the chassis.
         # It runs on the emergency-brake path too, where u = 0 trivially passes.
-        if cfg.wheel_coupling and cfg.wheel_enforce_output:
+        if cfg.wheel_coupling and cfg.wheel_enforce_output and not (
+                cfg.wheel_fit_boundary_tol > 0.0 and wheels_within(u_opt, xi_prev, cfg, dt, cfg.wheel_fit_boundary_tol)):
             u_fit, lam = fit_to_wheels(u_opt, xi_prev, cfg, dt)
             # λ ≈ 0 代表「沿用上一筆」，不是「停止」。這在上一筆正好貼著
             # 輪速邊界時會連續發生，把已經該收回的轉速一直送出去。
