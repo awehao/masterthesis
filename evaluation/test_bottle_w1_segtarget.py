@@ -4,7 +4,7 @@
 舊估計器的假影格照常送（V2／W1），用來驗證控制器確實忽略。
   A 名目（ready 窗 9–11 s）：凍結、完成放置、T_grasp z＝z_support＋0.10、V2／W1 舊估計被忽略（計數 > 0、不影響）；持瓶對兩桌、自碰、禁止接觸、命令有限照既有核對；
   B 從未 ready ⇒ segtarget_no_fix（漸變開始時）；C 觀測年齡 0.8 s ⇒ 拒收 stale ⇒ no_fix；D 凍結後下一快照偏 7 mm ⇒ segtarget_inconsistent；
-  E 快照檢查一直 pending（snap_ik＝1）⇒ 不採用 ⇒ no_fix；F 凍結後訊息中斷 ⇒ 依凍結語義照常完成；G z_support＋0.05 ⇒ 凍結的 T_grasp z 跟著＋0.05（只核目標，不要求抓取成功）。
+  E 快照檢查一直 pending（snap_ik＝1）⇒ 不採用 ⇒ no_fix；F 凍結後訊息中斷 ⇒ 依凍結語義照常完成；G z_support＋0.05 ⇒ 凍結的 T_grasp z 跟著＋0.05（只核目標，不要求抓取成功）；\n  H 目標 y＋0.5 m（window_branch 無解）⇒ segtarget_unreachable 受控停止、不閉爪、命令有限、保留未採用。
     python3 evaluation/test_bottle_w1_segtarget.py
 """
 import os
@@ -29,7 +29,7 @@ def chk(name, cond, info=''):
     print(('  ✓ ' if cond else '  ✗ ') + name + ('' if cond else f' {info}'))
 
 
-def run(win=(9.0, 11.0), age=0.05, ik=2, dz=0.0, jump_after=None, cut_after_freeze=False, seed=0):
+def run(win=(9.0, 11.0), age=0.05, ik=2, dz=0.0, jump_after=None, cut_after_freeze=False, seed=0, dy=0.0):
     orig = T.W1.W1PlaceController
     T.W1.W1PlaceController = SG.W1PlaceController
     try:
@@ -52,7 +52,7 @@ def run(win=(9.0, 11.0), age=0.05, ik=2, dz=0.0, jump_after=None, cut_after_free
                 off = np.zeros(2)
                 if jump_after is not None and frozen and st['seq'] >= jump_after:
                     off = np.array([0.007, 0.0])
-                xy = np.array([T.T.BX, T.T.BY]) + rng.normal(0, 0.0005, 2) + off
+                xy = np.array([T.T.BX, T.T.BY + dy]) + rng.normal(0, 0.0005, 2) + off
                 cand = dict(ready=1.0, age_s=age, snap_seq=float(st['seq']), snap_t_last=t - age, snap_cx=float(xy[0]), snap_cy=float(xy[1]),
                             snap_z_support=T.T.TOP + dz, snap_ik=float(ik), snap_local=2.0, snap_dev_mm=0.1, snap_consistent=1.0)
                 c.candidate_intake(t, cand)
@@ -88,6 +88,11 @@ def main():
     c4, f4, r4, st4 = run(dz=0.05)
     print(f"   G z_support＋0.05：凍結 T_grasp z {st4['z_at_freeze']}；結果 {(r4['stop'] or {}).get('why')}")
     chk('G 支撐高度改變 ⇒ 凍結目標 z 跟著改變（＋0.05 m）', st4['z_at_freeze'] is not None and abs(st4['z_at_freeze'] - (zg + 0.05)) < 1e-9, st4['z_at_freeze'])
+    c5, f5, r5, st5 = run(dy=0.5)
+    why5 = (r5['stop'] or {}).get('why')
+    print(f"   H 目標 y＋0.5 m（分支無解）：停止 {why5} @ {(r5['stop'] or {}).get('t')}；閉爪請求 {c5.t_close_req}；凍結 {c5.vfix is not None}")
+    chk('H 分支無解 ⇒ segtarget_unreachable 受控停止、不閉爪、命令有限、保留未採用', why5 == 'segtarget_unreachable' and c5.t_close_req is None and T.finite_cmds(f5) and c5.vfix is None,
+        (r5['stop'], c5.t_close_req))
     print(f'\n{"全過" if not BAD else "未過 " + str(len(BAD))}')
     return 1 if BAD else 0
 

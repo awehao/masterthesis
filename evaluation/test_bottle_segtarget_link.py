@@ -67,7 +67,12 @@ def main():
     link.tick(out[59]['t_eval'] - T0 + 1.0)
     rep = link.report()
     print(f"   轉送 {rep['n_forwarded']}／{len(sent)}；拒收 {rep['rejected']}")
-    chk('轉送數＝合格列數、四種壞訊息各拒收 1', rep['n_forwarded'] == len(sent) and rep['rejected'] == dict(no_label=1, schema_or_frame=1, field_count=1, t_eval_not_increasing=1), rep)
+    n_snap = sum(1 for o in sent if o['k_snap_seq'] >= 1)
+    rj = dict(rep['rejected'])
+    n_noshot = rj.pop('no_snapshot_yet', 0)
+    chk('轉送數＝有快照的合格列數、尚無快照的列只記進度不轉送、四種壞訊息各拒收 1', rep['n_forwarded'] == n_snap and n_noshot == len(sent) - n_snap
+        and rj == dict(no_label=1, schema_or_frame=1, field_count=1, t_eval_not_increasing=1), rep)
+    sent = [o for o in sent if o['k_snap_seq'] >= 1]
     ok_map = all(abs(c['snap_cx'] - o['k_snap_cx']) < 1e-12 or (np.isnan(c['snap_cx']) and np.isnan(o['k_snap_cx'])) for (_, c), o in zip(got, sent))
     ok_t = all((np.isnan(o['k_snap_t_last']) and np.isnan(c['snap_t_last'])) or abs(c['snap_t_last'] - (o['k_snap_t_last'] - T0)) < 1e-9 for (_, c), o in zip(got, sent))
     ages = [(c['age_s'], DELAY + o['k_age_s']) for (_, c), o in zip(got, sent) if np.isfinite(o['k_age_s'])]
