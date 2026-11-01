@@ -14,6 +14,10 @@
     自身點濾除只用在支撐搜尋（持瓶時瓶身貼著手指，不濾物體點）。機器人連桿點雲不含底盤本體。
   實例選擇：top-1＝信心最高的實例；size-gated＝依信心排序取第一個通過類別尺寸先驗（輪廓半徑 ≤ 0.06 m、可見高度 ≤ 0.40 m）的實例。兩者都報。
     物體高度只在支撐可觀測時給（瓶頂可見最高點 − 支撐高度），否則只給下界（可見高度範圍）。遮罩碰影像上／下緣時瓶頂／瓶底可能被切，另標。
+有效旗標（Codex 20261101_214354）：xy_valid＝遮罩不碰左右邊界（4 px）、點數 ≥ 30、已知半徑擬合 rms ≤ 3 mm；xy_valid_silhouette 另要左右邊界外為背景（≥ 80%）；
+  top_observed＝不碰上邊界且上緣外 3–6 px 有 ≥ 80% 為背景（遠 ≥ 5 cm 或無深度；近 ≥ 2 cm 為遮擋）——遮罩沒碰邊界不代表頂端完整可見；
+  support_observed＝支撐面幾何候選通過（不是承重證據）；height_valid＝top_observed 且 support_observed。瓶頂未確認時只報可見點 z 範圍，不叫瓶頂。
+資料角色：分割權重沒有用這些趟重訓，但尺寸閘、支撐搜尋等後處理依這批結果修改過，整條三維管線對這些趟是開發集，不是 held-out 驗證。
 評估：遮罩偵測——以真值瓶體（直立圓柱取樣點）投影判定是否在視野內（不計遮擋）：在視野內的命中率、完全不在視野內的誤檢；中心 xy 誤差（表面質心 vs 兩種圓擬合）；瓶頂 z 誤差；支撐可觀測率與支撐高度誤差（只在瓶仍在桌上的幀）。
 同場景、同瓶型、同桌高 0.60 m 的偏移測試，不是跨物體／跨高度盲測。與 Isaac／重播／訓練共用鎖。
     .venv-dl0/bin/python evaluation/bottle_seg_depth3d.py --weights evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth --runs bottle_w1_2 ... --out evaluation/results/vision/seg3d_v1
@@ -46,7 +50,8 @@ ERODE = 2
 SELF_R = 0.015
 OUTLIER_M = 0.10
 SUP_BAND, SUP_R, SUP_N, SUP_STD, SUP_ABOVE, SUP_WIN = (-0.05, 0.01), 0.10, 30, 0.003, 0.005, 0.006
-SIZE_GATE = dict(r_max=0.06, h_max=0.40)               # 類別層級尺寸先驗（瓶類：半徑 ≤ 6 cm、可見高度 ≤ 40 cm），不是該瓶真值；另報不加此閘的結果
+BORDER, EDGE_K, EDGE_FAR, EDGE_NEAR, EDGE_FRAC = 4, (3, 6), 0.05, 0.02, 0.8
+SIZE_GATE = dict(r_max=0.06, h_max=0.40)               # 類別層級尺寸先驗（瓶類：輪廓半徑 ≤ 6 cm、可見點高度範圍 ≤ 40 cm），不是該瓶真值；另報不加此閘的結果
 
 
 def load_model(weights, dev):
@@ -67,6 +72,31 @@ def to_world(depth, K, T_wc, sel, z_fixed=None):
     y = (v + VE.PIX_OFS - K[1, 2]) * z / K[1, 1]
     Pc = np.column_stack([x, y, z])
     return (T_wc[:3, :3] @ Pc.T).T + T_wc[:3, 3], z
+
+
+def edge_test(mask, depth, z_obj, side):
+    """遮罩某一側的邊界是否為真輪廓：邊界外 3–6 px 的深度比物體遠 ≥ 5 cm 或無效（背景）⇒ 真邊；比物體近 ≥ 2 cm ⇒ 遮擋；其餘（相近、可能是未分割的同一物體）⇒ 不確定。
+    回傳 (背景比例, 遮擋比例, 樣本數)。side：'top'、'left'、'right'。"""
+    H_, W_ = mask.shape
+    vv, uu = np.nonzero(mask)
+    pts = []
+    if side == 'top':
+        for c in np.unique(uu):
+            v0 = vv[uu == c].min()
+            pts += [(v0 - k, c) for k in range(EDGE_K[0], EDGE_K[1] + 1) if v0 - k >= 0]
+    else:
+        sgn = -1 if side == 'left' else 1
+        for rw in np.unique(vv):
+            cs = uu[vv == rw]
+            c0 = cs.min() if side == 'left' else cs.max()
+            pts += [(rw, c0 + sgn * k) for k in range(EDGE_K[0], EDGE_K[1] + 1) if 0 <= c0 + sgn * k < W_]
+    if not pts:
+        return 0.0, 0.0, 0
+    a = np.array(pts)
+    d = depth[a[:, 0], a[:, 1]].astype(float)
+    far = ~np.isfinite(d) | (d <= 0) | (d >= z_obj + EDGE_FAR)
+    near = np.isfinite(d) & (d > 0) & (d <= z_obj - EDGE_NEAR)
+    return float(far.mean()), float(near.mean()), int(len(a))
 
 
 def locate(mask, depth, K, T_wc, robot=None):
@@ -92,8 +122,13 @@ def locate(mask, depth, K, T_wc, robot=None):
     c_known, rms_known = VE.circle_fixed_r(P[:, :2], R_KNOWN, cs + away * R_KNOWN)
     vv, uu = np.nonzero(mask)
     H_, W_ = mask.shape
-    top_cut, bot_cut = bool(vv.min() <= 1), bool(vv.max() >= H_ - 2)
+    top_cut, bot_cut = bool(vv.min() <= BORDER), bool(vv.max() >= H_ - 1 - BORDER)
+    side_cut = bool(uu.min() <= BORDER or uu.max() >= W_ - 1 - BORDER)
     z_lo, z_hi = float(np.percentile(P[:, 2], 1)), float(np.percentile(P[:, 2], 99))
+    zm = float(np.median(z))
+    e_top, e_left, e_right = (edge_test(mask, depth, zm, sd) for sd in ('top', 'left', 'right'))
+    top_observed = (not top_cut) and e_top[2] > 0 and e_top[0] >= EDGE_FRAC
+    sides_observed = (not side_cut) and min(e_left[0], e_right[0]) >= EDGE_FRAC
     grid = np.zeros_like(mask)
     grid[::2, ::2] = True
     Q, _ = to_world(depth, K, T_wc, grid & ~ndimage.binary_dilation(mask, iterations=2))
@@ -125,9 +160,15 @@ def locate(mask, depth, K, T_wc, robot=None):
             sup = dict(observable=False, why='plane_seen_from_below', n=int(len(S)), z=zs, cam_z=float(T_wc[2, 3]))
         else:
             sup = dict(observable=True, z=zs, n=int(len(S)), std=std, sectors=sectors)
-    return dict(valid=True, why='ok', n_pts=int(len(P)), surface_centroid=cs.tolist(), z_visible=[z_lo, z_hi], z_top_silhouette=z_top_sil, top_cut=top_cut, bottom_cut=bot_cut,
+    xy_valid = (not side_cut) and len(P) >= 30 and rms_known <= 0.003
+    sup_ok = bool(sup['observable'])
+    return dict(valid=True, why='ok', n_pts=int(len(P)), surface_centroid=cs.tolist(), z_visible=[z_lo, z_hi], z_visible_span=z_hi - z_lo,
+                top_cut=top_cut, bottom_cut=bot_cut, side_cut=side_cut, edge_top=e_top, edge_left=e_left, edge_right=e_right,
+                xy_valid=bool(xy_valid), xy_valid_silhouette=bool(xy_valid and sides_observed), top_observed=bool(top_observed), support_observed=sup_ok,
+                height_valid=bool(top_observed and sup_ok),
+                z_top=z_top_sil if top_observed else None, z_top_silhouette_raw=z_top_sil,
                 center_silhouette=c_sil.tolist(), r_silhouette=r_sil, rms_silhouette=rms_sil, center_known_r=c_known.tolist(), rms_known_r=rms_known,
-                support=sup, height=None if not sup['observable'] else z_top_sil - sup['z'], height_lower_bound=z_top_sil - z_lo)
+                support=sup, height=(z_top_sil - sup['z']) if (top_observed and sup_ok) else None)
 
 
 def in_view(truth, K, T_wc, shape):
@@ -191,7 +232,7 @@ def main():
                     ests = [locate(masks[j], F['depth'][i], K, F['T_wc'][i], robot) for j in order]
                     row['conf'] = recs[int(order[0])]['confidence']
                     row['est'] = ests[0]
-                    ok = [n_ for n_, e_ in enumerate(ests) if e_.get('valid') and e_['r_silhouette'] <= SIZE_GATE['r_max'] and e_['height_lower_bound'] <= SIZE_GATE['h_max']]
+                    ok = [n_ for n_, e_ in enumerate(ests) if e_.get('valid') and e_['r_silhouette'] <= SIZE_GATE['r_max'] and e_['z_visible_span'] <= SIZE_GATE['h_max']]
                     row['est_gated'] = ests[ok[0]] if ok else None
                     row['conf_gated'] = recs[int(order[ok[0]])]['confidence'] if ok else None
                     row['n_rejected_by_size'] = sum(1 for e_ in ests if e_.get('valid')) - len(ok)
@@ -245,7 +286,7 @@ def summarize_rows(rows):
             n_frames=len(R), in_view=len(exp), detected_in_view=sum(1 for r in exp if r.get('est', {}).get('valid')), in_view_held=sum(1 for r in exp if not r['on_table']),
             detected_in_view_held=sum(1 for r in exp if not r['on_table'] and r.get('est', {}).get('valid')), valid_3d=len(E),
             false_pos_out_of_view=sum(1 for r in nexp if r.get('est', {}).get('valid')), n_out_of_view=len(nexp), recorded_expected_flag=sum(1 for r in R if r['expected']),
-            wrong_object=len(wrong), wrong_object_where=sorted({(r['run'], round(r['est']['r_silhouette'], 3), round(r['est']['height_lower_bound'], 2)) for r in wrong})[:6],
+            wrong_object=len(wrong), wrong_object_where=sorted({(r['run'], round(r['est']['r_silhouette'], 3), round(r['est']['z_visible_span'], 2)) for r in wrong})[:6],
             xy_err_mm_on_table=dict(surface_centroid=stats([err('surface', r) for r in E_ok if r['on_table']]), circle_silhouette_r=stats([err('center_silhouette', r) for r in E_ok if r['on_table']]),
                                     circle_known_r=stats([err('center_known_r', r) for r in E_ok if r['on_table']]),
                                     baseline_map_prior=stats([math.hypot(r['baseline']['cx'] - r['truth'][0], r['baseline']['cy'] - r['truth'][1]) * 1e3 for r in base if r['on_table']])),
@@ -256,13 +297,19 @@ def summarize_rows(rows):
                            baseline_map_prior=stats([math.hypot(r['baseline']['cx'] - r['truth'][0], r['baseline']['cy'] - r['truth'][1]) * 1e3 for r in base])),
             r_silhouette_mm=stats([r['est']['r_silhouette'] * 1e3 for r in E_ok]),
             r_silhouette_mm_on_table=stats([r['est']['r_silhouette'] * 1e3 for r in E_ok if r['on_table']]),
-            top_err_mm=dict(silhouette=stats([abs(r['est']['z_top_silhouette'] - (r['truth'][2] + H_KNOWN)) * 1e3 for r in E if not r['est']['top_cut'] and r['on_table']]),
-                            eroded_points=stats([abs(r['est']['z_visible'][1] - (r['truth'][2] + H_KNOWN)) * 1e3 for r in E if not r['est']['top_cut'] and r['on_table']])),
+            flags_on_table={f_: sum(1 for r in E_ok if r['on_table'] and r['est'][f_]) for f_ in ('xy_valid', 'xy_valid_silhouette', 'top_observed', 'support_observed', 'height_valid')},
+            xy_err_mm_flagged=dict(known_r_xy_valid=stats([err('center_known_r', r) for r in E_ok if r['on_table'] and r['est']['xy_valid']]),
+                                   known_r_xy_invalid=stats([err('center_known_r', r) for r in E_ok if r['on_table'] and not r['est']['xy_valid']]),
+                                   silhouette_valid=stats([err('center_silhouette', r) for r in E_ok if r['on_table'] and r['est']['xy_valid_silhouette']]),
+                                   silhouette_invalid=stats([err('center_silhouette', r) for r in E_ok if r['on_table'] and not r['est']['xy_valid_silhouette']])),
+            top_err_mm=dict(top_observed=stats([abs(r['est']['z_top'] - (r['truth'][2] + H_KNOWN)) * 1e3 for r in E_ok if r['on_table'] and r['est']['top_observed']]),
+                            not_observed_raw=stats([abs(r['est']['z_top_silhouette_raw'] - (r['truth'][2] + H_KNOWN)) * 1e3 for r in E_ok if r['on_table'] and not r['est']['top_observed']])),
+            r_silhouette_mm_valid=stats([r['est']['r_silhouette'] * 1e3 for r in E_ok if r['on_table'] and r['est']['xy_valid_silhouette']]),
             on_table=len(tab), support_observable=len(sup_obs), support_unobservable_why=why,
             bottom_visible_on_table=len(bvis), support_observable_when_bottom_visible=sum(1 for r in bvis if r['est']['support']['observable']),
             support_observable_when_bottom_hidden=sum(1 for r in tab if r not in bvis and r['est']['support']['observable']),
             support_err_mm=stats([abs(r['est']['support']['z'] - r['truth'][2]) * 1e3 for r in sup_obs]),
-            height_err_mm=stats([abs(r['est']['height'] - H_KNOWN) * 1e3 for r in sup_obs if not r['est']['top_cut']]),
+            height_err_mm=stats([abs(r['est']['height'] - H_KNOWN) * 1e3 for r in tab if r['est']['height_valid']]),
             held_support_observable=sum(1 for r in E if not r['on_table'] and r['est']['support']['observable']), held=sum(1 for r in E if not r['on_table']),
             infer_ms=stats([r['infer_ms'] for r in R]))
     return S
