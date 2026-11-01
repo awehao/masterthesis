@@ -278,6 +278,9 @@ class PlaceController(N2C.S1Planned):
             qp, sp = SP.plant_phys_step(qp, sp, u_in, self.cfg, 1)
         return qp, sp
 
+    def _carry_pending(self, q):
+        return False
+
     def _park_solve(self, q):
         """θ_park 固定，用完整座標變換：瓶底心 xy＝放置點 ⇒ 底盤 (x, y)。回傳 (P_park, 抬升高度)。"""
         Tbt = self.K.fk(np.r_[0.0, 0.0, 0.0, q[3:]], 'link_tcp') @ self.judge.T_rel
@@ -304,6 +307,8 @@ class PlaceController(N2C.S1Planned):
             self._ev('carry_plan_request', **self.carry_req)
         if st.phase == 'CARRY' and self.pph is None:
             res = self.carry_planner.poll()
+            if res is None and self._carry_pending(q):                  # 預設 False＝原行為；版本化子類在等待回覆期間回 True（CARRY 仍由同一 GMPC 控制）
+                return
             if res is None or not res.get('ok'):
                 self._pstop('carry_plan_missing' if res is None else 'carry_plan_invalid', detail=None if res is None else res.get('why'))
                 return
