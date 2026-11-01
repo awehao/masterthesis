@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """持瓶滑移分段定位（只讀紀錄；Codex 20261101_204716 第 3 項）。滑移 d(t)＝瓶對 TCP 相對位姿與抓持成立時刻（t_grasp）基準的位置差
 （與 bottle_s0_logic 同定義；TCP 用實測關節 FK，瓶用讀回位姿），角度差同。
-分段：抓持→LIFT、LIFT→離桌判定、側持運送（→收近）、收近過渡、緊湊穩態、轉回升高、轉回外伸、轉回完成→PARKED、PARKED→RELEASE（含下降與接觸）。
+分段：抓持→LIFT、LIFT→離桌判定、側持運送（→收近）、收近過渡、緊湊穩態、轉回升高、（v3）升高後等外伸、轉回外伸、轉回完成→PARKED、PARKED→RELEASE（含下降與接觸）。
 每段報：段首、段末、段內最大、段增量（末−首）、段內最大增量（段內 max − 段首）；另報段內瓶底最低、瓶點到車體頂（半徑 0.32 m 內、頂 z 0.38）最小垂直淨空。
     python3 evaluation/bottle_w1_slip_segments.py RUN_ID [RUN_ID ...]
 """
@@ -59,8 +59,10 @@ def one(run):
         DECK.append(float((Pw[inr, 2] - 0.38).min()) if inr.any() else np.inf)
     D_, A_, BOT, DECK = (np.array(x) for x in (D_, A_, BOT, DECK))
     bnd = [('抓持→LIFT', tg, ev.get('p_LIFT')), ('LIFT→離桌判定', ev.get('p_LIFT'), r['t_lift_ok']), ('側持運送（→收近）', r['t_lift_ok'], ev.get('compact_start')),
-           ('收近過渡', ev.get('compact_start'), ev.get('compact_reached')), ('緊湊穩態', ev.get('compact_reached'), ev.get('compact_return')),
-           ('轉回升高', ev.get('compact_return'), ev.get('compact_raised')), ('轉回外伸', ev.get('compact_raised'), ev.get('compact_returned')),
+           ('收近過渡', ev.get('compact_start'), ev.get('compact_reached')), ('緊湊穩態', ev.get('compact_reached'), ev.get('compact_raise_start', ev.get('compact_return'))),
+           ('轉回升高', ev.get('compact_raise_start', ev.get('compact_return')), ev.get('compact_raised')),
+           ('升高後等外伸（v3）', ev.get('compact_raised'), ev.get('compact_out_start')) if 'compact_out_start' in ev else ('升高後等外伸（v3）', None, None),
+           ('轉回外伸', ev.get('compact_out_start', ev.get('compact_raised')), ev.get('compact_returned')),
            ('轉回完成→PARKED', ev.get('compact_returned'), ev.get('p_PARKED')), ('PARKED→RELEASE（下降、接觸）', ev.get('p_PARKED'), ev.get('p_RELEASE'))]
     segs = []
     for nm, a, b in bnd:
