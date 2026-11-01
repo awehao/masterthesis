@@ -293,8 +293,8 @@ def main():
                     tried.append(view)
             elif state == 'observe':
                 apply(VQ[view])
-                fr = VP.fresh(w1_rows(), t_arrive)
-                as_ = VP.assess(fr)
+                fr = VP.fresh(w1_rows(), t_arrive, t)
+                as_ = VP.assess(fr, t)
                 if as_.get('enough') or t - t_arrive >= a.obs_timeout:
                     if not as_.get('enough'):
                         as_ = dict(enough=True, n=as_['n'], complete=False, deficits=['no_target'], known_type_candidate=False, frac=None)

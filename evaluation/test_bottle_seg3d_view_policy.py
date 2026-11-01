@@ -29,13 +29,17 @@ def rows_for(run, model, dev):
     L = np.load(os.path.join(HERE, 'runs', run, 'w1_log.npz'))
     lc = {str(k): L['rows'][:, i] for i, k in enumerate(L['cols'])}
     off = float(np.median(lc['stamp'] - lc['task_t']))
+    Zs = np.load(os.path.join(HERE, 'runs', run, 'seg3d_w1.npz'))
+    lb = str(Zs['label'])
+    fs = ['recv_t'] + lb.split('fields=')[1].split(',')
+    age = {round(float(d_['stamp']) - off, 4): (float(d_['recv_t']) - float(d_['stamp'])) for d_ in (dict(zip(fs, r_)) for r_ in Zs['rows'])}   # 該趟節點輸出的實際收到年齡
     rows = []
     for i, st in enumerate(F['stamp']):
         tt = float(st) - off
         if not (h0 <= tt < h1):
             continue
         masks, recs, _ = S3.SI.predict(model, Image.fromarray(F['rgb'][i]), dev)
-        r = dict(stamp=tt, valid=0.0, xy_valid=0.0, top_observed=0.0, support_observed=0.0, height_valid=0.0, bottom_cut=0.0, top_cut=0.0, edge_top_unknown=0.0)
+        r = dict(stamp=tt, recv_age_s=age.get(round(tt, 4), float('nan')), valid=0.0, xy_valid=0.0, top_observed=0.0, support_observed=0.0, height_valid=0.0, bottom_cut=0.0, top_cut=0.0, edge_top_unknown=0.0)
         if len(masks):
             order = np.argsort([-x['confidence'] for x in recs])
             ests = [S3.locate(masks[j], F['depth'][i], F['K'], F['T_wc'][i], None) for j in order]
@@ -55,7 +59,8 @@ def main():
     out, bad = {}, 0
     for run, want in RUNS.items():
         rows, h0 = rows_for(run, model, dev)
-        a = VP.assess(VP.fresh(rows, h0))
+        t_now = max(r['stamp'] for r in rows) + 0.1                       # 決策時刻：窗內最後一幀之後 0.1 s
+        a = VP.assess(VP.fresh(rows, h0, t_now), t_now)
         act, arg = VP.next_view(['V0'], a)
         got = act if act != 'move' else arg
         ok = got == want
