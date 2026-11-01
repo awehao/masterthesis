@@ -20,6 +20,7 @@ import bottle_ref as BRF
 import bottle_s0_ctrl as C0
 import bottle_w1_compactcarry3_ctrl as C3
 
+C2 = C3.C2                                               # 給 isaac 腳本的掃描中斷注入沿用 W1G.C2.T_TO
 SEGREG = dict(max_age=0.5, dev_tol_mm=2.0, max_corr=0.005, rate=0.005, lock_after_insert_s=0.9, expire_s=15.0)
 
 
