@@ -1,0 +1,44 @@
+{
+ "schema": 1,
+ "batch": "多任務第一批 v2（量測目標相對排程）",
+ "ruling": "reviews/20261102_050244_reply.md",
+ "manifest": "evaluation/experiments/20261102_multi_motm_tasks.json",
+ "frozen_at_local": "2026-11-02 05:30 Asia/Taipei",
+ "git_head": "c9b7cb293bdbda6b2a7edd0affac099bdcee8c94",
+ "working_tree_note": "evaluation/run_guarded_v3.sh 有未提交差異（對話開始前即存在，非本批修改）；以下雜湊為實跑所用檔案內容，與 04:11 前幾趟 guard sha256 74408a910b3e5e4a 相同",
+ "controller": "bottle_w1_vhigh_relwin_ctrl（父類 bottle_w1_segtarget_vhigh_ctrl＝v1 凍結）",
+ "isaac_script": "evaluation/isaac_bottle_w1dynsr23.py（dynsr18 複本，只換控制器匯入與列印 relwin）",
+ "tracker_script": "evaluation/bottle_tracker_stamped_kfcm.py",
+ "env": "V1=1 W1=1 PLAN=1 SEG3D=1 MAP_ARGS=\"--table2 2.4,-1.0\"；S1_ARGS=\"--dyn-case <case> --table1-z <z> --bottle-dx <dx> --bottle-dy <dy>\"",
+ "sha256": {
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962",
+  "evaluation/bottle_w1_vhigh_relwin_ctrl.py": "8029bc3926d5e1b90aef1a534dca387eb23b6a43cbb4ac7d566918eb14717537",
+  "evaluation/bottle_w1_segtarget_vhigh_ctrl.py": "69b7b3b9b8efbd9621290e562fa4a8c900eda4f60af5c87e7edd3f959f5e6f28",
+  "evaluation/isaac_bottle_w1dynsr23.py": "842735624201694a1fa3d74a42847a5df910bda7121fd0a45d68115a27d240d2",
+  "evaluation/isaac_bottle_w1dynsr18.py": "55e03a73a916c88099e59341b297d9492fa8c4aa5566c8ec07e6f2d2f1779eee",
+  "evaluation/bottle_tracker_stamped_kfcm.py": "8f27869b69d83912750d74e523e71131712aa7be4df19088e3405ec26b305e2c",
+  "evaluation/bottle_w1_compactcarry3_ctrl.py": "40989f8ff2fba74a1b0b5cced8195c7373a56e50b3d40e6145948bab9cf9dacc",
+  "evaluation/bottle_w1_compactcarry21_ctrl.py": "6966c83590f9f405550d621cbd25aa80220deec0666fdb61fe5e52ba35103e30",
+  "evaluation/bottle_w1_segtarget_ctrl.py": "86dd4c7a2b571f13d43dcc60abbb349d5c3536a026b222e0d3c0be1b8db20af7",
+  "evaluation/bottle_seg3d_node.py": "e8fd221226de3ff7bcdb0317362198500a8cfe09b84d15b642e505166b80429a",
+  "evaluation/bottle_seg3d_candidates_node.py": "4f089a6bd6c2a56008d9a9924a1b859f39cb33976c2d226df4e88f06b5317caf",
+  "evaluation/bottle_segtarget_link.py": "1bdd1a84057aef54af49e130d7b770eea7d551b712d2ab7b8a833fb1e5639e36",
+  "evaluation/run_bottle_ros.sh": "e45ceb9dbb39b55bcb134458c672d65ce8c1c9755f0291408aa81291df47d9fe",
+  "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
+  "evaluation/test_bottle_w1_relwin_batch.py": "a1798283c590707aa91a9c08d7a8ee69d2770c2c2880bc7c66140b1f47811cc4",
+  "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py": "2a1e2148b0d4bc229f8862af5ae218fb8d628d7a3f8a47b3259b2ec62edd44fb",
+  "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py": "f4ff50b7b5b9e9120cdbd7f44805e97bc01d1ecfde4e8471a90df51557933e09"
+ },
+ "offline_preflight": {
+  "result_file": "evaluation/results/bottle/relwin_batch_offline.json",
+  "kind": "假世界、假候選（只在 V_HIGH 保持段送）；非物理、非線上取得；C1／C2 未含動態物",
+  "degeneracy": "N1（v1）與 N2（v2 偏移 0）相位時刻與結果一致，完成 47.75 s；N2 視覺雜訊平移 3.8e-5 m",
+  "pass_full_pick_place_offline": ["A1", "A2", "A3", "A4", "B2", "C1", "C2"],
+  "fail": {
+   "B1": "抓取、抬升、運送正常；PLACE_APPROACH 外伸淨空閘全程 −0.1249 m 未過，48.3 s 期限停止 place_phase_timeout（t_phase 18.05 s > 18 s）。原因：持瓶／側持高度沿用「抓取點＋抬升」（第一桌 0.55 ⇒ TCP 0.70 m、瓶底約 0.584 m），低於第二桌面 0.60＋Z_PAD 0.02，外伸會掃進第二桌投影；閘依設計等待不放寬。記為「未進物理：前置核對未過（放置外伸淨空閘不可通過）」"
+  },
+  "stop_paths": "漸變起到抬升完成每 10 拍兩條 stop_traj（現在停／延後一拍）：八案全部無失敗（非手指≥10 mm、手指≥5 mm、持瓶〔離桌後〕≥5.5 mm、自碰≥0、關節餘裕≥0.05、有限、停完）"
+ },
+ "physical_order": ["A1", "A2", "A3", "A4", "B2", "C1", "C2"],
+ "not_physical": {"B1": "前置核對未過（見上）；不改期限、不放寬閘、不縮偏移，留在總分母"}
+}
