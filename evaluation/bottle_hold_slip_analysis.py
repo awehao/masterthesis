@@ -3,7 +3,8 @@
 1 基準＝判定器抓持成立時刻 t_grasp 的夾持相對位姿 T_rel0＝inv(T_tcp)·T_bottle（量測關節 FK、瓶位姿讀回）；之後各時刻 Δp＝T_rel(t).p − T_rel0.p，
   以 TCP 座標分量報（z＝工具軸／插入方向、x、y），另報範數、各段滑移率（mm/s）與兩指實測開度、兩指對瓶受力。
   分段：抓持成立→抬升完成（LIFT）、持瓶行進（CARRY_NAV）、放置接近（PLACE_APPROACH）、下降（LOWER）、鬆爪前；本趟另分停止前、停止減速中（stop→停止有效判定時刻）、停穩後。
-2 閉爪時（close_request、t_grasp）：插入深度（報告 grasp_depth_m）、瓶軸在 TCP 座標的偏心（x、y）、TCP 在瓶上的高度（抓持帶，瓶底起算）、兩指受力。
+2 閉爪時（close_request、t_grasp）：名目插入深度（報告 grasp_depth_m，設定值）與實測插入深度（＝瓶軸在 TCP 座標的工具軸分量取負：TCP 越過瓶軸的距離）、
+  瓶軸在 TCP 座標的偏心、TCP 在瓶座標的位置（inv(T_rel) 直接取；z＝抓持高度，瓶底起算）、兩指受力。
 3 材質與驅動設定：資產 yaml 的摩擦設定值、手指驅動增益（讀檔，不推斷實際碰撞面綁定）。
 輸出 results/bottle/hold_slip_analysis.json。
 """
@@ -80,9 +81,11 @@ def one(run):
                          finger_f_N=[round(float(np.mean(f1)), 2), round(float(np.mean(f2)), 2)], finger_f_min_N=[round(float(np.min(f1)), 2), round(float(np.min(f2)), 2)]))
     kc = int(np.argmin(np.abs(t - ev.get('close_request', tg))))
     Rc = rel(c, kc)
-    grasp = dict(t_close=ev.get('close_request'), t_grasp=tg, grasp_depth_m=r.get('grasp_depth_m'),
+    tcp_in_b = np.linalg.inv(R0)[:3, 3]                     # TCP 在瓶座標（瓶底中心為原點、z 沿瓶軸向上）
+    grasp = dict(t_close=ev.get('close_request'), t_grasp=tg, grasp_depth_nominal_m=r.get('grasp_depth_m'),
                  bottle_axis_in_tcp_at_grasp_mm=[round(float(v) * 1e3, 2) for v in R0[:3, 3]],
-                 tcp_height_on_bottle_mm=round(float(-(np.linalg.inv(R0)[:3, 3])[2]) * 1e3, 2),
+                 insertion_measured_mm=round(float(-R0[2, 3]) * 1e3, 2),
+                 tcp_in_bottle_mm=[round(float(v) * 1e3, 2) for v in tcp_in_b], tcp_height_on_bottle_mm=round(float(tcp_in_b[2]) * 1e3, 2),
                  at_close_rel_mm=[round(float(v) * 1e3, 2) for v in Rc[:3, 3]], finger_f_at_grasp_N=[round(float(c['f_finger1_bottle'][k0]), 2), round(float(c['f_finger2_bottle'][k0]), 2)],
                  finger_q_at_grasp=[round(float(c['finger1_q'][k0]), 5), round(float(c['finger2_q'][k0]), 5)])
     kend = len(t) - 1
