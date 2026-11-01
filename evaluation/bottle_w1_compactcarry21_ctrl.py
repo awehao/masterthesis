@@ -84,7 +84,7 @@ class W1PlaceController(C2.W1PlaceController):
             for qk in Q:
                 Tb_ = self.K.fk(np.r_[0.0, 0.0, 0.0, qk[3:]], 'link_tcp')
                 PB.append((Tb_[:3, :3] @ Pt.T).T + Tb_[:3, 3])
-            mk = C2.clear_margin(np.vstack(PB), Q[:, :3])
+            mk = C2.clear_margin(np.vstack(PB), Q[:, :3], None, self._t1())   # 第一桌：實例參數優先，未設＝模組常數（舊版本不變）
             if mk is None:
                 return None
             m = min(m, mk)

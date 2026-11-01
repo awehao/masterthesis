@@ -36,10 +36,12 @@ NS = 21
 GRIP = ('link6', 'link_eef', 'uflite_gripper_link', 'uflite_finger1', 'uflite_finger2')
 
 
-def rect_out_dist(X, Y):
-    """點到第一桌桌面投影（矩形）的水平有號距離：外面為正，裡面為負。"""
-    dx = np.abs(X - TABLE1_C[0]) - TABLE1_HALF[0]
-    dy = np.abs(Y - TABLE1_C[1]) - TABLE1_HALF[1]
+def rect_out_dist(X, Y, c=None, half=None):
+    """點到第一桌桌面投影（矩形）的水平有號距離：外面為正，裡面為負。c／half 未給＝呼叫當下的模組常數。"""
+    c = TABLE1_C if c is None else c
+    half = TABLE1_HALF if half is None else half
+    dx = np.abs(X - c[0]) - half[0]
+    dy = np.abs(Y - c[1]) - half[1]
     out = np.hypot(np.maximum(dx, 0.0), np.maximum(dy, 0.0))
     return np.where((dx <= 0) & (dy <= 0), np.maximum(dx, dy), out)
 
@@ -56,21 +58,23 @@ def grip_grid_tcp(qa):
     return np.array([(x, y, z) for x in ax[0] for y in ax[1] for z in ax[2]])
 
 
-def clear_margin(P_base, poses, P_world=None):
-    """低於桌面頂＋Z_PAD 的點在所有位姿下到桌面投影的最小水平距離減 EDGE_PAD；沒有低點 ⇒ +inf。非有限 ⇒ None。"""
+def clear_margin(P_base, poses, P_world=None, t1=None):
+    """低於桌面頂＋Z_PAD 的點在所有位姿下到桌面投影的最小水平距離減 EDGE_PAD；沒有低點 ⇒ +inf。非有限 ⇒ None。
+    t1＝(桌面頂, 投影中心, 半尺寸)；未給＝呼叫當下的模組常數 TOP_Z／TABLE1_C／TABLE1_HALF（舊版本行為）。"""
     if not (np.isfinite(P_base).all() and np.isfinite(poses).all() and (P_world is None or np.isfinite(P_world).all())):
         return None
+    top, c1, h1 = (TOP_Z, TABLE1_C, TABLE1_HALF) if t1 is None else t1
     m = math.inf
-    low = P_base[P_base[:, 2] < TOP_Z + Z_PAD]
+    low = P_base[P_base[:, 2] < top + Z_PAD]
     if len(low):
         c, s = np.cos(poses[:, 2:3]), np.sin(poses[:, 2:3])
         X = poses[:, 0:1] + c * low[:, 0] - s * low[:, 1]
         Y = poses[:, 1:2] + s * low[:, 0] + c * low[:, 1]
-        m = min(m, float(rect_out_dist(X, Y).min()) - EDGE_PAD)
+        m = min(m, float(rect_out_dist(X, Y, c1, h1).min()) - EDGE_PAD)
     if P_world is not None:
-        lw = P_world[P_world[:, 2] < TOP_Z + Z_PAD]
+        lw = P_world[P_world[:, 2] < top + Z_PAD]
         if len(lw):
-            m = min(m, float(rect_out_dist(lw[:, 0], lw[:, 1]).min()) - EDGE_PAD)
+            m = min(m, float(rect_out_dist(lw[:, 0], lw[:, 1], c1, h1).min()) - EDGE_PAD)
     return m
 
 
@@ -82,6 +86,16 @@ class W1PlaceController(CA.W1PlaceController):
         self.cc, self.cc_ev, self.cc_log = None, [], []
         self.gate_log, self.gate_ms, self.gate_trig, self.gate_mon_min = [], [], None, math.inf
         self._Pt = None
+
+    def _ccd(self, name):
+        """過渡時長：實例參數 cc_t_to／cc_t_up／cc_t_out（不可變計畫）優先；未設＝呼叫當下的本模組常數（舊版本與暫換常數的子類行為不變）。"""
+        v = getattr(self, 'cc_' + name.lower(), None)
+        return float(v) if v is not None else globals()[name]
+
+    def _t1(self):
+        """第一桌（收近閘／外伸閘用）：實例參數 cc_t1＝(桌面頂, 投影中心, 半尺寸) 優先；未設＝呼叫當下的模組常數。"""
+        v = getattr(self, 'cc_t1', None)
+        return v if v is not None else (TOP_Z, TABLE1_C, TABLE1_HALF)
 
     # ---- 幾何
     def _pts_tcp(self):
@@ -128,7 +142,7 @@ class W1PlaceController(CA.W1PlaceController):
             Pt = self._pts_tcp()
             Pw = (Tw[:3, :3] @ Pt.T).T + Tw[:3, 3]
             poses = self._poses(q, t_rem)
-            return clear_margin(self._sweep_base(T_side), poses, Pw), len(poses)
+            return clear_margin(self._sweep_base(T_side), poses, Pw, self._t1()), len(poses)
         finally:
             self.gate_ms.append((time.perf_counter() - t0) * 1e3)
 
@@ -138,15 +152,15 @@ class W1PlaceController(CA.W1PlaceController):
         pa, pc = f['T_side'][:3, 3], TCP_C
         T = f['T_side'].copy()
         if f['t_ret'] is None:
-            s = BR.min_jerk(min(max((t - f['t0']) / T_TO, 0.0), 1.0))
+            s = BR.min_jerk(min(max((t - f['t0']) / self._ccd('T_TO'), 0.0), 1.0))
             T[:3, 3] = pa + (pc - pa) * s
             return T
         tau = t - f['t_ret']
-        if tau <= T_UP:
-            s = BR.min_jerk(min(max(tau / T_UP, 0.0), 1.0))
+        if tau <= self._ccd('T_UP'):
+            s = BR.min_jerk(min(max(tau / self._ccd('T_UP'), 0.0), 1.0))
             T[:3, 3] = [pc[0], pc[1], pc[2] + (pa[2] - pc[2]) * s]
         else:
-            u = BR.min_jerk(min((tau - T_UP) / T_OUT, 1.0))
+            u = BR.min_jerk(min((tau - self._ccd('T_UP')) / self._ccd('T_OUT'), 1.0))
             T[:3, 3] = [pc[0] + (pa[0] - pc[0]) * u, pc[1] + (pa[1] - pc[1]) * u, pa[2]]
         return T
 
@@ -157,7 +171,7 @@ class W1PlaceController(CA.W1PlaceController):
         t = float(self.t)
         if self.cc is None:
             if self.pph == 'CARRY_NAV' and self.judge.t_grasp is not None and self.judge.t_lift_ok is not None:
-                m, n = self._gate(q, T_TO)
+                m, n = self._gate(q, self._ccd('T_TO'))
                 if self.n_step % 5 == 0 or (m is not None and m >= 0.0):
                     self.gate_log.append((round(t, 3), 'pre', None if m is None else round(m, 4), n))
                 if m is not None and m >= 0.0:
@@ -168,7 +182,7 @@ class W1PlaceController(CA.W1PlaceController):
             return
         f = self.cc
         if f['stage'] == 'to_compact':
-            t_rem = f['t0'] + T_TO - t
+            t_rem = f['t0'] + self._ccd('T_TO') - t
             m, n = self._gate(q, t_rem)
             if self.n_step % 5 == 0 or m is None or m < 0.0:
                 self.gate_log.append((round(t, 3), 'mon', None if m is None else round(m, 4), n))
@@ -189,11 +203,11 @@ class W1PlaceController(CA.W1PlaceController):
             self.cc_ev.append(('return', t))
         elif f['stage'] == 'return':
             tau = t - f['t_ret']
-            if 'raised' not in f and tau >= T_UP - 1e-9:
+            if 'raised' not in f and tau >= self._ccd('T_UP') - 1e-9:
                 f['raised'] = t
                 self._ev('compact_raised')
                 self.cc_ev.append(('raised', t))
-            if tau >= T_UP + T_OUT - 1e-9:
+            if tau >= self._ccd('T_UP') + self._ccd('T_OUT') - 1e-9:
                 f['stage'] = 'side'
                 self._ev('compact_returned')
                 self.cc_ev.append(('side', t))

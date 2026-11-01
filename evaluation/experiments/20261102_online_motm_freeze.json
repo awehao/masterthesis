@@ -1,0 +1,91 @@
+{
+ "schema": 1,
+ "batch": "區域導引在線 MotM（背景規劃工作者）",
+ "ruling": "reviews/20261102_howard_region_guided_online_motm.md、20261102_072116_reply.md、20261102_072949_reply.md",
+ "base_version": "v2w 判定與排程＋v3 轉回高度與 TCP 收斂；時長改逐案在線計算",
+ "frozen_at_local": "2026-11-02 08:40 Asia/Taipei",
+ "git_head_before_freeze_commit": "aff904707d07e0814c5836fb6e8e25ba2c3b4111",
+ "controller": "bottle_w1_online_ctrl",
+ "isaac_script": "evaluation/isaac_bottle_w1dynsr26.py",
+ "worker": "bottle_plan_worker.py（系統 python 子程序，JSON 行協定）＋bottle_plan_client.py",
+ "refactor": "compactcarry2／3／21：過渡時長與第一桌幾何改由實例存取（_ccd／_ccd3／_t1），未設實例值時於呼叫當下讀模組常數；v2w 名目、v3 A4、v3 B1 假世界結果逐欄相同",
+ "priors": [
+  "區域：第一桌所在、導航規劃路徑、抓取車道 y＝0（分支核對沿車道）",
+  "目標類別：同型直立瓶（半徑、抓持帶 0.10 m）",
+  "備妥分支：資產名目（唯一種子＝實際執行的備妥構型）",
+  "第一桌 xy 範圍（收近閘）：資產先驗；高度：本趟量測",
+  "第二桌：放置先驗"
+ ],
+ "truth_safety_net": [
+  "判定器離桌判定與 liftb 切換（模擬瓶位姿）",
+  "持瓶淨空拒絕、穿透估計、禁止接觸（只負責拒絕）"
+ ],
+ "sha256": {
+  "evaluation/bottle_w1_online_ctrl.py": "0dd70792a289b28d8adf380d9c9efce41424a452a2cc0638443b224d2e30c4ac",
+  "evaluation/bottle_plan_worker.py": "2bc11f466c2d5291d28a0849ff111d9e3933186995ff671d64a4ff69fd852967",
+  "evaluation/bottle_plan_client.py": "90326f2a92745c5d6718ee270f1f484c37fbf27f72a54703dca8ca40493fae92",
+  "evaluation/isaac_bottle_w1dynsr26.py": "3be934dd07dfb3401e69fc0e48078b967eac71d257486e90650802018577bb02",
+  "evaluation/bottle_w1_compactcarry2_ctrl.py": "5955b65e6ce1c9c843100ab042e46d67b0e2a93326ec7011e81a8720c58f3653",
+  "evaluation/bottle_w1_compactcarry3_ctrl.py": "2a7fa0585bc35eef48e133fc79f2f38eedd61d42c80c944c0c8592a021b33e69",
+  "evaluation/bottle_w1_compactcarry21_ctrl.py": "c1767d3b9ca4c3657a1ebfeb11859d2a3d509bb7c707af4c09c4fcc4cf9cfa17",
+  "evaluation/bottle_w1_vhigh_relwin_slipwarn_ctrl.py": "7bbaac4142ee21f895997102740d22be0fda5279d876ee7ff7b5bafd778310f0",
+  "evaluation/bottle_w1_vhigh_relwin_ctrl.py": "8029bc3926d5e1b90aef1a534dca387eb23b6a43cbb4ac7d566918eb14717537",
+  "evaluation/run_bottle_ros.sh": "066e49e6df56b55d836eb4fc3da9cc4824d32a8bd62ab8045cba937c0a4a7387",
+  "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
+  "evaluation/test_bottle_w1_online.py": "4b205c01106ce7e67d52eca4ee9cd35610eda76f2fa97dd26e879015b310343b",
+  "evaluation/bottle_online_unseen_gen.py": "1ba289b403ec6b958ccf7578aa82f3d4fe3b91db57b93e24e64fb520168a4dfb",
+  "evaluation/experiments/20261102_online_unseen_positions.json": "04b29fdc9f473cbbd802d7655aa988f816a1e92879be5e7c14c26b5184198442",
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962"
+ },
+ "offline": {
+  "result_file": "evaluation/results/bottle/online_offline.json",
+  "geometry": "B1 位置（第一批已用點）",
+  "rtf_cap": 0.6,
+  "closed": {
+   "outcome": "完整抓放",
+   "t_done": 48.4,
+   "place_mm": 0.8,
+   "latency": {
+    "grasp": {
+     "obs_first_to_accept_sim": 0.10999999999999766,
+     "obs_first_to_accept_wall": 0.16765952110290527,
+     "request_to_result_sim": 0.10999999999999766,
+     "request_to_result_wall": 0.11178445816040039,
+     "compute_wall": 0.11105966567993164
+    },
+    "ret": {
+     "request_to_ready_sim": 1.0000000000001563,
+     "request_to_ready_wall": 1.6496343612670898,
+     "compute_wall": 1.6492180824279785,
+     "first_gate": 22.500000000000718,
+     "ready_after_first_gate_s": 0.0,
+     "accept_t": 22.500000000000718
+    }
+   },
+   "dur": {
+    "T_TO": 4.05,
+    "T_UP": 2.1,
+    "T_OUT": 4.05
+   },
+   "stop_fails": []
+  },
+  "counterexamples": {
+   "dead": "停止 planner_dead",
+   "slow": "停止 grasp_plan_late",
+   "moved": "完整抓放",
+   "envelope": "完整抓放"
+  },
+  "first_try_notes": [
+   "承接條件誤加「底盤 |y|≤0.03」：採用時底盤仍在路徑上併向車道，已移除",
+   "轉回最晚處置點初版只在結果到後檢查且只看 PLACE_APPROACH：envelope 反例帶抬升高度接近第二桌而碰桌，已改為依運送進度且每拍先查",
+   "假世界未節流時運送段快於真實約 3.8 倍，工作者延遲在模擬時間上失真，已節流到 RTF≤0.6"
+  ]
+ },
+ "design_domain": "dx∈[−0.08,0.08]、dy∈[−0.025,0.04]、z1∈[0.55,0.65]（本批設計域，非已核可連續區間）",
+ "unseen": "evaluation/experiments/20261102_online_unseen_positions.json（種子 20261102，實跑前提交）",
+ "physical_order": [
+  "U1",
+  "U2",
+  "U3"
+ ]
+}

@@ -38,9 +38,15 @@ class W1PlaceController(C21.W1PlaceController):
         super().__init__(*a, **kw)
         self.reach_log, self.reach_trig, self.reach_mon_min = [], None, math.inf
 
+    def _ccd3(self, name):
+        """升高／外伸時長：實例參數 cc_t_up／cc_t_out 優先；未設＝呼叫當下的本模組常數 T_UP／T_OUT（舊版本與暫換常數的子類行為不變）。"""
+        v = getattr(self, 'cc_' + name.lower(), None)
+        return float(v) if v is not None else globals()[name]
+
     def _rects(self):
         P = self.place
-        return [(tuple(C2.TABLE1_C), tuple(C2.TABLE1_HALF), C2.TOP_Z), (tuple(P['c']), (P['size'][0] / 2, P['size'][1] / 2), float(P['top']))]
+        top1, c1, h1 = self._t1()
+        return [(tuple(c1), tuple(h1), top1), (tuple(P['c']), (P['size'][0] / 2, P['size'][1] / 2), float(P['top']))]
 
     def _T_raised(self):
         T = self.cc['T_side'].copy()
@@ -54,10 +60,10 @@ class W1PlaceController(C21.W1PlaceController):
         pa, pc = f['T_side'][:3, 3], C2.TCP_C
         T = f['T_side'].copy()
         tau = t - f['t_raise']
-        s = BR.min_jerk(min(max(tau / T_UP, 0.0), 1.0))
+        s = BR.min_jerk(min(max(tau / self._ccd3('T_UP'), 0.0), 1.0))
         T[:3, 3] = [pc[0], pc[1], pc[2] + (pa[2] - pc[2]) * s]
         if f.get('t_out') is not None:
-            u = BR.min_jerk(min(max((t - f['t_out']) / T_OUT, 0.0), 1.0))
+            u = BR.min_jerk(min(max((t - f['t_out']) / self._ccd3('T_OUT'), 0.0), 1.0))
             T[:3, 3] = [pc[0] + (pa[0] - pc[0]) * u, pc[1] + (pa[1] - pc[1]) * u, T[2, 3]]
         return T
 
@@ -99,7 +105,7 @@ class W1PlaceController(C21.W1PlaceController):
         t, f = float(self.t), self.cc
         if f is None:
             if self.pph == 'CARRY_NAV' and self.judge.t_grasp is not None and self.judge.t_lift_ok is not None:
-                m, n = self._gate(q, C2.T_TO)
+                m, n = self._gate(q, self._ccd('T_TO'))
                 if self.n_step % 5 == 0 or (m is not None and m >= 0.0):
                     self.gate_log.append((round(t, 3), 'pre', None if m is None else round(m, 4), n))
                 if m is not None and m >= 0.0:
@@ -109,7 +115,7 @@ class W1PlaceController(C21.W1PlaceController):
                     self.cc_ev.append(('to_compact', t))
             return
         if f['stage'] == 'to_compact':
-            t_rem = f['t0'] + C2.T_TO - t
+            t_rem = f['t0'] + self._ccd('T_TO') - t
             m, n = self._gate(q, t_rem)
             if self.n_step % 5 == 0 or m is None or m < 0.0:
                 self.gate_log.append((round(t, 3), 'mon', None if m is None else round(m, 4), n))
@@ -125,18 +131,18 @@ class W1PlaceController(C21.W1PlaceController):
                 self._ev('compact_reached')
                 self.cc_ev.append(('compact', t))
         if f['stage'] == 'compact':
-            lead = getattr(self, 'v_carry', 0.25) * T_UP
+            lead = getattr(self, 'v_carry', 0.25) * self._ccd3('T_UP')
             rem = None if self.cpath is None or self.csig is None else float(self.cpath.x_lane) - float(self.csig)
             if self.pph == 'PLACE_APPROACH':
                 self._start_raise('place_approach', rem)
             elif self.pph == 'CARRY_NAV' and rem is not None and np.isfinite(rem) and rem <= lead:
                 self._start_raise('early', rem)
-        if f['stage'] == 'raise' and t - f['t_raise'] >= T_UP - 1e-9:
+        if f['stage'] == 'raise' and t - f['t_raise'] >= self._ccd3('T_UP') - 1e-9:
             f['stage'] = 'raised'
             self._ev('compact_raised')
             self.cc_ev.append(('raised', t))
         if f['stage'] == 'raised' and self.pph == 'PLACE_APPROACH':
-            m, n = self._reach_gate(q, T_OUT)
+            m, n = self._reach_gate(q, self._ccd3('T_OUT'))
             self.reach_log.append((round(t, 3), 'pre', None if m is None else round(m, 4), n))
             if m is not None and m >= 0.0:
                 f.update(stage='out', t_out=t)
@@ -144,7 +150,7 @@ class W1PlaceController(C21.W1PlaceController):
                 self._ev('compact_out_start', reach_margin=round(m, 4))
                 self.cc_ev.append(('out', t))
         elif f['stage'] == 'out':
-            t_rem = f['t_out'] + T_OUT - t
+            t_rem = f['t_out'] + self._ccd3('T_OUT') - t
             m, n = self._reach_gate(q, max(t_rem, 0.0))
             if self.n_step % 5 == 0 or m is None or m < 0.0:
                 self.reach_log.append((round(t, 3), 'mon', None if m is None else round(m, 4), n))
