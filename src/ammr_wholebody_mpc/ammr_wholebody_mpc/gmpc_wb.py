@@ -516,6 +516,7 @@ class GMPCResult:
     # （gmpc_wb）手臂：arm_mode None＝未使用手臂（與封存版相同）；'hold'＝手臂速度序列固定 0（u_arm_seq (N,6) 全零）
     arm_mode          : str | None = None
     u_arm_seq         : np.ndarray | None = None
+    u0_rows_viol      : float = float('nan')    # （候選）給了 u0_rows 時：回傳命令（後處理後）對 A·u ≤ b 的最大違反；未給＝NaN
     arm_check         : dict | None = None      # active：回傳序列的原單位最大違反、有限值、seq_consistent（全身序列一致，退回時恆 False）、fallback 原因、arm_decel_valid（退回：手臂減速限制驗證）、base_as_is（退回：hold 底盤未被改動）、failed（手臂減速未驗證 ⇒ 呼叫端須終止）
 
 
@@ -1268,6 +1269,7 @@ class GMPC:
               arm        : dict | None = None,
               xi_prev2   : np.ndarray | None = None,
               cost_ref   : tuple | None = None,
+              u0_rows    : tuple | None = None,
               ) -> GMPCResult:
         """
         obstacles : optional list of dicts {x, y, radius} in world frame.
@@ -1285,7 +1287,7 @@ class GMPC:
             #   底盤不可行（煞停）⇒ 照封存版煞停、手臂歸零；耦合問題未完全收斂（status ≠ solved）⇒ 退回 hold 底盤解、手臂保持。
             #   動機：硬 k0 過近案封存版判 primal infeasible 煞停，耦合問題卻在迭代上限回傳朝障礙前進的命令（CBF 殘差 −0.55）。
             import dataclasses as _dc
-            r_hold = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm={'mode': 'hold'}, xi_prev2=xi_prev2, cost_ref=cost_ref)
+            r_hold = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm={'mode': 'hold'}, xi_prev2=xi_prev2, cost_ref=cost_ref, u0_rows=u0_rows)
             N_ = self.cfg.N
             def _fb(why, coupled_status=None, qp=None):
                 U_s, ck = arm_stop_sequence(arm, N_, self.cfg.dt)
@@ -1297,7 +1299,7 @@ class GMPC:
                                                   note='退回 hold 底盤解；手臂有界減速序列（未驗證通過 ⇒ failed，呼叫端須終止）'))
             if r_hold.accept_action == 'brake':
                 return _fb('base_brake')
-            r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=dict(arm, _inner=True), xi_prev2=xi_prev2, cost_ref=cost_ref)
+            r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=dict(arm, _inner=True), xi_prev2=xi_prev2, cost_ref=cost_ref, u0_rows=u0_rows)
             if r.status != 'solved':
                 return _fb('coupled_not_solved', r.status, (r.arm_check or {}).get('qp'))
             ck = r.arm_check or {}
@@ -1411,6 +1413,15 @@ class GMPC:
             A_total  = sparse.vstack([A_total, A_box], format='csc')
             lb_total = np.concatenate([lb_total, l_box])
             ub_total = np.concatenate([ub_total, u_box])
+        # 5a'.（候選）第一拍命令接受列 A·u_0 ≤ b（u_0＝ξ_ref,0＋δξ_0，只在 δξ_0 三欄）：None＝不加，問題與先前逐位元相同
+        if u0_rows is not None:
+            A_u0, b_u0 = np.asarray(u0_rows[0], float).reshape(-1, 3), np.asarray(u0_rows[1], float).ravel()
+            if len(b_u0):
+                A_r = np.zeros((len(b_u0), N * 3))
+                A_r[:, :3] = A_u0
+                A_total  = sparse.vstack([A_total, sparse.csc_matrix(A_r)], format='csc')
+                lb_total = np.concatenate([lb_total, np.full(len(b_u0), -np.inf)])
+                ub_total = np.concatenate([ub_total, b_u0 - A_u0 @ np.asarray(xi_ref_win[0], float)])
 
         # 5b. Full-horizon CBF safety filter — receding QP with per-step slack.
         #
@@ -1796,7 +1807,11 @@ class GMPC:
 
         if arm_check is not None:                     # 後處理若改了底盤命令，手臂序列不再與回傳底盤同解（不宣稱整串可行）
             arm_check['seq_consistent'] = bool(accept_action == 'as_is' and np.allclose(u_opt, xi_ref_win[0] + delta[0], atol=1e-12, rtol=0))
-        return GMPCResult(u_opt=u_opt, delta_xi_all=delta,
+        u0_viol = float('nan')
+        if u0_rows is not None:                       # 對回傳命令（含煞停、加速度夾、輪級後處理之後）核對；呼叫端決定違反時停止
+            A_u0, b_u0 = np.asarray(u0_rows[0], float).reshape(-1, 3), np.asarray(u0_rows[1], float).ravel()
+            u0_viol = float(np.max(A_u0 @ u_opt - b_u0)) if len(b_u0) else -np.inf
+        return GMPCResult(u_opt=u_opt, delta_xi_all=delta, u0_rows_viol=u0_viol,
                           e0=e0, solve_time_s=solve_time, status=status,
                           cbf_active=cbf_active, min_h=min_h,
                           n_obs_in=n_obs_in, n_static_in=n_static_in,
