@@ -6,7 +6,8 @@
   1 帳目：發布數＋最新一格槽丟棄數（n_drop_latest）＋配對丟棄數（n_drop_pair）＝注入數（結束時槽與配對表都已清空）；
   2 不回頭：發布戳嚴格遞增、n_stale＝0；
   3 最後注入的影格一定被處理並發布（槽只丟較舊的）；
-  4 亂序注入：另注入一組戳比已發布者舊的完整影格 ⇒ 不得發布（n_stale 增加）。
+  4 亂序注入：另注入一組戳比已發布者舊的完整影格 ⇒ 不得發布；
+  5 晚配齊的舊格（Codex 20261101_220915 第 2 項）：A 處理中、新格 C 已配齊入槽、舊格 B 才配齊 ⇒ B 不入槽（n_old_complete 增加）、C 必須發布。
     source /opt/ros/jazzy/setup.bash; ROS_DOMAIN_ID=91 .venv-dl0/bin/python evaluation/bottle_seg3d_slot_test.py --run bottle_w1_compact3_nominal1 --out OUT.json
 """
 import argparse
@@ -103,6 +104,30 @@ def main():
         msg.header.stamp = stamp(old_st)
         node._in(key, msg)
     time.sleep(1.5)
+    # 5 晚配齊的舊格：處理中 A（戳 t1）→ 新格 C（t1＋0.2）配齊入槽 → 舊格 B（t1＋0.1）才配齊 ⇒ B 不得入槽、C 必須發布
+    n_before5 = len(out)
+    t1 = round(t0 + 0.05 * a.n + 10.0, 6)
+    def inject(st_, e):
+        for key in ('pose', 'info', 'depth', 'rgb'):
+            msg = copy.copy(e[key])
+            msg.header = copy.copy(e[key].header)
+            msg.header.stamp = stamp(st_)
+            node._in(key, msg)
+    inject(t1, sets[1])
+    w_ = time.perf_counter()
+    while node.inflight is None and time.perf_counter() - w_ < 2.0:   # 等 A 開始處理
+        time.sleep(0.001)
+    inflight_seen = node.inflight
+    e_b = sets[2]
+    for key in ('pose', 'info', 'depth'):                             # B 先到三則（未配齊）
+        msg = copy.copy(e_b[key]); msg.header = copy.copy(e_b[key].header); msg.header.stamp = stamp(t1 + 0.1); node._in(key, msg)
+    inject(round(t1 + 0.2, 6), sets[3])                               # C 配齊入槽
+    msg = copy.copy(e_b['rgb']); msg.header = copy.copy(e_b['rgb'].header); msg.header.stamp = stamp(t1 + 0.1); node._in('rgb', msg)   # B 才配齊
+    old5 = node.n['old_complete']
+    time.sleep(1.5)
+    out5 = [d[0] for d in out[n_before5:]]
+    case5 = dict(inflight_seen=inflight_seen, published=out5, B_published=any(abs(x - (t1 + 0.1)) < 1e-6 for x in out5), C_published=any(abs(x - (t1 + 0.2)) < 1e-6 for x in out5),
+                 n_old_complete=old5)
     rows = [dict(zip(SN.FIELDS, d)) for d in out]
     st_out = [r['stamp'] for r in rows]
     mono = all(b > a_ for a_, b in zip(st_out, st_out[1:]))
@@ -113,7 +138,8 @@ def main():
                n_stale=node.n['stale'], accounting_ok=acc == a.n, monotonic=mono, old_injected_published=any(abs(s_ - old_st) < 1e-6 for s_ in st_out),
                last_injected_published=any(abs(s_ - injected[-1]) < 1e-6 for s_ in st_out),
                proc_ms=dict(median=round(float(np.median([r['proc_ms'] for r in rows])), 1), max=round(float(np.max([r['proc_ms'] for r in rows])), 1)) if rows else None,
-               queue_ms_max=round(float(np.max([r['queue_ms'] for r in rows])), 2) if rows else None)
+               queue_ms_max=round(float(np.max([r['queue_ms'] for r in rows])), 2) if rows else None,
+               late_old_frame=case5, late_old_ok=bool(case5['C_published'] and not case5['B_published'] and case5['n_old_complete'] >= 1))
     json.dump(dict(summary=res, rows=rows), open(a.out, 'w'), indent=1, default=float)
     print(json.dumps(res, ensure_ascii=False, indent=1, default=float))
     node.alive = False

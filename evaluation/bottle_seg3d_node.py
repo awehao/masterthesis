@@ -5,9 +5,13 @@
 配對與佇列：
   四則訊息以同一個來源時間戳配對；未配齊的戳最多保留 MAX_PENDING 個（丟最舊，計 n_drop_pair）。
   配齊的影格放進「最新一格」槽：工作執行緒處理中又來新的完整影格 ⇒ 覆蓋槽內尚未處理者（計 n_drop_latest）——只處理最新的。
-  發布前核對擷取戳必須大於上一筆已發布的戳，否則丟棄（計 n_stale）——舊結果不覆蓋新結果。
+  入槽前核對：擷取戳須大於槽內、處理中與已發布的最新戳，否則不入槽（計 n_old_complete）——較晚配齊的舊格不能擠掉新格；
+  發布前再核對擷取戳必須大於上一筆已發布的戳，否則丟棄（計 n_stale）——舊結果不覆蓋新結果。
+  訊息有效性：K 有限且 fx、fy > 0、無斜交、末列 (0,0,1)；位姿有限、四元數單位長（誤差 ≤ 1e-3）；step 與資料長度相符、深度位元組序與本機相同。
   核對：四則訊息同戳；color／depth／camera_info 的 frame_id 一致且非空；cam_pose frame_id＝odom；編碼 rgb8／32FC1；影像尺寸與 camera_info 一致。不符 ⇒ 該格發 why＝bad_message。
-  自身點：取擷取戳前後 0.1 s 內最近的 /odom 與 /joint_states；缺 ⇒ 支撐一律判不可觀測（why＝no_self_state），其餘照算。
+  自身點：/odom 與 /joint_states（關節依名稱 joint1–6 配對）各取包夾擷取戳、相距 ≤ 0.1 s 的前後樣本線性插值（偏航取最短角），配對誤差記 self_dt_ms；
+  沒有包夾 ⇒ 支撐一律判不可觀測（why＝no_self_state），其餘照算。
+  輸出 layout.dim[0].label 帶欄位版本、座標系與欄位名（LAYOUT_LABEL），最後一欄 schema＝2。
 估計：bottle_seg_depth3d.locate（同一份程式；尺寸閘＝類別層級先驗，與 top-1 都算，發布 size-gated 結果並附 top-1 是否被尺寸閘換掉）。
 發 /{ns}/bottle_seg3d（Float64MultiArray），欄位見 FIELDS；無效欄 NaN。時間：proc_ms＝取出影格到估計完成（解碼＋推論＋三維）；infer_ms＝模型本身；
   queue_ms＝配齊到開始處理的牆鐘等待；age_ms＝發布當下的節點時鐘（use_sim_time 則為模擬時鐘）減擷取戳；pair_age_ms＝四則訊息配齊當下的同一種年齡（傳輸與上游延遲）。
@@ -36,17 +40,19 @@ from rclpy.executors import ExternalShutdownException  # noqa: E402
 from rclpy.node import Node                             # noqa: E402
 from scipy.spatial import cKDTree                       # noqa: E402
 from sensor_msgs.msg import CameraInfo, Image, JointState   # noqa: E402
-from std_msgs.msg import Float64MultiArray              # noqa: E402
+from std_msgs.msg import Float64MultiArray, MultiArrayDimension   # noqa: E402
 
 MAX_PENDING = 3
 SUB_DEPTH = 30                                          # 影像訂閱佇列：太淺時 DDS 會在讀者端靜默覆蓋（重播核對 depth 5 時 18 幀無聲遺失），讓丟幀回到節點自己計數的最新一格槽
-SELF_DT = 0.1
+SELF_DT = 0.1                                           # 自身狀態須有包夾擷取戳、前後樣本相距 ≤ 0.1 s 才插值；否則支撐判不可觀測
 WHY = ('ok', 'no_instance', 'few_mask_depth', 'few_after_outlier', 'bad_message', 'size_gate_rejected_all')
 FIELDS = ('stamp', 'valid', 'conf', 'n_inst', 'n_size_rejected', 'top1_replaced',
           'xy_valid', 'cx_known_r', 'cy_known_r', 'xy_valid_silhouette', 'cx_sil', 'cy_sil', 'r_sil',
           'top_observed', 'z_top', 'z_vis_lo', 'z_vis_hi', 'support_observed', 'z_support', 'height_valid', 'height',
           'surf_cx', 'surf_cy', 'n_pts', 'self_filter', 'why', 'proc_ms', 'infer_ms', 'queue_ms', 'age_ms',
-          'n_drop_pair', 'n_drop_latest', 'n_stale', 'n_done', 'pair_age_ms')
+          'n_drop_pair', 'n_drop_latest', 'n_stale', 'n_done', 'pair_age_ms', 'n_old_complete', 'self_dt_ms', 'schema')
+SCHEMA = 2.0
+LAYOUT_LABEL = 'bottle_seg3d schema=2 frame=odom(world, z up, m) stamp=capture fields=' + ','.join(FIELDS)
 
 
 def stamp_of(h):
@@ -71,8 +77,19 @@ def check_msgs(e):
         raise ValueError(f'pose frame {pose.header.frame_id}')
     if c.encoding != 'rgb8' or d.encoding != '32FC1':
         raise ValueError(f'encoding {c.encoding} {d.encoding}')
-    if (c.height, c.width) != (d.height, d.width) or (info.height, info.width) != (d.height, d.width):
+    if (c.height, c.width) != (d.height, d.width) or (info.height, info.width) != (d.height, d.width) or c.height * c.width == 0:
         raise ValueError('size mismatch')
+    if c.step != 3 * c.width or d.step != 4 * d.width or len(c.data) != c.step * c.height or len(d.data) != d.step * d.height:
+        raise ValueError(f'step/size {c.step} {d.step} {len(c.data)} {len(d.data)}')
+    if d.is_bigendian != (sys.byteorder == 'big'):                         # 只支援與本機相同的位元組序
+        raise ValueError('depth endianness')
+    k = np.array(info.k, float)
+    if k.shape != (9,) or not np.isfinite(k).all() or k[0] <= 0 or k[4] <= 0 or abs(k[1]) > 1e-9 or np.abs(k[6:] - [0, 0, 1]).max() > 1e-9:
+        raise ValueError(f'K {k.tolist()}')
+    po, pp = pose.pose.orientation, pose.pose.position
+    qv = np.array([po.w, po.x, po.y, po.z], float)
+    if not (np.isfinite(qv).all() and np.isfinite([pp.x, pp.y, pp.z]).all()) or abs(np.linalg.norm(qv) - 1.0) > 1e-3:
+        raise ValueError('pose not finite / quaternion not unit')
     rgb = np.frombuffer(bytes(c.data), dtype=np.uint8).reshape(c.height, c.width, 3)
     D = np.frombuffer(bytes(d.data), dtype=np.float32).reshape(d.height, d.width)
     K = np.array(info.k, float).reshape(3, 3)
@@ -88,8 +105,8 @@ class Seg3dNode(Node):
         super().__init__(f'bottle_{ns}_seg3d')
         self.ns, self.pend, self.slot, self.lock = ns, {}, None, threading.Lock()
         self.ev = threading.Event()
-        self.n = dict(drop_pair=0, drop_latest=0, stale=0, done=0)
-        self.last_pub = -math.inf
+        self.n = dict(drop_pair=0, drop_latest=0, stale=0, done=0, old_complete=0)
+        self.last_pub, self.inflight = -math.inf, None
         self.odom, self.js = collections.deque(maxlen=400), collections.deque(maxlen=400)
         self.dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = S3.load_model(weights, self.dev)
@@ -109,9 +126,14 @@ class Seg3dNode(Node):
             self.odom.append((stamp_of(m.header), np.array([p.x, p.y, yaw])))
 
     def _js(self, m):
-        if len(m.position) >= 6:
+        try:
+            q = np.array([m.position[list(m.name).index(f'joint{i}')] for i in range(1, 7)], float)   # 依名稱配對，不只取前六個
+        except (ValueError, IndexError):
+            self.n['bad_js'] = self.n.get('bad_js', 0) + 1
+            return
+        if np.isfinite(q).all():
             with self.lock:
-                self.js.append((stamp_of(m.header), np.array(m.position[:6], float)))
+                self.js.append((stamp_of(m.header), q))
 
     def _in(self, key, m):
         st = stamp_of(m.header)
@@ -123,22 +145,44 @@ class Seg3dNode(Node):
             e = self.pend.get(st)
             if e is not None and len(e) == 4:
                 del self.pend[st]
+                newest = max([x for x in (None if self.slot is None else self.slot[0], self.inflight, self.last_pub) if x is not None], default=-math.inf)
+                if st <= newest:
+                    self.n['old_complete'] += 1                   # 較舊的影格晚配齊：不入槽、不覆蓋已入槽或處理中的新格
+                    return
                 if self.slot is not None:
                     self.n['drop_latest'] += 1                    # 槽內尚未處理的較舊影格被新的取代
                 self.slot = (st, e, time.perf_counter(), (self.get_clock().now().nanoseconds * 1e-9 - st) * 1e3)
                 self.ev.set()
 
+    @staticmethod
+    def _interp(buf, st, wrap=None):
+        """包夾 st 的前後樣本線性插值；前後相距 > SELF_DT 或沒有包夾 ⇒ None。回傳 (值, 配對誤差 s＝max(st−前, 後−st))。"""
+        before = [x for x in buf if x[0] <= st + 1e-9]
+        after = [x for x in buf if x[0] >= st - 1e-9]
+        if not before or not after:
+            return None
+        s0, v0 = max(before, key=lambda x: x[0])
+        s1, v1 = min(after, key=lambda x: x[0])
+        if s1 - s0 > SELF_DT:
+            return None
+        if s1 - s0 < 1e-9:
+            return v0.copy(), 0.0
+        w = (st - s0) / (s1 - s0)
+        d = v1 - v0
+        if wrap is not None:
+            d[wrap] = (d[wrap] + math.pi) % (2 * math.pi) - math.pi
+        return v0 + w * d, max(st - s0, s1 - st)
+
     def _self_tree(self, st):
         with self.lock:
-            od = [x for x in self.odom if abs(x[0] - st) <= SELF_DT]
-            js = [x for x in self.js if abs(x[0] - st) <= SELF_DT]
-        if not od or not js:
-            return None
-        b = min(od, key=lambda x: abs(x[0] - st))[1]
-        a = min(js, key=lambda x: abs(x[0] - st))[1]
-        q = np.r_[b, a]
+            od, js = list(self.odom), list(self.js)
+        b = self._interp(od, st, wrap=2)
+        a = self._interp(js, st)
+        if b is None or a is None:
+            return None, float('nan')
+        q = np.r_[b[0], a[0]]
         P = [np.vstack(list(S3.G.link_world(q, fq).values())) for fq in (S3.G.Q_OPEN, 0.0)]
-        return cKDTree(np.vstack(P))
+        return cKDTree(np.vstack(P)), max(b[1], a[1]) * 1e3
 
     def _loop(self):
         while self.alive:
@@ -147,17 +191,19 @@ class Seg3dNode(Node):
             with self.lock:
                 item, self.slot = self.slot, None
                 self.ev.clear()
+                if item is not None:
+                    self.inflight = item[0]
             if item is None:
                 continue
             st, e, t_ready, pair_age = item
             t0 = time.perf_counter()
             queue_ms = (t0 - t_ready) * 1e3
-            r, infer_ms, conf, n_inst, n_rej, repl, self_ok = None, float('nan'), float('nan'), 0, 0, 0, 0
+            r, infer_ms, conf, n_inst, n_rej, repl, self_ok, self_dt = None, float('nan'), float('nan'), 0, 0, 0, 0, float('nan')
             try:
                 rgb, D, K, T = check_msgs(e)
                 masks, recs, infer_ms = S3.SI.predict(self.model, PILImage.fromarray(rgb), self.dev)
                 n_inst = len(masks)
-                robot = self._self_tree(st)
+                robot, self_dt = self._self_tree(st)
                 self_ok = int(robot is not None)
                 if n_inst == 0:
                     r = dict(valid=False, why='no_instance')
@@ -176,8 +222,12 @@ class Seg3dNode(Node):
                 self.get_logger().warn(f'seg3d 失敗：{ex!r}')
                 r = dict(valid=False, why='bad_message')
             proc_ms = (time.perf_counter() - t0) * 1e3
-            if st <= self.last_pub:
-                self.n['stale'] += 1
+            with self.lock:
+                stale = st <= self.last_pub
+                if stale:
+                    self.n['stale'] += 1
+                    self.inflight = None
+            if stale:
                 continue
             now = self.get_clock().now().nanoseconds * 1e-9
             nan = float('nan')
@@ -194,11 +244,14 @@ class Seg3dNode(Node):
                        height_valid=float(v.get('height_valid', False)), height=nan if v.get('height') is None else v['height'], surf_cx=sc[0], surf_cy=sc[1],
                        n_pts=v.get('n_pts', 0), self_filter=self_ok, why=float(WHY.index(r['why'])) if r.get('why') in WHY else -1.0,
                        proc_ms=proc_ms, infer_ms=infer_ms, queue_ms=queue_ms, age_ms=(now - st) * 1e3,
-                       n_drop_pair=self.n['drop_pair'], n_drop_latest=self.n['drop_latest'], n_stale=self.n['stale'], n_done=self.n['done'], pair_age_ms=pair_age)
+                       n_drop_pair=self.n['drop_pair'], n_drop_latest=self.n['drop_latest'], n_stale=self.n['stale'], n_done=self.n['done'], pair_age_ms=pair_age,
+                       n_old_complete=self.n['old_complete'], self_dt_ms=self_dt, schema=SCHEMA)
             out = Float64MultiArray()
+            out.layout.dim = [MultiArrayDimension(label=LAYOUT_LABEL, size=len(FIELDS), stride=len(FIELDS))]
             out.data = [float(row[k]) for k in FIELDS]
             self.pub.publish(out)
-            self.last_pub = st
+            with self.lock:
+                self.last_pub, self.inflight = st, None
 
 
 def main():

@@ -15,7 +15,7 @@
   實例選擇：top-1＝信心最高的實例；size-gated＝依信心排序取第一個通過類別尺寸先驗（輪廓半徑 ≤ 0.06 m、可見高度 ≤ 0.40 m）的實例。兩者都報。
     物體高度只在支撐可觀測時給（瓶頂可見最高點 − 支撐高度），否則只給下界（可見高度範圍）。遮罩碰影像上／下緣時瓶頂／瓶底可能被切，另標。
 有效旗標（Codex 20261101_214354）：xy_valid＝遮罩不碰左右邊界（4 px）、點數 ≥ 30、已知半徑擬合 rms ≤ 3 mm；xy_valid_silhouette 另要左右邊界外為背景（≥ 80%）；
-  top_observed＝不碰上邊界且上緣外 3–6 px 有 ≥ 80% 為背景（遠 ≥ 5 cm 或無深度；近 ≥ 2 cm 為遮擋）——遮罩沒碰邊界不代表頂端完整可見；
+  top_observed＝不碰上邊界且上緣外 3–6 px 有 ≥ 80% 為有效遠背景（有深度且遠 ≥ 5 cm；近 ≥ 2 cm 為遮擋；無深度＝未知，不算正證據）——遮罩沒碰邊界不代表頂端完整可見；
   support_observed＝支撐面幾何候選通過（不是承重證據）；height_valid＝top_observed 且 support_observed。瓶頂未確認時只報可見點 z 範圍，不叫瓶頂。
 資料角色：分割權重沒有用這些趟重訓，但尺寸閘、支撐搜尋等後處理依這批結果修改過，整條三維管線對這些趟是開發集，不是 held-out 驗證。
 評估：遮罩偵測——以真值瓶體（直立圓柱取樣點）投影判定是否在視野內（不計遮擋）：在視野內的命中率、完全不在視野內的誤檢；中心 xy 誤差（表面質心 vs 兩種圓擬合）；瓶頂 z 誤差；支撐可觀測率與支撐高度誤差（只在瓶仍在桌上的幀）。
@@ -75,8 +75,9 @@ def to_world(depth, K, T_wc, sel, z_fixed=None):
 
 
 def edge_test(mask, depth, z_obj, side):
-    """遮罩某一側的邊界是否為真輪廓：邊界外 3–6 px 的深度比物體遠 ≥ 5 cm 或無效（背景）⇒ 真邊；比物體近 ≥ 2 cm ⇒ 遮擋；其餘（相近、可能是未分割的同一物體）⇒ 不確定。
-    回傳 (背景比例, 遮擋比例, 樣本數)。side：'top'、'left'、'right'。"""
+    """遮罩某一側的邊界是否為真輪廓：邊界外 3–6 px 的深度分三類——有效遠背景（有限、> 0、比物體遠 ≥ 5 cm）、遮擋（比物體近 ≥ 2 cm）、
+    未知（無深度：NaN／0／非有限，或與物體深度相近）。未知不得當作真邊的正證據（Codex 20261101_220915）。
+    回傳 (有效遠背景比例, 遮擋比例, 未知比例, 樣本數)。side：'top'、'left'、'right'。"""
     H_, W_ = mask.shape
     vv, uu = np.nonzero(mask)
     pts = []
@@ -91,12 +92,13 @@ def edge_test(mask, depth, z_obj, side):
             c0 = cs.min() if side == 'left' else cs.max()
             pts += [(rw, c0 + sgn * k) for k in range(EDGE_K[0], EDGE_K[1] + 1) if 0 <= c0 + sgn * k < W_]
     if not pts:
-        return 0.0, 0.0, 0
+        return 0.0, 0.0, 1.0, 0
     a = np.array(pts)
     d = depth[a[:, 0], a[:, 1]].astype(float)
-    far = ~np.isfinite(d) | (d <= 0) | (d >= z_obj + EDGE_FAR)
-    near = np.isfinite(d) & (d > 0) & (d <= z_obj - EDGE_NEAR)
-    return float(far.mean()), float(near.mean()), int(len(a))
+    ok = np.isfinite(d) & (d > 0)
+    far = ok & (d >= z_obj + EDGE_FAR)
+    near = ok & (d <= z_obj - EDGE_NEAR)
+    return float(far.mean()), float(near.mean()), float(1.0 - far.mean() - near.mean()), int(len(a))
 
 
 def locate(mask, depth, K, T_wc, robot=None):
@@ -127,7 +129,7 @@ def locate(mask, depth, K, T_wc, robot=None):
     z_lo, z_hi = float(np.percentile(P[:, 2], 1)), float(np.percentile(P[:, 2], 99))
     zm = float(np.median(z))
     e_top, e_left, e_right = (edge_test(mask, depth, zm, sd) for sd in ('top', 'left', 'right'))
-    top_observed = (not top_cut) and e_top[2] > 0 and e_top[0] >= EDGE_FRAC
+    top_observed = (not top_cut) and e_top[3] > 0 and e_top[0] >= EDGE_FRAC
     sides_observed = (not side_cut) and min(e_left[0], e_right[0]) >= EDGE_FRAC
     grid = np.zeros_like(mask)
     grid[::2, ::2] = True

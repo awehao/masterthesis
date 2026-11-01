@@ -96,8 +96,13 @@ class Rec(Node):
     """收結果的獨立節點，在自己的執行緒裡 spin（重播端發大影像時不會餓死）。"""
     def __init__(self, ns):
         super().__init__('seg3d_rec')
-        self.out = []
-        self.create_subscription(Float64MultiArray, f'/{ns}/bottle_seg3d', lambda m: self.out.append((time.perf_counter(), list(m.data))), 200)
+        self.out, self.label = [], None
+        self.create_subscription(Float64MultiArray, f'/{ns}/bottle_seg3d', self._cb, 200)
+
+    def _cb(self, m):
+        if m.layout.dim:
+            self.label = m.layout.dim[0].label
+        self.out.append((time.perf_counter(), list(m.data)))
 
 
 def main():
@@ -165,7 +170,10 @@ def main():
     t_end = time.perf_counter()
     while time.perf_counter() - t_end < 2.0:
         rclpy.spin_once(node, timeout_sec=0.05)
-    rows = [dict(zip(FIELDS, d)) for _, d in rec.out]
+    fields = rec.label.split('fields=')[1].split(',') if rec.label and 'fields=' in rec.label else list(FIELDS)   # 欄位名以訊息自帶的 layout 標籤為準
+    if any(len(d) != len(fields) for _, d in rec.out):
+        raise SystemExit('欄位數與 layout 標籤不符')
+    rows = [dict(zip(fields, d)) for _, d in rec.out]
     st = [r['stamp'] for r in rows]
     mono = all(b > a_ for a_, b in zip(st, st[1:]))
     B = json.load(open(a.batch))['rows']
@@ -185,7 +193,8 @@ def main():
         x = np.array([r[k] for r in rows if np.isfinite(r[k])], float)
         return None if not len(x) else dict(n=int(len(x)), median=round(float(np.median(x)), 2), p95=round(float(np.percentile(x, 95)), 2), max=round(float(x.max()), 2))
     last = rows[-1] if rows else {}
-    res = dict(run=a.run, ns=a.ns, mode='recorded_timing', n_sent=len(sent), n_out=len(rows), n_done_node=int(max([r['n_done'] for r in rows], default=0)), monotonic=mono,
+    res = dict(run=a.run, ns=a.ns, mode='recorded_timing', layout_label=rec.label, self_dt_ms=st_('self_dt_ms') if 'self_dt_ms' in fields else None,
+               n_old_complete=last.get('n_old_complete'), n_sent=len(sent), n_out=len(rows), n_done_node=int(max([r['n_done'] for r in rows], default=0)), monotonic=mono,
                n_drop_pair=last.get('n_drop_pair'), n_drop_latest=last.get('n_drop_latest'), n_stale=last.get('n_stale'),
                sent_minus_out=len(sent) - len(rows), batch_match=dict(n=len(cmp_), max_center_diff_m=max(cmp_) if cmp_ else None, support_flag_diff=sup_diff),
                proc_ms=st_('proc_ms'), infer_ms=st_('infer_ms'), queue_ms=st_('queue_ms'), age_ms=st_('age_ms'), pair_age_ms=st_('pair_age_ms'),
