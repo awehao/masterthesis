@@ -6,10 +6,13 @@
   known_type   ＝最近連續 ≥ K_MIN 列 xy_valid 且 support_observed（瓶頂可缺），跨幀一致（中心、支撐）。
                  量測：中心、支撐 z；先驗：瓶半徑、瓶高 0.20 m（推得瓶頂）、抓持帶在瓶底上 0.10 m（同 W1 的 grasp_target 高度）。
   not_ready 原因：rows（列數不足）、stale（窗內最新列在查詢時刻已逾 MAX_AGE_S）、inconsistent、unobservable（沒有符合條件的連續列）。
-可達與淨空（ReachWorker，背景執行緒，不阻塞呼叫端；未完成 ⇒ reach＝pending）：
-  抓持 TCP 目標＝bottle_s0_ctrl.grasp_target(中心, 支撐 z＋0.10)；底盤取名目抓取相對位置（瓶 y−0.42、x 在瓶 x 加 −0.30／−0.10／+0.10），任一點 IK 有解
-  （關節餘裕 ≥ 0.05）且瓶心 0.10 m 內（實際觀測到支撐面的範圍）的非手指連桿點高於觀測支撐面＋0.02 m ⇒ reach_ok。
-  「候選可達」不是抓取成功；0.10 m 以外的桌面延伸（桌緣、桌腳）未觀測、未核對。known_type 的瓶頂與抓持帶來自瓶型先驗，對同型瓶誤差為 0 不代表量測精度。
+三種狀態分開（Codex 20261102_001039）：
+  1 觀測候選：上述 complete／known_type 的 ready／not_ready（穩定、新鮮）；
+  2 ik_state：在**假設**的名目抓取底盤位置（瓶 y−0.42、x＝瓶 x＋−0.30／−0.10／+0.10）下，抓持終點 TCP＝grasp_target(中心, 支撐＋0.10) 任一點 IK 有解（關節餘裕 ≥ 0.05）；
+  3 local_clear_state：該解下瓶心 0.10 m 內的非手指連桿點高於觀測支撐面 ≥ 0.02 m（局部點檢查值；0.10 m 是縮小的檢查範圍，不是消除碰撞問題，也不代表整個圓盤都已觀測）。
+  都不包含：底盤能否抵達、預抓／插入／抬升路徑、自碰、完整環境碰撞。「候選可達」不是抓取成功。
+  2、3 由 ReachWorker 單一背景執行緒計算（最新待算槽、不阻塞）；結果只對實際檢查的候選版本有效。
+known_type 的瓶頂與抓持帶來自瓶型先驗，對同型瓶誤差為 0 不代表量測精度。
 """
 import math
 import threading
@@ -20,7 +23,7 @@ K_MIN, MAX_AGE_S, WINDOW_S = 3, 0.5, 2.0
 STD_XY, STD_SUP, STD_TOP = 0.003, 0.003, 0.005
 H_PRIOR, BAND_PRIOR, R_PRIOR = 0.20, 0.10, 0.015
 BASE_DX, BASE_DY = (-0.30, -0.10, 0.10), -0.42
-DISK_R, CLEAR_SUP = 0.10, 0.02                         # 只核實際觀測到支撐面的範圍（locate 支撐搜尋半徑 0.10 m）；0.40 m 會把站在桌邊的底盤與手臂根部也圈進來
+LOCAL_R, CLEAR_SUP = 0.10, 0.02                         # 只核實際觀測到支撐面的範圍（locate 支撐搜尋半徑 0.10 m）；0.40 m 會把站在桌邊的底盤與手臂根部也圈進來
 FINGERS = ('uflite_finger1', 'uflite_finger2')
 
 
@@ -93,7 +96,10 @@ class CandidateTracker:
 
 
 def reach_check(cand, q_seed, iters=150):
-    """名目抓取相對位置下的 IK 與觀測支撐面淨空（純運動學；慢，給 ReachWorker 在背景跑）。"""
+    """兩項分開回報（純運動學；慢，給 ReachWorker 在背景跑）：
+    ik＝在假設的名目抓取底盤位置（瓶 y−0.42、x＝瓶 x＋−0.30／−0.10／+0.10）下，抓持終點 TCP（grasp_target(中心, 支撐＋0.10)）IK 有解且關節餘裕 ≥ 0.05；
+    local_clear＝該解下，瓶心 LOCAL_R 內的非手指連桿點高於觀測支撐面的最小值（局部點檢查值）。
+    不包含：底盤能否抵達該位置、預抓／插入／抬升路徑、自碰、完整環境碰撞（桌緣、桌腳等未觀測部分）。"""
     import bottle_reach_scan as RS
     import bottle_s0_ctrl as C
     import bottle_s1_geom as G
@@ -104,44 +110,82 @@ def reach_check(cand, q_seed, iters=150):
         base = np.array([cx + dx, cy + BASE_DY, 0.0])
         ok, _, qa, pe, re, marg = RS.ik(base, T, [np.asarray(q_seed, float)], iters=iters)
         if not ok or marg < 0.05:
-            res.append(dict(dx=dx, ik=bool(ok), margin=float(marg), clear=None))
+            res.append(dict(dx=dx, ik=False, margin=float(marg), local_clear=None))
             continue
         W = G.link_world(np.r_[base, qa], G.Q_OPEN)
         P = np.vstack([v for k, v in W.items() if k not in FINGERS])
-        near = np.hypot(P[:, 0] - cx, P[:, 1] - cy) <= DISK_R
+        near = np.hypot(P[:, 0] - cx, P[:, 1] - cy) <= LOCAL_R
         clr = float((P[near, 2] - cand['z_support']).min()) if near.any() else math.inf
-        res.append(dict(dx=dx, ik=True, margin=float(marg), clear=clr))
-    good = [x for x in res if x['ik'] and x['clear'] is not None and x['clear'] >= CLEAR_SUP]
-    return dict(reach_ok=bool(good), per_base=res)
+        res.append(dict(dx=dx, ik=True, margin=float(marg), local_clear=clr))
+    ik_ok = [x for x in res if x['ik']]
+    loc_ok = [x for x in ik_ok if x['local_clear'] is not None and x['local_clear'] >= CLEAR_SUP]
+    return dict(ik_state='ok' if ik_ok else 'fail', local_clear_state='ok' if loc_ok else ('fail' if ik_ok else 'n/a'),
+                local_clear_min=max((x['local_clear'] for x in ik_ok), default=None), per_base=res,
+                scope='假設底盤位置下的抓持終點 IK＋瓶心 0.10 m 內局部點檢查；不含底盤可達、預抓／插入／抬升路徑、自碰、完整環境碰撞')
+
+
+def cand_id(c):
+    """候選版本：類別、來源列戳（最早、最新）、列數與精確值（不取格）。"""
+    return (c['kind'], round(c['t_first'], 6), round(c['t_last'], 6), int(c['n']), round(c['center'][0], 7), round(c['center'][1], 7), round(c['z_support'], 7))
 
 
 class ReachWorker:
-    """背景執行緒：同一個候選（類別＋中心 1 cm 格＋支撐 1 cm 格）只算一次；查詢時未完成 ⇒ pending。"""
+    """單一背景執行緒＋「最新待算」槽（Codex 20261102_001039）：query(c) 若 c 的版本已算過 ⇒ 回該結果；否則把 c 放進待算槽（取代較舊的待算者）並回 pending。
+    結果只對「實際被檢查的那個版本」有效：目前候選版本不同時，ik_state／local_clear_state 一律 pending，另附上次實際檢查的版本、目標、結果（last_*）與差距（mm），
+    由使用端自行判斷，不把它冒充目前版本的結果。
+    被取代或過期的版本即使之後算完，也不會變成目前結果（只有版本完全相同才回報）。"""
 
     def __init__(self, q_seed):
-        self.q_seed, self.cache, self.lock, self.busy = np.asarray(q_seed, float), {}, threading.Lock(), set()
-
-    @staticmethod
-    def key(c):
-        return (c['kind'], round(c['center'][0], 2), round(c['center'][1], 2), round(c['z_support'], 2))
+        self.q_seed = np.asarray(q_seed, float)
+        self.lock, self.ev = threading.Lock(), threading.Event()
+        self.pending, self.done, self.n_run, self.n_replaced = None, {}, 0, 0
+        self.last = None
+        self.alive = True
+        self.th = threading.Thread(target=self._loop, daemon=True)
+        self.th.start()
 
     def query(self, c):
         if c.get('status') != 'ready':
-            return dict(reach='n/a')
-        k = self.key(c)
+            return dict(ik_state='n/a', local_clear_state='n/a')
+        k = cand_id(c)
         with self.lock:
-            if k in self.cache:
-                return dict(reach='ok' if self.cache[k]['reach_ok'] else 'fail', detail=self.cache[k])
-            if k not in self.busy:
-                self.busy.add(k)
-                threading.Thread(target=self._run, args=(k, dict(c)), daemon=True).start()
-        return dict(reach='pending')
+            if k in self.done:
+                r = self.done[k]
+                return dict(ik_state=r['ik_state'], local_clear_state=r['local_clear_state'], local_clear_min=r['local_clear_min'], checked_id=k, scope=r['scope'])
+            if self.pending is not None and self.pending[0] != k:
+                self.n_replaced += 1
+            self.pending = (k, dict(c))
+            self.ev.set()
+            last = self.last
+        out = dict(ik_state='pending', local_clear_state='pending')
+        if last is not None:
+            lk, lc = last
+            lr = self.done.get(lk) or {}
+            out.update(last_checked_id=lk, last_checked_target=[lc['center'][0], lc['center'][1], lc['z_grasp']],
+                       last_ik_state=lr.get('ik_state', 'n/a'), last_local_clear_state=lr.get('local_clear_state', 'n/a'), last_local_clear_min=lr.get('local_clear_min'),
+                       delta_mm=round(float(math.hypot(c['center'][0] - lc['center'][0], c['center'][1] - lc['center'][1], c['z_grasp'] - lc['z_grasp']) * 1e3), 3))
+        return out
 
-    def _run(self, k, c):
-        try:
-            r = reach_check(c, self.q_seed)
-        except Exception as e:                                    # noqa: BLE001
-            r = dict(reach_ok=False, error=repr(e))
-        with self.lock:
-            self.cache[k] = r
-            self.busy.discard(k)
+    def _loop(self):
+        while self.alive:
+            if not self.ev.wait(0.2):
+                continue
+            with self.lock:
+                item, self.pending = self.pending, None
+                self.ev.clear()
+            if item is None:
+                continue
+            k, c = item
+            try:
+                r = reach_check(c, self.q_seed)
+            except Exception as e:                                # noqa: BLE001
+                r = dict(ik_state='fail', local_clear_state='n/a', local_clear_min=None, error=repr(e), scope='error')
+            with self.lock:
+                self.done[k] = r
+                self.last = (k, c)
+                self.n_run += 1
+                while len(self.done) > 64:                        # 有界：只留最近 64 個版本的結果
+                    del self.done[next(iter(self.done))]
+
+    def stop(self):
+        self.alive = False

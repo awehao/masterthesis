@@ -2,7 +2,8 @@
 """任務端候選的離線核對（只讀紀錄；Codex 20261101_234651）：把八趟採集（固定六趟＋自適應兩趟）的手腕旁路輸出依收到時刻依序餵給 CandidateTracker，
 每收到一列就在該時刻評估一次（非同步：評估本身不等可達檢查）。報：
   各類候選 ready 的列比例與原因分布、t_obs 後第一次 ready 的時刻；ready 候選對真值的誤差（中心、支撐、瓶頂、抓持帶高度；known_type 的瓶頂與抓持帶來自先驗，另標）；
-  可達與淨空：每個不同候選（ReachWorker 的鍵）同步算一次 reach_check（離線方便統計；線上由 ReachWorker 背景執行）；evaluate() 耗時。真值只用於評估，不回填。
+  ik_state／local_clear_state：每類取第一個與最後一個 ready 版本同步各算一次 reach_check（離線統計；線上由 ReachWorker 背景算最新版本）；evaluate() 耗時。真值只用於評估，不回填。
+  ik＝假設底盤位置下的抓持終點 IK；local_clear＝瓶心 0.10 m 內的局部點檢查值；都不是抓取成功、不含底盤可達與路徑碰撞。
     python3 evaluation/bottle_seg3d_candidates_eval.py
 """
 import json
@@ -57,7 +58,7 @@ def one(run, q_seed):
             tru_ = tru.get(round(c.get('t_last', -1.0), 3))
             tl[k].append(dict(t=d['t_recv'], status=c['status'], why=c['why'], c=c, truth=tru_))
             if c['status'] == 'ready':
-                cands.setdefault(CT.ReachWorker.key(c), c)
+                cands.setdefault(k, []).append(c)
     out = dict(run=run, layout=rep['layout'], t_obs=t_obs, eval_ms=stats(ms), kinds={})
     for k, T in tl.items():
         R = [x for x in T if x['status'] == 'ready' and x['truth'] is not None]
@@ -72,9 +73,10 @@ def one(run, q_seed):
                                grasp_z_err_mm=stats([abs(x['c']['z_grasp'] - x['truth'][2] - 0.10) * 1e3 for x in R]),
                                priors=R[0]['c']['priors'] if R else None)
     reach = {}
-    for key, c in cands.items():
-        r = CT.reach_check(c, q_seed)
-        reach[str(key)] = dict(reach_ok=r['reach_ok'], per_base=[(x['dx'], x['ik'], None if x['clear'] is None else round(x['clear'], 3)) for x in r['per_base']])
+    for kind, L_ in cands.items():                                  # 每類取第一個與最後一個 ready 版本各檢查一次（離線統計；線上由 ReachWorker 背景算最新版本）
+        for tag, c in (('first', L_[0]), ('last', L_[-1])):
+            r = CT.reach_check(c, q_seed)
+            reach[f'{kind}_{tag}'] = dict(id=CT.cand_id(c), ik_state=r['ik_state'], local_clear_state=r['local_clear_state'], local_clear_min=r['local_clear_min'])
     out['reach'] = reach
     return out
 
@@ -87,8 +89,7 @@ def main():
         print(f"== {r} 桌高 {o['layout']['table_z']} 瓶 {o['layout']['bottle']}；evaluate {o['eval_ms']}")
         for k, v in o['kinds'].items():
             print(f"   {k:10s} ready {v['n_ready']}/{v['n_eval']} 首次 {v['first_ready'] and round(v['first_ready'], 2)} 未就緒 {v['not_ready_why']}｜xy {v['xy_err_mm']} 支撐 {v['support_err_mm']} 瓶頂 {v['top_err_mm']} 抓持帶 {v['grasp_z_err_mm']}")
-        ok = sum(1 for x in o['reach'].values() if x['reach_ok'])
-        print(f"   可達：不同候選 {len(o['reach'])}、可達 {ok}；例 {list(o['reach'].values())[:1]}")
+        print('   ' + '；'.join(f"{k}：IK {v['ik_state']}、局部 {v['local_clear_state']} {None if v['local_clear_min'] is None else round(v['local_clear_min'], 3)} m" for k, v in o['reach'].items()))
     return 0
 
 
