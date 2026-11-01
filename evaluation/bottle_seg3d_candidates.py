@@ -189,3 +189,77 @@ class ReachWorker:
 
     def stop(self):
         self.alive = False
+
+
+SNAP_TOL, SNAP_MAX_AGE = 0.002, 3.0
+
+
+class SnapshotChecker:
+    """不可變快照的檢查（Codex 20261102_002139 第 1 項）：同一類候選 ready 時建立快照（序號、來源列戳、精確目標），交給單一背景工作者；
+    檢查完成時呼叫 on_done(快照, 結果) 主動發布，不等下一張影像。快照在檢查中不被取代；只有目前觀測偏離快照 > SNAP_TOL（中心或支撐）
+    或快照（以最新來源列計）超過 SNAP_MAX_AGE 時，才在下一個 ready 候選建立新快照。使用端採用時仍須自行核對快照年齡與目前觀測是否一致。"""
+
+    def __init__(self, q_seed, on_done=None):
+        self.q_seed, self.on_done = np.asarray(q_seed, float), on_done
+        self.lock, self.ev = threading.Lock(), threading.Event()
+        self.snap, self.seq, self.queue = {}, 0, {}                 # 待算槽每類一格（兩類同拍建快照時不互相覆蓋）
+        self.n_run, self.alive = 0, True
+        self.th = threading.Thread(target=self._loop, daemon=True)
+        self.th.start()
+
+    @staticmethod
+    def deviation(c, s):
+        return max(math.hypot(c['center'][0] - s['center'][0], c['center'][1] - s['center'][1]), abs(c['z_support'] - s['z_support']))
+
+    def update(self, c, t_now):
+        """c：目前評估的候選（同類）。回傳此類目前快照的摘要（含與目前觀測的偏差、是否一致、年齡）。"""
+        kind = c['kind']
+        with self.lock:
+            s = self.snap.get(kind)
+            if c.get('status') == 'ready':
+                need = s is None or (s['result'] is not None and (self.deviation(c, s['cand']) > SNAP_TOL or t_now - s['cand']['t_last'] > SNAP_MAX_AGE))
+                if need:
+                    self.seq += 1
+                    s = dict(seq=self.seq, cand={k: (list(v) if isinstance(v, list) else v) for k, v in c.items()}, t_created=t_now, result=None, t_done=None)
+                    self.snap[kind] = s
+                    self.queue[kind] = s['seq']
+                    self.ev.set()
+            if s is None:
+                return dict(seq=0)
+            dev = self.deviation(c, s['cand']) if c.get('status') == 'ready' else None
+            r = s['result'] or {}
+            return dict(seq=s['seq'], t_first=s['cand']['t_first'], t_last=s['cand']['t_last'], n=s['cand']['n'], center=s['cand']['center'], z_support=s['cand']['z_support'],
+                        z_grasp=s['cand']['z_grasp'], ik_state=r.get('ik_state', 'pending'), local_clear_state=r.get('local_clear_state', 'pending'), local_clear_min=r.get('local_clear_min'),
+                        age_s=t_now - s['cand']['t_last'], deviation_mm=None if dev is None else dev * 1e3, consistent=None if dev is None else bool(dev <= SNAP_TOL), t_done=s['t_done'])
+
+    def _loop(self):
+        while self.alive:
+            if not self.ev.wait(0.2):
+                continue
+            with self.lock:
+                item = self.queue.popitem() if self.queue else None
+                if not self.queue:
+                    self.ev.clear()
+                s = None if item is None else self.snap.get(item[0])
+                if s is not None and s['seq'] != item[1]:
+                    s = None
+                cand = None if s is None else dict(s['cand'])
+            if s is None:
+                continue
+            try:
+                r = reach_check(cand, self.q_seed)
+            except Exception as e:                                # noqa: BLE001
+                r = dict(ik_state='fail', local_clear_state='n/a', local_clear_min=None, error=repr(e))
+            import time as _t
+            with self.lock:
+                s['result'], s['t_done'] = r, _t.perf_counter()
+                self.n_run += 1
+            if self.on_done is not None:
+                try:
+                    self.on_done(s, r)
+                except Exception:                                 # noqa: BLE001  回呼出錯不得讓工作者執行緒結束
+                    import traceback
+                    traceback.print_exc()
+
+    def stop(self):
+        self.alive = False

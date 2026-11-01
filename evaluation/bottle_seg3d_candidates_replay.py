@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """候選節點的既有訊息重播核對（Codex 20261102_001039；獨立 ROS 網域、無 Isaac）：把某趟紀錄的 /w1/bottle_seg3d 原始輸出列（含 layout 標籤）照收到時刻、1 倍速重發，
 同時發 /clock；收 /bottle/target_candidates，核對：欄位數＝layout 標籤、標籤含 frame=odom、t_eval 單調；每筆輸出的 ready 狀態與離線 CandidateTracker 在同一時刻的評估一致；
-ik／local 狀態最後收斂（ready 版本最終出現 ok／fail，不永遠 pending）；evaluate 耗時。
+快照：穩定時不換版、檢查完成主動發 /bottle/target_candidate_checks（含序號、來源戳、精確目標），ready 列的快照狀態最後為 ok／fail；evaluate 耗時。
     source /opt/ros/jazzy/setup.bash; ROS_DOMAIN_ID=91 .venv-dl0/bin/python evaluation/bottle_seg3d_candidates_replay.py --run seg3d_ad_z045_p1b --out OUT.json
 """
 import argparse
@@ -49,13 +49,18 @@ def main():
     pub_n, rec_n = Node('cand_replay_pub'), Node('cand_replay_rec')
     pc = pub_n.create_publisher(Clock, '/clock', 10)
     ps = pub_n.create_publisher(Float64MultiArray, '/w1/bottle_seg3d', 50)
-    got, lab = [], {}
+    got, lab, chk = [], {}, []
 
     def cb(m):
         if m.layout.dim:
             lab['l'] = m.layout.dim[0].label
         got.append(list(m.data))
+
+    def cb_chk(m):
+        lab['c'] = m.layout.dim[0].label if m.layout.dim else ''
+        chk.append(list(m.data))
     rec_n.create_subscription(Float64MultiArray, '/bottle/target_candidates', cb, 500)
+    rec_n.create_subscription(Float64MultiArray, '/bottle/target_candidate_checks', cb_chk, 100)
     ex = SingleThreadedExecutor()
     ex.add_node(rec_n)
     threading.Thread(target=ex.spin, daemon=True).start()
@@ -98,18 +103,18 @@ def main():
             continue
         n_cmp += 1
         match += int(bool(o['c_ready']) == (e['complete']['status'] == 'ready') and bool(o['k_ready']) == (e['known_type']['status'] == 'ready'))
-    ready = [o for o in out if o['c_ready'] > 0.5 or o['k_ready'] > 0.5]
-    final_states = [(o['c_ik'], o['c_local'], o['k_ik'], o['k_local']) for o in ready[-3:]]
-    res = dict(run=a.run, n_sent=len(rows), n_out=len(out), label_ok=('frame=odom' in L and len(cf) > 0 and all(len(g) == len(cf) for g in got)), label=L[:80],
+    ready = [o for o in out if o['k_ready'] > 0.5]
+    cfs = lab.get('c', '').split('fields=')[1].split(',') if 'fields=' in lab.get('c', '') else []
+    checks = [dict(zip(cfs, g)) for g in chk if len(g) == len(cfs)]
+    k_seqs = sorted({int(o['k_snap_seq']) for o in ready})
+    res = dict(run=a.run, n_sent=len(rows), n_out=len(out), label_ok=('frame=odom' in L and len(cf) > 0 and all(len(g) == len(cf) for g in got)), label=L[:90],
                monotonic=all(b['t_eval'] >= a_['t_eval'] for a_, b in zip(out, out[1:])), ready_match=f'{match}/{n_cmp}',
-               ever_ok=dict(c_ik=any(o['c_ik'] == 2 for o in out), c_local=any(o['c_local'] == 2 for o in out), k_ik=any(o['k_ik'] == 2 for o in out), k_local=any(o['k_local'] == 2 for o in out)),
-               pending_frac_ready=round(float(np.mean([o['k_ik'] == 1 for o in ready])), 2) if ready else None, last_ready_states=final_states,
-               last_checked=dict(k_last_ik_ok=round(float(np.mean([o['k_last_ik'] == 2 for o in ready])), 2) if ready else None,
-                                 k_last_local_ok=round(float(np.mean([o['k_last_local'] == 2 for o in ready])), 2) if ready else None,
-                                 k_last_local_min=stats_(o['k_last_local_min'] for o in ready)),
-               eval_ms=dict(median=round(float(np.median([o['eval_ms'] for o in out])), 3), max=round(float(np.max([o['eval_ms'] for o in out])), 3)) if out else None,
-               n_reach_run=out[-1]['n_reach_run'] if out else None, n_reach_replaced=out[-1]['n_reach_replaced'] if out else None,
-               delta_mm=dict(median=round(float(np.nanmedian([o['k_delta_mm'] for o in ready])), 3), max=round(float(np.nanmax([o['k_delta_mm'] for o in ready])), 3)) if ready else None)
+               n_checks=len(checks), check_label_ok='frame=odom' in lab.get('c', ''), k_snapshots=k_seqs,
+               checks=[dict(kind=int(c['kind']), seq=int(c['seq']), ik=int(c['ik']), local=int(c['local']), local_min=round(c['local_min'], 4), t_last=round(c['t_last'], 3),
+                            published_after_s=round(c['t_publish'] - c['t_last'], 3)) for c in checks],
+               k_ready_rows=len(ready), k_ready_with_snap_ok=sum(1 for o in ready if int(o['k_snap_ik']) == 2),
+               k_snap_dev_mm=dict(median=round(float(np.nanmedian([o['k_snap_dev_mm'] for o in ready])), 3), max=round(float(np.nanmax([o['k_snap_dev_mm'] for o in ready])), 3)) if ready else None,
+               eval_ms=dict(median=round(float(np.median([o['eval_ms'] for o in out])), 3), max=round(float(np.max([o['eval_ms'] for o in out])), 3)) if out else None)
     json.dump(dict(summary=res, out=out), open(a.out, 'w'), ensure_ascii=False, indent=1, default=float)
     print(json.dumps(res, ensure_ascii=False, indent=1, default=float))
     rclpy.shutdown()

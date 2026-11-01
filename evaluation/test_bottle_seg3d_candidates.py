@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """任務端候選的最小核對（Codex 20261101_234651 第 2 項）：
-1 非同步：ReachWorker.query 第一次立即回 pending（< 5 ms），背景完成後同版本回 ok／fail 並附檢查版本；\n4 同格不同目標不沿用結果；5 連發下單一工作者、待算槽只留最新、被取代版本不成為目前結果；
+1 非同步：ReachWorker.query 第一次立即回 pending（< 5 ms），背景完成後同版本回 ok／fail 並附檢查版本；\n4 同格不同目標不沿用結果；5 連發下單一工作者、待算槽只留最新、被取代版本不成為目前結果；\n6 不可變快照：穩定候選不換版、完成主動回呼、檢查中不被取代、偏差 > 2 mm 才換；
 2 not_ready：列不足 ⇒ rows；最新列逾 0.5 s ⇒ stale；跨幀中心跳 1 cm ⇒ inconsistent；沒有完整列 ⇒ complete unobservable 但 known_type 仍可 ready；
 3 拒收：缺年齡、負年齡、逾期、重複／倒退戳的列不進追蹤器。
     python3 evaluation/test_bottle_seg3d_candidates.py
@@ -88,6 +88,37 @@ def main():
         and w.query(vers[-1])['ik_state'] in ('ok', 'fail'), (n_th0, n_th, n_new))
     chk('5 被取代的中間版本不會變成目前結果（查詢回 pending）', mid['ik_state'] == 'pending' and CT.cand_id(vers[10]) not in w.done, mid)
     w.stop()
+    # 6 不可變快照（Codex 002139）：穩定候選只建一個快照、完成後主動回呼、檢查中不被取代、小偏差不換版、偏差 > 2 mm（完成後）才建新快照
+    done = []
+    sc = CT.SnapshotChecker(q_seed, on_done=lambda s_, r_: done.append((s_['seq'], r_['ik_state'])))
+    base_c = dict(c)
+    seqs = []
+    for i in range(10):                                            # 每 0.2 s 一個新版本，中心抖 0.1 mm
+        ci = dict(base_c, center=[base_c['center'][0] + 0.0001 * (i % 2), base_c['center'][1]], t_last=base_c['t_last'] + 0.2 * i)
+        seqs.append(sc.update(ci, ci['t_last'] + 0.05)['seq'])
+    for _ in range(300):
+        time.sleep(0.02)
+        if done:
+            break
+    chk('6 穩定候選只建 1 個快照（10 個版本、抖 0.1 mm）、完成後主動回呼一次', set(seqs) == {1} and len(done) == 1 and done[0][0] == 1, (seqs, done))
+    far = dict(base_c, center=[base_c['center'][0] + 0.005, base_c['center'][1]], t_last=base_c['t_last'] + 2.2)
+    s2 = sc.update(far, far['t_last'] + 0.05)
+    chk('6 偏差 5 mm（前一快照已完成）⇒ 建新快照 seq 2', s2['seq'] == 2, s2)
+    near = dict(far, center=[far['center'][0] + 0.004, far['center'][1]], t_last=far['t_last'] + 0.2)
+    s3 = sc.update(near, near['t_last'] + 0.05)
+    chk('6 新快照檢查中（未完成）⇒ 不被取代，回報偏差與不一致', s3['seq'] == 2 and s3['consistent'] is False and abs(s3['deviation_mm'] - 4.0) < 0.01, s3)
+    sc.stop()
+    # 7 兩類同拍建快照 ⇒ 兩個都被檢查並各自回呼
+    done2 = []
+    sc2 = CT.SnapshotChecker(q_seed, on_done=lambda s_, r_: done2.append(s_['cand']['kind']))
+    sc2.update(dict(base_c, kind='complete'), base_c['t_last'] + 0.05)
+    sc2.update(dict(base_c, kind='known_type'), base_c['t_last'] + 0.05)
+    for _ in range(400):
+        time.sleep(0.02)
+        if len(done2) >= 2:
+            break
+    chk('7 兩類同拍建快照 ⇒ 兩個都檢查並回呼', sorted(done2) == ['complete', 'known_type'], done2)
+    sc2.stop()
     print(f'\n{"全過" if not BAD else "未過 " + str(len(BAD))}')
     return 1 if BAD else 0
 
