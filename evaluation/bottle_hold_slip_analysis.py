@@ -21,7 +21,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
 import bottle_s1_geom as G                              # noqa: E402
 
-RUNS = ('bottle_w1_vhigh_z060_p1_1', 'bottle_w1_segtarget_nominal1', 'bottle_w1_compact3_nominal1')
+RUNS = ('bottle_w1_vhigh_hold_z060_p1_1', 'bottle_w1_vhigh_z060_p1_1', 'bottle_w1_segtarget_nominal1', 'bottle_w1_compact3_nominal1')
 ASSET = os.path.join(os.path.dirname(HERE), 'src', 'my_omnibot_description', 'config', 'bottle_s0.yaml')
 
 
@@ -58,7 +58,12 @@ def one(run):
     st = r.get('stop') or {}
     se = r.get('stop_effect') or {}
     t_end = float(t[-1])
-    bounds = [('抓持→抬升完成', tg, ev.get('CARRY', t_end)), ('持瓶行進', ev.get('P_CARRY_NAV', t_end), ev.get('P_PLACE_APPROACH', t_end)),
+    hx = {e['what']: e['t'] for e in r['events'] if e['what'] in ('hold_settle_start', 'hold_start', 'hold_end')}
+    bounds = [('抓持→抬升完成', tg, ev.get('CARRY', t_end))]
+    if 'hold_start' in hx:
+        bounds += [('懸持前穩定過渡', ev.get('CARRY', t_end), hx['hold_start']), ('靜態懸持', hx['hold_start'], hx.get('hold_end', t_end)),
+                   ('懸持後到持瓶行進', hx.get('hold_end', t_end), ev.get('P_CARRY_NAV', t_end))]
+    bounds += [('持瓶行進', ev.get('P_CARRY_NAV', t_end), ev.get('P_PLACE_APPROACH', t_end)),
               ('放置接近', ev.get('P_PLACE_APPROACH', t_end), ev.get('P_LOWER', t_end)), ('下降', ev.get('P_LOWER', t_end), min(ev.get('P_RELEASE', t_end), st.get('t', t_end)))]
     if st.get('t') is not None:
         t_se = float(se.get('t', st['t'] + 2.0))
