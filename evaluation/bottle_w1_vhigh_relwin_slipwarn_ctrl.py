@@ -14,6 +14,8 @@ import bottle_place_ctrl as PC
 import bottle_s0_logic as L
 import bottle_w1_vhigh_relwin_ctrl as RW
 
+C3, C2 = RW.C3, RW.C2                                       # 腳本以模組屬性改第一桌閘（同父模組）
+
 
 class SlipWarnJudge(PC.PlaceJudge):
     """平移超標＝警告；轉角超標照停。T_rel 對外為當下量測，評分用 T_rel_base。"""

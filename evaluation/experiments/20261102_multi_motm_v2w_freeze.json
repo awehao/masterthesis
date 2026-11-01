@@ -15,7 +15,7 @@
   "結果碼 6（dynsr24 與 run_bottle_ros.sh 說明）"
  ],
  "sha256": {
-  "evaluation/bottle_w1_vhigh_relwin_slipwarn_ctrl.py": "88ccf2115ffdf296cbf7caf07d70fa3c5b4bd38a5f01d1ebb62aa40b530fae62",
+  "evaluation/bottle_w1_vhigh_relwin_slipwarn_ctrl.py": "7bbaac4142ee21f895997102740d22be0fda5279d876ee7ff7b5bafd778310f0",
   "evaluation/isaac_bottle_w1dynsr24.py": "bd769f3e88a4bfd14778a4280ad203443dd240cf1b170e9cfdce34374817e215",
   "evaluation/bottle_w1_vhigh_relwin_ctrl.py": "8029bc3926d5e1b90aef1a534dca387eb23b6a43cbb4ac7d566918eb14717537",
   "evaluation/run_bottle_ros.sh": "6c5d4a9b2e968f31319ef08bca3d8341c15a79a2c8d448d124c5dfd6bab8b2e0",
@@ -35,6 +35,17 @@
   "contact": "forbidden_contact:bottle_env 照停",
   "criterion_correction": "第一版 trans 判準 slip_max ≥ 9.9 mm 與 trans_ang 轉角排在鬆爪後屬測試設計錯誤，已更正後重跑；控制器未改"
  },
- "physical_order": ["A4", "B2", "C1", "C2"],
- "c1_c2_precondition": "Codex 053914 第 2 項：先補封存動態軌跡的離線核對"
+ "physical_order": [
+  "A4",
+  "B2",
+  "C1",
+  "C2"
+ ],
+ "c1_c2_precondition": "Codex 053914 第 2 項：先補封存動態軌跡的離線核對",
+ "refreeze": {
+  "t_local": "2026-11-02 06:12",
+  "why": "bottle_motm_multi_a4_1 起跑前腳本例外：dynsr24 讀控制器模組屬性 C2，警告版模組未轉出（AttributeError，機器人未動、無任務嘗試）；只補一行 C3, C2 = RW.C3, RW.C2，控制邏輯未改；真 ROS 匯入冒煙測試通過後重凍結",
+  "old_controller_sha": "88ccf2115ffdf296cbf7caf07d70fa3c5b4bd38a5f01d1ebb62aa40b530fae62",
+  "a4_1": "保留為起跑前腳本失敗（我的錯），照 093638 前例以新 RUN_ID 原配置重試一次"
+ }
 }
