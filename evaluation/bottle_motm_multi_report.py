@@ -93,15 +93,21 @@ def one(run):
     x, y = c['base_x'], c['base_y']
     sp = np.convolve(np.hypot(np.gradient(x, t), np.gradient(y, t)), np.ones(5) / 5, mode='same')
     ti, tok = ph.get('INSERT'), r.get('t_lift_ok')
-    grip = None
-    if ti is not None and tok is not None:
-        mk = (t >= ti) & (t <= tok)
+    def speed_seg(ta, tb):
+        if ta is None or tb is None or tb <= ta:
+            return None
+        mk = (t >= ta) & (t <= tb)
         ii = np.flatnonzero(mk)
-        grip = dict(t_insert=ti, t_close=r['t_close'], t_grasp=r['t_grasp'], t_lift_start=r['t_lift_start'], t_lift_ok=tok, dur_s=round(tok - ti, 3),
-                    v_meas=dict(min=round(float(sp[mk].min()), 4), mean=round(float(sp[mk].mean()), 4), max=round(float(sp[mk].max()), 4)),
-                    v_cmd=dict(min=round(float(np.hypot(c['base_cmd_vx'][mk], c['base_cmd_vy'][mk]).min()), 4), max=round(float(np.hypot(c['base_cmd_vx'][mk], c['base_cmd_vy'][mk]).max()), 4)),
+        vc = np.hypot(c['base_cmd_vx'][mk], c['base_cmd_vy'][mk])
+        return dict(t=[ta, tb], dur_s=round(tb - ta, 3), v_meas=dict(min=round(float(sp[mk].min()), 4), mean=round(float(sp[mk].mean()), 4), max=round(float(sp[mk].max()), 4)),
+                    v_cmd=dict(min=round(float(vc.min()), 4), max=round(float(vc.max()), 4)),
                     near_stop_segments=runs_below(t[mk], sp[mk], M.NEAR_STOP), near_stop_total_s=round(float((sp[mk] < M.NEAR_STOP).sum()) * DT, 2),
                     disp_net_m=round(float(math.hypot(x[ii[-1]] - x[ii[0]], y[ii[-1]] - y[ii[0]])), 4), disp_path_m=round(float(np.hypot(np.diff(x[ii]), np.diff(y[ii])).sum()), 4))
+    grip = None
+    if ti is not None and tok is not None:
+        grip = dict(t_insert=ti, t_close=r['t_close'], t_grasp=r['t_grasp'], t_lift_start=r['t_lift_start'], t_lift_ok=tok, t_carry=ph.get('CARRY'),
+                    insert_to_grasp=speed_seg(ti, r['t_grasp']), lift_to_carry=speed_seg(r['t_lift_start'], ph.get('CARRY')), insert_to_liftoff=speed_seg(ti, tok),
+                    note='抓取速度看 insert_to_grasp；lift_to_carry 含抬升後的加速，不算抓取速度')
     # 4 三段結果
     jd = r.get('success_s0_judge') or {}
     pl = r.get('place') or {}
@@ -116,6 +122,28 @@ def one(run):
                 max_whole_run_mm_deg=r['slip_max_mm_deg'], note='全程最大值含停止尾段（判定器 slip_max）；觸發值取判定器停止原因字串')
     safety = dict(forbidden_peak_n=e['forb_peak_n'], forbidden_nodata=e['forb_nodata'], pen_max_mm=r.get('pen_max_mm'), stop_effect_ok=(r.get('stop_effect') or {}).get('ok'),
                   stop_effect=r.get('stop_effect'), clear_bottle_mm=e['clear_bottle_mm'], shield=e['shield'])
+    # 停止尾段：物件保持與接觸（自算：逐步欄 FK 的 TCP→瓶相對平移，對 t_grasp；與判定器 slip 定義可能不同，另標）
+    tail = None
+    if stop.get('t') is not None and r['t_grasp'] is not None:
+        q9a = np.column_stack([x, y, c['base_yaw']] + [c[f'q{j}'] for j in range(1, 7)])
+        Pb = np.column_stack([c['bottle_base_x'], c['bottle_base_y'], c['bottle_base_z']])
+
+        def rel(k):
+            Tt = G.C.K.fk(q9a[k], 'link_tcp')
+            return Tt[:3, :3].T @ (Pb[k] - Tt[:3, 3])
+        kg, ks = int(np.argmin(np.abs(t - r['t_grasp']))), int(np.argmin(np.abs(t - stop['t'])))
+        kt = np.arange(ks, len(t))
+        r0 = rel(kg)
+        dr = np.array([np.linalg.norm(rel(k) - r0) for k in kt[::5]]) * 1e3
+        fk_ = [k for k in c if k.startswith('forb_')]
+        tail = dict(t_stop=stop['t'], t_end=round(float(t[-1]), 2), dur_s=round(float(t[-1] - stop['t']), 2),
+                    rel_shift_mm=dict(at_stop=round(float(dr[0]), 2), end=round(float(dr[-1]), 2), max=round(float(dr.max()), 2), note='自算 FK（瓶底中心，TCP 座標，對 t_grasp），非判定器 slip'),
+                    bottle_z=dict(at_stop=round(float(Pb[ks, 2]), 4), end=round(float(Pb[-1, 2]), 4), min=round(float(Pb[kt, 2].min()), 4)),
+                    finger_force_n=dict(f1_min=round(float(np.nanmin(c['f_finger1_bottle'][kt])), 3), f2_min=round(float(np.nanmin(c['f_finger2_bottle'][kt])), 3),
+                                        f1_end=round(float(c['f_finger1_bottle'][-1]), 3), f2_end=round(float(c['f_finger2_bottle'][-1]), 3)),
+                    bottle_table_force_max_n=round(float(np.nanmax(c['f_bottle_table'][kt])), 3),
+                    forbidden_tail_peak_n=round(float(max(np.nanmax(c[k][kt]) for k in fk_)), 4) if fk_ else None,
+                    held=bool(float(np.nanmin(c['f_finger1_bottle'][kt])) > 0 and float(np.nanmin(c['f_finger2_bottle'][kt])) > 0 and float(Pb[-1, 2]) > float(Pb[ks, 2]) - 0.01))
     # 5 0.10 s 加速度
     mk = t <= t_end
     q = np.column_stack([c[f'q{j}'] for j in range(1, 7)])
@@ -128,7 +156,7 @@ def one(run):
                base_peak=round(float(a_base.max()), 3), base_peak_t=round(float(tt[int(np.argmax(a_base))]), 2), base_p95=round(float(np.percentile(a_base, 95)), 3))
     timing = dict(solve_ms=e['ms'], world_step_ms=e['world_ms'], ros=(r.get('nav_chain') or {}).get('ros'), note='牆鐘時序；模擬非實時，不是實時保證')
     out = dict(run=run, case=(r.get('readback') or {}).get('perturb'), table1_z=r.get('table1_z'), t_done=e['t_done'], acquisition=acq, relwin=rw, insert_to_liftoff=grip,
-               segments=seg, slip=slip, safety=safety, acc_0p10s=acc, v_peak_run=round(e['v_peak'], 4), timing=timing)
+               segments=seg, slip=slip, safety=safety, post_stop=tail, acc_0p10s=acc, v_peak_run=round(e['v_peak'], 4), timing=timing)
     os.makedirs(OUT, exist_ok=True)
     json.dump(out, open(os.path.join(OUT, f'{run}.json'), 'w'), ensure_ascii=False, indent=1, default=float)
     return out
@@ -137,7 +165,7 @@ def one(run):
 def main():
     for run in sys.argv[1:]:
         o = one(run)
-        print(json.dumps({k: o[k] for k in ('run', 'case', 't_done', 'segments', 'slip', 'insert_to_liftoff', 'acc_0p10s')}, ensure_ascii=False, default=float))
+        print(json.dumps({k: o[k] for k in ('run', 'case', 't_done', 'segments', 'slip', 'insert_to_liftoff', 'post_stop', 'acc_0p10s')}, ensure_ascii=False, default=float))
         print(json.dumps(dict(acq=o['acquisition'], relwin={k: o['relwin'].get(k) for k in ('dx', 't', 'x_now')}), ensure_ascii=False, default=float))
     return 0
 
