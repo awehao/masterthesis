@@ -66,11 +66,10 @@ import bottle_ref as BRF                                             # noqa: E40
 import bottle_s0_ctrl as C                                           # noqa: E402
 import bottle_s0b_ctrl as SB                                         # noqa: E402
 import bottle_s1_geom as G                                           # noqa: E402
-import bottle_seg3d_view_policy as VP                                # noqa: E402
+import bottle_seg3d_adapt_sm as ASM                                  # noqa: E402
 
 ROBOT = '/World/omni_bot'
 ARM = [f'joint{i}' for i in range(1, 7)]
-PHASES = ('approach', 'move', 'observe', 'return', 'end')
 CLEAR_ABORT, BOTTLE_MOVE_ABORT = 0.02, 0.005
 
 
@@ -238,9 +237,8 @@ def main():
         base_world(np.zeros(3))
         world.step(render=True)
     Tb0 = bottle_T()
-    # 時程（有界自適應觀察）
+    # 時程（有界自適應觀察；狀態機與決策紀錄在 bottle_seg3d_adapt_sm，腳本只負責接近段與下指令）
     LIB = json.load(open(a.library))
-    VQ = {k: np.array(v['q'], float) for k, v in LIB['views'].items()}
     q_ready = np.array(D['q_ready'], float)
     T_tr = float(D['transition']['T_tr'])
     T_tk = math.ceil(1.875 * float(np.abs(q_ready - q_tuck).max()) / SB.W_ARM['v_arm'] / 0.05) * 0.05
@@ -251,12 +249,9 @@ def main():
         if tr is None or not tr['ok']:
             raise RuntimeError(f'視點庫沒有核可的過渡 {x}→{y}')
         return float(tr['T'])
-    state, seg_, chain_ = 'approach', None, []
-    view, view_next, tried, trace, final = None, None, [], [], None
-    t_arrive, abort, min_clear, n_step, t_done = None, None, 9.9, 0, None
-    t0w = float(world.current_time)
+    sm = ASM.AdaptiveSM(q_ready, q_tuck, {k: v['q'] for k, v in LIB['views'].items()}, T_tr, T_tk, T_between, t_obs, a.obs_timeout, os.path.join(a.out, 'decisions.jsonl'))
+    st_ = dict(abort=None, min_clear=9.9, n_step=0, t0w=float(world.current_time), w0=time.perf_counter())
     log = []
-    w0 = time.perf_counter()
 
     def w1_rows():
         lb = label.get('w1', '')
@@ -267,98 +262,80 @@ def main():
                 continue
             d_ = dict(zip(fs, r[1:]))
             d_['recv_age_s'] = r[0] - d_['stamp']
-            d_['stamp'] = d_['stamp'] - t0w                               # 擷取戳換成任務時刻
+            d_['stamp'] = d_['stamp'] - st_['t0w']                         # 擷取戳換成任務時刻
             out_.append(d_)
         return out_
-    while True:
-        t = float(world.current_time) - t0w
-        q, p, qt = q9()
-        if abort is None:
-            if state == 'approach':
-                k = min(int(np.searchsorted(R_t, t)), len(R_t) - 1)
-                pr, vr = R_b[k], R_v[k]
-                e = pr - q[:3]
-                e[2] = (e[2] + math.pi) % (2 * math.pi) - math.pi
-                base_world(vr + 2.0 * e)
-                apply(R_s[k])
-                if t >= t_obs:
-                    state, seg_, view_next = 'move', dict(t0=t, T=T_tr, qa=q_ready, qb=VQ['V0']), 'V0'
+
+    def loop():
+        while True:
+            t = float(world.current_time) - st_['t0w']
+            q, p, qt = q9()
+            if st_['abort'] is None:
+                q_cmd = sm.step(t, w1_rows)
+                if q_cmd is None:                                          # 接近段：照紀錄
+                    k = min(int(np.searchsorted(R_t, t)), len(R_t) - 1)
+                    e = R_b[k] - q[:3]
+                    e[2] = (e[2] + math.pi) % (2 * math.pi) - math.pi
+                    base_world(R_v[k] + 2.0 * e)
+                    apply(R_s[k])
+                else:
+                    base_world(np.zeros(3))
+                    apply(q_cmd)
             else:
                 base_world(np.zeros(3))
-            if state == 'move':
-                s_ = BRF.min_jerk(min((t - seg_['t0']) / seg_['T'], 1.0))
-                apply(seg_['qa'] + (seg_['qb'] - seg_['qa']) * s_)
-                if t >= seg_['t0'] + seg_['T']:
-                    state, view, t_arrive = 'observe', view_next, t
-                    tried.append(view)
-            elif state == 'observe':
-                apply(VQ[view])
-                fr = VP.fresh(w1_rows(), t_arrive, t)
-                as_ = VP.assess(fr, t)
-                if as_.get('enough') or t - t_arrive >= a.obs_timeout:
-                    if not as_.get('enough'):
-                        as_ = dict(enough=True, n=as_['n'], complete=False, deficits=['no_target'], known_type_candidate=False, frac=None)
-                    dec, arg = VP.next_view(tried, as_)          # 不可用 act：act 是 apply() 的關節索引
-                    trace.append(dict(view=view, t_arrive=t_arrive, t_decide=t, n=as_['n'], complete=as_['complete'], deficits=as_['deficits'], known_type_candidate=as_['known_type_candidate'],
-                                      frac=as_.get('frac'), action=dec, arg=arg))
-                    print(f'[col] 視點 {view}：{trace[-1]}', flush=True)
-                    if dec == 'move':
-                        state, seg_, view_next = 'move', dict(t0=t, T=T_between(view, arg), qa=VQ[view], qb=VQ[arg]), arg
-                    else:
-                        final = dict(action=dec, deficits=arg, view=view)
-                        chain_ = ([dict(T=T_between(view, 'V0'), qa=VQ[view], qb=VQ['V0'])] if view != 'V0' else []) + [dict(T=T_tr, qa=VQ['V0'], qb=q_ready), dict(T=T_tk, qa=q_ready, qb=q_tuck)]
-                        state, seg_ = 'return', dict(chain_.pop(0), t0=t)
-            elif state == 'return':
-                s_ = BRF.min_jerk(min((t - seg_['t0']) / seg_['T'], 1.0))
-                apply(seg_['qa'] + (seg_['qb'] - seg_['qa']) * s_)
-                if t >= seg_['t0'] + seg_['T']:
-                    if chain_:
-                        seg_ = dict(chain_.pop(0), t0=t)
-                    else:
-                        state, t_done = 'end', t
-            elif state == 'end':
-                apply(q_tuck)
-        else:
-            base_world(np.zeros(3))
-        Tb = bottle_T()
-        node.publish_state(float(world.current_time), p, qt, q[3:])
-        node_t[0] = float(world.current_time)
-        for cap in (v1, w1):
-            cap.record_step(float(world.current_time), float(world.current_time), t, q, Tb, PHASES.index(state))
-            if state == 'observe':
-                cap.t_sparse = -1e9                                   # 觀察段：每個新影格都存檔
-            cap.poll()
-        node.drain()
-        if n_step % 10 == 0:
-            P = np.vstack(list(G.link_world(q, C.FINGER_OPEN).values()))
-            d = min(float(G.box_dist(P, c_, s_).min()) for _, c_, s_ in G.table_boxes(T1))
-            d = min(d, float(G.cyl_dist((np.linalg.inv(Tb0) @ np.c_[P, np.ones(len(P))].T).T[:, :3], 0.0, 0.0, 0.0, G.BOTTLE['h'], G.BOTTLE['r']).min()))
-            min_clear = min(min_clear, d)
-            mv = float(np.linalg.norm(Tb[:3, 3] - Tb0[:3, 3]))
-            log.append((t, PHASES.index(state), (['V0', 'V_LOW', 'V_HIGH'].index(view) if view else -1), d, mv, *q))
-            if abort is None and (d < CLEAR_ABORT or mv > BOTTLE_MOVE_ABORT):
-                abort = dict(t=t, phase=state, view=view, clear=d, bottle_move=mv)
-                print(f'[col] 中止 {abort}', flush=True)
-                apply(q[3:])
-        n_step += 1
-        world.step(render=True)
-        if (t_done is not None and t >= t_done + 1.0) or (abort is not None and t >= abort['t'] + 2.0) or t > t_obs + 60.0:
-            break
-    sched = trace
-    rep = dict(layout=dict(table_z=TZ, bottle=[BX, BY]), design=a.design, design_q_look=D['q_look'], src_run=D['src_run'], t_obs=t_obs, T_tr=T_tr, T_tuck=T_tk,
-               library=a.library, trace=trace, final=final, views_tried=tried, t_done=t_done, abort=abort, min_clear_m=min_clear, bottle_move_m=float(np.linalg.norm(bottle_T()[:3, 3] - Tb0[:3, 3])), wall_s=time.perf_counter() - w0, n_step=n_step,
-               seg3d=dict(n={ns: len(v) for ns, v in seg.items()}, label=label))
-    rep['v1'] = v1.save(a.out)
-    rep['w1_cap'] = w1.save(a.out)
-    for ns, rows in seg.items():
-        np.savez_compressed(os.path.join(a.out, f'seg3d_{ns}.npz'), rows=np.array(rows, float) if rows else np.zeros((0, 1)), label=np.array(label.get(ns, '')))
-    np.savez_compressed(os.path.join(a.out, 'collect_log.npz'), rows=np.array(log, float), cols=np.array(['t', 'phase', 'view', 'clear', 'bottle_move', 'x', 'y', 'yaw'] + [f'q{j}' for j in range(1, 7)]))
-    json.dump(rep, open(os.path.join(a.out, 'collect_report.json'), 'w'), ensure_ascii=False, indent=1, default=float)
-    print(f"[col] 決策 {final}；視點 {tried}", flush=True)
-    print(f"[col] 結果 中止 {abort} 最小淨空 {min_clear:.3f} m 瓶位移 {rep['bottle_move_m'] * 1e3:.1f} mm seg3d {rep['seg3d']['n']} 影格 v1 {rep['v1'].get('n_frames') if isinstance(rep['v1'], dict) else rep['v1']} w1 {rep['w1_cap'].get('n_frames') if isinstance(rep['w1_cap'], dict) else rep['w1_cap']}", flush=True)
+            Tb = bottle_T()
+            node.publish_state(float(world.current_time), p, qt, q[3:])
+            node_t[0] = float(world.current_time)
+            for cap in (v1, w1):
+                cap.record_step(float(world.current_time), float(world.current_time), t, q, Tb, ASM.STATES.index(sm.state))
+                if sm.state == 'observe':
+                    cap.t_sparse = -1e9                                   # 觀察段：每個新影格都存檔
+                cap.poll()
+            node.drain()
+            if st_['n_step'] % 10 == 0:
+                P = np.vstack(list(G.link_world(q, C.FINGER_OPEN).values()))
+                d = min(float(G.box_dist(P, c_, s_).min()) for _, c_, s_ in G.table_boxes(T1))
+                d = min(d, float(G.cyl_dist((np.linalg.inv(Tb0) @ np.c_[P, np.ones(len(P))].T).T[:, :3], 0.0, 0.0, 0.0, G.BOTTLE['h'], G.BOTTLE['r']).min()))
+                st_['min_clear'] = min(st_['min_clear'], d)
+                mv = float(np.linalg.norm(Tb[:3, 3] - Tb0[:3, 3]))
+                log.append((t, ASM.STATES.index(sm.state), (['V0', 'V_LOW', 'V_HIGH'].index(sm.view) if sm.view else -1), d, mv, *q))
+                if st_['abort'] is None and (d < CLEAR_ABORT or mv > BOTTLE_MOVE_ABORT):
+                    st_['abort'] = dict(t=t, phase=sm.state, view=sm.view, clear=d, bottle_move=mv)
+                    print(f"[col] 中止 {st_['abort']}", flush=True)
+                    apply(q[3:])
+            st_['n_step'] += 1
+            world.step(render=True)
+            if (sm.t_done is not None and t >= sm.t_done + 1.0) or (st_['abort'] is not None and t >= st_['abort']['t'] + 2.0) or t > t_obs + 60.0:
+                return
+
+    def save_all(err=None):
+        """正常結束或例外時都呼叫；每一項各自 try，前一項失敗不擋後一項。"""
+        rep = dict(layout=dict(table_z=TZ, bottle=[BX, BY]), design=a.design, design_q_look=D['q_look'], src_run=D['src_run'], t_obs=t_obs, T_tr=T_tr, T_tuck=T_tk,
+                   library=a.library, trace=sm.trace, final=sm.final, views_tried=sm.tried, t_done=sm.t_done, abort=st_['abort'], min_clear_m=st_['min_clear'],
+                   wall_s=time.perf_counter() - st_['w0'], n_step=st_['n_step'], seg3d=dict(n={ns: len(v) for ns, v in seg.items()}, label=label), error=None if err is None else repr(err))
+        errs = []
+        for nm, fn in (('bottle_move', lambda: rep.update(bottle_move_m=float(np.linalg.norm(bottle_T()[:3, 3] - Tb0[:3, 3])))),
+                       ('seg3d', lambda: [np.savez_compressed(os.path.join(a.out, f'seg3d_{ns}.npz'), rows=np.array(rows, float) if rows else np.zeros((0, 1)), label=np.array(label.get(ns, '')))
+                                          for ns, rows in seg.items()]),
+                       ('collect_log', lambda: np.savez_compressed(os.path.join(a.out, 'collect_log.npz'), rows=np.array(log, float),
+                                                                    cols=np.array(['t', 'phase', 'view', 'clear', 'bottle_move', 'x', 'y', 'yaw'] + [f'q{j}' for j in range(1, 7)]))),
+                       ('v1', lambda: rep.update(v1=v1.save(a.out))), ('w1', lambda: rep.update(w1_cap=w1.save(a.out)))):
+            try:
+                fn()
+            except Exception as e2:                                        # noqa: BLE001
+                errs.append(f'{nm}: {e2!r}')
+        rep['save_errors'] = errs
+        json.dump(rep, open(os.path.join(a.out, 'collect_report.json'), 'w'), ensure_ascii=False, indent=1, default=float)
+        return rep
+    ASM.run_with_partial_save(loop, save_all)
+    rep = save_all()
+    abort = st_['abort']
+    print(f"[col] 決策 {sm.final}；視點 {sm.tried}", flush=True)
+    print(f"[col] 結果 中止 {abort} 最小淨空 {st_['min_clear']:.3f} m 瓶位移 {rep.get('bottle_move_m', float('nan')) * 1e3:.1f} mm seg3d {rep['seg3d']['n']} 存檔錯誤 {rep['save_errors']}", flush=True)
+    rc = 0 if (abort is None and not rep['save_errors']) else 3
     with open(os.path.join(a.out, 'exit_rc.txt'), 'w') as fh:
-        fh.write('0' if abort is None else '3')
-    return 0 if abort is None else 3
+        fh.write(str(rc))
+    return rc
 
 
 if __name__ == '__main__':

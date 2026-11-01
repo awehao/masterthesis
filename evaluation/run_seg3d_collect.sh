@@ -33,7 +33,7 @@ trap 'say "收到 INT"; exit 130' INT
 say "=== 三維定位採集 腳本 ${COLLECT_SCRIPT:-evaluation/isaac_bottle_seg3d_collect.py} 參數［${COLLECT_ARGS:-無}］ RUN_ID=$RUN_ID 網域 $ROS_DOMAIN_ID；git $(git rev-parse --short HEAD)"
 _nodes=$(timeout 15 ros2 node list --no-daemon --spin-time 2 2>/dev/null 9>&-)   # 不經 daemon（快取會留已結束程序；daemon 也會繼承互斥鎖 fd 9 而一直佔鎖）
 if [ -n "$_nodes" ]; then say "網域 $ROS_DOMAIN_ID 已有節點（$_nodes）⇒ 拒跑"; echo 77 > "$DIR/exit_rc.txt"; exit 77; fi
-sha256sum evaluation/isaac_bottle_seg3d_collect.py evaluation/isaac_bottle_seg3d_collect2.py evaluation/bottle_seg3d_view_policy.py evaluation/results/vision/seg3d_view_library.json evaluation/run_seg3d_collect.sh evaluation/bottle_seg3d_node.py evaluation/bottle_seg_depth3d.py evaluation/bottle_seg_infer.py \
+sha256sum evaluation/isaac_bottle_seg3d_collect.py evaluation/isaac_bottle_seg3d_collect2.py evaluation/bottle_seg3d_view_policy.py evaluation/bottle_seg3d_adapt_sm.py evaluation/results/vision/seg3d_view_library.json evaluation/run_seg3d_collect.sh evaluation/bottle_seg3d_node.py evaluation/bottle_seg_depth3d.py evaluation/bottle_seg_infer.py \
   evaluation/bottle_v1_cam.py evaluation/bottle_w1_cam.py evaluation/bottle_ros_chain.py evaluation/results/vision/seg3d_collect_design.json "$WEIGHTS" "$ASSET" > "$DIR/versions.sha256"
 spawn seg_v1 "$DL_PY" -u evaluation/bottle_seg3d_node.py --weights "$WEIGHTS" --ns v1 --ros-args -p use_sim_time:=true
 spawn seg_w1 "$DL_PY" -u evaluation/bottle_seg3d_node.py --weights "$WEIGHTS" --ns w1 --ros-args -p use_sim_time:=true
