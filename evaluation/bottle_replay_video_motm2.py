@@ -2,7 +2,7 @@
 """多任務批次實錄重播製片 v2（bottle_replay_video_w1vhigh.py 的版本化複本，2026-11-02；bottle_replay_video_motm.py 只加事件，不足以處理成功趟）：
 1 滑移（TCP→瓶相對平移，對 t_grasp）只畫到鬆爪（place_phase RELEASE）為止；鬆爪後夾爪退離，相對位移不是滑移，頂欄與曲線都不再顯示（照判定器：鬆爪後滑移不再判）。
 2 底部說明依該趟實際結果產生（完整抓放／完成但滑移超標警告／受控停止＋原因），不再寫死。停止後的尾段照舊顯示。
-3 關鍵時刻加 relwin_shift（依量測瓶 x 平移抓取排程）與 v2w 滑移警告（第一次平移超標）。
+3 關鍵時刻加 relwin_shift（依量測瓶 x 平移抓取排程）與 v2w 滑移警告（第一次平移超標）；v3 加 xh_back（轉回高度依第二桌）與 xh_tcp_converged（下放前 TCP 收斂）。
 以下為 w1vhigh 說明。
 移動視角首次物理結果的代表影片（bottle_replay_video_w1segt.py 的版本化複本，2026-11-02；Codex 20261102_031502）：
 加 V_HIGH 接近序列事件（展臂到高位視角、高位觀察、轉回備妥）、採用學習目標、受控停止；漸變前階段列顯示序列狀態；
@@ -160,6 +160,8 @@ def main():
     if sw_:
         mom = sorted(mom + [(sw_['t_first'], f"滑移警告：平移 {sw_['d_first_mm']:.2f} mm 超過 5 mm（不停止，原抓持品質不合格）")])
     mom = sorted(mom + [(e['t'], f"依量測瓶位平移抓取排程 Δx {e['dx'] * 1e3:+.1f} mm") for e in r['events'] if e['what'] == 'relwin_shift'])
+    mom = sorted(mom + [(e['t'], f"轉回高度依第二桌：{e['z_back']:.3f} m（抬升高 {e['z_side_lift']:.3f} m）") for e in r['events'] if e['what'] == 'xh_back']
+                 + [(e['t'], f"TCP 收斂到放置姿態（{e['err_mm']:.1f} mm），可停車下放") for e in r['events'] if e['what'] == 'xh_tcp_converged'])
     if r.get('mission_done') and r.get('success'):
         FOOT = '移動接近中以高位手腕視角取得學習目標（遮罩＋深度）；移動中抓取、離桌、運送、第二桌放置、鬆爪、退離、保持全部成立（原抓持品質標準內）；滑移曲線畫到鬆爪為止'
     elif r.get('mission_done'):
