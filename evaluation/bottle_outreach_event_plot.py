@@ -28,9 +28,9 @@ import bottle_s1_geom as G                              # noqa: E402
 
 RUNS = [('bottle_w1_vhigh_z060_p1_1', '無懸持', '#0072B2'), ('bottle_w1_vhigh_hold_z060_p1_1', '靜態懸持 13 s', '#D55E00')]   # Okabe–Ito
 RUNS = [x for x in RUNS] + [x for x in [(a_, b_, c_) for a_, b_, c_ in (( 'bottle_w1_vhigh_outslow_z060_p1_1', '慢外伸 7.6 s', '#009E73'),) if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', a_, 's1_report.json'))]]
-T_OUT, WIN = 3.8, (-3.0, 7.0)
+T_OUT, WIN = 3.8, (-3.0, 11.0)
 INK, MUTED, GRID = '#1f2933', '#6b7785', '#e3e7eb'
-FIG = os.path.join(os.path.dirname(HERE), '第七次進度報告素材', '圖表', 'vhigh_外伸事件對齊_兩趟.png')
+FIG = os.path.join(os.path.dirname(HERE), '第七次進度報告素材', '圖表', 'vhigh_外伸事件對齊_三趟.png')
 
 
 def font():
@@ -47,6 +47,9 @@ def series(run):
     c = {str(k): Z['rows'][:, i] for i, k in enumerate(Z['cols'])}
     r = json.load(open(os.path.join(D, 's1_report.json')))
     t_out = next(e['t'] for e in r['events'] if e['what'] == 'compact_out_start')
+    t_ret = next((e['t'] for e in r['events'] if e['what'] == 'compact_returned'), None)
+    T_o = float((r.get('outslow') or {}).get('t_out', T_OUT))                      # 每趟自己的外伸時長（慢外伸 7.6 s）
+    out_actual = None if t_ret is None else round(t_ret - t_out, 3)
     tg = float(r['t_grasp'])
     t = c['t']
     m = (t >= t_out + WIN[0]) & (t <= t_out + WIN[1])
@@ -74,8 +77,8 @@ def series(run):
     v = np.convolve(v, np.ones(5) / 5, mode='same')
     a = np.linalg.norm(np.gradient(np.gradient(P, dt, axis=0), dt, axis=0), axis=1)
     a = np.convolve(a, np.ones(11) / 11, mode='same')
-    u = np.array([BR.min_jerk(min(max(x / T_OUT, 0.0), 1.0)) for x in tt])
-    seg = (tt >= 0.0) & (tt <= T_OUT)
+    u = np.array([BR.min_jerk(min(max(x / T_o, 0.0), 1.0)) for x in tt])
+    seg = (tt >= 0.0) & (tt <= T_o)
     ks = np.nonzero(seg)[0]
     path = float(np.sum(np.linalg.norm(np.diff(P[ks], axis=0), axis=1))) * 1e3
     PB = np.array(PB)
@@ -83,7 +86,7 @@ def series(run):
     d0 = rel[ks[0]]
     dmax = float(np.max(np.linalg.norm(rel[ks] - d0, axis=1)))
     acc = float(rel[ks[-1], 0] - rel[ks[0], 0])
-    stats = dict(run=run, t_out=t_out, out_cum_down_mm=round(-acc, 3), out_max_rel_mm=round(dmax, 3), out_tcp_path_world_mm=round(path, 1), out_tcp_path_base_mm=round(path_b, 1),
+    stats = dict(run=run, t_out=t_out, T_out=T_o, out_actual_s=out_actual, out_cum_down_mm=round(-acc, 3), out_max_rel_mm=round(dmax, 3), out_tcp_path_world_mm=round(path, 1), out_tcp_path_base_mm=round(path_b, 1),
                  slip_per_world_path_mm_per_m=round(-acc / (path / 1e3), 3) if path > 0 else None, slip_per_base_path_mm_per_m=round(-acc / (path_b / 1e3), 3) if path_b > 0 else None, v_tcp_max=round(float(v[seg].max()), 3), a_tcp_max=round(float(a[seg].max()), 3),
                  finger_q=[round(float(np.mean(c['finger1_q'][idx][seg])), 5), round(float(np.mean(c['finger2_q'][idx][seg])), 5)],
                  finger_f_min=[round(float(np.min(c['f_finger1_bottle'][idx][seg])), 2), round(float(np.min(c['f_finger2_bottle'][idx][seg])), 2)])
@@ -106,6 +109,7 @@ def main():
             for y, ls in fn(s):
                 A.plot(s['tt'], y, ls, color=col, lw=1.6, label=lab if ls == '-' else None)
         A.axvspan(0.0, T_OUT, color='#f2f4f6', zorder=0)
+        A.axvline(2.0 * T_OUT, color=MUTED, lw=0.6, ls=':')
         A.axvline(0.0, color=MUTED, lw=0.8)
         A.set_title(title, loc='left', fontsize=10.5)
         A.grid(axis='y', color=GRID, lw=0.8)
@@ -114,8 +118,8 @@ def main():
         if yl:
             A.set_ylim(*yl)
     ax[0].legend(loc='lower right', frameon=False)
-    ax[-1].set_xlabel('相對外伸開始（compact_out_start）的時間 s；灰底＝外伸 3.8 s')
-    fig.suptitle('轉回外伸段事件對齊：V_HIGH 移動抓取兩趟（0.60／P1，各 n＝1）', x=0.02, ha='left', fontsize=12.5, color=INK)
+    ax[-1].set_xlabel('相對外伸開始（compact_out_start）的時間 s；灰底＝基線外伸 3.8 s，點線＝慢外伸結束 7.6 s')
+    fig.suptitle(f'轉回外伸段事件對齊：V_HIGH 移動抓取 {len(S)} 趟（0.60／P1，各 n＝1）', x=0.02, ha='left', fontsize=12.5, color=INK)
     os.makedirs(os.path.dirname(FIG), exist_ok=True)
     fig.savefig(FIG, dpi=150, bbox_inches='tight', facecolor='white')
     out = dict(figure=os.path.relpath(FIG, os.path.dirname(HERE)), window_s=WIN, T_out=T_OUT, runs=[s['stats'] for s, _, _ in S],

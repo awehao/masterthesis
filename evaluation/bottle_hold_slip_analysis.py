@@ -21,7 +21,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
 import bottle_s1_geom as G                              # noqa: E402
 
-RUNS = ('bottle_w1_vhigh_hold_z060_p1_1', 'bottle_w1_vhigh_z060_p1_1', 'bottle_w1_segtarget_nominal1', 'bottle_w1_compact3_nominal1')
+RUNS = ('bottle_w1_vhigh_outslow_z060_p1_1', 'bottle_w1_vhigh_hold_z060_p1_1', 'bottle_w1_vhigh_z060_p1_1', 'bottle_w1_segtarget_nominal1', 'bottle_w1_compact3_nominal1')
 ASSET = os.path.join(os.path.dirname(HERE), 'src', 'my_omnibot_description', 'config', 'bottle_s0.yaml')
 
 
