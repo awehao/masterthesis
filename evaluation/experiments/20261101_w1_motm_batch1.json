@@ -1,0 +1,45 @@
+{
+  "schema": "paired_physical_experiment_plan_v1",
+  "date_timezone": "2026-11-01 Asia/Taipei",
+  "authority": "reviews/20261101_howard_continue_physical_experiments_motm.md",
+  "task": "ROS scan and navigation planning; base and wrist visual target; pick; carry planning; park and place on second table",
+  "cases": [
+    {"id": "nominal", "bottle_dx_m": 0.0, "bottle_dy_m": 0.0, "G_existing_run": "bottle_w1_1"},
+    {"id": "plus5", "bottle_dx_m": 0.005, "bottle_dy_m": 0.005, "G_existing_run": "bottle_w1_2"},
+    {"id": "minus5", "bottle_dx_m": -0.005, "bottle_dy_m": -0.005, "G_new_run": "bottle_w1_g2_auto1"}
+  ],
+  "first_physical_batch": [
+    {"strategy": "G", "case": "minus5", "run_id": "bottle_w1_g2_auto1", "owner": "Codex", "needs_controller_change": false},
+    {"strategy": "P", "case": "nominal", "run_id": "bottle_w1_p_nominal_auto1", "owner": "Codex", "needs_controller_change": true, "gate": "targeted offline nominal and park/vision gating checks"},
+    {"strategy": "P", "case": "minus5", "run_id": "bottle_w1_p_minus5_auto1", "owner": "Codex", "needs_controller_change": true, "gate": "same frozen P controller; prior run fully cleaned up"}
+  ],
+  "strategy_scope": {
+    "G": "Frozen W1 full-body predictive moving grasp",
+    "P": "Same W1 vision and pick-carry-place task; measured parked base required for insertion; base command equality zero during manipulation; not a reproduction of an external paper",
+    "M": "Later versioned reactive one-step whole-body port; no claim of full MotM reproduction; at most two declared parameters and four offline adjustments before physical nominal"
+  },
+  "shared_conditions": {
+    "initial_arm": [0.0, 0.0, 0.035, 0.0, -1.5708, 0.0],
+    "reference_speed_nav_grasp_carry_mps": [0.35, 0.10, 0.25],
+    "physics_dt_s": 0.01,
+    "control_dt_s": 0.05,
+    "command_delay_physics_steps": 8,
+    "clearance_reject_with_guard_m": 0.0055,
+    "thermal_abort_c": 92,
+    "map_args": "--table2 2.4,-1.0",
+    "gui": true,
+    "automatic_video": false,
+    "failed_run_replacement": false,
+    "nominal_target_prior_moves_with_perturbation": false,
+    "visual_target_truth_fallback": false,
+    "unchanged": "same model, velocity and acceleration limits, perception, Shield, contact validity, grasp evidence, lift, slip, placement and stop criteria"
+  },
+  "comparison_rules": {
+    "paired_cases_only": true,
+    "completion": "physical stable release on second table, not phase alone",
+    "time": "same task start to stable placement; abort time is never a successful completion time",
+    "smoothness": "same 0.10 second pose-difference acceleration convention; separate grasp, carry and place windows; report TCP error, near-stop and reversal time alongside acceleration",
+    "safety": "forbidden contacts, penetration, geometric margin with explicit model coverage, CBF and Shield intervention, stop effectiveness",
+    "interpretation": "designed cases, not independent randomized trials or universal superiority over MotM; do not pool older nonvisual/nonplacement runs"
+  }
+}

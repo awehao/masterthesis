@@ -1,0 +1,56 @@
+{
+  "date": "2026-11-01",
+  "status": "offline_pilot_training_completed_not_connected_to_control",
+  "model": "torchvision Mask R-CNN ResNet50 FPN v2, COCO initialization, two output classes",
+  "classes": ["background", "bottle"],
+  "input": "RGB only",
+  "training_data": "recorded simulation RGB-D; capture-time truth used for OFFLINE automatic capped-cylinder masks only",
+  "counts": {
+    "train": {"positive": 227, "negative": 156, "total": 383},
+    "dev": {"positive": 112, "negative": 79, "total": 191},
+    "held_out": {"positive": 113, "negative": 76, "total": 189},
+    "excluded_tiny_or_unreliable_labels": 5
+  },
+  "splits": {
+    "train": ["bottle_w1_1", "bottle_w1_compact_nominal1"],
+    "dev": ["bottle_w1_g2_clean1"],
+    "held_out_from_model_selection": ["bottle_w1_2"]
+  },
+  "iterations_total": 480,
+  "seed": 0,
+  "batch_size": 2,
+  "score_threshold": 0.5,
+  "mask_threshold": 0.5,
+  "selected_iteration": 480,
+  "dev_equal_camera_group_mean_iou": 0.9314094610547221,
+  "held_out": {
+    "base_camera_mean_iou_positive_frames": 0.8810732225272352,
+    "wrist_camera_mean_iou_positive_frames": 0.9745996211442728,
+    "equal_camera_group_mean_iou": 0.927836421835754,
+    "base_positive_frames": 35,
+    "wrist_positive_frames": 78,
+    "negative_frames": 76,
+    "negative_false_positive_frames": 0,
+    "offline_inference_median_ms": 22.66221199533902
+  },
+  "weights": "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth",
+  "weights_sha256": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962",
+  "data_index": "evaluation/dl0_ckpt/bottle_seg_v1_data/index.json",
+  "training_result": "evaluation/dl0_ckpt/bottle_seg_v1_continue3/result.json",
+  "freeze_record": "evaluation/dl0_ckpt/bottle_seg_v1_continue3/frozen.json",
+  "interruption": {
+    "first_segment": "external SIGTERM at step 240; source not established; checkpoint saved",
+    "continued_to": [320, 400, 480],
+    "resumed_optimizer_and_scaler": true,
+    "bitwise_equivalence_to_uninterrupted_training_claimed": false,
+    "test_used_for_model_selection": false
+  },
+  "limitations": [
+    "Same simulated cylinder, appearance, background family and 0.60 m table height",
+    "No cross-object, unseen-height, real-camera or grasp-success validation",
+    "Auto-label cylinder/depth agreement is not human-reviewed ground truth for every frame",
+    "Sparse recorded frames are correlated; frame counts are not independent task trials",
+    "Single offline GPU inference timing is not end-to-end or realtime validation",
+    "No changes to GMPC, online vision estimator or existing safety guards"
+  ]
+}

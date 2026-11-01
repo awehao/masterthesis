@@ -15,10 +15,30 @@
 # 產物：runs/<RUN_ID>/thermal.csv（每秒一筆）、thermal.log、guard.log
 # 離開碼：運行器原碼；90 上限不合法；91 目錄已存在；92 取樣器起不來；
 #        93 熱中止；94 監看失效而中止
+#        95 同一使用者已有實驗／Isaac 重播／編碼，或互斥鎖不可用
 set -u
 WS="$(cd "$(dirname "$0")/.." && pwd)"
 : "${ROS_DOMAIN_ID:?ROS_DOMAIN_ID 未設定}"
 : "${RUN_ID:?RUN_ID 要明設（守護需要先知道趟次目錄）}"
+# Shared by physical runs and replays. Check before creating the run directory
+# or starting any child, so a refused launch cannot look like a physical trial.
+# The lock is held by this guard (and inherited children) through cleanup.
+ISAAC_LOCK_PATH="${XDG_RUNTIME_DIR:-/tmp}/masterthesis-isaac-$(id -u).lock"
+if ! command -v flock >/dev/null 2>&1; then
+  echo '找不到 flock，無法保證單一 Isaac 執行，拒跑'; exit 95
+fi
+exec 9>"$ISAAC_LOCK_PATH" || { echo '無法開啟 Isaac 互斥鎖，拒跑'; exit 95; }
+if ! flock -n 9; then
+  echo "Isaac 實驗／重播互斥鎖忙碌：$ISAAC_LOCK_PATH；本趟未啟動"; exit 95
+fi
+# Detect already-running legacy/direct launches that do not yet take the lock.
+ACTIVE_ISAAC=$(ps -u "$(id -u)" -o pid=,comm=,args= | awk '
+  $2 ~ /^(kit|isaacsim|ffmpeg)$/ ||
+  ($2 ~ /^python/ && ($0 ~ /\/isaacsim[^ ]*\/bin\/python/ || $0 ~ /evaluation\/isaac_/)) {print $1, $2}
+')
+if [ -n "$ACTIVE_ISAAC" ]; then
+  echo "已有 Isaac／重播／編碼程序（PID／名稱）：$ACTIVE_ISAAC；本趟未啟動"; exit 95
+fi
 LIMIT="${THERMAL_LIMIT:-92}"
 if ! [[ "$LIMIT" =~ ^[1-9][0-9]*$ ]] || [ "$LIMIT" -gt 92 ]; then
   echo "THERMAL_LIMIT='$LIMIT' 不合法（只接受 1–92 的整數），拒跑"; exit 90
@@ -31,6 +51,7 @@ mkdir -p "$DIR"
 G="$DIR/guard.log"
 CSV="$DIR/thermal.csv"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$G"; }
+say "Isaac 互斥鎖已取得：$ISAAC_LOCK_PATH；guard sha256 $(sha256sum "$WS/evaluation/run_guarded_v3.sh" | cut -c1-16)"
 last_c(){ tail -1 "$CSV" 2>/dev/null | awk -F, '{print $3}'; }
 last_src(){ tail -1 "$CSV" 2>/dev/null | awk -F, '{print $7}'; }
 csv_age(){ echo $(( $(date +%s) - $(stat -c %Y "$CSV" 2>/dev/null || echo 0) )); }

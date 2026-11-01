@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-01",
+  "timezone": "Asia/Taipei",
+  "status": "design_handoff_not_executable",
+  "purpose": "More complete visual pick, compact carry, planned transport, obstacle interaction, and second-table placement",
+  "instruction_file": "reviews/20261101_howard_integrated_robustness_experiments.md",
+  "physical_runs_planned": 8,
+  "base_candidate": "evaluation/bottle_w1_compactcarry2_ctrl.py",
+  "freeze_rule": "Finish stop-trajectory checks from 204716_reply, version any required fix, then freeze before each paired stage; no parameter retuning from physical results",
+  "execution_owner": "Claude_existing_Isaac_workflow",
+  "guard": {
+    "single_isaac_including_replay": true,
+    "gui_visible": true,
+    "thermal_abort_c": 92,
+    "new_run_id_only": true,
+    "unchanged_failure_rerun": false,
+    "safety_threshold_changes": false
+  },
+  "stage_1": {
+    "readiness": "needs_stop_path_gate_and_targeted_combination_checks",
+    "same_nominal_map_and_ready_pose": true,
+    "cases": [
+      {
+        "id": "R1",
+        "run_id_proposed": "bottle_w1_complex_r1_1",
+        "bottle_dx_m": 0.01,
+        "bottle_dy_m": -0.01,
+        "base_y_start_m": -0.05,
+        "base_yaw_start_deg": 3,
+        "dyn_case": "w1_dyn_pass1",
+        "expected_outcome": "complete_pick_carry_place_without_safety_violation"
+      },
+      {
+        "id": "R2",
+        "run_id_proposed": "bottle_w1_complex_r2_1",
+        "bottle_dx_m": -0.01,
+        "bottle_dy_m": 0.01,
+        "base_y_start_m": 0.05,
+        "base_yaw_start_deg": -3,
+        "dyn_case": "w1_dyn_overtake1",
+        "expected_outcome": "complete_pick_carry_place_without_safety_violation"
+      }
+    ]
+  },
+  "stage_2": {
+    "readiness": "scene_and_common_shell_parked_baseline_not_implemented",
+    "scene_type": "two_tables_and_scan_visible_L_corridor",
+    "corridor_inner_width_design_m": 1.2,
+    "exact_scene_coordinates": null,
+    "scene_manifest_required_before_execution": true,
+    "g_and_p_differ_only_in_grasp_base_strategy": true,
+    "do_not_assume_existing_group_flag_implements_baseline": true,
+    "dynamic_world_trajectory_frozen_before_pair": true,
+    "dynamic_trigger_follows_robot": false,
+    "path_blocked_preserved": true,
+    "automatic_failure_recovery_added": false,
+    "cases": [
+      {"id": "L0", "group": "G", "interaction": "none", "requires": ["frozen_scene_and_targeted_offline_checks"]},
+      {"id": "L1-G", "group": "G", "interaction": "carry_route_crossing", "requires": ["L0_completed", "frozen_L1_world_trajectory"]},
+      {"id": "L1-P", "group": "P", "interaction": "carry_route_crossing", "requires": ["L0_completed", "validated_common_shell_P", "frozen_L1_world_trajectory"]},
+      {"id": "L2-G", "group": "G", "interaction": "placement_approach_crossing", "requires": ["L0_completed", "frozen_L2_world_trajectory"]},
+      {"id": "L2-P", "group": "P", "interaction": "placement_approach_crossing", "requires": ["L0_completed", "validated_common_shell_P", "frozen_L2_world_trajectory"]}
+    ]
+  },
+  "stage_3": {
+    "readiness": "needs_return_out_scan_cut_injection_and_stop_trajectory_check",
+    "cases": [
+      {
+        "id": "F1",
+        "group": "G",
+        "dynamic_obstacle": false,
+        "scan_cut_event": "return_out_start_plus_0.5_T_OUT",
+        "expected_outcome": "controlled_stop_effective_no_release_no_drop_no_forbidden_contact",
+        "expected_task_completion": false
+      }
+    ]
+  },
+  "outcome_rules": {
+    "controlled_stop_is_task_success": false,
+    "infrastructure_failure_is_task_attempt": false,
+    "deterministic_repeats_are_independent_samples": false,
+    "claim_general_reliability_from_this_batch": false,
+    "claim_full_original_MotM_reproduction": false,
+    "report_all_runs_and_first_blocker": true
+  },
+  "videos": {
+    "comparison_pair_preselected": "L1-G_and_L1-P",
+    "include_failed_result": true,
+    "fault_clip": "F1",
+    "panels": ["wrist", "overview", "base_heading", "phase", "payload_envelope", "stop_reason"],
+    "label_recorded_replay": true
+  }
+}
