@@ -319,6 +319,9 @@ class GMPCConfig:
     # （gmpc_wb，2026-11-01 候選）輸入二階差分權重：Σ Δ²u_kᵀ S2 Δ²u_k，Δ²u_k = u_k − 2u_{k−1} + u_{k−2}，
     # u_{−1}＝xi_prev、u_{−2}＝xi_prev2（預測起點之前兩筆已套用／在途命令，由呼叫端給）。預設 0＝不加任何項（問題與先前相同）。
     S2     : np.ndarray = field(default_factory=lambda: np.zeros((3, 3)))
+    # （gmpc_wb，2026-11-01 候選）底盤位置硬界限 ((x_lo, x_hi), (y_lo, y_hi))，世界座標：時域第 1..N 步的預測位置（一階：p_ref,k＋R_ref,k·e_k[:2]，
+    # e＝Φ·e0＋Γ·z，e0 為在途前推後的初態）都須在矩形內。None＝不加任何列（問題與先前相同）。不是完整操作可行域。
+    base_box: tuple | None = None
     # ---- Wheel-speed coupling ---------------------------------------------
     # u_min/u_max/a_max form an axis-aligned BOX, but the chassis's feasible set
     # is not a box: the two translation axes drive different wheel pairs and so
@@ -743,6 +746,22 @@ def _build_smoothness_terms(S: np.ndarray, xi_ref_win: np.ndarray,
         S_bar[k*m:(k+1)*m, k*m:(k+1)*m] = S
     DtS = D.T @ S_bar
     return 2.0 * (DtS @ D), 2.0 * (DtS @ c)
+
+
+def _build_box_rows(box, X_ref_win, Phi, Gamma, e0, N):
+    """（gmpc_wb 候選）底盤位置硬界限列：第 i＋1 步（i＝0..N−1，含第一未來步）的世界位置一階預測
+    p ≈ p_ref,i+1 ＋ R_ref,i+1 · (Φ·e0 ＋ Γ·z)[3i:3i+2]，要求 x、y 各在 box 內。回傳 (A (2N×3N), l, u)。"""
+    (xlo, xhi), (ylo, yhi) = box
+    E0 = Phi @ e0
+    rows, lo, hi = [], [], []
+    for i in range(N):
+        Xr = X_ref_win[i + 1]
+        R, p = Xr[:2, :2], Xr[:2, 2]
+        rows.append(R @ Gamma[3 * i:3 * i + 2, :])
+        c = p + R @ E0[3 * i:3 * i + 2]
+        lo += [xlo - c[0], ylo - c[1]]
+        hi += [xhi - c[0], yhi - c[1]]
+    return sparse.csc_matrix(np.vstack(rows)), np.array(lo), np.array(hi)
 
 
 def _build_jerk_terms(S2: np.ndarray, xi_ref_win: np.ndarray, xi_prev: np.ndarray, xi_prev2: np.ndarray, N: int):
@@ -1341,6 +1360,12 @@ class GMPC:
 
         # 5. Constraints (velocity + acceleration)
         A_total, lb_total, ub_total = _build_constraints(cfg, xi_ref_win, xi_prev)
+        # 5a.（候選）底盤位置硬界限：只在 δξ 欄，之後的鬆弛欄與手臂欄補零時一併補上；hold 與耦合問題都含
+        if cfg.base_box is not None:
+            A_box, l_box, u_box = _build_box_rows(cfg.base_box, X_ref_win, Phi, Gamma, e0, N)
+            A_total  = sparse.vstack([A_total, A_box], format='csc')
+            lb_total = np.concatenate([lb_total, l_box])
+            ub_total = np.concatenate([ub_total, u_box])
 
         # 5b. Full-horizon CBF safety filter — receding QP with per-step slack.
         #
