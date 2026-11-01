@@ -11,7 +11,7 @@ ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$DIR/run.log"; }
 [ -s "evaluation/runs/$SRC_RUN/s1_steps.npz" ] || { say "**找不到來源實錄** $SRC_RUN"; exit 81; }
 say "=== 瓶子實錄重播 RUN_ID=$RUN_ID 來源 $SRC_RUN（steps sha256 $(sha256sum evaluation/runs/$SRC_RUN/s1_steps.npz | cut -c1-16)）參數［${RP_ARGS:-無}］；git $(git rev-parse --short HEAD)"
-"$ISAAC_PY" -u evaluation/isaac_bottle_replay.py --src "$SRC_RUN" --out "$DIR" --headless false ${RP_ARGS:-} > "$DIR/sim.log" 2>&1 &
+"$ISAAC_PY" -u "${RP_SCRIPT:-evaluation/isaac_bottle_replay.py}" --src "$SRC_RUN" --out "$DIR" --headless false ${RP_ARGS:-} > "$DIR/sim.log" 2>&1 &
 SIM=$!
 say "起 sim PID=$SIM"
 (
