@@ -2,7 +2,7 @@
 """多任務 v2w：C1／C2 含封存動態物的離線核對（Codex 20261102_053914 第 2 項；假受控對象＋離線射線，非物理）。
 C1＝瓶 (−0.06, 0.44)＋w1_dyn_pass1（迎面錯身），C2＝瓶 (+0.06, 0.40)＋w1_dyn_overtake1（後方追越）；第一桌 0.60。
 障礙軌跡、速度、起動時刻照 bottle_w1_dyn_case 封存值（任務時刻排程，不追機器人）；掃描＝靜態盒（兩桌）＋移動圓柱（同 test_bottle_w1_dyn）。
-控制器＝bottle_w1_vhigh_relwin_slipwarn_ctrl（v2w）；假候選同 test_bottle_w1_relwin_uadopt（U 段開始後 3.6 s 起送）。假世界沒有 Shield 節點（物理另有）。
+控制器＝bottle_w1_vhigh_relwin_slipwarn_ctrl（v2w）；假候選同 test_bottle_w1_relwin_uadopt（U 段開始後 3.6 s 起送）。Shield＝離線導航鏈（bottle_nav_chain）的 shield 模型，改寫超過 SHIELD_DV 即 shield_intervened 受控停止（同物理規則；物理為 ROS 節點）。
 核對（結果可以是完成或受控停止，不要求必成功）：
   1 實際軌跡：底盤圓盤（半徑 0.39）、全部連桿點、持瓶（假受控對象實際瓶位姿）到障礙圓柱表面（高 1.0 m 以下的點）的最小距離與時刻；
   2 停止路徑：會遇窗（障礙表面距底盤中心 < 1.5 m 的控制拍，前後各 5 拍）逐控制拍兩條 stop_traj（現在停／延後一拍停），
@@ -218,7 +218,7 @@ def main():
                adopt=next(({'t': e['t'], 'dx': e['dx']} for e in ev if e['what'] == 'relwin_shift'), None), slip_max=r['slip_max_mm_deg'], slip_warn=sw.get('warn'),
                actual_min=actual_min, encounter=enc, stop_dyn={k: round(v, 4) for k, v in dyn_worst.items()}, stop_dyn_where=where, stop_dyn_fails=dyn_fails,
                stop_static={k: round(v, 4) for k, v in stat_worst.items()}, stop_static_fails=stat_fails, n_stop_ticks=len(sel), n_dyn_cycles=int(sum(1 for x in nd if x > 0)), path_blocked=pb,
-               note='假世界無 Shield；障礙照封存任務時刻排程；停止路徑判準：連桿／持瓶到障礙表面 > 0（底盤圓盤值另報不判）；取樣核對，非全流程保證')
+               note='Shield＝離線導航鏈模型（非 ROS 節點）；障礙照封存任務時刻排程；停止路徑判準：連桿／持瓶到障礙表面 > 0（底盤圓盤值另報不判）；取樣核對，非全流程保證')
     print(json.dumps(out, ensure_ascii=False, default=float))
     return 0
 
