@@ -7,7 +7,7 @@
   "table2_z": 0.6
  },
  "controller": "bottle_w1_segtarget_vhigh_ctrl（isaac_bottle_w1dynsr18）",
- "outcome": "抓取完成、放置下降段滑移受控停止（非完整抓放）",
+ "outcome": "移動接近中取得學習目標，抓持與抬升成立；第二桌下降前接觸尚未成立，因滑移受控停止，非完整抓放",
  "first_block": {
   "t": 37.12,
   "why": "slip d=5.05 mm a=0.62 deg",
@@ -67,7 +67,8 @@
   "second_adopt": {
    "t": 11.06,
    "seq": 3,
-   "xy_shift_mm": 0.29
+   "xy_shift_mm": 0.0385,
+   "note": "更正：先前誤寫 0.29 mm；兩次採用 xy 差 0.038 mm（Codex 031502 指正）"
   },
   "note": "首次就緒在展臂 U 段（4.3–8.95 s）中；渲染預估 7.8／7.9 s（5 Hz 兩相位）"
  },
@@ -108,8 +109,12 @@
    "CARRY": 0.8,
    "PLACE_APPROACH": 2.34,
    "LOWER": 4.33,
-   "stop": 5.05,
-   "max": 6.16
+   "stop_trigger": 5.05,
+   "post_stop_tail_max": {
+    "value": 6.16,
+    "t": 39.72
+   },
+   "note": "以抬升起點為 0 的初步分析；5.05 是停止觸發值、6.16 是停止後尾段最大值（另列）"
   },
   "segtarget_nominal1": {
    "CARRY": 0.81,
@@ -124,5 +129,12 @@
    "RELEASE": 4.33
   }
  },
- "note": "n=1；滑移在抓取後的運送與放置下降段累積（抬升到持瓶段三趟同為 ~0.8 mm）；V_HIGH 只改漸變前的手臂參考，但 n=1 不能證明與滑移無關"
+ "note": "n=1；滑移在抓取後的運送與放置下降段累積（抬升到持瓶段三趟同為 ~0.8 mm）；V_HIGH 只改漸變前的手臂參考，但 n=1 不能證明與滑移無關",
+ "at_stop": {
+  "t": 37.12,
+  "bottle_bottom_above_table_mm": 6.2,
+  "table_support_force_N": 0.0,
+  "sliding_continued_after_stop": true,
+  "note": "下降前接觸尚未成立；停止有效只證明底盤／手臂停穩，不代表物件保持已穩住（Codex 031502）"
+ }
 }
