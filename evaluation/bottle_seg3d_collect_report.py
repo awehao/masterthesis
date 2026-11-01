@@ -16,7 +16,7 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RUNS = ('seg3d_col_z045_p1', 'seg3d_col_z045_p2', 'seg3d_col_z060_p1c', 'seg3d_col_z060_p2', 'seg3d_col_z075_p1', 'seg3d_col_z075_p2')
+RUNS = ('seg3d_col_z045_p1b', 'seg3d_col_z045_p2b', 'seg3d_col_z060_p1c', 'seg3d_col_z060_p2', 'seg3d_col_z075_p1b', 'seg3d_col_z075_p2b')
 H_BOTTLE = 0.20
 
 
