@@ -27,6 +27,7 @@ import bottle_ref as BR                                 # noqa: E402
 import bottle_s1_geom as G                              # noqa: E402
 
 RUNS = [('bottle_w1_vhigh_z060_p1_1', '無懸持', '#0072B2'), ('bottle_w1_vhigh_hold_z060_p1_1', '靜態懸持 13 s', '#D55E00')]   # Okabe–Ito
+RUNS = [x for x in RUNS] + [x for x in [(a_, b_, c_) for a_, b_, c_ in (( 'bottle_w1_vhigh_outslow_z060_p1_1', '慢外伸 7.6 s', '#009E73'),) if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', a_, 's1_report.json'))]]
 T_OUT, WIN = 3.8, (-3.0, 7.0)
 INK, MUTED, GRID = '#1f2933', '#6b7785', '#e3e7eb'
 FIG = os.path.join(os.path.dirname(HERE), '第七次進度報告素材', '圖表', 'vhigh_外伸事件對齊_兩趟.png')
@@ -50,7 +51,7 @@ def series(run):
     t = c['t']
     m = (t >= t_out + WIN[0]) & (t <= t_out + WIN[1])
     idx = np.nonzero(m)[0]
-    P, rel = [], []
+    P, rel, PB = [], [], []
     for k in idx:
         q = np.array([c['base_x'][k], c['base_y'][k], c['base_yaw'][k]] + [c[f'q{j}'][k] for j in range(1, 7)])
         Tt = G.C.K.fk(q, 'link_tcp')
@@ -58,6 +59,7 @@ def series(run):
         Tb[:3, :3] = Rot.from_quat([c['bottle_qx'][k], c['bottle_qy'][k], c['bottle_qz'][k], c['bottle_qw'][k]]).as_matrix()
         Tb[:3, 3] = [c['bottle_base_x'][k], c['bottle_base_y'][k], c['bottle_base_z'][k]]
         P.append(Tt[:3, 3])
+        PB.append(G.C.K.fk(np.r_[0.0, 0.0, 0.0, q[3:]], 'link_tcp')[:3, 3])          # 底盤座標 TCP（不含底盤移動）
         rel.append((np.linalg.inv(Tt) @ Tb)[:3, 3])
     kg = int(np.argmin(np.abs(t - tg)))
     qg = np.array([c['base_x'][kg], c['base_y'][kg], c['base_yaw'][kg]] + [c[f'q{j}'][kg] for j in range(1, 7)])
@@ -76,11 +78,13 @@ def series(run):
     seg = (tt >= 0.0) & (tt <= T_OUT)
     ks = np.nonzero(seg)[0]
     path = float(np.sum(np.linalg.norm(np.diff(P[ks], axis=0), axis=1))) * 1e3
+    PB = np.array(PB)
+    path_b = float(np.sum(np.linalg.norm(np.diff(PB[ks], axis=0), axis=1))) * 1e3
     d0 = rel[ks[0]]
     dmax = float(np.max(np.linalg.norm(rel[ks] - d0, axis=1)))
     acc = float(rel[ks[-1], 0] - rel[ks[0], 0])
-    stats = dict(run=run, t_out=t_out, out_cum_down_mm=round(-acc, 3), out_max_rel_mm=round(dmax, 3), out_tcp_path_mm=round(path, 1),
-                 slip_per_path_mm_per_m=round(-acc / (path / 1e3), 3) if path > 0 else None, v_tcp_max=round(float(v[seg].max()), 3), a_tcp_max=round(float(a[seg].max()), 3),
+    stats = dict(run=run, t_out=t_out, out_cum_down_mm=round(-acc, 3), out_max_rel_mm=round(dmax, 3), out_tcp_path_world_mm=round(path, 1), out_tcp_path_base_mm=round(path_b, 1),
+                 slip_per_world_path_mm_per_m=round(-acc / (path / 1e3), 3) if path > 0 else None, slip_per_base_path_mm_per_m=round(-acc / (path_b / 1e3), 3) if path_b > 0 else None, v_tcp_max=round(float(v[seg].max()), 3), a_tcp_max=round(float(a[seg].max()), 3),
                  finger_q=[round(float(np.mean(c['finger1_q'][idx][seg])), 5), round(float(np.mean(c['finger2_q'][idx][seg])), 5)],
                  finger_f_min=[round(float(np.min(c['f_finger1_bottle'][idx][seg])), 2), round(float(np.min(c['f_finger2_bottle'][idx][seg])), 2)])
     return dict(tt=tt, u=u, v=v, a=a, f1=c['f_finger1_bottle'][idx], f2=c['f_finger2_bottle'][idx], sx=rel[:, 0], sn=np.linalg.norm(rel, axis=1), stats=stats)

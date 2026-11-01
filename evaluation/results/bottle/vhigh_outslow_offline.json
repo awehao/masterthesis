@@ -12,6 +12,9 @@
   "ref_a_max": 0.0993,
   "ref_jump_max_m": 0.00613,
   "reach_min": null,
+  "reach_trigger_margin": Infinity,
+  "reach_applicable": false,
+  "reach_note": "rect_margin 回 inf＝外伸掃掠與停止軌跡沒有低於桌面頂＋Z_PAD 的點，此分支未產生低點約束（不是整體淨空無限大）；monitor_min=None 同義",
   "place_timeout": false,
   "self_min_mm": 8.37,
   "joint_margin": 0.088,
@@ -57,6 +60,9 @@
   "ref_a_max": 0.0248,
   "ref_jump_max_m": 0.00307,
   "reach_min": null,
+  "reach_trigger_margin": Infinity,
+  "reach_applicable": false,
+  "reach_note": "rect_margin 回 inf＝外伸掃掠與停止軌跡沒有低於桌面頂＋Z_PAD 的點，此分支未產生低點約束（不是整體淨空無限大）；monitor_min=None 同義",
   "place_timeout": false,
   "self_min_mm": 8.37,
   "joint_margin": 0.088,
@@ -99,6 +105,21 @@
   "done_delay_s": null,
   "ref_v_ratio": 0.5,
   "ref_a_ratio": 0.25,
-  "pass_": false
+  "checks": {
+   "out_len_slow": true,
+   "out_len_base": true,
+   "ref_ratio": true,
+   "no_place_timeout": true,
+   "slow_done": false,
+   "reach_gate_applicable": {
+    "base": false,
+    "slow": false,
+    "note": "不適用（無低點約束）≠ 通過；只分開列出"
+   }
+  },
+  "pass_": false,
+  "not_passed": [
+   "slow_done"
+  ]
  }
 }

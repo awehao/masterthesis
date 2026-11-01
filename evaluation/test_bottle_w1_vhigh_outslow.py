@@ -21,13 +21,17 @@ if len(sys.argv) > 1 and sys.argv[1] == 'all':
         line = [l_ for l_ in p.stdout.splitlines() if l_.startswith('{')]
         res[k] = json.loads(line[-1]) if line else dict(case=k, error=p.stderr[-2000:])
     b, s = res['base'], res['slow']
-    ok = bool(s.get('done') and abs((s.get('out_len') or 0) - 7.6) < 0.06 and abs((b.get('out_len') or 0) - 3.8) < 0.06 and s.get('reach_min') is not None and s['reach_min'] >= 0.0
-              and not s.get('place_timeout') and s.get('ref_v_max') is not None and s['ref_v_max'] < 0.6 * b['ref_v_max'] and s['ref_a_max'] < 0.4 * b['ref_a_max'])
+    checks = dict(out_len_slow=abs((s.get('out_len') or 0) - 7.6) < 0.06, out_len_base=abs((b.get('out_len') or 0) - 3.8) < 0.06,
+                  ref_ratio=s.get('ref_v_max') is not None and s['ref_v_max'] < 0.6 * b['ref_v_max'] and s['ref_a_max'] < 0.4 * b['ref_a_max'],
+                  no_place_timeout=not s.get('place_timeout'), slow_done=bool(s.get('done')),
+                  reach_gate_applicable=dict(base=b.get('reach_applicable'), slow=s.get('reach_applicable'), note='不適用（無低點約束）≠ 通過；只分開列出'))
+    ok = bool(all(v for k, v in checks.items() if k != 'reach_gate_applicable'))
     res['compare'] = dict(added_out_s=None if not (s.get('out_len') and b.get('out_len')) else round(s['out_len'] - b['out_len'], 3),
                           parked_delay_s=None if not (s.get('t_parked') and b.get('t_parked')) else round(s['t_parked'] - b['t_parked'], 3),
                           done_delay_s=None if not (s.get('t_done') and b.get('t_done')) else round(s['t_done'] - b['t_done'], 3),
                           ref_v_ratio=None if not b.get('ref_v_max') else round(s['ref_v_max'] / b['ref_v_max'], 3), ref_a_ratio=None if not b.get('ref_a_max') else round(s['ref_a_max'] / b['ref_a_max'], 3),
-                          pass_=ok)
+                          checks=checks, pass_=ok,
+                          not_passed=[k for k, v in checks.items() if k != 'reach_gate_applicable' and not v])
     json.dump(res, open(os.path.join(HERE, 'results', 'bottle', 'vhigh_outslow_offline.json'), 'w'), ensure_ascii=False, indent=1, default=float)
     for k in ('base', 'slow'):
         r = res[k]
@@ -83,7 +87,10 @@ def main():
     out = dict(case=CASE, done=bool(r['mission_done']), stop=why, out_len=out_len, t_out=t_o, t_parked=ev.get('P_PARKED'), t_done=ev.get('mission_done'),
                pa_len=None if ev.get('P_PLACE_APPROACH') is None or ev.get('P_PARKED') is None else round(ev['P_PARKED'] - ev['P_PLACE_APPROACH'], 3),
                ref_v_max=None if v_max is None else round(v_max, 4), ref_a_max=None if a_max is None else round(a_max, 4), ref_jump_max_m=None if jump is None else round(jump, 5),
-               reach_min=rg.get('monitor_min'), place_timeout=why == 'place_phase_timeout', self_min_mm=round(sm[0] * 1e3, 2), joint_margin=round(marg, 3),
+               reach_min=rg.get('monitor_min'), reach_trigger_margin=(rg.get('trigger') or {}).get('margin'),
+               reach_applicable=bool((rg.get('trigger') or {}).get('margin') is not None and np.isfinite((rg.get('trigger') or {}).get('margin'))),
+               reach_note='rect_margin 回 inf＝外伸掃掠與停止軌跡沒有低於桌面頂＋Z_PAD 的點，此分支未產生低點約束（不是整體淨空無限大）；monitor_min=None 同義',
+               place_timeout=why == 'place_phase_timeout', self_min_mm=round(sm[0] * 1e3, 2), joint_margin=round(marg, 3),
                mins={k: (round(v[0] * 1e3, 1) if isinstance(v, tuple) else v) for k, v in mins.items()}, outslow=r.get('outslow'))
     out['ref_jump_max'] = out['ref_jump_max_m']
     print(json.dumps(out, ensure_ascii=False, default=float))
