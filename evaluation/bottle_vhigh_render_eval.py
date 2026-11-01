@@ -39,8 +39,8 @@ def vis_truth(dep, K, T_wc, tz):
     def frac(P):
         Pc = (Ti[:3, :3] @ P.T).T + Ti[:3, 3]
         ok = Pc[:, 2] > 0.05
-        u = np.where(ok, K[0, 0] * Pc[:, 0] / np.where(ok, Pc[:, 2], 1) + K[0, 2], -1).round().astype(int)
-        v = np.where(ok, K[1, 1] * Pc[:, 1] / np.where(ok, Pc[:, 2], 1) + K[1, 2], -1).round().astype(int)
+        u = np.floor(np.where(ok, K[0, 0] * Pc[:, 0] / np.where(ok, Pc[:, 2], 1) + K[0, 2], -1)).astype(int)   # 與反投影 (u＋0.5−cx) 一致：像素 u 涵蓋 [u, u＋1)
+        v = np.floor(np.where(ok, K[1, 1] * Pc[:, 1] / np.where(ok, Pc[:, 2], 1) + K[1, 2], -1)).astype(int)
         inb = ok & (u >= 0) & (u < dep.shape[1]) & (v >= 0) & (v < dep.shape[0])
         d = np.zeros(len(P))
         d[inb] = dep[v[inb], u[inb]]
@@ -76,7 +76,7 @@ def main():
         masks, recs, infer_ms = S3.SI.predict(model, PILImage.fromarray(rgb), dev)
         P = [np.vstack(list(S3.G.link_world(q9, fq).values())) for fq in (S3.G.Q_OPEN, 0.0)]
         robot = cKDTree(np.vstack(P))
-        r, conf, n_false, cut, nod, bbox_m = dict(valid=False, why='no_instance'), float('nan'), 0, {}, float('nan'), float('nan')
+        r, conf, n_false, sel_false, cut, nod, bbox_m = dict(valid=False, why='no_instance'), float('nan'), 0, False, {}, float('nan'), float('nan')
         if len(masks):
             order = np.argsort([-x['confidence'] for x in recs])
             ests = [S3.locate(masks[j], dep, K, T, robot) for j in order]
@@ -87,6 +87,8 @@ def main():
                     n_false += 1
             if ok:
                 r, conf = ests[ok[0]], recs[int(order[ok[0]])]['confidence']
+                c0 = r.get('center_known_r')
+                sel_false = bool(c0 is not None and math.hypot(c0[0] - BOTTLE_XY[0], c0[1] - BOTTLE_XY[1]) > 0.03)
                 m = masks[int(order[ok[0]])]
                 nod = float((dep[m] == 0).mean()) if m.any() else float('nan')
                 ys, xs = np.nonzero(m)
@@ -107,20 +109,25 @@ def main():
                          err_xy_mm=None if not row['xy_valid'] else round(math.hypot(ck[0] - BOTTLE_XY[0], ck[1] - BOTTLE_XY[1]) * 1e3, 2),
                          err_sup_mm=None if not row['support_observed'] else round(abs(row['z_support'] - tz) * 1e3, 2),
                          cut=[bool(v.get(c_, False)) for c_ in ('top_cut', 'bottom_cut', 'side_cut')], mask_nodepth=None if not np.isfinite(nod) else round(nod, 3),
-                         bbox_margin_px=None if not np.isfinite(bbox_m) else bbox_m, n_false=n_false, n_pts=v.get('n_pts', 0), vis=vt, proc_ms=round(proc_ms, 1), infer_ms=round(float(infer_ms), 1),
+                         bbox_margin_px=None if not np.isfinite(bbox_m) else bbox_m, n_false=n_false, sel_false=sel_false, n_pts=v.get('n_pts', 0), vis=vt, proc_ms=round(proc_ms, 1), infer_ms=round(float(infer_ms), 1),
                          dist=round(float(np.linalg.norm(T[:3, 3] - np.array([BOTTLE_XY[0], BOTTLE_XY[1], tz + 0.10]))), 3)))
-    tr = CT.CandidateTracker()
-    first, tl = None, []
-    for row in rows:
-        tr.add(row)
-        ev = tr.evaluate(row['t_recv'])['known_type']
-        tl.append((round(row['t_recv'], 3), ev['status'], ev['why']))
-        if ev['status'] == 'ready' and first is None:
-            first = ev
-    reach = None
-    if first is not None:
+    def track(sub):
+        tr = CT.CandidateTracker()
+        first, tl = None, []
+        for row in sub:
+            tr.add(row)
+            ev = tr.evaluate(row['t_recv'])['known_type']
+            tl.append((round(row['t_recv'], 3), ev['status'], ev['why']))
+            if ev['status'] == 'ready' and first is None:
+                first = ev
+        if first is None:
+            return None, tl
         rc = CT.reach_check(first, np.array(info['q_ready']))
-        reach = dict(ik_state=rc['ik_state'], local_clear_state=rc['local_clear_state'], local_clear_min=rc['local_clear_min'])
+        return dict(t_recv=round(first['t_last'] + LAT, 3), t_last=first['t_last'], n=first['n'], center=first['center'], z_support=first['z_support'],
+                    err_xy_mm=round(math.hypot(first['center'][0] - BOTTLE_XY[0], first['center'][1] - BOTTLE_XY[1]) * 1e3, 2), err_sup_mm=round(abs(first['z_support'] - tz) * 1e3, 2),
+                    reach=dict(ik_state=rc['ik_state'], local_clear_state=rc['local_clear_state'], local_clear_min=rc['local_clear_min'])), tl
+    first_all, tl = track(rows)
+    first_5 = {f'phase{ph}': track(rows[ph::2])[0] for ph in (0, 1)}            # 實跑相機 5 Hz：10 Hz 影格取兩種相位各重放一次，兩者都報
     ok_rows = [d for d in diag if d['xy'] and d['sup']]
     segs, cur = [], None
     for d in diag:
@@ -134,17 +141,16 @@ def main():
     in_vh = [d for d in diag if info['t_v0'] <= d['t'] <= info['t_dep']]
     out = dict(run=run, src=src, table1_z=tz, seq=info, lat_assumed_s=LAT, n_frames=len(diag), weights=WEIGHTS,
                valid_xy_sup_segments=[dict(t0=s[0], t1=s[1], dur=round(s[1] - s[0] + 0.1, 2)) for s in segs],
-               known_type_first_ready=None if first is None else dict(t_recv=round(first['t_last'] + LAT, 3), t_last=first['t_last'], n=first['n'], center=first['center'], z_support=first['z_support'],
-                                                                      err_xy_mm=round(math.hypot(first['center'][0] - BOTTLE_XY[0], first['center'][1] - BOTTLE_XY[1]) * 1e3, 2),
-                                                                      err_sup_mm=round(abs(first['z_support'] - tz) * 1e3, 2), reach=reach),
+               known_type_first_ready_10hz=first_all, known_type_first_ready_5hz=first_5,
                deadlines=dict(t_depart_vhigh=info['t_dep'], t_x_blend=info['t_blend']),
                vhigh_hold=dict(n=len(in_vh), xy_sup=sum(d['xy'] and d['sup'] for d in in_vh), xy=sum(d['xy'] for d in in_vh), sup=sum(d['sup'] for d in in_vh),
                                no_instance=sum(d['why'] == 'no_instance' for d in in_vh), sup_why={w: sum(d['sup_why'] == w for d in in_vh if not d['sup']) for w in {d['sup_why'] for d in in_vh if not d['sup']}},
-                               cut=[sum(d['cut'][i] for d in in_vh) for i in range(3)], n_false=sum(d['n_false'] for d in in_vh),
+                               cut=[sum(d['cut'][i] for d in in_vh) for i in range(3)], false_generated=sum(d['n_false'] for d in in_vh), false_selected=sum(d['sel_false'] for d in in_vh),
                                vis_body=[min((d['vis']['body'] for d in in_vh), default=None), max((d['vis']['body'] for d in in_vh), default=None)],
                                vis_ring=[min((d['vis']['ring'] for d in in_vh), default=None), max((d['vis']['ring'] for d in in_vh), default=None)],
                                bbox_margin_px_min=min((d['bbox_margin_px'] for d in in_vh if d['bbox_margin_px'] is not None), default=None),
                                dist=[min((d['dist'] for d in in_vh), default=None), max((d['dist'] for d in in_vh), default=None)]),
+               false_all=dict(generated=sum(d['n_false'] for d in diag), selected=sum(d['sel_false'] for d in diag), frames_generated=[d['t'] for d in diag if d['n_false']]),
                err_xy_mm=None if not ok_rows else [round(float(np.percentile([d['err_xy_mm'] for d in ok_rows], q)), 2) for q in (50, 95, 100)],
                err_sup_mm=None if not ok_rows else [round(float(np.percentile([d['err_sup_mm'] for d in ok_rows], q)), 2) for q in (50, 95, 100)],
                proc_ms=[round(float(np.percentile([d['proc_ms'] for d in diag], q)), 1) for q in (50, 95, 100)], frames=diag, tracker=tl,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""V_HIGH 序列的只渲染核對（isaac_bottle_replay_w1z.py 的版本化複本，2026-11-02；Codex 20261102_021353 核可 0.60、0.75 各一次）：不跑控制、不推進物理、不起 ROS。
+"""V_HIGH 序列的只渲染核對（isaac_bottle_replay_w1z.py 的版本化複本，2026-11-02；Codex 20261102_021353 核可 0.60、0.75 各一次）：不跑控制、不起 ROS；初始化沉降（100 個物理步，只為取底盤 z）後，序列播放階段只渲染、不推進物理。
 來源是合成序列（bottle_vhigh_render_src.py：底盤＝名目趟實測軌跡、手臂＝B 案設計參考、瓶靜置），逐幀擺位後擷取手腕相機 RGB-D（同 bottle_w1_cam.CAMS['w1']：
 link_eef→camera_color_optical_frame、hfov 69°、640×480、孔徑 0.02、裁切 0.05–10 m，深度 distance_to_image_plane、範圍外記 0＝無深度），另存 K、逐幀相機位姿（量測關節 FK×外參，
 另記渲染端回讀與差值）、九維構型、來源時刻。只保留手腕與全景兩台相機。輸出 render_w1.npz＋frames/h_*.jpg、w_*.jpg＋replay_check.json。
