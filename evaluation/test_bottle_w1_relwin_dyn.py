@@ -7,8 +7,9 @@ C1＝瓶 (−0.06, 0.44)＋w1_dyn_pass1（迎面錯身），C2＝瓶 (+0.06, 0.4
   1 實際軌跡：底盤圓盤（半徑 0.39）、全部連桿點、持瓶（假受控對象實際瓶位姿）到障礙圓柱表面（高 1.0 m 以下的點）的最小距離與時刻；
   2 停止路徑：會遇窗（障礙表面距底盤中心 < 1.5 m 的控制拍，前後各 5 拍）逐控制拍兩條 stop_traj（現在停／延後一拍停），
     軌跡每個取樣點對應時刻（t＋取樣偏移）的障礙位置，算連桿點與持瓶（判定器 T_rel＝當下量測）到障礙表面最小距離，判準 > 0（另報最小值）；
-    同時照舊核對連桿／手指／持瓶對兩桌與自碰（判準同 test_bottle_w1_relwin_batch）；持瓶對桌在放置段（PARKED 起）不核——瓶本來就要放上第二桌
-    （第一版未排除，C2 因障礙起動前停在起點附近使會遇窗涵蓋放置段而誤判失敗，已更正）；
+    同時照舊核對連桿／手指／持瓶對兩桌與自碰（判準同 test_bottle_w1_relwin_batch）；核可放置段（PARKED 起）持瓶只排除對第二桌桌面（指定支撐面）的正常接觸，
+    第一桌、兩桌桌腳照核（Codex 064116 第 3 項；第一版未排除而使 C2 誤判，第二版整體略過範圍過大，現為第三版）；鬆爪後判定器 T_rel＝None，停止路徑不再按附著推算瓶；
+  1b 實際瓶（假受控對象讀回位姿）對兩桌：離桌成立＋0.2 s 起全程（含鬆爪後），PARKED 起排除第二桌桌面，其餘照核；
   3 結果、停止原因、會遇窗內最低車速與 0.1 s 速度變化率峰、動態障礙進入控制週期數、命令有限。
     python3 evaluation/test_bottle_w1_relwin_dyn.py all
 """
@@ -59,12 +60,14 @@ import test_bottle_place as TP                          # noqa: E402
 
 T = TV.T
 CA = DC.CASES[DYN]
-TB = [(c_, s_) for _, c_, s_ in G.table_boxes()] + [(c_, s_) for _, c_, s_ in TP.table2_boxes()]
+TBN = [('t1:' + n, c_, s_) for n, c_, s_ in G.table_boxes()] + [('t2:' + n, c_, s_) for n, c_, s_ in TP.table2_boxes()]
+TB = [(c_, s_) for _, c_, s_ in TBN]
+TB_NO_T2TOP = [(c_, s_) for n, c_, s_ in TBN if n != 't2:table_top']
 BPT = G.bottle_points()
 LIM = dict(nonfinger_table=0.01, finger_table=0.005, held_bottle_table=0.0055, self=0.0, margin=0.05)
 REC, TBLOG = [], []
 R_BASE = 0.39
-PLACING = ('PARKED', 'LOWER', 'RELEASE', 'RETREAT', 'HOLD', 'DONE')   # 放置段持瓶本來就要接觸第二桌：持瓶對桌不核（連桿／手指照核）
+PLACING = ('PARKED', 'LOWER', 'RELEASE', 'RETREAT', 'HOLD', 'DONE')   # 核可放置段：持瓶只排除對第二桌桌面（指定支撐面）的正常接觸；第一桌、兩桌桌腳照核
 
 
 def obs_d(P, t):
@@ -83,13 +86,13 @@ def pts(q9, f_cmd, T_rel):
     return W, P_l, P_b
 
 
-def chk_static(q9, T_rel, f_cmd, W, P_b):
+def chk_static(q9, T_rel, f_cmd, W, P_b, placing=False):
     P_nf = np.vstack([v for k, v in W.items() if k not in G.C.FINGERS])
     P_f = np.vstack([v for k, v in W.items() if k in G.C.FINGERS])
     out = dict(nonfinger_table=min(float(G.box_dist(P_nf, c_, s_).min()) for c_, s_ in TB), finger_table=min(float(G.box_dist(P_f, c_, s_).min()) for c_, s_ in TB),
                self=float(G.C.self_clear(q9, f_cmd)[0]), margin=BB.margin(q9[3:]))
     if P_b is not None:
-        out['held_bottle_table'] = min(float(G.box_dist(P_b, c_, s_).min()) for c_, s_ in TB)
+        out['held_bottle_table'] = min(float(G.box_dist(P_b, c_, s_).min()) for c_, s_ in (TB_NO_T2TOP if placing else TB))
     return out
 
 
@@ -176,7 +179,22 @@ def main():
     enc = dict(t_first_near=round(float(tt[np.argmax(db < 1.5)]), 2) if (db < 1.5).any() else None, t_last_near=round(float(tt[len(db) - 1 - np.argmax(db[::-1] < 1.5)]), 2) if (db < 1.5).any() else None,
                v_min_near=round(float(sp[1:][near_k].min()), 4) if near_k.any() else None, dv_max_near=round(float(acc[near_k].max()), 3) if near_k.any() else None,
                phases_near=sorted({H[k]['phase'] for k in np.flatnonzero(db < 1.5)}))
-    actual_min = dict(base_disc_surface=(round(float(db.min()), 4), round(float(tt[int(np.argmin(db))]), 2)), links=best_l, held_bottle=best_b)
+    t_lok = r.get('t_lift_ok')
+    t_park = next((e['t'] for e in ev if e['what'] == 'place_phase' and e.get('to') == 'PARKED'), 1e9)
+    bt = dict(v=9.9, t=None, box=None)
+    if t_lok is not None:
+        for tt_, Tb_, _ in TBLOG[::5]:
+            if tt_ < t_lok + 0.2:
+                continue
+            P_ = (Tb_[:3, :3] @ BPT.T).T + Tb_[:3, 3]
+            for n_, c_, s_ in TBN:
+                if tt_ >= t_park and n_ == 't2:table_top':
+                    continue
+                d_ = float(G.box_dist(P_, c_, s_).min())
+                if d_ < bt['v']:
+                    bt.update(v=round(d_, 4), t=round(tt_, 2), box=n_)
+    actual_min = dict(base_disc_surface=(round(float(db.min()), 4), round(float(tt[int(np.argmin(db))]), 2)), base_disc_radius_m=R_BASE, links=best_l, held_bottle=best_b,
+                      bottle_readback_table=bt, t_stop=(r['stop'] or {}).get('t'))
     # 2 停止路徑（會遇窗逐控制拍）
     rt = np.array([x['t'] for x in REC])
     dnear = np.array([float(np.hypot(x['q'][0] - DC.state(x['t'], CA)[0][0], x['q'][1] - DC.state(x['t'], CA)[0][1]) - CA['radius'] - R_BASE) for x in REC])
@@ -204,7 +222,7 @@ def main():
                         dyn_worst[kk], where[kk] = v, (round(x['t'], 2), x['pph'] or x['ph'], round(j * dt_s, 2))
                 if j % 2 == 0:
                     placing = (x['pph'] or '') in PLACING
-                    for kk, v in chk_static(qq, x['T_rel'], x['f_cmd'], W, P_b if not placing else None).items():
+                    for kk, v in chk_static(qq, x['T_rel'], x['f_cmd'], W, P_b, placing).items():
                         key = f'e{e}:{kk}'
                         if v < stat_worst.get(key, 9.9):
                             stat_worst[key], where[key] = v, (round(x['t'], 2), x['pph'] or x['ph'], round(j * dt_s, 2))
@@ -212,7 +230,7 @@ def main():
     stat_fails = sorted(k for k, v in stat_worst.items() if v < LIM[k.split(':')[1]]) + (['nonfinite'] if nonfin else []) + (['unfinished'] if unfin else [])
     nd = [len([o for o in (cc.get('obs') or []) if not o.get('static')]) for cc in c.compact] if getattr(c, 'compact', None) else []
     pb = [e for e in ev if 'blocked' in str(e.get('why', '')) or e['what'] == 'path_blocked']
-    ok = (done or why is not None) and not dyn_fails and not stat_fails and T.finite_cmds(f)
+    ok = (done or why is not None) and not dyn_fails and not stat_fails and T.finite_cmds(f) and bt['v'] >= LIM['held_bottle_table']
     sw = (r.get('slip_warn') or {})
     out = dict(case=CASE, dyn=DYN, z1=Z1, bottle=[DXB, 0.42 + DYB], **{'pass': bool(ok)}, outcome='完整抓放' if done else f'停止 {why}', stop=r['stop'], t_done=next((e['t'] for e in ev if e['what'] == 'mission_done'), None),
                adopt=next(({'t': e['t'], 'dx': e['dx']} for e in ev if e['what'] == 'relwin_shift'), None), slip_max=r['slip_max_mm_deg'], slip_warn=sw.get('warn'),
