@@ -198,6 +198,9 @@ def main():
         set_camera_view(eye=np.array([-1.6, -2.2, 1.8]), target=np.array([-0.2, 0.3, TZ]))
     except Exception as e:
         print(f'[col] 視角設定失敗：{e!r}', flush=True)
+    import rclpy
+    if not rclpy.ok():
+        rclpy.init()
     node = RC.make_bridge(NoChain())
     from isaacsim.sensors.camera import Camera
     from geometry_msgs.msg import PoseStamped
@@ -311,6 +314,16 @@ if __name__ == '__main__':
     rc_ = 1
     try:
         rc_ = main()
+    except BaseException:                                             # noqa: BLE001  先印出再關 Isaac（close 會直接結束程序，例外訊息會遺失）
+        import traceback
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        try:
+            with open(os.path.join(a.out, 'exit_rc.txt'), 'w') as fh:
+                fh.write('1')
+        except OSError:
+            pass
     finally:
         sim_app.close()
     sys.exit(rc_)
