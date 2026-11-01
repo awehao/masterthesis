@@ -119,7 +119,9 @@ def one(run):
                first_block=dict(t=stop.get('t'), why=stop.get('why'), phase=next((p for (p, tt) in sorted(ph.items(), key=lambda kv: kv[1], reverse=True) if tt <= (stop.get('t') or 1e9)), None)),
                judge=r.get('result'))
     slip = dict(trigger=stop.get('why') if 'slip' in str(stop.get('why')) else None, t_trigger=stop.get('t') if 'slip' in str(stop.get('why')) else None,
-                max_whole_run_mm_deg=r['slip_max_mm_deg'], note='全程最大值含停止尾段（判定器 slip_max）；觸發值取判定器停止原因字串')
+                max_whole_run_mm_deg=r['slip_max_mm_deg'], warn_v2w=(r.get('slip_warn') or {}).get('warn'), version='v2w（平移超標只警告）' if r.get('slip_warn') else 'v2（5 mm 即停）',
+                task_complete=bool(r.get('mission_done')), original_grip_quality_ok=(r.get('result') or {}).get('hold_ok'),
+                note='全程最大值含停止尾段（判定器 slip_max）；觸發值取判定器停止原因字串；v2w 的第一次警告取判定器 slip_warn')
     safety = dict(forbidden_peak_n=e['forb_peak_n'], forbidden_nodata=e['forb_nodata'], pen_max_mm=r.get('pen_max_mm'), stop_effect_ok=(r.get('stop_effect') or {}).get('ok'),
                   stop_effect=r.get('stop_effect'), clear_bottle_mm=e['clear_bottle_mm'], shield=e['shield'])
     # 停止尾段：物件保持與接觸（自算：逐步欄 FK 的 TCP→瓶相對平移，對 t_grasp；與判定器 slip 定義可能不同，另標）

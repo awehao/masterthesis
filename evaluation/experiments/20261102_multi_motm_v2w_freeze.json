@@ -1,0 +1,40 @@
+{
+ "schema": 1,
+ "batch": "多任務 v2w（量測目標相對排程＋平移滑移超標只警告）",
+ "ruling": "reviews/20261102_055603_reply.md",
+ "base_version": "evaluation/experiments/20261102_multi_motm_v2_freeze.json（v2，5 mm 即停；A1 bottle_motm_multi_a1_2、A2 bottle_motm_multi_a2_1、A3 bottle_motm_multi_a3_1 屬 v2，不與 v2w 合併計分）",
+ "a3_note": "A3 於 05:56 以 v2 起跑，055603 回覆 05:57 到達；A3 滑移最大 4.20 mm 未達門檻、完整成功，結果屬 v2 版本",
+ "frozen_at_local": "2026-11-02 06:20 Asia/Taipei",
+ "git_head_before_freeze_commit": "bb6225b4a",
+ "controller": "bottle_w1_vhigh_relwin_slipwarn_ctrl（父類 bottle_w1_vhigh_relwin_ctrl＝v2）",
+ "isaac_script": "evaluation/isaac_bottle_w1dynsr24.py（dynsr23 複本：換控制器匯入、列印 slip_warn、結果碼 6＝完成抓放但原抓持品質不合格）",
+ "changes_vs_v2": [
+  "判定器：平移滑移 > 5 mm 且轉角 ≤ 3° ⇒ 記警告（第一次時刻與值、超標步數）不停止；hold_ok＝False 照設、評分基準 T_rel_base 固定不重設；轉角 > 3°、失抓、禁止接觸、穿透、資料失效等停止照舊",
+  "幾何：judge.T_rel 對外改為最新有效量測的 TCP→瓶相對位姿（量測來源同既有抓持基準：模擬瓶位姿，安全網性質已揭露）",
+  "流程：滑移警告使 hold_ok 為 False 時，在原 done 時點（離桌成立＋hold_s、無停止）照設 done，之後照常運送／放置／鬆爪／保持；judge.success 不變",
+  "結果碼 6（dynsr24 與 run_bottle_ros.sh 說明）"
+ ],
+ "sha256": {
+  "evaluation/bottle_w1_vhigh_relwin_slipwarn_ctrl.py": "88ccf2115ffdf296cbf7caf07d70fa3c5b4bd38a5f01d1ebb62aa40b530fae62",
+  "evaluation/isaac_bottle_w1dynsr24.py": "bd769f3e88a4bfd14778a4280ad203443dd240cf1b170e9cfdce34374817e215",
+  "evaluation/bottle_w1_vhigh_relwin_ctrl.py": "8029bc3926d5e1b90aef1a534dca387eb23b6a43cbb4ac7d566918eb14717537",
+  "evaluation/run_bottle_ros.sh": "6c5d4a9b2e968f31319ef08bca3d8341c15a79a2c8d448d124c5dfd6bab8b2e0",
+  "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
+  "evaluation/test_bottle_w1_slipwarn.py": "cf0e5d0d7da5b26b3833f992b7f16e4e636f275d76979dd17c4ada82efc1078c",
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962"
+ },
+ "unchanged_from_v2_sha256": "其餘控制器、追蹤器、模型、gmpc 檔同 v2 凍結紀錄",
+ "targeted_offline": {
+  "result_file": "evaluation/results/bottle/slipwarn_offline.json",
+  "kind": "假世界、假候選（U+3.6 s 起送），A4 幾何；注入在假受控對象",
+  "nominal_vs_v2": "相位時刻相同、完成 48.25 s；放置偏差 0.90 vs 1.13 mm（幾何改用當下量測）",
+  "trans": "0.5 mm/s 下滑：32.94 s 警告（5.00 mm），不停，47.75 s 完成放置；hold_ok False、原標準不成功；鬆爪前最大 7.77 mm；持瓶對兩桌最小 44.0 mm（名目 49.8）",
+  "angle": "28.92 s 轉角 3.00° 照停",
+  "trans_ang": "27.96 s 警告後，32.95 s 轉角 3.00° 照停（警告不關掉後續停止）",
+  "loss": "grasp_loss_finger1 照停",
+  "contact": "forbidden_contact:bottle_env 照停",
+  "criterion_correction": "第一版 trans 判準 slip_max ≥ 9.9 mm 與 trans_ang 轉角排在鬆爪後屬測試設計錯誤，已更正後重跑；控制器未改"
+ },
+ "physical_order": ["A4", "B2", "C1", "C2"],
+ "c1_c2_precondition": "Codex 053914 第 2 項：先補封存動態軌跡的離線核對"
+}
