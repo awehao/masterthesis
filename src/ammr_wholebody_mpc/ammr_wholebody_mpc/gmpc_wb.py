@@ -793,6 +793,44 @@ def _build_box_rows(box, X_ref_win, Phi, Gamma, e0, N):
     return sparse.csc_matrix(np.vstack(rows)), np.array(lo), np.array(hi)
 
 
+FACE_OPPOSE = 0.5                                       # 同原規則的 0.5：n·d̂ < −0.5 視為迎面
+
+
+def _face_pref(P3, dd3, c, h_, dP, d_safe, slope, pv, stage):
+    """（gmpc_wb 候選 face_rule='pref'）三維障礙分隔面的選面偏好，行進方向只作偏好、不硬排除整個軸。六面固定候選：
+    背面一律不選：第 0 步本體均點在該面的對側面之外，且在另兩軸都落在盒的範圍內（要到達該面必須穿過障礙）。
+    req＝d_safe − slope·切向距離 − 有號距離（同列的斜坡需求），取名目時域最大值；n·d̂＝法向與時域行進方向的餘弦（靜止時 0）。
+    stage 'primary'：非迎面（n·d̂ ≥ −0.5）的面中，前一拍的面仍被名目滿足（req ≤ 0）就沿用；否則取 req 最小者（同分取 n·d̂ 大者）。
+    stage 'fallback'（primary 求解不可行時，由 solve 重解一次）：名目已滿足的面（可含迎面，作為減速／保持分隔），前一拍優先，否則 n·d̂ 最大；
+      都不滿足則沿用前一拍（非背面），再不然取 req 最小者。兩次都不可行 ⇒ 照原路徑停止。pv：前一拍採用的 (軸, 號) 或 None。"""
+    p0 = P3[0].mean(axis=0)
+    nd = float(np.linalg.norm(dP))
+    cand = []
+    for a_ in range(3):
+        oth = [i for i in range(3) if i != a_]
+        for sg_ in (-1.0, 1.0):
+            if (-sg_ * (p0[a_] - c[a_]) > h_[a_]) and all(abs(float(p0[i] - c[i])) <= h_[i] for i in oth):
+                continue
+            rq = d_safe - slope * np.linalg.norm(np.maximum(dd3[:, :, oth], 0.0), axis=2) - (sg_ * (P3[:, :, a_] - c[a_]) - h_[a_])
+            cand.append(dict(f=(a_, sg_), req=float(rq.max()), m_all=float((sg_ * (P3[:, :, a_] - c[a_]) - h_[a_]).min()),
+                             nd=0.0 if nd < 0.02 else float(sg_ * dP[a_] / nd)))
+    by = {x['f']: x for x in cand}
+    if stage == 'primary':
+        nonf = [x for x in cand if x['nd'] >= -FACE_OPPOSE]
+        if pv in by and by[pv]['nd'] >= -FACE_OPPOSE and by[pv]['req'] <= 0.0:
+            return pv
+        if nonf:
+            return min(nonf, key=lambda x: (x['req'], -x['nd']))['f']
+    V = [x for x in cand if x['req'] <= 0.0]
+    if pv in by and by[pv]['req'] <= 0.0:
+        return pv
+    if V:
+        return max(V, key=lambda x: (x['nd'], x['m_all']))['f']
+    if pv in by:
+        return pv
+    return min(cand, key=lambda x: x['req'])['f']
+
+
 def _build_jerk_terms(S2: np.ndarray, xi_ref_win: np.ndarray, xi_prev: np.ndarray, xi_prev2: np.ndarray, N: int):
     """（gmpc_wb 候選）輸入二階差分成本 Σ_{k=0}^{N-1} Δ²u_kᵀ S2 Δ²u_k 的 P／q 增量，寫法同 _build_smoothness_terms。
     u_k = ξ_ref(k) + δξ_k，u_{-1} = xi_prev，u_{-2} = xi_prev2：
@@ -1299,9 +1337,20 @@ class GMPC:
                                                   note='退回 hold 底盤解；手臂有界減速序列（未驗證通過 ⇒ failed，呼叫端須終止）'))
             if r_hold.accept_action == 'brake':
                 return _fb('base_brake')
-            r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=dict(arm, _inner=True), xi_prev2=xi_prev2, cost_ref=cost_ref, u0_rows=u0_rows)
+            bo0 = arm.get('body_obst')
+            pref = bool(bo0) and bo0.get('face_rule') == 'pref'
+            arm_i = dict(arm, _inner=True, body_obst=dict(bo0, face_stage='primary', _picks={})) if pref else dict(arm, _inner=True)
+            r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=arm_i, xi_prev2=xi_prev2, cost_ref=cost_ref, u0_rows=u0_rows)
+            face_stage = 'primary'
+            if pref and r.status != 'solved':                          # （候選）選面主選不可行 ⇒ 退回已滿足面重解一次（固定預算 2 次），仍不可行照原路徑停止
+                arm_i = dict(arm, _inner=True, body_obst=dict(bo0, face_stage='fallback', _picks={}))
+                r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=arm_i, xi_prev2=xi_prev2, cost_ref=cost_ref, u0_rows=u0_rows)
+                face_stage = 'fallback'
             if r.status != 'solved':
                 return _fb('coupled_not_solved', r.status, (r.arm_check or {}).get('qp'))
+            if pref:
+                bo0.setdefault('face_prev', {}).update(arm_i['body_obst'].get('_picks', {}))
+                r.arm_check = dict(r.arm_check or {}, face_stage=face_stage)
             ck = r.arm_check or {}
             # 實際回傳命令核對：有限值、手臂限制原單位違反、底盤後處理未改動；任一不過即退回，不只記錄
             if not (np.isfinite(np.asarray(r.u_opt, float)).all() and r.u_arm_seq is not None and np.isfinite(r.u_arm_seq).all() and ck.get('finite') is True):
@@ -1614,8 +1663,26 @@ class GMPC:
                         dP = P3[-1].mean(axis=0) - P3[0].mean(axis=0)    # 行進中不選迎面的面：迎面代表停在前面，側面才是繞過；靜止時六面都可選
                         axes = [a_ for a_ in range(3) if float(np.linalg.norm(dP)) < 0.02 or abs(float(dP[a_])) <= 0.5 * float(np.linalg.norm(dP))]
                         _, ax, sg = max(((float((sg_ * (P3[:, :, a_] - c[a_]) - h_[a_]).min()), a_, sg_) for a_ in axes for sg_ in (-1.0, 1.0)))
+                        if bo.get('face_rule') == 'pref':               # （候選，預設 None＝上面原規則）行進方向改為選面偏好，不硬排除
+                            fkey = (bname, round(float(c[0]), 4), round(float(c[1]), 4), round(float(c[2]), 4))
+                            ax, sg = _face_pref(P3, dd3, c, h_, dP, float(bo['d_safe']), float(bo['slope']), (bo.get('face_prev') or {}).get(fkey), bo.get('face_stage', 'primary'))
+                            bo.setdefault('_picks', {})[fkey] = (ax, sg)  # 只有被採用的求解才寫回 face_prev（由 solve 外層）
+                        ff = (bo.get('force_face') or {}).get(bname)    # （診斷，預設 None）指定本體採用某一面，只供逐面可行性核對
+                        if ff is not None:
+                            ax, sg = int(ff[0]), float(ff[1])
                         tang = [i for i in range(3) if i != ax]
                         planes.append(f"{'+' if sg > 0 else '-'}{'xyz'[ax]}")
+                        if bo.get('diag') is not None:                  # （診斷，預設 None）六面表：法向、第 0 步／全時域最小有號餘裕、原規則是否排除、需求最大值
+                            tab = []
+                            for a_ in range(3):
+                                for sg_ in (-1.0, 1.0):
+                                    tg_ = [i for i in range(3) if i != a_]
+                                    rq = float(bo['d_safe']) - float(bo['slope']) * np.linalg.norm(np.maximum(dd3[:, :, tg_], 0.0), axis=2) - (sg_ * (P3[:, :, a_] - c[a_]) - h_[a_])
+                                    tab.append(dict(face=f"{'+' if sg_ > 0 else '-'}{'xyz'[a_]}", m0=float((sg_ * (P3[0, :, a_] - c[a_]) - h_[a_]).min()),
+                                                    m_all=float((sg_ * (P3[:, :, a_] - c[a_]) - h_[a_]).min()), excluded=a_ not in axes, req_max=float(rq.max()),
+                                                    n_rows=int((rq >= -0.05).sum()), n_dot_dP=float(sg_ * dP[a_] / max(float(np.linalg.norm(dP)), 1e-9))))
+                            bo['diag'].append(dict(body=bname, box=[np.asarray(c, float).tolist(), np.asarray(sz, float).tolist()], dP=dP.tolist(), chosen=planes[-1], forced=ff is not None,
+                                                   p0_mean=P3[0].mean(axis=0).tolist(), faces=tab))
                         for j, (_, BG, Mk) in enumerate(preds):
                             for i_p, (_, Jp) in enumerate(pj[j]):
                                 # 斜坡邊界：允許深入量隨切向距離線性放寬，約束連續收緊；到箱角的真實距離是 d_safe／√(1＋slope²)，d_safe 由呼叫端補償
