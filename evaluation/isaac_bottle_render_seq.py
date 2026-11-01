@@ -257,8 +257,7 @@ def main():
                         joint_mrad=max(abs(float(ja[j]) - v) for j, v in zip(idx + [f1, f2], src_j)) * 1e3, bottle_mm=float(np.linalg.norm(np.asarray(pb2, float) - pb)) * 1e3)
         img, retry, dev = REPC.capture(cam_h.get_rgba, world.render, read_pose, max_retry=3)
         img2 = cam_w.get_rgba()
-        fr = cam_h.get_current_frame()
-        dep = fr.get('distance_to_image_plane')
+        dep = cam_h.get_depth()                                           # 直接讀標註器（同 get_rgba）；不推進物理時 get_current_frame() 不更新（vhigh_render_z075_1 深度全程同一格）
         dep = None if dep is None else np.asarray(dep, np.float32).copy()
         ok_i = REPC.has_image(img) and REPC.has_image(img2) and dep is not None and dep.shape == (480, 640)
         if ok_i:
@@ -290,14 +289,16 @@ def main():
             csv.flush()
             print(f'[rp] {n}/{len(pick)}', flush=True)
     csv.close()
+    Dk = np.stack(REC['depth'])
+    n_same = int(sum(np.array_equal(Dk[k], Dk[k - 1]) for k in range(1, len(Dk))))     # 防呆：相鄰格深度完全相同＝擷取過期
     np.savez_compressed(os.path.join(a.out, 'render_w1.npz'), stamp=np.array(REC['stamp']), rgb=np.stack(REC['rgb']), depth=np.stack(REC['depth']), T_wc=np.stack(REC['T_wc']),
                         T_rb=np.stack(REC['T_rb']), q9=np.stack(REC['q9']), K=np.array(K_), dev_cam_mm=np.array(REC['dev_cam_mm']), src=a.src,
                         note='合成序列只渲染；T_wc＝設定構型 FK×外參，T_rb＝渲染端回讀')
-    res_ = dict(dev_cam_mm_max=float(max(REC['dev_cam_mm'], default=float('nan'))), n_depth_frames=len(REC['stamp']), src=a.src, n_frames=len(pick), hz=1.0 / (every * dt), n_bad_img=n_bad_img, n_bad_pose=n_bad_pose, worst=worst, tol=TOL, z0=z0, mode='nostep', eye_ofs=eo, at_ofs=ao, foc=a.foc, hand=dict(T_mount=T_mount.tolist(), hfov_deg=69.0, clip=[0.05, 10.0], res=a.res_hand), wide=dict(eye=a.wide_eye, at=a.wide_at, foc=a.wide_foc))
+    res_ = dict(depth_same_as_prev=n_same, dev_cam_mm_max=float(max(REC['dev_cam_mm'], default=float('nan'))), n_depth_frames=len(REC['stamp']), src=a.src, n_frames=len(pick), hz=1.0 / (every * dt), n_bad_img=n_bad_img, n_bad_pose=n_bad_pose, worst=worst, tol=TOL, z0=z0, mode='nostep', eye_ofs=eo, at_ofs=ao, foc=a.foc, hand=dict(T_mount=T_mount.tolist(), hfov_deg=69.0, clip=[0.05, 10.0], res=a.res_hand), wide=dict(eye=a.wide_eye, at=a.wide_at, foc=a.wide_foc))
     json.dump(res_, open(os.path.join(a.out, 'replay_check.json'), 'w'), ensure_ascii=False, indent=1)
     print(f'[rp] 結束 {res_}', flush=True)
     with open(os.path.join(a.out, 'exit_rc.txt'), 'w') as f:
-        f.write('0' if n_bad_img == 0 and n_bad_pose == 0 else '5')
+        f.write('0' if n_bad_img == 0 and n_bad_pose == 0 and n_same == 0 else '5')
     return 0
 
 
