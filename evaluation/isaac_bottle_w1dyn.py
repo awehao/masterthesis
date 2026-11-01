@@ -89,6 +89,7 @@ ap.add_argument('--plan-only', action='store_true')
 ap.add_argument('--v1-hz', type=float, default=5.0)
 ap.add_argument('--goal', default='-0.9,0.0', help='規劃目標＝直線段入口（任務定義）')
 ap.add_argument('--nopred', action='store_true', help='瞬時組：動態障礙速度置 0（bottle_w1_nopred_ctrl）')
+ap.add_argument('--dyn-case', default='w1_dyn_pass1', help='bottle_w1_dyn_case.CASES 的鍵（封存案例）')
 ap.add_argument('--x-lane', type=float, default=-0.9)
 a = ap.parse_args()
 
@@ -219,7 +220,7 @@ def main():
                   T['material']['dynamic_friction'], T['material']['restitution'], mat_path='/World/PhysicsMaterials/table')
     bind_friction(stage, [stage.GetPrimAtPath('/World/bottle')], B['material']['static_friction'], B['material']['dynamic_friction'],
                   B['material']['restitution'], mat_path='/World/PhysicsMaterials/bottle')
-    CA = DC.CASE                                                              # 第二批移動物：真剛體，關重力、離地 3 mm、大質量，速度驅動
+    CA = DC.CASES[a.dyn_case]                                                 # 第二批移動物：真剛體，關重力、離地 3 mm、大質量，速度驅動
     DZ = CA['height'] / 2 + 0.003
     dyn = DynamicCylinder(prim_path='/World/dyn_obs', name='dyn_obs', position=np.array([CA['start'][0], CA['start'][1], DZ]), radius=CA['radius'], height=CA['height'],
                           mass=1000.0, color=np.array([0.85, 0.55, 0.15]))
@@ -498,7 +499,7 @@ def main():
     dyn_log = []
 
     def dyn_drive(t_task):
-        p_t, v_t = DC.state(t_task)
+        p_t, v_t = DC.state(t_task, CA)
         p_m, _ = dyn.get_world_pose()
         v_m = dyn.get_linear_velocity()
         e = np.array([p_t[0] - float(p_m[0]), p_t[1] - float(p_m[1]), DZ - float(p_m[2])])

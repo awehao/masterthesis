@@ -12,6 +12,15 @@ import numpy as np
 CASE = dict(name='w1_dyn_pass1', source='arena_traffic dyn_obs_0', speed=0.30, radius=0.25, height=1.0,
             start=(1.2936, -2.7148), end=(-1.8128, 0.8123), t_start=17.667, t_meet=25.0, lateral=0.80,
             meet_robot=(0.4399, -0.5351), robot_dir=(0.6609, -0.7504))
+# 第二案（Codex 20261101_092124 第 3 點：後方斜向追越；物理結果前封存）：arena 交通 dyn_obs_3（0.45 m/s、半徑 0.15 m、高 1.0 m），
+# 既有交通裡唯一明顯快於持瓶 0.25 m/s、能在持瓶斜段內追越的速度。沿斜段方向 d 行進、在右側法向 0.70 m（表面離機器人中心 0.55 m，同第一案）；
+# 依 w1_1 軌跡，t_meet＝25.0 s 與機器人並排，起點在並排點後方 2.4 m（t_start＝19.667 s）、終點並排點前方 2.0 m。
+# 約 22.0 s 從機器人後方約 1 m 斜穿過它剛走過的路線（y≈0），之後由右後方追越；不橫越前方規劃路徑。
+# 候選 (t_meet, 後方距離) ∈ {24.5, 25.0, 25.5, 26.0}×{1.6, 2.0, 2.4} 中，排除靜止起點離導航路線太近（全程最近點落在 11.8 s）者，取最近點在持瓶段且表面 0.55 m 者。
+CASE2 = dict(name='w1_dyn_overtake1', source='arena_traffic dyn_obs_3', speed=0.45, radius=0.15, height=1.0,
+             start=(-1.672, 0.803), end=(1.236, -2.499), t_start=19.667, t_meet=25.0, lateral=0.70,
+             meet_robot=(0.4399, -0.5351), robot_dir=(0.6609, -0.7504))
+CASES = {CASE['name']: CASE, CASE2['name']: CASE2}
 
 
 def state(t, case=CASE):

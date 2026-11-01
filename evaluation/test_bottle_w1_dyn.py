@@ -27,7 +27,7 @@ import test_bottle_place as TP                          # noqa: E402
 import test_bottle_w1 as T                               # noqa: E402
 
 BAD = []
-CA = DC.CASE
+CA = DC.CASES[os.environ.get('DYN_CASE', DC.CASE['name'])]
 
 
 def chk(name, cond, info=''):
@@ -53,13 +53,14 @@ def geometry():
     cp = np.array(r['place']['carry_path'], float)[:, :2]
     line = S + np.linspace(0, 1, 2000)[:, None] * (E - S)
     dpath = float(np.min(np.linalg.norm(cp[:, None, :] - line[None, :, :], axis=2)))
-    chk(f'2 障礙中心離持瓶規劃路徑 ≥ 0.74 m（{dpath:.3f}）', dpath >= 0.74, dpath)
+    thr = CA['radius'] + 0.39 + 0.05 + 0.05                                  # 半徑＋代價圖內切＋格＋餘裕（第一案＝0.74）
+    chk(f'2 障礙中心離持瓶規劃路徑 ≥ {thr:.2f} m（{dpath:.3f}）', dpath >= thr, dpath)
     Z = np.load(os.path.join(HERE, 'runs', 'bottle_w1_1', 's1_steps.npz'))
     c = {str(k): Z['rows'][:, i] for i, k in enumerate(Z['cols'])}
     t = c['t']
     lo = next(e['t'] for e in r['events'] if e.get('what') == 'place_phase' and e.get('to') == 'CARRY_NAV')
     hi = next(e['t'] for e in r['events'] if e.get('what') == 'place_phase' and e.get('to') == 'PLACE_APPROACH')
-    ob = np.array([DC.state(tt)[0] for tt in t])
+    ob = np.array([DC.state(tt, CA)[0] for tt in t])
     db = np.hypot(c['base_x'] - ob[:, 0], c['base_y'] - ob[:, 1]) - CA['radius']
     i = int(np.argmin(db))
     chk(f'3 最接近 {t[i]:.2f} s 在持瓶區間 [{lo}, {hi}]，底盤中心到障礙表面 {db[i]:.3f} m < 0.69', lo <= t[i] <= hi and db[i] < 0.69, (t[i], db[i]))
@@ -88,7 +89,7 @@ def run(cls):
 
     def scan_fn(t, q):
         r = NC.ray_boxes(q[:2], float(q[2]), scene, G.LIDAR_Z)
-        oc, _ = DC.state(t)
+        oc, _ = DC.state(t, CA)
         return np.minimum(r, DC.ray_cyl(q[:2], NC.scan_angles() + float(q[2]), oc, CA['radius'], NC.RANGE_MAX))
     del legs
     orig, orig_ml = T.W1.W1PlaceController, SC.make_lidar
@@ -101,7 +102,7 @@ def run(cls):
     r, _ = T.run(c, f)
     t = np.array([h['t'] for h in f.hist])
     Q = np.array([h['q'] for h in f.hist])
-    ob = np.array([DC.state(tt)[0] for tt in t])
+    ob = np.array([DC.state(tt, CA)[0] for tt in t])
     db = np.hypot(Q[:, 0] - ob[:, 0], Q[:, 1] - ob[:, 1]) - CA['radius']
     k = np.flatnonzero(np.abs(t * 10 - np.round(t * 10)) < 1e-6)
     sp = np.hypot(np.diff(Q[k, 0]), np.diff(Q[k, 1])) / 0.1
@@ -123,7 +124,7 @@ def main():
         print(f"   {name}：完成 {o['done']} 阻點 {o['stop'] and o['stop'].get('why')} DONE {o['t_done']} 底盤到障礙表面最小 {o['base_surface_min']:.3f} m @ {o['base_surface_min_t']:.2f} "
               f"錯身 ±3 s 內最低車速 {o['v_min_win']} 最大速度變化率 {o['dec_max_win']} 動態障礙進入控制週期 {o['n_dyn_cycles']} 置零 {o['n_zeroed']}", flush=True)
         chk(f'{name}：完成或受控停止、命令有限', (o['done'] or o['stop'] is not None) and o['finite'], o['stop'])
-    json.dump(res, open(os.path.join(HERE, 'results', 'bottle', 'w1_dyn_offline.json'), 'w'), ensure_ascii=False, indent=1, default=float)
+    json.dump(res, open(os.path.join(HERE, 'results', 'bottle', 'w1_dyn_offline.json' if CA is DC.CASE else f"w1_dyn_offline_{CA['name']}.json"), 'w'), ensure_ascii=False, indent=1, default=float)
     print(f'\n{"全過" if not BAD else "未過 " + str(len(BAD))}')
     for b in BAD:
         print('  失敗', b)
