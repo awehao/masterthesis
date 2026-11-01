@@ -1,0 +1,94 @@
+{
+ "schema": 1,
+ "batch": "多任務 v3（跨桌高抓放：轉回高度依放置桌）",
+ "ruling": "reviews/20261102_064116_reply.md、20261102_070114_reply.md",
+ "base_version": "v2w（evaluation/experiments/20261102_multi_motm_v2w_freeze.json）",
+ "frozen_at_local": "2026-11-02 07:45 Asia/Taipei",
+ "git_head_before_freeze_commit": "0f78b79a23ef6f1864f0aab38513c3732df0fb21",
+ "controller": "bottle_w1_vhigh_relwin_xh_ctrl",
+ "isaac_script": "evaluation/isaac_bottle_w1dynsr25.py（dynsr24 複本：換控制器匯入、列印 xh）",
+ "changes_vs_v2w": [
+  "轉回（升高／外伸）目標 T_back：收近完成時以側持姿態與 xy，高度＝第二桌面（放置先驗）＋Z_PAD 0.02＋H_CLEAR 0.029−持瓶／夾爪包絡在側持姿態下相對 TCP 最低點；收近起點仍原 T_side",
+  "轉回時長 T_TO／T_UP／T_OUT＝5.1／2.1／5.1 s（原 3.8／2.0／3.8；bottle_xh_timing 對本批六趟物理收近起點 IK 延續所需最大 4.81／2.00／4.82 ×1.05 進位）",
+  "下放前 TCP 收斂：外伸完成後 TCP 對 T_back 誤差 ≤ 2 mm 才累計停車靜止"
+ ],
+ "sha256": {
+  "evaluation/bottle_w1_vhigh_relwin_xh_ctrl.py": "c18ec60c745e87b8865724bc8f98ad2b4079df76ac966e9e894027ce5ccaa131",
+  "evaluation/isaac_bottle_w1dynsr25.py": "9526a55a0c1b26437bebad263ea215bfc4fbba0b92df04fbb81ed5056d5791d6",
+  "evaluation/bottle_w1_vhigh_relwin_slipwarn_ctrl.py": "7bbaac4142ee21f895997102740d22be0fda5279d876ee7ff7b5bafd778310f0",
+  "evaluation/bottle_w1_vhigh_relwin_ctrl.py": "8029bc3926d5e1b90aef1a534dca387eb23b6a43cbb4ac7d566918eb14717537",
+  "evaluation/run_bottle_ros.sh": "5701663fcce71b5b032cc921483ab33905f6685541a558f9bc6e24e7f1ef40cb",
+  "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
+  "evaluation/test_bottle_w1_xh.py": "fa574f1b003dab3aec3c6036f2f31c5b28f839b11ac6bb380da66f49aaf0b3aa",
+  "evaluation/bottle_xh_timing.py": "fce9d28e419219587fed17a252385e0091306b830eca396f45065f0eab5fe4ac",
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962"
+ },
+ "timing": {
+  "need_max": {
+   "to_compact": 4.812,
+   "raise": 1.998,
+   "out": 4.819
+  },
+  "pick": {
+   "to_compact": 5.1,
+   "raise": 2.1,
+   "out": 5.1
+  }
+ },
+ "offline": {
+  "result_file": "evaluation/results/bottle/xh_offline.json",
+  "B1": {
+   "outcome": "完整抓放",
+   "t_done": 49.5,
+   "place_mm": 0.97,
+   "z_back": 0.7503,
+   "timing": {
+    "to_compact": {
+     "T_need": 3.884,
+     "T_used": 5.1,
+     "ok": true,
+     "self_mm": 9.5,
+     "bottle_link_mm": 85.6,
+     "deck": 0.119,
+     "margin": 0.237
+    },
+    "raise": {
+     "T_need": 1.987,
+     "T_used": 2.1,
+     "ok": true,
+     "self_mm": 8.8,
+     "bottle_link_mm": 85.5,
+     "deck": 0.122,
+     "margin": 0.242
+    },
+    "out": {
+     "T_need": 3.831,
+     "T_used": 5.1,
+     "ok": true,
+     "self_mm": 9.7,
+     "bottle_link_mm": 85.5,
+     "deck": 0.269,
+     "margin": 0.298
+    }
+   }
+  },
+  "B2": {
+   "outcome": "完整抓放",
+   "t_done": 49.75,
+   "place_mm": 1.66,
+   "out_T_need": 5.009
+  },
+  "A4": {
+   "v3_t_done": 50.15,
+   "v2w_t_done": 48.25,
+   "note": "名目高度 z_back 0.7504（原 0.75）；時長加長使完成晚 1.9 s，不是退化相同"
+  },
+  "stop_fails": {
+   "B1": [],
+   "B2": [],
+   "A4": []
+  },
+  "first_try_note": "第一版 H_CLEAR 0.014（誤以包絡最低點 0.116 估）且沿用 3.8／2.0／3.8 s：結果可完成但時長重核不過，已改"
+ },
+ "physical_next": "B1：bottle_motm_xh_b1_1（第一桌 0.55、瓶 −0.04,+0.02、無動態物），交影片"
+}
