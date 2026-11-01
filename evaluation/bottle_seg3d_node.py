@@ -11,7 +11,7 @@
   核對：四則訊息同戳；color／depth／camera_info 的 frame_id 一致且非空；cam_pose frame_id＝odom；編碼 rgb8／32FC1；影像尺寸與 camera_info 一致。不符 ⇒ 該格發 why＝bad_message。
   自身點：/odom 與 /joint_states（關節依名稱 joint1–6 配對）各取包夾擷取戳、相距 ≤ 0.1 s 的前後樣本線性插值（偏航取最短角），配對誤差記 self_dt_ms；
   沒有包夾 ⇒ 支撐一律判不可觀測（why＝no_self_state），其餘照算。
-  輸出 layout.dim[0].label 帶欄位版本、座標系與欄位名（LAYOUT_LABEL），最後一欄 schema＝2。
+  輸出 layout.dim[0].label 帶欄位版本、座標系與欄位名（LAYOUT_LABEL）；schema＝3 起加 top_cut／bottom_cut／side_cut 與上緣外側的有效遠背景／遮擋／未知比例。
 估計：bottle_seg_depth3d.locate（同一份程式；尺寸閘＝類別層級先驗，與 top-1 都算，發布 size-gated 結果並附 top-1 是否被尺寸閘換掉）。
 發 /{ns}/bottle_seg3d（Float64MultiArray），欄位見 FIELDS；無效欄 NaN。時間：proc_ms＝取出影格到估計完成（解碼＋推論＋三維）；infer_ms＝模型本身；
   queue_ms＝配齊到開始處理的牆鐘等待；age_ms＝發布當下的節點時鐘（use_sim_time 則為模擬時鐘）減擷取戳；pair_age_ms＝四則訊息配齊當下的同一種年齡（傳輸與上游延遲）。
@@ -50,9 +50,10 @@ FIELDS = ('stamp', 'valid', 'conf', 'n_inst', 'n_size_rejected', 'top1_replaced'
           'xy_valid', 'cx_known_r', 'cy_known_r', 'xy_valid_silhouette', 'cx_sil', 'cy_sil', 'r_sil',
           'top_observed', 'z_top', 'z_vis_lo', 'z_vis_hi', 'support_observed', 'z_support', 'height_valid', 'height',
           'surf_cx', 'surf_cy', 'n_pts', 'self_filter', 'why', 'proc_ms', 'infer_ms', 'queue_ms', 'age_ms',
-          'n_drop_pair', 'n_drop_latest', 'n_stale', 'n_done', 'pair_age_ms', 'n_old_complete', 'self_dt_ms', 'schema')
-SCHEMA = 2.0
-LAYOUT_LABEL = 'bottle_seg3d schema=2 frame=odom(world, z up, m) stamp=capture fields=' + ','.join(FIELDS)
+          'n_drop_pair', 'n_drop_latest', 'n_stale', 'n_done', 'pair_age_ms', 'n_old_complete', 'self_dt_ms', 'schema',
+          'top_cut', 'bottom_cut', 'side_cut', 'edge_top_far', 'edge_top_near', 'edge_top_unknown')
+SCHEMA = 3.0                                            # 3：加遮罩截斷與上緣外側分類（給有界自適應觀察判斷缺底／缺頂；後處理 locate 不變）
+LAYOUT_LABEL = 'bottle_seg3d schema=3 frame=odom(world, z up, m) stamp=capture fields=' + ','.join(FIELDS)
 
 
 def stamp_of(h):
@@ -245,7 +246,9 @@ class Seg3dNode(Node):
                        n_pts=v.get('n_pts', 0), self_filter=self_ok, why=float(WHY.index(r['why'])) if r.get('why') in WHY else -1.0,
                        proc_ms=proc_ms, infer_ms=infer_ms, queue_ms=queue_ms, age_ms=(now - st) * 1e3,
                        n_drop_pair=self.n['drop_pair'], n_drop_latest=self.n['drop_latest'], n_stale=self.n['stale'], n_done=self.n['done'], pair_age_ms=pair_age,
-                       n_old_complete=self.n['old_complete'], self_dt_ms=self_dt, schema=SCHEMA)
+                       n_old_complete=self.n['old_complete'], self_dt_ms=self_dt, schema=SCHEMA,
+                       top_cut=float(v.get('top_cut', False)), bottom_cut=float(v.get('bottom_cut', False)), side_cut=float(v.get('side_cut', False)),
+                       edge_top_far=(v.get('edge_top') or [nan] * 4)[0], edge_top_near=(v.get('edge_top') or [nan] * 4)[1], edge_top_unknown=(v.get('edge_top') or [nan] * 4)[2])
             out = Float64MultiArray()
             out.layout.dim = [MultiArrayDimension(label=LAYOUT_LABEL, size=len(FIELDS), stride=len(FIELDS))]
             out.data = [float(row[k]) for k in FIELDS]
