@@ -162,6 +162,8 @@ def main():
             d.rectangle([b[0] - 6, b[1] - 4, b[2] + 6, b[3] + 4], fill=(16, 22, 28, 190))
             d.text((x + 10, y + 8), lab, font=RV.F_L, fill=INK)
         s_w, col_w = est_line(W1L, latest(W1L, tn))
+        if tn >= ev.get('wrist_lock', 1e9):                     # 鎖定後控制器不再使用手腕估計（估計節點仍照常輸出）
+            s_w, col_w = f'已鎖定、控制器不再使用（節點仍輸出：{s_w}）', MUTED
         b = d.textbbox((MAIN_W + 10, TOP + HAND_H - 34), f'手腕估計：{s_w}', font=RV.F_L)
         d.rectangle([b[0] - 6, b[1] - 4, b[2] + 6, b[3] + 4], fill=(16, 22, 28, 200))
         d.text((MAIN_W + 10, TOP + HAND_H - 34), f'手腕估計：{s_w}', font=RV.F_L, fill=col_w)
