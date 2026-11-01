@@ -2,7 +2,7 @@
 """多任務批次實錄重播製片 v2（bottle_replay_video_w1vhigh.py 的版本化複本，2026-11-02；bottle_replay_video_motm.py 只加事件，不足以處理成功趟）：
 1 滑移（TCP→瓶相對平移，對 t_grasp）只畫到鬆爪（place_phase RELEASE）為止；鬆爪後夾爪退離，相對位移不是滑移，頂欄與曲線都不再顯示（照判定器：鬆爪後滑移不再判）。
 2 底部說明依該趟實際結果產生（完整抓放／完成但滑移超標警告／受控停止＋原因），不再寫死。停止後的尾段照舊顯示。
-3 關鍵時刻加 relwin_shift（依量測瓶 x 平移抓取排程）與 v2w 滑移警告（第一次平移超標）；v3 加 xh_back（轉回高度依第二桌）與 xh_tcp_converged（下放前 TCP 收斂）。
+3 關鍵時刻加在線計畫事件（首次觀測、抓取／轉回計畫送出與承接；dynsr26）與 relwin_shift（依量測瓶 x 平移抓取排程）與 v2w 滑移警告（第一次平移超標）；v3 加 xh_back（轉回高度依第二桌）與 xh_tcp_converged（下放前 TCP 收斂）。
 以下為 w1vhigh 說明。
 移動視角首次物理結果的代表影片（bottle_replay_video_w1segt.py 的版本化複本，2026-11-02；Codex 20261102_031502）：
 加 V_HIGH 接近序列事件（展臂到高位視角、高位觀察、轉回備妥）、採用學習目標、受控停止；漸變前階段列顯示序列狀態；
@@ -162,6 +162,16 @@ def main():
     mom = sorted(mom + [(e['t'], f"依量測瓶位平移抓取排程 Δx {e['dx'] * 1e3:+.1f} mm") for e in r['events'] if e['what'] == 'relwin_shift'])
     mom = sorted(mom + [(e['t'], f"轉回高度依第二桌：{e['z_back']:.3f} m（抬升高 {e['z_side_lift']:.3f} m）") for e in r['events'] if e['what'] == 'xh_back']
                  + [(e['t'], f"TCP 收斂到放置姿態（{e['err_mm']:.1f} mm），可停車下放") for e in r['events'] if e['what'] == 'xh_tcp_converged'])
+    on_ = r.get('online') or {}
+    mom = sorted(mom + [(e['t'], f"看見新位置：首次合格觀測（快照 #{e['seq']}）") for e in r['events'] if e['what'] == 'online_obs_first']
+                 + [(e['t'], f"在線抓取計畫送出（最晚處置點 x {e['x_latest']:+.3f} m）") for e in r['events'] if e['what'] == 'grasp_plan_request']
+                 + [(e['t'], "在線轉回計畫送出（依側持姿態與持瓶包絡）") for e in r['events'] if e['what'] == 'return_plan_request']
+                 + [(e['t'], f"轉回計畫承接：時長 {e['T_TO']:.2f}／{e['T_UP']:.2f}／{e['T_OUT']:.2f} s") for e in r['events'] if e['what'] == 'return_plan_accept'])
+    for g_ in (on_.get('grasp_plans') or []):
+        if g_.get('state') == 'accepted':                                   # 在線版：採用目標＝抓取計畫承接（同一拍），合併成一則，避免同刻多則只顯示一則
+            lab = f"在線抓取計畫承接（計算 {g_['compute_wall'] * 1e3:.0f} ms 牆鐘）→ 目標與排程交給 GMPC"
+            mom = sorted([m for m in mom if not (abs(m[0] - g_['t_acc']) < 1e-6 and (m[1].startswith('採用學習目標') or m[1].startswith('學習模型目標採用') or m[1].startswith('依量測瓶位平移')))]
+                         + [(g_['t_acc'], lab)])
     if r.get('mission_done') and r.get('success'):
         FOOT = '移動接近中以高位手腕視角取得學習目標（遮罩＋深度）；移動中抓取、離桌、運送、第二桌放置、鬆爪、退離、保持全部成立（原抓持品質標準內）；滑移曲線畫到鬆爪為止'
     elif r.get('mission_done'):
