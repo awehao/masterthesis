@@ -281,6 +281,9 @@ class PlaceController(N2C.S1Planned):
     def _carry_pending(self, q):
         return False
 
+    def _place_arm_extra(self):
+        return {}                                           # 預設＝原行為；版本化子類可在持瓶後的求解加入三維障礙列（同 S0b 的 _arm_extra）
+
     def _park_solve(self, q):
         """θ_park 固定，用完整座標變換：瓶底心 xy＝放置點 ⇒ 底盤 (x, y)。回傳 (P_park, 抬升高度)。"""
         Tbt = self.K.fk(np.r_[0.0, 0.0, 0.0, q[3:]], 'link_tcp') @ self.judge.T_rel
@@ -647,7 +650,7 @@ class PlaceController(N2C.S1Planned):
         self.mpc = self.mpc_park if parked else self.mpc_nav
         w_p = C0.W_NEAR if self.pph in ('LOWER', 'RELEASE', 'RETREAT') else C0.W_FAR
         arm = dict(mode='active', K=self.K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=cfg.arm_model, T_seq=T_seq, w_p=w_p,
-                   lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=rel, qp_solver=self.qp_solver, **B.W_ARM)
+                   lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=rel, qp_solver=self.qp_solver, **B.W_ARM, **self._place_arm_extra())
         obs = None if self.obstacles_fn is None else self.obstacles_fn(t_eff)
         r = self.mpc.solve(obstacles=obs, X_now=from_xytheta(*qp[:3]), X_ref_win=X_ref, xi_ref_win=xi_ref, xi_prev=self.u_prev[:3], arm=arm)
         ck = dict(r.arm_check or {})
