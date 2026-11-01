@@ -802,7 +802,7 @@ def main():
                         counts=np.array(CLOG['counts'], float), normal_cols=np.array(['t', 'finger', 'f', 'px', 'py', 'pz', 'nx', 'ny', 'nz', 'dist']),
                         friction_cols=np.array(['t', 'finger', 'fx', 'fy', 'fz', 'px', 'py', 'pz']), counts_cols=np.array(['t', 'tot_normal', 'tot_friction', 'n_f0', 'fr_f0', 'n_f1', 'fr_f1']),
                         meta=np.array(json.dumps(dict(dt=dt, err=CLOG['err'], nonfinite=CLOG['nonfinite'], cap_over=CLOG['cap_over'], cap=CLOG['cap'], filter0='/World/bottle',
-                                                      note='法向：各接觸點法向力（純量）×法向；摩擦：錨點切向力向量；兩套索引不同；作用於手指或瓶的方向須依介面核對結果換算')))))
+                                                      note='法向：各接觸點法向力（純量）×法向；摩擦：錨點切向力向量；兩套索引不同；作用於手指或瓶的方向須依介面核對結果換算'))))
     print(f"[s1] 接觸量測 法向列 {len(CLOG['normal'])}、摩擦列 {len(CLOG['friction'])}、步數 {len(CLOG['counts'])}、讀取錯誤 {CLOG['err']}、非有限 {CLOG['nonfinite']}、超容量步 {CLOG['cap_over']}", flush=True)
     try:                                                                      # 紀錄補強（Codex 20261101_132514）：實際掃描與命令時間鏈，可直接重放
         np.savez_compressed(os.path.join(a.out, 'scan_log.npz'), t=np.array([s_[0] for s_ in scan_log], float), stamp=np.array([s_[0] + (chain.T0 or 0.0) for s_ in scan_log], float),
