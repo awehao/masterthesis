@@ -49,7 +49,7 @@ def replay(run, tracker_cls=None, radius=None):
             truth = dict(x=float(c['dyn_x'][k]), y=float(c['dyn_y'][k]), vx=float(c['dyn_vx'][k]), vy=float(c['dyn_vy'][k]))
         tracks = [dict(tid=int(k_.tid), x=float(k_.kf.position[0]), y=float(k_.kf.position[1]), vx=float(k_.kf.velocity[0]), vy=float(k_.kf.velocity[1]), age=int(k_.age),
                        misses=int(k_.misses), mover=bool(k_.is_mover), reject=int(k_.reject), innov=float(k_.innov), n_pts=int(len(k_.pts))) for k_ in tr._tracks]
-        rows.append(dict(t=float(t), pose=[float(v) for v in pose], dyn=[dict(d) for d in ch.dyn], tracks=tracks, truth=truth))
+        rows.append(dict(t=float(t), pose=[float(v) for v in pose], dyn=[dict(d) for d in ch.dyn], stat=[dict(d) for d in ch.stat], tracks=tracks, truth=truth, ranges=rr))
     return rows
 
 
