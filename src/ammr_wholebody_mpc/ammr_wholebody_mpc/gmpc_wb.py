@@ -761,6 +761,21 @@ def _build_smoothness_terms(S: np.ndarray, xi_ref_win: np.ndarray,
     return 2.0 * (DtS @ D), 2.0 * (DtS @ c)
 
 
+def _err_jac(e_bar, h=1e-7):
+    """（gmpc_wb 候選）M＝∂log(exp(ē)·exp(ε))/∂ε 於 ε＝0（中央差分；θ 取 wrap）：名目誤差 ε 對真參考誤差的一階對應。"""
+    from .se2 import exp_, log_
+    E = exp_(np.asarray(e_bar, float))
+    M = np.zeros((3, 3))
+    for i in range(3):
+        d = np.zeros(3)
+        d[i] = h
+        a, b = log_(E @ exp_(d)), log_(E @ exp_(-d))
+        dd = a - b
+        dd[2] = math.atan2(math.sin(dd[2]), math.cos(dd[2]))
+        M[:, i] = dd / (2 * h)
+    return M
+
+
 def _build_box_rows(box, X_ref_win, Phi, Gamma, e0, N):
     """（gmpc_wb 候選）底盤位置硬界限列：第 i＋1 步（i＝0..N−1，含第一未來步）的世界位置一階預測
     p ≈ p_ref,i+1 ＋ R_ref,i+1 · (Φ·e0 ＋ Γ·z)[3i:3i+2]，要求 x、y 各在 box 內。回傳 (A (2N×3N), l, u)。"""
@@ -1252,6 +1267,7 @@ class GMPC:
               obstacles  : list | None = None,
               arm        : dict | None = None,
               xi_prev2   : np.ndarray | None = None,
+              cost_ref   : tuple | None = None,
               ) -> GMPCResult:
         """
         obstacles : optional list of dicts {x, y, radius} in world frame.
@@ -1269,7 +1285,7 @@ class GMPC:
             #   底盤不可行（煞停）⇒ 照封存版煞停、手臂歸零；耦合問題未完全收斂（status ≠ solved）⇒ 退回 hold 底盤解、手臂保持。
             #   動機：硬 k0 過近案封存版判 primal infeasible 煞停，耦合問題卻在迭代上限回傳朝障礙前進的命令（CBF 殘差 −0.55）。
             import dataclasses as _dc
-            r_hold = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm={'mode': 'hold'}, xi_prev2=xi_prev2)
+            r_hold = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm={'mode': 'hold'}, xi_prev2=xi_prev2, cost_ref=cost_ref)
             N_ = self.cfg.N
             def _fb(why, coupled_status=None, qp=None):
                 U_s, ck = arm_stop_sequence(arm, N_, self.cfg.dt)
@@ -1281,7 +1297,7 @@ class GMPC:
                                                   note='退回 hold 底盤解；手臂有界減速序列（未驗證通過 ⇒ failed，呼叫端須終止）'))
             if r_hold.accept_action == 'brake':
                 return _fb('base_brake')
-            r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=dict(arm, _inner=True), xi_prev2=xi_prev2)
+            r = self.solve(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles, arm=dict(arm, _inner=True), xi_prev2=xi_prev2, cost_ref=cost_ref)
             if r.status != 'solved':
                 return _fb('coupled_not_solved', r.status, (r.arm_check or {}).get('qp'))
             ck = r.arm_check or {}
@@ -1336,8 +1352,24 @@ class GMPC:
         Q_bar = _build_Q_bar(Q_eff, Qf_eff, N)
         R_bar = _build_R_bar(cfg.R, N)
 
-        P_dense = 2.0 * (Gamma.T @ Q_bar @ Gamma + R_bar)
-        q_vec   = 2.0 * Gamma.T @ Q_bar @ Phi @ e0
+        if cost_ref is None:
+            P_dense = 2.0 * (Gamma.T @ Q_bar @ Gamma + R_bar)
+            q_vec   = 2.0 * Gamma.T @ Q_bar @ Phi @ e0
+        else:
+            # （候選）沿名目軌跡重線性化：X_ref_win／xi_ref_win 是線性化用的名目（動態、CBF、窗口、輪級、手臂 Jacobian 都繞它），
+            # 成本仍對真參考 cost_ref＝(X_true (N+1,3,3), xi_true (N+1,3))：e_true,k ≈ ē_k ＋ M_k ε_k，ē_k＝log(X_true,k⁻¹·X̄_k)，
+            # M_k＝∂log(exp(ē_k)·exp(ε))/∂ε（數值）；輸入成本 R 對 (u − ξ_true)＝δ ＋ (ū − ξ_true)。
+            Xt, xt = cost_ref
+            Mb = np.zeros((N * n, N * n))
+            eb = np.zeros(N * n)
+            for k in range(N):
+                ek_bar = geodesic_error(np.asarray(Xt[k + 1], float), np.asarray(X_ref_win[k + 1], float))
+                Mb[k * n:(k + 1) * n, k * n:(k + 1) * n] = _err_jac(ek_bar)
+                eb[k * n:(k + 1) * n] = ek_bar
+            G2 = Mb @ Gamma
+            c2 = Mb @ (Phi @ e0) + eb
+            P_dense = 2.0 * (G2.T @ Q_bar @ G2 + R_bar)
+            q_vec   = 2.0 * G2.T @ Q_bar @ c2 + 2.0 * R_bar @ (np.asarray(xi_ref_win, float)[:N] - np.asarray(xt, float)[:N]).ravel()
         # Forward-progress preference: reward velocity along the reference
         # tangent so that, when forced aside, the QP prefers to give way in the
         # direction of travel rather than backwards.
