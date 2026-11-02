@@ -75,6 +75,9 @@ import bottle_w1_f1l_ctrl as F1L                        # noqa: E402
 import test_bottle_place as TP                          # noqa: E402
 import bottle_n2_path as NP                             # noqa: E402
 TP.DX, TP.DY = (SCN['table2_x'] if SCN is not None else 2.4), -1.0
+if SCN is not None:                                     # 假世界的接觸模型（FakePlace）讀 PC.PLACE['c']：第二桌東移要同步，否則瓶子放在舊桌位之外、量不到支撐
+    PC_ = sys.modules.get('bottle_place_ctrl') or __import__('bottle_place_ctrl')
+    PC_.PLACE['c'] = SCN['place_c']
 J_RUN = np.array(json.load(open(os.path.join(HERE, 'runs', 'bottle_online5_u3_1', 's1_report.json')))['plan']['joined'], float)
 PLANS = json.load(open(os.path.join(HERE, 'results', 'bottle', f"f1_offline_plan_rev_box_lchan_dx{SCN['dx']:g}.json" if SCN is not None else 'f1_offline_plan_rev_box.json')))   # 原障礙方塊進地圖的離線路徑（實跑靠掃描進代價圖；無方塊版的返回路徑貼著方塊走，與實跑不符）
 RTF_CAP = 0.6
@@ -235,7 +238,11 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
     dyn_t = [float(e_['t']) for e_ in rows_ if FD._dyn(e_['obs'])]
     eps_ = np.array([float(e_.get('eps0', 0.0)) for e_ in rows_])
     out['false_dynamic'] = dict(n_ticks=len(dyn_t), n_rows=len(rows_), t_first=dyn_t[0] if dyn_t else None, t_last=dyn_t[-1] if dyn_t else None, max_items=max((len(FD._dyn(e_['obs'])) for e_ in rows_), default=0), note='場景沒有移動物，任何動態項都算誤判')
-    out['slack'] = dict(eps0_max=float(eps_.max()) if len(eps_) else None, n_over_1e4=int((eps_ > 1e-4).sum()), min_h_min=float(min((float(e_['min_h']) for e_ in rows_), default=float('nan'))))
+    i_e = int(np.argmax(eps_)) if len(eps_) else None
+    in_c = np.array([bool(LS.in_corridor(np.asarray(e_['qp'], float)[:2])[0]) for e_ in rows_])
+    t_over = [float(rows_[i_]['t']) for i_ in np.flatnonzero(eps_ > 1e-4)]
+    out['slack'] = dict(eps0_max=float(eps_.max()) if len(eps_) else None, at=None if i_e is None else dict(t=round(float(rows_[i_e]['t']), 2), xy=[round(float(v_), 3) for v_ in np.asarray(rows_[i_e]['qp'], float)[:2]], in_corridor=bool(in_c[i_e]), phase=int(rows_[i_e]['phase'])),
+                        n_over_1e4=len(t_over), n_over_1e4_in_corridor=int(((eps_ > 1e-4) & in_c).sum()), eps0_max_in_corridor=float(eps_[in_c].max()) if in_c.any() else None, t_over_range=[t_over[0], t_over[-1]] if t_over else None, n_ticks_corridor=int(in_c.sum()), min_h_min=float(min((float(e_['min_h']) for e_ in rows_), default=float('nan'))))
     out['shield'] = [(r_.get('nav_chain') or {}).get('shield') for r_ in reps]
     # 路徑連續性：實際底盤到當趟承接路徑（規劃路徑＋放置直線段）的橫向誤差；直線段銜接前後的命令變化
     out['tracking'] = {}
