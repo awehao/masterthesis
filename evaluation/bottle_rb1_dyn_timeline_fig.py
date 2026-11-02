@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """R-B1＋迎面移動物的報告用時間軸圖（Codex 20261102；只讀既有紀錄，不補造未記錄的量）。
-回答：動態會遇時，底盤如何改變運動、手臂如何維持持物任務，以及任務代價與品質如何變化。本案屬底盤避讓配合手臂相對任務，不是手臂主動繞開移動物的證據。
+回答：動態會遇時，底盤如何改變運動、預測 TCP 誤差如何變化，以及任務代價與品質如何變化。本案屬底盤避讓配合手臂相對任務，不是手臂主動繞開移動物的證據。預測 TCP 誤差相近不能證明抓持穩定（TCP 追蹤與瓶對夾爪滑移是不同指標）。
 共用時間軸（任務時刻）的五格：
   障礙距離（對障礙表面，真值只供評估）：底盤中心；手臂＋持瓶（高度 ≤ 障礙高的連桿點與持瓶點的最小值，每 0.05 s）；
   底盤速度（量測位置差分，10 物理步滑動平均）；
-  TCP 相對任務誤差＝s1_cbf 每求解拍：命令生效時刻預測構型 qp 的 TCP 對參考 T_seq[0] 的位置差（持瓶運送段在底盤座標、下放段在世界座標，同該拍求解）；
+  命令生效時刻的預測 TCP 位置誤差＝s1_cbf 每求解拍：預測構型 qp 的 TCP 對參考 T_seq[0] 的位置差（不是純實測追蹤誤差；持瓶段相對底盤、下放段世界座標，同該拍求解）；
   CBF 鬆弛 eps0（m²/s；動靜態列共用鬆弛，紀錄沒有逐列歸屬，不歸因於特定列）；
   滑移＝TCP→瓶相對平移對抓持成立時刻（量測 FK＋讀回瓶位姿），畫到鬆爪為止。
 本趟 bottle_rb1_dyn_1（carrygov），對照 bottle_rb1_gaze_1（gaze，無移動物）：控制器版本不同，不是嚴格只切換障礙的消融。
@@ -126,7 +126,7 @@ def main():
     t_near = float(td[k0])
     ph, phb = phases(r), phases(rb)
     fig = plt.figure(figsize=(13.33, 9.0), dpi=200, facecolor=SURF)
-    gs = fig.add_gridspec(6, 1, height_ratios=[0.62, 1.15, 1.0, 1.0, 0.8, 1.0], hspace=0.14, left=0.085, right=0.885, top=0.895, bottom=0.115)
+    gs = fig.add_gridspec(6, 1, height_ratios=[0.62, 1.15, 1.0, 1.0, 0.8, 1.0], hspace=0.14, left=0.085, right=0.885, top=0.895, bottom=0.135)
     axs = [fig.add_subplot(gs[i, 0]) for i in range(6)]
     for a in axs[1:]:
         a.sharex(axs[0])
@@ -180,9 +180,11 @@ def main():
     me, meb = (te >= T_LO) & (te <= T_HI), (teb >= T_LO) & (teb <= T_HI)
     a.plot(teb[meb], deb[meb], color=C_BASE, linewidth=1.6, linestyle=(0, (5, 2)))
     a.plot(te[me], de[me], color=C_RUN, linewidth=2)
-    style(a, 'TCP 相對任務\n誤差 (mm)', (0, max(12.0, float(de[me].max()) * 1.1)))
+    style(a, '預測 TCP\n位置誤差 (mm)', (0, max(12.0, float(de[me].max()) * 1.1)))
     rlabel(a, a.get_ylim()[1] * 0.80, '本趟', C_RUN)
     rlabel(a, a.get_ylim()[1] * 0.60, '基線（虛線）', C_BASE)
+    t_low, t_lowb = next(x for n_, x, _ in ph if n_ == '下放'), next(x for n_, x, _ in phb if n_ == '下放')
+    a.text(t_low + 0.15, a.get_ylim()[1] * 0.86, f'{t_low:.2f} s 起世界座標（基線 {t_lowb:.2f} s）', fontsize=9, color=INK)
     a = axs[4]
     a.plot(te[me], eps[me], color=C_RUN, linewidth=2)
     style(a, 'CBF 鬆弛 (m²/s)', (0, 0.34))
@@ -210,9 +212,10 @@ def main():
     A2.axvline(t_mv, color=INK2, linewidth=0.9, zorder=0)
     A2.axvline(23.55, color=INK2, linewidth=0.9, zorder=0)
     A2.text(23.75, 3.2, f'實線：障礙起動 {t_mv:.2f} s、起動後首次進求解器 23.55 s', fontsize=9, color=INK)
-    fig.text(0.085, 0.962, 'R-B1 迎面動態會遇：底盤減速振盪、手臂維持相對持物任務，完成抓放但滑移超標', fontsize=15, color=INK, weight='bold', ha='left')
+    fig.text(0.085, 0.962, 'R-B1 迎面動態會遇：底盤減速振盪，預測 TCP 誤差與基線相近，完成抓放但滑移超標', fontsize=15, color=INK, weight='bold', ha='left')
     fig.text(0.085, 0.932, 'bottle_rb1_dyn_1（n＝1，幾何篩選的指定挑戰案例）：底盤避讓配合手臂相對任務，不是手臂主動繞開移動物的證據；完成 52.95 s（基線 48.40 s）', fontsize=10, color=INK2, ha='left')
-    fig.text(0.085, 0.022, '基線 bottle_rb1_gaze_1 無移動物、控制器為 gaze（本趟 carrygov），差異是觀察值，不是嚴格只切換障礙的消融。距離真值只供評估，控制器未取得。TCP 相對任務誤差＝命令生效時刻預測構型對參考第 0 步的位置差。\n'
+    fig.text(0.085, 0.018, '基線 bottle_rb1_gaze_1 無移動物、控制器為 gaze（本趟 carrygov），差異是觀察值，不是嚴格只切換障礙的消融。距離真值只供評估，控制器未取得。\n'
+             '預測 TCP 位置誤差＝命令生效時刻預測構型對參考第 0 步的位置差，不是純實測追蹤誤差；持瓶段相對底盤、下放段世界座標；相近不代表抓持穩定（與瓶對夾爪滑移是不同指標）。\n'
              '未記錄：CBF 鬆弛的逐列歸屬（動靜態列共用鬆弛，不歸因於特定列）。圓盤外緣到表面＝底盤中心 − 0.39 m。垂直虛線＝本趟相位邊界。', fontsize=8.5, color=INK2, ha='left', va='bottom', linespacing=1.5)
     fig.savefig(PNG, facecolor=SURF)
     with open(CSV, 'w', newline='') as f:
