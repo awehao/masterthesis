@@ -14,8 +14,8 @@ from PIL import Image, ImageDraw, ImageFont
 HERE = os.path.dirname(os.path.abspath(__file__))
 FONT, FONT_B = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc', '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc'
 L_RUN, R_RUN = 'bottle_online_u3_2', 'bottle_online3_u3_1'
-ROWS = [('底盤就緒（首次進停車位 20 mm 內）', 'base_ready', 's'), ('手臂就緒（外伸完成、TCP 收斂）', 'arm_ready', 's'), ('實際下放（PARKED）', 'lower', 's'),
-        ('桌邊等待＝下放 − 底盤就緒', 'table_wait', 's'), ('任務完成', 'done', 's'), ('外伸暴露（持瓶＋夾爪超出 0.39 m）', 'exposure_s', 's'),
+ROWS = [('底盤進位置容差（首次 20 mm 內，未含停穩）', 'base_ready', 's'), ('手臂就緒（外伸完成、TCP 收斂）', 'arm_ready', 's'), ('實際下放（PARKED）', 'lower', 's'),
+        ('進位置容差至下放間隔', 'table_wait', 's'), ('任務完成', 'done', 's'), ('外伸暴露（持瓶＋夾爪超出 0.39 m）', 'exposure_s', 's'),
         ('滑移最大（平移）', 'slip', 'mm'), ('放置偏差', 'place_mm', 'mm'), ('禁止接觸峰／Shield 介入', 'forb', '')]
 
 
@@ -42,7 +42,7 @@ def banner(path):
         d.text((x1, y), va, font=fs, fill=(235, 238, 240))
         d.text((x2, y), vb, font=fs, fill=(235, 238, 240))
         y += 38
-    d.text((40, H - 40), '只改升高／外伸起點排程；速度、時長、淨空閘、停止與下放前收斂不變。第三版收近開始晚 0.3 s（兩趟間自然差異），底盤就緒也較晚。',
+    d.text((40, H - 40), '只改升高／外伸起點排程；速度、時長、淨空閘、停止與下放前收斂不變。第三版收近開始晚 0.3 s（兩趟間自然差異），進位置容差也較晚。',
            font=ImageFont.truetype(FONT, 20), fill=(150, 155, 160))
     im.save(path)
 
