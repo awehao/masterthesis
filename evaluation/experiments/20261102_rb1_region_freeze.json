@@ -1,0 +1,137 @@
+{
+ "schema": 1,
+ "task": "R-B1：到另一個已知區域（第一桌＋瓶平移 (+0.60,+0.80) m、桌高 0.58），本趟視覺取得未知瓶位，移動抓取送回原第二桌",
+ "ruling": "reviews/20261102_090007_reply.md",
+ "frozen_at_local": "以本凍結提交的 git 時間為準（寫檔時 09:14:32）",
+ "git_head_before_freeze_commit": "3053c7b3edfa1ce7d8789974ce8581d332084d0e",
+ "controller": "bottle_w1_online5_ctrl（＝online3 控制與排程＋承接狀態紀錄；未改）",
+ "isaac_script": "evaluation/isaac_bottle_w1dynsr31.py（--region-offset 0.6,0.8）",
+ "frame": "上層任務與控制器全程區域座標（世界＝區域＋O）；邊界各轉一次（見 dynsr31 說明與 bottle_region）；世界端（/odom、TF、地圖、planner、掃描、相機、真值安全網、s1_steps）世界座標；第二桌獨立世界位置",
+ "priors": [
+  "區域位姿 O 與第一桌 xy 範圍（任務先驗）",
+  "第二桌（放置先驗，世界）"
+ ],
+ "vision": "瓶精確位置與支撐高度只來自本趟視覺；生成值只交場景端",
+ "scene": {
+  "table1_offset": [
+   0.6,
+   0.8
+  ],
+  "table1_z": 0.58,
+  "bottle_world": [
+   0.57,
+   1.24
+  ],
+  "bottle_region": [
+   -0.03,
+   0.44
+  ],
+  "start_world": [
+   -3.6,
+   0.0
+  ],
+  "table2": "不變",
+  "obstacle": "不變",
+  "dynamic": "無"
+ },
+ "sha256": {
+  "evaluation/isaac_bottle_w1dynsr31.py": "4bc3735308de9a419c7c2a4bb58d446d479edc91ac6b4319ef80d23278f2e951",
+  "evaluation/bottle_region.py": "a27c91d7887089dc1ec7c61de39ef95d1b7f49d0ffe7bbabcc63671803d15714",
+  "evaluation/bottle_map_write.py": "2577438ed6f364c9b5b2a786aa5672f57dfe4824a9b09e3d9337a2eef9b7e977",
+  "evaluation/isaac_bottle_replay_w1r.py": "48a101a78415ef4c6d5cb4d301ce1d287086b4f31b7784d54da9dbc58b07b502",
+  "evaluation/bottle_w1_online5_ctrl.py": "d24838a35e95b703e2065530e8652936ff5e4ef4d708ba2563b0ac603453cbca",
+  "evaluation/bottle_n2_ros_center.py": "aee32de1fc139904c22c33820e78aa503c5d92cabbd3a7999e34f36395aed9e2",
+  "evaluation/bottle_w1_online3_ctrl.py": "754e3cf518b25207634cc0c8398da42398226c052eb42e3411235ebbcdcd32ba",
+  "evaluation/run_bottle_ros.sh": "d9d6be9b011e9014486c6801b93ae15c7bc91a8ef1631ea45d0cd0e72b136c96",
+  "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
+  "evaluation/test_bottle_w1_rb1.py": "3b08348be635edbf745271b6b9c175cd136b8dbc27a7745aff46d11c98ddb27c",
+  "evaluation/bottle_region_offline_plan.py": "0d4343415ae0bba60aba8e004a86fd4f2d6dc60d409deca872676142a6fc3cd8",
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962"
+ },
+ "offline": {
+  "plan_interface": {
+   "file": "evaluation/results/bottle/rb1_offline_plan.json",
+   "verify": true,
+   "approach": {
+    "roundtrip_max_err": 4.962605930858288e-06,
+    "grid_cost_equal": true,
+    "validate": [
+     true,
+     ""
+    ],
+    "cost_max_region": 34,
+    "joined_cost_blocked": 0
+   },
+   "carry": {
+    "roundtrip_max_err": 4.78948584925476e-06,
+    "grid_cost_equal": true,
+    "validate": [
+     true,
+     ""
+    ],
+    "cost_max_region": 55
+   },
+   "note": "首點換到起點格格心（檢查程式在格界的 floor 歧義另述）"
+  },
+  "closed_loop": {
+   "file": "evaluation/results/bottle/rb1_offline.json",
+   "outcome": "完整抓放",
+   "t_done": 50.6,
+   "place_mm": 1.78,
+   "grasp_accept": 12.099999999999786,
+   "x_acc": -1.6349079751814157,
+   "x_latest": -1.0332956142670053,
+   "dur": {
+    "T_TO": 4.2,
+    "T_UP": 2.1,
+    "T_OUT": 4.2
+   },
+   "stop_fails": [],
+   "bottle_table": {
+    "v": 0.0496,
+    "t": 35.5,
+    "box": "t2:table_top"
+   },
+   "approach": {
+    "start": null,
+    "max_dev_from_path_m": 0.2738,
+    "t_lane_merge": 8.38,
+    "y_at_blend": -0.0016,
+    "vhigh": [
+     [
+      8.35,
+      "U",
+      -2.6406,
+      4.65
+     ],
+     [
+      13.2,
+      "H",
+      -1.3001,
+      0.0
+     ],
+     [
+      14.8,
+      "R",
+      -0.9239,
+      2.35
+     ],
+     [
+      17.15,
+      "DONE",
+      -0.6428,
+      0.0
+     ]
+    ]
+   },
+   "note": "接近段離路徑最大 0.27 m：離線規劃無掃描、路徑距原障礙方塊 0.386 m（< 半徑＋CBF 邊距），CBF 推開；實跑掃描進代價圖"
+  }
+ },
+ "not_changed": [
+  "GMPC 核心",
+  "控制器與排程（online3）",
+  "安全規則、門檻、滑移警告",
+  "格心換算只在規劃接口一次"
+ ],
+ "physical_next": "bottle_rb1_1（一趟，新 RUN_ID）"
+}

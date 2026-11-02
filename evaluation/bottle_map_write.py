@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """瓶子 N1 地圖：把 bottle_nav_chain.occupancy 同一份已知家具（桌腳、側牆）寫成 map_server 可讀的 pgm／yaml。障礙方塊是未知物，不進地圖。
-    python3 evaluation/bottle_map_write.py <輸出基名> [--wall-box cx,cy,cz,sx,sy,sz]
+    python3 evaluation/bottle_map_write.py <輸出基名> [--wall-box cx,cy,cz,sx,sy,sz] [--table2 dx,dy] [--region-offset ox,oy]
 """
 import argparse
 import os
@@ -19,8 +19,10 @@ def main():
     ap.add_argument('out')
     ap.add_argument('--wall-box', default='')
     ap.add_argument('--table2', default='', help='第二桌位移 dx,dy（同一桌子資產；只放桌腳，桌面在掃描面之上）')
+    ap.add_argument('--region-offset', default='0,0', help='第一桌（抓取區域）世界平移 ox,oy（R-B1；預設 0,0＝原場景；第二桌、側牆不隨之移動）')
     a, _ = ap.parse_known_args()
-    boxes = [(b[1], b[2]) for b in G.table_boxes() if b[0] != 'table_top']
+    ro = np.array([float(v) for v in a.region_offset.split(',')] + [0.0])
+    boxes = [(b[1] + ro, b[2]) for b in G.table_boxes() if b[0] != 'table_top']
     if a.wall_box:
         v = [float(x) for x in a.wall_box.split(',')]
         boxes.append((np.array(v[:3]), np.array(v[3:])))
