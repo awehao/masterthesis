@@ -49,7 +49,7 @@ JOIN_S = 2.0                                            # 收尾時等工作執�
 FORCED_RC = 3                                           # 收尾強制結束（工作執行緒 JOIN_S 內未結束）的結束碼：非零、與正常結束分開計數
 EXIT_TEST_DELAY = float(os.environ.get('SEG3D_EXIT_TEST_DELAY', '0'))   # 只供獨立啟停核對：推論後多睡此秒數，模擬收尾時推論卡住（預設 0＝不作用）
 SELF_DT = 0.1                                           # 自身狀態須有包夾擷取戳、前後樣本相距 ≤ 0.1 s 才插值；否則支撐判不可觀測
-WHY = ('ok', 'no_instance', 'few_mask_depth', 'few_after_outlier', 'bad_message', 'size_gate_rejected_all')
+WHY = ('ok', 'no_instance', 'few_mask_depth', 'few_after_outlier', 'bad_message', 'size_gate_rejected_all', 'out_of_region', 'ambiguous', 'locking', 'lock_no_match')   # 後四項只有 F1 版本化子類會發
 FIELDS = ('stamp', 'valid', 'conf', 'n_inst', 'n_size_rejected', 'top1_replaced',
           'xy_valid', 'cx_known_r', 'cy_known_r', 'xy_valid_silhouette', 'cx_sil', 'cy_sil', 'r_sil',
           'top_observed', 'z_top', 'z_vis_lo', 'z_vis_hi', 'support_observed', 'z_support', 'height_valid', 'height',
@@ -189,6 +189,17 @@ class Seg3dNode(Node):
         P = [np.vstack(list(S3.G.link_world(q, fq).values())) for fq in (S3.G.Q_OPEN, 0.0)]
         return cKDTree(np.vstack(P)), max(b[1], a[1]) * 1e3
 
+    def _no_instance(self, st):
+        """這一幀沒有任何實例；版本化子類可記錄。"""
+
+    def _select(self, st, ests, confs):
+        """依信心排序的估計 → (要發布的 r, 選中索引或 None, 尺寸閘拒絕數)。原規則：尺寸閘後信心最高者。F1 子類覆寫（多實例分區與鎖定）。"""
+        ok = [k for k, x in enumerate(ests) if x.get('valid') and x['r_silhouette'] <= S3.SIZE_GATE['r_max'] and x['z_visible_span'] <= S3.SIZE_GATE['h_max']]
+        n_rej = sum(1 for x in ests if x.get('valid')) - len(ok)
+        if ok:
+            return ests[ok[0]], ok[0], n_rej
+        return dict(valid=False, why=ests[0].get('why') if not ests[0].get('valid') else 'size_gate_rejected_all'), None, n_rej
+
     def _loop(self):
         while self.alive:
             if not self.ev.wait(0.2):
@@ -212,17 +223,15 @@ class Seg3dNode(Node):
                 self_ok = int(robot is not None)
                 if n_inst == 0:
                     r = dict(valid=False, why='no_instance')
+                    self._no_instance(st)
                 else:
                     order = np.argsort([-x['confidence'] for x in recs])
                     ests = [S3.locate(masks[j], D, K, T, robot) for j in order]
-                    ok = [k for k, x in enumerate(ests) if x.get('valid') and x['r_silhouette'] <= S3.SIZE_GATE['r_max'] and x['z_visible_span'] <= S3.SIZE_GATE['h_max']]
-                    n_rej = sum(1 for x in ests if x.get('valid')) - len(ok)
-                    if ok:
-                        r, conf, repl = ests[ok[0]], recs[int(order[ok[0]])]['confidence'], int(ok[0] != 0)
+                    r, k_sel, n_rej = self._select(st, ests, [recs[int(j)]['confidence'] for j in order])
+                    if k_sel is not None:
+                        conf, repl = recs[int(order[k_sel])]['confidence'], int(k_sel != 0)
                         if robot is None and r['support']['observable']:
                             r = dict(r, support=dict(observable=False, why='no_self_state'), support_observed=False, height_valid=False, height=None)
-                    else:
-                        r = dict(valid=False, why=ests[0].get('why') if not ests[0].get('valid') else 'size_gate_rejected_all')
             except Exception as ex:                               # noqa: BLE001  訊息壞掉：照樣發一筆失敗，不吞掉
                 self.get_logger().warn(f'seg3d 失敗：{ex!r}')
                 r = dict(valid=False, why='bad_message')
@@ -272,7 +281,10 @@ def main():
     a, ros_args = ap.parse_known_args()
     torch.set_num_threads(4)
     rclpy.init(args=ros_args)
-    node = Seg3dNode(a.weights, a.ns)
+    run_node(Seg3dNode(a.weights, a.ns))
+
+
+def run_node(node):
     pending = None                                                # 正在傳出的例外：收尾後照樣拋出（強制結束時先印出），不吞掉
     try:
         rclpy.spin(node)
