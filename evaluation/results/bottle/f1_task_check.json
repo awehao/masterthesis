@@ -1,35 +1,431 @@
 {
  "nominal": {
   "case": "nominal",
-  "error": "/home/howardchen/masterthesis/src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py:173: RuntimeWarning: invalid value encountered in subtract\n  near |= np.abs(rr - s) < 0.15\nTraceback (most recent call last):\n  File \"/home/howardchen/masterthesis/evaluation/test_bottle_f1_task.py\", line 447, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"/home/howardchen/masterthesis/evaluation/test_bottle_f1_task.py\", line 397, in main\n    out.update(actual=act, stop=dict(other=sw, static=sst), stop_where=wh, fails=fails, static_fails=sfails, n_stop_ticks=len(sel), return_seg=dict(arm_move_rad=arm_move, v_max=float(spd.max()), base_clear_disc_m=round(base_c, 4), t_nav=[x['t'] for x in rt][0], t_end=[x['t'] for x in rt][-1], L=ret['info']['L'], plans=[c0.carry_planner.info]),\n                                                                                                                                                                                                                                                                                                                                 ^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'PlanPort' object has no attribute 'info'\n"
+  "outcome": "round0_aborted",
+  "stage": 0,
+  "t_done0": 49.24999999999877,
+  "t_switch": null,
+  "t_done": 77.70000000000285,
+  "switch": null,
+  "grip_ok": [
+   true
+  ],
+  "stop": {
+   "other": {
+    "other:nonfinger": 0.2031741583489699,
+    "other:finger": 0.18151186432060584,
+    "pre_lift:nonfinger": 0.23133568409135363,
+    "pre_lift:finger": 0.26306898079595364,
+    "pre_lift:held": 0.26276824527639064,
+    "other:held": 0.48168180740658373,
+    "return:nonfinger": 0.23190172482703875,
+    "return:finger": 0.4037554296838009
+   },
+   "static": {
+    "other:nonfinger_table": 0.06201363532134191,
+    "other:finger_table": 0.05664000516319441,
+    "other:self": 0.008563450290717221,
+    "other:margin": 0.09427955579885086,
+    "pre_lift:nonfinger_table": 0.06321980665000572,
+    "pre_lift:finger_table": 0.08971089173321624,
+    "pre_lift:self": 0.00967658068965517,
+    "pre_lift:margin": 1.1700872905112152,
+    "pre_lift:held_bottle_table": 0.15494266092771516,
+    "other:held_bottle_table": 0.04843810439645492,
+    "return:nonfinger_table": 0.21821369716264194,
+    "return:finger_table": 0.33007650450182285,
+    "return:self": 0.009023075865156641,
+    "return:margin": 0.0959101107182162
+   }
+  },
+  "rounds": [
+   {
+    "round": 0,
+    "done": true,
+    "slip_warn": null,
+    "slip_max": [
+     0.7773571061279756,
+     0.0710220296451299
+    ],
+    "rej": {
+     "old_round": 0
+    },
+    "place": {
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
+     "v_end": 0.0,
+     "fz_min": 1.9620000000000002,
+     "fz_need": 1.7658000000000003,
+     "edge": 0.0595956486505097,
+     "edge_need": 0.025,
+     "offset": 0.0011667034020665342,
+     "valid": true,
+     "ok": true
+    },
+    "ret": {
+     "state": "NAV",
+     "t0": 49.24999999999877,
+     "goal": [
+      -3.575,
+      -0.025
+     ],
+     "info": {
+      "L": 6.38,
+      "n": 321,
+      "wall_ms": null
+     },
+     "sig": 4.749999999998508,
+     "t_drained": null,
+     "n_settle": 0,
+     "n_reset": 0,
+     "last_rate": [
+      0.17569,
+      0.00378,
+      0.0
+     ]
+    },
+    "phases": {
+     "PREGRASP": 18.25,
+     "INSERT": 18.3,
+     "CLOSE": 19.8,
+     "LIFT": 21.1,
+     "CARRY": 22.2,
+     "CARRY_NAV": 22.25,
+     "PLACE_APPROACH": 31.25,
+     "PARKED": 35.6,
+     "LOWER": 35.6,
+     "RELEASE": 40.3,
+     "RETREAT": 41.25,
+     "HOLD": 46.2,
+     "DONE": 49.25
+    },
+    "events": [
+     [
+      7.79,
+      "online_obs_first",
+      null
+     ],
+     [
+      7.9,
+      "relwin_shift",
+      null
+     ],
+     [
+      49.25,
+      "mission_done",
+      null
+     ],
+     [
+      49.25,
+      "return_request",
+      null
+     ],
+     [
+      49.3,
+      "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
+      "NAV"
+     ],
+     [
+      75.1,
+      "stop",
+      null
+     ]
+    ],
+    "solve": {
+     "p50": 12.937588486238383,
+     "p95": 23.511329003667928,
+     "max": 46.65357799967751
+    },
+    "n_over_50ms": 0,
+    "n_fallback": 0,
+    "plans": [
+     "accepted"
+    ]
+   }
+  ],
+  "finite": true,
+  "guard": null,
+  "actual": {
+   "nonfinger": 0.20519183139109526,
+   "finger": 0.18373979607724494,
+   "held": 0.27
+  },
+  "stop_where": {
+   "nonfinger": [
+    0,
+    15.95,
+    "CRUISE",
+    null
+   ],
+   "finger": [
+    0,
+    15.85,
+    "CRUISE",
+    null
+   ],
+   "held": [
+    0,
+    21.1,
+    "CLOSE",
+    null
+   ],
+   "other:nonfinger": [
+    0,
+    15.85,
+    "CRUISE",
+    null,
+    0.72
+   ],
+   "other:finger": [
+    0,
+    15.7,
+    "CRUISE",
+    null,
+    0.72
+   ],
+   "other:nonfinger_table": [
+    0,
+    40.0,
+    "LOWER",
+    null,
+    0.72
+   ],
+   "other:finger_table": [
+    0,
+    43.75,
+    "RETREAT",
+    null,
+    0.32
+   ],
+   "other:self": [
+    0,
+    44.9,
+    "RETREAT",
+    null,
+    0.24
+   ],
+   "other:margin": [
+    0,
+    45.85,
+    "RETREAT",
+    null,
+    0.72
+   ],
+   "pre_lift:nonfinger": [
+    0,
+    21.3,
+    "LIFT",
+    null,
+    0.64
+   ],
+   "pre_lift:finger": [
+    0,
+    21.15,
+    "LIFT",
+    null,
+    0.72
+   ],
+   "pre_lift:held": [
+    0,
+    21.1,
+    "CLOSE",
+    null,
+    0.64
+   ],
+   "pre_lift:nonfinger_table": [
+    0,
+    21.1,
+    "CLOSE",
+    null,
+    0.72
+   ],
+   "pre_lift:finger_table": [
+    0,
+    21.1,
+    "CLOSE",
+    null,
+    0.72
+   ],
+   "pre_lift:self": [
+    0,
+    21.45,
+    "LIFT",
+    null,
+    0.24
+   ],
+   "pre_lift:margin": [
+    0,
+    21.1,
+    "CLOSE",
+    null,
+    0.0
+   ],
+   "pre_lift:held_bottle_table": [
+    0,
+    22.7,
+    "CARRY_NAV",
+    null,
+    0.8
+   ],
+   "other:held": [
+    0,
+    23.1,
+    "CARRY_NAV",
+    null,
+    0.0
+   ],
+   "other:held_bottle_table": [
+    0,
+    23.1,
+    "CARRY_NAV",
+    null,
+    0.72
+   ],
+   "return:nonfinger": [
+    0,
+    49.35,
+    "DONE",
+    "ROT0",
+    0.0
+   ],
+   "return:finger": [
+    0,
+    49.35,
+    "DONE",
+    "ROT0",
+    0.0
+   ],
+   "return:nonfinger_table": [
+    0,
+    49.35,
+    "DONE",
+    "ROT0",
+    0.0
+   ],
+   "return:finger_table": [
+    0,
+    49.35,
+    "DONE",
+    "ROT0",
+    0.0
+   ],
+   "return:self": [
+    0,
+    49.95,
+    "DONE",
+    "ROT0",
+    1.04
+   ],
+   "return:margin": [
+    0,
+    49.95,
+    "DONE",
+    "ROT0",
+    1.04
+   ]
+  },
+  "fails": [],
+  "static_fails": [],
+  "n_stop_ticks": 1034,
+  "return_seg": {
+   "arm_move_rad": 2.4753119588394497e-06,
+   "v_max": 0.27901731982921607,
+   "w_max": 0.7204314447020788,
+   "t_state": {
+    "ROT0": [
+     49.35,
+     53.55
+    ],
+    "NAV": [
+     53.6,
+     75.05
+    ]
+   },
+   "yaw_end": 2.6778432014853006,
+   "pos_end": [
+    -2.110896460937328,
+    -0.7255782717916859
+   ],
+   "base_clear_disc_m": 0.1356,
+   "t_nav": 49.34999999999875,
+   "t_end": 75.05000000000149,
+   "L": 6.38,
+   "plans": [
+    [
+     {
+      "name": "carry_far",
+      "d_start": 0.0314,
+      "d_goal": 0.0312,
+      "L": 2.137
+     },
+     {
+      "name": "return_far",
+      "d_start": 0.0314,
+      "d_goal": 0.05,
+      "L": 6.444
+     }
+    ]
+   ]
+  },
+  "switch_cont": {
+   "s_step_rad": null,
+   "q_step_max_rad": 0.009770312524504554,
+   "first_placed": null,
+   "second_placed": [
+    2.5510943933545844,
+    -0.5804043513494903,
+    0.6001298760381318
+   ]
+  },
+  "stop_why": [
+   "shield_intervened"
+  ],
+  "checks": {
+   "全程淨空": true,
+   "第二輪未拿到舊規劃": false,
+   "檢查點落盤": false,
+   "靜態判準": true,
+   "兩輪完成": false,
+   "返回段手臂未動": true,
+   "切換新實例承接設定點": false,
+   "反例擋下": false,
+   "命令有限": true
+  },
+  "pass": false,
+  "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
  },
- "stale": {
-  "case": "stale",
+ "fixed": {
+  "case": "fixed",
   "outcome": "complete",
   "stage": 1,
   "t_done0": 49.24999999999877,
   "t_switch": 85.59000000000688,
-  "t_done": null,
+  "t_done": 136.41000000002091,
   "switch": {
    "t": 85.59000000000688,
    "q": [
-    -3.5751523934172096,
-    -0.02496411605588014,
-    1.746642714740856e-08,
-    -0.002793041747032962,
-    -0.00227172431284677,
-    0.035487229755074796,
-    -0.00336663393998659,
-    -1.5719582754350847,
-    0.002222050556073093
+    -3.5751523934172105,
+    -0.024964116055879813,
+    1.746642714999339e-08,
+    -0.0027930417470807202,
+    -0.0022717243128735887,
+    0.035487229755032136,
+    -0.003366633940000145,
+    -1.571958275435114,
+    0.002222050556066977
    ],
    "s": [
-    -0.002793041747032964,
-    -0.020271724312846767,
-    0.04348722975507483,
-    -0.003366633939986592,
-    -1.5719582754350858,
-    0.0022220505560730953
+    -0.0027930417470807224,
+    -0.020271724312873586,
+    0.04348722975503217,
+    -0.003366633940000147,
+    -1.5719582754351151,
+    0.002222050556066979
    ],
    "d": [
     2.168404344971009e-18,
@@ -47,31 +443,55 @@
    true,
    true
   ],
-  "stop": [
-   null,
-   null
-  ],
+  "stop": {
+   "other": {
+    "other:nonfinger": 0.16893765920670062,
+    "other:finger": 0.14749290907165008,
+    "pre_lift:nonfinger": 0.23133568409135363,
+    "pre_lift:finger": 0.26306898079595364,
+    "pre_lift:held": 0.26276824527639064,
+    "other:held": 0.2374671545311242,
+    "return:nonfinger": 0.23190172482703875,
+    "return:finger": 0.4037554296838009
+   },
+   "static": {
+    "other:nonfinger_table": 0.06201363532134191,
+    "other:finger_table": 0.05664000516319441,
+    "other:self": 0.008563450290717221,
+    "other:margin": 0.09427955579885086,
+    "pre_lift:nonfinger_table": 0.06321980665000572,
+    "pre_lift:finger_table": 0.08971089173321624,
+    "pre_lift:self": 0.00967658068965517,
+    "pre_lift:margin": 1.1700872905112152,
+    "pre_lift:held_bottle_table": 0.15494266092771516,
+    "other:held_bottle_table": 0.047861942220184486,
+    "return:nonfinger_table": 0.21821369716264194,
+    "return:finger_table": 0.33007650450182285,
+    "return:self": 0.009023084424920499,
+    "return:margin": 0.09591031599884983
+   }
+  },
   "rounds": [
    {
     "round": 0,
     "done": true,
     "slip_warn": null,
     "slip_max": [
-     0.7773571061877081,
-     0.07102202965539334
+     0.7773571061279756,
+     0.0710220296451299
     ],
     "rej": {
      "old_round": 0
     },
     "place": {
-     "disp": 2.2741767405400434e-05,
-     "tilt": 0.5212965118823628,
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
      "v_end": 0.0,
      "fz_min": 1.9620000000000002,
      "fz_need": 1.7658000000000003,
-     "edge": 0.059595648650876965,
+     "edge": 0.0595956486505097,
      "edge_need": 0.025,
-     "offset": 0.001166703402166695,
+     "offset": 0.0011667034020665342,
      "valid": true,
      "ok": true
     },
@@ -87,7 +507,7 @@
       "n": 321,
       "wall_ms": null
      },
-     "sig": 6.379999999997043,
+     "sig": 6.379999999997121,
      "t_drained": 84.60000000000637,
      "n_settle": 20,
      "n_reset": 0,
@@ -155,9 +575,9 @@
      ]
     ],
     "solve": {
-     "p50": 11.108057995443232,
-     "p95": 23.449630496907044,
-     "max": 49.17804501019418
+     "p50": 10.669679511920549,
+     "p95": 22.908576254849322,
+     "max": 46.68076001689769
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
@@ -170,21 +590,21 @@
     "done": true,
     "slip_warn": null,
     "slip_max": [
-     0.577342197633144,
-     0.05375997825808651
+     0.5773421974720871,
+     0.05375997827164548
     ],
     "rej": {
-     "old_round": 1
+     "old_round": 0
     },
     "place": {
-     "disp": 2.2522035205545753e-05,
-     "tilt": 0.46477389321717166,
+     "disp": 2.2522035205622233e-05,
+     "tilt": 0.464773893222661,
      "v_end": 0.0,
      "fz_min": 1.9620000000000002,
      "fz_need": 1.7658000000000003,
-     "edge": 0.05907618463419917,
+     "edge": 0.059076184634274886,
      "edge_need": 0.025,
-     "offset": 0.001796859714247865,
+     "offset": 0.0017968597142519788,
      "valid": true,
      "ok": true
     },
@@ -222,9 +642,9 @@
      ]
     ],
     "solve": {
-     "p50": 15.075189003255218,
-     "p95": 22.881967207649723,
-     "max": 34.70366899273358
+     "p50": 14.64096299605444,
+     "p95": 23.051697388291355,
+     "max": 28.045109007507563
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
@@ -252,61 +672,283 @@
     "not_still"
    ]
   },
+  "actual": {
+   "nonfinger": 0.1690329407854383,
+   "finger": 0.1475673808480285,
+   "held": 0.23814428918502284
+  },
+  "stop_where": {
+   "nonfinger": [
+    1,
+    128.55,
+    "RETREAT",
+    null
+   ],
+   "finger": [
+    1,
+    128.65,
+    "RETREAT",
+    null
+   ],
+   "held": [
+    1,
+    119.2,
+    "PLACE_APPROACH",
+    null
+   ],
+   "other:nonfinger": [
+    1,
+    128.5,
+    "RETREAT",
+    null,
+    0.08
+   ],
+   "other:finger": [
+    1,
+    128.55,
+    "RETREAT",
+    null,
+    0.08
+   ],
+   "other:nonfinger_table": [
+    0,
+    40.0,
+    "LOWER",
+    null,
+    0.72
+   ],
+   "other:finger_table": [
+    0,
+    43.75,
+    "RETREAT",
+    null,
+    0.32
+   ],
+   "other:self": [
+    0,
+    44.9,
+    "RETREAT",
+    null,
+    0.24
+   ],
+   "other:margin": [
+    0,
+    45.85,
+    "RETREAT",
+    null,
+    0.72
+   ],
+   "pre_lift:nonfinger": [
+    0,
+    21.3,
+    "LIFT",
+    null,
+    0.64
+   ],
+   "pre_lift:finger": [
+    0,
+    21.15,
+    "LIFT",
+    null,
+    0.72
+   ],
+   "pre_lift:held": [
+    0,
+    21.1,
+    "CLOSE",
+    null,
+    0.64
+   ],
+   "pre_lift:nonfinger_table": [
+    0,
+    21.1,
+    "CLOSE",
+    null,
+    0.72
+   ],
+   "pre_lift:finger_table": [
+    0,
+    21.1,
+    "CLOSE",
+    null,
+    0.72
+   ],
+   "pre_lift:self": [
+    0,
+    21.45,
+    "LIFT",
+    null,
+    0.24
+   ],
+   "pre_lift:margin": [
+    0,
+    21.1,
+    "CLOSE",
+    null,
+    0.0
+   ],
+   "pre_lift:held_bottle_table": [
+    0,
+    22.7,
+    "CARRY_NAV",
+    null,
+    0.8
+   ],
+   "other:held": [
+    1,
+    119.1,
+    "PLACE_APPROACH",
+    null,
+    0.16
+   ],
+   "other:held_bottle_table": [
+    1,
+    117.8,
+    "PLACE_APPROACH",
+    null,
+    0.8
+   ],
+   "return:nonfinger": [
+    0,
+    49.35,
+    "DONE",
+    "NAV",
+    0.0
+   ],
+   "return:finger": [
+    0,
+    49.35,
+    "DONE",
+    "NAV",
+    0.0
+   ],
+   "return:nonfinger_table": [
+    0,
+    49.35,
+    "DONE",
+    "NAV",
+    0.0
+   ],
+   "return:finger_table": [
+    0,
+    49.35,
+    "DONE",
+    "NAV",
+    0.0
+   ],
+   "return:self": [
+    0,
+    49.65,
+    "DONE",
+    "NAV",
+    0.8
+   ],
+   "return:margin": [
+    0,
+    49.65,
+    "DONE",
+    "NAV",
+    0.8
+   ]
+  },
+  "fails": [],
+  "static_fails": [],
+  "n_stop_ticks": 1655,
+  "return_seg": {
+   "arm_move_rad": 2.4753119588394497e-06,
+   "v_max": 0.2564400905384485,
+   "w_max": 0.028247700855585776,
+   "t_state": {
+    "NAV": [
+     49.35,
+     83.85
+    ],
+    "ARRIVE": [
+     83.9,
+     84.5
+    ],
+    "SETTLE": [
+     84.55,
+     85.55
+    ]
+   },
+   "yaw_end": 1.746642714999339e-08,
+   "pos_end": [
+    -3.5751523934172105,
+    -0.024964116055879813
+   ],
+   "base_clear_disc_m": 0.1064,
+   "t_nav": 49.34999999999875,
+   "t_end": 85.55000000000686,
+   "L": 6.38,
+   "plans": [
+    [
+     {
+      "name": "carry_far",
+      "d_start": 0.0314,
+      "d_goal": 0.0312,
+      "L": 2.137
+     },
+     {
+      "name": "return_far",
+      "d_start": 0.0314,
+      "d_goal": 0.05,
+      "L": 6.444
+     },
+     {
+      "name": "carry_near",
+      "d_start": 0.0246,
+      "d_goal": 0.0192,
+      "L": 2.123
+     }
+    ]
+   ]
+  },
+  "switch_cont": {
+   "s_step_rad": 0.0,
+   "q_step_max_rad": 0.009770312524504554,
+   "first_placed": [
+    2.5510943933545844,
+    -0.5804043513494903,
+    0.6001298760381318
+   ],
+   "second_placed": [
+    2.251541191098713,
+    -0.5809238153657251,
+    0.6001151280063846
+   ]
+  },
+  "stop_why": [
+   null,
+   null
+  ],
   "checks": {
-   "舊候選被拒": true,
-   "之後照常完成": true,
+   "全程淨空": true,
+   "第二輪未拿到舊規劃": true,
+   "檢查點落盤": true,
+   "靜態判準": true,
+   "兩輪完成": true,
+   "返回段手臂未動": true,
+   "切換新實例承接設定點": true,
+   "反例擋下": true,
    "命令有限": true
   },
   "pass": true,
   "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
  },
- "noobs": {
-  "case": "noobs",
-  "outcome": "round1_aborted",
-  "stage": 1,
+ "stale": {
+  "case": "stale",
+  "outcome": "round0_aborted",
+  "stage": 0,
   "t_done0": 49.24999999999877,
-  "t_switch": 85.59000000000688,
+  "t_switch": null,
   "t_done": null,
-  "switch": {
-   "t": 85.59000000000688,
-   "q": [
-    -3.5751523934172096,
-    -0.02496411605588014,
-    1.746642714740856e-08,
-    -0.002793041747032962,
-    -0.00227172431284677,
-    0.035487229755074796,
-    -0.00336663393998659,
-    -1.5719582754350847,
-    0.002222050556073093
-   ],
-   "s": [
-    -0.002793041747032964,
-    -0.020271724312846767,
-    0.04348722975507483,
-    -0.003366633939986592,
-    -1.5719582754350858,
-    0.0022220505560730953
-   ],
-   "d": [
-    2.168404344971009e-18,
-    0.018000000000000002,
-    -0.008000000000000035,
-    2.168404344971009e-18,
-    1.1102230246251565e-15,
-    -2.168404344971009e-18
-   ],
-   "new_s_equal": true,
-   "pipe_zero": true,
-   "u_prev_zero": true
-  },
+  "switch": null,
   "grip_ok": [
-   true,
-   null
+   true
   ],
   "stop": [
-   null,
-   "segtarget_no_fix"
+   "shield_intervened"
   ],
   "rounds": [
    {
@@ -314,26 +956,26 @@
     "done": true,
     "slip_warn": null,
     "slip_max": [
-     0.7773571061877081,
-     0.07102202965539334
+     0.7773571061279756,
+     0.0710220296451299
     ],
     "rej": {
      "old_round": 0
     },
     "place": {
-     "disp": 2.2741767405400434e-05,
-     "tilt": 0.5212965118823628,
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
      "v_end": 0.0,
      "fz_min": 1.9620000000000002,
      "fz_need": 1.7658000000000003,
-     "edge": 0.059595648650876965,
+     "edge": 0.0595956486505097,
      "edge_need": 0.025,
-     "offset": 0.001166703402166695,
+     "offset": 0.0011667034020665342,
      "valid": true,
      "ok": true
     },
     "ret": {
-     "state": "READY",
+     "state": "NAV",
      "t0": 49.24999999999877,
      "goal": [
       -3.575,
@@ -344,13 +986,13 @@
       "n": 321,
       "wall_ms": null
      },
-     "sig": 6.379999999997043,
-     "t_drained": 84.60000000000637,
-     "n_settle": 20,
+     "sig": 4.749999999998508,
+     "t_drained": null,
+     "n_settle": 0,
      "n_reset": 0,
      "last_rate": [
-      0.0,
-      0.0,
+      0.17569,
+      0.00378,
       0.0
      ]
     },
@@ -393,92 +1035,174 @@
      [
       49.3,
       "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
       "NAV"
      ],
      [
-      83.85,
-      "return_state",
-      "ARRIVE"
-     ],
-     [
-      84.5,
-      "return_state",
-      "SETTLE"
-     ],
-     [
-      85.55,
-      "return_state",
-      "READY"
+      75.1,
+      "stop",
+      null
      ]
     ],
     "solve": {
-     "p50": 11.027970002032816,
-     "p95": 22.890415442816447,
-     "max": 45.28594700968824
+     "p50": 12.542187017970718,
+     "p95": 22.857320577895738,
+     "max": 45.73538099066354
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
     "plans": [
      "accepted"
     ]
-   },
+   }
+  ],
+  "finite": true,
+  "guard": null,
+  "checks": {
+   "舊候選被拒": false,
+   "之後照常完成": false,
+   "命令有限": true
+  },
+  "pass": false,
+  "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
+ },
+ "noobs": {
+  "case": "noobs",
+  "outcome": "round0_aborted",
+  "stage": 0,
+  "t_done0": 49.24999999999877,
+  "t_switch": null,
+  "t_done": null,
+  "switch": null,
+  "grip_ok": [
+   true
+  ],
+  "stop": [
+   "shield_intervened"
+  ],
+  "rounds": [
    {
-    "round": 1,
-    "done": false,
+    "round": 0,
+    "done": true,
     "slip_warn": null,
     "slip_max": [
-     0.0,
-     0.0
+     0.7773571061279756,
+     0.0710220296451299
     ],
     "rej": {
      "old_round": 0
     },
-    "place": null,
-    "ret": null,
-    "phases": {},
+    "place": {
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
+     "v_end": 0.0,
+     "fz_min": 1.9620000000000002,
+     "fz_need": 1.7658000000000003,
+     "edge": 0.0595956486505097,
+     "edge_need": 0.025,
+     "offset": 0.0011667034020665342,
+     "valid": true,
+     "ok": true
+    },
+    "ret": {
+     "state": "NAV",
+     "t0": 49.24999999999877,
+     "goal": [
+      -3.575,
+      -0.025
+     ],
+     "info": {
+      "L": 6.38,
+      "n": 321,
+      "wall_ms": null
+     },
+     "sig": 4.749999999998508,
+     "t_drained": null,
+     "n_settle": 0,
+     "n_reset": 0,
+     "last_rate": [
+      0.17569,
+      0.00378,
+      0.0
+     ]
+    },
+    "phases": {
+     "PREGRASP": 18.25,
+     "INSERT": 18.3,
+     "CLOSE": 19.8,
+     "LIFT": 21.1,
+     "CARRY": 22.2,
+     "CARRY_NAV": 22.25,
+     "PLACE_APPROACH": 31.25,
+     "PARKED": 35.6,
+     "LOWER": 35.6,
+     "RELEASE": 40.3,
+     "RETREAT": 41.25,
+     "HOLD": 46.2,
+     "DONE": 49.25
+    },
     "events": [
      [
-      100.2,
+      7.79,
+      "online_obs_first",
+      null
+     ],
+     [
+      7.9,
+      "relwin_shift",
+      null
+     ],
+     [
+      49.25,
+      "mission_done",
+      null
+     ],
+     [
+      49.25,
+      "return_request",
+      null
+     ],
+     [
+      49.3,
+      "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
+      "NAV"
+     ],
+     [
+      75.1,
       "stop",
       null
      ]
     ],
     "solve": {
-     "p50": 16.94846300233621,
-     "p95": 25.274320540484037,
-     "max": 30.3656600008253
+     "p50": 12.474021001253277,
+     "p95": 23.060532560339198,
+     "max": 46.803028002614155
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
-    "plans": []
+    "plans": [
+     "accepted"
+    ]
    }
   ],
   "finite": true,
-  "guard": {
-   "cmd_not_zero": [
-    "cmd_not_zero",
-    "not_tick_boundary"
-   ],
-   "pipe_not_zero": [
-    "cmd_not_zero",
-    "not_tick_boundary"
-   ],
-   "d_nan": [
-    "not_tick_boundary",
-    "d_invalid"
-   ],
-   "not_still": [
-    "not_tick_boundary",
-    "not_still"
-   ]
-  },
+  "guard": null,
   "checks": {
-   "第二輪中止": true,
-   "未建立目標": true,
-   "未抓持的輪次品質是未成立": true,
+   "第二輪中止": false,
+   "未建立目標": false,
+   "未抓持的輪次品質是未成立": false,
    "命令有限": true
   },
-  "pass": true,
+  "pass": false,
   "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
  },
  "abort0": {
@@ -501,8 +1225,8 @@
     "done": false,
     "slip_warn": null,
     "slip_max": [
-     0.34273736013664446,
-     0.07102202965539334
+     0.34273736002164135,
+     0.0710220296451299
     ],
     "rej": {
      "old_round": 0
@@ -535,9 +1259,9 @@
      ]
     ],
     "solve": {
-     "p50": 15.122634504223242,
-     "p95": 26.30085525015602,
-     "max": 47.379970987094566
+     "p50": 14.575220993719995,
+     "p95": 26.18455500487471,
+     "max": 47.83728500478901
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
@@ -558,51 +1282,17 @@
  },
  "slipwarn": {
   "case": "slipwarn",
-  "outcome": "complete",
-  "stage": 1,
+  "outcome": "round0_aborted",
+  "stage": 0,
   "t_done0": 49.24999999999877,
-  "t_switch": 85.59000000000688,
+  "t_switch": null,
   "t_done": null,
-  "switch": {
-   "t": 85.59000000000688,
-   "q": [
-    -3.5751523934172096,
-    -0.02496411605588014,
-    1.746642714740856e-08,
-    -0.0027930530653120177,
-    -0.0022714146235761497,
-    0.035487292006881326,
-    -0.0033666456340005735,
-    -1.5719585311934745,
-    0.0022220508810414544
-   ],
-   "s": [
-    -0.00279305306531202,
-    -0.020271414623576147,
-    0.04348729200688136,
-    -0.0033666456340005757,
-    -1.5719585311934756,
-    0.0022220508810414565
-   ],
-   "d": [
-    2.168404344971009e-18,
-    0.018000000000000002,
-    -0.008000000000000035,
-    2.168404344971009e-18,
-    1.1102230246251565e-15,
-    -2.168404344971009e-18
-   ],
-   "new_s_equal": true,
-   "pipe_zero": true,
-   "u_prev_zero": true
-  },
+  "switch": null,
   "grip_ok": [
-   false,
-   true
+   false
   ],
   "stop": [
-   null,
-   null
+   "shield_intervened"
   ],
   "rounds": [
    {
@@ -610,33 +1300,33 @@
     "done": true,
     "slip_warn": {
      "t_first": 22.26000000000068,
-     "d_first_mm": 5.99448692468089,
-     "a_first_deg": 0.0710220296451299,
+     "d_first_mm": 5.994486924661428,
+     "a_first_deg": 0.07102202962460304,
      "n_steps": 1805,
-     "d_max_mm": 6.704186802632763,
+     "d_max_mm": 6.7041868026173566,
      "t_last": 40.30000000000055
     },
     "slip_max": [
-     6.704186802632763,
-     0.07102202965539334
+     6.7041868026173566,
+     0.0710220296451299
     ],
     "rej": {
      "old_round": 0
     },
     "place": {
-     "disp": 2.277607626115949e-05,
-     "tilt": 0.5212565542006632,
+     "disp": 2.277607626086248e-05,
+     "tilt": 0.521256554199964,
      "v_end": 0.0,
      "fz_min": 1.9620000000000002,
      "fz_need": 1.7658000000000003,
-     "edge": 0.0595616315281029,
+     "edge": 0.05956163152773519,
      "edge_need": 0.025,
-     "offset": 0.0011430073368227346,
+     "offset": 0.001143007336738186,
      "valid": true,
      "ok": true
     },
     "ret": {
-     "state": "READY",
+     "state": "NAV",
      "t0": 49.24999999999877,
      "goal": [
       -3.575,
@@ -647,13 +1337,13 @@
       "n": 321,
       "wall_ms": null
      },
-     "sig": 6.379999999997043,
-     "t_drained": 84.60000000000637,
-     "n_settle": 20,
+     "sig": 4.749999999998508,
+     "t_drained": null,
+     "n_settle": 0,
      "n_reset": 0,
      "last_rate": [
-      0.0,
-      0.0,
+      0.17569,
+      0.00378,
       0.0
      ]
     },
@@ -696,95 +1386,23 @@
      [
       49.3,
       "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
       "NAV"
      ],
      [
-      83.85,
-      "return_state",
-      "ARRIVE"
-     ],
-     [
-      84.5,
-      "return_state",
-      "SETTLE"
-     ],
-     [
-      85.55,
-      "return_state",
-      "READY"
-     ]
-    ],
-    "solve": {
-     "p50": 10.997280493029393,
-     "p95": 23.19052644597832,
-     "max": 45.77372799394652
-    },
-    "n_over_50ms": 0,
-    "n_fallback": 0,
-    "plans": [
-     "accepted"
-    ]
-   },
-   {
-    "round": 1,
-    "done": true,
-    "slip_warn": null,
-    "slip_max": [
-     0.5773421975308963,
-     0.05375997825808651
-    ],
-    "rej": {
-     "old_round": 0
-    },
-    "place": {
-     "disp": 2.252203520565453e-05,
-     "tilt": 0.4647738932234452,
-     "v_end": 0.0,
-     "fz_min": 1.9620000000000002,
-     "fz_need": 1.7658000000000003,
-     "edge": 0.05907618463431641,
-     "edge_need": 0.025,
-     "offset": 0.001796859714215014,
-     "valid": true,
-     "ok": true
-    },
-    "ret": null,
-    "phases": {
-     "PREGRASP": 102.75,
-     "INSERT": 102.8,
-     "CLOSE": 104.3,
-     "LIFT": 105.6,
-     "CARRY": 106.7,
-     "CARRY_NAV": 106.75,
-     "PLACE_APPROACH": 115.75,
-     "PARKED": 120.25,
-     "LOWER": 120.25,
-     "RELEASE": 124.9,
-     "RETREAT": 125.8,
-     "HOLD": 130.75,
-     "DONE": 133.8
-    },
-    "events": [
-     [
-      93.39,
-      "online_obs_first",
-      null
-     ],
-     [
-      93.5,
-      "relwin_shift",
-      null
-     ],
-     [
-      133.8,
-      "mission_done",
+      75.1,
+      "stop",
       null
      ]
     ],
     "solve": {
-     "p50": 14.902205992257223,
-     "p95": 22.759169986238703,
-     "max": 28.519801009679213
+     "p50": 12.319812012719922,
+     "p95": 23.40894750959706,
+     "max": 46.27049001283012
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
@@ -794,30 +1412,13 @@
    }
   ],
   "finite": true,
-  "guard": {
-   "cmd_not_zero": [
-    "cmd_not_zero",
-    "not_tick_boundary"
-   ],
-   "pipe_not_zero": [
-    "cmd_not_zero",
-    "not_tick_boundary"
-   ],
-   "d_nan": [
-    "not_tick_boundary",
-    "d_invalid"
-   ],
-   "not_still": [
-    "not_tick_boundary",
-    "not_still"
-   ]
-  },
+  "guard": null,
   "checks": {
-   "警告後進第二輪": true,
+   "警告後進第二輪": false,
    "品質紀錄保留": true,
    "命令有限": true
   },
-  "pass": true,
+  "pass": false,
   "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
  },
  "badsettle": {
@@ -832,7 +1433,7 @@
    true
   ],
   "stop": [
-   "return_settle_invalid"
+   "shield_intervened"
   ],
   "rounds": [
    {
@@ -840,26 +1441,26 @@
     "done": true,
     "slip_warn": null,
     "slip_max": [
-     0.7773571061877081,
-     0.07102202965539334
+     0.7773571061279756,
+     0.0710220296451299
     ],
     "rej": {
      "old_round": 0
     },
     "place": {
-     "disp": 2.2741767405400434e-05,
-     "tilt": 0.5212965118823628,
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
      "v_end": 0.0,
      "fz_min": 1.9620000000000002,
      "fz_need": 1.7658000000000003,
-     "edge": 0.059595648650876965,
+     "edge": 0.0595956486505097,
      "edge_need": 0.025,
-     "offset": 0.001166703402166695,
+     "offset": 0.0011667034020665342,
      "valid": true,
      "ok": true
     },
     "ret": {
-     "state": "SETTLE",
+     "state": "NAV",
      "t0": 49.24999999999877,
      "goal": [
       -3.575,
@@ -870,13 +1471,13 @@
       "n": 321,
       "wall_ms": null
      },
-     "sig": 6.379999999997043,
-     "t_drained": 84.60000000000637,
-     "n_settle": 20,
+     "sig": 4.749999999998508,
+     "t_drained": null,
+     "n_settle": 0,
      "n_reset": 0,
      "last_rate": [
-      0.0,
-      0.0,
+      0.17569,
+      0.00378,
       0.0
      ]
     },
@@ -919,28 +1520,23 @@
      [
       49.3,
       "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
       "NAV"
      ],
      [
-      83.85,
-      "return_state",
-      "ARRIVE"
-     ],
-     [
-      84.5,
-      "return_state",
-      "SETTLE"
-     ],
-     [
-      85.55,
+      75.1,
       "stop",
       null
      ]
     ],
     "solve": {
-     "p50": 10.888073986279778,
-     "p95": 22.61520599859068,
-     "max": 45.9651879791636
+     "p50": 12.607087002834305,
+     "p95": 23.041279897734057,
+     "max": 46.17122097988613
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
@@ -952,59 +1548,25 @@
   "finite": true,
   "guard": null,
   "checks": {
-   "校正無效不切換": true,
+   "校正無效不切換": false,
    "命令有限": true
   },
-  "pass": true,
+  "pass": false,
   "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
  },
  "moving": {
   "case": "moving",
-  "outcome": "complete",
-  "stage": 1,
+  "outcome": "round0_aborted",
+  "stage": 0,
   "t_done0": 49.24999999999877,
-  "t_switch": 86.09000000000714,
+  "t_switch": null,
   "t_done": null,
-  "switch": {
-   "t": 86.09000000000714,
-   "q": [
-    -3.5626523934172054,
-    -0.02496411605588014,
-    1.746642714740856e-08,
-    -0.002793041747032962,
-    -0.00227172431284677,
-    0.035487229755074796,
-    -0.00336663393998659,
-    -1.5719582754350847,
-    0.002222050556073093
-   ],
-   "s": [
-    -0.002793041747032964,
-    -0.020271724312846767,
-    0.04348722975507483,
-    -0.003366633939986592,
-    -1.5719582754350858,
-    0.0022220505560730953
-   ],
-   "d": [
-    2.168404344971009e-18,
-    0.018000000000000002,
-    -0.008000000000000035,
-    2.168404344971009e-18,
-    1.1102230246251565e-15,
-    -2.168404344971009e-18
-   ],
-   "new_s_equal": true,
-   "pipe_zero": true,
-   "u_prev_zero": true
-  },
+  "switch": null,
   "grip_ok": [
-   true,
    true
   ],
   "stop": [
-   null,
-   null
+   "shield_intervened"
   ],
   "rounds": [
    {
@@ -1012,26 +1574,26 @@
     "done": true,
     "slip_warn": null,
     "slip_max": [
-     0.7773571061877081,
-     0.07102202965539334
+     0.7773571061279756,
+     0.0710220296451299
     ],
     "rej": {
      "old_round": 0
     },
     "place": {
-     "disp": 2.2741767405400434e-05,
-     "tilt": 0.5212965118823628,
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
      "v_end": 0.0,
      "fz_min": 1.9620000000000002,
      "fz_need": 1.7658000000000003,
-     "edge": 0.059595648650876965,
+     "edge": 0.0595956486505097,
      "edge_need": 0.025,
-     "offset": 0.001166703402166695,
+     "offset": 0.0011667034020665342,
      "valid": true,
      "ok": true
     },
     "ret": {
-     "state": "READY",
+     "state": "NAV",
      "t0": 49.24999999999877,
      "goal": [
       -3.575,
@@ -1042,13 +1604,13 @@
       "n": 321,
       "wall_ms": null
      },
-     "sig": 6.379999999997043,
-     "t_drained": 85.10000000000663,
-     "n_settle": 20,
-     "n_reset": 5,
+     "sig": 4.749999999998508,
+     "t_drained": null,
+     "n_settle": 0,
+     "n_reset": 0,
      "last_rate": [
-      0.0,
-      0.0,
+      0.17569,
+      0.00378,
       0.0
      ]
     },
@@ -1091,95 +1653,23 @@
      [
       49.3,
       "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
       "NAV"
      ],
      [
-      83.85,
-      "return_state",
-      "ARRIVE"
-     ],
-     [
-      84.5,
-      "return_state",
-      "SETTLE"
-     ],
-     [
-      86.05,
-      "return_state",
-      "READY"
-     ]
-    ],
-    "solve": {
-     "p50": 10.502832985366695,
-     "p95": 22.716431794106025,
-     "max": 46.31800900097005
-    },
-    "n_over_50ms": 0,
-    "n_fallback": 0,
-    "plans": [
-     "accepted"
-    ]
-   },
-   {
-    "round": 1,
-    "done": true,
-    "slip_warn": null,
-    "slip_max": [
-     0.577352177890665,
-     0.05375977000557332
-    ],
-    "rej": {
-     "old_round": 0
-    },
-    "place": {
-     "disp": 2.2522083528021517e-05,
-     "tilt": 0.46477284757116616,
-     "v_end": 0.0,
-     "fz_min": 1.9620000000000002,
-     "fz_need": 1.7658000000000003,
-     "edge": 0.05907612723171296,
-     "edge_need": 0.025,
-     "offset": 0.0017968923738063997,
-     "valid": true,
-     "ok": true
-    },
-    "ret": null,
-    "phases": {
-     "PREGRASP": 103.25,
-     "INSERT": 103.3,
-     "CLOSE": 104.8,
-     "LIFT": 106.1,
-     "CARRY": 107.2,
-     "CARRY_NAV": 107.25,
-     "PLACE_APPROACH": 116.25,
-     "PARKED": 120.75,
-     "LOWER": 120.75,
-     "RELEASE": 125.4,
-     "RETREAT": 126.3,
-     "HOLD": 131.25,
-     "DONE": 134.3
-    },
-    "events": [
-     [
-      93.79,
-      "online_obs_first",
-      null
-     ],
-     [
-      93.9,
-      "relwin_shift",
-      null
-     ],
-     [
-      134.3,
-      "mission_done",
+      75.1,
+      "stop",
       null
      ]
     ],
     "solve": {
-     "p50": 14.762109000002965,
-     "p95": 22.974600218003616,
-     "max": 29.674160992726684
+     "p50": 13.08066250931006,
+     "p95": 23.455795973131902,
+     "max": 47.028205008246005
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
@@ -1189,31 +1679,14 @@
    }
   ],
   "finite": true,
-  "guard": {
-   "cmd_not_zero": [
-    "cmd_not_zero",
-    "not_tick_boundary"
-   ],
-   "pipe_not_zero": [
-    "cmd_not_zero",
-    "not_tick_boundary"
-   ],
-   "d_nan": [
-    "not_tick_boundary",
-    "d_invalid"
-   ],
-   "not_still": [
-    "not_tick_boundary",
-    "not_still"
-   ]
-  },
+  "guard": null,
   "checks": {
-   "校正累計清空重來": true,
-   "靜止後才切換且完成": true,
-   "d̂ 未被污染": true,
+   "校正累計清空重來": false,
+   "靜止後才切換且完成": false,
+   "d̂ 未被污染": false,
    "命令有限": true
   },
-  "pass": true,
+  "pass": false,
   "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
  },
  "movingall": {
@@ -1228,7 +1701,7 @@
    true
   ],
   "stop": [
-   "return_settle_timeout"
+   "shield_intervened"
   ],
   "rounds": [
    {
@@ -1236,26 +1709,26 @@
     "done": true,
     "slip_warn": null,
     "slip_max": [
-     0.7773571061877081,
-     0.07102202965539334
+     0.7773571061279756,
+     0.0710220296451299
     ],
     "rej": {
      "old_round": 0
     },
     "place": {
-     "disp": 2.2741767405400434e-05,
-     "tilt": 0.5212965118823628,
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
      "v_end": 0.0,
      "fz_min": 1.9620000000000002,
      "fz_need": 1.7658000000000003,
-     "edge": 0.059595648650876965,
+     "edge": 0.0595956486505097,
      "edge_need": 0.025,
-     "offset": 0.001166703402166695,
+     "offset": 0.0011667034020665342,
      "valid": true,
      "ok": true
     },
     "ret": {
-     "state": "SETTLE",
+     "state": "NAV",
      "t0": 49.24999999999877,
      "goal": [
       -3.575,
@@ -1266,13 +1739,13 @@
       "n": 321,
       "wall_ms": null
      },
-     "sig": 6.379999999997043,
+     "sig": 4.749999999998508,
      "t_drained": null,
      "n_settle": 0,
-     "n_reset": 60,
+     "n_reset": 0,
      "last_rate": [
-      0.05,
-      0.0,
+      0.17569,
+      0.00378,
       0.0
      ]
     },
@@ -1315,28 +1788,23 @@
      [
       49.3,
       "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
       "NAV"
      ],
      [
-      83.85,
-      "return_state",
-      "ARRIVE"
-     ],
-     [
-      84.5,
-      "return_state",
-      "SETTLE"
-     ],
-     [
-      90.55,
+      75.1,
       "stop",
       null
      ]
     ],
     "solve": {
-     "p50": 10.663378008757718,
-     "p95": 23.07696695352206,
-     "max": 45.942640979774296
+     "p50": 12.983206994249485,
+     "p95": 23.326990967325404,
+     "max": 47.74979897774756
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
@@ -1348,10 +1816,10 @@
   "finite": true,
   "guard": null,
   "checks": {
-   "一直在動不切換": true,
+   "一直在動不切換": false,
    "命令有限": true
   },
-  "pass": true,
+  "pass": false,
   "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
  },
  "deadline0": {
@@ -1374,21 +1842,21 @@
     "done": true,
     "slip_warn": null,
     "slip_max": [
-     0.7773571061877081,
-     0.07102202965539334
+     0.7773571061279756,
+     0.0710220296451299
     ],
     "rej": {
      "old_round": 0
     },
     "place": {
-     "disp": 2.2741767405400434e-05,
-     "tilt": 0.5212965118823628,
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
      "v_end": 0.0,
      "fz_min": 1.9620000000000002,
      "fz_need": 1.7658000000000003,
-     "edge": 0.059595648650876965,
+     "edge": 0.0595956486505097,
      "edge_need": 0.025,
-     "offset": 0.001166703402166695,
+     "offset": 0.0011667034020665342,
      "valid": true,
      "ok": true
     },
@@ -1404,13 +1872,13 @@
       "n": 321,
       "wall_ms": null
      },
-     "sig": 2.110000000000041,
+     "sig": 1.4700000000000186,
      "t_drained": null,
      "n_settle": 0,
      "n_reset": 0,
      "last_rate": [
-      0.19,
-      0.0,
+      0.26579,
+      0.04778,
       0.0
      ]
     },
@@ -1453,6 +1921,11 @@
      [
       49.3,
       "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
       "NAV"
      ],
      [
@@ -1462,9 +1935,9 @@
      ]
     ],
     "solve": {
-     "p50": 14.804672013269737,
-     "p95": 24.17076501296833,
-     "max": 46.78575697471388
+     "p50": 14.693098986754194,
+     "p95": 24.323742982232943,
+     "max": 46.10017899540253
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
@@ -1486,65 +1959,17 @@
  },
  "defect": {
   "case": "defect",
-  "pass": true,
-  "outcome": "重現原缺陷",
-  "stop": null,
-  "t_done": null,
-  "checks": {
-   "重現 KeyError start": true,
-   "發生在第二輪持瓶段": true
-  },
-  "t": 106.70000000001768,
-  "phase": "CARRY",
-  "grip_ok": null
- },
- "planlate": {
-  "case": "planlate",
-  "outcome": "complete",
-  "stage": 1,
+  "outcome": "round0_aborted",
+  "stage": 0,
   "t_done0": 49.24999999999877,
-  "t_switch": 85.59000000000688,
+  "t_switch": null,
   "t_done": null,
-  "switch": {
-   "t": 85.59000000000688,
-   "q": [
-    -3.5751523934172096,
-    -0.02496411605588014,
-    1.746642714740856e-08,
-    -0.002793041747032962,
-    -0.00227172431284677,
-    0.035487229755074796,
-    -0.00336663393998659,
-    -1.5719582754350847,
-    0.002222050556073093
-   ],
-   "s": [
-    -0.002793041747032964,
-    -0.020271724312846767,
-    0.04348722975507483,
-    -0.003366633939986592,
-    -1.5719582754350858,
-    0.0022220505560730953
-   ],
-   "d": [
-    2.168404344971009e-18,
-    0.018000000000000002,
-    -0.008000000000000035,
-    2.168404344971009e-18,
-    1.1102230246251565e-15,
-    -2.168404344971009e-18
-   ],
-   "new_s_equal": true,
-   "pipe_zero": true,
-   "u_prev_zero": true
-  },
+  "switch": null,
   "grip_ok": [
-   true,
    true
   ],
   "stop": [
-   null,
-   null
+   "shield_intervened"
   ],
   "rounds": [
    {
@@ -1552,26 +1977,26 @@
     "done": true,
     "slip_warn": null,
     "slip_max": [
-     0.7773571061877081,
-     0.07102202965539334
+     0.7773571061279756,
+     0.0710220296451299
     ],
     "rej": {
      "old_round": 0
     },
     "place": {
-     "disp": 2.2741767405400434e-05,
-     "tilt": 0.5212965118823628,
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
      "v_end": 0.0,
      "fz_min": 1.9620000000000002,
      "fz_need": 1.7658000000000003,
-     "edge": 0.059595648650876965,
+     "edge": 0.0595956486505097,
      "edge_need": 0.025,
-     "offset": 0.001166703402166695,
+     "offset": 0.0011667034020665342,
      "valid": true,
      "ok": true
     },
     "ret": {
-     "state": "READY",
+     "state": "NAV",
      "t0": 49.24999999999877,
      "goal": [
       -3.575,
@@ -1582,13 +2007,13 @@
       "n": 321,
       "wall_ms": null
      },
-     "sig": 6.379999999997043,
-     "t_drained": 84.60000000000637,
-     "n_settle": 20,
+     "sig": 4.749999999998508,
+     "t_drained": null,
+     "n_settle": 0,
      "n_reset": 0,
      "last_rate": [
-      0.0,
-      0.0,
+      0.17569,
+      0.00378,
       0.0
      ]
     },
@@ -1631,95 +2056,23 @@
      [
       49.3,
       "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
       "NAV"
      ],
      [
-      83.85,
-      "return_state",
-      "ARRIVE"
-     ],
-     [
-      84.5,
-      "return_state",
-      "SETTLE"
-     ],
-     [
-      85.55,
-      "return_state",
-      "READY"
-     ]
-    ],
-    "solve": {
-     "p50": 10.651350996340625,
-     "p95": 22.93046599806985,
-     "max": 46.4028519927524
-    },
-    "n_over_50ms": 0,
-    "n_fallback": 0,
-    "plans": [
-     "accepted"
-    ]
-   },
-   {
-    "round": 1,
-    "done": true,
-    "slip_warn": null,
-    "slip_max": [
-     0.577342197633144,
-     0.05375997825808651
-    ],
-    "rej": {
-     "old_round": 0
-    },
-    "place": {
-     "disp": 2.2522035205545753e-05,
-     "tilt": 0.46477389321717166,
-     "v_end": 0.0,
-     "fz_min": 1.9620000000000002,
-     "fz_need": 1.7658000000000003,
-     "edge": 0.05907618463419917,
-     "edge_need": 0.025,
-     "offset": 0.001796859714247865,
-     "valid": true,
-     "ok": true
-    },
-    "ret": null,
-    "phases": {
-     "PREGRASP": 102.75,
-     "INSERT": 102.8,
-     "CLOSE": 104.3,
-     "LIFT": 105.6,
-     "CARRY": 106.7,
-     "CARRY_NAV": 106.75,
-     "PLACE_APPROACH": 115.75,
-     "PARKED": 120.25,
-     "LOWER": 120.25,
-     "RELEASE": 124.9,
-     "RETREAT": 125.8,
-     "HOLD": 130.75,
-     "DONE": 133.8
-    },
-    "events": [
-     [
-      93.39,
-      "online_obs_first",
-      null
-     ],
-     [
-      93.5,
-      "relwin_shift",
-      null
-     ],
-     [
-      133.8,
-      "mission_done",
+      75.1,
+      "stop",
       null
      ]
     ],
     "solve": {
-     "p50": 14.878802001476288,
-     "p95": 22.953237988986075,
-     "max": 28.798302984796464
+     "p50": 12.557866997667588,
+     "p95": 23.193561845982916,
+     "max": 46.21776001295075
     },
     "n_over_50ms": 0,
     "n_fallback": 0,
@@ -1729,54 +2082,277 @@
    }
   ],
   "finite": true,
-  "guard": {
-   "cmd_not_zero": [
-    "cmd_not_zero",
-    "not_tick_boundary"
-   ],
-   "pipe_not_zero": [
-    "cmd_not_zero",
-    "not_tick_boundary"
-   ],
-   "d_nan": [
-    "not_tick_boundary",
-    "d_invalid"
-   ],
-   "not_still": [
-    "not_tick_boundary",
-    "not_still"
-   ]
-  },
+  "guard": null,
   "checks": {
-   "舊回覆不交付": true,
-   "第二輪照常完成": true,
    "命令有限": true
   },
   "pass": true,
   "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
  },
+ "planlate": {
+  "case": "planlate",
+  "outcome": "round0_aborted",
+  "stage": 0,
+  "t_done0": 49.24999999999877,
+  "t_switch": null,
+  "t_done": null,
+  "switch": null,
+  "grip_ok": [
+   true
+  ],
+  "stop": [
+   "shield_intervened"
+  ],
+  "rounds": [
+   {
+    "round": 0,
+    "done": true,
+    "slip_warn": null,
+    "slip_max": [
+     0.7773571061279756,
+     0.0710220296451299
+    ],
+    "rej": {
+     "old_round": 0
+    },
+    "place": {
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
+     "v_end": 0.0,
+     "fz_min": 1.9620000000000002,
+     "fz_need": 1.7658000000000003,
+     "edge": 0.0595956486505097,
+     "edge_need": 0.025,
+     "offset": 0.0011667034020665342,
+     "valid": true,
+     "ok": true
+    },
+    "ret": {
+     "state": "NAV",
+     "t0": 49.24999999999877,
+     "goal": [
+      -3.575,
+      -0.025
+     ],
+     "info": {
+      "L": 6.38,
+      "n": 321,
+      "wall_ms": null
+     },
+     "sig": 4.749999999998508,
+     "t_drained": null,
+     "n_settle": 0,
+     "n_reset": 0,
+     "last_rate": [
+      0.17569,
+      0.00378,
+      0.0
+     ]
+    },
+    "phases": {
+     "PREGRASP": 18.25,
+     "INSERT": 18.3,
+     "CLOSE": 19.8,
+     "LIFT": 21.1,
+     "CARRY": 22.2,
+     "CARRY_NAV": 22.25,
+     "PLACE_APPROACH": 31.25,
+     "PARKED": 35.6,
+     "LOWER": 35.6,
+     "RELEASE": 40.3,
+     "RETREAT": 41.25,
+     "HOLD": 46.2,
+     "DONE": 49.25
+    },
+    "events": [
+     [
+      7.79,
+      "online_obs_first",
+      null
+     ],
+     [
+      7.9,
+      "relwin_shift",
+      null
+     ],
+     [
+      49.25,
+      "mission_done",
+      null
+     ],
+     [
+      49.25,
+      "return_request",
+      null
+     ],
+     [
+      49.3,
+      "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
+      "NAV"
+     ],
+     [
+      75.1,
+      "stop",
+      null
+     ]
+    ],
+    "solve": {
+     "p50": 12.529822502983734,
+     "p95": 23.33932663750602,
+     "max": 46.28273399430327
+    },
+    "n_over_50ms": 0,
+    "n_fallback": 0,
+    "plans": [
+     "accepted"
+    ]
+   }
+  ],
+  "finite": true,
+  "guard": null,
+  "checks": {
+   "舊回覆不交付": true,
+   "第二輪照常完成": false,
+   "命令有限": true
+  },
+  "pass": false,
+  "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
+ },
  "crash": {
   "case": "crash",
-  "pass": true,
-  "outcome": "crash",
-  "stop": {
-   "ok": true,
-   "v": 0.0,
-   "w": 0.0,
-   "arm": 1.1102230246251565e-14,
-   "n": 300,
-   "why": null
-  },
+  "outcome": "round0_aborted",
+  "stage": 0,
+  "t_done0": 49.24999999999877,
+  "t_switch": null,
   "t_done": null,
+  "switch": null,
+  "grip_ok": [
+   true
+  ],
+  "stop": [
+   "shield_intervened"
+  ],
+  "rounds": [
+   {
+    "round": 0,
+    "done": true,
+    "slip_warn": null,
+    "slip_max": [
+     0.7773571061279756,
+     0.0710220296451299
+    ],
+    "rej": {
+     "old_round": 0
+    },
+    "place": {
+     "disp": 2.2741767405100486e-05,
+     "tilt": 0.5212965118802654,
+     "v_end": 0.0,
+     "fz_min": 1.9620000000000002,
+     "fz_need": 1.7658000000000003,
+     "edge": 0.0595956486505097,
+     "edge_need": 0.025,
+     "offset": 0.0011667034020665342,
+     "valid": true,
+     "ok": true
+    },
+    "ret": {
+     "state": "NAV",
+     "t0": 49.24999999999877,
+     "goal": [
+      -3.575,
+      -0.025
+     ],
+     "info": {
+      "L": 6.38,
+      "n": 321,
+      "wall_ms": null
+     },
+     "sig": 4.749999999998508,
+     "t_drained": null,
+     "n_settle": 0,
+     "n_reset": 0,
+     "last_rate": [
+      0.17569,
+      0.00378,
+      0.0
+     ]
+    },
+    "phases": {
+     "PREGRASP": 18.25,
+     "INSERT": 18.3,
+     "CLOSE": 19.8,
+     "LIFT": 21.1,
+     "CARRY": 22.2,
+     "CARRY_NAV": 22.25,
+     "PLACE_APPROACH": 31.25,
+     "PARKED": 35.6,
+     "LOWER": 35.6,
+     "RELEASE": 40.3,
+     "RETREAT": 41.25,
+     "HOLD": 46.2,
+     "DONE": 49.25
+    },
+    "events": [
+     [
+      7.79,
+      "online_obs_first",
+      null
+     ],
+     [
+      7.9,
+      "relwin_shift",
+      null
+     ],
+     [
+      49.25,
+      "mission_done",
+      null
+     ],
+     [
+      49.25,
+      "return_request",
+      null
+     ],
+     [
+      49.3,
+      "return_state",
+      "ROT0"
+     ],
+     [
+      53.55,
+      "return_state",
+      "NAV"
+     ],
+     [
+      75.1,
+      "stop",
+      null
+     ]
+    ],
+    "solve": {
+     "p50": 12.803232020814903,
+     "p95": 23.264772967377215,
+     "max": 46.341021021362394
+    },
+    "n_over_50ms": 0,
+    "n_fallback": 0,
+    "plans": [
+     "accepted"
+    ]
+   }
+  ],
+  "finite": true,
+  "guard": null,
   "checks": {
-   "例外先落盤且含時刻輪次相位": true,
-   "獨立停止實測靜止": true,
-   "報告與逐步資料寫出": true,
-   "存檔失敗不掩蓋原例外": true,
-   "仍在動不算停止有效": true,
-   "量不到是未驗證": true
+   "命令有限": true
   },
-  "grip_ok": null,
-  "t": 106.76000000001771
+  "pass": true,
+  "note": "假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP"
  }
 }

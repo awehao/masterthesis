@@ -64,7 +64,7 @@ import test_bottle_place as TP                          # noqa: E402
 import bottle_n2_path as NP                             # noqa: E402
 TP.DX, TP.DY = 2.4, -1.0
 J_RUN = np.array(json.load(open(os.path.join(HERE, 'runs', 'bottle_online5_u3_1', 's1_report.json')))['plan']['joined'], float)
-PLANS = json.load(open(os.path.join(HERE, 'results', 'bottle', 'f1_offline_plan_rev.json')))
+PLANS = json.load(open(os.path.join(HERE, 'results', 'bottle', 'f1_offline_plan_rev_box.json')))   # 原障礙方塊進地圖的離線路徑（實跑靠掃描進代價圖；無方塊版的返回路徑貼著方塊走，與實跑不符）
 RTF_CAP = 0.6
 LOGP = os.path.join(HERE, 'results', 'bottle', f'f1_task_{CASE}_worker.log')
 W = TV.T
@@ -205,7 +205,7 @@ def main():
     c0.s_ref = c0.sig_robot = c0.path.sig0
     shared = SharedPlan(['carry_far', 'return_far', 'carry_near'])
     port = shared if CASE == 'defect' else FT.PlanPort(shared)
-    if CASE == 'defect':
+    if CASE == 'defect':                                     # 下面沒走到 KeyError 就判未過（main 結尾）
         shared.invalidate_real, shared.invalidate = shared.invalidate, (lambda: None)     # 重現 bottle_f1_1：切換與取用後都不清
     else:
         port.bind(c0)
@@ -441,6 +441,8 @@ def main():
         chk['返回中到期受控停止'] = r['outcome'] == 'round0_aborted' and r['t_switch'] is None and 'sim_limit' in str(out['stop'])
         chk['走完停止尾段'] = float(H_[-1]['t']) >= 60.0 + 2.5 and float(H_[-1]['t']) < 66.0
         chk['尾段底盤已停'] = bool(np.allclose(H_[-1]['u'], 0.0, atol=1e-6))
+    if CASE in ('defect', 'crash'):
+        chk['走到注入點'] = False                              # 正常結束代表沒走到注入點，不能算通過
     chk['命令有限'] = out['finite']
     out['checks'] = chk
     out['pass'] = bool(all(chk.values()))

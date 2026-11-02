@@ -18,14 +18,14 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
 DOMAIN = os.environ.get('CHECK_DOMAIN', '79')
 GEOM, KEYS, OUT = (('f1_geom_rev.json', ('r1', 'r2'), 'f1_offline_plan_rev.json') if os.environ.get('F1_ORDER') == 'rev' else ('f1_geom.json', ('c1', 'c2'), 'f1_offline_plan.json'))   # F1_ORDER=rev：對調抓取順序（r1 遠端、r2 近端）
-OUT = os.path.join(HERE, 'results', 'bottle', OUT)
+OUT = os.path.join(HERE, 'results', 'bottle', OUT.replace('.json', '_box.json') if os.environ.get('F1_BOX') == '1' else OUT)
 START = [-3.6, 0.0]
 
 
 def main():
     tmp = os.environ.get('CHECK_TMP', '/tmp')
     mp = os.path.join(tmp, 'f1_map')
-    subprocess.run([sys.executable, os.path.join(HERE, 'bottle_map_write.py'), mp, '--table2', '2.4,-1.0'], check=True)
+    subprocess.run([sys.executable, os.path.join(HERE, 'bottle_map_write.py'), mp, '--table2', '2.4,-1.0'] + (['--wall-box=-2.0,0.0,0.25,0.4,0.4,0.5'] if os.environ.get('F1_BOX') == '1' else []), check=True)   # F1_BOX：原障礙方塊進地圖（實跑靠掃描進代價圖，離線沒有掃描）
     os.environ['ROS_DOMAIN_ID'] = DOMAIN
     env = dict(os.environ, ROS_DOMAIN_ID=DOMAIN)
     y = open(os.path.join(HERE, 'bottle_n2_planner.yaml')).read().replace('use_sim_time: true', 'use_sim_time: false')
