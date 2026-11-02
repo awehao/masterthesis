@@ -21,7 +21,7 @@ def analyse(rows, mpc, t_start, nav):
     """rows：求解紀錄（dict：t、obs、qp、u_prev、X_ref、xi_ref、u、eps0、resid_ns…）；mpc：導航 GMPC（手臂 hold 重解用）；t_start：障礙起動任務時刻；nav：(返回 NAV 起, 迄)。"""
     cfg = mpc.cfg
     N, dt = cfg.N, cfg.dt
-    seg = {k: dict(n=0, n_tracked=0, n_in_solver=0, n_bound=0, n_react=0, t_first=None, t_last=None, du_max=0.0, eps0_max=0.0, d_center_min=9.9) for k in ('before_move', 'return_nav', 'other')}
+    seg = {k: dict(n=0, n_tracked=0, n_in_solver=0, n_bound=0, n_react=0, n_react_in_solver=0, t_first=None, t_last=None, du_max=0.0, eps0_max=0.0, d_center_min=9.9) for k in ('before_move', 'return_nav', 'other')}
     for e in rows:
         t = float(e['t'])
         k = 'before_move' if t < t_start else ('return_nav' if nav[0] <= t <= nav[1] else 'other')
@@ -41,8 +41,8 @@ def analyse(rows, mpc, t_start, nav):
                 pk = p_now if j == 0 else X[j][:2, 2]
                 dmin = min(dmin, float(np.hypot(pk[0] - (o['x'] + o.get('vx', 0.0) * j * dt), pk[1] - (o['y'] + o.get('vy', 0.0) * j * dt))))
         s['d_center_min'] = min(s['d_center_min'], round(dmin, 4))
-        if cfg.cbf_prune_range <= 0.0 or dmin <= cfg.cbf_prune_range:
-            s['n_in_solver'] += 1
+        in_s = cfg.cbf_prune_range <= 0.0 or dmin <= cfg.cbf_prune_range
+        s['n_in_solver'] += int(in_s)
         s['eps0_max'] = max(s['eps0_max'], float(e.get('eps0', 0.0)))
         Xn = from_xytheta(*np.asarray(e['qp'], float)[:3])
         A, l, _, _ = GW._build_cbf_horizon(cfg, Xn, X, xi, D, N)
@@ -60,6 +60,7 @@ def analyse(rows, mpc, t_start, nav):
             du = float(np.linalg.norm(u - np.asarray(r_no.u_opt, float)))
             s['du_max'] = max(s['du_max'], du)
             s['n_react'] += int(du > DU_TOL)
+            s['n_react_in_solver'] += int(du > DU_TOL and in_s)
     return seg
 
 
