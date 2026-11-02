@@ -13,7 +13,9 @@ sys.path.insert(0, HERE)
 sys.argv = ['test_bottle_f1_task.py', 'nominal']
 import test_bottle_f1_task as T                         # noqa: E402,F401
 import bottle_s1_geom as G                              # noqa: E402
+from scipy.spatial.transform import Rotation as Rot     # noqa: E402
 
+BPT = G.bottle_points()
 SC = json.load(open(os.path.join(HERE, 'experiments', '20261103_f1_lchannel_scene.json')))
 DX = float(SC.get('table2_dx', 0.0))
 PL = json.load(open(os.path.join(HERE, 'results', 'bottle', f'f1_offline_plan_rev_box_lchan_dx{DX:g}.json' if DX else 'f1_offline_plan_rev_box_lchan.json')))
@@ -61,7 +63,15 @@ def extent(k):
         d = W[:, :2] - Q[j, :2]
         ex.append(np.column_stack([c * d[:, 0] + s * d[:, 1], -s * d[:, 0] + c * d[:, 1]]))
     E = np.vstack(ex)
-    return dict(x=[round(float(E[:, 0].min()), 3), round(float(E[:, 0].max()), 3)], y=[round(float(E[:, 1].min()), 3), round(float(E[:, 1].max()), 3)], r_max=round(float(np.hypot(E[:, 0], E[:, 1]).max()), 3), z_note='只含 link_world 取樣點')
+    Eb = []
+    for j in k[::10]:
+        R_ = Rot.from_quat([col['bottle_qx'][j], col['bottle_qy'][j], col['bottle_qz'][j], col['bottle_qw'][j]]).as_matrix()
+        B_ = (R_ @ BPT.T).T + np.array([col['bottle_base_x'][j], col['bottle_base_y'][j], col['bottle_base_z'][j]])
+        c, s = np.cos(Q[j, 2]), np.sin(Q[j, 2])
+        d = B_[:, :2] - Q[j, :2]
+        Eb.append(np.column_stack([c * d[:, 0] + s * d[:, 1], -s * d[:, 0] + c * d[:, 1]]))
+    Eb = np.vstack(Eb)
+    return dict(x=[round(float(E[:, 0].min()), 3), round(float(E[:, 0].max()), 3)], y=[round(float(E[:, 1].min()), 3), round(float(E[:, 1].max()), 3)], r_max=round(float(np.hypot(E[:, 0], E[:, 1]).max()), 3), r_max_bottle=round(float(np.hypot(Eb[:, 0], Eb[:, 1]).max()), 3), z_note='實測姿態取樣：連桿與手指 link_world、持瓶 bottle_points；bottle 欄位對應當趟持瓶')
 
 
 for nm, fn, st in (('r1', 's1_report_r0.json', 0.0), ('r2', 's1_report.json', None)):
@@ -71,14 +81,14 @@ for nm, fn, st in (('r1', 's1_report_r0.json', 0.0), ('r2', 's1_report.json', No
     k = np.flatnonzero((t >= tl) & (t <= ev['compact_reached']))
     k = k[np.abs(t[k] * 20 - np.round(t[k] * 20)) < 1e-6]
     out['compact_arc_measured'][nm] = dict(from_plan_request=round(float(np.linalg.norm(np.diff(Q[k, :2], axis=0), axis=1).sum()), 3), t_compact=round(ev['compact_reached'] - tl, 2))
-    k2 = np.flatnonzero((t >= ev['compact_reached']) & (t <= ev['compact_raise_start']))
-    out['envelope']['compact_' + nm] = extent(k2) if len(k2) > 10 else None
+    k2 = np.flatnonzero((t >= ev['compact_reached'] - 0.3) & (t <= ev['compact_raise_start'] + 0.05))
+    out['envelope']['compact_' + nm] = extent(k2)
     k3 = np.flatnonzero((t >= ev['compact_raise_start']) & (t <= ev['compact_out_start']))
     out['envelope']['raise_' + nm] = extent(k3)
 r0 = json.load(open(os.path.join(HERE, 'runs', 'bottle_f1_3', 's1_report_r0.json')))
 evr = {e['to']: e['t'] for e in r0['events'] if e.get('what') == 'return_state'}
 kr = np.flatnonzero((t >= evr['NAV']) & (t <= evr['ROT1']))
-out['envelope']['return_hold'] = extent(kr)
+out['envelope']['return_hold'] = {k_: v_ for k_, v_ in extent(kr).items() if k_ != 'r_max_bottle'}   # 返回段沒有持瓶
 out['corridor_center_margin'] = dict(half_width=0.6, base_radius=0.39, disc_gap=0.21, static_keepout_margin=0.47, center_to_keepout=0.13, dynamic_margin=0.69)
 print(json.dumps(out, ensure_ascii=False, default=float))
 json.dump(out, open(os.path.join(HERE, 'results', 'bottle', 'f1_lchan_check.json'), 'w'), ensure_ascii=False, indent=1, default=float)

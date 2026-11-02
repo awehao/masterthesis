@@ -15,6 +15,7 @@
   planlate  切換後才到的舊回覆（舊序號）⇒ 不交付；第二輪照常用自己的請求完成。
   crash     第二輪持瓶段注入例外 ⇒ 先存 crash.json 與 ctx，獨立停止實測靜止，再存逐步資料與報告；另核存檔失敗不掩蓋原例外、停止未驗證照實報。
   dyn       名目兩輪＋原已固定的移動物 f1_return_pass1（世界軌跡與任務時鐘排程不改）。障礙只經離線射線→追蹤器→控制器；真值只用於劇本與距離評估。核會遇窗全身與停止掃掠（障礙隨取樣時間推進，連桿、手指、持瓶、底盤圓盤都要 > 0），分開報 tracked／in_solver／reaction。
+  lchan     兩瓶＋L 型走廊＋第二桌東移（Codex 20261103_065813；無移動物，座標凍結）。真追蹤器＋射線掃描＋GMPC＋Shield；牆進掃描、地圖與全身核對。交進出走廊的手臂排程、全身對牆淨空與停止掃掠、路徑連續性、牆的動態誤判、鬆弛、Shield、期限與第一阻點。假世界無代價圖（不含 path_blocked）、無接觸與滑移物理。
   origin    名目兩輪，重啟點在原起點（對照 bottle_f1_2 的做法；其餘案例都是短返回：重啟點在接近路徑上 x＝RESTART_X）。
 規劃接口與 Isaac 相同：兩輪共用同一個 SharedPlan（舊結果會留著、請求序號只增），外面包 PlanPort。
     python3 evaluation/test_bottle_f1_task.py all
@@ -30,7 +31,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'results', 'bottle', 'f1_task_check.json')
-CASES = ('nominal', 'dyn', 'origin', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
+CASES = ('nominal', 'dyn', 'lchan', 'origin', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
 if len(sys.argv) < 2 or sys.argv[1] == 'all':
     from concurrent.futures import ThreadPoolExecutor
 
@@ -48,6 +49,11 @@ if len(sys.argv) < 2 or sys.argv[1] == 'all':
 CASE = sys.argv[1]
 ROUNDS = [dict(b=(0.15, 0.42), target=(2.55, -0.58), x_look=0.15), dict(b=(-0.15, 0.42), target=(2.25, -0.58), x_look=-0.15)]
 PLACE_DEV, LIM_OTHER, GATE = 0.030, 0.05, 0.60
+sys.path.insert(0, HERE)
+import bottle_f1_lchan_scene as LS                      # noqa: E402
+SCN = LS.load() if CASE == 'lchan' else None
+if SCN is not None:
+    ROUNDS[0]['target'], ROUNDS[1]['target'] = SCN['targets']
 sys.argv = [sys.argv[0], '0.600', 'nom']
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
@@ -67,13 +73,15 @@ import bottle_w1_compactcarry21_ctrl as C21             # noqa: E402
 import bottle_w1_f1_ctrl as F1C                         # noqa: E402
 import test_bottle_place as TP                          # noqa: E402
 import bottle_n2_path as NP                             # noqa: E402
-TP.DX, TP.DY = 2.4, -1.0
+TP.DX, TP.DY = (SCN['table2_x'] if SCN is not None else 2.4), -1.0
 J_RUN = np.array(json.load(open(os.path.join(HERE, 'runs', 'bottle_online5_u3_1', 's1_report.json')))['plan']['joined'], float)
-PLANS = json.load(open(os.path.join(HERE, 'results', 'bottle', 'f1_offline_plan_rev_box.json')))   # 原障礙方塊進地圖的離線路徑（實跑靠掃描進代價圖；無方塊版的返回路徑貼著方塊走，與實跑不符）
+PLANS = json.load(open(os.path.join(HERE, 'results', 'bottle', f"f1_offline_plan_rev_box_lchan_dx{SCN['dx']:g}.json" if SCN is not None else 'f1_offline_plan_rev_box.json')))   # 原障礙方塊進地圖的離線路徑（實跑靠掃描進代價圖；無方塊版的返回路徑貼著方塊走，與實跑不符）
 RTF_CAP = 0.6
 LOGP = os.path.join(HERE, 'results', 'bottle', f'f1_task_{CASE}_worker.log')
 W = TV.T
 TBN = [('t1:' + n, c_, s_) for n, c_, s_ in G.table_boxes()] + [('t2:' + n, c_, s_) for n, c_, s_ in TP.table2_boxes()]
+WALLS = [] if SCN is None else [(c_, s_) for _, c_, s_ in SCN['walls']]
+TBN += [] if SCN is None else [('wall:' + n, c_, s_) for n, c_, s_ in SCN['walls']]
 TB = [(c_, s_) for _, c_, s_ in TBN]
 TB_NO_T2TOP = [(c_, s_) for n, c_, s_ in TBN if n != 't2:table_top']
 TB_NO_T1TOP = [(c_, s_) for n, c_, s_ in TBN if n != 't1:table_top']
@@ -154,7 +162,7 @@ class Ctl(F1C.W1PlaceController):
     def __init__(self, *a, **kw):
         if CUR['q_tuck'] is not None:
             kw['q_tuck'] = CUR['q_tuck']
-        super().__init__(*a, x_look=ROUNDS[CUR['id']]['x_look'], t_round0=CUR['t0'], round_id=CUR['id'], place=dict(target=ROUNDS[CUR['id']]['target']), planner_log=LOGP, return_heading='forward', **kw)
+        super().__init__(*a, x_look=ROUNDS[CUR['id']]['x_look'], t_round0=CUR['t0'], round_id=CUR['id'], place=dict(target=ROUNDS[CUR['id']]['target'], **({} if SCN is None else dict(c=SCN['place_c']))), planner_log=LOGP, return_heading='forward', **kw)
 
     def _advance_inner(self, T_tcp, close_done, q):
         if self.judge.stop is None and np.isfinite(q).all():
@@ -174,17 +182,76 @@ class Ctl(F1C.W1PlaceController):
 def build_ctrl():
     orig, orig_ml = W.W1.W1PlaceController, SC.make_lidar
     W.W1.W1PlaceController = Ctl
-    scene = SC.scene_boxes() + [(c_, sz) for n, c_, sz in TP.table2_boxes() if n != 'table_top']
+    scene = SC.scene_boxes() + [(c_, sz) for n, c_, sz in TP.table2_boxes() if n != 'table_top'] + WALLS
     def scan_fn(t, q):
         r_ = NC.ray_boxes(q[:2], float(q[2]), scene, G.LIDAR_Z)
         if CA is not None:
             r_ = np.minimum(r_, DC.ray_cyl(q[:2], NC.scan_angles() + float(q[2]), DC.state(t, CA)[0], CA['radius'], NC.RANGE_MAX))
         return r_
-    SC.make_lidar = lambda **kw: orig_ml(scan_fn=scan_fn, **kw)
+    SC.make_lidar = lambda **kw: orig_ml(scan_fn=scan_fn, **dict(kw, extra_boxes=list(kw.get('extra_boxes', [])) + WALLS))
     try:
         return W.build()
     finally:
         W.W1.W1PlaceController, SC.make_lidar = orig, orig_ml
+
+
+def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
+    """走廊核對：實際排程（不延後階段）、全身對牆淨空、路徑連續性、動態誤判、鬆弛、Shield。"""
+    out = dict(corridor={}, wall_actual={}, wall_stop={k_: round(v_, 4) for k_, v_ in wall_sw.items()}, wall_stop_where={k_: wh.get(k_) for k_ in wall_sw})
+    segs = [('carry_r1', [x for x in rec if x['round'] == 0 and x['ret'] is None and x['pph'] is not None], reps[0]), ('return', [x for x in rec if x['round'] == 0 and x['ret'] is not None], None), ('carry_r2', [x for x in rec if x['round'] == 1 and x['pph'] is not None], reps[-1])]
+    for nm, L_, rep in segs:
+        if not L_:
+            out['corridor'][nm] = dict(reached=False)
+            continue
+        Q_ = np.array([x['q'] for x in L_])
+        tt_ = np.array([x['t'] for x in L_])
+        ins = LS.in_corridor(Q_[:, :2])
+        d_ = dict(reached=bool(ins.any()))
+        if ins.any():
+            k_ = np.flatnonzero(ins)
+            d_.update(t_in=round(float(tt_[k_[0]]), 2), t_out=round(float(tt_[k_[-1]]), 2), dur=round(float(tt_[k_[-1]] - tt_[k_[0]]), 2))
+            v_ = np.linalg.norm(np.diff(Q_[k_, :2], axis=0), axis=1) / np.maximum(np.diff(tt_[k_]), 1e-6)
+            d_.update(v_mean=round(float(v_.mean()), 3), v_min=round(float(v_.min()), 3), v_max=round(float(v_.max()), 3))
+            if rep is not None:
+                ev = {e_['what']: e_['t'] for e_ in rep['events'] if str(e_.get('what', '')).startswith('compact_')}
+                d_['compact_events'] = {a_: round(float(b_), 2) for a_, b_ in ev.items()}
+                d_['in_compact'] = ev.get('compact_reached', 1e9) <= tt_[k_[0]]
+                d_['raise_after_out'] = ev.get('compact_raise_start', -1e9) >= tt_[k_[-1]]
+                d_['out_after_out'] = ev.get('compact_out_start', -1e9) >= tt_[k_[-1]]
+                d_['margin_in_s'] = round(float(tt_[k_[0]] - ev.get('compact_reached', 1e9)), 2)
+                d_['margin_raise_s'] = round(float(ev.get('compact_raise_start', -1e9) - tt_[k_[-1]]), 2)
+        out['corridor'][nm] = d_
+    for x in rec[::2]:
+        P_n, P_f = split(G.link_world(x['q'], x['f_cmd']))
+        for k_, P_ in (('nonfinger', P_n), ('finger', P_f)):
+            out['wall_actual'][k_] = min(out['wall_actual'].get(k_, 9.9), min(float(G.box_dist(P_, c_, s_).min()) for c_, s_ in WALLS))
+        out['wall_actual']['base_disc'] = min(out['wall_actual'].get('base_disc', 9.9), min(float(LS.d2_box(x['q'][:2], c_, s_)[0]) for c_, s_ in WALLS) - 0.39)
+        if x['T_rel'] is not None:
+            Tb_ = G.C.K.fk(x['q'], 'link_tcp') @ x['T_rel']
+            out['wall_actual']['held'] = min(out['wall_actual'].get('held', 9.9), min(float(G.box_dist((Tb_[:3, :3] @ BPT.T).T + Tb_[:3, 3], c_, s_).min()) for c_, s_ in WALLS))
+    out['wall_actual'] = {k_: round(v_, 4) for k_, v_ in out['wall_actual'].items()}
+    rows_ = list(c0.compact or []) + (list(placed['c1'].compact or []) if 'c1' in placed else [])
+    dyn_t = [float(e_['t']) for e_ in rows_ if FD._dyn(e_['obs'])]
+    eps_ = np.array([float(e_.get('eps0', 0.0)) for e_ in rows_])
+    out['false_dynamic'] = dict(n_ticks=len(dyn_t), n_rows=len(rows_), t_first=dyn_t[0] if dyn_t else None, t_last=dyn_t[-1] if dyn_t else None, max_items=max((len(FD._dyn(e_['obs'])) for e_ in rows_), default=0), note='場景沒有移動物，任何動態項都算誤判')
+    out['slack'] = dict(eps0_max=float(eps_.max()) if len(eps_) else None, n_over_1e4=int((eps_ > 1e-4).sum()), min_h_min=float(min((float(e_['min_h']) for e_ in rows_), default=float('nan'))))
+    out['shield'] = [(r_.get('nav_chain') or {}).get('shield') for r_ in reps]
+    # 路徑連續性：實際底盤到當趟承接路徑（規劃路徑＋放置直線段）的橫向誤差；直線段銜接前後的命令變化
+    out['tracking'] = {}
+    for nm, L_, rep in segs:
+        if rep is None or not L_ or nm == 'return':
+            continue
+        P_ = np.asarray(PLANS['carry_far' if nm == 'carry_r1' else 'carry_near']['P_region'], float)[:, :2]
+        park = np.asarray(rep['place'].get('park', P_[-1]), float)[:2] if isinstance(rep.get('place'), dict) else P_[-1]
+        P2_ = np.vstack([P_, P_[-1] + (park - P_[-1]) * np.linspace(0.05, 1.0, 20)[:, None]])
+        Q_ = np.array([x['q'] for x in L_ if x['pph'] in ('CARRY_NAV', 'PLACE_APPROACH')])
+        if not len(Q_):
+            continue
+        e_ = np.array([float(np.linalg.norm(P2_ - q_[:2], axis=1).min()) for q_ in Q_])
+        v_ = np.diff(Q_[:, :2], axis=0) / 0.05
+        a_ = np.linalg.norm(np.diff(v_, axis=0), axis=1) / 0.05
+        out['tracking'][nm] = dict(cross_max_m=round(float(e_.max()), 4), cross_p95_m=round(float(np.percentile(e_, 95)), 4), a_max_est_mps2=round(float(a_.max()), 3), v_max=round(float(np.linalg.norm(v_, axis=1).max()), 3), yaw_range=[round(float(Q_[:, 2].min()), 3), round(float(Q_[:, 2].max()), 3)])
+    return out
 
 
 def run_crash(e, task, f):
@@ -227,7 +294,7 @@ def main():
     else:
         port.bind(c0)
     c0.carry_planner = port
-    c0.compact = [] if CASE == 'dyn' else None
+    c0.compact = [] if CASE in ('dyn', 'lchan') else None
     f.q[0], f.q[1] = J_RUN[0][0], J_RUN[0][1]
     placed = {}
 
@@ -238,7 +305,7 @@ def main():
         c.path = NP.PlannedPath(J_RUN, -0.9)
         c.s_ref = c.sig_robot = c.path.project(f.q[:2], sig_r)
         c.carry_planner = port
-        c.compact = [] if CASE == 'dyn' else None
+        c.compact = [] if CASE in ('dyn', 'lchan') else None
         placed['c1'] = c
         if CASE != 'defect':
             port.bind(c)
@@ -346,11 +413,12 @@ def main():
                rounds=[dict(round=x['f1']['round'], done=x['mission_done'], slip_warn=(x.get('slip_warn') or {}).get('warn'), slip_max=x['slip_max_mm_deg'], rej=x['f1']['rej'], place=x['place'].get('metrics'), ret=x['f1']['ret'], phases={e['to']: e['t'] for e in x['events'] if e['what'] in ('phase', 'place_phase')},
                             events=[(e['t'], e['what'], e.get('to')) for e in x['events'] if e['what'] in ('return_request', 'return_state', 'mission_done', 'stop', 'relwin_shift', 'online_obs_first')], solve=x['solve_ms'], n_over_50ms=x['n_over_50ms'], n_fallback=x['n_fallback'], plans=[g.get('state') for g in (x.get('online') or {}).get('grasp_plans', [])]) for x in R],
                finite=bool(W.finite_cmds(f)), guard=st['guard'])
-    if CASE in ('nominal', 'origin', 'dyn'):
+    if CASE in ('nominal', 'origin', 'dyn', 'lchan'):
         H = f.hist
         tt, Q = np.array([h['t'] for h in H]), np.array([h['q'] for h in H])
         out['t_done'] = float(tt[-1])
         act, sw, sst, wh, nonfin, unfin = {}, {}, {}, {}, 0, 0
+        wall_sw = {}
         dt_s = C21.SAMPLE_EVERY * 0.01
 
         def upd(D, k, v, w):
@@ -365,10 +433,11 @@ def main():
             upd(act, 'finger', d_cyl(P_f, L), tag)
             near = d_cyl(np.vstack([P_n, P_f]), L) < GATE
             x['near'] = near
+            x['wall_near'] = bool(WALLS) and min(float(LS.d2_box(x['q'][:2], c_, s_)[0]) for c_, s_ in WALLS) < 1.2
             if x['T_rel'] is not None:
                 Tb = G.C.K.fk(x['q'], 'link_tcp') @ x['T_rel']
                 upd(act, 'held', d_cyl((Tb[:3, :3] @ BPT.T).T + Tb[:3, 3], L), tag)
-        idx = [i for i, x in enumerate(REC) if x['near'] or x['pre_lift'] or (x['pph'] in PLACING and x['ret'] is None) or (x['ret'] in ('NAV', 'ARRIVE', 'ROT0', 'ROT1') and i % 5 == 0)]
+        idx = [i for i, x in enumerate(REC) if x['near'] or x['pre_lift'] or (x['pph'] in PLACING and x['ret'] is None) or (x['ret'] in ('NAV', 'ARRIVE', 'ROT0', 'ROT1') and i % 5 == 0) or (x['wall_near'] and i % 5 == 0)]
         sel = set()
         for i in idx:
             sel.update(range(max(i - 2, 0), min(i + 3, len(REC))))
@@ -396,6 +465,12 @@ def main():
                         P_b = (Tb[:3, :3] @ BPT.T).T + Tb[:3, 3]
                         upd(sw, pfx + 'held', d_cyl(P_b, L), tag)
                     placing = (x['pph'] or '') in PLACING
+                    if WALLS:
+                        upd(wall_sw, pfx + 'nonfinger', min(float(G.box_dist(P_n, c_, s_).min()) for c_, s_ in WALLS), tag)
+                        upd(wall_sw, pfx + 'finger', min(float(G.box_dist(P_f, c_, s_).min()) for c_, s_ in WALLS), tag)
+                        upd(wall_sw, pfx + 'base_disc', min(float(LS.d2_box(qq[:2], c_, s_)[0]) for c_, s_ in WALLS) - 0.39, tag)
+                        if P_b is not None:
+                            upd(wall_sw, pfx + 'held', min(float(G.box_dist(P_b, c_, s_).min()) for c_, s_ in WALLS), tag)
                     upd(sst, pfx + 'nonfinger_table', min(float(G.box_dist(P_n, c_, s_).min()) for c_, s_ in TB), tag)
                     upd(sst, pfx + 'finger_table', min(float(G.box_dist(P_f, c_, s_).min()) for c_, s_ in TB), tag)
                     upd(sst, pfx + 'self', float(G.C.self_clear(qq, x['f_cmd'])[0]), tag)
@@ -409,7 +484,7 @@ def main():
         rq = np.array([x['q'] for x in rt])
         arm_move = float(np.abs(rq[:, 3:] - rq[0, 3:]).max())
         spd = np.linalg.norm(np.diff(rq[:, :2], axis=0), axis=1) / 0.05
-        boxes_base = [(c_, s_) for n, c_, s_ in TBN if 'leg' in n] + [(SC.OBST['c'], SC.OBST['sz'])]
+        boxes_base = [(c_, s_) for n, c_, s_ in TBN if 'leg' in n or 'wall:' in n] + [(SC.OBST['c'], SC.OBST['sz'])]
         Pb = np.c_[rq[:, :2], np.full(len(rq), 0.2)]
         base_c = min(float(np.hypot(np.maximum(np.abs(Pb[:, 0] - c_[0]) - s_[0] / 2, 0), np.maximum(np.abs(Pb[:, 1] - c_[1]) - s_[1] / 2, 0)).min()) for c_, s_ in boxes_base) - 0.39
         i_sw = next((k for k, h in enumerate(H) if task.t_switch is not None and h['t'] >= task.t_switch), None)
@@ -480,6 +555,12 @@ def main():
             near_ = np.array([float(np.hypot(*(QH[k_, :2] - DC.state(tH[k_], CA)[0]))) - CA['radius'] for k_ in k_nav[1:]]) < 1.0
             out['dyn']['reaction_motion'] = dict(v_min_near=round(float(v_[near_].min()), 4) if near_.any() else None, v_mean_near=round(float(v_[near_].mean()), 4) if near_.any() else None, w_max_near=round(float(w_[near_].max()), 4) if near_.any() else None)
             chk['移動物全身與停止掃掠 > 0'] = all(v_ > 0.0 for v_ in wd.values()) and FD.distances(tH, QH, CA, DC.state)['base_disc'] > 0.0
+        if CASE == 'lchan':
+            out['lchan'] = lchan_report(REC, R, c0, placed, wall_sw, wh, shared)
+            chk['牆無動態誤判'] = out['lchan']['false_dynamic']['n_ticks'] == 0
+            chk['進走廊前已收近、出走廊後才升高'] = all(v_['in_compact'] and v_['raise_after_out'] for v_ in out['lchan']['corridor'].values() if 'in_compact' in v_)
+            chk['對牆全身與停止掃掠 > 0'] = all(v_ > 0.0 for v_ in out['lchan']['wall_actual'].values()) and all(v_ > 0.0 for v_ in out['lchan']['wall_stop'].values())
+            chk['期限內完成'] = bool(out.get('t_done') is not None and out['t_done'] < 240.0)
         chk['全程淨空'] = not fails
         Q2 = np.array([x['q'] for x in REC if x['round'] == 1])
         out['round2_start'] = dict(sig_r=round(float(sig_r), 4), xy_r=[round(float(v), 4) for v in xy_r], q_start=Q2[0, :3].tolist(), err_to_path_mm=round(float(np.min(np.linalg.norm(pp0.xy(np.arange(pp0.sig0, pp0.x_lane, 0.005)) - Q2[0, :2], axis=1))) * 1e3, 2), events=[(round(e[0], 2), e[1]) for e in out['rounds'][1]['events'] if e[1] in ('online_obs_first', 'relwin_shift')], vhigh=[(round(e_['t'], 2), e_.get('ph'), round(e_.get('x', 0.0), 3)) for e_ in R[1]['events'] if e_['what'] == 'vhigh_seq'], plan=[{k_: g_.get(k_) for k_ in ('t_req', 't_acc', 'x_acc', 'x_latest')} for g_ in (R[1].get('online') or {}).get('grasp_plans', [])], t_u_minus_switch=None)
