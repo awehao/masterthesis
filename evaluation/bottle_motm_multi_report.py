@@ -73,7 +73,8 @@ def one(run):
     c_rd = next((j for j in cands if j.get('c_ready') == 1.0), None)
     fx = sg['fix']
     k0 = int(np.argmin(np.abs(t - fx['t'])))
-    tb = (float(c['bottle_base_x'][k0]), float(c['bottle_base_y'][k0]), float(c['bottle_base_z'][k0]))
+    ro_ = (r.get('region') or {}).get('offset', [0.0, 0.0])                    # R-B1：s1_steps 為世界座標、控制器目標為區域座標 ⇒ 真值換區域再比
+    tb = (float(c['bottle_base_x'][k0]) - float(ro_[0]), float(c['bottle_base_y'][k0]) - float(ro_[1]), float(c['bottle_base_z'][k0]))
     vh = r['vhigh_seq']['log']
     vh_at = next((p for (tt, p, _, _) in reversed(vh) if tt <= fx['t'] + 1e-9), 'TUCK')
     acq = dict(T0=T0, first_valid_xy_row=None if r_xy is None else dict(t_task=round(r_xy['t_recv'] - T0, 3), stamp_task=round(r_xy['row']['stamp'] - T0, 3), age_s=r_xy['row']['recv_age_s']),

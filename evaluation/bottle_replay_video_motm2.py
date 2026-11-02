@@ -163,6 +163,9 @@ def main():
     mom = sorted(mom + [(e['t'], f"轉回高度依第二桌：{e['z_back']:.3f} m（抬升高 {e['z_side_lift']:.3f} m）") for e in r['events'] if e['what'] == 'xh_back']
                  + [(e['t'], f"TCP 收斂到放置姿態（{e['err_mm']:.1f} mm），可停車下放") for e in r['events'] if e['what'] == 'xh_tcp_converged'])
     on_ = r.get('online') or {}
+    ro_ = (r.get('region') or {}).get('offset')
+    if ro_ and any(abs(float(v)) > 1e-9 for v in ro_):                     # R-B1：新區域
+        mom = sorted(mom + [(0.5, f"從原起點導航到新區域（第一桌世界平移 {float(ro_[0]):+.2f}, {float(ro_[1]):+.2f} m）")])
     mom = sorted(mom + [(e['t'], f"看見新位置：首次合格觀測（快照 #{e['seq']}）") for e in r['events'] if e['what'] == 'online_obs_first']
                  + [(e['t'], f"在線抓取計畫送出（最晚處置點 x {e['x_latest']:+.3f} m）") for e in r['events'] if e['what'] == 'grasp_plan_request']
                  + [(e['t'], "在線轉回計畫送出（依側持姿態與持瓶包絡）") for e in r['events'] if e['what'] == 'return_plan_request']
