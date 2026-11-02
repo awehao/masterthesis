@@ -19,6 +19,7 @@ TCP 誤差不等於瓶子滑移；全部 h 非負也只是模型下的離散預�
 鬆弛：既有 ε 是 CBF 不等式的加性鬆弛，不是直接調整 α。現行 cbf_static_slack_scale＝1、cbf_hard_k0＝False ⇒ 靜動態列**共用同一組** ε、k＝0 也是軟列。
   報逐步 ε（由未加鬆弛的列殘差算所需量，分動態／靜態；k＝0 與求解器 eps0 互核）與無鬆弛殘差。
 分類：feasible_forward 共同可行且前進／need_stop 需停或無解／accept_fail 接受檢查未過。事前判準見 JUDGE。
+注意（Codex 20261102_215118）：本工具的 roll 遇 accept_fail 仍繼續施加候選命令，是**強制續走診斷**；第一拍已拒收，後續不是接受流程會走出的軌跡。接受流程見 bottle_c2_contact_tube_relin.py。
     python3 evaluation/bottle_c2_contact_tube_check.py
 """
 import dataclasses
@@ -188,7 +189,7 @@ def record_path(i):
     return P
 
 
-def tick(name, i, qp, sp, up, path, stop=True):
+def tick(name, i, qp, sp, up, path, stop=True, u_nom=None):
     """同一拍：解、接受檢查、分類。"""
     CFG_M.arm_model.bias = Z['bias'][i]
     obs = obs_at(i)
@@ -196,6 +197,8 @@ def tick(name, i, qp, sp, up, path, stop=True):
                w_p=float(Z['w_p'][i]), lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=bool(Z['rel'][i]), qp_solver='gi', **B.W_ARM)
     if name == 'ct':
         arm['contact_tube'] = dict(e=E_C, n=N_TUBE)
+    if u_nom is not None:
+        arm['u_arm_nom'] = np.asarray(u_nom, float)
     X_now = from_xytheta(*qp[:3])
     t0 = time.perf_counter()
     r = SOLVERS[name].solve(X_now=X_now, X_ref_win=Z['X_ref'][i], xi_ref_win=Z['xi_ref'][i], xi_prev=np.asarray(up[:3], float), obstacles=obs, arm=arm)
@@ -205,7 +208,7 @@ def tick(name, i, qp, sp, up, path, stop=True):
     tcp_eff = K.fk(np.asarray(qp, float), 'link_tcp')
     e_eff = Z['T_seq'][i][0][:3, 3] - tcp_eff[:3, 3]
     row = dict(t=round(float(T[i]), 3), phase=BR.PHASES[int(Z['phase'][i])], n_dyn=sum(1 for o in obs if not o.get('static', 'margin' in o)), status=r.status, fallback=ck.get('fallback'), accept=r.accept_action,
-               seq_consistent=ck.get('seq_consistent'), u=np.round(u_b, 5).tolist(), rate=np.round((u_b - np.asarray(up[:3], float)) / DT, 4).tolist(), solve_ms=round(ms, 2), qp=(ck.get('qp') or {}).get('solver'),
+               seq_consistent=ck.get('seq_consistent'), u=np.round(u_b, 5).tolist(), rate=np.round((u_b - np.asarray(up[:3], float)) / DT, 4).tolist(), rate_excess=float(np.max(np.abs(u_b - np.asarray(up[:3], float)) / DT - A_CONTACT)), solve_ms=round(ms, 2), qp=(ck.get('qp') or {}).get('solver'), gi_steps=(ck.get('qp') or {}).get('gi_steps'),
                eps0=num(r.eps0, 6), resid_noslack=num(r.cbf_resid_noslack, 6), min_h_dyn_k0_solver=num(r.min_h_dynamic), min_h_static_k0_solver=num(r.min_h_static),
                tcp_eff_axis_mm=np.round(e_eff * 1e3, 3).tolist(), tcp_eff_norm_mm=num(np.linalg.norm(e_eff) * 1e3, 3), tcp_eff_ang_deg=num(rot_deg(tcp_eff[:3, :3], Z['T_seq'][i][0][:3, :3]), 3))
     # 目前狀態／在途區間
