@@ -220,6 +220,7 @@ import bottle_branch as BB                                           # noqa: E40
 import bottle_ros_chain as RC                                        # noqa: E402
 NC, C2, GR, N2C, PCm, V1C, V2, W1C, W1 = RC.import_with_real_ros('bottle_nav_chain', 'bottle_s1_ctrl', 'bottle_s1_groups', 'bottle_n2_ctrl', 'bottle_place_ctrl', 'bottle_v1_cam', 'bottle_v2_ctrl', 'bottle_w1_cam', 'bottle_w1_ctrl')
 W1G, W1N = RC.import_with_real_ros('bottle_w1_f1_ctrl', 'bottle_w1_nopred_ctrl')   # 運送進度協調（gaze＋持守點）   # 在線視向候選（online5＋q1 視向）   # 在線第五版（online3＋格心換算接口）   # 在線第三版（提前安全轉回）   # 在線第二版（來源擷取戳新鮮度）   # 區域導引在線 MotM   # 多任務 v3：跨桌高轉回   # 多任務 v2w：平移滑移警告   # 多任務 v2：量測目標相對排程   # 完整組換成 V_HIGH 接近序列   # 完整組換成第一拍 Shield 一致列候選
+import bottle_f1_contact as FC                                        # noqa: E402
 import bottle_f1_task as FT                                           # noqa: E402
 import bottle_w1_dyn_case as DC                                       # noqa: E402
 import bottle_dyn_case_region as DCR                                  # noqa: E402
@@ -422,9 +423,7 @@ def main():
     v_bt_2 = RigidPrim(prim_paths_expr='/World/bottle2', name='v_bt_2', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True, contact_filter_prim_paths_expr=['/World/table/top'])
     v_b2_2 = RigidPrim(prim_paths_expr='/World/bottle2', name='v_b2_2', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True, contact_filter_prim_paths_expr=['/World/table2/top'])
     v_bs_2 = RigidPrim(prim_paths_expr='/World/bottle2', name='v_bs_2', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True, contact_filter_prim_paths_expr=b_env2)
-    F1_PERM = list(range(1 + len(table_paths)))                               # 第二輪過濾欄：作用瓶換到第 0 欄（/World/bottle 換到原 /World/bottle2 的禁止接觸欄）
-    i_b2_ = 1 + table_paths.index('/World/bottle2')
-    F1_PERM[0], F1_PERM[i_b2_] = i_b2_, 0
+    F1_PERM, _ = FC.filter_perm(table_paths)                                  # 第二輪過濾欄：作用瓶換到第 0 欄（/World/bottle 換到原 /World/bottle2 的禁止接觸欄）
     world.reset()
     if v_bs is not None:
         v_bs.initialize()
@@ -496,13 +495,17 @@ def main():
         world.step(render=True)
     q_s, _ = q9()
     d0 = q_s[3:] - q_tuck
-    M_ = read_pairs(v_bt, 1, dt)                                              # 力方向約定：瓶靜置第一桌時桌面給瓶的力應向上
-    fz0 = float('nan') if M_ is None else float(M_[0, 0, 2])
-    if not np.isfinite(fz0) or abs(fz0) < 0.5 * float(B['mass']) * 9.81:
-        print(f'[s1] 起始瓶↔第一桌力 {fz0} 無法定方向 ⇒ 拒跑', flush=True)
+    M_, M2_ = read_pairs(v_bt, 1, dt), read_pairs(v_bt_2, 1, dt)              # 力方向約定：瓶靜置第一桌時桌面給瓶的力應向上；兩支瓶都核，第二桌與環境應為零（映射不符就拒跑）
+    M3_, M4_, M5_, M6_ = read_pairs(v_b2, 1, dt), read_pairs(v_b2_2, 1, dt), read_pairs(v_bs, len(b_env), dt), read_pairs(v_bs_2, len(b_env2), dt)
+    fz0, fz2_ = (float('nan') if m_ is None else float(m_[0, 0, 2]) for m_ in (M_, M2_))
+    f_tmp_ = [float('nan') if m_ is None else float(np.linalg.norm(m_, axis=2).max()) for m_ in (M3_, M4_, M5_, M6_)]
+    ok_s_, why_s_, F_SIGN = FC.support_check(fz0, fz2_, f_tmp_[0], f_tmp_[1], f_tmp_[2], f_tmp_[3], float(B['mass']) * 9.81)
+    p1_, _ = bottle.get_world_pose()
+    p2_, _ = bottle2.get_world_pose()
+    if not ok_s_ or math.hypot(float(p1_[0]) - BX, float(p1_[1]) - BY) > 0.01 or math.hypot(float(p2_[0]) - B2X, float(p2_[1]) - B2Y) > 0.01:
+        print(f'[s1] 動作前兩瓶支撐／位置核對未過（{why_s_}）：第一桌 {fz0}／{fz2_}、第二桌與環境 {f_tmp_}、位置 {[float(v) for v in p1_[:2]]}／{[float(v) for v in p2_[:2]]} ⇒ 拒跑', flush=True)
         return 68
-    F_SIGN = 1.0 if fz0 > 0.0 else -1.0
-    readback['f_sign'] = dict(fz0=fz0, sign=F_SIGN, mg=float(B['mass']) * 9.81)
+    readback['f_sign'] = dict(fz0=fz0, fz0_bottle2=fz2_, t2_env=f_tmp_, sign=F_SIGN, mg=float(B['mass']) * 9.81)
     print(f'[s1] 接觸力方向約定：起始瓶↔第一桌 fz {fz0:.3f} N ⇒ 符號 {F_SIGN:+.0f}', flush=True)
     n_filters = 1 + len(table_paths)
     required = ['finger_table', 'arm_bottle', 'arm_table', 'base_env', 'bottle_table1', 'bottle_table2'] + (['bottle_env'] if b_env else []) + [f'extra{i}_{w}' for i in range(len(v_extra)) for w in ('bottle', 'table')]
@@ -740,8 +743,7 @@ def main():
     penetration = 0.0
     for k in range(n):
         t = k * dt
-        if t >= a.sim_s and not ctrl.mission_done and ctrl.judge.stop is None:
-            ctrl._trigger_stop('sim_limit')
+        task.check_deadline(t, a.sim_s)                                       # 看 F1 整體，不看單輪 mission_done
         q, jp = q9()
         q_at_step[0] = np.asarray(REG.q_to_region(q), float)
         mprog.update(REG.q_to_region(q), t)                                   # 區域座標；先更新監看進度，再處理代價圖回呼（node.drain）與過期核對
@@ -780,31 +782,11 @@ def main():
         Ma_l = [read_pairs(v, n_filters, dt) for v in v_arm]
         Ma = None if any(x is None for x in Ma_l) else np.concatenate(Ma_l, axis=0)   # 任一連桿讀不到 ⇒ 整對無效（不當零）
         Me = [read_pairs(v, n_filters, dt) for v in v_extra]
-        if st_ == 1:                                                          # 第二輪：作用瓶換到第 0 欄
-            Mf = None if Mf is None else Mf[:, F1_PERM]
-            Ma = None if Ma is None else Ma[:, F1_PERM]
-            Me = [None if x is None else x[:, F1_PERM] for x in Me]
-        Mt = read_pairs(v_bt if st_ == 0 else v_bt_2, 1, dt)
-        ff = None if Mf is None or not np.isfinite(Mf[:, 0]).all() else tuple(float(x) for x in np.linalg.norm(Mf[:, 0], axis=1))
-        ft = None if Mt is None or not np.isfinite(Mt).all() else float(abs(Mt[0, 0, 2]))
-        forb = {}
-        if b_env:
-            Ms = read_pairs(v_bs if st_ == 0 else v_bs_2, len(b_env), dt)
-            forb['bottle_env'] = float('nan') if Ms is None or not np.isfinite(Ms).all() else float(np.linalg.norm(Ms, axis=2).max())
+        Mt = read_pairs(FC.pick(st_, v_bt, v_bt_2), 1, dt)
+        Ms = read_pairs(FC.pick(st_, v_bs, v_bs_2), len(b_env), dt) if b_env else None
         Mb = read_pairs(v_base, 1 + len(leg_paths) + len(leg2_paths) + (1 if WALL else 0), dt)
-        M2 = read_pairs(v_b2 if st_ == 0 else v_b2_2, 1, dt)
-        fp = None if M2 is None or not np.isfinite(M2).all() else np.asarray(M2[0, 0], float)
-        fp_raw = None if M2 is None else np.asarray(M2[0, 0], float).copy()
-        if fp is not None:
-            fp = F_SIGN * fp                                                  # 固定方向約定（起始靜置時瓶↔第一桌量得的符號），反向力不會被翻成支撐
-        forb['bottle_table1'] = float('nan') if ft is None else (float(ft) if ctrl.judge.t_lift_ok is not None else 0.0)   # 抬離成立後瓶不得再碰第一桌
-        forb['base_env'] = float('nan') if Mb is None else float(np.linalg.norm(Mb, axis=2).max())
-        forb['finger_table'] = float('nan') if Mf is None else float(np.linalg.norm(Mf[:, 1:], axis=2).max())
-        forb['arm_bottle'] = float('nan') if Ma is None else float(np.linalg.norm(Ma[:, 0], axis=1).max())
-        forb['arm_table'] = float('nan') if Ma is None else float(np.linalg.norm(Ma[:, 1:], axis=2).max())
-        for i, M in enumerate(Me):
-            forb[f'extra{i}_bottle'] = float('nan') if M is None else float(np.linalg.norm(M[:, 0], axis=1).max())
-            forb[f'extra{i}_table'] = float('nan') if M is None else float(np.linalg.norm(M[:, 1:], axis=2).max())
+        M2 = read_pairs(FC.pick(st_, v_b2, v_b2_2), 1, dt)
+        ff, ft, fp, fp_raw, forb, Mf = FC.summarize(st_, Mf, Ma, Me, Mt, Ms, Mb, M2, F1_PERM, F_SIGN, ctrl.judge.t_lift_ok is not None, has_env=bool(b_env))
         # 穿透估計（每控制週期）：非手指連桿點雲對瓶軸與桌面
         if k % C.NPH == 0:
             W = G.link_world(q, ctrl.f_cmd)

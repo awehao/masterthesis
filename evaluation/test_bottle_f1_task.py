@@ -8,6 +8,9 @@
   abort0    第一輪持瓶段禁止接觸 ⇒ 真正中止，不進第二輪。
   slipwarn  第一輪持瓶段平移滑移 6 mm（超過 5 mm 只警告）、仍正常放置保持 ⇒ 進第二輪，品質紀錄保留（grip_ok[0]＝False）。
   badsettle 校正窗 d̂ 無效 ⇒ 不放行切換。
+  moving    命令與管線皆零、校正中量測仍在動（0.5 s）⇒ 累計清空重來，未切換；之後靜止才切換，d̂ 不被污染。
+  movingall 命令與管線皆零但量測一直在動 ⇒ return_settle_timeout，不切換。
+  deadline0 第一輪完成、返回未完成時到達總期限 ⇒ 受控停止並走尾段，不等迴圈次數用完。
     python3 evaluation/test_bottle_f1_task.py all
 """
 import copy
@@ -20,7 +23,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'results', 'bottle', 'f1_task_check.json')
-CASES = ('nominal', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle')
+CASES = ('nominal', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0')
 if len(sys.argv) < 2 or sys.argv[1] == 'all':
     from concurrent.futures import ThreadPoolExecutor
 
@@ -214,6 +217,10 @@ def main():
             c.d_settle = np.full(6, np.nan)
             g['d_nan'] = c.switch_ready()[1]
             c.d_settle = d0_
+            s0_ = c.still_now
+            c.still_now = False
+            g['not_still'] = c.switch_ready()[1]
+            c.still_now = s0_
             st['guard'] = g
         if CASE == 'abort0' and task.stage == 0 and c.pph == 'CARRY_NAV':
             ov['forbidden'] = {k: (1.0 if k == 'robot_table' else 0.0) for k in W.T.REQ}
@@ -223,8 +230,12 @@ def main():
             f_.Trel[0, 3] += 0.006
         if CASE == 'badsettle' and task.stage == 0 and c.ret is not None and c.ret['state'] == 'SETTLE':
             c.obs.max = np.zeros(6)
-        if t >= 170.0 and not task.mission_done and task.judge.stop is None:
-            c._trigger_stop('sim_limit')
+        if CASE in ('moving', 'movingall') and task.stage == 0 and c.ret is not None and c.ret['state'] == 'SETTLE' and c.ret['t_drained'] is not None:   # 命令與管線全零，量測還在動
+            if 't_mv' not in st:
+                st['t_mv'] = t
+            if CASE == 'movingall' or t - st['t_mv'] <= 0.5:
+                f_.q[0] += 0.0005                             # 0.05 m/s（高於 park_v）
+        task.check_deadline(t, 60.0 if CASE == 'deadline0' else 170.0)
         return ov
     f.run(175.0, fault, tail=2.6)
     r = task.report()
@@ -312,20 +323,35 @@ def main():
         chk['兩輪完成'] = r['outcome'] == 'complete'
         chk['返回段手臂未動'] = arm_move < 0.002
         chk['切換新實例承接設定點'] = bool(r['switch'] and r['switch']['new_s_equal'] and r['switch']['pipe_zero'] and r['switch']['u_prev_zero'])
-        chk['反例擋下'] = bool(st['guard'] and 'cmd_not_zero' in st['guard']['cmd_not_zero'] and 'cmd_not_zero' in st['guard']['pipe_not_zero'] and 'd_invalid' in st['guard']['d_nan'])
+        chk['反例擋下'] = bool(st['guard'] and 'cmd_not_zero' in st['guard']['cmd_not_zero'] and 'cmd_not_zero' in st['guard']['pipe_not_zero'] and 'd_invalid' in st['guard']['d_nan'] and 'not_still' in st['guard']['not_still'])
     elif CASE == 'stale':
         chk['舊候選被拒'] = st.get('stale_rej', 0) >= 1 and st.get('stale_vfix') is False and st.get('stale_gp') is False
         chk['之後照常完成'] = r['outcome'] == 'complete'
     elif CASE == 'noobs':
         chk['第二輪中止'] = r['outcome'] == 'round1_aborted'
         chk['未建立目標'] = R[-1]['f1']['rej']['old_round'] == 0 and not (R[-1].get('online') or {}).get('grasp_plans')
+        chk['未抓持的輪次品質是未成立'] = r['grip_ok'] == [True, None]
     elif CASE == 'abort0':
         chk['第一輪中止不進第二輪'] = r['outcome'] == 'round0_aborted' and r['stage'] == 0 and r['t_switch'] is None
+        chk['未確認離桌的輪次品質不是合格'] = r['grip_ok'] == [None]
     elif CASE == 'slipwarn':
         chk['警告後進第二輪'] = r['stage'] == 1 and r['outcome'] == 'complete'
         chk['品質紀錄保留'] = r['grip_ok'][0] is False
     elif CASE == 'badsettle':
         chk['校正無效不切換'] = r['outcome'] == 'round0_aborted' and r['t_switch'] is None and 'return_settle_invalid' in str(out['stop'])
+    elif CASE == 'moving':
+        ret0 = R[0]['f1']['ret']
+        d_ = (r['switch'] or {}).get('d') or [float('nan')] * 6
+        chk['校正累計清空重來'] = ret0['n_reset'] >= 1
+        chk['靜止後才切換且完成'] = r['outcome'] == 'complete'
+        chk['d̂ 未被污染'] = bool(np.allclose(d_, np.asarray(W.T.D_TRUE, float), atol=1e-6))
+    elif CASE == 'movingall':
+        chk['一直在動不切換'] = r['outcome'] == 'round0_aborted' and r['t_switch'] is None and 'return_settle_timeout' in str(out['stop'])
+    elif CASE == 'deadline0':
+        H_ = f.hist
+        chk['返回中到期受控停止'] = r['outcome'] == 'round0_aborted' and r['t_switch'] is None and 'sim_limit' in str(out['stop'])
+        chk['走完停止尾段'] = float(H_[-1]['t']) >= 60.0 + 2.5 and float(H_[-1]['t']) < 66.0
+        chk['尾段底盤已停'] = bool(np.allclose(H_[-1]['u'], 0.0, atol=1e-6))
     chk['命令有限'] = out['finite']
     out['checks'] = chk
     out['pass'] = bool(all(chk.values()))
