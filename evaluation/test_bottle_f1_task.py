@@ -14,6 +14,7 @@
   defect    兩輪共用規劃接口、沒有 PlanPort（bottle_f1_1 的實際情況）⇒ 重現 KeyError: 'start'。只用來確認假世界抓得到原缺陷。
   planlate  切換後才到的舊回覆（舊序號）⇒ 不交付；第二輪照常用自己的請求完成。
   crash     第二輪持瓶段注入例外 ⇒ 先存 crash.json 與 ctx，獨立停止實測靜止，再存逐步資料與報告；另核存檔失敗不掩蓋原例外、停止未驗證照實報。
+  fixed     名目兩輪，返回段固定偏航倒車（對照；其餘案例都是車頭朝前）。
 規劃接口與 Isaac 相同：兩輪共用同一個 SharedPlan（舊結果會留著、請求序號只增），外面包 PlanPort。
     python3 evaluation/test_bottle_f1_task.py all
 """
@@ -27,7 +28,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'results', 'bottle', 'f1_task_check.json')
-CASES = ('nominal', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
+CASES = ('nominal', 'fixed', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
 if len(sys.argv) < 2 or sys.argv[1] == 'all':
     from concurrent.futures import ThreadPoolExecutor
 
@@ -143,7 +144,7 @@ class Ctl(F1C.W1PlaceController):
     def __init__(self, *a, **kw):
         if CUR['q_tuck'] is not None:
             kw['q_tuck'] = CUR['q_tuck']
-        super().__init__(*a, x_look=ROUNDS[CUR['id']]['x_look'], t_round0=CUR['t0'], round_id=CUR['id'], place=dict(target=ROUNDS[CUR['id']]['target']), planner_log=LOGP, **kw)
+        super().__init__(*a, x_look=ROUNDS[CUR['id']]['x_look'], t_round0=CUR['t0'], round_id=CUR['id'], place=dict(target=ROUNDS[CUR['id']]['target']), planner_log=LOGP, return_heading='fixed' if CASE == 'fixed' else 'forward', **kw)
 
     def _advance_inner(self, T_tcp, close_done, q):
         if self.judge.stop is None and np.isfinite(q).all():
@@ -246,6 +247,7 @@ def main():
             st['wall0'] = _time.time() - t / RTF_CAP
         c = task.c
         ov = {}
+        f_.q[2] = F1C.wrap(float(f_.q[2]))                     # 偏航量測與 Isaac 一樣落在 (−π, π]
         if CASE == 'planlate' and task.stage == 1 and not st['late_done']:      # 切換後第一拍：舊回覆才到
             st['late_done'] = True
             shared.inject_late(shared.req_id - 1)
@@ -323,7 +325,7 @@ def main():
                rounds=[dict(round=x['f1']['round'], done=x['mission_done'], slip_warn=(x.get('slip_warn') or {}).get('warn'), slip_max=x['slip_max_mm_deg'], rej=x['f1']['rej'], place=x['place'].get('metrics'), ret=x['f1']['ret'], phases={e['to']: e['t'] for e in x['events'] if e['what'] in ('phase', 'place_phase')},
                             events=[(e['t'], e['what'], e.get('to')) for e in x['events'] if e['what'] in ('return_request', 'return_state', 'mission_done', 'stop', 'relwin_shift', 'online_obs_first')], solve=x['solve_ms'], n_over_50ms=x['n_over_50ms'], n_fallback=x['n_fallback'], plans=[g.get('state') for g in (x.get('online') or {}).get('grasp_plans', [])]) for x in R],
                finite=bool(W.finite_cmds(f)), guard=st['guard'])
-    if CASE == 'nominal':
+    if CASE in ('nominal', 'fixed'):
         H = f.hist
         tt, Q = np.array([h['t'] for h in H]), np.array([h['q'] for h in H])
         out['t_done'] = float(tt[-1])
@@ -345,7 +347,7 @@ def main():
             if x['T_rel'] is not None:
                 Tb = G.C.K.fk(x['q'], 'link_tcp') @ x['T_rel']
                 upd(act, 'held', d_cyl((Tb[:3, :3] @ BPT.T).T + Tb[:3, 3], L), tag)
-        idx = [i for i, x in enumerate(REC) if x['near'] or x['pre_lift'] or (x['pph'] in PLACING and x['ret'] is None) or (x['ret'] in ('NAV', 'ARRIVE') and i % 5 == 0)]
+        idx = [i for i, x in enumerate(REC) if x['near'] or x['pre_lift'] or (x['pph'] in PLACING and x['ret'] is None) or (x['ret'] in ('NAV', 'ARRIVE', 'ROT0', 'ROT1') and i % 5 == 0)]
         sel = set()
         for i in idx:
             sel.update(range(max(i - 2, 0), min(i + 3, len(REC))))
@@ -364,7 +366,7 @@ def main():
                     W_ = G.link_world(qq, x['f_cmd'])
                     P_n, P_f = split(W_)
                     tag = (x['round'], round(x['t'], 2), x['pph'] or x['ph'], x['ret'], round(j * dt_s, 2))
-                    pfx = 'pre_lift:' if x['pre_lift'] else ('return:' if x['ret'] in ('NAV', 'ARRIVE') else 'other:')
+                    pfx = 'pre_lift:' if x['pre_lift'] else ('return:' if x['ret'] in ('NAV', 'ARRIVE', 'ROT0', 'ROT1') else 'other:')
                     upd(sw, pfx + 'nonfinger', d_cyl(P_n, L), tag)
                     upd(sw, pfx + 'finger', d_cyl(P_f, L), tag)
                     P_b = None
@@ -382,7 +384,7 @@ def main():
                         upd(sst, pfx + 'held_bottle_table', min(float(G.box_dist(P_b, c_, s_).min()) for c_, s_ in bx), tag)
         fails = sorted(k for k, v in act.items() if v < LIM_OTHER) + sorted(k for k, v in sw.items() if v < LIM_OTHER)
         sfails = sorted(k for k, v in sst.items() if v < LIM[k.split(':')[1]]) + (['nonfinite'] if nonfin else []) + (['unfinished'] if unfin else [])
-        rt = [x for x in REC if x['ret'] in ('NAV', 'ARRIVE', 'SETTLE', 'READY')]
+        rt = [x for x in REC if x['ret'] in ('ROT0', 'NAV', 'ROT1', 'ARRIVE', 'SETTLE', 'READY')]
         rq = np.array([x['q'] for x in rt])
         arm_move = float(np.abs(rq[:, 3:] - rq[0, 3:]).max())
         spd = np.linalg.norm(np.diff(rq[:, :2], axis=0), axis=1) / 0.05
@@ -394,7 +396,11 @@ def main():
         ds_sw = float(np.abs(Hs[i_sw + 1] - Hs[i_sw - 1]).max()) if i_sw else None
         j_q = float(np.abs(np.diff(Q[:, 3:], axis=0)).max())
         ret = R[0]['f1']['ret']
-        out.update(actual=act, stop=dict(other=sw, static=sst), stop_where=wh, fails=fails, static_fails=sfails, n_stop_ticks=len(sel), return_seg=dict(arm_move_rad=arm_move, v_max=float(spd.max()), base_clear_disc_m=round(base_c, 4), t_nav=[x['t'] for x in rt][0], t_end=[x['t'] for x in rt][-1], L=ret['info']['L'], plans=[c0.carry_planner.info]),
+        dyaw = np.abs(np.arctan2(np.sin(np.diff(rq[:, 2])), np.cos(np.diff(rq[:, 2])))) / 0.05
+        tst = {}
+        for x in rt:
+            tst.setdefault(x['ret'], [x['t'], x['t']])[1] = x['t']
+        out.update(actual=act, stop=dict(other=sw, static=sst), stop_where=wh, fails=fails, static_fails=sfails, n_stop_ticks=len(sel), return_seg=dict(arm_move_rad=arm_move, v_max=float(spd.max()), w_max=float(dyaw.max()), t_state={k_: [round(v_[0], 2), round(v_[1], 2)] for k_, v_ in tst.items()}, yaw_end=float(rq[-1, 2]), pos_end=rq[-1, :2].tolist(), base_clear_disc_m=round(base_c, 4), t_nav=[x['t'] for x in rt][0], t_end=[x['t'] for x in rt][-1], L=ret['info']['L'], plans=[shared.info]),
                    switch_cont=dict(s_step_rad=ds_sw, q_step_max_rad=j_q, first_placed=None if 'first' not in placed else placed['first'][:3, 3].tolist(), second_placed=np.array(f.Tb)[:3, 3].tolist()), stop_why=out['stop'] if isinstance(out['stop'], list) else None)
         chk['全程淨空'] = not fails
         chk['第二輪未拿到舊規劃'] = port.n_blocked >= 1 and [x['name'] for x in shared.info] == ['carry_far', 'return_far', 'carry_near']
