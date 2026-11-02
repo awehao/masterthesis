@@ -5,6 +5,10 @@
   rb1    R-B1 原路徑（接近＝bottle_rb1_1 實跑規劃、第一桌 0.58）：期望持守點從不限速（無 bind 事件）、完成時刻同視向版（48.4 s）。
   delay  R-B2＋轉回計畫結果晚 3.0 s 交付（模擬時間）：期望底盤在直線段入口前有界減速、停在持守點等待，收到後照常完成。
   fail   R-B2＋轉回計畫結果永不交付（工作者仍活）：期望持守點等待到 HOLD_MAX 後 carry_hold_timeout 受控停止，持瓶、無接觸、底盤停在持守點前。
+  recede 延遲案＋收近開始後 0.6 s 把控制器的第二桌先驗（place['c']）沿 −x 移動，使幾何危險邊界落在底盤目前進度前 0.04 m（持守點突然後退，來不及停）：
+         期望停止模型監看觸發 carry_hold_overrun 受控停止；持瓶段停止軌跡對實際兩桌照核。
+  recede_mild 同上但邊界在前 0.12 m：期望停止模型監看觸發，或來得及停住且停止模型餘裕始終 ≥ 0。
+  nonfinite 延遲案＋收近開始後 0.6 s 起持守包絡回傳非有限：期望 carry_gov_invalid 受控停止、不放行到停車位。
 每案：持瓶段（離桌確立 t_lift_ok＋0.2 s 起，同實際瓶對桌；到鬆爪或停止）每 5 控制拍＋持守 bind／release、收近、外伸等事件 ±5 拍，做現在停（e0）與延後一拍停（e1）的完整取樣停止軌跡（compactcarry21.stop_traj），
   核非手指／手指對兩桌、持瓶對兩桌（放置相位排除第二桌桌面）、自碰、關節餘裕；另記實際瓶對兩桌最小距離、持守紀錄、參考車速最小值與減速度。
 假世界節流 RTF 0.6、落後重新錨定（同 test_bottle_w1_gaze）。
@@ -20,7 +24,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'results', 'bottle', 'carrygov_check.json')
-ORDER = ('rb2', 'rb1', 'delay', 'fail')
+ORDER = ('rb2', 'rb1', 'delay', 'fail', 'recede', 'recede_mild', 'nonfinite')
 GEO = dict(rb2=dict(run=None, plan='rb2_offline_plan.json', z1=0.645, b=(0.0607, 0.4048), O=(0.80, -0.80)),
            rb1=dict(run='bottle_rb1_1', z1=0.58, b=(-0.03, 0.44), O=(0.60, 0.80)))
 DELAY_S = 3.0
@@ -32,7 +36,7 @@ if len(sys.argv) > 1 and sys.argv[1] == 'all':
         line = [l_ for l_ in p.stdout.splitlines() if l_.startswith('{')]
         res[k] = json.loads(line[-1]) if line else dict(case=k, error=p.stderr[-2500:])
         r = res[k]
-        print(k, {kk: r.get(kk) for kk in ('pass', 'carry_ok', 'outcome', 't_done', 'gov_events', 'hold_s', 'hold_pos', 'min_hold_minus_brake', 'stop_fails', 'bottle_table', 'error')}, flush=True)
+        print(k, {kk: r.get(kk) for kk in ('pass', 'carry_ok', 'outcome', 't_done', 'gov_events', 'hold_s', 'hold_pos', 'min_hold_minus_brake', 'min_stop_margin', 'inject', 'park_tol_log', 'stop_fails', 'bottle_table', 'error')}, flush=True)
     json.dump(res, open(OUT, 'w'), ensure_ascii=False, indent=1, default=float)
     sys.exit(0 if all(r.get('pass') for r in res.values()) else 1)
 
@@ -118,7 +122,7 @@ def run():
     f.q[0], f.q[1] = J_RUN[0][0], J_RUN[0][1]
     rng = np.random.default_rng(0)
     st = dict(next_t=0.0, seq=0, t_seq=-99.0, snap=None, held={}, wall0=None)
-    if CASE in ('delay', 'fail'):
+    if CASE in ('delay', 'fail', 'recede', 'recede_mild', 'nonfinite'):
         _poll = c.pc.poll
 
         def poll(rid):
@@ -131,7 +135,7 @@ def run():
                     return None
                 st['held'][rid] = (float(c.t), m)
             t0_, m = st['held'][rid]
-            if CASE == 'fail' or c.t < t0_ + DELAY_S - 1e-9:
+            if CASE == 'fail' or c.t < t0_ + DELAY_S - 1e-9:   # recede／nonfinite 沿用延遲案
                 return None
             return m
         c.pc.poll = poll
@@ -160,7 +164,26 @@ def run():
     f.meas = meas
     import time as _time
 
+    def inject():
+        cs = next((e['t'] for e in c.events if e['what'] == 'compact_start'), None)
+        if cs is None or st.get('injected') or c.t < cs + 0.6 - 1e-9 or c.judge.stop is not None:
+            return
+        st['injected'] = float(c.t)
+        if CASE in ('recede', 'recede_mild'):
+            gi = c.gov_info or {}
+            geom = gi.get('geom', float('inf'))
+            ahead = 0.04 if CASE == 'recede' else 0.12
+            dx = (geom + CG.GOV_BACK) - (float(c.csig) + ahead) if np.isfinite(geom) else 0.0
+            c.place['c'] = (float(c.place['c'][0]) - dx, float(c.place['c'][1]))
+            st['inject_info'] = dict(t=float(c.t), csig=float(c.csig), v_b=float(c.v_b), geom_before=geom, shift_x=-dx)
+        elif CASE == 'nonfinite':
+            env0 = c._gov_env
+            c._gov_env = lambda q_arms, _e=env0: _e(q_arms) * np.nan
+            st['inject_info'] = dict(t=float(c.t), csig=float(c.csig), v_b=float(c.v_b))
+
     def step(t, q, **kw):
+        if CASE in ('recede', 'recede_mild', 'nonfinite'):
+            inject()
         if st['wall0'] is None:
             st['wall0'] = _time.time() - t
         lag = t - (_time.time() - st['wall0']) * RTF_CAP
@@ -201,7 +224,7 @@ def main():
                t_grasp=r.get('t_grasp'), t_lift_ok=r.get('t_lift_ok'), phases=ph,
                rp=[{k: x.get(k) for k in ('id', 'state', 't_req', 't_res', 't_acc', 'compute_wall')} for x in on.get('return_plans') or []], held_return=list(st['held'].keys()),
                compact=[(e['t'], e['what']) for e in ev if e['what'].startswith('compact_')], gov_events=cg.get('events'), hold_s=cg.get('hold_s'),
-               min_hold_minus_brake=cg.get('min_hold_minus_brake'))
+               min_hold_minus_brake=cg.get('min_hold_minus_brake'), min_stop_margin=cg.get('min_stop_margin'), park_tol_log=cg.get('park_tol_log'), inject=st.get('inject_info'))
     # 持守位置與減速
     lg = cg.get('log') or []
     held = [x for x in lg if x[5] == 0.0 and x[6] is not None and x[6] - CG.GOV_BUF - x[4] <= 0.03 and x[7] != 'park']
@@ -261,13 +284,17 @@ def main():
     ok = {'rb2': done,
           'rb1': done and not cg.get('events') and out['t_done'] is not None and abs(out['t_done'] - 48.4) < 0.051,
           'delay': done and bool(cg.get('events')) and (cg.get('hold_s') or 0) > 0.0,
-          'fail': why == 'carry_hold_timeout' and r.get('t_grasp') is not None and not ph.get('PARKED')}[CASE]
+          'fail': why == 'carry_hold_timeout' and r.get('t_grasp') is not None and not ph.get('PARKED'),
+          'recede': st.get('inject_info') is not None and why == 'carry_hold_overrun',
+          'recede_mild': st.get('inject_info') is not None and (why == 'carry_hold_overrun' or (((cg.get('min_stop_margin') or {}).get('v', -1) >= 0.0) and 'RELEASE' in ph)),
+          'nonfinite': st.get('inject_info') is not None and why == 'carry_gov_invalid' and not ph.get('PARKED')}[CASE]
     reached_release = 'RELEASE' in ph
     out['carry_ok'] = bool(base_ok and (reached_release if CASE != 'fail' else ok))   # 持瓶段（持守、減速、停止軌跡、瓶對桌）是否成立，與整趟結果分列
     out['gov_log_cols'] = cg.get('log_cols')
     out['gov_log'] = cg.get('log')
     out['pass'] = bool(ok and base_ok)
-    out['expect'] = dict(rb2='完整抓放', rb1='持守從不限速、完成 48.4 s（同視向版）', delay='入口前減速並持守等待、收到後完成', fail='持守等待到上限後 carry_hold_timeout、持瓶無接觸')[CASE]
+    out['expect'] = dict(rb2='完整抓放', rb1='持守從不限速、完成 48.4 s（同視向版）', delay='入口前減速並持守等待、收到後完成', fail='持守等待到上限後 carry_hold_timeout、持瓶無接觸',
+                         recede='停止模型監看 carry_hold_overrun 受控停止', recede_mild='停止模型監看觸發，或停住且停止模型餘裕 ≥ 0', nonfinite='carry_gov_invalid 受控停止、不放行')[CASE]
     _ = th
     if DBG:
         print('EV', [e for e in ev if e['t'] >= (r['stop'] or {}).get('t', 1e9) - 1.0], flush=True)
