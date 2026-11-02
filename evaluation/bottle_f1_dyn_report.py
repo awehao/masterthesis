@@ -40,8 +40,8 @@ def _new():
                 n_react=0, n_react_k0_only=0, n_react_future=0, t_first=None, t_last=None, du_vx_max=0.0, du_vy_max=0.0, du_v_max=0.0, du_w_max=0.0, repro_max=0.0, eps0_max=0.0, d_center_min=9.9, resid_k0_min=None)
 
 
-def analyse(rows, mpc, t_start, nav):
-    """rows：求解紀錄（dict：t、obs、qp、u_prev、X_ref、xi_ref、u、eps0、w_p…）；mpc：導航 GMPC（手臂 hold 重解用）；t_start：障礙起動任務時刻；nav：(返回 NAV 起, 迄)。"""
+def analyse(rows, mpc, t_start, nav, before_solve=None):
+    """rows：求解紀錄（dict：t、obs、qp、u_prev、X_ref、xi_ref、u、eps0、w_p…）；mpc：導航 GMPC（手臂 hold 重解用）；t_start：障礙起動任務時刻；nav：(返回 NAV 起, 迄)；before_solve(e)：重解前還原該拍的控制器狀態（實跑的 Shield 列來自該拍最新掃描，必須還原才能重現；Shield 列是執行端限制，不算動態項，兩次重解都保留）。"""
     cfg = mpc.cfg
     N, dt = cfg.N, cfg.dt
     seg = {k: _new() for k in ('before_move', 'return_nav', 'other')}
@@ -84,6 +84,8 @@ def analyse(rows, mpc, t_start, nav):
             s['not_comparable']['not_hold'] += 1
             continue
         kw = dict(X_now=Xn, X_ref_win=X, xi_ref_win=xi, xi_prev=np.asarray(e['u_prev'], float)[:3], arm=dict(mode='hold'))
+        if before_solve is not None:
+            before_solve(e)
         r_f, r_n = mpc.solve(obstacles=list(e['obs'] or []), **kw), mpc.solve(obstacles=_static(e['obs']), **kw)
         if r_f.status != 'solved' or r_n.status != 'solved':
             s['not_comparable']['unsolved'] += 1
