@@ -140,6 +140,22 @@ def run():
             return m
         c.pc.poll = poll
     step0, meas0 = c.step, f.meas
+    if os.environ.get('CG_TIME'):                                    # 計時：持守每拍計算（_gov_compute＋_gov_stop_check），測試端包裝，不改受測控制器
+        import time as _tm
+        st['gov_ms'] = []
+        _gc, _gs = c._gov_compute, c._gov_stop_check
+
+        def gc_(q, _f=_gc):
+            t0_ = _tm.perf_counter()
+            ok_ = _f(q)
+            st['_t0'] = t0_
+            return ok_
+
+        def gs_(q, _f=_gs):
+            r_ = _f(q)
+            st['gov_ms'].append((float(c.t), (_tm.perf_counter() - st.pop('_t0', _tm.perf_counter())) * 1e3))
+            return r_
+        c._gov_compute, c._gov_stop_check = gc_, gs_
     if DBG:                                                         # 除錯：記每次 GMPC 外層結果（後處理動作、輪級、CBF）
         for nm in ('mpc_park', 'mpc_nav'):
             m_ = getattr(c, nm, None)
@@ -292,6 +308,10 @@ def main():
     out['carry_ok'] = bool(base_ok and (reached_release if CASE != 'fail' else ok))   # 持瓶段（持守、減速、停止軌跡、瓶對桌）是否成立，與整趟結果分列
     out['gov_log_cols'] = cg.get('log_cols')
     out['gov_log'] = cg.get('log')
+    if st.get('gov_ms'):
+        g_ = np.array([x[1] for x in st['gov_ms']])
+        out['gov_ms'] = dict(n=len(g_), p50=round(float(np.percentile(g_, 50)), 3), p95=round(float(np.percentile(g_, 95)), 3), max=round(float(g_.max()), 3))
+        out['timing'] = r.get('timing')
     out['pass'] = bool(ok and base_ok)
     out['expect'] = dict(rb2='完整抓放', rb1='持守從不限速、完成 48.4 s（同視向版）', delay='入口前減速並持守等待、收到後完成', fail='持守等待到上限後 carry_hold_timeout、持瓶無接觸',
                          recede='停止模型監看 carry_hold_overrun 受控停止', recede_mild='停止模型監看觸發，或停住且停止模型餘裕 ≥ 0', nonfinite='carry_gov_invalid 受控停止、不放行')[CASE]
