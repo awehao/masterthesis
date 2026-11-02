@@ -44,7 +44,8 @@ from std_msgs.msg import Float64MultiArray, MultiArrayDimension   # noqa: E402
 
 MAX_PENDING = 3
 SUB_DEPTH = 30                                          # 影像訂閱佇列：太淺時 DDS 會在讀者端靜默覆蓋（重播核對 depth 5 時 18 幀無聲遺失），讓丟幀回到節點自己計數的最新一格槽
-JOIN_S = 5.0                                            # 收尾時等工作執行緒結束的上限（單格推論約 0.1–0.3 s）
+JOIN_S = 2.0                                            # 收尾時等工作執行緒結束的上限：須小於 run_bottle_ros.sh 的 TERM→KILL 寬限 3 s（5 s 版在 bottle_rb2_gaze_1 被 KILL）
+EXIT_TEST_DELAY = float(os.environ.get('SEG3D_EXIT_TEST_DELAY', '0'))   # 只供獨立啟停核對：推論後多睡此秒數，模擬收尾時推論卡住（預設 0＝不作用）
 SELF_DT = 0.1                                           # 自身狀態須有包夾擷取戳、前後樣本相距 ≤ 0.1 s 才插值；否則支撐判不可觀測
 WHY = ('ok', 'no_instance', 'few_mask_depth', 'few_after_outlier', 'bad_message', 'size_gate_rejected_all')
 FIELDS = ('stamp', 'valid', 'conf', 'n_inst', 'n_size_rejected', 'top1_replaced',
@@ -223,6 +224,8 @@ class Seg3dNode(Node):
             except Exception as ex:                               # noqa: BLE001  訊息壞掉：照樣發一筆失敗，不吞掉
                 self.get_logger().warn(f'seg3d 失敗：{ex!r}')
                 r = dict(valid=False, why='bad_message')
+            if EXIT_TEST_DELAY > 0.0:
+                time.sleep(EXIT_TEST_DELAY)
             proc_ms = (time.perf_counter() - t0) * 1e3
             with self.lock:
                 stale = st <= self.last_pub
@@ -279,6 +282,10 @@ def main():
         node.alive = False                                        # 收尾順序：先停工作執行緒並等它結束（推論中最多等 JOIN_S），再銷毀節點、關閉環境；
         node.ev.set()                                             # 否則常駐執行緒在 C++／CUDA 呼叫中被直譯器結束拆掉 ⇒ terminate called without an active exception（核心傾印）
         node.worker.join(timeout=JOIN_S)
+        if node.worker.is_alive():                                # 推論仍卡住（例如 Isaac 同時收尾、GPU 忙）：不等、不做直譯器收尾，
+            sys.stderr.write(f'[seg3d] 工作執行緒 {JOIN_S} s 內未結束，直接結束程序\n')   # 否則常駐執行緒在 C++／CUDA 呼叫中被拆 ⇒ terminate；runner 寬限 3 s 到也會 KILL
+            sys.stderr.flush()
+            os._exit(0)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
