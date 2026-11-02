@@ -104,6 +104,7 @@ def preview(g, v, tgt, n, dt):
 
 class W1PlaceController(ON5.W1PlaceController):
     group = 'G_SHROW_CONT_COMPACT3_SEGTARGET_VHIGH_RELWIN_SLIPWARN_ONLINE5_CENTERCONV_GAZE'
+    look = LOOK                                         # 已知區域觀看點；預設＝本批設計域中心（F1 由子類依輪次指定）
 
     def __init__(self, *a, gaze_on=True, **kw):
         super().__init__(*a, **kw)
@@ -143,7 +144,7 @@ class W1PlaceController(ON5.W1PlaceController):
         ph, t = self.vh_seq['ph'], float(self.t)
         gz = self.gz
         if ph in ('U', 'H'):
-            tgt, why, res = gaze_target(self.K, np.asarray(q[:3], float), self._qseq(t + LEAD), gz['tgt'])
+            tgt, why, res = gaze_target(self.K, np.asarray(q[:3], float), self._qseq(t + LEAD), gz['tgt'], self.look)
             if tgt is None:
                 self.gz_n['hold_' + why] += 1
                 tgt = gz['tgt']
@@ -177,7 +178,7 @@ class W1PlaceController(ON5.W1PlaceController):
 
     def report(self):
         r = super().report()
-        r['gaze'] = dict(on=self.gaze_on, look=LOOK.tolist(), band_px=BAND_PX, v_g=V_G, a_g=A_G, lead=LEAD, g_max=G_MAX, z_min=Z_MIN, dxn_min=DXN_MIN, fx=FX,
+        r['gaze'] = dict(on=self.gaze_on, look=np.asarray(self.look).tolist(), band_px=BAND_PX, v_g=V_G, a_g=A_G, lead=LEAD, g_max=G_MAX, z_min=Z_MIN, dxn_min=DXN_MIN, fx=FX,
                          T_mount=T_MOUNT.round(6).tolist(), counts=self.gz_n, max=self.gz_max, ev=self.gz_ev, state=dict(g=self.gz['g'], v=self.gz['v'], tgt=self.gz['tgt']),
                          log=self.gz_log, note='q1 偏移只在 U／H 段；R 段起歸零；觀看點＝本批設計域中心（區域知識），不讀真值或生成桌高')
         return r

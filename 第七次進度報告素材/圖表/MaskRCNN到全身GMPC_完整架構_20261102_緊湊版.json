@@ -1,0 +1,47 @@
+{
+  "purpose": "Primary-module inference architecture from Mask R-CNN to active whole-body manipulation.",
+  "network": "Torchvision Mask R-CNN ResNet-50 FPN v2; bottle/background fine-tuning from COCO.",
+  "cnn_only_input": "RGB",
+  "inference_mask_path": "Postprocessed detection boxes + shared FPN -> separate mask RoIAlign -> mask head.",
+  "roi_align_sizes": {
+    "box": 7,
+    "mask": 14
+  },
+  "mask_resolution_before_postprocessing": [
+    28,
+    28
+  ],
+  "depth_geometry_inputs": [
+    "predicted mask",
+    "optical Z depth",
+    "K",
+    "capture-time measured camera pose"
+  ],
+  "control": "Base twist and arm setpoint-rate commands are jointly optimized; this figure emphasizes world-frame grasp tracking.",
+  "limits": "Known-type bottle radius/grasp band and task grasp direction; outside-network filtering/admission shown compactly; base safety not all-body collision guarantee.",
+  "imagery": "Camera and replay snippets from bottle_rb1_1 at different timestamps; no timeline correspondence claimed.",
+  "graphics": "Feature stacks and arrows are explanatory, not activation maps or measured vectors.",
+  "processing": "Native vector diagram; no new simulation, model inference, training, or image generation.",
+  "source_sha256": {
+    "evaluation/dl0_train.py": "fa73b5c09dddc33d304d93e58e0ae5851f4235fe6d97fc180ec7da7219b02cf4",
+    "evaluation/bottle_seg_train.py": "59fc6305d6ff8a1d60fab3b884edc43e585ecf02fea5f354098bb05349216d5c",
+    "evaluation/bottle_seg_depth3d.py": "ef9622ac4b5ce69e42802d6e9d3f3b0e2be7a3533268b85b8bca8b83b83e18cb",
+    "evaluation/bottle_w1_segtarget_ctrl.py": "86dd4c7a2b571f13d43dcc60abbb349d5c3536a026b222e0d3c0be1b8db20af7",
+    "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py": "0206430a5275c4355e71e6d62bfe9a87a5dde10c4f783d999d623f1bfeaf735a",
+    "第七次進度報告素材/圖表/acq_chain_frames/rb1_accept_t12.57.png": "d8c74394e0c4b6cd5b6dee8e6ced0ffbe0335a53a8e38b16d38b2a0194015cd0",
+    "第七次進度報告素材/圖表/rb1_keyframes/rb1_t19.7.png": "0be517a82cba5ced874734fe346958ef8b91b93a8f4933617a679508c14b4056",
+    ".venv-dl0/lib/python3.12/site-packages/torchvision/models/detection/mask_rcnn.py": "28aff430b1193fd1967c20c497a989b9804789d5a874661f3f18b246629684d1",
+    ".venv-dl0/lib/python3.12/site-packages/torchvision/models/detection/roi_heads.py": "ddf91a1c89603c86c0e7b30f3ad9f1613adf4623ed1c1688ed03e9af47579ff8"
+  },
+  "layout": "compact, no slide title, tighter modules and inter-row gaps",
+  "canvas_units": [
+    1560,
+    690
+  ],
+  "original_canvas_units": [
+    1920,
+    1080
+  ],
+  "camera_and_robot_aspect": "preserved",
+  "generator_sha256": "a62fb3d032bf7b34919cace0acb6dd73f67d505d1756bc8441c9ca771fbab05b"
+}
