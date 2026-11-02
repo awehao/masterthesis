@@ -1,0 +1,183 @@
+{
+ "schema": 1,
+ "task": "R-B1＋迎面移動物 rb1_dyn_pass1（carrygov 基線；Codex 200625）",
+ "ruling": "reviews/20261102_200625_reply.md",
+ "frozen_at_local": "以本凍結提交的 git 時間為準（寫檔時 20:15:09）",
+ "git_head_before_freeze_commit": "b87cfcb530cc88a39468b49f8cd14b49648d2426",
+ "run": {
+  "RUN_ID": "bottle_rb1_dyn_1",
+  "S1_ARGS": "--dyn-case rb1_dyn_pass1 --table1-z 0.58 --bottle-dx -0.03 --bottle-dy 0.02 --region-offset 0.6,0.8",
+  "MAP_ARGS": "--table2 2.4,-1.0",
+  "isaac_script": "evaluation/isaac_bottle_w1dynsr34.py"
+ },
+ "dyn_case": {
+  "name": "rb1_dyn_pass1",
+  "source": "arena_traffic dyn_obs_0（同 w1_dyn_pass1 生成法）",
+  "nominal": "bottle_rb1_gaze_1",
+  "speed": 0.3,
+  "radius": 0.25,
+  "height": 1.0,
+  "start": [
+   1.3199,
+   -2.9636
+  ],
+  "end": [
+   -0.58,
+   1.3352
+  ],
+  "t_start": 21.727,
+  "t_meet": 29.06,
+  "lateral": 0.8,
+  "meet_robot": [
+   1.1623,
+   -0.628
+  ],
+  "robot_dir": [
+   0.4042,
+   -0.9147
+  ],
+  "carry_nav": [
+   22.25,
+   31.85
+  ],
+  "frame": "world",
+  "frac": 0.7,
+  "rule": "t_meet＝持瓶導航段量測軌跡弧長分率 frac 處（候選依離中點順序，取第一個幾何前提全過者）；右側法向 0.80 m 反向等速；起點前 2.2 m、終點後 2.5 m"
+ },
+ "geometry": {
+  "1_static": {
+   "ok": true,
+   "worst": "t1:table_top",
+   "min": 0.3926,
+   "all": {
+    "t1:table_top": 0.3926,
+    "t1:leg_near-": 0.5192,
+    "t1:leg_far-": 0.6041,
+    "t1:leg_near+": 1.1229,
+    "t1:leg_far+": 1.2077,
+    "t2:table_top": 1.3113,
+    "t2:leg_near-": 1.4379,
+    "t2:leg_far-": 1.5228,
+    "t2:leg_near+": 2.0416,
+    "t2:leg_far+": 2.1265,
+    "box": 1.3248
+   }
+  },
+  "2_path": {
+   "ok": true,
+   "min": 0.8005,
+   "thr": 0.7400000000000001
+  },
+  "3_closest_in_carry": {
+   "ok": true,
+   "t": 29.06,
+   "base_surface": 0.55
+  },
+  "4_no_reaction_body": {
+   "ok": true,
+   "min": 0.5047,
+   "t": 29.1
+  }
+ },
+ "tried": [
+  {
+   "frac": 0.5,
+   "ok": false,
+   "failed": [
+    "1_static",
+    "2_path"
+   ]
+  },
+  {
+   "frac": 0.4,
+   "ok": false,
+   "failed": [
+    "2_path"
+   ]
+  },
+  {
+   "frac": 0.6,
+   "ok": false,
+   "failed": [
+    "1_static",
+    "2_path"
+   ]
+  },
+  {
+   "frac": 0.3,
+   "ok": false,
+   "failed": [
+    "2_path"
+   ]
+  },
+  {
+   "frac": 0.7,
+   "ok": true,
+   "failed": []
+  }
+ ],
+ "sha256": {
+  "evaluation/isaac_bottle_w1dynsr34.py": "e003af00360dd4cda184eaae6da8db191a2b8ed0d71fbed29c1003dfa6d87e10",
+  "evaluation/bottle_dyn_case_region.py": "cf8593cd1f4a343f5dac7ffdb3582f981d6e50fc8275ecfd7311d6e6e650d8f1",
+  "evaluation/experiments/20261102_rb1_dyn_case.json": "1c5e8f47f87e22415ccd6bfe3752cfc98d7299222555a7c1e3fada6eb95a6a0a",
+  "evaluation/bottle_w1_dyn_case.py": "dca3310f7a6f7b822b7c9022c0723d128da7eac112149b712a947ea90cf97b89",
+  "evaluation/bottle_w1_carrygov_ctrl.py": "9196becc2148895653bee89c26ae4384414731ee417ced185e7b5fadd314c201",
+  "evaluation/bottle_w1_gaze_ctrl.py": "dbcaf97b1e922cb1842086734ddf731b83b12402d449da7c5f5ded99cbd1163e",
+  "evaluation/bottle_w1_online5_ctrl.py": "d24838a35e95b703e2065530e8652936ff5e4ef4d708ba2563b0ac603453cbca",
+  "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py": "cffa8155f3ef9be4ddb7b93a77c775d6fa8b665c056033d62057451d21094a9b",
+  "evaluation/bottle_region.py": "a27c91d7887089dc1ec7c61de39ef95d1b7f49d0ffe7bbabcc63671803d15714",
+  "evaluation/run_bottle_ros.sh": "d9652258d702a57ac9e3d89a15b9983657b3e134a463d24ea107ddd7bb873fe6",
+  "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
+  "evaluation/bottle_seg3d_node.py": "3438a2163fb7feab8ae4e93a3755eefa95bb55db6b71afef516041ef79097054",
+  "evaluation/test_bottle_w1_rb1_dyn.py": "1be1b922852ea44dd83df54656bc270141628a5b829a02d95b4934ccfaea0cc9",
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962"
+ },
+ "offline": {
+  "pass": true,
+  "outcome": "完整抓放",
+  "t_done": 51.1,
+  "actual_min": {
+   "base_disc_surface": [
+    0.4525,
+    30.57
+   ],
+   "base_disc_radius_m": 0.39,
+   "links": [
+    0.7764928753979208,
+    30.6
+   ],
+   "held_bottle": [
+    0.8818956941412992,
+    30.8
+   ],
+   "bottle_readback_table": {
+    "v": 0.0497,
+    "t": 35.85,
+    "box": "t2:table_top"
+   },
+   "t_stop": null
+  },
+  "encounter": {
+   "t_first_near": 25.45,
+   "t_last_near": 33.56,
+   "v_min_near": 0.0435,
+   "dv_max_near": 0.758,
+   "phases_near": [
+    "CARRY"
+   ]
+  },
+  "stop_dyn": {
+   "e0:links_obs": 0.7766,
+   "e0:held_obs": 0.8808,
+   "e0:base_disc_obs": 0.453,
+   "e1:links_obs": 0.776,
+   "e1:held_obs": 0.8803,
+   "e1:base_disc_obs": 0.4523
+  },
+  "stop_dyn_fails": [],
+  "stop_static_fails": [],
+  "path_blocked": []
+ },
+ "failure_policy": "任務失敗不補跑",
+ "open_issue": "舊 C2 閉爪期間閃避破壞抓取仍未解，本趟運送段驗證不算解決"
+}
