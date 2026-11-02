@@ -4,12 +4,12 @@
  "ruling": "reviews/20261102_225852_reply.md",
  "git_head_before_freeze_commit": "83540e47348bb493ee025737c7a47324371404ee",
  "run": {
-  "RUN_ID": "bottle_f1cap_1",
-  "S1_ARGS": "--dyn-case none --bottle-dx 0.15 --bottle2 -0.15,0.42",
+  "RUN_ID": "bottle_f1cap_2",
+  "S1_ARGS": "--dyn-case none --bottle-dx 0.15 --bottle2=-0.15,0.42",
   "MAP_ARGS": "--table2 2.4,-1.0",
   "isaac_script": "evaluation/isaac_bottle_w1dynsr35.py",
   "SEG_W1_SCRIPT": "evaluation/bottle_seg3d_f1_node.py",
-  "SEG_W1_ARGS": "--region 0,0.35,0.36,0.62 --inst-log evaluation/runs/bottle_f1cap_1/instances.jsonl"
+  "SEG_W1_ARGS": "--region 0,0.35,0.36,0.62 --inst-log evaluation/runs/bottle_f1cap_2/instances.jsonl"
  },
  "scene": {
   "target": [
@@ -60,5 +60,9 @@
   "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
   "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py": "0206430a5275c4355e71e6d62bfe9a87a5dde10c4f783d999d623f1bfeaf735a",
   "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962"
+ },
+ "launch_error": {
+  "run": "bottle_f1cap_1",
+  "why": "--bottle2 -0.15,0.42 被 argparse 當成選項，腳本在解析階段離開（rc 2），未開始模擬、無任何資料；不算實驗失敗。程式與 sha 未改，只改參數寫法與 RUN_ID"
  }
 }
