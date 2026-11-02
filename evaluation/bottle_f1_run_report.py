@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """F1 完整一趟的報告（只讀紀錄；真值只供事後比對）。「兩輪流程完成」與「兩輪原抓持品質合格」分列；第一輪中止時照報已完成階段。
-分輪：抓持、抬升、運送、支撐、鬆爪、保持各階段時刻；INSERT→離桌確立的實測底盤車速與近停（< 0.01 m/s 持續 ≥ 0.1 s）；滑移（觸發值與最大值分列）、放置偏差；目標取得與承接時刻、來源年齡、對最晚處置點的餘裕；選中實例對真值的事後比對。
-全程：總時間、返回段、切換點連續性（關節與設定點跳動）、另一瓶位移與傾角、禁止接觸峰值、求解時間。
+分輪：抓持、抬升、運送、支撐、鬆爪、保持各階段時刻；INSERT→抓持成立的實測底盤車速與近停（< 0.01 m/s 持續 ≥ 0.1 s；這才是抓取接觸段）、INSERT→離桌確立另列（含抓持後的抬升與加速，不能當成抓取接觸速度）；滑移（觸發值與最大值分列）、放置偏差；目標取得與承接時刻、來源年齡、對最晚處置點的餘裕；選中實例對真值的事後比對。
+全程：任務完成時間（最後一輪 DONE 事件；不含停止尾段）、紀錄結束時間、返回段、切換點連續性（關節與設定點跳動）、另一瓶位移與傾角、禁止接觸峰值、求解時間。
     python3 evaluation/bottle_f1_run_report.py RUN_ID
 """
 import json
@@ -44,7 +44,7 @@ def round_summary(r, c, i, t_lo, t_hi):
     return dict(round=i, done=bool(r.get('mission_done')), stop=r.get('stop'), judge=r.get('result'), grip_ok_flag=None if not sw else (sw.get('warn') is None), slip_warn=sw.get('warn'), slip_max_mm_deg=r.get('slip_max_mm_deg'),
                 t=dict(obs_first=(on.get('obs_first') or {}).get('t'), plan_req=None if gp is None else gp.get('t_req'), plan_acc=None if gp is None else gp.get('t_acc'), insert=t_ins, close=r.get('t_close'), grasp=r.get('t_grasp'), lift_start=r.get('t_lift_start'), lift_ok=t_lift_ok, parked=ev.get('PARKED'), release=ev.get('RELEASE'), retreat=ev.get('RETREAT'), done=ev.get('DONE')),
                 accept=None if gp is None else dict(x_acc=num(gp['x_acc'], 4), x_latest=num(gp['x_latest'], 4), margin_m=num(float(gp['x_latest']) - float(gp['x_acc']), 4), obs_age=num(gp.get('obs_age_at_accept')), snap_age=num(gp.get('snap_age_at_accept')), xy=gp.get('xy'), z_support=gp.get('zs'), target_err_mm=num(math.hypot(gp['xy'][0] - TRUTH[i][0], gp['xy'][1] - TRUTH[i][1]) * 1e3, 2)),
-                grasp_speed=None if t_ins is None or t_lift_ok is None else speed_stats(c, t_ins, t_lift_ok), final_xyz=final, place_err_mm=None if final is None else num(math.hypot(final[0] - TARGET[i][0], final[1] - TARGET[i][1]) * 1e3, 2), place_metrics={k_: m.get(k_) for k_ in ('disp', 'tilt', 'offset', 'ok')},
+                grasp_speed=None if t_ins is None or r.get('t_grasp') is None else speed_stats(c, t_ins, r['t_grasp']), insert_to_liftoff_speed=None if t_ins is None or t_lift_ok is None else speed_stats(c, t_ins, t_lift_ok), final_xyz=final, place_err_mm=None if final is None else num(math.hypot(final[0] - TARGET[i][0], final[1] - TARGET[i][1]) * 1e3, 2), place_metrics={k_: m.get(k_) for k_ in ('disp', 'tilt', 'offset', 'ok')},
                 forbidden=r.get('forbidden_pulses'), solve_ms=r.get('solve_ms'), n_over_50ms=r.get('n_over_50ms'), n_fallback=r.get('n_fallback'), rej=(r.get('f1') or {}).get('rej'), ret=(r.get('f1') or {}).get('ret'))
 
 
@@ -103,7 +103,7 @@ def main():
         lo, hi = max(k - 1, 0), min(k + 1, len(t) - 1)
         switch = dict(t=num(ts), s_step_rad=num(max(abs(c[n_][hi] - c[n_][lo]) for n_ in cols_s), 6), q_step_rad=num(max(abs(c[n_][hi] - c[n_][lo]) for n_ in cols_q), 6), info=ft.get('switch'))
     r0ret = (R[0].get('f1') or {}).get('ret') or {}
-    out = dict(run=run, outcome=ft.get('outcome'), stage=ft.get('stage'), flow_complete=ft.get('outcome') == 'complete', grip_ok=ft.get('grip_ok'), t_total=num(float(t[-1])), t_done0=ft.get('t_done0'), t_switch=ts, return_info=dict(L=(r0ret.get('info') or {}).get('L'), t_request=r0ret.get('t0'), t_drained=r0ret.get('t_drained')), rounds=rounds, other_bottle=other, vision=insts, switch=switch, thermal=None, note='n＝1 指定案例；流程完成與抓持品質分開；不宣稱動態環境、未知瓶數或無縫連續')
+    out = dict(run=run, outcome=ft.get('outcome'), stage=ft.get('stage'), flow_complete=ft.get('outcome') == 'complete', grip_ok=ft.get('grip_ok'), t_mission_done=rounds[-1]['t'].get('done') if ft.get('outcome') == 'complete' else None, t_record_end=num(float(t[-1])), t_done0=ft.get('t_done0'), t_switch=ts, return_info=dict(L=(r0ret.get('info') or {}).get('L'), t_request=r0ret.get('t0'), t_drained=r0ret.get('t_drained')), rounds=rounds, other_bottle=other, vision=insts, switch=switch, thermal=None, note='n＝1 指定案例；流程完成與抓持品質分開；不宣稱動態環境、未知瓶數或無縫連續')
     json.dump(out, open(os.path.join(HERE, 'results', 'bottle', f'f1_run_{run}.json'), 'w'), ensure_ascii=False, indent=1, default=float)
     print(json.dumps(out, ensure_ascii=False, indent=0, default=float))
     return 0
