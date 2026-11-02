@@ -1,0 +1,409 @@
+{
+ "run": "bottle_rb1_dyn_1",
+ "baseline": "bottle_rb1_gaze_1",
+ "case": {
+  "name": "rb1_dyn_pass1",
+  "source": "arena_traffic dyn_obs_0（同 w1_dyn_pass1 生成法）",
+  "nominal": "bottle_rb1_gaze_1",
+  "speed": 0.3,
+  "radius": 0.25,
+  "height": 1.0,
+  "start": [
+   1.3199,
+   -2.9636
+  ],
+  "end": [
+   -0.58,
+   1.3352
+  ],
+  "t_start": 21.727,
+  "t_meet": 29.06,
+  "lateral": 0.8,
+  "meet_robot": [
+   1.1623,
+   -0.628
+  ],
+  "robot_dir": [
+   0.4042,
+   -0.9147
+  ],
+  "carry_nav": [
+   22.25,
+   31.85
+  ],
+  "frame": "world",
+  "frac": 0.7,
+  "rule": "t_meet＝持瓶導航段量測軌跡弧長分率 frac 處（候選依離中點順序，取第一個幾何前提全過者）；右側法向 0.80 m 反向等速；起點前 2.2 m、終點後 2.5 m"
+ },
+ "region_offset": [
+  0.6,
+  0.8
+ ],
+ "T0": 2.609999999999988,
+ "chain": {
+  "move": {
+   "t": 21.74,
+   "phase": "LIFT"
+  },
+  "scheduled_t_start": 21.727,
+  "before_move": {
+   "note": "障礙仍靜止在起點，卻被追蹤器判成動態並進入求解器（誤判），與起動後分開",
+   "tracker_n": 3,
+   "tracker_range": [
+    4.61,
+    4.81
+   ],
+   "solver_ticks": 6,
+   "solver_range": [
+    4.65,
+    4.9
+   ],
+   "solver_phases": [
+    "CRUISE"
+   ]
+  },
+  "first_tracked_dynamic_after_move": {
+   "t": 23.51,
+   "phase": "CARRY_NAV",
+   "delay_s": 1.77
+  },
+  "first_in_solver_after_move": {
+   "t": 23.55,
+   "phase": "CARRY_NAV",
+   "delay_s": 1.81
+  },
+  "solver_ticks_after_move": 222,
+  "first_tracked_dynamic": {
+   "t": 4.61,
+   "phase": "CRUISE"
+  },
+  "first_in_solver": {
+   "t": 4.65,
+   "phase": "CRUISE"
+  },
+  "last_in_solver": 37.6,
+  "phases_in_solver": [
+   "CARRY_NAV",
+   "CRUISE",
+   "PLACE_APPROACH"
+  ],
+  "solver_ticks_true": 228,
+  "solver_ticks_other": 8,
+  "other_range": [
+   32.95,
+   33.3
+  ],
+  "n_solve_ticks": 1100,
+  "tracker_true": 277,
+  "tracker_other": 4,
+  "tracker_pos_err": {
+   "p50": 0.249,
+   "max": 0.274
+  },
+  "tracker_vel_err": {
+   "p50": 0.034,
+   "max": 0.49
+  }
+ },
+ "distance": {
+  "base_center_to_surface": {
+   "m": 0.8167,
+   "t": 31.95,
+   "phase": "CARRY_NAV"
+  },
+  "base_disc_edge_to_surface": {
+   "m": 0.4267,
+   "disc_radius": 0.39
+  },
+  "links_to_surface": {
+   "m": 0.7357,
+   "t": 32.12
+  },
+  "held_bottle_to_surface": {
+   "m": 0.8198,
+   "t": 32.12
+  }
+ },
+ "encounter": {
+  "window": [
+   25.7,
+   34.9
+  ],
+  "v_min": 0.0162,
+  "v_mean": 0.146,
+  "dv_max": 0.662,
+  "dv_p95": 0.37
+ },
+ "safety": {
+  "shield": {
+   "n": 1099,
+   "active": 0,
+   "stale": 0,
+   "fallback": 0,
+   "unresolved": 0,
+   "dv_max": 0.0,
+   "d_min": 0.1538
+  },
+  "u0_rows": {
+   "n_solve": 805,
+   "n_bind": 0,
+   "rows_max": 10,
+   "violation": null
+  },
+  "cbf_slack": {
+   "n_ticks": 46,
+   "eps0_max": 0.2939,
+   "t_at_max": 32.05,
+   "phase_at_max": "CARRY_NAV",
+   "range": [
+    25.15,
+    32.1
+   ],
+   "phases": [
+    "CARRY_NAV"
+   ],
+   "with_dyn_ticks": 46,
+   "resid_s_min": -1.9556474495363574e-10
+  },
+  "cbf_active_max": 92,
+  "min_h_min": 0.0416,
+  "solve_over_50ms": [
+   {
+    "t": 0.0,
+    "ms": 80.7,
+    "phase": "CRUISE",
+    "n_obs": 1,
+    "has_dyn": false
+   },
+   {
+    "t": 8.6,
+    "ms": 59.2,
+    "phase": "CRUISE",
+    "n_obs": 5,
+    "has_dyn": false
+   },
+   {
+    "t": 32.05,
+    "ms": 152.5,
+    "phase": "CARRY_NAV",
+    "n_obs": 7,
+    "has_dyn": true
+   },
+   {
+    "t": 32.1,
+    "ms": 62.7,
+    "phase": "CARRY_NAV",
+    "n_obs": 7,
+    "has_dyn": true
+   }
+  ],
+  "cbf_slack_baseline": {
+   "n_ticks": 0,
+   "eps0_max": 0.0,
+   "t_at_max": 12.1
+  }
+ },
+ "run_sum": {
+  "done": 52.95,
+  "success_orig": false,
+  "carry_nav": 22.25,
+  "place_approach": 36.85,
+  "parked": 40.25,
+  "release": 44.0,
+  "t_grasp": 21.04,
+  "t_lift_ok": 23.080000000000002,
+  "slip": [
+   10.390218518062763,
+   0.9905535302348368
+  ],
+  "place_mm": 2.2,
+  "tilt_deg": 0.277,
+  "forb": {},
+  "accept": 8.7,
+  "margin": 1.0037,
+  "timing": {
+   "solve": {
+    "p50": 15.4,
+    "p95": 22.25,
+    "max": 152.54,
+    "n": 1100
+   },
+   "advance": {
+    "p50": 0.98,
+    "p95": 22.34,
+    "max": 29.33,
+    "n": 1100
+   }
+  },
+  "n_over_50ms": 4,
+  "events_done_end": [
+   26.1,
+   26.1
+  ]
+ },
+ "base_sum": {
+  "done": 48.4,
+  "success_orig": true,
+  "carry_nav": 22.25,
+  "place_approach": 31.85,
+  "parked": 35.25,
+  "release": 39.45,
+  "t_grasp": 21.04,
+  "t_lift_ok": 23.080000000000002,
+  "slip": [
+   3.7484188366088165,
+   0.7230718798049578
+  ],
+  "place_mm": 1.91,
+  "tilt_deg": 0.187,
+  "forb": {},
+  "accept": 8.7,
+  "margin": 1.0037,
+  "timing": {
+   "solve": {
+    "p50": 14.44,
+    "p95": 20.9,
+    "max": 26.33,
+    "n": 1009
+   },
+   "advance": {
+    "p50": 0.19,
+    "p95": 9.3,
+    "max": 12.21,
+    "n": 1009
+   }
+  },
+  "n_over_50ms": 0,
+  "events_done_end": [
+   26.1,
+   26.1
+  ]
+ },
+ "carry_gov": {
+  "events": [],
+  "hold_s": 0.0,
+  "min_stop_margin": {
+   "v": 0.5218,
+   "t": 35.25
+  },
+  "park_tol_n": 0
+ },
+ "slip_run": {
+  "table": [
+   {
+    "ev": "抓持成立",
+    "t": 21.04,
+    "slip_mm": 0.0,
+    "delta_mm": null
+   },
+   {
+    "ev": "compact_start",
+    "t": 23.4,
+    "slip_mm": 1.12,
+    "delta_mm": 1.12
+   },
+   {
+    "ev": "compact_reached",
+    "t": 27.5,
+    "slip_mm": 2.31,
+    "delta_mm": 1.19
+   },
+   {
+    "ev": "compact_raise_start",
+    "t": 33.15,
+    "slip_mm": 4.5,
+    "delta_mm": 2.2
+   },
+   {
+    "ev": "compact_raised",
+    "t": 35.25,
+    "slip_mm": 4.95,
+    "delta_mm": 0.45
+   },
+   {
+    "ev": "compact_out_start",
+    "t": 35.25,
+    "slip_mm": 4.95,
+    "delta_mm": 0.0
+   },
+   {
+    "ev": "compact_returned",
+    "t": 39.35,
+    "slip_mm": 7.06,
+    "delta_mm": 2.11
+   },
+   {
+    "ev": "PARKED",
+    "t": 40.25,
+    "slip_mm": 7.66,
+    "delta_mm": 0.6
+   },
+   {
+    "ev": "RELEASE",
+    "t": 44.0,
+    "slip_mm": 10.39,
+    "delta_mm": 2.73
+   }
+  ],
+  "max_mm": 10.39
+ },
+ "slip_base": {
+  "table": [
+   {
+    "ev": "抓持成立",
+    "t": 21.04,
+    "slip_mm": 0.0,
+    "delta_mm": null
+   },
+   {
+    "ev": "compact_start",
+    "t": 23.4,
+    "slip_mm": 1.11,
+    "delta_mm": 1.11
+   },
+   {
+    "ev": "compact_reached",
+    "t": 27.5,
+    "slip_mm": 1.62,
+    "delta_mm": 0.51
+   },
+   {
+    "ev": "compact_raise_start",
+    "t": 28.15,
+    "slip_mm": 1.63,
+    "delta_mm": 0.01
+   },
+   {
+    "ev": "compact_raised",
+    "t": 30.25,
+    "slip_mm": 1.64,
+    "delta_mm": 0.01
+   },
+   {
+    "ev": "compact_out_start",
+    "t": 30.25,
+    "slip_mm": 1.64,
+    "delta_mm": 0.0
+   },
+   {
+    "ev": "compact_returned",
+    "t": 34.35,
+    "slip_mm": 2.98,
+    "delta_mm": 1.34
+   },
+   {
+    "ev": "PARKED",
+    "t": 35.25,
+    "slip_mm": 3.45,
+    "delta_mm": 0.47
+   },
+   {
+    "ev": "RELEASE",
+    "t": 39.45,
+    "slip_mm": 3.74,
+    "delta_mm": 0.29
+   }
+  ],
+  "max_mm": 3.75
+ }
+}
