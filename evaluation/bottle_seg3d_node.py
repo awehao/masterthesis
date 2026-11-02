@@ -49,7 +49,7 @@ JOIN_S = 2.0                                            # 收尾時等工作執�
 FORCED_RC = 3                                           # 收尾強制結束（工作執行緒 JOIN_S 內未結束）的結束碼：非零、與正常結束分開計數
 EXIT_TEST_DELAY = float(os.environ.get('SEG3D_EXIT_TEST_DELAY', '0'))   # 只供獨立啟停核對：推論後多睡此秒數，模擬收尾時推論卡住（預設 0＝不作用）
 SELF_DT = 0.1                                           # 自身狀態須有包夾擷取戳、前後樣本相距 ≤ 0.1 s 才插值；否則支撐判不可觀測
-WHY = ('ok', 'no_instance', 'few_mask_depth', 'few_after_outlier', 'bad_message', 'size_gate_rejected_all', 'out_of_region', 'ambiguous', 'locking', 'lock_no_match')   # 後四項只有 F1 版本化子類會發
+WHY = ('ok', 'no_instance', 'few_mask_depth', 'few_after_outlier', 'bad_message', 'size_gate_rejected_all', 'out_of_region', 'ambiguous', 'locking', 'lock_no_match', 'old_round')   # 後五項只有 F1 版本化子類會發
 FIELDS = ('stamp', 'valid', 'conf', 'n_inst', 'n_size_rejected', 'top1_replaced',
           'xy_valid', 'cx_known_r', 'cy_known_r', 'xy_valid_silhouette', 'cx_sil', 'cy_sil', 'r_sil',
           'top_observed', 'z_top', 'z_vis_lo', 'z_vis_hi', 'support_observed', 'z_support', 'height_valid', 'height',

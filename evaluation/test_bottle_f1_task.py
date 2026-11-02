@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""F1 任務層假世界整合（Codex 20261102 F1 裁定；假受控對象、假候選，非物理，不用 Isaac、不跑 ROS 視覺節點）。遠瓶先抓：+0.15 → 遠端 (2.55, −0.58)，返回原起點，−0.15 → 近端 (2.25, −0.58)。
+控制器 bottle_w1_f1_ctrl＋任務層 bottle_f1_task。持瓶與返回路徑＝離線 Smac（results/bottle/f1_offline_plan_rev.json；首末點對齊當趟）。同一個假受控對象貫穿兩輪，關節與設定點不重置。
+案例：
+  nominal   名目兩輪。掃掠核對（三項缺口）：① 抓持成立到離桌確認之間的持瓶停止掃掠（此段瓶仍受第一桌支撐，對第一桌桌面不判、其餘照判）；② 返回段全身與停止；③ 切換條件與連續性。
+  stale     舊候選與舊完成通知在切換後到達（來源早於 t_round0）⇒ 拒收，不建立目標。之後送正常候選照常完成。
+  noobs     第二輪沒有任何新觀測 ⇒ 不沿用第一輪快照，由既有規則停止，outcome＝round1_aborted。
+  abort0    第一輪持瓶段禁止接觸 ⇒ 真正中止，不進第二輪。
+  slipwarn  第一輪持瓶段平移滑移 6 mm（超過 5 mm 只警告）、仍正常放置保持 ⇒ 進第二輪，品質紀錄保留（grip_ok[0]＝False）。
+  badsettle 校正窗 d̂ 無效 ⇒ 不放行切換。
+    python3 evaluation/test_bottle_f1_task.py all
+"""
+import copy
+import json
+import os
+import subprocess
+import sys
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, 'results', 'bottle', 'f1_task_check.json')
+CASES = ('nominal', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle')
+if len(sys.argv) < 2 or sys.argv[1] == 'all':
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(k):
+        p = subprocess.run([sys.executable, __file__, k], capture_output=True, text=True, timeout=3000)
+        line = [l_ for l_ in p.stdout.splitlines() if l_.startswith('{')]
+        return k, (json.loads(line[-1]) if line else dict(case=k, error=p.stderr[-2500:]))
+    with ThreadPoolExecutor(2) as ex:
+        res = dict(ex.map(one, CASES))
+    json.dump(res, open(OUT, 'w'), ensure_ascii=False, indent=1, default=float)
+    for k, r in res.items():
+        print(k, {kk: r.get(kk) for kk in ('pass', 'outcome', 'stop', 't_done', 'checks', 'error')})
+    sys.exit(0 if all(r.get('pass') for r in res.values()) else 1)
+
+CASE = sys.argv[1]
+ROUNDS = [dict(b=(0.15, 0.42), target=(2.55, -0.58), x_look=0.15), dict(b=(-0.15, 0.42), target=(2.25, -0.58), x_look=-0.15)]
+PLACE_DEV, LIM_OTHER, GATE = 0.030, 0.05, 0.60
+sys.argv = [sys.argv[0], '0.600', 'nom']
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
+import test_bottle_s0b as S0B                           # noqa: E402
+S0B.BX, S0B.BY = ROUNDS[0]['b']
+import test_bottle_w1_segtarget_vhigh as TV             # noqa: E402
+import bottle_branch as BB                              # noqa: E402
+import bottle_f1_task as FT                             # noqa: E402
+import bottle_nav_chain as NC                           # noqa: E402
+import bottle_s1_cand as SC                             # noqa: E402
+import bottle_s1_geom as G                              # noqa: E402
+import bottle_w1_compactcarry21_ctrl as C21             # noqa: E402
+import bottle_w1_f1_ctrl as F1C                         # noqa: E402
+import test_bottle_place as TP                          # noqa: E402
+import bottle_n2_path as NP                             # noqa: E402
+TP.DX, TP.DY = 2.4, -1.0
+J_RUN = np.array(json.load(open(os.path.join(HERE, 'runs', 'bottle_online5_u3_1', 's1_report.json')))['plan']['joined'], float)
+PLANS = json.load(open(os.path.join(HERE, 'results', 'bottle', 'f1_offline_plan_rev.json')))
+RTF_CAP = 0.6
+LOGP = os.path.join(HERE, 'results', 'bottle', f'f1_task_{CASE}_worker.log')
+W = TV.T
+TBN = [('t1:' + n, c_, s_) for n, c_, s_ in G.table_boxes()] + [('t2:' + n, c_, s_) for n, c_, s_ in TP.table2_boxes()]
+TB = [(c_, s_) for _, c_, s_ in TBN]
+TB_NO_T2TOP = [(c_, s_) for n, c_, s_ in TBN if n != 't2:table_top']
+TB_NO_T1TOP = [(c_, s_) for n, c_, s_ in TBN if n != 't1:table_top']
+BPT = G.bottle_points()
+LIM = dict(nonfinger_table=0.01, finger_table=0.005, held_bottle_table=0.0055, self=0.0, margin=0.05)
+PLACING = ('PARKED', 'LOWER', 'RELEASE', 'RETREAT', 'HOLD', 'DONE')
+REC = []
+CUR = dict(id=0, t0=0.0, q_tuck=None)
+Z_BOT, H_BOT, R_BOT = 0.60, G.BOTTLE['h'], G.BOTTLE['r']
+SECOND = (ROUNDS[1]['b'][0], ROUNDS[1]['b'][1], R_BOT)
+FIRST_PLACED = (ROUNDS[0]['target'][0], ROUNDS[0]['target'][1], R_BOT + PLACE_DEV)
+
+
+def others(x):
+    if x['round'] == 0:
+        return [SECOND, FIRST_PLACED] if x['ret'] is not None else [SECOND]
+    return [FIRST_PLACED]
+
+
+def d_cyl(P, L):
+    return min(float(G.cyl_dist(P, o[0], o[1], Z_BOT, Z_BOT + H_BOT, o[2]).min()) for o in L)
+
+
+def split(W_):
+    return np.vstack([v for k, v in W_.items() if k not in G.C.FINGERS]), np.vstack([v for k, v in W_.items() if k in G.C.FINGERS])
+
+
+class PlanSeq(TP.FakePlanner):
+    """離線 Smac 路徑依請求順序取用；只換首末點對齊當趟實際起點與目標。"""
+
+    def __init__(self, names):
+        super().__init__()
+        self.names, self.i, self.cur, self.info = list(names), 0, None, []
+
+    def request(self, start, goal, t):
+        super().request(start, goal, t)
+        self.cur = self.names[self.i]
+        self.i += 1
+
+    def poll(self):
+        res = super().poll()
+        if res is None or not res.get('ok'):
+            return res
+        a, b, _ = self.req
+        P0 = np.array(PLANS[self.cur]['P_region'], float)
+        d0, d1 = float(np.linalg.norm(P0[0] - a)), float(np.linalg.norm(P0[-1] - b))
+        if max(d0, d1) > 0.07:
+            raise SystemExit(f'{self.cur} 離線路徑首末點差太大 {d0:.3f}／{d1:.3f} m ⇒ 拒跑')
+        P = P0.copy()
+        P[0], P[-1] = a, b
+        self.info.append(dict(name=self.cur, d_start=round(d0, 4), d_goal=round(d1, 4), L=PLANS[self.cur]['length_m']))
+        res.update(P=P, info=dict(planned=True, name=self.cur))
+        return res
+
+
+class Ctl(F1C.W1PlaceController):
+    def __init__(self, *a, **kw):
+        if CUR['q_tuck'] is not None:
+            kw['q_tuck'] = CUR['q_tuck']
+        super().__init__(*a, x_look=ROUNDS[CUR['id']]['x_look'], t_round0=CUR['t0'], round_id=CUR['id'], place=dict(target=ROUNDS[CUR['id']]['target']), planner_log=LOGP, **kw)
+
+    def _advance_inner(self, T_tcp, close_done, q):
+        if self.judge.stop is None and np.isfinite(q).all():
+            j = self.judge
+            T_b = getattr(self, 'T_b_now', None)
+            T_rel, pre = None, False
+            if self.t_release is None and j.t_grasp is not None:
+                if j.t_lift_ok is not None and j.T_rel is not None:
+                    T_rel = np.asarray(j.T_rel, float).copy()
+                elif T_b is not None:                         # 抓持成立到離桌確認：用當下實測瓶對 TCP（缺口 ①）
+                    T_rel, pre = np.linalg.inv(self.K.fk(q, 'link_tcp')) @ np.asarray(T_b, float), True
+            REC.append(dict(round=self.round_id, t=float(self.t), ph=self.st.phase, pph=getattr(self, 'pph', None), q=np.asarray(q, float).copy(), s=np.asarray(self.s, float).copy(), pipe=[np.asarray(u, float).copy() for u in self.pipe],
+                            u_last=np.asarray(self.u_last, float).copy(), f_cmd=copy.deepcopy(self.f_cmd), T_rel=T_rel, pre_lift=pre, ret=None if self.ret is None else self.ret['state'], cfg=self.cfg))
+        super()._advance_inner(T_tcp, close_done, q)
+
+
+def build_ctrl():
+    orig, orig_ml = W.W1.W1PlaceController, SC.make_lidar
+    W.W1.W1PlaceController = Ctl
+    scene = SC.scene_boxes() + [(c_, sz) for n, c_, sz in TP.table2_boxes() if n != 'table_top']
+    SC.make_lidar = lambda **kw: orig_ml(scan_fn=lambda t, q: NC.ray_boxes(q[:2], float(q[2]), scene, G.LIDAR_Z), **kw)
+    try:
+        return W.build()
+    finally:
+        W.W1.W1PlaceController, SC.make_lidar = orig, orig_ml
+
+
+def main():
+    c0, f = build_ctrl()
+    c0.path = NP.PlannedPath(J_RUN, -0.9)
+    c0.s_ref = c0.sig_robot = c0.path.sig0
+    c0.carry_planner = PlanSeq(['carry_far', 'return_far'])
+    f.q[0], f.q[1] = J_RUN[0][0], J_RUN[0][1]
+    placed = {}
+
+    def make_round(i, s_now, d, t):
+        CUR.update(id=i, t0=t, q_tuck=np.asarray(s_now, float).copy())
+        c, _ = build_ctrl()
+        c.path = NP.PlannedPath(J_RUN, -0.9)
+        c.s_ref = c.sig_robot = c.path.project(f.q[:2], c.path.sig0)
+        c.carry_planner = PlanSeq(['carry_near'])
+        c.obs.d = np.clip(d, -c.obs.max, c.obs.max)
+        c.cfg.arm_model.bias = c.bias0 + np.asarray(c.cfg.arm_model.alpha, float) * c.obs.d
+        placed['first'] = np.array(f.Tb, float).copy()
+        S0B.BX, S0B.BY = ROUNDS[i]['b']
+        f.Tb, f.grasped, f.released, f.Trel = S0B.bottle_T(), False, False, None
+        return c
+    task = FT.F1Task(c0, J_RUN[0].tolist(), make_round)
+    f.c = task
+    rng = np.random.default_rng(0)
+    st = dict(next_t=0.0, seq=0, t_seq=-99.0, snap=None, wall0=None, stale_done=False, inj=False, guard=None)
+    import time as _time
+
+    def cand(c, t, xy, seq, t_last):
+        c.candidate_intake(t, dict(ready=1.0, age_s=0.05, snap_seq=float(seq), snap_t_last=t_last, snap_cx=float(xy[0]), snap_cy=float(xy[1]), snap_z_support=0.60, snap_ik=2.0, snap_local=2.0, snap_dev_mm=0.0, snap_consistent=1.0))
+
+    def fault(t, f_):
+        if st['wall0'] is None:
+            st['wall0'] = _time.time() - t
+        lag = t - (_time.time() - st['wall0']) * RTF_CAP
+        if lag > 0:
+            _time.sleep(lag / RTF_CAP)
+        else:
+            st['wall0'] = _time.time() - t / RTF_CAP
+        c = task.c
+        ov = {}
+        if task.stage == 1 and CASE == 'stale' and not st['stale_done'] and t >= task.t_switch + 2.0:     # 第一輪的候選與完成通知這時才到
+            st['stale_done'] = True
+            cand(c, t, ROUNDS[0]['b'], 999, task.t_switch - 1.0)
+            st['stale_vfix'] = c.vfix is not None
+            st['stale_gp'] = c.gp is not None
+            st['stale_rej'] = c.f1_rej['old_round']
+        if t >= st['next_t'] - 1e-9:
+            st['next_t'] = t + 0.2
+            u0 = next((e[0] for e in c.vh_log if e[1] == 'U'), None)
+            allow = not (CASE == 'noobs' and task.stage == 1)
+            if allow and c.vh_seq['ph'] in ('U', 'H') and c.vfix is None and u0 is not None and t >= u0 + 3.6 - 1e-9:
+                xy = np.array(ROUNDS[task.stage]['b']) + rng.normal(0, 0.0003, 2)
+                if st['snap'] is None or t - st['t_seq'] >= 3.0:
+                    st['seq'] += 1
+                    st['t_seq'], st['snap'] = t, xy.copy()
+                cand(c, t, st['snap'], st['seq'], t - 0.05)
+        if task.stage == 0 and c.ret is not None and c.ret['state'] == 'READY' and st['guard'] is None:      # 切換條件的反例（同一拍內改回）
+            g = {}
+            u0_, p0_, d0_ = c.u_last.copy(), [u_.copy() for u_ in c.pipe], c.d_settle
+            c.u_last = u0_ + 1e-3
+            g['cmd_not_zero'] = c.switch_ready()[1]
+            c.u_last = u0_
+            c.pipe[0] = p0_[0] + 1e-3
+            g['pipe_not_zero'] = c.switch_ready()[1]
+            c.pipe[0] = p0_[0]
+            c.d_settle = np.full(6, np.nan)
+            g['d_nan'] = c.switch_ready()[1]
+            c.d_settle = d0_
+            st['guard'] = g
+        if CASE == 'abort0' and task.stage == 0 and c.pph == 'CARRY_NAV':
+            ov['forbidden'] = {k: (1.0 if k == 'robot_table' else 0.0) for k in W.T.REQ}
+        if CASE == 'slipwarn' and task.stage == 0 and c.pph == 'CARRY_NAV' and not st['inj'] and f_.Trel is not None:
+            st['inj'] = True
+            f_.Trel = f_.Trel.copy()
+            f_.Trel[0, 3] += 0.006
+        if CASE == 'badsettle' and task.stage == 0 and c.ret is not None and c.ret['state'] == 'SETTLE':
+            c.obs.max = np.zeros(6)
+        if t >= 170.0 and not task.mission_done and task.judge.stop is None:
+            c._trigger_stop('sim_limit')
+        return ov
+    f.run(175.0, fault, tail=2.6)
+    r = task.report()
+    R = r['rounds']
+    chk = {}
+    out = dict(case=CASE, outcome=r['outcome'], stage=r['stage'], t_done0=r['t_done0'], t_switch=r['t_switch'], t_done=None, switch=r['switch'], grip_ok=r['grip_ok'], stop=[(x['stop'] or {}).get('why') for x in R],
+               rounds=[dict(round=x['f1']['round'], done=x['mission_done'], slip_warn=(x.get('slip_warn') or {}).get('warn'), slip_max=x['slip_max_mm_deg'], rej=x['f1']['rej'], place=x['place'].get('metrics'), ret=x['f1']['ret'], phases={e['to']: e['t'] for e in x['events'] if e['what'] in ('phase', 'place_phase')},
+                            events=[(e['t'], e['what'], e.get('to')) for e in x['events'] if e['what'] in ('return_request', 'return_state', 'mission_done', 'stop', 'relwin_shift', 'online_obs_first')], solve=x['solve_ms'], n_over_50ms=x['n_over_50ms'], n_fallback=x['n_fallback'], plans=[g.get('state') for g in (x.get('online') or {}).get('grasp_plans', [])]) for x in R],
+               finite=bool(W.finite_cmds(f)), guard=st['guard'])
+    if CASE == 'nominal':
+        H = f.hist
+        tt, Q = np.array([h['t'] for h in H]), np.array([h['q'] for h in H])
+        out['t_done'] = float(tt[-1])
+        act, sw, sst, wh, nonfin, unfin = {}, {}, {}, {}, 0, 0
+        dt_s = C21.SAMPLE_EVERY * 0.01
+
+        def upd(D, k, v, w):
+            if v < D.get(k, 9.9):
+                D[k], wh[k] = v, w
+        for x in REC:
+            L = others(x)
+            W_ = G.link_world(x['q'], x['f_cmd'])
+            P_n, P_f = split(W_)
+            tag = (x['round'], round(x['t'], 2), x['pph'] or x['ph'], x['ret'])
+            upd(act, 'nonfinger', d_cyl(P_n, L), tag)
+            upd(act, 'finger', d_cyl(P_f, L), tag)
+            near = d_cyl(np.vstack([P_n, P_f]), L) < GATE
+            x['near'] = near
+            if x['T_rel'] is not None:
+                Tb = G.C.K.fk(x['q'], 'link_tcp') @ x['T_rel']
+                upd(act, 'held', d_cyl((Tb[:3, :3] @ BPT.T).T + Tb[:3, 3], L), tag)
+        idx = [i for i, x in enumerate(REC) if x['near'] or x['pre_lift'] or (x['pph'] in PLACING and x['ret'] is None) or (x['ret'] in ('NAV', 'ARRIVE') and i % 5 == 0)]
+        sel = set()
+        for i in idx:
+            sel.update(range(max(i - 2, 0), min(i + 3, len(REC))))
+        for i in sorted(sel):
+            x = REC[i]
+            L = others(x)
+            for e in (0, 1):
+                Qs = C21.stop_traj(x['q'], x['s'], x['pipe'], x['u_last'], x['cfg'], e)
+                if len(Qs) >= 2000 // C21.SAMPLE_EVERY + 1:
+                    unfin += 1
+                if not np.isfinite(Qs).all():
+                    nonfin += 1
+                    continue
+                for j in range(0, len(Qs), 2):
+                    qq = Qs[j]
+                    W_ = G.link_world(qq, x['f_cmd'])
+                    P_n, P_f = split(W_)
+                    tag = (x['round'], round(x['t'], 2), x['pph'] or x['ph'], x['ret'], round(j * dt_s, 2))
+                    pfx = 'pre_lift:' if x['pre_lift'] else ('return:' if x['ret'] in ('NAV', 'ARRIVE') else 'other:')
+                    upd(sw, pfx + 'nonfinger', d_cyl(P_n, L), tag)
+                    upd(sw, pfx + 'finger', d_cyl(P_f, L), tag)
+                    P_b = None
+                    if x['T_rel'] is not None:
+                        Tb = G.C.K.fk(qq, 'link_tcp') @ x['T_rel']
+                        P_b = (Tb[:3, :3] @ BPT.T).T + Tb[:3, 3]
+                        upd(sw, pfx + 'held', d_cyl(P_b, L), tag)
+                    placing = (x['pph'] or '') in PLACING
+                    upd(sst, pfx + 'nonfinger_table', min(float(G.box_dist(P_n, c_, s_).min()) for c_, s_ in TB), tag)
+                    upd(sst, pfx + 'finger_table', min(float(G.box_dist(P_f, c_, s_).min()) for c_, s_ in TB), tag)
+                    upd(sst, pfx + 'self', float(G.C.self_clear(qq, x['f_cmd'])[0]), tag)
+                    upd(sst, pfx + 'margin', BB.margin(qq[3:]), tag)
+                    if P_b is not None:
+                        bx = TB_NO_T1TOP if x['pre_lift'] else (TB_NO_T2TOP if placing else TB)
+                        upd(sst, pfx + 'held_bottle_table', min(float(G.box_dist(P_b, c_, s_).min()) for c_, s_ in bx), tag)
+        fails = sorted(k for k, v in act.items() if v < LIM_OTHER) + sorted(k for k, v in sw.items() if v < LIM_OTHER)
+        sfails = sorted(k for k, v in sst.items() if v < LIM[k.split(':')[1]]) + (['nonfinite'] if nonfin else []) + (['unfinished'] if unfin else [])
+        rt = [x for x in REC if x['ret'] in ('NAV', 'ARRIVE', 'SETTLE', 'READY')]
+        rq = np.array([x['q'] for x in rt])
+        arm_move = float(np.abs(rq[:, 3:] - rq[0, 3:]).max())
+        spd = np.linalg.norm(np.diff(rq[:, :2], axis=0), axis=1) / 0.05
+        boxes_base = [(c_, s_) for n, c_, s_ in TBN if 'leg' in n] + [(SC.OBST['c'], SC.OBST['sz'])]
+        Pb = np.c_[rq[:, :2], np.full(len(rq), 0.2)]
+        base_c = min(float(np.hypot(np.maximum(np.abs(Pb[:, 0] - c_[0]) - s_[0] / 2, 0), np.maximum(np.abs(Pb[:, 1] - c_[1]) - s_[1] / 2, 0)).min()) for c_, s_ in boxes_base) - 0.39
+        i_sw = next((k for k, h in enumerate(H) if task.t_switch is not None and h['t'] >= task.t_switch), None)
+        Hs = np.array([h['s'] for h in H])
+        ds_sw = float(np.abs(Hs[i_sw + 1] - Hs[i_sw - 1]).max()) if i_sw else None
+        j_q = float(np.abs(np.diff(Q[:, 3:], axis=0)).max())
+        ret = R[0]['f1']['ret']
+        out.update(actual=act, stop=dict(other=sw, static=sst), stop_where=wh, fails=fails, static_fails=sfails, n_stop_ticks=len(sel), return_seg=dict(arm_move_rad=arm_move, v_max=float(spd.max()), base_clear_disc_m=round(base_c, 4), t_nav=[x['t'] for x in rt][0], t_end=[x['t'] for x in rt][-1], L=ret['info']['L'], plans=[c0.carry_planner.info]),
+                   switch_cont=dict(s_step_rad=ds_sw, q_step_max_rad=j_q, first_placed=None if 'first' not in placed else placed['first'][:3, 3].tolist(), second_placed=np.array(f.Tb)[:3, 3].tolist()), stop_why=out['stop'] if isinstance(out['stop'], list) else None)
+        chk['全程淨空'] = not fails
+        chk['靜態判準'] = not sfails
+        chk['兩輪完成'] = r['outcome'] == 'complete'
+        chk['返回段手臂未動'] = arm_move < 0.002
+        chk['切換新實例承接設定點'] = bool(r['switch'] and r['switch']['new_s_equal'] and r['switch']['pipe_zero'] and r['switch']['u_prev_zero'])
+        chk['反例擋下'] = bool(st['guard'] and 'cmd_not_zero' in st['guard']['cmd_not_zero'] and 'cmd_not_zero' in st['guard']['pipe_not_zero'] and 'd_invalid' in st['guard']['d_nan'])
+    elif CASE == 'stale':
+        chk['舊候選被拒'] = st.get('stale_rej', 0) >= 1 and st.get('stale_vfix') is False and st.get('stale_gp') is False
+        chk['之後照常完成'] = r['outcome'] == 'complete'
+    elif CASE == 'noobs':
+        chk['第二輪中止'] = r['outcome'] == 'round1_aborted'
+        chk['未建立目標'] = R[-1]['f1']['rej']['old_round'] == 0 and not (R[-1].get('online') or {}).get('grasp_plans')
+    elif CASE == 'abort0':
+        chk['第一輪中止不進第二輪'] = r['outcome'] == 'round0_aborted' and r['stage'] == 0 and r['t_switch'] is None
+    elif CASE == 'slipwarn':
+        chk['警告後進第二輪'] = r['stage'] == 1 and r['outcome'] == 'complete'
+        chk['品質紀錄保留'] = r['grip_ok'][0] is False
+    elif CASE == 'badsettle':
+        chk['校正無效不切換'] = r['outcome'] == 'round0_aborted' and r['t_switch'] is None and 'return_settle_invalid' in str(out['stop'])
+    chk['命令有限'] = out['finite']
+    out['checks'] = chk
+    out['pass'] = bool(all(chk.values()))
+    out['note'] = '假受控對象、假候選；不含 ROS 視覺節點、接觸與滑移物理；取樣核對，非全流程保證；另一瓶不進 QP'
+    print(json.dumps(out, ensure_ascii=False, default=float))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

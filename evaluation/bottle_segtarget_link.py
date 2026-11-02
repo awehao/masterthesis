@@ -58,6 +58,11 @@ class SegTargetLink:
     def set_T0(self, T0):
         self.T0 = float(T0)
 
+    def rebind(self, ctrl, sink):
+        """F1 輪次切換：換接收者並清空本輪的最新列、完成通知與配對紀錄（序號會從 1 重來）；t_eval 遞增界線 last_eval 保留，舊列到不了新實例。"""
+        self.ctrl, self.sink = ctrl, sink
+        self.latest, self.checks, self.merged = None, {}, set()
+
     def _rej(self, why):
         self.rej[why] = self.rej.get(why, 0) + 1
 

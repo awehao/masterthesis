@@ -1,0 +1,34 @@
+{
+  "purpose": "Explain the shared TCP tracking cost in the active coupled QP.",
+  "notation": {
+    "DeltaXi_B": "stacked base body-twist corrections",
+    "U_a": "stacked arm setpoint-rate commands, not measured joint velocities",
+    "epsilon": "CBF constraint slack, not the TCP tracking error",
+    "r_k": "linearization residual constant containing the reference; not a standalone measured target position",
+    "L_Bk": "base kinematic/pose-error Jacobians composed with condensed base dynamics",
+    "L_ak": "arm kinematic Jacobian composed with arm setpoint-model prediction",
+    "weighted_norm": "e.T W_T e"
+  },
+  "functional_dependencies": {
+    "J_nav": [
+      "DeltaXi_B"
+    ],
+    "J_TCP": [
+      "DeltaXi_B",
+      "U_a"
+    ],
+    "J_arm": [
+      "U_a"
+    ],
+    "J_CBF": [
+      "epsilon"
+    ]
+  },
+  "scope": "World/control-environment-frame TCP task during grasping. Relative-base carry can have L_B=0.",
+  "costs_and_constraints": "Diagram expands cost dependence only; CBF rows couple base prediction and slack through constraints.",
+  "processing": "Native vector mathematical schematic; no image generation, simulation, training, or QP solve.",
+  "source_sha256": {
+    "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py": "0206430a5275c4355e71e6d62bfe9a87a5dde10c4f783d999d623f1bfeaf735a",
+    "evaluation/bottle_coupled_objective_figure.py": "b4ddd72e4b2a1e8dadb2652e72cc64a488f41589e7295d3b90bcff8e5131d907"
+  }
+}
