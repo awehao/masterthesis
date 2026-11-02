@@ -24,6 +24,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 
 import numpy as np
 
@@ -45,6 +46,7 @@ from std_msgs.msg import Float64MultiArray, MultiArrayDimension   # noqa: E402
 MAX_PENDING = 3
 SUB_DEPTH = 30                                          # 影像訂閱佇列：太淺時 DDS 會在讀者端靜默覆蓋（重播核對 depth 5 時 18 幀無聲遺失），讓丟幀回到節點自己計數的最新一格槽
 JOIN_S = 2.0                                            # 收尾時等工作執行緒結束的上限：須小於 run_bottle_ros.sh 的 TERM→KILL 寬限 3 s（5 s 版在 bottle_rb2_gaze_1 被 KILL）
+FORCED_RC = 3                                           # 收尾強制結束（工作執行緒 JOIN_S 內未結束）的結束碼：非零、與正常結束分開計數
 EXIT_TEST_DELAY = float(os.environ.get('SEG3D_EXIT_TEST_DELAY', '0'))   # 只供獨立啟停核對：推論後多睡此秒數，模擬收尾時推論卡住（預設 0＝不作用）
 SELF_DT = 0.1                                           # 自身狀態須有包夾擷取戳、前後樣本相距 ≤ 0.1 s 才插值；否則支撐判不可觀測
 WHY = ('ok', 'no_instance', 'few_mask_depth', 'few_after_outlier', 'bad_message', 'size_gate_rejected_all')
@@ -271,25 +273,29 @@ def main():
     torch.set_num_threads(4)
     rclpy.init(args=ros_args)
     node = Seg3dNode(a.weights, a.ns)
+    pending = None                                                # 正在傳出的例外：收尾後照樣拋出（強制結束時先印出），不吞掉
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):           # SIGINT／SIGTERM：正常收尾
         pass
-    except Exception:                                                 # SIGTERM 在兩次等待之間關掉環境 ⇒ 建等待集合時 RCLError（context 無效）：環境已關才算正常收尾
+    except Exception as ex:                                           # SIGTERM 在兩次等待之間關掉環境 ⇒ 建等待集合時 RCLError（context 無效）：環境已關才算正常收尾
         if rclpy.ok():
-            raise
+            pending = ex
     finally:
         node.alive = False                                        # 收尾順序：先停工作執行緒並等它結束（推論中最多等 JOIN_S），再銷毀節點、關閉環境；
         node.ev.set()                                             # 否則常駐執行緒在 C++／CUDA 呼叫中被直譯器結束拆掉 ⇒ terminate called without an active exception（核心傾印）
         node.worker.join(timeout=JOIN_S)
-        if node.worker.is_alive():                                # 推論仍卡住（例如 Isaac 同時收尾、GPU 忙）：不等、不做直譯器收尾，
-            sys.stderr.write(f'[seg3d] 工作執行緒 {JOIN_S} s 內未結束，直接結束程序\n')   # 否則常駐執行緒在 C++／CUDA 呼叫中被拆 ⇒ terminate；runner 寬限 3 s 到也會 KILL
+        if node.worker.is_alive():                                # 推論仍卡住（例如 Isaac 同時收尾、GPU 忙）：強制結束（不是正常結束），結束碼 FORCED_RC 可辨識；
+            if pending is not None:                               # 不做直譯器收尾（否則 terminate），也趕在 runner 寬限 3 s 的 KILL 之前
+                traceback.print_exception(pending)
+            sys.stderr.write(f'[seg3d] 強制結束：工作執行緒 {JOIN_S} s 內未結束，結束碼 {FORCED_RC}\n')
             sys.stderr.flush()
-            os._exit(0)
+            os._exit(FORCED_RC)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
-
+    if pending is not None:
+        raise pending
 
 if __name__ == '__main__':
     main()

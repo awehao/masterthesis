@@ -3,7 +3,7 @@
 獨立 ROS domain（預設 77）、牆鐘時間：啟動 bottle_seg3d_node（.venv-dl0 python，--ns w1，use_sim_time false），本程序以 15 Hz 發布同戳四則訊息
 （/w1/color＝R-B1 實錄手腕影格 rgb8、/w1/depth＝常數 1.0 m 32FC1、/w1/camera_info fx 465.6、/w1/cam_pose frame odom），讓工作執行緒持續推論；
 收到 ≥ 3 筆 /w1/bottle_seg3d 後，等隨機 0–0.25 s（落在推論中或閒置）再對節點程序群組送 SIGTERM（同 run_bottle_ros.sh cleanup），最多等 8 s。
-每趟記：結束碼、是否需要 KILL、stderr 是否含「terminate called」或 Traceback、結束耗時。對照：git HEAD 版本（修正前）與工作目錄版本各 N 趟（CHECK_VERS 可只跑其一）。CHECK_SLOW＝秒數 ⇒ 節點推論後多睡（模擬收尾時推論卡住）。
+每趟記：結束碼、是否需要 KILL、stderr 是否含「terminate called」或 Traceback、結束耗時；正常結束（rc 0）與強制結束（rc 3＋「強制結束」訊息）分開計數。對照：git HEAD 版本（修正前）與工作目錄版本各 N 趟（CHECK_VERS 可只跑其一）。CHECK_SLOW＝秒數 ⇒ 節點推論後多睡（模擬收尾時推論卡住）。
     source /opt/ros/jazzy/setup.bash; python3 evaluation/bottle_seg3d_node_exit_check.py 6
 """
 import json
@@ -120,6 +120,7 @@ def main():
         n.destroy_node()
         rclpy.shutdown()
     summ = {v: dict(n=len(x), clean=sum(1 for y in x if y['rc'] == 0 and not y['killed'] and not y['terminate'] and not y['traceback']), terminate=sum(y['terminate'] for y in x),
+                    forced=sum(1 for y in x if y['rc'] == 3 and '強制結束' in y['err_tail'] and not y['killed'] and not y['terminate']),
                     abort=sum(1 for y in x if y['rc'] in (-6, 134)), killed=sum(y['killed'] for y in x), rcs=sorted({y['rc'] for y in x}), exit_s_max=max(y['exit_s'] for y in x)) for v, x in res.items()}
     json.dump(dict(domain=DOMAIN, n=N, weights=os.path.relpath(W, WS), summary=summ, trials=res), open(OUT, 'w'), ensure_ascii=False, indent=1)
     print(json.dumps(summ, ensure_ascii=False))
