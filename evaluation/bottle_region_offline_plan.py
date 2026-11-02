@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""R-B1 區域座標的規劃接口與往返一致性核對（Codex 20261102_090007；不用 Isaac、不實跑任務）。
+"""R-B1 區域座標的規劃接口與往返一致性核對（Codex 20261102_090007；不用 Isaac、不實跑任務）。R-B2 起以環境變數 REGION_OFS／REGION_TAG 指定區域（預設＝R-B1，輸出不變）。
 獨立 ROS domain（預設 79）：map_server（bottle_map_write --table2 2.4,-1.0 --region-offset ox,oy 產生的 R-B1 地圖）＋planner_server（同 bottle_planner_offset_check.launch）。
 以 bottle_region.PlanRosRegion（含 bottle_n2_ros_center.verify 的版本限定格心換算）在區域座標請求：
   接近段：起點＝世界 (−3.6, 0) 換區域、終點＝區域 (−0.9, 0)（＝世界 (−0.9＋ox, oy)）；
@@ -20,15 +20,16 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
-OFS = (0.60, 0.80)
+OFS = tuple(float(v) for v in os.environ.get('REGION_OFS', '0.60,0.80').split(','))        # 預設＝R-B1；R-B2：REGION_OFS=0.8,-0.8 REGION_TAG=rb2
+TAG = os.environ.get('REGION_TAG', 'rb1')
 DOMAIN = os.environ.get('CHECK_DOMAIN', '79')
-OUT = os.path.join(HERE, 'results', 'bottle', 'rb1_offline_plan.json')
+OUT = os.path.join(HERE, 'results', 'bottle', f'{TAG}_offline_plan.json')
 
 
 def main():
     import subprocess
     tmp = os.environ.get('CHECK_TMP', '/tmp')
-    mp = os.path.join(tmp, 'rb1_map')
+    mp = os.path.join(tmp, f'{TAG}_map')
     subprocess.run([sys.executable, os.path.join(HERE, 'bottle_map_write.py'), mp, '--table2', '2.4,-1.0', '--region-offset', f'{OFS[0]},{OFS[1]}'], check=True)
     os.environ['ROS_DOMAIN_ID'] = DOMAIN
     import bottle_planner_offset_check as CK
@@ -40,7 +41,7 @@ def main():
         # 同 CK.launch，但地圖換成 R-B1
         env = dict(os.environ, ROS_DOMAIN_ID=DOMAIN)
         y = open(os.path.join(HERE, 'bottle_n2_planner.yaml')).read().replace('use_sim_time: true', 'use_sim_time: false')
-        yp = os.path.join(tmp_, 'planner_nosim_rb1.yaml')
+        yp = os.path.join(tmp_, f'planner_nosim_{TAG}.yaml')
         open(yp, 'w').write(y)
         cmds = [['ros2', 'run', 'nav2_map_server', 'map_server', '--ros-args', '-p', 'use_sim_time:=false', '-p', f'yaml_filename:={mp}.yaml'],
                 ['ros2', 'run', 'nav2_lifecycle_manager', 'lifecycle_manager', '--ros-args', '-r', '__node:=lifecycle_manager_map', '-p', 'use_sim_time:=false', '-p', 'autostart:=true', '-p', "node_names:=['map_server']"],
@@ -48,7 +49,7 @@ def main():
                 ['ros2', 'run', 'tf2_ros', 'static_transform_publisher', '--frame-id', 'odom', '--child-frame-id', 'base_footprint'],
                 ['ros2', 'run', 'nav2_planner', 'planner_server', '--ros-args', '--params-file', yp, '-p', 'use_sim_time:=false'],
                 ['ros2', 'run', 'nav2_lifecycle_manager', 'lifecycle_manager', '--ros-args', '-r', '__node:=lifecycle_manager_planner', '-p', 'use_sim_time:=false', '-p', 'autostart:=true', '-p', "node_names:=['planner_server']"]]
-        logf = open(os.path.join(tmp_, 'rb1_plan_nodes.log'), 'w')
+        logf = open(os.path.join(tmp_, f'{TAG}_plan_nodes.log'), 'w')
         return [subprocess.Popen(c, env=env, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True) for c in cmds]
     del _launch
     procs = launch_map(tmp)

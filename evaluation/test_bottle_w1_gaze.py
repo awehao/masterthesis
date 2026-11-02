@@ -3,6 +3,7 @@
 兩條既有接近軌跡各跑「視向開」與「視向關（＝online5 基線、對照與退化）」：
   u3   原區域 U3：接近路徑＝bottle_online5_u3_1 實跑規劃（joined）、第一桌 0.598、瓶 (0.0042, 0.4564)、第二桌 (2.4, −1.0)、原障礙 (−2.0, 0)；
   rb1  R-B1：接近路徑＝bottle_rb1_1 實跑規劃（區域 joined）、第一桌 0.58、瓶 區域 (−0.03, 0.44)、第二桌區域 (1.8, −1.8)、原障礙區域 (−2.6, −0.8)、放置先驗換區域。
+  rb2  R-B2 前置（Codex 174123）：接近路徑＝rb2_offline_plan 離線規劃（無掃描）、第一桌 0.645、瓶 區域 (0.0607, 0.4048)（事前產生值，只供場景與安全評估）、O＝(0.8, −0.8)；只判接近段（approach_pass），整趟結果照列不作門檻。
 假候選同 test_bottle_w1_rb1（U 段開始後 3.6 s 起送；本檔不估計取得時刻，取得時刻要看實跑；這裡核動態）。規劃工作者是真子程序，假世界節流 RTF 0.6。
 核對：
   接近段（CRUISE 未漸變、序列 U／H／R）每個控制拍：現在停（e0）與延後一拍停（e1）的完整取樣停止軌跡（compactcarry21.stop_traj），
@@ -26,7 +27,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'results', 'bottle', 'gaze_closed.json')
 COMBOS = [('u3', 'on'), ('u3', 'off'), ('rb1', 'on'), ('rb1', 'off')]
 CASES = dict(u3=dict(run='bottle_online5_u3_1', z1=0.598, b=(0.0042, 0.4564), O=(0.0, 0.0)),
-             rb1=dict(run='bottle_rb1_1', z1=0.58, b=(-0.03, 0.44), O=(0.60, 0.80)))
+             rb1=dict(run='bottle_rb1_1', z1=0.58, b=(-0.03, 0.44), O=(0.60, 0.80)),
+             rb2=dict(run=None, plan='rb2_offline_plan.json', z1=0.645, b=(0.0607, 0.4048), O=(0.80, -0.80)))   # R-B2 前置（Codex 174123）：接近路徑＝離線規劃（無掃描），只判接近段
 
 if len(sys.argv) > 1 and sys.argv[1] == 'all':
     from concurrent.futures import ThreadPoolExecutor
@@ -68,14 +70,15 @@ import bottle_region as BRG                             # noqa: E402
 import bottle_s1_cand as SC                             # noqa: E402
 import bottle_n2_path as NP                             # noqa: E402
 REG = BRG.RegionFrame(*CF['O'])
-if CASE == 'rb1':
+if CF['O'] != (0.0, 0.0):
     PLACE_R = REG.place_to_region(PC.PLACE)
     PC.PLACE.clear()
     PC.PLACE.update(PLACE_R)
 TP.DX, TP.DY = 2.4 - CF['O'][0], -1.0 - CF['O'][1]
 SC.X0 = -3.6 - CF['O'][0]
 SC.OBST['c'] = np.array([-2.0 - CF['O'][0], 0.0 - CF['O'][1], 0.25])
-J_RUN = np.array(json.load(open(os.path.join(HERE, 'runs', CF['run'], 's1_report.json')))['plan']['joined'], float)
+J_RUN = np.array(json.load(open(os.path.join(HERE, 'runs', CF['run'], 's1_report.json')))['plan']['joined'] if CF.get('run') else
+                 json.load(open(os.path.join(HERE, 'results', 'bottle', CF['plan'])))['approach']['joined_region'], float)
 TBN = [('t1:' + n, c_, s_) for n, c_, s_ in G.table_boxes()] + [('t2:' + n, c_, s_) for n, c_, s_ in TP.table2_boxes()]
 OBX = (SC.OBST['c'], SC.OBST['sz'])
 BOXC, BOXS = np.array([CF['b'][0], CF['b'][1], Z1 + G.BOTTLE['h'] / 2]), np.array([2 * G.BOTTLE['r'], 2 * G.BOTTLE['r'], G.BOTTLE['h']])
@@ -302,6 +305,7 @@ def main():
     gaze_ok = (not GZON) or (gm.get('v', 9) <= GZ.V_G + 1e-9 and gm.get('a', 9) <= GZ.A_G + 1e-6 and (gz.get('state') or {}).get('g') == 0.0)
     ok = (done and not out['stop_fails'] and not out['approach_stop_fails'] and bt['v'] >= LIM['held_bottle_table'] and len(acc_g) == 1 and len(acc_r) == 1 and gaze_ok
           and out['done_before_blend'] is True and (out.get('v_base_min_U_close') or 0) > 0.0)
+    out['approach_pass'] = bool(not out['approach_stop_fails'] and gaze_ok and out['done_before_blend'] is True and T.finite_cmds(f))   # R-B2 前置只判這項
     out['pass'] = bool(ok and T.finite_cmds(f))
     print(json.dumps(out, ensure_ascii=False, default=float))
     return 0
