@@ -24,6 +24,7 @@ from ammr_wholebody_mpc.se2 import from_xytheta
 
 import bottle_n2_path as NP
 import bottle_place_ctrl as PC
+import bottle_ref as BR
 import bottle_s0_ctrl as C0
 import bottle_s0b_ctrl as B
 import bottle_s1_ctrl as S1
@@ -306,6 +307,10 @@ class W1PlaceController(CG.W1PlaceController):
         self.solve_ms.append((time.perf_counter() - t0) * 1e3)
         self.qp_log.append(dict(solver='hold'))
         self.u_arm_plan, self.base_plan = None, xi[:N] + np.asarray(r.delta_xi_all, float)
+        if self.compact is not None:                           # 返回段也留求解紀錄：動態項是否進求解器、命令反應都要從這裡量
+            self.compact.append(dict(obs=obs, t=self.t, phase=BR.PHASES.index(self.st.phase), qp=qp.copy(), sp=sp.copy(), u_prev=self.u_prev.copy(), X_ref=X.copy(), xi_ref=xi.copy(), T_seq=np.stack([np.eye(4)] * (N + 1)), rel=True, w_p=0.0,
+                                     bias=np.array(self.cfg.arm_model.bias, float), u=np.r_[np.asarray(r.u_opt, float), np.zeros(6)], cbf_active=int(r.cbf_active), min_h=float(r.min_h), eps0=float(r.eps0),
+                                     resid_ns=float(r.cbf_resid_post_noslack), resid_s=float(r.cbf_resid_post_slack)))
         if r.accept_action == 'brake' or r.status != 'solved':
             self.n_fallback += 1
             self._ev('wb_fallback', why=f'return_hold_{r.accept_action}', failed=False)

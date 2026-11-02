@@ -226,6 +226,10 @@ import bottle_f1_task as FT                                           # noqa: E4
 import bottle_w1_dyn_case as DC                                       # noqa: E402
 import bottle_dyn_case_region as DCR                                  # noqa: E402
 DC.CASES.update(DCR.cases())                                         # R-B1 迎面錯身（世界座標）
+_f1ca = dict(json.load(open(os.path.join(HERE, 'experiments', '20261103_f1_dyn_case.json')))['case'])   # F1 返回段移動物（世界座標、任務時鐘；事前固定）
+for _k in ('start', 'end', 'meet_robot', 'robot_dir'):
+    _f1ca[_k] = tuple(_f1ca[_k])
+DC.CASES[_f1ca['name']] = _f1ca
 import bottle_segtarget_link as SL                                   # noqa: E402
 import bottle_monitor_progress as MPG                                 # noqa: E402
 W1 = W1N if a.nopred else W1G   # 不讓 ros_stub 蓋掉真 rclpy
