@@ -1,0 +1,147 @@
+{
+ "schema": 1,
+ "status": "待 Codex 核可；未核可前不起跑",
+ "task": "F1 兩瓶連續任務修正版一趟（遠瓶先抓、車頭朝前返回；無移動物）",
+ "git_head_before_freeze_commit": "b7002c7a2e4fae7f6c2436f4d67fa95a409a248d",
+ "run": {
+  "RUN_ID": "bottle_f1_2",
+  "S1_ARGS": "--dyn-case none --bottle-dx 0.15 --bottle2=-0.15,0.42 --sim-s 200",
+  "MAP_ARGS": "--table2 2.4,-1.0",
+  "isaac_script": "evaluation/isaac_bottle_w1dynsr36.py",
+  "SEG_W1_SCRIPT": "evaluation/bottle_seg3d_f1_node.py",
+  "SEG_W1_ARGS": "--region 0,0.35,0.36,0.62 --inst-log evaluation/runs/bottle_f1_2/instances.jsonl",
+  "CAND_SCRIPT": "evaluation/bottle_seg3d_candidates_f1_node.py"
+ },
+ "scene": {
+  "first": [
+   0.15,
+   0.42
+  ],
+  "second": [
+   -0.15,
+   0.42
+  ],
+  "table1_z": 0.6,
+  "places": [
+   [
+    2.55,
+    -0.58
+   ],
+   [
+    2.25,
+    -0.58
+   ]
+  ],
+  "moving_obstacle": null
+ },
+ "rounds": [
+  {
+   "x_look": 0.15,
+   "region": [
+    0.0,
+    0.35,
+    0.36,
+    0.62
+   ],
+   "target": [
+    2.55,
+    -0.58
+   ]
+  },
+  {
+   "x_look": -0.15,
+   "region": [
+    -0.35,
+    0.0,
+    0.36,
+    0.62
+   ],
+   "target": [
+    2.25,
+    -0.58
+   ]
+  }
+ ],
+ "select": {
+  "K_LOCK": 3,
+  "R_LOCK_m": 0.05,
+  "M_BOUND_m": 0.05,
+  "relock": false
+ },
+ "return_seg": {
+  "goal": "第一輪接近路徑起點 pp.P[0]",
+  "arm": "hold",
+  "t_settle_s": 1.0,
+  "v_box": [
+   0.2775,
+   0.2,
+   0.25
+  ],
+  "margin": 0.95,
+  "heading": "forward",
+  "rot": {
+   "dir": "順時針起始",
+   "w_max": 0.7,
+   "a_max": 1.0
+  }
+ },
+ "offline": {
+  "task": "results/bottle/f1_task_check.json（十三案全過）",
+  "contact": "test_bottle_f1_contact 全過",
+  "link": "test_bottle_f1_link 全過",
+  "select": "test_bottle_f1_select 全過",
+  "select_replay": "results/bottle/f1_select_replay.json",
+  "capture": "bottle_f1cap_2"
+ },
+ "scoring": "兩輪流程完成與兩輪原抓持品質分列；第一輪真正中止或放置未完成不進第二輪；僅平移滑移警告可進第二輪且保留品質紀錄",
+ "failure_policy": "無候選、歧義、未及時承接、安全停止都保留結果；任務失敗不補跑、不臨場改視角或門檻；不放寬判準",
+ "sha256": {
+  "evaluation/isaac_bottle_w1dynsr36.py": "5c36c937bb155725c4d62c3dfaf74abfcc0d73dacfa84e195dbda7ceb37dae9e",
+  "evaluation/bottle_w1_f1_ctrl.py": "36f90df9551c26fbfdedea4044ed69b89db3ebb6f53381e17cf5a535c7f21e11",
+  "evaluation/bottle_f1_task.py": "f4cf344ae1fb67d2569be3ab87e4de3e0b6c657131241782e29dd2c1baba44d7",
+  "evaluation/bottle_seg3d_f1_node.py": "a7885fe21547180a77e0f60e4c0a61f563b394e2d946519e40254df121249a4e",
+  "evaluation/bottle_seg3d_candidates_f1_node.py": "32ae927bd6ea7d7269a8318c59357a33799e71e32a8fee0c71ba68fb0ba1e718",
+  "evaluation/bottle_seg3d_node.py": "cb3856406efe6bbb29f5fc5a657081052fa92c434405a084a269010fc242bbee",
+  "evaluation/bottle_seg3d_candidates_node.py": "4f089a6bd6c2a56008d9a9924a1b859f39cb33976c2d226df4e88f06b5317caf",
+  "evaluation/bottle_seg3d_candidates.py": "b8583c638cf924d89712ae70379bbbe4163d6a6ff14289462453c1f60d66c3fb",
+  "evaluation/bottle_f1_select.py": "123f3846b683376639d75b3ff39c5a8758faae991f64b5c9ba323e9b049b71a6",
+  "evaluation/bottle_segtarget_link.py": "559037987f7fcb6f0ae96ad099eeffcd8e177057b8a7b1f8b1da8c32645cbe0e",
+  "evaluation/bottle_w1_gaze_ctrl.py": "cae4b824610b7c6719404f1c7fd18f2c5fcf4638be865a8cddd2aaccecec43a7",
+  "evaluation/bottle_w1_carrygov_ctrl.py": "9196becc2148895653bee89c26ae4384414731ee417ced185e7b5fadd314c201",
+  "evaluation/bottle_seg_depth3d.py": "ef9622ac4b5ce69e42802d6e9d3f3b0e2be7a3533268b85b8bca8b83b83e18cb",
+  "evaluation/run_bottle_ros.sh": "7ffa4f6d86d7836c4bbe5f495903583b06faa71664a7f2325f53171ab7a3567a",
+  "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
+  "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py": "0206430a5275c4355e71e6d62bfe9a87a5dde10c4f783d999d623f1bfeaf735a",
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962",
+  "evaluation/bottle_f1_contact.py": "1053f973d615f1fc8f5ffe4b02e8bade86922c6c06796988bc527952a77b3da0",
+  "evaluation/bottle_f1_crash.py": "cb421ff680748e5c60204ef8eedc72795403f2e620f520201ca8d8e5708f3bcf",
+  "evaluation/bottle_place_ros.py": "1bc9ff3ba4beea25b273b29742eb7ab95f5546a268059cdf6ecb659939ebf65b"
+ },
+ "changes_since_candidate": {
+  "files": [
+   "evaluation/isaac_bottle_w1dynsr36.py",
+   "evaluation/bottle_w1_f1_ctrl.py",
+   "evaluation/bottle_f1_task.py",
+   "evaluation/bottle_f1_contact.py"
+  ],
+  "ruling": "reviews/20261103_021114_reply.md",
+  "what": "實測靜止、F1 整體總期限、接觸映射純函式與動作前支撐核對、grip_ok 三態"
+ },
+ "launch_policy": "尚未開始任務動作且確定是解析、初始化或接線失敗：保留紀錄，允許一次修復後以新 RUN_ID 重起，重新凍結有變更的檔案。任務動作已開始（含接近）：後續一律算該趟未完成，不補跑",
+ "previous": {
+  "run": "bottle_f1_1",
+  "result": "F1 任務未完成；直接中斷原因為規劃接口整合缺陷，抓取與放置品質資料不足"
+ },
+ "changes_since_previous": {
+  "files": [
+   "evaluation/isaac_bottle_w1dynsr36.py",
+   "evaluation/bottle_w1_f1_ctrl.py",
+   "evaluation/bottle_f1_task.py",
+   "evaluation/run_bottle_ros.sh",
+   "evaluation/bottle_f1_crash.py",
+   "evaluation/bottle_place_ros.py"
+  ],
+  "what": "PlanPort 與 invalidate、例外保存與檢查點、車頭朝前返回",
+  "ruling": "Codex 20261103 裁定"
+ }
+}
