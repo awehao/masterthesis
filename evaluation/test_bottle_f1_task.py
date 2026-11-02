@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 import numpy as np
 
@@ -55,6 +56,7 @@ S0B.BX, S0B.BY = ROUNDS[0]['b']
 import test_bottle_w1_segtarget_vhigh as TV             # noqa: E402
 import bottle_branch as BB                              # noqa: E402
 import bottle_f1_crash as FX                            # noqa: E402
+import bottle_s1_ctrl as C2                             # noqa: E402
 import bottle_f1_dyn_report as FD                       # noqa: E402
 import bottle_w1_dyn_case as DC                         # noqa: E402
 import bottle_f1_task as FT                             # noqa: E402
@@ -462,6 +464,15 @@ def main():
             nav_w = (nav_ev.get('NAV', 0.0), nav_ev.get('ROT1', 1e9))
             rows_ = list(c0.compact) + (list(placed['c1'].compact) if 'c1' in placed else [])
             out['dyn']['interaction'] = FD.analyse(rows_, c0.mpc_nav, CA['t_start'], nav_w)
+            # 實跑走 save_compact→load_rows：混合手臂主動與返回 hold 兩種紀錄列必須能存能讀，存讀後的統計要與記憶體版相同
+            rows_rt_ = []
+            for c_rt_ in (c0, placed.get('c1')):
+                if c_rt_ is not None:
+                    with tempfile.TemporaryDirectory() as td_:
+                        p_rt_ = os.path.join(td_, 's1_cbf.npz')
+                        C2.save_compact(c_rt_, p_rt_)
+                        rows_rt_ += FD.load_rows(p_rt_)
+            chk['求解紀錄存讀一致'] = FD.analyse(rows_rt_, c0.mpc_nav, CA['t_start'], nav_w) == out['dyn']['interaction']
             out['dyn']['nav_window'] = nav_w
             k_nav = np.flatnonzero((tH >= nav_w[0]) & (tH <= nav_w[1]) & (np.abs(tH * 20 - np.round(tH * 20)) < 1e-6))
             v_ = np.hypot(np.diff(QH[k_nav, 0]), np.diff(QH[k_nav, 1])) / 0.05
