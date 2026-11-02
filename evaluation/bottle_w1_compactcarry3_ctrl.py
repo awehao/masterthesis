@@ -131,17 +131,14 @@ class W1PlaceController(C21.W1PlaceController):
                 self._ev('compact_reached')
                 self.cc_ev.append(('compact', t))
         if f['stage'] == 'compact':
-            lead = getattr(self, 'v_carry', 0.25) * self._ccd3('T_UP')
-            rem = None if self.cpath is None or self.csig is None else float(self.cpath.x_lane) - float(self.csig)
-            if self.pph == 'PLACE_APPROACH':
-                self._start_raise('place_approach', rem)
-            elif self.pph == 'CARRY_NAV' and rem is not None and np.isfinite(rem) and rem <= lead:
-                self._start_raise('early', rem)
+            trig = self._cc_raise_trigger()
+            if trig is not None:
+                self._start_raise(*trig)
         if f['stage'] == 'raise' and t - f['t_raise'] >= self._ccd3('T_UP') - 1e-9:
             f['stage'] = 'raised'
             self._ev('compact_raised')
             self.cc_ev.append(('raised', t))
-        if f['stage'] == 'raised' and self.pph == 'PLACE_APPROACH':
+        if f['stage'] == 'raised' and self._cc_out_phase_ok():
             m, n = self._reach_gate(q, self._ccd3('T_OUT'))
             self.reach_log.append((round(t, 3), 'pre', None if m is None else round(m, 4), n))
             if m is not None and m >= 0.0:
@@ -169,6 +166,20 @@ class W1PlaceController(C21.W1PlaceController):
             self.n_still_p = 0                                   # 外伸完成前不累計停車靜止
         if self.n_step % 5 == 0:
             self.cc_log.append((round(t, 3), f['stage']))
+
+    def _cc_raise_trigger(self):
+        """緊湊穩態時何時開始升高：回 (原因, rem) 或 None。預設＝v3 原規則（PLACE_APPROACH 即升；CARRY_NAV 距直線段入口 ≤ v_carry×T_UP 提前升）；版本化子類可覆寫。"""
+        lead = getattr(self, 'v_carry', 0.25) * self._ccd3('T_UP')
+        rem = None if self.cpath is None or self.csig is None else float(self.cpath.x_lane) - float(self.csig)
+        if self.pph == 'PLACE_APPROACH':
+            return ('place_approach', rem)
+        if self.pph == 'CARRY_NAV' and rem is not None and np.isfinite(rem) and rem <= lead:
+            return ('early', rem)
+        return None
+
+    def _cc_out_phase_ok(self):
+        """升高完成後哪些放置相位允許開始外伸（仍須外伸淨空閘通過）。預設＝v3 原規則：只在 PLACE_APPROACH。"""
+        return self.pph == 'PLACE_APPROACH'
 
     def _start_raise(self, why, rem=None):
         self.cc.update(stage='raise', t_raise=float(self.t))

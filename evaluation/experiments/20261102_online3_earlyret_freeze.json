@@ -1,0 +1,76 @@
+{
+ "schema": 1,
+ "batch": "在線 MotM 第三版：提前安全轉回、與運送重疊（唯一提速候選）",
+ "ruling": "reviews/20261102_080657_reply.md",
+ "base_version": "online2（U3 物理 bottle_online_u3_2 的版本）",
+ "frozen_at_local": "以本凍結提交的 git 時間為準（寫檔時 08:15:22）",
+ "git_head_before_freeze_commit": "05da491dd0b2cc684764f20d59e650b63acee7f7",
+ "controller": "bottle_w1_online3_ctrl",
+ "isaac_script": "evaluation/isaac_bottle_w1dynsr28.py",
+ "change": "升高起點：CARRY_NAV 中 park_x−csig ≤ v_carry×(T_UP＋T_OUT)；外伸：升高完成後 CARRY_NAV／PLACE_APPROACH 皆可開始（須外伸淨空閘、逐拍監看）。速度、時長、閘、停止、收斂不變",
+ "refactor": "compactcarry3：升高觸發與外伸允許相位抽成 _cc_raise_trigger／_cc_out_phase_ok（預設＝原規則）；v2w 名目、v3 A4、v3 B1 假世界逐欄相同",
+ "sha256": {
+  "evaluation/bottle_w1_online3_ctrl.py": "754e3cf518b25207634cc0c8398da42398226c052eb42e3411235ebbcdcd32ba",
+  "evaluation/isaac_bottle_w1dynsr28.py": "dbbd789ec36d0d84247a458bd5a284abc6a2aacc2658d8cfb31386c8df449080",
+  "evaluation/bottle_w1_online2_ctrl.py": "edf12b9f4e2c146ecf7ca58fbd5b0bed60e81daa208a25b420f72cd5e45323ec",
+  "evaluation/bottle_w1_online_ctrl.py": "0dd70792a289b28d8adf380d9c9efce41424a452a2cc0638443b224d2e30c4ac",
+  "evaluation/bottle_plan_worker.py": "2bc11f466c2d5291d28a0849ff111d9e3933186995ff671d64a4ff69fd852967",
+  "evaluation/bottle_plan_client.py": "90326f2a92745c5d6718ee270f1f484c37fbf27f72a54703dca8ca40493fae92",
+  "evaluation/bottle_w1_compactcarry3_ctrl.py": "8fcfa2dc5cbb0386268b8aeb366deb30a71266e70ca5ebb0c582c7e7628de73d",
+  "evaluation/bottle_w1_compactcarry2_ctrl.py": "5955b65e6ce1c9c843100ab042e46d67b0e2a93326ec7011e81a8720c58f3653",
+  "evaluation/bottle_w1_compactcarry21_ctrl.py": "c1767d3b9ca4c3657a1ebfeb11859d2a3d509bb7c707af4c09c4fcc4cf9cfa17",
+  "evaluation/run_bottle_ros.sh": "10c5183a638c58d24a187212d24ed6c12dfaf0d05ffda004bd43f1c0753f6035",
+  "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
+  "evaluation/test_bottle_w1_online3.py": "bf18bffd2663a8952b18d4d518882f84c8cfdb001e10908fe52791b8befecff0",
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962"
+ },
+ "offline": {
+  "result_file": "evaluation/results/bottle/online3_offline.json",
+  "base": {
+   "compact_start": 23.45,
+   "compact_reached": 27.85,
+   "raise_start": 28.35,
+   "raised": 30.4,
+   "out_start": 30.4,
+   "out_done": 34.8,
+   "place_approach": 30.35,
+   "base_ready": 32.91000000000202,
+   "arm_ready": 34.800000000001646,
+   "lower": 35.25,
+   "release": 39.95,
+   "done": 48.9,
+   "raise_why": "early",
+   "table_wait": 2.34
+  },
+  "early": {
+   "compact_start": 23.45,
+   "compact_reached": 27.85,
+   "raise_start": 27.85,
+   "raised": 29.9,
+   "out_start": 29.9,
+   "out_done": 34.3,
+   "place_approach": 30.35,
+   "base_ready": 32.91000000000202,
+   "arm_ready": 34.300000000001745,
+   "lower": 34.75,
+   "release": 39.45,
+   "done": 48.4,
+   "raise_why": "early_overlap",
+   "table_wait": 1.84
+  },
+  "exposure": {
+   "base": {
+    "time_beyond_0p39_s": 9.4,
+    "r_max_m": 0.481,
+    "t_r_max": 23.550000000000882
+   },
+   "early": {
+    "time_beyond_0p39_s": 9.4,
+    "r_max_m": 0.481,
+    "t_r_max": 23.550000000000882
+   }
+  },
+  "note": "假世界節省 0.5 s（下放 35.25→34.75、完成 48.9→48.4）；手臂就緒受收近完成限制（收近＋升高＋外伸約 10.85 s），不能跳段"
+ },
+ "physical_next": "U3 同配置：bottle_online3_u3_1（對照 bottle_online_u3_2），交對照影片"
+}
