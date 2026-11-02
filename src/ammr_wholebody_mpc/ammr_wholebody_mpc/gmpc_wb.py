@@ -364,6 +364,12 @@ class GMPCConfig:
     # 起因（bottle_w1_dyn2b_g1）：QP 解與上一筆都貼在輪速邊界（殘差 1e-11～1e-9 rad/s），線段縮放的 (w_lim − b) 因捨入為負，λ 塌成 0。
     # 超出容差的真正違反仍照原線段縮放／投影，回傳被標成後處理改動。
     wheel_fit_boundary_tol : float = 0.0
+    # （gmpc_wb，2026-11-02 候選，Codex 20261102_184223）零速度框夾限的數值容差 (平移 m/s, 角速度 rad/s)。None＝原行為（逐位元相同）。
+    # 只在底盤三軸上下限皆為零（停車求解器）時生效：可用且收斂的解、未經加速度夾限／輪級縮放或投影／煞停後備（accept_action＝as_is），
+    # 回傳命令恰為速度框夾限結果，且夾回量逐軸 ≤ 容差 ⇒ seq_consistent 視為「數值容差內一致」（arm_check['seq_tol'] 記原值、回傳值、修正量）。
+    # 起因（R-B2 假世界進 HOLD 那拍）：底盤 δ0＝(7.4e-11, 2.3e-10, −6.4e-12) 被 [0, 0] 夾回 0，atol 1e-12 比對判成後處理改動而退回。
+    # 不是逐位元或精確同一序列；超出容差、非零速度框、其他後處理照原規則判不一致。
+    zero_box_clip_tol : Optional[Tuple[float, float]] = None
     # ---- Control Barrier Function safety filter ----------------------------
     cbf_alpha        : float = 1.0        # decay rate α in  ḣ + α·h ≥ 0
     cbf_safe_margin  : float = 0.30       # extra clearance added to obstacle radius [m]
@@ -523,6 +529,23 @@ class GMPCResult:
 # ---------------------------------------------------------------------------
 # Output acceptance: does the command that leaves solve() fit the wheels?
 # ---------------------------------------------------------------------------
+
+def zero_box_clip_ok(cfg: 'GMPCConfig', u_opt, u_raw, accept_action: str, usable: bool, status: str):
+    """零速度框夾限的數值容差判定（GMPCConfig.zero_box_clip_tol）。回 None＝不適用或不通過（照原規則）；否則回紀錄 dict。"""
+    tol = cfg.zero_box_clip_tol
+    if tol is None or accept_action != 'as_is' or not usable or status != 'solved':
+        return None
+    lo, hi = np.asarray(cfg.u_min, float), np.asarray(cfg.u_max, float)
+    if np.any(lo != 0.0) or np.any(hi != 0.0):
+        return None
+    u_opt, u_raw = np.asarray(u_opt, float), np.asarray(u_raw, float)
+    if not (np.isfinite(u_raw).all() and np.array_equal(u_opt, np.clip(u_raw, lo, hi))):
+        return None
+    corr = np.abs(u_opt - u_raw)
+    if corr[0] > tol[0] or corr[1] > tol[0] or corr[2] > tol[1]:
+        return None
+    return dict(label='數值容差內一致', raw=u_raw.tolist(), returned=u_opt.tolist(), corr_lin=float(max(corr[0], corr[1])), corr_ang=float(corr[2]), tol=[float(tol[0]), float(tol[1])])
+
 
 def wheel_matrix(cfg: 'GMPCConfig') -> np.ndarray:
     """W such that r·ω = W·u for the four wheels, in the same row order the
@@ -1793,6 +1816,7 @@ class GMPC:
                 u_arm_seq = np.zeros((N, ARM_N))
                 arm_check = dict(max_violation=float('nan'), finite=False, rows=int(arm_rows), qp=qp_info, note='底盤煞停路徑：手臂命令歸零（未求得序列）')
         u_opt = xi_ref_win[0] + delta[0]
+        u_raw = u_opt
         u_opt = np.clip(u_opt, cfg.u_min, cfg.u_max)
         accept_action, accept_scale = ('as_is' if usable else 'brake'), 1.0
         # Final feasibility guard, applied ONLY to solutions the solver did not
@@ -1874,6 +1898,10 @@ class GMPC:
 
         if arm_check is not None:                     # 後處理若改了底盤命令，手臂序列不再與回傳底盤同解（不宣稱整串可行）
             arm_check['seq_consistent'] = bool(accept_action == 'as_is' and np.allclose(u_opt, xi_ref_win[0] + delta[0], atol=1e-12, rtol=0))
+            if not arm_check['seq_consistent'] and cfg.zero_box_clip_tol is not None:
+                zt_ = zero_box_clip_ok(cfg, u_opt, u_raw, accept_action, usable, status)
+                if zt_ is not None:
+                    arm_check['seq_consistent'], arm_check['seq_tol'] = True, zt_
         u0_viol = float('nan')
         if u0_rows is not None:                       # 對回傳命令（含煞停、加速度夾、輪級後處理之後）核對；呼叫端決定違反時停止
             A_u0, b_u0 = np.asarray(u0_rows[0], float).reshape(-1, 3), np.asarray(u0_rows[1], float).ravel()
