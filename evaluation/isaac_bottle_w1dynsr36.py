@@ -616,10 +616,10 @@ def main():
         print('[s1] N2 只接 G', flush=True)
         return 2
     cls_ = W1.W1PlaceController
-    def make_ctrl(i_, q_tuck_, t0_):
-        return cls_(C.S0_K(), ident, T_g, T_ready_rel, q_ready, Z1, float(B['radius']), a.x_start - float(RO[0]), (a.win_lo, a.win_hi), C2.DetourPath(*p_),
+    def make_ctrl(i_, q_tuck_, t0_, x0_):
+        return cls_(C.S0_K(), ident, T_g, T_ready_rel, q_ready, Z1, float(B['radius']), x0_, (a.win_lo, a.win_hi), C2.DetourPath(*p_),
                            tuple(float(v) for v in a.exit_c.split(',')), a.exit_r, (lambda t_eff: REG.obs_to_region(chain.obstacles(t_eff))), chain=chain, scan_fn=(lambda t_, q_: scan_fn(t_, REG.q_to_world(q_))), place=dict(REG.place_to_region(PCm.PLACE), target=F1_ROUNDS[i_]['target']), x_look=F1_ROUNDS[i_]['x_look'], t_round0=t0_, round_id=i_, return_heading='forward', x_exit_stop=a.x_end, v_c=a.v_c, v_nav=a.v_nav, v_carry=a.v_carry, x_slow=a.x_slow, q_tuck=q_tuck_, x_unfold=a.x_unfold, t_unfold=a.t_unfold, t_blend=a.t_blend, t_insert=a.t_insert, no_tcp_preview=a.no_tcp_preview, no_inflight=a.no_inflight, body_boxes=[S2] if (S2 and a.s2_active) else None, body_links=tuple(x for x in a.s2_links.split(',') if x), reg=None, required=required, top_z=float(T['top_z']), win=(a.win_lo, a.win_hi), planner_log=os.path.join(a.out, 'plan_worker.log'), **(dict(kp=a.m_kp) if a.group == 'M' else {}))
-    ctrl = make_ctrl(0, q_tuck, 0.0)
+    ctrl = make_ctrl(0, q_tuck, 0.0, a.x_start - float(RO[0]))
     if a.group == 'M':
         ctrl.p1.mu_post = a.m_mu
     ctrl.compact = []                                                         # CBF 證據；反事實重解在實跑後（bottle_s1_cbf_replay.py）
@@ -699,18 +699,20 @@ def main():
 
     def make_round(i_, s_now, d_, t_):
         nonlocal mon, mprog
-        n_ = make_ctrl(i_, np.asarray(s_now, float).copy(), float(t_))        # 承接實際設定點，不拉回預設姿態；抓取目標仍是 NaN，只能來自視覺
+        n_ = make_ctrl(i_, np.asarray(s_now, float).copy(), float(t_), float(q_at_step[0][0]))   # 承接實際設定點與位置，不拉回預設姿態；抓取目標仍是 NaN，只能來自視覺
         n_.compact = []
         n_.obs.d = np.clip(d_, -n_.obs.max, n_.obs.max)
         n_.cfg.arm_model.bias = n_.bias0 + np.asarray(n_.cfg.arm_model.alpha, float) * n_.obs.d
         n_.planner_conv, n_.planner_ros = conv_cfg, pr
         port.bind(n_)
         n_.carry_planner, n_.exit_c, n_.bottle_mass = port, np.array([99.0, 99.0]), float(readback['bottle_mass'])
+        n_.path = pp
+        n_.s_ref = n_.sig_robot = pp.project(np.asarray(q_at_step[0][:2], float), sig_r_)   # 沿同一條路徑從重啟點接續；σ 不重新起算
         mon = NP.PathMonitor(pp)
-        mon.on_grid(pr.grid, pp.sig0)
+        mon.on_grid(pr.grid, n_.sig_robot)                                    # 監看與進度都從重啟點算，不是路徑起點
         mprog = MPG.MonitorProgress(pp, C2.B.Y_TUBE)
-        n_.path, n_.monitor = pp, mon
-        n_.s_ref = n_.sig_robot = pp.project(np.asarray(q_at_step[0][:2], float), pp.sig0)
+        mprog.sig = float(n_.sig_robot)
+        n_.monitor = mon
         pr.monitor, pr.sig_fn = mon, (lambda: mprog.sig)
         print(f'[s1] F1 第二輪實例：t {t_:.2f}、σ {n_.s_ref:.3f}、d̂ {np.round(n_.obs.d, 4).tolist()}', flush=True)
         return n_
@@ -728,7 +730,9 @@ def main():
         FX.atomic_json(os.path.join(a.out, f's1_report_{kind}.json'), r_)
         np.savez_compressed(os.path.join(a.out, f's1_steps_{kind}.npz'), rows=np.array(rows, float), cols=np.array(step_cols()))
         print(f'[s1] F1 檢查點 {kind} 已落盤（{len(rows)} 列）', flush=True)
-    task = FT.F1Task(ctrl, [float(pp.P[0][0]), float(pp.P[0][1])], make_round, on_switch, on_checkpoint)
+    sig_r_, xy_r_ = FT.restart_point(pp)                                      # 第二輪重啟點：接近路徑上 x＝RESTART_X 的投影點（不回原點）
+    print(f'[s1] F1 重啟點 σ {sig_r_:.3f}、xy {np.round(xy_r_, 3).tolist()}', flush=True)
+    task = FT.F1Task(ctrl, xy_r_, make_round, on_switch, on_checkpoint)
     ctrl = task
     dyn_log = []
 

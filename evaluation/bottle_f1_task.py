@@ -13,6 +13,17 @@ import numpy as np
 
 
 SLIP_MM, SLIP_DEG = 5.0, 3.0
+RESTART_X = -2.85                                       # 第二輪重啟點：接近路徑上第一次到達此 x 的投影點（U 段觸發約 −2.65 之前；單一候選，Howard：不回原點）
+
+
+def restart_point(path, x_r=RESTART_X):
+    """接近路徑上第一次 x ≥ x_r 的弧長 σ 與位置。第二輪沿同一條路徑從 σ 接續（σ 不重新起算，監看與投影都用它）。"""
+    sig = np.arange(path.sig0, path.x_lane, 0.01)
+    P = path.xy(sig)
+    k = int(np.argmax(P[:, 0] >= x_r))
+    if P[k, 0] < x_r:
+        raise ValueError(f'接近路徑沒有到達 x={x_r}')
+    return float(sig[k]), [float(P[k, 0]), float(P[k, 1])]
 
 
 def grip_state(r):

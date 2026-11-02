@@ -62,7 +62,7 @@ def moments(r):
     return sorted(out)
 
 
-def plot(d, x0, y0, w, h, t, series, t_now, ymax, title, ticks, target=None, unit=''):
+def plot(d, x0, y0, w, h, t, series, t_now, ymax, title, ticks, target=None, unit='', xstep=5):
     """細線曲線，共用時間軸；每條線直接標名與目前值。"""
     d.text((x0, y0 - 28), title, font=F_L, fill=MUTED)
     tx = lambda v: x0 + (v - t[0]) / (t[-1] - t[0]) * w      # noqa: E731
@@ -84,7 +84,7 @@ def plot(d, x0, y0, w, h, t, series, t_now, ymax, title, ticks, target=None, uni
         s = f'{name} {v[min(i_now, len(v) - 1)]:.0f} {unit}' if unit == 'mm' else f'{name} {v[min(i_now, len(v) - 1)]:.2f} {unit}'
         d.text((lx, y0 - 28), s, font=F_L, fill=col)
         lx += 170
-    for v in range(0, int(t[-1]) + 1, 5):
+    for v in range(0, int(t[-1]) + 1, xstep):
         d.text((tx(v), y0 + h + 4), f'{v}', font=F_L, fill=MUTED, anchor='ma')
 
 

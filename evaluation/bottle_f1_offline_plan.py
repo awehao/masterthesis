@@ -74,6 +74,11 @@ def main():
             reqs['carry_' + nm] = (list(cr['start']), list(cr['goal']))
             pk = G1[k]['park']
             reqs['return_' + nm] = ([float(pk[0]), float(pk[1]), 0.0], START)
+            if nm == 'far':                                    # 短返回：終點＝接近路徑（bottle_online5_u3_1 實跑規劃）上 x＝RESTART_X 的投影點
+                J_ = np.array(json.load(open(os.path.join(HERE, 'runs', 'bottle_online5_u3_1', 's1_report.json')))['plan']['joined'], float)
+                import bottle_f1_task as FT_
+                out['restart'] = dict(zip(('sig', 'xy'), FT_.restart_point(NP.PlannedPath(J_, -0.9))))
+                reqs['return_short'] = ([float(pk[0]), float(pk[1]), 0.0], out['restart']['xy'])
         for nm, (s_, g_) in reqs.items():
             rid = pr.request(tuple(s_), tuple(g_), 0.0)
             t1 = time.time()

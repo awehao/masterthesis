@@ -155,8 +155,8 @@ def main():
             d.rectangle([x0 - 18, TOP + MAIN_H - 72, x0 + (b[2] - b[0]) + 18, TOP + MAIN_H - 18], fill=(16, 22, 28, 220))
             d.text((x0, TOP + MAIN_H - 66), s, font=RV.F_B, fill=BAD if bad else GOOD)
         py, ph_ = Y2 + 42, H - Y2 - 42 - 62
-        RV.plot(d, 80, py, 520, ph_, t, [('車速', sp, C1)], tn, 0.4, '底盤車速 m/s，時間 s', (0, 0.2, 0.4), unit='m/s')
-        RV.plot(d, 680, py, 520, ph_, t, [('滑移', sl_plot, WARN)], tn, 8.0, '滑移 mm（對該輪抓持成立時刻，只畫到鬆爪）', (0, 5, 8), unit='mm')
+        RV.plot(d, 80, py, 520, ph_, t, [('車速', sp, C1)], tn, 0.4, '底盤車速 m/s，時間 s', (0, 0.2, 0.4), unit='m/s', xstep=20)
+        RV.plot(d, 680, py, 520, ph_, t, [('滑移', sl_plot, WARN)], tn, 8.0, '滑移 mm（對該輪抓持成立時刻，只畫到鬆爪）', (0, 5, 8), unit='mm', xstep=20)
         y5 = py + ph_ - 5.0 / 8.0 * ph_
         d.line([(680, y5), (1200, y5)], fill=BAD, width=1)
         d.text((1196, y5 - 2), '判準 5 mm', font=RV.F_L, fill=BAD, anchor='rb')

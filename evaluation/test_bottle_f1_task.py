@@ -14,7 +14,7 @@
   defect    兩輪共用規劃接口、沒有 PlanPort（bottle_f1_1 的實際情況）⇒ 重現 KeyError: 'start'。只用來確認假世界抓得到原缺陷。
   planlate  切換後才到的舊回覆（舊序號）⇒ 不交付；第二輪照常用自己的請求完成。
   crash     第二輪持瓶段注入例外 ⇒ 先存 crash.json 與 ctx，獨立停止實測靜止，再存逐步資料與報告；另核存檔失敗不掩蓋原例外、停止未驗證照實報。
-  fixed     名目兩輪，返回段固定偏航倒車（對照；其餘案例都是車頭朝前）。
+  origin    名目兩輪，重啟點在原起點（對照 bottle_f1_2 的做法；其餘案例都是短返回：重啟點在接近路徑上 x＝RESTART_X）。
 規劃接口與 Isaac 相同：兩輪共用同一個 SharedPlan（舊結果會留著、請求序號只增），外面包 PlanPort。
     python3 evaluation/test_bottle_f1_task.py all
 """
@@ -28,7 +28,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'results', 'bottle', 'f1_task_check.json')
-CASES = ('nominal', 'fixed', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
+CASES = ('nominal', 'origin', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
 if len(sys.argv) < 2 or sys.argv[1] == 'all':
     from concurrent.futures import ThreadPoolExecutor
 
@@ -144,7 +144,7 @@ class Ctl(F1C.W1PlaceController):
     def __init__(self, *a, **kw):
         if CUR['q_tuck'] is not None:
             kw['q_tuck'] = CUR['q_tuck']
-        super().__init__(*a, x_look=ROUNDS[CUR['id']]['x_look'], t_round0=CUR['t0'], round_id=CUR['id'], place=dict(target=ROUNDS[CUR['id']]['target']), planner_log=LOGP, return_heading='fixed' if CASE == 'fixed' else 'forward', **kw)
+        super().__init__(*a, x_look=ROUNDS[CUR['id']]['x_look'], t_round0=CUR['t0'], round_id=CUR['id'], place=dict(target=ROUNDS[CUR['id']]['target']), planner_log=LOGP, return_heading='forward', **kw)
 
     def _advance_inner(self, T_tcp, close_done, q):
         if self.judge.stop is None and np.isfinite(q).all():
@@ -203,7 +203,9 @@ def main():
     c0, f = build_ctrl()
     c0.path = NP.PlannedPath(J_RUN, -0.9)
     c0.s_ref = c0.sig_robot = c0.path.sig0
-    shared = SharedPlan(['carry_far', 'return_far', 'carry_near'])
+    shared = SharedPlan(['carry_far', 'return_far' if CASE == 'origin' else 'return_short', 'carry_near'])
+    pp0 = NP.PlannedPath(J_RUN, -0.9)
+    sig_r, xy_r = (pp0.sig0, J_RUN[0].tolist()) if CASE == 'origin' else FT.restart_point(pp0)
     port = shared if CASE == 'defect' else FT.PlanPort(shared)
     if CASE == 'defect':                                     # 下面沒走到 KeyError 就判未過（main 結尾）
         shared.invalidate_real, shared.invalidate = shared.invalidate, (lambda: None)     # 重現 bottle_f1_1：切換與取用後都不清
@@ -215,9 +217,10 @@ def main():
 
     def make_round(i, s_now, d, t):
         CUR.update(id=i, t0=t, q_tuck=np.asarray(s_now, float).copy())
+        SC.X0 = float(f.q[0])                                  # 建構起點＝實際位置，不是原起點
         c, _ = build_ctrl()
         c.path = NP.PlannedPath(J_RUN, -0.9)
-        c.s_ref = c.sig_robot = c.path.project(f.q[:2], c.path.sig0)
+        c.s_ref = c.sig_robot = c.path.project(f.q[:2], sig_r)
         c.carry_planner = port
         if CASE != 'defect':
             port.bind(c)
@@ -228,7 +231,7 @@ def main():
         f.Tb, f.grasped, f.released, f.Trel = S0B.bottle_T(), False, False, None
         return c
     ckpt = {}
-    task = FT.F1Task(c0, J_RUN[0].tolist(), make_round, on_checkpoint=lambda kind, r_: ckpt.update({kind: json.loads(json.dumps(dict(mission_done=r_.get('mission_done'), round=r_['f1']['round']), default=float))}))
+    task = FT.F1Task(c0, xy_r, make_round, on_checkpoint=lambda kind, r_: ckpt.update({kind: json.loads(json.dumps(dict(mission_done=r_.get('mission_done'), round=r_['f1']['round']), default=float))}))
     f.c = task
     rng = np.random.default_rng(0)
     st = dict(next_t=0.0, seq=0, t_seq=-99.0, snap=None, wall0=None, stale_done=False, inj=False, guard=None, late_done=False)
@@ -325,7 +328,7 @@ def main():
                rounds=[dict(round=x['f1']['round'], done=x['mission_done'], slip_warn=(x.get('slip_warn') or {}).get('warn'), slip_max=x['slip_max_mm_deg'], rej=x['f1']['rej'], place=x['place'].get('metrics'), ret=x['f1']['ret'], phases={e['to']: e['t'] for e in x['events'] if e['what'] in ('phase', 'place_phase')},
                             events=[(e['t'], e['what'], e.get('to')) for e in x['events'] if e['what'] in ('return_request', 'return_state', 'mission_done', 'stop', 'relwin_shift', 'online_obs_first')], solve=x['solve_ms'], n_over_50ms=x['n_over_50ms'], n_fallback=x['n_fallback'], plans=[g.get('state') for g in (x.get('online') or {}).get('grasp_plans', [])]) for x in R],
                finite=bool(W.finite_cmds(f)), guard=st['guard'])
-    if CASE in ('nominal', 'fixed'):
+    if CASE in ('nominal', 'origin'):
         H = f.hist
         tt, Q = np.array([h['t'] for h in H]), np.array([h['q'] for h in H])
         out['t_done'] = float(tt[-1])
@@ -403,6 +406,8 @@ def main():
         out.update(actual=act, stop=dict(other=sw, static=sst), stop_where=wh, fails=fails, static_fails=sfails, n_stop_ticks=len(sel), return_seg=dict(arm_move_rad=arm_move, v_max=float(spd.max()), w_max=float(dyaw.max()), t_state={k_: [round(v_[0], 2), round(v_[1], 2)] for k_, v_ in tst.items()}, yaw_end=float(rq[-1, 2]), pos_end=rq[-1, :2].tolist(), base_clear_disc_m=round(base_c, 4), t_nav=[x['t'] for x in rt][0], t_end=[x['t'] for x in rt][-1], L=ret['info']['L'], plans=[shared.info]),
                    switch_cont=dict(s_step_rad=ds_sw, q_step_max_rad=j_q, first_placed=None if 'first' not in placed else placed['first'][:3, 3].tolist(), second_placed=np.array(f.Tb)[:3, 3].tolist()), stop_why=out['stop'] if isinstance(out['stop'], list) else None)
         chk['全程淨空'] = not fails
+        Q2 = np.array([x['q'] for x in REC if x['round'] == 1])
+        out['round2_start'] = dict(sig_r=round(float(sig_r), 4), xy_r=[round(float(v), 4) for v in xy_r], q_start=Q2[0, :3].tolist(), err_to_path_mm=round(float(np.min(np.linalg.norm(pp0.xy(np.arange(pp0.sig0, pp0.x_lane, 0.005)) - Q2[0, :2], axis=1))) * 1e3, 2), events=[(round(e[0], 2), e[1]) for e in out['rounds'][1]['events'] if e[1] in ('online_obs_first', 'relwin_shift')], vhigh=[(round(e_['t'], 2), e_.get('ph'), round(e_.get('x', 0.0), 3)) for e_ in R[1]['events'] if e_['what'] == 'vhigh_seq'], plan=[{k_: g_.get(k_) for k_ in ('t_req', 't_acc', 'x_acc', 'x_latest')} for g_ in (R[1].get('online') or {}).get('grasp_plans', [])], t_u_minus_switch=None)
         chk['第二輪未拿到舊規劃'] = port.n_blocked >= 1 and [x['name'] for x in shared.info] == ['carry_far', 'return_far', 'carry_near']
         chk['檢查點落盤'] = ckpt.get('round0_done', {}).get('mission_done') is True and ckpt.get('switch', {}).get('round') == 0
         chk['靜態判準'] = not sfails
