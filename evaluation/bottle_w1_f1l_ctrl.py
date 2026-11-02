@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""F1 L 型走廊的承接限速（版本化子類，Codex 20261103_075357 核可的單一候選）：急彎前降速排程，不提高巡航速度、不放寬驗收。
+現行 curvature 限速是當下值，沒有前瞻，路徑有急彎時速度斜率來不及降到上限（lchan：a_lat 0.594 > 0.5，carry_ref_accel）。這裡只換限速函式：
+  上限 v(σ) ＝ min(v_carry, √(FRAC·a_lat／κ(σ)))，再由後往前限制減速度 ≤ A_LOOK（v(σ)² ≤ v(σ＋Δ)²＋2·A_LOOK·Δ）。
+驗收（ref_profile_check）與執行（speed_target）用同一個函式；驗收沿用當趟實際的承接進度、初速與在途模型；橫向加速度門檻仍是 0.5 m/s²，逐軸限制、淨空與停止規則不變。
+FRAC＝0.4 是看過這兩條路徑後選出的開發裕度，不是理論保證，也不是事前固定的獨立驗證；不再掃倍率。
+"""
+import math
+
+import numpy as np
+
+import bottle_place_ctrl as PC
+import bottle_s1_ctrl as S1
+import bottle_w1_f1_ctrl as F1C
+
+FRAC = 0.4
+A_LOOK = 0.5 * S1.A_SLEW                                # 0.2 m/s²：小於參考速度斜率，排程才跟得上
+
+
+def look_profile(cp, reg, v_carry, frac=FRAC, a_look=A_LOOK):
+    """回傳 (σ 格點, 限速)。κ 用與驗收相同的窗內最大曲率。"""
+    sig_k, km = PC.curvature_grid(cp, reg['kappa_win'])
+    v = np.minimum(float(v_carry), np.sqrt(float(frac) * float(reg['a_lat']) / np.maximum(km, 1e-9)))
+    ds = float(sig_k[1] - sig_k[0])
+    for i in range(len(v) - 2, -1, -1):
+        v[i] = min(v[i], math.sqrt(v[i + 1] ** 2 + 2.0 * float(a_look) * ds))
+    return sig_k, v
+
+
+class W1PlaceController(F1C.W1PlaceController):
+    group = 'G_F1L'
+
+    def _carry_vcap(self, cp, R):
+        sig_k, v = look_profile(cp, R, self.v_carry)
+        return lambda s_, sk=sig_k, vv=v: float(np.interp(s_, sk, vv, right=self.v_carry))   # noqa: E731
+
+    def report(self):
+        r = super().report()
+        r['f1l'] = dict(frac=FRAC, a_look=A_LOOK, note='急彎前降速排程；判準不變；0.4 是開發裕度')
+        return r

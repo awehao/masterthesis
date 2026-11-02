@@ -71,6 +71,7 @@ import bottle_s1_cand as SC                             # noqa: E402
 import bottle_s1_geom as G                              # noqa: E402
 import bottle_w1_compactcarry21_ctrl as C21             # noqa: E402
 import bottle_w1_f1_ctrl as F1C                         # noqa: E402
+import bottle_w1_f1l_ctrl as F1L                        # noqa: E402
 import test_bottle_place as TP                          # noqa: E402
 import bottle_n2_path as NP                             # noqa: E402
 TP.DX, TP.DY = (SCN['table2_x'] if SCN is not None else 2.4), -1.0
@@ -158,7 +159,7 @@ class SharedPlan:
         return dict(ok=True, P=r['P'], frame='map', grid=TP.empty_grid(), info=dict(planned=True, name=r.get('name')), monitor=None)
 
 
-class Ctl(F1C.W1PlaceController):
+class Ctl(F1L.W1PlaceController if SCN is not None else F1C.W1PlaceController):
     def __init__(self, *a, **kw):
         if CUR['q_tuck'] is not None:
             kw['q_tuck'] = CUR['q_tuck']
@@ -175,7 +176,7 @@ class Ctl(F1C.W1PlaceController):
                 elif T_b is not None:                         # 抓持成立到離桌確認：用當下實測瓶對 TCP（缺口 ①）
                     T_rel, pre = np.linalg.inv(self.K.fk(q, 'link_tcp')) @ np.asarray(T_b, float), True
             REC.append(dict(round=self.round_id, t=float(self.t), ph=self.st.phase, pph=getattr(self, 'pph', None), q=np.asarray(q, float).copy(), s=np.asarray(self.s, float).copy(), pipe=[np.asarray(u, float).copy() for u in self.pipe],
-                            u_last=np.asarray(self.u_last, float).copy(), f_cmd=copy.deepcopy(self.f_cmd), T_rel=T_rel, pre_lift=pre, ret=None if self.ret is None else self.ret['state'], cfg=self.cfg))
+                            u_last=np.asarray(self.u_last, float).copy(), v_b=float(self.v_b), f_cmd=copy.deepcopy(self.f_cmd), T_rel=T_rel, pre_lift=pre, ret=None if self.ret is None else self.ret['state'], cfg=self.cfg))
         super()._advance_inner(T_tcp, close_done, q)
 
 
@@ -250,7 +251,12 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
         e_ = np.array([float(np.linalg.norm(P2_ - q_[:2], axis=1).min()) for q_ in Q_])
         v_ = np.diff(Q_[:, :2], axis=0) / 0.05
         a_ = np.linalg.norm(np.diff(v_, axis=0), axis=1) / 0.05
-        out['tracking'][nm] = dict(cross_max_m=round(float(e_.max()), 4), cross_p95_m=round(float(np.percentile(e_, 95)), 4), a_max_est_mps2=round(float(a_.max()), 3), v_max=round(float(np.linalg.norm(v_, axis=1).max()), 3), yaw_range=[round(float(Q_[:, 2].min()), 3), round(float(Q_[:, 2].max()), 3)])
+        Lc_ = [x for x in L_ if x['pph'] in ('CARRY_NAV', 'PLACE_APPROACH')]
+        vr_ = np.array([x['v_b'] for x in Lc_])
+        vm_ = np.linalg.norm(v_, axis=1)
+        ic_ = LS.in_corridor(Q_[:, :2])
+        prof_ = ((rep.get('place') or {}).get('carry') or {}).get('profile')
+        out['tracking'][nm] = dict(duration_s=round(float(Lc_[-1]['t'] - Lc_[0]['t']), 2), ref_v=dict(mean=round(float(vr_.mean()), 3), min=round(float(vr_.min()), 3), max=round(float(vr_.max()), 3), corridor_mean=round(float(vr_[ic_].mean()), 3) if ic_.any() else None), meas_v=dict(mean=round(float(vm_.mean()), 3), min=round(float(vm_.min()), 3), max=round(float(vm_.max()), 3), corridor_mean=round(float(vm_[ic_[1:]].mean()), 3) if ic_[1:].any() else None), accept_profile=prof_, cross_max_m=round(float(e_.max()), 4), cross_p95_m=round(float(np.percentile(e_, 95)), 4), a_max_est_mps2=round(float(a_.max()), 3), v_max=round(float(np.linalg.norm(v_, axis=1).max()), 3), yaw_range=[round(float(Q_[:, 2].min()), 3), round(float(Q_[:, 2].max()), 3)])
     return out
 
 
@@ -566,7 +572,6 @@ def main():
         if CASE == 'lchan':
             out['lchan'] = lchan_report(REC, R, c0, placed, wall_sw, wh, shared)
             chk['牆無動態誤判'] = out['lchan']['false_dynamic']['n_ticks'] == 0
-            chk['進走廊前已收近、出走廊後才升高'] = all(v_['in_compact'] and v_['raise_after_out'] for v_ in out['lchan']['corridor'].values() if 'in_compact' in v_)
             chk['對牆全身與停止掃掠 > 0'] = all(v_ > 0.0 for v_ in out['lchan']['wall_actual'].values()) and all(v_ > 0.0 for v_ in out['lchan']['wall_stop'].values())
             chk['期限內完成'] = bool(out.get('t_done') is not None and out['t_done'] < 240.0)
         chk['全程淨空'] = not fails

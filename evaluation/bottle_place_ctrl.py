@@ -244,6 +244,11 @@ def tilt_deg(T_b):
 
 
 class PlaceController(N2C.S1Planned):
+    def _carry_vcap(self, cp, R):
+        """承接路徑限速：驗收與執行用回傳的同一個函式（版本化子類可換）。預設：當下曲率處橫向加速度 ≤ a_lat。"""
+        sig_k, km = curvature_grid(cp, R['kappa_win'])
+        return lambda s_, sk=sig_k, kk=km: min(self.v_carry, math.sqrt(R['a_lat'] / max(float(np.interp(s_, sk, kk, right=0.0)), 1e-9)))   # noqa: E731  局部降速
+
     def __init__(self, *a, place=None, carry_planner=None, reg=None, **kw):
         super().__init__(*a, **kw)
         self.place, self.preg = dict(PLACE, **(place or {})), dict(REG, **(reg or {}))
@@ -349,8 +354,7 @@ class PlaceController(N2C.S1Planned):
             if dv > R['v_ref_jump']:
                 self._pstop('carry_ref_discontinuous', dv=dv)
                 return
-            sig_k, km = curvature_grid(cp, R['kappa_win'])
-            vcap = lambda s_, sk=sig_k, kk=km: min(self.v_carry, math.sqrt(R['a_lat'] / max(float(np.interp(s_, sk, kk, right=0.0)), 1e-9)))   # noqa: E731  局部降速：曲率處橫向加速度 ≤ a_lat
+            vcap = self._carry_vcap(cp, R)
             ok, prof = ref_profile_check(cp, s_new, self.v_b, float(self.park[0]), vcap, self.v_carry, R)
             if not ok:
                 self._pstop('carry_ref_accel', **prof)
