@@ -9,6 +9,7 @@
   chain    a_max＝A_CONTACT，上一命令＝前一拍 chain 解（構型與參考仍用紀錄值；串接近似，不是閉迴路）。
 報：底盤命令、相鄰控制拍逐軸變化率、狀態、slack eps0、動態障礙 h（k＝0）、無 slack 殘差、輸出處置（accept_action）。
     python3 evaluation/bottle_c2_contact_resolve.py
+註（Codex 20261102_213316）：本工具命令先取四位才算重現差與串接，5e-5 是四捨五入造成的（全精度 1e-11）；串接不更新構型。後續核對改用 bottle_c2_contact_tube_check.py，本工具與舊結果原樣保留。
 """
 import dataclasses
 import json

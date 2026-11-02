@@ -1625,6 +1625,8 @@ class GMPC:
             Pzz = np.zeros((nz + n_arm, nz + n_arm))
             qz = np.zeros(nz + n_arm)
             rel_base = bool(arm.get('tcp_rel_base'))      # True：T_seq 是底盤座標目標，TCP 任務與底盤解耦（持瓶相對底盤）；世界座標代價會讓 QP 以為動底盤能消除誤差
+            ct = arm.get('contact_tube')                  # （候選，預設 None）{'e': 逐軸界 m, 'n': 前幾個未來控制步}：TCP 世界位置偏差硬列，只在世界座標模式；k＝0 是 u_0 作用後的第一個未來步，目前狀態不受此列約束
+            ct_L, ct_r = [], []
             for k in range(N):
                 xb = np.zeros(3) if rel_base else _pose_from_err(X_ref_win[k + 1], e_nom[k])
                 qa = Mq[k] @ U0 + cq[k]
@@ -1638,6 +1640,9 @@ class GMPC:
                     L[:, :Nm] = J[:, :3] @ Bk @ Gamma[k * n:(k + 1) * n, :]
                 L[:, nz:] = J[:, 3:] @ Mq[k]
                 r0 = ek + L[:, nz:] @ U0                                  # e_k ≈ r0 − L·z
+                if ct is not None and not rel_base and k < int(ct['n']):  # 與 TCP 代價同一線性化，只取位置三列
+                    ct_L.append(L[:3].copy())
+                    ct_r.append(r0[:3].copy())
                 Pzz += 2.0 * L.T @ Wt @ L
                 qz += -2.0 * L.T @ Wt @ r0
             va = float(arm['v_arm'])
@@ -1667,6 +1672,12 @@ class GMPC:
             lb_total = np.concatenate([lb_total, np.concatenate(rows_l)])
             ub_total = np.concatenate([ub_total, np.concatenate(rows_u)])
             arm_info = dict(nz=nz, A=A_arm, l=np.concatenate(rows_l), u=np.concatenate(rows_u), Mq=Mq, cq=cq, U0=U0)
+            if ct_L:                                            # 接觸管道：r0 − e ≤ L·z ≤ r0 + e（等同 |e_k 位置逐軸| ≤ e，立方管道；不加鬆弛）
+                Act, rct = np.vstack(ct_L), np.concatenate(ct_r)
+                A_total = sparse.vstack([A_total, sparse.csc_matrix(Act)], format='csc')
+                lb_total = np.concatenate([lb_total, rct - float(ct['e'])])
+                ub_total = np.concatenate([ub_total, rct + float(ct['e'])])
+                arm_info['ct'] = (Act, rct, float(ct['e']))
             bo = arm.get('body_obst')
             if bo:                                              # 三維障礙：TCP 剛連點（夾爪、持瓶）的預測距離約束，底盤與手臂都在列內，耦合問題自己分配誰讓路
                 r_ob, l_ob, planes, by_body, row_body = [], [], [], {}, []
@@ -1810,8 +1821,16 @@ class GMPC:
                     for b_, g_ in zip(arm_info['row_body'], r_ob_):
                         if g_ <= 1e-6:
                             arm_info['bind'][b_] = arm_info['bind'].get(b_, 0) + 1
+                ct_info = None
+                if 'ct' in arm_info:                  # 接觸管道列也進回傳核對：違反走既有退回路徑
+                    Act, rct, ec_ = arm_info['ct']
+                    e_lin = rct - Act @ np.asarray(res.x)[:arm_info['nz'] + n_arm]
+                    viol = max(viol, float(np.max(np.abs(e_lin))) - ec_)
+                    ct_info = dict(rows=int(len(rct)), bind=int(np.sum(np.abs(e_lin) >= ec_ - 1e-6)), e_lin=e_lin.tolist())
                 u_arm_seq = ua.reshape(N, ARM_N)
                 arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info, ob_rows=int(len(arm_info['ob'][1])) if 'ob' in arm_info else 0, ob_planes=arm_info.get('planes'), ob_by_body=arm_info.get('by_body'), ob_bind=arm_info.get('bind'))
+                if ct_info is not None:
+                    arm_check['ct'] = ct_info
             else:
                 u_arm_seq = np.zeros((N, ARM_N))
                 arm_check = dict(max_violation=float('nan'), finite=False, rows=int(arm_rows), qp=qp_info, note='底盤煞停路徑：手臂命令歸零（未求得序列）')
