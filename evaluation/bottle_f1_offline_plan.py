@@ -19,13 +19,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mp
 DOMAIN = os.environ.get('CHECK_DOMAIN', '79')
 GEOM, KEYS, OUT = (('f1_geom_rev.json', ('r1', 'r2'), 'f1_offline_plan_rev.json') if os.environ.get('F1_ORDER') == 'rev' else ('f1_geom.json', ('c1', 'c2'), 'f1_offline_plan.json'))   # F1_ORDER=rev：對調抓取順序（r1 遠端、r2 近端）
 OUT = os.path.join(HERE, 'results', 'bottle', OUT.replace('.json', '_box.json') if os.environ.get('F1_BOX') == '1' else OUT)
+WALLS = os.environ.get('F1_WALLS', '')                  # 場景 JSON：牆體進地圖；輸出檔名另加 _lchan
+if WALLS:
+    OUT = OUT.replace('.json', '_lchan.json')
 START = [-3.6, 0.0]
+DX = float(os.environ.get('F1_T2_DX', '0'))              # 只供設計比較：第二桌與放置點整體東移（公尺）；輸出檔名另加 _dx
+if DX:
+    OUT = OUT.replace('.json', f'_dx{DX:g}.json')
 
 
 def main():
     tmp = os.environ.get('CHECK_TMP', '/tmp')
     mp = os.path.join(tmp, 'f1_map')
-    subprocess.run([sys.executable, os.path.join(HERE, 'bottle_map_write.py'), mp, '--table2', '2.4,-1.0'] + (['--wall-box=-2.0,0.0,0.25,0.4,0.4,0.5'] if os.environ.get('F1_BOX') == '1' else []), check=True)   # F1_BOX：原障礙方塊進地圖（實跑靠掃描進代價圖，離線沒有掃描）
+    subprocess.run([sys.executable, os.path.join(HERE, 'bottle_map_write.py'), mp, '--table2', f'{2.4 + DX},-1.0'] + (['--wall-box=-2.0,0.0,0.25,0.4,0.4,0.5'] if os.environ.get('F1_BOX') == '1' else []) + (['--walls-file', WALLS] if WALLS else []), check=True)   # F1_BOX：原障礙方塊進地圖（實跑靠掃描進代價圖，離線沒有掃描）
     os.environ['ROS_DOMAIN_ID'] = DOMAIN
     env = dict(os.environ, ROS_DOMAIN_ID=DOMAIN)
     y = open(os.path.join(HERE, 'bottle_n2_planner.yaml')).read().replace('use_sim_time: true', 'use_sim_time: false')
@@ -71,8 +77,8 @@ def main():
         reqs = {}
         for nm, k in zip(('far', 'near'), KEYS):
             cr = G1[k]['carry_req']
-            reqs['carry_' + nm] = (list(cr['start']), list(cr['goal']))
-            pk = G1[k]['park']
+            reqs['carry_' + nm] = (list(cr['start']), [cr['goal'][0] + DX, cr['goal'][1]])
+            pk = [G1[k]['park'][0] + DX, G1[k]['park'][1]]
             reqs['return_' + nm] = ([float(pk[0]), float(pk[1]), 0.0], START)
             if nm == 'far':                                    # 短返回：終點＝接近路徑（bottle_online5_u3_1 實跑規劃）上 x＝RESTART_X 的投影點
                 J_ = np.array(json.load(open(os.path.join(HERE, 'runs', 'bottle_online5_u3_1', 's1_report.json')))['plan']['joined'], float)
