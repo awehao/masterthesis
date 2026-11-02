@@ -2,7 +2,7 @@
  "schema": 1,
  "status": "待 Codex 核可；未核可前不起跑",
  "task": "F1 兩瓶連續任務完整一趟（遠瓶先抓；無移動物）",
- "git_head_before_freeze_commit": "a021dc0e3a21002b33021157d92785a1f9f5285d",
+ "git_head_before_freeze_commit": "dc6ba7a19295af660af921e3be1d1f513772c7cb",
  "run": {
   "RUN_ID": "bottle_f1_1",
   "S1_ARGS": "--dyn-case none --bottle-dx 0.15 --bottle2=-0.15,0.42 --sim-s 200",
@@ -80,16 +80,19 @@
   "margin": 0.95
  },
  "offline": {
-  "task": "results/bottle/f1_task_check.json（六案全過）",
+  "task": "results/bottle/f1_task_check.json（九案全過）",
+  "contact": "test_bottle_f1_contact 全過",
+  "link": "test_bottle_f1_link 全過",
+  "select": "test_bottle_f1_select 全過",
   "select_replay": "results/bottle/f1_select_replay.json",
   "capture": "bottle_f1cap_2"
  },
  "scoring": "兩輪流程完成與兩輪原抓持品質分列；第一輪真正中止或放置未完成不進第二輪；僅平移滑移警告可進第二輪且保留品質紀錄",
  "failure_policy": "無候選、歧義、未及時承接、安全停止都保留結果；任務失敗不補跑、不臨場改視角或門檻；不放寬判準",
  "sha256": {
-  "evaluation/isaac_bottle_w1dynsr36.py": "b08e5f79d52af2aa14a0465515d751e6cc52dac9c6ccdc6f0ca6e8b9334d5a01",
-  "evaluation/bottle_w1_f1_ctrl.py": "cb55d4c2fc1a19e59a31a425fb84dbd2370a229e7060424b8ed9758d4e86861a",
-  "evaluation/bottle_f1_task.py": "7af39ec45cda4cce31e74585aff5927e95b554afed9bd50f2a7120353fb477ac",
+  "evaluation/isaac_bottle_w1dynsr36.py": "c96b9515b8b314c509e775f355b70917593f12e0217ed9c233ec76cfd21cb532",
+  "evaluation/bottle_w1_f1_ctrl.py": "daf28f61a37385a109a431d7eb50cb66882cafb9694236bd08f0a9ceb9acf417",
+  "evaluation/bottle_f1_task.py": "331490a0841563f444d2c27af21b85e9775738744f05ee9ab31a9ba081f7c9f4",
   "evaluation/bottle_seg3d_f1_node.py": "a7885fe21547180a77e0f60e4c0a61f563b394e2d946519e40254df121249a4e",
   "evaluation/bottle_seg3d_candidates_f1_node.py": "32ae927bd6ea7d7269a8318c59357a33799e71e32a8fee0c71ba68fb0ba1e718",
   "evaluation/bottle_seg3d_node.py": "cb3856406efe6bbb29f5fc5a657081052fa92c434405a084a269010fc242bbee",
@@ -103,6 +106,18 @@
   "evaluation/run_bottle_ros.sh": "42c0ec48d5a736090a7b1a234f554c510c8b601be907fa42b3e8c608fe7bfc83",
   "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
   "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py": "0206430a5275c4355e71e6d62bfe9a87a5dde10c4f783d999d623f1bfeaf735a",
-  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962"
- }
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962",
+  "evaluation/bottle_f1_contact.py": "1053f973d615f1fc8f5ffe4b02e8bade86922c6c06796988bc527952a77b3da0"
+ },
+ "changes_since_candidate": {
+  "files": [
+   "evaluation/isaac_bottle_w1dynsr36.py",
+   "evaluation/bottle_w1_f1_ctrl.py",
+   "evaluation/bottle_f1_task.py",
+   "evaluation/bottle_f1_contact.py"
+  ],
+  "ruling": "reviews/20261103_021114_reply.md",
+  "what": "實測靜止、F1 整體總期限、接觸映射純函式與動作前支撐核對、grip_ok 三態"
+ },
+ "launch_policy": "尚未開始任務動作且確定是解析、初始化或接線失敗：保留紀錄，允許一次修復後以新 RUN_ID 重起，重新凍結有變更的檔案。任務動作已開始（含接近）：後續一律算該趟未完成，不補跑"
 }
