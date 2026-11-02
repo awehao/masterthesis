@@ -120,6 +120,7 @@ class W1PlaceController(CG.W1PlaceController):
             R['rp'], R['info'] = rp, dict(L=round(rp.L, 3), n=len(rp.P), wall_ms=(res.get('info') or {}).get('wall_ms'))
             self.cpath, self.csig = rp, 0.0
             self.cmon = res['monitor'](rp) if res.get('monitor') else None
+            self.carry_planner.invalidate()                    # 返回路徑已取用：結果不再交付給任何人（第二輪持瓶前不能看到它）
             self.s_ref, self.v_b = 0.0, 0.0
             self._ret_set('NAV', L=round(rp.L, 3))
         elif R['state'] == 'NAV':

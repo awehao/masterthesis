@@ -24,10 +24,55 @@ def grip_state(r):
     return bool(d <= SLIP_MM and a <= SLIP_DEG)
 
 
+class PlanPort:
+    """兩輪共用規劃接口的輪次與用途界線（Codex 20261103 裁定；bottle_f1_1 的 KeyError 根因：第二輪拿到返回段的舊結果）。
+    結果只交給「目前實例、目前用途（持瓶 carry／返回 return）」送出的請求；還沒送出本輪請求就是 None。持瓶請求要 carry_req 已備妥（有 start），否則失效關閉。
+    bind／invalidate 解除舊綁定，舊結果與晚到回覆都到不了新實例；請求序號只增不歸零。"""
+
+    def __init__(self, inner):
+        self.inner, self.owner, self.tag, self.n_blocked = inner, None, None, 0
+
+    def _purpose(self):
+        return 'return' if self.owner.ret is not None else 'carry'
+
+    def bind(self, owner):
+        self.invalidate()
+        self.owner = owner
+
+    def invalidate(self):
+        self.tag = None
+        self.inner.invalidate()
+
+    def request(self, start, goal, t):
+        self.tag = (self.owner.round_id, self._purpose())
+        self.inner.request(start, goal, t)
+
+    def tick(self):
+        self.inner.tick()
+
+    def poll(self):
+        if self.tag is None or self.tag != (self.owner.round_id, self._purpose()):
+            self.n_blocked += 1
+            return None
+        if self.tag[1] == 'carry' and 'start' not in (self.owner.carry_req or {}):
+            self.n_blocked += 1
+            return None
+        return self.inner.poll()
+
+
 class F1Task:
-    def __init__(self, ctrl0, return_goal, make_round, on_switch=None):
+    def __init__(self, ctrl0, return_goal, make_round, on_switch=None, on_checkpoint=None):
         object.__setattr__(self, 'c', ctrl0)
-        self.__dict__.update(stage=0, reports=[], outcome=None, return_goal=return_goal, make_round=make_round, on_switch=on_switch, t_switch=None, switch_info=None, t_done0=None, prev=None)
+        self.__dict__.update(stage=0, reports=[], outcome=None, return_goal=return_goal, make_round=make_round, on_switch=on_switch, on_checkpoint=on_checkpoint, ckpt_errors=[], t_switch=None, switch_info=None, t_done0=None, prev=None)
+
+    def _ckpt(self, kind, r):
+        """耐久檢查點：第一輪完成與切換時就落盤，不等全任務結束。寫失敗只記錄，不影響任務。"""
+        if self.on_checkpoint is None:
+            return
+        try:
+            self.on_checkpoint(kind, r)
+        except Exception as e:                                # noqa: BLE001
+            self.ckpt_errors.append(dict(kind=kind, type=type(e).__name__, msg=str(e)))
 
     def __getattr__(self, k):
         return getattr(self.__dict__['c'], k)
@@ -51,6 +96,7 @@ class F1Task:
                 self.reports.append(c.report())
             elif c.mission_done and c.ret is None:
                 self.t_done0 = float(t)
+                self._ckpt('round0_done', c.report())
                 c.start_return(self.return_goal, t)
             elif c.ret is not None:
                 ok, _ = c.switch_ready()
@@ -76,6 +122,7 @@ class F1Task:
         c = self.c
         s_now, d = np.asarray(c.s, float).copy(), np.asarray(c.d_settle, float).copy()
         self.reports.append(c.report())
+        self._ckpt('switch', self.reports[-1])
         c.close()
         n = self.make_round(1, s_now, d, float(t))
         self.__dict__['c'] = n
@@ -88,7 +135,7 @@ class F1Task:
     def report(self):
         if self.outcome is None:
             self.reports.append(self.c.report())
-        return dict(outcome=self.outcome, stage=self.stage, t_switch=self.t_switch, t_done0=self.t_done0, switch=self.switch_info, rounds=self.reports,
+        return dict(outcome=self.outcome, stage=self.stage, t_switch=self.t_switch, t_done0=self.t_done0, switch=self.switch_info, rounds=self.reports, ckpt_errors=self.ckpt_errors,
                     grip_ok=[grip_state(r) for r in self.reports])
 
     def close(self):

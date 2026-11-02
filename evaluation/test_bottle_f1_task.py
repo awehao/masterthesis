@@ -11,6 +11,10 @@
   moving    命令與管線皆零、校正中量測仍在動（0.5 s）⇒ 累計清空重來，未切換；之後靜止才切換，d̂ 不被污染。
   movingall 命令與管線皆零但量測一直在動 ⇒ return_settle_timeout，不切換。
   deadline0 第一輪完成、返回未完成時到達總期限 ⇒ 受控停止並走尾段，不等迴圈次數用完。
+  defect    兩輪共用規劃接口、沒有 PlanPort（bottle_f1_1 的實際情況）⇒ 重現 KeyError: 'start'。只用來確認假世界抓得到原缺陷。
+  planlate  切換後才到的舊回覆（舊序號）⇒ 不交付；第二輪照常用自己的請求完成。
+  crash     第二輪持瓶段注入例外 ⇒ 先存 crash.json 與 ctx，獨立停止實測靜止，再存逐步資料與報告；另核存檔失敗不掩蓋原例外、停止未驗證照實報。
+規劃接口與 Isaac 相同：兩輪共用同一個 SharedPlan（舊結果會留著、請求序號只增），外面包 PlanPort。
     python3 evaluation/test_bottle_f1_task.py all
 """
 import copy
@@ -23,7 +27,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'results', 'bottle', 'f1_task_check.json')
-CASES = ('nominal', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0')
+CASES = ('nominal', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
 if len(sys.argv) < 2 or sys.argv[1] == 'all':
     from concurrent.futures import ThreadPoolExecutor
 
@@ -48,6 +52,7 @@ import test_bottle_s0b as S0B                           # noqa: E402
 S0B.BX, S0B.BY = ROUNDS[0]['b']
 import test_bottle_w1_segtarget_vhigh as TV             # noqa: E402
 import bottle_branch as BB                              # noqa: E402
+import bottle_f1_crash as FX                            # noqa: E402
 import bottle_f1_task as FT                             # noqa: E402
 import bottle_nav_chain as NC                           # noqa: E402
 import bottle_s1_cand as SC                             # noqa: E402
@@ -90,32 +95,48 @@ def split(W_):
     return np.vstack([v for k, v in W_.items() if k not in G.C.FINGERS]), np.vstack([v for k, v in W_.items() if k in G.C.FINGERS])
 
 
-class PlanSeq(TP.FakePlanner):
-    """離線 Smac 路徑依請求順序取用；只換首末點對齊當趟實際起點與目標。"""
+class SharedPlan:
+    """離線 Smac 路徑依請求順序取用；介面與語意同 RosCarryPlanner＋PlanRos：結果留著直到下一次請求，序號只增；poll 比對序號。只換首末點對齊當趟實際起點與目標。"""
 
     def __init__(self, names):
-        super().__init__()
-        self.names, self.i, self.cur, self.info = list(names), 0, None, []
+        self.names, self.i, self.info = list(names), 0, []
+        self.id, self.result, self.req_id, self.pending = None, None, 0, None
 
     def request(self, start, goal, t):
-        super().request(start, goal, t)
-        self.cur = self.names[self.i]
+        self.result = None
+        self.req_id += 1
+        self.id = self.req_id
+        self.pending = (self.req_id, self.names[self.i], np.array(start[:2], float), np.array(goal, float))
         self.i += 1
 
+    def invalidate(self):
+        self.id, self.result = None, None
+        self.req_id += 1
+
+    def tick(self):
+        pass
+
+    def inject_late(self, rid):
+        """舊請求的回覆晚到（PlanRos 的 stale 判定之前就寫進 result 的最壞情形）。"""
+        self.result = dict(id=rid, ok=True, P=np.array(PLANS['return_far']['P_region'], float), frame='map')
+
     def poll(self):
-        res = super().poll()
-        if res is None or not res.get('ok'):
-            return res
-        a, b, _ = self.req
-        P0 = np.array(PLANS[self.cur]['P_region'], float)
-        d0, d1 = float(np.linalg.norm(P0[0] - a)), float(np.linalg.norm(P0[-1] - b))
-        if max(d0, d1) > 0.07:
-            raise SystemExit(f'{self.cur} 離線路徑首末點差太大 {d0:.3f}／{d1:.3f} m ⇒ 拒跑')
-        P = P0.copy()
-        P[0], P[-1] = a, b
-        self.info.append(dict(name=self.cur, d_start=round(d0, 4), d_goal=round(d1, 4), L=PLANS[self.cur]['length_m']))
-        res.update(P=P, info=dict(planned=True, name=self.cur))
-        return res
+        if self.pending is not None:
+            rid, nm, a, b = self.pending
+            self.pending = None
+            if rid == self.req_id:
+                P0 = np.array(PLANS[nm]['P_region'], float)
+                d0, d1 = float(np.linalg.norm(P0[0] - a)), float(np.linalg.norm(P0[-1] - b))
+                if max(d0, d1) > 0.07:
+                    raise SystemExit(f'{nm} 離線路徑首末點差太大 {d0:.3f}／{d1:.3f} m ⇒ 拒跑')
+                P = P0.copy()
+                P[0], P[-1] = a, b
+                self.info.append(dict(name=nm, d_start=round(d0, 4), d_goal=round(d1, 4), L=PLANS[nm]['length_m']))
+                self.result = dict(id=rid, ok=True, P=P, frame='map', name=nm)
+        r = self.result
+        if self.id is None or r is None or r.get('id') != self.id:
+            return None
+        return dict(ok=True, P=r['P'], frame='map', grid=TP.empty_grid(), info=dict(planned=True, name=r.get('name')), monitor=None)
 
 
 class Ctl(F1C.W1PlaceController):
@@ -150,11 +171,44 @@ def build_ctrl():
         W.W1.W1PlaceController, SC.make_lidar = orig, orig_ml
 
 
+def run_crash(e, task, f):
+    """與 Isaac 相同的收尾順序；另核存檔失敗與停止未驗證。"""
+    import tempfile
+    d = tempfile.mkdtemp(prefix='f1crash_')
+    c = FX.record(d, e, dict(t=float(f.t), stage=task.stage, phase=task.st.phase, pph=task.pph))
+    first = json.load(open(os.path.join(d, 'crash.json')))
+    u0 = np.asarray(f.hist[-1]['u'], float)
+    s_hold = np.asarray(f.hist[-1]['s'], float)
+
+    def step_fn(u):
+        c_, s_ = np.cos(f.q[2]), np.sin(f.q[2])
+        f.q[:3] += 0.01 * np.array([c_ * u[0] - s_ * u[1], s_ * u[0] + c_ * u[1], u[2]])
+        f.q[3:] = f.q[3:] + f.alpha * (s_hold - f.q[3:] + W.T.D_TRUE)
+    c['stop'] = FX.independent_stop(step_fn, lambda: f.q.copy(), u0, F1C.B.A_BASE, 0.01)
+    FX.guarded(c, 'report', lambda: FX.atomic_json(os.path.join(d, 's1_report_crash.json'), task.c.report()))
+    FX.guarded(c, 'steps', lambda: np.savez_compressed(os.path.join(d, 's1_steps.npz'), rows=np.array([h['q'] for h in f.hist], float)))
+    FX.guarded(c, 'boom', lambda: (_ for _ in ()).throw(OSError('注入存檔失敗')))
+    FX.atomic_json(os.path.join(d, 'crash.json'), c)
+    final = json.load(open(os.path.join(d, 'crash.json')))
+    moving = FX.independent_stop(lambda u: f.q.__setitem__(0, f.q[0] + 0.001), lambda: f.q.copy(), np.zeros(3), F1C.B.A_BASE, 0.01, t_tail=0.2)   # 一直在動 ⇒ ok False
+    noq = FX.independent_stop(lambda u: None, lambda: np.full(9, np.nan), np.zeros(3), F1C.B.A_BASE, 0.01, t_tail=0.2)                          # 量不到 ⇒ None
+    chk = {'例外先落盤且含時刻輪次相位': first['type'] == 'RuntimeError' and first['stage'] == 1 and first['phase'] == 'CARRY' and first['pph'] == 'CARRY_NAV' and first['stop'] is None,
+           '獨立停止實測靜止': final['stop']['ok'] is True, '報告與逐步資料寫出': os.path.exists(os.path.join(d, 's1_report_crash.json')) and os.path.exists(os.path.join(d, 's1_steps.npz')),
+           '存檔失敗不掩蓋原例外': final['type'] == 'RuntimeError' and final['save_errors'][0]['step'] == 'boom', '仍在動不算停止有效': moving['ok'] is False, '量不到是未驗證': noq['ok'] is None}
+    return dict(case=CASE, **{'pass': all(chk.values())}, outcome='crash', stop=final['stop'], t_done=None, checks=chk, grip_ok=None, t=final['t'])
+
+
 def main():
     c0, f = build_ctrl()
     c0.path = NP.PlannedPath(J_RUN, -0.9)
     c0.s_ref = c0.sig_robot = c0.path.sig0
-    c0.carry_planner = PlanSeq(['carry_far', 'return_far'])
+    shared = SharedPlan(['carry_far', 'return_far', 'carry_near'])
+    port = shared if CASE == 'defect' else FT.PlanPort(shared)
+    if CASE == 'defect':
+        shared.invalidate_real, shared.invalidate = shared.invalidate, (lambda: None)     # 重現 bottle_f1_1：切換與取用後都不清
+    else:
+        port.bind(c0)
+    c0.carry_planner = port
     f.q[0], f.q[1] = J_RUN[0][0], J_RUN[0][1]
     placed = {}
 
@@ -163,17 +217,20 @@ def main():
         c, _ = build_ctrl()
         c.path = NP.PlannedPath(J_RUN, -0.9)
         c.s_ref = c.sig_robot = c.path.project(f.q[:2], c.path.sig0)
-        c.carry_planner = PlanSeq(['carry_near'])
+        c.carry_planner = port
+        if CASE != 'defect':
+            port.bind(c)
         c.obs.d = np.clip(d, -c.obs.max, c.obs.max)
         c.cfg.arm_model.bias = c.bias0 + np.asarray(c.cfg.arm_model.alpha, float) * c.obs.d
         placed['first'] = np.array(f.Tb, float).copy()
         S0B.BX, S0B.BY = ROUNDS[i]['b']
         f.Tb, f.grasped, f.released, f.Trel = S0B.bottle_T(), False, False, None
         return c
-    task = FT.F1Task(c0, J_RUN[0].tolist(), make_round)
+    ckpt = {}
+    task = FT.F1Task(c0, J_RUN[0].tolist(), make_round, on_checkpoint=lambda kind, r_: ckpt.update({kind: json.loads(json.dumps(dict(mission_done=r_.get('mission_done'), round=r_['f1']['round']), default=float))}))
     f.c = task
     rng = np.random.default_rng(0)
-    st = dict(next_t=0.0, seq=0, t_seq=-99.0, snap=None, wall0=None, stale_done=False, inj=False, guard=None)
+    st = dict(next_t=0.0, seq=0, t_seq=-99.0, snap=None, wall0=None, stale_done=False, inj=False, guard=None, late_done=False)
     import time as _time
 
     def cand(c, t, xy, seq, t_last):
@@ -189,6 +246,13 @@ def main():
             st['wall0'] = _time.time() - t / RTF_CAP
         c = task.c
         ov = {}
+        if CASE == 'planlate' and task.stage == 1 and not st['late_done']:      # 切換後第一拍：舊回覆才到
+            st['late_done'] = True
+            shared.inject_late(shared.req_id - 1)
+            st['late_poll'] = port.poll()
+            st['late_poll_inner'] = shared.poll()
+        if CASE == 'crash' and task.stage == 1 and c.pph == 'CARRY_NAV':
+            raise RuntimeError('注入例外：第二輪持瓶段')
         if task.stage == 1 and CASE == 'stale' and not st['stale_done'] and t >= task.t_switch + 2.0:     # 第一輪的候選與完成通知這時才到
             st['stale_done'] = True
             cand(c, t, ROUNDS[0]['b'], 999, task.t_switch - 1.0)
@@ -237,7 +301,21 @@ def main():
                 f_.q[0] += 0.0005                             # 0.05 m/s（高於 park_v）
         task.check_deadline(t, 60.0 if CASE == 'deadline0' else 170.0)
         return ov
-    f.run(175.0, fault, tail=2.6)
+    crash = None
+    try:
+        f.run(175.0, fault, tail=2.6)
+    except KeyError as e:
+        if CASE != 'defect':
+            raise
+        print(json.dumps(dict(case=CASE, **{'pass': str(e) == "'start'" and task.stage == 1}, outcome='重現原缺陷', stop=None, t_done=None, checks={'重現 KeyError start': str(e) == "'start'", '發生在第二輪持瓶段': task.stage == 1}, t=float(f.t), phase=task.st.phase, grip_ok=None), ensure_ascii=False, default=float))
+        return 0
+    except RuntimeError as e:
+        if CASE != 'crash':
+            raise
+        crash = run_crash(e, task, f)
+    if crash is not None:
+        print(json.dumps(crash, ensure_ascii=False, default=float))
+        return 0
     r = task.report()
     R = r['rounds']
     chk = {}
@@ -319,6 +397,8 @@ def main():
         out.update(actual=act, stop=dict(other=sw, static=sst), stop_where=wh, fails=fails, static_fails=sfails, n_stop_ticks=len(sel), return_seg=dict(arm_move_rad=arm_move, v_max=float(spd.max()), base_clear_disc_m=round(base_c, 4), t_nav=[x['t'] for x in rt][0], t_end=[x['t'] for x in rt][-1], L=ret['info']['L'], plans=[c0.carry_planner.info]),
                    switch_cont=dict(s_step_rad=ds_sw, q_step_max_rad=j_q, first_placed=None if 'first' not in placed else placed['first'][:3, 3].tolist(), second_placed=np.array(f.Tb)[:3, 3].tolist()), stop_why=out['stop'] if isinstance(out['stop'], list) else None)
         chk['全程淨空'] = not fails
+        chk['第二輪未拿到舊規劃'] = port.n_blocked >= 1 and [x['name'] for x in shared.info] == ['carry_far', 'return_far', 'carry_near']
+        chk['檢查點落盤'] = ckpt.get('round0_done', {}).get('mission_done') is True and ckpt.get('switch', {}).get('round') == 0
         chk['靜態判準'] = not sfails
         chk['兩輪完成'] = r['outcome'] == 'complete'
         chk['返回段手臂未動'] = arm_move < 0.002
@@ -339,6 +419,9 @@ def main():
         chk['品質紀錄保留'] = r['grip_ok'][0] is False
     elif CASE == 'badsettle':
         chk['校正無效不切換'] = r['outcome'] == 'round0_aborted' and r['t_switch'] is None and 'return_settle_invalid' in str(out['stop'])
+    elif CASE == 'planlate':
+        chk['舊回覆不交付'] = st.get('late_poll') is None and st.get('late_poll_inner') is None
+        chk['第二輪照常完成'] = r['outcome'] == 'complete'
     elif CASE == 'moving':
         ret0 = R[0]['f1']['ret']
         d_ = (r['switch'] or {}).get('d') or [float('nan')] * 6

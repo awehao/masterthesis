@@ -221,6 +221,7 @@ import bottle_ros_chain as RC                                        # noqa: E40
 NC, C2, GR, N2C, PCm, V1C, V2, W1C, W1 = RC.import_with_real_ros('bottle_nav_chain', 'bottle_s1_ctrl', 'bottle_s1_groups', 'bottle_n2_ctrl', 'bottle_place_ctrl', 'bottle_v1_cam', 'bottle_v2_ctrl', 'bottle_w1_cam', 'bottle_w1_ctrl')
 W1G, W1N = RC.import_with_real_ros('bottle_w1_f1_ctrl', 'bottle_w1_nopred_ctrl')   # 運送進度協調（gaze＋持守點）   # 在線視向候選（online5＋q1 視向）   # 在線第五版（online3＋格心換算接口）   # 在線第三版（提前安全轉回）   # 在線第二版（來源擷取戳新鮮度）   # 區域導引在線 MotM   # 多任務 v3：跨桌高轉回   # 多任務 v2w：平移滑移警告   # 多任務 v2：量測目標相對排程   # 完整組換成 V_HIGH 接近序列   # 完整組換成第一拍 Shield 一致列候選
 import bottle_f1_contact as FC                                        # noqa: E402
+import bottle_f1_crash as FX                                          # noqa: E402
 import bottle_f1_task as FT                                           # noqa: E402
 import bottle_w1_dyn_case as DC                                       # noqa: E402
 import bottle_dyn_case_region as DCR                                  # noqa: E402
@@ -685,7 +686,9 @@ def main():
     mprog = MPG.MonitorProgress(pp, C2.B.Y_TUBE)                              # 導航段監看的獨立進度（不影響控制參考）
     t_now = [0.0]
     cpl = PRS.RosCarryPlanner(pr, lambda: T0 + t_now[0], lambda: ctrl.csig)
-    ctrl.carry_planner, ctrl.exit_c, ctrl.bottle_mass = cpl, np.array([99.0, 99.0]), float(readback['bottle_mass'])
+    port = FT.PlanPort(cpl)                                                   # 兩輪共用規劃接口的輪次與用途界線（bottle_f1_1 的 KeyError 根因）
+    port.bind(ctrl)
+    ctrl.carry_planner, ctrl.exit_c, ctrl.bottle_mass = port, np.array([99.0, 99.0]), float(readback['bottle_mass'])
     ctrl.path, ctrl.monitor = pp, mon
     ctrl.s_ref = ctrl.sig_robot = pp.sig0
     pr.monitor, pr.sig_fn = mon, (lambda: mprog.sig)
@@ -701,7 +704,8 @@ def main():
         n_.obs.d = np.clip(d_, -n_.obs.max, n_.obs.max)
         n_.cfg.arm_model.bias = n_.bias0 + np.asarray(n_.cfg.arm_model.alpha, float) * n_.obs.d
         n_.planner_conv, n_.planner_ros = conv_cfg, pr
-        n_.carry_planner, n_.exit_c, n_.bottle_mass = cpl, np.array([99.0, 99.0]), float(readback['bottle_mass'])
+        port.bind(n_)
+        n_.carry_planner, n_.exit_c, n_.bottle_mass = port, np.array([99.0, 99.0]), float(readback['bottle_mass'])
         mon = NP.PathMonitor(pp)
         mon.on_grid(pr.grid, pp.sig0)
         mprog = MPG.MonitorProgress(pp, C2.B.Y_TUBE)
@@ -720,7 +724,11 @@ def main():
         reg_ = F1_ROUNDS[1]['region']
         pub_round.publish(Float64MultiArray(data=[1.0, float(reg_[0]), float(reg_[1]), float(reg_[2]), float(reg_[3]), float(T0 + t_)]))
         print(f'[s1] F1 切換 t {t_:.2f}；已發 /f1/round', flush=True)
-    task = FT.F1Task(ctrl, [float(pp.P[0][0]), float(pp.P[0][1])], make_round, on_switch)
+    def on_checkpoint(kind, r_):
+        FX.atomic_json(os.path.join(a.out, f's1_report_{kind}.json'), r_)
+        np.savez_compressed(os.path.join(a.out, f's1_steps_{kind}.npz'), rows=np.array(rows, float), cols=np.array(step_cols()))
+        print(f'[s1] F1 檢查點 {kind} 已落盤（{len(rows)} 列）', flush=True)
+    task = FT.F1Task(ctrl, [float(pp.P[0][0]), float(pp.P[0][1])], make_round, on_switch, on_checkpoint)
     ctrl = task
     dyn_log = []
 
@@ -737,96 +745,130 @@ def main():
         dyn.set_angular_velocity(np.zeros(3, np.float32))
         dyn_log.append([float(p_m[0]), float(p_m[1]), float(p_m[2]), float(v_m[0]), float(v_m[1]), float(p_t[0]), float(p_t[1]), float(v_t[0]), float(v_t[1])])
     BP_S = G.bottle_points()
+
+    cols_base_idx = 1 + 3 + 6 + 6                                            # rows：t、底盤 3、q 6、手臂目標 6，之後是底盤命令 3
+
+    def step_cols():
+        return ['t', 'base_x', 'base_y', 'base_yaw'] + [f'q{i}' for i in range(1, 7)] + [f's{i}' for i in range(1, 7)] + ['base_cmd_vx', 'base_cmd_vy', 'base_cmd_wz', 'v_b', 's_ref', 'finger1_q', 'finger2_q', 'finger_cmd', 'f_finger1_bottle', 'f_finger2_bottle',
+                'f_bottle_table', 'bottle_base_x', 'bottle_base_y', 'bottle_base_z', 'bottle_qw', 'bottle_qx', 'bottle_qy', 'bottle_qz', 'phase_index', 'stopped'] + [f'forb_{kk}' for kk in sorted(forb)] + ['dyn_x', 'dyn_y', 'dyn_z', 'dyn_vx', 'dyn_vy', 'dyn_tx', 'dyn_ty', 'dyn_tvx', 'dyn_tvy'] + ['f1_stage', 'other_base_x', 'other_base_y', 'other_base_z', 'other_qw', 'other_qx', 'other_qy', 'other_qz']
     rows, step_ms = [], []                                                    # step_ms：物理＋渲染，分開計時
     t_end_tail = None
     n = int(round((a.sim_s + a.stop_tail_s + 1.5) / dt))                      # 總期限後仍走停止尾段
     penetration = 0.0
-    for k in range(n):
-        t = k * dt
-        task.check_deadline(t, a.sim_s)                                       # 看 F1 整體，不看單輪 mission_done
-        q, jp = q9()
-        q_at_step[0] = np.asarray(REG.q_to_region(q), float)
-        mprog.update(REG.q_to_region(q), t)                                   # 區域座標；先更新監看進度，再處理代價圖回呼（node.drain）與過期核對
-        p_, qt_ = robot.get_world_pose()
-        node.publish_state(T0 + t, p_, qt_, q[3:])
-        chain.set_now(T0 + t)
-        node.drain()
-        t_now[0] = t
-        cpl.tick()
-        if ctrl.pph is None:                                                  # 承接後代價圖只餵持瓶段監看器
-            mon.check_age(T0 + t, mprog.sig)
-        elif ctrl.cmon is not None:
-            ctrl.cmon.check_age(T0 + t, ctrl.csig)
-        # 瓶位姿（幾何中心 → 底心座標：z 軸＝瓶軸）
-        st_ = task.stage
-        pb, qb = (bottle if st_ == 0 else bottle2).get_world_pose()
-        po_, qo_ = (bottle2 if st_ == 0 else bottle).get_world_pose()         # 另一瓶：只供穿透估計與事後評估
-        Ro_ = quat_R(qo_)
-        To_ = np.eye(4)
-        To_[:3, :3] = Ro_
-        To_[:3, 3] = np.asarray(po_, float) - Ro_[:, 2] * float(B['height']) / 2
-        Rb = quat_R(qb)
-        Tb = np.eye(4)
-        Tb[:3, :3] = Rb
-        Tb[:3, 3] = np.asarray(pb, float) - Rb[:, 2] * float(B['height']) / 2
-        ok_b = bool(np.isfinite(Tb).all())
-        v1.record_step(float(world.current_time), T0 + t, t, q, Tb if ok_b else None, BR_PH.index(ctrl.st.phase))   # V1 旁路：先記本步（＝上一次算圖的狀態），再取新影格
-        v1.poll()
-        link.tick(t)                                                          # V2：估計（位姿互核通過者）→ 控制器；時間為任務時間
-        w1.record_step(float(world.current_time), T0 + t, t, q, Tb if ok_b else None, BR_PH.index(ctrl.st.phase))   # W1 手腕：同樣先記本步再取影格
-        w1.poll()
-        wlink.tick(t)
-        slink.tick(t)                                                         # 候選：任務時刻轉送
-        # 接觸
-        Mf = read_pairs(v_finger, n_filters, dt)
-        Ma_l = [read_pairs(v, n_filters, dt) for v in v_arm]
-        Ma = None if any(x is None for x in Ma_l) else np.concatenate(Ma_l, axis=0)   # 任一連桿讀不到 ⇒ 整對無效（不當零）
-        Me = [read_pairs(v, n_filters, dt) for v in v_extra]
-        Mt = read_pairs(FC.pick(st_, v_bt, v_bt_2), 1, dt)
-        Ms = read_pairs(FC.pick(st_, v_bs, v_bs_2), len(b_env), dt) if b_env else None
-        Mb = read_pairs(v_base, 1 + len(leg_paths) + len(leg2_paths) + (1 if WALL else 0), dt)
-        M2 = read_pairs(FC.pick(st_, v_b2, v_b2_2), 1, dt)
-        ff, ft, fp, fp_raw, forb, Mf = FC.summarize(st_, Mf, Ma, Me, Mt, Ms, Mb, M2, F1_PERM, F_SIGN, ctrl.judge.t_lift_ok is not None, has_env=bool(b_env))
-        # 穿透估計（每控制週期）：非手指連桿點雲對瓶軸與桌面
-        if k % C.NPH == 0:
-            W = G.link_world(q, ctrl.f_cmd)
-            Pl = np.vstack([P for n_, P in W.items() if n_ not in G.C.FINGERS])
-            Pb = (Tb[:3, :3].T @ (Pl - Tb[:3, 3]).T).T
-            dmin = float(G.cyl_dist(Pb, 0.0, 0.0, 0.0, float(B['height']), float(B['radius'])).min())
-            Po_ = (To_[:3, :3].T @ (Pl - To_[:3, 3]).T).T
-            dmin = min(dmin, float(G.cyl_dist(Po_, 0.0, 0.0, 0.0, float(B['height']), float(B['radius'])).min()))
-            tb = list(T1TB)
-            tb = tb + [(n_, c_ + T2D, sz_) for n_, c_, sz_ in T2TB]
-            dmin = min(dmin, min(float(G.box_dist(Pl, c, sz).min()) for _, c, sz in tb), float(G.box_dist(Pl, OB_C, OB_S).min()), float(G.box_dist(Pl, S2[0], S2[1]).min()) if S2 else 9.9, float(G.box_dist(Pl, WALL[0], WALL[1]).min()) if WALL else 9.9)
-            if ok_b:                                                          # 瓶身對第二桌面與桌腳的穿透（瓶底支撐的正常接觸遠小於 1 mm 判準）
-                Pb_w2 = (Tb[:3, :3] @ BP_S.T).T + Tb[:3, 3]
-                dmin = min(dmin, min(float(G.box_dist(Pb_w2, c_ + T2D, sz_).min()) for _, c_, sz_ in T2TB))
-            if (S2 or WALL) and ok_b:                                         # 實測瓶位姿對 S2 方塊與側牆
-                Pb_w = (Tb[:3, :3] @ BP_S.T).T + Tb[:3, 3]
-                for box_ in [b_ for b_ in (S2, WALL) if b_ is not None]:
-                    dmin = min(dmin, float(G.box_dist(Pb_w, box_[0], box_[1]).min()))
-            elif S2 or WALL:
-                dmin = float('nan')                                           # 瓶位姿無效：不當零，由資料失效判定處理
-            penetration = max(0.0, -dmin) if np.isfinite(dmin) else float('nan')
-        out = ctrl.step(t, REG.q_to_region(q), f_fingers=ff, t_contact=(t if ff is not None else None), T_bottle=REG.T_to_region(Tb) if ok_b else None, t_bottle=t if ok_b else None,
-                        f_table=ft, forbidden=forb, penetration=penetration, f_place=fp, q_fingers=(float(jp[f1]), float(jp[f2])), f_place_raw=fp_raw, f_finger_vec=None if Mf is None else np.asarray(Mf[:, 0], float))
-        tgt = np.array(jp, float)
-        for j, i in enumerate(idx):
-            tgt[i] = float(out['arm_target'][j])
-        tgt[f1] = out['finger_target']
-        apply(tgt)
-        base_cmd(out['base_twist'], float(q[2]))
-        dyn_drive(t)
-        t_w = time.perf_counter()
-        world.step(render=True)
-        step_ms.append((time.perf_counter() - t_w) * 1e3)
-        rows.append([t, *q, *out['arm_target'], *out['base_twist'], ctrl.v_b, ctrl.s_ref, float(jp[f1]), float(jp[f2]), out['finger_target'], *(ff if ff else (float('nan'),) * 2),
-                     float('nan') if ft is None else ft, *Tb[:3, 3], *[float(v) for v in qb], BR_PH.index(out['phase']), float(out['stopped']),
-                     *[forb[kk] for kk in sorted(forb)], *dyn_log[-1], float(st_), *To_[:3, 3], *[float(v) for v in qo_]])
-        if (out['stopped'] or out['done']) and t_end_tail is None:
-            t_end_tail = t + (a.stop_tail_s if out['done'] else max(a.stop_tail_s, 2.6))   # 停穩判定 1.0–2.0 s 窗，尾段 ≥ 2.5 s  # 停止尾段須涵蓋 1 s 停止有效性
-        if t_end_tail is not None and t >= t_end_tail:
-            break
+    forb, t = {}, 0.0
+    try:
+      for k in range(n):
+          t = k * dt
+          task.check_deadline(t, a.sim_s)                                       # 看 F1 整體，不看單輪 mission_done
+          q, jp = q9()
+          q_at_step[0] = np.asarray(REG.q_to_region(q), float)
+          mprog.update(REG.q_to_region(q), t)                                   # 區域座標；先更新監看進度，再處理代價圖回呼（node.drain）與過期核對
+          p_, qt_ = robot.get_world_pose()
+          node.publish_state(T0 + t, p_, qt_, q[3:])
+          chain.set_now(T0 + t)
+          node.drain()
+          t_now[0] = t
+          cpl.tick()
+          if ctrl.pph is None:                                                  # 承接後代價圖只餵持瓶段監看器
+              mon.check_age(T0 + t, mprog.sig)
+          elif ctrl.cmon is not None:
+              ctrl.cmon.check_age(T0 + t, ctrl.csig)
+          # 瓶位姿（幾何中心 → 底心座標：z 軸＝瓶軸）
+          st_ = task.stage
+          pb, qb = (bottle if st_ == 0 else bottle2).get_world_pose()
+          po_, qo_ = (bottle2 if st_ == 0 else bottle).get_world_pose()         # 另一瓶：只供穿透估計與事後評估
+          Ro_ = quat_R(qo_)
+          To_ = np.eye(4)
+          To_[:3, :3] = Ro_
+          To_[:3, 3] = np.asarray(po_, float) - Ro_[:, 2] * float(B['height']) / 2
+          Rb = quat_R(qb)
+          Tb = np.eye(4)
+          Tb[:3, :3] = Rb
+          Tb[:3, 3] = np.asarray(pb, float) - Rb[:, 2] * float(B['height']) / 2
+          ok_b = bool(np.isfinite(Tb).all())
+          v1.record_step(float(world.current_time), T0 + t, t, q, Tb if ok_b else None, BR_PH.index(ctrl.st.phase))   # V1 旁路：先記本步（＝上一次算圖的狀態），再取新影格
+          v1.poll()
+          link.tick(t)                                                          # V2：估計（位姿互核通過者）→ 控制器；時間為任務時間
+          w1.record_step(float(world.current_time), T0 + t, t, q, Tb if ok_b else None, BR_PH.index(ctrl.st.phase))   # W1 手腕：同樣先記本步再取影格
+          w1.poll()
+          wlink.tick(t)
+          slink.tick(t)                                                         # 候選：任務時刻轉送
+          # 接觸
+          Mf = read_pairs(v_finger, n_filters, dt)
+          Ma_l = [read_pairs(v, n_filters, dt) for v in v_arm]
+          Ma = None if any(x is None for x in Ma_l) else np.concatenate(Ma_l, axis=0)   # 任一連桿讀不到 ⇒ 整對無效（不當零）
+          Me = [read_pairs(v, n_filters, dt) for v in v_extra]
+          Mt = read_pairs(FC.pick(st_, v_bt, v_bt_2), 1, dt)
+          Ms = read_pairs(FC.pick(st_, v_bs, v_bs_2), len(b_env), dt) if b_env else None
+          Mb = read_pairs(v_base, 1 + len(leg_paths) + len(leg2_paths) + (1 if WALL else 0), dt)
+          M2 = read_pairs(FC.pick(st_, v_b2, v_b2_2), 1, dt)
+          ff, ft, fp, fp_raw, forb, Mf = FC.summarize(st_, Mf, Ma, Me, Mt, Ms, Mb, M2, F1_PERM, F_SIGN, ctrl.judge.t_lift_ok is not None, has_env=bool(b_env))
+          # 穿透估計（每控制週期）：非手指連桿點雲對瓶軸與桌面
+          if k % C.NPH == 0:
+              W = G.link_world(q, ctrl.f_cmd)
+              Pl = np.vstack([P for n_, P in W.items() if n_ not in G.C.FINGERS])
+              Pb = (Tb[:3, :3].T @ (Pl - Tb[:3, 3]).T).T
+              dmin = float(G.cyl_dist(Pb, 0.0, 0.0, 0.0, float(B['height']), float(B['radius'])).min())
+              Po_ = (To_[:3, :3].T @ (Pl - To_[:3, 3]).T).T
+              dmin = min(dmin, float(G.cyl_dist(Po_, 0.0, 0.0, 0.0, float(B['height']), float(B['radius'])).min()))
+              tb = list(T1TB)
+              tb = tb + [(n_, c_ + T2D, sz_) for n_, c_, sz_ in T2TB]
+              dmin = min(dmin, min(float(G.box_dist(Pl, c, sz).min()) for _, c, sz in tb), float(G.box_dist(Pl, OB_C, OB_S).min()), float(G.box_dist(Pl, S2[0], S2[1]).min()) if S2 else 9.9, float(G.box_dist(Pl, WALL[0], WALL[1]).min()) if WALL else 9.9)
+              if ok_b:                                                          # 瓶身對第二桌面與桌腳的穿透（瓶底支撐的正常接觸遠小於 1 mm 判準）
+                  Pb_w2 = (Tb[:3, :3] @ BP_S.T).T + Tb[:3, 3]
+                  dmin = min(dmin, min(float(G.box_dist(Pb_w2, c_ + T2D, sz_).min()) for _, c_, sz_ in T2TB))
+              if (S2 or WALL) and ok_b:                                         # 實測瓶位姿對 S2 方塊與側牆
+                  Pb_w = (Tb[:3, :3] @ BP_S.T).T + Tb[:3, 3]
+                  for box_ in [b_ for b_ in (S2, WALL) if b_ is not None]:
+                      dmin = min(dmin, float(G.box_dist(Pb_w, box_[0], box_[1]).min()))
+              elif S2 or WALL:
+                  dmin = float('nan')                                           # 瓶位姿無效：不當零，由資料失效判定處理
+              penetration = max(0.0, -dmin) if np.isfinite(dmin) else float('nan')
+          out = ctrl.step(t, REG.q_to_region(q), f_fingers=ff, t_contact=(t if ff is not None else None), T_bottle=REG.T_to_region(Tb) if ok_b else None, t_bottle=t if ok_b else None,
+                          f_table=ft, forbidden=forb, penetration=penetration, f_place=fp, q_fingers=(float(jp[f1]), float(jp[f2])), f_place_raw=fp_raw, f_finger_vec=None if Mf is None else np.asarray(Mf[:, 0], float))
+          tgt = np.array(jp, float)
+          for j, i in enumerate(idx):
+              tgt[i] = float(out['arm_target'][j])
+          tgt[f1] = out['finger_target']
+          apply(tgt)
+          base_cmd(out['base_twist'], float(q[2]))
+          dyn_drive(t)
+          t_w = time.perf_counter()
+          world.step(render=True)
+          step_ms.append((time.perf_counter() - t_w) * 1e3)
+          rows.append([t, *q, *out['arm_target'], *out['base_twist'], ctrl.v_b, ctrl.s_ref, float(jp[f1]), float(jp[f2]), out['finger_target'], *(ff if ff else (float('nan'),) * 2),
+                       float('nan') if ft is None else ft, *Tb[:3, 3], *[float(v) for v in qb], BR_PH.index(out['phase']), float(out['stopped']),
+                       *[forb[kk] for kk in sorted(forb)], *dyn_log[-1], float(st_), *To_[:3, 3], *[float(v) for v in qo_]])
+          if (out['stopped'] or out['done']) and t_end_tail is None:
+              t_end_tail = t + (a.stop_tail_s if out['done'] else max(a.stop_tail_s, 2.6))   # 停穩判定 1.0–2.0 s 窗，尾段 ≥ 2.5 s  # 停止尾段須涵蓋 1 s 停止有效性
+          if t_end_tail is not None and t >= t_end_tail:
+              break
+    except Exception as ex_:                                                  # 例外：先存例外與狀態，再獨立收尾，最後盡力存資料；原例外不被掩蓋（Codex 20261103）
+        ph_ = FX_ph = None
+        try:
+            ph_, FX_ph = task.st.phase, task.pph
+        except Exception:
+            pass
+        crash = FX.record(a.out, ex_, dict(t=float(t), stage=int(task.stage), phase=ph_, pph=FX_ph, outcome=task.outcome, n_rows=len(rows)))
+        print(f"[s1] 例外（已落盤 crash.json）：{crash['type']}: {crash['msg']}；t {t:.2f} 輪次 {task.stage} 相位 {ph_}／{FX_ph}", flush=True)
+        u_last_ = np.array(rows[-1][cols_base_idx:cols_base_idx + 3], float) if rows else np.zeros(3)
+        tgt_hold_ = np.array(robot.get_joint_positions(), float)
+
+        def stop_step_(u_):
+            apply(tgt_hold_)
+            q_, _ = q9()
+            base_cmd(u_, float(q_[2]))
+            world.step(render=True)
+        crash['stop'] = FX.guarded(crash, 'independent_stop', lambda: FX.independent_stop(stop_step_, lambda: q9()[0], u_last_, C2.B.A_BASE, dt))
+        print(f"[s1] 獨立收尾 {crash['stop']}", flush=True)
+        FX.guarded(crash, 'rows', lambda: np.savez_compressed(os.path.join(a.out, 's1_steps.npz'), rows=np.array(rows, float), cols=np.array(step_cols())))
+        FX.guarded(crash, 'report', lambda: FX.atomic_json(os.path.join(a.out, 's1_report_crash.json'), task.c.report()))
+        FX.guarded(crash, 'reports_task', lambda: FX.atomic_json(os.path.join(a.out, 's1_report_rounds_crash.json'), dict(outcome=task.outcome, stage=task.stage, t_switch=task.t_switch, t_done0=task.t_done0, switch=task.switch_info, rounds=task.reports)))
+        FX.atomic_json(os.path.join(a.out, 'crash.json'), crash)
+        print(f"[s1] 例外收尾完成：停止 {crash['stop']}；存檔錯誤 {crash['save_errors']}", flush=True)
+        node.destroy_node()
+        rclpy.shutdown()
+        return 78
     f1_rep = task.report()
     rep = task.c.report()
     rep['f1_task'] = {k: f1_rep[k] for k in ('outcome', 'stage', 't_switch', 't_done0', 'switch', 'grip_ok')}
@@ -840,8 +882,7 @@ def main():
     rep['timing']['world_step'] = dict(p50=round(float(np.percentile(step_ms, 50)), 2), p95=round(float(np.percentile(step_ms, 95)), 2), max=round(float(np.max(step_ms)), 2), n=len(step_ms))
     rep['region'] = dict(offset=RO[:2].tolist(), frame='控制器與 rep 內事件位置為區域座標；s1_steps 的 base_x／bottle_* 為世界座標')
     rep.update(plan=plan_info, readback=readback, asset=S, forb_keys=sorted(forb), d0=[float(v) for v in d0], n_steps=len(rows), obstacle=dict(c=OB_C.tolist(), sz=OB_S.tolist(), r_cbf=0.2 * math.sqrt(2.0), margin=0.47, truth_for_eval_only=True), exit=dict(c=a.exit_c, r=a.exit_r), path=p_, note='W1：底盤遠距凍結＋手腕近距修正（只修 xy、限速 5 mm/s、INSERT＋0.9 s 鎖定、閉爪前須到達）；V2：抓取目標由底盤相機估計凍結（建構時 NaN），只收位姿互核通過的影格；手臂備妥分支用任務名目瓶位；5 mm 淨空與禁止接觸用模擬真值瓶位姿（安全網）。核心 gmpc_wb；PhysX 射線掃描經真 ROS 話題：/scan_raw→scan_relay→/scan→追蹤器與 Shield 獨立節點，障礙走 /gmpc/obstacles_stamped，底盤命令走 /cmd_vel_pre_shield→Shield→/cmd_vel；控制器與物理同步（非即時部署驗證）；底盤與瓶位姿真值；地圖只有桌腳與側牆；參考路徑：導航段起跑前 SmacPlanner2D 規劃到抓取直線入口；抓取直線為任務定義；持瓶段 LIFT 開始時再規劃到放置直線入口（平滑、承接、局部降速、參考加速度核對）；放置直線與停車放置為任務定義；不重規劃。第二桌位置為已知位置，瓶位姿真值只供安全網與評估；命令總延遲 8 物理步＝實測往返＋注入補足（分列於 nav_chain.ros）；停止處置為腳本自有', ros_chain=True)
-    cols = ['t', 'base_x', 'base_y', 'base_yaw'] + [f'q{i}' for i in range(1, 7)] + [f's{i}' for i in range(1, 7)] + ['base_cmd_vx', 'base_cmd_vy', 'base_cmd_wz', 'v_b', 's_ref', 'finger1_q', 'finger2_q', 'finger_cmd', 'f_finger1_bottle', 'f_finger2_bottle',
-            'f_bottle_table', 'bottle_base_x', 'bottle_base_y', 'bottle_base_z', 'bottle_qw', 'bottle_qx', 'bottle_qy', 'bottle_qz', 'phase_index', 'stopped'] + [f'forb_{kk}' for kk in sorted(forb)] + ['dyn_x', 'dyn_y', 'dyn_z', 'dyn_vx', 'dyn_vy', 'dyn_tx', 'dyn_ty', 'dyn_tvx', 'dyn_tvy'] + ['f1_stage', 'other_base_x', 'other_base_y', 'other_base_z', 'other_qw', 'other_qx', 'other_qy', 'other_qz']
+    cols = step_cols()
     if CA is None:
         rep['dyn'] = dict(case=None, note='無移動物（--dyn-case none）')
     else:

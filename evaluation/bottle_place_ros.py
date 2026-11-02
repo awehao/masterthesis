@@ -13,6 +13,11 @@ class RosCarryPlanner:
         self.pr.result = None                                # 導航段那次的回覆不能拿來用
         self.id = self.pr.request(tuple(float(v) for v in start), tuple(float(v) for v in goal), self.now_fn())
 
+    def invalidate(self):
+        """解除目前請求綁定：舊結果與晚到回覆都不再交付（F1 輪次切換、返回路徑用完時）。請求序號只增不歸零，還在路上的舊回覆由 PlanRos 當 stale 丟棄。"""
+        self.id, self.pr.result = None, None
+        self.pr.req_id += 1
+
     def tick(self):
         self.pr.poll()
 
