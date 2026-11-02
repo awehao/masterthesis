@@ -44,6 +44,7 @@ from std_msgs.msg import Float64MultiArray, MultiArrayDimension   # noqa: E402
 
 MAX_PENDING = 3
 SUB_DEPTH = 30                                          # 影像訂閱佇列：太淺時 DDS 會在讀者端靜默覆蓋（重播核對 depth 5 時 18 幀無聲遺失），讓丟幀回到節點自己計數的最新一格槽
+JOIN_S = 5.0                                            # 收尾時等工作執行緒結束的上限（單格推論約 0.1–0.3 s）
 SELF_DT = 0.1                                           # 自身狀態須有包夾擷取戳、前後樣本相距 ≤ 0.1 s 才插值；否則支撐判不可觀測
 WHY = ('ok', 'no_instance', 'few_mask_depth', 'few_after_outlier', 'bad_message', 'size_gate_rejected_all')
 FIELDS = ('stamp', 'valid', 'conf', 'n_inst', 'n_size_rejected', 'top1_replaced',
@@ -252,6 +253,8 @@ class Seg3dNode(Node):
             out = Float64MultiArray()
             out.layout.dim = [MultiArrayDimension(label=LAYOUT_LABEL, size=len(FIELDS), stride=len(FIELDS))]
             out.data = [float(row[k]) for k in FIELDS]
+            if not self.alive:                                    # 收尾中：不再發布（環境可能已關閉）
+                break
             self.pub.publish(out)
             with self.lock:
                 self.last_pub, self.inflight = st, None
@@ -269,8 +272,13 @@ def main():
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):           # SIGINT／SIGTERM：正常收尾
         pass
+    except Exception:                                                 # SIGTERM 在兩次等待之間關掉環境 ⇒ 建等待集合時 RCLError（context 無效）：環境已關才算正常收尾
+        if rclpy.ok():
+            raise
     finally:
-        node.alive = False
+        node.alive = False                                        # 收尾順序：先停工作執行緒並等它結束（推論中最多等 JOIN_S），再銷毀節點、關閉環境；
+        node.ev.set()                                             # 否則常駐執行緒在 C++／CUDA 呼叫中被直譯器結束拆掉 ⇒ terminate called without an active exception（核心傾印）
+        node.worker.join(timeout=JOIN_S)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

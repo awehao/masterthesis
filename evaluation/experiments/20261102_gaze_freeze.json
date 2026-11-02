@@ -1,0 +1,329 @@
+{
+ "schema": 1,
+ "task": "在線視向候選：R-B1 同配置一趟（Codex 092601 預先同意：離線核對通過後凍結、新 RUN_ID、不補跑）",
+ "ruling": "reviews/20261102_092601_reply.md",
+ "frozen_at_local": "以本凍結提交的 git 時間為準（寫檔時 17:32:27）",
+ "git_head_before_freeze_commit": "490f3fb8971a17af0b47cd036d946e95cad109f0",
+ "controller": "bottle_w1_gaze_ctrl（online5＋接近段 U／H 只加 q1 視向偏移；R 段起歸零）",
+ "isaac_script": "evaluation/isaac_bottle_w1dynsr32.py（--region-offset 0.6,0.8）",
+ "params": {
+  "look": [
+   0.0,
+   0.4275,
+   0.7
+  ],
+  "band_px": 200.0,
+  "v_g": 0.6,
+  "a_g": 1.5,
+  "lead": 0.39999999999999997,
+  "g_max": 0.9,
+  "area": {
+   "x": [
+    -0.08,
+    0.08
+   ],
+   "y": [
+    0.395,
+    0.46
+   ],
+   "z1": [
+    0.55,
+    0.65
+   ]
+  }
+ },
+ "run": {
+  "RUN_ID": "bottle_rb1_gaze_1",
+  "S1_ARGS": "--dyn-case none --table1-z 0.58 --bottle-dx -0.03 --bottle-dy 0.02 --region-offset 0.6,0.8",
+  "MAP_ARGS": "--table2 2.4,-1.0",
+  "env": "V1=1 W1=1 PLAN=1 SEG3D=1 TRACKER_SCRIPT=evaluation/bottle_tracker_stamped_kfcm.py RUNNER=evaluation/run_bottle_ros.sh run_guarded_v3.sh",
+  "same_as": "bottle_rb1_1（只換 ISAAC_SCRIPT dynsr31→dynsr32）"
+ },
+ "primary_metrics": [
+  "線上首次合格目標時刻（快照檢查 t_publish）",
+  "計畫承接餘裕 x_latest − x_acc"
+ ],
+ "also": [
+  "是否維持移動抓取（底盤未停）",
+  "完整抓放"
+ ],
+ "baseline": {
+  "run": "bottle_rb1_1",
+  "first_target_s": 12.05,
+  "accept_s": 12.15,
+  "margin_m": 0.045
+ },
+ "sha256": {
+  "evaluation/isaac_bottle_w1dynsr32.py": "45f5478c756fbb524277dd8433504745557521c94e23f655bd0c265eaa3705a2",
+  "evaluation/bottle_w1_gaze_ctrl.py": "dbcaf97b1e922cb1842086734ddf731b83b12402d449da7c5f5ded99cbd1163e",
+  "evaluation/bottle_w1_online5_ctrl.py": "d24838a35e95b703e2065530e8652936ff5e4ef4d708ba2563b0ac603453cbca",
+  "evaluation/bottle_w1_online3_ctrl.py": "754e3cf518b25207634cc0c8398da42398226c052eb42e3411235ebbcdcd32ba",
+  "evaluation/bottle_w1_segtarget_vhigh_ctrl.py": "69b7b3b9b8efbd9621290e562fa4a8c900eda4f60af5c87e7edd3f959f5e6f28",
+  "evaluation/bottle_region.py": "a27c91d7887089dc1ec7c61de39ef95d1b7f49d0ffe7bbabcc63671803d15714",
+  "evaluation/bottle_n2_ros_center.py": "aee32de1fc139904c22c33820e78aa503c5d92cabbd3a7999e34f36395aed9e2",
+  "evaluation/bottle_map_write.py": "2577438ed6f364c9b5b2a786aa5672f57dfe4824a9b09e3d9337a2eef9b7e977",
+  "evaluation/isaac_bottle_replay_w1r.py": "48a101a78415ef4c6d5cb4d301ce1d287086b4f31b7784d54da9dbc58b07b502",
+  "evaluation/run_bottle_ros.sh": "913e9bf91a6a0171d24aab98cc3247bbc9dccedd878ac403cc4fc7d68324f318",
+  "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
+  "evaluation/bottle_seg3d_node.py": "1947d971792bb34eaa698f9505dced365f1b7269f3bf77e6042ffb3166cf39fa",
+  "evaluation/bottle_seg3d_node_exit_check.py": "362ec98192ecb0bc9f7f514df573da0215d70dff711a935d38e3a691f39fac8d",
+  "evaluation/bottle_gaze_offline.py": "e393fcc95b74cbad4723c0b7e38bd79540a1644670ab675d2722675ef8c12d90",
+  "evaluation/test_bottle_w1_gaze.py": "c430858e743e569e4c314b68076943a9aabd842b311e28efdea20319b54aa87a",
+  "evaluation/test_bottle_w1_gaze_unit.py": "d80bbc4f122341b38a3033ab2d2f9bb3f6def38460857025d155c08232ab0488",
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962"
+ },
+ "offline": {
+  "replay": {
+   "orig_u3": {
+    "coverage": {
+     "U_to_accept": {
+      "base": {
+       "real": 0.829,
+       "area": 0.763
+      },
+      "gaze": {
+       "real": 1.0,
+       "area": 0.908
+      },
+      "meas": {
+       "real": 0.829,
+       "area": 0.763
+      }
+     },
+     "U_to_R": {
+      "base": {
+       "real": 0.921,
+       "area": 0.89
+      },
+      "gaze": {
+       "real": 1.0,
+       "area": 0.957
+      },
+      "meas": {
+       "real": 0.921,
+       "area": 0.89
+      }
+     },
+     "H": {
+      "base": {
+       "real": 1.0,
+       "area": 1.0
+      },
+      "gaze": {
+       "real": 1.0,
+       "area": 1.0
+      },
+      "meas": {
+       "real": 1.0,
+       "area": 1.0
+      }
+     }
+    },
+    "gaps": {
+     "base": [
+      [
+       6.45,
+       7.1
+      ]
+     ],
+     "gaze": []
+    },
+    "gaze": {
+     "max": {
+      "g": 0.25770997587969824,
+      "v": 0.5250000959515635,
+      "a": 1.5000000000000007
+     },
+     "g_at_R": 0.0,
+     "t_zero_after_R": 12.35,
+     "t_done_logged": 14.65,
+     "zero_before_done": true,
+     "why": {
+      "solved": 41,
+      "in_band": 123
+     }
+    },
+    "geometry_fails": []
+   },
+   "rb1": {
+    "coverage": {
+     "U_to_accept": {
+      "base": {
+       "real": 0.421,
+       "area": 0.351
+      },
+      "gaze": {
+       "real": 1.0,
+       "area": 1.0
+      },
+      "meas": {
+       "real": 0.421,
+       "area": 0.351
+      }
+     },
+     "U_to_R": {
+      "base": {
+       "real": 0.476,
+       "area": 0.413
+      },
+      "gaze": {
+       "real": 1.0,
+       "area": 1.0
+      },
+      "meas": {
+       "real": 0.476,
+       "area": 0.413
+      }
+     },
+     "H": {
+      "base": {
+       "real": 0.967,
+       "area": 0.7
+      },
+      "gaze": {
+       "real": 1.0,
+       "area": 1.0
+      },
+      "meas": {
+       "real": 0.967,
+       "area": 0.7
+      }
+     }
+    },
+    "gaps": {
+     "base": [
+      [
+       8.05,
+       11.35
+      ]
+     ],
+     "gaze": []
+    },
+    "gaze": {
+     "max": {
+      "g": 0.8327397506442131,
+      "v": 0.6,
+      "a": 1.5000000000000002
+     },
+     "g_at_R": -0.0,
+     "t_zero_after_R": 13.45,
+     "t_done_logged": 15.1,
+     "zero_before_done": true,
+     "why": {
+      "in_band": 30,
+      "solved": 96
+     }
+    },
+    "geometry_fails": []
+   }
+  },
+  "closed": {
+   "u3_on": {
+    "pass": true,
+    "t_done": 48.35,
+    "place_mm": 0.97,
+    "approach_stop_fails": [],
+    "stop_fails": [],
+    "coverage": {
+     "U_to_R_real": 1.0,
+     "U_to_R_area": 0.982,
+     "n": 164
+    },
+    "v_base_min_U_close": 0.0483,
+    "done_before_blend": true,
+    "u_rate": [
+     9.218,
+     1.137,
+     4.009,
+     7.849,
+     1.661,
+     3.618
+    ],
+    "ref_a_j1": 1.5
+   },
+   "u3_off": {
+    "pass": true,
+    "t_done": 48.35,
+    "place_mm": 0.97,
+    "approach_stop_fails": [],
+    "stop_fails": [],
+    "coverage": {
+     "U_to_R_real": 0.921,
+     "U_to_R_area": 0.89,
+     "n": 164
+    },
+    "v_base_min_U_close": 0.0483,
+    "done_before_blend": true,
+    "u_rate": [
+     0.695,
+     1.137,
+     4.009,
+     2.557,
+     0.664,
+     3.618
+    ],
+    "ref_a_j1": 0.404
+   },
+   "rb1_on": {
+    "pass": true,
+    "t_done": 48.4,
+    "place_mm": 1.67,
+    "approach_stop_fails": [],
+    "stop_fails": [],
+    "coverage": {
+     "U_to_R_real": 1.0,
+     "U_to_R_area": 1.0,
+     "n": 126
+    },
+    "v_base_min_U_close": 0.05,
+    "done_before_blend": true,
+    "u_rate": [
+     5.963,
+     1.142,
+     4.019,
+     3.189,
+     0.694,
+     3.649
+    ],
+    "ref_a_j1": 1.5
+   },
+   "rb1_off": {
+    "pass": true,
+    "t_done": 48.4,
+    "place_mm": 1.67,
+    "approach_stop_fails": [],
+    "stop_fails": [],
+    "coverage": {
+     "U_to_R_real": 0.476,
+     "U_to_R_area": 0.413,
+     "n": 126
+    },
+    "v_base_min_U_close": 0.05,
+    "done_before_blend": true,
+    "u_rate": [
+     0.694,
+     1.141,
+     4.017,
+     2.561,
+     0.664,
+     3.626
+    ],
+    "ref_a_j1": 0.404
+   }
+  },
+  "unit": "test_bottle_w1_gaze_unit 全過",
+  "seg_exit": "修正前 1/6 rc −6；最終版 20/20 rc 0"
+ },
+ "disclosure": [
+  "參數在同兩條軌跡上 6 組中選定（選定與核對同一組資料）",
+  "假世界候選不依可見度；取得時刻只能由實跑回答",
+  "視向起步拍 MPC 命令變化率 j1 9.22／5.96 rad/s²（基線 0.69），< A_ARM 19.98",
+  "分割節點收尾流程改版（處理邏輯不變）一併進本趟"
+ ],
+ "not_changed": [
+  "GMPC 核心",
+  "抓取速度、新鮮度、處置期限",
+  "安全規則與門檻",
+  "online5 其餘控制與排程"
+ ]
+}

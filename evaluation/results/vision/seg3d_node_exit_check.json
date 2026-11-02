@@ -1,0 +1,448 @@
+{
+ "domain": "77",
+ "weights": "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth",
+ "runs": [
+  {
+   "label": "第一次：HEAD（修正前）對照 join 版",
+   "n": 6,
+   "summary": {
+    "head": {
+     "n": 6,
+     "clean": 5,
+     "terminate": 1,
+     "abort": 1,
+     "killed": 0,
+     "rcs": [
+      -6,
+      0
+     ],
+     "exit_s_max": 1.165
+    },
+    "work": {
+     "n": 6,
+     "clean": 6,
+     "terminate": 0,
+     "abort": 0,
+     "killed": 0,
+     "rcs": [
+      0
+     ],
+     "exit_s_max": 0.514
+    }
+   },
+   "trials": {
+    "head": [
+     {
+      "trial": 0,
+      "outputs_before": 3,
+      "delay_s": 0.142,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.414,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 1,
+      "outputs_before": 3,
+      "delay_s": 0.246,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.414,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 2,
+      "outputs_before": 3,
+      "delay_s": 0.094,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.414,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 3,
+      "outputs_before": 3,
+      "delay_s": 0.16,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.415,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 4,
+      "outputs_before": 3,
+      "delay_s": 0.03,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.414,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 5,
+      "outputs_before": 3,
+      "delay_s": 0.011,
+      "rc": -6,
+      "killed": false,
+      "exit_s": 1.165,
+      "terminate": true,
+      "traceback": true,
+      "core": true,
+      "err_tail": "callbacks\n    wait_set = _rclpy.WaitSet(\n               ^^^^^^^^^^^^^^^\nrclpy._rclpy_pybind11.RCLError: failed to initialize wait set: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/wait.c:130\nterminate called without an active exception\n"
+     }
+    ],
+    "work": [
+     {
+      "trial": 0,
+      "outputs_before": 3,
+      "delay_s": 0.21,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 1,
+      "outputs_before": 3,
+      "delay_s": 0.051,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.464,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 2,
+      "outputs_before": 3,
+      "delay_s": 0.234,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 3,
+      "outputs_before": 3,
+      "delay_s": 0.249,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.464,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 4,
+      "outputs_before": 3,
+      "delay_s": 0.154,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.464,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 5,
+      "outputs_before": 3,
+      "delay_s": 0.244,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     }
+    ]
+   },
+   "note": "head 第 5 趟 rc −6：SIGTERM 在兩次等待之間關掉環境 ⇒ spin 建等待集合時 RCLError（context 無效，非 ExternalShutdownException）往外傳，常駐工作執行緒仍在跑 ⇒ terminate called without an active exception"
+  },
+  {
+   "label": "第二次：最終版（join＋環境已關時 RCLError 視為正常收尾）",
+   "n": 20,
+   "summary": {
+    "work": {
+     "n": 20,
+     "clean": 20,
+     "terminate": 0,
+     "abort": 0,
+     "killed": 0,
+     "rcs": [
+      0
+     ],
+     "exit_s_max": 0.515
+    }
+   },
+   "trials": {
+    "work": [
+     {
+      "trial": 0,
+      "outputs_before": 3,
+      "delay_s": 0.142,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 1,
+      "outputs_before": 3,
+      "delay_s": 0.246,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 2,
+      "outputs_before": 3,
+      "delay_s": 0.094,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.414,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 3,
+      "outputs_before": 3,
+      "delay_s": 0.16,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.464,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 4,
+      "outputs_before": 3,
+      "delay_s": 0.03,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 5,
+      "outputs_before": 3,
+      "delay_s": 0.011,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.515,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 6,
+      "outputs_before": 3,
+      "delay_s": 0.21,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 7,
+      "outputs_before": 3,
+      "delay_s": 0.051,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.515,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 8,
+      "outputs_before": 3,
+      "delay_s": 0.234,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 9,
+      "outputs_before": 3,
+      "delay_s": 0.249,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.464,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 10,
+      "outputs_before": 3,
+      "delay_s": 0.154,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 11,
+      "outputs_before": 3,
+      "delay_s": 0.244,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 12,
+      "outputs_before": 3,
+      "delay_s": 0.199,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.414,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 13,
+      "outputs_before": 3,
+      "delay_s": 0.225,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.514,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 14,
+      "outputs_before": 3,
+      "delay_s": 0.15,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.464,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 15,
+      "outputs_before": 3,
+      "delay_s": 0.176,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.464,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 16,
+      "outputs_before": 3,
+      "delay_s": 0.102,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.414,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 17,
+      "outputs_before": 3,
+      "delay_s": 0.2,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.414,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 18,
+      "outputs_before": 3,
+      "delay_s": 0.148,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.464,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     },
+     {
+      "trial": 19,
+      "outputs_before": 3,
+      "delay_s": 0.2,
+      "rc": 0,
+      "killed": false,
+      "exit_s": 0.414,
+      "terminate": false,
+      "traceback": false,
+      "core": false,
+      "err_tail": ""
+     }
+    ]
+   }
+  }
+ ],
+ "conclusion": "修正前 1/6 中止（rc −6）；最終版 20/20 rc 0、無 terminate／Traceback、結束 ≤ 0.52 s。間歇性競態，n 小，只能說最終版在 20 趟內未再出現"
+}
