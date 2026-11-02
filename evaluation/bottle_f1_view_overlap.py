@@ -15,21 +15,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mp
 import bottle_s0_ctrl as C0                             # noqa: E402
 import bottle_w1_gaze_ctrl as GZ                        # noqa: E402
 
-RUN = 'bottle_rb1_gaze_1'
-OUT = os.path.join(HERE, 'results', 'bottle', 'f1_view_overlap.json')
+RUN = sys.argv[1] if len(sys.argv) > 1 else 'bottle_rb1_gaze_1'   # 參數＝趟次；bottle_f1cap_2 是 F1 第一輪實際軌跡（觀看點 +0.15、無區域偏移）
+OUT = os.path.join(HERE, 'results', 'bottle', 'f1_view_overlap.json' if RUN == 'bottle_rb1_gaze_1' else f'f1_view_overlap_{RUN}.json')
 R_B, HALF_W = 0.015, 320.0
 
 
 def main():
     D = os.path.join(HERE, 'runs', RUN)
     r = json.load(open(os.path.join(D, 's1_report.json')))
-    O = np.array(r['region']['offset'], float)
+    O = np.array((r.get('region') or {}).get('offset', [0.0, 0.0]), float)
     Z = np.load(os.path.join(D, 's1_steps.npz'))
     c = {str(k): Z['rows'][:, i] for i, k in enumerate(Z['cols'])}
     K = C0.S0_K()
     t_u = next(e[0] for e in r['vhigh_seq']['log'] if e[1] == 'U')
     t_acc = float(r['online']['grasp_hist'][0]['t_accept']) if (r.get('online') or {}).get('grasp_hist') else None
-    t_blend = next(e['t'] for e in r['events'] if e['what'] == 'blend_start')
+    t_blend = next((e['t'] for e in r['events'] if e['what'] in ('blend_start', 'f1_capture_boundary')), float(c['t'][-1]))
     rows = []
     for k in range(0, len(c['t']), 10):
         t = float(c['t'][k])
