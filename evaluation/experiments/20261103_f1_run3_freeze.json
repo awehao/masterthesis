@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "status": "待 Codex 核可；未核可前不起跑",
+ "status": "Codex 20261103_055608 核可物理一趟；固定世界軌跡與任務時鐘；任務開始後失敗不補跑",
  "task": "F1 短返回＋單一移動物一趟（遠瓶先抓、車頭朝前返回、重啟點 x＝−2.85；移動物 f1_return_pass1）",
  "git_head_before_freeze_commit": "edefbe54114470b7bf405adfcb036e4de57d83c8",
  "run": {
@@ -32,7 +32,41 @@
     -0.58
    ]
   ],
-  "moving_obstacle": null
+  "moving_obstacle": {
+   "name": "f1_return_pass1",
+   "source": "arena_traffic dyn_obs_0（同 w1_dyn_pass1 生成法）",
+   "nominal": "bottle_f1_2",
+   "speed": 0.3,
+   "radius": 0.25,
+   "height": 1.0,
+   "start": [
+    -4.3016,
+    -1.728
+   ],
+   "end": [
+    0.3735,
+    -2.211
+   ],
+   "t_start": 64.127,
+   "t_meet": 71.46,
+   "lateral": 0.8,
+   "side": "left",
+   "frac": 0.7,
+   "meet_robot": [
+    -2.031,
+    -1.1583
+   ],
+   "robot_dir": [
+    -0.9947,
+    0.1027
+   ],
+   "nav": [
+    53.1,
+    79.85
+   ],
+   "frame": "world",
+   "rule": "t_meet＝返回 NAV 實測軌跡弧長分率 frac 處；法向 0.80 m（先右後左）反向等速；起點前 2.2 m、終點後 2.5 m"
+  }
  },
  "rounds": [
   {
@@ -69,7 +103,15 @@
   "relock": false
  },
  "return_seg": {
-  "goal": "第一輪接近路徑起點 pp.P[0]",
+  "goal": {
+   "what": "第一輪接近路徑 x＝−2.85 的投影點（RESTART_X，bottle_f1_task.restart_point）",
+   "x_r": -2.85,
+   "sigma": -3.4407,
+   "xy": [
+    -2.8454,
+    -0.8331
+   ]
+  },
   "arm": "hold",
   "t_settle_s": 1.0,
   "v_box": [
@@ -117,7 +159,8 @@
   "evaluation/bottle_f1_crash.py": "cb421ff680748e5c60204ef8eedc72795403f2e620f520201ca8d8e5708f3bcf",
   "evaluation/bottle_place_ros.py": "1bc9ff3ba4beea25b273b29742eb7ab95f5546a268059cdf6ecb659939ebf65b",
   "evaluation/experiments/20261103_f1_dyn_case.json": "5dcd9462dead2d82609b74d464fd316e091c005c72d01e33207feae5f8043704",
-  "evaluation/bottle_f1_dyn_report.py": "f1e94e45996b5c6705020661a261811422847190a790a6598f33f6a4daa1fef3"
+  "evaluation/bottle_f1_dyn_report.py": "be9dcc702d2216f3df02e6d3265d674c1f15263ff0284176857aa746efd63def",
+  "evaluation/test_bottle_f1_task.py": "f8d2d5a0a36eaf3ef0eabdfb77cd748b8dce6d0945b9e1ac7df1d93c677469bf"
  },
  "changes_since_candidate": {
   "files": [
@@ -144,7 +187,7 @@
    "evaluation/bottle_f1_dyn_report.py"
   ],
   "what": "重啟點 RESTART_X＝−2.85；返回段留求解紀錄；移動物案例",
-  "ruling": "Codex 20261103_045153"
+  "ruling": "Codex 20261103_045153、20261103_055608"
  },
  "dyn_case": {
   "name": "f1_return_pass1",
