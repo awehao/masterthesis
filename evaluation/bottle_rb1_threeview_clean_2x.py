@@ -46,6 +46,8 @@ def main():
         temperatures()
         metadata = json.loads(SOURCE_META.read_text())
         assert metadata['n_frames'] == 1261 and metadata['speed_x'] == 2
+        report = json.loads((SOURCE.RUN / 's1_report.json').read_text())
+        t0 = float(report['segtarget_link']['T0'])
         arrays = SOURCE.camera_arrays()
         predictions_path = ROOT / metadata['predictions']
         assert SOURCE.digest(predictions_path) == metadata['predictions_sha256']
@@ -86,8 +88,7 @@ def main():
                         k = int(metadata['selected_camera_indices'][cam][i])
                         if k < 0:
                             continue
-                        stamp_task = float(arrays[cam]['stamp'][k]) - float(
-                            json.loads((SOURCE.RUN / 's1_report.json').read_text())['segtarget_link']['T0'])
+                        stamp_task = float(arrays[cam]['stamp'][k]) - t0
                         assert stamp_task <= tn + 1e-8
                         if cached[cam][0] != k:
                             cached[cam] = (k, boxes_only(arrays[cam]['rgb'][k],
