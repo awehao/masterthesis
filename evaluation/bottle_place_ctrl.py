@@ -178,8 +178,9 @@ def build_carry(raw, p_pred, dir_pred, x_entry, lane_y, reg=REG, v_max=0.25):
     turn = max_turn_deg(conn)
     P = np.vstack([conn, raw[k2 + 1:]])
     J = join_lane_y(P, x_entry, lane_y, reg['conn_len'])
+    rs0 = NP.resample(raw0)                                # 只供報告；已重取樣的路徑再重取樣可能少一點，索引要對 rs0 長度（L 型走廊離線核對 IndexError）
     return CarryPath(J, x_entry, lane_y), dict(lateral=lat, conn_turn_deg=turn, n=len(J), turn_max_deg=max_turn_deg(J), raw_turn_max_deg=max_turn_deg(raw0),
-                                               smooth_shift_max=float(np.linalg.norm(raw - NP.resample(raw0)[np.linspace(0, len(raw0) - 1, len(raw)).round().astype(int)], axis=1).max()) if len(raw0) else None)
+                                               smooth_shift_max=float(np.linalg.norm(raw - rs0[np.linspace(0, len(rs0) - 1, len(raw)).round().astype(int)], axis=1).max()) if len(raw0) else None)
 
 
 def curvature_grid(cp, win):

@@ -413,6 +413,14 @@ def main():
                rounds=[dict(round=x['f1']['round'], done=x['mission_done'], slip_warn=(x.get('slip_warn') or {}).get('warn'), slip_max=x['slip_max_mm_deg'], rej=x['f1']['rej'], place=x['place'].get('metrics'), ret=x['f1']['ret'], phases={e['to']: e['t'] for e in x['events'] if e['what'] in ('phase', 'place_phase')},
                             events=[(e['t'], e['what'], e.get('to')) for e in x['events'] if e['what'] in ('return_request', 'return_state', 'mission_done', 'stop', 'relwin_shift', 'online_obs_first')], solve=x['solve_ms'], n_over_50ms=x['n_over_50ms'], n_fallback=x['n_fallback'], plans=[g.get('state') for g in (x.get('online') or {}).get('grasp_plans', [])]) for x in R],
                finite=bool(W.finite_cmds(f)), guard=st['guard'])
+    if CASE == 'lchan' and not any(x['ret'] is not None for x in REC):      # 第一輪沒走到返回：交第一阻點，不算掃掠
+        Lr = [x for x in REC if x['round'] == 0]
+        Qr = np.array([x['q'] for x in Lr])
+        Rw = {n_: float(min(float(LS.d2_box(Qr[-1, :2], c_, s_)[0]) for m_, c_, s_ in SCN['walls'] if m_ == n_)) for n_, _, _ in SCN['walls']}
+        rows0 = list(c0.compact or [])
+        out.update(first_blocker=dict(stop=R[0].get('stop'), t_last=float(Lr[-1]['t']), ph=Lr[-1]['ph'], pph=Lr[-1]['pph'], q_last=Qr[-1, :3].tolist(), wall_center_dist=Rw, n_dyn_ticks=sum(1 for e_ in rows0 if FD._dyn(e_['obs'])), events_tail=R[0]['events'][-14:], shield=(R[0].get('nav_chain') or {}).get('shield'), eps0_max=max((float(e_['eps0']) for e_ in rows0), default=None), info=shared.info), checks={'兩輪完成': False}, **{'pass': False})
+        print(json.dumps(out, ensure_ascii=False, default=float))
+        return 0
     if CASE in ('nominal', 'origin', 'dyn', 'lchan'):
         H = f.hist
         tt, Q = np.array([h['t'] for h in H]), np.array([h['q'] for h in H])
