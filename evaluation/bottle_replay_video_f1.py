@@ -62,6 +62,7 @@ def main():
     ap.add_argument('replay')
     ap.add_argument('src')
     ap.add_argument('out')
+    ap.add_argument('--title', default='', help='頂欄標題；未給就用 bottle_f1_2 的原文字')
     a = ap.parse_args()
     RD, SD = os.path.join(HERE, 'runs', a.replay), os.path.join(HERE, 'runs', a.src)
     r0, r1 = json.load(open(os.path.join(SD, 's1_report_r0.json'))), json.load(open(os.path.join(SD, 's1_report.json')))
@@ -104,9 +105,24 @@ def main():
     ret = [(e['t'], e['to']) for e in r0['events'] if e['what'] == 'return_state']
     t_done0 = float(ft['t_done0'])
     t_done1 = next(e['t'] for e in r1['events'] if e['what'] == 'mission_done')
-    warn = (r1.get('slip_warn') or {}).get('warn')
-    TITLE = '兩瓶連續任務：同一世界依視覺抓放兩瓶（bottle_f1_2，n＝1，無移動物）'
-    FOOT = f"第一輪合格（滑移 {r0['slip_max_mm_deg'][0]:.2f} mm）；第二輪流程完成但原抓持品質不合格（判定滑移 {r1['slip_max_mm_deg'][0]:.2f} mm > 5 mm）。任務完成 {t_done1:.2f} s。下方滑移曲線對抓持成立時刻重算，基準與判定器不同。"
+    warns = [(r_.get('slip_warn') or {}).get('warn') for r_ in Rs]
+    warn = warns[1]
+    TITLE = a.title or '兩瓶連續任務：同一世界依視覺抓放兩瓶（bottle_f1_2，n＝1，無移動物）'
+    q_txt = [f"{('第一輪', '第二輪')[i_]}{'原抓持品質不合格' if warns[i_] else '合格'}（判定滑移 {Rs[i_]['slip_max_mm_deg'][0]:.2f} mm{' > 5 mm' if warns[i_] else ''}）" for i_ in (0, 1)]
+    FOOT = f"流程完成；{'；'.join(q_txt)}。任務完成 {t_done1:.2f} s。下方滑移曲線對抓持成立時刻重算，基準與判定器不同。"
+    has_scene = bool(r1.get('scene'))
+    if has_scene:
+        import bottle_f1_lchan_scene as LS
+        k20_ = np.flatnonzero(np.abs(t_all * 20 - np.round(t_all * 20)) < 1e-6)
+        ins_ = LS.in_corridor(np.column_stack([c['base_x'][k20_], c['base_y'][k20_]]))
+        edges_ = np.flatnonzero(np.diff(ins_.astype(int)))
+        corr_ = np.interp(t_all, t_all[k20_], ins_.astype(float)) > 0.5
+        mom = sorted(mom + [(float(t_all[k20_[j_ + 1]]), '進入 L 型走廊（內淨寬 1.20 m）' if ins_[j_ + 1] else '離開 L 型走廊') for j_ in edges_], key=lambda m: m[0])
+    moved_ = np.hypot(c['other_base_x'] - c['other_base_x'][0], c['other_base_y'] - c['other_base_y'][0]) if 'other_base_x' in c else None
+    has_mover = bool((r1.get('dyn') or {}).get('case'))
+    note_ = ('單一移動圓柱（返回段）' if has_mover else '無移動物') + '；另一瓶未被碰到'
+    sl_max = float(np.nanmax(np.r_[slip[np.isfinite(slip)], 8.0]))
+    sl_top = 8.0 if sl_max <= 7.5 else float(np.ceil((sl_max + 1.0) / 5.0) * 5.0)
 
     def label(tn, i_):
         st = 0 if tn < ts else 1
@@ -119,7 +135,7 @@ def main():
         pre = ('第一輪（遠瓶 +0.15）', '第二輪（近瓶 −0.15）')[st]
         v = [p for tp, p in seq[st] if tp <= tn + 1e-9]
         if v:
-            return f'{pre}：{PLACE.get(v[-1], v[-1])}'
+            return f'{pre}：{PLACE.get(v[-1], v[-1])}{"；L 型走廊內" if has_scene and corr_[i_] else ""}'
         return f'{pre}：{GRASP.get(ph, "移動接近")}'
     pipe = subprocess.Popen(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{W}x{H}', '-r', f'{fps:g}', '-i', '-', '-c:v', 'libx264', '-preset', 'medium', '-crf', '21', '-pix_fmt', 'yuv420p', a.out], stdin=subprocess.PIPE)
     Y2 = TOP + MAIN_H
@@ -156,8 +172,8 @@ def main():
             d.text((x0, TOP + MAIN_H - 66), s, font=RV.F_B, fill=BAD if bad else GOOD)
         py, ph_ = Y2 + 42, H - Y2 - 42 - 62
         RV.plot(d, 80, py, 520, ph_, t, [('車速', sp, C1)], tn, 0.4, '底盤車速 m/s，時間 s', (0, 0.2, 0.4), unit='m/s', xstep=20)
-        RV.plot(d, 680, py, 520, ph_, t, [('滑移', sl_plot, WARN)], tn, 8.0, '滑移 mm（對該輪抓持成立時刻，只畫到鬆爪）', (0, 5, 8), unit='mm', xstep=20)
-        y5 = py + ph_ - 5.0 / 8.0 * ph_
+        RV.plot(d, 680, py, 520, ph_, t, [('滑移', sl_plot, WARN)], tn, sl_top, '滑移 mm（對該輪抓持成立時刻，只畫到鬆爪）', (0, 5, sl_top), unit='mm', xstep=20)
+        y5 = py + ph_ - 5.0 / sl_top * ph_
         d.line([(680, y5), (1200, y5)], fill=BAD, width=1)
         d.text((1196, y5 - 2), '判準 5 mm', font=RV.F_L, fill=BAD, anchor='rb')
         for t_v, s_v in ((t_done0, '第一輪完成'), (ts, '切換'), (t_done1, '第二輪完成')):
@@ -174,9 +190,10 @@ def main():
         d.text((cx_ - rr_, cy_ + rr_ + 6), '白箭頭：車頭（世界座標）', font=RV.F_L, fill=MUTED)
         tx_ = x0_ + 170
         st = 0 if tn < ts else 1
-        lines = [(f'第一輪：{"完成，品質合格" if tn >= t_done0 else "進行中"}', GOOD if tn >= t_done0 else MUTED),
-                 (f'第二輪：{"完成，品質不合格" if tn >= t_done1 else ("滑移已超標" if warn and tn >= warn["t_first"] else ("進行中" if st == 1 else "未開始"))}', BAD if (warn and tn >= warn['t_first']) else MUTED),
-                 (f'目前瓶到第二桌面 {float(c["bottle_base_z"][i_]) - 0.60:+.3f} m', MUTED), ('無移動物；另一瓶未被碰到', MUTED)]
+        w0_ = warns[0]
+        lines = [(f'第一輪：{("完成，品質不合格" if w0_ else "完成，品質合格") if tn >= t_done0 else ("滑移已超標" if w0_ and tn >= w0_["t_first"] else "進行中")}', BAD if (w0_ and tn >= w0_['t_first']) else (GOOD if tn >= t_done0 else MUTED)),
+                 (f'第二輪：{("完成，品質不合格" if warn else "完成，品質合格") if tn >= t_done1 else ("滑移已超標" if warn and tn >= warn["t_first"] else ("進行中" if st == 1 else "未開始"))}', BAD if (warn and tn >= warn['t_first']) else (GOOD if tn >= t_done1 else MUTED)),
+                 (f'目前瓶到第二桌面 {float(c["bottle_base_z"][i_]) - 0.60:+.3f} m', MUTED), (note_, MUTED)]
         for k_, (s_, col_) in enumerate(lines):
             d.text((tx_, y0_ + 8 + 30 * k_), s_, font=RV.F_L, fill=col_)
         d.text((24, H - 28), FOOT, font=RV.F_L, fill=MUTED)

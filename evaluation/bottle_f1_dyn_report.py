@@ -30,9 +30,12 @@ def _static(obs):
 
 def load_rows(path):
     """讀 save_compact 的 npz，還原成 analyse 用的 rows。"""
-    Z = np.load(path)
-    keys = [k for k in Z.files if k != 'obs_json']
-    return [dict({k: Z[k][i] for k in keys}, obs=json.loads(str(Z['obs_json'][i]))) for i in range(len(Z['t']))]
+    # 每個陣列只解壓一次。舊寫法逐列 Z[k][i]：每次都重新解壓整個陣列，而且列裡的視圖留住整個陣列，
+    # 2186 列就吃到 26 GB，系統記憶體保護把 VS Code 整個關掉（11/3 三次閃退）。
+    with np.load(path) as Z:
+        A = {k: Z[k] for k in Z.files}
+    obs = A.pop('obs_json')
+    return [dict({k: v[i] for k, v in A.items()}, obs=json.loads(str(obs[i]))) for i in range(len(A['t']))]
 
 
 def _new():
