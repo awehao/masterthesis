@@ -1779,7 +1779,7 @@ class GMPC:
                 gi_ms = (time.perf_counter() - t_g) * 1e3
                 gi_ok = gx is not None and np.asarray(gx).size == np.asarray(res.x).size and bool(np.all(np.isfinite(gx)))
                 hold_fb = dict(osqp_status=str(res.info.status), osqp_iter=int(res.info.iter), osqp_ms=osqp_ms, gi_ok=bool(gi_ok), gi_why=gi.get('why'), gi_steps=gi.get('steps'), gi_ms=gi_ms,
-                               kkt={k_: gi.get(k_) for k_ in ('ok', 'primal', 'dual', 'comp') if k_ in gi})
+                               kkt={k_: gi.get(k_) for k_ in ('ok', 'prim', 'stat', 'dual', 'comp') if k_ in gi})
                 if gi_ok:
                     res = SimpleNamespace(x=np.asarray(gx, float), y=gy, info=SimpleNamespace(status='solved'))
         solve_time = time.perf_counter() - t0
