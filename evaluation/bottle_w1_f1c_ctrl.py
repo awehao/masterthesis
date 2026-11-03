@@ -100,6 +100,7 @@ class W1PlaceController(F1L.W1PlaceController):
         """接手前一實例的運動狀態（任務狀態都是新的）。σ 由前一實例的弧長換算，路徑同一條。"""
         R = prev.ret
         J = R['J']
+        self.t = float(prev.t)
         self.path = NP.PlannedPath(J, CP.X_LANE)
         s_prev = float(prev.s_ref)
         self.s_ref = float(self.path.sig0 + s_prev)
