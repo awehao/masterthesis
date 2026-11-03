@@ -1,0 +1,310 @@
+{
+ "schema": 1,
+ "status": "Codex 20261103_143554 核可一趟；任務動作開始後失敗不補跑、不掃夾持力；不能用結果單獨證明加力、改路徑或連續交接各自的收益",
+ "task": "兩瓶連續交接＋固定 L 型走廊＋單一移動物的整合驗證（移動中狀態交接、不停車初始化；不回舊重啟點；夾爪驅動上限 10 N）",
+ "git_head_before_freeze_commit": "d7a0e745be9aab5e7b39a35af93c7f10b3c984dd",
+ "run": {
+  "RUN_ID": "bottle_f1c_1",
+  "S1_ARGS": "--finger-max-effort 10 --dyn-case f1c_transit_pass1 --bottle-dx 0.15 --bottle2=-0.15,0.42 --sim-s 240",
+  "MAP_ARGS": "--table2 3.0,-1.0 --walls-file evaluation/experiments/20261103_f1_lchannel_scene_v2.json",
+  "isaac_script": "evaluation/isaac_bottle_w1dynsr38.py",
+  "SEG_W1_SCRIPT": "evaluation/bottle_seg3d_f1_node.py",
+  "SEG_W1_ARGS": "--region 0,0.35,0.36,0.62 --inst-log evaluation/runs/bottle_f1c_1/instances.jsonl",
+  "CAND_SCRIPT": "evaluation/bottle_seg3d_candidates_f1_node.py"
+ },
+ "scene": {
+  "file": "evaluation/experiments/20261103_f1_lchannel_scene_v2.json",
+  "name": "f1_lchannel_v2",
+  "widths": {
+   "ns": 1.2,
+   "ew": 1.2,
+   "boxes": {
+    "partition": [
+     [
+      0.9,
+      -1.7,
+      0.0
+     ],
+     [
+      1.0,
+      3.0,
+      1.2
+     ]
+    ],
+    "inner_h": [
+     [
+      0.95,
+      -1.7,
+      0.0
+     ],
+     [
+      1.45,
+      -1.6,
+      1.2
+     ]
+    ],
+    "west": [
+     [
+      -0.4,
+      -3.0,
+      0.0
+     ],
+     [
+      -0.3,
+      -1.35,
+      1.2
+     ]
+    ],
+    "south": [
+     [
+      -0.4,
+      -3.0,
+      0.0
+     ],
+     [
+      1.9,
+      -2.9,
+      1.2
+     ]
+    ]
+   }
+  },
+  "rays": {
+   "南北段": {
+    "org": [
+     0.3,
+     -1.5
+    ],
+    "d": [
+     0.6,
+     0.6
+    ],
+    "sum": 1.2,
+    "hits": [
+     "/World/lwall/partition",
+     "/World/lwall/west"
+    ]
+   },
+   "東西段": {
+    "org": [
+     1.2,
+     -2.3
+    ],
+    "d": [
+     0.6,
+     0.6
+    ],
+    "sum": 1.2,
+    "hits": [
+     "/World/lwall/inner_h",
+     "/World/lwall/south"
+    ]
+   }
+  },
+  "first": [
+   0.15,
+   0.42
+  ],
+  "second": [
+   -0.15,
+   0.42
+  ],
+  "table1_z": 0.6,
+  "places": [
+   [
+    3.15,
+    -0.58
+   ],
+   [
+    2.85,
+    -0.58
+   ]
+  ],
+  "table2_x": 3.0,
+  "moving_obstacle": {
+   "name": "f1c_transit_pass1",
+   "source": "arena_traffic dyn_obs_0（同 w1_dyn_pass1 生成法）",
+   "nominal": "假世界 cont 軌跡（場景 v2）",
+   "speed": 0.3,
+   "radius": 0.25,
+   "height": 1.0,
+   "start": [
+    1.3202,
+    -3.9349
+   ],
+   "end": [
+    4.8135,
+    -0.7905
+   ],
+   "t_start": 66.257,
+   "t_meet": 73.59,
+   "lateral": 0.8,
+   "side": "left",
+   "frac": 0.5,
+   "meet_robot": [
+    2.4202,
+    -1.8684
+   ],
+   "robot_dir": [
+    -0.7432,
+    -0.669
+   ],
+   "nav": [
+    69.0,
+    78.71000000000336
+   ],
+   "rule": "t_meet＝前往第二瓶途中東房段實測軌跡弧長分率 frac 處；法向 0.80 m（先右後左）反向等速；起點前 2.2 m、終點後 2.5 m"
+  }
+ },
+ "rounds": [
+  {
+   "x_look": 0.15,
+   "region": [
+    0.0,
+    0.35,
+    0.36,
+    0.62
+   ],
+   "target": [
+    3.15,
+    -0.58
+   ]
+  },
+  {
+   "x_look": -0.15,
+   "region": [
+    -0.35,
+    0.0,
+    0.36,
+    0.62
+   ],
+   "target": [
+    2.85,
+    -0.58
+   ]
+  }
+ ],
+ "select": {
+  "K_LOCK": 3,
+  "R_LOCK_m": 0.05,
+  "M_BOUND_m": 0.05,
+  "relock": false
+ },
+ "return_seg": {
+  "goal": "G (-0.95,-0.45) 後接半徑 0.225 m 圓弧到直線段；交接點 σ＝-2.754",
+  "arm": "hold；後備 mi_gi_fallback",
+  "heading": "forward；交接前沿路徑轉回 0"
+ },
+ "offline": {
+  "task": "results/bottle/f1c_task_cont.json、f1c_task_contdyn.json",
+  "counterexamples": "results/bottle/f1c_task_counterexamples.json",
+  "wiring": "runs/bottle_f1c_wire_1/lchan_wiring.json",
+  "audit": "F1C_AUDIT：FK 與視向拿到改寫 q 的次數 0"
+ },
+ "scoring": "兩輪流程完成與兩輪原抓持品質分列；第一輪真正中止或放置未完成不進第二輪；僅平移滑移警告可進第二輪且保留品質紀錄",
+ "failure_policy": "無候選、歧義、未及時承接、安全停止都保留結果；任務失敗不補跑、不臨場改視角或門檻；不放寬判準",
+ "sha256": {
+  "evaluation/bottle_w1_f1_ctrl.py": "d6916171b9a3332a1636a3b9ec23c391ea9496bf6b0fa9a8333a0162f09a0169",
+  "evaluation/bottle_f1_task.py": "fc6fa5828eb2ad1f1db8571c69b1b4da1a81b83c73b2f322b484aafa6b7232f0",
+  "evaluation/bottle_seg3d_f1_node.py": "a7885fe21547180a77e0f60e4c0a61f563b394e2d946519e40254df121249a4e",
+  "evaluation/bottle_seg3d_candidates_f1_node.py": "32ae927bd6ea7d7269a8318c59357a33799e71e32a8fee0c71ba68fb0ba1e718",
+  "evaluation/bottle_seg3d_node.py": "cb3856406efe6bbb29f5fc5a657081052fa92c434405a084a269010fc242bbee",
+  "evaluation/bottle_seg3d_candidates_node.py": "4f089a6bd6c2a56008d9a9924a1b859f39cb33976c2d226df4e88f06b5317caf",
+  "evaluation/bottle_seg3d_candidates.py": "b8583c638cf924d89712ae70379bbbe4163d6a6ff14289462453c1f60d66c3fb",
+  "evaluation/bottle_f1_select.py": "123f3846b683376639d75b3ff39c5a8758faae991f64b5c9ba323e9b049b71a6",
+  "evaluation/bottle_segtarget_link.py": "559037987f7fcb6f0ae96ad099eeffcd8e177057b8a7b1f8b1da8c32645cbe0e",
+  "evaluation/bottle_w1_gaze_ctrl.py": "060611fe8a750eddffa3fc9dbbfaa1b0cf644cb9912d34c4c4f520e7b50e58ac",
+  "evaluation/bottle_w1_carrygov_ctrl.py": "9196becc2148895653bee89c26ae4384414731ee417ced185e7b5fadd314c201",
+  "evaluation/bottle_seg_depth3d.py": "ef9622ac4b5ce69e42802d6e9d3f3b0e2be7a3533268b85b8bca8b83b83e18cb",
+  "evaluation/run_bottle_ros.sh": "4ba0a9b6f3566c4f3e992ba1f56302b504af92c49a93b876ba756759b87c7f98",
+  "evaluation/run_guarded_v3.sh": "74408a910b3e5e4a027492436893d3611dd680017a6b98fc18bf8d519ea3b6fb",
+  "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_wb.py": "cc8a5bd6f77fa697e254c86dd9a7758c7274cba2f4da91e8ca889fa92dca159a",
+  "evaluation/dl0_ckpt/bottle_seg_v1_continue3/best.pth": "e5077fb8ede8815f02230748b7b35746d104f363ac8c28ed04d0d6da1d2bc962",
+  "evaluation/bottle_f1_contact.py": "1053f973d615f1fc8f5ffe4b02e8bade86922c6c06796988bc527952a77b3da0",
+  "evaluation/bottle_f1_crash.py": "cb421ff680748e5c60204ef8eedc72795403f2e620f520201ca8d8e5708f3bcf",
+  "evaluation/bottle_place_ros.py": "1bc9ff3ba4beea25b273b29742eb7ab95f5546a268059cdf6ecb659939ebf65b",
+  "evaluation/test_bottle_f1_task.py": "1b52f3fdf025891fb1ebcbe101ca29812ed84f3c2e49e87cc7b65f289b743e78",
+  "evaluation/bottle_w1_f1l_ctrl.py": "46d503bbfc9f3aa69b6815928bf6d475a35f420f34ea545731d8ccef76b9b3ae",
+  "evaluation/bottle_f1_lchan_scene.py": "ddf9e1dfdf044f6857c10646d5e4a59402115b5563b98c67bf6d7bcd7b42e00e",
+  "evaluation/experiments/20261103_f1_lchannel_scene_v2.json": "347886e9b641c3c2881f90a544e2212202f53d9f2acec12258bbf5fdf05a760d",
+  "evaluation/bottle_map_write.py": "ae57fc5f958fc8660de93f8b107cd1b3a8ca6c819ab4e2fc07626d4a51dc4803",
+  "evaluation/bottle_place_ctrl.py": "1c4b23a87c5a4f0dedb388443d2c5709085cd537aa094cfa6eb7bf55a3be2b3f",
+  "evaluation/isaac_bottle_w1dynsr38.py": "b8f4ed9446167e12f38b18248786ff4ae1ecaa706e74cdc37060a0359c7beb72",
+  "evaluation/bottle_w1_f1c_ctrl.py": "a8e1c84a12e1cbb9b247cf52dd4daa7a9a5270cd25a89ea93e49eb21daca55ba",
+  "evaluation/bottle_f1c_path.py": "71e69fb370f3251074360966662f86cd6c3bcbc9b97bf761a8d9499aea8687ab",
+  "evaluation/experiments/20261103_f1c_dyn_case.json": "f61d1cbc45cab02a82f90588d3391dd2dd1dce1f9c0321f5027fab0fcbc53d42",
+  "evaluation/results/bottle/f1_offline_plan_rev_box_lchan2_dx0.6_cont.json": "c9f14130fc5f177e1bc375d281bb8964072ec88f456e53de577c5fd1ad87c5bf",
+  "evaluation/runs/bottle_f1c_wire_1/lchan_wiring.json": "f041246690ce34d91c528f69038ee43b36b8eb3ecf15497880f56cf31f6f7424"
+ },
+ "changes_since_candidate": {
+  "files": [
+   "evaluation/isaac_bottle_w1dynsr36.py",
+   "evaluation/bottle_w1_f1_ctrl.py",
+   "evaluation/bottle_f1_task.py",
+   "evaluation/bottle_f1_contact.py"
+  ],
+  "ruling": "reviews/20261103_021114_reply.md",
+  "what": "實測靜止、F1 整體總期限、接觸映射純函式與動作前支撐核對、grip_ok 三態"
+ },
+ "launch_policy": "尚未開始任務動作且確定是解析、初始化或接線失敗：保留紀錄，允許一次修復後以新 RUN_ID 重起，重新凍結有變更的檔案。任務動作已開始（含接近）：後續一律算該趟未完成，不補跑",
+ "previous": {
+  "run": "bottle_f1l_1",
+  "result": "流程完成 168.55 s；兩輪原抓持品質不合格（16.45、18.19 mm）；回舊重啟點、停車、無移動物、5 N"
+ },
+ "changes_since_previous": {
+  "what": "連續交接路徑與移動中狀態交接、弧長觸發（只用於進度判定）、單一移動物、手指最大 effort 10 N",
+  "ruling": "Codex 133750、143554",
+  "three_changes_together": "三項同時開，不作單因素歸因"
+ },
+ "compare_note": "場景同 bottle_f1l_1，但路徑、交接、移動物與夾爪驅動同時改，不作單因素比較",
+ "speed_limit": {
+  "a_lat_frac": 0.4,
+  "a_look": 0.2,
+  "note": "0.4 是開發裕度；判準 a_lat 0.5 不變"
+ },
+ "wiring_note": "探測 48 組全部有力且兩輪進禁止接觸（嚴格核對，不依賴碰撞體計數；計數器讀不到 instance proxy，值不可信）；探測只在 --wiring-check 模式移牆",
+ "deliverable": "全景／手腕實錄重播，顯示沒有回舊重啟點、移動交接與動態會遇；失敗也交第一阻點",
+ "finger_effort": {
+  "asset": 5.0,
+  "set": 10.0,
+  "readback": [
+   10.0,
+   10.0
+  ],
+  "note": "兩個指關節各自的最大 effort 設定；不是量到的夾持力；模擬候選，不是實機規格"
+ },
+ "dyn_case": {
+  "name": "f1c_transit_pass1",
+  "source": "arena_traffic dyn_obs_0（同 w1_dyn_pass1 生成法）",
+  "nominal": "假世界 cont 軌跡（場景 v2）",
+  "speed": 0.3,
+  "radius": 0.25,
+  "height": 1.0,
+  "start": [
+   1.3202,
+   -3.9349
+  ],
+  "end": [
+   4.8135,
+   -0.7905
+  ],
+  "t_start": 66.257,
+  "t_meet": 73.59,
+  "lateral": 0.8,
+  "side": "left",
+  "frac": 0.5,
+  "meet_robot": [
+   2.4202,
+   -1.8684
+  ],
+  "robot_dir": [
+   -0.7432,
+   -0.669
+  ],
+  "nav": [
+   69.0,
+   78.71000000000336
+  ],
+  "rule": "t_meet＝前往第二瓶途中東房段實測軌跡弧長分率 frac 處；法向 0.80 m（先右後左）反向等速；起點前 2.2 m、終點後 2.5 m"
+ }
+}
