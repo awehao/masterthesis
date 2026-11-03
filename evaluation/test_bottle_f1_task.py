@@ -250,13 +250,11 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
     for nm, L_, rep in segs:
         if rep is None or not L_ or nm == 'return':
             continue
-        cp_ = (c0 if nm == 'carry_r1' else placed.get('c1')).cpath     # 當趟實際承接路徑（含接段與接直線段），不是規劃器原始路徑
-        park = np.asarray(rep['place']['park'], float)[:2]
-        P2_ = np.vstack([np.asarray(cp_.P, float)[:, :2], cp_.xy(np.arange(cp_.x_lane, float(park[0]) + 1e-9, NP.DS))])
         Q_ = np.array([x['q'] for x in L_ if x['pph'] in ('CARRY_NAV', 'PLACE_APPROACH')])
         if not len(Q_):
             continue
-        e_ = np.array([float(np.linalg.norm(P2_ - q_[:2], axis=1).min()) for q_ in Q_])
+        rows_c_ = [e2_ for e2_ in (c0.compact if nm == 'carry_r1' else (placed['c1'].compact if 'c1' in placed else [])) if float(e2_['w_p']) != 0.0 and float(e2_['t']) >= L_[0]['t'] and float(e2_['t']) <= L_[-1]['t']]
+        e_ = np.array([float(np.linalg.norm(np.asarray(e2_['qp'], float)[:2] - np.asarray(e2_['X_ref'], float)[0][:2, 2])) for e2_ in rows_c_]) if rows_c_ else np.zeros(1)
         v_ = np.diff(Q_[:, :2], axis=0) / 0.05
         a_ = np.linalg.norm(np.diff(v_, axis=0), axis=1) / 0.05
         Lc_ = [x for x in L_ if x['pph'] in ('CARRY_NAV', 'PLACE_APPROACH')]
@@ -264,7 +262,7 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
         vm_ = np.linalg.norm(v_, axis=1)
         ic_ = LS.in_corridor(Q_[:, :2])
         prof_ = ((rep.get('place') or {}).get('carry') or {}).get('profile')
-        out['tracking'][nm] = dict(duration_s=round(float(Lc_[-1]['t'] - Lc_[0]['t']), 2), ref_v=dict(mean=round(float(vr_.mean()), 3), min=round(float(vr_.min()), 3), max=round(float(vr_.max()), 3), corridor_mean=round(float(vr_[ic_].mean()), 3) if ic_.any() else None), meas_v=dict(mean=round(float(vm_.mean()), 3), min=round(float(vm_.min()), 3), max=round(float(vm_.max()), 3), corridor_mean=round(float(vm_[ic_[1:]].mean()), 3) if ic_[1:].any() else None), accept_profile=prof_, cross_max_m=round(float(e_.max()), 4), cross_p95_m=round(float(np.percentile(e_, 95)), 4), a_max_est_mps2=round(float(a_.max()), 3), v_max=round(float(np.linalg.norm(v_, axis=1).max()), 3), yaw_range=[round(float(Q_[:, 2].min()), 3), round(float(Q_[:, 2].max()), 3)])
+        out['tracking'][nm] = dict(duration_s=round(float(Lc_[-1]['t'] - Lc_[0]['t']), 2), ref_v=dict(mean=round(float(vr_.mean()), 3), min=round(float(vr_.min()), 3), max=round(float(vr_.max()), 3), corridor_mean=round(float(vr_[ic_].mean()), 3) if ic_.any() else None), meas_v=dict(mean=round(float(vm_.mean()), 3), min=round(float(vm_.min()), 3), max=round(float(vm_.max()), 3), corridor_mean=round(float(vm_[ic_[1:]].mean()), 3) if ic_[1:].any() else None), accept_profile=prof_, ref_err_max_m=round(float(e_.max()), 4), ref_err_mean_m=round(float(e_.mean()), 4), a_max_est_mps2=round(float(a_.max()), 3), v_max=round(float(np.linalg.norm(v_, axis=1).max()), 3), yaw_range=[round(float(Q_[:, 2].min()), 3), round(float(Q_[:, 2].max()), 3)])
     # 中止時保留該拍輸入、狀態、殘差與耗時（Codex 083722）；求解紀錄存檔，不改求解器
     rd_ = os.path.join(HERE, 'runs', 'lchan_fake_' + SCN['name'])
     os.makedirs(rd_, exist_ok=True)
