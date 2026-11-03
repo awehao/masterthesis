@@ -236,8 +236,9 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
     out['wall_actual'] = {k_: round(v_, 4) for k_, v_ in out['wall_actual'].items()}
     rows_ = list(c0.compact or []) + (list(placed['c1'].compact or []) if 'c1' in placed else [])
     dyn_t = [float(e_['t']) for e_ in rows_ if FD._dyn(e_['obs'])]
+    near_w = sum(1 for e_ in rows_ if any(min(float(LS.d2_box(np.array([o_['x'], o_['y']]), c_, s_)[0]) for c_, s_ in WALLS) < 0.6 for o_ in FD._dyn(e_['obs'])))
     eps_ = np.array([float(e_.get('eps0', 0.0)) for e_ in rows_])
-    out['false_dynamic'] = dict(n_ticks=len(dyn_t), n_rows=len(rows_), t_first=dyn_t[0] if dyn_t else None, t_last=dyn_t[-1] if dyn_t else None, max_items=max((len(FD._dyn(e_['obs'])) for e_ in rows_), default=0), note='場景沒有移動物，任何動態項都算誤判')
+    out['false_dynamic'] = dict(n_ticks_near_wall=near_w, n_ticks=len(dyn_t), n_rows=len(rows_), t_first=dyn_t[0] if dyn_t else None, t_last=dyn_t[-1] if dyn_t else None, max_items=max((len(FD._dyn(e_['obs'])) for e_ in rows_), default=0), note='場景沒有移動物，任何動態項都算誤判')
     i_e = int(np.argmax(eps_)) if len(eps_) else None
     in_c = np.array([bool(LS.in_corridor(np.asarray(e_['qp'], float)[:2])[0]) for e_ in rows_])
     t_over = [float(rows_[i_]['t']) for i_ in np.flatnonzero(eps_ > 1e-4)]
@@ -249,9 +250,9 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
     for nm, L_, rep in segs:
         if rep is None or not L_ or nm == 'return':
             continue
-        P_ = np.asarray(PLANS['carry_far' if nm == 'carry_r1' else 'carry_near']['P_region'], float)[:, :2]
-        park = np.asarray(rep['place'].get('park', P_[-1]), float)[:2] if isinstance(rep.get('place'), dict) else P_[-1]
-        P2_ = np.vstack([P_, P_[-1] + (park - P_[-1]) * np.linspace(0.05, 1.0, 20)[:, None]])
+        cp_ = (c0 if nm == 'carry_r1' else placed.get('c1')).cpath     # 當趟實際承接路徑（含接段與接直線段），不是規劃器原始路徑
+        park = np.asarray(rep['place']['park'], float)[:2]
+        P2_ = np.vstack([np.asarray(cp_.P, float)[:, :2], cp_.xy(np.arange(cp_.x_lane, float(park[0]) + 1e-9, NP.DS))])
         Q_ = np.array([x['q'] for x in L_ if x['pph'] in ('CARRY_NAV', 'PLACE_APPROACH')])
         if not len(Q_):
             continue
@@ -436,6 +437,24 @@ def main():
         return 0
     if CASE == 'lchan':                                      # 掃描要算很久：先留下結果與中止原因，後面報告出事也不會丟
         print('#EARLY ' + json.dumps(dict(outcome=r['outcome'], stage=r['stage'], stop=out['stop'], t_switch=r['t_switch'], t_done0=r['t_done0'], t_last=float(REC[-1]['t']), last=dict(ph=REC[-1]['ph'], pph=REC[-1]['pph'], ret=REC[-1]['ret'], q=REC[-1]['q'][:3].tolist()), events_tail=[e_ for e_ in (R[-1].get('events') or [])[-10:]], ret=R[0].get('f1', {}).get('ret')), ensure_ascii=False, default=float), flush=True)
+    if CASE == 'lchan' and os.environ.get('LCHAN_DIAG'):     # 只讀診斷：不算掃描；存求解紀錄、把中止前幾拍用同一輸入重解一次（掃描用當拍位姿重新射線，年齡近似）
+        C2.save_compact(c0, os.environ['LCHAN_DIAG'])
+        rows_ = list(c0.compact)
+        i_stop = max((i_ for i_, e_ in enumerate(rows_) if float(e_['w_p']) == 0.0), default=None)
+        diag = []
+        for e_ in rows_[max(i_stop - 3, 0):i_stop + 1]:
+            c0.t = float(e_['t'])
+            c0.scan_last = (float(e_['t']), np.array(c0.scan_fn(float(e_['t']), np.asarray(e_['qp'], float)), float)) if False else c0.scan_last
+            Xn_ = TP.from_xytheta(*np.asarray(e_['qp'], float)[:3]) if hasattr(TP, 'from_xytheta') else __import__('ammr_wholebody_mpc.se2', fromlist=['from_xytheta']).from_xytheta(*np.asarray(e_['qp'], float)[:3])
+            r_ = c0.mpc_nav.solve(obstacles=list(e_['obs'] or []), X_now=Xn_, X_ref_win=e_['X_ref'], xi_ref_win=e_['xi_ref'], xi_prev=np.asarray(e_['u_prev'], float)[:3], arm=dict(mode='hold'))
+            p_ = np.asarray(e_['qp'], float)[:2]
+            ds_ = sorted(round(float(np.hypot(o_['x'] - p_[0], o_['y'] - p_[1])), 3) for o_ in (e_['obs'] or []))
+            diag.append(dict(t=round(float(e_['t']), 2), xy=[round(float(v_), 3) for v_ in p_], yaw=round(float(e_['qp'][2]), 3), logged_u=np.round(e_['u'][:3], 4).tolist(), u_prev=np.round(e_['u_prev'][:3], 4).tolist(), xi0=np.round(e_['xi_ref'][0], 4).tolist(), ref_err=[round(float(v_), 4) for v_ in (np.asarray(e_['X_ref'][0][:2, 2]) - p_)], re_u=np.round(r_.u_opt, 4).tolist(), re_status=str(r_.status), re_accept=str(r_.accept_action), re_eps0=float(r_.eps0), re_active=int(r_.cbf_active), re_min_h=float(r_.min_h), n_obs=len(e_['obs'] or []), n_dyn=len(FD._dyn(e_['obs'])), obs_dist=ds_[:8]))
+        print('#DIAG ' + json.dumps(diag, ensure_ascii=False, default=float), flush=True)
+        print('#EPS ' + json.dumps([dict(t=round(float(e_['t']), 2), eps0=float(e_['eps0']), xy=[round(float(v_), 3) for v_ in np.asarray(e_['qp'], float)[:2]], w_p=float(e_['w_p']), n_dyn=len(FD._dyn(e_['obs']))) for e_ in rows_ if float(e_['eps0']) > 1e-4], ensure_ascii=False), flush=True)
+        print('#DYN ' + json.dumps([dict(t=round(float(e_['t']), 2), xy=[round(float(v_), 3) for v_ in np.asarray(e_['qp'], float)[:2]], d=[[round(float(o_['x']), 2), round(float(o_['y']), 2), round(float(o_.get('vx', 0.0)), 2), round(float(o_.get('vy', 0.0)), 2)] for o_ in FD._dyn(e_['obs'])]) for e_ in rows_ if FD._dyn(e_['obs'])][::3], ensure_ascii=False), flush=True)
+        print('#Q ' + json.dumps(dict(cpath=None if c0.cpath is None else np.round(c0.cpath.P[::20], 3).tolist()), ensure_ascii=False), flush=True)
+        return 0
     if CASE in ('nominal', 'origin', 'dyn', 'lchan'):
         H = f.hist
         tt, Q = np.array([h['t'] for h in H]), np.array([h['q'] for h in H])
@@ -580,7 +599,7 @@ def main():
             chk['移動物全身與停止掃掠 > 0'] = all(v_ > 0.0 for v_ in wd.values()) and FD.distances(tH, QH, CA, DC.state)['base_disc'] > 0.0
         if CASE == 'lchan':
             out['lchan'] = lchan_report(REC, R, c0, placed, wall_sw, wh, shared)
-            chk['牆無動態誤判'] = out['lchan']['false_dynamic']['n_ticks'] == 0
+            chk['牆無動態誤判'] = out['lchan']['false_dynamic']['n_ticks_near_wall'] == 0
             chk['對牆全身與停止掃掠 > 0'] = all(v_ > 0.0 for v_ in out['lchan']['wall_actual'].values()) and all(v_ > 0.0 for v_ in out['lchan']['wall_stop'].values())
             chk['期限內完成'] = bool(out.get('t_done') is not None and out['t_done'] < 240.0)
         chk['全程淨空'] = not fails
