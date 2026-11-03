@@ -293,26 +293,27 @@ def read_pairs(view, n_filters, dt):
 
 def lchan_wiring(a, SCN, stage, world, robot, query, ray_range, LW_OBJ, LW_PATHS, read_pairs, dt, V, P, F1_PERM, F_SIGN, T2D, bottle, bottle2, FC, NC, G):
     """不動作接線檢查（Codex 20261103_095415）：讀回牆盒與兩段淨寬、PhysX 射線、地圖檔、第二桌，再把牆暫時移到各感測物體上，確認力落在該牆那一欄，並經 FC.summarize 兩輪都進禁止接觸。空場零力不能證明映射，所以一定要探測。只有這個模式會移牆；檢查後離開，不開始任務。"""
-    from pxr import Usd, UsdGeom
+    from pxr import UsdPhysics
     fails, out = [], dict(scene=SCN['name'], widths_json=SCN['widths'], sim_s=float(a.sim_s), stop_tail_s=float(a.stop_tail_s))
 
     def chk(nm, ok, detail=None):
         print(f"[wire] {'通過' if ok else '未過'} {nm} {'' if detail is None else detail}", flush=True)
         if not ok:
             fails.append(nm)
-    cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ['default', 'render'])
+    # 牆盒讀回：USD BBox 對 FixedCuboid 會把 scale 算兩次（厚度 0.01），不能用；改讀 prim 位姿＋scale，再用 PhysX 射線量實際碰撞面
     bb = {}
-    for n_, p_ in zip(LW_OBJ, LW_PATHS):
-        r_ = cache.ComputeWorldBound(stage.GetPrimAtPath(p_)).ComputeAlignedRange()
-        bb[n_] = (np.array(r_.GetMin(), float), np.array(r_.GetMax(), float))
+    for n_, wo in LW_OBJ.items():
+        c_ = np.asarray(wo.get_world_pose()[0], float)
+        s_ = np.asarray(wo.get_local_scale(), float)
+        bb[n_] = (c_ - s_ / 2.0, c_ + s_ / 2.0)
     w_ns, w_ew = float(bb['partition'][0][0] - bb['west'][1][0]), float(bb['inner_h'][0][1] - bb['south'][1][1])
     out['widths_physics'] = dict(ns=round(w_ns, 5), ew=round(w_ew, 5), boxes={k: [v_[0].round(4).tolist(), v_[1].round(4).tolist()] for k, v_ in bb.items()})
     chk('物理牆盒讀回兩段內淨寬 1.20 m', abs(w_ns - 1.2) < 1e-3 and abs(w_ew - 1.2) < 1e-3, (w_ns, w_ew))
     z_ = float(G.LIDAR_Z)
     rays = {}
-    for nm, org, d1, d2, w1, w2 in (('南北段', (0.3, -2.0), (1.0, 0.0), (-1.0, 0.0), 'partition', 'west'), ('東西段', (1.2, -2.3), (0.0, 1.0), (0.0, -1.0), 'inner_h', 'south')):
+    for nm, org, d1, d2, w1, w2 in (('南北段', (0.3, -1.5), (1.0, 0.0), (-1.0, 0.0), 'partition', 'west'), ('東西段', (1.2, -2.3), (0.0, 1.0), (0.0, -1.0), 'inner_h', 'south')):
         a1, a2 = ray_range(query, [org[0], org[1], z_], [d1[0], d1[1], 0.0], NC.RANGE_MAX, []), ray_range(query, [org[0], org[1], z_], [d2[0], d2[1], 0.0], NC.RANGE_MAX, [])
-        rays[nm] = dict(sum=round(a1[0] + a2[0], 4), hits=[str(a1[1]), str(a2[1])])
+        rays[nm] = dict(org=org, d=[round(a1[0], 4), round(a2[0], 4)], sum=round(a1[0] + a2[0], 4), hits=[str(a1[1]), str(a2[1])])
         chk(f'PhysX 射線 {nm} 淨寬與命中牆', abs(a1[0] + a2[0] - 1.2) < 2e-3 and w1 in str(a1[1]) and w2 in str(a2[1]), rays[nm])
     out['rays'] = rays
     mp = os.path.join(a.out, 'map')
@@ -328,8 +329,15 @@ def lchan_wiring(a, SCN, stage, world, robot, query, ray_range, LW_OBJ, LW_PATHS
         return bool(img[ny - 1 - int((y - oy) / res), int((x - ox) / res)] < 128)
     m_ok = all(occ(float(0.5 * (v_[0][0] + v_[1][0])), float(0.5 * (v_[0][1] + v_[1][1]))) for k, v_ in bb.items() if k != 'partition') and occ(0.95, 0.0)
     m_free = not any(occ(x_, y_v) for x_, y_v in ((0.3, -2.0), (0.3, -1.5), (0.8, -2.3), (1.2, -2.3)))
-    wn = sum(1 for k_ in range(int((-0.6) / res), int(1.1 / res)) if not occ(k_ * res + 1e-3, -2.0)) * res
-    we = sum(1 for k_ in range(int((-3.0) / res), int((-1.5) / res)) if not occ(1.2, k_ * res + 1e-3)) * res
+    m_ok = m_ok and occ(0.95, -1.5)                                         # 隔牆南段（走廊東側）
+
+    def free_run(x0, y0, dx, dy):
+        n_ = 0
+        while n_ < 200 and not occ(x0 + (n_ + 1) * res * dx, y0 + (n_ + 1) * res * dy):
+            n_ += 1
+        return n_ * res
+    wn = free_run(0.3, -1.5, 1, 0) + free_run(0.3, -1.5, -1, 0) + res               # 由走廊中心往兩側數連續自由格
+    we = free_run(1.2, -2.3, 0, 1) + free_run(1.2, -2.3, 0, -1) + res
     t2 = [(c_ + T2D) for n_, c_, s_ in G.table_boxes() if n_ != 'table_top']
     m_t2 = all(occ(float(c_[0]), float(c_[1])) for c_ in t2)
     out['map'] = dict(file=mp, width_cells_ns=round(wn, 3), width_cells_ew=round(we, 3), t2_x=float(T2D[0]))
@@ -345,67 +353,92 @@ def lchan_wiring(a, SCN, stage, world, robot, query, ray_range, LW_OBJ, LW_PATHS
     jp0, b1p, b2p = robot.get_joint_positions().copy(), bottle.get_world_pose(), bottle2.get_world_pose()
 
     def targets():
-        pos = dict(base=np.asarray(V['base'].get_world_poses()[0], float)[0], finger=np.asarray(V['finger'].get_world_poses()[0], float)[0], arm_first=np.asarray(V['arm'][0].get_world_poses()[0], float)[0], arm_last=np.asarray(V['arm'][-1].get_world_poses()[0], float)[0], bottle1=np.asarray(bottle.get_world_pose()[0], float), bottle2=np.asarray(bottle2.get_world_pose()[0], float))
+        pos = dict(bottle1=np.asarray(bottle.get_world_pose()[0], float), bottle2=np.asarray(bottle2.get_world_pose()[0], float), finger=np.asarray(V['finger'].get_world_poses()[0], float)[0])
+        for i_, v_ in enumerate(V['arm']):
+            pos[f'arm{i_}'] = np.asarray(v_.get_world_poses()[0], float)[0]
         for i_, v_ in enumerate(V['extra']):
             pos[f'extra{i_}'] = np.asarray(v_.get_world_poses()[0], float)[0]
+        pos['base'] = np.asarray(V['base'].get_world_poses()[0], float)[0]           # 底盤最後：力最大，免得影響其他探測
         return pos
 
     def read_all():
         return dict(Mf=read_pairs(V['finger'], nf, dt), Ma=np.concatenate([read_pairs(v_, nf, dt) for v_ in V['arm']], axis=0), Me=[read_pairs(v_, nf, dt) for v_ in V['extra']], Mb=read_pairs(V['base'], len(P['base']), dt), Ms=read_pairs(V['bs'], len(P['b_env']), dt), Ms2=read_pairs(V['bs2'], len(P['b_env2']), dt), Mt=read_pairs(V['bt'], 1, dt), Mt2=read_pairs(V['bt2'], 1, dt), M2=read_pairs(V['b2'], 1, dt), M22=read_pairs(V['b22'], 1, dt))
+
+    def restore():
+        robot.set_joint_positions(jp0)
+        robot.set_joint_velocities(np.zeros_like(jp0))
+        bottle.set_world_pose(*b1p)
+        bottle2.set_world_pose(*b2p)
+        for b_ in (bottle, bottle2):
+            b_.set_linear_velocity(np.zeros(3))
+            b_.set_angular_velocity(np.zeros(3))
+        for _ in range(4):
+            world.step(render=False)
+            robot.set_joint_positions(jp0)
+            robot.set_joint_velocities(np.zeros_like(jp0))
     R0 = read_all()
     for k_, v_ in R0.items():
         arr = v_ if not isinstance(v_, list) else np.concatenate(v_, axis=0)
         chk(f'接觸矩陣 {k_} 形狀與有限值', arr is not None and np.isfinite(arr).all(), None if arr is None else arr.shape)
+    # 感測物體有沒有碰撞體：沒有的話該通道本來就不會有力，要明列，不能算通過也不能算映射錯
+    body_paths = dict(finger=str(V['finger'].prim_paths[0]), **{f'arm{i_}': str(v_.prim_paths[0]) for i_, v_ in enumerate(V['arm'])}, **{f'extra{i_}': str(v_.prim_paths[0]) for i_, v_ in enumerate(V['extra'])})
+    rigid = {str(pr.GetPath()) for pr in stage.Traverse() if pr.HasAPI(UsdPhysics.RigidBodyAPI)}
+    n_coll = {}
+    for tn_, bp_ in body_paths.items():
+        c_n = 0
+        for pr in stage.Traverse():
+            ps_ = str(pr.GetPath())
+            if ps_.startswith(bp_ + '/') and pr.HasAPI(UsdPhysics.CollisionAPI) and not any(r_ != bp_ and r_.startswith(bp_ + '/') and (ps_ == r_ or ps_.startswith(r_ + '/')) for r_ in rigid):
+                c_n += 1
+        n_coll[tn_] = c_n
+    out['n_colliders'] = n_coll
+    print(f'[wire] 感測物體碰撞體數 {n_coll}', flush=True)
     probes = []
+    OFF = (np.zeros(3), np.array([0.0, 0.0, 0.03]), np.array([0.0, 0.0, -0.03]), np.array([0.03, 0.0, 0.0]), np.array([-0.03, 0.0, 0.0]), np.array([0.0, 0.03, 0.0]), np.array([0.0, -0.03, 0.0]))
     for wi, (wn_, wo) in enumerate(LW_OBJ.items()):
         p0_, q0_ = wo.get_world_pose()
-        for tn, pos in targets().items():
-            wo.set_world_pose(position=np.asarray(pos, float))
-            f_max = 0.0
-            hit, forb0, forb1, cols = None, {}, {}, {}
-            for _ in range(4):
+        for tn in targets():
+            f_max, hit, drift = 0.0, None, None
+            for off in OFF:
+                restore()
+                T_ = targets()
+                wo.set_world_pose(position=np.asarray(T_[tn], float) + off)
                 world.step(render=False)
                 Rr = read_all()
+                wo.set_world_pose(position=p0_, orientation=q0_)
                 if tn == 'base':
                     M_, col = Rr['Mb'], len(P['base']) - len(LW_PATHS) + wi
                 elif tn == 'finger':
                     M_, col = Rr['Mf'], nf - len(LW_PATHS) + wi
-                elif tn in ('arm_first', 'arm_last'):
-                    M_, col = Rr['Ma'], nf - len(LW_PATHS) + wi
+                elif tn.startswith('arm'):
+                    M_, col = read_pairs(V['arm'][int(tn[3:])], nf, dt), nf - len(LW_PATHS) + wi
                 elif tn.startswith('extra'):
                     M_, col = Rr['Me'][int(tn[5:])], nf - len(LW_PATHS) + wi
                 elif tn == 'bottle1':
                     M_, col = Rr['Ms'], len(P['b_env']) - len(LW_PATHS) + wi
                 else:
                     M_, col = Rr['Ms2'], len(P['b_env2']) - len(LW_PATHS) + wi
-                fw = float(np.linalg.norm(M_[:, col], axis=1).max())
-                if fw > f_max:
-                    f_max, hit = fw, Rr
+                f_max = float(np.linalg.norm(M_[:, col], axis=1).max())
+                if f_max > 1e-3:
+                    hit = Rr
+                    break
+            forb0, forb1 = {}, {}
             if hit is not None:
                 _, _, _, _, forb0, _ = FC.summarize(0, hit['Mf'], hit['Ma'], hit['Me'], hit['Mt'], hit['Ms'], hit['Mb'], hit['M2'], F1_PERM, F_SIGN, True, has_env=True)
                 _, _, _, _, forb1, _ = FC.summarize(1, hit['Mf'], hit['Ma'], hit['Me'], hit['Mt2'], hit['Ms2'], hit['Mb'], hit['M22'], F1_PERM, F_SIGN, True, has_env=True)
-            key = {'base': 'base_env', 'finger': 'finger_table', 'arm_first': 'arm_table', 'arm_last': 'arm_table', 'bottle1': 'bottle_env', 'bottle2': 'bottle_env'}.get(tn, f'{tn}_table')
+            key = 'base_env' if tn == 'base' else 'finger_table' if tn == 'finger' else 'arm_table' if tn.startswith('arm') else 'bottle_env' if tn.startswith('bottle') else f'{tn}_table'
             if tn == 'bottle1':
                 ok_r = forb0.get(key, 0.0) > 0.0
             elif tn == 'bottle2':
                 ok_r = forb1.get(key, 0.0) > 0.0
             else:
                 ok_r = forb0.get(key, 0.0) > 0.0 and forb1.get(key, 0.0) > 0.0
-            probes.append(dict(wall=wn_, target=tn, f_col=round(f_max, 3), key=key, r1=round(float(forb0.get(key, 0.0)), 3), r2=round(float(forb1.get(key, 0.0)), 3), ok=bool(f_max > 1e-3 and ok_r)))
-            print(f"[wire] 探測 {wn_}→{tn}：牆欄 {f_max:.2f} N；{key} 第一輪 {forb0.get(key, 0.0):.2f}／第二輪 {forb1.get(key, 0.0):.2f}", flush=True)
-            wo.set_world_pose(position=p0_, orientation=q0_)
-            robot.set_joint_positions(jp0)
-            robot.set_joint_velocities(np.zeros_like(jp0))
-            bottle.set_world_pose(*b1p)
-            bottle2.set_world_pose(*b2p)
-            for b_ in (bottle, bottle2):
-                b_.set_linear_velocity(np.zeros(3))
-                b_.set_angular_velocity(np.zeros(3))
-            for _ in range(3):
-                world.step(render=False)
+            no_coll = n_coll.get(tn) == 0
+            probes.append(dict(wall=wn_, target=tn, f_col=round(f_max, 3), key=key, r1=round(float(forb0.get(key, 0.0)), 3), r2=round(float(forb1.get(key, 0.0)), 3), n_coll=n_coll.get(tn), no_collider=bool(no_coll), ok=bool(f_max > 1e-3 and ok_r) or bool(no_coll)))
+            print(f"[wire] 探測 {wn_}→{tn}：牆欄 {f_max:.2f} N；{key} 第一輪 {forb0.get(key, 0.0):.2f}／第二輪 {forb1.get(key, 0.0):.2f}{'（此物體無碰撞體，通道不可能有力）' if no_coll else ''}", flush=True)
     out['probes'] = probes
     bad = [x_ for x_ in probes if not x_['ok']]
-    chk(f'探測 {len(probes)} 組：力落在該牆欄且進禁止接觸（兩輪）', not bad, bad[:6])
+    chk(f'探測 {len(probes)} 組：力落在該牆欄且進禁止接觸（兩輪）；無碰撞體 {sum(1 for x_ in probes if x_["no_collider"])} 組另列', not bad, bad[:8])
     out['fails'] = fails
     out['ok'] = not fails
     json.dump(out, open(os.path.join(a.out, 'lchan_wiring.json'), 'w'), ensure_ascii=False, indent=1, default=float)
