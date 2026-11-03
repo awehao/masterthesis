@@ -32,7 +32,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'results', 'bottle', 'f1_task_check.json')
-CASES = ('nominal', 'dyn', 'lchan', 'cont', 'cont_stale', 'cont_noobs', 'cont_planlate', 'origin', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
+CASES = ('nominal', 'dyn', 'lchan', 'cont', 'contdyn', 'cont_stale', 'cont_noobs', 'cont_planlate', 'origin', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
 if len(sys.argv) < 2 or sys.argv[1] == 'all':
     from concurrent.futures import ThreadPoolExecutor
 
@@ -101,8 +101,8 @@ PLACING = ('PARKED', 'LOWER', 'RELEASE', 'RETREAT', 'HOLD', 'DONE')
 REC = []
 CUR = dict(id=0, t0=0.0, q_tuck=None)
 CA = None
-if CASE == 'dyn':
-    CA = dict(json.load(open(os.path.join(HERE, 'experiments', '20261103_f1_dyn_case.json')))['case'])
+if CASE in ('dyn', 'contdyn'):
+    CA = dict(json.load(open(os.path.join(HERE, 'experiments', '20261103_f1c_dyn_case.json' if CASE == 'contdyn' else '20261103_f1_dyn_case.json')))['case'])
     for k_ in ('start', 'end', 'meet_robot', 'robot_dir'):
         CA[k_] = tuple(CA[k_])
 Z_BOT, H_BOT, R_BOT = 0.60, G.BOTTLE['h'], G.BOTTLE['r']
@@ -510,12 +510,16 @@ def main():
         print('#DYN ' + json.dumps([dict(t=round(float(e_['t']), 2), xy=[round(float(v_), 3) for v_ in np.asarray(e_['qp'], float)[:2]], d=[[round(float(o_['x']), 2), round(float(o_['y']), 2), round(float(o_.get('vx', 0.0)), 2), round(float(o_.get('vy', 0.0)), 2)] for o_ in FD._dyn(e_['obs'])]) for e_ in rows_ if FD._dyn(e_['obs'])][::3], ensure_ascii=False), flush=True)
         print('#Q ' + json.dumps(dict(cpath=None if c0.cpath is None else np.round(c0.cpath.P[::20], 3).tolist()), ensure_ascii=False), flush=True)
         return 0
-    if CASE == 'cont' or BASE_CASE in ('stale', 'noobs', 'planlate') and CONT:
+    if CASE in ('cont', 'contdyn') or BASE_CASE in ('stale', 'noobs', 'planlate') and CONT:
         out['cont'] = cont_report(f, r, R, task)
         print('#CONT ' + json.dumps(out['cont'], ensure_ascii=False, default=float), flush=True)
+    if CONT:                                                  # 軌跡留檔：移動物案例由它事前產生，之後不再依成敗調整
+        rd0_ = os.path.join(HERE, 'runs', 'lchan_fake_' + SCN['name'])
+        os.makedirs(rd0_, exist_ok=True)
+        np.savez_compressed(os.path.join(rd0_, f'traj_{CASE}.npz'), t=np.array([h['t'] for h in f.hist]), q=np.array([h['q'] for h in f.hist]), ret=np.array([[e_['t'], e_['to']] for e_ in R[0]['events'] if e_.get('what') == 'return_state'], dtype=object), t_switch=r['t_switch'], t_done0=r['t_done0'])
     if CONT and os.environ.get('CONT_QUICK'):                 # 只要流程與主表，不算掃描
         return 0
-    if CASE in ('nominal', 'origin', 'dyn', 'lchan', 'cont'):
+    if CASE in ('nominal', 'origin', 'dyn', 'lchan', 'cont', 'contdyn'):
         H = f.hist
         tt, Q = np.array([h['t'] for h in H]), np.array([h['q'] for h in H])
         out['t_done'] = float(tt[-1])
@@ -600,7 +604,7 @@ def main():
             tst.setdefault(x['ret'], [x['t'], x['t']])[1] = x['t']
         out.update(actual=act, stop=dict(other=sw, static=sst), stop_where=wh, fails=fails, static_fails=sfails, n_stop_ticks=len(sel), return_seg=dict(arm_move_rad=arm_move, v_max=float(spd.max()), w_max=float(dyaw.max()), t_state={k_: [round(v_[0], 2), round(v_[1], 2)] for k_, v_ in tst.items()}, yaw_end=float(rq[-1, 2]), pos_end=rq[-1, :2].tolist(), base_clear_disc_m=round(base_c, 4), t_nav=[x['t'] for x in rt][0], t_end=[x['t'] for x in rt][-1], L=ret['info']['L'], plans=[shared.info]),
                    switch_cont=dict(s_step_rad=ds_sw, q_step_max_rad=j_q, first_placed=None if 'first' not in placed else placed['first'][:3, 3].tolist(), second_placed=np.array(f.Tb)[:3, 3].tolist()), stop_why=out['stop'] if isinstance(out['stop'], list) else None)
-        if CASE == 'dyn':
+        if CA is not None:
             tH = np.array([h['t'] for h in H])
             QH = np.array([h['q'] for h in H])
             out['dyn'] = dict(case=CA, actual=FD.distances(tH, QH, CA, DC.state))
@@ -640,7 +644,7 @@ def main():
             nav_ev = {e_['to']: e_['t'] for e_ in R[0]['events'] if e_['what'] == 'return_state'}
             nav_w = (nav_ev.get('NAV', 0.0), nav_ev.get('ROT1', 1e9))
             rows_ = list(c0.compact) + (list(placed['c1'].compact) if 'c1' in placed else [])
-            out['dyn']['interaction'] = FD.analyse(rows_, c0.mpc_nav, CA['t_start'], nav_w)
+            out['dyn']['interaction'] = FD.analyse(rows_, c0.mpc_nav, CA['t_start'], nav_w, arm=(c0._ret_arm() if CONT else None))
             # 實跑走 save_compact→load_rows：混合手臂主動與返回 hold 兩種紀錄列必須能存能讀，存讀後的統計要與記憶體版相同
             rows_rt_ = []
             for c_rt_ in (c0, placed.get('c1')):
@@ -649,7 +653,7 @@ def main():
                         p_rt_ = os.path.join(td_, 's1_cbf.npz')
                         C2.save_compact(c_rt_, p_rt_)
                         rows_rt_ += FD.load_rows(p_rt_)
-            chk['求解紀錄存讀一致'] = FD.analyse(rows_rt_, c0.mpc_nav, CA['t_start'], nav_w) == out['dyn']['interaction']
+            chk['求解紀錄存讀一致'] = FD.analyse(rows_rt_, c0.mpc_nav, CA['t_start'], nav_w, arm=(c0._ret_arm() if CONT else None)) == out['dyn']['interaction']
             out['dyn']['nav_window'] = nav_w
             k_nav = np.flatnonzero((tH >= nav_w[0]) & (tH <= nav_w[1]) & (np.abs(tH * 20 - np.round(tH * 20)) < 1e-6))
             v_ = np.hypot(np.diff(QH[k_nav, 0]), np.diff(QH[k_nav, 1])) / 0.05
