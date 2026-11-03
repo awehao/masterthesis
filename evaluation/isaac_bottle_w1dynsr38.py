@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""瓶子 F1-C 連續交接（isaac_bottle_w1dynsr37.py 的版本化複本，2026-11-03；Howard「不要回原位」、Codex 20261103_133750）：第一瓶放好後一條路徑（bottle_f1c_path）直接接第二瓶，到換目標點不停車換新實例（bottle_w1_f1c_ctrl.adopt_rolling、bottle_f1_task.F1TaskC）；底層仍是原 GMPC。--dyn-case f1c_transit_pass1 加入事前固定的單一移動圓柱（前往第二瓶途中、走廊外東房段）。--finger-max-effort：模擬手指有效驅動上限（N，兩指合計）；0＝沿用資產值，有設就讀回核對並寫進報告。場景、接線檢查同 dynsr37。
+"""瓶子 F1-C 連續交接（isaac_bottle_w1dynsr37.py 的版本化複本，2026-11-03；Howard「不要回原位」、Codex 20261103_133750、143554）：第一瓶放好後一條路徑（bottle_f1c_path）直接接第二瓶，到交接點做移動中狀態交接、不停車初始化（仍建立第二輪新實例，只承接運動狀態；bottle_w1_f1c_ctrl.adopt_rolling、bottle_f1_task.F1TaskC）；底層仍是原 GMPC。--dyn-case f1c_transit_pass1 加入事前固定的單一移動圓柱（前往第二瓶途中、走廊外東房段）。--finger-max-effort：模擬手指有效驅動上限（N，兩指合計）；0＝沿用資產值，有設就讀回核對並寫進報告。場景、接線檢查同 dynsr37。
 以下為 dynsr37 說明。
 瓶子 F1-L（isaac_bottle_w1dynsr36.py 的版本化複本，2026-11-03；Codex 20261103_095415）：兩瓶＋固定 L 型走廊的指定場景。四面牆與第二桌位置都讀 bottle_f1_lchan_scene（場景 v2，淨寬由牆面核算，不符拒跑），同步進物理、地圖、掃描（PhysX 射線）、接觸判定與放置評估；控制器換 bottle_w1_f1l_ctrl（急彎前降速、返回段迭代上限後備）。無移動物。--wiring-check：不動作接線檢查後離開，不開始任務。其餘同 dynsr36。
 以下為 dynsr36 說明。
@@ -635,15 +635,18 @@ def main():
     robot.set_joint_positions(q0)
     robot.get_articulation_controller().set_gains(kps=kp, kds=kd)
     me0_ = np.asarray(robot.get_articulation_controller().get_max_efforts(), float).copy()
-    FINGER_EFFORT = dict(asset=float(me0_[f1]), follower=float(me0_[f2]), requested=float(a.finger_max_effort))
+    g0_ = [np.asarray(v_, float).copy() for v_ in robot.get_articulation_controller().get_gains()]
+    FINGER_EFFORT = dict(asset=float(me0_[f1]), follower=float(me0_[f2]), requested=float(a.finger_max_effort), note='兩個指關節各自的最大 effort 設定；不是量到的夾持力，接觸力另報。模擬候選，不是實機規格')
     if a.finger_max_effort > 0.0:                                             # 只改手指；閉合目標、kp／kd、摩擦、手臂都不動
         me_ = me0_.copy()
         me_[f1] = me_[f2] = float(a.finger_max_effort)                        # 同門任務的做法：兩指一起設；實際夾持力看接觸力讀值，不看這個設定
         robot.get_articulation_controller().set_max_efforts(me_.astype(np.float32))
         rb_ = np.asarray(robot.get_articulation_controller().get_max_efforts(), float)
-        FINGER_EFFORT['readback'] = float(rb_[f1])
-        if abs(float(rb_[f1]) - float(a.finger_max_effort)) > 1e-3:
-            print(f'[s1] 手指驅動上限讀回 {rb_[f1]} 不等於設定 {a.finger_max_effort} ⇒ 拒跑', flush=True)
+        gb_ = [np.asarray(v_, float) for v_ in robot.get_articulation_controller().get_gains()]
+        others_ = [i_ for i_ in range(len(rb_)) if i_ not in (f1, f2)]
+        FINGER_EFFORT.update(readback=[float(rb_[f1]), float(rb_[f2])], others_unchanged=bool(np.array_equal(rb_[others_], me0_[others_])), gains_unchanged=all(np.array_equal(a_, b_) for a_, b_ in zip(g0_, gb_)))
+        if not (np.isfinite(rb_).all() and abs(float(rb_[f1]) - float(a.finger_max_effort)) <= 1e-3 and abs(float(rb_[f2]) - float(a.finger_max_effort)) <= 1e-3 and FINGER_EFFORT['others_unchanged'] and FINGER_EFFORT['gains_unchanged']):
+            print(f'[s1] 手指驅動上限讀回不符 {FINGER_EFFORT} ⇒ 拒跑', flush=True)
             return 17
     print(f'[s1] 手指有效驅動上限 {FINGER_EFFORT}', flush=True)
 

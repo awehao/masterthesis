@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """F1 連續交接控制器（版本化子類；Howard「不要回原位」、Codex 20261103_133750）。底層仍是原 GMPC；基線 bottle_w1_f1l_ctrl。
-第一瓶放好後不回西端：一條路徑（bottle_f1c_path）直接接到第二瓶的直線段，走到路徑上的換目標點就換新實例，不停車。
+第一瓶放好後不回西端：一條路徑（bottle_f1c_path）直接接到第二瓶的直線段，到交接點做移動中狀態交接、不停車初始化（程式仍建立第二輪新實例，只承接運動狀態）。
 保留：實測狀態、設定點、上一命令、在途管線、偏移估測、Shield 用的最新掃描、參考速度與進度（σ 連續）。
 重設：視覺輪次、目標、抓持基準、抓放相位、規劃請求綁定（PlanPort.bind 已擋舊回覆）。沒有人工清空管線、沒有靜態校正。
-弧長觸發：既有流程的手腕視角、抓取計畫期限、漸變、窗口都用「x 單調」的假設（bottle_w1_segtarget_vhigh_ctrl 明寫）。繞回來的接近段 x 不單調，所以直線段之前把 x 換成 σ；到直線段 σ＝x，後段行為與基線相同。手腕視向仍用實際位姿。
+弧長觸發：既有流程的手腕視角、抓取計畫期限、漸變、窗口都用「x 單調」的假設（bottle_w1_segtarget_vhigh_ctrl 明寫）。繞回來的接近段 x 不單調，所以直線段之前把判定用的 x 換成 σ；到直線段 σ＝x，後段行為與基線相同。σ 只用於進度與期限判定；FK、視向、障礙、淨空與停止核對都用真實構型（F1C_AUDIT 實際核對）。
 必要的避障、放置與安全停止都保留：「不停」不壓過安全；換目標條件不成立就不換，超過容許範圍受控停止。
 """
 import copy
@@ -141,12 +141,18 @@ class W1PlaceController(F1L.W1PlaceController):
             self._q_true = np.asarray(q, float)
             q = np.array(q, float)
             q[0] = float(self.sig_robot)
+            self._q_eff = q                                    # 核對用：這個陣列只能用於進度判定
         else:
-            self._q_true = None
+            self._q_true, self._q_eff = None, None
         super()._advance_inner(T_tcp, close_done, q)
+        self._q_eff = None
 
     def _q_for_gaze(self, q):
         return self._q_true if self._q_true is not None else q
+
+    def _clear_check(self, T_tcp, q):
+        """非手指對瓶的淨空核對用真實構型，不用路徑進度。"""
+        return super()._clear_check(T_tcp, self._q_true if self._q_true is not None else q)
 
     def report(self):
         r = super().report()

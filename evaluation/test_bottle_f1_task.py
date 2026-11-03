@@ -78,6 +78,7 @@ import bottle_w1_f1_ctrl as F1C                         # noqa: E402
 import bottle_w1_f1l_ctrl as F1L                        # noqa: E402
 import bottle_w1_f1c_ctrl as F1CC                       # noqa: E402
 import bottle_f1c_path as CP                            # noqa: E402
+import bottle_monitor_progress as MPG                   # noqa: E402
 import test_bottle_place as TP                          # noqa: E402
 import bottle_n2_path as NP                             # noqa: E402
 TP.DX, TP.DY = (SCN['table2_x'] if SCN is not None else 2.4), -1.0
@@ -187,6 +188,31 @@ class Ctl(F1CC.W1PlaceController if CONT else (F1L.W1PlaceController if SCN is n
             REC.append(dict(round=self.round_id, t=float(self.t), ph=self.st.phase, pph=getattr(self, 'pph', None), q=np.asarray(q, float).copy(), s=np.asarray(self.s, float).copy(), pipe=[np.asarray(u, float).copy() for u in self.pipe],
                             u_last=np.asarray(self.u_last, float).copy(), v_b=float(self.v_b), f_cmd=copy.deepcopy(self.f_cmd), T_rel=T_rel, pre_lift=pre, ret=None if self.ret is None else self.ret['state'], cfg=self.cfg))
         super()._advance_inner(T_tcp, close_done, q)
+
+
+AUDIT = []
+
+
+def audit_fk(c):
+    """F1C_AUDIT：σ 只能用於進度判定。FK 與手腕視向一旦拿到被改寫的 q 就記下呼叫位置。"""
+    import traceback
+    K_ = c.K
+    fk0 = K_.fk
+
+    def fk(q_, *a_, **k_):
+        e_ = getattr(c, '_q_eff', None)
+        if e_ is not None and np.asarray(q_).shape == e_.shape and np.array_equal(np.asarray(q_), e_):
+            AUDIT.append(''.join(traceback.format_stack(limit=4)[:-1])[-400:])
+        return fk0(q_, *a_, **k_)
+    K_.fk = fk
+    q0 = c._q_for_gaze
+
+    def qg(q_):
+        out_ = q0(q_)
+        if getattr(c, '_q_eff', None) is not None and out_ is c._q_eff:
+            AUDIT.append('gaze 拿到改寫的 q')
+        return out_
+    c._q_for_gaze = qg
 
 
 def build_ctrl():
@@ -387,6 +413,18 @@ def main():
             port.bind(c)
         c.obs.d = np.clip(d, -c.obs.max, c.obs.max)
         c.cfg.arm_model.bias = c.bias0 + np.asarray(c.cfg.arm_model.alpha, float) * c.obs.d
+        if CONT:                                               # 同 Isaac dynsr38 的接線：路徑與監看都換成前一實例規劃好的那一條，σ 由它的進度換算
+            prev_ = task.c
+            pn_ = NP.PlannedPath(prev_.ret['J'], CP.X_LANE)
+            c.path = pn_
+            c.s_ref = c.sig_robot = float(pn_.sig0 + float(prev_.ret['sig']))
+            mon_ = NP.PathMonitor(pn_)
+            mon_.on_grid(TP.empty_grid(), c.sig_robot)
+            mprog_ = MPG.MonitorProgress(pn_, C2.B.Y_TUBE)
+            mprog_.sig = float(c.sig_robot)
+            placed.update(mon=mon_, mprog=mprog_, sig_start=float(c.sig_robot), path_new=pn_)
+            if os.environ.get('F1C_AUDIT'):
+                audit_fk(c)
         placed['first'] = np.array(f.Tb, float).copy()
         S0B.BX, S0B.BY = ROUNDS[i]['b']
         f.Tb, f.grasped, f.released, f.Trel = S0B.bottle_T(), False, False, None
@@ -412,6 +450,8 @@ def main():
         c = task.c
         ov = {}
         f_.q[2] = F1C.wrap(float(f_.q[2]))                     # 偏航量測與 Isaac 一樣落在 (−π, π]
+        if CONT and 'mprog' in placed:
+            placed['mprog'].update(np.asarray(f_.q, float), float(t))
         if BASE_CASE == 'planlate' and task.stage == 1 and not st['late_done']:      # 切換後第一拍：舊回覆才到
             st['late_done'] = True
             shared.inject_late(shared.req_id - 1)
@@ -517,6 +557,10 @@ def main():
         print('#DYN ' + json.dumps([dict(t=round(float(e_['t']), 2), xy=[round(float(v_), 3) for v_ in np.asarray(e_['qp'], float)[:2]], d=[[round(float(o_['x']), 2), round(float(o_['y']), 2), round(float(o_.get('vx', 0.0)), 2), round(float(o_.get('vy', 0.0)), 2)] for o_ in FD._dyn(e_['obs'])]) for e_ in rows_ if FD._dyn(e_['obs'])][::3], ensure_ascii=False), flush=True)
         print('#Q ' + json.dumps(dict(cpath=None if c0.cpath is None else np.round(c0.cpath.P[::20], 3).tolist()), ensure_ascii=False), flush=True)
         return 0
+    if CONT and 'mprog' in placed:
+        out['monitor'] = dict(sig_start=placed['sig_start'], mprog=placed['mprog'].report(), why=placed['mon'].why, n_check=placed['mon'].n_check, path_L=placed['path_new'].L)
+    if os.environ.get('F1C_AUDIT'):
+        print('#AUDIT ' + json.dumps(dict(n=len(AUDIT), first=AUDIT[:3]), ensure_ascii=False), flush=True)
     if CASE in ('cont', 'contdyn') or BASE_CASE in ('stale', 'noobs', 'planlate') and CONT:
         out['cont'] = cont_report(f, r, R, task)
         print('#CONT ' + json.dumps(out['cont'], ensure_ascii=False, default=float), flush=True)

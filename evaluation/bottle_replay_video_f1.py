@@ -98,7 +98,10 @@ def main():
     sl_plot = np.nan_to_num(slip[idx], nan=0.0)
     sp_all = np.convolve(np.hypot(np.gradient(c['base_x'], t_all), np.gradient(c['base_y'], t_all)), np.ones(5) / 5, mode='same')
     sp = sp_all[idx]
-    mom = sorted(round_events(r0, 0) + round_events(r1, 1) + [(ts, '切換到第二輪：視覺與候選重設，只找第一桌左半的瓶')], key=lambda m: m[0])
+    cont_ = bool((r0.get('f1c') or {}).get('s_h') is not None)   # 連續交接：沒有回舊重啟點，移動中狀態交接
+    if cont_:
+        RET.update(ROT0='前往第二瓶：原地掉頭（車頭朝行進方向）', NAV='前往第二瓶：車頭朝前導航')
+    mom = sorted(round_events(r0, 0) + round_events(r1, 1) + [(ts, '移動中狀態交接到第二輪（不停車、不回舊重啟點）：視覺與候選重設' if cont_ else '切換到第二輪：視覺與候選重設，只找第一桌左半的瓶')] + ([(float(r1['dyn']['case']['t_start']), '移動圓柱開始走（世界軌跡固定）')] if (r1.get('dyn') or {}).get('case') else []), key=lambda m: m[0])
     seq = [[], []]
     for i_, r in enumerate(Rs):
         seq[i_] = [(e['t'], e['to']) for e in r['events'] if e['what'] == 'place_phase']

@@ -17,13 +17,15 @@ import bottle_f1_dyn_report as FD                       # noqa: E402
 import bottle_s1_geom as G                              # noqa: E402
 
 D = os.path.join(HERE, 'runs', RUN)
-CA = dict(json.load(open(os.path.join(HERE, 'experiments', '20261103_f1_dyn_case.json')))['case'])
-for k in ('start', 'end', 'meet_robot', 'robot_dir'):
-    CA[k] = tuple(CA[k])
 r0 = json.load(open(os.path.join(D, 's1_report_r0.json')))
 r1 = json.load(open(os.path.join(D, 's1_report.json')))
+CA = dict((r1.get('dyn') or {}).get('case') or json.load(open(os.path.join(HERE, 'experiments', '20261103_f1_dyn_case.json')))['case'])   # 案例以當趟報告為準
+for k in ('start', 'end', 'meet_robot', 'robot_dir'):
+    CA[k] = tuple(CA[k])
+ROLL = bool((r0.get('f1c') or {}).get('s_h') is not None)   # 連續交接：沒有 ROT1，NAV 到交接為止；返回段求解有開後備
 ev = {e['to']: e['t'] for e in r0['events'] if e.get('what') == 'return_state'}
-nav = (ev.get('NAV', 0.0), ev.get('ROT1', 1e9))
+t_sw_ = float((r1.get('f1_task') or {}).get('t_switch') or 1e9)
+nav = (ev.get('NAV', 0.0), ev.get('ROT1', t_sw_ if ROLL else 1e9))
 c, _ = T.build_ctrl()
 rows = FD.load_rows(os.path.join(D, 's1_cbf_r0.npz')) + FD.load_rows(os.path.join(D, 's1_cbf.npz'))
 SL = np.load(os.path.join(D, 'scan_log.npz'))
@@ -37,7 +39,7 @@ def before_solve(e):
     c.scan_last = None if i_ < 0 else (float(ts_[i_]), np.array(rr_[i_], float))
 
 
-out = dict(run=RUN, case=CA['name'], nav_window=nav, return_states=ev, interaction=FD.analyse(rows, c.mpc_nav, CA['t_start'], nav, before_solve=before_solve))
+out = dict(run=RUN, case=CA['name'], nav_window=nav, return_states=ev, interaction=FD.analyse(rows, c.mpc_nav, CA['t_start'], nav, before_solve=before_solve, arm=dict(mode='hold', mi_gi_fallback=True) if ROLL else None))
 n_d = np.array([len(FD._dyn(e['obs'])) for e in rows if nav[0] <= float(e['t']) <= nav[1]])
 t_d = np.array([float(e['t']) for e in rows if nav[0] <= float(e['t']) <= nav[1]])
 on = t_d[n_d > 0]
