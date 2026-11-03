@@ -54,7 +54,7 @@ DT = cfg.dt
 AGE_PAD = SR.AGE_PAD
 SH = c.sh_rows
 CASES = (('v1_test2', 'runs/lchan_fake_f1_lchannel_v1/s1_cbf_r0.npz', 'experiments/20261103_f1_lchannel_scene_v1_mismatch.json', 88.70),
-         ('v2_test3', 'runs/lchan_fake_f1_lchannel_v2/s1_cbf_r0.npz', 'experiments/20261103_f1_lchannel_scene_v2.json', 78.00))
+         ('v2_test3', 'runs/lchan_fake_f1_lchannel_v2_test3/s1_cbf_r0.npz', 'experiments/20261103_f1_lchannel_scene_v2.json', 78.00))
 
 
 def violations(u, xi_prev, A_row=None, rows=None):

@@ -65,10 +65,12 @@ def main():
     ap.add_argument('--title', default='', help='頂欄標題；未給就用 bottle_f1_2 的原文字')
     a = ap.parse_args()
     RD, SD = os.path.join(HERE, 'runs', a.replay), os.path.join(HERE, 'runs', a.src)
-    r0, r1 = json.load(open(os.path.join(SD, 's1_report_r0.json'))), json.load(open(os.path.join(SD, 's1_report.json')))
-    Rs = (r0, r1)
+    r1 = json.load(open(os.path.join(SD, 's1_report.json')))
+    r0 = json.load(open(os.path.join(SD, 's1_report_r0.json'))) if os.path.exists(os.path.join(SD, 's1_report_r0.json')) else r1   # 第一輪後中止：只有一份報告，第二輪未開始
+    one_round = r0 is r1
+    Rs = (r0,) if one_round else (r0, r1)
     ft = r1['f1_task']
-    ts = float(ft['t_switch'])
+    ts = float(ft['t_switch']) if ft.get('t_switch') is not None else 1e9
     Z = np.load(os.path.join(SD, 's1_steps.npz'))
     c = {str(k): Z['rows'][:, i] for i, k in enumerate(Z['cols'])}
     t_all = c['t']
@@ -101,18 +103,21 @@ def main():
     cont_ = bool((r0.get('f1c') or {}).get('s_h') is not None)   # 連續交接：沒有回舊重啟點，移動中狀態交接
     if cont_:
         RET.update(ROT0='前往第二瓶：原地掉頭（車頭朝行進方向）', NAV='前往第二瓶：車頭朝前導航')
-    mom = sorted(round_events(r0, 0) + round_events(r1, 1) + [(ts, '移動中狀態交接到第二輪（不停車、不回舊重啟點）：視覺與候選重設' if cont_ else '切換到第二輪：視覺與候選重設，只找第一桌左半的瓶')] + ([(float(r1['dyn']['case']['t_start']), '移動圓柱開始走（世界軌跡固定）')] if (r1.get('dyn') or {}).get('case') else []), key=lambda m: m[0])
+    mom = sorted(round_events(r0, 0) + ([] if one_round else round_events(r1, 1)) + [(ts, '移動中狀態交接到第二輪（不停車、不回舊重啟點）：視覺與候選重設' if cont_ else '切換到第二輪：視覺與候選重設，只找第一桌左半的瓶')] + ([(float(r1['dyn']['case']['t_start']), '移動圓柱開始走（世界軌跡固定）')] if (r1.get('dyn') or {}).get('case') else []), key=lambda m: m[0])
     seq = [[], []]
+    if one_round:
+        stop_ = r1.get('stop') or {}
+        mom = sorted(mom + [(float(stop_.get('t', t_all[-1])), f"受控停止：{stop_.get('why')}（第二瓶未開始）")], key=lambda m: m[0])
     for i_, r in enumerate(Rs):
         seq[i_] = [(e['t'], e['to']) for e in r['events'] if e['what'] == 'place_phase']
     ret = [(e['t'], e['to']) for e in r0['events'] if e['what'] == 'return_state']
-    t_done0 = float(ft['t_done0'])
-    t_done1 = next(e['t'] for e in r1['events'] if e['what'] == 'mission_done')
-    warns = [(r_.get('slip_warn') or {}).get('warn') for r_ in Rs]
+    t_done0 = float(ft['t_done0']) if ft.get('t_done0') is not None else 1e9
+    t_done1 = 1e9 if one_round else next(e['t'] for e in r1['events'] if e['what'] == 'mission_done')
+    warns = [(r_.get('slip_warn') or {}).get('warn') for r_ in Rs] + ([None] if one_round else [])
     warn = warns[1]
     TITLE = a.title or '兩瓶連續任務：同一世界依視覺抓放兩瓶（bottle_f1_2，n＝1，無移動物）'
-    q_txt = [f"{('第一輪', '第二輪')[i_]}{'原抓持品質不合格' if warns[i_] else '合格'}（判定滑移 {Rs[i_]['slip_max_mm_deg'][0]:.2f} mm{' > 5 mm' if warns[i_] else ''}）" for i_ in (0, 1)]
-    FOOT = f"流程完成；{'；'.join(q_txt)}。任務完成 {t_done1:.2f} s。下方滑移曲線對抓持成立時刻重算，基準與判定器不同。"
+    q_txt = [f"{('第一輪', '第二輪')[i_]}{'原抓持品質不合格' if warns[i_] else '合格'}（判定滑移 {Rs[i_]['slip_max_mm_deg'][0]:.2f} mm{' > 5 mm' if warns[i_] else ''}）" for i_ in range(len(Rs))]
+    FOOT = f"未完成：t＝{float((r1.get('stop') or {}).get('t', 0.0)):.2f} s 受控停止，第二瓶未開始；{q_txt[0]}。下方滑移曲線對抓持成立時刻重算。" if one_round else f"流程完成；{'；'.join(q_txt)}。任務完成 {t_done1:.2f} s。下方滑移曲線對抓持成立時刻重算，基準與判定器不同。"
     has_scene = bool(r1.get('scene'))
     if has_scene:
         import bottle_f1_lchan_scene as LS

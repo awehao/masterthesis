@@ -304,7 +304,7 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
         out['tracking'][nm] = dict(duration_s=round(float(Lc_[-1]['t'] - Lc_[0]['t']), 2), ref_v=dict(mean=round(float(vr_.mean()), 3), min=round(float(vr_.min()), 3), max=round(float(vr_.max()), 3), corridor_mean=round(float(vr_[ic_].mean()), 3) if ic_.any() else None), meas_v=dict(mean=round(float(vm_.mean()), 3), min=round(float(vm_.min()), 3), max=round(float(vm_.max()), 3), corridor_mean=round(float(vm_[ic_[1:]].mean()), 3) if ic_[1:].any() else None), accept_profile=prof_, ref_err_max_m=round(float(e_.max()), 4), ref_err_mean_m=round(float(e_.mean()), 4), a_max_est_mps2=round(float(a_.max()), 3), v_max=round(float(np.linalg.norm(v_, axis=1).max()), 3), yaw_range=[round(float(Q_[:, 2].min()), 3), round(float(Q_[:, 2].max()), 3)])
     # 中止時保留該拍輸入、狀態、殘差與耗時（Codex 083722）；求解紀錄存檔，不改求解器
     out['ret_solver'] = [(r_.get('f1l') or {}).get('ret_solver') for r_ in reps]
-    rd_ = os.path.join(HERE, 'runs', 'lchan_fake_' + SCN['name'])
+    rd_ = os.path.join(HERE, 'runs', f'lchan_fake_{SCN["name"]}_{CASE}')      # 每案分開存：曾因共用資料夾把第三次測試的輸入覆蓋掉
     os.makedirs(rd_, exist_ok=True)
     C2.save_compact(c0, os.path.join(rd_, 's1_cbf_r0.npz'))
     if 'c1' in placed:

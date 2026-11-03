@@ -1769,10 +1769,10 @@ class GMPC:
             res = prob.solve()
             if n_arm:
                 qp_info['osqp_ms'] = (time.perf_counter() - t_os) * 1e3
-            # （候選，Codex 20261103_090730）只有呼叫端明確給 arm={'mode':'hold','mi_gi_fallback':True} 才啟用，觸發僅限 OSQP 迭代上限：
+            # （候選，Codex 20261103_090730、145515）只有呼叫端明確給 arm={'mode':'hold','mi_gi_fallback':True} 才啟用，觸發僅限 OSQP 迭代上限或 solved inaccurate（改用另一解法重解，不是直接接受不精確解）：
             # 對完全相同的 P,q,A,l,u 用對偶作用集求一次（內含 qp_kkt_check），通過才交回原後處理；未通過就保留原 OSQP 結果與狀態，由呼叫端照原規則停止。預設不變。
             if (not n_arm and arm is not None and arm.get('mode') == 'hold' and arm.get('mi_gi_fallback')
-                    and res.info.status == 'maximum iterations reached'):
+                    and res.info.status in ('maximum iterations reached', 'solved inaccurate')):
                 t_g = time.perf_counter()
                 osqp_ms = (t_g - t_os) * 1e3
                 gx, gy, gi = HOLD_GI(P_sp, q_vec, A_total, lb_total, ub_total)
