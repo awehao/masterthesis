@@ -303,9 +303,10 @@ class W1PlaceController(CG.W1PlaceController):
         xi = np.column_stack([c_ * vw[:, 0] + s_ * vw[:, 1], -s_ * vw[:, 0] + c_ * vw[:, 1], w_k])
         X = np.array([from_xytheta(float(p[0]), float(p[1]), float(t_)) for p, t_ in zip(P, th_k)])
         obs = None if self.obstacles_fn is None else self.obstacles_fn(t_eff)
-        r = self.mpc_nav.solve(obstacles=obs, X_now=from_xytheta(*qp[:3]), X_ref_win=X, xi_ref_win=xi, xi_prev=self.u_prev[:3], arm=dict(mode='hold'))
+        r = self.mpc_nav.solve(obstacles=obs, X_now=from_xytheta(*qp[:3]), X_ref_win=X, xi_ref_win=xi, xi_prev=self.u_prev[:3], arm=self._ret_arm())
         self.solve_ms.append((time.perf_counter() - t0) * 1e3)
         self.qp_log.append(dict(solver='hold'))
+        self._ret_solved(r, self.solve_ms[-1])
         self.u_arm_plan, self.base_plan = None, xi[:N] + np.asarray(r.delta_xi_all, float)
         if self.compact is not None:                           # 返回段也留求解紀錄：動態項是否進求解器、命令反應都要從這裡量
             self.compact.append(dict(obs=obs, t=self.t, phase=BR.PHASES.index(self.st.phase), qp=qp.copy(), sp=sp.copy(), u_prev=self.u_prev.copy(), X_ref=X.copy(), xi_ref=xi.copy(), T_seq=np.stack([np.eye(4)] * (N + 1)), rel=True, w_p=0.0,
@@ -318,6 +319,13 @@ class W1PlaceController(CG.W1PlaceController):
             return None
         self.s_ref += self.v_b * DT
         return np.r_[np.asarray(r.u_opt, float), np.zeros(6)]
+
+    def _ret_arm(self):
+        """返回段求解的手臂設定（版本化子類可在這裡明確開選項；其他路徑不經過這裡）。"""
+        return dict(mode='hold')
+
+    def _ret_solved(self, r, ms):
+        pass
 
     def switch_ready(self):
         """任務層換第二輪實例前的全部條件；不只看實測靜止。"""

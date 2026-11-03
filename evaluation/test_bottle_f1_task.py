@@ -52,6 +52,7 @@ PLACE_DEV, LIM_OTHER, GATE = 0.030, 0.05, 0.60
 sys.path.insert(0, HERE)
 import bottle_f1_lchan_scene as LS                      # noqa: E402
 SCN = LS.load() if CASE == 'lchan' else None
+FB_FAIL = CASE == 'lchan' and bool(os.environ.get('LCHAN_FB_FAIL'))   # 只供核對：注入後備失敗，應照原規則停止
 if SCN is not None:
     ROUNDS[0]['target'], ROUNDS[1]['target'] = SCN['targets']
 sys.argv = [sys.argv[0], '0.600', 'nom']
@@ -264,6 +265,7 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
         prof_ = ((rep.get('place') or {}).get('carry') or {}).get('profile')
         out['tracking'][nm] = dict(duration_s=round(float(Lc_[-1]['t'] - Lc_[0]['t']), 2), ref_v=dict(mean=round(float(vr_.mean()), 3), min=round(float(vr_.min()), 3), max=round(float(vr_.max()), 3), corridor_mean=round(float(vr_[ic_].mean()), 3) if ic_.any() else None), meas_v=dict(mean=round(float(vm_.mean()), 3), min=round(float(vm_.min()), 3), max=round(float(vm_.max()), 3), corridor_mean=round(float(vm_[ic_[1:]].mean()), 3) if ic_[1:].any() else None), accept_profile=prof_, ref_err_max_m=round(float(e_.max()), 4), ref_err_mean_m=round(float(e_.mean()), 4), a_max_est_mps2=round(float(a_.max()), 3), v_max=round(float(np.linalg.norm(v_, axis=1).max()), 3), yaw_range=[round(float(Q_[:, 2].min()), 3), round(float(Q_[:, 2].max()), 3)])
     # 中止時保留該拍輸入、狀態、殘差與耗時（Codex 083722）；求解紀錄存檔，不改求解器
+    out['ret_solver'] = [(r_.get('f1l') or {}).get('ret_solver') for r_ in reps]
     rd_ = os.path.join(HERE, 'runs', 'lchan_fake_' + SCN['name'])
     os.makedirs(rd_, exist_ok=True)
     C2.save_compact(c0, os.path.join(rd_, 's1_cbf_r0.npz'))
@@ -276,8 +278,8 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
         from ammr_wholebody_mpc.se2 import from_xytheta as fx_
         c_ = placed.get('c1') or c0
         c_.t = float(e_['t'])
-        r_ = c_.mpc_nav.solve(obstacles=list(e_['obs'] or []), X_now=fx_(*np.asarray(e_['qp'], float)[:3]), X_ref_win=e_['X_ref'], xi_ref_win=e_['xi_ref'], xi_prev=np.asarray(e_['u_prev'], float)[:3], arm=dict(mode='hold'))
-        out['stop_tick'] = dict(t=float(e_['t']), qp=np.asarray(e_['qp'], float)[:3].tolist(), logged_u=np.asarray(e_['u'], float)[:3].tolist(), re_u=np.asarray(r_.u_opt, float).tolist(), status=str(r_.status), accept=str(r_.accept_action), eps0=float(r_.eps0), resid_noslack=float(r_.cbf_resid_noslack), resid_slack=float(r_.cbf_resid_slack), solve_ms=float(r_.solve_time_s) * 1e3, min_h_m2=float(r_.min_h), n_obs=len(e_['obs'] or []), note='重解用同一輸入；Shield 列取控制器最後一幀掃描，近似')
+        r_ = c_.mpc_nav.solve(obstacles=list(e_['obs'] or []), X_now=fx_(*np.asarray(e_['qp'], float)[:3]), X_ref_win=e_['X_ref'], xi_ref_win=e_['xi_ref'], xi_prev=np.asarray(e_['u_prev'], float)[:3], arm=c_._ret_arm())
+        out['stop_tick'] = dict(hold_fb=r_.hold_fb, logged_eps0=float(e_['eps0']), logged_resid_noslack=float(e_['resid_ns']), logged_resid_slack=float(e_['resid_s']), t=float(e_['t']), qp=np.asarray(e_['qp'], float)[:3].tolist(), logged_u=np.asarray(e_['u'], float)[:3].tolist(), re_u=np.asarray(r_.u_opt, float).tolist(), status=str(r_.status), accept=str(r_.accept_action), eps0=float(r_.eps0), resid_noslack=float(r_.cbf_resid_noslack), resid_slack=float(r_.cbf_resid_slack), solve_ms=float(r_.solve_time_s) * 1e3, min_h_m2=float(r_.min_h), n_obs=len(e_['obs'] or []), note='重解用同一輸入；Shield 列取控制器最後一幀掃描，近似')
     return out
 
 
@@ -309,6 +311,9 @@ def run_crash(e, task, f):
 
 
 def main():
+    if FB_FAIL:
+        from ammr_wholebody_mpc import gmpc_wb as GW_
+        GW_.HOLD_GI = lambda *a_, **k_: (None, None, dict(ok=False, why='injected', steps=0))
     c0, f = build_ctrl()
     c0.path = NP.PlannedPath(J_RUN, -0.9)
     c0.s_ref = c0.sig_robot = c0.path.sig0

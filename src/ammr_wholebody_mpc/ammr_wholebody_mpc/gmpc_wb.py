@@ -250,6 +250,9 @@ def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800):
     return x, y, dict(ck, steps=step, n_active=len(act), solver='gi')
 
 
+
+HOLD_GI = qp_dual_active                              # hold 迭代上限後備用的解法（只換這個名字就能注入失敗測試，不影響手臂主動分支）
+
 def arm_stop_sequence(arm, N, dt, tol=1e-9):
     """退回用手臂序列：自 u_arm_prev 以 a_arm·dt 有界減速到 0，並核速度框、加速度框、預測實測角與設定點限位（±margin）。
     零速度命令不保證實體手臂立即停止，也可能違反對上一筆的加速度限制（Codex 20261031_183817），所以不直接給零。
@@ -523,6 +526,7 @@ class GMPCResult:
     arm_mode          : str | None = None
     u_arm_seq         : np.ndarray | None = None
     u0_rows_viol      : float = float('nan')    # （候選）給了 u0_rows 時：回傳命令（後處理後）對 A·u ≤ b 的最大違反；未給＝NaN
+    hold_fb           : dict | None = None      # （候選）hold 迭代上限後備：OSQP 狀態／迭代／耗時、對偶作用集步數／KKT／耗時；未觸發＝None
     arm_check         : dict | None = None      # active：回傳序列的原單位最大違反、有限值、seq_consistent（全身序列一致，退回時恆 False）、fallback 原因、arm_decel_valid（退回：手臂減速限制驗證）、base_as_is（退回：hold 底盤未被改動）、failed（手臂減速未驗證 ⇒ 呼叫端須終止）
 
 
@@ -1743,6 +1747,7 @@ class GMPC:
         # 6. OSQP solve（耦合問題先用對偶作用集法，未得解才走 OSQP；底盤問題維持封存設定）
         t0 = time.perf_counter()
         res, qp_info = None, None
+        hold_fb = None
         P_sp = sparse.csc_matrix(P_dense)
         if n_arm:
             qp_info = dict(solver='osqp', gi_why='disabled', gi_ms=0.0, osqp_ms=None, asm_ms=None)
@@ -1764,6 +1769,19 @@ class GMPC:
             res = prob.solve()
             if n_arm:
                 qp_info['osqp_ms'] = (time.perf_counter() - t_os) * 1e3
+            # （候選，Codex 20261103_090730）只有呼叫端明確給 arm={'mode':'hold','mi_gi_fallback':True} 才啟用，觸發僅限 OSQP 迭代上限：
+            # 對完全相同的 P,q,A,l,u 用對偶作用集求一次（內含 qp_kkt_check），通過才交回原後處理；未通過就保留原 OSQP 結果與狀態，由呼叫端照原規則停止。預設不變。
+            if (not n_arm and arm is not None and arm.get('mode') == 'hold' and arm.get('mi_gi_fallback')
+                    and res.info.status == 'maximum iterations reached'):
+                t_g = time.perf_counter()
+                osqp_ms = (t_g - t_os) * 1e3
+                gx, gy, gi = HOLD_GI(P_sp, q_vec, A_total, lb_total, ub_total)
+                gi_ms = (time.perf_counter() - t_g) * 1e3
+                gi_ok = gx is not None and np.asarray(gx).size == np.asarray(res.x).size and bool(np.all(np.isfinite(gx)))
+                hold_fb = dict(osqp_status=str(res.info.status), osqp_iter=int(res.info.iter), osqp_ms=osqp_ms, gi_ok=bool(gi_ok), gi_why=gi.get('why'), gi_steps=gi.get('steps'), gi_ms=gi_ms,
+                               kkt={k_: gi.get(k_) for k_ in ('ok', 'primal', 'dual', 'comp') if k_ in gi})
+                if gi_ok:
+                    res = SimpleNamespace(x=np.asarray(gx, float), y=gy, info=SimpleNamespace(status='solved'))
         solve_time = time.perf_counter() - t0
 
         status = res.info.status
@@ -1940,7 +1958,7 @@ class GMPC:
                           cbf_resid_post_slack=resid_post_s,
                           cbf_resid_evaluated_on=evaluated_on,
                           arm_mode=None if arm is None else arm.get('mode'),
-                          u_arm_seq=u_arm_seq, arm_check=arm_check)
+                          u_arm_seq=u_arm_seq, arm_check=arm_check, hold_fb=hold_fb)
 
 
 # ---------------------------------------------------------------------------
