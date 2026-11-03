@@ -242,7 +242,14 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
     out['wall_actual'] = {k_: round(v_, 4) for k_, v_ in out['wall_actual'].items()}
     rows_ = list(c0.compact or []) + (list(placed['c1'].compact or []) if 'c1' in placed else [])
     dyn_t = [float(e_['t']) for e_ in rows_ if FD._dyn(e_['obs'])]
-    near_w = sum(1 for e_ in rows_ if any(min(float(LS.d2_box(np.array([o_['x'], o_['y']]), c_, s_)[0]) for c_, s_ in WALLS) < 0.6 for o_ in FD._dyn(e_['obs'])))
+    def _is_wall_dyn(e_, o_):                                  # 靠牆且不是移動圓柱本身（圓柱會經過牆端，不能算牆被誤判）
+        if min(float(LS.d2_box(np.array([o_['x'], o_['y']]), c_, s_)[0]) for c_, s_ in WALLS) >= 0.6:
+            return False
+        if CA is None:
+            return True
+        oc_ = DC.state(float(e_['t']), CA)[0]
+        return float(np.hypot(o_['x'] - oc_[0], o_['y'] - oc_[1])) - CA['radius'] > 0.5
+    near_w = sum(1 for e_ in rows_ if any(_is_wall_dyn(e_, o_) for o_ in FD._dyn(e_['obs'])))
     eps_ = np.array([float(e_.get('eps0', 0.0)) for e_ in rows_])
     out['false_dynamic'] = dict(n_ticks_near_wall=near_w, n_ticks=len(dyn_t), n_rows=len(rows_), t_first=dyn_t[0] if dyn_t else None, t_last=dyn_t[-1] if dyn_t else None, max_items=max((len(FD._dyn(e_['obs'])) for e_ in rows_), default=0), note='場景沒有移動物，任何動態項都算誤判')
     i_e = int(np.argmax(eps_)) if len(eps_) else None
@@ -642,7 +649,7 @@ def main():
                                 wd[nm_], whd[nm_] = v_, (round(x_['t'], 2), x_['ret'] or x_['pph'] or x_['ph'], round(j_ * C21.SAMPLE_EVERY * 0.01, 2))
             out['dyn'].update(sweep={k_: round(v_, 4) for k_, v_ in wd.items()}, sweep_where=whd, n_ticks=len(sel_d))
             nav_ev = {e_['to']: e_['t'] for e_ in R[0]['events'] if e_['what'] == 'return_state'}
-            nav_w = (nav_ev.get('NAV', 0.0), nav_ev.get('ROT1', 1e9))
+            nav_w = (nav_ev.get('NAV', 0.0), nav_ev.get('ROT1', r['t_switch'] if CONT else 1e9))
             rows_ = list(c0.compact) + (list(placed['c1'].compact) if 'c1' in placed else [])
             out['dyn']['interaction'] = FD.analyse(rows_, c0.mpc_nav, CA['t_start'], nav_w, arm=(c0._ret_arm() if CONT else None))
             # 實跑走 save_compact→load_rows：混合手臂主動與返回 hold 兩種紀錄列必須能存能讀，存讀後的統計要與記憶體版相同
