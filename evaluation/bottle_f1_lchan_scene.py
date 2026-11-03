@@ -6,15 +6,27 @@ import os
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PATH = os.path.join(HERE, 'experiments', '20261103_f1_lchannel_scene.json')
+PATH = os.path.join(HERE, 'experiments', '20261103_f1_lchannel_scene_v2.json')
 PLACE_C0, TABLE2_X0 = (2.4, -0.39), 2.4
 
 
-def load(path=PATH):
+def widths(boxes):
+    """由牆盒內面核算兩段內淨寬（不信文字）。南北段＝隔牆西面−西牆東面；東西段＝內轉角牆南面−南牆北面。"""
+    b = {n: (np.array(v[:3], float), np.array(v[3:], float)) for n, v in boxes.items()}
+    lo = lambda n, a: float(b[n][0][a] - b[n][1][a] / 2.0)   # noqa: E731
+    hi = lambda n, a: float(b[n][0][a] + b[n][1][a] / 2.0)   # noqa: E731
+    return dict(ns=round(lo('partition', 0) - hi('west', 0), 6), ew=round(lo('inner_h', 1) - hi('south', 1), 6))
+
+
+def load(path=PATH, strict=True):
     d = json.load(open(path, encoding='utf-8'))
+    w = widths(d['boxes'])
+    want = float(d['rules']['inner_width_m'])
+    if strict and not (abs(w['ns'] - want) < 1e-6 and abs(w['ew'] - want) < 1e-6):
+        raise ValueError(f'{d["name"]} 內淨寬 {w} 不等於規格 {want} m')
     walls = [(n, np.array(v[:3], float), np.array(v[3:], float)) for n, v in d['boxes'].items()]
     dx = float(d['table2_dx'])
-    return dict(name=d['name'], walls=walls, dx=dx, table2_x=TABLE2_X0 + dx, targets=[tuple(t) for t in d['targets']], place_c=(PLACE_C0[0] + dx, PLACE_C0[1]))
+    return dict(name=d['name'], walls=walls, dx=dx, table2_x=TABLE2_X0 + dx, targets=[tuple(t) for t in d['targets']], place_c=(PLACE_C0[0] + dx, PLACE_C0[1]), widths=w, plan_file=d['plan_file'])
 
 
 def in_corridor(xy):

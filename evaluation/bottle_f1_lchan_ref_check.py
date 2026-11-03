@@ -22,8 +22,9 @@ import bottle_f1_lchan_scene as LS                      # noqa: E402
 R = PC.REG
 DT = PC.DT
 RES = {}
-CASES = (('lchan_far', 'f1_offline_plan_rev_box_lchan_dx0.6.json', 'carry_far', 3.0493, 0.1336, 0.11),
-         ('lchan_near', 'f1_offline_plan_rev_box_lchan_dx0.6.json', 'carry_near', 2.7239, -0.2, 0.11),
+PF = LS.load()['plan_file']
+CASES = (('lchan_far', PF, 'carry_far', 3.0493, 0.1336, 0.11),
+         ('lchan_near', PF, 'carry_near', 2.7239, -0.2, 0.11),
          ('orig_far', 'f1_offline_plan_rev_box.json', 'carry_far', 2.45, 0.1336, 0.11),
          ('orig_near', 'f1_offline_plan_rev_box.json', 'carry_near', 2.1239, -0.2, 0.11))
 for nm, fn, key, park_x, x0, v0 in CASES:

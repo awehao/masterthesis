@@ -16,9 +16,12 @@ import bottle_s1_geom as G                              # noqa: E402
 from scipy.spatial.transform import Rotation as Rot     # noqa: E402
 
 BPT = G.bottle_points()
-SC = json.load(open(os.path.join(HERE, 'experiments', '20261103_f1_lchannel_scene.json')))
+import bottle_f1_lchan_scene as LS                      # noqa: E402
+SC = json.load(open(LS.PATH, encoding='utf-8'))
+SW = LS.widths(SC['boxes'])
+assert abs(SW['ns'] - 1.2) < 1e-6 and abs(SW['ew'] - 1.2) < 1e-6, SW
 DX = float(SC.get('table2_dx', 0.0))
-PL = json.load(open(os.path.join(HERE, 'results', 'bottle', f'f1_offline_plan_rev_box_lchan_dx{DX:g}.json' if DX else 'f1_offline_plan_rev_box_lchan.json')))
+PL = json.load(open(os.path.join(HERE, 'results', 'bottle', SC['plan_file'])))
 WALLS = {k: (np.array(v[:3], float), np.array(v[3:], float)) for k, v in SC['boxes'].items()}
 T2 = np.array([2.4 + DX, -1.0, 0.0])
 LEGS = {'t1_' + n: (c, sz) for n, c, sz in G.table_boxes() if n != 'table_top'}
@@ -47,7 +50,7 @@ def path_report(P):
     return dict(end_dir_deg=round(float(np.degrees(np.arctan2(d_[1], d_[0]))), 1), L=round(float(s[-1]), 3), wall_min={a: round(b, 3) for a, b in dw.items()}, leg_min=round(dl, 3), box_min=round(float(d_box(P, *BOX['box']).min()), 3), corridor=None if not len(k) else dict(s_in=round(float(s[k[0]]), 3), s_out=round(float(s[k[-1]]), 3), rem_after=round(float(s[-1] - s[k[-1]]), 3), L_in=round(float(s[k[-1]] - s[k[0]]), 3), y_min=round(float(P[:, 1].min()), 3), x_max=round(float(P[:, 0].max()), 3)))
 
 
-out = dict(scene=SC['name'], paths={n: path_report(np.asarray(PL[n]['P_region'], float)) for n in ('carry_far', 'return_short', 'carry_near')}, compact_arc_measured={}, envelope={})
+out = dict(widths=SW, scene=SC['name'], paths={n: path_report(np.asarray(PL[n]['P_region'], float)) for n in ('carry_far', 'return_short', 'carry_near')}, compact_arc_measured={}, envelope={})
 Z = np.load(os.path.join(HERE, 'runs', 'bottle_f1_3', 's1_steps.npz'), allow_pickle=True)
 col = {str(n): Z['rows'][:, i] for i, n in enumerate(Z['cols'])}
 t = col['t']
@@ -122,4 +125,4 @@ ax.set_ylabel('y (m)')
 ax.legend(loc='upper left', frameon=False)
 ax.set_title('F1 L 型走廊場景：真規劃器路徑（內淨寬 1.20 m；離線，未實跑）')
 fig.tight_layout()
-fig.savefig(os.path.join(os.path.dirname(HERE), '第七次進度報告素材', '圖表', 'F1_L型走廊_離線路徑_20261103_v2.png'), dpi=150)
+fig.savefig(os.path.join(os.path.dirname(HERE), '第七次進度報告素材', '圖表', 'F1_L型走廊_離線路徑_20261103_v3_淨寬1.20.png'), dpi=150)

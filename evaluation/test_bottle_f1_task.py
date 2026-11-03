@@ -79,7 +79,7 @@ if SCN is not None:                                     # 假世界的接觸模�
     PC_ = sys.modules.get('bottle_place_ctrl') or __import__('bottle_place_ctrl')
     PC_.PLACE['c'] = SCN['place_c']
 J_RUN = np.array(json.load(open(os.path.join(HERE, 'runs', 'bottle_online5_u3_1', 's1_report.json')))['plan']['joined'], float)
-PLANS = json.load(open(os.path.join(HERE, 'results', 'bottle', f"f1_offline_plan_rev_box_lchan_dx{SCN['dx']:g}.json" if SCN is not None else 'f1_offline_plan_rev_box.json')))   # 原障礙方塊進地圖的離線路徑（實跑靠掃描進代價圖；無方塊版的返回路徑貼著方塊走，與實跑不符）
+PLANS = json.load(open(os.path.join(HERE, 'results', 'bottle', SCN['plan_file'] if SCN is not None else 'f1_offline_plan_rev_box.json')))   # 原障礙方塊進地圖的離線路徑（實跑靠掃描進代價圖；無方塊版的返回路徑貼著方塊走，與實跑不符）
 RTF_CAP = 0.6
 LOGP = os.path.join(HERE, 'results', 'bottle', f'f1_task_{CASE}_worker.log')
 W = TV.T
@@ -201,7 +201,7 @@ def build_ctrl():
 
 def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
     """走廊核對：實際排程（不延後階段）、全身對牆淨空、路徑連續性、動態誤判、鬆弛、Shield。"""
-    out = dict(corridor={}, wall_actual={}, wall_stop={k_: round(v_, 4) for k_, v_ in wall_sw.items()}, wall_stop_where={k_: wh.get(k_) for k_ in wall_sw})
+    out = dict(scene=SCN['name'], widths=SCN['widths'], corridor={}, wall_actual={}, wall_stop={k_: round(v_, 4) for k_, v_ in wall_sw.items()}, wall_stop_where={k_: wh.get(k_) for k_ in wall_sw})
     segs = [('carry_r1', [x for x in rec if x['round'] == 0 and x['ret'] is None and x['pph'] is not None], reps[0]), ('return', [x for x in rec if x['round'] == 0 and x['ret'] is not None], None), ('carry_r2', [x for x in rec if x['round'] == 1 and x['pph'] is not None], reps[-1])]
     for nm, L_, rep in segs:
         if not L_:
@@ -265,6 +265,21 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
         ic_ = LS.in_corridor(Q_[:, :2])
         prof_ = ((rep.get('place') or {}).get('carry') or {}).get('profile')
         out['tracking'][nm] = dict(duration_s=round(float(Lc_[-1]['t'] - Lc_[0]['t']), 2), ref_v=dict(mean=round(float(vr_.mean()), 3), min=round(float(vr_.min()), 3), max=round(float(vr_.max()), 3), corridor_mean=round(float(vr_[ic_].mean()), 3) if ic_.any() else None), meas_v=dict(mean=round(float(vm_.mean()), 3), min=round(float(vm_.min()), 3), max=round(float(vm_.max()), 3), corridor_mean=round(float(vm_[ic_[1:]].mean()), 3) if ic_[1:].any() else None), accept_profile=prof_, cross_max_m=round(float(e_.max()), 4), cross_p95_m=round(float(np.percentile(e_, 95)), 4), a_max_est_mps2=round(float(a_.max()), 3), v_max=round(float(np.linalg.norm(v_, axis=1).max()), 3), yaw_range=[round(float(Q_[:, 2].min()), 3), round(float(Q_[:, 2].max()), 3)])
+    # 中止時保留該拍輸入、狀態、殘差與耗時（Codex 083722）；求解紀錄存檔，不改求解器
+    rd_ = os.path.join(HERE, 'runs', 'lchan_fake_' + SCN['name'])
+    os.makedirs(rd_, exist_ok=True)
+    C2.save_compact(c0, os.path.join(rd_, 's1_cbf_r0.npz'))
+    if 'c1' in placed:
+        C2.save_compact(placed['c1'], os.path.join(rd_, 's1_cbf.npz'))
+    out['cbf_dir'] = rd_
+    why_ = ' '.join(str((r_.get('stop') or {}).get('why')) for r_ in reps)
+    if 'wb_fallback' in why_ and rows_ and float(rows_[-1]['w_p']) == 0.0:
+        e_ = rows_[-1]
+        from ammr_wholebody_mpc.se2 import from_xytheta as fx_
+        c_ = placed.get('c1') or c0
+        c_.t = float(e_['t'])
+        r_ = c_.mpc_nav.solve(obstacles=list(e_['obs'] or []), X_now=fx_(*np.asarray(e_['qp'], float)[:3]), X_ref_win=e_['X_ref'], xi_ref_win=e_['xi_ref'], xi_prev=np.asarray(e_['u_prev'], float)[:3], arm=dict(mode='hold'))
+        out['stop_tick'] = dict(t=float(e_['t']), qp=np.asarray(e_['qp'], float)[:3].tolist(), logged_u=np.asarray(e_['u'], float)[:3].tolist(), re_u=np.asarray(r_.u_opt, float).tolist(), status=str(r_.status), accept=str(r_.accept_action), eps0=float(r_.eps0), resid_noslack=float(r_.cbf_resid_noslack), resid_slack=float(r_.cbf_resid_slack), solve_ms=float(r_.solve_time_s) * 1e3, min_h_m2=float(r_.min_h), n_obs=len(e_['obs'] or []), note='重解用同一輸入；Shield 列取控制器最後一幀掃描，近似')
     return out
 
 

@@ -22,10 +22,13 @@ OUT = os.path.join(HERE, 'results', 'bottle', OUT.replace('.json', '_box.json') 
 WALLS = os.environ.get('F1_WALLS', '')                  # 場景 JSON：牆體進地圖；輸出檔名另加 _lchan
 if WALLS:
     OUT = OUT.replace('.json', '_lchan.json')
+    _pf = json.load(open(WALLS, encoding='utf-8')).get('plan_file')
 START = [-3.6, 0.0]
 DX = float(os.environ.get('F1_T2_DX', '0'))              # 只供設計比較：第二桌與放置點整體東移（公尺）；輸出檔名另加 _dx
 if DX:
     OUT = OUT.replace('.json', f'_dx{DX:g}.json')
+if WALLS and _pf:                                       # 場景檔指定輸出檔名（版本化，不覆蓋舊場景的路徑）
+    OUT = os.path.join(HERE, 'results', 'bottle', _pf)
 
 
 def main():
