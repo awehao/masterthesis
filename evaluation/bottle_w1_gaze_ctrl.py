@@ -137,6 +137,10 @@ class W1PlaceController(ON5.W1PlaceController):
             return False                                      # 回到備妥前 g 必須已歸零
         return super()._at(q, np.asarray(qc, float) + self.gz['g'] * E1)
 
+    def _q_for_gaze(self, q):
+        """視向要實際位姿；版本化子類若把 q[0] 換成路徑進度，在這裡交回實測值。"""
+        return q
+
     def _vstep(self, q):
         super()._vstep(q)
         if not self.gaze_on:
@@ -144,7 +148,7 @@ class W1PlaceController(ON5.W1PlaceController):
         ph, t = self.vh_seq['ph'], float(self.t)
         gz = self.gz
         if ph in ('U', 'H'):
-            tgt, why, res = gaze_target(self.K, np.asarray(q[:3], float), self._qseq(t + LEAD), gz['tgt'], self.look)
+            tgt, why, res = gaze_target(self.K, np.asarray(self._q_for_gaze(q)[:3], float), self._qseq(t + LEAD), gz['tgt'], self.look)
             if tgt is None:
                 self.gz_n['hold_' + why] += 1
                 tgt = gz['tgt']

@@ -15,6 +15,7 @@
   planlate  切換後才到的舊回覆（舊序號）⇒ 不交付；第二輪照常用自己的請求完成。
   crash     第二輪持瓶段注入例外 ⇒ 先存 crash.json 與 ctx，獨立停止實測靜止，再存逐步資料與報告；另核存檔失敗不掩蓋原例外、停止未驗證照實報。
   dyn       名目兩輪＋原已固定的移動物 f1_return_pass1（世界軌跡與任務時鐘排程不改）。障礙只經離線射線→追蹤器→控制器；真值只用於劇本與距離評估。核會遇窗全身與停止掃掠（障礙隨取樣時間推進，連桿、手指、持瓶、底盤圓盤都要 > 0），分開報 tracked／in_solver／reaction。
+  cont      連續交接（Codex 20261103_133750）：第一瓶放好後走一條路徑直接接第二瓶，到換目標點換新實例不停車；場景同 lchan。cont_stale／cont_noobs／cont_planlate 是舊觀測、第二瓶沒取得、舊規劃晚到的反例。
   lchan     兩瓶＋L 型走廊＋第二桌東移（Codex 20261103_065813；無移動物，座標凍結）。真追蹤器＋射線掃描＋GMPC＋Shield；牆進掃描、地圖與全身核對。交進出走廊的手臂排程、全身對牆淨空與停止掃掠、路徑連續性、牆的動態誤判、鬆弛、Shield、期限與第一阻點。假世界無代價圖（不含 path_blocked）、無接觸與滑移物理。
   origin    名目兩輪，重啟點在原起點（對照 bottle_f1_2 的做法；其餘案例都是短返回：重啟點在接近路徑上 x＝RESTART_X）。
 規劃接口與 Isaac 相同：兩輪共用同一個 SharedPlan（舊結果會留著、請求序號只增），外面包 PlanPort。
@@ -31,7 +32,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'results', 'bottle', 'f1_task_check.json')
-CASES = ('nominal', 'dyn', 'lchan', 'origin', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
+CASES = ('nominal', 'dyn', 'lchan', 'cont', 'cont_stale', 'cont_noobs', 'cont_planlate', 'origin', 'stale', 'noobs', 'abort0', 'slipwarn', 'badsettle', 'moving', 'movingall', 'deadline0', 'defect', 'planlate', 'crash')
 if len(sys.argv) < 2 or sys.argv[1] == 'all':
     from concurrent.futures import ThreadPoolExecutor
 
@@ -51,7 +52,9 @@ ROUNDS = [dict(b=(0.15, 0.42), target=(2.55, -0.58), x_look=0.15), dict(b=(-0.15
 PLACE_DEV, LIM_OTHER, GATE = 0.030, 0.05, 0.60
 sys.path.insert(0, HERE)
 import bottle_f1_lchan_scene as LS                      # noqa: E402
-SCN = LS.load() if CASE == 'lchan' else None
+CONT = CASE.startswith('cont')                          # 連續交接（不回西端、不停車）；場景同 lchan
+BASE_CASE = CASE[5:] if CASE.startswith('cont_') else CASE
+SCN = LS.load() if CASE == 'lchan' or CONT else None
 FB_FAIL = CASE == 'lchan' and bool(os.environ.get('LCHAN_FB_FAIL'))   # 只供核對：注入後備失敗，應照原規則停止
 if SCN is not None:
     ROUNDS[0]['target'], ROUNDS[1]['target'] = SCN['targets']
@@ -73,6 +76,8 @@ import bottle_s1_geom as G                              # noqa: E402
 import bottle_w1_compactcarry21_ctrl as C21             # noqa: E402
 import bottle_w1_f1_ctrl as F1C                         # noqa: E402
 import bottle_w1_f1l_ctrl as F1L                        # noqa: E402
+import bottle_w1_f1c_ctrl as F1CC                       # noqa: E402
+import bottle_f1c_path as CP                            # noqa: E402
 import test_bottle_place as TP                          # noqa: E402
 import bottle_n2_path as NP                             # noqa: E402
 TP.DX, TP.DY = (SCN['table2_x'] if SCN is not None else 2.4), -1.0
@@ -80,7 +85,7 @@ if SCN is not None:                                     # 假世界的接觸模�
     PC_ = sys.modules.get('bottle_place_ctrl') or __import__('bottle_place_ctrl')
     PC_.PLACE['c'] = SCN['place_c']
 J_RUN = np.array(json.load(open(os.path.join(HERE, 'runs', 'bottle_online5_u3_1', 's1_report.json')))['plan']['joined'], float)
-PLANS = json.load(open(os.path.join(HERE, 'results', 'bottle', SCN['plan_file'] if SCN is not None else 'f1_offline_plan_rev_box.json')))   # 原障礙方塊進地圖的離線路徑（實跑靠掃描進代價圖；無方塊版的返回路徑貼著方塊走，與實跑不符）
+PLANS = json.load(open(os.path.join(HERE, 'results', 'bottle', SCN['plan_file'].replace('.json', '_cont.json') if CONT else SCN['plan_file'] if SCN is not None else 'f1_offline_plan_rev_box.json')))   # 原障礙方塊進地圖的離線路徑（實跑靠掃描進代價圖；無方塊版的返回路徑貼著方塊走，與實跑不符）
 RTF_CAP = 0.6
 LOGP = os.path.join(HERE, 'results', 'bottle', f'f1_task_{CASE}_worker.log')
 W = TV.T
@@ -163,7 +168,7 @@ class SharedPlan:
         return dict(ok=True, P=r['P'], frame='map', grid=TP.empty_grid(), info=dict(planned=True, name=r.get('name')), monitor=None)
 
 
-class Ctl(F1L.W1PlaceController if SCN is not None else F1C.W1PlaceController):
+class Ctl(F1CC.W1PlaceController if CONT else (F1L.W1PlaceController if SCN is not None else F1C.W1PlaceController)):
     def __init__(self, *a, **kw):
         if CUR['q_tuck'] is not None:
             kw['q_tuck'] = CUR['q_tuck']
@@ -283,6 +288,37 @@ def lchan_report(rec, reps, c0, placed, wall_sw, wh, shared):
     return out
 
 
+def cont_report(f, r, R, task):
+    """連續交接主表：第一瓶放好到第二瓶 INSERT 的時間與路程、靜止時間、換目標時的連續性、兩次抓取車速。"""
+    H = f.hist
+    tt, Q, U = np.array([h['t'] for h in H]), np.array([h['q'] for h in H]), np.array([h['u'] for h in H])
+    k = np.flatnonzero(np.abs(tt * 20 - np.round(tt * 20)) < 1e-6)
+    t0 = r['t_done0']
+    ins = [next((e_['t'] for e_ in x_['events'] if e_.get('what') == 'phase' and e_.get('to') == 'INSERT'), None) for x_ in R]
+    gr = [next((e_['t'] for e_ in x_['events'] if e_.get('what') == 'contact_first' or e_.get('what') == 'close_request'), None) for x_ in R]
+    done = [next((e_['t'] for e_ in x_['events'] if e_.get('what') == 'mission_done'), None) for x_ in R]
+    out = dict(t_done0=t0, t_switch=r['t_switch'], t_done=[d_ for d_ in done], t_insert=ins, outcome=r['outcome'], stop=[(x_.get('stop') or {}).get('why') for x_ in R])
+
+    def seg(a, b):
+        m = k[(tt[k] >= a) & (tt[k] <= b)]
+        v = np.hypot(np.diff(Q[m, 0]), np.diff(Q[m, 1])) / 0.05
+        wz = np.abs(np.arctan2(np.sin(np.diff(Q[m, 2])), np.cos(np.diff(Q[m, 2])))) / 0.05
+        return dict(dur=round(float(tt[m[-1]] - tt[m[0]]), 2), L=round(float(np.hypot(np.diff(Q[m, 0]), np.diff(Q[m, 1])).sum()), 3), still_s=round(float((v < 0.01).sum() * 0.05), 2), still_not_rot_s=round(float(((v < 0.01) & (wz < 0.05)).sum() * 0.05), 2), v_min=round(float(v.min()), 3), v_mean=round(float(v.mean()), 3))
+    if t0 is not None and ins[-1] is not None and r['stage'] == 1:
+        out['done0_to_insert'] = seg(t0, ins[-1])
+    if r['t_switch'] is not None:
+        i_ = int(np.argmin(np.abs(tt - r['t_switch'])))
+        j0, j1 = max(i_ - 10, 0), min(i_ + 10, len(tt) - 1)
+        out['v_at_switch'] = round(float(np.hypot(*(Q[j1, :2] - Q[j0, :2])) / max(tt[j1] - tt[j0], 1e-6)), 3)
+        du = np.abs(np.diff(U[max(i_ - 30, 0):min(i_ + 30, len(U))], axis=0))
+        out['du_near_switch_max'] = np.round(du.max(axis=0), 5).tolist()
+        out['q_at_switch'] = np.round(Q[i_, :3], 3).tolist()
+        out['ret_info'] = (R[0].get('f1c') or {}).get('ret_info')
+    if len(R) > 1:
+        out['events2'] = [(round(e_['t'], 2), e_.get('what'), e_.get('ph') or e_.get('to') or '') for e_ in R[-1]['events'] if e_.get('what') in ('rolling_adopt', 'vhigh_seq', 'online_obs_first', 'relwin_shift', 'blend_start', 'phase', 'stop')][:20]
+    return out
+
+
 def run_crash(e, task, f):
     """與 Isaac 相同的收尾順序；另核存檔失敗與停止未驗證。"""
     import tempfile
@@ -317,7 +353,8 @@ def main():
     c0, f = build_ctrl()
     c0.path = NP.PlannedPath(J_RUN, -0.9)
     c0.s_ref = c0.sig_robot = c0.path.sig0
-    shared = SharedPlan(['carry_far', 'return_far' if CASE == 'origin' else 'return_short', 'carry_near'])
+    PLAN_SEQ = ['carry_far', 'transit_far' if CONT else ('return_far' if CASE == 'origin' else 'return_short'), 'carry_near']
+    shared = SharedPlan(PLAN_SEQ)
     pp0 = NP.PlannedPath(J_RUN, -0.9)
     sig_r, xy_r = (pp0.sig0, J_RUN[0].tolist()) if CASE == 'origin' else FT.restart_point(pp0)
     port = shared if CASE == 'defect' else FT.PlanPort(shared)
@@ -326,7 +363,7 @@ def main():
     else:
         port.bind(c0)
     c0.carry_planner = port
-    c0.compact = [] if CASE in ('dyn', 'lchan') else None
+    c0.compact = [] if CASE in ('dyn', 'lchan') or CONT else None
     f.q[0], f.q[1] = J_RUN[0][0], J_RUN[0][1]
     placed = {}
 
@@ -337,7 +374,7 @@ def main():
         c.path = NP.PlannedPath(J_RUN, -0.9)
         c.s_ref = c.sig_robot = c.path.project(f.q[:2], sig_r)
         c.carry_planner = port
-        c.compact = [] if CASE in ('dyn', 'lchan') else None
+        c.compact = [] if CASE in ('dyn', 'lchan') or CONT else None
         placed['c1'] = c
         if CASE != 'defect':
             port.bind(c)
@@ -348,7 +385,7 @@ def main():
         f.Tb, f.grasped, f.released, f.Trel = S0B.bottle_T(), False, False, None
         return c
     ckpt = {}
-    task = FT.F1Task(c0, xy_r, make_round, on_checkpoint=lambda kind, r_: ckpt.update({kind: json.loads(json.dumps(dict(mission_done=r_.get('mission_done'), round=r_['f1']['round']), default=float))}))
+    task = (FT.F1TaskC if CONT else FT.F1Task)(c0, CP.G_TRANSIT if CONT else xy_r, make_round, on_checkpoint=lambda kind, r_: ckpt.update({kind: json.loads(json.dumps(dict(mission_done=r_.get('mission_done'), round=r_['f1']['round']), default=float))}))
     f.c = task
     rng = np.random.default_rng(0)
     st = dict(next_t=0.0, seq=0, t_seq=-99.0, snap=None, wall0=None, stale_done=False, inj=False, guard=None, late_done=False)
@@ -368,14 +405,14 @@ def main():
         c = task.c
         ov = {}
         f_.q[2] = F1C.wrap(float(f_.q[2]))                     # 偏航量測與 Isaac 一樣落在 (−π, π]
-        if CASE == 'planlate' and task.stage == 1 and not st['late_done']:      # 切換後第一拍：舊回覆才到
+        if BASE_CASE == 'planlate' and task.stage == 1 and not st['late_done']:      # 切換後第一拍：舊回覆才到
             st['late_done'] = True
             shared.inject_late(shared.req_id - 1)
             st['late_poll'] = port.poll()
             st['late_poll_inner'] = shared.poll()
         if CASE == 'crash' and task.stage == 1 and c.pph == 'CARRY_NAV':
             raise RuntimeError('注入例外：第二輪持瓶段')
-        if task.stage == 1 and CASE == 'stale' and not st['stale_done'] and t >= task.t_switch + 2.0:     # 第一輪的候選與完成通知這時才到
+        if task.stage == 1 and BASE_CASE == 'stale' and not st['stale_done'] and t >= task.t_switch + 2.0:     # 第一輪的候選與完成通知這時才到
             st['stale_done'] = True
             cand(c, t, ROUNDS[0]['b'], 999, task.t_switch - 1.0)
             st['stale_vfix'] = c.vfix is not None
@@ -384,7 +421,7 @@ def main():
         if t >= st['next_t'] - 1e-9:
             st['next_t'] = t + 0.2
             u0 = next((e[0] for e in c.vh_log if e[1] == 'U'), None)
-            allow = not (CASE == 'noobs' and task.stage == 1)
+            allow = not (BASE_CASE == 'noobs' and task.stage == 1)
             if allow and c.vh_seq['ph'] in ('U', 'H') and c.vfix is None and u0 is not None and t >= u0 + 3.6 - 1e-9:
                 xy = np.array(ROUNDS[task.stage]['b']) + rng.normal(0, 0.0003, 2)
                 if st['snap'] is None or t - st['t_seq'] >= 3.0:
@@ -453,7 +490,7 @@ def main():
         out.update(first_blocker=dict(stop=R[0].get('stop'), t_last=float(Lr[-1]['t']), ph=Lr[-1]['ph'], pph=Lr[-1]['pph'], q_last=Qr[-1, :3].tolist(), wall_center_dist=Rw, n_dyn_ticks=sum(1 for e_ in rows0 if FD._dyn(e_['obs'])), events_tail=R[0]['events'][-14:], shield=(R[0].get('nav_chain') or {}).get('shield'), eps0_max=max((float(e_['eps0']) for e_ in rows0), default=None), info=shared.info), checks={'兩輪完成': False}, **{'pass': False})
         print(json.dumps(out, ensure_ascii=False, default=float))
         return 0
-    if CASE == 'lchan':                                      # 掃描要算很久：先留下結果與中止原因，後面報告出事也不會丟
+    if CASE == 'lchan' or CONT:                              # 掃描要算很久：先留下結果與中止原因，後面報告出事也不會丟
         print('#EARLY ' + json.dumps(dict(outcome=r['outcome'], stage=r['stage'], stop=out['stop'], t_switch=r['t_switch'], t_done0=r['t_done0'], t_last=float(REC[-1]['t']), last=dict(ph=REC[-1]['ph'], pph=REC[-1]['pph'], ret=REC[-1]['ret'], q=REC[-1]['q'][:3].tolist()), events_tail=[e_ for e_ in (R[-1].get('events') or [])[-10:]], ret=R[0].get('f1', {}).get('ret')), ensure_ascii=False, default=float), flush=True)
     if CASE == 'lchan' and os.environ.get('LCHAN_DIAG'):     # 只讀診斷：不算掃描；存求解紀錄、把中止前幾拍用同一輸入重解一次（掃描用當拍位姿重新射線，年齡近似）
         C2.save_compact(c0, os.environ['LCHAN_DIAG'])
@@ -473,7 +510,12 @@ def main():
         print('#DYN ' + json.dumps([dict(t=round(float(e_['t']), 2), xy=[round(float(v_), 3) for v_ in np.asarray(e_['qp'], float)[:2]], d=[[round(float(o_['x']), 2), round(float(o_['y']), 2), round(float(o_.get('vx', 0.0)), 2), round(float(o_.get('vy', 0.0)), 2)] for o_ in FD._dyn(e_['obs'])]) for e_ in rows_ if FD._dyn(e_['obs'])][::3], ensure_ascii=False), flush=True)
         print('#Q ' + json.dumps(dict(cpath=None if c0.cpath is None else np.round(c0.cpath.P[::20], 3).tolist()), ensure_ascii=False), flush=True)
         return 0
-    if CASE in ('nominal', 'origin', 'dyn', 'lchan'):
+    if CASE == 'cont' or BASE_CASE in ('stale', 'noobs', 'planlate') and CONT:
+        out['cont'] = cont_report(f, r, R, task)
+        print('#CONT ' + json.dumps(out['cont'], ensure_ascii=False, default=float), flush=True)
+    if CONT and os.environ.get('CONT_QUICK'):                 # 只要流程與主表，不算掃描
+        return 0
+    if CASE in ('nominal', 'origin', 'dyn', 'lchan', 'cont'):
         H = f.hist
         tt, Q = np.array([h['t'] for h in H]), np.array([h['q'] for h in H])
         out['t_done'] = float(tt[-1])
@@ -615,25 +657,30 @@ def main():
             near_ = np.array([float(np.hypot(*(QH[k_, :2] - DC.state(tH[k_], CA)[0]))) - CA['radius'] for k_ in k_nav[1:]]) < 1.0
             out['dyn']['reaction_motion'] = dict(v_min_near=round(float(v_[near_].min()), 4) if near_.any() else None, v_mean_near=round(float(v_[near_].mean()), 4) if near_.any() else None, w_max_near=round(float(w_[near_].max()), 4) if near_.any() else None)
             chk['移動物全身與停止掃掠 > 0'] = all(v_ > 0.0 for v_ in wd.values()) and FD.distances(tH, QH, CA, DC.state)['base_disc'] > 0.0
-        if CASE == 'lchan':
+        if CASE == 'lchan' or CONT:
             out['lchan'] = lchan_report(REC, R, c0, placed, wall_sw, wh, shared)
             chk['牆無動態誤判'] = out['lchan']['false_dynamic']['n_ticks_near_wall'] == 0
             chk['對牆全身與停止掃掠 > 0'] = all(v_ > 0.0 for v_ in out['lchan']['wall_actual'].values()) and all(v_ > 0.0 for v_ in out['lchan']['wall_stop'].values())
             chk['期限內完成'] = bool(out.get('t_done') is not None and out['t_done'] < 240.0)
         chk['全程淨空'] = not fails
         Q2 = np.array([x['q'] for x in REC if x['round'] == 1])
-        out['round2_start'] = None if not len(Q2) else dict(sig_r=round(float(sig_r), 4), xy_r=[round(float(v), 4) for v in xy_r], q_start=Q2[0, :3].tolist(), err_to_path_mm=round(float(np.min(np.linalg.norm(pp0.xy(np.arange(pp0.sig0, pp0.x_lane, 0.005)) - Q2[0, :2], axis=1))) * 1e3, 2), events=[(round(e[0], 2), e[1]) for e in out['rounds'][1]['events'] if e[1] in ('online_obs_first', 'relwin_shift')], vhigh=[(round(e_['t'], 2), e_.get('ph'), round(e_.get('x', 0.0), 3)) for e_ in R[1]['events'] if e_['what'] == 'vhigh_seq'], plan=[{k_: g_.get(k_) for k_ in ('t_req', 't_acc', 'x_acc', 'x_latest')} for g_ in (R[1].get('online') or {}).get('grasp_plans', [])], t_u_minus_switch=None)
-        chk['第二輪未拿到舊規劃'] = port.n_blocked >= 1 and [x['name'] for x in shared.info] == ['carry_far', 'return_far' if CASE == 'origin' else 'return_short', 'carry_near']
+        out['round2_start'] = None if (not len(Q2) or CONT) else dict(sig_r=round(float(sig_r), 4), xy_r=[round(float(v), 4) for v in xy_r], q_start=Q2[0, :3].tolist(), err_to_path_mm=round(float(np.min(np.linalg.norm(pp0.xy(np.arange(pp0.sig0, pp0.x_lane, 0.005)) - Q2[0, :2], axis=1))) * 1e3, 2), events=[(round(e[0], 2), e[1]) for e in out['rounds'][1]['events'] if e[1] in ('online_obs_first', 'relwin_shift')], vhigh=[(round(e_['t'], 2), e_.get('ph'), round(e_.get('x', 0.0), 3)) for e_ in R[1]['events'] if e_['what'] == 'vhigh_seq'], plan=[{k_: g_.get(k_) for k_ in ('t_req', 't_acc', 'x_acc', 'x_latest')} for g_ in (R[1].get('online') or {}).get('grasp_plans', [])], t_u_minus_switch=None)
+        chk['第二輪未拿到舊規劃'] = port.n_blocked >= 1 and [x['name'] for x in shared.info] == PLAN_SEQ
         chk['檢查點落盤'] = ckpt.get('round0_done', {}).get('mission_done') is True and ckpt.get('switch', {}).get('round') == 0
         chk['靜態判準'] = not sfails
         chk['兩輪完成'] = r['outcome'] == 'complete'
         chk['返回段手臂未動'] = arm_move < 0.002
-        chk['切換新實例承接設定點'] = bool(r['switch'] and r['switch']['new_s_equal'] and r['switch']['pipe_zero'] and r['switch']['u_prev_zero'])
-        chk['反例擋下'] = bool(st['guard'] and 'cmd_not_zero' in st['guard']['cmd_not_zero'] and 'cmd_not_zero' in st['guard']['pipe_not_zero'] and 'd_invalid' in st['guard']['d_nan'] and 'not_still' in st['guard']['not_still'])
-    elif CASE == 'stale':
+        if CONT:
+            sw_ = r['switch'] or {}
+            chk['換目標連續：設定點、上一命令、在途管線都承接'] = bool(sw_.get('new_s_equal') and sw_.get('pipe_equal') and sw_.get('u_prev_equal') and sw_.get('u_last_equal') and sw_.get('rolling'))
+            chk['換目標時沒有停車'] = (out.get('cont') or {}).get('v_at_switch', 0.0) > 0.05
+        else:
+            chk['切換新實例承接設定點'] = bool(r['switch'] and r['switch']['new_s_equal'] and r['switch']['pipe_zero'] and r['switch']['u_prev_zero'])
+            chk['反例擋下'] = bool(st['guard'] and 'cmd_not_zero' in st['guard']['cmd_not_zero'] and 'cmd_not_zero' in st['guard']['pipe_not_zero'] and 'd_invalid' in st['guard']['d_nan'] and 'not_still' in st['guard']['not_still'])
+    elif BASE_CASE == 'stale':
         chk['舊候選被拒'] = st.get('stale_rej', 0) >= 1 and st.get('stale_vfix') is False and st.get('stale_gp') is False
         chk['之後照常完成'] = r['outcome'] == 'complete'
-    elif CASE == 'noobs':
+    elif BASE_CASE == 'noobs':
         chk['第二輪中止'] = r['outcome'] == 'round1_aborted'
         chk['未建立目標'] = R[-1]['f1']['rej']['old_round'] == 0 and not (R[-1].get('online') or {}).get('grasp_plans')
         chk['未抓持的輪次品質是未成立'] = r['grip_ok'] == [True, None]
@@ -645,7 +692,7 @@ def main():
         chk['品質紀錄保留'] = r['grip_ok'][0] is False
     elif CASE == 'badsettle':
         chk['校正無效不切換'] = r['outcome'] == 'round0_aborted' and r['t_switch'] is None and 'return_settle_invalid' in str(out['stop'])
-    elif CASE == 'planlate':
+    elif BASE_CASE == 'planlate':
         chk['舊回覆不交付'] = st.get('late_poll') is None and st.get('late_poll_inner') is None
         chk['第二輪照常完成'] = r['outcome'] == 'complete'
     elif CASE == 'moving':

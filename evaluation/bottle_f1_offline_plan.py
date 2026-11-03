@@ -29,6 +29,9 @@ if DX:
     OUT = OUT.replace('.json', f'_dx{DX:g}.json')
 if WALLS and _pf:                                       # 場景檔指定輸出檔名（版本化，不覆蓋舊場景的路徑）
     OUT = os.path.join(HERE, 'results', 'bottle', _pf)
+CONT = os.environ.get('F1_CONT') == '1'                 # 連續交接：多一條停車位到第二瓶轉向點 G 的路徑；輸出另存
+if CONT:
+    OUT = OUT.replace('.json', '_cont.json')
 
 
 def main():
@@ -88,6 +91,9 @@ def main():
                 import bottle_f1_task as FT_
                 out['restart'] = dict(zip(('sig', 'xy'), FT_.restart_point(NP.PlannedPath(J_, -0.9))))
                 reqs['return_short'] = ([float(pk[0]), float(pk[1]), 0.0], out['restart']['xy'])
+                if CONT:
+                    import bottle_f1c_path as CP_
+                    reqs['transit_far'] = ([float(pk[0]), float(pk[1]), 0.0], list(CP_.G_TRANSIT))
         for nm, (s_, g_) in reqs.items():
             rid = pr.request(tuple(s_), tuple(g_), 0.0)
             t1 = time.time()

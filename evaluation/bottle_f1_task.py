@@ -151,3 +151,53 @@ class F1Task:
 
     def close(self):
         self.c.close()
+
+
+class F1TaskC(F1Task):
+    """連續交接（Codex 20261103_133750）：第一瓶放好後走一條直接接第二瓶的路徑，到換目標點就換新實例，不停車；運動狀態由 adopt_rolling 接手，物件與任務狀態重設。"""
+
+    def step(self, t, q, **kw):
+        c = self.c
+        out = c.step(t, q, **kw)
+        if self.outcome is not None:
+            out['done'] = self.outcome == 'complete'
+            return out
+        if self.stage == 0:
+            out['done'] = False
+            if c.judge.stop is not None:
+                self.outcome = 'round0_aborted'
+                self.reports.append(c.report())
+            elif c.mission_done and c.ret is None:
+                self.t_done0 = float(t)
+                self._ckpt('round0_done', c.report())
+                c.start_return_rolling(self.return_goal, t)
+            elif c.ret is not None:
+                ok, _ = c.rolling_ready()
+                if ok:
+                    self._switch_rolling(t, q)
+        elif c.judge.stop is not None:
+            self.outcome = 'round1_aborted'
+            self.reports.append(c.report())
+        elif c.mission_done:
+            self.outcome = 'complete'
+            self.reports.append(c.report())
+            out['done'] = True
+        return out
+
+    def _switch_rolling(self, t, q):
+        c = self.c
+        s_now, d = np.asarray(c.s, float).copy(), np.asarray(c.obs.d, float).copy()
+        before = dict(u_prev=np.asarray(c.u_prev, float).copy(), u_last=np.asarray(c.u_last, float).copy(), pipe=[np.asarray(u_, float).copy() for u_ in c.pipe], s=s_now, v_b=float(c.v_b))
+        self.reports.append(c.report())
+        self._ckpt('switch', self.reports[-1])
+        c.close()
+        n = self.make_round(1, s_now, d, float(t))
+        n.adopt_rolling(c)
+        self.__dict__['c'] = n
+        self.__dict__['prev'] = c
+        self.stage, self.t_switch = 1, float(t)
+        self.switch_info = dict(t=float(t), q=[float(v) for v in q], s=s_now.tolist(), d=d.tolist(), rolling=True, new_s_equal=bool(np.array_equal(np.asarray(n.s, float), s_now)),
+                                pipe_equal=all(np.array_equal(a_, b_) for a_, b_ in zip(before['pipe'], n.pipe)), u_prev_equal=bool(np.array_equal(before['u_prev'], n.u_prev)), u_last_equal=bool(np.array_equal(before['u_last'], n.u_last)),
+                                v_b=before['v_b'], u_last=before['u_last'].tolist(), pipe_nonzero=any(bool(np.any(u_)) for u_ in before['pipe']), roll=n.roll_info)
+        if self.on_switch is not None:
+            self.on_switch(n, float(t))
