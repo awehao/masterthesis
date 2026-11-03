@@ -434,6 +434,8 @@ def main():
         out.update(first_blocker=dict(stop=R[0].get('stop'), t_last=float(Lr[-1]['t']), ph=Lr[-1]['ph'], pph=Lr[-1]['pph'], q_last=Qr[-1, :3].tolist(), wall_center_dist=Rw, n_dyn_ticks=sum(1 for e_ in rows0 if FD._dyn(e_['obs'])), events_tail=R[0]['events'][-14:], shield=(R[0].get('nav_chain') or {}).get('shield'), eps0_max=max((float(e_['eps0']) for e_ in rows0), default=None), info=shared.info), checks={'兩輪完成': False}, **{'pass': False})
         print(json.dumps(out, ensure_ascii=False, default=float))
         return 0
+    if CASE == 'lchan':                                      # 掃描要算很久：先留下結果與中止原因，後面報告出事也不會丟
+        print('#EARLY ' + json.dumps(dict(outcome=r['outcome'], stage=r['stage'], stop=out['stop'], t_switch=r['t_switch'], t_done0=r['t_done0'], t_last=float(REC[-1]['t']), last=dict(ph=REC[-1]['ph'], pph=REC[-1]['pph'], ret=REC[-1]['ret'], q=REC[-1]['q'][:3].tolist()), events_tail=[e_ for e_ in (R[-1].get('events') or [])[-10:]], ret=R[0].get('f1', {}).get('ret')), ensure_ascii=False, default=float), flush=True)
     if CASE in ('nominal', 'origin', 'dyn', 'lchan'):
         H = f.hist
         tt, Q = np.array([h['t'] for h in H]), np.array([h['q'] for h in H])
@@ -583,7 +585,7 @@ def main():
             chk['期限內完成'] = bool(out.get('t_done') is not None and out['t_done'] < 240.0)
         chk['全程淨空'] = not fails
         Q2 = np.array([x['q'] for x in REC if x['round'] == 1])
-        out['round2_start'] = dict(sig_r=round(float(sig_r), 4), xy_r=[round(float(v), 4) for v in xy_r], q_start=Q2[0, :3].tolist(), err_to_path_mm=round(float(np.min(np.linalg.norm(pp0.xy(np.arange(pp0.sig0, pp0.x_lane, 0.005)) - Q2[0, :2], axis=1))) * 1e3, 2), events=[(round(e[0], 2), e[1]) for e in out['rounds'][1]['events'] if e[1] in ('online_obs_first', 'relwin_shift')], vhigh=[(round(e_['t'], 2), e_.get('ph'), round(e_.get('x', 0.0), 3)) for e_ in R[1]['events'] if e_['what'] == 'vhigh_seq'], plan=[{k_: g_.get(k_) for k_ in ('t_req', 't_acc', 'x_acc', 'x_latest')} for g_ in (R[1].get('online') or {}).get('grasp_plans', [])], t_u_minus_switch=None)
+        out['round2_start'] = None if not len(Q2) else dict(sig_r=round(float(sig_r), 4), xy_r=[round(float(v), 4) for v in xy_r], q_start=Q2[0, :3].tolist(), err_to_path_mm=round(float(np.min(np.linalg.norm(pp0.xy(np.arange(pp0.sig0, pp0.x_lane, 0.005)) - Q2[0, :2], axis=1))) * 1e3, 2), events=[(round(e[0], 2), e[1]) for e in out['rounds'][1]['events'] if e[1] in ('online_obs_first', 'relwin_shift')], vhigh=[(round(e_['t'], 2), e_.get('ph'), round(e_.get('x', 0.0), 3)) for e_ in R[1]['events'] if e_['what'] == 'vhigh_seq'], plan=[{k_: g_.get(k_) for k_ in ('t_req', 't_acc', 'x_acc', 'x_latest')} for g_ in (R[1].get('online') or {}).get('grasp_plans', [])], t_u_minus_switch=None)
         chk['第二輪未拿到舊規劃'] = port.n_blocked >= 1 and [x['name'] for x in shared.info] == ['carry_far', 'return_far' if CASE == 'origin' else 'return_short', 'carry_near']
         chk['檢查點落盤'] = ckpt.get('round0_done', {}).get('mission_done') is True and ckpt.get('switch', {}).get('round') == 0
         chk['靜態判準'] = not sfails
