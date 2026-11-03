@@ -151,6 +151,14 @@ def main():
                               radius=B['radius'], height=B['height'], mass=B['mass'], color=np.array([0.2, 0.6, 0.9]))
     import bottle_place_ctrl as PCm                                      # 第二桌：同 isaac_bottle_place（位移＝放置點 x − 名目瓶 x、lane_y）
     T2D = np.array([PCm.PLACE['target'][0] - float(B['center_xy'][0]), PCm.PLACE['lane_y'], 0.0])
+    if rep.get('scene'):                                                 # F1-L：第二桌位置與四面牆讀同一場景檔（報告記的版本名要相符）
+        import bottle_f1_lchan_scene as LS
+        SCN_ = LS.load()
+        if SCN_['name'] != rep['scene']:
+            raise SystemExit(f"場景版本不符：報告 {rep['scene']}，場景檔 {SCN_['name']}")
+        T2D[0] = SCN_['table2_x'] - float(B['center_xy'][0])
+        for n_, c_, s_ in SCN_['walls']:
+            FixedCuboid(prim_path=f'/World/lwall/{n_}', name=f'lwall_{n_}', position=np.array(c_, float), scale=np.array(s_, float), color=np.array([0.62, 0.64, 0.68]))
     T = T2                                                                   # 以下第二桌用資產高度
     hz = T['top_z'] - T['thick']
     FixedCuboid(prim_path='/World/table2/top', name='table2_top', position=np.array([0.0, T['near_y'] + T['size_y'] / 2, T['top_z'] - T['thick'] / 2]) + T2D,

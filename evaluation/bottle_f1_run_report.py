@@ -49,9 +49,12 @@ def round_summary(r, c, i, t_lo, t_hi):
 
 
 def main():
+    global TARGET
     run = sys.argv[1]
     D = os.path.join(HERE, 'runs', run)
     last = json.load(open(os.path.join(D, 's1_report.json')))
+    if last.get('f1_targets'):                                  # F1-L：放置目標讀當趟報告（第二桌東移）
+        TARGET = tuple(tuple(t_) for t_ in last['f1_targets'])
     ft = last.get('f1_task') or {}
     R = []
     p0 = os.path.join(D, 's1_report_r0.json')

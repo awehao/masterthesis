@@ -14,6 +14,7 @@ import bottle_place_ctrl as PC
 import bottle_s1_ctrl as S1
 import bottle_w1_f1_ctrl as F1C
 
+C2 = getattr(F1C, 'C2', None)                           # Isaac 腳本沿用 W1G.C2 的名字（只有 --scan-cut-front 注入會用）
 FRAC = 0.4
 A_LOOK = 0.5 * S1.A_SLEW                                # 0.2 m/s²：小於參考速度斜率，排程才跟得上
 
