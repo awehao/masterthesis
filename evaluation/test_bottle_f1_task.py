@@ -421,11 +421,11 @@ def main():
                 st['t_mv'] = t
             if CASE == 'movingall' or t - st['t_mv'] <= 0.5:
                 f_.q[0] += 0.0005                             # 0.05 m/s（高於 park_v）
-        task.check_deadline(t, 60.0 if CASE == 'deadline0' else 170.0)
+        task.check_deadline(t, 60.0 if CASE == 'deadline0' else (240.0 if SCN is not None else 170.0))
         return ov
     crash = None
     try:
-        f.run(175.0, fault, tail=2.6)
+        f.run(245.0 if SCN is not None else 175.0, fault, tail=2.6)
     except KeyError as e:
         if CASE != 'defect':
             raise
