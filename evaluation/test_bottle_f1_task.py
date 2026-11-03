@@ -560,7 +560,7 @@ def main():
     if CONT and 'mprog' in placed:
         out['monitor'] = dict(sig_start=placed['sig_start'], mprog=placed['mprog'].report(), why=placed['mon'].why, n_check=placed['mon'].n_check, path_L=placed['path_new'].L)
     if os.environ.get('F1C_AUDIT'):
-        print('#AUDIT ' + json.dumps(dict(n=len(AUDIT), first=AUDIT[:3]), ensure_ascii=False), flush=True)
+        print('#AUDIT ' + json.dumps(dict(n=len(AUDIT), first=AUDIT[:3], monitor=out.get('monitor'), switch={k_: v_ for k_, v_ in (r.get('switch') or {}).items() if k_ in ('rolling', 'new_s_equal', 'pipe_equal', 'u_prev_equal', 'u_last_equal', 'pipe_nonzero', 'v_b', 'roll')}), ensure_ascii=False, default=float), flush=True)
     if CASE in ('cont', 'contdyn') or BASE_CASE in ('stale', 'noobs', 'planlate') and CONT:
         out['cont'] = cont_report(f, r, R, task)
         print('#CONT ' + json.dumps(out['cont'], ensure_ascii=False, default=float), flush=True)
