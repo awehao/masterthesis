@@ -64,7 +64,7 @@ for _j in K.joints.values():                                   # 同 verify_self
 SELF_PAIRS = [(x, y) for i, x in enumerate(ARM_LINKS) for y in ARM_LINKS[i + 1:]
               if frozenset((x, y)) not in _adj and frozenset((x, y)) not in DESIGNED_CONTACT and _find(x) != _find(y)]
 BASE_H = 0.45                                                   # 底盤（含光達座）頂高上限：只核對貼地、低於此高度的方盒（桌腳）；桌面板離地 0.565 m 不與底盤圓盤相交
-_RNG = np.random.default_rng(7)                                 # 單一固定亂數產生器依序取 6 組（原本每組重建 rng(7) ⇒ 六組相同；Codex 20261111_011839）
+_RNG = np.random.default_rng(7)                                 # 單一固定亂數產生器依序取 6 組（原本每組重建 rng(7) ⇒ 六組相同；Codex 20261111_011111）
 RNG_SEEDS = [_RNG.uniform(LITE6_SAFE.lower * 0.8, LITE6_SAFE.upper * 0.8) for _ in range(6)]
 
 

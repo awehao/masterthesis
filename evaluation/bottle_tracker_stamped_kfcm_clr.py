@@ -26,7 +26,7 @@ CLEAR_BACK = 0.10
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
 import bottle_nav_chain as _NC                           # noqa: E402  執行設定來源（Shield 底盤包絡）
 import bottle_s0b_ctrl as _B                             # noqa: E402  執行設定來源（GMPC 動態 CBF 邊距）
-DYN_MARGIN = float(_B.CBF_MISSION['cbf_safe_margin'])      # 由執行設定讀取，不寫死（Codex 20261111_011839）
+DYN_MARGIN = float(_B.CBF_MISSION['cbf_safe_margin'])      # 由執行設定讀取，不寫死（Codex 20261111_011111）
 ROBOT_ENV = float(_NC.SHIELD['robot_radius'])
 R_COVER = DYN_MARGIN - ROBOT_ENV                          # 被遮罩端點須在本幀動態點此距離內（幾何覆蓋條件；不是避碰保證）
 
