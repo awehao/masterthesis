@@ -14,7 +14,6 @@
     python3 evaluation/tpas_offline_check.py OUT.json
 """
 import json
-import math
 import os
 import sys
 
@@ -66,9 +65,10 @@ def stop_sweep(q9, u9, boxes, xb, yb, zs, skip_bottle=()):
     return worst
 
 
-def run_case(name, qa0, qd0, base0, v_b0, scen, ctx):
+def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0):
     xb, yb, zs, yl, x_pre, x_slow, T_pre, T_g, boxes = (ctx[k] for k in ('xb', 'yb', 'zs', 'yl', 'x_pre', 'x_slow', 'T_pre', 'T_g', 'boxes'))
-    row = dict(start=name, scenario=scen, v_base0=v_b0)
+    row = dict(start=name, scenario=scen + (f'＋橫向偏 {y_off * 100:.0f} cm' if y_off else ''), v_base0=v_b0, y_off=y_off)
+    yb_act = yl + y_off                                                 # 實際底盤 y（規劃仍用車道 yl）
     inp = dict(xy=[xb, yb], z_support=zs, band=0.10, pre_m=0.06, lift_m=0.05, win_rel=[-0.35, 0.15], x_nom=0.0, y_lane=yl,
                q_seeds=[s.tolist() for s in [qa0] + list(R0.RNG_SEEDS)], q_now=qa0.tolist(), q_seed=None)
     ok, why, res = PW.plan_grasp(inp)
@@ -78,18 +78,19 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx):
     Rr, why = TPA.plan_tpa(R0.K, qa0, qd0, np.array([x_pre, yl, 0.0]), T_pre, np.asarray(res['q_pre_lo'], float), sig_e, x_pre, x_slow, V_NAV, V_C, v_b0, R0.IDX, L.lower, L.upper)
     if Rr is None:
         return dict(row, ok=False, why='tpa_' + str(why))
-    P, T, q1, qd1 = Rr['P'], Rr['P']['T'], Rr['q1'], Rr['qd1']
+    P, T = Rr['P'], Rr['P']['T']
     v_nav_eff, v_c_eff = Rr['v_nav_eff'], Rr['v_c_eff']
     prof = TS.progress_profile(sig_e, x_pre, x_slow, v_nav_eff, v_c_eff, v_b0, T)
+    PD = dict(P=P, T=T, base_end=np.array([x_pre, yl, 0.0]), v_c_eff=v_c_eff, T_pre=T_pre)
     x, v, vref, tau, rate, t = float(base0[0]) + v_b0 * LAT, v_b0, v_b0, 0.0, 1.0, 0.0
-    wait_t0, sw, v2_dp, switched = None, None, None, False
+    sw, v2_dp, switched = None, None, False
     W = dict(vr=0.0, ar=0.0, jm=np.inf, clr=(np.inf, None), stop=(np.inf, None))
     rate_prev, k = rate, 0
     log = []
     while t < 40.0:
         cap = SCEN[scen](t, x, x_pre)
         if not switched:
-            if wait_t0 is not None or (x >= x_pre and tau < T - 1e-9):
+            if x >= x_pre and tau < T - 1e-9:
                 vref = max(vref - B.A_REF * 2.0 * B.DT, 0.0)
             else:
                 vt = v_nav_eff if x < x_slow else v_c_eff
@@ -98,10 +99,9 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx):
         v = min(vd, v + S1.A_SLEW * DTC) if v < vd else max(vd, v - float(B.A_BASE[0]) * DTC)
         x += v * DTC
         t += DTC
-        if wait_t0 is None:
-            tau, rate = TS.tau_step(tau, rate, DTC, x, prof, T)
+        tau, rate = TS.tau_step(tau, rate, DTC, x, prof, T)
         if v2_dp is None and t >= T:
-            Tv2 = R0.K.fk(np.r_[x, yl, 0.0, TPA.traj_eval(P, T)], 'link_tcp')
+            Tv2 = R0.K.fk(np.r_[x, yb_act, 0.0, TPA.traj_eval(P, T)], 'link_tcp')
             v2_dp = round(float(np.linalg.norm(Tv2[:3, 3] - T_pre[:3, 3])), 4)
         qa = TPA.traj_eval(P, tau)
         qd = TPA.traj_eval(P, tau, 1) * rate
@@ -110,7 +110,7 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx):
         W['vr'] = max(W['vr'], float(np.abs(qd).max() / V_ARM))
         W['ar'] = max(W['ar'], float(np.abs(qdd).max() / A_ARM))
         W['jm'] = min(W['jm'], R0.jmargin(qa))
-        q9 = np.r_[x, yl, 0.0, qa]
+        q9 = np.r_[x, yb_act, 0.0, qa]
         if k % 3 == 0:
             m = clear_all(q9, boxes, xb, yb, zs)
             W['clr'] = min(W['clr'], m, key=lambda z: z[0])
@@ -121,45 +121,55 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx):
             log.append((round(t, 2), round(x, 4), round(v, 4), round(tau, 3), round(rate, 3)))
         k += 1
         if tau >= T - 1e-9:
-            qp = np.r_[x + v * LAT, yl, 0.0, qa]
-            r_ = 0.0 if wait_t0 is not None else rate
-            sw = TS.switch_check(R0.K, qp, q1, qd1, r_, np.r_[v, 0.0, 0.0], T_pre)
-            if sw['ok']:
-                switched = True
-                sw = dict(sw, t=round(t, 2), x=round(x, 4), waited=None if wait_t0 is None else round(t - wait_t0, 2))
-                break
-            if wait_t0 is None:
-                wait_t0, rate = t, 0.0
-            elif t - wait_t0 > TS.SW_WAIT:
-                sw = dict(sw, t=round(t, 2), x=round(x, 4), rejected=True)
-                break
+            sw = TS.switch_check(R0.K, np.r_[x + v * LAT, yb_act, 0.0], np.r_[v, 0.0, 0.0], PD, tau + rate * LAT, rate, T_pre)
+            T_from = sw.pop('T_from')
+            sw = dict(sw, t=round(t, 2), x=round(x, 4))
+            switched = bool(sw['ok'])
+            break
     row.update(T=round(T, 2), t_switch=sw.get('t') if sw else None, switch=sw, v2_dp_at_T=v2_dp, x_at_switch=round(x, 4), x_pre=round(x_pre, 4),
                v_ratio=round(W['vr'], 3), a_ratio=round(W['ar'], 3), joint_margin_min=round(W['jm'], 4), clear_slack_min=(round(W['clr'][0], 4), W['clr'][1]),
                stop_traj_slack_min=(round(W['stop'][0], 4), W['stop'][1]), log=log[::3])
     if not switched:
-        return dict(row, ok=False, why='switch_rejected' if sw and sw.get('rejected') else 'no_switch')
-    qi, prev, ins_fail, wi, wst = [], qa.copy(), 0, (np.inf, None), (np.inf, None)
+        return dict(row, ok=sw is not None and sw.get('kind') == 'reject' and y_off >= TS.SW_P_MAX, why='switch_rejected' if sw else 'no_switch',
+                    expected='拒絕' if y_off >= TS.SW_P_MAX else None)
+    prev, ins_fail, wi, wst = qa.copy(), 0, (np.inf, None), (np.inf, None)
     vv = v
-    for kk in range(int(round(1.0 / DTC)) + 1):
+    segs = []
+    if sw['kind'] == 'rejoin':
+        n_rj = int(round(sw['t_rj'] / DTC))
+        segs += [('rejoin', BR.interp_pose(T_from, T_pre, BR.min_jerk(kk / n_rj))) for kk in range(1, n_rj + 1)]
+    segs += [('insert', BR.interp_pose(T_pre, T_g, BR.min_jerk(kk * DTC / 1.0))) for kk in range(int(round(1.0 / DTC)) + 1)]
+    rj_fail, rj_clr, rj_stop, kk = 0, (np.inf, None), (np.inf, None), 0
+    for seg, Tk in segs:
         vv = min(V_C, vv + S1.A_SLEW * DTC)
-        Tk = BR.interp_pose(T_pre, T_g, BR.min_jerk(kk * DTC / 1.0))
-        qf = np.r_[x, yl, 0.0, prev]
+        qf = np.r_[x, yb_act, 0.0, prev]
         rr = R0.solve_ik(R0.K, qf, Tk)
         if not (rr.ok and rr.pos_err < 1e-3 and rr.rot_err < 1e-2):
-            ins_fail += 1
+            if seg == 'rejoin':
+                rj_fail += 1
+            else:
+                ins_fail += 1
         else:
             qd_i = (rr.q[R0.IDX] - prev) / DTC
             prev = rr.q[R0.IDX]
-            m = clear_all(rr.q, boxes, xb, yb, zs, skip_bottle=TO.FING)
-            wi = min(wi, m, key=lambda z: z[0])
-            if kk % 4 == 0:
-                s_ = stop_sweep(rr.q, np.r_[vv, 0.0, 0.0, qd_i], boxes, xb, yb, zs, skip_bottle=TO.FING)
-                wst = min(wst, s_, key=lambda z: z[0])
+            skip = TO.FING if seg == 'insert' else ()
+            m = clear_all(rr.q, boxes, xb, yb, zs, skip_bottle=skip)
+            s_ = stop_sweep(rr.q, np.r_[vv, 0.0, 0.0, qd_i], boxes, xb, yb, zs, skip_bottle=skip) if kk % 4 == 0 else (np.inf, None)
+            if seg == 'rejoin':
+                rj_clr, rj_stop = min(rj_clr, m, key=lambda z: z[0]), min(rj_stop, s_, key=lambda z: z[0])
+                W['vr'] = max(W['vr'], float(np.abs(qd_i).max() / V_ARM))
+            else:
+                wi, wst = min(wi, m, key=lambda z: z[0]), min(wst, s_, key=lambda z: z[0])
         x += vv * DTC
+        kk += 1
+    if sw['kind'] == 'rejoin':
+        row.update(rejoin_ik_fail=rj_fail, rejoin_clear_slack_min=(round(rj_clr[0], 4), rj_clr[1]), rejoin_stop_traj_slack_min=(round(rj_stop[0], 4), rj_stop[1]))
     row.update(insert_ik_fail=ins_fail, insert_clear_slack_min=(round(wi[0], 4), wi[1]), insert_stop_traj_slack_min=(round(wst[0], 4), wst[1]),
-               t_accept_to_grasp=round(sw['t'] + LAT + 0.05 + 1.0, 2))
-    row['ok'] = bool(W['vr'] <= 1.0 + 1e-6 and W['ar'] <= 1.0 and W['jm'] >= R0.LIM_M and W['clr'][0] >= 0 and W['stop'][0] >= 0 and ins_fail == 0
-                     and wi[0] >= 0 and wst[0] >= 0)
+               t_accept_to_grasp=round(sw['t'] + LAT + sw.get('t_rj', 0.0) + 0.05 + 1.0, 2))
+    rj_ok = sw['kind'] != 'rejoin' or (row['rejoin_ik_fail'] == 0 and row['rejoin_clear_slack_min'][0] >= 0 and row['rejoin_stop_traj_slack_min'][0] >= 0)
+    row['ok'] = bool(W['vr'] <= 1.0 + 1e-6 and W['ar'] <= 1.0 and W['jm'] >= R0.LIM_M and W['clr'][0] >= 0 and W['stop'][0] >= 0 and rj_ok
+                     and (y_off < TS.SW_P_MAX))   # 本次範圍：TPA 接近段＋切換（含重接）（Codex 032519）
+    row['insert_ok'] = bool(ins_fail == 0 and wi[0] >= 0 and wst[0] >= 0)                                                            # INSERT 與舊流程相同，另列
     return row
 
 
@@ -179,13 +189,14 @@ def main():
     _, _, b88 = TO.rec_state(c, O, 8.80)
     starts.append(('合成 K2_READY 靜止', R0.Q_TUCK.copy(), np.zeros(6), b88))
     rows = []
-    for scen in SCEN:
+    cases = [(scen, 0.0) for scen in SCEN] + [('名目', 0.02), ('名目', 0.05)]
+    for scen, yo in cases:
         for nm, q, qd, base in starts:
-            row = run_case(nm, q, qd, base, 0.35, scen, ctx)
+            row = run_case(nm, q, qd, base, 0.35, scen, ctx, y_off=yo)
             rows.append(row)
-            print({k: row.get(k) for k in ('start', 'scenario', 'ok', 'why', 'T', 't_switch', 'switch', 'v2_dp_at_T', 'v_ratio', 'a_ratio', 'clear_slack_min',
-                                           'stop_traj_slack_min', 'insert_ik_fail', 'insert_stop_traj_slack_min', 't_accept_to_grasp')}, flush=True)
-    json.dump(dict(run=TO.RUN, gate=dict(sw_p=TS.SW_P, sw_r=TS.SW_R, sw_v=TS.SW_V, sw_wait=TS.SW_WAIT), rows=rows,
+            print({k: row.get(k) for k in ('start', 'scenario', 'ok', 'why', 'expected', 'T', 't_switch', 'switch', 'rejoin_ik_fail', 'rejoin_clear_slack_min', 'rejoin_stop_traj_slack_min', 'v2_dp_at_T', 'v_ratio', 'a_ratio', 'clear_slack_min',
+                                           'stop_traj_slack_min', 'insert_ok', 'insert_clear_slack_min', 'insert_stop_traj_slack_min', 't_accept_to_grasp')}, flush=True)
+    json.dump(dict(run=TO.RUN, gate=dict(sw_p=TS.SW_P, sw_r=TS.SW_R, sw_v=TS.SW_V, sw_p_max=TS.SW_P_MAX, sw_r_max=TS.SW_R_MAX, v_rj=TS.V_RJ), rows=rows,
                    note='底盤沿車道直線；情境上限作用於實際速度；完整停止軌跡用既有 stop_traj（設定點 s 取當下構型、在途命令取當拍命令重複——近似）；'
                         'v2_dp_at_T＝若依時間在 t＝T 切換，相對側與世界 T_pre 的位置差（v2 缺口的量化）'),
               open(out, 'w'), ensure_ascii=False, indent=1, default=float)
