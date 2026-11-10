@@ -2,6 +2,7 @@
 """r5（2026-11-10；Codex 20261110_200117 D）：r4 的版本化複本，只把「發空計畫停車」全部改成 gmpc_node_m8 的主動保持（/gmpc/hold）：
   STOP_BLOCKED、WAIT 的 stop_now、HOLD_STALE（只有上層航跡決策資料過期；底層障礙過期由 GMPC 自己的 stale 保護失效關閉）、WAIT_TIMEOUT，
   以及 WAIT 走到停點 0.25 m 內（否則 GMPC 判 arrived 直接歸零、不解 QP）。離開這些模式時先解除保持再發計畫。時窗層參數同 r4（B 未改）。
+  另：起步須感知就緒（收到過 /gmpc/tracks_debug 且接收間隔 ≤ 0.5 s），起跑核對記錄航跡接收間隔與數量。
 r4（2026-11-10；Codex 20261110_194328 核可 A）：r3b 的版本化複本，只把時窗層換成 m8_window2.WindowLayer2（不穩移動物用速度上界 0.8 m/s、
   機器人通過時間上下界、逐點時空衝突與整段 COMMIT 核對）。其餘同 r3b。
 r3b（2026-11-10）：r3 的版本化複本，只改起步與規劃請求的強健性（m8fake_r3_T25p83：代價圖在地圖到達前以預設 5×5 m 啟動、
@@ -341,8 +342,12 @@ class M8Nav(Node):
                 return
             if int(self.pr.grid.cost(np.array([[x, y]]))[0]) < 0:              # r3b：代價圖未涵蓋機器人（地圖未到、預設小圖）
                 return
+            if self.tracks_t is None or self.t - self.tracks_t > WL.TRACK_MAX_AGE:   # r5：感知就緒（收到過航跡且接收間隔內）才起步（m8fake_r4S_T44p0 起步即 HOLD_STALE）
+                return
             self.t_start = self.t
-            self.rep['start_check'] = dict(t=self.t, pose=list(self.pose), grid_n=self.pr.n_grid, grid_age=round(self.t - self.pr.grid.stamp, 3))
+            self.rep['start_check'] = dict(t=self.t, pose=list(self.pose), grid_n=self.pr.n_grid, grid_age=round(self.t - self.pr.grid.stamp, 3),
+                                           tracks_recv_age=round(self.t - self.tracks_t, 3), n_tracks=len(self.tracks), n_confirmed=sum(1 for x_ in self.tracks if x_.get('confirmed')),
+                                           note='tracks_recv_age 是接收間隔（/gmpc/tracks_debug 無來源時間戳），不是來源資料年齡')
             self._request('initial')
             self._go('PLAN')
         if self.seg == 'PLAN' and self.pr.result is None and self.rep['plans'] and self.t - self.rep['plans'][-1]['t'] > T_PLAN_RETRY:   # r3b：無回覆重送

@@ -58,6 +58,13 @@ def main():
     i = int(np.argmin(dk))
     clr['known_walls_furniture_door'] = dict(disc_min=num(dk[i]), t_world=num(tw[i], 2), n_intrusion_samples=int((dk < 0).sum()))
     out['clearance'] = clr
+    if t0 is not None:                                                     # 起跑時包絡間距（真值）、感知就緒、第一次風險辨識與決策（Codex 194328 B）
+        k0 = int(np.argmin(np.abs(c['t'] - t0)))
+        out['start'] = dict(t=t0, disc_to_walkers={w['name']: num(math.hypot(c['base_x'][k0] - c[f"{w['name']}_x"][k0], c['base_y'][k0] - c[f"{w['name']}_y"][k0]) - w['radius'] - R_BASE) for w in walkers},
+                            initial_intrusion=any(math.hypot(c['base_x'][k0] - c[f"{w['name']}_x"][k0], c['base_y'][k0] - c[f"{w['name']}_y"][k0]) - w['radius'] - R_BASE < 0 for w in walkers),
+                            start_check=nav.get('start_check'))
+        lg = [x for x in (nav.get('conflict_layer_log') or []) if x.get('mode') not in (None, 'CRUISE')]
+        out['first_risk'] = None if not lg else dict(lg[0], t_world=num(float(np.interp(lg[0]['t'], c['t'], c['tw'])), 2))
     out['safety'] = dict(intrusion=any(v['disc_min'] is not None and v['disc_min'] < 0 for v in clr.values()),
                          note='假世界不模擬接觸力；負值＝安全包絡侵入（幾何重疊）')
     B = MB.read_bag(os.path.join(D, 'bag'), ['/shield/diag', '/gmpc/diag_v2', '/cmd_vel_pre_mux', '/cmd_vel', '/odom'])
@@ -109,7 +116,7 @@ def main():
     out['conflict_layer_log'] = nav.get('conflict_layer_log')
     out['safety_node'] = nav.get('safety')
     json.dump(out, open(os.path.join(D, 'm8_fake_report.json'), 'w'), ensure_ascii=False, indent=1, default=float)
-    show = {k_: out[k_] for k_ in ('run', 'nav_node', 'result', 't_cruise_world', 't_end_world', 'path_len_m', 'safety', 'shield', 'cbf', 'rate', 'mode_time_s', 'mode_episodes')}
+    show = {k_: out.get(k_) for k_ in ('run', 'nav_node', 'result', 't_cruise_world', 't_end_world', 'path_len_m', 'safety', 'shield', 'cbf', 'rate', 'mode_time_s', 'mode_episodes', 'start', 'first_risk')}
     show['clearance'] = {k_: v for k_, v in clr.items() if k_ in ('walker_a1', 'unknown_a1', 'unknown_a2', 'known_walls_furniture_door')}
     show['conflict_modes'] = [(x.get('t'), x.get('mode'), (x.get('plan') or {}).get('kind')) for x in (out['conflict'] or []) if x.get('mode')]
     print(json.dumps(show, ensure_ascii=False, indent=1, default=float))
