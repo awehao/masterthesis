@@ -49,6 +49,7 @@ def window_seeded(T_pre, T_g, T_lift, x_lo, x_hi, seed, y=0.0, dx=0.02):
         return None, 'ik_pre_mid'
     q_mid = np.asarray(g[2], float)
     mn = float('inf')
+    q_pre_lo = None
     for nm, T in (('pre', T_pre), ('grasp', T_g), ('lift', T_lift)):
         g2 = RS.ik(np.array([x_mid, y, 0.0]), T, [q_mid])
         if not g2[0]:
@@ -58,7 +59,9 @@ def window_seeded(T_pre, T_g, T_lift, x_lo, x_hi, seed, y=0.0, dx=0.02):
             if r is None:
                 return None, f'sweep_{nm}@{m}'
             mn = min(mn, m)
-    return dict(q_mid=q_mid, margin=mn, x_mid=float(x_mid)), None
+            if nm == 'pre' and xs is lhs:
+                q_pre_lo = np.asarray(r[-1], float)                 # R1a：窗起點的預抓分支構型（由量測目標＋實際種子延拓得到；舊控制器不讀）
+    return dict(q_mid=q_mid, margin=mn, x_mid=float(x_mid), q_pre_lo=q_pre_lo, x_lo=float(lhs[-1])), None
 
 
 def plan_grasp(inp):
@@ -68,10 +71,31 @@ def plan_grasp(inp):
     T_p[:3, 3] -= float(inp['pre_m']) * T_g[:3, 2]
     T_l = BRF.lift_pose(T_g, float(inp['lift_m']))
     lo, hi = (float(v) for v in inp['win_rel'])
-    br, why = window_seeded(T_p, T_g, T_l, x + lo, x + hi, inp['q_seed'], y=float(inp.get('y_lane', 0.0)))   # y_lane：目標專屬車道（bottle_tlane；未給＝舊車道 y＝0，舊控制器行為不變）
+    yl = float(inp.get('y_lane', 0.0))                                   # y_lane：目標專屬車道（bottle_tlane；未給＝舊車道 y＝0，舊控制器行為不變）
+    if inp.get('q_seeds'):                                               # R1a：多種子（當下手臂、方位、固定亂數；不含 q_ready），取從 q_now 轉移最快的可行分支
+        q_now = np.asarray(inp['q_now'], float)
+        best, why, tried = None, None, []
+        for k, sd in enumerate(inp['q_seeds']):
+            b, w = window_seeded(T_p, T_g, T_l, x + lo, x + hi, sd, y=yl)
+            if b is None or b.get('q_pre_lo') is None or not (np.isfinite(b['margin']) and b['margin'] > 0.0):
+                tried.append(dict(k=k, ok=False, why=w))
+                why = why or w
+                continue
+            cost = float(np.abs(b['q_pre_lo'] - q_now).max())
+            tried.append(dict(k=k, ok=True, dq_max=round(cost, 4), margin=round(float(b['margin']), 4)))
+            if best is None or cost < best[0]:
+                best = (cost, k, b)
+        br = None if best is None else dict(best[2], seed_index=best[1], dq_max=best[0])
+        if br is not None:
+            br['tried'] = tried
+    else:
+        br, why = window_seeded(T_p, T_g, T_l, x + lo, x + hi, inp['q_seed'], y=yl)
     ok = br is not None and np.isfinite(br['margin']) and br['margin'] > 0.0
     return ok, None if ok else (why or 'margin_nonpositive'), dict(T_g=T_g.tolist(), margin=None if br is None else float(br['margin']), x_mid=None if br is None else br['x_mid'],
-                                                                   q_mid=None if br is None else br['q_mid'].tolist(), win=[x + lo, x + hi], dx=x - float(inp['x_nom']))
+                                                                   q_mid=None if br is None else br['q_mid'].tolist(), win=[x + lo, x + hi], dx=x - float(inp['x_nom']),
+                                                                   q_pre_lo=None if br is None or br.get('q_pre_lo') is None else br['q_pre_lo'].tolist(), x_lo=None if br is None else br.get('x_lo'),
+                                                                   seed_index=None if br is None else br.get('seed_index'), dq_max=None if br is None else br.get('dq_max'),
+                                                                   tried=None if br is None else br.get('tried'))
 
 
 def path_q_ns(q0, T_from, T_to, T_rel, GC, ns):
