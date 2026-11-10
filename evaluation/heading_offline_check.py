@@ -31,20 +31,32 @@ N, DT = B.N, B.DT
 CFG = C0.make_cfg(json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json'))))
 
 
-def run_path(path, sig_start, v_max, heading, q_arm, t_max=60.0):
+def run_path(path, sig_start, v_max, heading, q_arm, t_max=60.0, yaw0=0.0, switch=None):
+    """switch＝(t_sw, path2)：t_sw 時換到 path2（σ 取實測投影），新航向以舊參考在當下進度的偏航為 θ0（同 bottle_w1_head_ctrl）。"""
     mpc = GW.GMPC(B.nav_cfg())
     p0 = path.xy(np.array([sig_start]))[0]
-    q = np.r_[p0, 0.0, q_arm]
+    q = np.r_[p0, float(yaw0), q_arm]
     s = np.array(q_arm, float)
     pipe = [np.zeros(9) for _ in range(C0.D_STEPS)]
     u_prev = np.zeros(3)
-    HR = HD.HeadingRef(path, sig_start, 0.0) if heading else None
+    HR = HD.HeadingRef(path, sig_start, float(yaw0)) if heading else None
+    sw_rec = None
     s_ref, sig_rob, v = float(sig_start), float(sig_start), 0.0
     sig_end = float(path.sig0 + path.L) + 0.3
     rec = dict(t=[], ep=[], eyaw=[], w=[], vx=[], vy=[], yaw=[], yaw_ref=[], yaw_tan=[], vref=[], sig=[])
     t = 0.0
     t_arr = None
     while t < t_max and sig_rob < sig_end:
+        if switch is not None and sw_rec is None and t >= switch[0]:
+            path2 = switch[1]
+            s2 = float(path2.project(q[:2], path2.sig0, back=0.0, ahead=1.0))
+            th0 = float(HR.yaw(s_ref)) if HR is not None else 0.0
+            yr_old = th0
+            path, sig_rob, s_ref = path2, s2, s2
+            sig_end = float(path.sig0 + path.L) + 0.3
+            if HR is not None:
+                HR = HD.HeadingRef(path, s2, th0)
+            sw_rec = dict(t=round(t, 2), theta_old=round(yr_old, 4), theta_new=round(float(HR.yaw(s2)) if HR is not None else 0.0, 4))
         qp, sp = q.copy(), s.copy()
         for u_in in pipe:
             qp, sp = S.plant_phys_step(qp, sp, u_in, CFG, 1)
@@ -95,13 +107,13 @@ def run_path(path, sig_start, v_max, heading, q_arm, t_max=60.0):
     wd = np.abs(np.diff(w)) / DT if len(w) > 1 else np.zeros(1)
     iw = np.argsort(-wd)[:3]
     tan_err = np.array([math.atan2(math.sin(a - b), math.cos(a - b)) for a, b in zip(rec['yaw'], rec['yaw_tan'])])
-    HS = HD.HeadingRef(path, sig_start, float(np.arctan2(*path.tangent(np.array([sig_start]))[0][::-1])))   # 平滑切線（無承接混合）供對照
+    HS = HD.HeadingRef(path, path.sig0 if switch is not None else sig_start, float(np.arctan2(*path.tangent(np.array([path.sig0 if switch is not None else sig_start]))[0][::-1])))   # 平滑切線（無承接混合）供對照
     sm_err = np.array([math.atan2(math.sin(a - float(HS.yaw(sg))), math.cos(a - float(HS.yaw(sg)))) for a, sg in zip(rec['yaw'], rec['sig'])])
     after = np.array(rec['sig']) >= sig_start + HD.L_BLEND + 0.2                        # 扣除起步承接混合段（＋0.2 m 追蹤收斂）
     t_blend_end = next((rec['t'][i] for i in range(len(after)) if after[i]), None)
     sm_a, tn_a = (sm_err[after], tan_err[after]) if after.any() else (sm_err, tan_err)
     k_bl = int(HD.L_BLEND / max(np.mean(np.abs(np.diff(rec['t'])) * 0.3), 1e-3)) if heading else 0
-    return dict(heading=heading, t_total=round(t, 2), wdot_top=[(rec['t'][i], round(float(wd[i]), 3), round(rec['vref'][i], 3)) for i in iw], reached=bool(sig_rob >= sig_end - 0.45), ep_max=round(max(rec['ep']), 4), ep_p95=round(float(np.percentile(rec['ep'], 95)), 4),
+    return dict(heading=heading, switch=sw_rec, t_total=round(t, 2), wdot_top=[(rec['t'][i], round(float(wd[i]), 3), round(rec['vref'][i], 3)) for i in iw], reached=bool(sig_rob >= sig_end - 0.45), ep_max=round(max(rec['ep']), 4), ep_p95=round(float(np.percentile(rec['ep'], 95)), 4),
                 eyaw_max_deg=round(math.degrees(max(np.abs(rec['eyaw']))), 2), w_max=round(float(np.abs(w).max()), 3), wdot_max=round(float(wd.max()), 3),
                 vy_max=round(float(np.abs(rec['vy']).max()), 3), heading_vs_tangent_deg_p95=round(math.degrees(float(np.percentile(np.abs(tan_err), 95))), 2),
                 heading_vs_tangent_deg_max=round(math.degrees(float(np.abs(tan_err).max())), 2), heading_vs_smooth_deg_p95=round(math.degrees(float(np.percentile(np.abs(sm_err), 95))), 2), heading_vs_smooth_deg_max=round(math.degrees(float(np.abs(sm_err).max())), 2), after_blend=dict(t_from=t_blend_end, vs_smooth_p95=round(math.degrees(float(np.percentile(np.abs(sm_a), 95))), 2), vs_smooth_max=round(math.degrees(float(np.abs(sm_a).max())), 2), vs_tangent_p95=round(math.degrees(float(np.percentile(np.abs(tn_a), 95))), 2), vs_tangent_max=round(math.degrees(float(np.abs(tn_a).max())), 2)), vref_min=round(min(rec['vref'][5:] or [0.0]), 3), n=len(rec['t']),

@@ -136,6 +136,10 @@ class W1PlaceController(CJ.W1PlaceController):
         self.st.t_pre = float('inf')                                     # 不再依時間進 PREGRASP；由切換閘門決定
         self._ev('tpas_profile', n=len(prof[0]), sig0=round(float(prof[1][0]), 4), sig_end=round(float(prof[1][-1]), 4), tau_end=round(float(prof[0][-1]), 3))
 
+    def _plan_yaw(self, sig):
+        """進度點 σ 的計畫底盤偏航（本版＝th_ref；航向沿路徑的子類覆寫為該進度點的路徑航向）。"""
+        return float(self.th_ref)
+
     def _tau_at(self, tau_t):
         P = self.tpa
         return P['tau'] + P['rate'] * (tau_t - float(self.t))
@@ -155,7 +159,7 @@ class W1PlaceController(CJ.W1PlaceController):
             P['t_last'] = t
             qp, _, _ = self._stop_rest(np.asarray(q, float))
             sp = self.path.project(qp[:2], float(self.sig_robot), back=0.1, ahead=0.3)
-            P['D'], dy, dth = plan_dev(qp[:3], self.path.xy(sp)[0], float(self.th_ref))
+            P['D'], dy, dth = plan_dev(qp[:3], self.path.xy(sp)[0], self._plan_yaw(sp))
             P['dev_max'] = max(P.get('dev_max', 0.0), abs(dy))
             if abs(dy) > DEV_Y_MAX or abs(dth) > DEV_TH_MAX:
                 self.judge._stop(self.t, 'tpa_plan_deviation', dy=round(dy, 4), dth=round(dth, 4))
