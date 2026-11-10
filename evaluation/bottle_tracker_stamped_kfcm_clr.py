@@ -23,11 +23,20 @@ import bottle_tracker_kfclock as KC                     # noqa: E402
 import bottle_tracker_stamped_kfcm as KM                # noqa: E402
 
 CLEAR_BACK = 0.10
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
-import bottle_nav_chain as _NC                           # noqa: E402  執行設定來源（Shield 底盤包絡）
-import bottle_s0b_ctrl as _B                             # noqa: E402  執行設定來源（GMPC 動態 CBF 邊距）
-DYN_MARGIN = float(_B.CBF_MISSION['cbf_safe_margin'])      # 由執行設定讀取，不寫死（Codex 20261111_011111）
-ROBOT_ENV = float(_NC.SHIELD['robot_radius'])
+
+
+def _const(fname, name):
+    """從執行設定原始檔讀模組層級常數（ast 字面值）；不 import：bottle_nav_chain 載入時會安裝 ros_stub 蓋掉真 rclpy（真節點 TypeError，tpa_nom_1 結果碼 70）。"""
+    import ast
+    tree = ast.parse(open(os.path.join(HERE, fname)).read())
+    for n in tree.body:
+        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in n.targets):
+            return ast.literal_eval(n.value) if not isinstance(n.value, ast.Call) else {k.arg: ast.literal_eval(k.value) for k in n.value.keywords}
+    raise KeyError(f'{fname}:{name}')
+
+
+DYN_MARGIN = float(_const('bottle_s0b_ctrl.py', 'CBF_MISSION')['cbf_safe_margin'])   # 由執行設定讀取，不寫死（Codex 20261111_011111）
+ROBOT_ENV = float(_const('bottle_nav_chain.py', 'SHIELD')['robot_radius'])
 R_COVER = DYN_MARGIN - ROBOT_ENV                          # 被遮罩端點須在本幀動態點此距離內（幾何覆蓋條件；不是避碰保證）
 
 
