@@ -71,6 +71,19 @@ def conflicts(P, t_lb, t_ub, M, margin):
     return conf, cov_any, first
 
 
+def beyond(t_lb, t_ub, margin):
+    """各點機器人時窗 [t_lb−margin, t_ub＋margin] 是否超出預測範圍 T_LONG：0＝全在範圍內、1＝部分超出、2＝整段超出（該點未核對）。"""
+    lo, hi = np.asarray(t_lb, float) - margin, np.asarray(t_ub, float) + margin
+    return np.where(lo > W2.T_LONG, 2, np.where(hi > W2.T_LONG, 1, 0))
+
+
+def status(conf, bey):
+    """conflict｜clear_within_horizon（範圍內無衝突且全在範圍內）｜clear_beyond_horizon（範圍內無衝突，但有點的時窗超出 T_LONG＝未知，不算已驗證）。"""
+    if np.asarray(conf).any():
+        return 'conflict'
+    return 'clear_within_horizon' if not (np.asarray(bey) > 0).any() else 'clear_beyond_horizon'
+
+
 def line_of(x):
     v = np.array([x['vx'], x['vy']], float)
     vh = v / max(np.linalg.norm(v), 1e-9)

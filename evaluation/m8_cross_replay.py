@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""r7 候選 B 的離線比較（Codex 20261110_221334：先用既有紀錄，對照原路與一個近垂直穿越候選）。只讀紀錄、不改控制。
+"""r7 候選 B 的離線比較（r2 口徑：Codex 20261110_223314 第 2 項——區分預測範圍內無衝突／超出 T_LONG（未知）／資料過期或紀錄結尾；到達＝逐步滾動重評未失效，不是整段已驗證）。
+（r1：Codex 20261110_221334：先用既有紀錄，對照原路與一個近垂直穿越候選）。只讀紀錄、不改控制。
 一 逐時刻（機器人照該趟實際位姿／速度／朝向，開迴路）：
    原路＝當時巡航路徑（/plan 終點＝門前觀察區）自投影點起；候選＝m8_cross.build_cross（方向取原路第一個衝突的確認航跡，stable 才建）。
    各報：是否立即可行（DT_MARGIN 時空核對）、第一個衝突（航跡、kind、覆蓋時刻、機器人時窗）、候選拒絕原因、
@@ -72,20 +73,37 @@ def main():
     def set_cm(t):
         cur['m'] = next((x[1] for x in reversed(cms) if x[0] <= t), None)
     drop = {int(v) for v in os.environ.get('DROP_TID', '').split(',') if v.strip()}   # 診斷用反事實（離線定位阻點，不是可用設定）
+    cls = None
+    if os.environ.get('STATIC_CLS'):                                    # r1 口徑＋分類候選（Codex 223314 第 3 項；離線，不接控制器）
+        import m8_trackcls as TC
+        cls = TC.StaticClassifier()
     H = W2.TrackHistory()
     TM = []                                                            # (t, M) 全程預先分類（線上歷史，只用過去資料）
+    n_static_dropped = 0
+    t_rec_end = to_sim(B['/gmpc/tracks_debug'][-1][0]) if B['/gmpc/tracks_debug'] else -1.0
     for r, m in B['/gmpc/tracks_debug']:
         t = to_sim(r)
         if t > tb + T_TRIAL_MAX:
             break
         T = [x for x in MB.tracks(m) if int(x['tid']) not in drop]
+        if cls is not None:
+            cls.update(t, T)
+            keep = [x for x in T if not (x.get('confirmed') and cls.is_static(t, x['tid']))]
+            n_static_dropped += sum(1 for x in T if x.get('confirmed')) - sum(1 for x in keep if x.get('confirmed'))
+            T = keep
         H.update(t, T)
         TM.append((t, [(x, H.kind(t, x)) for x in T if x.get('confirmed')]))
     tt_tm = np.array([x[0] for x in TM])
 
-    def M_at(t):
+    def M_at(t, with_status=False):
+        """該時刻最新一筆航跡集合；with_status 時另回 ok｜stale（最新一筆比 TRACK_MAX_AGE 舊）｜record_end（超過紀錄結尾）。"""
         i = int(np.searchsorted(tt_tm, t, side='right')) - 1
-        return TM[i][1] if i >= 0 else []
+        M = TM[i][1] if i >= 0 else []
+        if not with_status:
+            return M
+        if t > t_rec_end + W2.TRACK_MAX_AGE or i >= len(TM) - 1 and t > tt_tm[-1] + W2.TRACK_MAX_AGE:
+            return M, 'record_end'
+        return M, ('ok' if i >= 0 and t - tt_tm[i] <= W2.TRACK_MAX_AGE else 'stale')
     mv = np.hypot(np.gradient(od[:, 1], od[:, 0]), np.gradient(od[:, 2], od[:, 0]))
     kc = (od[:, 0] >= ta) & (od[:, 0] <= tb) & (mv > 0.1)
     v_nom = float(np.median(mv[kc])) if kc.any() else W2.V_UB_R
@@ -118,7 +136,8 @@ def main():
         _, _, ub_old = W2.robot_window(P, rp, v_al)
         conf, cov, first = X.conflicts(P, lb, ub, M, W2.DT_MARGIN)
         conf_old, _, _ = X.conflicts(P, lb, ub_old, M, W2.DT_MARGIN)
-        row = dict(t=round(t, 2), rp=rp.round(3).tolist(), orig=dict(ok=not conf.any(), ok_old_time=not conf_old.any(), first=first, rot_s=parts['rot_s'], corner_s=parts['corner_s']))
+        row = dict(t=round(t, 2), rp=rp.round(3).tolist(), orig=dict(ok=not conf.any(), status=X.status(conf, X.beyond(lb, ub, W2.DT_MARGIN)), ok_old_time=not conf_old.any(), first=first,
+                                                                    rot_s=parts['rot_s'], corner_s=parts['corner_s']))
         threat = None
         if first is not None:
             threat = next(((x, k) for x, k in M if int(x.get('tid', -1)) == first['tid']), None)
@@ -137,7 +156,7 @@ def main():
                 sc, lbc, ubc, pc = X.window_m(c['P'], c['yaw'], rp, ryaw, vel)
                 cc, covc, fc = X.conflicts(c['P'], lbc, ubc, M, W2.DT_MARGIN)
                 i0, i1 = X.band_span(c['P'], c['line'], start=c['i_W'])
-                row['cand'] = dict(built=True, ok=not cc.any(), first=fc, approach_ok=not cc[:c['i_W'] + 1].any(), W=c['W'].round(3).tolist(), Wp=c['Wp'].round(3).tolist(),
+                row['cand'] = dict(built=True, ok=not cc.any(), status=X.status(cc, X.beyond(lbc, ubc, W2.DT_MARGIN)), first=fc, approach_ok=not cc[:c['i_W'] + 1].any(), W=c['W'].round(3).tolist(), Wp=c['Wp'].round(3).tolist(),
                                    tid=c['tid'], len=c['len'], at_W=X.times_at(sc, lbc, ubc, c['i_W']), band_in=X.times_at(sc, lbc, ubc, i0),
                                    band_out=X.times_at(sc, lbc, ubc, i1), rot_s=pc['rot_s'], corner_s=pc['corner_s'])
         rows.append(row)
@@ -163,17 +182,25 @@ def main():
         return (int(ii[0]) - 1 if len(ii) and ii[0] > 0 else 0), side
 
     def simulate(P, Y, t_s, prof):
-        """虛擬機器人自 P[0] 靜止起步沿 P；回傳結果字典。"""
+        """虛擬機器人自 P[0] 靜止起步沿 P；回傳結果字典。
+        entry_status：進入時整段 clear_within_horizon｜clear_beyond_horizon（有點的時窗超出 T_LONG＝未知）。
+        每步資料：最新航跡比 TRACK_MAX_AGE 舊或超過紀錄結尾 ⇒ data_insufficient（不算到達也不算失效）。
+        到達＝arrived_rolling：每步滾動重評都沒失效；不是整段已驗證（n_steps_beyond＝核對範圍有點超出 T_LONG 的步數）。"""
         seglen = np.r_[0.0, np.linalg.norm(np.diff(P, axis=0), axis=1)]
         S = np.cumsum(seglen)
         set_cm(t_s)
+        M0, st0 = M_at(t_s, True)
+        if st0 != 'ok':
+            return dict(entry=False, data=st0)
         s_, lb_, ub_, _ = X.window_m(P[1:], Y[1:], P[0], Y[0], np.zeros(2))
-        cf, _, f0 = X.conflicts(P[1:], lb_, ub_, M_at(t_s), W2.DT_MARGIN)
-        if cf.any():
+        cf, _, f0 = X.conflicts(P[1:], lb_, ub_, M0, W2.DT_MARGIN)
+        est = X.status(cf, X.beyond(lb_, ub_, W2.DT_MARGIN))
+        if est == 'conflict':
             return dict(entry=False, first=f0)
         vmax = W2.V_UB_R if prof == 'ub' else v_nom
         delay = W2.T_DELAY if prof == 'ub' else W2.T_DELAY_LB
-        pos_s, v, tau = 0.0, 0.0, 0.0
+        pos_s, v, tau, n_bey = 0.0, 0.0, 0.0, 0
+        base = dict(entry=True, entry_status=est)
         while tau < T_TRIAL_MAX:
             tau += STEP_DT
             if tau > delay:
@@ -181,11 +208,13 @@ def main():
                 pos_s += v * STEP_DT
             k = int(np.searchsorted(S, pos_s))
             if k >= len(P) - 1 or math.hypot(P[-1, 0] - np.interp(pos_s, S, P[:, 0]), P[-1, 1] - np.interp(pos_s, S, P[:, 1])) <= ALIGN_R:
-                return dict(entry=True, outcome='arrived', t=round(tau, 1))
+                return dict(base, outcome='arrived_rolling', t=round(tau, 1), n_steps_beyond=n_bey)
+            M, st = M_at(t_s + tau, True)
+            if st != 'ok':
+                return dict(base, outcome='data_insufficient', data=st, t=round(tau, 1), s=round(pos_s, 2), s_total=round(float(S[-1]), 2))
             q = np.array([np.interp(pos_s, S, P[:, 0]), np.interp(pos_s, S, P[:, 1])])
             dirv = P[k] - P[k - 1] if k > 0 else P[1] - P[0]
             vel = dirv / max(np.linalg.norm(dirv), 1e-9) * v
-            M = M_at(t_s + tau)
             R, RY = P[k:], Y[k:]
             s2, lb2, ub2, _ = X.window_m(R, RY, q, float(Y[max(k - 1, 0)]), vel)
             fa = W2.WindowLayer2._first_arrival(None, q, M)
@@ -194,13 +223,15 @@ def main():
                 nc = np.flatnonzero(~cov2)
                 i_out = int(nc[0]) if len(nc) else len(R) - 1
                 cf2, _, f2 = X.conflicts(R[:i_out + 1], lb2[:i_out + 1], ub2[:i_out + 1], M, 0.0)
+                n_bey += int((X.beyond(lb2[:i_out + 1], ub2[:i_out + 1], 0.0) > 0).any())
                 if cf2.any():
-                    return dict(entry=True, outcome='commit_invalid', t=round(tau, 1), s=round(pos_s, 2), s_total=round(float(S[-1]), 2), first=f2, threat_kind=fa[2])
+                    return dict(base, outcome='commit_invalid', t=round(tau, 1), s=round(pos_s, 2), s_total=round(float(S[-1]), 2), first=f2, threat_kind=fa[2])
             else:
                 cf2, _, f2 = X.conflicts(R, lb2, ub2, M, W2.DT_MARGIN)
+                n_bey += int((X.beyond(lb2, ub2, W2.DT_MARGIN) > 0).any())
                 if cf2.any():
-                    return dict(entry=True, outcome='wait', t=round(tau, 1), s=round(pos_s, 2), s_total=round(float(S[-1]), 2), first=f2)
-        return dict(entry=True, outcome='timeout', t=round(tau, 1))
+                    return dict(base, outcome='wait', t=round(tau, 1), s=round(pos_s, 2), s_total=round(float(S[-1]), 2), first=f2)
+        return dict(base, outcome='timeout', t=round(tau, 1))
     trials = []
     t_s = ta
     while t_s <= tb:
@@ -245,7 +276,13 @@ def main():
         for q in z:
             if q['entry']:
                 oc[opt][q['outcome']] = oc[opt].get(q['outcome'], 0) + 1
-        ar = [q['t'] for q in z if q.get('outcome') == 'arrived']
+        for q in z:
+            if q['entry']:
+                es = 'entry_' + q['entry_status']
+                oc[opt][es] = oc[opt].get(es, 0) + 1
+            elif q.get('data'):
+                oc[opt]['no_entry_data_' + q['data']] = oc[opt].get('no_entry_data_' + q['data'], 0) + 1
+        ar = [q['t'] for q in z if q.get('outcome') == 'arrived_rolling']
         oc[opt]['t_arrive_med'] = None if not ar else round(float(np.median(ar)), 1)
         inv = [q for q in z if q.get('outcome') == 'commit_invalid']
         oc[opt]['invalid_t_med'] = None if not inv else round(float(np.median([q['t'] for q in inv])), 1)
@@ -258,13 +295,18 @@ def main():
                               cand_built=sum(1 for r in rows if r['cand'].get('built')), cand_ok=cnt('cand', 'ok', True), cand_approach_ok=cnt('cand', 'approach_ok', True),
                               cand_not_built=why_c,
                               band_dur_ub_minus_lb=dict(orig_med=None if not dur['orig'] else float(np.median(dur['orig'])), cand_med=None if not dur['cand'] else float(np.median(dur['cand'])))),
-             trials=oc,
+             per_instant_status=dict(orig={k_: sum(1 for r in rows if r['orig'].get('status') == k_) for k_ in ('conflict', 'clear_within_horizon', 'clear_beyond_horizon')},
+                                     cand={k_: sum(1 for r in rows if (r['cand'] or {}).get('status') == k_) for k_ in ('conflict', 'clear_within_horizon', 'clear_beyond_horizon')}),
+             trials=oc, record_end_t=round(t_rec_end, 2), static_cls=None if cls is None else dict(params=cls.params(), n_confirmed_dropped=n_static_dropped),
              note='開迴路逐時刻＋虛擬穿越試驗；錄到的航跡受該趟機器人視角影響；虛擬機器人不經 GMPC／CBF／Shield；只驗決策邏輯與時窗，不代表安全')
     if drop:
         S['counterfactual_drop_tid'] = sorted(drop)
         S['note'] += '；DROP_TID：診斷用反事實，移除指定航跡以定位阻點，不是可用設定、不代表通過'
+    if cls is not None:
+        S['note'] += '；STATIC_CLS：靜態分類候選（離線；判靜態的確認航跡不進時窗層，掃描、CBF、Shield 不受影響）'
     out = dict(summary=S, rows=rows, trials=trials)
-    json.dump(out, open(os.path.join(D, 'm8_cross_replay' + ('_drop' + '_'.join(map(str, sorted(drop))) if drop else '') + '.json'), 'w'), ensure_ascii=False, indent=1, default=float)
+    tag = ('_drop' + '_'.join(map(str, sorted(drop))) if drop else '') + ('_cls' if cls is not None else '')
+    json.dump(out, open(os.path.join(D, 'm8_cross_replay_r2' + tag + '.json'), 'w'), ensure_ascii=False, indent=1, default=float)
     print(json.dumps(S, ensure_ascii=False, indent=1, default=float))
 
 
