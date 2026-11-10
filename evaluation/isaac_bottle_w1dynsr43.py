@@ -696,10 +696,10 @@ def main():
     import bottle_tlane as TLN                                                # dynsr39：目標專屬入口／車道
     import bottle_w1_online_ctrl as W1ON
 
-    def _lane_planner(obs, t_task, sig_robot, d_stop):
+    def _lane_planner(obs, t_task, sig_robot, d_stop, y_reach=None):                 # dynsr43：y_reach＝(d) 站位選擇結果（None＝名目）
         g = pr.grid
         r = TLN.decide(obs, t_task, W1ON.OBS_FRESH_S, ctrl.path, sig_robot, None, d_stop, float(ctrl.win[0]) - float(ctrl.x_nom), g,
-                       None if g is None else float(g.stamp) - T0, y_tube=C2.B.Y_TUBE)
+                       None if g is None else float(g.stamp) - T0, y_tube=C2.B.Y_TUBE, y_reach=y_reach)
         if r['ok']:
             mon.path = r['path_new']
             mprog.path, mprog.sig = r['path_new'], float(mprog.sig) + float(r['dsig0'])

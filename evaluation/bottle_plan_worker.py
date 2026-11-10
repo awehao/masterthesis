@@ -185,6 +185,9 @@ def main():
                 ok, err, res = plan_grasp(req['inputs'])
             elif kind == 'return':
                 ok, err, res = plan_return(req['inputs'])
+            elif kind == 'standoff':                                       # (d) 量測後站位選擇（bottle_standoff；導引候選時、支撐未知 ⇒ 區域桌高範圍皆可行）
+                import bottle_standoff as BSO
+                ok, err, res = BSO.evaluate(req['inputs'])
             else:
                 ok, err, res = False, f'unknown_kind:{kind}', {}
             if ok and not finite_tree(res):
