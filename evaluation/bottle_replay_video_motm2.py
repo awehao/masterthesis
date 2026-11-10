@@ -54,13 +54,14 @@ EVENT = {'unfold_start': '手臂展開', 'vision_freeze': '底盤相機凍結抓
 WHY = ('ok', '無深度', '桌面上無物體點', '無瓶型群', '訊息錯誤')
 
 
-VH = {'U': '手臂抬到高位視角（V_HIGH）', 'H': '高位觀察（V_HIGH 保持）', 'R': '轉回名目備妥', 'DONE': '備妥完成'}
-VH_BAR = {'U': '接近：展臂到高位視角', 'H': '接近：高位觀察', 'R': '接近：轉回備妥', 'DONE': '接近：備妥完成'}
+VH = {'U': '手臂抬到高位視角（V_HIGH）', 'H': '高位觀察（V_HIGH 保持）', 'R': '轉回名目備妥', 'DONE': '備妥完成', 'TPA': 'TPA 整段接近開始（從當下狀態、不經預抓姿態）', 'SW': '切換到世界座標預抓（PREGRASP）'}
+VH_BAR = {'U': '接近：展臂到高位視角', 'H': '接近：高位觀察', 'R': '接近：轉回備妥', 'DONE': '接近：備妥完成', 'TPA': '接近：TPA 整段接近（不經預抓姿態）', 'SW': '接近：世界座標預抓'}
 
 
 def moments(r):
     out = [(e['t'], EVENT[e['what']]) for e in r['events'] if e['what'] in EVENT and e['what'] != 'unfold_start']
     out += [(e['t'], VH[e['ph']]) for e in r['events'] if e['what'] == 'vhigh_seq' and e['ph'] in VH and e['ph'] != 'DONE']
+    out += [(e['t'], VH['TPA' if e['what'] == 'tpa_start' else 'SW']) for e in r['events'] if e['what'] in ('tpa_start', 'tpa_switch')]   # TPA 版本（bottle_w1_tpa_ctrl 起）
     out += [(e['t'], f"採用學習目標（快照 #{e.get('seq')}）") for e in r['events'] if e['what'] == 'segtarget_freeze']
     out += [(e['t'], f"受控停止：{e.get('why')}") for e in r['events'] if e['what'] == 'stop']
     out += [(e['t'], PHASE[e['to']]) for e in r['events'] if e['what'] == 'phase' and e['to'] in ('PREGRASP', 'INSERT')]
@@ -109,7 +110,7 @@ def main():
     CL = [x for x in CL if x.get('kind') == 'cand']
     c_t = np.array([x['t_eval'] - T0c for x in CL]) if CL else np.zeros(0)
     sgf = r['segtarget']['fix']
-    vh_ev = sorted((e['t'], e['ph']) for e in r['events'] if e['what'] == 'vhigh_seq')
+    vh_ev = sorted([(e['t'], e['ph']) for e in r['events'] if e['what'] == 'vhigh_seq'] + [(e['t'], 'TPA' if e['what'] == 'tpa_start' else 'SW') for e in r['events'] if e['what'] in ('tpa_start', 'tpa_switch')])
     from scipy.spatial.transform import Rotation as Rot
 
     def rel(k_):
