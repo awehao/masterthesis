@@ -7,6 +7,7 @@
   B 底盤導引觸發（實跑推估）：v1 xy 首次有效 4.2 s＋5 Hz 三列＋收到延遲 ⇒ 4.8 s（推估，未經實跑驗證）；視角＝以導引 xy 為觀看點、q1 生成；
   C 底盤導引觸發（影格重放實得）：8.1 s；
   D 無導引後備：依區域觀看點（區域知識）在觀察期限觸發；期限＝能在底盤到 x_pre 前留下 抬高＋觀察＋就緒＋TPA 最短時長 的最晚時刻（此處以 C 的同一時刻比較）。
+  E 視角可用提早觸發：bottle_w1_obs_ctrl 的 view_useful（抬高後支撐在畫面內、俯角 ≥ 5.1°、相機距 ≤ 1.8 m）沿此路徑的最早觸發點 x −3.541。
 報：抬高起點、支撐首見、候選就緒、就緒時底盤到 x_pre 的剩餘距離與名目剩餘時間。
     python3 evaluation/obs_timeline_check.py OUT.json
 """
@@ -57,7 +58,8 @@ def main():
     look_meas = np.array([xb, yb, zs + 0.10])
     rows = []
     for name, t0, look, gen in (('A 現行：X_U0＋固定 V_HIGH', 6.40, None, False), ('B 底盤導引觸發（實跑推估 4.8 s）', 4.80, look_meas, True),
-                                ('C 底盤導引觸發（重放實得 8.1 s）', 8.10, look_meas, True), ('D 無導引後備（區域觀看點，8.1 s）', 8.10, look_region, True)):
+                                ('C 底盤導引觸發（重放實得 8.1 s）', 8.10, look_meas, True), ('D 無導引後備（區域觀看點，8.1 s）', 8.10, look_region, True),
+                                ('E 視角可用提早觸發（區域觀看點；x ≥ −3.541 首拍，obs_ctrl 判定）', float(t[np.argmax(c['base_x'] - O[0] >= -3.541)]), look_region, True)):
         T_u_guess = VH._T(R0.Q_TUCK, R0.Q_VHIGH)
         if gen:
             q_obs, info = VG.view_q1(R0.K, base_at(t0 + T_u_guess), R0.Q_VHIGH, look, L.lower[0] + 0.05, L.upper[0] - 0.05)

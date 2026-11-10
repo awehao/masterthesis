@@ -3,7 +3,8 @@
 導引候選（bottle_guide_link → guide_intake；雙相機節點的 /bottle/target_guide：xy、來源、擷取時刻、狀態）：
   1 車道：尚未決定目標專屬車道且導引新鮮 ⇒ 以導引 xy 交同一 lane_planner（bottle_tlane.decide；代價圖核對、太晚／擋住照舊拒絕）提早決定；
     之後抓取計畫請求沿用該車道（tlane 子類只在未決定時才再決定）。
-  2 抬高觀看：手臂在收攏（TUCK）時，(導引新鮮) 或 (實測 x ≥ 觀察期限 X_DEAD＝現行 X_U0，不晚於現行) 先到者觸發；
+  2 抬高觀看：手臂在收攏（TUCK）時，(導引新鮮) 或 (以區域觀看點生成的抬高視角在 U 段結束時已能看到支撐——幾何必要條件，提早抬高、不必等底盤先找到)
+    或 (實測 x ≥ 觀察期限 X_DEAD＝現行 X_U0，最後界線) 先到者觸發；觸發後若導引才到 ⇒ 視向改對準量測位置（重新瞄準）；q1 限 ±Q1_LIM（離線核過）；
     觀看點＝導引 xy（z＝區域觀看高度）或無導引時的區域觀看點（區域知識）；視角＝bottle_view_gen.view_q1（V_HIGH 腕部樣板、只解 q1），
     以「U 段結束時的預測底盤位姿」（路徑上 s_ref＋v_b·T_u，偏航取航向參考）生成；之後的 U→H、視向追蹤（look 改為同一觀看點）、TPA 承接照基線。
   3 拒絕：導引 reject（兩來源不一致逾時）⇒ 受控停止 dual_inconsistent。
@@ -22,6 +23,9 @@ import bottle_w1_gaze_ctrl as GZ
 import bottle_w1_online_ctrl as ON
 
 GUIDE_MAX_AGE = 1.0
+Q1_LIM = 1.5                                                    # 視角 q1 範圍：view_domain_check（收攏→視角路徑自碰撞 ≥ 5 mm、關節裕度 ≥ 0.05）
+USEFUL_EVERY = 5                                                # 每 5 拍（0.25 s）判一次「抬高視角是否已可看到支撐」
+Z_SUP_REGION = 0.60                                             # 區域支撐高度中點（區域知識；桌高域 [0.55, 0.65]），只供可用性判斷，不當目標
 OK_STATES = ('selected', 'kept', 'selected_unchecked', 'kept_unchecked')
 
 
@@ -70,34 +74,60 @@ class W1PlaceController(HC.W1PlaceController):
         self._ev('tlane_accept', x_entry=r['x_entry'], y_lane=r['y_lane'], sig_join=r['sig_join'], dsig0=ds, cost_max=r.get('cost_max'), source=g['cam'])
 
     # ---- 觀察觸發
+    def _view_for(self, sq, look):
+        """以「U 段結束時的預測底盤位姿」生成觀看視角；q1 限在已核範圍。回 (q_obs, 資訊, T_u, 預測底盤位姿)。"""
+        T_u = max(1.0, math.ceil(1.875 * float(np.abs(self.q_view_tmpl - np.asarray(sq['qb'])).max()) / B.W_ARM['v_arm'] / 0.05) * 0.05)   # 同 segtarget_vhigh._T
+        s_end = float(self.s_ref) + float(self.v_b) * T_u
+        pxy = self.path.xy(np.array([s_end]))[0]
+        bp = np.r_[pxy, float(self.hd.yaw(s_end)) if self.hd is not None else 0.0]
+        q_obs, info = VG.view_q1(self.K, bp, self.q_view_tmpl, look, -Q1_LIM, Q1_LIM)
+        if q_obs is None:
+            return None, info, T_u, bp
+        return np.asarray(q_obs, float), info, T_u, bp
+
+    def _useful(self, q_obs, bp, look):
+        """抬高到 q_obs 時，觀看點下方支撐（z＝區域支撐中點）與瓶頂是否在畫面內、俯角 ≥ 校準門檻、相機距離 ≤ VG.D_MAX（幾何必要條件，不代表辨識成功）。"""
+        P = VG.bottle_pts(float(look[0]), float(look[1]), Z_SUP_REGION)
+        return bool(VG.visible(self.K, bp, q_obs, P, None)['ok'])          # 含距離上限 VG.D_MAX（解析度只校準到 1.79 m）
+
     def _vstep(self, q):
         sq = self.vh_seq
         if self.judge.stop is None and sq['ph'] == 'TUCK':
             self._lane_from_guide()
             x = float(q[0])
-            why = 'guide' if self._guide_fresh() else ('deadline' if x >= self.x_dead else None)
-            if why is not None and self.obs_trig is None:
-                if not self._at(q, sq['qb']):
-                    self._wait('tuck_not_reached', x)
-                else:
-                    look = np.r_[self.guide['xy'], GZ.LOOK[2]] if why == 'guide' else np.asarray(self.look, float)
-                    T_u = max(1.0, math.ceil(1.875 * float(np.abs(self.q_view_tmpl - np.asarray(sq['qb'])).max()) / B.W_ARM['v_arm'] / 0.05) * 0.05)   # 同 segtarget_vhigh._T
-                    s_end = float(self.s_ref) + float(self.v_b) * T_u
-                    pxy = self.path.xy(np.array([s_end]))[0]
-                    yaw = float(self.hd.yaw(s_end)) if self.hd is not None else 0.0
-                    from ammr_wholebody_mpc.arm_limits import LITE6_SAFE as L
-                    q_obs, info = VG.view_q1(self.K, np.r_[pxy, yaw], self.q_view_tmpl, look, L.lower[0] + 0.05, L.upper[0] - 0.05)
+            if self.obs_trig is None:
+                guide = self._guide_fresh()
+                look = np.r_[self.guide['xy'], GZ.LOOK[2]] if guide else np.asarray(self.look, float)
+                why, cand = None, None
+                if guide:
+                    why = 'guide'
+                elif self.n_tick % USEFUL_EVERY == 0 or x >= self.x_dead:
+                    cand = self._view_for(sq, look)
+                    if cand[0] is not None and self._useful(cand[0], cand[3], look):
+                        why = 'view_useful'                                    # 依區域與當下構型提早抬高（不必等底盤先找到）
+                    elif x >= self.x_dead:
+                        why = 'deadline'
+                if why is not None:
+                    if not self._at(q, sq['qb']):
+                        self._wait('tuck_not_reached', x)
+                        return
+                    q_obs, info, T_u, bp = cand if cand is not None else self._view_for(sq, look)
                     if q_obs is None:
-                        q_obs, info = self.q_view_tmpl.copy(), dict(why='view_gen_failed_template')
-                    self.q_vhigh = np.asarray(q_obs, float)
-                    self.look = np.asarray(look, float)                       # 視向追蹤改對準同一觀看點
-                    self.obs_trig = dict(t=round(float(self.t), 3), why=why, x=round(x, 4), look=np.round(look, 4).tolist(), q1=round(float(self.q_vhigh[0]), 4),
-                                         T_u=T_u, view=info, guide_cam=None if why != 'guide' else self.guide['cam'])
-                    self._ev('obs_trigger', why=why, x=round(x, 4), q1=round(float(self.q_vhigh[0]), 4), guide_cam=self.obs_trig['guide_cam'])
+                        q_obs, info = self.q_view_tmpl.copy(), dict(info, why='view_gen_failed_template')
+                    self.q_vhigh = q_obs
+                    self.look = np.asarray(look, float)                       # 視向追蹤對準同一觀看點
+                    self.obs_trig = dict(t=round(float(self.t), 3), why=why, x=round(x, 4), look=np.round(look, 4).tolist(), q1=round(float(q_obs[0]), 4),
+                                         T_u=T_u, view=info, guide_cam=self.guide['cam'] if why == 'guide' else None)
+                    self._ev('obs_trigger', why=why, x=round(x, 4), q1=round(float(q_obs[0]), 4), guide_cam=self.obs_trig['guide_cam'])
                     self._vset('U', sq['qb'], self.q_vhigh, x)
                     return
-            if self.obs_trig is None:
                 return                                                         # 未觸發：保持收攏，不讓基線在 X_U0 自行左擺
+        if self.obs_trig is not None and self.obs_trig['why'] != 'guide' and self._guide_fresh() and sq['ph'] in ('U', 'H'):
+            new_look = np.r_[self.guide['xy'], GZ.LOOK[2]]
+            if float(np.linalg.norm(new_look - np.asarray(self.look, float))) > 1e-4:
+                self.look = new_look                                           # 有導引後以量測位置重新瞄準（視向偏移有界追蹤，不跳設定點）
+                self.obs_trig['reaim'] = dict(t=round(float(self.t), 3), cam=self.guide['cam'])
+                self._ev('obs_reaim', cam=self.guide['cam'])
         super()._vstep(q)
 
     def report(self):

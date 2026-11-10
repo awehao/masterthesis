@@ -5,7 +5,7 @@
   左側時結果≈V_HIGH＋既有視向偏移；右側時 q1 轉到機身右前方。不讀真值瓶位，不存「右側固定姿態」。
 可見性（候選可就緒的必要幾何條件）：同 bottle_w1_gaze_ctrl 的 T_MOUNT、FX；640×480。
   瓶底心與瓶頂心投影都在畫面內且離邊 ≥ EDGE_PX、在相機前 ≥ Z_MIN；相機對瓶底心（支撐點）的俯角 ≥ ELEV_MIN；
-  手臂連桿點雲（含夾爪手指）沒有落在瓶 16 點投影外框內且比瓶近（自遮擋）。
+  相機到瓶底心距離 ≤ D_MAX；手臂連桿點雲（含夾爪手指）沒有落在瓶 16 點投影外框內且比瓶近（自遮擋）。
   ELEV_MIN 由名目趟 bottle_motm_nom_1 校準（candidates.jsonl 每列時刻、w1_frames 1 Hz 相機位姿線性內插）：俯角 4.2° 以下各列 support_observed 全為 0，
   5.1° 起全為 1；取已觀測到的最低通過值 5.1°（4.2–5.1° 之間無資料）。此後 K_MIN＝3 列一致才就緒（名目趟：支撐首次量到 11.14 s → 就緒 11.60 s）。
   底盤車體與光達座不在點雲內（未核車體遮擋），分割模型在右側視角的實際表現未核（照實揭露）。
@@ -20,6 +20,7 @@ W_PX, H_PX = 640, 480
 FX = GZ.FX
 EDGE_PX = 5.0
 ELEV_MIN = 5.1                                                  # 度；名目趟校準（見檔頭）
+D_MAX = 1.8                                                     # 相機到瓶底心距離上限（m）：nom_1 支撐首次量到時 1.79 m；取已觀測的最遠成功值（11/11 加入，r1b_right_r2 未含此條件）
 Z_MIN = GZ.Z_MIN
 
 
@@ -92,5 +93,6 @@ def visible(K, qb, qa, P, clouds=None, zs=None):
             uu, vv, zz = project(Tc, W)
             m = (zz > 0.02) & (zz < za.min()) & (uu >= u0) & (uu <= u1) & (vv >= v0) & (vv <= v1)
             n_occ += int(m.sum())
-    ok = edge >= EDGE_PX and elev >= ELEV_MIN and n_occ == 0
-    return dict(ok=bool(ok), edge_px=round(edge, 1), z_min=round(zmin, 3), elev_deg=round(elev, 1), n_occ=n_occ)
+    dist = float(np.linalg.norm(d))
+    ok = edge >= EDGE_PX and elev >= ELEV_MIN and dist <= D_MAX and n_occ == 0
+    return dict(ok=bool(ok), edge_px=round(edge, 1), z_min=round(zmin, 3), elev_deg=round(elev, 1), dist=round(dist, 3), n_occ=n_occ)
