@@ -27,6 +27,7 @@ import bottle_branch as BB                              # noqa: E402
 import bottle_reach_scan as RS                          # noqa: E402
 import bottle_ref as BRF                                # noqa: E402
 import bottle_s0_ctrl as C0                             # noqa: E402
+import bottle_side as BSD                               # noqa: E402
 import bottle_s1_geom as G                              # noqa: E402
 import bottle_w1_compact_pose as CP                     # noqa: E402
 import bottle_w1_compact_timing as TM                   # noqa: E402
@@ -66,7 +67,8 @@ def window_seeded(T_pre, T_g, T_lift, x_lo, x_hi, seed, y=0.0, dx=0.02):
 
 def plan_grasp(inp):
     x, y, zs = float(inp['xy'][0]), float(inp['xy'][1]), float(inp['z_support'])
-    T_g = C0.grasp_target(x, y, zs + float(inp['band']))
+    side = inp.get('side', 'left')                                       # R1b：物件在機身右側（bottle_side；未給＝左，舊行為逐元素相同）
+    T_g = C0.grasp_target(x, y, zs + float(inp['band'])) if side == 'left' else BSD.grasp_target(x, y, zs + float(inp['band']), side)
     T_p = T_g.copy()
     T_p[:3, 3] -= float(inp['pre_m']) * T_g[:3, 2]
     T_l = BRF.lift_pose(T_g, float(inp['lift_m']))

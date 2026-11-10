@@ -120,27 +120,20 @@ def main():
                     print(row)
                     continue
                 base_end = np.array([x_pre, yl, 0.0])
-                q1, qd1, why = TPA.end_state(R0.K, base_end, T_pre, np.asarray(res['q_pre_lo'], float), V_C, R0.IDX)
-                if q1 is None:
-                    row.update(ok=False, why='end_' + why)
+                Rr, why = TPA.plan_tpa(R0.K, qa0, qd0, base_end, T_pre, np.asarray(res['q_pre_lo'], float), base0[0], x_pre, x_slow, V_NAV, V_C, v_b0, R0.IDX, L.lower, L.upper)
+                if Rr is None:
+                    row.update(ok=False, why='tpa_' + str(why))
                     rows.append(row)
                     print(row)
                     continue
-                t_base = TPA.base_time(base0[0], x_pre, x_slow, V_NAV, V_C, v_b0)
-                P, info = TPA.plan_joint(qa0, qd0, q1, qd1, max(t_base, 1.0), V_ARM, A_ARM, L.lower, L.upper)
-                if P is None:
-                    row.update(ok=False, why='traj_' + str(info), t_base=round(t_base, 2))
-                    rows.append(row)
-                    print(row)
-                    continue
-                T = P['T']
-                v_nav_eff, t_arr = TPA.base_profile(base0[0], x_pre, x_slow, V_NAV, V_C, v_b0, T)
+                P, info, q1, qd1, t_base = Rr['P'], Rr['info'], Rr['q1'], Rr['qd1'], Rr['t_base']
+                T, v_nav_eff, v_c_eff, t_arr = P['T'], Rr['v_nav_eff'], Rr['v_c_eff'], Rr['t_arrive']
                 ts = np.arange(0.0, T + 1e-9, DT)
                 xs, vs, x, v = [], [], float(base0[0]), v_b0
                 for _ in ts:
                     xs.append(x)
                     vs.append(v)
-                    vt = (v_nav_eff if x < x_slow else V_C) if x < x_pre else V_C
+                    vt = (v_nav_eff if x < x_slow else v_c_eff) if x < x_pre else 0.0
                     v = min(vt, v + S1.A_SLEW * DT) if v < vt else max(vt, v - S1.A_SLEW * DT)
                     x += v * DT
                 xs, vs = np.array(xs), np.array(vs)
@@ -194,7 +187,7 @@ def main():
                 ar = float(np.abs(A).max() / A_ARM)
                 vri = float(np.abs(VI[1:-1]).max() / V_ARM)
                 ari = float(np.abs(AI[2:-2]).max() / A_ARM)
-                row.update(T=round(T, 2), t_base=round(t_base, 2), t_arrive=round(t_arr, 2), v_nav_eff=round(v_nav_eff, 3), tb=round(P['tb'], 3), qd1_max=round(float(np.abs(qd1).max()), 3),
+                row.update(T=round(T, 2), t_base=round(t_base, 2), t_arrive=round(t_arr, 2), v_nav_eff=round(v_nav_eff, 3), v_c_eff=round(v_c_eff, 3), replan=Rr['replan'], tb=round(P['tb'], 3), qd1_max=round(float(np.abs(qd1).max()), 3),
                            v_ratio=round(vr, 3), a_ratio=round(ar, 3), joint_margin_min=round(jm, 4),
                            env_min=(round(W['env'][0], 4), W['env'][1]), self_min=(round(W['self'][0], 4), W['self'][1]), base_leg_min=round(W['base'], 4),
                            bottle_min=(round(W['bottle'][0], 4), W['bottle'][1]), stop_sweep_slack=(round(W['stop'][0], 4), W['stop'][1]),

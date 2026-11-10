@@ -125,21 +125,49 @@ def base_time(sig, x_pre, x_slow, v_nav, v_c, v0):
     return t
 
 
-def base_profile(sig, x_pre, x_slow, v_nav, v_c, v0, T):
-    """手臂需要比底盤久（T > 名目到位時間）時，把 x_slow 前的巡航速度降到 v_nav' 使到位時間＝T（二分）；回傳 (v_nav', 到位時間)。"""
+def base_profile(sig, x_pre, x_slow, v_nav, v_c, v0, T, v_floor=0.02):
+    """手臂需要比底盤久（T > 名目到位時間）時降低底盤速度使到位時間＝T：先降 x_slow 前的巡航速度（下限 v_c），仍太早再把巡航與接近速度一起降（下限 v_floor）。
+    回傳 (v_nav', v_c', 到位時間)。降到下限仍早到 ⇒ 到位時間 < T，由 S1 既有規則在 x_pre 減速等手臂。"""
     t_nom = base_time(sig, x_pre, x_slow, v_nav, v_c, v0)
     if T <= t_nom + 0.05:
-        return float(v_nav), t_nom
-    lo, hi = float(v_c), float(v_nav)
-    if base_time(sig, x_pre, x_slow, lo, v_c, v0) < T:
-        return lo, base_time(sig, x_pre, x_slow, lo, v_c, v0)
+        return float(v_nav), float(v_c), t_nom
+    if base_time(sig, x_pre, x_slow, v_c, v_c, v0) >= T:
+        lo, hi = float(v_c), float(v_nav)
+        for _ in range(30):
+            m = 0.5 * (lo + hi)
+            lo, hi = (m, hi) if base_time(sig, x_pre, x_slow, m, v_c, v0) > T else (lo, m)
+        return hi, float(v_c), base_time(sig, x_pre, x_slow, hi, v_c, v0)
+    lo, hi = float(v_floor), float(v_c)
+    if base_time(sig, x_pre, x_slow, lo, lo, v0) < T:
+        return lo, lo, base_time(sig, x_pre, x_slow, lo, lo, v0)
     for _ in range(30):
         m = 0.5 * (lo + hi)
-        if base_time(sig, x_pre, x_slow, m, v_c, v0) > T:
-            lo = m
-        else:
-            hi = m
-    return hi, base_time(sig, x_pre, x_slow, hi, v_c, v0)
+        lo, hi = (m, hi) if base_time(sig, x_pre, x_slow, m, m, v0) > T else (lo, m)
+    return hi, hi, base_time(sig, x_pre, x_slow, hi, hi, v0)
+
+
+def plan_tpa(K, qa0, qd0, base_end, T_pre, q_seed, sig, x_pre, x_slow, v_nav, v_c, v_b, arm_idx, lo, hi):
+    """完整規劃（控制器與離線核對共用）：終點 IK／速度 → 關節軌跡 → 底盤剖面；接近速度被降時以 v_c' 重算終點速度再規劃一次。
+    回傳 dict 或 (None, 原因)。"""
+    q1, qd1, why = end_state(K, base_end, T_pre, q_seed, v_c, arm_idx)
+    if q1 is None:
+        return None, why
+    t_base = base_time(sig, x_pre, x_slow, v_nav, v_c, v_b)
+    P, info = plan_joint(qa0, qd0, q1, qd1, max(t_base, 1.0), W_ARM['v_arm'], C0.A_ARM, lo, hi)
+    if P is None:
+        return None, str(info)
+    v_nav_eff, v_c_eff, t_arr = base_profile(sig, x_pre, x_slow, v_nav, v_c, v_b, P['T'])
+    replan = False
+    if v_c_eff < v_c - 1e-9:
+        q1b, qd1b, why = end_state(K, base_end, T_pre, q_seed, v_c_eff, arm_idx)
+        if q1b is None:
+            return None, why
+        P2, info2 = plan_joint(qa0, qd0, q1b, qd1b, P['T'], W_ARM['v_arm'], C0.A_ARM, lo, hi)
+        if P2 is None:
+            return None, str(info2)
+        q1, qd1, P, info, replan = q1b, qd1b, P2, info2, True
+        v_nav_eff, v_c_eff, t_arr = base_profile(sig, x_pre, x_slow, v_nav, v_c, v_b, P['T'])
+    return dict(P=P, info=info, q1=q1, qd1=qd1, t_base=t_base, v_nav_eff=v_nav_eff, v_c_eff=v_c_eff, t_arrive=t_arr, replan=replan), None
 
 
 START_PH = ('U', 'H')                                                   # 承接時手臂正在展開（U，含速度）或觀察保持（H）都直接接整段軌跡
@@ -173,28 +201,25 @@ class W1PlaceController(R1A.W1PlaceController):
         qd0 = np.asarray(self.u_last, float)[3:9]                        # 最後送出的手臂速度命令（設定點模型下即生效後的關節速度）
         y_lane = float(self.tlane['y_lane']) if self.tlane else 0.0
         base_end = np.array([float(self.x_pre), y_lane, 0.0])
-        q1, qd1, why = end_state(self.K, base_end, np.array(self.task.T_pre, float), np.asarray(self.q_arm_ready, float), float(self.v_c), self._arm_idx)
-        if q1 is None:
-            self.judge._stop(self.t, 'tpa_' + why)
-            return
         sig = float(getattr(self, 'sig_robot', qp[0]))
         t_lat = C0.D_STEPS * C0.PHYS
         sig_e = sig + float(self.v_b) * t_lat
-        t_base = base_time(sig_e, float(self.x_pre), float(self.x_slow), float(self.v_nav), float(self.v_c), float(self.v_b))
-        P, info = plan_joint(qa0, qd0, q1, qd1, max(t_base, 1.0), W_ARM['v_arm'], C0.A_ARM, L.lower, L.upper)
-        if P is None:
-            self.judge._stop(self.t, 'tpa_' + str(info))
+        R, why = plan_tpa(self.K, qa0, qd0, base_end, np.array(self.task.T_pre, float), np.asarray(self.q_arm_ready, float), sig_e, float(self.x_pre), float(self.x_slow),
+                          float(self.v_nav), float(self.v_c), float(self.v_b), self._arm_idx, L.lower, L.upper)
+        if R is None:
+            self.judge._stop(self.t, 'tpa_' + str(why))
             return
-        T = P['T']
-        v_nav_eff, t_arr = base_profile(sig_e, float(self.x_pre), float(self.x_slow), float(self.v_nav), float(self.v_c), float(self.v_b), T)
+        P, info, q1, qd1, t_base = R['P'], R['info'], R['q1'], R['qd1'], R['t_base']
+        T, v_nav_eff, v_c_eff, t_arr = P['T'], R['v_nav_eff'], R['v_c_eff'], R['t_arrive']
         t_e = float(self.t) + t_lat
         self.tpa = dict(t_e=t_e, T=T, P=P, q0=qa0, qd0=qd0, q1=q1, qd1=qd1, base_end=base_end, t_base=round(t_base, 3), t_arrive=round(t_arr, 3), v_nav_eff=round(v_nav_eff, 4),
+                        v_c_eff=round(v_c_eff, 4), replan=R['replan'],
                         info=info, switched=False, sig=round(sig, 4), ph0=self.vh_seq['ph'], T_pre=np.array(self.task.T_pre, float),
                         dist_nominal_ready_end=round(float(np.abs(q1 - self.q_ready_nominal).max()), 4))
         self.d_static = np.array(self.obs.d, float)
         self.st.t_cruise0, self.st.t_pre = t_e, t_e + T
         self.vh_seq = dict(self.vh_seq, ph='TPA')
-        self._ev('tpa_start', T=round(T, 3), t_base=round(t_base, 3), v_nav_eff=round(v_nav_eff, 4), v_ratio=info['v_ratio'], a_ratio=info['a_ratio'],
+        self._ev('tpa_start', T=round(T, 3), t_base=round(t_base, 3), v_nav_eff=round(v_nav_eff, 4), v_c_eff=round(v_c_eff, 4), v_ratio=info['v_ratio'], a_ratio=info['a_ratio'],
                  qd0_max=round(float(np.abs(qd0).max()), 4), qd1_max=round(float(np.abs(qd1).max()), 4), sig=round(sig, 4), x_pre=round(float(self.x_pre), 4), ph0=self.tpa['ph0'])
 
     def _rel_target(self, tau):
@@ -204,7 +229,7 @@ class W1PlaceController(R1A.W1PlaceController):
         s = tau - P['t_e']
         if s <= P['T']:
             return self.K.fk(np.r_[0.0, 0.0, 0.0, traj_eval(P['P'], s)], 'link_tcp')
-        be = P['base_end'] + np.array([float(self.v_c) * (s - P['T']), 0.0, 0.0])   # 預覽超過 t_pre：世界固定 T_pre 換到沿車道前進的底盤座標
+        be = P['base_end'] + np.array([float(P['v_c_eff']) * (s - P['T']), 0.0, 0.0])   # 預覽超過 t_pre：世界固定 T_pre 換到沿車道前進的底盤座標
         c_, s_ = math.cos(be[2]), math.sin(be[2])
         Tb = np.eye(4)
         Tb[:3, :3] = [[c_, -s_, 0], [s_, c_, 0], [0, 0, 1]]
@@ -226,7 +251,7 @@ class W1PlaceController(R1A.W1PlaceController):
 
     def _v_target(self, T_tcp, x):
         if self.tpa is not None and self.st.phase == 'CRUISE' and not self.blending and x < float(self.x_pre):
-            v = self.tpa['v_nav_eff'] if x < self.x_slow else self.v_c
+            v = self.tpa['v_nav_eff'] if x < self.x_slow else self.tpa['v_c_eff']
             return v / math.sqrt(1.0 + self.path.dy(x) ** 2)
         return super()._v_target(T_tcp, x)
 
