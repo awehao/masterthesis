@@ -41,7 +41,9 @@ PRM=$(python3 - <<'PY'
 import sys; sys.path.insert(0,'evaluation')
 import bottle_nav_chain as N
 def f(d): return ' '.join(f"-p {k}:={str(v).lower() if isinstance(v,bool) else v}" for k,v in d.items())
-print(f(dict(N.TRACKER, use_map_subtraction=True))); print(f(N.SHIELD))
+import os
+ov=dict(kv.split('=') for kv in os.environ.get('TRACKER_OVERRIDE','').split(',') if kv.strip())   # 本包版本才設（例：min_net_speed=0.10,...）；未設＝既有參數不變
+print(f(dict(N.TRACKER, use_map_subtraction=True, **{k: float(v) for k, v in ov.items()}))); print(f(N.SHIELD))
 PY
 )
 TR_P=$(sed -n 1p <<<"$PRM"); SH_P=$(sed -n 2p <<<"$PRM")

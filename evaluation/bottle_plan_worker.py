@@ -68,7 +68,7 @@ def plan_grasp(inp):
     T_p[:3, 3] -= float(inp['pre_m']) * T_g[:3, 2]
     T_l = BRF.lift_pose(T_g, float(inp['lift_m']))
     lo, hi = (float(v) for v in inp['win_rel'])
-    br, why = window_seeded(T_p, T_g, T_l, x + lo, x + hi, inp['q_seed'])
+    br, why = window_seeded(T_p, T_g, T_l, x + lo, x + hi, inp['q_seed'], y=float(inp.get('y_lane', 0.0)))   # y_lane：目標專屬車道（bottle_tlane；未給＝舊車道 y＝0，舊控制器行為不變）
     ok = br is not None and np.isfinite(br['margin']) and br['margin'] > 0.0
     return ok, None if ok else (why or 'margin_nonpositive'), dict(T_g=T_g.tolist(), margin=None if br is None else float(br['margin']), x_mid=None if br is None else br['x_mid'],
                                                                    q_mid=None if br is None else br['q_mid'].tolist(), win=[x + lo, x + hi], dx=x - float(inp['x_nom']))
