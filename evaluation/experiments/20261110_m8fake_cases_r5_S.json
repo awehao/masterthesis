@@ -1,0 +1,41 @@
+{
+ "name": "m8fake_r5_S_cases",
+ "registered": "2026-11-10，跑前登錄（Codex 20261110_200117 D：先修保持鏈缺陷，預測參數同 r4、B 未改）",
+ "code_commit": "69b417ec8",
+ "nav_node": "evaluation/m8_nav_obs_node_r5.py（m8_window2 同 r4；停車改主動保持；起步須感知就緒）",
+ "gmpc": "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node_m8.py r2（主動保持、_halt 紀錄等級修正）heading_source=plan_yaw",
+ "world": "evaluation/m8_fakeworld_node.py（二維、不模擬接觸力、行人不推人）；障礙 evaluation/results/mission/mission_obstacles_seed1.json",
+ "robot_start": [
+  -2.2,
+  -4.3,
+  1.570796
+ ],
+ "robot_initial_speed": 0.0,
+ "start_rule": "導航節點進入 CRUISE 的那一刻＝行人世界時間 T0（--go-on-nav）；實際偏移逐案記錄",
+ "cases_T0": [
+  25.83,
+  26.0,
+  32.0,
+  38.0,
+  44.0
+ ],
+ "case_roles": {
+  "25.83": "已知失敗情境回歸（cand_3）",
+  "26.0": "相位",
+  "32.0": "相位",
+  "38.0": "相位",
+  "44.0": "相位"
+ },
+ "nav_timeout_s": 120,
+ "criteria": [
+  "期限內到達（result＝done）",
+  "對行人、箱體、已知幾何無安全包絡侵入（圓盤 0.39 m）",
+  "命令符合速度／加速度／輪級限制（報平滑器與最終命令變化率）",
+  "無失效資料放行、無來回卡死",
+  "報等待、行程、耗時、鬆弛、Shield"
+ ],
+ "note": "開發場景的有限相位核對，不是泛化成功率；途中改版須分版本保存，不拼接",
+ "previous": "r4 結果保留於 evaluation/runs/m8fake_r4S_T*",
+ "role": "完整任務起點 S（帶外）；依完整標準驗收",
+ "report_extra": "每案報起跑時包絡間距、感知是否就緒、第一次風險辨識與決策；初始已侵入列為初始條件不符"
+}
