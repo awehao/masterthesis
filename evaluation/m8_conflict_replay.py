@@ -34,7 +34,7 @@ def main():
     def blocked(p):
         m = cur['m']
         if m is None:
-            return False
+            return True                                         # 代價圖缺失 ⇒ 擋住（失效關閉）
         i = m.info
         ix, iy = int((p[0] - i.origin.position.x) / i.resolution), int((p[1] - i.origin.position.y) / i.resolution)
         if not (0 <= ix < i.width and 0 <= iy < i.height):
@@ -52,18 +52,20 @@ def main():
         pr = MB.pose_at(od, t)
         j = int(np.searchsorted(od[:, 0], t))
         j0 = int(np.searchsorted(od[:, 0], t - 0.2))
-        v_now = math.hypot(od[j, 1] - od[j0, 1], od[j, 2] - od[j0, 2]) / max(od[j, 0] - od[j0, 0], 1e-6) if j < len(od) else 0.0
+        j = min(j, len(od) - 1)
+        vel = ((od[j, 1] - od[j0, 1]) / max(od[j, 0] - od[j0, 0], 1e-6), (od[j, 2] - od[j0, 2]) / max(od[j, 0] - od[j0, 0], 1e-6))
         d = np.linalg.norm(plan[k_proj:k_proj + 40] - pr[1:3], axis=1)
         k_proj += int(np.argmin(d))
-        res = L.update(t, (pr[1], pr[2], pr[3]), plan[k_proj:], MB.tracks(m), v_now)
+        res = L.update(t, (pr[1], pr[2], pr[3]), vel, plan[k_proj:], MB.tracks(m), tracks_age=0.0)
         rows.append(dict(t=round(t, 2), mode=res['mode'], n_movers=res.get('n_movers'), robot=[round(pr[1], 3), round(pr[2], 3)]))
     first = {}
     for r in rows:
         first.setdefault(r['mode'], r['t'])
     out = dict(run=run, compare=dict(t_first_intrusion=sw['t_first_intrusion'], last_escape_exists=sw['last_escape_exists']), first_time_by_mode=first,
-               log=L.log, params=dict(V_MOVER=CF.V_MOVER, T_H=CF.T_H, DT_WIN=CF.DT_WIN, R_BODY=CF.R_BODY, R_BASE=CF.R_BASE, MARGIN=CF.MARGIN, SIG0=CF.SIG0, SIG_V=CF.SIG_V, V_NOM=CF.V_NOM),
+               log=L.log, params=dict(V_MOVER=CF.V_MOVER, T_H=CF.T_H, T_LONG=CF.T_LONG, DT_WIN=CF.DT_WIN, R_BODY=CF.R_BODY, R_BASE=CF.R_BASE, MARGIN=CF.MARGIN, SIG0=CF.SIG0,
+                                      SIG_V=CF.SIG_V, V_NOM=CF.V_NOM, V_EXIT=CF.V_EXIT, T_DELAY=CF.T_DELAY, A_BRAKE=CF.A_BRAKE, note='開發假設'),
                note='開迴路重播：機器人照當趟實際軌跡，只看決策時機與停點；不代表照做後能避免碰撞')
-    json.dump(out, open(os.path.join(D, 'm8_conflict_replay.json'), 'w'), ensure_ascii=False, indent=1, default=float)
+    json.dump(out, open(os.path.join(D, 'm8_conflict_replay_r2.json'), 'w'), ensure_ascii=False, indent=1, default=float)
     print(json.dumps(dict(compare=out['compare'], first=first, log=L.log[:8]), ensure_ascii=False, indent=1, default=float))
 
 
