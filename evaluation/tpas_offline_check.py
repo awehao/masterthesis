@@ -14,6 +14,7 @@
     python3 evaluation/tpas_offline_check.py OUT.json
 """
 import json
+import math
 import os
 import sys
 
@@ -72,13 +73,27 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
 
     def yoff_at(tt):
         return y_off if ramp is None else y_off * min(max((tt - ramp[0]) / (ramp[1] - ramp[0]), 0.0), 1.0)
-    yb_act = yl                                                         # 實際底盤 y（規劃仍用車道 yl）；每拍更新
+    path, hd = ctx.get('path'), ctx.get('hd')
+
+    def ppose(sg):                                                      # 計畫底盤位姿（路徑點、計畫偏航）；無路徑＝車道直線
+        if path is None:
+            return np.r_[sg, yl, 0.0]
+        pxy = path.xy(np.array([sg]))[0]
+        return np.r_[pxy, float(hd.yaw(sg)) if hd is not None else 0.0]
+
+    def apose(sg, off):                                                 # 實際底盤位姿＝計畫位姿沿法向偏 off
+        b_ = ppose(sg)
+        return np.r_[b_[0] - off * math.sin(b_[2]), b_[1] + off * math.cos(b_[2]), b_[2]]
+
+    def omega(sg, vv):
+        return 0.0 if hd is None else vv * float(hd.dyaw(sg))
     inp = dict(xy=[xb, yb], z_support=zs, band=0.10, pre_m=0.06, lift_m=0.05, win_rel=[-0.35, 0.15], x_nom=0.0, y_lane=yl,
                q_seeds=[s.tolist() for s in [qa0] + list(R0.RNG_SEEDS)], q_now=qa0.tolist(), q_seed=None)
     ok, why, res = PW.plan_grasp(inp)
     if not ok:
         return dict(row, ok=False, why='plan_' + str(why))
-    sig_e = float(base0[0]) + v_b0 * LAT
+    sig_b0 = float(base0[0]) if path is None else float(path.project(np.asarray(base0[:2], float), path.sig0, back=0.0, ahead=8.0))
+    sig_e = sig_b0 + v_b0 * LAT
     Rr, why = TPA.plan_tpa(R0.K, qa0, qd0, np.array([x_pre, yl, 0.0]), T_pre, np.asarray(res['q_pre_lo'], float), sig_e, x_pre, x_slow, V_NAV, V_C, v_b0, R0.IDX, L.lower, L.upper)
     if Rr is None:
         return dict(row, ok=False, why='tpa_' + str(why))
@@ -86,7 +101,7 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
     v_nav_eff, v_c_eff = Rr['v_nav_eff'], Rr['v_c_eff']
     prof = TS.progress_profile(sig_e, x_pre, x_slow, v_nav_eff, v_c_eff, v_b0, T)
     PD = dict(P=P, T=T, base_end=np.array([x_pre, yl, 0.0]), v_c_eff=v_c_eff, T_pre=T_pre)
-    x, v, vref, tau, rate, t = float(base0[0]) + v_b0 * LAT, v_b0, v_b0, 0.0, 1.0, 0.0
+    x, v, vref, tau, rate, t = sig_e, v_b0, v_b0, 0.0, 1.0, 0.0
     sw, v2_dp, switched = None, None, False
     W = dict(vr=0.0, ar=0.0, jm=np.inf, clr=(np.inf, None), stop=(np.inf, None))
     k, q_prev, v_prev, early = 0, None, None, None
@@ -105,20 +120,22 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
         x += v * DTC
         t += DTC
         tau, rate = TS.tau_step(tau, rate, DTC, x, prof, T)
-        yb_act = yl + yoff_at(t)
+        off = yoff_at(t)
+        ba = apose(x, off)
         if v2_dp is None and t >= T:
-            Tv2 = R0.K.fk(np.r_[x, yb_act, 0.0, TPA.traj_eval(P, T)], 'link_tcp')
+            Tv2 = R0.K.fk(np.r_[ba, TPA.traj_eval(P, T)], 'link_tcp')
             v2_dp = round(float(np.linalg.norm(Tv2[:3, 3] - T_pre[:3, 3])), 4)
-        qpb = np.r_[x + v * LAT, yb_act, 0.0]
-        D, dy, dth = TS.plan_dev(qpb, (x + v * LAT, yl), 0.0)
+        qpb = apose(x + v * LAT, off)
+        ppl = ppose(x + v * LAT)
+        D, dy, dth = TS.plan_dev(qpb, ppl[:2], ppl[2])
         if abs(dy) > TS.DEV_Y_MAX or abs(dth) > TS.DEV_TH_MAX:
             early = dict(t=round(t, 2), dy=round(dy, 4), x=round(x, 4))
             break
         if abs(dy) < 1e-9 and abs(dth) < 1e-9:
             qa = TPA.traj_eval(P, tau)                                   # 無偏差：送出參考＝q(τ)
         else:                                                            # 有偏差：TCP 目標＝計畫底盤位姿⊗rel_ref(τ)；手臂構型由 IK（GMPC 追蹤的近似）
-            Tw = Tpl(np.r_[x, yl, 0.0]) @ TS.rel_ref(R0.K, PD, tau)
-            rr = R0.solve_ik(R0.K, np.r_[x, yb_act, 0.0, (q_prev if q_prev is not None else TPA.traj_eval(P, tau))], Tw)
+            Tw = Tpl(ppose(x)) @ TS.rel_ref(R0.K, PD, tau)
+            rr = R0.solve_ik(R0.K, np.r_[ba, (q_prev if q_prev is not None else TPA.traj_eval(P, tau))], Tw)
             if not (rr.ok and rr.pos_err < 1e-3 and rr.rot_err < 1e-2):
                 early = dict(t=round(t, 2), why='ik_fail_under_deviation', dy=round(dy, 4))
                 break
@@ -132,18 +149,19 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
         if k >= 2:
             W['ar'] = max(W['ar'], float(np.abs(qdd).max() / A_ARM))
         W['jm'] = min(W['jm'], R0.jmargin(qa))
-        q9 = np.r_[x, yb_act, 0.0, qa]
+        q9 = np.r_[ba, qa]
+        wz = omega(x, v)
         if k % 3 == 0:
             m = clear_all(q9, boxes, xb, yb, zs)
             W['clr'] = min(W['clr'], m, key=lambda z: z[0])
         if k % 4 == 0:
-            s_ = stop_sweep(q9, np.r_[v, 0.0, 0.0, qd], boxes, xb, yb, zs)
+            s_ = stop_sweep(q9, np.r_[v, 0.0, wz, qd], boxes, xb, yb, zs)
             W['stop'] = min(W['stop'], s_, key=lambda z: z[0])
         if len(log) < 600 and k % 4 == 0:
             log.append((round(t, 2), round(x, 4), round(v, 4), round(tau, 3), round(rate, 3)))
         k += 1
         if tau >= T - 1e-9:
-            sw = TS.switch_check(R0.K, qpb, np.r_[v, 0.0, 0.0], PD, tau + rate * LAT, rate, T_pre, D=D)
+            sw = TS.switch_check(R0.K, qpb, np.r_[v, 0.0, wz], PD, tau + rate * LAT, rate, T_pre, D=D)
             T_from = sw.pop('T_from')
             sw = dict(sw, t=round(t, 2), x=round(x, 4))
             switched = bool(sw['ok'])
@@ -164,7 +182,7 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
     rj_fail, rj_clr, rj_stop, kk = 0, (np.inf, None), (np.inf, None), 0
     for seg, Tk in segs:
         vv = min(V_C, vv + S1.A_SLEW * DTC)
-        qf = np.r_[x, yb_act, 0.0, prev]
+        qf = np.r_[apose(x, off), prev]
         rr = R0.solve_ik(R0.K, qf, Tk)
         if not (rr.ok and rr.pos_err < 1e-3 and rr.rot_err < 1e-2):
             if seg == 'rejoin':
@@ -210,9 +228,23 @@ def main():
         starts.append((nm, q, qd, base))
     _, _, b88 = TO.rec_state(c, O, 8.80)
     starts.append(('合成 K2_READY 靜止', R0.Q_TUCK.copy(), np.zeros(6), b88))
+    head = os.environ.get('TPAS_HEADING') == '1'
+    if head:                                                            # 航向版：底盤走實錄的量測後接近路徑（含重接彎段），偏航沿 HeadingRef
+        import bottle_heading as HD
+        import bottle_tlane as TLN
+        rp = json.load(open(os.path.join(HERE, 'runs', 'bottle_motm_tpa_nom_3', 's1_report.json')))
+        tl3, pp3 = rp['tlane']['accepted'], rp['planned_path']
+        pth = TLN.PlannedPathLane(np.array(pp3['pts'], float), float(tl3['x_entry']), float(tl3['y_lane']))
+        s_b = float(pth.project(np.asarray(TO.rec_state(c, O, 8.80)[2][:2], float), pth.sig0, back=0.0, ahead=8.0))
+        tn = pth.tangent(np.array([pth.sig0]))[0]
+        ctx.update(path=pth, hd=HD.HeadingRef(pth, pth.sig0, math.atan2(tn[1], tn[0])), yl=float(tl3['y_lane']))
+        print('航向版：路徑 L', round(pth.L, 3), '承接時 σ', round(s_b, 3), 'θ(σ)', round(float(ctx['hd'].yaw(s_b)), 4), flush=True)
     rows = []
     cases = [(scen, 0.0, None, False) for scen in SCEN] + [('名目', 0.03, None, False), ('名目', 0.05, (3.0, 6.0), False), ('A 型減速', -0.07, (3.0, 6.0), False),
                                                           ('名目', 0.09, (3.0, 6.0), True)]
+    if head:
+        cases = [('名目', 0.0, None, False), ('A 型減速', 0.0, None, False), ('停走', 0.0, None, False), ('名目', 0.05, (3.0, 6.0), False),
+                 ('A 型減速', -0.07, (3.0, 6.0), False), ('名目', 0.09, (3.0, 6.0), True)]
     for scen, yo, ramp, exp in cases:
         for nm, q, qd, base in starts:
             row = run_case(nm, q, qd, base, 0.35, scen, ctx, y_off=yo, ramp=ramp, expect_reject=exp)
@@ -220,8 +252,8 @@ def main():
             print({k: row.get(k) for k in ('start', 'scenario', 'ok', 'why', 'early_reject', 'safe_before_reject', 'T', 't_switch', 'switch', 'rejoin_ik_fail', 'rejoin_clear_slack_min', 'rejoin_stop_traj_slack_min', 'v2_dp_at_T', 'v_ratio', 'a_ratio', 'clear_slack_min',
                                            'stop_traj_slack_min', 'insert_ok', 'insert_clear_slack_min', 'insert_stop_traj_slack_min', 't_accept_to_grasp')}, flush=True)
     json.dump(dict(run=TO.RUN, gate=dict(sw_p=TS.SW_P, sw_r=TS.SW_R, sw_v=TS.SW_V, sw_p_max=TS.SW_P_MAX, sw_r_max=TS.SW_R_MAX, v_rj=TS.V_RJ), rows=rows,
-                   note='底盤沿車道直線；情境上限作用於實際速度；完整停止軌跡用既有 stop_traj（設定點 s 取當下構型、在途命令取當拍命令重複——近似）；'
-                        'v2_dp_at_T＝若依時間在 t＝T 切換，相對側與世界 T_pre 的位置差（v2 缺口的量化）'),
+                   note=('航向版：底盤走 tpa_nom_3 量測後接近路徑、偏航沿 HeadingRef；' if head else '底盤沿車道直線；') + '情境上限作用於實際速度；完整停止軌跡用既有 stop_traj（設定點 s 取當下構型、在途命令取當拍命令重複——近似）；'
+                        'v2_dp_at_T＝若依時間在 t＝T 切換，相對側與世界 T_pre 的位置差（v2 缺口的量化）', heading=head),
               open(out, 'w'), ensure_ascii=False, indent=1, default=float)
 
 

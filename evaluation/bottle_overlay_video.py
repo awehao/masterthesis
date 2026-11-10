@@ -4,7 +4,7 @@
   2 s 等速預測（橘虛線）、計畫版本（只畫已生效者並標生效時刻：起跑前導引 plan.json 灰→量測後接近路徑 報告 planned_path 綠→持瓶運送路徑 place.carry_path 紫；
   被取代的淡化；缺紀錄明示，不在生成前畫未來路徑）、視覺目標（segtarget 凍結／鎖定，綠十字）。
 評估用真值（另一圖例，空心／點線）：移動物真值圓（s1_steps dyn_x/y，紅空心）、瓶真值（紫空心）。不以真值代替追蹤結果；缺資料標「缺」。
-機器人：實測底盤軌跡（藍）、底盤圓盤 0.30 與包絡 0.39（藍虛線）、朝向。側欄：RUN_ID、版本、模擬時間、相位、實測車速、CBF 動態項數、最近事件、結果。
+機器人：實測底盤軌跡（藍）、底盤圓盤 0.30 與包絡 0.39（藍虛線）、車頭朝向（藍箭頭）、當下生效計畫的路徑方向（黑點線）；側欄列車頭角、路徑方向角與差。側欄：RUN_ID、版本、模擬時間、相位、實測車速、CBF 動態項數、最近事件、結果。
 座標：世界（區域＝世界 − O，O 由 plan.json start_world − start）。每格 0.1 s 模擬時間、10 fps＝1 倍速。
     python3 evaluation/bottle_overlay_video.py RUN_ID OUT.mp4 [--t0 T --t1 T]
 """
@@ -123,6 +123,13 @@ def main():
         ax.add_patch(Circle((bx, by), 0.30, fc=C_ROB, alpha=0.25, ec=C_ROB))
         ax.add_patch(Circle((bx, by), 0.39, fill=False, ec=C_ROB, ls='--', lw=0.8))
         ax.arrow(bx, by, 0.35 * math.cos(byaw), 0.35 * math.sin(byaw), width=0.01, color=C_ROB)
+        Pe = (Pc if (Pc is not None and t_cn is not None and tf >= t_cn) else (P1 if (P1 is not None and replaced) else J))   # 當下生效計畫
+        ie = int(np.argmin(np.hypot(Pe[:, 0] - bx, Pe[:, 1] - by)))
+        i0, i1 = max(ie - 5, 0), min(ie + 5, len(Pe) - 1)
+        yaw_path = math.atan2(Pe[i1, 1] - Pe[i0, 1], Pe[i1, 0] - Pe[i0, 0]) if i1 > i0 else float('nan')
+        d_head = math.degrees(math.atan2(math.sin(byaw - yaw_path), math.cos(byaw - yaw_path))) if math.isfinite(yaw_path) else float('nan')
+        if math.isfinite(yaw_path):
+            ax.plot([bx, bx + 0.45 * math.cos(yaw_path)], [by, by + 0.45 * math.sin(yaw_path)], ':', color='#222222', lw=1.4, label='路徑方向（當下生效計畫）')
         j = int(np.searchsorted(sc_t, tf, side='right')) - 1
         if j >= 0 and tf - sc_t[j] <= 0.3:
             r = np.asarray(Z['ranges'][j], float)
@@ -163,7 +170,8 @@ def main():
         recent = [e for e in ev if e['t'] <= tf][-4:]
         res = rep.get('result') or {}
         txt = [f'RUN_ID：{a.run}', f'影片：2D 追蹤疊圖（紀錄重建，非 Isaac 畫面）', f'模擬時間 {tf:6.2f} s（1 倍速）', f'相位：{ph}',
-               f'實測車速 {vb[k]:.3f} m/s', f'CBF 動態項數：{"缺" if n_dyn is None else n_dyn}', f'原始掃描：{scan_txt}',
+               f'實測車速 {vb[k]:.3f} m/s', f'車頭 {math.degrees(byaw):+.1f}°／路徑方向 {math.degrees(yaw_path):+.1f}°／差 {d_head:+.1f}°',
+               f'CBF 動態項數：{"缺" if n_dyn is None else n_dyn}', f'原始掃描：{scan_txt}',
                '目標專屬車道：' + ('無（舊版）' if not tl else f"入口 x {tl['x_entry']:.3f}、y {tl['y_lane']:.3f}（區域）"),
                '計畫版本：起跑前導引' + ('' if not tl else f'→ {t_tl:.2f} s 量測後接近路徑' + ('' if P1 is not None else '（缺紀錄）'))
                + ('' if Pc is None or t_cn is None else f'→ {t_cn:.2f} s 持瓶運送路徑'), '', '最近事件：']

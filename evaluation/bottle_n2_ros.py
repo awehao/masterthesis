@@ -78,9 +78,10 @@ class PlanRos:
 def planner_params():
     import hashlib
     import os
-    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bottle_n2_planner.yaml')
+    rel = os.environ.get('PLANNER_YAML') or 'evaluation/bottle_n2_planner.yaml'   # 與 run_bottle_ros.sh 給 planner_server 的同一設定（舊版寫死預設檔名＝紀錄錯誤，11/11 更正）
+    f = rel if os.path.isabs(rel) else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), rel)
     b = open(f, 'rb').read()
-    return dict(file='evaluation/bottle_n2_planner.yaml', sha256=hashlib.sha256(b).hexdigest()[:16], join_len=NP.JOIN_LEN, ds=NP.DS, start_tol=NP.START_TOL, goal_tol=NP.GOAL_TOL,
+    return dict(file=rel, sha256=hashlib.sha256(b).hexdigest()[:16], source='env PLANNER_YAML' if os.environ.get('PLANNER_YAML') else 'default', join_len=NP.JOIN_LEN, ds=NP.DS, start_tol=NP.START_TOL, goal_tol=NP.GOAL_TOL,
                 gap_max=NP.GAP_MAX, cost_block=NP.COST_BLOCK, costmap_max_age=NP.COSTMAP_MAX_AGE)
 
 
