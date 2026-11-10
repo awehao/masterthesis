@@ -34,7 +34,7 @@ LEAD="${LEAD:-2.0}"
 T_START=$(python3 -c "print($T0-$LEAD)")
 GO="$DIR/go.flag"
 say "=== 假世界短程閉迴路：$NAV_NODE；起點 $START；世界時鐘 T0 $T0；RTF $RTF；RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID"
-spawn world python3 -u evaluation/m8_fakeworld_node.py --start="$START" --t0 "$T_START" --rtf "$RTF" --t-end "$T_END" --obstacles "$OBS" --out "$DIR" --go-file "$GO"
+spawn world python3 -u evaluation/m8_fakeworld_node.py --start="$START" --t0 "$T_START" --rtf "$RTF" --t-end "$T_END" --obstacles "$OBS" --out "$DIR" --go-file "$GO" ${NO_WALKERS:+--no-walkers}
 sleep 2
 say "[導航] map_server／scan_relay／tracker／gmpc（封存定版參數）／平滑器／護盾／planner_server"
 spawn rsp ros2 run robot_state_publisher robot_state_publisher "$URDF" --ros-args -p use_sim_time:=true
@@ -64,7 +64,7 @@ for n_ in smlife planlife; do
   [ "$ok_" = 1 ] || { say "**$n_ 未回報 active** ⇒ 中止，不空跑"; exit 86; }
 done
 spawn shield ros2 run ammr_wholebody_mpc scan_safety_shield --ros-args -p use_sim_time:=true -p enable:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_shield -p cmd_out_topic:=/cmd_vel -p robot_radius:=0.39 -p self_return_radius:=0.30 -p alpha:=2.0 -p a_brake:=6.25 -p tau:=0.15 -p vx_max:=0.2775 -p vy_max:=0.2775 -p wz_max:=1.1327
-spawn bag ros2 bag record -s mcap -o "$DIR/bag" /shield/diag /m8/collision /scan /scan_filtered /gmpc/obstacles /gmpc/static_obstacles /gmpc/tracks_debug /gmpc/diag_v2 /gmpc/plan_ack /plan /odom /cmd_vel_nav /cmd_vel_pre_mux /cmd_vel_pre_shield /cmd_vel /m8nav/state /global_costmap/costmap /handover/state
+spawn bag ros2 bag record -s mcap -o "$DIR/bag" /shield/diag /m8/collision /gmpc/heading /scan /scan_filtered /gmpc/obstacles /gmpc/static_obstacles /gmpc/tracks_debug /gmpc/diag_v2 /gmpc/plan_ack /plan /odom /cmd_vel_nav /cmd_vel_pre_mux /cmd_vel_pre_shield /cmd_vel /m8nav/state /global_costmap/costmap /handover/state
 say "  導航鏈已起；建開始旗標：行人世界時間自 $T_START（＝T0−$LEAD）起走，隨即起導航節點"
 touch "$GO"
 spawn nav python3 -u "evaluation/$NAV_NODE" --goal-file "$CHK" --out "$DIR/m8nav.json" --nav-timeout-s 120

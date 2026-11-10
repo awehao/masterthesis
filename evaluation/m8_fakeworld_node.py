@@ -85,7 +85,7 @@ class FakeWorld(Node):
         super().__init__('m8_fakeworld')
         self.a = a
         ob = json.load(open(a.obstacles))
-        self.walkers = ob['walkers']
+        self.walkers = [] if a.no_walkers else ob['walkers']
         self.polys = segments() + [box_poly(u) for u in ob['static_unknown']]
         x, y, th = (float(v) for v in a.start.split(','))
         self.q = np.array([x, y, th])
@@ -181,6 +181,7 @@ def main():
     ap.add_argument('--rtf', type=float, default=1.0)
     ap.add_argument('--t-end', type=float, default=1e9, help='世界時間上限')
     ap.add_argument('--go-file', default='')
+    ap.add_argument('--no-walkers', action='store_true', help='不放行人（執行契約核對用）')
     a, _ = ap.parse_known_args()
     rclpy.init()
     w = FakeWorld(a)
