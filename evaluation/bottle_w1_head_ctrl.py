@@ -2,7 +2,7 @@
 """車頭沿規劃路徑切線（Howard 11/11「車頭朝路徑方向」；Codex 20261111_042529 (a)、045253 第 3 項；版本化子類，基線＝bottle_w1_tpas_ctrl）。
 導航（CRUISE，非 CARRY）與運送（CARRY_NAV／PLACE_APPROACH）的底盤參考：
   位姿＝(路徑 xy(σ_k), θ(σ_k))，θ 由 bottle_heading.HeadingRef（切線 atan2、unwrap、0.5 m 平滑、承接混合 0.6 m）；
-  本體速度前饋 ξ＝(v, 0, v·dθ/dσ)（世界→本體：參考沿路徑前進、車頭沿切線 ⇒ 本體橫向分量 0）。
+  本體速度前饋 ξ＝(R(θ)ᵀ·v·t_path, v·dθ/dσ)（bottle_heading.ref_window；承接混合期間航向≠切線時有本體橫向分量——Codex 050821）。
   換路徑（起跑前導引 → 量測後接近路徑 → 持瓶運送路徑）時以「舊參考在當下進度的偏航」（無舊參考則用實測偏航）為 θ0 連續承接，不瞬間轉頭。
   轉彎能力：參考速度 ≤ HeadingRef.v_cap（ω ≤ W_MAX、ω̇ 近似 ≤ ALPHA_MAX，前瞻減速）；運送段併入既有 vcap（驗收與執行同一函式）。
 全身一致：
@@ -60,10 +60,8 @@ class W1PlaceController(TS.W1PlaceController):
             return super()._ref_window(xs_eff)
         self._ensure_nav_hd()
         xs = xs_eff + self.v_b * DT * np.arange(N + 1)
-        P = self.path.xy(xs)
-        th = self.hd.yaw(xs)
-        X_ref = np.array([from_xytheta(float(p[0]), float(p[1]), float(a)) for p, a in zip(P, th)])
-        xi_ref = np.column_stack([np.full(N + 1, self.v_b), np.zeros(N + 1), self.v_b * self.hd.dyaw(xs)])
+        pose, xi_ref = HD.ref_window(self.path, self.hd, xs, self.v_b)
+        X_ref = np.array([from_xytheta(float(a), float(b), float(c)) for a, b, c in pose])
         return X_ref, xi_ref
 
     def _v_target(self, T_tcp, x):
@@ -103,10 +101,8 @@ class W1PlaceController(TS.W1PlaceController):
         if self.pph not in ('CARRY_NAV', 'PLACE_APPROACH') or self.hd_c is None or self.cpath is not self._hdc_path:
             return super()._ref_window_place(xs_eff)
         xs = xs_eff + self.v_b * DT * np.arange(N + 1)
-        P = self.cpath.xy(xs)
-        th = self.hd_c.yaw(xs)
-        X = np.array([from_xytheta(float(p[0]), float(p[1]), float(a)) for p, a in zip(P, th)])
-        xi = np.column_stack([np.full(N + 1, self.v_b), np.zeros(N + 1), self.v_b * self.hd_c.dyaw(xs)])
+        pose, xi = HD.ref_window(self.cpath, self.hd_c, xs, self.v_b)
+        X = np.array([from_xytheta(float(a), float(b), float(c)) for a, b, c in pose])
         return X, xi
 
     def report(self):

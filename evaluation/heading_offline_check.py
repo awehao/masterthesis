@@ -68,14 +68,8 @@ def run_path(path, sig_start, v_max, heading, q_arm, t_max=60.0, yaw0=0.0, switc
         v = min(vt, v + S1.A_SLEW * DT) if v < vt else max(vt, v - S1.A_SLEW * DT)
         xs_eff = s_ref + v * C0.D_STEPS * C0.PHYS
         xs = xs_eff + v * DT * np.arange(N + 1)
-        P, Tn = path.xy(xs), path.tangent(xs)
-        if HR is None:
-            X_ref = np.array([from_xytheta(float(a[0]), float(a[1]), 0.0) for a in P])
-            xi = np.column_stack([v * Tn[:, 0], v * Tn[:, 1], np.zeros(N + 1)])
-        else:
-            th = HR.yaw(xs)
-            X_ref = np.array([from_xytheta(float(a[0]), float(a[1]), float(b)) for a, b in zip(P, th)])
-            xi = np.column_stack([np.full(N + 1, v), np.zeros(N + 1), v * HR.dyaw(xs)])
+        pose, xi = HD.ref_window(path, HR, xs, v)
+        X_ref = np.array([from_xytheta(float(a), float(b), float(c)) for a, b, c in pose])
         r = mpc.solve(X_now=from_xytheta(*qp[:3]), X_ref_win=X_ref, xi_ref_win=xi, xi_prev=u_prev)
         ub = np.asarray(r.u_opt, float)
         u = np.r_[ub, np.zeros(6)]
