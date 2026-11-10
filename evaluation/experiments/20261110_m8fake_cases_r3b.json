@@ -1,0 +1,39 @@
+{
+ "name": "m8fake_r3b_phase_cases",
+ "registered": "2026-11-10，跑前登錄；r3 系列第一案（25.83）卡在啟動競態（規劃無回覆）後改版，五案全部以 r3b 重跑，不與 r3 拼接",
+ "code_commit": "f5cf204fd",
+ "nav_node": "evaluation/m8_nav_obs_node_r3b.py（m8_window.WindowLayer；只改起步與規劃請求強健性）",
+ "gmpc": "src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node_m8.py heading_source=plan_yaw；其餘參數同 run_m8_nav.sh",
+ "world": "evaluation/m8_fakeworld_node.py（二維、不模擬接觸力、行人不推人）；障礙 evaluation/results/mission/mission_obstacles_seed1.json",
+ "robot_start": [
+  -0.9012,
+  -3.001,
+  0.8068
+ ],
+ "robot_initial_speed": 0.0,
+ "start_rule": "導航節點進入 CRUISE 的那一刻＝行人世界時間 T0（--go-on-nav）；實際偏移逐案記錄",
+ "cases_T0": [
+  25.83,
+  26.0,
+  32.0,
+  38.0,
+  44.0
+ ],
+ "case_roles": {
+  "25.83": "已知失敗情境回歸（cand_3）",
+  "26.0": "相位",
+  "32.0": "相位",
+  "38.0": "相位",
+  "44.0": "相位"
+ },
+ "nav_timeout_s": 120,
+ "criteria": [
+  "期限內到達（result＝done）",
+  "對行人、箱體、已知幾何無安全包絡侵入（圓盤 0.39 m）",
+  "命令符合速度／加速度／輪級限制（報平滑器與最終命令變化率）",
+  "無失效資料放行、無來回卡死",
+  "報等待、行程、耗時、鬆弛、Shield"
+ ],
+ "note": "開發場景的有限相位核對，不是泛化成功率；途中改版須分版本保存，不拼接",
+ "previous": "r3 系列結果保留於 evaluation/runs/m8fake_r3_T*"
+}
