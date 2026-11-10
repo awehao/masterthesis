@@ -41,6 +41,10 @@ trap cleanup EXIT
 trap 'say "收到 TERM"; exit 143' TERM
 trap 'say "收到 INT"; exit 130' INT
 
+if [ -n "${FREEZE:-}" ]; then                                                 # 正式趟：凍結清單逐檔核對，不符即拒跑（接線／冒煙不設）
+  sha256sum -c --quiet "$FREEZE" > "$DIR/freeze_check.txt" 2>&1 || { say "**凍結核對不符（$FREEZE）** ⇒ 拒跑"; cat "$DIR/freeze_check.txt" | tee -a "$DIR/run.log"; exit 94; }
+  say "凍結核對通過：$FREEZE（$(wc -l < "$FREEZE") 檔）"
+fi
 sha256sum evaluation/isaac_door_k2_sim_ev9r9b.py evaluation/m8_nav_obs_node.py evaluation/m8_planner.yaml evaluation/m8_scene_check.py evaluation/mission_walkers.py evaluation/run_m8_nav.sh \
   src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py \
   src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py "$OBS" "$CHK" "$MAP" "$WORLD" "$DOOR3" "$DRAWER" > "$DIR/versions.sha256" || { say "**版本紀錄失敗** ⇒ 拒跑"; exit 95; }
@@ -113,7 +117,7 @@ for n_ in smlife planlife; do
   [ "$ok_" = 1 ] || { say "**$n_ 未回報 active** ⇒ 中止，不空跑"; exit 86; }
 done
 spawn shield ros2 run ammr_wholebody_mpc scan_safety_shield --ros-args -p use_sim_time:=true -p enable:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_shield -p cmd_out_topic:=/cmd_vel -p robot_radius:=0.39 -p self_return_radius:=0.30 -p alpha:=2.0 -p a_brake:=6.25 -p tau:=0.15 -p vx_max:=0.2775 -p vy_max:=0.2775 -p wz_max:=1.1327
-spawn bag ros2 bag record -s mcap -o "$DIR/bag" /scan /scan_filtered /gmpc/obstacles /gmpc/tracks_debug /gmpc/diag_v2 /gmpc/plan_ack /plan /odom /cmd_vel_nav /cmd_vel_pre_mux /cmd_vel_pre_shield /cmd_vel /m8nav/state /global_costmap/costmap /handover/state
+spawn bag ros2 bag record -s mcap -o "$DIR/bag" /scan /scan_filtered /gmpc/obstacles /gmpc/static_obstacles /gmpc/tracks_debug /gmpc/diag_v2 /gmpc/plan_ack /plan /odom /cmd_vel_nav /cmd_vel_pre_mux /cmd_vel_pre_shield /cmd_vel /m8nav/state /global_costmap/costmap /handover/state
 sleep 3
 if [ "${WIRING:-0}" = "1" ]; then
   say "[接線檢查] 不起導航節點、底盤不動；保持 $WIRING_S 秒（牆鐘）後停"
