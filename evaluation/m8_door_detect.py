@@ -26,6 +26,24 @@ import d1_handle_detect_v2 as D1  # noqa: E402
 
 SEED = 0
 FREEZE = os.path.join(HERE, 'results', 'vision', 'm8_door_method_freeze.sha256')
+WS = os.path.dirname(HERE)
+
+
+def verify_freeze():
+    """凍結清單逐檔重算 sha256（路徑相對工作區）；全部相符才回 True（Codex 232017：驗證雜湊，不只檢查清單存在）。"""
+    if not os.path.exists(FREEZE):
+        return False, ['freeze_missing']
+    bad = []
+    for ln in open(FREEZE, encoding='utf-8'):
+        ln = ln.strip()
+        if not ln:
+            continue
+        h, path = ln.split(None, 1)
+        path = path.lstrip('*')
+        fp = os.path.join(WS, path)
+        if not os.path.exists(fp) or hashlib.sha256(open(fp, 'rb').read()).hexdigest() != h:
+            bad.append(path)
+    return not bad, bad
 
 
 def classify(det):
@@ -81,9 +99,11 @@ def main():
     ap.add_argument('--group', choices=('dev', 'holdout'), required=True)
     ap.add_argument('--open-holdout', action='store_true')
     a = ap.parse_args()
-    if a.group == 'holdout' and not (a.open_holdout and os.path.exists(FREEZE)):
-        print('保留集須方法與門檻凍結（m8_door_method_freeze.sha256）後以 --open-holdout 開啟 ⇒ 拒跑')
-        return 2
+    if a.group == 'holdout':
+        ok, bad = verify_freeze()
+        if not (a.open_holdout and ok):
+            print(f'保留集須方法與門檻凍結且雜湊全部相符，並以 --open-holdout 開啟 ⇒ 拒跑（不符：{bad}）')
+            return 2
     D = os.path.join(HERE, 'runs', a.run, 'wrist_door')
     m = json.load(open(os.path.join(D, 'meta.json')))
     K = np.array(m['intrinsics_readback']['K'])

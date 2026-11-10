@@ -14,7 +14,8 @@
   C 接近掃掠：觀測手臂 → 預抓手臂的關節直線內插（11 點）對環境餘裕；預抓 → 抓取沿 a_H（s 0.03→0，5 點）IK 延續與餘裕（手指—橫桿為設計接觸）。
   D 事後真值核對（偵測、目標、IK 都完成後才讀 truth.json）：同一組關節對真值把手幾何的餘裕；抓取 TCP 對真值目標的誤差（沿工具 z／側向）。
 不代表整機碰撞安全、動態可達或物理夾持成功；瞬移擷取不證明機器人能安全到達觀察姿態。
-    python3 evaluation/m8_door_pregrasp_check.py m8doorcap_1
+    python3 evaluation/m8_door_pregrasp_check.py m8doorcap_1 [--group dev|holdout]
+分組輸入（Codex 232017 資料接線）：讀 door_detect_<group>.json、寫 door_pregrasp_<group>.json；保留集須凍結雜湊全部相符。
 """
 import json
 import math
@@ -153,9 +154,20 @@ def base_sweep(b0, b1):
 
 
 def main():
-    run = sys.argv[1]
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('run')
+    ap.add_argument('--group', choices=('dev', 'holdout'), default='dev')
+    aa = ap.parse_args()
+    run, group = aa.run, aa.group
+    if group == 'holdout':
+        import m8_door_detect as MD
+        ok, bad = MD.verify_freeze()
+        if not ok:
+            print(f'保留集須凍結雜湊全部相符 ⇒ 拒跑（不符：{bad}）')
+            return 2
     D = os.path.join(HERE, 'runs', run, 'wrist_door')
-    det = json.load(open(os.path.join(D, 'door_detect_dev.json')))
+    det = json.load(open(os.path.join(D, f'door_detect_{group}.json')))
     meta = json.load(open(os.path.join(D, 'meta.json')))
     reg = json.load(open(os.path.join(WS, meta['registration'])))
     VP = {v['id']: v for v in reg['viewpoints']}
@@ -228,7 +240,7 @@ def main():
                               tcp_err_along_tool_z_mm=round(float(e @ z) * 1e3, 2), tcp_err_lateral_mm=round(float(np.linalg.norm(e - (e @ z) * z)) * 1e3, 2),
                               tcp_rot_err_deg=round(math.degrees(E.OT.geodesic(T_tool[:3, :3], T_true[:3, :3])), 3))
     n = len(rows)
-    S = dict(run=run, group='dev', n_viewpoints_valid_center=n, est_ok=sum(1 for r in rows if r['est_ok']),
+    S = dict(run=run, group=group, n_viewpoints_valid_center=n, est_ok=sum(1 for r in rows if r['est_ok']),
              A_feasible_at_current_base=sum(1 for r in rows if r.get('A_current_base', {}).get('ok')),
              B_feasible_after_base_move=sum(1 for r in rows if r.get('B_moved_base', {}).get('ok')),
              B_displacement_m=sorted(r['B_moved_base']['displacement_m'] for r in rows if r.get('B_moved_base', {}).get('ok')),
@@ -238,9 +250,9 @@ def main():
              grasp_prior='bar26 型設計抓取（baseline_reference：phf_01_M 的 link_tcp FK；door_local_v3 grasp 同依據）', s_pre_m=S_PRE,
              wall_s=round(time.perf_counter() - t0, 1),
              note='離線幾何；門扇／牆＝地圖先驗、立柱／橫桿＝類型先驗放在估計把手座標；底盤掃掠只對門扇／牆；不代表整機碰撞安全、動態可達或物理夾持成功')
-    json.dump(dict(summary=S, rows=rows), open(os.path.join(D, 'door_pregrasp_dev.json'), 'w'), ensure_ascii=False, indent=1, default=float)
+    json.dump(dict(summary=S, rows=rows), open(os.path.join(D, f'door_pregrasp_{group}.json'), 'w'), ensure_ascii=False, indent=1, default=float)
     print(json.dumps(S, ensure_ascii=False, indent=1))
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
