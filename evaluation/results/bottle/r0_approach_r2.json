@@ -1,0 +1,391 @@
+{
+ "object": {
+  "x": -0.0232,
+  "y": 0.4081,
+  "z_support": 0.58
+ },
+ "rules": {
+  "v_arm": 0.9999,
+  "a_arm": 19.984,
+  "lim_m": 0.05,
+  "env_m": 0.02,
+  "self_m": 0.005,
+  "base_m": 0.02,
+  "pre_m": 0.06,
+  "lift_m": 0.05
+ },
+ "note": "離線；不經 q_ready（只量距離）；種子＝當下手臂＋固定亂數；底盤沿當下車頭方向的車道等速（不轉向）；窗內手指／夾爪殼對桌不計（抓取段另由 GC 系列管）",
+ "cases": [
+  {
+   "name": "左側（行進 +x）＋V_HIGH 觀察姿態",
+   "heading": "+x",
+   "yaw": 0.0,
+   "y_lane": -0.0194,
+   "window": [
+    -0.373,
+    0.127
+   ],
+   "q_now": [
+    0.002,
+    0.014,
+    2.19,
+    -2.387,
+    -1.292,
+    2.473
+   ],
+   "x_now": -1.5732,
+   "v_along": 0.35,
+   "t_base_to_window_s": 3.43,
+   "candidates": [
+    {
+     "flip": false,
+     "ok": true,
+     "seed_index": 0,
+     "seed": "當下手臂",
+     "T_transition_s": 3.21,
+     "fits_before_window": true,
+     "v_peak_ratio": 1.0,
+     "a_peak_ratio": 0.048,
+     "env_transition": [
+      0.086,
+      "uflite_gripper_link|table_top"
+     ],
+     "self_transition": [
+      0.0207,
+      "link5|link_eef"
+     ],
+     "env_window": [
+      0.0685,
+      "link_eef|table_top"
+     ],
+     "self_window": [
+      0.0207,
+      "link5|link_eef"
+     ],
+     "base_table_min": 0.1894,
+     "window_joint_margin_min": 0.5083,
+     "q_pre_start": [
+      0.754,
+      0.498,
+      1.415,
+      -1.052,
+      -0.996,
+      0.76
+     ],
+     "object_body_y": 0.427,
+     "tcp_body_y": 0.431,
+     "q1_mid": 1.641,
+     "side": "左",
+     "arm_side": "左",
+     "min_dist_to_q_ready": 0.83
+    },
+    {
+     "flip": true,
+     "ok": false,
+     "seed_index": 6,
+     "seed": "亂數種子#5",
+     "T_transition_s": 6.05,
+     "fits_before_window": false,
+     "v_peak_ratio": 1.0,
+     "a_peak_ratio": 0.025,
+     "env_transition": [
+      0.0606,
+      "link_eef|table_top"
+     ],
+     "self_transition": [
+      0.0207,
+      "link5|link_eef"
+     ],
+     "env_window": [
+      0.0199,
+      "link_eef|table_top"
+     ],
+     "self_window": [
+      0.0182,
+      "link4|link_eef"
+     ],
+     "base_table_min": 0.1894,
+     "window_joint_margin_min": 0.187,
+     "q_pre_start": [
+      -2.388,
+      -2.018,
+      1.415,
+      0.838,
+      -1.373,
+      -0.215
+     ],
+     "object_body_y": 0.427,
+     "tcp_body_y": 0.431,
+     "q1_mid": -1.501,
+     "side": "左",
+     "arm_side": "左",
+     "min_dist_to_q_ready": 1.521
+    }
+   ],
+   "chosen": {
+    "flip": false,
+    "T_transition_s": 3.21
+   },
+   "ok": true
+  },
+  {
+   "name": "右側（行進 −x）＋V_HIGH 觀察姿態",
+   "heading": "−x",
+   "yaw": 3.141592653589793,
+   "y_lane": -0.0194,
+   "window": [
+    0.327,
+    -0.173
+   ],
+   "q_now": [
+    0.002,
+    0.014,
+    2.19,
+    -2.387,
+    -1.292,
+    2.473
+   ],
+   "x_now": 1.5268,
+   "v_along": 0.35,
+   "t_base_to_window_s": 3.43,
+   "candidates": [
+    {
+     "flip": false,
+     "ok": false,
+     "seed_index": 2,
+     "seed": "亂數種子#1",
+     "T_transition_s": 6.45,
+     "fits_before_window": false,
+     "v_peak_ratio": 1.0,
+     "a_peak_ratio": 0.024,
+     "env_transition": [
+      0.086,
+      "uflite_gripper_link|table_top"
+     ],
+     "self_transition": [
+      0.0207,
+      "link5|link_eef"
+     ],
+     "env_window": [
+      0.0685,
+      "link_eef|table_top"
+     ],
+     "self_window": [
+      0.0207,
+      "link5|link_eef"
+     ],
+     "base_table_min": 0.1894,
+     "window_joint_margin_min": 0.5083,
+     "q_pre_start": [
+      -0.754,
+      0.498,
+      1.415,
+      1.052,
+      -0.996,
+      -0.76
+     ],
+     "object_body_y": -0.427,
+     "tcp_body_y": -0.431,
+     "q1_mid": -1.641,
+     "side": "右",
+     "arm_side": "右",
+     "min_dist_to_q_ready": 1.177
+    },
+    {
+     "flip": true,
+     "ok": false,
+     "why": "no_continuous_branch"
+    }
+   ],
+   "chosen": null,
+   "ok": false
+  },
+  {
+   "name": "左側（行進 +x）＋K2_READY 收攏姿態",
+   "heading": "+x",
+   "yaw": 0.0,
+   "y_lane": -0.0194,
+   "window": [
+    -0.373,
+    0.127
+   ],
+   "q_now": [
+    0.0,
+    0.0,
+    0.035,
+    0.0,
+    -1.571,
+    0.0
+   ],
+   "x_now": -1.5732,
+   "v_along": 0.35,
+   "t_base_to_window_s": 3.43,
+   "candidates": [
+    {
+     "flip": false,
+     "ok": true,
+     "seed_index": 0,
+     "seed": "當下手臂",
+     "T_transition_s": 2.59,
+     "fits_before_window": true,
+     "v_peak_ratio": 1.0,
+     "a_peak_ratio": 0.06,
+     "env_transition": [
+      0.086,
+      "uflite_gripper_link|table_top"
+     ],
+     "self_transition": [
+      0.0141,
+      "link1|link5"
+     ],
+     "env_window": [
+      0.0685,
+      "link_eef|table_top"
+     ],
+     "self_window": [
+      0.0207,
+      "link5|link_eef"
+     ],
+     "base_table_min": 0.1894,
+     "window_joint_margin_min": 0.5083,
+     "q_pre_start": [
+      0.754,
+      0.498,
+      1.415,
+      -1.052,
+      -0.996,
+      0.76
+     ],
+     "object_body_y": 0.427,
+     "tcp_body_y": 0.431,
+     "q1_mid": 1.641,
+     "side": "左",
+     "arm_side": "左",
+     "min_dist_to_q_ready": 1.048
+    },
+    {
+     "flip": true,
+     "ok": false,
+     "seed_index": 6,
+     "seed": "亂數種子#5",
+     "T_transition_s": 4.48,
+     "fits_before_window": false,
+     "v_peak_ratio": 1.0,
+     "a_peak_ratio": 0.034,
+     "env_transition": [
+      0.0664,
+      "link_eef|table_top"
+     ],
+     "self_transition": [
+      0.0141,
+      "link1|link5"
+     ],
+     "env_window": [
+      0.0199,
+      "link_eef|table_top"
+     ],
+     "self_window": [
+      0.0182,
+      "link4|link_eef"
+     ],
+     "base_table_min": 0.1894,
+     "window_joint_margin_min": 0.187,
+     "q_pre_start": [
+      -2.388,
+      -2.018,
+      1.415,
+      0.838,
+      -1.373,
+      -0.215
+     ],
+     "object_body_y": 0.427,
+     "tcp_body_y": 0.431,
+     "q1_mid": -1.501,
+     "side": "左",
+     "arm_side": "左",
+     "min_dist_to_q_ready": 2.221
+    }
+   ],
+   "chosen": {
+    "flip": false,
+    "T_transition_s": 2.59
+   },
+   "ok": true
+  },
+  {
+   "name": "右側（行進 −x）＋K2_READY 收攏姿態",
+   "heading": "−x",
+   "yaw": 3.141592653589793,
+   "y_lane": -0.0194,
+   "window": [
+    0.327,
+    -0.173
+   ],
+   "q_now": [
+    0.0,
+    0.0,
+    0.035,
+    0.0,
+    -1.571,
+    0.0
+   ],
+   "x_now": 1.5268,
+   "v_along": 0.35,
+   "t_base_to_window_s": 3.43,
+   "candidates": [
+    {
+     "flip": false,
+     "ok": true,
+     "seed_index": 0,
+     "seed": "當下手臂",
+     "T_transition_s": 2.59,
+     "fits_before_window": true,
+     "v_peak_ratio": 1.0,
+     "a_peak_ratio": 0.06,
+     "env_transition": [
+      0.086,
+      "uflite_gripper_link|table_top"
+     ],
+     "self_transition": [
+      0.0141,
+      "link1|link5"
+     ],
+     "env_window": [
+      0.0685,
+      "link_eef|table_top"
+     ],
+     "self_window": [
+      0.0207,
+      "link5|link_eef"
+     ],
+     "base_table_min": 0.1894,
+     "window_joint_margin_min": 0.5083,
+     "q_pre_start": [
+      -0.754,
+      0.498,
+      1.415,
+      1.052,
+      -0.996,
+      -0.76
+     ],
+     "object_body_y": -0.427,
+     "tcp_body_y": -0.431,
+     "q1_mid": -1.641,
+     "side": "右",
+     "arm_side": "右",
+     "min_dist_to_q_ready": 2.221
+    },
+    {
+     "flip": true,
+     "ok": false,
+     "why": "no_continuous_branch"
+    }
+   ],
+   "chosen": {
+    "flip": false,
+    "T_transition_s": 2.59
+   },
+   "ok": true
+  }
+ ]
+}

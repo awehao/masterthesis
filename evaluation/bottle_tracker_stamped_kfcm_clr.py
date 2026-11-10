@@ -23,7 +23,12 @@ import bottle_tracker_kfclock as KC                     # noqa: E402
 import bottle_tracker_stamped_kfcm as KM                # noqa: E402
 
 CLEAR_BACK = 0.10
-R_COVER = 0.69 - 0.39                                     # 動態 CBF 邊距 − 底盤包絡
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src', 'ammr_wholebody_mpc'))
+import bottle_nav_chain as _NC                           # noqa: E402  執行設定來源（Shield 底盤包絡）
+import bottle_s0b_ctrl as _B                             # noqa: E402  執行設定來源（GMPC 動態 CBF 邊距）
+DYN_MARGIN = float(_B.CBF_MISSION['cbf_safe_margin'])      # 由執行設定讀取，不寫死（Codex 20261111_011839）
+ROBOT_ENV = float(_NC.SHIELD['robot_radius'])
+R_COVER = DYN_MARGIN - ROBOT_ENV                          # 被遮罩端點須在本幀動態點此距離內（幾何覆蓋條件；不是避碰保證）
 
 
 class StampedKFCMClr(KM.StampedKFCM):
@@ -81,6 +86,7 @@ def main():
     eff = KC.effective_params(node)
     eff['ros_params'] = {n: p.value for n, p in getattr(node, '_parameters', {}).items()}
     eff['clear_back'] = CLEAR_BACK
+    eff['mask_cover'] = dict(dyn_margin=DYN_MARGIN, robot_env=ROBOT_ENV, r_cover=R_COVER, source='bottle_s0b_ctrl.CBF_MISSION／bottle_nav_chain.SHIELD')
     node.get_logger().info('tracker kfcm_clr effective params ' + json.dumps(eff, default=str))
     try:
         rclpy.spin(node)

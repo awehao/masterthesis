@@ -8,7 +8,7 @@
   窗＝沿行進方向在量測 x 前後（行進 +x：[x−0.35, x+0.15]；行進 −x：[x+0.35, x−0.15] 依序）。
 核對（每個候選）：
   1 窗內 IK 分支連續（預抓、抓取、抬升三位姿；每 2 cm 延拓；位置 < 1 mm、姿態 < 0.01 rad；關節離 LITE6_SAFE ≥ 0.05 rad）。
-  2 轉移：當下手臂 → 窗起點的預抓構型，關節空間 min-jerk；時長取速度 v_arm／加速度 a_arm 的較嚴者（v_arm、a_arm＝控制器 W_ARM）；
+  2 轉移：當下手臂 → 窗起點的預抓構型，關節空間 min-jerk（起訖速度＝0：未承接實際手臂速度，也未證明與窗內追蹤速度連續——R1 必修）；時長取速度 v_arm／加速度 a_arm 的較嚴者（v_arm、a_arm＝控制器 W_ARM）；
     須 ≤ 底盤以當下沿車道速度到窗起點的時間（不改底盤速度）；報峰值關節速度／加速度對限制的比。
   3 碰撞：轉移與窗內每個取樣，手臂連桿點雲（手指、夾爪殼除外於窗內抓取段）對第一桌方盒 ≥ 0.02 m、自碰撞（非相鄰、非設計接觸）≥ 0.005 m；
     底盤同時沿車道移動（全身），底盤圓盤 0.39 對桌 ≥ 0.02 m。
@@ -64,7 +64,8 @@ for _j in K.joints.values():                                   # 同 verify_self
 SELF_PAIRS = [(x, y) for i, x in enumerate(ARM_LINKS) for y in ARM_LINKS[i + 1:]
               if frozenset((x, y)) not in _adj and frozenset((x, y)) not in DESIGNED_CONTACT and _find(x) != _find(y)]
 BASE_H = 0.45                                                   # 底盤（含光達座）頂高上限：只核對貼地、低於此高度的方盒（桌腳）；桌面板離地 0.565 m 不與底盤圓盤相交
-RNG_SEEDS = [np.random.default_rng(7).uniform(LITE6_SAFE.lower * 0.8, LITE6_SAFE.upper * 0.8) for _ in range(6)]
+_RNG = np.random.default_rng(7)                                 # 單一固定亂數產生器依序取 6 組（原本每組重建 rng(7) ⇒ 六組相同；Codex 20261111_011839）
+RNG_SEEDS = [_RNG.uniform(LITE6_SAFE.lower * 0.8, LITE6_SAFE.upper * 0.8) for _ in range(6)]
 
 
 def table_boxes(z1=0.58):
