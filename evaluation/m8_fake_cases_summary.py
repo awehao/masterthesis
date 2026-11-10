@@ -32,7 +32,7 @@ def main():
                          rate_final_max=d['rate']['final']['a_max'] if d['rate'].get('final') else None, rate_final_n_over=d['rate']['final']['n_over'] if d['rate'].get('final') else None))
     passed = [r for r in rows if not r.get('missing') and r['arrived'] and not r['intrusion']]
     S = dict(prefix=prefix, n=len(rows), n_pass_arrive_no_intrusion=len(passed), rows=rows,
-             note='開發場景的有限相位核對，不是泛化成功率；假世界不模擬接觸力；變化率另列，未納入這個計數')
+             note='開發場景的有限相位核對，不是泛化成功率；假世界不模擬接觸力；變化率另列，未納入這個計數', mode_time_def='模式時間＝導航節點實際套用的決策紀錄（m8nav.json conflict），窗口＝巡航起點到該趟結束；與時窗層內部紀錄 conflict_layer_log 不同')
     json.dump(S, open(out, 'w'), ensure_ascii=False, indent=1)
     for r in rows:
         if r.get('missing'):
