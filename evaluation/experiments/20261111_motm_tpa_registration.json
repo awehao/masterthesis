@@ -11,8 +11,8 @@
   0.8
  ],
  "map_args": "--table2 2.4,-1.0",
- "executor": "evaluation/isaac_bottle_w1dynsr41.py",
- "controller": "bottle_w1_tpa_ctrl（r1a 子類：計畫承接即從命令生效預測狀態接整段關節軌跡到 x_pre 時本趟量測的 T_pre；不經名目 q_ready、不在預抓構型零速停住）",
+ "executor": "evaluation/isaac_bottle_w1dynsr42.py",
+ "controller": "bottle_w1_tpa_cj_ctrl（bottle_w1_tpa_ctrl 子類＋持瓶承接方向修正）；TPA：計畫承接即從命令生效預測狀態接整段關節軌跡到 x_pre 時本趟量測的 T_pre，不經名目 q_ready、不在預抓構型零速停住",
  "tracker": "evaluation/bottle_tracker_stamped_kfcm_clr.py（/scan_filtered＋/scan_clear）",
  "tracker_override": "min_net_speed=0.10,min_track_speed=0.12,release_track_speed=0.10",
  "cases": {
@@ -25,7 +25,7 @@
  "planner_yaml": "evaluation/bottle_n2_planner_sf.yaml",
  "bottle_rtf_cap": 0.4,
  "run_ids": {
-  "nominal": "bottle_motm_tpa_nom_2",
+  "nominal": "bottle_motm_tpa_nom_3",
   "A": "bottle_motm_tpa_A_1"
  },
  "x_slow": "名目（沿用既有排程；離線「快 x_slow」只是探索，不採用）",
@@ -38,6 +38,15 @@
   {
    "run": "bottle_motm_tpa_nom_1",
    "why": "握手未過（結果碼 70）：kfcm_clr 追蹤器 import bottle_nav_chain 安裝 ros_stub ⇒ 真節點 TypeError；模擬未起跑；修正後重建凍結"
+  }
+ ],
+ "informative_failures": [
+  {
+   "run": "bottle_motm_tpa_nom_2",
+   "executor": "dynsr41（bottle_w1_tpa_ctrl）",
+   "result": "結果碼 3：TPA 接近、PREGRASP 0.35 s 到容差、INSERT、閉爪、抬升都成立；21.8 s 進 CARRY 承接持瓶路徑 carry_ref_accel 受控停止",
+   "root_cause": "持瓶路徑回覆晚一拍，參考已停而實測超前 1.4 mm，MPC 計畫小幅倒退 ⇒ 承接接段起點切線朝後約 176°（離線重建吻合 nom_1 與 nom_2 實錄值）；既有承接規則的時序弱點，與 TPA 無關",
+   "fix": "bottle_w1_tpa_cj_ctrl：計畫速度沿車頭分量 < 0.02 m/s ⇒ 用車頭方向；換版重建凍結"
   }
  ]
 }
