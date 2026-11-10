@@ -65,10 +65,14 @@ def stop_sweep(q9, u9, boxes, xb, yb, zs, skip_bottle=()):
     return worst
 
 
-def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0):
+def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expect_reject=False):
     xb, yb, zs, yl, x_pre, x_slow, T_pre, T_g, boxes = (ctx[k] for k in ('xb', 'yb', 'zs', 'yl', 'x_pre', 'x_slow', 'T_pre', 'T_g', 'boxes'))
-    row = dict(start=name, scenario=scen + (f'＋橫向偏 {y_off * 100:.0f} cm' if y_off else ''), v_base0=v_b0, y_off=y_off)
-    yb_act = yl + y_off                                                 # 實際底盤 y（規劃仍用車道 yl）
+    lab = '' if not y_off else (f'＋橫偏 {y_off * 100:+.0f} cm' + ('（3–6 s 漸增）' if ramp else '') + ('（＋往瓶側）' if y_off > 0 else '（往離瓶側）'))
+    row = dict(start=name, scenario=scen + lab, v_base0=v_b0, y_off=y_off, expect_reject=expect_reject)
+
+    def yoff_at(tt):
+        return y_off if ramp is None else y_off * min(max((tt - ramp[0]) / (ramp[1] - ramp[0]), 0.0), 1.0)
+    yb_act = yl                                                         # 實際底盤 y（規劃仍用車道 yl）；每拍更新
     inp = dict(xy=[xb, yb], z_support=zs, band=0.10, pre_m=0.06, lift_m=0.05, win_rel=[-0.35, 0.15], x_nom=0.0, y_lane=yl,
                q_seeds=[s.tolist() for s in [qa0] + list(R0.RNG_SEEDS)], q_now=qa0.tolist(), q_seed=None)
     ok, why, res = PW.plan_grasp(inp)
@@ -85,8 +89,9 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0):
     x, v, vref, tau, rate, t = float(base0[0]) + v_b0 * LAT, v_b0, v_b0, 0.0, 1.0, 0.0
     sw, v2_dp, switched = None, None, False
     W = dict(vr=0.0, ar=0.0, jm=np.inf, clr=(np.inf, None), stop=(np.inf, None))
-    rate_prev, k = rate, 0
+    k, q_prev, v_prev, early = 0, None, None, None
     log = []
+    Tpl = TS._tb
     while t < 40.0:
         cap = SCEN[scen](t, x, x_pre)
         if not switched:
@@ -100,15 +105,32 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0):
         x += v * DTC
         t += DTC
         tau, rate = TS.tau_step(tau, rate, DTC, x, prof, T)
+        yb_act = yl + yoff_at(t)
         if v2_dp is None and t >= T:
             Tv2 = R0.K.fk(np.r_[x, yb_act, 0.0, TPA.traj_eval(P, T)], 'link_tcp')
             v2_dp = round(float(np.linalg.norm(Tv2[:3, 3] - T_pre[:3, 3])), 4)
-        qa = TPA.traj_eval(P, tau)
-        qd = TPA.traj_eval(P, tau, 1) * rate
-        qdd = TPA.traj_eval(P, tau, 2) * rate ** 2 + TPA.traj_eval(P, tau, 1) * (rate - rate_prev) / DTC
-        rate_prev = rate
+        qpb = np.r_[x + v * LAT, yb_act, 0.0]
+        D, dy, dth = TS.plan_dev(qpb, (x + v * LAT, yl), 0.0)
+        if abs(dy) > TS.DEV_Y_MAX or abs(dth) > TS.DEV_TH_MAX:
+            early = dict(t=round(t, 2), dy=round(dy, 4), x=round(x, 4))
+            break
+        if abs(dy) < 1e-9 and abs(dth) < 1e-9:
+            qa = TPA.traj_eval(P, tau)                                   # 無偏差：送出參考＝q(τ)
+        else:                                                            # 有偏差：TCP 目標＝計畫底盤位姿⊗rel_ref(τ)；手臂構型由 IK（GMPC 追蹤的近似）
+            Tw = Tpl(np.r_[x, yl, 0.0]) @ TS.rel_ref(R0.K, PD, tau)
+            rr = R0.solve_ik(R0.K, np.r_[x, yb_act, 0.0, (q_prev if q_prev is not None else TPA.traj_eval(P, tau))], Tw)
+            if not (rr.ok and rr.pos_err < 1e-3 and rr.rot_err < 1e-2):
+                early = dict(t=round(t, 2), why='ik_fail_under_deviation', dy=round(dy, 4))
+                break
+            qa = rr.q[R0.IDX]
+        qd = np.zeros(6) if q_prev is None else (qa - q_prev) / DTC          # 由實際送出參考序列差分（Codex 042529 第 2 項）
+        if q_prev is None:
+            qd = TPA.traj_eval(P, tau, 1) * rate
+        qdd = np.zeros(6) if v_prev is None else (qd - v_prev) / DTC
+        q_prev, v_prev = qa.copy(), qd.copy()
         W['vr'] = max(W['vr'], float(np.abs(qd).max() / V_ARM))
-        W['ar'] = max(W['ar'], float(np.abs(qdd).max() / A_ARM))
+        if k >= 2:
+            W['ar'] = max(W['ar'], float(np.abs(qdd).max() / A_ARM))
         W['jm'] = min(W['jm'], R0.jmargin(qa))
         q9 = np.r_[x, yb_act, 0.0, qa]
         if k % 3 == 0:
@@ -121,17 +143,17 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0):
             log.append((round(t, 2), round(x, 4), round(v, 4), round(tau, 3), round(rate, 3)))
         k += 1
         if tau >= T - 1e-9:
-            sw = TS.switch_check(R0.K, np.r_[x + v * LAT, yb_act, 0.0], np.r_[v, 0.0, 0.0], PD, tau + rate * LAT, rate, T_pre)
+            sw = TS.switch_check(R0.K, qpb, np.r_[v, 0.0, 0.0], PD, tau + rate * LAT, rate, T_pre, D=D)
             T_from = sw.pop('T_from')
             sw = dict(sw, t=round(t, 2), x=round(x, 4))
             switched = bool(sw['ok'])
             break
     row.update(T=round(T, 2), t_switch=sw.get('t') if sw else None, switch=sw, v2_dp_at_T=v2_dp, x_at_switch=round(x, 4), x_pre=round(x_pre, 4),
                v_ratio=round(W['vr'], 3), a_ratio=round(W['ar'], 3), joint_margin_min=round(W['jm'], 4), clear_slack_min=(round(W['clr'][0], 4), W['clr'][1]),
-               stop_traj_slack_min=(round(W['stop'][0], 4), W['stop'][1]), log=log[::3])
-    if not switched:
-        return dict(row, ok=sw is not None and sw.get('kind') == 'reject' and y_off >= TS.SW_P_MAX, why='switch_rejected' if sw else 'no_switch',
-                    expected='拒絕' if y_off >= TS.SW_P_MAX else None)
+               stop_traj_slack_min=(round(W['stop'][0], 4), W['stop'][1]), early_reject=early, log=log[::3])
+    safe_before = W['clr'][0] >= 0 and W['stop'][0] >= 0
+    if early is not None or not switched:
+        return dict(row, ok=bool(expect_reject and safe_before), why='early_reject' if early else ('switch_rejected' if sw else 'no_switch'), safe_before_reject=safe_before)
     prev, ins_fail, wi, wst = qa.copy(), 0, (np.inf, None), (np.inf, None)
     vv = v
     segs = []
@@ -168,7 +190,7 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0):
                t_accept_to_grasp=round(sw['t'] + LAT + sw.get('t_rj', 0.0) + 0.05 + 1.0, 2))
     rj_ok = sw['kind'] != 'rejoin' or (row['rejoin_ik_fail'] == 0 and row['rejoin_clear_slack_min'][0] >= 0 and row['rejoin_stop_traj_slack_min'][0] >= 0)
     row['ok'] = bool(W['vr'] <= 1.0 + 1e-6 and W['ar'] <= 1.0 and W['jm'] >= R0.LIM_M and W['clr'][0] >= 0 and W['stop'][0] >= 0 and rj_ok
-                     and (y_off < TS.SW_P_MAX))   # 本次範圍：TPA 接近段＋切換（含重接）（Codex 032519）
+                     and not expect_reject)   # 本次範圍：TPA 接近段＋切換（含重接）（Codex 032519）
     row['insert_ok'] = bool(ins_fail == 0 and wi[0] >= 0 and wst[0] >= 0)                                                            # INSERT 與舊流程相同，另列
     return row
 
@@ -189,12 +211,13 @@ def main():
     _, _, b88 = TO.rec_state(c, O, 8.80)
     starts.append(('合成 K2_READY 靜止', R0.Q_TUCK.copy(), np.zeros(6), b88))
     rows = []
-    cases = [(scen, 0.0) for scen in SCEN] + [('名目', 0.02), ('名目', 0.05)]
-    for scen, yo in cases:
+    cases = [(scen, 0.0, None, False) for scen in SCEN] + [('名目', 0.03, None, False), ('名目', 0.05, (3.0, 6.0), False), ('A 型減速', -0.07, (3.0, 6.0), False),
+                                                          ('名目', 0.09, (3.0, 6.0), True)]
+    for scen, yo, ramp, exp in cases:
         for nm, q, qd, base in starts:
-            row = run_case(nm, q, qd, base, 0.35, scen, ctx, y_off=yo)
+            row = run_case(nm, q, qd, base, 0.35, scen, ctx, y_off=yo, ramp=ramp, expect_reject=exp)
             rows.append(row)
-            print({k: row.get(k) for k in ('start', 'scenario', 'ok', 'why', 'expected', 'T', 't_switch', 'switch', 'rejoin_ik_fail', 'rejoin_clear_slack_min', 'rejoin_stop_traj_slack_min', 'v2_dp_at_T', 'v_ratio', 'a_ratio', 'clear_slack_min',
+            print({k: row.get(k) for k in ('start', 'scenario', 'ok', 'why', 'early_reject', 'safe_before_reject', 'T', 't_switch', 'switch', 'rejoin_ik_fail', 'rejoin_clear_slack_min', 'rejoin_stop_traj_slack_min', 'v2_dp_at_T', 'v_ratio', 'a_ratio', 'clear_slack_min',
                                            'stop_traj_slack_min', 'insert_ok', 'insert_clear_slack_min', 'insert_stop_traj_slack_min', 't_accept_to_grasp')}, flush=True)
     json.dump(dict(run=TO.RUN, gate=dict(sw_p=TS.SW_P, sw_r=TS.SW_R, sw_v=TS.SW_V, sw_p_max=TS.SW_P_MAX, sw_r_max=TS.SW_R_MAX, v_rj=TS.V_RJ), rows=rows,
                    note='底盤沿車道直線；情境上限作用於實際速度；完整停止軌跡用既有 stop_traj（設定點 s 取當下構型、在途命令取當拍命令重複——近似）；'

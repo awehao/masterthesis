@@ -12,8 +12,12 @@
     世界側＝T_pre（靜止）。位置差 ≤ SW_P、姿態差 ≤ SW_R；相對側 TCP 世界速度（底盤照 u_last、相位照 rate 前推差分）≤ SW_V。
     處置：全部 ≤ (SW_P, SW_R, SW_V) ⇒ 直接切（blending、st.t_pre＝t，step_phase 進 PREGRASP）；
           位置 ≤ SW_P_MAX、姿態 ≤ SW_R_MAX、速度 ≤ SW_V ⇒ 有界重接：切換後 PREGRASP 的世界目標由相對側位姿 T_from 以 min-jerk 在
-            t_rj＝clip(max(dp/V_RJ, dr/W_RJ), 0.3, 1.5) s 內接到 T_pre（_T_seq；含手腕近距修正後的目標）——位置連續、速度有界；
+            t_rj＝max(1.875·dp/V_RJ, 1.875·dr/W_RJ, 0.3) s（> 1.5 s 拒絕）內接到 T_pre（_T_seq；含手腕近距修正後的目標）——位置連續、速度有界；
           其餘 ⇒ 受控停止 tpa_switch_inconsistent（不直接切換再靠追蹤拉回）。
+  4 計畫位姿偏差補償（Codex 042529 第 1 項）：每拍以命令生效預測底盤位姿 qp 投影到路徑得進度點，計畫底盤位姿＝(路徑點, 計畫偏航 th_ref)；
+    偏差 D（只取橫向 dy、偏航 dθ）從相對參考扣除：送出參考＝D⁻¹⊗rel_ref(τ) ⇒ TCP 世界路徑維持規劃值（手臂吸收底盤橫偏，手指不因橫偏偏向瓶）；
+    |dy| > DEV_Y_MAX 或 |dθ| > DEV_TH_MAX ⇒ 接近段即受控停止 tpa_plan_deviation（不等到切換）。切換閘門用同一 D。
+  5 rate 不濾波＝本拍實際相位增量／Δt；重接時長依 min-jerk 峰值（1.875×平均）使峰值 ≤ V_RJ／W_RJ，超過 T_RJ_MAX 即拒絕（不截短）。
   st.t_pre 在承接時設為無限大（不再依時間進 PREGRASP）。
 """
 import math
@@ -30,7 +34,9 @@ import bottle_w1_tpa_ctrl as TPA
 SW_P, SW_R, SW_V = 0.010, math.radians(2.0), 0.03            # 直接切換
 SW_P_MAX, SW_R_MAX = 0.040, math.radians(5.0)                 # 有界重接上限；超過 ⇒ 受控拒絕
 V_RJ, W_RJ, T_RJ_MIN, T_RJ_MAX = 0.03, math.radians(10.0), 0.3, 1.5   # 重接：TCP 世界目標以 ≤ 3 cm/s、≤ 10°/s 由相對側位姿 min-jerk 內插到 T_pre
-RATE_LP = 0.5
+RATE_LP = 1.0                                                   # 不濾波：rate＝本拍實際相位增量／Δt（Codex 042529：預覽與實際送出參考一致）
+MJ_PEAK = 1.875                                                 # min-jerk 峰值速度／平均速度
+DEV_Y_MAX, DEV_TH_MAX = 0.08, math.radians(8.0)                 # 底盤相對計畫底盤位姿的橫向／偏航偏差上限（超過 ⇒ 接近段即受控拒絕）
 
 
 def progress_profile(sig, x_pre, x_slow, v_nav, v_c, v0, T, dt=0.02):
@@ -48,14 +54,21 @@ def progress_profile(sig, x_pre, x_slow, v_nav, v_c, v0, T, dt=0.02):
 
 
 def tau_step(tau, rate, dt, sig_meas, prof, T):
-    """回 (τ_new, rate_new)。prof＝(τ_k, σ_k)。"""
+    """回 (τ_new, rate_new)。prof＝(τ_k, σ_k)。
+    τ_σ＝σ_nom⁻¹(σ_實測)；σ 超過剖面終點時以剖面終端速度延伸到 T 之後（τ_σ＝T＋(σ−σ_end)/v_end），使最後一拍的 rate 仍是實際進度速率。
+    未截斷增量＝min(Δt, max(0, τ_σ−τ))（只進不退、速率 ≤ 計畫）；rate＝未截斷增量／Δt（RATE_LP＝1 ⇒ 不濾波）；送出的 τ 截在 T。"""
     tk, sk = prof
     if dt <= 0.0:
         return tau, rate
-    tau_sig = T if sig_meas >= sk[-1] - 1e-9 else float(np.interp(sig_meas, sk, tk))
-    tau_new = min(tau + dt, max(tau, tau_sig), T)
-    r = (tau_new - tau) / dt
-    return tau_new, (1.0 - RATE_LP) * rate + RATE_LP * r
+    if sig_meas < sk[-1] - 1e-9:
+        tau_sig = float(np.interp(sig_meas, sk, tk))
+    else:
+        j = -2 if len(sk) >= 3 else -1                                    # 剖面最後一步在 x_pre 截斷 ⇒ 取最後一個完整區間的斜率當終端速度
+        v_end = (sk[j] - sk[j - 1]) / max(tk[j] - tk[j - 1], 1e-9) if len(sk) > 1 else 0.0
+        tau_sig = T + (sig_meas - sk[-1]) / v_end if v_end > 1e-4 else T + dt
+    inc = min(dt, max(0.0, tau_sig - tau))
+    r = inc / dt
+    return min(tau + inc, T), (1.0 - RATE_LP) * rate + RATE_LP * r
 
 
 def _tb(b):
@@ -74,16 +87,26 @@ def rel_ref(K, P, tau):
     return np.linalg.inv(_tb(be)) @ P['T_pre']
 
 
-def switch_check(K, qp_base, u_base_body, P, tau_eff, rate, T_pre, dt=0.02):
+def plan_dev(qp_base, lane_xy, th_ref):
+    """底盤（命令生效預測位姿）相對「計畫底盤位姿」（路徑上同一進度點、計畫偏航）的偏差 D（SE2，只取橫向與偏航；縱向由相位 τ 處理）。回 (D 4×4, dy, dθ)。"""
+    qb = np.asarray(qp_base, float)[:3]
+    Tl = _tb(np.r_[np.asarray(lane_xy, float)[:2], float(th_ref)])
+    Dm = np.linalg.inv(Tl) @ _tb(qb)
+    dy, dth = float(Dm[1, 3]), float(math.atan2(Dm[1, 0], Dm[0, 0]))
+    return _tb(np.r_[0.0, dy, dth]), dy, dth
+
+
+def switch_check(K, qp_base, u_base_body, P, tau_eff, rate, T_pre, dt=0.02, D=None):
     """同一世界座標、同一命令生效時刻比較切換兩側：相對側 Tb(qp)⊗rel_ref(τ_eff) vs 世界側 T_pre（靜止）。
     速度：相對側 TCP 世界速度以「底盤照 u_last、相位照 rate」前推 dt 的差分。回 dict(ok, dp, dr, dv)。"""
     from ammr_wholebody_mpc.wgmpc_core import so3_log
     qb = np.asarray(qp_base, float)[:3]
-    Tw0 = _tb(qb) @ rel_ref(K, P, tau_eff)
+    Di = np.eye(4) if D is None else np.linalg.inv(D)                      # 偏差補償：相對參考扣掉底盤相對計畫位姿的橫向／偏航偏差
+    Tw0 = _tb(qb) @ Di @ rel_ref(K, P, tau_eff)
     c_, s_ = math.cos(qb[2]), math.sin(qb[2])
     ub = np.asarray(u_base_body, float)
     qb1 = qb + dt * np.r_[c_ * ub[0] - s_ * ub[1], s_ * ub[0] + c_ * ub[1], ub[2]]
-    Tw1 = _tb(qb1) @ rel_ref(K, P, tau_eff + rate * dt)
+    Tw1 = _tb(qb1) @ Di @ rel_ref(K, P, tau_eff + rate * dt)
     dp = float(np.linalg.norm(Tw0[:3, 3] - T_pre[:3, 3]))
     dr = float(np.linalg.norm(so3_log(Tw0[:3, :3].T @ T_pre[:3, :3])))
     dv = float(np.linalg.norm(Tw1[:3, 3] - Tw0[:3, 3]) / dt)
@@ -93,8 +116,10 @@ def switch_check(K, qp_base, u_base_body, P, tau_eff, rate, T_pre, dt=0.02):
         kind = 'rejoin'
     else:
         kind = 'reject'
-    t_rj = float(np.clip(max(dp / V_RJ, dr / W_RJ), T_RJ_MIN, T_RJ_MAX)) if kind == 'rejoin' else 0.0
-    return dict(ok=kind != 'reject', kind=kind, dp=round(dp, 5), dr=round(dr, 5), dv=round(dv, 4), t_rj=round(t_rj, 3), T_from=Tw0)
+    t_rj = max(MJ_PEAK * dp / V_RJ, MJ_PEAK * dr / W_RJ, T_RJ_MIN) if kind == 'rejoin' else 0.0   # 依 min-jerk 峰值速度定時長（峰值 ≤ V_RJ、W_RJ）
+    if kind == 'rejoin' and t_rj > T_RJ_MAX:
+        kind = 'reject'                                                     # 超過時長上限不截短，拒絕
+    return dict(ok=kind != 'reject', kind=kind, dp=round(dp, 5), dr=round(dr, 5), dv=round(dv, 4), t_rj=round(t_rj if kind == 'rejoin' else 0.0, 3), T_from=Tw0)
 
 
 class W1PlaceController(CJ.W1PlaceController):
@@ -119,7 +144,8 @@ class W1PlaceController(CJ.W1PlaceController):
         P = self.tpa
         if P is None or P['switched']:
             return super()._rel_target(tau_t)
-        return rel_ref(self.K, P, max(self._tau_at(tau_t), 0.0))
+        Di = np.eye(4) if P.get('D') is None else np.linalg.inv(P['D'])
+        return Di @ rel_ref(self.K, P, max(self._tau_at(tau_t), 0.0))
 
     def _advance_inner(self, T_tcp, close_done, q):
         P = self.tpa
@@ -127,12 +153,17 @@ class W1PlaceController(CJ.W1PlaceController):
             t = float(self.t)
             P['tau'], P['rate'] = tau_step(P['tau'], P['rate'], t - P['t_last'], float(self.sig_robot), P['prof'], P['T'])
             P['t_last'] = t
+            qp, _, _ = self._stop_rest(np.asarray(q, float))
+            sp = self.path.project(qp[:2], float(self.sig_robot), back=0.1, ahead=0.3)
+            P['D'], dy, dth = plan_dev(qp[:3], self.path.xy(sp)[0], float(self.th_ref))
+            P['dev_max'] = max(P.get('dev_max', 0.0), abs(dy))
+            if abs(dy) > DEV_Y_MAX or abs(dth) > DEV_TH_MAX:
+                self.judge._stop(self.t, 'tpa_plan_deviation', dy=round(dy, 4), dth=round(dth, 4))
             if len(P['tau_log']) < 2000:
                 P['tau_log'].append((round(t, 3), round(float(self.sig_robot), 4), round(P['tau'], 4), round(P['rate'], 4)))
-            if P['tau'] >= P['T'] - 1e-9:
-                qp, _, _ = self._stop_rest(np.asarray(q, float))
+            if self.judge.stop is None and P['tau'] >= P['T'] - 1e-9:
                 lat = C0.D_STEPS * C0.PHYS
-                sw = switch_check(self.K, qp[:3], np.asarray(self.u_last, float)[:3], P, P['tau'] + P['rate'] * lat, P['rate'], P['T_pre'])
+                sw = switch_check(self.K, qp[:3], np.asarray(self.u_last, float)[:3], P, P['tau'] + P['rate'] * lat, P['rate'], P['T_pre'], D=P['D'])
                 T_from = sw.pop('T_from')
                 P['sw'] = dict(sw, t=round(t, 3), x=round(float(q[0]), 4), y=round(float(q[1]), 4), rate=round(P['rate'], 4))
                 if sw['ok']:
@@ -164,7 +195,7 @@ class W1PlaceController(CJ.W1PlaceController):
         if P is not None:
             rj = P.get('rj')
             r['tpas'] = dict(sw=P.get('sw'), rejoin=None if rj is None else dict(t0=rj['t0'], T=rj['T']), tau_log=P.get('tau_log', [])[::2],
-                             gate=dict(sw_p=SW_P, sw_r=SW_R, sw_v=SW_V, sw_p_max=SW_P_MAX, sw_r_max=SW_R_MAX, v_rj=V_RJ, w_rj=W_RJ, t_rj=[T_RJ_MIN, T_RJ_MAX], rate_lp=RATE_LP),
+                             gate=dict(sw_p=SW_P, sw_r=SW_R, sw_v=SW_V, sw_p_max=SW_P_MAX, sw_r_max=SW_R_MAX, v_rj=V_RJ, w_rj=W_RJ, t_rj=[T_RJ_MIN, T_RJ_MAX], rate_lp=RATE_LP, mj_peak=MJ_PEAK, dev_y_max=DEV_Y_MAX, dev_th_max=DEV_TH_MAX), dev_max=P.get('dev_max'),
                              note='手臂相位隨底盤實測進度；τ 只進不退、速率 ≤ 計畫；τ 到 T 以同一參考、同一命令生效時刻核切換兩側：小差直接切、中差有界重接、大差受控拒絕')
-            r['tpa'] = {k: v for k, v in r['tpa'].items() if k not in ('prof', 'tau_log', 'rj')}
+            r['tpa'] = {k: v for k, v in r['tpa'].items() if k not in ('prof', 'tau_log', 'rj', 'D')}
         return r
