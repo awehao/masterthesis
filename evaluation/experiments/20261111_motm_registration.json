@@ -1,0 +1,25 @@
+{
+ "name": "motm_dyn_single_bottle_r1",
+ "registered": "2026-11-11（Codex 20261110_233102；擷取／閉迴路前登錄）",
+ "seed": 202611110001,
+ "rule": "numpy default_rng(seed)：dx～U[−0.08,0.08]、dy～U[−0.025,0.04]（設計域）；只交執行端（場景）與評估，不寫進控制器設定",
+ "bottle_dx": -0.0232,
+ "bottle_dy": -0.0119,
+ "table1_z": 0.58,
+ "region_offset": [
+  0.6,
+  0.8
+ ],
+ "map_args": "--table2 2.4,-1.0",
+ "executor": "evaluation/isaac_bottle_w1dynsr39.py",
+ "controller": "bottle_w1_tlane_ctrl（carrygov 子類，目標專屬入口／車道）",
+ "tracker": "evaluation/bottle_tracker_stamped_kfcm.py",
+ "tracker_override": "min_net_speed=0.10,min_track_speed=0.12,release_track_speed=0.10",
+ "cases": {
+  "nominal": "--dyn-case none（無移動物）",
+  "A": "接近段橫越 0.20 m/s；由名目趟量測依 bottle_dyn_case_motm 事前規則生成（名目趟後）"
+ },
+ "same_across_cases": "瓶位、控制版本、夾持設定、速度相同；只差移動物條件",
+ "deliverables": "每趟同 RUN_ID：Isaac 實錄重播（跟拍＋手腕＋全景）＋2D 追蹤疊圖（bottle_overlay_video.py），1 倍速",
+ "note": "n=1 有資訊的案例，不是成功率；失敗不換案例補成功、不掃參數"
+}
