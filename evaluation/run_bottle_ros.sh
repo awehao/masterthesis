@@ -73,7 +73,7 @@ if [ "${SEG3D:-0}" = 1 ]; then                                 # 學習式遮罩
   sleep 8                                                      # 模型載入
 fi
 if [ "${PLAN:-0}" = 1 ]; then                                  # N2：planner_server 只供路徑（SmacPlanner2D），不起控制器
-  spawn planner ros2 run nav2_planner planner_server --ros-args --params-file evaluation/bottle_n2_planner.yaml -p use_sim_time:=true
+  spawn planner ros2 run nav2_planner planner_server --ros-args --params-file "${PLANNER_YAML:-evaluation/bottle_n2_planner.yaml}" -p use_sim_time:=true   # PLANNER_YAML：本包版本化設定；未設＝既有
   spawn planlife ros2 run nav2_lifecycle_manager lifecycle_manager --ros-args -r __node:=lifecycle_manager_planner -p use_sim_time:=true -p autostart:=true -p node_names:="['planner_server']"
   PLAN_ARGS="--plan"
 fi
