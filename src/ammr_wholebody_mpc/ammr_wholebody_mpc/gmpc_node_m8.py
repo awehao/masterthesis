@@ -1,0 +1,1331 @@
+# gmpc_node_m8（2026-11-10；第八次第一包，Codex 20261110_190030「修正路徑／航向的執行契約」）：封存 gmpc_node.py 的版本化複本，只加一個參數
+#   heading_source：'chord'（預設＝原行為逐位元相同：期望航向＝到路徑前方 heading_lookahead_m 點的弦方向）或 'plan_yaw'
+#   （期望航向＝同一前瞻點的計畫姿態朝向；讓上層用計畫明確指定航向，例如離開線維持車頭純側移）。斜率限制、權重、CBF、輪級後處理全部不變。
+#   封存的 gmpc_node.py／gmpc.py 不動。
+"""ROS2 standalone GMPC controller node.
+
+Subscribes  : /plan  (nav_msgs/Path)            in `global_frame`
+Publishes   : /cmd_vel (geometry_msgs/Twist)    body-frame command for the omni base
+TF needed   : `global_frame` → `robot_base_frame`   (e.g. map → base_footprint)
+
+Control loop runs at `control_frequency` Hz:
+  1. Look up the current robot pose in `global_frame` via tf2.
+  2. Build a horizon reference (X_ref_win, xi_ref_win) by arclength sampling
+     the latest /plan starting from the projection of the robot.
+  3. Solve the SE(2) GMPC QP (see ammr_wholebody_mpc.gmpc).
+  4. Publish the optimal body twist as /cmd_vel.
+
+If no plan has been received, the node publishes zero twist.
+If the robot is within `goal_tolerance_xy` of the path end, the node holds zero.
+If TF lookup fails, the node publishes zero and warns (throttled).
+"""
+
+from __future__ import annotations
+
+import math
+import numpy as np
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
+
+from geometry_msgs.msg import Twist, TransformStamped, Point, PoseStamped
+from nav_msgs.msg      import Odometry, Path
+from std_msgs.msg      import Float32, Float32MultiArray
+from geometry_msgs.msg import Vector3Stamped
+from std_msgs.msg import String  # noqa: E402  (versioned JSON diag)
+from visualization_msgs.msg import MarkerArray, Marker
+
+import tf2_ros
+
+from collections import deque
+
+from .gmpc           import GMPC, GMPCConfig
+from .se2            import from_xytheta, to_xytheta, geodesic_error
+from .detour import (DetourConfig, DetourState, apply_offset,
+                     clear_reference, FREE)
+from .path_processor import (path_msg_to_xyth, project_arclength,
+                             build_reference_window,
+                             blend_reference,
+                             quaternion_to_yaw)
+
+
+class GMPCNode(Node):
+
+    def __init__(self):
+        super().__init__('gmpc_controller')
+
+        # ---- Parameters ---------------------------------------------------
+        self.declare_parameter('control_frequency', 20.0)
+        self.declare_parameter('horizon',           20)
+        self.declare_parameter('v_nominal',         0.30)
+        # **參考視窗的固定弧長前置量。預設 0.0 = 原行為一位元未改。**
+        # 前視距離原本是 k·v_nom·dt，與 v_nominal 成正比；把速度降進全身的
+        # 速度框時前視也一起縮掉（v_nom 0.03、dt 0.05、N 20 ⇒ 整窗 30 mm），
+        # 參考點貼在機器人身上，停住就成了閉環的不動點。詳見
+        # path_processor.build_reference_window 的註解與實測編號。
+        self.declare_parameter('reference_lead_m',  0.0)
+        # **參考點的投影方式。預設 'vertex' = 原行為一位元未改。**
+        # 'segment' 投影到線段上，s 隨機器人連續變化，不再在 5 cm 取樣間
+        # 跳格；搭配單調進度保護（參考不倒退）。實測慢速區相鄰命令方向
+        # 變化 p50 32.7°、p95 89.2°、最大 103°，就是跳格造成的左右修正。
+        self.declare_parameter('reference_projection', 'vertex')
+        self.declare_parameter('reference_monotonic', False)
+
+        self.declare_parameter('vx_min', -0.20)
+        self.declare_parameter('vx_max',  0.35)
+        self.declare_parameter('vy_min', -0.25)
+        self.declare_parameter('vy_max',  0.25)
+        self.declare_parameter('wz_min', -0.80)
+        self.declare_parameter('wz_max',  0.80)
+        self.declare_parameter('ax_max',  1.5)
+        self.declare_parameter('ay_max',  1.0)
+        self.declare_parameter('az_max',  2.0)
+
+        self.declare_parameter('Q_xy',    10.0)   # forward (body-x) tracking weight
+        # Lateral (body-y) tracking weight, separate from forward. Relaxing it
+        # lets the robot, after the CBF pushes it off-path to dodge, merge back
+        # to the global plan along a GENTLE arc instead of snapping the heading
+        # hard (which shows up as xy-path zig-zag). <=0 -> use Q_xy (isotropic).
+        self.declare_parameter('Q_y',      0.0)
+        # ---- optional heading objective (default OFF = original behaviour) ---
+        # The base is omnidirectional and the original design deliberately
+        # references no heading at all (see path_processor). This adds the
+        # behaviour of facing along the path WITHOUT removing the ability to
+        # strafe: wz is still a free input and lateral motion is still allowed,
+        # the robot is simply also asked to point where it is going.
+        self.declare_parameter('heading_enable', False)
+        self.declare_parameter('heading_weight', 2.0)     # Q's yaw diagonal
+        # Direction is taken from a look-ahead point on the path, as ONE atan2
+        # of a chord -- never by differencing the path's own yaw, which is
+        # jagged at nav2's 0.15 m resample spacing.
+        self.declare_parameter('heading_lookahead_m', 1.2)
+        # Slew limit on the REFERENCE (not on wz). Distinguishes a sustained
+        # turn, which passes through, from high-frequency wobble, which does
+        # not. A smaller wz is not automatically better: corners need turning.
+        self.declare_parameter('heading_rate_max', 1.0)   # rad/s
+        # Fixed heading for testing the objective on its own, before any path
+        # derived direction is involved. NaN = use the path.
+        self.declare_parameter('heading_fixed', float('nan'))
+        self.declare_parameter('heading_source', 'chord')          # m8：'chord'（原行為）或 'plan_yaw'
+        self.declare_parameter('R_vx',     0.5)
+        self.declare_parameter('R_vy',     0.5)
+        self.declare_parameter('R_w',      0.2)
+        self.declare_parameter('Qf_mult',  5.0)
+        # Input-increment (Δu) smoothness weights S (penalise control jerk).
+        # 0 = off. Larger -> smoother cruising, CBF still allowed to burst.
+        self.declare_parameter('S_vx',     0.0)
+        self.declare_parameter('S_vy',     0.0)
+        self.declare_parameter('S_w',      0.0)
+
+        self.declare_parameter('global_frame',     'map')
+        self.declare_parameter('robot_base_frame', 'base_footprint')
+        # Pose low-pass filter: EMA on the (map-frame) robot pose before it feeds
+        # the controller/CBF. AMCL injects ~3-5 cm/cycle jitter into the pose;
+        # the near-hard CBF chases that jitter -> the xy path zig-zags near walls.
+        # Smoothing the INPUT (not the output) is the right fix: filtering the
+        # control output instead makes the reactive loop sluggish and oscillate
+        # MORE. alpha in [0,1): 0 = off, higher = smoother (more lag). ~0.7 ->
+        # ~0.12 s time constant (a few cm lag, absorbed by the CBF margin).
+        self.declare_parameter('pose_lpf_alpha', 0.0)
+        self.declare_parameter('plan_topic',       '/plan')
+        self.declare_parameter('cmd_vel_topic',    '/cmd_vel')
+        # Cross-fade the tracked reference from the previous plan to the new one
+        # over this many seconds. 0 = adopt the new plan instantly (validated
+        # behaviour). The global planner republishes every 3 s and a quarter of
+        # those updates move the path in front of the robot by more than 0.25 m
+        # (measured: median 0.05 m, p90 0.44 m, max 1.82 m; reference heading
+        # p90 26 deg, max 63 deg). In the 0.3 s after such a jump the controller
+        # sits at 0.96 of a_max and saturates 88.5% of the time, against 13.5%
+        # otherwise -- it is chasing a step, not misbehaving.
+        self.declare_parameter('plan_blend_s', 0.0)
+        # Hold still when there is demonstrably no way forward, instead of
+        # tracking a reference that insists there is. With the planner decoupled
+        # from the movers it cannot know an opening is blocked, so it keeps
+        # routing through one; the CBF stops the robot, the plan flips to the
+        # other opening three seconds later, and the robot turns around. In the
+        # both-gaps-patrolled scenario that produced 8 left/right plan flips in
+        # 29 replans, 10.9 reversals per run, 12.7% of commands in reverse, and
+        # the robot never once reached the divider in 88 s -- 2 of 10 trials
+        # arrived and 9 collided. Waiting is the correct answer there and
+        # nothing in the stack could express it.
+        # 0 disables (the behaviour every result so far was measured with).
+        self.declare_parameter('stuck_window_s', 0.0)
+        self.declare_parameter('stuck_progress_m', 0.15)
+        self.declare_parameter('stuck_release_h', 0.6)
+        self.declare_parameter('stuck_max_hold_s', 25.0)
+        self.declare_parameter('goal_tolerance_xy', 0.20)
+        self.declare_parameter('tf_timeout',        0.10)
+        # Where the controller's pose comes from.
+        #
+        #   'tf'     lookup_transform(map, base_footprint, Time()) -- the latest
+        #            COMMON time across map->odom and odom->base_footprint. tf2
+        #            is free to compose two different instants, and when one leg
+        #            stalls the composed pose is wrong by whatever the robot
+        #            moved in between. Measured on hardC/seed1: the composed
+        #            pose sat a median 0.176 m and a peak 0.826 m from
+        #            /odometry/filtered, while five neighbouring trials agreed
+        #            to a median of 0.000 m -- an intermittent fault, not a bias.
+        #            The CBF then placed a wall 1.02 m away that was really at
+        #            0.25 m, so a HARD barrier was satisfied and the robot still
+        #            grazed the door post.
+        #
+        #   'odom'   take map->base_footprint straight off the EKF's
+        #            /odometry/filtered, which publishes exactly that pair. No
+        #            composition, no common-time search.
+        self.declare_parameter('pose_source', 'tf')      # 'tf' | 'odom'
+        self.declare_parameter('pose_odom_topic', '/odometry/filtered')
+        # Reject a pose this much older than now; a stale pose is worse than
+        # none because the CBF would linearise about a place the robot has left.
+        self.declare_parameter('pose_max_age', 0.30)
+        # Age limits for the OTHER inputs. The readiness gate before a run only
+        # proves a topic published once; it says nothing about a publisher that
+        # stops halfway. Without these the CBF keeps steering around an obstacle
+        # set frozen at the moment its tracker died, and the TF lookup happily
+        # returns the last transform in the buffer however old it is.
+        #   <= 0 disables that check (and reproduces the old behaviour).
+        self.declare_parameter('obstacle_max_age', 1.0)   # /gmpc/obstacles [s]
+        self.declare_parameter('tf_max_age',       0.50)  # map->base_footprint
+        # What to do when an input goes stale: 'stop' publishes zero and says
+        # why; 'warn' keeps driving and only logs. 'stop' is the default because
+        # a stale obstacle set is indistinguishable from an empty one at the
+        # barrier, and an empty one reads as "nothing to avoid".
+        self.declare_parameter('stale_input_policy', 'stop')
+
+        # ---- CBF safety filter ------------------------------------------
+        self.declare_parameter('cbf_enable',         False)
+        self.declare_parameter('cbf_alpha',          2.0)
+        self.declare_parameter('cbf_safe_margin',    0.30)
+        self.declare_parameter('cbf_slack_weight',   1.0e4)
+        self.declare_parameter('cbf_eps0_scale',     100.0)
+        # Gain scheduling — when robot enters the danger zone (h < threshold)
+        # the QP downweights tracking and upweights slack penalty.
+        self.declare_parameter('cbf_danger_thresh',   0.5)
+        self.declare_parameter('cbf_Q_min_scale',     0.2)
+        self.declare_parameter('cbf_slack_max_scale', 100.0)
+        # Price wall-constraint relaxation this many times higher than dynamic
+        # relaxation, so a robot pinched between a mover and a wall gives up
+        # dynamic clearance (0.08 m of buffer) instead of wall clearance
+        # (0.03 m). 1.0 = the original single shared slack.
+        self.declare_parameter('cbf_static_slack_scale', 1.0)
+        # Spatio-temporal cost field: soft Gaussian barrier on the PREDICTED
+        # obstacle positions across the horizon. 0 = off (identical to the
+        # validated configuration); independent of cbf_enable so the two can be
+        # switched separately for A/B.
+        self.declare_parameter('st_weight', 0.0)
+        self.declare_parameter('st_sigma0', 0.6)
+        self.declare_parameter('st_growth', 0.02)
+        # Grow the CBF keep-out with the horizon step to discount far-future
+        # constant-velocity predictions. 0 = the validated constant margin.
+        # See gmpc.py: keep-out that grows with the closing rate.
+        self.declare_parameter('cbf_vel_margin_gain', 0.0)
+        # See gmpc.py: drop CBF rows that cannot bind (far points, far steps).
+        self.declare_parameter('cbf_prune_range', 0.0)
+        self.declare_parameter('cbf_near_steps', 6)
+        self.declare_parameter('cbf_far_stride', 1)
+        self.declare_parameter('cbf_hard_k0', False)
+        self.declare_parameter('cbf_hard_k0_static', False)
+        # Wheel-speed coupling. The box in vx/vy/wz cannot express that rotation
+        # borrows authority from both translation axes; see GMPCConfig.
+        self.declare_parameter('wheel_coupling', True)
+        self.declare_parameter('wheel_radius', 0.05)
+        self.declare_parameter('wheel_base_L', 0.245)
+        self.declare_parameter('wheel_w_max', 5.55)
+        self.declare_parameter('wheel_a_max', 125.0)
+        # 'segment'（預設）＝原本的單一 λ 線段縮放；'project' 只在
+        # λ≈0 的退化情形改用投影，避免一列貼邊就凍結三個自由度。
+        self.declare_parameter('wheel_fit_mode', 'segment')
+        self.declare_parameter('cbf_margin_growth', 0.0)
+        # Prefer giving way FORWARD rather than backward when the CBF pushes the
+        # robot off the reference. 0 = no preference (validated behaviour).
+        self.declare_parameter('prog_weight', 0.0)
+        # Committed detour (see detour.py): lock a side, bend the reference
+        # around the obstacle, keep a forward-speed floor. Off by default.
+        self.declare_parameter('detour_enable', False)
+        self.declare_parameter('detour_trigger_range', 2.0)
+        self.declare_parameter('detour_cone_deg', 30.0)
+        self.declare_parameter('detour_max_offset', 0.60)
+        self.declare_parameter('detour_offset_rate', 0.08)
+        self.declare_parameter('detour_vx_floor', 0.0)
+        # Keep the tracked reference out of the CBF's keep-out discs. Without
+        # it Q pulls towards points the CBF forbids (see clear_reference).
+        self.declare_parameter('detour_clear_ref', True)
+        self.declare_parameter('detour_clear_pad', 0.05)
+        # Push a blocked reference point out ALONG the committed side rather
+        # than radially. Radial is "away from the obstacle centre", which with
+        # the obstacle dead ahead means BACKWARDS -- measured 0.235 m of
+        # backward reference shift, and the robot answered by retreating 1.8 m
+        # down the spawn corridor. False restores the radial behaviour so the
+        # two can be compared.
+        self.declare_parameter('detour_side_proj', True)
+        self.declare_parameter('obstacles_topic',    '/gmpc/obstacles')
+        # static-CBF (Solution 1): nearest wall points (v=0) so the CBF also
+        # repels from known static geometry and won't dodge into walls.
+        self.declare_parameter('static_obstacles_topic', '/gmpc/static_obstacles')
+        # drop static-CBF points within this distance of the goal: the goal can
+        # hug a wall, and the planner's path already handles the (static-safe)
+        # final approach -> don't let the wall-CBF block reaching the goal.
+        self.declare_parameter('static_goal_clear', 0.6)
+        # Static obstacles get their OWN (smaller) CBF margin: the moving
+        # obstacles in open space can afford the full cbf_safe_margin, but the
+        # same keep-out applied to wall points boxes the robot in narrow
+        # passages. Static walls are already routed around by the planner, so
+        # the static-CBF is only a backstop -> a tighter margin keeps narrow
+        # passages drivable while still preventing dodge-into-wall.
+        # NOTE the 0.30 m robot radius is INSIDE this number -- the CBF treats
+        # the robot as a point -- so 0.33 buys only 3 cm of true buffer, against
+        # the 8 cm the dynamic margin (0.38) buys. That difference is invisible
+        # for wall points, whose own radius is 0.05, but not for an unknown
+        # cylinder of radius 0.30: keep-out 0.63 against a 0.60 m contact
+        # distance. Measured across 187 arena trials, EVERY collision was a
+        # graze of an unknown static pillar, at -0.006 to +0.011 m -- exactly
+        # that 3 cm target minus slack -- while walls and movers were never
+        # touched. Measured at 0.38 against 0.33, ten trials each: shapes 8 -> 3
+        # collisions, stopgo 2 -> 0 and 14 s faster, crossing's worst-case
+        # clearance +0.070 -> +0.327, with arrival time and path length
+        # unchanged on the scenarios that already passed.
+        self.declare_parameter('static_cbf_safe_margin', 0.38)
+        # Static-CBF is a BACKSTOP for "don't dodge a dynamic obstacle into a
+        # wall" — only engage it when a dynamic obstacle is within this range of
+        # the robot. With no dynamic threat nearby the robot just tracks the
+        # (smooth) global plan through gaps, instead of the two-sided wall CBF
+        # constraints squeezing it into a left-right zig-zag in a passage.
+        # 0 = always on (old behaviour).
+        self.declare_parameter('static_activate_range', 0.0)
+
+        # DERIVED margins. 'fixed' keeps cbf_safe_margin / static_cbf_safe_margin
+        # exactly as they are; 'derived' computes each obstacle's keep-out from
+        # what it physically has to absorb:
+        #
+        #   static   loc_err + v^2/(2 a) + v dt
+        #   dynamic  the same, plus v_obs * percep_lag + obs_pos_err
+        #
+        # The fixed values have no derivation behind them -- 0.38 and 0.60 were
+        # tuned, and the measurements say they are far larger than needed. At the
+        # wall graze of C_seed22 the robot was doing 0.254 m/s, for which the
+        # terms above sum to 0.094 m against a margin of 0.380. Oversizing is not
+        # free: the goal there sat 0.55 m from a wall, inside a 0.68 m keep-out,
+        # so the barrier pushed the robot off its own goal and it ground along
+        # the wall for two seconds before converging.
+        #
+        # A speed-scaled margin also removes the need to tune static_goal_clear:
+        # the keep-out shrinks as the robot slows into the goal.
+        self.declare_parameter('margin_mode', 'fixed')      # fixed | derived
+        self.declare_parameter('margin_loc_err', 0.06)      # localisation p90 [m]
+        self.declare_parameter('margin_percep_lag', 0.30)   # min_track_age/rate [s]
+        self.declare_parameter('margin_obs_pos_err', 0.05)  # surface-point error [m]
+        self.declare_parameter('margin_floor', 0.08)        # never below this [m]
+
+        # ---- Diagnostic topics ------------------------------------------
+        self.declare_parameter('solve_time_topic',   '/gmpc/solve_time_ms')
+        self.declare_parameter('min_h_topic',        '/gmpc/min_h')
+        self.declare_parameter('cbf_zone_topic',     '/gmpc/cbf_zones')
+
+        # Read into instance state
+        f       = float(self.get_parameter('control_frequency').value)
+        N       = int(  self.get_parameter('horizon').value)
+        self.dt = 1.0 / f
+        self.v_nom = float(self.get_parameter('v_nominal').value)
+        self.ref_lead = float(self.get_parameter('reference_lead_m').value)
+        self.ref_proj = str(self.get_parameter('reference_projection').value)
+        self.ref_mono = bool(self.get_parameter('reference_monotonic').value)
+        self._s_prev = None          # 單調進度的狀態；換計畫時重設
+        # **執行期可改 v_nominal。** 原本只在這裡讀一次，所以最後接近要放慢時
+        # 只能重啟節點 —— 那會在控制上留一個空窗。這是**加法式**改動：
+        # 控制律一行未動，只是讓這個參數變成活的。
+        # 用途：滾動交棒需要底盤在**仍在移動**時被接手，而本節點抵達目標時的
+        # 減速是陡的（實測由 0.153 m/s 到 0 只走了 6 mm），沒有任何時刻停在
+        # 全身的速度框內還在動。把最後一段的 v_nominal 降進框內才做得到。
+        self.add_on_set_parameters_callback(self._on_set_params)
+
+        self.global_frame     = str(self.get_parameter('global_frame').value)
+        self.base_frame       = str(self.get_parameter('robot_base_frame').value)
+        self.pose_lpf_alpha   = float(self.get_parameter('pose_lpf_alpha').value)
+        self.pose_source      = str(self.get_parameter('pose_source').value)
+        # 留成屬性：失效訊息要講**真正訂閱的**話題，不是寫死的預設名
+        self.pose_odom_topic  = str(
+            self.get_parameter('pose_odom_topic').value)
+        self.pose_max_age     = float(self.get_parameter('pose_max_age').value)
+        self._odom_pose       = None      # (t, x, y, yaw) from the EKF topic
+        self._pose_fallbacks  = 0         # times 'odom' had to fall back to TF
+        self._tf_pose_last    = None      # TF pose, kept for the diagnostic
+        self._pose_filt       = None        # EMA state for the robot pose
+        self.goal_tol_xy      = float(self.get_parameter('goal_tolerance_xy').value)
+        self.plan_blend_s = float(self.get_parameter('plan_blend_s').value)
+        self.stuck_window_s = float(self.get_parameter('stuck_window_s').value)
+        self.stuck_progress_m = float(self.get_parameter('stuck_progress_m').value)
+        self.stuck_release_h = float(self.get_parameter('stuck_release_h').value)
+        self.stuck_max_hold_s = float(self.get_parameter('stuck_max_hold_s').value)
+        self._goal_hist = deque(maxlen=2000)   # (t, distance to goal)
+        self._holding_since = None
+        self._last_min_h = None
+        # "the CBF is doing something" -- the same threshold gain scheduling
+        # uses, so being blocked and being in the danger zone mean the same thing
+        self.cbf_danger_hold = float(
+            self.get_parameter('cbf_danger_thresh').value)
+        self._prev_path_xyth = None      # path being faded OUT
+        self._blend_t0 = None            # when the current fade started
+        self.tf_timeout_s     = float(self.get_parameter('tf_timeout').value)
+
+        Qxy  = float(self.get_parameter('Q_xy').value)
+        # No heading is ever referenced (see path_processor), so heading error
+        # is not a tracking objective and carries no weight. An explicit zero
+        # rather than a deletion: Q must stay the 3x3 the SE(2) cost needs.
+        self.heading_enable = bool(self.get_parameter('heading_enable').value)
+        self.heading_w      = float(self.get_parameter('heading_weight').value)
+        self.heading_look   = float(self.get_parameter('heading_lookahead_m').value)
+        self.heading_rate   = float(self.get_parameter('heading_rate_max').value)
+        self.heading_fixed  = float(self.get_parameter('heading_fixed').value)
+        self.heading_source = str(self.get_parameter('heading_source').value)
+        if self.heading_source not in ('chord', 'plan_yaw'):
+            raise ValueError(f'heading_source 必須是 chord 或 plan_yaw：{self.heading_source!r}')
+        self._yaw_ref       = None      # rate-limited heading reference
+        self._yaw_raw       = None      # pre-slew direction, diagnostics only
+        self._yaw_ref_t     = None
+        Qyaw = self.heading_w if self.heading_enable else 0.0
+        Qy   = float(self.get_parameter('Q_y').value)
+        if Qy <= 0.0:
+            Qy = Qxy                                   # default: isotropic xy
+        Qf_m = float(self.get_parameter('Qf_mult').value)
+
+        cfg = GMPCConfig(
+            N=N, dt=self.dt,
+            u_min=np.array([float(self.get_parameter('vx_min').value),
+                            float(self.get_parameter('vy_min').value),
+                            float(self.get_parameter('wz_min').value)]),
+            u_max=np.array([float(self.get_parameter('vx_max').value),
+                            float(self.get_parameter('vy_max').value),
+                            float(self.get_parameter('wz_max').value)]),
+            a_max=np.array([float(self.get_parameter('ax_max').value),
+                            float(self.get_parameter('ay_max').value),
+                            float(self.get_parameter('az_max').value)]),
+            Q =np.diag([Qxy, Qy, Qyaw]),
+            R =np.diag([float(self.get_parameter('R_vx').value),
+                        float(self.get_parameter('R_vy').value),
+                        float(self.get_parameter('R_w').value)]),
+            S =np.diag([float(self.get_parameter('S_vx').value),
+                        float(self.get_parameter('S_vy').value),
+                        float(self.get_parameter('S_w').value)]),
+            Qf=np.diag([Qxy * Qf_m, Qxy * Qf_m, Qyaw * Qf_m]),
+            cbf_alpha         =float(self.get_parameter('cbf_alpha').value),
+            cbf_safe_margin   =float(self.get_parameter('cbf_safe_margin').value),
+            cbf_slack_weight  =float(self.get_parameter('cbf_slack_weight').value),
+            cbf_eps0_scale    =float(self.get_parameter('cbf_eps0_scale').value),
+            cbf_danger_thresh =float(self.get_parameter('cbf_danger_thresh').value),
+            cbf_Q_min_scale   =float(self.get_parameter('cbf_Q_min_scale').value),
+            cbf_slack_max_scale=float(self.get_parameter('cbf_slack_max_scale').value),
+            cbf_static_slack_scale=float(
+                self.get_parameter('cbf_static_slack_scale').value),
+            st_weight=float(self.get_parameter('st_weight').value),
+            st_sigma0=float(self.get_parameter('st_sigma0').value),
+            st_growth=float(self.get_parameter('st_growth').value),
+            cbf_margin_growth=float(
+                self.get_parameter('cbf_margin_growth').value),
+            cbf_vel_margin_gain=float(
+                self.get_parameter('cbf_vel_margin_gain').value),
+            cbf_prune_range=float(
+                self.get_parameter('cbf_prune_range').value),
+            cbf_near_steps=int(self.get_parameter('cbf_near_steps').value),
+            cbf_far_stride=int(self.get_parameter('cbf_far_stride').value),
+            cbf_hard_k0=bool(self.get_parameter('cbf_hard_k0').value),
+            cbf_hard_k0_static=bool(
+                self.get_parameter('cbf_hard_k0_static').value),
+            wheel_coupling=bool(self.get_parameter('wheel_coupling').value),
+            wheel_radius=float(self.get_parameter('wheel_radius').value),
+            wheel_base_L=float(self.get_parameter('wheel_base_L').value),
+            wheel_w_max=float(self.get_parameter('wheel_w_max').value),
+            wheel_a_max=float(self.get_parameter('wheel_a_max').value),
+            wheel_fit_mode=str(
+                self.get_parameter('wheel_fit_mode').value),
+            prog_weight=float(self.get_parameter('prog_weight').value),
+        )
+        self.mpc = GMPC(cfg)
+        self.cfg = cfg        # derived margins read a_max from here
+        self.detour = DetourState(DetourConfig(
+            enable=bool(self.get_parameter('detour_enable').value),
+            trigger_range=float(self.get_parameter('detour_trigger_range').value),
+            trigger_cone_deg=float(self.get_parameter('detour_cone_deg').value),
+            max_offset=float(self.get_parameter('detour_max_offset').value),
+            offset_rate=float(self.get_parameter('detour_offset_rate').value),
+            vx_floor=float(self.get_parameter('detour_vx_floor').value)))
+        self.detour_clear_ref = bool(
+            self.get_parameter('detour_clear_ref').value)
+        self.detour_clear_pad = float(
+            self.get_parameter('detour_clear_pad').value)
+        self.detour_side_proj = bool(
+            self.get_parameter('detour_side_proj').value)
+        self._cfg = cfg
+        self.N   = cfg.N
+        self.cbf_enable = bool(self.get_parameter('cbf_enable').value)
+        self.static_goal_clear = float(self.get_parameter('static_goal_clear').value)
+        self.static_cbf_safe_margin = float(self.get_parameter('static_cbf_safe_margin').value)
+        self.margin_mode        = str(self.get_parameter('margin_mode').value)
+        self.margin_loc_err     = float(self.get_parameter('margin_loc_err').value)
+        self.margin_percep_lag  = float(self.get_parameter('margin_percep_lag').value)
+        self.margin_obs_pos_err = float(self.get_parameter('margin_obs_pos_err').value)
+        self.margin_floor       = float(self.get_parameter('margin_floor').value)
+        self.static_activate_range = float(self.get_parameter('static_activate_range').value)
+
+        # ---- State --------------------------------------------------------
+        self.latest_path  = None
+        self.xi_prev      = np.zeros(3)
+        self._arrived     = False
+        self._obstacles   = []           # dynamic: list of dict {x, y, radius, vx, vy}
+        self._static_obstacles = []      # static walls (v=0) for the CBF
+        self._stat_rx_t   = 0.0          # arrival time of the last static msg
+        self._stat_rx_n   = 0            # points in it
+        self._stat_rx_seq = 0            # messages received (DDS liveness)
+        self._cycle_id    = 0            # ties every diagnostic to one solve
+        self._dbg_solver_in = None       # 求解器輸入快照（純診斷）
+        self._dbg_prev_t  = None         # 上一輪控制步的節點時刻
+        self._obs_rx_t    = None         # arrival time of the last dynamic msg
+        self._requested_goal = None      # (t, x, y) straight off /goal_pose
+        self._last_state  = None         # suppress repeated state logs
+        self.obstacle_max_age = float(self.get_parameter('obstacle_max_age').value)
+        self.tf_max_age       = float(self.get_parameter('tf_max_age').value)
+        self.stale_policy     = str(self.get_parameter('stale_input_policy').value)
+        self._tf_age_last = float('nan')  # age of the transform actually used
+
+        # ---- TF + I/O -----------------------------------------------------
+        self.tf_buffer   = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        plan_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history    =QoSHistoryPolicy.KEEP_LAST,
+            depth      =1,
+        )
+        self.create_subscription(
+            Path,
+            str(self.get_parameter('plan_topic').value),
+            self._plan_cb, plan_qos,
+        )
+        # The goal as REQUESTED, which is not the goal the controller steers to:
+        # it stops on the last pose of /plan, and the planner is free to end its
+        # path short of the request. Subscribing here is diagnostic only -- it
+        # changes no control decision -- but it is the only way an arrival can
+        # name which of the two endpoints it was measured against.
+        self.create_subscription(PoseStamped, '/goal_pose', self._goal_cb, 10)
+        # Always subscribe, even when pose_source is 'tf': the diagnostic logs
+        # both poses every cycle, so a run can show how far the TF composition
+        # drifted without having to switch the controller over to find out.
+        self.create_subscription(
+            Odometry,
+            str(self.get_parameter('pose_odom_topic').value),
+            self._pose_odom_cb, 10,
+        )
+        self.cmd_pub = self.create_publisher(
+            Twist,
+            str(self.get_parameter('cmd_vel_topic').value),
+            10,
+        )
+
+        # Diagnostic publishers (for analyze.py + Foxglove visualisation)
+        self.solve_time_pub = self.create_publisher(
+            Float32, str(self.get_parameter('solve_time_topic').value), 10)
+        self.min_h_pub      = self.create_publisher(
+            Float32, str(self.get_parameter('min_h_topic').value), 10)
+        # One row per control step, published unconditionally (unlike min_h,
+        # which is skipped when cbf_active == 0 and therefore goes stale in a
+        # bag). Layout is documented at the publish site.
+        self.diag_pub       = self.create_publisher(
+            Float32MultiArray, '/gmpc/diag', 10)
+        # Heading diagnostics, one row per control step while heading_enable is
+        # on. x = pre-slew chord direction, y = rate-limited reference actually
+        # given to the QP, z = the robot's measured yaw. Separating x from y is
+        # the only way a bag can tell "the plan moved" from "the reference was
+        # allowed to follow it"; z against y gives the tracking error. Stamped,
+        # unlike /gmpc/diag.
+        self.heading_pub    = self.create_publisher(
+            Vector3Stamped, '/gmpc/heading', 10)
+        # 版本化的診斷。舊 /gmpc/diag 是位置索引陣列，22 欄/29 欄曾被混淆；
+        # 這裡改用自描述的 JSON 並帶 schema 版本，讀取端遇未知版本應直接失敗。
+        self.diag2_pub      = self.create_publisher(String, '/gmpc/diag_v2', 10)
+        # 計畫採用回報：回傳 header.stamp，發計畫端據此確認 GMPC 已換上這份計畫
+        self.plan_ack_pub   = self.create_publisher(String, '/gmpc/plan_ack', 10)
+        self.cbf_zone_pub   = self.create_publisher(
+            MarkerArray, str(self.get_parameter('cbf_zone_topic').value), 10)
+
+        # Obstacles: subscribe to a Float32MultiArray that the aggregator publishes.
+        # Layout: [x1, y1, r1, x2, y2, r2, ...] flat array, length = 3*N_obs.
+        if self.cbf_enable:
+            self.create_subscription(
+                Float32MultiArray,
+                str(self.get_parameter('obstacles_topic').value),
+                self._obstacles_cb, 10,
+            )
+            self.create_subscription(
+                Float32MultiArray,
+                str(self.get_parameter('static_obstacles_topic').value),
+                self._static_obstacles_cb, 10,
+            )
+
+        self.create_timer(self.dt, self._control_step)
+
+        self.get_logger().info(
+            f'GMPC controller up: N={cfg.N}, dt={self.dt:.3f}s, v_nom={self.v_nom:.2f} m/s, '
+            f'frame {self.global_frame}->{self.base_frame}, '
+            f'CBF={"ON" if self.cbf_enable else "OFF"}'
+            + (f' (α={cfg.cbf_alpha:.1f}, margin={cfg.cbf_safe_margin:.2f}m)'
+               if self.cbf_enable else '')
+        )
+
+    @staticmethod
+    def _wrap(a: float) -> float:
+        return math.atan2(math.sin(a), math.cos(a))
+
+    def _desired_yaw(self, path_xyth, robot_xyth, now_s):
+        """Heading reference for this cycle, or None to keep current behaviour.
+
+        Direction is the chord from the robot to a look-ahead point along the
+        path -- one atan2, so ±pi wrapping never enters and the path's own
+        jagged yaw is never differenced. The result is then slew-limited, which
+        lets a sustained turn through while damping wobble; the limit is on the
+        REFERENCE, not on wz, so the QP can still rotate as fast as it needs.
+
+        Deliberately NOT gated on speed: a robot standing still facing away
+        from a goal on its left must still be told to turn. It holds the last
+        reference only when there is no usable direction -- no path, or the
+        remaining path is shorter than a few centimetres -- and never demands a
+        terminal heading, because the task carries no goal orientation.
+        """
+        if not self.heading_enable:
+            return None
+        if not math.isnan(self.heading_fixed):
+            return float(self.heading_fixed)          # fixed-reference test mode
+        if path_xyth is None or len(path_xyth) < 2:
+            return self._yaw_ref                      # hold
+        pts = path_xyth[:, :2]
+        d = np.linalg.norm(pts - robot_xyth[:2], axis=1)
+        i0 = int(np.argmin(d))
+        seg = np.linalg.norm(np.diff(pts[i0:], axis=0), axis=1)
+        if seg.size == 0:
+            return self._yaw_ref
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        j = int(np.searchsorted(cum, self.heading_look))
+        j = min(j, len(cum) - 1)
+        tgt = pts[i0 + j]
+        chord = tgt - robot_xyth[:2]
+        if float(chord @ chord) < 1e-4:               # 1 cm: no usable direction
+            return self._yaw_ref
+        raw = math.atan2(float(chord[1]), float(chord[0]))
+        if self.heading_source == 'plan_yaw':                         # m8：改用前瞻點的計畫朝向（弦只用來判斷是否有可用路徑）
+            raw = float(path_xyth[i0 + j, 2])
+        self._yaw_raw = raw          # pre-slew, for diagnostics only
+        if self._yaw_ref is None or self._yaw_ref_t is None:
+            self._yaw_ref, self._yaw_ref_t = raw, now_s
+            return raw
+        dt_ref = max(now_s - self._yaw_ref_t, 1e-3)
+        step = self._wrap(raw - self._yaw_ref)
+        lim = self.heading_rate * dt_ref
+        self._yaw_ref = self._wrap(self._yaw_ref + max(-lim, min(lim, step)))
+        self._yaw_ref_t = now_s
+        return self._yaw_ref
+
+    def _blend_alpha(self):
+        """Fade weight in [0,1) for the new plan, or None when not fading.
+
+        1.0 means the fade is over, so it is reported as None and the previous
+        path is dropped -- that keeps the common case free of the second
+        reference build.
+        """
+        if (self.plan_blend_s <= 0.0 or self._prev_path_xyth is None
+                or self._blend_t0 is None):
+            return None
+        dt = (self.get_clock().now() - self._blend_t0).nanoseconds * 1e-9
+        if dt < 0.0 or dt >= self.plan_blend_s:
+            self._prev_path_xyth = None
+            self._blend_t0 = None
+            return None
+        return dt / self.plan_blend_s
+
+    def _hold_if_stuck(self, dist_to_goal) -> bool:
+        """Stop and wait when the route is blocked, rather than keep pushing.
+
+        Detection is deliberately about OUTCOME, not cause: if the distance to
+        the goal has not fallen over a whole window, the robot is not getting
+        anywhere, whatever the reason. It only counts as blocked when the CBF is
+        also active -- otherwise a robot that is simply slow, or circling a wide
+        detour, would be mistaken for a stuck one.
+
+        Holding releases as soon as min_h recovers, which for a patrolling
+        obstacle happens on its own, and is capped so a permanent blockage does
+        not become a permanent stop: after the cap the robot resumes and the
+        detector starts again from scratch.
+
+        Returns True if the caller should publish zero and skip this step.
+        """
+        if self.stuck_window_s <= 0.0:
+            return False
+        now = self.get_clock().now().nanoseconds * 1e-9
+        self._goal_hist.append((now, dist_to_goal))
+        while self._goal_hist and now - self._goal_hist[0][0] > self.stuck_window_s:
+            self._goal_hist.popleft()
+
+        h = self._last_min_h if self._last_min_h is not None else 9.9
+        if self._holding_since is not None:
+            held = now - self._holding_since
+            if h > self.stuck_release_h or held > self.stuck_max_hold_s:
+                self.get_logger().info(
+                    f'\033[1;32mresuming\033[0m after holding {held:.1f} s '
+                    f'(min_h={h:.2f})')
+                self._holding_since = None
+                self._goal_hist.clear()
+                return False
+            self._publish_zero()
+            return True
+
+        if (len(self._goal_hist) > 10
+                and now - self._goal_hist[0][0] >= self.stuck_window_s * 0.95):
+            progress = self._goal_hist[0][1] - dist_to_goal
+            if progress < self.stuck_progress_m and h < self.cbf_danger_hold:
+                self.get_logger().warn(
+                    f'\033[1;33mblocked\033[0m: {progress:+.2f} m of progress in '
+                    f'{self.stuck_window_s:.0f} s with min_h={h:.2f} -- holding')
+                self._holding_since = now
+                self._publish_zero()
+                return True
+        return False
+
+    def _on_set_params(self, params):
+        from rcl_interfaces.msg import SetParametersResult
+        for p in params:
+            if p.name == 'v_nominal':
+                v = float(p.value)
+                if not (v > 0.0):
+                    return SetParametersResult(
+                        successful=False, reason='v_nominal 必須為正')
+                old, self.v_nom = self.v_nom, v
+                self.get_logger().info(
+                    f'v_nominal {old:.4f} -> {v:.4f} m/s（執行期變更）')
+            elif p.name == 'reference_lead_m':
+                v = float(p.value)
+                if not (v >= 0.0):
+                    return SetParametersResult(
+                        successful=False, reason='reference_lead_m 不得為負')
+                old, self.ref_lead = self.ref_lead, v
+                self.get_logger().info(
+                    f'reference_lead_m {old:.4f} -> {v:.4f} m（執行期變更）')
+        return SetParametersResult(successful=True)
+
+    def _plan_cb(self, msg: Path):
+        # **換計畫就重設單調狀態** —— 舊路徑的弧長套到新路徑上沒有意義，
+        # 而且會把參考卡在一個不屬於新路徑的位置。
+        self._s_prev = None
+        if len(msg.poses) == 0:
+            self.get_logger().warn('Received empty plan')
+        if (self.plan_blend_s > 0.0 and self.latest_path is not None
+                and len(self.latest_path.poses) >= 2 and len(msg.poses) >= 2):
+            # Keep the outgoing path so the reference can cross-fade instead of
+            # teleporting. Restarting the fade on every plan is deliberate: a
+            # second jump during a fade should also be smoothed, not snapped to.
+            self._prev_path_xyth = path_msg_to_xyth(self.latest_path)
+            self._blend_t0 = self.get_clock().now()
+        self.latest_path = msg
+        if hasattr(self, 'plan_ack_pub'):
+            self.plan_ack_pub.publish(String(data=f'{msg.header.stamp.sec}.{msg.header.stamp.nanosec:09d}'))
+        # New plan means a new goal (or continuous replan) — re-arm the arrival
+        # detector so the next arrival also gets logged.
+        self._arrived = False
+
+    def _obstacles_cb(self, msg: Float32MultiArray):
+        """Flat [x, y, r, vx, vy, ...] (5 floats per obstacle) in global frame."""
+        # Float32MultiArray carries no header, so arrival time is the only clock
+        # this feed has; it is what the freshness gate in _control_step reads.
+        self._obs_rx_t = self.get_clock().now().nanoseconds * 1e-9
+        data = list(msg.data)
+        stride = 5
+        n = len(data) // stride
+        self._obstacles = [
+            {'x':      float(data[stride*i + 0]),
+             'y':      float(data[stride*i + 1]),
+             'radius': float(data[stride*i + 2]),
+             'vx':     float(data[stride*i + 3]),
+             'vy':     float(data[stride*i + 4])}
+            for i in range(n)
+        ]
+
+    def _pose_gap(self):
+        """How far the TF composition sits from the EKF's own pose. Zero when
+        the two legs are in step; on hardC/seed1 it ran to 0.83 m."""
+        tf_p, op = self._tf_pose_last, self._odom_pose
+        if tf_p is None or op is None:
+            return float('nan')
+        return float(math.hypot(tf_p[0] - op[1], tf_p[1] - op[2]))
+
+    def _pose_odom_cb(self, msg: Odometry):
+        """map -> base_footprint straight from the EKF (frame_id 'map',
+        child_frame_id 'base_footprint'), i.e. the same pair the TF lookup
+        composes, but as one message from one instant."""
+        p = msg.pose.pose.position
+        o = msg.pose.pose.orientation
+        yaw = math.atan2(2.0 * (o.w * o.z + o.x * o.y),
+                         1.0 - 2.0 * (o.y * o.y + o.z * o.z))
+        ts = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self._odom_pose = (ts, float(p.x), float(p.y), float(yaw))
+
+    def _static_obstacles_cb(self, msg: Float32MultiArray):
+        # Position 1 of the entry diagnostic: what actually crossed DDS, stamped
+        # on arrival. Float32MultiArray carries no header, so a bag can only
+        # align this topic with /gmpc/min_h by record time -- which is exactly
+        # the ambiguity the per-cycle diagnostic removes.
+        self._stat_rx_t = self.get_clock().now().nanoseconds * 1e-9
+        self._stat_rx_n = len(msg.data) // 5
+        self._stat_rx_seq += 1
+        """Nearest WALL points (v=0) from the tracker. Same wire format as the
+        dynamic obstacles; merged into the CBF set so the controller doesn't
+        dodge a moving obstacle straight into static geometry."""
+        data = list(msg.data)
+        stride = 5
+        n = len(data) // stride
+        self._static_obstacles = [
+            {'x':      float(data[stride*i + 0]),
+             'y':      float(data[stride*i + 1]),
+             'radius': float(data[stride*i + 2]),
+             'vx':     0.0,
+             'vy':     0.0}
+            for i in range(n)
+        ]
+
+    def _goal_cb(self, msg: PoseStamped):
+        self._requested_goal = (self.get_clock().now().nanoseconds * 1e-9,
+                                float(msg.pose.position.x),
+                                float(msg.pose.position.y))
+
+    def _publish_zero(self):
+        self.cmd_pub.publish(Twist())
+        self.xi_prev = np.zeros(3)
+
+    # Why a cycle produced no command. Published as diag field 22 so a bag can
+    # tell "arrived" from "no plan" from "the obstacle feed died" -- previously
+    # every one of these returned early and published nothing at all, so the
+    # diagnostic went silent in exactly the cycles that needed explaining.
+    STATE = {'running': 0.0, 'no_plan': 1.0, 'no_pose': 2.0, 'arrived': 3.0,
+             'holding_stuck': 4.0, 'stale_obstacles': 5.0, 'stale_static': 6.0}
+
+    def _halt(self, state: str, robot_xyth=None):
+        """Stop the chassis and say why, in the log and on /gmpc/diag."""
+        if state != self._last_state:
+            log = (self.get_logger().warn if state.startswith('stale')
+                   else self.get_logger().info)
+            log(f'gmpc state -> {state}')
+            self._last_state = state
+        self._publish_diag(state, robot_xyth=robot_xyth)
+        self._publish_zero()
+
+    def _publish_diag(self, state, robot_xyth=None, result=None, entry=None):
+        """One /gmpc/diag row per control cycle, whatever the cycle did.
+
+        Fields 0-21 keep the layout the existing readers index by; the state and
+        acceptance fields are APPENDED, so a reader written against the old
+        length still works (they gate on len(v) >= their own G_LEN).
+        Anything this cycle did not compute is NaN, never a stale carry-over.
+        """
+        self._cycle_id += 1
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+        n = float('nan')
+        v = [n] * 29
+        v[0] = float(self._cycle_id)
+        if robot_xyth is not None:
+            v[1], v[2] = float(robot_xyth[0]), float(robot_xyth[1])
+        v[3] = float(self._stat_rx_seq)
+        v[4] = float(self._stat_rx_n)
+        v[5] = float(len(self._static_obstacles))
+        v[15] = now_s - self._stat_rx_t if self._stat_rx_seq else n
+        v[19] = self._pose_gap()
+        v[20] = 1.0 if self.pose_source == 'odom' else 0.0
+        v[21] = float(self._pose_fallbacks)
+        v[22] = self.STATE.get(state, n)
+        v[25] = (now_s - self._obs_rx_t) if self._obs_rx_t is not None else n
+        v[26] = self._tf_age_last
+        if entry is not None:
+            (v[6], v[7], v[8], v[9], v[10]) = entry
+        if result is not None:
+            v[11] = result.min_h_static
+            v[12] = result.min_h_dynamic
+            v[13] = result.min_h
+            v[14] = float(result.cbf_active)
+            v[16] = result.eps0
+            v[17] = result.cbf_resid_noslack
+            v[18] = result.cbf_resid_slack
+            v[23] = {'as_is': 0.0, 'acc_clipped': 1.0,
+                     'wheel_scaled': 2.0, 'brake': 3.0}.get(
+                         getattr(result, 'accept_action', 'as_is'), n)
+            v[24] = float(getattr(result, 'wheel_w_cmd_max', n))
+        if self.latest_path is not None and len(self.latest_path.poses) and \
+                robot_xyth is not None:
+            e = self.latest_path.poses[-1].pose.position
+            v[27] = float(math.hypot(e.x - robot_xyth[0], e.y - robot_xyth[1]))
+        if self._requested_goal is not None and robot_xyth is not None:
+            v[28] = float(math.hypot(self._requested_goal[1] - robot_xyth[0],
+                                     self._requested_goal[2] - robot_xyth[1]))
+        d = Float32MultiArray()
+        d.data = [float(x) for x in v]
+        self.diag_pub.publish(d)
+        # --- 版本化診斷：把「命令識別／時間／約束評估對象／原 slack」配成一組 ---
+        import json as _json
+        rec = dict(schema='gmpc_diag/3', cmd_id=int(self._cycle_id), t=now_s,
+                   solver_in=self._dbg_solver_in,
+                   state=state, u=None, accept_action=None, accept_scale=None,
+                   wheel_w_cmd_max=None,
+                   cbf_resid_solved_noslack=None, cbf_resid_solved_slack=None,
+                   cbf_resid_returned_noslack=None, cbf_resid_returned_slack=None,
+                   cbf_evaluated_on='not_evaluated', eps0=None,
+                   cbf_active=None, min_h=None)
+        if result is not None:
+            rec.update(
+                u=[float(x) for x in np.asarray(result.u_opt).ravel()],
+                accept_action=getattr(result, 'accept_action', None),
+                accept_scale=float(getattr(result, 'accept_scale', float('nan'))),
+                wheel_w_cmd_max=float(getattr(result, 'wheel_w_cmd_max',
+                                              float('nan'))),
+                cbf_resid_solved_noslack=float(result.cbf_resid_noslack),
+                cbf_resid_solved_slack=float(result.cbf_resid_slack),
+                cbf_resid_returned_noslack=float(
+                    getattr(result, 'cbf_resid_post_noslack', float('nan'))),
+                cbf_resid_returned_slack=float(
+                    getattr(result, 'cbf_resid_post_slack', float('nan'))),
+                cbf_evaluated_on=getattr(result, 'cbf_resid_evaluated_on',
+                                         'not_evaluated'),
+                eps0=float(result.eps0), cbf_active=float(result.cbf_active),
+                min_h=float(result.min_h))
+        _m = String(); _m.data = _json.dumps(rec, ensure_ascii=False,
+                                             default=lambda o: None)
+        self.diag2_pub.publish(_m)
+
+    @staticmethod
+    def _tf_to_xyth(tf: TransformStamped) -> np.ndarray:
+        t = tf.transform.translation
+        r = tf.transform.rotation
+        return np.array([t.x, t.y, quaternion_to_yaw(r.x, r.y, r.z, r.w)])
+
+    def _tf_robot_pose(self, timeout_s=None):
+        """map -> base_footprint via TF composition. Kept as the fallback and,
+        whatever the active source, as the diagnostic reference.
+
+        `timeout_s` 可覆寫等待時間。**已經有新鮮 odom 位姿時要傳 0.0** ——
+        這個查詢在 TF 不存在時會把整個等待時間用滿：本機實測
+        timeout 0.1 s ⇒ 101.9 ms、timeout 0 ⇒ 0.021 ms，而控制週期量到的
+        中位數是 160 ms，也就是**六成以上耗在等一個不存在的 TF**。
+        零等待仍會在 TF 真的存在時取到值，所以診斷不會消失。
+        """
+        _to = self.tf_timeout_s if timeout_s is None else float(timeout_s)
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                self.global_frame, self.base_frame,
+                rclpy.time.Time(),
+                rclpy.duration.Duration(seconds=_to),
+            )
+        except (tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException) as e:
+            self.get_logger().warn(
+                f'TF {self.global_frame}->{self.base_frame} failed: {e}',
+                throttle_duration_sec=2.0)
+            self._tf_age_last = float('nan')
+            return None
+        # rclpy.time.Time() asks for "the latest available", which succeeds for
+        # as long as the buffer holds anything at all -- a localisation chain
+        # that died two minutes ago still returns a transform, and the lookup
+        # reports no error. Its own stamp is the only thing that says so.
+        # A stamp in the FUTURE is not freshness: it means the publisher's clock
+        # disagrees with ours, so take the magnitude, not the signed difference.
+        st = tf.header.stamp
+        age = (self.get_clock().now().nanoseconds * 1e-9
+               - (st.sec + st.nanosec * 1e-9))
+        self._tf_age_last = abs(age)
+        if self.tf_max_age > 0.0 and self._tf_age_last > self.tf_max_age:
+            self.get_logger().warn(
+                f'TF {self.global_frame}->{self.base_frame} is '
+                f'{age:+.2f} s off now (limit {self.tf_max_age:.2f} s)',
+                throttle_duration_sec=2.0)
+            if self.stale_policy == 'stop':
+                return None
+        return self._tf_to_xyth(tf)
+
+    def _lookup_robot_pose(self):
+        # **先看 odom，再決定 TF 要不要阻塞等。**
+        # 原本無條件先做阻塞式 TF 查詢，即使 pose_source=odom 且 odom 新鮮
+        # 也照等 —— TF 不存在時每輪白等一個完整 timeout。
+        pose = None
+        have_odom = False
+        if self.pose_source == 'odom':
+            op = self._odom_pose
+            now = self.get_clock().now().nanoseconds * 1e-9
+            if op is not None and (now - op[0]) <= self.pose_max_age:
+                pose = np.array([op[1], op[2], op[3]])
+                have_odom = True
+        # 診斷用的 TF 仍然每輪取，但有 odom 時用**零等待**：存在就拿得到，
+        # 不存在就立刻失敗，不佔週期。
+        tf_pose = self._tf_robot_pose(timeout_s=0.0 if have_odom else None)
+        self._tf_pose_last = tf_pose            # for the per-cycle diagnostic
+        if pose is None:
+            pose = tf_pose
+        if self.pose_source == 'odom' and not have_odom:
+            # 沒有新鮮的 odom 位姿：退回 TF，而不是拿過期的去導航。
+            op = self._odom_pose
+            now = self.get_clock().now().nanoseconds * 1e-9
+            self._pose_fallbacks += 1
+            # **訊息要講真正訂閱的話題**。原本寫死 /odometry/filtered，
+            # 但話題是參數給的；先前就因為這句把「沒設 use_sim_time」
+            # 誤判成「話題不對」。
+            self.get_logger().warn(
+                f'pose_source=odom 但 {self.pose_odom_topic} 沒有新鮮位姿'
+                f'（{"從未收到" if op is None else f"{now - op[0]:.2f}s 前"}）'
+                f'⇒ 改用 TF',
+                throttle_duration_sec=2.0)
+        if pose is None:
+            return None
+        a = self.pose_lpf_alpha
+        if a > 0.0:
+            if self._pose_filt is None:
+                self._pose_filt = pose.copy()
+            else:
+                f = self._pose_filt
+                f[0] = a * f[0] + (1.0 - a) * pose[0]
+                f[1] = a * f[1] + (1.0 - a) * pose[1]
+                # yaw via shortest-angle increment (avoid ±pi wrap artefacts)
+                dyaw = np.arctan2(np.sin(pose[2] - f[2]), np.cos(pose[2] - f[2]))
+                f[2] = f[2] + (1.0 - a) * dyaw
+            pose = self._pose_filt.copy()
+        return pose
+
+    # ----------------------------------------------------------------------
+    def _control_step(self):
+        # 0. Need a plan
+        if self.latest_path is None or len(self.latest_path.poses) < 2:
+            self._halt('no_plan')
+            return
+
+        # 1. Robot pose in global_frame
+        robot_xyth = self._lookup_robot_pose()
+        if robot_xyth is None:
+            self._halt('no_pose')
+            return
+
+        # 1b. Inputs must be FRESH, not merely once-received. A tracker that
+        # stops publishing leaves self._obstacles holding its last frame, and
+        # the CBF would keep constraining against obstacles that are no longer
+        # being observed while treating everything new as empty space.
+        if self.cbf_enable and self.obstacle_max_age > 0.0:
+            now_s = self.get_clock().now().nanoseconds * 1e-9
+            if self._obs_rx_t is not None:
+                age = now_s - self._obs_rx_t
+                if age > self.obstacle_max_age:
+                    self.get_logger().warn(
+                        f'/gmpc/obstacles stale by {age:.2f} s '
+                        f'(limit {self.obstacle_max_age:.2f} s)',
+                        throttle_duration_sec=2.0)
+                    if self.stale_policy == 'stop':
+                        self._halt('stale_obstacles', robot_xyth)
+                        return
+            if self._stat_rx_seq:
+                age = now_s - self._stat_rx_t
+                if age > self.obstacle_max_age:
+                    self.get_logger().warn(
+                        f'/gmpc/static_obstacles stale by {age:.2f} s '
+                        f'(limit {self.obstacle_max_age:.2f} s)',
+                        throttle_duration_sec=2.0)
+                    if self.stale_policy == 'stop':
+                        self._halt('stale_static', robot_xyth)
+                        return
+
+        # 2. Distance-to-goal check (just hold zero when there)
+        goal_xy = np.array([self.latest_path.poses[-1].pose.position.x,
+                            self.latest_path.poses[-1].pose.position.y])
+        dist_to_goal = float(np.linalg.norm(goal_xy - robot_xyth[:2]))
+        if self._hold_if_stuck(dist_to_goal):
+            self._publish_diag('holding_stuck', robot_xyth)
+            return
+        if dist_to_goal < self.goal_tol_xy:
+            if not self._arrived:
+                # Name BOTH endpoints. This controller stops on the last pose of
+                # /plan; the test harness scores against the goal it asked for;
+                # the relay closes its replan loop against the /goal_pose it
+                # received. Those are three different points, and a run that
+                # reports only "0.295 m from (8.10, 0.45)" cannot be checked
+                # against a request for (8.12, 0.48) after the fact.
+                rq = self._requested_goal
+                extra = ''
+                if rq is not None:
+                    d_rq = math.hypot(rq[1] - robot_xyth[0], rq[2] - robot_xyth[1])
+                    gap = math.hypot(rq[1] - goal_xy[0], rq[2] - goal_xy[1])
+                    extra = (f'; requested goal ({rq[1]:.2f}, {rq[2]:.2f}) is '
+                             f'{d_rq:.3f} m away, plan endpoint sits {gap:.3f} m '
+                             f'from it')
+                self.get_logger().info(
+                    f'\033[1;32mGoal reached\033[0m '
+                    f'(within {dist_to_goal:.3f} m of plan endpoint '
+                    f'({goal_xy[0]:.2f}, {goal_xy[1]:.2f}), '
+                    f'tol={self.goal_tol_xy:.2f} m, pose_source={self.pose_source})'
+                    f'{extra} -- holding zero twist'
+                )
+                self._arrived = True
+            self._halt('arrived', robot_xyth)
+            return
+
+        # 3. Build horizon reference from latest /plan
+        path_xyth = path_msg_to_xyth(self.latest_path)
+        # (reference yaw is rate-limited after blending; see step 3b below)
+        yaw_des = self._desired_yaw(path_xyth, robot_xyth,
+                                    self.get_clock().now().nanoseconds * 1e-9)
+        if self.heading_enable:
+            hm = Vector3Stamped()
+            hm.header.stamp = self.get_clock().now().to_msg()
+            hm.header.frame_id = 'map'
+            hm.vector.x = float('nan') if self._yaw_raw is None else float(self._yaw_raw)
+            hm.vector.y = float('nan') if yaw_des is None else float(yaw_des)
+            hm.vector.z = float(robot_xyth[2])
+            self.heading_pub.publish(hm)
+        # 連續投影 ＋ 單調進度（都預設關閉；開了才改變行為）
+        _s_ov = None
+        if self.ref_proj == 'segment':
+            _s_ov = project_arclength(
+                path_xyth, robot_xyth, continuous=True,
+                s_min=(self._s_prev if self.ref_mono else None))
+            self._s_prev = _s_ov
+        X_ref_win, xi_ref_win = build_reference_window(
+            path_xyth, robot_xyth,
+            N=self.N, dt=self.dt, v_nom=self.v_nom,
+            desired_yaw=yaw_des, lead_m=self.ref_lead,
+            s_start_override=_s_ov,
+        )
+        a = self._blend_alpha()
+        if a is not None:
+            X_old, xi_old = build_reference_window(
+                self._prev_path_xyth, robot_xyth,
+                N=self.N, dt=self.dt, v_nom=self.v_nom,
+                desired_yaw=yaw_des, lead_m=self.ref_lead,
+                )
+            X_ref_win, xi_ref_win = blend_reference(
+                X_old, xi_old, X_ref_win, xi_ref_win, a)
+
+        # 4. Solve
+        X_now  = from_xytheta(*robot_xyth)
+        # **診斷用：把求解器這一輪真正看到的輸入留一份。**
+        # 加法式，不進任何計算。實跑量到慢速區命令在 ±a_max·dt 之間反覆
+        # 擺動（p50 81 mm/s，v_nominal 卻是 0.03），而橫向誤差 p50 僅
+        # 8.6 mm、偏航幾乎不動 —— 離線純運動學閉環重現不出來。要分清楚
+        # 到底是參考視窗沒把速度壓下去，還是 e0 一直非零在推，只能看
+        # 求解器自己的輸入。
+        _t_now = self.get_clock().now().nanoseconds * 1e-9
+        try:
+            _xr0 = X_ref_win[0]
+            self._dbg_solver_in = {
+                'robot_xyth': [float(q) for q in robot_xyth],
+                'xref0_xy': [float(_xr0[0, 2]), float(_xr0[1, 2])],
+                'e0': [float(q) for q in geodesic_error(_xr0, X_now)],
+                'xi_ref0': [float(q) for q in xi_ref_win[0]],
+                'xi_ref_last': [float(q) for q in xi_ref_win[-1]],
+                'xi_prev': [float(q) for q in self.xi_prev],
+                'v_nom': float(self.v_nom), 'dt_cfg': float(self.dt),
+                'ref_lead_m': float(self.ref_lead),
+                'ref_proj': self.ref_proj,
+                'ref_s': (None if self._s_prev is None
+                          else float(self._s_prev)),
+                'dt_meas': (None if self._dbg_prev_t is None
+                            else float(_t_now - self._dbg_prev_t)),
+                't': float(_t_now),
+            }
+            self._dbg_prev_t = float(_t_now)
+        except Exception as _e:                       # 不無聲吞掉
+            self._dbg_solver_in = {'error': repr(_e)}
+            self._dbg_prev_t = float(_t_now)
+        # Derived keep-outs, sized from what each obstacle actually has to
+        # absorb rather than from a tuned constant. v is the last commanded
+        # body speed, so the margin collapses as the robot slows -- which is
+        # what lets it settle on a goal that sits close to a wall.
+        v_rob = float(np.hypot(self.xi_prev[0], self.xi_prev[1]))
+        if self.margin_mode == 'derived':
+            a_brake = max(1e-3, min(self.cfg.a_max[0], self.cfg.a_max[1]))
+            m_base = (self.margin_loc_err
+                      + v_rob * v_rob / (2.0 * a_brake)
+                      + v_rob * self.dt)
+            m_static = max(self.margin_floor, m_base)
+        else:
+            m_base = m_static = None
+        if self.cbf_enable:
+            obstacles = list(self._obstacles)                     # dynamic
+            if m_base is not None:
+                for o in obstacles:
+                    v_obs = float(np.hypot(o.get('vx', 0.0), o.get('vy', 0.0)))
+                    o['margin'] = max(
+                        self.margin_floor,
+                        m_base + v_obs * self.margin_percep_lag
+                        + self.margin_obs_pos_err)
+            # Engage the static-CBF (wall backstop) only while a dynamic obstacle
+            # is actually nearby; otherwise let the smooth plan carry the robot
+            # through gaps without two-sided wall constraints zig-zagging it.
+            rx, ry = robot_xyth[0], robot_xyth[1]
+            dyn_near = (self.static_activate_range <= 0.0) or any(
+                np.hypot(o['x'] - rx, o['y'] - ry) < self.static_activate_range
+                for o in self._obstacles)
+            if dyn_near:
+                for s in self._static_obstacles:                  # walls (v=0),
+                    if np.hypot(s['x'] - goal_xy[0],              # but not the
+                                s['y'] - goal_xy[1]) > self.static_goal_clear:
+                        # smaller keep-out for walls (see static_cbf_safe_margin).
+                        # 'static' tags these as geometry to route AROUND rather
+                        # than movers to commit a detour against -- detour.py
+                        # must never lock a side against a wall point.
+                        obstacles.append({
+                            **s, 'static': True,
+                            'margin': (m_static if m_static is not None
+                                       else self.static_cbf_safe_margin)})
+        else:
+            obstacles = None
+        # Committed detour: pick a side once, then bend the horizon reference
+        # around the obstacle so the tracking cost pulls the robot AROUND it
+        # instead of resisting the CBF's sideways push. See detour.py.
+        side, off = self.detour.update(robot_xyth, obstacles or [])
+        if abs(off) > 1e-6:
+            X_ref_win = apply_offset(X_ref_win, off, self.detour.cfg.max_offset)
+            if self.detour_clear_ref:
+                X_ref_win = clear_reference(
+                    X_ref_win, obstacles or [], self.dt,
+                    default_margin=self._cfg.cbf_safe_margin,
+                    pad=self.detour_clear_pad, side=side,
+                    sideways=self.detour_side_proj)
+        # While detouring, floor the forward speed so "stop and wait" leaves the
+        # solution space; restore the nominal limit as soon as we are free.
+        floor = self.detour.cfg.vx_floor if (
+            side != FREE and self.detour.cfg.enable) else None
+        u_min_saved = self._cfg.u_min
+        if floor is not None and floor > self._cfg.u_min[0]:
+            self._cfg.u_min = np.array([floor, u_min_saved[1], u_min_saved[2]])
+        # Position 2 of the entry diagnostic: the set as it stands at the call,
+        # measured against the SAME robot_xyth the solver linearises about.
+        # A count alone is not enough -- four points can be present and still
+        # exclude the door post -- so the nearest static point and its own
+        # barrier value are recorded too.
+        rx_d, ry_d = robot_xyth[0], robot_xyth[1]
+        n_dyn_in = len(self._obstacles)
+        n_stat_held = len(self._static_obstacles)
+        stat_in = [o for o in (obstacles or []) if o.get('static', False)]
+        near_d = near_r = near_m = float('nan')
+        min_h_stat_entry = float('inf')
+        for o in stat_in:
+            d = math.hypot(o['x'] - rx_d, o['y'] - ry_d)
+            r_eff = float(o['radius']) + float(o.get('margin', 0.0))
+            h_i = d * d - r_eff * r_eff
+            if h_i < min_h_stat_entry:
+                min_h_stat_entry, near_d, near_r, near_m = h_i, d, o['radius'], o.get('margin', float('nan'))
+        try:
+            result = self.mpc.solve(X_now, X_ref_win, xi_ref_win, self.xi_prev,
+                                    obstacles=obstacles)
+        finally:
+            self._cfg.u_min = u_min_saved
+
+        # 5. Publish cmd_vel (saturate one more time as a belt-and-braces safety)
+        u = result.u_opt
+        twist = Twist()
+        twist.linear.x  = float(u[0])
+        twist.linear.y  = float(u[1])
+        twist.angular.z = float(u[2])
+        self.cmd_pub.publish(twist)
+        self.xi_prev = u
+
+        # 6. Diagnostic topics (for analyze.py + Foxglove)
+        # Per-cycle entry diagnostic. Every field below comes from THIS call, so
+        # "the point was published" and "the point reached the barrier" can be
+        # told apart without cross-topic time alignment.
+        #   0  cycle_id            8  nearest static radius
+        #   1  robot x             9  nearest static margin
+        #   2  robot y            10  min h over static AT ENTRY
+        #   3  static msgs rx     11  min h over static IN BUILDER
+        #   4  points in last msg 12  min h over dynamic IN BUILDER
+        #   5  static held        13  result.min_h (as published)
+        #   6  static appended    14  cbf_active rows
+        #   7  nearest static d   15  age of last static msg [s]
+        #  16  eps_0 actually used
+        #  17  min CBF row residual WITHOUT slack   (A z - l)
+        #  18  min CBF row residual WITH slack      (A z + eps - l)
+        #  19  |TF pose - EKF pose|  [m]     20  pose source (0 tf, 1 odom)
+        #  21  fallbacks so far
+        #  22  control state (see GMPCNode.STATE)  23  acceptance action
+        #  24  worst |ω| the sent command implies  25  dynamic obstacle age [s]
+        #  26  age of the TF actually used [s]     27  dist to /plan endpoint
+        #  28  dist to the goal as REQUESTED on /goal_pose
+        # 19 is logged whichever source is active, so one run shows both how far
+        # the TF composition drifted and whether it mattered.
+        # 17 < 0 while 18 >= 0 and 16 > 0 is the proof that the command broke
+        # the barrier condition and only the slack kept the QP feasible.
+        # 27 against 28 is what separates "the robot arrived" from "the planner
+        # stopped somewhere else"; fields 22-28 are appended, so readers written
+        # against the 22-field layout keep working unchanged.
+        self._publish_diag('running', robot_xyth=robot_xyth, result=result,
+                           entry=(len(stat_in), near_d, near_r, near_m,
+                                  min_h_stat_entry))
+        m = Float32(); m.data = float(result.solve_time_s * 1e3)
+        self.solve_time_pub.publish(m)
+        if self.cbf_enable and result.cbf_active > 0:
+            mh = Float32(); mh.data = float(result.min_h)
+            self.min_h_pub.publish(mh)
+            # kept for the stuck detector: how close the barrier came this step
+            self._last_min_h = float(result.min_h)
+            self._publish_cbf_zones()
+
+        # Say what was actually sent. This used to log 'emergency-braking' for
+        # every status outside {solved, solved inaccurate} -- including
+        # 'maximum iterations reached', which is accepted as usable and whose
+        # NON-ZERO command had already been published two statements earlier.
+        # A diagnostic that contradicts the command is worse than none.
+        self._last_state = 'running'
+        act = getattr(result, 'accept_action', 'as_is')
+        if act == 'brake':
+            self.get_logger().warn(
+                f'OSQP status={result.status}, emergency-braking (u=0)',
+                throttle_duration_sec=1.0)
+        elif act == 'wheel_scaled':
+            self.get_logger().warn(
+                f'OSQP status={result.status}: command scaled by '
+                f'{result.accept_scale:.3f} to fit the wheel limits '
+                f'(|ω|max now {result.wheel_w_cmd_max:.2f} rad/s), u={np.round(u, 4)}',
+                throttle_duration_sec=1.0)
+        elif result.status not in ('solved', 'solved inaccurate'):
+            self.get_logger().warn(
+                f'OSQP status={result.status}: sub-optimal point accepted and '
+                f'sent as u={np.round(u, 4)} (NOT braking)',
+                throttle_duration_sec=1.0)
+
+    def _publish_cbf_zones(self):
+        """Visualise CBF safety zones as MarkerArray for Foxglove."""
+        ma = MarkerArray()
+        for i, obs in enumerate(self._obstacles):
+            mk = Marker()
+            mk.header.frame_id = self.global_frame
+            mk.header.stamp    = self.get_clock().now().to_msg()
+            mk.ns       = 'cbf_zone'
+            mk.id       = i
+            mk.type     = Marker.CYLINDER
+            mk.action   = Marker.ADD
+            r = obs['radius'] + self.mpc.cfg.cbf_safe_margin
+            mk.scale.x = 2.0 * r
+            mk.scale.y = 2.0 * r
+            mk.scale.z = 0.02
+            mk.pose.position.x = obs['x']
+            mk.pose.position.y = obs['y']
+            mk.pose.position.z = 0.01
+            mk.pose.orientation.w = 1.0
+            mk.color.r = 1.0
+            mk.color.g = 0.5
+            mk.color.b = 0.0
+            mk.color.a = 0.25            # translucent orange ring
+            ma.markers.append(mk)
+        self.cbf_zone_pub.publish(ma)
+
+
+def main():
+    rclpy.init()
+    node = GMPCNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

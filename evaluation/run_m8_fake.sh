@@ -28,7 +28,7 @@ trap cleanup EXIT
 trap 'say "收到 TERM"; exit 143' TERM
 trap 'say "收到 INT"; exit 130' INT
 N_OTHER=$(pgrep -f "ROS_DOMAIN_ID=$ROS_DOMAIN_ID" 2>/dev/null | wc -l)
-sha256sum evaluation/m8_fakeworld_node.py "evaluation/$NAV_NODE" evaluation/m8_conflict.py evaluation/m8_planner.yaml evaluation/run_m8_fake.sh src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node.py \
+sha256sum src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node_m8.py evaluation/m8_fakeworld_node.py "evaluation/$NAV_NODE" evaluation/m8_conflict.py evaluation/m8_planner.yaml evaluation/run_m8_fake.sh src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node.py \
   src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py "$OBS" "$CHK" > "$DIR/versions.sha256"
 LEAD="${LEAD:-2.0}"
 T_START=$(python3 -c "print($T0-$LEAD)")
@@ -52,8 +52,8 @@ sys.argv=['gmpc_node','--ros-args','-p','use_sim_time:=true','-p','pose_source:=
  '-p','cmd_vel_topic:=/cmd_vel_nav','-p','obstacles_topic:=/gmpc/obstacles','-p','cbf_enable:=true','-p','cbf_alpha:=0.5','-p','cbf_safe_margin:=0.69',
  '-p','static_cbf_safe_margin:=0.47','-p','cbf_prune_range:=1.2','-p','cbf_near_steps:=6','-p','cbf_far_stride:=2','-p','horizon:=20','-p','control_frequency:=20.0',
  '-p','Q_xy:=15.0','-p','Qf_mult:=5.0','-p','R_vx:=2.0','-p','R_vy:=2.0','-p','R_w:=1.0','-p','S_vx:=15.0','-p','S_vy:=15.0','-p','S_w:=8.0',
- '-p','heading_enable:=true','-p','wheel_fit_mode:=project','-p','vx_min:=-0.35','-p','ax_max:=1.5','-p','ay_max:=1.0','-p','az_max:=2.0','-p','plan_blend_s:=0.0']
-from ammr_wholebody_mpc.gmpc_node import main; main()"
+ '-p','heading_enable:=true','-p','wheel_fit_mode:=project','-p','vx_min:=-0.35','-p','ax_max:=1.5','-p','ay_max:=1.0','-p','az_max:=2.0','-p','plan_blend_s:=0.0']+([ '-p','heading_source:=${HEADING_SOURCE:-chord}'] if '${GMPC_MOD:-gmpc_node}'=='gmpc_node_m8' else [])
+from ammr_wholebody_mpc.${GMPC_MOD:-gmpc_node} import main; main()"
 sleep 4
 spawn smoother ros2 run nav2_velocity_smoother velocity_smoother --ros-args -p use_sim_time:=true -p max_velocity:="[0.35, 0.25, 0.80]" -p min_velocity:="[-0.35, -0.25, -0.80]" -p max_accel:="[1.5, 1.0, 2.0]" -p max_decel:="[-1.5, -1.0, -2.0]" -p feedback:=OPEN_LOOP -p odom_topic:=/odom -r cmd_vel:=cmd_vel_nav -r cmd_vel_smoothed:=cmd_vel_pre_mux
 spawn smlife ros2 run nav2_lifecycle_manager lifecycle_manager --ros-args -r __node:=lifecycle_manager_smoother -p use_sim_time:=true -p autostart:=true -p node_names:="['velocity_smoother']"
