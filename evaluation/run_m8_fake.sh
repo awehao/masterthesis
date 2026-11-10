@@ -64,10 +64,13 @@ for n_ in smlife planlife; do
   [ "$ok_" = 1 ] || { say "**$n_ 未回報 active** ⇒ 中止，不空跑"; exit 86; }
 done
 spawn shield ros2 run ammr_wholebody_mpc scan_safety_shield --ros-args -p use_sim_time:=true -p enable:=true -p scan_topic:=/scan -p cmd_in_topic:=/cmd_vel_pre_shield -p cmd_out_topic:=/cmd_vel -p robot_radius:=0.39 -p self_return_radius:=0.30 -p alpha:=2.0 -p a_brake:=6.25 -p tau:=0.15 -p vx_max:=0.2775 -p vy_max:=0.2775 -p wz_max:=1.1327
-spawn bag ros2 bag record -s mcap -o "$DIR/bag" /shield/diag /m8/collision /gmpc/heading /scan /scan_filtered /gmpc/obstacles /gmpc/static_obstacles /gmpc/tracks_debug /gmpc/diag_v2 /gmpc/plan_ack /plan /odom /cmd_vel_nav /cmd_vel_pre_mux /cmd_vel_pre_shield /cmd_vel /m8nav/state /global_costmap/costmap /handover/state
+spawn bag ros2 bag record -s mcap -o "$DIR/bag" /shield/diag /m8/collision /gmpc/heading /scan /scan_filtered /gmpc/obstacles /gmpc/static_obstacles /gmpc/tracks_debug /gmpc/diag_v2 /gmpc/plan_ack /plan /odom /cmd_vel_nav /cmd_vel_pre_mux /cmd_vel_pre_shield /cmd_vel /m8nav/state /gmpc/hold /global_costmap/costmap /handover/state
 say "  導航鏈已起；建開始旗標：行人世界時間自 $T_START（＝T0−$LEAD）起走，隨即起導航節點"
 touch "$GO"
 spawn nav python3 -u "evaluation/$NAV_NODE" --goal-file "$CHK" --out "$DIR/m8nav.json" --nav-timeout-s 120
+if [ -n "${KILL_TRACKER_AFTER:-}" ]; then                                   # 功能核對：保持期間停掉追蹤器，核 GMPC 是否照樣失效關閉
+  ( sleep "$KILL_TRACKER_AFTER"; for i in "${!NAMES[@]}"; do [ "${NAMES[$i]}" = tracker ] && kill -TERM -- "-${PIDS[$i]}" 2>/dev/null; done; echo "[$(date +%H:%M:%S)] 已停追蹤器（KILL_TRACKER_AFTER=$KILL_TRACKER_AFTER）" >> "$DIR/run.log" ) &
+fi
 say "  等導航結果（牆鐘最多 600 s）"
 r=""
 for i in $(seq 600); do

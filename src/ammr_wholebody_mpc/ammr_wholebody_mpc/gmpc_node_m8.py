@@ -2,6 +2,11 @@
 #   heading_source：'chord'（預設＝原行為逐位元相同：期望航向＝到路徑前方 heading_lookahead_m 點的弦方向）或 'plan_yaw'
 #   （期望航向＝同一前瞻點的計畫姿態朝向；讓上層用計畫明確指定航向，例如離開線維持車頭純側移）。斜率限制、權重、CBF、輪級後處理全部不變。
 #   封存的 gmpc_node.py／gmpc.py 不動。
+#   r2（2026-11-10；Codex 20261110_200117 A）：加主動保持模式。訂 /gmpc/hold（std_msgs/String JSON {"active": bool, "id": ...}）：
+#   active＝true 時以「進入保持當下的位姿」建一條 1 cm 的退化路徑當參考（零名目前進），**不走 no_plan／arrived／holding_stuck 的直接歸零捷徑**，
+#   照常用同一 GMPC（含 CBF、輪級後處理、接受規則）求解；速度框不鎖零，障礙約束需要退讓時仍有控制空間。位姿與障礙資料有效性檢查
+#   （stale_obstacles／stale_static）放在保持之前，照樣失效關閉。保持期間不做計畫混合；離開保持時不清零 xi_prev（承接上一命令）。
+#   另修 _halt 的紀錄等級：封存版以同一呼叫點依狀態切換 info／warn，rclpy 會在首次轉入 stale_* 時拋 ValueError 使節點崩潰（m8hold_b 發現）。
 """ROS2 standalone GMPC controller node.
 
 Subscribes  : /plan  (nav_msgs/Path)            in `global_frame`
@@ -468,6 +473,7 @@ class GMPCNode(Node):
 
         # ---- State --------------------------------------------------------
         self.latest_path  = None
+        self._hold_active, self._hold_pose, self._hold_path, self._hold_id, self._hold_log = False, None, None, None, []
         self.xi_prev      = np.zeros(3)
         self._arrived     = False
         self._obstacles   = []           # dynamic: list of dict {x, y, radius, vx, vy}
@@ -506,6 +512,7 @@ class GMPCNode(Node):
         # changes no control decision -- but it is the only way an arrival can
         # name which of the two endpoints it was measured against.
         self.create_subscription(PoseStamped, '/goal_pose', self._goal_cb, 10)
+        self.create_subscription(String, '/gmpc/hold', self._on_hold, 10)              # m8 r2：主動保持
         # Always subscribe, even when pose_source is 'tf': the diagnostic logs
         # both poses every cycle, so a run can show how far the TF composition
         # drifted without having to switch the controller over to find out.
@@ -803,12 +810,42 @@ class GMPCNode(Node):
     STATE = {'running': 0.0, 'no_plan': 1.0, 'no_pose': 2.0, 'arrived': 3.0,
              'holding_stuck': 4.0, 'stale_obstacles': 5.0, 'stale_static': 6.0}
 
+    def _on_hold(self, msg):
+        import json as _j
+        try:
+            d = _j.loads(msg.data)
+            act = bool(d.get('active'))
+        except (ValueError, AttributeError):
+            self.get_logger().warn(f'/gmpc/hold 無法解析：{msg.data[:80]!r}')
+            return
+        if act != self._hold_active:
+            self._hold_active, self._hold_pose, self._hold_path = act, None, None
+            self._hold_id = d.get('id')
+            self._hold_log.append((self.get_clock().now().nanoseconds * 1e-9, act, d.get('id')))
+            self.get_logger().info(f'主動保持 → {act}（id {d.get("id")}）')
+
+    def _hold_path_msg(self, robot_xyth):
+        from nav_msgs.msg import Path as _P
+        from geometry_msgs.msg import PoseStamped as _PS
+        p = _P()
+        p.header.frame_id = self.global_frame
+        p.header.stamp = self.get_clock().now().to_msg()
+        x, y, th = (float(v) for v in robot_xyth)
+        for k in (0.0, 0.01):
+            ps = _PS()
+            ps.header = p.header
+            ps.pose.position.x, ps.pose.position.y = x + k * math.cos(th), y + k * math.sin(th)
+            ps.pose.orientation.z, ps.pose.orientation.w = math.sin(th / 2), math.cos(th / 2)
+            p.poses.append(ps)
+        return p
+
     def _halt(self, state: str, robot_xyth=None):
         """Stop the chassis and say why, in the log and on /gmpc/diag."""
         if state != self._last_state:
-            log = (self.get_logger().warn if state.startswith('stale')
-                   else self.get_logger().info)
-            log(f'gmpc state -> {state}')
+            if state.startswith('stale'):                     # m8 r2：warn／info 分開呼叫點（rclpy 不允許同一呼叫點改等級；封存版此處在首次 stale 時拋 ValueError 使節點崩潰）
+                self.get_logger().warn(f'gmpc state -> {state}')
+            else:
+                self.get_logger().info(f'gmpc state -> {state}')
             self._last_state = state
         self._publish_diag(state, robot_xyth=robot_xyth)
         self._publish_zero()
@@ -993,7 +1030,7 @@ class GMPCNode(Node):
     # ----------------------------------------------------------------------
     def _control_step(self):
         # 0. Need a plan
-        if self.latest_path is None or len(self.latest_path.poses) < 2:
+        if not self._hold_active and (self.latest_path is None or len(self.latest_path.poses) < 2):
             self._halt('no_plan')
             return
 
@@ -1030,14 +1067,21 @@ class GMPCNode(Node):
                         self._halt('stale_static', robot_xyth)
                         return
 
+        # 1c. m8 主動保持：以進入保持時的位姿為參考，跳過 no_plan／arrived／holding_stuck 捷徑（上面的有效性檢查已做）
+        path_msg = self.latest_path
+        if self._hold_active:
+            if self._hold_pose is None:
+                self._hold_pose = np.asarray(robot_xyth, float).copy()
+                self._hold_path = self._hold_path_msg(self._hold_pose)
+            path_msg = self._hold_path
         # 2. Distance-to-goal check (just hold zero when there)
-        goal_xy = np.array([self.latest_path.poses[-1].pose.position.x,
-                            self.latest_path.poses[-1].pose.position.y])
+        goal_xy = np.array([path_msg.poses[-1].pose.position.x,
+                            path_msg.poses[-1].pose.position.y])
         dist_to_goal = float(np.linalg.norm(goal_xy - robot_xyth[:2]))
-        if self._hold_if_stuck(dist_to_goal):
+        if not self._hold_active and self._hold_if_stuck(dist_to_goal):
             self._publish_diag('holding_stuck', robot_xyth)
             return
-        if dist_to_goal < self.goal_tol_xy:
+        if not self._hold_active and dist_to_goal < self.goal_tol_xy:
             if not self._arrived:
                 # Name BOTH endpoints. This controller stops on the last pose of
                 # /plan; the test harness scores against the goal it asked for;
@@ -1065,7 +1109,7 @@ class GMPCNode(Node):
             return
 
         # 3. Build horizon reference from latest /plan
-        path_xyth = path_msg_to_xyth(self.latest_path)
+        path_xyth = path_msg_to_xyth(path_msg)
         # (reference yaw is rate-limited after blending; see step 3b below)
         yaw_des = self._desired_yaw(path_xyth, robot_xyth,
                                     self.get_clock().now().nanoseconds * 1e-9)
@@ -1090,7 +1134,7 @@ class GMPCNode(Node):
             desired_yaw=yaw_des, lead_m=self.ref_lead,
             s_start_override=_s_ov,
         )
-        a = self._blend_alpha()
+        a = None if self._hold_active else self._blend_alpha()
         if a is not None:
             X_old, xi_old = build_reference_window(
                 self._prev_path_xyth, robot_xyth,
