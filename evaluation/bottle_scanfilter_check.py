@@ -79,8 +79,8 @@ def run_cfg(run, cfg, logdir):
 
     def stamp(t):
         from builtin_interfaces.msg import Time
-        s = int(math.floor(t))
-        return Time(sec=s, nanosec=int(round((t - s) * 1e9)) % 1000000000)
+        ns = int(round(float(t) * 1e9))                              # 先四捨五入到奈秒再拆（避免 2.9999999999 ⇒ 2.0 的進位錯誤）
+        return Time(sec=ns // 1000000000, nanosec=ns % 1000000000)
 
     def tfm(parent, child, t, x, y_, z, yaw):
         m = TransformStamped()
