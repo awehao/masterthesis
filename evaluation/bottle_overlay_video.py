@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """瓶子動態移動夾取：俯視「掃描／追蹤疊圖」2D 影片（由同一趟紀錄重建，不是 Isaac 渲染；Codex 20261110_233102）。
 控制端實際收到的（實線／實心）：原始掃描點（scan_log，灰）、CBF 收到的動態障礙＝追蹤器表面點（s1_cbf obs_json 非靜態項，橘）與速度箭頭、
-  2 s 等速預測（橘虛線）、規劃導引路徑（plan.json，灰）、目標專屬車道（報告 tlane，綠虛線；舊版無）、視覺目標（segtarget 凍結／鎖定，綠十字）。
+  2 s 等速預測（橘虛線）、計畫版本（只畫已生效者並標生效時刻：起跑前導引 plan.json 灰→量測後接近路徑 報告 planned_path 綠→持瓶運送路徑 place.carry_path 紫；
+  被取代的淡化；缺紀錄明示，不在生成前畫未來路徑）、視覺目標（segtarget 凍結／鎖定，綠十字）。
 評估用真值（另一圖例，空心／點線）：移動物真值圓（s1_steps dyn_x/y，紅空心）、瓶真值（紫空心）。不以真值代替追蹤結果；缺資料標「缺」。
 機器人：實測底盤軌跡（藍）、底盤圓盤 0.30 與包絡 0.39（藍虛線）、朝向。側欄：RUN_ID、版本、模擬時間、相位、實測車速、CBF 動態項數、最近事件、結果。
 座標：世界（區域＝世界 − O，O 由 plan.json start_world − start）。每格 0.1 s 模擬時間、10 fps＝1 倍速。
@@ -61,6 +62,16 @@ def main():
     rep = json.load(open(os.path.join(D, 's1_report.json')))
     ev = sorted(rep.get('events', []), key=lambda e: e['t'])
     tl = (rep.get('tlane') or {}).get('accepted')
+    # 計畫版本（Howard 11/11：只畫已生效的計畫，標生效時刻；被取代的淡化；不在生成前畫未來路徑）
+    ppr = rep.get('planned_path') or {}
+    P1, t_tl = None, None
+    if tl:
+        t_tl = float(tl.get('t', min((e['t'] for e in ev if e['what'] == 'tlane_accept'), default=float('nan'))))
+        if ppr.get('pts') and abs(float(ppr.get('x_lane', 1e9)) - float(tl['x_entry'])) < 1e-3:
+            P1 = np.array(ppr['pts'], float) + O                              # 控制器最終路徑＝量測後重接的接近路徑（報告 planned_path）
+    cpl = ((rep.get('place') or {}).get('carry_path'))
+    Pc = None if not cpl else np.array(cpl, float) + O
+    t_cn = min((e['t'] for e in ev if e['what'] == 'place_phase' and e.get('to') == 'CARRY_NAV'), default=None)
     tgt_ev = [e for e in ev if e['what'] in ('segtarget_freeze', 'segtarget_lock')]
     ver = []
     for ln in open(os.path.join(D, 'run.log'), encoding='utf-8', errors='replace'):
@@ -94,10 +105,17 @@ def main():
     for tf in np.arange(t0, t1 + 1e-9, 0.1):
         ax.clear()
         ax.imshow(np.where(img < 128, 0.35, 1.0), cmap='gray', vmin=0, vmax=1, extent=ext, origin='upper', alpha=0.6)
-        ax.plot(J[:, 0], J[:, 1], '-', color=C_PLAN, lw=1.2, label='導引路徑（起跑前規劃）')
-        if tl:
+        replaced = tl is not None and t_tl is not None and tf >= t_tl
+        ax.plot(J[:, 0], J[:, 1], '--' if replaced else '-', color=C_PLAN, lw=1.0 if replaced else 1.2, alpha=0.45 if replaced else 1.0,
+                label=f'起跑前導引（{t_tl:.2f} s 起被取代）' if replaced else '導引路徑（起跑前規劃，生效中）')
+        if replaced:
+            if P1 is not None:
+                carry_on = Pc is not None and t_cn is not None and tf >= t_cn
+                ax.plot(P1[:, 0], P1[:, 1], '-', color=C_LANE, lw=1.6, alpha=0.45 if carry_on else 1.0, label=f'量測後接近路徑（{t_tl:.2f} s 生效）')
             lx = np.array([tl['x_entry'], tl['x_entry'] + 1.5]) + O[0]
-            ax.plot(lx, [tl['y_lane'] + O[1]] * 2, '--', color=C_LANE, lw=1.6, label='目標專屬車道（量測後生成）')
+            ax.plot(lx, [tl['y_lane'] + O[1]] * 2, '--', color=C_LANE, lw=1.4, label='車道（入口後直線）' if P1 is not None else '車道（重接路徑缺紀錄，只畫車道）')
+        if Pc is not None and t_cn is not None and tf >= t_cn:
+            ax.plot(Pc[:, 0], Pc[:, 1], '-', color='#7b3fb8', lw=1.6, label=f'持瓶運送路徑（{t_cn:.2f} s 生效）')
         k = int(np.searchsorted(t, tf, side='right')) - 1
         k = max(k, 0)
         ax.plot(c['base_x'][:k + 1], c['base_y'][:k + 1], '-', color=C_ROB, lw=1.4, label='實走底盤軌跡')
@@ -146,7 +164,9 @@ def main():
         res = rep.get('result') or {}
         txt = [f'RUN_ID：{a.run}', f'影片：2D 追蹤疊圖（紀錄重建，非 Isaac 畫面）', f'模擬時間 {tf:6.2f} s（1 倍速）', f'相位：{ph}',
                f'實測車速 {vb[k]:.3f} m/s', f'CBF 動態項數：{"缺" if n_dyn is None else n_dyn}', f'原始掃描：{scan_txt}',
-               '目標專屬車道：' + ('無（舊版）' if not tl else f"入口 x {tl['x_entry']:.3f}、y {tl['y_lane']:.3f}（區域）"), '', '最近事件：']
+               '目標專屬車道：' + ('無（舊版）' if not tl else f"入口 x {tl['x_entry']:.3f}、y {tl['y_lane']:.3f}（區域）"),
+               '計畫版本：起跑前導引' + ('' if not tl else f'→ {t_tl:.2f} s 量測後接近路徑' + ('' if P1 is not None else '（缺紀錄）'))
+               + ('' if Pc is None or t_cn is None else f'→ {t_cn:.2f} s 持瓶運送路徑'), '', '最近事件：']
         txt += [f"  {e['t']:6.2f} {e['what']}" for e in recent]
         txt += ['', '結果：' + ', '.join(f'{kk}={vv}' for kk, vv in res.items()) if res else '結果：缺']
         side.text(0.0, 1.0, '\n'.join(txt), va='top', ha='left', fontsize=9, family=fam, wrap=True)
