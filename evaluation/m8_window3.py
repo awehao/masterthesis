@@ -9,6 +9,8 @@
 2 停止不一律視為較保守：STOP_BLOCKED／原地停時，評估若找到可接受的 EXIT／COMMIT 就立即採用；EXIT 只在失效時才可能退回 STOP。
 3 失效資料（航跡過期）照 WindowLayer2 立即 HOLD_STALE，不受持續規則延後；持續驗證每拍都用最新航跡。
 回 CRUISE 仍需 T_CLEAR 1 s 連續無衝突（沿用）。
+r6b（Codex 20261110_220329）：離開的「到位」半徑改由呼叫端傳入 GMPC 實際的到達容差（exit_reached；不寫死）。到位只代表離開線執行完，
+  之後以實測位置交回 WindowLayer2 重新評估（仍在衝突區 ⇒ 新 EXIT／COMMIT／STOP；已清出 ⇒ 經 T_CLEAR 回 CRUISE），不等待底層不會抵達的精確點。
 """
 import math
 
@@ -22,9 +24,11 @@ T_DELAY_LB, V_LB = W2.T_DELAY_LB, W2.V_LB
 
 
 class WindowLayer3(W2.WindowLayer2):
-    def __init__(self, blocked=None):
+    def __init__(self, blocked=None, exit_reached=EXIT_REACHED):
         super().__init__(blocked)
         self.kept = dict(EXIT=0, COMMIT=0)
+        self.exit_reached = float(exit_reached)
+        self.exit_done_goal = None
 
     def _conflict_free(self, P, t_lb, t_ub, M, margin):
         for x, k in M:
@@ -68,7 +72,10 @@ class WindowLayer3(W2.WindowLayer2):
         if self.mode in ('EXIT', 'COMMIT'):
             self.hist.update(t, tracks)
             M = [(x, self.hist.kind(t, x)) for x in tracks if x.get('confirmed')]
-            if self.mode == 'EXIT' and self.hold is not None and np.linalg.norm(rp - np.array(self.hold['goal'])) > EXIT_REACHED:
+            if self.mode == 'EXIT' and self.hold is not None and np.linalg.norm(rp - np.array(self.hold['goal'])) <= self.exit_reached and self.exit_done_goal != tuple(self.hold['goal']):
+                self.exit_done_goal = tuple(self.hold['goal'])                 # 這個目標已執行到位（新目標會重新記）
+                self.log.append(dict(t=round(float(t), 3), mode='EXIT', event='exit_executed', d=round(float(np.linalg.norm(rp - np.array(self.hold['goal']))), 3)))
+            if self.mode == 'EXIT' and self.hold is not None and np.linalg.norm(rp - np.array(self.hold['goal'])) > self.exit_reached:
                 ok, why = self._exit_continue(rp, np.array(self.hold['goal']), M)
                 if ok:
                     self.kept['EXIT'] += 1
