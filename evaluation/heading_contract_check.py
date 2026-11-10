@@ -40,15 +40,16 @@ def seq(path, hd, v_max, sig0, t_max=40.0, v0=0.0):
 
 
 def contract(rows):
-    e_ff, wd = 0.0, []
+    e_v, e_w, wd = 0.0, 0.0, []
     for (t0, s0, v0, p0, x0), (t1, s1, v1, p1, x1) in zip(rows[:-1], rows[1:]):
         X0, X1 = from_xytheta(*p0), from_xytheta(*p1)
         tw = log_(np.linalg.inv(X0) @ X1) / DT
         ff = 0.5 * (x0 + x1)
-        e_ff = max(e_ff, float(np.linalg.norm(tw - ff)))
+        e_v = max(e_v, float(np.linalg.norm(tw[:2] - ff[:2])))
+        e_w = max(e_w, float(abs(tw[2] - ff[2])))
         wd.append(abs(x1[2] - x0[2]) / DT)
     wd = np.array(wd) if wd else np.zeros(1)
-    return dict(ff_err_max=round(e_ff, 4), wdot_max=round(float(wd.max()), 3), wdot_p99=round(float(np.percentile(wd, 99)), 3),
+    return dict(ff_err_v_mps=round(e_v, 4), ff_err_w_radps=round(e_w, 4), diff_dt_s=DT, wdot_max=round(float(wd.max()), 3), wdot_p99=round(float(np.percentile(wd, 99)), 3),
                 wdot_ok=bool(wd.max() <= HD.ALPHA_MAX + 1e-6), n=len(rows))
 
 

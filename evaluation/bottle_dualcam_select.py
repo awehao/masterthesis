@@ -4,7 +4,10 @@
   v1 底盤相機：高 0.31 m、在桌面下方 ⇒ 支撐面不可見；任務 2–4 s（距離 3–4 m）起 xy 有效（中心誤差中位數 0.6 mm、最大 2.1 mm）。
      ⇒ 形成「接近導引候選」guide（只有 xy）：可提早決定目標專屬車道、左右側與手腕觀看點；不能單獨給抓取高度。
   w1 手腕相機：抬高後支撐面可見 ⇒ 形成 known_type 抓取候選 grasp（xy＋支撐高度；瓶高、抓持帶為瓶型先驗）；收攏時也可能只有 xy。
-每個來源各自一個 SourceTracker（沿用 bottle_seg3d_candidates 的規則：連續 ≥ K_MIN 列、跨幀 std、MAX_AGE、窗長；xy 候選只要求 xy_valid）。
+每個來源各自一個 SourceTracker（沿用 bottle_seg3d_candidates 的規則：連續 ≥ K_MIN 列、跨幀 std、MAX_AGE、窗長 2.0 s——控制版參數；
+  離線影格重放因影格稀疏另用 3.2 s，只限重放、不帶入控制版；xy 候選只要求 xy_valid；歷史列數有上限）。
+導引候選不是可閉爪目標：沒有有效支撐高度不能補資產桌高；交叉核對只對其他「新鮮、就緒、同物件」觀測，另一台不可見／過期不算不一致。
+首版適用範圍：單一目標（第二物件測試只證明混入資料被拒，不代表有多物件關聯）。
 DualSelect.evaluate(t_now)：
   1 各來源候選（帶 camera_id、擷取時刻 t_first／t_last、年齡＝t_now − t_last（擷取時刻，不因換來源刷新）、列數、std、版本號）。
   2 同物件核對：兩來源 xy 都 ready ⇒ |Δxy| ≤ TOL_SAME 一致；> TOL_OTHER 視為不同物件（只保留與目前採用同物件者；尚未採用 ⇒ 兩者都不採用並記 ambiguous）；
@@ -19,6 +22,7 @@ import numpy as np
 import bottle_seg3d_candidates as CT
 
 TOL_SAME, TOL_OTHER, T_INCONS = 0.010, 0.10, 1.0
+MAX_ROWS = 200                                                          # 每來源保留列數上限
 
 
 def _xyok(r):
@@ -41,6 +45,9 @@ class SourceTracker:
             self.n_rej['order'] += 1
             return False
         self.rows.append(dict(r, camera_id=self.cam))
+        if len(self.rows) > MAX_ROWS:                                       # 有界歷史（Codex 053311：筆電長時間不累積）；窗外舊列不影響評估
+            cut = self.rows[-1]['stamp'] - 2.0 * self.window_s
+            self.rows = [x for x in self.rows[-MAX_ROWS:] if x['stamp'] >= cut]
         return True
 
     def evaluate(self, t_now):
