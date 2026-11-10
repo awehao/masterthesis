@@ -69,6 +69,8 @@ def main():
         t_tl = float(tl.get('t', min((e['t'] for e in ev if e['what'] == 'tlane_accept'), default=float('nan'))))
         if ppr.get('pts') and abs(float(ppr.get('x_lane', 1e9)) - float(tl['x_entry'])) < 1e-3:
             P1 = np.array(ppr['pts'], float) + O                              # 控制器最終路徑＝量測後重接的接近路徑（報告 planned_path）
+    glog = (rep.get('guide_link') or {}).get('log') or []                 # 雙相機導引轉接紀錄（dynsr43 起；舊趟缺）
+    otrig = (rep.get('obs') or {}).get('trigger')
     cpl = ((rep.get('place') or {}).get('carry_path'))
     Pc = None if not cpl else np.array(cpl, float) + O
     t_cn = min((e['t'] for e in ev if e['what'] == 'place_phase' and e.get('to') == 'CARRY_NAV'), default=None)
@@ -173,6 +175,8 @@ def main():
                f'實測車速 {vb[k]:.3f} m/s', f'車頭 {math.degrees(byaw):+.1f}°／路徑方向 {math.degrees(yaw_path):+.1f}°／差 {d_head:+.1f}°',
                f'CBF 動態項數：{"缺" if n_dyn is None else n_dyn}', f'原始掃描：{scan_txt}',
                '目標專屬車道：' + ('無（舊版）' if not tl else f"入口 x {tl['x_entry']:.3f}、y {tl['y_lane']:.3f}（區域）"),
+               ('導引來源：缺紀錄（舊版）' if not glog else (lambda g_: '導引來源：' + ('無' if g_ is None else f"{g_['cam']}（{g_['state']}，年齡 {g_['age_s']} s）"))(next((g for g in reversed(glog) if g['t'] <= tf), None))),
+               ('觀察觸發：缺紀錄（舊版）' if (otrig is None and not glog) else ('觀察觸發：未觸發' if otrig is None or tf < otrig['t'] else f"觀察觸發：{otrig['t']:.2f} s（{otrig['why']}、q1 {otrig['q1']:+.2f}）")),
                '計畫版本：起跑前導引' + ('' if not tl else f'→ {t_tl:.2f} s 量測後接近路徑' + ('' if P1 is not None else '（缺紀錄）'))
                + ('' if Pc is None or t_cn is None else f'→ {t_cn:.2f} s 持瓶運送路徑'), '', '最近事件：']
         txt += [f"  {e['t']:6.2f} {e['what']}" for e in recent]
