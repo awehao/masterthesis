@@ -76,7 +76,8 @@ class M8Nav(Node):
         self.create_subscription(String, '/m8/collision', self._collision, lat)
         self.tracks, self.tracks_t = [], None
         self.cf = CF.ConflictLayer(blocked=self._blocked_static)
-        self.cf_mode, self.collision = 'CRUISE', None
+        self.cf_mode, self.collision, self.cf_rev = 'CRUISE', None, None
+        self.vworld = (0.0, 0.0)
         self.pose = self.t = None
         self._vp, self.vmeas = None, None
         self.cin, self.cin_t = (0.0, 0.0, 0.0), None
@@ -117,6 +118,7 @@ class M8Nav(Node):
         elif cur[0] - self._vp[0] >= 0.1:
             dt = cur[0] - self._vp[0]
             self.vmeas = (math.hypot(cur[1] - self._vp[1], cur[2] - self._vp[2]) / dt, abs(wrap(cur[3] - self._vp[3])) / dt)
+            self.vworld = ((cur[1] - self._vp[1]) / dt, (cur[2] - self._vp[2]) / dt)
             self._vp = cur
 
     def _cin(self, m):
@@ -146,7 +148,7 @@ class M8Nav(Node):
 
     def _blocked_static(self, p):
         g = self.pr.grid
-        if g is None:
+        if g is None or self.t is None or self.t - g.stamp > NP.COSTMAP_MAX_AGE:      # 代價圖缺失／過期 ⇒ 擋住（失效關閉）
             return True
         return bool(NP.blocked(g.cost(np.atleast_2d(p)))[0])
 
@@ -165,7 +167,7 @@ class M8Nav(Node):
 
     def _apply_conflict(self, res):
         mode = res['mode']
-        if mode == self.cf_mode:
+        if mode == self.cf_mode and not res.get('changed'):
             return
         h = res.get('hold') or {}
         rec = dict(t=self.t, mode=mode, frm=self.cf_mode, pose=[round(v, 4) for v in self.pose], hold=h, n_tracks=len(self.tracks), tracks_age=None if self.tracks_t is None else round(self.t - self.tracks_t, 3))
@@ -186,9 +188,9 @@ class M8Nav(Node):
             Q = np.c_[np.linspace(x, g[0], n), np.linspace(y, g[1], n)]
             self._publish_path(Q, [th] * len(Q))
             rec['plan'] = dict(kind='exit_line', n=len(Q), end=[round(float(v), 3) for v in g])
-        elif mode == 'STOP_BLOCKED':
+        elif mode in ('STOP_BLOCKED', 'HOLD_STALE'):
             self.plan_pub.publish(Path(header=self._hdr()))
-            rec['plan'] = dict(kind='empty_stop_blocked')
+            rec['plan'] = dict(kind='empty_stop_' + mode.lower(), why=res.get('why') or res.get('reason'), note='既有保護停止；停止不保證行人不撞上來')
         elif mode == 'CRUISE':
             self._request('resume')
             rec['plan'] = dict(kind='replan_requested')
@@ -325,9 +327,10 @@ class M8Nav(Node):
             if self.pr.grid is not None and self.t - self.pr.grid.stamp > NP.COSTMAP_MAX_AGE:
                 return self._finish('costmap_stale', age=round(self.t - self.pr.grid.stamp, 3))
             vm = self.vmeas[0] if self.vmeas else 0.0
-            if self.P is not None and self.cf_mode in ('CRUISE', 'WAIT', 'EXIT', 'STOP_BLOCKED'):
+            if self.P is not None and self.cf_mode in ('CRUISE', 'WAIT', 'EXIT', 'STOP_BLOCKED', 'HOLD_STALE'):
                 self._proj()                                                     # 各模式都更新投影索引（WAIT／EXIT 時機器人仍在動）
-                res = self.cf.update(self.t, self.pose, self.P[self.k_proj:], self.tracks, vm)
+                age = None if self.tracks_t is None else self.t - self.tracks_t
+                res = self.cf.update(self.t, self.pose, self.vworld, self.P[self.k_proj:], self.tracks, age)
                 self._apply_conflict(res)
             if self.cf_mode != 'CRUISE':
                 b = None
@@ -349,7 +352,7 @@ class M8Nav(Node):
                 self.t_block0 = None
             if dist <= a.align_r and self.cf_mode == 'CRUISE':
                 self.t_align = self.t
-                self.u_align = np.zeros(3)
+                self.u_align = np.array(self.out_last, float)               # r2：從上一筆輸出接續（r1 歸零會造成命令跳變）
                 self._go('ALIGN', dist=round(dist, 4), yaw_err_deg=round(math.degrees(eyaw), 2), vmeas=self.vmeas)
         if self.seg == 'ALIGN':
             if dist <= a.tol_pos and abs(eyaw) <= math.radians(a.tol_yaw_deg):

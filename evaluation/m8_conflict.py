@@ -25,6 +25,7 @@ R_BODY, R_BASE, MARGIN, SIG0, SIG_V = 0.30, 0.39, 0.15, 0.05, 0.05
 V_NOM, V_EXIT, A_BRAKE, T_DELAY = 0.30, 0.25, 0.5, 0.35
 TRACK_MAX_AGE = 0.5
 EXIT_EXTRA, LAT_TIE = 0.20, 0.25
+EXIT_REACHED = 0.15                                      # 離開目標視為到達的距離（之後才允許降級）
 RES = 0.05                                               # 加密查代價的間距（＝地圖解析度）
 DTAU = 0.1
 
@@ -127,6 +128,14 @@ class ConflictLayer:
         seg = np.r_[np.linalg.norm(path[0] - rp), np.linalg.norm(np.diff(path, axis=0), axis=1)]
         s = np.cumsum(seg)
         tau_path = T_DELAY + s / V_NOM
+        if self.mode == 'EXIT' and self.hold is not None and np.linalg.norm(rp - np.array(self.hold['goal'])) > EXIT_REACHED:   # 防抖：離開中、目標仍有效且未到 ⇒ 維持
+            g = np.array(self.hold['goal'])
+            line = densify(rp, g)
+            tau = T_DELAY + np.linalg.norm(line - rp, axis=1) / V_EXIT
+            if self._static_ok(line) and not any(in_band(g, mm)[0] for mm in M) and \
+                    not any(traj_hits(line, tau, mm) is not None for mm in M if [mm['x'], mm['y']] != self.hold['mover'][:2]):
+                self.t_noconf = None
+                return dict(mode='EXIT', hold=self.hold, n_movers=len(M), rev=self.rev, changed=False)
         inside = [m for m in M if in_band(p_stop, m)[0]]
         conf = []
         for m in M:
@@ -210,7 +219,7 @@ class ConflictLayer:
             self.hold, self.side = opt, opt['side']
             self._set(t, 'EXIT', changed=changed, **opt)
             return dict(mode='EXIT', hold=self.hold, n_movers=len(M), rev=self.rev, changed=changed)
-        changed = self.hold is None or self.hold.get('stop') != opt['stop']
+        changed = self.hold is None or self.hold.get('kind') != opt['kind'] or (opt['kind'] == 'wait' and self.hold.get('stop') != opt['stop'])   # 原地停（stop_now）不因煞停位置微動算改變
         self.hold = opt
         self._set(t, 'WAIT', changed=changed, **opt)
         return dict(mode='WAIT', hold=self.hold, n_movers=len(M), rev=self.rev, changed=changed)
