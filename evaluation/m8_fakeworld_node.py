@@ -31,6 +31,7 @@ from rclpy.node import Node  # noqa: E402
 from rclpy.qos import qos_profile_sensor_data  # noqa: E402
 from rosgraph_msgs.msg import Clock  # noqa: E402
 from sensor_msgs.msg import JointState, LaserScan  # noqa: E402
+from std_msgs.msg import String  # noqa: E402
 from tf2_ros import TransformBroadcaster  # noqa: E402
 
 DT, SCAN_DT = 0.01, 0.1
@@ -92,16 +93,26 @@ class FakeWorld(Node):
         self.v = np.zeros(3)
         self.cmd = np.zeros(3)
         self.t = float(a.t0)                                # ROS 時鐘
-        self.tw, self.t_go = float(a.t0), (None if a.go_file else float(a.t0))   # 行人世界時間；開始時刻
+        self.tw, self.t_go = float(a.t0), (None if (a.go_file or a.go_on_nav) else float(a.t0))   # 行人世界時間；開始時刻
         self.clock_pub = self.create_publisher(Clock, '/clock', 10)
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.scan_pub = self.create_publisher(LaserScan, '/scan_raw', 10)            # 同 Isaac 執行端：/scan_raw → scan_relay → /scan
         self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
         self.tf = TransformBroadcaster(self)
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 10)
+        self.create_subscription(String, '/m8nav/state', self._nav_state, 10)
         self.next_scan = self.t
         self.log = []
         self.ang = SCAN_MIN + np.arange(SCAN_N) * (SCAN_MAX - SCAN_MIN) / (SCAN_N - 1)
+
+    def _nav_state(self, m):
+        if self.a.go_on_nav and self.t_go is None:
+            try:
+                if json.loads(m.data).get('seg') == 'CRUISE':
+                    self.t_go = self.t                          # 導航進入巡航的那一刻＝行人世界時間 --t0（固定起步，不受 ROS 啟動耗時影響）
+                    self.get_logger().info(f'go（導航 CRUISE）：ROS 時鐘 {self.t:.2f}、世界時間 {self.tw:.2f}')
+            except ValueError:
+                pass
 
     def _cmd(self, m):
         self.cmd = np.array([m.linear.x, m.linear.y, m.angular.z])
@@ -114,7 +125,7 @@ class FakeWorld(Node):
         return s
 
     def step(self):
-        if self.t_go is None and os.path.exists(self.a.go_file):
+        if self.t_go is None and self.a.go_file and os.path.exists(self.a.go_file):
             self.t_go = self.t
             self.get_logger().info(f'go：ROS 時鐘 {self.t:.2f}、世界時間 {self.tw:.2f}')
         if self.t_go is None:
@@ -182,6 +193,7 @@ def main():
     ap.add_argument('--t-end', type=float, default=1e9, help='世界時間上限')
     ap.add_argument('--go-file', default='')
     ap.add_argument('--no-walkers', action='store_true', help='不放行人（執行契約核對用）')
+    ap.add_argument('--go-on-nav', action='store_true', help='導航節點進入 CRUISE 時行人世界時間才從 --t0 起走')
     a, _ = ap.parse_known_args()
     rclpy.init()
     w = FakeWorld(a)

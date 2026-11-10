@@ -30,11 +30,11 @@ trap 'say "收到 INT"; exit 130' INT
 N_OTHER=$(pgrep -f "ROS_DOMAIN_ID=$ROS_DOMAIN_ID" 2>/dev/null | wc -l)
 sha256sum src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node_m8.py evaluation/m8_fakeworld_node.py "evaluation/$NAV_NODE" evaluation/m8_conflict.py evaluation/m8_planner.yaml evaluation/run_m8_fake.sh src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc_node.py \
   src/ammr_wholebody_mpc/ammr_wholebody_mpc/gmpc.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_obstacle_tracker.py src/ammr_wholebody_mpc/ammr_wholebody_mpc/scan_safety_shield.py "$OBS" "$CHK" > "$DIR/versions.sha256"
-LEAD="${LEAD:-2.0}"
+LEAD="${LEAD:-2.0}"; [ -n "${GO_ON_NAV:-}" ] && LEAD=0
 T_START=$(python3 -c "print($T0-$LEAD)")
 GO="$DIR/go.flag"
 say "=== 假世界短程閉迴路：$NAV_NODE；起點 $START；世界時鐘 T0 $T0；RTF $RTF；RUN_ID=$RUN_ID domain=$ROS_DOMAIN_ID"
-spawn world python3 -u evaluation/m8_fakeworld_node.py --start="$START" --t0 "$T_START" --rtf "$RTF" --t-end "$T_END" --obstacles "$OBS" --out "$DIR" --go-file "$GO" ${NO_WALKERS:+--no-walkers}
+spawn world python3 -u evaluation/m8_fakeworld_node.py --start="$START" --t0 "$T_START" --rtf "$RTF" --t-end "$T_END" --obstacles "$OBS" --out "$DIR" $([ -n "${GO_ON_NAV:-}" ] && echo --go-on-nav || echo --go-file "$GO") ${NO_WALKERS:+--no-walkers}
 sleep 2
 say "[導航] map_server／scan_relay／tracker／gmpc（封存定版參數）／平滑器／護盾／planner_server"
 spawn rsp ros2 run robot_state_publisher robot_state_publisher "$URDF" --ros-args -p use_sim_time:=true
