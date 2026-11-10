@@ -2,7 +2,8 @@
 """【dynsr39】（2026-11-10；Codex 20261110_233102 第 2 項）：isaac_bottle_w1dynsr34.py 的版本化複本，只改：
 - 控制器換 bottle_w1_tlane_ctrl（carrygov 子類）：第一個合格量測後才生成目標專屬入口／車道並核對承接（bottle_tlane）。
 - 注入 lane_planner：用最新代價圖核對（時間＝代價圖 stamp − T0）、側向管 Y_TUBE；通過時同步把 PathMonitor 與 MonitorProgress 換成新路徑（σ 平移 Δσ0）。
-- 登錄 bottle_dyn_case_motm 的案例（檔案存在時；世界座標，控制器只經掃描→追蹤器）。其餘同 dynsr34。
+- 登錄 bottle_dyn_case_motm 的案例（檔案存在時；世界座標，控制器只經掃描→追蹤器）。
+- 環境變數 BOTTLE_RTF_CAP（>0 時）：每個 world.step 後若模擬時間超前上限×牆鐘就睡（筆電散熱；未設＝不節流）。其餘同 dynsr34。
 以下為 dynsr34 說明。
 瓶子 W1・R-B1＋迎面錯身移動物（isaac_bottle_w1dynsr33.py 的版本化複本，2026-11-02；Codex 20261102_200625）：
 控制器同 dynsr33（bottle_w1_carrygov_ctrl，基線凍結）。只多把 bottle_dyn_case_region.cases()（experiments/20261102_rb1_dyn_case.json，世界座標）登錄到
@@ -293,6 +294,23 @@ def main():
     dt = float(PH['dt'])
     os.makedirs(a.out, exist_ok=True)
     world = World(stage_units_in_meters=1.0, physics_dt=dt, rendering_dt=dt)
+    _rtf_cap = float(os.environ.get('BOTTLE_RTF_CAP', '0') or 0)                # dynsr39：筆電散熱節流（模擬時間 ≤ 上限 × 牆鐘；0＝不節流，同 dynsr34）
+    if _rtf_cap > 0:
+        _ws_step, _pace = world.step, dict(w0=None, s0=None, n_sleep=0, slept=0.0)
+
+        def _paced_step(*a_, **k_):
+            r_ = _ws_step(*a_, **k_)
+            now_, st_ = time.perf_counter(), float(world.current_time)
+            if _pace['w0'] is None:
+                _pace.update(w0=now_, s0=st_)
+            ahead_ = (st_ - _pace['s0']) / _rtf_cap - (now_ - _pace['w0'])
+            if ahead_ > 0:
+                time.sleep(ahead_)
+                _pace['n_sleep'] += 1
+                _pace['slept'] += ahead_
+            return r_
+        world.step = _paced_step
+        print(f'[s1] dynsr39 即時倍率上限 {_rtf_cap}（筆電散熱節流；控制以模擬時間為準）', flush=True)
     stage = world.stage
     GroundPlane(prim_path='/World/ground', name='ground', z_position=0.0)
     from pxr import Gf, PhysxSchema, UsdGeom, UsdLux, UsdPhysics
