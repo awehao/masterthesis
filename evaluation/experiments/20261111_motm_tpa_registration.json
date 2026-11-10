@@ -1,0 +1,37 @@
+{
+ "name": "motm_dyn_single_bottle_tpa_r1",
+ "registered": "2026-11-11（Codex 20261111_013508 第 3、4 項：TPA 整段接近離線 24/24、R1b 右側離線 12/12 後；物理前登錄）",
+ "seed": 202611110001,
+ "rule": "numpy default_rng(seed)：dx～U[−0.08,0.08]、dy～U[−0.025,0.04]（設計域）；只交執行端（場景）與評估，不寫進控制器設定",
+ "bottle_dx": -0.0232,
+ "bottle_dy": -0.0119,
+ "table1_z": 0.58,
+ "region_offset": [
+  0.6,
+  0.8
+ ],
+ "map_args": "--table2 2.4,-1.0",
+ "executor": "evaluation/isaac_bottle_w1dynsr41.py",
+ "controller": "bottle_w1_tpa_ctrl（r1a 子類：計畫承接即從命令生效預測狀態接整段關節軌跡到 x_pre 時本趟量測的 T_pre；不經名目 q_ready、不在預抓構型零速停住）",
+ "tracker": "evaluation/bottle_tracker_stamped_kfcm_clr.py（/scan_filtered＋/scan_clear）",
+ "tracker_override": "min_net_speed=0.10,min_track_speed=0.12,release_track_speed=0.10",
+ "cases": {
+  "nominal": "--dyn-case none（無移動物）",
+  "A": "--dyn-case motm_A_cross：沿用 experiments/20261111_motm_dyn_case.json 的既定排程（不重生成；與 bottle_motm_A_1 相同的移動物時刻與路徑）"
+ },
+ "same_across_cases": "瓶位、控制版本、夾持設定、速度相同；只差移動物條件",
+ "deliverables": "每趟同 RUN_ID：Isaac 實錄重播（跟拍＋手腕＋全景）＋2D 追蹤疊圖（bottle_overlay_video.py），1 倍速",
+ "note": "n=1 有資訊的案例，不是成功率；失敗不換案例補成功、不掃參數；只驗左側（右側物理不在本次範圍）",
+ "planner_yaml": "evaluation/bottle_n2_planner_sf.yaml",
+ "bottle_rtf_cap": 0.4,
+ "run_ids": {
+  "nominal": "bottle_motm_tpa_nom_1",
+  "A": "bottle_motm_tpa_A_1"
+ },
+ "x_slow": "名目（沿用既有排程；離線「快 x_slow」只是探索，不採用）",
+ "compare_to": {
+  "nominal": "bottle_motm_nom_1（dynsr39，舊流程經名目備妥）",
+  "A": "bottle_motm_A_1（dynsr39，原始 /scan 規劃代價圖，path_blocked）"
+ },
+ "freeze": "experiments/20261111_motm_tpa_freeze.sha256"
+}
