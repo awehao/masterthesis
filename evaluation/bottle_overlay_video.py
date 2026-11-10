@@ -79,6 +79,8 @@ def main():
     t1 = a.t1 if a.t1 is not None else float(t[-1])
     xs = np.r_[c['base_x'], J[:, 0]]
     ys = np.r_[c['base_y'], J[:, 1]]
+    kb = np.isfinite(c['bottle_base_x'])
+    xs, ys = np.r_[xs, c['bottle_base_x'][kb][:1]], np.r_[ys, c['bottle_base_y'][kb][:1]]   # 視窗涵蓋瓶初始位置
     if np.isfinite(c['dyn_x']).any():
         xs, ys = np.r_[xs, c['dyn_x'][np.isfinite(c['dyn_x'])]], np.r_[ys, c['dyn_y'][np.isfinite(c['dyn_y'])]]
     lim = (np.nanmin(xs) - 0.8, np.nanmax(xs) + 0.8, np.nanmin(ys) - 0.8, np.nanmax(ys) + 0.8)
