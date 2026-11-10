@@ -97,11 +97,19 @@ def main():
         a = np.abs(np.diff(U, axis=0)[ok]) / dt[ok, None]
         return dict(n=int(ok.sum()), a_max=[num(v) for v in a.max(axis=0)], n_over=[int((a[:, j] > A_LIM[j] * 1.05).sum()) for j in range(3)], lim=A_LIM.tolist())
     out['rate'] = dict(smoother_out=acc('/cmd_vel_pre_mux'), final=acc('/cmd_vel'), note='相鄰訊息差分；時間戳取 bag 接收換算，會有抖動')
+    lg = [x for x in (nav.get('conflict') or []) if x.get('mode')]
+    dur = {}
+    for i_, x in enumerate(lg):
+        t_next = lg[i_ + 1]['t'] if i_ + 1 < len(lg) else t1
+        dur[x['mode']] = dur.get(x['mode'], 0.0) + max(0.0, float(t_next) - float(x['t']))
+    out['mode_time_s'] = {k_: round(v, 2) for k_, v in dur.items()}
+    out['mode_episodes'] = {k_: sum(1 for i_, x in enumerate(lg) if x['mode'] == k_ and (i_ == 0 or lg[i_ - 1]['mode'] != k_)) for k_ in dur}
+    out['go_offset'] = dict(t_go_ros=meta.get('t_go'), t_cruise_ros=t0, world_at_cruise=out['t_cruise_world'], note='行人世界時間在導航 CRUISE 時起走（go_on_nav）')
     out['conflict'] = nav.get('conflict')
     out['conflict_layer_log'] = nav.get('conflict_layer_log')
     out['safety_node'] = nav.get('safety')
     json.dump(out, open(os.path.join(D, 'm8_fake_report.json'), 'w'), ensure_ascii=False, indent=1, default=float)
-    show = {k_: out[k_] for k_ in ('run', 'nav_node', 'result', 't_cruise_world', 't_end_world', 'path_len_m', 'safety', 'shield', 'cbf', 'rate')}
+    show = {k_: out[k_] for k_ in ('run', 'nav_node', 'result', 't_cruise_world', 't_end_world', 'path_len_m', 'safety', 'shield', 'cbf', 'rate', 'mode_time_s', 'mode_episodes')}
     show['clearance'] = {k_: v for k_, v in clr.items() if k_ in ('walker_a1', 'unknown_a1', 'unknown_a2', 'known_walls_furniture_door')}
     show['conflict_modes'] = [(x.get('t'), x.get('mode'), (x.get('plan') or {}).get('kind')) for x in (out['conflict'] or []) if x.get('mode')]
     print(json.dumps(show, ensure_ascii=False, indent=1, default=float))
