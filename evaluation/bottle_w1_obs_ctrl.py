@@ -66,6 +66,62 @@ class W1PlaceController(HC.W1PlaceController):
         if g.get('cam') and g.get('state') in OK_STATES and g.get('xy') is not None:
             self.guide = dict(g, t_recv=float(t_recv))
 
+    # ---- 抓取目標有效期：由新合格快照的來源擷取時刻重新驗證（Codex 20261111_142637 第 2 項；有效期政策變更，非「原判準不變」）----
+    def candidate_intake(self, t_recv, c):
+        """基線採用規則不變（就緒、快照檢查 ok、目前觀測新鮮、與快照一致、序號遞增、凍結後相對首次凍結 xy／高度 ≤ 5 mm）。
+        本筆被採用（凍結或凍結後更新）時，以其快照來源擷取時刻 snap_t_last 推進「最後有效驗證」；只進不退（舊影格、重複通知不推進）。
+        首次凍結與幾何基準（vfix）保留不重設；鎖定後基線已不再受理（不新增刷新途徑）；導引（底盤 xy）不經此路徑，不能刷新。"""
+        src = getattr(self, '_snap_src', None)
+        if src is None:
+            src = self._snap_src = {}
+        try:
+            k_, ts_ = int(c.get('snap_seq')), float(c.get('snap_t_last'))
+            if k_ > 0 and np.isfinite(ts_):
+                src.setdefault(k_, ts_)                                    # 快照不可變：每個序號一個來源擷取時刻（凍結時取用）
+        except (TypeError, ValueError):
+            pass
+        seq0, n0 = self.seg_seq, len(self.seg_adopt)
+        super().candidate_intake(t_recv, c)
+        if self.judge.stop is not None or len(self.seg_adopt) <= n0 or self.seg_seq <= seq0 or self.vfix is None:
+            return
+        ts = float(c.get('snap_t_last', float('nan')))
+        sv = getattr(self, 'seg_valid', None)
+        if not np.isfinite(ts) or ts > float(self.t) + 1e-9 or (sv is not None and ts <= sv['t_src'] + 1e-9):
+            return
+        first = sv is None
+        self.seg_valid = dict(t_src=ts, seq=int(self.seg_seq), t_acc=round(float(self.t), 3))
+        log = getattr(self, 'seg_valid_log', None)
+        if log is None:
+            log = self.seg_valid_log = []
+        log.append(dict(self.seg_valid, t_src=round(ts, 3)))
+        self._ev('segtarget_valid_init' if first else 'segtarget_revalidated', t_src=round(ts, 3), seq=int(self.seg_seq),
+                 expire_new=round(ts + float(self.seg['expire_s']), 3), expire_old_rule=round(float(self.vfix['t']) + float(self.seg['expire_s']), 3))
+
+    def _gp_apply(self, g, res, q):
+        """線上版在抓取計畫被接受時才凍結（vfix）：此時以凍結快照的來源擷取時刻初始化有效起點（未知 ⇒ 退回凍結時刻，標記）。"""
+        super()._gp_apply(g, res, q)
+        if self.vfix is None or getattr(self, 'seg_valid', None) is not None:
+            return
+        ts = (getattr(self, '_snap_src', None) or {}).get(int(self.vfix['seq']))
+        ok = ts is not None and np.isfinite(ts) and ts <= float(self.t) + 1e-9
+        self.seg_valid = dict(t_src=float(ts) if ok else float(self.vfix['t']), seq=int(self.vfix['seq']), t_acc=round(float(self.t), 3), init='freeze_snapshot' if ok else 'fallback_freeze_time')
+        log = getattr(self, 'seg_valid_log', None)
+        if log is None:
+            log = self.seg_valid_log = []
+        log.append(dict(self.seg_valid, t_src=round(self.seg_valid['t_src'], 3)))
+        self._ev('segtarget_valid_init', t_src=round(self.seg_valid['t_src'], 3), seq=int(self.vfix['seq']), init=self.seg_valid['init'],
+                 expire_new=round(self.seg_valid['t_src'] + float(self.seg['expire_s']), 3), expire_old_rule=round(float(self.vfix['t']) + float(self.seg['expire_s']), 3))
+
+    def _seg_valid_t(self):
+        sv = getattr(self, 'seg_valid', None)
+        return self.vfix['t'] if sv is None else sv['t_src']
+
+    def _seg_expire_info(self):
+        sv = getattr(self, 'seg_valid', None)
+        return dict(policy='last_valid_src_capture', t_src=None if sv is None else round(sv['t_src'], 3), seq=None if sv is None else sv['seq'],
+                    first_freeze_t=round(float(self.vfix['t']), 3), expire_old_rule=round(float(self.vfix['t']) + float(self.seg['expire_s']), 3),
+                    n_valid=len(getattr(self, 'seg_valid_log', []) or []))
+
     def _guide_fresh(self):
         g = self.guide
         return g is not None and float(self.t) - float(g['t_last']) <= GUIDE_MAX_AGE
@@ -278,6 +334,10 @@ class W1PlaceController(HC.W1PlaceController):
 
     def report(self):
         r = super().report()
+        r['seg_validity'] = dict(policy='有效期 15 s 由最後有效驗證（新合格抓取快照）的來源擷取時刻起算；首次凍結與幾何基準不重設（Codex 142637）',
+                                 log=getattr(self, 'seg_valid_log', []), first_freeze_t=None if self.vfix is None else round(float(self.vfix['t']), 3),
+                                 expire_old_rule=None if self.vfix is None else round(float(self.vfix['t']) + float(self.seg['expire_s']), 3),
+                                 expire_new=None if getattr(self, 'seg_valid', None) is None else round(self.seg_valid['t_src'] + float(self.seg['expire_s']), 3))
         r['obs'] = dict(trigger=self.obs_trig, standoff=self.so, standoff_hist=getattr(self, 'so_hist', [])[-20:], view_fail=self.obs_fail[-20:], guide_block=self.guide_block, x_dead=self.x_dead, guide_n=self.guide_n, guide_last=None if self.guide is None else {k: (round(v, 4) if isinstance(v, float) else v) for k, v in self.guide.items()},
                         guide_lane=self.guide_lane, guide_max_age=GUIDE_MAX_AGE,
                         note='觀察觸發＝導引就緒或觀察期限（X_DEAD＝現行 X_U0）先到者；觀看點＝導引 xy 或區域觀看點；車道可由導引提早決定')

@@ -39,26 +39,41 @@ V_RJ, W_RJ, T_RJ_MIN, T_RJ_MAX = 0.03, math.radians(10.0), 0.3, 1.5   # 重接�
 RATE_LP = 1.0                                                   # 不濾波：rate＝本拍實際相位增量／Δt（Codex 042529：預覽與實際送出參考一致）
 MJ_PEAK = 1.875                                                 # min-jerk 峰值速度／平均速度
 DEV_Y_MAX, DEV_TH_MAX = 0.08, math.radians(8.0)                 # 底盤相對計畫底盤位姿的橫向／偏航偏差上限（超過 ⇒ 接近段即受控拒絕）
+R_MAX, RDOT_UP = 1.2, 1.0                                       # 有界相位追趕（Codex 20261111_142637 (A)）：τ 落後 τ_σ 時 rate 可超過 1，上限 1.2（唯一候選，不掃）；
+                                                                #   rate > 1 的部分每秒最多增加 1.0（≥ 0.2 s 才到 1.2）；rate ≤ 1 的行為不變（同前：跟底盤進度、可即時降）
 
 
-def progress_profile(sig, x_pre, x_slow, v_nav, v_c, v0, T, dt=0.02):
-    """同 bottle_w1_tpa_ctrl.base_time 的剖面；回 (τ 陣列, σ 陣列)，σ 嚴格遞增直到 x_pre（或 τ＝T）。"""
+def progress_profile(sig, x_pre, x_slow, v_nav, v_c, v0, T, dt=0.02, scale_to_T=True):
+    """同 bottle_w1_tpa_ctrl.base_time 的剖面；回 (τ 陣列, σ 陣列)，σ 嚴格遞增直到 x_pre（或 τ＝T）。
+    scale_to_T（終點修正）：末步按剩餘距離取部分時間，且剖面在 T 前到 x_pre 時 τ 軸等比縮放使 x_pre 處 τ＝T（obs_nom_2：離散剖面 τ_end 10.38、
+    T 10.40，且末步 0.77 mm 記滿 0.02 s ⇒ σ 到 x_pre 前後 τ_σ 不連續，τ 追不及、S1 已減速 ⇒ 切換速度差被拒）。False＝舊行為（對照用）。"""
     t, x, v, a = 0.0, float(sig), max(float(v0), 0.0), S1.A_SLEW
     ts, xs = [0.0], [x]
     while x < x_pre and t < T + 1e-9 and len(ts) < 20000:
         vt = v_nav if x < x_slow else v_c
         v = min(vt, v + a * dt) if v < vt else max(vt, v - a * dt)
+        if scale_to_T and x + max(v, 1e-6) * dt > x_pre:               # 末步按剩餘距離取部分時間（原碼末步截在 x_pre 仍記滿 Δt ⇒ 終點斜率失真）
+            t += (x_pre - x) / max(v, 1e-6)
+            x = x_pre
+            ts.append(t)
+            xs.append(x)
+            break
         x += max(v, 1e-6) * dt
         t += dt
         ts.append(t)
         xs.append(min(x, x_pre))
-    return np.array(ts), np.array(xs)
+    ts, xs = np.array(ts), np.array(xs)
+    if scale_to_T and xs[-1] >= x_pre - 1e-9 and ts[-1] > 1e-9 and abs(ts[-1] - T) > 1e-9:
+        ts = ts * (float(T) / ts[-1])
+    return ts, xs
 
 
-def tau_step(tau, rate, dt, sig_meas, prof, T):
+def tau_step(tau, rate, dt, sig_meas, prof, T, r_max=R_MAX, rdot_up=RDOT_UP):
     """回 (τ_new, rate_new)。prof＝(τ_k, σ_k)。
     τ_σ＝σ_nom⁻¹(σ_實測)；σ 超過剖面終點時以剖面終端速度延伸到 T 之後（τ_σ＝T＋(σ−σ_end)/v_end），使最後一拍的 rate 仍是實際進度速率。
-    未截斷增量＝min(Δt, max(0, τ_σ−τ))（只進不退、速率 ≤ 計畫）；rate＝未截斷增量／Δt（RATE_LP＝1 ⇒ 不濾波）；送出的 τ 截在 T。"""
+    未截斷增量＝min(r_cap·Δt, max(0, τ_σ−τ))（只進不退）；r_cap＝min(r_max, max(1, rate＋rdot_up·Δt))：τ 落後時可有界追趕（obs_nom_2：末段底盤快 7%、
+    τ 速率上限 1 ⇒ 落後 0.19 s，底盤到 x_pre 減速等手臂、手臂照原末速收尾 ⇒ 切換速度差 0.061 被拒）；rate＝未截斷增量／Δt（RATE_LP＝1 ⇒ 不濾波）；送出的 τ 截在 T。
+    r_max＝1、rdot_up＝0 即舊行為（速率 ≤ 計畫）。預覽（_tau_at）與切換閘門都用同一 rate。"""
     tk, sk = prof
     if dt <= 0.0:
         return tau, rate
@@ -68,7 +83,8 @@ def tau_step(tau, rate, dt, sig_meas, prof, T):
         j = -2 if len(sk) >= 3 else -1                                    # 剖面最後一步在 x_pre 截斷 ⇒ 取最後一個完整區間的斜率當終端速度
         v_end = (sk[j] - sk[j - 1]) / max(tk[j] - tk[j - 1], 1e-9) if len(sk) > 1 else 0.0
         tau_sig = T + (sig_meas - sk[-1]) / v_end if v_end > 1e-4 else T + dt
-    inc = min(dt, max(0.0, tau_sig - tau))
+    r_cap = min(float(r_max), max(1.0, float(rate) + float(rdot_up) * dt))
+    inc = min(r_cap * dt, max(0.0, tau_sig - tau))
     r = inc / dt
     return min(tau + inc, T), (1.0 - RATE_LP) * rate + RATE_LP * r
 
@@ -150,7 +166,17 @@ class W1PlaceController(CJ.W1PlaceController):
         x = float(xy[0])
         if x >= float(self.path.x_lane):
             return x
-        return float(self.path.project(np.asarray(xy[:2], float), float(hint), back=0.1, ahead=0.3))
+        s0 = float(self.path.project(np.asarray(xy[:2], float), float(hint), back=0.1, ahead=0.3))
+        lo, hi = s0 - 0.01, s0 + 0.01                                      # 次格點細化（取樣投影 1 cm 量化使 rate 在 0.57／1.0 間跳動、ṙ 達 ±14/s）
+        p_ = np.asarray(xy[:2], float)
+        for _ in range(14):                                                # 三分搜尋（局部單峰）：剩餘區間 ≈ 0.02·(2/3)^14 ≈ 0.1 mm
+            m1, m2 = lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0
+            d1, d2 = (float(np.linalg.norm(self.path.xy(np.array([m]))[0] - p_)) for m in (m1, m2))
+            if d1 <= d2:
+                hi = m2
+            else:
+                lo = m1
+        return 0.5 * (lo + hi)
 
     def _sig_meas(self, q):
         """相位用的底盤實測進度（obs_nom_1 修正；Codex 20261111_140507 第 1 項）：每拍由實測底盤位置以 _sig_of 求 σ_raw（不單調，照實記錄）；
@@ -237,6 +263,6 @@ class W1PlaceController(CJ.W1PlaceController):
                              note='手臂相位隨底盤實測進度；τ 只進不退、速率 ≤ 計畫；τ 到 T 以同一參考、同一命令生效時刻核切換兩側：小差直接切、中差有界重接、大差受控拒絕')
             r['tpa'] = {k: v for k, v in r['tpa'].items() if k not in ('prof', 'tau_log', 'rj', 'D', 'sig_path')}
             r['tpas'].update(progress=dict(sig_raw_end=round(float(P.get('sig_raw', float('nan'))), 4), sig_phase_end=round(float(P.get('sig_phase', float('nan'))), 4),
-                                           regress_max=round(float(P.get('regress_max', 0.0)), 4), time_switch=P.get('time_switch'),
+                                           regress_max=round(float(P.get('regress_max', 0.0)), 4), time_switch=P.get('time_switch'), r_max=R_MAX, rdot_up=RDOT_UP,
                                            note='σ：車道段解析 σ＝x、其前取樣投影；相位用 σ_phase（只進不退），σ_raw 照實記錄；tau_log 欄＝(t, σ_phase, τ, rate, σ_raw)'))
         return r

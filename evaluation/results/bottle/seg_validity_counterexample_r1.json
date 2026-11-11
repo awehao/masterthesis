@@ -1,0 +1,207 @@
+{
+ "steps": [
+  {
+   "t": 7.18,
+   "what": "首次合格快照（來源 7.05）⇒ 送抓取計畫（線上版此時不凍結）",
+   "refreshed": false,
+   "valid_t_src": null,
+   "seq": 0,
+   "stop": null,
+   "rej": {}
+  },
+  {
+   "t": 7.4,
+   "what": "計畫接受 ⇒ 凍結（vfix 7.40）＋有效起點＝快照來源 7.05",
+   "refreshed": true,
+   "valid_t_src": 7.05,
+   "seq": 1,
+   "stop": null
+  },
+  {
+   "t": 10.3,
+   "what": "新合格快照（序號 2、來源 10.20）⇒ 刷新",
+   "refreshed": true,
+   "valid_t_src": 10.2,
+   "seq": 2,
+   "stop": null,
+   "rej": {}
+  },
+  {
+   "t": 10.5,
+   "what": "重複通知（同序號）⇒ 不刷新",
+   "refreshed": false,
+   "valid_t_src": 10.2,
+   "seq": 2,
+   "stop": null,
+   "rej": {
+    "seq_not_new": 1
+   }
+  },
+  {
+   "t": 11.0,
+   "what": "新序號但舊影格（來源 9.00 早於 10.20）⇒ 不刷新",
+   "refreshed": false,
+   "valid_t_src": 10.2,
+   "seq": 3,
+   "stop": null,
+   "rej": {
+    "seq_not_new": 1
+   }
+  },
+  {
+   "t": 11.5,
+   "what": "與快照不一致（雙相機／同物件核對未過）⇒ 拒收、不刷新",
+   "refreshed": false,
+   "valid_t_src": 10.2,
+   "seq": 3,
+   "stop": null,
+   "rej": {
+    "seq_not_new": 1,
+    "inconsistent_with_snapshot": 1
+   }
+  },
+  {
+   "t": 12.0,
+   "what": "目前觀測未就緒 ⇒ 不刷新",
+   "refreshed": false,
+   "valid_t_src": 10.2,
+   "seq": 3,
+   "stop": null,
+   "rej": {
+    "seq_not_new": 1,
+    "inconsistent_with_snapshot": 1,
+    "not_ready": 1
+   }
+  },
+  {
+   "t": 12.5,
+   "what": "快照檢查未完成 ⇒ 不刷新",
+   "refreshed": false,
+   "valid_t_src": 10.2,
+   "seq": 3,
+   "stop": null,
+   "rej": {
+    "seq_not_new": 1,
+    "inconsistent_with_snapshot": 1,
+    "not_ready": 1,
+    "check_not_ok": 1
+   }
+  },
+  {
+   "t": 12.8,
+   "what": "目前觀測過期（0.9 s > 0.5）⇒ 不刷新",
+   "refreshed": false,
+   "valid_t_src": 10.2,
+   "seq": 3,
+   "stop": null,
+   "rej": {
+    "seq_not_new": 1,
+    "inconsistent_with_snapshot": 1,
+    "not_ready": 1,
+    "check_not_ok": 1,
+    "stale": 1
+   }
+  },
+  {
+   "t": 13.0,
+   "what": "底盤導引（只有 xy）⇒ 不經抓取候選、不刷新",
+   "refreshed": false,
+   "valid_t_src": 10.2,
+   "seq": 3,
+   "stop": null
+  }
+ ],
+ "lock_case": [
+  {
+   "t": 7.18,
+   "what": "（鎖定案）首次合格快照",
+   "refreshed": false,
+   "valid_t_src": null,
+   "seq": 0,
+   "stop": null,
+   "rej": {}
+  },
+  {
+   "t": 9.0,
+   "what": "鎖定後新合格快照 ⇒ 基線不受理、不刷新",
+   "refreshed": false,
+   "valid_t_src": 7.05,
+   "seq": 1,
+   "stop": null,
+   "rej": {}
+  }
+ ],
+ "expiry": [
+  {
+   "t": 22.39,
+   "stop": null
+  },
+  {
+   "t": 22.41,
+   "stop": null
+  },
+  {
+   "t": 25.19,
+   "stop": null
+  },
+  {
+   "t": 25.21,
+   "stop": {
+    "t": 25.21,
+    "why": "segtarget_expired",
+    "age": 15.010000000000002,
+    "policy": "last_valid_src_capture",
+    "t_src": 10.2,
+    "seq": 2,
+    "first_freeze_t": 7.4,
+    "expire_old_rule": 22.4,
+    "n_valid": 2
+   }
+  }
+ ],
+ "valid_log": [
+  {
+   "t_src": 7.05,
+   "seq": 1,
+   "t_acc": 7.4,
+   "init": "freeze_snapshot"
+  },
+  {
+   "t_src": 10.2,
+   "seq": 2,
+   "t_acc": 10.3
+  }
+ ],
+ "events": [
+  {
+   "t": 7.4,
+   "what": "segtarget_freeze",
+   "xy": [
+    -0.0227,
+    0.4083
+   ],
+   "z_support": 0.58,
+   "seq": 1,
+   "margin": 0.46
+  },
+  {
+   "t": 7.4,
+   "what": "segtarget_valid_init",
+   "t_src": 7.05,
+   "seq": 1,
+   "init": "freeze_snapshot",
+   "expire_new": 22.05,
+   "expire_old_rule": 22.4
+  },
+  {
+   "t": 10.3,
+   "what": "segtarget_revalidated",
+   "t_src": 10.2,
+   "seq": 2,
+   "expire_new": 25.2,
+   "expire_old_rule": 22.4
+  }
+ ],
+ "expire_old_rule": 22.4,
+ "expire_new": 25.2
+}

@@ -32,6 +32,9 @@ import bottle_s1_ctrl as S1  # noqa: E402
 import bottle_w1_compactcarry21_ctrl as C21  # noqa: E402
 import bottle_w1_tpa_ctrl as TPA  # noqa: E402
 import bottle_w1_tpas_ctrl as TS  # noqa: E402
+if os.environ.get('TPAS_OLD') == '1':                                  # 對照：修正前 tau_step（速率上限 1、不追趕）
+    import functools
+    TS.tau_step = functools.partial(TS.tau_step, r_max=1.0, rdot_up=0.0)
 import tpa_offline_check as TO  # noqa: E402
 from ammr_wholebody_mpc.arm_limits import LITE6_SAFE as L  # noqa: E402
 
@@ -41,11 +44,14 @@ DTC = 0.05
 LAT = C0.D_STEPS * C0.PHYS
 CFG = C0.make_cfg(json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json'))))
 
+MUL = {'末段快 7%': 1.07}                                              # 實際速度倍率（只在 x ≥ x_slow 的慢速段）
 SCEN = {
     '名目': lambda tr, x, xp: 9.0,
     'A 型減速': lambda tr, x, xp: 0.08 if 3.0 <= tr <= 8.0 else 9.0,
     '停走': lambda tr, x, xp: 0.0 if 4.0 <= tr <= 6.0 else 9.0,
     '末段慢': lambda tr, x, xp: 0.03 if x > xp - 0.15 else 9.0,
+    '末端停住': lambda tr, x, xp: 0.0 if x > xp - 0.10 else 9.0,      # 追趕包（Codex 142637）：x_pre 前 0.10 m 停住不再走 ⇒ τ 不到 T、不得依時間強切
+    '末段快 7%': lambda tr, x, xp: 9.0,                                # 追趕包：最後慢速段實際速度＝參考 ×1.07（仿 obs_nom_2 15.1–17.9 s），見 MUL
 }
 
 
@@ -107,7 +113,8 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
     k, q_prev, v_prev, early = 0, None, None, None
     log = []
     Tpl = TS._tb
-    while t < 40.0:
+    t_end = 25.0 if scen == '末端停住' else 40.0
+    while t < t_end:
         cap = SCEN[scen](t, x, x_pre)
         if not switched:
             if x >= x_pre and tau < T - 1e-9:
@@ -115,7 +122,7 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
             else:
                 vt = v_nav_eff if x < x_slow else v_c_eff
                 vref = min(vt, vref + S1.A_SLEW * DTC) if vref < vt else max(vt, vref - S1.A_SLEW * DTC)
-        vd = min(vref, cap)
+        vd = min(vref * (MUL.get(scen, 1.0) if x >= x_slow else 1.0), cap)
         v = min(vd, v + S1.A_SLEW * DTC) if v < vd else max(vd, v - float(B.A_BASE[0]) * DTC)
         x += v * DTC
         t += DTC
@@ -159,6 +166,9 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
             W['stop'] = min(W['stop'], s_, key=lambda z: z[0])
         if len(log) < 600 and k % 4 == 0:
             log.append((round(t, 2), round(x, 4), round(v, 4), round(tau, 3), round(rate, 3)))
+        W['rmax'] = max(W.get('rmax', 0.0), float(rate))
+        if x >= x_pre and W.get('lag_at_xpre') is None:
+            W['lag_at_xpre'] = round(float(T - tau), 4)                      # 底盤到 x_pre 時 τ 距 T（追趕包：應趨近 0）
         k += 1
         if tau >= T - 1e-9:
             sw = TS.switch_check(R0.K, qpb, np.r_[v, 0.0, wz], PD, tau + rate * LAT, rate, T_pre, D=D)
@@ -166,6 +176,7 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
             sw = dict(sw, t=round(t, 2), x=round(x, 4))
             switched = bool(sw['ok'])
             break
+    row.update(rate_max=round(W.get('rmax', 0.0), 3), tau_lag_at_x_pre=W.get('lag_at_xpre'), tau_end=round(float(tau), 3), t_end=round(float(t), 2))
     row.update(T=round(T, 2), t_switch=sw.get('t') if sw else None, switch=sw, v2_dp_at_T=v2_dp, x_at_switch=round(x, 4), x_pre=round(x_pre, 4),
                v_ratio=round(W['vr'], 3), a_ratio=round(W['ar'], 3), joint_margin_min=round(W['jm'], 4), clear_slack_min=(round(W['clr'][0], 4), W['clr'][1]),
                stop_traj_slack_min=(round(W['stop'][0], 4), W['stop'][1]), early_reject=early, log=log[::3])
@@ -242,14 +253,16 @@ def main():
     rows = []
     cases = [(scen, 0.0, None, False) for scen in SCEN] + [('名目', 0.03, None, False), ('名目', 0.05, (3.0, 6.0), False), ('A 型減速', -0.07, (3.0, 6.0), False),
                                                           ('名目', 0.09, (3.0, 6.0), True)]
-    if head:
+    if os.environ.get('TPAS_CASES') == 'catchup':                       # 追趕包（Codex 142637）：名目、停走、末端停住、末段快 7%（航向版路徑時同）
+        cases = [('名目', 0.0, None, False), ('停走', 0.0, None, False), ('末端停住', 0.0, None, False), ('末段快 7%', 0.0, None, False)]
+    elif head:
         cases = [('名目', 0.0, None, False), ('A 型減速', 0.0, None, False), ('停走', 0.0, None, False), ('名目', 0.05, (3.0, 6.0), False),
                  ('A 型減速', -0.07, (3.0, 6.0), False), ('名目', 0.09, (3.0, 6.0), True)]
     for scen, yo, ramp, exp in cases:
         for nm, q, qd, base in starts:
             row = run_case(nm, q, qd, base, 0.35, scen, ctx, y_off=yo, ramp=ramp, expect_reject=exp)
             rows.append(row)
-            print({k: row.get(k) for k in ('start', 'scenario', 'ok', 'why', 'early_reject', 'safe_before_reject', 'T', 't_switch', 'switch', 'rejoin_ik_fail', 'rejoin_clear_slack_min', 'rejoin_stop_traj_slack_min', 'v2_dp_at_T', 'v_ratio', 'a_ratio', 'clear_slack_min',
+            print({k: row.get(k) for k in ('start', 'scenario', 'ok', 'why', 'rate_max', 'tau_lag_at_x_pre', 'tau_end', 't_end', 'early_reject', 'safe_before_reject', 'T', 't_switch', 'switch', 'rejoin_ik_fail', 'rejoin_clear_slack_min', 'rejoin_stop_traj_slack_min', 'v2_dp_at_T', 'v_ratio', 'a_ratio', 'clear_slack_min',
                                            'stop_traj_slack_min', 'insert_ok', 'insert_clear_slack_min', 'insert_stop_traj_slack_min', 't_accept_to_grasp')}, flush=True)
     json.dump(dict(run=TO.RUN, gate=dict(sw_p=TS.SW_P, sw_r=TS.SW_R, sw_v=TS.SW_V, sw_p_max=TS.SW_P_MAX, sw_r_max=TS.SW_R_MAX, v_rj=TS.V_RJ), rows=rows,
                    note=('航向版：底盤走 tpa_nom_3 量測後接近路徑、偏航沿 HeadingRef；' if head else '底盤沿車道直線；') + '情境上限作用於實際速度；完整停止軌跡用既有 stop_traj（設定點 s 取當下構型、在途命令取當拍命令重複——近似）；'

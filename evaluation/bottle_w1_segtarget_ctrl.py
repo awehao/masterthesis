@@ -101,6 +101,13 @@ class W1PlaceController(C3.W1PlaceController):
         self._ev('segtarget_freeze', xy=[round(float(v), 5) for v in xy], z_support=round(zs, 5), seq=seq, margin=float(br['margin']))
         return True
 
+    def _seg_valid_t(self):
+        """有效期起點（基線＝首次凍結時刻；子類可改為最後有效驗證的來源擷取時刻）。"""
+        return self.vfix['t']
+
+    def _seg_expire_info(self):
+        return {}
+
     def _Tg(self, xy):
         if self.seg_z is None:
             return np.full((4, 4), np.nan)                       # 未採用前沒有目標；不回填桌高
@@ -121,8 +128,8 @@ class W1PlaceController(C3.W1PlaceController):
             if self.vfix is None and not self.blending and q[0] >= self.x_blend:
                 self.judge._stop(self.t, 'segtarget_no_fix', rej=dict(self.seg_rej), n=len(self.seg_log))
                 return
-            if self.vfix is not None and self.t_close_req is None and self.t - self.vfix['t'] > self.seg['expire_s']:
-                self.judge._stop(self.t, 'segtarget_expired', age=self.t - self.vfix['t'])
+            if self.vfix is not None and self.t_close_req is None and self.t - self._seg_valid_t() > self.seg['expire_s']:
+                self.judge._stop(self.t, 'segtarget_expired', age=self.t - self._seg_valid_t(), **self._seg_expire_info())
                 return
         super()._advance_inner(T_tcp, close_done, q)
 
