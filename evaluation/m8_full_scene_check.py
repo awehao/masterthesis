@@ -131,6 +131,7 @@ def main():
     go = raster(static + [leaf_open], 0.02)
     res['1_rooms'] = dict(closed_A_to_B=reach(gc, inside_A, inside_B)['ok'], open_A_to_B=reach(go, inside_A, inside_B)['ok'])
     res['1_rooms']['ok'] = (not res['1_rooms']['closed_A_to_B']) and res['1_rooms']['open_A_to_B']
+    res['1_rooms']['note'] = '關門不通：格 0.02 m、障礙膨脹 0.03 m，因此 5 cm 門縫被封住（寬於 6 cm 的縫才算通）；離散平面連通核對'
     # 2 未知箱體不在靜態地圖
     import yaml as Y
     mp = os.path.join(WS, REG['static_map']['path'])
@@ -156,7 +157,8 @@ def main():
         gi = raster(static + [leaf_open] + unk, 0.05, inflate=infl)
         path_res[str(infl)] = dict(S_to_doorA=reach(gi, Sxy, door_front_A), doorA_to_doorB=reach(gi, door_front_A, door_front_B),
                                    doorB_to_drawer=reach(gi, door_front_B, front_goal), S_to_drawer=reach(gi, Sxy, front_goal))
-    res['3_passable'] = dict(by_inflation=path_res, front_goal=[round(v, 3) for v in front_goal], ok=all(v['ok'] for v in path_res['0.39'].values()))
+    res['3_passable'] = dict(by_inflation=path_res, front_goal=[round(v, 3) for v in front_goal], ok=all(v['ok'] for pr in path_res.values() for v in pr.values()),
+                             note='0.39 與 0.47 兩種膨脹全部納入判定；離散平面連通核對（格 0.05 m），不是全身通過保證')
     # 4 操作空間
     R_sw = L + stand
     sector_pts = [np.array([R * math.cos(a), R * math.sin(a)]) for R in np.linspace(0.05, R_sw, 12) for a in np.linspace(-math.pi / 2, 0.0, 19)]

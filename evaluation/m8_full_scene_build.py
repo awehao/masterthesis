@@ -53,6 +53,8 @@ def write_marker():
                note='粗馬克筆代理（Howard 11/10 定案：接受粗馬克筆代理，不換指形）。不是一般細筆；未經實物驗證；本檔只登錄尺寸、質量、初始配置，不宣稱夾持可行。',
                shape='cylinder', axis='x', radius=r, length=L, mass_kg=0.020,
                material=dict(static_friction=0.6, dynamic_friction=0.5, restitution=0.0, note='同瓶代理的材料量級；未辨識'),
+               physics=dict(angular_damping=20.0, note='滾動阻力的代理（PhysX 材料沒有滾動摩擦）：靜置核對 r1 無阻尼時圓柱在抽屜底板上持續滾動（3 s 滾 63 mm、仍在加速），'
+                                                       '實物筆有筆夾／筆蓋不會這樣滾；數值未辨識'),
                gripper_basis=dict(source='drawer_unit_bar26.yaml 檔頭（指片內面閉 22.4 mm、開 40.2 mm，官方網格）', contact_finger_joint_m=round((2 * r * 1000 - 22.4) / 2 / 1000, 4),
                                   open_margin_each_side_m=round((40.2 - 2 * r * 1000) / 2 / 1000, 4)),
                placement=dict(frame='drawer（抽屜剛體本地座標；隨抽屜滑動）', center=[0.05, -0.110, round(z_top + r + 0.001, 4)],
@@ -105,11 +107,11 @@ def main():
                world=dict(path=os.path.relpath(WORLD, WS), sha256=sha(WORLD), note='外牆 2.4 m（同隔牆、門資產牆）；平面足跡同 mission_room.sdf'),
                door=dict(asset=os.path.relpath(DOOR, WS), sha256=sha(DOOR), builder='evaluation/door_asset_v3.py', note='可動門扇＋把手（物理機構）；地圖門洞留空'),
                drawer=dict(asset=os.path.relpath(DRAWER, WS), sha256=sha(DRAWER), pose=list(DRAWER_POSE), builder='evaluation/drawer_asset.py', note='可動抽屜＋把手（滑動關節，無驅動）'),
-               marker=dict(asset=os.path.relpath(MARKER, WS), sha256=sha(MARKER), in_drawer=True, radius=mk['radius'], length=mk['length'], mass_kg=mk['mass_kg'], center_drawer_frame=mk['placement']['center']),
+               marker=dict(asset=os.path.relpath(MARKER, WS), sha256=sha(MARKER), builder='evaluation/marker_proxy_asset.py（獨立動態剛體＋碰撞＋材料；不掛在抽屜底下）', in_drawer=True, radius=mk['radius'], length=mk['length'], mass_kg=mk['mass_kg'], center_drawer_frame=mk['placement']['center']),
                obstacles=dict(path=os.path.relpath(OBS_OUT, WS), sha256=sha(OBS_OUT), n_static_unknown=len(ob['static_unknown']), n_walkers=len(ob['walkers']), walker_speed_mps=WALKER_SPEED,
                               note='未知箱體不進靜態地圖；真值只給場景與評估'),
                start=dict(pose=poses['S'], note='A 房起點 S'),
-               static_map=dict(path=os.path.relpath(MAP_NEW, WS) + '.yaml', sha256=sha(MAP_NEW + '.pgm'), **mp),
+               static_map=dict(path=os.path.relpath(MAP_NEW, WS) + '.yaml', yaml_sha256=sha(MAP_NEW + '.yaml'), pgm=os.path.relpath(MAP_NEW, WS) + '.pgm', pgm_sha256=sha(MAP_NEW + '.pgm'), **mp),
                not_included='天花板（不加）；完整任務實跑、夾持可行性、在線操作能力（場景就緒不代表任務完成）')
     json.dump(reg, open(REG, 'w'), ensure_ascii=False, indent=1)
     print(json.dumps(dict(marker=dict(radius=mk['radius'], length=mk['length'], center=mk['placement']['center'], basis=mk['gripper_basis']),
