@@ -5,7 +5,9 @@
 候選：y_reach ∈ Y_LIST（車道 y＝y_obj − y_reach；物件在左側——右側車道／抓取姿態待 (d) 右側接線，未實作）；窗相對起點 WIN_LO（沿用；−0.25 等較晚窗在離線評估多不可行）。
 每候選、每 z：plan_worker.window_seeded（預抓／抓取／抬升三位姿沿窗延拓；種子依序試、第一個可行分支即採用並優先用於下一個 z；某 z 不可行即停該候選）⇒ 可行與最小關節餘裕。
 另算底盤圓盤（R_BASE 0.39）沿窗段對已知桌腳方盒（區域先驗桌）的最小間隙；車道須在放行側向管 y_tube（bottle_s0b_ctrl.Y_TUBE，已驗證範圍）內。
-選擇：全 z 可行者中，最小關節餘裕（取各 z 最小）最大 → 底盤對桌腳間隙最大；到抓取時間由底盤剖面決定、各候選相同（standoff_select_check：皆 9.38 s），不列入。
+口徑：三個取樣高度都通過，不代表整個高度區間可行；抓取高度要等手腕量到支撐後由 plan_grasp 確認（導引初選、抓取確認）。
+工作者端排序（餘裕 → 桌腳間隙）只是預設；控制端另以「實際橫向接回後的底盤剩餘時間、手臂轉移時間」再選（bottle_w1_obs_ctrl._pick_standoff），
+不固化任何單一站位成新模板。
 """
 import numpy as np
 
@@ -32,7 +34,7 @@ def evaluate(inp):
         if tube is not None and not (float(tube[0]) <= yl <= float(tube[1])):
             rows.append(dict(y_reach=yr, y_lane=round(yl, 4), ok=False, why='outside_release_tube', margin_min=None, margin_by_z=None, base_leg_clear=None))
             continue                                                         # 放行 INSERT 的側向管（bottle_s0b_ctrl.Y_TUBE，已驗證範圍）外不選
-        mins, why = [], None
+        mins, why, q_pre = [], None, None
         for z in zlist:
             T_g = C0.grasp_target(x, y, z + float(inp.get('band', 0.10)))
             T_p = T_g.copy()
@@ -43,6 +45,8 @@ def evaluate(inp):
                 b, w = PW.window_seeded(T_p, T_g, T_l, x + WIN_LO, x + WIN_LO + WIN_W, sd, y=yl)
                 if b is not None and np.isfinite(b['margin']) and b['margin'] > 0.0:
                     best = b['margin']
+                    if q_pre is None and b.get('q_pre_lo') is not None:
+                        q_pre = np.asarray(b['q_pre_lo'], float)                # 窗起點預抓分支（第一個取樣高度；供控制端估手臂轉移時間）
                     seeds = [sd] + [q for q in seeds if q is not sd]            # 下一個 z 先試同一分支
                     break
                 if why is None:
@@ -59,7 +63,8 @@ def evaluate(inp):
             clr = round(min(d) - R_BASE, 4)
         ok = mins is not None and (clr is None or clr >= 0.02)
         rows.append(dict(y_reach=yr, y_lane=round(yl, 4), ok=bool(ok), why=None if ok else (why or 'base_leg'), margin_min=None if mins is None else round(min(mins), 4),
-                         margin_by_z=None if mins is None else [round(m, 4) for m in mins], base_leg_clear=clr))
+                         margin_by_z=None if mins is None else [round(m, 4) for m in mins], base_leg_clear=clr,
+                         q_pre_lo=None if (mins is None or q_pre is None) else np.round(q_pre, 5).tolist()))
     feas = [r for r in rows if r['ok']]
     if not feas:
         return False, 'no_feasible_standoff', dict(rows=rows)

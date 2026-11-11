@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """導引候選轉接（雙相機 (b)(c)；Codex 20261111_050821）：/bottle/target_guide（bottle_seg3d_candidates_dual_node）→ ctrl.guide_intake。
 在 Isaac 同程序的 bridge 節點上訂閱；主迴圈每步 tick(t_task) 依收到順序處理。訊息內時間是 ROS 模擬時鐘；轉送時換成任務時刻（ROS − T0）。
-驗證（全部通過才轉送；失效關閉）：標籤含 bottle_target_guide 與欄位名、欄位齊全；t_eval 有限、非未來、嚴格遞增；guide_cam／guide_state／grasp_state 為精確整數碼；
-  有導引（guide_cam ≠ 0）時 cx、cy、t_last 有限且 t_last ≤ t_eval；年齡在轉送當下由擷取戳重算（含轉送延遲，不用訊息內的 age_s）。
+驗證（全部通過才轉送；失效關閉）：標籤含 bottle_target_guide、schema=1、frame=odom 與欄位名、欄位齊全；t_eval 有限、非未來、嚴格遞增；
+  guide_cam／guide_state／grasp_cam／grasp_state／reject／schema 為精確整數碼（非法碼整筆拒收，不當作無來源）；
+  有導引（guide_cam ≠ 0）時 cx、cy 有限、t_first ≤ t_last ≤ t_eval、n 為正整數；年齡在轉送當下由擷取戳重算（含轉送延遲，不用訊息內的 age_s）。
 xy：世界 → 區域（減 region_offset）；只轉一次。reject＝1 照樣轉送（控制端受控停止）。
 """
 import numpy as np
@@ -37,8 +38,8 @@ class GuideLink:
         now_ros = float(t_task) + self.T0
         while self.q:
             lab, data = self.q.pop(0)
-            if 'bottle_target_guide' not in lab or 'fields=' not in lab:
-                self._bad('label')
+            if 'bottle_target_guide' not in lab or 'fields=' not in lab or 'schema=1' not in lab or 'frame=odom' not in lab:
+                self._bad('label')                                            # 標籤須含 schema=1 與 frame=odom（Codex 054341：schema、座標框架一併核）
                 continue
             fs = lab.split('fields=')[1].split(',')
             if len(fs) != len(data) or any(k not in fs for k in REQ):
@@ -50,14 +51,17 @@ class GuideLink:
                 self._bad('t_eval')
                 continue
             gc, gs, ks = _code(r['guide_cam'], CAMS), _code(r['guide_state'], STATES), _code(r['grasp_state'], STATES)
-            rj = _code(r['reject'], (0, 1))
-            if None in (gc, gs, ks, rj):
-                self._bad('codes')
+            kc, rj = _code(r['grasp_cam'], CAMS), _code(r['reject'], (0, 1))
+            sch = _code(r.get('schema', np.nan), (1,))
+            if None in (gc, gs, ks, kc, rj, sch):
+                self._bad('codes')                                            # 非法 grasp_cam 不當作「無來源」，整筆拒收
                 continue
-            g = dict(t_eval=te - self.T0, cam=CAMS[gc], state=STATES[gs], grasp_cam=CAMS[_code(r['grasp_cam'], CAMS) or 0], grasp_state=STATES[ks], reject=bool(rj))
+            g = dict(t_eval=te - self.T0, cam=CAMS[gc], state=STATES[gs], grasp_cam=CAMS[kc], grasp_state=STATES[ks], reject=bool(rj))
             if gc != 0:
-                if not (np.isfinite(r['cx']) and np.isfinite(r['cy']) and np.isfinite(r['t_last']) and r['t_last'] <= te + 1e-9):
-                    self._bad('target')
+                n_ok = np.isfinite(r['n']) and abs(r['n'] - round(r['n'])) < 1e-9 and r['n'] >= 1
+                t_ok = np.isfinite(r['t_first']) and np.isfinite(r['t_last']) and r['t_first'] <= r['t_last'] <= te + 1e-9
+                if not (np.isfinite(r['cx']) and np.isfinite(r['cy']) and t_ok and n_ok):
+                    self._bad('target')                                       # 擷取時間順序 t_first ≤ t_last ≤ t_eval、列數為正整數
                     continue
                 g.update(xy=[float(r['cx']) - float(self.O[0]), float(r['cy']) - float(self.O[1])], t_last=float(r['t_last']) - self.T0,
                          age_s=float(now_ros - r['t_last']), n=int(r['n']))

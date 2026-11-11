@@ -2,13 +2,17 @@
 """(b) 觀察觸發改為「導引就緒或觀察期限」，不再無條件在 X_U0 左擺（Howard 11/11；Codex 20261111_050821 (b)；版本化子類，基線＝bottle_w1_head_ctrl）。
 導引候選（bottle_guide_link → guide_intake；雙相機節點的 /bottle/target_guide：xy、來源、擷取時刻、狀態）：
   1 車道：尚未決定目標專屬車道且導引新鮮 ⇒ 先向計畫工作者要 (d) 站位選擇（bottle_standoff：區域桌高範圍皆可行 → 關節餘裕最大 → 桌腳間隙最大），
-    結果到了再以選定 y_reach 交同一 lane_planner（bottle_tlane.decide；代價圖核對、太晚／擋住照舊拒絕）提早決定；全不可行 ⇒ 名目 y_reach（照記錄）；
+    結果到了再以選定 y_reach 交同一 lane_planner（bottle_tlane.decide；代價圖核對、太晚／擋住照舊拒絕）提早決定（導引初選；三個取樣桌高通過，不代表整段區間可行，
+    抓取高度由手腕量到支撐後 plan_grasp 確認）；
     之後抓取計畫請求沿用該車道（tlane 子類只在未決定時才再決定）。
   2 抬高觀看：手臂在收攏（TUCK）時，(導引新鮮) 或 (以區域觀看點生成的抬高視角在 U 段結束時已能看到支撐——幾何必要條件，提早抬高、不必等底盤先找到)
     或 (實測 x ≥ 觀察期限 X_DEAD＝現行 X_U0，最後界線) 先到者觸發；觸發後若導引才到 ⇒ 視向改對準量測位置（重新瞄準）；q1 限 ±Q1_LIM（離線核過）；
     觀看點＝導引 xy（z＝區域觀看高度）或無導引時的區域觀看點（區域知識）；視角＝bottle_view_gen.view_q1（V_HIGH 腕部樣板、只解 q1），
     以「U 段結束時的預測底盤位姿」（路徑上 s_ref＋v_b·T_u，偏航取航向參考）生成；之後的 U→H、視向追蹤（look 改為同一觀看點）、TPA 承接照基線。
-  3 拒絕：導引 reject（兩來源不一致逾時）⇒ 受控停止 dual_inconsistent。
+  3 拒絕：導引 reject（兩來源不一致逾時）⇒ 受控停止 dual_inconsistent；導引狀態為不一致／歧義／物件遺失 ⇒ 快取導引失效（不建車道、不重新瞄準）。
+  4 視角生成失敗：不退回固定左看樣板；期限前保持收攏、下一次判斷再試，期限已到仍失敗 ⇒ 受控停止 obs_view_infeasible。
+  5 站位結果綁定導引版本（xy 容差 2 mm、新鮮度）：晚到或導引已變 ⇒ 丟棄重送；全不可行 ⇒ standoff_none_feasible、工作者不可用 ⇒ planner_unavailable／dead
+    （不默默退回名目站位）；控制端以實際橫向接回後的底盤時間與手臂轉移時間選擇（_pick_standoff）。
 不改：抓取目標仍只來自手腕 known_type 快照（雙相機節點已交叉核對）；segtarget 限速更新、凍結、期限；GMPC、安全規則。
 右側：車道規則（bottle_tlane.lane_from_target）仍只支援物件在左側；(d) 處理。
 """
@@ -18,16 +22,20 @@ import numpy as np
 
 import bottle_s0_ctrl as C0
 import bottle_s0b_ctrl as B
+import bottle_tlane as TLNm
 import bottle_view_gen as VG
 import bottle_w1_head_ctrl as HC
 import bottle_w1_gaze_ctrl as GZ
 import bottle_w1_online_ctrl as ON
+import bottle_w1_tpa_ctrl as TPAm
 
 GUIDE_MAX_AGE = 1.0
 Q1_LIM = 1.5                                                    # 視角 q1 範圍：view_domain_check（收攏→視角路徑自碰撞 ≥ 5 mm、關節裕度 ≥ 0.05）
 USEFUL_EVERY = 5                                                # 每 5 拍（0.25 s）判一次「抬高視角是否已可看到支撐」
 Z_SUP_REGION = 0.60                                             # 區域支撐高度中點（區域知識；桌高域 [0.55, 0.65]），只供可用性判斷，不當目標
 OK_STATES = ('selected', 'kept', 'selected_unchecked', 'kept_unchecked')
+BLOCK_STATES = ('inconsistent', 'reject', 'ambiguous_two_objects', 'adopted_object_lost')
+SO_TOL = 0.002                                                  # 站位結果所綁導引 xy 的容差（同 segtarget 一致性 2 mm）
 
 
 class W1PlaceController(HC.W1PlaceController):
@@ -37,6 +45,7 @@ class W1PlaceController(HC.W1PlaceController):
         super().__init__(*a, **kw)
         self.guide, self.obs_trig, self.guide_n, self.guide_lane = None, None, 0, None
         self.so = None                                                      # (d) 站位選擇請求（計畫工作者 kind＝standoff）
+        self.guide_block, self.obs_fail = None, []
         self.x_dead = float(self.x_u0)
         self.q_view_tmpl = np.array(self.q_vhigh, float).copy()
 
@@ -47,6 +56,12 @@ class W1PlaceController(HC.W1PlaceController):
             self._ev('dual_reject', state=g.get('state'), grasp_state=g.get('grasp_state'))
             self.judge._stop(self.t, 'dual_inconsistent', state=g.get('state'), grasp_state=g.get('grasp_state'))
             return
+        if g.get('state') in BLOCK_STATES or g.get('grasp_state') in BLOCK_STATES:
+            if self.guide is not None:
+                self._ev('guide_invalidated', state=g.get('state'), grasp_state=g.get('grasp_state'))
+            self.guide = None                                                  # 不一致／歧義／物件遺失：快取導引失效（不再用來建車道、重新瞄準）
+            self.guide_block = dict(t=round(float(t_recv), 3), state=g.get('state'), grasp_state=g.get('grasp_state'))
+            return
         if g.get('cam') and g.get('state') in OK_STATES and g.get('xy') is not None:
             self.guide = dict(g, t_recv=float(t_recv))
 
@@ -54,46 +69,90 @@ class W1PlaceController(HC.W1PlaceController):
         g = self.guide
         return g is not None and float(self.t) - float(g['t_last']) <= GUIDE_MAX_AGE
 
+    def _d_stop(self):
+        v = max(float(getattr(self, 'v_b', 0.0)), ON.V_STOP_FLOOR)            # 同 bottle_w1_tlane_ctrl 的煞停距離
+        return v * (C0.D_STEPS * C0.PHYS + 0.05) + v * v / (2.0 * float(B.A_BASE[0])) + 0.02
+
+    def _pick_standoff(self, rows):
+        """控制端選擇：可行候選逐一以 bottle_tlane.rejoin 算實際橫向接回後的路徑，估底盤到 x_pre 的時間（名目剖面）與手臂到該分支的轉移時間，
+        取 max(兩者) 最短（0.1 s 內視為同）→ 最小關節餘裕最大 → 桌腳間隙最大。回 (選定列或 None, 每列成本)。"""
+        g = self.guide
+        sig_join = float(self.sig_robot) + self._d_stop() + 0.02
+        q_now = self._arm_now()
+        win_lo = float(self.win[0]) - float(self.x_nom)
+        out = []
+        for r in rows:
+            if not r.get('ok'):
+                continue
+            x_entry, y_lane = TLNm.lane_from_target(g['xy'], win_lo, r['y_reach'])
+            try:
+                new = TLNm.PlannedPathLane(TLNm.rejoin(self.path, sig_join, x_entry, y_lane), x_entry, y_lane)
+            except Exception as e:                                             # noqa: BLE001
+                out.append(dict(r, cost=None, why_cost=f'rejoin:{e!r}'))
+                continue
+            ds = float(new.sig0 - self.path.sig0)
+            x_pre_c = float(g['xy'][0]) + win_lo + 0.05
+            t_base = TPAm.base_time(float(self.sig_robot) + ds, x_pre_c, x_pre_c - 0.6, float(self.v_nav), float(self.v_c), float(self.v_b))
+            t_arm = 0.0 if r.get('q_pre_lo') is None else 1.875 * float(np.abs(np.asarray(r['q_pre_lo'], float) - q_now).max()) / B.W_ARM['v_arm']
+            out.append(dict(r, cost=round(max(t_base, t_arm), 3), t_base=round(t_base, 3), t_arm=round(t_arm, 3), dsig0=round(ds, 4)))
+        feas = [r for r in out if r.get('cost') is not None]
+        if not feas:
+            return None, out
+        best = min(feas, key=lambda r: (round(r['cost'], 1), -r['margin_min'], -(r['base_leg_clear'] or 0.0)))
+        return best, out
+
     def _standoff(self):
-        """(d) 導引新鮮且尚未決定車道 ⇒ 送一次站位選擇請求；結果到了回 y_reach（None＝不可行／未到 ⇒ 由呼叫端決定）。"""
-        if self.so is None:
-            g = self.guide
+        """(d) 導引新鮮且尚未決定車道 ⇒ 送站位選擇請求（綁定導引版本＝xy）；結果到了若導引已變（> SO_TOL）或過期 ⇒ 丟棄、下一拍以新導引重送。
+        全不可行 ⇒ 受控停止 standoff_none_feasible；工作者不可用 ⇒ planner_unavailable／planner_dead（不默默退回名目站位）。回 y_reach 或 None（未到）。"""
+        g = self.guide
+        if self.so is None or self.so['state'] == 'stale':
             q_now = self._arm_now()
             qb = q_now.copy()
             qb[0] = math.atan2(0.4275, 0.35)                                   # 方位種子：車道未定，以名目站位與窗起點的相對方位近似（只是 IK 種子，不是姿態先驗）
             import bottle_s1_geom as G
             legs = [(c.tolist(), sz.tolist()) for n_, c, sz in G.table_boxes(G.S1_TABLE) if n_.startswith('leg')]   # 已知家具（區域先驗桌腳）
-            inp = dict(xy=list(g['xy']), band=0.10, pre_m=0.06, lift_m=0.05, q_seeds=[np.asarray(z_, float).tolist() for z_ in [q_now, qb] + list(self._rng_seeds)], legs=legs,
-                       y_tube=list(B.Y_TUBE))
+            inp = dict(xy=list(g['xy']), band=0.10, pre_m=0.06, lift_m=0.05, q_seeds=[np.asarray(z_, float).tolist() for z_ in [q_now, qb] + list(self._rng_seeds)],
+                       legs=legs, y_tube=list(B.Y_TUBE))
             rid = self.pc.submit('standoff', inp)
-            self.so = dict(id=rid, t_req=round(float(self.t), 3), state='pending' if rid is not None else 'not_sent', xy=list(g['xy']))
-            self._ev('standoff_request', id=rid)
+            n_req = 1 if self.so is None else self.so.get('n_req', 1) + 1
+            self.so = dict(id=rid, t_req=round(float(self.t), 3), state='pending', xy=list(g['xy']), t_guide=float(g['t_last']), n_req=n_req)
+            self._ev('standoff_request', id=rid, n=n_req)
+            if rid is None:
+                self.so['state'] = 'not_sent'
+                self.judge._stop(self.t, 'planner_unavailable', kind='standoff', alive=self.pc.alive())
             return None
         if self.so['state'] != 'pending':
             return self.so.get('y_reach')
         m = self.pc.poll(self.so['id'])
         if m is None:
+            if not self.pc.alive():
+                self.judge._stop(self.t, 'planner_dead', kind='standoff')
             return None
         res = m.get('result') or {}
         self.so.update(t_res=round(float(self.t), 3), ok=bool(m['ok']), error=m.get('error'), rows=res.get('rows'), compute_wall=round(m['wall']['t1'] - m['wall']['t0'], 3))
-        if m['ok']:
-            self.so.update(state='done', y_reach=float(res['chosen']['y_reach']), chosen=res['chosen'])
-        else:
+        if not self._guide_fresh() or float(np.hypot(*(np.asarray(g['xy'], float) - np.asarray(self.so['xy'], float)))) > SO_TOL:
+            self.so['state'] = 'stale'                                         # 結果晚到、導引已更新或過期：丟棄，下一拍以新導引重送
+            self._ev('standoff_stale', id=self.so['id'])
+            return None
+        best, costs = self._pick_standoff(res.get('rows') or []) if m['ok'] else (None, [])
+        self.so['costs'] = [{k: v for k, v in c.items() if k != 'q_pre_lo'} for c in costs]
+        if best is None:
             self.so.update(state='none_feasible', y_reach=None)
-        self._ev('standoff_result', ok=bool(m['ok']), y_reach=self.so.get('y_reach'), wall=self.so['compute_wall'])
-        return self.so.get('y_reach')
+            self._ev('standoff_result', ok=False, wall=self.so['compute_wall'])
+            self.judge._stop(self.t, 'standoff_none_feasible', error=m.get('error'))
+            return None
+        self.so.update(state='done', y_reach=float(best['y_reach']), chosen={k: v for k, v in best.items() if k != 'q_pre_lo'})
+        self._ev('standoff_result', ok=True, y_reach=self.so['y_reach'], cost=best['cost'], wall=self.so['compute_wall'])
+        return self.so['y_reach']
 
     def _lane_from_guide(self):
-        if self.tlane is not None or self.lane_planner is None or not self._guide_fresh():
+        if self.tlane is not None or self.lane_planner is None or not self._guide_fresh() or self.judge.stop is not None:
             return
         yr = self._standoff()
-        if self.so is None or self.so['state'] == 'pending':
-            return                                                             # 等站位結果
-        if self.so['state'] == 'not_sent':
-            yr = None                                                          # 工作者不可用：名目站位（照記錄）
+        if yr is None:
+            return                                                             # 站位結果未到、已丟棄重送或已受控停止
         g = self.guide
-        v = max(float(getattr(self, 'v_b', 0.0)), ON.V_STOP_FLOOR)                  # 同 bottle_w1_tlane_ctrl 的煞停距離
-        d_stop = v * (C0.D_STEPS * C0.PHYS + 0.05) + v * v / (2.0 * float(B.A_BASE[0])) + 0.02
+        d_stop = self._d_stop()
         r = self.lane_planner(dict(t=float(g['t_last']), xy=list(g['xy'])), float(self.t), float(self.sig_robot), d_stop, y_reach=yr)
         rec = {k: v_ for k, v_ in r.items() if k != 'path_new'}
         rec.update(t=round(float(self.t), 3), seq=-1, sig_robot=round(float(self.sig_robot), 4), d_stop=round(d_stop, 4), source=g['cam'])
@@ -148,8 +207,12 @@ class W1PlaceController(HC.W1PlaceController):
                         self._wait('tuck_not_reached', x)
                         return
                     q_obs, info, T_u, bp = cand if cand is not None else self._view_for(sq, look)
-                    if q_obs is None:
-                        q_obs, info = self.q_view_tmpl.copy(), dict(info, why='view_gen_failed_template')
+                    if q_obs is None:                                          # 視角生成失敗：不退回固定左看樣板（Codex 054341）
+                        self.obs_fail.append(dict(t=round(float(self.t), 3), why=why, x=round(x, 4), info=info))
+                        self._ev('obs_view_failed', why=why, x=round(x, 4))
+                        if x >= self.x_dead:
+                            self.judge._stop(self.t, 'obs_view_infeasible', x=round(x, 4), n_fail=len(self.obs_fail))   # 期限已到仍無可行視角：受控拒絕
+                        return                                                 # 期限前：保持收攏，下一次判斷再試（有界：期限即最後界線）
                     self.q_vhigh = q_obs
                     self.look = np.asarray(look, float)                       # 視向追蹤對準同一觀看點
                     self.obs_trig = dict(t=round(float(self.t), 3), why=why, x=round(x, 4), look=np.round(look, 4).tolist(), q1=round(float(q_obs[0]), 4),
@@ -168,7 +231,7 @@ class W1PlaceController(HC.W1PlaceController):
 
     def report(self):
         r = super().report()
-        r['obs'] = dict(trigger=self.obs_trig, standoff=self.so, x_dead=self.x_dead, guide_n=self.guide_n, guide_last=None if self.guide is None else {k: (round(v, 4) if isinstance(v, float) else v) for k, v in self.guide.items()},
+        r['obs'] = dict(trigger=self.obs_trig, standoff=self.so, view_fail=self.obs_fail[-20:], guide_block=self.guide_block, x_dead=self.x_dead, guide_n=self.guide_n, guide_last=None if self.guide is None else {k: (round(v, 4) if isinstance(v, float) else v) for k, v in self.guide.items()},
                         guide_lane=self.guide_lane, guide_max_age=GUIDE_MAX_AGE,
                         note='觀察觸發＝導引就緒或觀察期限（X_DEAD＝現行 X_U0）先到者；觀看點＝導引 xy 或區域觀看點；車道可由導引提早決定')
         return r

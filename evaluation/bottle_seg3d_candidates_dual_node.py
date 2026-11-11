@@ -3,6 +3,8 @@
 訂 /v1/bottle_seg3d（底盤）與 /w1/bottle_seg3d（手腕）；兩路都餵 bottle_dualcam_select.DualSelect（各來源追蹤、交叉核對、物件層級不一致、擷取時刻年齡）。
   抓取候選：沿用基線的 known_type 追蹤與不可變快照（ik／局部點檢查），只多一道閘——DualSelect 判 inconsistent／reject／ambiguous／adopted_object_lost
     ⇒ 該拍 known_type 視為 not_ready（why＝inconsistent），不產生新快照；發布格式不變（控制端 segtarget 規則照舊：限速更新、凍結、期限）。
+    閘門轉為擋住時：目前快照（含背景檢查中者）作廢——其完成通知不發布；若由底盤列觸發，立即以最後手腕訊息重評估並發布一列（未就緒），
+    使最新候選列不再是 ready（Codex 054341 競態：檢查中 → 底盤發現不一致 → 手腕暫無新影格 → 舊檢查完成仍被承接）。
   導引候選：另發 /bottle/target_guide（Float64MultiArray；layout 標籤帶欄位名）：t_eval、guide_cam（0 無 1 v1 2 w1）、guide_state、cx、cy、t_first、t_last（擷取戳）、
     age_s、n、grasp_cam、grasp_state、reject、schema。供控制端觀察觸發、車道／側別（不是抓取目標）。
 每筆輸入列與 DualSelect 結果寫入 --log（JSON lines；含 camera_id）。所有時間是 ROS 模擬時鐘。
@@ -36,7 +38,7 @@ class DualCandNode(CN.CandNode):
     def __init__(self, q_seed, log_path):
         super().__init__(q_seed, log_path)
         self.ds = DS.DualSelect()
-        self.gate = None
+        self.gate, self.void_seq, self.n_suppressed, self._last_w1 = None, set(), 0, None
         self.create_subscription(Float64MultiArray, '/v1/bottle_seg3d', self._in_v1, 50)
         self.pub_guide = self.create_publisher(Float64MultiArray, '/bottle/target_guide', 20)
         ev0 = self.tr.evaluate
@@ -58,11 +60,27 @@ class DualCandNode(CN.CandNode):
         r['recv_age_s'] = self.get_clock().now().nanoseconds * 1e-9 - r['stamp']
         return r
 
+    def _done(self, s, r):
+        """背景快照檢查完成：該快照已因雙相機不一致作廢、或此刻閘門擋住 ⇒ 不發布完成通知（Codex 054341：檢查中快照不可在衝突後被承接）。"""
+        if s['seq'] in self.void_seq or self.gate in BLOCK:
+            self.n_suppressed += 1
+            self._write(dict(rec='check_suppressed', seq=s['seq'], gate=self.gate, void=s['seq'] in self.void_seq))
+            return
+        super()._done(s, r)
+
     def _dual(self, cam, r):
         now = self.get_clock().now().nanoseconds * 1e-9
         acc = self.ds.add(cam, r)
         res = self.ds.evaluate(now)
+        was = self.gate
         self.gate = res['grasp_state']
+        if self.gate in BLOCK and was not in BLOCK:
+            snap = self.sc.snap.get('known_type')
+            if snap is not None:
+                self.void_seq.add(snap['seq'])                                # 作廢目前快照（含背景檢查中者）
+            self._write(dict(rec='gate_block', gate=self.gate, void_seq=sorted(self.void_seq)))
+            if cam == 'v1' and self._last_w1 is not None:
+                CN.CandNode._in(self, self._last_w1)                          # 立即以最後手腕訊息重評估並發布（閘門 ⇒ known_type 未就緒），最新候選列不再是 ready
         u, g = res['guide'], res['grasp']
         nan = float('nan')
         row = dict(t_eval=now, guide_cam=CAM[None if u is None else u['camera_id']], guide_state=GSTATE.get(res['guide_state'], -1.0),
@@ -85,6 +103,7 @@ class DualCandNode(CN.CandNode):
     def _in(self, m):
         r = self._parse(m)
         if r is not None:
+            self._last_w1 = m
             self._dual('w1', dict(r))
         super()._in(m)                                                    # 基線 known_type 追蹤與快照（經 gated evaluate）
 
