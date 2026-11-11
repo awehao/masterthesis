@@ -725,7 +725,7 @@ def main():
         dyn_log.append([float(p_m[0]), float(p_m[1]), float(p_m[2]), float(v_m[0]), float(v_m[1]), float(p_t[0]), float(p_t[1]), float(v_t[0]), float(v_t[1])])
     BP_S = G.bottle_points()
     rows, step_ms = [], []                                                    # step_ms：物理＋渲染，分開計時
-    ctrl_ms, link_ms = [], []                                                 # dynsr43：控制拍總耗時（ctrl.step 全部）、候選／導引轉接 tick 耗時（Codex 134437 耗時紀錄）
+    ctrl_ms, ctrl_ms_solve, ctrl_ms_other, ctrl_top, link_ms = [], [], [], [], []                # dynsr43：ctrl.step 耗時——全部物理步／其中有求解的真正控制拍分開（Codex 140507）；前幾大記時刻與相位；轉接 tick
     t_end_tail = None
     n = int(round((a.sim_s + a.stop_tail_s + 1.5) / dt))                      # 總期限後仍走停止尾段
     penetration = 0.0
@@ -807,10 +807,15 @@ def main():
             elif S2 or WALL:
                 dmin = float('nan')                                           # 瓶位姿無效：不當零，由資料失效判定處理
             penetration = max(0.0, -dmin) if np.isfinite(dmin) else float('nan')
-        t_c = time.perf_counter()
+        t_c, n_sol0 = time.perf_counter(), len(ctrl.solve_ms)
         out = ctrl.step(t, REG.q_to_region(q), f_fingers=ff, t_contact=(t if ff is not None else None), T_bottle=REG.T_to_region(Tb) if ok_b else None, t_bottle=t if ok_b else None,
                         f_table=ft, forbidden=forb, penetration=penetration, f_place=fp, q_fingers=(float(jp[f1]), float(jp[f2])), f_place_raw=fp_raw, f_finger_vec=None if Mf is None else np.asarray(Mf[:, 0], float))
-        ctrl_ms.append((time.perf_counter() - t_c) * 1e3)
+        ms_ = (time.perf_counter() - t_c) * 1e3
+        ctrl_ms.append(ms_)
+        sol_ = len(ctrl.solve_ms) > n_sol0
+        (ctrl_ms_solve if sol_ else ctrl_ms_other).append(ms_)
+        if ms_ > 40.0 and len(ctrl_top) < 400:
+            ctrl_top.append((round(ms_, 2), round(float(t), 3), out['phase'], bool(sol_), round(float(ctrl.solve_ms[-1]), 2) if sol_ else None))
         tgt = np.array(jp, float)
         for j, i in enumerate(idx):
             tgt[i] = float(out['arm_target'][j])
@@ -830,9 +835,11 @@ def main():
             break
     rep = ctrl.report()
     rep['timing']['world_step'] = dict(p50=round(float(np.percentile(step_ms, 50)), 2), p95=round(float(np.percentile(step_ms, 95)), 2), max=round(float(np.max(step_ms)), 2), n=len(step_ms))
-    for k_, v_ in (('ctrl_step_total', ctrl_ms), ('seg_guide_link_tick', link_ms)):
+    for k_, v_ in (('ctrl_step_all_phys', ctrl_ms), ('ctrl_tick_solve', ctrl_ms_solve), ('ctrl_step_nonsolve', ctrl_ms_other), ('seg_guide_link_tick', link_ms)):
         if v_:
             rep['timing'][k_] = dict(p50=round(float(np.percentile(v_, 50)), 2), p95=round(float(np.percentile(v_, 95)), 2), max=round(float(np.max(v_)), 2), n=len(v_))
+    rep['timing']['ctrl_step_top'] = dict(cols=['ms', 't', 'phase', 'solve_tick', 'solve_ms'], rows=sorted(ctrl_top, key=lambda e: -e[0])[:8],
+                                          note='ctrl.step > 40 ms 的前幾大；第一拍求解含冷啟動（obs_nom_1：t＝0 求解 283 ms）')
     rep['region'] = dict(offset=RO[:2].tolist(), frame='控制器與 rep 內事件位置為區域座標；s1_steps 的 base_x／bottle_* 為世界座標')
     rep.update(plan=plan_info, readback=readback, asset=S, forb_keys=sorted(forb), d0=[float(v) for v in d0], n_steps=len(rows), obstacle=dict(c=OB_C.tolist(), sz=OB_S.tolist(), r_cbf=0.2 * math.sqrt(2.0), margin=0.47, truth_for_eval_only=True), exit=dict(c=a.exit_c, r=a.exit_r), path=p_, note='W1：底盤遠距凍結＋手腕近距修正（只修 xy、限速 5 mm/s、INSERT＋0.9 s 鎖定、閉爪前須到達）；V2：抓取目標由底盤相機估計凍結（建構時 NaN），只收位姿互核通過的影格；手臂備妥分支用任務名目瓶位；5 mm 淨空與禁止接觸用模擬真值瓶位姿（安全網）。核心 gmpc_wb；PhysX 射線掃描經真 ROS 話題：/scan_raw→scan_relay→/scan→追蹤器與 Shield 獨立節點，障礙走 /gmpc/obstacles_stamped，底盤命令走 /cmd_vel_pre_shield→Shield→/cmd_vel；控制器與物理同步（非即時部署驗證）；底盤與瓶位姿真值；地圖只有桌腳與側牆；參考路徑：導航段起跑前 SmacPlanner2D 規劃到抓取直線入口；抓取直線為任務定義；持瓶段 LIFT 開始時再規劃到放置直線入口（平滑、承接、局部降速、參考加速度核對）；放置直線與停車放置為任務定義；不重規劃。第二桌位置為已知位置，瓶位姿真值只供安全網與評估；命令總延遲 8 物理步＝實測往返＋注入補足（分列於 nav_chain.ros）；停止處置為腳本自有', ros_chain=True)
     cols = ['t', 'base_x', 'base_y', 'base_yaw'] + [f'q{i}' for i in range(1, 7)] + [f's{i}' for i in range(1, 7)] + ['base_cmd_vx', 'base_cmd_vy', 'base_cmd_wz', 'v_b', 's_ref', 'finger1_q', 'finger2_q', 'finger_cmd', 'f_finger1_bottle', 'f_finger2_bottle',

@@ -243,7 +243,7 @@ class W1PlaceController(R1A.W1PlaceController):
 
     def _advance_inner(self, T_tcp, close_done, q):
         P = self.tpa
-        if P is not None and not P['switched'] and self.st.phase == 'CRUISE' and float(self.t) >= P['t_e'] + P['T'] - 1e-9:
+        if P is not None and not P['switched'] and P.get('time_switch', True) and self.st.phase == 'CRUISE' and float(self.t) >= P['t_e'] + P['T'] - 1e-9:   # TPAS 子類停用（time_switch＝False）
             P['switched'] = True
             self.blending = True                                          # 切世界座標：step_phase 於 t ≥ t_pre 進 PREGRASP（世界固定 T_pre）
             self._ev('tpa_switch', x=round(float(q[0]), 4), y=round(float(q[1]), 4))

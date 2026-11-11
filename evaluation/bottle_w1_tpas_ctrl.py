@@ -19,6 +19,8 @@
     |dy| > DEV_Y_MAX 或 |dθ| > DEV_TH_MAX ⇒ 接近段即受控停止 tpa_plan_deviation（不等到切換）。切換閘門用同一 D。
   5 rate 不濾波＝本拍實際相位增量／Δt；重接時長依 min-jerk 峰值（1.875×平均）使峰值 ≤ V_RJ／W_RJ，超過 T_RJ_MAX 即拒絕（不截短）。
   st.t_pre 在承接時設為無限大（不再依時間進 PREGRASP）。
+  6 obs_nom_1 修正（2026-11-11）：相位進度 σ 改由本類每拍投影實測底盤位置求得（_sig_meas，只進不退），不再用過車道入口即凍結的 sig_robot；
+    父類 TPA 的時間切換停用（P['time_switch']＝False），切換只經 switch_check；τ 遲遲不到 T 由既有期限受控停止（不新增期限）。
 """
 import math
 
@@ -130,15 +132,46 @@ class W1PlaceController(CJ.W1PlaceController):
         P = self.tpa
         if P is None:
             return
-        sig_e = float(getattr(self, 'sig_robot', q[0])) + float(self.v_b) * (P['t_e'] - float(self.t))
+        sig0 = self._sig_of(np.asarray(q, float)[:2], float(getattr(self, 'sig_robot', q[0])))   # 同一進度定義（車道段解析 σ＝x，其前取樣投影）
+        sig_e = sig0 + float(self.v_b) * (P['t_e'] - float(self.t))
         prof = progress_profile(sig_e, float(self.x_pre), float(self.x_slow), P['v_nav_eff'], P['v_c_eff'], float(self.v_b), P['T'])
-        P.update(prof=prof, tau=0.0, rate=1.0, t_last=P['t_e'], sw=None, rj=None, tau_log=[])
+        P.update(prof=prof, tau=0.0, rate=1.0, t_last=P['t_e'], sw=None, rj=None, tau_log=[], time_switch=False, sig_raw=sig0, sig_phase=sig0, sig_path=self.path,
+                 regress_max=0.0, regress_ev=False)
+        # time_switch＝False：父類 TPA 依時間 t_e＋T 切換停用（obs_nom_1：τ 未到 T 卻被時間切換，st.t_pre＝∞ ⇒ 永不進 PREGRASP）；切換只經 switch_check
         self.st.t_pre = float('inf')                                     # 不再依時間進 PREGRASP；由切換閘門決定
         self._ev('tpas_profile', n=len(prof[0]), sig0=round(float(prof[1][0]), 4), sig_end=round(float(prof[1][-1]), 4), tau_end=round(float(prof[0][-1]), 3))
 
     def _plan_yaw(self, sig):
         """進度點 σ 的計畫底盤偏航（本版＝th_ref；航向沿路徑的子類覆寫為該進度點的路徑航向）。"""
         return float(self.th_ref)
+
+    def _sig_of(self, xy, hint):
+        """進度定義（初始化、相位、偏差補償、紀錄共用）：直線車道段（x ≥ x_lane，路徑點＝(σ, y_lane)）解析 σ＝x；其前以 hint 附近取樣投影（窗 back 0.1／ahead 0.3）。"""
+        x = float(xy[0])
+        if x >= float(self.path.x_lane):
+            return x
+        return float(self.path.project(np.asarray(xy[:2], float), float(hint), back=0.1, ahead=0.3))
+
+    def _sig_meas(self, q):
+        """相位用的底盤實測進度（obs_nom_1 修正；Codex 20261111_140507 第 1 項）：每拍由實測底盤位置以 _sig_of 求 σ_raw（不單調，照實記錄）；
+        手臂相位用 σ_phase＝max(上一拍 σ_phase, σ_raw)（只進不退只用於相位）。不沿用 sig_robot（只在 s_ref < x_lane 更新，過車道入口即凍結）。
+        換路徑版本：σ 依新舊路徑 sig0 差平移（＝tlane 的 dsig0；接段前的舊路徑保留）。實際倒退 σ_phase − σ_raw 記最大值與事件，安全檢查照舊（偏差補償用 σ_raw 鄰域）。"""
+        P = self.tpa
+        if P.get('sig_path') is not self.path:
+            old = P.get('sig_path')
+            ds = 0.0 if old is None else float(self.path.sig0) - float(old.sig0)
+            P['sig_raw'], P['sig_phase'], P['sig_path'] = float(P['sig_raw']) + ds, float(P['sig_phase']) + ds, self.path
+            self._ev('tpas_path_version', ds=round(ds, 4))
+        raw = self._sig_of(np.asarray(q, float)[:2], P['sig_raw'])
+        P['sig_raw'] = raw
+        P['sig_phase'] = max(float(P['sig_phase']), raw)
+        reg = float(P['sig_phase']) - raw
+        if reg > P['regress_max']:
+            P['regress_max'] = reg
+        if reg > 0.03 and not P['regress_ev']:
+            P['regress_ev'] = True
+            self._ev('tpas_base_regress', sig_raw=round(raw, 4), sig_phase=round(float(P['sig_phase']), 4))   # 實測倒退：記錄（相位不退），不新增停止規則
+        return float(P['sig_phase'])
 
     def _tau_at(self, tau_t):
         P = self.tpa
@@ -155,21 +188,22 @@ class W1PlaceController(CJ.W1PlaceController):
         P = self.tpa
         if P is not None and not P['switched'] and self.st.phase == 'CRUISE' and self.judge.stop is None and float(self.t) >= P['t_e'] - 1e-9:
             t = float(self.t)
-            P['tau'], P['rate'] = tau_step(P['tau'], P['rate'], t - P['t_last'], float(self.sig_robot), P['prof'], P['T'])
+            sm = self._sig_meas(q)
+            P['tau'], P['rate'] = tau_step(P['tau'], P['rate'], t - P['t_last'], sm, P['prof'], P['T'])
             P['t_last'] = t
             qp, _, _ = self._stop_rest(np.asarray(q, float))
-            sp = self.path.project(qp[:2], float(self.sig_robot), back=0.1, ahead=0.3)
+            sp = self._sig_of(qp[:2], P['sig_raw'])                       # 同一進度定義（不再以凍結的 sig_robot 當提示）
             P['D'], dy, dth = plan_dev(qp[:3], self.path.xy(sp)[0], self._plan_yaw(sp))
             P['dev_max'] = max(P.get('dev_max', 0.0), abs(dy))
             if abs(dy) > DEV_Y_MAX or abs(dth) > DEV_TH_MAX:
                 self.judge._stop(self.t, 'tpa_plan_deviation', dy=round(dy, 4), dth=round(dth, 4))
             if len(P['tau_log']) < 2000:
-                P['tau_log'].append((round(t, 3), round(float(self.sig_robot), 4), round(P['tau'], 4), round(P['rate'], 4)))
+                P['tau_log'].append((round(t, 3), round(sm, 4), round(P['tau'], 4), round(P['rate'], 4), round(float(P['sig_raw']), 4)))   # (t, σ_phase, τ, rate, σ_raw)
             if self.judge.stop is None and P['tau'] >= P['T'] - 1e-9:
                 lat = C0.D_STEPS * C0.PHYS
                 sw = switch_check(self.K, qp[:3], np.asarray(self.u_last, float)[:3], P, P['tau'] + P['rate'] * lat, P['rate'], P['T_pre'], D=P['D'])
                 T_from = sw.pop('T_from')
-                P['sw'] = dict(sw, t=round(t, 3), x=round(float(q[0]), 4), y=round(float(q[1]), 4), rate=round(P['rate'], 4))
+                P['sw'] = dict(sw, t_sw=round(t, 3), x=round(float(q[0]), 4), y=round(float(q[1]), 4), rate=round(P['rate'], 4))   # 時刻欄名 t_sw：_ev／S0Judge._stop 以 t 為固定參數，原名 t 使接受與拒絕路徑都 TypeError（tpas_progress_counterexample 抓到）
                 if sw['ok']:
                     P['switched'] = True
                     self.blending = True
@@ -201,5 +235,8 @@ class W1PlaceController(CJ.W1PlaceController):
             r['tpas'] = dict(sw=P.get('sw'), rejoin=None if rj is None else dict(t0=rj['t0'], T=rj['T']), tau_log=P.get('tau_log', [])[::2],
                              gate=dict(sw_p=SW_P, sw_r=SW_R, sw_v=SW_V, sw_p_max=SW_P_MAX, sw_r_max=SW_R_MAX, v_rj=V_RJ, w_rj=W_RJ, t_rj=[T_RJ_MIN, T_RJ_MAX], rate_lp=RATE_LP, mj_peak=MJ_PEAK, dev_y_max=DEV_Y_MAX, dev_th_max=DEV_TH_MAX), dev_max=P.get('dev_max'),
                              note='手臂相位隨底盤實測進度；τ 只進不退、速率 ≤ 計畫；τ 到 T 以同一參考、同一命令生效時刻核切換兩側：小差直接切、中差有界重接、大差受控拒絕')
-            r['tpa'] = {k: v for k, v in r['tpa'].items() if k not in ('prof', 'tau_log', 'rj', 'D')}
+            r['tpa'] = {k: v for k, v in r['tpa'].items() if k not in ('prof', 'tau_log', 'rj', 'D', 'sig_path')}
+            r['tpas'].update(progress=dict(sig_raw_end=round(float(P.get('sig_raw', float('nan'))), 4), sig_phase_end=round(float(P.get('sig_phase', float('nan'))), 4),
+                                           regress_max=round(float(P.get('regress_max', 0.0)), 4), time_switch=P.get('time_switch'),
+                                           note='σ：車道段解析 σ＝x、其前取樣投影；相位用 σ_phase（只進不退），σ_raw 照實記錄；tau_log 欄＝(t, σ_phase, τ, rate, σ_raw)'))
         return r

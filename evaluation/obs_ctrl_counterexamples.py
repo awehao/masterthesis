@@ -7,6 +7,7 @@
   4 導引狀態不一致 ⇒ 快取導引失效，不建車道、不重新瞄準。
   5 站位請求在途時開始 U ⇒ 結果回來仍被取回、採用所選車道（不綁 TUCK）。
   6 手腕抓取候選先到（無導引）⇒ 不讓父類建名目車道；以實測支撐高度做站位確認，車道成立後才放行抓取計畫。
+  7 同戳導引：GuideLink 收同一 t_eval 兩筆（正常→不一致／reject），第二筆到達控制器（導引失效／受控停止）；較舊仍拒收。
 站位成本：tpa_nom_3 實際接近路徑，承接時 σ（任務 5 s 附近）；bottle_standoff.evaluate 實算候選（含分支構型）→ _pick_standoff（實際橫向接回後底盤時間、手臂轉移時間）。
     python3 evaluation/obs_ctrl_counterexamples.py OUT.json
 """
@@ -185,6 +186,29 @@ def main():
     res['6_wrist_first'] = dict(parent_calls_immediately=immediate, standoff_inputs_z=st['inputs'][0].get('z_list') if st['inputs'] else None, parent_calls_after=calls6,
                                 lane_calls=o.lane_calls, events=[e[0] for e in o.ev])
     print('6', res['6_wrist_first'], flush=True)
+    # 7 同戳導引（Codex 140507 第 4 項）：第一筆正常、第二筆不一致／reject（同一 t_eval）⇒ 第二筆必須到達控制器
+    import ast
+    import bottle_guide_link as GL
+    mod = ast.parse(open(os.path.join(HERE, 'bottle_seg3d_candidates_dual_node.py')).read())
+    asg = {n.targets[0].id: n.value for n in mod.body if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)}
+    GF = ast.literal_eval(asg['GFIELDS'])
+    GLABEL = ast.literal_eval(asg['GLABEL'].left) + ','.join(GF)          # 與節點同一標籤（由原始碼讀，不手抄）
+    RO7 = (0.6, 0.8)
+
+    def grow(te, cam, st, gst, rej, xy=None):
+        nan = float('nan')
+        d = dict(t_eval=te, guide_cam=cam, guide_state=st, cx=nan if xy is None else xy[0] + RO7[0], cy=nan if xy is None else xy[1] + RO7[1], t_first=nan if xy is None else te - 0.3,
+                 t_last=nan if xy is None else te - 0.05, age_s=nan if xy is None else 0.05, n=0.0 if xy is None else 3.0, grasp_cam=0.0, grasp_state=gst, reject=rej, schema=1.0)
+        return (GLABEL, [float(d[f]) for f in GF])
+    for variant, second in (('inconsistent', grow(5.0, 0.0, 5.0, 5.0, 0.0)), ('reject', grow(5.0, 0.0, 6.0, 6.0, 1.0))):
+        o = mk(path)
+        gl = GL.GuideLink(types.SimpleNamespace(create_subscription=lambda *a, **k: None), o, None, region_offset=RO7)
+        gl.set_T0(0.0)
+        gl.q += [grow(5.0, 1.0, 1.0, 0.0, 0.0, xy=(-0.0227, 0.4081)), second, grow(4.9, 1.0, 1.0, 0.0, 0.0, xy=(-0.0227, 0.4081))]   # 第三筆較舊：仍拒收
+        o.t = 5.02
+        gl.tick(5.02)
+        res[f'7_same_stamp_{variant}'] = dict(n_fwd=gl.n_fwd, rejected=gl.rej, guide=o.guide, guide_block=o.guide_block, guide_n=o.guide_n, stop=o.judge.stop, events=[e[0] for e in o.ev])
+        print('7', variant, res[f'7_same_stamp_{variant}'], flush=True)
     # 站位成本：實算候選 → 控制端選擇
     o = mk(path, s_ref=-2.9)
     o.guide_intake(5.0, dict(cam='v1', state='selected', xy=[-0.0227, 0.4081], t_last=4.95, reject=False))

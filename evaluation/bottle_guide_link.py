@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """導引候選轉接（雙相機 (b)(c)；Codex 20261111_050821）：/bottle/target_guide（bottle_seg3d_candidates_dual_node）→ ctrl.guide_intake。
 在 Isaac 同程序的 bridge 節點上訂閱；主迴圈每步 tick(t_task) 依收到順序處理。訊息內時間是 ROS 模擬時鐘；轉送時換成任務時刻（ROS − T0）。
-驗證（全部通過才轉送；失效關閉）：標籤含 bottle_target_guide、schema=1、frame=odom 與欄位名、欄位齊全；t_eval 有限、非未來、嚴格遞增；
+驗證（全部通過才轉送；失效關閉）：標籤含 bottle_target_guide、schema=1、frame=odom 與欄位名、欄位齊全；t_eval 有限、非未來、不早於上一筆（同戳照到達順序處理；
+  雙相機節點在 v1、w1 回呼同一模擬時刻各發一筆，obs_nom_1 嚴格遞增曾拒收 79／244 筆）；
   guide_cam／guide_state／grasp_cam／grasp_state／reject／schema 為精確整數碼（非法碼整筆拒收，不當作無來源）；
   有導引（guide_cam ≠ 0）時 cx、cy 有限、t_first ≤ t_last ≤ t_eval、n 為正整數；年齡在轉送當下由擷取戳重算（含轉送延遲，不用訊息內的 age_s）。
 xy：世界 → 區域（減 region_offset）；只轉一次。reject＝1 照樣轉送（控制端受控停止）。
@@ -47,7 +48,7 @@ class GuideLink:
                 continue
             r = dict(zip(fs, data))
             te = r['t_eval']
-            if not np.isfinite(te) or te > now_ros + 1e-6 or (self.last_eval is not None and te <= self.last_eval):
+            if not np.isfinite(te) or te > now_ros + 1e-6 or (self.last_eval is not None and te < self.last_eval):   # 同戳可收（照單一發布者到達順序；Codex 140507 第 4 項），較舊拒收
                 self._bad('t_eval')
                 continue
             gc, gs, ks = _code(r['guide_cam'], CAMS), _code(r['guide_state'], STATES), _code(r['grasp_state'], STATES)
