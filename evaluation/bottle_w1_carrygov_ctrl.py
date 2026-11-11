@@ -92,7 +92,7 @@ class W1PlaceController(GZ.W1PlaceController):
         f = self.cc
         stage = None if f is None else f['stage']
         T_lift = np.asarray(self.st.T_carry_rel if f is None else f.get('T_side_lift', f['T_side']), float)
-        R, pc = T_lift[:3, :3], np.asarray(C2m.TCP_C, float)
+        R, pc = T_lift[:3, :3], np.asarray(self._tcp_c(), float)
         Pr = (R @ Pt.T).T
         if stage in (None, 'to_compact'):
             pa = T_lift[:3, 3]

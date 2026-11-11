@@ -108,7 +108,7 @@ class W1PlaceController(CA.W1PlaceController):
 
     def _sweep_base(self, T_side):
         Pt = self._pts_tcp()
-        R, pa, pc = T_side[:3, :3], T_side[:3, 3], TCP_C
+        R, pa, pc = T_side[:3, :3], T_side[:3, 3], self._tcp_c()
         Pr = (R @ Pt.T).T
         return np.vstack([Pr + (pa + (pc - pa) * s) for s in np.linspace(0.0, 1.0, NS)])
 
@@ -149,7 +149,7 @@ class W1PlaceController(CA.W1PlaceController):
     # ---- 參考
     def _cc_T(self, t):
         f = self.cc
-        pa, pc = f['T_side'][:3, 3], TCP_C
+        pa, pc = f['T_side'][:3, 3], self._tcp_c()
         T = f['T_side'].copy()
         if f['t_ret'] is None:
             s = BR.min_jerk(min(max((t - f['t0']) / self._ccd('T_TO'), 0.0), 1.0))
@@ -226,7 +226,7 @@ class W1PlaceController(CA.W1PlaceController):
         r = super().report()
         gm = np.array(self.gate_ms) if self.gate_ms else np.zeros(1)
         r['compact_carry'] = dict(
-            version='v2', events=self.cc_ev, tcp_compact=TCP_C.tolist(), T_to=T_TO, T_up=T_UP, T_out=T_OUT, log=self.cc_log,
+            version='v2', events=self.cc_ev, tcp_compact=self._tcp_c().tolist(), T_to=T_TO, T_up=T_UP, T_out=T_OUT, log=self.cc_log,
             gate=dict(edge_pad=EDGE_PAD, z_pad=Z_PAD, top_z=TOP_Z, v_ahead=V_AHEAD, n_sweep=NS, trigger=self.gate_trig,
                       monitor_min=None if not math.isfinite(self.gate_mon_min) else self.gate_mon_min, ms_max=float(gm.max()), ms_mean=float(gm.mean()), n=len(self.gate_ms), log=self.gate_log),
             scope='v2：三段各自起訖速度為零的過渡（時長依整段路徑關節速度／加速度）；第一桌淨空閘＝整段降低路徑的完整瓶身＋夾爪點 × 實測／在途／預測時域／路徑前方位姿；停車與放置沿用原算法')

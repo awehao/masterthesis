@@ -127,7 +127,7 @@ class W1PlaceController(SW.W1PlaceController):
         elif q[0] >= g['x_latest']:
             why = 'late'
         T_g = np.array(res['T_g'], float)
-        if why is None and float(np.abs(T_g - C0.grasp_target(float(g['xy'][0]), float(g['xy'][1]), g['zs'] + 0.10)).max()) > 1e-9:
+        if why is None and float(np.abs(T_g - self._grasp_T(float(g['xy'][0]), float(g['xy'][1]), g['zs'] + 0.10)).max()) > 1e-9:
             why = 'target_mismatch'
         if why is not None:
             g['state'] = 'rejected:' + why
@@ -156,7 +156,8 @@ class W1PlaceController(SW.W1PlaceController):
         self.w_goal = np.array(xy, float)
         self.seg_seq = seq
         self.seg_adopt.append((self.t, seq, list(map(float, xy)), zs))
-        self.cc_t1 = (float(zs), np.array(C2m.TABLE1_C, float), np.array(C2m.TABLE1_HALF, float))   # 第一桌高度＝本趟量測；xy 範圍＝任務先驗
+        c_h = getattr(self, 'table1_c_half', None) or (C2m.TABLE1_C, C2m.TABLE1_HALF)       # 第一桌先驗（hook；未設＝模組常數，舊行為）
+        self.cc_t1 = (float(zs), np.array(c_h[0], float), np.array(c_h[1], float))   # 第一桌高度＝本趟量測；xy 範圍＝任務先驗
         g.update(state='accepted', t_acc=float(self.t), wall_acc=_wall(), x_acc=x_now, margin=float(res['margin']), q_mid=res['q_mid'])
         self._ev('segtarget_freeze', xy=[round(float(v), 5) for v in xy], z_support=round(zs, 5), seq=seq, margin=float(res['margin']), plan_id=g['id'])
 
@@ -168,7 +169,7 @@ class W1PlaceController(SW.W1PlaceController):
         T_side = np.array(self.lb['T_fin'], float)
         T_rel = np.array(self.judge.T_rel, float)
         inp = dict(T_side=T_side.tolist(), T_rel=T_rel.tolist(), q_arm=np.asarray(q, float)[3:].tolist(), top2=float(self.place['top']), z_pad=C2m.Z_PAD, h_clear=H_CLEAR,
-                   tcp_c=np.asarray(C2m.TCP_C, float).tolist(), ns=NS_RET, scale=1.05, step=0.05, floor=dict(DUR_FLOOR), limits=RET_LIM)
+                   tcp_c=np.asarray(self._tcp_c(), float).tolist(), ns=NS_RET, scale=1.05, step=0.05, floor=dict(DUR_FLOOR), limits=RET_LIM)
         rid = self.pc.submit('return', inp)
         self.rp_n += 1
         self.rp = dict(state='pending' if rid is not None else 'not_sent', id=rid, t_req=float(self.t), wall_req=_wall(), T_side=T_side, T_rel=T_rel)

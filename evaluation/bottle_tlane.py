@@ -35,9 +35,10 @@ class PlannedPathLane(NP.PlannedPath):
         return out
 
 
-def lane_from_target(xy_meas, win_lo, y_reach=None):
+def lane_from_target(xy_meas, win_lo, y_reach=None, side='left'):
     """入口 x、車道 y。y_reach＝None ⇒ 名目 Y_REACH_NOM（舊行為）；(d) 由站位選擇（bottle_standoff）給量測後選定值。"""
-    return float(xy_meas[0]) + float(win_lo) - RUNUP, float(xy_meas[1]) - (Y_REACH_NOM if y_reach is None else float(y_reach))
+    sg = 1.0 if side == 'left' else -1.0                                  # 右側整合：y_lane＝y ＋ y_reach（右）；未給＝左，舊行為
+    return float(xy_meas[0]) + float(win_lo) - RUNUP, float(xy_meas[1]) - sg * (Y_REACH_NOM if y_reach is None else float(y_reach))
 
 
 def rejoin(path, sig_join, x_entry, y_lane):
@@ -55,7 +56,7 @@ def rejoin(path, sig_join, x_entry, y_lane):
     return NP.resample(np.vstack([pre[:-1], B]))
 
 
-def decide(obs, t_now, fresh_s, path, sig_robot, v, d_stop, win_lo, grid=None, t_grid=None, y_tube=None, y_reach=None):
+def decide(obs, t_now, fresh_s, path, sig_robot, v, d_stop, win_lo, grid=None, t_grid=None, y_tube=None, y_reach=None, side='left'):
     """回傳 dict(ok, why, x_entry, y_lane, sig_join, path_new, dsig0, cost_max)。obs＝{'t','xy'} 或 None。"""
     out = dict(ok=False, why=None)
     if obs is None:
@@ -70,9 +71,9 @@ def decide(obs, t_now, fresh_s, path, sig_robot, v, d_stop, win_lo, grid=None, t
     if xy.shape != (2,) or not np.isfinite(xy).all():
         out['why'] = 'observation_invalid'
         return out
-    x_entry, y_lane = lane_from_target(xy, win_lo, y_reach)
+    x_entry, y_lane = lane_from_target(xy, win_lo, y_reach, side)
     sig_join = float(sig_robot) + float(d_stop) + 0.02
-    out.update(x_entry=round(x_entry, 4), y_lane=round(y_lane, 4), sig_join=round(sig_join, 4), y_reach=Y_REACH_NOM if y_reach is None else float(y_reach))
+    out.update(x_entry=round(x_entry, 4), y_lane=round(y_lane, 4), sig_join=round(sig_join, 4), y_reach=Y_REACH_NOM if y_reach is None else float(y_reach), side=side)
     if y_tube is not None and not (float(y_tube[0]) <= y_lane <= float(y_tube[1])):
         out['why'] = 'lane_outside_release_tube'                 # 放行 INSERT 的側向管（bottle_s0b_ctrl.Y_TUBE）是驗證過的範圍，不放寬
         return out

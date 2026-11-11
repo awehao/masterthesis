@@ -50,14 +50,15 @@ class W1PlaceController(C21.W1PlaceController):
 
     def _T_raised(self):
         T = self.cc['T_side'].copy()
-        T[:3, 3] = [C2.TCP_C[0], C2.TCP_C[1], T[2, 3]]
+        pc_ = self._tcp_c()
+        T[:3, 3] = [pc_[0], pc_[1], T[2, 3]]
         return T
 
     def _cc_T(self, t):
         f = self.cc
         if f.get('t_raise') is None:
             return super()._cc_T(t)
-        pa, pc = f['T_side'][:3, 3], C2.TCP_C
+        pa, pc = f['T_side'][:3, 3], self._tcp_c()
         T = f['T_side'].copy()
         tau = t - f['t_raise']
         s = BR.min_jerk(min(max(tau / self._ccd3('T_UP'), 0.0), 1.0))

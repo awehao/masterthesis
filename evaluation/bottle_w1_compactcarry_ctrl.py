@@ -29,6 +29,11 @@ class W1PlaceController(CA.W1PlaceController):
         super().__init__(*a, **kw)
         self.cc, self.cc_ev, self.cc_log = None, [], []
 
+    def _tcp_c(self):
+        """收近點（底盤座標；hook：實例 tcp_c 優先，未設＝模組常數 TCP_C，舊行為）。"""
+        v = getattr(self, 'tcp_c', None)
+        return TCP_C if v is None else np.asarray(v, float)
+
     def _bottle_xy(self, q):
         Tb = self.K.fk(np.asarray(q, float), 'link_tcp') @ self.judge.T_rel
         return Tb[:2, 3]
@@ -37,7 +42,7 @@ class W1PlaceController(CA.W1PlaceController):
         if self.judge.T_rel is None:
             return False
         p = self._bottle_xy(q)
-        (cx, cy), (sx, sy) = TABLE1
+        (cx, cy), (sx, sy) = getattr(self, 'table1_xy', None) or TABLE1     # 第一桌先驗（hook；未設＝模組常數）
         return abs(p[0] - cx) > sx / 2 + EDGE_PAD or abs(p[1] - cy) > sy / 2 + EDGE_PAD
 
     def _cc_s(self, t):

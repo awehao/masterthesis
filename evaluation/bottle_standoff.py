@@ -22,7 +22,10 @@ def evaluate(inp):
     import bottle_plan_worker as PW
     import bottle_ref as BRF
     import bottle_s0_ctrl as C0
+    import bottle_side as BSD
     x, y = float(inp['xy'][0]), float(inp['xy'][1])
+    side = inp.get('side', 'left')                                        # 右側整合：抓取側（控制端量測選側；未給＝左，舊行為逐元素相同）
+    sg = BSD.sgn(side)
     ylist = tuple(inp.get('y_list') or Y_LIST)
     zlist = tuple(inp.get('z_list') or Z_LIST)
     seeds = [np.asarray(s, float) for s in inp['q_seeds']]
@@ -30,13 +33,13 @@ def evaluate(inp):
     rows = []
     tube = inp.get('y_tube')
     for yr in ylist:
-        yl = y - yr
+        yl = y - sg * yr
         if tube is not None and not (float(tube[0]) <= yl <= float(tube[1])):
             rows.append(dict(y_reach=yr, y_lane=round(yl, 4), ok=False, why='outside_release_tube', margin_min=None, margin_by_z=None, base_leg_clear=None))
             continue                                                         # 放行 INSERT 的側向管（bottle_s0b_ctrl.Y_TUBE，已驗證範圍）外不選
         mins, why, q_pre = [], None, None
         for z in zlist:
-            T_g = C0.grasp_target(x, y, z + float(inp.get('band', 0.10)))
+            T_g = C0.grasp_target(x, y, z + float(inp.get('band', 0.10))) if side == 'left' else BSD.grasp_target(x, y, z + float(inp.get('band', 0.10)), side)
             T_p = T_g.copy()
             T_p[:3, 3] -= float(inp.get('pre_m', 0.06)) * T_g[:3, 2]
             T_l = BRF.lift_pose(T_g, float(inp.get('lift_m', 0.05)))
@@ -69,4 +72,4 @@ def evaluate(inp):
     if not feas:
         return False, 'no_feasible_standoff', dict(rows=rows)
     best = max(feas, key=lambda r: (r['margin_min'], r['base_leg_clear'] if r['base_leg_clear'] is not None else 0.0))
-    return True, None, dict(rows=rows, chosen=best, rule='全 z 可行 → 最小關節餘裕最大 → 底盤對桌腳間隙最大', z_list=list(zlist), win=[WIN_LO, WIN_LO + WIN_W])
+    return True, None, dict(side=side, rows=rows, chosen=best, rule='全 z 可行 → 最小關節餘裕最大 → 底盤對桌腳間隙最大', z_list=list(zlist), win=[WIN_LO, WIN_LO + WIN_W])

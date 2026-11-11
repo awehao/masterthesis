@@ -108,10 +108,14 @@ class W1PlaceController(C3.W1PlaceController):
     def _seg_expire_info(self):
         return {}
 
+    def _grasp_T(self, x, y, h):
+        """抓取目標姿態（hook；預設＝左側 C0.grasp_target，舊行為逐元素相同；右側子類覆寫）。"""
+        return C0.grasp_target(float(x), float(y), float(h))
+
     def _Tg(self, xy):
         if self.seg_z is None:
             return np.full((4, 4), np.nan)                       # 未採用前沒有目標；不回填桌高
-        return C0.grasp_target(float(xy[0]), float(xy[1]), self.seg_z + 0.10)
+        return self._grasp_T(float(xy[0]), float(xy[1]), self.seg_z + 0.10)
 
     def _w1_checks(self):
         R, st = self.seg, self.st
