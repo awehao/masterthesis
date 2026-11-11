@@ -24,7 +24,7 @@
  },
  "order": "先名目；名目完整通過且紀錄確認新版鏈生效（導引來源、觀察觸發原因、站位結果採用、車頭沿路徑）才跑 A；名目失敗交第一阻點，不自動補跑",
  "run_ids": {
-  "nominal": "bottle_motm_obs_nom_2",
+  "nominal": "bottle_motm_obs_nom_3",
   "A": "bottle_motm_obs_A_1"
  },
  "deliverables": "每趟同 RUN_ID：Isaac 實錄重播＋同時間軸 2D 追蹤疊圖；分列抓取車速、停止時間、滑移、放置誤差、車頭與路徑夾角、兩相機實際作用；控制拍總耗時、發布間隔、工作者排隊／計算／回傳、候選年齡與承接餘裕",
@@ -33,7 +33,7 @@
   "nominal": "bottle_motm_tpa_nom_3（dynsr42，名目站位 0.4275、無觀察觸發）",
   "A": "bottle_motm_tpa_A_1（dynsr42）"
  },
- "freeze": "experiments/20261111_motm_obs_freeze_r2.sha256",
+ "freeze": "experiments/20261111_motm_obs_freeze_r3.sha256",
  "pre_checks": [
   "results/bottle/obs_ctrl_counterexamples_r2.json（反例 1–6）",
   "results/vision/dualcam_void_check_r1.json（A／B 順序）",
@@ -46,7 +46,15 @@
    "result": "結果碼 3：22.8 s segtarget_expired（凍結 7.75 s 起 15.05 s）；相位停在 CRUISE、未閉爪",
    "root_cause": "TPAS 進度 σ 取 sig_robot，過車道入口（14.85 s）後凍結 ⇒ τ 停 5.12/10.45；父類 TPA 時間切換 18.3 s 觸發（st.t_pre＝∞ ⇒ 不進 PREGRASP），底盤倒退約 0.27 m（無接觸）",
    "fix": "Codex 140507：TPAS 自身實測投影進度（車道段 σ＝x）、父類時間切換停用（time_switch 旗標）、sw 時刻鍵 t→t_sw（真 _ev／_stop 簽名衝突，切換路徑原本會 TypeError）、GuideLink 同戳可收；反例 tpas_progress_counterexample_r1、obs_ctrl_counterexamples_r3"
+  },
+  {
+   "run": "bottle_motm_obs_nom_2",
+   "freeze": "experiments/20261111_motm_obs_freeze_r2.sha256",
+   "result": "結果碼 3：19.95 s tpa_switch_inconsistent（dp 16.2 mm、dv 0.061 > 0.03）；未閉爪",
+   "root_cause": "τ 速率上限 1：末段底盤快 7% ⇒ 落後 0.19 s；剖面終點離散（τ_end 10.38≠T 10.40、末步記滿 Δt）；S1 於 x_pre 減速等手臂，手臂照 v_c 末速收尾 ⇒ 速度差",
+   "fix": "Codex 142637 (A)：有界追趕 r_max 1.2（ṙ↑≤1.0/s）＋剖面終點修正＋σ 次格點細化；同包變更有效期政策（最後有效驗證來源時刻起 15 s）"
   }
  ],
- "nom_2_rules": "Codex 141404：期限 15 s、凍結時刻、速度、抓取門檻不改；不提早閉爪、不重送相同目標／延後凍結／刷新計時；推算餘裕約 −0.5 s（混合推算：反例 20.35 s 為切換／重接起始，非完成；1.85 s 取自 nom_3 只作估算）事前揭露；逾期照規則停止、不補跑、不接 A；完整通過才依本凍結接 A"
+ "nom_2_rules": "Codex 141404：期限 15 s、凍結時刻、速度、抓取門檻不改；不提早閉爪、不重送相同目標／延後凍結／刷新計時；推算餘裕約 −0.5 s（混合推算：反例 20.35 s 為切換／重接起始，非完成；1.85 s 取自 nom_3 只作估算）事前揭露；逾期照規則停止、不補跑、不接 A；完整通過才依本凍結接 A",
+ "nom_3_rules": "Codex 142637：相位策略（追趕＋剖面終點）與有效期政策同時變更，結果不得全歸因於提速；場景、速度上限、抓持品質門檻不動；失敗不補跑；名目完整通過才接原固定 A（同凍結 r3）"
 }
