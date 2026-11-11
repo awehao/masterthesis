@@ -66,7 +66,7 @@ class W1PlaceController(ON.W1PlaceController):
                 self.judge._stop(self.t, 'segtarget_unreachable', source='online_grasp_plan', error=m['error'], seq=g['seq'])
                 return
             T_g = np.array(m['result']['T_g'], float)
-            if float(np.abs(T_g - C0.grasp_target(float(g['xy'][0]), float(g['xy'][1]), g['zs'] + 0.10)).max()) > 1e-9:
+            if float(np.abs(T_g - self._grasp_T(float(g['xy'][0]), float(g['xy'][1]), g['zs'] + 0.10)).max()) > 1e-9:   # hook（預設＝C0.grasp_target，左側逐元素相同；bottle_motm_right_nom_3 在此以寫死左側目標誤停）
                 g['state'] = 'rejected:target_mismatch'
                 self.judge._stop(self.t, 'grasp_plan_target_mismatch', id=g['id'])
                 return
