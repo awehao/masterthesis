@@ -1,0 +1,8 @@
+{"name": "m8_door_reaim_capture", "registered": "2026-11-12（Codex 門把手途中重瞄 r3 裁定：核可一次最小靜態 RGB-D 擷取）",
+ "question": "重新瞄準後，近距是否能取得可靠把手估計，以及誤差是否實際縮小",
+ "run_id": "m8doorcap_reaim_1", "viewpoints": "evaluation/results/vision/m8_door_reaim_viewpoints_r1.json", "n_registered": 24, "n_ok": 9, "ok_by_group": {"dev": 5, "holdout": 4}, "ok_by_lam": {"0.5": 2, "1.0": 7},
+ "source_estimate": "m8doorcap_1 視點 d1.5_x0.5_y+0_OBS（凍結偵測器 d1_handle_detect_v2＋dl2_obs_to_target_v2 N-obs）；候選不讀真值、不按真值置中",
+ "runner": "evaluation/run_m8_doorcap.sh（同 m8doorcap_1；場景 mission_room.sdf＋門 v3，行人清空；每視點 3 幀）",
+ "evaluation": "evaluation/m8_door_detect.py（凍結偵測、分類規則不改）→ 估計；真值只在事後評估；先開 dev，holdout 於方法與門檻不變下再開",
+ "rules": "一次 Isaac；不閉爪、不開門、不動控制；非 ok 視點照實跳過不補；異常不自動重跑；靜態置姿擷取不是接近軌跡的證據",
+ "selection_rule_frozen": "擷取後比較候選時：先滿足接觸誤差預算，再選較快者；樣本最大誤差不當成可靠上界"}
