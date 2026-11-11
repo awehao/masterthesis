@@ -81,8 +81,12 @@ def main():
         u_last = np.r_[0.10, 0.15, 0.0, np.zeros(6)]
         hd, s_ref = None, 0.0
         dp_stat = dict(n=0, n_clip=0, dy_rate_max=0.0, dth_rate_max=0.0)
+        t = 1.0
+    import bottle_s0_logic as L0
+    Stub.judge = L0.S0Judge.__new__(L0.S0Judge)
+    Stub.judge.stop, Stub.judge.log = None, []
     r_over = DP.W1PlaceController._d_rates(Stub(), dict(D=D))
-    chk('4c 速率超界 ⇒ 該拍退回常數 D（不夾限使用）並計數', r_over == (0.0, 0.0) and Stub.dp_stat['n_clip'] == 1, dict(rates=r_over, stat=Stub.dp_stat))
+    chk('4c 速率超界 ⇒ 受控停止 dpred_rate_out_of_domain', r_over == (0.0, 0.0) and Stub.dp_stat['n_clip'] == 1 and (Stub.judge.stop or {}).get('why') == 'dpred_rate_out_of_domain', dict(rates=r_over, stat=Stub.dp_stat))
     # 相鄰控制拍：第 k 拍預覽的第 1 步 vs 第 k+1 拍的當拍值（底盤照命令走時應一致）；底盤橫向速度在兩拍間變化 a_y·DT 時的參考跳動
     y0, vy0 = -0.04, 0.04
     pred_next = DP.d_at(y0, 0.0, vy0, 0.0, dt)[1]

@@ -8,7 +8,7 @@
   2 MPC 時域預覽（同上，_T_seq 經 _rel_target）；
   3 切換檢查（Tw1 用 D(dt)）。
 ḋy＝vx·sin dθ＋vy·cos dθ（底盤命令在計畫座標的橫向分量）；ḋθ＝ωz−計畫偏航率（v_沿路徑·dθ_plan/dσ）。命令取 u_last（與切換檢查原本用的同一命令）。
-有界：前推時間 ≤ D_HORIZON；|ḋy|、|ḋθ| 超過適用上限 ⇒ 該拍退回常數 D（不夾限後使用）並計數。門檻 SW_*、DEV_* 不變。"""
+有界：前推時間 ≤ D_HORIZON；|ḋy|、|ḋθ| 超過適用上限 ⇒ 受控停止 dpred_rate_out_of_domain（退回常數 D 的進出不是無縫，見 dpred_realchain_check）。門檻 SW_*、DEV_* 不變。"""
 import math
 
 import numpy as np
@@ -81,7 +81,9 @@ class W1PlaceController(LS.W1PlaceController):
         st['n'] += 1
         st['dy_rate_max'], st['dth_rate_max'] = max(st['dy_rate_max'], abs(dy_d)), max(st['dth_rate_max'], abs(dth_d))
         if abs(dy_d) > DY_RATE_MAX or abs(dth_d) > DTH_RATE_MAX:               # 超出模型適用域：不夾限後當作有效預測——該拍退回常數 D（既有行為；切換檢查因此照原模型判）
-            st['n_clip'] += 1
+            st['n_clip'] += 1                                                 # 真參考鏈反例：退回常數 D 的進出瞬間參考速度跳 0.095 m/s（> SW_V）⇒ 不是無縫回退
+            if self.judge.stop is None:                                       # ⇒ 走既有受控停止，不繼續宣稱預測有效
+                self.judge._stop(self.t, 'dpred_rate_out_of_domain', dy_rate=round(dy_d, 4), dth_rate=round(dth_d, 4))
             return 0.0, 0.0
         return float(dy_d), float(dth_d)
 
