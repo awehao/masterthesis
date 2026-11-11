@@ -17,6 +17,7 @@ import bottle_s0_ctrl as C0
 import bottle_w1_lateslow_ctrl as LS
 import bottle_w1_tpas_ctrl as TS
 
+XTICK_TOL = 0.002                                                # 跨拍預覽更新差上限（m）：既有工程判準 2 mm，未為本候選更改
 D_HORIZON = 1.2                                                  # 前推時間上限（s；MPC 預覽 N·DT＝1.0 s＋在途延遲）
 DY_RATE_MAX, DTH_RATE_MAX = 0.10, 0.30                           # ḋy、ḋθ 適用上限（m/s、rad/s）：高於此視為模型不適用，該拍退回常數 D
 
@@ -93,16 +94,51 @@ class W1PlaceController(LS.W1PlaceController):
             return super()._rel_target(tau_t)
         D = P['D']
         r = P.get('Dd')
-        if r is None or P.get('Dd_t') != P.get('t_last'):
-            r = self._d_rates(P)
-            P['Dd'], P['Dd_t'] = r, P.get('t_last')
+        if r is None or P.get('Dd_t') != P.get('t_last'):                       # 變化率只在 _advance_inner（求解前）計算與判域；這裡不計算、不觸發停止
+            self.dp_stat['n_nocache'] = self.dp_stat.get('n_nocache', 0) + 1     # 不應發生；發生時用常數 D 並計數（測試核為 0）
+            r = (0.0, 0.0)
         t_d = float(P.get('t_last', self.t)) + C0.D_STEPS * C0.PHYS          # D 所對應的時刻（命令生效）
         Dk, _, _ = d_at(float(D[1, 3]), float(math.atan2(D[1, 0], D[0, 0])), r[0], r[1], float(tau_t) - t_d)
         return np.linalg.inv(Dk) @ TS.rel_ref(self.K, P, max(self._tau_at(tau_t), 0.0))
 
+    def _advance_inner(self, T_tcp, close_done, q):
+        """同拍停止契約：適用域檢查在 _advance（求解與命令提交之前）。S0 的 step 先 _advance、再依 judge.stop 決定走減速或求解，
+        所以這裡設停止 ⇒ 該拍不求解、不提交正常命令，直接走既有 _arm_decel 有界減速（在途命令照既有管線走完）。"""
+        super()._advance_inner(T_tcp, close_done, q)
+        P = self.tpa
+        if P is not None and not P.get('switched') and P.get('D') is not None and self.judge.stop is None and self.st.phase == 'CRUISE' and P.get('Dd_t') != P.get('t_last'):
+            P['Dd'], P['Dd_t'] = self._d_rates(P), P.get('t_last')
+        self._xtick_gate()
+
+    def _xtick_gate(self):
+        """跨拍預覽更新判準（XTICK_TOL＝2 mm，既有工程判準）接成求解前檢查：上一拍時域參考在「這一拍第 0 步的絕對時刻」的 TCP 相對位置，
+        對這一拍在同一絕對時刻的值；同座標（都是相對底盤的 TPA 參考）、同絕對時刻。超標 ⇒ 既有同拍受控停止（該拍不求解、不提交正常命令）。
+        只在 TPA 相對參考生效且未切換時比較；切換後座標改變，由既有切換閘門負責，這裡清掉上一拍紀錄。"""
+        P = self.tpa
+        live = P is not None and not P.get('switched') and P.get('D') is not None and self.st.phase == 'CRUISE' and not self.blending and self.judge.stop is None and 'tau' in P
+        if not live:
+            self._xt_prev = None
+            return
+        t_eff = float(self.t) + C0.D_STEPS * C0.PHYS
+        now = self._rel_target(t_eff)[:3, 3]
+        prev = getattr(self, '_xt_prev', None)
+        if prev is not None and abs(prev['t_abs'] - t_eff) < 1e-6:
+            d = float(np.linalg.norm(prev['p'] - now))
+            st = self.dp_stat
+            st['xtick_n'] = st.get('xtick_n', 0) + 1
+            st['xtick_max_mm'] = max(st.get('xtick_max_mm', 0.0), d * 1e3)
+            if d > XTICK_TOL:
+                self.judge._stop(self.t, 'dpred_preview_jump', d_mm=round(d * 1e3, 3), tol_mm=XTICK_TOL * 1e3)
+                self._xt_prev = None
+                return
+        nxt = t_eff + C0.NPH * C0.PHYS
+        self._xt_prev = dict(t_abs=nxt, p=self._rel_target(nxt)[:3, 3].copy())
+
     def _switch_check(self, qp_base, u_base, P, tau_eff, rate):
-        r = self._d_rates(P)
+        r = self._d_rates(P)                                                    # 切換檢查在父類 _advance_inner 內（求解前）；同拍的快取一併更新
         P['Dd'], P['Dd_t'] = r, P.get('t_last')
+        if self.judge.stop is not None:                                         # 超出適用域已停止：回拒絕結果（父類不再切換）
+            return dict(ok=False, kind='reject', dp=float('nan'), dr=float('nan'), dv=float('nan'), dv_const_D=None, t_rj=0.0, T_from=np.eye(4))
         return switch_check(self.K, qp_base, u_base, P, tau_eff, rate, P['T_pre'], P['D'], r)
 
     def report(self):

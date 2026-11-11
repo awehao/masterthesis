@@ -26,8 +26,9 @@ import bottle_w1_dpred_ctrl as DP                                 # noqa: E402
 import bottle_w1_lateslow_ctrl as LS                              # noqa: E402
 import bottle_w1_tpas_ctrl as TS                                  # noqa: E402
 
-TICK, LAT = 2 * B.DT, C0.D_STEPS * C0.PHYS
+TICK, LAT = float(os.environ.get('DP_TICK', str(C0.NPH * C0.PHYS))), C0.D_STEPS * C0.PHYS   # 控制拍＝NPH·PHYS（0.05 s）；DP_TICK=0.10 保留為壓力案例（r1／r2 誤用 0.10）
 POS_TOL, ACC_TOL = 0.002, 1.0
+TAU0 = float(os.environ.get('DP_TAU0', '5.2'))                    # 5.2＝切換點之後（τ>T）；DP_TAU0=2.0＝接近中段（τ<T，rel_ref 走關節軌跡）
 FAIL, res = [], {}
 
 
@@ -35,6 +36,7 @@ def mk(cls):
     o = cls.__new__(cls)
     o.K = R0.K
     o.st = types.SimpleNamespace(phase='CRUISE', t_phase=0.0, t_pre=float('inf'))
+    o._xt_prev = None
     o.blending, o.no_tcp_preview, o.preview, o.w_goal, o.lb = False, False, {}, None, None
     o.hd, o.s_ref = None, 0.0
     import bottle_s0_logic as L0
@@ -43,7 +45,11 @@ def mk(cls):
     o.dp_stat = dict(n=0, n_clip=0, dy_rate_max=0.0, dth_rate_max=0.0)
     T_pre = np.eye(4)
     T_pre[:3, 3] = [0.10, 0.45, 0.70]
-    o.tpa = dict(switched=False, T=5.0, tau=5.2, rate=1.0, t_last=0.0, base_end=np.array([-0.30, 0.0, 0.0]), v_c_eff=0.10, T_pre=T_pre, D=None, sig_raw=0.0)
+    import bottle_w1_tpa_ctrl as TPAm
+    from ammr_wholebody_mpc.arm_limits import LITE6_SAFE as LL
+    q0, q1 = np.asarray(R0.Q_TUCK, float), np.asarray(R0.Q_VHIGH, float)
+    PJ, _ = TPAm.plan_joint(q0, np.zeros(6), q1, np.zeros(6), 5.0, B.W_ARM['v_arm'], C0.A_ARM, LL.lower, LL.upper)
+    o.tpa = dict(switched=False, P=PJ, T=float(PJ['T']), tau=TAU0, rate=1.0, t_last=0.0, base_end=np.array([-0.30, 0.0, 0.0]), v_c_eff=0.10, T_pre=T_pre, D=None, sig_raw=0.0)
     o.t = 0.0
     return o
 
@@ -59,10 +65,17 @@ def run(name, cls, vy_fn, n=14, y0=-0.02):
         # 控制器每拍：D＝命令生效時刻的預測偏差（在途延遲內照上一命令走）；u_last＝這拍送出的命令
         dy_eff = y + vy * LAT
         o.t, o.tpa['t_last'] = t, t
-        o.tpa['tau'] = 5.2 + t
+        o.tpa['tau'] = TAU0 + t
         o.tpa['D'] = TS._tb(np.r_[0.0, dy_eff, 0.0])
         o.tpa.pop('Dd', None)
         o.u_last = np.r_[0.10, vy, 0.0, np.zeros(6)]
+        if cls is DP.W1PlaceController:
+            o.tpa['Dd'], o.tpa['Dd_t'] = C._d_rates(o, o.tpa), t                 # 同控制器：變化率在 _advance（求解前）算好
+        if cls is DP.W1PlaceController and o.judge.stop is None:
+            C._xtick_gate(o)                                                     # 同控制器：求解前的 2 mm 跨拍檢查
+        if o.judge.stop is not None:
+            rows.append(dict(t=round(t, 2), vy=round(vy, 4), stopped=o.judge.stop.get('why'), fallback=False))
+            break
         Tq = C._T_seq(o, np.zeros(9), t + LAT)
         p = Tq[:, :3, 3]
         v_in = np.diff(p, axis=0) / B.DT
@@ -73,17 +86,18 @@ def run(name, cls, vy_fn, n=14, y0=-0.02):
             rows.append(row)
             break
         if prev is not None:
-            row['jump_pos_mm'] = round(float(np.linalg.norm(prev['p2'] - p[0])) * 1e3, 3)       # 上一拍預覽 +0.1 s 對這一拍當拍
+            row['jump_pos_mm'] = round(float(np.linalg.norm(prev['pn'] - p[0])) * 1e3, 3)       # 「同一絕對時刻的預覽更新差」：上一拍預覽在 +TICK 的值 對 這一拍當拍值（不是實際參考速度）
             row['dv_cross'] = round(float(np.linalg.norm(v_in[0] - prev['v0'])), 4)
             row['a_cross'] = round(row['dv_cross'] / TICK, 3)
-        prev = dict(p2=p[2].copy(), v0=v_in[0].copy())
+        kk = int(round(TICK / B.DT))
+        prev = dict(pn=p[kk].copy(), v0=v_in[0].copy())
         rows.append(row)
         y += vy * TICK + 0.5 * (float(vy_fn(t + TICK)) - vy) * TICK        # 梯形積分
     jp = max((r.get('jump_pos_mm', 0.0) for r in rows))
     ac = max((r.get('a_cross', 0.0) for r in rows))
     dvc = max((r.get('dv_cross', 0.0) for r in rows))
     fb = [r['t'] for r in rows if r['fallback']]
-    out = dict(name=name, impl=impl, jump_pos_max_mm=jp, a_cross_max=ac, dv_cross_max=dvc, a_preview_max=max(r['a_preview'] for r in rows), fallback_ticks=fb, n_clip=o.dp_stat['n_clip'] if cls is DP.W1PlaceController else None, rows=rows)
+    out = dict(name=name, impl=impl, jump_pos_max_mm=jp, a_cross_max=ac, dv_cross_max=dvc, a_preview_max=max(r.get('a_preview', 0.0) for r in rows), fallback_ticks=fb, n_clip=o.dp_stat['n_clip'] if cls is DP.W1PlaceController else None, rows=rows)
     return out
 
 
@@ -104,13 +118,16 @@ def main():
     for x in (A, Bc, Cc, Dc):
         print('==', x['name'], x['impl'], {k: x[k] for k in ('jump_pos_max_mm', 'dv_cross_max', 'a_cross_max', 'a_preview_max', 'fallback_ticks', 'n_clip')})
     chk('MRO：_T_seq＝tpas 檔、_rel_target＝dpred 檔', A['impl'] == dict(T_seq='bottle_w1_tpas_ctrl.py', rel='bottle_w1_dpred_ctrl.py'), A['impl'])
-    zc = [r for r in A['rows'] if r['dy'] > 0]
+    zc = [r for r in A['rows'] if r.get('dy', -1) > 0]
     chk('A 過零：跨拍位置跳動 ≤ 2 mm、速度無跳動', A['jump_pos_max_mm'] <= POS_TOL * 1e3 and A['a_cross_max'] <= ACC_TOL and len(zc) > 3 and not A['fallback_ticks'], dict(jump=A['jump_pos_max_mm'], a=A['a_cross_max'], n_after_zero=len(zc)))
-    chk('B 加速：跨拍位置跳動 ≤ 2 mm、換算加速度 ≤ 1.0', Bc['jump_pos_max_mm'] <= POS_TOL * 1e3 and Bc['a_cross_max'] <= ACC_TOL, dict(jump=Bc['jump_pos_max_mm'], a=Bc['a_cross_max']))
+    lastB = Bc['rows'][-1]
+    chk('B 橫向加速 0.4（2.1 mm 壓力輸入）⇒ 求解前受控停止 dpred_preview_jump，之後不再產生參考', lastB.get('stopped') == 'dpred_preview_jump' and 'ref_y' not in lastB,
+        dict(t_stop=lastB['t'], stop=lastB.get('stopped'), n_ticks_before=len(Bc['rows']) - 1, jump_before_max_mm=Bc['jump_pos_max_mm']))
     first_over = next((r for r in Cc['rows'] if abs(r['vy']) > DP.DY_RATE_MAX), None)
     chk('C 速率超出適用域 ⇒ 該拍即受控停止（不做非無縫回退）', Cc['rows'][-1].get('stopped') == 'dpred_rate_out_of_domain' and first_over is not None and Cc['rows'][-1]['t'] == first_over['t'],
         dict(t_stop=Cc['rows'][-1]['t'], vy=Cc['rows'][-1]['vy'], limit=DP.DY_RATE_MAX, r1_finding='退回常數 D 的進出瞬間參考速度跳 0.095 m/s > SW_V 0.03'))
     res['baseline_const_D'] = dict(jump_pos_max_mm=Dc['jump_pos_max_mm'], a_cross_max=Dc['a_cross_max'], note='常數 D（既有行為）在同一橫向加速情境下的跨拍值，作對照')
+    res['setup'] = dict(tick=TICK, tau0=TAU0, T=float(mk(P_).tpa['T']), note='D 以 y＋v·延遲 合成（未走真在途管線 _stop_rest）；真 step 的核對在假世界注入案')
     res['verdict'] = dict(ok=not FAIL, fails=FAIL, criteria=dict(pos_mm=POS_TOL * 1e3, acc=ACC_TOL, sw_v=TS.SW_V))
     json.dump(res, open(sys.argv[1], 'w'), ensure_ascii=False, indent=1, default=float)
     print('判定', 'PASS' if not FAIL else 'FAIL', FAIL)

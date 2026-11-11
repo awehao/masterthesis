@@ -45,6 +45,8 @@ import bottle_w1_compactcarry21_ctrl as C21             # noqa: E402
 BASE = dict(fprof=FC.W1PlaceController, late=LS.W1PlaceController, dpred=DPC.W1PlaceController, base=SCT.W1PlaceController)[MODE]
 if os.environ.get('FP_DYMAX'):                           # 測試用注入：把偏差變化率適用上限調低，使自然出現的橫移在指定階段觸發超域停止（只供真 step 的停止契約反例）
     DPC.DY_RATE_MAX = float(os.environ['FP_DYMAX'])
+if os.environ.get('FP_XTOL'):                            # 測試用注入：把跨拍判準調低使名目趟觸發，核真 step 的停止契約（判準本身未改）
+    DPC.XTICK_TOL = float(os.environ['FP_XTOL'])
 SWEEP = os.environ.get('FP_STOPSWEEP') == '1'
 AST = dict(n=0, n_cfg=0, worst={}, where={}, nonfinite=0, unfinished=0)
 AST2 = dict(n=0, bad=0, worst={}, where={}, ticks={})
@@ -391,7 +393,7 @@ def main():
         out['arm_cmd_tpa'] = dict(v_max=round(float(np.abs(UA).max()), 4), v_p95=round(float(np.percentile(np.abs(UA).max(axis=1), 95)), 4), v_arm=1.0, a_max=round(float(acc.max()), 3), a_p95=round(float(np.percentile(acc.max(axis=1), 95)), 3),
                                   A_ARM=TV.C0.A_ARM, note='真實當拍構型下 MPC 實際送出的手臂關節速度命令與相鄰拍差分（設定點模型的命令，不是實測關節加速度）')
     why = (out.get('stop') or {}).get('why')
-    if why == 'dpred_rate_out_of_domain':
+    if why in ('dpred_rate_out_of_domain', 'dpred_preview_jump'):
         import bottle_s0_ctrl as C0s
         t_stop = float(out['stop']['t'])
         H = [h for h in f.hist if h['t'] >= t_stop - 0.3]
