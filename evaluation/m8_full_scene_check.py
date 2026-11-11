@@ -182,7 +182,7 @@ def main():
     M = yaml.safe_load(open(os.path.join(WS, REG['marker']['asset'])))
     DR = yaml.safe_load(open(os.path.join(WS, REG['drawer']['asset'])))
     c = M['placement']['center']
-    r, Lm = M['radius'], M['length']
+    ry, r, Lm = M['half_extent_y'], M['half_extent_z'], M['length']        # 六角柱平放：y 向半寬＝外接圓半徑、z 向半高＝邊心距
     sides = [b_ for b_ in DR['drawer']['body'] if b_[0] in ('side_l', 'side_r')]
     x_in = min(abs(b_[1][0]) - b_[2][0] / 2 for b_ in sides)
     back = [b_ for b_ in DR['drawer']['body'] if b_[0] == 'back'][0]
@@ -192,8 +192,8 @@ def main():
     z_shelf = shelf[1][2] - shelf[2][2] / 2
     cab_front = -0.225
     travel = float(DR['drawer']['joint']['upper'])
-    mk = dict(x_ok=abs(c[0]) + Lm / 2 <= x_in, y_ok=(c[1] - r >= y_front_in) and (c[1] + r <= y_back_in), z_on_bottom=round(c[2] - r - M['drawer_interior']['bottom_top_z'], 4),
-              outside_cabinet_when_open=(c[1] + r - travel) < cab_front, clearance_to_shelf_above=round(z_shelf - (c[2] + r), 4),
+    mk = dict(x_ok=abs(c[0]) + Lm / 2 <= x_in, y_ok=(c[1] - ry >= y_front_in) and (c[1] + ry <= y_back_in), z_on_bottom=round(c[2] - r - M['drawer_interior']['bottom_top_z'], 4),
+              outside_cabinet_when_open=(c[1] + ry - travel) < cab_front, clearance_to_shelf_above=round(z_shelf - (c[2] + r), 4),
               gripper_contact_joint=M['gripper_basis']['contact_finger_joint_m'], gripper_open_margin=M['gripper_basis']['open_margin_each_side_m'])
     mk['ok'] = mk['x_ok'] and mk['y_ok'] and mk['outside_cabinet_when_open'] and 0 <= mk['z_on_bottom'] <= 0.002 and mk['gripper_contact_joint'] > 0 and mk['gripper_open_margin'] > 0.005
     res['5_marker'] = mk

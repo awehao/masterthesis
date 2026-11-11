@@ -45,6 +45,7 @@ from pxr import Gf, UsdGeom, UsdLux                              # noqa: E402
 import door_asset_v3 as DA3                                      # noqa: E402
 import drawer_asset as DRA                                       # noqa: E402
 from isaac_common import import_urdf                             # noqa: E402
+import marker_proxy_asset as MK                                  # noqa: E402
 import mission_walkers as MW                                     # noqa: E402
 import wrist_v0_capture as W0                                    # noqa: E402
 
@@ -103,14 +104,7 @@ def main():
     dpose = tuple(reg['drawer']['pose'])
     DRA.build_usd(stage, DRA.load(os.path.join(WS, reg['drawer']['asset'])), dpose, root='/World/drawer_unit')
     M = yaml.safe_load(open(os.path.join(WS, reg['marker']['asset'])))
-    cyl = UsdGeom.Cylinder.Define(stage, '/World/drawer_unit/drawer/marker_proxy')     # 預覽：掛在抽屜剛體底下（隨抽屜位移）
-    cyl.GetAxisAttr().Set('X')
-    cyl.GetRadiusAttr().Set(float(M['radius']))
-    cyl.GetHeightAttr().Set(float(M['length']))
-    cyl.CreateDisplayColorAttr().Set([Gf.Vec3f(0.05, 0.55, 0.25)])
-    hl_, r_ = float(M['length']) / 2, float(M['radius'])
-    cyl.CreateExtentAttr().Set([Gf.Vec3f(-hl_, -r_, -r_), Gf.Vec3f(hl_, r_, r_)])   # 沒有 extent 時算圖邊界為空會被剔除（r2 預覽代理物不見）
-    UsdGeom.Xformable(cyl).AddTranslateOp().Set(Gf.Vec3d(*[float(v) for v in M['placement']['center']]))
+    MK.build(world, M, dpose)                                              # 與靜置核對同一建構：獨立動態剛體、六角柱（外觀＝碰撞）
     ob = json.load(open(os.path.join(WS, reg['obstacles']['path'])))
     walkers = []
     for o in ob['static_unknown']:
@@ -168,7 +162,7 @@ def main():
     def render(n=40):
         for _ in range(n):
             world.render()
-    meta = dict(reg=reg['name'], fixed={}, robot_shots=[], note='預覽不步進物理；行人在 t＝0 位置；抽屜拉出圖為平移顯示')
+    meta = dict(reg=reg['name'], fixed={}, robot_shots=[], note='擺位與短步進更新後渲染，非任務閉迴路；行人在 t＝0 位置；抽屜拉出圖為平移顯示（抽屜與代理物一起平移）；機器人取景位置用資產登錄的把手位置')
     render(60)
     for nm, (c, R, f) in cams.items():
         render(10)
@@ -208,6 +202,8 @@ def main():
     dprim = UsdGeom.Xformable(stage.GetPrimAtPath('/World/drawer_unit/drawer'))
     ops = dprim.GetOrderedXformOps()
     ops[0].Set(Gf.Vec3d(dpose[0], dpose[1] - 0.22, 0.0))
+    mops = UsdGeom.Xformable(stage.GetPrimAtPath('/World/marker_proxy')).GetOrderedXformOps()
+    mops[0].Set(Gf.Vec3d(*MK.world_center(M, dpose, opening=0.22).tolist()))     # 代理物是獨立物件：顯示時一起平移（不是物理拉開）
     render(40)
     c, R, f = cams['overview']
     near = Camera(prim_path='/World/cams/drawer_close', resolution=(1200, 900), frequency=10)
@@ -221,6 +217,7 @@ def main():
     save_png(near.get_rgba(), os.path.join(a.out, 'm8_scene_drawer_open_display.png'))
     meta['fixed']['drawer_open_display'] = dict(eye=eye, R_wc=Rn.tolist(), hfov=math.radians(55.0), res=[1200, 900], file='m8_scene_drawer_open_display.png', drawer_offset_y=-0.22)
     ops[0].Set(Gf.Vec3d(dpose[0], dpose[1], 0.0))
+    mops[0].Set(Gf.Vec3d(*MK.world_center(M, dpose).tolist()))
     json.dump(meta, open(os.path.join(a.out, 'm8_scene_preview_meta.json'), 'w'), ensure_ascii=False, indent=1)
     print('[preview] 完成；保持視窗', flush=True)
     t0, tt = time.time(), 0.0

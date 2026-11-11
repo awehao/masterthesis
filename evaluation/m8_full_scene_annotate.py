@@ -60,7 +60,7 @@ def items(reg, obs, walls):
     it = [('start', 'S 起點（機器人）', [S['x'], S['y'], 0.5]),
           ('task', '門（可動門扇＋把手）\n開口 1.00 m、門扇 0.95 m', [0.5, 0.06, 2.0]),
           ('task', '抽屜櫃（可動抽屜＋把手）\n內有粗馬克筆代理物', [dx, dy, 0.9]),
-          ('task', f'馬克筆代理物 Ø{2 * reg["marker"]["radius"] * 1000:.0f}×{reg["marker"]["length"] * 1000:.0f} mm、{reg["marker"]["mass_kg"] * 1000:.0f} g', [dx + mk[0], dy + mk[1], mk[2]])]
+          ('task', f'馬克筆代理物 六角柱 對邊{reg["marker"]["across_flats"] * 1000:.0f}×{reg["marker"]["length"] * 1000:.0f} mm、{reg["marker"]["mass_kg"] * 1000:.0f} g', [dx + mk[0], dy + mk[1], mk[2]])]
     for o in obs['static_unknown']:
         zh = '未知椅' if o['kind'] == 'chair' else '未知箱'
         it.append(('unknown', f"{zh} {o['name'].split('_')[1]}", [o['x'], o['y'], o['size'][2]]))
@@ -92,7 +92,7 @@ def draw(img_path, cam, it, obs, out_path, offsets, title, room_labels=True, onl
         u = P(p)
         if not (0 <= u[0] < W and 0 <= u[1] < H):
             continue
-        key = txt.split('（')[0].split('\n')[0].split(' Ø')[0]
+        key = txt.split('（')[0].split('\n')[0].split(' 六角柱')[0]
         if only is not None and key not in only:
             continue
         off = offsets.get(key, (40, -40))
