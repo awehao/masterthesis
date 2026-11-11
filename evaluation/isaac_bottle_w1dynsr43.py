@@ -725,6 +725,7 @@ def main():
         dyn_log.append([float(p_m[0]), float(p_m[1]), float(p_m[2]), float(v_m[0]), float(v_m[1]), float(p_t[0]), float(p_t[1]), float(v_t[0]), float(v_t[1])])
     BP_S = G.bottle_points()
     rows, step_ms = [], []                                                    # step_ms：物理＋渲染，分開計時
+    ctrl_ms, link_ms = [], []                                                 # dynsr43：控制拍總耗時（ctrl.step 全部）、候選／導引轉接 tick 耗時（Codex 134437 耗時紀錄）
     t_end_tail = None
     n = int(round((a.sim_s + a.stop_tail_s + 1.5) / dt))                      # 總期限後仍走停止尾段
     penetration = 0.0
@@ -757,8 +758,10 @@ def main():
         w1.record_step(float(world.current_time), T0 + t, t, q, Tb if ok_b else None, BR_PH.index(ctrl.st.phase))   # W1 手腕：同樣先記本步再取影格
         w1.poll()
         wlink.tick(t)
+        t_l = time.perf_counter()
         slink.tick(t)                                                         # 候選：任務時刻轉送
         glink.tick(t)                                                         # dynsr43：導引候選
+        link_ms.append((time.perf_counter() - t_l) * 1e3)
         # 接觸
         Mf = read_pairs(v_finger, n_filters, dt)
         Ma_l = [read_pairs(v, n_filters, dt) for v in v_arm]
@@ -804,8 +807,10 @@ def main():
             elif S2 or WALL:
                 dmin = float('nan')                                           # 瓶位姿無效：不當零，由資料失效判定處理
             penetration = max(0.0, -dmin) if np.isfinite(dmin) else float('nan')
+        t_c = time.perf_counter()
         out = ctrl.step(t, REG.q_to_region(q), f_fingers=ff, t_contact=(t if ff is not None else None), T_bottle=REG.T_to_region(Tb) if ok_b else None, t_bottle=t if ok_b else None,
                         f_table=ft, forbidden=forb, penetration=penetration, f_place=fp, q_fingers=(float(jp[f1]), float(jp[f2])), f_place_raw=fp_raw, f_finger_vec=None if Mf is None else np.asarray(Mf[:, 0], float))
+        ctrl_ms.append((time.perf_counter() - t_c) * 1e3)
         tgt = np.array(jp, float)
         for j, i in enumerate(idx):
             tgt[i] = float(out['arm_target'][j])
@@ -825,6 +830,9 @@ def main():
             break
     rep = ctrl.report()
     rep['timing']['world_step'] = dict(p50=round(float(np.percentile(step_ms, 50)), 2), p95=round(float(np.percentile(step_ms, 95)), 2), max=round(float(np.max(step_ms)), 2), n=len(step_ms))
+    for k_, v_ in (('ctrl_step_total', ctrl_ms), ('seg_guide_link_tick', link_ms)):
+        if v_:
+            rep['timing'][k_] = dict(p50=round(float(np.percentile(v_, 50)), 2), p95=round(float(np.percentile(v_, 95)), 2), max=round(float(np.max(v_)), 2), n=len(v_))
     rep['region'] = dict(offset=RO[:2].tolist(), frame='控制器與 rep 內事件位置為區域座標；s1_steps 的 base_x／bottle_* 為世界座標')
     rep.update(plan=plan_info, readback=readback, asset=S, forb_keys=sorted(forb), d0=[float(v) for v in d0], n_steps=len(rows), obstacle=dict(c=OB_C.tolist(), sz=OB_S.tolist(), r_cbf=0.2 * math.sqrt(2.0), margin=0.47, truth_for_eval_only=True), exit=dict(c=a.exit_c, r=a.exit_r), path=p_, note='W1：底盤遠距凍結＋手腕近距修正（只修 xy、限速 5 mm/s、INSERT＋0.9 s 鎖定、閉爪前須到達）；V2：抓取目標由底盤相機估計凍結（建構時 NaN），只收位姿互核通過的影格；手臂備妥分支用任務名目瓶位；5 mm 淨空與禁止接觸用模擬真值瓶位姿（安全網）。核心 gmpc_wb；PhysX 射線掃描經真 ROS 話題：/scan_raw→scan_relay→/scan→追蹤器與 Shield 獨立節點，障礙走 /gmpc/obstacles_stamped，底盤命令走 /cmd_vel_pre_shield→Shield→/cmd_vel；控制器與物理同步（非即時部署驗證）；底盤與瓶位姿真值；地圖只有桌腳與側牆；參考路徑：導航段起跑前 SmacPlanner2D 規劃到抓取直線入口；抓取直線為任務定義；持瓶段 LIFT 開始時再規劃到放置直線入口（平滑、承接、局部降速、參考加速度核對）；放置直線與停車放置為任務定義；不重規劃。第二桌位置為已知位置，瓶位姿真值只供安全網與評估；命令總延遲 8 物理步＝實測往返＋注入補足（分列於 nav_chain.ros）；停止處置為腳本自有', ros_chain=True)
     cols = ['t', 'base_x', 'base_y', 'base_yaw'] + [f'q{i}' for i in range(1, 7)] + [f's{i}' for i in range(1, 7)] + ['base_cmd_vx', 'base_cmd_vy', 'base_cmd_wz', 'v_b', 's_ref', 'finger1_q', 'finger2_q', 'finger_cmd', 'f_finger1_bottle', 'f_finger2_bottle',

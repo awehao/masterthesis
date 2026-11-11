@@ -1,0 +1,42 @@
+{
+ "name": "motm_dyn_single_bottle_obs_r1",
+ "registered": "2026-11-11（Codex 20261111_134437：條件核可名目＋固定 A 各一趟；兩項接線缺口修補＋針對性反例＋不動作接線檢查 motm_obs_wiring_r1 通過後凍結）",
+ "seed": 202611110001,
+ "rule": "瓶位沿用 motm_dyn_single_bottle_tpa_r1（同一亂數抽樣，不重抽）；只交執行端（場景）與評估，不寫進控制器設定",
+ "bottle_dx": -0.0232,
+ "bottle_dy": -0.0119,
+ "table1_z": 0.58,
+ "region_offset": [
+  0.6,
+  0.8
+ ],
+ "map_args": "--table2 2.4,-1.0",
+ "executor": "evaluation/isaac_bottle_w1dynsr43.py",
+ "cand_script": "evaluation/bottle_seg3d_candidates_dual_node.py（雙相機：v1 底盤導引、w1 手腕抓取候選；DualSelect 交叉核對閘門、作廢快照移除）",
+ "controller": "bottle_w1_obs_ctrl（觀察觸發：導引／抬高可見支撐／期限先到者；站位選擇 bottle_standoff 經工作者、手腕先到也走站位確認）→ bottle_w1_head_ctrl（車頭沿路徑切線）→ bottle_w1_tpas_ctrl（手臂相位隨底盤實測進度＋切換閘門）→ tpa_cj → tpa → tlane",
+ "tracker": "evaluation/bottle_tracker_stamped_kfcm_clr.py（/scan_filtered＋/scan_clear）",
+ "tracker_override": "min_net_speed=0.10,min_track_speed=0.12,release_track_speed=0.10",
+ "planner_yaml": "evaluation/bottle_n2_planner_sf.yaml",
+ "bottle_rtf_cap": 0.4,
+ "cases": {
+  "nominal": "--dyn-case none（無移動物）",
+  "A": "--dyn-case motm_A_cross：沿用 experiments/20261111_motm_dyn_case.json 既定世界軌跡與排程（不重生成、不重新挑時刻）；未形成交互也照實報"
+ },
+ "order": "先名目；名目完整通過且紀錄確認新版鏈生效（導引來源、觀察觸發原因、站位結果採用、車頭沿路徑）才跑 A；名目失敗交第一阻點，不自動補跑",
+ "run_ids": {
+  "nominal": "bottle_motm_obs_nom_1",
+  "A": "bottle_motm_obs_A_1"
+ },
+ "deliverables": "每趟同 RUN_ID：Isaac 實錄重播＋同時間軸 2D 追蹤疊圖；分列抓取車速、停止時間、滑移、放置誤差、車頭與路徑夾角、兩相機實際作用；控制拍總耗時、發布間隔、工作者排隊／計算／回傳、候選年齡與承接餘裕",
+ "claims": "n=1 有資訊的案例，不是成功率；倍率 0.4 下完成不能稱即時部署；15 ms／1.09 s 為離線觀察值不是在線保證；右側不在本次實跑範圍",
+ "compare_to": {
+  "nominal": "bottle_motm_tpa_nom_3（dynsr42，名目站位 0.4275、無觀察觸發）",
+  "A": "bottle_motm_tpa_A_1（dynsr42）"
+ },
+ "freeze": "experiments/20261111_motm_obs_freeze.sha256",
+ "pre_checks": [
+  "results/bottle/obs_ctrl_counterexamples_r2.json（反例 1–6）",
+  "results/vision/dualcam_void_check_r1.json（A／B 順序）",
+  "results/bottle/motm_obs_wiring_r1.json（A 靜態＋B 真 DDS）"
+ ]
+}

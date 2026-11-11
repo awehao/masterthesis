@@ -95,7 +95,7 @@ class DualCandNode(CN.CandNode):
         out.layout.dim = [MultiArrayDimension(label=GLABEL, size=len(GFIELDS), stride=len(GFIELDS))]
         out.data = [float(row[f]) for f in GFIELDS]
         self.pub_guide.publish(out)
-        self._write(dict(kind='dual', cam=cam, accepted=acc, stamp=r.get('stamp'), recv_age_s=r.get('recv_age_s'), guide_state=res['guide_state'], grasp_state=res['grasp_state'],
+        self._write(dict(kind='dual', t_eval=now, cam=cam, accepted=acc, stamp=r.get('stamp'), recv_age_s=r.get('recv_age_s'), guide_state=res['guide_state'], grasp_state=res['grasp_state'],
                          guide=None if u is None else dict(cam=u['camera_id'], cx=u['center'][0], cy=u['center'][1], age_s=u['age_s']),
                          grasp=None if g is None else dict(cam=g['camera_id'], cx=g['center'][0], cy=g['center'][1], age_s=g['age_s']), handoffs=self.ds.handoffs[-1:] if self.ds.handoffs else []))
 

@@ -143,6 +143,12 @@ class W1PlaceController(HC.W1PlaceController):
             return None
         res = m.get('result') or {}
         self.so.update(t_res=round(float(self.t), 3), ok=bool(m['ok']), error=m.get('error'), rows=res.get('rows'), compute_wall=round(m['wall']['t1'] - m['wall']['t0'], 3))
+        if m.get('t_wall_submit') is not None and m.get('t_wall_recv') is not None:          # 工作者排隊（送出→開始）、回傳（完成→控制端取回）牆鐘
+            self.so.update(queue_wall=round(m['wall']['t0'] - m['t_wall_submit'], 3), return_wall=round(m['t_wall_recv'] - m['wall']['t1'], 3))
+        hist = getattr(self, 'so_hist', None)
+        if hist is None:
+            hist = self.so_hist = []
+        hist.append({k: self.so.get(k) for k in ('id', 'n_req', 't_req', 't_res', 'src', 'z_list', 'ok', 'compute_wall', 'queue_wall', 'return_wall')})
         if g is None or float(np.hypot(*(np.asarray(g['xy'], float) - np.asarray(self.so['xy'], float)))) > SO_TOL or (g.get('z_list') is not None and self.so.get('z_list') is None):
             self.so['state'] = 'stale'                                         # 結果晚到、導引已更新或過期：丟棄，下一拍以新導引重送
             self._ev('standoff_stale', id=self.so['id'])
@@ -272,7 +278,7 @@ class W1PlaceController(HC.W1PlaceController):
 
     def report(self):
         r = super().report()
-        r['obs'] = dict(trigger=self.obs_trig, standoff=self.so, view_fail=self.obs_fail[-20:], guide_block=self.guide_block, x_dead=self.x_dead, guide_n=self.guide_n, guide_last=None if self.guide is None else {k: (round(v, 4) if isinstance(v, float) else v) for k, v in self.guide.items()},
+        r['obs'] = dict(trigger=self.obs_trig, standoff=self.so, standoff_hist=getattr(self, 'so_hist', [])[-20:], view_fail=self.obs_fail[-20:], guide_block=self.guide_block, x_dead=self.x_dead, guide_n=self.guide_n, guide_last=None if self.guide is None else {k: (round(v, 4) if isinstance(v, float) else v) for k, v in self.guide.items()},
                         guide_lane=self.guide_lane, guide_max_age=GUIDE_MAX_AGE,
                         note='觀察觸發＝導引就緒或觀察期限（X_DEAD＝現行 X_U0）先到者；觀看點＝導引 xy 或區域觀看點；車道可由導引提早決定')
         return r
