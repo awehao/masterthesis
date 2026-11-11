@@ -5,6 +5,8 @@
   2 站位結果晚到：送出後導引更新（xy 偏 5 mm）⇒ 舊結果丟棄（standoff_stale）、以新導引重送，第二次結果才決定車道。
   3 站位全不可行 ⇒ 受控停止 standoff_none_feasible（不退名目站位）；工作者不可用 ⇒ planner_unavailable。
   4 導引狀態不一致 ⇒ 快取導引失效，不建車道、不重新瞄準。
+  5 站位請求在途時開始 U ⇒ 結果回來仍被取回、採用所選車道（不綁 TUCK）。
+  6 手腕抓取候選先到（無導引）⇒ 不讓父類建名目車道；以實測支撐高度做站位確認，車道成立後才放行抓取計畫。
 站位成本：tpa_nom_3 實際接近路徑，承接時 σ（任務 5 s 附近）；bottle_standoff.evaluate 實算候選（含分支構型）→ _pick_standoff（實際橫向接回後底盤時間、手臂轉移時間）。
     python3 evaluation/obs_ctrl_counterexamples.py OUT.json
 """
@@ -50,6 +52,7 @@ def mk(path, s_ref=-4.0):
     o.v_b, o.v_nav, o.v_c = 0.35, 0.35, 0.10
     o.win, o.x_nom = (-0.35, 0.15), 0.0
     o.tlane, o.tlane_log = None, []
+    o._wrist_src, o._gp_defer = None, None
     o._rng_seeds = list(R0.RNG_SEEDS)
     o.q_prev2 = np.r_[s_ref, 0.3, 0.0, R0.Q_TUCK]
     o.ev = []
@@ -142,6 +145,46 @@ def main():
     o._lane_from_guide()
     res['4_guide_block'] = dict(guide=o.guide, guide_block=o.guide_block, n_submit=st['n_sub'], lane_calls=o.lane_calls, events=[e[0] for e in o.ev])
     print('4', res['4_guide_block'], flush=True)
+    # 5 站位請求在途時開始 U，結果回來仍取回並採用所選車道（Codex 134437 第 1 項）
+    import bottle_w1_head_ctrl as HCm
+    import bottle_w1_tlane_ctrl as TLm
+    HCm.W1PlaceController._advance_inner = lambda self, T, c, q_: None   # 隔離：只測觀察層的每拍處理
+    o = mk(path)
+    o.lane_planner_calls = []
+    o.guide_intake(5.0, dict(cam='v1', state='selected', xy=[-0.0227, 0.4081], t_last=4.95, reject=False))
+
+    def results5(rid, st):
+        return None if st['polls'] < 4 else dict(ok=True, error=None, result=dict(rows=[dict(y_reach=0.40, ok=True, margin_min=0.46, base_leg_clear=0.16, q_pre_lo=None)]), wall=dict(t0=0.0, t1=1.1))
+    st = fake_pc(o, results5)
+    o._advance_inner(None, False, q)                                    # 送出站位請求
+    o._vstep(q)                                                         # 同拍：導引觸發 U
+    ph_after = o.vh_seq['ph']
+    for k in range(6):
+        o.t = 5.05 + 0.05 * k
+        o.guide['t_last'] = o.t - 0.05
+        o._advance_inner(None, False, q)
+    res['5_result_after_U'] = dict(ph_after_trigger=ph_after, n_submit=st['n_sub'], lane_calls=o.lane_calls, tlane_y=None if o.tlane is None else o.tlane['y_lane'],
+                                   events=[e[0] for e in o.ev])
+    print('5', res['5_result_after_U'], flush=True)
+    # 6 手腕先就緒不得繞過站位選擇
+    calls6 = []
+    TLm.W1PlaceController._gp_submit = lambda self, xy, zs, seq: calls6.append(dict(tlane_set=self.tlane is not None, seq=seq))
+    o = mk(path, s_ref=-2.0)
+    o.obs_trig = dict(t=4.0, why='view_useful')
+    o.vh_seq['ph'] = 'H'
+
+    def results6(rid, st):
+        return None if st['polls'] < 2 else dict(ok=True, error=None, result=dict(rows=[dict(y_reach=0.40, ok=True, margin_min=0.46, base_leg_clear=0.16, q_pre_lo=None)]), wall=dict(t0=0.0, t1=1.1))
+    st = fake_pc(o, results6)
+    o.t = 8.8
+    o._gp_submit(np.array([-0.0227, 0.4081]), 0.58, 1)                 # 手腕抓取候選先到（無導引）
+    immediate = list(calls6)
+    for k in range(4):
+        o.t = 8.85 + 0.05 * k
+        o._advance_inner(None, False, q)
+    res['6_wrist_first'] = dict(parent_calls_immediately=immediate, standoff_inputs_z=st['inputs'][0].get('z_list') if st['inputs'] else None, parent_calls_after=calls6,
+                                lane_calls=o.lane_calls, events=[e[0] for e in o.ev])
+    print('6', res['6_wrist_first'], flush=True)
     # 站位成本：實算候選 → 控制端選擇
     o = mk(path, s_ref=-2.9)
     o.guide_intake(5.0, dict(cam='v1', state='selected', xy=[-0.0227, 0.4081], t_last=4.95, reject=False))
@@ -151,7 +194,7 @@ def main():
     w0 = time.time()
     ok, why, rr = BSO.evaluate(dict(xy=[-0.0227, 0.4081], q_seeds=[q_now.tolist()] + [s.tolist() for s in R0.RNG_SEEDS], legs=legs, y_tube=[-0.04, 0.10]))
     wall = round(time.time() - w0, 2)
-    best, costs = o._pick_standoff(rr['rows'])
+    best, costs = o._pick_standoff(rr['rows'], o._lane_src())
     res['standoff_cost'] = dict(worker_ok=ok, worker_wall_s=wall, worker_rows=[{k: v for k, v in r.items() if k != 'q_pre_lo'} for r in rr['rows']],
                                 costs=[{k: v for k, v in c.items() if k != 'q_pre_lo'} for c in costs], chosen=None if best is None else {k: v for k, v in best.items() if k != 'q_pre_lo'})
     print('成本', [(c['y_reach'], c.get('cost'), c.get('t_base'), c.get('t_arm'), c.get('dsig0'), c['margin_min']) for c in costs], '選', None if best is None else best['y_reach'], 'wall', wall, flush=True)

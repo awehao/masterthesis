@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """(b) 觀察觸發改為「導引就緒或觀察期限」，不再無條件在 X_U0 左擺（Howard 11/11；Codex 20261111_050821 (b)；版本化子類，基線＝bottle_w1_head_ctrl）。
 導引候選（bottle_guide_link → guide_intake；雙相機節點的 /bottle/target_guide：xy、來源、擷取時刻、狀態）：
-  1 車道：尚未決定目標專屬車道且導引新鮮 ⇒ 先向計畫工作者要 (d) 站位選擇（bottle_standoff：區域桌高範圍皆可行 → 關節餘裕最大 → 桌腳間隙最大），
+  1 車道（每拍，不綁 TUCK）：尚未決定目標專屬車道且有量測來源（導引新鮮；或手腕抓取候選先到——此時以實測支撐高度確認，抓取請求延後到車道成立）⇒ 先向計畫工作者要 (d) 站位選擇（bottle_standoff：區域桌高範圍皆可行 → 關節餘裕最大 → 桌腳間隙最大），
     結果到了再以選定 y_reach 交同一 lane_planner（bottle_tlane.decide；代價圖核對、太晚／擋住照舊拒絕）提早決定（導引初選；三個取樣桌高通過，不代表整段區間可行，
     抓取高度由手腕量到支撐後 plan_grasp 確認）；
     之後抓取計畫請求沿用該車道（tlane 子類只在未決定時才再決定）。
@@ -46,6 +46,7 @@ class W1PlaceController(HC.W1PlaceController):
         self.guide, self.obs_trig, self.guide_n, self.guide_lane = None, None, 0, None
         self.so = None                                                      # (d) 站位選擇請求（計畫工作者 kind＝standoff）
         self.guide_block, self.obs_fail = None, []
+        self._wrist_src, self._gp_defer = None, None
         self.x_dead = float(self.x_u0)
         self.q_view_tmpl = np.array(self.q_vhigh, float).copy()
 
@@ -69,14 +70,24 @@ class W1PlaceController(HC.W1PlaceController):
         g = self.guide
         return g is not None and float(self.t) - float(g['t_last']) <= GUIDE_MAX_AGE
 
+    def _lane_src(self):
+        """車道／站位的量測來源：導引新鮮 ⇒ 導引（xy；支撐未知 ⇒ 區域取樣高度）；否則手腕抓取候選先到（延後中）⇒ 手腕（xy＋實測支撐高度，抓取確認）。
+        都沒有 ⇒ None。不退回名目模板（Codex 134437）。"""
+        if self._guide_fresh():
+            g = self.guide
+            return dict(xy=list(g['xy']), t=float(g['t_last']), cam=g['cam'], z_list=None)
+        w = self._wrist_src
+        if w is not None and float(self.t) - float(w['t']) <= ON.OBS_FRESH_S:
+            return dict(xy=list(w['xy']), t=float(w['t']), cam='w1_grasp', z_list=[float(w['z'])])
+        return None
+
     def _d_stop(self):
         v = max(float(getattr(self, 'v_b', 0.0)), ON.V_STOP_FLOOR)            # 同 bottle_w1_tlane_ctrl 的煞停距離
         return v * (C0.D_STEPS * C0.PHYS + 0.05) + v * v / (2.0 * float(B.A_BASE[0])) + 0.02
 
-    def _pick_standoff(self, rows):
+    def _pick_standoff(self, rows, g):
         """控制端選擇：可行候選逐一以 bottle_tlane.rejoin 算實際橫向接回後的路徑，估底盤到 x_pre 的時間（名目剖面）與手臂到該分支的轉移時間，
-        取 max(兩者) 最短（0.1 s 內視為同）→ 最小關節餘裕最大 → 桌腳間隙最大。回 (選定列或 None, 每列成本)。"""
-        g = self.guide
+        取 max(兩者) 最短（0.1 s 內視為同）→ 最小關節餘裕最大 → 桌腳間隙最大。回 (選定列或 None, 每列成本)。g＝量測來源（_lane_src）。"""
         sig_join = float(self.sig_robot) + self._d_stop() + 0.02
         q_now = self._arm_now()
         win_lo = float(self.win[0]) - float(self.x_nom)
@@ -101,10 +112,10 @@ class W1PlaceController(HC.W1PlaceController):
         best = min(feas, key=lambda r: (round(r['cost'], 1), -r['margin_min'], -(r['base_leg_clear'] or 0.0)))
         return best, out
 
-    def _standoff(self):
+    def _standoff(self, g):
         """(d) 導引新鮮且尚未決定車道 ⇒ 送站位選擇請求（綁定導引版本＝xy）；結果到了若導引已變（> SO_TOL）或過期 ⇒ 丟棄、下一拍以新導引重送。
-        全不可行 ⇒ 受控停止 standoff_none_feasible；工作者不可用 ⇒ planner_unavailable／planner_dead（不默默退回名目站位）。回 y_reach 或 None（未到）。"""
-        g = self.guide
+        全不可行 ⇒ 受控停止 standoff_none_feasible；工作者不可用 ⇒ planner_unavailable／planner_dead（不默默退回名目站位）。回 y_reach 或 None（未到）。
+        g＝量測來源（_lane_src：導引或手腕；手腕帶實測支撐高度 z_list）。"""
         if self.so is None or self.so['state'] == 'stale':
             q_now = self._arm_now()
             qb = q_now.copy()
@@ -113,9 +124,11 @@ class W1PlaceController(HC.W1PlaceController):
             legs = [(c.tolist(), sz.tolist()) for n_, c, sz in G.table_boxes(G.S1_TABLE) if n_.startswith('leg')]   # 已知家具（區域先驗桌腳）
             inp = dict(xy=list(g['xy']), band=0.10, pre_m=0.06, lift_m=0.05, q_seeds=[np.asarray(z_, float).tolist() for z_ in [q_now, qb] + list(self._rng_seeds)],
                        legs=legs, y_tube=list(B.Y_TUBE))
+            if g.get('z_list'):
+                inp['z_list'] = list(g['z_list'])                              # 手腕先到：以實測支撐高度確認（不是區域取樣）
             rid = self.pc.submit('standoff', inp)
             n_req = 1 if self.so is None else self.so.get('n_req', 1) + 1
-            self.so = dict(id=rid, t_req=round(float(self.t), 3), state='pending', xy=list(g['xy']), t_guide=float(g['t_last']), n_req=n_req)
+            self.so = dict(id=rid, t_req=round(float(self.t), 3), state='pending', xy=list(g['xy']), t_src=float(g['t']), src=g['cam'], z_list=g.get('z_list'), n_req=n_req)
             self._ev('standoff_request', id=rid, n=n_req)
             if rid is None:
                 self.so['state'] = 'not_sent'
@@ -130,11 +143,11 @@ class W1PlaceController(HC.W1PlaceController):
             return None
         res = m.get('result') or {}
         self.so.update(t_res=round(float(self.t), 3), ok=bool(m['ok']), error=m.get('error'), rows=res.get('rows'), compute_wall=round(m['wall']['t1'] - m['wall']['t0'], 3))
-        if not self._guide_fresh() or float(np.hypot(*(np.asarray(g['xy'], float) - np.asarray(self.so['xy'], float)))) > SO_TOL:
+        if g is None or float(np.hypot(*(np.asarray(g['xy'], float) - np.asarray(self.so['xy'], float)))) > SO_TOL or (g.get('z_list') is not None and self.so.get('z_list') is None):
             self.so['state'] = 'stale'                                         # 結果晚到、導引已更新或過期：丟棄，下一拍以新導引重送
             self._ev('standoff_stale', id=self.so['id'])
             return None
-        best, costs = self._pick_standoff(res.get('rows') or []) if m['ok'] else (None, [])
+        best, costs = self._pick_standoff(res.get('rows') or [], g) if m['ok'] else (None, [])
         self.so['costs'] = [{k: v for k, v in c.items() if k != 'q_pre_lo'} for c in costs]
         if best is None:
             self.so.update(state='none_feasible', y_reach=None)
@@ -145,28 +158,57 @@ class W1PlaceController(HC.W1PlaceController):
         self._ev('standoff_result', ok=True, y_reach=self.so['y_reach'], cost=best['cost'], wall=self.so['compute_wall'])
         return self.so['y_reach']
 
-    def _lane_from_guide(self):
-        if self.tlane is not None or self.lane_planner is None or not self._guide_fresh() or self.judge.stop is not None:
+    def _lane_decide(self):
+        """每拍（不綁 TUCK）：車道尚未成立 ⇒ 依量測來源走站位選擇，結果到了才以選定 y_reach 建車道。"""
+        if self.tlane is not None or self.lane_planner is None or self.judge.stop is not None:
             return
-        yr = self._standoff()
+        g = self._lane_src()
+        if g is None:
+            return
+        yr = self._standoff(g)                                                 # 在途請求的來源若已換（導引過期、手腕先到）：結果回來時版本核對丟棄並以新來源重送
         if yr is None:
             return                                                             # 站位結果未到、已丟棄重送或已受控停止
-        g = self.guide
         d_stop = self._d_stop()
-        r = self.lane_planner(dict(t=float(g['t_last']), xy=list(g['xy'])), float(self.t), float(self.sig_robot), d_stop, y_reach=yr)
+        r = self.lane_planner(dict(t=float(g['t']), xy=list(g['xy'])), float(self.t), float(self.sig_robot), d_stop, y_reach=yr)
         rec = {k: v_ for k, v_ in r.items() if k != 'path_new'}
         rec.update(t=round(float(self.t), 3), seq=-1, sig_robot=round(float(self.sig_robot), 4), d_stop=round(d_stop, 4), source=g['cam'])
         self.tlane_log.append(rec)
         self.guide_lane = rec
         if not r['ok']:
             self._ev('tlane_reject', why=r['why'], source=g['cam'])
-            return                                                             # 導引車道不通過：不停止，等手腕候選時照基線再決定（基線會受控停止）
+            if g['cam'] == 'w1_grasp':
+                self.judge._stop(self.t, 'target_lane_rejected', why=r['why'], source='standoff')   # 手腕確認後仍不通過：同基線受控停止
+            return
         ds = float(r['dsig0'])
         self.path = r['path_new']
         self.s_ref = float(self.s_ref) + ds
         self.sig_robot = float(self.sig_robot) + ds
         self.tlane = rec
-        self._ev('tlane_accept', x_entry=r['x_entry'], y_lane=r['y_lane'], sig_join=r['sig_join'], dsig0=ds, cost_max=r.get('cost_max'), source=g['cam'])
+        self._ev('tlane_accept', x_entry=r['x_entry'], y_lane=r['y_lane'], sig_join=r['sig_join'], dsig0=ds, cost_max=r.get('cost_max'), source=g['cam'], y_reach=yr)
+
+    _lane_from_guide = _lane_decide                                            # 舊名（離線反例腳本沿用）
+
+    def _gp_submit(self, xy, zs, seq):
+        """手腕抓取候選先到而車道未成立：不讓父類建名目車道（會繞過站位選擇）——記為延後，待站位確認、車道成立後再送抓取計畫。"""
+        if self.tlane is None:
+            self._wrist_src = dict(xy=[float(xy[0]), float(xy[1])], z=float(zs), seq=int(seq), t=float(self.t))
+            self._gp_defer = (np.asarray(xy, float).copy(), float(zs), seq)
+            self._ev('grasp_submit_deferred', seq=int(seq))
+            self._lane_decide()
+            if self.tlane is None:
+                return
+        self._gp_defer = None
+        super()._gp_submit(xy, zs, seq)
+
+    def _advance_inner(self, T_tcp, close_done, q):
+        if self.judge.stop is None and self.tlane is None:
+            self._lane_decide()
+        if self.judge.stop is None and self.tlane is not None and self._gp_defer is not None:
+            xy, zs, seq = self._gp_defer
+            self._gp_defer = None
+            self._ev('grasp_submit_released', seq=int(seq))
+            self._gp_submit(xy, zs, seq)                                       # 車道已成立：照基線送抓取計畫（tlane 子類見車道已定不再建名目車道）
+        super()._advance_inner(T_tcp, close_done, q)
 
     # ---- 觀察觸發
     def _view_for(self, sq, look):
@@ -188,7 +230,6 @@ class W1PlaceController(HC.W1PlaceController):
     def _vstep(self, q):
         sq = self.vh_seq
         if self.judge.stop is None and sq['ph'] == 'TUCK':
-            self._lane_from_guide()
             x = float(q[0])
             if self.obs_trig is None:
                 guide = self._guide_fresh()
