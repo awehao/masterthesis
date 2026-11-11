@@ -92,6 +92,11 @@ class W1PlaceController(CA.W1PlaceController):
         v = getattr(self, 'cc_' + name.lower(), None)
         return float(v) if v is not None else globals()[name]
 
+    def _tcp_c(self):
+        """收近點（底盤座標；hook：實例 tcp_c 優先，未設＝模組常數 TCP_C，舊行為逐元素相同；右側子類覆寫）。"""
+        v = getattr(self, 'tcp_c', None)
+        return TCP_C if v is None else np.asarray(v, float)
+
     def _t1(self):
         """第一桌（收近閘／外伸閘用）：實例參數 cc_t1＝(桌面頂, 投影中心, 半尺寸) 優先；未設＝呼叫當下的模組常數。"""
         v = getattr(self, 'cc_t1', None)
