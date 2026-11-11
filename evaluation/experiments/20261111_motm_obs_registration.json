@@ -24,8 +24,8 @@
  },
  "order": "先名目；名目完整通過且紀錄確認新版鏈生效（導引來源、觀察觸發原因、站位結果採用、車頭沿路徑）才跑 A；名目失敗交第一阻點，不自動補跑",
  "run_ids": {
-  "nominal": "bottle_motm_obs_nom_3",
-  "A": "bottle_motm_obs_A_1"
+  "nominal": "bottle_motm_obs_nom_3（r3 凍結，完整成功）",
+  "A": "bottle_motm_obs_A_2"
  },
  "deliverables": "每趟同 RUN_ID：Isaac 實錄重播＋同時間軸 2D 追蹤疊圖；分列抓取車速、停止時間、滑移、放置誤差、車頭與路徑夾角、兩相機實際作用；控制拍總耗時、發布間隔、工作者排隊／計算／回傳、候選年齡與承接餘裕",
  "claims": "n=1 有資訊的案例，不是成功率；倍率 0.4 下完成不能稱即時部署；15 ms／1.09 s 為離線觀察值不是在線保證；右側不在本次實跑範圍",
@@ -33,7 +33,7 @@
   "nominal": "bottle_motm_tpa_nom_3（dynsr42，名目站位 0.4275、無觀察觸發）",
   "A": "bottle_motm_tpa_A_1（dynsr42）"
  },
- "freeze": "experiments/20261111_motm_obs_freeze_r3.sha256",
+ "freeze": "experiments/20261111_motm_obs_freeze_r4.sha256",
  "pre_checks": [
   "results/bottle/obs_ctrl_counterexamples_r2.json（反例 1–6）",
   "results/vision/dualcam_void_check_r1.json（A／B 順序）",
@@ -53,8 +53,23 @@
    "result": "結果碼 3：19.95 s tpa_switch_inconsistent（dp 16.2 mm、dv 0.061 > 0.03）；未閉爪",
    "root_cause": "τ 速率上限 1：末段底盤快 7% ⇒ 落後 0.19 s；剖面終點離散（τ_end 10.38≠T 10.40、末步記滿 Δt）；S1 於 x_pre 減速等手臂，手臂照 v_c 末速收尾 ⇒ 速度差",
    "fix": "Codex 142637 (A)：有界追趕 r_max 1.2（ṙ↑≤1.0/s）＋剖面終點修正＋σ 次格點細化；同包變更有效期政策（最後有效驗證來源時刻起 15 s）"
+  },
+  {
+   "run": "bottle_motm_obs_A_1",
+   "freeze": "experiments/20261111_motm_obs_freeze_r3.sha256",
+   "result": "結果碼 3：22.9 s vision_fix_expired；行人交互成立（12–18.4 s 底盤被拖慢、最近 0.72 m），未完成抓取",
+   "root_cause": "有效期政策未完整接入：bottle_v2_ctrl 底層期限仍自首次凍結起算（實作缺口；反例隔離了 v2 層）",
+   "fix": "Codex 150220：v2 期限走同一 hook、缺來源戳受控拒絕；鏈級回歸 seg_validity_chain_regression_r1"
   }
  ],
  "nom_2_rules": "Codex 141404：期限 15 s、凍結時刻、速度、抓取門檻不改；不提早閉爪、不重送相同目標／延後凍結／刷新計時；推算餘裕約 −0.5 s（混合推算：反例 20.35 s 為切換／重接起始，非完成；1.85 s 取自 nom_3 只作估算）事前揭露；逾期照規則停止、不補跑、不接 A；完整通過才依本凍結接 A",
- "nom_3_rules": "Codex 142637：相位策略（追趕＋剖面終點）與有效期政策同時變更，結果不得全歸因於提速；場景、速度上限、抓持品質門檻不動；失敗不補跑；名目完整通過才接原固定 A（同凍結 r3）"
+ "nom_3_rules": "Codex 142637：相位策略（追趕＋剖面終點）與有效期政策同時變更，結果不得全歸因於提速；場景、速度上限、抓持品質門檻不動；失敗不補跑；名目完整通過才接原固定 A（同凍結 r3）",
+ "successes": [
+  {
+   "run": "bottle_motm_obs_nom_3",
+   "freeze": "experiments/20261111_motm_obs_freeze_r3.sha256",
+   "result": "結果碼 0：新版雙相機／站位／航向／相位協調下無移動物的移動抓放完整成功（n＝1）；閉爪 21.7 s 早於舊期限 22.5 s（本趟完成不靠期限延後；不宣稱整體提速）"
+  }
+ ],
+ "A_2_rules": "Codex 150220：只修政策接線；世界軌跡、排程、相位策略、速度、品質門檻不動；A_1 保留為未完成（不被 A_2 取代）；失敗交阻點、不補跑；不需重跑名目"
 }
