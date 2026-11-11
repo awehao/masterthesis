@@ -1,0 +1,74 @@
+{
+ "name": "m8_full_scene_r1",
+ "created": "2026-11-11（Howard reviews/20261111_howard_complete_mission_scene.md）",
+ "frame": "門局部座標（door_local_v3）：鉸鏈在原點、隔牆 y∈[0, 0.12]、A 房 y<0、B 房 y>0.12；外牆內面 x∈[−4.0, 5.0]、y∈[−5.45, 5.45]",
+ "world": {
+  "path": "src/ammr_bringup/worlds/mission_room_m8_fullwalls.sdf",
+  "sha256": "ff1332aaf53eb1c034e286bf02bc9619cba33b47997f2f464fb00633526c3553",
+  "note": "外牆 2.4 m（同隔牆、門資產牆）；平面足跡同 mission_room.sdf"
+ },
+ "door": {
+  "asset": "src/my_omnibot_description/config/door_local_v3.yaml",
+  "sha256": "6b9628c3b2ab8a00f7de1322fa8a85291bcdfc7d9e321885f68a4e12b16bb324",
+  "builder": "evaluation/door_asset_v3.py",
+  "note": "可動門扇＋把手（物理機構）；地圖門洞留空"
+ },
+ "drawer": {
+  "asset": "src/my_omnibot_description/config/drawer_unit_bar26.yaml",
+  "sha256": "ef0396078012fd004734b81d91de8c22187cd101b0631d0aa69e83d56dc73530",
+  "pose": [
+   2.4,
+   5.05,
+   0.0
+  ],
+  "builder": "evaluation/drawer_asset.py",
+  "note": "可動抽屜＋把手（滑動關節，無驅動）"
+ },
+ "marker": {
+  "asset": "src/my_omnibot_description/config/marker_proxy_m8.yaml",
+  "sha256": "3292900ddece593e9a3b0df3e5c99941ccde9b604ac89a19ce680b5515ee1caf",
+  "in_drawer": true,
+  "radius": 0.013,
+  "length": 0.14,
+  "mass_kg": 0.02,
+  "center_drawer_frame": [
+   0.05,
+   -0.149,
+   0.461
+  ]
+ },
+ "obstacles": {
+  "path": "evaluation/results/mission/mission_obstacles_m8_seed1_slow.json",
+  "sha256": "f55779cf86e073e207d2a38146895e94d934a3521fd4190974efd02dde4a8e38",
+  "n_static_unknown": 5,
+  "n_walkers": 3,
+  "walker_speed_mps": 0.2,
+  "note": "未知箱體不進靜態地圖；真值只給場景與評估"
+ },
+ "start": {
+  "pose": {
+   "x": -2.2,
+   "y": -4.3,
+   "yaw_deg": 90.0,
+   "rgb": [
+    0.1,
+    0.75,
+    0.2
+   ],
+   "note": "起點／終點（A 房西南）"
+  },
+  "note": "A 房起點 S"
+ },
+ "static_map": {
+  "path": "src/ammr_bringup/maps/mission_room_m8_fullwalls.yaml",
+  "sha256": "c8d64074afa69c280ea5f7f1a19178de3883fc7cd960ec175d7d7545931d5a83",
+  "shape": [
+   240,
+   200
+  ],
+  "identical_to_mission_room": true,
+  "n_diff": 0,
+  "occupied": 6441
+ },
+ "not_included": "天花板（不加）；完整任務實跑、夾持可行性、在線操作能力（場景就緒不代表任務完成）"
+}
