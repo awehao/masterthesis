@@ -94,7 +94,7 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
     def omega(sg, vv):
         return 0.0 if hd is None else vv * float(hd.dyaw(sg))
     inp = dict(xy=[xb, yb], z_support=zs, band=0.10, pre_m=0.06, lift_m=0.05, win_rel=[-0.35, 0.15], x_nom=0.0, y_lane=yl,
-               q_seeds=[s.tolist() for s in [qa0] + list(R0.RNG_SEEDS)], q_now=qa0.tolist(), q_seed=None)
+               q_seeds=[s.tolist() for s in [qa0] + list(R0.RNG_SEEDS)], q_now=qa0.tolist(), q_seed=None, side=ctx.get('side', 'left'))
     ok, why, res = PW.plan_grasp(inp)
     if not ok:
         return dict(row, ok=False, why='plan_' + str(why))
@@ -239,6 +239,18 @@ def main():
         starts.append((nm, q, qd, base))
     _, _, b88 = TO.rec_state(c, O, 8.80)
     starts.append(('合成 K2_READY 靜止', R0.Q_TUCK.copy(), np.zeros(6), b88))
+    if os.environ.get('TPAS_SIDE') == 'right':                          # 右側整合（整場景鏡射名目）：瓶 y 取負、右側抓取姿態、車道 y＝y＋y_reach、桌盒鏡射
+        import bottle_side as BSD
+        import bottle_tlane as TLN
+        import bottle_view_gen as VG
+        yb = -abs(yb)
+        yl = float(TLN.lane_from_target([xb, yb], -0.35, 0.40, 'right')[1])
+        T_g = BSD.grasp_target(xb, yb, zs + 0.10, 'right')
+        ctx.update(yb=yb, yl=yl, T_g=T_g, T_pre=BR.offset_along_tool(T_g, -0.06), boxes=BSD.mirror_boxes(R0.table_boxes(zs)), side='right')
+        b0 = np.array([float(b88[0]), yl, 0.0])
+        q_v, _ = VG.view_q1(R0.K, b0, R0.Q_VHIGH, BSD.look_point('right'), -1.5, 1.5)
+        starts = [('合成 K2_READY 靜止（右側車道）', R0.Q_TUCK.copy(), np.zeros(6), b0), ('右看視角靜止（線上生成 q1）', np.asarray(q_v, float), np.zeros(6), b0)]
+        print('右側：車道 y', round(yl, 4), '右看 q1', round(float(q_v[0]), 4), flush=True)
     head = os.environ.get('TPAS_HEADING') == '1'
     if head:                                                            # 航向版：底盤走實錄的量測後接近路徑（含重接彎段），偏航沿 HeadingRef
         import bottle_heading as HD
