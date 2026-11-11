@@ -17,7 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MODE, OUTP = sys.argv[1], sys.argv[2]
 T_END = float(os.environ.get('FP_T_END', '45'))
 RTF_CAP = float(os.environ.get('GZ_RTF_CAP', '0.6'))
-Z1, D_U, BXY = 0.598, 6.4, (0.0042, 0.4564)                   # D_U 6.4：第一筆快照約 6.8 s（同實跑 obs_nom_3／right_nom_4 的 online_obs_first 時刻）；r1 用 3.6 時 TPA 在彎段起算，基線即被 tpa_plan_deviation 擋下
+Z1, D_U, BXY = 0.598, float(os.environ.get('FP_DU', '6.4')), (0.0042, 0.4564)                   # D_U 6.4：第一筆快照約 6.8 s（同實跑 obs_nom_3／right_nom_4 的 online_obs_first 時刻）；r1 用 3.6 時 TPA 在彎段起算，基線即被 tpa_plan_deviation 擋下
 print('#EARLY', dict(mode=MODE, t_end=T_END, rtf_cap=RTF_CAP), flush=True)
 sys.argv = [sys.argv[0], f'{Z1:.3f}', 'nom']
 sys.path.insert(0, HERE)
@@ -47,6 +47,10 @@ if os.environ.get('FP_DYMAX'):                           # 測試用注入：把
     DPC.DY_RATE_MAX = float(os.environ['FP_DYMAX'])
 SWEEP = os.environ.get('FP_STOPSWEEP') == '1'
 AST = dict(n=0, n_cfg=0, worst={}, where={}, nonfinite=0, unfinished=0)
+AST2 = dict(n=0, bad=0, worst={}, where={})
+LIM2 = dict(nonfinger_bottle=0.005, nonfinger_table=0.01, finger_table=0.005, self=0.0, margin=0.05)   # 既有規則：非手指對瓶 5 mm（TPA／線上拒絕線）；對桌與自碰同 test_bottle_w1_gaze LIM
+XT = dict(d=[], v=[], prev=None, prev_t=-9.0, prev_v=None) if os.environ.get('FP_XTICK') == '1' else None
+B_DT = 0.05
 # 門檻來源（既有階段規則，Codex 20261111 第 12 輪；不為候選新降門檻）：
 #   TPA 整段接近（本檔掃掠範圍，CRUISE 未切換；全部連桿含開爪手指）：對第一桌 ≥ 0.02（R0.ENV_M）、對瓶 ≥ 0.005（tpa_offline_check 第 10 行）、自碰 ≥ 0.005（R0.SELF_M）、關節餘裕 ≥ 0.05（R0.LIM_M）。
 #   觀察段規則（全部連桿離瓶 0.05、自碰 0.008017）另列為 obs_rule，只供對照舊判讀，不是本段判準。INSERT 不在本掃掠範圍（未核）。
@@ -69,7 +73,34 @@ class Ctl(BASE):
     def __init__(self, *a, **kw):
         super().__init__(*a, planner_log=LOGP, **kw)
 
+    def _T_seq(self, q, t_eff):
+        T_ = super()._T_seq(q, t_eff)
+        if XT is not None and self.st.phase == 'CRUISE' and not self.blending and self.tpa is not None and 'tau' in self.tpa:
+            p_ = np.asarray(T_)[:, :3, 3]
+            if XT.get('prev') is not None and abs(float(self.t) - XT['prev_t'] - B_DT) < 1e-6:
+                XT['d'].append(float(np.linalg.norm(XT['prev'] - p_[0])))          # 上一拍預覽在 +1 拍的值 對 這一拍當拍值（真在途管線、真 D）
+                XT['v'].append(float(np.linalg.norm((p_[1] - p_[0]) / B_DT - XT['prev_v'])))
+            XT['prev'], XT['prev_t'], XT['prev_v'] = p_[1].copy(), float(self.t), (p_[1] - p_[0]) / B_DT
+        return T_
+
     def _advance_inner(self, T_tcp, close_done, q):
+        if SWEEP and self.judge.stop is None and np.isfinite(q).all() and self.st.phase in ('PREGRASP', 'INSERT') and self.n_tick % 2 == 0:
+            for e in (0, 1):                                               # PREGRASP／INSERT：既有 INSERT 規則——非手指（含夾爪殼）對瓶、手指／非手指對桌、自碰、關節餘裕；預定接觸的手指對瓶不核
+                Q = C21.stop_traj(np.asarray(q, float), self.s, self.pipe, self.u_last, self.cfg, e)
+                AST2['n'] += 1
+                if not np.isfinite(Q).all() or len(Q) >= N_MAX:
+                    AST2['bad'] += 1
+                    continue
+                for qq in Q:
+                    W_ = G.link_world(qq, G.Q_OPEN)
+                    Pn = np.vstack([v for k_, v in W_.items() if k_ not in G.C.FINGERS])
+                    Pf = np.vstack([v for k_, v in W_.items() if k_ in G.C.FINGERS])
+                    vals = dict(nonfinger_bottle=float(G.box_dist(Pn, BOXC, BOXS).min()), nonfinger_table=min(float(G.box_dist(Pn, c_, s_).min()) for c_, s_ in TBN),
+                                finger_table=min(float(G.box_dist(Pf, c_, s_).min()) for c_, s_ in TBN), self=float(G.C.self_clear(qq, G.Q_OPEN)[0]), margin=BB.margin(qq[3:]))
+                    for k_, v in vals.items():
+                        key = f'{self.st.phase}:e{e}:{k_}'
+                        if v < AST2['worst'].get(key, 9.9):
+                            AST2['worst'][key], AST2['where'][key] = v, round(float(self.t), 3)
         if SWEEP and self.judge.stop is None and np.isfinite(q).all() and self.st.phase == 'CRUISE' and not self.blending and self.tpa is not None and self.n_tick % 2 == 0:
             AST['n'] += 1                                                  # TPA 接近段每隔一拍：現在停（e0）與延後一拍停（e1）的完整取樣停止軌跡
             for e in (0, 1):
@@ -309,6 +340,26 @@ def main():
         out['diag'] = dict(window=[W0, W1_], rows=rows, origin=st.get('origin'), v_arm=B0.W_ARM['v_arm'], hist_keys=sorted(f.hist[0].keys()),
                            missing='後處理命令（Shield 輸出、設定點模型實際套用值）與 QP 各限制的乘子／作用集合不在既有紀錄內；求解命令取 compact.u、實測取假受控對象位置差分')
     out['swdiag'] = st.get('swdiag')
+    if SWEEP:
+        out['stop_sweep_grasp'] = dict(n=AST2['n'], bad=AST2['bad'], worst={k: round(v, 5) for k, v in sorted(AST2['worst'].items())}, where=AST2['where'], lim=LIM2,
+                                       fails=sorted(k for k, v in AST2['worst'].items() if v < LIM2[k.split(':')[2]]) + (['bad_traj'] if AST2['bad'] else []),
+                                       scope='PREGRASP／INSERT 每隔一拍，現在停／晚一拍停；到閉爪請求為止（閉爪後未核）')
+    if XT is not None and XT['d']:
+        out['xtick'] = dict(n=len(XT['d']), pos_max_mm=round(max(XT['d']) * 1e3, 3), pos_p95_mm=round(float(np.percentile(XT['d'], 95)) * 1e3, 3), dv_max=round(max(XT['v']), 4), dv_p95=round(float(np.percentile(XT['v'], 95)), 4),
+                            crit_mm=2.0, note='真 step、真在途管線：上一拍時域參考在 +0.05 s 的 TCP 相對位置 對 下一拍當拍值；dv＝相鄰拍當拍參考速度差')
+    try:                                                                   # 腕部近距修正可用時間：手腕相機到瓶 ≤ 0.35 m（既有可見距離）起，到 INSERT 開始／閉爪請求
+        import bottle_v1_cam_visibility as VZ
+        T_WR = VZ.CAMS['wrist']['T']
+        tgt = np.array([BXY[0], BXY[1], Z1 + 0.1])
+        vis = [h['t'] for h in f.hist if float(np.linalg.norm(tgt - (G.C.K.fk(h['q'], 'link_eef') @ T_WR)[:3, 3])) <= 0.35]
+        ph_ = {}
+        for h in f.hist:
+            ph_.setdefault(h['phase'], h['t'])
+        if vis:
+            out['wrist_time'] = dict(t_first_in_range=round(vis[0], 2), t_insert=ph_.get('INSERT'), t_close=c.t_close_req, to_insert_s=None if ph_.get('INSERT') is None else round(ph_['INSERT'] - vis[0], 2),
+                                     to_close_s=None if c.t_close_req is None else round(c.t_close_req - vis[0], 2), note='幾何距離條件（≤0.35 m），未核遮擋與視角；此測試台不送手腕估計')
+    except Exception as e_:                                                # noqa: BLE001
+        out['wrist_time'] = dict(error=repr(e_))
     out['push'] = None if PUSH is None else dict(y_off=PUSH[0], x_back=[PUSH[1], PUSH[2]], pushed=st.get('pushed'), t=st.get('push_t'), dev_abs_max=st.get('dev_max'), dev_gate=0.08)
     if SWEEP:
         out['stop_sweep'] = dict(n=AST['n'], n_cfg=AST['n_cfg'], worst={k: round(v, 5) for k, v in AST['worst'].items()}, where=AST['where'], lim=ALIM,
@@ -353,6 +404,7 @@ def main():
     out['flow_pass'] = bool(st['exc'] is None and r is not None and c.t_close_req is not None and why == 'sim_limit' and (out.get('approach') or {}).get('cmd_nonfinite') == 0)
     sw_ = out.get('stop_sweep')
     ac_ = out.get('arm_cmd_tpa') or {}
+    out['safety_grasp_pass'] = None if not out.get('stop_sweep_grasp') else bool(not out['stop_sweep_grasp']['fails'] and out['stop_sweep_grasp']['n'] > 0)
     out['safety_pass'] = None if sw_ is None else bool(not sw_['fails'] and sw_['n'] > 0 and ac_.get('v_max', 9) <= 1.0 + 1e-9 and ac_.get('a_max', 1e9) <= TV.C0.A_ARM)   # None＝未核對（不默認通過）
     out['safety_scope'] = '只含 TPA 接近段停止掃掠與手臂命令界；PREGRASP／INSERT、抓持、手腕修正未核'
     out['pass'] = bool(out['flow_pass'] and out['safety_pass'] is True)
