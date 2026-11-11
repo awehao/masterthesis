@@ -62,8 +62,9 @@ def sweep(P, lim, v0, a_up, a_dn, v_end=None, v0_tol=1e-6):
     n = len(sig)
     cap = np.minimum(np.asarray(lim['v_cap'], float).copy(), 10.0)
     v0 = max(float(v0), 0.0)
-    au = np.minimum(a_up, lim['a_ang'])
-    ad = np.minimum(a_dn, lim['a_ang'])
+    aa = np.minimum(lim['a_ang'], np.r_[lim['a_ang'][1:], lim['a_ang'][-1]])     # 段 i→i+1 的角加速度項上限取兩端較小者（只取起點時終點端 θ′a 會超過 α/2；單元核對抓到 1.011）
+    au = np.minimum(a_up, aa)
+    ad = np.minimum(a_dn, aa)
     entry = bool(v0 > cap[0] + v0_tol)
     if entry:                                                                       # 承接段：允許由 v0 以可用減速度降到上限以下
         ve = v0
@@ -100,17 +101,39 @@ def profile(P, v_target, v0, a_up, a_dn, w_max=None, alpha_max=None, margin=MARG
 
 
 def verify(pr, cfg=None):
-    """由剖面樣本數值微分回核：輪級用量、偏航率、偏航角加速度、標量加速度、本體加速度、輪緣加速度（對 r·α_wheel_max）。不靠建構時的推導。"""
+    """剖面回核。輪級、偏航率：逐點精確值。標量加速度：各段等加速度的精確值 (v₁²−v₀²)/(2Δσ)。
+    偏航角加速度：**解析式** α＝θ″v²＋θ′a，以段兩端的 θ′、θ″、v 與該段 a 各算一次取最大（與限制所用的同一組陣列；不靠數值微分，也不加容差）。
+    另附數值微分值 alpha_fd、a_body_lin_fd、wheel_acc_ratio_fd 作旁證（含離散誤差，不作為接受依據）。"""
     c = cfg or WL.WheelLimitConfig()
     cap, W = wheel_cap(c)
-    t, body = pr['t'], pr['body']
+    t, body, v, sig, lim = pr['t'], pr['body'], pr['v'], pr['sig'], pr['lim']
+    ds = np.maximum(np.diff(sig), 1e-12)
+    a_seg = (v[1:] ** 2 - v[:-1] ** 2) / (2.0 * ds)
+    dth, ddth = lim['xi'][:, 2], lim['ddth']
+    al = np.maximum(np.abs(ddth[:-1] * v[:-1] ** 2 + dth[:-1] * a_seg), np.abs(ddth[1:] * v[1:] ** 2 + dth[1:] * a_seg))
     dt = np.maximum(np.diff(t), 1e-9)
     acc = np.diff(body, axis=0) / dt[:, None]
-    a_s = np.diff(pr['v']) / dt
     rim_a = np.max(np.abs(acc @ W.T), axis=1)
-    return dict(wheel_ratio_max=float(pr['wheel_ratio'].max()), w_max=float(np.max(np.abs(body[:, 2]))), alpha_max=float(np.max(np.abs(acc[:, 2]))) if len(acc) else 0.0,
-                a_scalar_max=float(np.max(np.abs(a_s))) if len(a_s) else 0.0, a_body_lin_max=float(np.max(np.hypot(acc[:, 0], acc[:, 1]))) if len(acc) else 0.0,
-                wheel_acc_ratio_max=float(rim_a.max() / (c.wheel_radius * c.wheel_a_max)) if len(acc) else 0.0)
+    return dict(wheel_ratio_max=float(pr['wheel_ratio'].max()), w_max=float(np.max(np.abs(body[:, 2]))), alpha_max=float(al.max()) if len(al) else 0.0,
+                a_scalar_max=float(np.max(np.abs(a_seg))) if len(a_seg) else 0.0, alpha_fd=float(np.max(np.abs(acc[:, 2]))) if len(acc) else 0.0,
+                a_body_lin_fd=float(np.max(np.hypot(acc[:, 0], acc[:, 1]))) if len(acc) else 0.0,
+                wheel_acc_ratio_fd=float(rim_a.max() / (c.wheel_radius * c.wheel_a_max)) if len(acc) else 0.0)
+
+
+def hard_check(pr, eps=1e-9):
+    """接受閘門（既有硬限制，無容差）：輪級用量 ≤ 1、偏航率 ≤ w_max、偏航角加速度 ≤ alpha_max、標量加減速 ≤ a。
+    回 (違反項目清單, verify, over_margin)。over_margin＝輪級用量超過工程餘裕 margin 但仍 ≤ 1（有界承接時可能發生；只標記，不拒絕）。"""
+    c, vf = pr['cfg'], verify(pr)
+    bad = []
+    if vf['wheel_ratio_max'] > 1.0 + eps:
+        bad.append('wheel')
+    if c['w_max'] is not None and vf['w_max'] > c['w_max'] + eps:
+        bad.append('yaw_rate')
+    if c['alpha_max'] is not None and vf['alpha_max'] > c['alpha_max'] + eps:
+        bad.append('yaw_acc')
+    if vf['a_scalar_max'] > max(c['a_up'], c['a_dn']) + 1e-6:
+        bad.append('accel')
+    return bad, vf, bool(vf['wheel_ratio_max'] > c['margin'] + 1e-6)
 
 
 def resample(pr, dt):

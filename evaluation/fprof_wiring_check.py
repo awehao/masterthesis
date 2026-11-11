@@ -113,7 +113,7 @@ def one(run):
             FAIL.append(f'{run}:retime+{extra}')
     if abs(F['T'] - new['T']) > 0.25:
         FAIL.append(run + ':T_profile_vs_ref_sim')
-    if new['wheel_use_max'] > 1.0 or new['alpha_max'] > HD.ALPHA_MAX * 1.15 or new['w_max'] > HD.W_MAX * 1.02:
+    if new['wheel_use_max'] > 1.0 or new['alpha_max'] > HD.ALPHA_MAX or new['w_max'] > HD.W_MAX:
         FAIL.append(run + ':limits')
     if new['preview_sig_err_max_m'] > 0.01:
         FAIL.append(run + ':preview')
@@ -123,7 +123,7 @@ def one(run):
 
 def main():
     res = dict(mro=mro(), runs=[one(x) for x in sys.argv[2:]])
-    res['verdict'] = dict(ok=not FAIL, fails=FAIL, criteria='MRO 解析；A0 參考輪級 ≤1、ω ≤ W_MAX、α ≤ 1.15·ALPHA_MAX（逐拍差分容差）、剖面時間與逐拍參考時間差 ≤0.25 s、預覽 σ 誤差 ≤1 cm、重新定時到位時間誤差 <0.02 s')
+    res['verdict'] = dict(ok=not FAIL, fails=FAIL, criteria='MRO 解析；A0 參考輪級 ≤1、ω ≤ W_MAX、α ≤ ALPHA_MAX（逐拍離散參考，無容差；剖面本身另以解析式硬限制閘門）、剖面時間與逐拍參考時間差 ≤0.25 s、預覽 σ 誤差 ≤1 cm、重新定時到位時間誤差 <0.02 s')
     json.dump(res, open(sys.argv[1], 'w'), ensure_ascii=False, indent=1)
     print(json.dumps(res['mro'], ensure_ascii=False))
     for x in res['runs']:

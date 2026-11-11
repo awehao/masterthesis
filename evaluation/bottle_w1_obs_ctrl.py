@@ -165,7 +165,7 @@ class W1PlaceController(HC.W1PlaceController):
             t_base = self._standoff_t_base(new, float(self.sig_robot) + ds, x_pre_c)
             t_arm = 0.0 if r.get('q_pre_lo') is None else 1.875 * float(np.abs(np.asarray(r['q_pre_lo'], float) - q_now).max()) / B.W_ARM['v_arm']
             out.append(dict(r, cost=round(max(t_base, t_arm), 3), t_base=round(t_base, 3), t_arm=round(t_arm, 3), dsig0=round(ds, 4)))
-        feas = [r for r in out if r.get('cost') is not None]
+        feas = [r for r in out if r.get('cost') is not None and np.isfinite(r['cost'])]   # 非有限成本＝該候選時間模型不可行（A0 hook 回 inf）；既有梯形成本恆有限，行為不變
         if not feas:
             return None, out
         best = min(feas, key=lambda r: (round(r['cost'], 1), -r['margin_min'], -(r['base_leg_clear'] or 0.0)))

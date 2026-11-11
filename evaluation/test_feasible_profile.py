@@ -33,7 +33,7 @@ p0 = FP.profile(P2, 0.35, 0.0, A, A, w_max=W, alpha_max=None)
 p1 = FP.profile(P2, 0.35, 0.0, A, A, w_max=W, alpha_max=AL)
 v0_, v1_ = FP.verify(p0), FP.verify(p1)
 chk('角加速度：未限制時確實超過 1.0（反例成立）', v0_['alpha_max'] > AL, round(v0_['alpha_max'], 3))
-chk('角加速度：限制後 ≤ 1.0（數值微分容差 5%）', v1_['alpha_max'] <= AL * 1.05, round(v1_['alpha_max'], 3))
+chk('角加速度：限制後 ≤ 1.0（解析式、無容差）', v1_['alpha_max'] <= AL + 1e-9, round(v1_['alpha_max'], 3))
 chk('角加速度：限制後偏航率 ≤ 0.6、輪級 ≤ 0.97', v1_['w_max'] <= W + 1e-6 and v1_['wheel_ratio_max'] <= 0.97 + 1e-9, (round(v1_['w_max'], 3), round(v1_['wheel_ratio_max'], 3)))
 # 3 起速：0.25 進到很快就要降到 0.05 的路 ⇒ 不可偷改
 vt = np.where(x < 0.05, 0.30, 0.05)

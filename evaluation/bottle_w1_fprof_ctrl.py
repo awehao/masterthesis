@@ -23,6 +23,7 @@ import wb_wheel_limit as WL
 
 N, DT = B.N, B.DT
 DS = 0.01
+RETIME_TOL = 0.01                                                # 共同定時的到位時間容許殘差（s；二分法 30 次的數值殘差量級，非放寬）
 
 
 def build(path, hd, sig0, v0, x_pre, x_slow, v_nav, v_c, sig_end=None):
@@ -41,8 +42,11 @@ def build(path, hd, sig0, v0, x_pre, x_slow, v_nav, v_c, sig_end=None):
     pr = FP.profile(P, vt, float(v0), S1.A_SLEW, S1.A_SLEW, w_max=HD.W_MAX, alpha_max=HD.ALPHA_MAX)
     if not pr['ok']:
         return dict(ok=False, why=pr['why'], detail={k: v for k, v in pr['detail'].items() if k != 'ok'})
+    bad, vf, over = FP.hard_check(pr)
+    if bad:                                                                     # 接受閘門：既有硬限制（無容差）；超限 ⇒ 不可行（由呼叫端重新定時或受控停止）
+        return dict(ok=False, why='hard_limit:' + ','.join(bad), detail={k: round(float(v), 5) for k, v in vf.items()})
     return dict(ok=True, why=None, sig=g, v=pr['v'], t=pr['t'], T=float(np.interp(float(x_pre), g, pr['t'])), pr=pr, P=P, arc_err=arc_err, v_nav=float(v_nav), v_c=float(v_c),
-                x_pre=float(x_pre), x_slow=float(x_slow), entry_over_cap=pr['entry_over_cap'])
+                x_pre=float(x_pre), x_slow=float(x_slow), entry_over_cap=pr['entry_over_cap'], over_margin=over, verify={k: round(float(v), 5) for k, v in vf.items()})
 
 
 def v_at(F, sig):
@@ -134,8 +138,10 @@ class Timing:
             vc = self.v_c
         else:
             Ff = self._b(self.v_floor, self.v_floor)
-            if Ff.get('ok') and Ff['T'] < T:
-                vn, vc, Fb = self.v_floor, self.v_floor, Ff
+            if Ff.get('ok') and Ff['T'] < T:                                   # 連最低速度剖面都比手臂早到 ⇒ 無法共同定時：明確拒絕（不縮放時間軸、不退回舊剖面）
+                self.log.append(dict(T=T, kind='retime_cannot_meet_T', t_slowest=round(float(Ff['T']), 4), v_floor=self.v_floor))
+                self.F = dict(ok=False, why='retime_cannot_meet_T')
+                return self.v_nav, self.v_c, float(F['T'])
             else:
                 vn, Fb = bis(lambda m: self._b(m, m), self.v_floor, self.v_c)
                 vc = vn
@@ -143,20 +149,27 @@ class Timing:
             self.log.append(dict(T=T, kind='retime_failed'))
             self.F = dict(ok=False, why='retime_failed')
             return self.v_nav, self.v_c, float(F['T'])
+        if abs(float(Fb['T']) - T) > RETIME_TOL:                                # 二分法沒有收斂到 T（例：可行區間不含 T）⇒ 拒絕
+            self.log.append(dict(T=T, kind='retime_not_converged', t=round(float(Fb['T']), 4)))
+            self.F = dict(ok=False, why='retime_not_converged')
+            return self.v_nav, self.v_c, float(F['T'])
         self.F = Fb
         self.log.append(dict(T=T, v_nav=round(vn, 4), v_c=round(vc, 4), t=round(Fb['T'], 4), kind='retimed'))
         return float(vn), float(vc), float(Fb['T'])
 
 
 def tpas_table(F, T, dt=0.02):
-    """TPAS 進度表 (τ, σ)：最終剖面的等時間取樣（含終點）。二分法殘差使 F['T'] 與 T 差在毫秒級 ⇒ τ 軸等比對齊到 T 並回報比例（不是把不同源的剖面硬縮）。"""
+    """TPAS 進度表 (τ, σ)：最終剖面的等時間取樣（含終點）。剖面到位時間與 T 的差須 ≤ RETIME_TOL（二分法殘差，毫秒級）；
+    此時只把終點時間對齊到 T（比例記錄）。差更大＝沒有共同定時成功 ⇒ 回 (None, None, 比例)，由呼叫端受控停止——不以縮放掩蓋。"""
     m = F['sig'] <= F['x_pre'] + 1e-9
     tt, sg = F['t'][m], F['sig'][m]
+    scale = float(T) / float(tt[-1])
+    if abs(float(tt[-1]) - float(T)) > RETIME_TOL:
+        return None, None, scale
     tk = np.arange(0.0, tt[-1] + 1e-9, dt)
     if tt[-1] - tk[-1] > 1e-9:
         tk = np.r_[tk, tt[-1]]
     sk = np.interp(tk, tt, sg)
-    scale = float(T) / float(tt[-1])
     return tk * scale, sk, scale
 
 
@@ -184,10 +197,11 @@ class W1PlaceController(SC.W1PlaceController):
             return self.fp
         F = build(self.path, self.hd, float(self.s_ref), float(self.v_b), float(self.x_pre), float(self.x_slow), float(self.v_nav), float(self.v_c))
         self.fp_log.append(dict(t=round(float(self.t), 3), what='nav', ok=bool(F.get('ok')), why=F.get('why'), sig0=round(float(self.s_ref), 4), v0=round(float(self.v_b), 4),
-                                T=round(F['T'], 3) if F.get('ok') else None, arc_err=round(F['arc_err'], 5) if F.get('ok') else None, entry_over_cap=F.get('entry_over_cap')))
+                                T=round(F['T'], 3) if F.get('ok') else None, arc_err=round(F['arc_err'], 5) if F.get('ok') else None, entry_over_cap=F.get('entry_over_cap'),
+                                over_margin=F.get('over_margin'), verify=F.get('verify'), detail=F.get('detail')))
         if not F.get('ok'):
             if self.judge.stop is None:
-                self.judge._stop(self.t, 'fprof_infeasible', why=str(F.get('why')), where='nav')
+                self.judge._stop(self.t, 'fprof_infeasible', reason=str(F.get('why')), where='nav')
             return None
         self.fp, self._fp_key = F, key
         return F
@@ -230,7 +244,7 @@ class W1PlaceController(SC.W1PlaceController):
         if not tm.ok():
             self.fp_log.append(dict(t=round(float(self.t), 3), what='tpa', ok=False, why=tm.F0.get('why')))
             if self.judge.stop is None:
-                self.judge._stop(self.t, 'fprof_infeasible', why=str(tm.F0.get('why')), where='tpa')
+                self.judge._stop(self.t, 'fprof_infeasible', reason=str(tm.F0.get('why')), where='tpa')
             return None                                                         # 已停止；plan_tpa 仍會跑完既有路徑，但結果不會被執行
         self._fp_timing = tm
         return tm
@@ -243,7 +257,7 @@ class W1PlaceController(SC.W1PlaceController):
             return
         F = tm.F
         if not F.get('ok'):
-            self.judge._stop(self.t, 'fprof_infeasible', why=str(F.get('why')), where='tpa_retime')
+            self.judge._stop(self.t, 'fprof_infeasible', reason=str(F.get('why')), where='tpa_retime')
             return
         self.fp, self._fp_key = F, (id(self.path), id(self.hd), float(self.x_pre), float(self.x_slow))
         self.fp_log.append(dict(t=round(float(self.t), 3), what='tpa', ok=True, T_arm=round(float(P['T']), 3), T_base=round(tm.t_base(), 3), T_final=round(float(F['T']), 3),
@@ -252,8 +266,14 @@ class W1PlaceController(SC.W1PlaceController):
     def _tpas_prof(self, sig_e, P):
         tm = self._fp_timing
         if tm is None or not tm.F.get('ok'):
+            if tm is not None and self.judge.stop is None:                      # 有 A0 定時但最終剖面不可用 ⇒ 受控停止
+                self.judge._stop(self.t, 'fprof_infeasible', reason=str(tm.F.get('why')), where='tpas')
             return super()._tpas_prof(sig_e, P)
         tk, sk, scale = tpas_table(tm.F, P['T'])
+        if tk is None:
+            if self.judge.stop is None:
+                self.judge._stop(self.t, 'fprof_infeasible', reason='tpas_table_T_mismatch', where='tpas', scale=round(float(scale), 4))
+            return super()._tpas_prof(sig_e, P)                                 # 已停止；回傳只為讓父類流程不崩，結果不會被執行
         P['fprof'] = dict(tau_scale=round(scale, 6), sig0_plan=round(float(tm.a[2]), 4), sig0_tpas=round(float(sig_e), 4))
         return tk, sk + (float(sig_e) - float(tm.a[2]))                       # 同一進度定義下的起點對齊（_sig_of 與 sig_robot 的差；記錄）
 
