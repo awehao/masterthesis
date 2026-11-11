@@ -177,7 +177,7 @@ def plot(P):
         ax.add_patch(Rectangle((fp[2] + 0.05, fp[1]), fp[3] - fp[2] - 0.1, REG['drawer']['travel'], fc='none', ec='#1f5fbf', ls=(0, (3, 2)), lw=1.0, zorder=4))
         ax.plot([-0.04, 0.0], [0.0, 0.95], color='#c0392b', lw=3, zorder=5)                      # 關閉的門扇（沿 x）
         ax.add_patch(Arc((0.0, 0.0), 1.9, 1.9, theta1=90, theta2=180, color='#c0392b', ls=(0, (3, 2)), lw=1.0, zorder=5))
-        ax.annotate('門（關閉、可操作）\n向臥室側拉開', xy=(-0.02, 0.5), xytext=(-1.55, -1.75), fontsize=9, color=INK, ha='center', arrowprops=dict(arrowstyle='-', color='#c0392b', lw=1.2), zorder=6,
+        ax.annotate('門（關閉、可操作）\n向臥室側拉開', xy=(-0.02, 0.5), xytext=(-1.2, -1.75), fontsize=9, color=INK, ha='center', arrowprops=dict(arrowstyle='-', color='#c0392b', lw=1.2), zorder=6,
                     bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='#c0392b', lw=1.2))
         for o in OB['static_unknown']:
             ax.add_patch(Rectangle((o['y'] - o['size'][1] / 2, o['x'] - o['size'][0] / 2), o['size'][1], o['size'][0], angle=-o['yaw_deg'], rotation_point='center', fc='#d9a15a', ec='#7a4a12', lw=0.8, zorder=4))
@@ -188,7 +188,7 @@ def plot(P):
         ax.add_patch(Circle((s['y'], s['x']), 0.39, fc='#3aa0e8', ec='#16507c', lw=1.0, zorder=5))
         ax.text(s['y'], s['x'] + 0.62, '起點 S', ha='center', va='center', fontsize=9, color=INK, zorder=6)
         ax.plot([s['y'], -1.4, 1.25, 3.2, 5.06, 6.4, 7.0], [s['x'], 0.5, 0.5, 0.2, 0.0, -1.0, P['drawer_front'][0]], color='#1e8449', ls=(0, (2, 3)), lw=1.6, alpha=0.9, zorder=4)
-        for txt, yy, xx in (('左側起始房間（臥室）', -3.05, 2.78), ('中央客廳／通行區', 2.55, -0.6), ('右側取物區', 6.95, 2.72)):
+        for txt, yy, xx in (('臥室（起始房間）', -3.25, -1.72), ('中央客廳／通行區', 2.55, -0.6), ('右側取物區', 6.95, 2.72)):
             ax.text(yy, xx, txt, ha='center', va='center', fontsize=11, color=MUTED, fontweight='bold', zorder=1)
         ax.text(5.06, 0.0, '開口', ha='center', va='center', fontsize=8, color=MUTED, rotation=90, zorder=6)
         ax.set_xlim(-4.7, 9.3)
