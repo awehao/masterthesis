@@ -129,7 +129,7 @@ class W1PlaceController(OC.W1PlaceController):
             if xy is not None:
                 yb = float(xy[1]) - float(self.tlane['y_lane'])                # 預測操作構型：底盤在 x_pre、車道上、偏航 0 ⇒ 物件機身 y
                 s_ = 'left' if yb > 0 else 'right'
-                self.side_chk = dict(t=round(float(self.t), 3), y_body=round(yb, 4), side=s_, ok=s_ == self.grasp_side, x_pre=round(float(self.x_pre), 4))
+                self.side_chk = dict(t_chk=round(float(self.t), 3), y_body=round(yb, 4), side=s_, ok=s_ == self.grasp_side, x_pre=round(float(self.x_pre), 4))   # 鍵不可用 t（_ev／_stop 的固定參數；bottle_motm_right_nom_2 崩潰）
                 self._ev('side_check', **self.side_chk)
                 if s_ != self.grasp_side:
                     self.judge._stop(self.t, 'grasp_side_mismatch_predicted', **self.side_chk)

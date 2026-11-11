@@ -133,6 +133,24 @@ def part_control():
     # f 預測操作構型
     r_ = TLN.lane_from_target(OBJ_R, -0.35, 0.40, 'right')
     out['f_lane'] = dict(x_entry=round(r_[0], 4), y_lane=round(r_[1], 4), y_body=round(float(OBJ_R[1] - r_[1]), 4))
+    # f2 預測操作構型核對：經真 _advance_inner（其下觀察層以下隔離）＋真 _ev／S0Judge._stop（bottle_motm_right_nom_2 在此崩潰）
+    base_adv = SC.OC.W1PlaceController._advance_inner
+    SC.OC.W1PlaceController._advance_inner = lambda self, T, c_, q: None
+    f2 = {}
+    for nm, yl in (('同側', -0.0083), ('反側（車道在物件右邊）', -0.90)):
+        o3 = mk('right')
+        o3.apply_region_prior()
+        o3.t = 2.7
+        o3._update_side(OBJ_R, 'guide:w1')
+        o3.guide = dict(xy=OBJ_R.tolist(), cam='w1', state='selected', t_last=2.6)
+        o3.tlane, o3.x_pre = dict(y_lane=yl), -0.3227
+        try:
+            o3._advance_inner(None, False, np.array([-3.8, 0.4, -0.5]))
+            f2[nm] = dict(side_chk=o3.side_chk, stop=o3.judge.stop, events=[e['what'] for e in o3.events])
+        except Exception as e:                                          # noqa: BLE001
+            f2[nm] = dict(exception=repr(e))
+    SC.OC.W1PlaceController._advance_inner = base_adv
+    out['f2_side_check_real_path'] = f2
     # b' 反側量測 ⇒ 受控停止
     o.t = 8.0
     o._update_side(np.array([-0.0227, 0.40]), 'snapshot:9')
