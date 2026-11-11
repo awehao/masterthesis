@@ -47,8 +47,9 @@ if os.environ.get('FP_DYMAX'):                           # 測試用注入：把
     DPC.DY_RATE_MAX = float(os.environ['FP_DYMAX'])
 SWEEP = os.environ.get('FP_STOPSWEEP') == '1'
 AST = dict(n=0, n_cfg=0, worst={}, where={}, nonfinite=0, unfinished=0)
-AST2 = dict(n=0, bad=0, worst={}, where={})
-LIM2 = dict(nonfinger_bottle=0.005, nonfinger_table=0.01, finger_table=0.005, self=0.0, margin=0.05)   # 既有規則：非手指對瓶 5 mm（TPA／線上拒絕線）；對桌與自碰同 test_bottle_w1_gaze LIM
+AST2 = dict(n=0, bad=0, worst={}, where={}, ticks={})
+INS = []
+LIM2 = dict(finger_bottle=0.005, nonfinger_bottle=0.005, nonfinger_table=0.01, finger_table=0.005, self=0.0, margin=0.05)   # 既有規則：非手指對瓶 5 mm（TPA／線上拒絕線）；對桌與自碰同 test_bottle_w1_gaze LIM
 XT = dict(d=[], v=[], prev=None, prev_t=-9.0, prev_v=None) if os.environ.get('FP_XTICK') == '1' else None
 B_DT = 0.05
 # 門檻來源（既有階段規則，Codex 20261111 第 12 輪；不為候選新降門檻）：
@@ -84,7 +85,9 @@ class Ctl(BASE):
         return T_
 
     def _advance_inner(self, T_tcp, close_done, q):
-        if SWEEP and self.judge.stop is None and np.isfinite(q).all() and self.st.phase in ('PREGRASP', 'INSERT') and self.n_tick % 2 == 0:
+        if SWEEP and self.judge.stop is None and np.isfinite(q).all() and self.st.phase in ('PREGRASP', 'INSERT'):   # 每一拍（含相位入口拍、閉爪請求前最後一拍）
+            AST2['ticks'][self.st.phase] = AST2['ticks'].get(self.st.phase, 0) + 1
+            INS.append(dict(t=float(self.t), phase=self.st.phase, q=np.asarray(q, float).copy(), s=np.asarray(self.s, float).copy(), pipe=np.array(self.pipe, float).copy(), u_last=np.asarray(self.u_last, float).copy()))
             for e in (0, 1):                                               # PREGRASP／INSERT：既有 INSERT 規則——非手指（含夾爪殼）對瓶、手指／非手指對桌、自碰、關節餘裕；預定接觸的手指對瓶不核
                 Q = C21.stop_traj(np.asarray(q, float), self.s, self.pipe, self.u_last, self.cfg, e)
                 AST2['n'] += 1
@@ -95,6 +98,11 @@ class Ctl(BASE):
                     W_ = G.link_world(qq, G.Q_OPEN)
                     Pn = np.vstack([v for k_, v in W_.items() if k_ not in G.C.FINGERS])
                     Pf = np.vstack([v for k_, v in W_.items() if k_ in G.C.FINGERS])
+                    if self.st.phase == 'PREGRASP':                       # 分階段接觸規則：PREGRASP 仍核開爪手指對瓶（指定接觸豁免只在 INSERT）
+                        k0 = f'PREGRASP:e{e}:finger_bottle'
+                        vfb = float(G.box_dist(Pf, BOXC, BOXS).min())
+                        if vfb < AST2['worst'].get(k0, 9.9):
+                            AST2['worst'][k0], AST2['where'][k0] = vfb, round(float(self.t), 3)
                     vals = dict(nonfinger_bottle=float(G.box_dist(Pn, BOXC, BOXS).min()), nonfinger_table=min(float(G.box_dist(Pn, c_, s_).min()) for c_, s_ in TBN),
                                 finger_table=min(float(G.box_dist(Pf, c_, s_).min()) for c_, s_ in TBN), self=float(G.C.self_clear(qq, G.Q_OPEN)[0]), margin=BB.margin(qq[3:]))
                     for k_, v in vals.items():
@@ -343,7 +351,10 @@ def main():
     if SWEEP:
         out['stop_sweep_grasp'] = dict(n=AST2['n'], bad=AST2['bad'], worst={k: round(v, 5) for k, v in sorted(AST2['worst'].items())}, where=AST2['where'], lim=LIM2,
                                        fails=sorted(k for k, v in AST2['worst'].items() if v < LIM2[k.split(':')[2]]) + (['bad_traj'] if AST2['bad'] else []),
-                                       scope='PREGRASP／INSERT 每隔一拍，現在停／晚一拍停；到閉爪請求為止（閉爪後未核）')
+                                       ticks=AST2['ticks'], uncovered=[ph for ph in ('PREGRASP', 'INSERT') if AST2['ticks'].get(ph, 0) == 0],
+                                       scope='PREGRASP／INSERT 每一拍（含相位入口拍與閉爪請求前最後一拍），現在停／晚一拍停；PREGRASP 核全部連桿含手指對瓶，INSERT 只豁免手指對瓶；閉爪後未核')
+        if os.environ.get('FP_SAVE_INS') and INS:
+            np.savez(os.environ['FP_SAVE_INS'], t=[x['t'] for x in INS], phase=[x['phase'] for x in INS], q=[x['q'] for x in INS], s=[x['s'] for x in INS], pipe=[x['pipe'] for x in INS], u_last=[x['u_last'] for x in INS], bxy=BXY, z1=Z1)
     if XT is not None and XT['d']:
         out['xtick'] = dict(n=len(XT['d']), pos_max_mm=round(max(XT['d']) * 1e3, 3), pos_p95_mm=round(float(np.percentile(XT['d'], 95)) * 1e3, 3), dv_max=round(max(XT['v']), 4), dv_p95=round(float(np.percentile(XT['v'], 95)), 4),
                             crit_mm=2.0, note='真 step、真在途管線：上一拍時域參考在 +0.05 s 的 TCP 相對位置 對 下一拍當拍值；dv＝相鄰拍當拍參考速度差')
@@ -404,10 +415,12 @@ def main():
     out['flow_pass'] = bool(st['exc'] is None and r is not None and c.t_close_req is not None and why == 'sim_limit' and (out.get('approach') or {}).get('cmd_nonfinite') == 0)
     sw_ = out.get('stop_sweep')
     ac_ = out.get('arm_cmd_tpa') or {}
-    out['safety_grasp_pass'] = None if not out.get('stop_sweep_grasp') else bool(not out['stop_sweep_grasp']['fails'] and out['stop_sweep_grasp']['n'] > 0)
+    g_ = out.get('stop_sweep_grasp')
+    out['safety_grasp_pass'] = None if (not g_ or g_['uncovered']) else bool(not g_['fails'])     # 有相位沒取到樣 ⇒ 未核（None），不判通過
     out['safety_pass'] = None if sw_ is None else bool(not sw_['fails'] and sw_['n'] > 0 and ac_.get('v_max', 9) <= 1.0 + 1e-9 and ac_.get('a_max', 1e9) <= TV.C0.A_ARM)   # None＝未核對（不默認通過）
     out['safety_scope'] = '只含 TPA 接近段停止掃掠與手臂命令界；PREGRASP／INSERT、抓持、手腕修正未核'
-    out['pass'] = bool(out['flow_pass'] and out['safety_pass'] is True)
+    out['pass'] = bool(out['flow_pass'] and out['safety_pass'] is True and out['safety_grasp_pass'] is True)
+    out['pass_scope'] = '流程到閉爪請求＋TPA 接近段停止掃掠＋手臂命令界＋PREGRASP／INSERT 停止掃掠（兩相位都有取樣）；任一未核 ⇒ pass＝False'
     json.dump(out, open(OUTP, 'w'), ensure_ascii=False, indent=1, default=float)
     print(json.dumps({k: v for k, v in out.items() if k != 'curve'}, ensure_ascii=False, default=float)[:3500], flush=True)
     try:
