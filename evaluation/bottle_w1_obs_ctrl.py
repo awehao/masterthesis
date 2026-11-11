@@ -162,7 +162,7 @@ class W1PlaceController(HC.W1PlaceController):
                 continue
             ds = float(new.sig0 - self.path.sig0)
             x_pre_c = float(g['xy'][0]) + win_lo + 0.05
-            t_base = TPAm.base_time(float(self.sig_robot) + ds, x_pre_c, x_pre_c - 0.6, float(self.v_nav), float(self.v_c), float(self.v_b))
+            t_base = self._standoff_t_base(new, float(self.sig_robot) + ds, x_pre_c)
             t_arm = 0.0 if r.get('q_pre_lo') is None else 1.875 * float(np.abs(np.asarray(r['q_pre_lo'], float) - q_now).max()) / B.W_ARM['v_arm']
             out.append(dict(r, cost=round(max(t_base, t_arm), 3), t_base=round(t_base, 3), t_arm=round(t_arm, 3), dsig0=round(ds, 4)))
         feas = [r for r in out if r.get('cost') is not None]
@@ -170,6 +170,10 @@ class W1PlaceController(HC.W1PlaceController):
             return None, out
         best = min(feas, key=lambda r: (round(r['cost'], 1), -r['margin_min'], -(r['base_leg_clear'] or 0.0)))
         return best, out
+
+    def _standoff_t_base(self, path_new, sig, x_pre_c):
+        """站位候選的底盤時間成本（hook；預設＝既有梯形剖面；A0 子類改用同源剖面）。"""
+        return TPAm.base_time(sig, x_pre_c, x_pre_c - 0.6, float(self.v_nav), float(self.v_c), float(self.v_b))
 
     def _standoff(self, g):
         """(d) 導引新鮮且尚未決定車道 ⇒ 送站位選擇請求（綁定導引版本＝xy）；結果到了若導引已變（> SO_TOL）或過期 ⇒ 丟棄、下一拍以新導引重送。

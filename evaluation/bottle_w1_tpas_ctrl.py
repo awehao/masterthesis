@@ -163,12 +163,16 @@ class W1PlaceController(CJ.W1PlaceController):
             return
         sig0 = self._sig_of(np.asarray(q, float)[:2], float(getattr(self, 'sig_robot', q[0])))   # 同一進度定義（車道段解析 σ＝x，其前取樣投影）
         sig_e = sig0 + float(self.v_b) * (P['t_e'] - float(self.t))
-        prof = progress_profile(sig_e, float(self.x_pre), float(self.x_slow), P['v_nav_eff'], P['v_c_eff'], float(self.v_b), P['T'])
+        prof = self._tpas_prof(sig_e, P)
         P.update(prof=prof, tau=0.0, rate=1.0, t_last=P['t_e'], sw=None, rj=None, tau_log=[], time_switch=False, sig_raw=sig0, sig_phase=sig0, sig_path=self.path,
                  regress_max=0.0, regress_ev=False)
         # time_switch＝False：父類 TPA 依時間 t_e＋T 切換停用（obs_nom_1：τ 未到 T 卻被時間切換，st.t_pre＝∞ ⇒ 永不進 PREGRASP）；切換只經 switch_check
         self.st.t_pre = float('inf')                                     # 不再依時間進 PREGRASP；由切換閘門決定
         self._ev('tpas_profile', n=len(prof[0]), sig0=round(float(prof[1][0]), 4), sig_end=round(float(prof[1][-1]), 4), tau_end=round(float(prof[0][-1]), 3))
+
+    def _tpas_prof(self, sig_e, P):
+        """名目進度表 (τ, σ)（hook；預設＝既有梯形剖面；A0 子類回傳與 TPA 時長同一份剖面的取樣）。"""
+        return progress_profile(sig_e, float(self.x_pre), float(self.x_slow), P['v_nav_eff'], P['v_c_eff'], float(self.v_b), P['T'])
 
     def _plan_yaw(self, sig):
         """進度點 σ 的計畫底盤偏航（本版＝th_ref；航向沿路徑的子類覆寫為該進度點的路徑航向）。"""

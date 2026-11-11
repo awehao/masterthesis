@@ -100,12 +100,33 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
         return dict(row, ok=False, why='plan_' + str(why))
     sig_b0 = float(base0[0]) if path is None else float(path.project(np.asarray(base0[:2], float), path.sig0, back=0.0, ahead=8.0))
     sig_e = sig_b0 + v_b0 * LAT
-    Rr, why = TPA.plan_tpa(R0.K, qa0, qd0, np.array([x_pre, yl, 0.0]), T_pre, np.asarray(res['q_pre_lo'], float), sig_e, x_pre, x_slow, V_NAV, V_C, v_b0, R0.IDX, L.lower, L.upper)
+    tm = None
+    if os.environ.get('TPAS_FPROF') == '1' and path is not None:        # A0 同源剖面（bottle_w1_fprof_ctrl）：TPA 時長、進度表、底盤參考速度同一份
+        import bottle_w1_fprof_ctrl as FC
+        F_cap = FC.build(path, hd, sig_e, 0.0, x_pre, x_slow, V_NAV, V_C)
+        v_cap0 = float(F_cap['pr']['lim']['v_cap'][0])
+        if v_b0 > v_cap0:                                               # A0 參考不會超過起點上限：起速取可行上限並記錄（原情境的 0.35 是舊梯形的巡航值）
+            row['v_base0_fprof'] = round(v_cap0, 4)
+            v_b0 = v_cap0
+            sig_e = sig_b0 + v_b0 * LAT
+        tm = FC.Timing(path, hd, sig_e, v_b0, x_pre, x_slow, V_NAV, V_C)
+        if not tm.ok():
+            return dict(row, ok=False, why='fprof_' + str(tm.F0.get('why')))
+    Rr, why = TPA.plan_tpa(R0.K, qa0, qd0, np.array([x_pre, yl, 0.0]), T_pre, np.asarray(res['q_pre_lo'], float), sig_e, x_pre, x_slow, V_NAV, V_C, v_b0, R0.IDX, L.lower, L.upper, timing=tm)
     if Rr is None:
         return dict(row, ok=False, why='tpa_' + str(why))
     P, T = Rr['P'], Rr['P']['T']
     v_nav_eff, v_c_eff = Rr['v_nav_eff'], Rr['v_c_eff']
     prof = TS.progress_profile(sig_e, x_pre, x_slow, v_nav_eff, v_c_eff, v_b0, T)
+    if tm is not None:
+        if not tm.F.get('ok'):
+            return dict(row, ok=False, why='fprof_retime')
+        import bottle_feasible_profile as FPm
+        tk_, sk_, sc_ = FC.tpas_table(tm.F, T)
+        prof = (tk_, sk_)
+        vf = FPm.verify(tm.F['pr'])
+        row['fprof'] = dict(T_base=round(tm.t_base(), 3), T_arm=round(float(T), 3), T_final=round(float(tm.F['T']), 3), tau_scale=round(sc_, 6), retime=tm.log[-1] if tm.log else None,
+                            verify={k: round(float(v), 4) for k, v in vf.items()}, arc_err=round(tm.F['arc_err'], 5))
     PD = dict(P=P, T=T, base_end=np.array([x_pre, yl, 0.0]), v_c_eff=v_c_eff, T_pre=T_pre)
     x, v, vref, tau, rate, t = sig_e, v_b0, v_b0, 0.0, 1.0, 0.0
     sw, v2_dp, switched = None, None, False
@@ -120,7 +141,7 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
             if x >= x_pre and tau < T - 1e-9:
                 vref = max(vref - B.A_REF * 2.0 * B.DT, 0.0)
             else:
-                vt = v_nav_eff if x < x_slow else v_c_eff
+                vt = (v_nav_eff if x < x_slow else v_c_eff) if tm is None else (FC.v_next(tm.F, x, DTC) if x < x_pre else v_c_eff)
                 vref = min(vt, vref + S1.A_SLEW * DTC) if vref < vt else max(vt, vref - S1.A_SLEW * DTC)
         vd = min(vref * (MUL.get(scen, 1.0) if x >= x_slow else 1.0), cap)
         v = min(vd, v + S1.A_SLEW * DTC) if v < vd else max(vd, v - float(B.A_BASE[0]) * DTC)

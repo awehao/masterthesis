@@ -146,17 +146,19 @@ def base_profile(sig, x_pre, x_slow, v_nav, v_c, v0, T, v_floor=0.02):
     return hi, hi, base_time(sig, x_pre, x_slow, hi, hi, v0)
 
 
-def plan_tpa(K, qa0, qd0, base_end, T_pre, q_seed, sig, x_pre, x_slow, v_nav, v_c, v_b, arm_idx, lo, hi):
+def plan_tpa(K, qa0, qd0, base_end, T_pre, q_seed, sig, x_pre, x_slow, v_nav, v_c, v_b, arm_idx, lo, hi, timing=None):
     """完整規劃（控制器與離線核對共用）：終點 IK／速度 → 關節軌跡 → 底盤剖面；接近速度被降時以 v_c' 重算終點速度再規劃一次。
     回傳 dict 或 (None, 原因)。"""
     q1, qd1, why = end_state(K, base_end, T_pre, q_seed, v_c, arm_idx)
     if q1 is None:
         return None, why
-    t_base = base_time(sig, x_pre, x_slow, v_nav, v_c, v_b)
+    # timing（hook；None＝既有梯形剖面，行為不變）：物件提供 t_base()、retime(T)→(v_nav', v_c', 到位時間)；A0 同源剖面的子類傳入
+    _bp = (lambda T_: base_profile(sig, x_pre, x_slow, v_nav, v_c, v_b, T_)) if timing is None else timing.retime
+    t_base = base_time(sig, x_pre, x_slow, v_nav, v_c, v_b) if timing is None else timing.t_base()
     P, info = plan_joint(qa0, qd0, q1, qd1, max(t_base, 1.0), W_ARM['v_arm'], C0.A_ARM, lo, hi)
     if P is None:
         return None, str(info)
-    v_nav_eff, v_c_eff, t_arr = base_profile(sig, x_pre, x_slow, v_nav, v_c, v_b, P['T'])
+    v_nav_eff, v_c_eff, t_arr = _bp(P['T'])
     replan = False
     if v_c_eff < v_c - 1e-9:
         q1b, qd1b, why = end_state(K, base_end, T_pre, q_seed, v_c_eff, arm_idx)
@@ -166,7 +168,7 @@ def plan_tpa(K, qa0, qd0, base_end, T_pre, q_seed, sig, x_pre, x_slow, v_nav, v_
         if P2 is None:
             return None, str(info2)
         q1, qd1, P, info, replan = q1b, qd1b, P2, info2, True
-        v_nav_eff, v_c_eff, t_arr = base_profile(sig, x_pre, x_slow, v_nav, v_c, v_b, P['T'])
+        v_nav_eff, v_c_eff, t_arr = _bp(P['T'])
     return dict(P=P, info=info, q1=q1, qd1=qd1, t_base=t_base, v_nav_eff=v_nav_eff, v_c_eff=v_c_eff, t_arrive=t_arr, replan=replan), None
 
 
@@ -205,7 +207,7 @@ class W1PlaceController(R1A.W1PlaceController):
         t_lat = C0.D_STEPS * C0.PHYS
         sig_e = sig + float(self.v_b) * t_lat
         R, why = plan_tpa(self.K, qa0, qd0, base_end, np.array(self.task.T_pre, float), np.asarray(self.q_arm_ready, float), sig_e, float(self.x_pre), float(self.x_slow),
-                          float(self.v_nav), float(self.v_c), float(self.v_b), self._arm_idx, L.lower, L.upper)
+                          float(self.v_nav), float(self.v_c), float(self.v_b), self._arm_idx, L.lower, L.upper, timing=self._tpa_timing(sig_e))
         if R is None:
             self.judge._stop(self.t, 'tpa_' + str(why))
             return
@@ -221,6 +223,10 @@ class W1PlaceController(R1A.W1PlaceController):
         self.vh_seq = dict(self.vh_seq, ph='TPA')
         self._ev('tpa_start', T=round(T, 3), t_base=round(t_base, 3), v_nav_eff=round(v_nav_eff, 4), v_c_eff=round(v_c_eff, 4), v_ratio=info['v_ratio'], a_ratio=info['a_ratio'],
                  qd0_max=round(float(np.abs(qd0).max()), 4), qd1_max=round(float(np.abs(qd1).max()), 4), sig=round(sig, 4), x_pre=round(float(self.x_pre), 4), ph0=self.tpa['ph0'])
+
+    def _tpa_timing(self, sig_e):
+        """底盤到位時間模型（hook）：None＝既有梯形剖面；A0 子類回傳同源剖面物件。"""
+        return None
 
     def _rel_target(self, tau):
         P = self.tpa
