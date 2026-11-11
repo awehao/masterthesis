@@ -8,7 +8,7 @@
   2 MPC 時域預覽（同上，_T_seq 經 _rel_target）；
   3 切換檢查（Tw1 用 D(dt)）。
 ḋy＝vx·sin dθ＋vy·cos dθ（底盤命令在計畫座標的橫向分量）；ḋθ＝ωz−計畫偏航率（v_沿路徑·dθ_plan/dσ）。命令取 u_last（與切換檢查原本用的同一命令）。
-有界：前推時間 ≤ D_HORIZON；橫偏朝 0 收斂時不外推越過 0（不假設會過衝）；|ḋy|、|ḋθ| 超過上限 ⇒ 夾限並記錄。門檻 SW_*、DEV_* 不變。"""
+有界：前推時間 ≤ D_HORIZON；|ḋy|、|ḋθ| 超過適用上限 ⇒ 該拍退回常數 D（不夾限後使用）並計數。門檻 SW_*、DEV_* 不變。"""
 import math
 
 import numpy as np
@@ -18,7 +18,7 @@ import bottle_w1_lateslow_ctrl as LS
 import bottle_w1_tpas_ctrl as TS
 
 D_HORIZON = 1.2                                                  # 前推時間上限（s；MPC 預覽 N·DT＝1.0 s＋在途延遲）
-DY_RATE_MAX, DTH_RATE_MAX = 0.10, 0.30                           # ḋy、ḋθ 夾限（m/s、rad/s）：高於此視為模型不適用，夾限並計數
+DY_RATE_MAX, DTH_RATE_MAX = 0.10, 0.30                           # ḋy、ḋθ 適用上限（m/s、rad/s）：高於此視為模型不適用，該拍退回常數 D
 
 
 def d_rate(u_body, dth, yaw_rate_plan):
@@ -28,13 +28,10 @@ def d_rate(u_body, dth, yaw_rate_plan):
 
 
 def d_at(dy, dth, dy_d, dth_d, delta):
-    """D(Δ)：Δ 夾在 [0, D_HORIZON]；橫偏、偏航偏差朝 0 收斂時停在 0。回 (4×4, dy, dθ)。"""
+    """D(Δ)：線性前推，Δ 夾在 [0, D_HORIZON]。與切換檢查對底盤的前推（照 u_last 等速）同一假設——不在過零處截斷
+    （r1 版把過零後的偏差定為 0：橫偏 −1 mm、修正 0.04 m/s 時預測速度由 0.04 突降為 0，反而製造不連續）。回 (4×4, dy, dθ)。"""
     dl = min(max(float(delta), 0.0), D_HORIZON)
-
-    def adv(x, xd):
-        y = x + xd * dl
-        return 0.0 if (x != 0.0 and (x > 0) != (y > 0) and abs(xd) > 0) else y
-    y_, th_ = adv(float(dy), float(dy_d)), adv(float(dth), float(dth_d))
+    y_, th_ = float(dy) + float(dy_d) * dl, float(dth) + float(dth_d) * dl
     return TS._tb(np.r_[0.0, y_, th_]), y_, th_
 
 
@@ -83,9 +80,10 @@ class W1PlaceController(LS.W1PlaceController):
         st = self.dp_stat
         st['n'] += 1
         st['dy_rate_max'], st['dth_rate_max'] = max(st['dy_rate_max'], abs(dy_d)), max(st['dth_rate_max'], abs(dth_d))
-        if abs(dy_d) > DY_RATE_MAX or abs(dth_d) > DTH_RATE_MAX:
+        if abs(dy_d) > DY_RATE_MAX or abs(dth_d) > DTH_RATE_MAX:               # 超出模型適用域：不夾限後當作有效預測——該拍退回常數 D（既有行為；切換檢查因此照原模型判）
             st['n_clip'] += 1
-        return float(np.clip(dy_d, -DY_RATE_MAX, DY_RATE_MAX)), float(np.clip(dth_d, -DTH_RATE_MAX, DTH_RATE_MAX))
+            return 0.0, 0.0
+        return float(dy_d), float(dth_d)
 
     def _rel_target(self, tau_t):
         P = self.tpa

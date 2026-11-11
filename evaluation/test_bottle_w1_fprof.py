@@ -45,7 +45,11 @@ import bottle_w1_compactcarry21_ctrl as C21             # noqa: E402
 BASE = dict(fprof=FC.W1PlaceController, late=LS.W1PlaceController, dpred=DPC.W1PlaceController, base=SCT.W1PlaceController)[MODE]
 SWEEP = os.environ.get('FP_STOPSWEEP') == '1'
 AST = dict(n=0, n_cfg=0, worst={}, where={}, nonfinite=0, unfinished=0)
-ALIM = dict(table=0.05, bottle=0.05, self=0.008017 - 1e-6, margin=0.05)   # 同 test_bottle_w1_gaze 的接近段門檻
+# 門檻來源（既有階段規則，Codex 20261111 第 12 輪；不為候選新降門檻）：
+#   TPA 整段接近（本檔掃掠範圍，CRUISE 未切換；全部連桿含開爪手指）：對第一桌 ≥ 0.02（R0.ENV_M）、對瓶 ≥ 0.005（tpa_offline_check 第 10 行）、自碰 ≥ 0.005（R0.SELF_M）、關節餘裕 ≥ 0.05（R0.LIM_M）。
+#   觀察段規則（全部連桿離瓶 0.05、自碰 0.008017）另列為 obs_rule，只供對照舊判讀，不是本段判準。INSERT 不在本掃掠範圍（未核）。
+ALIM = dict(table=0.02, bottle=0.005, self=0.005, margin=0.05)
+ALIM_OBS = dict(table=0.05, bottle=0.05, self=0.008017 - 1e-6, margin=0.05)
 N_MAX = 2000 // C21.SAMPLE_EVERY + 1
 TBN = [(c_, s_) for n_, c_, s_ in G.table_boxes()]
 BOXC, BOXS = np.array([BXY[0], BXY[1], Z1 + G.BOTTLE['h'] / 2]), np.array([2 * G.BOTTLE['r'], 2 * G.BOTTLE['r'], G.BOTTLE['h']])
@@ -86,7 +90,7 @@ class Ctl(BASE):
         u = super()._solve(q)
         if self.st.phase == 'CRUISE':
             TICK.append(dict(t=round(float(self.t), 3), s_ref=float(self.s_ref), sig=float(getattr(self, 'sig_robot', np.nan)), v_b=float(self.v_b), q=[float(v) for v in q[:3]],
-                             u=None if u is None else [float(v) for v in np.asarray(u, float)[:3]], ua=None if u is None else float(np.abs(np.asarray(u, float)[3:9]).max()), blending=bool(self.blending), ph=self.vh_seq['ph'],
+                             u=None if u is None else [float(v) for v in np.asarray(u, float)[:3]], ua=None if u is None else float(np.abs(np.asarray(u, float)[3:9]).max()), uav=None if u is None else [float(v) for v in np.asarray(u, float)[3:9]], blending=bool(self.blending), ph=self.vh_seq['ph'],
                              tau=None if not self.tpa or 'tau' not in self.tpa else float(self.tpa['tau']), rate=None if not self.tpa or 'rate' not in self.tpa else float(self.tpa['rate']),
                              ms=round((_time.perf_counter() - w0) * 1e3, 2)))
         return u
@@ -292,6 +296,7 @@ def main():
     out['swdiag'] = st.get('swdiag')
     if SWEEP:
         out['stop_sweep'] = dict(n=AST['n'], n_cfg=AST['n_cfg'], worst={k: round(v, 5) for k, v in AST['worst'].items()}, where=AST['where'], lim=ALIM,
+                                 scope='TPA 接近段（CRUISE、未切換）每隔一拍；全部連桿含開爪手指；不含 PREGRASP／INSERT', fails_obs_rule=sorted(k for k, v in AST['worst'].items() if v < ALIM_OBS[k.split(':')[1]]), lim_obs_rule=ALIM_OBS,
                                  fails=sorted(k for k, v in AST['worst'].items() if v < ALIM[k.split(':')[1]]) + (['nonfinite'] if AST['nonfinite'] else []) + (['unfinished'] if AST['unfinished'] else []))
     if r is not None:
         out['dpred'] = r.get('dpred')
@@ -300,10 +305,20 @@ def main():
         t_sw = st['swdiag'][-1]['t']
         out['sw_window'] = [dict(t=k['t'], v_b=round(k['v_b'], 4), x=round(k['q'][0], 4), y=round(k['q'][1], 4), th=round(k['q'][2], 4), u=None if k['u'] is None else [round(v, 4) for v in k['u']], tau=k['tau'], rate=k['rate'])
                             for k in TICK if t_sw - 1.5 <= k['t'] <= t_sw + 0.1]
-    ua = [k['ua'] for k in TICK if k.get('ua') is not None and k.get('tau') is not None]
-    out['arm_cmd_tpa'] = dict(max=round(max(ua), 4), p95=round(float(np.percentile(ua, 95)), 4), v_arm=TV.T.T.W1.B.W_ARM['v_arm'] if False else 1.0) if ua else None
+    KA = [k for k in TICK if k.get('uav') is not None and k.get('tau') is not None]
+    if len(KA) > 2:
+        UA = np.array([k['uav'] for k in KA])
+        ta = np.array([k['t'] for k in KA])
+        acc = np.abs(np.diff(UA, axis=0)) / np.maximum(np.diff(ta), 1e-9)[:, None]
+        out['arm_cmd_tpa'] = dict(v_max=round(float(np.abs(UA).max()), 4), v_p95=round(float(np.percentile(np.abs(UA).max(axis=1), 95)), 4), v_arm=1.0, a_max=round(float(acc.max()), 3), a_p95=round(float(np.percentile(acc.max(axis=1), 95)), 3),
+                                  A_ARM=TV.C0.A_ARM, note='真實當拍構型下 MPC 實際送出的手臂關節速度命令與相鄰拍差分（設定點模型的命令，不是實測關節加速度）')
     why = (out.get('stop') or {}).get('why')
-    out['pass'] = bool(st['exc'] is None and r is not None and c.t_close_req is not None and why == 'sim_limit' and (out.get('approach') or {}).get('cmd_nonfinite') == 0)
+    out['flow_pass'] = bool(st['exc'] is None and r is not None and c.t_close_req is not None and why == 'sim_limit' and (out.get('approach') or {}).get('cmd_nonfinite') == 0)
+    sw_ = out.get('stop_sweep')
+    ac_ = out.get('arm_cmd_tpa') or {}
+    out['safety_pass'] = None if sw_ is None else bool(not sw_['fails'] and sw_['n'] > 0 and ac_.get('v_max', 9) <= 1.0 + 1e-9 and ac_.get('a_max', 1e9) <= TV.C0.A_ARM)   # None＝未核對（不默認通過）
+    out['safety_scope'] = '只含 TPA 接近段停止掃掠與手臂命令界；PREGRASP／INSERT、抓持、手腕修正未核'
+    out['pass'] = bool(out['flow_pass'] and out['safety_pass'] is True)
     json.dump(out, open(OUTP, 'w'), ensure_ascii=False, indent=1, default=float)
     print(json.dumps({k: v for k, v in out.items() if k != 'curve'}, ensure_ascii=False, default=float)[:3500], flush=True)
     try:
