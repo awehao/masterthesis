@@ -83,6 +83,25 @@ def main():
         lane_log.append({k: v for k, v in r.items() if k != 'path_new'})
         return r
     c.lane_planner = lane_planner
+    DIAG = os.environ.get('FP_DIAG') == '1'                                # 短窗定位：留每拍求解證據（參考窗、求解命令、CBF 作用列）；另記 TPA 起點兩種算法的差
+    if DIAG:
+        c.compact = []
+        if os.environ.get('FP_NC') == '1':
+            import bottle_s0b_ctrl as B0n
+            c.mpc_nc = B0n.GW.GMPC(c.nav)                              # 同建構式的作法（log_cbf＝True 時建立）
+            c.log_cbf, c.cbf_log = True, []                            # 每拍另解一次無 CBF 的同一問題（既有 log_cbf 機制）：du＝有無 CBF 的命令差
+        ts0 = c._tpa_start
+
+        def tpa_start(q):
+            qp, _, _ = c._stop_rest(q)                                     # 在途命令走完後的預測構型（tpa_ctrl 取手臂起點用的同一函式）
+            hint = float(getattr(c, 'sig_robot', q[0]))
+            s_meas = float(c._sig_of(np.asarray(q, float)[:2], hint))
+            s_pred = float(c._sig_of(np.asarray(qp, float)[:2], hint))
+            lat = TV.C0.D_STEPS * TV.C0.PHYS
+            st['origin'] = dict(t=float(c.t), sig_meas=s_meas, v_b=float(c.v_b), lat=lat, sig_common=s_meas + float(c.v_b) * lat, sig_inflight_pred=s_pred,
+                                diff_mm=round((s_meas + float(c.v_b) * lat - s_pred) * 1e3, 3))
+            return ts0(q)
+        c._tpa_start = tpa_start
     FR = os.environ.get('FP_FORCE_REACH')                                  # 局部對照：兩版強制同一站位伸距（只留該候選列；仍經各自的成本與可行性判定）
     if FR:
         pick0 = c._pick_standoff
@@ -165,6 +184,47 @@ def main():
                                rate_max=round(float(rate.max()), 3) if len(rate) else None, cmd_nonfinite=int(np.isnan(U).any(axis=1).sum()),
                                ctrl_ms=dict(p50=round(float(np.median([k['ms'] for k in K])), 2), p95=round(float(np.percentile([k['ms'] for k in K], 95)), 2), max=round(float(max(k['ms'] for k in K)), 2)))
         out['curve'] = dict(t=[round(float(v), 2) for v in tt[::4]], v_ref=[round(float(v), 4) for v in vb[::4]], v_meas=[round(float(v), 4) for v in vm[::4]], wheel=[round(float(v), 3) for v in use[::4]])
+    if DIAG and getattr(c, 'compact', None):
+        import bottle_s0b_ctrl as B0
+        W0, W1_ = float(os.environ.get('FP_WIN0', '10.5')), float(os.environ.get('FP_WIN1', '13.5'))
+        cap, Wm = FP.wheel_cap()
+        hist_t = np.array([h['t'] for h in f.hist])
+        hist_q = np.array([h['q'] for h in f.hist])
+        rows = []
+        tk = {round(k['t'], 3): k for k in TICK}
+        for e in c.compact:
+            t_ = float(e['t'])
+            if not (W0 <= t_ <= W1_):
+                continue
+            qp = np.asarray(e['qp'], float)
+            Xr = np.asarray(e['X_ref'][0], float)
+            xr, yr, thr = float(Xr[0, 2]), float(Xr[1, 2]), float(np.arctan2(Xr[1, 0], Xr[0, 0]))
+            ex, ey = xr - qp[0], yr - qp[1]
+            c_, s_ = np.cos(thr), np.sin(thr)
+            xi = np.asarray(e['xi_ref'][0], float)
+            u = np.asarray(e['u'], float)
+            T0_ = np.asarray(e['T_seq'][0], float)
+            Tt = c.K.fk(qp, 'link_tcp')
+            if e['rel']:
+                Tb = np.eye(4)
+                Tb[:3, :3] = [[np.cos(qp[2]), -np.sin(qp[2]), 0], [np.sin(qp[2]), np.cos(qp[2]), 0], [0, 0, 1]]
+                Tb[:3, 3] = [qp[0], qp[1], 0.0]
+                Tt = np.linalg.inv(Tb) @ Tt
+            i0, i1 = np.searchsorted(hist_t, t_), np.searchsorted(hist_t, t_ + 0.1)
+            vm = float(np.hypot(*(hist_q[min(i1, len(hist_q) - 1), :2] - hist_q[min(i0, len(hist_q) - 1), :2])) / 0.1)
+            k_ = tk.get(round(t_, 3), {})
+            rows.append(dict(t=round(t_, 2), v_ref=round(float(np.hypot(xi[0], xi[1])), 4), w_ref=round(float(xi[2]), 4), v_solve=round(float(np.hypot(u[0], u[1])), 4), w_solve=round(float(u[2]), 4),
+                             wheel_ref=round(float(np.max(np.abs(Wm @ xi[:3])) / cap), 3), wheel_solve=round(float(np.max(np.abs(Wm @ u[:3])) / cap), 3), v_meas=round(vm, 4),
+                             e_along_mm=round(float(c_ * ex + s_ * ey) * 1e3, 1), e_lat_mm=round(float(-s_ * ex + c_ * ey) * 1e3, 1), e_yaw_deg=round(float(np.degrees(np.arctan2(np.sin(thr - qp[2]), np.cos(thr - qp[2])))), 2),
+                             tcp_err_mm=round(float(np.linalg.norm(T0_[:3, 3] - Tt[:3, 3])) * 1e3, 1), tcp_rel=bool(e['rel']), arm_u_max=round(float(np.abs(u[3:]).max()), 3),
+                             arm_u_ratio=round(float(np.abs(u[3:]).max()) / B0.W_ARM['v_arm'], 3), cbf_active=int(e['cbf_active']), min_h=round(float(e['min_h']), 4),
+                             n_obs=0 if e['obs'] is None else len(e['obs']), rate=k_.get('rate'), ph=k_.get('ph')))
+        nc = [dict(t=round(float(x['t']), 2), du=round(float(x['du']), 4), v=round(float(np.hypot(x['u'][0], x['u'][1])), 4), v_nc=round(float(np.hypot(x['u_nc'][0], x['u_nc'][1])), 4),
+                   w=round(float(x['u'][2]), 4), w_nc=round(float(x['u_nc'][2]), 4), min_h=round(float(x['min_h']), 4), cbf_active=int(x['cbf_active']))
+              for x in (getattr(c, 'cbf_log', None) or []) if W0 <= float(x['t']) <= W1_]
+        out['diag_nc'] = nc
+        out['diag'] = dict(window=[W0, W1_], rows=rows, origin=st.get('origin'), v_arm=B0.W_ARM['v_arm'], hist_keys=sorted(f.hist[0].keys()),
+                           missing='後處理命令（Shield 輸出、設定點模型實際套用值）與 QP 各限制的乘子／作用集合不在既有紀錄內；求解命令取 compact.u、實測取假受控對象位置差分')
     why = (out.get('stop') or {}).get('why')
     out['pass'] = bool(st['exc'] is None and r is not None and c.t_close_req is not None and why == 'sim_limit' and (out.get('approach') or {}).get('cmd_nonfinite') == 0)
     json.dump(out, open(OUTP, 'w'), ensure_ascii=False, indent=1, default=float)
