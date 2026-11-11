@@ -23,7 +23,7 @@
  "bottle_rtf_cap": 0.4,
  "speeds": "現行設定不變（不混入流暢度 A0）",
  "case": "--dyn-case none（右側名目；不自動追加動態趟）",
- "run_id": "bottle_motm_right_nom_1",
+ "run_id": "bottle_motm_right_nom_3",
  "rules": "失敗保留、不熱改、不補跑，先交第一阻點；交同 RUN_ID 的 Isaac 實錄重播＋2D 追蹤疊圖；結果分流程完成與抓持品質；n＝1 不報成功率",
  "pre_checks": [
   "results/bottle/right_side_check_r1.json",
@@ -36,5 +36,19 @@
   "插入段夾爪殼對瓶 3 mm（左側既有離線結果相同）",
   "追趕上限加關節速度界（本包新增，左右共用）"
  ],
- "freeze": "experiments/20261111_motm_right_freeze_r1.sha256"
+ "freeze": "experiments/20261111_motm_right_freeze_r2.sha256",
+ "invalid_or_incomplete": [
+  {
+   "run": "bottle_motm_right_nom_1",
+   "cls": "任務開始前環境無效",
+   "why": "核心 7.0.0-42 開機後 nvidia 模組未載入，Isaac 無 CUDA 裝置"
+  },
+  {
+   "run": "bottle_motm_right_nom_2",
+   "cls": "任務開始後程式例外、未完成（不是右側抓取的控制結論，停止有效性證據不足）",
+   "why": "side_chk 含 t 鍵傳入 _ev／_stop 與固定參數衝突（TypeError）",
+   "fix": "鍵名 t_chk；right_side_check_r3 經真 _advance_inner＋真 _ev／S0Judge 兩案、工具自動判定 PASS（下層隔離的局部回歸，非端到端）"
+  }
+ ],
+ "order_note": "Codex 173840：先交完整任務場景（Howard reviews/20261111_howard_complete_mission_scene.md），之後確認 CUDA／環境與 r2 雜湊正常再跑 nom_3；不換場景、不混入 A0"
 }

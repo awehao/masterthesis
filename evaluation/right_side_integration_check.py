@@ -212,8 +212,40 @@ def main():
               'return', g.get('return_plan', {}).get('ok'), g.get('return_plan', {}).get('why'), flush=True)
         print('   return seg', json.dumps(g.get('return_plan', {}).get('seg'), ensure_ascii=False)[:600], flush=True)
         print('   view', g['view'], flush=True)
+    fails = verdict(res)
+    res['verdict'] = dict(ok=not fails, fails=fails)
+    print('判定', 'PASS' if not fails else 'FAIL', fails, flush=True)
     json.dump(res, open(sys.argv[1], 'w'), ensure_ascii=False, indent=1, default=str)
+    return 1 if fails else 0
+
+
+def verdict(res):
+    """明確失敗判定（Codex 173840 第 2 項）：例外、同側意外停止／缺事件、反側未得指定停止原因，以及控制端其他預期，都判失敗。"""
+    c, f = res['control'], []
+    same, opp = c['f2_side_check_real_path'].get('同側', {}), c['f2_side_check_real_path'].get('反側（車道在物件右邊）', {})
+    for nm, d in (('同側', same), ('反側', opp)):
+        if 'exception' in d:
+            f.append(f'f2 {nm} 例外：{d["exception"]}')
+    if 'exception' not in same and (same.get('stop') is not None or 'side_check' not in same.get('events', []) or not (same.get('side_chk') or {}).get('ok')):
+        f.append('f2 同側：意外停止或缺 side_check 事件')
+    if 'exception' not in opp and (opp.get('stop') or {}).get('why') != 'grasp_side_mismatch_predicted':
+        f.append('f2 反側：未得 grasp_side_mismatch_predicted')
+    if c['b_select'].get('grasp_side') != 'right' or c['b_select'].get('ambiguous') is not None:
+        f.append('b 選側')
+    if (c['b_side_changed'] or {}).get('why') != 'grasp_side_changed':
+        f.append('b 反側量測未受控停止')
+    if c['c_standoff_request'].get('side') != 'right' or c['c_unselected_refused'].get('returned') is not None:
+        f.append('c 站位請求側別')
+    if c['d_tcp_c'] != [0.0, -0.2, 0.6] or c['d_grasp_T']['tool_z'][1] > -0.99:
+        f.append('d 抓取姿態／收近點')
+    if c['e_candidate_gate'].get('passed_seqs') != [3]:
+        f.append('e 候選同側閘')
+    for side in ('right', 'left'):
+        g = res['geometry'][side]
+        if not (g['standoff']['ok'] and g['grasp_plan']['ok'] and g.get('return_plan', {}).get('ok')):
+            f.append(f'幾何 {side}：站位／抓取／轉回不可行')
+    return f
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
