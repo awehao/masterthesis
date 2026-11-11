@@ -55,8 +55,9 @@ def write_marker():
                material=dict(static_friction=0.6, dynamic_friction=0.5, restitution=0.0, note='同瓶代理的材料量級；未辨識'),
                gripper_basis=dict(source='drawer_unit_bar26.yaml 檔頭（指片內面閉 22.4 mm、開 40.2 mm，官方網格）', contact_finger_joint_m=round((2 * r * 1000 - 22.4) / 2 / 1000, 4),
                                   open_margin_each_side_m=round((40.2 - 2 * r * 1000) / 2 / 1000, 4)),
-               placement=dict(frame='drawer（抽屜剛體本地座標；隨抽屜滑動）', center=[0.05, round(y_front_in + 0.015 + r + 0.050, 4), round(z_top + r + 0.001, 4)],
-                              yaw_deg=0.0, rule='平躺沿抽屜 x 軸，置於底板前段：抽屜拉出全行程 0.22 m 時整支在櫃口外（從上方可見可取）；離前板內面 0.065 m、離側板 ≥ 0.12 m'),
+               placement=dict(frame='drawer（抽屜剛體本地座標；隨抽屜滑動）', center=[0.05, -0.110, round(z_top + r + 0.001, 4)],
+                              yaw_deg=0.0, rule='平躺沿抽屜 x 軸，置於抽屜拉出全行程 0.22 m 時露在櫃口外那一段的中間（抽屜座標 y −0.11：離前板內面 0.117 m、'
+                                                '拉出時離櫃口線 0.095 m）；r1 版離前板 0.065 m 時連 60° 俯角都被 0.23 m 高的前板擋住（預覽 r2／r3）'),
                drawer_interior=dict(bottom_top_z=round(z_top, 4), front_inner_y=round(y_front_in, 4)))
     yaml.safe_dump(doc, open(MARKER, 'w'), allow_unicode=True, sort_keys=False)
     return doc
