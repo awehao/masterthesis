@@ -7,8 +7,8 @@
 分段：接近（0→閉爪請求）、抓取（閉爪→抬升成立）、運送（CARRY_NAV→PARKED）、放置（PARKED→DONE）。
 每段：時長、實測速度中位／最低、近停累計（< 0.02 m/s）、減速再加速循環數（實測速度 0.25 s 中位序列的局部谷，前後落差都 ≥ 0.03 m/s）、
   最大轉向率、手臂關節最大速度；各拍歸因（取第一個成立者）：
-  ref_limited（參考本身低於該段名目速度 80%）→ wheel_saturated（u < 0.8·v_ref 且輪級額度 (|vx|+|vy|+L|ωz|)/0.2775 ≥ 0.97）→ mpc_limited（其餘 u < 0.8·v_ref）→ shield_limited（out < 0.8·u）→ plant_lag（v_meas < 0.8·out）→ nominal。
-  各低速拍同時標當拍相位、放置子相位、CBF 作用旗標，以及參考受限時的規則線索（觀察序列、x_slow 後 v_c、x_pre 等手臂、航向角速度上限、運送限速）。
+  ref_limited（參考本身低於該段名目速度 80%）→ wheel_saturated（u < 0.8·v_ref 且輪級額度 (max(|vx|,|vy|)+L|ωz|)/0.2775 ≥ 0.97）→ mpc_limited（其餘 u < 0.8·v_ref）→ shield_limited（out < 0.8·u）→ plant_lag（v_meas < 0.8·out）→ nominal。
+  各低速拍同時標當拍相位、放置子相位，以及參考受限時的規則線索（觀察序列、x_slow 後 v_c、x_pre 等手臂、航向角速度上限、運送限速）。
 加速度、jerk 若由位置差分取得，量化與無濾波都會放大；本檔只報速度與轉向率，不報差分加速度。
     python3 evaluation/smooth_motion_analysis.py OUT.json
 """
@@ -30,7 +30,6 @@ def one(run):
     c = {n: i for i, n in enumerate(list(s['cols']))}
     R, PH = s['rows'], list(s['phases'])
     cc = np.load(os.path.join(D, 'cmd_chain.npz'), allow_pickle=True)
-    cb = np.load(os.path.join(D, 's1_cbf.npz'), allow_pickle=True)
     pl = np.load(os.path.join(D, 'place_log.npz'), allow_pickle=True)
     t_s = R[:, 0]
     tick = np.round(np.arange(0.0, float(t_s[-1]) - 0.05, 0.05), 3)
@@ -51,11 +50,8 @@ def one(run):
         out[ok] = arr[j[ok]]
         return out
     u = at_cmd(np.hypot(cc['u'][:, 0], cc['u'][:, 1]))
-    wheel = at_cmd((np.abs(cc['u'][:, 0]) + np.abs(cc['u'][:, 1]) + WHEEL_L * np.abs(cc['u'][:, 2])) / WHEEL_CAP)   # 輪級額度使用率（nav_cfg wheel_coupling）
+    wheel = at_cmd((np.maximum(np.abs(cc['u'][:, 0]), np.abs(cc['u'][:, 1])) + WHEEL_L * np.abs(cc['u'][:, 2])) / WHEEL_CAP)   # 輪級額度使用率：max(|vx|,|vy|)＋L|ωz| ≤ 0.2775（gmpc_wb wheel_matrix；Codex 161442 更正）
     out = at_cmd(np.hypot(cc['out'][:, 0], cc['out'][:, 1]))
-    cbt = np.round(cb['t'], 3)
-    jb = np.clip(np.searchsorted(cbt, tick - 1e-9), 0, len(cbt) - 1)
-    cba = np.where(np.abs(cbt[jb] - tick) < 1e-6, cb['cbf_active'][jb], -1)
     pt = pl['rows'][:, 0]
     pph = pl['rows'][np.clip(np.searchsorted(pt, tick - 1e-9), 0, len(pt) - 1), list(pl['cols']).index('pph')]
     ev = r['events']
@@ -103,8 +99,7 @@ def one(run):
         frac = {k_: round(lab.count(k_) * 0.05, 2) for k_ in ('ref_limited', 'wheel_saturated', 'mpc_limited', 'shield_limited', 'plant_lag', 'nominal')}
         out_segs.append(dict(seg=nm, t=[round(a, 2), round(b, 2)], dur_s=round(b - a, 2), v_nominal=vnom, v_meas_median=round(float(np.median(vv)), 3),
                              v_meas_min=round(float(vv.min()), 3), near_stop_s=round(float((vv < 0.02).sum() * 0.05), 2), decel_accel_cycles=cyc, cycles_at=cyc_t,
-                             yaw_rate_max=round(float(wm[w].max()), 3), arm_joint_speed_max=round(float(qa[w].max()), 3), time_by_cause_s=frac,
-                             cbf_active_s=round(float((cba[w] == 1).sum() * 0.05), 2)))
+                             yaw_rate_max=round(float(wm[w].max()), 3), arm_joint_speed_max=round(float(qa[w].max()), 3), time_by_cause_s=frac))
     # 參考受限的規則線索（接近段）：依時間窗對到事件
     cues = []
     wa = (tick < t_close)
