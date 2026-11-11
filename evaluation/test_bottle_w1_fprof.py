@@ -43,6 +43,8 @@ import bottle_w1_dpred_ctrl as DPC                      # noqa: E402
 import bottle_branch as BB                              # noqa: E402
 import bottle_w1_compactcarry21_ctrl as C21             # noqa: E402
 BASE = dict(fprof=FC.W1PlaceController, late=LS.W1PlaceController, dpred=DPC.W1PlaceController, base=SCT.W1PlaceController)[MODE]
+if os.environ.get('FP_DYMAX'):                           # 測試用注入：把偏差變化率適用上限調低，使自然出現的橫移在指定階段觸發超域停止（只供真 step 的停止契約反例）
+    DPC.DY_RATE_MAX = float(os.environ['FP_DYMAX'])
 SWEEP = os.environ.get('FP_STOPSWEEP') == '1'
 AST = dict(n=0, n_cfg=0, worst={}, where={}, nonfinite=0, unfinished=0)
 # 門檻來源（既有階段規則，Codex 20261111 第 12 輪；不為候選新降門檻）：
@@ -173,6 +175,7 @@ def main():
         def pick(rows, g):
             return pick0([r_ for r_ in rows if abs(float(r_['y_reach']) - float(FR)) < 1e-6], g)
         c._pick_standoff = pick
+    PUSH = tuple(float(v) for v in os.environ['FP_PUSH'].split(',')) if os.environ.get('FP_PUSH') else None
     rng = np.random.default_rng(0)
     st = dict(next_g=0.4, next_c=0.0, seq=0, t_seq=-99.0, snap=None, wall0=None, exc=None, n_guide=0, n_cand=0)
     step0 = c.step
@@ -202,6 +205,18 @@ def main():
                 c.candidate_intake(t, dict(ready=1.0, age_s=0.05, snap_seq=float(st['seq']), snap_t_last=t - 0.05, snap_cx=float(st['snap'][0]), snap_cy=float(st['snap'][1]),
                                            snap_z_support=Z1, snap_ik=2.0, snap_local=2.0, snap_dev_mm=float(np.linalg.norm(xy - st['snap']) * 1e3), snap_consistent=1.0))
                 st['n_cand'] += 1
+        if PUSH is not None and c.tpa is not None:                         # 以共同進度注入橫偏：底盤 x 在 [x_pre−b0, x_pre−b1] 之間把受控對象橫向推移到累計 y_off（對受控對象的外擾，不是量測偏差）
+            y_off, b0, b1 = PUSH
+            fr = min(max((float(f.q[0]) - (float(c.x_pre) - b0)) / max(b0 - b1, 1e-6), 0.0), 1.0)
+            tgt = y_off * fr
+            d_ = tgt - st.get('pushed', 0.0)
+            if abs(d_) > 0:
+                f.q[1] += d_
+                st['pushed'] = tgt
+                st.setdefault('push_t', [float(t), None])[1] = float(t)
+            if c.tpa.get('D') is not None:
+                dyv = float(c.tpa['D'][1, 3])
+                st['dev_max'] = max(st.get('dev_max', 0.0), abs(dyv))
         if c.t_close_req is not None and st.get('t_close') is None:
             st['t_close'] = float(t)
         if st.get('t_close') is not None and t >= st['t_close'] + 0.3 and c.judge.stop is None:
@@ -294,6 +309,7 @@ def main():
         out['diag'] = dict(window=[W0, W1_], rows=rows, origin=st.get('origin'), v_arm=B0.W_ARM['v_arm'], hist_keys=sorted(f.hist[0].keys()),
                            missing='後處理命令（Shield 輸出、設定點模型實際套用值）與 QP 各限制的乘子／作用集合不在既有紀錄內；求解命令取 compact.u、實測取假受控對象位置差分')
     out['swdiag'] = st.get('swdiag')
+    out['push'] = None if PUSH is None else dict(y_off=PUSH[0], x_back=[PUSH[1], PUSH[2]], pushed=st.get('pushed'), t=st.get('push_t'), dev_abs_max=st.get('dev_max'), dev_gate=0.08)
     if SWEEP:
         out['stop_sweep'] = dict(n=AST['n'], n_cfg=AST['n_cfg'], worst={k: round(v, 5) for k, v in AST['worst'].items()}, where=AST['where'], lim=ALIM,
                                  scope='TPA 接近段（CRUISE、未切換）每隔一拍；全部連桿含開爪手指；不含 PREGRASP／INSERT', fails_obs_rule=sorted(k for k, v in AST['worst'].items() if v < ALIM_OBS[k.split(':')[1]]), lim_obs_rule=ALIM_OBS,
@@ -313,6 +329,27 @@ def main():
         out['arm_cmd_tpa'] = dict(v_max=round(float(np.abs(UA).max()), 4), v_p95=round(float(np.percentile(np.abs(UA).max(axis=1), 95)), 4), v_arm=1.0, a_max=round(float(acc.max()), 3), a_p95=round(float(np.percentile(acc.max(axis=1), 95)), 3),
                                   A_ARM=TV.C0.A_ARM, note='真實當拍構型下 MPC 實際送出的手臂關節速度命令與相鄰拍差分（設定點模型的命令，不是實測關節加速度）')
     why = (out.get('stop') or {}).get('why')
+    if why == 'dpred_rate_out_of_domain':
+        import bottle_s0_ctrl as C0s
+        t_stop = float(out['stop']['t'])
+        H = [h for h in f.hist if h['t'] >= t_stop - 0.3]
+        ht = np.array([h['t'] for h in H])
+        UL = np.array([h['u_last'] for h in H], float)
+        post = UL[ht >= t_stop - 1e-9]
+        nrm = np.abs(post).max(axis=1)
+        import bottle_s0b_ctrl as B0s
+        da = np.r_[B0s.A_BASE, np.full(6, C0s.A_ARM)] * c.cfg.dt
+        step_ok = bool(np.all(np.abs(np.diff(post[::C0s.NPH], axis=0)) <= da + 1e-9))
+        t_solves = [k['t'] for k in TICK]
+        tpa_ = c.tpa or {}
+        out['stop_contract'] = dict(t_stop=t_stop, tau=tpa_.get('tau'), T=tpa_.get('T'), tau_lt_T=bool(tpa_.get('tau', 9e9) < tpa_.get('T', 0)), last_solve_t=max(t_solves) if t_solves else None,
+                                    solve_at_or_after_stop=int(sum(1 for x in t_solves if x >= t_stop - 1e-9)), u_norm_before=round(float(np.abs(UL[ht < t_stop - 1e-9][-1]).max()), 4) if (ht < t_stop - 1e-9).any() else None,
+                                    u_norm_at_stop=round(float(nrm[0]), 4), u_norm_monotone=bool(np.all(np.diff(nrm[::C0s.NPH]) <= 1e-9)), decel_within_bounds=step_ok, u_norm_end=round(float(nrm[-1]), 5),
+                                    n_post=int(len(post)), n_nocache=(r.get('dpred') or {}).get('stat', {}).get('n_nocache', 0) if r else None, stop_effect=(r or {}).get('stop_effect'),
+                                    ok=None)
+        sc_ = out['stop_contract']
+        sc_['ok'] = bool(sc_['solve_at_or_after_stop'] == 0 and sc_['u_norm_monotone'] and sc_['decel_within_bounds'] and sc_['u_norm_end'] < 1e-3 and (sc_['n_nocache'] or 0) == 0
+                         and (sc_['u_norm_before'] is None or sc_['u_norm_at_stop'] <= sc_['u_norm_before'] + 1e-9))
     out['flow_pass'] = bool(st['exc'] is None and r is not None and c.t_close_req is not None and why == 'sim_limit' and (out.get('approach') or {}).get('cmd_nonfinite') == 0)
     sw_ = out.get('stop_sweep')
     ac_ = out.get('arm_cmd_tpa') or {}
