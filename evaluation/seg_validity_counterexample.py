@@ -114,11 +114,56 @@ def main():
         exp.append(dict(t=t, stop=None if o.judge.stop is None else dict(o.judge.stop)))
         if o.judge.stop is not None:
             break
-    res = dict(steps=steps, lock_case=lock_case, expiry=exp, valid_log=getattr(o, 'seg_valid_log', []),
+    # 第二條期限路徑（bottle_v2_ctrl.vision_fix_expired；A_1 第一阻點）：同一狀態，v2 層真碼、其下隔離
+    import inspect
+    import re
+    import bottle_v2_ctrl as V2
+    v2_below = nxt[nxt.index(MRO['bottle_v2_ctrl']) + 1]
+    v2_below._advance_inner = lambda self, T, c, q: None
+    exp_v2 = []
+    o.judge.stop = None
+    o.v2 = dict(V2.V2REG)
+    for t in (22.39, 22.41, 25.19, 25.21):
+        o.t = t
+        MRO['bottle_v2_ctrl']._advance_inner(o, None, False, np.array([-0.5, 0.0, 0.0]))
+        exp_v2.append(dict(t=t, stop=None if o.judge.stop is None else dict(o.judge.stop)))
+        if o.judge.stop is not None:
+            break
+    # 全鏈掃描：控制器 MRO 內每個類別的原始碼，凡以 vfix 時刻判期限者列出（應只有 segtarget 與 v2，且都走 _seg_valid_t）
+    scan = []
+    for k in C.__mro__:
+        try:
+            src_ = inspect.getsource(k)
+        except (TypeError, OSError):
+            continue
+        for ln in src_.split('\n'):
+            if 'expire' in ln and re.search(r"self\.t - (self\.vfix\['t'\]|t_valid|self\._seg_valid_t\(\))", ln):
+                scan.append(dict(cls=k.__module__, line=ln.strip()[:160], uses_hook=('t_valid' in ln or '_seg_valid_t' in ln)))
+    # A_1 實錄時刻重放：凍結 7.9 s（快照來源 7.56）、刷新 10.68／14.20／17.31／20.43 ⇒ 兩條路徑在 22.9 s 都不停、35.43 s 後才逾期
+    oa = _mk()
+    oa.v2 = dict(V2.V2REG)
+    oa.t = 7.67
+    oa.candidate_intake(7.67, cand(1, 7.56))
+    oa.t = 7.9
+    oa._gp_apply(oa.gp, dict(margin=0.46), np.array([-2.72, 0.0, 0.0]))
+    for k_, (ta, ts) in enumerate(((10.78, 10.68), (14.25, 14.20), (17.37, 17.31), (20.5, 20.43)), start=2):
+        oa.t = ta
+        oa.candidate_intake(ta, cand(k_, ts))
+    a1 = []
+    for t in (22.9, 35.43, 35.45):
+        for lay in ('bottle_w1_segtarget_ctrl', 'bottle_v2_ctrl'):
+            oa.judge.stop = None
+            oa.t = t
+            MRO[lay]._advance_inner(oa, None, False, np.array([-0.42, 0.0, 0.0]))
+            a1.append(dict(t=t, layer=lay, stop=None if oa.judge.stop is None else oa.judge.stop['why']))
+    res = dict(steps=steps, lock_case=lock_case, expiry=exp, expiry_v2=exp_v2, scan=scan, a1_replay=a1, valid_log=getattr(o, 'seg_valid_log', []),
                events=[e for e in o.events if e['what'].startswith('segtarget')], expire_old_rule=round(o.vfix['t'] + 15.0, 3), expire_new=round(o.seg_valid['t_src'] + 15.0, 3))
     for s in steps + lock_case:
         print(s, flush=True)
-    print('期限', exp, flush=True)
+    print('期限 segtarget', exp, flush=True)
+    print('期限 v2', exp_v2, flush=True)
+    print('掃描', scan, flush=True)
+    print('A_1 重放', a1, flush=True)
     json.dump(res, open(sys.argv[1], 'w'), ensure_ascii=False, indent=1, default=str)
 
 

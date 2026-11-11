@@ -86,8 +86,10 @@ class V2PlaceController(PC.PlaceController):
             if self.vfix is None and not self.blending and q[0] >= self.x_blend:
                 self.judge._stop(self.t, 'vision_no_fix', n_buf=len(self.vbuf), rej=dict(self.vrej))
                 return
-            if self.vfix is not None and self.t_close_req is None and self.t - self.vfix['t'] > self.v2['expire_s']:
-                self.judge._stop(self.t, 'vision_fix_expired', age=self.t - self.vfix['t'])
+            t_valid = None if self.vfix is None else (self._seg_valid_t() if hasattr(self, '_seg_valid_t') else self.vfix['t'])   # 有效期起點：子類（segtarget／obs）可改為最後有效驗證來源時刻；否則照舊＝凍結時刻
+            if self.vfix is not None and self.t_close_req is None and self.t - t_valid > self.v2['expire_s']:
+                info = self._seg_expire_info() if hasattr(self, '_seg_expire_info') else {}
+                self.judge._stop(self.t, 'vision_fix_expired', age=self.t - t_valid, **info)
                 return
         super()._advance_inner(T_tcp, close_done, q)
 

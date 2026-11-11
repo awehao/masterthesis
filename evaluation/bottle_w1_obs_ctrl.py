@@ -98,13 +98,16 @@ class W1PlaceController(HC.W1PlaceController):
                  expire_new=round(ts + float(self.seg['expire_s']), 3), expire_old_rule=round(float(self.vfix['t']) + float(self.seg['expire_s']), 3))
 
     def _gp_apply(self, g, res, q):
-        """線上版在抓取計畫被接受時才凍結（vfix）：此時以凍結快照的來源擷取時刻初始化有效起點（未知 ⇒ 退回凍結時刻，標記）。"""
+        """線上版在抓取計畫被接受時才凍結（vfix）：此時以凍結快照的來源擷取時刻初始化有效起點。
+        缺有效來源擷取戳 ⇒ 受控拒絕 segtarget_valid_src_missing（Codex 150220：不退回凍結時刻冒充觀測時間）。"""
         super()._gp_apply(g, res, q)
-        if self.vfix is None or getattr(self, 'seg_valid', None) is not None:
+        if self.vfix is None or getattr(self, 'seg_valid', None) is not None or self.judge.stop is not None:
             return
         ts = (getattr(self, '_snap_src', None) or {}).get(int(self.vfix['seq']))
-        ok = ts is not None and np.isfinite(ts) and ts <= float(self.t) + 1e-9
-        self.seg_valid = dict(t_src=float(ts) if ok else float(self.vfix['t']), seq=int(self.vfix['seq']), t_acc=round(float(self.t), 3), init='freeze_snapshot' if ok else 'fallback_freeze_time')
+        if ts is None or not np.isfinite(ts) or ts > float(self.t) + 1e-9:
+            self.judge._stop(self.t, 'segtarget_valid_src_missing', seq=int(self.vfix['seq']), t_src=ts)
+            return
+        self.seg_valid = dict(t_src=float(ts), seq=int(self.vfix['seq']), t_acc=round(float(self.t), 3), init='freeze_snapshot')
         log = getattr(self, 'seg_valid_log', None)
         if log is None:
             log = self.seg_valid_log = []
