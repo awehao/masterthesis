@@ -85,6 +85,32 @@ def main():
         return r
     c.lane_planner = lane_planner
     DIAG = os.environ.get('FP_DIAG') == '1'                                # 短窗定位：留每拍求解證據（參考窗、求解命令、CBF 作用列）；另記 TPA 起點兩種算法的差
+    if os.environ.get('FP_SWDIAG') == '1':                                 # 切換檢查分解（有界診斷）：包住 TS.switch_check，同輸入另算底盤項／相位項／偏差補償的 TCP 世界速度三軸
+        import bottle_w1_tpas_ctrl as TSm
+        sc0 = TSm.switch_check
+
+        def sc(K, qp_base, u_base_body, P, tau_eff, rate, T_pre, dt=0.02, D=None):
+            r_ = sc0(K, qp_base, u_base_body, P, tau_eff, rate, T_pre, dt=dt, D=D)
+
+            def vel(ub, rt, Dm):
+                qb = np.asarray(qp_base, float)[:3]
+                Di = np.eye(4) if Dm is None else np.linalg.inv(Dm)
+                T0_ = TSm._tb(qb) @ Di @ TSm.rel_ref(K, P, tau_eff)
+                c_, s_ = np.cos(qb[2]), np.sin(qb[2])
+                qb1 = qb + dt * np.r_[c_ * ub[0] - s_ * ub[1], s_ * ub[0] + c_ * ub[1], ub[2]]
+                T1_ = TSm._tb(qb1) @ Di @ TSm.rel_ref(K, P, tau_eff + rt * dt)
+                return ((T1_[:3, 3] - T0_[:3, 3]) / dt).round(4).tolist()
+            ub = np.asarray(u_base_body, float)
+            z = np.zeros(3)
+            st.setdefault('swdiag', []).append(dict(
+                t=float(c.t), kind=r_['kind'], dp=r_['dp'], dv=r_['dv'], tau_eff=float(tau_eff), T=float(P['T']), tau_over_T=float(tau_eff - P['T']), rate=float(rate), v_c_eff=float(P['v_c_eff']),
+                qp_base=[float(v) for v in np.asarray(qp_base, float)[:3]], u_last_body=ub.round(4).tolist(), q_meas=[float(v) for v in f.q[:3]], v_ref=float(c.v_b),
+                D=None if D is None else dict(dy=float(D[1, 3]), dth=float(np.arctan2(D[1, 0], D[0, 0]))),
+                v_tcp_total=vel(ub, rate, D), v_tcp_base_only=vel(ub, 0.0, D), v_tcp_phase_only=vel(z, rate, D), v_tcp_phase_rate1=vel(z, 1.0, D),
+                v_tcp_base_x_only=vel(np.r_[ub[0], 0, 0], 0.0, D), v_tcp_base_y_only=vel(np.r_[0, ub[1], 0], 0.0, D), v_tcp_base_w_only=vel(np.r_[0, 0, ub[2]], 0.0, D),
+                v_tcp_total_noD=vel(ub, rate, None), v_tcp_total_rate1=vel(ub, 1.0, D)))
+            return r_
+        TSm.switch_check = sc
     if DIAG:
         c.compact = []
         if os.environ.get('FP_NC') == '1':
@@ -230,6 +256,11 @@ def main():
         out['diag_nc'] = nc
         out['diag'] = dict(window=[W0, W1_], rows=rows, origin=st.get('origin'), v_arm=B0.W_ARM['v_arm'], hist_keys=sorted(f.hist[0].keys()),
                            missing='後處理命令（Shield 輸出、設定點模型實際套用值）與 QP 各限制的乘子／作用集合不在既有紀錄內；求解命令取 compact.u、實測取假受控對象位置差分')
+    out['swdiag'] = st.get('swdiag')
+    if st.get('swdiag') and TICK:
+        t_sw = st['swdiag'][-1]['t']
+        out['sw_window'] = [dict(t=k['t'], v_b=round(k['v_b'], 4), x=round(k['q'][0], 4), y=round(k['q'][1], 4), th=round(k['q'][2], 4), u=None if k['u'] is None else [round(v, 4) for v in k['u']], tau=k['tau'], rate=k['rate'])
+                            for k in TICK if t_sw - 1.5 <= k['t'] <= t_sw + 0.1]
     why = (out.get('stop') or {}).get('why')
     out['pass'] = bool(st['exc'] is None and r is not None and c.t_close_req is not None and why == 'sim_limit' and (out.get('approach') or {}).get('cmd_nonfinite') == 0)
     json.dump(out, open(OUTP, 'w'), ensure_ascii=False, indent=1, default=float)
