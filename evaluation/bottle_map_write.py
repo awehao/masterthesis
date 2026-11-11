@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """瓶子 N1 地圖：把 bottle_nav_chain.occupancy 同一份已知家具（桌腳、側牆）寫成 map_server 可讀的 pgm／yaml。障礙方塊是未知物，不進地圖。
-    python3 evaluation/bottle_map_write.py <輸出基名> [--wall-box cx,cy,cz,sx,sy,sz] [--table2 dx,dy] [--region-offset ox,oy]
+    python3 evaluation/bottle_map_write.py <輸出基名> [--wall-box cx,cy,cz,sx,sy,sz] [--table2 dx,dy] [--region-offset ox,oy] [--mirror-y]
 """
 import argparse
 import json
@@ -21,6 +21,7 @@ def main():
     ap.add_argument('--wall-box', default='')
     ap.add_argument('--walls-file', default='', help='場景 JSON 的 boxes（牆體同步進地圖；只進地圖，場景與掃描由各自入口讀同一檔）')
     ap.add_argument('--table2', default='', help='第二桌位移 dx,dy（同一桌子資產；只放桌腳，桌面在掃描面之上）')
+    ap.add_argument('--mirror-y', action='store_true', help='dynsr44：整場景對世界 y＝0 鏡射（與執行端同一份；預設關＝舊行為）')
     ap.add_argument('--region-offset', default='0,0', help='第一桌（抓取區域）世界平移 ox,oy（R-B1；預設 0,0＝原場景；第二桌、側牆不隨之移動）')
     a, _ = ap.parse_known_args()
     ro = np.array([float(v) for v in a.region_offset.split(',')] + [0.0])
@@ -34,6 +35,8 @@ def main():
     if a.table2:
         dx, dy = (float(v) for v in a.table2.split(','))
         boxes += [(c + np.array([dx, dy, 0.0]), sz) for n, c, sz in G.table_boxes() if n != 'table_top']
+    if a.mirror_y:
+        boxes = [(np.asarray(c, float) * np.array([1.0, -1.0, 1.0]), sz) for c, sz in boxes]   # 鏡射後世界＝M·(資產＋偏移)，與 dynsr44 一致
     g = NC.occupancy(boxes)
     nx, ny = g.info.width, g.info.height
     occ = np.array(g.data, np.int8).reshape(ny, nx)
