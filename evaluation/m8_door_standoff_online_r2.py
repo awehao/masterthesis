@@ -36,7 +36,7 @@ ROOT_MARGIN_MM = 2.7                                              # DL3 根部�
 print('#EARLY r2', dict(A_LIN=A_LIN, ALPHA=ALPHA, margin=FP.MARGIN), flush=True)
 
 # ---- 1 完整場景已知幾何
-REG = json.load(open(os.path.join(HERE, 'experiments', '20261111_m8_full_scene.json')))
+REG = json.load(open(os.path.join(HERE, 'experiments', os.environ.get('M8_SCENE_REG', '20261111_m8_full_scene.json'))))   # 預設＝舊兩房場景（r2／r3 結果的前提）；住宅場景設 M8_SCENE_REG=20261112_m8_house_scene.json
 
 
 def scene_known():
