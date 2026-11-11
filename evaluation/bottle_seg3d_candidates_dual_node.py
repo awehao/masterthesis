@@ -3,7 +3,8 @@
 訂 /v1/bottle_seg3d（底盤）與 /w1/bottle_seg3d（手腕）；兩路都餵 bottle_dualcam_select.DualSelect（各來源追蹤、交叉核對、物件層級不一致、擷取時刻年齡）。
   抓取候選：沿用基線的 known_type 追蹤與不可變快照（ik／局部點檢查），只多一道閘——DualSelect 判 inconsistent／reject／ambiguous／adopted_object_lost
     ⇒ 該拍 known_type 視為 not_ready（why＝inconsistent），不產生新快照；發布格式不變（控制端 segtarget 規則照舊：限速更新、凍結、期限）。
-    閘門轉為擋住時：目前快照（含背景檢查中者）作廢——其完成通知不發布；若由底盤列觸發，立即以最後手腕訊息重評估並發布一列（未就緒），
+    閘門轉為擋住時：目前快照（含背景檢查中者）作廢——從快照檢查器移除（快照與待算槽），其完成通知不發布，之後的候選列也不再帶該序號與其結果
+      （恢復一致時另建新序號快照重新檢查；Codex 134437 第 2 項）；若由底盤列觸發，立即以最後手腕訊息重評估並發布一列（未就緒），
     使最新候選列不再是 ready（Codex 054341 競態：檢查中 → 底盤發現不一致 → 手腕暫無新影格 → 舊檢查完成仍被承接）。
   導引候選：另發 /bottle/target_guide（Float64MultiArray；layout 標籤帶欄位名）：t_eval、guide_cam（0 無 1 v1 2 w1）、guide_state、cx、cy、t_first、t_last（擷取戳）、
     age_s、n、grasp_cam、grasp_state、reject、schema。供控制端觀察觸發、車道／側別（不是抓取目標）。
@@ -75,9 +76,12 @@ class DualCandNode(CN.CandNode):
         was = self.gate
         self.gate = res['grasp_state']
         if self.gate in BLOCK and was not in BLOCK:
-            snap = self.sc.snap.get('known_type')
-            if snap is not None:
-                self.void_seq.add(snap['seq'])                                # 作廢目前快照（含背景檢查中者）
+            with self.sc.lock:                                                # 作廢目前快照（含背景檢查中者）：從檢查器移除快照與待算槽（Codex 134437 第 2 項）
+                snap = self.sc.snap.pop('known_type', None)                   #   ⇒ 之後候選列不再帶舊序號／舊結果；恢復一致時 ready 候選建立新序號快照
+                if snap is not None:
+                    self.void_seq.add(snap['seq'])
+                    if self.sc.queue.get('known_type') == snap['seq']:
+                        self.sc.queue.pop('known_type', None)                 #   尚未開始的檢查不再執行；執行中的檢查完成時由 _done 依 void_seq 壓下
             self._write(dict(rec='gate_block', gate=self.gate, void_seq=sorted(self.void_seq)))
             if cam == 'v1' and self._last_w1 is not None:
                 CN.CandNode._in(self, self._last_w1)                          # 立即以最後手腕訊息重評估並發布（閘門 ⇒ known_type 未就緒），最新候選列不再是 ready
