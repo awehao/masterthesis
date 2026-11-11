@@ -4,7 +4,7 @@
 整合層所需輸入以合成資料餵入（與執行端同一入口）：區域先驗（左側，場景登錄）、導引量測 guide_intake（0.4 s 起每 0.2 s，瓶真值＋0.3 mm 雜訊，節點側別＝控制端選側）、
   車道規劃器 bottle_tlane.decide（無代價圖，故原障礙移出場地）、快照候選 candidate_intake（U 段開始 3.6 s 後）。
 只跑接近段：到閉爪請求或 t_end 即結束（結束時觸發 sim_limit 受控停止收尾）；不判抓放。
-    python3 evaluation/test_bottle_w1_fprof.py fprof|base OUT.json        （base＝既有右側整合控制器，同輸入對照）
+    python3 evaluation/test_bottle_w1_fprof.py fprof|late|base OUT.json        （base＝既有右側整合控制器，同輸入對照）
 """
 import json
 import os
@@ -38,7 +38,8 @@ import bottle_w1_side_ctrl as SCT                       # noqa: E402
 T = TV.T
 import bottle_s1_cand as SCD                            # noqa: E402
 SCD.OBST['c'] = np.array([-2.0, 6.0, 0.25])              # 原障礙移出場地：本檔車道規劃器沒有代價圖（grid＝None），重接路徑會直穿原障礙位置（r1：CBF 把底盤壓到近停，是測試台假象）
-BASE = FC.W1PlaceController if MODE == 'fprof' else SCT.W1PlaceController
+import bottle_w1_lateslow_ctrl as LS                    # noqa: E402
+BASE = dict(fprof=FC.W1PlaceController, late=LS.W1PlaceController, base=SCT.W1PlaceController)[MODE]
 LOGP = OUTP.replace('.json', '_worker.log')
 TICK = []
 
@@ -183,6 +184,10 @@ def main():
                                rate_min=round(float(rate.min()), 3) if len(rate) else None, rate_median=round(float(np.median(rate)), 3) if len(rate) else None,
                                rate_max=round(float(rate.max()), 3) if len(rate) else None, cmd_nonfinite=int(np.isnan(U).any(axis=1).sum()),
                                ctrl_ms=dict(p50=round(float(np.median([k['ms'] for k in K])), 2), p95=round(float(np.percentile([k['ms'] for k in K], 95)), 2), max=round(float(max(k['ms'] for k in K)), 2)))
+        xq = qq[:, 0] - float(c.x_pre)
+        out['pre_zone'] = dict(v_meas_at_m013=round(float(np.interp(-0.13, xq, vm)), 4), v_meas_at_m005=round(float(np.interp(-0.05, xq, vm)), 4), v_meas_at_0=round(float(np.interp(0.0, xq, vm)), 4),
+                               t_last_0p6m=round(float(np.interp(0.0, xq, tt) - np.interp(-0.6, xq, tt)), 2), t_last_0p35m=round(float(np.interp(0.0, xq, tt) - np.interp(-0.35, xq, tt)), 2),
+                               wrist=dict(n_groups=len(getattr(c, 'w_groups', []) or []), t_first=(c.w_groups[0]['t'] if getattr(c, 'w_groups', None) else None)))
         out['curve'] = dict(t=[round(float(v), 2) for v in tt[::4]], v_ref=[round(float(v), 4) for v in vb[::4]], v_meas=[round(float(v), 4) for v in vm[::4]], wheel=[round(float(v), 3) for v in use[::4]])
     if DIAG and getattr(c, 'compact', None):
         import bottle_s0b_ctrl as B0

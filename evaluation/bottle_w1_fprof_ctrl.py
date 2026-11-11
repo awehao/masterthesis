@@ -185,18 +185,23 @@ class W1PlaceController(SC.W1PlaceController):
                            w_max=HD.W_MAX, alpha_max=HD.ALPHA_MAX, a=S1.A_SLEW)
 
     # ---- 剖面管理
+    slow_back = None                                                       # 終端低速區長度（m；None＝既有 x_slow）。晚降速子類設值；只影響本檔的同源剖面與站位時間成本
+
+    def _xs(self):
+        return float(self.x_slow) if self.slow_back is None else float(self.x_pre) - float(self.slow_back)
+
     def _fp_active(self, x=None):
         return self.st.phase == 'CRUISE' and not self.blending and (x is None or x < float(self.x_pre))
 
     def _fp_ensure(self):
         """導航剖面：路徑或航向參考換版時由當下參考狀態（s_ref、v_b）重建；TPA 承接後改用 TPA 定時後的同一份剖面（_tpa_timing）。"""
         self._ensure_nav_hd()
-        key = (id(self.path), id(self.hd), float(self.x_pre), float(self.x_slow))
+        key = (id(self.path), id(self.hd), float(self.x_pre), self._xs())
         if self.fp is not None and self._fp_key == key:
             return self.fp
         if self.tpa is not None and self._fp_timing is not None and self._fp_key is not None and self._fp_key[:2] == key[:2]:
             return self.fp
-        F = build(self.path, self.hd, float(self.s_ref), float(self.v_b), float(self.x_pre), float(self.x_slow), float(self.v_nav), float(self.v_c))
+        F = build(self.path, self.hd, float(self.s_ref), float(self.v_b), float(self.x_pre), self._xs(), float(self.v_nav), float(self.v_c))
         self.fp_log.append(dict(t=round(float(self.t), 3), what='nav', ok=bool(F.get('ok')), why=F.get('why'), sig0=round(float(self.s_ref), 4), v0=round(float(self.v_b), 4),
                                 T=round(F['T'], 3) if F.get('ok') else None, arc_err=round(F['arc_err'], 5) if F.get('ok') else None, entry_over_cap=F.get('entry_over_cap'),
                                 over_margin=F.get('over_margin'), verify=F.get('verify'), detail=F.get('detail')))
@@ -253,7 +258,7 @@ class W1PlaceController(SC.W1PlaceController):
     def _standoff_t_base(self, path_new, sig, x_pre_c):
         th0 = float(self.hd.yaw(float(self.s_ref))) if self.hd is not None else float(self._yaw_meas)
         hd = HD.HeadingRef(path_new, float(sig), th0)
-        F = build(path_new, hd, float(sig), float(self.v_b), float(x_pre_c), float(x_pre_c) - 0.6, float(self.v_nav), float(self.v_c))
+        F = build(path_new, hd, float(sig), float(self.v_b), float(x_pre_c), float(x_pre_c) - (0.6 if self.slow_back is None else float(self.slow_back)), float(self.v_nav), float(self.v_c))
         if not F.get('ok'):
             return float('inf')                                                 # 該候選以同源剖面不可行 ⇒ 成本無限大（不改用梯形估）
         return float(F['T'])
@@ -263,7 +268,7 @@ class W1PlaceController(SC.W1PlaceController):
         self._ensure_nav_hd()
         if self._fp_sig_e is not None:                                          # 與 TPAS 進度表同一起點（_tpa_start 以同一量測、同一投影 _sig_of 先算好）；不用父類的 sig_robot 起點
             sig_e = self._fp_sig_e
-        tm = Timing(self.path, self.hd, float(sig_e), float(self.v_b), float(self.x_pre), float(self.x_slow), float(self.v_nav), float(self.v_c))
+        tm = Timing(self.path, self.hd, float(sig_e), float(self.v_b), float(self.x_pre), self._xs(), float(self.v_nav), float(self.v_c))
         if not tm.ok():
             self.fp_log.append(dict(t=round(float(self.t), 3), what='tpa', ok=False, why=tm.F0.get('why')))
             if self.judge.stop is None:
@@ -286,7 +291,7 @@ class W1PlaceController(SC.W1PlaceController):
         if not F.get('ok'):
             self.judge._stop(self.t, 'fprof_infeasible', reason=str(F.get('why')), where='tpa_retime')
             return
-        self.fp, self._fp_key = F, (id(self.path), id(self.hd), float(self.x_pre), float(self.x_slow))
+        self.fp, self._fp_key = F, (id(self.path), id(self.hd), float(self.x_pre), self._xs())
         self.fp_log.append(dict(t=round(float(self.t), 3), what='tpa', ok=True, T_arm=round(float(P['T']), 3), T_base=round(tm.t_base(), 3), T_final=round(float(F['T']), 3),
                                 dT=round(float(F['T']) - float(P['T']), 4), retime=tm.log[-1] if tm.log else None, entry_over_cap=F.get('entry_over_cap')))
 
@@ -310,6 +315,6 @@ class W1PlaceController(SC.W1PlaceController):
 
     def report(self):
         r = super().report()
-        r['fprof'] = dict(cfg=self.fp_cfg, log=self.fp_log, rejoin_hold=self.rj_hold, tpa=(self.tpa or {}).get('fprof') if self.tpa else None,
+        r['fprof'] = dict(slow_back=self.slow_back, cfg=self.fp_cfg, log=self.fp_log, rejoin_hold=self.rj_hold, tpa=(self.tpa or {}).get('fprof') if self.tpa else None,
                           note='導航接近段參考速度、MPC 預覽、站位時間成本、TPA 時長、TPAS 進度表共用同一份輪級可行剖面；margin 為固定工程餘裕，非已辨識的追蹤誤差界')
         return r
