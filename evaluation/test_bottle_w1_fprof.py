@@ -39,7 +39,22 @@ T = TV.T
 import bottle_s1_cand as SCD                            # noqa: E402
 SCD.OBST['c'] = np.array([-2.0, 6.0, 0.25])              # 原障礙移出場地：本檔車道規劃器沒有代價圖（grid＝None），重接路徑會直穿原障礙位置（r1：CBF 把底盤壓到近停，是測試台假象）
 import bottle_w1_lateslow_ctrl as LS                    # noqa: E402
-BASE = dict(fprof=FC.W1PlaceController, late=LS.W1PlaceController, base=SCT.W1PlaceController)[MODE]
+import bottle_w1_dpred_ctrl as DPC                      # noqa: E402
+import bottle_branch as BB                              # noqa: E402
+import bottle_w1_compactcarry21_ctrl as C21             # noqa: E402
+BASE = dict(fprof=FC.W1PlaceController, late=LS.W1PlaceController, dpred=DPC.W1PlaceController, base=SCT.W1PlaceController)[MODE]
+SWEEP = os.environ.get('FP_STOPSWEEP') == '1'
+AST = dict(n=0, n_cfg=0, worst={}, where={}, nonfinite=0, unfinished=0)
+ALIM = dict(table=0.05, bottle=0.05, self=0.008017 - 1e-6, margin=0.05)   # 同 test_bottle_w1_gaze 的接近段門檻
+N_MAX = 2000 // C21.SAMPLE_EVERY + 1
+TBN = [(c_, s_) for n_, c_, s_ in G.table_boxes()]
+BOXC, BOXS = np.array([BXY[0], BXY[1], Z1 + G.BOTTLE['h'] / 2]), np.array([2 * G.BOTTLE['r'], 2 * G.BOTTLE['r'], G.BOTTLE['h']])
+
+
+def achk(q9):
+    W = G.link_world(q9, G.Q_OPEN)
+    P = np.vstack(list(W.values()))
+    return dict(table=min(float(G.box_dist(P, c_, s_).min()) for c_, s_ in TBN), bottle=float(G.box_dist(P, BOXC, BOXS).min()), self=float(G.C.self_clear(q9, G.Q_OPEN)[0]), margin=BB.margin(q9[3:]))
 LOGP = OUTP.replace('.json', '_worker.log')
 TICK = []
 
@@ -48,12 +63,30 @@ class Ctl(BASE):
     def __init__(self, *a, **kw):
         super().__init__(*a, planner_log=LOGP, **kw)
 
+    def _advance_inner(self, T_tcp, close_done, q):
+        if SWEEP and self.judge.stop is None and np.isfinite(q).all() and self.st.phase == 'CRUISE' and not self.blending and self.tpa is not None and self.n_tick % 2 == 0:
+            AST['n'] += 1                                                  # TPA 接近段每隔一拍：現在停（e0）與延後一拍停（e1）的完整取樣停止軌跡
+            for e in (0, 1):
+                Q = C21.stop_traj(np.asarray(q, float), self.s, self.pipe, self.u_last, self.cfg, e)
+                if len(Q) >= N_MAX:
+                    AST['unfinished'] += 1
+                if not np.isfinite(Q).all():
+                    AST['nonfinite'] += 1
+                    continue
+                for qq in Q:
+                    AST['n_cfg'] += 1
+                    for k, v in achk(qq).items():
+                        key = f'e{e}:{k}'
+                        if v < AST['worst'].get(key, 9.9):
+                            AST['worst'][key], AST['where'][key] = v, (round(float(self.t), 3), round(float(q[0]), 4))
+        super()._advance_inner(T_tcp, close_done, q)
+
     def _solve(self, q):
         w0 = _time.perf_counter()
         u = super()._solve(q)
         if self.st.phase == 'CRUISE':
             TICK.append(dict(t=round(float(self.t), 3), s_ref=float(self.s_ref), sig=float(getattr(self, 'sig_robot', np.nan)), v_b=float(self.v_b), q=[float(v) for v in q[:3]],
-                             u=None if u is None else [float(v) for v in np.asarray(u, float)[:3]], blending=bool(self.blending), ph=self.vh_seq['ph'],
+                             u=None if u is None else [float(v) for v in np.asarray(u, float)[:3]], ua=None if u is None else float(np.abs(np.asarray(u, float)[3:9]).max()), blending=bool(self.blending), ph=self.vh_seq['ph'],
                              tau=None if not self.tpa or 'tau' not in self.tpa else float(self.tpa['tau']), rate=None if not self.tpa or 'rate' not in self.tpa else float(self.tpa['rate']),
                              ms=round((_time.perf_counter() - w0) * 1e3, 2)))
         return u
@@ -257,10 +290,18 @@ def main():
         out['diag'] = dict(window=[W0, W1_], rows=rows, origin=st.get('origin'), v_arm=B0.W_ARM['v_arm'], hist_keys=sorted(f.hist[0].keys()),
                            missing='後處理命令（Shield 輸出、設定點模型實際套用值）與 QP 各限制的乘子／作用集合不在既有紀錄內；求解命令取 compact.u、實測取假受控對象位置差分')
     out['swdiag'] = st.get('swdiag')
+    if SWEEP:
+        out['stop_sweep'] = dict(n=AST['n'], n_cfg=AST['n_cfg'], worst={k: round(v, 5) for k, v in AST['worst'].items()}, where=AST['where'], lim=ALIM,
+                                 fails=sorted(k for k, v in AST['worst'].items() if v < ALIM[k.split(':')[1]]) + (['nonfinite'] if AST['nonfinite'] else []) + (['unfinished'] if AST['unfinished'] else []))
+    if r is not None:
+        out['dpred'] = r.get('dpred')
+        K_ = [k for k in TICK if k['u'] is not None]
     if st.get('swdiag') and TICK:
         t_sw = st['swdiag'][-1]['t']
         out['sw_window'] = [dict(t=k['t'], v_b=round(k['v_b'], 4), x=round(k['q'][0], 4), y=round(k['q'][1], 4), th=round(k['q'][2], 4), u=None if k['u'] is None else [round(v, 4) for v in k['u']], tau=k['tau'], rate=k['rate'])
                             for k in TICK if t_sw - 1.5 <= k['t'] <= t_sw + 0.1]
+    ua = [k['ua'] for k in TICK if k.get('ua') is not None and k.get('tau') is not None]
+    out['arm_cmd_tpa'] = dict(max=round(max(ua), 4), p95=round(float(np.percentile(ua, 95)), 4), v_arm=TV.T.T.W1.B.W_ARM['v_arm'] if False else 1.0) if ua else None
     why = (out.get('stop') or {}).get('why')
     out['pass'] = bool(st['exc'] is None and r is not None and c.t_close_req is not None and why == 'sim_limit' and (out.get('approach') or {}).get('cmd_nonfinite') == 0)
     json.dump(out, open(OUTP, 'w'), ensure_ascii=False, indent=1, default=float)

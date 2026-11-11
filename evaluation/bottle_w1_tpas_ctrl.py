@@ -220,6 +220,10 @@ class W1PlaceController(CJ.W1PlaceController):
         P = self.tpa
         return P['tau'] + P['rate'] * (tau_t - float(self.t))
 
+    def _switch_check(self, qp_base, u_base, P, tau_eff, rate):
+        """切換檢查（hook；預設＝模組函式 switch_check、偏差 D 取當拍值，行為不變）。"""
+        return switch_check(self.K, qp_base, u_base, P, tau_eff, rate, P['T_pre'], D=P['D'])
+
     def _rel_target(self, tau_t):
         P = self.tpa
         if P is None or P['switched']:
@@ -246,7 +250,7 @@ class W1PlaceController(CJ.W1PlaceController):
                 P['tau_log'].append((round(t, 3), round(sm, 4), round(P['tau'], 4), round(P['rate'], 4), round(float(P['sig_raw']), 4)))   # (t, σ_phase, τ, rate, σ_raw)
             if self.judge.stop is None and P['tau'] >= P['T'] - 1e-9:
                 lat = C0.D_STEPS * C0.PHYS
-                sw = switch_check(self.K, qp[:3], np.asarray(self.u_last, float)[:3], P, P['tau'] + P['rate'] * lat, P['rate'], P['T_pre'], D=P['D'])
+                sw = self._switch_check(qp[:3], np.asarray(self.u_last, float)[:3], P, P['tau'] + P['rate'] * lat, P['rate'])
                 T_from = sw.pop('T_from')
                 P['sw'] = dict(sw, t_sw=round(t, 3), x=round(float(q[0]), 4), y=round(float(q[1]), 4), rate=round(P['rate'], 4))   # 時刻欄名 t_sw：_ev／S0Judge._stop 以 t 為固定參數，原名 t 使接受與拒絕路徑都 TypeError（tpas_progress_counterexample 抓到）
                 if sw['ok']:
