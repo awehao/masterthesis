@@ -1,0 +1,42 @@
+{
+ "name": "motm_dpred_left_nominal",
+ "registered": "2026-11-12（Codex 偏差前推 r7 裁定：2 mm 求解前檢查＋回歸後可凍結並跑名目 Isaac 一趟）",
+ "scene": "左側名目（不鏡射）、無移動物；同 bottle_motm_obs_nom_3 的場景參數",
+ "s1_args": "--dyn-case none --table1-z 0.58 --bottle-dx -0.0232 --bottle-dy -0.0119 --region-offset 0.6,0.8",
+ "map_args": "--table2 2.4,-1.0",
+ "executor": "evaluation/isaac_bottle_w1dynsr45.py（dynsr44 複本，只多 W1_CTRL 選控制器）",
+ "controller": "bottle_w1_dpred_ctrl（A0 同源剖面＋終端低速區 0.05 m＋偏差補償前推＋2 mm 跨拍求解前檢查）",
+ "cand_script": "evaluation/bottle_seg3d_candidates_dual_side_node.py",
+ "tracker": "evaluation/bottle_tracker_stamped_kfcm_clr.py",
+ "tracker_override": "min_net_speed=0.10,min_track_speed=0.12,release_track_speed=0.10",
+ "planner_yaml": "evaluation/bottle_n2_planner_sf.yaml",
+ "bottle_rtf_cap": 0.4,
+ "run_id": "bottle_motm_dpred_nom_1",
+ "fixed_params": {
+  "slow_back_m": 0.05,
+  "margin": 0.97,
+  "d_horizon_s": 1.2,
+  "dy_rate_max": 0.1,
+  "dth_rate_max": 0.3,
+  "xtick_tol_m": 0.002,
+  "sig0_tol_m": 0.0001,
+  "retime_tol_s": 0.01,
+  "note": "皆事前單一值，未掃描"
+ },
+ "rules": "失敗保留、不補跑、不熱改；名目完整且品質合格後才談動態 A 案；交 Isaac 重播＋2D 疊圖",
+ "baseline_for_compare": "bottle_motm_obs_nom_3（既有控制器，左側名目，閉爪 21.70 s、DONE 約 57 s）——不同執行端版本（dynsr43）與控制器鏈，屬系統比較",
+ "pre_checks": [
+  "results/bottle/regress_dpred/（hook 前後基線逐列相同、左右回歸相同）",
+  "results/bottle/fprof_failure_paths_r2.json",
+  "results/bottle/dpred_check_r3.json",
+  "results/bottle/dpred_realchain_r4_*.json",
+  "results/bottle/fprof_retime_ctrl_r1.json",
+  "results/bottle/xgate_dpred_{nominal,inject}_r1.json（假世界）"
+ ],
+ "known_open": [
+  "合成橫向加速 0.4 m/s² 會由 2 mm 檢查受控停止（預期行為）",
+  "假世界最大橫偏 7.1 cm（門檻 8 cm）",
+  "腕部修正可用時間縮短（距離條件內 3.76→2.28 s）",
+  "左側經 side 控制鏈＋dual_side 節點的 Isaac 首趟（右側已跑過）"
+ ]
+}

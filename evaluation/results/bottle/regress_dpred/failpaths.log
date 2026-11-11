@@ -1,0 +1,18 @@
+PASS 4a 起速 0.30（輪級 1.081）⇒ 拒絕 {"why": "hard_limit:wheel", "detail": {"wheel_ratio_max": 1.08108, "w_max": 0.0, "alpha_max": 0.0, "a_scalar_max": 0.4, "alpha_fd": 0.0, "a_body_lin_fd": 0.4, "wheel_acc_ratio_fd": 0.064}}
+PASS 4b 起速 0.275（> 餘裕、≤ 硬界）⇒ 接受並標記 {"wheel_ratio_max": 0.99099, "w_max": 0.0, "alpha_max": 0.0, "a_scalar_max": 0.4, "alpha_fd": 0.0, "a_body_lin_fd": 0.4, "wheel_acc_ratio_fd": 0.064}
+PASS 4c 名目：不標記、硬限制內 {"wheel_ratio_max": 0.97, "w_max": 0.0, "alpha_max": 0.0, "a_scalar_max": 0.4, "alpha_fd": 0.0, "a_body_lin_fd": 0.4, "wheel_acc_ratio_fd": 0.064}
+PASS 1a 導航剖面不可行 ⇒ 鎖存 fprof_infeasible {"stop": {"t": 3.0, "why": "fprof_infeasible", "reason": "hard_limit:wheel", "where": "nav"}, "impl": "bottle_w1_fprof_ctrl.py"}
+PASS 1b TPA 建立不可行 ⇒ 鎖存、回 None {"t": 3.0, "why": "fprof_infeasible", "reason": "hard_limit:wheel", "where": "tpa"}
+PASS 3a retime：最低速度仍早到 ⇒ 拒絕 {"T": 40.0, "kind": "retime_cannot_meet_T", "t_slowest": 22.5, "v_floor": 0.02}
+PASS 3b tpas_table：T 不符 ⇒ 回 None（不縮放） {"scale": 4.416, "T_profile": 4.529}
+PASS 3c tpas_table：毫秒級殘差 ⇒ 接受、終點對齊 {"scale": 1.000883}
+PASS 1c 共同定時失敗 ⇒ 鎖存（where＝tpa_retime） {"stop": {"t": 3.0, "why": "fprof_infeasible", "reason": "retime_cannot_meet_T", "where": "tpa_retime"}, "stubbed": "bottle_w1_head_ctrl"}
+PASS 1d TPAS 進度表 T 不符 ⇒ 鎖存（where＝tpas） {"t": 3.0, "why": "fprof_infeasible", "reason": "tpas_table_T_mismatch", "where": "tpas", "scale": 4.4158}
+PASS 2a A0 成本下正常選到有限成本候選 [[0.36, 13.999, 13.999], [0.4, 14.052, 14.052], [0.4275, 14.134, 14.134]]
+PASS 2b 全部成本無限大 ⇒ 不選（None） [[0.36, Infinity], [0.4, Infinity], [0.4275, Infinity]]
+PASS 2c 只有一個有限 ⇒ 選它 [[0.36, Infinity], [0.4, 12.0], [0.4275, Infinity]]
+PASS 5a 同一起點：表起點＝定時起點、終點＝x_pre、不停止 {"sig0": 1.0133, "sig_end": 3.0, "fprof": {"tau_scale": 1.0, "sig0_plan": 1.0133, "sig0_tpas": 1.0133, "d_sig0": 0.0, "sig_end": 3.0}}
+PASS 5b 起點不一致 ⇒ 受控停止、表不平移（終點仍 x_pre） {"t": 3.0, "why": "fprof_infeasible", "reason": "sig_origin_mismatch", "where": "tpas", "d_sig0": -0.0133}
+PASS 6a 未修：重接途中即進 INSERT（缺口重現） {"fix": 11.1, "nofix": 10.0}
+PASS 6b 修正：重接時間到才進 INSERT，tol_pre 復原 {"phases": {"fix": 11.1, "nofix": 10.0}, "hold": {"t0": 10.0, "t_end": 11.054, "n": 22}}
+判定 PASS []

@@ -1,0 +1,10 @@
+PASS 1a 常數 D：重現速度差 0.037（紀錄 0.0370） {"dv": 0.0371, "sw_v": 0.03}
+PASS 1b 前推 D：速度差在門檻內 {"dv": 0.0015, "rates": [0.0398, -0.01]}
+PASS 2 相對參考速度：前推版多出橫向補償項、預覽二階差分有界 {"v_const": [-0.1159, 0.0007, 0.0], "v_pred": [-0.1208, -0.0362, 0.0], "acc_max": 0.0024}
+PASS 3 補償橫移所需關節速度（粗估）≤ 0.5·v_arm {"dy_rate": 0.0398, "sigma_min": 0.164, "qd_need": 0.243, "v_arm": 0.9999, "note": "以 V_HIGH 構型的位置 Jacobian 最小奇異值粗估，不是該拍實際構型"}
+PASS 4a 過零不截斷：預測速度全程 0.04（橫偏 −1 mm 起） {"y": [-0.001, 0.001, 0.003, 0.005], "v_min": 0.0399999999999999, "v_max": 0.040000000000000036}
+PASS 4b 預測邊界：超過上限保持上限值、負時間取當拍值 [0.0076, 0.008, 0.008, -0.04]
+PASS 4c 速率超界 ⇒ 受控停止 dpred_rate_out_of_domain {"rates": [0.0, 0.0], "stat": {"n": 1, "n_clip": 1, "dy_rate_max": 0.15062227511836604, "dth_rate_max": 0.0}}
+PASS 4d 相鄰控制拍參考連續：等速時 0；底盤橫向加速 0.4 m/s² 時跳動 ≤ 1 mm {"jump_same": 0.0, "jump_acc_mm": 0.5, "dt": 0.05}
+PASS 5 hook 解析 {"base": "bottle_w1_tpas_ctrl.py", "dpred": "bottle_w1_dpred_ctrl.py", "rel": "bottle_w1_dpred_ctrl.py"}
+判定 PASS []
