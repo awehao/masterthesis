@@ -37,7 +37,7 @@ def project(Tc, P):
     return u, v, z
 
 
-def view_q1(K, qb, q_tmpl, look, lo, hi, n_grid=145):
+def view_q1(K, qb, q_tmpl, look, lo, hi, n_grid=37):                   # 37 點粗掃＋牛頓：54 個位姿／觀看點組合與 145 點結果相同（|Δq1| < 1e-15），耗時 15 → 5 ms
     """回 (q 視角構型, 資訊)。q_tmpl 只提供 q2–q6 樣板；q1 由觀看點與預測底盤位姿決定。"""
     q = np.asarray(q_tmpl, float).copy()
     best = None
