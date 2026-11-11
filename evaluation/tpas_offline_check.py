@@ -126,7 +126,10 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
         v = min(vd, v + S1.A_SLEW * DTC) if v < vd else max(vd, v - float(B.A_BASE[0]) * DTC)
         x += v * DTC
         t += DTC
-        tau, rate = TS.tau_step(tau, rate, DTC, x, prof, T)
+        if os.environ.get('TPAS_OLD') == '1':
+            tau, rate = TS.tau_step(tau, rate, DTC, x, prof, T)
+        else:
+            tau, rate = TS.tau_step(tau, rate, DTC, x, prof, T, r_max=TS.rate_cap(P, tau, T, V_ARM))   # 與控制器同一追趕上限（含關節速度界）
         off = yoff_at(t)
         ba = apose(x, off)
         if v2_dp is None and t >= T:

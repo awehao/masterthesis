@@ -68,6 +68,19 @@ def progress_profile(sig, x_pre, x_slow, v_nav, v_c, v0, T, dt=0.02, scale_to_T=
     return ts, xs
 
 
+V_MARGIN = 0.98                                                 # 追趕上限的關節速度裕度（右側整合離線：右看起點＋末段快 7% 時 1.2 倍追趕使 q̇ 達 1.062 v_arm）
+
+
+def rate_cap(Ptraj, tau, T, v_arm, look=0.3):
+    """追趕上限（Codex 142637：每拍仍須 q̇＝q_τ·r ≤ v_arm）：min(R_MAX, max(1, V_MARGIN·v_arm／max|q′(τ…τ＋look)|))。
+    計畫本身在 rate 1 已滿足 v_arm（plan_joint），故下限 1 不放寬既有界；控制器與離線核對共用。"""
+    t1 = min(float(tau) + look, float(T))
+    qd = max(float(np.max(np.abs(TPA.traj_eval(Ptraj, s, 1)))) for s in np.linspace(float(tau), max(t1, float(tau)), 4))
+    if qd <= 1e-9:
+        return float(R_MAX)
+    return float(min(R_MAX, max(1.0, V_MARGIN * float(v_arm) / qd)))
+
+
 def tau_step(tau, rate, dt, sig_meas, prof, T, r_max=R_MAX, rdot_up=RDOT_UP):
     """回 (τ_new, rate_new)。prof＝(τ_k, σ_k)。
     τ_σ＝σ_nom⁻¹(σ_實測)；σ 超過剖面終點時以剖面終端速度延伸到 T 之後（τ_σ＝T＋(σ−σ_end)/v_end），使最後一拍的 rate 仍是實際進度速率。
@@ -215,7 +228,9 @@ class W1PlaceController(CJ.W1PlaceController):
         if P is not None and not P['switched'] and self.st.phase == 'CRUISE' and self.judge.stop is None and float(self.t) >= P['t_e'] - 1e-9:
             t = float(self.t)
             sm = self._sig_meas(q)
-            P['tau'], P['rate'] = tau_step(P['tau'], P['rate'], t - P['t_last'], sm, P['prof'], P['T'])
+            rc_ = rate_cap(P['P'], P['tau'], P['T'], B.W_ARM['v_arm'])
+            P['rcap_min'] = min(P.get('rcap_min', R_MAX), rc_)
+            P['tau'], P['rate'] = tau_step(P['tau'], P['rate'], t - P['t_last'], sm, P['prof'], P['T'], r_max=rc_)
             P['t_last'] = t
             qp, _, _ = self._stop_rest(np.asarray(q, float))
             sp = self._sig_of(qp[:2], P['sig_raw'])                       # 同一進度定義（不再以凍結的 sig_robot 當提示）
@@ -263,6 +278,6 @@ class W1PlaceController(CJ.W1PlaceController):
                              note='手臂相位隨底盤實測進度；τ 只進不退、速率 ≤ 計畫；τ 到 T 以同一參考、同一命令生效時刻核切換兩側：小差直接切、中差有界重接、大差受控拒絕')
             r['tpa'] = {k: v for k, v in r['tpa'].items() if k not in ('prof', 'tau_log', 'rj', 'D', 'sig_path')}
             r['tpas'].update(progress=dict(sig_raw_end=round(float(P.get('sig_raw', float('nan'))), 4), sig_phase_end=round(float(P.get('sig_phase', float('nan'))), 4),
-                                           regress_max=round(float(P.get('regress_max', 0.0)), 4), time_switch=P.get('time_switch'), r_max=R_MAX, rdot_up=RDOT_UP,
+                                           regress_max=round(float(P.get('regress_max', 0.0)), 4), time_switch=P.get('time_switch'), r_max=R_MAX, rdot_up=RDOT_UP, rcap_min=P.get('rcap_min'), v_margin=V_MARGIN,
                                            note='σ：車道段解析 σ＝x、其前取樣投影；相位用 σ_phase（只進不退），σ_raw 照實記錄；tau_log 欄＝(t, σ_phase, τ, rate, σ_raw)'))
         return r
