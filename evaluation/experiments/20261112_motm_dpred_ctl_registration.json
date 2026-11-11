@@ -1,0 +1,32 @@
+{
+ "name": "motm_dpred_left_nominal_control",
+ "registered": "2026-11-12（Codex：dpred_nom_1 結果碼 6 後核可一趟診斷對照）",
+ "scene": "左側名目（不鏡射）、無移動物；同 bottle_motm_obs_nom_3 的場景參數",
+ "s1_args": "--dyn-case none --table1-z 0.58 --bottle-dx -0.0232 --bottle-dy -0.0119 --region-offset 0.6,0.8",
+ "map_args": "--table2 2.4,-1.0",
+ "executor": "evaluation/isaac_bottle_w1dynsr45.py（dynsr44 複本，只多 W1_CTRL 選控制器）",
+ "controller": "bottle_w1_side_ctrl（右側整合鏈；不含 A0、晚降速、偏差前推）——W1_CTRL 環境變數選擇，其餘同 dpred_nom_1",
+ "cand_script": "evaluation/bottle_seg3d_candidates_dual_side_node.py",
+ "tracker": "evaluation/bottle_tracker_stamped_kfcm_clr.py",
+ "tracker_override": "min_net_speed=0.10,min_track_speed=0.12,release_track_speed=0.10",
+ "planner_yaml": "evaluation/bottle_n2_planner_sf.yaml",
+ "bottle_rtf_cap": 0.4,
+ "run_id": "bottle_motm_dpred_ctl_1",
+ "rules": "診斷對照，n=1；結果不論好壞都交回，不自行追加趟次；比較的是 A0＋晚降速＋偏差前推整包",
+ "baseline_for_compare": "bottle_motm_obs_nom_3（既有控制器，左側名目，閉爪 21.70 s、DONE 約 57 s）——不同執行端版本（dynsr43）與控制器鏈，屬系統比較",
+ "pre_checks": [
+  "results/bottle/regress_dpred/（hook 前後基線逐列相同、左右回歸相同）",
+  "results/bottle/fprof_failure_paths_r2.json",
+  "results/bottle/dpred_check_r3.json",
+  "results/bottle/dpred_realchain_r4_*.json",
+  "results/bottle/fprof_retime_ctrl_r1.json",
+  "results/bottle/xgate_dpred_{nominal,inject}_r1.json（假世界）"
+ ],
+ "known_open": [
+  "合成橫向加速 0.4 m/s² 會由 2 mm 檢查受控停止（預期行為）",
+  "假世界最大橫偏 7.1 cm（門檻 8 cm）",
+  "腕部修正可用時間縮短（距離條件內 3.76→2.28 s）",
+  "左側經 side 控制鏈＋dual_side 節點的 Isaac 首趟（右側已跑過）"
+ ],
+ "paired_with": "bottle_motm_dpred_nom_1（結果碼 6，滑移 7.18 mm）"
+}
