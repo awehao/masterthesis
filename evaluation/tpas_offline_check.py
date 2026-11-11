@@ -74,6 +74,8 @@ def stop_sweep(q9, u9, boxes, xb, yb, zs, skip_bottle=()):
 
 def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expect_reject=False):
     xb, yb, zs, yl, x_pre, x_slow, T_pre, T_g, boxes = (ctx[k] for k in ('xb', 'yb', 'zs', 'yl', 'x_pre', 'x_slow', 'T_pre', 'T_g', 'boxes'))
+    if os.environ.get('FPROF_XSLOW_BACK'):                              # 晚降速候選（Codex 20261111 第 8 輪）：降速點＝x_pre − 指定距離；煞到 v_c 由同源剖面的後向掃描決定
+        x_slow = x_pre - float(os.environ['FPROF_XSLOW_BACK'])
     lab = '' if not y_off else (f'＋橫偏 {y_off * 100:+.0f} cm' + ('（3–6 s 漸增）' if ramp else '') + ('（＋往瓶側）' if y_off > 0 else '（往離瓶側）'))
     row = dict(start=name, scenario=scen + lab, v_base0=v_b0, y_off=y_off, expect_reject=expect_reject)
 
@@ -125,6 +127,7 @@ def run_case(name, qa0, qd0, base0, v_b0, scen, ctx, y_off=0.0, ramp=None, expec
         tk_, sk_, sc_ = FC.tpas_table(tm.F, T)
         prof = (tk_, sk_)
         vf = FPm.verify(tm.F['pr'])
+        row['x_slow_back'] = round(float(x_pre - x_slow), 3)
         row['fprof'] = dict(T_base=round(tm.t_base(), 3), T_arm=round(float(T), 3), T_final=round(float(tm.F['T']), 3), tau_scale=round(sc_, 6), retime=tm.log[-1] if tm.log else None,
                             verify={k: round(float(v), 4) for k, v in vf.items()}, arc_err=round(tm.F['arc_err'], 5))
     PD = dict(P=P, T=T, base_end=np.array([x_pre, yl, 0.0]), v_c_eff=v_c_eff, T_pre=T_pre)
