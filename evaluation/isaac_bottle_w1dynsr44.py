@@ -595,7 +595,7 @@ def main():
     from isaacsim.sensors.camera import Camera
     from geometry_msgs.msg import PoseStamped
     from sensor_msgs.msg import CameraInfo, Image
-    from std_msgs.msg import Float64MultiArray
+    from std_msgs.msg import Float64MultiArray, MultiArrayDimension
     v1_boxes = [(c_, sz_) for _, c_, sz_ in T1TB] + [(OB_C, OB_S)] + [(c_ + T2D, sz_) for _, c_, sz_ in T2TB]
     v1 = V1C.V1Capture(Camera, str(b_base[0]), a.urdf, node, a.v1_hz, dt, v1_boxes, dict(Image=Image, CameraInfo=CameraInfo, PoseStamped=PoseStamped, Float64MultiArray=Float64MultiArray))
     b_eef = [b for b in bodies if str(b).rstrip('/').split('/')[-1] == 'link_eef']
@@ -674,6 +674,19 @@ def main():
         return _f(t_recv, c)
     ctrl.candidate_intake = _ci_region
     slink = SL.SegTargetLink(node, ctrl, Float64MultiArray)                    # 學習模型候選 → candidate_intake（目標唯一來源）
+    pub_side = node.create_publisher(Float64MultiArray, '/bottle/grasp_side', 10)   # dynsr44：控制端抓取側 → 候選節點（可達檢查用同一側）
+    side_pub = dict(last=None, t_last=-1e9, ver=0)
+
+    def publish_side(t_task):
+        c_ = {None: 0.0, 'left': 1.0, 'right': 2.0}[getattr(ctrl, 'grasp_side', None)]
+        if c_ != side_pub['last'] or t_task - side_pub['t_last'] >= 0.2:
+            if c_ != side_pub['last']:
+                side_pub['ver'] += 1
+            m_ = Float64MultiArray()
+            m_.layout.dim = [MultiArrayDimension(label='bottle_grasp_side schema=1 side=0 none,1 left,2 right fields=t_ros,side,ver', size=3, stride=3)]
+            m_.data = [float(T0 + t_task) if T0 is not None else float(t_task), c_, float(side_pub['ver'])]
+            pub_side.publish(m_)
+            side_pub.update(last=c_, t_last=float(t_task))
     glink = GL.GuideLink(node, ctrl, Float64MultiArray, region_offset=RO)       # dynsr43：導引候選（xy、來源）→ guide_intake（觀察觸發、車道）
 
     def hs_state():
@@ -727,8 +740,12 @@ def main():
 
     def _lane_planner(obs, t_task, sig_robot, d_stop, y_reach=None):                 # dynsr43：y_reach＝(d) 站位選擇結果（None＝名目）
         g = pr.grid
+        side_ = getattr(ctrl, 'grasp_side', None)                            # dynsr44：車道側別＝控制器量測選側（未選側不建車道）
+        if side_ is None:
+            print('[s1] 目標專屬車道 拒絕：grasp_side_unknown', flush=True)
+            return dict(ok=False, why='grasp_side_unknown')
         r = TLN.decide(obs, t_task, W1ON.OBS_FRESH_S, ctrl.path, sig_robot, None, d_stop, float(ctrl.win[0]) - float(ctrl.x_nom), g,
-                       None if g is None else float(g.stamp) - T0, y_tube=C2.B.Y_TUBE, y_reach=y_reach)
+                       None if g is None else float(g.stamp) - T0, y_tube=C2.B.Y_TUBE, y_reach=y_reach, side=side_)
         if r['ok']:
             mon.path = r['path_new']
             mprog.path, mprog.sig = r['path_new'], float(mprog.sig) + float(r['dsig0'])
@@ -790,6 +807,7 @@ def main():
         t_l = time.perf_counter()
         slink.tick(t)                                                         # 候選：任務時刻轉送
         glink.tick(t)                                                         # dynsr43：導引候選
+        publish_side(t)                                                       # dynsr44：抓取側回傳候選節點
         link_ms.append((time.perf_counter() - t_l) * 1e3)
         # 接觸
         Mf = read_pairs(v_finger, n_filters, dt)

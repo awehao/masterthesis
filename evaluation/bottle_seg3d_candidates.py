@@ -104,11 +104,22 @@ def reach_check(cand, q_seed, iters=150):
     import bottle_s0_ctrl as C
     import bottle_s1_geom as G
     cx, cy = cand['center']
-    T = C.grasp_target(cx, cy, cand['z_grasp'])
+    side = cand.get('side', 'left')                                      # 右側整合：控制端回傳的抓取側（未給＝左，舊行為逐元素相同）
+    if side == 'left':
+        T = C.grasp_target(cx, cy, cand['z_grasp'])
+    else:
+        import bottle_side as BSD
+        T = BSD.grasp_target(cx, cy, cand['z_grasp'], side)
+    dy_base = BASE_DY if side == 'left' else -BASE_DY
     res = []
     for dx in BASE_DX:
-        base = np.array([cx + dx, cy + BASE_DY, 0.0])
-        ok, _, qa, pe, re, marg = RS.ik(base, T, [np.asarray(q_seed, float)], iters=iters)
+        base = np.array([cx + dx, cy + dy_base, 0.0])
+        seeds_ = [np.asarray(q_seed, float)]
+        if side != 'left':
+            sm_ = np.asarray(q_seed, float).copy()
+            sm_[0] = -sm_[0]
+            seeds_ = [sm_] + seeds_                                       # 右側：多一個 q1 取反的 IK 起點（只是種子，可行性仍由 IK 與餘裕判定）
+        ok, _, qa, pe, re, marg = RS.ik(base, T, seeds_, iters=iters)
         if not ok or marg < 0.05:
             res.append(dict(dx=dx, ik=False, margin=float(marg), local_clear=None))
             continue
@@ -121,7 +132,7 @@ def reach_check(cand, q_seed, iters=150):
     loc_ok = [x for x in ik_ok if x['local_clear'] is not None and x['local_clear'] >= CLEAR_SUP]
     return dict(ik_state='ok' if ik_ok else 'fail', local_clear_state='ok' if loc_ok else ('fail' if ik_ok else 'n/a'),
                 local_clear_min=max((x['local_clear'] for x in ik_ok), default=None), per_base=res,
-                scope='假設底盤位置下的抓持終點 IK＋瓶心 0.10 m 內局部點檢查；不含底盤可達、預抓／插入／抬升路徑、自碰、完整環境碰撞')
+                scope='假設底盤位置下的抓持終點 IK＋瓶心 0.10 m 內局部點檢查；不含底盤可達、預抓／插入／抬升路徑、自碰、完整環境碰撞', side=side)
 
 
 def cand_id(c):

@@ -66,6 +66,16 @@ class GuideLink:
                     continue
                 g.update(xy=[float(r['cx']) - float(self.O[0]), float(r['cy']) - float(self.O[1])], t_last=float(r['t_last']) - self.T0,
                          age_s=float(now_ros - r['t_last']), n=int(r['n']))
+            for k_ in ('chk_side', 'chk_side_seq0'):                           # 右側整合版節點的額外欄位（選填；非法碼整筆拒收）
+                if k_ in r:
+                    v_ = _code(r[k_], (0, 1, 2)) if k_ == 'chk_side' else (int(round(r[k_])) if np.isfinite(r[k_]) and r[k_] >= 0 else None)
+                    if v_ is None:
+                        g = None
+                        break
+                    g[k_] = v_
+            if g is None:
+                self._bad('extra')
+                continue
             self.last_eval = te
             self.n_fwd += 1
             if len(self.log) < 400:

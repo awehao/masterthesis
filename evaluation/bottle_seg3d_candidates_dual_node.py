@@ -51,6 +51,13 @@ class DualCandNode(CN.CandNode):
             return ev
         self.tr.evaluate = gated
 
+    def _guide_fields(self):
+        """導引訊息欄位與標籤（hook；右側版子類加欄位）。"""
+        return GFIELDS, GLABEL
+
+    def _guide_extra(self):
+        return {}
+
     def _parse(self, m):
         if not m.layout.dim or 'fields=' not in m.layout.dim[0].label:
             return None
@@ -91,9 +98,11 @@ class DualCandNode(CN.CandNode):
                    cx=nan if u is None else u['center'][0], cy=nan if u is None else u['center'][1], t_first=nan if u is None else u['t_first'],
                    t_last=nan if u is None else u['t_last'], age_s=nan if u is None else u['age_s'], n=0.0 if u is None else float(u['n']),
                    grasp_cam=CAM[None if g is None else g['camera_id']], grasp_state=GSTATE.get(res['grasp_state'], -1.0), reject=1.0 if res.get('reject') else 0.0, schema=1.0)
+        row.update(self._guide_extra())
+        gf, gl = self._guide_fields()
         out = Float64MultiArray()
-        out.layout.dim = [MultiArrayDimension(label=GLABEL, size=len(GFIELDS), stride=len(GFIELDS))]
-        out.data = [float(row[f]) for f in GFIELDS]
+        out.layout.dim = [MultiArrayDimension(label=gl, size=len(gf), stride=len(gf))]
+        out.data = [float(row[f]) for f in gf]
         self.pub_guide.publish(out)
         self._write(dict(kind='dual', t_eval=now, cam=cam, accepted=acc, stamp=r.get('stamp'), recv_age_s=r.get('recv_age_s'), guide_state=res['guide_state'], grasp_state=res['grasp_state'],
                          guide=None if u is None else dict(cam=u['camera_id'], cx=u['center'][0], cy=u['center'][1], age_s=u['age_s']),
