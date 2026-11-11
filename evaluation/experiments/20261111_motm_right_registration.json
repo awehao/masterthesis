@@ -1,0 +1,40 @@
+{
+ "name": "motm_right_side_nominal_r1",
+ "registered": "2026-11-11（Howard reviews/20261111_howard_smooth_motion_and_right_side.md B；Codex 161442／163931：整合＋前置核對＋不動作接線通過後凍結，跑右側名目一趟，不必再送設計確認）",
+ "scene": "整場景對世界 y＝0 鏡射（dynsr44 --mirror-y）：第一桌、瓶、第二桌、放置目標與放置車道、起點、出口、地圖同乘 M；車頭沿路徑 +x。指定右側場景驗證，不是任意左右泛化證據",
+ "bottle_dx": -0.0232,
+ "bottle_dy": -0.0119,
+ "table1_z": 0.58,
+ "region_offset_args": [
+  0.6,
+  0.8
+ ],
+ "region_offset_world_after_mirror": [
+  0.6,
+  -0.8
+ ],
+ "map_args": "--table2 2.4,-1.0（地圖寫入另由 S1_ARGS 的 --mirror-y 鏡射）",
+ "executor": "evaluation/isaac_bottle_w1dynsr44.py --mirror-y",
+ "cand_script": "evaluation/bottle_seg3d_candidates_dual_side_node.py（等控制端回傳抓取側才建快照與可達檢查）",
+ "controller": "bottle_w1_side_ctrl（量測選側＋側別綁定；站位／車道／抓取計畫／抓取目標／收近點依抓取側；第一桌與觀看點讀區域先驗；放置側由放置幾何）→ bottle_w1_obs_ctrl 整合鏈（雙相機觀察、站位、車頭沿路徑、TPAS 有界追趕＋關節速度界、有效期重新驗證）",
+ "tracker": "evaluation/bottle_tracker_stamped_kfcm_clr.py",
+ "tracker_override": "min_net_speed=0.10,min_track_speed=0.12,release_track_speed=0.10",
+ "planner_yaml": "evaluation/bottle_n2_planner_sf.yaml",
+ "bottle_rtf_cap": 0.4,
+ "speeds": "現行設定不變（不混入流暢度 A0）",
+ "case": "--dyn-case none（右側名目；不自動追加動態趟）",
+ "run_id": "bottle_motm_right_nom_1",
+ "rules": "失敗保留、不熱改、不補跑，先交第一阻點；交同 RUN_ID 的 Isaac 實錄重播＋2D 追蹤疊圖；結果分流程完成與抓持品質；n＝1 不報成功率",
+ "pre_checks": [
+  "results/bottle/right_side_check_r1.json",
+  "results/bottle/tpas_offline_right_r2.json",
+  "results/bottle/motm_right_wiring_r1.json",
+  "左側回歸：obs_ctrl_counterexamples_r5、tpas_progress_counterexample_r4、seg_validity_chain_regression_r2、tpas_catchup_check_r2、test_bottle_tlane 15/15"
+ ],
+ "known_items": [
+  "右側收近段自碰撞最小 2.4 mm（左 9.2 mm；判準 ≥ 0）",
+  "插入段夾爪殼對瓶 3 mm（左側既有離線結果相同）",
+  "追趕上限加關節速度界（本包新增，左右共用）"
+ ],
+ "freeze": "experiments/20261111_motm_right_freeze_r1.sha256"
+}

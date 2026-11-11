@@ -105,7 +105,12 @@ def main():
     T, B, PH = S['table'], S['bottle'], S['physics']
     T2 = dict(T)                                                             # 第二桌：資產高度
     T = dict(T, top_z=float(rep.get('table1_z', T['top_z'])))                 # 第一桌：來源趟的 table1_z
-    RO = np.array(list((rep.get('region') or {}).get('offset', [0.0, 0.0])) + [0.0], float)   # 第一桌世界平移（R-B1）
+    RO = np.array(list((rep.get('region') or {}).get('offset', [0.0, 0.0])) + [0.0], float)   # 第一桌世界平移（R-B1；dynsr44 已是鏡射後偏移）
+    MY = -1.0 if (rep.get('mirror') or {}).get('mirror_y') else 1.0            # dynsr44 整場景鏡射（世界 y＝0）；舊紀錄無此欄＝不鏡射
+    MIR = np.array([1.0, MY, 1.0])
+
+    def mir(v):
+        return np.asarray(v, float) * MIR
     print(f"[rp] 區域偏移 {RO[:2].tolist()}", flush=True)
     print(f"[rp] 第一桌 {T['top_z']:.3f} m、第二桌 {T2['top_z']:.3f} m", flush=True)
     dt = float(PH['dt'])
@@ -119,13 +124,13 @@ def main():
     from omni.physx import get_physx_interface
     from pxr import Gf, UsdGeom, UsdLux
     # 場景（同 isaac_bottle_s1.py）
-    FixedCuboid(prim_path='/World/table/top', name='table_top', position=np.array([0.0, T['near_y'] + T['size_y'] / 2, T['top_z'] - T['thick'] / 2]) + RO,
+    FixedCuboid(prim_path='/World/table/top', name='table_top', position=mir([0.0, T['near_y'] + T['size_y'] / 2, T['top_z'] - T['thick'] / 2]) + RO,
                 scale=np.array([T['size_x'], T['size_y'], T['thick']]), color=np.array([0.55, 0.42, 0.30]))
     hz = T['top_z'] - T['thick']
     for sx in (-1, 1):
         lx = sx * (T['size_x'] / 2 - T['leg_inset_x'] - T['leg'] / 2)
         for nm, ly in (('near', T['near_y'] + T['leg_inset_near'] + T['leg'] / 2), ('far', T['near_y'] + T['size_y'] - T['leg_inset_far'] - T['leg'] / 2)):
-            FixedCuboid(prim_path=f'/World/table/leg_{nm}_{"p" if sx > 0 else "m"}', name=f'leg_{nm}_{sx}', position=np.array([lx, ly, hz / 2]) + RO,
+            FixedCuboid(prim_path=f'/World/table/leg_{nm}_{"p" if sx > 0 else "m"}', name=f'leg_{nm}_{sx}', position=mir([lx, ly, hz / 2]) + RO,
                         scale=np.array([T['leg'], T['leg'], hz]), color=np.array([0.4, 0.3, 0.2]))
     ob = rep['obstacle']
     FixedCuboid(prim_path='/World/obstacle', name='obstacle', position=np.array(ob['c']), scale=np.array(ob['sz']), color=np.array([0.7, 0.25, 0.2]))
@@ -136,7 +141,7 @@ def main():
         s_ = box_of(rb['s2_box'])
         FixedCuboid(prim_path='/World/s2_box', name='s2_box', position=s_[0], scale=s_[1], color=np.array([0.2, 0.7, 0.3]))
     pt = rb.get('perturb') or dict(bottle_dx=0.0, bottle_dy=0.0, x_start=rb['base'][0], y_start=rb['base'][1], yaw_start_deg=math.degrees(rb['base'][2]))   # 舊版紀錄無此欄＝名目
-    bx0, by0 = float(B['center_xy'][0]) + pt['bottle_dx'] + RO[0], float(B['center_xy'][1]) + pt['bottle_dy'] + RO[1]
+    bx0, by0 = float(B['center_xy'][0]) + pt['bottle_dx'] + RO[0], MY * (float(B['center_xy'][1]) + pt['bottle_dy']) + RO[1]
     CA = (rep.get('dyn') or {}).get('case')
     dyn = None
     if CA:                                                                # 移動物：只擺位（讀回世界位置），無物理推進
@@ -145,21 +150,21 @@ def main():
     bottle = DynamicCylinder(prim_path='/World/bottle', name='bottle', position=np.array([bx0, by0, T['top_z'] + B['height'] / 2]),
                              radius=B['radius'], height=B['height'], mass=B['mass'], color=np.array([0.2, 0.6, 0.9]))
     import bottle_place_ctrl as PCm                                      # 第二桌：同 isaac_bottle_place（位移＝放置點 x − 名目瓶 x、lane_y）
-    T2D = np.array([PCm.PLACE['target'][0] - float(B['center_xy'][0]), PCm.PLACE['lane_y'], 0.0])
+    T2D = mir([PCm.PLACE['target'][0] - float(B['center_xy'][0]), PCm.PLACE['lane_y'], 0.0])
     T = T2                                                                   # 以下第二桌用資產高度
     hz = T['top_z'] - T['thick']
-    FixedCuboid(prim_path='/World/table2/top', name='table2_top', position=np.array([0.0, T['near_y'] + T['size_y'] / 2, T['top_z'] - T['thick'] / 2]) + T2D,
+    FixedCuboid(prim_path='/World/table2/top', name='table2_top', position=mir([0.0, T['near_y'] + T['size_y'] / 2, T['top_z'] - T['thick'] / 2]) + T2D,
                 scale=np.array([T['size_x'], T['size_y'], T['thick']]), color=np.array([0.45, 0.50, 0.62]))
     for sx in (-1, 1):
         lx = sx * (T['size_x'] / 2 - T['leg_inset_x'] - T['leg'] / 2)
         for nm, ly in (('near', T['near_y'] + T['leg_inset_near'] + T['leg'] / 2), ('far', T['near_y'] + T['size_y'] - T['leg_inset_far'] - T['leg'] / 2)):
-            FixedCuboid(prim_path=f'/World/table2/leg_{nm}_{"p" if sx > 0 else "m"}', name=f'leg2_{nm}_{sx}', position=np.array([lx, ly, hz / 2]) + T2D,
+            FixedCuboid(prim_path=f'/World/table2/leg_{nm}_{"p" if sx > 0 else "m"}', name=f'leg2_{nm}_{sx}', position=mir([lx, ly, hz / 2]) + T2D,
                         scale=np.array([T['leg'], T['leg'], hz]), color=np.array([0.35, 0.38, 0.45]))
     import_urdf(a.urdf, ROBOT, fix_base=False)
     xf = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT))
     xf.ClearXformOpOrder()
-    xf.AddTranslateOp().Set(Gf.Vec3d(float(pt['x_start']), float(pt['y_start']), 0.0))
-    xf.AddRotateZOp().Set(float(pt['yaw_start_deg']))
+    xf.AddTranslateOp().Set(Gf.Vec3d(float(pt['x_start']), float(MY * pt['y_start']), 0.0))
+    xf.AddRotateZOp().Set(float(MY * pt['yaw_start_deg']))
     apply_split(stage, ROBOT)
     k_ = UsdLux.DistantLight.Define(stage, '/World/key')
     k_.CreateIntensityAttr(3000.0)
