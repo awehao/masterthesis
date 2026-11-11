@@ -23,6 +23,7 @@ import wb_wheel_limit as WL
 
 N, DT = B.N, B.DT
 DS = 0.01
+SIG0_TOL = 1e-4                                                  # TPA 定時與 TPAS 表起點容許差（m；同一算式應為 0，留浮點餘量）
 RETIME_TOL = 0.01                                                # 共同定時的到位時間容許殘差（s；二分法 30 次的數值殘差量級，非放寬）
 
 
@@ -178,7 +179,7 @@ class W1PlaceController(SC.W1PlaceController):
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
-        self.fp, self._fp_key, self.fp_log, self._fp_timing = None, None, [], None
+        self.fp, self._fp_key, self.fp_log, self._fp_timing, self._fp_sig_e, self.rj_hold = None, None, [], None, None, None
         c = WL.WheelLimitConfig()
         self.fp_cfg = dict(wheel_radius=c.wheel_radius, wheel_base_L=c.wheel_base_L, wheel_w_max=c.wheel_w_max, cap=c.wheel_radius * c.wheel_w_max, margin=FP.MARGIN,
                            w_max=HD.W_MAX, alpha_max=HD.ALPHA_MAX, a=S1.A_SLEW)
@@ -228,6 +229,26 @@ class W1PlaceController(SC.W1PlaceController):
         X_ref = np.array([from_xytheta(float(a), float(b), float(c)) for a, b, c in pose])
         return X_ref, xi
 
+    # ---- 段間連續性契約：重接（rejoin）插值只在 PREGRASP 生效；量測一進 tol_pre 就會被 step_phase 推進 INSERT，
+    #      插值尚未走完 ⇒ 參考由「重接途中」跳到 INSERT 的 T_pre 起點（假世界短跑：重接 0.984 s，0.70 s 就進 INSERT）。
+    #      本版：重接時間未到之前不放行 PREGRASP→INSERT（暫時收緊 tol_pre；其他相位不受影響）。
+    def _advance_inner(self, T_tcp, close_done, q):
+        P = self.tpa
+        rj = None if P is None else P.get('rj')
+        hold = bool(rj is not None and self.st.phase == 'PREGRASP' and float(self.t) < float(rj['t0']) + float(rj['T']) - 1e-9)
+        if not hold:
+            return super()._advance_inner(T_tcp, close_done, q)
+        tol0 = self.task.tol_pre
+        if self.rj_hold is None:
+            self.rj_hold = dict(t0=round(float(self.t), 3), t_end=round(float(rj['t0']) + float(rj['T']), 3), n=0)
+            self._ev('rejoin_hold', t_end=self.rj_hold['t_end'])
+        self.rj_hold['n'] += 1
+        self.task.tol_pre = (-1.0, -1.0)
+        try:
+            return super()._advance_inner(T_tcp, close_done, q)
+        finally:
+            self.task.tol_pre = tol0
+
     # ---- 使用點 4：站位時間成本
     def _standoff_t_base(self, path_new, sig, x_pre_c):
         th0 = float(self.hd.yaw(float(self.s_ref))) if self.hd is not None else float(self._yaw_meas)
@@ -240,6 +261,8 @@ class W1PlaceController(SC.W1PlaceController):
     # ---- 使用點 5：TPA 時長與 TPAS 進度表
     def _tpa_timing(self, sig_e):
         self._ensure_nav_hd()
+        if self._fp_sig_e is not None:                                          # 與 TPAS 進度表同一起點（_tpa_start 以同一量測、同一投影 _sig_of 先算好）；不用父類的 sig_robot 起點
+            sig_e = self._fp_sig_e
         tm = Timing(self.path, self.hd, float(sig_e), float(self.v_b), float(self.x_pre), float(self.x_slow), float(self.v_nav), float(self.v_c))
         if not tm.ok():
             self.fp_log.append(dict(t=round(float(self.t), 3), what='tpa', ok=False, why=tm.F0.get('why')))
@@ -251,6 +274,10 @@ class W1PlaceController(SC.W1PlaceController):
 
     def _tpa_start(self, q):
         self._fp_timing = None
+        import bottle_s0_ctrl as C0
+        # 起點契約：TPA 定時與 TPAS 進度表都用「同一量測位置經 _sig_of 投影的進度＋在途延遲內以當下參考速度前進」；
+        # 原本 TPA 用 sig_robot、TPAS 用 _sig_of（假世界短跑差 13.3 mm），再把整張表平移 ⇒ 連 x_pre 終點一起移動。
+        self._fp_sig_e = float(self._sig_of(np.asarray(q, float)[:2], float(getattr(self, 'sig_robot', q[0])))) + float(self.v_b) * C0.D_STEPS * C0.PHYS
         super()._tpa_start(q)
         tm, P = self._fp_timing, self.tpa
         if P is None or tm is None or self.judge.stop is not None:
@@ -274,11 +301,15 @@ class W1PlaceController(SC.W1PlaceController):
             if self.judge.stop is None:
                 self.judge._stop(self.t, 'fprof_infeasible', reason='tpas_table_T_mismatch', where='tpas', scale=round(float(scale), 4))
             return super()._tpas_prof(sig_e, P)                                 # 已停止；回傳只為讓父類流程不崩，結果不會被執行
-        P['fprof'] = dict(tau_scale=round(scale, 6), sig0_plan=round(float(tm.a[2]), 4), sig0_tpas=round(float(sig_e), 4))
-        return tk, sk + (float(sig_e) - float(tm.a[2]))                       # 同一進度定義下的起點對齊（_sig_of 與 sig_robot 的差；記錄）
+        d0 = float(sig_e) - float(tm.a[2])
+        P['fprof'] = dict(tau_scale=round(scale, 6), sig0_plan=round(float(tm.a[2]), 5), sig0_tpas=round(float(sig_e), 5), d_sig0=round(d0, 6), sig_end=round(float(sk[-1]), 5))
+        if abs(d0) > SIG0_TOL:                                                  # 起點不一致 ⇒ 受控停止；不平移整張表（會移動 x_pre 終點）
+            if self.judge.stop is None:
+                self.judge._stop(self.t, 'fprof_infeasible', reason='sig_origin_mismatch', where='tpas', d_sig0=round(d0, 5))
+        return tk, sk                                                           # 表的終點＝x_pre，不動
 
     def report(self):
         r = super().report()
-        r['fprof'] = dict(cfg=self.fp_cfg, log=self.fp_log, tpa=(self.tpa or {}).get('fprof') if self.tpa else None,
+        r['fprof'] = dict(cfg=self.fp_cfg, log=self.fp_log, rejoin_hold=self.rj_hold, tpa=(self.tpa or {}).get('fprof') if self.tpa else None,
                           note='導航接近段參考速度、MPC 預覽、站位時間成本、TPA 時長、TPAS 進度表共用同一份輪級可行剖面；margin 為固定工程餘裕，非已辨識的追蹤誤差界')
         return r

@@ -57,7 +57,7 @@ def ctrl(path, hd, s_ref, v_b, x_pre, x_slow):
     o._ev = lambda w, **k: o.events.append((w, k))
     o.path, o._hd_path, o.hd = path, path, hd
     o.s_ref, o.sig_robot, o.v_b, o.x_pre, o.x_slow, o.v_nav, o.v_c = s_ref, s_ref, v_b, x_pre, x_slow, 0.35, 0.10
-    o.tpa, o.fp, o._fp_key, o.fp_log, o._fp_timing, o.tlane = None, None, None, [], None, None
+    o.tpa, o.fp, o._fp_key, o.fp_log, o._fp_timing, o.tlane, o._fp_sig_e, o.rj_hold = None, None, None, [], None, None, None, None
     o._yaw_meas = 0.0
     return o
 
@@ -157,6 +157,60 @@ def main():
         chk('2c 只有一個有限 ⇒ 選它', best3 is not None and np.isfinite(best3['cost']), [(c_['y_reach'], c_.get('cost')) for c_ in costs3])
     finally:
         C._standoff_t_base = C_tb
+    # ---- 5 起點契約（Codex 20261111_203xxx 第 1 項）：真 _tpa_timing／_tpas_prof
+    import bottle_ref as BR
+    o = ctrl(P, hd, 1.0, 0.2, 3.0, 2.4)
+    o._fp_sig_e = 1.0133
+    tm5 = C._tpa_timing(o, 1.0)                                          # 父類傳入的 sig_robot 起點 1.0 被同一起點 1.0133 取代
+    Pd = dict(T=tm5.t_base(), v_nav_eff=0.35, v_c_eff=0.10)
+    tk5, sk5 = C._tpas_prof(o, 1.0133, Pd)
+    chk('5a 同一起點：表起點＝定時起點、終點＝x_pre、不停止', abs(tm5.a[2] - 1.0133) < 1e-12 and abs(sk5[0] - 1.0133) < 1e-9 and abs(sk5[-1] - 3.0) < 1e-9 and o.judge.stop is None,
+        dict(sig0=float(sk5[0]), sig_end=float(sk5[-1]), fprof=Pd.get('fprof')))
+    o2 = ctrl(P, hd, 1.0, 0.2, 3.0, 2.4)
+    o2._fp_timing = tm5
+    tk6, sk6 = C._tpas_prof(o2, 1.0, dict(T=tm5.t_base(), v_nav_eff=0.35, v_c_eff=0.10))   # 起點不一致（差 13.3 mm）
+    chk('5b 起點不一致 ⇒ 受控停止、表不平移（終點仍 x_pre）', why(o2) == 'fprof_infeasible' and o2.judge.stop.get('reason') == 'sig_origin_mismatch' and abs(sk6[-1] - 3.0) < 1e-9, o2.judge.stop)
+    # ---- 6 重接完成前不進 INSERT：真 fprof._advance_inner＋真 BR.step_phase（父鏈以只跑 step_phase 的樁取代）
+    nxt = [k for k in C.__mro__[1:] if '_advance_inner' in k.__dict__][0]
+    orig = nxt.__dict__['_advance_inner']
+
+    def stub_adv(self, T_tcp, close_done, q):
+        BR.step_phase(self.task, self.st, self.t, T_tcp, False, close_done)
+    T_pre = np.eye(4)
+    T_pre[:3, 3] = [0.5, 0.3, 0.7]
+    setattr(nxt, '_advance_inner', stub_adv)
+    try:
+        def mk6(with_fix):
+            o6 = ctrl(P, hd, 2.9, 0.1, 3.0, 2.4)
+            o6.task = BR.BottleTask(T_pre=T_pre, T_grasp=T_pre, T_ready_rel=np.eye(4)) if False else None
+            return o6
+        import types
+        phases = {}
+        for label, meth in (('fix', C._advance_inner), ('nofix', stub_adv)):
+            o6 = ctrl(P, hd, 2.9, 0.1, 3.0, 2.4)
+            o6.task = types.SimpleNamespace(T_pre=T_pre, T_grasp=T_pre, tol_pre=(0.02, 0.2), tol_ins=(0.01, 0.1), t_insert=1.0)
+            o6.st = BR.PhaseState()
+            o6.st.phase, o6.st.t_pre, o6.st.t_phase = 'PREGRASP', 10.0, 10.0
+            o6.tpa = dict(rj=dict(t0=10.07, T=0.984, T_from=T_pre))
+            o6.rj_hold = None
+            T_meas = T_pre.copy()
+            T_meas[0, 3] += 0.012                                         # 量測已在 tol_pre 內（12 mm）
+            log = []
+            for k in range(25):
+                o6.t = 10.0 + 0.05 * k
+                meth(o6, T_meas, False, np.zeros(9))
+                log.append((round(o6.t, 2), o6.st.phase))
+            phases[label] = next((t_ for t_, ph_ in log if ph_ == 'INSERT'), None)
+            if label == 'fix':
+                tol_restored = o6.task.tol_pre == (0.02, 0.2)
+                hold = o6.rj_hold
+        chk('6a 未修：重接途中即進 INSERT（缺口重現）', phases['nofix'] is not None and phases['nofix'] < 10.07 + 0.984, phases)
+        chk('6b 修正：重接時間到才進 INSERT，tol_pre 復原', phases['fix'] is not None and phases['fix'] >= 10.07 + 0.984 - 1e-9 and phases['fix'] <= 10.07 + 0.984 + 0.06 and tol_restored, dict(phases=phases, hold=hold))
+    except Exception as e:                                               # noqa: BLE001
+        import traceback
+        chk('6 重接段間契約', False, traceback.format_exc()[-400:])
+    finally:
+        setattr(nxt, '_advance_inner', orig)
     res['verdict'] = dict(ok=not FAIL, fails=FAIL)
     json.dump(res, open(sys.argv[1], 'w'), ensure_ascii=False, indent=1, default=str)
     print('判定', 'PASS' if not FAIL else 'FAIL', FAIL)

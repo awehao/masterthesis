@@ -83,6 +83,13 @@ def main():
         lane_log.append({k: v for k, v in r.items() if k != 'path_new'})
         return r
     c.lane_planner = lane_planner
+    FR = os.environ.get('FP_FORCE_REACH')                                  # 局部對照：兩版強制同一站位伸距（只留該候選列；仍經各自的成本與可行性判定）
+    if FR:
+        pick0 = c._pick_standoff
+
+        def pick(rows, g):
+            return pick0([r_ for r_ in rows if abs(float(r_['y_reach']) - float(FR)) < 1e-6], g)
+        c._pick_standoff = pick
     rng = np.random.default_rng(0)
     st = dict(next_g=0.4, next_c=0.0, seq=0, t_seq=-99.0, snap=None, wall0=None, exc=None, n_guide=0, n_cand=0)
     step0 = c.step
@@ -128,7 +135,13 @@ def main():
     out = dict(mode=MODE, exception=st['exc'], n_guide=st['n_guide'], n_cand=st['n_cand'], n_tick=len(TICK), lane=lane_log[-1:] if lane_log else None)
     if r is not None:
         ev = r['events']
-        out.update(stop=r['stop'], t_close_req=c.t_close_req, side=(r.get('side') or {}).get('grasp_side'), fprof=r.get('fprof'),
+        ph_t = {}
+        for e in ev:
+            if e['what'] == 'phase':
+                ph_t.setdefault(e['to'], e['t'])
+        out.update(force_reach=os.environ.get('FP_FORCE_REACH'), phase_t=ph_t, rejoin=(r.get('tpas') or {}).get('rejoin'), y_reach=(lane_log[-1] if lane_log else {}).get('y_reach'),
+                   tpa_fprof=(r.get('fprof') or {}).get('tpa'), rejoin_hold=(r.get('fprof') or {}).get('rejoin_hold'),
+                   stop=r['stop'], t_close_req=c.t_close_req, side=(r.get('side') or {}).get('grasp_side'), fprof=r.get('fprof'),
                    tpa={k: (r.get('tpa') or {}).get(k) for k in ('t_e', 'T', 't_base', 't_arrive', 'v_nav_eff', 'v_c_eff', 'replan', 'switched')} if r.get('tpa') else None,
                    tpas_sw=(r.get('tpas') or {}).get('sw'), events=[dict(t=e['t'], what=e['what'], **{k: e[k] for k in ('to', 'why', 'reason', 'where', 'kind', 'ph') if k in e}) for e in ev
                                                                     if e['what'] in ('grasp_side', 'standoff_result', 'tlane_accept', 'side_check', 'heading_ref', 'tpa_start', 'tpas_profile', 'tpa_switch',
