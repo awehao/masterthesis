@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """開門執行層的**幾何耦合測試＋反算力矩紀錄**（不是動力學驗證；無接觸物理、無 Isaac）。
+r2：綁定／解除分開建模——綁定中門角＝機器人把手點方位反算；執行器收到 request_unbind 後在下一物理步前解除並 confirm_unbind，
+之後門角是**獨立狀態**（ω̇＝−d·ω，d＝2.0 1/s 的簡化阻尼，限位 0–110°；手指視為立即張開——假設，Isaac 量實際）。力只能注入（假世界無力）。
 假受控對象：底盤積分管線送出的本體速度（×v_scale）；手臂 q⁺＝q＋α·a_scale·(s−q＋d)。
 門角＝由**實測機器人構型**的把手點方位角反算（理想綁定下末端帶著把手走）；不把機器人構型投影回閉鏈——徑向／高度／姿態的閉鏈殘差照量（在物理裡它會變成連接內應力）。
 反算鉸鏈力矩 τ＝I·(φ̈＋d·φ̇)，I＝m·L²/3（8 kg、0.95 m）、d＝2.0 1/s（PhysX 剛體角阻尼語意：ω̇＝−d·ω；不是鉸鏈黏滯係數）——只作紀錄。
@@ -26,6 +28,7 @@ PHI_GOAL = math.radians(85.0)
 D_TRUE = np.array([0.0004, 0.0105, -0.0097, -0.0010, 0.0004, -0.0002])   # smoke_3 量到的靜態偏置量級
 FINGER_Q = 0.00173                                                 # smoke_3 兩指實測閉合開度（1.72／1.74 mm）
 I_LEAF, D_ANG = 8.0 * 0.95 ** 2 / 3.0, 2.0
+I_DAMP = 2.0                                                       # 解除後門的簡化阻尼（1/s）
 
 
 def bind_state(kind):
@@ -68,30 +71,57 @@ class Fake:
         self.c, self.q, self.t = c, np.asarray(q0, float).copy(), 0.0
         self.alpha, self.v_scale = np.asarray(c.cfg.arm_model.alpha, float) * a_scale, v_scale
         self.log, self.after_stop = [], dict(min={k: np.inf for k in X.KEYS}, closure_pos=0.0, closure_rot=0.0, n=0)
-        self.phi_hist = []
+        self.phi_hist, self.bound, self.phi_free, self.omega_free, self.force_fn = [], True, None, 0.0, None
+        self.unbind_info, self.after_release = None, dict(min={k: np.inf for k in X.KEYS}, n=0, door_sweep_deg=0.0)
+        self.s_prev = c.s.copy()
+
+    def door(self):
+        if self.bound:
+            return self.c.phi_of(self.q)
+        return self.phi_free, None
 
     def one(self):
         c = self.c
-        phi, pH = c.phi_of(self.q)
-        out = c.step(self.t, self.q.copy(), phi)
+        phi, pH = self.door()
+        force = None if self.force_fn is None else self.force_fn(self)
+        out = c.step(self.t, self.q.copy(), phi, force)
+        if out['request_unbind'] and self.bound:                    # 執行器：下一物理步前解除並讀回確認
+            om = (phi - self.phi_hist[-1]) / PHYS if self.phi_hist else 0.0
+            self.bound, self.phi_free, self.omega_free = False, float(phi), float(om)
+            self.unbind_info = dict(t=round(self.t, 3), phi_deg=round(math.degrees(phi), 3), omega_dps=round(math.degrees(om), 3))
+            self.phi_rel0 = float(phi)
+            c.confirm_unbind(True, detail=self.unbind_info)
         cs, sn = math.cos(self.q[2]), math.sin(self.q[2])
         vx, vy, wz = out['base_twist'] * self.v_scale
         self.q[:3] += PHYS * np.array([cs * vx - sn * vy, sn * vx + cs * vy, wz])
         self.q[3:] = self.q[3:] + self.alpha * (out['arm_target'] - self.q[3:] + D_TRUE)
+        if not self.bound:
+            self.omega_free *= math.exp(-I_DAMP * PHYS)
+            self.phi_free = min(max(self.phi_free + self.omega_free * PHYS, 0.0), math.radians(110.0))
         self.t += PHYS
         self.phi_hist.append(phi)
+        s_rate = float(np.abs(out['arm_target'] - self.s_prev).max()) / PHYS
+        self.s_prev = out['arm_target'].copy()
         if c.n_step % NPH == 0:
-            r_dev, z_dev = float(np.hypot(pH[0], pH[1])) - c.r_handle, float(pH[2]) - c.z_handle
-            self.log.append([self.t, phi, r_dev, z_dev, *self.q[:3], *out['base_twist'], float(out['stopped'])])
+            phi2, pH2 = self.door()
+            r_dev = float(np.hypot(pH2[0], pH2[1])) - c.r_handle if pH2 is not None else float('nan')
+            z_dev = float(pH2[2]) - c.z_handle if pH2 is not None else float('nan')
+            self.log.append([self.t, phi2, r_dev, z_dev, *self.q[:3], *out['base_twist'], float(out['stopped']), s_rate, float(self.bound)])
             if out['stopped']:
-                phi2, _ = c.phi_of(self.q)
                 cl = W.clear_door(np.r_[self.q, phi2], c.T_WH_bind)
-                ep, er = c.closure_at(self.q, phi2)
                 a = self.after_stop
                 a['n'] += 1
-                a['closure_pos'], a['closure_rot'] = max(a['closure_pos'], ep), max(a['closure_rot'], er)
                 for k in X.KEYS:
                     a['min'][k] = min(a['min'][k], cl[k])
+                if self.bound:
+                    ep, er = c.closure_at(self.q, phi2)
+                    a['closure_pos'], a['closure_rot'] = max(a['closure_pos'], ep), max(a['closure_rot'], er)
+                else:
+                    b = self.after_release
+                    b['n'] += 1
+                    b['door_sweep_deg'] = max(b['door_sweep_deg'], abs(math.degrees(phi2 - self.phi_rel0)))
+                    for k in X.KEYS:
+                        b['min'][k] = min(b['min'][k], cl[k])
         return out
 
     def run(self, t_end=40.0, hook=None):
@@ -117,7 +147,7 @@ def run_case(case, plan, out):
     s0 = q0[3:] - D_TRUE                                            # 穩態：q＝s＋d ⇒ 設定點≠實測
     pipe = [np.zeros(9) for _ in range(D_STEPS)]
     u_last = np.zeros(9)
-    kw, hook, expect = {}, None, 'open_done'
+    kw, expect = {}, 'open_done'
     if case == 'handover_inflight':                                 # 承接時管線裡還有非零手臂命令（未清）
         for i in range(D_STEPS):
             pipe[i][4] = 0.02 * (1 - i / D_STEPS)
@@ -128,16 +158,32 @@ def run_case(case, plan, out):
     c = X.DoorOpenExec(ident, P['Xd'], float(P['h']), P['T_WH_bind'], float(P['phi_bind']), P['T_HE'], PHI_GOAL, dict(s=s0, pipe=pipe, u_last=u_last, u_prev=u_last.copy(), bias=bias), FINGER_Q)
     F = Fake(c, q0, **kw)
     first_targets = []
-    if case.startswith('stop_'):
-        frac = dict(stop_front=0.08, stop_mid=0.5, stop_late=0.92)[case]
+    hook = None
+    expect_mode = 'settled'
+    if case.startswith('stop_') or case.startswith('path_then') or case == 'path_candidate_rejected':
+        frac = dict(stop_front=0.08, stop_mid=0.5, stop_late=0.92).get(case, 0.5)
         expect = 'forced_stop'
+        t_fs = [None]
 
         def hook(F_):
             if F_.c.stop is None and F_.c.sigma >= frac * F_.c.sig_end:
                 F_.c._stop('forced_stop')
+                t_fs[0] = F_.t
+        if case == 'path_then_overforce':                            # 路徑停止 0.2 s 後才出現超力
+            expect_mode = 'release'
+            F.force_fn = lambda F_: 50.0 if (t_fs[0] is not None and F_.t - t_fs[0] >= 0.2) else 5.0
+        if case == 'path_then_clearance':                            # 路徑停止 0.2 s 後實測淨空違反
+            expect_mode = 'hold'
+            c.clear_inject = lambda c_, cl: (dict(cl, env=0.003) if (t_fs[0] is not None and c_.t - t_fs[0] >= 0.2) else cl)
+        if case == 'path_candidate_rejected':                        # 路徑停止的新候選被提交前核對拒絕
+            expect_mode = 'hold'
+            c.sweep_inject = lambda c_, tag: (dict(tag=tag, injected=True) if tag == 'path_candidate' and t_fs[0] is not None else None)
     if case == 'solver_fail_mid':
-        expect = 'solver_fail'
+        expect, expect_mode = 'solver_fail', 'hold'
         c.fail_inject = lambda t: c.sigma >= 0.5 * c.sig_end
+    if case == 'overforce_mid':
+        expect, expect_mode = 'overforce', 'release'
+        F.force_fn = lambda F_: 50.0 if F_.c.sigma >= 0.5 * F_.c.sig_end else 5.0
     if case == 'door_blocked':                                      # 門卡住（假對象把手臂／底盤照走，但回報的門角停在 30°）——進度調節應停住等門並判 door_not_following 或閉鏈殘差
         expect = 'blocked'
     if case == 'handover_inflight':
@@ -162,9 +208,22 @@ def run_case(case, plan, out):
     stop_ok = bool(rep['stop_effect'] and rep['stop_effect']['ok'])
     clear_act = all(rep['min_clear_actual'][k_] >= th[k_] for k_ in X.KEYS)
     clear_stop = F.after_stop['n'] == 0 or all(F.after_stop['min'][k_] >= th[k_] for k_ in X.KEYS)
-    emerg = rep['stop_mode'] == 'cmd'
-    ch = dict(stop_reason=bool(rep['stop'] and (rep['stop']['why'] == expect)), stop_effective=stop_ok, clear_actual=clear_act, clear_during_stop=clear_stop, unbind_requested_iff_emergency=bool(rep['request_unbind'] == emerg),
-              closure_within=bool(rep['closure_measured']['pos_mm']['max'] <= X.CL_TOL['pos_m'] * 1e3 and rep['closure_measured']['rot_deg']['max'] <= X.CL_TOL['rot_deg']), closure_during_stop=bool(emerg or F.after_stop['closure_pos'] <= X.CL_TOL['pos_m']))   # 緊急停止先解綁，閉鏈不再適用
+    L_W = 0.245
+    WM = np.array([[0, 1, L_W], [-1, 0, L_W], [0, -1, L_W], [1, 0, L_W]])
+    tw = L[:, 7:10]
+    wheel = float(np.abs(tw @ WM.T).max())
+    acc = (np.abs(np.diff(tw, axis=0)) / 0.05).max(axis=0)
+    s_rate = float(L[:, 11].max())
+    final_mode = 'release' if not F.bound or rep['stop_mode'] == 'release' else rep['stop_mode']
+    ch = dict(stop_reason=bool(rep['stop'] and rep['stop']['why'] == expect), final_mode=bool(final_mode == expect_mode), stop_effective=stop_ok, clear_actual=clear_act, clear_during_stop=clear_stop,
+              wheel_speed=bool(wheel <= 0.2775 + 1e-4), body_acc=bool((acc <= np.array([1.5, 1.0, 2.0]) + 1e-6).all()), arm_setpoint_rate=bool(s_rate <= 1.0 + 1e-6),
+              unbind_iff_release=bool((not F.bound) == (expect_mode == 'release')), unbind_confirmed=bool((rep['unbind_t'] is not None) == (expect_mode == 'release')),
+              closure_within_bound=bool(rep['closure_measured']['pos_mm']['max'] <= X.CL_TOL['pos_m'] * 1e3 and rep['closure_measured']['rot_deg']['max'] <= X.CL_TOL['rot_deg']),
+              closure_during_path_stop=bool(expect_mode != 'settled' or (F.after_stop['closure_pos'] <= X.CL_TOL['pos_m'] and math.degrees(0) <= X.CL_TOL['rot_deg'] and F.after_stop['closure_rot'] <= X.CL_TOL['rot_deg'])))
+    res['limits'] = dict(wheel_max=round(wheel, 4), body_acc_max=[round(float(v), 3) for v in acc], arm_setpoint_rate_max=round(s_rate, 4), stop_closure_pos_mm=round(F.after_stop['closure_pos'] * 1e3, 3), stop_closure_rot_deg=round(F.after_stop['closure_rot'], 3))
+    res['release'] = dict(unbind=F.unbind_info, after_release=dict(n=F.after_release['n'], door_sweep_deg=round(F.after_release['door_sweep_deg'], 3), min_clear={k_: round(float(v), 4) for k_, v in F.after_release['min'].items()}) if F.unbind_info else None,
+                          finger_note='假世界把手指視為立即張開、門立即自由；Isaac 停用 FixedJoint 後須同時命令張爪並量實際卸載')
+    res['expect_mode'] = expect_mode
     if expect == 'open_done':
         ch.update(done=bool(rep['done']), phi_end=bool(phi[-1] >= PHI_GOAL - X.END['phi_tol']))
     if case == 'handover_inflight':
@@ -172,7 +231,7 @@ def run_case(case, plan, out):
     res['checks'], res['pass'] = ch, bool(all(ch.values()))
     json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1, default=float)
     np.save(out.replace('.json', '_log.npy'), L)
-    print(case, 'PASS' if res['pass'] else 'FAIL', ch, {k_: rep[k_] for k_ in ('stop', 'phi_end_deg', 't_end', 'closure_measured', 'setpoint_closure', 'lead_deg_max', 'g_lt1_frac', 'min_clear_actual', 'min_clear_stop_sweep', 'emergency_stop_path', 'stop_mode', 'arm_sat_s', 'base_cmd_max')}, res['geom'], res['torque_record'], rep['timing']['whole_tick_ms'], flush=True)
+    print(case, 'PASS' if res['pass'] else 'FAIL', {k_: v_ for k_, v_ in ch.items() if not v_}, {k_: rep[k_] for k_ in ('stop', 'stop_mode', 'bound', 'phi_end_deg', 't_end', 'closure_measured', 'setpoint_model_deviation', 'min_clear_actual', 'release_path_pred', 'hold_stop_path')}, res['limits'], res['release'], rep['stop_effect'], rep['timing']['whole_tick_ms'], flush=True)
     return 0
 
 
