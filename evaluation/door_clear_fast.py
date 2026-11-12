@@ -11,7 +11,7 @@ import m8_door_reaim_online_r4 as R4
 R3, R1, PG, DOC, K = R4.R3, R4.R1, R4.PG, R4.DOC, R4.K
 _C = {n: P.mean(axis=0) for n, P in DOC.CL.items()}
 _R = {n: float(np.linalg.norm(P - _C[n], axis=1).max()) for n, P in DOC.CL.items()}
-_TREE, _STATIC = {}, None
+_TREE, _STATIC, _SARR = {}, None, None
 TOOL = ('uflite_gripper_link',) + tuple(DOC.FINGERS)
 
 
@@ -22,11 +22,12 @@ def _pairs():
 
 
 def clear_full(qf, T_WH):
-    global _STATIC
+    global _STATIC, _SARR
     qf = np.asarray(qf, float)
     pairs = _pairs()
     if _STATIC is None:
         _STATIC = PG.static_shapes()
+        _SARR = (np.array([c for _, c, _, _ in _STATIC]), np.array([R for _, _, R, _ in _STATIC]), np.array([h for _, _, _, h in _STATIC]))
     names = sorted(set(DOC.ARM_LINKS) | {n for p in pairs for n in p})
     T = {n: K.fk(qf, n) for n in names}
     Cw = {n: T[n][:3, :3] @ _C[n] + T[n][:3, 3] for n in names}
@@ -45,14 +46,20 @@ def clear_full(qf, T_WH):
         if x not in _TREE:
             _TREE[x] = cKDTree(DOC.CL[x])
         Py = (pts(y) - T[x][:3, 3]) @ T[x][:3, :3]
-        sc = min(sc, float(_TREE[x].query(Py, k=1)[0].min()))
+        sc = min(sc, float(_TREE[x].query(Py, k=1, distance_upper_bound=sc)[0].min()))   # 超過目前最小值者回 inf，不影響最小值
     # 環境（靜態方盒＋立柱；橫桿只對非手指、非夾爪殼連桿）
     posts, bar = PG.handle_shapes(T_WH)
-    sh = _STATIC + posts
     cand = []
-    for n in DOC.ARM_LINKS:
+    Cs, Rs, Hs = _SARR
+    P_all = np.array([Cw[n] for n in DOC.ARM_LINKS])                  # (L,3)
+    Lc = np.einsum('lsj,sjk->lsk', P_all[:, None, :] - Cs[None], Rs)  # 與 box_dist 相同：(P−c)@R
+    dd = np.abs(Lc) - Hs[None]
+    lbs = np.linalg.norm(np.maximum(dd, 0), axis=2) + np.minimum(dd.max(axis=2), 0)
+    for i, n in enumerate(DOC.ARM_LINKS):
+        for j, (name, c, R, hs) in enumerate(_STATIC):
+            cand.append((float(lbs[i, j]) - _R[n], n, name, (c, R, hs)))
         c1 = Cw[n][None, :]
-        for name, c, R, hs in sh:
+        for name, c, R, hs in posts:
             cand.append((float(DOC.box_dist(c1, c, R, hs)[0]) - _R[n], n, name, (c, R, hs)))
         if n not in DOC.FINGERS and n != 'uflite_gripper_link':
             cand.append((float(PG.bar_dist(c1, bar)[0]) - _R[n], n, 'bar', None))

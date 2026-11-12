@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """門把手非接觸接近：假世界真鏈核對（不是物理）。驅動**同一份** DoorApproachCtrl（真求解器、真在途命令管線、真設定點積分、真 _stop／減速流程）。
 假受控對象：底盤積分管線送出的本體速度（×v_scale）；手臂 q⁺＝q＋α·a_scale·(s−q＋D_TRUE)。無接觸物理、無相機：
-  近距量測＝靜態擷取 m8doorcap_reaim_1 該視點第一個有效中心影格的估計（事前規則），於到位後 OBS_DELAY 送入。
+  近距量測＝**既有靜態影格估計＋合成送達時間**（靜態擷取 m8doorcap_reaim_1 該視點第一個有效中心影格，事前規則；於到位後 OBS_DELAY 送入）——不是移動後實際重拍。
 視點選擇：r5 已通過的底盤到位視點（λ＝1.0）中總時間最短者（可達／碰撞／時間；不看真值誤差）。
 案例：名目、模型失配、無量測、量測過期、量測早於到位、量測無效、重新規劃失敗、途中把手估計變動致停止預測違反、求解失敗。
 另：名目趟沿途每 FORK_EVERY 拍複製控制器與受控對象，強制「現在停／晚一拍停」，用真停止流程跑到靜止，對照真值把手核最小淨空與停止有效性。
@@ -58,6 +58,7 @@ class Fake:
         self.c, self.L = c, L
         self.q = np.r_[L['base0'], L['q_obs']].astype(float)
         self.t, self.alpha, self.v_scale, self.d = 0.0, np.asarray(c.cfg.arm_model.alpha, float) * a_scale, v_scale, np.asarray(d_true, float)
+        self.creep = None
         self.sent, self.min_true, self.hist = False, dict(env=np.inf, base=np.inf, self=np.inf, bar_tool=np.inf), []
 
     def one(self, obs_fn=None, hook=None):
@@ -69,6 +70,8 @@ class Fake:
                 self.sent = True
         if hook is not None:
             hook(self)
+        if self.creep is not None and c.phase in self.creep[0]:
+            self.q[:2] += PHYS * np.asarray(self.creep[1], float)   # 故障注入：保持相位底盤被外力慢推
         out = c.step(self.t, self.q.copy())
         cs, sn = math.cos(self.q[2]), math.sin(self.q[2])
         vx, vy, wz = out['base_twist'] * self.v_scale
@@ -82,13 +85,13 @@ class Fake:
             self.hist.append([self.t, out['phase'], *self.q[:3], *K.fk(self.q, 'link_tcp')[:3, 3]])
         return out
 
-    def run(self, t_end=60.0, tail=2.0, **kw):
-        t_stop = None
+    def run(self, t_end=60.0, tail=0.5, **kw):
+        t_ok = None
         while self.t < t_end:
-            out = self.one(**kw)
-            if out['stopped'] and t_stop is None:
-                t_stop = self.t
-            if t_stop is not None and self.t - t_stop >= tail:
+            self.one(**kw)
+            if self.c.stop_ok is not None and t_ok is None:
+                t_ok = self.t
+            if t_ok is not None and self.t - t_ok >= tail:
                 break
         return self
 
@@ -116,6 +119,20 @@ def evaluate(F):
     return rep
 
 
+def checks(r):
+    """每案共同判定：預期停止原因、停止有效（持續靜止、管線清空）、done 與原因一致；完成案另核終端、底盤保持、保持相位底盤命令為零、真值把手下沿途淨空不低於門檻。"""
+    th = r['params']['thresholds']
+    c = dict(stop_reason=bool(r['stop'] and r['stop']['why'] == r['expect']), stop_effective=bool(r['stop_effect'] and r['stop_effect']['ok']), done_consistent=bool((r['expect'] == 'approach_done') == r['done']),
+             hold_base_cmd_zero=bool(r['tracking']['base_cmd_max_hold'] == 0.0))
+    if r['expect'] != 'base_hold_violation':
+        c['hold_dev_within'] = bool(r['hold_dev_max']['base_m'] <= DA.HOLD_TOL['base_m'] and r['hold_dev_max']['yaw_rad'] <= DA.HOLD_TOL['yaw_rad'])
+    if r['expect'] == 'approach_done':
+        e = (r['end'] or {}).get('reached')
+        c['end_reached_metrics'] = bool(e and e['tcp_m'] <= DA.END_TOL['tcp_m'] and e['tcp_deg'] <= DA.END_TOL['tcp_deg'])
+        c['true_clear_ok'] = bool(all(r['truth_eval']['min_clear_true_handle'][k] >= th[k] for k in th))
+    return c
+
+
 def fork_stop(F, extra):
     """複製（控制器＋受控對象），晚 extra 拍後強制停止，用真 _stop／減速／管線跑到靜止。回真值把手下最小淨空、停止有效性、與控制器停止預測的終點差。"""
     G = copy.deepcopy(F)
@@ -130,7 +147,7 @@ def fork_stop(F, extra):
     G.min_true = {k: np.inf for k in G.min_true}
     mn = {k: np.inf for k in G.min_true}
     n = 0
-    while G.c.stop_ok is None and n < 600:
+    while G.c.stop_ok is None and n < 800:
         G.one()
         n += 1
         cc = DA.CLEAR(G.q, G.L['T_true'])
@@ -151,9 +168,9 @@ def nominal_with_forks(L, obs):
                 probes.append(p)
             w_f += time.perf_counter() - w0
         out = F.one(obs_fn=obs)
-        if out['stopped'] and t_stop is None:
+        if F.c.stop_ok is not None and t_stop is None:
             t_stop = F.t
-        if t_stop is not None and F.t - t_stop >= 2.0:
+        if t_stop is not None and F.t - t_stop >= 0.5:
             break
     ok = [p for p in probes if 'min' in p]
     th = dict(env=R1.ENV_M, base=R1.BASE_M, self=R1.SELF_M, bar_tool=R1.ENV_M)
@@ -173,22 +190,45 @@ def main():
     F, S = nominal_with_forks(L, good)
     r = evaluate(F)
     r['stop_probes'] = S
+    r['expect'] = 'approach_done'
+    r['checks'] = checks(r)
+    r['checks']['probes_all_stop_ok'] = bool(S['all_stop_ok'] and S['n_run'] == S['n'])
+    r['checks']['probes_none_below_threshold'] = bool(all(v == 0 for v in S['n_below_threshold'].values()))
+    r['pass'] = bool(all(r['checks'].values()))
     res['cases']['nominal'] = r
+    print('nominal', 'pass' if r['pass'] else 'FAIL', r['checks'], 'hold', r['hold_dev_max'], 'tick_ms', r['timing'], flush=True)
     print('nominal', r['stop'], 'T', r['t_end'], 'probe', S['n_run'], S['min_true'], S['n_below_threshold'], 'wall', round(time.perf_counter() - w0, 1), flush=True)
     np.save(out_path.replace('.json', '_nominal_hist.npy'), np.array([[h[0], *h[2:]] for h in F.hist]))
 
-    def case(name, expect, obs=good, hook=None, **kw):
-        F = mk(L, **kw).run(obs_fn=obs, hook=hook)
+    def case(name, expect, obs=good, hook=None, rej=None, creep=None, **kw):
+        F = mk(L, **kw)
+        F.creep = creep
+        F.run(obs_fn=obs, hook=hook)
         r = evaluate(F)
-        r['expect'], r['pass'] = expect, bool(r['stop'] and r['stop']['why'] == expect and r['stop_effect'] and r['stop_effect']['ok'] and (expect == 'approach_done') == r['done'])
+        r['expect'] = expect
+        r['checks'] = checks(r)
+        if rej is not None:
+            r['checks']['reject_counted'] = bool(r['obs_rejected'].get(rej, 0) >= 1)
+        r['pass'] = bool(all(r['checks'].values()))
         res['cases'][name] = r
-        print(name, 'pass' if r['pass'] else 'FAIL', r['stop'], r['stop_effect'] and r['stop_effect']['ok'], r['obs_rejected'], flush=True)
+        print(name, 'pass' if r['pass'] else 'FAIL', {k: v for k, v in (r['stop'] or {}).items() if k != 'at'}, r['checks'], r['obs_rejected'], 'hold', r['hold_dev_max'], 'tick_ms', r['timing']['whole_tick_ms'], flush=True)
     case('mismatch_alpha0.8_v0.95', 'approach_done', a_scale=0.8, v_scale=0.95)
     case('mismatch_alpha1.2_v1.05_d2x', 'approach_done', a_scale=1.2, v_scale=1.05, d_true=2 * D_TRUE)
     case('no_near_obs', 'near_obs_timeout', obs=None)
-    case('stale_obs', 'near_obs_timeout', obs=lambda t, c: (t - DA.OBS_MAX_AGE_S - 0.5, L['T_near'], True) if t - DA.OBS_MAX_AGE_S - 0.5 >= c.look['t_arrive'] else None)
-    case('obs_before_arrival', 'near_obs_timeout', obs=lambda t, c: (c.look['t_arrive'] - 0.1, L['T_near'], True))
-    case('invalid_obs', 'near_obs_timeout', obs=lambda t, c: (t - 0.05, None, False))
+    case('stale_obs', 'near_obs_timeout', rej='stale', obs=lambda t, c: (t - DA.OBS_MAX_AGE_S - 0.5, L['T_near'], True) if t - DA.OBS_MAX_AGE_S - 0.5 >= c.look['t_arrive'] else None)
+    case('obs_before_arrival', 'near_obs_timeout', rej='before_arrival', obs=lambda t, c: (c.look['t_arrive'] - 0.1, L['T_near'], True))
+    case('invalid_obs', 'near_obs_timeout', rej='invalid', obs=lambda t, c: (t - 0.05, None, False))
+    case('future_stamp_obs', 'near_obs_timeout', rej='future_stamp', obs=lambda t, c: (t + 0.5, L['T_near'], True))
+    Tnan = L['T_near'].copy()
+    Tnan[0, 3] = np.nan
+    case('nonfinite_obs', 'near_obs_timeout', rej='nonfinite', obs=lambda t, c: (t - 0.05, Tnan, True))
+    Tsk = L['T_near'].copy()
+    Tsk[:3, 0] *= 1.05                                               # 非正交
+    case('bad_pose_matrix_obs', 'near_obs_timeout', rej='bad_pose_matrix', obs=lambda t, c: (t - 0.05, Tsk, True))
+    zap = L['T_at'](L['T_near'], 0.0)[:3, 2]                         # 接近軸（工具→把手）
+    Tfar_ = L['T_near'].copy()
+    Tfar_[:3, 3] += 0.25 * zap                                       # 把手再遠 0.25 m：固定底盤下手臂到不了 ⇒ 不可行就停（底盤不補）
+    case('needs_base_but_base_fixed', 'replan_failed', obs=lambda t, c: (t - 0.05, Tfar_, True))
     Tbad = L['T_near'].copy()
     Tbad[:3, 3] += [0.0, 1.0, 0.0]
     case('replan_unreachable', 'replan_failed', obs=lambda t, c: (t - 0.05, Tbad, True))
@@ -202,6 +242,21 @@ def main():
             F.shifted = True
     case('handle_estimate_jumps_onto_tool', 'stop_sweep_violation', hook=shift_hook)
 
+    def near_hook(F):
+        c = F.c
+        if c.phase == 'TO_PRE' and c.t > c.seg['t0'] + 0.3 * c.seg['T'] and not getattr(F, 'shifted', False):
+            c.T_WH = c.T_WH.copy()
+            c.T_WH[:3, 3] -= 0.012 * zap                             # 把手估計朝工具移近 12 mm：當下「現在停」仍夠，往前走的新命令不夠 ⇒ 候選命令被拒
+            F.shifted = True
+    case('new_command_insufficient_stop_margin', 'candidate_stop_violation', hook=near_hook)
+
+    def slow_hook(F):
+        if F.c.phase == 'TO_PRE' and not getattr(F, 'slowed', False):
+            F.alpha = F.alpha * 0.08                                 # 手臂響應大幅變慢：時間到了但 TCP 未到 ⇒ 不算完成
+            F.slowed = True
+    case('time_up_tcp_not_arrived', 'end_not_reached', hook=slow_hook)
+    case('base_pushed_during_hold', 'base_hold_violation', creep=(('TO_PRE', 'END'), (0.004, 0.0)))
+
     def solver_hook(F):
         if F.c.phase == 'TO_PRE' and F.c.fail_inject is None:
             t_f = F.c.seg['t0'] + 0.4 * F.c.seg['T']
@@ -213,7 +268,8 @@ def main():
             t_f = 0.5 * F.c.seg['T']
             F.c.fail_inject = lambda t: t >= t_f
     case('solver_fail_mid_to_look', 'solver_fail', hook=solver_hook2)
-    res['all_pass'] = bool(res['cases']['nominal']['done'] and all(c.get('pass', True) for c in res['cases'].values()))
+    res['all_pass'] = bool(all(c['pass'] for c in res['cases'].values()))
+    res['near_data'] = '既有靜態影格估計＋合成送達時間（不是移動後實際重拍）'
     res['wall_s'] = round(time.perf_counter() - w0, 1)
 
     def clean(o):
