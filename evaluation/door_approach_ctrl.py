@@ -37,7 +37,13 @@ import m8_door_reaim_online_r4 as R4                                  # noqa: E4
 import offset_interval as OINT                                        # noqa: E402
 
 R3, R2, R1, PG, DOC, K, IDX = R4.R3, R4.R2, R4.R1, R4.PG, R4.DOC, R4.K, R4.IDX
-CLEAR = FAST.clear_full                                               # 與 R3.cfg_clear_full(contact=False) 等值（door_clear_fast_check.py）
+FINGER_Q = 0.0089                                                     # 本包手指固定張開量（m）；執行器起跑讀回兩指關節與連桿位姿核對，超出即拒跑（Codex 20261112_121455）
+
+
+def CLEAR(q, T_WH):
+    """全碰撞對淨空，手指用實際張開構型（finger_q＝0 時與 R3.cfg_clear_full(contact=False) 等值；door_clear_fast_check.py）。"""
+    return FAST.clear_full(q, T_WH, finger_q=FINGER_Q)
+
 PHYS, NPH, D_STEPS, N, DT = C0.PHYS, C0.NPH, C0.D_STEPS, B.N, B.DT
 SETTLE_S, LOOK_TIMEOUT_S, OBS_MAX_AGE_S = 0.5, 3.0, 1.0
 HOLD = ('SETTLE', 'LOOK', 'TO_PRE', 'END')
@@ -386,5 +392,5 @@ class DoorApproachCtrl:
                                   base_cmd_max_hold=round(float(max((r[7] for r in tr if r[1] in HOLD), default=0.0)), 6)),
                     d_hat=[round(float(x), 5) for x in self.obs.d],
                     timing=dict(solve_ms=pct(self.solve_ms), stop_now_sweep_ms=pct(self.sweep_ms), candidate_sweep_ms=pct(self.cand_ms), whole_tick_ms=pct(self.tick_ms), n_tick_over_period=int(sum(x > self.cfg.dt * 1e3 for x in self.tick_ms)), n_tick=len(self.tick_ms)),
-                    params=dict(SETTLE_S=SETTLE_S, LOOK_TIMEOUT_S=LOOK_TIMEOUT_S, OBS_MAX_AGE_S=OBS_MAX_AGE_S, STILL=STILL, HOLD_TOL=HOLD_TOL, END_TOL=END_TOL, STOP_STILL=STOP_STILL, ARRIVE_TOL=ARRIVE_TOL, S_PRE=PG.S_PRE,
+                    params=dict(SETTLE_S=SETTLE_S, LOOK_TIMEOUT_S=LOOK_TIMEOUT_S, OBS_MAX_AGE_S=OBS_MAX_AGE_S, STILL=STILL, HOLD_TOL=HOLD_TOL, END_TOL=END_TOL, STOP_STILL=STOP_STILL, ARRIVE_TOL=ARRIVE_TOL, S_PRE=PG.S_PRE, FINGER_Q=FINGER_Q,
                                 thresholds=dict(env=R1.ENV_M, base=R1.BASE_M, self=R1.SELF_M, bar_tool=R1.ENV_M)))

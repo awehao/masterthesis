@@ -69,9 +69,11 @@ R4 = DA.R4
 PG, E, K, IDX = DA.PG, R4.E, DA.K, DA.IDX
 ROBOT, DOOR = '/World/omni_bot', '/World/door'
 ARM = [f'joint{i}' for i in range(1, 7)]
-FINGER_OPEN = 0.0089
+FINGER_OPEN = DA.FINGER_Q                                       # 與控制器淨空模型同一張開量
+FINGER_TOL_M, FINGER_POSE_TOL_M = 0.0005, 0.0005                # 兩指關節讀回／連桿位姿對模型的容許差；超出 ⇒ 拒跑或鎖存
+HARD_WALL_EXTRA_S = 60.0                                        # 牆鐘逾時後仍讓受控停止走完的額外上限；再超過才中止（停止有效性記為未驗證）
 DT = 0.01
-WALL_LIMIT_S, STEP_WALL_LIMIT_S = 900.0, 20.0
+WALL_LIMIT_S, STEP_WALL_LIMIT_S = 900.0, 20.0                    # 兩者都是迴圈內事後檢查；同步呼叫本身卡死時不會觸發（不是硬性看門狗）
 CONTACT_N, DOOR_DEG = 0.05, 0.05                                 # 非預期接觸門檻：淨力 N；門角變化 °
 SMOKE_SLEEP_S = 0.15                                             # 冒煙：每控制拍故意多等（核對等待時物理不偷跑）
 CAM = dict(res=(640, 480), hfov_deg=69.0, aperture=0.020, clip=(0.05, 10.0), hz=30)
@@ -258,7 +260,26 @@ def main():
         base_cmd(np.zeros(3), 0.0)
         world.step(render=True)
     Kr = np.asarray(cam.get_intrinsics_matrix(), float)
-    q_s, _ = q9()
+    q_s, jp_s = q9()
+    fbody = {name_of(b): b for b in bodies if name_of(b) in ('uflite_finger1', 'uflite_finger2')}
+
+    def finger_model_vs_isaac(qv, jpv):
+        """兩指連桿原點：控制器淨空模型（實際張開量）對 Isaac 連桿世界位姿。機器人自身幾何，不是場景真值。"""
+        out, xc_ = {}, UsdGeom.XformCache()
+        for n_, sg in (('uflite_finger1', 1.0), ('uflite_finger2', -1.0)):
+            Tm = K.fk(qv, n_)
+            pm = Tm[:3, 3] + sg * FINGER_OPEN * Tm[:3, 1]
+            M = xc_.GetLocalToWorldTransform(stage.GetPrimAtPath(str(fbody[n_])))
+            pi = np.array([M[3][0], M[3][1], M[3][2]], float)
+            out[n_] = float(np.linalg.norm(pm - pi))
+        return out
+    fing = dict(q1=float(jp_s[f1]), q2=float(jp_s[f2]), model=FINGER_OPEN, pose_err_m=finger_model_vs_isaac(q_s, jp_s))
+    readback['finger_readback'] = fing
+    print(f'[da] 手指讀回 {fing}', flush=True)
+    if abs(fing['q1'] - FINGER_OPEN) > FINGER_TOL_M or abs(fing['q2'] - FINGER_OPEN) > FINGER_TOL_M or max(fing['pose_err_m'].values()) > FINGER_POSE_TOL_M:
+        print('[da] 手指張開量或連桿位姿與淨空模型不符 ⇒ 拒跑', flush=True)
+        json.dump(clean(dict(refused='finger_model_mismatch', readback=readback)), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)
+        return 65
     door_q0 = door_q()
     truth = dict(note='只供事後評估；控制、估計、視點選擇都不讀', T_handle_start=truth_handle().tolist(), door_q0_rad=door_q0)
     print(f'[da] 起點讀回 底盤 {np.round(q_s[:3], 4).tolist()} 手臂靜態偏移 {np.round(q_s[3:] - start_q, 4).tolist()} 門角 {math.degrees(door_q0):.4f}°', flush=True)
@@ -355,6 +376,8 @@ def main():
     pipe_probe = dict(first_cmd_step=None, first_target_step=None, first_motion_step=None, s0=None)
     probe_state = dict(t_drop=None, done=False)
     contact_max = dict(n=0.0, who=None)
+    finger_rng = dict(lo=FINGER_OPEN, hi=FINGER_OPEN)
+    wall_over, aborted = False, None
     for k in range(n_steps):
         t = k * DT
         w_step0 = time.perf_counter()
@@ -380,6 +403,10 @@ def main():
                 fail('unexpected_contact', force_n=round(cn, 4), who=cwho)
         if dq_deg > DOOR_DEG:
             fail('door_moved', door_deg=round(dq_deg, 4))
+        for fv in (float(jp[f1]), float(jp[f2])):
+            finger_rng['lo'], finger_rng['hi'] = min(finger_rng['lo'], fv), max(finger_rng['hi'], fv)
+            if abs(fv - FINGER_OPEN) > FINGER_TOL_M and (probe_state['t_drop'] is None):
+                fail('finger_opening_out_of_model', finger_q=fv)
         # 相機
         f = grab(t)
         if f is not None:
@@ -467,8 +494,12 @@ def main():
         rows.append([t, st0 - T0, *q, *out['arm_target'], *out['base_twist'], DA.HOLD.index(ctrl.phase) + 1 if ctrl.phase in DA.HOLD else 0, float(out['stopped']), w_ctrl, sw, 0.0 if cn is None else cn, dq_deg])
         if sw > STEP_WALL_LIMIT_S:
             fail('step_wall_timeout', wall_s=round(sw, 2))
-        if time.perf_counter() - w_all0 > WALL_LIMIT_S:
-            fail('wall_timeout')
+        if time.perf_counter() - w_all0 > WALL_LIMIT_S and not wall_over:
+            wall_over = True
+            fail('wall_timeout')                                      # 可繼續執行：鎖存失敗並走受控停止，迴圈續跑到停止有效性判定
+        if time.perf_counter() - w_all0 > WALL_LIMIT_S + HARD_WALL_EXTRA_S:
+            aborted = 'hard_wall_abort：受控停止未在額外上限內完成；停止有效性未驗證'
+            print(f'[da] **中止** {aborted}', flush=True)
             break
         if ctrl.stop_ok is not None:
             if not smoke and t - ctrl.stop_ok['t'] >= 1.0:
@@ -477,6 +508,7 @@ def main():
                 break
     else:
         fail('sim_limit')
+        aborted = 'sim_limit：模擬時間上限到；停止流程未跑完，停止有效性未驗證'
     wall_total = time.perf_counter() - w_all0
     R = np.array(rows)
     q_end, _ = q9()
@@ -493,6 +525,28 @@ def main():
     Tp, Tg = T_at(T_true, PG.S_PRE), T_at(T_true, 0.0)
     z = Tg[:3, 2]
     e = Tt[:3, 3] - Tp[:3, 3]
+    # 事後沿途真值幾何淨空：每控制拍的實測構型對真值把手，手指用本趟張開量（與 Isaac 讀回核對過的同一模型）
+    th = dict(env=DA.R1.ENV_M, base=DA.R1.BASE_M, self=DA.R1.SELF_M, bar_tool=DA.R1.ENV_M)
+    t_probe = probe_state['t_drop'] if probe_state['t_drop'] is not None else np.inf
+    tc = dict(status='unverified', why=None)
+    try:
+        if abs(math.degrees(door_q() - door_q0)) > DOOR_DEG:
+            tc['why'] = 'door_moved：把手真值非定值，本評估不適用'
+        else:
+            mn, at = {k_: np.inf for k_ in th}, {}
+            n_cfg = 0
+            for row in R[::DA.NPH]:
+                if row[0] >= t_probe:
+                    break
+                cc = DA.FAST.clear_full(row[2:11], T_true, finger_q=FINGER_OPEN)
+                n_cfg += 1
+                for k_ in th:
+                    if cc[k_] < mn[k_]:
+                        mn[k_], at[k_] = cc[k_], round(float(row[0]), 2)
+            tc = dict(status='computed', n_cfg=n_cfg, min_m={k_: round(float(v), 4) for k_, v in mn.items()}, at_t=at, thresholds=th, ok=bool(all(mn[k_] >= th[k_] for k_ in th)),
+                      finger_q_model=FINGER_OPEN, finger_q_range_readback=[round(finger_rng['lo'], 5), round(finger_rng['hi'], 5)], note='幾何模型（點雲對方盒／圓柱）對真值把手位姿；取樣＝每控制拍')
+    except Exception as e_:                                           # noqa: BLE001
+        tc['why'] = repr(e_)
     hold = R[R[:, 20] > 0]
     stop_rows = R[R[:, 21] > 0]
     ev = dict(final_tcp_vs_true_pregrasp_mm=dict(total=round(float(np.linalg.norm(e)) * 1e3, 2), along_approach=round(float(e @ z) * 1e3, 2), perp=round(float(np.linalg.norm(e - (e @ z) * z)) * 1e3, 2)),
@@ -503,7 +557,9 @@ def main():
               base_hold_yaw_drift_deg=None if not len(hold) else round(float(np.degrees(np.abs(hold[:, 4] - hold[0, 4]).max())), 5),
               base_drift_after_stop_mm=None if not len(stop_rows) else round(float(np.linalg.norm(stop_rows[-1, 2:4] - stop_rows[0, 2:4])) * 1e3, 4),
               door_deg_max=round(float(R[:, 25].max()), 5), contact_max=dict(n=round(contact_max['n'], 5), who=contact_max['who']),
-              min_clear_true_handle_note='沿途對真值把手的幾何淨空由事後腳本用 log.npz 重算（模型手指為閉合 0、Isaac 手指張開 8.9 mm：照實列為模型差異）')
+              true_clearance=tc,
+              contact_monitor_note='淨接觸力 ≤0.05 N 只代表未觸發此接觸監看，不是絕對無接觸證明（多處接觸力可能抵消）',
+              door_angle_note='門角用於失敗鎖存＝模擬真值安全監看，不是實機感測')
     timing = dict(sim_s=round(float(R[-1, 0] + DT), 2), wall_s=round(wall_total, 1), rtf=round(float((R[-1, 0] + DT) / wall_total), 4), clock_step_mismatch=int(clock_bad),
                   step_wall_ms=dict(p50=round(float(np.percentile(step_wall, 50)) * 1e3, 1), p95=round(float(np.percentile(step_wall, 95)) * 1e3, 1), max=round(float(np.max(step_wall)) * 1e3, 1)),
                   smoke_sleep_s_per_tick=SMOKE_SLEEP_S if smoke else 0.0, note='非即時計算：控制計算期間模擬暫停；影片若以模擬時間 1× 播放不代表實機執行速度')
@@ -518,13 +574,15 @@ def main():
                       path_no_estimate=bool(p.get('no_valid_estimate', {}).get('copy_rejected', {}).get('invalid', 0) >= 1 and p['no_valid_estimate']['copy_phase_after'] == 'LOOK'),
                       main_timeout_stop=bool(rep['stop'] and rep['stop']['why'] == 'near_obs_timeout'), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']),
                       hold_base_cmd_zero=rep['tracking']['base_cmd_max_hold'] == 0.0, contact_probe_latched=bool(smoke_res['contact_probe']['latched']),
+                      finger_model_matches=True, true_clearance_before_probe_ok=bool(tc.get('status') == 'computed' and tc.get('ok')), not_aborted=aborted is None,
                       no_unexpected_before_probe=bool(latch is None or (probe_state['t_drop'] is not None and latch['t'] >= probe_state['t_drop'] and latch['why'] == 'unexpected_contact')))
         ok = all(checks.values())
     else:
-        checks = dict(clock_no_drift=clock_bad == 0, pipe_delay=pipe_probe['delay_steps'] == DA.D_STEPS, done=bool(rep['done']), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']), no_latch=latch is None,
+        checks = dict(clock_no_drift=clock_bad == 0, pipe_delay=pipe_probe['delay_steps'] == DA.D_STEPS, done=bool(rep['done']), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']), no_latch=latch is None, not_aborted=aborted is None,
+                      true_clearance_ok=bool(tc.get('status') == 'computed' and tc.get('ok')),
                       near_from_live_frame=bool(cam_stat['delivered'] == 1 and rep['target_source'] == 'near'), hold_base_cmd_zero=rep['tracking']['base_cmd_max_hold'] == 0.0)
         ok = all(checks.values())
-    res = dict(run=os.path.basename(a.out.rstrip('/')), mode=a.mode, ok=bool(ok), checks=checks, latch=latch, readback=readback, controller=rep, eval_truth=ev, timing=timing, camera=cam_stat, far_live=far_live, pipe=pipe_probe,
+    res = dict(run=os.path.basename(a.out.rstrip('/')), mode=a.mode, ok=bool(ok), checks=checks, latch=latch, aborted=aborted, readback=readback, controller=rep, eval_truth=ev, timing=timing, camera=cam_stat, far_live=far_live, pipe=pipe_probe,
                smoke=smoke_res if smoke else None, init=dict(far_estimate='登錄檔 source.T_WH_est（既有影格估計）＝初始化條件；不是本趟在線視覺', standoff_and_look='登錄視點（r5 通過、總時間最短）'),
                scope='非接觸；不插入、不閉爪、不開門、無行人；非即時閉迴路（計算時模擬暫停）')
     json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)

@@ -2,7 +2,8 @@
 """全碰撞對淨空的等值快速版（判準、幾何、點雲、門檻與 m8_door_reaim_online_r3.cfg_clear_full(contact=False) 完全相同；只改計算順序）。
 作法：每個連桿點雲的包圍球給出各配對距離的下界（方盒／橫桿的符號距離與點對點距離都是 1-Lipschitz），下界不小於目前最小值的配對不必細算 ⇒ 最小值不變。
 自碰撞：把 y 連桿點雲轉到 x 連桿座標，查 x 連桿預先建好的 KD 樹（剛體變換不改距離）。
-等值性由 door_clear_fast_check.py 對原函式逐構型比對（不是假設）。"""
+等值性由 door_clear_fast_check.py 對原函式逐構型比對（不是假設）。
+張開手指（finger_q>0）：原模型手指固定在閉合 0；本版把兩指點雲沿滑動軸各移 finger_q。此幾何由 Isaac 起跑時讀回兩指連桿世界位姿核對（執行器，不符拒跑）。"""
 import numpy as np
 from scipy.spatial import cKDTree
 
@@ -21,7 +22,8 @@ def _pairs():
     return DOC.SELF_PAIRS
 
 
-def clear_full(qf, T_WH):
+def clear_full(qf, T_WH, finger_q=0.0):
+    """finger_q＝兩指張開量（m；finger_joint1 沿夾爪 +y、finger_joint2 沿 −y，URDF 互為 mimic）。0＝原模型（閉合），與原函式等值。"""
     global _STATIC, _SARR
     qf = np.asarray(qf, float)
     pairs = _pairs()
@@ -30,6 +32,11 @@ def clear_full(qf, T_WH):
         _SARR = (np.array([c for _, c, _, _ in _STATIC]), np.array([R for _, _, R, _ in _STATIC]), np.array([h for _, _, _, h in _STATIC]))
     names = sorted(set(DOC.ARM_LINKS) | {n for p in pairs for n in p})
     T = {n: K.fk(qf, n) for n in names}
+    if finger_q:
+        for n, sg in (('uflite_finger1', 1.0), ('uflite_finger2', -1.0)):
+            if n in T:
+                T[n] = T[n].copy()
+                T[n][:3, 3] += sg * float(finger_q) * T[n][:3, 1]      # 手指座標與夾爪殼同向；滑動軸＝局部 y
     Cw = {n: T[n][:3, :3] @ _C[n] + T[n][:3, 3] for n in names}
     W = {}
 

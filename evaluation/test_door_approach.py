@@ -253,13 +253,34 @@ def main():
             F.shifted = True
     case('handle_estimate_jumps_onto_tool', 'stop_sweep_violation', hook=shift_hook)
 
+    shift_info = {}
+
     def near_hook(F):
+        """把手估計在 TO_PRE 途中被改動：在工具座標六個方向中，找「使終點構型工具對橫桿淨空掉到門檻下 2 mm」所需位移最小者（1 mm 格點），
+        且當下構型仍合格——當下「現在停」仍夠，往終點走的新命令不夠 ⇒ 候選命令被拒。位移由幾何算出，不是寫死的數字。"""
         c = F.c
         if c.phase == 'TO_PRE' and c.t > c.seg['t0'] + 0.3 * c.seg['T'] and not getattr(F, 'shifted', False):
+            q_end = np.r_[c.seg['b_world'], c.seg['qb']]
+            Rt = K.fk(q_end, 'link_tcp')[:3, :3]
+            best = None
+            for ax in range(3):
+                for sg in (1.0, -1.0):
+                    e = sg * Rt[:, ax]
+                    for d in np.arange(0.001, 0.0601, 0.001):
+                        T = c.T_WH.copy()
+                        T[:3, 3] += d * e
+                        if DA.CLEAR(q_end, T)['bar_tool'] < R1.ENV_M - 0.002:
+                            if DA.CLEAR(F.q, T)['ok'] and (best is None or d < best[0]):
+                                best = (float(d), e.copy(), f"{'+' if sg > 0 else '-'}{'xyz'[ax]}")
+                            break
+            assert best is not None, '找不到符合條件的位移'
             c.T_WH = c.T_WH.copy()
-            c.T_WH[:3, 3] -= 0.012 * zap                             # 把手估計朝工具移近 12 mm：當下「現在停」仍夠，往前走的新命令不夠 ⇒ 候選命令被拒
+            c.T_WH[:3, 3] += best[0] * best[1]
+            shift_info.update(shift_m=round(best[0], 4), tool_axis=best[2], t=round(float(c.t), 3))
             F.shifted = True
     case('new_command_insufficient_stop_margin', 'candidate_stop_violation', hook=near_hook)
+    if 'new_command_insufficient_stop_margin' in res['cases']:
+        res['cases']['new_command_insufficient_stop_margin']['shift'] = dict(shift_info)
 
     def stuck_hook(F):
         c = F.c
