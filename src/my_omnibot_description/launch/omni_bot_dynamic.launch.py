@@ -427,8 +427,21 @@ def generate_launch_description():
                           # exactly the set this layer must not depend on.
                           'scan_topic': '/scan',
                           'cmd_in_topic': '/cmd_vel_pre_shield',
-                          'cmd_out_topic': '/cmd_vel',
-                          'robot_radius': 0.30,
+                          # 2026-11-12：GUARD=1 且 SHIELD=1 時改為單一串接
+                          #   smoother -> /cmd_vel_pre_shield -> shield
+                          #   -> /cmd_vel_smoothed -> wheel_limit_guard -> /cmd_vel
+                          # 修改前兩個節點都直接發布 /cmd_vel（平行發布）。guard
+                          # 維持 /cmd_vel 唯一發布者（design_wheel_limit_chain.md
+                          # 第 7 節裁決）。此時 shield 的投影集合加入輪級列
+                          # （wheel_rows），輸出已在 guard 的集合內，guard 為直通；
+                          # 依據與量測見 第八次進度報告素材/規格/
+                          # 導航修改紀錄_GUARD與Shield串接_r1.md。
+                          # 只開其中一個時，話題與參數和修改前相同。
+                          'cmd_out_topic': ('/cmd_vel_smoothed'
+                                            if (_guard and _shield) else '/cmd_vel'),
+                          'wheel_rows': bool(_guard and _shield),
+                          'robot_radius': float(
+                              os.environ.get('SHIELD_RADIUS', '0.30')),
                           'alpha': float(os.environ.get('SHIELD_ALPHA', '2.0')),
                           'a_brake': 6.25,
                           'tau': float(os.environ.get('SHIELD_TAU', '0.15')),

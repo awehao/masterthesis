@@ -107,6 +107,22 @@ class ScanSafetyShield(Node):
         p('vx_max', 0.2775)
         p('vy_max', 0.2775)
         p('wz_max', 1.1327)
+        # 2026-11-12（GUARD＋Shield 串接；預設 False＝行為不變）：把四輪的輪速與
+        # 輪加速度列放進同一個投影集合。下游 wheel_limit_guard 以線段縮放強制同
+        # 一組限制，Shield 的輸出若不在輪級集合內，guard 會沿「上一筆→目標」退回，
+        # 最壞 λ=0 即原樣保持上一筆命令 —— 離線核對（evaluation/
+        # nav_guard_shield_chain_check.py）量到最終命令因此違反本層條件。
+        # 開啟後本層輸出已在輪級集合內，guard 應為直通（λ=1）。
+        p('wheel_rows', False)
+        p('wheel_radius', 0.05)
+        p('wheel_base_L', 0.245)
+        p('wheel_w_max', 5.55)
+        p('wheel_a_max', 125.0)
+        p('wheel_dt', 0.05)             # s, 下游 guard 的發布間隔
+        # 輪級列內縮量（m/s）。掃掠投影的收斂容差是 1e-3；不內縮時輸出可能落在
+        # guard 集合外 1e-3 以內，而 guard 對「貼邊且朝外」的列取 λ=0（保持上一
+        # 筆）。內縮量大於容差，guard 才會是直通。代價：最高輪速少 0.7%。
+        p('wheel_margin', 0.002)
 
         g = lambda k: self.get_parameter(k).value
         self.enable = bool(g('enable'))
@@ -129,6 +145,15 @@ class ScanSafetyShield(Node):
         self.u_max = np.array([float(g('vx_max')), float(g('vy_max')),
                                float(g('wz_max'))])
         self.base_frame = str(g('base_frame'))
+        self.wheel_rows = bool(g('wheel_rows'))
+        _L = float(g('wheel_base_L'))
+        self.Wm = np.array([[0.0, 1.0, _L], [-1.0, 0.0, _L],
+                            [0.0, -1.0, _L], [1.0, 0.0, _L]])
+        self.w_lim = float(g('wheel_radius')) * float(g('wheel_w_max'))
+        self.a_lim = (float(g('wheel_radius')) * float(g('wheel_a_max'))
+                      * float(g('wheel_dt')))
+        self.wheel_margin = float(g('wheel_margin'))
+        self._prev_out = np.zeros(3)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -206,7 +231,8 @@ class ScanSafetyShield(Node):
         self._scan_t = self.get_clock().now().nanoseconds * 1e-9
 
     # ------------------------------------------------------------------
-    def _limit(self, u: np.ndarray, pts: np.ndarray, scan_age: float):
+    def _limit(self, u: np.ndarray, pts: np.ndarray, scan_age: float,
+               prev=None):
         """Project u onto the barrier half-spaces AND the velocity box.
 
         Three things this has to get right, none of which a plain fixed-count
@@ -244,10 +270,22 @@ class ScanSafetyShield(Node):
             box_b[2 * k] = self.u_max[k]
             box_a[2 * k + 1, k] = -1.0
             box_b[2 * k + 1] = self.u_max[k]
+        wheel = bool(getattr(self, 'wheel_rows', False)) and prev is not None
+        if wheel:
+            # 輪速 |W v| <= r w_max；輪加速度 |W (v - prev)| <= r a_max dt
+            Wm = self.Wm
+            bp = Wm @ np.asarray(prev, float)
+            box_a = np.vstack([box_a, Wm, -Wm, Wm, -Wm])
+            mg = float(getattr(self, 'wheel_margin', 0.0))
+            box_b = np.concatenate([
+                box_b, np.full(4, self.w_lim - mg), np.full(4, self.w_lim - mg),
+                self.a_lim - mg + bp, self.a_lim - mg - bp])
 
-        if not len(pts):
+        if not len(pts) and not wheel:
             out = np.clip(u, -self.u_max, self.u_max)
             return out, float(np.linalg.norm(out - u)), float('inf'), 0.0, 0.0, 0, False
+        if not len(pts):
+            pts = np.empty((0, 2))
 
         rad = np.hypot(pts[:, 0], pts[:, 1])
         d = rad - self.R
@@ -266,6 +304,8 @@ class ScanSafetyShield(Node):
         b_obs = self.alpha * (d - d_stop)
 
         def sweep(A, B, x0, iters):
+            if wheel:
+                iters = max(iters, 40)   # 多 16 列，6 次不夠收斂；仍為固定上限
             """Motzkin relaxation: repeatedly project onto the most violated
             half-space. Deterministic iteration count, unit-norm rows."""
             x = x0.copy()
@@ -307,7 +347,8 @@ class ScanSafetyShield(Node):
             after = float(np.max(A @ out - B))
             if float(np.max(A @ out - B2)) > 1e-3:
                 out = np.zeros(3)          # last resort: command nothing
-        return (out, float(np.linalg.norm(out - u)), float(np.min(d)),
+        return (out, float(np.linalg.norm(out - u)),
+                float(np.min(d)) if len(d) else float('inf'),
                 before, after, iters, fallback)
 
     def _cmd_cb(self, msg: Twist):
@@ -337,12 +378,13 @@ class ScanSafetyShield(Node):
             pts = self._pts if self._pts is not None else np.empty((0, 2))
             npts = len(pts)
             out, dv, dmin, before, after, iters, fallback = self._limit(
-                u, pts, age)
+                u, pts, age, self._prev_out if self.wheel_rows else None)
 
         t = Twist()
         t.linear.x, t.linear.y, t.angular.z = (float(out[0]), float(out[1]),
                                                float(out[2]))
         self.pub.publish(t)
+        self._prev_out = np.asarray(out, float).copy()
 
         if fallback:
             self.get_logger().warn(
