@@ -82,6 +82,7 @@ HARD_WALL_EXTRA_S = 60.0                                        # 牆鐘逾時�
 DT = 0.01
 WALL_LIMIT_S, STEP_WALL_LIMIT_S = 900.0, 20.0                    # 兩者都是迴圈內事後檢查；同步呼叫本身卡死時不會觸發（不是硬性看門狗）
 CONTACT_N, DOOR_DEG = 0.05, 0.05                                 # 非預期接觸門檻：淨力 N；門角變化 °
+PLAN_WALL_LIMIT_S = 120.0                                        # 在線規劃牆鐘上限（事後檢查；超過 ⇒ 動作前拒跑。同步卡死時不會觸發，不是硬性看門狗）
 SMOKE_SLEEP_S = 0.15                                             # 冒煙：每控制拍故意多等（核對等待時物理不偷跑）
 CAM = dict(res=(640, 480), hfov_deg=69.0, aperture=0.020, clip=(0.05, 10.0), hz=30)
 SEED = 20261112
@@ -121,7 +122,7 @@ def main():
     assert vp['status'] == 'ok' and vp['lam'] == 1.0, vp
     r5 = json.load(open(os.path.join(HERE, 'runs', 'm8doorcap_reaim_1', 'wrist_door', 'door_reaim_arrived_r5.json')))
     cand = sorted([r for r in r5['rows'] if r.get('ok') and r['lam'] == 1.0], key=lambda r: (r['T_total'], r['id']))
-    if cand[0]['id'] != a.viewpoint_id:
+    if cand[0]['id'] != a.viewpoint_id and not a.online_plan:      # 在線模式不受舊登錄視點限制（舊值只供事後比較）
         print(f"[da] 視點 {a.viewpoint_id} 不是登錄規則選出的 {cand[0]['id']} ⇒ 拒跑", flush=True)
         return 2
     base0, b1 = np.array(vreg['standoff']['base0'], float), np.array(vp['base'], float)
@@ -291,6 +292,8 @@ def main():
     truth = dict(note='只供事後評估；控制、估計、視點選擇都不讀', T_handle_start=truth_handle().tolist(), door_q0_rad=door_q0)
     print(f'[da] 起點讀回 底盤 {np.round(q_s[:3], 4).tolist()} 手臂靜態偏移 {np.round(q_s[3:] - start_q, 4).tolist()} 門角 {math.degrees(door_q0):.4f}°', flush=True)
     online = None
+    w_run0 = time.perf_counter()
+    sim_run0 = float(world.current_time)
     if a.online_plan:
         if a.ctrl_module != 'door_approach_jnom_ctrl' or smoke:
             print('[da] --online-plan 需搭配 door_approach_jnom_ctrl 與 approach 模式 ⇒ 拒跑', flush=True)
@@ -336,6 +339,7 @@ def main():
             w_p = time.perf_counter()
             st_a = float(world.current_time)
             plan_ = OP.plan(T_live, qn[:3], qn[3:], T_mount, Kr, T_at)
+            online['frame_wait_sim_s'], online['estimate_wall_s'] = round(st_a - sim_run0, 3), round(w_p - w_run0, 2)
             online['plan_wall_s'], online['sim_clock_advance_during_plan_s'] = round(time.perf_counter() - w_p, 2), float(world.current_time) - st_a
             T_bad, info_bad = far_est(np.full_like(f_far['dep'], np.inf), 'far_invalid_probe')    # 無有效遠距估計路徑：不得建立計畫
             pb = OP.plan(T_bad, qn[:3], qn[3:], T_mount, Kr, T_at)
@@ -349,15 +353,30 @@ def main():
             b1, q_look, T_far = plan_['b1'].copy(), plan_['q_look'].copy(), T_live.copy()      # 之後只用本趟算出的值
         print(f"[da] 在線規劃 {json.dumps(clean({k_: v_ for k_, v_ in online.items() if k_ not in ('plan', 'T_far')}), ensure_ascii=False)[:1200]}", flush=True)
         inv_ok = bool(online.get('invalid_path') and not online['invalid_path']['plan_ok'] and not online['invalid_path']['has_plan'] and online['invalid_path']['why'] == 'no_valid_far_estimate')
-        if not plan_['ok'] or a.plan_only:
-            okp = bool(plan_['ok'] and inv_ok and online.get('sim_clock_advance_during_plan_s') == 0.0)
-            json.dump(clean(dict(run=os.path.basename(a.out.rstrip('/')), mode='plan_only' if a.plan_only else 'approach', ok=okp if a.plan_only else False, refused=None if plan_['ok'] else 'no_online_plan：不建立接近計畫、不運動、不沿用登錄資料',
-                                 checks=dict(plan_ok=bool(plan_['ok']), invalid_estimate_no_plan=inv_ok, clock_paused_during_plan=online.get('sim_clock_advance_during_plan_s') == 0.0), online=online, readback=readback)),
+        clock_ok = bool(online.get('sim_clock_advance_during_plan_s') == 0.0)
+        wall_ok = bool(online.get('plan_wall_s', 1e9) <= PLAN_WALL_LIMIT_S)
+        online['gates'] = dict(plan_ok=bool(plan_['ok']), invalid_estimate_no_plan=inv_ok, clock_paused_during_plan=clock_ok, plan_wall_within_limit=wall_ok, PLAN_WALL_LIMIT_S=PLAN_WALL_LIMIT_S)
+        gates_ok = bool(plan_['ok'] and inv_ok and clock_ok and wall_ok)
+        if not gates_ok or a.plan_only:                               # 任一放行條件不過 ⇒ 動作前拒跑（正式模式同樣適用）
+            okp = gates_ok
+            json.dump(clean(dict(run=os.path.basename(a.out.rstrip('/')), mode='plan_only' if a.plan_only else 'approach', ok=okp if a.plan_only else False, refused=None if gates_ok else 'online_gates_failed：不建立接近計畫、不運動、不沿用登錄資料',
+                                 checks={k_: v_ for k_, v_ in online['gates'].items() if k_ != 'PLAN_WALL_LIMIT_S'}, online=online, readback=readback)),
                       open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)
             print(f"[da] 完成 ok={okp if a.plan_only else False} plan_only={a.plan_only} 計畫={plan_['ok']} {plan_.get('why')}", flush=True)
             return 0 if (a.plan_only and okp) else 7
     ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json')))
-    ctrl = DA.DoorApproachCtrl(ident, start_b, start_q, b1, q_look, T_far, T_at, **(dict(joint_nominal=True) if a.joint_nominal else {}))
+    if online is not None:
+        # 承接：軌跡起點＝當下**實測**底盤與手臂（與在線規劃同一筆 qn）；設定點＝目前致動器目標（不瞬移、不重置）；管線原樣（全零）
+        qm, _ = q9()
+        s_now = np.array([tgt[i] for i in idx], float)
+        ctrl = DA.DoorApproachCtrl(ident, qm[:3], qm[3:], b1, q_look, T_far, T_at, **(dict(joint_nominal=True) if a.joint_nominal else {}))
+        ctrl.s = s_now.copy()
+        Tm0 = K.fk(qm, 'link_tcp')
+        Tr0 = K.fk(np.r_[qm[:3], ctrl._ref(0.0)[2]], 'link_tcp')
+        online['handover'] = dict(plan_state_vs_handover_state_max=float(np.abs(qm - qn).max()), ref_start_vs_measured_tcp_mm=round(float(np.linalg.norm(Tm0[:3, 3] - Tr0[:3, 3])) * 1e3, 4), ref_base_start_vs_measured_m=float(np.linalg.norm(ctrl._ref(0.0)[0][:2] - qm[:2])),
+                                  setpoint_minus_measured_rad=[round(float(v), 5) for v in (s_now - qm[3:])], setpoint_kept=True)
+    else:
+        ctrl = DA.DoorApproachCtrl(ident, start_b, start_q, b1, q_look, T_far, T_at, **(dict(joint_nominal=True) if a.joint_nominal else {}))
     readback['ctrl_module'], readback['ctrl_file'], readback['joint_nominal'] = a.ctrl_module, os.path.basename(DA.__file__), bool(getattr(ctrl, 'joint_nominal', False))
     print(f"[da] 控制器 {readback['ctrl_file']} joint_nominal={readback['joint_nominal']}", flush=True)
     if readback['joint_nominal'] != bool(a.joint_nominal):
@@ -546,6 +565,11 @@ def main():
             phase_prev = ctrl.phase
         if pipe_probe['s0'] is None:
             pipe_probe['s0'] = out['arm_target'].copy()
+            if online is not None:
+                online['handover']['first_target_minus_prev_target_max'] = float(np.abs(out['arm_target'] - np.array([tgt[i] for i in idx], float)).max())
+                online['handover']['first_base_twist_max'] = float(np.abs(out['base_twist']).max())
+                online['handover']['first_cmd_arm_max'] = float(np.abs(ctrl.u_last[3:]).max())
+                online['handover']['first_cmd_base_max'] = float(np.abs(ctrl.u_last[:3]).max())
         if pipe_probe['first_cmd_step'] is None and np.any(np.abs(ctrl.u_last[3:]) > 1e-9):
             pipe_probe['first_cmd_step'] = k
         if pipe_probe['first_target_step'] is None and np.any(np.abs(out['arm_target'] - pipe_probe['s0']) > 1e-12):
@@ -638,7 +662,8 @@ def main():
               true_clearance=tc,
               contact_monitor_note='淨接觸力 ≤0.05 N 只代表未觸發此接觸監看，不是絕對無接觸證明（多處接觸力可能抵消）',
               door_angle_note='門角用於失敗鎖存＝模擬真值安全監看，不是實機感測')
-    timing = dict(sim_s=round(float(R[-1, 0] + DT), 2), wall_s=round(wall_total, 1), rtf=round(float((R[-1, 0] + DT) / wall_total), 4), clock_step_mismatch=int(clock_bad),
+    w_total = time.perf_counter() - w_run0
+    timing = dict(total_wall_from_first_frame_request_s=round(w_total, 1), total_note='含取像、估計、在線選擇計算、運動與收斂（非即時）', sim_s=round(float(R[-1, 0] + DT), 2), wall_s=round(wall_total, 1), rtf=round(float((R[-1, 0] + DT) / wall_total), 4), clock_step_mismatch=int(clock_bad),
                   step_wall_ms=dict(p50=round(float(np.percentile(step_wall, 50)) * 1e3, 1), p95=round(float(np.percentile(step_wall, 95)) * 1e3, 1), max=round(float(np.max(step_wall)) * 1e3, 1)),
                   smoke_sleep_s_per_tick=SMOKE_SLEEP_S if smoke else 0.0, note='非即時計算：控制計算期間模擬暫停；影片若以模擬時間 1× 播放不代表實機執行速度')
     cam_stat['detect_ms'] = dict(n=len(cam_stat['detect_ms']), max=round(max(cam_stat['detect_ms'], default=0.0), 1))
@@ -659,6 +684,8 @@ def main():
         checks = dict(clock_no_drift=clock_bad == 0, pipe_delay=pipe_probe['delay_steps'] == DA.D_STEPS, ctrl_as_requested=bool(rep.get('joint_nominal', False) == bool(a.joint_nominal)), done=bool(rep['done']), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']), no_latch=latch is None, not_aborted=aborted is None,
                       true_clearance_ok=bool(tc.get('status') == 'computed' and tc.get('ok')),
                       online_plan_as_requested=bool((online is not None) == bool(a.online_plan)),
+                      online_gates=bool(online is None or all(v_ for k_, v_ in online['gates'].items() if k_ != 'PLAN_WALL_LIMIT_S')),
+                      handover_continuous=bool(online is None or (online['handover']['ref_start_vs_measured_tcp_mm'] < 0.01 and online['handover']['first_target_minus_prev_target_max'] < 1e-9 and online['handover']['first_base_twist_max'] == 0.0 and online['handover']['plan_state_vs_handover_state_max'] < 1e-4)),
                       near_from_live_frame=bool(cam_stat['delivered'] == 1 and rep['target_source'] == 'near'), hold_base_cmd_zero=rep['tracking']['base_cmd_max_hold'] == 0.0)
         ok = all(checks.values())
     res = dict(run=os.path.basename(a.out.rstrip('/')), mode=a.mode, ok=bool(ok), checks=checks, latch=latch, aborted=aborted, readback=readback, controller=rep, eval_truth=ev, timing=timing, camera=cam_stat, far_live=far_live, pipe=pipe_probe, online=online,

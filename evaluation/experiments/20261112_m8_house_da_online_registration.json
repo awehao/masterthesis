@@ -1,0 +1,34 @@
+{
+ "name": "m8_house_door_approach_online_r1",
+ "authority": "Codex 20261112_143547：三處接線缺口修正＋針對性核對後，一次授權 plan-only 冒煙→通過後正式非接觸一趟；冒煙未過就停",
+ "run_id": "m8house_da_online_1",
+ "mode": "approach",
+ "n": 1,
+ "scope": "住宅場景；起點靜止取本趟新影格→凍結偵測＋估計→在線算停位與到位重瞄（door_online_plan，截斷搜尋）→到位停穩→重拍→固定底盤重算→預抓→停止。不插入、不閉爪、不開門、無行人；已知幾何下的局部接近，不是完整導航／避障鏈整合；未改追蹤門檻、代價圖過濾、CBF、Shield。",
+ "init_conditions": [
+  "起點底盤位姿 (0.5,−1.5,90°) 與起始手臂姿態為場景初始條件",
+  "冒煙與正式趟各自取影格、各自規劃，不沿用彼此答案",
+  "舊登錄停位／視點／遠距估計只供事後比較"
+ ],
+ "accept": "result.json checks 全為 true（含 online_gates：有計畫、無效估計不建計畫、規劃期間時鐘不前進、規劃牆鐘 ≤120 s；handover_continuous；其餘同前）。新視角看不到 ⇒ 照既有規則停止，不回填",
+ "report_separately": [
+  "總耗時＝取像＋估計＋選擇計算（約 17 s）＋運動／收斂；不以運動時間縮短宣稱整體變快",
+  "TO_PRE 途中追蹤誤差",
+  "底盤保持漂移",
+  "整拍耗時與 RTF",
+  "與舊登錄結果差異",
+  "搜尋範圍、候選數、截斷條件（非全域最優）"
+ ],
+ "on_failure": "保留紀錄、不熱修、不自動重跑",
+ "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070／kernel 7.0.0-31；耗時不與筆電趟比較",
+ "freeze": "evaluation/experiments/20261112_m8_house_da_online_freeze_r1.sha256",
+ "caveats": [
+  "PG.plan_at 初篩仍用閉合手指模型，可能漏掉可行解，不宣稱搜尋完整",
+  "真值淨空是每控制拍取樣的幾何評估，不是連續時間無碰撞保證",
+  "手指容差不等於模型完全無誤差",
+  "非即時、單案例對照；失敗保留、不補跑；雙影片照交"
+ ],
+ "smoke_run_id": "m8house_da_online_planonly_1",
+ "controller": "door_approach_jnom_ctrl.py joint_nominal=True；CTRL_ARGS=\"--ctrl-module door_approach_jnom_ctrl --joint-nominal --online-plan\"（冒煙另加 --plan-only）",
+ "compare_to": "m8house_da_approach_jnom_1"
+}
