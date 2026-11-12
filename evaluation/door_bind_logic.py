@@ -132,6 +132,6 @@ class BindGate:
 
     def decide(self, pos_m, rot_deg, finger_q, finger_bar_n, door_pre_deg):
         c = self.c
-        ok = dict(no_forbidden_contact=self.latched is None, pos=pos_m <= c['pos_m'], rot=rot_deg <= c['rot_deg'], rel_still=self.n_still * self.dt >= c['rel_still_s'] - 1e-9,
+        ok = dict(no_forbidden_contact=self.latched is None, pos=pos_m <= c['pos_m'], rot=rot_deg <= c['rot_deg'], rel_still=(self.still_s if self.prev is not None or self.still_s > 0 else self.n_still * self.dt) >= c['rel_still_s'] - 1e-9,   # step_seq 路徑直接比連續時間；舊 step 路徑才用拍數
                   finger_q=all(c['finger_q_m'][0] <= q <= c['finger_q_m'][1] for q in finger_q), finger_bar_contact=all(f > c['finger_contact_n'] for f in finger_bar_n), door_pre=door_pre_deg <= c['door_pre_deg'])
         return bool(all(ok.values())), ok

@@ -45,7 +45,16 @@ A_BASE = np.array([1.0, 1.0, 2.0])                                 # 世界座�
 A_BODY = np.array([1.5, 1.0, 2.0])                                 # 底盤本體加速度上限（bottle_s0b_ctrl.A_BASE；執行端同值）
 PHI_MAX, PHI_RATE = math.radians(105.0), 0.5                       # 門角上限（資產限位 110° 留 5°）、門角速率上限 rad/s（工程設定）
 THR = dict(env=R1.ENV_M, base=R1.BASE_M, self=R1.SELF_M, shell_bar=R1.ENV_M)
-FINGER_Q = DA.FINGER_Q
+FINGER_Q = DA.FINGER_Q                                             # 淨空模型的手指開度；綁定後由 set_model() 換成各指實測閉合開度
+PHI0 = 0.0                                                         # T_WH0 對應的門角（綁定瞬間）
+
+
+def set_model(phi0=0.0, finger_q=None):
+    """設定把手基準門角與淨空模型的手指開度（模組層級；一次規劃／一趟執行用同一組）。"""
+    global PHI0, FINGER_Q
+    PHI0 = float(phi0)
+    if finger_q is not None:
+        FINGER_Q = float(finger_q)
 TOOL = ('uflite_gripper_link',) + tuple(DOC.FINGERS)
 SIG_FLOOR = 0.03                                                   # 手臂 6×6 Jacobian 最小奇異值下限（非接觸趟的近奇異谷底為 0.009；抓持起始約 0.06–0.09）
 TAU_SP = 0.105                                                     # 設定點一階模型時間常數（辨識檔 α＝0.095／步）
@@ -73,7 +82,8 @@ def Rz4(a):
 
 
 def handle_pose(T_WH0, phi):
-    return Rz4(-phi) @ T_WH0
+    """T_WH0＝門角 PHI0 時的把手位姿（r3：PHI0 可非零＝綁定瞬間；預設 0 與 r2 相同）。T_WH(φ)＝Rz[−(φ−PHI0)]·T_WH0。"""
+    return Rz4(-(phi - PHI0)) @ T_WH0
 
 
 _STAT = None
@@ -92,7 +102,7 @@ def clear_door(x, T_WH0):
     """非線性淨空：回 dict(env, base, self, shell_bar, who)。門扇、立柱、橫桿都轉到 φ。"""
     qf, phi = np.asarray(x[:9], float), float(x[9])
     sh, leaf = _static()
-    Rp = Rz4(-phi)[:3, :3]
+    Rp = Rz4(-phi)[:3, :3]                                         # 門扇幾何以絕對門角轉（資產在 φ＝0 定義）
     leaf_p = (leaf[0], Rp @ leaf[1], Rp, leaf[3])
     T_WH = handle_pose(T_WH0, phi)
     posts, bar = PG.handle_shapes(T_WH)
@@ -124,15 +134,23 @@ def margins(x, T_WH0):
 
 
 class DoorWBOpt:
-    def __init__(self, T_WH0, T_WE0, x0, phi_goal, N=60, dt=0.2, mode='rigid', base_fixed=False, w=None):
-        self.T_WH0, self.T_HE = np.asarray(T_WH0, float), np.linalg.inv(T_WH0) @ np.asarray(T_WE0, float)
+    def __init__(self, T_WH0, T_WE0, x0, phi_goal, N=60, dt=0.2, mode='rigid', base_fixed=False, w=None, T_HE=None, project_start=True):
+        """r3：T_HE 可明確傳入（綁定瞬間的實測抓持變換；之後規劃與重規劃都固定用它）；project_start=False 時起點不做牛頓投影，
+        只核閉鏈殘差 <1e-6（否則丟 ValueError）——實測起點不得被改成另一個構型。T_WH0 是門角 PHI0（set_model）時的把手位姿。"""
+        self.T_WH0 = np.asarray(T_WH0, float)
+        self.T_HE = np.linalg.inv(self.T_WH0) @ np.asarray(T_WE0, float) if T_HE is None else np.asarray(T_HE, float)
         self.mode = mode
         x0 = np.asarray(x0, float)
         self.x0, self.phi_goal, self.N, self.dt, self.mode, self.base_fixed = np.asarray(x0, float), float(phi_goal), int(N), float(dt), mode, bool(base_fixed)
         self.w = dict(phi=4.0, v=1.0, a=1.0, lim=0.3, manip=0.5, slack=1e5, reg=1e-3, col=1e5, term=1e5)
         self.w.update(w or {})
         self.scale = np.r_[0.25, 0.25, 0.6, np.full(6, V_ARM), PHI_RATE]   # 速度正規化（各自的上限量級）
-        self.x0 = self.project(self.x0, iters=30)                 # 起始抓持構型的閉鏈殘差壓到數值零（IK 容差 1e-5 m 級）
+        if project_start:
+            self.x0 = self.project(self.x0, iters=30)             # 起始抓持構型的閉鏈殘差壓到數值零（IK 容差 1e-5 m 級）
+        else:
+            e0 = float(np.abs(self.closure(self.x0)[0]).max())
+            if e0 > 1e-6:
+                raise ValueError(f'start closure residual {e0:.3e} > 1e-6（實測起點與 T_HE 不一致；不投影）')
         self.X = np.tile(self.x0, (self.N + 1, 1))
         self.act, self.keep = 0.025, 0.004                         # 淨空列：餘裕（距離−門檻）低於 act 才線性化；要求線性化後餘裕 ≥ keep
         self.log = []
@@ -141,12 +159,13 @@ class DoorWBOpt:
     def init_corotate(self, T_ramp):
         """起始猜測（不是答案）：整台機器人跟著門繞鉸鏈剛體轉動——底盤位姿繞原點轉 −φ、手臂不動，閉鏈自動成立。
         φ 以 min-jerk 在 T_ramp 內由 0 到 φ_goal 之後保持。來源只有門機構（鉸鏈位置與轉向），不含任何既有開門軌跡。之後由最佳化自由改動。"""
+        ph0 = float(self.x0[9])
         for k in range(self.N + 1):
             u = min(k * self.dt / T_ramp, 1.0)
-            phi = self.phi_goal * (10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5)
-            c, s_ = math.cos(-phi), math.sin(-phi)
+            dphi = (self.phi_goal - ph0) * (10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5)   # 角度**增量**（起點可為非零門角）
+            c, s_ = math.cos(-dphi), math.sin(-dphi)
             b = self.x0[:3]
-            self.X[k] = np.r_[c * b[0] - s_ * b[1], s_ * b[0] + c * b[1], b[2] - phi, self.x0[3:9], phi]
+            self.X[k] = np.r_[c * b[0] - s_ * b[1], s_ * b[0] + c * b[1], b[2] - dphi, self.x0[3:9], ph0 + dphi]
         self.X[0] = self.x0
         self.init = dict(kind='corotate', T_ramp=T_ramp)
 
@@ -174,7 +193,7 @@ class DoorWBOpt:
         Td = self.target(x[9])
         e = np.r_[Td[:3, 3] - Tc[:3, 3], GW._rot_err_world(Tc[:3, :3], Td[:3, :3])]
         om = np.array([0.0, 0.0, -1.0])
-        Jphi = np.r_[np.cross(om, Td[:3, 3]), om]
+        Jphi = np.r_[np.cross(om, Td[:3, 3]), om]                   # 與 PHI0 無關：dT_WH/dφ 都是繞原點鉸鏈 −z 的旋量
         S = self.rows(x[9])
         return S @ e, S @ J, S @ Jphi
 
