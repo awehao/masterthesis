@@ -42,3 +42,30 @@ class PhaseGuard:
             self.blocked.append(phase)
             return False
         return True
+
+
+class ExecLatch:
+    """執行器全域中止鎖存（Codex 20261113_022124）：一旦中止，任何後續 step 呼叫都不再步進物理、不換段。"""
+    def __init__(self):
+        self.aborted, self.blocked_calls = None, 0
+
+    def abort(self, info):
+        if self.aborted is None:
+            self.aborted = dict(info)
+        return False
+
+    def may_step(self):
+        if self.aborted is not None:
+            self.blocked_calls += 1
+            return False
+        return True
+
+
+def release_gate(joint_enabled_readback, release_min_clear, thr):
+    """解綁後能否張爪／退出：讀回必須明確為 False；張爪期間（兩指實際開度逐步）淨空須全過門檻。回 (ok, 原因)。"""
+    why = []
+    if joint_enabled_readback is not False:
+        why.append('unbind_readback_not_false')
+    if release_min_clear is None or any(release_min_clear[k] < thr[k] for k in thr):
+        why.append('release_clearance')
+    return (not why), why

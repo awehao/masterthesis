@@ -60,7 +60,19 @@ a2 = g2.on_latch(dict(t=31.0, why='nonfinger_contact'), 'exit')          # 退�
 s2 = g2.may_start('next')
 out['phase_guard'] = dict(latch_in_release=dict(action=a1, may_start_exit=s1, aborted=g.aborted), latch_in_exit=dict(action=a2, may_start_next=s2, aborted=g2.aborted))
 ok4 = a1 == 'abort' and s1 is False and g.aborted is not None and a2 == 'forward' and s2 is False and g2.aborted is None
-out['checks'] = dict(old_frame_not_refreshed=ok1, task_reference_explicit=ok2, task_ref_invalidation=bool(ok3), phase_guard=bool(ok4))
+# 5 全域中止鎖存：綁定靜置中止後再次呼叫 step ⇒ 不步進、計數
+xl = FL.ExecLatch()
+xl.abort(dict(t=6.0, why='overforce_while_bound', phase='E'))
+calls = [xl.may_step() for _ in range(3)]
+ok5 = (calls == [False, False, False] and xl.blocked_calls == 3 and xl.aborted['why'] == 'overforce_while_bound')
+# 6 解綁讀回失敗／張爪淨空違反 ⇒ 不啟動退出
+THR = dict(env=0.005, base=0.02, self=0.005, shell_bar=0.005)
+good = dict(env=0.03, base=0.06, self=0.01, shell_bar=0.006)
+g1 = FL.release_gate(True, good, THR); g2 = FL.release_gate(None, good, THR); g3 = FL.release_gate(False, dict(good, shell_bar=0.004), THR); g4 = FL.release_gate(False, good, THR)
+ok6 = (not g1[0]) and (not g2[0]) and (not g3[0]) and g4[0]
+out['exec_latch'] = dict(calls_after_abort=calls, blocked=xl.blocked_calls)
+out['release_gate'] = dict(readback_true=g1, readback_none=g2, clearance_violation=g3, ok_case=g4)
+out['checks'] = dict(old_frame_not_refreshed=ok1, task_reference_explicit=ok2, task_ref_invalidation=bool(ok3), phase_guard=bool(ok4), exec_latch_blocks_after_abort=bool(ok5), release_gate_blocks_exit=bool(ok6))
 out['pass'] = bool(all(out['checks'].values()))
 json.dump(out, open(sys.argv[1], 'w'), ensure_ascii=False, indent=1, default=float)
 print(out['checks'], 'PASS' if out['pass'] else 'FAIL'); print(json.dumps(out['old_frame_original_time'], ensure_ascii=False, default=float)[:400]); print(json.dumps(out['task_reference'], ensure_ascii=False, default=float)[:400])

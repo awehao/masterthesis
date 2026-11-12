@@ -17,7 +17,7 @@ if ! sha256sum -c --quiet "$FREEZE" > "$DIR/freeze_check.log" 2>&1; then
 fi
 cp "$FREEZE" "$DIR/versions.sha256"
 say "=== 門整合（A0→A1→開門→X2）：RUN_ID=$RUN_ID MODE=$MODE SMOKE=${SMOKE:-0} CTRL_ARGS='${CTRL_ARGS:-}'；凍結 $FREEZE 全部相符；機器 $(hostname)／$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)／$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)／kernel $(uname -r)；GUI 開；非即時計算"
-setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_door_full.py --out "$DIR" ${SMOKE:+--smoke-nobind} >> "$DIR/sim.log" 2>&1 &
+setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_door_full.py --out "$DIR" $( [ "${SMOKE:-0}" = "1" ] && echo --smoke-nobind ) >> "$DIR/sim.log" 2>&1 &
 SIM=$!
 sleep 1
 P=$(pgrep -f "[i]saac_m8_house_door_full.py.*runs/$RUN_ID" | head -1)
