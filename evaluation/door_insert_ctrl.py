@@ -165,6 +165,12 @@ class DoorApproachCtrl:
     def obs_intake(self, t_obs, T_WH, ok=True):
         self.obs_in = dict(t_obs=t_obs, t_recv=float(self.t), T_WH=T_WH, ok=bool(ok))
 
+    def accept_task_reference(self, T_WH, info):
+        """r2（Codex 20261113_020612）：跨段沿用**已接受的任務參考**（例：前段近距影格的估計），不冒充新觀測、不改時間戳。
+        info 須含來源、原始擷取時刻（模擬時鐘）、年齡與失效條件；失效條件由執行器在交付前與插入期間核對。
+        走同一個 _try_replan（同一 IK、淨空、停止核對），只跳過「新影格」專屬的到位後與年齡檢查，並把來源與年齡寫進 replan。"""
+        self.obs_in = dict(t_obs=float(self.t), t_recv=float(self.t), T_WH=T_WH, ok=True, task_ref=dict(info))
+
     def _rej(self, why):
         self.obs_rej[why] = self.obs_rej.get(why, 0) + 1
 
@@ -183,13 +189,16 @@ class DoorApproachCtrl:
             return self._rej('nonfinite')
         if not valid_pose(T_near):
             return self._rej('bad_pose_matrix')
-        if t_obs > float(self.t) + 1e-9:
-            return self._rej('future_stamp')
-        if t_obs < self.look['t_arrive'] - 1e-9:
-            return self._rej('before_arrival')
+        tref = o.get('task_ref')
+        if tref is None:
+            if t_obs > float(self.t) + 1e-9:
+                return self._rej('future_stamp')
+            if t_obs < self.look['t_arrive'] - 1e-9:
+                return self._rej('before_arrival')
         age = float(self.t) - t_obs
-        if age > OBS_MAX_AGE_S:
+        if tref is None and age > OBS_MAX_AGE_S:
             return self._rej('stale')
+        self.task_ref_used = tref
         w0 = time.perf_counter()
         base = np.asarray(q[:3], float).copy()
         _qg = PG.ik(base, np.asarray(q[3:9], float), self.target_fn(T_near, S_END), extra_seeds=False)
@@ -203,10 +212,10 @@ class DoorApproachCtrl:
             return self._stop('replan_collision', at={k: (round(v, 4) if isinstance(v, float) else v) for k, v in cc.items()}, replan_ms=round(ms, 1))
         T2, _ = R2.bounded_T(base, np.asarray(q[3:9], float), base, q_pre[IDX])
         ms = (time.perf_counter() - w0) * 1e3
-        self.T_WH, self.T_src = T_near, 'near'
+        self.T_WH, self.T_src = T_near, ('task_reference' if getattr(self, 'task_ref_used', None) else 'near')
         self.seg = dict(kind='world', t0=float(self.t) + D_STEPS * PHYS, T=float(T2), ba=base.copy(), bb=base.copy(), qa=np.asarray(q[3:9], float).copy(), qb=q_pre[IDX].copy(), b_world=base.copy())
         self.T_pre = np.asarray(self.target_fn(T_near, S_END), float)
-        self.replan = dict(t=round(float(self.t), 3), obs_age_s=round(age, 3), wall_ms=round(ms, 1), T_to_pre=round(float(T2), 3), base_at_replan=[round(float(v), 5) for v in base], q_pre=[round(float(v), 5) for v in q_pre[IDX]],
+        self.replan = dict(t=round(float(self.t), 3), obs_age_s=round(age, 3), task_reference=getattr(self, 'task_ref_used', None), wall_ms=round(ms, 1), T_to_pre=round(float(T2), 3), base_at_replan=[round(float(v), 5) for v in base], q_pre=[round(float(v), 5) for v in q_pre[IDX]],
                            T_pre_world=self.T_pre.tolist(), pre_clear={k: (round(v, 4) if isinstance(v, float) else v) for k, v in cc.items() if k != 'ok'})
         self.phase = 'TO_PRE'
         self._ev('replan', **{k: v for k, v in self.replan.items() if k not in ('T_pre_world', 'q_pre', 't')})

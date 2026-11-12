@@ -1,0 +1,22 @@
+{
+ "name": "m8_house_door_full_smoke_r1",
+ "run_id": "m8house_door_full_smoke_1",
+ "mode": "smoke_nobind",
+ "authority": "Codex 20261113_020612：偏置可重新估計（明列模型重新初始化、核首段命令）；舊影格不改時間戳（改明示任務參考）；X2 範圍停止在控制器內；鎖存持續阻止換段；閉門 0° 退出另核；修正、離線反例通過、重建凍結後核可一趟冒煙，正式開門趟另申請",
+ "scope": "有運動及接觸的整合冒煙：A0 本趟視覺接近（同 da_online 鏈）→ 插入（目標＝本趟近距估計的已接受任務參考）→ 閉爪 → 綁定條件只評估、**不綁、不開門** → 張爪 → X1→X1b→X2（門角約 0°）→ 控制器內範圍停止。不導航、不穿門。",
+ "checks": "result.json checks 全過且 result＝completed_to_X2：A0 done／停止有效／近距來自本趟；插入 done／停止有效／目標來源＝task_reference；承接（A0→I 設定點／管線／上一命令；I→X 設定點／管線／上一命令／u_prev 與致動目標一致）；X 範圍停止、停止有效、無中止、淨空、無 X3X4 命令、兩指例外撤除、限制；無禁止接觸；FixedJoint 從未建立",
+ "not_claims": [
+  "綁定條件只評估，不稱綁定已驗證",
+  "起點穿透反例只說故障處置符合預期，不列為安全成功",
+  "非即時",
+  "名目停止掃掠餘裕 0.3 mm 只是名目模型餘裕"
+ ],
+ "pre_checks": [
+  "資料/door_full_pre_r1/full_logic_counterexamples.json（舊影格原始時間被拒、任務參考明示、失效條件、張爪時鎖存不得啟動退出）",
+  "資料/door_full_pre_r1/closed_X2.json（閉門 0° 起點 X1→X2 範圍停止、無 X3X4 命令）",
+  "資料/door_exit_fake_r2（退出 11 案＋開門→退出承接）"
+ ],
+ "on_failure": "保留、不熱修、不自動重跑；結果照交（影片照交）",
+ "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070",
+ "freeze": "evaluation/experiments/20261113_m8_house_door_full_freeze_r1.sha256"
+}

@@ -52,6 +52,7 @@ import door_open_exec_ctrl as XO                                 # noqa: E402
 import door_exit_ctrl as XE                                      # noqa: E402
 import door_bind_logic as BL                                     # noqa: E402
 import door_online_plan as OP                                    # noqa: E402
+import door_full_logic as FL                                     # noqa: E402
 import door_asset_v3 as DA3                                      # noqa: E402
 import m8_door_detect as MD                                      # noqa: E402
 import wrist_v0_capture as W0                                    # noqa: E402
@@ -432,8 +433,9 @@ def main():
                 mx, who = float(n_.max()), nm(b)
         return mx, who
     gate = BL.BindGate(COND, DT)
+    guard = FL.PhaseGuard()
     events = []
-    box = dict(kind=None, obj=None, t0=0.0, aborted=None)
+    box = dict(kind=None, obj=None, t0=0.0, aborted=None, forwarded=False)
     olog = []
 
     def step(phase, n):
@@ -477,15 +479,28 @@ def main():
             if box['kind'] == 'insert' and (fc[0][0] + fc[1][0] + fc[0][1] + fc[1][1]) > 0.05:
                 obj.freeze_offset('first_finger_contact')
             rows.append([t, PH.index(phase), door_q(), float(jp[f1]), float(jp[f2]), *q, *wrist_F6()])
-            if gate.latched is not None and not events:
-                events.append(dict(gate.latched, who=ow))
-                print(f'[full] **禁止接觸鎖存** {events[-1]}', flush=True)
-                if box['kind'] == 'insert':
-                    BL.forward_forbidden(gate.latched, ow, ctrl=obj)
-                elif box['kind'] == 'open':
-                    BL.forward_forbidden(gate.latched, ow, ex=obj)
-                elif box['kind'] == 'exit':
-                    obj._stop('exec_forbidden_contact', contact_info=dict(gate.latched, who=ow))
+            if gate.latched is not None:                                 # 鎖存持續：有活動控制器 ⇒ 轉交其停止（一次）；無 ⇒ 模擬中止
+                if not events:
+                    events.append(dict(gate.latched, who=ow))
+                    print(f'[full] **禁止接觸鎖存** {events[-1]}', flush=True)
+                act_ = guard.on_latch(dict(gate.latched, who=ow), box['kind'])
+                if act_ == 'abort':
+                    box['aborted'] = dict(t=round(t, 3), why='forbidden_contact_without_active_controller', latch=guard.latched, phase=phase)
+                    print(f"[full] **模擬中止** {box['aborted']}", flush=True)
+                    return False
+                if not box['forwarded']:
+                    box['forwarded'] = True
+                    if box['kind'] == 'insert':
+                        BL.forward_forbidden(gate.latched, ow, ctrl=obj)
+                    elif box['kind'] == 'open':
+                        BL.forward_forbidden(gate.latched, ow, ex=obj)
+                    elif box['kind'] == 'exit':
+                        obj._stop('exec_forbidden_contact', contact_info=dict(gate.latched, who=ow))
+            if box['kind'] == 'insert' and box.get('task_ref') is not None and box['obj'].stop is None:   # 任務參考失效條件：插入期間門角自擷取起變化
+                okr, infr = FL.task_ref_check(float(world.current_time), box['task_ref']['t_capture_sim'], door_q(), box['task_ref']['door_capture_rad'], None)
+                if not okr:
+                    box['obj']._stop('task_reference_invalid')
+                    res.setdefault('task_reference_invalidated', infr)
         return True
     # I：插入（目標＝本趟 T_near；設定點承接 A0；管線／上一命令承接 A0 控制器當下值）
     qm, _ = q9()
@@ -497,19 +512,39 @@ def main():
     res['handover_A0_to_I'] = dict(setpoint_equal=bool(np.array_equal(ins.s, ho_a0['s'])), pipe_equal=bool(all(np.array_equal(x_, y_) for x_, y_ in zip(ins.pipe, ho_a0['pipe']))), u_last_equal=bool(np.array_equal(ins.u_last, ho_a0['u_last'])),
                                    setpoint_minus_measured=[round(float(x_), 5) for x_ in (ho_a0['s'] - qm[3:])], bias_A0=ho_a0['bias'].tolist(), bias_insert_init=np.asarray(ins.cfg.arm_model.bias, float).tolist(),
                                    bias_note='插入控制器以自帶觀測重新估計偏置（不承接 A0 值）')
-    box.update(kind='insert', obj=ins, t0=t)
-    sent = False
+    okr, infr = FL.task_ref_check(float(world.current_time), near['t_render_sim'], door_q(), phi_cap, latch)
+    res['task_reference'] = dict(source='A0 近距影格估計（本趟）', t_capture_sim=near['t_render_sim'], door_capture_deg=round(math.degrees(phi_cap), 5), check_at_insert_start=infr,
+                                 invalid_if=['前段鎖存', f'門角自擷取起變化 >{FL.TASK_REF_DOOR_DEG}°（插入期間每步核）', f'年齡 >{FL.TASK_REF_MAX_AGE_S} s'], note='已接受的任務參考，不是新觀測；不改時間戳')
+    if not okr or not guard.may_start('I'):
+        res['result'] = 'task_reference_invalid_or_latched：不插入'
+        return finish(res, rows, None, events=events, gate=gate)
+    box.update(kind='insert', obj=ins, t0=t, task_ref=dict(t_capture_sim=near['t_render_sim'], door_capture_rad=phi_cap))
+    sent, first_i = False, dict(u=None, tgt=[])
+    s_ins0 = ins.s.copy()
     while t - box['t0'] < CTRL_LIMIT_S and ins.stop_ok is None:
         if ins.phase == 'LOOK' and not sent:
-            ins.obs_intake((t - box['t0']) - DT, T_near)                 # 本趟近距估計（A0 已送過接近控制器；插入控制器以同一估計為目標）
+            ins.accept_task_reference(T_near, dict(res['task_reference'], age_at_accept_s=round(float(world.current_time) - near['t_render_sim'], 3)))
             sent = True
-        step('I', 1)
+        if not step('I', 1):
+            break
+        if first_i['u'] is None and np.any(ins.u_last):
+            first_i['u'] = ins.u_last.copy()
+        if len(first_i['tgt']) < 15:
+            first_i['tgt'].append(float(np.abs(ins.s - s_ins0).max()))
+    box['task_ref'] = None
     rep_i = ins.report()
-    res['I_insert'] = dict(stop=rep_i['stop'], done=rep_i['done'], stop_effect=rep_i['stop_effect'], tracking=rep_i['tracking']['TO_PRE'], d_hat=rep_i['d_hat'], target='本趟 T_near')
+    res['handover_A0_to_I'].update(model_reinit='偏置模型重新初始化（插入控制器自帶觀測，首次接觸後照舊凍結）', bias_diff=[round(float(x_), 6) for x_ in (np.asarray(ins.bias0, float) - ho_a0['bias'])],
+                                   first_nonzero_cmd=None if first_i['u'] is None else [round(float(x_), 5) for x_ in first_i['u']], first_15_steps_setpoint_change=first_i['tgt'],
+                                   insert_min_clear_stop_now=rep_i.get('min_clear_stop_now'), insert_min_clear_candidate=rep_i.get('min_clear_candidate'))
+    res['I_insert'] = dict(stop=rep_i['stop'], done=rep_i['done'], stop_effect=rep_i['stop_effect'], tracking=rep_i['tracking']['TO_PRE'], d_hat=rep_i['d_hat'], target_source=rep_i['target_source'],
+                           replan_task_reference=(rep_i['replan'] or {}).get('task_reference'), obs_rejected=rep_i['obs_rejected'])
     print(f"[full] 插入 done={rep_i['done']} stop={rep_i['stop']}", flush=True)
     if not (rep_i['done'] and rep_i['stop_effect'] and rep_i['stop_effect']['ok'] and gate.latched is None):
         res['result'] = 'insert_not_completed：不閉爪'
         return finish(res, rows, None, events=events, gate=gate)
+    if not guard.may_start('B'):
+        res['result'] = 'latched：不閉爪'
+        return finish(res, rows, box['aborted'], events=events, gate=gate)
     for i in range(50):
         tgt[f1] = FINGER_OPEN * (1 - (i + 1) / 50)
         step('B', 1)
@@ -532,8 +567,8 @@ def main():
         exit_ho_src = ins
         phi_b, T_WH_b = door_q(), WB.Rz4(-(door_q() - phi_cap)) @ T_near
     else:
-        if not okb:
-            res['result'] = 'bind_conditions_not_met：不綁'
+        if not okb or not guard.may_start('D'):
+            res['result'] = 'bind_conditions_not_met_or_latched：不綁'
             return finish(res, rows, None, events=events, gate=gate)
         Rr0, Tg_b, Tl_b = rel_T()
         j = UsdPhysics.FixedJoint.Define(stage, JOINT)
@@ -578,9 +613,12 @@ def main():
         opt, info, v, (Xd, h, _) = rr
         np.savez(os.path.join(a.out, 'plan.npz'), Xd=Xd, h=h, X=opt.X, T_WH_bind=T_WH_b, phi_bind=phi_b, T_HE=T_HE, T_near=T_near, phi_capture=phi_cap)
         ho = dict(s=ins.s.copy(), pipe=[u_.copy() for u_ in ins.pipe], u_last=ins.u_last.copy(), u_prev=ins.u_prev.copy(), bias=np.asarray(ins.cfg.arm_model.bias, float).copy())
+        if not guard.may_start('O'):
+            res['result'] = 'latched：不開門'
+            return finish(res, rows, None, events=events, gate=gate)
         ex = XO.DoorOpenExec(ident, Xd, h, T_WH_b, phi_b, T_HE, PHI_GOAL, ho, fq, arm_mode='closure', joint_kp=joint_kp)
         res['exec_config'] = ex.config_readback()
-        box.update(kind='open', obj=ex, t0=t)
+        box.update(kind='open', obj=ex, t0=t, forwarded=False)
         t_o0 = t
         while t - t_o0 < OPEN_LIMIT_S and ex.stop_ok is None:
             if not step('O', 1):
@@ -606,10 +644,17 @@ def main():
         exit_ho_src = ex
     # 張爪（兩指實際開度；觀察 0.5 s）
     box.update(kind=None, obj=None)
+    okR = True
     for i in range(50):
         tgt[f1] = fq + (FINGER_OPEN - fq) * (i + 1) / 50
-        step('R', 1)
-    step('R', 50)
+        if not step('R', 1):
+            okR = False
+            break
+    if okR:
+        okR = step('R', 50)
+    if not okR or not guard.may_start('X'):
+        res['result'] = 'latched_in_release：模擬中止、不啟動退出（停止有效性未驗證）'
+        return finish(res, rows, box['aborted'], events=events, gate=gate, guard=guard)
     qm, jpm = q9()
     Rd = np.array([r for r in rows if r[1] == 7])
     omega0 = float((Rd[-1, 2] - Rd[-11, 2]) / 0.1)
@@ -617,17 +662,15 @@ def main():
     # ================= X：退出（承接當下設定點、管線、上一命令、偏置）=================
     src_ = exit_ho_src
     ho_x = dict(s=src_.s.copy(), pipe=[u_.copy() for u_ in src_.pipe], u_last=src_.u_last.copy(), u_prev=src_.u_prev.copy(), bias=np.asarray(src_.cfg.arm_model.bias, float).copy())
-    xc = XE.DoorExitCtrl(ident, T_WH_b, phi_b, ho_x['s'], ho_x['pipe'], ho_x['u_last'], ho_x['u_prev'], ho_x['bias'], fq_open, door_q(), omega0, np.zeros((1, 2)), q_obs, joint_kp=joint_kp)
+    xc = XE.DoorExitCtrl(ident, T_WH_b, phi_b, ho_x['s'], ho_x['pipe'], ho_x['u_last'], ho_x['u_prev'], ho_x['bias'], fq_open, door_q(), omega0, np.zeros((1, 2)), q_obs, joint_kp=joint_kp, scope_end='X2')
     res['handover_to_X'] = dict(source='door_open_exec_ctrl' if src_ is not ins else 'door_insert_ctrl（冒煙）', setpoint_equal=bool(np.array_equal(xc.s, ho_x['s'])), pipe_equal=bool(all(np.array_equal(x_, y_) for x_, y_ in zip(xc.pipe, ho_x['pipe']))),
-                                u_last_equal=bool(np.array_equal(xc.u_last, ho_x['u_last'])), setpoint_vs_actuator_target=float(np.abs(ho_x['s'] - np.array([tgt[i] for i in idx], float)).max()),
+                                u_last_equal=bool(np.array_equal(xc.u_last, ho_x['u_last'])), u_prev_equal=bool(np.array_equal(xc.u_prev, ho_x['u_prev'])), setpoint_vs_actuator_target=float(np.abs(ho_x['s'] - np.array([tgt[i] for i in idx], float)).max()),
                                 phi0_deg=round(math.degrees(door_q()), 4), omega0_dps=round(math.degrees(omega0), 4), finger_q_open=fq_open, q_stow='本趟起始手臂姿態（同 da_online_1 起點）')
-    box.update(kind='exit', obj=xc, t0=t)
+    box.update(kind='exit', obj=xc, t0=t, forwarded=False)
     t_x0 = t
     while t - t_x0 < EXIT_LIMIT_S:
         if not step('X', 1):
             break
-        if xc.phase == 'X3X4' and xc.stop is None:
-            xc._stop('scope_end_after_X2')
         if xc.stop is not None and xc.stop_ok is not None:
             break
     rep_x = xc.report()
@@ -639,19 +682,30 @@ def main():
         res['result'] = 'completed_to_X2'
     else:
         res['result'] = 'exit_not_completed：' + str(rep_x['stop'])
-    return finish(res, rows, box['aborted'], events=events, gate=gate)
+    if a.smoke_nobind:
+        res['smoke_fixedjoint_never_created'] = not stage.GetPrimAtPath(JOINT).IsValid()
+    return finish(res, rows, box['aborted'], events=events, gate=gate, guard=guard)
 
 
-def finish(res, rows, aborted, events=None, gate=None):
+def finish(res, rows, aborted, events=None, gate=None, guard=None):
     R = np.array(rows) if rows else np.zeros((1, 20))
     res['forbidden_contact'] = None if gate is None else dict(latched=gate.latched, events=events)
-    ck = dict(A0=bool(res.get('A0', {}).get('done')), insert=bool(res.get('I_insert', {}).get('done')), no_forbidden=bool(gate is None or gate.latched is None))
+    res['phase_guard'] = None if guard is None else dict(latched=guard.latched, aborted=guard.aborted, blocked=guard.blocked)
+    a0 = res.get('A0', {})
+    ck = dict(A0=bool(a0.get('done')), A0_stop_effective=bool((a0.get('stop_effect') or {}).get('ok')), near_from_this_run=bool(a0.get('near') and a0.get('target_source') == 'near'),
+              insert=bool(res.get('I_insert', {}).get('done')), insert_stop_effective=bool((res.get('I_insert', {}).get('stop_effect') or {}).get('ok')),
+              insert_target_task_reference=bool(res.get('I_insert', {}).get('target_source') == 'task_reference'), no_forbidden=bool(gate is None or gate.latched is None))
     if 'O_open' in res:
         ck.update(open_done=bool(res['O_open']['done']), unbound=bool(res.get('U_unbind') and not res['U_unbind']['joint_enabled_readback']))
     if 'X_exit' in res:
         x = res['X_exit']
+        hx = res['handover_to_X']
         ck.update(exit_to_X2=bool(x['stop'] and x['stop']['why'] == 'scope_end_after_X2'), exit_stop_effective=bool(x['stop_effect'] and x['stop_effect'].get('ok')), exit_no_abort=x['abort'] is None,
-                  exit_clear=bool(all(x['min_clear'][k_] >= XE.W.THR[k_] for k_ in XE.KEYS)), handover_X=bool(res['handover_to_X']['setpoint_equal'] and res['handover_to_X']['pipe_equal'] and res['handover_to_X']['u_last_equal']))
+                  exit_clear=bool(all(x['min_clear'][k_] >= XE.W.THR[k_] for k_ in XE.KEYS)), no_x3x4_cmd=bool(x.get('x3x4_cmd_ticks') == 0), finger_exemption_released=x.get('finger_release_t') is not None,
+                  exit_limits=bool(x['limits']['arm_rate'] <= 1.0 + 1e-6 and x['limits']['arm_acc'] <= XE.C0.A_ARM + 1e-6 and x['limits']['wheel_v'] <= XE.LIM.W_LIM + 1e-6 and x['limits']['wheel_a'] <= XE.LIM.WA_LIM + 1e-6),
+                  handover_X=bool(hx['setpoint_equal'] and hx['pipe_equal'] and hx['u_last_equal'] and hx['u_prev_equal'] and hx['setpoint_vs_actuator_target'] < 1e-6))
+    if res.get('mode') == 'smoke_nobind':
+        ck['smoke_fixedjoint_never_created'] = bool(res.get('smoke_fixedjoint_never_created'))
     if 'handover_A0_to_I' in res:
         h = res['handover_A0_to_I']
         ck['handover_A0_I'] = bool(h['setpoint_equal'] and h['pipe_equal'] and h['u_last_equal'])

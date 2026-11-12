@@ -27,12 +27,17 @@ phi0 = float(Rr[-1, 2])
 omega0 = float((Rr[-1, 2] - Rr[-11, 2]) / 0.1)
 fq = 0.5 * (float(Rr[-1, 3]) + float(Rr[-1, 4]))
 s0 = Z['ctrl'][-1, 32:38].copy()
+if case == 'closed_X2':                                              # 閉門約 0°（冒煙幾何）：第三趟綁定靜置末的實測狀態、張爪、不綁；承接插入控制器設定點
+    Re = R[R[:, 1] == 4]
+    q0 = np.r_[Re[-1, 24:27], Re[-1, 16:22]]
+    phi0, omega0, fq = float(Re[-1, 2]), 0.0, XE.FINGER_OPEN
+    s0 = q0[3:] + np.array(json.load(open(os.path.join(RUN, 'result.json')))['handover']['setpoint_minus_measured'])
 al = np.asarray(ident['alpha'], float)
 d0 = q0[3:] - s0                                                     # 起點實測靜態偏置（q−s）
 path = np.vstack([np.array(sg['path_xy']) for sg in pj['segments']])
 path = np.vstack([path, np.array(pj['P2'])[None]])
 Q_STOW = np.array([-0.013, -0.052, 0.086, 0.012, -1.625, -0.002])
-c = XE.DoorExitCtrl(ident, P['T_WH_bind'], float(P['phi_bind']), s0, [np.zeros(9)] * XE.D_STEPS, np.zeros(9), np.zeros(9), al * d0, fq, phi0, omega0, path[1:], Q_STOW)
+c = XE.DoorExitCtrl(ident, P['T_WH_bind'], float(P['phi_bind']), s0, [np.zeros(9)] * XE.D_STEPS, np.zeros(9), np.zeros(9), al * d0, fq, phi0, omega0, path[1:], Q_STOW, scope_end=('X2' if case in ('closed_X2', 'open_X2') else None))
 K = XE.K
 bodies = BM.arm_bodies(K)
 G0 = BM.arm_gravity(K, q0, bodies)
@@ -88,7 +93,7 @@ while t < 90.0:
         break
 rep = c.report()
 Lg = np.array(log)
-expect = dict(nominal='exit_pass_done', door_push='door_out_of_band', finger_pen_start='finger_penetration', finger_slow='forced_stop', finger_reapproach='finger_bar', push_during_stop='forced_stop').get(case, 'forced_stop')
+expect = dict(closed_X2='scope_end_after_X2', open_X2='scope_end_after_X2', nominal='exit_pass_done', door_push='door_out_of_band', finger_pen_start='finger_penetration', finger_slow='forced_stop', finger_reapproach='finger_bar', push_during_stop='forced_stop').get(case, 'forced_stop')
 P2 = np.array(pj['P2'])
 if case in ('push_during_stop', 'finger_slow'):
     want = ('clearance', 'finger_bar') if case == 'push_during_stop' else ('finger_gap_worsening',)
@@ -98,6 +103,9 @@ else:
   ck = dict(stop_reason=bool(rep['stop'] and rep['stop']['why'] == expect), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']), not_aborted=rep['abort'] is None,
           clear_ok=bool(case in ('finger_reapproach', 'finger_pen_start') or all(rep['min_clear'][k] >= XE.W.THR[k] for k in XE.KEYS)), finger_after_release_ok=bool(case == 'finger_reapproach' or rep['min_clear']['finger_bar_after_release'] >= XE.W.THR['env'] or rep['finger_release_t'] is None),
           limits_ok=bool(rep['limits']['arm_rate'] <= 1.0 + 1e-6 and rep['limits']['arm_acc'] <= XE.C0.A_ARM + 1e-6 and rep['limits']['wheel_v'] <= XE.LIM.W_LIM + 1e-6 and rep['limits']['wheel_a'] <= XE.LIM.WA_LIM + 1e-6))
+if case in ('closed_X2', 'open_X2'):
+    ck.update(no_x3x4_cmd=bool(rep['x3x4_cmd_ticks'] == 0 and not any(ph == 'X3X4' or ph == 'STOP:X3X4' for _, ph, _u in c.cmd_log)), reached_X2_done=bool(any(e['what'] == 'phase_done' and e['phase'] == 'X2' for e in rep['events'])),
+              arm_stowed=bool(np.abs(q[3:] - Q_STOW).max() < 0.03), finger_released=rep['finger_release_t'] is not None)
 if case == 'nominal':
     st = c.sweep_timing
     def kd(tag, e):

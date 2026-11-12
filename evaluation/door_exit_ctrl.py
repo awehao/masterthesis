@@ -102,7 +102,7 @@ def trap_T(dist, v, a):
 
 
 class DoorExitCtrl:
-    def __init__(self, ident, T_WH_bind, phi_bind, s, pipe, u_last, u_prev, bias, finger_q, phi0, omega0, path_xy, q_stow, joint_kp=600.0, sweep_stride=3):
+    def __init__(self, ident, T_WH_bind, phi_bind, s, pipe, u_last, u_prev, bias, finger_q, phi0, omega0, path_xy, q_stow, joint_kp=600.0, sweep_stride=3, scope_end=None):
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
         self.cfg.arm_model.bias = np.asarray(bias, float).copy()
@@ -141,6 +141,8 @@ class DoorExitCtrl:
         self._ref_done = False
         self.abort, self.finger_gap_max, self.phi_tick, self.still_n, self.sweep_timing, self.stop_sev, self.stop_kinds = None, None, None, 0, [], None, set()
         self.inject = None                                           # 測試用（外部停止等）
+        self.scope_end = scope_end                                   # 'X2'：X2 完成即在控制器內範圍停止，不進 X3X4、不產生任何 X3X4 命令（Codex 20261113_020612）
+        self.cmd_log = []                                            # 每控制拍（t, 段, 提交命令 9）——驗證無 X3X4 命令
 
     # ---- 門角帶
     def band(self, t):
@@ -404,7 +406,9 @@ class DoorExitCtrl:
                 if self.settle_n >= SETTLE['n_ticks']:
                     nxt = dict(X1='X1b', X1b='X2', X2='X3X4', X3X4='DONE')[self.phase]
                     self._ev('phase_done', phase=self.phase)
-                    if nxt == 'DONE':
+                    if nxt == 'X3X4' and self.scope_end == 'X2':
+                        self._stop('scope_end_after_X2')
+                    elif nxt == 'DONE':
                         self.done = True
                         self._stop('exit_pass_done')
                     else:
@@ -451,6 +455,7 @@ class DoorExitCtrl:
                 self.u_last = u
             self.u_prev = self.u_last.copy()
             self.u_body_prev = self.u_last[:3].copy()
+            self.cmd_log.append((round(self.t, 3), self.phase if self.stop is None else 'STOP:' + self.phase, self.u_last.copy()))
             self.u_from_base, self.ramp_j = self._ramp_end(), 0
         cmd = XO.ramp_cmd(self.u_from_base, self.u_last, self.ramp_j)
         self.ramp_j += 1
@@ -473,6 +478,7 @@ class DoorExitCtrl:
     def report(self):
         Rr = np.array(self.rec, float) if self.rec else np.zeros((1, 10))
         return dict(stop=self.stop, abort=self.abort, done=self.done, stop_effect=self.stop_ok, phases=self.ph_hist, events=self.events, anchor=self.anchor,
-                    sweep_timing_sample=self.sweep_timing[:6], sweep_timing_n=len(self.sweep_timing),
+                    sweep_timing_sample=self.sweep_timing[:6], sweep_timing_n=len(self.sweep_timing), scope_end=self.scope_end,
+                    x3x4_cmd_ticks=sum(1 for _, ph, u in self.cmd_log if ph == 'X3X4' and np.any(u)), cmd_ticks=len(self.cmd_log),
                     min_clear={k: round(float(v), 4) for k, v in self.mins.items()}, finger_release_t=self.finger_release_t, limits={k: (round(v, 4) if isinstance(v, float) else [round(x, 4) for x in v]) for k, v in self.lim.items()},
                     door_band_end_deg=[round(math.degrees(v), 4) for v in self.band(self.t - getattr(self, 't_x1', 0.0))], door_meas_end_deg=round(math.degrees(float(Rr[-1, 6])), 4) if len(Rr) else None, t_end=round(self.t, 3))
