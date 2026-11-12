@@ -46,6 +46,8 @@ ap.add_argument('--settle-s', type=float, default=1.0)
 ap.add_argument('--sim-limit-s', type=float, default=40.0)
 ap.add_argument('--hold-s', type=float, default=3.0)
 ap.add_argument('--ctrl-module', default='door_approach_ctrl', choices=('door_approach_ctrl', 'door_approach_jnom_ctrl'))
+ap.add_argument('--online-plan', action='store_true', help='停位與重瞄構型由本趟起點影格的估計在線算（door_online_plan）；不用登錄停位／視點／遠距估計')
+ap.add_argument('--plan-only', action='store_true', help='只做起點影格→估計→在線規劃與無效估計路徑核對，不運動')
 ap.add_argument('--joint-nominal', action='store_true', help='只對 door_approach_jnom_ctrl：底盤固定相位以重算關節軌跡為線性化名目')
 a = ap.parse_args()
 
@@ -288,6 +290,72 @@ def main():
     door_q0 = door_q()
     truth = dict(note='只供事後評估；控制、估計、視點選擇都不讀', T_handle_start=truth_handle().tolist(), door_q0_rad=door_q0)
     print(f'[da] 起點讀回 底盤 {np.round(q_s[:3], 4).tolist()} 手臂靜態偏移 {np.round(q_s[3:] - start_q, 4).tolist()} 門角 {math.degrees(door_q0):.4f}°', flush=True)
+    online = None
+    if a.online_plan:
+        if a.ctrl_module != 'door_approach_jnom_ctrl' or smoke:
+            print('[da] --online-plan 需搭配 door_approach_jnom_ctrl 與 approach 模式 ⇒ 拒跑', flush=True)
+            return 66
+        import door_online_plan as OP
+        hist_p, f_far, n_read = {}, None, 0
+        for _ in range(120):                                          # 機器人保持不動，等一格新影格（影格時間＝渲染時間；位姿＝同一步讀值）
+            t_s = float(world.current_time)
+            qv, _ = q9()
+            hist_p[int(round(t_s / DT))] = (t_s, qv.copy())
+            fr = cam.get_current_frame()
+            n_read += 1
+            t_r, dep_ = fr.get('rendering_time'), fr.get('distance_to_image_plane')
+            hp = None if t_r is None else hist_p.get(int(round(float(t_r) / DT)))
+            if hp is not None and dep_ is not None and np.asarray(dep_).size and len(hist_p) > 3 and float(t_r) >= t_s - 3 * DT:
+                dep_ = np.asarray(dep_, dtype=np.float32)
+                col_ = fr.get('rgb') if fr.get('rgb') is not None else fr.get('rgba')
+                f_far = dict(t_r=float(t_r), t_q=t_s, dep=dep_[:, :, 0] if dep_.ndim == 3 else dep_, T_cam=K.fk(hp[1], W0.OPT), q=hp[1], rgb=None if col_ is None else np.asarray(col_)[:, :, :3].astype(np.uint8))
+                break
+            apply(tgt)
+            base_cmd(np.zeros(3), 0.0)
+            world.step(render=True)
+
+        def far_est(dep_, tag):
+            det, ms = D1.detect(dep_, Kr, f_far['T_cam'], np.random.default_rng(SEED))
+            cls = MD.classify(det)
+            info = dict(tag=tag, cls=cls, reject=det['reject'], detect_ms=round(float(ms), 1), t_obs_sim=f_far['t_r'], t_query_sim=f_far['t_q'])
+            if cls != 'center_valid':
+                return None, info
+            est = E.estimate(dict(path=tag, L1=det['L1'], L2=det['L2'], reject=None, reject_L2=None, depth=dep_, K=Kr, T_cam=f_far['T_cam'], t_obs=f_far['t_r']), 'N-obs', Rg, T_HG, a_H, query_t=f_far['t_q'])
+            info['est_ok'], info['est_why'] = bool(est['ok']), est.get('why')
+            return (np.asarray(est['T_WH'], float) if est['ok'] else None), info
+        online = dict(frame_reads=n_read, got_frame=f_far is not None)
+        T_live, plan_ = None, dict(ok=False, why='no_far_frame')
+        if f_far is not None:
+            import imageio.v2 as imageio
+            os.makedirs(os.path.join(a.out, 'frames'), exist_ok=True)
+            if f_far['rgb'] is not None:
+                imageio.imwrite(os.path.join(a.out, 'frames', 'far_plan_rgb.png'), f_far['rgb'])
+            np.save(os.path.join(a.out, 'frames', 'far_plan_depth_m.npy'), f_far['dep'])
+            T_live, online['far_estimate'] = far_est(f_far['dep'], 'far_plan')
+            qn, _ = q9()
+            w_p = time.perf_counter()
+            st_a = float(world.current_time)
+            plan_ = OP.plan(T_live, qn[:3], qn[3:], T_mount, Kr, T_at)
+            online['plan_wall_s'], online['sim_clock_advance_during_plan_s'] = round(time.perf_counter() - w_p, 2), float(world.current_time) - st_a
+            T_bad, info_bad = far_est(np.full_like(f_far['dep'], np.inf), 'far_invalid_probe')    # 無有效遠距估計路徑：不得建立計畫
+            pb = OP.plan(T_bad, qn[:3], qn[3:], T_mount, Kr, T_at)
+            online['invalid_path'] = dict(info_bad, plan_ok=pb['ok'], why=pb.get('why'), has_plan=bool('b1' in pb))
+        online['plan'] = {k_: v_ for k_, v_ in plan_.items() if k_ not in ('b1', 'q_look', 'q_pre_far')}
+        if plan_['ok']:
+            online.update(b1=plan_['b1'].tolist(), q_look=plan_['q_look'].tolist(), T_far=T_live.tolist(),
+                          vs_registered=dict(b1_dist_m=round(float(np.linalg.norm(plan_['b1'][:2] - b1[:2])), 4), b1_yaw_deg=round(math.degrees(DA.R1.wrap(plan_['b1'][2] - b1[2])), 2), q_look_max_rad=round(float(np.abs(plan_['q_look'] - q_look).max()), 4),
+                                             far_est_vs_registered_far_mm=round(float(np.linalg.norm(T_live[:3, 3] - T_far[:3, 3])) * 1e3, 2)),
+                          far_est_vs_truth_mm_eval=round(float(np.linalg.norm(T_live[:3, 3] - truth_handle()[:3, 3])) * 1e3, 2))
+            b1, q_look, T_far = plan_['b1'].copy(), plan_['q_look'].copy(), T_live.copy()      # 之後只用本趟算出的值
+        print(f"[da] 在線規劃 {json.dumps(clean({k_: v_ for k_, v_ in online.items() if k_ not in ('plan', 'T_far')}), ensure_ascii=False)[:1200]}", flush=True)
+        inv_ok = bool(online.get('invalid_path') and not online['invalid_path']['plan_ok'] and not online['invalid_path']['has_plan'] and online['invalid_path']['why'] == 'no_valid_far_estimate')
+        if not plan_['ok'] or a.plan_only:
+            okp = bool(plan_['ok'] and inv_ok and online.get('sim_clock_advance_during_plan_s') == 0.0)
+            json.dump(clean(dict(run=os.path.basename(a.out.rstrip('/')), mode='plan_only' if a.plan_only else 'approach', ok=okp if a.plan_only else False, refused=None if plan_['ok'] else 'no_online_plan：不建立接近計畫、不運動、不沿用登錄資料',
+                                 checks=dict(plan_ok=bool(plan_['ok']), invalid_estimate_no_plan=inv_ok, clock_paused_during_plan=online.get('sim_clock_advance_during_plan_s') == 0.0), online=online, readback=readback)),
+                      open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)
+            print(f"[da] 完成 ok={okp if a.plan_only else False} plan_only={a.plan_only} 計畫={plan_['ok']} {plan_.get('why')}", flush=True)
+            return 0 if (a.plan_only and okp) else 7
     ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json')))
     ctrl = DA.DoorApproachCtrl(ident, start_b, start_q, b1, q_look, T_far, T_at, **(dict(joint_nominal=True) if a.joint_nominal else {}))
     readback['ctrl_module'], readback['ctrl_file'], readback['joint_nominal'] = a.ctrl_module, os.path.basename(DA.__file__), bool(getattr(ctrl, 'joint_nominal', False))
@@ -590,10 +658,11 @@ def main():
     else:
         checks = dict(clock_no_drift=clock_bad == 0, pipe_delay=pipe_probe['delay_steps'] == DA.D_STEPS, ctrl_as_requested=bool(rep.get('joint_nominal', False) == bool(a.joint_nominal)), done=bool(rep['done']), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']), no_latch=latch is None, not_aborted=aborted is None,
                       true_clearance_ok=bool(tc.get('status') == 'computed' and tc.get('ok')),
+                      online_plan_as_requested=bool((online is not None) == bool(a.online_plan)),
                       near_from_live_frame=bool(cam_stat['delivered'] == 1 and rep['target_source'] == 'near'), hold_base_cmd_zero=rep['tracking']['base_cmd_max_hold'] == 0.0)
         ok = all(checks.values())
-    res = dict(run=os.path.basename(a.out.rstrip('/')), mode=a.mode, ok=bool(ok), checks=checks, latch=latch, aborted=aborted, readback=readback, controller=rep, eval_truth=ev, timing=timing, camera=cam_stat, far_live=far_live, pipe=pipe_probe,
-               smoke=smoke_res if smoke else None, init=dict(far_estimate='登錄檔 source.T_WH_est（既有影格估計）＝初始化條件；不是本趟在線視覺', standoff_and_look='登錄視點（r5 通過、總時間最短）'),
+    res = dict(run=os.path.basename(a.out.rstrip('/')), mode=a.mode, ok=bool(ok), checks=checks, latch=latch, aborted=aborted, readback=readback, controller=rep, eval_truth=ev, timing=timing, camera=cam_stat, far_live=far_live, pipe=pipe_probe, online=online,
+               smoke=smoke_res if smoke else None, init=(dict(far_estimate='本趟起點影格的估計', standoff_and_look='本趟在線規劃（door_online_plan）', given='起點底盤位姿與起始手臂姿態為場景初始條件') if online is not None else dict(far_estimate='登錄檔 source.T_WH_est（既有影格估計）＝初始化條件；不是本趟在線視覺', standoff_and_look='登錄視點（r5 通過、總時間最短）')),
                scope='非接觸；不插入、不閉爪、不開門、無行人；非即時閉迴路（計算時模擬暫停）')
     json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)
     json.dump(clean(truth), open(os.path.join(a.out, 'truth.json'), 'w'), ensure_ascii=False, indent=1)
