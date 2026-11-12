@@ -13,7 +13,10 @@
       底盤參考 X_ref[k]＝b_ref(σ_k)、本體速度前饋＝g·R(θ_ref)ᵀ·db_ref/dσ；
       預測門角 φ̂_k＝φ_ref(σ_k)；TCP 目標 T_seq[k]＝Rz[−(φ̂_k−φ_bind)]·T_WH_bind·T_HE（世界座標）；
       手臂線性化名目＝參考關節經設定點模型反算（同 jnom；求解器回傳的就是完整命令，不再另加前饋）。
-  3 **同一個全身問題**（gmpc_wb.GMPC，底盤不固定＋手臂 active）同時輸出底盤與手臂命令；輪級耦合在求解器內，求解後不再改命令。
+  3 **同一個全身問題**（gmpc_wb.GMPC，底盤不固定＋手臂 active）同時輸出底盤與手臂命令；輪級耦合在求解器內。arm_mode='qp'（r5 預設）求解後不再改命令。
+    arm_mode='closure'（r6，A；Codex 20261113_003032）：**底盤＝QP 提案**，手臂命令改為「命令生效時刻預測底盤＋預測門角」的閉鏈 IK 追蹤（替換 QP 手臂輸出）；
+    替換後的命令有自己的限制驗收（手臂速度、相鄰命令加速度、預測設定點與 IK 構型限位、可操作度下限），不過 ⇒ 候選失敗＝closure_cmd_invalid（模擬中止）；
+    只能稱「機構約束離線規劃＋QP 底盤提案＋閉鏈 IK 手臂追蹤」，不能稱最終命令仍是同一全身 QP 的最佳解。
   4 提交前核停止路徑（含**轉動中的門**）：對「現在停」（求解前）與「候選命令後下一拍停／再晚一拍停」各預測整段機器人軌跡（真管線、真減速），
     每個取樣點由把手點位置反算當時門角 φ_i，核：預測閉鏈殘差（徑向／高度／姿態；綁定下它代表內應力而非可見誤差）與全身對 φ_i 門扇的淨空（閉合手指開度）。
     違反 ⇒ 候選不提交、受控停止。
@@ -113,10 +116,11 @@ class DoorOpenExec:
         self.mpc = GR.GMPC(rc)
         self.arm_mode = str(arm_mode)                                # r6：'qp'＝全身 QP 的手臂輸出（r5 預設）；'closure'＝A 閉鏈一致設定點（命令生效時刻的預測底盤＋預測門角解 IK）
         assert self.arm_mode in ('qp', 'closure')
-        self.cl_stats = dict(n=0, rate_clip=0, ik_fail=0, sigma_min=np.inf, ik_resid_max=0.0, s0_jump_max=0.0)
+        self.cl_stats = dict(n=0, rate_clip=0, ik_fail=0, sigma_min=np.inf, ik_resid_max=0.0, s0_jump_max=0.0, rate_max=0.0, acc_max=0.0, fails=[])
+        self._cl_fail = None
         self.q_cl_prev = None
         self.joint_kp = float(joint_kp)                              # A：重力偏置換算用的關節 PD 剛度（執行器 --kp；登錄值）
-        self.off_cl0, self.G0, self.arm_bodies = None, None, BM.arm_bodies(K)
+        self.off_cl0, self.G0, self.arm_bodies, self.anchor = None, None, BM.arm_bodies(K), None
         self.Xd, self.h = np.asarray(Xd, float), float(h)
         self.T_WH_bind, self.phi_bind, self.T_HE, self.phi_goal = np.asarray(T_WH_bind, float), float(phi_bind), np.asarray(T_HE, float), float(phi_goal)
         W.set_model(phi0=self.phi_bind, finger_q=finger_q)
@@ -145,7 +149,7 @@ class DoorOpenExec:
         self.cmd_hist = []                                           # 每物理步實際送進管線的命令（驗收用）
         self.step_log, self.pipe_log = [], []                        # r5 紀錄：逐物理步（提交／生效命令、設定點、σ、生效參考時刻）、逐控制拍管線快照；只記錄，不影響行為
         self.sigma0 = float(self.sigma)
-        self.sweep_inject, self.clear_inject = None, None            # 測試用故障注入
+        self.sweep_inject, self.clear_inject, self.closure_inject = None, None, None   # 測試用故障注入
         self.rel_min, self.n_release_viol, self.mon_prev = {k: np.inf for k in KEYS}, 0, None
         self.finger_q_closed = float(finger_q)
         self._ev('start', sigma_end=round(self.sig_end, 2), phi_bind_deg=round(math.degrees(self.phi_bind), 3), pipe_nonzero=int(sum(bool(np.any(u)) for u in self.pipe)))
@@ -345,13 +349,16 @@ class DoorOpenExec:
             B_.append(b.copy())
         PH_ = [float(self.ref(sig_eff + k * DT * g)[9]) for k in range(N + 1)]
         seed = self.q_cl_prev if self.q_cl_prev is not None else np.asarray(qp[3:], float)
-        Q = []
+        Q, SG = [], []
         for k in range(N + 1):
             q, res, sm = self._ik_closure(B_[k], PH_[k], seed)
+            SG.append(sm)
             self.cl_stats['ik_resid_max'] = max(self.cl_stats['ik_resid_max'], res)
             self.cl_stats['sigma_min'] = min(self.cl_stats['sigma_min'], sm)
             if not (res < 1e-6 and np.isfinite(q).all()) or float(np.abs(q - seed).max()) > 0.5:
                 self.cl_stats['ik_fail'] += 1
+                self._cl_fail = [dict(what='ik_fail', k=k, resid=res)]
+                self.cl_stats['fails'].append(dict(t=round(self.t, 3), bad=self._cl_fail))
                 return None
             Q.append(q)
             seed = q
@@ -362,12 +369,32 @@ class DoorOpenExec:
         U = np.diff(np.vstack([np.asarray(sp, float)[None], S_[1:]]), axis=0) / DT
         self.cl_stats['n'] += 1
         self.cl_stats['s0_jump_max'] = max(self.cl_stats['s0_jump_max'], float(np.abs(S_[0] - sp).max()))
-        if float(np.abs(U[0]).max()) > va + 1e-12:
+        # 替換後命令自己的限制驗收（不沿用 QP 的 arm_check）：任一不過 ⇒ 候選失敗（不夾住、不提交）
+        acc = np.abs(np.diff(np.vstack([np.asarray(self.u_prev[3:], float)[None], U]), axis=0)) / DT     # 含承接第一拍（對上一個提交的手臂命令）
+        rate = float(np.abs(U).max())
+        self.cl_stats['rate_max'] = max(self.cl_stats['rate_max'], rate)
+        self.cl_stats['acc_max'] = max(self.cl_stats['acc_max'], float(acc.max()))
+        lo_q, hi_q = np.asarray(LITE6_SAFE.lower, float), np.asarray(LITE6_SAFE.upper, float)
+        sig_q = float(min(SG))                                         # 本拍整個視窗的 IK 構型可操作度
+        bad = []
+        if rate > va + 1e-12:
             self.cl_stats['rate_clip'] += 1
-        ua = np.clip(U[0], -va, va)
+            bad.append(dict(what='arm_rate', max=round(rate, 4), lim=va))
+        if float(acc.max()) > C0.A_ARM + 1e-9:
+            bad.append(dict(what='arm_acc', max=round(float(acc.max()), 4), lim=C0.A_ARM))
         if np.any(S_[1:] < self.lim_lo) or np.any(S_[1:] > self.lim_hi):
+            bad.append(dict(what='setpoint_limit'))
+        if np.any(Q < lo_q) or np.any(Q > hi_q):
+            bad.append(dict(what='ik_joint_limit'))
+        if sig_q < W.SIG_FLOOR:
+            bad.append(dict(what='manipulability', sigma_min=round(sig_q, 5), floor=W.SIG_FLOOR))
+        if self.closure_inject is not None:                          # 測試用：真鏈反例（例如收緊限位）
+            bad += self.closure_inject(self, U, S_, Q) or []
+        if bad:
+            self._cl_fail = bad
+            self.cl_stats['fails'].append(dict(t=round(self.t, 3), bad=bad))
             return None
-        return ua
+        return U[0].copy()
 
     def _ramp_end(self):
         """若在本拍首提交新命令，其過渡起點＝上一個物理步實際送出的底盤命令。"""
@@ -429,8 +456,10 @@ class DoorOpenExec:
             self._stop('state_nonfinite')
         if self.abort is not None:
             return dict(ab, arm_target=self.s.copy())
-        if tick and self.off_cl0 is None:                            # A：開門起點實測靜態偏置（第一拍、尚未送任何命令）
+        if tick and self.off_cl0 is None:                            # A：開門起點實測靜態偏置（第一拍、尚未送任何命令；只取一次，運動中不重新歸零）
             self.off_cl0, self.G0 = q[3:] - self.s, BM.arm_gravity(K, q, self.arm_bodies)
+            self.anchor = dict(t=self.t, q0=q.tolist(), s0=self.s.tolist(), G0=self.G0.tolist(), off0=self.off_cl0.tolist(), joint_kp=self.joint_kp,
+                               note='錨定含綁定預載，不是自由空間辨識偏置；q−s＝G/kp')
         if tick:
             if self.q_tick is not None:
                 self.rate = dict(base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / self.cfg.dt, yaw=abs(q[2] - self.q_tick[2]) / self.cfg.dt, arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / self.cfg.dt, door=abs(phi_meas - self.phi_tick) / self.cfg.dt)
@@ -468,9 +497,10 @@ class DoorOpenExec:
         # ---- 命令
         if tick:
             if self.stop is None:
+                self._cl_fail = None
                 u = self._solve(q, phi_meas)
                 if u is None:
-                    self._stop('solver_fail')
+                    self._stop('closure_cmd_invalid', bad=self._cl_fail) if self._cl_fail else self._stop('solver_fail')
                 else:
                     w0 = time.perf_counter()
                     b_ = self._sweep(q, u, (1, 2), 'candidate')
@@ -490,9 +520,10 @@ class DoorOpenExec:
                 elif self.t - self.t_path_stop > PATH_STOP_MAX_S:
                     self._stop('path_stop_timeout')
                 else:
+                    self._cl_fail = None
                     u = self._solve(q, phi_meas)
                     if u is None:
-                        self._stop('solver_fail')
+                        self._stop('closure_cmd_invalid', bad=self._cl_fail) if self._cl_fail else self._stop('solver_fail')
                     else:
                         b_ = self._sweep(q, u, (1, 2), 'path_candidate')     # 路徑停止的新候選同樣經提交前核對
                         if b_ is not None:
@@ -545,6 +576,7 @@ class DoorOpenExec:
         import hashlib
         sha = lambda f: hashlib.sha256(open(f, 'rb').read()).hexdigest()   # noqa: E731
         return dict(exec_module=__file__, exec_sha256=sha(__file__), solver_module=type(self.mpc).__module__, solver_file=sys.modules[type(self.mpc).__module__].__file__, solver_sha256=sha(sys.modules[type(self.mpc).__module__].__file__),
+                    arm_mode=self.arm_mode, joint_kp=self.joint_kp, body_model=BM.__file__, body_model_sha256=sha(BM.__file__),
                     cmd_ramp_w=getattr(self.mpc.cfg, 'cmd_ramp_w', None), BASE_RAMP=BASE_RAMP, START_LAT_ALIGN=START_LAT_ALIGN, sigma0_s=self.sigma0, latency_steps=D_STEPS, phys_dt=PHYS, latency_s=D_STEPS * PHYS, nph=NPH, ctrl_dt=self.cfg.dt)
 
     def report(self):
@@ -560,7 +592,7 @@ class DoorOpenExec:
         def pct(a):
             a = np.array(a or [0.0])
             return dict(p50=round(float(np.percentile(a, 50)), 1), p95=round(float(np.percentile(a, 95)), 1), max=round(float(a.max()), 1))
-        return dict(arm_mode=self.arm_mode, closure_stats={k: (round(float(v), 6) if isinstance(v, float) else v) for k, v in self.cl_stats.items()}, stop=self.stop, done=self.done, stop_effect=self.stop_ok, events=self.events, sigma_end=round(self.sig_end, 2), sigma=round(self.sigma, 3),
+        return dict(arm_mode=self.arm_mode, closure_anchor=self.anchor, closure_stats={k: (round(float(v), 6) if isinstance(v, float) else v) for k, v in self.cl_stats.items()}, stop=self.stop, done=self.done, stop_effect=self.stop_ok, events=self.events, sigma_end=round(self.sig_end, 2), sigma=round(self.sigma, 3),
                     closure_measured=dict(pos_mm=stb(5, 1e3), rot_deg=stb(6)), setpoint_model_deviation=dict(pos_mm=stb(7, 1e3), rot_deg=stb(8), note='設定點模型的幾何偏差監看（主要是 τ·q̇ 動態超前），不是內應力'), base_track_m=st(9), yaw_track_rad=st(10), tcp_vs_ref_mm=st(11, 1e3),
                     lead_deg_max=round(math.degrees(float((Rr[:, 4] - Rr[:, 3]).max())), 3), g_min=round(float(Rr[:, 2].min()), 3), g_lt1_frac=round(float((Rr[:, 2] < 1 - 1e-9).mean()), 3),
                     min_clear_actual={k: round(float(v), 4) for k, v in self.mins['act'].items()}, min_clear_stop_sweep={k: round(float(v), 4) for k, v in self.mins['stop'].items()},

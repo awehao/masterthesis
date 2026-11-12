@@ -33,6 +33,7 @@ ap.add_argument('--kd', type=float, default=60.0)
 ap.add_argument('--finger-kp', type=float, default=1.0e4)
 ap.add_argument('--finger-kd', type=float, default=1.0e3)
 ap.add_argument('--hold-s', type=float, default=3.0)
+ap.add_argument('--arm-mode', default='qp', choices=['qp', 'closure'], help="開門執行層手臂命令：qp＝全身 QP 輸出（r5）；closure＝A 閉鏈 IK 追蹤（r6）")
 ap.add_argument('--wiring', action='store_true', help='不動作接線核對：只擺位靜置、讀回、以合成綁定狀態試規劃與控制器一步，不插入、不閉爪、不綁、不開門')
 a = ap.parse_args()
 
@@ -182,6 +183,26 @@ def main():
     robot.set_joint_positions(q0.astype(np.float32))
     robot.get_articulation_controller().set_gains(kps=kp, kds=kd)
     tgt = q0.copy()
+    # r3：關節增益讀回（A 的重力偏置換算要用實際 kp；不符拒跑）
+    gr = dict(arm_mode=a.arm_mode, kp_set=a.kp, kd_set=a.kd)
+    try:
+        kps_rb, kds_rb = robot.get_articulation_controller().get_gains()
+        gr.update(api_kp=[float(np.asarray(kps_rb)[i]) for i in idx], api_kd=[float(np.asarray(kds_rb)[i]) for i in idx])
+    except Exception as e_:                                          # noqa: BLE001
+        gr['api_error'] = repr(e_)
+    usd_kp = []
+    for jn in ARM:
+        pj = [pr for pr in stage.Traverse() if pr.GetName() == jn and str(pr.GetPath()).startswith(ROBOT) and pr.IsA(UsdPhysics.RevoluteJoint)]
+        usd_kp.append(None if not pj else pj[0].GetAttribute('drive:angular:physics:stiffness').Get())
+    gr['usd_stiffness_per_deg'] = usd_kp
+    ok_api = 'api_kp' in gr and all(abs(v - a.kp) <= 1e-3 * a.kp for v in gr['api_kp'])
+    ok_usd = all(v is not None and abs(float(v) - a.kp * math.pi / 180.0) <= 1e-3 * a.kp * math.pi / 180.0 for v in usd_kp)
+    gr['verified'] = dict(api=bool(ok_api), usd=bool(ok_usd))
+    joint_kp = float(a.kp) if (ok_api or ok_usd) else None
+    print(f'[bind] 增益讀回 {gr}', flush=True)
+    if joint_kp is None:
+        print('[bind] 手臂關節增益讀回與設定不符 ⇒ 拒跑', flush=True)
+        return 66
 
     def apply():
         robot.get_articulation_controller().apply_action(ArticulationAction(joint_positions=np.asarray(tgt, np.float32)[act], joint_indices=act))
@@ -332,7 +353,7 @@ def main():
     A = np.array(rows)
     dist_mass = 0.4126
     F_all = np.asarray(robot.get_measured_joint_forces(), float)
-    res = dict(readback=rb, wrist=dict(row=j6, joint_names=list(meta.joint_names), joint_indices={k_: int(v_) for k_, v_ in meta.joint_indices.items()}, shape=list(Fshape), raw_all_rows_P_end=F_all.tolist(),
+    res = dict(readback=rb, gains_readback=gr, wrist=dict(row=j6, joint_names=list(meta.joint_names), joint_indices={k_: int(v_) for k_, v_ in meta.joint_indices.items()}, shape=list(Fshape), raw_all_rows_P_end=F_all.tolist(),
                                        P_mean_norm_n=round(float(np.linalg.norm(A[:, 10:13].mean(axis=0))), 3), downstream_weight_n=round(dist_mass * 9.81, 3), status='未校準；只作合理性檢查，不稱把手拉力', frame='子連桿座標（API 說明）'))
     res['P'] = dict(door_deg_change=round(math.degrees(float(np.abs(A[:, 2] - door0).max())), 4), finger_contact_max_n=round(float(max(A[:, 5:7].max(), A[:, 22:24].max())), 4), other_contact_max_n=round(float(A[:, 9].max()), 4),
                     static_offset_rad=[round(float(v), 5) for v in (A[-1, 16:22] - q_grasp)], note='預抓位姿、無接觸靜置；偏置＝實測關節−設定點')
@@ -360,10 +381,11 @@ def main():
                 raise ee
             opt, info, v, (Xd, h, _) = rr
             wr_clock = float(world.current_time) - st_w
-            ex = XO.DoorOpenExec(ident, Xd, h, T_far, 0.0, T_HE, PHI_GOAL, dict(s=np.array([tgt[i] for i in idx], float), pipe=[np.zeros(9)] * DA.D_STEPS, u_last=np.zeros(9), u_prev=np.zeros(9), bias=np.zeros(6)), 0.00173)
+            ex = XO.DoorOpenExec(ident, Xd, h, T_far, 0.0, T_HE, PHI_GOAL, dict(s=np.array([tgt[i] for i in idx], float), pipe=[np.zeros(9)] * DA.D_STEPS, u_last=np.zeros(9), u_prev=np.zeros(9), bias=np.zeros(6)), 0.00173, arm_mode=a.arm_mode, joint_kp=joint_kp)
             Fw, _ = wrist_F()
             o1 = ex.step(0.0, qg, 0.0, float(np.linalg.norm(Fw)))      # 合成狀態一步：不套用命令、不步進物理
-            wr.update(plan=dict(solve=info, feasible=v['feasible'], failed=v['failed'], t_phi_first_goal_s=v['t_phi_first_goal_s']), plan_wall_s=round(time.perf_counter() - w0, 1), plan_sim_clock_advance_s=wr_clock,
+            wr.update(exec_config={k_: v_ for k_, v_ in ex.config_readback().items()}, closure_stats=ex.cl_stats, anchor=ex.anchor, gains_readback=gr,
+                      plan=dict(solve=info, feasible=v['feasible'], failed=v['failed'], t_phi_first_goal_s=v['t_phi_first_goal_s']), plan_wall_s=round(time.perf_counter() - w0, 1), plan_sim_clock_advance_s=wr_clock,
                       exec_one_step=dict(abort=o1['abort'], finite=bool(np.isfinite(o1['arm_target']).all() and np.isfinite(o1['base_twist']).all()), stop=ex.stop, solve_ms=ex.solve_ms[-1:] if ex.solve_ms else None),
                       wrist_F_norm_static=round(float(np.linalg.norm(Fw)), 3))
         res['wiring'] = wr
@@ -470,7 +492,7 @@ def main():
             else:
                 np.savez(os.path.join(a.out, 'plan.npz'), Xd=Xd, h=h, X=opt.X, T_WH_bind=T_WH_b, phi_bind=phi_b, T_HE=T_HE)
                 ho = dict(s=ctrl.s.copy(), pipe=[u_.copy() for u_ in ctrl.pipe], u_last=ctrl.u_last.copy(), u_prev=ctrl.u_prev.copy(), bias=np.asarray(ctrl.cfg.arm_model.bias, float).copy())
-                ex = XO.DoorOpenExec(ident, Xd, h, T_WH_b, phi_b, T_HE, PHI_GOAL, ho, fq)
+                ex = XO.DoorOpenExec(ident, Xd, h, T_WH_b, phi_b, T_HE, PHI_GOAL, ho, fq, arm_mode=a.arm_mode, joint_kp=joint_kp)
                 res['exec_config'] = ex.config_readback()
                 print(f"[open] 執行層讀回 {json.dumps(clean(res['exec_config']), ensure_ascii=False)}", flush=True)
                 res['handover'] = dict(pipe_nonzero=int(sum(bool(np.any(u_)) for u_ in ho['pipe'])), setpoint_minus_measured=[round(float(x), 5) for x in (ho['s'] - qm[3:])], bias=[round(float(x), 6) for x in ho['bias']])
