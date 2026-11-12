@@ -1,0 +1,199 @@
+{
+ "case": "push_during_stop",
+ "expect": "forced_stop",
+ "checks": {
+  "stop_reason": true,
+  "escalated_abort": true,
+  "no_physics_after_abort": true,
+  "stop_not_success": true
+ },
+ "pass_": true,
+ "report": {
+  "stop": {
+   "t": 0.8,
+   "why": "forced_stop",
+   "phase": "X1"
+  },
+  "abort": {
+   "t": 1.1,
+   "why": "violation_during_stop",
+   "phase": "X1",
+   "viol": [
+    "finger_bar"
+   ],
+   "stop_why": "forced_stop"
+  },
+  "done": false,
+  "stop_effect": {
+   "t": 1.1,
+   "ok": null,
+   "status": "unverified（模擬中止）"
+  },
+  "phases": [
+   [
+    "X1",
+    0.0
+   ]
+  ],
+  "events": [
+   {
+    "t": 0.25,
+    "what": "finger_exemption_released",
+    "gap_mm": 5.952
+   },
+   {
+    "t": 0.8,
+    "what": "stop",
+    "why": "forced_stop",
+    "phase": "X1"
+   },
+   {
+    "t": 1.1,
+    "what": "abort",
+    "why": "violation_during_stop",
+    "viol": [
+     "finger_bar"
+    ],
+    "stop_why": "forced_stop"
+   }
+  ],
+  "anchor": {
+   "q0": [
+    -0.30530327558517456,
+    -0.7404372096061707,
+    0.47726764942167543,
+    -1.3700376749038696,
+    -0.3576188087463379,
+    1.2240123748779297,
+    -1.5769017934799194,
+    -0.9784008860588074,
+    0.0066317226737737656
+   ],
+   "s0": [
+    -1.3701460928975413,
+    -0.36289576409863317,
+    1.2334772602232014,
+    -1.575580965541979,
+    -0.978446384090482,
+    0.006633977674098998
+   ],
+   "off0": [
+    0.00010841799367167226,
+    0.005276955352295276,
+    -0.009464885345271679,
+    -0.0013208279379404164,
+    4.549803167464006e-05,
+    -2.2550003252325146e-06
+   ],
+   "joint_kp": 600.0
+  },
+  "sweep_timing_sample": [
+   {
+    "t": 0.0,
+    "tag": "stop_now",
+    "extra": 0,
+    "j0": 5,
+    "k_decel": 0,
+    "n_cmd": 60
+   },
+   {
+    "t": 0.0,
+    "tag": "candidate",
+    "extra": 1,
+    "j0": 0,
+    "k_decel": 5,
+    "n_cmd": 72
+   },
+   {
+    "t": 0.0,
+    "tag": "candidate",
+    "extra": 2,
+    "j0": 0,
+    "k_decel": 10,
+    "n_cmd": 77
+   },
+   {
+    "t": 0.05,
+    "tag": "stop_now",
+    "extra": 0,
+    "j0": 5,
+    "k_decel": 0,
+    "n_cmd": 67
+   },
+   {
+    "t": 0.05,
+    "tag": "candidate",
+    "extra": 1,
+    "j0": 0,
+    "k_decel": 5,
+    "n_cmd": 72
+   },
+   {
+    "t": 0.05,
+    "tag": "candidate",
+    "extra": 2,
+    "j0": 0,
+    "k_decel": 10,
+    "n_cmd": 77
+   }
+  ],
+  "sweep_timing_n": 51,
+  "min_clear": {
+   "env": 0.0335,
+   "base": 0.0371,
+   "self": 0.0117,
+   "shell_bar": 0.0057,
+   "finger_bar_after_release": 0.0045,
+   "stop_sweep": 0.0003
+  },
+  "finger_release_t": 0.25000000000000006,
+  "limits": {
+   "arm_rate": 0.3678,
+   "arm_acc": 2.933,
+   "wheel_v": 0.0,
+   "wheel_a": 0.0,
+   "body_v": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "body_a": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "door_band_end_deg": [
+   85.1708,
+   85.2264
+  ],
+  "door_meas_end_deg": 85.2053,
+  "t_end": 1.1
+ },
+ "final": {
+  "base": [
+   -0.2764,
+   -0.738,
+   0.4773
+  ],
+  "yaw_deg": 27.35,
+  "arm": [
+   -1.5496,
+   -0.4264,
+   1.1786,
+   -1.5847,
+   -1.1581,
+   0.0311
+  ],
+  "t": 1.1
+ },
+ "sources": {
+  "start": "runs/m8house_door_open_3/log.npz 張爪觀察末列",
+  "setpoint": "open_steps.npz ctrl 末列",
+  "handle": "runs/m8house_door_open_3/plan.npz",
+  "path": "pass_check_r2.json（A* 理想跟隨；含登錄未知物真值，只是幾何／運動學串接）",
+  "stow": "m8house_da_online_1 起點手臂"
+ },
+ "omega0_dps": 0.03,
+ "phi0_deg": 85.1808
+}

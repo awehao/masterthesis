@@ -38,7 +38,36 @@ D_OMEGA, D_PHI = math.radians(0.01), math.radians(0.01)
 SETTLE = dict(arm_rps=0.02, base_mps=0.005, yaw_rps=0.01, n_ticks=4)
 V_NAV, A_NAV, W_TURN, A_TURN = 0.25, 0.5, 0.5, 1.0                  # 跟隨段（運動學代替導航）：平移速度／加速度、轉向角速度／角加速度
 BACK, V_BACK, A_BACK = 0.25, 0.10, 0.5
-STOP_EXTRAS = (0, 1)                                                 # 現在停／晚一拍停
+STOP_EXTRAS = (1, 2)                                                 # 候選提交後：下一拍停／再晚一拍停（現在停另在求解前以實際管線與斜坡相位核）
+STOP_STILL_S = 0.3                                                   # 停止有效：連續靜止且管線清空 0.3 s
+GAP_TOL = 1e-4                                                       # 兩指間隙不惡化容差（對「至今最大間隙」比，不逐拍累積）
+
+
+def stop_traj_exit(q, s, pipe, u_last, u_from_base, j0, cfg, extra_ticks=0):
+    """與 door_open_exec_ctrl.stop_traj_ramp 同一停法（每控制拍有界減速：底盤 A_BASE、手臂 A_ARM；底盤分量拍內逐物理步斜坡；真管線），
+    另回 (取樣構型, 逐物理步送進管線的命令, 第一次減速的物理步序號)，供時序核對。j0＝目前控制拍內已過的物理步數（拍首＝NPH ⇒ 立即進入新一拍）。"""
+    qp, sp = np.asarray(q, float).copy(), np.asarray(s, float).copy()
+    pp = [np.asarray(u, float).copy() for u in pipe]
+    u, uf, j = np.asarray(u_last, float).copy(), np.asarray(u_from_base, float).copy(), int(j0)
+    da = np.r_[B.A_BASE, np.full(6, C0.A_ARM)] * cfg.dt
+    out, cmds, k, quiet, k_dec = [qp.copy()], [], 0, 0, None
+    while quiet < XO.C21.SETTLE_STEPS and k < 2000:
+        if j >= NPH:
+            uf, j = XO.ramp_cmd(uf, u, NPH - 1)[:3], 0
+            if k >= extra_ticks * NPH:
+                if k_dec is None:
+                    k_dec = k
+                u = u + np.clip(-u, -da, da)
+        cmd = XO.ramp_cmd(uf, u, j)
+        pp.append(cmd)
+        cmds.append(cmd.copy())
+        qp, sp = S.plant_phys_step(qp, sp, pp.pop(0), cfg, 1)
+        k += 1
+        j += 1
+        quiet = quiet + 1 if (not np.any(cmd) and not any(np.any(x) for x in pp)) else 0
+        if k % XO.C21.SAMPLE_EVERY == 0:
+            out.append(qp.copy())
+    return np.array(out), cmds, k_dec
 
 
 def minjerk(u):
@@ -110,6 +139,8 @@ class DoorExitCtrl:
         self.u_body_prev = np.zeros(3)
         self.nav = None
         self._ref_done = False
+        self.abort, self.finger_gap_max, self.phi_tick, self.still_n, self.sweep_timing, self.stop_sev, self.stop_kinds = None, None, None, 0, [], None, set()
+        self.inject = None                                           # 測試用（外部停止等）
 
     # ---- 門角帶
     def band(self, t):
@@ -261,28 +292,58 @@ class DoorExitCtrl:
             bad.append(dict(what='wheel_a', v=round(wa, 3)))
         return bad
 
-    def _sweep(self, q, u):
-        """候選提交前：提交 u 後「現在停（extra 0）／晚一拍停（extra 1）」，門角取帶兩端。"""
-        for e in STOP_EXTRAS:
-            Q = XO.stop_traj_ramp(q, self.s, self.pipe, u, self._ramp_end(), 0, self.cfg, e)
+    def _sweep(self, q, u, extras, j0, u_from, tag):
+        """停止掃掠：從目前管線與斜坡相位，依序執行 u（extras 拍後開始有界減速）直到停穩；每取樣點核淨空（門角取帶在該時刻的兩端）
+        與兩指規則（例外中只要求不穿入，撤除後要求門檻）。回 None 或違反資訊；並記錄減速起點（時序核對）。"""
+        for e in extras:
+            Q, cmds, k_dec = stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, e)
+            self.sweep_timing.append(dict(t=round(self.t, 3), tag=tag, extra=e, j0=int(j0), k_decel=k_dec, n_cmd=len(cmds)))
             idx = list(range(0, len(Q), self.sweep_stride)) + [len(Q) - 1]
             for i in idx:
                 lo, hi = self.band(self.t - self.t_x1 + i * XO.C21.SAMPLE_EVERY * PHYS)   # 門角帶取該取樣點的時刻
                 c = self.clear(Q[i], (lo, hi))
                 self.mins['stop_sweep'] = min(self.mins['stop_sweep'], min(c[k] - W.THR[k] for k in KEYS))
                 b_ = [k for k in KEYS if c[k] < W.THR[k]]
-                if (not self.finger_exempt) and c['finger_bar'] < W.THR['env']:
+                if c['finger_bar'] < (0.0 if self.finger_exempt else W.THR['env']):
                     b_.append('finger_bar')
                 if b_:
-                    return dict(extra=e, i=i, bad=b_)
+                    return dict(tag=tag, extra=e, i=i, bad=b_)
         return None
 
     def _ramp_end(self):
         return np.asarray(self.pipe[-1][:3], float).copy()
 
+    def _abort(self, why, **kw):
+        if self.abort is None:
+            self.abort = dict(t=round(self.t, 3), why=why, phase=self.phase, **kw)
+            self._ev('abort', why=why, **kw)
+            self.stop_ok = dict(t=round(self.t, 3), ok=None, status='unverified（模擬中止）')
+
+    def _severity(self, c):
+        """停止中比較用的嚴重度（越小越糟）：兩指間隙與各淨空餘裕的最小值。"""
+        return min(c['finger_bar'], min(c[k] - W.THR[k] for k in KEYS))
+
+    def _monitor_finger(self, gap, gap_band=None):
+        """兩指—橫桿：例外只免 5 mm 餘裕、不免非穿透；不惡化以「至今最大間隙」為基準（不逐拍累積）；
+        撤除例外要求量測門角與門角帶兩端的間隙都達門檻（與停止掃掠同一判準），撤除後永久。回違反原因或 None。"""
+        if self.finger_exempt:
+            if gap < 0.0:
+                return 'finger_penetration'
+            if self.finger_gap_max is not None and gap < self.finger_gap_max - GAP_TOL:
+                return 'finger_gap_worsening'
+            self.finger_gap_max = gap if self.finger_gap_max is None else max(self.finger_gap_max, gap)
+            if min(gap, gap if gap_band is None else gap_band) >= W.THR['env']:
+                self.finger_exempt, self.finger_release_t = False, self.t
+                self._ev('finger_exemption_released', gap_mm=round(gap * 1e3, 3))
+            return None
+        self.mins['finger_bar_after_release'] = min(self.mins['finger_bar_after_release'], gap)
+        return 'finger_bar' if gap < W.THR['env'] else None
+
     def step(self, t, q, phi_meas):
         self.t = float(t)
         q = np.asarray(q, float)
+        if self.abort is not None:                                   # 模擬中止：不再產生命令
+            return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), stopped=True, done=False, abort=True)
         tick = self.n_step % NPH == 0
         if tick and self.off0 is None:
             self.off0, self.G0 = q[3:] - self.s, BM.arm_gravity(K, q, self.bodies)
@@ -294,25 +355,44 @@ class DoorExitCtrl:
             if self.q_tick is not None:
                 self.rate = dict(arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / DT, base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / DT, yaw=abs(q[2] - self.q_tick[2]) / DT)
             self.q_tick = q.copy()
-            # 監看：門角帶、實測淨空
+            # 監看：門角帶、實測淨空、兩指規則（停止期間照樣；停止中再違反 ⇒ 模擬中止）
+            viol = []
             lo, hi = self.band(self.t - self.t_x1)
-            if not (lo <= phi_meas <= hi):
-                self._stop('door_out_of_band', phi_deg=round(math.degrees(phi_meas), 4), band_deg=[round(math.degrees(lo), 4), round(math.degrees(hi), 4)])
+            out_band = not (lo <= phi_meas <= hi)
             c = self.clear(q, (phi_meas,))
             for k in KEYS:
                 self.mins[k] = min(self.mins[k], c[k])
-            if self.finger_exempt:
-                if self.finger_gap_prev is not None and c['finger_bar'] < self.finger_gap_prev - 1e-4:
-                    self._stop('finger_gap_worsening', gap_mm=round(c['finger_bar'] * 1e3, 3))
-                self.finger_gap_prev = c['finger_bar']
-                if c['finger_bar'] >= W.THR['env']:
-                    self.finger_exempt, self.finger_release_t = False, self.t
-                    self._ev('finger_exemption_released', gap_mm=round(c['finger_bar'] * 1e3, 3))
-            else:
-                self.mins['finger_bar_after_release'] = min(self.mins['finger_bar_after_release'], c['finger_bar'])
-            b_ = self._bad(c)
+            gb = min(self.finger_bar(q, lo), self.finger_bar(q, hi)) if self.finger_exempt else None
+            fv = self._monitor_finger(c['finger_bar'], gb)
+            if fv:
+                viol.append((fv, dict(gap_mm=round(c['finger_bar'] * 1e3, 3))))
+            b_ = [k for k in KEYS if c[k] < W.THR[k]]
             if b_:
-                self._stop('clearance', bad=b_, at={k: round(float(v), 4) for k, v in c.items()})
+                viol.append(('clearance', dict(bad=b_, at={k: round(float(v), 4) for k, v in c.items()})))
+            if out_band:
+                # 舊帶失效：以當下狀態重建帶（門角、量測角速度），並以新帶核「現在停」；不成立 ⇒ 中止
+                om = 0.0 if self.phi_tick is None else (phi_meas - self.phi_tick) / DT
+                old = [round(math.degrees(lo), 4), round(math.degrees(hi), 4)]
+                self.phi0, self.omega0, self.t_x1 = float(phi_meas), float(om), self.t
+                sw = self._sweep(q, self.u_last, (0,), self.ramp_j, self.u_from_base, 'rebanded_stop_now')
+                if sw is not None:
+                    self._abort('door_out_of_band_unverifiable', phi_deg=round(math.degrees(phi_meas), 4), old_band_deg=old, sweep=sw)
+                else:
+                    viol.append(('door_out_of_band', dict(phi_deg=round(math.degrees(phi_meas), 4), old_band_deg=old, new_band_origin_deg=round(math.degrees(phi_meas), 4), omega_dps=round(math.degrees(om), 4))))
+            self.phi_tick = float(phi_meas)
+            if self.stop is not None and viol:                          # 停止中：觸發停止的同一違反若未惡化視為持續狀態；新的或惡化的違反 ⇒ 中止
+                sev = self._severity(c)
+                viol = [v for v in viol if not (v[0] in self.stop_kinds and self.stop_sev is not None and sev >= self.stop_sev - GAP_TOL)]
+            if viol and self.abort is None:
+                if self.stop is None:
+                    self._stop(viol[0][0], **viol[0][1])
+                    self.stop_sev, self.stop_kinds = self._severity(c), {v[0] for v in viol}
+                else:
+                    self._abort('violation_during_stop', viol=[v[0] for v in viol], stop_why=self.stop['why'])
+            if self.abort is not None:
+                return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), stopped=True, done=False, abort=True)
+            if self.inject is not None:
+                self.inject(self)
             self.rec.append([self.t, KEYS.index('env') * 0 + c['env'], c['base'], c['self'], c['shell_bar'], c['finger_bar'], phi_meas, lo, hi, ['X1', 'X1b', 'X2', 'X3X4', 'STOP'].index(self.phase if self.stop is None else 'STOP')])
             # 段別推進
             if self.stop is None:
@@ -336,6 +416,11 @@ class DoorExitCtrl:
                             P = np.vstack([q[:2], self.path])
                             cum = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
                             self.nav = dict(mode='turn', P=P, cum=cum, L=float(cum[-1]), t0=None)
+            # 求解前「現在停」：目前命令、實際管線與斜坡相位
+            if self.stop is None:
+                sw0 = self._sweep(q, self.u_last, (0,), self.ramp_j, self.u_from_base, 'stop_now')
+                if sw0 is not None:
+                    self._stop('stop_now_violation', **sw0)
             # 命令
             if self.stop is None:
                 qp, sp = self._pred(q)
@@ -351,19 +436,19 @@ class DoorExitCtrl:
                     if bad:
                         self._stop('cmd_limit', bad=bad)
                     else:
-                        sw = self._sweep(q, u)
+                        sw = self._sweep(q, u, STOP_EXTRAS, 0, self._ramp_end(), 'candidate')
                         if sw is not None:
                             self._stop('candidate_stop_violation', **sw)
                         else:
                             self.u_last = u
-            if self.stop is not None:                                    # 受控停止：底盤有界減速、手臂設定點凍結
-                da = np.r_[LIM.A_BODY * DT, np.full(6, np.inf)]
-                u = self.u_last.copy()
-                u[3:] = 0.0
-                u[:3] = u[:3] + np.clip(-u[:3], -da[:3], da[:3])
+            if self.stop is not None:                                    # 受控停止：與預測同一停法（每拍有界減速：底盤 A_BASE、手臂 A_ARM），停止命令也過限制核對
+                da = np.r_[B.A_BASE, np.full(6, C0.A_ARM)] * self.cfg.dt
+                u = self.u_last + np.clip(-self.u_last, -da, da)
+                badl = self._check_cmd(u)
+                if badl:
+                    self._abort('stop_cmd_limit', bad=badl)
+                    return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), stopped=True, done=False, abort=True)
                 self.u_last = u
-                if self.stop_ok is None and self.rate['arm'] <= SETTLE['arm_rps'] and self.rate['base'] <= SETTLE['base_mps'] and self.rate['yaw'] <= SETTLE['yaw_rps'] and not any(np.any(u_) for u_ in self.pipe) and not np.any(u):
-                    self.stop_ok = dict(t=round(self.t, 3), since_stop_s=round(self.t - self.stop_t, 3), ok=True)
             self.u_prev = self.u_last.copy()
             self.u_body_prev = self.u_last[:3].copy()
             self.u_from_base, self.ramp_j = self._ramp_end(), 0
@@ -376,11 +461,18 @@ class DoorExitCtrl:
             nxt = np.clip(nxt, self.lim_lo, self.lim_hi)
             self._stop('setpoint_limit')
         self.s = nxt
+        if self.stop is not None and self.stop_ok is None and self.abort is None:
+            still = (self.rate['arm'] <= SETTLE['arm_rps'] and self.rate['base'] <= SETTLE['base_mps'] and self.rate['yaw'] <= SETTLE['yaw_rps']
+                     and not any(np.any(u_) for u_ in self.pipe) and not np.any(self.u_last))
+            self.still_n = self.still_n + 1 if still else 0
+            if self.still_n * PHYS >= STOP_STILL_S - 1e-9:
+                self.stop_ok = dict(t=round(self.t, 3), since_stop_s=round(self.t - self.stop_t, 3), still_s=STOP_STILL_S, ok=True)
         self.n_step += 1
-        return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), stopped=self.stop is not None, done=self.done)
+        return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), stopped=self.stop is not None, done=self.done, abort=self.abort is not None)
 
     def report(self):
         Rr = np.array(self.rec, float) if self.rec else np.zeros((1, 10))
-        return dict(stop=self.stop, done=self.done, stop_effect=self.stop_ok, phases=self.ph_hist, events=self.events, anchor=self.anchor,
+        return dict(stop=self.stop, abort=self.abort, done=self.done, stop_effect=self.stop_ok, phases=self.ph_hist, events=self.events, anchor=self.anchor,
+                    sweep_timing_sample=self.sweep_timing[:6], sweep_timing_n=len(self.sweep_timing),
                     min_clear={k: round(float(v), 4) for k, v in self.mins.items()}, finger_release_t=self.finger_release_t, limits={k: (round(v, 4) if isinstance(v, float) else [round(x, 4) for x in v]) for k, v in self.lim.items()},
                     door_band_end_deg=[round(math.degrees(v), 4) for v in self.band(self.t - getattr(self, 't_x1', 0.0))], door_meas_end_deg=round(math.degrees(float(Rr[-1, 6])), 4) if len(Rr) else None, t_end=round(self.t, 3))
