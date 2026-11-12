@@ -381,17 +381,23 @@ def main():
                 raise ee
             opt, info, v, (Xd, h, _) = rr
             wr_clock = float(world.current_time) - st_w
-            ex = XO.DoorOpenExec(ident, Xd, h, T_far, 0.0, T_HE, PHI_GOAL, dict(s=np.array([tgt[i] for i in idx], float), pipe=[np.zeros(9)] * DA.D_STEPS, u_last=np.zeros(9), u_prev=np.zeros(9), bias=np.zeros(6)), 0.00173, arm_mode=a.arm_mode, joint_kp=joint_kp)
+            # r3b（Codex 20261113_004539）：接線夾具改一致的合成狀態——設定點＝合成構型−預抓靜置實測靜態偏置 d（q−s），模型偏置＝α·d，上一命令與管線為零（靜止）
+            #   （wiring_1 用預抓實際設定點配抓取位構型，差約 30 mm，屬不一致輸入；保留為「不一致輸入被拒」負例）
+            d_st = A[-1, 16:22] - q_grasp
+            al_ = np.asarray(ident['alpha'], float)
+            ex = XO.DoorOpenExec(ident, Xd, h, T_far, 0.0, T_HE, PHI_GOAL, dict(s=qg[3:] - d_st, pipe=[np.zeros(9)] * DA.D_STEPS, u_last=np.zeros(9), u_prev=np.zeros(9), bias=al_ * d_st), 0.00173, arm_mode=a.arm_mode, joint_kp=joint_kp)
             Fw, _ = wrist_F()
             o1 = ex.step(0.0, qg, 0.0, float(np.linalg.norm(Fw)))      # 合成狀態一步：不套用命令、不步進物理
             wr.update(exec_config={k_: v_ for k_, v_ in ex.config_readback().items()}, closure_stats=ex.cl_stats, anchor=ex.anchor, gains_readback=gr,
                       plan=dict(solve=info, feasible=v['feasible'], failed=v['failed'], t_phi_first_goal_s=v['t_phi_first_goal_s']), plan_wall_s=round(time.perf_counter() - w0, 1), plan_sim_clock_advance_s=wr_clock,
-                      exec_one_step=dict(abort=o1['abort'], finite=bool(np.isfinite(o1['arm_target']).all() and np.isfinite(o1['base_twist']).all()), stop=ex.stop, solve_ms=ex.solve_ms[-1:] if ex.solve_ms else None),
+                      exec_one_step=dict(abort=o1['abort'], finite=bool(np.isfinite(o1['arm_target']).all() and np.isfinite(o1['base_twist']).all()), stop=ex.stop, solve_ms=ex.solve_ms[-1:] if ex.solve_ms else None,
+                                         committed=bool(ex.stop is None and np.isfinite(ex.u_last).all() and (a.arm_mode != 'closure' or (ex.cl_stats['n'] >= 1 and not ex.cl_stats['fails']))),
+                                         u_last=ex.u_last.tolist(), synthetic=dict(d_static=d_st.tolist(), note='s＝qg−d、bias＝α·d、管線與上一命令＝0；命令不施加到 Isaac')),
                       wrist_F_norm_static=round(float(np.linalg.norm(Fw)), 3))
         res['wiring'] = wr
         res['result'] = 'wiring_only'
         print(f"[open] 接線核對 {json.dumps(clean(wr), ensure_ascii=False)[:1500]}", flush=True)
-        ok_w = bool(isinstance(wr.get('plan'), dict) and wr['plan']['feasible'] and wr['exec_one_step']['finite'] and not wr['exec_one_step']['abort'] and wr['fixedjoint_api'] and wr.get('plan_sim_clock_advance_s') == 0.0)
+        ok_w = bool(isinstance(wr.get('plan'), dict) and wr['plan']['feasible'] and wr['exec_one_step']['finite'] and not wr['exec_one_step']['abort'] and wr['exec_one_step']['stop'] is None and wr['exec_one_step']['committed'] and wr['fixedjoint_api'] and wr.get('plan_sim_clock_advance_s') == 0.0)
         res['checks'], res['ok'] = dict(wiring=ok_w, P_no_contact=res['P']['finger_contact_max_n'] <= COND['forbidden_n'] and res['P']['other_contact_max_n'] <= COND['forbidden_n']), None
         res['ok'] = bool(all(res['checks'].values()))
         json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)

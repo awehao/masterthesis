@@ -1,8 +1,8 @@
 {
  "name": "m8_house_door_open_constraint_opt_r3",
  "run_id": "m8house_door_open_3",
- "wiring_run_id": "m8house_door_open3_wiring_1",
- "authority": "Codex 20261113_003032：有條件核可 A2 與第三趟；替換命令自有限制驗收、真鏈反例、增益讀回、錨定紀錄、新凍結核對相符後可起跑；任何前置失敗就停下交阻點",
+ "wiring_run_id": "m8house_door_open3_wiring_2",
+ "authority": "Codex 20261113_003032：有條件核可 A2 與第三趟；替換命令自有限制驗收、真鏈反例、增益讀回、錨定紀錄、新凍結核對相符後可起跑；任何前置失敗就停下交阻點；Codex 20261113_004539：先修接線夾具（一致合成狀態 s＝qg−d、bias＝α·d、管線與上一命令＝0），wiring_2 通過後依原授權跑正式第三趟",
  "scope": "理想抓持綁定下，新機構約束規劃能否實際帶門開啟的名目功能驗證：局部預抓起點 → door_insert_ctrl 插入 → 閉爪 → BindGate 綁定 → 暫停規劃（door_wbopt，綁定瞬間實測狀態）→ door_open_exec_ctrl 開門到 85° → path 停止停穩 → 解綁讀回 → 張爪觀察。不含退出、不接導航、不沿用舊開門控制。",
  "inputs": {
   "handle": "online_1 起點影格估計（φ＝0），以鉸鏈讀值轉到 φ_bind",
@@ -39,11 +39,13 @@
  ],
  "on_failure": "保留、不熱修、不自動重跑；結果與雙影片照交（實錄重播＋同時間軸疊圖；標理想抓持、非即時）",
  "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070",
- "freeze": "evaluation/experiments/20261112_m8_house_door_open_freeze_r4.sha256",
+ "freeze": "evaluation/experiments/20261112_m8_house_door_open_freeze_r5.sha256",
  "notes": [
   "m8house_door_open_wiring_1：規劃期間主執行緒阻塞約 2 分鐘時 Isaac 被 SIGKILL（無 OOM 紀錄、無例外；原因未定，視窗無回應是候選）。r2 起規劃在背景執行緒、主執行緒只算圖不步進物理，並核規劃期間模擬時鐘不前進。",
   "m8house_door_open_1：開門 0.13 s 手腕傳遞力 46.4 N > 40 N ⇒ 模擬中止（門 0.38°）。",
-  "m8house_door_open_2：開門 0.19 s 手腕力 40.4 N > 40 N ⇒ 模擬中止（物理門角 0.637°）。"
+  "m8house_door_open_2：開門 0.19 s 手腕力 40.4 N > 40 N ⇒ 模擬中止（物理門角 0.637°）。",
+  "m8house_door_open3_wiring_1：合成狀態不一致（預抓設定點配抓取位構型，差約 30 mm）⇒ path 停止後被 A 驗收拒絕升級中止；保留為「不一致輸入被拒」負例，不回改成通過。",
+  "接線夾具只改合成狀態；正式流程的實測設定點與管線不重置；控制器、增益、限制、40 N 不改。"
  ],
  "changes_since_run1": [
   "door_limits 單一來源；規劃加本體速度框（r4）",
