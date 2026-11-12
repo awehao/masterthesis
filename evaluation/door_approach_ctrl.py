@@ -161,6 +161,7 @@ class DoorApproachCtrl:
             self._try_replan(q)
             if self.stop is None and self.phase == 'LOOK' and self.t - self.look['t_arrive'] > LOOK_TIMEOUT_S:
                 return self._stop('near_obs_timeout', rejected=dict(self.obs_rej))
+        g = self.seg                                                # 重新規劃會換段：重新取（r1 假世界抓到：沿用舊段使 TO_PRE 立刻被判結束）
         if self.phase == 'TO_PRE' and self.t >= g['t0'] + g['T'] + SETTLE_S:
             self.phase = 'END'
             self.end = dict(t=float(self.t))
