@@ -32,6 +32,7 @@ os.environ.setdefault('M8_SCENE_REG', '20261112_m8_house_scene.json')
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import door_approach_jnom_ctrl as DA                               # noqa: E402
+import door_limits as LIM                                          # noqa: E402
 
 GW, K, PG, DOC, R1, FAST = DA.GW, DA.K, DA.PG, DA.DOC, DA.R1, DA.FAST
 FC = GW.FastChain.of(K, 'link_tcp')
@@ -231,7 +232,7 @@ class DoorWBOpt:
             th = 0.5 * (X[k, 2] + X[k + 1, 2])
             c_, s_ = math.cos(th), math.sin(th)
             vb = np.array([c_ * dX[k, 0] + s_ * dX[k, 1], -s_ * dX[k, 0] + c_ * dX[k, 1], dX[k, 2]])
-            viol += float(np.maximum(np.abs(WM @ vb) - W_LIM, 0).sum())
+            viol += float(np.maximum(np.abs(WM @ vb) - W_LIM, 0).sum()) + float(np.maximum(vb - LIM.BODY_V_MAX, 0).sum() + np.maximum(LIM.BODY_V_MIN - vb, 0).sum())
         qdd = np.diff(np.vstack([np.zeros(6), dX[:, 3:9]]), axis=0) / dt
         viol += float(np.maximum(np.abs(dX[:, 3:9] + TAU_SP * qdd) - V_ARM, 0).sum())
         mg = np.array([margins(x, self.T_WH0)[0][:3 if self.mode == 'rigid' else 4].min() for x in X[1:]])
@@ -337,6 +338,14 @@ class DoorWBOpt:
                     cols += [sp, sp + 1, sp + 2]
                     vals += list(-M[r])
                 add(cols, vals, -0.97 * W_LIM * dt - base[r], 0.97 * W_LIM * dt - base[r])   # 0.97：θ 取目前軌跡的線性化誤差餘量
+            # r4：追蹤控制器的本體速度框（硬限制，r3 以前規劃漏掉）；DEV_MARGIN 為開發餘裕
+            bb = Rt @ (X[k, :3] - X[k - 1, :3])
+            for r in range(3):
+                cols, vals = [s0, s0 + 1, s0 + 2], list(Rt[r])
+                if sp is not None:
+                    cols += [sp, sp + 1, sp + 2]
+                    vals += list(-Rt[r])
+                add(cols, vals, LIM.DEV_MARGIN * LIM.BODY_V_MIN[r] * dt - bb[r], LIM.DEV_MARGIN * LIM.BODY_V_MAX[r] * dt - bb[r])
         # 加速度（二階差分；k＝0 之前與 k＝N 之後視為靜止）
         for k in range(0, N + 1):                                   # 底盤加速度：本體座標（與執行端同語意：vx 1.5、vy 1.0、ωz 2.0），θ 取目前軌跡；0.9 為線性化餘量
             th = X[k, 2]
@@ -522,7 +531,9 @@ class DoorWBOpt:
                  closure_pos_mm=round(float(np.abs(r[:, :3]).max()) * 1e3, 6), closure_rot_deg=round(math.degrees(float(np.abs(r[:, 3:]).max())), 6),
                  raw_midpoint_pos_mm=round(float(np.abs(raw[:, :3]).max()) * 1e3, 4), raw_midpoint_rot_deg=round(math.degrees(float(np.abs(raw[:, 3:]).max())), 4),
                  min_clear_m={k: round(float(v_), 4) for k, v_ in mn.items()}, min_clear_who=who, clear_ok=bool(all(mn[k] >= THR[k] for k in THR)),
-                 wheel_max=round(float(wheel.max()), 4), wheel_ok=bool(wheel.max() <= W_LIM + 1e-4), wheel_sat_frac=round(float((wheel.max(axis=1) >= W_LIM - 2e-3).mean()), 3),
+                 wheel_max=round(float(wheel.max()), 4), wheel_ok=bool(wheel.max() <= W_LIM + 1e-4),
+                 body_v_min=[round(float(x), 4) for x in vb.min(axis=0)], body_v_max=[round(float(x), 4) for x in vb.max(axis=0)], body_v_box=[LIM.BODY_V_MIN.tolist(), LIM.BODY_V_MAX.tolist()],
+                 body_v_ok=bool((vb >= LIM.BODY_V_MIN - 1e-6).all() and (vb <= LIM.BODY_V_MAX + 1e-6).all()), wheel_sat_frac=round(float((wheel.max(axis=1) >= W_LIM - 2e-3).mean()), 3),
                  body_acc_max=[round(float(x), 3) for x in ab.max(axis=0)], body_acc_limit=A_BODY.tolist(), body_acc_ok=bool((ab.max(axis=0) <= A_BODY + 1e-6).all()),
                  wheel_acc_max=round(float(wa.max()), 3), wheel_acc_limit=0.05 * 125.0, wheel_acc_ok=bool(wa.max() <= 0.05 * 125.0 + 1e-6),
                  arm_rate_max=round(float(np.abs(qd).max()), 4), arm_rate_ok=bool(np.abs(qd).max() <= V_ARM + 1e-4),
@@ -535,7 +546,7 @@ class DoorWBOpt:
                  t_phi_95pct_s=t_at(0.95 * self.phi_goal), t_phi_84p5deg_s=t_at(self.phi_goal - math.radians(0.5)), t_phi_first_goal_s=t_at(self.phi_goal), t_ref_end_s=round(n * h, 2),
                  time_note='各時刻為 0.05 s 取樣序列上的首次到達；參考結束≠實際停穩（後者要執行後量）',
                  base_travel_m=round(float(np.linalg.norm(np.diff(Xd[:, :2], axis=0), axis=1).sum()), 3), base_net_m=round(float(np.linalg.norm(Xd[-1, :2] - Xd[0, :2])), 3), base_yaw_change_deg=round(math.degrees(Xd[-1, 2] - Xd[0, 2]), 1))
-        keys = ('clear_ok', 'wheel_ok', 'body_acc_ok', 'wheel_acc_ok', 'arm_rate_ok', 'setpoint_rate_ok', 'joint_ok', 'sigma_ok', 'phi_end_ok', 'phi_range_ok', 'phi_rate_ok')
+        keys = ('clear_ok', 'wheel_ok', 'body_v_ok', 'body_acc_ok', 'wheel_acc_ok', 'arm_rate_ok', 'setpoint_rate_ok', 'joint_ok', 'sigma_ok', 'phi_end_ok', 'phi_range_ok', 'phi_rate_ok')
         v['closure_ok'] = bool(v['closure_pos_mm'] < 1e-3 and v['closure_rot_deg'] < 1e-3)
         v['failed'] = [k for k in keys + ('closure_ok',) if not v[k]]
         v['feasible'] = not v['failed']

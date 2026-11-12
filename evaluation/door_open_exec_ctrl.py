@@ -39,6 +39,7 @@ os.environ.setdefault('M8_SCENE_REG', '20261112_m8_house_scene.json')
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import door_wbopt as W                                             # noqa: E402
+import door_limits as LIM                                          # noqa: E402
 
 DA = W.DA
 GW, K, C0, B, C21, S = DA.GW, DA.K, DA.C0, DA.B, DA.C21, DA.S
@@ -58,6 +59,37 @@ D_DOOR = 2.0                                                        # 解除後�
 FINGER_OPEN = 0.0089
 STOP_STILL = dict(arm_rps=2e-3, base_mps=0.003, yaw_rps=0.003, door_rps=0.005, hold_s=0.3, timeout_s=4.0)
 KEYS = ('env', 'base', 'self', 'shell_bar')
+BASE_RAMP = True                                                    # r4：底盤命令在一個控制拍內逐物理步線性過渡（管線、預測、停止掃掠同一語意）
+
+
+def ramp_cmd(u_from_base, u_tick, j):
+    """第 j 個物理步（0…NPH−1）實際送出的命令：底盤分量由上一筆線性過渡到本拍命令，手臂分量＝本拍命令（設定點積分本身已平滑）。"""
+    a = min(j + 1, NPH) / NPH if BASE_RAMP else 1.0
+    return np.r_[u_from_base + a * (u_tick[:3] - u_from_base), u_tick[3:]]
+
+
+def stop_traj_ramp(q, s, pipe, u_last, u_from_base, j0, cfg, extra_ticks=0):
+    """C21.stop_traj 的斜坡版（同一個設定點／底盤受控對象 S.plant_phys_step）：每控制拍有界減速，底盤分量在拍內逐物理步過渡。
+    j0＝起點在目前控制拍內已過的物理步數（拍首呼叫＝0，u_from_base 為本拍過渡起點）。回每 SAMPLE_EVERY 物理步的 q。"""
+    qp, sp = np.asarray(q, float).copy(), np.asarray(s, float).copy()
+    pp = [np.asarray(u, float).copy() for u in pipe]
+    u, uf, j = np.asarray(u_last, float).copy(), np.asarray(u_from_base, float).copy(), int(j0)
+    da = np.r_[B.A_BASE, np.full(6, C0.A_ARM)] * cfg.dt
+    out, k, quiet = [qp.copy()], 0, 0
+    while quiet < C21.SETTLE_STEPS and k < 2000:
+        if j >= NPH:
+            uf, j = ramp_cmd(uf, u, NPH - 1)[:3], 0
+            if k >= extra_ticks * NPH:
+                u = u + np.clip(-u, -da, da)
+        cmd = ramp_cmd(uf, u, j)
+        pp.append(cmd)
+        qp, sp = S.plant_phys_step(qp, sp, pp.pop(0), cfg, 1)
+        k += 1
+        j += 1
+        quiet = quiet + 1 if (not np.any(cmd) and not any(np.any(x) for x in pp)) else 0
+        if k % C21.SAMPLE_EVERY == 0:
+            out.append(qp.copy())
+    return np.array(out)
 
 
 def rot_deg(Ta, Tb):
@@ -96,6 +128,8 @@ class DoorOpenExec:
         self.stop_mode, self.request_unbind, self.request_finger_open, self.t_path_stop, self.n_emerg_closure = None, False, False, None, 0
         self.bound, self.unbind_t, self.force_max, self.force_n = True, None, 0.0, None
         self.abort = None
+        self.u_from_base, self.ramp_j = np.asarray(self.pipe[-1][:3], float).copy(), NPH   # 斜坡狀態：本拍底盤過渡起點、本拍已過物理步數
+        self.cmd_hist = []                                           # 每物理步實際送進管線的命令（驗收用）
         self.sweep_inject, self.clear_inject = None, None            # 測試用故障注入
         self.rel_min, self.n_release_viol, self.mon_prev = {k: np.inf for k in KEYS}, 0, None
         self.finger_q_closed = float(finger_q)
@@ -173,7 +207,7 @@ class DoorOpenExec:
             W.FINGER_Q = FINGER_OPEN
         try:
             for e in extras:
-                Q = C21.stop_traj(np.asarray(q, float), self.s, self.pipe, u, self.cfg, e)
+                Q = stop_traj_ramp(q, self.s, self.pipe, u, self.u_from_base if u is self.u_last else self._ramp_end(), 0 if u is not self.u_last else self.ramp_j, self.cfg, e)
                 idx = list(range(0, len(Q), self.sweep_stride))
                 if idx[-1] != len(Q) - 1:
                     idx.append(len(Q) - 1)
@@ -249,6 +283,10 @@ class DoorOpenExec:
             return None
         u = np.r_[np.asarray(r.u_opt, float), r.u_arm_seq[0]]
         return u if np.isfinite(u).all() else None
+
+    def _ramp_end(self):
+        """若在本拍首提交新命令，其過渡起點＝上一個物理步實際送出的底盤命令。"""
+        return np.asarray(self.pipe[-1][:3], float).copy()
 
     def _decel(self):
         da = np.r_[B.A_BASE, np.full(6, C0.A_ARM)] * self.cfg.dt
@@ -381,7 +419,12 @@ class DoorOpenExec:
                 self.u_last = self._decel()
             self.u_prev = self.u_last.copy()
             self.tick_ms.append((time.perf_counter() - w_t) * 1e3)
-        self.pipe.append(self.u_last.copy())
+        if tick:                                                   # 新的一拍：過渡起點＝上一物理步實際送出的底盤命令
+            self.u_from_base, self.ramp_j = self._ramp_end(), 0
+        cmd = ramp_cmd(self.u_from_base, self.u_last, self.ramp_j)
+        self.ramp_j += 1
+        self.pipe.append(cmd)
+        self.cmd_hist.append(cmd[:3].copy())
         ua = self.pipe.pop(0)
         nxt = self.s + PHYS * ua[3:]
         if np.any(nxt < self.lim_lo) or np.any(nxt > self.lim_hi):
@@ -425,6 +468,7 @@ class DoorOpenExec:
                     abort=self.abort, bound=self.bound, unbind_t=self.unbind_t, force_max_n=round(self.force_max, 3), force_limit_n=FORCE_LIMIT_N,
                     hold_stop_path=dict(closure_pos_mm_max=round(self.mins['stop_closure_pos'] * 1e3, 3), closure_rot_deg_max=round(self.mins['stop_closure_rot'], 3), n_cfg_over_tol=self.n_emerg_closure, note='命令減速停法的預測閉鏈偏差（只記錄；本版命令減速只用在 path 停到 settled 之後）'), stop_mode=self.stop_mode, n_sweep_cfg=self.mins['n_sweep'],
                     arm_cmd_max=round(float(Rr[:, 16].max()), 4), base_cmd_max=round(float(Rr[:, 17].max()), 4), arm_sat_s=round(float((Rr[:, 16] >= float(B.W_ARM['v_arm']) - 1e-3).sum()) * self.cfg.dt, 2),
-                    phi_end_deg=round(math.degrees(float(Rr[-1, 3])), 3), t_end=round(float(self.t), 2),
+                    phi_end_last_tick_deg=round(math.degrees(float(Rr[-1, 3])), 3), phi_end_deg=round(math.degrees(float(Rr[-1, 3])), 3), phi_end_note='最後控制拍的門角；最終物理紀錄的門角由執行器另報', t_end=round(float(self.t), 2),
+                    base_cmd_phys=dict(acc_max=[round(float(x), 3) for x in (np.abs(np.diff(np.array(self.cmd_hist), axis=0)).max(axis=0) / PHYS if len(self.cmd_hist) > 1 else np.zeros(3))], limit=LIM.A_BODY.tolist(), ramp=BASE_RAMP, note='逐物理步命令差分（世界前的本體命令）'), limits=LIM.summary(),
                     timing=dict(solve_ms=pct(self.solve_ms), sweep_ms=pct(self.sweep_ms), whole_tick_ms=pct(self.tick_ms)),
                     params=dict(T_STOP=T_STOP, PATH_STOP_MAX_S=PATH_STOP_MAX_S, PATH_OK=list(PATH_OK), FORCE_LIMIT_N=FORCE_LIMIT_N, LEAD_MAX_deg=3.0, LEAD_BAND_deg=1.0, STALL_S=STALL_S, CL_TOL=CL_TOL, STRESS_TOL=STRESS_TOL, END={k: (round(math.degrees(v), 3) if k == 'phi_tol' else v) for k, v in END.items()}, STOP_STILL=STOP_STILL, thresholds=W.THR, finger_q=W.FINGER_Q))
