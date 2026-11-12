@@ -1,0 +1,14 @@
+{
+ "name": "m8_house_door_approach_noncontact_r1",
+ "authority": "待 Codex 核可（冒煙 m8house_da_smoke_1 通過後申請）；未核可前不起跑",
+ "run_id": "m8house_da_approach_1",
+ "mode": "approach",
+ "n": 1,
+ "scope": "住宅場景 m8_house_r1；起點 base0＋觀測姿態 → 登錄停位與重瞄姿態 → 到位停穩 → 到位後新影格 → 凍結偵測＋幾何估計 → 固定底盤重算 → 預抓位姿（離抓取 30 mm）→ 受控停止。不插入、不閉爪、不開門、無行人。非即時閉迴路（計算時模擬暫停）。",
+ "init_conditions": ["遠距把手估計＝登錄檔 source.T_WH_est（既有影格估計），不是本趟在線視覺", "停位與重瞄視點＝登錄視點 reaim_d0.35_az+0_el0_lam1.0（r5 通過、總時間最短）", "起點另拍一格只記錄比較、不進控制"],
+ "accept": "result.json checks 全為 true：時鐘無偷跑、管線延遲 8 步、done、停止有效、無鎖存（非預期接觸／門角變化／逾時）、近距估計來自到位後新影格、保持相位底盤命令恆 0",
+ "report_separately": ["TO_PRE 途中 TCP 追蹤誤差（假世界約 53 mm／5°，未解決，不算精準追蹤通過）", "底盤保持漂移（Isaac 實測）", "整拍耗時與 RTF（非即時）", "模型手指閉合 0、Isaac 手指張開 8.9 mm 的幾何模型差異"],
+ "on_failure": "保留紀錄、不熱修、不自動重跑",
+ "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070／kernel 7.0.0-31；耗時不與筆電趟比較",
+ "freeze": "evaluation/experiments/20261112_m8_house_da_approach_freeze_r1.sha256"
+}
