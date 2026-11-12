@@ -1,0 +1,41 @@
+{
+ "name": "m8_house_door_open_constraint_opt_r1",
+ "run_id": "m8house_door_open_1",
+ "wiring_run_id": "m8house_door_open_wiring_1",
+ "authority": "Codex 20261112_223736：超力／無可驗證停止路徑改模擬中止；兩個超力與求解失敗反例經執行器真入口通過、不動作接線核對、登錄與凍結後，沿用正式一趟條件授權",
+ "scope": "理想抓持綁定下，新機構約束規劃能否實際帶門開啟的名目功能驗證：局部預抓起點 → door_insert_ctrl 插入 → 閉爪 → BindGate 綁定 → 暫停規劃（door_wbopt，綁定瞬間實測狀態）→ door_open_exec_ctrl 開門到 85° → path 停止停穩 → 解綁讀回 → 張爪觀察。不含退出、不接導航、不沿用舊開門控制。",
+ "inputs": {
+  "handle": "online_1 起點影格估計（φ＝0），以鉸鏈讀值轉到 φ_bind",
+  "door_angle": "鉸鏈讀值（模擬量測；實機無此感測）",
+  "force": "手腕傳遞力範數，metadata joint6＋1，未校準",
+  "base": "理想底盤介面"
+ },
+ "abort": {
+  "triggers": "超力 40 N（模擬工程中止值）、求解失敗、非有限、限位、實測淨空／閉鏈、path 中被拒或惡化、path 逾時、禁止接觸、開門逾時 40 s",
+  "action": "下一次 world.step 前停止物理步進；鎖存；不解綁、不 hold、不退出；停止有效性未驗證"
+ },
+ "bind_conditions": {
+  "pos_m": 0.005,
+  "rot_deg": 3.0,
+  "rel_lin_mps": 0.005,
+  "rel_ang_rps": 0.02,
+  "rel_still_s": 0.3,
+  "finger_q_m": [
+   0.0005,
+   0.004
+  ],
+  "finger_contact_n": 0.5,
+  "door_pre_deg": 0.5,
+  "note": "模擬判據；相對靜止＝逐步相對變換差分（四元數正規化、float64、atan2）線速度 ≤5 mm/s 且角速度 ≤0.02 rad/s **連續 0.3 s**（依樣本時間戳）；0.3 s 首尾差只當診斷；其餘同 r2",
+  "forbidden_n": 0.05
+ },
+ "accept": "result.json checks 全過：綁定條件、無跳動、規劃可行且規劃期間模擬時鐘不前進、未中止、open_done、停止有效（管線／底盤／手臂／門）、門角 ≥84.5°、開門期間淨空、解綁讀回、張爪期間淨空（兩指實際開度）",
+ "pre_checks": [
+  "幾何耦合測試 r3：資料/door_open_exec_fake_r3（超力×2、求解失敗經執行器入口：鎖存、不再步進、不解綁、不報停止成功；名目 open_done）",
+  "door_bind_logic 反例 r3",
+  "插入控制器假世界 r1"
+ ],
+ "on_failure": "保留、不熱修、不補跑；交 Isaac 重播＋同時間軸 2D 疊圖（標理想抓持、非即時）",
+ "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070",
+ "freeze": "evaluation/experiments/20261112_m8_house_door_open_freeze_r1.sha256"
+}

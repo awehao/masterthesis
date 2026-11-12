@@ -74,6 +74,7 @@ class Fake:
         self.phi_hist, self.bound, self.phi_free, self.omega_free, self.force_fn = [], True, None, 0.0, None
         self.unbind_info, self.after_release = None, dict(min={k: np.inf for k in X.KEYS}, n=0, door_sweep_deg=0.0)
         self.s_prev = c.s.copy()
+        self.aborted, self.abort_t, self.n_cmd_after_abort, self.n_phys_after_abort = False, None, 0, 0
 
     def door(self):
         if self.bound:
@@ -85,6 +86,11 @@ class Fake:
         phi, pH = self.door()
         force = None if self.force_fn is None else self.force_fn(self)
         out = c.step(self.t, self.q.copy(), phi, force)
+        if out.get('abort'):                                           # 執行器真入口：中止鎖存後不再步進物理
+            if not self.aborted:
+                self.aborted, self.abort_t = True, self.t
+            self.n_cmd_after_abort += int(bool(np.any(out['base_twist'])))
+            return out
         if out['request_unbind'] and self.bound:                    # 執行器：下一物理步前解除並讀回確認
             om = (phi - self.phi_hist[-1]) / PHYS if self.phi_hist else 0.0
             self.bound, self.phi_free, self.omega_free = False, float(phi), float(om)
@@ -129,7 +135,12 @@ class Fake:
         while self.t < t_end:
             if hook is not None:
                 hook(self)
+            t_before = self.t
             self.one()
+            if self.aborted:
+                if self.t != t_before:
+                    self.n_phys_after_abort += 1
+                break
             if self.c.stop_ok is not None and t_ok is None:
                 t_ok = self.t
             if t_ok is not None and self.t - t_ok >= 0.3:
@@ -170,7 +181,7 @@ def run_case(case, plan, out):
                 F_.c._stop('forced_stop')
                 t_fs[0] = F_.t
         if case == 'path_then_overforce':                            # 路徑停止 0.2 s 後才出現超力
-            expect_mode = 'release'
+            expect_mode = 'abort'
             F.force_fn = lambda F_: 50.0 if (t_fs[0] is not None and F_.t - t_fs[0] >= 0.2) else 5.0
         if case == 'path_then_clearance':                            # 路徑停止 0.2 s 後實測淨空違反
             expect_mode = 'hold'
@@ -179,10 +190,10 @@ def run_case(case, plan, out):
             expect_mode = 'hold'
             c.sweep_inject = lambda c_, tag: (dict(tag=tag, injected=True) if tag == 'path_candidate' and t_fs[0] is not None else None)
     if case == 'solver_fail_mid':
-        expect, expect_mode = 'solver_fail', 'hold'
+        expect, expect_mode = 'solver_fail', 'abort'
         c.fail_inject = lambda t: c.sigma >= 0.5 * c.sig_end
     if case == 'overforce_mid':
-        expect, expect_mode = 'overforce', 'release'
+        expect, expect_mode = 'overforce', 'abort'
         F.force_fn = lambda F_: 50.0 if F_.c.sigma >= 0.5 * F_.c.sig_end else 5.0
     if case == 'door_blocked':                                      # 門卡住（假對象把手臂／底盤照走，但回報的門角停在 30°）——進度調節應停住等門並判 door_not_following 或閉鏈殘差
         expect = 'blocked'
@@ -224,6 +235,12 @@ def run_case(case, plan, out):
     res['release'] = dict(unbind=F.unbind_info, after_release=dict(n=F.after_release['n'], door_sweep_deg=round(F.after_release['door_sweep_deg'], 3), min_clear={k_: round(float(v), 4) for k_, v in F.after_release['min'].items()}) if F.unbind_info else None,
                           finger_note='假世界把手指視為立即張開、門立即自由；Isaac 停用 FixedJoint 後須同時命令張爪並量實際卸載')
     res['expect_mode'] = expect_mode
+    if expect_mode == 'abort':                                       # 模擬中止：鎖存、不再步進、不解綁、不報停止成功
+        ch = dict(stop_reason=bool(rep['stop'] and rep['stop']['why'] == expect), abort_latched=bool(rep['abort'] is not None and rep['stop_mode'] == 'abort'),
+                  no_physics_after_abort=bool(F.aborted and F.n_phys_after_abort == 0), no_command_after_abort=bool(F.n_cmd_after_abort == 0), no_unbind=bool(F.bound and rep['unbind_t'] is None),
+                  stop_not_reported_success=bool(rep['stop_effect'] is not None and rep['stop_effect'].get('ok') is None and not rep['done']), clear_until_abort=clear_act,
+                  wheel_speed=bool(wheel <= 0.2775 + 1e-4), body_acc=bool((acc <= np.array([1.5, 1.0, 2.0]) + 1e-6).all()), arm_setpoint_rate=bool(s_rate <= 1.0 + 1e-6))
+        res['abort'] = dict(t=F.abort_t, controller=rep['abort'], phys_steps_after=F.n_phys_after_abort, note='模擬中止，不是受控停止；停止有效性未驗證')
     if expect == 'open_done':
         ch.update(done=bool(rep['done']), phi_end=bool(phi[-1] >= PHI_GOAL - X.END['phi_tol']))
     if case == 'handover_inflight':

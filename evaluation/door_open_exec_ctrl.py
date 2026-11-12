@@ -18,14 +18,13 @@
     每個取樣點由把手點位置反算當時門角 φ_i，核：預測閉鏈殘差（徑向／高度／姿態；綁定下它代表內應力而非可見誤差）與全身對 φ_i 門扇的淨空（閉合手指開度）。
     違反 ⇒ 候選不提交、受控停止。
   5 監看（鎖存停止）：實測閉鏈殘差、設定點閉鏈殘差（手臂被命令去的位置對機構允許位置＝內應力指標）、實測淨空、進度停滯、求解失敗、外部超力旗標。
-停止（r2，依 Codex 開門執行層 r1 裁定）：三種模式＋持續監看
-  path    路徑停止：g 以 1/T_STOP 斜降到 0，期間繼續以同一全身求解追蹤參考；**每拍新候選命令照樣經提交前核對**（保持停止路徑淨空），
-          監看（超力、非有限、限位、實測閉鏈、實測淨空）持續生效；任一項違反或惡化 ⇒ 升級 hold（超力 ⇒ release）。只用在 PATH_OK 類原因。
-  hold    命令逐拍有界減速、在途命令走完、**綁定保持**（門跟著機器人停）。這種停法閉鏈不相容（預測偏差最大約 22 mm），以傳遞力監看；超力 ⇒ release。
-  release 超力（模擬工程中止值 40 N，傳遞力範數，每物理步取樣，停止期間同樣有效）：request_unbind＋request_finger_open，執行器須在下一物理步前
-          解除連接並讀回確認（confirm_unbind）；之後門角改用**獨立量測**（不再由機器人構型反算），閉鏈監看停用，淨空用張開手指模型＋實測門角。
-  每拍另預測 release 路徑：機器人命令減速，門以當下角速度自由轉 φ(t)＝φ0＋ω0/d·(1−e^{−d t})（d＝2.0 1/s 的簡化阻尼模型，不是 PhysX 驗證），
-  手指張開模型；記錄其最小淨空（不擋命令：release 是最後手段，見報告）。
+停止（r3，依 Codex 20261112_223736）：
+  path    只用於 PATH_OK 類原因（外部停止、完成、未達、門不跟、設定點模型偏差、候選／停止掃掠被拒）：g 0.5 s 斜降、同一全身求解繼續追蹤，
+          每拍新候選照樣經提交前核對、監看持續；任何一項不過或惡化 ⇒ abort。
+  abort   **模擬中止**：其餘所有原因（超力 40 N〔模擬工程中止值，傳遞力範數，每物理步〕、求解失敗、非有限、限位、實測淨空／閉鏈、path 中被拒或惡化、path 逾時）。
+          鎖存失敗、回 abort＝True；執行器必須在下一次 world.step 前停止物理步進。不 hold、不自動解綁、不退出；停止有效性標「未驗證」，不叫受控停止成功。
+  解綁    只在正常完成（open_done 或 path 停止到 settled）且停止有效（管線清空、底盤／手臂／門停穩）之後，由執行器解除連接並讀回；張爪期間以兩指實際開度核幾何。
+（r2 的 hold／release 與 release 路徑預測保留在 versions/door_open_exec_ctrl_r2.py，不再使用：release 會使夾爪殼碰橫桿，hold 有約 22 mm 閉鏈不相容且無反力模型。）
 停止有效性分核：管線清空、底盤、手臂、門角速度。
 完成：σ 到參考終點、實測門角 ≥ φ_goal−END_PHI_TOL、各速度低於門檻連續 END_N 拍。
 數值皆為事前登錄的工程設定；未校準的傳遞力只作模擬保護。"""
@@ -53,7 +52,7 @@ STRESS_TOL = dict(pos_m=0.030, rot_deg=8.0)                        # 設定點�
 END = dict(phi_tol=math.radians(0.5), n_ticks=10, wait_s=4.0, arm_rps=0.02, base_mps=0.005, yaw_rps=0.01, door_rps=0.01)
 T_STOP, PATH_STOP_MAX_S = 0.5, 3.0                                # 路徑停止：g 由 1 降到 0 的時間、最長等待
 PATH_OK = ('forced_stop', 'open_done', 'end_not_reached', 'door_not_following', 'setpoint_model_deviation', 'candidate_stop_violation', 'stop_sweep_violation')
-RELEASE = ('overforce',)                                            # 其餘原因一律 hold
+# 其餘原因一律 abort（模擬中止）
 FORCE_LIMIT_N = 40.0                                                # 模擬工程中止值（未校準傳遞力範數；不是安全上限）
 D_DOOR = 2.0                                                        # 解除後門的簡化阻尼（1/s；預測用）
 FINGER_OPEN = 0.0089
@@ -96,6 +95,7 @@ class DoorOpenExec:
         self.overforce = None
         self.stop_mode, self.request_unbind, self.request_finger_open, self.t_path_stop, self.n_emerg_closure = None, False, False, None, 0
         self.bound, self.unbind_t, self.force_max, self.force_n = True, None, 0.0, None
+        self.abort = None
         self.sweep_inject, self.clear_inject = None, None            # 測試用故障注入
         self.rel_min, self.n_release_viol, self.mon_prev = {k: np.inf for k in KEYS}, 0, None
         self.finger_q_closed = float(finger_q)
@@ -105,30 +105,28 @@ class DoorOpenExec:
         self.events.append(dict(t=round(float(self.t), 3), what=what, **kw))
 
     def _stop(self, why, **kw):
-        mode = 'release' if why in RELEASE else ('path' if why in PATH_OK else 'hold')
-        order = dict(path=0, settled=0, hold=1, release=2)
+        mode = 'path' if (why in PATH_OK and (self.stop is None or self.stop_mode == 'path')) else 'abort'
         if self.stop is None:
             self.stop = dict(t=round(float(self.t), 3), why=why, sigma=round(self.sigma, 3), mode=mode, **kw)
             self.t_path_stop = self.t
             self._ev('stop', why=why, mode=mode, **kw)
-            self._set_mode(mode)
-        elif order[mode] > order.get(self.stop_mode, 0):              # 停止途中再出錯 ⇒ 升級（path → hold → release），不降級
-            self.stop.setdefault('escalations', []).append(dict(t=round(float(self.t), 3), why=why, to=mode, **kw))
-            self._ev('stop_escalated', why=why, to=mode, **kw)
-            self._set_mode(mode)
+            self.stop_mode = mode
+        elif self.stop_mode in ('path', 'settled') and mode == 'abort':   # 正常停止途中再出錯 ⇒ 模擬中止（不降級）
+            self.stop.setdefault('escalations', []).append(dict(t=round(float(self.t), 3), why=why, to='abort', **kw))
+            self._ev('stop_escalated', why=why, to='abort', **kw)
+            self.stop_mode = mode
+        if self.stop_mode == 'abort' and self.abort is None:
+            self.abort = dict(t=round(float(self.t), 3), why=why, **kw)
+            self.stop_ok = dict(t=round(float(self.t), 3), ok=None, status='unverified（模擬中止，不是受控停止）')
 
-    def _set_mode(self, mode):
-        self.stop_mode = mode
-        if mode in ('hold', 'release') and self.stopped_t is None:
-            self.stopped_t = self.t
-        if mode == 'release':
-            self.request_unbind, self.request_finger_open = True, True
+    def set_finger(self, q_finger):
+        """張爪期間由執行器以兩指實際開度更新淨空模型（不因已下張爪命令就換成全開模型）。"""
+        W.set_model(phi0=self.phi_bind, finger_q=float(q_finger))
 
     def confirm_unbind(self, ok, detail=None):
         """執行器在解除連接（並讀回 jointEnabled＝False）後呼叫；之後門角由執行器獨立量測傳入。"""
         if ok and self.bound:
             self.bound, self.unbind_t = False, self.t
-            W.set_model(phi0=self.phi_bind, finger_q=FINGER_OPEN)      # 手指已命令張開：淨空改用張開模型
             self._ev('unbind_confirmed', detail=detail)
         elif not ok:
             self._ev('unbind_not_confirmed', detail=detail)
@@ -272,7 +270,7 @@ class DoorOpenExec:
         Tm, Tr = K.fk(q, 'link_tcp'), K.fk(x_ref[:9], 'link_tcp')
         self.rec.append([self.t, self.sigma, self.g, phi_meas, x_ref[9], ep, er, sp_, sr_, float(np.linalg.norm(q[:2] - x_ref[:2])), abs(q[2] - x_ref[2]), float(np.linalg.norm(Tm[:3, 3] - Tr[:3, 3])), *[c[k] for k in KEYS],
                          float(np.abs(self.u_last[3:]).max()), float(np.hypot(self.u_last[0], self.u_last[1])), (self.force_n if self.force_n is not None else float('nan')), float(self.bound),
-                         {'None': 0, 'path': 1, 'settled': 1, 'hold': 2, 'release': 3}[str(self.stop_mode)]])
+                         {'None': 0, 'path': 1, 'settled': 1, 'abort': 4}[str(self.stop_mode)]])
         bad = [k for k in KEYS if c[k] < W.THR[k]]
         out = None
         if bad:
@@ -294,6 +292,9 @@ class DoorOpenExec:
         force_n＝手腕傳遞力範數（模擬保護；None＝無讀值）。回 dict(arm_target, base_twist, stopped, done, request_unbind, request_finger_open)。"""
         self.t = float(t)
         q = np.asarray(q, float)
+        ab = dict(base_twist=np.zeros(3), stopped=True, done=False, abort=True, request_unbind=False, request_finger_open=False)
+        if self.abort is not None:                                   # 已中止：不再產生任何命令
+            return dict(ab, arm_target=self.s.copy())
         tick = self.n_step % NPH == 0
         w_t = time.perf_counter()
         self.force_n = None if force_n is None else float(force_n)
@@ -303,6 +304,8 @@ class DoorOpenExec:
                 self._stop('overforce', force_n=round(self.force_n, 3), limit_n=FORCE_LIMIT_N)
         if not (np.isfinite(q).all() and math.isfinite(phi_meas)):
             self._stop('state_nonfinite')
+        if self.abort is not None:
+            return dict(ab, arm_target=self.s.copy())
         if tick:
             if self.q_tick is not None:
                 self.rate = dict(base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / self.cfg.dt, yaw=abs(q[2] - self.q_tick[2]) / self.cfg.dt, arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / self.cfg.dt, door=abs(phi_meas - self.phi_tick) / self.cfg.dt)
@@ -335,11 +338,8 @@ class DoorOpenExec:
                     self.sweep_ms.append((time.perf_counter() - w0) * 1e3)
                     if b_ is not None:
                         self._stop('stop_sweep_violation', **b_)
-            elif m is not None and m[0] not in ('setpoint_model_deviation',):
-                self._stop(m[0] if self.stop_mode != 'path' else ('path_' + m[0] if not m[0].startswith('path_') else m[0]), **m[1])
-            # release 路徑預測（只記錄）：門自由轉、手指張開
-            if self.bound and self.stop_mode != 'release':
-                self._sweep(q, self.u_last, (0,), 'release', door='free', phi0=float(phi_meas), omega0=float(self.rate['door']) * (1.0 if self.phi_last is None or phi_meas >= self.phi_last else -1.0))
+            elif m is not None and m[0] not in ('setpoint_model_deviation',) and self.stop_mode == 'path':
+                self._stop(m[0] if m[0].startswith('path_') else 'path_' + m[0], **m[1])
         # ---- 命令
         if tick:
             if self.stop is None:
@@ -375,7 +375,7 @@ class DoorOpenExec:
                         else:
                             self.u_last = u
                             self.sigma = min(self.sigma + self.cfg.dt * self.g, self.sig_end)
-            if self.stop is not None and self.stop_mode in ('settled', 'hold', 'release'):
+            if self.stop is not None and self.stop_mode == 'settled':
                 if self.stopped_t is None:
                     self.stopped_t = self.t
                 self.u_last = self._decel()
@@ -388,7 +388,7 @@ class DoorOpenExec:
             nxt = np.clip(nxt, self.lim_lo, self.lim_hi)
             self._stop('setpoint_limit')
         self.s = nxt
-        if self.stopped_t is not None and self.q_last is not None and self.stop_ok is None:
+        if self.stopped_t is not None and self.q_last is not None and self.stop_ok is None and self.abort is None:
             dq = float(np.abs(q[3:] - self.q_last[3:]).max()) / PHYS
             vb = float(np.hypot(*(q[:2] - self.q_last[:2]))) / PHYS
             wy = abs(q[2] - self.q_last[2]) / PHYS
@@ -401,7 +401,9 @@ class DoorOpenExec:
                 self.stop_ok = dict(t=round(self.t, 3), since_stop_s=round(self.t - self.stopped_t, 3), parts=st, arm_rate=dq, base_speed=vb, yaw_rate=wy, door_rate=dd, bound=self.bound, ok=bool(self._still * PHYS >= STOP_STILL['hold_s']))
         self.q_last, self.phi_last = q.copy(), float(phi_meas)
         self.n_step += 1
-        return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), stopped=self.stop is not None, done=self.done, request_unbind=bool(self.request_unbind and self.bound), request_finger_open=bool(self.request_finger_open))
+        if self.abort is not None:                                   # 本步中途觸發（例如求解失敗、設定點限位）：本步命令也不送
+            return dict(ab, arm_target=self.s.copy())
+        return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), stopped=self.stop is not None, done=self.done, abort=False, request_unbind=False, request_finger_open=False)
 
     def report(self):
         Rr = np.array(self.rec, dtype=float) if self.rec else np.zeros((1, 21))
@@ -420,10 +422,9 @@ class DoorOpenExec:
                     closure_measured=dict(pos_mm=stb(5, 1e3), rot_deg=stb(6)), setpoint_model_deviation=dict(pos_mm=stb(7, 1e3), rot_deg=stb(8), note='設定點模型的幾何偏差監看（主要是 τ·q̇ 動態超前），不是內應力'), base_track_m=st(9), yaw_track_rad=st(10), tcp_vs_ref_mm=st(11, 1e3),
                     lead_deg_max=round(math.degrees(float((Rr[:, 4] - Rr[:, 3]).max())), 3), g_min=round(float(Rr[:, 2].min()), 3), g_lt1_frac=round(float((Rr[:, 2] < 1 - 1e-9).mean()), 3),
                     min_clear_actual={k: round(float(v), 4) for k, v in self.mins['act'].items()}, min_clear_stop_sweep={k: round(float(v), 4) for k, v in self.mins['stop'].items()},
-                    bound=self.bound, unbind_t=self.unbind_t, request_unbind=self.request_unbind, request_finger_open=self.request_finger_open, force_max_n=round(self.force_max, 3), force_limit_n=FORCE_LIMIT_N,
-                    release_path_pred=dict(min_clear={k: round(float(v), 4) for k, v in self.rel_min.items()}, n_ticks_violating=self.n_release_viol, worst=getattr(self, 'release_worst', None), note='門自由轉（簡化阻尼 2/s）＋手指張開的預測；只記錄、不擋命令'),
-                    hold_stop_path=dict(closure_pos_mm_max=round(self.mins['stop_closure_pos'] * 1e3, 3), closure_rot_deg_max=round(self.mins['stop_closure_rot'], 3), n_cfg_over_tol=self.n_emerg_closure, note='hold（命令減速、綁定保持）停止路徑的預測閉鏈偏差：閉鏈不相容量，物理上轉成連接內力，以傳遞力監看'), stop_mode=self.stop_mode, n_sweep_cfg=self.mins['n_sweep'],
+                    abort=self.abort, bound=self.bound, unbind_t=self.unbind_t, force_max_n=round(self.force_max, 3), force_limit_n=FORCE_LIMIT_N,
+                    hold_stop_path=dict(closure_pos_mm_max=round(self.mins['stop_closure_pos'] * 1e3, 3), closure_rot_deg_max=round(self.mins['stop_closure_rot'], 3), n_cfg_over_tol=self.n_emerg_closure, note='命令減速停法的預測閉鏈偏差（只記錄；本版命令減速只用在 path 停到 settled 之後）'), stop_mode=self.stop_mode, n_sweep_cfg=self.mins['n_sweep'],
                     arm_cmd_max=round(float(Rr[:, 16].max()), 4), base_cmd_max=round(float(Rr[:, 17].max()), 4), arm_sat_s=round(float((Rr[:, 16] >= float(B.W_ARM['v_arm']) - 1e-3).sum()) * self.cfg.dt, 2),
                     phi_end_deg=round(math.degrees(float(Rr[-1, 3])), 3), t_end=round(float(self.t), 2),
                     timing=dict(solve_ms=pct(self.solve_ms), sweep_ms=pct(self.sweep_ms), whole_tick_ms=pct(self.tick_ms)),
-                    params=dict(T_STOP=T_STOP, PATH_STOP_MAX_S=PATH_STOP_MAX_S, PATH_OK=list(PATH_OK), RELEASE=list(RELEASE), FORCE_LIMIT_N=FORCE_LIMIT_N, D_DOOR=D_DOOR, LEAD_MAX_deg=3.0, LEAD_BAND_deg=1.0, STALL_S=STALL_S, CL_TOL=CL_TOL, STRESS_TOL=STRESS_TOL, END={k: (round(math.degrees(v), 3) if k == 'phi_tol' else v) for k, v in END.items()}, STOP_STILL=STOP_STILL, thresholds=W.THR, finger_q=W.FINGER_Q))
+                    params=dict(T_STOP=T_STOP, PATH_STOP_MAX_S=PATH_STOP_MAX_S, PATH_OK=list(PATH_OK), FORCE_LIMIT_N=FORCE_LIMIT_N, LEAD_MAX_deg=3.0, LEAD_BAND_deg=1.0, STALL_S=STALL_S, CL_TOL=CL_TOL, STRESS_TOL=STRESS_TOL, END={k: (round(math.degrees(v), 3) if k == 'phi_tol' else v) for k, v in END.items()}, STOP_STILL=STOP_STILL, thresholds=W.THR, finger_q=W.FINGER_Q))
