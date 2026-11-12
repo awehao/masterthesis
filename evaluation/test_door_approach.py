@@ -51,6 +51,19 @@ def load():
 
     def T_at(T_WH, s):
         return np.asarray(E.OT.object_target(T_WH, T_HG, a_H, float(s))['T_WE'], float)
+    out_online = None
+    if os.environ.get('DA_ONLINE') == '1':                           # 在線停位／重瞄：遠距估計＝Isaac 實錄 m8house_da_approach_1 起點影格的估計（假世界無相機 ⇒ 合成送入）；不用登錄停位與視點
+        import door_online_plan as OP
+        import wrist_v0_capture as W0
+        rr = json.load(open(os.path.join(HERE, 'runs', 'm8house_da_approach_1', 'result.json')))
+        T_far_live = np.array(rr['far_live']['T_WH'])
+        T_mount = W0.urdf_chain_T(os.path.join(HERE, 'models', 'omni_bot_manip.urdf'), 'link_eef', W0.OPT)
+        pl = OP.plan(T_far_live, np.array(reg['standoff']['base0']), q_obs, T_mount, np.array(meta['intrinsics_readback']['K']), T_at)
+        assert pl['ok'], pl
+        out_online = dict(b1=pl['b1'], q_look=pl['q_look'], T_far=T_far_live, info={k: pl[k] for k in ('standoff', 'cam', 'plan_motion_s', 'wall_s', 'wall_split_s', 'n_standoff_feasible', 'n_look_ok', 'tried')})
+    if out_online is not None:
+        return dict(vid='online', cand=[], near_frame=r['stem'] + '（合成：靜態影格估計，非所選視角重拍）', base0=np.array(reg['standoff']['base0']), b1=out_online['b1'], q_obs=q_obs, q_look=out_online['q_look'], T_far=out_online['T_far'],
+                    T_near=np.asarray(est['T_WH'], float), T_true=np.array(truth['per_viewpoint'][vid]['M_world_handle_prim']), T_at=T_at, online=out_online['info'])
     return dict(vid=vid, cand=[dict(id=c['id'], T_total=c['T_total']) for c in cand], near_frame=r['stem'], base0=np.array(reg['standoff']['base0']), b1=np.array(v['base'], float), q_obs=q_obs, q_look=np.array(v['q_arm'], float),
                 T_far=np.array(reg['source']['T_WH_est']), T_near=np.asarray(est['T_WH'], float), T_true=np.array(truth['per_viewpoint'][vid]['M_world_handle_prim']), T_at=T_at)
 
@@ -194,7 +207,7 @@ def main():
     out_path = sys.argv[1]
     L = load()
     good = lambda t, c: (t - 0.05, L['T_near'], True)              # noqa: E731  影格拍攝早於送達 0.05 s
-    res = dict(viewpoint=L['vid'], candidates_by_time=L['cand'], near_frame=L['near_frame'], D_TRUE=D_TRUE.tolist(), OBS_DELAY=OBS_DELAY, cases={})
+    res = dict(online_plan=L.get('online'), viewpoint=L['vid'], candidates_by_time=L['cand'], near_frame=L['near_frame'], D_TRUE=D_TRUE.tolist(), OBS_DELAY=OBS_DELAY, cases={})
     w0 = time.perf_counter()
     if os.environ.get('DA_ONLY'):
         res['partial'] = os.environ['DA_ONLY']
