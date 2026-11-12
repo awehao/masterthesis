@@ -22,7 +22,7 @@ def _pairs():
     return DOC.SELF_PAIRS
 
 
-def clear_full(qf, T_WH, finger_q=0.0):
+def clear_full(qf, T_WH, finger_q=0.0, exempt_fingers_bar=False):
     """finger_q＝兩指張開量（m；finger_joint1 沿夾爪 +y、finger_joint2 沿 −y，URDF 互為 mimic）。0＝原模型（閉合），與原函式等值。"""
     global _STATIC, _SARR
     qf = np.asarray(qf, float)
@@ -79,6 +79,7 @@ def clear_full(qf, T_WH, finger_q=0.0):
         if d < env:
             env, who = d, f'{n}|{name}'
     bc, bwho = min((float(DOC.box_dist(np.array([[qf[0], qf[1], c[2]]]), c, R, hs)[0]) - DOC.RB, name) for name, c, R, hs in _STATIC)
-    bt, btw = min((float(PG.bar_dist(pts(n), bar).min()), n) for n in TOOL if n in T)
+    # exempt_fingers_bar（預設 False＝不變）：插入／抓持段，兩指對橫桿是指定接觸，只核夾爪殼對橫桿（同 R3.cfg_clear_full(contact=True) 的規則）
+    bt, btw = min((float(PG.bar_dist(pts(n), bar).min()), n) for n in (TOOL[:1] if exempt_fingers_bar else TOOL) if n in T)
     return dict(env=env, env_who=who, base=bc, base_who=bwho, self=sc, bar_tool=bt, bar_tool_who=btw,
                 ok=bool(env >= R1.ENV_M and bc >= R1.BASE_M and sc >= R1.SELF_M and bt >= R1.ENV_M))

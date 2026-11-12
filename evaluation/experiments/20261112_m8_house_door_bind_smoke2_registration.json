@@ -1,0 +1,47 @@
+{
+ "name": "m8_house_door_insert_and_ideal_bind_smoke_r2",
+ "authority": "Codex 20261112（綁定冒煙 1 裁定）：預抓擺位＋既有 jnom 局部插入；反例通過、更新登錄與凍結後可直接起跑 smoke_2",
+ "run_id": "m8house_door_bind_smoke_2",
+ "scope": "局部插入＋理想綁定介面冒煙（不是純靜態）：預抓擺位靜置 → door_insert_ctrl 插入 30 mm → 閉爪 → 綁定條件 → 綁定 → 靜置 → 解除 → 觀察。不導航、不做遠距視覺／在線停位、不執行開門軌跡。",
+ "placement": "底盤＝online_1 在線停位；手臂＝對把手估計（online_1 起點影格，既有估計）的預抓 IK（退 30 mm）；只擺位一次",
+ "bind_conditions": {
+  "pos_m": 0.005,
+  "rot_deg": 3.0,
+  "rel_lin_mps": 0.005,
+  "rel_ang_rps": 0.02,
+  "rel_still_s": 0.3,
+  "finger_q_m": [
+   0.0005,
+   0.004
+  ],
+  "finger_contact_n": 0.5,
+  "door_pre_deg": 0.5,
+  "note": "模擬判據；相對速度＝相對變換差分；TCP＝實測底盤＋關節 FK；手指接觸以接觸點分類（橫桿／其他）；禁止接觸出現即鎖存、不插入不閉爪不綁",
+  "forbidden_n": 0.05
+ },
+ "record": [
+  "各指實際開度",
+  "手指對門扇接觸力",
+  "連接兩端同步位姿（綁定瞬間 local_pos1／local_rot1）",
+  "綁定前後跳動",
+  "綁定靜置連接誤差",
+  "門角與角速度（含解除後）",
+  "手腕傳遞力（列號＝dof 索引＋1；A 段靜置對下游重量自我核對）",
+  "非預期接觸（手臂六連桿、link_eef、夾爪殼、底盤 對 門扇＋牆／家具）",
+  "鉸鏈被動讀回（驅動、質量、PhysX 角阻尼、限位）"
+ ],
+ "pass": "result.json checks 全過；失敗保留、不熱修、不補跑",
+ "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070",
+ "freeze": "evaluation/experiments/20261112_m8_house_door_bind_smoke2_freeze_r1.sha256",
+ "pre_checks": [
+  "door_bind_logic 反例（共同剛轉、碰門板不綁、歷史禁止接觸不綁、正例）：資料/door_bind_logic_test_r1.json",
+  "插入控制器假世界：資料/door_insert_fake_r1.json（到抓取 1.14 mm）",
+  "door_clear_fast 預設等值重核"
+ ],
+ "notes": [
+  "底盤速度逐步設定＝理想底盤介面／支撐假設",
+  "手腕傳遞力列＝metadata.joint_indices[joint6]+1，未校準",
+  "smoke_1 保留為「抓持前置未過、未建立綁定」",
+  "守護離開碼 0 不等於驗收通過，以 result.json 判定"
+ ]
+}
