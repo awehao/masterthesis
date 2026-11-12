@@ -58,7 +58,7 @@ class Fake:
         self.c, self.L = c, L
         self.q = np.r_[L['base0'], L['q_obs']].astype(float)
         self.t, self.alpha, self.v_scale, self.d = 0.0, np.asarray(c.cfg.arm_model.alpha, float) * a_scale, v_scale, np.asarray(d_true, float)
-        self.creep = None
+        self.creep, self.stuck = None, None
         self.sent, self.min_true, self.hist = False, dict(env=np.inf, base=np.inf, self=np.inf, bar_tool=np.inf), []
 
     def one(self, obs_fn=None, hook=None):
@@ -76,7 +76,10 @@ class Fake:
         cs, sn = math.cos(self.q[2]), math.sin(self.q[2])
         vx, vy, wz = out['base_twist'] * self.v_scale
         self.q[:3] += PHYS * np.array([cs * vx - sn * vy, sn * vx + cs * vy, wz])
-        self.q[3:] = self.q[3:] + self.alpha * (out['arm_target'] - self.q[3:] + self.d)
+        qn = self.q[3:] + self.alpha * (out['arm_target'] - self.q[3:] + self.d)
+        if self.stuck is not None:
+            qn[self.stuck] = self.q[3:][self.stuck]                  # 故障注入：關節卡住
+        self.q[3:] = qn
         self.t += PHYS
         if c.n_step % NPH == 0:
             cc = DA.CLEAR(self.q, self.L['T_true'])
@@ -119,10 +122,10 @@ def evaluate(F):
     return rep
 
 
-def checks(r):
+def checks(r, still=True):
     """每案共同判定：預期停止原因、停止有效（持續靜止、管線清空）、done 與原因一致；完成案另核終端、底盤保持、保持相位底盤命令為零、真值把手下沿途淨空不低於門檻。"""
     th = r['params']['thresholds']
-    c = dict(stop_reason=bool(r['stop'] and r['stop']['why'] == r['expect']), stop_effective=bool(r['stop_effect'] and r['stop_effect']['ok']), done_consistent=bool((r['expect'] == 'approach_done') == r['done']),
+    c = dict(stop_reason=bool(r['stop'] and r['stop']['why'] == r['expect']), stop_effective=bool(r['stop_effect'] and r['stop_effect']['ok'] == still and r['stop_effect']['pipe_empty']), done_consistent=bool((r['expect'] == 'approach_done') == r['done']),
              hold_base_cmd_zero=bool(r['tracking']['base_cmd_max_hold'] == 0.0))
     if r['expect'] != 'base_hold_violation':
         c['hold_dev_within'] = bool(r['hold_dev_max']['base_m'] <= DA.HOLD_TOL['base_m'] and r['hold_dev_max']['yaw_rad'] <= DA.HOLD_TOL['yaw_rad'])
@@ -187,26 +190,34 @@ def main():
     good = lambda t, c: (t - 0.05, L['T_near'], True)              # noqa: E731  影格拍攝早於送達 0.05 s
     res = dict(viewpoint=L['vid'], candidates_by_time=L['cand'], near_frame=L['near_frame'], D_TRUE=D_TRUE.tolist(), OBS_DELAY=OBS_DELAY, cases={})
     w0 = time.perf_counter()
-    F, S = nominal_with_forks(L, good)
-    r = evaluate(F)
-    r['stop_probes'] = S
-    r['expect'] = 'approach_done'
-    r['checks'] = checks(r)
-    r['checks']['probes_all_stop_ok'] = bool(S['all_stop_ok'] and S['n_run'] == S['n'])
-    r['checks']['probes_none_below_threshold'] = bool(all(v == 0 for v in S['n_below_threshold'].values()))
-    r['pass'] = bool(all(r['checks'].values()))
-    res['cases']['nominal'] = r
-    print('nominal', 'pass' if r['pass'] else 'FAIL', r['checks'], 'hold', r['hold_dev_max'], 'tick_ms', r['timing'], flush=True)
-    print('nominal', r['stop'], 'T', r['t_end'], 'probe', S['n_run'], S['min_true'], S['n_below_threshold'], 'wall', round(time.perf_counter() - w0, 1), flush=True)
-    np.save(out_path.replace('.json', '_nominal_hist.npy'), np.array([[h[0], *h[2:]] for h in F.hist]))
+    if os.environ.get('DA_ONLY'):
+        res['partial'] = os.environ['DA_ONLY']
+    F, S = nominal_with_forks(L, good) if not os.environ.get('DA_ONLY') else (None, None)
+    if F is not None:
+        r = evaluate(F)
+        r['stop_probes'] = S
+        r['expect'] = 'approach_done'
+        r['checks'] = checks(r)
+        r['checks']['probes_all_stop_ok'] = bool(S['all_stop_ok'] and S['n_run'] == S['n'])
+        r['checks']['probes_none_below_threshold'] = bool(all(v == 0 for v in S['n_below_threshold'].values()))
+        r['pass'] = bool(all(r['checks'].values()))
+        res['cases']['nominal'] = r
+        print('nominal', 'pass' if r['pass'] else 'FAIL', r['checks'], 'hold', r['hold_dev_max'], 'tick_ms', r['timing'], flush=True)
+        print('nominal', r['stop'], 'T', r['t_end'], 'probe', S['n_run'], S['min_true'], S['n_below_threshold'], 'wall', round(time.perf_counter() - w0, 1), flush=True)
+    if F is not None:
+        np.save(out_path.replace('.json', '_nominal_hist.npy'), np.array([[h[0], *h[2:]] for h in F.hist]))
 
-    def case(name, expect, obs=good, hook=None, rej=None, creep=None, **kw):
+    only = os.environ.get('DA_ONLY')
+
+    def case(name, expect, obs=good, hook=None, rej=None, creep=None, still=True, **kw):
+        if only and name not in only.split(','):
+            return
         F = mk(L, **kw)
         F.creep = creep
         F.run(obs_fn=obs, hook=hook)
         r = evaluate(F)
         r['expect'] = expect
-        r['checks'] = checks(r)
+        r['checks'] = checks(r, still)
         if rej is not None:
             r['checks']['reject_counted'] = bool(r['obs_rejected'].get(rej, 0) >= 1)
         r['pass'] = bool(all(r['checks'].values()))
@@ -250,12 +261,13 @@ def main():
             F.shifted = True
     case('new_command_insufficient_stop_margin', 'candidate_stop_violation', hook=near_hook)
 
-    def slow_hook(F):
-        if F.c.phase == 'TO_PRE' and not getattr(F, 'slowed', False):
-            F.alpha = F.alpha * 0.08                                 # 手臂響應大幅變慢：時間到了但 TCP 未到 ⇒ 不算完成
-            F.slowed = True
-    case('time_up_tcp_not_arrived', 'end_not_reached', hook=slow_hook)
-    case('base_pushed_during_hold', 'base_hold_violation', creep=(('TO_PRE', 'END'), (0.004, 0.0)))
+    def stuck_hook(F):
+        c = F.c
+        if c.phase == 'TO_PRE' and c.t > c.seg['t0'] + 0.7 * c.seg['T'] and F.stuck is None:
+            F.stuck = [4]                                            # 腕關節卡住：參考時間走完但 TCP 到不了 ⇒ 不算完成
+    case('time_up_tcp_not_arrived', 'end_not_reached', hook=stuck_hook)
+    # 外力在停止後仍持續推：停止原因要對；停止有效性必須**如實報未靜止**（管線已清空）
+    case('base_pushed_during_hold', 'base_hold_violation', creep=(('TO_PRE', 'END'), (0.004, 0.0)), still=False)
 
     def solver_hook(F):
         if F.c.phase == 'TO_PRE' and F.c.fail_inject is None:
