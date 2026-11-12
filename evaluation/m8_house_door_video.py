@@ -56,7 +56,8 @@ def load(run):
             err.append(np.nan)
         clr.append(DA.FAST.clear_full(q, T_true, finger_q=DA.FINGER_Q)['bar_tool'])
         tt.append(t)
-    return dict(run=run, jnom=bool(c.get('joint_nominal')), R=R, res=res, phase=phase, tt=np.array(tt), err=np.array(err) * 1e3, clr=np.array(clr) * 1e3, tcp=np.array(tcp), d_pre=np.array(d_pre) * 1e3, T_pre=T_pre, T_true=T_true, T_pre_true=T_pre_true,
+    on = res.get('online')
+    return dict(run=run, online=None if not on else dict(plan_wall_s=on['plan_wall_s'], cam=on['plan']['cam'], standoff=on['plan']['standoff']), jnom=bool(c.get('joint_nominal')), R=R, res=res, phase=phase, tt=np.array(tt), err=np.array(err) * 1e3, clr=np.array(clr) * 1e3, tcp=np.array(tcp), d_pre=np.array(d_pre) * 1e3, T_pre=T_pre, T_true=T_true, T_pre_true=T_pre_true,
                 T_near=np.array(res['camera']['near']['T_WH']), marks=dict(settle=t_settle, arrive=t_arr, replan=t_rep, end=t_end, stop=t_stop), u_arm=np.abs(np.diff(R[:, 11:17], axis=0)).max(axis=1) / DA.PHYS)
 
 
@@ -79,10 +80,10 @@ def video_a(L, rdir, out):
         d = ImageDraw.Draw(cv)
         i = min(int(round(t / (DA.PHYS * DA.NPH))), len(L['tt']) - 1)
         ph = L['phase'](t)
-        d.text((16, 8), f"門把手非接觸接近{'・關節名目線性化對照' if L['jnom'] else ''}（Isaac 重播・依實錄擺位算圖）　t＝{t:5.2f} s　{PH_ZH[ph]}", font=f1, fill=(240, 240, 240))
+        d.text((16, 8), f"門把手非接觸接近{'・在線停位與重瞄' if L['online'] else '・關節名目線性化對照' if L['jnom'] else ''}（Isaac 重播・依實錄擺位算圖）　t＝{t:5.2f} s　{PH_ZH[ph]}", font=f1, fill=(240, 240, 240))
         e = L['err'][i]
         d.text((16, 48), f"TCP 到估計預抓目標 {L['d_pre'][i]:6.1f} mm　工具對橫桿淨空（真值幾何）{L['clr'][i]:6.1f} mm" + ('' if np.isnan(e) else f"　途中追蹤誤差 {e:5.1f} mm") + "　接觸監看：未觸發", font=f2, fill=(200, 210, 220))
-        d.text((16, 72), "非即時計算（計算時模擬暫停；模擬時間 1× 播放，不代表實機速度）｜遠距把手估計＝既有影格（初始化條件）｜不插入、不閉爪、不開門", font=f2, fill=(235, 190, 110))
+        d.text((16, 72), "非即時計算（計算時模擬暫停；模擬時間 1× 播放，不代表實機速度）｜" + (f"遠距估計＝本趟起點影格、停位與重瞄在線算（起跑前等待 {L['online']['plan_wall_s']:.1f} s 牆鐘，未計入時間軸）" if L['online'] else "遠距把手估計＝既有影格（初始化條件）") + "｜不插入、不閉爪、不開門", font=f2, fill=(235, 190, 110))
         for (x, y, s) in ((12, BAR + 8, '總覽'), (1292, BAR + 8, '把手側拍'), (1292, BAR + 368, '手腕相機')):
             d.rectangle([x - 4, y - 2, x + 12 + 19 * len(s), y + 26], fill=(0, 0, 0))
             d.text((x, y), s, font=f2, fill=(255, 255, 255))
@@ -165,7 +166,7 @@ def video_b(L, out, fps, every):
     for v, lab, ha in ((M['arrive'], '到位→新影格→重算', 'right'), (M['end'], '參考結束', 'right'), (M['stop'], '完成', 'left')):
         a1.text(v + (0.06 if ha == 'left' else -0.06), a1.get_ylim()[1] * 0.97, lab, fontsize=8, color=MUTE, ha=ha, va='top')
     head_txt = fig.text(0.05, 0.955, '', fontsize=13, color=INK)
-    fig.text(0.05, 0.925, '非即時計算（模擬時間 1×）｜遠距把手估計＝既有影格（初始化條件）｜接觸監看未觸發｜' + ('對照版：關節名目線性化（底盤固定相位）' if L['jnom'] else '途中追蹤誤差大、尚未解決') + '｜n＝1', fontsize=9.5, color='#8a5a12')
+    fig.text(0.05, 0.925, '非即時計算（模擬時間 1×）｜' + (f"遠距估計＝本趟起點影格；停位與重瞄在線算（起跑前等待 {L['online']['plan_wall_s']:.1f} s 牆鐘，未計入時間軸）" if L['online'] else '遠距把手估計＝既有影格（初始化條件）') + '｜接觸監看未觸發｜' + ('關節名目線性化（底盤固定相位）' if L['jnom'] else '途中追蹤誤差大、尚未解決') + '｜n＝1', fontsize=9.5, color='#8a5a12')
     w, h = fig.canvas.get_width_height()
     pr = ffmpeg(out, w, h, fps)
     for k in range(0, len(R), every):
