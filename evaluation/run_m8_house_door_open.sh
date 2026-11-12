@@ -20,7 +20,7 @@ say "=== 門把手非接觸接近：RUN_ID=$RUN_ID MODE=$MODE CTRL_ARGS='${CTRL_
 setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_door_open.py --out "$DIR" ${WIRING:+--wiring} >> "$DIR/sim.log" 2>&1 &
 SIM=$!
 sleep 1
-P=$(pgrep -f "[i]saac_m8_house_door_bind_smoke.py.*runs/$RUN_ID" | head -1)
+P=$(pgrep -f "[i]saac_m8_house_door_open.py.*runs/$RUN_ID" | head -1)
 say "  起 sim PID=${P:-$SIM}"
 trap 'say "收到 TERM"; [ -n "${P:-}" ] && kill -TERM "$P" 2>/dev/null; sleep 3; [ -n "${P:-}" ] && kill -KILL "$P" 2>/dev/null; exit 143' TERM
 trap 'say "收到 INT"; [ -n "${P:-}" ] && kill -TERM "$P" 2>/dev/null; exit 130' INT

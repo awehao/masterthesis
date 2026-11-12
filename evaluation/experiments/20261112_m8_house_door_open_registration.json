@@ -1,7 +1,7 @@
 {
  "name": "m8_house_door_open_constraint_opt_r1",
  "run_id": "m8house_door_open_1",
- "wiring_run_id": "m8house_door_open_wiring_1",
+ "wiring_run_id": "m8house_door_open_wiring_2",
  "authority": "Codex 20261112_223736：超力／無可驗證停止路徑改模擬中止；兩個超力與求解失敗反例經執行器真入口通過、不動作接線核對、登錄與凍結後，沿用正式一趟條件授權",
  "scope": "理想抓持綁定下，新機構約束規劃能否實際帶門開啟的名目功能驗證：局部預抓起點 → door_insert_ctrl 插入 → 閉爪 → BindGate 綁定 → 暫停規劃（door_wbopt，綁定瞬間實測狀態）→ door_open_exec_ctrl 開門到 85° → path 停止停穩 → 解綁讀回 → 張爪觀察。不含退出、不接導航、不沿用舊開門控制。",
  "inputs": {
@@ -37,5 +37,8 @@
  ],
  "on_failure": "保留、不熱修、不補跑；交 Isaac 重播＋同時間軸 2D 疊圖（標理想抓持、非即時）",
  "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070",
- "freeze": "evaluation/experiments/20261112_m8_house_door_open_freeze_r1.sha256"
+ "freeze": "evaluation/experiments/20261112_m8_house_door_open_freeze_r2.sha256",
+ "notes": [
+  "m8house_door_open_wiring_1：規劃期間主執行緒阻塞約 2 分鐘時 Isaac 被 SIGKILL（無 OOM 紀錄、無例外；原因未定，視窗無回應是候選）。r2 起規劃在背景執行緒、主執行緒只算圖不步進物理，並核規劃期間模擬時鐘不前進。"
+ ]
 }

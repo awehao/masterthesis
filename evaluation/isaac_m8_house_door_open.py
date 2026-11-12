@@ -67,6 +67,25 @@ OPEN_LIMIT_S = 40.0                                              # 開門段模�
 PLAN_WALL_LIMIT_S = 600.0
 
 
+def run_responsive(world, fn):
+    """在背景執行緒跑 fn（規劃）；主執行緒只呼叫 world.render()（算圖、不步進物理）讓視窗保持回應。
+    m8house_door_open_wiring_1 在主執行緒阻塞約 2 分鐘時被 SIGKILL（原因未定；視窗無回應是候選），r2 起改此作法。回 (結果, 例外)。"""
+    import threading
+    box = {}
+
+    def _t():
+        try:
+            box['r'] = fn()
+        except Exception as e_:                                    # noqa: BLE001
+            box['e'] = e_
+    th = threading.Thread(target=_t, daemon=True)
+    th.start()
+    while th.is_alive():
+        world.render()
+        time.sleep(0.05)
+    return box.get('r'), box.get('e')
+
+
 def clean(o):
     if isinstance(o, dict):
         return {str(k): clean(v) for k, v in o.items()}
@@ -325,21 +344,28 @@ def main():
             T_HE = np.linalg.inv(T_far) @ K.fk(qg, 'link_tcp')
             b = qg[:3]
             T_ramp = 1.875 * PHI_GOAL * (float(np.hypot(b[0], b[1])) + WB.L_W) / (0.9 * WB.W_LIM)
-            opt = WB.DoorWBOpt(T_far, np.eye(4), np.r_[qg, 0.0], PHI_GOAL, N=int(math.ceil((T_ramp + 2.0) / 0.2)), dt=0.2, T_HE=T_HE, project_start=False)
-            opt.init_corotate(T_ramp)
-            info = opt.solve(max_iter=45)
-            v = opt.verify()
-            Xd, h, _ = opt.dense_reference(4)
+            st_w = float(world.current_time)
+
+            def _plan_w():
+                o_ = WB.DoorWBOpt(T_far, np.eye(4), np.r_[qg, 0.0], PHI_GOAL, N=int(math.ceil((T_ramp + 2.0) / 0.2)), dt=0.2, T_HE=T_HE, project_start=False)
+                o_.init_corotate(T_ramp)
+                i_ = o_.solve(max_iter=45)
+                return o_, i_, o_.verify(), o_.dense_reference(4)
+            rr, ee = run_responsive(world, _plan_w)
+            if ee is not None:
+                raise ee
+            opt, info, v, (Xd, h, _) = rr
+            wr_clock = float(world.current_time) - st_w
             ex = XO.DoorOpenExec(ident, Xd, h, T_far, 0.0, T_HE, PHI_GOAL, dict(s=np.array([tgt[i] for i in idx], float), pipe=[np.zeros(9)] * DA.D_STEPS, u_last=np.zeros(9), u_prev=np.zeros(9), bias=np.zeros(6)), 0.00173)
             Fw, _ = wrist_F()
             o1 = ex.step(0.0, qg, 0.0, float(np.linalg.norm(Fw)))      # 合成狀態一步：不套用命令、不步進物理
-            wr.update(plan=dict(solve=info, feasible=v['feasible'], failed=v['failed'], t_phi_first_goal_s=v['t_phi_first_goal_s']), plan_wall_s=round(time.perf_counter() - w0, 1),
+            wr.update(plan=dict(solve=info, feasible=v['feasible'], failed=v['failed'], t_phi_first_goal_s=v['t_phi_first_goal_s']), plan_wall_s=round(time.perf_counter() - w0, 1), plan_sim_clock_advance_s=wr_clock,
                       exec_one_step=dict(abort=o1['abort'], finite=bool(np.isfinite(o1['arm_target']).all() and np.isfinite(o1['base_twist']).all()), stop=ex.stop, solve_ms=ex.solve_ms[-1:] if ex.solve_ms else None),
                       wrist_F_norm_static=round(float(np.linalg.norm(Fw)), 3))
         res['wiring'] = wr
         res['result'] = 'wiring_only'
         print(f"[open] 接線核對 {json.dumps(clean(wr), ensure_ascii=False)[:1500]}", flush=True)
-        ok_w = bool(isinstance(wr.get('plan'), dict) and wr['plan']['feasible'] and wr['exec_one_step']['finite'] and not wr['exec_one_step']['abort'] and wr['fixedjoint_api'])
+        ok_w = bool(isinstance(wr.get('plan'), dict) and wr['plan']['feasible'] and wr['exec_one_step']['finite'] and not wr['exec_one_step']['abort'] and wr['fixedjoint_api'] and wr.get('plan_sim_clock_advance_s') == 0.0)
         res['checks'], res['ok'] = dict(wiring=ok_w, P_no_contact=res['P']['finger_contact_max_n'] <= COND['forbidden_n'] and res['P']['other_contact_max_n'] <= COND['forbidden_n']), None
         res['ok'] = bool(all(res['checks'].values()))
         json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)
@@ -419,16 +445,18 @@ def main():
             T_ramp = 1.875 * (PHI_GOAL - phi_b) * (float(np.hypot(b[0], b[1])) + WB.L_W) / (0.9 * WB.W_LIM)
             w0, st0 = time.perf_counter(), float(world.current_time)
             plan_ok, why_p = False, None
-            try:
-                opt = WB.DoorWBOpt(T_WH_b, np.eye(4), np.r_[qm, phi_b], PHI_GOAL, N=int(math.ceil((T_ramp + 2.0) / 0.2)), dt=0.2, T_HE=T_HE, project_start=False)
-                opt.init_corotate(T_ramp)
-                info = opt.solve(max_iter=45)
-                v = opt.verify()
-                Xd, h, adj = opt.dense_reference(4)
+            def _plan_f():
+                o_ = WB.DoorWBOpt(T_WH_b, np.eye(4), np.r_[qm, phi_b], PHI_GOAL, N=int(math.ceil((T_ramp + 2.0) / 0.2)), dt=0.2, T_HE=T_HE, project_start=False)
+                o_.init_corotate(T_ramp)
+                i_ = o_.solve(max_iter=45)
+                return o_, i_, o_.verify(), o_.dense_reference(4)
+            rr, ee = run_responsive(world, _plan_f)
+            if ee is None:
+                opt, info, v, (Xd, h, adj) = rr
                 plan_ok = bool(v['feasible'])
                 why_p = None if plan_ok else v['failed']
-            except ValueError as e_:
-                info, v, why_p = None, None, repr(e_)
+            else:
+                info, v, why_p = None, None, repr(ee)
             res['plan'] = dict(ok=plan_ok, why=why_p, wall_s=round(time.perf_counter() - w0, 1), sim_clock_advance_s=float(world.current_time) - st0, phi_bind_deg=round(math.degrees(phi_b), 5), finger_q_model=fq, T_HE=T_HE.tolist(),
                                solve=info, verify=None if v is None else {k_: v[k_] for k_ in ('feasible', 'failed', 't_phi_95pct_s', 't_phi_first_goal_s', 't_ref_end_s', 'min_clear_m', 'sigma_min', 'sigma_start', 'setpoint_rate_needed_max', 'wheel_max', 'body_acc_max', 'closure_pos_mm', 'base_travel_m', 'base_yaw_change_deg')},
                                handle_source='online_1 起點影格估計（φ＝0），以鉸鏈讀值轉到 φ_bind', note='非即時：規劃期間不步進物理')
