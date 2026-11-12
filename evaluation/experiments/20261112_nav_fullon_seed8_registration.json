@@ -1,0 +1,12 @@
+{
+ "name": "nav_fullon_bigarena_seed8_r1",
+ "authority": "Codex 20261112_151745：隔離鏈通過並建立登錄與凍結後，可直接跑 gmpc_scan_heading＋GUARD＋Shield 的 seed 8 一趟",
+ "run_id": "fullon_s8_1", "seed": 8, "n": 1,
+ "config": "GUARD=1 SHIELD=1 HEADING=1 PLANNER_SCAN=/scan REPLAN=1.0；其餘同歷史重現 desk_repro_s8_145801（AMCL＋EKF、排程式動態交通 v3、PHASE_DELTA 30、任務時限 180 s 模擬時間、HEADLESS=false）",
+ "changed_vs_history": ["Shield 啟用並改為 smoother→Shield→GUARD 單一串接（scan_safety_shield wheel_rows、final_cmd_topic=/cmd_vel、wheel_dt 0.045）", "heading 開（gmpc_scan_heading）"],
+ "purpose": "確認主線該開的都開後：命令確實經過各層、唯一發布者、動態繞行與到達是否仍成立。與 145801 只當同場景對照，不是配對檢定。",
+ "checks": ["到達與否、任務時間、路徑長", "對動態物／靜態最小間距（真值，已扣機器人半徑 0.30）", "/cmd_vel 發布者唯一", "GUARD 狀態逐筆：mode、action、faults、是否改動及數值差；目標與 Shield 輸出配對，配不到算未驗證", "Shield 診斷：介入、退讓、未解、殘差、前值來源、退回比例", "重規劃次數（以模擬時間）", "追蹤器輸出的動態物數", "各節點參數快照"],
+ "on_failure": "保留、不熱修、不補跑；未過項目交阻點",
+ "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070",
+ "freeze": "evaluation/experiments/20261112_nav_fullon_seed8_freeze_r1.sha256"
+}
