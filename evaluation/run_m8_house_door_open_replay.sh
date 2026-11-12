@@ -9,7 +9,7 @@ ISAAC_PY="${ISAAC_PY:-$HOME/venvs/isaacsim-6.0.1/bin/python}"
 DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$DIR/run.log"; }
 say "=== 重播（擺位＋算圖，非物理）：來源 $SRC_RUN → $RUN_ID"
-setsid systemd-run --user --scope -q -p MemoryMax=20G -p MemorySwapMax=0 env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_door_open_replay.py --run "$SRC_RUN" --out "$DIR/frames" >> "$DIR/sim.log" 2>&1 &
+setsid systemd-run --user --scope -q -p MemoryMax=20G -p MemorySwapMax=0 env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_door_open_replay.py --run "$SRC_RUN" --out "$DIR/frames" ${EVERY_OPEN:+--every-open $EVERY_OPEN} >> "$DIR/sim.log" 2>&1 &
 SIM=$!
 sleep 1
 P=$(pgrep -f "[i]saac_m8_house_door_open_replay.py.*runs/$RUN_ID" | head -1)

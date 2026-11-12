@@ -17,6 +17,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument('--run', required=True)
 ap.add_argument('--out', required=True)
 ap.add_argument('--every', type=int, default=4)
+ap.add_argument('--every-open', type=int, default=1, help='開門段每幾個物理步一格（1＝逐步；長開門段用 4＝1×）')
 ap.add_argument('--reg', default=os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json'))
 ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_manip.urdf'))
 a = ap.parse_args()
@@ -131,8 +132,8 @@ def main():
     for _ in range(40):
         pose(R[0])
         world.step(render=True)
-    ks = [k for k in range(len(R)) if PH[int(R[k, 1])] == 'O' or k % a.every == 0]
-    meta = dict(run=a.run, every=a.every, every_open=1, frames=[], note='依實錄逐格擺位＋算圖（非物理重跑；不建綁定）；開門段每物理步一格、其餘段每 every 步一格；實錄為非即時計算')
+    ks = [k for k in range(len(R)) if (PH[int(R[k, 1])] == 'O' and k % a.every_open == 0) or (PH[int(R[k, 1])] != 'O' and k % a.every == 0)]
+    meta = dict(run=a.run, every=a.every, every_open=a.every_open, frames=[], note='依實錄逐格擺位＋算圖（非物理重跑；不建綁定）；開門段每物理步一格、其餘段每 every 步一格；實錄為非即時計算')
     for n, k in enumerate(ks):
         for _ in range(3):                                            # 擺位後多算兩次圖，避免讀到上一格
             pose(R[k])
