@@ -1,0 +1,298 @@
+{
+ "case": "phi5_nominal",
+ "expect": "open_done",
+ "plan": "plan_phi5.npz",
+ "report": {
+  "stop": {
+   "t": 14.55,
+   "why": "open_done",
+   "sigma": 14.0,
+   "mode": "path",
+   "phi_meas_deg": 85.011
+  },
+  "done": true,
+  "stop_effect": {
+   "t": 14.95,
+   "since_stop_s": 0.4,
+   "parts": {
+    "pipe": true,
+    "arm": true,
+    "base": true,
+    "door": true
+   },
+   "arm_rate": 5.395279505382433e-05,
+   "base_speed": 0.0,
+   "yaw_rate": 0.0,
+   "door_rate": 1.267337745858299e-05,
+   "bound": true,
+   "ok": true
+  },
+  "events": [
+   {
+    "t": 0.0,
+    "what": "start",
+    "sigma_end": 14.0,
+    "phi_bind_deg": 5.0,
+    "pipe_nonzero": 0
+   },
+   {
+    "t": 14.1,
+    "what": "ref_end",
+    "phi_meas_deg": 85.013
+   },
+   {
+    "t": 14.55,
+    "what": "stop",
+    "why": "open_done",
+    "mode": "path",
+    "phi_meas_deg": 85.011
+   },
+   {
+    "t": 14.55,
+    "what": "path_stop_settled"
+   }
+  ],
+  "sigma_end": 14.0,
+  "sigma": 14.0,
+  "closure_measured": {
+   "pos_mm": {
+    "max": 1.4211,
+    "p95": 0.3329,
+    "end": 0.0016
+   },
+   "rot_deg": {
+    "max": 0.2318,
+    "p95": 0.2149,
+    "end": 0.0006
+   }
+  },
+  "setpoint_model_deviation": {
+   "pos_mm": {
+    "max": 7.4037,
+    "p95": 7.114,
+    "end": 0.0016
+   },
+   "rot_deg": {
+    "max": 1.5032,
+    "p95": 1.3173,
+    "end": 0.0006
+   },
+   "note": "設定點模型的幾何偏差監看（主要是 τ·q̇ 動態超前），不是內應力"
+  },
+  "base_track_m": {
+   "max": 0.0218,
+   "p95": 0.0202,
+   "end": 0.0002
+  },
+  "yaw_track_rad": {
+   "max": 0.0048,
+   "p95": 0.0044,
+   "end": 0.0
+  },
+  "tcp_vs_ref_mm": {
+   "max": 1.4976,
+   "p95": 0.631,
+   "end": 0.0142
+  },
+  "lead_deg_max": 0.086,
+  "g_min": 0.0,
+  "g_lt1_frac": 0.078,
+  "min_clear_actual": {
+   "env": 0.035,
+   "base": 0.066,
+   "self": 0.0099,
+   "shell_bar": 0.0071
+  },
+  "min_clear_stop_sweep": {
+   "env": 0.0348,
+   "base": 0.0657,
+   "self": 0.0099,
+   "shell_bar": 0.0069
+  },
+  "abort": null,
+  "bound": true,
+  "unbind_t": null,
+  "force_max_n": 0.0,
+  "force_limit_n": 40.0,
+  "hold_stop_path": {
+   "closure_pos_mm_max": 6.076,
+   "closure_rot_deg_max": 0.441,
+   "n_cfg_over_tol": 0,
+   "note": "命令減速停法的預測閉鏈偏差（只記錄；本版命令減速只用在 path 停到 settled 之後）"
+  },
+  "stop_mode": "settled",
+  "n_sweep_cfg": 9738,
+  "arm_cmd_max": 0.4348,
+  "base_cmd_max": 0.2828,
+  "arm_sat_s": 0.0,
+  "phi_end_last_tick_deg": 85.01,
+  "phi_end_deg": 85.01,
+  "phi_end_note": "最後控制拍的門角；最終物理紀錄的門角由執行器另報",
+  "t_end": 15.26,
+  "base_cmd_phys": {
+   "acc_max": [
+    1.5,
+    1.0,
+    1.367
+   ],
+   "limit": [
+    1.5,
+    1.0,
+    2.0
+   ],
+   "ramp": true,
+   "note": "逐物理步命令差分（世界前的本體命令）"
+  },
+  "limits": {
+   "body_v_min": [
+    -0.2,
+    -0.25,
+    -0.8
+   ],
+   "body_v_max": [
+    0.35,
+    0.25,
+    0.8
+   ],
+   "a_body": [
+    1.5,
+    1.0,
+    2.0
+   ],
+   "wheel_v": 0.2775,
+   "wheel_a": 6.25,
+   "dev_margin": 0.9,
+   "source": "bottle_s0b_ctrl.nav_cfg()／A_BASE"
+  },
+  "timing": {
+   "solve_ms": {
+    "p50": 9.2,
+    "p95": 9.8,
+    "max": 15.5
+   },
+   "sweep_ms": {
+    "p50": 274.4,
+    "p95": 294.8,
+    "max": 304.1
+   },
+   "whole_tick_ms": {
+    "p50": 291.7,
+    "p95": 311.9,
+    "max": 322.1
+   }
+  },
+  "params": {
+   "T_STOP": 0.5,
+   "PATH_STOP_MAX_S": 3.0,
+   "PATH_OK": [
+    "forced_stop",
+    "open_done",
+    "end_not_reached",
+    "door_not_following",
+    "setpoint_model_deviation",
+    "candidate_stop_violation",
+    "stop_sweep_violation"
+   ],
+   "FORCE_LIMIT_N": 40.0,
+   "LEAD_MAX_deg": 3.0,
+   "LEAD_BAND_deg": 1.0,
+   "STALL_S": 2.0,
+   "CL_TOL": {
+    "pos_m": 0.01,
+    "rot_deg": 5.0
+   },
+   "STRESS_TOL": {
+    "pos_m": 0.03,
+    "rot_deg": 8.0
+   },
+   "END": {
+    "phi_tol": 0.5,
+    "n_ticks": 10,
+    "wait_s": 4.0,
+    "arm_rps": 0.02,
+    "base_mps": 0.005,
+    "yaw_rps": 0.01,
+    "door_rps": 0.01
+   },
+   "STOP_STILL": {
+    "arm_rps": 0.002,
+    "base_mps": 0.003,
+    "yaw_rps": 0.003,
+    "door_rps": 0.005,
+    "hold_s": 0.3,
+    "timeout_s": 4.0
+   },
+   "thresholds": {
+    "env": 0.005,
+    "base": 0.02,
+    "self": 0.005,
+    "shell_bar": 0.005
+   },
+   "finger_q": 0.00173
+  }
+ },
+ "geom": {
+  "radial_dev_mm": {
+   "max": 1.427,
+   "end": -0.001
+  },
+  "height_dev_mm": {
+   "max": 0.089
+  },
+  "phi_end_deg": 85.01,
+  "phi_rate_max_dps": 19.53
+ },
+ "torque_record": {
+  "I": 2.407,
+  "d": 2.0,
+  "tau_max_nm": 5.076,
+  "handle_force_equiv_max_n": 6.345,
+  "note": "反算紀錄；幾何耦合下的門角二階差分，不是動力學驗證"
+ },
+ "after_stop": {
+  "n": 14,
+  "min_clear": {
+   "env": 0.0351,
+   "base": 0.0843,
+   "self": 0.0114,
+   "shell_bar": 0.0072
+  },
+  "closure_pos_mm": 0.003,
+  "closure_rot_deg": 0.001
+ },
+ "handover": null,
+ "limits": {
+  "wheel_max": 0.2662,
+  "body_acc_max": [
+   1.473,
+   1.0,
+   1.218
+  ],
+  "arm_setpoint_rate_max": 0.4348,
+  "stop_closure_pos_mm": 0.003,
+  "stop_closure_rot_deg": 0.001
+ },
+ "release": {
+  "unbind": null,
+  "after_release": null,
+  "finger_note": "假世界把手指視為立即張開、門立即自由；Isaac 停用 FixedJoint 後須同時命令張爪並量實際卸載"
+ },
+ "expect_mode": "settled",
+ "checks": {
+  "stop_reason": true,
+  "final_mode": true,
+  "stop_effective": true,
+  "clear_actual": true,
+  "clear_during_stop": true,
+  "wheel_speed": true,
+  "body_acc": true,
+  "arm_setpoint_rate": true,
+  "unbind_iff_release": true,
+  "unbind_confirmed": true,
+  "closure_within_bound": true,
+  "closure_during_path_stop": true,
+  "done": true,
+  "phi_end": true
+ },
+ "pass": true
+}

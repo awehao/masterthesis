@@ -40,6 +40,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import door_wbopt as W                                             # noqa: E402
 import door_limits as LIM                                          # noqa: E402
+import gmpc_wb_ramp as GR                                          # noqa: E402
+import dataclasses                                                 # noqa: E402
 
 DA = W.DA
 GW, K, C0, B, C21, S = DA.GW, DA.K, DA.C0, DA.B, DA.C21, DA.S
@@ -59,6 +61,7 @@ D_DOOR = 2.0                                                        # 解除後�
 FINGER_OPEN = 0.0089
 STOP_STILL = dict(arm_rps=2e-3, base_mps=0.003, yaw_rps=0.003, door_rps=0.005, hold_s=0.3, timeout_s=4.0)
 KEYS = ('env', 'base', 'self', 'shell_bar')
+START_LAT_ALIGN = True                                              # r5：參考時鐘從第一筆命令到達受控對象才起算（σ₀＝−D_STEPS·PHYS；底盤與手臂共用同一條管線延遲）
 BASE_RAMP = True                                                    # r4：底盤命令在一個控制拍內逐物理步線性過渡（管線、預測、停止掃掠同一語意）
 
 
@@ -103,7 +106,10 @@ class DoorOpenExec:
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
         self.cfg.arm_model.bias = np.asarray(handover['bias'], float).copy()
-        self.mpc = GW.GMPC(B.nav_cfg())
+        nc = B.nav_cfg()
+        rc = GR.GMPCConfig(**{f.name: getattr(nc, f.name) for f in dataclasses.fields(nc)})
+        rc.cmd_ramp_w = (0.4, 0.6) if BASE_RAMP else None             # r5：GMPC 底盤預測與 ramp_cmd 同語意（20…100% ⇒ 平均 0.4·u_{k−1}＋0.6·u_k）
+        self.mpc = GR.GMPC(rc)
         self.Xd, self.h = np.asarray(Xd, float), float(h)
         self.T_WH_bind, self.phi_bind, self.T_HE, self.phi_goal = np.asarray(T_WH_bind, float), float(phi_bind), np.asarray(T_HE, float), float(phi_goal)
         W.set_model(phi0=self.phi_bind, finger_q=finger_q)
@@ -116,7 +122,7 @@ class DoorOpenExec:
         self.u_last, self.u_prev = np.asarray(handover['u_last'], float).copy(), np.asarray(handover['u_prev'], float).copy()
         self.lim_lo, self.lim_hi = np.asarray(LITE6_SAFE.lower, float) + 0.05, np.asarray(LITE6_SAFE.upper, float) - 0.05
         self.sig_end = (len(self.Xd) - 1) * self.h
-        self.sigma, self.g, self.t, self.n_step = 0.0, 0.0, 0.0, 0
+        self.sigma, self.g, self.t, self.n_step = (-D_STEPS * PHYS if START_LAT_ALIGN else 0.0), 0.0, 0.0, 0
         self.stop, self.done, self.stopped_t, self.stop_ok, self._still = None, False, None, None, 0
         self.events, self.rec, self.fail_inject = [], [], None
         self.solve_ms, self.sweep_ms, self.tick_ms = [], [], []

@@ -184,10 +184,16 @@ def run_case(case, plan, out):
             expect_mode = 'abort'
             F.force_fn = lambda F_: 50.0 if (t_fs[0] is not None and F_.t - t_fs[0] >= 0.2) else 5.0
         if case == 'path_then_clearance':                            # 路徑停止 0.2 s 後實測淨空違反
-            expect_mode = 'hold'
-            c.clear_inject = lambda c_, cl: (dict(cl, env=0.003) if (t_fs[0] is not None and c_.t - t_fs[0] >= 0.2) else cl)
+            expect_mode = 'abort'                                     # r5 更正：r3 起正常停止途中再出錯一律升級為模擬中止（原 'hold' 是 r2 舊預期，r3/r4 未重跑本案）
+            real_min = {k_: np.inf for k_ in X.KEYS}                   # 注入前的真實淨空（注入值本身就是觸發條件，不算違反）
+
+            def _inj(c_, cl):
+                for k_ in X.KEYS:
+                    real_min[k_] = min(real_min[k_], cl[k_])
+                return dict(cl, env=0.003) if (t_fs[0] is not None and c_.t - t_fs[0] >= 0.2) else cl
+            c.clear_inject = _inj
         if case == 'path_candidate_rejected':                        # 路徑停止的新候選被提交前核對拒絕
-            expect_mode = 'hold'
+            expect_mode = 'abort'                                     # r5 更正：r3 起正常停止途中再出錯一律升級為模擬中止（原 'hold' 是 r2 舊預期，r3/r4 未重跑本案）
             c.sweep_inject = lambda c_, tag: (dict(tag=tag, injected=True) if tag == 'path_candidate' and t_fs[0] is not None else None)
     if case == 'solver_fail_mid':
         expect, expect_mode = 'solver_fail', 'abort'
@@ -238,7 +244,8 @@ def run_case(case, plan, out):
     if expect_mode == 'abort':                                       # 模擬中止：鎖存、不再步進、不解綁、不報停止成功
         ch = dict(stop_reason=bool(rep['stop'] and rep['stop']['why'] == expect), abort_latched=bool(rep['abort'] is not None and rep['stop_mode'] == 'abort'),
                   no_physics_after_abort=bool(F.aborted and F.n_phys_after_abort == 0), no_command_after_abort=bool(F.n_cmd_after_abort == 0), no_unbind=bool(F.bound and rep['unbind_t'] is None),
-                  stop_not_reported_success=bool(rep['stop_effect'] is not None and rep['stop_effect'].get('ok') is None and not rep['done']), clear_until_abort=clear_act,
+                  stop_not_reported_success=bool(rep['stop_effect'] is not None and rep['stop_effect'].get('ok') is None and not rep['done']),
+                  clear_until_abort=(all(real_min[k_] >= th[k_] for k_ in X.KEYS) if case == 'path_then_clearance' else clear_act),
                   wheel_speed=bool(wheel <= 0.2775 + 1e-4), body_acc=bool((acc <= np.array([1.5, 1.0, 2.0]) + 1e-6).all()), arm_setpoint_rate=bool(s_rate <= 1.0 + 1e-6))
         res['abort'] = dict(t=F.abort_t, controller=rep['abort'], phys_steps_after=F.n_phys_after_abort, note='模擬中止，不是受控停止；停止有效性未驗證')
     if expect == 'open_done':
@@ -248,7 +255,7 @@ def run_case(case, plan, out):
     res['checks'], res['pass'] = ch, bool(all(ch.values()))
     json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1, default=float)
     np.save(out.replace('.json', '_log.npy'), L)
-    print(case, 'PASS' if res['pass'] else 'FAIL', {k_: v_ for k_, v_ in ch.items() if not v_}, {k_: rep[k_] for k_ in ('stop', 'stop_mode', 'bound', 'phi_end_deg', 't_end', 'closure_measured', 'setpoint_model_deviation', 'min_clear_actual', 'release_path_pred', 'hold_stop_path')}, res['limits'], res['release'], rep['stop_effect'], rep['timing']['whole_tick_ms'], flush=True)
+    print(case, 'PASS' if res['pass'] else 'FAIL', {k_: v_ for k_, v_ in ch.items() if not v_}, {k_: rep[k_] for k_ in ('stop', 'stop_mode', 'bound', 'phi_end_deg', 't_end', 'closure_measured', 'setpoint_model_deviation', 'min_clear_actual', 'release_path_pred', 'hold_stop_path') if k_ in rep}, res['limits'], res['release'], rep['stop_effect'], rep['timing']['whole_tick_ms'], flush=True)
     return 0
 
 
