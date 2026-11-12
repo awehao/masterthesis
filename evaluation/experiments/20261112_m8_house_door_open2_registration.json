@@ -1,0 +1,56 @@
+{
+ "name": "m8_house_door_open_constraint_opt_r2",
+ "run_id": "m8house_door_open_2",
+ "wiring_run_id": null,
+ "authority": "Codex 20261112_232809：時鐘對齊可採用；修正禁止接觸事件轉送（巢狀 contact_info，經真 _stop／_ev 核對）、補逐步命令與原始手腕六維紀錄、讀回模組／斜坡權重／時鐘選項／延遲值、重建凍結後，條件核可一趟，不必再等裁定",
+ "scope": "理想抓持綁定下，新機構約束規劃能否實際帶門開啟的名目功能驗證：局部預抓起點 → door_insert_ctrl 插入 → 閉爪 → BindGate 綁定 → 暫停規劃（door_wbopt，綁定瞬間實測狀態）→ door_open_exec_ctrl 開門到 85° → path 停止停穩 → 解綁讀回 → 張爪觀察。不含退出、不接導航、不沿用舊開門控制。",
+ "inputs": {
+  "handle": "online_1 起點影格估計（φ＝0），以鉸鏈讀值轉到 φ_bind",
+  "door_angle": "鉸鏈讀值（模擬量測；實機無此感測）",
+  "force": "手腕傳遞力範數，metadata joint6＋1，未校準",
+  "base": "理想底盤介面"
+ },
+ "abort": {
+  "triggers": "超力 40 N（模擬工程中止值）、求解失敗、非有限、限位、實測淨空／閉鏈、path 中被拒或惡化、path 逾時、禁止接觸、開門逾時 40 s",
+  "action": "下一次 world.step 前停止物理步進；鎖存；不解綁、不 hold、不退出；停止有效性未驗證"
+ },
+ "bind_conditions": {
+  "pos_m": 0.005,
+  "rot_deg": 3.0,
+  "rel_lin_mps": 0.005,
+  "rel_ang_rps": 0.02,
+  "rel_still_s": 0.3,
+  "finger_q_m": [
+   0.0005,
+   0.004
+  ],
+  "finger_contact_n": 0.5,
+  "door_pre_deg": 0.5,
+  "note": "模擬判據；相對靜止＝逐步相對變換差分（四元數正規化、float64、atan2）線速度 ≤5 mm/s 且角速度 ≤0.02 rad/s **連續 0.3 s**（依樣本時間戳）；0.3 s 首尾差只當診斷；其餘同 r2",
+  "forbidden_n": 0.05
+ },
+ "accept": "result.json checks 全過：綁定條件、無跳動、規劃可行且規劃期間模擬時鐘不前進、未中止、open_done、停止有效（管線／底盤／手臂／門）、門角 ≥84.5°、開門期間淨空、解綁讀回、張爪期間淨空（兩指實際開度）",
+ "pre_checks": [
+  "假世界 13 案 r5：資料/door_open_exec_fake_r5（名目、φ5、承接在途、兩失配、三個路徑停止、求解失敗、超力、路徑停止後超力／淨空注入／候選被拒；後三者為故障響應測試，通過 ≠ 任務安全完成）",
+  "gmpc_wb_ramp 契約核對（B 預測對逐物理步推進、C 線性化對有限差分）＋選項關閉等價（A）",
+  "禁止接觸轉送核對：資料/door_open_exec_fake_r5/forbidden_forward_check.json",
+  "door_bind_logic 反例 r3",
+  "插入控制器假世界 r1"
+ ],
+ "on_failure": "保留、不熱修、不自動重跑；結果與雙影片照交（實錄重播＋同時間軸疊圖；標理想抓持、非即時）",
+ "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070",
+ "freeze": "evaluation/experiments/20261112_m8_house_door_open_freeze_r3.sha256",
+ "notes": [
+  "m8house_door_open_wiring_1：規劃期間主執行緒阻塞約 2 分鐘時 Isaac 被 SIGKILL（無 OOM 紀錄、無例外；原因未定，視窗無回應是候選）。r2 起規劃在背景執行緒、主執行緒只算圖不步進物理，並核規劃期間模擬時鐘不前進。",
+  "m8house_door_open_1：開門 0.13 s 手腕傳遞力 46.4 N > 40 N ⇒ 模擬中止（門 0.38°）。"
+ ],
+ "changes_since_run1": [
+  "door_limits 單一來源；規劃加本體速度框（r4）",
+  "底盤命令逐物理步斜坡 20…100%（r4）",
+  "GMPC 底盤預測改斜坡同語意 gmpc_wb_ramp cmd_ramp_w=(0.4,0.6)；一階近似（保留原 A_k），選項關閉與原求解器逐值相同（r5）",
+  "參考時鐘對齊：σ₀＝−D_STEPS·PHYS＝−0.08 s（只適用綁定後停穩再開始新開門參考；不清管線、不重置設定點）（r5）",
+  "禁止接觸轉送改 BL.forward_forbidden（原 **gate.latched 因 why 重複參數會崩潰）",
+  "紀錄：open_steps.npz（實測狀態、門角、原始手腕六維、提交／生效九維命令、設定點、σ／生效參考時刻、每控制拍管線）；result.json exec_config 讀回"
+ ],
+ "expectation_note": "假世界起步閉鏈 1.87 mm（名目）不代表物理傳遞力 < 40 N；假世界不模擬 FixedJoint 剛度與接觸力，尚不能說已定位第一趟超力主因"
+}

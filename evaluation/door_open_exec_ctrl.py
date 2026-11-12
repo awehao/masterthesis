@@ -136,6 +136,8 @@ class DoorOpenExec:
         self.abort = None
         self.u_from_base, self.ramp_j = np.asarray(self.pipe[-1][:3], float).copy(), NPH   # 斜坡狀態：本拍底盤過渡起點、本拍已過物理步數
         self.cmd_hist = []                                           # 每物理步實際送進管線的命令（驗收用）
+        self.step_log, self.pipe_log = [], []                        # r5 紀錄：逐物理步（提交／生效命令、設定點、σ、生效參考時刻）、逐控制拍管線快照；只記錄，不影響行為
+        self.sigma0 = float(self.sigma)
         self.sweep_inject, self.clear_inject = None, None            # 測試用故障注入
         self.rel_min, self.n_release_viol, self.mon_prev = {k: np.inf for k in KEYS}, 0, None
         self.finger_q_closed = float(finger_q)
@@ -432,11 +434,14 @@ class DoorOpenExec:
         self.pipe.append(cmd)
         self.cmd_hist.append(cmd[:3].copy())
         ua = self.pipe.pop(0)
+        if tick:
+            self.pipe_log.append(np.r_[self.t, np.concatenate(self.pipe)])
         nxt = self.s + PHYS * ua[3:]
         if np.any(nxt < self.lim_lo) or np.any(nxt > self.lim_hi):
             nxt = np.clip(nxt, self.lim_lo, self.lim_hi)
             self._stop('setpoint_limit')
         self.s = nxt
+        self.step_log.append(np.r_[self.t, float(tick), self.sigma, self.g, self.sigma + D_STEPS * PHYS * self.g, self.u_last, cmd, ua, self.s])
         if self.stopped_t is not None and self.q_last is not None and self.stop_ok is None and self.abort is None:
             dq = float(np.abs(q[3:] - self.q_last[3:]).max()) / PHYS
             vb = float(np.hypot(*(q[:2] - self.q_last[:2]))) / PHYS
@@ -453,6 +458,15 @@ class DoorOpenExec:
         if self.abort is not None:                                   # 本步中途觸發（例如求解失敗、設定點限位）：本步命令也不送
             return dict(ab, arm_target=self.s.copy())
         return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), stopped=self.stop is not None, done=self.done, abort=False, request_unbind=False, request_finger_open=False)
+
+    STEP_LOG_COLS = ['t', 'tick', 'sigma', 'g', 'sigma_eff_pred'] + [f'u_commit_{i}' for i in range(9)] + [f'cmd_in_{i}' for i in range(9)] + [f'u_effective_{i}' for i in range(9)] + [f'setpoint_{i}' for i in range(6)]
+
+    def config_readback(self):
+        """實際使用的模組、斜坡權重、時鐘選項與延遲值（讀回物件本身，不抄常數）。"""
+        import hashlib
+        sha = lambda f: hashlib.sha256(open(f, 'rb').read()).hexdigest()   # noqa: E731
+        return dict(exec_module=__file__, exec_sha256=sha(__file__), solver_module=type(self.mpc).__module__, solver_file=sys.modules[type(self.mpc).__module__].__file__, solver_sha256=sha(sys.modules[type(self.mpc).__module__].__file__),
+                    cmd_ramp_w=getattr(self.mpc.cfg, 'cmd_ramp_w', None), BASE_RAMP=BASE_RAMP, START_LAT_ALIGN=START_LAT_ALIGN, sigma0_s=self.sigma0, latency_steps=D_STEPS, phys_dt=PHYS, latency_s=D_STEPS * PHYS, nph=NPH, ctrl_dt=self.cfg.dt)
 
     def report(self):
         Rr = np.array(self.rec, dtype=float) if self.rec else np.zeros((1, 21))

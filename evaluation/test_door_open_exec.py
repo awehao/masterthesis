@@ -185,11 +185,13 @@ def run_case(case, plan, out):
             F.force_fn = lambda F_: 50.0 if (t_fs[0] is not None and F_.t - t_fs[0] >= 0.2) else 5.0
         if case == 'path_then_clearance':                            # 路徑停止 0.2 s 後實測淨空違反
             expect_mode = 'abort'                                     # r5 更正：r3 起正常停止途中再出錯一律升級為模擬中止（原 'hold' 是 r2 舊預期，r3/r4 未重跑本案）
-            real_min = {k_: np.inf for k_ in X.KEYS}                   # 注入前的真實淨空（注入值本身就是觸發條件，不算違反）
+            real_min = {k_: np.inf for k_ in X.KEYS}                   # 注入前的實測構型淨空（只取 _monitor 呼叫；注入值本身就是觸發條件，不算違反）
+            sweep_min = {k_: np.inf for k_ in X.KEYS}                  # 同期停止／候選掃掠（預測構型）的注入前淨空，分列
 
             def _inj(c_, cl):
+                tgt_ = real_min if sys._getframe(1).f_code.co_name == '_monitor' else sweep_min
                 for k_ in X.KEYS:
-                    real_min[k_] = min(real_min[k_], cl[k_])
+                    tgt_[k_] = min(tgt_[k_], cl[k_])
                 return dict(cl, env=0.003) if (t_fs[0] is not None and c_.t - t_fs[0] >= 0.2) else cl
             c.clear_inject = _inj
         if case == 'path_candidate_rejected':                        # 路徑停止的新候選被提交前核對拒絕
@@ -252,6 +254,9 @@ def run_case(case, plan, out):
         ch.update(done=bool(rep['done']), phi_end=bool(phi[-1] >= PHI_GOAL - X.END['phi_tol']))
     if case == 'handover_inflight':
         ch['pipe_not_cleared'] = bool(max(first_targets) > 1e-6 and abs(sum(0.02 * (1 - i / D_STEPS) * PHYS for i in range(D_STEPS)) - first_targets[-1]) < 1e-9)
+    if case == 'path_then_clearance':                               # 注入值與原始幾何值分列（Codex 20261112_232809）
+        res['injection'] = dict(injected=dict(env=0.003, from_s_after_path_stop=0.2), real_geometry_min_actual={k_: round(float(v_), 4) for k_, v_ in real_min.items()}, real_geometry_min_sweep_pred={k_: round(float(v_), 4) for k_, v_ in sweep_min.items()}, reported_min_including_injection=rep['min_clear_actual'],
+                                note='故障響應測試通過 ≠ 任務安全完成')
     res['checks'], res['pass'] = ch, bool(all(ch.values()))
     json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1, default=float)
     np.save(out.replace('.json', '_log.npy'), L)

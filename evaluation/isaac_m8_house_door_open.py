@@ -251,6 +251,10 @@ def main():
         F = np.asarray(robot.get_measured_joint_forces(), float)
         return F[j6][:3].copy(), F.shape
 
+    def wrist_F6():
+        return np.asarray(robot.get_measured_joint_forces(), float)[j6][:6].copy()
+    olog = []                                                        # r2：開門段逐物理步（實測狀態、門角、原始手腕六維）＋控制器 step_log 同列序
+
     rows, events = [], []
     t = 0.0
     gate = BL.BindGate(COND, DT)
@@ -271,9 +275,12 @@ def main():
             q, jp = q9()
             ex = ex_box['ex']
             if ex is not None:
-                Fw, _ = wrist_F()
+                F6 = wrist_F6()
+                Fw = F6[:3]
                 ex_box['force'] = float(np.linalg.norm(Fw))
-                out = ex.step(t - ex_box['t0'], q, door_q(), ex_box['force'])
+                phm = door_q()
+                out = ex.step(t - ex_box['t0'], q, phm, ex_box['force'])
+                olog.append(np.r_[t - ex_box['t0'], float(world.current_time), q, phm, ex_box['force'], F6, float(out['abort'])])
                 if out['abort']:                                       # 模擬中止：不再步進物理
                     ex_box['aborted'] = dict(t=round(t, 3), controller=ex.abort)
                     print(f"[open] **模擬中止** {ex_box['aborted']}", flush=True)
@@ -309,10 +316,7 @@ def main():
             if gate.latched is not None and not events:
                 events.append(dict(gate.latched, who=ow))
                 print(f'[bind] **禁止接觸鎖存** {events[-1]}', flush=True)
-                if ctrl is not None:
-                    ctrl._stop('exec_forbidden_contact')
-                if ex_box['ex'] is not None:
-                    ex_box['ex']._stop('forbidden_contact', **gate.latched)
+                BL.forward_forbidden(gate.latched, ow, ctrl=ctrl, ex=ex_box['ex'])   # r2：巢狀 contact_info（原 **gate.latched 會因 why 重複參數崩潰）
         return True
     quat = np.array([math.cos(b1[2] / 2), 0, 0, math.sin(b1[2] / 2)], np.float32)
     for _ in range(5):
@@ -467,6 +471,8 @@ def main():
                 np.savez(os.path.join(a.out, 'plan.npz'), Xd=Xd, h=h, X=opt.X, T_WH_bind=T_WH_b, phi_bind=phi_b, T_HE=T_HE)
                 ho = dict(s=ctrl.s.copy(), pipe=[u_.copy() for u_ in ctrl.pipe], u_last=ctrl.u_last.copy(), u_prev=ctrl.u_prev.copy(), bias=np.asarray(ctrl.cfg.arm_model.bias, float).copy())
                 ex = XO.DoorOpenExec(ident, Xd, h, T_WH_b, phi_b, T_HE, PHI_GOAL, ho, fq)
+                res['exec_config'] = ex.config_readback()
+                print(f"[open] 執行層讀回 {json.dumps(clean(res['exec_config']), ensure_ascii=False)}", flush=True)
                 res['handover'] = dict(pipe_nonzero=int(sum(bool(np.any(u_)) for u_ in ho['pipe'])), setpoint_minus_measured=[round(float(x), 5) for x in (ho['s'] - qm[3:])], bias=[round(float(x), 6) for x in ho['bias']])
                 ctrl = None
                 ex_box.update(ex=ex, t0=t)
@@ -479,6 +485,9 @@ def main():
                     step('O', 1)
                 rep_o = ex.report()
                 res['O_open'] = rep_o
+                np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), meas=np.array(olog), meas_cols=np.array(['t_rel', 't_sim', 'bx', 'by', 'byaw', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'phi_meas', 'wrist_F_norm', 'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz', 'abort_out']),
+                                    ctrl=np.array(ex.step_log), ctrl_cols=np.array(XO.DoorOpenExec.STEP_LOG_COLS), pipe=np.array(ex.pipe_log), pipe_note='每控制拍：t＋管線 8×9 攤平（pop 後、本拍新命令 append 前）',
+                                    note='meas 每列在 ex.step 之前取（實測→控制器輸入）；ctrl 每列為同一步 ex.step 內的提交／生效命令；手腕六維＝metadata joint6＋1 列原始讀值（未校準，子連桿座標）')
                 res['O_open']['force_note'] = '手腕傳遞力範數：列＝metadata joint6＋1、未校準；40 N＝模擬工程中止值，不是安全上限'
                 res['O_open']['door_angle_note'] = '門角＝鉸鏈讀值（模擬量測；實機無此感測）'
                 print(f"[open] 開門 {json.dumps(clean({k_: rep_o[k_] for k_ in ('stop', 'done', 'stop_effect', 'phi_end_deg', 't_end', 'closure_measured', 'setpoint_model_deviation', 'lead_deg_max', 'min_clear_actual', 'force_max_n', 'arm_sat_s')}), ensure_ascii=False)[:2200]}", flush=True)
