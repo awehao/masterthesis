@@ -123,6 +123,13 @@ class ScanSafetyShield(Node):
         # guard 集合外 1e-3 以內，而 guard 對「貼邊且朝外」的列取 λ=0（保持上一
         # 筆）。內縮量大於容差，guard 才會是直通。代價：最高輪速少 0.7%。
         p('wheel_margin', 0.002)
+        # 輪加速度列的基準（前值）。空字串＝用本節點自己上一筆輸出（離線核對用的
+        # 假設）。實際串接時下游 guard 以「它自己上一次發布的命令」為基準，而且
+        # 會在輸入逾時時自行減速——兩者前值可以不同。設成最終命令話題（串接時
+        # 為 /cmd_vel）後，本節點訂閱它，以最近一筆**最終命令**當前值；
+        # 超過 final_cmd_timeout 沒收到就退回自己上一筆並在診斷標記。
+        p('final_cmd_topic', '')
+        p('final_cmd_timeout', 0.25)
 
         g = lambda k: self.get_parameter(k).value
         self.enable = bool(g('enable'))
@@ -153,6 +160,13 @@ class ScanSafetyShield(Node):
         self.a_lim = (float(g('wheel_radius')) * float(g('wheel_a_max'))
                       * float(g('wheel_dt')))
         self.wheel_margin = float(g('wheel_margin'))
+        self._final = None
+        self._final_t = 0.0
+        self.final_timeout = float(g('final_cmd_timeout'))
+        self._prev_src = 0.0            # 0 無／未用、1 最終命令回饋、2 自己上一筆
+        if self.wheel_rows and str(g('final_cmd_topic')):
+            self.create_subscription(Twist, str(g('final_cmd_topic')),
+                                     self._final_cb, 10)
         self._prev_out = np.zeros(3)
 
         self.tf_buffer = tf2_ros.Buffer()
@@ -178,6 +192,42 @@ class ScanSafetyShield(Node):
             f'a_brake={self.a_brake}')
 
     # ------------------------------------------------------------------
+    def _final_cb(self, m: Twist):
+        self._final = np.array([m.linear.x, m.linear.y, m.angular.z], float)
+        self._final_t = self.get_clock().now().nanoseconds * 1e-9
+
+    def _prev_for_rows(self, now: float):
+        """輪加速度列的前值：優先用最終命令回饋；逾時才用自己上一筆。"""
+        if not self.wheel_rows:
+            self._prev_src = 0.0
+            return None
+        if self._final is not None and now - self._final_t <= self.final_timeout:
+            self._prev_src = 1.0
+            return self._final
+        self._prev_src = 2.0
+        return self._prev_out
+
+    def _wheel_fit(self, out, prev):
+        """輸出前最後一步：沿 prev -> out 取最大可行 λ（與 wheel_limit_guard.fit
+        同式，限制取內縮後的值）。投影已收斂時 λ=1、輸出不變；投影殘差超過內縮
+        量時在這裡明確退回，而不是留給下游 guard 以 λ=0 原樣保持上一筆。
+        回傳 (命令, λ)；prev 本身不合輪速時不處理（λ=-1），交由 guard 的
+        prev_infeasible 流程。"""
+        mg = self.wheel_margin
+        b = self.Wm @ prev
+        if np.max(np.abs(b)) > self.w_lim + 1e-6:
+            return out, -1.0
+        d = self.Wm @ (out - prev)
+        lam = 1.0
+        w_l, a_l = self.w_lim - 0.5 * mg, self.a_lim - 0.5 * mg
+        for bi, di in zip(b, d):
+            if abs(di) > 1e-9:
+                hi = (w_l - bi) / di if di > 0 else (-w_l - bi) / di
+                lam = min(lam, max(hi, 0.0))
+                lam = min(lam, a_l / abs(di))
+        lam = float(min(max(lam, 0.0), 1.0))
+        return prev + lam * (out - prev), lam
+
     def _scan_cb(self, msg: LaserScan):
         """Raw returns to base-frame points. No clustering, by design."""
         n = len(msg.ranges)
@@ -305,7 +355,8 @@ class ScanSafetyShield(Node):
 
         def sweep(A, B, x0, iters):
             if wheel:
-                iters = max(iters, 40)   # 多 16 列，6 次不夠收斂；仍為固定上限
+                iters = max(iters, 120)  # 多 16 列，6 次不夠收斂；仍為固定上限
+                # （40 次時實測命令整個反向的 3 拍殘差 2.5e-3，超過容差）
             """Motzkin relaxation: repeatedly project onto the most violated
             half-space. Deterministic iteration count, unit-norm rows."""
             x = x0.copy()
@@ -361,6 +412,7 @@ class ScanSafetyShield(Node):
         npts = iters = 0
         fallback = False
 
+        prev_rows = self._prev_for_rows(now)
         if not self.enable:
             out = np.clip(u, -self.u_max, self.u_max)
         elif stale:
@@ -373,13 +425,20 @@ class ScanSafetyShield(Node):
             if sp > self.stale_speed:
                 out[:2] = u[:2] * (self.stale_speed / sp)
             out = np.clip(out, -self.u_max, self.u_max)
+            if prev_rows is not None:
+                # 掃描過期分支原本繞過投影；串接時限速後的命令同樣要落在輪級集合
+                out = self._limit(out, np.empty((0, 2)), 0.0, prev_rows)[0]
             dv = float(np.linalg.norm(out - u))
         else:
             pts = self._pts if self._pts is not None else np.empty((0, 2))
             npts = len(pts)
             out, dv, dmin, before, after, iters, fallback = self._limit(
-                u, pts, age, self._prev_out if self.wheel_rows else None)
+                u, pts, age, prev_rows)
 
+        wlam = 1.0
+        if prev_rows is not None and self.enable:
+            out, wlam = self._wheel_fit(np.asarray(out, float),
+                                        np.asarray(prev_rows, float))
         t = Twist()
         t.linear.x, t.linear.y, t.angular.z = (float(out[0]), float(out[1]),
                                                float(out[2]))
@@ -398,13 +457,16 @@ class ScanSafetyShield(Node):
         #  8 vx_out       9 vy_out       10 wz_out     11 scan_age
         # 12 stale       13 max_violation_before      14 max_violation_after
         # 15 iterations  16 fallback_active           17 unresolved
+        # 18 prev_source (0 none, 1 final-cmd feedback, 2 own last output)
+        # 19 wheel_fit_lambda (1 = 投影輸出未再退回；<1 = 明確退回；-1 = 前值不合輪速)
         d.data = [float(self._cycle), 1.0 if dv > 1e-4 else 0.0, float(npts),
                   dmin if math.isfinite(dmin) else -1.0, dv,
                   float(u[0]), float(u[1]), float(u[2]),
                   float(out[0]), float(out[1]), float(out[2]),
                   age if math.isfinite(age) else -1.0, 1.0 if stale else 0.0,
                   before, after, float(iters), 1.0 if fallback else 0.0,
-                  1.0 if after > 1e-3 else 0.0]
+                  1.0 if after > 1e-3 else 0.0, float(self._prev_src),
+                  float(wlam)]
         self.diag.publish(d)
 
 

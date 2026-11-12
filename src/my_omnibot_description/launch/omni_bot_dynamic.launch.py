@@ -440,6 +440,11 @@ def generate_launch_description():
                           'cmd_out_topic': ('/cmd_vel_smoothed'
                                             if (_guard and _shield) else '/cmd_vel'),
                           'wheel_rows': bool(_guard and _shield),
+                          # guard 以自己量到的發布間隔算加速度預算；隔離鏈實測
+                          # 0.048–0.052 s。取 0.045 讓本層預算不大於 guard 的。
+                          'wheel_dt': 0.045,
+                          'final_cmd_topic': ('/cmd_vel'
+                                              if (_guard and _shield) else ''),
                           'robot_radius': float(
                               os.environ.get('SHIELD_RADIUS', '0.30')),
                           'alpha': float(os.environ.get('SHIELD_ALPHA', '2.0')),
