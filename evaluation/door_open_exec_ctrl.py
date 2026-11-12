@@ -42,6 +42,7 @@ import door_wbopt as W                                             # noqa: E402
 import door_limits as LIM                                          # noqa: E402
 import gmpc_wb_ramp as GR                                          # noqa: E402
 import dataclasses                                                 # noqa: E402
+import door_body_model as BM                                       # noqa: E402
 
 DA = W.DA
 GW, K, C0, B, C21, S = DA.GW, DA.K, DA.C0, DA.B, DA.C21, DA.S
@@ -102,7 +103,7 @@ def rot_deg(Ta, Tb):
 
 
 class DoorOpenExec:
-    def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2):
+    def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2, arm_mode='qp', joint_kp=600.0):
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
         self.cfg.arm_model.bias = np.asarray(handover['bias'], float).copy()
@@ -110,6 +111,12 @@ class DoorOpenExec:
         rc = GR.GMPCConfig(**{f.name: getattr(nc, f.name) for f in dataclasses.fields(nc)})
         rc.cmd_ramp_w = (0.4, 0.6) if BASE_RAMP else None             # r5：GMPC 底盤預測與 ramp_cmd 同語意（20…100% ⇒ 平均 0.4·u_{k−1}＋0.6·u_k）
         self.mpc = GR.GMPC(rc)
+        self.arm_mode = str(arm_mode)                                # r6：'qp'＝全身 QP 的手臂輸出（r5 預設）；'closure'＝A 閉鏈一致設定點（命令生效時刻的預測底盤＋預測門角解 IK）
+        assert self.arm_mode in ('qp', 'closure')
+        self.cl_stats = dict(n=0, rate_clip=0, ik_fail=0, sigma_min=np.inf, ik_resid_max=0.0, s0_jump_max=0.0)
+        self.q_cl_prev = None
+        self.joint_kp = float(joint_kp)                              # A：重力偏置換算用的關節 PD 剛度（執行器 --kp；登錄值）
+        self.off_cl0, self.G0, self.arm_bodies = None, None, BM.arm_bodies(K)
         self.Xd, self.h = np.asarray(Xd, float), float(h)
         self.T_WH_bind, self.phi_bind, self.T_HE, self.phi_goal = np.asarray(T_WH_bind, float), float(phi_bind), np.asarray(T_HE, float), float(phi_goal)
         W.set_model(phi0=self.phi_bind, finger_q=finger_q)
@@ -290,7 +297,77 @@ class DoorOpenExec:
         if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None:
             return None
         u = np.r_[np.asarray(r.u_opt, float), r.u_arm_seq[0]]
+        if self.arm_mode == 'closure':
+            ua = self._closure_arm(qp, sp, r, np.array(xi), sig_eff, g, tau, va)
+            if ua is None:
+                return None
+            u = np.r_[np.asarray(r.u_opt, float), ua]
         return u if np.isfinite(u).all() else None
+
+    # ---- A：閉鏈一致設定點（Codex 20261112_234431／20261113_000935）
+    def _ik_closure(self, b, phi, seed):
+        """固定 T_HE：給底盤位姿 b 與門角 φ，解手臂 q 使 TCP＝把手(φ)·T_HE；以前一解為種子（連續分支）。回 (q, 殘差, σ_min)。"""
+        Tg = self.handle_T(float(phi)) @ self.T_HE
+        q = np.asarray(seed, float).copy()
+        res = np.inf
+        for _ in range(30):
+            q9 = np.r_[b, q]
+            Tc = K.fk(q9, 'link_tcp')
+            dR = Tg[:3, :3] @ Tc[:3, :3].T
+            e = np.r_[Tg[:3, 3] - Tc[:3, 3], 0.5 * np.array([dR[2, 1] - dR[1, 2], dR[0, 2] - dR[2, 0], dR[1, 0] - dR[0, 1]])]
+            res = float(np.linalg.norm(e))
+            if res < 1e-10:
+                break
+            J = K.jacobian(q9, 'link_tcp')[:, 3:9]
+            q = q + np.linalg.solve(J.T @ J + 1e-12 * np.eye(6), J.T @ e)
+        J = K.jacobian(np.r_[b, q], 'link_tcp')[:, 3:9]
+        return q, res, float(np.linalg.svd(J, compute_uv=False).min())
+
+    def _off_cl(self, q9):
+        """A 的靜態偏置 q−s：以開門起點**實測** (q₀−s₀)（含綁定預載）為錨，加 URDF 重力隨構型的變化 (G(q)−G(q₀))/kp。"""
+        return self.off_cl0 + (BM.arm_gravity(K, q9, self.arm_bodies) - self.G0) / self.joint_kp
+
+    def _closure_arm(self, qp, sp, r, xi_ref, sig_eff, g, tau, va):
+        """底盤序列＝本拍 GMPC 解（ξ_ref＋δξ，含逐物理步斜坡）；由管線清空後的預測狀態 qp 起推，得命令生效時刻起每拍末的預測底盤；
+        門角＝同一份參考在預測時刻的 φ_ref（與 GMPC 的 T_seq 同一定義）；每拍末解閉鏈 IK → q_cl，設定點 s＝q_cl＋τ·q̇_cl−off；手臂速度＝相鄰設定點差／DT。
+        回本拍手臂速度命令（第一拍）；IK 失敗回 None（＝求解失敗 ⇒ 模擬中止）。"""
+        xi_seq = xi_ref[:N] + np.asarray(r.delta_xi_all, float)[:N]
+        b = np.asarray(qp[:3], float).copy()
+        u_prev = np.asarray(self.pipe[-1][:3], float).copy()
+        B_ = [b.copy()]
+        for k in range(N):
+            for j in range(NPH):
+                a_ = min(j + 1, NPH) / NPH if BASE_RAMP else 1.0
+                v = u_prev + a_ * (xi_seq[k] - u_prev)
+                c, s_ = math.cos(b[2]), math.sin(b[2])
+                b = b + PHYS * np.array([c * v[0] - s_ * v[1], s_ * v[0] + c * v[1], v[2]])
+            u_prev = xi_seq[k].copy()
+            B_.append(b.copy())
+        PH_ = [float(self.ref(sig_eff + k * DT * g)[9]) for k in range(N + 1)]
+        seed = self.q_cl_prev if self.q_cl_prev is not None else np.asarray(qp[3:], float)
+        Q = []
+        for k in range(N + 1):
+            q, res, sm = self._ik_closure(B_[k], PH_[k], seed)
+            self.cl_stats['ik_resid_max'] = max(self.cl_stats['ik_resid_max'], res)
+            self.cl_stats['sigma_min'] = min(self.cl_stats['sigma_min'], sm)
+            if not (res < 1e-6 and np.isfinite(q).all()) or float(np.abs(q - seed).max()) > 0.5:
+                self.cl_stats['ik_fail'] += 1
+                return None
+            Q.append(q)
+            seed = q
+        Q = np.array(Q)
+        self.q_cl_prev = Q[1].copy()
+        Qd = np.gradient(Q, DT, axis=0)
+        S_ = np.array([Q[k] + tau * Qd[k] - self._off_cl(np.r_[B_[k], Q[k]]) for k in range(N + 1)])
+        U = np.diff(np.vstack([np.asarray(sp, float)[None], S_[1:]]), axis=0) / DT
+        self.cl_stats['n'] += 1
+        self.cl_stats['s0_jump_max'] = max(self.cl_stats['s0_jump_max'], float(np.abs(S_[0] - sp).max()))
+        if float(np.abs(U[0]).max()) > va + 1e-12:
+            self.cl_stats['rate_clip'] += 1
+        ua = np.clip(U[0], -va, va)
+        if np.any(S_[1:] < self.lim_lo) or np.any(S_[1:] > self.lim_hi):
+            return None
+        return ua
 
     def _ramp_end(self):
         """若在本拍首提交新命令，其過渡起點＝上一個物理步實際送出的底盤命令。"""
@@ -352,6 +429,8 @@ class DoorOpenExec:
             self._stop('state_nonfinite')
         if self.abort is not None:
             return dict(ab, arm_target=self.s.copy())
+        if tick and self.off_cl0 is None:                            # A：開門起點實測靜態偏置（第一拍、尚未送任何命令）
+            self.off_cl0, self.G0 = q[3:] - self.s, BM.arm_gravity(K, q, self.arm_bodies)
         if tick:
             if self.q_tick is not None:
                 self.rate = dict(base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / self.cfg.dt, yaw=abs(q[2] - self.q_tick[2]) / self.cfg.dt, arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / self.cfg.dt, door=abs(phi_meas - self.phi_tick) / self.cfg.dt)
@@ -481,7 +560,7 @@ class DoorOpenExec:
         def pct(a):
             a = np.array(a or [0.0])
             return dict(p50=round(float(np.percentile(a, 50)), 1), p95=round(float(np.percentile(a, 95)), 1), max=round(float(a.max()), 1))
-        return dict(stop=self.stop, done=self.done, stop_effect=self.stop_ok, events=self.events, sigma_end=round(self.sig_end, 2), sigma=round(self.sigma, 3),
+        return dict(arm_mode=self.arm_mode, closure_stats={k: (round(float(v), 6) if isinstance(v, float) else v) for k, v in self.cl_stats.items()}, stop=self.stop, done=self.done, stop_effect=self.stop_ok, events=self.events, sigma_end=round(self.sig_end, 2), sigma=round(self.sigma, 3),
                     closure_measured=dict(pos_mm=stb(5, 1e3), rot_deg=stb(6)), setpoint_model_deviation=dict(pos_mm=stb(7, 1e3), rot_deg=stb(8), note='設定點模型的幾何偏差監看（主要是 τ·q̇ 動態超前），不是內應力'), base_track_m=st(9), yaw_track_rad=st(10), tcp_vs_ref_mm=st(11, 1e3),
                     lead_deg_max=round(math.degrees(float((Rr[:, 4] - Rr[:, 3]).max())), 3), g_min=round(float(Rr[:, 2].min()), 3), g_lt1_frac=round(float((Rr[:, 2] < 1 - 1e-9).mean()), 3),
                     min_clear_actual={k: round(float(v), 4) for k, v in self.mins['act'].items()}, min_clear_stop_sweep={k: round(float(v), 4) for k, v in self.mins['stop'].items()},

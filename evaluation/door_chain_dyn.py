@@ -15,7 +15,6 @@
 import math
 import os
 import sys
-import xml.etree.ElementTree as ET
 
 import numpy as np
 
@@ -31,35 +30,9 @@ GRAV = np.array([0.0, 0.0, -9.81])
 S_LINKS = ('link6', 'link_eef', 'uflite_gripper_link', 'uflite_finger1', 'uflite_finger2')
 
 
-def rpy_R(r, p, y):
-    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
-    return np.array([[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr], [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr], [-sp, cp * sr, cp * cr]])
-
-
-def parse_urdf(path=URDF):
-    root = ET.parse(path).getroot()
-    inert, effort = {}, {}
-    for l in root.findall('link'):
-        i = l.find('inertial')
-        if i is None:
-            continue
-        m = float(i.find('mass').get('value'))
-        o = i.find('origin')
-        xyz = np.array([float(v) for v in (o.get('xyz', '0 0 0') if o is not None else '0 0 0').split()])
-        rpy = [float(v) for v in (o.get('rpy', '0 0 0') if o is not None else '0 0 0').split()]
-        a = i.find('inertia').attrib
-        I = np.array([[float(a['ixx']), float(a['ixy']), float(a['ixz'])], [float(a['ixy']), float(a['iyy']), float(a['iyz'])], [float(a['ixz']), float(a['iyz']), float(a['izz'])]])
-        Rc = rpy_R(*rpy)
-        if m > 0:
-            inert[l.get('name')] = (m, xyz, Rc @ I @ Rc.T)
-    for j in root.findall('joint'):
-        lim = j.find('limit')
-        if lim is not None and lim.get('effort') is not None:
-            effort[j.get('name')] = float(lim.get('effort'))
-    return inert, effort
-
-
-INERT, EFFORT = parse_urdf()
+import door_body_model as BM                                         # noqa: E402
+INERT, EFFORT = BM.INERT, BM.EFFORT
+rpy_R, parse_urdf = BM.rpy_R, BM.parse_urdf
 KNOWN = set(sorted({j.child for j in K.joints.values()}))
 BODIES = [b for b in INERT if b in KNOWN]
 MISSING = [b for b in INERT if b not in KNOWN]

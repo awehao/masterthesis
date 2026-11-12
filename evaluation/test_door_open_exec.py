@@ -166,7 +166,7 @@ def run_case(case, plan, out):
         kw = dict(a_scale=0.8, v_scale=0.95)
     if case == 'mismatch_a1.2_v1.05':
         kw = dict(a_scale=1.2, v_scale=1.05)
-    c = X.DoorOpenExec(ident, P['Xd'], float(P['h']), P['T_WH_bind'], float(P['phi_bind']), P['T_HE'], PHI_GOAL, dict(s=s0, pipe=pipe, u_last=u_last, u_prev=u_last.copy(), bias=bias), FINGER_Q)
+    c = X.DoorOpenExec(ident, P['Xd'], float(P['h']), P['T_WH_bind'], float(P['phi_bind']), P['T_HE'], PHI_GOAL, dict(s=s0, pipe=pipe, u_last=u_last, u_prev=u_last.copy(), bias=bias), FINGER_Q, arm_mode=os.environ.get('DOOR_ARM_MODE', 'qp'))
     F = Fake(c, q0, **kw)
     first_targets = []
     hook = None
