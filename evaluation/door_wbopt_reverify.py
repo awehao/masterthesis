@@ -20,5 +20,5 @@ for nm, c in r1['cases'].items():
     o.X = X
     v = o.verify()
     res['cases'][nm] = v
-    print(nm, v['feasible'], v['failed'], 'raw mid', v['raw_midpoint_pos_mm'], v['raw_midpoint_rot_deg'], 'adj', v['proj_adjust_max_rad'], 'body acc', v['body_acc_max'], 'wheel', v['wheel_max'], 'sp', v['setpoint_rate_needed_max'], 'phi_end', v['phi_end_deg'], flush=True)
+    print(nm, v['feasible'], v['failed'], 't95', v['t_phi_95pct_s'], 't84.5', v['t_phi_84p5deg_s'], 't85', v['t_phi_first_goal_s'], 'tend', v['t_ref_end_s'], 'raw mid', v['raw_midpoint_pos_mm'], v['raw_midpoint_rot_deg'], 'adj', v['proj_adjust_max_rad'], 'body acc', v['body_acc_max'], 'wheel', v['wheel_max'], 'sp', v['setpoint_rate_needed_max'], 'phi_end', v['phi_end_deg'], flush=True)
 json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1)

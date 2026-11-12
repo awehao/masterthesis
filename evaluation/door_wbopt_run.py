@@ -69,14 +69,14 @@ def main():
         if INIT == 'corotate' and not fixed:
             opt.init_corotate(T_ramp)
             row['seed_verify'] = opt.verify()
-            print(nm, 'seed', {k: row['seed_verify'][k] for k in ('feasible', 'failed', 't_phi_95pct_s', 't_phi_goal_minus_0p5deg_s', 'wheel_max', 'body_acc_max', 'base_travel_m', 'sigma_min')}, flush=True)
+            print(nm, 'seed', {k: row['seed_verify'][k] for k in ('feasible', 'failed', 't_phi_95pct_s', 't_phi_84p5deg_s', 'wheel_max', 'body_acc_max', 'base_travel_m', 'sigma_min')}, flush=True)
         res['weights'] = opt.w
         info = opt.solve(max_iter=int(os.environ.get('WB_ITERS', '80')), verbose=os.environ.get('WB_VERBOSE') == '1')
         v = opt.verify()
         row.update(solve=info, verify=v, wall_total_s=round(time.perf_counter() - t0, 1), end_state=[round(float(x), 4) for x in opt.X[-1]], log_tail=opt.log[-3:])
         res['cases'][nm] = row
         np.save(out.replace('.json', f"_{nm.replace('|', '_')}.npy"), opt.X)
-        print(nm, info, {k: v[k] for k in ('feasible', 'failed', 't_phi_95pct_s', 't_phi_goal_minus_0p5deg_s', 't_end_s', 'phi_end_deg', 'closure_pos_mm', 'raw_midpoint_pos_mm', 'proj_adjust_max_rad', 'min_clear_m', 'wheel_max', 'body_acc_max', 'wheel_acc_max', 'setpoint_rate_needed_max', 'sigma_min', 'sigma_start', 'joint_margin_min_rad', 'base_travel_m', 'base_yaw_change_deg', 'phi_rate_max')}, flush=True)
+        print(nm, info, {k: v[k] for k in ('feasible', 'failed', 't_phi_95pct_s', 't_phi_84p5deg_s', 't_phi_first_goal_s', 't_ref_end_s', 'phi_end_deg', 'closure_pos_mm', 'raw_midpoint_pos_mm', 'proj_adjust_max_rad', 'min_clear_m', 'wheel_max', 'body_acc_max', 'wheel_acc_max', 'setpoint_rate_needed_max', 'sigma_min', 'sigma_start', 'joint_margin_min_rad', 'base_travel_m', 'base_yaw_change_deg', 'phi_rate_max')}, flush=True)
         json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1)
     json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1)
 

@@ -513,7 +513,8 @@ class DoorWBOpt:
                  sigma_note=None if sig[0] >= SIG_FLOOR else '起始低可操作度例外：起始值已低於下限，只保證不再降低；不得稱全程 σ_min ≥ 下限',
                  phi_end_deg=round(math.degrees(phi[-1]), 3), phi_end_ok=bool(phi[-1] >= self.phi_goal - 1e-6), phi_range_ok=bool(phi.min() >= -1e-9 and phi.max() <= PHI_MAX + 1e-9),
                  phi_rate_max=round(float(pd.max()), 4), phi_rate_ok=bool(pd.max() <= PHI_RATE + 1e-4), phi_monotone=bool((np.diff(phi) >= -1e-6).all()),
-                 t_phi_95pct_s=t_at(0.95 * self.phi_goal), t_phi_goal_minus_0p5deg_s=t_at(self.phi_goal - math.radians(0.5)), t_end_s=round(n * h, 2),
+                 t_phi_95pct_s=t_at(0.95 * self.phi_goal), t_phi_84p5deg_s=t_at(self.phi_goal - math.radians(0.5)), t_phi_first_goal_s=t_at(self.phi_goal), t_ref_end_s=round(n * h, 2),
+                 time_note='各時刻為 0.05 s 取樣序列上的首次到達；參考結束≠實際停穩（後者要執行後量）',
                  base_travel_m=round(float(np.linalg.norm(np.diff(Xd[:, :2], axis=0), axis=1).sum()), 3), base_net_m=round(float(np.linalg.norm(Xd[-1, :2] - Xd[0, :2])), 3), base_yaw_change_deg=round(math.degrees(Xd[-1, 2] - Xd[0, 2]), 1))
         keys = ('clear_ok', 'wheel_ok', 'body_acc_ok', 'wheel_acc_ok', 'arm_rate_ok', 'setpoint_rate_ok', 'joint_ok', 'sigma_ok', 'phi_end_ok', 'phi_range_ok', 'phi_rate_ok')
         v['closure_ok'] = bool(v['closure_pos_mm'] < 1e-3 and v['closure_rot_deg'] < 1e-3)

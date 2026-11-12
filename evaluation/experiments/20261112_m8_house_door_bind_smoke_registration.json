@@ -1,0 +1,12 @@
+{
+ "name": "m8_house_door_ideal_grasp_bind_smoke_r1",
+ "authority": "Codex 20261112（門機構最佳化 r2 裁定）：核可一趟限縮的 Isaac 靜態綁定冒煙；條件核對過即可依新登錄起跑",
+ "run_id": "m8house_door_bind_smoke_1",
+ "scope": "未綁定靜置 → 閉爪 → 綁定條件 → 建立綁定 → 綁定靜置 → 解除 → 繼續觀察。不導航、不執行開門軌跡、不驗追蹤或重規劃。理想抓持綁定（FixedJoint uflite_gripper_link↔leaf，當下相對位姿，不設斷裂力＝理想承載）。",
+ "placement": "底盤＝m8house_da_online_1 在線停位 b1；手臂＝對把手估計（online_1 起點影格）的抓取 IK；只在 A 段之前擺位一次",
+ "bind_conditions": {"pos_m": 0.005, "rot_deg": 3.0, "rel_lin_mps": 0.005, "rel_ang_rps": 0.02, "rel_still_s": 0.3, "finger_q_m": [0.0005, 0.004], "finger_contact_n": 0.5, "door_pre_deg": 0.5, "note": "模擬判據；手指開度區間：橫桿直徑 26 mm、夾爪閉合 22.4 mm ⇒ 夾住時約 1.8 mm，不是空夾終點 0"},
+ "record": ["各指實際開度", "手指對門扇接觸力", "連接兩端同步位姿（綁定瞬間 local_pos1／local_rot1）", "綁定前後跳動", "綁定靜置連接誤差", "門角與角速度（含解除後）", "手腕傳遞力（列號＝dof 索引＋1；A 段靜置對下游重量自我核對）", "非預期接觸（手臂六連桿、link_eef、夾爪殼、底盤 對 門扇＋牆／家具）", "鉸鏈被動讀回（驅動、質量、PhysX 角阻尼、限位）"],
+ "pass": "result.json checks 全過；失敗保留、不熱修、不補跑",
+ "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070",
+ "freeze": "evaluation/experiments/20261112_m8_house_door_bind_smoke_freeze_r1.sha256"
+}
