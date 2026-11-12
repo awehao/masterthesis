@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""全碰撞對淨空的等值快速版（判準、幾何、點雲、門檻與 m8_door_reaim_online_r3.cfg_clear_full(contact=False) 完全相同；只改計算順序）。
+作法：每個連桿點雲的包圍球給出各配對距離的下界（方盒／橫桿的符號距離與點對點距離都是 1-Lipschitz），下界不小於目前最小值的配對不必細算 ⇒ 最小值不變。
+自碰撞：把 y 連桿點雲轉到 x 連桿座標，查 x 連桿預先建好的 KD 樹（剛體變換不改距離）。
+等值性由 door_clear_fast_check.py 對原函式逐構型比對（不是假設）。"""
+import numpy as np
+from scipy.spatial import cKDTree
+
+import m8_door_reaim_online_r4 as R4
+
+R3, R1, PG, DOC, K = R4.R3, R4.R1, R4.PG, R4.DOC, R4.K
+_C = {n: P.mean(axis=0) for n, P in DOC.CL.items()}
+_R = {n: float(np.linalg.norm(P - _C[n], axis=1).max()) for n, P in DOC.CL.items()}
+_TREE, _STATIC = {}, None
+TOOL = ('uflite_gripper_link',) + tuple(DOC.FINGERS)
+
+
+def _pairs():
+    if DOC.SELF_PAIRS is None:
+        DOC.self_clear(np.zeros(9))                                   # 用原函式建立配對表（同一份）
+    return DOC.SELF_PAIRS
+
+
+def clear_full(qf, T_WH):
+    global _STATIC
+    qf = np.asarray(qf, float)
+    pairs = _pairs()
+    if _STATIC is None:
+        _STATIC = PG.static_shapes()
+    names = sorted(set(DOC.ARM_LINKS) | {n for p in pairs for n in p})
+    T = {n: K.fk(qf, n) for n in names}
+    Cw = {n: T[n][:3, :3] @ _C[n] + T[n][:3, 3] for n in names}
+    W = {}
+
+    def pts(n):
+        if n not in W:
+            W[n] = (T[n][:3, :3] @ DOC.CL[n].T).T + T[n][:3, 3]
+        return W[n]
+    # 自碰撞
+    lb = sorted((float(np.linalg.norm(Cw[x] - Cw[y])) - _R[x] - _R[y], x, y) for x, y in pairs)
+    sc = np.inf
+    for b, x, y in lb:
+        if b >= sc:
+            break
+        if x not in _TREE:
+            _TREE[x] = cKDTree(DOC.CL[x])
+        Py = (pts(y) - T[x][:3, 3]) @ T[x][:3, :3]
+        sc = min(sc, float(_TREE[x].query(Py, k=1)[0].min()))
+    # 環境（靜態方盒＋立柱；橫桿只對非手指、非夾爪殼連桿）
+    posts, bar = PG.handle_shapes(T_WH)
+    sh = _STATIC + posts
+    cand = []
+    for n in DOC.ARM_LINKS:
+        c1 = Cw[n][None, :]
+        for name, c, R, hs in sh:
+            cand.append((float(DOC.box_dist(c1, c, R, hs)[0]) - _R[n], n, name, (c, R, hs)))
+        if n not in DOC.FINGERS and n != 'uflite_gripper_link':
+            cand.append((float(PG.bar_dist(c1, bar)[0]) - _R[n], n, 'bar', None))
+    cand.sort(key=lambda z: z[0])
+    env, who = np.inf, None
+    for b, n, name, g in cand:
+        if b >= env:
+            break
+        d = float(PG.bar_dist(pts(n), bar).min()) if g is None else float(DOC.box_dist(pts(n), *g).min())
+        if d < env:
+            env, who = d, f'{n}|{name}'
+    bc, bwho = min((float(DOC.box_dist(np.array([[qf[0], qf[1], c[2]]]), c, R, hs)[0]) - DOC.RB, name) for name, c, R, hs in _STATIC)
+    bt, btw = min((float(PG.bar_dist(pts(n), bar).min()), n) for n in TOOL if n in T)
+    return dict(env=env, env_who=who, base=bc, base_who=bwho, self=sc, bar_tool=bt, bar_tool_who=btw,
+                ok=bool(env >= R1.ENV_M and bc >= R1.BASE_M and sc >= R1.SELF_M and bt >= R1.ENV_M))
