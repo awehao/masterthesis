@@ -45,6 +45,8 @@ ap.add_argument('--finger-kd', type=float, default=1.0e3)
 ap.add_argument('--settle-s', type=float, default=1.0)
 ap.add_argument('--sim-limit-s', type=float, default=40.0)
 ap.add_argument('--hold-s', type=float, default=3.0)
+ap.add_argument('--ctrl-module', default='door_approach_ctrl', choices=('door_approach_ctrl', 'door_approach_jnom_ctrl'))
+ap.add_argument('--joint-nominal', action='store_true', help='只對 door_approach_jnom_ctrl：底盤固定相位以重算關節軌跡為線性化名目')
 a = ap.parse_args()
 
 from isaacsim import SimulationApp                               # noqa: E402
@@ -58,7 +60,10 @@ from isaacsim.sensors.camera import Camera                       # noqa: E402
 from pxr import Gf, PhysxSchema, UsdGeom, UsdLux, UsdPhysics     # noqa: E402
 
 import d1_handle_detect_v2 as D1                                 # noqa: E402
-import door_approach_ctrl as DA                                  # noqa: E402
+import importlib                                                 # noqa: E402
+DA = importlib.import_module(a.ctrl_module)
+if a.joint_nominal and a.ctrl_module != 'door_approach_jnom_ctrl':
+    raise SystemExit('--joint-nominal 需搭配 --ctrl-module door_approach_jnom_ctrl')
 import door_asset_v3 as DA3                                      # noqa: E402
 import m8_door_detect as MD                                      # noqa: E402
 import wrist_v0_capture as W0                                    # noqa: E402
@@ -284,7 +289,12 @@ def main():
     truth = dict(note='只供事後評估；控制、估計、視點選擇都不讀', T_handle_start=truth_handle().tolist(), door_q0_rad=door_q0)
     print(f'[da] 起點讀回 底盤 {np.round(q_s[:3], 4).tolist()} 手臂靜態偏移 {np.round(q_s[3:] - start_q, 4).tolist()} 門角 {math.degrees(door_q0):.4f}°', flush=True)
     ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json')))
-    ctrl = DA.DoorApproachCtrl(ident, start_b, start_q, b1, q_look, T_far, T_at)
+    ctrl = DA.DoorApproachCtrl(ident, start_b, start_q, b1, q_look, T_far, T_at, **(dict(joint_nominal=True) if a.joint_nominal else {}))
+    readback['ctrl_module'], readback['ctrl_file'], readback['joint_nominal'] = a.ctrl_module, os.path.basename(DA.__file__), bool(getattr(ctrl, 'joint_nominal', False))
+    print(f"[da] 控制器 {readback['ctrl_file']} joint_nominal={readback['joint_nominal']}", flush=True)
+    if readback['joint_nominal'] != bool(a.joint_nominal):
+        print('[da] 控制器開關讀回與指定不符 ⇒ 拒跑', flush=True)
+        return 66
     T0 = float(world.current_time)
     hist, last_rf, frames = {}, None, []
     cam_stat = dict(read=0, new=0, rejects={}, detect_ms=[], est_fail={}, delivered=0)
@@ -578,7 +588,7 @@ def main():
                       no_unexpected_before_probe=bool(latch is None or (probe_state['t_drop'] is not None and latch['t'] >= probe_state['t_drop'] and latch['why'] == 'unexpected_contact')))
         ok = all(checks.values())
     else:
-        checks = dict(clock_no_drift=clock_bad == 0, pipe_delay=pipe_probe['delay_steps'] == DA.D_STEPS, done=bool(rep['done']), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']), no_latch=latch is None, not_aborted=aborted is None,
+        checks = dict(clock_no_drift=clock_bad == 0, pipe_delay=pipe_probe['delay_steps'] == DA.D_STEPS, ctrl_as_requested=bool(rep.get('joint_nominal', False) == bool(a.joint_nominal)), done=bool(rep['done']), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']), no_latch=latch is None, not_aborted=aborted is None,
                       true_clearance_ok=bool(tc.get('status') == 'computed' and tc.get('ok')),
                       near_from_live_frame=bool(cam_stat['delivered'] == 1 and rep['target_source'] == 'near'), hold_base_cmd_zero=rep['tracking']['base_cmd_max_hold'] == 0.0)
         ok = all(checks.values())

@@ -142,23 +142,27 @@ def fork_stop(F, extra):
     """複製（控制器＋受控對象），晚 extra 拍後強制停止，用真 _stop／減速／管線跑到靜止。回真值把手下最小淨空、停止有效性、與控制器停止預測的終點差。"""
     G = copy.deepcopy(F)
     G.sent = True
+    mn = {k: np.inf for k in G.min_true}
+    self_stop, n = None, 0
     for _ in range(extra * NPH):
         G.one()
-        if G.c.stop is not None:
-            return dict(extra=extra, pre_stopped=G.c.stop['why'])
-    G.c._stop('forced_stop_probe')
-    q0, s0 = G.q.copy(), G.c.s.copy()
-    Qp = DA.C21.stop_traj(q0, s0, G.c.pipe, G.c.u_last, G.c.cfg, 0)
-    G.min_true = {k: np.inf for k in G.min_true}
-    mn = {k: np.inf for k in G.min_true}
-    n = 0
+        n += 1
+        if G.c.stop is not None:                                   # 晚一拍期間複本自己進入停止（例如正常完成）：不強制，沿它自己的真停止流程跑到靜止，一樣核管線、停止有效性與淨空
+            self_stop = G.c.stop['why']
+            break
+    Qp = None
+    if self_stop is None:
+        G.c._stop('forced_stop_probe')
+        Qp = DA.C21.stop_traj(G.q.copy(), G.c.s.copy(), G.c.pipe, G.c.u_last, G.c.cfg, 0)
+        n = 0
     while G.c.stop_ok is None and n < 800:
         G.one()
         n += 1
         cc = DA.CLEAR(G.q, G.L['T_true'])
         for k in mn:
             mn[k] = min(mn[k], cc[k])
-    return dict(extra=extra, min=mn, stop_ok=bool(G.c.stop_ok and G.c.stop_ok['ok']), pred_end_err_arm=float(np.abs(Qp[-1][3:] - G.q[3:]).max()), pred_end_err_base=float(np.linalg.norm(Qp[-1][:2] - G.q[:2])), stop_time=n * PHYS)
+    return dict(extra=extra, min=mn, stop_ok=bool(G.c.stop_ok and G.c.stop_ok['ok'] and G.c.stop_ok['pipe_empty']), self_stop=self_stop, pred_end_err_arm=0.0 if Qp is None else float(np.abs(Qp[-1][3:] - G.q[3:]).max()),
+                pred_end_err_base=0.0 if Qp is None else float(np.linalg.norm(Qp[-1][:2] - G.q[:2])), stop_time=n * PHYS)
 
 
 def nominal_with_forks(L, obs):
@@ -179,7 +183,7 @@ def nominal_with_forks(L, obs):
             break
     ok = [p for p in probes if 'min' in p]
     th = dict(env=R1.ENV_M, base=R1.BASE_M, self=R1.SELF_M, bar_tool=R1.ENV_M)
-    S = dict(n=len(probes), n_run=len(ok), pre_stopped=[p for p in probes if 'pre_stopped' in p], all_stop_ok=all(p['stop_ok'] for p in ok),
+    S = dict(n=len(probes), n_run=len(ok), self_stopped=[dict(t=p['t'], extra=p['extra'], why=p['self_stop'], stop_ok=p['stop_ok']) for p in probes if p.get('self_stop')], pre_stopped=[], all_stop_ok=all(p['stop_ok'] for p in ok),
              min_true={k: round(float(min(p['min'][k] for p in ok)), 4) for k in th}, min_by_phase={ph: {k: round(float(min(p['min'][k] for p in ok if p['phase'] == ph)), 4) for k in th} for ph in sorted({p['phase'] for p in ok})},
              n_below_threshold={k: int(sum(p['min'][k] < th[k] for p in ok)) for k in th}, pred_end_err_arm_max_rad=round(float(max(p['pred_end_err_arm'] for p in ok)), 5), pred_end_err_base_max_m=round(float(max(p['pred_end_err_base'] for p in ok)), 5),
              stop_time_max_s=round(float(max(p['stop_time'] for p in ok)), 2), thresholds=th)
@@ -200,7 +204,7 @@ def main():
         r['stop_probes'] = S
         r['expect'] = 'approach_done'
         r['checks'] = checks(r)
-        r['checks']['probes_all_stop_ok'] = bool(S['all_stop_ok'] and all(p_['pre_stopped'] == 'approach_done' for p_ in S['pre_stopped']))   # 晚一拍的複本自己正常完成（approach_done）不算探針失敗；其他提前停止才算
+        r['checks']['probes_all_stop_ok'] = bool(S['all_stop_ok'] and S['n_run'] == S['n'])   # 每個探針都跑到靜止並核過（含晚一拍期間自己進入停止者）
         r['checks']['probes_none_below_threshold'] = bool(all(v == 0 for v in S['n_below_threshold'].values()))
         r['pass'] = bool(all(r['checks'].values()))
         res['cases']['nominal'] = r

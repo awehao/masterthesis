@@ -16,8 +16,8 @@ if ! sha256sum -c --quiet "$FREEZE" > "$DIR/freeze_check.log" 2>&1; then
   say "凍結清單核對不符（$FREEZE）⇒ 拒跑：$(head -3 "$DIR/freeze_check.log")"; exit 96
 fi
 cp "$FREEZE" "$DIR/versions.sha256"
-say "=== 門把手非接觸接近：RUN_ID=$RUN_ID MODE=$MODE；凍結 $FREEZE 全部相符；機器 $(hostname)／$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)／$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)／kernel $(uname -r)；GUI 開；非即時計算"
-setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_door_approach.py --mode "$MODE" --out "$DIR" >> "$DIR/sim.log" 2>&1 &
+say "=== 門把手非接觸接近：RUN_ID=$RUN_ID MODE=$MODE CTRL_ARGS='${CTRL_ARGS:-}'；凍結 $FREEZE 全部相符；機器 $(hostname)／$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)／$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)／kernel $(uname -r)；GUI 開；非即時計算"
+setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_door_approach.py --mode "$MODE" --out "$DIR" ${CTRL_ARGS:-} >> "$DIR/sim.log" 2>&1 &
 SIM=$!
 sleep 1
 P=$(pgrep -f "[i]saac_m8_house_door_approach.py.*runs/$RUN_ID" | head -1)
