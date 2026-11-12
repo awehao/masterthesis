@@ -18,7 +18,9 @@ import numpy as np
 os.environ.setdefault('M8_SCENE_REG', '20261112_m8_house_scene.json')
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import door_approach_ctrl as DA                                    # noqa: E402
+import importlib                                                   # noqa: E402
+DA = importlib.import_module(os.environ.get('DA_CTRL', 'door_approach_ctrl'))   # DA_CTRL=door_approach_jnom_ctrl＋DA_JNOM=1：關節名目線性化對照
+JNOM = os.environ.get('DA_JNOM') == '1'
 
 R4 = DA.R4
 R3, R2, R1, PG, E, K, IDX = DA.R3, DA.R2, DA.R1, DA.PG, R4.E, DA.K, DA.IDX
@@ -101,7 +103,7 @@ class Fake:
 
 def mk(L, **kw):
     ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json')))
-    c = DA.DoorApproachCtrl(ident, L['base0'], L['q_obs'], L['b1'], L['q_look'], L['T_far'], L['T_at'])
+    c = DA.DoorApproachCtrl(ident, L['base0'], L['q_obs'], L['b1'], L['q_look'], L['T_far'], L['T_at'], **(dict(joint_nominal=True) if JNOM else {}))
     return Fake(c, L, **kw)
 
 
@@ -198,7 +200,7 @@ def main():
         r['stop_probes'] = S
         r['expect'] = 'approach_done'
         r['checks'] = checks(r)
-        r['checks']['probes_all_stop_ok'] = bool(S['all_stop_ok'] and S['n_run'] == S['n'])
+        r['checks']['probes_all_stop_ok'] = bool(S['all_stop_ok'] and all(p_['pre_stopped'] == 'approach_done' for p_ in S['pre_stopped']))   # 晚一拍的複本自己正常完成（approach_done）不算探針失敗；其他提前停止才算
         r['checks']['probes_none_below_threshold'] = bool(all(v == 0 for v in S['n_below_threshold'].values()))
         r['pass'] = bool(all(r['checks'].values()))
         res['cases']['nominal'] = r
