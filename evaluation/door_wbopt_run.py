@@ -58,19 +58,25 @@ def main():
         r_b = float(np.hypot(b[0], b[1]))                            # 起始猜測的時間由輪速上限決定（不是調出來的）：共轉時輪面速度 ≤ φ̇·(底盤離鉸鏈距離＋L)
         T_ramp = 1.875 * PHI_GOAL * (r_b + W.L_W) / (0.9 * W.W_LIM)
         Nc = int(math.ceil((T_ramp + 2.0) / DT)) if os.environ.get('WB_N') is None else N
+        if fixed:                                                   # 固定底盤：不經最佳化的可達性掃描
+            row['fixed_base_sweep'] = W.fixed_base_sweep(T_WH0, T_WE0, x0, PHI_GOAL, mode=mode)
+            res['cases'][nm] = row
+            print(nm, row['fixed_base_sweep'], flush=True)
+            json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1)
+            continue
         opt = W.DoorWBOpt(T_WH0, T_WE0, x0, PHI_GOAL, N=Nc, dt=DT, mode=mode, base_fixed=fixed)
         row.update(N=Nc, T_ramp_seed=round(T_ramp, 2))
         if INIT == 'corotate' and not fixed:
             opt.init_corotate(T_ramp)
             row['seed_verify'] = opt.verify()
-            print(nm, 'seed', {k: row['seed_verify'][k] for k in ('feasible', 'closure_pos_mm', 'min_clear_m', 'wheel_max', 'wheel_ok', 't_goal_s', 'base_travel_m', 'sigma_min', 'setpoint_rate_needed_max')}, flush=True)
+            print(nm, 'seed', {k: row['seed_verify'][k] for k in ('feasible', 'failed', 't_phi_95pct_s', 't_phi_goal_minus_0p5deg_s', 'wheel_max', 'body_acc_max', 'base_travel_m', 'sigma_min')}, flush=True)
         res['weights'] = opt.w
         info = opt.solve(max_iter=int(os.environ.get('WB_ITERS', '80')), verbose=os.environ.get('WB_VERBOSE') == '1')
         v = opt.verify()
         row.update(solve=info, verify=v, wall_total_s=round(time.perf_counter() - t0, 1), end_state=[round(float(x), 4) for x in opt.X[-1]], log_tail=opt.log[-3:])
         res['cases'][nm] = row
         np.save(out.replace('.json', f"_{nm.replace('|', '_')}.npy"), opt.X)
-        print(nm, info, {k: v[k] for k in ('feasible', 't_goal_s', 'phi_end_deg', 'closure_pos_mm', 'mid_closure_pos_mm', 'min_clear_m', 'clear_ok', 'arm_rate_sat_steps', 'wheel_sat_steps', 'phi_rate_sat_steps', 'base_travel_m', 'base_yaw_change_deg', 'joint_margin_min_rad', 'setpoint_rate_needed_max', 'sigma_min', 'sigma_start', 'wheel_max', 'arm_rate_max')}, flush=True)
+        print(nm, info, {k: v[k] for k in ('feasible', 'failed', 't_phi_95pct_s', 't_phi_goal_minus_0p5deg_s', 't_end_s', 'phi_end_deg', 'closure_pos_mm', 'raw_midpoint_pos_mm', 'proj_adjust_max_rad', 'min_clear_m', 'wheel_max', 'body_acc_max', 'wheel_acc_max', 'setpoint_rate_needed_max', 'sigma_min', 'sigma_start', 'joint_margin_min_rad', 'base_travel_m', 'base_yaw_change_deg', 'phi_rate_max')}, flush=True)
         json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1)
     json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1)
 
