@@ -46,7 +46,10 @@ r10（Codex 20261113_124213 §4）：g2['prep_fc']＝掃掠準備的 TCP FK 改 
   （stop_mode＝settled，等同現在停掃掠預測的停法；不是沿用上一命令）；本拍現在停沒驗到 ⇒ 模擬中止。池逾時 0.5 s 是資源失效判定，與此分開。
 r11（Codex 20261113_130916 §1）：期限備援的「已驗證」改為本拍現在停預測同時滿足——淨空門檻、每個取樣的預測閉鏈位置／姿態偏差 ≤ CL_TOL
   （r3 起只計數不拒絕；備援要用就必須拒絕）、在步數上限內停穩（命令本身由有界減速構成、不超限）。路徑停止中晚到也要本拍重驗同樣條件
-  （每拍另算現在停預測）；不滿足 ⇒ 模擬中止，不先標 settled。測試掛鉤：fb_closure_inject（放大備援評估用的預測閉鏈偏差）、deadline_inject（強制本拍晚到）。"""
+  （每拍另算現在停預測）；不滿足 ⇒ 模擬中止，不先標 settled。測試掛鉤：fb_closure_inject（放大備援評估用的預測閉鏈偏差）、deadline_inject（強制本拍晚到）。
+r12（P2 執行層整合，Codex 20261113_124213 §3）：extend_reference(Xd_new, σ_s, final)——參考在 σ_s 起換成新段的密集參考（新段起點＝舊參考在 σ_s 的狀態
+  與速度 ⇒ C1 連續、不跳參考）；σ_s 必須還沒到（σ ≤ σ_s）。p2_open＝True 時參考走到盡頭（段尾停穩）且門未到目標：不判 end_not_reached，
+  等延伸（靜止重啟由外部在實測停穩後提出）；等超過 P2_REST_WAIT_S ⇒ p2_no_extension 停止。final＝True（末段）後回到原 END 規則。"""
 import math
 import os
 import sys
@@ -83,6 +86,7 @@ FINGER_OPEN = 0.0089
 STOP_STILL = dict(arm_rps=2e-3, base_mps=0.003, yaw_rps=0.003, door_rps=0.005, hold_s=0.3, timeout_s=4.0)
 KEYS = ('env', 'base', 'self', 'shell_bar')
 START_LAT_ALIGN = True                                              # r5：參考時鐘從第一筆命令到達受控對象才起算（σ₀＝−D_STEPS·PHYS；底盤與手臂共用同一條管線延遲）
+P2_REST_WAIT_S = 8.0                                               # r12：參考盡頭等延伸的上限
 POOL_TIMEOUT_S = 0.5                                                # r9：平行掃掠收集逾時（偵測卡死用；即時性另以每拍耗時統計）
 BASE_RAMP = True                                                    # r4：底盤命令在一個控制拍內逐物理步線性過渡（管線、預測、停止掃掠同一語意）
 
@@ -127,6 +131,7 @@ class DoorOpenExec:
     def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2, arm_mode='qp', joint_kp=600.0, g2=None):
         self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False, prep_fc=False, deadline_ms=None)
         self.n_deadline_miss = 0
+        self.p2_open, self.p2_log = False, []                         # r12
         self._fb_ok, self._fb_info = False, None                      # r11：本拍期限備援是否可用＋依據
         self.fb_closure_inject, self.deadline_inject = None, None      # r11：測試掛鉤
         self.fb_log = []
@@ -396,6 +401,22 @@ class DoorOpenExec:
         if self._pool is not None:
             self._pool.close()
 
+    def extend_reference(self, Xd_new, sigma_s, final=False):
+        """r12：參考在 σ_s 起換成 Xd_new（同間隔 h；Xd_new[0] 應等於舊參考在 σ_s 的狀態）。σ 已過 σ_s ⇒ 拒絕（回 False）。"""
+        i_s = int(round(sigma_s / self.h))
+        if abs(i_s * self.h - sigma_s) > 1e-9 or sigma_s < self.sigma - 1e-9 or self.stop is not None or self.abort is not None:
+            self.p2_log.append(dict(t=round(self.t, 3), ok=False, sigma=round(self.sigma, 3), sigma_s=round(sigma_s, 3), why='late_or_stopped'))
+            return False
+        i_s = min(i_s, len(self.Xd) - 1)
+        jump = float(np.abs(np.asarray(Xd_new[0]) - self.Xd[i_s]).max())
+        self.Xd = np.vstack([self.Xd[:i_s], np.asarray(Xd_new, float)])
+        self.sig_end = (len(self.Xd) - 1) * self.h
+        if self.sigma < self.sig_end:
+            self.t_ref_end, self._n_end = None, 0
+        self.p2_open = not final
+        self.p2_log.append(dict(t=round(self.t, 3), ok=True, sigma=round(self.sigma, 3), sigma_s=round(sigma_s, 3), final=bool(final), splice_jump=jump, sig_end=round(self.sig_end, 3)))
+        return True
+
     def warmup(self, q, phi_meas):
         """r10：交接前預熱（接近階段即可做，不在控制拍內）。複製一份控制器（不含計算池）以起始狀態空跑一拍，
         讓求解器、閉鏈、淨空、停止預測的第一次呼叫成本發生在交接前；本控制器狀態完全不動（複本丟棄）。回複本那一拍的耗時 ms。"""
@@ -664,6 +685,9 @@ class DoorOpenExec:
                     if self._n_end >= END['n_ticks']:
                         self.done = True
                         self._stop('open_done', phi_meas_deg=round(math.degrees(phi_meas), 3))
+                    elif self.p2_open:                                 # r12：等延伸（不判 end_not_reached）
+                        if self.t - self.t_ref_end > P2_REST_WAIT_S:
+                            self._stop('p2_no_extension', phi_meas_deg=round(math.degrees(phi_meas), 3))
                     elif self.t - self.t_ref_end > END['wait_s']:
                         self._stop('end_not_reached', phi_meas_deg=round(math.degrees(phi_meas), 3), rates={k: round(v, 5) for k, v in self.rate.items()})
                 if self.stop is None:
