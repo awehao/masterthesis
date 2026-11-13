@@ -23,6 +23,8 @@ r6（G1，Codex 20261113 時間帳裁定）：grad='analytic' 時淨空列改用
 r7（Codex 20261113_120619 (a)）：init_corotate(T_ramp, v0_tau) 選項——起始速度 v0≠0 時，初猜的底盤再疊一段「起始速度指數衰減」的位移
         v0·τ·(1−e^{−t/τ})（控制點 k 對應 t＝(k＋½)dt，與 r5 起始控制點同一語意），手臂投影回閉鏈。只是初猜：不改問題、不改驗收，
         也不是控制器要走的停車過程（最佳化自由改動）。v0_tau＝None 與 r6 逐值相同。
+r8（P2 第一包，Codex 20261113_120619）：segment＝True 為短段模式——不加「終點門角 ≥ φ_goal」列、merit 不計終點未達、verify 不以 phi_end_ok 判失敗
+        （門角進展另報）。其餘問題與驗收不變；段尾因 B 樣條末端重複控制點而減速到靜止、全程閉鏈與各限制照樣核 ⇒ 每段自帶機構相容的停止。segment＝False 與 r7 相同。
 未含（照實）：設定點一階落後與 8 步在途命令（只在事後算所需設定點速率）；門的慣性、阻尼、回關；夾持力與摩擦；感測誤差。"""
 import math
 import os
@@ -140,7 +142,7 @@ def margins(x, T_WH0):
 
 
 class DoorWBOpt:
-    def __init__(self, T_WH0, T_WE0, x0, phi_goal, N=60, dt=0.2, mode='rigid', base_fixed=False, w=None, T_HE=None, project_start=True, v0=None, grad='fd'):
+    def __init__(self, T_WH0, T_WE0, x0, phi_goal, N=60, dt=0.2, mode='rigid', base_fixed=False, w=None, T_HE=None, project_start=True, v0=None, grad='fd', segment=False):
         """r3：T_HE 可明確傳入（綁定瞬間的實測抓持變換；之後規劃與重規劃都固定用它）；project_start=False 時起點不做牛頓投影，
         只核閉鏈殘差 <1e-6（否則丟 ValueError）——實測起點不得被改成另一個構型。T_WH0 是門角 PHI0（set_model）時的把手位姿。"""
         self.T_WH0 = np.asarray(T_WH0, float)
@@ -168,6 +170,7 @@ class DoorWBOpt:
         self.X[0] = self.c0
         if grad not in ('fd', 'analytic'):
             raise ValueError(grad)
+        self.segment = bool(segment)                               # r8：短段模式
         self.grad = grad                                           # r6：淨空列線性化方式（'fd'＝r5 前向差分；'analytic'＝G1 解析梯度）
         self.act, self.keep = 0.025, 0.004                         # 淨空列：餘裕（距離−門檻）低於 act 才線性化；要求線性化後餘裕 ≥ keep
         self.log = []
@@ -255,7 +258,7 @@ class DoorWBOpt:
         sig = np.array([sigma_min(x) for x in X[1:]])
         J = (w['phi'] * float(((X[1:, 9] - self.phi_goal) ** 2).sum()) + w['v'] * float((d1 ** 2).sum()) + w['a'] * float((d2 ** 2).sum())
              + w['lim'] * float((((X[1:, 3:9] - mid) / half) ** 2).sum()) - w['manip'] * float(np.log(np.maximum(sig, 1e-4)).sum()))
-        viol = max(0.0, self.phi_goal - X[-1, 9]) + float(np.maximum(min(SIG_FLOOR, sigma_min(self.x0)) - sig, 0).sum())
+        viol = (0.0 if self.segment else max(0.0, self.phi_goal - X[-1, 9])) + float(np.maximum(min(SIG_FLOOR, sigma_min(self.x0)) - sig, 0).sum())
         dX = np.diff(X, axis=0) / dt
         for k in range(N):
             th = 0.5 * (X[k, 2] + X[k + 1, 2])
@@ -421,7 +424,8 @@ class DoorWBOpt:
                         vals.append(c)
                 add(cols, vals, -V_ARM - base, V_ARM - base)
         # 終點門角（硬性）：φ_N ≥ φ_goal
-        add([idx(N).start + 9, nz - 1], [1.0, 1.0], self.phi_goal + 2e-4 - X[N, 9], np.inf)   # 2e-4 rad：大於 QP 容差 1e-6 與投影誤差的餘量（同輪速 0.97 的作法）   # 彈性：φ_N＋s_T ≥ φ_goal，s_T 重罰；起始猜測未達目標時 QP 不會必然無解
+        if not self.segment:
+            add([idx(N).start + 9, nz - 1], [1.0, 1.0], self.phi_goal + 2e-4 - X[N, 9], np.inf)   # 2e-4 rad：大於 QP 容差 1e-6 與投影誤差的餘量（同輪速 0.97 的作法）   # 彈性：φ_N＋s_T ≥ φ_goal，s_T 重罰；起始猜測未達目標時 QP 不會必然無解
         add([nz - 1], [1.0], 0.0, np.inf)
         # 淨空（線性化；鬆弛重罰）
         for j, (k, mg, g) in enumerate(col):
@@ -589,6 +593,8 @@ class DoorWBOpt:
                  time_note='各時刻為 0.05 s 取樣序列上的首次到達；參考結束≠實際停穩（後者要執行後量）',
                  base_travel_m=round(float(np.linalg.norm(np.diff(Xd[:, :2], axis=0), axis=1).sum()), 3), base_net_m=round(float(np.linalg.norm(Xd[-1, :2] - Xd[0, :2])), 3), base_yaw_change_deg=round(math.degrees(Xd[-1, 2] - Xd[0, 2]), 1))
         keys = ('clear_ok', 'wheel_ok', 'body_v_ok', 'body_acc_ok', 'wheel_acc_ok', 'arm_rate_ok', 'setpoint_rate_ok', 'joint_ok', 'sigma_ok', 'phi_end_ok', 'phi_range_ok', 'phi_rate_ok')
+        if self.segment:
+            keys = tuple(k for k in keys if k != 'phi_end_ok')            # r8：短段不要求到 φ_goal（進展另報）
         v['start_state_err'] = float(np.abs(Xd[0] - self.x0).max())                        # r5：參考起點＝實測起點（投影後）
         v['start_vel'] = [round(float(x_), 5) for x_ in (Xd[1] - Xd[0]) / h]
         v['closure_ok'] = bool(v['closure_pos_mm'] < 1e-3 and v['closure_rot_deg'] < 1e-3)
