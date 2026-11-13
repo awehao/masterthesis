@@ -18,6 +18,8 @@
 解法    序列二次規劃：每輪在目前軌跡線性化閉鏈（解析 Jacobian：gmpc_wb.FastChain.fk_jac；門角方向為繞鉸鏈的旋量）、輪級列與淨空（有限差分，只對接近的節點），
         解一個帶信賴域的 QP（OSQP）；非線性殘差變差就縮信賴域。收斂後每個節點再以牛頓步把閉鏈殘差壓到數值零（只動手臂），最後**用非線性模型重核**所有條件，
         含節點之間的中點。局部解：不稱全域最佳。QP 解出不代表原問題成立，以重核為準；任一項不過 ⇒ 回報不可行，不退回任何既有開門答案。
+r6（G1，Codex 20261113 時間帳裁定）：grad='analytic' 時淨空列改用解析梯度（door_clear_grad.margins_grad：最近對上的距離梯度×點位置 Jacobian、門角旋量項）；
+        值與有限差分版完全相同，只換線性化（新線性化版本；預設 grad='fd' 與 r5 逐值相同）。非線性接受（殘差、merit、verify）不變。
 未含（照實）：設定點一階落後與 8 步在途命令（只在事後算所需設定點速率）；門的慣性、阻尼、回關；夾持力與摩擦；感測誤差。"""
 import math
 import os
@@ -135,7 +137,7 @@ def margins(x, T_WH0):
 
 
 class DoorWBOpt:
-    def __init__(self, T_WH0, T_WE0, x0, phi_goal, N=60, dt=0.2, mode='rigid', base_fixed=False, w=None, T_HE=None, project_start=True, v0=None):
+    def __init__(self, T_WH0, T_WE0, x0, phi_goal, N=60, dt=0.2, mode='rigid', base_fixed=False, w=None, T_HE=None, project_start=True, v0=None, grad='fd'):
         """r3：T_HE 可明確傳入（綁定瞬間的實測抓持變換；之後規劃與重規劃都固定用它）；project_start=False 時起點不做牛頓投影，
         只核閉鏈殘差 <1e-6（否則丟 ValueError）——實測起點不得被改成另一個構型。T_WH0 是門角 PHI0（set_model）時的把手位姿。"""
         self.T_WH0 = np.asarray(T_WH0, float)
@@ -161,6 +163,9 @@ class DoorWBOpt:
         self.c0 = self.x0 + 0.5 * self.dt * self.v0
         self.Xm1 = self.x0 - 0.5 * self.dt * self.v0
         self.X[0] = self.c0
+        if grad not in ('fd', 'analytic'):
+            raise ValueError(grad)
+        self.grad = grad                                           # r6：淨空列線性化方式（'fd'＝r5 前向差分；'analytic'＝G1 解析梯度）
         self.act, self.keep = 0.025, 0.004                         # 淨空列：餘裕（距離−門檻）低於 act 才線性化；要求線性化後餘裕 ≥ keep
         self.log = []
         self.init = dict(kind='hold')
@@ -429,6 +434,16 @@ class DoorWBOpt:
     def active_collisions(self):
         """接近門檻的節點：回 [(k, 該類餘裕, 對 10 維的梯度)]（有限差分）。"""
         out, worst = [], np.inf
+        if self.grad == 'analytic':
+            import door_clear_grad as CG
+            for k in range(1, self.N + 1):
+                m0, G, _ = CG.margins_grad(self.X[k], self.T_WH0)
+                worst = min(worst, float(m0.min()))
+                for c in np.where(m0 < self.act)[0]:
+                    if c == 3 and self.mode == 'rigid':
+                        continue
+                    out.append((k, float(m0[c]), G[c].copy()))
+            return out, worst
         h = np.r_[1e-4, 1e-4, 1e-4, np.full(6, 1e-4), 1e-4]
         for k in range(1, self.N + 1):
             m0, _ = margins(self.X[k], self.T_WH0)
