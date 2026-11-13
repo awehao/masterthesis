@@ -15,7 +15,8 @@ r2（READY 可撤銷；Codex 20261113_120619）：環境變數 RQ_CASE 選 READY
   請求接受＝每拍呼叫 accept_handover(當拍 ready_ver)，直到成功或停止；成功即交接（結束）。
 r4（閉爪後；Codex 20261113_124213）：c_drift4  鎖定（閉爪開始）後 0.1 s 起擷取的影格估計平移 4 mm（門檻內），READY 後 0.2 s 請求接受
                                      c_ramp8   鎖定起 1.0 s 內估計線性漂到 8 mm（之後保持），READY 後 0.2 s 請求接受
-  另記閉爪開始後真值相對位移最大值（含停止期間）。"""
+  另記閉爪開始後真值相對位移最大值（含停止期間）。
+r6：c_slip6  鎖定後 0.3 s 把手「真的」移 6 mm（影格與真值同時移；夾爪未跟＝滑脫），記偵測延遲（滑脫時刻→停止事件）。"""
 import json, math, os, sys
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
@@ -48,7 +49,8 @@ bias_dir = rng.normal(size=3); bias_dir /= np.linalg.norm(bias_dir)
 frames = []                                                          # (擷取時刻, 估計)
 RQ = os.environ.get('RQ_CASE')
 RQP = dict(r_nominal=dict(acc=0.0), r_stalever=dict(acc=0.1, stale=True), r_delay=dict(acc=None), r_jump4=dict(acc=0.2, jump=4.0), r_jump8=dict(acc=0.4, jump=8.0),
-           r_speed=dict(acc=0.3, vs=1.3), r_occl=dict(acc=0.4, occl=1.0), c_drift4=dict(acc=0.2, cjump=4.0), c_ramp8=dict(acc=0.2, cramp=8.0)).get(RQ) if RQ else None
+           r_speed=dict(acc=0.3, vs=1.3), r_occl=dict(acc=0.4, occl=1.0), c_drift4=dict(acc=0.2, cjump=4.0), c_ramp8=dict(acc=0.2, cramp=8.0), c_slip6=dict(acc=0.2, slip=6.0)).get(RQ) if RQ else None
+slip_t = [None]                                                      # r6：真滑脫發生的絕對時刻
 t_ready_abs = [None]                                                 # 首次 READY 的絕對時刻（受控對象端；擾動在此之後生效）
 jump_dir = np.array([0.0, 1.0, 0.0])
 
@@ -70,6 +72,10 @@ def est_at(t):
         lk = getattr(c, 'lock', None) if 'c' in globals() else None
         if RQP is not None and lk is not None and RQP.get('cjump') and tn >= lk['t'] + 0.1 - 1e-9:
             T[:3, 3] += jump_dir * RQP['cjump'] * 1e-3
+        if RQP is not None and lk is not None and RQP.get('slip') and tn >= lk['t'] + 0.3 - 1e-9:
+            T[:3, 3] += jump_dir * RQP['slip'] * 1e-3                 # 真滑脫：影格反映把手真實位置
+            if slip_t[0] is None:
+                slip_t[0] = lk['t'] + 0.3
         if RQP is not None and lk is not None and RQP.get('cramp') and tn >= lk['t'] - 1e-9:
             T[:3, 3] += jump_dir * RQP['cramp'] * 1e-3 * min(1.0, (tn - lk['t']) / 1.0)
         ang = rng.normal(scale=math.radians(pert['jit_deg']), size=3)
@@ -127,7 +133,10 @@ while t < 6.0:
     t += PHYS
     if c.n_step % NPH == 0:
         tr = t - c.t0
-        Tg = T_at(T_true, c.s_of(tr - PHYS)); Tc = K.fk(q, 'link_tcp')           # 真值：TCP 對「當下排程」的真值目標
+        T_true_now = T_true.copy()
+        if RQP is not None and RQP.get('slip') and getattr(c, 'lock', None) is not None and t >= c.lock['t'] + 0.3 - 1e-9:
+            T_true_now[:3, 3] += jump_dir * RQP['slip'] * 1e-3
+        Tg = T_at(T_true_now, c.s_of(tr - PHYS)); Tc = K.fk(q, 'link_tcp')           # 真值：TCP 對「當下排程」的真值目標
         Tg0 = T_at(T_true, 0.0)
         dR = Tg0[:3, :3].T @ Tc[:3, :3]
         rows.append([tr, c.phase, float(np.linalg.norm(Tc[:3, 3] - Tg[:3, 3])), float(np.linalg.norm(Tc[:3, 3] - Tg0[:3, 3])), math.degrees(math.acos(max(-1, min(1, (np.trace(dR) - 1) / 2)))), *Tc[:3, 3], float((q[:2] - b0[:2]) @ d_world)])
@@ -173,7 +182,9 @@ res = dict(case=case, v=v, pert=pert, report={k: rep[k] for k in ('fuse', 'stop'
                          revocations=[e for e in rep['events'] if e['what'] in ('ready_revoked', 'accept_refused', 'accept_handover')], stop=rep['stop'], stop_effect=rep['stop_effect'],
                          true_rel_at_end_mm=round(float(A[-1, 2]) * 1e3, 3) if len(A) else None,
                          true_rel_max_after_close_mm=round(float(A[mask(('CLOSE', 'CONFIRM', 'READY', 'STOP')), 2].max()) * 1e3, 3) if mask(('CLOSE', 'CONFIRM', 'READY', 'STOP')).any() else None,
-                         contact_lock=rep.get('contact_lock'), lock_inconsistency_max=rep.get('lock_inconsistency_max'), contact_stop=rep.get('contact_stop')))
+                         contact_lock=rep.get('contact_lock'), lock_inconsistency_max=rep.get('lock_inconsistency_max'), contact_stop=rep.get('contact_stop'),
+                         fast_slip=rep.get('fast_slip'), slip_t_rel=None if slip_t[0] is None else round(slip_t[0] - c.t0, 3),
+                         slip_detect_latency_s=None if (slip_t[0] is None or rep['stop'] is None) else round(rep['stop']['t'] - slip_t[0], 3)))
 res['cmd_log'] = [[t_, ph_, *map(float, u_)] for t_, ph_, u_ in c.cmd_log]
 c.close_pool()
 json.dump(res, open(out_path, 'w'), ensure_ascii=False, indent=1, default=float)

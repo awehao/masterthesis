@@ -25,6 +25,13 @@ r4（Codex 20261113_124213 §1）：閉爪開始鎖定有時間戳的接觸任�
   接觸後停止（CLOSE／CONFIRM／READY）改「接觸停法」：底盤命令照原本每拍有界減速，手臂每拍仍以預測底盤解 IK 追鎖定把手（s＝0）——不是底盤、手臂各自減速；
   停止掃掠在接觸段用同一停法向前模擬（每拍 IK、命令限制、淨空），驗不過（IK 失敗、限制、未停穩）⇒ 違反；實際停止中命令驗不過 ⇒ 模擬中止。不自動張爪、不解綁。
   接觸停法停穩判準：底盤命令與管線為零、手臂命令 ≤ CSTOP.arm_cmd、各速率低於門檻連續 0.3 s。
+r6（Codex 20261113_130916 §2）：
+  相對速度改用同一拍的「把手參考—TCP 相對變換」差分（rel_motion）：門與夾爪一起動、相對不變 ⇒ 0；TCP 不動、把手動 ⇒ 有相對運動。
+  （r1–r5 用 TCP 世界位姿差分，只在門靜止時等於相對速度。）
+  滑脫快速拒絕通道（鎖定後）：最近 FAST.win_s 內擷取的原始影格（不經融合閘門），按擷取時刻的門角機構校正到現在門角後取中位，
+  對鎖定參考差 > FUSE 門檻 ⇒ contact_slip_suspect（接觸停法）。融合估計仍供規劃與一般監看；快速通道只拒絕、不改運動目標。
+  訊號來源（照實）：門角＝step() 的 phi_meas（假世界＝受控對象真值；Isaac＝門鉸鏈關節讀值，是模擬量測，實機需另行估計）；
+  把手影格＝est_fn（假世界＝真值＋偏差＋雜訊＋延遲＋遮擋；Isaac＝腕部相機偵測）；本控制器不使用接觸力訊號（指尖接觸由執行器另核）。
 r5：fastkin＝True 時 IK 改 FastChain（door_fast_kin.ik_closure_fc 同迭代，解差 4e-14 級）、重力改 FastGravity2（差 9e-15 N·m）；預設 False＝r4。"""
 import math
 import os
@@ -40,7 +47,8 @@ XO, W, K, C0, B, S, PG, E, LIM, BM = XE.XO, XE.W, XE.K, XE.C0, XE.B, XE.S, XE.PG
 PHYS, NPH, D_STEPS, DT, KEYS = XE.PHYS, XE.NPH, XE.D_STEPS, XE.DT, XE.KEYS
 SCHED = dict(hold_s=0.3, ins_s=1.0, close_s=0.5, confirm_s=0.3)
 CONFIRM = dict(pos_m=0.005, rot_deg=3.0, lin_mps=0.005, ang_rps=0.02)
-FUSE = dict(win_s=1.0, gate_m=0.005, gate_deg=3.0, min_frames=5)     # 把手估計融合：近 win_s 影格的穩健平均（把手在世界靜止）；離群門檻
+FUSE = dict(win_s=1.0, gate_m=0.005, gate_deg=3.0, min_frames=5)
+FAST = dict(win_s=0.2, min_frames=3)                                 # r6 事前登錄：滑脫快速通道視窗與最少影格（門檻沿用 FUSE.gate_m／gate_deg）     # 把手估計融合：近 win_s 影格的穩健平均（把手在世界靜止）；離群門檻
 FINGER_CLOSED = 0.0017
 CSTOP = dict(arm_cmd=0.005, max_steps=2000)                         # r4 事前登錄：接觸停法停穩的手臂命令上限（rad/s）、預測步數上限
 READY_Q = dict(fresh_s=0.3, accept_max_s=0.5)                       # r2 事前登錄：估計新鮮度上限（30 Hz、延遲 0.1 s 下約 0.13 s）、首次 READY 後等待下游接受的上限
@@ -93,6 +101,8 @@ class MovingGraspCtrl:
         self.n_revoke, self.stop_end_s, self.est_age = 0, None, None
         self.lock, self.phi_now, self.lock_incons_max = None, None, dict(pos_mm=0.0, deg=0.0)
         self.cstop = dict(used=False, n_ticks=0)
+        self.raw_frames, self.phi_hist, self.fast = [], [], dict(max_pos_mm=0.0, max_deg=0.0, n_eval=0)
+        self.rel_prev_T = None
         self.rec, self.events, self.cmd_log = [], [], []
         self.mins = {k: np.inf for k in KEYS}
         self.mins.update(finger_bar=np.inf, stop_sweep=np.inf)
@@ -321,6 +331,13 @@ class MovingGraspCtrl:
             bad.append(dict(what='wheel_a', v=round(wa, 3)))
         return bad
 
+    @staticmethod
+    def rel_motion(Trel_prev, Trel):
+        """r6：相對變換差分 ⇒ (線速度 m/s, 角速度 rad/s)，以把手座標表示（與世界運動無關）。"""
+        lin = float(np.linalg.norm(Trel[:3, 3] - Trel_prev[:3, 3])) / DT
+        dR = Trel_prev[:3, :3].T @ Trel[:3, :3]
+        return lin, math.acos(max(-1.0, min(1.0, (np.trace(dR) - 1) / 2))) / DT
+
     def _rel(self, q):
         """控制器視角的夾爪相對把手（估計）誤差：位置 m、姿態 °（TCP 對 T_at(估計, s＝0)）。"""
         Tc, Tg = K.fk(q, 'link_tcp'), self.T_at(self.handle_ref(), 0.0)      # r4：鎖定後對鎖定參考
@@ -338,6 +355,10 @@ class MovingGraspCtrl:
                 self.t0, self.b_origin, self.yaw_ref = self.t, q[:3].copy(), float(q[2])
                 self.G0 = self._gravity(q)
             est = self.est_fn(self.t)
+            self.phi_hist.append((self.t, float(phi_meas)))
+            if est is not None and (not self.raw_frames or self.raw_frames[-1][0] != est[1]):
+                self.raw_frames.append((est[1], float(est[2]), np.asarray(est[0], float).copy()))   # r6：原始影格（不經融合閘門）
+                self.raw_frames = [f_ for f_ in self.raw_frames if f_[1] >= self.t - 2.0]
             if est is not None and est[1] not in self.frames:
                 Tn = np.asarray(est[0], float)
                 if self.T_est is not None and len(self.frames) >= FUSE['min_frames']:
@@ -372,6 +393,21 @@ class MovingGraspCtrl:
                 self.lock_incons_max = dict(pos_mm=max(self.lock_incons_max['pos_mm'], dpos * 1e3), deg=max(self.lock_incons_max['deg'], dang))
                 if (dpos > FUSE['gate_m'] or dang > FUSE['gate_deg']) and self.stop is None:
                     self._stop('contact_ref_inconsistent', dpos_mm=round(dpos * 1e3, 3), dang_deg=round(dang, 3))
+                rec_ = [f_ for f_ in self.raw_frames if f_[1] >= self.t - FAST['win_s'] - 1e-9 and f_[1] >= self.lock['t'] - 1e-9]
+                if len(rec_) >= FAST['min_frames']:                    # r6：滑脫快速通道
+                    def phi_at(tc):
+                        cand = [p_ for t_, p_ in self.phi_hist if t_ <= tc + 1e-9]
+                        return cand[-1] if cand else self.phi_hist[0][1]
+                    Ps, Rs_ = [], []
+                    for _, tc, Tf in rec_:
+                        Ta = W.Rz4(-(float(phi_meas) - phi_at(tc))) @ Tf  # 擷取時門角 → 現在門角
+                        Ps.append(Ta[:3, 3]); Rs_.append(Ta[:3, :3])
+                    pm = np.median(np.array(Ps), axis=0)
+                    dps = float(np.linalg.norm(pm - Hr[:3, 3]))
+                    dgs = sorted(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(Hr[:3, :3].T @ R_) - 1) / 2)))) for R_ in Rs_)[len(Rs_) // 2]
+                    self.fast = dict(max_pos_mm=max(self.fast['max_pos_mm'], dps * 1e3), max_deg=max(self.fast['max_deg'], dgs), n_eval=self.fast['n_eval'] + 1)
+                    if (dps > FUSE['gate_m'] or dgs > FUSE['gate_deg']) and self.stop is None:
+                        self._stop('contact_slip_suspect', dpos_mm=round(dps * 1e3, 3), dang_deg=round(dgs, 3), n_frames=len(rec_))
             if self.q_tick is not None:
                 self.rate = dict(arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / DT, base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / DT, yaw=abs(q[2] - self.q_tick[2]) / DT)
             self.q_tick = q.copy()
@@ -390,12 +426,13 @@ class MovingGraspCtrl:
             if not (self.win[0] - 1e-9 <= sd <= self.win[1] + 1e-9):
                 viol.append(('outside_window', dict(s_along=round(sd, 4), window=self.win)))
             ep, er, Tc = self._rel(q)
-            if self.rel_prev is not None:
-                lin = float(np.linalg.norm(Tc[:3, 3] - self.rel_prev[:3, 3])) / DT
-                dR = self.rel_prev[:3, :3].T @ Tc[:3, :3]
-                ang = math.acos(max(-1.0, min(1.0, (np.trace(dR) - 1) / 2))) / DT
+            Tg_now = self.T_at(self.handle_ref(), 0.0)
+            Trel = np.linalg.inv(Tg_now) @ Tc                          # r6：把手參考（s＝0 抓取位）—TCP 相對變換（同一拍）
+            if self.rel_prev_T is not None:
+                lin, ang = self.rel_motion(self.rel_prev_T, Trel)
             else:
                 lin = ang = np.inf
+            self.rel_prev_T = Trel
             self.rel_prev = Tc
             self.rec.append([self.t, tr, sd, ep, er, lin, ang, c['env'], c['self'], c['shell_bar'], c['finger_bar'], ['HOLD', 'INSERT', 'CLOSE', 'CONFIRM', 'READY', 'STOP'].index(self.phase if self.stop is None else 'STOP')])
             if viol and self.abort is None:
@@ -547,6 +584,7 @@ class MovingGraspCtrl:
     def report(self):
         Rr = np.array(self.rec, float) if self.rec else np.zeros((1, 12))
         return dict(fuse=self.fuse, stop=self.stop, abort=self.abort, stop_effect=self.stop_ok, phases=self.ph_hist, ready_t_rel=None if self.ready_t is None else round(self.ready_t - self.t0, 3),
+                    fast_slip=self.fast,
                     contact_lock=None if self.lock is None else dict(t=self.lock['t'], phi_deg=round(math.degrees(self.lock['phi']), 4), est_ver=self.lock['est_ver']), lock_inconsistency_max=self.lock_incons_max, contact_stop=self.cstop,
                     accepted=self.accepted, accept_t_rel=None if self.accept_t is None else round(self.accept_t - self.t0, 3), n_ready_revoked=self.n_revoke, n_ready_ver=self.n_ready_ver,
                     min_clear={k: round(float(v), 4) for k, v in self.mins.items()}, limits={k: round(float(v), 4) for k, v in self.lim.items()}, events=self.events,
