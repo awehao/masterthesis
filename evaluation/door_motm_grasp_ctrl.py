@@ -35,6 +35,12 @@ r6（Codex 20261113_130916 §2）：
 r7（Codex 20261113_130916 §4）：deadline_ms（None＝r6）。拍首計時，提交候選時已超過 ⇒ 不提交（晚到不放行）；本拍「現在停」掃掠已通過
   （鎖定後即接觸停法的向前模擬：IK、命令限制、停穩、淨空）⇒ 以該停法停止（tick_deadline_miss），否則模擬中止。tick_log 分記正常拍與停止拍耗時。
   測試掛鉤：deadline_inject（強制本拍晚到）、fb_inject（使本拍備援視為未驗證）。
+r11：「現在停」淨空先派工、派工期間主程序算追蹤命令（投機計算，收到現在停結果後才用；不過即丟棄，q_ik_prev 只在通過後更新）；
+  接觸停法模擬的管線全零檢查改隨佇列維護旗標（同一布林）。命令與 r10 逐位元相同（假世界核對）。
+r10：_arm_track 的 IK 對（q1、q0）與重力偏置以「輸入位元組完全相同」為鍵快取（底盤預測位姿、目標位姿、種子；每拍清空）——
+  接觸停法向前模擬在底盤停下後反覆以同一輸入解 IK；命中時結果與重算逐位元相同（Isaac 冒煙 3：接觸段首拍 50.0 ms 觸發期限）。
+r9（Howard 20261113 13:49／Codex 20261113_141451）：前導接近——HOLD 段可位於窗口之前（未接觸、預抓保持，同一底盤律與監看），
+  INSERT 起才要求在窗口內；pool 可傳入外部共用的計算池（不由本控制器關閉）。
 r8（Codex 20261113_133147 §3）：close_gate（可呼叫，回 True 才准從 INSERT 進入 CLOSE）——下游首段未及時可用就不開始閉爪；
   INSERT 時間到而閘門未開 ⇒ close_gate_not_ready 受控停止（尚未接觸，用原停法）。None＝r7。
 r5：fastkin＝True 時 IK 改 FastChain（door_fast_kin.ik_closure_fc 同迭代，解差 4e-14 級）、重力改 FastGravity2（差 9e-15 N·m）；預設 False＝r4。"""
@@ -67,10 +73,13 @@ class MovingGraspCtrl:
         self.deadline_inject, self.fb_inject = None, None
         self.n_deadline_miss, self.tick_log, self._fb_ok = 0, [], False
         self.close_gate = None                                       # r8
-        self._pool = None
-        if int(pool) > 0:
+        self._ikc = {}                                               # r10：每拍清空
+        self._pool, self._pool_owned = None, False
+        if not isinstance(pool, (int, float)):                       # r9：外部共用計算池
+            self._pool = pool
+        elif int(pool) > 0:
             import door_sweep_pool as DSP
-            self._pool = DSP.SweepPool(int(pool))
+            self._pool, self._pool_owned = DSP.SweepPool(int(pool)), True
         self.pool_ms = []
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
@@ -167,12 +176,36 @@ class MovingGraspCtrl:
             vv = uf + min(jj + 1, NPH) / NPH * (ub - uf)
             cb, sb = math.cos(b[2]), math.sin(b[2])
             b = b + PHYS * np.array([cb * vv[0] - sb * vv[1], sb * vv[0] + cb * vv[1], vv[2]])
-        q1, r1 = self._ik(b, self.target(te), seed)
-        q0_, r0 = self._ik(qp[:3], self.target(te - DT), q1)
+        s1_, s0_ = self.s_of(te), self.s_of(te - DT)
+        key = (b.tobytes(), np.asarray(qp[:3], float).tobytes(), np.asarray(seed, float).tobytes(), s1_, s0_, self.handle_ref().tobytes())
+        hit = self._ikc.get(key)
+        if hit is None:
+            q1, r1 = self._ik(b, self.target(te), seed)
+            q0_, r0 = self._ik(qp[:3], self.target(te - DT), q1)
+            offv = self.off(np.r_[b, q1]) if not (max(r1, r0) > 1e-6 or float(np.abs(q1 - seed).max()) > 0.5) else None
+            hit = (q1, r1, q0_, r0, offv)
+            self._ikc[key] = hit
+        q1, r1, q0_, r0, offv = hit
         if max(r1, r0) > 1e-6 or float(np.abs(q1 - seed).max()) > 0.5:
             return None, max(r1, r0), None
-        S1 = q1 + self.tau * (q1 - q0_) / DT - self.off(np.r_[b, q1])
+        S1 = q1 + self.tau * (q1 - q0_) / DT - offv
         return (S1 - sp) / DT, max(r1, r0), q1
+
+    def _track(self, q, tr):
+        """r11：本拍追蹤命令（純計算，不改狀態）：底盤沿 d 以 v＋側向／偏航回授（加速度限），手臂以命令生效後一拍末的預測底盤解 IK。"""
+        qp, sp = self._pred(q)
+        yaw_err = (self.yaw_ref - qp[2] + math.pi) % (2 * math.pi) - math.pi
+        lat = float(np.cross(np.r_[self.d, 0.0], np.r_[qp[:2] - self.b_origin[:2], 0.0])[2])
+        nrm = np.array([-self.d[1], self.d[0]])
+        vw = self.v * self.d - 1.0 * lat * nrm
+        cth, sth = math.cos(qp[2]), math.sin(qp[2])
+        ub = np.array([cth * vw[0] + sth * vw[1], -sth * vw[0] + cth * vw[1], 1.5 * yaw_err])
+        ub = np.clip(ub, LIM.BODY_V_MIN, LIM.BODY_V_MAX)
+        ub = np.clip(ub, self.u_body_prev - LIM.A_BODY * DT, self.u_body_prev + LIM.A_BODY * DT)
+        te = tr + D_STEPS * PHYS + DT
+        seed = self.q_ik_prev if self.q_ik_prev is not None else qp[3:]
+        ua_, res_, q1 = self._arm_track(qp, sp, np.asarray(self.pipe[-1][:3], float).copy(), ub, te, seed)
+        return ub, ua_, res_, q1
 
     def _lim_bad(self, u, u_prev):
         bad = []
@@ -194,6 +227,8 @@ class MovingGraspCtrl:
         u_prev = u.copy()
         dab = B.A_BASE * self.cfg.dt
         out, k, quiet, k_dec, n_tick = [qp.copy()], 0, 0, None, 0
+        nzq = [bool(np.any(x[:3])) for x in pp]                      # r11：管線各筆底盤是否非零（與 pp 同步進出）
+        n_nz = sum(nzq)
         seed = self.q_ik_prev if self.q_ik_prev is not None else qp[3:]
         while quiet < XO.C21.SETTLE_STEPS and k < CSTOP['max_steps']:
             if j >= NPH:
@@ -217,10 +252,13 @@ class MovingGraspCtrl:
                 n_tick += 1
             cmd = XO.ramp_cmd(uf, u, j)
             pp.append(cmd)
+            nzc = bool(np.any(cmd[:3]))
+            nzq.append(nzc)
+            n_nz += int(nzc) - int(nzq.pop(0))
             qp, sp = S.plant_phys_step(qp, sp, pp.pop(0), self.cfg, 1)
             k += 1
             j += 1
-            settled = (not np.any(cmd[:3]) and not any(np.any(x[:3]) for x in pp) and float(np.abs(cmd[3:]).max()) <= CSTOP['arm_cmd'])
+            settled = (not nzc and n_nz == 0 and float(np.abs(cmd[3:]).max()) <= CSTOP['arm_cmd'])
             quiet = quiet + 1 if settled else 0
             if k % XO.C21.SAMPLE_EVERY == 0:
                 out.append(qp.copy())
@@ -268,7 +306,7 @@ class MovingGraspCtrl:
         return b_
 
     def close_pool(self):
-        if self._pool is not None:
+        if self._pool is not None and self._pool_owned:
             self._pool.close()
 
     def _stop_traj(self, q, u, e, j0, u_from):
@@ -279,11 +317,18 @@ class MovingGraspCtrl:
         return Q, None, k_dec
 
     def _sweep_pool(self, q, u, extras, j0, u_from, phi, exempt, tag):
+        sub = self._sweep_pool_submit(q, u, extras, j0, u_from, phi, exempt, tag)
+        if sub[0] == 'viol':
+            return sub[1]
+        return self._sweep_pool_finish(sub[1], sub[2], exempt, tag)
+
+    def _sweep_pool_submit(self, q, u, extras, j0, u_from, phi, exempt, tag):
+        """r11：準備（停止軌跡）＋派工。回 ('viol', 違反) 或 ('h', items, handle)。"""
         items, X, ends = [], [], {}
         for e in extras:
             Q, vtraj, k_dec = self._stop_traj(q, u, e, j0, u_from)
             if vtraj is not None:
-                return dict(tag=tag, extra=e, traj=vtraj, k_decel=k_dec)
+                return ('viol', dict(tag=tag, extra=e, traj=vtraj, k_decel=k_dec))
             if tag == 'stop_now' and e == 0:
                 self.stop_end_s = float((np.asarray(Q[-1][:2]) - self.b_origin[:2]) @ self.d)
             idx = list(range(0, len(Q), self.sweep_stride)) + [len(Q) - 1]
@@ -292,6 +337,9 @@ class MovingGraspCtrl:
                 X.append(np.r_[Q[i], phi])
         W.FINGER_Q = self.finger_q
         h = self._pool.submit(self.T_WH_model, W.FINGER_Q, W.PHI0, np.array(X), finger_bar_q=self.finger_q)
+        return ('h', items, h)
+
+    def _sweep_pool_finish(self, items, h, exempt, tag):
         res, why, tms = self._pool.collect(h, XO.POOL_TIMEOUT_S)
         self.pool_ms.append(tms)
         if res is None:
@@ -363,6 +411,7 @@ class MovingGraspCtrl:
         w_t = time.perf_counter()
         if tick:
             self._fb_ok = False
+            self._ikc = {}
             if self.t0 is None:
                 self.t0, self.b_origin, self.yaw_ref = self.t, q[:3].copy(), float(q[2])
                 self.G0 = self._gravity(q)
@@ -435,7 +484,7 @@ class MovingGraspCtrl:
             b_ = self._bad(c, exempt)
             if b_:
                 viol.append(('clearance', dict(bad=b_, at={k: round(float(v), 4) for k, v in c.items() if k != 'who'})))
-            if not (self.win[0] - 1e-9 <= sd <= self.win[1] + 1e-9):
+            if sd > self.win[1] + 1e-9 or (sd < self.win[0] - 1e-9 and self.phase != 'HOLD'):   # r9：HOLD（預抓保持、未接觸）可在窗口前（前導接近）
                 viol.append(('outside_window', dict(s_along=round(sd, 4), window=self.win)))
             ep, er, Tc = self._rel(q)
             Tg_now = self.T_at(self.handle_ref(), 0.0)
@@ -486,8 +535,21 @@ class MovingGraspCtrl:
                             self.ready_t = self.t                      # 首次 READY（接受等待上限由此起算，撤銷不重置）
             if self.phase in ('CLOSE', 'CONFIRM', 'READY'):
                 self.finger_q = max(FINGER_CLOSED, self.finger_q - (self.finger_open - FINGER_CLOSED) * DT / self.sched['close_s'])
-            # 現在停
-            if self.stop is None:
+            # 現在停（r11：有計算池時先派工，派工期間投機計算追蹤命令）
+            spec = None
+            if self.stop is None and self._pool is not None:
+                sn = self._sweep_pool_submit(q, self.u_last, (0,), self.ramp_j, self.u_from_base, phi_meas, exempt, 'stop_now')
+                if sn[0] == 'viol':
+                    self._stop('stop_now_violation', **sn[1])
+                else:
+                    spec = self._track(q, tr)
+                    sw0 = self._sweep_pool_finish(sn[1], sn[2], exempt, 'stop_now')
+                    if sw0 is not None:
+                        self._stop('stop_now_violation', **sw0)
+                        spec = None
+                    else:
+                        self._fb_ok = self.fb_inject is None or bool(self.fb_inject(self))
+            elif self.stop is None:
                 sw0 = self._sweep(q, self.u_last, (0,), self.ramp_j, self.u_from_base, phi_meas, exempt, 'stop_now')
                 if sw0 is not None:
                     self._stop('stop_now_violation', **sw0)
@@ -502,19 +564,7 @@ class MovingGraspCtrl:
             else:
                 self.ready_ver = None
             if self.stop is None:
-                qp, sp = self._pred(q)
-                yaw_err = (self.yaw_ref - qp[2] + math.pi) % (2 * math.pi) - math.pi
-                lat = float(np.cross(np.r_[self.d, 0.0], np.r_[qp[:2] - self.b_origin[:2], 0.0])[2])
-                nrm = np.array([-self.d[1], self.d[0]])
-                vw = self.v * self.d - 1.0 * lat * nrm
-                cth, sth = math.cos(qp[2]), math.sin(qp[2])
-                ub = np.array([cth * vw[0] + sth * vw[1], -sth * vw[0] + cth * vw[1], 1.5 * yaw_err])
-                ub = np.clip(ub, LIM.BODY_V_MIN, LIM.BODY_V_MAX)
-                ub = np.clip(ub, self.u_body_prev - LIM.A_BODY * DT, self.u_body_prev + LIM.A_BODY * DT)
-                # 預測底盤：管線清空後再以本拍命令（斜坡）走一拍
-                te = tr + D_STEPS * PHYS + DT
-                seed = self.q_ik_prev if self.q_ik_prev is not None else qp[3:]
-                ua_, res_, q1 = self._arm_track(qp, sp, np.asarray(self.pipe[-1][:3], float).copy(), ub, te, seed)
+                ub, ua_, res_, q1 = spec if spec is not None else self._track(q, tr)
                 if ua_ is None:
                     self._stop('ik_fail', resid=res_)
                 else:

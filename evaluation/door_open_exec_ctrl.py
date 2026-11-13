@@ -53,7 +53,8 @@ r12（P2 執行層整合，Codex 20261113_124213 §3）：extend_reference(Xd_ne
 r13（Codex 20261113_133147 §1）：新參考先暫存（stage_reference：非有限、版本不新、σ 已過、接縫不合 ⇒ 拒），接縫用執行層實際的 ref／dref 語意核
   （接縫兩側分段斜率之差／h 的本體加速度、輪速、手臂速率與加速度、設定點速率、門角速率與加速度，界限同 door_wbopt 驗收；以 g＝1 為最壞）。
   staged_step（每拍首、step 之前）：新參考最早會影響命令的那一拍（σ＋(D_STEPS·PHYS＋N·DT) ≥ σ_s）以複本試跑一拍——當下實測狀態、設定點、
-  真管線、拍內斜坡——候選命令、閉鏈手臂驗收、提交前停止掃掠、預測停止閉鏈 ≤ CL_TOL、期限備援都過才接上本體；否則拒接，舊段與其停止尾段不動。"""
+  真管線、拍內斜坡——候選命令、閉鏈手臂驗收、提交前停止掃掠、預測停止閉鏈 ≤ CL_TOL、期限備援都過才接上本體；否則拒接，舊段與其停止尾段不動。
+r14：g2['pool'] 可傳外部共用的計算池（執行器在啟動模擬器前 fork）；只關自己建立的池。"""
 import math
 import os
 import sys
@@ -146,10 +147,12 @@ class DoorOpenExec:
         self.g2.update(g2 or {})
         self._grav = DFK.FastGravity2(K, BM.arm_bodies(K)) if self.g2['gravity2'] else (DFK.FastGravity(K, BM.arm_bodies(K)) if self.g2['gravity'] else None)
         self._ccache = DFK.ClearCache(W.clear_door) if self.g2['sweep_cache'] else None
-        self._pool = None
-        if int(self.g2['pool']) > 0:
+        self._pool, self._pool_owned = None, False
+        if not isinstance(self.g2['pool'], (int, float)):            # r14：外部共用的計算池（執行器在啟動模擬器前 fork），本控制器不關它
+            self._pool = self.g2['pool']
+        elif int(self.g2['pool']) > 0:
             import door_sweep_pool as DSP
-            self._pool = DSP.SweepPool(int(self.g2['pool']))
+            self._pool, self._pool_owned = DSP.SweepPool(int(self.g2['pool'])), True
         self.Q_cl_prev_full = None
         self._sn = None
         self._sn_verified = False
@@ -403,7 +406,7 @@ class DoorOpenExec:
         return self._pool_eval(items, self._pool_submit(items), tag)
 
     def close_pool(self):
-        if self._pool is not None:
+        if self._pool is not None and self._pool_owned:
             self._pool.close()
 
     def extend_reference(self, Xd_new, sigma_s, final=False):
@@ -493,7 +496,7 @@ class DoorOpenExec:
             for k, v in saved.items():
                 setattr(self, k, v)
             self._pool, self.staged = pool, stg
-        tmp._pool = pool
+        tmp._pool, tmp._pool_owned = pool, False
         return tmp
 
     def staged_step(self, t, q, phi_meas):
@@ -545,7 +548,7 @@ class DoorOpenExec:
             tmp = copy.deepcopy(self)
         finally:
             self._pool = pool
-        tmp._pool = None
+        tmp._pool, tmp._pool_owned = None, False
         tmp.g2 = dict(tmp.g2, pool=0, deadline_ms=None)
         fq_save, phi0_save = W.FINGER_Q, W.PHI0
         t0 = time.perf_counter()

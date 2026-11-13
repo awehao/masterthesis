@@ -20,7 +20,18 @@ class _FB:
         self.T_WH_bind, self.finger_q = T, fq
 
 
+def _die_with_parent():
+    """父程序死亡（含段錯誤）時本程序收 SIGTERM（Linux prctl PR_SET_PDEATHSIG），避免孤兒程序佔住 Isaac 互斥檢查。"""
+    try:
+        import ctypes
+        import signal
+        ctypes.CDLL('libc.so.6', use_errno=True).prctl(1, signal.SIGTERM)
+    except Exception:                                                 # noqa: BLE001
+        pass
+
+
 def _worker(conn):
+    _die_with_parent()
     import door_wbopt as W
     import door_clear_door_fast as F
     import door_exit_ctrl as XE
