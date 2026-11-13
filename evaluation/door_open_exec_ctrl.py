@@ -49,7 +49,11 @@ r11（Codex 20261113_130916 §1）：期限備援的「已驗證」改為本拍�
   （每拍另算現在停預測）；不滿足 ⇒ 模擬中止，不先標 settled。測試掛鉤：fb_closure_inject（放大備援評估用的預測閉鏈偏差）、deadline_inject（強制本拍晚到）。
 r12（P2 執行層整合，Codex 20261113_124213 §3）：extend_reference(Xd_new, σ_s, final)——參考在 σ_s 起換成新段的密集參考（新段起點＝舊參考在 σ_s 的狀態
   與速度 ⇒ C1 連續、不跳參考）；σ_s 必須還沒到（σ ≤ σ_s）。p2_open＝True 時參考走到盡頭（段尾停穩）且門未到目標：不判 end_not_reached，
-  等延伸（靜止重啟由外部在實測停穩後提出）；等超過 P2_REST_WAIT_S ⇒ p2_no_extension 停止。final＝True（末段）後回到原 END 規則。"""
+  等延伸（靜止重啟由外部在實測停穩後提出）；等超過 P2_REST_WAIT_S ⇒ p2_no_extension 停止。final＝True（末段）後回到原 END 規則。
+r13（Codex 20261113_133147 §1）：新參考先暫存（stage_reference：非有限、版本不新、σ 已過、接縫不合 ⇒ 拒），接縫用執行層實際的 ref／dref 語意核
+  （接縫兩側分段斜率之差／h 的本體加速度、輪速、手臂速率與加速度、設定點速率、門角速率與加速度，界限同 door_wbopt 驗收；以 g＝1 為最壞）。
+  staged_step（每拍首、step 之前）：新參考最早會影響命令的那一拍（σ＋(D_STEPS·PHYS＋N·DT) ≥ σ_s）以複本試跑一拍——當下實測狀態、設定點、
+  真管線、拍內斜坡——候選命令、閉鏈手臂驗收、提交前停止掃掠、預測停止閉鏈 ≤ CL_TOL、期限備援都過才接上本體；否則拒接，舊段與其停止尾段不動。"""
 import math
 import os
 import sys
@@ -132,6 +136,7 @@ class DoorOpenExec:
         self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False, prep_fc=False, deadline_ms=None)
         self.n_deadline_miss = 0
         self.p2_open, self.p2_log = False, []                         # r12
+        self.staged, self._last_ver = None, 0                         # r13
         self._fb_ok, self._fb_info = False, None                      # r11：本拍期限備援是否可用＋依據
         self.fb_closure_inject, self.deadline_inject = None, None      # r11：測試掛鉤
         self.fb_log = []
@@ -416,6 +421,120 @@ class DoorOpenExec:
         self.p2_open = not final
         self.p2_log.append(dict(t=round(self.t, 3), ok=True, sigma=round(self.sigma, 3), sigma_s=round(sigma_s, 3), final=bool(final), splice_jump=jump, sig_end=round(self.sig_end, 3)))
         return True
+
+    def seam_check(self, Xd_new, sigma_s):
+        """r13：接縫在執行層 ref／dref 語意下的核對。回 dict(ok, failed, values)。"""
+        Xn = np.asarray(Xd_new, float)
+        out = dict(ok=False, failed=[], values={})
+        if not np.isfinite(Xn).all() or len(Xn) < 2:
+            out['failed'].append('nonfinite_or_short')
+            return out
+        i_s = int(round(sigma_s / self.h))
+        if abs(i_s * self.h - sigma_s) > 1e-9 or i_s < 1 or i_s > len(self.Xd) - 1:
+            out['failed'].append('off_grid_or_range')
+            return out
+        a, b, c = self.Xd[i_s - 1], self.Xd[i_s], Xn[1]
+        pj = float(np.abs(Xn[0] - b).max())
+        v1, v2 = (b - a) / self.h, (c - Xn[0]) / self.h
+        acc = (v2 - v1) / self.h
+        th = float(b[2])
+        Rt = np.array([[math.cos(th), math.sin(th)], [-math.sin(th), math.cos(th)]])
+        vb2 = np.r_[Rt @ v2[:2], v2[2]]
+        ab = np.abs(np.r_[Rt @ acc[:2], acc[2]])
+        wheel = float(np.abs(W.WM @ vb2).max())
+        sp = np.abs(v2[3:9] + W.TAU_SP * acc[3:9])
+        vals = dict(pos_jump=pj, body_acc=[round(float(x), 4) for x in ab], wheel=round(wheel, 4), arm_rate=round(float(np.abs(v2[3:9]).max()), 4), arm_acc=round(float(np.abs(acc[3:9]).max()), 4),
+                    setpoint_rate=round(float(sp.max()), 4), phi_rate=round(abs(float(v2[9])), 4), phi_acc=round(abs(float(acc[9])), 4))
+        f = []
+        if pj > 1e-6:
+            f.append('pos_jump')
+        if (ab > W.A_BODY + 1e-6).any():
+            f.append('body_acc')
+        if wheel > W.W_LIM + 1e-4:
+            f.append('wheel')
+        if float(np.abs(v2[3:9]).max()) > W.V_ARM + 1e-4:
+            f.append('arm_rate')
+        if float(np.abs(acc[3:9]).max()) > W.A_ARM + 1e-6:
+            f.append('arm_acc')
+        if float(sp.max()) > W.V_ARM + 1e-3:
+            f.append('setpoint_rate')
+        if abs(float(v2[9])) > W.PHI_RATE + 1e-4:
+            f.append('phi_rate')
+        if abs(float(acc[9])) > 5.0 + 1e-6:
+            f.append('phi_acc')
+        out.update(ok=not f, failed=f, values=vals)
+        return out
+
+    def stage_reference(self, Xd_new, sigma_s, final=False, ver=None):
+        """r13：暫存新參考（不動本體參考）。回 (ok, 原因／接縫)。"""
+        ver = self._last_ver + 1 if ver is None else int(ver)
+        if ver <= self._last_ver:
+            return False, dict(why='old_version', ver=ver, last=self._last_ver)
+        if sigma_s < self.sigma - 1e-9:
+            return False, dict(why='expired_seam', sigma=round(self.sigma, 3), sigma_s=round(sigma_s, 3))
+        sc = self.seam_check(Xd_new, sigma_s)
+        if not sc['ok']:
+            return False, dict(why='seam', seam=sc)
+        self.staged = dict(Xd=np.asarray(Xd_new, float).copy(), sigma_s=float(sigma_s), final=bool(final), ver=ver, seam=sc, t=round(self.t, 3))
+        self._last_ver = ver
+        return True, dict(seam=sc)
+
+    def _light_copy(self):
+        import copy
+        big = ('step_log', 'pipe_log', 'cmd_hist', 'events', 'rec', 'tick_ms', 'solve_ms', 'sweep_ms', 'pool_ms', 'prep_ms', 'p2_log', 'fb_log')
+        saved = {k: getattr(self, k) for k in big if hasattr(self, k)}
+        pool, stg = self._pool, self.staged
+        try:
+            for k in saved:
+                setattr(self, k, [])
+            self._pool, self.staged = None, None
+            tmp = copy.deepcopy(self)
+        finally:
+            for k, v in saved.items():
+                setattr(self, k, v)
+            self._pool, self.staged = pool, stg
+        tmp._pool = pool
+        return tmp
+
+    def staged_step(self, t, q, phi_meas):
+        """r13：每拍首（step 之前）呼叫。新參考最早影響命令的那一拍以複本試跑，全過才接上。回 None／'waiting'／決定紀錄。"""
+        st = self.staged
+        if st is None:
+            return None
+        if self.stop is not None or self.abort is not None:
+            self.staged = None
+            rec = dict(t=round(float(t), 3), ver=st['ver'], ok=False, why='exec_stopped')
+            self.p2_log.append(rec)
+            return rec
+        if self.sigma > st['sigma_s'] + 1e-9:
+            self.staged = None
+            rec = dict(t=round(float(t), 3), ver=st['ver'], ok=False, why='expired_before_influence', sigma=round(self.sigma, 3), sigma_s=round(st['sigma_s'], 3))
+            self.p2_log.append(rec)
+            return rec
+        reach = self.sigma + D_STEPS * PHYS + N * DT
+        if reach < st['sigma_s'] - 1e-9 and self.sigma < self.sig_end - 1e-9:
+            return 'waiting'
+        w0 = time.perf_counter()
+        tmp = self._light_copy()
+        tmp.mins = dict(tmp.mins, stop_closure_pos=0.0, stop_closure_rot=0.0)
+        okx = tmp.extend_reference(st['Xd'], st['sigma_s'], final=st['final'])
+        fq_save, phi0_save = W.FINGER_Q, W.PHI0
+        try:
+            if okx:
+                tmp.step(float(t), np.asarray(q, float).copy(), float(phi_meas))
+        finally:
+            W.FINGER_Q, W.PHI0 = fq_save, phi0_save
+        dry = dict(extend_ok=okx, stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail,
+                   stop_closure_pos_mm=round(tmp.mins['stop_closure_pos'] * 1e3, 3), stop_closure_rot_deg=round(tmp.mins['stop_closure_rot'], 3),
+                   fb_ok=bool(tmp._fb_ok) if tmp._pool is not None else None, wall_ms=round((time.perf_counter() - w0) * 1e3, 1))
+        valid = (okx and tmp.stop is None and tmp.abort is None and tmp._cl_fail is None and tmp.mins['stop_closure_pos'] <= CL_TOL['pos_m'] and tmp.mins['stop_closure_rot'] <= CL_TOL['rot_deg']
+                 and (tmp._pool is None or tmp._fb_ok))
+        self.staged = None
+        if valid:
+            self.extend_reference(st['Xd'], st['sigma_s'], final=st['final'])
+        rec = dict(t=round(float(t), 3), ver=st['ver'], ok=bool(valid), why=None if valid else 'dry_run_rejected', dry=dry, sigma=round(self.sigma, 3), sigma_s=round(st['sigma_s'], 3))
+        self.p2_log.append(rec)
+        return rec
 
     def warmup(self, q, phi_meas):
         """r10：交接前預熱（接近階段即可做，不在控制拍內）。複製一份控制器（不含計算池）以起始狀態空跑一拍，

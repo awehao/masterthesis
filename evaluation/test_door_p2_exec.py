@@ -3,7 +3,8 @@
 起點：綁定後靜止（ex4 plan_nominal 的起點；閉鏈一致）。首段＝冷啟規劃，計算時間 w0 進時間線（開門晚 w0 才開始；此起點已綁定靜止，等待期間不動）。
 續接：每 T_RE 秒（模擬時間）請求一次；σ_s＝目前 σ＋L（參考時間，取密集網格）；新段起點＝執行層目前參考在 σ_s 的點（閉鏈一致）與速度
   （底盤／門角中央差分、手臂取閉鏈一致解）⇒ 接上時 C1 連續、不跳參考。單一規劃程序；結果在 t_req＋wall（模擬時間）才可用。
-接管前核對：σ 還沒過 σ_s；實測構型對目前參考（底盤 ≤10 mm、偏航 ≤1°、量測門角 ≤1°，事前登錄）；不過 ⇒ 拒接（舊段走到段尾停穩）。
+接管前核對（r2，Codex 20261113_133147）：預檢偏航 ≤1°、量測門角 ≤1°（底盤偏差只記錄）⇒ 暫存（執行層 r13 stage_reference：接縫在 ref／dref 語意下核）；
+  每拍首 staged_step：新參考最早影響命令那一拍以複本試跑（當下實測、設定點、真管線、拍內斜坡），全過才接上；否則拒接（舊段走到段尾停穩）。
   不改寫、不投影實測構型。執行層提交的每個命令照樣走真管線停止掃掠（執行層本身）。
 靜止重啟：參考已到盡頭且門未到目標 ⇒ 實測停穩（END 速率門檻連續 10 拍）才請求；新段從舊參考終點（閉鏈一致）起算，接管前同樣核對實測對參考。
 案：ideal、plant（受控對象 a×0.8、底盤速度×0.95）、meas_bias（量測門角 +0.3°，受控對象不變）、timeout（第 3、4 次請求逾時）、deadline50（執行層 50 ms 期限）。
@@ -23,7 +24,7 @@ ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.j
 q0 = P['q_meas'].copy(); al = np.asarray(ident['alpha'], float)
 T_e, phb, T_HE, h = P['T_WH_bind'], float(P['phi_bind']), P['T_HE'], float(P['h'])
 GOAL, FQ = T.PHI_GOAL, T.FINGER_Q
-TAKE = dict(base_m=0.010, yaw_deg=1.0, door_deg=1.0)
+TAKE = dict(yaw_deg=1.0, door_deg=1.0)                               # r2：底盤偏差只記錄
 T_RE = P2.T_RE
 x0 = np.asarray(P['Xd'][0], float).copy()
 WB.set_model(phi0=phb, finger_q=FQ)
@@ -81,6 +82,13 @@ def hook(f):
         st['still'] = st['still'] + 1 if ok_still else 0
     if c.stop is not None or c.abort is not None:
         return
+    if c.n_step % 5 == 0 and c.staged is not None:                       # r13：每拍首（step 之前）決定暫存的新參考
+        phi_m = float(f.door()[0])
+        dec = c.staged_step(t, f.q.copy(), phi_m)
+        if isinstance(dec, dict):
+            log['decisions'] = log.get('decisions', []) + [dec]
+            if dec.get('ok'):
+                log['splices'].append(dict(ver=dec['ver'], t=round(t, 3), sigma_s=dec['sigma_s']))
     pend = st['pending']
     if pend is not None and t >= pend['t_avail'] - 1e-9:
         st['pending'] = None
@@ -92,14 +100,14 @@ def hook(f):
             rec['result'] = 'infeasible'
         elif c.sigma > pend['sigma_s'] + 1e-9 and not pend['rest']:
             rec['result'] = 'missed_deadline'
-        elif eb > TAKE['base_m'] or ey > TAKE['yaw_deg'] or ed > TAKE['door_deg']:
-            rec['result'] = 'takeover_rejected'
+        elif ey > TAKE['yaw_deg'] or ed > TAKE['door_deg']:
+            rec['result'] = 'precheck_rejected'
+        elif c.staged is not None:
+            rec['result'] = 'staged_busy'
         else:
-            sig_s = pend['sigma_s'] if not pend['rest'] else max(pend['sigma_s'], math.ceil(c.sigma / h - 1e-9) * h)
-            okx = c.extend_reference(pend['Xd'], sig_s, final=pend['final'])
-            rec['result'] = 'spliced' if okx else 'extend_refused'
-            if okx:
-                log['splices'].append(dict(k=rec['k'], t=round(t, 3), sigma_s=round(sig_s, 3), final=pend['final'], rest=pend['rest']))
+            okS, info = c.stage_reference(pend['Xd'], pend['sigma_s'], final=pend['final'], ver=rec['k'])
+            rec['result'] = 'staged' if okS else 'stage_rejected'
+            rec['stage'] = info if not okS else dict(seam=info['seam']['values'])
     if st['pending'] is None and t >= st['t_next'] - 1e-9 and c.p2_open:
         sig_s = math.ceil((c.sigma + L) / h - 1e-9) * h
         rest = sig_s >= c.sig_end - 1e-9
@@ -162,7 +170,8 @@ log['summary'] = dict(
               phi_end_meas_deg=round(math.degrees(float(S[-1, 1])), 3)),
     safety=dict(abort=c.abort, stop_ok=c.stop_ok, min_clear_actual=c.mins['act'], min_clear_stop_sweep=c.mins['stop'], closure_stats={k: v for k, v in c.cl_stats.items() if k != 'fails'},
                 after_stop_closure_pos_mm=round(F.after_stop['closure_pos'] * 1e3, 3), n_cmd_after_abort=F.n_cmd_after_abort),
-    continuity=dict(n_req=len(log['req']), results=res_count, n_splice=len(log['splices']), n_stall=n_st, stall_s=round(dur, 2), splices=log['splices'][-3:], p2_log_tail=c.p2_log[-3:]),
+    continuity=dict(n_req=len(log['req']), results=res_count, n_splice=len(log['splices']), n_stall=n_st, stall_s=round(dur, 2), splices=log['splices'][-3:],
+                    decisions=dict(n=len(log.get('decisions', [])), ok=sum(1 for d_ in log.get('decisions', []) if d_.get('ok')), rejected=[d_ for d_ in log.get('decisions', []) if not d_.get('ok')][:4])),
     deadline=dict(deadline_ms=g2['deadline_ms'], n_miss=c.n_deadline_miss, normal_ticks=dict(n=int(normal.size), p50=round(float(np.median(normal)), 1), p95=round(float(np.percentile(normal, 95)), 1), max=round(float(normal.max()), 1), n_over_50=int((normal > 50).sum())) if normal.size else None),
     phi_curve=[[round(float(a), 2), round(math.degrees(float(b)), 2)] for a, b in S[::20, :2]], wall_total_s=round(time.perf_counter() - t0w, 1))
 json.dump(log, open(OUT, 'w'), ensure_ascii=False, indent=1, default=float)
