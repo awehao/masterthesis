@@ -20,6 +20,9 @@
         含節點之間的中點。局部解：不稱全域最佳。QP 解出不代表原問題成立，以重核為準；任一項不過 ⇒ 回報不可行，不退回任何既有開門答案。
 r6（G1，Codex 20261113 時間帳裁定）：grad='analytic' 時淨空列改用解析梯度（door_clear_grad.margins_grad：最近對上的距離梯度×點位置 Jacobian、門角旋量項）；
         值與有限差分版完全相同，只換線性化（新線性化版本；預設 grad='fd' 與 r5 逐值相同）。非線性接受（殘差、merit、verify）不變。
+r7（Codex 20261113_120619 (a)）：init_corotate(T_ramp, v0_tau) 選項——起始速度 v0≠0 時，初猜的底盤再疊一段「起始速度指數衰減」的位移
+        v0·τ·(1−e^{−t/τ})（控制點 k 對應 t＝(k＋½)dt，與 r5 起始控制點同一語意），手臂投影回閉鏈。只是初猜：不改問題、不改驗收，
+        也不是控制器要走的停車過程（最佳化自由改動）。v0_tau＝None 與 r6 逐值相同。
 未含（照實）：設定點一階落後與 8 步在途命令（只在事後算所需設定點速率）；門的慣性、阻尼、回關；夾持力與摩擦；感測誤差。"""
 import math
 import os
@@ -170,7 +173,7 @@ class DoorWBOpt:
         self.log = []
         self.init = dict(kind='hold')
 
-    def init_corotate(self, T_ramp):
+    def init_corotate(self, T_ramp, v0_tau=None):
         """起始猜測（不是答案）：整台機器人跟著門繞鉸鏈剛體轉動——底盤位姿繞原點轉 −φ、手臂不動，閉鏈自動成立。
         φ 以 min-jerk 在 T_ramp 內由 0 到 φ_goal 之後保持。來源只有門機構（鉸鏈位置與轉向），不含任何既有開門軌跡。之後由最佳化自由改動。"""
         ph0 = float(self.x0[9])
@@ -182,6 +185,13 @@ class DoorWBOpt:
             self.X[k] = np.r_[c * b[0] - s_ * b[1], s_ * b[0] + c * b[1], b[2] - dphi, self.x0[3:9], ph0 + dphi]
         self.X[0] = self.c0
         self.init = dict(kind='corotate', T_ramp=T_ramp)
+        if v0_tau is not None and self.moving:
+            tau = float(v0_tau)
+            for k in range(1, self.N + 1):
+                tk = (k + 0.5) * self.dt
+                self.X[k, :3] += self.v0[:3] * tau * (1.0 - math.exp(-tk / tau))
+                self.X[k] = self.project(self.X[k], iters=30)
+            self.init = dict(kind='corotate_v0decay', T_ramp=T_ramp, v0_tau=tau)
 
     def closure_velocity(self, x, vbase, phidot=0.0):
         """r5：給底盤世界速度與門角速度，回閉鏈一致的手臂關節速度（J_arm·q̇＝J_φ·φ̇−J_base·ḃ；最小平方）。"""
