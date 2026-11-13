@@ -84,6 +84,7 @@ for k in range(n_total):
         up_sig = min(globals().get('up_sig', np.inf), WB.sigma_min(np.r_[q, phi_b]))
 assert (n_total - 1) % NPH == j0 or True
 phase_in_tick = (n_total) % NPH                                        # 交接時本拍已過的物理步數
+q_handover = q.copy()                                                 # 交接瞬間實測（下游會沿用 q 續跑）
 Tc_h = K.fk(q, 'link_tcp')
 up_err_mm = float(np.linalg.norm(Tc_h[:3, 3] - T_grasp[:3, 3])) * 1e3
 up_rate_max = float(np.abs(np.diff(Lu_tmp := np.array(log_up)[-60:, 10:16], axis=0)).max() / PHYS)
@@ -153,7 +154,7 @@ boundary = dict(arm_cmd_change_per_DT_max=round(float(dd_set.max()), 3), arm_cmd
                 note='索引 0＝交接後第一個物理步；設定點二階差反映手臂命令跳動')
 tw = Ld[:, 5:8]
 acc = float(np.abs(np.diff(tw, axis=0)).max() / PHYS)
-res = dict(j0=j0, v=v, mode=mode, phase_in_tick_at_handover=phase_in_tick, upstream=dict(tcp_err_at_handover_mm=round(up_err_mm, 4), setpoint_rate_max=round(up_rate_max, 4), clear_margin_min_mm=round(float(up_min) * 1e3, 2), sigma_min=round(float(up_sig), 4), base_at_handover=q[:3].round(4).tolist(), base_vs_bind_m=round(float(np.linalg.norm(q[:2] - q_b[:2])), 4)), boundary=boundary, proj_to_closure_rad=proj, v0=None if v0 is None else np.round(v0, 5).tolist(),
+res = dict(j0=j0, v=v, mode=mode, phase_in_tick_at_handover=phase_in_tick, upstream=dict(tcp_err_at_handover_mm=round(up_err_mm, 4), setpoint_rate_max=round(up_rate_max, 4), clear_margin_min_mm=round(float(up_min) * 1e3, 2), sigma_min=round(float(up_sig), 4), base_at_handover=q_handover[:3].round(4).tolist(), base_vs_bind_m=round(float(np.linalg.norm(q_handover[:2] - q_b[:2])), 4), base_end_of_run=q[:3].round(4).tolist()), boundary=boundary, proj_to_closure_rad=proj, v0=None if v0 is None else np.round(v0, 5).tolist(),
            plan=dict(why=info['why'], wall_s=info['wall_s'], feasible=ver['feasible'], failed=ver['failed'], start_state_err=ver['start_state_err'], start_vel=ver['start_vel'], body_acc_max=ver['body_acc_max']),
            continuity=dict(setpoint_step_max_rad=round(jumps['setpoint'], 6), setpoint_step_upstream_max=round(norm_set, 6), base_cmd_step_max=round(jumps['base_cmd'], 5), base_cmd_step_upstream_max=round(norm_base, 5), arm_cmd_step_max=round(jumps['arm_cmd'], 4)),
            startup=dict(radial_max_mm_0p5s=round(float(np.abs(Ld[Ld[:, 0] <= 0.5, 1]).max()) * 1e3, 3), height_max_mm_0p5s=round(float(np.abs(Ld[Ld[:, 0] <= 0.5, 2]).max()) * 1e3, 3), rot_max_deg_0p5s=round(float(Ld[Ld[:, 0] <= 0.5, 3].max()), 4),
