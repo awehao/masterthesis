@@ -32,10 +32,14 @@ r6（Codex 20261113_130916 §2）：
   對鎖定參考差 > FUSE 門檻 ⇒ contact_slip_suspect（接觸停法）。融合估計仍供規劃與一般監看；快速通道只拒絕、不改運動目標。
   訊號來源（照實）：門角＝step() 的 phi_meas（假世界＝受控對象真值；Isaac＝門鉸鏈關節讀值，是模擬量測，實機需另行估計）；
   把手影格＝est_fn（假世界＝真值＋偏差＋雜訊＋延遲＋遮擋；Isaac＝腕部相機偵測）；本控制器不使用接觸力訊號（指尖接觸由執行器另核）。
+r7（Codex 20261113_130916 §4）：deadline_ms（None＝r6）。拍首計時，提交候選時已超過 ⇒ 不提交（晚到不放行）；本拍「現在停」掃掠已通過
+  （鎖定後即接觸停法的向前模擬：IK、命令限制、停穩、淨空）⇒ 以該停法停止（tick_deadline_miss），否則模擬中止。tick_log 分記正常拍與停止拍耗時。
+  測試掛鉤：deadline_inject（強制本拍晚到）、fb_inject（使本拍備援視為未驗證）。
 r5：fastkin＝True 時 IK 改 FastChain（door_fast_kin.ik_closure_fc 同迭代，解差 4e-14 級）、重力改 FastGravity2（差 9e-15 N·m）；預設 False＝r4。"""
 import math
 import os
 import sys
+import time
 
 import numpy as np
 
@@ -55,8 +59,11 @@ READY_Q = dict(fresh_s=0.3, accept_max_s=0.5)                       # r2 事前�
 
 
 class MovingGraspCtrl:
-    def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None, pool=0, fastkin=False):
+    def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None, pool=0, fastkin=False, deadline_ms=None):
         self.fastkin = bool(fastkin)
+        self.deadline_ms = None if deadline_ms is None else float(deadline_ms)
+        self.deadline_inject, self.fb_inject = None, None
+        self.n_deadline_miss, self.tick_log, self._fb_ok = 0, [], False
         self._pool = None
         if int(pool) > 0:
             import door_sweep_pool as DSP
@@ -350,7 +357,9 @@ class MovingGraspCtrl:
         if self.abort is not None:
             return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), finger=self.finger_q, ready=False, stopped=True, abort=True)
         tick = self.n_step % NPH == 0
+        w_t = time.perf_counter()
         if tick:
+            self._fb_ok = False
             if self.t0 is None:
                 self.t0, self.b_origin, self.yaw_ref = self.t, q[:3].copy(), float(q[2])
                 self.G0 = self._gravity(q)
@@ -477,6 +486,8 @@ class MovingGraspCtrl:
                 sw0 = self._sweep(q, self.u_last, (0,), self.ramp_j, self.u_from_base, phi_meas, exempt, 'stop_now')
                 if sw0 is not None:
                     self._stop('stop_now_violation', **sw0)
+                else:
+                    self._fb_ok = self.fb_inject is None or bool(self.fb_inject(self))
             if self.stop is None and self.phase == 'READY' and self.stop_end_s is not None and self.stop_end_s > self.win[1] + 1e-9:
                 self._stop('window_insufficient', stop_end_s=round(self.stop_end_s, 4), window=self.win)   # r2：現在停會停到窗口外
             self.ready_now = bool(self.stop is None and self.phase == 'READY')
@@ -509,8 +520,17 @@ class MovingGraspCtrl:
                         self._stop('cmd_limit', bad=bad)
                     else:
                         sw = self._sweep(q, u, XE.STOP_EXTRAS, 0, np.asarray(self.pipe[-1][:3], float), phi_meas, exempt, 'candidate')
+                        late = self.deadline_ms is not None and ((time.perf_counter() - w_t) * 1e3 > self.deadline_ms or (self.deadline_inject is not None and self.deadline_inject(self)))
                         if sw is not None:
                             self._stop('candidate_stop_violation', **sw)
+                        elif late:                                     # r7：晚到候選不提交
+                            self.n_deadline_miss += 1
+                            el = round((time.perf_counter() - w_t) * 1e3, 1)
+                            if self._fb_ok:
+                                self._stop('tick_deadline_miss', elapsed_ms=el, contact=self.lock is not None)
+                            else:
+                                self._stop('tick_deadline_miss', elapsed_ms=el, contact=self.lock is not None)
+                                self._abort('tick_deadline_miss_unverified', elapsed_ms=el)
                         else:
                             self.u_last = u
             if self.stop is not None and self.lock is not None and self.abort is None:   # r4：接觸停法（底盤有界減速、手臂照追鎖定把手）
@@ -538,6 +558,7 @@ class MovingGraspCtrl:
             self.u_body_prev = self.u_last[:3].copy()
             self.cmd_log.append((round(self.t, 3), self.phase if self.stop is None else 'STOP', self.u_last.copy()))
             self.u_from_base, self.ramp_j = np.asarray(self.pipe[-1][:3], float).copy(), 0
+            self.tick_log.append((round(self.t, 3), round((time.perf_counter() - w_t) * 1e3, 3), self.stop is not None))
         cmd = XO.ramp_cmd(self.u_from_base, self.u_last, self.ramp_j)
         self.ramp_j += 1
         self.pipe.append(cmd)

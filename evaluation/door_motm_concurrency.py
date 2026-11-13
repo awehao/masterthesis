@@ -49,7 +49,9 @@ def ctrl_open(out):
     wu = c.warmup(q0, T.Fake(c, q0).door()[0]) if POOL else None   # r10 交接前預熱（部署組）
     T.Fake(c, q0).run(t_end=40.0)
     c.close_pool()
-    json.dump(dict(tick_ms=list(map(float, c.tick_ms)), done=c.done, stop=c.stop, n_deadline_miss=c.n_deadline_miss, warmup_ms=wu), open(out, 'w'), default=float)
+    st_t = None if c.stop is None else float(c.stop['t'])
+    tl = [(i * 0.05, float(m), bool(st_t is not None and i * 0.05 >= st_t - 1e-9)) for i, m in enumerate(c.tick_ms)]
+    json.dump(dict(tick_ms=list(map(float, c.tick_ms)), tick_log=tl, done=c.done, stop=c.stop, abort=c.abort, n_deadline_miss=c.n_deadline_miss, warmup_ms=wu), open(out, 'w'), default=float)
 
 
 def timed_class(cls, rec):
@@ -74,7 +76,8 @@ def ctrl_grasp(out):
     os.environ['FASTKIN'] = '1' if POOL else '0'                     # 池化組同時用抓持 r5 fastkin（命令差 ≤2e-13）
     sys.argv = ['test_door_motm_grasp_fake.py', 'nominal', '0.05', out.replace('.json', '_case.json')]
     runpy.run_path(os.path.join(HERE, 'test_door_motm_grasp_fake.py'), run_name='__main__')
-    json.dump(dict(tick_ms=rec), open(out, 'w'))
+    dd = json.load(open(out.replace('.json', '_case.json'))).get('deadline', {})
+    json.dump(dict(tick_ms=rec, tick_log=dd.get('tick_log'), stop=dd.get('stop'), abort=dd.get('abort'), n_deadline_miss=dd.get('n_miss')), open(out, 'w'), default=float)
 
 
 def ctrl_exit(out):
@@ -87,7 +90,7 @@ def ctrl_exit(out):
     L = np.load(RUN + '/log.npz')['rows']; Pp = np.load(RUN + '/plan.npz')
     R7 = L[L[:, 1] == 7]; qx = np.r_[R7[-1, 5:8], R7[-1, 8:14]]; phx = float(R7[-1, 2]); om = float((R7[-1, 2] - R7[-11, 2]) / 0.1)
     sx = np.load(RUN + '/open_steps.npz')['ctrl'][-1, 32:38]
-    xc = XE.DoorExitCtrl(ident, Pp['T_WH_bind'], float(Pp['phi_bind']), sx, [np.zeros(9)] * 8, np.zeros(9), np.zeros(9), al * (qx[3:] - sx), 0.0089, phx, om, np.zeros((1, 2)), qx[3:], scope_end='X2', pool=POOL)
+    xc = XE.DoorExitCtrl(ident, Pp['T_WH_bind'], float(Pp['phi_bind']), sx, [np.zeros(9)] * 8, np.zeros(9), np.zeros(9), al * (qx[3:] - sx), 0.0089, phx, om, np.zeros((1, 2)), qx[3:], scope_end='X2', pool=POOL, deadline_ms=DEADLINE)
     outs = []
     q = qx.copy()
     wu = xc.warmup(qx, phx) if POOL else None
@@ -99,7 +102,7 @@ def ctrl_exit(out):
         cs, sn = math.cos(q[2]), math.sin(q[2]); vx, vy, wz = o['base_twist']
         q[:3] += 0.01 * np.array([cs * vx - sn * vy, sn * vx + cs * vy, wz]); q[3:] += al * (o['arm_target'] - q[3:] + (qx[3:] - sx))
     xc.close_pool()
-    json.dump(dict(tick_ms=rec[1:] if POOL else rec, phase=xc.phase, stop=xc.stop, done=xc.done, sim_s=round(k * 0.01, 2), outs=outs, warmup_ms=wu), open(out, 'w'), default=float)
+    json.dump(dict(tick_ms=rec[1:] if POOL else rec, tick_log=xc.tick_log, phase=xc.phase, stop=xc.stop, abort=xc.abort, n_deadline_miss=xc.n_deadline_miss, done=xc.done, sim_s=round(k * 0.01, 2), outs=outs, warmup_ms=wu), open(out, 'w'), default=float)
 
 
 def bg_planner(out, stopf):
@@ -174,8 +177,10 @@ def drive(out):
             if r.returncode != 0:
                 res[cond][ctl] = dict(error=r.stderr.decode()[-800:]); continue
             d = json.load(open(f'{W}/{ctl}_{cond}.json'))
-            res[cond][ctl] = dict(tick_ms=stats(d['tick_ms']), **{k: d[k] for k in d if k not in ('tick_ms', 'outs')})
-            print(cond, ctl, res[cond][ctl]['tick_ms'], flush=True)
+            tl = d.get('tick_log') or []
+            res[cond][ctl] = dict(tick_ms=stats(d['tick_ms']), ticks_normal=stats([m for _, m, s_ in tl if not s_]), ticks_stop=stats([m for _, m, s_ in tl if s_]),
+                                  **{k: d[k] for k in d if k not in ('tick_ms', 'outs', 'tick_log')})
+            print(cond, ctl, 'normal', res[cond][ctl]['ticks_normal'], 'stop', (res[cond][ctl].get('stop') or {}).get('why'), 'abort', (res[cond][ctl].get('abort') or {}).get('why'), 'miss', res[cond][ctl].get('n_deadline_miss'), flush=True)
         if bgs:
             open(stopf, 'w').close()
             for b in bgs:

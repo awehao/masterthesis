@@ -120,6 +120,19 @@ s0 = qa + tau * qd - dq(q)
 pipe = [u_ss.copy() for _ in range(D_STEPS)]
 c = G.MovingGraspCtrl(ident, est_at, d_world, v, WIN, s0, pipe, u_ss, u_ss, dq(q), pool=int(os.environ.get('POOL', '0')), fastkin=os.environ.get('FASTKIN', '0') == '1')   # POOL：G3 平行掃掠工作程序數（0＝原式）；FASTKIN：r5 FastChain IK＋單趟重力
 rq_vers, rq_attempts, rq_stale_done = [], [], [False]
+# r7 期限：DEADLINE_MS（None＝不檢查）、DL_INJECT_T（控制器相對時刻 ≥ 此值的第一拍強制晚到）、FB_INVALID（同拍備援視為未驗證）
+if os.environ.get('DEADLINE_MS') not in (None, '', 'None', 'none'):
+    c.deadline_ms = float(os.environ['DEADLINE_MS'])
+if os.environ.get('DL_INJECT_T'):
+    _dl = dict(t=float(os.environ['DL_INJECT_T']), done=False)
+    def _inj(cc, _dl=_dl):
+        if not _dl['done'] and cc.t0 is not None and cc.t - cc.t0 >= _dl['t'] - 1e-9:
+            _dl['done'] = True
+            return True
+        return False
+    c.deadline_inject = _inj
+    if os.environ.get('FB_INVALID') == '1':
+        c.fb_inject = lambda cc, _dl=_dl: not (cc.t0 is not None and cc.t - cc.t0 >= _dl['t'] - 1e-9 and not _dl['done'])
 plant_s = s0.copy()
 t, rows = 0.0, []
 while t < 6.0:
@@ -186,6 +199,8 @@ res = dict(case=case, v=v, pert=pert, report={k: rep[k] for k in ('fuse', 'stop'
                          fast_slip=rep.get('fast_slip'), slip_t_rel=None if slip_t[0] is None else round(slip_t[0] - c.t0, 3),
                          slip_detect_latency_s=None if (slip_t[0] is None or rep['stop'] is None) else round(rep['stop']['t'] - slip_t[0], 3)))
 res['cmd_log'] = [[t_, ph_, *map(float, u_)] for t_, ph_, u_ in c.cmd_log]
+res['deadline'] = dict(deadline_ms=c.deadline_ms, n_miss=c.n_deadline_miss, tick_log=c.tick_log, stop=rep['stop'], abort=rep['abort'], stop_effect=rep['stop_effect'],
+                       tcp_vs_original_end_mm=round(float(A[-1, 2]) * 1e3, 3) if len(A) else None, n_cmd_after_abort=None)
 c.close_pool()
 json.dump(res, open(out_path, 'w'), ensure_ascii=False, indent=1, default=float)
 print(json.dumps({k: res[k] for k in ('case', 'v', 'ready', 'window', 'tracking_true')}, ensure_ascii=False, default=float)); print(json.dumps(res['report'], ensure_ascii=False, default=float)[:700])

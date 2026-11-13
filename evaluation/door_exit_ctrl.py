@@ -104,7 +104,10 @@ def trap_T(dist, v, a):
 
 
 class DoorExitCtrl:
-    def __init__(self, ident, T_WH_bind, phi_bind, s, pipe, u_last, u_prev, bias, finger_q, phi0, omega0, path_xy, q_stow, joint_kp=600.0, sweep_stride=3, scope_end=None, wait_enable=False, anchor_pred_bias=True, pool=0):
+    def __init__(self, ident, T_WH_bind, phi_bind, s, pipe, u_last, u_prev, bias, finger_q, phi0, omega0, path_xy, q_stow, joint_kp=600.0, sweep_stride=3, scope_end=None, wait_enable=False, anchor_pred_bias=True, pool=0, deadline_ms=None):
+        self.deadline_ms = None if deadline_ms is None else float(deadline_ms)   # r7（Codex 20261113_130916 §4）：期限；晚到候選不提交，本拍現在停已過 ⇒ 停止，否則中止
+        self.deadline_inject, self.fb_inject = None, None
+        self.n_deadline_miss, self.tick_log, self._fb_ok = 0, [], False
         self._pool = None                                            # r5（G3）：停止掃掠淨空分給預建工作程序；0＝r4
         if int(pool) > 0:
             import door_sweep_pool as DSP
@@ -442,6 +445,7 @@ class DoorExitCtrl:
         if self.abort is not None:                                   # 模擬中止：不再產生命令
             return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), stopped=True, done=False, abort=True)
         tick = self.n_step % NPH == 0
+        self._w_t = time.perf_counter()
         if tick and self.off0 is None:
             self._anchor(q, self.phi0, self.omega0)
         if tick:
@@ -526,10 +530,13 @@ class DoorExitCtrl:
                             cum = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
                             self.nav = dict(mode='turn', P=P, cum=cum, L=float(cum[-1]), t0=None)
             # 求解前「現在停」：目前命令、實際管線與斜坡相位
+            self._fb_ok = False
             if self.stop is None:
                 sw0 = self._sweep(q, self.u_last, (0,), self.ramp_j, self.u_from_base, 'stop_now')
                 if sw0 is not None:
                     self._stop('stop_now_violation', **sw0)
+                else:
+                    self._fb_ok = self.fb_inject is None or bool(self.fb_inject(self))
             # 命令
             if self.stop is None and self.phase == 'W':
                 self.u_last = np.zeros(9)
@@ -548,8 +555,15 @@ class DoorExitCtrl:
                         self._stop('cmd_limit', bad=bad)
                     else:
                         sw = self._sweep(q, u, STOP_EXTRAS, 0, self._ramp_end(), 'candidate')
+                        late = self.deadline_ms is not None and ((time.perf_counter() - self._w_t) * 1e3 > self.deadline_ms or (self.deadline_inject is not None and self.deadline_inject(self)))
                         if sw is not None:
                             self._stop('candidate_stop_violation', **sw)
+                        elif late:                                       # r7：晚到候選不提交
+                            self.n_deadline_miss += 1
+                            el = round((time.perf_counter() - self._w_t) * 1e3, 1)
+                            self._stop('tick_deadline_miss', elapsed_ms=el)
+                            if not self._fb_ok:
+                                self._abort('tick_deadline_miss_unverified', elapsed_ms=el)
                         else:
                             self.u_last = u
             if self.stop is not None:                                    # 受控停止：與預測同一停法（每拍有界減速：底盤 A_BASE、手臂 A_ARM），停止命令也過限制核對
@@ -564,6 +578,7 @@ class DoorExitCtrl:
             self.u_body_prev = self.u_last[:3].copy()
             self.cmd_log.append((round(self.t, 3), self.phase if self.stop is None else 'STOP:' + self.phase, self.u_last.copy()))
             self.u_from_base, self.ramp_j = self._ramp_end(), 0
+            self.tick_log.append((round(self.t, 3), round((time.perf_counter() - self._w_t) * 1e3, 3), self.stop is not None))
         cmd = XO.ramp_cmd(self.u_from_base, self.u_last, self.ramp_j)
         self.ramp_j += 1
         self.pipe.append(cmd)
@@ -580,7 +595,9 @@ class DoorExitCtrl:
             if self.still_n * PHYS >= STOP_STILL_S - 1e-9:
                 self.stop_ok = dict(t=round(self.t, 3), since_stop_s=round(self.t - self.stop_t, 3), still_s=STOP_STILL_S, ok=True)
         self.n_step += 1
-        return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), stopped=self.stop is not None, done=self.done, abort=self.abort is not None)
+        if self.abort is not None:                                   # r7：中止當步起不出命令（原本這一步仍回傳管線底盤命令）
+            return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), stopped=True, done=False, abort=True)
+        return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), stopped=self.stop is not None, done=self.done, abort=False)
 
     def report(self):
         Rr = np.array(self.rec, float) if self.rec else np.zeros((1, 10))
