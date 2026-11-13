@@ -57,6 +57,29 @@ class Seg:
 
 
 TERM = os.environ.get('P2_TERM', '0') == '1'                        # (i) 段終剩餘代價（Codex 20261113_124213）
+FINAL = os.environ.get('P2_FINAL', '0') == '1'                      # 末段模式（Codex 20261113_130916 §3）
+N_FINAL_MAX = 15                                                     # 事前登錄：整段公式估計的剩餘節點數 ≤15（約 6° 內）才嘗試到位候選（公式只當搜尋提示，接受與否看完整驗收）
+
+
+def plan_final(T_e, T_HE, x0, v0, goal, fq, phi_model, warm=None, t_s=None):
+    """到位候選：整段問題（原彈性終點列 φ_N＋s_T ≥ φ_goal、s_T 重罰），N＝整段公式提示。回 (o, info, verify, wall) 或 None（不符嘗試條件）。"""
+    b = x0[:3]
+    Tr = 1.875 * max(goal - x0[9], 0.0) * (float(np.hypot(b[0], b[1])) + WB.L_W) / (0.9 * WB.W_LIM)
+    N = int(math.ceil((Tr + 2.0) / DT))
+    if N > N_FINAL_MAX:
+        return None
+    WB.set_model(phi0=phi_model, finger_q=fq)
+    o = WB.DoorWBOpt(T_e, np.eye(4), x0, goal, N=N, dt=DT, T_HE=T_HE, project_start=False, v0=v0, grad='analytic', segment=False)
+    if warm is None:
+        o.init_corotate(max(Tr, 1.0), v0_tau=0.4 if np.any(v0) else None)
+    else:
+        for k in range(1, N + 1):
+            o.X[k] = o.project(warm.state(t_s + (k + 0.5) * DT)[0], iters=30)
+        o.init = dict(kind='warm_shift')
+    t0 = time.perf_counter()
+    info = o.solve(max_iter=MAX_ITER)
+    v = o.verify()
+    return o, info, v, time.perf_counter() - t0
 
 
 def term_nodes(x0, goal, N):
@@ -127,10 +150,11 @@ def run(rd, H, L, case, out):
     t_end = 25.0
     ph_jump_done = False
     n_good, t_done = 0, None
+    final_locked = False
     t = 0.0
     while t < t_end:
         # 發請求：規劃程序空閒且距上次請求 ≥ T_RE
-        if t >= t_free - 1e-9 and t - t_last_req >= T_RE - 1e-9:
+        if t >= t_free - 1e-9 and t - t_last_req >= T_RE - 1e-9 and not final_locked:
             k_req += 1
             t_req, t_s = t, t + L
             xs, vs = cur.state(t_s)
@@ -149,12 +173,32 @@ def run(rd, H, L, case, out):
                 xs = tmp.x0
                 vs = np.r_[vs[:3], tmp.closure_velocity(xs, vs[:3], vs[9]), vs[9]]
             on = None
-            try:
-                o2, i2, v2, w2 = plan_seg(T_e, T_HE, xs, vs, H, goal, fq, phm, warm=cur, t_s=t_s)
+            fin_try, w_fin = None, 0.0
+            if FINAL and not final_locked:
+                try:
+                    fin_try = plan_final(T_e, T_HE, xs, vs, goal, fq, phm, warm=cur, t_s=t_s)
+                except ValueError:
+                    fin_try = None
+                if fin_try is not None:
+                    w_fin = fin_try[3]
+                    log.setdefault('final_tries', []).append(dict(k=k_req + 1, t_s=round(t_s, 3), N=fin_try[0].N, wall_s=round(w_fin, 3), why=fin_try[1]['why'], feasible=fin_try[2]['feasible'], failed=fin_try[2]['failed'],
+                                                                  phi_end_deg=fin_try[2]['phi_end_deg'], phi_start_deg=round(math.degrees(xs[9]), 3)))
+            if final_locked:
+                w2, i2, v2 = 0.0, dict(why='final_locked', iters=0), dict(feasible=False, failed=['final_locked'])
+            elif fin_try is not None and fin_try[2]['feasible']:
+                o2, i2, v2, w2 = fin_try
                 on = (o2, i2, v2)
-            except ValueError as e:
-                w2, i2, v2 = 0.0, dict(why='start_invalid:' + str(e)[:80], iters=0), dict(feasible=False, failed=['start'])
+                w_fin = 0.0
+                is_final = True
+            else:
+                try:
+                    o2, i2, v2, w2 = plan_seg(T_e, T_HE, xs, vs, H, goal, fq, phm, warm=cur, t_s=t_s)
+                    on = (o2, i2, v2)
+                except ValueError as e:
+                    w2, i2, v2 = 0.0, dict(why='start_invalid:' + str(e)[:80], iters=0), dict(feasible=False, failed=['start'])
+            w2 += w_fin                                                # 同一規劃程序：嘗試過的到位候選時間也計入
             w2 *= ws
+            is_final = bool(on is not None and not on[0].segment)
             if k_req in C.get('timeout_req', ()):
                 w2 = 1e9                                             # 注入：求解逾時（結果永不在期限前可用）
             if k_req in C.get('fail_req', ()):
@@ -173,6 +217,9 @@ def run(rd, H, L, case, out):
                 log['switches'].append(dict(k=k_req, t_s=round(t_s, 3), jump_pos=round(float(np.abs(xn[:3] - xo[:3]).max()) * 1e3, 3), jump_phi_deg=round(math.degrees(abs(xn[9] - xo[9])), 4),
                                             jump_vel=round(float(np.abs(vn[[0, 1, 2, 9]] - vo[[0, 1, 2, 9]]).max()), 5), dphi_seg_deg=round(math.degrees(on[0].X[-1, 9] - xs[9]), 3)))
                 pend = (t_s, new, on[2]['min_clear_m'], on[2])
+                if is_final:
+                    final_locked = True                                  # 末段鎖定：之後不再替換，讓它走完停穩尾段
+                    log['final_accept'] = dict(k=k_req, t_s=round(t_s, 3), N=on[0].N, phi_end_deg=on[2]['phi_end_deg'], t_ref_end_s=round(t_s + (on[0].N + 1) * DT, 3))
             else:
                 pend = None
             rec['switched'] = pend is not None
@@ -209,7 +256,7 @@ def run(rd, H, L, case, out):
     t84 = next((float(P[i, 0]) for i in range(len(P)) if ph[i] >= goal - math.radians(0.5)), None)
     mc = {k: min(s_['min_clear'][k] for s_ in segs) for k in segs[0]['min_clear']}
     walls = [r['wall_s'] for r in log['req'] if isinstance(r['wall_s'], float)]
-    log['summary'] = dict(H=H, L=L, case=case, term=TERM, ref_len_s=round((int(round(H / DT)) + 1) * DT, 2), t_done_s=None if t_done is None else round(t_done, 2), t_phi_84p5_s=t84, t_end_s=round(float(P[-1, 0]), 2), phi_end_deg=round(math.degrees(ph[-1]), 3), n_req=len(log['req']), n_switch=len(log['switches']),
+    log['summary'] = dict(H=H, L=L, case=case, term=TERM, final_mode=FINAL, final_accept=log.get('final_accept'), n_final_tries=len(log.get('final_tries', [])), ref_len_s=round((int(round(H / DT)) + 1) * DT, 2), t_done_s=None if t_done is None else round(t_done, 2), t_phi_84p5_s=t84, t_end_s=round(float(P[-1, 0]), 2), phi_end_deg=round(math.degrees(ph[-1]), 3), n_req=len(log['req']), n_switch=len(log['switches']),
                           n_deadline_miss=sum(1 for r in log['req'] if not r['deadline_met']), n_infeasible=sum(1 for r in log['req'] if not r['feasible']),
                           wall_p50=round(float(np.median(walls)), 3) if walls else None, wall_max=round(float(max(walls)), 3) if walls else None,
                           n_stall=n_st, stall_s=round(dur, 2), min_clear_executed_segments=mc,
