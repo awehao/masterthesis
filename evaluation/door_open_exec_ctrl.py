@@ -43,7 +43,10 @@ r9（G3，Codex 20261113_120619）：g2['gravity2']＝重力改單趟串鏈後�
   逾時（POOL_TIMEOUT_S）、工作程序死亡／例外、結果缺漏、版本不符 ⇒ stop_sweep_unavailable／candidate_sweep_unavailable（不在 PATH_OK ⇒ 模擬中止），不當通過。
 r10（Codex 20261113_124213 §4）：g2['prep_fc']＝掃掠準備的 TCP FK 改 FastChain（與 K.fk 捨入級差）；g2['deadline_ms']＝控制期限（None＝不檢查＝r9）：
   每拍從拍首計時，到「提交候選」那一刻若已超過期限 ⇒ 候選不提交（晚到結果不放行）。本拍「現在停」已驗過 ⇒ 改走已驗證的有界減速停法
-  （stop_mode＝settled，等同現在停掃掠預測的停法；不是沿用上一命令）；本拍現在停沒驗到 ⇒ 模擬中止。池逾時 0.5 s 是資源失效判定，與此分開。"""
+  （stop_mode＝settled，等同現在停掃掠預測的停法；不是沿用上一命令）；本拍現在停沒驗到 ⇒ 模擬中止。池逾時 0.5 s 是資源失效判定，與此分開。
+r11（Codex 20261113_130916 §1）：期限備援的「已驗證」改為本拍現在停預測同時滿足——淨空門檻、每個取樣的預測閉鏈位置／姿態偏差 ≤ CL_TOL
+  （r3 起只計數不拒絕；備援要用就必須拒絕）、在步數上限內停穩（命令本身由有界減速構成、不超限）。路徑停止中晚到也要本拍重驗同樣條件
+  （每拍另算現在停預測）；不滿足 ⇒ 模擬中止，不先標 settled。測試掛鉤：fb_closure_inject（放大備援評估用的預測閉鏈偏差）、deadline_inject（強制本拍晚到）。"""
 import math
 import os
 import sys
@@ -124,6 +127,9 @@ class DoorOpenExec:
     def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2, arm_mode='qp', joint_kp=600.0, g2=None):
         self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False, prep_fc=False, deadline_ms=None)
         self.n_deadline_miss = 0
+        self._fb_ok, self._fb_info = False, None                      # r11：本拍期限備援是否可用＋依據
+        self.fb_closure_inject, self.deadline_inject = None, None      # r11：測試掛鉤
+        self.fb_log = []
         for k_ in (g2 or {}):
             if k_ not in self.g2:
                 raise ValueError(k_)
@@ -309,8 +315,10 @@ class DoorOpenExec:
         """依原順序：停止軌跡、取樣點、構型反算門角、預測閉鏈偏差；遇非有限即截斷（原式在此返回）。"""
         w0 = time.perf_counter()
         items = []
+        self._prep_settled = {}
         for e in extras:
             Q = stop_traj_ramp(q, self.s, self.pipe, u, self.u_from_base if u is self.u_last else self._ramp_end(), 0 if u is not self.u_last else self.ramp_j, self.cfg, e)
+            self._prep_settled[e] = bool((len(Q) - 1) * C21.SAMPLE_EVERY < 2000 - C21.SAMPLE_EVERY)   # r11：步數上限內停穩
             idx = list(range(0, len(Q), self.sweep_stride))
             if idx[-1] != len(Q) - 1:
                 idx.append(len(Q) - 1)
@@ -343,11 +351,20 @@ class DoorOpenExec:
             if res is None:
                 return None, why
         k = 0
+        fb = tag in ('stop_now', 'fallback')                           # r11：現在停同時評估期限備援
+        fb_ok, fb_cl = fb and all(self._prep_settled.values()), [0.0, 0.0]
         for (e, i, x, ep, er) in items:
             if x is None:
                 return dict(extra=e, i=i, tag=tag, nonfinite=True), None
             c = res[k]
             k += 1
+            if fb:
+                ep2, er2 = (ep, er) if self.fb_closure_inject is None else self.fb_closure_inject(self, ep, er)
+                fb_cl = [max(fb_cl[0], ep2), max(fb_cl[1], er2)]
+                if ep2 > CL_TOL['pos_m'] or er2 > CL_TOL['rot_deg'] or any(c[kk] < W.THR[kk] for kk in KEYS):
+                    fb_ok = False
+            if tag == 'fallback':
+                continue
             self.mins['stop_closure_pos'], self.mins['stop_closure_rot'] = max(self.mins['stop_closure_pos'], ep), max(self.mins['stop_closure_rot'], er)
             if ep > CL_TOL['pos_m'] or er > CL_TOL['rot_deg']:
                 self.n_emerg_closure += 1
@@ -360,6 +377,11 @@ class DoorOpenExec:
             bad = [kk for kk in KEYS if c[kk] < W.THR[kk]]
             if bad or not (-0.02 <= phi_i <= W.PHI_MAX + 0.02):
                 return dict(extra=e, i=i, tag=tag, door='bound', clear_bad=bad, phi_deg=round(math.degrees(phi_i), 2), at={kk: round(float(c[kk]), 4) for kk in KEYS}), None
+        if fb:
+            self._fb_ok = bool(fb_ok)
+            self._fb_info = dict(closure_pos_mm=round(fb_cl[0] * 1e3, 3), closure_rot_deg=round(fb_cl[1], 3), settled=all(self._prep_settled.values()), tag=tag)
+        if tag == 'fallback':
+            return None, None
         if self.sweep_inject is not None:
             inj = self.sweep_inject(self, tag)
             if inj is not None:
@@ -397,8 +419,9 @@ class DoorOpenExec:
         """r10：控制期限已過 ⇒ 不提交本拍候選。正常段：本拍現在停已驗過 ⇒ 有界減速停法（settled）；沒驗到 ⇒ 模擬中止。
         路徑停止中：上一拍提交的候選已含「下一拍起減速」的預測核對 ⇒ 直接轉有界減速。"""
         self.n_deadline_miss += 1
+        self.fb_log.append(dict(t=round(float(self.t), 3), tag=tag, fb_ok=self._fb_ok, fb=self._fb_info, elapsed_ms=round(elapsed_ms, 1)))
         if self.stop is None:
-            if self._sn_verified:
+            if self._sn_verified and self._fb_ok:
                 self.stop = dict(t=round(float(self.t), 3), why='tick_deadline_miss', sigma=round(self.sigma, 3), mode='settled', elapsed_ms=round(elapsed_ms, 1), tag=tag)
                 self.t_path_stop = self.t
                 self.stop_mode = 'settled'
@@ -406,8 +429,11 @@ class DoorOpenExec:
             else:
                 self._stop('tick_deadline_miss_unverified', elapsed_ms=round(elapsed_ms, 1), tag=tag)
         elif self.stop_mode == 'path':
-            self.stop_mode = 'settled'
-            self._ev('path_deadline_to_settled', elapsed_ms=round(elapsed_ms, 1), tag=tag)
+            if self._fb_ok:
+                self.stop_mode = 'settled'
+                self._ev('path_deadline_to_settled', elapsed_ms=round(elapsed_ms, 1), tag=tag, fb=self._fb_info)
+            else:
+                self._stop('path_deadline_miss_unverified', elapsed_ms=round(elapsed_ms, 1), tag=tag, fb=self._fb_info)
 
     # ---- 求解（同一個全身問題）
     def _solve(self, q, phi_meas):
@@ -614,6 +640,7 @@ class DoorOpenExec:
                 self._ccache.clear()                                   # 快取只在同一拍內有效
             self._sn = None                                            # r9：上一拍未收的派工作廢（遲到結果會因版本不符被丟棄）
             self._sn_verified = False                                  # r10：本拍現在停是否已驗過
+            self._fb_ok, self._fb_info = False, None                   # r11：本拍備援重驗
             if self.q_tick is not None:
                 self.rate = dict(base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / self.cfg.dt, yaw=abs(q[2] - self.q_tick[2]) / self.cfg.dt, arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / self.cfg.dt, door=abs(phi_meas - self.phi_tick) / self.cfg.dt)
             self.q_tick, self.phi_tick = q.copy(), float(phi_meas)
@@ -687,7 +714,7 @@ class DoorOpenExec:
                         self._stop('candidate_sweep_unavailable', pool_why=why_c)
                     elif b_ is not None:
                         self._stop('candidate_stop_violation', **b_)
-                if self.stop is None and self.g2['deadline_ms'] is not None and (time.perf_counter() - w_t) * 1e3 > self.g2['deadline_ms']:
+                if self.stop is None and self.g2['deadline_ms'] is not None and ((time.perf_counter() - w_t) * 1e3 > self.g2['deadline_ms'] or (self.deadline_inject is not None and self.deadline_inject(self))):
                     self._deadline_stop((time.perf_counter() - w_t) * 1e3, 'candidate')   # r10：晚到候選不提交
                 if self.stop is None:
                     self.u_last = u
@@ -702,7 +729,15 @@ class DoorOpenExec:
                     self._stop('path_stop_timeout')
                 else:
                     self._cl_fail = None
+                    hfb = None
+                    if self.g2['deadline_ms'] is not None and self._pool is not None:   # r11：路徑停止中每拍重驗備援（現在停預測），與求解並行
+                        itf = self._sweep_prep(q, self.u_last, (0,))
+                        hfb = (itf, self._pool_submit(itf))
                     u = self._solve(q, phi_meas)
+                    if hfb is not None:
+                        _, whyf = self._pool_eval(hfb[0], hfb[1], 'fallback')
+                        if whyf is not None:
+                            self._fb_ok = False
                     if u is None:
                         self._stop('closure_cmd_invalid', bad=self._cl_fail) if self._cl_fail else self._stop('solver_fail')
                     else:
@@ -714,7 +749,7 @@ class DoorOpenExec:
                             self._stop('path_candidate_sweep_unavailable', pool_why=why_p)
                         elif b_ is not None:
                             self._stop('path_candidate_rejected', **b_)
-                        elif self.g2['deadline_ms'] is not None and (time.perf_counter() - w_t) * 1e3 > self.g2['deadline_ms']:
+                        elif self.g2['deadline_ms'] is not None and ((time.perf_counter() - w_t) * 1e3 > self.g2['deadline_ms'] or (self.deadline_inject is not None and self.deadline_inject(self))):
                             self._deadline_stop((time.perf_counter() - w_t) * 1e3, 'path_candidate')   # 路徑停止中晚到：不提交，改已驗證的有界減速
                         else:
                             self.u_last = u
