@@ -25,6 +25,10 @@ r7（Codex 20261113_120619 (a)）：init_corotate(T_ramp, v0_tau) 選項——�
         也不是控制器要走的停車過程（最佳化自由改動）。v0_tau＝None 與 r6 逐值相同。
 r8（P2 第一包，Codex 20261113_120619）：segment＝True 為短段模式——不加「終點門角 ≥ φ_goal」列、merit 不計終點未達、verify 不以 phi_end_ok 判失敗
         （門角進展另報）。其餘問題與驗收不變；段尾因 B 樣條末端重複控制點而減速到靜止、全程閉鏈與各限制照樣核 ⇒ 每段自帶機構相容的停止。segment＝False 與 r7 相同。
+r9（P2 進展目標 (i)，Codex 20261113_124213）：term_nodes＝M（預設 0＝r8）。段終剩餘代價 M·w_φ·(φ_N−φ_goal)²：
+        整段規劃對每個節點都計 w_φ(φ_k−φ_goal)²；短段在節點 N 停住，若之後停在 φ_N，未來 M 個節點各計一次（近似設計：實際之後會繼續前進，
+        所以是上界型代理，不保證有限時間到位）。節點 N 在原本的和裡已計一次，M 只算之後的節點，不重複。M 由呼叫端以段起點狀態估計、每次求解固定。
+        QP（P、q）與 merit 用同一式。
 未含（照實）：設定點一階落後與 8 步在途命令（只在事後算所需設定點速率）；門的慣性、阻尼、回關；夾持力與摩擦；感測誤差。"""
 import math
 import os
@@ -142,7 +146,7 @@ def margins(x, T_WH0):
 
 
 class DoorWBOpt:
-    def __init__(self, T_WH0, T_WE0, x0, phi_goal, N=60, dt=0.2, mode='rigid', base_fixed=False, w=None, T_HE=None, project_start=True, v0=None, grad='fd', segment=False):
+    def __init__(self, T_WH0, T_WE0, x0, phi_goal, N=60, dt=0.2, mode='rigid', base_fixed=False, w=None, T_HE=None, project_start=True, v0=None, grad='fd', segment=False, term_nodes=0):
         """r3：T_HE 可明確傳入（綁定瞬間的實測抓持變換；之後規劃與重規劃都固定用它）；project_start=False 時起點不做牛頓投影，
         只核閉鏈殘差 <1e-6（否則丟 ValueError）——實測起點不得被改成另一個構型。T_WH0 是門角 PHI0（set_model）時的把手位姿。"""
         self.T_WH0 = np.asarray(T_WH0, float)
@@ -171,6 +175,7 @@ class DoorWBOpt:
         if grad not in ('fd', 'analytic'):
             raise ValueError(grad)
         self.segment = bool(segment)                               # r8：短段模式
+        self.term_nodes = float(term_nodes)                        # r9：段終剩餘代價的未來節點數 M（每次求解固定）
         self.grad = grad                                           # r6：淨空列線性化方式（'fd'＝r5 前向差分；'analytic'＝G1 解析梯度）
         self.act, self.keep = 0.025, 0.004                         # 淨空列：餘裕（距離−門檻）低於 act 才線性化；要求線性化後餘裕 ≥ keep
         self.log = []
@@ -256,7 +261,7 @@ class DoorWBOpt:
         d2 = (Xe[2:] - 2 * Xe[1:-1] + Xe[:-2]) * sc                 # k＝0…N；與 QP 同式
         half, mid = 0.5 * (HI - LO), 0.5 * (HI + LO)
         sig = np.array([sigma_min(x) for x in X[1:]])
-        J = (w['phi'] * float(((X[1:, 9] - self.phi_goal) ** 2).sum()) + w['v'] * float((d1 ** 2).sum()) + w['a'] * float((d2 ** 2).sum())
+        J = (w['phi'] * float(((X[1:, 9] - self.phi_goal) ** 2).sum()) + w['phi'] * self.term_nodes * float((X[-1, 9] - self.phi_goal) ** 2) + w['v'] * float((d1 ** 2).sum()) + w['a'] * float((d2 ** 2).sum())
              + w['lim'] * float((((X[1:, 3:9] - mid) / half) ** 2).sum()) - w['manip'] * float(np.log(np.maximum(sig, 1e-4)).sum()))
         viol = (0.0 if self.segment else max(0.0, self.phi_goal - X[-1, 9])) + float(np.maximum(min(SIG_FLOOR, sigma_min(self.x0)) - sig, 0).sum())
         dX = np.diff(X, axis=0) / dt
@@ -289,8 +294,9 @@ class DoorWBOpt:
         for k in range(1, N + 1):
             s = idx(k)
             i_phi = s.start + 9
-            P[i_phi, i_phi] += 2 * w['phi']
-            qv[i_phi] += 2 * w['phi'] * (X[k, 9] - self.phi_goal)
+            wk = w['phi'] * (1.0 + (self.term_nodes if k == N else 0.0))   # r9：節點 N 另加 M 倍（未來節點），與 merit 同式
+            P[i_phi, i_phi] += 2 * wk
+            qv[i_phi] += 2 * wk * (X[k, 9] - self.phi_goal)
             for j in range(6):                                     # 關節遠離限位（以中心為零點的正規化二次）
                 i = s.start + 3 + j
                 half = 0.5 * (HI[j] - LO[j])
@@ -473,7 +479,7 @@ class DoorWBOpt:
                 out.append((k, float(m0[c]), g))
         return out, worst
 
-    def solve(self, max_iter=80, verbose=False):
+    def solve(self, max_iter=80, verbose=False, tol_rel=1e-3):
         t0 = time.perf_counter()
         rho, ok, why = 1.0, False, 'max_iter'
         m_cur = self.merit(self.X)
@@ -515,7 +521,7 @@ class DoorWBOpt:
             self.log.append(dict(it=it, step=round(step, 4), merit=round(m_new[0], 4), J=round(m_new[1], 4), viol=round(m_new[2], 5), dec=round(dec, 5), worst_margin=round(worst, 4), phi_end_deg=round(math.degrees(self.X[-1, 9]), 2), n_col=len(col), rho=rho))
             if verbose:
                 print(self.log[-1], flush=True)
-            if dec < 1e-3 * max(1.0, abs(m_new[0])):
+            if dec < tol_rel * max(1.0, abs(m_new[0])):                # r9：tol_rel 可調（預設 1e-3＝原式；診斷用）
                 ok, why = True, 'converged'
                 break
         self.info = dict(init=self.init, ok=ok, why=why, iters=len(self.log), wall_s=round(time.perf_counter() - t0, 1))

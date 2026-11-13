@@ -56,10 +56,20 @@ class Seg:
         return t_abs - self.t0 >= self.T - 1e-9
 
 
+TERM = os.environ.get('P2_TERM', '0') == '1'                        # (i) 段終剩餘代價（Codex 20261113_124213）
+
+
+def term_nodes(x0, goal, N):
+    """M＝整段規劃節點數估計 N_full（同整段規劃的 N 公式：ceil((T_ramp＋2)/dt)，T_ramp 以段起點門角與底盤到鉸鏈距離算）減去本段 N；不小於 0。"""
+    b = x0[:3]
+    Tr = 1.875 * max(goal - x0[9], 0.0) * (float(np.hypot(b[0], b[1])) + WB.L_W) / (0.9 * WB.W_LIM)
+    return max(0, int(math.ceil((Tr + 2.0) / DT)) - N)
+
+
 def plan_seg(T_e, T_HE, x0, v0, H, goal, fq, phi_model, warm=None, t_s=None):
     WB.set_model(phi0=phi_model, finger_q=fq)
     N = int(round(H / DT))
-    o = WB.DoorWBOpt(T_e, np.eye(4), x0, goal, N=N, dt=DT, T_HE=T_HE, project_start=False, v0=v0, grad='analytic', segment=True)
+    o = WB.DoorWBOpt(T_e, np.eye(4), x0, goal, N=N, dt=DT, T_HE=T_HE, project_start=False, v0=v0, grad='analytic', segment=True, term_nodes=term_nodes(x0, goal, N) if TERM else 0)
     if warm is None:
         b = x0[:3]
         Tr = 1.875 * (goal - x0[9]) * (float(np.hypot(b[0], b[1])) + WB.L_W) / (0.9 * WB.W_LIM)
@@ -112,10 +122,11 @@ def run(rd, H, L, case, out):
     if not v['feasible']:
         json.dump(log, open(out, 'w'), ensure_ascii=False, indent=1, default=float); print('first infeasible'); return
     cur = Seg(o, 0.0)
-    segs = [dict(t0=0.0, min_clear=v['min_clear_m'])]
+    segs = [dict(t0=0.0, min_clear=v['min_clear_m'], v=v)]
     t_free, t_last_req, k_req = 0.0, -1e9, 0
     t_end = 25.0
     ph_jump_done = False
+    n_good, t_done = 0, None
     t = 0.0
     while t < t_end:
         # 發請求：規劃程序空閒且距上次請求 ≥ T_RE
@@ -161,7 +172,7 @@ def run(rd, H, L, case, out):
                 xn, vn = new.state(t_s)
                 log['switches'].append(dict(k=k_req, t_s=round(t_s, 3), jump_pos=round(float(np.abs(xn[:3] - xo[:3]).max()) * 1e3, 3), jump_phi_deg=round(math.degrees(abs(xn[9] - xo[9])), 4),
                                             jump_vel=round(float(np.abs(vn[[0, 1, 2, 9]] - vo[[0, 1, 2, 9]]).max()), 5), dphi_seg_deg=round(math.degrees(on[0].X[-1, 9] - xs[9]), 3)))
-                pend = (t_s, new, on[2]['min_clear_m'])
+                pend = (t_s, new, on[2]['min_clear_m'], on[2])
             else:
                 pend = None
             rec['switched'] = pend is not None
@@ -173,13 +184,17 @@ def run(rd, H, L, case, out):
                 samples_until(log, cur, t, pend[0])
                 t = pend[0]
                 cur = pend[1]
-                segs.append(dict(t0=round(t, 3), min_clear=pend[2]))
+                segs.append(dict(t0=round(t, 3), min_clear=pend[2], v=pend[3]))
                 continue
         nt = t + 0.05
         samples_until(log, cur, t, nt)
         t = nt
-        xr, _ = cur.state(t)
-        if xr[9] >= goal - math.radians(0.5) and cur.at_rest(t):
+        xr, vr = cur.state(t)
+        # 完成判準＝開門執行層 END（門角 ≥ 目標−0.5°、手臂／底盤／偏航／門角速度低於門檻、連續 10 拍）；在參考上判
+        good = xr[9] >= goal - math.radians(0.5) and float(np.abs(vr[3:9]).max()) <= 0.02 and float(np.hypot(vr[0], vr[1])) <= 0.005 and abs(vr[2]) <= 0.01 and abs(vr[9]) <= 0.01
+        n_good = n_good + 1 if good else 0
+        if n_good >= 10 and t_done is None:
+            t_done = t
             break
     P = np.array(log.pop('samples'))
     ph = P[:, 1]
@@ -194,10 +209,15 @@ def run(rd, H, L, case, out):
     t84 = next((float(P[i, 0]) for i in range(len(P)) if ph[i] >= goal - math.radians(0.5)), None)
     mc = {k: min(s_['min_clear'][k] for s_ in segs) for k in segs[0]['min_clear']}
     walls = [r['wall_s'] for r in log['req'] if isinstance(r['wall_s'], float)]
-    log['summary'] = dict(H=H, L=L, case=case, t_phi_84p5_s=t84, t_end_s=round(float(P[-1, 0]), 2), phi_end_deg=round(math.degrees(ph[-1]), 3), n_req=len(log['req']), n_switch=len(log['switches']),
+    log['summary'] = dict(H=H, L=L, case=case, term=TERM, ref_len_s=round((int(round(H / DT)) + 1) * DT, 2), t_done_s=None if t_done is None else round(t_done, 2), t_phi_84p5_s=t84, t_end_s=round(float(P[-1, 0]), 2), phi_end_deg=round(math.degrees(ph[-1]), 3), n_req=len(log['req']), n_switch=len(log['switches']),
                           n_deadline_miss=sum(1 for r in log['req'] if not r['deadline_met']), n_infeasible=sum(1 for r in log['req'] if not r['feasible']),
                           wall_p50=round(float(np.median(walls)), 3) if walls else None, wall_max=round(float(max(walls)), 3) if walls else None,
                           n_stall=n_st, stall_s=round(dur, 2), min_clear_executed_segments=mc,
+                          margins_executed_segments=dict(wheel_max=max(s_['v']['wheel_max'] for s_ in segs), wheel_lim=round(WB.W_LIM, 4),
+                                                         body_acc_max=[max(s_['v']['body_acc_max'][i] for s_ in segs) for i in range(3)], body_acc_lim=WB.A_BODY.tolist(),
+                                                         setpoint_rate_max=max(s_['v']['setpoint_rate_needed_max'] for s_ in segs), setpoint_rate_lim=WB.V_ARM,
+                                                         sigma_min=min(s_['v']['sigma_min'] for s_ in segs), joint_margin_min=min(s_['v']['joint_margin_min_rad'] for s_ in segs),
+                                                         phi_rate_max=max(s_['v']['phi_rate_max'] for s_ in segs), phi_rate_lim=WB.PHI_RATE),
                           jump_pos_mm_max=max((s_['jump_pos'] for s_ in log['switches']), default=None), jump_vel_max=max((s_['jump_vel'] for s_ in log['switches']), default=None),
                           phi_curve=[[round(float(a), 2), round(math.degrees(float(b)), 2)] for a, b in P[::10, :2]])
     json.dump(log, open(out, 'w'), ensure_ascii=False, indent=1, default=float)
