@@ -12,7 +12,10 @@ r2（READY 可撤銷；Codex 20261113_120619）：環境變數 RQ_CASE 選 READY
   r_jump4／r_jump8  READY 後擷取的影格把手估計平移 4／8 mm（門檻 5 mm：前者被融合、後者被拒），0.2／0.4 s 後請求接受
   r_speed    READY 後底盤實際速度 ×1.3（命令不變），0.3 s 後請求接受
   r_occl     READY 起遮擋 1.0 s，0.4 s 後請求接受
-  請求接受＝每拍呼叫 accept_handover(當拍 ready_ver)，直到成功或停止；成功即交接（結束）。"""
+  請求接受＝每拍呼叫 accept_handover(當拍 ready_ver)，直到成功或停止；成功即交接（結束）。
+r4（閉爪後；Codex 20261113_124213）：c_drift4  鎖定（閉爪開始）後 0.1 s 起擷取的影格估計平移 4 mm（門檻內），READY 後 0.2 s 請求接受
+                                     c_ramp8   鎖定起 1.0 s 內估計線性漂到 8 mm（之後保持），READY 後 0.2 s 請求接受
+  另記閉爪開始後真值相對位移最大值（含停止期間）。"""
 import json, math, os, sys
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
@@ -45,7 +48,7 @@ bias_dir = rng.normal(size=3); bias_dir /= np.linalg.norm(bias_dir)
 frames = []                                                          # (擷取時刻, 估計)
 RQ = os.environ.get('RQ_CASE')
 RQP = dict(r_nominal=dict(acc=0.0), r_stalever=dict(acc=0.1, stale=True), r_delay=dict(acc=None), r_jump4=dict(acc=0.2, jump=4.0), r_jump8=dict(acc=0.4, jump=8.0),
-           r_speed=dict(acc=0.3, vs=1.3), r_occl=dict(acc=0.4, occl=1.0)).get(RQ) if RQ else None
+           r_speed=dict(acc=0.3, vs=1.3), r_occl=dict(acc=0.4, occl=1.0), c_drift4=dict(acc=0.2, cjump=4.0), c_ramp8=dict(acc=0.2, cramp=8.0)).get(RQ) if RQ else None
 t_ready_abs = [None]                                                 # 首次 READY 的絕對時刻（受控對象端；擾動在此之後生效）
 jump_dir = np.array([0.0, 1.0, 0.0])
 
@@ -64,6 +67,11 @@ def est_at(t):
         T[:3, 3] += bias_dir * pert['bias_mm'] * 1e-3 + rng.normal(scale=pert['jit_mm'] * 1e-3, size=3)
         if post and RQP.get('jump'):
             T[:3, 3] += jump_dir * RQP['jump'] * 1e-3
+        lk = getattr(c, 'lock', None) if 'c' in globals() else None
+        if RQP is not None and lk is not None and RQP.get('cjump') and tn >= lk['t'] + 0.1 - 1e-9:
+            T[:3, 3] += jump_dir * RQP['cjump'] * 1e-3
+        if RQP is not None and lk is not None and RQP.get('cramp') and tn >= lk['t'] - 1e-9:
+            T[:3, 3] += jump_dir * RQP['cramp'] * 1e-3 * min(1.0, (tn - lk['t']) / 1.0)
         ang = rng.normal(scale=math.radians(pert['jit_deg']), size=3)
         th = np.linalg.norm(ang)
         if th > 0:
@@ -163,7 +171,9 @@ res = dict(case=case, v=v, pert=pert, report={k: rep[k] for k in ('fuse', 'stop'
            ready=rep['ready_t_rel'] is not None,
            ready_r2=dict(rq_case=RQ, accepted=rep.get('accepted'), accept_t_rel=rep.get('accept_t_rel'), n_ready_revoked=rep.get('n_ready_revoked'), attempts=rq_attempts,
                          revocations=[e for e in rep['events'] if e['what'] in ('ready_revoked', 'accept_refused', 'accept_handover')], stop=rep['stop'], stop_effect=rep['stop_effect'],
-                         true_rel_at_end_mm=round(float(A[-1, 2]) * 1e3, 3) if len(A) else None))
+                         true_rel_at_end_mm=round(float(A[-1, 2]) * 1e3, 3) if len(A) else None,
+                         true_rel_max_after_close_mm=round(float(A[mask(('CLOSE', 'CONFIRM', 'READY', 'STOP')), 2].max()) * 1e3, 3) if mask(('CLOSE', 'CONFIRM', 'READY', 'STOP')).any() else None,
+                         contact_lock=rep.get('contact_lock'), lock_inconsistency_max=rep.get('lock_inconsistency_max'), contact_stop=rep.get('contact_stop')))
 res['cmd_log'] = [[t_, ph_, *map(float, u_)] for t_, ph_, u_ in c.cmd_log]
 c.close_pool()
 json.dump(res, open(out_path, 'w'), ensure_ascii=False, indent=1, default=float)

@@ -17,7 +17,14 @@ r2（Codex 20261113_120619：READY 是可撤銷的當下資格，不是永久相
   accept_max_s 內未被接受 ⇒ 受控停止。CONFIRM 也要求估計新鮮。窗口邊界檢查在 READY 中照常（r1 對 READY 豁免，已移除）。
   每個合格拍給一個 ready_ver；accept_handover(ver) 只接受「當拍」版本，舊版本拒絕。READY 只代表模型內的放行條件，不代表實際雙指接觸或移動綁定已驗證。
 r3（G3）：pool＝工作程序數（0＝r2）：停止掃掠的淨空與兩指—橫桿距離分給預建工作程序（同函式、同樣本、原順序判定）；逾時／程序失敗／缺結果 ⇒ 模擬中止。
-  中止那一步起不再出命令（r2 的最後回傳把 abort 固定為 False，中止要到下一步才生效；已改）。"""
+  中止那一步起不再出命令（r2 的最後回傳把 abort 固定為 False，中止要到下一步才生效；已改）。
+r4（Codex 20261113_124213 §1）：閉爪開始鎖定有時間戳的接觸任務參考 lock＝(T_est, φ_meas, t, est_ver)——不是鎖關節、也不是鎖夾爪相對底盤；
+  之後手臂目標＝T_at(Rz[−(φ_meas−φ_lock)]·T_lock, s)（門動就按機構更新），底盤照走、手臂依生效時刻的預測底盤補償；新影像只做一致性監看
+  （機構校正後的融合估計對鎖定參考差 > FUSE 門檻 ⇒ contact_ref_inconsistent 停止），不灌進接觸中的運動目標。READY 的相對判準改對鎖定參考。
+  閉爪開始≠抓持成立（接觸、開度、相對運動放行照舊另核）。
+  接觸後停止（CLOSE／CONFIRM／READY）改「接觸停法」：底盤命令照原本每拍有界減速，手臂每拍仍以預測底盤解 IK 追鎖定把手（s＝0）——不是底盤、手臂各自減速；
+  停止掃掠在接觸段用同一停法向前模擬（每拍 IK、命令限制、淨空），驗不過（IK 失敗、限制、未停穩）⇒ 違反；實際停止中命令驗不過 ⇒ 模擬中止。不自動張爪、不解綁。
+  接觸停法停穩判準：底盤命令與管線為零、手臂命令 ≤ CSTOP.arm_cmd、各速率低於門檻連續 0.3 s。"""
 import math
 import os
 import sys
@@ -34,6 +41,7 @@ SCHED = dict(hold_s=0.3, ins_s=1.0, close_s=0.5, confirm_s=0.3)
 CONFIRM = dict(pos_m=0.005, rot_deg=3.0, lin_mps=0.005, ang_rps=0.02)
 FUSE = dict(win_s=1.0, gate_m=0.005, gate_deg=3.0, min_frames=5)     # 把手估計融合：近 win_s 影格的穩健平均（把手在世界靜止）；離群門檻
 FINGER_CLOSED = 0.0017
+CSTOP = dict(arm_cmd=0.005, max_steps=2000)                         # r4 事前登錄：接觸停法停穩的手臂命令上限（rad/s）、預測步數上限
 READY_Q = dict(fresh_s=0.3, accept_max_s=0.5)                       # r2 事前登錄：估計新鮮度上限（30 Hz、延遲 0.1 s 下約 0.13 s）、首次 READY 後等待下游接受的上限
 
 
@@ -78,6 +86,8 @@ class MovingGraspCtrl:
         self.confirm_n, self.ready_t = 0, None
         self.ready_now, self.ready_ver, self.n_ready_ver, self.accepted, self.accept_t = False, None, 0, False, None
         self.n_revoke, self.stop_end_s, self.est_age = 0, None, None
+        self.lock, self.phi_now, self.lock_incons_max = None, None, dict(pos_mm=0.0, deg=0.0)
+        self.cstop = dict(used=False, n_ticks=0)
         self.rec, self.events, self.cmd_log = [], [], []
         self.mins = {k: np.inf for k in KEYS}
         self.mins.update(finger_bar=np.inf, stop_sweep=np.inf)
@@ -111,8 +121,84 @@ class MovingGraspCtrl:
         a, _ = XE.minjerk((t_rel - h) / i)
         return self.S_PRE * (1.0 - a)
 
+    def handle_ref(self, phi=None):
+        """r4：鎖定前＝融合估計；鎖定後＝鎖定參考按門角機構更新（鉸鏈在世界原點，同 door_wbopt.handle_pose）。"""
+        if self.lock is None:
+            return self.T_est
+        ph = self.phi_now if phi is None else phi
+        return W.Rz4(-(float(ph) - self.lock['phi'])) @ self.lock['T']
+
     def target(self, t_rel):
-        return self.T_at(self.T_est, self.s_of(t_rel))
+        return self.T_at(self.handle_ref(), self.s_of(t_rel))
+
+    def _arm_track(self, qp, sp, uf, ub, te, seed):
+        """命令生效後一拍末的預測底盤（qp 起、本拍底盤命令斜坡）解 IK → 設定點 → 手臂命令。回 (u_arm 或 None, 殘差, q1)。"""
+        b = np.asarray(qp[:3], float).copy()
+        uf = np.asarray(uf, float)
+        for jj in range(NPH):
+            vv = uf + min(jj + 1, NPH) / NPH * (ub - uf)
+            cb, sb = math.cos(b[2]), math.sin(b[2])
+            b = b + PHYS * np.array([cb * vv[0] - sb * vv[1], sb * vv[0] + cb * vv[1], vv[2]])
+        q1, r1 = self._ik(b, self.target(te), seed)
+        q0_, r0 = self._ik(qp[:3], self.target(te - DT), q1)
+        if max(r1, r0) > 1e-6 or float(np.abs(q1 - seed).max()) > 0.5:
+            return None, max(r1, r0), None
+        S1 = q1 + self.tau * (q1 - q0_) / DT - self.off(np.r_[b, q1])
+        return (S1 - sp) / DT, max(r1, r0), q1
+
+    def _lim_bad(self, u, u_prev):
+        bad = []
+        if float(np.abs(u[3:]).max()) > self.va + 1e-9:
+            bad.append('arm_rate')
+        if float(np.abs(u[3:] - u_prev[3:]).max()) / DT > C0.A_ARM + 1e-9:
+            bad.append('arm_acc')
+        if float(np.abs(LIM.WM @ u[:3]).max()) > LIM.W_LIM + 1e-9:
+            bad.append('wheel_v')
+        if float(np.abs(LIM.WM @ (u[:3] - u_prev[:3])).max()) / DT > LIM.WA_LIM + 1e-9:
+            bad.append('wheel_a')
+        return bad
+
+    def _contact_stop_traj(self, q, u0, extra, tr, j0, u_from):
+        """r4：接觸停法的向前模擬（真管線、拍內斜坡、每拍：底盤有界減速、手臂以預測底盤 IK 追鎖定把手）。回 (Q 取樣, 違反或 None, 減速起點)。"""
+        qp, sp = np.asarray(q, float).copy(), self.s.copy()
+        pp = [np.asarray(x, float).copy() for x in self.pipe]
+        u, uf, j = np.asarray(u0, float).copy(), np.asarray(u_from, float).copy(), int(j0)
+        u_prev = u.copy()
+        dab = B.A_BASE * self.cfg.dt
+        out, k, quiet, k_dec, n_tick = [qp.copy()], 0, 0, None, 0
+        seed = self.q_ik_prev if self.q_ik_prev is not None else qp[3:]
+        while quiet < XO.C21.SETTLE_STEPS and k < CSTOP['max_steps']:
+            if j >= NPH:
+                uf, j = XO.ramp_cmd(uf, u, NPH - 1)[:3], 0
+                if k >= extra * NPH:
+                    if k_dec is None:
+                        k_dec = k
+                    ub = u[:3] + np.clip(-u[:3], -dab, dab)
+                    q2, s2 = qp.copy(), sp.copy()
+                    for x in pp:
+                        q2, s2 = S.plant_phys_step(q2, s2, x, self.cfg, 1)
+                    te = tr + k * PHYS + D_STEPS * PHYS + DT
+                    ua, res, q1 = self._arm_track(q2, s2, pp[-1][:3], ub, te, seed)
+                    if ua is None:
+                        return np.array(out), dict(what='contact_stop_ik_fail', k=k, resid=res), k_dec
+                    un = np.r_[ub, ua]
+                    bad = self._lim_bad(un, u_prev)
+                    if bad:
+                        return np.array(out), dict(what='contact_stop_limit', k=k, bad=bad), k_dec
+                    seed, u_prev, u = q1, un, un
+                n_tick += 1
+            cmd = XO.ramp_cmd(uf, u, j)
+            pp.append(cmd)
+            qp, sp = S.plant_phys_step(qp, sp, pp.pop(0), self.cfg, 1)
+            k += 1
+            j += 1
+            settled = (not np.any(cmd[:3]) and not any(np.any(x[:3]) for x in pp) and float(np.abs(cmd[3:]).max()) <= CSTOP['arm_cmd'])
+            quiet = quiet + 1 if settled else 0
+            if k % XO.C21.SAMPLE_EVERY == 0:
+                out.append(qp.copy())
+        if quiet < XO.C21.SETTLE_STEPS:
+            return np.array(out), dict(what='contact_stop_not_settled', k=k), k_dec
+        return np.array(out), None, k_dec
 
     def _pred(self, q):
         qp, sp = np.asarray(q, float).copy(), self.s.copy()
@@ -154,10 +240,19 @@ class MovingGraspCtrl:
         if self._pool is not None:
             self._pool.close()
 
+    def _stop_traj(self, q, u, e, j0, u_from):
+        """r4：接觸段（已鎖定）用接觸停法；其餘用原停法。回 (Q, 違反或 None, k_dec)。"""
+        if self.lock is not None:
+            return self._contact_stop_traj(q, u, e, self.t - self.t0, j0, u_from)
+        Q, cmds, k_dec = XE.stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, e)
+        return Q, None, k_dec
+
     def _sweep_pool(self, q, u, extras, j0, u_from, phi, exempt, tag):
         items, X, ends = [], [], {}
         for e in extras:
-            Q, cmds, k_dec = XE.stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, e)
+            Q, vtraj, k_dec = self._stop_traj(q, u, e, j0, u_from)
+            if vtraj is not None:
+                return dict(tag=tag, extra=e, traj=vtraj, k_decel=k_dec)
             if tag == 'stop_now' and e == 0:
                 self.stop_end_s = float((np.asarray(Q[-1][:2]) - self.b_origin[:2]) @ self.d)
             idx = list(range(0, len(Q), self.sweep_stride)) + [len(Q) - 1]
@@ -183,7 +278,9 @@ class MovingGraspCtrl:
         if self._pool is not None:
             return self._sweep_pool(q, u, extras, j0, u_from, phi, exempt, tag)
         for e in extras:
-            Q, cmds, k_dec = XE.stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, e)
+            Q, vtraj, k_dec = self._stop_traj(q, u, e, j0, u_from)
+            if vtraj is not None:
+                return dict(tag=tag, extra=e, traj=vtraj, k_decel=k_dec)
             if tag == 'stop_now' and e == 0:
                 self.stop_end_s = float((np.asarray(Q[-1][:2]) - self.b_origin[:2]) @ self.d)   # r2：現在停的停止終點沿 d
             idx = list(range(0, len(Q), self.sweep_stride)) + [len(Q) - 1]
@@ -215,7 +312,7 @@ class MovingGraspCtrl:
 
     def _rel(self, q):
         """控制器視角的夾爪相對把手（估計）誤差：位置 m、姿態 °（TCP 對 T_at(估計, s＝0)）。"""
-        Tc, Tg = K.fk(q, 'link_tcp'), self.T_at(self.T_est, 0.0)
+        Tc, Tg = K.fk(q, 'link_tcp'), self.T_at(self.handle_ref(), 0.0)      # r4：鎖定後對鎖定參考
         dR = Tg[:3, :3].T @ Tc[:3, :3]
         return float(np.linalg.norm(Tc[:3, 3] - Tg[:3, 3])), math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR) - 1) / 2)))), Tc
 
@@ -253,8 +350,17 @@ class MovingGraspCtrl:
                 self._stop('no_estimate')
             self.est_age = None if self.est_ver is None else self.t - float(self.frames[self.est_ver][0])
             fresh = self.est_age is not None and self.est_age <= READY_Q['fresh_s'] + 1e-9
-            self.T_WH_model = self.T_est                               # 淨空模型的把手＝估計（門角 φ 由實測給）
+            self.phi_now = float(phi_meas)
+            self.T_WH_model = self.handle_ref()                        # 淨空模型的把手＝估計（r4：鎖定後＝鎖定參考）；門角 φ 由實測給
             W.set_model(phi0=float(phi_meas), finger_q=self.finger_q)
+            if self.lock is not None and self.T_est is not None:       # r4：新影像只做一致性監看
+                Hr = self.handle_ref()
+                dpos = float(np.linalg.norm(self.T_est[:3, 3] - Hr[:3, 3]))
+                dR_ = Hr[:3, :3].T @ self.T_est[:3, :3]
+                dang = math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR_) - 1) / 2))))
+                self.lock_incons_max = dict(pos_mm=max(self.lock_incons_max['pos_mm'], dpos * 1e3), deg=max(self.lock_incons_max['deg'], dang))
+                if (dpos > FUSE['gate_m'] or dang > FUSE['gate_deg']) and self.stop is None:
+                    self._stop('contact_ref_inconsistent', dpos_mm=round(dpos * 1e3, 3), dang_deg=round(dang, 3))
             if self.q_tick is not None:
                 self.rate = dict(arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / DT, base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / DT, yaw=abs(q[2] - self.q_tick[2]) / DT)
             self.q_tick = q.copy()
@@ -294,6 +400,8 @@ class MovingGraspCtrl:
                     self._phase('INSERT')
                 elif self.phase == 'INSERT' and tr >= h + i:
                     self._phase('CLOSE')
+                    self.lock = dict(T=self.T_est.copy(), phi=float(phi_meas), t=round(self.t, 3), est_ver=self.est_ver)   # r4：閉爪開始鎖定接觸任務參考
+                    self._ev('contact_ref_locked', phi_deg=round(math.degrees(float(phi_meas)), 4), est_ver=self.est_ver)
                 elif self.phase == 'CLOSE' and tr >= h + i + cl:
                     self._phase('CONFIRM')
                 rel_ok = ep <= CONFIRM['pos_m'] and er <= CONFIRM['rot_deg'] and lin <= CONFIRM['lin_mps'] and ang <= CONFIRM['ang_rps']
@@ -340,21 +448,14 @@ class MovingGraspCtrl:
                 ub = np.clip(ub, LIM.BODY_V_MIN, LIM.BODY_V_MAX)
                 ub = np.clip(ub, self.u_body_prev - LIM.A_BODY * DT, self.u_body_prev + LIM.A_BODY * DT)
                 # 預測底盤：管線清空後再以本拍命令（斜坡）走一拍
-                b = qp[:3].copy(); uf = np.asarray(self.pipe[-1][:3], float).copy()
-                for jj in range(NPH):
-                    vv = uf + min(jj + 1, NPH) / NPH * (ub - uf)
-                    cb, sb = math.cos(b[2]), math.sin(b[2])
-                    b = b + PHYS * np.array([cb * vv[0] - sb * vv[1], sb * vv[0] + cb * vv[1], vv[2]])
                 te = tr + D_STEPS * PHYS + DT
                 seed = self.q_ik_prev if self.q_ik_prev is not None else qp[3:]
-                q1, r1 = self._ik(b, self.target(te), seed)
-                q0_, r0 = self._ik(qp[:3], self.target(te - DT), q1)
-                if max(r1, r0) > 1e-6 or float(np.abs(q1 - seed).max()) > 0.5:
-                    self._stop('ik_fail', resid=max(r1, r0))
+                ua_, res_, q1 = self._arm_track(qp, sp, np.asarray(self.pipe[-1][:3], float).copy(), ub, te, seed)
+                if ua_ is None:
+                    self._stop('ik_fail', resid=res_)
                 else:
                     self.q_ik_prev = q1
-                    S1 = q1 + self.tau * (q1 - q0_) / DT - self.off(np.r_[b, q1])
-                    u = np.r_[ub, (S1 - sp) / DT]
+                    u = np.r_[ub, ua_]
                     bad = self._check_cmd(u)
                     if bad:
                         self._stop('cmd_limit', bad=bad)
@@ -364,7 +465,24 @@ class MovingGraspCtrl:
                             self._stop('candidate_stop_violation', **sw)
                         else:
                             self.u_last = u
-            if self.stop is not None:
+            if self.stop is not None and self.lock is not None and self.abort is None:   # r4：接觸停法（底盤有界減速、手臂照追鎖定把手）
+                self.cstop['used'] = True
+                self.cstop['n_ticks'] += 1
+                qp, sp = self._pred(q)
+                ub = self.u_last[:3] + np.clip(-self.u_last[:3], -B.A_BASE * self.cfg.dt, B.A_BASE * self.cfg.dt)
+                seed = self.q_ik_prev if self.q_ik_prev is not None else qp[3:]
+                ua_, res_, q1 = self._arm_track(qp, sp, np.asarray(self.pipe[-1][:3], float).copy(), ub, tr + D_STEPS * PHYS + DT, seed)
+                if ua_ is None:
+                    self._abort('contact_stop_ik_fail', resid=res_)
+                else:
+                    u = np.r_[ub, ua_]
+                    bad = self._lim_bad(u, self.u_prev)
+                    if bad:
+                        self._abort('contact_stop_cmd_limit', bad=bad)
+                    else:
+                        self.q_ik_prev = q1
+                        self.u_last = u
+            elif self.stop is not None:
                 da = np.r_[B.A_BASE, np.full(6, C0.A_ARM)] * self.cfg.dt
                 u = self.u_last + np.clip(-self.u_last, -da, da)
                 self.u_last = u
@@ -382,7 +500,11 @@ class MovingGraspCtrl:
             self._stop('setpoint_limit')
         self.s = nxt
         if self.stop is not None and self.stop_ok is None:
-            still = (self.rate['arm'] <= 0.02 and self.rate['base'] <= 0.005 and self.rate['yaw'] <= 0.01 and not any(np.any(u_) for u_ in self.pipe) and not np.any(self.u_last))
+            if self.cstop['used']:                                     # r4：接觸停法停穩＝底盤命令與管線為零、手臂命令 ≤ CSTOP.arm_cmd、速率低
+                cmd_ok = not np.any(self.u_last[:3]) and not any(np.any(u_[:3]) for u_ in self.pipe) and float(np.abs(self.u_last[3:]).max()) <= CSTOP['arm_cmd'] and all(float(np.abs(u_[3:]).max()) <= CSTOP['arm_cmd'] for u_ in self.pipe)
+            else:
+                cmd_ok = not any(np.any(u_) for u_ in self.pipe) and not np.any(self.u_last)
+            still = (self.rate['arm'] <= 0.02 and self.rate['base'] <= 0.005 and self.rate['yaw'] <= 0.01 and cmd_ok)
             self.still_n = self.still_n + 1 if still else 0
             if self.still_n * PHYS >= 0.3 - 1e-9:
                 self.stop_ok = dict(t=round(self.t, 3), ok=True)
@@ -414,6 +536,7 @@ class MovingGraspCtrl:
     def report(self):
         Rr = np.array(self.rec, float) if self.rec else np.zeros((1, 12))
         return dict(fuse=self.fuse, stop=self.stop, abort=self.abort, stop_effect=self.stop_ok, phases=self.ph_hist, ready_t_rel=None if self.ready_t is None else round(self.ready_t - self.t0, 3),
+                    contact_lock=None if self.lock is None else dict(t=self.lock['t'], phi_deg=round(math.degrees(self.lock['phi']), 4), est_ver=self.lock['est_ver']), lock_inconsistency_max=self.lock_incons_max, contact_stop=self.cstop,
                     accepted=self.accepted, accept_t_rel=None if self.accept_t is None else round(self.accept_t - self.t0, 3), n_ready_revoked=self.n_revoke, n_ready_ver=self.n_ready_ver,
                     min_clear={k: round(float(v), 4) for k, v in self.mins.items()}, limits={k: round(float(v), 4) for k, v in self.lim.items()}, events=self.events,
                     s_along_end=round(float(Rr[-1, 2]), 4))
