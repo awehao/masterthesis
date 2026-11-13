@@ -1,0 +1,246 @@
+{
+ "parking_full2_timeline": {
+  "t_far_capture_s": 1.03,
+  "far_detect_ms": 89.3,
+  "standoff_reaim_plan_wall_s": 21.638,
+  "split_wall_s": {
+   "standoff": 1.003,
+   "look": 18.414,
+   "verify": 2.221
+  },
+  "sim_clock_advance_during_plan_s": 0.0,
+  "planned_motion_s": {
+   "to_look": 7.764,
+   "look": 0.5,
+   "to_pre": 1.626,
+   "total": 9.89
+  },
+  "near_capture_t_s": 8.58000002346933,
+  "near_detect_ms": 46.1,
+  "replan_ms": 147.7,
+  "open_plan_wall_s": 67.4,
+  "open_plan_sim_clock_advance_s": 0.0,
+  "note": "停車版：兩次規劃共 21.6＋67.4 s 都在模擬暫停中算（模擬時鐘前進 0），等待時間被藏掉；重瞄候選 18.4 s 是「停在停位再轉相機看」這一步的計算"
+ },
+ "motm_compute_s": {
+  "open_plan": {
+   "orig_fd_full2": 62.78,
+   "fast_clear_full2": 16.24,
+   "g1_analytic_full2": 4.71,
+   "g1_analytic_motm_pre": 10.72,
+   "g1_analytic_motm_pre_loaded": [
+    11.03,
+    11.0,
+    11.09,
+    11.16,
+    11.23,
+    10.9
+   ],
+   "g1_warm_resolve": [
+    3.92,
+    3.9,
+    3.42
+   ],
+   "reuse_verify": [
+    0.65,
+    0.71
+   ]
+  },
+  "perception": {
+   "detect_offline_alone": {
+    "rate_hz": 15.12,
+    "detect_ms": {
+     "n": 153,
+     "first_cold": 11.4,
+     "p50": 48.7,
+     "p95": 135.0,
+     "max": 146.5,
+     "n_over_50": 75
+    }
+   },
+   "detect_offline_loaded": [
+    {
+     "rate_hz": 14.76,
+     "detect_ms": {
+      "n": 942,
+      "first_cold": 11.0,
+      "p50": 50.8,
+      "p95": 134.1,
+      "max": 174.7,
+      "n_over_50": 482
+     }
+    },
+    {
+     "rate_hz": 14.75,
+     "detect_ms": {
+      "n": 941,
+      "first_cold": 10.9,
+      "p50": 50.8,
+      "p95": 136.7,
+      "max": 175.1,
+      "n_over_50": 478
+     }
+    }
+   ],
+   "note": "每路上限 30 Hz、1 核：實際約 15 Hz（p50 約 50 ms、p95 約 135 ms）；雙相機 30 Hz 需要每路約 2 核"
+  },
+  "control_tick_ms": {
+   "open_r7": {
+    "first_cold": 225.3,
+    "p50": 189.8,
+    "p95": 211.1,
+    "max": 225.3,
+    "n_over_50": 307
+   },
+   "open_r8_g2": {
+    "first_cold": 84.4,
+    "p50": 104.5,
+    "p95": 114.5,
+    "max": 118.7,
+    "n_over_50": 307
+   },
+   "alone": {
+    "open": {
+     "n": 322,
+     "first_cold": 110.3,
+     "p50": 104.4,
+     "p95": 114.9,
+     "max": 121.7,
+     "n_over_50": 307
+    },
+    "grasp": {
+     "n": 52,
+     "first_cold": 92.1,
+     "p50": 62.4,
+     "p95": 67.8,
+     "max": 92.1,
+     "n_over_50": 52
+    },
+    "exit": {
+     "n": 160,
+     "first_cold": 138.2,
+     "p50": 103.8,
+     "p95": 116.5,
+     "max": 138.2,
+     "n_over_50": 154
+    }
+   },
+   "loaded": {
+    "open": {
+     "n": 322,
+     "first_cold": 114.4,
+     "p50": 109.4,
+     "p95": 121.4,
+     "max": 127.6,
+     "n_over_50": 307
+    },
+    "grasp": {
+     "n": 52,
+     "first_cold": 94.9,
+     "p50": 65.6,
+     "p95": 75.3,
+     "max": 165.4,
+     "n_over_50": 52
+    },
+    "exit": {
+     "n": 160,
+     "first_cold": 146.4,
+     "p50": 112.9,
+     "p95": 127.9,
+     "max": 146.4,
+     "n_over_50": 154
+    }
+   },
+   "period_ms": 50,
+   "breakdown_note": "開門 r8：求解 ~10 ms、閉鏈 ~25 ms、停止掃掠 ~70 ms；抓持：掃掠 83%；退出：掃掠 94%（cProfile）。掃掠每個樣本一次 clear_door_fast（約 1.8 ms，自碰撞約一半）"
+  }
+ },
+ "motm_dependency_P1": [
+  {
+   "node": "far_estimate",
+   "needs": [],
+   "compute": "偵測 46–89 ms／格（實跑），離線 p50 約 50 ms",
+   "when": "t_far"
+  },
+  {
+   "node": "pass_line_and_window",
+   "needs": [
+    "far_estimate"
+   ],
+   "compute": "停車版對應：停位 1.0 s＋整段核對 2.2 s（實跑 wall）；重瞄 18.4 s 這一步在移動版沒有對應（不停車轉相機）；移動版的通過線／視向選擇本身尚未實作、未量",
+   "when": "t_far 之後，邊走邊算"
+  },
+  {
+   "node": "predicted_READY_state",
+   "needs": [
+    "pass_line_and_window"
+   ],
+   "compute": "接近路徑＋抓持排程（插入 1.0＋閉爪 0.5＋確認 0.3＋保持 0.3）＋管線 0.08 s 可預測",
+   "when": "同上"
+  },
+  {
+   "node": "open_preplan",
+   "needs": [
+    "predicted_READY_state",
+    "far_estimate"
+   ],
+   "compute": "G1 冷啟 10.72 s 單跑／10.9–11.23 s 負載",
+   "when": "背景，必須在核對開始前完成"
+  },
+  {
+   "node": "near_estimate_stream",
+   "needs": [],
+   "compute": "雙相機持續（實際約 15 Hz／路／核）",
+   "when": "接近全程"
+  },
+  {
+   "node": "reuse_verify",
+   "needs": [
+    "open_preplan",
+    "near_estimate_stream"
+   ],
+   "compute": "完整非線性重核約 0.7 s",
+   "when": "必須在閉爪開始（READY−0.8 s）前完成 ⇒ 最晚 READY−1.5 s 開始，只能用「預測的」READY 狀態；READY 時實際狀態與預測的差需另有便宜核對（未設計）"
+  },
+  {
+   "node": "fallback_warm_resolve",
+   "needs": [
+    "reuse_verify fail"
+   ],
+   "compute": "G1 熱重解 3.42–3.92 s（重用不過的三個實際案）",
+   "when": "READY 後沒有時間（v105 顯示 READY 後須立即交接）；要在閉爪前完成就得在進窗口前約 2.6 s 開始 ⇒ 實際上只能「放棄這次抓取、繞過重來」或改 P2"
+  },
+  {
+   "node": "handover_open_exec",
+   "needs": [
+    "READY",
+    "reuse_verify ok"
+   ],
+   "compute": "開門執行層 r7 移動承接；每拍 r8 p50 104 ms（>50 ms 307/322 拍）",
+   "when": "READY 後第一拍"
+  }
+ ],
+ "windows": {
+  "approach_motion_est_s": 7.68,
+  "approach_wheel_use": 0.875,
+  "approach_note": "停車版界限模型 R2.bounded_T（遠距擷取時狀態 → 窗口起點、預抓構型，停到停）；移動版以 v 通過、時間不同，只是量級",
+  "ready_after_window_start_s": 2.05,
+  "t_ready_est_s": 10.76,
+  "time_far_to_ready_s": 9.73,
+  "preplan_fits": false,
+  "preplan_slack_s": -3.0,
+  "window_margin_at_ready": {
+   "v005_m": 0.12,
+   "v005_s": 2.4,
+   "v008_m": "0.05–0.06",
+   "v008_s": "0.6–0.75"
+  },
+  "note": "preplan_fits：遠距擷取到 READY−1.5 s（核對最晚開始）之間放不放得下負載下最長一次冷啟規劃；不含通過線／視向選擇自身的時間（未實作）"
+ },
+ "verdict_inputs": {
+  "control_ticks_realtime": false,
+  "why_ticks": "三個控制器 p50 62–109 ms 都超過 50 ms 週期；G2 等值加速後仍是，主因停止掃掠的淨空計算",
+  "planning_overlap": "G1 後 MotM 預先規劃（含 v0，23 迭代）單跑 10.7 s、負載 11.2 s；遠距擷取→READY 估計 9.7 s，扣掉核對最晚開始的 1.5 s 只剩 8.2 s ⇒ 放不下（餘裕 -3.0 s）；停車版靜止起點冷啟 4.7 s 則放得下；熱重解放不進 READY 後",
+  "perception_rate": "雙相機 30 Hz 在單核上達不到（約 15 Hz／路）"
+ }
+}
