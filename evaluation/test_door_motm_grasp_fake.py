@@ -17,6 +17,8 @@ import door_motm_grasp_ctrl as G
 XO, K, S, C0, BM = G.XO, G.K, G.S, G.C0, G.BM
 PHYS, NPH, D_STEPS, DT = G.PHYS, G.NPH, G.D_STEPS, G.DT
 case, v, out_path = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+if os.path.exists(out_path.replace('.json', '_ready.npz')):
+    os.remove(out_path.replace('.json', '_ready.npz'))                # 本程式自己產生的暫存交接狀態（重跑覆寫）
 RUN = os.path.join(HERE, 'runs', 'm8house_door_full_2')
 P = np.load(os.path.join(RUN, 'plan.npz')); L = np.load(os.path.join(RUN, 'log.npz'))['rows']; R = json.load(open(os.path.join(RUN, 'result.json')))
 T_WH_b, phi_b = P['T_WH_bind'], float(P['phi_bind'])
@@ -105,6 +107,8 @@ while t < 6.0:
         rows.append([tr, c.phase, float(np.linalg.norm(Tc[:3, 3] - Tg[:3, 3])), float(np.linalg.norm(Tc[:3, 3] - Tg0[:3, 3])), math.degrees(math.acos(max(-1, min(1, (np.trace(dR) - 1) / 2)))), *Tc[:3, 3], float((q[:2] - b0[:2]) @ d_world)])
     if c.stop is not None and c.stop_ok is not None:
         break
+    if c.phase == 'READY' and not os.path.exists(out_path.replace('.json', '_ready.npz')) and c.n_step % NPH == 0:   # READY 後第一個拍首：存交接狀態（開門參考重用核對用）
+        np.savez(out_path.replace('.json', '_ready.npz'), q=q, s=c.s, pipe=np.array(c.pipe), u_last=c.u_last, u_prev=c.u_prev, T_est=c.T_est, phi=phi_b, off_static=dq(q), t=t, T_true=T_true)
     if c.phase == 'READY' and t - c.ready_t >= 0.5:
         break
 rep = c.report()
