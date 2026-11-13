@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""MotM 開門第一包（2）完整可抓窗口＋（3）相對追蹤預算：移動中抓持控制器（door_motm_grasp_ctrl）真入口假世界。
+起點：底盤在可抓窗口起點（full_2 綁定點 +x 0.03 m）以 v 沿世界 −x 穩態移動，手臂在預抓位（s＝S_PRE）穩態追蹤（管線填滿穩態命令＝上游承接狀態）。
+受控對象：底盤照管線命令積分（可加速度失配與偏航擾動）；手臂一階模型（α 可失配），靜態偏置 d(q)＝D＋(G(q)−G(q_b))/kp；門靜止於 φ_b（未綁、不受力）。
+感知：把手估計＝真值＋固定偏差＋逐格雜訊（30 Hz）＋延遲＋遮擋（遮擋時沿用最後估計）。
+量：可抓窗口使用（READY 時沿 d 的位移、距窗口終點）、時間（插入＋閉爪＋確認＋延遲）、真值相對誤差（TCP 對真值抓取位姿）與相對速度
+    （閉爪與確認期間每拍取最大值）、限制、淨空、停止掃掠最小餘裕、停止／中止。
+    python3 evaluation/test_door_motm_grasp_fake.py CASE V OUT.json"""
+import json, math, os, sys
+import numpy as np
+HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+import door_wbopt as WB
+if os.environ.get('FAST_CLEAR', '1') == '1':
+    import door_clear_door_fast as _F
+    WB.clear_door = _F.clear_door_fast
+import door_motm_grasp_ctrl as G
+XO, K, S, C0, BM = G.XO, G.K, G.S, G.C0, G.BM
+PHYS, NPH, D_STEPS, DT = G.PHYS, G.NPH, G.D_STEPS, G.DT
+case, v, out_path = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+RUN = os.path.join(HERE, 'runs', 'm8house_door_full_2')
+P = np.load(os.path.join(RUN, 'plan.npz')); L = np.load(os.path.join(RUN, 'log.npz'))['rows']; R = json.load(open(os.path.join(RUN, 'result.json')))
+T_WH_b, phi_b = P['T_WH_bind'], float(P['phi_bind'])
+T_true = WB.handle_pose(T_WH_b, phi_b) if False else T_WH_b         # 綁定門角下的把手真值（PHI0＝φ_b 時 handle_pose＝T_WH_b）
+ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json'))); al = np.asarray(ident['alpha'], float)
+D = np.array(R['I_insert']['d_hat'])
+E4 = L[L[:, 1] == 4][-1]; q_b = np.r_[E4[5:8], E4[8:14]]
+bodies = BM.arm_bodies(K); G_b = BM.arm_gravity(K, q_b, bodies)
+dq = lambda q9: D + (BM.arm_gravity(K, q9, bodies) - G_b) / 600.0   # noqa: E731
+d_world = np.array([-1.0, 0.0]); WIN = (0.0, 0.22)                    # 窗口原點＝綁定點 +x 0.03 m；長 0.22 m（door_motm_window_r1「沿門面 −x」）
+rng = np.random.default_rng(20261113)
+pert = dict(bias_mm=0.0, jit_mm=0.0, jit_deg=0.0, lat_s=0.0, occl=None, a_scale=1.0, v_scale=1.0, yaw_dist=0.0)
+pert.update(dict(nominal={}, bias=dict(bias_mm=3.4), jitter=dict(jit_mm=1.0, jit_deg=0.3), latency=dict(lat_s=0.10, jit_mm=0.5, jit_deg=0.15),
+                 occlusion=dict(occl=(0.5, 1.2), jit_mm=0.5), a08=dict(a_scale=0.8), a12=dict(a_scale=1.2), v095=dict(v_scale=0.95), v105=dict(v_scale=1.05),
+                 yawdist=dict(yaw_dist=0.02), combined=dict(bias_mm=3.4, jit_mm=1.0, jit_deg=0.3, lat_s=0.1, a_scale=0.8, v_scale=0.95, yaw_dist=0.01))[case])
+bias_dir = rng.normal(size=3); bias_dir /= np.linalg.norm(bias_dir)
+frames = []                                                          # (擷取時刻, 估計)
+
+
+def est_at(t):
+    """控制器在 t 可用的最新估計：擷取時刻 ≤ t−延遲；遮擋區間內不產生新格。"""
+    tk = math.floor((t - pert['lat_s']) * 30.0) / 30.0
+    while len(frames) == 0 or frames[-1][0] < tk - 1e-9:
+        tn = -1.0 if not frames else frames[-1][0] + 1.0 / 30.0          # 影格自 t＝−1 s 起（接近段已在看）
+        if pert['occl'] is not None and pert['occl'][0] <= tn < pert['occl'][1]:
+            frames.append((tn, None)); continue
+        T = T_true.copy()
+        T[:3, 3] += bias_dir * pert['bias_mm'] * 1e-3 + rng.normal(scale=pert['jit_mm'] * 1e-3, size=3)
+        ang = rng.normal(scale=math.radians(pert['jit_deg']), size=3)
+        th = np.linalg.norm(ang)
+        if th > 0:
+            kx = ang / th; Kx = np.array([[0, -kx[2], kx[1]], [kx[2], 0, -kx[0]], [-kx[1], kx[0], 0]])
+            T[:3, :3] = (np.eye(3) + math.sin(th) * Kx + (1 - math.cos(th)) * Kx @ Kx) @ T[:3, :3]
+        frames.append((tn, T))
+    for tn, T in reversed(frames):
+        if T is not None and tn <= tk + 1e-9:
+            return T, round(tn, 4), tn
+    return None
+
+
+# ---- 穩態移動起點（上游承接狀態）
+Rg, T_HG, a_H = WB.PG.baseline_reference()
+T_at = lambda T, s_: np.asarray(G.E.OT.object_target(T, T_HG, a_H, float(s_))['T_WE'], float)   # noqa: E731
+T_pre_true = T_at(T_true, G.PG.S_PRE)
+
+
+def ik(b, T, seed):
+    q = seed.copy()
+    for _ in range(40):
+        q9 = np.r_[b, q]; Tc = K.fk(q9, 'link_tcp'); dR = T[:3, :3] @ Tc[:3, :3].T
+        e = np.r_[T[:3, 3] - Tc[:3, 3], 0.5 * np.array([dR[2, 1] - dR[1, 2], dR[0, 2] - dR[2, 0], dR[1, 0] - dR[0, 1]])]
+        if np.linalg.norm(e) < 1e-11:
+            break
+        J = K.jacobian(q9, 'link_tcp')[:, 3:9]; q = q + np.linalg.solve(J.T @ J + 1e-12 * np.eye(6), J.T @ e)
+    return q
+
+
+b0 = np.r_[q_b[:2] + np.array([0.03, 0.0]), q_b[2]]
+vw = v * d_world
+qa = ik(b0, T_pre_true, q_b[3:]); qa2 = ik(b0 + np.r_[vw * DT, 0.0], T_pre_true, qa)
+qd = (qa2 - qa) / DT
+cth, sth = math.cos(b0[2]), math.sin(b0[2])
+ub = np.array([cth * vw[0] + sth * vw[1], -sth * vw[0] + cth * vw[1], 0.0])
+u_ss = np.r_[ub, qd]
+tau = PHYS / al
+q = np.r_[b0, qa.copy()]
+s0 = qa + tau * qd - dq(q)
+pipe = [u_ss.copy() for _ in range(D_STEPS)]
+c = G.MovingGraspCtrl(ident, est_at, d_world, v, WIN, s0, pipe, u_ss, u_ss, dq(q))
+plant_s = s0.copy()
+t, rows = 0.0, []
+while t < 6.0:
+    o = c.step(t, q.copy(), phi_b)
+    if o.get('abort'):
+        break
+    tw = o['base_twist'] * pert['v_scale']
+    cs, sn = math.cos(q[2]), math.sin(q[2])
+    q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2] + pert['yaw_dist']])
+    q[3:] = q[3:] + al * pert['a_scale'] * (o['arm_target'] - q[3:] + dq(q))
+    t += PHYS
+    if c.n_step % NPH == 0:
+        tr = t - c.t0
+        Tg = T_at(T_true, c.s_of(tr - PHYS)); Tc = K.fk(q, 'link_tcp')           # 真值：TCP 對「當下排程」的真值目標
+        Tg0 = T_at(T_true, 0.0)
+        dR = Tg0[:3, :3].T @ Tc[:3, :3]
+        rows.append([tr, c.phase, float(np.linalg.norm(Tc[:3, 3] - Tg[:3, 3])), float(np.linalg.norm(Tc[:3, 3] - Tg0[:3, 3])), math.degrees(math.acos(max(-1, min(1, (np.trace(dR) - 1) / 2)))), *Tc[:3, 3], float((q[:2] - b0[:2]) @ d_world)])
+    if c.stop is not None and c.stop_ok is not None:
+        break
+    if c.phase == 'READY' and t - c.ready_t >= 0.5:
+        break
+rep = c.report()
+ph = [r[1] for r in rows]
+A = np.array([[r[0], r[2], r[3], r[4], r[5], r[6], r[7], r[8]] for r in rows])
+pv = np.vstack([np.zeros(3), np.diff(A[:, 4:7], axis=0) / DT])
+mask = lambda names: np.array([p in names for p in ph])            # noqa: E731
+cc = mask(('CLOSE', 'CONFIRM', 'READY'))
+res = dict(case=case, v=v, pert=pert, report={k: rep[k] for k in ('fuse', 'stop', 'abort', 'stop_effect', 'phases', 'ready_t_rel', 'min_clear', 'limits', 's_along_end')},
+           window=dict(length_m=WIN[1] - WIN[0], s_at_ready=None if rep['ready_t_rel'] is None else round(float(A[np.argmin(np.abs(A[:, 0] - rep['ready_t_rel'])), 7]), 4),
+                       margin_to_end_m=None if rep['ready_t_rel'] is None else round(WIN[1] - float(A[np.argmin(np.abs(A[:, 0] - rep['ready_t_rel'])), 7]), 4),
+                       time_needed_s=sum(G.SCHED.values()) + D_STEPS * PHYS),
+           tracking_true=dict(insert_path_err_max_mm=round(float(A[mask(('INSERT',)), 1].max()) * 1e3, 3) if mask(('INSERT',)).any() else None,
+                              hold_close_confirm_pos_max_mm=round(float(A[cc, 2].max()) * 1e3, 3) if cc.any() else None,
+                              hold_close_confirm_rot_max_deg=round(float(A[cc, 3].max()), 4) if cc.any() else None,
+                              rel_speed_max_mmps=round(float(np.linalg.norm(pv[cc], axis=1).max()) * 1e3, 3) if cc.any() else None,
+                              note='真值：TCP 對真值抓取位姿；閉爪與確認期間每拍最大值（不以首尾差抵消）；把手靜止 ⇒ 相對速度＝TCP 世界速度'),
+           ready=rep['ready_t_rel'] is not None)
+json.dump(res, open(out_path, 'w'), ensure_ascii=False, indent=1, default=float)
+print(json.dumps({k: res[k] for k in ('case', 'v', 'ready', 'window', 'tracking_true')}, ensure_ascii=False, default=float)); print(json.dumps(res['report'], ensure_ascii=False, default=float)[:700])
