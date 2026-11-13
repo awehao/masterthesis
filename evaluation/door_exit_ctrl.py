@@ -13,6 +13,7 @@
         候選提交前「現在停／晚一拍停」掃掠（真管線、真減速、門角帶兩端）；手臂速度／加速度、本體速度框、輪面速度與加速度。
 停止：任何違反 ⇒ 受控停止（底盤有界減速、手臂設定點凍結；不再前進）；停止有效性＝管線清空、底盤與手臂停穩。"""
 import math
+import time
 import os
 import sys
 
@@ -307,6 +308,23 @@ class DoorExitCtrl:
     def close_pool(self):
         if self._pool is not None:
             self._pool.close()
+
+    def warmup(self, q, phi_meas):
+        """r6：交接前預熱（複本空跑一拍、本控制器狀態不動；同開門執行層 r10）。回複本那一拍耗時 ms。"""
+        import copy
+        pool, self._pool = self._pool, None
+        try:
+            tmp = copy.deepcopy(self)
+        finally:
+            self._pool = pool
+        tmp._pool = None
+        fq_save, phi0_save = W.FINGER_Q, W.PHI0
+        t0 = time.perf_counter()
+        try:
+            tmp.step(0.0, np.asarray(q, float).copy(), float(phi_meas))
+        finally:
+            W.FINGER_Q, W.PHI0 = fq_save, phi0_save
+        return (time.perf_counter() - t0) * 1e3
 
     def _sweep_pool(self, q, u, extras, j0, u_from, tag):
         """r5：同 _sweep 的樣本、門角帶與判定順序；淨空與兩指—橫桿距離由工作程序算（同函式）。逾時／程序失敗／缺結果 ⇒ 模擬中止，不當通過。"""

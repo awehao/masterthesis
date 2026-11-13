@@ -112,7 +112,7 @@ tau = PHYS / al
 q = np.r_[b0, qa.copy()]
 s0 = qa + tau * qd - dq(q)
 pipe = [u_ss.copy() for _ in range(D_STEPS)]
-c = G.MovingGraspCtrl(ident, est_at, d_world, v, WIN, s0, pipe, u_ss, u_ss, dq(q), pool=int(os.environ.get('POOL', '0')))   # POOL：G3 平行掃掠工作程序數（0＝原式）
+c = G.MovingGraspCtrl(ident, est_at, d_world, v, WIN, s0, pipe, u_ss, u_ss, dq(q), pool=int(os.environ.get('POOL', '0')), fastkin=os.environ.get('FASTKIN', '0') == '1')   # POOL：G3 平行掃掠工作程序數（0＝原式）；FASTKIN：r5 FastChain IK＋單趟重力
 rq_vers, rq_attempts, rq_stale_done = [], [], [False]
 plant_s = s0.copy()
 t, rows = 0.0, []

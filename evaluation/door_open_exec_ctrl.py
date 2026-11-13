@@ -40,7 +40,10 @@ r9（G3，Codex 20261113_120619）：g2['gravity2']＝重力改單趟串鏈後�
   g2['pool']＝工作程序數（0＝r8）。停止掃掠的樣本照原順序準備（停止軌跡、構型反算門角、預測閉鏈偏差），
   淨空分給預建工作程序（door_sweep_pool），結果依原順序判定 ⇒ 第一個違反、紀錄與 r8 相同。「現在停」在求解前派工、與求解同時計算，
   求解後才收：現在停不過 ⇒ 求解結果丟棄（同 r8 的停止處理；求解的熱啟動副作用保留，只影響初值）。候選掃掠未過不提交。
-  逾時（POOL_TIMEOUT_S）、工作程序死亡／例外、結果缺漏、版本不符 ⇒ stop_sweep_unavailable／candidate_sweep_unavailable（不在 PATH_OK ⇒ 模擬中止），不當通過。"""
+  逾時（POOL_TIMEOUT_S）、工作程序死亡／例外、結果缺漏、版本不符 ⇒ stop_sweep_unavailable／candidate_sweep_unavailable（不在 PATH_OK ⇒ 模擬中止），不當通過。
+r10（Codex 20261113_124213 §4）：g2['prep_fc']＝掃掠準備的 TCP FK 改 FastChain（與 K.fk 捨入級差）；g2['deadline_ms']＝控制期限（None＝不檢查＝r9）：
+  每拍從拍首計時，到「提交候選」那一刻若已超過期限 ⇒ 候選不提交（晚到結果不放行）。本拍「現在停」已驗過 ⇒ 改走已驗證的有界減速停法
+  （stop_mode＝settled，等同現在停掃掠預測的停法；不是沿用上一命令）；本拍現在停沒驗到 ⇒ 模擬中止。池逾時 0.5 s 是資源失效判定，與此分開。"""
 import math
 import os
 import sys
@@ -119,7 +122,8 @@ def rot_deg(Ta, Tb):
 
 class DoorOpenExec:
     def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2, arm_mode='qp', joint_kp=600.0, g2=None):
-        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False)
+        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False, prep_fc=False, deadline_ms=None)
+        self.n_deadline_miss = 0
         for k_ in (g2 or {}):
             if k_ not in self.g2:
                 raise ValueError(k_)
@@ -132,6 +136,7 @@ class DoorOpenExec:
             self._pool = DSP.SweepPool(int(self.g2['pool']))
         self.Q_cl_prev_full = None
         self._sn = None
+        self._sn_verified = False
         self.pool_ms, self.prep_ms = [], []
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
@@ -314,7 +319,7 @@ class DoorOpenExec:
                     items.append((e, i, None, None, None))
                     self.prep_ms.append((time.perf_counter() - w0) * 1e3)
                     return items
-                Tc = K.fk(Q[i], 'link_tcp')                            # 同 phi_of／closure_at 的式子，只算一次 FK（同函式同輸入 ⇒ 值相同）
+                Tc = W.FC.fk_jac(Q[i])[0] if self.g2['prep_fc'] else K.fk(Q[i], 'link_tcp')   # 同 phi_of／closure_at 的式子，只算一次 FK；r10 prep_fc＝FastChain
                 pH = (Tc @ self.T_EH)[:3, 3]
                 d_ = math.atan2(pH[1], pH[0]) - self.ang_bind
                 d_ = (d_ + math.pi) % (2 * math.pi) - math.pi
@@ -368,6 +373,41 @@ class DoorOpenExec:
     def close_pool(self):
         if self._pool is not None:
             self._pool.close()
+
+    def warmup(self, q, phi_meas):
+        """r10：交接前預熱（接近階段即可做，不在控制拍內）。複製一份控制器（不含計算池）以起始狀態空跑一拍，
+        讓求解器、閉鏈、淨空、停止預測的第一次呼叫成本發生在交接前；本控制器狀態完全不動（複本丟棄）。回複本那一拍的耗時 ms。"""
+        import copy
+        pool, self._pool = self._pool, None
+        try:
+            tmp = copy.deepcopy(self)
+        finally:
+            self._pool = pool
+        tmp._pool = None
+        tmp.g2 = dict(tmp.g2, pool=0, deadline_ms=None)
+        fq_save, phi0_save = W.FINGER_Q, W.PHI0
+        t0 = time.perf_counter()
+        try:
+            tmp.step(0.0, np.asarray(q, float).copy(), float(phi_meas))
+        finally:
+            W.FINGER_Q, W.PHI0 = fq_save, phi0_save
+        return (time.perf_counter() - t0) * 1e3
+
+    def _deadline_stop(self, elapsed_ms, tag):
+        """r10：控制期限已過 ⇒ 不提交本拍候選。正常段：本拍現在停已驗過 ⇒ 有界減速停法（settled）；沒驗到 ⇒ 模擬中止。
+        路徑停止中：上一拍提交的候選已含「下一拍起減速」的預測核對 ⇒ 直接轉有界減速。"""
+        self.n_deadline_miss += 1
+        if self.stop is None:
+            if self._sn_verified:
+                self.stop = dict(t=round(float(self.t), 3), why='tick_deadline_miss', sigma=round(self.sigma, 3), mode='settled', elapsed_ms=round(elapsed_ms, 1), tag=tag)
+                self.t_path_stop = self.t
+                self.stop_mode = 'settled'
+                self._ev('stop', why='tick_deadline_miss', mode='settled', elapsed_ms=round(elapsed_ms, 1), tag=tag)
+            else:
+                self._stop('tick_deadline_miss_unverified', elapsed_ms=round(elapsed_ms, 1), tag=tag)
+        elif self.stop_mode == 'path':
+            self.stop_mode = 'settled'
+            self._ev('path_deadline_to_settled', elapsed_ms=round(elapsed_ms, 1), tag=tag)
 
     # ---- 求解（同一個全身問題）
     def _solve(self, q, phi_meas):
@@ -573,6 +613,7 @@ class DoorOpenExec:
             if self._ccache is not None:
                 self._ccache.clear()                                   # 快取只在同一拍內有效
             self._sn = None                                            # r9：上一拍未收的派工作廢（遲到結果會因版本不符被丟棄）
+            self._sn_verified = False                                  # r10：本拍現在停是否已驗過
             if self.q_tick is not None:
                 self.rate = dict(base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / self.cfg.dt, yaw=abs(q[2] - self.q_tick[2]) / self.cfg.dt, arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / self.cfg.dt, door=abs(phi_meas - self.phi_tick) / self.cfg.dt)
             self.q_tick, self.phi_tick = q.copy(), float(phi_meas)
@@ -609,6 +650,8 @@ class DoorOpenExec:
                         self.sweep_ms.append((time.perf_counter() - w0) * 1e3)
                         if b_ is not None:
                             self._stop('stop_sweep_violation', **b_)
+                        else:
+                            self._sn_verified = True
             elif m is not None and m[0] not in ('setpoint_model_deviation',) and self.stop_mode == 'path':
                 self._stop(m[0] if m[0].startswith('path_') else 'path_' + m[0], **m[1])
         # ---- 命令
@@ -626,6 +669,8 @@ class DoorOpenExec:
                         self._stop('stop_sweep_unavailable', pool_why=why0)
                     elif b0 is not None:
                         self._stop('stop_sweep_violation', **b0)
+                    else:
+                        self._sn_verified = True
                 if self.stop is not None:
                     pass
                 elif u is None:
@@ -642,6 +687,8 @@ class DoorOpenExec:
                         self._stop('candidate_sweep_unavailable', pool_why=why_c)
                     elif b_ is not None:
                         self._stop('candidate_stop_violation', **b_)
+                if self.stop is None and self.g2['deadline_ms'] is not None and (time.perf_counter() - w_t) * 1e3 > self.g2['deadline_ms']:
+                    self._deadline_stop((time.perf_counter() - w_t) * 1e3, 'candidate')   # r10：晚到候選不提交
                 if self.stop is None:
                     self.u_last = u
                     self.sigma = min(self.sigma + self.cfg.dt * self.g, self.sig_end)
@@ -667,6 +714,8 @@ class DoorOpenExec:
                             self._stop('path_candidate_sweep_unavailable', pool_why=why_p)
                         elif b_ is not None:
                             self._stop('path_candidate_rejected', **b_)
+                        elif self.g2['deadline_ms'] is not None and (time.perf_counter() - w_t) * 1e3 > self.g2['deadline_ms']:
+                            self._deadline_stop((time.perf_counter() - w_t) * 1e3, 'path_candidate')   # 路徑停止中晚到：不提交，改已驗證的有界減速
                         else:
                             self.u_last = u
                             self.sigma = min(self.sigma + self.cfg.dt * self.g, self.sig_end)

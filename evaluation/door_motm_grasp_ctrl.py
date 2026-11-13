@@ -24,7 +24,8 @@ r4（Codex 20261113_124213 §1）：閉爪開始鎖定有時間戳的接觸任�
   閉爪開始≠抓持成立（接觸、開度、相對運動放行照舊另核）。
   接觸後停止（CLOSE／CONFIRM／READY）改「接觸停法」：底盤命令照原本每拍有界減速，手臂每拍仍以預測底盤解 IK 追鎖定把手（s＝0）——不是底盤、手臂各自減速；
   停止掃掠在接觸段用同一停法向前模擬（每拍 IK、命令限制、淨空），驗不過（IK 失敗、限制、未停穩）⇒ 違反；實際停止中命令驗不過 ⇒ 模擬中止。不自動張爪、不解綁。
-  接觸停法停穩判準：底盤命令與管線為零、手臂命令 ≤ CSTOP.arm_cmd、各速率低於門檻連續 0.3 s。"""
+  接觸停法停穩判準：底盤命令與管線為零、手臂命令 ≤ CSTOP.arm_cmd、各速率低於門檻連續 0.3 s。
+r5：fastkin＝True 時 IK 改 FastChain（door_fast_kin.ik_closure_fc 同迭代，解差 4e-14 級）、重力改 FastGravity2（差 9e-15 N·m）；預設 False＝r4。"""
 import math
 import os
 import sys
@@ -46,7 +47,8 @@ READY_Q = dict(fresh_s=0.3, accept_max_s=0.5)                       # r2 事前�
 
 
 class MovingGraspCtrl:
-    def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None, pool=0):
+    def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None, pool=0, fastkin=False):
+        self.fastkin = bool(fastkin)
         self._pool = None
         if int(pool) > 0:
             import door_sweep_pool as DSP
@@ -68,6 +70,9 @@ class MovingGraspCtrl:
         self.off0 = np.asarray(off_static, float).copy()
         self.joint_kp = float(joint_kp)
         self.bodies = BM.arm_bodies(K)
+        import door_fast_kin as DFK
+        self._DFK = DFK
+        self._grav2 = DFK.FastGravity2(K, self.bodies) if self.fastkin else None
         self.G0 = None
         self.finger_q = float(finger_open)
         self.finger_open = float(finger_open)
@@ -110,8 +115,11 @@ class MovingGraspCtrl:
             self.abort = dict(t=round(self.t, 3), why=why, phase=self.phase, **kw)
             self.stop_ok = dict(ok=None, status='unverified（模擬中止）')
 
+    def _gravity(self, q9):
+        return self._grav2(q9) if self._grav2 is not None else BM.arm_gravity(K, q9, self.bodies)
+
     def off(self, q9):
-        return self.off0 + (BM.arm_gravity(K, q9, self.bodies) - self.G0) / self.joint_kp
+        return self.off0 + (self._gravity(q9) - self.G0) / self.joint_kp
 
     def s_of(self, t_rel):
         """TCP 沿接近軸的退讓量 s（S_PRE→0）：HOLD 段 S_PRE、INSERT 段最小急動、之後 0。t_rel 自控制器起點。"""
@@ -207,6 +215,9 @@ class MovingGraspCtrl:
         return qp, sp
 
     def _ik(self, b, T, seed):
+        if self.fastkin:
+            q_, r_, _ = self._DFK.ik_closure_fc(T, np.asarray(b, float), seed)
+            return q_, r_
         q = np.asarray(seed, float).copy()
         res = np.inf
         for _ in range(30):
@@ -325,7 +336,7 @@ class MovingGraspCtrl:
         if tick:
             if self.t0 is None:
                 self.t0, self.b_origin, self.yaw_ref = self.t, q[:3].copy(), float(q[2])
-                self.G0 = BM.arm_gravity(K, q, self.bodies)
+                self.G0 = self._gravity(q)
             est = self.est_fn(self.t)
             if est is not None and est[1] not in self.frames:
                 Tn = np.asarray(est[0], float)

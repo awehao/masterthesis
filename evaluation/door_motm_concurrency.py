@@ -18,7 +18,9 @@ PY = ['env', '-u', 'VIRTUAL_ENV', 'PATH=/usr/local/bin:/usr/bin:/bin', f'SP={SP}
 SCOPE = ['systemd-run', '--user', '--scope', '-q', '-p', 'CPUQuota=100%', '-p', 'MemoryMax=3G']
 POOL = int(os.environ.get('POOL', '0'))                              # G3：控制器平行掃掠工作程序數；>0 時控制器範圍 CPU 額度＝(1＋POOL) 核
 SCOPE_CTL = ['systemd-run', '--user', '--scope', '-q', '-p', f'CPUQuota={100 * (1 + POOL)}%', '-p', 'MemoryMax=6G']
-PY_CTL = ['env', '-u', 'VIRTUAL_ENV', 'PATH=/usr/local/bin:/usr/bin:/bin', f'SP={SP}', f'POOL={POOL}', '/usr/bin/python3']
+PREP_FC = os.environ.get('PREP_FC', '0') == '1'
+DEADLINE = None if os.environ.get('DEADLINE_MS') in (None, '', 'none', 'None') else float(os.environ['DEADLINE_MS'])
+PY_CTL = ['env', '-u', 'VIRTUAL_ENV', 'PATH=/usr/local/bin:/usr/bin:/bin', f'SP={SP}', f'POOL={POOL}', f'PREP_FC={int(PREP_FC)}', f'DEADLINE_MS={DEADLINE}', '/usr/bin/python3']
 
 
 def stats(a):
@@ -43,10 +45,11 @@ def ctrl_open(out):
     ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json')))
     q0 = P['q_meas'].copy(); al = np.asarray(ident['alpha'], float)
     c = X.DoorOpenExec(ident, P['Xd'], float(P['h']), P['T_WH_bind'], float(P['phi_bind']), P['T_HE'], T.PHI_GOAL, dict(s=q0[3:] - T.D_TRUE, pipe=[np.zeros(9)] * 8, u_last=np.zeros(9), u_prev=np.zeros(9), bias=al * T.D_TRUE), T.FINGER_Q,
-                       arm_mode='closure', g2=(dict(gravity2=True, ik_fc=True, pool=POOL) if POOL else dict(gravity=True, ik_fc=True, sweep_cache=True)))
+                       arm_mode='closure', g2=(dict(gravity2=True, ik_fc=True, pool=POOL, prep_fc=PREP_FC, deadline_ms=DEADLINE) if POOL else dict(gravity=True, ik_fc=True, sweep_cache=True)))
+    wu = c.warmup(q0, T.Fake(c, q0).door()[0]) if POOL else None   # r10 交接前預熱（部署組）
     T.Fake(c, q0).run(t_end=40.0)
     c.close_pool()
-    json.dump(dict(tick_ms=list(map(float, c.tick_ms)), done=c.done, stop=c.stop), open(out, 'w'), default=float)
+    json.dump(dict(tick_ms=list(map(float, c.tick_ms)), done=c.done, stop=c.stop, n_deadline_miss=c.n_deadline_miss, warmup_ms=wu), open(out, 'w'), default=float)
 
 
 def timed_class(cls, rec):
@@ -68,6 +71,7 @@ def ctrl_grasp(out):
     rec = []
     timed_class(G.MovingGraspCtrl, rec)
     os.environ['POOL'] = str(POOL)
+    os.environ['FASTKIN'] = '1' if POOL else '0'                     # 池化組同時用抓持 r5 fastkin（命令差 ≤2e-13）
     sys.argv = ['test_door_motm_grasp_fake.py', 'nominal', '0.05', out.replace('.json', '_case.json')]
     runpy.run_path(os.path.join(HERE, 'test_door_motm_grasp_fake.py'), run_name='__main__')
     json.dump(dict(tick_ms=rec), open(out, 'w'))
@@ -86,6 +90,7 @@ def ctrl_exit(out):
     xc = XE.DoorExitCtrl(ident, Pp['T_WH_bind'], float(Pp['phi_bind']), sx, [np.zeros(9)] * 8, np.zeros(9), np.zeros(9), al * (qx[3:] - sx), 0.0089, phx, om, np.zeros((1, 2)), qx[3:], scope_end='X2', pool=POOL)
     outs = []
     q = qx.copy()
+    wu = xc.warmup(qx, phx) if POOL else None
     for k in range(1500):
         o = xc.step(k * 0.01, q.copy(), phx)
         outs.append(np.r_[o['base_twist'], o['arm_target']].tolist())
@@ -94,7 +99,7 @@ def ctrl_exit(out):
         cs, sn = math.cos(q[2]), math.sin(q[2]); vx, vy, wz = o['base_twist']
         q[:3] += 0.01 * np.array([cs * vx - sn * vy, sn * vx + cs * vy, wz]); q[3:] += al * (o['arm_target'] - q[3:] + (qx[3:] - sx))
     xc.close_pool()
-    json.dump(dict(tick_ms=rec, phase=xc.phase, stop=xc.stop, done=xc.done, sim_s=round(k * 0.01, 2), outs=outs), open(out, 'w'), default=float)
+    json.dump(dict(tick_ms=rec[1:] if POOL else rec, phase=xc.phase, stop=xc.stop, done=xc.done, sim_s=round(k * 0.01, 2), outs=outs, warmup_ms=wu), open(out, 'w'), default=float)
 
 
 def bg_planner(out, stopf):
@@ -181,6 +186,8 @@ def drive(out):
             print('bg loaded', res['bg_loaded'], flush=True)
     res['note'] = '計算時間（牆鐘）；背景每程序限 1 核、控制器範圍 (1＋POOL) 核；假世界照模擬時間步進。偵測頻率為每路上限 30 Hz 下實際達成值。'
     res['pool'] = POOL
+    res['prep_fc'] = PREP_FC
+    res['deadline_ms'] = DEADLINE
     res['machine'] = dict(cpu=open('/proc/cpuinfo').read().split('model name')[1].split('\n')[0].strip(': '), nproc=os.cpu_count())
     json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1, default=float)
 
