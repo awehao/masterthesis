@@ -135,7 +135,7 @@ def margins(x, T_WH0):
 
 
 class DoorWBOpt:
-    def __init__(self, T_WH0, T_WE0, x0, phi_goal, N=60, dt=0.2, mode='rigid', base_fixed=False, w=None, T_HE=None, project_start=True):
+    def __init__(self, T_WH0, T_WE0, x0, phi_goal, N=60, dt=0.2, mode='rigid', base_fixed=False, w=None, T_HE=None, project_start=True, v0=None):
         """r3：T_HE 可明確傳入（綁定瞬間的實測抓持變換；之後規劃與重規劃都固定用它）；project_start=False 時起點不做牛頓投影，
         只核閉鏈殘差 <1e-6（否則丟 ValueError）——實測起點不得被改成另一個構型。T_WH0 是門角 PHI0（set_model）時的把手位姿。"""
         self.T_WH0 = np.asarray(T_WH0, float)
@@ -153,6 +153,14 @@ class DoorWBOpt:
             if e0 > 1e-6:
                 raise ValueError(f'start closure residual {e0:.3e} > 1e-6（實測起點與 T_HE 不一致；不投影）')
         self.X = np.tile(self.x0, (self.N + 1, 1))
+        # r5（MotM 非零狀態交接；Codex 20261113）：起始速度 v0（10 維：底盤世界速度 3、手臂 6、門角 1）。
+        #   以二次 B 樣條的兩個起始控制點 c₋₁＝x0−v0·dt/2、c₀＝x0＋v0·dt/2 使參考恰好從 x0、速度 v0 出發；
+        #   QP／merit 的「起點前」由虛擬節點 x₋₁＝c₋₁ 取代靜止假設，節點 0 固定為 c₀（不要求閉鏈；密集參考逐點投影）。v0＝None 或全零 ⇒ 與 r4 逐值相同。
+        self.v0 = np.zeros(NX) if v0 is None else np.asarray(v0, float).copy()
+        self.moving = bool(np.any(self.v0))
+        self.c0 = self.x0 + 0.5 * self.dt * self.v0
+        self.Xm1 = self.x0 - 0.5 * self.dt * self.v0
+        self.X[0] = self.c0
         self.act, self.keep = 0.025, 0.004                         # 淨空列：餘裕（距離−門檻）低於 act 才線性化；要求線性化後餘裕 ≥ keep
         self.log = []
         self.init = dict(kind='hold')
@@ -167,8 +175,14 @@ class DoorWBOpt:
             c, s_ = math.cos(-dphi), math.sin(-dphi)
             b = self.x0[:3]
             self.X[k] = np.r_[c * b[0] - s_ * b[1], s_ * b[0] + c * b[1], b[2] - dphi, self.x0[3:9], ph0 + dphi]
-        self.X[0] = self.x0
+        self.X[0] = self.c0
         self.init = dict(kind='corotate', T_ramp=T_ramp)
+
+    def closure_velocity(self, x, vbase, phidot=0.0):
+        """r5：給底盤世界速度與門角速度，回閉鏈一致的手臂關節速度（J_arm·q̇＝J_φ·φ̇−J_base·ḃ；最小平方）。"""
+        _, J, Jp = self.closure(np.asarray(x, float))
+        rhs = Jp * float(phidot) - J[:, :3] @ np.asarray(vbase, float)
+        return np.linalg.lstsq(J[:, 3:9], rhs, rcond=None)[0]
 
     # ---- 閉鏈
     def target(self, phi):
@@ -220,20 +234,20 @@ class DoorWBOpt:
         w, dt, N = self.w, self.dt, self.N
         sc = 1.0 / (self.scale * dt)
         d1 = np.diff(X, axis=0) * sc
-        Xe = np.vstack([X[0], X, X[-1]])
-        d2 = (Xe[2:] - 2 * Xe[1:-1] + Xe[:-2]) * sc                 # k＝0…N，兩端外視為靜止；與 QP 同式
+        Xe = np.vstack([self.Xm1, X, X[-1]])                        # r5：起點前＝虛擬節點 x₋₁（v0＝0 時即 x0）；收尾後靜止
+        d2 = (Xe[2:] - 2 * Xe[1:-1] + Xe[:-2]) * sc                 # k＝0…N；與 QP 同式
         half, mid = 0.5 * (HI - LO), 0.5 * (HI + LO)
         sig = np.array([sigma_min(x) for x in X[1:]])
         J = (w['phi'] * float(((X[1:, 9] - self.phi_goal) ** 2).sum()) + w['v'] * float((d1 ** 2).sum()) + w['a'] * float((d2 ** 2).sum())
              + w['lim'] * float((((X[1:, 3:9] - mid) / half) ** 2).sum()) - w['manip'] * float(np.log(np.maximum(sig, 1e-4)).sum()))
-        viol = max(0.0, self.phi_goal - X[-1, 9]) + float(np.maximum(min(SIG_FLOOR, sigma_min(X[0])) - sig, 0).sum())
+        viol = max(0.0, self.phi_goal - X[-1, 9]) + float(np.maximum(min(SIG_FLOOR, sigma_min(self.x0)) - sig, 0).sum())
         dX = np.diff(X, axis=0) / dt
         for k in range(N):
             th = 0.5 * (X[k, 2] + X[k + 1, 2])
             c_, s_ = math.cos(th), math.sin(th)
             vb = np.array([c_ * dX[k, 0] + s_ * dX[k, 1], -s_ * dX[k, 0] + c_ * dX[k, 1], dX[k, 2]])
             viol += float(np.maximum(np.abs(WM @ vb) - W_LIM, 0).sum()) + float(np.maximum(vb - LIM.BODY_V_MAX, 0).sum() + np.maximum(LIM.BODY_V_MIN - vb, 0).sum())
-        qdd = np.diff(np.vstack([np.zeros(6), dX[:, 3:9]]), axis=0) / dt
+        qdd = np.diff(np.vstack([(X[0, 3:9] - self.Xm1[3:9]) / dt, dX[:, 3:9]]), axis=0) / dt
         viol += float(np.maximum(np.abs(dX[:, 3:9] + TAU_SP * qdd) - V_ARM, 0).sum())
         mg = np.array([margins(x, self.T_WH0)[0][:3 if self.mode == 'rigid' else 4].min() for x in X[1:]])
         viol += 10.0 * float(np.maximum(-mg, 0).sum())
@@ -248,6 +262,7 @@ class DoorWBOpt:
         nc = len(col)
         nz = n + ns + nc + 1                                        # 最後一個＝終點門角鬆弛 s_T
         X = self.X
+        Xat = lambda t: self.Xm1 if t < 0 else X[t]                # noqa: E731  r5：t＝−1 為固定虛擬節點
         idx = lambda k: slice((k - 1) * NX, k * NX)                # noqa: E731  節點 k（1…N）
         P = sparse.lil_matrix((nz, nz))
         qv = np.zeros(nz)
@@ -270,17 +285,17 @@ class DoorWBOpt:
                 qv[s.start + 3 + j] += -w['manip'] * gg[j] / max(sg, 1e-4)
         def quad_diff(coefs, wt, scl, ks):                             # Σ |Σ_c c·x_{k+o}|² 的 P、q（含固定的 x_0）
             for k in ks:
-                terms = [(min(max(k + o, 0), N), c) for o, c in coefs]   # 兩端外視為靜止：x_{-1}＝x_0、x_{N+1}＝x_N
-                const = sum(c * X[t] for t, c in terms)
+                terms = [(min(max(k + o, -1), N), c) for o, c in coefs]  # r5：起點前＝虛擬節點 x₋₁（固定）；收尾後 x_{N+1}＝x_N
+                const = sum(c * Xat(t) for t, c in terms)
                 for d_ in range(NX):
                     g = wt * scl[d_] ** 2
                     for (ta, ca) in terms:
-                        if ta == 0:
+                        if ta <= 0:
                             continue
                         ia = (ta - 1) * NX + d_
                         qv[ia] += 2 * g * ca * const[d_]
                         for (tb, cb) in terms:
-                            if tb == 0:
+                            if tb <= 0:
                                 continue
                             P[ia, (tb - 1) * NX + d_] += 2 * g * ca * cb
         quad_diff([(0, 1.0), (-1, -1.0)], w['v'], sc, range(1, N + 1))
@@ -351,8 +366,8 @@ class DoorWBOpt:
             th = X[k, 2]
             c_, s_ = math.cos(th), math.sin(th)
             Rt = np.array([[c_, s_, 0.0], [-s_, c_, 0.0], [0.0, 0.0, 1.0]])
-            terms = [(min(k + 1, N), 1.0), (k, -2.0), (max(k - 1, 0), 1.0)]
-            base = Rt @ sum(c * X[t, :3] for t, c in terms)
+            terms = [(min(k + 1, N), 1.0), (k, -2.0), (max(k - 1, -1), 1.0)]
+            base = Rt @ sum(c * Xat(t)[:3] for t, c in terms)
             for r in range(3):
                 cols, vals = [], []
                 for t, c in terms:
@@ -365,8 +380,8 @@ class DoorWBOpt:
         for k in range(0, N + 1):
             for d_ in (9,):                                        # 門角二階差分；手臂由設定點速率列限制、底盤由上面的本體座標列限制
                 terms = [(k + 1, 1.0), (k, -2.0), (k - 1, 1.0)]
-                terms = [(min(max(t, 0), N), c) for t, c in terms]
-                base = sum(c * X[t, d_] for t, c in terms)
+                terms = [(min(max(t, -1), N), c) for t, c in terms]
+                base = sum(c * Xat(t)[d_] for t, c in terms)
                 cols, vals = [], []
                 for t, c in terms:
                     if t >= 1:
@@ -382,8 +397,8 @@ class DoorWBOpt:
         # 設定點模型所需命令速率：(q_{k+1}−q_k)/dt＋τ·(q_{k+1}−2q_k＋q_{k−1})/dt² ∈ ±V_ARM（k＝0…N−1；k−1<0 取 x_0）
         for k in range(0, N):
             for d_ in range(3, 9):
-                terms = [(k + 1, 1.0 / dt + TAU_SP / dt ** 2), (k, -1.0 / dt - 2 * TAU_SP / dt ** 2), (max(k - 1, 0), TAU_SP / dt ** 2)]
-                base = sum(c * X[t, d_] for t, c in terms)
+                terms = [(k + 1, 1.0 / dt + TAU_SP / dt ** 2), (k, -1.0 / dt - 2 * TAU_SP / dt ** 2), (max(k - 1, -1), TAU_SP / dt ** 2)]
+                base = sum(c * Xat(t)[d_] for t, c in terms)
                 cols, vals = [], []
                 for t, c in terms:
                     if t >= 1:
@@ -483,7 +498,7 @@ class DoorWBOpt:
         底盤位姿與門角直接取樣條值，手臂以樣條值為起點做牛頓投影到閉鏈殘差數值零。這條密集序列本身就是參考（不是驗收時才修正）。
         樣條性質：速度連續、各段加速度為常數且恰等於控制點二階差分／dt²（＝QP 內受限的量）；樣條不通過節點（在節點處為相鄰三點的 1/8、6/8、1/8 加權）。
         總時長 (N+1)·dt。回 (X_dense, dt_dense, 手臂投影調整量最大值)。"""
-        P = np.vstack([self.X[0], self.X, self.X[-1]])             # P[i]＝x_{i-1}，i＝0…N+2
+        P = np.vstack([self.Xm1, self.X, self.X[-1]])              # P[i]＝x_{i-1}，i＝0…N+2；r5：P[0]＝c₋₁（v0＝0 時＝x0）
         out, adj = [], 0.0
         for k in range(self.N + 1):                                # 第 k 段：控制點 x_{k-1}, x_k, x_{k+1}
             a_, b_, c_ = P[k], P[k + 1], P[k + 2]
@@ -516,11 +531,13 @@ class DoorWBOpt:
             c_, s_ = math.cos(th), math.sin(th)
             vb[k] = [c_ * dX[k, 0] + s_ * dX[k, 1], -s_ * dX[k, 0] + c_ * dX[k, 1], dX[k, 2]]
         wheel = np.abs(vb @ WM.T)
-        vbe = np.vstack([np.zeros(3), vb, np.zeros(3)])            # 起步前與收尾後靜止
+        th0 = float(self.x0[2])
+        v0b = np.array([math.cos(th0) * self.v0[0] + math.sin(th0) * self.v0[1], -math.sin(th0) * self.v0[0] + math.cos(th0) * self.v0[1], self.v0[2]])
+        vbe = np.vstack([v0b, vb, np.zeros(3)])                    # r5：起步前＝承接速度（v0＝0 時靜止）；收尾後靜止
         ab = np.abs(np.diff(vbe, axis=0)) / h                      # 本體座標加速度（與執行端逐拍有界減速同語意）
         wa = np.abs(np.diff(vbe @ WM.T, axis=0)) / h               # 輪面加速度 m/s²；上限 r·α_max
         qd = dX[:, 3:9]
-        qdd = np.diff(np.vstack([np.zeros(6), qd]), axis=0) / h
+        qdd = np.diff(np.vstack([self.v0[3:9], qd]), axis=0) / h
         s_rate = np.abs(qd + TAU_SP * qdd)
         jm = np.minimum(Xd[:, 3:9] - (LO - 0.05), (HI + 0.05) - Xd[:, 3:9])
         sig = np.array([sigma_min(x) for x in Xd])
@@ -547,6 +564,8 @@ class DoorWBOpt:
                  time_note='各時刻為 0.05 s 取樣序列上的首次到達；參考結束≠實際停穩（後者要執行後量）',
                  base_travel_m=round(float(np.linalg.norm(np.diff(Xd[:, :2], axis=0), axis=1).sum()), 3), base_net_m=round(float(np.linalg.norm(Xd[-1, :2] - Xd[0, :2])), 3), base_yaw_change_deg=round(math.degrees(Xd[-1, 2] - Xd[0, 2]), 1))
         keys = ('clear_ok', 'wheel_ok', 'body_v_ok', 'body_acc_ok', 'wheel_acc_ok', 'arm_rate_ok', 'setpoint_rate_ok', 'joint_ok', 'sigma_ok', 'phi_end_ok', 'phi_range_ok', 'phi_rate_ok')
+        v['start_state_err'] = float(np.abs(Xd[0] - self.x0).max())                        # r5：參考起點＝實測起點（投影後）
+        v['start_vel'] = [round(float(x_), 5) for x_ in (Xd[1] - Xd[0]) / h]
         v['closure_ok'] = bool(v['closure_pos_mm'] < 1e-3 and v['closure_rot_deg'] < 1e-3)
         v['failed'] = [k for k in keys + ('closure_ok',) if not v[k]]
         v['feasible'] = not v['failed']

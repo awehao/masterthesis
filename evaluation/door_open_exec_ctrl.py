@@ -146,6 +146,14 @@ class DoorOpenExec:
         self.bound, self.unbind_t, self.force_max, self.force_n = True, None, 0.0, None
         self.abort = None
         self.u_from_base, self.ramp_j = np.asarray(self.pipe[-1][:3], float).copy(), NPH   # 斜坡狀態：本拍底盤過渡起點、本拍已過物理步數
+        # r7（MotM 非零狀態交接）：handover['moving']＝True 表示承接時底盤／手臂在動、管線非空、可能在拍中途。
+        #   off_static：上游觀測器（或模型分離）給的靜態偏置 q−s（不含動態追蹤落後）；closure 錨定用它，不取當下 q−s。
+        #   斜坡預測的「上一命令」改為實際最後一個物理步送出的底盤命令（拍中途承接時與 u_last 不同）。
+        self.moving_handover = bool(handover.get('moving', False))
+        self.off_static = None if handover.get('off_static') is None else np.asarray(handover['off_static'], float).copy()
+        if self.moving_handover:
+            self.u_prev = self.u_prev.copy()
+            self.u_prev[:3] = np.asarray(self.pipe[-1][:3], float)
         self.cmd_hist = []                                           # 每物理步實際送進管線的命令（驗收用）
         self.step_log, self.pipe_log = [], []                        # r5 紀錄：逐物理步（提交／生效命令、設定點、σ、生效參考時刻）、逐控制拍管線快照；只記錄，不影響行為
         self.sigma0 = float(self.sigma)
@@ -456,9 +464,10 @@ class DoorOpenExec:
             self._stop('state_nonfinite')
         if self.abort is not None:
             return dict(ab, arm_target=self.s.copy())
-        if tick and self.off_cl0 is None:                            # A：開門起點實測靜態偏置（第一拍、尚未送任何命令；只取一次，運動中不重新歸零）
-            self.off_cl0, self.G0 = q[3:] - self.s, BM.arm_gravity(K, q, self.arm_bodies)
-            self.anchor = dict(t=self.t, q0=q.tolist(), s0=self.s.tolist(), G0=self.G0.tolist(), off0=self.off_cl0.tolist(), joint_kp=self.joint_kp,
+        if tick and self.off_cl0 is None:                            # A：開門起點靜態偏置（第一拍、只取一次）；r7：移動承接用上游靜態估計，不取含動態落後的 q−s
+            self.off_cl0 = self.off_static.copy() if self.off_static is not None else q[3:] - self.s
+            self.G0 = BM.arm_gravity(K, q, self.arm_bodies)
+            self.anchor = dict(t=self.t, q0=q.tolist(), s0=self.s.tolist(), G0=self.G0.tolist(), off0=self.off_cl0.tolist(), joint_kp=self.joint_kp, off_source='handover_off_static' if self.off_static is not None else 'measured_q_minus_s', q_minus_s=(q[3:] - self.s).tolist(),
                                note='錨定含綁定預載，不是自由空間辨識偏置；q−s＝G/kp')
         if tick:
             if self.q_tick is not None:
