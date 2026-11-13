@@ -342,6 +342,7 @@ def main():
             log_event('first_segment_available', feasible=r_[2], failed=r_[3], final=r_[4], plan_wall_s=round(r_[5], 3), info=r_[6])
         # 交接（READY 那拍首）
         if tick and gc.ready_now and gc.ready_ver is not None and gc.stop is None and not a.smoke:
+            w_ho = time.perf_counter()                                   # 交接計算（綁定條件、建執行層、預熱、試跑）的牆鐘：在本體 50 ms 計時之外，另記
             Th = truth_handle()
             Ttcp = K.fk(q, 'link_tcp')
             Tg_des = T_at(Th, 0.0)
@@ -362,13 +363,16 @@ def main():
                                   g2=dict(gravity2=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0))
             exn.p2_open = True
             wu = exn.warmup(q, phi_b)                                     # 交接前預熱（複本空跑，本體不動）；試跑前做，避免試跑拍含冷啟成本
+            w_dry = time.perf_counter()
             tmp = exn._light_copy()
             tmp.step(0.0, q.copy(), phi_b, float(np.linalg.norm(wrist_F6()[:3])))
+            dry_ms = (time.perf_counter() - w_dry) * 1e3
             dry = dict(stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok),
                        stop_closure_pos_mm=round(tmp.mins['stop_closure_pos'] * 1e3, 3), reproj_arm_max_rad=round(float(np.abs(Xd0p[:, 3:9] - Xd0[:, 3:9]).max()), 5),
                        start_base_vs_meas_mm=round(float(np.linalg.norm(Xd0p[0, :2] - q[:2])) * 1e3, 3))
             valid = tmp.stop is None and tmp.abort is None and tmp._cl_fail is None and tmp.mins['stop_closure_pos'] <= XO.CL_TOL['pos_m'] and tmp._fb_ok
-            log_event('handover_attempt', bind_ok=okb, bind=okd, bind_values=c, dry_ok=valid, dry=dry, ready_ver=gc.ready_ver)
+            log_event('handover_attempt', bind_ok=okb, bind=okd, bind_values=c, dry_ok=valid, dry=dry, ready_ver=gc.ready_ver, warmup_ms=round(wu, 1), dry_run_ms=round(dry_ms, 1),
+                      handover_compute_ms=round((time.perf_counter() - w_ho) * 1e3, 1), note='交接計算在本體控制拍計時之外；計算期間物理不步進')
             if okb and valid and gc.accept_handover(gc.ready_ver):
                 Rr0, Tg_b, _ = rel_T()
                 j = UsdPhysics.FixedJoint.Define(stage, JOINT)
