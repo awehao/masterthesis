@@ -85,3 +85,71 @@ class ClearCache:
         else:
             self.hit += 1
         return dict(r, who=dict(r['who']))
+
+
+class FastGravity2:
+    """單趟串鏈版（G3 階段）：沿底盤→joint1…joint6 一次前向，記下每個手臂關節的軸、位置與關節後座標；各剛體掛在其鏈上最後一個手臂關節之後（固定偏移預先算好），
+    手臂是串鏈 ⇒ 關節 i 的下游剛體＝i 之後全部 ⇒ G_i＝a_i·((S_i−M_i·p_i)×g)，S_i、M_i 為下游 Σm·p、Σm（後綴和）。
+    與 arm_gravity 同一物理量，只有加總順序不同（捨入級差異；door_fast_kin_check 另核）。"""
+
+    def __init__(self, K_, bodies):
+        self.K = K_
+        self.bodies = list(bodies)
+        dof = list(K_.dof_names)
+        self.arm_j = dof[3:9]
+        last = 'link6' if 'link6' in K_.parent_of else K_.joints[self.arm_j[-1]].child
+        self.chain = list(K_.chain(last))
+        assert [jn for jn in self.chain if jn in dof][3:] == self.arm_j
+        q0 = np.zeros(len(dof))
+        self.att, self.cl, self.m = [], [], []
+        for b in self.bodies:
+            ch = K_.chain(b)
+            jd = [jn for jn in ch if jn in self.arm_j][-1]
+            Tt = np.eye(4)
+            for jn in ch[ch.index(jd) + 1:]:
+                Tt = Tt @ K_.joints[jn].transform(K_._q_of(jn, q0))
+            m, com, _ = BM.INERT[b]
+            self.att.append(self.arm_j.index(jd))
+            self.cl.append(Tt[:3, :3] @ np.asarray(com, float) + Tt[:3, 3])
+            self.m.append(float(m))
+        self.att = np.array(self.att)
+        self.cl = np.array(self.cl)
+        self.m = np.array(self.m)
+        self.Mk = np.array([self.m[self.att == k].sum() for k in range(6)])
+        self.Msuf = np.cumsum(self.Mk[::-1])[::-1]
+
+    def __call__(self, q9):
+        q9 = np.asarray(q9, float)
+        T = np.eye(4)
+        A, P, Tk = [], [], []
+        for jn in self.chain:
+            j = self.K.joints[jn]
+            Tj = T @ _iso(j)
+            if jn in self.arm_j:
+                A.append(Tj[:3, :3] @ j.axis)
+                P.append(Tj[:3, 3].copy())
+            T = T @ j.transform(self.K._q_of(jn, q9))
+            if jn in self.arm_j:
+                Tk.append(T.copy())
+        Sk = np.zeros((6, 3))
+        for bi in range(len(self.m)):
+            k = self.att[bi]
+            Sk[k] += self.m[bi] * (Tk[k][:3, :3] @ self.cl[bi] + Tk[k][:3, 3])
+        Ssuf = np.cumsum(Sk[::-1], axis=0)[::-1]
+        G = np.zeros(6)
+        for i in range(6):
+            G[i] = float(A[i] @ np.cross(Ssuf[i] - self.Msuf[i] * P[i], BM.GRAV))
+        return G
+
+
+_ISO = {}
+
+
+def _iso(j):
+    key = id(j)
+    T = _ISO.get(key)
+    if T is None:
+        T = np.eye(4)
+        T[:3, :3], T[:3, 3] = j.origin_rot, j.origin_xyz
+        _ISO[key] = T
+    return T

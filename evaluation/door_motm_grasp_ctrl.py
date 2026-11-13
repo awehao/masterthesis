@@ -15,7 +15,9 @@ r2（Codex 20261113_120619：READY 是可撤銷的當下資格，不是永久相
   相對位姿／速度（同 CONFIRM 門檻）、估計新鮮度（最新採用影格的擷取時刻距今 ≤ READY_Q.fresh_s）、剩餘窗口（「現在停」預測停止終點沿 d 仍在窗口內）、
   停止可行（現在停掃掠通過，原本就每拍做）。相對運動或新鮮度不過 ⇒ 撤銷 READY 回 CONFIRM（重新累積）；停止終點出窗口或首次 READY 後
   accept_max_s 內未被接受 ⇒ 受控停止。CONFIRM 也要求估計新鮮。窗口邊界檢查在 READY 中照常（r1 對 READY 豁免，已移除）。
-  每個合格拍給一個 ready_ver；accept_handover(ver) 只接受「當拍」版本，舊版本拒絕。READY 只代表模型內的放行條件，不代表實際雙指接觸或移動綁定已驗證。"""
+  每個合格拍給一個 ready_ver；accept_handover(ver) 只接受「當拍」版本，舊版本拒絕。READY 只代表模型內的放行條件，不代表實際雙指接觸或移動綁定已驗證。
+r3（G3）：pool＝工作程序數（0＝r2）：停止掃掠的淨空與兩指—橫桿距離分給預建工作程序（同函式、同樣本、原順序判定）；逾時／程序失敗／缺結果 ⇒ 模擬中止。
+  中止那一步起不再出命令（r2 的最後回傳把 abort 固定為 False，中止要到下一步才生效；已改）。"""
 import math
 import os
 import sys
@@ -36,7 +38,12 @@ READY_Q = dict(fresh_s=0.3, accept_max_s=0.5)                       # r2 事前�
 
 
 class MovingGraspCtrl:
-    def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None):
+    def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None, pool=0):
+        self._pool = None
+        if int(pool) > 0:
+            import door_sweep_pool as DSP
+            self._pool = DSP.SweepPool(int(pool))
+        self.pool_ms = []
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
         al = np.asarray(self.cfg.arm_model.alpha, float)
@@ -143,7 +150,38 @@ class MovingGraspCtrl:
             b_.append('finger_bar')
         return b_
 
+    def close_pool(self):
+        if self._pool is not None:
+            self._pool.close()
+
+    def _sweep_pool(self, q, u, extras, j0, u_from, phi, exempt, tag):
+        items, X, ends = [], [], {}
+        for e in extras:
+            Q, cmds, k_dec = XE.stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, e)
+            if tag == 'stop_now' and e == 0:
+                self.stop_end_s = float((np.asarray(Q[-1][:2]) - self.b_origin[:2]) @ self.d)
+            idx = list(range(0, len(Q), self.sweep_stride)) + [len(Q) - 1]
+            for i in idx:
+                items.append((e, i, len(X), k_dec))
+                X.append(np.r_[Q[i], phi])
+        W.FINGER_Q = self.finger_q
+        h = self._pool.submit(self.T_WH_model, W.FINGER_Q, W.PHI0, np.array(X), finger_bar_q=self.finger_q)
+        res, why, tms = self._pool.collect(h, XO.POOL_TIMEOUT_S)
+        self.pool_ms.append(tms)
+        if res is None:
+            self._abort('sweep_unavailable', pool_why=why, tag=tag)
+            return dict(tag=tag, pool_unavailable=why)
+        for e, i, j, k_dec in items:
+            c = res[j]
+            self.mins['stop_sweep'] = min(self.mins['stop_sweep'], min(c[k] - W.THR[k] for k in KEYS if k != 'shell_bar'))
+            b_ = self._bad(c, exempt)
+            if b_:
+                return dict(tag=tag, extra=e, i=i, bad=b_, k_decel=k_dec)
+        return None
+
     def _sweep(self, q, u, extras, j0, u_from, phi, exempt, tag):
+        if self._pool is not None:
+            return self._sweep_pool(q, u, extras, j0, u_from, phi, exempt, tag)
         for e in extras:
             Q, cmds, k_dec = XE.stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, e)
             if tag == 'stop_now' and e == 0:
@@ -351,6 +389,8 @@ class MovingGraspCtrl:
         self.n_step += 1
         if self.stop is not None:
             self.ready_now, self.ready_ver = False, None
+        if self.abort is not None:                                   # r3：中止當步起不出命令
+            return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), finger=self.finger_q, ready=False, ready_ver=None, stopped=True, abort=True)
         return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), finger=self.finger_q, ready=self.ready_now, ready_ver=self.ready_ver, stopped=self.stop is not None, abort=False)
 
     def accept_handover(self, ver):

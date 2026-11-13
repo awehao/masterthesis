@@ -35,7 +35,12 @@ r8（G2，Codex 20261113 時間帳裁定）：g2＝dict(gravity, ik_fc, ik_warm,
   gravity     閉鏈錨定的 URDF 重力改單趟計算（door_fast_kin.FastGravity；與 door_body_model.arm_gravity 逐構型核對）。
   ik_fc       閉鏈 IK 每次迭代 FK＋Jacobian 一趟（FastChain；同迭代、同種子、同停止條件）。
   ik_warm     IK 種子改用上一拍同一預測時刻的解（上一拍節點 k＋1）；分支跳躍防護仍對原鏈式種子（上一節點）量，判準不變。
-  sweep_cache 停止掃掠的淨空：輸入完全相同（構型位元組＋手指開度＋PHI0＋把手位姿）才重用、每拍清空 ⇒ 結果與重算相同；樣本數與核對項目不變。"""
+  sweep_cache 停止掃掠的淨空：輸入完全相同（構型位元組＋手指開度＋PHI0＋把手位姿）才重用、每拍清空 ⇒ 結果與重算相同；樣本數與核對項目不變。
+r9（G3，Codex 20261113_120619）：g2['gravity2']＝重力改單趟串鏈後綴和（door_fast_kin.FastGravity2；與原式捨入級差 ≤9e-15 N·m，非逐位元）。
+  g2['pool']＝工作程序數（0＝r8）。停止掃掠的樣本照原順序準備（停止軌跡、構型反算門角、預測閉鏈偏差），
+  淨空分給預建工作程序（door_sweep_pool），結果依原順序判定 ⇒ 第一個違反、紀錄與 r8 相同。「現在停」在求解前派工、與求解同時計算，
+  求解後才收：現在停不過 ⇒ 求解結果丟棄（同 r8 的停止處理；求解的熱啟動副作用保留，只影響初值）。候選掃掠未過不提交。
+  逾時（POOL_TIMEOUT_S）、工作程序死亡／例外、結果缺漏、版本不符 ⇒ stop_sweep_unavailable／candidate_sweep_unavailable（不在 PATH_OK ⇒ 模擬中止），不當通過。"""
 import math
 import os
 import sys
@@ -72,6 +77,7 @@ FINGER_OPEN = 0.0089
 STOP_STILL = dict(arm_rps=2e-3, base_mps=0.003, yaw_rps=0.003, door_rps=0.005, hold_s=0.3, timeout_s=4.0)
 KEYS = ('env', 'base', 'self', 'shell_bar')
 START_LAT_ALIGN = True                                              # r5：參考時鐘從第一筆命令到達受控對象才起算（σ₀＝−D_STEPS·PHYS；底盤與手臂共用同一條管線延遲）
+POOL_TIMEOUT_S = 0.5                                                # r9：平行掃掠收集逾時（偵測卡死用；即時性另以每拍耗時統計）
 BASE_RAMP = True                                                    # r4：底盤命令在一個控制拍內逐物理步線性過渡（管線、預測、停止掃掠同一語意）
 
 
@@ -113,14 +119,20 @@ def rot_deg(Ta, Tb):
 
 class DoorOpenExec:
     def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2, arm_mode='qp', joint_kp=600.0, g2=None):
-        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False)
+        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False)
         for k_ in (g2 or {}):
             if k_ not in self.g2:
                 raise ValueError(k_)
         self.g2.update(g2 or {})
-        self._grav = DFK.FastGravity(K, BM.arm_bodies(K)) if self.g2['gravity'] else None
+        self._grav = DFK.FastGravity2(K, BM.arm_bodies(K)) if self.g2['gravity2'] else (DFK.FastGravity(K, BM.arm_bodies(K)) if self.g2['gravity'] else None)
         self._ccache = DFK.ClearCache(W.clear_door) if self.g2['sweep_cache'] else None
+        self._pool = None
+        if int(self.g2['pool']) > 0:
+            import door_sweep_pool as DSP
+            self._pool = DSP.SweepPool(int(self.g2['pool']))
         self.Q_cl_prev_full = None
+        self._sn = None
+        self.pool_ms, self.prep_ms = [], []
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
         self.cfg.arm_model.bias = np.asarray(handover['bias'], float).copy()
@@ -286,6 +298,76 @@ class DoorOpenExec:
             return None
         finally:
             W.FINGER_Q = fq_save
+
+    # ---- r9 平行掃掠
+    def _sweep_prep(self, q, u, extras):
+        """依原順序：停止軌跡、取樣點、構型反算門角、預測閉鏈偏差；遇非有限即截斷（原式在此返回）。"""
+        w0 = time.perf_counter()
+        items = []
+        for e in extras:
+            Q = stop_traj_ramp(q, self.s, self.pipe, u, self.u_from_base if u is self.u_last else self._ramp_end(), 0 if u is not self.u_last else self.ramp_j, self.cfg, e)
+            idx = list(range(0, len(Q), self.sweep_stride))
+            if idx[-1] != len(Q) - 1:
+                idx.append(len(Q) - 1)
+            for i in idx:
+                if not np.isfinite(Q[i]).all():
+                    items.append((e, i, None, None, None))
+                    self.prep_ms.append((time.perf_counter() - w0) * 1e3)
+                    return items
+                Tc = K.fk(Q[i], 'link_tcp')                            # 同 phi_of／closure_at 的式子，只算一次 FK（同函式同輸入 ⇒ 值相同）
+                pH = (Tc @ self.T_EH)[:3, 3]
+                d_ = math.atan2(pH[1], pH[0]) - self.ang_bind
+                d_ = (d_ + math.pi) % (2 * math.pi) - math.pi
+                phi_i = self.phi_bind - d_
+                Td = self.handle_T(phi_i) @ self.T_HE
+                ep, er = float(np.linalg.norm(Tc[:3, 3] - Td[:3, 3])), rot_deg(Td, Tc)
+                items.append((e, i, np.r_[Q[i], phi_i], ep, er))
+        self.prep_ms.append((time.perf_counter() - w0) * 1e3)
+        return items
+
+    def _pool_submit(self, items):
+        X = [it[2] for it in items if it[2] is not None]
+        return self._pool.submit(self.T_WH_bind, W.FINGER_Q, W.PHI0, np.array(X)) if X else None
+
+    def _pool_eval(self, items, h, tag):
+        """回 (違反或 None, 失敗原因或 None)。判定順序、紀錄與 r8 的 _sweep 相同。"""
+        res = []
+        if h is not None:
+            res, why, tms = self._pool.collect(h, POOL_TIMEOUT_S)
+            self.pool_ms.append(tms)
+            if res is None:
+                return None, why
+        k = 0
+        for (e, i, x, ep, er) in items:
+            if x is None:
+                return dict(extra=e, i=i, tag=tag, nonfinite=True), None
+            c = res[k]
+            k += 1
+            self.mins['stop_closure_pos'], self.mins['stop_closure_rot'] = max(self.mins['stop_closure_pos'], ep), max(self.mins['stop_closure_rot'], er)
+            if ep > CL_TOL['pos_m'] or er > CL_TOL['rot_deg']:
+                self.n_emerg_closure += 1
+            if self.clear_inject is not None:
+                c = self.clear_inject(self, c)
+            self.mins['n_sweep'] += 1
+            for kk in KEYS:
+                self.mins['stop'][kk] = min(self.mins['stop'][kk], c[kk])
+            phi_i = float(x[9])
+            bad = [kk for kk in KEYS if c[kk] < W.THR[kk]]
+            if bad or not (-0.02 <= phi_i <= W.PHI_MAX + 0.02):
+                return dict(extra=e, i=i, tag=tag, door='bound', clear_bad=bad, phi_deg=round(math.degrees(phi_i), 2), at={kk: round(float(c[kk]), 4) for kk in KEYS}), None
+        if self.sweep_inject is not None:
+            inj = self.sweep_inject(self, tag)
+            if inj is not None:
+                return inj, None
+        return None, None
+
+    def _pool_sweep(self, q, u, extras, tag):
+        items = self._sweep_prep(q, u, extras)
+        return self._pool_eval(items, self._pool_submit(items), tag)
+
+    def close_pool(self):
+        if self._pool is not None:
+            self._pool.close()
 
     # ---- 求解（同一個全身問題）
     def _solve(self, q, phi_meas):
@@ -490,6 +572,7 @@ class DoorOpenExec:
         if tick:
             if self._ccache is not None:
                 self._ccache.clear()                                   # 快取只在同一拍內有效
+            self._sn = None                                            # r9：上一拍未收的派工作廢（遲到結果會因版本不符被丟棄）
             if self.q_tick is not None:
                 self.rate = dict(base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / self.cfg.dt, yaw=abs(q[2] - self.q_tick[2]) / self.cfg.dt, arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / self.cfg.dt, door=abs(phi_meas - self.phi_tick) / self.cfg.dt)
             self.q_tick, self.phi_tick = q.copy(), float(phi_meas)
@@ -517,10 +600,15 @@ class DoorOpenExec:
                         self._stop('end_not_reached', phi_meas_deg=round(math.degrees(phi_meas), 3), rates={k: round(v, 5) for k, v in self.rate.items()})
                 if self.stop is None:
                     w0 = time.perf_counter()
-                    b_ = self._sweep(q, self.u_last, (0,), 'stop_now')
-                    self.sweep_ms.append((time.perf_counter() - w0) * 1e3)
-                    if b_ is not None:
-                        self._stop('stop_sweep_violation', **b_)
+                    if self._pool is not None:                         # r9：現在停先派工，與求解同時算，求解後才收
+                        items0 = self._sweep_prep(q, self.u_last, (0,))
+                        self._sn = (items0, self._pool_submit(items0))
+                        self.sweep_ms.append((time.perf_counter() - w0) * 1e3)
+                    else:
+                        b_ = self._sweep(q, self.u_last, (0,), 'stop_now')
+                        self.sweep_ms.append((time.perf_counter() - w0) * 1e3)
+                        if b_ is not None:
+                            self._stop('stop_sweep_violation', **b_)
             elif m is not None and m[0] not in ('setpoint_model_deviation',) and self.stop_mode == 'path':
                 self._stop(m[0] if m[0].startswith('path_') else 'path_' + m[0], **m[1])
         # ---- 命令
@@ -528,14 +616,31 @@ class DoorOpenExec:
             if self.stop is None:
                 self._cl_fail = None
                 u = self._solve(q, phi_meas)
-                if u is None:
+                if self._sn is not None:                               # r9：收現在停；不過 ⇒ 丟棄求解結果
+                    items0, h0 = self._sn
+                    self._sn = None
+                    w1 = time.perf_counter()
+                    b0, why0 = self._pool_eval(items0, h0, 'stop_now')
+                    self.sweep_ms[-1] += (time.perf_counter() - w1) * 1e3
+                    if why0 is not None:
+                        self._stop('stop_sweep_unavailable', pool_why=why0)
+                    elif b0 is not None:
+                        self._stop('stop_sweep_violation', **b0)
+                if self.stop is not None:
+                    pass
+                elif u is None:
                     self._stop('closure_cmd_invalid', bad=self._cl_fail) if self._cl_fail else self._stop('solver_fail')
                 else:
                     w0 = time.perf_counter()
-                    b_ = self._sweep(q, u, (1, 2), 'candidate')
+                    if self._pool is not None:
+                        b_, why_c = self._pool_sweep(q, u, (1, 2), 'candidate')
+                    else:
+                        b_, why_c = self._sweep(q, u, (1, 2), 'candidate'), None
                     if self.sweep_ms:
                         self.sweep_ms[-1] += (time.perf_counter() - w0) * 1e3
-                    if b_ is not None:
+                    if why_c is not None:
+                        self._stop('candidate_sweep_unavailable', pool_why=why_c)
+                    elif b_ is not None:
                         self._stop('candidate_stop_violation', **b_)
                 if self.stop is None:
                     self.u_last = u
@@ -554,8 +659,13 @@ class DoorOpenExec:
                     if u is None:
                         self._stop('closure_cmd_invalid', bad=self._cl_fail) if self._cl_fail else self._stop('solver_fail')
                     else:
-                        b_ = self._sweep(q, u, (1, 2), 'path_candidate')     # 路徑停止的新候選同樣經提交前核對
-                        if b_ is not None:
+                        if self._pool is not None:
+                            b_, why_p = self._pool_sweep(q, u, (1, 2), 'path_candidate')
+                        else:
+                            b_, why_p = self._sweep(q, u, (1, 2), 'path_candidate'), None     # 路徑停止的新候選同樣經提交前核對
+                        if why_p is not None:
+                            self._stop('path_candidate_sweep_unavailable', pool_why=why_p)
+                        elif b_ is not None:
                             self._stop('path_candidate_rejected', **b_)
                         else:
                             self.u_last = u

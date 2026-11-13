@@ -104,7 +104,7 @@ tau = PHYS / al
 q = np.r_[b0, qa.copy()]
 s0 = qa + tau * qd - dq(q)
 pipe = [u_ss.copy() for _ in range(D_STEPS)]
-c = G.MovingGraspCtrl(ident, est_at, d_world, v, WIN, s0, pipe, u_ss, u_ss, dq(q))
+c = G.MovingGraspCtrl(ident, est_at, d_world, v, WIN, s0, pipe, u_ss, u_ss, dq(q), pool=int(os.environ.get('POOL', '0')))   # POOL：G3 平行掃掠工作程序數（0＝原式）
 rq_vers, rq_attempts, rq_stale_done = [], [], [False]
 plant_s = s0.copy()
 t, rows = 0.0, []
@@ -164,5 +164,7 @@ res = dict(case=case, v=v, pert=pert, report={k: rep[k] for k in ('fuse', 'stop'
            ready_r2=dict(rq_case=RQ, accepted=rep.get('accepted'), accept_t_rel=rep.get('accept_t_rel'), n_ready_revoked=rep.get('n_ready_revoked'), attempts=rq_attempts,
                          revocations=[e for e in rep['events'] if e['what'] in ('ready_revoked', 'accept_refused', 'accept_handover')], stop=rep['stop'], stop_effect=rep['stop_effect'],
                          true_rel_at_end_mm=round(float(A[-1, 2]) * 1e3, 3) if len(A) else None))
+res['cmd_log'] = [[t_, ph_, *map(float, u_)] for t_, ph_, u_ in c.cmd_log]
+c.close_pool()
 json.dump(res, open(out_path, 'w'), ensure_ascii=False, indent=1, default=float)
 print(json.dumps({k: res[k] for k in ('case', 'v', 'ready', 'window', 'tracking_true')}, ensure_ascii=False, default=float)); print(json.dumps(res['report'], ensure_ascii=False, default=float)[:700])

@@ -103,7 +103,12 @@ def trap_T(dist, v, a):
 
 
 class DoorExitCtrl:
-    def __init__(self, ident, T_WH_bind, phi_bind, s, pipe, u_last, u_prev, bias, finger_q, phi0, omega0, path_xy, q_stow, joint_kp=600.0, sweep_stride=3, scope_end=None, wait_enable=False, anchor_pred_bias=True):
+    def __init__(self, ident, T_WH_bind, phi_bind, s, pipe, u_last, u_prev, bias, finger_q, phi0, omega0, path_xy, q_stow, joint_kp=600.0, sweep_stride=3, scope_end=None, wait_enable=False, anchor_pred_bias=True, pool=0):
+        self._pool = None                                            # r5（G3）：停止掃掠淨空分給預建工作程序；0＝r4
+        if int(pool) > 0:
+            import door_sweep_pool as DSP
+            self._pool = DSP.SweepPool(int(pool))
+        self.pool_ms = []
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
         self.cfg.arm_model.bias = np.asarray(bias, float).copy()
@@ -299,7 +304,50 @@ class DoorExitCtrl:
             bad.append(dict(what='wheel_a', v=round(wa, 3)))
         return bad
 
+    def close_pool(self):
+        if self._pool is not None:
+            self._pool.close()
+
+    def _sweep_pool(self, q, u, extras, j0, u_from, tag):
+        """r5：同 _sweep 的樣本、門角帶與判定順序；淨空與兩指—橫桿距離由工作程序算（同函式）。逾時／程序失敗／缺結果 ⇒ 模擬中止，不當通過。"""
+        items, X, tim = [], [], {}
+        for e in extras:
+            Q, cmds, k_dec = stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, e)
+            tim[e] = dict(t=round(self.t, 3), tag=tag, extra=e, j0=int(j0), k_decel=k_dec, n_cmd=len(cmds))
+            idx = list(range(0, len(Q), self.sweep_stride)) + [len(Q) - 1]
+            for i in idx:
+                lo, hi = self.band(self.t - self.t_x1 + i * XO.C21.SAMPLE_EVERY * PHYS)
+                items.append((e, i, len(X)))
+                X.append(np.r_[Q[i], lo])
+                X.append(np.r_[Q[i], hi])
+        h = self._pool.submit(self.T_WH_bind, W.FINGER_Q, W.PHI0, np.array(X), finger_bar_q=self.finger_q)
+        res, why, tms = self._pool.collect(h, XO.POOL_TIMEOUT_S)
+        self.pool_ms.append(tms)
+        if res is None:
+            self._abort('sweep_unavailable', pool_why=why, tag=tag)
+            return dict(tag=tag, pool_unavailable=why)
+        seen = set()
+        for e, i, j in items:
+            if e not in seen:
+                seen.add(e)
+                self.sweep_timing.append(tim[e])
+            c = {k: np.inf for k in KEYS}
+            c['finger_bar'] = np.inf
+            for r in (res[j], res[j + 1]):
+                for k in KEYS:
+                    c[k] = min(c[k], float(r[k]))
+                c['finger_bar'] = min(c['finger_bar'], r['finger_bar'])
+            self.mins['stop_sweep'] = min(self.mins['stop_sweep'], min(c[k] - W.THR[k] for k in KEYS))
+            b_ = [k for k in KEYS if c[k] < W.THR[k]]
+            if c['finger_bar'] < (0.0 if self.finger_exempt else W.THR['env']):
+                b_.append('finger_bar')
+            if b_:
+                return dict(tag=tag, extra=e, i=i, bad=b_)
+        return None
+
     def _sweep(self, q, u, extras, j0, u_from, tag):
+        if self._pool is not None:
+            return self._sweep_pool(q, u, extras, j0, u_from, tag)
         """停止掃掠：從目前管線與斜坡相位，依序執行 u（extras 拍後開始有界減速）直到停穩；每取樣點核淨空（門角取帶在該時刻的兩端）
         與兩指規則（例外中只要求不穿入，撤除後要求門檻）。回 None 或違反資訊；並記錄減速起點（時序核對）。"""
         for e in extras:

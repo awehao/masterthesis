@@ -16,6 +16,9 @@ HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 SP = os.environ.get('SP', '/tmp/claude-1000/-home-howardchen-masterthesis/2a47f71f-1a91-4ff0-9dbf-1892d8540042/scratchpad')
 PY = ['env', '-u', 'VIRTUAL_ENV', 'PATH=/usr/local/bin:/usr/bin:/bin', f'SP={SP}', '/usr/bin/python3']
 SCOPE = ['systemd-run', '--user', '--scope', '-q', '-p', 'CPUQuota=100%', '-p', 'MemoryMax=3G']
+POOL = int(os.environ.get('POOL', '0'))                              # G3：控制器平行掃掠工作程序數；>0 時控制器範圍 CPU 額度＝(1＋POOL) 核
+SCOPE_CTL = ['systemd-run', '--user', '--scope', '-q', '-p', f'CPUQuota={100 * (1 + POOL)}%', '-p', 'MemoryMax=6G']
+PY_CTL = ['env', '-u', 'VIRTUAL_ENV', 'PATH=/usr/local/bin:/usr/bin:/bin', f'SP={SP}', f'POOL={POOL}', '/usr/bin/python3']
 
 
 def stats(a):
@@ -40,8 +43,9 @@ def ctrl_open(out):
     ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json')))
     q0 = P['q_meas'].copy(); al = np.asarray(ident['alpha'], float)
     c = X.DoorOpenExec(ident, P['Xd'], float(P['h']), P['T_WH_bind'], float(P['phi_bind']), P['T_HE'], T.PHI_GOAL, dict(s=q0[3:] - T.D_TRUE, pipe=[np.zeros(9)] * 8, u_last=np.zeros(9), u_prev=np.zeros(9), bias=al * T.D_TRUE), T.FINGER_Q,
-                       arm_mode='closure', g2=dict(gravity=True, ik_fc=True, sweep_cache=True))
+                       arm_mode='closure', g2=(dict(gravity2=True, ik_fc=True, pool=POOL) if POOL else dict(gravity=True, ik_fc=True, sweep_cache=True)))
     T.Fake(c, q0).run(t_end=40.0)
+    c.close_pool()
     json.dump(dict(tick_ms=list(map(float, c.tick_ms)), done=c.done, stop=c.stop), open(out, 'w'), default=float)
 
 
@@ -63,6 +67,7 @@ def ctrl_grasp(out):
     import door_motm_grasp_ctrl as G
     rec = []
     timed_class(G.MovingGraspCtrl, rec)
+    os.environ['POOL'] = str(POOL)
     sys.argv = ['test_door_motm_grasp_fake.py', 'nominal', '0.05', out.replace('.json', '_case.json')]
     runpy.run_path(os.path.join(HERE, 'test_door_motm_grasp_fake.py'), run_name='__main__')
     json.dump(dict(tick_ms=rec), open(out, 'w'))
@@ -78,15 +83,18 @@ def ctrl_exit(out):
     L = np.load(RUN + '/log.npz')['rows']; Pp = np.load(RUN + '/plan.npz')
     R7 = L[L[:, 1] == 7]; qx = np.r_[R7[-1, 5:8], R7[-1, 8:14]]; phx = float(R7[-1, 2]); om = float((R7[-1, 2] - R7[-11, 2]) / 0.1)
     sx = np.load(RUN + '/open_steps.npz')['ctrl'][-1, 32:38]
-    xc = XE.DoorExitCtrl(ident, Pp['T_WH_bind'], float(Pp['phi_bind']), sx, [np.zeros(9)] * 8, np.zeros(9), np.zeros(9), al * (qx[3:] - sx), 0.0089, phx, om, np.zeros((1, 2)), qx[3:], scope_end='X2')
+    xc = XE.DoorExitCtrl(ident, Pp['T_WH_bind'], float(Pp['phi_bind']), sx, [np.zeros(9)] * 8, np.zeros(9), np.zeros(9), al * (qx[3:] - sx), 0.0089, phx, om, np.zeros((1, 2)), qx[3:], scope_end='X2', pool=POOL)
+    outs = []
     q = qx.copy()
     for k in range(1500):
         o = xc.step(k * 0.01, q.copy(), phx)
+        outs.append(np.r_[o['base_twist'], o['arm_target']].tolist())
         if o.get('abort') or (xc.stop is not None and xc.stop_ok is not None) or (xc.done and xc.stop_ok is not None):
             break
         cs, sn = math.cos(q[2]), math.sin(q[2]); vx, vy, wz = o['base_twist']
         q[:3] += 0.01 * np.array([cs * vx - sn * vy, sn * vx + cs * vy, wz]); q[3:] += al * (o['arm_target'] - q[3:] + (qx[3:] - sx))
-    json.dump(dict(tick_ms=rec, phase=xc.phase, stop=xc.stop, done=xc.done, sim_s=round(k * 0.01, 2)), open(out, 'w'), default=float)
+    xc.close_pool()
+    json.dump(dict(tick_ms=rec, phase=xc.phase, stop=xc.stop, done=xc.done, sim_s=round(k * 0.01, 2), outs=outs), open(out, 'w'), default=float)
 
 
 def bg_planner(out, stopf):
@@ -135,7 +143,7 @@ def bg_percep(out, stopf, seed):
 
 
 def sub(args, bg=False):
-    cmd = SCOPE + PY + [os.path.abspath(__file__)] + args
+    cmd = (SCOPE_CTL + PY_CTL if args[0].startswith('ctrl_') else SCOPE + PY) + [os.path.abspath(__file__)] + args
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) if bg else subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=3000)
 
 
@@ -161,7 +169,7 @@ def drive(out):
             if r.returncode != 0:
                 res[cond][ctl] = dict(error=r.stderr.decode()[-800:]); continue
             d = json.load(open(f'{W}/{ctl}_{cond}.json'))
-            res[cond][ctl] = dict(tick_ms=stats(d['tick_ms']), **{k: d[k] for k in d if k != 'tick_ms'})
+            res[cond][ctl] = dict(tick_ms=stats(d['tick_ms']), **{k: d[k] for k in d if k not in ('tick_ms', 'outs')})
             print(cond, ctl, res[cond][ctl]['tick_ms'], flush=True)
         if bgs:
             open(stopf, 'w').close()
@@ -171,7 +179,8 @@ def drive(out):
             for i in (1, 2):
                 a = json.load(open(f'{W}/pc_loaded_{i}.json')); res['bg_loaded'][f'percep_{i}'] = dict(rate_hz=a['rate_hz'], detect_ms=stats(a['detect_ms']))
             print('bg loaded', res['bg_loaded'], flush=True)
-    res['note'] = '計算時間（牆鐘）；每程序限 1 核；假世界照模擬時間步進。偵測頻率為每路上限 30 Hz 下實際達成值。'
+    res['note'] = '計算時間（牆鐘）；背景每程序限 1 核、控制器範圍 (1＋POOL) 核；假世界照模擬時間步進。偵測頻率為每路上限 30 Hz 下實際達成值。'
+    res['pool'] = POOL
     res['machine'] = dict(cpu=open('/proc/cpuinfo').read().split('model name')[1].split('\n')[0].strip(': '), nproc=os.cpu_count())
     json.dump(res, open(out, 'w'), ensure_ascii=False, indent=1, default=float)
 
