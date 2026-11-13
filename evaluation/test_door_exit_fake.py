@@ -27,6 +27,15 @@ phi0 = float(Rr[-1, 2])
 omega0 = float((Rr[-1, 2] - Rr[-11, 2]) / 0.1)
 fq = 0.5 * (float(Rr[-1, 3]) + float(Rr[-1, 4]))
 s0 = Z['ctrl'][-1, 32:38].copy()
+START = os.environ.get('EXIT_START', 'open3')
+if START == 'full1':                                                 # 正式整合趟 1 的實錄退出起點（解綁張爪後門以 −0.124°/s 回擺）
+    RUN = os.path.join(HERE, 'runs', 'm8house_door_full_1')
+    L1 = np.load(os.path.join(RUN, 'log.npz'))['rows']
+    P = np.load(os.path.join(RUN, 'plan.npz'))
+    R7 = L1[L1[:, 1] == 7]
+    q0 = np.r_[R7[-1, 5:8], R7[-1, 8:14]]
+    phi0, omega0, fq = float(R7[-1, 2]), float((R7[-1, 2] - R7[-11, 2]) / 0.1), 0.5 * (float(R7[-1, 3]) + float(R7[-1, 4]))
+    s0 = np.load(os.path.join(RUN, 'open_steps.npz'))['ctrl'][-1, 32:38].copy()
 if case == 'closed_X2':                                              # 閉門約 0°（冒煙幾何）：第三趟綁定靜置末的實測狀態、張爪、不綁；承接插入控制器設定點
     Re = R[R[:, 1] == 4]
     q0 = np.r_[Re[-1, 24:27], Re[-1, 16:22]]
@@ -37,7 +46,7 @@ d0 = q0[3:] - s0                                                     # 起點實
 path = np.vstack([np.array(sg['path_xy']) for sg in pj['segments']])
 path = np.vstack([path, np.array(pj['P2'])[None]])
 Q_STOW = np.array([-0.013, -0.052, 0.086, 0.012, -1.625, -0.002])
-c = XE.DoorExitCtrl(ident, P['T_WH_bind'], float(P['phi_bind']), s0, [np.zeros(9)] * XE.D_STEPS, np.zeros(9), np.zeros(9), al * d0, fq, phi0, omega0, path[1:], Q_STOW, scope_end=('X2' if case in ('closed_X2', 'open_X2') else None))
+c = XE.DoorExitCtrl(ident, P['T_WH_bind'], float(P['phi_bind']), s0, [np.zeros(9)] * XE.D_STEPS, np.zeros(9), np.zeros(9), al * d0, fq, phi0, omega0, path[1:], Q_STOW, scope_end=('X2' if (case in ('closed_X2', 'open_X2') or START == 'full1') else None), wait_enable=(os.environ.get('EXIT_WAIT', '1') == '1'))
 K = XE.K
 bodies = BM.arm_bodies(K)
 G0 = BM.arm_gravity(K, q0, bodies)
@@ -56,8 +65,20 @@ if case == 'finger_pen_start':                                       # 起點門
 tool_z = XE.K.fk(q0, 'link_tcp')[:3, 2]                              # 工具接近軸（朝橫桿）
 push = np.zeros(2)
 n_phys_after_abort, aborted = 0, False
+phi_s, om_s = phi0, omega0                                           # 門：獨立積分狀態（被動衰減；個案可加外力）
+released_during_dip = False
 while t < 90.0:
-    phi = phi0 + phi_off + omega0 / XE.C_EFF * (1.0 - math.exp(-XE.C_EFF * t)) + phi_push
+    if case == 'wait_push' and c.phase == 'W':
+        om_s = math.radians(-0.06)                                   # 等待中門持續被推（−0.06°/s，不衰減）
+    if case == 'wait_dip' and c.phase == 'W':
+        om_s = 0.0 if 1.0 <= t < 1.2 else math.radians(-0.10) if t < 3.0 else om_s   # 速度短暫（0.2 s）低於門檻後回升，3 s 後才被動衰減
+        if 1.0 <= t < 1.6 and c.phase != 'W':
+            released_during_dip = True
+    if case == 'wait_clear' and c.phase == 'W' and c.stop is None:
+        push = push + 1.0e-4 * tool_z[:2] / max(np.linalg.norm(tool_z[:2]), 1e-9)      # 等待中底盤被緩推向橫桿（每步 0.1 mm）
+    phi_s += om_s * 0.01
+    om_s *= math.exp(-XE.C_EFF * 0.01)
+    phi = phi_s + phi_off + phi_push
     if case == 'door_push' and c.phase == 'X1b' and t - c.t_phase > 0.5:
         phi_push = min(phi_push + math.radians(0.05), math.radians(0.6))   # 外力把門再推開（每步 0.05°，到 0.6° 為止）
     if case == 'finger_slow' and c.stop is not None and c.stop['why'] == 'forced_stop' and c.finger_exempt:
@@ -93,9 +114,11 @@ while t < 90.0:
         break
 rep = c.report()
 Lg = np.array(log)
-expect = dict(closed_X2='scope_end_after_X2', open_X2='scope_end_after_X2', nominal='exit_pass_done', door_push='door_out_of_band', finger_pen_start='finger_penetration', finger_slow='forced_stop', finger_reapproach='finger_bar', push_during_stop='forced_stop').get(case, 'forced_stop')
+expect = dict(neg_swing='scope_end_after_X2', wait_push=None, wait_dip='scope_end_after_X2', wait_clear=None, closed_X2='scope_end_after_X2', open_X2='scope_end_after_X2', nominal='exit_pass_done', door_push='door_out_of_band', finger_pen_start='finger_penetration', finger_slow='forced_stop', finger_reapproach='finger_bar', push_during_stop='forced_stop').get(case, 'forced_stop')
 P2 = np.array(pj['P2'])
-if case in ('push_during_stop', 'finger_slow'):
+if case in ('wait_push', 'wait_clear'):                              # 不得放行：停在等待段（原因依實際機制，照列）
+    ck = dict(not_released=bool(all(p[0] == 'W' for p in rep['phases'])), stopped=bool(rep['stop'] is not None), no_x1_cmd=bool(not any(ph.startswith('X') and np.any(u) for _, ph, u in c.cmd_log)))
+elif case in ('push_during_stop', 'finger_slow'):
     want = ('clearance', 'finger_bar') if case == 'push_during_stop' else ('finger_gap_worsening',)
     ck = dict(stop_reason=bool(rep['stop'] and rep['stop']['why'] == expect), escalated_abort=bool(rep['abort'] is not None and rep['abort']['why'] == 'violation_during_stop' and any(w in rep['abort']['viol'] for w in want)),
               no_physics_after_abort=bool(aborted and n_phys_after_abort == 0), stop_not_success=bool(rep['stop_effect'] and rep['stop_effect'].get('ok') is None))
@@ -103,7 +126,9 @@ else:
   ck = dict(stop_reason=bool(rep['stop'] and rep['stop']['why'] == expect), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']), not_aborted=rep['abort'] is None,
           clear_ok=bool(case in ('finger_reapproach', 'finger_pen_start') or all(rep['min_clear'][k] >= XE.W.THR[k] for k in XE.KEYS)), finger_after_release_ok=bool(case == 'finger_reapproach' or rep['min_clear']['finger_bar_after_release'] >= XE.W.THR['env'] or rep['finger_release_t'] is None),
           limits_ok=bool(rep['limits']['arm_rate'] <= 1.0 + 1e-6 and rep['limits']['arm_acc'] <= XE.C0.A_ARM + 1e-6 and rep['limits']['wheel_v'] <= XE.LIM.W_LIM + 1e-6 and rep['limits']['wheel_a'] <= XE.LIM.WA_LIM + 1e-6))
-if case in ('closed_X2', 'open_X2'):
+if case == 'wait_dip':
+    ck.update(not_released_during_dip=bool(not released_during_dip))
+if case in ('closed_X2', 'open_X2', 'neg_swing', 'wait_dip'):
     ck.update(no_x3x4_cmd=bool(rep['x3x4_cmd_ticks'] == 0 and not any(ph == 'X3X4' or ph == 'STOP:X3X4' for _, ph, _u in c.cmd_log)), reached_X2_done=bool(any(e['what'] == 'phase_done' and e['phase'] == 'X2' for e in rep['events'])),
               arm_stowed=bool(np.abs(q[3:] - Q_STOW).max() < 0.03), finger_released=rep['finger_release_t'] is not None)
 if case == 'nominal':
@@ -114,7 +139,7 @@ if case == 'nominal':
     timing = dict(stop_now=kd('stop_now', 0), candidate_e1=kd('candidate', 1), candidate_e2=kd('candidate', 2))
     ck.update(sweep_timing_distinct=bool(timing['stop_now'] == [0] and timing['candidate_e1'] == [NPH_] and timing['candidate_e2'] == [2 * NPH_]))
     ck.update(done=bool(rep['done']), at_P2=bool(np.linalg.norm(q[:2] - P2) < 0.03), yaw_90=bool(abs(math.degrees(q[2]) - 90.0) < 2.0), arm_stowed=bool(np.abs(q[3:] - Q_STOW).max() < 0.03), finger_released=rep['finger_release_t'] is not None)
-res = dict(case=case, expect=expect, checks=ck, pass_=bool(all(ck.values())), report=rep, final=dict(base=q[:3].round(4).tolist(), yaw_deg=round(math.degrees(q[2]), 2), arm=q[3:].round(4).tolist(), t=round(t, 2)),
+res = dict(case=case, start=START, wait=rep.get('wait'), expect=expect, checks=ck, pass_=bool(all(ck.values())), report=rep, final=dict(base=q[:3].round(4).tolist(), yaw_deg=round(math.degrees(q[2]), 2), arm=q[3:].round(4).tolist(), t=round(t, 2)),
            sources=dict(start='runs/m8house_door_open_3/log.npz 張爪觀察末列', setpoint='open_steps.npz ctrl 末列', handle='runs/m8house_door_open_3/plan.npz', path=os.path.basename(pass_json) + '（A* 理想跟隨；含登錄未知物真值，只是幾何／運動學串接）', stow='m8house_da_online_1 起點手臂'),
            omega0_dps=round(math.degrees(omega0), 4), phi0_deg=round(math.degrees(phi0), 4))
 if case == 'nominal':

@@ -40,6 +40,7 @@ V_NAV, A_NAV, W_TURN, A_TURN = 0.25, 0.5, 0.5, 1.0                  # 跟隨段�
 BACK, V_BACK, A_BACK = 0.25, 0.10, 0.5
 STOP_EXTRAS = (1, 2)                                                 # 候選提交後：下一拍停／再晚一拍停（現在停另在求解前以實際管線與斜坡相位核）
 STOP_STILL_S = 0.3                                                   # 停止有效：連續靜止且管線清空 0.3 s
+WAIT = dict(omega_dps=0.02, hold_s=0.3, win_s=0.3, max_s=10.0)      # r4 條件式等待（Codex 20261113_090540）：門角速度（0.3 s 窗最小平方斜率）連續 0.3 s ≤0.02°/s 才放行 X1；上限 10 s，逾時拒絕退出
 GAP_TOL = 1e-4                                                       # 兩指間隙不惡化容差（對「至今最大間隙」比，不逐拍累積）
 
 
@@ -102,7 +103,7 @@ def trap_T(dist, v, a):
 
 
 class DoorExitCtrl:
-    def __init__(self, ident, T_WH_bind, phi_bind, s, pipe, u_last, u_prev, bias, finger_q, phi0, omega0, path_xy, q_stow, joint_kp=600.0, sweep_stride=3, scope_end=None):
+    def __init__(self, ident, T_WH_bind, phi_bind, s, pipe, u_last, u_prev, bias, finger_q, phi0, omega0, path_xy, q_stow, joint_kp=600.0, sweep_stride=3, scope_end=None, wait_enable=True):
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
         self.cfg.arm_model.bias = np.asarray(bias, float).copy()
@@ -125,7 +126,9 @@ class DoorExitCtrl:
         self.T_at = lambda T, s_: np.asarray(E.OT.object_target(T, self.T_HG, self.a_H, float(s_))['T_WE'], float)   # noqa: E731
         self.S_EXIT = float(PG.S_PRE)
         self.t, self.n_step = 0.0, 0
-        self.phase, self.t_phase, self.ph_hist = 'X1', 0.0, [('X1', 0.0)]
+        self.wait_enable = bool(wait_enable)
+        self.phase, self.t_phase, self.ph_hist = ('W', 0.0, [('W', 0.0)]) if self.wait_enable else ('X1', 0.0, [('X1', 0.0)])
+        self.phi_hist, self.wait_ok_n, self.wait_info = [], 0, None
         self.anchor, self.off0, self.G0, self.bodies = None, None, None, BM.arm_bodies(K)
         self.q_ik_prev, self.q_ref0, self.b_ref0, self.Tn0, self.Th0 = None, None, None, None, None
         self.finger_exempt, self.finger_gap_prev, self.finger_release_t = True, None, None
@@ -325,6 +328,23 @@ class DoorExitCtrl:
         """停止中比較用的嚴重度（越小越糟）：兩指間隙與各淨空餘裕的最小值。"""
         return min(c['finger_bar'], min(c[k] - W.THR[k] for k in KEYS))
 
+    def _anchor(self, q, phi, omega):
+        """以當下實測狀態建立退出參考：偏置錨定 off0＝q−s、重力基準、TCP 與把手基準、門角帶起點；
+        停止預測模型的偏置也改用同一實測值（bias＝α·off0；自由空間辨識偏置在此構型不成立——full_1 預測穩態與實測差 5.3 mrad）。"""
+        self.off0, self.G0 = q[3:] - self.s, BM.arm_gravity(K, q, self.bodies)
+        self.cfg.arm_model.bias = np.asarray(self.cfg.arm_model.alpha, float) * self.off0
+        self.phi0, self.omega0, self.t_x1 = float(phi), float(omega), self.t
+        self.anchor = dict(t=round(self.t, 3), q0=q.tolist(), s0=self.s.tolist(), off0=self.off0.tolist(), joint_kp=self.joint_kp, phi0_deg=round(math.degrees(phi), 4), omega0_dps=round(math.degrees(omega), 4))
+        self.Tn0 = K.fk(q, 'link_tcp')
+        self.Th0 = W.handle_pose(self.T_WH_bind, self.phi0)
+
+    def _omega_est(self):
+        """門角速度：最近 WAIT.win_s 內每控制拍門角的最小平方斜率（不足窗長回 None）。"""
+        n = int(round(WAIT['win_s'] / DT)) + 1
+        if len(self.phi_hist) < n:
+            return None
+        return float(np.polyfit(np.arange(n) * DT, np.array(self.phi_hist[-n:]), 1)[0])
+
     def _monitor_finger(self, gap, gap_band=None):
         """兩指—橫桿：例外只免 5 mm 餘裕、不免非穿透；不惡化以「至今最大間隙」為基準（不逐拍累積）；
         撤除例外要求量測門角與門角帶兩端的間隙都達門檻（與停止掃掠同一判準），撤除後永久。回違反原因或 None。"""
@@ -348,11 +368,7 @@ class DoorExitCtrl:
             return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), stopped=True, done=False, abort=True)
         tick = self.n_step % NPH == 0
         if tick and self.off0 is None:
-            self.off0, self.G0 = q[3:] - self.s, BM.arm_gravity(K, q, self.bodies)
-            self.anchor = dict(q0=q.tolist(), s0=self.s.tolist(), off0=self.off0.tolist(), joint_kp=self.joint_kp)
-            self.Tn0 = K.fk(q, 'link_tcp')
-            self.Th0 = W.handle_pose(self.T_WH_bind, self.phi0)
-            self.t_x1 = self.t
+            self._anchor(q, self.phi0, self.omega0)
         if tick:
             if self.q_tick is not None:
                 self.rate = dict(arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / DT, base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / DT, yaw=abs(q[2] - self.q_tick[2]) / DT)
@@ -382,6 +398,7 @@ class DoorExitCtrl:
                 else:
                     viol.append(('door_out_of_band', dict(phi_deg=round(math.degrees(phi_meas), 4), old_band_deg=old, new_band_origin_deg=round(math.degrees(phi_meas), 4), omega_dps=round(math.degrees(om), 4))))
             self.phi_tick = float(phi_meas)
+            self.phi_hist.append(float(phi_meas))
             if self.stop is not None and viol:                          # 停止中：觸發停止的同一違反若未惡化視為持續狀態；新的或惡化的違反 ⇒ 中止
                 sev = self._severity(c)
                 viol = [v for v in viol if not (v[0] in self.stop_kinds and self.stop_sev is not None and sev >= self.stop_sev - GAP_TOL)]
@@ -395,7 +412,20 @@ class DoorExitCtrl:
                 return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), stopped=True, done=False, abort=True)
             if self.inject is not None:
                 self.inject(self)
-            self.rec.append([self.t, KEYS.index('env') * 0 + c['env'], c['base'], c['self'], c['shell_bar'], c['finger_bar'], phi_meas, lo, hi, ['X1', 'X1b', 'X2', 'X3X4', 'STOP'].index(self.phase if self.stop is None else 'STOP')])
+            if self.phase == 'W' and self.stop is None:                   # 條件式等待：命令為零、監看與現在停掃掠照常；達條件 ⇒ 以當下狀態重新錨定並放行 X1
+                om = self._omega_est()
+                tw = self.t - self.t_phase
+                self.wait_ok_n = self.wait_ok_n + 1 if (om is not None and abs(om) <= math.radians(WAIT['omega_dps'])) else 0
+                if self.wait_ok_n * DT >= WAIT['hold_s'] - 1e-9:
+                    self._anchor(q, phi_meas, om)
+                    self.wait_info = dict(wait_s=round(tw, 3), omega_release_dps=round(math.degrees(om), 5))
+                    self._ev('wait_released', **self.wait_info)
+                    self.phase, self.t_phase = 'X1', self.t
+                    self.ph_hist.append(('X1', round(self.t, 3)))
+                elif tw >= WAIT['max_s']:
+                    self.wait_info = dict(wait_s=round(tw, 3), omega_dps=None if om is None else round(math.degrees(om), 5), timeout=True)
+                    self._stop('wait_timeout_exit_refused', **self.wait_info)
+            self.rec.append([self.t, c['env'], c['base'], c['self'], c['shell_bar'], c['finger_bar'], phi_meas, lo, hi, ['W', 'X1', 'X1b', 'X2', 'X3X4', 'STOP'].index(self.phase if self.stop is None else 'STOP')])
             # 段別推進
             if self.stop is None:
                 slow = self.rate['arm'] <= SETTLE['arm_rps'] and self.rate['base'] <= SETTLE['base_mps'] and self.rate['yaw'] <= SETTLE['yaw_rps']
@@ -404,7 +434,7 @@ class DoorExitCtrl:
                 else:
                     self.settle_n = 0
                 if self.settle_n >= SETTLE['n_ticks']:
-                    nxt = dict(X1='X1b', X1b='X2', X2='X3X4', X3X4='DONE')[self.phase]
+                    nxt = dict(W='W', X1='X1b', X1b='X2', X2='X3X4', X3X4='DONE')[self.phase]
                     self._ev('phase_done', phase=self.phase)
                     if nxt == 'X3X4' and self.scope_end == 'X2':
                         self._stop('scope_end_after_X2')
@@ -426,7 +456,9 @@ class DoorExitCtrl:
                 if sw0 is not None:
                     self._stop('stop_now_violation', **sw0)
             # 命令
-            if self.stop is None:
+            if self.stop is None and self.phase == 'W':
+                self.u_last = np.zeros(9)
+            elif self.stop is None:
                 qp, sp = self._pred(q)
                 u, info = self._cmd(q, qp, sp)
                 if u is None:
@@ -478,7 +510,7 @@ class DoorExitCtrl:
     def report(self):
         Rr = np.array(self.rec, float) if self.rec else np.zeros((1, 10))
         return dict(stop=self.stop, abort=self.abort, done=self.done, stop_effect=self.stop_ok, phases=self.ph_hist, events=self.events, anchor=self.anchor,
-                    sweep_timing_sample=self.sweep_timing[:6], sweep_timing_n=len(self.sweep_timing), scope_end=self.scope_end,
+                    wait=self.wait_info, sweep_timing_sample=self.sweep_timing[:6], sweep_timing_n=len(self.sweep_timing), scope_end=self.scope_end,
                     x3x4_cmd_ticks=sum(1 for _, ph, u in self.cmd_log if ph == 'X3X4' and np.any(u)), cmd_ticks=len(self.cmd_log),
                     min_clear={k: round(float(v), 4) for k, v in self.mins.items()}, finger_release_t=self.finger_release_t, limits={k: (round(v, 4) if isinstance(v, float) else [round(x, 4) for x in v]) for k, v in self.lim.items()},
                     door_band_end_deg=[round(math.degrees(v), 4) for v in self.band(self.t - getattr(self, 't_x1', 0.0))], door_meas_end_deg=round(math.degrees(float(Rr[-1, 6])), 4) if len(Rr) else None, t_end=round(self.t, 3))
