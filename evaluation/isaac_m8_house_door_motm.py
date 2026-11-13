@@ -307,6 +307,7 @@ def main():
     gc.close_gate = lambda cc: first['ok']
     ev = []
     rows, ts = [], []
+    STATE.update(res=res, rows=rows, ts=ts, ev=ev)                    # 例外時存部分紀錄（名目趟 1 例外未存檔）
     box = dict(mode='grasp', ex=None, aborted=None, t_bind=None, T_WH_b=None, T_HE=None, phi_b=None, helper=None, pend=None, t_next=None, k=1, decisions=[], reqs=[])
 
     def log_event(what, **kw):
@@ -360,6 +361,7 @@ def main():
             exn = XO.DoorOpenExec(ident, Xd0p, 0.05, T_WH_b, phi_b, T_HE_act, GOAL, ho, fq_b, arm_mode='closure', joint_kp=a.kp,
                                   g2=dict(gravity2=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0))
             exn.p2_open = True
+            wu = exn.warmup(q, phi_b)                                     # 交接前預熱（複本空跑，本體不動）；試跑前做，避免試跑拍含冷啟成本
             tmp = exn._light_copy()
             tmp.step(0.0, q.copy(), phi_b, float(np.linalg.norm(wrist_F6()[:3])))
             dry = dict(stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok),
@@ -380,7 +382,6 @@ def main():
                 j.CreateJointEnabledAttr().Set(True)
                 j.CreateBreakForceAttr().Set(float('inf'))
                 j.CreateBreakTorqueAttr().Set(float('inf'))
-                wu = exn.warmup(q, phi_b)
                 box.update(mode='open', ex=exn, t_bind=t, T_WH_b=T_WH_b, T_HE=T_HE_act, phi_b=phi_b, fq=fq_b, helper=hlp2, t_next=t + P2.T_RE)
                 np.savez(os.path.join(a.out, 'first_segment.npz'), Xd0=Xd0, Xd0p=Xd0p, T_plan=first['T_plan'], T_HE_pred=first['T_HE_pred'], T_WH_b=T_WH_b, T_HE_act=T_HE_act, phi_b=phi_b)
                 log_event('bind_and_handover', base_speed_cmd=round(float(np.linalg.norm(gc.u_last[:2])), 4), joint_enabled=bool(UsdPhysics.Joint(stage.GetPrimAtPath(JOINT)).GetJointEnabledAttr().Get()), warmup_ms=round(wu, 1))
@@ -549,13 +550,30 @@ def main():
     return 0 if res['result'] in ('open_done_85', 'smoke_done') else 5
 
 
+STATE = {}
+
+
+def save_partial(tb):
+    """例外中斷時存部分紀錄：log_partial.npz（逐步列、時間序列）＋result_partial.json（事件、例外）。"""
+    try:
+        if STATE.get('rows'):
+            np.savez_compressed(os.path.join(a.out, 'log_partial.npz'), rows=np.array(STATE['rows']), ts=np.array(STATE['ts']),
+                                cols=np.array(['t', 'phase', 'door_q', 'f1', 'f2', 'bx', 'by', 'byaw', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz', 'wall']), phases=np.array(PH))
+        r = dict(STATE.get('res') or {}, events=STATE.get('ev'), exception=tb, result='exception：程式例外中斷（非受控停止；停止有效性未驗證）')
+        json.dump(clean(r), open(os.path.join(a.out, 'result_partial.json'), 'w'), ensure_ascii=False, indent=1)
+    except Exception as e_:                                          # noqa: BLE001
+        print('[motm] 部分紀錄存檔失敗', repr(e_), flush=True)
+
+
 if __name__ == '__main__':
     rc = 99
     try:
         rc = main()
     except Exception:
         import traceback
-        print('[motm] 例外', traceback.format_exc(), flush=True)
+        tb = traceback.format_exc()
+        print('[motm] 例外', tb, flush=True)
+        save_partial(tb)
     try:
         POOL.close()
         PLANNER.close()

@@ -54,7 +54,9 @@ r13（Codex 20261113_133147 §1）：新參考先暫存（stage_reference：非�
   （接縫兩側分段斜率之差／h 的本體加速度、輪速、手臂速率與加速度、設定點速率、門角速率與加速度，界限同 door_wbopt 驗收；以 g＝1 為最壞）。
   staged_step（每拍首、step 之前）：新參考最早會影響命令的那一拍（σ＋(D_STEPS·PHYS＋N·DT) ≥ σ_s）以複本試跑一拍——當下實測狀態、設定點、
   真管線、拍內斜坡——候選命令、閉鏈手臂驗收、提交前停止掃掠、預測停止閉鏈 ≤ CL_TOL、期限備援都過才接上本體；否則拒接，舊段與其停止尾段不動。
-r14：g2['pool'] 可傳外部共用的計算池（執行器在啟動模擬器前 fork）；只關自己建立的池。"""
+r14：g2['pool'] 可傳外部共用的計算池（執行器在啟動模擬器前 fork）；只關自己建立的池。
+r15：複本（_light_copy／warmup）深拷貝前暫時把 g2['pool'] 換成 0、拷貝後還原並讓複本共用同一池（池物件含程序認證字串不可拷貝；
+  名目趟 m8house_door_motm_1 在交接試跑時因此例外中斷）；試跑複本不檢查控制期限（期限只對本體真實拍）。"""
 import math
 import os
 import sys
@@ -486,17 +488,18 @@ class DoorOpenExec:
         import copy
         big = ('step_log', 'pipe_log', 'cmd_hist', 'events', 'rec', 'tick_ms', 'solve_ms', 'sweep_ms', 'pool_ms', 'prep_ms', 'p2_log', 'fb_log')
         saved = {k: getattr(self, k) for k in big if hasattr(self, k)}
-        pool, stg = self._pool, self.staged
+        pool, stg, g2p = self._pool, self.staged, self.g2
         try:
             for k in saved:
                 setattr(self, k, [])
-            self._pool, self.staged = None, None
+            self._pool, self.staged, self.g2 = None, None, dict(self.g2, pool=0)
             tmp = copy.deepcopy(self)
         finally:
             for k, v in saved.items():
                 setattr(self, k, v)
-            self._pool, self.staged = pool, stg
+            self._pool, self.staged, self.g2 = pool, stg, g2p
         tmp._pool, tmp._pool_owned = pool, False
+        tmp.g2 = dict(tmp.g2, pool=g2p['pool'], deadline_ms=None)       # 試跑複本不是實時拍：期限只對本體的真實拍檢查
         return tmp
 
     def staged_step(self, t, q, phi_meas):
@@ -544,10 +547,11 @@ class DoorOpenExec:
         讓求解器、閉鏈、淨空、停止預測的第一次呼叫成本發生在交接前；本控制器狀態完全不動（複本丟棄）。回複本那一拍的耗時 ms。"""
         import copy
         pool, self._pool = self._pool, None
+        g2p, self.g2 = self.g2, dict(self.g2, pool=0)
         try:
             tmp = copy.deepcopy(self)
         finally:
-            self._pool = pool
+            self._pool, self.g2 = pool, g2p
         tmp._pool, tmp._pool_owned = None, False
         tmp.g2 = dict(tmp.g2, pool=0, deadline_ms=None)
         fq_save, phi0_save = W.FINGER_Q, W.PHI0

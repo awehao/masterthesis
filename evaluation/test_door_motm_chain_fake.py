@@ -12,6 +12,8 @@
 import json, math, os, sys, time
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+import door_sweep_pool as DSP
+SHARED = DSP.SweepPool(6) if os.environ.get('SHARED_POOL') == '1' else None   # 同 Isaac 執行器：先 fork 的共用池物件
 os.environ.setdefault('P2_TERM', '1'); os.environ.setdefault('P2_FINAL', '1')
 import door_motm_p2 as P2
 WB = P2.WB
@@ -70,7 +72,7 @@ ub = np.array([cth * vw[0] + sth * vw[1], -sth * vw[0] + cth * vw[1], 0.0])
 u_ss = np.r_[ub, qd]
 q = np.r_[b0, qa.copy()]
 s0 = qa + (PHYS / al) * qd - dq(q)
-gc = G.MovingGraspCtrl(ident, est_at, d_world, V, WIN, s0, [u_ss.copy() for _ in range(D_STEPS)], u_ss, u_ss, dq(q), pool=6, fastkin=True, deadline_ms=50.0)
+gc = G.MovingGraspCtrl(ident, est_at, d_world, V, WIN, s0, [u_ss.copy() for _ in range(D_STEPS)], u_ss, u_ss, dq(q), pool=SHARED if SHARED is not None else 6, fastkin=True, deadline_ms=50.0)
 ev, ts = [], []
 first = dict(req=None, t_avail=None, ok=False)
 
@@ -111,8 +113,10 @@ while t < 30.0:
             Xd0, h0, _ = first['o'].dense_reference(4)
             T_HE_act = np.linalg.inv(first['T_plan']) @ K.fk(q, 'link_tcp')
             ho = dict(s=gc.s.copy(), pipe=[u_.copy() for u_ in gc.pipe], u_last=gc.u_last.copy(), u_prev=gc.u_prev.copy(), bias=np.asarray(gc.cfg.arm_model.bias, float).copy(), moving=True, off_static=gc.off(q))
-            ex_c = X.DoorOpenExec(ident, Xd0, h0, first['T_plan'], phi_b, T_HE_act, GOAL, ho, FQ, arm_mode='closure', g2=dict(gravity2=True, ik_fc=True, pool=6, prep_fc=True, deadline_ms=50.0))
+            ex_c = X.DoorOpenExec(ident, Xd0, h0, first['T_plan'], phi_b, T_HE_act, GOAL, ho, FQ, arm_mode='closure', g2=dict(gravity2=True, ik_fc=True, pool=SHARED if SHARED is not None else 6, prep_fc=True, deadline_ms=50.0))
             ex_c.p2_open = True
+            if SHARED is not None:
+                ex_c.warmup(q, phi_b)
             w0_ = time.perf_counter()
             tmp = ex_c._light_copy()
             tmp.step(t, q.copy(), phi_b)
