@@ -53,6 +53,11 @@ def main():
     reg = json.load(open(a.reg))
     L = np.load(os.path.join(HERE, 'runs', a.run, 'log.npz'))
     R = L['rows']
+    global C_DOOR, C_F1, C_F2, C_Q, C_B, PH
+    cols = [str(c) for c in L['cols']]
+    C_DOOR, C_F1, C_F2, C_Q, C_B = cols.index('door_q'), cols.index('f1'), cols.index('f2'), cols.index('q1'), cols.index('bx')   # 依欄名（開門執行器與整合執行器欄位不同）
+    if 'phases' in L:
+        PH = [str(x) for x in L['phases']]
     os.makedirs(a.out, exist_ok=False)
     world = World(stage_units_in_meters=1.0, physics_dt=0.01, rendering_dt=0.01)
     stage = world.stage
