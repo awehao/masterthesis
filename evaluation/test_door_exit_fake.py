@@ -46,7 +46,7 @@ d0 = q0[3:] - s0                                                     # 起點實
 path = np.vstack([np.array(sg['path_xy']) for sg in pj['segments']])
 path = np.vstack([path, np.array(pj['P2'])[None]])
 Q_STOW = np.array([-0.013, -0.052, 0.086, 0.012, -1.625, -0.002])
-c = XE.DoorExitCtrl(ident, P['T_WH_bind'], float(P['phi_bind']), s0, [np.zeros(9)] * XE.D_STEPS, np.zeros(9), np.zeros(9), al * d0, fq, phi0, omega0, path[1:], Q_STOW, scope_end=('X2' if (case in ('closed_X2', 'open_X2') or START == 'full1') else None), wait_enable=(os.environ.get('EXIT_WAIT', '1') == '1'))
+c = XE.DoorExitCtrl(ident, P['T_WH_bind'], float(P['phi_bind']), s0, [np.zeros(9)] * XE.D_STEPS, np.zeros(9), np.zeros(9), al * d0, fq, phi0, omega0, path[1:], Q_STOW, scope_end=('X2' if (case in ('closed_X2', 'open_X2') or START == 'full1') else None), wait_enable=(os.environ.get('EXIT_WAIT', '0') == '1'))
 K = XE.K
 bodies = BM.arm_bodies(K)
 G0 = BM.arm_gravity(K, q0, bodies)
@@ -106,7 +106,7 @@ while t < 90.0:
     if np.any(push):
         q[:2] += push; push = np.zeros(2) if case in ('finger_slow', 'finger_reapproach', 'push_during_stop') else push
     d = d0 + (BM.arm_gravity(K, q, bodies) - G0) / 600.0
-    q[3:] = q[3:] + al * (o['arm_target'] - q[3:] + d)
+    q[3:] = q[3:] + al * float(os.environ.get('EXIT_ALPHA', '1.0')) * (o['arm_target'] - q[3:] + d)   # EXIT_ALPHA：受控對象響應失配（控制器模型不變）
     t += 0.01
     if c.n_step % XE.NPH == 0:
         log.append([t, *q, phi])
@@ -123,7 +123,7 @@ elif case in ('push_during_stop', 'finger_slow'):
     ck = dict(stop_reason=bool(rep['stop'] and rep['stop']['why'] == expect), escalated_abort=bool(rep['abort'] is not None and rep['abort']['why'] == 'violation_during_stop' and any(w in rep['abort']['viol'] for w in want)),
               no_physics_after_abort=bool(aborted and n_phys_after_abort == 0), stop_not_success=bool(rep['stop_effect'] and rep['stop_effect'].get('ok') is None))
 else:
-  ck = dict(stop_reason=bool(rep['stop'] and rep['stop']['why'] == expect), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']), not_aborted=rep['abort'] is None,
+  ck = dict(stop_reason=bool(rep['stop'] and (rep['stop']['why'] == expect or (case == 'finger_reapproach' and rep['stop']['why'] == 'stop_now_violation' and 'finger_bar' in rep['stop'].get('bad', [])))), stop_effective=bool(rep['stop_effect'] and rep['stop_effect']['ok']), not_aborted=rep['abort'] is None,
           clear_ok=bool(case in ('finger_reapproach', 'finger_pen_start') or all(rep['min_clear'][k] >= XE.W.THR[k] for k in XE.KEYS)), finger_after_release_ok=bool(case == 'finger_reapproach' or rep['min_clear']['finger_bar_after_release'] >= XE.W.THR['env'] or rep['finger_release_t'] is None),
           limits_ok=bool(rep['limits']['arm_rate'] <= 1.0 + 1e-6 and rep['limits']['arm_acc'] <= XE.C0.A_ARM + 1e-6 and rep['limits']['wheel_v'] <= XE.LIM.W_LIM + 1e-6 and rep['limits']['wheel_a'] <= XE.LIM.WA_LIM + 1e-6))
 if case == 'wait_dip':

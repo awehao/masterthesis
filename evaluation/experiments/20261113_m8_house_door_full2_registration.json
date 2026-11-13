@@ -1,0 +1,35 @@
+{
+ "name": "m8_house_door_full_r2",
+ "run_id": "m8house_door_full_2",
+ "mode": "full",
+ "authority": "Codex 20261113_091401：撤回「必須先等待」，改「立即退出＋實測錨定預測偏置」；full_1 實錄新舊模型核對、取錨前置條件、最終版回歸通過，新登錄與凍結相符後核可一趟",
+ "scope": "本趟視覺接近 → 插入（任務參考）→ 閉爪 → 理想抓持綁定 → 規劃（T_WH_b＝Rz[−(φ_b−φ_cap)]·T_near）→ 開門（closure）→ 停穩 → 解綁讀回 → 張爪（兩指實際開度逐步核淨空）→ X1→X1b→X2 → 控制器內範圍停止。不穿門、不導航。",
+ "checks": "result＝completed_to_X2 且 checks 全過：冒煙同項 ＋ mode_full、綁定條件、規劃與時鐘、open_done、開門停止有效、解綁讀回明確 False、張爪淨空、X 承接來源＝door_open_exec_ctrl、未中止；任何中止或必要欄位缺漏均不算過",
+ "not_claims": [
+  "綁定條件只評估，不稱綁定已驗證",
+  "起點穿透反例只說故障處置符合預期，不列為安全成功",
+  "非即時",
+  "名目停止掃掠餘裕 0.3 mm 只是名目模型餘裕",
+  "理想抓持綁定、非即時、n=1；不穿門",
+  "未接回光達動態 CBF／GUARD／Shield，不是動態避障開門成果",
+  "假世界受控對象與預測用同一起點實測偏置，屬同模型比較"
+ ],
+ "pre_checks": [
+  "資料/door_exit_fake_r4_final/full1_pred_model_check.json（舊模型重現 full_1 拒絕點；零命令 0.29 s 實錄：舊模型關節誤差 7.77 mrad／TCP 2.93 mm，新模型 0.10 mrad／0.013 mm）",
+  "資料/door_exit_fake_r4_final（原 11 案＋閉門＋85°＋承接；full_1 起點：回擺、門推、底盤推、受控對象響應 ×0.8／×1.2）",
+  "m8house_door_full_smoke_1（A0／插入鏈未改）"
+ ],
+ "on_failure": "保留、不熱修、不自動補跑；結果與雙影片照交；模擬時間與規劃／計算牆鐘分列",
+ "machine": "桌機 msi：Ryzen 7 9800X3D／RTX 5070",
+ "freeze": "evaluation/experiments/20261113_m8_house_door_full_freeze_r3.sha256",
+ "smoke": "m8house_door_full_smoke_1 通過（不綁不開門）",
+ "units_note": "A0 與插入初值的 bias 差 ≤0.93 mrad 是模型每步加項；除以 α≈0.095 的等效靜態偏移差最大約 9.8 mrad",
+ "changes_since_full1": [
+  "退出控制器 r4：W 段預設停用（等待策略在兩個實錄起點未過現行檢查；速度判準反例未覆蓋）",
+  "退出預測模型偏置於取錨時以實測 α·(q−s) 初始化一次（承接模型 j2 等效 13.47 mrad、實測 5.29 mrad）；門檻、例外撤除、門角帶、停止政策不變",
+  "取錨前置：管線清空、無命令（不符 ⇒ anchor_precondition 停止）；記錄新舊 bias 與等效偏移"
+ ],
+ "notes": [
+  "m8house_door_full_1：開門完成（85.04°、11.5 N）；退出第一拍 stop_now_violation ⇒ 受控停止有效；整合趟未通過（保留）。"
+ ]
+}

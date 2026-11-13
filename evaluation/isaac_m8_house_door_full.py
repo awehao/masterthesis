@@ -704,7 +704,7 @@ def main():
     xc = XE.DoorExitCtrl(ident, T_WH_b, phi_b, ho_x['s'], ho_x['pipe'], ho_x['u_last'], ho_x['u_prev'], ho_x['bias'], fq_open, door_q(), omega0, np.zeros((1, 2)), q_obs, joint_kp=joint_kp, scope_end='X2')
     res['handover_to_X'] = dict(source='door_open_exec_ctrl' if src_ is not ins else 'door_insert_ctrl（冒煙）', setpoint_equal=bool(np.array_equal(xc.s, ho_x['s'])), pipe_equal=bool(all(np.array_equal(x_, y_) for x_, y_ in zip(xc.pipe, ho_x['pipe']))),
                                 u_last_equal=bool(np.array_equal(xc.u_last, ho_x['u_last'])), u_prev_equal=bool(np.array_equal(xc.u_prev, ho_x['u_prev'])), setpoint_vs_actuator_target=float(np.abs(ho_x['s'] - np.array([tgt[i] for i in idx], float)).max()),
-                                phi0_deg=round(math.degrees(door_q()), 4), omega0_dps=round(math.degrees(omega0), 4), finger_q_open=fq_open, q_stow='本趟起始手臂姿態（同 da_online_1 起點）')
+                                phi0_deg=round(math.degrees(door_q()), 4), omega0_dps=round(math.degrees(omega0), 4), wait_enable=xc.wait_enable, anchor_pred_bias=xc.anchor_pred_bias, pred_bias_inherited=ho_x['bias'].tolist(), finger_q_open=fq_open, q_stow='本趟起始手臂姿態（同 da_online_1 起點）')
     box.update(kind='exit', obj=xc, t0=t, forwarded=False)
     t_x0 = t
     while t - t_x0 < EXIT_LIMIT_S:
@@ -742,6 +742,9 @@ def finish(res, rows, aborted, events=None, gate=None, guard=None):
                   exit_clear=bool(all(x['min_clear'][k_] >= XE.W.THR[k_] for k_ in XE.KEYS)), no_x3x4_cmd=bool(x.get('x3x4_cmd_ticks') == 0), finger_exemption_released=x.get('finger_release_t') is not None,
                   exit_limits=bool(x['limits']['arm_rate'] <= 1.0 + 1e-6 and x['limits']['arm_acc'] <= XE.C0.A_ARM + 1e-6 and x['limits']['wheel_v'] <= XE.LIM.W_LIM + 1e-6 and x['limits']['wheel_a'] <= XE.LIM.WA_LIM + 1e-6),
                   handover_X=bool(hx['setpoint_equal'] and hx['pipe_equal'] and hx['u_last_equal'] and hx['u_prev_equal'] and hx['setpoint_vs_actuator_target'] < 1e-6))
+    if 'X_exit' in res:
+        an_ = res['X_exit'].get('anchor') or {}
+        ck['exit_anchor_precondition'] = bool(an_.get('precondition') and all(an_['precondition'].values()) and an_.get('anchored_pred_bias'))
     if res.get('mode') == 'smoke_nobind':
         ck['smoke_fixedjoint_never_created'] = bool(res.get('smoke_fixedjoint_never_created'))
     else:                                                                # 正式：必要欄位缺漏即失敗

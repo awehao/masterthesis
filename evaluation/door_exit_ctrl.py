@@ -103,7 +103,7 @@ def trap_T(dist, v, a):
 
 
 class DoorExitCtrl:
-    def __init__(self, ident, T_WH_bind, phi_bind, s, pipe, u_last, u_prev, bias, finger_q, phi0, omega0, path_xy, q_stow, joint_kp=600.0, sweep_stride=3, scope_end=None, wait_enable=True):
+    def __init__(self, ident, T_WH_bind, phi_bind, s, pipe, u_last, u_prev, bias, finger_q, phi0, omega0, path_xy, q_stow, joint_kp=600.0, sweep_stride=3, scope_end=None, wait_enable=False, anchor_pred_bias=True):
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
         self.cfg.arm_model.bias = np.asarray(bias, float).copy()
@@ -126,7 +126,9 @@ class DoorExitCtrl:
         self.T_at = lambda T, s_: np.asarray(E.OT.object_target(T, self.T_HG, self.a_H, float(s_))['T_WE'], float)   # noqa: E731
         self.S_EXIT = float(PG.S_PRE)
         self.t, self.n_step = 0.0, 0
-        self.wait_enable = bool(wait_enable)
+        self.wait_enable = bool(wait_enable)                         # r4：W 段預設停用（Codex 20261113_091401；等待策略在兩個實錄起點未過現行檢查）
+        self.anchor_pred_bias = bool(anchor_pred_bias)               # 預測模型偏置以錨定時實測 q−s 初始化（局部預測模型初始化變更；門檻不變）
+        self.bias_inherited = np.asarray(bias, float).copy()
         self.phase, self.t_phase, self.ph_hist = ('W', 0.0, [('W', 0.0)]) if self.wait_enable else ('X1', 0.0, [('X1', 0.0)])
         self.phi_hist, self.wait_ok_n, self.wait_info = [], 0, None
         self.anchor, self.off0, self.G0, self.bodies = None, None, None, BM.arm_bodies(K)
@@ -331,10 +333,17 @@ class DoorExitCtrl:
     def _anchor(self, q, phi, omega):
         """以當下實測狀態建立退出參考：偏置錨定 off0＝q−s、重力基準、TCP 與把手基準、門角帶起點；
         停止預測模型的偏置也改用同一實測值（bias＝α·off0；自由空間辨識偏置在此構型不成立——full_1 預測穩態與實測差 5.3 mrad）。"""
+        al_ = np.asarray(self.cfg.arm_model.alpha, float)
+        pre = dict(pipe_empty=bool(not any(np.any(u_) for u_ in self.pipe)), u_last_zero=bool(not np.any(self.u_last)))   # 取錨前置：管線清空、無命令（靜止與無鎖存由執行器在放行前確認）
         self.off0, self.G0 = q[3:] - self.s, BM.arm_gravity(K, q, self.bodies)
-        self.cfg.arm_model.bias = np.asarray(self.cfg.arm_model.alpha, float) * self.off0
+        if self.anchor_pred_bias:
+            self.cfg.arm_model.bias = al_ * self.off0                 # 只在取錨時設一次；之後不因掃掠失敗再調
         self.phi0, self.omega0, self.t_x1 = float(phi), float(omega), self.t
-        self.anchor = dict(t=round(self.t, 3), q0=q.tolist(), s0=self.s.tolist(), off0=self.off0.tolist(), joint_kp=self.joint_kp, phi0_deg=round(math.degrees(phi), 4), omega0_dps=round(math.degrees(omega), 4))
+        self.anchor = dict(t=round(self.t, 3), q0=q.tolist(), s0=self.s.tolist(), off0=self.off0.tolist(), joint_kp=self.joint_kp, phi0_deg=round(math.degrees(phi), 4), omega0_dps=round(math.degrees(omega), 4), precondition=pre,
+                           pred_bias_inherited=self.bias_inherited.tolist(), pred_bias_used=np.asarray(self.cfg.arm_model.bias, float).tolist(), equiv_offset_inherited_mrad=[round(float(v) * 1e3, 3) for v in self.bias_inherited / al_],
+                           equiv_offset_used_mrad=[round(float(v) * 1e3, 3) for v in np.asarray(self.cfg.arm_model.bias, float) / al_], anchored_pred_bias=self.anchor_pred_bias)
+        if not all(pre.values()):
+            self._stop('anchor_precondition', **pre)
         self.Tn0 = K.fk(q, 'link_tcp')
         self.Th0 = W.handle_pose(self.T_WH_bind, self.phi0)
 
