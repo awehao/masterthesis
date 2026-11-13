@@ -30,7 +30,12 @@
 （r2 的 hold／release 與 release 路徑預測保留在 versions/door_open_exec_ctrl_r2.py，不再使用：release 會使夾爪殼碰橫桿，hold 有約 22 mm 閉鏈不相容且無反力模型。）
 停止有效性分核：管線清空、底盤、手臂、門角速度。
 完成：σ 到參考終點、實測門角 ≥ φ_goal−END_PHI_TOL、各速度低於門檻連續 END_N 拍。
-數值皆為事前登錄的工程設定；未校準的傳遞力只作模擬保護。"""
+數值皆為事前登錄的工程設定；未校準的傳遞力只作模擬保護。
+r8（G2，Codex 20261113 時間帳裁定）：g2＝dict(gravity, ik_fc, ik_warm, sweep_cache)，預設全關＝r7 逐值相同。
+  gravity     閉鏈錨定的 URDF 重力改單趟計算（door_fast_kin.FastGravity；與 door_body_model.arm_gravity 逐構型核對）。
+  ik_fc       閉鏈 IK 每次迭代 FK＋Jacobian 一趟（FastChain；同迭代、同種子、同停止條件）。
+  ik_warm     IK 種子改用上一拍同一預測時刻的解（上一拍節點 k＋1）；分支跳躍防護仍對原鏈式種子（上一節點）量，判準不變。
+  sweep_cache 停止掃掠的淨空：輸入完全相同（構型位元組＋手指開度＋PHI0＋把手位姿）才重用、每拍清空 ⇒ 結果與重算相同；樣本數與核對項目不變。"""
 import math
 import os
 import sys
@@ -46,6 +51,7 @@ import door_limits as LIM                                          # noqa: E402
 import gmpc_wb_ramp as GR                                          # noqa: E402
 import dataclasses                                                 # noqa: E402
 import door_body_model as BM                                       # noqa: E402
+import door_fast_kin as DFK                                        # noqa: E402
 
 DA = W.DA
 GW, K, C0, B, C21, S = DA.GW, DA.K, DA.C0, DA.B, DA.C21, DA.S
@@ -106,7 +112,15 @@ def rot_deg(Ta, Tb):
 
 
 class DoorOpenExec:
-    def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2, arm_mode='qp', joint_kp=600.0):
+    def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2, arm_mode='qp', joint_kp=600.0, g2=None):
+        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False)
+        for k_ in (g2 or {}):
+            if k_ not in self.g2:
+                raise ValueError(k_)
+        self.g2.update(g2 or {})
+        self._grav = DFK.FastGravity(K, BM.arm_bodies(K)) if self.g2['gravity'] else None
+        self._ccache = DFK.ClearCache(W.clear_door) if self.g2['sweep_cache'] else None
+        self.Q_cl_prev_full = None
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
         self.cfg.arm_model.bias = np.asarray(handover['bias'], float).copy()
@@ -250,7 +264,7 @@ class DoorOpenExec:
                     else:
                         ts = i * C21.SAMPLE_EVERY * PHYS
                         phi_i = min(max(phi0 + omega0 / D_DOOR * (1.0 - math.exp(-D_DOOR * ts)), 0.0), math.radians(110.0))
-                    c = W.clear_door(np.r_[Q[i], phi_i], self.T_WH_bind)
+                    c = (self._ccache if self._ccache is not None else W.clear_door)(np.r_[Q[i], phi_i], self.T_WH_bind)
                     if self.clear_inject is not None:
                         c = self.clear_inject(self, c)
                     self.mins['n_sweep'] += 1
@@ -320,6 +334,8 @@ class DoorOpenExec:
     def _ik_closure(self, b, phi, seed):
         """固定 T_HE：給底盤位姿 b 與門角 φ，解手臂 q 使 TCP＝把手(φ)·T_HE；以前一解為種子（連續分支）。回 (q, 殘差, σ_min)。"""
         Tg = self.handle_T(float(phi)) @ self.T_HE
+        if self.g2['ik_fc']:
+            return DFK.ik_closure_fc(Tg, np.asarray(b, float), seed)
         q = np.asarray(seed, float).copy()
         res = np.inf
         for _ in range(30):
@@ -337,7 +353,7 @@ class DoorOpenExec:
 
     def _off_cl(self, q9):
         """A 的靜態偏置 q−s：以開門起點**實測** (q₀−s₀)（含綁定預載）為錨，加 URDF 重力隨構型的變化 (G(q)−G(q₀))/kp。"""
-        return self.off_cl0 + (BM.arm_gravity(K, q9, self.arm_bodies) - self.G0) / self.joint_kp
+        return self.off_cl0 + ((self._grav(q9) if self._grav is not None else BM.arm_gravity(K, q9, self.arm_bodies)) - self.G0) / self.joint_kp
 
     def _closure_arm(self, qp, sp, r, xi_ref, sig_eff, g, tau, va):
         """底盤序列＝本拍 GMPC 解（ξ_ref＋δξ，含逐物理步斜坡）；由管線清空後的預測狀態 qp 起推，得命令生效時刻起每拍末的預測底盤；
@@ -358,8 +374,9 @@ class DoorOpenExec:
         PH_ = [float(self.ref(sig_eff + k * DT * g)[9]) for k in range(N + 1)]
         seed = self.q_cl_prev if self.q_cl_prev is not None else np.asarray(qp[3:], float)
         Q, SG = [], []
+        warm = self.Q_cl_prev_full if self.g2['ik_warm'] else None
         for k in range(N + 1):
-            q, res, sm = self._ik_closure(B_[k], PH_[k], seed)
+            q, res, sm = self._ik_closure(B_[k], PH_[k], warm[k + 1] if (warm is not None and k + 1 <= N) else seed)
             SG.append(sm)
             self.cl_stats['ik_resid_max'] = max(self.cl_stats['ik_resid_max'], res)
             self.cl_stats['sigma_min'] = min(self.cl_stats['sigma_min'], sm)
@@ -372,6 +389,7 @@ class DoorOpenExec:
             seed = q
         Q = np.array(Q)
         self.q_cl_prev = Q[1].copy()
+        self.Q_cl_prev_full = Q.copy()
         Qd = np.gradient(Q, DT, axis=0)
         S_ = np.array([Q[k] + tau * Qd[k] - self._off_cl(np.r_[B_[k], Q[k]]) for k in range(N + 1)])
         U = np.diff(np.vstack([np.asarray(sp, float)[None], S_[1:]]), axis=0) / DT
@@ -466,10 +484,12 @@ class DoorOpenExec:
             return dict(ab, arm_target=self.s.copy())
         if tick and self.off_cl0 is None:                            # A：開門起點靜態偏置（第一拍、只取一次）；r7：移動承接用上游靜態估計，不取含動態落後的 q−s
             self.off_cl0 = self.off_static.copy() if self.off_static is not None else q[3:] - self.s
-            self.G0 = BM.arm_gravity(K, q, self.arm_bodies)
+            self.G0 = self._grav(q) if self._grav is not None else BM.arm_gravity(K, q, self.arm_bodies)
             self.anchor = dict(t=self.t, q0=q.tolist(), s0=self.s.tolist(), G0=self.G0.tolist(), off0=self.off_cl0.tolist(), joint_kp=self.joint_kp, off_source='handover_off_static' if self.off_static is not None else 'measured_q_minus_s', q_minus_s=(q[3:] - self.s).tolist(),
                                note='錨定含綁定預載，不是自由空間辨識偏置；q−s＝G/kp')
         if tick:
+            if self._ccache is not None:
+                self._ccache.clear()                                   # 快取只在同一拍內有效
             if self.q_tick is not None:
                 self.rate = dict(base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / self.cfg.dt, yaw=abs(q[2] - self.q_tick[2]) / self.cfg.dt, arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / self.cfg.dt, door=abs(phi_meas - self.phi_tick) / self.cfg.dt)
             self.q_tick, self.phi_tick = q.copy(), float(phi_meas)
