@@ -10,7 +10,12 @@
 監看與停止：實測淨空（門扇／立柱／橫桿＝門角實測；兩指—橫桿在 INSERT 起為指定接觸只要求不穿入）、窗口邊界（底盤沿 d 的位置超出可抓窗口 ⇒ 停止）、
             現在停／候選下一拍與再晚一拍停止掃掠（door_exit_ctrl.stop_traj_exit，同一停法）、手臂速度／加速度、輪面速度／加速度。
             違反 ⇒ 受控停止（同一停法有界減速）；停止中新違反 ⇒ 中止。
-真值只在受控對象與評估端；控制器只讀估計。"""
+真值只在受控對象與評估端；控制器只讀估計。
+r2（Codex 20261113_120619：READY 是可撤銷的當下資格，不是永久相位標籤）：下游接受交接（accept_handover）之前，READY 每拍重判——
+  相對位姿／速度（同 CONFIRM 門檻）、估計新鮮度（最新採用影格的擷取時刻距今 ≤ READY_Q.fresh_s）、剩餘窗口（「現在停」預測停止終點沿 d 仍在窗口內）、
+  停止可行（現在停掃掠通過，原本就每拍做）。相對運動或新鮮度不過 ⇒ 撤銷 READY 回 CONFIRM（重新累積）；停止終點出窗口或首次 READY 後
+  accept_max_s 內未被接受 ⇒ 受控停止。CONFIRM 也要求估計新鮮。窗口邊界檢查在 READY 中照常（r1 對 READY 豁免，已移除）。
+  每個合格拍給一個 ready_ver；accept_handover(ver) 只接受「當拍」版本，舊版本拒絕。READY 只代表模型內的放行條件，不代表實際雙指接觸或移動綁定已驗證。"""
 import math
 import os
 import sys
@@ -27,6 +32,7 @@ SCHED = dict(hold_s=0.3, ins_s=1.0, close_s=0.5, confirm_s=0.3)
 CONFIRM = dict(pos_m=0.005, rot_deg=3.0, lin_mps=0.005, ang_rps=0.02)
 FUSE = dict(win_s=1.0, gate_m=0.005, gate_deg=3.0, min_frames=5)     # 把手估計融合：近 win_s 影格的穩健平均（把手在世界靜止）；離群門檻
 FINGER_CLOSED = 0.0017
+READY_Q = dict(fresh_s=0.3, accept_max_s=0.5)                       # r2 事前登錄：估計新鮮度上限（30 Hz、延遲 0.1 s 下約 0.13 s）、首次 READY 後等待下游接受的上限
 
 
 class MovingGraspCtrl:
@@ -63,6 +69,8 @@ class MovingGraspCtrl:
         self.frames, self.fuse = {}, dict(used=0, rejected=0, last_ver=None)
         self.stop, self.stop_t, self.stop_ok, self.abort, self.still_n = None, None, None, None, 0
         self.confirm_n, self.ready_t = 0, None
+        self.ready_now, self.ready_ver, self.n_ready_ver, self.accepted, self.accept_t = False, None, 0, False, None
+        self.n_revoke, self.stop_end_s, self.est_age = 0, None, None
         self.rec, self.events, self.cmd_log = [], [], []
         self.mins = {k: np.inf for k in KEYS}
         self.mins.update(finger_bar=np.inf, stop_sweep=np.inf)
@@ -138,6 +146,8 @@ class MovingGraspCtrl:
     def _sweep(self, q, u, extras, j0, u_from, phi, exempt, tag):
         for e in extras:
             Q, cmds, k_dec = XE.stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, e)
+            if tag == 'stop_now' and e == 0:
+                self.stop_end_s = float((np.asarray(Q[-1][:2]) - self.b_origin[:2]) @ self.d)   # r2：現在停的停止終點沿 d
             idx = list(range(0, len(Q), self.sweep_stride)) + [len(Q) - 1]
             for i in idx:
                 c = self.clear(Q[i], phi, exempt)
@@ -203,6 +213,8 @@ class MovingGraspCtrl:
                 self.fuse.update(used=len(keep), last_ver=max(keep))
             if self.T_est is None:
                 self._stop('no_estimate')
+            self.est_age = None if self.est_ver is None else self.t - float(self.frames[self.est_ver][0])
+            fresh = self.est_age is not None and self.est_age <= READY_Q['fresh_s'] + 1e-9
             self.T_WH_model = self.T_est                               # 淨空模型的把手＝估計（門角 φ 由實測給）
             W.set_model(phi0=float(phi_meas), finger_q=self.finger_q)
             if self.q_tick is not None:
@@ -220,7 +232,7 @@ class MovingGraspCtrl:
             b_ = self._bad(c, exempt)
             if b_:
                 viol.append(('clearance', dict(bad=b_, at={k: round(float(v), 4) for k, v in c.items() if k != 'who'})))
-            if not (self.win[0] - 1e-9 <= sd <= self.win[1] + 1e-9) and self.phase != 'READY':
+            if not (self.win[0] - 1e-9 <= sd <= self.win[1] + 1e-9):
                 viol.append(('outside_window', dict(s_along=round(sd, 4), window=self.win)))
             ep, er, Tc = self._rel(q)
             if self.rel_prev is not None:
@@ -246,13 +258,24 @@ class MovingGraspCtrl:
                     self._phase('CLOSE')
                 elif self.phase == 'CLOSE' and tr >= h + i + cl:
                     self._phase('CONFIRM')
+                rel_ok = ep <= CONFIRM['pos_m'] and er <= CONFIRM['rot_deg'] and lin <= CONFIRM['lin_mps'] and ang <= CONFIRM['ang_rps']
+                if self.phase == 'READY':                              # r2：READY 每拍重判（交接被接受前）
+                    why_r = [w_ for w_, ok_ in (('rel_motion', rel_ok), ('stale_estimate', fresh)) if not ok_]
+                    if why_r:
+                        self.n_revoke += 1
+                        self._ev('ready_revoked', why=why_r, ep_mm=round(ep * 1e3, 3), er_deg=round(er, 3), lin_mmps=round(lin * 1e3, 3), est_age_s=None if self.est_age is None else round(self.est_age, 3))
+                        self._phase('CONFIRM')
+                        self.confirm_n = 0
+                if self.ready_t is not None and not self.accepted and self.t - self.ready_t > READY_Q['accept_max_s'] + 1e-9:
+                    self._stop('accept_timeout', since_first_ready_s=round(self.t - self.ready_t, 3), phase_now=self.phase)   # 首次 READY 起算，撤銷回 CONFIRM 也照計
                 if self.phase == 'CONFIRM':
-                    ok = ep <= CONFIRM['pos_m'] and er <= CONFIRM['rot_deg'] and lin <= CONFIRM['lin_mps'] and ang <= CONFIRM['ang_rps']
+                    ok = rel_ok and fresh
                     # 相對速度：夾爪對把手（把手靜止於世界 ⇒ 夾爪世界速度）；每拍取值、連續成立才累積
                     self.confirm_n = self.confirm_n + 1 if ok else 0
                     if self.confirm_n * DT >= cf - 1e-9:
                         self._phase('READY')
-                        self.ready_t = self.t
+                        if self.ready_t is None:
+                            self.ready_t = self.t                      # 首次 READY（接受等待上限由此起算，撤銷不重置）
             if self.phase in ('CLOSE', 'CONFIRM', 'READY'):
                 self.finger_q = max(FINGER_CLOSED, self.finger_q - (self.finger_open - FINGER_CLOSED) * DT / self.sched['close_s'])
             # 現在停
@@ -260,6 +283,14 @@ class MovingGraspCtrl:
                 sw0 = self._sweep(q, self.u_last, (0,), self.ramp_j, self.u_from_base, phi_meas, exempt, 'stop_now')
                 if sw0 is not None:
                     self._stop('stop_now_violation', **sw0)
+            if self.stop is None and self.phase == 'READY' and self.stop_end_s is not None and self.stop_end_s > self.win[1] + 1e-9:
+                self._stop('window_insufficient', stop_end_s=round(self.stop_end_s, 4), window=self.win)   # r2：現在停會停到窗口外
+            self.ready_now = bool(self.stop is None and self.phase == 'READY')
+            if self.ready_now:
+                self.n_ready_ver += 1
+                self.ready_ver = self.n_ready_ver
+            else:
+                self.ready_ver = None
             if self.stop is None:
                 qp, sp = self._pred(q)
                 yaw_err = (self.yaw_ref - qp[2] + math.pi) % (2 * math.pi) - math.pi
@@ -318,7 +349,17 @@ class MovingGraspCtrl:
             if self.still_n * PHYS >= 0.3 - 1e-9:
                 self.stop_ok = dict(t=round(self.t, 3), ok=True)
         self.n_step += 1
-        return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), finger=self.finger_q, ready=self.phase == 'READY' and self.stop is None, stopped=self.stop is not None, abort=False)
+        if self.stop is not None:
+            self.ready_now, self.ready_ver = False, None
+        return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), finger=self.finger_q, ready=self.ready_now, ready_ver=self.ready_ver, stopped=self.stop is not None, abort=False)
+
+    def accept_handover(self, ver):
+        """下游接受交接：只接受當拍的 READY 版本（舊版本、已撤銷、已停止 ⇒ 拒絕）。接受後本控制器不再出命令。"""
+        ok = bool(self.ready_now and self.stop is None and ver is not None and ver == self.ready_ver)
+        self._ev('accept_handover' if ok else 'accept_refused', ver=ver, current=self.ready_ver)
+        if ok:
+            self.accepted, self.accept_t = True, self.t
+        return ok
 
     def _phase(self, ph):
         self.phase, self.t_phase = ph, self.t
@@ -333,5 +374,6 @@ class MovingGraspCtrl:
     def report(self):
         Rr = np.array(self.rec, float) if self.rec else np.zeros((1, 12))
         return dict(fuse=self.fuse, stop=self.stop, abort=self.abort, stop_effect=self.stop_ok, phases=self.ph_hist, ready_t_rel=None if self.ready_t is None else round(self.ready_t - self.t0, 3),
+                    accepted=self.accepted, accept_t_rel=None if self.accept_t is None else round(self.accept_t - self.t0, 3), n_ready_revoked=self.n_revoke, n_ready_ver=self.n_ready_ver,
                     min_clear={k: round(float(v), 4) for k, v in self.mins.items()}, limits={k: round(float(v), 4) for k, v in self.lim.items()}, events=self.events,
                     s_along_end=round(float(Rr[-1, 2]), 4))

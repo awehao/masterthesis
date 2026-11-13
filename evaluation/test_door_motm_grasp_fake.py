@@ -5,7 +5,14 @@
 感知：把手估計＝真值＋固定偏差＋逐格雜訊（30 Hz）＋延遲＋遮擋（遮擋時沿用最後估計）。
 量：可抓窗口使用（READY 時沿 d 的位移、距窗口終點）、時間（插入＋閉爪＋確認＋延遲）、真值相對誤差（TCP 對真值抓取位姿）與相對速度
     （閉爪與確認期間每拍取最大值）、限制、淨空、停止掃掠最小餘裕、停止／中止。
-    python3 evaluation/test_door_motm_grasp_fake.py CASE V OUT.json"""
+    python3 evaluation/test_door_motm_grasp_fake.py CASE V OUT.json
+r2（READY 可撤銷；Codex 20261113_120619）：環境變數 RQ_CASE 選 READY 後反例（未設＝原行為，READY 後 0.5 s 結束）：
+  r_nominal  首個 READY 拍即請求接受        r_stalever  READY 第 3 拍用第 1 拍的版本請求（應拒絕），再用當拍版本
+  r_delay    永不接受（應 accept_timeout 受控停止）
+  r_jump4／r_jump8  READY 後擷取的影格把手估計平移 4／8 mm（門檻 5 mm：前者被融合、後者被拒），0.2／0.4 s 後請求接受
+  r_speed    READY 後底盤實際速度 ×1.3（命令不變），0.3 s 後請求接受
+  r_occl     READY 起遮擋 1.0 s，0.4 s 後請求接受
+  請求接受＝每拍呼叫 accept_handover(當拍 ready_ver)，直到成功或停止；成功即交接（結束）。"""
 import json, math, os, sys
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
@@ -36,6 +43,11 @@ pert.update(dict(nominal={}, bias=dict(bias_mm=3.4), jitter=dict(jit_mm=1.0, jit
                  yawdist=dict(yaw_dist=0.02), combined=dict(bias_mm=3.4, jit_mm=1.0, jit_deg=0.3, lat_s=0.1, a_scale=0.8, v_scale=0.95, yaw_dist=0.01))[case])
 bias_dir = rng.normal(size=3); bias_dir /= np.linalg.norm(bias_dir)
 frames = []                                                          # (擷取時刻, 估計)
+RQ = os.environ.get('RQ_CASE')
+RQP = dict(r_nominal=dict(acc=0.0), r_stalever=dict(acc=0.1, stale=True), r_delay=dict(acc=None), r_jump4=dict(acc=0.2, jump=4.0), r_jump8=dict(acc=0.4, jump=8.0),
+           r_speed=dict(acc=0.3, vs=1.3), r_occl=dict(acc=0.4, occl=1.0)).get(RQ) if RQ else None
+t_ready_abs = [None]                                                 # 首次 READY 的絕對時刻（受控對象端；擾動在此之後生效）
+jump_dir = np.array([0.0, 1.0, 0.0])
 
 
 def est_at(t):
@@ -45,8 +57,13 @@ def est_at(t):
         tn = -1.0 if not frames else frames[-1][0] + 1.0 / 30.0          # 影格自 t＝−1 s 起（接近段已在看）
         if pert['occl'] is not None and pert['occl'][0] <= tn < pert['occl'][1]:
             frames.append((tn, None)); continue
+        post = RQP is not None and t_ready_abs[0] is not None and tn >= t_ready_abs[0] - 1e-9
+        if post and RQP.get('occl') and tn < t_ready_abs[0] + RQP['occl']:
+            frames.append((tn, None)); continue
         T = T_true.copy()
         T[:3, 3] += bias_dir * pert['bias_mm'] * 1e-3 + rng.normal(scale=pert['jit_mm'] * 1e-3, size=3)
+        if post and RQP.get('jump'):
+            T[:3, 3] += jump_dir * RQP['jump'] * 1e-3
         ang = rng.normal(scale=math.radians(pert['jit_deg']), size=3)
         th = np.linalg.norm(ang)
         if th > 0:
@@ -88,13 +105,14 @@ q = np.r_[b0, qa.copy()]
 s0 = qa + tau * qd - dq(q)
 pipe = [u_ss.copy() for _ in range(D_STEPS)]
 c = G.MovingGraspCtrl(ident, est_at, d_world, v, WIN, s0, pipe, u_ss, u_ss, dq(q))
+rq_vers, rq_attempts, rq_stale_done = [], [], [False]
 plant_s = s0.copy()
 t, rows = 0.0, []
 while t < 6.0:
     o = c.step(t, q.copy(), phi_b)
     if o.get('abort'):
         break
-    tw = o['base_twist'] * pert['v_scale']
+    tw = o['base_twist'] * pert['v_scale'] * (RQP.get('vs', 1.0) if (RQP is not None and t_ready_abs[0] is not None) else 1.0)
     cs, sn = math.cos(q[2]), math.sin(q[2])
     q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2] + pert['yaw_dist']])
     q[3:] = q[3:] + al * pert['a_scale'] * (o['arm_target'] - q[3:] + dq(q))
@@ -109,8 +127,24 @@ while t < 6.0:
         break
     if c.phase == 'READY' and not os.path.exists(out_path.replace('.json', '_ready.npz')) and c.n_step % NPH == 0:   # READY 後第一個拍首：存交接狀態（開門參考重用核對用）
         np.savez(out_path.replace('.json', '_ready.npz'), q=q, s=c.s, pipe=np.array(c.pipe), u_last=c.u_last, u_prev=c.u_prev, T_est=c.T_est, phi=phi_b, off_static=dq(q), t=t, T_true=T_true)
-    if c.phase == 'READY' and t - c.ready_t >= 0.5:
+    if RQP is None and c.phase == 'READY' and t - c.ready_t >= 0.5:
         break
+    if RQP is not None:
+        if c.ready_t is not None and t_ready_abs[0] is None:
+            t_ready_abs[0] = c.ready_t
+        if o.get('ready_ver') is not None and (not rq_vers or rq_vers[-1] != o['ready_ver']):
+            rq_vers.append(o['ready_ver'])
+        if t_ready_abs[0] is not None and RQP['acc'] is not None and t - t_ready_abs[0] >= RQP['acc'] - 1e-9 and c.n_step % NPH == 1 and c.stop is None:
+            if RQP.get('stale') and not rq_stale_done[0] and len(rq_vers) >= 3:
+                rq_attempts.append(dict(t_rel=round(t - c.t0, 3), ver=rq_vers[0], current=o.get('ready_ver'), ok=c.accept_handover(rq_vers[0]), kind='stale_version'))
+                rq_stale_done[0] = True
+            elif (not RQP.get('stale')) or rq_stale_done[0]:
+                okh = c.accept_handover(o.get('ready_ver'))
+                rq_attempts.append(dict(t_rel=round(t - c.t0, 3), ver=o.get('ready_ver'), ok=okh, kind='current'))
+                if okh:
+                    break
+        if c.stop is not None and c.stop_ok is not None and t - c.stop_t >= 0.3:
+            break
 rep = c.report()
 ph = [r[1] for r in rows]
 A = np.array([[r[0], r[2], r[3], r[4], r[5], r[6], r[7], r[8]] for r in rows])
@@ -126,6 +160,9 @@ res = dict(case=case, v=v, pert=pert, report={k: rep[k] for k in ('fuse', 'stop'
                               hold_close_confirm_rot_max_deg=round(float(A[cc, 3].max()), 4) if cc.any() else None,
                               rel_speed_max_mmps=round(float(np.linalg.norm(pv[cc], axis=1).max()) * 1e3, 3) if cc.any() else None,
                               note='真值：TCP 對真值抓取位姿；閉爪與確認期間每拍最大值（不以首尾差抵消）；把手靜止 ⇒ 相對速度＝TCP 世界速度'),
-           ready=rep['ready_t_rel'] is not None)
+           ready=rep['ready_t_rel'] is not None,
+           ready_r2=dict(rq_case=RQ, accepted=rep.get('accepted'), accept_t_rel=rep.get('accept_t_rel'), n_ready_revoked=rep.get('n_ready_revoked'), attempts=rq_attempts,
+                         revocations=[e for e in rep['events'] if e['what'] in ('ready_revoked', 'accept_refused', 'accept_handover')], stop=rep['stop'], stop_effect=rep['stop_effect'],
+                         true_rel_at_end_mm=round(float(A[-1, 2]) * 1e3, 3) if len(A) else None))
 json.dump(res, open(out_path, 'w'), ensure_ascii=False, indent=1, default=float)
 print(json.dumps({k: res[k] for k in ('case', 'v', 'ready', 'window', 'tracking_true')}, ensure_ascii=False, default=float)); print(json.dumps(res['report'], ensure_ascii=False, default=float)[:700])
