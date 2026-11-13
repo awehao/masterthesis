@@ -35,6 +35,8 @@ r6（Codex 20261113_130916 §2）：
 r7（Codex 20261113_130916 §4）：deadline_ms（None＝r6）。拍首計時，提交候選時已超過 ⇒ 不提交（晚到不放行）；本拍「現在停」掃掠已通過
   （鎖定後即接觸停法的向前模擬：IK、命令限制、停穩、淨空）⇒ 以該停法停止（tick_deadline_miss），否則模擬中止。tick_log 分記正常拍與停止拍耗時。
   測試掛鉤：deadline_inject（強制本拍晚到）、fb_inject（使本拍備援視為未驗證）。
+r8（Codex 20261113_133147 §3）：close_gate（可呼叫，回 True 才准從 INSERT 進入 CLOSE）——下游首段未及時可用就不開始閉爪；
+  INSERT 時間到而閘門未開 ⇒ close_gate_not_ready 受控停止（尚未接觸，用原停法）。None＝r7。
 r5：fastkin＝True 時 IK 改 FastChain（door_fast_kin.ik_closure_fc 同迭代，解差 4e-14 級）、重力改 FastGravity2（差 9e-15 N·m）；預設 False＝r4。"""
 import math
 import os
@@ -64,6 +66,7 @@ class MovingGraspCtrl:
         self.deadline_ms = None if deadline_ms is None else float(deadline_ms)
         self.deadline_inject, self.fb_inject = None, None
         self.n_deadline_miss, self.tick_log, self._fb_ok = 0, [], False
+        self.close_gate = None                                       # r8
         self._pool = None
         if int(pool) > 0:
             import door_sweep_pool as DSP
@@ -455,6 +458,8 @@ class MovingGraspCtrl:
                 h, i, cl, cf = (self.sched[k] for k in ('hold_s', 'ins_s', 'close_s', 'confirm_s'))
                 if self.phase == 'HOLD' and tr >= h:
                     self._phase('INSERT')
+                elif self.phase == 'INSERT' and tr >= h + i and self.close_gate is not None and not self.close_gate(self):
+                    self._stop('close_gate_not_ready')                 # r8：下游首段未就緒 ⇒ 不閉爪
                 elif self.phase == 'INSERT' and tr >= h + i:
                     self._phase('CLOSE')
                     self.lock = dict(T=self.T_est.copy(), phi=float(phi_meas), t=round(self.t, 3), est_ver=self.est_ver)   # r4：閉爪開始鎖定接觸任務參考
