@@ -468,8 +468,7 @@ def main():
                     rec['result'] = 'infeasible'
                 elif ex.sigma > pend['sigma_s'] + 1e-9 and not pend['rest']:
                     rec['result'] = 'missed_deadline'
-                elif ey > 1.0 or ed > 1.0:
-                    rec['result'] = 'precheck_rejected'
+                # 偏航／門角追蹤誤差只記錄（rec['track_err']）；接管由接縫核對＋真狀態試跑決定（Codex 20261115_004634 §3）
                 elif ex.staged is not None or ex.stop is not None:
                     rec['result'] = 'staged_busy_or_stopped'
                 else:

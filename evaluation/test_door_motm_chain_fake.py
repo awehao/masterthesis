@@ -164,8 +164,7 @@ while t < 30.0:
                 rec['result'] = 'infeasible'
             elif ex.sigma > pend['sigma_s'] + 1e-9 and not pend['rest']:
                 rec['result'] = 'missed_deadline'
-            elif ey > 1.0 or ed > 1.0:
-                rec['result'] = 'precheck_rejected'
+            # 11/15（Codex 20261115_004634 §3）：偏航／門角預檢只是「實測對舊參考的追蹤誤差」⇒ 改為只記錄（rec['track']），接管交由真狀態、真管線的接縫試跑決定
             elif ex.staged is not None:
                 rec['result'] = 'staged_busy'
             else:
