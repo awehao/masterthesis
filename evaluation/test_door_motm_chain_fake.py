@@ -21,6 +21,7 @@ import door_motm_grasp_ctrl as G
 import door_open_exec_ctrl as X
 K, BM = G.K, G.BM
 PHYS, NPH, D_STEPS, DT = G.PHYS, G.NPH, G.D_STEPS, G.DT
+XO_D = D_STEPS * PHYS                                                # 管線延遲（s）
 OUT = sys.argv[1]
 V, H, L_LAT = 0.05, 2.0, 1.2
 GOAL = math.radians(85.0)
@@ -155,9 +156,10 @@ while t < 30.0:
         pend = st['pending']
         if pend is not None and t >= pend['t_avail'] - 1e-9 and ex.stop is None:
             st['pending'] = None
-            xr = ex.ref(ex.sigma)
+            xr = ex.ref(ex.sigma)                                      # σ 已以管線延遲起算（σ₀＝−0.08 s）⇒ 與實測同一時刻；11/15 曾誤改成 σ−延遲·g（誤差反而 1.7–2.1°），已還原
             ey, ed = abs(math.degrees(q[2] - xr[2])), abs(math.degrees(phi_now - xr[9]))
             rec = pend['rec']
+            rec['track'] = dict(yaw_deg=round(ey, 3), door_deg=round(ed, 3), base_mm=round(float(np.linalg.norm(q[:2] - xr[:2])) * 1e3, 2), t_avail=round(t, 3), g=round(ex.g, 3))
             if not pend['feasible']:
                 rec['result'] = 'infeasible'
             elif ex.sigma > pend['sigma_s'] + 1e-9 and not pend['rest']:

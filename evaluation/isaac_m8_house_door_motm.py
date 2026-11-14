@@ -71,6 +71,7 @@ JOINT = '/World/door/ideal_grasp_attach'
 ARM = [f'joint{i}' for i in range(1, 7)]
 DT = 0.01
 NPH = G.NPH
+XO_D = G.D_STEPS * G.PHYS                                            # 管線延遲（s）
 V, H_SEG, L_LAT = 0.05, 2.0, 1.2
 L_LEAD, T_LEAD = 0.01, 0.2                                         # 冒煙 2：前導 0.15 m 起步會穿過 x≈0.80 的腕部奇異（關節 5 過零）⇒ 前導縮到 1 cm（σ 全程 ≥0.031）
 GOAL = math.radians(85.0)
@@ -187,6 +188,11 @@ def main():
     if abs(hinge['drive_stiffness']) > 1e-12 or abs(hinge['drive_damping']) > 1e-12 or not hinge['is_rigid_body']:
         print('[motm] 鉸鏈不是被動 ⇒ 拒跑', flush=True)
         return 64
+    try:                                                           # 門扇剛體角阻尼讀回（資產設定有 2.0；「鉸鏈零驅動」≠ 門無阻尼）
+        leaf_damp = dict(angular=PhysxSchema.PhysxRigidBodyAPI(stage.GetPrimAtPath(dauth['leaf_prim'])).GetAngularDampingAttr().Get(),
+                         linear=PhysxSchema.PhysxRigidBodyAPI(stage.GetPrimAtPath(dauth['leaf_prim'])).GetLinearDampingAttr().Get())
+    except Exception as e_:                                        # noqa: BLE001
+        leaf_damp = dict(error=repr(e_))
     bar_axis = 'XYZ'.index(str(hinge['handle_bar']['axis']))
     bar_r, bar_hl = float(hinge['handle_bar']['radius']), 0.5 * float(hinge['handle_bar']['length'])
     T_true0 = truth_handle()
@@ -271,7 +277,8 @@ def main():
                scope='理想感知（把手 prim 真值 30 Hz）＋理想抓持（FixedJoint）；非即時（控制計算期間物理不步進）；範圍：開到 85° 停穩為止（不解綁、不退出、不穿門）',
                init=dict(pass_line_from='full_2 綁定底盤位姿 y／偏航（場景初始條件）', b_start=b_start.tolist(), lead_m=L_LEAD, lead_s=T_LEAD, v_pass=V, q_arm_pregrasp=qa.tolist(),
                          note='起點瞬移到通過線上窗口前 0.01 m、手臂預抓構型（抓取同側分支），靜置後從靜止起步；起跑後不瞬移。前導受 x≈0.80 m 腕部奇異限制（冒煙 2：0.15 m 前導在 1.9 s 手臂速率 1.61 rad/s 超限停止）'),
-               gains=dict(kp=a.kp, kd=a.kd))
+               gains=dict(kp=a.kp, kd=a.kd), door_readback=dict(hinge=hinge, leaf_rigid_body_damping=leaf_damp),
+               finger=dict(command='CLOSE 段由張開斜降到 0（夾緊，同停車版）', geometry='兩指各自實測開度；CLOSE 段掃掠另含預測閉合開度'))
     # ---- 靜置
     quat0 = np.array([math.cos(b_start[2] / 2), 0.0, 0.0, math.sin(b_start[2] / 2)], np.float32)
     for k in range(int(round(a.settle_s / DT))):
@@ -350,47 +357,50 @@ def main():
             c = dict(pos_m=float(np.linalg.norm(Ttcp[:3, 3] - Tg_des[:3, 3])), rot_deg=rot_deg(Ttcp, Tg_des), finger_q=[float(jp[f1]), float(jp[f2])], finger_bar_n=[float(fc[0][0]), float(fc[1][0])],
                      door_pre_deg=math.degrees(abs(door_q() - door0)))
             okb, okd = gate.decide(c['pos_m'], c['rot_deg'], c['finger_q'], c['finger_bar_n'], c['door_pre_deg'])
-            phi_b = door_q()
-            T_WH_b = gc.handle_ref(phi_b)
-            T_HE_act = np.linalg.inv(T_WH_b) @ Ttcp
-            fq_b = 0.5 * (float(jp[f1]) + float(jp[f2]))
-            Xd0 = first['res'][1]
-            WB.set_model(phi0=phi_b, finger_q=fq_b)
-            hlp2 = WB.DoorWBOpt(T_WH_b, np.eye(4), np.r_[q, phi_b], GOAL, N=2, dt=0.2, T_HE=T_HE_act, project_start=True)
-            Xd0p = np.array([hlp2.project(x, iters=30) for x in Xd0])     # 首段參考以本趟實測 T_HE 重投影手臂（底盤、門角不變）；以試跑重核
-            ho = dict(s=gc.s.copy(), pipe=[u_.copy() for u_ in gc.pipe], u_last=gc.u_last.copy(), u_prev=gc.u_prev.copy(), bias=np.asarray(gc.cfg.arm_model.bias, float).copy(), moving=True, off_static=gc.off(q))
-            exn = XO.DoorOpenExec(ident, Xd0p, 0.05, T_WH_b, phi_b, T_HE_act, GOAL, ho, fq_b, arm_mode='closure', joint_kp=a.kp,
-                                  g2=dict(gravity2=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0))
-            exn.p2_open = True
-            wu = exn.warmup(q, phi_b)                                     # 交接前預熱（複本空跑，本體不動）；試跑前做，避免試跑拍含冷啟成本
-            w_dry = time.perf_counter()
-            tmp = exn._light_copy()
-            tmp.step(0.0, q.copy(), phi_b, float(np.linalg.norm(wrist_F6()[:3])))
-            dry_ms = (time.perf_counter() - w_dry) * 1e3
-            dry = dict(stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok),
-                       stop_closure_pos_mm=round(tmp.mins['stop_closure_pos'] * 1e3, 3), reproj_arm_max_rad=round(float(np.abs(Xd0p[:, 3:9] - Xd0[:, 3:9]).max()), 5),
-                       start_base_vs_meas_mm=round(float(np.linalg.norm(Xd0p[0, :2] - q[:2])) * 1e3, 3))
-            valid = tmp.stop is None and tmp.abort is None and tmp._cl_fail is None and tmp.mins['stop_closure_pos'] <= XO.CL_TOL['pos_m'] and tmp._fb_ok
-            log_event('handover_attempt', bind_ok=okb, bind=okd, bind_values=c, dry_ok=valid, dry=dry, ready_ver=gc.ready_ver, warmup_ms=round(wu, 1), dry_run_ms=round(dry_ms, 1),
-                      handover_compute_ms=round((time.perf_counter() - w_ho) * 1e3, 1), note='交接計算在本體控制拍計時之外；計算期間物理不步進')
-            if okb and valid and gc.accept_handover(gc.ready_ver):
-                Rr0, Tg_b, _ = rel_T()
-                j = UsdPhysics.FixedJoint.Define(stage, JOINT)
-                j.CreateBody0Rel().SetTargets([Sdf.Path(str(grip[0]))])
-                j.CreateBody1Rel().SetTargets([Sdf.Path(leaf)])
-                j.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-                j.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
-                qr = W0.R_to_wxyz(Rr0[:3, :3])
-                j.CreateLocalPos1Attr().Set(Gf.Vec3f(*[float(v) for v in Rr0[:3, 3]]))
-                j.CreateLocalRot1Attr().Set(Gf.Quatf(float(qr[0]), float(qr[1]), float(qr[2]), float(qr[3])))
-                j.CreateJointEnabledAttr().Set(True)
-                j.CreateBreakForceAttr().Set(float('inf'))
-                j.CreateBreakTorqueAttr().Set(float('inf'))
-                box.update(mode='open', ex=exn, t_bind=t, T_WH_b=T_WH_b, T_HE=T_HE_act, phi_b=phi_b, fq=fq_b, helper=hlp2, t_next=t + P2.T_RE)
-                np.savez(os.path.join(a.out, 'first_segment.npz'), Xd0=Xd0, Xd0p=Xd0p, T_plan=first['T_plan'], T_HE_pred=first['T_HE_pred'], T_WH_b=T_WH_b, T_HE_act=T_HE_act, phi_b=phi_b)
-                log_event('bind_and_handover', base_speed_cmd=round(float(np.linalg.norm(gc.u_last[:2])), 4), joint_enabled=bool(UsdPhysics.Joint(stage.GetPrimAtPath(JOINT)).GetJointEnabledAttr().Get()), warmup_ms=round(wu, 1))
-                break
-        o = gc.step(t, q.copy(), door_q())
+            if not okb:                                                  # 先核實際抓持條件；不過就不做昂貴的預熱與試跑（Codex 20261113_144548 §4）
+                log_event('handover_bind_not_ready', bind=okd, bind_values=c, ready_ver=gc.ready_ver, compute_ms=round((time.perf_counter() - w_ho) * 1e3, 1))
+            else:
+                phi_b = door_q()
+                T_WH_b = gc.handle_ref(phi_b)
+                T_HE_act = np.linalg.inv(T_WH_b) @ Ttcp
+                fq_b = 0.5 * (float(jp[f1]) + float(jp[f2]))
+                Xd0 = first['res'][1]
+                WB.set_model(phi0=phi_b, finger_q=fq_b)
+                hlp2 = WB.DoorWBOpt(T_WH_b, np.eye(4), np.r_[q, phi_b], GOAL, N=2, dt=0.2, T_HE=T_HE_act, project_start=True)
+                Xd0p = np.array([hlp2.project(x, iters=30) for x in Xd0])     # 首段參考以本趟實測 T_HE 重投影手臂（底盤、門角不變）；以試跑重核
+                ho = dict(s=gc.s.copy(), pipe=[u_.copy() for u_ in gc.pipe], u_last=gc.u_last.copy(), u_prev=gc.u_prev.copy(), bias=np.asarray(gc.cfg.arm_model.bias, float).copy(), moving=True, off_static=gc.off(q))
+                exn = XO.DoorOpenExec(ident, Xd0p, 0.05, T_WH_b, phi_b, T_HE_act, GOAL, ho, fq_b, arm_mode='closure', joint_kp=a.kp,
+                                      g2=dict(gravity2=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0))
+                exn.p2_open = True
+                wu = exn.warmup(q, phi_b)                                     # 交接前預熱（複本空跑，本體不動）；試跑前做，避免試跑拍含冷啟成本
+                w_dry = time.perf_counter()
+                tmp = exn._light_copy()
+                tmp.step(0.0, q.copy(), phi_b, float(np.linalg.norm(wrist_F6()[:3])))
+                dry_ms = (time.perf_counter() - w_dry) * 1e3
+                dry = dict(stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok),
+                           stop_closure_pos_mm=round(tmp.mins['stop_closure_pos'] * 1e3, 3), reproj_arm_max_rad=round(float(np.abs(Xd0p[:, 3:9] - Xd0[:, 3:9]).max()), 5),
+                           start_base_vs_meas_mm=round(float(np.linalg.norm(Xd0p[0, :2] - q[:2])) * 1e3, 3))
+                valid = tmp.stop is None and tmp.abort is None and tmp._cl_fail is None and tmp.mins['stop_closure_pos'] <= XO.CL_TOL['pos_m'] and tmp._fb_ok
+                log_event('handover_attempt', bind_ok=okb, bind=okd, bind_values=c, dry_ok=valid, dry=dry, ready_ver=gc.ready_ver, warmup_ms=round(wu, 1), dry_run_ms=round(dry_ms, 1),
+                          handover_compute_ms=round((time.perf_counter() - w_ho) * 1e3, 1), note='交接計算在本體控制拍計時之外；計算期間物理不步進')
+                if okb and valid and gc.accept_handover(gc.ready_ver):
+                    Rr0, Tg_b, _ = rel_T()
+                    j = UsdPhysics.FixedJoint.Define(stage, JOINT)
+                    j.CreateBody0Rel().SetTargets([Sdf.Path(str(grip[0]))])
+                    j.CreateBody1Rel().SetTargets([Sdf.Path(leaf)])
+                    j.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+                    j.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+                    qr = W0.R_to_wxyz(Rr0[:3, :3])
+                    j.CreateLocalPos1Attr().Set(Gf.Vec3f(*[float(v) for v in Rr0[:3, 3]]))
+                    j.CreateLocalRot1Attr().Set(Gf.Quatf(float(qr[0]), float(qr[1]), float(qr[2]), float(qr[3])))
+                    j.CreateJointEnabledAttr().Set(True)
+                    j.CreateBreakForceAttr().Set(float('inf'))
+                    j.CreateBreakTorqueAttr().Set(float('inf'))
+                    box.update(mode='open', ex=exn, t_bind=t, T_WH_b=T_WH_b, T_HE=T_HE_act, phi_b=phi_b, fq=fq_b, helper=hlp2, t_next=t + P2.T_RE)
+                    np.savez(os.path.join(a.out, 'first_segment.npz'), Xd0=Xd0, Xd0p=Xd0p, T_plan=first['T_plan'], T_HE_pred=first['T_HE_pred'], T_WH_b=T_WH_b, T_HE_act=T_HE_act, phi_b=phi_b)
+                    log_event('bind_and_handover', base_speed_cmd=round(float(np.linalg.norm(gc.u_last[:2])), 4), joint_enabled=bool(UsdPhysics.Joint(stage.GetPrimAtPath(JOINT)).GetJointEnabledAttr().Get()), warmup_ms=round(wu, 1))
+                    break
+        o = gc.step(t, q.copy(), door_q(), finger_meas=(float(jp[f1]), float(jp[f2])))   # r12：兩指各自實測開度供碰撞幾何
         if o.get('abort'):
             box['aborted'] = dict(t=round(t, 3), controller=gc.abort)
             log_event('grasp_abort', abort=gc.abort)
@@ -451,7 +461,7 @@ def main():
                 pend = box['pend']; box['pend'] = None
                 rec = pend['rec']
                 rec.update(t_avail=round(t, 3), wall_avail=round(time.perf_counter() - t_wall0, 3), plan_wall_s=round(r_[5], 3), feasible=r_[2], final=r_[4], failed=r_[3])
-                xr = ex.ref(ex.sigma)
+                xr = ex.ref(ex.sigma)                                  # σ 已以管線延遲起算 ⇒ 與實測同一時刻
                 ey, ed = abs(math.degrees(q[2] - xr[2])), abs(math.degrees(phm - xr[9]))
                 rec['track_err'] = dict(base_mm=round(float(np.linalg.norm(q[:2] - xr[:2])) * 1e3, 3), yaw_deg=round(ey, 3), door_deg=round(ed, 3))
                 if not r_[2] or r_[1] is None:

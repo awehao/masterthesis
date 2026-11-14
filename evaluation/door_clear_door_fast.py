@@ -68,10 +68,12 @@ def clear_door_fast(x, T_WH0):
     names = sorted(set(DOC.ARM_LINKS) | {n for p in pairs for n in p})
     T = fk_all(qf, names)
     # 手指沿滑動軸平移（同原式：P＋(±1)·fq·T[:3,1]）——整個剛體平移，等價於改連桿原點
+    # r2（Codex 20261113_144548）：FINGER_Q 可為 (指1, 指2) 兩指各自實測開度；純量與 r1 逐值相同
     for n in DOC.FINGERS:
-        if n in T and fq:
+        fqn = (fq[0] if n.endswith('1') else fq[1]) if isinstance(fq, (tuple, list)) else fq
+        if n in T and fqn:
             T[n] = T[n].copy()
-            T[n][:3, 3] += (1.0 if n.endswith('1') else -1.0) * fq * T[n][:3, 1]
+            T[n][:3, 3] += (1.0 if n.endswith('1') else -1.0) * fqn * T[n][:3, 1]
     W_ = {}
 
     def pts(n):

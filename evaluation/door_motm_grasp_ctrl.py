@@ -35,6 +35,10 @@ r6（Codex 20261113_130916 §2）：
 r7（Codex 20261113_130916 §4）：deadline_ms（None＝r6）。拍首計時，提交候選時已超過 ⇒ 不提交（晚到不放行）；本拍「現在停」掃掠已通過
   （鎖定後即接觸停法的向前模擬：IK、命令限制、停穩、淨空）⇒ 以該停法停止（tick_deadline_miss），否則模擬中止。tick_log 分記正常拍與停止拍耗時。
   測試掛鉤：deadline_inject（強制本拍晚到）、fb_inject（使本拍備援視為未驗證）。
+r12（Codex 20261113_144548；Isaac 名目趟 2：手指目標＝閉合開度模型值 1.7 mm ⇒ 未夾緊、單指推門）：
+  手指**命令**與碰撞**幾何**分開——命令在 CLOSE 段由張開斜降到 0（同停車版夾緊；之後保持 0）；幾何用兩指各自實測開度（step 的 finger_meas；
+  假世界無手指物理時用 max(命令, FINGER_CLOSED) 模型）。CLOSE 段的監看與停止／候選掃掠同時以實測開度與預測閉合開度（FINGER_CLOSED）兩種幾何評估取最小。
+  交接被接受前門角自鎖定起變化 >0.5°（同 BindGate 基準）⇒ door_moved_before_bind 停止；停止後 4 s 內未停穩（管線、底盤、手臂、門）⇒ 模擬中止（不無限追門）。
 r11：「現在停」淨空先派工、派工期間主程序算追蹤命令（投機計算，收到現在停結果後才用；不過即丟棄，q_ik_prev 只在通過後更新）；
   接觸停法模擬的管線全零檢查改隨佇列維護旗標（同一布林）。命令與 r10 逐位元相同（假世界核對）。
 r10：_arm_track 的 IK 對（q1、q0）與重力偏置以「輸入位元組完全相同」為鍵快取（底盤預測位姿、目標位姿、種子；每拍清空）——
@@ -101,7 +105,9 @@ class MovingGraspCtrl:
         self._DFK = DFK
         self._grav2 = DFK.FastGravity2(K, self.bodies) if self.fastkin else None
         self.G0 = None
-        self.finger_q = float(finger_open)
+        self.finger_q = float(finger_open)                           # r12：碰撞幾何用的開度（純量或兩指 tuple）
+        self.finger_cmd = float(finger_open)                         # r12：手指命令（CLOSE 起斜降到 0）
+        self._finger_meas = None
         self.finger_open = float(finger_open)
         self.sweep_stride = int(sweep_stride)
         self.sched = dict(SCHED, **(sched or {}))
@@ -290,11 +296,27 @@ class MovingGraspCtrl:
             q = q + np.linalg.solve(J.T @ J + 1e-12 * np.eye(6), J.T @ e)
         return q, res
 
+    def _geoms(self):
+        """r12：要評估的手指幾何——實測（或模型）；CLOSE 段另加預測閉合開度。"""
+        g = [self.finger_q]
+        if self.phase == 'CLOSE':
+            g.append((FINGER_CLOSED, FINGER_CLOSED))
+        return g
+
     def clear(self, q9, phi, exempt):
-        W.FINGER_Q = self.finger_q
-        c = W.clear_door(np.r_[q9, phi], self.T_WH_model)
-        c['finger_bar'] = XE.DoorExitCtrl.finger_bar(self, q9, phi)
-        return c
+        out = None
+        fq_save = self.finger_q
+        try:
+            for gq in self._geoms():
+                self.finger_q = gq
+                W.FINGER_Q = gq
+                c = W.clear_door(np.r_[q9, phi], self.T_WH_model)
+                c['finger_bar'] = XE.DoorExitCtrl.finger_bar(self, q9, phi)
+                out = c if out is None else {k: (min(out[k], c[k]) if k != 'who' else out[k]) for k in out}
+        finally:
+            self.finger_q = fq_save
+            W.FINGER_Q = fq_save
+        return out
 
     def _bad(self, c, exempt):
         """exempt：'insert'＝兩指—橫桿只要求不穿入（張開插入）；'contact'＝閉爪起兩指—橫桿為指定接觸（同靜止版 contact=True），只核夾爪殼；None＝全部照門檻。"""
@@ -335,13 +357,21 @@ class MovingGraspCtrl:
             for i in idx:
                 items.append((e, i, len(X), k_dec))
                 X.append(np.r_[Q[i], phi])
+        hs = []
+        for gq in self._geoms():                                     # r12：每種手指幾何一個工作
+            hs.append(self._pool.submit(self.T_WH_model, gq, W.PHI0, np.array(X), finger_bar_q=gq))
         W.FINGER_Q = self.finger_q
-        h = self._pool.submit(self.T_WH_model, W.FINGER_Q, W.PHI0, np.array(X), finger_bar_q=self.finger_q)
-        return ('h', items, h)
+        return ('h', items, hs)
 
-    def _sweep_pool_finish(self, items, h, exempt, tag):
-        res, why, tms = self._pool.collect(h, XO.POOL_TIMEOUT_S)
-        self.pool_ms.append(tms)
+    def _sweep_pool_finish(self, items, hs, exempt, tag):
+        res = None
+        for h in hs:
+            r_, why, tms = self._pool.collect(h, XO.POOL_TIMEOUT_S)
+            self.pool_ms.append(tms)
+            if r_ is None:
+                res = None
+                break
+            res = r_ if res is None else [{k: (min(a[k], b[k]) if k != 'who' else a[k]) for k in a} for a, b in zip(res, r_)]
         if res is None:
             self._abort('sweep_unavailable', pool_why=why, tag=tag)
             return dict(tag=tag, pool_unavailable=why)
@@ -402,11 +432,14 @@ class MovingGraspCtrl:
         dR = Tg[:3, :3].T @ Tc[:3, :3]
         return float(np.linalg.norm(Tc[:3, 3] - Tg[:3, 3])), math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR) - 1) / 2)))), Tc
 
-    def step(self, t, q, phi_meas):
+    def step(self, t, q, phi_meas, finger_meas=None):
         self.t = float(t)
+        self._finger_meas = None if finger_meas is None else (float(finger_meas[0]), float(finger_meas[1]))   # r12：兩指實測開度（幾何用）
+        if self._finger_meas is not None:
+            self.finger_q = self._finger_meas
         q = np.asarray(q, float)
         if self.abort is not None:
-            return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), finger=self.finger_q, ready=False, stopped=True, abort=True)
+            return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), finger=self.finger_cmd, ready=False, stopped=True, abort=True)
         tick = self.n_step % NPH == 0
         w_t = time.perf_counter()
         if tick:
@@ -442,10 +475,15 @@ class MovingGraspCtrl:
             if self.T_est is None:
                 self._stop('no_estimate')
             self.est_age = None if self.est_ver is None else self.t - float(self.frames[self.est_ver][0])
+            if self.lock is not None and not self.accepted and self.stop is None and abs(float(phi_meas) - self.lock['phi']) > math.radians(0.5):
+                self._stop('door_moved_before_bind', door_change_deg=round(math.degrees(float(phi_meas) - self.lock['phi']), 4))   # r12：同 BindGate 基準
+            if self.stop is not None and self.stop_ok is None and self.abort is None and self.t - self.stop_t > 4.0:
+                self._abort('stop_not_settled_4s', since_stop_s=round(self.t - self.stop_t, 3))   # r12：不無限追門；停止有效性未驗證
             fresh = self.est_age is not None and self.est_age <= READY_Q['fresh_s'] + 1e-9
             self.phi_now = float(phi_meas)
             self.T_WH_model = self.handle_ref()                        # 淨空模型的把手＝估計（r4：鎖定後＝鎖定參考）；門角 φ 由實測給
-            W.set_model(phi0=float(phi_meas), finger_q=self.finger_q)
+            W.set_model(phi0=float(phi_meas))
+            W.FINGER_Q = self.finger_q
             if self.lock is not None and self.T_est is not None:       # r4：新影像只做一致性監看
                 Hr = self.handle_ref()
                 dpos = float(np.linalg.norm(self.T_est[:3, 3] - Hr[:3, 3]))
@@ -501,7 +539,7 @@ class MovingGraspCtrl:
                     self._stop(viol[0][0], **viol[0][1])
                 elif viol[0][0] != self.stop['why']:
                     self._abort('violation_during_stop', viol=[v_[0] for v_ in viol])
-                    return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), finger=self.finger_q, ready=False, stopped=True, abort=True)
+                    return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), finger=self.finger_cmd, ready=False, stopped=True, abort=True)
             # 段別
             if self.stop is None:
                 h, i, cl, cf = (self.sched[k] for k in ('hold_s', 'ins_s', 'close_s', 'confirm_s'))
@@ -534,8 +572,11 @@ class MovingGraspCtrl:
                         if self.ready_t is None:
                             self.ready_t = self.t                      # 首次 READY（接受等待上限由此起算，撤銷不重置）
             if self.phase in ('CLOSE', 'CONFIRM', 'READY'):
-                self.finger_q = max(FINGER_CLOSED, self.finger_q - (self.finger_open - FINGER_CLOSED) * DT / self.sched['close_s'])
+                self.finger_cmd = max(0.0, self.finger_cmd - self.finger_open * DT / self.sched['close_s'])   # r12：命令斜降到 0（夾緊）
+            if self._finger_meas is None:                              # 假世界：無手指物理 ⇒ 幾何＝max(命令, 閉合開度模型)
+                self.finger_q = max(FINGER_CLOSED, self.finger_cmd)
             # 現在停（r11：有計算池時先派工，派工期間投機計算追蹤命令）
+            exempt = 'insert' if self.phase == 'INSERT' else ('contact' if self.phase in ('CLOSE', 'CONFIRM', 'READY') else None)   # r12：段別轉換後重算（閉爪段掃掠含閉合幾何 ⇒ 兩指—橫桿為指定接觸）
             spec = None
             if self.stop is None and self._pool is not None:
                 sn = self._sweep_pool_submit(q, self.u_last, (0,), self.ramp_j, self.u_from_base, phi_meas, exempt, 'stop_now')
@@ -636,8 +677,8 @@ class MovingGraspCtrl:
         if self.stop is not None:
             self.ready_now, self.ready_ver = False, None
         if self.abort is not None:                                   # r3：中止當步起不出命令
-            return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), finger=self.finger_q, ready=False, ready_ver=None, stopped=True, abort=True)
-        return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), finger=self.finger_q, ready=self.ready_now, ready_ver=self.ready_ver, stopped=self.stop is not None, abort=False)
+            return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), finger=self.finger_cmd, ready=False, ready_ver=None, stopped=True, abort=True)
+        return dict(arm_target=self.s.copy(), base_twist=ua[:3].copy(), finger=self.finger_cmd, ready=self.ready_now, ready_ver=self.ready_ver, stopped=self.stop is not None, abort=False)
 
     def accept_handover(self, ver):
         """下游接受交接：只接受當拍的 READY 版本（舊版本、已撤銷、已停止 ⇒ 拒絕）。接受後本控制器不再出命令。"""

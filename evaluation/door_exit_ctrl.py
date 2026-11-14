@@ -181,7 +181,8 @@ class DoorExitCtrl:
         d = np.inf
         for n in ('uflite_finger1', 'uflite_finger2'):
             T = K.fk(q9, n)
-            P = (T[:3, :3] @ DI.DOC.CL[n].T).T + T[:3, 3] + (1.0 if n.endswith('1') else -1.0) * self.finger_q * T[:3, 1]
+            fqn = (self.finger_q[0] if n.endswith('1') else self.finger_q[1]) if isinstance(self.finger_q, (tuple, list)) else self.finger_q   # r8：兩指各自開度
+            P = (T[:3, :3] @ DI.DOC.CL[n].T).T + T[:3, 3] + (1.0 if n.endswith('1') else -1.0) * fqn * T[:3, 1]
             d = min(d, float(PG.bar_dist(P, bar).min()))
         return d
 

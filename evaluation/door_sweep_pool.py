@@ -53,9 +53,9 @@ def _worker(conn):
         try:
             if delay:
                 time.sleep(delay)                                    # 測試用：注入延遲
-            W.FINGER_Q, W.PHI0 = float(fq), float(phi0)
+            W.FINGER_Q, W.PHI0 = (tuple(float(x) for x in fq) if isinstance(fq, (tuple, list)) else float(fq)), float(phi0)   # r2：可為兩指各自開度
             res = []
-            fbo = None if fb is None else _FB(T, float(fb))
+            fbo = None if fb is None else _FB(T, tuple(float(x) for x in fb) if isinstance(fb, (tuple, list)) else float(fb))
             for x in X:
                 r = F.clear_door_fast(x, T)
                 res.append((r['env'], r['base'], r['self'], r['shell_bar'], r['who']['env'], r['who']['base'],
@@ -97,7 +97,7 @@ class SweepPool:
             if len(idx) == 0:
                 continue
             try:
-                self.conns[w].send((self.ver, w, T, float(fq), float(phi0), X[idx], self.inject_delay.get(w, 0.0), finger_bar_q))
+                self.conns[w].send((self.ver, w, T, (tuple(float(x) for x in fq) if isinstance(fq, (tuple, list)) else float(fq)), float(phi0), X[idx], self.inject_delay.get(w, 0.0), finger_bar_q))
                 sent.append(w)
             except (BrokenPipeError, OSError):
                 return dict(ver=self.ver, chunks=chunks, sent=sent, t_submit=t0, t_dispatch_ms=(time.perf_counter() - t0) * 1e3, n=len(X), send_failed=w)

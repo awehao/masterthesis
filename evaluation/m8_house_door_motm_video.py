@@ -10,7 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FONT = '/usr/share/fonts/opentype/noto/NotoSansCJK-Medium.ttc'
 FPS = 25
 PHZ = dict(L='前導接近（預抓保持、移動）', I='插入（移動中）', C='閉爪（移動中）', F='確認（移動中）', R='READY（移動中，等交接）', O='開門（P2 續接）', S='停止（接觸停法）')
-EVZ = dict(first_segment_request='首段規劃送出（預測 READY 狀態）', first_segment_available='首段就緒', handover_attempt='交接嘗試', bind_and_handover='綁定＋移動中交接',
+EVZ = dict(handover_bind_not_ready='交接：實際抓持條件未過', first_segment_request='首段規劃送出（預測 READY 狀態）', first_segment_available='首段就緒', handover_attempt='交接嘗試', bind_and_handover='綁定＋移動中交接',
            grasp_stopped='抓持停止', p2_plan_result='P2 段結果', p2_decision='P2 接縫試跑', open_end='開門結束', open_abort='模擬中止', grasp_abort='模擬中止', forbidden_contact_latched='禁止接觸鎖存')
 
 
@@ -29,6 +29,8 @@ def ev_text(ev):
     if w == 'handover_attempt':
         bad = [k for k, v in (ev.get('bind') or {}).items() if not v]
         s += '：綁定條件不過 ' + '、'.join(bad) + f"；執行層試跑 {'通過' if ev.get('dry_ok') else '不過'}" if bad else '：綁定條件過'
+    if w == 'handover_bind_not_ready':
+        s += '（' + '、'.join(k for k, v in (ev.get('bind') or {}).items() if not v) + '）'
     if w == 'grasp_stopped':
         s += '：' + str((ev.get('stop') or {}).get('why'))
     if w == 'open_end':
@@ -41,13 +43,13 @@ def summary(L):
     g = r.get('grasp') or {}
     o = r.get('open') or {}
     s1 = f"結果：{r.get('result')}"
-    ha = [e for e in r.get('events', []) if e['what'] == 'handover_attempt']
-    if ha:
+    ha = [e for e in r.get('events', []) if e['what'] in ('handover_attempt', 'handover_bind_not_ready')]
+    if o:
+        s2 = f"開門：{'open_done（停止有效）' if (o.get('done') and (o.get('stop_effect') or {}).get('ok')) else '未完成 ' + str((o.get('stop') or {}).get('why'))}，門 {o.get('phi_end_deg')}°，手腕傳遞力最大 {o.get('force_max_n')} N（中止值 40 N）"
+    elif ha:
         e = ha[-1]
         fb = (e.get('bind_values') or {}).get('finger_bar_n')
         s2 = f"交接嘗試 {len(ha)} 次；最後一次：雙指—橫桿接觸力 {fb} N（門檻 0.5 N）、相對靜止 {'過' if (e.get('bind') or {}).get('rel_still') else '不過'}、執行層試跑 {'通過' if e.get('dry_ok') else '不過'}"
-    elif o:
-        s2 = f"開門：{'open_done' if o.get('done') else '未完成'}，門 {o.get('phi_end_deg')}°"
     else:
         s2 = ''
     s3 = f"模擬 {r.get('sim_total_s')} s／牆鐘 {r.get('wall_total_s')} s（RTF {r.get('rtf')}，非即時）；控制期限晚到 {g.get('n_deadline_miss')} 次"
@@ -139,7 +141,7 @@ def video_b(L, rdir, out, label):
             a_.axvline(t0, color='#666', lw=0.8, ls='--')
         ax[0].text(t0, 0.06, ph, fontsize=9, color='#444')
     for e in evs:
-        if e['what'] in ('handover_attempt',):
+        if e['what'] in ('handover_attempt', 'handover_bind_not_ready'):
             ax[2].axvline(e['t'], color='#cf222e', lw=0.6, alpha=0.5)
         if e['what'] in ('bind_and_handover', 'grasp_stopped', 'open_end', 'open_abort'):
             for a_ in ax:

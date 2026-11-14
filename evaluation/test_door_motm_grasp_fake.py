@@ -16,6 +16,7 @@ r2（READY 可撤銷；Codex 20261113_120619）：環境變數 RQ_CASE 選 READY
 r4（閉爪後；Codex 20261113_124213）：c_drift4  鎖定（閉爪開始）後 0.1 s 起擷取的影格估計平移 4 mm（門檻內），READY 後 0.2 s 請求接受
                                      c_ramp8   鎖定起 1.0 s 內估計線性漂到 8 mm（之後保持），READY 後 0.2 s 請求接受
   另記閉爪開始後真值相對位移最大值（含停止期間）。
+r12：c_doordrift  鎖定後量測門角以 0.4°/s 漂移（同 Isaac 名目趟 2 的量級）、不接受交接 ⇒ 應停止，且 4 s 內未停穩即模擬中止（不無限追門）。
 r6：c_slip6  鎖定後 0.3 s 把手「真的」移 6 mm（影格與真值同時移；夾爪未跟＝滑脫），記偵測延遲（滑脫時刻→停止事件）。"""
 import json, math, os, sys
 import numpy as np
@@ -49,7 +50,7 @@ bias_dir = rng.normal(size=3); bias_dir /= np.linalg.norm(bias_dir)
 frames = []                                                          # (擷取時刻, 估計)
 RQ = os.environ.get('RQ_CASE')
 RQP = dict(r_nominal=dict(acc=0.0), r_stalever=dict(acc=0.1, stale=True), r_delay=dict(acc=None), r_jump4=dict(acc=0.2, jump=4.0), r_jump8=dict(acc=0.4, jump=8.0),
-           r_speed=dict(acc=0.3, vs=1.3), r_occl=dict(acc=0.4, occl=1.0), c_drift4=dict(acc=0.2, cjump=4.0), c_ramp8=dict(acc=0.2, cramp=8.0), c_slip6=dict(acc=0.2, slip=6.0)).get(RQ) if RQ else None
+           r_speed=dict(acc=0.3, vs=1.3), r_occl=dict(acc=0.4, occl=1.0), c_drift4=dict(acc=0.2, cjump=4.0), c_ramp8=dict(acc=0.2, cramp=8.0), c_slip6=dict(acc=0.2, slip=6.0), c_doordrift=dict(acc=None, ddrift=math.radians(0.4))).get(RQ) if RQ else None
 slip_t = [None]                                                      # r6：真滑脫發生的絕對時刻
 t_ready_abs = [None]                                                 # 首次 READY 的絕對時刻（受控對象端；擾動在此之後生效）
 jump_dir = np.array([0.0, 1.0, 0.0])
@@ -135,8 +136,11 @@ if os.environ.get('DL_INJECT_T'):
         c.fb_inject = lambda cc, _dl=_dl: not (cc.t0 is not None and cc.t - cc.t0 >= _dl['t'] - 1e-9 and not _dl['done'])
 plant_s = s0.copy()
 t, rows = 0.0, []
-while t < 6.0:
-    o = c.step(t, q.copy(), phi_b)
+while t < 9.0:
+    phi_in = phi_b
+    if RQP is not None and RQP.get('ddrift') and getattr(c, 'lock', None) is not None:
+        phi_in = phi_b + RQP['ddrift'] * (t - c.lock['t'])
+    o = c.step(t, q.copy(), phi_in)
     if o.get('abort'):
         break
     tw = o['base_twist'] * pert['v_scale'] * (RQP.get('vs', 1.0) if (RQP is not None and t_ready_abs[0] is not None) else 1.0)
@@ -174,6 +178,8 @@ while t < 6.0:
                 if okh:
                     break
         if c.stop is not None and c.stop_ok is not None and t - c.stop_t >= 0.3:
+            break
+        if c.abort is not None:
             break
 rep = c.report()
 ph = [r[1] for r in rows]
