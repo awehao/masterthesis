@@ -566,6 +566,7 @@ class DoorOpenExec:
         finally:
             W.FINGER_Q, W.PHI0 = fq_save, phi0_save
         dry = dict(extend_ok=okx, stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail,
+                   stop_detail=tmp.stop, abort_detail=tmp.abort, stop_mode=tmp.stop_mode, fb_info=tmp._fb_info, xd_ver=tmp._xd_ver, pr_delta_abs_max=float(np.abs(tmp._pr_delta).max()), hold_active=tmp._hold is not None,   # N1：被拒細項（違反項、數值、取樣點、停法、參考版本）
                    stop_closure_pos_mm=round(tmp.mins['stop_closure_pos'] * 1e3, 3), stop_closure_rot_deg=round(tmp.mins['stop_closure_rot'], 3),
                    fb_ok=bool(tmp._fb_ok) if tmp._pool is not None else None, wall_ms=round((time.perf_counter() - w0) * 1e3, 1))
         valid = (okx and tmp.stop is None and tmp.abort is None and tmp._cl_fail is None and tmp.mins['stop_closure_pos'] <= CL_TOL['pos_m'] and tmp.mins['stop_closure_rot'] <= CL_TOL['rot_deg']

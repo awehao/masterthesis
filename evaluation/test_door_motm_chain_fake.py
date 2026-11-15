@@ -239,6 +239,8 @@ while t < 30.0:
                         w += on[3]
                     except ValueError:
                         on = None
+                if os.environ.get('SKIP_MOVING_P2') == '1' and not rest:      # 核對用：移動中的續段一律當作不可行 ⇒ 走到首段終點後靜止重啟（第十一趟的情形）
+                    on = None
                 rec = dict(k=st['k'], t_req=round(t, 3), sigma=round(ex.sigma, 3), sigma_s=round(sig_s, 3), rest=rest, final=fin, wall_s=round(w, 3), feasible=bool(on is not None and on[2]['feasible']))
                 log['req'].append(rec)
                 if on is not None:
