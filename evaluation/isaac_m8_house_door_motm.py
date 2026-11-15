@@ -178,7 +178,6 @@ def main():
     v_leaf = RigidPrim(prim_paths_expr=leaf, name='v_leaf_pose')
     fric_usd = {}
     if a.arm_friction_model == 'urdf_effort':                        # world.reset 之前：逐軸 API（該軸優先於舊的無因次 jointFriction）；顯式保留原速度上限與 armature
-        from pxr import PhysxSchema
         for pr in stage.Traverse():
             if pr.GetName() in ARM and pr.IsA(UsdPhysics.RevoluteJoint):
                 old = PhysxSchema.PhysxJointAPI(pr)
@@ -189,7 +188,6 @@ def main():
                     print('[motm] 手臂關節原速度上限讀不到 ⇒ 拒跑', flush=True)
                     return 31
                 pr.ApplyAPI('PhysxJointAxisAPI', 'angular')
-                from pxr import Sdf
                 for nm_, v_ in (('staticFrictionEffort', 1.0), ('dynamicFrictionEffort', 1.0), ('viscousFrictionCoefficient', 0.0), ('maxJointVelocity', float(mv)), ('armature', float(am))):
                     pr.CreateAttribute('physxJointAxis:angular:' + nm_, Sdf.ValueTypeNames.Float).Set(float(v_))
                 dr = UsdPhysics.DriveAPI(pr, 'angular')
