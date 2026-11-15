@@ -782,13 +782,25 @@ def main():
             F6 = wrist_F6()
             rows.append([t, 5 if ex.stop is None else 6, door_q(), float(jp2[f1]), float(jp2[f2]), *q2, *F6, time.perf_counter() - t_wall0])
             olog.append(np.r_[tr, q2, door_q(), fn_, ex.sigma, ex.ref(ex.sigma)[9]])
-            if Rr is not None and box.get('Rr0') is not None:           # 連接變形：夾爪—門扇相對位姿相對綁定瞬間的變化
-                dT_ = np.linalg.inv(box['Rr0']) @ Rr
-                dpos_, drot_ = float(np.linalg.norm(dT_[:3, 3])), math.degrees(math.acos(max(-1.0, min(1.0, 0.5 * (np.trace(dT_[:3, :3]) - 1.0)))))
-                deflog.append([tr, dpos_, drot_, *[float(x_) for x_ in dT_[:3, 3]]])
-                if a.bind_model == 'd6_compliant' and ex.stop is None and (dpos_ > BIND_DEF_POS_M or drot_ > BIND_DEF_ROT_DEG):
-                    log_event('bind_deformation_over_budget', pos_mm=round(dpos_ * 1e3, 3), rot_deg=round(drot_, 3))
-                    ex._stop('bind_deformation_over_budget', pos_mm=round(dpos_ * 1e3, 3), rot_deg=round(drot_, 3))
+            if box.get('Rr0') is not None:                              # 連接變形：綁定期間每物理步都查（含停止中）；超量、非有限或位姿讀取失敗 ⇒ 下一物理步前中止
+                bad_def = None
+                if Rr is None or not np.isfinite(Rr).all():
+                    bad_def = dict(why='bind_pose_read_failed')
+                else:
+                    dT_ = np.linalg.inv(box['Rr0']) @ Rr
+                    dpos_, drot_ = float(np.linalg.norm(dT_[:3, 3])), math.degrees(math.acos(max(-1.0, min(1.0, 0.5 * (np.trace(dT_[:3, :3]) - 1.0)))))
+                    pv_ = deflog[-1] if deflog else None
+                    vpos_ = 0.0 if pv_ is None else float(np.linalg.norm(dT_[:3, 3] - np.array(pv_[3:6]))) / DT
+                    vrot_ = 0.0 if pv_ is None else math.radians(abs(drot_ - pv_[2])) / DT
+                    # 估算（非量測）：彈簧分量 k×變形、阻尼分量 c×相對速度（差分）；D6 驅動同時含兩項
+                    deflog.append([tr, dpos_, drot_, *[float(x_) for x_ in dT_[:3, 3]], vpos_, vrot_, BIND_KT * dpos_, BIND_CT * vpos_, BIND_KR * math.radians(drot_), BIND_CR * vrot_])
+                    if not (math.isfinite(dpos_) and math.isfinite(drot_)):
+                        bad_def = dict(why='bind_deformation_nonfinite')
+                    elif a.bind_model == 'd6_compliant' and (dpos_ > BIND_DEF_POS_M or drot_ > BIND_DEF_ROT_DEG):
+                        bad_def = dict(why='bind_deformation_over_budget', pos_mm=round(dpos_ * 1e3, 3), rot_deg=round(drot_, 3))
+                if bad_def is not None and ex.abort is None and (a.bind_model == 'd6_compliant' or bad_def['why'] != 'bind_deformation_over_budget'):
+                    log_event(bad_def['why'], **{k_: v_ for k_, v_ in bad_def.items() if k_ != 'why'}, during_stop=ex.stop is not None)
+                    ex._stop(bad_def['why'], **{k_: v_ for k_, v_ in bad_def.items() if k_ != 'why'})   # 不在 PATH_OK ⇒ 中止（停止中則升級為中止）
             if ex.n_step % NPH == 0:
                 bsp = float(np.linalg.norm(q2[:2] - prev_b[:2])) / G.DT
                 prev_b = q2[:3].copy()
@@ -804,7 +816,9 @@ def main():
             ex._stop('open_time_limit')
         rep_o = ex.report()
         res['open'] = {k_: rep_o.get(k_) for k_ in ('arm_mode', 'closure_anchor', 'closure_stats', 'stop', 'done', 'stop_effect', 'phi_end_deg', 't_end', 'closure_measured', 'min_clear_actual', 'force_max_n', 'timing')}
-        res['open']['bind_deformation'] = None if not deflog else dict(pos_mm_max=round(max(x_[1] for x_ in deflog) * 1e3, 3), rot_deg_max=round(max(x_[2] for x_ in deflog), 3), pos_mm_end=round(deflog[-1][1] * 1e3, 3), rot_deg_end=round(deflog[-1][2], 3))
+        res['open']['bind_deformation'] = None if not deflog else dict(pos_mm_max=round(max(x_[1] for x_ in deflog) * 1e3, 3), rot_deg_max=round(max(x_[2] for x_ in deflog), 3), pos_mm_end=round(deflog[-1][1] * 1e3, 3), rot_deg_end=round(deflog[-1][2], 3),
+                                                                     est_spring_force_max_n=round(max(x_[8] for x_ in deflog), 2), est_damper_force_max_n=round(max(x_[9] for x_ in deflog), 2), est_spring_torque_max_nm=round(max(x_[10] for x_ in deflog), 3), est_damper_torque_max_nm=round(max(x_[11] for x_ in deflog), 3),
+                                                                     note='力／力矩為估算（k×變形、c×差分相對速度；fixed 模型下僅供對照，非實際連接力）', cols=['t', 'pos_m', 'rot_deg', 'dx', 'dy', 'dz', 'vpos', 'vrot', 'F_spring', 'F_damper', 'T_spring', 'T_damper'])
         res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'], fb_log=ex.fb_log, base_hold_log_tail=ex.hold_log[-5:], base_hold_n=len(ex.hold_log), base_hold_cmd_max=[max((x[1] for x in ex.hold_log), default=None), max((x[2] for x in ex.hold_log), default=None)], cstop_ticks=len(ex.cs_log), stop_mode=ex.stop_mode, tick_ms_normal=[round(float(m), 1) for i, m in enumerate(ex.tick_ms) if ex.stop is None or i * 0.05 < float(ex.stop['t']) - 1e-9])
         np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), bind_deform=np.array(deflog), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
     res['events'] = ev
