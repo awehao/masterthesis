@@ -39,7 +39,7 @@ class CStop:
         import door_fric_ff as FF_
         self.FF, self.fric_ff = FF_, P.get('fric_ff')
         self.pr_delta = np.zeros(6)                                  # B2：設定點偏置 δ（預測期間視為定值；由呼叫端設定）
-        self._bias0 = np.asarray(self.cfg.arm_model.bias, float).copy()
+        self._bias0 = np.asarray(P['bias0'] if P.get('bias0') is not None else self.cfg.arm_model.bias, float).copy()   # 原始偏置（未含 δ）：δ 只在 set_delta 扣一次
         self.lim_lo, self.lim_hi = np.asarray(P['lim_lo'], float), np.asarray(P['lim_hi'], float)     # r2：設定點限位（同執行層）
         self.q_lo, self.q_hi = np.asarray(P['q_lo'], float), np.asarray(P['q_hi'], float)             # 關節限位（同閉鏈手臂驗收）
         self.set_ref(P['Xd'])

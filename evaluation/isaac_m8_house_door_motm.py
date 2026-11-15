@@ -619,7 +619,7 @@ def main():
                 Xd0p = np.array([hlp2.project(x, iters=30) for x in Xd0])     # 首段參考以本趟實測 T_HE 重投影手臂（底盤、門角不變）；以試跑重核
                 ho = dict(s=gc.s.copy(), pipe=[u_.copy() for u_ in gc.pipe], u_last=gc.u_last.copy(), u_prev=gc.u_prev.copy(), bias=np.asarray(gc.cfg.arm_model.bias, float).copy(), moving=True, off_static=gc.off(q))
                 exn = XO.DoorOpenExec(ident, Xd0p, 0.05, T_WH_b, phi_b, T_HE_act, GOAL, ho, fq_b, arm_mode='closure', joint_kp=a.kp,
-                                      g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0, cstop=CSW, preload_release=bool(a.preload_release and wb['bF'] is not None)))
+                                      g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0, cstop=CSW, preload_release=bool(a.preload_release)))
                 exn.p2_open = True
                 if a.diag:
                     exn.deadline_inject = lambda cc: cc.t >= DIAG_STOP_T - 1e-9   # 取證：0.5 s 後強制本拍晚到 ⇒ 與第四趟相同的閉鏈一致停止流程
@@ -702,7 +702,15 @@ def main():
             wb['M'].append(T6_[:3, :3].T @ rM_)
         elif a.preload_release and wb['bF'] is None and gc.phase != 'HOLD' and len(wb['F']) >= 20 and np.isfinite(wb['F']).all() and np.isfinite(wb['M']).all():
             wb['bF'], wb['bM'] = np.mean(wb['F'], axis=0), np.mean(wb['M'], axis=0)
+            wb['tried'] = True
             log_event('wrench_baseline', n=len(wb['F']), bias_F_world=[round(float(x_), 3) for x_ in wb['bF']], bias_M_link6=[round(float(x_), 4) for x_ in wb['bM']], F_std=[round(float(x_), 3) for x_ in np.std(wb['F'], axis=0)])
+        if a.preload_release and wb['bF'] is None and gc.phase != 'HOLD' and gc.stop is None:   # 指定 B2 開而基線無效（樣本不足或非有限）⇒ 不默默關掉 B2：走抓持控制器既有停止流程、本趟不進任務
+            log_event('wrench_baseline_invalid', n=len(wb['F']))
+            gc._stop('wrench_baseline_invalid', n=len(wb['F']))
+            res['refused'] = 'wrench_baseline_invalid'
+        if not np.isfinite(F6).all() and gc.stop is None:              # 力訊號失效：40 N 監看無法成立 ⇒ 停止
+            log_event('force_signal_invalid', phase='grasp')
+            gc._stop('force_signal_invalid')
         rows.append([t, phase_i() if gc.stop is None else 6, door_q(), float(jp2[f1]), float(jp2[f2]), *q2, *F6, time.perf_counter() - t_wall0])
         if gc.n_step % NPH == 0:
             bsp = float(np.linalg.norm(q2[:2] - prev_b[:2])) / G.DT
@@ -788,6 +796,10 @@ def main():
             F6 = wrist_F6()
             fn_ = float(np.linalg.norm(F6[:3]))
             w_ext_ = ext_wrench(q, F6) if a.preload_release else None
+            if ex.abort is None and (not np.isfinite(F6).all() or (a.preload_release and w_ext_ is None)):   # 力訊號或外力旋量失效 ⇒ 中止（不得讓 40 N 監看失效後繼續）
+                why_ = 'force_signal_invalid' if not np.isfinite(F6).all() else 'wrench_invalid'
+                log_event(why_, phase='open')
+                ex._stop(why_)
             out = ex.step(tr, q, phm, fn_, w_ext=w_ext_)
             if out['abort']:
                 box['aborted'] = dict(t=round(t, 3), controller=ex.abort)

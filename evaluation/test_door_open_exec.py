@@ -103,7 +103,7 @@ class Fake:
         if getattr(self, 'yaw_drift', None) is not None:              # 測試用：底盤偏航外擾（命令之外的實際角速度）
             wz = wz + float(self.yaw_drift(self))
         self.q[:3] += PHYS * np.array([cs * vx - sn * vy, sn * vx + cs * vy, wz])
-        tgt_ = out['arm_target'] - c._pr_delta if getattr(self, 'rigid_delta', False) else out['arm_target']   # 測試用：剛性綁定的替身——設定點偏置 δ 由約束吸收，手臂不跟著動
+        tgt_ = out['arm_target'] - c._pr_s if getattr(self, 'rigid_delta', False) else out['arm_target']   # 測試用：剛性綁定的替身——已實際進入設定點的 δ（含管線延遲）由約束吸收，手臂不跟著動
         self.q[3:] = self.q[3:] + self.alpha * (tgt_ - self.q[3:] + D_TRUE)
         if not self.bound:
             self.omega_free *= math.exp(-I_DAMP * PHYS)

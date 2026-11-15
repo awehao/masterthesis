@@ -209,7 +209,10 @@ class DoorOpenExec:
         self._hold = None                                             # r20（B1）：閉鏈一致停法的底盤保持錨點（世界 x, y, yaw）；None＝未啟用
         self.hold_log = []
         self._hold_t0 = None
-        self._pr_delta, self._w_ext, self.pr_log = np.zeros(6), None, []   # r22（B2）：約束方向預載釋放的設定點偏置 δ、最新外力旋量 (F, M@TCP, 世界)、紀錄
+        self._pr_delta, self._w_ext, self.pr_log = np.zeros(6), None, []   # r22（B2）：已提交的設定點偏置 δ、最新外力旋量 (F, M@TCP, 世界)、紀錄
+        self._pr_cand, self._pr_commit_tick = None, False             # r23：本拍候選 δ（連同候選命令與停止預測通過才提交；被拒或晚到即丟棄）
+        self._pr_inf, self.pr_rejected = {}, 0
+        self._pr_u, self._pr_pipe, self._pr_s = np.zeros(6), [np.zeros(6) for _ in range(D_STEPS)], np.zeros(6)   # δ 增量對應的命令分量、其在途管線、已實際進入設定點的 δ（含管線延遲）
         self.stop, self.done, self.stopped_t, self.stop_ok, self._still = None, False, None, None, 0
         self.events, self.rec, self.fail_inject = [], [], None
         self.solve_ms, self.sweep_ms, self.tick_ms = [], [], []
@@ -594,7 +597,7 @@ class DoorOpenExec:
 
     def _cs_params(self):
         return dict(ident=self._ident, bias=np.asarray(self.cfg.arm_model.bias, float), T_WH_bind=self.T_WH_bind, phi_bind=self.phi_bind, T_HE=self.T_HE, off_cl0=self.off_cl0, G0=self.G0,
-                    joint_kp=self.joint_kp, h=self.h, Xd=self.Xd, gravity3=bool(self.g2.get('gravity3')), fric_ff=self.g2['fric_ff'], lim_lo=self.lim_lo, lim_hi=self.lim_hi, q_lo=np.asarray(LITE6_SAFE.lower, float), q_hi=np.asarray(LITE6_SAFE.upper, float))
+                    joint_kp=self.joint_kp, h=self.h, Xd=self.Xd, bias0=self._bias0.copy(), gravity3=bool(self.g2.get('gravity3')), fric_ff=self.g2['fric_ff'], lim_lo=self.lim_lo, lim_hi=self.lim_hi, q_lo=np.asarray(LITE6_SAFE.lower, float), q_hi=np.asarray(LITE6_SAFE.upper, float))
 
     def _cs_on(self):
         return self._csw is not None and self.bound and self.off_cl0 is not None and self._pool is not None
@@ -609,9 +612,28 @@ class DoorOpenExec:
         self._cs_box[0].set_delta(self._pr_delta)                    # r22：主程序停法物件用當下的 δ（工作程序由狀態快照帶入）
         return self._cs_box[0]
 
-    def _cs_state(self, q, **kw):
+    def _pr_commit(self):
+        """候選命令提交時一併提交 δ：δ 增量化成命令分量，走與手臂命令相同的在途管線。"""
+        self._pr_commit_tick = True
+        if self._pr_cand is None:
+            self._pr_u = np.zeros(6)
+            return
+        self._pr_u = (self._pr_cand - self._pr_delta) / self.cfg.dt
+        self._pr_delta = self._pr_cand.copy()
+        inf_ = self._pr_inf
+        self.pr_log.append((round(self.t, 3), float(np.abs(self._pr_delta).max()), inf_.get('Fc_norm', float('nan')), inf_.get('Mc_norm', float('nan')), inf_.get('lam_n', float('nan')), bool(inf_.get('sat', False)), bool(inf_.get('updated', False))))
+
+    def _pr_use(self):
+        """候選命令用的 δ：有候選用候選，否則用已提交值。"""
+        return self._pr_cand if self._pr_cand is not None else self._pr_delta
+
+    def _pr_model(self, d):
+        """內部受控對象模型的穩態偏置＝bias0−α·δ。這是「剛性閉鏈近似」（綁定下手臂不隨設定點偏置移動），不是已辨識的受控對象偏置；bias0 與 δ 各自獨立保存。"""
+        self.cfg.arm_model.bias = self._bias0 - np.asarray(self.cfg.arm_model.alpha, float) * np.asarray(d, float)
+
+    def _cs_state(self, q, pr_delta=None, **kw):
         seed = self.q_cl_prev if self.q_cl_prev is not None else np.asarray(q[3:], float)
-        return dict(q=np.asarray(q, float), s=self.s, pipe=self.pipe, u_prev=self.u_last, sigma=self.sigma, g=self.g, seed=seed, Xd=self.Xd, se_end=self._se_end, base_hold=self._hold, pr_delta=self._pr_delta.copy(), **kw)
+        return dict(q=np.asarray(q, float), s=self.s, pipe=self.pipe, u_prev=self.u_last, sigma=self.sigma, g=self.g, seed=seed, Xd=self.Xd, se_end=self._se_end, base_hold=self._hold, pr_delta=(self._pr_delta if pr_delta is None else np.asarray(pr_delta, float)).copy(), **kw)
 
     def _cs_bg(self, ver, out):
         """背景執行緒（主程序求解期間）：等向前模擬 → 取樣構型送計算池核淨空 → 收結果。只寫自己這次請求的 out（不寫控制器狀態）。
@@ -695,13 +717,14 @@ class DoorOpenExec:
         原各軸減速的 (1,2) 中「同一命令再多留一拍」在閉鏈手臂下不是會發生的情形（手臂命令每拍依閉鏈重算；多留一拍即破壞閉鏈，假世界起步即 arm_rate 不可行）。"""
         self._cs_obj()
         w = 1 if self._csw.n > 1 else 0
-        return w, self._csw.submit(self._cs_state(q, u_first=np.asarray(u, float), hold=1, se_first=self._se_cand), w=w), self._xd_ver
+        return w, self._csw.submit(self._cs_state(q, pr_delta=self._pr_use(), u_first=np.asarray(u, float), hold=1, se_first=self._se_cand), w=w), self._xd_ver
 
     def _solve_cand(self, q, phi_meas):
         """求解；閉鏈一致停法啟用時，本拍命令一確定（閉鏈手臂前三個節點算完）就把候選核對的模擬送出，與其餘求解工作重疊。
         回 (u, 候選請求或 None)。提早送出的命令與最後命令不同（>1e-9）或沒送 ⇒ 以最後命令重送。"""
         on = self._cs_on()
         self._hc_e = None
+        self._pr_model(self._pr_use())                               # 候選求解與其預測用候選 δ 的模型；未提交則於拍末回復
         if on:
             def _cb(ue, q=q):
                 self._hc_e = (self._cs_cand_submit(q, ue), np.asarray(ue, float).copy())
@@ -867,13 +890,13 @@ class DoorOpenExec:
             Q.append(q)
             seed = q
             if k == 2 and self._early_cb is not None:                  # r17：本拍手臂命令只依賴前三個節點（中央差分）——先算出並交給候選核對提早派工；
-                S1e = Q[1] + tau * (Q[2] - Q[0]) / (2 * DT) - self._off_cl(np.r_[B_[1], Q[1]]) + FF.ff((Q[2] - Q[0]) / (2 * DT), self.g2['fric_ff'], self.joint_kp) + self._pr_delta   # 其餘節點（限制驗收用）照常算完，不過則候選作廢
+                S1e = Q[1] + tau * (Q[2] - Q[0]) / (2 * DT) - self._off_cl(np.r_[B_[1], Q[1]]) + FF.ff((Q[2] - Q[0]) / (2 * DT), self.g2['fric_ff'], self.joint_kp) + self._pr_use()   # 其餘節點（限制驗收用）照常算完，不過則候選作廢
                 self._early_cb(np.r_[np.asarray(r.u_opt, float), (S1e - np.asarray(sp, float)) / DT])
         Q = np.array(Q)
         self.q_cl_prev = Q[1].copy()
         self.Q_cl_prev_full = Q.copy()
         Qd = np.gradient(Q, DT, axis=0)
-        S_ = np.array([Q[k] + tau * Qd[k] - self._off_cl(np.r_[B_[k], Q[k]]) + FF.ff(Qd[k], self.g2['fric_ff'], self.joint_kp) + self._pr_delta for k in range(N + 1)])   # r19：庫倫摩擦前饋（door_fric_ff）
+        S_ = np.array([Q[k] + tau * Qd[k] - self._off_cl(np.r_[B_[k], Q[k]]) + FF.ff(Qd[k], self.g2['fric_ff'], self.joint_kp) + self._pr_use() for k in range(N + 1)])   # r19：庫倫摩擦前饋（door_fric_ff）
         U = np.diff(np.vstack([np.asarray(sp, float)[None], S_[1:]]), axis=0) / DT
         self.cl_stats['n'] += 1
         self.cl_stats['s0_jump_max'] = max(self.cl_stats['s0_jump_max'], float(np.abs(S_[0] - sp).max()))
@@ -976,11 +999,12 @@ class DoorOpenExec:
             self._sn = None                                            # r9：上一拍未收的派工作廢（遲到結果會因版本不符被丟棄）
             self._sn_verified = False                                  # r10：本拍現在停是否已驗過
             self._fb_ok, self._fb_info = False, None                   # r11：本拍備援重驗
-            if self.g2['preload_release'] and self.bound and self._w_ext is not None:   # r22（B2）：每控制拍以實測外力旋量更新一次 δ（正常追蹤與備援停止共用；之後 δ 進設定點目標）
+            self._pr_cand, self._pr_commit_tick = None, False
+            if self.g2['preload_release'] and self.bound and self._w_ext is not None and (self.stop is None or self.stop_mode == 'path'):
+                # r23（B2）：新 δ 只是候選——本拍「現在停」用已提交的 δ；候選 δ 連同候選命令及其停止預測通過才提交；備援停止（cstop）期間 δ 凍結
                 Tt_, Jt_ = DFK.FC.fk_jac(q)
-                self._pr_delta, inf_ = PR.update(self._pr_delta, self._w_ext[0], self._w_ext[1], Tt_[:3, 3], Jt_[:, 3:9], self.joint_kp, self.cfg.dt)
-                self.cfg.arm_model.bias = self._bias0 - np.asarray(self.cfg.arm_model.alpha, float) * self._pr_delta   # δ 等同靜態偏置估計的修正：內部受控對象模型的穩態偏置同步改（預測的關節位置不因 δ 位移——剛性綁定下手臂不會跟著 δ 動）
-                self.pr_log.append((round(self.t, 3), float(np.abs(self._pr_delta).max()), inf_.get('Fc_norm', float('nan')), inf_.get('Mc_norm', float('nan')), inf_.get('lam_n', float('nan')), bool(inf_.get('sat', False)), bool(inf_.get('updated', False))))
+                self._pr_cand, inf_ = PR.update(self._pr_delta, self._w_ext[0], self._w_ext[1], Tt_[:3, 3], Jt_[:, 3:9], self.joint_kp, self.cfg.dt)
+                self._pr_inf = inf_
             if self.q_tick is not None:
                 self.rate = dict(base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / self.cfg.dt, yaw=abs(q[2] - self.q_tick[2]) / self.cfg.dt, arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / self.cfg.dt, door=abs(phi_meas - self.phi_tick) / self.cfg.dt)
             self.q_tick, self.phi_tick = q.copy(), float(phi_meas)
@@ -1103,6 +1127,7 @@ class DoorOpenExec:
                 if self.stop is None:
                     self.u_last = u
                     self._se_end = self._se_cand
+                    self._pr_commit()
                     self.sigma = min(self.sigma + self.cfg.dt * self.g, self.sig_end)
             if self.stop is not None and self.stop_mode == 'path':
                 self.g = max(self.g - self.cfg.dt / T_STOP, 0.0)
@@ -1150,6 +1175,7 @@ class DoorOpenExec:
                         else:
                             self.u_last = u
                             self._se_end = self._se_cand
+                            self._pr_commit()
                             self.sigma = min(self.sigma + self.cfg.dt * self.g, self.sig_end)
             if self.stop is not None and self.stop_mode == 'cstop' and self.abort is None:   # r16：閉鏈一致備援停法
                 if self.stopped_t is None:
@@ -1171,6 +1197,12 @@ class DoorOpenExec:
                 if self.stopped_t is None:
                     self.stopped_t = self.t
                 self.u_last = self._decel()
+            if not self._pr_commit_tick:                               # 本拍沒有提交候選（被拒、晚到、停止中）：δ 與模型一起回到已提交值
+                if self._pr_cand is not None:
+                    self.pr_rejected = getattr(self, 'pr_rejected', 0) + 1
+                self._pr_u = np.zeros(6)
+                self._pr_cand = None
+            self._pr_model(self._pr_delta)
             self.u_prev = self.u_last.copy()
             self.tick_ms.append((time.perf_counter() - w_t) * 1e3)
         if tick:                                                   # 新的一拍：過渡起點＝上一物理步實際送出的底盤命令
@@ -1178,6 +1210,8 @@ class DoorOpenExec:
         cmd = ramp_cmd(self.u_from_base, self.u_last, self.ramp_j)
         self.ramp_j += 1
         self.pipe.append(cmd)
+        self._pr_pipe.append(self._pr_u.copy())                      # δ 的命令分量與手臂命令同步進出管線
+        self._pr_s = self._pr_s + PHYS * self._pr_pipe.pop(0)
         self.cmd_hist.append(cmd[:3].copy())
         ua = self.pipe.pop(0)
         if tick:
