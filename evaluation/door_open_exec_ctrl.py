@@ -68,6 +68,7 @@ import sys
 import time
 
 import numpy as np
+import door_fric_ff as FF
 
 os.environ.setdefault('M8_SCENE_REG', '20261112_m8_house_scene.json')
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -141,7 +142,7 @@ def rot_deg(Ta, Tb):
 
 class DoorOpenExec:
     def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2, arm_mode='qp', joint_kp=600.0, g2=None):
-        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False, gravity3=False, prep_fc=False, deadline_ms=None, cstop=None)
+        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False, gravity3=False, prep_fc=False, deadline_ms=None, cstop=None, fric_ff=None)
         self.n_deadline_miss = 0
         self.p2_open, self.p2_log = False, []                         # r12
         self.staged, self._last_ver = None, 0                         # r13
@@ -585,7 +586,7 @@ class DoorOpenExec:
 
     def _cs_params(self):
         return dict(ident=self._ident, bias=np.asarray(self.cfg.arm_model.bias, float), T_WH_bind=self.T_WH_bind, phi_bind=self.phi_bind, T_HE=self.T_HE, off_cl0=self.off_cl0, G0=self.G0,
-                    joint_kp=self.joint_kp, h=self.h, Xd=self.Xd, gravity3=bool(self.g2.get('gravity3')), lim_lo=self.lim_lo, lim_hi=self.lim_hi, q_lo=np.asarray(LITE6_SAFE.lower, float), q_hi=np.asarray(LITE6_SAFE.upper, float))
+                    joint_kp=self.joint_kp, h=self.h, Xd=self.Xd, gravity3=bool(self.g2.get('gravity3')), fric_ff=self.g2['fric_ff'], lim_lo=self.lim_lo, lim_hi=self.lim_hi, q_lo=np.asarray(LITE6_SAFE.lower, float), q_hi=np.asarray(LITE6_SAFE.upper, float))
 
     def _cs_on(self):
         return self._csw is not None and self.bound and self.off_cl0 is not None and self._pool is not None
@@ -855,13 +856,13 @@ class DoorOpenExec:
             Q.append(q)
             seed = q
             if k == 2 and self._early_cb is not None:                  # r17：本拍手臂命令只依賴前三個節點（中央差分）——先算出並交給候選核對提早派工；
-                S1e = Q[1] + tau * (Q[2] - Q[0]) / (2 * DT) - self._off_cl(np.r_[B_[1], Q[1]])   # 其餘節點（限制驗收用）照常算完，不過則候選作廢
+                S1e = Q[1] + tau * (Q[2] - Q[0]) / (2 * DT) - self._off_cl(np.r_[B_[1], Q[1]]) + FF.ff((Q[2] - Q[0]) / (2 * DT), self.g2['fric_ff'], self.joint_kp)   # 其餘節點（限制驗收用）照常算完，不過則候選作廢
                 self._early_cb(np.r_[np.asarray(r.u_opt, float), (S1e - np.asarray(sp, float)) / DT])
         Q = np.array(Q)
         self.q_cl_prev = Q[1].copy()
         self.Q_cl_prev_full = Q.copy()
         Qd = np.gradient(Q, DT, axis=0)
-        S_ = np.array([Q[k] + tau * Qd[k] - self._off_cl(np.r_[B_[k], Q[k]]) for k in range(N + 1)])
+        S_ = np.array([Q[k] + tau * Qd[k] - self._off_cl(np.r_[B_[k], Q[k]]) + FF.ff(Qd[k], self.g2['fric_ff'], self.joint_kp) for k in range(N + 1)])   # r19：庫倫摩擦前饋（door_fric_ff）
         U = np.diff(np.vstack([np.asarray(sp, float)[None], S_[1:]]), axis=0) / DT
         self.cl_stats['n'] += 1
         self.cl_stats['s0_jump_max'] = max(self.cl_stats['s0_jump_max'], float(np.abs(S_[0] - sp).max()))

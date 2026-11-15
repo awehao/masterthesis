@@ -54,6 +54,7 @@ import sys
 import time
 
 import numpy as np
+import door_fric_ff as FF
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -71,7 +72,7 @@ READY_Q = dict(fresh_s=0.3, accept_max_s=0.5)                       # r2 事前�
 
 
 class MovingGraspCtrl:
-    def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None, pool=0, fastkin=False, deadline_ms=None):
+    def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None, pool=0, fastkin=False, deadline_ms=None, fric_ff=None):
         self.fastkin = bool(fastkin)
         self.deadline_ms = None if deadline_ms is None else float(deadline_ms)
         self.deadline_inject, self.fb_inject = None, None
@@ -90,6 +91,7 @@ class MovingGraspCtrl:
         al = np.asarray(self.cfg.arm_model.alpha, float)
         self.cfg.arm_model.bias = al * np.asarray(off_static, float)
         self.tau, self.va = PHYS / al, float(B.W_ARM['v_arm'])
+        self.fric_ff = fric_ff                                         # r13：庫倫摩擦前饋的 τ_f（N·m；None＝不加，逐值同 r12）
         self.est_fn = est_fn                                         # 回 (T_WH 估計, 版本, 擷取時刻) 或 None
         self.d = np.asarray(d_world, float) / np.linalg.norm(d_world)
         self.v = float(v_pass)
@@ -194,7 +196,7 @@ class MovingGraspCtrl:
         q1, r1, q0_, r0, offv = hit
         if max(r1, r0) > 1e-6 or float(np.abs(q1 - seed).max()) > 0.5:
             return None, max(r1, r0), None
-        S1 = q1 + self.tau * (q1 - q0_) / DT - offv
+        S1 = q1 + self.tau * (q1 - q0_) / DT - offv + FF.ff((q1 - q0_) / DT, self.fric_ff, self.joint_kp)
         return (S1 - sp) / DT, max(r1, r0), q1
 
     def _track(self, q, tr):

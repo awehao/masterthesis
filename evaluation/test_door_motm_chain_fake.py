@@ -32,6 +32,15 @@ RUN = os.path.join(HERE, 'runs', 'm8house_door_full_2')
 P = np.load(os.path.join(RUN, 'plan.npz')); Lg = np.load(os.path.join(RUN, 'log.npz'))['rows']; R = json.load(open(os.path.join(RUN, 'result.json')))
 T_true, phi_b = P['T_WH_bind'], float(P['phi_bind'])
 ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json'))); al = np.asarray(ident['alpha'], float)
+FAKE_FRIC = float(os.environ.get('FAKE_FRIC', '0'))                  # 假世界手臂關節庫倫摩擦（N·m）：死區模型 |kp·e|≤τ_f 不動、超出部分照一階模型——只是替身，不是 PhysX 摩擦
+FRIC_FF = float(os.environ['FRIC_FF']) if os.environ.get('FRIC_FF') else None   # 控制器前饋用的 τ_f
+
+
+def dead(e):
+    d_ = FAKE_FRIC / 600.0
+    return e - np.clip(e, -d_, d_)
+
+
 Dst = np.array(R['I_insert']['d_hat'])
 E4 = Lg[Lg[:, 1] == 4][-1]; q_b = np.r_[E4[5:8], E4[8:14]]
 bodies = BM.arm_bodies(K); G_b = BM.arm_gravity(K, q_b, bodies)
@@ -75,7 +84,7 @@ ub = np.array([cth * vw[0] + sth * vw[1], -sth * vw[0] + cth * vw[1], 0.0])
 u_ss = np.r_[ub, qd]
 q = np.r_[b0, qa.copy()]
 s0 = qa + (PHYS / al) * qd - dq(q)
-gc = G.MovingGraspCtrl(ident, est_at, d_world, V, WIN, s0, [u_ss.copy() for _ in range(D_STEPS)], u_ss, u_ss, dq(q), pool=SHARED if SHARED is not None else 6, fastkin=True, deadline_ms=50.0)
+gc = G.MovingGraspCtrl(ident, est_at, d_world, V, WIN, s0, [u_ss.copy() for _ in range(D_STEPS)], u_ss, u_ss, dq(q), pool=SHARED if SHARED is not None else 6, fastkin=True, deadline_ms=50.0, fric_ff=FRIC_FF)
 ev, ts = [], []
 first = dict(req=None, t_avail=None, ok=False)
 
@@ -116,7 +125,7 @@ while t < 30.0:
             Xd0, h0, _ = first['o'].dense_reference(4)
             T_HE_act = np.linalg.inv(first['T_plan']) @ K.fk(q, 'link_tcp')
             ho = dict(s=gc.s.copy(), pipe=[u_.copy() for u_ in gc.pipe], u_last=gc.u_last.copy(), u_prev=gc.u_prev.copy(), bias=np.asarray(gc.cfg.arm_model.bias, float).copy(), moving=True, off_static=gc.off(q))
-            ex_c = X.DoorOpenExec(ident, Xd0, h0, first['T_plan'], phi_b, T_HE_act, GOAL, ho, FQ, arm_mode='closure', g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=SHARED if SHARED is not None else 6, prep_fc=True, deadline_ms=50.0, cstop=CSW))
+            ex_c = X.DoorOpenExec(ident, Xd0, h0, first['T_plan'], phi_b, T_HE_act, GOAL, ho, FQ, arm_mode='closure', g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=SHARED if SHARED is not None else 6, prep_fc=True, deadline_ms=50.0, cstop=CSW, fric_ff=FRIC_FF))
             ex_c.p2_open = True
             if SHARED is not None:
                 ex_c.warmup(q, phi_b)
@@ -149,7 +158,7 @@ while t < 30.0:
         tw = o['base_twist']
         cs, sn = math.cos(q[2]), math.sin(q[2])
         q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2]])
-        q[3:] = q[3:] + al * (o['arm_target'] - q[3:] + dq(q))
+        q[3:] = q[3:] + al * dead(o['arm_target'] - q[3:] + dq(q))
         if gc.stop is not None and gc.stop_ok is not None:
             ev.append(dict(t=round(t, 3), what='grasp_stopped', stop=gc.stop)); break
     else:
@@ -226,7 +235,7 @@ while t < 30.0:
         tw = o['base_twist']
         cs, sn = math.cos(q[2]), math.sin(q[2])
         q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2]])
-        q[3:] = q[3:] + al * (o['arm_target'] - q[3:] + dq(q))
+        q[3:] = q[3:] + al * dead(o['arm_target'] - q[3:] + dq(q))
         if ex.stop is not None and ex.stop_ok is not None and t - ex.stop_ok['t'] >= 0.3:
             ev.append(dict(t=round(t, 3), what='open_end', stop=ex.stop, done=ex.done)); break
     t += PHYS

@@ -32,6 +32,8 @@ class CStop:
         self.off0, self.G0, self.kp = np.asarray(P['off_cl0'], float), np.asarray(P['G0'], float), float(P['joint_kp'])
         self.grav = (DFK.FastGravity3 if P.get('gravity3') else DFK.FastGravity2)(self.K, XO.BM.arm_bodies(self.K))   # 與執行層同一個重力函式
         self.h = float(P['h'])
+        import door_fric_ff as FF_
+        self.FF, self.fric_ff = FF_, P.get('fric_ff')
         self.lim_lo, self.lim_hi = np.asarray(P['lim_lo'], float), np.asarray(P['lim_hi'], float)     # r2：設定點限位（同執行層）
         self.q_lo, self.q_hi = np.asarray(P['q_lo'], float), np.asarray(P['q_hi'], float)             # 關節限位（同閉鏈手臂驗收）
         self.set_ref(P['Xd'])
@@ -87,7 +89,7 @@ class CStop:
         if max(r1, r0) > 1e-6 or float(np.abs(q1 - seed).max()) > 0.5 or not np.isfinite(q1).all():
             return dict(ok=False, why='ik_fail')
         off = self.off0 + (self.grav(np.r_[b, q1]) - self.G0) / self.kp
-        S1 = q1 + self.tau * (q1 - q0) / DT - off
+        S1 = q1 + self.tau * (q1 - q0) / DT - off + self.FF.ff((q1 - q0) / DT, self.fric_ff, self.kp)   # 同執行層：庫倫摩擦前饋（參考速度歸零時自動收回）
         ua = (S1 - sp) / DT
         u = np.r_[ub, ua]
         if float(np.abs(ua).max()) > self.va + 1e-9:

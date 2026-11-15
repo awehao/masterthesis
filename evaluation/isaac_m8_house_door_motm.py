@@ -81,6 +81,8 @@ L_LEAD, T_LEAD = 0.01, 0.2                                         # 冒煙 2：
 GOAL = math.radians(85.0)
 COND = dict(pos_m=0.005, rot_deg=3.0, rel_lin_mps=0.005, rel_ang_rps=0.02, rel_still_s=0.3, finger_q_m=(0.0005, 0.004), finger_contact_n=0.5, door_pre_deg=0.5, forbidden_n=0.05)
 GRASP_LIMIT_S, OPEN_LIMIT_S = 12.0, 40.0
+HOLD_R_MAX, HOLD_V_MAX = 1.3, 0.01                                   # P2：靜置保持力矩殘差上限（N·m）、低速門檻（rad/s）
+PLAN_LEAD_S, PLAN_TOL_S, T_REPLAN = 0.10, 0.05, 1.0                  # 首段：名目交接在預測 READY 後 0.10 s（第 3、4 趟實況）；適用窗 [0.10, 0.10＋0.05]；過期後重算的預測提前量 1.0 s（規劃在模擬時間約 0.8 s）
 DIAG_STOP_T = 0.5                                                   # --diag：開門執行層時間到此即強制本拍「晚到」（走與第四趟相同的閉鏈一致停止流程）
 PH = ['L', 'I', 'C', 'F', 'R', 'O', 'S']                            # 前導(HOLD)／插入／閉爪／確認／READY／開門／停止
 PH_ZH = dict(L='前導接近（預抓保持、移動）', I='插入（移動中）', C='閉爪（移動中）', F='確認（移動中）', R='READY（移動中）', O='開門（P2 續接）', S='停止')
@@ -188,10 +190,11 @@ def main():
                     print('[motm] 手臂關節原速度上限讀不到 ⇒ 拒跑', flush=True)
                     return 31
                 pr.ApplyAPI('PhysxJointAxisAPI', 'angular')
+                old.CreateJointFrictionAttr().Set(0.0)                # P1（Codex 20261115）：舊的無因次係數＝單位錯置的那一項，明設 0；摩擦由逐軸 1.0 N·m 表示
                 for nm_, v_ in (('staticFrictionEffort', 1.0), ('dynamicFrictionEffort', 1.0), ('viscousFrictionCoefficient', 0.0), ('maxJointVelocity', float(mv)), ('armature', float(am))):
                     pr.CreateAttribute('physxJointAxis:angular:' + nm_, Sdf.ValueTypeNames.Float).Set(float(v_))
                 dr = UsdPhysics.DriveAPI(pr, 'angular')
-                fric_usd[pr.GetName()] = dict(legacy_jointFriction_unitless=None if jf is None else float(jf), axis_static_Nm=1.0, axis_dynamic_Nm=1.0, axis_viscous=0.0, maxJointVelocity_deg_s=float(mv), armature=float(am),
+                fric_usd[pr.GetName()] = dict(legacy_jointFriction_unitless_imported=None if jf is None else float(jf), legacy_jointFriction_unitless_set=0.0, axis_static_Nm=1.0, axis_dynamic_Nm=1.0, axis_viscous=0.0, maxJointVelocity_deg_s=float(mv), armature=float(am),
                                               drive_maxForce_Nm=None if not dr.GetMaxForceAttr() else float(dr.GetMaxForceAttr().Get()))
         if sorted(fric_usd) != sorted(ARM):
             print('[motm] 手臂關節逐軸摩擦設定不完整 ⇒ 拒跑', sorted(fric_usd), flush=True)
@@ -253,7 +256,8 @@ def main():
         ok_f = ('error' not in arm_backend and fpv.shape == (6, 3) and np.isfinite(fpv).all() and np.allclose(fpv[:, 0], 1.0, atol=1e-6) and np.allclose(fpv[:, 1], 1.0, atol=1e-6) and np.allclose(fpv[:, 2], 0.0, atol=1e-9)
                 and np.isfinite(mvb).all() and np.allclose(mvb, [math.radians(fric_usd[names[i]]['maxJointVelocity_deg_s']) for i in idx], rtol=1e-3)
                 and np.isfinite(mfb).all() and np.allclose(mfb, [fric_usd[names[i]]['drive_maxForce_Nm'] for i in idx], rtol=1e-3)
-                and np.allclose(arm_backend['kp'], a.kp, rtol=1e-3) and np.allclose(arm_backend['kd'], a.kd, rtol=1e-3))
+                and np.allclose(arm_backend['kp'], a.kp, rtol=1e-3) and np.allclose(arm_backend['kd'], a.kd, rtol=1e-3)
+                and arm_backend.get('legacy_friction_coefficients') is not None and np.allclose(arm_backend['legacy_friction_coefficients'], 0.0, atol=1e-9))
         if not ok_f:
             print('[motm] 手臂關節後端有效屬性讀回不符（摩擦／速度上限／力矩上限／增益）⇒ 拒跑', flush=True)
             json.dump(dict(refused='arm_backend_readback', arm_backend=arm_backend), open(os.path.join(a.out, 'refused.json'), 'w'), ensure_ascii=False, indent=1)
@@ -378,16 +382,29 @@ def main():
                finger=dict(command='CLOSE 段由張開斜降到 0（夾緊，同停車版）', geometry='兩指各自實測開度；CLOSE 段掃掠另含預測閉合開度'))
     # ---- 靜置
     quat0 = np.array([math.cos(b_start[2] / 2), 0.0, 0.0, math.sin(b_start[2] / 2)], np.float32)
+    jv_hist = []
     for k in range(int(round(a.settle_s / DT))):
         if k < 5:
             robot.set_world_pose(np.array([b_start[0], b_start[1], 0.0], np.float32), quat0)
         apply()
         base_cmd(np.zeros(3), 0.0)
         world.step(render=True)
+        jv_hist.append(np.asarray(robot.get_joint_velocities(), float)[idx])
     qs, jps = q9()
+    # P2（Codex 20261115）：任務運動前的工程拒跑檢查——未綁定、無接觸、實測低速持續 0.3 s 後，r＝kp(s−q)＋kd(0−q̇)＋G(q)（速度目標＝0）
+    jv_tail = np.abs(np.array(jv_hist[-int(round(0.3 / DT)):]))
+    r_hold = a.kp * (s0 - qs[3:]) + a.kd * (0.0 - jv_hist[-1]) + BM.arm_gravity(K, qs, bodies_arm)
+    hold_chk = dict(low_speed_0p3s=bool(jv_tail.max() <= HOLD_V_MAX), joint_rate_abs_max_0p3s=round(float(jv_tail.max()), 6), r_Nm=[round(float(x), 3) for x in r_hold], limit_Nm=HOLD_R_MAX, v_limit=HOLD_V_MAX,
+                    note='r 含重力模型與驅動近似誤差：超過不證明新舊摩擦疊加，通過也不證明摩擦已校準；1.3＝1.0＋事前工程容差 0.3')
+    hold_chk['ok'] = bool(hold_chk['low_speed_0p3s'] and float(np.abs(r_hold).max()) <= HOLD_R_MAX)
+    print('[motm] hold_check', json.dumps(hold_chk, ensure_ascii=False), flush=True)
+    if a.arm_friction_model == 'urdf_effort' and not hold_chk['ok']:
+        print('[motm] 靜置保持力矩殘差檢查不過 ⇒ 拒跑', flush=True)
+        json.dump(dict(refused='hold_residual', hold_check=hold_chk, arm_backend=arm_backend), open(os.path.join(a.out, 'refused.json'), 'w'), ensure_ascii=False, indent=1)
+        return 34
     off_static = qs[3:] - s0                                          # 靜置實測靜態偏置（含未建模）
     door0 = door_q()
-    res['settle'] = dict(base=qs[:3].tolist(), arm_err_vs_pregrasp=[round(float(x), 5) for x in (qs[3:] - qa)], off_static=off_static.tolist(), door_deg=round(math.degrees(door0), 5))
+    res['settle'] = dict(hold_check=hold_chk, base=qs[:3].tolist(), arm_err_vs_pregrasp=[round(float(x), 5) for x in (qs[3:] - qa)], off_static=off_static.tolist(), door_deg=round(math.degrees(door0), 5))
     # ---- 理想感知影格
     frames = []
 
@@ -408,7 +425,7 @@ def main():
     gc = G.MovingGraspCtrl(ident, est_fn, np.array([-1.0, 0.0]), V, (L_LEAD, L_LEAD + 0.22), s0.copy(), [np.zeros(9) for _ in range(G.D_STEPS)], np.zeros(9), np.zeros(9), off_static,
                            sched=dict(hold_s=0.3 + T_LEAD), pool=POOL, fastkin=True, deadline_ms=50.0)
     first = dict(rid=None, t_req=None, wall_req=None, t_avail=None, wall_avail=None, ok=False, res=None)
-    gc.close_gate = lambda cc: first['ok']
+    gc.close_gate = lambda cc: bool(first['ok'] and abs(first['t_ready_pred'] - (cc.t0 + cc.sched['hold_s'] + cc.sched['ins_s'] + cc.sched['close_s'] + cc.sched['confirm_s'] - G.DT)) <= 0.5 * G.DT)   # 首段可用且是照本排程的 READY 時刻算的
     ev = []
     rows, ts = [], []
     STATE.update(res=res, rows=rows, ts=ts, ev=ev)                    # 例外時存部分紀錄（名目趟 1 例外未存檔）
@@ -424,12 +441,10 @@ def main():
     while t < t_end_lim and box['mode'] == 'grasp':
         q, jp = q9()
         tick = gc.n_step % NPH == 0
-        # P2 首段：前導第一拍送出（預測 READY 狀態）
-        if tick and first['rid'] is None and gc.t0 is not None and gc.T_est is not None:
-            T_plan = gc.T_est.copy()
-            t_rel = t - gc.t0
-            t_ready_rel = gc.sched['hold_s'] + gc.sched['ins_s'] + gc.sched['close_s'] + gc.sched['confirm_s'] - G.DT
-            b_pred = q[:3] + np.r_[np.array([-V, 0.0]) * (t_ready_rel - t_rel), 0.0]
+        # P2 首段：前導第一拍送出（預測 READY 狀態）；過期後依最新狀態重算（Codex 20261115：首段計畫過期修正）
+        def req_first(t_ready_abs, why):
+            T_plan = gc.handle_ref().copy() if gc.lock is not None else gc.T_est.copy()
+            b_pred = q[:3] + np.r_[np.array([-V, 0.0]) * max(t_ready_abs - t, 0.0), 0.0]     # 通過線等速（抓持控制器的底盤命令）；在途管線同為等速
             qa_pred = ik(b_pred, T_at(T_plan, 0.0), q[3:])
             phi_now = door_q()
             x_pred = np.r_[b_pred, qa_pred, phi_now]
@@ -437,15 +452,31 @@ def main():
             WB.set_model(phi0=phi_now, finger_q=G.FINGER_CLOSED)
             hlp = WB.DoorWBOpt(T_plan, np.eye(4), x_pred, GOAL, N=2, dt=0.2, T_HE=T_HE_pred, project_start=False)
             v_pred = np.r_[-V, 0.0, 0.0, hlp.closure_velocity(x_pred, np.r_[-V, 0.0, 0.0], 0.0), 0.0]
-            first.update(rid=1, t_req=t, wall_req=time.perf_counter() - t_wall0, T_plan=T_plan, T_HE_pred=T_HE_pred, x_pred=x_pred, t_ready_pred=gc.t0 + t_ready_rel, phi_req=phi_now)
-            PLANNER.submit(1, dict(T_WH0=T_plan, T_HE=T_HE_pred, x0=x_pred, v0=v_pred, H=H_SEG, goal=GOAL, fq=G.FINGER_CLOSED, phi_model=phi_now, try_final=True))
-            log_event('first_segment_request', t_ready_pred=round(gc.t0 + t_ready_rel, 3), b_pred=[round(float(x), 4) for x in b_pred])
-        r_ = PLANNER.poll() if first['rid'] is not None and first['res'] is None else None
+            first['n_req'] = first.get('n_req', 0) + 1
+            first.update(rid=first['n_req'], t_req=t, wall_req=time.perf_counter() - t_wall0, pend=dict(T_plan=T_plan, T_HE_pred=T_HE_pred, x_pred=x_pred, t_ready_pred=t_ready_abs, phi_req=phi_now), pending=True)
+            PLANNER.submit(first['n_req'], dict(T_WH0=T_plan, T_HE=T_HE_pred, x0=x_pred, v0=v_pred, H=H_SEG, goal=GOAL, fq=G.FINGER_CLOSED, phi_model=phi_now, try_final=True))
+            log_event('first_segment_request', k=first['n_req'], why=why, t_ready_pred=round(t_ready_abs, 3), b_pred=[round(float(x), 4) for x in b_pred])
+
+        if tick and first['rid'] is None and gc.t0 is not None and gc.T_est is not None:
+            req_first(gc.t0 + gc.sched['hold_s'] + gc.sched['ins_s'] + gc.sched['close_s'] + gc.sched['confirm_s'] - G.DT, 'initial')
+        plan_t = first.get('t_ready_pred')
+        stale = first['res'] is not None and plan_t is not None and t > plan_t + PLAN_LEAD_S + PLAN_TOL_S + 1e-9
+        if tick and stale and not first.get('pending') and gc.stop is None and not a.smoke:
+            first['ok'] = False                                          # 舊段不再適用（不平移、不沿用）
+            req_first(t + T_REPLAN, 'stale')
+        r_ = PLANNER.poll() if first.get('pending') else None
+        if r_ is not None and r_[0] != first['rid']:
+            r_ = None                                                    # 舊請求的結果：丟棄
         if r_ is not None:
+            first.update(first.pop('pend'))
+            first['pending'] = False
             first.update(res=r_, t_avail=t, wall_avail=time.perf_counter() - t_wall0, ok=bool(r_[2] and r_[1] is not None))
             log_event('first_segment_available', feasible=r_[2], failed=r_[3], final=r_[4], plan_wall_s=round(r_[5], 3), info=r_[6])
         # 交接（READY 那拍首）
-        if tick and gc.ready_now and gc.ready_ver is not None and gc.stop is None and not a.smoke:
+        plan_fit = bool(first['ok'] and first.get('t_ready_pred') is not None and first['t_ready_pred'] + PLAN_LEAD_S - 0.5 * G.DT <= t <= first['t_ready_pred'] + PLAN_LEAD_S + PLAN_TOL_S + 1e-9)
+        if tick and gc.ready_now and gc.ready_ver is not None and gc.stop is None and not a.smoke and not plan_fit:
+            log_event('handover_wait_plan', plan_ok=bool(first['ok']), pending=bool(first.get('pending')), t_ready_pred=first.get('t_ready_pred'), ready_ver=gc.ready_ver)
+        if tick and gc.ready_now and gc.ready_ver is not None and gc.stop is None and not a.smoke and plan_fit:
             w_ho = time.perf_counter()                                   # 交接計算（綁定條件、建執行層、預熱、試跑）的牆鐘：在本體 50 ms 計時之外，另記
             Th = truth_handle()
             Ttcp = K.fk(q, 'link_tcp')
@@ -541,7 +572,7 @@ def main():
     res['grasp'] = {k_: rep_g.get(k_) for k_ in ('phases', 'stop', 'abort', 'stop_effect', 'ready_t_rel', 'accepted', 'accept_t_rel', 'n_ready_revoked', 'min_clear', 'limits', 'contact_lock', 'lock_inconsistency_max', 'contact_stop', 'fast_slip')}
     res['grasp']['n_deadline_miss'] = gc.n_deadline_miss
     res['grasp']['tick_log'] = gc.tick_log
-    res['first_segment'] = {k_: first.get(k_) for k_ in ('t_req', 'wall_req', 't_avail', 'wall_avail', 'ok', 't_ready_pred', 'phi_req')}
+    res['first_segment'] = {k_: first.get(k_) for k_ in ('t_req', 'wall_req', 't_avail', 'wall_avail', 'ok', 't_ready_pred', 'phi_req', 'n_req')}
     if first['res'] is not None:
         res['first_segment'].update(feasible=first['res'][2], failed=first['res'][3], final=first['res'][4], plan_wall_s=round(first['res'][5], 3), info=first['res'][6])
     # ================= 開門（P2 續接）=================
