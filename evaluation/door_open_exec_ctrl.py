@@ -141,7 +141,7 @@ def rot_deg(Ta, Tb):
 
 class DoorOpenExec:
     def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2, arm_mode='qp', joint_kp=600.0, g2=None):
-        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False, prep_fc=False, deadline_ms=None, cstop=None)
+        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False, gravity3=False, prep_fc=False, deadline_ms=None, cstop=None)
         self.n_deadline_miss = 0
         self.p2_open, self.p2_log = False, []                         # r12
         self.staged, self._last_ver = None, 0                         # r13
@@ -158,7 +158,7 @@ class DoorOpenExec:
             if k_ not in self.g2:
                 raise ValueError(k_)
         self.g2.update(g2 or {})
-        self._grav = DFK.FastGravity2(K, BM.arm_bodies(K)) if self.g2['gravity2'] else (DFK.FastGravity(K, BM.arm_bodies(K)) if self.g2['gravity'] else None)
+        self._grav = DFK.FastGravity3(K, BM.arm_bodies(K)) if self.g2.get('gravity3') else DFK.FastGravity2(K, BM.arm_bodies(K)) if self.g2['gravity2'] else (DFK.FastGravity(K, BM.arm_bodies(K)) if self.g2['gravity'] else None)
         self._ccache = DFK.ClearCache(W.clear_door) if self.g2['sweep_cache'] else None
         self._csw = self.g2['cstop']                                 # r16（須在 g2 更新之後讀）
         self._pool, self._pool_owned = None, False
@@ -584,7 +584,7 @@ class DoorOpenExec:
 
     def _cs_params(self):
         return dict(ident=self._ident, bias=np.asarray(self.cfg.arm_model.bias, float), T_WH_bind=self.T_WH_bind, phi_bind=self.phi_bind, T_HE=self.T_HE, off_cl0=self.off_cl0, G0=self.G0,
-                    joint_kp=self.joint_kp, h=self.h, Xd=self.Xd, lim_lo=self.lim_lo, lim_hi=self.lim_hi, q_lo=np.asarray(LITE6_SAFE.lower, float), q_hi=np.asarray(LITE6_SAFE.upper, float))
+                    joint_kp=self.joint_kp, h=self.h, Xd=self.Xd, gravity3=bool(self.g2.get('gravity3')), lim_lo=self.lim_lo, lim_hi=self.lim_hi, q_lo=np.asarray(LITE6_SAFE.lower, float), q_hi=np.asarray(LITE6_SAFE.upper, float))
 
     def _cs_on(self):
         return self._csw is not None and self.bound and self.off_cl0 is not None and self._pool is not None

@@ -116,7 +116,7 @@ while t < 30.0:
             Xd0, h0, _ = first['o'].dense_reference(4)
             T_HE_act = np.linalg.inv(first['T_plan']) @ K.fk(q, 'link_tcp')
             ho = dict(s=gc.s.copy(), pipe=[u_.copy() for u_ in gc.pipe], u_last=gc.u_last.copy(), u_prev=gc.u_prev.copy(), bias=np.asarray(gc.cfg.arm_model.bias, float).copy(), moving=True, off_static=gc.off(q))
-            ex_c = X.DoorOpenExec(ident, Xd0, h0, first['T_plan'], phi_b, T_HE_act, GOAL, ho, FQ, arm_mode='closure', g2=dict(gravity2=True, ik_fc=True, pool=SHARED if SHARED is not None else 6, prep_fc=True, deadline_ms=50.0, cstop=CSW))
+            ex_c = X.DoorOpenExec(ident, Xd0, h0, first['T_plan'], phi_b, T_HE_act, GOAL, ho, FQ, arm_mode='closure', g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=SHARED if SHARED is not None else 6, prep_fc=True, deadline_ms=50.0, cstop=CSW))
             ex_c.p2_open = True
             if SHARED is not None:
                 ex_c.warmup(q, phi_b)

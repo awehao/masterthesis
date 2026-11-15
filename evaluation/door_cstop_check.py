@@ -23,7 +23,7 @@ out = {}
 #   cand_closure＝候選提交後的停止預測閉鏈超限（放大注入；候選須被拒、不提交）
 for case, t_late in (('early', 0.05), ('mid', 3.0), ('abort_in_cstop', 3.0), ('missing', 3.0), ('infeasible_late', 3.0), ('g_change_late', 3.0), ('cand_closure', 3.0)):
     c = X.DoorOpenExec(ident, P['Xd'], float(P['h']), P['T_WH_bind'], float(P['phi_bind']), P['T_HE'], T.PHI_GOAL, dict(s=q0[3:] - T.D_TRUE, pipe=[np.zeros(9)] * 8, u_last=np.zeros(9), u_prev=np.zeros(9), bias=al * T.D_TRUE), T.FINGER_Q,
-                       arm_mode='closure', g2=dict(gravity2=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=1000.0, cstop=CSW))
+                       arm_mode='closure', g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=1000.0, cstop=CSW))
     F = T.Fake(c, q0)
     c.warmup(q0, F.door()[0])
     st = dict(done=False, pred=None)

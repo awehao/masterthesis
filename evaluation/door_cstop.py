@@ -30,7 +30,7 @@ class CStop:
         self.va = float(XO.B.W_ARM['v_arm'])
         self.T_WH_bind, self.phi_bind, self.T_HE = np.asarray(P['T_WH_bind'], float), float(P['phi_bind']), np.asarray(P['T_HE'], float)
         self.off0, self.G0, self.kp = np.asarray(P['off_cl0'], float), np.asarray(P['G0'], float), float(P['joint_kp'])
-        self.grav = DFK.FastGravity2(self.K, XO.BM.arm_bodies(self.K))
+        self.grav = (DFK.FastGravity3 if P.get('gravity3') else DFK.FastGravity2)(self.K, XO.BM.arm_bodies(self.K))   # 與執行層同一個重力函式
         self.h = float(P['h'])
         self.lim_lo, self.lim_hi = np.asarray(P['lim_lo'], float), np.asarray(P['lim_hi'], float)     # r2：設定點限位（同執行層）
         self.q_lo, self.q_hi = np.asarray(P['q_lo'], float), np.asarray(P['q_hi'], float)             # 關節限位（同閉鏈手臂驗收）

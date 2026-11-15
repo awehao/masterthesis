@@ -142,6 +142,40 @@ class FastGravity2:
         return G
 
 
+
+class FastGravity3(FastGravity2):
+    """FastGravity2 的等值加速（Codex 20261115：重力批次化）：同一串鏈前向與同一公式，
+    只把「逐剛體加總 Σm·(R_k·c_b＋p_k)」先合併成每個關節一個向量 R_k·(Σm·c_b)＋M_k·p_k，並把六次 np.cross 合成一次。
+    與 FastGravity2 只有加總順序不同（捨入級；door_fast_kin_check3 核最大差）。"""
+
+    def __init__(self, K_, bodies):
+        super().__init__(K_, bodies)
+        self.ck = np.array([(self.m[self.att == k][:, None] * self.cl[self.att == k]).sum(axis=0) if np.any(self.att == k) else np.zeros(3) for k in range(6)])
+        self._arm = [jn in self.arm_j for jn in self.chain]
+        self._J = [self.K.joints[jn] for jn in self.chain]
+        self._iso = [_iso(j) for j in self._J]
+        self._ax = [np.asarray(j.axis, float) for j in self._J]
+
+    def __call__(self, q9):
+        q9 = np.asarray(q9, float)
+        T = np.eye(4)
+        A, P, Sk = np.empty((6, 3)), np.empty((6, 3)), np.empty((6, 3))
+        k = 0
+        K_ = self.K
+        for n, jn in enumerate(self.chain):
+            j = self._J[n]
+            if self._arm[n]:
+                Tj = T @ self._iso[n]
+                A[k] = Tj[:3, :3] @ self._ax[n]
+                P[k] = Tj[:3, 3]
+            T = T @ j.transform(K_._q_of(jn, q9))
+            if self._arm[n]:
+                Sk[k] = T[:3, :3] @ self.ck[k] + self.Mk[k] * T[:3, 3]
+                k += 1
+        Ssuf = np.cumsum(Sk[::-1], axis=0)[::-1]
+        return np.einsum('ij,ij->i', A, np.cross(Ssuf - self.Msuf[:, None] * P, BM.GRAV))
+
+
 _ISO = {}
 
 
