@@ -56,6 +56,20 @@ class Seg:
         return t_abs - self.t0 >= self.T - 1e-9
 
 
+class RefWarm:
+    """續段熱啟用的「已執行參考尾段」：state(σ) 回參考在 σ 的線性內插值（超出段尾取終點＝靜止）。
+    用途：移動中的續段冷啟（init_corotate）在快速段會落到 QP 不可行（第十一趟 σ_s 1.55／1.95：新段起步 0.05–0.2 s 手臂速率 1.16–1.22＞1.0）；
+    以現行參考的剩餘部分作初始猜測，兩個接縫都收斂且可行。只改初始猜測，問題定義、限制、驗收不變。"""
+    def __init__(self, Xd, h):
+        self.Xd, self.h = np.asarray(Xd, float), float(h)
+
+    def state(self, t):
+        x = min(max(t, 0.0), (len(self.Xd) - 1) * self.h) / self.h
+        i = min(int(x), len(self.Xd) - 2)
+        a = x - i
+        return (1 - a) * self.Xd[i] + a * self.Xd[i + 1], None
+
+
 TERM = os.environ.get('P2_TERM', '0') == '1'                        # (i) 段終剩餘代價（Codex 20261113_124213）
 FINAL = os.environ.get('P2_FINAL', '0') == '1'                      # 末段模式（Codex 20261113_130916 §3）
 N_FINAL_MAX = 15                                                     # 事前登錄：整段公式估計的剩餘節點數 ≤15（約 6° 內）才嘗試到位候選（公式只當搜尋提示，接受與否看完整驗收）

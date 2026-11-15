@@ -38,7 +38,7 @@ def _serve(conn):
         t0 = time.perf_counter()
         try:
             WB.set_model(phi0=sn['phi_model'], finger_q=sn['fq'])
-            out, fin = None, False
+            out, fin, warm_used = None, False, None
             if sn.get('try_final', True):
                 try:
                     ft = P2.plan_final(sn['T_WH0'], sn['T_HE'], sn['x0'], sn['v0'], sn['goal'], sn['fq'], sn['phi_model'])
@@ -47,9 +47,19 @@ def _serve(conn):
                 if ft is not None and ft[2]['feasible']:
                     out, fin = ft, True
             if out is None:
-                out = P2.plan_seg(sn['T_WH0'], sn['T_HE'], sn['x0'], sn['v0'], sn['H'], sn['goal'], sn['fq'], sn['phi_model'])
+                wr = sn.get('warm_ref')                                # (Xd, h, σ_s)：已執行參考尾段熱啟（移動中續段）；None＝冷啟
+                if wr is not None:
+                    out = P2.plan_seg(sn['T_WH0'], sn['T_HE'], sn['x0'], sn['v0'], sn['H'], sn['goal'], sn['fq'], sn['phi_model'], warm=P2.RefWarm(wr[0], wr[1]), t_s=float(wr[2]))
+                    warm_used = True
+                    if not out[2]['feasible']:                         # 熱啟不可行 ⇒ 照舊再試冷啟（不放寬任何驗收）
+                        out2 = P2.plan_seg(sn['T_WH0'], sn['T_HE'], sn['x0'], sn['v0'], sn['H'], sn['goal'], sn['fq'], sn['phi_model'])
+                        if out2[2]['feasible']:
+                            out, warm_used = out2, False
+                else:
+                    out = P2.plan_seg(sn['T_WH0'], sn['T_HE'], sn['x0'], sn['v0'], sn['H'], sn['goal'], sn['fq'], sn['phi_model'])
+                    warm_used = False
             Xd, h, _ = out[0].dense_reference(4)
-            conn.send((rid, Xd, bool(out[2]['feasible']), out[2]['failed'], fin, time.perf_counter() - t0, dict(why=out[1]['why'], iters=out[1]['iters'], phi_end_deg=out[2]['phi_end_deg'], min_clear=out[2]['min_clear_m'])))
+            conn.send((rid, Xd, bool(out[2]['feasible']), out[2]['failed'], fin, time.perf_counter() - t0, dict(warm_used=warm_used, why=out[1]['why'], iters=out[1]['iters'], phi_end_deg=out[2]['phi_end_deg'], min_clear=out[2]['min_clear_m'])))
         except Exception as e:                                        # noqa: BLE001
             conn.send((rid, None, False, ['exception:' + repr(e)[:200]], False, time.perf_counter() - t0, None))
 

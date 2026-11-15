@@ -235,8 +235,13 @@ while t < 30.0:
                         on, fin = ft, True
                 if on is None:
                     try:
-                        on = P2.plan_seg(first['T_plan'], first['T_HE_pred'], xs, vs, H, GOAL, FQ, phi_b)
+                        on = P2.plan_seg(first['T_plan'], first['T_HE_pred'], xs, vs, H, GOAL, FQ, phi_b, **({} if (rest or os.environ.get('P2_COLD') == '1') else dict(warm=P2.RefWarm(ex.Xd, ex.h), t_s=sig_s)))
                         w += on[3]
+                        if not on[2]['feasible'] and not rest and os.environ.get('P2_COLD') != '1':   # 熱啟不可行 ⇒ 再試冷啟（同規劃程序的流程）
+                            on2 = P2.plan_seg(first['T_plan'], first['T_HE_pred'], xs, vs, H, GOAL, FQ, phi_b)
+                            w += on2[3]
+                            if on2[2]['feasible']:
+                                on = on2
                     except ValueError:
                         on = None
                 if os.environ.get('SKIP_MOVING_P2') == '1' and not rest:      # 核對用：移動中的續段一律當作不可行 ⇒ 走到首段終點後靜止重啟（第十一趟的情形）

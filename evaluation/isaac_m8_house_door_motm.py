@@ -772,7 +772,7 @@ def main():
             if r_ is not None:
                 pend = box['pend']; box['pend'] = None
                 rec = pend['rec']
-                rec.update(t_avail=round(t, 3), wall_avail=round(time.perf_counter() - t_wall0, 3), plan_wall_s=round(r_[5], 3), feasible=r_[2], final=r_[4], failed=r_[3])
+                rec.update(t_avail=round(t, 3), wall_avail=round(time.perf_counter() - t_wall0, 3), plan_wall_s=round(r_[5], 3), feasible=r_[2], final=r_[4], failed=r_[3], warm_used=(r_[6] or {}).get('warm_used'), why=(r_[6] or {}).get('why'), iters=(r_[6] or {}).get('iters'))
                 xr = ex.ref(ex.sigma)                                  # σ 已以管線延遲起算 ⇒ 與實測同一時刻
                 ey, ed = abs(math.degrees(q[2] - xr[2])), abs(math.degrees(phm - xr[9]))
                 rec['track_err'] = dict(base_mm=round(float(np.linalg.norm(q[:2] - xr[:2])) * 1e3, 3), yaw_deg=round(ey, 3), door_deg=round(ed, 3))
@@ -809,7 +809,7 @@ def main():
                     box['k'] += 1
                     rec = dict(k=box['k'], t_req=round(t, 3), wall_req=round(time.perf_counter() - t_wall0, 3), sigma=round(ex.sigma, 3), sigma_s=round(sig_s, 3), rest=rest)
                     box['reqs'].append(rec)
-                    PLANNER.submit(box['k'], dict(T_WH0=box['T_WH_b'], T_HE=box['T_HE'], x0=xs, v0=vs, H=H_SEG, goal=GOAL, fq=box['fq'], phi_model=box['phi_b'], try_final=True))
+                    PLANNER.submit(box['k'], dict(T_WH0=box['T_WH_b'], T_HE=box['T_HE'], x0=xs, v0=vs, H=H_SEG, goal=GOAL, fq=box['fq'], phi_model=box['phi_b'], try_final=True, warm_ref=None if rest else (ex.Xd.copy(), ex.h, sig_s)))
                     box['pend'] = dict(sigma_s=sig_s, rest=rest, rec=rec)
                     box['t_next'] = t + P2.T_RE
             F6 = wrist_F6()
