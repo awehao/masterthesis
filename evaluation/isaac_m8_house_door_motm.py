@@ -34,6 +34,7 @@ ap.add_argument('--settle-s', type=float, default=1.0)
 ap.add_argument('--smoke', action='store_true')
 ap.add_argument('--arm-friction-model', default='legacy', choices=['legacy', 'urdf_effort', 'no_passive_arm_friction'])   # no_passive_arm_friction（Codex Q2）：僅六個手臂關節的 legacy／逐軸摩擦歸零（研究假設變更，不是摩擦已修好）   # urdf_effort（Codex 20261115_1421xx）：手臂六關節逐軸摩擦 static＝dynamic＝1.0 N·m、viscous＝0；模型假設，不是實機辨識
 ap.add_argument('--arm-fric-value', type=float, default=1.0)        # urdf_effort 模型的 static＝dynamic（N·m）；門任務＝1.0；探針用 0／0.2／1.0
+ap.add_argument('--bind-model', default='fixed', choices=['fixed', 'd6_compliant'])   # d6_compliant（B3）：理想綁定改有限剛度六自由度連接（工程假設；外部 regular joint）
 ap.add_argument('--probe', action='store_true')                     # 手臂摩擦探針（Codex 核可 O1）：靜置後 joint4 限速限加速度小幅正反向動作，無門任務；不做抓持／綁定／開門
 ap.add_argument('--diag', action='store_true')                      # 取證短診斷（Codex 20261115_14xxxx）：不送 P2、開門 0.5 s 後強制走閉鏈一致停止流程、每物理步補記根連桿三個時點等
 a = ap.parse_args()
@@ -93,6 +94,9 @@ HOLD_DR_MAX = 0.3                                                    # 相對零
 HOLD_R_MAX, HOLD_V_MAX = 1.3, 0.01                                   # P2：靜置保持力矩殘差上限（N·m）、低速門檻（rad/s）
 # 首段適用窗與滾動參數在 door_first_seg（LEAD 0.10／TOL 0.05／AHEAD 1.0／GAP 0.4 s）
 _UNUSED_PLAN = (0.10, 0.05, 1.0)                  # 首段：名目交接在預測 READY 後 0.10 s（第 3、4 趟實況）；適用窗 [0.10, 0.10＋0.05]；過期後重算的預測提前量 1.0 s（規劃在模擬時間約 0.8 s）
+# B3 有限剛度綁定（事前選定的一組固定值；SI）：平移 1.0e4 N/m、200 N·s/m；轉動 100 N·m/rad、2.0 N·m·s/rad。USD 轉動驅動以「每度」為單位 ⇒ 寫入值乘 π/180。
+BIND_KT, BIND_CT, BIND_KR, BIND_CR = 1.0e4, 200.0, 100.0, 2.0
+BIND_DEF_POS_M, BIND_DEF_ROT_DEG = 0.003, 1.5                        # 變形預算（相對綁定瞬間的夾爪—門扇相對位姿）：超過即停止（執行器轉送）
 DIAG_STOP_T = 0.5                                                   # --diag：開門執行層時間到此即強制本拍「晚到」（走與第四趟相同的閉鏈一致停止流程）
 PH = ['L', 'I', 'C', 'F', 'R', 'O', 'S']                            # 前導(HOLD)／插入／閉爪／確認／READY／開門／停止
 PH_ZH = dict(L='前導接近（預抓保持、移動）', I='插入（移動中）', C='閉爪（移動中）', F='確認（移動中）', R='READY（移動中）', O='開門（P2 續接）', S='停止')
@@ -616,7 +620,26 @@ def main():
                         log_event('first_segment_cancelled', rid=fs.pend[0]['rid'], target=round(fs.pend[0]['target'], 3))
                         fs.pend[0] = None
                     Rr0, Tg_b, _ = rel_T()
-                    j = UsdPhysics.FixedJoint.Define(stage, JOINT)
+                    if a.bind_model == 'd6_compliant':
+                        j = UsdPhysics.Joint.Define(stage, JOINT)         # 通用六自由度 joint（無限位）＋六軸彈簧阻尼驅動，目標 0＝綁定瞬間相對位姿；不重錨、不加門角驅動
+                        j.CreateExcludeFromArticulationAttr().Set(True)
+                        bind_rb = {}
+                        for ax_, k_, c_ in (('transX', BIND_KT, BIND_CT), ('transY', BIND_KT, BIND_CT), ('transZ', BIND_KT, BIND_CT),
+                                            ('rotX', BIND_KR * math.pi / 180.0, BIND_CR * math.pi / 180.0), ('rotY', BIND_KR * math.pi / 180.0, BIND_CR * math.pi / 180.0), ('rotZ', BIND_KR * math.pi / 180.0, BIND_CR * math.pi / 180.0)):
+                            dr_ = UsdPhysics.DriveAPI.Apply(j.GetPrim(), ax_)
+                            dr_.CreateTypeAttr().Set('force')
+                            dr_.CreateStiffnessAttr().Set(float(k_))
+                            dr_.CreateDampingAttr().Set(float(c_))
+                            dr_.CreateTargetPositionAttr().Set(0.0)
+                            dr_.CreateTargetVelocityAttr().Set(0.0)
+                            bind_rb[ax_] = dict(stiffness_usd=float(dr_.GetStiffnessAttr().Get()), damping_usd=float(dr_.GetDampingAttr().Get()), type=str(dr_.GetTypeAttr().Get()), max_force=None if not dr_.GetMaxForceAttr() or dr_.GetMaxForceAttr().Get() is None else float(dr_.GetMaxForceAttr().Get()))
+                        res['bind_model'] = dict(model='d6_compliant', si=dict(k_trans_N_per_m=BIND_KT, c_trans_Ns_per_m=BIND_CT, k_rot_Nm_per_rad=BIND_KR, c_rot_Nms_per_rad=BIND_CR), usd_readback=bind_rb,
+                                                 usd_units='平移：N/m、N·s/m；轉動：N·m/度、N·m·s/度（寫入值＝SI×π/180）', exclude_from_articulation=bool(j.GetExcludeFromArticulationAttr().Get()),
+                                                 budget=dict(pos_m=BIND_DEF_POS_M, rot_deg=BIND_DEF_ROT_DEG), note='工程假設，不稱更符合真實夾持；平衡位姿＝綁定瞬間相對位姿')
+                    else:
+                        j = UsdPhysics.FixedJoint.Define(stage, JOINT)
+                        res['bind_model'] = dict(model='fixed')
+                    box['Rr0'] = Rr0.copy()
                     j.CreateBody0Rel().SetTargets([Sdf.Path(str(grip[0]))])
                     j.CreateBody1Rel().SetTargets([Sdf.Path(leaf)])
                     j.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
@@ -680,7 +703,7 @@ def main():
     # ================= 開門（P2 續接）=================
     if box['mode'] == 'open':
         ex = box['ex']
-        olog = []
+        olog, deflog = [], []
         while t - box['t_bind'] < OPEN_LIMIT_S:
             q, jp = q9()
             tr = t - box['t_bind']
@@ -759,6 +782,13 @@ def main():
             F6 = wrist_F6()
             rows.append([t, 5 if ex.stop is None else 6, door_q(), float(jp2[f1]), float(jp2[f2]), *q2, *F6, time.perf_counter() - t_wall0])
             olog.append(np.r_[tr, q2, door_q(), fn_, ex.sigma, ex.ref(ex.sigma)[9]])
+            if Rr is not None and box.get('Rr0') is not None:           # 連接變形：夾爪—門扇相對位姿相對綁定瞬間的變化
+                dT_ = np.linalg.inv(box['Rr0']) @ Rr
+                dpos_, drot_ = float(np.linalg.norm(dT_[:3, 3])), math.degrees(math.acos(max(-1.0, min(1.0, 0.5 * (np.trace(dT_[:3, :3]) - 1.0)))))
+                deflog.append([tr, dpos_, drot_, *[float(x_) for x_ in dT_[:3, 3]]])
+                if a.bind_model == 'd6_compliant' and ex.stop is None and (dpos_ > BIND_DEF_POS_M or drot_ > BIND_DEF_ROT_DEG):
+                    log_event('bind_deformation_over_budget', pos_mm=round(dpos_ * 1e3, 3), rot_deg=round(drot_, 3))
+                    ex._stop('bind_deformation_over_budget', pos_mm=round(dpos_ * 1e3, 3), rot_deg=round(drot_, 3))
             if ex.n_step % NPH == 0:
                 bsp = float(np.linalg.norm(q2[:2] - prev_b[:2])) / G.DT
                 prev_b = q2[:3].copy()
@@ -774,8 +804,9 @@ def main():
             ex._stop('open_time_limit')
         rep_o = ex.report()
         res['open'] = {k_: rep_o.get(k_) for k_ in ('arm_mode', 'closure_anchor', 'closure_stats', 'stop', 'done', 'stop_effect', 'phi_end_deg', 't_end', 'closure_measured', 'min_clear_actual', 'force_max_n', 'timing')}
+        res['open']['bind_deformation'] = None if not deflog else dict(pos_mm_max=round(max(x_[1] for x_ in deflog) * 1e3, 3), rot_deg_max=round(max(x_[2] for x_ in deflog), 3), pos_mm_end=round(deflog[-1][1] * 1e3, 3), rot_deg_end=round(deflog[-1][2], 3))
         res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'], fb_log=ex.fb_log, base_hold_log_tail=ex.hold_log[-5:], base_hold_n=len(ex.hold_log), base_hold_cmd_max=[max((x[1] for x in ex.hold_log), default=None), max((x[2] for x in ex.hold_log), default=None)], cstop_ticks=len(ex.cs_log), stop_mode=ex.stop_mode, tick_ms_normal=[round(float(m), 1) for i, m in enumerate(ex.tick_ms) if ex.stop is None or i * 0.05 < float(ex.stop['t']) - 1e-9])
-        np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
+        np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), bind_deform=np.array(deflog), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
     res['events'] = ev
     res['forbidden_contact'] = dict(latched=gate.latched)
     res['aborted'] = box['aborted']
