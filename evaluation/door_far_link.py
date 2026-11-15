@@ -22,6 +22,10 @@ NAV_BASE_RUN = 'isaac_bigarena_gmpc_scan_heading__seed8__fullon_s8_1'
 NAV_NODES = ('gmpc_controller', 'scan_safety_shield', 'wheel_limit_guard', 'scan_obstacle_tracker', 'velocity_smoother', 'planner_server')
 NAV_CHAIN = ['planner_server', 'gmpc_controller → /cmd_vel_nav', 'velocity_smoother → /cmd_vel_pre_shield', 'scan_safety_shield → /cmd_vel_smoothed', 'wheel_limit_guard → /cmd_vel（唯一最終發布者）']
 EST_MAX_AGE_S = 0.3                                                  # 同抓持控制器 READY_Q['fresh_s']
+SYNC_TOL_S = 0.02                                                    # 影像以外的狀態／命令時間戳對交接時刻的容許差（兩個物理步）
+GRASP_WINDOW_M = (0.005, 0.25)                                       # 交接時距抓取點的沿線距離窗口（抓持控制器的前導＋插入需要的行程；上限＝目前排程可用的最長前導）
+ARM_TRACK_TOL = 0.01                                                 # rad：交接時手臂構型對「當下底盤位置下的目標 IK 解」的最大容許差
+TICK_STEPS = 5                                                       # 每控制拍的物理步數（同控制器 NPH）
 LINE_TOL = dict(lateral_m=0.010, yaw_rad=math.radians(1.0), speed_frac=0.2)   # 機器人須已在通過線上（側向、朝向）且沿線速度在 v_pass 的 ±20% 內
 
 
@@ -169,39 +173,149 @@ def pass_line(T_WH, T_HG, a_H, K, q_pregrasp_arm, T_at, s_pre):
     return dict(p0=p_grasp, d=d[:2], n=n[:2], yaw=yaw, standoff=float((p_grasp - T_WH[:2, 3]) @ n[:2]), tcp_z_err=float(Tg[2, 3] - T0[2, 3])), None
 
 
-def handover_request(t, auth, line, q, base_twist_body, s_arm, pipe, u_last, est_info, v_pass, d_steps):
-    """NAV→GRASP 的交接核對。全過 ⇒ 回抓持控制器建構所需的交接包；否則回拒絕原因列表。不改任何狀態（切換由呼叫端依結果呼叫 auth.switch）。"""
+def _fin(x):
+    try:
+        return x is not None and bool(np.isfinite(np.asarray(x, float)).all())
+    except Exception:                                                 # noqa: BLE001
+        return False
+
+
+def handover_request(t, auth, line, q, v_meas_world, s_arm, pipe, u_last, u_prev, est, v_pass, d_steps, off_static=None, tick_phase=None, stamps=None, arm_track_err=None):
+    """NAV→GRASP 的交接核對（r2）。全過 ⇒ 回抓持控制器建構所需的交接包；否則回拒絕原因列表。不改任何狀態。
+    est＝dict(T_WH, t_obs)：年齡以交接當下 t−t_obs 重算（不沿用先前算好的年齡）。
+    v_meas_world＝實測底盤速度（世界座標 vx, vy）——移動條件用實測，不用命令。
+    pipe＝實際送往受控對象的最近 d_steps 筆 9 維命令；任何一筆缺失（None／非有限／維度不符）⇒ 拒絕，不補零。
+    stamps＝dict(image, state, cmd)：三者的時間戳（同一時鐘）；缺或彼此相差超過 SYNC_TOL_S ⇒ 拒絕。"""
     why = []
     if auth.owner != 'NAV':
         why.append('authority_not_nav:' + auth.owner)
-    if est_info is None or not est_info.get('ok'):
-        why.append('no_valid_handle_estimate:' + str(None if est_info is None else est_info.get('why')))
-    elif est_info.get('age_s', 1e9) > EST_MAX_AGE_S:
-        why.append('estimate_stale:%.3f' % est_info['age_s'])
-    if line is None:
-        why.append('no_pass_line')
+    if not _fin(t):
+        why.append('time_nonfinite')
+    if est is None or est.get('T_WH') is None or not _fin(est.get('T_WH')) or not _fin(est.get('t_obs')):
+        why.append('no_valid_handle_estimate')
+        age = None
     else:
+        age = float(t) - float(est['t_obs'])
+        if age < -1e-9:
+            why.append('estimate_from_future')
+        elif age > EST_MAX_AGE_S:
+            why.append('estimate_stale:%.3f' % age)
+    if stamps is None or any(not _fin(stamps.get(k)) for k in ('state', 'cmd')):
+        why.append('timestamps_missing')
+    elif max(abs(float(stamps['state']) - float(t)), abs(float(stamps['cmd']) - float(t))) > SYNC_TOL_S:
+        why.append('state_or_cmd_not_synchronized')
+    if not _fin(q) or len(q) != 9:
+        why.append('robot_state_missing')
+    if not _fin(v_meas_world) or len(v_meas_world) != 2:
+        why.append('measured_velocity_missing')
+    if line is None or not all(_fin(line.get(k)) for k in ('p0', 'd', 'n', 'yaw')):
+        why.append('no_pass_line')
+    elif _fin(q) and len(q) == 9:
         r = np.asarray(q[:2], float) - line['p0']
         lat = float(r @ line['n'])
         yaw_e = (float(q[2]) - line['yaw'] + math.pi) % (2 * math.pi) - math.pi
-        cb, sb = math.cos(q[2]), math.sin(q[2])
-        vw = np.array([cb * base_twist_body[0] - sb * base_twist_body[1], sb * base_twist_body[0] + cb * base_twist_body[1]])
-        v_al, v_lat = float(vw @ line['d']), float(vw @ line['n'])
         if abs(lat) > LINE_TOL['lateral_m']:
             why.append('off_pass_line_lateral:%.4f' % lat)
         if abs(yaw_e) > LINE_TOL['yaw_rad']:
             why.append('yaw_error:%.4f' % yaw_e)
-        if abs(v_al - v_pass) > LINE_TOL['speed_frac'] * v_pass or abs(v_lat) > LINE_TOL['speed_frac'] * v_pass:
-            why.append('not_moving_along_line:v_along=%.4f,v_lat=%.4f' % (v_al, v_lat))
-        if float(r @ line['d']) > 0.0:
+        along = float(-(r @ line['d']))                              # 距抓取點還有多遠（沿通過方向為正）
+        if along <= 0.0:
             why.append('already_past_grasp_point')
-    if pipe is None or len(pipe) != d_steps or not all(np.isfinite(np.asarray(u, float)).all() and len(u) == 9 for u in pipe):
-        why.append('pipeline_incomplete')
-    if s_arm is None or len(s_arm) != 6 or not np.isfinite(s_arm).all():
+        elif not (GRASP_WINDOW_M[0] <= along <= GRASP_WINDOW_M[1]):
+            why.append('outside_grasp_window:%.4f' % along)
+        if _fin(v_meas_world) and len(v_meas_world) == 2:
+            vw = np.asarray(v_meas_world, float)
+            v_al, v_lat = float(vw @ line['d']), float(vw @ line['n'])
+            if abs(v_al - v_pass) > LINE_TOL['speed_frac'] * v_pass or abs(v_lat) > LINE_TOL['speed_frac'] * v_pass:
+                why.append('not_moving_along_line:v_along=%.4f,v_lat=%.4f' % (v_al, v_lat))
+    if pipe is None or len(pipe) != d_steps:
+        why.append('pipeline_length')
+    elif any((u is None) or (not _fin(u)) or len(u) != 9 for u in pipe):
+        why.append('pipeline_has_missing_command')
+    if not _fin(s_arm) or len(s_arm) != 6:
         why.append('setpoint_missing')
-    if u_last is None or len(u_last) != 9:
+    if not _fin(u_last) or len(u_last) != 9:
         why.append('last_command_missing')
+    if not _fin(u_prev) or len(u_prev) != 9:
+        why.append('previous_command_missing')
+    if not _fin(off_static) or len(off_static) != 6:
+        why.append('static_offset_source_missing')
+    if tick_phase is None or not (0 <= int(tick_phase) < TICK_STEPS):
+        why.append('tick_phase_missing')
+    # 手臂在交接當下必須已經在追「把手估計後退 s_pre」的世界目標（抓持控制器接手後第一拍就以此為目標；差太多會要求瞬移 ⇒ 第一拍命令超限）
+    if arm_track_err is None or not _fin(arm_track_err):
+        why.append('arm_tracking_state_missing')
+    elif float(arm_track_err) > ARM_TRACK_TOL:
+        why.append('arm_not_tracking_target:%.4f' % float(arm_track_err))
     if why:
         return None, why
-    return dict(t=float(t), frames=dict(world='map（門鉸鏈座標；同門任務）', base='base_link'), d_world=line['d'].copy(), yaw=line['yaw'], p0=line['p0'].copy(), v_pass=float(v_pass),
-                s=np.asarray(s_arm, float).copy(), pipe=[np.asarray(u, float).copy() for u in pipe], u_last=np.asarray(u_last, float).copy(), est=dict(est_info)), []
+    return dict(t=float(t), frames=dict(world='map（門鉸鏈座標；同門任務）', base='base_link'), d_world=np.asarray(line['d'], float).copy(), yaw=float(line['yaw']), p0=np.asarray(line['p0'], float).copy(), v_pass=float(v_pass),
+                s=np.asarray(s_arm, float).copy(), pipe=[np.asarray(u, float).copy() for u in pipe], u_last=np.asarray(u_last, float).copy(), u_prev=np.asarray(u_prev, float).copy(), off_static=np.asarray(off_static, float).copy(),
+                tick_phase=int(tick_phase), est=dict(T_WH=np.asarray(est['T_WH'], float).copy(), t_obs=float(est['t_obs']), age_s=age),
+                base_cmd_route='抓持控制器的底盤命令仍送入 /cmd_vel_pre_shield → Shield → GUARD → /cmd_vel（不旁路安全鏈）'), []
+
+
+def pregrasp_from_estimate(T_WH, T_at, s_pre, K, clear_fn=None, thr=None, sig_floor=None, lo=None, hi=None):
+    """由把手估計產生預抓構型與底盤通過線位置（不讀真值、不讀既有趟的預抓關節角）：
+    候選：底盤在門面外法向上、朝向正對門（−n）、側向距離 standoff ∈ [0.36, 0.56] m（每 1 cm）；每個候選以通用種子格點多起點解 IK 到「抓取位姿後退 s_pre」，
+    再由該解連續解到抓取位姿（s＝0）；兩個構型都須：殘差 <1e-6、在關節限位內、可操作度 ≥ sig_floor、淨空 ≥ thr（若給 clear_fn）。
+    選擇：兩構型可操作度較小者最大的那一個（同分取 standoff 較小）。回 (dict 或 None, 原因／統計)。"""
+    import itertools
+    import door_fast_kin as DFK
+    T_WH = np.asarray(T_WH, float)
+    n = (T_WH[:3, :3] @ np.asarray(_A_H, float)).copy(); n[2] = 0.0
+    ax = T_WH[:3, 0].copy(); ax[2] = 0.0
+    if np.linalg.norm(n) < 1e-6 or np.linalg.norm(ax) < 1e-6:
+        return None, dict(why='degenerate_handle_axes')
+    n, d = n / np.linalg.norm(n), -ax / np.linalg.norm(ax)
+    yaw = math.atan2(-n[1], -n[0])
+    Tp, Tg = np.asarray(T_at(T_WH, s_pre), float), np.asarray(T_at(T_WH, 0.0), float)
+    seeds = [np.array(s_) for s_ in itertools.product((-0.6, 0.0, 0.6), (-0.3, 0.2), (0.6, 1.4), (-1.5, 0.0, 1.5), (-0.7, 0.7), (0.0,))]
+    best, stat = None, dict(n_candidates=0, n_ik_ok=0, n_feasible=0)
+    for so in np.arange(0.36, 0.5601, 0.01):
+        for lat_along in np.arange(-0.12, 0.1201, 0.02):               # 底盤沿通過方向相對把手的偏移（抓取瞬間）
+            b = np.r_[T_WH[:2, 3] + so * n[:2] + lat_along * d[:2], yaw]
+            sols = []
+            for sd in seeds:
+                stat['n_candidates'] += 1
+                q1, r1, s1 = DFK.ik_closure_fc(Tp, b, sd)
+                if not (r1 < 1e-6 and np.isfinite(q1).all()):
+                    continue
+                q1 = (q1 + math.pi) % (2 * math.pi) - math.pi
+                if any(np.abs(q1 - x[0]).max() < 1e-3 for x in sols):
+                    continue
+                q0, r0, s0 = DFK.ik_closure_fc(Tg, b, q1)
+                if not (r0 < 1e-6 and np.isfinite(q0).all()):
+                    continue
+                stat['n_ik_ok'] += 1
+                sols.append((q1, q0, s1, s0))
+            for q1, q0, s1, s0 in sols:
+                if lo is not None and (np.any(q1 < lo) or np.any(q1 > hi) or np.any(q0 < lo) or np.any(q0 > hi)):
+                    stat['rej_joint_limit'] = stat.get('rej_joint_limit', 0) + 1
+                    continue
+                if sig_floor is not None and min(s1, s0) < sig_floor:
+                    stat['rej_manipulability'] = stat.get('rej_manipulability', 0) + 1
+                    continue
+                if clear_fn is not None:
+                    c1, c0 = clear_fn(np.r_[b, q1]), clear_fn(np.r_[b, q0])
+                    bad = [k for k in ('env', 'base', 'self') if c1[k] < thr[k]] + [k + '@grasp' for k in thr if c0[k] < thr[k]]
+                    if bad:
+                        for k in bad:
+                            stat['rej_clear_' + k] = stat.get('rej_clear_' + k, 0) + 1
+                        continue
+                stat['n_feasible'] += 1
+                sc = min(s1, s0)
+                if best is None or sc > best['sigma_min'] + 1e-9:
+                    best = dict(along=float(lat_along), standoff=float(so), yaw=float(yaw), base=b.copy(), q_pregrasp=q1.copy(), q_grasp=q0.copy(), sigma_min=float(sc), d=d[:2].copy(), n=n[:2].copy())
+    if best is None:
+        return None, dict(stat, why='no_feasible_pregrasp')
+    best['p0'] = best['base'][:2].copy()                          # 抓取瞬間底盤位置（通過線上的抓取點）
+    return best, stat
+
+
+_A_H = None
+
+
+def set_approach_axis(a_H):
+    global _A_H
+    _A_H = np.asarray(a_H, float)

@@ -1,0 +1,305 @@
+{
+ "data": {
+  "run": "m8house_da_online_1",
+  "n_frames": 2,
+  "note": "兩格皆靜止拍攝；無移動中影格；紀錄無手臂命令欄"
+ },
+ "nav_baseline": {
+  "run": "isaac_bigarena_gmpc_scan_heading__seed8__fullon_s8_1",
+  "chain": [
+   "planner_server",
+   "gmpc_controller → /cmd_vel_nav",
+   "velocity_smoother → /cmd_vel_pre_shield",
+   "scan_safety_shield → /cmd_vel_smoothed",
+   "wheel_limit_guard → /cmd_vel（唯一最終發布者）"
+  ],
+  "ok": true,
+  "why": [],
+  "record": {
+   "method": "gmpc_scan_heading",
+   "heading": 1,
+   "heading_readback_true": true,
+   "cmd_vel_sole_publisher": [
+    "/wheel_limit_guard"
+   ],
+   "cmd_vel_nav_publisher": [
+    "/gmpc_controller"
+   ],
+   "cmd_vel_smoothed_publisher": [
+    "/scan_safety_shield"
+   ],
+   "shield_subscribes_scan": true,
+   "tracker_subscribes_scan": true
+  },
+  "config_source": {
+   "run_bigarena_isaac.sh": "4daef44ff666e2bb",
+   "lib/run_guards.sh": "0bbb439de16faad5"
+  },
+  "param_dump_note": "基準趟 side/params_*.yaml 為空檔（Node not found）；逐參數值未存檔——整合前須在基準配置下重新 dump（缺口）"
+ },
+ "cases_real": [
+  {
+   "frame": "far_live",
+   "t_obs": 0.02,
+   "obs": {
+    "t_obs": 0.02,
+    "t_query": 0.03,
+    "age_s": 0.01,
+    "cls": "center_valid",
+    "reject": null,
+    "detect_ms": 67.0,
+    "ok": true,
+    "why": null
+   },
+   "pregrasp_search": {
+    "n_candidates": 19656,
+    "n_ik_ok": 1966,
+    "n_feasible": 327,
+    "rej_clear_self": 13,
+    "rej_clear_self@grasp": 6,
+    "rej_joint_limit": 1501,
+    "rej_manipulability": 125
+   },
+   "generated": {
+    "p0": [
+     0.9193,
+     -0.4503
+    ],
+    "d": [
+     -1.0,
+     0.0014
+    ],
+    "yaw_deg": 89.921,
+    "standoff_m": 0.41,
+    "sigma_min": 0.1129,
+    "q_pregrasp": [
+     -2.3989,
+     -1.4008,
+     1.294,
+     -0.7943,
+     -1.8947,
+     1.2534
+    ]
+   },
+   "robot": {
+    "base": [
+     0.5,
+     -1.4999,
+     1.5708
+    ],
+    "v_meas": [
+     0.0,
+     0.0001
+    ]
+   },
+   "decision": "reject",
+   "reasons": [
+    "off_pass_line_lateral:1.0501",
+    "already_past_grasp_point",
+    "not_moving_along_line:v_along=0.0000,v_lat=-0.0001",
+    "pipeline_has_missing_command",
+    "last_command_missing",
+    "previous_command_missing",
+    "static_offset_source_missing",
+    "tick_phase_missing",
+    "arm_tracking_state_missing"
+   ],
+   "authority_after": "NAV"
+  },
+  {
+   "frame": "near_used",
+   "t_obs": 8.58,
+   "obs": {
+    "t_obs": 8.58,
+    "t_query": 8.59,
+    "age_s": 0.01,
+    "cls": "center_valid",
+    "reject": null,
+    "detect_ms": 45.5,
+    "ok": true,
+    "why": null
+   },
+   "pregrasp_search": {
+    "n_candidates": 19656,
+    "n_ik_ok": 1970,
+    "n_feasible": 325,
+    "rej_joint_limit": 1511,
+    "rej_clear_self": 12,
+    "rej_clear_self@grasp": 4,
+    "rej_manipulability": 122
+   },
+   "generated": {
+    "p0": [
+     0.9186,
+     -0.4487
+    ],
+    "d": [
+     -1.0,
+     0.003
+    ],
+    "yaw_deg": 89.829,
+    "standoff_m": 0.41,
+    "sigma_min": 0.1131,
+    "q_pregrasp": [
+     -2.3989,
+     -1.4041,
+     1.2903,
+     -0.7944,
+     -1.895,
+     1.2596
+    ]
+   },
+   "robot": {
+    "base": [
+     0.7242,
+     -0.4893,
+     1.5695
+    ],
+    "v_meas": [
+     0.0,
+     -0.0
+    ]
+   },
+   "decision": "reject",
+   "reasons": [
+    "off_pass_line_lateral:0.0411",
+    "already_past_grasp_point",
+    "not_moving_along_line:v_along=-0.0000,v_lat=0.0000",
+    "pipeline_has_missing_command",
+    "last_command_missing",
+    "previous_command_missing",
+    "static_offset_source_missing",
+    "tick_phase_missing",
+    "arm_not_tracking_target:2.6785"
+   ],
+   "authority_after": "NAV"
+  }
+ ],
+ "stale_estimate": {
+  "reasons": [
+   "estimate_stale:1.000",
+   "off_pass_line_lateral:1.0501",
+   "already_past_grasp_point",
+   "not_moving_along_line:v_along=0.0000,v_lat=0.0000"
+  ],
+  "has_stale": true
+ },
+ "contract_synthetic": {
+  "note": "合成狀態；不是移動視覺驗證；把手位姿值取 far_live 的估計但時間戳為合成（只核介面）",
+  "arm_not_tracking": {
+   "arm_track_err_rad": 0.2,
+   "reasons": [
+    "arm_not_tracking_target:0.2000"
+   ]
+  },
+  "arm_tracking_qd_abs_max": 0.1934,
+  "decision": "handover",
+  "reasons": [],
+  "ctrl_first_ticks": {
+   "n_steps": 10,
+   "stop": null,
+   "abort": null,
+   "phase": "HOLD",
+   "base_cmd_first": [
+    0.0,
+    0.05,
+    0.0
+   ],
+   "base_cmd_jump": 0.0,
+   "arm_cmd_jump": 0.01914,
+   "arm_cmd_abs_max": 0.17421,
+   "arm_cmd_finite": true,
+   "setpoint_jump": 0.001934,
+   "authority": "GRASP"
+  }
+ },
+ "entrance_negative": {
+  "no_sync_state": {
+   "ok": false,
+   "why": "no_synchronized_robot_state"
+  },
+  "future_stamp": {
+   "ok": false,
+   "why": "timestamp_in_future"
+  },
+  "incomplete": {
+   "ok": false,
+   "why": "frame_incomplete:dep,T_cam,t_obs"
+  },
+  "publish_by_non_owner": {
+   "accepted": false,
+   "owner": "GRASP",
+   "n_rejected": 1
+  }
+ },
+ "post_hoc_only": {
+  "given_line_and_pregrasp_from_truth_run": {
+   "y": -0.48907628655433655,
+   "yaw_deg": 89.797,
+   "q_pregrasp": [
+    -0.20327399359844062,
+    -0.2795354870740042,
+    1.2784132719974204,
+    -1.5094767547143277,
+    -0.20724838762841266,
+    -0.062656164073562
+   ]
+  },
+  "far_live": {
+   "lateral_diff_vs_given_mm": 38.78,
+   "yaw_diff_deg": 0.124,
+   "q_pregrasp_diff_max_rad": 2.1956
+  },
+  "near_used": {
+   "lateral_diff_vs_given_mm": 40.38,
+   "yaw_diff_deg": 0.032,
+   "q_pregrasp_diff_max_rad": 2.1956
+  }
+ },
+ "authority_log": [
+  {
+   "t": 0.03,
+   "what": "switch_refused",
+   "to": "GRASP",
+   "why": [
+    "off_pass_line_lateral:1.0501",
+    "already_past_grasp_point",
+    "not_moving_along_line:v_along=0.0000,v_lat=-0.0001",
+    "pipeline_has_missing_command",
+    "last_command_missing",
+    "previous_command_missing",
+    "static_offset_source_missing",
+    "tick_phase_missing",
+    "arm_tracking_state_missing"
+   ]
+  },
+  {
+   "t": 8.59,
+   "what": "switch_refused",
+   "to": "GRASP",
+   "why": [
+    "off_pass_line_lateral:0.0411",
+    "already_past_grasp_point",
+    "not_moving_along_line:v_along=-0.0000,v_lat=0.0000",
+    "pipeline_has_missing_command",
+    "last_command_missing",
+    "previous_command_missing",
+    "static_offset_source_missing",
+    "tick_phase_missing",
+    "arm_not_tracking_target:2.6785"
+   ]
+  },
+  {
+   "t": 10.0,
+   "what": "switch",
+   "frm": "NAV",
+   "to": "GRASP"
+  },
+  {
+   "t": 0.0,
+   "what": "publish_rejected",
+   "src": "NAV",
+   "owner": "GRASP"
+  }
+ ]
+}
