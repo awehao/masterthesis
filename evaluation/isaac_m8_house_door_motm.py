@@ -32,6 +32,7 @@ ap.add_argument('--finger-kp', type=float, default=1.0e4)
 ap.add_argument('--finger-kd', type=float, default=1.0e3)
 ap.add_argument('--settle-s', type=float, default=1.0)
 ap.add_argument('--smoke', action='store_true')
+ap.add_argument('--diag', action='store_true')                      # 取證短診斷（Codex 20261115_14xxxx）：不送 P2、開門 0.5 s 後強制走閉鏈一致停止流程、每物理步補記根連桿三個時點等
 a = ap.parse_args()
 
 # ---- 啟動模擬器前：只匯入輕量的計算池／規劃程序模組並 fork（子程序自己匯入專案模組）；專案模組在 SimulationApp 之後才匯入
@@ -79,6 +80,7 @@ L_LEAD, T_LEAD = 0.01, 0.2                                         # 冒煙 2：
 GOAL = math.radians(85.0)
 COND = dict(pos_m=0.005, rot_deg=3.0, rel_lin_mps=0.005, rel_ang_rps=0.02, rel_still_s=0.3, finger_q_m=(0.0005, 0.004), finger_contact_n=0.5, door_pre_deg=0.5, forbidden_n=0.05)
 GRASP_LIMIT_S, OPEN_LIMIT_S = 12.0, 40.0
+DIAG_STOP_T = 0.5                                                   # --diag：開門執行層時間到此即強制本拍「晚到」（走與第四趟相同的閉鏈一致停止流程）
 PH = ['L', 'I', 'C', 'F', 'R', 'O', 'S']                            # 前導(HOLD)／插入／閉爪／確認／READY／開門／停止
 PH_ZH = dict(L='前導接近（預抓保持、移動）', I='插入（移動中）', C='閉爪（移動中）', F='確認（移動中）', R='READY（移動中）', O='開門（P2 續接）', S='停止')
 
@@ -243,6 +245,53 @@ def main():
     def wrist_F6():
         return np.asarray(robot.get_measured_joint_forces(), float)[j6][:6].copy()
 
+    # ---- --diag：每物理步三個時點（覆寫前 A／覆寫後 B／物理步後 C）的根連桿位姿與六維速度＋其他取證訊號
+    dlog, dstate, derr = [], {}, []
+    v_l6 = [v for v, b in zip(v_o, others + grip) if nm(b) == 'link6'][0]
+
+    def _root():
+        p_, q_ = robot.get_world_pose()
+        return np.r_[np.asarray(p_, float), np.asarray(q_, float), np.asarray(robot.get_linear_velocity(), float), np.asarray(robot.get_angular_velocity(), float)]
+
+    def _pq(view):
+        p_, q_ = view.get_world_poses()
+        return np.r_[np.asarray(p_, float)[0], np.asarray(q_, float)[0]]
+
+    def diag_A():
+        if a.diag:
+            try:
+                dstate['A'] = _root()
+            except Exception as e:                                     # noqa: BLE001
+                derr.append('A:' + repr(e)[:120])
+
+    def diag_B():
+        if a.diag:
+            try:
+                dstate['B'] = _root()
+            except Exception as e:                                     # noqa: BLE001
+                derr.append('B:' + repr(e)[:120])
+
+    def diag_C(tt, mode_i, twist, pipe_, u_last_):
+        if not a.diag:
+            return
+        try:
+            C_ = _root()
+            jp_ = np.asarray(robot.get_joint_positions(), float)
+            jv_ = np.asarray(robot.get_joint_velocities(), float)
+            try:
+                me_ = np.asarray(robot.get_measured_joint_efforts(), float)
+            except Exception:                                          # noqa: BLE001
+                me_ = np.full(len(jp_), np.nan)
+            try:
+                ae_ = np.asarray(robot.get_applied_joint_efforts(), float)
+            except Exception:                                          # noqa: BLE001
+                ae_ = np.full(len(jp_), np.nan)
+            F_ = np.asarray(robot.get_measured_joint_forces(), float)
+            dlog.append(np.r_[tt, mode_i, dstate.get('A', np.full(13, np.nan)), dstate.get('B', np.full(13, np.nan)), C_, np.asarray(twist, float), jp_, jv_, me_, ae_, np.asarray(tgt, float), F_[j6][:6], F_[j6 - 1][:6],
+                              _pq(v_l6), _pq(v_grip), _pq(v_leaf), np.concatenate([np.asarray(u_, float) for u_ in pipe_]), np.asarray(u_last_, float), door_q()])
+        except Exception as e:                                         # noqa: BLE001
+            derr.append('C:' + repr(e)[:160])
+
     def rel_T():
         pg, qg = v_grip.get_world_poses()
         pl, ql = v_leaf.get_world_poses()
@@ -374,6 +423,8 @@ def main():
                 exn = XO.DoorOpenExec(ident, Xd0p, 0.05, T_WH_b, phi_b, T_HE_act, GOAL, ho, fq_b, arm_mode='closure', joint_kp=a.kp,
                                       g2=dict(gravity2=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0, cstop=CSW))
                 exn.p2_open = True
+                if a.diag:
+                    exn.deadline_inject = lambda cc: cc.t >= DIAG_STOP_T - 1e-9   # 取證：0.5 s 後強制本拍晚到 ⇒ 與第四趟相同的閉鏈一致停止流程
                 wu = exn.warmup(q, phi_b)                                     # 交接前預熱（複本空跑，本體不動）；試跑前做，避免試跑拍含冷啟成本
                 w_dry = time.perf_counter()
                 tmp = exn._light_copy()
@@ -410,10 +461,13 @@ def main():
         for i, j_ in zip(idx, range(6)):
             tgt[i] = float(o['arm_target'][j_])
         tgt[f1] = float(o['finger'])
+        diag_A()
         apply()
         base_cmd(o['base_twist'], float(q[2]))
+        diag_B()
         world.step(render=True)
         t += DT
+        diag_C(t, 0, o['base_twist'], gc.pipe, gc.u_last)
         capture(t)
         q2, jp2 = q9()
         Rr, _, _ = rel_T()
@@ -479,7 +533,7 @@ def main():
                     if not okS:
                         rec['why'] = info.get('why')
                 log_event('p2_plan_result', k=rec['k'], result=rec['result'], plan_wall_s=rec['plan_wall_s'], final=rec['final'])
-            if box['pend'] is None and ex.stop is None and ex.p2_open and t >= box['t_next'] - 1e-9:
+            if box['pend'] is None and ex.stop is None and ex.p2_open and not a.diag and t >= box['t_next'] - 1e-9:
                 sig_s = math.ceil((ex.sigma + L_LAT) / ex.h - 1e-9) * ex.h
                 rest = sig_s >= ex.sig_end - 1e-9
                 still_ok = ex.rate['arm'] <= XO.END['arm_rps'] and ex.rate['base'] <= XO.END['base_mps'] and ex.rate['door'] <= XO.END['door_rps']
@@ -511,10 +565,13 @@ def main():
                 break
             for i, j_ in zip(idx, range(6)):
                 tgt[i] = float(out['arm_target'][j_])
+            diag_A()
             apply()
             base_cmd(out['base_twist'], float(q[2]))
+            diag_B()
             world.step(render=True)
             t += DT
+            diag_C(t, 1 if ex.stop is None else 2, out['base_twist'], ex.pipe, ex.u_last)
             q2, jp2 = q9()
             Rr, _, _ = rel_T()
             fc = finger_contacts()
@@ -558,6 +615,31 @@ def main():
         res['result'] = 'grasp_not_handed_over：' + str((res['grasp'] or {}).get('stop'))
     else:
         res['result'] = 'open_not_done：' + str(o_.get('stop'))
+    if a.diag:
+        try:
+            nd = len(robot.dof_names)
+            lay = [('t', 1), ('mode(0抓持,1開門,2停止)', 1), ('rootA_pos3_quat4_lin3_ang3(覆寫前)', 13), ('rootB(覆寫後)', 13), ('rootC(物理步後)', 13), ('base_twist_cmd(本體座標)', 3), ('joint_pos', nd), ('joint_vel', nd),
+                   ('measured_joint_efforts', nd), ('applied_joint_efforts', nd), ('position_targets(tgt)', nd), ('measured_joint_forces[j6]', 6), ('measured_joint_forces[j6-1]', 6),
+                   ('link6_pos3_quat4', 7), ('gripper_pos3_quat4', 7), ('leaf_pos3_quat4', 7), ('pipe(8×9)', 72), ('u_last', 9), ('door_q', 1)]
+            jinfo = {}
+            for pr in stage.Traverse():
+                if pr.GetName() in ('joint5', 'joint6') or str(pr.GetPath()) == JOINT:
+                    jj = UsdPhysics.Joint(pr)
+                    g_ = lambda at: (None if not at or at.Get() is None else [float(x) for x in (list(at.Get()) if not hasattr(at.Get(), 'GetReal') else [at.Get().GetReal(), *at.Get().GetImaginary()])])   # noqa: E731
+                    jinfo[str(pr.GetPath())] = dict(type=str(pr.GetTypeName()), body0=[str(x) for x in jj.GetBody0Rel().GetTargets()], body1=[str(x) for x in jj.GetBody1Rel().GetTargets()],
+                                                    localPos0=g_(jj.GetLocalPos0Attr()), localRot0_wxyz=g_(jj.GetLocalRot0Attr()), localPos1=g_(jj.GetLocalPos1Attr()), localRot1_wxyz=g_(jj.GetLocalRot1Attr()))
+            dmeta = dict(layout=lay, dof_names=list(robot.dof_names), joint_indices={str(k_): int(v_) for k_, v_ in dict(meta.joint_indices).items()}, j6_row=j6,
+                         link_names=[str(x) for x in getattr(meta, 'link_names', [])], joint_names=[str(x) for x in getattr(meta, 'joint_names', [])],
+                         api_doc=dict(get_measured_joint_forces=str(getattr(robot.get_measured_joint_forces, '__doc__', ''))[:1500], get_measured_joint_efforts=str(getattr(robot.get_measured_joint_efforts, '__doc__', ''))[:1500],
+                                      get_applied_joint_efforts=str(getattr(robot.get_applied_joint_efforts, '__doc__', ''))[:1500]),
+                         usd_joints=jinfo, errors=derr[:20], n_err=len(derr), diag_stop_t=DIAG_STOP_T, phys_dt=DT)
+            json.dump(dmeta, open(os.path.join(a.out, 'diag_meta.json'), 'w'), ensure_ascii=False, indent=1)
+            if dlog:
+                nmax = max(len(x_) for x_ in dlog)
+                np.savez_compressed(os.path.join(a.out, 'diag_steps.npz'), D=np.array([np.r_[x_, np.full(nmax - len(x_), np.nan)] for x_ in dlog]))
+        except Exception as e:                                         # noqa: BLE001
+            print('[motm] diag 存檔失敗', repr(e)[:300], flush=True)
+        res['diag'] = dict(note='取證短診斷：不送 P2；開門執行層 0.5 s 後強制本拍晚到，走閉鏈一致停止流程（與第四趟相同）；不是開門成果', forced_stop_t=DIAG_STOP_T, n_rows=len(dlog), n_err=len(derr))
     np.savez_compressed(os.path.join(a.out, 'log.npz'), rows=np.array(rows), cols=np.array(['t', 'phase', 'door_q', 'f1', 'f2', 'bx', 'by', 'byaw', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz', 'wall']),
                         phases=np.array(PH), ts=np.array(ts), ts_cols=np.array(['t', 'wall', 'ctrl', 'phase', 'base_speed', 'door_q', 'tcp_err_grasp', 'sigma', 'phi_ref']))
     json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)
