@@ -35,6 +35,7 @@ ap.add_argument('--smoke', action='store_true')
 ap.add_argument('--arm-friction-model', default='legacy', choices=['legacy', 'urdf_effort', 'no_passive_arm_friction'])   # no_passive_arm_friction（Codex Q2）：僅六個手臂關節的 legacy／逐軸摩擦歸零（研究假設變更，不是摩擦已修好）   # urdf_effort（Codex 20261115_1421xx）：手臂六關節逐軸摩擦 static＝dynamic＝1.0 N·m、viscous＝0；模型假設，不是實機辨識
 ap.add_argument('--arm-fric-value', type=float, default=1.0)        # urdf_effort 模型的 static＝dynamic（N·m）；門任務＝1.0；探針用 0／0.2／1.0
 ap.add_argument('--bind-model', default='fixed', choices=['fixed', 'd6_compliant'])   # d6_compliant（B3）：理想綁定改有限剛度六自由度連接（工程假設；外部 regular joint）
+ap.add_argument('--preload-release', action='store_true')           # B2：綁定迴路約束方向預載釋放（door_preload_release；低頻有界設定點偏置）
 ap.add_argument('--probe', action='store_true')                     # 手臂摩擦探針（Codex 核可 O1）：靜置後 joint4 限速限加速度小幅正反向動作，無門任務；不做抓持／綁定／開門
 ap.add_argument('--diag', action='store_true')                      # 取證短診斷（Codex 20261115_14xxxx）：不送 P2、開門 0.5 s 後強制走閉鏈一致停止流程、每物理步補記根連桿三個時點等
 a = ap.parse_args()
@@ -64,6 +65,7 @@ import door_clear_door_fast as _F                                # noqa: E402
 WB.clear_door = _F.clear_door_fast
 import door_motm_grasp_ctrl as G                                 # noqa: E402
 import door_open_exec_ctrl as XO                                 # noqa: E402
+import door_motm_force_offline as FO                             # noqa: E402（須在 SimulationApp 之後：它匯入專案控制模組）
 import door_body_model as BM                                     # noqa: E402
 import door_bind_logic as BL                                     # noqa: E402
 import door_full_logic as FL                                     # noqa: E402
@@ -310,6 +312,24 @@ def main():
 
     def wrist_F6():
         return np.asarray(robot.get_measured_joint_forces(), float)[j6][:6].copy()
+
+    # ---- B2：外界對夾爪的旋量（世界座標、作用點 TCP）＝−(joint6 量測轉世界＋下游重力−自由狀態基線)
+    wb = dict(F=[], M=[], bF=None, bM=None)
+
+    def wrench_parts(q9_, F6_):
+        Fg_, Mg_, T6_ = FO.down_gravity(q9_)
+        R6_ = T6_[:3, :3]
+        return R6_ @ F6_[:3] + Fg_, R6_ @ F6_[3:] + Mg_, T6_
+
+    def ext_wrench(q9_, F6_):
+        if wb['bF'] is None:
+            return None
+        rF_, rM_, T6_ = wrench_parts(q9_, F6_)
+        Fe_ = -(rF_ - wb['bF'])
+        Mo_ = -(rM_ - T6_[:3, :3] @ wb['bM'])
+        pt_ = K.fk(q9_, 'link_tcp')[:3, 3]
+        w_ = (Fe_, Mo_ - np.cross(pt_ - T6_[:3, 3], Fe_))
+        return w_ if (np.isfinite(w_[0]).all() and np.isfinite(w_[1]).all()) else None
 
     # ---- --diag：每物理步三個時點（覆寫前 A／覆寫後 B／物理步後 C）的根連桿位姿與六維速度＋其他取證訊號
     dlog, dstate, derr = [], {}, []
@@ -599,7 +619,7 @@ def main():
                 Xd0p = np.array([hlp2.project(x, iters=30) for x in Xd0])     # 首段參考以本趟實測 T_HE 重投影手臂（底盤、門角不變）；以試跑重核
                 ho = dict(s=gc.s.copy(), pipe=[u_.copy() for u_ in gc.pipe], u_last=gc.u_last.copy(), u_prev=gc.u_prev.copy(), bias=np.asarray(gc.cfg.arm_model.bias, float).copy(), moving=True, off_static=gc.off(q))
                 exn = XO.DoorOpenExec(ident, Xd0p, 0.05, T_WH_b, phi_b, T_HE_act, GOAL, ho, fq_b, arm_mode='closure', joint_kp=a.kp,
-                                      g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0, cstop=CSW))
+                                      g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0, cstop=CSW, preload_release=bool(a.preload_release and wb['bF'] is not None)))
                 exn.p2_open = True
                 if a.diag:
                     exn.deadline_inject = lambda cc: cc.t >= DIAG_STOP_T - 1e-9   # 取證：0.5 s 後強制本拍晚到 ⇒ 與第四趟相同的閉鏈一致停止流程
@@ -676,6 +696,13 @@ def main():
         oc, ow = other_contacts()
         gate.step_seq(float(world.current_time), Rr, oc, max(fc[0][1], fc[1][1]))
         F6 = wrist_F6()
+        if a.preload_release and gc.phase == 'HOLD' and 0.1 <= t <= 0.4 and gc.stop is None:   # 自由狀態基線（未接觸、前導等速）：量測轉世界＋下游重力的殘差
+            rF_, rM_, T6_ = wrench_parts(q2, F6)
+            wb['F'].append(rF_)
+            wb['M'].append(T6_[:3, :3].T @ rM_)
+        elif a.preload_release and wb['bF'] is None and gc.phase != 'HOLD' and len(wb['F']) >= 20 and np.isfinite(wb['F']).all() and np.isfinite(wb['M']).all():
+            wb['bF'], wb['bM'] = np.mean(wb['F'], axis=0), np.mean(wb['M'], axis=0)
+            log_event('wrench_baseline', n=len(wb['F']), bias_F_world=[round(float(x_), 3) for x_ in wb['bF']], bias_M_link6=[round(float(x_), 4) for x_ in wb['bM']], F_std=[round(float(x_), 3) for x_ in np.std(wb['F'], axis=0)])
         rows.append([t, phase_i() if gc.stop is None else 6, door_q(), float(jp2[f1]), float(jp2[f2]), *q2, *F6, time.perf_counter() - t_wall0])
         if gc.n_step % NPH == 0:
             bsp = float(np.linalg.norm(q2[:2] - prev_b[:2])) / G.DT
@@ -760,7 +787,8 @@ def main():
                     box['t_next'] = t + P2.T_RE
             F6 = wrist_F6()
             fn_ = float(np.linalg.norm(F6[:3]))
-            out = ex.step(tr, q, phm, fn_)
+            w_ext_ = ext_wrench(q, F6) if a.preload_release else None
+            out = ex.step(tr, q, phm, fn_, w_ext=w_ext_)
             if out['abort']:
                 box['aborted'] = dict(t=round(t, 3), controller=ex.abort)
                 log_event('open_abort', abort=ex.abort)
@@ -819,8 +847,8 @@ def main():
         res['open']['bind_deformation'] = None if not deflog else dict(pos_mm_max=round(max(x_[1] for x_ in deflog) * 1e3, 3), rot_deg_max=round(max(x_[2] for x_ in deflog), 3), pos_mm_end=round(deflog[-1][1] * 1e3, 3), rot_deg_end=round(deflog[-1][2], 3),
                                                                      est_spring_force_max_n=round(max(x_[8] for x_ in deflog), 2), est_damper_force_max_n=round(max(x_[9] for x_ in deflog), 2), est_spring_torque_max_nm=round(max(x_[10] for x_ in deflog), 3), est_damper_torque_max_nm=round(max(x_[11] for x_ in deflog), 3),
                                                                      note='力／力矩為估算（k×變形、c×差分相對速度；fixed 模型下僅供對照，非實際連接力）', cols=['t', 'pos_m', 'rot_deg', 'dx', 'dy', 'dz', 'vpos', 'vrot', 'F_spring', 'F_damper', 'T_spring', 'T_damper'])
-        res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'], fb_log=ex.fb_log, base_hold_log_tail=ex.hold_log[-5:], base_hold_n=len(ex.hold_log), base_hold_cmd_max=[max((x[1] for x in ex.hold_log), default=None), max((x[2] for x in ex.hold_log), default=None)], cstop_ticks=len(ex.cs_log), stop_mode=ex.stop_mode, tick_ms_normal=[round(float(m), 1) for i, m in enumerate(ex.tick_ms) if ex.stop is None or i * 0.05 < float(ex.stop['t']) - 1e-9])
-        np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), bind_deform=np.array(deflog), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
+        res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'], fb_log=ex.fb_log, preload_release=dict(enabled=bool(ex.g2['preload_release']), baseline=None if wb['bF'] is None else dict(F_world=[float(x_) for x_ in wb['bF']], M_link6=[float(x_) for x_ in wb['bM']], n=len(wb['F'])), n=len(ex.pr_log), delta_abs_max=max((x_[1] for x_ in ex.pr_log), default=None), delta_end=[round(float(x_), 5) for x_ in ex._pr_delta], Fc_first=(ex.pr_log[0][2] if ex.pr_log else None), Fc_max=max((x_[2] for x_ in ex.pr_log), default=None), Fc_last=(ex.pr_log[-1][2] if ex.pr_log else None), Mc_last=(ex.pr_log[-1][3] if ex.pr_log else None), lam_last=(ex.pr_log[-1][4] if ex.pr_log else None), sat_any=any(x_[5] for x_ in ex.pr_log), params=dict(KI=XO.PR.KI, RATE_MAX=XO.PR.RATE_MAX, DELTA_MAX=XO.PR.DELTA_MAX), log_cols=['t', 'delta_abs_max', 'Fc_norm', 'Mc_norm', 'lambda', 'sat', 'updated']), base_hold_log_tail=ex.hold_log[-5:], base_hold_n=len(ex.hold_log), base_hold_cmd_max=[max((x[1] for x in ex.hold_log), default=None), max((x[2] for x in ex.hold_log), default=None)], cstop_ticks=len(ex.cs_log), stop_mode=ex.stop_mode, tick_ms_normal=[round(float(m), 1) for i, m in enumerate(ex.tick_ms) if ex.stop is None or i * 0.05 < float(ex.stop['t']) - 1e-9])
+        np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), preload=np.array(ex.pr_log, float), bind_deform=np.array(deflog), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
     res['events'] = ev
     res['forbidden_contact'] = dict(latched=gate.latched)
     res['aborted'] = box['aborted']

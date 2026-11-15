@@ -38,9 +38,16 @@ class CStop:
         self.h = float(P['h'])
         import door_fric_ff as FF_
         self.FF, self.fric_ff = FF_, P.get('fric_ff')
+        self.pr_delta = np.zeros(6)                                  # B2：設定點偏置 δ（預測期間視為定值；由呼叫端設定）
+        self._bias0 = np.asarray(self.cfg.arm_model.bias, float).copy()
         self.lim_lo, self.lim_hi = np.asarray(P['lim_lo'], float), np.asarray(P['lim_hi'], float)     # r2：設定點限位（同執行層）
         self.q_lo, self.q_hi = np.asarray(P['q_lo'], float), np.asarray(P['q_hi'], float)             # 關節限位（同閉鏈手臂驗收）
         self.set_ref(P['Xd'])
+
+    def set_delta(self, d):
+        """B2：δ 進設定點目標，同時修正模型的穩態偏置（同執行層）。"""
+        self.pr_delta = np.asarray(d, float).copy()
+        self.cfg.arm_model.bias = self._bias0 - np.asarray(self.cfg.arm_model.alpha, float) * self.pr_delta
 
     def set_ref(self, Xd):
         self.Xd = np.asarray(Xd, float)
@@ -105,7 +112,7 @@ class CStop:
         if max(r1, r0) > 1e-6 or float(np.abs(q1 - seed).max()) > 0.5 or not np.isfinite(q1).all():
             return dict(ok=False, why='ik_fail')
         off = self.off0 + (self.grav(np.r_[b, q1]) - self.G0) / self.kp
-        S1 = q1 + self.tau * (q1 - q0) / DT - off + self.FF.ff((q1 - q0) / DT, self.fric_ff, self.kp)   # 同執行層：庫倫摩擦前饋（參考速度歸零時自動收回）
+        S1 = q1 + self.tau * (q1 - q0) / DT - off + self.FF.ff((q1 - q0) / DT, self.fric_ff, self.kp) + self.pr_delta   # 同執行層：庫倫摩擦前饋（參考速度歸零時自動收回）
         ua = (S1 - sp) / DT
         u = np.r_[ub, ua]
         if float(np.abs(ua).max()) > self.va + 1e-9:
@@ -139,6 +146,7 @@ class CStop:
         u_prev, sigma, g, seed = np.asarray(st['u_prev'], float).copy(), float(st['sigma']), float(st['g']), np.asarray(st['seed'], float).copy()
         hold = int(st.get('hold', 0))
         se_end = float(st['se_end'])
+        self.set_delta(np.zeros(6) if st.get('pr_delta') is None else st['pr_delta'])
         bh = None if st.get('base_hold') is None else np.asarray(st['base_hold'], float).copy()
         zeroed = False
         bh_steps = 0

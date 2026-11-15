@@ -21,9 +21,9 @@ out = {}
 # r2（Codex 20261115_131250）：abort_in_cstop＝備援停止 0.2 s 後超力（須同拍中止、之後不再出命令）；missing＝現在停核對結果缺失（須中止，不得當核過）；
 #   infeasible_late＝模型判備援不可行且同拍晚到（須中止）；g_change_late＝該拍主控制器把 g 重算成 0.8 後立即晚到（0.5 的驟降會先被現在停淨空核對與手臂加速度驗收擋下，到不了備援）（備援起點須＝已提交終點，不回拉不前跳）；
 #   cand_closure＝候選提交後的停止預測閉鏈超限（放大注入；候選須被拒、不提交）
-for case, t_late in (('early', 0.05), ('mid', 3.0), ('abort_in_cstop', 3.0), ('missing', 3.0), ('infeasible_late', 3.0), ('g_change_late', 3.0), ('cand_closure', 3.0), ('yaw_drift', 3.0)):
+for case, t_late in (('early', 0.05), ('mid', 3.0), ('abort_in_cstop', 3.0), ('missing', 3.0), ('infeasible_late', 3.0), ('g_change_late', 3.0), ('cand_closure', 3.0), ('yaw_drift', 3.0), ('b2_release', 3.0)):
     c = X.DoorOpenExec(ident, P['Xd'], float(P['h']), P['T_WH_bind'], float(P['phi_bind']), P['T_HE'], T.PHI_GOAL, dict(s=q0[3:] - T.D_TRUE, pipe=[np.zeros(9)] * 8, u_last=np.zeros(9), u_prev=np.zeros(9), bias=al * T.D_TRUE), T.FINGER_Q,
-                       arm_mode='closure', g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=1000.0, cstop=CSW))
+                       arm_mode='closure', g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=1000.0, cstop=CSW, preload_release=(case == 'b2_release')))
     F = T.Fake(c, q0)
     c.warmup(q0, F.door()[0])
     st = dict(done=False, pred=None)
@@ -35,6 +35,17 @@ for case, t_late in (('early', 0.05), ('mid', 3.0), ('abort_in_cstop', 3.0), ('m
         return False
     if case not in ('missing', 'cand_closure'):
         c.deadline_inject = dl
+    if case == 'b2_release':                                            # B2 真管線：局部線性模型提供外力旋量（設定點平衡位置比實際高 1.2 mm ⇒ 約束反力；δ 生效後遞減），3.0 s 強制晚到
+        import door_fast_kin as _DFK
+
+        def wfn(F_):
+            T_, J9_ = _DFK.FC.fk_jac(F_.q)
+            J_ = J9_[:, 3:9]
+            dq0 = np.linalg.solve(J_, np.r_[0.0, 0.0, 0.0012, 0.0, 0.0, 0.0])
+            Wl = -np.linalg.solve(J_.T, 600.0 * (dq0 + F_.c._pr_delta))
+            return Wl[:3], Wl[3:]
+        F.wrench_fn = wfn
+        F.rigid_delta = True
     if case == 'yaw_drift':                                             # 第七趟的偏航漂移：停止後底盤實際角速度多出 0.0028 rad/s（命令之外）
         F.yaw_drift = lambda F_: 0.0028 if F_.c.stop is not None else 0.0
     if case == 'g_change_late':
@@ -49,7 +60,7 @@ for case, t_late in (('early', 0.05), ('mid', 3.0), ('abort_in_cstop', 3.0), ('m
     arm_cmd = max((x[2] for x in c.cs_log), default=None)
     out[case] = dict(stop=c.stop, abort=c.abort, stop_mode=c.stop_mode, stop_ok=c.stop_ok, n_cstop_ticks=len(c.cs_log), arm_cmd_max=arm_cmd, phi_end_deg=round(math.degrees(F.door()[0]), 3),
                      after_stop_closure_pos_mm=round(F.after_stop['closure_pos'] * 1e3, 3), after_stop_min_clear={k: round(float(v), 4) for k, v in F.after_stop['min'].items()},
-                     setpoint_minus_meas_end=[round(float(x), 5) for x in (F.q[3:] - c.s)], d_true=T.D_TRUE.tolist(), n_cmd_after_abort=F.n_cmd_after_abort, escalations=(c.stop or {}).get('escalations'), fb_log=c.fb_log[:1], first_cs_ticks=c.cs_log[:3], hold_log_tail=c.hold_log[-3:], hold_cmd_yaw_max=max((x[2] for x in c.hold_log), default=None), hold_err_yaw_max_mrad=max((x[4] * 1e3 for x in c.hold_log), default=None), base_hold=(c.stop_ok or {}).get('base_hold'), cs_ticks_after_abort=(None if c.abort is None else sum(1 for x in c.cs_log if x[0] > c.abort['t'] + 1e-9)))
+                     setpoint_minus_meas_end=[round(float(x), 5) for x in (F.q[3:] - c.s)], d_true=T.D_TRUE.tolist(), n_cmd_after_abort=F.n_cmd_after_abort, escalations=(c.stop or {}).get('escalations'), fb_log=c.fb_log[:1], first_cs_ticks=c.cs_log[:3], pr=(None if not c.pr_log else dict(n=len(c.pr_log), delta_abs_max=max(x[1] for x in c.pr_log), Fc_first=c.pr_log[0][2], Fc_at_stop=[x[2] for x in c.pr_log if x[0] >= t_late - 1e-9][:1], Fc_last=c.pr_log[-1][2], Fc_max=max(x[2] for x in c.pr_log), sat_any=any(x[5] for x in c.pr_log), lam_first=c.pr_log[0][4], lam_last=c.pr_log[-1][4])), hold_log_tail=c.hold_log[-3:], hold_cmd_yaw_max=max((x[2] for x in c.hold_log), default=None), hold_err_yaw_max_mrad=max((x[4] * 1e3 for x in c.hold_log), default=None), base_hold=(c.stop_ok or {}).get('base_hold'), cs_ticks_after_abort=(None if c.abort is None else sum(1 for x in c.cs_log if x[0] > c.abort['t'] + 1e-9)))
     print(case, json.dumps(out[case], ensure_ascii=False, default=float)[:6000], flush=True)
 POOL.close(); CSW.close()
 json.dump(out, open(sys.argv[2], 'w'), ensure_ascii=False, indent=1, default=float)

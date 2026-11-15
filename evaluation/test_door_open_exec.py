@@ -85,7 +85,8 @@ class Fake:
         c = self.c
         phi, pH = self.door()
         force = None if self.force_fn is None else self.force_fn(self)
-        out = c.step(self.t, self.q.copy(), phi, force)
+        wfn = getattr(self, 'wrench_fn', None)
+        out = c.step(self.t, self.q.copy(), phi, force) if wfn is None else c.step(self.t, self.q.copy(), phi, force, w_ext=wfn(self))
         if out.get('abort'):                                           # 執行器真入口：中止鎖存後不再步進物理
             if not self.aborted:
                 self.aborted, self.abort_t = True, self.t
@@ -102,7 +103,8 @@ class Fake:
         if getattr(self, 'yaw_drift', None) is not None:              # 測試用：底盤偏航外擾（命令之外的實際角速度）
             wz = wz + float(self.yaw_drift(self))
         self.q[:3] += PHYS * np.array([cs * vx - sn * vy, sn * vx + cs * vy, wz])
-        self.q[3:] = self.q[3:] + self.alpha * (out['arm_target'] - self.q[3:] + D_TRUE)
+        tgt_ = out['arm_target'] - c._pr_delta if getattr(self, 'rigid_delta', False) else out['arm_target']   # 測試用：剛性綁定的替身——設定點偏置 δ 由約束吸收，手臂不跟著動
+        self.q[3:] = self.q[3:] + self.alpha * (tgt_ - self.q[3:] + D_TRUE)
         if not self.bound:
             self.omega_free *= math.exp(-I_DAMP * PHYS)
             self.phi_free = min(max(self.phi_free + self.omega_free * PHYS, 0.0), math.radians(110.0))
