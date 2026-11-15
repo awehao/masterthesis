@@ -47,14 +47,16 @@ class FastGravity:
         return G
 
 
-def ik_closure_fc(Tg, b, seed):
-    """回 (q, 殘差, σ_min)；與 door_open_exec_ctrl._ik_closure 同一迭代。"""
+def _ik_closure_fc_impl(Tg, b, seed, ac):
     q = np.asarray(seed, float).copy()
     res, J = np.inf, None
+    T0 = None if ac is None else ac.prefix(b)
     for _ in range(30):
-        q9 = np.r_[b, q]
-        Tc, Jf = FC.fk_jac(q9)
-        J = Jf[:, 3:9]
+        if ac is None:
+            Tc, Jf = FC.fk_jac(np.r_[b, q])
+            J = Jf[:, 3:9]
+        else:
+            Tc, J = ac.fk_jac_arm(T0, q)
         dR = Tg[:3, :3] @ Tc[:3, :3].T
         e = np.r_[Tg[:3, 3] - Tc[:3, 3], 0.5 * np.array([dR[2, 1] - dR[1, 2], dR[0, 2] - dR[2, 0], dR[1, 0] - dR[0, 1]])]
         res = float(np.linalg.norm(e))
@@ -63,9 +65,76 @@ def ik_closure_fc(Tg, b, seed):
         q = q + np.linalg.solve(J.T @ J + 1e-12 * np.eye(6), J.T @ e)
         J = None
     if J is None:
-        J = FC.fk_jac(np.r_[b, q])[1][:, 3:9]
+        J = FC.fk_jac(np.r_[b, q])[1][:, 3:9] if ac is None else ac.fk_jac_arm(T0, q)[1]
     return q, res, float(np.linalg.svd(J, compute_uv=False).min())
 
+
+def ik_closure_fc(Tg, b, seed):
+    """回 (q, 殘差, σ_min)；與 door_open_exec_ctrl._ik_closure 同一迭代。A3：正向運動學改手臂專用等值版（_ArmChain；逐位元相同）。"""
+    global _AC
+    if _AC is None:
+        _AC = _ArmChain(FC)
+    return _ik_closure_fc_impl(Tg, b, seed, _AC)
+
+
+class _ArmChain:
+    """FastChain.fk_jac 的手臂專用等值版（A3）：底盤三個自由度在一次 IK 內不變 ⇒ 底盤段的前綴變換只算一次；
+    各關節的 K、K·K 預先算好。運算順序與 FastChain.fk_jac 相同（T＝(T·O)·B、B＝I＋(sin·K＋(1−cos)·K·K)），結果逐位元相同（door_fast_kin_check3 核）。"""
+
+    def __init__(self, fc):
+        self.fc = fc
+        self.base = [st for st in fc.steps if st[4] < 3]
+        self.arm = []
+        for O, k, ax, jt, i in fc.steps:
+            if i >= 3:
+                assert jt != 'prismatic'
+                K_ = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+                self.arm.append((O, ax, K_, K_ @ K_, i))
+        assert [st[4] for st in fc.steps] == list(range(9))
+        self.tail = fc.tail
+
+    def prefix(self, b):
+        T = np.eye(4)
+        for O, k, ax, jt, i in self.base:
+            Tj = T @ O
+            B = np.eye(4)
+            if jt == 'prismatic':
+                B[:3, 3] = ax * b[i]
+            else:
+                sn, cs = math.sin(b[i]), math.cos(b[i])
+                K_ = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+                B[:3, :3] += sn * K_ + (1.0 - cs) * (K_ @ K_)
+            T = Tj @ B
+        return T
+
+    def fk_jac_arm(self, T0, qa):
+        """回 (T_tcp, J 的手臂六欄)。"""
+        T = T0
+        A, P = [], []
+        for n, (O, ax, K_, KK, i) in enumerate(self.arm):
+            Tj = T @ O
+            B = np.eye(4)
+            sn, cs = math.sin(qa[n]), math.cos(qa[n])
+            B[:3, :3] += sn * K_ + (1.0 - cs) * KK
+            A.append(Tj[:3, :3] @ ax)
+            P.append(Tj[:3, 3])
+            T = Tj @ B
+        T = T @ self.tail
+        pe = T[:3, 3]
+        J = np.zeros((6, 6))
+        for n in range(6):
+            a, r = A[n], pe - P[n]
+            J[0, n], J[1, n], J[2, n] = a[1] * r[2] - a[2] * r[1], a[2] * r[0] - a[0] * r[2], a[0] * r[1] - a[1] * r[0]
+            J[3:, n] = a
+        return T, J
+
+
+_AC = None
+
+
+def ik_closure_fc_ref(Tg, b, seed):
+    """原版（對照用）。"""
+    return _ik_closure_fc_impl(Tg, b, seed, None)
 
 class ClearCache:
     def __init__(self, fn):
