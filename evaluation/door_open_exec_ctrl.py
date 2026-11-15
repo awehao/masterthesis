@@ -69,6 +69,7 @@ import time
 
 import numpy as np
 import door_fric_ff as FF
+import door_cstop_def as DCSM
 
 os.environ.setdefault('M8_SCENE_REG', '20261112_m8_house_scene.json')
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -86,6 +87,7 @@ from ammr_wholebody_mpc.arm_limits import LITE6_SAFE               # noqa: E402
 from ammr_wholebody_mpc.se2 import from_xytheta                    # noqa: E402
 
 PHYS, NPH, D_STEPS, N, DT = C0.PHYS, C0.NPH, C0.D_STEPS, B.N, B.DT
+assert D_STEPS == DCSM.D_STEPS                                      # 停法共用定義的管線長度須一致
 LEAD_MAX, LEAD_BAND, STALL_S = math.radians(3.0), math.radians(1.0), 2.0
 CL_TOL = dict(pos_m=0.010, rot_deg=5.0)                            # 實測／預測閉鏈殘差上限
 STRESS_TOL = dict(pos_m=0.030, rot_deg=8.0)                        # 設定點閉鏈殘差上限（內應力指標）
@@ -204,6 +206,7 @@ class DoorOpenExec:
         self._se_cand = self._se_end
         self._hold = None                                             # r20（B1）：閉鏈一致停法的底盤保持錨點（世界 x, y, yaw）；None＝未啟用
         self.hold_log = []
+        self._hold_t0 = None
         self.stop, self.done, self.stopped_t, self.stop_ok, self._still = None, False, None, None, 0
         self.events, self.rec, self.fail_inject = [], [], None
         self.solve_ms, self.sweep_ms, self.tick_ms = [], [], []
@@ -1148,6 +1151,7 @@ class DoorOpenExec:
                 else:
                     self.u_last, self.sigma, self.g, self.q_cl_prev, self._se_end = rc['u'], rc['sigma'], rc['g'], rc['q1'], rc['se_end']
                     if rc['hold'] is not None and self._hold is None:
+                        self._hold_t0 = self.t
                         self._ev('base_hold_anchor', anchor=[round(float(x), 5) for x in rc['hold']])
                     self._hold = rc['hold']
                     if self._hold is not None:
@@ -1181,8 +1185,8 @@ class DoorOpenExec:
             dd = abs(phi_meas - self.phi_last) / PHYS
             empty = not np.any(self.u_last) and not any(np.any(u) for u in self.pipe)
             hold_on = self.stop_mode == 'cstop' and self._hold is not None
-            if hold_on:                                                # r20（B1）：保持模式下「管線」一項＝運動管線已清空且保持啟用（保持輸出另列，不是零命令）；實測速率門檻與持續時間不變
-                empty = True
+            if hold_on:                                                # r21：保持模式下「管線」一項＝錨定前發出的運動命令已全部排出管線（錨定後已過 D 個物理步），之後管線內只有保持模式的命令；保持輸出另列，不是零命令；實測速率門檻與持續時間不變
+                empty = bool(DCSM.motion_cleared(int(round((self.t - self._hold_t0) / PHYS))))
             st = dict(pipe=bool(empty), arm=bool(dq < STOP_STILL['arm_rps']), base=bool(vb < STOP_STILL['base_mps'] and wy < STOP_STILL['yaw_rps']), door=bool(dd < STOP_STILL['door_rps']))
             self._still = self._still + 1 if all(st.values()) else 0
             lim = STOP_STILL['timeout_s'] + (3.0 if not self.bound else 0.0)   # 解除後門自由減速需要較久

@@ -11,6 +11,7 @@ import multiprocessing as mp
 import time
 
 import numpy as np
+import door_cstop_def as DEF
 
 T_STOP = 0.5
 K_HOLD = 2.0                                                         # 1/s：底盤保持比例增益（管線延遲 0.08 s ⇒ 增益×延遲＝0.16）
@@ -140,6 +141,7 @@ class CStop:
         se_end = float(st['se_end'])
         bh = None if st.get('base_hold') is None else np.asarray(st['base_hold'], float).copy()
         zeroed = False
+        bh_steps = 0
         X, quiet = [np.r_[q, self.ref(sigma)[9]]], 0
         self._cl = [0.0, 0.0]
         self._tr = []                                                # 逐拍（拍、g、預測閉鏈位置偏差 mm、手臂命令最大值）：診斷用
@@ -170,7 +172,10 @@ class CStop:
                 self._cl[0] = max(self._cl[0], float(np.linalg.norm(Tc[:3, 3] - Td[:3, 3])))
                 self._cl[1] = max(self._cl[1], self.XO.rot_deg(Td, Tc))
                 self._tr.append((n, round(g, 2), round(float(np.linalg.norm(Tc[:3, 3] - Td[:3, 3])) * 1e3, 2), round(float(np.abs(u[3:]).max()), 3), round(float(np.hypot(u[0], u[1])), 4), round(sigma, 3)))
-            still = (not np.any(u) and not any(np.any(x_) for x_ in pipe)
+            if bh is not None:
+                bh_steps += NPH
+            pipe_ok = (not np.any(u) and not any(np.any(x_) for x_ in pipe)) or (bh is not None and DEF.motion_cleared(bh_steps - NPH))   # 同執行層定義：零命令，或保持啟用且錨定前命令已排完
+            still = (pipe_ok
                      and float(np.abs(q[3:] - q_a[3:]).max()) / DT < SS['arm_rps'] and float(np.hypot(*(q[:2] - q_a[:2]))) / DT < SS['base_mps']
                      and abs(q[2] - q_a[2]) / DT < SS['yaw_rps'] and abs(float(X[-1][9] - X[-2][9])) / DT < SS['door_rps'])
             quiet = quiet + 1 if still else 0
