@@ -1,0 +1,431 @@
+{
+ "sources": {
+  "scan": "合成射線投射（已知場景幾何＋關閉門扇；無雜訊）",
+  "odom": "/cmd_vel 理想積分",
+  "clock": "本節點",
+  "joint_states": "一階設定點模型",
+  "delay": "命令經 8 個物理步（0.08 s）在途管線才作用（底盤與手臂）"
+ },
+ "events": [
+  {
+   "t": 60.75,
+   "what": "coarse_goal_sent",
+   "goal_map": [
+    1.649,
+    -0.491
+   ],
+   "goal_odom": [
+    1.649,
+    -0.491
+   ],
+   "map_odom": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "note": "背景搜尋已送出"
+  },
+  {
+   "t": 60.75,
+   "what": "merge_gmpc_started",
+   "overrides": {
+    "plan_topic": "/merge/plan",
+    "cmd_vel_topic": "/cmd_vel_merge",
+    "v_nominal": 0.05,
+    "heading_fixed": 1.5694211868225114,
+    "goal_tolerance_xy": 0.03,
+    "heading_enable": true
+   }
+  },
+  {
+   "t": 63.19,
+   "what": "plan_ready",
+   "wall_s": 0.72,
+   "sim_elapsed_s": 2.44,
+   "n_cells": 4,
+   "standoff": 0.45000000000000007,
+   "along_offset": -0.03999999999999998,
+   "prep_time_s": 6.55,
+   "sigma_min": 0.0561
+  },
+  {
+   "t": 71.45,
+   "what": "base_owner_NAV_to_MERGE",
+   "along": 0.67,
+   "lat": 0.588,
+   "speed": 0.256,
+   "merge_plan": {
+    "n": 274,
+    "along0": 0.669,
+    "end_odom": [
+     0.743,
+     -0.49
+    ]
+   },
+   "released_cmd": [
+    0.2176,
+    0.0005,
+    -0.0931
+   ],
+   "merge_candidate": [
+    0.1544,
+    0.0014,
+    -0.031
+   ],
+   "nav_cmd": [
+    0.2055,
+    -0.0015,
+    -0.0928
+   ],
+   "candidate_checks": {
+    "candidate_fresh": true,
+    "plan_acked": true,
+    "candidate_nonzero": true,
+    "step_within_smoother_limit": true,
+    "predicted_in_capture": true
+   },
+   "n_shadow_plans": 7,
+   "note": "影子模式下進線 GMPC 的上一命令＝實際放行命令（外包設定）；候選有效才切換"
+  },
+  {
+   "t": 81.8,
+   "what": "arm_owner_HOLD_to_TRACK_prep",
+   "along": 0.669,
+   "need_along": 0.593
+  },
+  {
+   "t": 91.35,
+   "what": "arm_track_start",
+   "along_pred": 0.2225,
+   "lat_pred_mm": -0.29,
+   "yaw_err_deg": 0.395,
+   "arm_err_rad": 0.0
+  },
+  {
+   "t": 96.95,
+   "what": "pass_end_no_handover_global_stop",
+   "along": -0.0511,
+   "n_judgements": 111
+  },
+  {
+   "t": 99.7,
+   "what": "finished_base_stopped",
+   "along": -0.0582,
+   "lat_mm": -0.01
+  }
+ ],
+ "plan": {
+  "wall_s": 0.72,
+  "select": "first_feasible（非最優）",
+  "n_cells": 4,
+  "pass_line": {
+   "p0": [
+    0.8392378692324558,
+    -0.49021674875223664
+   ],
+   "d": [
+    -0.9999990544532125,
+    0.0013751700553570178
+   ],
+   "n": [
+    -0.0013751395389841787,
+    -0.9999990544951772
+   ],
+   "yaw": 1.5694211868225119,
+   "standoff": 0.45000000000000007,
+   "along": -0.03999999999999998
+  },
+  "observe": {
+   "alongs": [
+    0.25,
+    0.225,
+    -0.09999999999999992
+   ],
+   "sigma_min": 0.056136405800830326,
+   "prep_time_s": 6.552347689118696,
+   "track_rate_max": 0.47894323002493855,
+   "min_clear": {
+    "env": 0.08394615431745212,
+    "base": 0.19007923174670088,
+    "self": 0.006421725708687738
+   }
+  }
+ },
+ "forwarded": {
+  "NAV": 216,
+  "MERGE": 510,
+  "dropped": 774
+ },
+ "final_owner": {
+  "base": "MERGE",
+  "arm": "TRACK",
+  "stop": true
+ },
+ "no_reach": null,
+ "timeline": {
+  "t_goal": 60.75,
+  "t_plan_ready": 63.19,
+  "plan_latency_sim_s": 2.44,
+  "t_switch": 71.45,
+  "speed_at_switch": 0.256,
+  "switch": {
+   "t": 71.45,
+   "what": "base_owner_NAV_to_MERGE",
+   "along": 0.67,
+   "lat": 0.588,
+   "speed": 0.256,
+   "merge_plan": {
+    "n": 274,
+    "along0": 0.669,
+    "end_odom": [
+     0.743,
+     -0.49
+    ]
+   },
+   "released_cmd": [
+    0.2176,
+    0.0005,
+    -0.0931
+   ],
+   "merge_candidate": [
+    0.1544,
+    0.0014,
+    -0.031
+   ],
+   "nav_cmd": [
+    0.2055,
+    -0.0015,
+    -0.0928
+   ],
+   "candidate_checks": {
+    "candidate_fresh": true,
+    "plan_acked": true,
+    "candidate_nonzero": true,
+    "step_within_smoother_limit": true,
+    "predicted_in_capture": true
+   },
+   "n_shadow_plans": 7,
+   "note": "影子模式下進線 GMPC 的上一命令＝實際放行命令（外包設定）；候選有效才切換"
+  }
+ },
+ "released_cmd_around_switch": {
+  "max_step_change": [
+   0.051,
+   0.007,
+   0.0625
+  ],
+  "max_accel": [
+   1.02,
+   0.14,
+   1.25
+  ],
+  "speed_before": 0.21,
+  "speed_after_1s": 0.053
+ },
+ "line_tracking": {
+  "prep": {
+   "n": 191,
+   "lat_mm_odom": [
+    -7.55,
+    29.96
+   ],
+   "lat_mm_truth": [
+    -7.55,
+    28.96
+   ],
+   "yaw_err_deg": [
+    0.4,
+    0.54
+   ],
+   "speed": [
+    0.0283,
+    0.0621
+   ]
+  },
+  "track": {
+   "n": 168,
+   "lat_mm_odom": [
+    -0.34,
+    -0.01
+   ],
+   "lat_mm_truth": [
+    -0.34,
+    -0.01
+   ],
+   "yaw_err_deg": [
+    0.38,
+    1.29
+   ],
+   "speed": [
+    0.0,
+    0.0614
+   ]
+  },
+  "tol": {
+   "lateral_mm": 10,
+   "yaw_deg": 1.0
+  }
+ },
+ "map_odom": {
+  "at_anchor": [
+   2.25464849901158e-06,
+   1.2078577831253767e-06,
+   -2.220446049250313e-16
+  ],
+  "final": [
+   0.1181,
+   -0.0245,
+   -0.0401
+  ],
+  "max_abs_xy_mm": 118.9,
+  "n_path_publishes": 23,
+  "note": "進線期間 map←odom 持續變動；通過線保存在里程座標，變動超過 2 mm／0.1° 就以新轉換重發路徑"
+ },
+ "stop_precheck": {
+  "prep": {
+   "n": 191,
+   "all_ok": true,
+   "min_clear": {
+    "env": 0.0841,
+    "base": 0.1834,
+    "self": 0.0063
+   },
+   "ms_p50": 12.4,
+   "ms_max": 17.5
+  },
+  "track": {
+   "n": 113,
+   "all_ok": true,
+   "min_clear": {
+    "env": 0.2575,
+    "base": 0.1899,
+    "self": 0.0063
+   },
+   "ms_p50": 12.2,
+   "ms_max": 15.0
+  }
+ },
+ "worker": {
+  "stale_replies_dropped": 0,
+  "switch_wait_ticks": 0
+ },
+ "merge_gmpc": {
+  "n_running_after_switch": 564,
+  "xi_prev_first_tick_after_switch": [
+   0.20548757325805775,
+   -0.0014983660176632746,
+   -0.09278397260468096
+  ],
+  "u_first_tick_after_switch": [
+   0.14470390811166928,
+   0.0010551378354335642,
+   -0.02795075237654818
+  ],
+  "min_h_min": 0.057,
+  "states": [
+   "running"
+  ]
+ },
+ "arm": {
+  "prep_ticks": 191,
+  "track_ticks": 168,
+  "track_err_max": 0.0807,
+  "clear_min_during_arm_motion": {
+   "env": 0.0843,
+   "base": 0.1836,
+   "self": 0.0063
+  }
+ },
+ "handover_judgements": {
+  "n": 111,
+  "accepted": {
+   "real_image_at_start": 0,
+   "synthetic_fresh_stamp": 0
+  },
+  "refuse_reasons": {
+   "real_image_at_start": {
+    "estimate_stale": 111,
+    "not_moving_along_line": 84,
+    "arm_not_tracking_target": 111,
+    "yaw_error": 22,
+    "outside_grasp_window": 2,
+    "already_past_grasp_point": 20
+   },
+   "synthetic_fresh_stamp": {
+    "not_moving_along_line": 84,
+    "arm_not_tracking_target": 111,
+    "yaw_error": 22,
+    "outside_grasp_window": 2,
+    "already_past_grasp_point": 20
+   }
+  },
+  "first": [
+   {
+    "t": 91.4,
+    "along": 0.227,
+    "lat_mm": -0.32,
+    "judge": {
+     "real_image_at_start": [
+      "estimate_stale:30.650",
+      "not_moving_along_line:v_along=0.0392,v_lat=0.0003",
+      "arm_not_tracking_target:0.0358"
+     ],
+     "synthetic_fresh_stamp": [
+      "not_moving_along_line:v_along=0.0392,v_lat=0.0003",
+      "arm_not_tracking_target:0.0358"
+     ]
+    }
+   }
+  ],
+  "last": [
+   {
+    "t": 96.9,
+    "along": -0.0481,
+    "lat_mm": -0.02,
+    "judge": {
+     "real_image_at_start": [
+      "estimate_stale:36.150",
+      "yaw_error:0.0221",
+      "already_past_grasp_point",
+      "arm_not_tracking_target:0.0562"
+     ],
+     "synthetic_fresh_stamp": [
+      "yaw_error:0.0221",
+      "already_past_grasp_point",
+      "arm_not_tracking_target:0.0562"
+     ]
+    }
+   }
+  ],
+  "note": "合成時間戳只驗接線，不算移動視覺"
+ },
+ "stop_check": {
+  "trigger": {
+   "t": 96.95,
+   "what": "pass_end_no_handover_global_stop",
+   "along": -0.0511,
+   "n_judgements": 111
+  },
+  "t_to_still_s": 0.18,
+  "distance_m": 0.0091,
+  "speed_at_trigger": 0.0513,
+  "decel_max": 5.02,
+  "accel_limit_released_chain": "平滑器／GUARD 的既有上限（未改）",
+  "arm_rate_max_during_stop": 0.5235,
+  "arm_setpoint_rate_max": 0.6738,
+  "arm_rate_after_still_max": 0.25608,
+  "joints_within_limits": true,
+  "min_clear_during_stop": {
+   "env": 0.3174,
+   "base": 0.1901,
+   "self": 0.0064
+  },
+  "clear_ok": true,
+  "n_clear_samples": 24,
+  "final": {
+   "along": -0.0582,
+   "lat_mm": -0.01
+  },
+  "note": "事後重算（執行時另有每拍提交前停止核對 stop_precheck）；淨空以把手估計＋已知門幾何計算"
+ }
+}

@@ -7,10 +7,11 @@ WS="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$WS"
 OUT="$1"; Q0="$2"; TEND="${3:-150}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-72}" ROS_LOCALHOST_ONLY=1
 set +u; source /opt/ros/jazzy/setup.bash; source install/setup.bash; set -u
-n=$(pgrep -fc "[s]can_safety_shield|[w]heel_limit_guard|[v]elocity_smoother|[g]mpc_node|[p]lanner_server|[w]orld_node|[m]erge_node" || true)
+PAT="[s]can_safety_shield|[w]heel_limit_guard|[v]elocity_smoother|[g]mpc_node|[g]mpc_merge_wrap|[p]lanner_server|[w]orld_node.py|[m]erge_node.py"
+for i in $(seq 15); do n=$(pgrep -fc "$PAT" || true); [ "$n" = "0" ] && break; sleep 2; done   # 上一趟收尾中的節點最多等 30 s
 [ "$n" = "0" ] || { echo "已有相關節點在跑（$n）⇒ 拒跑"; exit 99; }
 PIDS=()
-cleanup(){ for p in "${PIDS[@]}"; do kill -INT -- "-$p" 2>/dev/null; done; pkill -INT -f "[g]mpc_node.*gmpc_merge" 2>/dev/null; sleep 3; for p in "${PIDS[@]}"; do kill -KILL -- "-$p" 2>/dev/null; done; pkill -KILL -f "[g]mpc_node.*gmpc_merge" 2>/dev/null; }
+cleanup(){ for p in "${PIDS[@]}"; do kill -INT -- "-$p" 2>/dev/null; done; pkill -INT -f "[g]mpc_merge_wrap" 2>/dev/null; sleep 3; for p in "${PIDS[@]}"; do kill -KILL -- "-$p" 2>/dev/null; done; pkill -KILL -f "[g]mpc_merge_wrap" 2>/dev/null; }
 trap cleanup EXIT
 SX=$(echo "$Q0" | cut -d, -f1); SY=$(echo "$Q0" | cut -d, -f2); SYAW=$(echo "$Q0" | cut -d, -f3)
 PYS="env -u VIRTUAL_ENV /usr/bin/python3"

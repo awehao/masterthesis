@@ -1,0 +1,39 @@
+/planner_server:
+  ros__parameters:
+    /bond_disable_heartbeat_timeout: true
+    GridBased:
+      allow_unknown: true
+      cost_travel_multiplier: 2.0
+      downsample_costmap: false
+      downsampling_factor: 1
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      plugin: nav2_smac_planner::SmacPlanner2D
+      smoother:
+        do_refinement: true
+        max_iterations: 1000
+        refinement_num: 2
+        tolerance: 1.0e-10
+        w_data: 0.2
+        w_smooth: 0.3
+      terminal_checking_interval: 5000
+      tolerance: 0.125
+      use_final_approach_orientation: false
+    action_server_result_timeout: 10.0
+    autostart_node: false
+    bond_heartbeat_period: 0.1
+    costmap_update_timeout: 1.0
+    expected_planner_frequency: 5.0
+    planner_plugins:
+    - GridBased
+    qos_overrides:
+      /clock:
+        subscription:
+          depth: 1
+          durability: volatile
+          history: keep_last
+          reliability: best_effort
+    start_type_description_service: true
+    use_sim_time: true
+
