@@ -1,0 +1,122 @@
+{
+ "sources": {
+  "scan": "合成射線投射（已知場景幾何＋關閉門扇；無雜訊）",
+  "odom": "/cmd_vel 理想積分",
+  "clock": "本節點",
+  "joint_states": "一階設定點模型"
+ },
+ "goal": [
+  0.6,
+  -0.49
+ ],
+ "start": [
+  1.5,
+  -2.8,
+  1.5708
+ ],
+ "end": [
+  0.6261200325560493,
+  -0.7150202280033399,
+  1.7685036675612034
+ ],
+ "motion_t": [
+  59.36,
+  70.35
+ ],
+ "duration_s": 10.99,
+ "goal_err": {
+  "dist": 0.227,
+  "dx": 0.026,
+  "dy": -0.225
+ },
+ "speed_max": 0.256,
+ "scan_min": 0.715,
+ "plan": {
+  "n": 28,
+  "first_n_poses": 63,
+  "last_xy": [
+   0.6000001579523087,
+   -0.5000001266598701
+  ]
+ },
+ "vs_pass_line": {
+  "line": {
+   "p0": [
+    0.8392,
+    -0.4902
+   ],
+   "d": [
+    -1.0,
+    0.0
+   ],
+   "yaw_deg": 89.921,
+   "v_pass": 0.05,
+   "window_along": [
+    0.25,
+    -0.05
+   ],
+   "lateral_tol_mm": 10,
+   "yaw_tol_deg": 1.0
+  },
+  "n_steps_in_window": 0,
+  "end_along": -0.213,
+  "end_lateral_mm": 224.8,
+  "end_yaw_err_deg": 11.41,
+  "lateral_min_abs_mm": 224.8,
+  "yaw_err_range_deg": [
+   -6.2,
+   32.5
+  ]
+ },
+ "layers": {
+  "cmd_vel_nav": {
+   "n": 1314,
+   "last3s_speed_mean": 0.187,
+   "max_speed": 0.2564,
+   "max_wz": 0.376
+  },
+  "cmd_vel_pre_shield": {
+   "n": 1334,
+   "last3s_speed_mean": 0.1877,
+   "max_speed": 0.2564,
+   "max_wz": 0.376
+  },
+  "cmd_vel_smoothed": {
+   "n": 1325,
+   "last3s_speed_mean": 0.1875,
+   "max_speed": 0.2564,
+   "max_wz": 0.375
+  },
+  "cmd_vel": {
+   "n": 1314,
+   "last3s_speed_mean": 0.1907,
+   "max_speed": 0.2564,
+   "max_wz": 0.375
+  }
+ },
+ "layer_diffs_max": {
+  "nav_to_pre_shield": 0.1359,
+  "pre_shield_to_smoothed": 0.084,
+  "smoothed_to_cmd_vel": 0.2244
+ },
+ "param_snapshots": {
+  "params_amcl.yaml": 1863,
+  "params_global_costmap_global_costmap.yaml": 2219,
+  "params_gmpc_controller.yaml": 2439,
+  "params_goal_to_plan_relay.yaml": 355,
+  "params_planner_server.yaml": 1068,
+  "params_scan_obstacle_tracker.yaml": 1170,
+  "params_scan_safety_shield.yaml": 863,
+  "params_velocity_smoother.yaml": 918,
+  "params_wheel_limit_guard.yaml": 425
+ },
+ "endpoints_raw": "== /cmd_vel\nPublisher count: 1\nNode name: wheel_limit_guard\nNode namespace: /\nEndpoint type: PUBLISHER\nSubscription count: 3\nNode name: scan_safety_shield\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: far_dry_world\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: far_dry_logger\nNode namespace: /\nEndpoint type: SUBSCRIPTION\n== /cmd_vel_smoothed\nPublisher count: 1\nNode name: scan_safety_shield\nNode namespace: /\nEndpoint type: PUBLISHER\nSubscription count: 2\nNode name: wheel_limit_guard\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: far_dry_logger\nNode namespace: /\nEndpoint type: SUBSCRIPTION\n== /cmd_vel_pre_shield\nPublisher count: 1\nNode name: velocity_smoother\nNode namespace: /\nEndpoint type: PUBLISHER\nSubscription count: 2\nNode name: scan_safety_shield\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: far_dry_logger\nNode namespace: /\nEndpoint type: SUBSCRIPTION\n== /cmd_vel_nav\nPublisher count: 1\nNode name: gmpc_controller\nNode namespace: /\nEndpoint type: PUBLISHER\nSubscription count: 2\nNode name: velocity_smoother\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: far_dry_logger\nNode namespace: /\nEndpoint type: SUBSCRIPTION\n== /scan\nPublisher count: 1\nNode name: scan_relay\nNode namespace: /\nEndpoint type: PUBLISHER\nSubscription count: 4\nNode name: scan_safety_shield\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: scan_obstacle_tracker\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: amcl\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: global_costmap\nNode namespace: /global_costmap\nEndpoint type: SUBSCRIPTION\n== /scan_raw\nPublisher count: 1\nNode name: far_dry_world\nNode namespace: /\nEndpoint type: PUBLISHER\nSubscription count: 1\nNode name: scan_relay\nNode namespace: /\nEndpoint type: SUBSCRIPTION\n== /odom\nPublisher count: 1\nNode name: odom_tf_broadcaster\nNode namespace: /\nEndpoint type: PUBLISHER\nSubscription count: 2\nNode name: wheel_limit_guard\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: ekf_global\nNode namespace: /\nEndpoint type: SUBSCRIPTION\n== /odom_raw\nPublisher count: 1\nNode name: far_dry_world\nNode namespace: /\nEndpoint type: PUBLISHER\nSubscription count: 1\nNode name: odom_tf_broadcaster\nNode namespace: /\nEndpoint type: SUBSCRIPTION\n== /plan\nPublisher count: 2\nNode name: goal_to_plan_relay\nNode namespace: /\nEndpoint type: PUBLISHER\nNode name: planner_server\nNode namespace: /\nEndpoint type: PUBLISHER\nSubscription count: 2\nNode name: gmpc_controller\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: far_dry_logger\nNode namespace: /\nEndpoint type: SUBSCRIPTION\n== /goal_pose\nPublisher count: 0\nSubscription count: 2\nNode name: goal_to_plan_relay\nNode namespace: /\nEndpoint type: SUBSCRIPTION\nNode name: gmpc_controller\nNode namespace: /\nEndpoint type: SUBSCRIPTION\n== /far/arm_cmd\nPublisher count: 0\nSubscription count: 1\nNode name: far_dry_world\nNode namespace: /\nEndpoint type: SUBSCRIPTION\n",
+ "gmpc_flags": {
+  "heading_enable": "true",
+  "vx_max": "0.2775",
+  "goal_tolerance_xy": "0.3",
+  "cbf_safe_margin": "0.38",
+  "static_margin": null,
+  "horizon": "20"
+ }
+}
