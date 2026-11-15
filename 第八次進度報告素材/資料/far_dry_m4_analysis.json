@@ -1,0 +1,237 @@
+{
+ "sources": {
+  "scan": "合成射線投射（已知場景幾何＋關閉門扇；無雜訊）",
+  "odom": "/cmd_vel 理想積分",
+  "clock": "本節點",
+  "joint_states": "一階設定點模型",
+  "delay": "命令經 8 個物理步（0.08 s）在途管線才作用（底盤與手臂）"
+ },
+ "events": [
+  {
+   "t": 57.0,
+   "what": "coarse_goal_sent",
+   "goal": [
+    1.649,
+    -0.491
+   ],
+   "note": "背景搜尋已送出"
+  },
+  {
+   "t": 57.0,
+   "what": "merge_gmpc_started",
+   "overrides": {
+    "plan_topic": "/merge/plan",
+    "cmd_vel_topic": "/cmd_vel_merge",
+    "v_nominal": 0.05,
+    "heading_fixed": 1.5694211868225114,
+    "goal_tolerance_xy": 0.03,
+    "heading_enable": true
+   }
+  },
+  {
+   "t": 57.97,
+   "what": "plan_ready",
+   "wall_s": 0.74,
+   "sim_elapsed_s": 0.97,
+   "n_cells": 4,
+   "standoff": 0.45000000000000007,
+   "along_offset": -0.03999999999999998,
+   "prep_time_s": 6.55,
+   "sigma_min": 0.0561
+  },
+  {
+   "t": 66.2,
+   "what": "base_owner_NAV_to_MERGE",
+   "along": 0.669,
+   "lat": 0.587,
+   "speed": 0.235,
+   "merge_plan": {
+    "n": 263,
+    "along0": 0.669,
+    "end": [
+     0.784,
+     -0.49
+    ]
+   },
+   "cmd_jump_at_switch": 0.2157,
+   "note": "切換時進線 GMPC 的上一命令為零；差額由原平滑器處理"
+  },
+  {
+   "t": 76.75,
+   "what": "arm_owner_HOLD_to_TRACK_prep",
+   "along": 0.708,
+   "need_along": 0.593
+  },
+  {
+   "t": 87.6,
+   "what": "refuse_enter_reach_zone_global_stop",
+   "along_pred": 0.2231,
+   "lat_pred_mm": -32.86,
+   "yaw_err_deg": 0.408,
+   "arm_err_rad": 0.0
+  },
+  {
+   "t": 90.35,
+   "what": "finished_base_stopped",
+   "along": 0.2222,
+   "lat_mm": -32.86
+  }
+ ],
+ "plan": {
+  "wall_s": 0.74,
+  "select": "first_feasible（非最優）",
+  "n_cells": 4,
+  "pass_line": {
+   "p0": [
+    0.8392378692324567,
+    -0.4902167487522368
+   ],
+   "d": [
+    -0.9999990544532125,
+    0.0013751700553574623
+   ],
+   "n": [
+    -0.0013751395389846228,
+    -0.9999990544951772
+   ],
+   "yaw": 1.5694211868225114,
+   "standoff": 0.45000000000000007,
+   "along": -0.03999999999999998
+  },
+  "observe": {
+   "alongs": [
+    0.25,
+    0.225,
+    -0.09999999999999992
+   ],
+   "sigma_min": 0.05613640580465841,
+   "prep_time_s": 6.552347689110448,
+   "track_rate_max": 0.4789432300249389,
+   "min_clear": {
+    "env": 0.08394615431884783,
+    "base": 0.190079231746701,
+    "self": 0.006421725708687739
+   }
+  }
+ },
+ "forwarded": {
+  "NAV": 196,
+  "MERGE": 427,
+  "dropped": 662
+ },
+ "final_owner": {
+  "base": "MERGE",
+  "arm": "PREP",
+  "stop": true
+ },
+ "no_reach": null,
+ "timeline": {
+  "t_goal": 57.0,
+  "t_plan_ready": 57.97,
+  "plan_latency_sim_s": 0.97,
+  "t_switch": 66.2,
+  "speed_at_switch": 0.235,
+  "cmd_jump_at_switch": 0.2157
+ },
+ "released_cmd_around_switch": {
+  "max_step_change": [
+   0.1614,
+   0.0723,
+   0.0866
+  ],
+  "max_accel": [
+   3.23,
+   1.45,
+   1.73
+  ],
+  "speed_before": 0.221,
+  "speed_after_1s": 0.05
+ },
+ "line_tracking_truth": {
+  "n": 285,
+  "lat_mm_mean": -27.1,
+  "lat_mm_range": [
+   -41.9,
+   57.2
+  ],
+  "yaw_err_deg_range": [
+   0.37,
+   0.6
+  ],
+  "speed_mean": 0.0409,
+  "tol": {
+   "lateral_mm": 10,
+   "yaw_deg": 1.0
+  }
+ },
+ "localization_vs_truth_after_switch_mm": {
+  "n": 11,
+  "dx_mean": -32.9,
+  "dy_mean": -35.7,
+  "dx_range": [
+   -51.5,
+   -23.0
+  ],
+  "dy_range": [
+   -40.5,
+   -28.8
+  ],
+  "note": "AMCL 位姿−真值；進線 GMPC 在自己的座標裡追線"
+ },
+ "merge_gmpc_own_frame": {
+  "n": 204,
+  "lateral_err_mm_abs_max": 2.49,
+  "yaw_err_deg_abs_max": 0.271,
+  "min_h_min": 0.026,
+  "states": [
+   "running"
+  ]
+ },
+ "arm": {
+  "prep_ticks": 273,
+  "track_ticks": 0,
+  "track_err_max": null,
+  "clear_min_during_arm_motion": {
+   "env": 0.0465,
+   "base": 0.1493,
+   "self": 0.0063
+  }
+ },
+ "handover_judgements": {
+  "n": 0,
+  "first": [],
+  "last": [],
+  "note": "沒有進入追蹤，就沒有交接判定"
+ },
+ "stop_check": {
+  "trigger": {
+   "t": 87.6,
+   "what": "refuse_enter_reach_zone_global_stop",
+   "along_pred": 0.2231,
+   "lat_pred_mm": -32.86,
+   "yaw_err_deg": 0.408,
+   "arm_err_rad": 0.0
+  },
+  "t_to_still_s": 0.18,
+  "distance_m": 0.009,
+  "speed_at_trigger": 0.0497,
+  "decel_max": 4.98,
+  "accel_limit_released_chain": "平滑器／GUARD 的既有上限（未改）",
+  "arm_rate_max_during_stop": 0.0,
+  "arm_setpoint_rate_max": 0.0,
+  "arm_rate_after_still_max": 0.0,
+  "joints_within_limits": true,
+  "min_clear_during_stop": {
+   "env": 0.2249,
+   "base": 0.1577,
+   "self": 0.0064
+  },
+  "clear_ok": true,
+  "n_clear_samples": 24,
+  "final": {
+   "along": 0.2222,
+   "lat_mm": -32.86
+  },
+  "note": "停止時手臂在準備段終點（觀察追蹤作業起點解）；淨空以把手估計（真值座標）＋已知門幾何計算"
+ }
+}

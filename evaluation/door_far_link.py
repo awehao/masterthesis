@@ -266,7 +266,7 @@ def handover_request(t, auth, line, q, v_meas_world, s_arm, pipe, u_last, u_prev
                 base_cmd_route='抓持控制器的底盤命令仍送入 /cmd_vel_pre_shield → Shield → GUARD → /cmd_vel（不旁路安全鏈）'), []
 
 
-def pregrasp_from_estimate(T_WH, T_at, s_pre, K, clear_fn=None, thr=None, sig_floor=None, lo=None, hi=None, collect=None):
+def pregrasp_from_estimate(T_WH, T_at, s_pre, K, clear_fn=None, thr=None, sig_floor=None, lo=None, hi=None, collect=None, standoffs=None, alongs=None):
     """由把手估計產生預抓構型與底盤通過線位置（不讀真值、不讀既有趟的預抓關節角）：
     候選：底盤在門面外法向上、朝向正對門（−n）、側向距離 standoff ∈ [0.36, 0.56] m（每 1 cm）；每個候選以通用種子格點多起點解 IK 到「抓取位姿後退 s_pre」，
     再由該解連續解到抓取位姿（s＝0）；兩個構型都須：殘差 <1e-6、在關節限位內、可操作度 ≥ sig_floor、淨空 ≥ thr（若給 clear_fn）。
@@ -283,8 +283,8 @@ def pregrasp_from_estimate(T_WH, T_at, s_pre, K, clear_fn=None, thr=None, sig_fl
     Tp, Tg = np.asarray(T_at(T_WH, s_pre), float), np.asarray(T_at(T_WH, 0.0), float)
     seeds = [np.array(s_) for s_ in itertools.product((-0.6, 0.0, 0.6), (-0.3, 0.2), (0.6, 1.4), (-1.5, 0.0, 1.5), (-0.7, 0.7), (0.0,))]
     best, stat = None, dict(n_candidates=0, n_ik_ok=0, n_feasible=0)
-    for so in np.arange(0.36, 0.5601, 0.01):
-        for lat_along in np.arange(-0.12, 0.1201, 0.02):               # 底盤沿通過方向相對把手的偏移（抓取瞬間）
+    for so in (np.arange(0.36, 0.5601, 0.01) if standoffs is None else standoffs):
+        for lat_along in (np.arange(-0.12, 0.1201, 0.02) if alongs is None else alongs):               # 底盤沿通過方向相對把手的偏移（抓取瞬間）
             b = np.r_[T_WH[:2, 3] + so * n[:2] + lat_along * d[:2], yaw]
             sols = []
             for sd in seeds:

@@ -103,7 +103,10 @@ def generate_launch_description():
     # smoother rate-limits it onto /cmd_vel. When OFF, GMPC drives /cmd_vel
     # directly (one fewer lifecycle dependency -> fewer launch flakes; jerk is
     # already handled by gmpc.py's accept-suboptimal-OSQP-solution path).
-    gmpc_cmd_topic = PythonExpression(
+    # GMPC_CMD_TOPIC（預設空＝原行為）：遠距進線模式要在平滑器之前插入命令選擇器時，把導航 GMPC 的輸出改到另一個話題；
+    # 平滑器仍只吃 cmd_vel_nav，之後的 Shield／GUARD 不變。未設定時與原本逐字相同。
+    _gmpc_cmd_env = os.environ.get('GMPC_CMD_TOPIC', '')
+    gmpc_cmd_topic = _gmpc_cmd_env if _gmpc_cmd_env else PythonExpression(
         ["'cmd_vel_nav' if '", use_smoother, "' == 'true' else 'cmd_vel'"])
 
     # Read once: the smoother's output topic depends on it, and a launch-time

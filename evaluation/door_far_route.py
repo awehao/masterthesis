@@ -51,10 +51,10 @@ def _wrap(a):
     return (np.asarray(a, float) + math.pi) % (2 * math.pi) - math.pi
 
 
-def select_pregrasp(T_WH, q_now, T_at, s_pre, K, clear_fn, thr, sig_floor, lo, hi, v_pass):
+def select_pregrasp(T_WH, q_now, T_at, s_pre, K, clear_fn, thr, sig_floor, lo, hi, v_pass, standoffs=None, alongs=None):
     t0 = time.perf_counter()
     cands = []
-    _, stat = FL.pregrasp_from_estimate(T_WH, T_at, s_pre, K, clear_fn=clear_fn, thr=thr, sig_floor=sig_floor, lo=lo, hi=hi, collect=cands)
+    _, stat = FL.pregrasp_from_estimate(T_WH, T_at, s_pre, K, clear_fn=clear_fn, thr=thr, sig_floor=sig_floor, lo=lo, hi=hi, collect=cands, standoffs=standoffs, alongs=alongs)
     t_gen = time.perf_counter() - t0
     Tp = np.asarray(T_at(T_WH, s_pre), float)
     ok, rej = [], {}
@@ -226,3 +226,21 @@ def track_start_decision(q, base_pipe, pg, arm_q, br, phys):
         return 'wait', info
     ok = abs(lat) <= FL.LINE_TOL['lateral_m'] and abs(yaw_e) <= FL.LINE_TOL['yaw_rad'] and arm_err <= 0.05
     return ('start' if ok else 'refuse'), info
+
+
+def select_pregrasp_first(T_WH, q_now, T_at, s_pre, K, clear_fn, thr, sig_floor, lo, hi, v_pass, budget_s=8.0):
+    """限時、找到合格候選即止的搜尋（Codex 20261116：背景計算要進時間線）。驗收條件與 select_pregrasp 完全相同，只是逐格（側向距離由 0.45 m 往外、沿線偏移由 0 往外）
+    依序試，第一個通過全部條件的就回傳——**不是最優**。超過 budget_s 仍無解 ⇒ 回 None（呼叫端不得伸臂）。"""
+    t0 = time.perf_counter()
+    so_all = sorted(np.arange(0.36, 0.5601, 0.01), key=lambda x: abs(x - 0.45))
+    al_all = sorted(np.arange(-0.12, 0.1201, 0.02), key=lambda x: abs(x))
+    n = 0
+    for so in so_all:
+        for al_ in al_all:
+            if time.perf_counter() - t0 > budget_s:
+                return None, dict(why='budget_exceeded', n_cells=n, t_total_s=round(time.perf_counter() - t0, 2))
+            n += 1
+            pg, info = select_pregrasp(T_WH, q_now, T_at, s_pre, K, clear_fn, thr, sig_floor, lo, hi, v_pass, standoffs=[so], alongs=[al_])
+            if pg is not None:
+                return pg, dict(mode='first_feasible（非最優）', n_cells=n, t_total_s=round(time.perf_counter() - t0, 2), last=info)
+    return None, dict(why='no_feasible', n_cells=n, t_total_s=round(time.perf_counter() - t0, 2))

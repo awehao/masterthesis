@@ -12,7 +12,7 @@ mv = np.where(np.abs(u).max(axis=1) > 1e-6)[0]
 t0, t1 = float(t[mv[0]]), float(t[mv[-1]])
 along = -((q[:, :2] - P0) @ DV); lat = (q[:, :2] - P0) @ NV
 sp = np.hypot(*(np.diff(q[:, :2], axis=0).T)) / 0.01
-win = (along[1:] <= 0.25) & (along[1:] >= -0.05) & (np.abs(lat[1:]) < 0.5) & (t[1:] >= t0)
+win = (along[1:] <= 0.25) & (along[1:] >= -0.05) & (np.abs(lat[1:]) <= 0.010) & (t[1:] >= t0)   # 側向條件＝登錄的 10 mm
 out = dict(sources=json.load(open(os.path.join(D, 'n3_world_meta.json')))['sources'], goal=GOAL.tolist(), start=q[0].tolist(), end=q[-1].tolist(), motion_t=[t0, t1], duration_s=round(t1 - t0, 2),
            goal_err=dict(dist=round(float(np.linalg.norm(q[-1, :2] - GOAL)), 3), dx=round(float(q[-1, 0] - GOAL[0]), 3), dy=round(float(q[-1, 1] - GOAL[1]), 3)), speed_max=round(float(sp.max()), 3), scan_min=round(float(np.nanmin(L[:, -1])), 3),
            plan=dict(n=len(P), first_n_poses=P[0]['n'] if P else None, last_xy=P[-1]['xy'][-1] if P else None),
@@ -23,7 +23,7 @@ out = dict(sources=json.load(open(os.path.join(D, 'n3_world_meta.json')))['sourc
 lay = {}
 for k in ('cmd_vel_nav', 'cmd_vel_pre_shield', 'cmd_vel_smoothed', 'cmd_vel'):
     A = C[k]; m = (A[:, 0] >= t1 - 3.0) & (A[:, 0] <= t1 + 0.5)
-    lay[k] = dict(n=int(len(A)), last3s_speed_mean=round(float(np.hypot(A[m, 1], A[m, 2]).mean()), 4) if m.any() else None, max_speed=round(float(np.hypot(A[:, 1], A[:, 2]).max()), 4), max_wz=round(float(np.abs(A[:, 3]).max()), 3))
+    lay[k] = dict(n=int(len(A)), last3s_of_motion_speed_mean=round(float(np.hypot(A[m, 1], A[m, 2]).mean()), 4) if m.any() else None, max_speed=round(float(np.hypot(A[:, 1], A[:, 2]).max()), 4), max_wz=round(float(np.abs(A[:, 3]).max()), 3))
 out['layers'] = lay
 # Shield／GUARD 是否改過命令：同時刻附近 pre_shield 對 smoothed、smoothed 對 cmd_vel 的差
 def diff(a, b):

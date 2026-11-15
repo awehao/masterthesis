@@ -23,6 +23,7 @@ from std_msgs.msg import Float64MultiArray
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WS = os.path.dirname(HERE)
 DT = 0.01
+D_STEPS = 8
 SCAN_N, SCAN_MIN, SCAN_MAX = 360, -3.14159, 3.14159
 SCAN_INC = (SCAN_MAX - SCAN_MIN) / (SCAN_N - 1)
 RANGE_MIN, RANGE_MAX = 0.12, 10.0
@@ -85,8 +86,9 @@ class World(Node):
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 10)
         self.create_subscription(Float64MultiArray, '/far/arm_cmd', self._acmd, 10)
         self.log = []
+        self.pipe = [np.zeros(9) for _ in range(D_STEPS)]              # 命令到受控對象的 8 步在途管線（同門任務控制器的延遲模型；底盤與手臂都經過）
         self.v_world, self.wz = np.zeros(2), 0.0
-        self.meta = dict(boxes=[b[0] for b in self.boxes], lidar_z=self.lidar_z, lidar_xy=self.lidar_xy.tolist(), sources=dict(scan='合成射線投射（已知場景幾何＋關閉門扇；無雜訊）', odom='/cmd_vel 理想積分', clock='本節點', joint_states='一階設定點模型'))
+        self.meta = dict(boxes=[b[0] for b in self.boxes], lidar_z=self.lidar_z, lidar_xy=self.lidar_xy.tolist(), sources=dict(scan='合成射線投射（已知場景幾何＋關閉門扇；無雜訊）', odom='/cmd_vel 理想積分', clock='本節點', joint_states='一階設定點模型', delay='命令經 8 個物理步（0.08 s）在途管線才作用（底盤與手臂）'))
         self.timer = self.create_timer(DT, self.step)
 
     def _cmd(self, m):
@@ -104,8 +106,11 @@ class World(Node):
         return s
 
     def step(self):
-        u = self.cmd if self.t - self.cmd_t <= 0.5 else np.zeros(3)
-        ua = self.acmd if self.t - self.acmd_t <= 0.2 else np.zeros(6)
+        u_in = self.cmd if self.t - self.cmd_t <= 0.5 else np.zeros(3)
+        ua_in = self.acmd if self.t - self.acmd_t <= 0.2 else np.zeros(6)
+        self.pipe.append(np.r_[u_in, ua_in])
+        ue = self.pipe.pop(0)
+        u, ua = ue[:3], ue[3:]
         c, s_ = math.cos(self.q[2]), math.sin(self.q[2])
         self.v_world, self.wz = np.array([c * u[0] - s_ * u[1], s_ * u[0] + c * u[1]]), float(u[2])
         self.q[:2] += DT * self.v_world
@@ -130,7 +135,8 @@ class World(Node):
             js.name = ARM + ['finger_joint1', 'finger_joint2']
             js.position = [float(x) for x in self.q[3:]] + [0.0089, 0.0089]
             self.p_js.publish(js)
-            self.p_truth.publish(Float64MultiArray(data=[self.t, *[float(x) for x in self.q], *[float(x) for x in self.s], *[float(x) for x in u], *[float(x) for x in ua]]))
+            s_end = self.s + DT * sum(p_[3:] for p_ in self.pipe)
+            self.p_truth.publish(Float64MultiArray(data=[self.t, *[float(x) for x in self.q], *[float(x) for x in self.s], *[float(x) for x in s_end], *[float(x) for x in np.concatenate(self.pipe)]]))   # t, q9, s6, s_end6, 在途命令 8×9
         if self.n % 10 == 0:
             cy, sy = math.cos(self.q[2]), math.sin(self.q[2])
             pl = self.q[:2] + np.array([cy * self.lidar_xy[0] - sy * self.lidar_xy[1], sy * self.lidar_xy[0] + cy * self.lidar_xy[1]])
@@ -143,13 +149,13 @@ class World(Node):
             m.ranges = [float(x) for x in r]
             self.p_scan.publish(m)
             self.scan_min = float(np.min(r))
-        self.log.append(np.r_[self.t, self.q, self.s, u, ua, getattr(self, 'scan_min', np.nan)])
+        self.log.append(np.r_[self.t, self.q, self.s, u, ua, getattr(self, 'scan_min', np.nan), u_in, ua_in])
         if self.t >= self.t_end:
             self.save()
             raise SystemExit(0)
 
     def save(self):
-        np.savez_compressed(self.out + '_world.npz', L=np.array(self.log), cols=np.array(['t'] + [f'q{i}' for i in range(9)] + [f's{i}' for i in range(6)] + ['ux', 'uy', 'uw'] + [f'ua{i}' for i in range(6)] + ['scan_min']))
+        np.savez_compressed(self.out + '_world.npz', L=np.array(self.log), cols=np.array(['t'] + [f'q{i}' for i in range(9)] + [f's{i}' for i in range(6)] + ['ux', 'uy', 'uw'] + [f'ua{i}' for i in range(6)] + ['scan_min', 'uin_x', 'uin_y', 'uin_w'] + [f'uain{i}' for i in range(6)]))
         json.dump(self.meta, open(self.out + '_world_meta.json', 'w'), ensure_ascii=False, indent=1)
 
 

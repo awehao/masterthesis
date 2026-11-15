@@ -156,7 +156,7 @@ def run(case, prep_dist):
     return dict(case=case, t_end=round(t, 2), mode_end=mode, events=ev[:14], first_decisions=dec_log[:3], route=dict(base=route.base, arm=route.arm, stop=route.stop, n_rejected=route.n_rejected),
                 final=dict(along=round(float(-(r @ d)), 4), lat_mm=round(float(r @ n_) * 1e3, 2), base_speed=round(float(np.linalg.norm(q[:2] - q_last[:2]) / PHYS), 5), arm_rate=round(float(np.abs(q[3:] - q_last[3:]).max() / PHYS), 5)),
                 lag_timeline_head=lag_tl[:8], lag_after_1s_max=(max((x[2] for x in lag_tl[20:]), default=None)), tracking=dict(n_ticks=n_trk, n_fail=trk_fail, lag_max_rad=round(lag_max, 5), n_clipped=trk.n_clip, sigma_min=None if not np.isfinite(sig_min) else round(float(sig_min), 4), sigma_ok=bool(sig_min >= W.SIG_FLOOR), wrist_sees_ticks=n_see, lat_max_mm=round(lat_max * 1e3, 2)),
-                min_clear={k_: (None if not np.isfinite(v_) else round(v_, 4)) for k_, v_ in mc.items()}, clear_ok=bool(all(mc[k_] >= W.THR[k_] for k_ in mc)))
+                min_clear={k_: (None if not np.isfinite(v_) else round(v_, 4)) for k_, v_ in mc.items()}, clear_ok=(bool(all(mc[k_] >= W.THR[k_] for k_ in mc)) if all(np.isfinite(v_) for v_ in mc.values()) else '未覆蓋／未驗證（沒有淨空樣本）'))
 
 
 out['nominal'] = run('nominal', prep_dist=0.9)
