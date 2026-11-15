@@ -202,6 +202,8 @@ class DoorOpenExec:
         self.sigma, self.g, self.t, self.n_step = (-D_STEPS * PHYS if START_LAT_ALIGN else 0.0), 0.0, 0.0, 0
         self._se_end = self.sigma + D_STEPS * PHYS                     # r17：上一個真正已提交命令的參考終點（只在提交時更新）；起始＝第一拍求解的起點
         self._se_cand = self._se_end
+        self._hold = None                                             # r20（B1）：閉鏈一致停法的底盤保持錨點（世界 x, y, yaw）；None＝未啟用
+        self.hold_log = []
         self.stop, self.done, self.stopped_t, self.stop_ok, self._still = None, False, None, None, 0
         self.events, self.rec, self.fail_inject = [], [], None
         self.solve_ms, self.sweep_ms, self.tick_ms = [], [], []
@@ -602,7 +604,7 @@ class DoorOpenExec:
 
     def _cs_state(self, q, **kw):
         seed = self.q_cl_prev if self.q_cl_prev is not None else np.asarray(q[3:], float)
-        return dict(q=np.asarray(q, float), s=self.s, pipe=self.pipe, u_prev=self.u_last, sigma=self.sigma, g=self.g, seed=seed, Xd=self.Xd, se_end=self._se_end, **kw)
+        return dict(q=np.asarray(q, float), s=self.s, pipe=self.pipe, u_prev=self.u_last, sigma=self.sigma, g=self.g, seed=seed, Xd=self.Xd, se_end=self._se_end, base_hold=self._hold, **kw)
 
     def _cs_bg(self, ver, out):
         """背景執行緒（主程序求解期間）：等向前模擬 → 取樣構型送計算池核淨空 → 收結果。只寫自己這次請求的 out（不寫控制器狀態）。
@@ -629,6 +631,8 @@ class DoorOpenExec:
     def _cs_submit(self, q):
         """現在停（實際會用的閉鏈一致停法）的向前模擬：送獨立程序＋背景執行緒，與求解並行。"""
         import threading
+        if self._cs_th is not None and self._cs_th.is_alive():         # 作廢的上一筆仍在用計算池：先等它結束（同一時間只一個執行緒用池）
+            self._cs_th.join(0.3)
         self._cs_obj()
         out = dict(done=False, xd_ver=self._xd_ver, t=self.t)           # 每次請求自己的結果盒：遲到的執行緒只會寫到舊盒，不覆寫下一拍
         ver_ = self._csw.submit(self._cs_state(q))
@@ -967,15 +971,22 @@ class DoorOpenExec:
             if self.q_tick is not None:
                 self.rate = dict(base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / self.cfg.dt, yaw=abs(q[2] - self.q_tick[2]) / self.cfg.dt, arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / self.cfg.dt, door=abs(phi_meas - self.phi_tick) / self.cfg.dt)
             self.q_tick, self.phi_tick = q.copy(), float(phi_meas)
-            w_m = time.perf_counter()
-            m = self._monitor(q, phi_meas)
-            self.mon_ms.append((time.perf_counter() - w_m) * 1e3)
-            if self.stop is None:
+            early_sn = False
+            if self.stop is None:                                      # r20（A2）：進度率先算（只用 σ 與實測門角），現在停提前到監看之前派工——用本拍狀態、更新後的 g、同一參考版本
                 x_ref = self.ref(self.sigma)
                 lead = float(x_ref[9] - phi_meas)
                 self.g = float(np.clip((LEAD_MAX - lead) / LEAD_BAND, 0.0, 1.0)) if self.sigma < self.sig_end else 0.0
                 if self.g_inject is not None:
                     self.g = float(self.g_inject(self, self.g))
+                if self._pool is not None and self._cs_on():
+                    w0 = time.perf_counter()
+                    self._cs_submit(q)
+                    self._sn, early_sn = 'cstop', True
+                    self.sweep_ms.append((time.perf_counter() - w0) * 1e3)
+            w_m = time.perf_counter()
+            m = self._monitor(q, phi_meas)
+            self.mon_ms.append((time.perf_counter() - w_m) * 1e3)
+            if self.stop is None:
                 if m is not None:
                     self._stop(m[0], **m[1])
                 else:
@@ -998,7 +1009,9 @@ class DoorOpenExec:
                         self._stop('end_not_reached', phi_meas_deg=round(math.degrees(phi_meas), 3), rates={k: round(v, 5) for k, v in self.rate.items()})
                 if self.stop is None:
                     w0 = time.perf_counter()
-                    if self._pool is not None:                         # r9：現在停先派工，與求解同時算，求解後才收
+                    if early_sn:
+                        pass                                           # 已在監看前派工
+                    elif self._pool is not None:                         # r9：現在停先派工，與求解同時算，求解後才收
                         if self._cs_on():
                             self._cs_submit(q)                         # r16：綁定中「現在停」核實際會用的閉鏈一致停法（獨立程序模擬＋背景執行緒送淨空；與求解並行）
                             self._sn = 'cstop'
@@ -1013,6 +1026,8 @@ class DoorOpenExec:
                             self._stop('stop_sweep_violation', **b_)
                         else:
                             self._sn_verified = True
+                if self.stop is not None and self._sn == 'cstop':      # 監看或其他判定已停止 ⇒ 提前派工的結果作廢
+                    self._sn = None
             elif m is not None and m[0] not in ('setpoint_model_deviation',) and self.stop_mode == 'path':
                 self._stop(m[0] if m[0].startswith('path_') else 'path_' + m[0], **m[1])
             elif m is not None and m[0] not in ('setpoint_model_deviation',) and self.stop_mode == 'cstop':   # r16：備援停止中監看違反 ⇒ 模擬中止
@@ -1127,11 +1142,16 @@ class DoorOpenExec:
                 if self.stopped_t is None:
                     self.stopped_t = self.t
                 seed = self.q_cl_prev if self.q_cl_prev is not None else np.asarray(q[3:], float)
-                rc = self._cs_obj().step_cmd(q, self.s, self.pipe, self.u_last, self.sigma, self.g, seed, self._se_end)   # r17：_cs_obj 每次設成當下參考；起點＝已提交終點
+                rc = self._cs_obj().step_cmd(q, self.s, self.pipe, self.u_last, self.sigma, self.g, seed, self._se_end, self._hold)   # r17：_cs_obj 每次設成當下參考；起點＝已提交終點
                 if not rc['ok']:
                     self._stop('cstop_cmd_invalid', cs_why=rc.get('why'))
                 else:
                     self.u_last, self.sigma, self.g, self.q_cl_prev, self._se_end = rc['u'], rc['sigma'], rc['g'], rc['q1'], rc['se_end']
+                    if rc['hold'] is not None and self._hold is None:
+                        self._ev('base_hold_anchor', anchor=[round(float(x), 5) for x in rc['hold']])
+                    self._hold = rc['hold']
+                    if self._hold is not None:
+                        self.hold_log.append((round(self.t, 3), float(np.hypot(rc['u'][0], rc['u'][1])), float(abs(rc['u'][2])), float(np.hypot(*(q[:2] - self._hold[:2]))), float(abs(q[2] - self._hold[2]))))
                     self.cs_log.append((round(self.t, 3), round(self.g, 3), float(np.abs(rc['u'][3:]).max()), round(self._se_end, 4)))
             if self.stop is not None and self.stop_mode == 'settled':
                 if self.stopped_t is None:
@@ -1160,11 +1180,14 @@ class DoorOpenExec:
             wy = abs(q[2] - self.q_last[2]) / PHYS
             dd = abs(phi_meas - self.phi_last) / PHYS
             empty = not np.any(self.u_last) and not any(np.any(u) for u in self.pipe)
+            hold_on = self.stop_mode == 'cstop' and self._hold is not None
+            if hold_on:                                                # r20（B1）：保持模式下「管線」一項＝運動管線已清空且保持啟用（保持輸出另列，不是零命令）；實測速率門檻與持續時間不變
+                empty = True
             st = dict(pipe=bool(empty), arm=bool(dq < STOP_STILL['arm_rps']), base=bool(vb < STOP_STILL['base_mps'] and wy < STOP_STILL['yaw_rps']), door=bool(dd < STOP_STILL['door_rps']))
             self._still = self._still + 1 if all(st.values()) else 0
             lim = STOP_STILL['timeout_s'] + (3.0 if not self.bound else 0.0)   # 解除後門自由減速需要較久
             if self._still * PHYS >= STOP_STILL['hold_s'] or self.t - self.stopped_t >= lim:
-                self.stop_ok = dict(t=round(self.t, 3), since_stop_s=round(self.t - self.stopped_t, 3), parts=st, arm_rate=dq, base_speed=vb, yaw_rate=wy, door_rate=dd, bound=self.bound, ok=bool(self._still * PHYS >= STOP_STILL['hold_s']))
+                self.stop_ok = dict(t=round(self.t, 3), since_stop_s=round(self.t - self.stopped_t, 3), parts=st, base_hold=None if not hold_on else dict(active=True, anchor=[round(float(x), 5) for x in self._hold], cmd_now=[round(float(x), 5) for x in self.u_last[:3]], pipe_zero=bool(not np.any(self.u_last) and not any(np.any(u) for u in self.pipe)), note='pipe 項＝運動管線清空＋保持啟用；保持輸出非零時不是零命令'), arm_rate=dq, base_speed=vb, yaw_rate=wy, door_rate=dd, bound=self.bound, ok=bool(self._still * PHYS >= STOP_STILL['hold_s']))
                 if self.stop_mode == 'cstop' and not self.stop_ok['ok']:        # r16：備援 4 s 內未停穩 ⇒ 模擬中止
                     self._stop('cstop_not_settled', parts=st)
         self.q_last, self.phi_last = q.copy(), float(phi_meas)
@@ -1206,5 +1229,5 @@ class DoorOpenExec:
                     phi_end_last_tick_deg=round(math.degrees(float(Rr[-1, 3])), 3), phi_end_deg=round(math.degrees(float(Rr[-1, 3])), 3), phi_end_note='最後控制拍的門角；最終物理紀錄的門角由執行器另報', t_end=round(float(self.t), 2),
                     base_cmd_phys=dict(acc_max=[round(float(x), 3) for x in (np.abs(np.diff(np.array(self.cmd_hist), axis=0)).max(axis=0) / PHYS if len(self.cmd_hist) > 1 else np.zeros(3))], limit=LIM.A_BODY.tolist(), ramp=BASE_RAMP, note='逐物理步命令差分（世界前的本體命令）'), limits=LIM.summary(),
                     timing=dict(solve_ms=pct(self.solve_ms), sweep_ms=pct(self.sweep_ms), whole_tick_ms=pct(self.tick_ms), monitor_ms=pct(self.mon_ms), closure_arm_ms=pct(self.cl_ms), candidate_check_ms=pct(self.cand_ms), stop_now_collect_ms=pct(self.sn_ms), prep_ms=pct(self.prep_ms),
-                                note='solve_ms 含 closure_arm_ms；sweep_ms 含 stop_now_collect＋candidate_check；整拍另含監看與其他'),
+                                note='solve_ms＝QP（不含 closure_arm_ms）；sweep_ms 含 stop_now_collect＋candidate_check；整拍另含監看與其他'),
                     params=dict(T_STOP=T_STOP, PATH_STOP_MAX_S=PATH_STOP_MAX_S, PATH_OK=list(PATH_OK), FORCE_LIMIT_N=FORCE_LIMIT_N, LEAD_MAX_deg=3.0, LEAD_BAND_deg=1.0, STALL_S=STALL_S, CL_TOL=CL_TOL, STRESS_TOL=STRESS_TOL, END={k: (round(math.degrees(v), 3) if k == 'phi_tol' else v) for k, v in END.items()}, STOP_STILL=STOP_STILL, thresholds=W.THR, finger_q=W.FINGER_Q))

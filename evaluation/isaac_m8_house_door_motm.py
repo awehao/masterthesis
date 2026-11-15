@@ -49,6 +49,11 @@ import door_first_seg as FSG                                     # noqa: E402
 import door_cstop as DCS                                         # noqa: E402
 POOL = DSP.SweepPool(8)
 PLANNER = PS.PlannerServer()
+PLANNER_FS = PS.PlannerServer()                                      # A1：首段滾動規劃用獨立程序（低優先權；交接時若仍在算即終止——可控取消，不停車等、不佔開門拍的核心）
+try:
+    os.setpriority(os.PRIO_PROCESS, PLANNER_FS.proc.pid, 10)
+except Exception:                                                # noqa: BLE001
+    pass
 CSW = DCS.CStopWorker()                                              # 閉鏈一致備援停法的向前模擬程序（Codex 20261115_005224）
 
 from isaacsim import SimulationApp                               # noqa: E402
@@ -516,7 +521,7 @@ def main():
     capture(0.0)
     gc = G.MovingGraspCtrl(ident, est_fn, np.array([-1.0, 0.0]), V, (L_LEAD, L_LEAD + 0.22), s0.copy(), [np.zeros(9) for _ in range(G.D_STEPS)], np.zeros(9), np.zeros(9), off_static,
                            sched=dict(hold_s=0.3 + T_LEAD), pool=POOL, fastkin=True, deadline_ms=50.0)
-    fs = FSG.FirstSeg([PLANNER], G.DT)                               # 首段計畫管理（執行器與離線核對共用；提前滾動更新）
+    fs = FSG.FirstSeg([PLANNER_FS], G.DT)                               # 首段計畫管理（執行器與離線核對共用；提前滾動更新）
     first = dict(ok=False, res=None, sel=None)
     gc.close_gate = lambda cc: fs.gate_ok()                          # 照本排程 READY 時刻算的首段已可用且可行
     ev = []
@@ -606,6 +611,10 @@ def main():
                 log_event('handover_attempt', bind_ok=okb, bind=okd, bind_values=c, dry_ok=valid, dry=dry, ready_ver=gc.ready_ver, warmup_ms=round(wu, 1), dry_run_ms=round(dry_ms, 1),
                           handover_compute_ms=round((time.perf_counter() - w_ho) * 1e3, 1), note='交接計算在本體控制拍計時之外；計算期間物理不步進')
                 if okb and valid and gc.accept_handover(gc.ready_ver):
+                    if fs.pend[0] is not None:                         # A1：在途的首段滾動規劃已無用 ⇒ 終止該程序（之後不再送首段請求）
+                        PLANNER_FS.proc.kill()
+                        log_event('first_segment_cancelled', rid=fs.pend[0]['rid'], target=round(fs.pend[0]['target'], 3))
+                        fs.pend[0] = None
                     Rr0, Tg_b, _ = rel_T()
                     j = UsdPhysics.FixedJoint.Define(stage, JOINT)
                     j.CreateBody0Rel().SetTargets([Sdf.Path(str(grip[0]))])
@@ -682,11 +691,7 @@ def main():
                 if isinstance(dec, dict):
                     box['decisions'].append(dec)
                     log_event('p2_decision', ok=dec.get('ok'), ver=dec.get('ver'), why=dec.get('why'), dry=dec.get('dry'))
-            if fs.pend[0] is not None:                                   # 交接時仍在途的首段滾動請求：收掉丟棄（不得被當成 P2 結果）
-                if PLANNER.poll() is not None:
-                    fs.pend[0] = None
-                    log_event('first_segment_dropped', why='after_handover')
-            r_ = PLANNER.poll() if (box['pend'] is not None and fs.pend[0] is None) else None
+            r_ = PLANNER.poll() if box['pend'] is not None else None
             if r_ is not None:
                 pend = box['pend']; box['pend'] = None
                 rec = pend['rec']
@@ -707,7 +712,7 @@ def main():
                     if not okS:
                         rec['why'] = info.get('why')
                 log_event('p2_plan_result', k=rec['k'], result=rec['result'], plan_wall_s=rec['plan_wall_s'], final=rec['final'])
-            if box['pend'] is None and fs.pend[0] is None and ex.stop is None and ex.p2_open and not a.diag and t >= box['t_next'] - 1e-9:
+            if box['pend'] is None and ex.stop is None and ex.p2_open and not a.diag and t >= box['t_next'] - 1e-9:
                 sig_s = math.ceil((ex.sigma + L_LAT) / ex.h - 1e-9) * ex.h
                 rest = sig_s >= ex.sig_end - 1e-9
                 still_ok = ex.rate['arm'] <= XO.END['arm_rps'] and ex.rate['base'] <= XO.END['base_mps'] and ex.rate['door'] <= XO.END['door_rps']
@@ -769,7 +774,7 @@ def main():
             ex._stop('open_time_limit')
         rep_o = ex.report()
         res['open'] = {k_: rep_o.get(k_) for k_ in ('arm_mode', 'closure_anchor', 'closure_stats', 'stop', 'done', 'stop_effect', 'phi_end_deg', 't_end', 'closure_measured', 'min_clear_actual', 'force_max_n', 'timing')}
-        res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'], fb_log=ex.fb_log, cstop_ticks=len(ex.cs_log), stop_mode=ex.stop_mode, tick_ms_normal=[round(float(m), 1) for i, m in enumerate(ex.tick_ms) if ex.stop is None or i * 0.05 < float(ex.stop['t']) - 1e-9])
+        res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'], fb_log=ex.fb_log, base_hold_log_tail=ex.hold_log[-5:], base_hold_n=len(ex.hold_log), base_hold_cmd_max=[max((x[1] for x in ex.hold_log), default=None), max((x[2] for x in ex.hold_log), default=None)], cstop_ticks=len(ex.cs_log), stop_mode=ex.stop_mode, tick_ms_normal=[round(float(m), 1) for i, m in enumerate(ex.tick_ms) if ex.stop is None or i * 0.05 < float(ex.stop['t']) - 1e-9])
         np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
     res['events'] = ev
     res['forbidden_contact'] = dict(latched=gate.latched)
@@ -848,6 +853,7 @@ if __name__ == '__main__':
     try:
         POOL.close()
         PLANNER.close()
+        PLANNER_FS.close()
         CSW.close()
     except Exception:                                              # noqa: BLE001
         pass

@@ -99,6 +99,8 @@ class Fake:
             c.confirm_unbind(True, detail=self.unbind_info)
         cs, sn = math.cos(self.q[2]), math.sin(self.q[2])
         vx, vy, wz = out['base_twist'] * self.v_scale
+        if getattr(self, 'yaw_drift', None) is not None:              # 測試用：底盤偏航外擾（命令之外的實際角速度）
+            wz = wz + float(self.yaw_drift(self))
         self.q[:3] += PHYS * np.array([cs * vx - sn * vy, sn * vx + cs * vy, wz])
         self.q[3:] = self.q[3:] + self.alpha * (out['arm_target'] - self.q[3:] + D_TRUE)
         if not self.bound:

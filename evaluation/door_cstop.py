@@ -13,6 +13,9 @@ import time
 import numpy as np
 
 T_STOP = 0.5
+K_HOLD = 2.0                                                         # 1/s：底盤保持比例增益（管線延遲 0.08 s ⇒ 增益×延遲＝0.16）
+HOLD_V = np.array([0.02, 0.02, 0.05])                                # 保持命令上限（m/s, m/s, rad/s）
+HOLD_DEAD = 1e-5                                                     # 保持命令死區（數值零）
 ARM_CMD_SETTLE = 0.005
 
 
@@ -58,7 +61,7 @@ class CStop:
         Tg = self.W.Rz4(-(float(phi) - self.phi_bind)) @ self.T_WH_bind @ self.T_HE
         return self.DFK.ik_closure_fc(Tg, np.asarray(b, float), seed)
 
-    def step_cmd(self, q, s, pipe, u_prev, sigma, g, seed, se_end):
+    def step_cmd(self, q, s, pipe, u_prev, sigma, g, seed, se_end, hold=None):
         """一拍的備援命令。回 dict(ok, u, sigma, g, q1, why)。q＝實測（或模擬）構型；pipe＝在途命令；u_prev＝上一拍提交命令。"""
         XO = self.XO
         DT, PHYS, NPH, D = XO.DT, XO.PHYS, XO.NPH, XO.D_STEPS
@@ -73,10 +76,22 @@ class CStop:
         c, s_ = math.cos(x[2]), math.sin(x[2])
         ub = np.array([ge * (c * dx[0] + s_ * dx[1]), ge * (-s_ * dx[0] + c * dx[1]), ge * dx[2]])
         dab = np.asarray(self.B.A_BASE, float) * DT
-        ub = np.clip(ub, u_prev[:3] - dab, u_prev[:3] + dab)
         qp, sp = np.asarray(q, float).copy(), np.asarray(s, float).copy()
         for u_in in pipe:
             qp, sp = self.S.plant_phys_step(qp, sp, u_in, self.cfg, 1)
+        # r3（B1，Codex 20261115）：底盤保持——減速尾端（g2＝0、參考前饋為零）且在途底盤命令已清空時，以當下實測位姿一次錨定（之後不重錨）；
+        #   保持命令＝K_HOLD·(錨點−管線清空後的預測位姿)（本體座標），速度上限 HOLD_V、加速度同 A_BASE、輪速上限同原式；
+        #   它是底盤命令本身 ⇒ 同樣進手臂閉鏈預測、管線與停止預測。不瞬移、不硬鎖。
+        if hold is None and g2 <= 0.0 and not np.any(ub) and not any(np.any(np.asarray(u_in)[:3]) for u_in in pipe) and not np.any(np.asarray(u_prev)[:3]):
+            hold = np.asarray(q[:3], float).copy()
+        if hold is not None:
+            e = np.asarray(hold, float) - qp[:3]
+            e[2] = (e[2] + math.pi) % (2 * math.pi) - math.pi
+            ch, sh = math.cos(qp[2]), math.sin(qp[2])
+            ub = K_HOLD * np.array([ch * e[0] + sh * e[1], -sh * e[0] + ch * e[1], e[2]])
+            ub = np.clip(ub, -HOLD_V, HOLD_V)
+            ub[np.abs(ub) < HOLD_DEAD] = 0.0
+        ub = np.clip(ub, u_prev[:3] - dab, u_prev[:3] + dab)
         b = qp[:3].copy()
         uf = np.asarray(pipe[-1][:3], float)
         for j in range(NPH):
@@ -106,8 +121,8 @@ class CStop:
             return dict(ok=False, why='manipulability', v=float(sm1))
         if g2 <= 0.0 and ge <= 0.0 and not np.any(ub) and float(np.abs(ua).max()) <= ARM_CMD_SETTLE:
             u = np.zeros(9)                                        # 停穩：命令歸零（設定點保持在閉鏈一致位置）
-            return dict(ok=True, u=u, sigma=se1 - D * PHYS * g2, g=g2, q1=q1, zeroed=True, se_end=se1)
-        return dict(ok=True, u=u, sigma=se1 - D * PHYS * g2, g=g2, q1=q1, zeroed=False, se_end=se1)
+            return dict(ok=True, u=u, sigma=se1 - D * PHYS * g2, g=g2, q1=q1, zeroed=True, se_end=se1, hold=hold)
+        return dict(ok=True, u=u, sigma=se1 - D * PHYS * g2, g=g2, q1=q1, zeroed=False, se_end=se1, hold=hold)
 
     def sim(self, st, max_ticks=80):
         """自狀態 st（q, s, pipe, u_prev, sigma, g, seed；可含 u_first, hold）起向前模擬到停穩。
@@ -123,6 +138,7 @@ class CStop:
         u_prev, sigma, g, seed = np.asarray(st['u_prev'], float).copy(), float(st['sigma']), float(st['g']), np.asarray(st['seed'], float).copy()
         hold = int(st.get('hold', 0))
         se_end = float(st['se_end'])
+        bh = None if st.get('base_hold') is None else np.asarray(st['base_hold'], float).copy()
         zeroed = False
         X, quiet = [np.r_[q, self.ref(sigma)[9]]], 0
         self._cl = [0.0, 0.0]
@@ -135,10 +151,10 @@ class CStop:
             elif zeroed:
                 u = np.zeros(9)                                      # 已歸零後不再重算命令：g＝0、參考與預測底盤終點不變、管線末設定點不變 ⇒ 本停法下一拍輸出仍是同一個（已歸零的）命令
             else:
-                r = self.step_cmd(q, s, pipe, u_prev, sigma, g, seed, se_end)
+                r = self.step_cmd(q, s, pipe, u_prev, sigma, g, seed, se_end, bh)
                 if not r['ok']:
                     return dict(ok=False, why=r['why'], n_ticks=n, X=np.array(X))
-                u, sigma, g, seed, zeroed, se_end = r['u'], r['sigma'], r['g'], r['q1'], r['zeroed'], r['se_end']
+                u, sigma, g, seed, zeroed, se_end, bh = r['u'], r['sigma'], r['g'], r['q1'], r['zeroed'], r['se_end'], r['hold']
             uf = np.asarray(pipe[-1][:3], float).copy()
             q_a = q.copy()
             for j in range(NPH):
