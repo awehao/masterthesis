@@ -1,0 +1,909 @@
+{
+ "run": "m8house_door_motm_4",
+ "mode": "nominal",
+ "scope": "理想感知（把手 prim 真值 30 Hz）＋理想抓持（FixedJoint）；非即時（控制計算期間物理不步進）；範圍：開到 85° 停穩為止（不解綁、不退出、不穿門）",
+ "init": {
+  "pass_line_from": "full_2 綁定底盤位姿 y／偏航（場景初始條件）",
+  "b_start": [
+   0.7639990234375,
+   -0.48907628655433655,
+   1.5672570642127734
+  ],
+  "lead_m": 0.01,
+  "lead_s": 0.2,
+  "v_pass": 0.05,
+  "q_arm_pregrasp": [
+   -0.20327399359844062,
+   -0.2795354870740042,
+   1.2784132719974204,
+   -1.5094767547143277,
+   -0.20724838762841266,
+   -0.062656164073562
+  ],
+  "note": "起點瞬移到通過線上窗口前 0.01 m、手臂預抓構型（抓取同側分支），靜置後從靜止起步；起跑後不瞬移。前導受 x≈0.80 m 腕部奇異限制（冒煙 2：0.15 m 前導在 1.9 s 手臂速率 1.61 rad/s 超限停止）"
+ },
+ "gains": {
+  "kp": 600.0,
+  "kd": 60.0
+ },
+ "door_readback": {
+  "hinge": {
+   "root": "/World/door",
+   "leaf_prim": "/World/door/leaf",
+   "joint_prim": "/World/door/hinge",
+   "handle_bar_prim": "/World/door/leaf/handle_bar",
+   "is_rigid_body": true,
+   "mass_kg": 8.0,
+   "center_of_mass": [
+    0.4749999940395355,
+    0.019999999552965164,
+    1.0099999904632568
+   ],
+   "diagonal_inertia": [
+    2.6677334308624268,
+    3.2683334350585938,
+    0.602733314037323
+   ],
+   "angular_damping": 2.0,
+   "joint_type": "PhysicsRevoluteJoint",
+   "joint_axis": "Z",
+   "joint_body0": [],
+   "joint_body1": [
+    "/World/door/leaf"
+   ],
+   "joint_local_pos0": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_rot0_wxyz": [
+    0.0,
+    1.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_rot1_wxyz": [
+    0.0,
+    1.0,
+    0.0,
+    0.0
+   ],
+   "limit_lower_deg": 0.0,
+   "limit_upper_deg": 110.0,
+   "joint_friction": 0.0,
+   "drive_stiffness": 0.0,
+   "drive_damping": 0.0,
+   "drive_max_force": 0.0,
+   "handle_bar": {
+    "axis": "X",
+    "radius": 0.013,
+    "length": 0.2,
+    "center_leaf_local": [
+     0.8,
+     -0.04,
+     0.85
+    ]
+   },
+   "handle_material": {
+    "bound_at": "/World/door/leaf/handle_bar",
+    "material": "/World/PhysicsMaterials/door_handle",
+    "static_friction": 1.0,
+    "dynamic_friction": 0.800000011920929,
+    "restitution": 0.0
+   },
+   "linear_damping": 0.0,
+   "collision_offsets": {
+    "wall_hinge_side": [
+     0.004000000189989805,
+     0.0
+    ],
+    "wall_latch_side": [
+     0.004000000189989805,
+     0.0
+    ],
+    "leaf_box": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post0": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post1": [
+     0.004000000189989805,
+     0.0
+    ],
+    "handle_bar": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post_in0": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post_in1": [
+     0.004000000189989805,
+     0.0
+    ],
+    "handle_bar_inner": [
+     0.004000000189989805,
+     0.0
+    ]
+   },
+   "wall_end_faces_x": {
+    "wall_hinge_side": -0.014999999999999902,
+    "wall_latch_side": 1.0
+   },
+   "collision_prims": [
+    "/World/door/frame/wall_hinge_side",
+    "/World/door/frame/wall_latch_side",
+    "/World/door/leaf/handle_bar",
+    "/World/door/leaf/handle_bar_inner",
+    "/World/door/leaf/leaf_box",
+    "/World/door/leaf/post0",
+    "/World/door/leaf/post1",
+    "/World/door/leaf/post_in0",
+    "/World/door/leaf/post_in1"
+   ],
+   "handle_bar_inner_prim": "/World/door/leaf/handle_bar_inner",
+   "handle_bar_inner": {
+    "axis": "X",
+    "radius": 0.013,
+    "length": 0.2,
+    "center_leaf_local": [
+     0.8,
+     0.08,
+     0.85
+    ]
+   },
+   "post_prims": [
+    "/World/door/leaf/post0",
+    "/World/door/leaf/post1"
+   ],
+   "post_inner_prims": [
+    "/World/door/leaf/post_in0",
+    "/World/door/leaf/post_in1"
+   ],
+   "posts": {
+    "post0": {
+     "center_leaf_local": [
+      0.7150000000000001,
+      -0.02,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    },
+    "post1": {
+     "center_leaf_local": [
+      0.885,
+      -0.02,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    },
+    "post_in0": {
+     "center_leaf_local": [
+      0.7150000000000001,
+      0.06,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    },
+    "post_in1": {
+     "center_leaf_local": [
+      0.885,
+      0.06,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    }
+   },
+   "leaf_box": {
+    "center_leaf_local": [
+     0.475,
+     0.02,
+     1.0099999999999998
+    ],
+    "half_size": [
+     0.475,
+     0.02,
+     0.9999999999999999
+    ]
+   },
+   "handle_material_by_bar": {
+    "handle_bar": {
+     "bound_at": "/World/door/leaf/handle_bar",
+     "material": "/World/PhysicsMaterials/door_handle",
+     "static_friction": 1.0,
+     "dynamic_friction": 0.800000011920929,
+     "restitution": 0.0
+    },
+    "handle_bar_inner": {
+     "bound_at": "/World/door/leaf/handle_bar_inner",
+     "material": "/World/PhysicsMaterials/door_handle",
+     "static_friction": 1.0,
+     "dynamic_friction": 0.800000011920929,
+     "restitution": 0.0
+    }
+   }
+  },
+  "leaf_rigid_body_damping": {
+   "angular": 2.0,
+   "linear": 0.0
+  }
+ },
+ "finger": {
+  "command": "CLOSE 段由張開斜降到 0（夾緊，同停車版）",
+  "geometry": "兩指各自實測開度；CLOSE 段掃掠另含預測閉合開度"
+ },
+ "settle": {
+  "base": [
+   0.7640088200569153,
+   -0.4890218675136566,
+   1.5672570639148466
+  ],
+  "arm_err_vs_pregrasp": [
+   0.00026,
+   0.00243,
+   -0.00097,
+   -0.00098,
+   0.0002,
+   -7e-05
+  ],
+  "off_static": [
+   0.00025793598792883676,
+   0.007107071812197052,
+   -0.009849023434513438,
+   -0.0011169324231765643,
+   0.00024100321963851923,
+   -6.680195433647618e-05
+  ],
+  "door_deg": 0.0
+ },
+ "grasp": {
+  "phases": [
+   [
+    "HOLD",
+    0.0
+   ],
+   [
+    "INSERT",
+    0.5
+   ],
+   [
+    "CLOSE",
+    1.5
+   ],
+   [
+    "CONFIRM",
+    2.0
+   ],
+   [
+    "READY",
+    2.3
+   ]
+  ],
+  "stop": null,
+  "abort": null,
+  "stop_effect": null,
+  "ready_t_rel": 2.3,
+  "accepted": true,
+  "accept_t_rel": 2.34,
+  "n_ready_revoked": 0,
+  "min_clear": {
+   "env": 0.035,
+   "base": 0.1888,
+   "self": 0.0098,
+   "shell_bar": 0.0066,
+   "finger_bar": -0.0004,
+   "stop_sweep": 0.0048
+  },
+  "limits": {
+   "arm_rate": 0.5301,
+   "arm_acc": 10.602,
+   "wheel_v": 0.0502,
+   "wheel_a": 1.0
+  },
+  "contact_lock": {
+   "t": 1.5,
+   "phi_deg": 0.0,
+   "est_ver": 1.48
+  },
+  "lock_inconsistency_max": {
+   "pos_mm": 0.30435946857111223,
+   "deg": 0.021770878194303813
+  },
+  "contact_stop": {
+   "used": false,
+   "n_ticks": 0
+  },
+  "fast_slip": {
+   "max_pos_mm": 0.012980388759116734,
+   "max_deg": 0.0012500645731945155,
+   "n_eval": 14
+  },
+  "n_deadline_miss": 0,
+  "tick_log": [
+   [
+    0.0,
+    37.828,
+    false
+   ],
+   [
+    0.05,
+    18.768,
+    false
+   ],
+   [
+    0.1,
+    18.482,
+    false
+   ],
+   [
+    0.15,
+    18.166,
+    false
+   ],
+   [
+    0.2,
+    18.842,
+    false
+   ],
+   [
+    0.25,
+    17.895,
+    false
+   ],
+   [
+    0.3,
+    18.934,
+    false
+   ],
+   [
+    0.35,
+    20.673,
+    false
+   ],
+   [
+    0.4,
+    18.032,
+    false
+   ],
+   [
+    0.45,
+    18.979,
+    false
+   ],
+   [
+    0.5,
+    18.751,
+    false
+   ],
+   [
+    0.55,
+    19.395,
+    false
+   ],
+   [
+    0.6,
+    19.064,
+    false
+   ],
+   [
+    0.65,
+    18.157,
+    false
+   ],
+   [
+    0.7,
+    18.271,
+    false
+   ],
+   [
+    0.75,
+    17.9,
+    false
+   ],
+   [
+    0.8,
+    17.806,
+    false
+   ],
+   [
+    0.85,
+    19.739,
+    false
+   ],
+   [
+    0.9,
+    20.951,
+    false
+   ],
+   [
+    0.95,
+    19.193,
+    false
+   ],
+   [
+    1.0,
+    19.37,
+    false
+   ],
+   [
+    1.05,
+    18.752,
+    false
+   ],
+   [
+    1.1,
+    20.237,
+    false
+   ],
+   [
+    1.15,
+    18.344,
+    false
+   ],
+   [
+    1.2,
+    18.288,
+    false
+   ],
+   [
+    1.25,
+    18.474,
+    false
+   ],
+   [
+    1.3,
+    17.972,
+    false
+   ],
+   [
+    1.35,
+    18.02,
+    false
+   ],
+   [
+    1.4,
+    17.729,
+    false
+   ],
+   [
+    1.45,
+    17.632,
+    false
+   ],
+   [
+    1.5,
+    34.136,
+    false
+   ],
+   [
+    1.55,
+    36.237,
+    false
+   ],
+   [
+    1.6,
+    34.611,
+    false
+   ],
+   [
+    1.65,
+    35.753,
+    false
+   ],
+   [
+    1.7,
+    36.257,
+    false
+   ],
+   [
+    1.75,
+    35.701,
+    false
+   ],
+   [
+    1.8,
+    35.129,
+    false
+   ],
+   [
+    1.85,
+    35.965,
+    false
+   ],
+   [
+    1.9,
+    33.575,
+    false
+   ],
+   [
+    1.95,
+    36.101,
+    false
+   ],
+   [
+    2.0,
+    28.015,
+    false
+   ],
+   [
+    2.05,
+    25.111,
+    false
+   ],
+   [
+    2.1,
+    24.45,
+    false
+   ],
+   [
+    2.15,
+    24.494,
+    false
+   ],
+   [
+    2.2,
+    24.8,
+    false
+   ],
+   [
+    2.25,
+    24.582,
+    false
+   ],
+   [
+    2.3,
+    24.801,
+    false
+   ]
+  ]
+ },
+ "first_segment": {
+  "t_req": 0.05,
+  "wall_req": 0.09648242600087542,
+  "t_avail": 0.8300000000000005,
+  "wall_avail": 1.548032279999461,
+  "ok": true,
+  "t_ready_pred": 2.25,
+  "phi_req": 2.2901579938006122e-11,
+  "feasible": true,
+  "failed": [],
+  "final": false,
+  "plan_wall_s": 1.424,
+  "info": {
+   "why": "stalled_trust_region",
+   "iters": 17,
+   "phi_end_deg": 54.44,
+   "min_clear": {
+    "env": 0.0357,
+    "base": 0.0226,
+    "self": 0.0109,
+    "shell_bar": 0.0072
+   }
+  }
+ },
+ "open": {
+  "arm_mode": "closure",
+  "closure_anchor": {
+   "t": 0.0,
+   "q0": [
+    0.6512772440910339,
+    -0.4891121983528137,
+    1.5676845658155907,
+    -0.6379397511482239,
+    0.08938132971525192,
+    1.6164196729660034,
+    -1.5096898078918457,
+    -0.6425942778587341,
+    -0.07562988251447678
+   ],
+   "s0": [
+    -0.653462826084417,
+    0.09031853704912361,
+    1.6413275494266235,
+    -1.5147454691410867,
+    -0.6574347255737121,
+    -0.06897721546802617
+   ],
+   "G0": [
+    0.0,
+    6.141032054653316,
+    -5.325517418504352,
+    -0.24421563928589243,
+    0.030963544084647708,
+    1.2429979742164485e-06
+   ],
+   "off0": [
+    0.00025793598792883676,
+    0.012614578302656658,
+    -0.009831870030012697,
+    -0.001387223166337979,
+    0.00024974621061885115,
+    -6.680128253527926e-05
+   ],
+   "joint_kp": 600.0,
+   "off_source": "handover_off_static",
+   "q_minus_s": [
+    0.015523074936193093,
+    -0.0009372073338716896,
+    -0.024907876460620093,
+    0.00505566124924095,
+    0.014840447714977945,
+    -0.006652667046450608
+   ],
+   "note": "錨定含綁定預載，不是自由空間辨識偏置；q−s＝G/kp"
+  },
+  "closure_stats": {
+   "n": 3,
+   "rate_clip": 0,
+   "ik_fail": 0,
+   "sigma_min": 0.076904,
+   "ik_resid_max": 0.0,
+   "s0_jump_max": 0.012919,
+   "rate_max": 0.843993,
+   "acc_max": 11.214334,
+   "fails": []
+  },
+  "stop": {
+   "t": 0.1,
+   "why": "tick_deadline_miss",
+   "sigma": 0.02,
+   "mode": "cstop",
+   "elapsed_ms": 57.2,
+   "tag": "candidate",
+   "fb": {
+    "law": "cstop",
+    "tag": "stop_now_cstop",
+    "n_ticks": 24,
+    "sim_ms": 15.4,
+    "min_clear": {
+     "env": 0.0344,
+     "base": 0.1672,
+     "self": 0.0109,
+     "shell_bar": 0.0061
+    },
+    "closure_pos_mm": 2.779,
+    "closure_rot_deg": 0.307,
+    "n_samples": 25,
+    "xd_ver": 0
+   },
+   "escalations": [
+    {
+     "t": 4.11,
+     "why": "cstop_not_settled",
+     "to": "abort",
+     "parts": {
+      "pipe": false,
+      "arm": false,
+      "base": false,
+      "door": true
+     }
+    }
+   ]
+  },
+  "done": false,
+  "stop_effect": {
+   "t": 4.11,
+   "ok": null,
+   "status": "unverified（模擬中止，不是受控停止）"
+  },
+  "phi_end_deg": 5.911,
+  "t_end": 4.11,
+  "closure_measured": {
+   "pos_mm": {
+    "max": 0.0752,
+    "p95": 0.0741,
+    "end": 0.0732
+   },
+   "rot_deg": {
+    "max": 0.062,
+    "p95": 0.061,
+    "end": 0.0601
+   }
+  },
+  "min_clear_actual": {
+   "env": 0.0354,
+   "base": 0.1665,
+   "self": 0.0109,
+   "shell_bar": 0.007
+  },
+  "force_max_n": 36.756,
+  "timing": {
+   "solve_ms": {
+    "p50": 12.4,
+    "p95": 12.7,
+    "max": 12.8
+   },
+   "sweep_ms": {
+    "p50": 21.3,
+    "p95": 22.6,
+    "max": 22.8
+   },
+   "whole_tick_ms": {
+    "p50": 3.5,
+    "p95": 4.3,
+    "max": 58.8
+   }
+  },
+  "n_deadline_miss": 1,
+  "p2_log": [],
+  "reqs": [],
+  "fb_log": [
+   {
+    "t": 0.1,
+    "tag": "candidate",
+    "fb_ok": true,
+    "fb": {
+     "law": "cstop",
+     "tag": "stop_now_cstop",
+     "n_ticks": 24,
+     "sim_ms": 15.4,
+     "min_clear": {
+      "env": 0.0344,
+      "base": 0.1672,
+      "self": 0.0109,
+      "shell_bar": 0.0061
+     },
+     "closure_pos_mm": 2.779,
+     "closure_rot_deg": 0.307,
+     "n_samples": 25,
+     "xd_ver": 0
+    },
+    "elapsed_ms": 57.2,
+    "se_end_committed": 0.1,
+    "sigma": 0.02,
+    "g": 1.0,
+    "sigma_plus_delay_g": 0.1
+   }
+  ],
+  "cstop_ticks": 81,
+  "stop_mode": "abort",
+  "tick_ms_normal": [
+   48.2,
+   49.6
+  ]
+ },
+ "events": [
+  {
+   "t": 0.05,
+   "wall": 0.097,
+   "what": "first_segment_request",
+   "t_ready_pred": 2.25,
+   "b_pred": [
+    0.654,
+    -0.489,
+    1.5673
+   ]
+  },
+  {
+   "t": 0.83,
+   "wall": 1.548,
+   "what": "first_segment_available",
+   "feasible": true,
+   "failed": [],
+   "final": false,
+   "plan_wall_s": 1.424,
+   "info": {
+    "why": "stalled_trust_region",
+    "iters": 17,
+    "phi_end_deg": 54.44,
+    "min_clear": {
+     "env": 0.0357,
+     "base": 0.0226,
+     "self": 0.0109,
+     "shell_bar": 0.0072
+    }
+   }
+  },
+  {
+   "t": 2.35,
+   "wall": 4.356,
+   "what": "handover_attempt",
+   "bind_ok": true,
+   "bind": {
+    "no_forbidden_contact": true,
+    "pos": true,
+    "rot": true,
+    "rel_still": true,
+    "finger_q": true,
+    "finger_bar_contact": true,
+    "door_pre": true
+   },
+   "bind_values": {
+    "pos_m": 0.0006217338272382216,
+    "rot_deg": 0.0981936547532267,
+    "finger_q": [
+     0.0016913473373278975,
+     0.0017210388323292136
+    ],
+    "finger_bar_n": [
+     2.937251567840576,
+     2.0232563817407936
+    ],
+    "door_pre_deg": 0.03127627360778723
+   },
+   "dry_ok": true,
+   "dry": {
+    "stop": null,
+    "abort": null,
+    "cl_fail": null,
+    "fb_ok": true,
+    "stop_closure_pos_mm": 2.914,
+    "reproj_arm_max_rad": 0.0031,
+    "start_base_vs_meas_mm": 2.734
+   },
+   "ready_ver": 1,
+   "warmup_ms": 127.1,
+   "dry_run_ms": 66.7,
+   "handover_compute_ms": 212.8,
+   "note": "交接計算在本體控制拍計時之外；計算期間物理不步進"
+  },
+  {
+   "t": 2.35,
+   "wall": 4.358,
+   "what": "bind_and_handover",
+   "base_speed_cmd": 0.05,
+   "joint_enabled": true,
+   "warmup_ms": 127.1
+  },
+  {
+   "t": 6.46,
+   "wall": 9.819,
+   "what": "open_abort",
+   "abort": {
+    "t": 4.11,
+    "why": "cstop_not_settled",
+    "parts": {
+     "pipe": false,
+     "arm": false,
+     "base": false,
+     "door": true
+    }
+   }
+  }
+ ],
+ "forbidden_contact": {
+  "latched": null
+ },
+ "aborted": {
+  "t": 6.46,
+  "controller": {
+   "t": 4.11,
+   "why": "cstop_not_settled",
+   "parts": {
+    "pipe": false,
+    "arm": false,
+    "base": false,
+    "door": true
+   }
+  }
+ },
+ "wall_total_s": 9.8,
+ "sim_total_s": 6.46,
+ "rtf": 0.659,
+ "result": "aborted：模擬中止（停止有效性未驗證；綁定中則未解綁）"
+}
