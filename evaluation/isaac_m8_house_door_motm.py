@@ -384,7 +384,7 @@ def main():
                finger=dict(command='CLOSE 段由張開斜降到 0（夾緊，同停車版）', geometry='兩指各自實測開度；CLOSE 段掃掠另含預測閉合開度'))
     # ---- 靜置
     quat0 = np.array([math.cos(b_start[2] / 2), 0.0, 0.0, math.sin(b_start[2] / 2)], np.float32)
-    jv_hist, ct_hist = [], []
+    jv_hist, ct_hist, ct_err = [], [], []
     for k in range(int(round(a.settle_s / DT))):
         if k < 5:
             robot.set_world_pose(np.array([b_start[0], b_start[1], 0.0], np.float32), quat0)
@@ -394,9 +394,13 @@ def main():
         jv_hist.append(np.asarray(robot.get_joint_velocities(), float)[idx])
         try:
             fc_ = finger_contacts()
-            ct_hist.append(max(float(fc_[0][1]), float(fc_[1][1]), float(fc_[0][0]), float(fc_[1][0]), float(other_contacts()[0])))
+            ch_ = [float(fc_[0][0]), float(fc_[0][1]), float(fc_[1][0]), float(fc_[1][1])]
+            for v_, b_ in zip(v_o + [v_base], others + grip + base_b):   # 各連桿原始通道逐一取值（先核有限，再彙整）
+                ch_ += [float(x_) for x_ in np.linalg.norm(np.asarray(v_.get_contact_force_matrix(dt=DT), float).reshape(-1, 3), axis=1)]
+            ct_hist.append(float(max(ch_)) if (len(ch_) > 4 and np.isfinite(ch_).all()) else float('nan'))
         except Exception as e:                                         # noqa: BLE001
             ct_hist.append(float('nan'))
+            ct_err.append(repr(e)[:160])
     qs, jps = q9()
     # P2（Codex 20261115）：任務運動前的工程拒跑檢查——未綁定、無接觸、實測低速持續 0.3 s 後，r＝kp(s−q)＋kd(0−q̇)＋G(q)（速度目標＝0）
     jv_tail = np.abs(np.array(jv_hist[-int(round(0.3 / DT)):]))
@@ -405,7 +409,7 @@ def main():
                     note='r 含重力模型與驅動近似誤差：超過不證明新舊摩擦疊加，通過也不證明摩擦已校準；1.3＝1.0＋事前工程容差 0.3')
     n_need = int(round(0.3 / DT))
     ct_tail = np.array(ct_hist[-n_need:], float)
-    hold_chk.update(n_samples=int(min(len(jv_tail), len(ct_tail))), n_need=n_need, contact_force_max_n=None if not np.isfinite(ct_tail).all() else round(float(ct_tail.max()), 6),
+    hold_chk.update(contact_read_errors=ct_err[:3], n_contact_read_errors=len(ct_err), n_samples=int(min(len(jv_tail), len(ct_tail))), n_need=n_need, contact_force_max_n=None if not np.isfinite(ct_tail).all() else round(float(ct_tail.max()), 6),
                     no_contact=bool(len(ct_tail) == n_need and np.isfinite(ct_tail).all() and float(ct_tail.max()) <= 1e-6), finite=bool(np.isfinite(jv_tail).all() and np.isfinite(r_hold).all()))
     hold_chk['ok'] = bool(hold_chk['low_speed_0p3s'] and hold_chk['finite'] and len(jv_tail) == n_need and hold_chk['no_contact'] and float(np.abs(r_hold).max()) <= HOLD_R_MAX)
     print('[motm] hold_check', json.dumps(hold_chk, ensure_ascii=False), flush=True)
@@ -479,7 +483,9 @@ def main():
                     if e_['rid'] == 1 and r__ is not None:
                         first.update(ok=e_['ok'], res=r__, t_avail=t, wall_avail=time.perf_counter() - t_wall0, t_req=pl_[0]['t_req'], t_ready_pred=e_['target'], **{k_: pl_[0]['meta'][k_] for k_ in ('wall_req', 'phi_req')})
                 else:
-                    log_event('first_segment_dropped', **{k_: v_ for k_, v_ in e_.items() if k_ != 'what'})
+                    log_event('first_segment_desync', **{k_: v_ for k_, v_ in e_.items() if k_ != 'what'})
+            if fs.desync is not None and gc.stop is None:              # 規劃通訊失同步：拒交接、走抓持控制器既有停止流程
+                gc._stop('planner_desync', detail=fs.desync)
         pl_sel = fs.applicable(t) if tick else None
         plan_fit = pl_sel is not None
         if tick and gc.ready_now and gc.ready_ver is not None and gc.stop is None and not a.smoke and not plan_fit:

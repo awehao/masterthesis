@@ -16,6 +16,7 @@ class FirstSeg:
         self.pend = [None] * len(self.P)                             # 各規劃程序在途請求：dict(rid, target, meta, t_req)
         self.plans, self.n_req, self.n_stale_drop, self.last_target, self.log = [], 0, 0, None, []
         self.sched_target = None
+        self.desync = None
 
     def _grid(self, x):
         return math.ceil(x / self.dt - 1e-9) * self.dt
@@ -32,6 +33,8 @@ class FirstSeg:
     def step(self, t, sched_target, make_req, rolling=True):
         """每控制拍首呼叫。回本拍新事件列表（request／result／dropped）。"""
         n0 = len(self.log)
+        if self.desync is not None:
+            return []
         if self.sched_target is None:                                # 首次：照排程的預測 READY 時刻
             self.sched_target = self._grid(sched_target)
             self._submit(0, t, self.sched_target, make_req, 'initial')
@@ -41,15 +44,17 @@ class FirstSeg:
             r = pl.poll()
             if r is None:
                 continue
-            pd, self.pend[i] = self.pend[i], None
-            if r[0] != pd['rid']:
+            pd = self.pend[i]
+            if r[0] != pd['rid']:                                    # 版本不符＝通訊失同步：不清 pend、不再送件；呼叫端須拒交接並走停止流程
                 self.n_stale_drop += 1
-                self.log.append(dict(t=round(t, 3), what='dropped', rid=r[0], expect=pd['rid']))
+                self.desync = dict(t=round(t, 3), planner=i, got=r[0], expect=pd['rid'])
+                self.log.append(dict(t=round(t, 3), what='desync', rid=r[0], expect=pd['rid']))
                 continue
+            self.pend[i] = None
             ok = bool(r[2] and r[1] is not None)
             self.plans.append(dict(rid=pd['rid'], target=pd['target'], ok=ok, res=r, meta=pd['meta'], t_req=pd['t_req'], t_avail=t))
             self.log.append(dict(t=round(t, 3), what='result', rid=pd['rid'], target=round(pd['target'], 3), ok=ok, plan_wall_s=round(float(r[5]), 3), late=bool(t > pd['target'] + self.lead + self.tol + 1e-9)))
-        if rolling:
+        if rolling and self.desync is None:
             for i in range(len(self.P)):
                 if self.pend[i] is None:
                     target = self._grid(max(t + self.ahead, self.last_target + self.gap))
@@ -62,6 +67,8 @@ class FirstSeg:
 
     def applicable(self, t):
         """本拍可用來交接的計畫（可行、且 t 落在其適用窗）；沒有回 None。"""
+        if self.desync is not None:
+            return None
         c = [p for p in self.plans if p['ok'] and self.window(p)[0] <= t <= self.window(p)[1]]
         return max(c, key=lambda p: p['rid']) if c else None
 
