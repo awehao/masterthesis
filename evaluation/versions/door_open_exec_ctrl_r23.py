@@ -212,6 +212,8 @@ class DoorOpenExec:
         self._pr_delta, self._w_ext, self.pr_log = np.zeros(6), None, []   # r22（B2）：已提交的設定點偏置 δ、最新外力旋量 (F, M@TCP, 世界)、紀錄
         self._pr_cand, self._pr_commit_tick = None, False             # r23：本拍候選 δ（連同候選命令與停止預測通過才提交；被拒或晚到即丟棄）
         self._pr_inf, self.pr_rejected = {}, 0
+        self.pr_ts = []                                               # 紀錄（每控制拍）：t、事件(1 提交／−1 候選被拒或晚到／0 無候選)、δ 候選 6、δ 已提交 6、δ 已生效 6、輸入旋量 F3＋M3
+        self._pr_cand_last = None
         self._pr_u, self._pr_pipe, self._pr_s = np.zeros(6), [np.zeros(6) for _ in range(D_STEPS)], np.zeros(6)   # δ 增量對應的命令分量、其在途管線、已實際進入設定點的 δ（含管線延遲）
         self.stop, self.done, self.stopped_t, self.stop_ok, self._still = None, False, None, None, 0
         self.events, self.rec, self.fail_inject = [], [], None
@@ -1197,12 +1199,19 @@ class DoorOpenExec:
                 if self.stopped_t is None:
                     self.stopped_t = self.t
                 self.u_last = self._decel()
+            if self.g2['preload_release']:                             # 只記錄：提交判定前先存候選
+                self._pr_cand_last = None if self._pr_cand is None else self._pr_cand.copy()
             if not self._pr_commit_tick:                               # 本拍沒有提交候選（被拒、晚到、停止中）：δ 與模型一起回到已提交值
                 if self._pr_cand is not None:
                     self.pr_rejected = getattr(self, 'pr_rejected', 0) + 1
                 self._pr_u = np.zeros(6)
                 self._pr_cand = None
             self._pr_model(self._pr_delta)
+            if self.g2['preload_release']:
+                cl_ = self._pr_cand_last
+                ev_ = 0 if cl_ is None else (1 if self._pr_commit_tick else -1)
+                w_ = np.full(6, np.nan) if self._w_ext is None else np.r_[self._w_ext[0], self._w_ext[1]]
+                self.pr_ts.append(np.r_[self.t, ev_, np.full(6, np.nan) if cl_ is None else cl_, self._pr_delta, self._pr_s, w_])
             self.u_prev = self.u_last.copy()
             self.tick_ms.append((time.perf_counter() - w_t) * 1e3)
         if tick:                                                   # 新的一拍：過渡起點＝上一物理步實際送出的底盤命令

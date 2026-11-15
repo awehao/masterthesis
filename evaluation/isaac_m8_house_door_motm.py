@@ -738,7 +738,7 @@ def main():
     # ================= 開門（P2 續接）=================
     if box['mode'] == 'open':
         ex = box['ex']
-        olog, deflog = [], []
+        olog, deflog, wlog = [], [], []
         while t - box['t_bind'] < OPEN_LIMIT_S:
             q, jp = q9()
             tr = t - box['t_bind']
@@ -795,7 +795,9 @@ def main():
                     box['t_next'] = t + P2.T_RE
             F6 = wrist_F6()
             fn_ = float(np.linalg.norm(F6[:3]))
+            w_wall0 = time.perf_counter()
             w_ext_ = ext_wrench(q, F6) if a.preload_release else None
+            wlog.append(np.r_[tr, F6, np.full(6, np.nan) if w_ext_ is None else np.r_[w_ext_[0], w_ext_[1]], (time.perf_counter() - w_wall0) * 1e3])
             if ex.abort is None and (not np.isfinite(F6).all() or (a.preload_release and w_ext_ is None)):   # 力訊號或外力旋量失效 ⇒ 中止（不得讓 40 N 監看失效後繼續）
                 why_ = 'force_signal_invalid' if not np.isfinite(F6).all() else 'wrench_invalid'
                 log_event(why_, phase='open')
@@ -859,8 +861,8 @@ def main():
         res['open']['bind_deformation'] = None if not deflog else dict(pos_mm_max=round(max(x_[1] for x_ in deflog) * 1e3, 3), rot_deg_max=round(max(x_[2] for x_ in deflog), 3), pos_mm_end=round(deflog[-1][1] * 1e3, 3), rot_deg_end=round(deflog[-1][2], 3),
                                                                      est_spring_force_max_n=round(max(x_[8] for x_ in deflog), 2), est_damper_force_max_n=round(max(x_[9] for x_ in deflog), 2), est_spring_torque_max_nm=round(max(x_[10] for x_ in deflog), 3), est_damper_torque_max_nm=round(max(x_[11] for x_ in deflog), 3),
                                                                      note='力／力矩為估算（k×變形、c×差分相對速度；fixed 模型下僅供對照，非實際連接力）', cols=['t', 'pos_m', 'rot_deg', 'dx', 'dy', 'dz', 'vpos', 'vrot', 'F_spring', 'F_damper', 'T_spring', 'T_damper'])
-        res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'], fb_log=ex.fb_log, preload_release=dict(enabled=bool(ex.g2['preload_release']), baseline=None if wb['bF'] is None else dict(F_world=[float(x_) for x_ in wb['bF']], M_link6=[float(x_) for x_ in wb['bM']], n=len(wb['F'])), n=len(ex.pr_log), delta_abs_max=max((x_[1] for x_ in ex.pr_log), default=None), delta_end=[round(float(x_), 5) for x_ in ex._pr_delta], Fc_first=(ex.pr_log[0][2] if ex.pr_log else None), Fc_max=max((x_[2] for x_ in ex.pr_log), default=None), Fc_last=(ex.pr_log[-1][2] if ex.pr_log else None), Mc_last=(ex.pr_log[-1][3] if ex.pr_log else None), lam_last=(ex.pr_log[-1][4] if ex.pr_log else None), sat_any=any(x_[5] for x_ in ex.pr_log), params=dict(KI=XO.PR.KI, RATE_MAX=XO.PR.RATE_MAX, DELTA_MAX=XO.PR.DELTA_MAX), log_cols=['t', 'delta_abs_max', 'Fc_norm', 'Mc_norm', 'lambda', 'sat', 'updated']), base_hold_log_tail=ex.hold_log[-5:], base_hold_n=len(ex.hold_log), base_hold_cmd_max=[max((x[1] for x in ex.hold_log), default=None), max((x[2] for x in ex.hold_log), default=None)], cstop_ticks=len(ex.cs_log), stop_mode=ex.stop_mode, tick_ms_normal=[round(float(m), 1) for i, m in enumerate(ex.tick_ms) if ex.stop is None or i * 0.05 < float(ex.stop['t']) - 1e-9])
-        np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), preload=np.array(ex.pr_log, float), bind_deform=np.array(deflog), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
+        res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'], fb_log=ex.fb_log, preload_release=dict(enabled=bool(ex.g2['preload_release']), n_committed=int(sum(1 for x_ in ex.pr_ts if x_[1] == 1)), n_rejected=int(sum(1 for x_ in ex.pr_ts if x_[1] == -1)), wrench_compute_ms_max=(None if not wlog else round(float(max(x_[-1] for x_ in wlog)), 3)), wrench_compute_note='外力旋量換算在控制器 50 ms 計時之外，另列', baseline=None if wb['bF'] is None else dict(F_world=[float(x_) for x_ in wb['bF']], M_link6=[float(x_) for x_ in wb['bM']], n=len(wb['F'])), n=len(ex.pr_log), delta_abs_max=max((x_[1] for x_ in ex.pr_log), default=None), delta_end=[round(float(x_), 5) for x_ in ex._pr_delta], Fc_first=(ex.pr_log[0][2] if ex.pr_log else None), Fc_max=max((x_[2] for x_ in ex.pr_log), default=None), Fc_last=(ex.pr_log[-1][2] if ex.pr_log else None), Mc_last=(ex.pr_log[-1][3] if ex.pr_log else None), lam_last=(ex.pr_log[-1][4] if ex.pr_log else None), sat_any=any(x_[5] for x_ in ex.pr_log), params=dict(KI=XO.PR.KI, RATE_MAX=XO.PR.RATE_MAX, DELTA_MAX=XO.PR.DELTA_MAX), log_cols=['t', 'delta_abs_max', 'Fc_norm', 'Mc_norm', 'lambda', 'sat', 'updated']), base_hold_log_tail=ex.hold_log[-5:], base_hold_n=len(ex.hold_log), base_hold_cmd_max=[max((x[1] for x in ex.hold_log), default=None), max((x[2] for x in ex.hold_log), default=None)], cstop_ticks=len(ex.cs_log), stop_mode=ex.stop_mode, tick_ms_normal=[round(float(m), 1) for i, m in enumerate(ex.tick_ms) if ex.stop is None or i * 0.05 < float(ex.stop['t']) - 1e-9])
+        np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), preload_ts=np.array(ex.pr_ts, float), preload_ts_cols=np.array(['t', 'event(1提交,-1拒絕或晚到,0無候選)'] + [f'cand_{k_}' for k_ in range(6)] + [f'committed_{k_}' for k_ in range(6)] + [f'in_setpoint_{k_}' for k_ in range(6)] + ['Fx', 'Fy', 'Fz', 'Mx', 'My', 'Mz']), wrench=np.array(wlog, float), wrench_cols=np.array(['t'] + [f'raw_j6_{k_}' for k_ in range(6)] + ['Fext_x', 'Fext_y', 'Fext_z', 'Mtcp_x', 'Mtcp_y', 'Mtcp_z', 'compute_ms']), preload=np.array(ex.pr_log, float), bind_deform=np.array(deflog), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
     res['events'] = ev
     res['forbidden_contact'] = dict(latched=gate.latched)
     res['aborted'] = box['aborted']
