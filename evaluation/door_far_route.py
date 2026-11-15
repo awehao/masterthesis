@@ -141,3 +141,88 @@ class ArmPreTracker:
 def merge_plan(pg):
     """導航末段目標與交接區。回 dict(p_in, yaw, d, window)。"""
     return dict(p_in=pg['p0'] - pg['d'] * L_IN, yaw=pg['yaw'], d=pg['d'].copy(), p_grasp=pg['p0'].copy(), window=(W_MIN, W_MAX), handover='控制拍邊界；移動中；不到點停車')
+
+
+S_OBS = 0.33                                                         # 觀察追蹤：TCP 目標＝抓取位姿沿接近軸後退 S_OBS（腕部相機看得到把手中心與兩端的最小後退量 0.31 m 加餘量）
+OBS_ALONG = (0.25, -0.10)                                            # 觀察追蹤已核的沿線範圍（距抓取點；負值＝已通過把手正前方）。0.275 m 處可操作度 0.027<0.03、更遠構不到
+STOP_ALONG = -0.05                                                   # 取像趟：通過把手正前方 0.05 m 後開始正常停止（TCP 始終在後退 S_OBS 的觀察位，不進無視覺段）
+
+
+def observe_target(T_WH, T_at, a_H):
+    T = np.asarray(T_at(T_WH, 0.0), float).copy()
+    T[:3, 3] += S_OBS * (np.asarray(T_WH, float)[:3, :3] @ np.asarray(a_H, float))
+    return T
+
+
+def observe_branch(T_WH, pg, q_now, base_prep_path, T_at, a_H, clear_fn, thr, sig_floor, lo, hi, v_pass):
+    """觀察追蹤的連續分支與完整核對（候選；不是已驗證）。pg＝通過線（p0, d, yaw）。base_prep_path＝準備段期間底盤預計經過的位姿序列（由導航路徑取樣）。
+    追蹤窗口取樣由 W_MAX＋2.5 cm 到 −2.5 cm（含停止時多走的餘量：v²/2a 約數 mm）；每點核 IK 連續、限位、可操作度（整段 ≥ 下限）、淨空（env／base／self）、所需關節速率。
+    準備段：現構型→窗口起點解的關節直線，9 個取樣點配底盤路徑同步取樣，核限位與淨空（env／base／self）。
+    回 (dict 或 None, 資訊)。"""
+    import itertools
+    Tt = observe_target(T_WH, T_at, a_H)
+    alongs = np.arange(OBS_ALONG[0], OBS_ALONG[1] - 1e-9, -TRACK_STEP)   # 已核範圍；作業範圍取其內縮一格（起點 0.225 m、停止起點 −0.05 m），兩端各留 2.5–5 cm 給啟動前推誤差與停止行程
+    best, n_try, rej = None, 0, {}
+    for sd in itertools.product((-0.6, 0.0, 0.6), (-0.3, 0.2), (0.6, 1.4), (-1.5, 0.0, 1.5), (-0.7, 0.7), (0.0,)):
+        n_try += 1
+        seed, Q, why, sig, mc = np.array(sd), [], None, np.inf, {k: np.inf for k in ('env', 'base', 'self')}
+        for al in alongs:
+            b = np.r_[pg['p0'] - pg['d'] * al, pg['yaw']]
+            q, r, sm = DFK.ik_closure_fc(Tt, b, seed)
+            if not Q:
+                q = _wrap(q)
+            if not (r < 1e-6 and np.isfinite(q).all()) or (Q and np.abs(q - seed).max() > 0.5):
+                why = 'track_ik'; break
+            if np.any(q < lo) or np.any(q > hi):
+                why = 'track_joint_limit'; break
+            if sm < sig_floor:
+                why = 'track_manipulability'; break
+            cl = clear_fn(np.r_[b, q])
+            if any(cl[k] < thr[k] for k in mc):
+                why = 'track_clearance'; break
+            sig = min(sig, sm); mc = {k: min(mc[k], float(cl[k])) for k in mc}
+            Q.append(q); seed = q
+        if why is None:
+            Q = np.array(Q)
+            rate = float(np.abs(np.diff(Q, axis=0)).max() / (TRACK_STEP / v_pass))
+            if rate > V_ARM:
+                why = 'track_rate'
+        if why is None:
+            qa0 = np.asarray(q_now[3:], float)
+            dq = Q[0] - qa0                                           # 關節直線（不繞圈）：兩端都在限位內 ⇒ 途中也在限位內
+            if np.any(qa0 < lo) or np.any(qa0 > hi):
+                why = 'prep_start_outside_limit'
+            else:
+                for i_, u_ in enumerate(np.linspace(0.0, 1.0, 9)):
+                    bp = np.asarray(base_prep_path[min(int(round(u_ * (len(base_prep_path) - 1))), len(base_prep_path) - 1)], float)
+                    cl = clear_fn(np.r_[bp, qa0 + u_ * dq])
+                    if any(cl[k] < thr[k] for k in ('env', 'base', 'self')):
+                        why = 'prep_clearance:' + ','.join(k for k in ('env', 'base', 'self') if cl[k] < thr[k]); break
+                    mc = {k: min(mc[k], float(cl[k])) for k in mc}
+        if why is not None:
+            rej[why] = rej.get(why, 0) + 1
+            continue
+        c = dict(q_start_op=Q[1].copy(), q_window_start=Q[0].copy(), q_window=Q, alongs=alongs.copy(), sigma_min=float(sig), min_clear=mc, track_rate_max=rate, prep_move_max_rad=float(np.abs(dq).max()), prep_time_s=float(np.abs(dq).max() / V_PREP), T_target=Tt)
+        if best is None or (round(c['prep_time_s'], 2), -c['sigma_min']) < (round(best['prep_time_s'], 2), -best['sigma_min']):
+            best = c
+    return best, dict(n_seeds=n_try, rejected=rej, status='候選（離線幾何與運動學核對；偵測成立與否、實際追蹤誤差未驗）')
+
+
+def track_start_decision(q, base_pipe, pg, arm_q, br, phys):
+    """追蹤啟動判定（用在途管線前推後的底盤位姿）：回 ('start'｜'wait'｜'refuse', 資訊)。
+    start：前推後已進入已核的可達窗口（沿線距離 ≤ 窗口起點）、側向與朝向在線上、手臂已準備到窗口起點解附近。
+    refuse：前推後已進入窗口但手臂未就緒或不在線上 ⇒ 不得進入伸臂／抓持區，呼叫端須協同停止（底盤與手臂）。"""
+    b = np.asarray(q[:3], float).copy()
+    for ub in base_pipe:
+        c, s_ = math.cos(b[2]), math.sin(b[2])
+        b = b + phys * np.array([c * ub[0] - s_ * ub[1], s_ * ub[0] + c * ub[1], ub[2]])
+    r = b[:2] - pg['p0']
+    along, lat = float(-(r @ pg['d'])), float(r @ pg['n'])
+    yaw_e = float(_wrap(b[2] - pg['yaw']))
+    arm_err = float(np.abs(np.asarray(arm_q, float) - br['q_start_op']).max())     # 手臂須已準備到「作業起點」的解（已核範圍邊緣對沿線位置很敏感，不拿邊緣解當起點）
+    info = dict(along_pred=round(along, 4), lat_pred_mm=round(lat * 1e3, 2), yaw_err_deg=round(math.degrees(yaw_e), 3), arm_err_rad=round(arm_err, 4))
+    a_start = float(br['alongs'][1])                              # 作業起點＝已核範圍內縮一格
+    if along > a_start:
+        return 'wait', info
+    ok = abs(lat) <= FL.LINE_TOL['lateral_m'] and abs(yaw_e) <= FL.LINE_TOL['yaw_rad'] and arm_err <= 0.05
+    return ('start' if ok else 'refuse'), info

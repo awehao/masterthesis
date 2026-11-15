@@ -21,6 +21,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 NAV_BASE_RUN = 'isaac_bigarena_gmpc_scan_heading__seed8__fullon_s8_1'
 NAV_NODES = ('gmpc_controller', 'scan_safety_shield', 'wheel_limit_guard', 'scan_obstacle_tracker', 'velocity_smoother', 'planner_server')
 NAV_CHAIN = ['planner_server', 'gmpc_controller → /cmd_vel_nav', 'velocity_smoother → /cmd_vel_pre_shield', 'scan_safety_shield → /cmd_vel_smoothed', 'wheel_limit_guard → /cmd_vel（唯一最終發布者）']
+POSE_SOURCES = ('fk_at_render_time',)                               # 相機位姿的允許來源：該渲染時刻的關節／底盤讀值 FK（同一步的歷史紀錄）；之後接 ROS 時加「TF 於影像時間戳內插」
+IMG_STATE_TOL_S = 0.011                                              # 影像時間戳與狀態時間戳的容許差（一個物理步）
 EST_MAX_AGE_S = 0.3                                                  # 同抓持控制器 READY_Q['fresh_s']
 SYNC_TOL_S = 0.02                                                    # 影像以外的狀態／命令時間戳對交接時刻的容許差（兩個物理步）
 GRASP_WINDOW_M = (0.005, 0.25)                                       # 交接時距抓取點的沿線距離窗口（抓持控制器的前導＋插入需要的行程；上限＝目前排程可用的最長前導）
@@ -119,6 +121,15 @@ class HandleObs:
             return None, dict(ok=False, why='frame_incomplete:' + ','.join(miss))
         if f.get('q') is None:
             return None, dict(ok=False, why='no_synchronized_robot_state')   # 相機位姿必須來自同一渲染時刻的讀值
+        # r3：影像—狀態—TF 的時間與來源核對（「有 q」不等於同步）
+        if f.get('t_state') is None or f.get('pose_source') is None:
+            return None, dict(ok=False, why='state_stamp_or_pose_source_missing')
+        if f['pose_source'] not in POSE_SOURCES:
+            return None, dict(ok=False, why='pose_source_not_allowed:' + str(f['pose_source']))
+        if abs(float(f['t_state']) - float(f['t_obs'])) > IMG_STATE_TOL_S:
+            return None, dict(ok=False, why='image_state_time_mismatch:%.4f' % abs(float(f['t_state']) - float(f['t_obs'])))
+        if f.get('frame_id') not in (None, 'map'):
+            return None, dict(ok=False, why='camera_pose_frame_not_map:' + str(f.get('frame_id')))
         if not np.isfinite(f['T_cam']).all() or not math.isfinite(float(f['t_obs'])):
             return None, dict(ok=False, why='nonfinite_pose_or_time')
         if f['t_obs'] > t_now + 1e-9:

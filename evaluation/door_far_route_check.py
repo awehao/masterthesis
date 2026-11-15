@@ -31,7 +31,7 @@ al = np.asarray(ident['alpha'], float); tau = PHYS / al
 out = dict(note='運動學層離線核對；導航提案與安全鏈為替身；視覺時間戳為合成；不是 ROS 接線、不是全身避障驗證')
 # ---- 實際影像 → 估計
 obs = FL.HandleObs()
-f = dict(dep=np.load(os.path.join(RUN, 'frames', 'far_live_depth_m.npy')), K=np.asarray(meta['K'], float), T_cam=np.asarray(fr['cam_T_fk'], float), t_obs=float(fr['t_obs']), q=np.asarray(fr['q'], float))
+f = dict(dep=np.load(os.path.join(RUN, 'frames', 'far_live_depth_m.npy')), K=np.asarray(meta['K'], float), T_cam=np.asarray(fr['cam_T_fk'], float), t_obs=float(fr['t_obs']), q=np.asarray(fr['q'], float), t_state=float(fr['t_obs']), pose_source='fk_at_render_time', frame_id='map')   # online_1 的擷取碼以渲染時刻查同一步的姿態歷史算 FK（找不到同一步即拒收）
 T_est, oinfo = obs.intake(f, f['t_obs'] + 0.01)
 out['estimate'] = oinfo
 q = np.asarray(fr['q'], float).copy()                                # 起點實測構型（底盤 3＋手臂 6）

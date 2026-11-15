@@ -18,7 +18,7 @@ meta = json.load(open(os.path.join(RUN, 'frames_meta.json')))
 fr = [f for f in meta['frames'] if f['stem'] == 'far_live'][0]
 Kc = np.asarray(meta['K'], float); Wd, Hd = 640, 480
 obs = FL.HandleObs()
-T_est, _ = obs.intake(dict(dep=np.load(os.path.join(RUN, 'frames', 'far_live_depth_m.npy')), K=Kc, T_cam=np.asarray(fr['cam_T_fk'], float), t_obs=float(fr['t_obs']), q=np.asarray(fr['q'], float)), float(fr['t_obs']) + 0.01)
+T_est, _ = obs.intake(dict(dep=np.load(os.path.join(RUN, 'frames', 'far_live_depth_m.npy')), K=Kc, T_cam=np.asarray(fr['cam_T_fk'], float), t_obs=float(fr['t_obs']), q=np.asarray(fr['q'], float), t_state=float(fr['t_obs']), pose_source='fk_at_render_time', frame_id='map')   # online_1 的擷取碼以渲染時刻查同一步的姿態歷史算 FK（找不到同一步即拒收）, float(fr['t_obs']) + 0.01)
 Rg, T_HG, a_H = G.PG.baseline_reference()
 T_at = lambda T, s: np.asarray(G.E.OT.object_target(T, T_HG, a_H, float(s))['T_WE'], float)   # noqa: E731
 S_PRE = float(G.PG.S_PRE)
@@ -64,6 +64,26 @@ def self_occluded(q9, c_pos, target, rad=0.02):
     return None
 
 
+import door_wbopt as WB
+import door_clear_door_fast as _F
+WB.clear_door = _F.clear_door_fast
+_SH, _LEAF = WB._static()
+_POSTS, _BAR = WB.PG.handle_shapes(T_est)
+BOXES = list(_SH) + [_LEAF] + list(_POSTS)                             # 已知門洞牆、門扇（門關閉）、把手立柱（依估計位姿）
+
+
+def env_occluded(c_pos, target):
+    """相機到目標的線段是否穿過已知幾何（門洞牆、門扇、立柱）：每 5 mm 取樣，目標前 15 mm 以內不算。"""
+    v = target - c_pos
+    L_ = float(np.linalg.norm(v))
+    n_ = max(int(L_ / 0.005), 2)
+    P = c_pos[None, :] + np.linspace(0.0, max(L_ - 0.015, 0.0) / L_, n_)[:, None] * v[None, :]
+    for name, c, R_, hs in BOXES:
+        if float(DOC.box_dist(P, c, R_, hs).min()) <= 0.0:
+            return name
+    return None
+
+
 def view(q9, cam='wrist'):
     C_ = CAMS[cam]
     Tc = C_['T'](q9)
@@ -74,7 +94,13 @@ def view(q9, cam='wrist'):
     ok_img = all(p_ is not None and 20 <= p_[0] <= 640 - 20 and 20 <= p_[1] <= 480 - 20 for p_ in pr)
     ok_rng = C_['rng'][0] <= pr[0][2] <= C_['rng'][1]
     occ = self_occluded(q9, Tc[:3, 3], hc) if (ok_img and ok_rng) else None
-    why = None if (ok_img and ok_rng and occ is None) else ('feature_out_of_image' if not ok_img else ('out_of_depth_range' if not ok_rng else 'self_occluded:' + occ))
+    eocc = None
+    if ok_img and ok_rng and occ is None:
+        for p_ in [hc] + ENDS:
+            eocc = env_occluded(Tc[:3, 3], p_)
+            if eocc is not None:
+                break
+    why = None if (ok_img and ok_rng and occ is None and eocc is None) else ('feature_out_of_image' if not ok_img else ('out_of_depth_range' if not ok_rng else ('self_occluded:' + occ if occ is not None else 'env_occluded:' + str(eocc))))
     px_len = None if (pr[1] is None or pr[2] is None) else round(math.hypot(pr[1][0] - pr[2][0], pr[1][1] - pr[2][1]), 1)
     return dict(in_view=why is None, u=round(pr[0][0], 1), v=round(pr[0][1], 1), depth=round(pr[0][2], 3), dist=round(dist, 3), bar_px=px_len, why=why)
 
@@ -122,3 +148,45 @@ out['wrist_min_retreat_in_view'] = min(ok_s) if ok_s else None
 json.dump(out, open(sys.argv[2], 'w'), ensure_ascii=False, indent=1)
 print('wrist vs retreat:', [(r_['s'], r_.get('in_view'), r_.get('why'), r_.get('depth'), r_.get('v')) for r_ in ret][::2])
 print('base cam sample D:', out['segments']['D_tracking_window']['base']['samples'][0])
+
+# ---- 觀察追蹤段（新模式候選）：底盤沿通過線由距抓取點 0.60 m 到 0，TCP 目標＝抓取位姿沿接近軸後退 s_obs；多起點取整段可操作度最小值最大的連續分支
+import itertools
+S_OBS = 0.33
+a_w = T_est[:3, :3] @ np.asarray(a_H, float)
+T_obs_t = T_at(T_est, 0.0).copy(); T_obs_t[:3, 3] += S_OBS * a_w
+alongs = np.arange(FR.W_MAX, -1e-9, -0.025)                           # 追蹤窗口（距抓取點 0.25 m→0）；更長的窗口手臂構不到世界固定目標
+WB.set_model(phi0=0.0, finger_q=G.XO.FINGER_OPEN)
+LO_, HI_ = np.asarray(G.XO.LITE6_SAFE.lower, float) + 0.05, np.asarray(G.XO.LITE6_SAFE.upper, float) - 0.05
+best = None
+n_try = 0
+for sd in itertools.product((-0.6, 0.0, 0.6), (-0.3, 0.2), (0.6, 1.4), (-1.5, 0.0, 1.5), (-0.7, 0.7), (0.0,)):
+    seed, row, ok = np.array(sd), [], True
+    n_try += 1
+    for al_ in alongs:
+        b = np.r_[p_g - d * al_, yaw]
+        qq, r_, sm = DFK.ik_closure_fc(T_obs_t, b, seed)
+        qq = FR._wrap(qq) if not row else qq
+        if not (r_ < 1e-6 and np.isfinite(qq).all()) or np.any(qq < LO_) or np.any(qq > HI_) or (row and np.abs(qq - seed).max() > 0.5):
+            ok = False; break
+        cl = WB.clear_door(np.r_[b, qq, 0.0], T_est)
+        row.append(dict(along=round(float(al_), 3), q=qq, sigma=float(sm), clear={k_: float(cl[k_]) for k_ in ('env', 'base', 'self')}, wrist=view(np.r_[b, qq], 'wrist'), base=view(np.r_[b, qq], 'base')))
+        seed = qq
+    if not ok:
+        continue
+    sc = min(r_['sigma'] for r_ in row)
+    if best is None or sc > best[0]:
+        best = (sc, row)
+if best is None:
+    out['observe_tracking'] = dict(s_obs=S_OBS, feasible=False, n_seeds=n_try)
+    print('observe_tracking: no continuous branch')
+else:
+    sc, row = best
+    rate = max(float(np.abs(row[i + 1]['q'] - row[i]['q']).max()) / (0.025 / 0.05) for i in range(len(row) - 1))   # 每 2.5 cm、v_pass 0.05 m/s ⇒ 0.5 s
+    mc = {k_: min(r_['clear'][k_] for r_ in row) for k_ in ('env', 'base', 'self')}
+    out['observe_tracking'] = dict(s_obs=S_OBS, feasible=True, n_seeds=n_try, sigma_min=round(sc, 4), sigma_floor=WB.SIG_FLOOR, sigma_ok=bool(sc >= WB.SIG_FLOOR), joint_rate_max_at_v_pass=round(rate, 4), min_clear=mc, clear_ok=bool(all(mc[k_] >= WB.THR[k_] for k_ in mc)),
+                                   wrist_in_view=[bool(r_['wrist']['in_view']) for r_ in row], wrist_why=sorted({r_['wrist']['why'] for r_ in row if r_['wrist']['why']}), wrist_depth=[r_['wrist'].get('depth') for r_ in row], wrist_bar_px=[r_['wrist'].get('bar_px') for r_ in row],
+                                   base_in_view=[bool(r_['base']['in_view']) for r_ in row], alongs=[r_['along'] for r_ in row], q_first=[round(float(x), 4) for x in row[0]['q']], q_last=[round(float(x), 4) for x in row[-1]['q']],
+                                   note='不含從現構型到觀察姿態的準備段、不含停止掃掠；偵測是否成立須實際影像')
+    o_ = out['observe_tracking']
+    print('observe_tracking: sigma_min', o_['sigma_min'], 'rate', o_['joint_rate_max_at_v_pass'], 'clear', {k_: round(v_, 4) for k_, v_ in mc.items()}, 'wrist in view', sum(o_['wrist_in_view']), '/', len(row), o_['wrist_why'], 'depth', o_['wrist_depth'][::4], 'base', sum(o_['base_in_view']))
+json.dump(out, open(sys.argv[2], 'w'), ensure_ascii=False, indent=1, default=lambda x: x.tolist() if hasattr(x, 'tolist') else str(x))

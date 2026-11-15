@@ -42,7 +42,7 @@ def gen(T):
 cases, keep = [], {}
 for fr in meta['frames']:
     dep = np.load(os.path.join(RUN, 'frames', fr['stem'] + '_depth_m.npy'))
-    f = dict(dep=dep, K=np.asarray(meta['K'], float), T_cam=np.asarray(fr['cam_T_fk'], float), t_obs=float(fr['t_obs']), q=np.asarray(fr['q'], float))
+    f = dict(dep=dep, K=np.asarray(meta['K'], float), T_cam=np.asarray(fr['cam_T_fk'], float), t_obs=float(fr['t_obs']), q=np.asarray(fr['q'], float), t_state=float(fr['t_obs']), pose_source='fk_at_render_time', frame_id='map')   # online_1 的擷取碼以渲染時刻查同一步的姿態歷史算 FK（找不到同一步即拒收）
     k = int(np.argmin(np.abs(R[:, ci('t')] - f['t_obs'])))
     k1 = min(k + 1, len(R) - 1)
     row = R[k1]
@@ -125,7 +125,7 @@ out['contract_synthetic'] = C
 print('C', json.dumps(C, ensure_ascii=False, default=float)[:900])
 # 入口反例
 f_bad = dict(dep=np.zeros((4, 4)), K=np.eye(3), T_cam=np.eye(4), t_obs=1.0, q=None)
-out['entrance_negative'] = dict(no_sync_state=obs.intake(f_bad, 2.0)[1], future_stamp=obs.intake(dict(f_bad, q=np.zeros(9), t_obs=3.0), 2.0)[1], incomplete=obs.intake(dict(K=np.eye(3)), 2.0)[1],
+out['entrance_negative'] = dict(no_sync_state=obs.intake(f_bad, 2.0)[1], future_stamp=obs.intake(dict(f_bad, q=np.zeros(9), t_obs=3.0, t_state=3.0, pose_source='fk_at_render_time'), 2.0)[1], no_state_stamp=obs.intake(dict(f_bad, q=np.zeros(9)), 2.0)[1], state_time_mismatch=obs.intake(dict(f_bad, q=np.zeros(9), t_state=1.05, pose_source='fk_at_render_time'), 2.0)[1], pose_source_other=obs.intake(dict(f_bad, q=np.zeros(9), t_state=1.0, pose_source='latest_tf'), 2.0)[1], incomplete=obs.intake(dict(K=np.eye(3)), 2.0)[1],
                                 publish_by_non_owner=dict(accepted=auth.publish('NAV' if auth.owner != 'NAV' else 'GRASP', 0.0), owner=auth.owner, n_rejected=auth.n_rejected))
 # 事後對照
 res12 = json.load(open(os.path.join(HERE, 'runs', 'm8house_door_motm_12', 'result.json')))

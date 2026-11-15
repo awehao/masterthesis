@@ -1,0 +1,236 @@
+{
+ "note": "運動學層；導航提案與安全鏈為替身；可見性為幾何（中心＋兩端在畫面、深度範圍）；不是移動視覺驗證、不是全身避障驗證",
+ "estimate": {
+  "t_obs": 0.02,
+  "t_query": 0.03,
+  "age_s": 0.01,
+  "cls": "center_valid",
+  "reject": null,
+  "detect_ms": 71.0,
+  "ok": true,
+  "why": null
+ },
+ "plan": {
+  "pass_line": {
+   "p0": [
+    0.8392,
+    -0.4902
+   ],
+   "yaw_deg": 89.921,
+   "standoff": 0.45000000000000007
+  },
+  "line_search_s": 20.08,
+  "observe_search_s": 0.42,
+  "observe_info": {
+   "n_seeds": 72,
+   "rejected": {
+    "track_ik": 22,
+    "track_joint_limit": 45
+   },
+   "status": "候選（離線幾何與運動學核對；偵測成立與否、實際追蹤誤差未驗）"
+  },
+  "observe": {
+   "sigma_min": 0.0561,
+   "min_clear": {
+    "env": 0.084,
+    "base": 0.1901,
+    "self": 0.0064
+   },
+   "track_rate_max": 0.4789,
+   "prep_move_max_rad": 3.276,
+   "prep_time_s": 6.55,
+   "q_window_start": [
+    -1.1514,
+    -1.2094,
+    2.1311,
+    1.1588,
+    1.6513,
+    -1.3929
+   ],
+   "window": [
+    0.25,
+    -0.1
+   ]
+  },
+  "compute_budget": "兩段搜尋合計 20.5 s：須在背景程序於遠距導航期間完成；來不及（底盤前推後已到準備起點而結果未出）就不進伸臂段"
+ },
+ "nominal": {
+  "case": "nominal",
+  "t_end": 21.81,
+  "mode_end": "TRACK",
+  "events": [
+   {
+    "t": 2.8,
+    "what": "arm_prep_start",
+    "along": -0.024
+   },
+   {
+    "t": 8.7,
+    "what": "safety_brake_start",
+    "along": 0.498
+   },
+   {
+    "t": 14.65,
+    "what": "arm_track_start",
+    "along_pred": 0.2243,
+    "lat_pred_mm": 0.0,
+    "yaw_err_deg": 0.0,
+    "arm_err_rad": 0.0
+   },
+   {
+    "t": 16.3,
+    "what": "safety_deflect_start",
+    "along": 0.148
+   },
+   {
+    "t": 20.3,
+    "what": "normal_stop_start",
+    "along": -0.0517
+   }
+  ],
+  "first_decisions": [
+   {
+    "t": 14.65,
+    "decision": "start",
+    "along_pred": 0.2243,
+    "lat_pred_mm": 0.0,
+    "yaw_err_deg": 0.0,
+    "arm_err_rad": 0.0
+   }
+  ],
+  "route": {
+   "base": "NAV",
+   "arm": "TRACK",
+   "stop": false,
+   "n_rejected": 0
+  },
+  "final": {
+   "along": -0.0612,
+   "lat_mm": 0.0,
+   "base_speed": 0.0,
+   "arm_rate": 0.0
+  },
+  "lag_timeline_head": [
+   [
+    14.65,
+    0.231,
+    0.0049,
+    false
+   ],
+   [
+    14.7,
+    0.228,
+    0.0225,
+    true
+   ],
+   [
+    14.75,
+    0.226,
+    0.0395,
+    false
+   ],
+   [
+    14.8,
+    0.223,
+    0.052,
+    false
+   ],
+   [
+    14.85,
+    0.221,
+    0.0495,
+    false
+   ],
+   [
+    14.9,
+    0.218,
+    0.045,
+    false
+   ],
+   [
+    14.95,
+    0.216,
+    0.0417,
+    false
+   ],
+   [
+    15.0,
+    0.213,
+    0.0394,
+    false
+   ]
+  ],
+  "lag_after_1s_max": 0.058,
+  "tracking": {
+   "n_ticks": 144,
+   "n_fail": 0,
+   "lag_max_rad": 0.05804,
+   "n_clipped": 1,
+   "sigma_min": 0.0731,
+   "sigma_ok": true,
+   "wrist_sees_ticks": 144,
+   "lat_max_mm": 6.58
+  },
+  "min_clear": {
+   "env": 0.2575,
+   "base": 0.1901,
+   "self": 0.0063
+  },
+  "clear_ok": true
+ },
+ "late_arm": {
+  "case": "late_arm",
+  "t_end": 15.56,
+  "mode_end": "HOLD",
+  "events": [
+   {
+    "t": 14.05,
+    "what": "refuse_enter_reach_zone",
+    "along_pred": 0.2243,
+    "lat_pred_mm": 0.0,
+    "yaw_err_deg": 0.0,
+    "arm_err_rad": 3.226
+   }
+  ],
+  "first_decisions": [
+   {
+    "t": 14.05,
+    "decision": "refuse",
+    "along_pred": 0.2243,
+    "lat_pred_mm": 0.0,
+    "yaw_err_deg": 0.0,
+    "arm_err_rad": 3.226
+   }
+  ],
+  "route": {
+   "base": "NAV",
+   "arm": "HOLD",
+   "stop": true,
+   "n_rejected": 0
+  },
+  "final": {
+   "along": 0.2238,
+   "lat_mm": 0.0,
+   "base_speed": 0.0,
+   "arm_rate": 0.0
+  },
+  "lag_timeline_head": [],
+  "lag_after_1s_max": null,
+  "tracking": {
+   "n_ticks": 0,
+   "n_fail": 0,
+   "lag_max_rad": 0.0,
+   "n_clipped": 0,
+   "sigma_min": null,
+   "sigma_ok": true,
+   "wrist_sees_ticks": 0,
+   "lat_max_mm": 0.0
+  },
+  "min_clear": {
+   "env": null,
+   "base": null,
+   "self": null
+  },
+  "clear_ok": true
+ }
+}
