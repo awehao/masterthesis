@@ -212,6 +212,7 @@ class DoorOpenExec:
         self._pr_delta, self._w_ext, self.pr_log = np.zeros(6), None, []   # r22（B2）：已提交的設定點偏置 δ、最新外力旋量 (F, M@TCP, 世界)、紀錄
         self._pr_cand, self._pr_commit_tick = None, False             # r23：本拍候選 δ（連同候選命令與停止預測通過才提交；被拒或晚到即丟棄）
         self._pr_inf, self.pr_rejected = {}, 0
+        self.qp_log = []                                              # T3：每拍求解分項（t、是否已停止、前置 ms、mpc.solve ms、組裝 ms、GI ms、OSQP ms、求解器 0=gi／1=osqp）
         self.pr_ts = []                                               # 紀錄（每控制拍）：t、事件(1 提交／−1 候選被拒或晚到／0 無候選)、δ 候選 6、δ 已提交 6、δ 已生效 6、輸入旋量 F3＋M3
         self._pr_cand_last = None
         self._pr_u, self._pr_pipe, self._pr_s = np.zeros(6), [np.zeros(6) for _ in range(D_STEPS)], np.zeros(6)   # δ 增量對應的命令分量、其在途管線、已實際進入設定點的 δ（含管線延遲）
@@ -516,7 +517,7 @@ class DoorOpenExec:
 
     def _light_copy(self):
         import copy
-        big = ('step_log', 'pipe_log', 'cmd_hist', 'events', 'rec', 'tick_ms', 'solve_ms', 'sweep_ms', 'pool_ms', 'prep_ms', 'p2_log', 'fb_log', 'mon_ms', 'cl_ms', 'cand_ms', 'sn_ms')
+        big = ('step_log', 'pipe_log', 'cmd_hist', 'events', 'rec', 'tick_ms', 'solve_ms', 'sweep_ms', 'pool_ms', 'prep_ms', 'p2_log', 'fb_log', 'mon_ms', 'cl_ms', 'cand_ms', 'sn_ms', 'qp_log', 'pr_ts', 'pr_log', 'hold_log')
         saved = {k: getattr(self, k) for k in big if hasattr(self, k)}
         pool, stg, g2p = self._pool, self.staged, self.g2
         try:
@@ -819,8 +820,12 @@ class DoorOpenExec:
             sk_ = sk_ + DT * u
         arm = dict(u_arm_nom=np.array(u_nom), mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=cfg.arm_model, T_seq=np.array(Ts), w_p=C0.W_NEAR,
                    lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=False, qp_solver='gi', **B.W_ARM)
+        w_pre = time.perf_counter()
         r = self.mpc.solve(X_now=from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=None)
         self.solve_ms.append((time.perf_counter() - w0) * 1e3)
+        qi_ = (r.arm_check or {}).get('qp') or {}
+        f_ = lambda v_: float('nan') if v_ is None else float(v_)       # noqa: E731
+        self.qp_log.append((float(self.t), float(self.stop is not None), (w_pre - w0) * 1e3, (time.perf_counter() - w_pre) * 1e3, f_(qi_.get('asm_ms')), f_(qi_.get('gi_ms')), f_(qi_.get('osqp_ms')), 0.0 if qi_.get('solver') == 'gi' else 1.0))
         ck = dict(r.arm_check or {})
         if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None:
             return None

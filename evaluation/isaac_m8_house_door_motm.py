@@ -42,6 +42,10 @@ a = ap.parse_args()
 
 # ---- 啟動模擬器前：只匯入輕量的計算池／規劃程序模組並 fork（子程序自己匯入專案模組）；專案模組在 SimulationApp 之後才匯入
 #      （專案模組會放入離線用的 rclpy 替身，若早於 Kit 載入會使 Kit 擴充套件匯入失敗——冒煙 1 實測崩潰 139）
+import door_cpu_layout as CPUL                                   # noqa: E402
+CPU_LAYOUT = os.environ.get('CPU_LAYOUT') == '1'                     # T2：排程與 BLAS 執行緒配置（只改排程；預設關＝舊行為）
+if CPU_LAYOUT:
+    CPUL.blas_single()                                           # 須在匯入 NumPy 前
 import numpy as np                                               # noqa: E402
 os.environ.setdefault('P2_TERM', '1')
 os.environ.setdefault('P2_FINAL', '1')
@@ -57,9 +61,14 @@ try:
 except Exception:                                                # noqa: BLE001
     pass
 CSW = DCS.CStopWorker()                                              # 閉鏈一致備援停法的向前模擬程序（Codex 20261115_005224）
+CPU_PIN = None
+if CPU_LAYOUT:
+    CPU_PIN = dict(workers=CPUL.pin_workers(POOL, CSW, (PLANNER, PLANNER_FS)), pre_kit=CPUL.pre_kit())
 
 from isaacsim import SimulationApp                               # noqa: E402
 sim_app = SimulationApp({'headless': False, 'width': 1280, 'height': 720})
+if CPU_LAYOUT:
+    CPU_PIN['post_kit'] = CPUL.post_kit()                         # 只移主執行緒到 CPU 0（Kit 既有執行緒留在 Kit 集合）
 import door_wbopt as WB                                          # noqa: E402
 import door_clear_door_fast as _F                                # noqa: E402
 WB.clear_door = _F.clear_door_fast
@@ -621,6 +630,7 @@ def main():
                 exn = XO.DoorOpenExec(ident, Xd0p, 0.05, T_WH_b, phi_b, T_HE_act, GOAL, ho, fq_b, arm_mode='closure', joint_kp=a.kp,
                                       g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0, cstop=CSW, preload_release=bool(a.preload_release)))
                 exn.p2_open = True
+                res['cpu_layout'] = dict(enabled=CPU_LAYOUT, pin=CPU_PIN, at_handover=CPUL.readback(POOL, CSW, (PLANNER, PLANNER_FS)))
                 if a.diag:
                     exn.deadline_inject = lambda cc: cc.t >= DIAG_STOP_T - 1e-9   # 取證：0.5 s 後強制本拍晚到 ⇒ 與第四趟相同的閉鏈一致停止流程
                 wu = exn.warmup(q, phi_b)                                     # 交接前預熱（複本空跑，本體不動）；試跑前做，避免試跑拍含冷啟成本
@@ -861,8 +871,17 @@ def main():
         res['open']['bind_deformation'] = None if not deflog else dict(pos_mm_max=round(max(x_[1] for x_ in deflog) * 1e3, 3), rot_deg_max=round(max(x_[2] for x_ in deflog), 3), pos_mm_end=round(deflog[-1][1] * 1e3, 3), rot_deg_end=round(deflog[-1][2], 3),
                                                                      est_spring_force_max_n=round(max(x_[8] for x_ in deflog), 2), est_damper_force_max_n=round(max(x_[9] for x_ in deflog), 2), est_spring_torque_max_nm=round(max(x_[10] for x_ in deflog), 3), est_damper_torque_max_nm=round(max(x_[11] for x_ in deflog), 3),
                                                                      note='力／力矩為估算（k×變形、c×差分相對速度；fixed 模型下僅供對照，非實際連接力）', cols=['t', 'pos_m', 'rot_deg', 'dx', 'dy', 'dz', 'vpos', 'vrot', 'F_spring', 'F_damper', 'T_spring', 'T_damper'])
+        QL_ = np.array(ex.qp_log, float).reshape(-1, 8)
+        def qsum(m_):
+            S_ = QL_[m_]
+            if not len(S_):
+                return None
+            med = lambda c_: (None if not np.isfinite(S_[:, c_]).any() else round(float(np.nanmedian(S_[:, c_])), 2))   # noqa: E731
+            return dict(n=int(len(S_)), pre_ms=med(2), mpc_solve_ms=med(3), mpc_solve_ms_max=round(float(S_[:, 3].max()), 2), asm_ms=med(4), gi_ms=med(5), osqp_ms=med(6), n_osqp_fallback=int((S_[:, 7] > 0.5).sum()))
+        res['open']['qp_timing'] = dict(normal_ticks=qsum(QL_[:, 1] < 0.5), path_stop_ticks=qsum(QL_[:, 1] > 0.5), note='正常拍與停止中求解分列；cstop 停止拍不求解')
+        res['cpu_layout_end'] = CPUL.readback(POOL, CSW, (PLANNER,)) if CPU_LAYOUT else None
         res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'], fb_log=ex.fb_log, preload_release=dict(enabled=bool(ex.g2['preload_release']), n_committed=int(sum(1 for x_ in ex.pr_ts if x_[1] == 1)), n_rejected=int(sum(1 for x_ in ex.pr_ts if x_[1] == -1)), wrench_compute_ms_max=(None if not wlog else round(float(max(x_[-1] for x_ in wlog)), 3)), wrench_compute_note='外力旋量換算在控制器 50 ms 計時之外，另列', baseline=None if wb['bF'] is None else dict(F_world=[float(x_) for x_ in wb['bF']], M_link6=[float(x_) for x_ in wb['bM']], n=len(wb['F'])), n=len(ex.pr_log), delta_abs_max=max((x_[1] for x_ in ex.pr_log), default=None), delta_end=[round(float(x_), 5) for x_ in ex._pr_delta], Fc_first=(ex.pr_log[0][2] if ex.pr_log else None), Fc_max=max((x_[2] for x_ in ex.pr_log), default=None), Fc_last=(ex.pr_log[-1][2] if ex.pr_log else None), Mc_last=(ex.pr_log[-1][3] if ex.pr_log else None), lam_last=(ex.pr_log[-1][4] if ex.pr_log else None), sat_any=any(x_[5] for x_ in ex.pr_log), params=dict(KI=XO.PR.KI, RATE_MAX=XO.PR.RATE_MAX, DELTA_MAX=XO.PR.DELTA_MAX), log_cols=['t', 'delta_abs_max', 'Fc_norm', 'Mc_norm', 'lambda', 'sat', 'updated']), base_hold_log_tail=ex.hold_log[-5:], base_hold_n=len(ex.hold_log), base_hold_cmd_max=[max((x[1] for x in ex.hold_log), default=None), max((x[2] for x in ex.hold_log), default=None)], cstop_ticks=len(ex.cs_log), stop_mode=ex.stop_mode, tick_ms_normal=[round(float(m), 1) for i, m in enumerate(ex.tick_ms) if ex.stop is None or i * 0.05 < float(ex.stop['t']) - 1e-9])
-        np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), preload_ts=np.array(ex.pr_ts, float), preload_ts_cols=np.array(['t', 'event(1提交,-1拒絕或晚到,0無候選)'] + [f'cand_{k_}' for k_ in range(6)] + [f'committed_{k_}' for k_ in range(6)] + [f'in_setpoint_{k_}' for k_ in range(6)] + ['Fx', 'Fy', 'Fz', 'Mx', 'My', 'Mz']), wrench=np.array(wlog, float), wrench_cols=np.array(['t'] + [f'raw_j6_{k_}' for k_ in range(6)] + ['Fext_x', 'Fext_y', 'Fext_z', 'Mtcp_x', 'Mtcp_y', 'Mtcp_z', 'compute_ms']), preload=np.array(ex.pr_log, float), bind_deform=np.array(deflog), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
+        np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), qp_log=np.array(ex.qp_log, float), qp_log_cols=np.array(['t', 'stopped', 'pre_ms', 'mpc_solve_ms', 'asm_ms', 'gi_ms', 'osqp_ms', 'solver(0gi,1osqp)']), tick_ms=np.array(ex.tick_ms, float), preload_ts=np.array(ex.pr_ts, float), preload_ts_cols=np.array(['t', 'event(1提交,-1拒絕或晚到,0無候選)'] + [f'cand_{k_}' for k_ in range(6)] + [f'committed_{k_}' for k_ in range(6)] + [f'in_setpoint_{k_}' for k_ in range(6)] + ['Fx', 'Fy', 'Fz', 'Mx', 'My', 'Mz']), wrench=np.array(wlog, float), wrench_cols=np.array(['t'] + [f'raw_j6_{k_}' for k_ in range(6)] + ['Fext_x', 'Fext_y', 'Fext_z', 'Mtcp_x', 'Mtcp_y', 'Mtcp_z', 'compute_ms']), preload=np.array(ex.pr_log, float), bind_deform=np.array(deflog), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
     res['events'] = ev
     res['forbidden_contact'] = dict(latched=gate.latched)
     res['aborted'] = box['aborted']

@@ -10,12 +10,24 @@
 記：每拍時間序列（控制器、底盤速度、門角、TCP 對真值抓取位姿）、事件、各段計算時間（模擬時間線上的等待）、完成／停止／中止。
     python3 evaluation/test_door_motm_chain_fake.py OUT_PREFIX"""
 import json, math, os, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import door_cpu_layout as CPUL
+CPU_LAYOUT = os.environ.get('CPU_LAYOUT') == '1'
+if CPU_LAYOUT:
+    CPUL.blas_single()
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import door_sweep_pool as DSP
 SHARED = DSP.SweepPool(int(os.environ.get('POOL_N', '6'))) if os.environ.get('SHARED_POOL') == '1' else None   # 同 Isaac 執行器：先 fork 的共用池物件
 import door_cstop as DCS
 CSW = DCS.CStopWorker() if SHARED is not None else None
+BG = None
+if os.environ.get('BG_PLAN') == '1':                                 # 背景規劃負載（同執行器：獨立規劃程序持續規劃；結果丟棄）
+    import door_p2_planner_server as PS
+    BG = PS.PlannerServer()
+if CPU_LAYOUT:
+    CPUL.pin_workers(SHARED, CSW, (BG,) if BG is not None else ())
+    CPUL.post_kit()                                                  # 主執行緒 → CPU 0
 os.environ.setdefault('P2_TERM', '1'); os.environ.setdefault('P2_FINAL', '1')
 import door_motm_p2 as P2
 WB = P2.WB
@@ -117,6 +129,7 @@ while t < 30.0:
             helper = WB.DoorWBOpt(T_plan, np.eye(4), x_pred, GOAL, N=2, dt=0.2, T_HE=T_HE_pred, project_start=False)
             v_pred = np.r_[vw, 0.0, helper.closure_velocity(x_pred, np.r_[vw, 0.0], 0.0), 0.0]
             o1, i1, v1, w1 = P2.plan_seg(T_plan, T_HE_pred, x_pred, v_pred, H, GOAL, FQ, phi_b)
+            BG_V = v_pred.copy()
             first.update(req=round(t, 3), t_avail=t + w1, ok=bool(v1['feasible']), wall_s=round(w1, 3), why=i1['why'], failed=v1['failed'], o=o1, T_plan=T_plan, T_HE_pred=T_HE_pred, x_pred=x_pred, t_ready_pred=t_ready_rel)
             ev.append(dict(t=round(t, 3), what='first_segment_request', wall_s=round(w1, 3), feasible=v1['feasible'], t_avail=round(t + w1, 3), t_ready_pred=round(t_ready_rel, 3)))
             t = 0.0
@@ -165,6 +178,9 @@ while t < 30.0:
         phi_now, _ = ex.phi_of(q)
         # 4 P2 續接
         if tick and ex.staged is not None and ex.stop is None:
+            if BG is not None:
+                if BG.busy is None or BG.poll() is not None:
+                    BG.submit(1, dict(T_WH0=first['T_plan'], T_HE=first['T_HE_pred'], x0=first['x_pred'], v0=BG_V, H=H, goal=GOAL, fq=FQ, phi_model=phi_b, try_final=True))
             dec = ex.staged_step(t, q.copy(), phi_now)
             if os.environ.get('LATE_AFTER_P2') == '1' and isinstance(dec, dict) and dec.get('ok') and ex.deadline_inject is None:   # 核對：P2 接上後立即晚到
                 _once = []
@@ -250,10 +266,21 @@ else:
 TS = np.array(ts)
 bs = np.r_[0.0, np.linalg.norm(np.diff(TS[:, 3:5], axis=0), axis=1) / DT]
 i_h = int(np.argmax(TS[:, 1] > 0.5)) if (TS[:, 1] > 0.5).any() else None
+EQ = None
+if ex is not None:
+    import hashlib
+    SL_ = np.array(ex.step_log, float)
+    TM_ = np.array(ex.tick_ms, float)
+    ctl = TM_[TM_ > 10.0]                                              # 有求解的控制拍
+    QL_ = np.array(ex.qp_log, float).reshape(-1, 8)
+    EQ = dict(cmd_sha256=hashlib.sha256(np.round(SL_[:, 5:14], 10).tobytes()).hexdigest()[:16], n_steps=int(len(SL_)), n_ctrl_ticks=int(len(ctl)), ctrl_tick_p50=round(float(np.median(ctl)), 1), ctrl_tick_p95=round(float(np.percentile(ctl, 95)), 1), ctrl_tick_max=round(float(ctl.max()), 1),
+              n_over_45=int((ctl > 45.0).sum()), n_over_50=int((ctl > 50.0).sum()), mpc_solve_p50=round(float(np.median(QL_[:, 3])), 2), mpc_solve_max=round(float(QL_[:, 3].max()), 2), pre_p50=round(float(np.median(QL_[:, 2])), 2), gi_p50=round(float(np.nanmedian(QL_[:, 5])), 2), n_osqp=int((QL_[:, 7] > 0.5).sum()),
+              cand_p50=round(float(np.median(ex.cand_ms)), 1), cand_max=round(float(max(ex.cand_ms)), 1), cl_p50=round(float(np.median(ex.cl_ms)), 1), mon_p50=round(float(np.median(ex.mon_ms)), 1),
+              cpu=CPUL.readback(SHARED, CSW, (BG,) if BG is not None else ()) if CPU_LAYOUT else dict(enabled=False, blas_env={k: os.environ.get(k) for k in CPUL.BLAS_ENV}), bg_plan=BG is not None, python=sys.executable, numpy=np.__version__)
 summary = dict(
     first_segment=dict(k={k_: first.get(k_) for k_ in ('req', 'wall_s', 'why', 'failed', 'ok')}, t_avail=None if first['t_avail'] is None else round(first['t_avail'], 3), t_ready_pred=round(first.get('t_ready_pred', float('nan')), 3)),
     grasp=dict(phases=gc.ph_hist, stop=gc.stop, abort=gc.abort, accepted=gc.accepted, n_deadline_miss=gc.n_deadline_miss),
-    open=None if ex is None else dict(done=ex.done, stop=ex.stop, abort=ex.abort, stop_ok=ex.stop_ok, n_deadline_miss=ex.n_deadline_miss, stop_mode=ex.stop_mode, tick_max_ms=round(float(max(ex.tick_ms)), 1), tick_p50_ms=round(float(np.median(ex.tick_ms)), 1), fb_log=ex.fb_log, p2_decisions=dict(n=len(log['decisions']), ok=sum(1 for d_ in log['decisions'] if d_.get('ok'))),
+    open=None if ex is None else dict(equiv=EQ, done=ex.done, stop=ex.stop, abort=ex.abort, stop_ok=ex.stop_ok, n_deadline_miss=ex.n_deadline_miss, stop_mode=ex.stop_mode, tick_max_ms=round(float(max(ex.tick_ms)), 1), tick_p50_ms=round(float(np.median(ex.tick_ms)), 1), fb_log=ex.fb_log, p2_decisions=dict(n=len(log['decisions']), ok=sum(1 for d_ in log['decisions'] if d_.get('ok'))),
                                       req_results={r_.get('result', 'pending'): sum(1 for x_ in log['req'] if x_.get('result', 'pending') == r_.get('result', 'pending')) for r_ in log['req']},
                                       min_clear_actual={k_: round(float(v_), 4) for k_, v_ in ex.mins['act'].items()}, closure_stats={k_: v_ for k_, v_ in ex.cl_stats.items() if k_ != 'fails'}),
     motion=dict(base_speed_min_between_start_and_handover=None if i_h is None else round(float(bs[1:i_h + 3].min()), 4), base_speed_at_handover=None if i_h is None else round(float(bs[i_h]), 4),
