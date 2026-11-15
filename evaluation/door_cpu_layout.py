@@ -31,11 +31,11 @@ def blas_runtime(set_to=None):
             if 'openblas' not in os.path.basename(pth).lower() or pth in seen:
                 continue
             seen.add(pth)
-            rec = dict(lib=os.path.basename(pth), before=None, after=None, set_ok=None)
+            rec = dict(lib=os.path.basename(pth), path=pth, before=None, after=None, set_ok=None)
             try:
                 L = ctypes.CDLL(pth)
-                get = next((getattr(L, n) for n in ('scipy_openblas_get_num_threads64_', 'openblas_get_num_threads64_', 'openblas_get_num_threads') if hasattr(L, n)), None)
-                st = next((getattr(L, n) for n in ('scipy_openblas_set_num_threads64_', 'openblas_set_num_threads64_', 'openblas_set_num_threads') if hasattr(L, n)), None)
+                get = next((getattr(L, n) for n in ('scipy_openblas_get_num_threads64_', 'scipy_openblas_get_num_threads', 'openblas_get_num_threads64_', 'openblas_get_num_threads') if hasattr(L, n)), None)
+                st = next((getattr(L, n) for n in ('scipy_openblas_set_num_threads64_', 'scipy_openblas_set_num_threads', 'openblas_set_num_threads64_', 'openblas_set_num_threads') if hasattr(L, n)), None)
                 if get is not None:
                     rec['before'] = int(get())
                 if set_to is not None and st is not None:
@@ -49,6 +49,11 @@ def blas_runtime(set_to=None):
     except Exception as e:                                            # noqa: BLE001
         out.append(dict(error=repr(e)[:120]))
     return out
+
+
+def blas_all_single(rb):
+    """執行期讀回的判定：至少一份已載入的 OpenBLAS、每份都讀得到（getter 存在、無錯誤）且執行緒數＝1。讀不到或符號不支援 ⇒ False。"""
+    return bool(rb) and all(isinstance(r, dict) and r.get('error') is None and r.get('after') == 1 for r in rb)
 
 
 def pin(pid, cpus, nice=None):

@@ -631,13 +631,7 @@ def main():
                 exn = XO.DoorOpenExec(ident, Xd0p, 0.05, T_WH_b, phi_b, T_HE_act, GOAL, ho, fq_b, arm_mode='closure', joint_kp=a.kp,
                                       g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0, cstop=CSW, preload_release=bool(a.preload_release)))
                 exn.p2_open = True
-                if CPU_LAYOUT:
-                    bl_ = CPUL.blas_runtime(1)
-                    if not bl_ or any(r_.get('after') != 1 for r_ in bl_):   # 讀回不是單執行緒 ⇒ 不交接（走抓持控制器停止流程）
-                        log_event('blas_threads_not_single', readback=bl_)
-                        gc._stop('blas_threads_not_single')
-                        break
-                res['cpu_layout'] = dict(enabled=CPU_LAYOUT, pin=CPU_PIN, at_handover=CPUL.readback(POOL, CSW, (PLANNER, PLANNER_FS)))
+                res.setdefault('cpu_layout', {}).update(enabled=CPU_LAYOUT, pin=CPU_PIN, at_handover=CPUL.readback(POOL, CSW, (PLANNER, PLANNER_FS)))
                 if a.diag:
                     exn.deadline_inject = lambda cc: cc.t >= DIAG_STOP_T - 1e-9   # 取證：0.5 s 後強制本拍晚到 ⇒ 與第四趟相同的閉鏈一致停止流程
                 wu = exn.warmup(q, phi_b)                                     # 交接前預熱（複本空跑，本體不動）；試跑前做，避免試跑拍含冷啟成本
@@ -651,7 +645,15 @@ def main():
                 valid = tmp.stop is None and tmp.abort is None and tmp._cl_fail is None and tmp.mins['stop_closure_pos'] <= XO.CL_TOL['pos_m'] and tmp._fb_ok
                 log_event('handover_attempt', bind_ok=okb, bind=okd, bind_values=c, dry_ok=valid, dry=dry, ready_ver=gc.ready_ver, warmup_ms=round(wu, 1), dry_run_ms=round(dry_ms, 1),
                           handover_compute_ms=round((time.perf_counter() - w_ho) * 1e3, 1), note='交接計算在本體控制拍計時之外；計算期間物理不步進')
-                if okb and valid and gc.accept_handover(gc.ready_ver):
+                blas_ok = True
+                if CPU_LAYOUT:                                           # 預熱／試跑之後、綁定之前：各份已載入 OpenBLAS 設單執行緒並以 getter 讀回；不是全部為 1（或讀不到）⇒ 不交接
+                    bl_ = CPUL.blas_runtime(1)
+                    blas_ok = CPUL.blas_all_single(bl_)
+                    res.setdefault('cpu_layout', {})['blas_before_bind'] = bl_
+                    if not blas_ok and gc.stop is None:
+                        log_event('blas_threads_not_single', readback=bl_)
+                        gc._stop('blas_threads_not_single')              # 不跳出迴圈：之後照抓持控制器既有停止流程走到停穩或逾時中止
+                if okb and valid and blas_ok and gc.accept_handover(gc.ready_ver):
                     if fs.pend[0] is not None:                         # A1：在途的首段滾動規劃已無用 ⇒ 終止該程序（之後不再送首段請求）
                         PLANNER_FS.proc.kill()
                         log_event('first_segment_cancelled', rid=fs.pend[0]['rid'], target=round(fs.pend[0]['target'], 3))
