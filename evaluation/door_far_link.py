@@ -255,7 +255,7 @@ def handover_request(t, auth, line, q, v_meas_world, s_arm, pipe, u_last, u_prev
                 base_cmd_route='抓持控制器的底盤命令仍送入 /cmd_vel_pre_shield → Shield → GUARD → /cmd_vel（不旁路安全鏈）'), []
 
 
-def pregrasp_from_estimate(T_WH, T_at, s_pre, K, clear_fn=None, thr=None, sig_floor=None, lo=None, hi=None):
+def pregrasp_from_estimate(T_WH, T_at, s_pre, K, clear_fn=None, thr=None, sig_floor=None, lo=None, hi=None, collect=None):
     """由把手估計產生預抓構型與底盤通過線位置（不讀真值、不讀既有趟的預抓關節角）：
     候選：底盤在門面外法向上、朝向正對門（−n）、側向距離 standoff ∈ [0.36, 0.56] m（每 1 cm）；每個候選以通用種子格點多起點解 IK 到「抓取位姿後退 s_pre」，
     再由該解連續解到抓取位姿（s＝0）；兩個構型都須：殘差 <1e-6、在關節限位內、可操作度 ≥ sig_floor、淨空 ≥ thr（若給 clear_fn）。
@@ -305,6 +305,8 @@ def pregrasp_from_estimate(T_WH, T_at, s_pre, K, clear_fn=None, thr=None, sig_fl
                         continue
                 stat['n_feasible'] += 1
                 sc = min(s1, s0)
+                if collect is not None:                               # 收集全部可行候選（供「先可連續到達再排序」的選擇）
+                    collect.append(dict(along=float(lat_along), standoff=float(so), yaw=float(yaw), base=b.copy(), q_pregrasp=q1.copy(), q_grasp=q0.copy(), sigma_min=float(sc), d=d[:2].copy(), n=n[:2].copy(), p0=b[:2].copy()))
                 if best is None or sc > best['sigma_min'] + 1e-9:
                     best = dict(along=float(lat_along), standoff=float(so), yaw=float(yaw), base=b.copy(), q_pregrasp=q1.copy(), q_grasp=q0.copy(), sigma_min=float(sc), d=d[:2].copy(), n=n[:2].copy())
     if best is None:
