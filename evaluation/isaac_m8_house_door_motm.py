@@ -32,6 +32,7 @@ ap.add_argument('--finger-kp', type=float, default=1.0e4)
 ap.add_argument('--finger-kd', type=float, default=1.0e3)
 ap.add_argument('--settle-s', type=float, default=1.0)
 ap.add_argument('--smoke', action='store_true')
+ap.add_argument('--arm-friction-model', default='legacy', choices=['legacy', 'urdf_effort'])   # urdf_effort（Codex 20261115_1421xx）：手臂六關節逐軸摩擦 static＝dynamic＝1.0 N·m、viscous＝0；模型假設，不是實機辨識
 ap.add_argument('--diag', action='store_true')                      # 取證短診斷（Codex 20261115_14xxxx）：不送 P2、開門 0.5 s 後強制走閉鏈一致停止流程、每物理步補記根連桿三個時點等
 a = ap.parse_args()
 
@@ -175,6 +176,28 @@ def main():
     v_base = RigidPrim(prim_paths_expr=str(base_b[0]), name='v_base', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True, contact_filter_prim_paths_expr=[leaf] + env_paths)
     v_grip = RigidPrim(prim_paths_expr=str(grip[0]), name='v_grip_pose')
     v_leaf = RigidPrim(prim_paths_expr=leaf, name='v_leaf_pose')
+    fric_usd = {}
+    if a.arm_friction_model == 'urdf_effort':                        # world.reset 之前：逐軸 API（該軸優先於舊的無因次 jointFriction）；顯式保留原速度上限與 armature
+        from pxr import PhysxSchema
+        for pr in stage.Traverse():
+            if pr.GetName() in ARM and pr.IsA(UsdPhysics.RevoluteJoint):
+                old = PhysxSchema.PhysxJointAPI(pr)
+                mv = old.GetMaxJointVelocityAttr().Get() if old.GetMaxJointVelocityAttr() else None
+                am = old.GetArmatureAttr().Get() if old.GetArmatureAttr() and old.GetArmatureAttr().HasAuthoredValue() else 0.0
+                jf = old.GetJointFrictionAttr().Get() if old.GetJointFrictionAttr() else None
+                if mv is None or not math.isfinite(float(mv)):
+                    print('[motm] 手臂關節原速度上限讀不到 ⇒ 拒跑', flush=True)
+                    return 31
+                pr.ApplyAPI('PhysxJointAxisAPI', 'angular')
+                from pxr import Sdf
+                for nm_, v_ in (('staticFrictionEffort', 1.0), ('dynamicFrictionEffort', 1.0), ('viscousFrictionCoefficient', 0.0), ('maxJointVelocity', float(mv)), ('armature', float(am))):
+                    pr.CreateAttribute('physxJointAxis:angular:' + nm_, Sdf.ValueTypeNames.Float).Set(float(v_))
+                dr = UsdPhysics.DriveAPI(pr, 'angular')
+                fric_usd[pr.GetName()] = dict(legacy_jointFriction_unitless=None if jf is None else float(jf), axis_static_Nm=1.0, axis_dynamic_Nm=1.0, axis_viscous=0.0, maxJointVelocity_deg_s=float(mv), armature=float(am),
+                                              drive_maxForce_Nm=None if not dr.GetMaxForceAttr() else float(dr.GetMaxForceAttr().Get()))
+        if sorted(fric_usd) != sorted(ARM):
+            print('[motm] 手臂關節逐軸摩擦設定不完整 ⇒ 拒跑', sorted(fric_usd), flush=True)
+            return 32
     world.reset()
     for v in v_f + v_o + [v_base, v_grip, v_leaf]:
         v.initialize()
@@ -212,6 +235,31 @@ def main():
     robot.set_joint_positions(q0.astype(np.float32))
     robot.get_articulation_controller().set_gains(kps=kp, kds=kd)
     kps_rb, _ = robot.get_articulation_controller().get_gains()
+    # ---- 後端（PhysX tensor view）有效屬性讀回：摩擦三項、速度／力矩上限、armature、增益
+    arm_backend = dict(model=a.arm_friction_model)
+    try:
+        pv = robot._articulation_view._physics_view
+        fp = np.asarray(pv.get_dof_friction_properties(), float)[0]
+        arm_backend.update(dof=[names[i] for i in idx], friction_static_dynamic_viscous=[[float(x) for x in fp[i]] for i in idx],
+                           max_velocity=[float(np.asarray(pv.get_dof_max_velocities(), float)[0][i]) for i in idx], max_force=[float(np.asarray(pv.get_dof_max_forces(), float)[0][i]) for i in idx],
+                           armature=[float(np.asarray(pv.get_dof_armatures(), float)[0][i]) for i in idx],
+                           kp=[float(np.asarray(pv.get_dof_stiffnesses(), float)[0][i]) for i in idx], kd=[float(np.asarray(pv.get_dof_dampings(), float)[0][i]) for i in idx],
+                           legacy_friction_coefficients=[float(np.asarray(pv.get_dof_friction_coefficients(), float)[0][i]) for i in idx] if hasattr(pv, 'get_dof_friction_coefficients') else None,
+                           units='摩擦：static／dynamic＝N·m，viscous＝後端單位（tensor API；角度制或弧度制依後端，值為 0）；max_velocity＝後端單位（rad/s）；max_force＝N·m', usd=fric_usd)
+    except Exception as e:                                            # noqa: BLE001
+        arm_backend['error'] = repr(e)[:300]
+    print('[motm] arm_backend', json.dumps(arm_backend, ensure_ascii=False)[:1500], flush=True)
+    if a.arm_friction_model == 'urdf_effort':
+        fpv = np.array(arm_backend.get('friction_static_dynamic_viscous', [[np.nan] * 3]), float)
+        mvb, mfb = np.array(arm_backend.get('max_velocity', [np.nan]), float), np.array(arm_backend.get('max_force', [np.nan]), float)
+        ok_f = ('error' not in arm_backend and fpv.shape == (6, 3) and np.isfinite(fpv).all() and np.allclose(fpv[:, 0], 1.0, atol=1e-6) and np.allclose(fpv[:, 1], 1.0, atol=1e-6) and np.allclose(fpv[:, 2], 0.0, atol=1e-9)
+                and np.isfinite(mvb).all() and np.allclose(mvb, [math.radians(fric_usd[names[i]]['maxJointVelocity_deg_s']) for i in idx], rtol=1e-3)
+                and np.isfinite(mfb).all() and np.allclose(mfb, [fric_usd[names[i]]['drive_maxForce_Nm'] for i in idx], rtol=1e-3)
+                and np.allclose(arm_backend['kp'], a.kp, rtol=1e-3) and np.allclose(arm_backend['kd'], a.kd, rtol=1e-3))
+        if not ok_f:
+            print('[motm] 手臂關節後端有效屬性讀回不符（摩擦／速度上限／力矩上限／增益）⇒ 拒跑', flush=True)
+            json.dump(dict(refused='arm_backend_readback', arm_backend=arm_backend), open(os.path.join(a.out, 'refused.json'), 'w'), ensure_ascii=False, indent=1)
+            return 33
     if not all(abs(float(np.asarray(kps_rb)[i]) - a.kp) <= 1e-3 * a.kp for i in idx):
         print('[motm] 增益讀回不符 ⇒ 拒跑', flush=True)
         return 66
@@ -328,7 +376,7 @@ def main():
                scope='理想感知（把手 prim 真值 30 Hz）＋理想抓持（FixedJoint）；非即時（控制計算期間物理不步進）；範圍：開到 85° 停穩為止（不解綁、不退出、不穿門）',
                init=dict(pass_line_from='full_2 綁定底盤位姿 y／偏航（場景初始條件）', b_start=b_start.tolist(), lead_m=L_LEAD, lead_s=T_LEAD, v_pass=V, q_arm_pregrasp=qa.tolist(),
                          note='起點瞬移到通過線上窗口前 0.01 m、手臂預抓構型（抓取同側分支），靜置後從靜止起步；起跑後不瞬移。前導受 x≈0.80 m 腕部奇異限制（冒煙 2：0.15 m 前導在 1.9 s 手臂速率 1.61 rad/s 超限停止）'),
-               gains=dict(kp=a.kp, kd=a.kd), door_readback=dict(hinge=hinge, leaf_rigid_body_damping=leaf_damp),
+               gains=dict(kp=a.kp, kd=a.kd), arm_backend=arm_backend, door_readback=dict(hinge=hinge, leaf_rigid_body_damping=leaf_damp),
                finger=dict(command='CLOSE 段由張開斜降到 0（夾緊，同停車版）', geometry='兩指各自實測開度；CLOSE 段掃掠另含預測閉合開度'))
     # ---- 靜置
     quat0 = np.array([math.cos(b_start[2] / 2), 0.0, 0.0, math.sin(b_start[2] / 2)], np.float32)

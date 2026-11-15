@@ -171,6 +171,7 @@ class DoorOpenExec:
         self._sn = None
         self._sn_verified = False
         self.pool_ms, self.prep_ms = [], []
+        self.mon_ms, self.cl_ms, self.cand_ms, self.sn_ms = [], [], [], []   # r18：逐段計時（監看、閉鏈手臂 IK＋重力、候選核對等待、現在停收結果）；都在整拍期限之內
         self.cfg = C0.make_cfg(ident)
         self.cfg.base_fixed = False
         self.cfg.arm_model.bias = np.asarray(handover['bias'], float).copy()
@@ -501,7 +502,7 @@ class DoorOpenExec:
 
     def _light_copy(self):
         import copy
-        big = ('step_log', 'pipe_log', 'cmd_hist', 'events', 'rec', 'tick_ms', 'solve_ms', 'sweep_ms', 'pool_ms', 'prep_ms', 'p2_log', 'fb_log')
+        big = ('step_log', 'pipe_log', 'cmd_hist', 'events', 'rec', 'tick_ms', 'solve_ms', 'sweep_ms', 'pool_ms', 'prep_ms', 'p2_log', 'fb_log', 'mon_ms', 'cl_ms', 'cand_ms', 'sn_ms')
         saved = {k: getattr(self, k) for k in big if hasattr(self, k)}
         pool, stg, g2p = self._pool, self.staged, self.g2
         try:
@@ -788,7 +789,9 @@ class DoorOpenExec:
             return None
         u = np.r_[np.asarray(r.u_opt, float), r.u_arm_seq[0]]
         if self.arm_mode == 'closure':
+            w_cl = time.perf_counter()
             ua = self._closure_arm(qp, sp, r, np.array(xi), sig_eff, g, tau, va)
+            self.cl_ms.append((time.perf_counter() - w_cl) * 1e3)
             if ua is None:
                 return None
             u = np.r_[np.asarray(r.u_opt, float), ua]
@@ -963,7 +966,9 @@ class DoorOpenExec:
             if self.q_tick is not None:
                 self.rate = dict(base=float(np.linalg.norm(q[:2] - self.q_tick[:2])) / self.cfg.dt, yaw=abs(q[2] - self.q_tick[2]) / self.cfg.dt, arm=float(np.abs(q[3:] - self.q_tick[3:]).max()) / self.cfg.dt, door=abs(phi_meas - self.phi_tick) / self.cfg.dt)
             self.q_tick, self.phi_tick = q.copy(), float(phi_meas)
+            w_m = time.perf_counter()
             m = self._monitor(q, phi_meas)
+            self.mon_ms.append((time.perf_counter() - w_m) * 1e3)
             if self.stop is None:
                 x_ref = self.ref(self.sigma)
                 lead = float(x_ref[9] - phi_meas)
@@ -1020,6 +1025,7 @@ class DoorOpenExec:
                     self._sn = None
                     w1 = time.perf_counter()
                     st0, b0c = self._cs_collect()
+                    self.sn_ms.append((time.perf_counter() - w1) * 1e3)
                     self.sweep_ms[-1] += (time.perf_counter() - w1) * 1e3
                     if st0 == 'missing':                               # r17：結果缺失／程序失效 ≠ 核過 ⇒ 模擬中止
                         self._stop('cstop_check_unavailable', fb=self._fb_info)
@@ -1047,6 +1053,7 @@ class DoorOpenExec:
                     w0 = time.perf_counter()
                     if hc_ is not None:                                 # r17：候選核對用實際停法
                         stc, b_, infc = self._cs_cand_finish(hc_, 'candidate')
+                        self.cand_ms.append((time.perf_counter() - w0) * 1e3)
                         why_c = None
                         if stc == 'missing':
                             why_c = infc
@@ -1197,5 +1204,6 @@ class DoorOpenExec:
                     arm_cmd_max=round(float(Rr[:, 16].max()), 4), base_cmd_max=round(float(Rr[:, 17].max()), 4), arm_sat_s=round(float((Rr[:, 16] >= float(B.W_ARM['v_arm']) - 1e-3).sum()) * self.cfg.dt, 2),
                     phi_end_last_tick_deg=round(math.degrees(float(Rr[-1, 3])), 3), phi_end_deg=round(math.degrees(float(Rr[-1, 3])), 3), phi_end_note='最後控制拍的門角；最終物理紀錄的門角由執行器另報', t_end=round(float(self.t), 2),
                     base_cmd_phys=dict(acc_max=[round(float(x), 3) for x in (np.abs(np.diff(np.array(self.cmd_hist), axis=0)).max(axis=0) / PHYS if len(self.cmd_hist) > 1 else np.zeros(3))], limit=LIM.A_BODY.tolist(), ramp=BASE_RAMP, note='逐物理步命令差分（世界前的本體命令）'), limits=LIM.summary(),
-                    timing=dict(solve_ms=pct(self.solve_ms), sweep_ms=pct(self.sweep_ms), whole_tick_ms=pct(self.tick_ms)),
+                    timing=dict(solve_ms=pct(self.solve_ms), sweep_ms=pct(self.sweep_ms), whole_tick_ms=pct(self.tick_ms), monitor_ms=pct(self.mon_ms), closure_arm_ms=pct(self.cl_ms), candidate_check_ms=pct(self.cand_ms), stop_now_collect_ms=pct(self.sn_ms), prep_ms=pct(self.prep_ms),
+                                note='solve_ms 含 closure_arm_ms；sweep_ms 含 stop_now_collect＋candidate_check；整拍另含監看與其他'),
                     params=dict(T_STOP=T_STOP, PATH_STOP_MAX_S=PATH_STOP_MAX_S, PATH_OK=list(PATH_OK), FORCE_LIMIT_N=FORCE_LIMIT_N, LEAD_MAX_deg=3.0, LEAD_BAND_deg=1.0, STALL_S=STALL_S, CL_TOL=CL_TOL, STRESS_TOL=STRESS_TOL, END={k: (round(math.degrees(v), 3) if k == 'phi_tol' else v) for k, v in END.items()}, STOP_STILL=STOP_STILL, thresholds=W.THR, finger_q=W.FINGER_Q))

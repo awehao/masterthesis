@@ -16,8 +16,8 @@ if ! sha256sum -c --quiet "$FREEZE" > "$DIR/freeze_check.log" 2>&1; then
   say "凍結清單核對不符（$FREEZE）⇒ 拒跑：$(head -3 "$DIR/freeze_check.log")"; exit 96
 fi
 cp "$FREEZE" "$DIR/versions.sha256"
-say "=== 門 MotM 名目展示：RUN_ID=$RUN_ID MODE=$MODE SMOKE=${SMOKE:-0} DIAG=${DIAG:-0}；凍結 $FREEZE 全部相符；機器 $(hostname)／$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)／$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)／kernel $(uname -r)；GUI 開；非即時；理想感知＋理想抓持"
-setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_door_motm.py --out "$DIR" $( [ "${SMOKE:-0}" = "1" ] && echo --smoke ) $( [ "${DIAG:-0}" = "1" ] && echo --diag ) >> "$DIR/sim.log" 2>&1 &
+say "=== 門 MotM 名目展示：RUN_ID=$RUN_ID MODE=$MODE SMOKE=${SMOKE:-0} DIAG=${DIAG:-0} ARM_FRIC=${ARM_FRIC:-legacy}；凍結 $FREEZE 全部相符；機器 $(hostname)／$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)／$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)／kernel $(uname -r)；GUI 開；非即時；理想感知＋理想抓持"
+setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_door_motm.py --out "$DIR" $( [ "${SMOKE:-0}" = "1" ] && echo --smoke ) $( [ "${DIAG:-0}" = "1" ] && echo --diag ) --arm-friction-model "${ARM_FRIC:-legacy}" >> "$DIR/sim.log" 2>&1 &
 SIM=$!
 sleep 1
 P=$(pgrep -f "[i]saac_m8_house_door_motm.py.*runs/$RUN_ID" | head -1)
