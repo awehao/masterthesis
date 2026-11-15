@@ -41,8 +41,10 @@ os.environ.setdefault('P2_TERM', '1')
 os.environ.setdefault('P2_FINAL', '1')
 import door_sweep_pool as DSP                                    # noqa: E402
 import door_p2_planner_server as PS                              # noqa: E402
+import door_cstop as DCS                                         # noqa: E402
 POOL = DSP.SweepPool(6)
 PLANNER = PS.PlannerServer()
+CSW = DCS.CStopWorker()                                              # 閉鏈一致備援停法的向前模擬程序（Codex 20261115_005224）
 
 from isaacsim import SimulationApp                               # noqa: E402
 sim_app = SimulationApp({'headless': False, 'width': 1280, 'height': 720})
@@ -370,7 +372,7 @@ def main():
                 Xd0p = np.array([hlp2.project(x, iters=30) for x in Xd0])     # 首段參考以本趟實測 T_HE 重投影手臂（底盤、門角不變）；以試跑重核
                 ho = dict(s=gc.s.copy(), pipe=[u_.copy() for u_ in gc.pipe], u_last=gc.u_last.copy(), u_prev=gc.u_prev.copy(), bias=np.asarray(gc.cfg.arm_model.bias, float).copy(), moving=True, off_static=gc.off(q))
                 exn = XO.DoorOpenExec(ident, Xd0p, 0.05, T_WH_b, phi_b, T_HE_act, GOAL, ho, fq_b, arm_mode='closure', joint_kp=a.kp,
-                                      g2=dict(gravity2=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0))
+                                      g2=dict(gravity2=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0, cstop=CSW))
                 exn.p2_open = True
                 wu = exn.warmup(q, phi_b)                                     # 交接前預熱（複本空跑，本體不動）；試跑前做，避免試跑拍含冷啟成本
                 w_dry = time.perf_counter()
@@ -536,7 +538,7 @@ def main():
             ex._stop('open_time_limit')
         rep_o = ex.report()
         res['open'] = {k_: rep_o.get(k_) for k_ in ('arm_mode', 'closure_anchor', 'closure_stats', 'stop', 'done', 'stop_effect', 'phi_end_deg', 't_end', 'closure_measured', 'min_clear_actual', 'force_max_n', 'timing')}
-        res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'])
+        res['open'].update(n_deadline_miss=ex.n_deadline_miss, p2_log=ex.p2_log, reqs=box['reqs'], fb_log=ex.fb_log, cstop_ticks=len(ex.cs_log), stop_mode=ex.stop_mode, tick_ms_normal=[round(float(m), 1) for i, m in enumerate(ex.tick_ms) if ex.stop is None or i * 0.05 < float(ex.stop['t']) - 1e-9])
         np.savez_compressed(os.path.join(a.out, 'open_steps.npz'), meas=np.array(olog), Xd_final=ex.Xd, h=ex.h, ctrl=np.array(ex.step_log))
     res['events'] = ev
     res['forbidden_contact'] = dict(latched=gate.latched)
@@ -590,6 +592,7 @@ if __name__ == '__main__':
     try:
         POOL.close()
         PLANNER.close()
+        CSW.close()
     except Exception:                                              # noqa: BLE001
         pass
     sim_app.close()

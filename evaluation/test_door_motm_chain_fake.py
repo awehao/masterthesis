@@ -14,6 +14,8 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import door_sweep_pool as DSP
 SHARED = DSP.SweepPool(6) if os.environ.get('SHARED_POOL') == '1' else None   # 同 Isaac 執行器：先 fork 的共用池物件
+import door_cstop as DCS
+CSW = DCS.CStopWorker() if SHARED is not None else None
 os.environ.setdefault('P2_TERM', '1'); os.environ.setdefault('P2_FINAL', '1')
 import door_motm_p2 as P2
 WB = P2.WB
@@ -114,13 +116,17 @@ while t < 30.0:
             Xd0, h0, _ = first['o'].dense_reference(4)
             T_HE_act = np.linalg.inv(first['T_plan']) @ K.fk(q, 'link_tcp')
             ho = dict(s=gc.s.copy(), pipe=[u_.copy() for u_ in gc.pipe], u_last=gc.u_last.copy(), u_prev=gc.u_prev.copy(), bias=np.asarray(gc.cfg.arm_model.bias, float).copy(), moving=True, off_static=gc.off(q))
-            ex_c = X.DoorOpenExec(ident, Xd0, h0, first['T_plan'], phi_b, T_HE_act, GOAL, ho, FQ, arm_mode='closure', g2=dict(gravity2=True, ik_fc=True, pool=SHARED if SHARED is not None else 6, prep_fc=True, deadline_ms=50.0))
+            ex_c = X.DoorOpenExec(ident, Xd0, h0, first['T_plan'], phi_b, T_HE_act, GOAL, ho, FQ, arm_mode='closure', g2=dict(gravity2=True, ik_fc=True, pool=SHARED if SHARED is not None else 6, prep_fc=True, deadline_ms=50.0, cstop=CSW))
             ex_c.p2_open = True
             if SHARED is not None:
                 ex_c.warmup(q, phi_b)
             w0_ = time.perf_counter()
             tmp = ex_c._light_copy()
             tmp.step(t, q.copy(), phi_b)
+            if os.environ.get('CS_DEBUG') == '1':
+                print('CSDBG', round(t, 3), 'u', np.round(tmp.u_last, 3).tolist(), flush=True)
+                for _n, _tr in (('stop_now', tmp._sn_tr), ('candidate', tmp._cand_tr)):
+                    print('  ', _n, _tr, flush=True)
             dry = dict(stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail,
                        stop_closure_pos_mm=round(tmp.mins['stop_closure_pos'] * 1e3, 3), fb_ok=bool(tmp._fb_ok), wall_ms=round((time.perf_counter() - w0_) * 1e3, 1),
                        start_base_mm=round(float(np.linalg.norm(Xd0[0, :2] - q[:2])) * 1e3, 3))
@@ -151,6 +157,9 @@ while t < 30.0:
         # 4 P2 續接
         if tick and ex.staged is not None and ex.stop is None:
             dec = ex.staged_step(t, q.copy(), phi_now)
+            if os.environ.get('LATE_AFTER_P2') == '1' and isinstance(dec, dict) and dec.get('ok') and ex.deadline_inject is None:   # 核對：P2 接上後立即晚到
+                _once = []
+                ex.deadline_inject = lambda cc, _o=_once: (not _o) and (_o.append(1) is None)
             if isinstance(dec, dict):
                 log['decisions'].append(dec)
         pend = st['pending']
@@ -235,7 +244,7 @@ i_h = int(np.argmax(TS[:, 1] > 0.5)) if (TS[:, 1] > 0.5).any() else None
 summary = dict(
     first_segment=dict(k={k_: first.get(k_) for k_ in ('req', 'wall_s', 'why', 'failed', 'ok')}, t_avail=None if first['t_avail'] is None else round(first['t_avail'], 3), t_ready_pred=round(first.get('t_ready_pred', float('nan')), 3)),
     grasp=dict(phases=gc.ph_hist, stop=gc.stop, abort=gc.abort, accepted=gc.accepted, n_deadline_miss=gc.n_deadline_miss),
-    open=None if ex is None else dict(done=ex.done, stop=ex.stop, abort=ex.abort, stop_ok=ex.stop_ok, n_deadline_miss=ex.n_deadline_miss, p2_decisions=dict(n=len(log['decisions']), ok=sum(1 for d_ in log['decisions'] if d_.get('ok'))),
+    open=None if ex is None else dict(done=ex.done, stop=ex.stop, abort=ex.abort, stop_ok=ex.stop_ok, n_deadline_miss=ex.n_deadline_miss, stop_mode=ex.stop_mode, tick_max_ms=round(float(max(ex.tick_ms)), 1), tick_p50_ms=round(float(np.median(ex.tick_ms)), 1), fb_log=ex.fb_log, p2_decisions=dict(n=len(log['decisions']), ok=sum(1 for d_ in log['decisions'] if d_.get('ok'))),
                                       req_results={r_.get('result', 'pending'): sum(1 for x_ in log['req'] if x_.get('result', 'pending') == r_.get('result', 'pending')) for r_ in log['req']},
                                       min_clear_actual={k_: round(float(v_), 4) for k_, v_ in ex.mins['act'].items()}, closure_stats={k_: v_ for k_, v_ in ex.cl_stats.items() if k_ != 'fails'}),
     motion=dict(base_speed_min_between_start_and_handover=None if i_h is None else round(float(bs[1:i_h + 3].min()), 4), base_speed_at_handover=None if i_h is None else round(float(bs[i_h]), 4),

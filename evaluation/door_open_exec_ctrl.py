@@ -54,6 +54,11 @@ r13（Codex 20261113_133147 §1）：新參考先暫存（stage_reference：非�
   （接縫兩側分段斜率之差／h 的本體加速度、輪速、手臂速率與加速度、設定點速率、門角速率與加速度，界限同 door_wbopt 驗收；以 g＝1 為最壞）。
   staged_step（每拍首、step 之前）：新參考最早會影響命令的那一拍（σ＋(D_STEPS·PHYS＋N·DT) ≥ σ_s）以複本試跑一拍——當下實測狀態、設定點、
   真管線、拍內斜坡——候選命令、閉鏈手臂驗收、提交前停止掃掠、預測停止閉鏈 ≤ CL_TOL、期限備援都過才接上本體；否則拒接，舊段與其停止尾段不動。
+r17（Codex 20261115_131250）：停止升級含 cstop；停法物件共用且每次取用設成當下參考（P2 換段）、參考版本號綁結果；候選核對與試跑複本改用同一停法（提交一拍後停）；結果缺失≠核過（中止）；候選模擬提早派工。
+r16（Codex 20261115_005224）：g2['cstop']＝door_cstop.CStopWorker ⇒ 綁定中的期限備援改「閉鏈一致停法」（door_cstop：沿參考把 g 降到 0、底盤前饋×g、
+  手臂閉鏈 IK；不依賴 QP）。每拍把狀態快照送獨立程序以同一停法向前模擬（與求解並行），取樣構型再經計算池核淨空、主程序核閉鏈 ≤CL_TOL；
+  全過才算備援可用（取代 r11 以各軸減速預測評估的備援——motm_3：該停法在綁定下留下設定點殘差、力升到 36 N、手臂停不穩）。
+  晚到 ⇒ stop_mode＝'cstop'：每拍 step_cmd（不過 ⇒ 模擬中止）、監看照常（違反 ⇒ 中止）、4 s 內未停穩 ⇒ 中止；不退回各軸減速、不解綁。
 r14：g2['pool'] 可傳外部共用的計算池（執行器在啟動模擬器前 fork）；只關自己建立的池。
 r15：複本（_light_copy／warmup）深拷貝前暫時把 g2['pool'] 換成 0、拷貝後還原並讓複本共用同一池（池物件含程序認證字串不可拷貝；
   名目趟 m8house_door_motm_1 在交接試跑時因此例外中斷）；試跑複本不檢查控制期限（期限只對本體真實拍）。"""
@@ -136,12 +141,17 @@ def rot_deg(Ta, Tb):
 
 class DoorOpenExec:
     def __init__(self, ident, Xd, h, T_WH_bind, phi_bind, T_HE, phi_goal, handover, finger_q, sweep_stride=2, arm_mode='qp', joint_kp=600.0, g2=None):
-        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False, prep_fc=False, deadline_ms=None)
+        self.g2 = dict(gravity=False, ik_fc=False, ik_warm=False, sweep_cache=False, pool=0, gravity2=False, prep_fc=False, deadline_ms=None, cstop=None)
         self.n_deadline_miss = 0
         self.p2_open, self.p2_log = False, []                         # r12
         self.staged, self._last_ver = None, 0                         # r13
+        self._cs_box, self._cs_th, self._cs_out, self.cs_log, self._xd_ver = [None], None, None, [], 0   # r16；r17：停法物件放共用盒（試跑複本共用）、參考版本號
+        self._ident = ident
         self._fb_ok, self._fb_info = False, None                      # r11：本拍期限備援是否可用＋依據
         self.fb_closure_inject, self.deadline_inject = None, None      # r11：測試掛鉤
+        self._cand_tr, self._sn_tr = None, None
+        self._early_cb, self._hc_e = None, None                        # r17：候選核對提早派工
+        self.cs_inject = None                                          # r17：測試掛鉤（閉鏈一致停法核對結果改為 'missing'／'infeasible'）
         self.fb_log = []
         for k_ in (g2 or {}):
             if k_ not in self.g2:
@@ -149,6 +159,7 @@ class DoorOpenExec:
         self.g2.update(g2 or {})
         self._grav = DFK.FastGravity2(K, BM.arm_bodies(K)) if self.g2['gravity2'] else (DFK.FastGravity(K, BM.arm_bodies(K)) if self.g2['gravity'] else None)
         self._ccache = DFK.ClearCache(W.clear_door) if self.g2['sweep_cache'] else None
+        self._csw = self.g2['cstop']                                 # r16（須在 g2 更新之後讀）
         self._pool, self._pool_owned = None, False
         if not isinstance(self.g2['pool'], (int, float)):            # r14：外部共用的計算池（執行器在啟動模擬器前 fork），本控制器不關它
             self._pool = self.g2['pool']
@@ -224,7 +235,7 @@ class DoorOpenExec:
             self.t_path_stop = self.t
             self._ev('stop', why=why, mode=mode, **kw)
             self.stop_mode = mode
-        elif self.stop_mode in ('path', 'settled') and mode == 'abort':   # 正常停止途中再出錯 ⇒ 模擬中止（不降級）
+        elif self.stop_mode in ('path', 'settled', 'cstop') and mode == 'abort':   # 正常停止途中再出錯 ⇒ 模擬中止（不降級）；r17：含閉鏈一致備援
             self.stop.setdefault('escalations', []).append(dict(t=round(float(self.t), 3), why=why, to='abort', **kw))
             self._ev('stop_escalated', why=why, to='abort', **kw)
             self.stop_mode = mode
@@ -392,7 +403,7 @@ class DoorOpenExec:
             bad = [kk for kk in KEYS if c[kk] < W.THR[kk]]
             if bad or not (-0.02 <= phi_i <= W.PHI_MAX + 0.02):
                 return dict(extra=e, i=i, tag=tag, door='bound', clear_bad=bad, phi_deg=round(math.degrees(phi_i), 2), at={kk: round(float(c[kk]), 4) for kk in KEYS}), None
-        if fb:
+        if fb and not self._cs_on():
             self._fb_ok = bool(fb_ok)
             self._fb_info = dict(closure_pos_mm=round(fb_cl[0] * 1e3, 3), closure_rot_deg=round(fb_cl[1], 3), settled=all(self._prep_settled.values()), tag=tag)
         if tag == 'fallback':
@@ -420,6 +431,7 @@ class DoorOpenExec:
         i_s = min(i_s, len(self.Xd) - 1)
         jump = float(np.abs(np.asarray(Xd_new[0]) - self.Xd[i_s]).max())
         self.Xd = np.vstack([self.Xd[:i_s], np.asarray(Xd_new, float)])
+        self._xd_ver += 1                                              # r17：參考版本（備援預測結果綁版本）
         self.sig_end = (len(self.Xd) - 1) * self.h
         if self.sigma < self.sig_end:
             self.t_ref_end, self._n_end = None, 0
@@ -492,14 +504,18 @@ class DoorOpenExec:
         try:
             for k in saved:
                 setattr(self, k, [])
-            self._pool, self.staged, self.g2 = None, None, dict(self.g2, pool=0)
+            self._pool, self.staged, self.g2 = None, None, dict(self.g2, pool=0, cstop=None)
+            csw, box, th, self._csw, self._cs_box, self._cs_th, self._cs_out = self._csw, self._cs_box, self._cs_th, None, None, None, None
             tmp = copy.deepcopy(self)
         finally:
             for k, v in saved.items():
                 setattr(self, k, v)
             self._pool, self.staged, self.g2 = pool, stg, g2p
+            self._csw, self._cs_box, self._cs_th = csw, box, th
+            self._cs_out = None
         tmp._pool, tmp._pool_owned = pool, False
-        tmp.g2 = dict(tmp.g2, pool=g2p['pool'], deadline_ms=None)       # 試跑複本不是實時拍：期限只對本體的真實拍檢查
+        tmp._csw, tmp._cs_box = csw, box                                # r17：試跑複本用同一個閉鏈一致停法（同工作程序、同停法物件；每次使用前各自設參考）
+        tmp.g2 = dict(tmp.g2, pool=g2p['pool'], deadline_ms=None, cstop=csw)       # 試跑複本不是實時拍：期限只對本體的真實拍檢查
         return tmp
 
     def staged_step(self, t, q, phi_meas):
@@ -547,11 +563,12 @@ class DoorOpenExec:
         讓求解器、閉鏈、淨空、停止預測的第一次呼叫成本發生在交接前；本控制器狀態完全不動（複本丟棄）。回複本那一拍的耗時 ms。"""
         import copy
         pool, self._pool = self._pool, None
-        g2p, self.g2 = self.g2, dict(self.g2, pool=0)
+        g2p, self.g2 = self.g2, dict(self.g2, pool=0, cstop=None)
+        csw, box, self._csw, self._cs_box = self._csw, self._cs_box, None, [None]
         try:
             tmp = copy.deepcopy(self)
         finally:
-            self._pool, self.g2 = pool, g2p
+            self._pool, self.g2, self._csw, self._cs_box = pool, g2p, csw, box
         tmp._pool, tmp._pool_owned = None, False
         tmp.g2 = dict(tmp.g2, pool=0, deadline_ms=None)
         fq_save, phi0_save = W.FINGER_Q, W.PHI0
@@ -562,22 +579,168 @@ class DoorOpenExec:
             W.FINGER_Q, W.PHI0 = fq_save, phi0_save
         return (time.perf_counter() - t0) * 1e3
 
+    def _cs_params(self):
+        return dict(ident=self._ident, bias=np.asarray(self.cfg.arm_model.bias, float), T_WH_bind=self.T_WH_bind, phi_bind=self.phi_bind, T_HE=self.T_HE, off_cl0=self.off_cl0, G0=self.G0,
+                    joint_kp=self.joint_kp, h=self.h, Xd=self.Xd, lim_lo=self.lim_lo, lim_hi=self.lim_hi, q_lo=np.asarray(LITE6_SAFE.lower, float), q_hi=np.asarray(LITE6_SAFE.upper, float))
+
+    def _cs_on(self):
+        return self._csw is not None and self.bound and self.off_cl0 is not None and self._pool is not None
+
+    def _cs_obj(self):
+        """主程序的停法物件（與工作程序同參數）；每次取用都設成本控制器當下的參考（P2 換段後不沿用舊段）。"""
+        if self._cs_box[0] is None:
+            import door_cstop as DCS
+            self._cs_box[0] = DCS.CStop(self._cs_params())
+            self._csw.init(self._cs_params())
+        self._cs_box[0].set_ref(self.Xd)
+        return self._cs_box[0]
+
+    def _cs_state(self, q, **kw):
+        seed = self.q_cl_prev if self.q_cl_prev is not None else np.asarray(q[3:], float)
+        return dict(q=np.asarray(q, float), s=self.s, pipe=self.pipe, u_prev=self.u_last, sigma=self.sigma, g=self.g, seed=seed, Xd=self.Xd, **kw)
+
+    def _cs_bg(self, ver, out):
+        """背景執行緒（主程序求解期間）：等向前模擬 → 取樣構型送計算池核淨空 → 收結果。只寫自己這次請求的 out（不寫控制器狀態）。
+        status：ok／infeasible（模型判此停法不可行）／missing（結果缺失、逾時、程序或計算池失效）。"""
+        try:
+            r = self._csw.collect(ver, 0.2)
+            if r is None:
+                out.update(status='missing', why='sim_timeout_or_dead')
+            elif not r['ok'] and str(r['why']).startswith('exception'):
+                out.update(status='missing', why=r['why'])
+            elif not r['ok']:
+                out.update(status='infeasible', why=r['why'])
+            else:
+                h_ = self._pool.submit(self.T_WH_bind, W.FINGER_Q, W.PHI0, r['X'])
+                res, why, _ = self._pool.collect(h_, POOL_TIMEOUT_S)
+                if res is None:
+                    out.update(status='missing', why='pool_' + str(why))
+                else:
+                    out.update(status='ok', res=res, r=r)
+        except Exception as e:                                         # noqa: BLE001
+            out.update(status='missing', why='bg_exception:' + repr(e)[:120])
+        out['done'] = True
+
+    def _cs_submit(self, q):
+        """現在停（實際會用的閉鏈一致停法）的向前模擬：送獨立程序＋背景執行緒，與求解並行。"""
+        import threading
+        self._cs_obj()
+        out = dict(done=False, xd_ver=self._xd_ver, t=self.t)           # 每次請求自己的結果盒：遲到的執行緒只會寫到舊盒，不覆寫下一拍
+        ver_ = self._csw.submit(self._cs_state(q))
+        th = threading.Thread(target=self._cs_bg, args=(ver_, out), daemon=True)
+        th.start()
+        self._cs_th, self._cs_out = th, out
+
+    def _cs_judge(self, r, res, tag):
+        """回 (淨空違反 dict 或 None, 備援可用, 資訊)。"""
+        mn = {k: min(float(c[k]) for c in res) for k in KEYS}
+        for k in KEYS:
+            self.mins['stop'][k] = min(self.mins['stop'][k], mn[k])
+        self.mins['n_sweep'] += len(res)
+        cp, cr = r['closure']
+        if self.fb_closure_inject is not None:
+            cp, cr = self.fb_closure_inject(self, cp, cr)
+        self.mins['stop_closure_pos'], self.mins['stop_closure_rot'] = max(self.mins['stop_closure_pos'], cp), max(self.mins['stop_closure_rot'], cr)
+        bad = [k for k in KEYS if mn[k] < W.THR[k]]
+        ok = bool(not bad and cp <= CL_TOL['pos_m'] and cr <= CL_TOL['rot_deg'])
+        info = dict(law='cstop', tag=tag, n_ticks=r['n_ticks'], sim_ms=round(r['sim_ms'], 1), min_clear={k: round(v, 4) for k, v in mn.items()}, closure_pos_mm=round(cp * 1e3, 3), closure_rot_deg=round(cr, 3), n_samples=len(res), xd_ver=self._xd_ver)
+        return (dict(tag=tag, clear_bad=bad, at={k: round(v, 4) for k, v in mn.items()}) if bad else None), ok, info
+
+    def _cs_collect(self):
+        """求解後取背景結果。回 (status, 淨空違反或 None)；status＝ok／infeasible／missing。並設定本拍備援是否可用。
+        missing（逾時、例外、程序或計算池失效、參考版本不符）不是「核過」：呼叫端須中止。"""
+        th, out = self._cs_th, self._cs_out
+        self._cs_th, self._cs_out = None, None
+        if th is None or out is None:
+            self._fb_ok, self._fb_info = False, dict(law='cstop', status='missing', why='not_submitted')
+            return 'missing', None
+        th.join(0.3)
+        if self.cs_inject is not None:
+            inj = self.cs_inject(self, 'stop_now')
+            if inj is not None:
+                out = dict(done=True, xd_ver=out['xd_ver'], status=inj, why='injected')
+        if th.is_alive() or not out.get('done'):
+            self._fb_ok, self._fb_info = False, dict(law='cstop', status='missing', why='bg_timeout')
+            return 'missing', None
+        if out['xd_ver'] != self._xd_ver:
+            self._fb_ok, self._fb_info = False, dict(law='cstop', status='missing', why='ref_version_mismatch')
+            return 'missing', None
+        if out['status'] != 'ok':
+            self._fb_ok, self._fb_info = False, dict(law='cstop', status=out['status'], why=out.get('why'))
+            return out['status'], None
+        bad, ok, info = self._cs_judge(out['r'], out['res'], 'stop_now_cstop')
+        self._sn_tr = out['r'].get('tr')
+        self._fb_ok, self._fb_info = ok, info
+        return 'ok', bad
+
+    def _cs_cand_submit(self, q, u):
+        """候選提交前核對（取代各軸減速的 (1,2) 掃掠）的模擬請求：提交 u 一拍後以閉鏈一致停法停下。用第二個工作程序（不等現在停那一個）。
+        只核 hold＝1：同步執行下，下一拍若晚到，備援命令就在該拍取代候選，候選命令恰好作用一拍。
+        原各軸減速的 (1,2) 中「同一命令再多留一拍」在閉鏈手臂下不是會發生的情形（手臂命令每拍依閉鏈重算；多留一拍即破壞閉鏈，假世界起步即 arm_rate 不可行）。"""
+        self._cs_obj()
+        w = 1 if self._csw.n > 1 else 0
+        return w, self._csw.submit(self._cs_state(q, u_first=np.asarray(u, float), hold=1), w=w), self._xd_ver
+
+    def _solve_cand(self, q, phi_meas):
+        """求解；閉鏈一致停法啟用時，本拍命令一確定（閉鏈手臂前三個節點算完）就把候選核對的模擬送出，與其餘求解工作重疊。
+        回 (u, 候選請求或 None)。提早送出的命令與最後命令不同（>1e-9）或沒送 ⇒ 以最後命令重送。"""
+        on = self._cs_on()
+        self._hc_e = None
+        if on:
+            def _cb(ue, q=q):
+                self._hc_e = (self._cs_cand_submit(q, ue), np.asarray(ue, float).copy())
+            self._early_cb = _cb
+        try:
+            u = self._solve(q, phi_meas)
+        finally:
+            self._early_cb = None
+        he, self._hc_e = self._hc_e, None
+        if not on or u is None:
+            return u, None
+        if he is not None and float(np.abs(he[1] - u).max()) <= 1e-9:
+            return u, he[0]
+        return u, self._cs_cand_submit(q, u)
+
+    def _cs_cand_finish(self, hc, tag):
+        """回 (status, 淨空違反或 None, 資訊)。infeasible＝提交後沒有可行的閉鏈一致停法 ⇒ 候選不得提交；missing＝結果缺失（呼叫端依「掃掠不可用」處理）。
+        須在現在停的背景執行緒結束後呼叫（計算池同一時間只由一個執行緒使用）。"""
+        w, ver, xv = hc
+        r = self._csw.collect(ver, 0.2, w=w)
+        if self.cs_inject is not None:
+            inj = self.cs_inject(self, tag)
+            if inj is not None:
+                return inj, None, dict(why='injected')
+        if r is None or xv != self._xd_ver or ((not r['ok']) and str(r['why']).startswith('exception')):
+            return 'missing', None, dict(why=None if r is None else ('ref_version_mismatch' if xv != self._xd_ver else r['why']))
+        if not r['ok']:
+            return 'infeasible', None, dict(why=r['why'])
+        res, why, tms = self._pool.collect(self._pool.submit(self.T_WH_bind, W.FINGER_Q, W.PHI0, r['X']), POOL_TIMEOUT_S)
+        self.pool_ms.append(tms)
+        if res is None:
+            return 'missing', None, dict(why='pool_' + str(why))
+        bad, ok, info = self._cs_judge(r, res, tag)
+        self._cand_tr = r.get('tr')                                    # 診斷用：候選核對的逐拍預測
+        if not ok and bad is None:
+            self.n_emerg_closure += 1                                  # 同原候選掃掠語意：預測閉鏈超限記數（不單獨拒絕候選）
+        return 'ok', bad, info
+
     def _deadline_stop(self, elapsed_ms, tag):
         """r10：控制期限已過 ⇒ 不提交本拍候選。正常段：本拍現在停已驗過 ⇒ 有界減速停法（settled）；沒驗到 ⇒ 模擬中止。
         路徑停止中：上一拍提交的候選已含「下一拍起減速」的預測核對 ⇒ 直接轉有界減速。"""
         self.n_deadline_miss += 1
         self.fb_log.append(dict(t=round(float(self.t), 3), tag=tag, fb_ok=self._fb_ok, fb=self._fb_info, elapsed_ms=round(elapsed_ms, 1)))
+        mode_fb = 'cstop' if self._cs_on() else 'settled'
         if self.stop is None:
             if self._sn_verified and self._fb_ok:
-                self.stop = dict(t=round(float(self.t), 3), why='tick_deadline_miss', sigma=round(self.sigma, 3), mode='settled', elapsed_ms=round(elapsed_ms, 1), tag=tag)
+                self.stop = dict(t=round(float(self.t), 3), why='tick_deadline_miss', sigma=round(self.sigma, 3), mode=mode_fb, elapsed_ms=round(elapsed_ms, 1), tag=tag, fb=self._fb_info)
                 self.t_path_stop = self.t
-                self.stop_mode = 'settled'
-                self._ev('stop', why='tick_deadline_miss', mode='settled', elapsed_ms=round(elapsed_ms, 1), tag=tag)
+                self.stop_mode = mode_fb
+                self._ev('stop', why='tick_deadline_miss', mode=mode_fb, elapsed_ms=round(elapsed_ms, 1), tag=tag, fb=self._fb_info)
             else:
                 self._stop('tick_deadline_miss_unverified', elapsed_ms=round(elapsed_ms, 1), tag=tag)
         elif self.stop_mode == 'path':
             if self._fb_ok:
-                self.stop_mode = 'settled'
+                self.stop_mode = mode_fb
                 self._ev('path_deadline_to_settled', elapsed_ms=round(elapsed_ms, 1), tag=tag, fb=self._fb_info)
             else:
                 self._stop('path_deadline_miss_unverified', elapsed_ms=round(elapsed_ms, 1), tag=tag, fb=self._fb_info)
@@ -682,6 +845,9 @@ class DoorOpenExec:
                 return None
             Q.append(q)
             seed = q
+            if k == 2 and self._early_cb is not None:                  # r17：本拍手臂命令只依賴前三個節點（中央差分）——先算出並交給候選核對提早派工；
+                S1e = Q[1] + tau * (Q[2] - Q[0]) / (2 * DT) - self._off_cl(np.r_[B_[1], Q[1]])   # 其餘節點（限制驗收用）照常算完，不過則候選作廢
+                self._early_cb(np.r_[np.asarray(r.u_opt, float), (S1e - np.asarray(sp, float)) / DT])
         Q = np.array(Q)
         self.q_cl_prev = Q[1].copy()
         self.Q_cl_prev_full = Q.copy()
@@ -741,7 +907,7 @@ class DoorOpenExec:
         Tm, Tr = K.fk(q, 'link_tcp'), K.fk(x_ref[:9], 'link_tcp')
         self.rec.append([self.t, self.sigma, self.g, phi_meas, x_ref[9], ep, er, sp_, sr_, float(np.linalg.norm(q[:2] - x_ref[:2])), abs(q[2] - x_ref[2]), float(np.linalg.norm(Tm[:3, 3] - Tr[:3, 3])), *[c[k] for k in KEYS],
                          float(np.abs(self.u_last[3:]).max()), float(np.hypot(self.u_last[0], self.u_last[1])), (self.force_n if self.force_n is not None else float('nan')), float(self.bound),
-                         {'None': 0, 'path': 1, 'settled': 1, 'abort': 4}[str(self.stop_mode)]])
+                         {'None': 0, 'path': 1, 'settled': 1, 'cstop': 1, 'abort': 4}[str(self.stop_mode)]])
         bad = [k for k in KEYS if c[k] < W.THR[k]]
         out = None
         if bad:
@@ -819,8 +985,12 @@ class DoorOpenExec:
                 if self.stop is None:
                     w0 = time.perf_counter()
                     if self._pool is not None:                         # r9：現在停先派工，與求解同時算，求解後才收
-                        items0 = self._sweep_prep(q, self.u_last, (0,))
-                        self._sn = (items0, self._pool_submit(items0))
+                        if self._cs_on():
+                            self._cs_submit(q)                         # r16：綁定中「現在停」核實際會用的閉鏈一致停法（獨立程序模擬＋背景執行緒送淨空；與求解並行）
+                            self._sn = 'cstop'
+                        else:
+                            items0 = self._sweep_prep(q, self.u_last, (0,))
+                            self._sn = (items0, self._pool_submit(items0))
                         self.sweep_ms.append((time.perf_counter() - w0) * 1e3)
                     else:
                         b_ = self._sweep(q, self.u_last, (0,), 'stop_now')
@@ -831,12 +1001,25 @@ class DoorOpenExec:
                             self._sn_verified = True
             elif m is not None and m[0] not in ('setpoint_model_deviation',) and self.stop_mode == 'path':
                 self._stop(m[0] if m[0].startswith('path_') else 'path_' + m[0], **m[1])
+            elif m is not None and m[0] not in ('setpoint_model_deviation',) and self.stop_mode == 'cstop':   # r16：備援停止中監看違反 ⇒ 模擬中止
+                self._stop('cstop_' + m[0], **m[1])
         # ---- 命令
         if tick:
             if self.stop is None:
                 self._cl_fail = None
-                u = self._solve(q, phi_meas)
-                if self._sn is not None:                               # r9：收現在停；不過 ⇒ 丟棄求解結果
+                u, hc_ = self._solve_cand(q, phi_meas)                 # r17：候選模擬提早送出（第二個工作程序），與求解後段及現在停的淨空核對重疊
+                if self._sn == 'cstop':                                 # r16：淨空違反 ⇒ 同原語意停止；閉鏈超限只使備援不可用
+                    self._sn = None
+                    w1 = time.perf_counter()
+                    st0, b0c = self._cs_collect()
+                    self.sweep_ms[-1] += (time.perf_counter() - w1) * 1e3
+                    if st0 == 'missing':                               # r17：結果缺失／程序失效 ≠ 核過 ⇒ 模擬中止
+                        self._stop('cstop_check_unavailable', fb=self._fb_info)
+                    elif b0c is not None:
+                        self._stop('stop_sweep_violation', **b0c)
+                    else:
+                        self._sn_verified = True                       # 已得到判定（可行與否見 _fb_ok）
+                elif self._sn is not None:                             # r9：收現在停；不過 ⇒ 丟棄求解結果
                     items0, h0 = self._sn
                     self._sn = None
                     w1 = time.perf_counter()
@@ -854,7 +1037,14 @@ class DoorOpenExec:
                     self._stop('closure_cmd_invalid', bad=self._cl_fail) if self._cl_fail else self._stop('solver_fail')
                 else:
                     w0 = time.perf_counter()
-                    if self._pool is not None:
+                    if hc_ is not None:                                 # r17：候選核對用實際停法
+                        stc, b_, infc = self._cs_cand_finish(hc_, 'candidate')
+                        why_c = None
+                        if stc == 'missing':
+                            why_c = infc
+                        elif stc == 'infeasible':
+                            b_ = dict(tag='candidate_cstop', infeasible=infc)
+                    elif self._pool is not None:
                         b_, why_c = self._pool_sweep(q, u, (1, 2), 'candidate')
                     else:
                         b_, why_c = self._sweep(q, u, (1, 2), 'candidate'), None
@@ -880,18 +1070,29 @@ class DoorOpenExec:
                 else:
                     self._cl_fail = None
                     hfb = None
-                    if self.g2['deadline_ms'] is not None and self._pool is not None:   # r11：路徑停止中每拍重驗備援（現在停預測），與求解並行
+                    cs_on = self._cs_on()
+                    if cs_on:
+                        self._cs_submit(q)                             # r16：路徑停止中每拍重驗閉鏈一致備援（取代各軸減速預測）
+                    if not cs_on and self.g2['deadline_ms'] is not None and self._pool is not None:   # r11：路徑停止中每拍重驗備援（現在停預測），與求解並行
                         itf = self._sweep_prep(q, self.u_last, (0,))
                         hfb = (itf, self._pool_submit(itf))
-                    u = self._solve(q, phi_meas)
+                    u, hc_ = self._solve_cand(q, phi_meas)
                     if hfb is not None:
                         _, whyf = self._pool_eval(hfb[0], hfb[1], 'fallback')
                         if whyf is not None:
                             self._fb_ok = False
-                    if u is None:
+                    stp = self._cs_collect()[0] if cs_on else None
+                    if stp == 'missing':
+                        self._stop('path_cstop_check_unavailable', fb=self._fb_info)
+                    elif u is None:
                         self._stop('closure_cmd_invalid', bad=self._cl_fail) if self._cl_fail else self._stop('solver_fail')
                     else:
-                        if self._pool is not None:
+                        if cs_on:
+                            stc, b_, infc = self._cs_cand_finish(hc_, 'path_candidate')
+                            why_p = infc if stc == 'missing' else None
+                            if stc == 'infeasible':
+                                b_ = dict(tag='path_candidate_cstop', infeasible=infc)
+                        elif self._pool is not None:
                             b_, why_p = self._pool_sweep(q, u, (1, 2), 'path_candidate')
                         else:
                             b_, why_p = self._sweep(q, u, (1, 2), 'path_candidate'), None     # 路徑停止的新候選同樣經提交前核對
@@ -904,6 +1105,16 @@ class DoorOpenExec:
                         else:
                             self.u_last = u
                             self.sigma = min(self.sigma + self.cfg.dt * self.g, self.sig_end)
+            if self.stop is not None and self.stop_mode == 'cstop' and self.abort is None:   # r16：閉鏈一致備援停法
+                if self.stopped_t is None:
+                    self.stopped_t = self.t
+                seed = self.q_cl_prev if self.q_cl_prev is not None else np.asarray(q[3:], float)
+                rc = self._cs_obj().step_cmd(q, self.s, self.pipe, self.u_last, self.sigma, self.g, seed)   # r17：_cs_obj 每次設成當下參考
+                if not rc['ok']:
+                    self._stop('cstop_cmd_invalid', cs_why=rc.get('why'))
+                else:
+                    self.u_last, self.sigma, self.g, self.q_cl_prev = rc['u'], rc['sigma'], rc['g'], rc['q1']
+                    self.cs_log.append((round(self.t, 3), round(self.g, 3), float(np.abs(rc['u'][3:]).max())))
             if self.stop is not None and self.stop_mode == 'settled':
                 if self.stopped_t is None:
                     self.stopped_t = self.t
@@ -936,6 +1147,8 @@ class DoorOpenExec:
             lim = STOP_STILL['timeout_s'] + (3.0 if not self.bound else 0.0)   # 解除後門自由減速需要較久
             if self._still * PHYS >= STOP_STILL['hold_s'] or self.t - self.stopped_t >= lim:
                 self.stop_ok = dict(t=round(self.t, 3), since_stop_s=round(self.t - self.stopped_t, 3), parts=st, arm_rate=dq, base_speed=vb, yaw_rate=wy, door_rate=dd, bound=self.bound, ok=bool(self._still * PHYS >= STOP_STILL['hold_s']))
+                if self.stop_mode == 'cstop' and not self.stop_ok['ok']:        # r16：備援 4 s 內未停穩 ⇒ 模擬中止
+                    self._stop('cstop_not_settled', parts=st)
         self.q_last, self.phi_last = q.copy(), float(phi_meas)
         self.n_step += 1
         if self.abort is not None:                                   # 本步中途觸發（例如求解失敗、設定點限位）：本步命令也不送
