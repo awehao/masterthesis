@@ -20,6 +20,37 @@ def blas_single():
         os.environ[k] = '1'
 
 
+def blas_runtime(set_to=None):
+    """執行期直接對已載入的 OpenBLAS 設定／讀回執行緒數（ctypes）。模擬器啟動時會把 OPENBLAS_NUM_THREADS 改回核心數並可能重設執行緒池，
+    所以只設環境變數不夠（第十趟：主執行緒被釘在 CPU 0、OpenBLAS 仍 16 執行緒 ⇒ 單次 GI 求解 124 ms）。回 [dict(lib, before, after)]。"""
+    import ctypes
+    out, seen = [], set()
+    try:
+        for ln in open('/proc/self/maps'):
+            pth = ln.strip().split(' ')[-1]
+            if 'openblas' not in os.path.basename(pth).lower() or pth in seen:
+                continue
+            seen.add(pth)
+            rec = dict(lib=os.path.basename(pth), before=None, after=None, set_ok=None)
+            try:
+                L = ctypes.CDLL(pth)
+                get = next((getattr(L, n) for n in ('scipy_openblas_get_num_threads64_', 'openblas_get_num_threads64_', 'openblas_get_num_threads') if hasattr(L, n)), None)
+                st = next((getattr(L, n) for n in ('scipy_openblas_set_num_threads64_', 'openblas_set_num_threads64_', 'openblas_set_num_threads') if hasattr(L, n)), None)
+                if get is not None:
+                    rec['before'] = int(get())
+                if set_to is not None and st is not None:
+                    st(ctypes.c_int(int(set_to)))
+                    rec['set_ok'] = True
+                if get is not None:
+                    rec['after'] = int(get())
+            except Exception as e:                                    # noqa: BLE001
+                rec['error'] = repr(e)[:120]
+            out.append(rec)
+    except Exception as e:                                            # noqa: BLE001
+        out.append(dict(error=repr(e)[:120]))
+    return out
+
+
 def pin(pid, cpus, nice=None):
     try:
         os.sched_setaffinity(pid, set(cpus))
@@ -70,7 +101,7 @@ def readback(pool=None, csw=None, planners=()):
     hist = {}
     for _, _, a in th:
         hist[str(a)] = hist.get(str(a), 0) + 1
-    r = dict(layout=dict(main=MAIN, kit_and_planners=KIT, cstop=CSTOP, pool=POOL, smt='邏輯 CPU i 與 i+8 同實體核心；CPU 8 不分配'), blas_env={k: os.environ.get(k) for k in BLAS_ENV},
+    r = dict(blas_runtime=blas_runtime(None), layout=dict(main=MAIN, kit_and_planners=KIT, cstop=CSTOP, pool=POOL, smt='邏輯 CPU i 與 i+8 同實體核心；CPU 8 不分配'), blas_env={k: os.environ.get(k) for k in BLAS_ENV},
              main_thread=aff(main_tid), n_threads=len(th), thread_affinity_hist=hist, n_other_threads_allowed_on_cpu0=len(on0), other_threads_on_cpu0_names=sorted({t[1] for t in on0})[:12])
     if pool is not None:
         r['pool'] = [aff(p.pid) for p in pool.procs]

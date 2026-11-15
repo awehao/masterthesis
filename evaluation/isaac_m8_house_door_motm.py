@@ -69,6 +69,7 @@ from isaacsim import SimulationApp                               # noqa: E402
 sim_app = SimulationApp({'headless': False, 'width': 1280, 'height': 720})
 if CPU_LAYOUT:
     CPU_PIN['post_kit'] = CPUL.post_kit()                         # 只移主執行緒到 CPU 0（Kit 既有執行緒留在 Kit 集合）
+    CPU_PIN['blas_after_kit'] = CPUL.blas_runtime(1)              # 模擬器啟動後把主程序的 OpenBLAS 直接設成單執行緒並讀回（環境變數會被模擬器改回）
 import door_wbopt as WB                                          # noqa: E402
 import door_clear_door_fast as _F                                # noqa: E402
 WB.clear_door = _F.clear_door_fast
@@ -630,6 +631,12 @@ def main():
                 exn = XO.DoorOpenExec(ident, Xd0p, 0.05, T_WH_b, phi_b, T_HE_act, GOAL, ho, fq_b, arm_mode='closure', joint_kp=a.kp,
                                       g2=dict(gravity2=True, gravity3=True, ik_fc=True, pool=POOL, prep_fc=True, deadline_ms=50.0, cstop=CSW, preload_release=bool(a.preload_release)))
                 exn.p2_open = True
+                if CPU_LAYOUT:
+                    bl_ = CPUL.blas_runtime(1)
+                    if not bl_ or any(r_.get('after') != 1 for r_ in bl_):   # 讀回不是單執行緒 ⇒ 不交接（走抓持控制器停止流程）
+                        log_event('blas_threads_not_single', readback=bl_)
+                        gc._stop('blas_threads_not_single')
+                        break
                 res['cpu_layout'] = dict(enabled=CPU_LAYOUT, pin=CPU_PIN, at_handover=CPUL.readback(POOL, CSW, (PLANNER, PLANNER_FS)))
                 if a.diag:
                     exn.deadline_inject = lambda cc: cc.t >= DIAG_STOP_T - 1e-9   # 取證：0.5 s 後強制本拍晚到 ⇒ 與第四趟相同的閉鏈一致停止流程
