@@ -13,7 +13,7 @@ import json, math, os, sys, time
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import door_sweep_pool as DSP
-SHARED = DSP.SweepPool(6) if os.environ.get('SHARED_POOL') == '1' else None   # 同 Isaac 執行器：先 fork 的共用池物件
+SHARED = DSP.SweepPool(int(os.environ.get('POOL_N', '6'))) if os.environ.get('SHARED_POOL') == '1' else None   # 同 Isaac 執行器：先 fork 的共用池物件
 import door_cstop as DCS
 CSW = DCS.CStopWorker() if SHARED is not None else None
 os.environ.setdefault('P2_TERM', '1'); os.environ.setdefault('P2_FINAL', '1')

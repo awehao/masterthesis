@@ -56,15 +56,15 @@ class CStop:
         Tg = self.W.Rz4(-(float(phi) - self.phi_bind)) @ self.T_WH_bind @ self.T_HE
         return self.DFK.ik_closure_fc(Tg, np.asarray(b, float), seed)
 
-    def step_cmd(self, q, s, pipe, u_prev, sigma, g, seed):
+    def step_cmd(self, q, s, pipe, u_prev, sigma, g, seed, se_end):
         """一拍的備援命令。回 dict(ok, u, sigma, g, q1, why)。q＝實測（或模擬）構型；pipe＝在途命令；u_prev＝上一拍提交命令。"""
         XO = self.XO
         DT, PHYS, NPH, D = XO.DT, XO.PHYS, XO.NPH, XO.D_STEPS
         g2 = max(g - DT / T_STOP, 0.0)
-        # r2：參考進度對命令連續——執行層不變式「σ＋D·PHYS·g＝上一個已提交命令的終點進度」。
-        #     本拍命令自該終點起、前進 DT·g2；回傳的 σ 維持同一不變式（σ'＝終點−D·PHYS·g2）。
-        #     （原式 se＝σ＋D·PHYS·g2 每拍把起點往回拉 D·PHYS·Δg，交接處參考門速快時使目標門角與在途命令不連續、預測閉鏈偏差到 8–11 mm。）
-        se = sigma + D * PHYS * g
+        # r2：參考進度對命令連續——本拍命令自「上一個真正已提交命令的參考終點」se_end 起、前進 DT·g2。
+        #     se_end 由呼叫端保存（只在命令提交時更新；不從當下的 g 回推——主控制器每拍先重算 g，回推會回拉或前跳）。
+        #     （最初的式子 se＝σ＋D·PHYS·g2 每拍把起點回拉 D·PHYS·Δg，交接處參考門速快時預測閉鏈偏差到 8–11 mm。）
+        se = float(se_end)
         se1 = min(se + DT * g2, self.sig_end)
         ge = g2
         x, dx = self.ref(se), self.dref(0.5 * (se + se1))
@@ -104,19 +104,8 @@ class CStop:
             return dict(ok=False, why='manipulability', v=float(sm1))
         if g2 <= 0.0 and ge <= 0.0 and not np.any(ub) and float(np.abs(ua).max()) <= ARM_CMD_SETTLE:
             u = np.zeros(9)                                        # 停穩：命令歸零（設定點保持在閉鏈一致位置）
-            return dict(ok=True, u=u, sigma=se1 - D * PHYS * g2, g=g2, q1=q1, zeroed=True)
-        return dict(ok=True, u=u, sigma=se1 - D * PHYS * g2, g=g2, q1=q1, zeroed=False)
-
-    @staticmethod
-    def _thin(X):
-        """淨空取樣去重：與上一個保留樣本相比，底盤 <0.5 mm／偏航與各關節 <1 mrad／門角 <1 mrad 的拍末樣本略過（停穩尾段幾乎不動）；首末必留。"""
-        keep = [X[0]]
-        for x in X[1:-1]:
-            d = np.abs(x - keep[-1])
-            if d[:2].max() >= 5e-4 or d[2:].max() >= 1e-3:
-                keep.append(x)
-        keep.append(X[-1])
-        return np.array(keep)
+            return dict(ok=True, u=u, sigma=se1 - D * PHYS * g2, g=g2, q1=q1, zeroed=True, se_end=se1)
+        return dict(ok=True, u=u, sigma=se1 - D * PHYS * g2, g=g2, q1=q1, zeroed=False, se_end=se1)
 
     def sim(self, st, max_ticks=80):
         """自狀態 st（q, s, pipe, u_prev, sigma, g, seed；可含 u_first, hold）起向前模擬到停穩。
@@ -131,6 +120,7 @@ class CStop:
         pipe = [np.asarray(u, float).copy() for u in st['pipe']]
         u_prev, sigma, g, seed = np.asarray(st['u_prev'], float).copy(), float(st['sigma']), float(st['g']), np.asarray(st['seed'], float).copy()
         hold = int(st.get('hold', 0))
+        se_end = float(st['se_end'])
         zeroed = False
         X, quiet = [np.r_[q, self.ref(sigma)[9]]], 0
         self._cl = [0.0, 0.0]
@@ -139,13 +129,14 @@ class CStop:
             if n < hold:
                 u = np.asarray(st['u_first'], float).copy()
                 sigma = min(sigma + DT * g, self.sig_end)
+                se_end = float(st['se_first'])                       # 候選命令自己的參考終點（主控制器求解時算出）
             elif zeroed:
                 u = np.zeros(9)                                      # 已歸零後不再重算命令：g＝0、參考與預測底盤終點不變、管線末設定點不變 ⇒ 本停法下一拍輸出仍是同一個（已歸零的）命令
             else:
-                r = self.step_cmd(q, s, pipe, u_prev, sigma, g, seed)
+                r = self.step_cmd(q, s, pipe, u_prev, sigma, g, seed, se_end)
                 if not r['ok']:
                     return dict(ok=False, why=r['why'], n_ticks=n, X=np.array(X))
-                u, sigma, g, seed, zeroed = r['u'], r['sigma'], r['g'], r['q1'], r['zeroed']
+                u, sigma, g, seed, zeroed, se_end = r['u'], r['sigma'], r['g'], r['q1'], r['zeroed'], r['se_end']
             uf = np.asarray(pipe[-1][:3], float).copy()
             q_a = q.copy()
             for j in range(NPH):
@@ -166,7 +157,7 @@ class CStop:
                      and abs(q[2] - q_a[2]) / DT < SS['yaw_rps'] and abs(float(X[-1][9] - X[-2][9])) / DT < SS['door_rps'])
             quiet = quiet + 1 if still else 0
             if quiet >= need:
-                return dict(ok=True, why=None, n_ticks=n + 1, X=self._thin(X))
+                return dict(ok=True, why=None, n_ticks=n + 1, X=np.array(X))   # 全部拍末樣本都送淨空核對（不做近似去重）
         return dict(ok=False, why='not_settled', n_ticks=max_ticks, X=np.array(X))
 
 

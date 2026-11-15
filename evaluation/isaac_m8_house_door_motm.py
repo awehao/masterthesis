@@ -42,7 +42,7 @@ os.environ.setdefault('P2_FINAL', '1')
 import door_sweep_pool as DSP                                    # noqa: E402
 import door_p2_planner_server as PS                              # noqa: E402
 import door_cstop as DCS                                         # noqa: E402
-POOL = DSP.SweepPool(6)
+POOL = DSP.SweepPool(8)
 PLANNER = PS.PlannerServer()
 CSW = DCS.CStopWorker()                                              # 閉鏈一致備援停法的向前模擬程序（Codex 20261115_005224）
 

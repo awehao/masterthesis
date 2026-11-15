@@ -151,6 +151,7 @@ class DoorOpenExec:
         self.fb_closure_inject, self.deadline_inject = None, None      # r11：測試掛鉤
         self._cand_tr, self._sn_tr = None, None
         self._early_cb, self._hc_e = None, None                        # r17：候選核對提早派工
+        self.g_inject = None                                           # r17：測試掛鉤（改寫本拍重算出的 g）
         self.cs_inject = None                                          # r17：測試掛鉤（閉鏈一致停法核對結果改為 'missing'／'infeasible'）
         self.fb_log = []
         for k_ in (g2 or {}):
@@ -197,6 +198,8 @@ class DoorOpenExec:
         self.lim_lo, self.lim_hi = np.asarray(LITE6_SAFE.lower, float) + 0.05, np.asarray(LITE6_SAFE.upper, float) - 0.05
         self.sig_end = (len(self.Xd) - 1) * self.h
         self.sigma, self.g, self.t, self.n_step = (-D_STEPS * PHYS if START_LAT_ALIGN else 0.0), 0.0, 0.0, 0
+        self._se_end = self.sigma + D_STEPS * PHYS                     # r17：上一個真正已提交命令的參考終點（只在提交時更新）；起始＝第一拍求解的起點
+        self._se_cand = self._se_end
         self.stop, self.done, self.stopped_t, self.stop_ok, self._still = None, False, None, None, 0
         self.events, self.rec, self.fail_inject = [], [], None
         self.solve_ms, self.sweep_ms, self.tick_ms = [], [], []
@@ -597,7 +600,7 @@ class DoorOpenExec:
 
     def _cs_state(self, q, **kw):
         seed = self.q_cl_prev if self.q_cl_prev is not None else np.asarray(q[3:], float)
-        return dict(q=np.asarray(q, float), s=self.s, pipe=self.pipe, u_prev=self.u_last, sigma=self.sigma, g=self.g, seed=seed, Xd=self.Xd, **kw)
+        return dict(q=np.asarray(q, float), s=self.s, pipe=self.pipe, u_prev=self.u_last, sigma=self.sigma, g=self.g, seed=seed, Xd=self.Xd, se_end=self._se_end, **kw)
 
     def _cs_bg(self, ver, out):
         """背景執行緒（主程序求解期間）：等向前模擬 → 取樣構型送計算池核淨空 → 收結果。只寫自己這次請求的 out（不寫控制器狀態）。
@@ -679,7 +682,7 @@ class DoorOpenExec:
         原各軸減速的 (1,2) 中「同一命令再多留一拍」在閉鏈手臂下不是會發生的情形（手臂命令每拍依閉鏈重算；多留一拍即破壞閉鏈，假世界起步即 arm_rate 不可行）。"""
         self._cs_obj()
         w = 1 if self._csw.n > 1 else 0
-        return w, self._csw.submit(self._cs_state(q, u_first=np.asarray(u, float), hold=1), w=w), self._xd_ver
+        return w, self._csw.submit(self._cs_state(q, u_first=np.asarray(u, float), hold=1, se_first=self._se_cand), w=w), self._xd_ver
 
     def _solve_cand(self, q, phi_meas):
         """求解；閉鏈一致停法啟用時，本拍命令一確定（閉鏈手臂前三個節點算完）就把候選核對的模擬送出，與其餘求解工作重疊。
@@ -720,15 +723,17 @@ class DoorOpenExec:
             return 'missing', None, dict(why='pool_' + str(why))
         bad, ok, info = self._cs_judge(r, res, tag)
         self._cand_tr = r.get('tr')                                    # 診斷用：候選核對的逐拍預測
-        if not ok and bad is None:
-            self.n_emerg_closure += 1                                  # 同原候選掃掠語意：預測閉鏈超限記數（不單獨拒絕候選）
+        if not ok and bad is None:                                     # 提交後的停止預測閉鏈超限 ⇒ 提交後沒有合格備援 ⇒ 候選不得提交
+            self.n_emerg_closure += 1
+            return 'infeasible', None, dict(why='closure_over_tol', closure_pos_mm=info['closure_pos_mm'], closure_rot_deg=info['closure_rot_deg'])
         return 'ok', bad, info
 
     def _deadline_stop(self, elapsed_ms, tag):
         """r10：控制期限已過 ⇒ 不提交本拍候選。正常段：本拍現在停已驗過 ⇒ 有界減速停法（settled）；沒驗到 ⇒ 模擬中止。
         路徑停止中：上一拍提交的候選已含「下一拍起減速」的預測核對 ⇒ 直接轉有界減速。"""
         self.n_deadline_miss += 1
-        self.fb_log.append(dict(t=round(float(self.t), 3), tag=tag, fb_ok=self._fb_ok, fb=self._fb_info, elapsed_ms=round(elapsed_ms, 1)))
+        self.fb_log.append(dict(t=round(float(self.t), 3), tag=tag, fb_ok=self._fb_ok, fb=self._fb_info, elapsed_ms=round(elapsed_ms, 1), se_end_committed=round(self._se_end, 4), sigma=round(self.sigma, 4), g=round(self.g, 3),
+                                sigma_plus_delay_g=round(self.sigma + D_STEPS * PHYS * self.g, 4)))
         mode_fb = 'cstop' if self._cs_on() else 'settled'
         if self.stop is None:
             if self._sn_verified and self._fb_ok:
@@ -754,6 +759,7 @@ class DoorOpenExec:
             qp, sp = S.plant_phys_step(qp, sp, u_in, cfg, 1)
         g = self.g
         sig_eff = self.sigma + D_STEPS * PHYS * g
+        self._se_cand = min(sig_eff + DT * g, self.sig_end)           # r17：本拍候選命令的參考終點（提交時才成為 _se_end）
         X, xi, Ts, qr = [], [], [], []
         for k in range(N + 1):
             sk = sig_eff + k * DT * g
@@ -962,6 +968,8 @@ class DoorOpenExec:
                 x_ref = self.ref(self.sigma)
                 lead = float(x_ref[9] - phi_meas)
                 self.g = float(np.clip((LEAD_MAX - lead) / LEAD_BAND, 0.0, 1.0)) if self.sigma < self.sig_end else 0.0
+                if self.g_inject is not None:
+                    self.g = float(self.g_inject(self, self.g))
                 if m is not None:
                     self._stop(m[0], **m[1])
                 else:
@@ -1058,6 +1066,7 @@ class DoorOpenExec:
                     self._deadline_stop((time.perf_counter() - w_t) * 1e3, 'candidate')   # r10：晚到候選不提交
                 if self.stop is None:
                     self.u_last = u
+                    self._se_end = self._se_cand
                     self.sigma = min(self.sigma + self.cfg.dt * self.g, self.sig_end)
             if self.stop is not None and self.stop_mode == 'path':
                 self.g = max(self.g - self.cfg.dt / T_STOP, 0.0)
@@ -1104,17 +1113,18 @@ class DoorOpenExec:
                             self._deadline_stop((time.perf_counter() - w_t) * 1e3, 'path_candidate')   # 路徑停止中晚到：不提交，改已驗證的有界減速
                         else:
                             self.u_last = u
+                            self._se_end = self._se_cand
                             self.sigma = min(self.sigma + self.cfg.dt * self.g, self.sig_end)
             if self.stop is not None and self.stop_mode == 'cstop' and self.abort is None:   # r16：閉鏈一致備援停法
                 if self.stopped_t is None:
                     self.stopped_t = self.t
                 seed = self.q_cl_prev if self.q_cl_prev is not None else np.asarray(q[3:], float)
-                rc = self._cs_obj().step_cmd(q, self.s, self.pipe, self.u_last, self.sigma, self.g, seed)   # r17：_cs_obj 每次設成當下參考
+                rc = self._cs_obj().step_cmd(q, self.s, self.pipe, self.u_last, self.sigma, self.g, seed, self._se_end)   # r17：_cs_obj 每次設成當下參考；起點＝已提交終點
                 if not rc['ok']:
                     self._stop('cstop_cmd_invalid', cs_why=rc.get('why'))
                 else:
-                    self.u_last, self.sigma, self.g, self.q_cl_prev = rc['u'], rc['sigma'], rc['g'], rc['q1']
-                    self.cs_log.append((round(self.t, 3), round(self.g, 3), float(np.abs(rc['u'][3:]).max())))
+                    self.u_last, self.sigma, self.g, self.q_cl_prev, self._se_end = rc['u'], rc['sigma'], rc['g'], rc['q1'], rc['se_end']
+                    self.cs_log.append((round(self.t, 3), round(self.g, 3), float(np.abs(rc['u'][3:]).max()), round(self._se_end, 4)))
             if self.stop is not None and self.stop_mode == 'settled':
                 if self.stopped_t is None:
                     self.stopped_t = self.t
