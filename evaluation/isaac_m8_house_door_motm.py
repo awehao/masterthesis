@@ -43,6 +43,7 @@ os.environ.setdefault('P2_TERM', '1')
 os.environ.setdefault('P2_FINAL', '1')
 import door_sweep_pool as DSP                                    # noqa: E402
 import door_p2_planner_server as PS                              # noqa: E402
+import door_first_seg as FSG                                     # noqa: E402
 import door_cstop as DCS                                         # noqa: E402
 POOL = DSP.SweepPool(8)
 PLANNER = PS.PlannerServer()
@@ -82,7 +83,8 @@ GOAL = math.radians(85.0)
 COND = dict(pos_m=0.005, rot_deg=3.0, rel_lin_mps=0.005, rel_ang_rps=0.02, rel_still_s=0.3, finger_q_m=(0.0005, 0.004), finger_contact_n=0.5, door_pre_deg=0.5, forbidden_n=0.05)
 GRASP_LIMIT_S, OPEN_LIMIT_S = 12.0, 40.0
 HOLD_R_MAX, HOLD_V_MAX = 1.3, 0.01                                   # P2：靜置保持力矩殘差上限（N·m）、低速門檻（rad/s）
-PLAN_LEAD_S, PLAN_TOL_S, T_REPLAN = 0.10, 0.05, 1.0                  # 首段：名目交接在預測 READY 後 0.10 s（第 3、4 趟實況）；適用窗 [0.10, 0.10＋0.05]；過期後重算的預測提前量 1.0 s（規劃在模擬時間約 0.8 s）
+# 首段適用窗與滾動參數在 door_first_seg（LEAD 0.10／TOL 0.05／AHEAD 1.0／GAP 0.4 s）
+_UNUSED_PLAN = (0.10, 0.05, 1.0)                  # 首段：名目交接在預測 READY 後 0.10 s（第 3、4 趟實況）；適用窗 [0.10, 0.10＋0.05]；過期後重算的預測提前量 1.0 s（規劃在模擬時間約 0.8 s）
 DIAG_STOP_T = 0.5                                                   # --diag：開門執行層時間到此即強制本拍「晚到」（走與第四趟相同的閉鏈一致停止流程）
 PH = ['L', 'I', 'C', 'F', 'R', 'O', 'S']                            # 前導(HOLD)／插入／閉爪／確認／READY／開門／停止
 PH_ZH = dict(L='前導接近（預抓保持、移動）', I='插入（移動中）', C='閉爪（移動中）', F='確認（移動中）', R='READY（移動中）', O='開門（P2 續接）', S='停止')
@@ -382,7 +384,7 @@ def main():
                finger=dict(command='CLOSE 段由張開斜降到 0（夾緊，同停車版）', geometry='兩指各自實測開度；CLOSE 段掃掠另含預測閉合開度'))
     # ---- 靜置
     quat0 = np.array([math.cos(b_start[2] / 2), 0.0, 0.0, math.sin(b_start[2] / 2)], np.float32)
-    jv_hist = []
+    jv_hist, ct_hist = [], []
     for k in range(int(round(a.settle_s / DT))):
         if k < 5:
             robot.set_world_pose(np.array([b_start[0], b_start[1], 0.0], np.float32), quat0)
@@ -390,13 +392,22 @@ def main():
         base_cmd(np.zeros(3), 0.0)
         world.step(render=True)
         jv_hist.append(np.asarray(robot.get_joint_velocities(), float)[idx])
+        try:
+            fc_ = finger_contacts()
+            ct_hist.append(max(float(fc_[0][1]), float(fc_[1][1]), float(fc_[0][0]), float(fc_[1][0]), float(other_contacts()[0])))
+        except Exception as e:                                         # noqa: BLE001
+            ct_hist.append(float('nan'))
     qs, jps = q9()
     # P2（Codex 20261115）：任務運動前的工程拒跑檢查——未綁定、無接觸、實測低速持續 0.3 s 後，r＝kp(s−q)＋kd(0−q̇)＋G(q)（速度目標＝0）
     jv_tail = np.abs(np.array(jv_hist[-int(round(0.3 / DT)):]))
     r_hold = a.kp * (s0 - qs[3:]) + a.kd * (0.0 - jv_hist[-1]) + BM.arm_gravity(K, qs, bodies_arm)
     hold_chk = dict(low_speed_0p3s=bool(jv_tail.max() <= HOLD_V_MAX), joint_rate_abs_max_0p3s=round(float(jv_tail.max()), 6), r_Nm=[round(float(x), 3) for x in r_hold], limit_Nm=HOLD_R_MAX, v_limit=HOLD_V_MAX,
                     note='r 含重力模型與驅動近似誤差：超過不證明新舊摩擦疊加，通過也不證明摩擦已校準；1.3＝1.0＋事前工程容差 0.3')
-    hold_chk['ok'] = bool(hold_chk['low_speed_0p3s'] and float(np.abs(r_hold).max()) <= HOLD_R_MAX)
+    n_need = int(round(0.3 / DT))
+    ct_tail = np.array(ct_hist[-n_need:], float)
+    hold_chk.update(n_samples=int(min(len(jv_tail), len(ct_tail))), n_need=n_need, contact_force_max_n=None if not np.isfinite(ct_tail).all() else round(float(ct_tail.max()), 6),
+                    no_contact=bool(len(ct_tail) == n_need and np.isfinite(ct_tail).all() and float(ct_tail.max()) <= 1e-6), finite=bool(np.isfinite(jv_tail).all() and np.isfinite(r_hold).all()))
+    hold_chk['ok'] = bool(hold_chk['low_speed_0p3s'] and hold_chk['finite'] and len(jv_tail) == n_need and hold_chk['no_contact'] and float(np.abs(r_hold).max()) <= HOLD_R_MAX)
     print('[motm] hold_check', json.dumps(hold_chk, ensure_ascii=False), flush=True)
     if a.arm_friction_model == 'urdf_effort' and not hold_chk['ok']:
         print('[motm] 靜置保持力矩殘差檢查不過 ⇒ 拒跑', flush=True)
@@ -424,8 +435,9 @@ def main():
     capture(0.0)
     gc = G.MovingGraspCtrl(ident, est_fn, np.array([-1.0, 0.0]), V, (L_LEAD, L_LEAD + 0.22), s0.copy(), [np.zeros(9) for _ in range(G.D_STEPS)], np.zeros(9), np.zeros(9), off_static,
                            sched=dict(hold_s=0.3 + T_LEAD), pool=POOL, fastkin=True, deadline_ms=50.0)
-    first = dict(rid=None, t_req=None, wall_req=None, t_avail=None, wall_avail=None, ok=False, res=None)
-    gc.close_gate = lambda cc: bool(first['ok'] and abs(first['t_ready_pred'] - (cc.t0 + cc.sched['hold_s'] + cc.sched['ins_s'] + cc.sched['close_s'] + cc.sched['confirm_s'] - G.DT)) <= 0.5 * G.DT)   # 首段可用且是照本排程的 READY 時刻算的
+    fs = FSG.FirstSeg([PLANNER], G.DT)                               # 首段計畫管理（執行器與離線核對共用；提前滾動更新）
+    first = dict(ok=False, res=None, sel=None)
+    gc.close_gate = lambda cc: fs.gate_ok()                          # 照本排程 READY 時刻算的首段已可用且可行
     ev = []
     rows, ts = [], []
     STATE.update(res=res, rows=rows, ts=ts, ev=ev)                    # 例外時存部分紀錄（名目趟 1 例外未存檔）
@@ -442,9 +454,9 @@ def main():
         q, jp = q9()
         tick = gc.n_step % NPH == 0
         # P2 首段：前導第一拍送出（預測 READY 狀態）；過期後依最新狀態重算（Codex 20261115：首段計畫過期修正）
-        def req_first(t_ready_abs, why):
+        def make_req(t_now, target):
             T_plan = gc.handle_ref().copy() if gc.lock is not None else gc.T_est.copy()
-            b_pred = q[:3] + np.r_[np.array([-V, 0.0]) * max(t_ready_abs - t, 0.0), 0.0]     # 通過線等速（抓持控制器的底盤命令）；在途管線同為等速
+            b_pred = q[:3] + np.r_[np.array([-V, 0.0]) * max(target - t_now, 0.0), 0.0]      # 通過線等速（抓持控制器的底盤命令；在途管線同為等速）
             qa_pred = ik(b_pred, T_at(T_plan, 0.0), q[3:])
             phi_now = door_q()
             x_pred = np.r_[b_pred, qa_pred, phi_now]
@@ -452,30 +464,26 @@ def main():
             WB.set_model(phi0=phi_now, finger_q=G.FINGER_CLOSED)
             hlp = WB.DoorWBOpt(T_plan, np.eye(4), x_pred, GOAL, N=2, dt=0.2, T_HE=T_HE_pred, project_start=False)
             v_pred = np.r_[-V, 0.0, 0.0, hlp.closure_velocity(x_pred, np.r_[-V, 0.0, 0.0], 0.0), 0.0]
-            first['n_req'] = first.get('n_req', 0) + 1
-            first.update(rid=first['n_req'], t_req=t, wall_req=time.perf_counter() - t_wall0, pend=dict(T_plan=T_plan, T_HE_pred=T_HE_pred, x_pred=x_pred, t_ready_pred=t_ready_abs, phi_req=phi_now), pending=True)
-            PLANNER.submit(first['n_req'], dict(T_WH0=T_plan, T_HE=T_HE_pred, x0=x_pred, v0=v_pred, H=H_SEG, goal=GOAL, fq=G.FINGER_CLOSED, phi_model=phi_now, try_final=True))
-            log_event('first_segment_request', k=first['n_req'], why=why, t_ready_pred=round(t_ready_abs, 3), b_pred=[round(float(x), 4) for x in b_pred])
+            return (dict(T_WH0=T_plan, T_HE=T_HE_pred, x0=x_pred, v0=v_pred, H=H_SEG, goal=GOAL, fq=G.FINGER_CLOSED, phi_model=phi_now, try_final=True),
+                    dict(T_plan=T_plan, T_HE_pred=T_HE_pred, x_pred=x_pred, phi_req=phi_now, wall_req=time.perf_counter() - t_wall0))
 
-        if tick and first['rid'] is None and gc.t0 is not None and gc.T_est is not None:
-            req_first(gc.t0 + gc.sched['hold_s'] + gc.sched['ins_s'] + gc.sched['close_s'] + gc.sched['confirm_s'] - G.DT, 'initial')
-        plan_t = first.get('t_ready_pred')
-        stale = first['res'] is not None and plan_t is not None and t > plan_t + PLAN_LEAD_S + PLAN_TOL_S + 1e-9
-        if tick and stale and not first.get('pending') and gc.stop is None and not a.smoke:
-            first['ok'] = False                                          # 舊段不再適用（不平移、不沿用）
-            req_first(t + T_REPLAN, 'stale')
-        r_ = PLANNER.poll() if first.get('pending') else None
-        if r_ is not None and r_[0] != first['rid']:
-            r_ = None                                                    # 舊請求的結果：丟棄
-        if r_ is not None:
-            first.update(first.pop('pend'))
-            first['pending'] = False
-            first.update(res=r_, t_avail=t, wall_avail=time.perf_counter() - t_wall0, ok=bool(r_[2] and r_[1] is not None))
-            log_event('first_segment_available', feasible=r_[2], failed=r_[3], final=r_[4], plan_wall_s=round(r_[5], 3), info=r_[6])
-        # 交接（READY 那拍首）
-        plan_fit = bool(first['ok'] and first.get('t_ready_pred') is not None and first['t_ready_pred'] + PLAN_LEAD_S - 0.5 * G.DT <= t <= first['t_ready_pred'] + PLAN_LEAD_S + PLAN_TOL_S + 1e-9)
+        if tick and gc.t0 is not None and gc.T_est is not None and gc.stop is None:
+            sched_t = gc.t0 + gc.sched['hold_s'] + gc.sched['ins_s'] + gc.sched['close_s'] + gc.sched['confirm_s'] - G.DT
+            for e_ in fs.step(t, sched_t, make_req, rolling=not a.smoke):
+                if e_['what'] == 'request':
+                    log_event('first_segment_request', k=e_['rid'], why=e_['why'], t_ready_pred=e_['target'])
+                elif e_['what'] == 'result':
+                    pl_ = [p_ for p_ in fs.plans if p_['rid'] == e_['rid']]
+                    r__ = pl_[0]['res'] if pl_ else None
+                    log_event('first_segment_available', k=e_['rid'], t_ready_pred=e_['target'], feasible=e_['ok'], late=e_['late'], plan_wall_s=e_['plan_wall_s'], failed=None if r__ is None else r__[3], final=None if r__ is None else r__[4], info=None if r__ is None else r__[6])
+                    if e_['rid'] == 1 and r__ is not None:
+                        first.update(ok=e_['ok'], res=r__, t_avail=t, wall_avail=time.perf_counter() - t_wall0, t_req=pl_[0]['t_req'], t_ready_pred=e_['target'], **{k_: pl_[0]['meta'][k_] for k_ in ('wall_req', 'phi_req')})
+                else:
+                    log_event('first_segment_dropped', **{k_: v_ for k_, v_ in e_.items() if k_ != 'what'})
+        pl_sel = fs.applicable(t) if tick else None
+        plan_fit = pl_sel is not None
         if tick and gc.ready_now and gc.ready_ver is not None and gc.stop is None and not a.smoke and not plan_fit:
-            log_event('handover_wait_plan', plan_ok=bool(first['ok']), pending=bool(first.get('pending')), t_ready_pred=first.get('t_ready_pred'), ready_ver=gc.ready_ver)
+            log_event('handover_wait_plan', next_window=fs.next_window(t), ready_ver=gc.ready_ver)
         if tick and gc.ready_now and gc.ready_ver is not None and gc.stop is None and not a.smoke and plan_fit:
             w_ho = time.perf_counter()                                   # 交接計算（綁定條件、建執行層、預熱、試跑）的牆鐘：在本體 50 ms 計時之外，另記
             Th = truth_handle()
@@ -492,7 +500,8 @@ def main():
                 T_WH_b = gc.handle_ref(phi_b)
                 T_HE_act = np.linalg.inv(T_WH_b) @ Ttcp
                 fq_b = 0.5 * (float(jp[f1]) + float(jp[f2]))
-                Xd0 = first['res'][1]
+                Xd0 = pl_sel['res'][1]
+                first['sel'] = dict(rid=pl_sel['rid'], t_ready_pred=round(pl_sel['target'], 3), t_req=round(pl_sel['t_req'], 3), t_avail=round(pl_sel['t_avail'], 3))
                 WB.set_model(phi0=phi_b, finger_q=fq_b)
                 hlp2 = WB.DoorWBOpt(T_WH_b, np.eye(4), np.r_[q, phi_b], GOAL, N=2, dt=0.2, T_HE=T_HE_act, project_start=True)
                 Xd0p = np.array([hlp2.project(x, iters=30) for x in Xd0])     # 首段參考以本趟實測 T_HE 重投影手臂（底盤、門角不變）；以試跑重核
@@ -527,7 +536,7 @@ def main():
                     j.CreateBreakForceAttr().Set(float('inf'))
                     j.CreateBreakTorqueAttr().Set(float('inf'))
                     box.update(mode='open', ex=exn, t_bind=t, T_WH_b=T_WH_b, T_HE=T_HE_act, phi_b=phi_b, fq=fq_b, helper=hlp2, t_next=t + P2.T_RE)
-                    np.savez(os.path.join(a.out, 'first_segment.npz'), Xd0=Xd0, Xd0p=Xd0p, T_plan=first['T_plan'], T_HE_pred=first['T_HE_pred'], T_WH_b=T_WH_b, T_HE_act=T_HE_act, phi_b=phi_b)
+                    np.savez(os.path.join(a.out, 'first_segment.npz'), Xd0=Xd0, Xd0p=Xd0p, T_plan=pl_sel['meta']['T_plan'], T_HE_pred=pl_sel['meta']['T_HE_pred'], T_WH_b=T_WH_b, T_HE_act=T_HE_act, phi_b=phi_b)
                     log_event('bind_and_handover', base_speed_cmd=round(float(np.linalg.norm(gc.u_last[:2])), 4), joint_enabled=bool(UsdPhysics.Joint(stage.GetPrimAtPath(JOINT)).GetJointEnabledAttr().Get()), warmup_ms=round(wu, 1))
                     break
         o = gc.step(t, q.copy(), door_q(), finger_meas=(float(jp[f1]), float(jp[f2])))   # r12：兩指各自實測開度供碰撞幾何
@@ -572,7 +581,8 @@ def main():
     res['grasp'] = {k_: rep_g.get(k_) for k_ in ('phases', 'stop', 'abort', 'stop_effect', 'ready_t_rel', 'accepted', 'accept_t_rel', 'n_ready_revoked', 'min_clear', 'limits', 'contact_lock', 'lock_inconsistency_max', 'contact_stop', 'fast_slip')}
     res['grasp']['n_deadline_miss'] = gc.n_deadline_miss
     res['grasp']['tick_log'] = gc.tick_log
-    res['first_segment'] = {k_: first.get(k_) for k_ in ('t_req', 'wall_req', 't_avail', 'wall_avail', 'ok', 't_ready_pred', 'phi_req', 'n_req')}
+    res['first_segment'] = {k_: first.get(k_) for k_ in ('t_req', 'wall_req', 't_avail', 'wall_avail', 'ok', 't_ready_pred', 'phi_req', 'sel')}
+    res['first_segment'].update(n_req=fs.n_req, n_dropped=fs.n_stale_drop, log=fs.log, window=dict(lead_s=fs.lead, tol_s=fs.tol, ahead_s=fs.ahead, gap_s=fs.gap))
     if first['res'] is not None:
         res['first_segment'].update(feasible=first['res'][2], failed=first['res'][3], final=first['res'][4], plan_wall_s=round(first['res'][5], 3), info=first['res'][6])
     # ================= 開門（P2 續接）=================
@@ -589,7 +599,11 @@ def main():
                 if isinstance(dec, dict):
                     box['decisions'].append(dec)
                     log_event('p2_decision', ok=dec.get('ok'), ver=dec.get('ver'), why=dec.get('why'), dry=dec.get('dry'))
-            r_ = PLANNER.poll() if box['pend'] is not None else None
+            if fs.pend[0] is not None:                                   # 交接時仍在途的首段滾動請求：收掉丟棄（不得被當成 P2 結果）
+                if PLANNER.poll() is not None:
+                    fs.pend[0] = None
+                    log_event('first_segment_dropped', why='after_handover')
+            r_ = PLANNER.poll() if (box['pend'] is not None and fs.pend[0] is None) else None
             if r_ is not None:
                 pend = box['pend']; box['pend'] = None
                 rec = pend['rec']
@@ -610,7 +624,7 @@ def main():
                     if not okS:
                         rec['why'] = info.get('why')
                 log_event('p2_plan_result', k=rec['k'], result=rec['result'], plan_wall_s=rec['plan_wall_s'], final=rec['final'])
-            if box['pend'] is None and ex.stop is None and ex.p2_open and not a.diag and t >= box['t_next'] - 1e-9:
+            if box['pend'] is None and fs.pend[0] is None and ex.stop is None and ex.p2_open and not a.diag and t >= box['t_next'] - 1e-9:
                 sig_s = math.ceil((ex.sigma + L_LAT) / ex.h - 1e-9) * ex.h
                 rest = sig_s >= ex.sig_end - 1e-9
                 still_ok = ex.rate['arm'] <= XO.END['arm_rps'] and ex.rate['base'] <= XO.END['base_mps'] and ex.rate['door'] <= XO.END['door_rps']
