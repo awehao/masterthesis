@@ -1,0 +1,24 @@
+{
+ "name": "m8_house_arm_fric_probe_r1",
+ "run_ids": [
+  "m8house_arm_fric_probe_000",
+  "m8house_arm_fric_probe_020",
+  "m8house_arm_fric_probe_100"
+ ],
+ "mode": "probe",
+ "authority": "Codex reviews/20261115_151327_reply.md：核可 O1，限一個診斷包、三個固定設定值；異常不補跑；不是開門趟",
+ "scope": "同一場景、同一機器人、同初態（門任務的預抓構型與底盤位置）、同增益 kp／kd 600／60 與限制。三案各自全新載入：逐軸 static＝dynamic＝0／0.2／1.0 N·m、legacy＝0、viscous＝0。靜置 1 s 後 joint4 設定點以梯形速度（0.1 rad/s、0.5 rad/s²）走 +0.10 rad、停 3 s、走回、停 3 s；其餘關節設定點與底盤命令不動；無抓持／綁定／開門。",
+ "logging": "每物理步：joint4 參考位移與速度、六關節位置目標、q、q̇、measured_joint_efforts、joint6 旋量、接觸最大值、模型重力、底盤位姿；後端設定讀回；靜置檢查讀數（只記錄，不拒跑）",
+ "analysis_rules": [
+  "以零摩擦案為基線比較增量",
+  "達既有停穩判準（手臂 2e-3 rad/s，段末 0.3 s）才稱靜止殘差；否則記未停穩",
+  "r＝名目 PD＋重力模型殘差，不稱摩擦力矩",
+  "不用三點擬合「能過門檻的設定值」",
+  "速度目標＝0（位置驅動），照實列"
+ ],
+ "freeze": "evaluation/experiments/20261115_m8_house_arm_fric_probe_freeze_r1.sha256",
+ "machine": "桌機：Ryzen 7 9800X3D／RTX 5070",
+ "notes": [
+  "m8house_door_motm_6：有前置物理步、起跑閘門拒跑、開門任務未開始；當時小修與登錄因 git add 路徑錯誤尚未入版（凍結 sha 相符，事後補提交）——流程瑕疵留紀錄"
+ ]
+}

@@ -33,6 +33,8 @@ ap.add_argument('--finger-kd', type=float, default=1.0e3)
 ap.add_argument('--settle-s', type=float, default=1.0)
 ap.add_argument('--smoke', action='store_true')
 ap.add_argument('--arm-friction-model', default='legacy', choices=['legacy', 'urdf_effort'])   # urdf_effort（Codex 20261115_1421xx）：手臂六關節逐軸摩擦 static＝dynamic＝1.0 N·m、viscous＝0；模型假設，不是實機辨識
+ap.add_argument('--arm-fric-value', type=float, default=1.0)        # urdf_effort 模型的 static＝dynamic（N·m）；門任務＝1.0；探針用 0／0.2／1.0
+ap.add_argument('--probe', action='store_true')                     # 手臂摩擦探針（Codex 核可 O1）：靜置後 joint4 限速限加速度小幅正反向動作，無門任務；不做抓持／綁定／開門
 ap.add_argument('--diag', action='store_true')                      # 取證短診斷（Codex 20261115_14xxxx）：不送 P2、開門 0.5 s 後強制走閉鏈一致停止流程、每物理步補記根連桿三個時點等
 a = ap.parse_args()
 
@@ -193,10 +195,10 @@ def main():
                     return 31
                 pr.ApplyAPI('PhysxJointAxisAPI', 'angular')
                 old.CreateJointFrictionAttr().Set(0.0)                # P1（Codex 20261115）：舊的無因次係數＝單位錯置的那一項，明設 0；摩擦由逐軸 1.0 N·m 表示
-                for nm_, v_ in (('staticFrictionEffort', 1.0), ('dynamicFrictionEffort', 1.0), ('viscousFrictionCoefficient', 0.0), ('maxJointVelocity', float(mv)), ('armature', float(am))):
+                for nm_, v_ in (('staticFrictionEffort', float(a.arm_fric_value)), ('dynamicFrictionEffort', float(a.arm_fric_value)), ('viscousFrictionCoefficient', 0.0), ('maxJointVelocity', float(mv)), ('armature', float(am))):
                     pr.CreateAttribute('physxJointAxis:angular:' + nm_, Sdf.ValueTypeNames.Float).Set(float(v_))
                 dr = UsdPhysics.DriveAPI(pr, 'angular')
-                fric_usd[pr.GetName()] = dict(legacy_jointFriction_unitless_imported=None if jf is None else float(jf), legacy_jointFriction_unitless_set=0.0, axis_static_Nm=1.0, axis_dynamic_Nm=1.0, axis_viscous=0.0, maxJointVelocity_deg_s=float(mv), armature=float(am),
+                fric_usd[pr.GetName()] = dict(legacy_jointFriction_unitless_imported=None if jf is None else float(jf), legacy_jointFriction_unitless_set=0.0, axis_static_Nm=float(a.arm_fric_value), axis_dynamic_Nm=float(a.arm_fric_value), axis_viscous=0.0, maxJointVelocity_deg_s=float(mv), armature=float(am),
                                               drive_maxForce_Nm=None if not dr.GetMaxForceAttr() else float(dr.GetMaxForceAttr().Get()))
         if sorted(fric_usd) != sorted(ARM):
             print('[motm] 手臂關節逐軸摩擦設定不完整 ⇒ 拒跑', sorted(fric_usd), flush=True)
@@ -255,7 +257,7 @@ def main():
     if a.arm_friction_model == 'urdf_effort':
         fpv = np.array(arm_backend.get('friction_static_dynamic_viscous', [[np.nan] * 3]), float)
         mvb, mfb = np.array(arm_backend.get('max_velocity', [np.nan]), float), np.array(arm_backend.get('max_force', [np.nan]), float)
-        ok_f = ('error' not in arm_backend and fpv.shape == (6, 3) and np.isfinite(fpv).all() and np.allclose(fpv[:, 0], 1.0, atol=1e-6) and np.allclose(fpv[:, 1], 1.0, atol=1e-6) and np.allclose(fpv[:, 2], 0.0, atol=1e-9)
+        ok_f = ('error' not in arm_backend and fpv.shape == (6, 3) and np.isfinite(fpv).all() and np.allclose(fpv[:, 0], a.arm_fric_value, atol=1e-6) and np.allclose(fpv[:, 1], a.arm_fric_value, atol=1e-6) and np.allclose(fpv[:, 2], 0.0, atol=1e-9)
                 and np.isfinite(mvb).all() and np.allclose(mvb, [math.radians(fric_usd[names[i]]['maxJointVelocity_deg_s']) for i in idx], rtol=1e-3)
                 and np.isfinite(mfb).all() and np.allclose(mfb, [fric_usd[names[i]]['drive_maxForce_Nm'] for i in idx], rtol=1e-3)
                 and np.allclose(arm_backend['kp'], a.kp, rtol=1e-3) and np.allclose(arm_backend['kd'], a.kd, rtol=1e-3)
@@ -413,13 +415,76 @@ def main():
                     no_contact=bool(len(ct_tail) == n_need and np.isfinite(ct_tail).all() and float(ct_tail.max()) <= 1e-6), finite=bool(np.isfinite(jv_tail).all() and np.isfinite(r_hold).all()))
     hold_chk['ok'] = bool(hold_chk['low_speed_0p3s'] and hold_chk['finite'] and len(jv_tail) == n_need and hold_chk['no_contact'] and float(np.abs(r_hold).max()) <= HOLD_R_MAX)
     print('[motm] hold_check', json.dumps(hold_chk, ensure_ascii=False), flush=True)
-    if a.arm_friction_model == 'urdf_effort' and not hold_chk['ok']:
+    if a.arm_friction_model == 'urdf_effort' and not hold_chk['ok'] and not a.probe:
         print('[motm] 靜置保持力矩殘差檢查不過 ⇒ 拒跑', flush=True)
         json.dump(dict(refused='hold_residual', hold_check=hold_chk, arm_backend=arm_backend), open(os.path.join(a.out, 'refused.json'), 'w'), ensure_ascii=False, indent=1)
         return 34
     off_static = qs[3:] - s0                                          # 靜置實測靜態偏置（含未建模）
     door0 = door_q()
     res['settle'] = dict(hold_check=hold_chk, base=qs[:3].tolist(), arm_err_vs_pregrasp=[round(float(x), 5) for x in (qs[3:] - qa)], off_static=off_static.tolist(), door_deg=round(math.degrees(door0), 5))
+    if a.probe:
+        # ---- 手臂摩擦探針：joint4 設定點以梯形速度（0.1 rad/s、加速度 0.5 rad/s²）走 +0.10 rad → 停 PROBE_HOLD → 回 −0.10 rad → 停；其餘關節設定點不動；底盤零命令
+        PV, PA, PD_, PHOLD = 0.1, 0.5, 0.10, 3.0
+        def prof(tt):                                                  # 梯形：回 (位移, 速度)
+            ta = PV / PA
+            tc = (PD_ - PV * ta) / PV
+            if tt < ta:
+                return 0.5 * PA * tt * tt, PA * tt
+            if tt < ta + tc:
+                return 0.5 * PA * ta * ta + PV * (tt - ta), PV
+            if tt < 2 * ta + tc:
+                td = 2 * ta + tc - tt
+                return PD_ - 0.5 * PA * td * td, PA * td
+            return PD_, 0.0
+        Tm = 2 * PV / PA + (PD_ - PV * PV / PA) / PV
+        j4 = 3
+        s_base = np.array([tgt[i] for i in idx], float)
+        plog, perr = [], []
+        tt_ = 0.0
+        while tt_ < 2 * (Tm + PHOLD) - 1e-9:
+            if tt_ < Tm + PHOLD:
+                d_, v_ = prof(tt_)
+            else:
+                d2, v2 = prof(tt_ - Tm - PHOLD)
+                d_, v_ = PD_ - d2, -v2
+            tgt[idx[j4]] = float(s_base[j4] + d_)
+            apply()
+            base_cmd(np.zeros(3), 0.0)
+            world.step(render=True)
+            tt_ += DT
+            try:
+                jp_ = np.asarray(robot.get_joint_positions(), float)[idx]
+                jv_ = np.asarray(robot.get_joint_velocities(), float)[idx]
+                me_ = np.asarray(robot.get_measured_joint_efforts(), float)[idx]
+                ch_ = []
+                for vv_ in v_o + [v_base] + v_f:
+                    ch_ += [float(x_) for x_ in np.linalg.norm(np.asarray(vv_.get_contact_force_matrix(dt=DT), float).reshape(-1, 3), axis=1)]
+                qq_, _ = q9()
+                plog.append(np.r_[tt_, d_, v_, [tgt[i] for i in idx], jp_, jv_, me_, wrist_F6(), max(ch_) if ch_ else np.nan, BM.arm_gravity(K, qq_, bodies_arm), qq_[:3]])
+            except Exception as e:                                     # noqa: BLE001
+                perr.append(repr(e)[:160])
+        P_ = np.array(plog)
+        cols_ = ['t', 's4_disp', 's4_vel_ref'] + [f'target_{k_}' for k_ in range(1, 7)] + [f'q_{k_}' for k_ in range(1, 7)] + [f'qd_{k_}' for k_ in range(1, 7)] + [f'meas_effort_{k_}' for k_ in range(1, 7)] + [f'j6_wrench_{k_}' for k_ in range(6)] + ['contact_max_n'] + [f'G_model_{k_}' for k_ in range(1, 7)] + ['bx', 'by', 'byaw']
+        np.savez_compressed(os.path.join(a.out, 'probe_steps.npz'), P=P_, cols=np.array(cols_))
+        def seg(t0_, t1_):
+            S_ = P_[(P_[:, 0] > t0_) & (P_[:, 0] <= t1_)]
+            still = bool(np.abs(S_[:, 15:21]).max() < XO.STOP_STILL['arm_rps'])          # 既有停穩判準（手臂 2e-3 rad/s），該段最後 0.3 s 全程
+            L_ = S_[-1]
+            r_ = a.kp * (L_[3:9] - L_[9:15]) - a.kd * L_[15:21] + L_[28:34]
+            return dict(t=[round(t0_, 2), round(t1_, 2)], settled_per_STOP_STILL=still, qd_abs_max=round(float(np.abs(S_[:, 15:21]).max()), 6), qd4_mean=round(float(S_[:, 18].mean()), 6),
+                        target_minus_q_mrad=[round(float(x_) * 1e3, 3) for x_ in (L_[3:9] - L_[9:15])], r_nominal_pd_plus_G_Nm=[round(float(x_), 3) for x_ in r_],
+                        meas_effort_Nm=[round(float(x_), 3) for x_ in S_[:, 21:27].mean(axis=0)], contact_max_n=float(np.nanmax(S_[:, 33])))
+        mv = P_[(P_[:, 0] > PV / PA) & (P_[:, 0] <= Tm - PV / PA)]
+        res['probe'] = dict(fric_value_Nm=float(a.arm_fric_value), model=a.arm_friction_model, motion=dict(joint='joint4', disp_rad=PD_, v_rad_s=PV, a_rad_s2=PA, hold_s=PHOLD, velocity_target='0（位置驅動；未送速度目標）'),
+                            after_fwd_last_0p3s=seg(Tm + PHOLD - 0.3, Tm + PHOLD), after_back_last_0p3s=seg(2 * (Tm + PHOLD) - 0.3, 2 * (Tm + PHOLD)),
+                            fwd_cruise=dict(lag_target_minus_q4_mrad_mean=round(float((mv[:, 6] - mv[:, 12]).mean()) * 1e3, 3), qd4_mean=round(float(mv[:, 18].mean()), 5), meas_effort4_mean=round(float(mv[:, 24].mean()), 3)),
+                            n_rows=int(len(P_)), n_err=len(perr), errors=perr[:3], contact_max_n=float(np.nanmax(P_[:, 33])),
+                            note='r＝名目 PD＋重力模型殘差（不是量到的摩擦力矩）；settled 才可稱靜止殘差')
+        res['result'] = 'probe_done'
+        res['aborted'] = None
+        json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)
+        print('[motm] probe', json.dumps(clean(res['probe']), ensure_ascii=False)[:1800], flush=True)
+        return 0
     # ---- 理想感知影格
     frames = []
 
