@@ -78,7 +78,17 @@ def worker(conn):
     T_est_W = T_est.copy()                                             # 歷史影像的估計（該影像自己的世界座標；含實際影像的估計誤差）
     clear_fn = lambda x: W.clear_door(np.r_[x, 0.0], T_est)            # noqa: E731
     AL = np.asarray(ident['alpha'], float)
-    st = dict(pg=None, br=None, trk=None)
+    st = dict(pg=None, br=None, trk=None, off=None)
+    grav = DFK.FastGravity3(K, G.BM.arm_bodies(K))
+    KP_ARM = 600.0                                                    # 執行器手臂位置驅動增益（API 讀回 600）
+
+    def off_fn(q9):
+        """K2：手臂靜態偏置 q−s 的模型＝無接觸保持狀態的錨 off0＋(G(q)−G0)/kp（重力隨構型）。未錨定時回 0（原行為）。
+        既有紀錄核對（far_arm_offset_model_check.json）：此模型加一階落後後，殘差最大 0.006 rad。"""
+        o = st['off']
+        if o is None:
+            return np.zeros(6)
+        return o['off0'] + (np.asarray(grav(np.asarray(q9, float)), float) - o['G0']) / KP_ARM
 
     def to_map(q, T_mo):
         """里程座標的機器人構型 → 地圖座標（靜態環境幾何所在的座標）。"""
@@ -151,12 +161,13 @@ def worker(conn):
             n_cmd = len(cmds)
             cmds += [np.zeros(9)] * 100
             b, a, sp = np.asarray(q[:3], float).copy(), np.asarray(q[3:], float).copy(), np.asarray(s, float).copy()
+            off_c = off_fn(q)                                          # 停止期間的靜態偏置取當下構型的值（停止行程短，重力項變化小；與追蹤器同一模型）
             Q, lim_ok, still, k_still = [np.r_[b, a]], True, 0, None
             for k, u in enumerate(cmds):
                 c, s_ = math.cos(b[2]), math.sin(b[2])
                 b = b + PHYS * np.array([c * u[0] - s_ * u[1], s_ * u[0] + c * u[1], u[2]])
                 sp = sp + PHYS * u[3:]
-                a_new = a + AL * (sp - a)
+                a_new = a + AL * (sp + off_c - a)
                 still = still + 1 if (k >= n_cmd and float(np.abs(a_new - a).max()) < 1e-5) else 0
                 a = a_new
                 lim_ok = lim_ok and bool(np.all(sp >= LO) and np.all(sp <= HI) and np.all(a >= LO) and np.all(a <= HI))
@@ -334,13 +345,18 @@ def worker(conn):
                 if br is not None:
                     q_s_, _, _ = DFK.ik_closure_fc(br['T_target'], np.r_[pg['p0'] - pg['d'] * STOP_ALONG, pg['yaw']], br['q_window'][int(np.argmin(np.abs(np.asarray(br['alongs']) - STOP_ALONG)))])   # 種子＝已核分支在終點附近的解（同一連續分支）
                     st['q_end_seed'] = q_s_
-                st['trk'] = FR.ArmPreTracker(tau, lambda q9: np.zeros(6), DT, PHYS, NPH, LO, HI)
+                st['trk'] = FR.ArmPreTracker(tau, off_fn, DT, PHYS, NPH, LO, HI)
                 if br is not None:
                     stop_check(np.r_[np.asarray(a['q'], float)[:3], br['q_start_op']], [np.zeros(9)] * D, np.zeros(3), br['q_start_op'], np.zeros(6), np.zeros(3))   # 預熱（不在控制拍內）
                 conn.send(('plan', ver, dict(ok=bool(pg is not None and br is not None), wall_s=round(time.perf_counter() - t0, 2), select=info, observe=binfo,
                                         pg=None if pg is None else dict(p0=pg['p0'].tolist(), d=pg['d'].tolist(), n=pg['n'].tolist(), yaw=pg['yaw'], standoff=pg['standoff'], along=pg['along']),
                                         br=None if br is None else dict(q_start_op=br['q_start_op'].tolist(), alongs=[float(br['alongs'][0]), float(br['alongs'][1]), float(br['alongs'][-1])], sigma_min=br['sigma_min'], min_clear=br['min_clear'],
                                                                          prep_time_s=br['prep_time_s'], track_rate_max=br['track_rate_max']))))
+            elif op == 'off_anchor':                                    # 以無接觸、手臂靜止的保持狀態作錨（監督節點在手臂準備開始前送）
+                q_a, s_a = np.asarray(a['q'], float), np.asarray(a['s'], float)
+                st['off'] = dict(off0=q_a[3:] - s_a, G0=np.asarray(grav(q_a), float))
+                qs_ = np.asarray(st['br']['q_start_op'], float)
+                conn.send(('off_anchor', ver, dict(off0=[float(x) for x in st['off']['off0']], G0=[float(x) for x in st['off']['G0']], off_at_start_op=[float(x) for x in off_fn(np.r_[q_a[:3], qs_])])))
             elif op == 'stop_check':                                   # 離線重放／測試用：直接算一次停止核對
                 conn.send(('stop_check', ver, stop_check(np.asarray(a['q'], float), [np.asarray(u, float) for u in a['pipe']], np.asarray(a['rel'], float), np.asarray(a['s'], float), np.asarray(a['ua'], float), np.asarray(a['T_mo'], float))))
             elif op == 'tick':
@@ -397,6 +413,9 @@ def worker(conn):
                         nd = float(np.linalg.norm(dv))
                         if nd > 1e-5:
                             step_try = dv * min(1.0, UPD['step_m'] / nd)
+                        else:                                          # 參考已與更新目標重合（≤0.01 mm）：該組觀察確認了現參考 ⇒ 來源時間更新為該組觀察的時間（位姿沒變，不升版）
+                            ref['t_obs'] = ref['goal']['t_obs']
+                            upd['confirmed_by_obs'] = True
                     o = None
                     if step_try is not None:
                         old = (T_est, br['T_target'], pg['p0'].copy(), None if trk.q_prev is None else trk.q_prev.copy(), trk.u_prev.copy(), trk.lag_max, trk.n_clip, trk.ready)
@@ -789,14 +808,20 @@ def main():
             if self.owner == 'MERGE' and not self.stop and self.arm == 'HOLD' and self.no_reach is None and abs(lat) < 0.03 and abs(yaw_e) < 3.0:
                 need = br['alongs'][1] + br['prep_time_s'] * V_PASS + PREP_MARGIN
                 if along >= need:
-                    self.arm, self.t_prep0, self.s_prep0 = 'PREP', t, tr['s_end'].copy()
-                    self.event('arm_owner_HOLD_to_TRACK_prep', along=round(along, 3), need_along=round(need, 3))
+                    tag_o, res_o = self.ask('off_anchor', dict(q=q.tolist(), s=tr['s'].tolist()), 0.045)
+                    if tag_o != 'off_anchor':
+                        self.engineering_abort('off_anchor_unavailable:' + str(tag_o), res=str(res_o)[:200])
+                    else:
+                        self.off_anchor = res_o
+                        self.arm, self.t_prep0, self.s_prep0 = 'PREP', t, tr['s_end'].copy()
+                        self.prep_goal = np.array(br['q_start_op']) - np.array(res_o['off_at_start_op'])   # 設定點目標＝作業起點關節角−該構型的靜態偏置（關節才會到作業起點）
+                        self.event('arm_owner_HOLD_to_TRACK_prep', along=round(along, 3), need_along=round(need, 3), off0=[round(x, 4) for x in res_o['off0']], off_at_start_op=[round(x, 4) for x in res_o['off_at_start_op']])
                 else:
                     self.no_reach = 'on_line_too_late_for_prep'
                     self.global_stop('prep_distance_insufficient_global_stop', why=self.no_reach, along=round(along, 3), need_along=round(need, 3))
             res, ua_cand = {}, np.zeros(6)
             if self.arm == 'PREP' and not self.stop:
-                qs = np.array(br['q_start_op']); dq = qs - self.s_prep0
+                qs = self.prep_goal; dq = qs - self.s_prep0
                 Tp = max(float(np.abs(dq).max()) / 0.5, DT); u_ = min((t + DT - self.t_prep0) / Tp, 1.0)
                 s_des = self.s_prep0 + (10 * u_ ** 3 - 15 * u_ ** 4 + 6 * u_ ** 5) * dq
                 ua_cand = np.clip((s_des - tr['s_end']) / DT, -1.0, 1.0)
@@ -879,7 +904,7 @@ def main():
             cols = ['t', 't_world'] + [f'q{i}' for i in range(9)] + [f's{i}' for i in range(6)] + ['rel_x', 'rel_y', 'rel_w'] + [f'ua{i}' for i in range(6)] + ['nav_x', 'nav_y', 'nav_w', 'mrg_x', 'mrg_y', 'mrg_w', 'base_owner(0NAV,1MERGE)', 'arm(0HOLD,1PREP,2TRACK)', 'stop',
                                                                                                            'along', 'lat', 'yaw_err_deg', 'arm_track_err', 'sigma', 'clipped', 'clear_env', 'clear_base', 'clear_self', 'vx_meas', 'vy_meas', 'truth_x', 'truth_y', 'truth_yaw', 'mo_x', 'mo_y', 'mo_yaw', 'stop_ok', 'stop_env', 'stop_base', 'stop_self', 'stop_ms', 'arm_track_err_pred', 'tf_stamp_base', 'stop_now_all_still_s', 'stop_next_all_still_s', 'stop_n_samples', 'stop_margin_env', 'stop_margin_base', 'stop_margin_self', 'stop_n_refine', 'ref_ver', 'ref_px', 'ref_py', 'ref_pz', 'ref_goal_dist_mm']
             np.savez_compressed(out + '_merge.npz', R=np.array(self.rows, float), cols=np.array(cols), TM=np.array(self.tm_log, float).reshape(-1, 8), tm_cols=np.array(['t', 'is_tick', 'dispatch_ms', 'queue_ms', 'compute_ms', 'return_ms', 'total_ms', 'late']))
-            json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, sched=W0.get('sched'), obs_mode=OBS_MODE, update_mode=UPDATE, update_params=UPD, ref_log=self.ref_log, ref_ver_final=self.ref_ver, prior=getattr(self, 'prior', None), n_assoc_rejected=self.n_assoc_rej, obs_log=self.obs_log, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, engineering_abort=self.aborted, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
+            json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, off_anchor=getattr(self, 'off_anchor', None), sched=W0.get('sched'), obs_mode=OBS_MODE, update_mode=UPDATE, update_params=UPD, ref_log=self.ref_log, ref_ver_final=self.ref_ver, prior=getattr(self, 'prior', None), n_assoc_rejected=self.n_assoc_rej, obs_log=self.obs_log, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, engineering_abort=self.aborted, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
 
     node = M()
     try:

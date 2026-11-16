@@ -140,10 +140,11 @@ class ArmPreTracker:
         a_, sp_, al_ = np.asarray(q[3:], float).copy(), np.asarray(s_arm, float).copy(), self.phys / self.tau
         n_p = max(len(base_pipe), 1)
         dsp = (np.asarray(s_pipe_end, float) - sp_) / n_p
+        off_ = np.asarray(self.off_fn(np.r_[b, q1]), float)             # 靜態偏置（關節收斂到 設定點＋偏置）；與命令計算用同一個模型
         for _ in range(n_p):
-            sp_ = sp_ + dsp; a_ = a_ + al_ * (sp_ - a_)
+            sp_ = sp_ + dsp; a_ = a_ + al_ * (sp_ + off_ - a_)
         for _ in range(self.nph):
-            sp_ = sp_ + self.phys * u_c; a_ = a_ + al_ * (sp_ - a_)
+            sp_ = sp_ + self.phys * u_c; a_ = a_ + al_ * (sp_ + off_ - a_)
         err_pred = float(np.abs(a_ - q1).max())
         if np.isfinite(err):
             self.lag_max = max(self.lag_max, err)

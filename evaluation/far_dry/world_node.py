@@ -73,7 +73,19 @@ class World(Node):
             self.boxes.append(tuple(gm['leaf']))
         ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json')))
         self.al = np.asarray(ident['alpha'], float)
-        self.s = self.q[3:].copy()
+        # 手臂重力靜態偏置（FAR_GRAV=1）：關節收斂到 設定點＋G(q)/kp（kp 600；同 Isaac 紀錄核對過的模型）。專案模組會把 rclpy 換成替身 ⇒ 匯入後還原。
+        self.grav, self.off_w = None, np.zeros(6)
+        if os.environ.get('FAR_GRAV') == '1':
+            pre = ('rclpy', 'std_msgs', 'geometry_msgs', 'nav_msgs', 'sensor_msgs', 'tf2_msgs', 'tf2_ros', 'rosgraph_msgs', 'builtin_interfaces', 'rcl_interfaces')
+            snap = {k_: v_ for k_, v_ in sys.modules.items() if k_.split('.')[0] in pre}
+            sys.path.insert(0, HERE)
+            import door_motm_grasp_ctrl as G_, door_fast_kin as DFK_
+            for k_ in [k_ for k_ in sys.modules if k_.split('.')[0] in pre and k_ not in snap]:
+                sys.modules.pop(k_, None)
+            sys.modules.update(snap)
+            self.grav = DFK_.FastGravity3(G_.K, G_.BM.arm_bodies(G_.K))
+            self.off_w = np.asarray(self.grav(self.q), float) / 600.0
+        self.s = self.q[3:].copy() - self.off_w                       # 起點靜止：設定點＝關節角−偏置
         self.t, self.n = 0.0, 0
         self.cmd, self.cmd_t = np.zeros(3), -1.0
         self.acmd, self.acmd_t = np.zeros(6), -1.0
@@ -127,7 +139,9 @@ class World(Node):
         self.q[:2] += DT * self.v_world
         self.q[2] += DT * self.wz
         self.s = self.s + DT * ua
-        self.q[3:] = self.q[3:] + self.al * (self.s - self.q[3:])
+        if self.grav is not None and self.n % 5 == 0:
+            self.off_w = np.asarray(self.grav(self.q), float) / 600.0
+        self.q[3:] = self.q[3:] + self.al * (self.s + self.off_w - self.q[3:])
         self.t = round(self.t + DT, 10)
         self.n += 1
         ck = Clock()
