@@ -26,6 +26,7 @@ IMG_STATE_TOL_S = 0.011                                              # 影像時
 EST_MAX_AGE_S = 0.3                                                  # 同抓持控制器 READY_Q['fresh_s']
 SYNC_TOL_S = 0.02                                                    # 影像以外的狀態／命令時間戳對交接時刻的容許差（兩個物理步）
 GRASP_WINDOW_M = (0.005, 0.25)                                       # 交接時距抓取點的沿線距離窗口（抓持控制器的前導＋插入需要的行程；上限＝目前排程可用的最長前導）
+LOCK_BUDGET = dict(pos_m=0.005, ang_deg=3.0)                         # 鎖定任務參考在遮擋期間的總誤差預算上限（Codex 20261116）
 ARM_TRACK_TOL = 0.01                                                 # rad：交接時手臂構型對「當下底盤位置下的目標 IK 解」的最大容許差
 TICK_STEPS = 5                                                       # 每控制拍的物理步數（同控制器 NPH）
 LINE_TOL = dict(lateral_m=0.010, yaw_rad=math.radians(1.0), speed_frac=0.2)   # 機器人須已在通過線上（側向、朝向）且沿線速度在 v_pass 的 ±20% 內
@@ -191,8 +192,10 @@ def _fin(x):
         return False
 
 
-def handover_request(t, auth, line, q, v_meas_world, s_arm, pipe, u_last, u_prev, est, v_pass, d_steps, off_static=None, tick_phase=None, stamps=None, arm_track_err=None):
-    """NAV→GRASP 的交接核對（r2）。全過 ⇒ 回抓持控制器建構所需的交接包；否則回拒絕原因列表。不改任何狀態。
+def handover_request(t, auth, line, q, v_meas_world, s_arm, pipe, u_last, u_prev, est, v_pass, d_steps, off_static=None, tick_phase=None, stamps=None, arm_track_err=None, locked=None):
+    """NAV→GRASP 的交接核對（r2；r3 加 locked）。
+    locked（Codex 20261116「鎖定任務參考」入口；不偽造影像新鮮度）＝dict(age_at_lock_s, pos_budget_m, ang_budget_deg, terms)：給了就不查影像年齡，改查
+      鎖定當下觀察年齡 ≤ EST_MAX_AGE_S、遮擋期間位置總預算 ≤ LOCK_BUDGET['pos_m']、姿態 ≤ LOCK_BUDGET['ang_deg']；其餘條件完全相同。全過 ⇒ 回抓持控制器建構所需的交接包；否則回拒絕原因列表。不改任何狀態。
     est＝dict(T_WH, t_obs)：年齡以交接當下 t−t_obs 重算（不沿用先前算好的年齡）。
     v_meas_world＝實測底盤速度（世界座標 vx, vy）——移動條件用實測，不用命令。
     pipe＝實際送往受控對象的最近 d_steps 筆 9 維命令；任何一筆缺失（None／非有限／維度不符）⇒ 拒絕，不補零。
@@ -209,6 +212,16 @@ def handover_request(t, auth, line, q, v_meas_world, s_arm, pipe, u_last, u_prev
         age = float(t) - float(est['t_obs'])
         if age < -1e-9:
             why.append('estimate_from_future')
+        elif locked is not None:
+            if not all(_fin(locked.get(k)) for k in ('age_at_lock_s', 'pos_budget_m', 'ang_budget_deg')):
+                why.append('locked_reference_fields_missing')
+            else:
+                if float(locked['age_at_lock_s']) > EST_MAX_AGE_S or float(locked['age_at_lock_s']) < -1e-9:
+                    why.append('lock_observation_not_fresh:%.3f' % float(locked['age_at_lock_s']))
+                if float(locked['pos_budget_m']) > LOCK_BUDGET['pos_m']:
+                    why.append('locked_position_budget_exceeded:%.4f' % float(locked['pos_budget_m']))
+                if float(locked['ang_budget_deg']) > LOCK_BUDGET['ang_deg']:
+                    why.append('locked_orientation_budget_exceeded:%.2f' % float(locked['ang_budget_deg']))
         elif age > EST_MAX_AGE_S:
             why.append('estimate_stale:%.3f' % age)
     if stamps is None or any(not _fin(stamps.get(k)) for k in ('state', 'cmd')):
@@ -262,7 +275,7 @@ def handover_request(t, auth, line, q, v_meas_world, s_arm, pipe, u_last, u_prev
         return None, why
     return dict(t=float(t), frames=dict(world='map（門鉸鏈座標；同門任務）', base='base_link'), d_world=np.asarray(line['d'], float).copy(), yaw=float(line['yaw']), p0=np.asarray(line['p0'], float).copy(), v_pass=float(v_pass),
                 s=np.asarray(s_arm, float).copy(), pipe=[np.asarray(u, float).copy() for u in pipe], u_last=np.asarray(u_last, float).copy(), u_prev=np.asarray(u_prev, float).copy(), off_static=np.asarray(off_static, float).copy(),
-                tick_phase=int(tick_phase), est=dict(T_WH=np.asarray(est['T_WH'], float).copy(), t_obs=float(est['t_obs']), age_s=age),
+                tick_phase=int(tick_phase), est=dict(T_WH=np.asarray(est['T_WH'], float).copy(), t_obs=float(est['t_obs']), age_s=age, locked=None if locked is None else dict(locked)),
                 base_cmd_route='抓持控制器的底盤命令仍送入 /cmd_vel_pre_shield → Shield → GUARD → /cmd_vel（不旁路安全鏈）'), []
 
 
