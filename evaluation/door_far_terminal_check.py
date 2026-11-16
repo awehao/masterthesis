@@ -62,7 +62,7 @@ def cell(a, s, seed):
 t0 = time.perf_counter()
 # ---- 1. 可行圖
 A = np.round(np.arange(0.225, -0.0501, -0.0125), 4)
-S = np.round(np.r_[np.arange(S_OBS, S_PRE, -0.02), S_PRE], 4)
+S = np.round(np.r_[np.arange(S_OBS, S_PRE, -0.02), S_PRE, 0.015, 0.0], 4)      # 末兩欄＝插入段（後退 0.015、0＝抓取位）；插入段的兩指—橫桿豁免由抓持控制器處理，這裡的淨空是未豁免的值，原因照列
 grid, seed_a = [], q0.copy()
 for a in A:
     qa, ra = cell(a, S_OBS, seed_a)
@@ -72,12 +72,12 @@ for a in A:
     for s in S:
         q, r = cell(a, s, seed)
         ok = isinstance(r, dict)
-        row.append(dict(ok=ok, why=None if ok else r, sigma=r['sigma'] if ok else None, self=r['clear']['self'] if ok else None))
+        row.append(dict(ok=ok, why=None if ok else r, sigma=r['sigma'] if ok else None, self=r['clear']['self'] if ok else None, q=None if q is None else [round(float(x), 3) for x in q]))
         if q is None:
             break
         seed = q
     while len(row) < len(S):
-        row.append(dict(ok=False, why='not_reached', sigma=None, self=None))
+        row.append(dict(ok=False, why='not_reached', sigma=None, self=None, q=None))
     grid.append(row)
 fmap = [''.join('#' if c['ok'] else ('m' if str(c['why']).startswith('manip') else ('c' if str(c['why']).startswith('clear') else ('l' if c['why'] == 'limit' else '.'))) for c in row) for row in grid]
 
@@ -149,7 +149,7 @@ for r in scheds:
 gs = getattr(G, 'SCHED', None)
 res = dict(source=RUN, note='運動學層離線核對；不是物理結果。把手估計＝該趟固定參考（途中實際影像）', S_OBS=S_OBS, S_PRE=S_PRE, v_pass=V, sig_floor=SIG, thr={k: float(v) for k, v in THR.items()}, limits_margin_rad=0.05, v_arm=FR.V_ARM, a_arm=FR.A_ARM,
            map=dict(alongs=A.tolist(), retreats=S.tolist(), legend='#＝可行；m＝可操作度不足；c＝淨空不足；l＝限位；.＝IK 無解或分支不連續／未到達。每列一個沿線位置（由 0.225 到 −0.05），每欄一個後退量（由 0.33 到 S_PRE）', rows=fmap,
-                    sigma_at_pregrasp=[None if not row[-1]['ok'] else round(row[-1]['sigma'], 4) for row in grid], first_block_reason=[next((c['why'] for c in row if not c['ok']), None) for row in grid]),
+                    sigma_at_pregrasp=[None if not row[-3]['ok'] else round(row[-3]['sigma'], 4) for row in grid], last3_cols=[[c_['why'] if not c_['ok'] else 'ok(sig %.3f, self %.4f)' % (c_['sigma'], c_['self']) for c_ in row[-3:]] for row in grid], q_at_pregrasp=[row[-3]['q'] for row in grid], first_block_reason=[next((c['why'] for c in row if not c['ok']), None) for row in grid]),
            schedules=dict(n=len(scheds), n_ok=len(ok), fail_reasons=fail, ok=ok[:12], all=scheds), grasp_ctrl_sched=gs, grasp_window_m=list(FL.GRASP_WINDOW_M), wall_s=round(time.perf_counter() - t0, 1))
 json.dump(res, open(sys.argv[2], 'w'), ensure_ascii=False, indent=1, default=str)
 print('S_PRE', S_PRE, 'SIG', SIG)
