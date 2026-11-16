@@ -13,7 +13,7 @@ import numpy as np
 cell, S_PRE, S_OBS = ns['cell'], ns['S_PRE'], ns['S_OBS']
 name, a0, s0 = argv[3], float(argv[4]), float(argv[5])
 seed0 = np.array([float(x) for x in argv[6].split(',')])
-A = np.round(np.arange(0.60, -0.2001, -0.025), 4)
+A = np.round(np.arange(0.60, -0.4501, -0.025), 4)
 S = np.round(np.r_[0.0, 0.015, S_PRE, np.arange(0.05, S_OBS + 1e-9, 0.02), S_OBS], 4)
 S = np.unique(S)
 ia0, is0 = int(np.argmin(np.abs(A - a0))), int(np.argmin(np.abs(S - s0)))

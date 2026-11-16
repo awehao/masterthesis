@@ -43,6 +43,7 @@ CAM = dict(res=(640, 480), hfov_deg=69.0, aperture=0.020, clip=(0.05, 10.0), hz=
 SCAN_N, SCAN_MIN, SCAN_MAX, RANGE_MIN, RANGE_MAX = 360, -3.14159, 3.14159, 0.12, 10.0
 SCAN_INC = (SCAN_MAX - SCAN_MIN) / (SCAN_N - 1)
 LIDAR_Z = float(json.load(open(os.path.join(HERE, 'far_dry', 'geom.json')))['lidar_z'])
+GRASP_END_ABS = -0.285                                               # 抓持段絕對終點（通過線沿線座標；同監督節點）：抓取位可行下界 −0.30 留停止行程 0.015
 EST_BOUND_M, EST_BOUND_DEG, SYNC_M = 0.00285, 0.885, 0.05 * 0.011    # 鎖定預算項（同監督節點 TERM；far_lock_error_envelope.json 的已觀測包絡，工程預算）
 CMD_TIMEOUT_S, ARM_CMD_TIMEOUT_S = 0.5, 0.2
 
@@ -236,11 +237,13 @@ rep("    # ---- 理想感知影格\n", r'''    # ================= 遠距前段�
                 snap = dict(s=s_far.copy(), pipe=[u_.copy() for u_ in pipe_far], u_last=pipe_far[-1].copy(), u_prev=pipe_far[-1 - NPH].copy(), off_static=off_ho.copy())
                 w_try = time.perf_counter()
                 # 以當下快照建立獨立的抓持控制器實例並試算首拍：不發任何命令、不動真管線（全部是複本）。通過 ⇒ 這個實例與它的首拍輸出就是接手後的第一拍（同一狀態、同一步）；不過 ⇒ 丟棄、回 nack、前段所有權不變
-                gc_try = G.MovingGraspCtrl(ident, est_fn_lock, HOX['lock']['d'].copy(), V, (L_LEAD, L_LEAD + 0.22), snap['s'].copy(), [u_.copy() for u_ in snap['pipe']], snap['u_last'].copy(), snap['u_prev'].copy(), snap['off_static'].copy(),
+                a_to = float(-((q[:2] - HOX['lock']['p0']) @ HOX['lock']['d']))   # 接手當下的沿線位置（通過線真實座標）
+                HOX.update(a_to=a_to, win=(L_LEAD, a_to - GRASP_END_ABS))      # 控制器窗口以接手位置為原點 ⇒ 換算成相對量，絕對終點固定在 GRASP_END_ABS
+                gc_try = G.MovingGraspCtrl(ident, est_fn_lock, HOX['lock']['d'].copy(), V, HOX['win'], snap['s'].copy(), [u_.copy() for u_ in snap['pipe']], snap['u_last'].copy(), snap['u_prev'].copy(), snap['off_static'].copy(),
                                            sched=dict(hold_s=0.3 + T_LEAD), pool=POOL, fastkin=True, deadline_ms=50.0, lock_budget_fn=lock_budget)
                 o_try = gc_try.step(0.0, q.copy(), door_q(), finger_meas=(float(jp[f1]), float(jp[f2])))
-                ok_try = gc_try.stop is None and gc_try.abort is None and not o_try.get('abort') and np.isfinite(np.asarray(o_try['base_twist'], float)).all() and np.isfinite(np.asarray(o_try['arm_target'], float)).all()
-                trial = dict(ok=bool(ok_try), stop=gc_try.stop, abort=gc_try.abort, wall_ms=round((time.perf_counter() - w_try) * 1e3, 1), phase=ph_, n=node.n, rx_mod=[x_ % NPH for x_ in node.rx_steps[-8:]], budget=gc_try.lock_budget,
+                ok_try = (a_to - GRASP_END_ABS >= 0.115) and gc_try.stop is None and gc_try.abort is None and not o_try.get('abort') and np.isfinite(np.asarray(o_try['base_twist'], float)).all() and np.isfinite(np.asarray(o_try['arm_target'], float)).all()
+                trial = dict(along_at_takeover=round(a_to, 4), window_rel=[float(x_) for x_ in HOX['win']], ok=bool(ok_try), stop=gc_try.stop, abort=gc_try.abort, wall_ms=round((time.perf_counter() - w_try) * 1e3, 1), phase=ph_, n=node.n, rx_mod=[x_ % NPH for x_ in node.rx_steps[-8:]], budget=gc_try.lock_budget,
                              first_cmd=[float(x_) for x_ in gc_try.u_last], prev_cmd=[float(x_) for x_ in snap['u_last']], first_cmd_step_max=float(np.abs(gc_try.u_last - snap['u_last']).max()))
                 HOX['trial'] = trial
                 if ok_try:
@@ -309,9 +312,9 @@ rep("    # ---- 理想感知影格\n", r'''    # ================= 遠距前段�
         return 70 if 'abort' in far_out['result'] else 6
     # ---- 已接手：控制器實例＝試跑通過的那一個（設定點、真管線、上一／前一拍命令、偏置皆為接手當下的快照）
     T_lock, lock, t_far_ho = HOX['T_lock'], HOX['lock'], HOX['t_far_ho']
-    node.ca = FCA.ChainAlign(G.D_STEPS, NPH)
+    node.ca = FCA.ChainAlign(G.D_STEPS, NPH, pre_release=node.cmd.copy())   # 接手前最後一筆放行值（前擁有者的命令在最初 8 步內仍在鏈內）
     chain = dict(stop=None)
-    res['handover'] = dict(t_far=round(t_far_ho, 3), base=q[:3].tolist(), lock={k_: (v_.tolist() if isinstance(v_, np.ndarray) else v_) for k_, v_ in lock.items()}, T_lock=T_lock.tolist(), s=HOX['snap']['s'].tolist(), off_static=HOX['off_ho'].tolist(),
+    res['handover'] = dict(window_rel=HOX['win'], along_at_takeover=HOX['a_to'], grasp_end_abs=GRASP_END_ABS, t_far=round(t_far_ho, 3), base=q[:3].tolist(), lock={k_: (v_.tolist() if isinstance(v_, np.ndarray) else v_) for k_, v_ in lock.items()}, T_lock=T_lock.tolist(), s=HOX['snap']['s'].tolist(), off_static=HOX['off_ho'].tolist(),
                            u_last=HOX['snap']['u_last'].tolist(), u_prev=HOX['snap']['u_prev'].tolist(), pipe=[u_.tolist() for u_ in HOX['snap']['pipe']], trial=HOX['trial'], eval_only=dict(lock_err_mm=round(float(np.linalg.norm(T_lock[:3, 3] - truth_handle()[:3, 3])) * 1e3, 2)))
     # ---- 把手估計來源＝鎖定任務參考（原始時間戳；不更新）
 ''')

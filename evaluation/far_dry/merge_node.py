@@ -15,7 +15,11 @@ CAP_ALONG, CAP_LAT = (0.45, 1.40), 0.60                              # r2（Code
 ENTER_EXTRA = 0.02                                                   # 斜向切入目標的額外沿線餘量（在途命令 0.13 s×通過速度＋切入收斂）
 _OLD_CAP = (0.62, 1.40)                                    # 捕獲區：距抓取點的沿線距離、離線側向距離
 PREP_MARGIN = 0.04
-TERM_END = -0.185                                                    # 預抓位追蹤的終點（門旁分支預抓位在沿線 −0.075～−0.20 m 可行；留 0.015 m）
+# 抓持窗口的真實座標（通過線沿線位置；door_far_branch_map_r1.json 門旁分支）：預抓位可行 −0.075～−0.325、抓取位可行 −0.10～−0.30。
+GRASP_END_ABS = -0.285                                               # 抓持段絕對終點＝抓取位可行下界 −0.30 留停止行程 0.015（在途 8 步 4 mm＋減速約 1 cm）
+GRASP_NEED = 0.115 + 0.025                                           # 接手後到 READY 的行程（排程 2.3 s×0.05）＋接受等待上限 0.5 s 的行程
+HO_LATEST = GRASP_END_ABS + GRASP_NEED                               # ＝−0.145：最晚可交接的沿線位置（保證排程與接受等待都在絕對終點前）；更晚 ⇒ 不交接
+TERM_END = HO_LATEST - 0.005                                         # 預抓位追蹤終點：過了最晚交接點仍未交接 ⇒ 協同停止
 # 近距觀察段的連續視覺更新（N3；Codex 20261116）。只在觀察追蹤（TRACK）中、已核沿線範圍內啟用；只更新把手位置（姿態沿用固定參考）。
 UPD = dict(max_age_s=0.3,          # 觀察年齡上限（同 FL.EST_MAX_AGE_S）
            gate_pos_m=0.020, gate_ang_deg=3.0,   # 對目前參考的粗差閘門（明顯不是同一目標或估計壞掉）
@@ -98,7 +102,7 @@ def worker(conn):
     SWP._die_with_parent()
     cpus = [int(x) for x in os.environ.get('FAR_CPUS', '').split(',') if x.strip()]   # N2：排程配置（只改排程；45 ms 期限不改）。順序：幾何工作程序、監督主程序、其餘給掃掠池
     if len(cpus) >= 6:
-        CPU.pin(0, [cpus[0]])
+        CPU.pin(0, cpus[0:2])                                           # 幾何工作程序與監督主程序共用前兩核（不一對一釘死：桌面程序佔到其中一核時排程器可避開；實測 Chrome 以 63% 佔住 CPU 5）
     blas_rb = CPU.blas_runtime(set_to=1)
     pool = SWP.SweepPool(4)                                           # 建池在啟動時（不在控制拍內）
     T_est_W = T_est.copy()                                             # 歷史影像的估計（該影像自己的世界座標；含實際影像的估計誤差）
@@ -231,7 +235,7 @@ def worker(conn):
                 return None
             h = pool.submit(T_map, W.FINGER_Q, W.PHI0, np.array([np.r_[to_map(x, T_mo), 0.0] for x in todo]))
             sp_ = [self_pairs(x) for x in todo]                        # 與池同時進行
-            outp, why, _ = pool.collect(h, 0.025)
+            outp, why, _ = pool.collect(h, max(0.005, 0.040 - (time.perf_counter() - t0)))   # 掃掠等待上限＝本次核對起算 40 ms 內（原固定 25 ms 是我自訂的子期限，乾跑多次在此逾時；整拍 45 ms 期限不變）
             if outp is None:
                 return 'sweep_' + str(why)
             for x, o, spx in zip(todo, outp, sp_):
@@ -657,7 +661,7 @@ def main():
     _, _, W0 = pc.recv()
     _fc = [int(x) for x in os.environ.get('FAR_CPUS', '').split(',') if x.strip()]
     if len(_fc) >= 6:
-        os.sched_setaffinity(0, {_fc[1]})
+        os.sched_setaffinity(0, set(_fc[0:2]))
     W0['sched']['main_affinity'] = sorted(os.sched_getaffinity(0))
     co = {}
     rclpy.init()
@@ -719,6 +723,10 @@ def main():
 
         def _hoack(self, m):
             self.ho_ack = m.data                                      # 'ack:<ver>' 或 'nack:<ver>:<原因>'（執行器以當下快照試跑首拍的結果）
+            if self.ho_pending is not None and self.ho_ack == 'ack:%d' % self.ho_pending and getattr(self, 'grasp_stash', None) is not None and self.owner != 'GRASP':
+                self.owner, self.t_owner_grasp = 'GRASP', self.now()
+                self.p_nav.publish(self.grasp_stash); self.n_fwd['GRASP'] += 1
+                self.grasp_stash = None
 
         def _obs(self, m):
             d = np.array(m.data, float)                               # seq, t_obs, valid, odom_base(3), T_base_handle(16), t_publish
@@ -771,10 +779,15 @@ def main():
                 self.mrg_t = self.now()
             if self.stop:
                 self.p_nav.publish(Twist()); self.n_fwd['dropped'] += 1
-            elif src == 'GRASP' and self.owner != 'GRASP' and self.ho_pending is not None and not (self.ho_ack or '').startswith('nack'):
-                # 交權邊界：執行器只在「以當下快照試跑首拍通過」後才發第一筆 /cmd_vel_grasp；這一筆到達選擇器即為命令權切換點（自此 MERGE／NAV 丟棄）
-                self.owner, self.t_owner_grasp = 'GRASP', self.now()
-                self.p_nav.publish(m); self.n_fwd[src] += 1
+            elif src == 'GRASP' and self.owner != 'GRASP' and self.ho_pending is not None:
+                # 交權邊界：須先有版本相符的 ack（＝執行器以當下快照試跑首拍通過）；第一筆 /cmd_vel_grasp 到達選擇器即為命令權切換點（自此 MERGE／NAV 丟棄）
+                if self.ho_ack == 'ack:%d' % self.ho_pending:
+                    self.owner, self.t_owner_grasp = 'GRASP', self.now()
+                    self.p_nav.publish(m); self.n_fwd[src] += 1
+                elif self.ho_ack is None:
+                    self.grasp_stash = m                               # 跨話題：首提案先於 ack 到 ⇒ 暫存最新一筆，ack 版本相符時才轉發
+                else:
+                    self.n_fwd['dropped'] += 1                         # nack 或版本不符：不交權
             elif src == self.owner:
                 self.p_nav.publish(m); self.n_fwd[src] += 1
             else:
@@ -1094,7 +1107,7 @@ def main():
                 tk = res.get('track')
                 ua = np.array(tk['u'])
                 bd = res.get('budget') or {}
-                if res.get('handover_ok') and self.t_handover_ok is None:
+                if res.get('handover_ok') and self.t_handover_ok is None and along >= HO_LATEST:
                     self.t_handover_ok = t
                     if HANDOVER:                                   # 交出命令權：鎖定參考（位姿、原始時間戳、鎖定時年齡、一致性）與通過線；設定點／真管線／上一命令在執行器手上原樣承接
                         lk_ = self.lock
@@ -1104,7 +1117,7 @@ def main():
                         self.event('handover_requested', along=round(along, 4), budget=bd, ver=self.ho_pending, note='命令權仍在 MERGE、本節點續追預抓位；執行器以當下快照試跑首拍通過才接手（第一筆 /cmd_vel_grasp 到選擇器即切換）；nack ⇒ 保留前段所有權並停止')
                     else:
                         self.event('handover_request_accepted_first', along=round(along, 4), budget=bd, note='本程式只做判定與記錄；抓持控制器未接')
-                if (self.ho_ack or '').startswith('nack') and not self.stop:
+                if self.ho_pending is not None and self.ho_ack is not None and self.ho_ack != 'ack:%d' % self.ho_pending and not self.stop:   # nack 或版本不符
                     self.global_stop('handover_rejected_by_executor_global_stop', ack=self.ho_ack, stop_certificate='本拍 now 停法核對通過')
                     ua = np.zeros(6)
                 elif along <= TERM_END:                               # 預抓位追蹤的已核範圍終點：協同停止

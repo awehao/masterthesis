@@ -112,7 +112,7 @@ class World(Node):
             # 提案發到 /cmd_vel_grasp（選擇器→平滑器→Shield→GUARD），放行值以 ChainAlign 對齊後套用。手臂保持。只驗命令路徑與延遲，不是抓持。
             sys.path.insert(0, HERE)
             import far_chain_align as FCA
-            self.ca, self.ho, self.ho_n0, self.u_prop_hist = FCA.ChainAlign(D_STEPS, 5), None, None, []
+            self.ca, self.ho, self.ho_n0, self.u_prop_hist = None, None, None, []
             self.p_grasp = self.create_publisher(Twist, '/cmd_vel_grasp', 10)
             self.p_hoack = self.create_publisher(self._String, '/far/handover_ack', 10)
             self.nack_test = os.environ.get('FAR_TEST_NACK') == '1'
@@ -128,8 +128,11 @@ class World(Node):
         self.cmd, self.cmd_t = np.array([m.linear.x, m.linear.y, m.angular.z]), self.t
         if hasattr(self, 'rx_steps'):
             self.rx_steps.append(self.n)
-        if getattr(self, 'ho', None) is not None:
-            self.ca.on_release(self.n, self.cmd)
+        if getattr(self, 'ho', None) is not None and self.ca is not None:
+            v_ = self.cmd.copy()
+            if getattr(self, 'inject', False) and self.ho_n0 is not None and self.n - self.ho_n0 >= 52 and 'inject' not in self.meta:   # 反例注入（核對用）：接手後 0.52 s 有一筆放行被改成零（模擬 Shield 煞車）
+                v_ = np.zeros(3); self.meta['inject'] = dict(n=self.n)
+            self.ca.on_release(self.n, v_)
 
     def _ho(self, m):
         if self.ho is None and self.ho_req is None and not getattr(self, 'ho_nacked', False):
@@ -146,6 +149,8 @@ class World(Node):
             self.ho = np.array(m.data, float)
             self.ho_n0 = None
             self.ho_u0 = self.cmd.copy()
+            self.ca = self.FCA.ChainAlign(D_STEPS, 5, pre_release=self.cmd.copy())
+            self.inject = os.environ.get('FAR_TEST_BRAKE') == '1'
 
     def _acmd(self, m):
         if len(m.data) == 6 and np.isfinite(m.data).all():
