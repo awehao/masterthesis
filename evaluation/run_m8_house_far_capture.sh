@@ -26,6 +26,7 @@ set +u; source /opt/ros/jazzy/setup.bash; source install/setup.bash; set -u
 PAT="[s]can_safety_shield|[w]heel_limit_guard|[v]elocity_smoother|[g]mpc_node|[g]mpc_merge_wrap|[p]lanner_server|[w]orld_node.py|[m]erge_node.py"
 n=$(pgrep -fc "$PAT" || true)
 if [ "$n" != "0" ]; then say "已有導航／乾跑節點在跑（$n 個）⇒ 拒跑"; exit 99; fi
+say "排程：SIM_CPUS=${SIM_CPUS:-0-3,8-11} FAR_CPUS=${FAR_CPUS:-4,5,6,7,14,15} SUP_MODE=${SUP_MODE:-obs}"
 say "=== 遠距取像：RUN_ID=$RUN_ID START=$START STATIC_S=$STATIC_S SIM_LIMIT=$SIM_LIMIT domain=$ROS_DOMAIN_ID；凍結 $FREEZE 全部相符；機器 $(hostname)／$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)／$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
 PIDS=()
 cleanup(){
@@ -38,7 +39,9 @@ cleanup(){
   left=$(pgrep -fc "$PAT" || true); say "收尾完成；殘留導航節點 $left"
 }
 trap cleanup EXIT
-setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_far_capture.py --out "$DIR" --start "$START" --arm="$ARM" --sim-limit-s "$SIM_LIMIT" --static-s "$STATIC_S" > "$DIR/sim.log" 2>&1 < /dev/null &
+# N2 排程（只改排程）：Isaac 與導航鏈在 CPU 0–3、8–11；監督節點＋幾何工作程序＋掃掠池在 4–7、14、15（12、13＝幾何工作程序與監督主程序的 SMT 同核，不分配）
+SIM_CPUS="${SIM_CPUS:-0-3,8-11}"; export FAR_CPUS="${FAR_CPUS:-4,5,6,7,14,15}"
+setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 taskset -c "$SIM_CPUS" env -u VIRTUAL_ENV "$ISAAC_PY" -u evaluation/isaac_m8_house_far_capture.py --out "$DIR" --start "$START" --arm="$ARM" --sim-limit-s "$SIM_LIMIT" --static-s "$STATIC_S" > "$DIR/sim.log" 2>&1 < /dev/null &
 SIM=$!
 sleep 1
 P=$(pgrep -f "[i]saac_m8_house_far_capture.py.*runs/$RUN_ID" | head -1)
@@ -58,7 +61,7 @@ if [ "$STATIC_S" = "0" ]; then
     SX=$(echo "$START" | cut -d, -f1); SY=$(echo "$START" | cut -d, -f2); SYAW=$(echo "$START" | cut -d, -f3)
     PYS="env -u VIRTUAL_ENV /usr/bin/python3"
     NO_GZ=1 BIGARENA=1 SCENE=mission_house_m8 NO_TRAFFIC=1 HEADING=1 GUARD=1 SHIELD=1 GMPC_CMD_TOPIC=cmd_vel_nav_raw SPAWN_X="$SX" SPAWN_Y="$SY" \
-      setsid ros2 launch my_omnibot_description omni_bot_dynamic.launch.py gui:=false use_arm:=true > "$DIR/launch.log" 2>&1 < /dev/null & PIDS+=( $! )
+      setsid taskset -c "$SIM_CPUS" ros2 launch my_omnibot_description omni_bot_dynamic.launch.py gui:=false use_arm:=true > "$DIR/launch.log" 2>&1 < /dev/null & PIDS+=( $! )
     setsid $PYS -u evaluation/far_dry/logger_node.py "$DIR/ros" > "$DIR/logger.log" 2>&1 < /dev/null & PIDS+=( $! )
     sleep 25
     QZ=$(python3 -c "import math;print(math.sin($SYAW/2))"); QW=$(python3 -c "import math;print(math.cos($SYAW/2))")
@@ -72,7 +75,7 @@ if [ "$STATIC_S" = "0" ]; then
     if ! grep -q "velocity_smoother active" "$DIR/ros.side/lifecycle.txt" || ! grep -q "planner_server active" "$DIR/ros.side/lifecycle.txt"; then
       say "導航節點未就緒（$(tr '\n' ';' < "$DIR/ros.side/lifecycle.txt")）⇒ 不啟動監督節點，結束模擬"; kill -TERM "${P:-$SIM}" 2>/dev/null
     else
-      setsid $PYS -u evaluation/far_dry/merge_node.py "$DIR/ros" obs > "$DIR/merge.log" 2>&1 < /dev/null & PIDS+=( $! )
+      setsid $PYS -u evaluation/far_dry/merge_node.py "$DIR/ros" "${SUP_MODE:-obs}" > "$DIR/merge.log" 2>&1 < /dev/null & PIDS+=( $! )
       say "  監督節點（取像模式）已啟動"
       sleep 12
       setsid timeout $((SIM_LIMIT * 4 + 60)) ros2 topic echo /merge/gmpc/diag_v2 std_msgs/msg/String --field data > "$DIR/ros.merge_diag_v2.txt" 2>/dev/null < /dev/null & PIDS+=( $! )

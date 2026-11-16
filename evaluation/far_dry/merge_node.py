@@ -66,7 +66,12 @@ def worker(conn):
                                    t_state=float(fr['t_obs']), pose_source='fk_at_render_time', frame_id='map'), float(fr['t_obs']) + 0.01)
     W.set_model(phi0=0.0, finger_q=G.XO.FINGER_OPEN)
     import door_sweep_pool as SWP
+    import door_cpu_layout as CPU
     SWP._die_with_parent()
+    cpus = [int(x) for x in os.environ.get('FAR_CPUS', '').split(',') if x.strip()]   # N2：排程配置（只改排程；45 ms 期限不改）。順序：幾何工作程序、監督主程序、其餘給掃掠池
+    if len(cpus) >= 6:
+        CPU.pin(0, [cpus[0]])
+    blas_rb = CPU.blas_runtime(set_to=1)
     pool = SWP.SweepPool(4)                                           # 建池在啟動時（不在控制拍內）
     T_est_W = T_est.copy()                                             # 歷史影像的估計（該影像自己的世界座標；含實際影像的估計誤差）
     clear_fn = lambda x: W.clear_door(np.r_[x, 0.0], T_est)            # noqa: E731
@@ -269,7 +274,11 @@ def worker(conn):
         return dict(ok=bool(res['now']['ok'] and res['next']['ok']), why=why, now=res['now'], next=res['next'], min_clear=mcc if not why else {}, margin_after_interval_bound=mab, n_eval=len(cache), n_refine=n_ref,
                     coverage='區間界（路徑長上界 L；兩端淨空較小值 − L/2 ≥ 門檻；自碰撞逐對）＋不過則加密到逐物理步', ms_traj=round((t1 - t0) * 1e3, 1), ms_eval0=round((t2 - t1) * 1e3, 1), ms_cert=round((time.perf_counter() - t2) * 1e3, 1), ms=round((time.perf_counter() - t0) * 1e3, 1))
 
-    conn.send(('ready', 0, dict(est=oinfo, capture_base_pose=[float(x) for x in np.asarray(fr['q'], float)[:3]])))
+    if len(cpus) >= 6:
+        for p_, c_ in zip(pool.procs, cpus[2:6]):
+            CPU.pin(p_.pid, [c_])
+    sched = dict(far_cpus=cpus, worker_affinity=sorted(os.sched_getaffinity(0)), pool_affinity=[sorted(os.sched_getaffinity(p_.pid)) for p_ in pool.procs], blas_runtime=blas_rb, blas_all_single=CPU.blas_all_single(blas_rb) if blas_rb else '沒有載入 OpenBLAS（系統 Python 參考 BLAS）')
+    conn.send(('ready', 0, dict(sched=sched, est=oinfo, capture_base_pose=[float(x) for x in np.asarray(fr['q'], float)[:3]])))
     while True:
         m = conn.recv()
         if m is None:
@@ -277,6 +286,7 @@ def worker(conn):
             break
         op, a = m
         ver = a.get('ver', 0)
+        t_rx = time.perf_counter()
         try:
             if op == 'prior':                                          # 地圖先驗：場景登錄的門資產名目把手位姿（門關閉）；只供粗導航目標與目標關聯，不是影像估計
                 import hashlib
@@ -423,6 +433,7 @@ def worker(conn):
                     T_mo_ = np.asarray(a['T_mo'], float)
                     cl = W.clear_door(np.r_[to_map(q, T_mo_), 0.0], _T3(T_mo_) @ T_est)
                     out['clear'] = {k_: float(cl[k_]) for k_ in ('env', 'base', 'self')}
+                out['tm'] = (t_rx, time.perf_counter())             # 收到請求、算完的時刻（CLOCK_MONOTONIC，跨程序可比）
                 conn.send(('tick', ver, out))
         except Exception as e:                                        # noqa: BLE001
             conn.send(('error', ver, repr(e)[:300]))
@@ -447,6 +458,10 @@ def main():
     if not pc.poll(120.0):
         raise SystemExit('worker 未就緒')
     _, _, W0 = pc.recv()
+    _fc = [int(x) for x in os.environ.get('FAR_CPUS', '').split(',') if x.strip()]
+    if len(_fc) >= 6:
+        os.sched_setaffinity(0, {_fc[1]})
+    W0['sched']['main_affinity'] = sorted(os.sched_getaffinity(0))
     co = {}
     rclpy.init()
 
@@ -481,6 +496,7 @@ def main():
             self.tfb = Buffer(); self.tfl = TransformListener(self.tfb, self)
             self.ver, self.stale, self.T_mo_pub, self.path_odom, self.plan_stamp, self.ack, self.t_shadow, self.mrg_t = 0, 0, None, None, None, None, None, None
             self.anchor = None
+            self.tm_log = []                                           # 每次請求：[t, 是否 tick, 派工(送出) ms, 排隊 ms, 計算 ms, 收回 ms, 總 ms, 遲到]
             self.tf_stamp, self.v_last = {}, np.zeros(2)
             self.plan, self.plan_req_t, self.plan_ready_t, self.pending = None, None, None, None
             self.gm, self.t_goal, self.t_prep0, self.s_prep0, self.u_arm, self.u_arm_prev = None, None, None, None, np.zeros(6), np.zeros(6)
@@ -525,16 +541,22 @@ def main():
         def ask(self, op, a, timeout):
             """送一個帶版本的請求並等同版本回覆；舊版本回覆丟棄並計數。回 (tag, payload) 或 ('late', None)。"""
             self.ver += 1
+            t_s0 = time.perf_counter()
             pc.send((op, dict(a, ver=self.ver)))
-            t_end = time.perf_counter() + timeout
+            t_s1 = time.perf_counter()
+            t_end = t_s1 + timeout
             while True:
                 rem = t_end - time.perf_counter()
                 if rem <= 0 or not pc.poll(rem):
+                    self.tm_log.append([self.now(), op == 'tick', (t_s1 - t_s0) * 1e3, np.nan, np.nan, np.nan, (time.perf_counter() - t_s0) * 1e3, 1.0])
                     return 'late', None
                 tag, ver, res = pc.recv()
                 if ver != self.ver:
                     self.stale += 1
                     continue
+                t_r = time.perf_counter()
+                tm = res.get('tm') if isinstance(res, dict) else None
+                self.tm_log.append([self.now(), op == 'tick', (t_s1 - t_s0) * 1e3, np.nan if tm is None else (tm[0] - t_s1) * 1e3, np.nan if tm is None else (tm[1] - tm[0]) * 1e3, np.nan if tm is None else (t_r - tm[1]) * 1e3, (t_r - t_s0) * 1e3, 0.0])
                 return tag, res
 
         def _in(self, src, m):
@@ -841,8 +863,8 @@ def main():
         def save(self):
             cols = ['t', 't_world'] + [f'q{i}' for i in range(9)] + [f's{i}' for i in range(6)] + ['rel_x', 'rel_y', 'rel_w'] + [f'ua{i}' for i in range(6)] + ['nav_x', 'nav_y', 'nav_w', 'mrg_x', 'mrg_y', 'mrg_w', 'base_owner(0NAV,1MERGE)', 'arm(0HOLD,1PREP,2TRACK)', 'stop',
                                                                                                            'along', 'lat', 'yaw_err_deg', 'arm_track_err', 'sigma', 'clipped', 'clear_env', 'clear_base', 'clear_self', 'vx_meas', 'vy_meas', 'truth_x', 'truth_y', 'truth_yaw', 'mo_x', 'mo_y', 'mo_yaw', 'stop_ok', 'stop_env', 'stop_base', 'stop_self', 'stop_ms', 'arm_track_err_pred', 'tf_stamp_base', 'stop_now_all_still_s', 'stop_next_all_still_s', 'stop_n_samples', 'stop_margin_env', 'stop_margin_base', 'stop_margin_self', 'stop_n_refine', 'ref_ver', 'ref_px', 'ref_py', 'ref_pz', 'ref_goal_dist_mm']
-            np.savez_compressed(out + '_merge.npz', R=np.array(self.rows, float), cols=np.array(cols))
-            json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, obs_mode=OBS_MODE, update_mode=UPDATE, update_params=UPD, ref_log=self.ref_log, ref_ver_final=self.ref_ver, prior=getattr(self, 'prior', None), n_assoc_rejected=self.n_assoc_rej, obs_log=self.obs_log, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, engineering_abort=self.aborted, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
+            np.savez_compressed(out + '_merge.npz', R=np.array(self.rows, float), cols=np.array(cols), TM=np.array(self.tm_log, float).reshape(-1, 8), tm_cols=np.array(['t', 'is_tick', 'dispatch_ms', 'queue_ms', 'compute_ms', 'return_ms', 'total_ms', 'late']))
+            json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, sched=W0.get('sched'), obs_mode=OBS_MODE, update_mode=UPDATE, update_params=UPD, ref_log=self.ref_log, ref_ver_final=self.ref_ver, prior=getattr(self, 'prior', None), n_assoc_rejected=self.n_assoc_rej, obs_log=self.obs_log, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, engineering_abort=self.aborted, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
 
     node = M()
     try:
