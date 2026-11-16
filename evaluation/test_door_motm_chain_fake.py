@@ -87,6 +87,10 @@ def ik(b, T, seed):
 
 # ---- 穩態移動起點（同 test_door_motm_grasp_fake）
 b0 = np.r_[q_b[:2] + np.array([0.03, 0.0]), q_b[2]]
+if os.environ.get('FAKE_START_Q9'):                                 # 遠距整合核對：改由指定的底盤位姿與手臂分支種子起步（遠距鏈的預抓位追蹤狀態）；預設不設＝原行為
+    _q9 = np.array([float(x) for x in os.environ['FAKE_START_Q9'].split(',')], float)
+    b0 = _q9[:3].copy(); q_b = np.r_[q_b[:3], _q9[3:]]
+    print('FAKE_START_Q9 base', b0.tolist(), 'arm seed', _q9[3:].tolist(), flush=True)
 vw = V * d_world
 T_pre = T_at(T_true, G.PG.S_PRE)
 qa = ik(b0, T_pre, q_b[3:]); qa2 = ik(b0 + np.r_[vw * DT, 0.0], T_pre, qa)

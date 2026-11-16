@@ -15,17 +15,22 @@ CAP_ALONG, CAP_LAT = (0.45, 1.40), 0.60                              # r2（Code
 ENTER_EXTRA = 0.02                                                   # 斜向切入目標的額外沿線餘量（在途命令 0.13 s×通過速度＋切入收斂）
 _OLD_CAP = (0.62, 1.40)                                    # 捕獲區：距抓取點的沿線距離、離線側向距離
 PREP_MARGIN = 0.04
-TERM_END = 0.09                                                      # 預抓位追蹤的終點（此分支預抓位在沿線 ≥0.075 m 可行；留 0.015 m）
+TERM_END = -0.185                                                    # 預抓位追蹤的終點（門旁分支預抓位在沿線 −0.075～−0.20 m 可行；留 0.015 m）
 # 近距觀察段的連續視覺更新（N3；Codex 20261116）。只在觀察追蹤（TRACK）中、已核沿線範圍內啟用；只更新把手位置（姿態沿用固定參考）。
 UPD = dict(max_age_s=0.3,          # 觀察年齡上限（同 FL.EST_MAX_AGE_S）
            gate_pos_m=0.020, gate_ang_deg=3.0,   # 對目前參考的粗差閘門（明顯不是同一目標或估計壞掉）
            n_consist=3, spread_m=0.005,          # 需最近 3 格有效觀察、彼此位置差 ≤5 mm 才形成更新目標（取各軸中位數）
            step_m=0.0001)                        # 參考每控制拍最多移動 0.1 mm（＝2 mm/s；目標與命令連續，不逐格覆寫、不清管線）。1 mm／拍在重播中使手臂命令偏離無更新版最多 0.49 rad/s，太大
-# 終端接近 T1b（K3；運動學離線依據 door_far_terminal_t1b_check.json）：準備提前完成 → 手臂靜止觀察 → 鎖定參考 → 關節直線下降到預抓位 → 追預抓位 → 交接判定
+# 終端接近 T1c（K3；運動學離線依據 door_far_branch_map_r1.json、door_far_terminal_t1c_check.json）：
+#   遠距觀察分支（沿線 ≥0.025 才可行）與門旁抓持／開門分支（沿線 ≤−0.075 才可行）不相連，中間是腕部近奇異帶；從觀察分支直接抓，開門首段不可行（假世界整鏈核對）。
+#   ⇒ 準備提前完成 → 手臂靜止觀察 → 鎖定參考 → 以關節直線（不是 TCP 直線，不經任務空間奇異帶）轉到門旁分支的預抓位解 → 追預抓位 → 交接給門旁已驗的移動抓持／開門
+DS_SEED = (-0.354, -0.088, 1.435, -1.421, -0.358, -0.157)            # 門旁分支的手臂種子（m8house_door_full_2 綁定時構型；只作 IK 分支種子）
+DS_ANCHOR_A = -0.115                                                 # 該種子對應的沿線位置（門旁綁定時底盤 x 0.724）
+GRASP_ORIGIN_SHIFT = 0.20                                            # 交接判定用的抓取點原點＝通過線原點沿行進方向再 0.20 m（門旁分支預抓位可行到沿線 −0.20）；窗口條件本身不變
 TERM = dict(a_obs=0.42,            # 手臂準備須在沿線 ≥ a_obs 前完成（之後手臂靜止在作業起點解，把手在畫面內：幾何投影 ≤0.40）
-            a_lock=0.335,          # 在途前推後到這個沿線位置：鎖定參考並開始下降
-            a_pre=0.225,           # 下降結束、到預抓位（後退 S_PRE）的沿線位置
-            t_desc=2.2,            # 下降時間（＝(a_lock−a_pre)/v_pass；梯形速度，加減速各 20%）
+            a_lock=0.15,           # 在途前推後到這個沿線位置：鎖定參考並開始轉移
+            a_pre=-0.075,          # 轉移結束、到門旁分支預抓位（後退 S_PRE）的沿線位置
+            t_desc=4.5,            # 轉移時間（＝(a_lock−a_pre)/v_pass；梯形速度，加減速各 20%；離線：關節速率 0.73、淨空 env 0.048／self 0.0063）
             est_bound_m=0.00285,   # 影像估計＋擷取同步的位置誤差預算項＝同一個三格鎖定算法在既有 Isaac 影格（近距 ≤0.5 m，n=95，capture_1／3）上的已觀測誤差包絡最大值（far_lock_error_envelope.json）；工程預算，不是可靠上界
             est_bound_deg=0.885,   # 同上，姿態包絡最大值
             sync_s=0.011,          # 同步：一個物理步＋餘量 × 通過速度
@@ -364,18 +369,20 @@ def worker(conn):
                     br, binfo = FR.observe_branch(T_est, pg, np.asarray(a['q'], float), prep_path, T_at, a_H, clear_fn, W.THR, W.SIG_FLOOR, LO, HI, V_PASS)
                 st['pg'], st['br'] = pg, br
                 term_info = None
-                if br is not None and a.get('full'):                    # 終端接近：由觀察分支在 a_pre 連續解到預抓位
-                    b_pre = np.r_[pg['p0'] - pg['d'] * TERM['a_pre'], pg['yaw']]
+                if br is not None and a.get('full'):                    # 終端：門旁分支預抓位解（由門旁種子在錨點解抓取位→後退 S_PRE→沿線連續解到 a_pre）
                     a_n_ = T_est[:3, :3] @ np.asarray(a_H, float)
-                    sd_, why_t = np.asarray(br['q_start_op'], float), None
-                    for s_r in np.r_[np.arange(FR.S_OBS, S_PRE, -0.01), S_PRE]:
+                    sd_, why_t = np.asarray(DS_SEED, float), None
+                    steps_ = [(DS_ANCHOR_A, 0.0), (DS_ANCHOR_A, S_PRE)] + [(float(a_), S_PRE) for a_ in np.arange(DS_ANCHOR_A + 0.005, TERM['a_pre'] + 1e-9, 0.005)]
+                    for a_c, s_r in steps_:
+                        b_c = np.r_[pg['p0'] - pg['d'] * a_c, pg['yaw']]
                         Tt_ = np.asarray(T_at(T_est, 0.0), float).copy(); Tt_[:3, 3] += s_r * a_n_
-                        qn_, rn_, sm_ = DFK.ik_closure_fc(Tt_, b_pre, sd_)
+                        qn_, rn_, sm_ = DFK.ik_closure_fc(Tt_, b_c, sd_)
                         if not (rn_ < 1e-6 and np.isfinite(qn_).all()) or float(np.abs(qn_ - sd_).max()) > 0.6 or np.any(qn_ < LO) or np.any(qn_ > HI) or sm_ < W.SIG_FLOOR:
-                            why_t = 'terminal_ik_limit_or_manipulability@s=%.2f' % s_r; break
-                        cl_ = clear_fn(np.r_[b_pre, qn_])
-                        if any(cl_[k_] < W.THR[k_] for k_ in ('env', 'base', 'self')):
-                            why_t = 'terminal_clearance@s=%.2f' % s_r; break
+                            why_t = 'terminal_ik_limit_or_manipulability@a=%.3f,s=%.3f' % (a_c, s_r); break
+                        if s_r >= S_PRE - 1e-9:                         # 抓取位（s=0）的兩指—橫桿淨空由抓持控制器的豁免處理；這裡只核預抓位
+                            cl_ = clear_fn(np.r_[b_c, qn_])
+                            if any(cl_[k_] < W.THR[k_] for k_ in ('env', 'base', 'self')):
+                                why_t = 'terminal_clearance@a=%.3f' % a_c; break
                         sd_ = qn_
                     if why_t is None:
                         st['q_pre'] = sd_
@@ -520,7 +527,7 @@ def worker(conn):
                         out['budget'] = bud
                         if a['mode'] == 'PRETRACK' and a.get('judge'):
                             sh = type('A', (), dict(owner='NAV'))()
-                            pkt, why = FL.handover_request(a['t'], sh, pg, q, a['v_meas'], s, pipe, a['u_last'], a['u_prev'], dict(T_WH=lk_['T'], t_obs=lk_['t_obs']), V_PASS, D, off_static=off_fn(q), tick_phase=0,
+                            pkt, why = FL.handover_request(a['t'], sh, dict(pg, p0=pg['p0'] + GRASP_ORIGIN_SHIFT * pg['d']), q, a['v_meas'], s, pipe, a['u_last'], a['u_prev'], dict(T_WH=lk_['T'], t_obs=lk_['t_obs']), V_PASS, D, off_static=off_fn(q), tick_phase=0,
                                                            stamps=dict(image=lk_['t_obs'], state=a['t'], cmd=a['t']), arm_track_err=o.get('track_err') if o['ok'] else None, locked=bud)
                             out['judge'] = dict(locked_reference=why)
                             out['handover_ok'] = bool(pkt is not None)
@@ -806,7 +813,7 @@ def main():
             n_in = max(int(np.linalg.norm(entry - q[:2]) / 0.005), 2)     # 路徑點距 5 mm：進線 GMPC 以最近路徑點為參考起點（ref_proj=vertex），點距粗時低速下會卡在兩點之間
             for u_ in np.linspace(1.0 / n_in, 1.0, n_in):
                 pts.append(q[:2] + u_ * (entry - q[:2]))
-            for al in np.arange(al0 - 0.005, -0.10 - 1e-9, -0.005):     # 路徑延伸到已核觀察範圍終點（−0.10）；受控停止由監督節點在 STOP_ALONG 發起，不靠控制器到點
+            for al in np.arange(al0 - 0.005, (-0.30 if FULL else -0.10) - 1e-9, -0.005):     # 路徑延伸到已核觀察範圍終點（−0.10）；受控停止由監督節點在 STOP_ALONG 發起，不靠控制器到點
                 pts.append(p0 - dv * al)
             self.path_odom, self.path_yaw = np.array(pts), float(pg['yaw'])
             return dict(n=len(pts), along_now=round(al_now, 3), along_entry=round(al0, 3), need_along=round(need, 3), diagonal=bool(al0 > al_now + 1e-9), end_odom=[round(float(v), 3) for v in pts[-1]])
