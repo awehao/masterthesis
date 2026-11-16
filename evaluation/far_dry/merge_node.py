@@ -5,7 +5,7 @@
 幾何計算（把手估計、通過線、觀察分支、手臂追蹤、交接核對）在 fork 出的工作程序做（專案模組會裝 rclpy 替身，不能與 rclpy 同程序）。
 座標：把手估計、通過線、手臂任務都保存在連續的里程座標（odom）；影像估計以「擷取同刻」的里程位姿轉入；發布給進線 GMPC 的路徑才用當下 map←odom 轉成 map。真值底盤位姿只記錄供事後評估。
 資料來源照實：底盤位姿取 TF odom→base_footprint；手臂關節、設定點、8 步在途命令取世界節點 /far/truth（驅動端讀回）；把手相對底盤的量測來自 online_1 的實際影像（時間戳設為本趟起點，之後沒有新影像）。
-限制：淨空計算的靜態環境幾何以地圖座標值直接放在里程座標用（兩者相差當下的定位修正量）；乾跑的里程是理想的（無滑移）。"""
+淨空：在地圖座標核（機器人構型與把手估計以當下 map←odom 轉入，與靜態環境幾何同座標）。限制：乾跑的里程是理想的（無滑移）。"""
 import json, math, multiprocessing as mp, os, signal, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -43,41 +43,69 @@ def worker(conn):
     T_est, oinfo = obs.intake(dict(dep=np.load(os.path.join(RUN, 'frames', 'far_live_depth_m.npy')), K=np.asarray(meta['K'], float), T_cam=np.asarray(fr['cam_T_fk'], float), t_obs=float(fr['t_obs']), q=np.asarray(fr['q'], float),
                                    t_state=float(fr['t_obs']), pose_source='fk_at_render_time', frame_id='map'), float(fr['t_obs']) + 0.01)
     W.set_model(phi0=0.0, finger_q=G.XO.FINGER_OPEN)
+    import door_sweep_pool as SWP
+    SWP._die_with_parent()
+    pool = SWP.SweepPool(4)                                           # 建池在啟動時（不在控制拍內）
     T_est_W = T_est.copy()                                             # 歷史影像的估計（該影像自己的世界座標；含實際影像的估計誤差）
     clear_fn = lambda x: W.clear_door(np.r_[x, 0.0], T_est)            # noqa: E731
     AL = np.asarray(ident['alpha'], float)
     st = dict(pg=None, br=None, trk=None)
 
-    def stop_check(q, pipe, rel, s, ua):
-        """提交前停止核對：假設本拍提交手臂候選命令 ua、下一拍起全域停止。
-        底盤＝在途 8 步 → 本拍放行命令一拍 → 平滑器以既有減速上限逐拍降到零；手臂＝在途命令＋本拍命令積分進設定點後歸零，關節以辨識的一階模型趨近。
-        沿途取樣核淨空與關節限位；任一不過 ⇒ 不提交。"""
+    def to_map(q, T_mo):
+        """里程座標的機器人構型 → 地圖座標（靜態環境幾何所在的座標）。"""
+        c, s_ = math.cos(T_mo[2]), math.sin(T_mo[2])
+        return np.r_[c * q[0] - s_ * q[1] + T_mo[0], s_ * q[0] + c * q[1] + T_mo[1], q[2] + T_mo[2], q[3:]]
+
+    def stop_check(q, pipe, rel, s, ua, T_mo):
+        """提交前停止核對，兩種實際會採用的停法都核：
+          now ：本拍起就送零（候選不提交）——底盤＝在途 8 步 → 平滑器以既有減速上限逐拍降到零；手臂＝在途命令走完後設定點不再動，關節以一階模型收斂。
+          next：本拍提交候選 ua、下一拍起送零。
+        淨空在地圖座標核（機器人構型與把手估計都以當下 map←odom 轉入；靜態環境幾何本來就在地圖座標）。
+        取樣：自上次取樣起底盤位移 >5 mm 或任一關節變化 >0.01 rad 就取一點（末點必取）——相鄰樣本間任一連桿點位移上界約 5 mm＋0.01 rad×0.75 m≈12.5 mm；此上界照實回報，不加進門檻。"""
         t0 = time.perf_counter()
-        cmds = [np.asarray(u, float) for u in pipe] + [np.r_[rel, ua]] * NPH
-        v = np.asarray(rel, float).copy()
-        while float(np.abs(v).max()) > 1e-9:
-            v = v - np.sign(v) * np.minimum(np.abs(v), np.asarray(DEC) * DT)
-            cmds += [np.r_[v, np.zeros(6)]] * NPH
-        cmds += [np.zeros(9)] * 30
-        b, a, sp = np.asarray(q[:3], float).copy(), np.asarray(q[3:], float).copy(), np.asarray(s, float).copy()
-        mc, lim_ok, ns = dict(env=9.9, base=9.9, self=9.9), True, 0
-        for k, u in enumerate(cmds):
-            c, s_ = math.cos(b[2]), math.sin(b[2])
-            b = b + PHYS * np.array([c * u[0] - s_ * u[1], s_ * u[0] + c * u[1], u[2]])
-            sp = sp + PHYS * u[3:]
-            a = a + AL * (sp - a)
-            lim_ok = lim_ok and bool(np.all(sp >= LO) and np.all(sp <= HI) and np.all(a >= LO) and np.all(a <= HI))
-            if k % 8 == 7 or k == len(cmds) - 1:
-                cl = clear_fn(np.r_[b, a]); ns += 1
-                for k_ in mc:
-                    mc[k_] = min(mc[k_], float(cl[k_]))
-        ok = lim_ok and all(mc[k_] >= W.THR[k_] for k_ in mc)
-        return dict(ok=bool(ok), limits_ok=lim_ok, min_clear={k_: round(v_, 4) for k_, v_ in mc.items()}, n_samples=ns, n_steps=len(cmds), ms=round((time.perf_counter() - t0) * 1e3, 1))
+        T_map = _T3(T_mo) @ T_est
+        res, X, tag = {}, [], []
+        for mode in ('now', 'next'):
+            cmds = [np.asarray(u, float) for u in pipe] + ([np.r_[rel, ua]] * NPH if mode == 'next' else [])
+            v = np.asarray(rel, float).copy()
+            while float(np.abs(v).max()) > 1e-9:
+                v = v - np.sign(v) * np.minimum(np.abs(v), np.asarray(DEC) * DT)
+                cmds += [np.r_[v, np.zeros(6)]] * NPH
+            cmds += [np.zeros(9)] * 40
+            b, a, sp = np.asarray(q[:3], float).copy(), np.asarray(q[3:], float).copy(), np.asarray(s, float).copy()
+            lim_ok, ns, last, k_base, k_all = True, 0, np.r_[b, a], None, None
+            for k, u in enumerate(cmds):
+                c, s_ = math.cos(b[2]), math.sin(b[2])
+                b_new = b + PHYS * np.array([c * u[0] - s_ * u[1], s_ * u[0] + c * u[1], u[2]])
+                sp = sp + PHYS * u[3:]
+                a_new = a + AL * (sp - a)
+                if k_base is None and float(np.abs(b_new - b).max()) < 1e-9 and k >= len(pipe):
+                    k_base = k
+                if k_all is None and k_base is not None and float(np.abs(a_new - a).max()) < 1e-5:
+                    k_all = k
+                b, a = b_new, a_new
+                lim_ok = lim_ok and bool(np.all(sp >= LO) and np.all(sp <= HI) and np.all(a >= LO) and np.all(a <= HI))
+                if float(np.linalg.norm(b[:2] - last[:2])) > 0.005 or float(np.abs(a - last[3:]).max()) > 0.01 or k == len(cmds) - 1:
+                    if not (mode == 'next' and k < len(pipe)):         # 在途 8 步兩種停法相同，只算一次
+                        X.append(np.r_[to_map(np.r_[b, a], T_mo), 0.0]); tag.append(mode if k >= len(pipe) else 'both')
+                    ns += 1; last = np.r_[b, a]
+            res[mode] = dict(limits_ok=lim_ok, n_samples=ns, base_still_s=None if k_base is None else round(k_base * PHYS, 2), all_still_s=None if k_all is None else round(k_all * PHYS, 2), arm_residual=round(float(np.abs(sp - a).max()), 5))
+        h = pool.submit(T_map, W.FINGER_Q, W.PHI0, np.array(X))        # 既有的平行掃掠池（同一淨空函式；逾時／工作程序死亡／缺漏 ⇒ 未通過）
+        outp, why, tms = pool.collect(h, 0.030)
+        if outp is None:
+            return dict(ok=False, why='sweep_' + str(why), now=res['now'], next=res['next'], min_clear={}, n_eval=len(X), ms=round((time.perf_counter() - t0) * 1e3, 1))
+        for mode in ('now', 'next'):
+            mc = {k_: min([float(o[k_]) for o, tg in zip(outp, tag) if tg in (mode, 'both')] or [9.9]) for k_ in ('env', 'base', 'self')}
+            res[mode]['min_clear'] = {k_: round(v_, 4) for k_, v_ in mc.items()}
+            res[mode]['ok'] = bool(res[mode]['limits_ok'] and all(mc[k_] >= W.THR[k_] for k_ in mc))
+        mcc = {k_: min(res['now']['min_clear'][k_], res['next']['min_clear'][k_]) for k_ in ('env', 'base', 'self')}
+        return dict(ok=bool(res['now']['ok'] and res['next']['ok']), now=res['now'], next=res['next'], min_clear=mcc, sample_rule='base>5mm or joint>0.01rad', inter_sample_bound_mm=12.5, n_eval=len(X), sweep_wait_ms=round(tms['wait'], 1), ms=round((time.perf_counter() - t0) * 1e3, 1))
 
     conn.send(('ready', 0, dict(est=oinfo, capture_base_pose=[float(x) for x in np.asarray(fr['q'], float)[:3]])))
     while True:
         m = conn.recv()
         if m is None:
+            pool.close()
             break
         op, a = m
         ver = a.get('ver', 0)
@@ -87,7 +115,8 @@ def worker(conn):
                 # 再用同刻的里程位姿轉入里程座標。實機／Isaac 取像時這一步＝相機＋FK 直接給出的相對量測。
                 T_base_handle = np.linalg.inv(np.asarray(a['T_truth_base'], float)) @ T_est_W
                 T_est = np.asarray(a['T_odom_base'], float) @ T_base_handle
-                clear_fn = lambda x, _T=T_est: W.clear_door(np.r_[x, 0.0], _T)   # noqa: E731
+                _Tmo_a = np.asarray(a['T_mo'], float)                     # 搜尋階段的淨空：以錨定時的 map←odom 轉入地圖座標（每拍核對另用當下轉換）
+                clear_fn = lambda x, _T=_T3(_Tmo_a) @ T_est, _m=_Tmo_a: W.clear_door(np.r_[to_map(np.asarray(x, float), _m), 0.0], _T)   # noqa: E731
                 n = (T_est[:3, :3] @ np.asarray(a_H, float)).copy(); n[2] = 0; n /= np.linalg.norm(n)
                 ax = T_est[:3, 0].copy(); ax[2] = 0; d = -ax / np.linalg.norm(ax)
                 yaw = math.atan2(-n[1], -n[0])
@@ -102,7 +131,7 @@ def worker(conn):
                 st['pg'], st['br'] = pg, br
                 st['trk'] = FR.ArmPreTracker(tau, lambda q9: np.zeros(6), DT, PHYS, NPH, LO, HI)
                 if br is not None:
-                    stop_check(np.r_[np.asarray(a['q'], float)[:3], br['q_start_op']], [np.zeros(9)] * D, np.zeros(3), br['q_start_op'], np.zeros(6))   # 預熱（不在控制拍內）
+                    stop_check(np.r_[np.asarray(a['q'], float)[:3], br['q_start_op']], [np.zeros(9)] * D, np.zeros(3), br['q_start_op'], np.zeros(6), np.zeros(3))   # 預熱（不在控制拍內）
                 conn.send(('plan', ver, dict(ok=bool(pg is not None and br is not None), wall_s=round(time.perf_counter() - t0, 2), select=info, observe=binfo,
                                         pg=None if pg is None else dict(p0=pg['p0'].tolist(), d=pg['d'].tolist(), n=pg['n'].tolist(), yaw=pg['yaw'], standoff=pg['standoff'], along=pg['along']),
                                         br=None if br is None else dict(q_start_op=br['q_start_op'].tolist(), alongs=[float(br['alongs'][0]), float(br['alongs'][1]), float(br['alongs'][-1])], sigma_min=br['sigma_min'], min_clear=br['min_clear'],
@@ -114,13 +143,13 @@ def worker(conn):
                 if a['mode'] == 'PREP':
                     dcs, di = FR.track_start_decision(q, bp + [rel] * NPH, pg, q[3:], br, PHYS)
                     out['decision'] = (dcs, di)
-                    out['stop'] = stop_check(q, pipe, rel, s, np.asarray(a['ua_cand'], float))
+                    out['stop'] = stop_check(q, pipe, rel, s, np.asarray(a['ua_cand'], float), np.asarray(a['T_mo'], float))
                 if a['mode'] == 'TRACK':
                     trk = st['trk']
                     o = trk.step(q, bp, rel, s, s_end, br['T_target'], trk.q_prev if trk.q_prev is not None else q[3:])
-                    out['track'] = dict(ok=o['ok'], why=o.get('why'), u=[float(x) for x in o['u']], err=o.get('track_err'), clipped=o.get('clipped'), sigma=o.get('sigma'))
+                    out['track'] = dict(ok=o['ok'], why=o.get('why'), u=[float(x) for x in o['u']], err=o.get('track_err'), err_pred=o.get('track_err_pred'), clipped=o.get('clipped'), sigma=o.get('sigma'))
                     if o['ok']:
-                        out['stop'] = stop_check(q, pipe, rel, s, np.asarray(o['u'], float))
+                        out['stop'] = stop_check(q, pipe, rel, s, np.asarray(o['u'], float), np.asarray(a['T_mo'], float))
                     if a.get('judge'):
                         j = {}
                         for nm, tobs in (('real_image_at_start', a['t_img']), ('synthetic_fresh_stamp', a['t'] - 0.05)):
@@ -130,7 +159,8 @@ def worker(conn):
                             j[nm] = why
                         out['judge'] = j
                 if a['mode'] in ('PREP', 'TRACK') or a.get('want_clear'):
-                    cl = clear_fn(q)
+                    T_mo_ = np.asarray(a['T_mo'], float)
+                    cl = W.clear_door(np.r_[to_map(q, T_mo_), 0.0], _T3(T_mo_) @ T_est)
                     out['clear'] = {k_: float(cl[k_]) for k_ in ('env', 'base', 'self')}
                 conn.send(('tick', ver, out))
         except Exception as e:                                        # noqa: BLE001
@@ -141,7 +171,7 @@ def main():
     out = sys.argv[1]
     ctx = mp.get_context('fork')
     pc, cc = ctx.Pipe()
-    wp = ctx.Process(target=worker, args=(cc,), daemon=True)
+    wp = ctx.Process(target=worker, args=(cc,), daemon=False)          # 非 daemon：它要再開平行掃掠池；以 PDEATHSIG 跟著父程序結束
     wp.start()                                                       # 先 fork（之後才匯入 rclpy）
     import numpy as np
     import rclpy
@@ -180,6 +210,7 @@ def main():
             self.tfb = Buffer(); self.tfl = TransformListener(self.tfb, self)
             self.ver, self.stale, self.T_mo_pub, self.path_odom, self.plan_stamp, self.ack, self.t_shadow, self.mrg_t = 0, 0, None, None, None, None, None, None
             self.anchor = None
+            self.tf_stamp, self.v_last = {}, np.zeros(2)
             self.plan, self.plan_req_t, self.plan_ready_t, self.pending = None, None, None, None
             self.gm, self.t_goal, self.t_prep0, self.s_prep0, self.u_arm, self.u_arm_prev = None, None, None, None, np.zeros(6), np.zeros(6)
             self.q_prev, self.t_stopcheck, self.n_fwd, self.no_reach = None, None, dict(NAV=0, MERGE=0, dropped=0), None
@@ -203,6 +234,7 @@ def main():
             except Exception:                                         # noqa: BLE001
                 return None
             o = tr.transform.rotation
+            self.tf_stamp[child] = tr.header.stamp.sec + tr.header.stamp.nanosec * 1e-9
             return np.array([tr.transform.translation.x, tr.transform.translation.y, math.atan2(2 * (o.w * o.z + o.x * o.y), 1 - 2 * (o.y * o.y + o.z * o.z))])
 
         def ask(self, op, a, timeout):
@@ -308,7 +340,7 @@ def main():
             q = np.r_[T_ob, tr['q'][3:]]                                # 控制用位姿＝里程座標（TF odom→base_footprint）；手臂＝驅動端讀回。真值底盤位姿只記錄，不進任何判斷
             self.p_act.publish(Bool(data=self.owner == 'MERGE'))
             if self.t_goal is None:                                   # 起點＝影像擷取同刻（乾跑設定）：把手估計以同刻里程位姿轉入里程座標；粗目標立即送出；背景開始搜尋
-                tag, res = self.ask('anchor', dict(T_odom_base=_T3(T_ob).tolist(), T_truth_base=_T3(tr['q'][:3]).tolist()), 10.0)
+                tag, res = self.ask('anchor', dict(T_odom_base=_T3(T_ob).tolist(), T_truth_base=_T3(tr['q'][:3]).tolist(), T_mo=T_mo.tolist()), 10.0)
                 if tag != 'anchor':
                     self.global_stop('anchor_failed_global_stop', res=str(res)[:200]); raise SystemExit(1)
                 co.update(res)
@@ -344,7 +376,10 @@ def main():
             if pg is not None:
                 r = q[:2] - np.array(pg['p0'])
                 along, lat = float(-(r @ np.array(pg['d']))), float(r @ np.array(pg['n']))
-            v_meas = np.zeros(2) if self.q_prev is None else (q[:2] - self.q_prev[1][:2]) / max(t - self.q_prev[0], 1e-6)
+            ts_b = self.tf_stamp['base_footprint']                      # 速度＝帶時間戳的里程位姿差分（用 TF 自己的時間戳，不用控制拍時間；時間戳沒前進就沿用上一個值）
+            if self.q_prev is not None and ts_b - self.q_prev[0] > 1e-6:
+                self.v_last = (q[:2] - self.q_prev[1][:2]) / (ts_b - self.q_prev[0])
+            v_meas = self.v_last
             yaw_e = math.degrees(w2(q[2] - yaw_l))
             # ---- 進線路徑：影子模式（尚未取得命令權）每 0.25 s 由當下位姿重建；取得命令權後凍結，只在 map←odom 變動時以新轉換重發
             in_cap = pg is not None and CAP_ALONG[0] <= along <= CAP_ALONG[1] + 0.30 and abs(lat) <= CAP_LAT + 0.30
@@ -393,7 +428,7 @@ def main():
                 ua_cand = np.clip((s_des - tr['s_end']) / DT, -1.0, 1.0)
             if self.arm in ('PREP', 'TRACK') and not self.stop:
                 judge = self.arm == 'TRACK' and -0.05 <= along <= 0.25
-                tag, res = self.ask('tick', dict(mode=self.arm, t=t, q=q.tolist(), pipe=tr['pipe'].tolist(), rel=self.rel.tolist(), s=tr['s'].tolist(), s_end=tr['s_end'].tolist(), judge=judge, t_img=self.t_goal, v_meas=v_meas.tolist(), ua_cand=ua_cand.tolist(),
+                tag, res = self.ask('tick', dict(mode=self.arm, t=t, q=q.tolist(), pipe=tr['pipe'].tolist(), rel=self.rel.tolist(), s=tr['s'].tolist(), s_end=tr['s_end'].tolist(), judge=judge, t_img=self.t_goal, v_meas=v_meas.tolist(), ua_cand=ua_cand.tolist(), T_mo=T_mo.tolist(),
                                                   u_last=np.r_[self.rel, self.u_arm].tolist(), u_prev=np.r_[self.rel, self.u_arm_prev].tolist()), 0.045)
                 if tag != 'tick':                                     # 遲到或錯誤：本拍沒有經過核對的候選 ⇒ 不提交，走全域停止（遲到的回覆之後以版本號丟棄）
                     self.global_stop('worker_' + tag + '_global_stop', arm=self.arm, res=str(res)[:200]); res = {}
@@ -423,13 +458,15 @@ def main():
                 ua = np.zeros(6); self.p_nav.publish(Twist())
             self.u_arm_prev, self.u_arm = self.u_arm, ua
             self.p_arm.publish(Float64MultiArray(data=[float(x) for x in ua]))
-            self.q_prev = (t, q.copy())
+            if self.q_prev is None or ts_b - self.q_prev[0] > 1e-6:
+                self.q_prev = (ts_b, q.copy())
             tk = res.get('track') or {}
             cl = res.get('clear') or {}
             scm = (sc or {}).get('min_clear') or {}
             self.rows.append([t, tr['t'], *q, *tr['s'], *self.rel, *ua, *self.last['NAV'], *self.last['MERGE'], dict(NAV=0, MERGE=1)[self.owner], dict(HOLD=0, PREP=1, TRACK=2)[self.arm], float(self.stop),
                               np.nan if along is None else along, np.nan if lat is None else lat, yaw_e, tk.get('err') if tk.get('err') is not None else np.nan, tk.get('sigma') if tk.get('sigma') is not None else np.nan, float(bool(tk.get('clipped'))),
-                              cl.get('env', np.nan), cl.get('base', np.nan), cl.get('self', np.nan), *v_meas, *tr['q'][:3], *T_mo, np.nan if sc is None else float(sc['ok']), scm.get('env', np.nan), scm.get('base', np.nan), scm.get('self', np.nan), np.nan if sc is None else sc['ms']])
+                              cl.get('env', np.nan), cl.get('base', np.nan), cl.get('self', np.nan), *v_meas, *tr['q'][:3], *T_mo, np.nan if sc is None else float(sc['ok']), scm.get('env', np.nan), scm.get('base', np.nan), scm.get('self', np.nan), np.nan if sc is None else sc['ms'], tk.get('err_pred') if tk.get('err_pred') is not None else np.nan, ts_b,
+                              np.nan if sc is None else (sc['now']['all_still_s'] or np.nan), np.nan if sc is None else (sc['next']['all_still_s'] or np.nan), np.nan if sc is None else sc.get('n_eval', np.nan)])
             if res.get('judge') is not None:
                 self.sel_log.append(dict(t=round(t, 2), along=round(along, 4), lat_mm=round(lat * 1e3, 2), judge=res['judge']))
             # ---- 結束條件：進線後底盤靜止 2.5 s
@@ -444,7 +481,7 @@ def main():
 
         def save(self):
             cols = ['t', 't_world'] + [f'q{i}' for i in range(9)] + [f's{i}' for i in range(6)] + ['rel_x', 'rel_y', 'rel_w'] + [f'ua{i}' for i in range(6)] + ['nav_x', 'nav_y', 'nav_w', 'mrg_x', 'mrg_y', 'mrg_w', 'base_owner(0NAV,1MERGE)', 'arm(0HOLD,1PREP,2TRACK)', 'stop',
-                                                                                                           'along', 'lat', 'yaw_err_deg', 'arm_track_err', 'sigma', 'clipped', 'clear_env', 'clear_base', 'clear_self', 'vx_meas', 'vy_meas', 'truth_x', 'truth_y', 'truth_yaw', 'mo_x', 'mo_y', 'mo_yaw', 'stop_ok', 'stop_env', 'stop_base', 'stop_self', 'stop_ms']
+                                                                                                           'along', 'lat', 'yaw_err_deg', 'arm_track_err', 'sigma', 'clipped', 'clear_env', 'clear_base', 'clear_self', 'vx_meas', 'vy_meas', 'truth_x', 'truth_y', 'truth_yaw', 'mo_x', 'mo_y', 'mo_yaw', 'stop_ok', 'stop_env', 'stop_base', 'stop_self', 'stop_ms', 'arm_track_err_pred', 'tf_stamp_base', 'stop_now_all_still_s', 'stop_next_all_still_s', 'stop_n_samples']
             np.savez_compressed(out + '_merge.npz', R=np.array(self.rows, float), cols=np.array(cols))
             json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
 

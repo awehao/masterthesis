@@ -4,6 +4,8 @@
   尚未取得命令權（影子模式）時，每收到一筆實際放行命令就把控制器的「上一命令」xi_prev 設成它：
   取得命令權後第一拍的求解因此從當下實際放行的命令出發（加速度限制與命令變化都以它為基準），不是從零。
   取得命令權後不再覆寫，xi_prev 回到控制器自己的輸出（原行為）。"""
+import math
+
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
@@ -17,6 +19,13 @@ class GM(GMPCNode):
         self._m_active, self._m_seed = False, 0
         self.create_subscription(Twist, '/cmd_vel', self._m_rel, 20)
         self.create_subscription(Bool, '/merge/active', self._m_act, 10)
+
+    def _plan_cb(self, msg):
+        """位置、朝向、轉換版本一起生效：路徑每個點帶 map 座標下的通過線朝向；收到路徑時把固定朝向參考設成它（原節點優先採 heading_fixed，不採路徑姿態）。"""
+        super()._plan_cb(msg)
+        if len(msg.poses):
+            o = msg.poses[0].pose.orientation
+            self.heading_fixed = float(math.atan2(2.0 * (o.w * o.z + o.x * o.y), 1.0 - 2.0 * (o.y * o.y + o.z * o.z)))
 
     def _m_act(self, m):
         if m.data and not self._m_active:

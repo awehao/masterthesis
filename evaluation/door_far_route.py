@@ -132,10 +132,23 @@ class ArmPreTracker:
         clipped = bool(np.abs(u_c - u).max() > 1e-9)
         self.n_clip += int(clipped)
         self.q_prev, self.u_prev = q1.copy(), u_c.copy()
-        err = float(np.abs(q1 - np.asarray(q[3:], float)).max())
-        self.lag_max = max(self.lag_max, err)
-        self.ready = (not clipped) and err <= 3 * FL.ARM_TRACK_TOL
-        return dict(ok=True, u=u_c, q1=q1, clipped=clipped, sigma=float(sm), track_err=err)
+        # 誤差分列（Codex 20261116：q1 是約 0.13 s 後的構型，不能直接和現在的實測比）：
+        #   track_err      ＝現在實測關節 對 現在底盤位姿下的目標 IK 解（交接判定用的量，同 FL.ARM_TRACK_TOL 的定義）
+        #   track_err_pred ＝生效時刻的預測關節（設定點沿在途命令走完＋本拍命令一拍、關節一階模型）對 q1
+        qn, rn, _ = DFK.ik_closure_fc(T_target, np.asarray(q[:3], float), np.asarray(q[3:], float))
+        err = float(np.abs(qn - np.asarray(q[3:], float)).max()) if (rn < 1e-6 and np.isfinite(qn).all()) else float('nan')
+        a_, sp_, al_ = np.asarray(q[3:], float).copy(), np.asarray(s_arm, float).copy(), self.phys / self.tau
+        n_p = max(len(base_pipe), 1)
+        dsp = (np.asarray(s_pipe_end, float) - sp_) / n_p
+        for _ in range(n_p):
+            sp_ = sp_ + dsp; a_ = a_ + al_ * (sp_ - a_)
+        for _ in range(self.nph):
+            sp_ = sp_ + self.phys * u_c; a_ = a_ + al_ * (sp_ - a_)
+        err_pred = float(np.abs(a_ - q1).max())
+        if np.isfinite(err):
+            self.lag_max = max(self.lag_max, err)
+        self.ready = (not clipped) and np.isfinite(err) and err <= 3 * FL.ARM_TRACK_TOL
+        return dict(ok=True, u=u_c, q1=q1, clipped=clipped, sigma=float(sm), track_err=err, track_err_pred=err_pred)
 
 
 def merge_plan(pg):

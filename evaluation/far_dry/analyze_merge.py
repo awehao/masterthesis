@@ -38,7 +38,7 @@ if 'truth_x' in c and an is not None:
     out['line_tracking']['tol'] = dict(lateral_mm=10, yaw_deg=1.0)
     out['map_odom'] = dict(at_anchor=an['map_odom'], final=[round(float(x), 4) for x in R[-1, i('mo_x'):i('mo_x') + 3]], max_abs_xy_mm=round(float(np.abs(R[:, i('mo_x'):i('mo_x') + 2]).max()) * 1e3, 1), n_path_publishes=J.get('n_path_publishes'), note='進線期間 map←odom 持續變動；通過線保存在里程座標，變動超過 2 mm／0.1° 就以新轉換重發路徑')
     out['stop_precheck'] = {nm: dict(n=int(np.isfinite(R[m_, i('stop_ok')]).sum()), all_ok=bool(np.nanmin(R[m_, i('stop_ok')]) == 1), min_clear=dict(env=round(float(np.nanmin(R[m_, i('stop_env')])), 4), base=round(float(np.nanmin(R[m_, i('stop_base')])), 4), self=round(float(np.nanmin(R[m_, i('stop_self')])), 4)),
-                                     ms_p50=round(float(np.nanmedian(R[m_, i('stop_ms')])), 1), ms_max=round(float(np.nanmax(R[m_, i('stop_ms')])), 1)) for nm, m_ in (('prep', arm_ == 1), ('track', arm_ == 2)) if m_.any()}
+                                     ms_p50=round(float(np.nanmedian(R[m_, i('stop_ms')])), 1), ms_max=round(float(np.nanmax(R[m_, i('stop_ms')])), 1), n_eval_max=None if 'stop_n_samples' not in c else float(np.nanmax(R[m_, i('stop_n_samples')])), modes='now（本拍起送零）＋next（提交候選一拍後送零）', sample_rule='底盤 >5 mm 或關節 >0.01 rad 取一點；相鄰樣本間位移上界約 12.5 mm（未加進門檻）', frame='地圖座標（當下 map←odom）') for nm, m_ in (('prep', arm_ == 1), ('track', arm_ == 2)) if m_.any()}
     out['worker'] = dict(stale_replies_dropped=J.get('stale_replies_dropped'), switch_wait_ticks=J.get('switch_wait_ticks'))
 try:
     DG = [json.loads(x) for x in open(os.path.join(D, PF + '.merge_diag_v2.txt')) if x.strip().startswith('{')]
@@ -48,7 +48,9 @@ except Exception as e:                                                # noqa: BL
     out['merge_gmpc'] = dict(error=repr(e)[:120])
 # 手臂
 arm = R[:, i('arm(0HOLD,1PREP,2TRACK)')]
-out['arm'] = dict(prep_ticks=int((arm == 1).sum()), track_ticks=int((arm == 2).sum()), track_err_max=None if not (arm == 2).any() else round(float(np.nanmax(R[arm == 2, i('arm_track_err')])), 4), clear_min_during_arm_motion={k_: (None if not np.isfinite(R[arm > 0, i('clear_' + k_)]).any() else round(float(np.nanmin(R[arm > 0, i('clear_' + k_)])), 4)) for k_ in ('env', 'base', 'self')})
+_tm = (arm == 2) & (R[:, i('stop')] == 0)
+out['arm'] = dict(prep_ticks=int((arm == 1).sum()), track_ticks=int(_tm.sum()), track_err_now_max=None if not _tm.any() else round(float(np.nanmax(R[_tm, i('arm_track_err')])), 4), track_err_pred_max=None if not _tm.any() or 'arm_track_err_pred' not in c else round(float(np.nanmax(R[_tm, i('arm_track_err_pred')])), 4),
+                  track_err_note='now＝現在實測對現在底盤位姿下的目標解（交接用，容許 0.01 rad）；pred＝生效時刻預測關節對生效時刻目標解', clear_min_during_arm_motion={k_: (None if not np.isfinite(R[arm > 0, i('clear_' + k_)]).any() else round(float(np.nanmin(R[arm > 0, i('clear_' + k_)])), 4)) for k_ in ('env', 'base', 'self')})
 from collections import Counter
 def _reasons(key):
     cn = Counter()
@@ -79,7 +81,8 @@ if stop_ev:
     cl = [Wb.clear_door(np.r_[S[j, 1:10], 0.0], T_est) for j in range(0, min(n_end, len(S)), 2)]
     mc = {k_: round(float(min(c_[k_] for c_ in cl)), 4) for k_ in ('env', 'base', 'self')}
     LO, HI = np.asarray(G.XO.LITE6_SAFE.lower, float) + 0.05, np.asarray(G.XO.LITE6_SAFE.upper, float) - 0.05
-    out['stop_check'] = dict(trigger=stop_ev[0], t_to_still_s=None if k_still is None else round(k_still * 0.01, 2), distance_m=round(float(np.linalg.norm(S[min(n_end, len(S) - 1), 1:3] - S[0, 1:3])), 4), speed_at_trigger=round(float(sp[0]), 4), decel_max=round(float(acc.max()), 2), accel_limit_released_chain='平滑器／GUARD 的既有上限（未改）',
+    k_arm = [j for j in range(len(arm_rate)) if j >= (k_still or 0) and arm_rate[j:j + 20].max() < 1e-3]
+    out['stop_check'] = dict(trigger=stop_ev[0], base_stop_time_s=None if k_still is None else round(k_still * 0.01, 2), whole_robot_settle_time_s=None if not k_arm else round(k_arm[0] * 0.01, 2), settle_rule='底盤靜止且手臂各關節速率連續 0.2 s <1e-3 rad/s', distance_m=round(float(np.linalg.norm(S[min(n_end, len(S) - 1), 1:3] - S[0, 1:3])), 4), speed_at_trigger=round(float(sp[0]), 4), decel_max=round(float(acc.max()), 2), accel_limit_released_chain='平滑器／GUARD 的既有上限（未改）',
                              arm_rate_max_during_stop=round(float(arm_rate[:n_end].max()), 4), arm_setpoint_rate_max=round(float(sp_rate[:n_end].max()), 4), arm_rate_after_still_max=None if k_still is None else round(float(arm_rate[k_still:k_still + 100].max()), 5),
                              joints_within_limits=bool(np.all(S[:n_end, 4:10] >= LO) and np.all(S[:n_end, 4:10] <= HI)), min_clear_during_stop=mc, clear_ok=bool(all(mc[k_] >= Wb.THR[k_] for k_ in mc)), n_clear_samples=len(cl),
                              final=dict(along=ev.get('finished_base_stopped', {}).get('along'), lat_mm=ev.get('finished_base_stopped', {}).get('lat_mm')), note='事後重算（執行時另有每拍提交前停止核對 stop_precheck）；淨空以把手估計＋已知門幾何計算')
