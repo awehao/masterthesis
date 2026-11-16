@@ -15,9 +15,10 @@ P = json.load(open(sys.argv[2])); path = np.array([p[:2] for p in P[0]['plan']],
 bp = BP.BPlanner(TS.T_H, TS.d, TS.n_, TS.yaw, TS.Kc)
 bp._alpha = np.asarray(ident['alpha'], float)
 bp.v_tr, bp.a_dec = float(os.environ.get('V_TR', '0.10')), float(os.environ.get('A_DEC', '0.20'))
-pl = bp.plan(path, Q_NAV)
+pl = bp.plan(path, Q_NAV, require_cover=os.environ.get('REQUIRE_COVER', '1') == '1')
+full = dict(pl); json.dump(full, open(sys.argv[3].replace('.json', '_full.json'), 'w'), default=lambda o: o.tolist() if hasattr(o, 'tolist') else str(o))
 keep = {k: v for k, v in pl.items() if k not in ('path_door', 'q_pre')}
 keep['obs'] = [{k: v for k, v in f.items() if k != 'q'} for f in pl.get('obs', [])]
 json.dump(keep, open(sys.argv[3], 'w'), ensure_ascii=False, indent=1, default=str)
-print(json.dumps({k: keep.get(k) for k in ('why', 'a_w', 'a_t0', 'T_tr', 'v_tr', 'a_dec', 'last_valid_t', 'last_covered_t', 'last_covered_frame', 'blind_s', 'goal_xy')}, ensure_ascii=False, default=str))
+print(json.dumps({k: keep.get(k) for k in ('why', 'a_w', 'a_t0', 'T_tr', 'v_tr', 'a_dec', 'last_valid_t', 'last_covered_t', 'last_covered_frame', 'blind_s', 'blind_def', 'goal_xy')}, ensure_ascii=False, default=str))
 print('obs', [(f['a'], f['range'], f['oblique'], f['covered']) for f in keep['obs']])

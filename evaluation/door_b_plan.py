@@ -28,7 +28,8 @@ Rg, T_HG, a_H = G.PG.baseline_reference()
 DS_SEED = np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157])
 OBS_P = [(rho, e, az) for rho in (0.35, 0.40, 0.45) for e in (0, 10, 20, 30) for az in range(-80, 81, 10)]
 D_RNG, EDGE = (0.25, 1.2), 40                                        # 視覺管線的偵測距離與影像邊距（m8_door_reaim_online_r3 的 D_RNG／EDGE）
-ENV_COVER = dict(range=(0.35, 0.50), oblique_max=13.0)               # 既有 Isaac 實際影格涵蓋的觀測包絡（results/motm_b/vis_error_by_range.json：0.35–0.5 m、斜視 6.2–12.8°，n＝101）
+ENV_COVER = dict(range=(0.364, 0.397), oblique_max=14.2)             # 既有 Isaac 近距「實際估計有效」影格的觀測包絡（results/motm_b/vis_frames_all.json：12 趟 3737 格、近距有效 n 269）；只代表這批資料與分類方法
+HALF_BAR = 0.100                                                     # 資產橫桿長 200 mm
 T_READY = 2.05
 
 
@@ -38,7 +39,7 @@ class BPlanner:
         self.h_xy, self.H = self.T_H[:2, 3], self.T_H[:3, 3]
         self.a_n = self.T_H[:3, :3] @ np.asarray(a_H, float)
         self.Kc = np.asarray(Kc, float)
-        self.ENDS = [self.H, self.H + self.T_H[:3, 0] * 0.06, self.H - self.T_H[:3, 0] * 0.06]
+        self.ENDS = [self.H, self.H + self.T_H[:3, 0] * HALF_BAR, self.H - self.T_H[:3, 0] * HALF_BAR]
         self.V, self.goal_tol, self.t_prep, self.margin = float(v_grasp), float(goal_tol), float(t_prep), float(margin)
         self.SH = SHG.ShieldGeom()
         W.set_model(phi0=0.0, finger_q=G.XO.FINGER_OPEN)
@@ -75,7 +76,7 @@ class BPlanner:
         return True
 
     def frame(self, q9, nrm=None):
-        """視覺管線會產生有效估計的影格條件：把手中心與兩端在影像內（邊距 EDGE）、距離在 D_RNG。回 (距離, 斜視角°) 或 None。斜視角＝相機→把手方向與門面法向夾角。"""
+        """**幾何篩選**（不是偵測器條件；實際有效只能由影格得到）：把手中心與兩端（±100 mm）在影像內（邊距 EDGE）、距離在 D_RNG（觀察幾何篩選門檻）。回 (距離, 斜視角°) 或 None。斜視角＝相機→把手方向與門面法向夾角。"""
         Tc = K.fk(q9, W0.OPT); Ti = np.linalg.inv(Tc); rng = None
         for j, p in enumerate(self.ENDS):
             pc = (Ti @ np.r_[p, 1.0])[:3]
@@ -151,7 +152,8 @@ class BPlanner:
         return True
 
     # ---- 主函式
-    def plan(self, path_xy, q_now, a_w_cands=(-0.08, -0.10, -0.12), v_arm=1.0, a_arm=19.984, a_body=1.0):
+    def plan(self, path_xy, q_now, a_w_cands=(-0.08, -0.10, -0.12), v_arm=1.0, a_arm=19.984, a_body=1.0, require_cover=True):
+        """require_cover＝False（無接觸取像趟）：不要求過渡中有包絡內影格，改取「最後幾何篩選通過 → READY」最短者；盲段只是幾何估計，實際以取像趟影格為準。"""
         path = np.asarray(path_xy, float)
         AD = np.array([self.to_door(p) for p in path])
         if len(AD) < 3:
@@ -178,7 +180,10 @@ class BPlanner:
             self.T_TC = np.linalg.inv(K.fk(q9, 'link_tcp')) @ K.fk(q9, W0.OPT)
         # 觀察族
         fam, seed = [], None
-        A_SEQ = np.round(np.arange(0.04, 0.601, 0.02), 3)                # 由近端往遠端延拓：近端先找正面（落在既有影格包絡內）的視角，再往遠端連續（遠端斜視可較大）
+        if require_cover:
+            A_SEQ = np.round(np.arange(0.04, 0.601, 0.02), 3)            # 由近端往遠端延拓：近端先找正面（落在既有影格包絡內）的視角，再往遠端連續（遠端斜視可較大）
+        else:
+            A_SEQ = np.round(np.arange(0.60, 0.039, -0.02), 3)           # 取像模式：同 door_obs_candidate 由遠到近延拓、以連續性為主（候選 1 的分支）
         for a in A_SEQ:
             b = self.base(float(a), sb)
             best = None
@@ -192,7 +197,8 @@ class BPlanner:
                     fr = self.frame(np.r_[b, q]) if okc else None
                     if fr is None:
                         continue
-                    cost = (fr[1], 0.0 if seed is None else float(np.abs(q - seed).max()))   # 優先最小斜視（落在既有影格包絡），再看連續性
+                    dqs = 0.0 if seed is None else float(np.abs(q - seed).max())
+                    cost = (fr[1], dqs) if require_cover else (dqs, fr[1])   # 包絡模式：優先最小斜視；取像模式：優先連續性
                     if best is None or cost < best[0]:
                         best = (cost, q, (rho, e, az), fr)
                     break
@@ -202,7 +208,8 @@ class BPlanner:
                 continue
             seed = best[1]
             fam.append(dict(a=float(a), q=best[1], par=best[2], range=round(best[3][0], 3), oblique=round(best[3][1], 1), covered=self.covered(best[3])))
-        fam = fam[::-1]                                                  # 依行進順序（a 由大到小）
+        if require_cover:
+            fam = fam[::-1]                                              # 依行進順序（a 由大到小）
         if not fam:
             out['why'] = 'no_observation_family'
             return out
@@ -218,6 +225,8 @@ class BPlanner:
             if r is None:
                 continue
             t_cov = r['t_cov'] if r['t_cov'] is not None else (0.0 if f['covered'] else None)
+            if not require_cover:
+                t_cov = r['t_valid'] if r['t_valid'] is not None else 0.0
             if t_cov is None:
                 continue                                              # 過渡起點與過渡中都沒有落在包絡內的有效影格 ⇒ 不採（不能外推）
             blind = (T - t_cov) + T_READY + 0.05
@@ -228,7 +237,7 @@ class BPlanner:
             return out
         f, T, r, t_cov = best[1], best[2], best[3], best[4]
         out.update(a_t0=f['a'], T_tr=round(T, 3), last_valid_t=r['t_valid'], last_covered_t=round(t_cov, 3), last_covered_frame=r['fr_cov'] or [f['range'], f['oblique']],
-                   blind_s=round(best[0], 3), blind_def='最後一格落在既有影格包絡內的有效影格 → READY（抓持排程 2.05 s＋交接 1 拍；插入只在排程內）', v_tr=self.v_tr, a_dec=self.a_dec)
+                   blind_s=round(best[0], 3), blind_def=('最後一格落在既有影格包絡內的幾何篩選影格 → READY' if require_cover else '最後一格幾何篩選通過（非實際有效）→ READY；取像模式') + '（抓持排程 2.05 s＋交接 1 拍；插入只在排程內）', v_tr=self.v_tr, a_dec=self.a_dec, require_cover=require_cover)
         # 導航遠端目標：沿路徑，接手點後弧長 ≥ 到達容差＋V·t_prep＋餘裕（取路徑點）
         need = self.goal_tol + self.V * self.t_prep + self.margin
         i_w = int(np.argmin(np.abs(AD[:, 0] - a_w) + 10 * (~line)))
@@ -315,3 +324,21 @@ class BPlanner:
             if not ok2:
                 return None
         return dict(t_valid=None if t_valid is None else round(t_valid, 3), t_cov=t_cov, fr_cov=fr_cov)
+
+
+    def reference(self, plan, a_meas, t_tr=None):
+        """執行參考：觀察段（底盤實測沿門座標 a_meas ≥ a_t0）沿觀察族依 a 線性內插；過渡段（已啟動，t_tr＝自過渡起點的時間）照最小急動 q(t)，
+        底盤沿門座標參考 a(t) 由速度剖面給。回 (q_ref, a_ref 或 None, 段名)。"""
+        fam = plan['obs']
+        if t_tr is None:
+            A = np.array([f['a'] for f in fam]); Q = np.array([f['q'] for f in fam])
+            o = np.argsort(A); A, Q = A[o], Q[o]
+            a_c = float(np.clip(a_meas, A[0], A[-1]))
+            q = np.array([np.interp(a_c, A, Q[:, j]) for j in range(6)])
+            return q, None, 'observe'
+        T = float(plan['T_tr'])
+        prof = self.speed_profile(float(plan['a_t0']), float(plan['a_w']))
+        u = min(max(t_tr / T, 0.0), 1.0)
+        s = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5
+        qa = np.array([f['q'] for f in fam if abs(f['a'] - plan['a_t0']) < 1e-9][0]); qb = np.asarray(plan['q_pre'], float)
+        return qa + s * (qb - qa), prof[1](min(t_tr, T)), ('transition' if t_tr < T else 'pregrasp_reached')
