@@ -8,7 +8,15 @@
     新框比當下命令緊時，邊界以各軸加速度上限 a_max 由當下命令漸收到新框（提前減速）；漸收所需時間 > t_eff_s ⇒ 拒收該條件（不放寬、不硬切）。
   - 版本須遞增；任務進行中條件逾時（valid_s）或收到 {lost:true} ⇒ **不回一般導航**：速度框以 a_max 漸收到零（停下）並發 /task/status=lost；
     只有收到 {clear:true}（任務正常結束、交權後或監督節點撤銷）才回原行為。
-  - /task/conditions_ack：每個條件的採用／拒收與原因；/task/status：idle／task／lost。"""
+  - /task/conditions_ack：每個條件的採用／拒收與原因；/task/status：idle／task／lost。
+區域模式（主線 B；Codex 20261117_044741：操作端給「可接任務的狀態集合」，導航自己選點、規劃與局部收斂）：
+  條件可帶 region＝{id, line:[[x0,y0],[x1,y1]]（走廊中心線，進入端→離開端，map）, half_width, extend}。導航：
+  - 選進入點 E：走廊上「目前位置投影＋L_CONV」處，但不晚於操作端給的最晚進入點 enter_by−L_CONV（不早於走廊起點、不晚於離開端前 0.10 m）；已過 enter_by 仍未在區內 ⇒ 狀態標 late；
+  - 向同一 planner_server（ComputePathToPose，GridBased）要 目前位置→E 的 Smac 路徑，每 1 s 重算，直到已收斂（側向誤差 ≤ 2×half_width 且投影已過 E）；
+  - 參考路徑＝Smac(→E)＋走廊 E→離開端＋沿走廊延伸 extend（一般 0.30 m 到點容差不動；延伸只為了任務模式不在走廊內因到點容差提前停）；
+    區域模式期間外部 /plan 只暫存不採用，撤銷區域後恢復最新外部路徑。
+  - /task/region_status：側向誤差、沿走廊位置、是否在區域內（|側向| ≤ half_width）、階段（approach／inside）。
+  區域只改參考路徑；CBF、Shield、GUARD、速度限制與求解器不變。"""
 import json
 import math
 
@@ -31,6 +39,43 @@ class GMPCTaskNode(GMPCNode):
         self.p_t_ack = self.create_publisher(String, '/task/conditions_ack', 10)
         self.p_t_status = self.create_publisher(String, '/task/status', 10)
         self.create_timer(0.05, self._t_tick)
+        # 區域模式
+        from nav_msgs.msg import Path as _Path
+        from geometry_msgs.msg import PoseStamped as _PS
+        from rclpy.action import ActionClient
+        from nav2_msgs.action import ComputePathToPose
+        self._t_Path, self._t_PS, self._t_CP = _Path, _PS, ComputePathToPose
+        self._t_cp = ActionClient(self, ComputePathToPose, '/compute_path_to_pose')
+        self._t_region, self._t_reg_busy, self._t_reg_t, self._t_reg_leg, self._t_ext_plan, self._t_internal = None, False, -9.0, None, None, False
+        self._t_reg_pub = self.create_publisher(String, '/task/region_status', 10)
+        self.create_timer(0.1, self._t_region_tick)
+        # 預測發布（主線 B 操作端用；只讀求解結果、不改任何控制決策）：ξ_k＝ξ_ref,k＋δξ_k（夾在速度上下限），自 X_now 以 SE(2) 指數積分 N 步。
+        from std_msgs.msg import Float64MultiArray
+        self._t_pred_pub = self.create_publisher(Float64MultiArray, '/task/gmpc_pred', 10)
+        self._t_F64 = Float64MultiArray
+        _orig_solve = self.mpc.solve
+
+        def _solve_pub(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles=None, _o=_orig_solve):
+            r = _o(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles=obstacles)
+            try:
+                self._t_pub_pred(np.asarray(X_now, float), np.asarray(xi_ref_win, float), np.asarray(r.delta_xi_all, float), np.asarray(r.u_opt, float))
+            except Exception:                                         # noqa: BLE001
+                pass
+            return r
+        self.mpc.solve = _solve_pub
+
+    def _t_pub_pred(self, X, xi_ref, dxi, u0):
+        cfg = self._cfg
+        dt = float(cfg.dt)
+        lo, hi = np.asarray(cfg.u_min, float), np.asarray(cfg.u_max, float)
+        x, y, th = float(X[0, 2]), float(X[1, 2]), math.atan2(float(X[1, 0]), float(X[0, 0]))
+        out = [self._t_now(), dt, float(len(dxi)), x, y, th]
+        for k in range(len(dxi)):
+            v = u0 if k == 0 else np.clip(xi_ref[k] + dxi[k], lo, hi)
+            c, s_ = math.cos(th), math.sin(th)
+            x += dt * (c * v[0] - s_ * v[1]); y += dt * (s_ * v[0] + c * v[1]); th += dt * v[2]
+            out += [x, y, th]
+        self._t_pred_pub.publish(self._t_F64(data=[float(z) for z in out]))
 
     # ---- 工具
     def _t_now(self):
@@ -59,6 +104,7 @@ class GMPCTaskNode(GMPCNode):
         except Exception:                                             # noqa: BLE001
             return
         if d.get('clear'):
+            self._t_region_off('task_clear')
             self._t_mode, self._t_cond, self._t_until, self._t_box_tgt, self._t_heading = 'idle', None, None, None, None
             self._t_box_eff = None
             self._t_ack(True, 'clear')
@@ -93,7 +139,17 @@ class GMPCTaskNode(GMPCNode):
         if self._t_box_eff is None:
             self._t_box_eff = np.c_[np.maximum(np.minimum(u, tgt[:, 0]), base[:, 0]), np.minimum(np.maximum(u, tgt[:, 1]), base[:, 1])]
         self._t_mode = 'task'
-        self._t_ack(True, 'conditions', heading=round(self._t_heading, 5), box=tgt.round(4).tolist(), need_s=round(need, 3))
+        rg = d.get('region')
+        if rg is not None:
+            L = np.asarray(rg.get('line'), float).reshape(2, 2)
+            if self._t_region is None or self._t_region['id'] != rg.get('id'):
+                ph = 'approach' if self._t_region is None else self._t_region['phase']
+                self._t_region = dict(id=rg.get('id'), p0=L[0], p1=L[1], w=float(rg.get('half_width', 0.02)), ext=float(rg.get('extend', 0.40)), enter_by=float(rg.get('enter_by', 1e9)),
+                                      phase=ph, n_plan=0, t_set=self._t_now())
+                self._t_reg_t = -9.0
+        elif self._t_region is not None and d.get('region_clear'):
+            self._t_region_off('cleared')
+        self._t_ack(True, 'conditions', heading=round(self._t_heading, 5), box=tgt.round(4).tolist(), need_s=round(need, 3), region=None if self._t_region is None else self._t_region['id'])
         self._t_status()
 
     def _t_lose(self, why):
@@ -139,6 +195,114 @@ class GMPCTaskNode(GMPCNode):
             self._yaw_ref_t = now_s
             return self._yaw_ref
         return super()._desired_yaw(path_xyth, robot_xyth, now_s)
+
+    # ---- 區域模式
+    L_CONV = 0.15
+
+    def _plan_cb(self, msg):
+        if self._t_region is not None and not self._t_internal:
+            self._t_ext_plan = msg                                     # 區域模式：外部路徑只暫存
+            return
+        return super()._plan_cb(msg)
+
+    def _t_region_off(self, why):
+        if self._t_region is None:
+            return
+        self._t_region = None
+        if self._t_ext_plan is not None:
+            self._t_internal = True
+            try:
+                super()._plan_cb(self._t_ext_plan)
+            finally:
+                self._t_internal = False
+        self.get_logger().info('[task] region off: ' + why)
+
+    def _t_robot_map(self):
+        try:
+            tr = self.tf_buffer.lookup_transform('map', 'base_footprint', rclpy.time.Time())
+        except Exception:                                             # noqa: BLE001
+            return None
+        o = tr.transform.rotation
+        return np.array([tr.transform.translation.x, tr.transform.translation.y, math.atan2(2 * (o.w * o.z + o.x * o.y), 1 - 2 * (o.y * o.y + o.z * o.z))])
+
+    def _t_region_geom(self, xy):
+        R = self._t_region
+        u = R['p1'] - R['p0']; Lr = float(np.linalg.norm(u)); u = u / Lr
+        rel = np.asarray(xy, float) - R['p0']
+        s_ = float(rel @ u); lat = float(u[0] * rel[1] - u[1] * rel[0])
+        return s_, lat, Lr, u
+
+    def _t_pose(self, xy, yaw):
+        m = self._t_PS(); m.header.frame_id = 'map'; m.header.stamp = self.get_clock().now().to_msg()
+        m.pose.position.x, m.pose.position.y = float(xy[0]), float(xy[1]); m.pose.orientation.z, m.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+        return m
+
+    def _t_region_tick(self):
+        R = self._t_region
+        if R is None:
+            return
+        rb = self._t_robot_map()
+        if rb is None:
+            return
+        s_, lat, Lr, u = self._t_region_geom(rb[:2])
+        inside = abs(lat) <= R['w'] and 0.0 <= s_ <= Lr
+        if R['phase'] == 'approach' and abs(lat) <= 2 * R['w'] and s_ >= R.get('s_E', 0.0) - 0.05:
+            R['phase'] = 'inside'
+            self._t_reg_t = -9.0
+        self._t_reg_pub.publish(String(data=json.dumps(dict(id=R['id'], t=round(self._t_now(), 3), s=round(s_, 4), lat=round(lat, 4), w=R['w'], inside=bool(inside), phase=R['phase'], n_plan=R['n_plan'],
+                                                            s_E=R.get('s_E'), enter_by=R['enter_by'], late=bool(s_ > R['enter_by'] and not inside)))))
+        now = self._t_now()
+        if now - self._t_reg_t < 1.0 or self._t_reg_busy:
+            return
+        self._t_reg_t = now
+        yaw_line = math.atan2(u[1], u[0])
+        if R['phase'] == 'inside':                                   # 已收斂：參考＝走廊（自目前投影起）＋延伸
+            self._t_set_ref([], max(s_, 0.0), Lr, u, yaw_line)
+            return
+        s_E = float(np.clip(min(max(s_, 0.0) + self.L_CONV, R['enter_by'] - self.L_CONV), 0.0, max(Lr - 0.10, 0.0)))   # 不晚於操作端給的最晚進入點（減收斂距離）
+        R['s_E'] = s_E
+        E = R['p0'] + s_E * u
+        gl = self._t_CP.Goal(); gl.start = self._t_pose(rb[:2], rb[2]); gl.goal = self._t_pose(E, yaw_line); gl.use_start = True; gl.planner_id = 'GridBased'
+        if not self._t_cp.server_is_ready():
+            return
+        self._t_reg_busy = True
+        fut = self._t_cp.send_goal_async(gl)
+
+        def _acc(f, s_E=s_E, yaw_line=yaw_line):
+            gh = f.result()
+            if gh is None or not gh.accepted:
+                self._t_reg_busy = False; return
+
+            def _done(r):
+                self._t_reg_busy = False
+                try:
+                    P = [(p.pose.position.x, p.pose.position.y) for p in r.result().result.path.poses]
+                except Exception:                                     # noqa: BLE001
+                    P = []
+                if len(P) >= 2 and self._t_region is not None:
+                    s2, _, L2, u2 = self._t_region_geom(self._t_region['p0'])
+                    self._t_set_ref(P, s_E, L2, u2, yaw_line)
+            gh.get_result_async().add_done_callback(_done)
+        fut.add_done_callback(_acc)
+
+    def _t_set_ref(self, P, s_from, Lr, u, yaw_line):
+        R = self._t_region
+        pts = list(P)
+        for ss in np.arange(s_from, Lr + R['ext'] + 1e-9, 0.02):
+            pts.append(tuple(R['p0'] + ss * u))
+        m = self._t_Path(); m.header.frame_id = 'map'; m.header.stamp = self.get_clock().now().to_msg()
+        for k, (x, y) in enumerate(pts):
+            x2, y2 = pts[min(k + 1, len(pts) - 1)]
+            th = math.atan2(y2 - y, x2 - x) if (x2, y2) != (x, y) else yaw_line
+            ps = self._t_PS(); ps.header = m.header; ps.pose.position.x, ps.pose.position.y = float(x), float(y)
+            ps.pose.orientation.z, ps.pose.orientation.w = math.sin(th / 2), math.cos(th / 2)
+            m.poses.append(ps)
+        self._t_internal = True
+        try:
+            super()._plan_cb(m)
+        finally:
+            self._t_internal = False
+        R['n_plan'] += 1
 
     # ---- 覆寫：控制步（求解器限制取交集，求解後還原）
     def _control_step(self):
