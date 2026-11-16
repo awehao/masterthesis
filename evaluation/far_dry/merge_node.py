@@ -104,7 +104,7 @@ def worker(conn):
     if len(cpus) >= 6:
         CPU.pin(0, cpus[0:2])                                           # 幾何工作程序與監督主程序共用前兩核（不一對一釘死：桌面程序佔到其中一核時排程器可避開；實測 Chrome 以 63% 佔住 CPU 5）
     blas_rb = CPU.blas_runtime(set_to=1)
-    pool = SWP.SweepPool(4)                                           # 建池在啟動時（不在控制拍內）
+    pool = SWP.SweepPool(int(os.environ.get('FAR_POOL_N', '4')))                                           # 建池在啟動時（不在控制拍內）
     T_est_W = T_est.copy()                                             # 歷史影像的估計（該影像自己的世界座標；含實際影像的估計誤差）
     clear_fn = lambda x: W.clear_door(np.r_[x, 0.0], T_est)            # noqa: E731
     AL = np.asarray(ident['alpha'], float)
@@ -235,7 +235,7 @@ def worker(conn):
                 return None
             h = pool.submit(T_map, W.FINGER_Q, W.PHI0, np.array([np.r_[to_map(x, T_mo), 0.0] for x in todo]))
             sp_ = [self_pairs(x) for x in todo]                        # 與池同時進行
-            outp, why, _ = pool.collect(h, max(0.005, 0.040 - (time.perf_counter() - t0)))   # 掃掠等待上限＝本次核對起算 40 ms 內（原固定 25 ms 是我自訂的子期限，乾跑多次在此逾時；整拍 45 ms 期限不變）
+            outp, why, _ = pool.collect(h, max(0.005, 0.040 - (h['t_submit'] - t0)))   # 掃掠等待上限＝本次核對起算 40 ms（collect 的期限以派工時刻起算，所以扣的是派工時刻；far_door_5 前誤扣成「現在」，實際上限只有約 36 ms）；整拍 45 ms 期限不變
             if outp is None:
                 return 'sweep_' + str(why)
             for x, o, spx in zip(todo, outp, sp_):
@@ -318,8 +318,8 @@ def worker(conn):
                     coverage='區間界（路徑長上界 L；兩端淨空較小值 − L/2 ≥ 門檻；自碰撞逐對）＋不過則加密到逐物理步', ms_traj=round((t1 - t0) * 1e3, 1), ms_eval0=round((t2 - t1) * 1e3, 1), ms_cert=round((time.perf_counter() - t2) * 1e3, 1), ms=round((time.perf_counter() - t0) * 1e3, 1))
 
     if len(cpus) >= 6:
-        for p_ in pool.procs:                                         # 掃掠池四個程序共用這組核（不一對一釘死：其中一核被外部程序佔用時排程器可避開；m27／m29 一對一釘選下出現 25 ms 掃掠逾時）
-            CPU.pin(p_.pid, cpus[2:6])
+        for p_ in pool.procs:                                         # 掃掠池程序共用 FAR_CPUS 第 3 個起的全部核（不一對一釘死：其中一核被外部程序佔用時排程器可避開）
+            CPU.pin(p_.pid, cpus[2:])
     sched = dict(far_cpus=cpus, worker_affinity=sorted(os.sched_getaffinity(0)), pool_affinity=[sorted(os.sched_getaffinity(p_.pid)) for p_ in pool.procs], blas_runtime=blas_rb, blas_all_single=CPU.blas_all_single(blas_rb) if blas_rb else '沒有載入 OpenBLAS（系統 Python 參考 BLAS）')
     conn.send(('ready', 0, dict(sched=sched, est=oinfo, capture_base_pose=[float(x) for x in np.asarray(fr['q'], float)[:3]])))
     while True:
@@ -725,12 +725,23 @@ def main():
         def _ack(self, m):
             self.ack = m.data
 
+        def _repin_after_handover(self):
+            """交權後本節點只剩命令選擇器在工作（幾何程序與掃掠池閒置）：把主程序移到導航鏈那組核，讓出抓持／開門計算用的核（只改排程）。"""
+            cp = [int(x) for x in os.environ.get('FAR_AFTER_HO_CPUS', '').split(',') if x.strip()]
+            if cp:
+                try:
+                    os.sched_setaffinity(0, set(cp))
+                except Exception as e:                                # noqa: BLE001
+                    self.repin = dict(error=repr(e)[:100]); return
+            self.repin = dict(requested=cp, readback=sorted(os.sched_getaffinity(0)))
+
         def _hoack(self, m):
             self.ho_ack = m.data                                      # 'ack:<ver>' 或 'nack:<ver>:<原因>'（執行器以當下快照試跑首拍的結果）
             if self.ho_pending is not None and self.ho_ack == 'ack:%d' % self.ho_pending and getattr(self, 'grasp_stash', None) is not None and self.owner != 'GRASP':
                 self.owner, self.t_owner_grasp = 'GRASP', self.now()
                 self.p_nav.publish(self.grasp_stash); self.n_fwd['GRASP'] += 1
                 self.grasp_stash = None
+                self._repin_after_handover()
 
         def _obs(self, m):
             d = np.array(m.data, float)                               # seq, t_obs, valid, odom_base(3), T_base_handle(16), t_publish
@@ -788,6 +799,7 @@ def main():
                 if self.ho_ack == 'ack:%d' % self.ho_pending:
                     self.owner, self.t_owner_grasp = 'GRASP', self.now()
                     self.p_nav.publish(m); self.n_fwd[src] += 1
+                    self._repin_after_handover()
                 elif self.ho_ack is None:
                     self.grasp_stash = m                               # 跨話題：首提案先於 ack 到 ⇒ 暫存最新一筆，ack 版本相符時才轉發
                 else:
@@ -889,7 +901,7 @@ def main():
                 xs = self.xstate or ''
                 if not getattr(self, 'ho_logged', False):
                     self.ho_logged = True
-                    self.event('owner_GRASP_on_first_grasp_command', t_switch=round(self.t_owner_grasp, 3), ack=self.ho_ack, request_ver=self.ho_pending)
+                    self.event('owner_GRASP_on_first_grasp_command', t_switch=round(self.t_owner_grasp, 3), ack=self.ho_ack, request_ver=self.ho_pending, repin=getattr(self, 'repin', None))
                 if xs.startswith('done') or xs.startswith('latched'):
                     self.event('executor_finished_after_handover', state=xs, forwarded=dict(self.n_fwd))
                     raise SystemExit(0)

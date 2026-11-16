@@ -27,7 +27,7 @@ set +u; source /opt/ros/jazzy/setup.bash; source install/setup.bash; set -u
 PAT="[s]can_safety_shield|[w]heel_limit_guard|[v]elocity_smoother|[g]mpc_node|[g]mpc_merge_wrap|[p]lanner_server|[w]orld_node.py|[m]erge_node.py"
 n=$(pgrep -fc "$PAT" || true)
 if [ "$n" != "0" ]; then say "已有導航／乾跑節點在跑（$n 個）⇒ 拒跑"; exit 99; fi
-say "排程：SIM_CPUS=${SIM_CPUS:-0-3,8-11} FAR_CPUS=${FAR_CPUS:-4,5,6,7,14,15} SUP_MODE=${SUP_MODE:-obs}"
+say "排程：SIM_CPUS=${SIM_CPUS:-1,2,9,10} FAR_CPUS=${FAR_CPUS:-3,11,4,5,6,7,12,13,14,15} FAR_POOL_N=${FAR_POOL_N:-8} SUP_MODE=${SUP_MODE:-fullho}"
 say "=== 遠距取像：RUN_ID=$RUN_ID START=$START STATIC_S=$STATIC_S SIM_LIMIT=$SIM_LIMIT domain=$ROS_DOMAIN_ID；凍結 $FREEZE 全部相符；機器 $(hostname)／$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)／$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
 PIDS=()
 cleanup(){
@@ -41,7 +41,9 @@ cleanup(){
 }
 trap cleanup EXIT
 # N2 排程（只改排程）：Isaac 與導航鏈在 CPU 0–3、8–11；監督節點＋幾何工作程序＋掃掠池在 4–7、14、15（12、13＝幾何工作程序與監督主程序的 SMT 同核，不分配）
-SIM_CPUS="${SIM_CPUS:-1,2,9,10}"; export FAR_CPUS="${FAR_CPUS:-4,5,6,7,14,15}"
+# r2 排程（far_door_5 後；只改排程與掃掠池程序數，樣本與覆蓋不變）：遠距前段執行器的掃掠池（4–7、12–15）與閉鏈停法程序（3、11）閒置 ⇒
+#   監督節點幾何程序＋主程序用 3、11；它的掃掠池 8 個程序用 4–7、12–15（原 4 個程序擠在 6、7、14、15＝兩顆實體核）。交權後監督主程序（只剩命令選擇器）移到導航鏈那組核。
+SIM_CPUS="${SIM_CPUS:-1,2,9,10}"; export FAR_CPUS="${FAR_CPUS:-3,11,4,5,6,7,12,13,14,15}" FAR_POOL_N="${FAR_POOL_N:-8}" FAR_AFTER_HO_CPUS="${FAR_AFTER_HO_CPUS:-1,2,9,10}"
 setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV CPU_LAYOUT=1 "$ISAAC_PY" -u evaluation/isaac_m8_house_far_door_motm.py --out "$DIR" --start "$START" --arm="$ARM" --far-limit-s "$SIM_LIMIT" > "$DIR/sim.log" 2>&1 < /dev/null &
 SIM=$!
 sleep 1

@@ -36,7 +36,7 @@ for r_ in rows:
         out_rows.append(dict(t=float(R[r_, 0]), error=str(sc)[:200])); continue
     t_ms.append(sc['ms'])
     out_rows.append(dict(t=float(R[r_, 0]), arm=int(arm[r_]), disposition=SD('tick', sc), ok=sc['ok'], why=sc.get('why'), now_ok=sc['now']['ok'], next_ok=sc['next']['ok'], settled=[sc['now']['settled'], sc['next']['settled']], coverage=[sc['now']['coverage_ok'], sc['next']['coverage_ok']],
-                         margin=sc['margin_after_interval_bound'], min_clear=sc['min_clear'], n_eval=sc['n_eval'], n_refine=sc['n_refine'], ms=sc['ms'], recorded_ok=bool(R[r_, i('stop_ok')] == 1)))
+                         margin=sc['margin_after_interval_bound'], min_clear=sc['min_clear'], n_eval=sc['n_eval'], n_refine=sc['n_refine'], ms=sc['ms'], ms_traj=sc.get('ms_traj'), ms_eval0=sc.get('ms_eval0'), ms_cert=sc.get('ms_cert'), n_samples=[sc['now']['n_samples'], sc['next']['n_samples']], recorded_ok=bool(R[r_, i('stop_ok')] == 1)))
 pc.send(None)
 from collections import Counter
 good = [o for o in out_rows if 'error' not in o]
