@@ -108,6 +108,13 @@ class World(Node):
             self.done, self.obs_seq = False, 0
             self.create_subscription(Bool, '/far/done', lambda m: setattr(self, 'done', self.done or bool(m.data)), 10)
             self.create_subscription(String, '/far/abort', lambda m: setattr(self, 'done', True), 10)   # 模擬工程中止：不再步進
+            # 交接後的安全鏈串接核對（fullho）：收到 /far/handover 後，由本節點扮演抓持控制器的底盤提案來源——等速 3 s 再以 0.5 m/s² 減速到零，
+            # 提案發到 /cmd_vel_grasp（選擇器→平滑器→Shield→GUARD），放行值以 ChainAlign 對齊後套用。手臂保持。只驗命令路徑與延遲，不是抓持。
+            sys.path.insert(0, HERE)
+            import far_chain_align as FCA
+            self.ca, self.ho, self.ho_n0, self.u_prop_hist = FCA.ChainAlign(D_STEPS, 5), None, None, []
+            self.p_grasp = self.create_publisher(Twist, '/cmd_vel_grasp', 10)
+            self.create_subscription(Float64MultiArray, '/far/handover', self._ho, 10)
         self.log = []
         self.pipe = [np.zeros(9) for _ in range(D_STEPS)]              # 命令到受控對象的 8 步在途管線（同門任務控制器的延遲模型；底盤與手臂都經過）
         self.v_world, self.wz = np.zeros(2), 0.0
@@ -116,6 +123,14 @@ class World(Node):
 
     def _cmd(self, m):
         self.cmd, self.cmd_t = np.array([m.linear.x, m.linear.y, m.angular.z]), self.t
+        if getattr(self, 'ho', None) is not None:
+            self.ca.on_release(self.n, self.cmd)
+
+    def _ho(self, m):
+        if self.ho is None:
+            self.ho = np.array(m.data, float)
+            self.ho_n0 = None
+            self.ho_u0 = self.cmd.copy()
 
     def _acmd(self, m):
         if len(m.data) == 6 and np.isfinite(m.data).all():
@@ -131,8 +146,32 @@ class World(Node):
     def step(self):
         u_in = self.cmd if self.t - self.cmd_t <= 0.5 else np.zeros(3)
         ua_in = self.acmd if self.t - self.acmd_t <= 0.2 else np.zeros(6)
-        self.pipe.append(np.r_[u_in, ua_in])
-        ue = self.pipe.pop(0)
+        if getattr(self, 'ho', None) is not None:                    # 交接後：提案走安全鏈；套用＝提案經 8 步管線的預期值＋放行對齊修正
+            if self.ho_n0 is None:
+                self.ho_n0 = self.n
+            k_ = self.n - self.ho_n0
+            if k_ % 5 == 0:
+                tt = k_ * DT
+                sp_ = float(np.linalg.norm(self.ho_u0[:2]))
+                sc_ = 1.0 if tt < 3.0 else max(0.0, 1.0 - 0.5 * (tt - 3.0) / max(sp_, 1e-6))
+                self.u_prop = self.ho_u0 * sc_
+                self.ca.propose(self.n, self.u_prop)
+                m_ = Twist(); m_.linear.x, m_.linear.y, m_.angular.z = (float(x) for x in self.u_prop)
+                self.p_grasp.publish(m_)
+                st_ = self.ca.tick_status(self.n)
+                self.p_xs.publish(self._String(data='grasp'))
+                if tt > 3.0 and sc_ == 0.0 and tt > 3.0 + sp_ / 0.5 + 1.0:
+                    self.meta['chain_align'] = self.ca.report()
+                    self.p_xs.publish(self._String(data='done'))
+                    self.done = True
+            u_in = self.u_prop
+            ua_in = np.zeros(6)
+            self.pipe.append(np.r_[u_in, ua_in])
+            ue = self.pipe.pop(0)
+            ue = np.r_[ue[:3] + self.ca.correction(self.n), ue[3:]]
+        else:
+            self.pipe.append(np.r_[u_in, ua_in])
+            ue = self.pipe.pop(0)
         u, ua = ue[:3], ue[3:]
         c, s_ = math.cos(self.q[2]), math.sin(self.q[2])
         self.v_world, self.wz = np.array([c * u[0] - s_ * u[1], s_ * u[0] + c * u[1]]), float(u[2])

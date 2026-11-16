@@ -495,7 +495,7 @@ def worker(conn):
                                             st['lock'] = dict(t=float(a['t']), t_obs=g_['t_obs'], age_at_lock_s=float(a['t']) - g_['t_obs'], seqs=g_['seqs'], spread=g_['spread'], dang=g_['dang'], T=T_new.copy(), base_at_lock=q[:3].copy(), ver=ref['ver'],
                                                               s0=s_end_.copy(), sp_goal=sp_goal, t0=float(a['t']), T_pre=Tp_)
                                             st['trk'].q_prev, st['trk'].u_prev = None, np.zeros(6)
-                                            lk = dict(ok=True, ver=ref['ver'], t_obs=g_['t_obs'], age_at_lock_s=round(float(a['t']) - g_['t_obs'], 3), seqs=g_['seqs'], spread_mm=round(g_['spread'] * 1e3, 2), shift_mm=[round(float(x) * 1e3, 2) for x in dp_], along_at_lock=round(al_now, 4),
+                                            lk = dict(ok=True, T=T_new.tolist(), dang=g_['dang'], spread=g_['spread'], ver=ref['ver'], t_obs=g_['t_obs'], age_at_lock_s=round(float(a['t']) - g_['t_obs'], 3), seqs=g_['seqs'], spread_mm=round(g_['spread'] * 1e3, 2), shift_mm=[round(float(x) * 1e3, 2) for x in dp_], along_at_lock=round(al_now, 4),
                                                       q_pre=[float(x) for x in q_pre], sp_goal=[float(x) for x in sp_goal], s0=[float(x) for x in s_end_], pg_p0=[float(x) for x in p0_new], descent_margin={k_: round(v_, 4) for k_, v_ in worst.items()}, first_tick_stop=dict(ms=sc1['ms']))
                                             out['stop'] = sc1
                             out['lock'] = lk
@@ -637,8 +637,9 @@ def worker(conn):
 def main():
     out = sys.argv[1]
     UPDATE = len(sys.argv) > 2 and sys.argv[2] == 'obsupd'           # obsupd＝取像模式＋近距觀察段連續視覺更新（N3）
-    FULL = len(sys.argv) > 2 and sys.argv[2] == 'full'               # full＝取像模式＋終端接近 T1b（準備提前→靜止觀察→鎖定→下降→追預抓位→交接判定）
-    OBS_MODE = len(sys.argv) > 2 and sys.argv[2] in ('obs', 'obsupd', 'full')            # 取像模式：把手估計來自執行器 /far/handle_obs 的實際影像（起點第一格有效估計定通過線；之後各格只記錄與更新時間戳，不改線）
+    HANDOVER = len(sys.argv) > 2 and sys.argv[2] == 'fullho'         # fullho＝full＋交接判定通過即交出命令權給執行器行程內的抓持／開門控制器
+    FULL = len(sys.argv) > 2 and sys.argv[2] in ('full', 'fullho')               # full＝取像模式＋終端接近 T1b（準備提前→靜止觀察→鎖定→下降→追預抓位→交接判定）
+    OBS_MODE = len(sys.argv) > 2 and sys.argv[2] in ('obs', 'obsupd', 'full', 'fullho')            # 取像模式：把手估計來自執行器 /far/handle_obs 的實際影像（起點第一格有效估計定通過線；之後各格只記錄與更新時間戳，不改線）
     ctx = mp.get_context('fork')
     pc, cc = ctx.Pipe()
     wp = ctx.Process(target=worker, args=(cc,), daemon=False)          # 非 daemon：它要再開平行掃掠池；以 PDEATHSIG 跟著父程序結束
@@ -670,7 +671,9 @@ def main():
             self.owner, self.arm, self.stop = 'NAV', 'HOLD', False
             self.ev, self.rows, self.sel_log = [], [], []
             self.truth, self.rel, self.rel_t = None, np.zeros(3), None
-            self.last = dict(NAV=np.zeros(3), MERGE=np.zeros(3))
+            self.last = dict(NAV=np.zeros(3), MERGE=np.zeros(3), GRASP=np.zeros(3))
+            self.create_subscription(Twist, '/cmd_vel_grasp', lambda m: self._in('GRASP', m), 20)   # 抓持／開門控制器（執行器行程內）的底盤提案：同樣經選擇器→平滑器→Shield→GUARD
+            self.p_ho = self.create_publisher(Float64MultiArray, '/far/handover', 10)
             self.p_nav = self.create_publisher(Twist, '/cmd_vel_nav', 10)
             self.p_goal = self.create_publisher(PoseStamped, '/goal_pose', 10)
             self.p_plan = self.create_publisher(Path, '/merge/plan', 10)
@@ -697,7 +700,7 @@ def main():
             self.tf_stamp, self.v_last = {}, np.zeros(2)
             self.plan, self.plan_req_t, self.plan_ready_t, self.pending = None, None, None, None
             self.gm, self.t_goal, self.t_prep0, self.s_prep0, self.u_arm, self.u_arm_prev = None, None, None, None, np.zeros(6), np.zeros(6)
-            self.q_prev, self.t_stopcheck, self.n_fwd, self.no_reach = None, None, dict(NAV=0, MERGE=0, dropped=0), None
+            self.q_prev, self.t_stopcheck, self.n_fwd, self.no_reach = None, None, dict(NAV=0, MERGE=0, GRASP=0, dropped=0), None
             self.wait_tick = False
             self.n_goal = 1
             self.timer = self.create_timer(DT, self.tick)
@@ -856,6 +859,16 @@ def main():
             t = self.now()
             q = np.r_[T_ob, tr['q'][3:]]                                # 控制用位姿＝里程座標（TF odom→base_footprint）；手臂＝驅動端讀回。真值底盤位姿只記錄，不進任何判斷
             self.p_act.publish(Bool(data=self.owner == 'MERGE'))
+            if self.owner == 'GRASP':                                 # 已交接：底盤命令權在抓持／開門控制器（提案仍經本節點選擇器→安全鏈）；本節點不再下任何手臂或底盤命令
+                xs = self.xstate or ''
+                if xs.startswith('handover_rejected') and not self.stop:
+                    self.owner = 'MERGE'
+                    self.global_stop('handover_rejected_by_executor_global_stop', state=xs)
+                elif xs.startswith('done') or xs.startswith('latched'):
+                    self.event('executor_finished_after_handover', state=xs, forwarded=dict(self.n_fwd))
+                    raise SystemExit(0)
+                if self.owner == 'GRASP':
+                    return
             if self.xstate is not None and self.xstate.startswith('latched') and not self.stop:
                 self.global_stop('executor_latched_global_stop', state=self.xstate)
             if self.t_first_tick is None:
@@ -1074,7 +1087,15 @@ def main():
                 bd = res.get('budget') or {}
                 if res.get('handover_ok') and self.t_handover_ok is None:
                     self.t_handover_ok = t
-                    self.event('handover_request_accepted_first', along=round(along, 4), budget=bd, note='本程式只做判定與記錄；抓持控制器未接')
+                    if HANDOVER:                                   # 交出命令權：鎖定參考（位姿、原始時間戳、鎖定時年齡、一致性）與通過線；設定點／真管線／上一命令在執行器手上原樣承接
+                        lk_ = self.lock
+                        msg = [t, *np.array(lk_['T'], float).reshape(-1), lk_['t_obs'], lk_['age_at_lock_s'], lk_['dang'], lk_['spread'], *self.plan['pg']['p0'], *self.plan['pg']['d'], self.plan['pg']['yaw'], float(lk_['ver'])]
+                        for _ in range(2):
+                            self.p_ho.publish(Float64MultiArray(data=[float(x) for x in msg]))
+                        self.owner = 'GRASP'
+                        self.event('handover_published_owner_GRASP', along=round(along, 4), budget=bd, note='底盤提案改由 /cmd_vel_grasp 經選擇器→平滑器→Shield→GUARD；MERGE／NAV 命令自此丟棄')
+                    else:
+                        self.event('handover_request_accepted_first', along=round(along, 4), budget=bd, note='本程式只做判定與記錄；抓持控制器未接')
                 if along <= TERM_END:                                 # 預抓位追蹤的已核範圍終點：協同停止
                     self.global_stop('pretrack_end_global_stop', along=round(along, 4), n_judgements=len(self.sel_log), handover_ok_first_t=self.t_handover_ok, stop_certificate='本拍 now 停法核對通過')
                     ua = np.zeros(6)
@@ -1093,7 +1114,7 @@ def main():
             tk = res.get('track') or {}
             cl = res.get('clear') or {}
             scm = (sc or {}).get('min_clear') or {}
-            self.rows.append([t, tr['t'], *q, *tr['s'], *self.rel, *ua, *self.last['NAV'], *self.last['MERGE'], dict(NAV=0, MERGE=1)[self.owner], dict(HOLD=0, PREP=1, TRACK=2, OBSERVE=3, DESCEND=4, PRETRACK=5)[self.arm], float(self.stop),
+            self.rows.append([t, tr['t'], *q, *tr['s'], *self.rel, *ua, *self.last['NAV'], *self.last['MERGE'], dict(NAV=0, MERGE=1, GRASP=2)[self.owner], dict(HOLD=0, PREP=1, TRACK=2, OBSERVE=3, DESCEND=4, PRETRACK=5)[self.arm], float(self.stop),
                               np.nan if along is None else along, np.nan if lat is None else lat, yaw_e, tk.get('err') if tk.get('err') is not None else np.nan, tk.get('sigma') if tk.get('sigma') is not None else np.nan, float(bool(tk.get('clipped'))),
                               cl.get('env', np.nan), cl.get('base', np.nan), cl.get('self', np.nan), *v_meas, *tr['q'][:3], *T_mo, np.nan if sc is None else float(sc['ok']), scm.get('env', np.nan), scm.get('base', np.nan), scm.get('self', np.nan), np.nan if sc is None else sc['ms'], tk.get('err_pred') if tk.get('err_pred') is not None else np.nan, ts_b,
                               np.nan if sc is None else (sc['now']['all_still_s'] or np.nan), np.nan if sc is None else (sc['next']['all_still_s'] or np.nan), np.nan if sc is None else sc.get('n_eval', np.nan),
