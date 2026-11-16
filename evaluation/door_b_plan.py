@@ -26,7 +26,9 @@ S_PRE = float(G.PG.S_PRE)
 LO, HI = np.asarray(G.XO.LITE6_SAFE.lower, float) + 0.05, np.asarray(G.XO.LITE6_SAFE.upper, float) - 0.05
 Rg, T_HG, a_H = G.PG.baseline_reference()
 DS_SEED = np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157])
-OBS_P = [(rho, e, az) for rho in (0.35, 0.42, 0.50) for e in (10, 25, 40) for az in (0, -20, 20)]
+OBS_P = [(rho, e, az) for rho in (0.35, 0.40, 0.45) for e in (0, 10, 20, 30) for az in range(-80, 81, 10)]
+D_RNG, EDGE = (0.25, 1.2), 40                                        # 視覺管線的偵測距離與影像邊距（m8_door_reaim_online_r3 的 D_RNG／EDGE）
+ENV_COVER = dict(range=(0.35, 0.50), oblique_max=13.0)               # 既有 Isaac 實際影格涵蓋的觀測包絡（results/motm_b/vis_error_by_range.json：0.35–0.5 m、斜視 6.2–12.8°，n＝101）
 T_READY = 2.05
 
 
@@ -71,6 +73,27 @@ class BPlanner:
             if not (25 <= u <= 615 and 25 <= v <= 455):
                 return False
         return True
+
+    def frame(self, q9, nrm=None):
+        """視覺管線會產生有效估計的影格條件：把手中心與兩端在影像內（邊距 EDGE）、距離在 D_RNG。回 (距離, 斜視角°) 或 None。斜視角＝相機→把手方向與門面法向夾角。"""
+        Tc = K.fk(q9, W0.OPT); Ti = np.linalg.inv(Tc); rng = None
+        for j, p in enumerate(self.ENDS):
+            pc = (Ti @ np.r_[p, 1.0])[:3]
+            if pc[2] < 0.08:
+                return None
+            u, v = (self.Kc @ (pc / pc[2]))[:2]
+            if not (EDGE <= u <= 640 - EDGE and EDGE <= v <= 480 - EDGE):
+                return None
+            if j == 0:
+                rng = float(np.linalg.norm(pc))
+        if not (D_RNG[0] <= rng <= D_RNG[1]):
+            return None
+        nrm = -np.r_[self.n, 0.0] if nrm is None else nrm               # 由機器人側看向門
+        v = self.H - Tc[:3, 3]; v /= np.linalg.norm(v)
+        return rng, math.degrees(math.acos(max(-1.0, min(1.0, float(v @ nrm)))))
+
+    def covered(self, fr):
+        return fr is not None and ENV_COVER['range'][0] <= fr[0] <= ENV_COVER['range'][1] and fr[1] <= ENV_COVER['oblique_max']
 
     def ok_cfg(self, b, q):
         lim = float(min((q - LO).min(), (HI - q).min()))
@@ -155,7 +178,8 @@ class BPlanner:
             self.T_TC = np.linalg.inv(K.fk(q9, 'link_tcp')) @ K.fk(q9, W0.OPT)
         # 觀察族
         fam, seed = [], None
-        for a in np.round(np.arange(0.60, -0.0001, -0.02), 3):
+        A_SEQ = np.round(np.arange(0.04, 0.601, 0.02), 3)                # 由近端往遠端延拓：近端先找正面（落在既有影格包絡內）的視角，再往遠端連續（遠端斜視可較大）
+        for a in A_SEQ:
             b = self.base(float(a), sb)
             best = None
             for (rho, e, az) in OBS_P:
@@ -165,36 +189,46 @@ class BPlanner:
                     if q is None or sm < W.SIG_FLOOR or (seed is not None and np.abs(q - seed).max() > 0.3):
                         continue
                     okc, _, _ = self.ok_cfg(b, q)
-                    if not okc or not self.visible(np.r_[b, q]):
+                    fr = self.frame(np.r_[b, q]) if okc else None
+                    if fr is None:
                         continue
-                    cost = 0.0 if seed is None else float(np.abs(q - seed).max())
+                    cost = (fr[1], 0.0 if seed is None else float(np.abs(q - seed).max()))   # 優先最小斜視（落在既有影格包絡），再看連續性
                     if best is None or cost < best[0]:
-                        best = (cost, q, (rho, e, az))
+                        best = (cost, q, (rho, e, az), fr)
                     break
             if best is None:
                 if fam:
                     break
                 continue
             seed = best[1]
-            fam.append(dict(a=float(a), q=best[1], par=best[2]))
+            fam.append(dict(a=float(a), q=best[1], par=best[2], range=round(best[3][0], 3), oblique=round(best[3][1], 1), covered=self.covered(best[3])))
+        fam = fam[::-1]                                                  # 依行進順序（a 由大到小）
         if not fam:
             out['why'] = 'no_observation_family'
             return out
-        out.update(a_w=a_w, q_pre=q_pre.tolist(), obs=[dict(a=f['a'], q=f['q'].tolist(), par=f['par']) for f in fam])
+        out.update(a_w=a_w, q_pre=q_pre.tolist(), obs=[dict(a=f['a'], q=f['q'].tolist(), par=f['par'], range=f['range'], oblique=f['oblique'], covered=f['covered']) for f in fam])
         # 過渡
         best = None
         for f in fam:
-            T = (f['a'] - a_w) / self.V
-            r = self._minjerk(f['q'], q_pre, T, f['a'], a_w, sb, v_arm, a_arm, a_body)
+            prof = self.speed_profile(f['a'], a_w)
+            if prof is None:
+                continue
+            T, a_of_t = prof
+            r = self._minjerk(f['q'], q_pre, T, f['a'], a_w, sb, v_arm, a_arm, a_body, a_of_t=a_of_t)
             if r is None:
                 continue
-            blind = (T - (r if r is not None else 0.0)) + T_READY + 0.05
+            t_cov = r['t_cov'] if r['t_cov'] is not None else (0.0 if f['covered'] else None)
+            if t_cov is None:
+                continue                                              # 過渡起點與過渡中都沒有落在包絡內的有效影格 ⇒ 不採（不能外推）
+            blind = (T - t_cov) + T_READY + 0.05
             if best is None or blind < best[0]:
-                best = (blind, f['a'], T, r)
+                best = (blind, f, T, r, t_cov)
         if best is None:
-            out['why'] = 'no_feasible_transition'
+            out['why'] = 'no_feasible_transition_with_covered_frame'
             return out
-        out.update(a_t0=best[1], T_tr=round(best[2], 3), last_vis_t=round(best[3], 3), blind_s=round(best[0], 3))
+        f, T, r, t_cov = best[1], best[2], best[3], best[4]
+        out.update(a_t0=f['a'], T_tr=round(T, 3), last_valid_t=r['t_valid'], last_covered_t=round(t_cov, 3), last_covered_frame=r['fr_cov'] or [f['range'], f['oblique']],
+                   blind_s=round(best[0], 3), blind_def='最後一格落在既有影格包絡內的有效影格 → READY（抓持排程 2.05 s＋交接 1 拍；插入只在排程內）', v_tr=self.v_tr, a_dec=self.a_dec)
         # 導航遠端目標：沿路徑，接手點後弧長 ≥ 到達容差＋V·t_prep＋餘裕（取路徑點）
         need = self.goal_tol + self.V * self.t_prep + self.margin
         i_w = int(np.argmin(np.abs(AD[:, 0] - a_w) + 10 * (~line)))
@@ -231,24 +265,53 @@ class BPlanner:
                 return True, k, None
         return False, max_steps, dict(why='not_settled')
 
-    def _minjerk(self, qa, qb, T, a0, a1, sb, v_arm, a_arm, a_body, n=60):
+    v_tr, a_dec = 0.10, 0.20
+
+    def speed_profile(self, a0, a1):
+        """過渡段底盤沿門前線（往 −a）：v_tr 等速，接手前以 a_dec 連續減速到抓持速度 V（接手點恰為 V）。回 (時長, a(t) 函式) 或 None。"""
+        L = a0 - a1
+        if L <= 0:
+            return None
+        d_dec = (self.v_tr ** 2 - self.V ** 2) / (2 * self.a_dec)
+        if d_dec >= L:
+            return None
+        t1 = (L - d_dec) / self.v_tr
+        t2 = (self.v_tr - self.V) / self.a_dec
+
+        def a_of_t(t):
+            if t <= t1:
+                return a0 - self.v_tr * t
+            tt = min(t - t1, t2)
+            return a0 - (L - d_dec) - (self.v_tr * tt - 0.5 * self.a_dec * tt * tt)
+        return t1 + t2, a_of_t
+
+    def _minjerk(self, qa, qb, T, a0, a1, sb, v_arm, a_arm, a_body, n=60, a_of_t=None):
+        """篩選用（不是停止證書）：關節空間最小急動＋底盤沿門前線依速度剖面；逐點 σ、淨空、限位、速率／加速度、穩態管線停止前推模型；記最後有效／包絡內影格。"""
         dq = qb - qa
         if float(np.abs(dq).max()) * 1.875 / T > v_arm or float(np.abs(dq).max()) * 5.7735 / T ** 2 > a_arm:
             return None
-        last_vis = 0.0
+        t_valid, t_cov, fr_cov = None, None, None
         for k in range(n + 1):
             u = k / n
+            t = u * T
             s = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5
             sd = (30 * u ** 2 - 60 * u ** 3 + 30 * u ** 4) / T
             q = qa + s * dq
-            b = self.base(a0 + (a1 - a0) * u, sb)
+            a = a_of_t(t) if a_of_t is not None else a0 + (a1 - a0) * u
+            b = self.base(a, sb)
             okc, _, _ = self.ok_cfg(b, q)
             if not okc or self.sigma6(np.r_[b, q]) < W.SIG_FLOOR:
                 return None
-            if self.visible(np.r_[b, q]):
-                last_vis = u * T
-            qd = sd * dq
-            ok2, _, _ = self.ok_cfg(self.base(a0 + (a1 - a0) * u - self.V ** 2 / (2 * a_body), sb), q + qd * np.abs(qd) / (2 * a_arm))
+            fr = self.frame(np.r_[b, q])
+            if fr is not None:
+                t_valid = t
+                if self.covered(fr):
+                    t_cov, fr_cov = t, [round(fr[0], 3), round(fr[1], 1)]
+            v_b = (a_of_t(min(t + 1e-3, T)) - a_of_t(t)) / 1e-3 if a_of_t is not None else (a1 - a0) / T
+            c, s_ = math.cos(self.yaw), math.sin(self.yaw)
+            vw = -self.d * abs(v_b)
+            ub = np.array([c * vw[0] + s_ * vw[1], -s_ * vw[0] + c * vw[1], 0.0])
+            ok2, _, _ = self.stop_sweep(b, q, ub, sd * dq, self._alpha if hasattr(self, '_alpha') else np.full(6, 0.095))
             if not ok2:
                 return None
-        return last_vis
+        return dict(t_valid=None if t_valid is None else round(t_valid, 3), t_cov=t_cov, fr_cov=fr_cov)
