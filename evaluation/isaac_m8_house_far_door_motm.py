@@ -150,6 +150,8 @@ class Bridge(Node):
         self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
         self.p_state = self.create_publisher(String, '/far/exec_state', 10)
         self.p_grasp = self.create_publisher(Twist, '/cmd_vel_grasp', 10)
+        self.p_hoack = self.create_publisher(String, '/far/handover_ack', 10)
+        self.rx_steps, self.ho_tried = [], False
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 20)
         self.create_subscription(Float64MultiArray, '/far/arm_cmd', self._acmd, 10)
         self.create_subscription(Bool, '/far/done', self._done, 10)
@@ -163,6 +165,7 @@ class Bridge(Node):
         v = np.array([m.linear.x, m.linear.y, m.angular.z], float)
         if np.isfinite(v).all():
             self.cmd, self.cmd_t = v, self.t
+            self.rx_steps.append(self.n)
             if self.ca is not None:
                 self.ca.on_release(self.n, v)
 
@@ -711,6 +714,16 @@ def main():
         far_ev.append(dict(kw, t=round(node.t, 3), what=what))
         print(f'[motm] far t={node.t:.2f} {what} {json.dumps(clean(kw), ensure_ascii=False)[:300]}', flush=True)
     far_out = None
+    HOX = {}
+
+    def est_fn_lock(t_):
+        return HOX['T_lock'], 1, HOX['lock']['t_obs_rel']                 # 鎖定任務參考（原始時間戳；不更新）
+
+    def lock_budget(t_, q9_, ep_, er_):
+        lk_ = HOX['lock']
+        pos = max(EST_BOUND_M, lk_['spread']) + SYNC_M + float(ep_)      # 估計包絡（工程預算）＋同步＋手臂 TCP 實測；理想里程分支里程項為零
+        ang = EST_BOUND_DEG + lk_['dang'] + float(er_)
+        return dict(pos_m=round(pos, 5), ang_deg=round(ang, 3), ok=bool(pos <= FARL.LOCK_BUDGET['pos_m'] and ang <= FARL.LOCK_BUDGET['ang_deg']), terms=dict(est_m=max(EST_BOUND_M, lk_['spread']), sync_m=SYNC_M, odom_m=0.0, arm_tcp_m=round(float(ep_), 5)))
     w_far0 = time.perf_counter()
     while node.t < a.far_limit_s:
         t_sim = float(world.current_time)
@@ -736,9 +749,31 @@ def main():
             far_out = dict(result='far_engineering_abort', why='supervisor_abort', detail=node.abort[:200])
             far_event('latched_sim_engineering_abort', **far_out)
             break
-        if node.ho is not None:
-            far_event('handover_packet_received', t_sup=float(node.ho[0]))
-            break
+        if node.ho is not None and not node.ho_tried:
+            ph_ = FCA.best_phase(node.rx_steps)
+            if ph_ is None or node.n % NPH == ph_:                     # 在安全鏈節拍的合適相位接手（名目放行延遲約 6 步，落在 8 步管線內）
+                node.ho_tried = True
+                HO = node.ho
+                HOX.update(T_lock=HO[1:17].reshape(4, 4).copy(), t_far_ho=node.t,
+                           lock=dict(t_obs=float(HO[17]), age_at_lock_s=float(HO[18]), dang=float(HO[19]), spread=float(HO[20]), p0=HO[21:23].copy(), d=HO[23:25].copy(), yaw=float(HO[25]), ver=int(HO[26]), t_obs_rel=float(HO[17]) - node.t))
+                off_ho = off_static + (grav_far(q) - G_rest) / a.kp    # 靜態偏置：靜置實測錨＋重力隨構型（同 K2 模型）
+                snap = dict(s=s_far.copy(), pipe=[u_.copy() for u_ in pipe_far], u_last=pipe_far[-1].copy(), u_prev=pipe_far[-1 - NPH].copy(), off_static=off_ho.copy())
+                w_try = time.perf_counter()
+                # 以當下快照建立獨立的抓持控制器實例並試算首拍：不發任何命令、不動真管線（全部是複本）。通過 ⇒ 這個實例與它的首拍輸出就是接手後的第一拍（同一狀態、同一步）；不過 ⇒ 丟棄、回 nack、前段所有權不變
+                gc_try = G.MovingGraspCtrl(ident, est_fn_lock, HOX['lock']['d'].copy(), V, (L_LEAD, L_LEAD + 0.22), snap['s'].copy(), [u_.copy() for u_ in snap['pipe']], snap['u_last'].copy(), snap['u_prev'].copy(), snap['off_static'].copy(),
+                                           sched=dict(hold_s=0.3 + T_LEAD), pool=POOL, fastkin=True, deadline_ms=50.0, lock_budget_fn=lock_budget)
+                o_try = gc_try.step(0.0, q.copy(), door_q(), finger_meas=(float(jp[f1]), float(jp[f2])))
+                ok_try = gc_try.stop is None and gc_try.abort is None and not o_try.get('abort') and np.isfinite(np.asarray(o_try['base_twist'], float)).all() and np.isfinite(np.asarray(o_try['arm_target'], float)).all()
+                trial = dict(ok=bool(ok_try), stop=gc_try.stop, abort=gc_try.abort, wall_ms=round((time.perf_counter() - w_try) * 1e3, 1), phase=ph_, n=node.n, rx_mod=[x_ % NPH for x_ in node.rx_steps[-8:]], budget=gc_try.lock_budget,
+                             first_cmd=[float(x_) for x_ in gc_try.u_last], prev_cmd=[float(x_) for x_ in snap['u_last']], first_cmd_step_max=float(np.abs(gc_try.u_last - snap['u_last']).max()))
+                HOX['trial'] = trial
+                if ok_try:
+                    node.p_hoack.publish(String(data='ack:%d' % HOX['lock']['ver']))
+                    HOX.update(gc=gc_try, o_first=o_try, snap=snap, off_ho=off_ho)
+                    far_event('handover_trial_passed_takeover', **{k_: trial[k_] for k_ in ('wall_ms', 'phase', 'first_cmd_step_max', 'budget')})
+                    break
+                node.p_hoack.publish(String(data='nack:%d:%s' % (HOX['lock']['ver'], str((gc_try.stop or gc_try.abort or {}).get('why'))[:60])))
+                far_event('handover_trial_failed_nack', **trial)
         if node.done:
             far_out = dict(result='far_ended_without_handover', why='supervisor_done')
             far_event('supervisor_done_without_handover')
@@ -787,30 +822,21 @@ def main():
     json.dump(clean(dict(K=Kr, cam=CAM, T_mount=T_mount, frames=fmeta)), open(os.path.join(a.out, 'frames_meta.json'), 'w'), ensure_ascii=False, indent=1)
     res['far'] = dict(sim_s=round(node.t, 2), wall_s=round(time.perf_counter() - w_far0, 1), events=far_ev, n_frames=len(fmeta), n_valid=sum(1 for f_ in fmeta if f_['valid']), base_travel_m=round(float(np.abs(np.diff(np.array(far_rows)[:, 1:3], axis=0)).sum()), 3) if len(far_rows) > 1 else 0.0,
                       sources=dict(odom='物理位姿直接當里程（理想）', scan='PhysX 射線，略過機器人自身（忽略手臂自遮擋）', delay='8 步在途管線（軟體模型）', arm_friction='no_passive_arm_friction（自載入起）'))
-    if node.ho is None:
+    if HOX.get('gc') is None:
+        if far_out is None and HOX.get('trial') is not None:
+            far_out = dict(result='far_ended_handover_rejected', why='trial_failed', trial=HOX['trial'])
         if far_out is None:
             far_out = dict(result='far_ended_without_handover', why='far_limit')
         res.update(result=far_out['result'], far_end=far_out, aborted=far_out if 'abort' in far_out['result'] else None)
         json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)
         print(f"[motm] 遠距前段結束（未交接）：{far_out}", flush=True)
         return 70 if 'abort' in far_out['result'] else 6
-    # ---- 交接包（監督節點）＋本行程持有的真狀態：設定點、真管線、上一／前一拍命令、偏置——原樣承接
-    HO = node.ho
-    T_lock = HO[1:17].reshape(4, 4).copy()
-    t_far_ho = node.t
-    lock = dict(t_obs=float(HO[17]), age_at_lock_s=float(HO[18]), dang=float(HO[19]), spread=float(HO[20]), p0=HO[21:23].copy(), d=HO[23:25].copy(), yaw=float(HO[25 - 0]) if False else float(HO[25]), t_obs_rel=float(HO[17]) - t_far_ho)
-    q, jp = q9()
-    off_ho = off_static + (grav_far(q) - G_rest) / a.kp                # 靜態偏置：靜置實測錨＋重力隨構型（同 K2 模型）
-    ho_pkt = dict(s=s_far.copy(), pipe=[u_.copy() for u_ in pipe_far], u_last=pipe_far[-1].copy(), u_prev=pipe_far[-1 - NPH].copy(), off_static=off_ho)
-
-    def lock_budget(t_, q9_, ep_, er_):
-        pos = max(EST_BOUND_M, lock['spread']) + SYNC_M + float(ep_)    # 估計包絡（工程預算）＋同步＋手臂 TCP 實測；理想里程分支里程項為零
-        ang = EST_BOUND_DEG + lock['dang'] + float(er_)
-        return dict(pos_m=round(pos, 5), ang_deg=round(ang, 3), ok=bool(pos <= FARL.LOCK_BUDGET['pos_m'] and ang <= FARL.LOCK_BUDGET['ang_deg']), terms=dict(est_m=max(EST_BOUND_M, lock['spread']), sync_m=SYNC_M, odom_m=0.0, arm_tcp_m=round(float(ep_), 5)))
+    # ---- 已接手：控制器實例＝試跑通過的那一個（設定點、真管線、上一／前一拍命令、偏置皆為接手當下的快照）
+    T_lock, lock, t_far_ho = HOX['T_lock'], HOX['lock'], HOX['t_far_ho']
     node.ca = FCA.ChainAlign(G.D_STEPS, NPH)
     chain = dict(stop=None)
-    res['handover'] = dict(t_far=round(t_far_ho, 3), base=q[:3].tolist(), lock={k_: (v_.tolist() if isinstance(v_, np.ndarray) else v_) for k_, v_ in lock.items()}, T_lock=T_lock.tolist(), s=s_far.tolist(), off_static=off_ho.tolist(),
-                           u_last=ho_pkt['u_last'].tolist(), u_prev=ho_pkt['u_prev'].tolist(), pipe=[u_.tolist() for u_ in pipe_far], eval_only=dict(lock_err_mm=round(float(np.linalg.norm(T_lock[:3, 3] - truth_handle()[:3, 3])) * 1e3, 2)))
+    res['handover'] = dict(t_far=round(t_far_ho, 3), base=q[:3].tolist(), lock={k_: (v_.tolist() if isinstance(v_, np.ndarray) else v_) for k_, v_ in lock.items()}, T_lock=T_lock.tolist(), s=HOX['snap']['s'].tolist(), off_static=HOX['off_ho'].tolist(),
+                           u_last=HOX['snap']['u_last'].tolist(), u_prev=HOX['snap']['u_prev'].tolist(), pipe=[u_.tolist() for u_ in HOX['snap']['pipe']], trial=HOX['trial'], eval_only=dict(lock_err_mm=round(float(np.linalg.norm(T_lock[:3, 3] - truth_handle()[:3, 3])) * 1e3, 2)))
     # ---- 把手估計來源＝鎖定任務參考（原始時間戳；不更新）
     frames = []
 
@@ -818,19 +844,18 @@ def main():
         return None
 
     def est_fn(t):
-        return T_lock, 1, lock['t_obs_rel']
+        return est_fn_lock(t)
     gate = BL.BindGate(COND, DT)
     t, t_wall0 = 0.0, time.perf_counter()
     capture(0.0)
-    gc = G.MovingGraspCtrl(ident, est_fn, lock['d'].copy(), V, (L_LEAD, L_LEAD + 0.22), ho_pkt['s'], ho_pkt['pipe'], ho_pkt['u_last'], ho_pkt['u_prev'], ho_pkt['off_static'],
-                           sched=dict(hold_s=0.3 + T_LEAD), pool=POOL, fastkin=True, deadline_ms=50.0, lock_budget_fn=lock_budget)
+    gc = HOX['gc']                                                    # 試跑通過並已接手的控制器實例（首拍已算，輸出在 HOX['o_first']）
     fs = FSG.FirstSeg([PLANNER_FS], G.DT)                               # 首段計畫管理（執行器與離線核對共用；提前滾動更新）
     first = dict(ok=False, res=None, sel=None)
     gc.close_gate = lambda cc: fs.gate_ok()                          # 照本排程 READY 時刻算的首段已可用且可行
     ev = []
     rows, ts = [], []
     STATE.update(res=res, rows=rows, ts=ts, ev=ev)                    # 例外時存部分紀錄（名目趟 1 例外未存檔）
-    box = dict(mode='grasp', ex=None, aborted=None, t_bind=None, T_WH_b=None, T_HE=None, phi_b=None, helper=None, pend=None, t_next=None, k=1, decisions=[], reqs=[])
+    box = dict(o_first=HOX['o_first'], mode='grasp', ex=None, aborted=None, t_bind=None, T_WH_b=None, T_HE=None, phi_b=None, helper=None, pend=None, t_next=None, k=1, decisions=[], reqs=[])
 
     def log_event(what, **kw):
         ev.append(dict(t=round(t, 3), wall=round(time.perf_counter() - t_wall0, 3), what=what, **kw))
@@ -841,7 +866,8 @@ def main():
     # ================= 移動抓持 =================
     while t < t_end_lim and box['mode'] == 'grasp':
         q, jp = q9()
-        tick = gc.n_step % NPH == 0
+        first_it = box.get('o_first') is not None
+        tick = first_it or gc.n_step % NPH == 0
         # P2 首段：前導第一拍送出（預測 READY 狀態）；過期後依最新狀態重算（Codex 20261115：首段計畫過期修正）
         def make_req(t_now, target):
             T_plan = gc.handle_ref().copy() if gc.lock is not None else gc.T_est.copy()
@@ -962,18 +988,19 @@ def main():
                     np.savez(os.path.join(a.out, 'first_segment.npz'), Xd0=Xd0, Xd0p=Xd0p, T_plan=pl_sel['meta']['T_plan'], T_HE_pred=pl_sel['meta']['T_HE_pred'], T_WH_b=T_WH_b, T_HE_act=T_HE_act, phi_b=phi_b)
                     log_event('bind_and_handover', base_speed_cmd=round(float(np.linalg.norm(gc.u_last[:2])), 4), joint_enabled=bool(UsdPhysics.Joint(stage.GetPrimAtPath(JOINT)).GetJointEnabledAttr().Get()), warmup_ms=round(wu, 1))
                     break
-        o = gc.step(t, q.copy(), door_q(), finger_meas=(float(jp[f1]), float(jp[f2])))   # r12：兩指各自實測開度供碰撞幾何
+        o = box.pop('o_first') if first_it else gc.step(t, q.copy(), door_q(), finger_meas=(float(jp[f1]), float(jp[f2])))   # 首拍＝接手試跑的輸出（同一狀態、同一步）
         node.t = float(world.current_time) - T0
-        if tick:                                                     # A2(b)：底盤提案走 選擇器→平滑器→Shield→GUARD；放行值照控制器的生效時刻套用
+        if tick:                                                     # A2(b)：底盤提案走 選擇器→平滑器→Shield→GUARD（GUARD 唯一出口）
             node.ca.propose(node.n, gc.u_last[:3])
             mt_ = Twist(); mt_.linear.x, mt_.linear.y, mt_.angular.z = (float(x_) for x_ in gc.u_last[:3]); node.p_grasp.publish(mt_)
-            cst = node.ca.tick_status(node.n)
-            if (cst['consec_mod'] >= 2 or cst['consec_late'] >= 2) and gc.stop is None and chain['stop'] is None:
-                chain['stop'] = dict(t=round(t, 3), phase='grasp', **cst)
-                log_event('safety_chain_stop', **chain['stop'])
-                gc._stop('safety_chain_modified' if cst['consec_mod'] >= 2 else 'safety_chain_late', chain=cst)   # 安全鏈改動或晚到 ⇒ 走抓持控制器既有停止流程（不繞過安全鏈）
         ros_step(q, jp, gc.s, gc.pipe, 'grasp')
-        o['base_twist'] = np.asarray(o['base_twist'], float) + node.ca.correction(node.n)
+        ckc = node.ca.check(node.n)                                  # 本步有提案生效：放行須與控制器核過的命令一致；缺失／不一致 ⇒ 在它生效前拒絕＝模擬工程中止（控制器的停止證書以它的管線為前提，管線已不成立）
+        if not ckc['ok']:
+            chain['stop'] = dict(t=round(t, 3), phase='grasp', **ckc)
+            box['aborted'] = dict(t=round(t, 3), controller=None, kind='模擬工程中止（安全鏈放行與已核命令不一致；不再步進，不是受控停止）', chain=ckc)
+            log_event('safety_chain_mismatch_engineering_abort', **ckc)
+            node.p_state.publish(String(data='latched:safety_chain_' + ckc['why']))
+            break
         if o.get('abort'):
             box['aborted'] = dict(t=round(t, 3), controller=gc.abort)
             log_event('grasp_abort', abort=gc.abort)
@@ -1107,14 +1134,14 @@ def main():
             if tick:
                 node.ca.propose(node.n, ex.u_last[:3])
                 mt_ = Twist(); mt_.linear.x, mt_.linear.y, mt_.angular.z = (float(x_) for x_ in ex.u_last[:3]); node.p_grasp.publish(mt_)
-                cst = node.ca.tick_status(node.n)
-                if (cst['consec_mod'] >= 2 or cst['consec_late'] >= 2) and ex.stop is None and chain['stop'] is None:
-                    chain['stop'] = dict(t=round(t, 3), phase='open', **cst)
-                    log_event('safety_chain_stop', **chain['stop'])
-                    ex._stop('safety_chain_modified' if cst['consec_mod'] >= 2 else 'safety_chain_late')
             ros_step(q, jp, ex.s, ex.pipe, 'open')
-            if not out['abort']:
-                out['base_twist'] = np.asarray(out['base_twist'], float) + node.ca.correction(node.n)
+            ckc = node.ca.check(node.n)
+            if not ckc['ok']:
+                chain['stop'] = dict(t=round(t, 3), phase='open', **ckc)
+                box['aborted'] = dict(t=round(t, 3), controller=None, kind='模擬工程中止（安全鏈放行與已核命令不一致；不再步進，不是受控停止）', chain=ckc)
+                log_event('safety_chain_mismatch_engineering_abort', **ckc)
+                node.p_state.publish(String(data='latched:safety_chain_' + ckc['why']))
+                break
             if out['abort']:
                 box['aborted'] = dict(t=round(t, 3), controller=ex.abort)
                 log_event('open_abort', abort=ex.abort)
@@ -1230,7 +1257,7 @@ def main():
         res['diag'] = dict(note='取證短診斷：不送 P2；開門執行層 0.5 s 後強制本拍晚到，走閉鏈一致停止流程（與第四趟相同）；不是開門成果', forced_stop_t=DIAG_STOP_T, n_rows=len(dlog), n_err=len(derr))
     np.savez_compressed(os.path.join(a.out, 'log.npz'), rows=np.array(rows), cols=np.array(['t', 'phase', 'door_q', 'f1', 'f2', 'bx', 'by', 'byaw', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz', 'wall']),
                         phases=np.array(PH), ts=np.array(ts), ts_cols=np.array(['t', 'wall', 'ctrl', 'phase', 'base_speed', 'door_q', 'tcp_err_grasp', 'sigma', 'phi_ref']))
-    res['safety_chain'] = dict(node.ca.report(), stop=chain['stop'], note='抓持／開門段底盤提案經 選擇器→平滑器→Shield→GUARD；放行值照控制器生效時刻套用；晚到或被改動連續 2 拍 ⇒ 控制器既有停止流程')
+    res['safety_chain'] = dict(node.ca.report(), stop=chain['stop'], note='抓持／開門段底盤提案經 選擇器→平滑器→Shield→GUARD；每筆提案在生效步核對放行與提案一致才執行；缺失／不一致 ⇒ 生效前模擬工程中止')
     res['lock_budget_max'] = gc.lock_budget_max
     try:
         node.p_state.publish(String(data='done')); rclpy.spin_once(node, timeout_sec=0.0)

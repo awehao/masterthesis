@@ -11,84 +11,66 @@ import numpy as np
 class ChainAlign:
     def __init__(self, d_steps=8, nph=5, tol=1e-3):
         self.D, self.NPH, self.tol = int(d_steps), int(nph), float(tol)
-        self.props = []                                              # dict(k, n, u, r, n_rx, delta, late)
+        self.props = []                                              # dict(k, n, u)
         self.n_late, self.n_modified, self.n_unmatched_release, self.lag_steps = 0, 0, 0, []
         self.consec_late, self.consec_mod = 0, 0
+        self.releases, self.n_ok, self.delta_max, self.ptr = [], 0, 0.0, 0
 
     def propose(self, n, u):
         self.props.append(dict(k=len(self.props), n=int(n), u=np.asarray(u, float).copy(), r=None, n_rx=None, delta=None, late=False))
 
     def on_release(self, n_rx, v):
-        v = np.asarray(v, float)
-        cand = [p for p in self.props[-6:] if p['r'] is None and p['n'] <= n_rx]
-        if not cand:
-            self.n_unmatched_release += 1
-            return None
-        d = [float(np.abs(v - p['u']).max()) for p in cand]
-        j = int(np.argmin(d))
-        p = cand[j] if d[j] <= self.tol else cand[0]                 # 值相符者優先；都不符 ⇒ 依序配最舊的（視為被安全鏈改動）
-        p['r'], p['n_rx'], p['delta'] = v.copy(), int(n_rx), v - p['u']
-        p['late'] = bool(n_rx > p['n'] + self.D)
-        self.lag_steps.append(int(n_rx - p['n']))
-        return p
+        self.releases.append((int(n_rx), np.asarray(v, float).copy()))
 
-    def _delta_k(self, i, n):
-        """第 i 拍在步 n 可用的 Δ：已放行且不晚於生效時刻 ⇒ 它自己的；否則沿用前一拍的（晚到）。"""
-        if i < 0:
-            return np.zeros(3)
-        p = self.props[i]
-        if p['delta'] is not None and p['n_rx'] <= max(n, p['n'] + self.D):
-            return p['delta']
-        return self._delta_k(i - 1, n)
-
-    def correction(self, n):
-        """步 n 要加在控制器預期底盤命令上的修正量（本體座標 3 維）。"""
-        i = None
-        for j in range(len(self.props) - 1, -1, -1):
-            if self.props[j]['n'] + self.D <= n:
-                i = j
-                break
-        if i is None:
-            return np.zeros(3)
-        jr = n - (self.props[i]['n'] + self.D)
-        a, b = self._delta_k(i - 1, n), self._delta_k(i, n)
-        w = min((jr + 1) / self.NPH, 1.0)
-        return a + w * (b - a)
-
-    def tick_status(self, n):
-        """在控制拍邊界呼叫：統計剛到生效時刻的那一拍。回 dict(late, modified, consec_late, consec_mod)。"""
-        out = dict(late=False, modified=False)
-        for p in self.props:
-            if p.get('counted') or p['n'] + self.D > n:
+    def check(self, n):
+        """保守版（Codex 20261117）：放行與已核命令逐步一致才執行。在第 i 筆提案的生效步（n＝n_i＋D）呼叫：
+        須有放行在 (n_i, n_i＋D] 內收到、且依放行順序有一筆的值與提案一致（≤tol）。缺失、過期、不一致 ⇒ ok=False（呼叫端在它生效前拒絕）。
+        值一致即表示實際執行的命令與控制器核過的管線逐步相同（重複命令彼此等值，不需區分）。非生效步回 ok=True。"""
+        for p in self.props[-40:]:
+            if p['n'] + self.D != n:
                 continue
-            p['counted'] = True
-            late = p['r'] is None or p['late']
-            mod = p['delta'] is not None and float(np.abs(p['delta']).max()) > self.tol
-            self.n_late += int(late)
-            self.n_modified += int(mod)
-            self.consec_late = self.consec_late + 1 if late else 0
-            self.consec_mod = self.consec_mod + 1 if mod else 0
-            out = dict(late=late, modified=mod, delta=None if p['delta'] is None else [float(x) for x in p['delta']])
-        out.update(consec_late=self.consec_late, consec_mod=self.consec_mod)
-        return out
+            rs = [(j, r) for j, r in enumerate(self.releases) if j >= self.ptr and p['n'] < r[0] <= n]
+            if not rs:
+                self.n_late += 1
+                return dict(ok=False, why='release_missing', k=p['k'], n_prop=p['n'])
+            hit = next(((j, r) for j, r in rs if float(np.abs(r[1] - p['u']).max()) <= self.tol), None)   # 依放行順序找與本提案一致的那一筆（放行流單調前進；等值的重複命令彼此可互換）
+            if hit is None:
+                self.n_modified += 1
+                return dict(ok=False, why='release_differs', k=p['k'], n_prop=p['n'], proposed=[float(x) for x in p['u']], released_in_window=[[float(x) for x in r[1]] for _, r in rs][-3:])
+            self.ptr = hit[0] + 1
+            self.lag_steps.append(int(hit[1][0] - p['n']))
+            self.delta_max = max(self.delta_max, float(np.abs(hit[1][1] - p['u']).max()))
+            p['ok'] = True
+            self.n_ok += 1
+        return dict(ok=True)
 
     def report(self):
         lg = np.array(self.lag_steps, float)
-        dl = np.array([np.abs(p['delta']).max() for p in self.props if p['delta'] is not None], float)
-        return dict(n_proposed=len(self.props), n_released_matched=int(len(lg)), n_late=self.n_late, n_modified=self.n_modified, n_unmatched_release=self.n_unmatched_release,
-                    lag_steps=None if not len(lg) else dict(min=int(lg.min()), p50=float(np.median(lg)), max=int(lg.max())), delta_abs_max=None if not len(dl) else float(dl.max()), d_steps=self.D, tol=self.tol)
+        return dict(policy='放行與提案逐步一致才執行；缺失／不一致在生效前拒絕', n_proposed=len(self.props), n_checked_ok=self.n_ok, n_missing=self.n_late, n_differs=self.n_modified,
+                    lag_steps=None if not len(lg) else dict(min=int(lg.min()), p50=float(np.median(lg)), max=int(lg.max())), delta_abs_max=float(self.delta_max), d_steps=self.D, tol=self.tol)
+
+def best_phase(rx_steps, nph=5, back=4):
+    """由最近的放行到達步推安全鏈的節拍相位 r（到達步 mod nph 的眾數），回建議的提案相位＝(r−(nph+1)) mod nph……
+    使名目延遲約 nph＋1 步（落在 0～D 的中間，兩側各留約 2 步）。樣本不足回 None。"""
+    xs = [int(x) % nph for x in rx_steps[-12:]]
+    if len(xs) < 6:
+        return None
+    r = max(set(xs), key=xs.count)
+    return (r - (nph + 1)) % nph
 
 
 if __name__ == '__main__':                                           # 自我核對
     A = ChainAlign()
     for k in range(10):
-        A.propose(5 * k, [0.05, 0, 0]); A.on_release(5 * k + 5, [0.05, 0, 0]); A.tick_status(5 * k)
-    assert np.abs(A.correction(40)).max() == 0 and A.report()['n_late'] == 0
-    B = ChainAlign()
-    B.propose(0, [0.05, 0, 0]); B.on_release(5, [0.03, 0, 0])
-    assert abs(B.correction(8)[0] + 0.004) < 1e-12 and abs(B.correction(12)[0] + 0.02) < 1e-12
-    B.propose(5, [0.05, 0, 0]); B.on_release(15, [0.05, 0, 0])      # 晚到（15 > 5＋8）⇒ 步 13 沿用前一拍 Δ
-    assert abs(B.correction(13)[0] + 0.02) < 1e-12 and B.props[1]['late']
-    B.tick_status(20)
-    assert B.n_late == 1 and B.n_modified == 1
-    print('ChainAlign self-check ok', A.report(), B.report())
+        A.propose(5 * k, [0.05, 0, 0]); A.on_release(5 * k + 4, [0.05, 0, 0])
+    assert all(A.check(n)['ok'] for n in range(60)) and A.report()['n_checked_ok'] == 10
+    B = ChainAlign(); B.propose(0, [0.05, 0, 0]); B.on_release(4, [0.03, 0, 0])
+    assert B.check(7)['ok'] and B.check(8)['why'] == 'release_differs'
+    C = ChainAlign(); C.propose(0, [0.05, 0, 0]); C.on_release(9, [0.05, 0, 0])
+    assert C.check(8)['why'] == 'release_missing'
+    Dd = ChainAlign(); Dd.on_release(0, [0.05, 0, 0]); Dd.propose(0, [0.05, 0, 0])      # 提案前的舊放行不算
+    assert Dd.check(8)['why'] == 'release_missing'
+    E = ChainAlign()                                                 # 延遲 8 步且下一筆提前到：仍依序配到自己的那一筆
+    E.propose(0, [0.05, 0, 0]); E.propose(5, [0.025, 0, 0]); E.on_release(7, [0.05, 0, 0]); E.on_release(8, [0.025, 0, 0])
+    assert E.check(8)['ok'] and E.check(13)['ok']
+    print('ChainAlign self-check ok', A.report())

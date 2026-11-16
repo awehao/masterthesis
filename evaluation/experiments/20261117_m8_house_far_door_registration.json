@@ -1,7 +1,7 @@
 {
  "name": "m8_house_far_door_r1",
  "run_id": "m8house_far_door_1",
- "status": "申請中",
+ "status": "修正後重新申請",
  "flow": "遠距起點（1.5,−2.8,90°）→ 原導航（地圖先驗粗目標）→ 途中實際影像定線 → 移動中斜向進線 → 手臂準備（沿線 ≥0.42 前完成）→ 手臂靜止觀察 → 在途前推到沿線 0.15 鎖定任務參考 → 關節直線 4.5 s 轉到門旁分支預抓位（沿線 −0.075）→ 追預抓位 → 交接判定（鎖定任務參考入口）→ /far/handover → MovingGraspCtrl r14（鎖定模式）移動中插入／閉爪／確認 → BindGate → 理想綁定 → DoorOpenExec 開門到 85° 停穩",
  "chain": {
   "executor": "evaluation/isaac_m8_house_far_door_motm.py（門旁執行器複本＋遠距前段；CPU_LAYOUT=1）",
@@ -9,15 +9,22 @@
   "supervisor": "evaluation/far_dry/merge_node.py fullho＋gmpc_merge_wrap.py",
   "runner": "evaluation/run_m8_house_far_door.sh 經 run_guarded_v3.sh"
  },
- "codex_rulings": ["T1（速度 0.05）→ 實作為 T1c（關節直線轉門旁分支；分支不相連是離線發現的阻點）", "A1 門旁控制器整合、物理步邊界單一所有權交接", "A2(b) 抓持／開門底盤提案仍經 Shield→GUARD，GUARD 唯一出口", "A3 r14 鎖定任務參考模式；預算位置 ≤5 mm、姿態 ≤3°，每拍重算", "全程 no_passive_arm_friction 並後端讀回"],
+ "codex_rulings": [
+  "T1（速度 0.05）→ 實作為 T1c（關節直線轉門旁分支；分支不相連是離線發現的阻點）",
+  "A1 門旁控制器整合、物理步邊界單一所有權交接",
+  "A2(b) 抓持／開門底盤提案仍經 Shield→GUARD，GUARD 唯一出口",
+  "A3 r14 鎖定任務參考模式；預算位置 ≤5 mm、姿態 ≤3°，每拍重算",
+  "全程 no_passive_arm_friction 並後端讀回"
+ ],
  "stops": [
   "遠距前段：同 far_capture_3 登錄（粗目標未進線、候選六項、準備不足、停止核對三分處置、遲到工程中止、接觸／門角 ⇒ 工程中止）",
   "準備未在鎖定點前完成、鎖定失敗（無一致觀察／觀察 >0.3 s／預抓位不可達／轉移路徑淨空／首拍停止核對）⇒ 協同停止",
   "預抓位追蹤到沿線 −0.185 仍未交接 ⇒ 協同停止",
   "抓持：鎖定預算超界——未閉爪則不閉爪並停止；已接觸走接觸停法；其餘同門旁 r13（相對運動、確認時間、接受等待 0.5 s、BindGate 不變）",
-  "安全鏈放行值晚到或被改動連續 2 拍 ⇒ 抓持／開門控制器既有停止流程（不繞過安全鏈）",
   "開門：同門旁第 12 趟（期限 50 ms、閉鏈一致停法、40 N 工程中止值）",
-  "92 °C 熱中止"
+  "92 °C 熱中止",
+  "安全鏈：見 safety_chain_rule（工程中止）",
+  "交接試跑不過 ⇒ nack、協同停止"
  ],
  "disclosures": [
   "理想綁定（FixedJoint）；BindGate 的實際抓持條件以把手 prim 真值核（同門旁各趟）；首段規劃與開門用鎖定參考",
@@ -32,7 +39,24 @@
  "evidence_offline": [
   "乾跑 m24／m26（真節點；合成觀察含偏差；重力偏置世界）：定線→斜向進線→準備→觀察→鎖定（0.158）→轉移→預抓位（−0.067）→交接（−0.075，預算 4.45 mm）→提案經安全鏈 84 筆 0 晚到 0 改動",
   "假世界整鏈（test_door_motm_chain_fake.py；由交接狀態＋r14 鎖定模式起步）：抓持→綁定→開到 85.01°（n=1）",
-  "分支可行圖 door_far_branch_map_r1.json、轉移核對 door_far_terminal_t1c_check.json、鎖定誤差包絡 far_lock_error_envelope.json、偏置模型 far_arm_offset_model_check.json"
+  "分支可行圖 door_far_branch_map_r1.json、轉移核對 door_far_terminal_t1c_check.json、鎖定誤差包絡 far_lock_error_envelope.json、偏置模型 far_arm_offset_model_check.json",
+  "交接／拒絕核對（真節點乾跑，同一入口）：m31／m32 ack 路徑——請求→試跑相位選擇→ack→第一筆提案切換命令權→83 筆提案 81 筆生效核對全過、0 缺失 0 不一致（實際延遲最大 6 步）；m28 nack 路徑——監督節點保留所有權並協同停止。m27／m29 在準備段因掃掠池 25 ms 逾時 ⇒ 工程中止（一對一釘核下的時序失敗，改為共用核集後 m30–m32 未再出現；不保證）"
  ],
- "acceptance": "分段照實報：遠距定線／進線／鎖定／轉移／交接／抓持 READY／綁定／開門角度／停穩（既有 STOP_STILL）；預測停穩與實測停穩分開"
+ "acceptance": "分段照實報：遠距定線／進線／鎖定／轉移／交接／抓持 READY／綁定／開門角度／停穩（既有 STOP_STILL）；預測停穩與實測停穩分開",
+ "handover_protocol": "監督節點交接判定通過 ⇒ 發 /far/handover 請求（命令權仍在 MERGE、續追預抓位）→ 執行器在安全鏈節拍的合適相位，以當下快照（設定點、真管線、上一／前一拍命令、偏置的複本）建立獨立 MovingGraspCtrl 實例試算首拍（不發命令、不動真管線）→ 通過：ack＋該實例與首拍輸出即為接手後第一拍（同一狀態同一步），第一筆 /cmd_vel_grasp 到選擇器即命令權切換點，MERGE／NAV 自此丟棄；不過：nack、前段所有權不變、監督節點協同停止",
+ "safety_chain_rule": "每筆底盤提案在其生效步（提案後 8 物理步）核對：窗口內依放行順序有一筆 /cmd_vel 與提案一致（≤1e-3）才執行；缺失或不一致 ⇒ 生效前模擬工程中止（不再步進；不是受控停止）。不做事後修正。提案相位依實測放行節拍選（名目延遲約 6 步）",
+ "grasp_window": {
+  "definition": "交接判定用的抓取點原點＝通過線原點 p0 沿行進方向平移 0.20 m；條件式仍是「距該原點 0.005–0.25 m」",
+  "in_pass_line_coords_m": [
+   -0.195,
+   0.05
+  ],
+  "effective_handover_range_m": [
+   -0.185,
+   -0.075
+  ],
+  "why": "門旁分支預抓位只在沿線 −0.075～−0.20 可行；−0.075 起步同門旁第 12 趟（起點沿線 −0.075、綁定約 −0.19）",
+  "after_takeover": "抓持排程 hold 0.5＋插入 1.0＋閉爪 0.5＋確認 0.3＝2.3 s（0.115 m）⇒ READY 約在沿線 −0.19；接受等待上限 0.5 s 會到 −0.215（超出該分支抓取位可行範圍 −0.20）——餘裕很小，照實列",
+  "stop_travel": "0.05 m/s 下在途 8 步 4 mm＋減速約 1 cm"
+ }
 }

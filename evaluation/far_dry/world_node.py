@@ -114,6 +114,9 @@ class World(Node):
             import far_chain_align as FCA
             self.ca, self.ho, self.ho_n0, self.u_prop_hist = FCA.ChainAlign(D_STEPS, 5), None, None, []
             self.p_grasp = self.create_publisher(Twist, '/cmd_vel_grasp', 10)
+            self.p_hoack = self.create_publisher(self._String, '/far/handover_ack', 10)
+            self.nack_test = os.environ.get('FAR_TEST_NACK') == '1'
+            self.rx_steps, self.FCA, self.ho_req = [], FCA, None
             self.create_subscription(Float64MultiArray, '/far/handover', self._ho, 10)
         self.log = []
         self.pipe = [np.zeros(9) for _ in range(D_STEPS)]              # 命令到受控對象的 8 步在途管線（同門任務控制器的延遲模型；底盤與手臂都經過）
@@ -123,11 +126,23 @@ class World(Node):
 
     def _cmd(self, m):
         self.cmd, self.cmd_t = np.array([m.linear.x, m.linear.y, m.angular.z]), self.t
+        if hasattr(self, 'rx_steps'):
+            self.rx_steps.append(self.n)
         if getattr(self, 'ho', None) is not None:
             self.ca.on_release(self.n, self.cmd)
 
     def _ho(self, m):
-        if self.ho is None:
+        if self.ho is None and self.ho_req is None and not getattr(self, 'ho_nacked', False):
+            self.ho_req = np.array(m.data, float)                     # 先記下請求；在安全鏈節拍的合適相位才接手（step() 內）
+
+    def _ho_adopt(self):
+        m = type('M', (), dict(data=self.ho_req))()
+        if True:
+            if self.nack_test:                                        # 拒絕路徑核對：試跑不過 ⇒ nack，不發任何 /cmd_vel_grasp，繼續當受控對象
+                self.ho_nacked = True
+                self.p_hoack.publish(self._String(data='nack:%d:test' % int(m.data[-1])))
+                return
+            self.p_hoack.publish(self._String(data='ack:%d' % int(m.data[-1])))
             self.ho = np.array(m.data, float)
             self.ho_n0 = None
             self.ho_u0 = self.cmd.copy()
@@ -146,6 +161,11 @@ class World(Node):
     def step(self):
         u_in = self.cmd if self.t - self.cmd_t <= 0.5 else np.zeros(3)
         ua_in = self.acmd if self.t - self.acmd_t <= 0.2 else np.zeros(6)
+        if getattr(self, 'ho_req', None) is not None and self.ho is None and not getattr(self, 'ho_nacked', False):
+            ph = self.FCA.best_phase(self.rx_steps)
+            if ph is None or self.n % 5 == ph:
+                self.meta['handover_phase'] = dict(phase=ph, n=self.n, rx_mod=[x % 5 for x in self.rx_steps[-8:]])
+                self._ho_adopt()
         if getattr(self, 'ho', None) is not None:                    # 交接後：提案走安全鏈；套用＝提案經 8 步管線的預期值＋放行對齊修正
             if self.ho_n0 is None:
                 self.ho_n0 = self.n
@@ -158,7 +178,6 @@ class World(Node):
                 self.ca.propose(self.n, self.u_prop)
                 m_ = Twist(); m_.linear.x, m_.linear.y, m_.angular.z = (float(x) for x in self.u_prop)
                 self.p_grasp.publish(m_)
-                st_ = self.ca.tick_status(self.n)
                 self.p_xs.publish(self._String(data='grasp'))
                 if tt > 3.0 and sc_ == 0.0 and tt > 3.0 + sp_ / 0.5 + 1.0:
                     self.meta['chain_align'] = self.ca.report()
@@ -168,7 +187,11 @@ class World(Node):
             ua_in = np.zeros(6)
             self.pipe.append(np.r_[u_in, ua_in])
             ue = self.pipe.pop(0)
-            ue = np.r_[ue[:3] + self.ca.correction(self.n), ue[3:]]
+            ck_ = self.ca.check(self.n)                               # 生效步：放行須與提案一致，否則拒絕（乾跑：記錄並結束）
+            if not ck_['ok']:
+                self.meta['chain_align'] = dict(self.ca.report(), fail=ck_)
+                self.p_xs.publish(self._String(data='latched:safety_chain_' + ck_['why']))
+                self.done = True
         else:
             self.pipe.append(np.r_[u_in, ua_in])
             ue = self.pipe.pop(0)

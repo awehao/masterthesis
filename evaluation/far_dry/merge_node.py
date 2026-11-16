@@ -314,8 +314,8 @@ def worker(conn):
                     coverage='區間界（路徑長上界 L；兩端淨空較小值 − L/2 ≥ 門檻；自碰撞逐對）＋不過則加密到逐物理步', ms_traj=round((t1 - t0) * 1e3, 1), ms_eval0=round((t2 - t1) * 1e3, 1), ms_cert=round((time.perf_counter() - t2) * 1e3, 1), ms=round((time.perf_counter() - t0) * 1e3, 1))
 
     if len(cpus) >= 6:
-        for p_, c_ in zip(pool.procs, cpus[2:6]):
-            CPU.pin(p_.pid, [c_])
+        for p_ in pool.procs:                                         # 掃掠池四個程序共用這組核（不一對一釘死：其中一核被外部程序佔用時排程器可避開；m27／m29 一對一釘選下出現 25 ms 掃掠逾時）
+            CPU.pin(p_.pid, cpus[2:6])
     sched = dict(far_cpus=cpus, worker_affinity=sorted(os.sched_getaffinity(0)), pool_affinity=[sorted(os.sched_getaffinity(p_.pid)) for p_ in pool.procs], blas_runtime=blas_rb, blas_all_single=CPU.blas_all_single(blas_rb) if blas_rb else '沒有載入 OpenBLAS（系統 Python 參考 BLAS）')
     conn.send(('ready', 0, dict(sched=sched, est=oinfo, capture_base_pose=[float(x) for x in np.asarray(fr['q'], float)[:3]])))
     while True:
@@ -674,6 +674,8 @@ def main():
             self.last = dict(NAV=np.zeros(3), MERGE=np.zeros(3), GRASP=np.zeros(3))
             self.create_subscription(Twist, '/cmd_vel_grasp', lambda m: self._in('GRASP', m), 20)   # 抓持／開門控制器（執行器行程內）的底盤提案：同樣經選擇器→平滑器→Shield→GUARD
             self.p_ho = self.create_publisher(Float64MultiArray, '/far/handover', 10)
+            self.create_subscription(String, '/far/handover_ack', self._hoack, 10)
+            self.ho_pending, self.ho_ack, self.t_owner_grasp = None, None, None
             self.p_nav = self.create_publisher(Twist, '/cmd_vel_nav', 10)
             self.p_goal = self.create_publisher(PoseStamped, '/goal_pose', 10)
             self.p_plan = self.create_publisher(Path, '/merge/plan', 10)
@@ -714,6 +716,9 @@ def main():
 
         def _ack(self, m):
             self.ack = m.data
+
+        def _hoack(self, m):
+            self.ho_ack = m.data                                      # 'ack:<ver>' 或 'nack:<ver>:<原因>'（執行器以當下快照試跑首拍的結果）
 
         def _obs(self, m):
             d = np.array(m.data, float)                               # seq, t_obs, valid, odom_base(3), T_base_handle(16), t_publish
@@ -766,6 +771,10 @@ def main():
                 self.mrg_t = self.now()
             if self.stop:
                 self.p_nav.publish(Twist()); self.n_fwd['dropped'] += 1
+            elif src == 'GRASP' and self.owner != 'GRASP' and self.ho_pending is not None and not (self.ho_ack or '').startswith('nack'):
+                # 交權邊界：執行器只在「以當下快照試跑首拍通過」後才發第一筆 /cmd_vel_grasp；這一筆到達選擇器即為命令權切換點（自此 MERGE／NAV 丟棄）
+                self.owner, self.t_owner_grasp = 'GRASP', self.now()
+                self.p_nav.publish(m); self.n_fwd[src] += 1
             elif src == self.owner:
                 self.p_nav.publish(m); self.n_fwd[src] += 1
             else:
@@ -861,10 +870,10 @@ def main():
             self.p_act.publish(Bool(data=self.owner == 'MERGE'))
             if self.owner == 'GRASP':                                 # 已交接：底盤命令權在抓持／開門控制器（提案仍經本節點選擇器→安全鏈）；本節點不再下任何手臂或底盤命令
                 xs = self.xstate or ''
-                if xs.startswith('handover_rejected') and not self.stop:
-                    self.owner = 'MERGE'
-                    self.global_stop('handover_rejected_by_executor_global_stop', state=xs)
-                elif xs.startswith('done') or xs.startswith('latched'):
+                if not getattr(self, 'ho_logged', False):
+                    self.ho_logged = True
+                    self.event('owner_GRASP_on_first_grasp_command', t_switch=round(self.t_owner_grasp, 3), ack=self.ho_ack, request_ver=self.ho_pending)
+                if xs.startswith('done') or xs.startswith('latched'):
                     self.event('executor_finished_after_handover', state=xs, forwarded=dict(self.n_fwd))
                     raise SystemExit(0)
                 if self.owner == 'GRASP':
@@ -1090,13 +1099,15 @@ def main():
                     if HANDOVER:                                   # 交出命令權：鎖定參考（位姿、原始時間戳、鎖定時年齡、一致性）與通過線；設定點／真管線／上一命令在執行器手上原樣承接
                         lk_ = self.lock
                         msg = [t, *np.array(lk_['T'], float).reshape(-1), lk_['t_obs'], lk_['age_at_lock_s'], lk_['dang'], lk_['spread'], *self.plan['pg']['p0'], *self.plan['pg']['d'], self.plan['pg']['yaw'], float(lk_['ver'])]
-                        for _ in range(2):
-                            self.p_ho.publish(Float64MultiArray(data=[float(x) for x in msg]))
-                        self.owner = 'GRASP'
-                        self.event('handover_published_owner_GRASP', along=round(along, 4), budget=bd, note='底盤提案改由 /cmd_vel_grasp 經選擇器→平滑器→Shield→GUARD；MERGE／NAV 命令自此丟棄')
+                        self.p_ho.publish(Float64MultiArray(data=[float(x) for x in msg]))
+                        self.ho_pending = int(lk_['ver'])
+                        self.event('handover_requested', along=round(along, 4), budget=bd, ver=self.ho_pending, note='命令權仍在 MERGE、本節點續追預抓位；執行器以當下快照試跑首拍通過才接手（第一筆 /cmd_vel_grasp 到選擇器即切換）；nack ⇒ 保留前段所有權並停止')
                     else:
                         self.event('handover_request_accepted_first', along=round(along, 4), budget=bd, note='本程式只做判定與記錄；抓持控制器未接')
-                if along <= TERM_END:                                 # 預抓位追蹤的已核範圍終點：協同停止
+                if (self.ho_ack or '').startswith('nack') and not self.stop:
+                    self.global_stop('handover_rejected_by_executor_global_stop', ack=self.ho_ack, stop_certificate='本拍 now 停法核對通過')
+                    ua = np.zeros(6)
+                elif along <= TERM_END:                               # 預抓位追蹤的已核範圍終點：協同停止
                     self.global_stop('pretrack_end_global_stop', along=round(along, 4), n_judgements=len(self.sel_log), handover_ok_first_t=self.t_handover_ok, stop_certificate='本拍 now 停法核對通過')
                     ua = np.zeros(6)
             elif self.arm == 'TRACK' and not self.stop:
