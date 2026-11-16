@@ -33,7 +33,7 @@ def _seg_entry(o, fm=None):
                 ready=bool(o.get('ready')), ready_ver=o.get('ready_ver'), stopped=bool(o.get('stopped')), abort=bool(o.get('abort')), done=bool(o.get('done')))
 
 
-def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None):
+def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=None):
     """door＝door_ahead_open.DoorOpenPhase（可選）：抓持 READY 後在本程序內交接給開門執行層，之後同一套提前一拍協定。"""
     try:
         import ctypes
@@ -60,6 +60,16 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None):
                 conn.send(('call', getattr(tgt, name.split('.', 1)[-1])(*args)))
             except Exception as e:                                    # noqa: BLE001
                 conn.send(('call_error', repr(e)[:300]))
+            continue
+        if op == 'build':                                             # D2：交權請求到才建控制器（builder(packet) → 控制器；工作程序內建、不經 fork 傳物件）
+            w_b = time.perf_counter()
+            try:
+                ctrl = builder(msg[1])
+                seg_prev, s_before, cfg_prev, mode, k_tick, k_open = None, None, None, 'grasp', 0, 0
+                conn.send(('built', dict(ok=True, ms=round((time.perf_counter() - w_b) * 1e3, 2), ver=msg[1].get('ver'))))
+            except Exception as e:                                    # noqa: BLE001
+                import traceback
+                conn.send(('built', dict(ok=False, err=traceback.format_exc()[-1200:], ver=msg[1].get('ver'))))
             continue
         if op == 'get':
             conn.send(('get', dict({k: getattr(ctrl, k, None) for k in msg[1]}, _mode=mode)))
@@ -160,10 +170,10 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None):
 class AheadRunner:
     """執行器端：持有工作程序、已提交段、尾段、時間帳。"""
 
-    def __init__(self, ctrl, S, nph, deadline_ms=50.0, phi0=0.0, finger0=None, late_ticks=None, door=None):
+    def __init__(self, ctrl, S, nph, deadline_ms=50.0, phi0=0.0, finger0=None, late_ticks=None, door=None, builder=None):
         ctx = mp.get_context('fork')
         self.conn, c2 = ctx.Pipe()
-        self.proc = ctx.Process(target=_worker, args=(c2, ctrl, S, nph, phi0, finger0, dict(late_ticks or {}), door), daemon=True)
+        self.proc = ctx.Process(target=_worker, args=(c2, ctrl, S, nph, phi0, finger0, dict(late_ticks or {}), door, builder), daemon=True)
         self.proc.start()
         c2.close()
         self.nph, self.deadline_ms = nph, float(deadline_ms)
@@ -190,7 +200,9 @@ class AheadRunner:
                     break
                 t_ = time.perf_counter()
                 with self._rx_lock:
-                    if tag in ('seg', 'error'):
+                    if tag == 'built':
+                        self.built = out
+                    elif tag in ('seg', 'error'):
                         self._rx_box = (tag, out, t_)
         self._rx_box = None
         self._rx = threading.Thread(target=_loop, daemon=True)
@@ -213,6 +225,48 @@ class AheadRunner:
             snap['finger'] = finger
         self.pending = dict(ver=self.ver, n_send=int(n_send), w_send=time.perf_counter())
         self.conn.send(('tick', snap))
+
+    def prepare_takeover(self, packet, q_pred, t_h, n_h, phi=None, finger=None):
+        """D2（Codex 20261117 交權契約）：非阻塞準備。工作程序以 packet 建控制器、用預測的接手狀態 q_pred 算接手拍 n_h 的第一段＋尾段。
+        只送出、不等；結果由 poll()／接收執行緒收下。之後在 n_h 呼叫 commit_takeover()。"""
+        self.conn.send(('build', packet))
+        self.ver += 1
+        snap = dict(ver=self.ver, q=np.asarray(q_pred, float).tolist(), t_next=float(t_h), first=True)
+        if phi is not None:
+            snap['phi'] = float(phi)
+        if finger is not None:
+            snap['finger'] = finger
+        self.pending = dict(ver=self.ver, n_send=int(n_h), w_send=time.perf_counter(), takeover=True)
+        self.mode, self.took = 'prep', None
+        self.conn.send(('tick', snap))
+        return self.ver
+
+    def commit_takeover(self, n_h, extra_ok=True, why_not=None):
+        """在接手步 n_h（套用本步輸出之前）呼叫：第一段結果已到、計算 ≤ 期限、附尾段、無中止，且呼叫端的前綴／版本／狀態驗收（extra_ok）成立 ⇒ 原子切換為名目；
+        否則 mode＝'nack'（遲到結果之後丟棄），回 (ok, 紀錄)。"""
+        rec = dict(n=int(n_h), kind='takeover')
+        self.poll()
+        got, self.got = self.got, None
+        p = self.pending
+        ok = False
+        if got is not None and got[0] == 'seg' and p is not None and got[1]['ver'] == p['ver']:
+            o = got[1]
+            comp = (o['w_done'] - o['w_start']) * 1e3
+            rec.update(compute_ms=round(comp, 2), wall_since_request_ms=round((got[2] - p['w_send']) * 1e3, 2), tail_src=o['tail_src'], abort=o['abort'])
+            ok = bool(extra_ok and comp <= self.deadline_ms and o['seg'] is not None and o['abort'] is None and o['tail'] is not None)
+            if ok:
+                self.seg, self.tail, self.tail_i, self.mode, self.j = o['seg'], o['tail'], 0, 'nominal', 0
+                self.prop0 = None if o.get('prop') is None else np.asarray(o['prop'], float).copy()
+                self.n_commit += 1
+        else:
+            rec['why'] = 'not_ready' if got is None else ('error:' + str(got[1])[:300] if got[0] == 'error' else 'version_mismatch')
+        if not ok:
+            rec.setdefault('why', why_not or ('extra_check' if not extra_ok else 'deadline_or_tail'))
+            self.mode, self.seg = 'nack', None
+        self.pending = None
+        rec['ok'] = ok
+        self.log.append(rec)
+        return ok, rec
 
     def start(self, q, t0, phi=None, finger=None, timeout=5.0):
         """初始化（執行器起跑前）：第一段以實測狀態直接算。"""
@@ -240,8 +294,11 @@ class AheadRunner:
                     if self._rx_box is not None:
                         self.got, self._rx_box = self._rx_box, None
             return
-        if self.pending is not None and self.got is None and self.conn.poll(0):
+        while self.pending is not None and self.got is None and self.conn.poll(0):
             tag, out = self.conn.recv()
+            if tag == 'built':                                        # D2 建控制器的回報（只記錄）
+                self.built = out
+                continue
             self.got = (tag, out, time.perf_counter())
 
     def tick_boundary(self, q, t_next, n, phi=None, finger=None):
@@ -308,7 +365,7 @@ class AheadRunner:
 
     def output(self):
         """本步要套用的輸出：dict(arm_target, base_twist, finger, ready, ready_ver, stopped) 或 None（尾段已執行完＝停住）。"""
-        if self.mode == 'start_rejected':
+        if self.mode in ('start_rejected', 'prep', 'nack'):
             return None
         if self.mode == 'nominal':
             o = self.seg[self.j]

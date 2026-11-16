@@ -18,13 +18,36 @@ from door_ahead_case import *                                       # noqa: F401
 import door_ahead_case as CASE
 import door_ahead_exec as AE
 OUT = sys.argv[1]
-runner = AE.AheadRunner(gc, G.S, NPH, deadline_ms=DL_MS, phi0=phi_b, late_ticks=LATE, door=door)
+D2 = os.environ.get('AHEAD_D2') == '1'                               # D2 機制核對：工作程序起跑時沒有控制器，交權請求到才以封包建抓持控制器、算接手拍第一段＋尾段，接手步原子切換
+
+
+def _d2_builder(pk):
+    c = G.MovingGraspCtrl(ident, est_at, d_world, V, WIN, np.asarray(pk['s'], float), [np.asarray(u_, float) for u_ in pk['pipe']], np.asarray(pk['u_last'], float), np.asarray(pk['u_prev'], float),
+                          np.asarray(pk['off_static'], float), pool=SHARED, fastkin=True, deadline_ms=DL_MS, fric_ff=FRIC_FF, lock_budget_fn=lock_budget if LOCKED else None)
+    c.close_gate = gate
+    return c
+
+
+runner = AE.AheadRunner(None if D2 else gc, G.S, NPH, deadline_ms=DL_MS, phi0=phi_b, late_ticks=LATE, door=door, builder=_d2_builder if D2 else None)
 if CPU_LAYOUT:
     CPU_PIN['ahead_worker'] = CPUL.pin(runner.proc.pid, [0, 8])     # 控制器工作程序：整個實體核心 0（邏輯 0＋8；背景執行緒可用同核另一邏輯 CPU）
     CPU_PIN['readback'] = dict(main=sorted(os.sched_getaffinity(0)), worker=sorted(os.sched_getaffinity(runner.proc.pid)), pool=[sorted(os.sched_getaffinity(p_.pid)) for p_ in SHARED.procs], cstop=[sorted(os.sched_getaffinity(p_.pid)) for p_ in CSW.procs], planner=sorted(os.sched_getaffinity(BG.proc.pid)))
-init = runner.start(q, 0.0, phi=phi_b)
-if os.environ.get('AHEAD_RX_THREAD', '1') == '1':
-    runner.start_rx()                                                # 同 ROS 乾跑執行器：獨立接收執行緒（結果一到即記收到牆鐘；主迴圈忙於物理步時不延後）
+if D2:
+    runner.start_rx()
+    pk = dict(ver=1, s=s0.tolist(), pipe=[u_ss.tolist() for _ in range(D_STEPS)], u_last=u_ss.tolist(), u_prev=u_ss.tolist(), off_static=dq(q).tolist())
+    w_r = time.perf_counter()
+    runner.prepare_takeover(pk, q.copy(), 0.0, 0, phi=phi_b)
+    time.sleep(float(os.environ.get('AHEAD_D2_PREP_S', '0.1')))       # 交權準備期（假世界：受控對象在接手前靜止；請求到接手步 0.1 s）
+    ok_t, rec_t = runner.commit_takeover(0)
+    ev.append(dict(t=0.0, what='d2_takeover', ok=ok_t, rec=rec_t, built=getattr(runner, 'built', None), wall_ms=round((time.perf_counter() - w_r) * 1e3, 1)))
+    print('D2 takeover', ok_t, rec_t, getattr(runner, 'built', None), flush=True)
+    init = dict(tail_src=rec_t.get('tail_src'), phase=None)
+    if not ok_t:
+        runner.mode = 'start_rejected'
+else:
+    init = runner.start(q, 0.0, phi=phi_b)
+    if os.environ.get('AHEAD_RX_THREAD', '1') == '1':
+        runner.start_rx()                                            # 同 ROS 乾跑執行器：獨立接收執行緒（結果一到即記收到牆鐘；主迴圈忙於物理步時不延後）
 ev.append(dict(t=0.0, what='ahead_init', tail_src=init['tail_src'], phase=init['phase'], mode=runner.mode))
 exec_abort, meas_min = None, {k_: 9.0 for k_ in ('env', 'base', 'self', 'shell_bar')}
 SS = X.STOP_STILL                                                    # 停穩判準（同開門執行層：手臂、底盤、偏航、門角速率連續低於門檻 hold_s；逾時 timeout_s）
