@@ -12,10 +12,10 @@ C = np.load(os.path.join(D, PF + '_cmds.npz'))
 i = c.index
 ev = {e['what']: e for e in J['events']}
 out = dict(sources=json.load(open(os.path.join(D, PF + '_world_meta.json')))['sources'], events=J['events'], plan=dict(wall_s=J['plan']['wall_s'], select=J['plan']['select'].get('mode'), n_cells=J['plan']['select'].get('n_cells'), pass_line=J['plan']['pg'], observe={k: J['plan']['br'][k] for k in ('alongs', 'sigma_min', 'prep_time_s', 'track_rate_max', 'min_clear')}),
-           forwarded=J['forwarded'], final_owner=J['final_owner'], no_reach=J['no_reach'])
+           anchor=J.get('anchor'), prior=J.get('prior'), obs=dict(n=len(J.get('obs_log', [])), n_valid=sum(1 for o in J.get('obs_log', []) if o['valid']), n_assoc_rejected=J.get('n_assoc_rejected')), forwarded=J['forwarded'], final_owner=J['final_owner'], no_reach=J['no_reach'])
 own = R[:, i('base_owner(0NAV,1MERGE)')]
 k_sw = int(np.argmax(own > 0.5))
-out['timeline'] = dict(t_goal=ev['coarse_goal_sent']['t'], t_plan_ready=ev['plan_ready']['t'], plan_latency_sim_s=ev['plan_ready']['sim_elapsed_s'], t_switch=float(R[k_sw, 0]), speed_at_switch=ev['base_owner_NAV_to_MERGE']['speed'], switch=ev['base_owner_NAV_to_MERGE'])
+out['timeline'] = dict(t_goal=ev['coarse_goal_sent']['t'], t_visual_task=ev.get('visual_task_established', {}).get('t'), t_plan_ready=ev['plan_ready']['t'], plan_latency_sim_s=ev['plan_ready']['sim_elapsed_s'], t_switch=float(R[k_sw, 0]), speed_at_switch=ev['base_owner_NAV_to_MERGE']['speed'], switch=ev['base_owner_NAV_to_MERGE'])
 # 切換前後實際放行命令（/cmd_vel）的連續性
 A = C['cmd_vel']; ts = out['timeline']['t_switch']
 m = (A[:, 0] > ts - 0.3) & (A[:, 0] < ts + 1.0)
@@ -39,6 +39,11 @@ if 'truth_x' in c and an is not None:
     out['map_odom'] = dict(at_anchor=an['map_odom'], final=[round(float(x), 4) for x in R[-1, i('mo_x'):i('mo_x') + 3]], max_abs_xy_mm=round(float(np.abs(R[:, i('mo_x'):i('mo_x') + 2]).max()) * 1e3, 1), n_path_publishes=J.get('n_path_publishes'), note='進線期間 map←odom 持續變動；通過線保存在里程座標，變動超過 2 mm／0.1° 就以新轉換重發路徑')
     out['stop_precheck'] = {nm: dict(n=int(np.isfinite(R[m_, i('stop_ok')]).sum()), all_ok=bool(np.nanmin(R[m_, i('stop_ok')]) == 1), min_clear=dict(env=round(float(np.nanmin(R[m_, i('stop_env')])), 4), base=round(float(np.nanmin(R[m_, i('stop_base')])), 4), self=round(float(np.nanmin(R[m_, i('stop_self')])), 4)),
                                      ms_p50=round(float(np.nanmedian(R[m_, i('stop_ms')])), 1), ms_max=round(float(np.nanmax(R[m_, i('stop_ms')])), 1), n_eval_max=None if 'stop_n_samples' not in c else float(np.nanmax(R[m_, i('stop_n_samples')])), modes='now（本拍起送零）＋next（提交候選一拍後送零）', sample_rule='底盤 >5 mm 或關節 >0.01 rad 取一點；相鄰樣本間位移上界約 12.5 mm（未加進門檻）', frame='地圖座標（當下 map←odom）') for nm, m_ in (('prep', arm_ == 1), ('track', arm_ == 2)) if m_.any()}
+    if 'stop_margin_self' in c:
+        for nm, m_ in (('prep', arm_ == 1), ('track', arm_ == 2)):
+            if m_.any() and nm in out['stop_precheck']:
+                out['stop_precheck'][nm].update(margin_lower_bound_after_interval_bound=dict(env=round(float(np.nanmin(R[m_, i('stop_margin_env')])), 4), base=round(float(np.nanmin(R[m_, i('stop_margin_base')])), 4), self=round(float(np.nanmin(R[m_, i('stop_margin_self')])), 4)), n_refine_max=float(np.nanmax(R[m_, i('stop_n_refine')])),
+                                                sample_rule='初始：底盤 >5 mm 或關節 >0.01 rad；區間界不過則加密到逐物理步', coverage='兩端淨空較小值 − L/2 ≥ 門檻（L＝逐物理步累加的路徑長上界；自碰撞逐對）；停穩＝管線排清後連續 0.2 s 靜止', settle_pred_s_max=[float(np.nanmax(R[m_, i('stop_now_all_still_s')])), float(np.nanmax(R[m_, i('stop_next_all_still_s')]))])
     out['worker'] = dict(stale_replies_dropped=J.get('stale_replies_dropped'), switch_wait_ticks=J.get('switch_wait_ticks'))
 try:
     DG = [json.loads(x) for x in open(os.path.join(D, PF + '.merge_diag_v2.txt')) if x.strip().startswith('{')]
@@ -52,6 +57,7 @@ _tm = (arm == 2) & (R[:, i('stop')] == 0)
 out['arm'] = dict(prep_ticks=int((arm == 1).sum()), track_ticks=int(_tm.sum()), track_err_now_max=None if not _tm.any() else round(float(np.nanmax(R[_tm, i('arm_track_err')])), 4), track_err_pred_max=None if not _tm.any() or 'arm_track_err_pred' not in c else round(float(np.nanmax(R[_tm, i('arm_track_err_pred')])), 4),
                   track_err_note='now＝現在實測對現在底盤位姿下的目標解（交接用，容許 0.01 rad）；pred＝生效時刻預測關節對生效時刻目標解', clear_min_during_arm_motion={k_: (None if not np.isfinite(R[arm > 0, i('clear_' + k_)]).any() else round(float(np.nanmin(R[arm > 0, i('clear_' + k_)])), 4)) for k_ in ('env', 'base', 'self')})
 from collections import Counter
+_JK = list(J['judge'][0]['judge'].keys()) if J['judge'] else []
 def _reasons(key):
     cn = Counter()
     for j in J['judge']:
@@ -59,8 +65,8 @@ def _reasons(key):
         for r_ in (w if isinstance(w, list) else [str(w)]):
             cn[str(r_).split(':')[0]] += 1
     return dict(cn)
-out['handover_judgements'] = dict(n=len(J['judge']), accepted={k_: sum(1 for j in J['judge'] if not j['judge'][k_] or j['judge'][k_] in ('ok', None)) for k_ in ('real_image_at_start', 'synthetic_fresh_stamp')} if J['judge'] else None,
-                                  refuse_reasons={k_: _reasons(k_) for k_ in ('real_image_at_start', 'synthetic_fresh_stamp')} if J['judge'] else None, first=J['judge'][:1], last=J['judge'][-1:], note='沒有進入追蹤，就沒有交接判定' if not J['judge'] else '合成時間戳只驗接線，不算移動視覺')
+out['handover_judgements'] = dict(n=len(J['judge']), accepted={k_: sum(1 for j in J['judge'] if not j['judge'][k_] or j['judge'][k_] in ('ok', None)) for k_ in _JK} if J['judge'] else None,
+                                  refuse_reasons={k_: _reasons(k_) for k_ in _JK} if J['judge'] else None, first=J['judge'][:1], last=J['judge'][-1:], note='沒有進入追蹤，就沒有交接判定' if not J['judge'] else '合成時間戳只驗接線，不算移動視覺')
 # 停止核對：以實際放行命令與世界紀錄（含 8 步延遲）
 stop_ev = [e for e in J['events'] if 'global_stop' in e['what'] or e['what'] == 'normal_stop_start']
 if stop_ev:

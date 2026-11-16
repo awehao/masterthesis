@@ -1,0 +1,552 @@
+{
+ "sources": {
+  "scan": "合成射線投射（已知場景幾何＋關閉門扇；無雜訊）",
+  "odom": "/cmd_vel 理想積分",
+  "clock": "本節點",
+  "joint_states": "一階設定點模型",
+  "delay": "命令經 8 個物理步（0.08 s）在途管線才作用（底盤與手臂）"
+ },
+ "events": [
+  {
+   "t": 60.6,
+   "what": "coarse_goal_sent",
+   "goal_map": [
+    1.65,
+    -0.49
+   ],
+   "map_odom": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "note": "粗目標來自地圖先驗（src/my_omnibot_description/config/door_local_v3.yaml）；通過線待途中第一格有效影像估計"
+  },
+  {
+   "t": 60.6,
+   "what": "merge_gmpc_started",
+   "overrides": {
+    "plan_topic": "/merge/plan",
+    "cmd_vel_topic": "/cmd_vel_merge",
+    "v_nominal": 0.05,
+    "heading_fixed": 1.5707963267948966,
+    "goal_tolerance_xy": 0.03,
+    "heading_enable": true
+   }
+  },
+  {
+   "t": 68.85,
+   "what": "visual_task_established",
+   "seq": 344,
+   "t_obs": 68.8,
+   "age_s": 0.05,
+   "assoc": {
+    "dxy_m": 0.0394,
+    "dz_m": 0.0002,
+    "dang_deg": 0.512
+   },
+   "dist_to_coarse_goal": 0.969
+  },
+  {
+   "t": 69.55,
+   "what": "plan_ready",
+   "wall_s": 0.68,
+   "sim_elapsed_s": 0.7,
+   "n_cells": 4,
+   "standoff": 0.45000000000000007,
+   "along_offset": -0.03999999999999998,
+   "prep_time_s": 6.55,
+   "sigma_min": 0.0561
+  },
+  {
+   "t": 70.5,
+   "what": "base_owner_NAV_to_MERGE",
+   "along": 0.675,
+   "lat": 0.596,
+   "speed": 0.198,
+   "merge_plan": {
+    "n": 282,
+    "along0": 0.672,
+    "end_odom": [
+     0.741,
+     -0.49
+    ]
+   },
+   "released_cmd": [
+    0.2202,
+    -0.0075,
+    -0.1334
+   ],
+   "merge_candidate": [
+    0.1512,
+    -0.0002,
+    -0.0441
+   ],
+   "nav_cmd": [
+    0.2121,
+    -0.01,
+    -0.1315
+   ],
+   "candidate_checks": {
+    "candidate_fresh": true,
+    "plan_acked": true,
+    "candidate_nonzero": true,
+    "step_within_smoother_limit": true,
+    "moving": true,
+    "predicted_in_capture": true
+   },
+   "n_shadow_plans": 4,
+   "note": "影子模式下進線 GMPC 的上一命令＝實際放行命令（外包設定）；候選有效才切換"
+  },
+  {
+   "t": 80.95,
+   "what": "arm_owner_HOLD_to_TRACK_prep",
+   "along": 0.672,
+   "need_along": 0.593
+  },
+  {
+   "t": 90.5,
+   "what": "arm_track_start",
+   "along_pred": 0.2231,
+   "lat_pred_mm": -0.19,
+   "yaw_err_deg": 0.001,
+   "arm_err_rad": 0.0
+  },
+  {
+   "t": 96.1,
+   "what": "pass_end_no_handover_global_stop",
+   "along": -0.0506,
+   "n_judgements": 111
+  },
+  {
+   "t": 98.85,
+   "what": "finished_base_stopped",
+   "along": -0.058,
+   "lat_mm": -0.0
+  }
+ ],
+ "plan": {
+  "wall_s": 0.68,
+  "select": "first_feasible（非最優）",
+  "n_cells": 4,
+  "pass_line": {
+   "p0": [
+    0.8392378692324567,
+    -0.4902167487522367
+   ],
+   "d": [
+    -0.9999990544532125,
+    0.0013751700553574608
+   ],
+   "n": [
+    -0.001375139538984581,
+    -0.9999990544951772
+   ],
+   "yaw": 1.5694211868225114,
+   "standoff": 0.45000000000000007,
+   "along": -0.03999999999999998
+  },
+  "observe": {
+   "alongs": [
+    0.25,
+    0.225,
+    -0.09999999999999992
+   ],
+   "sigma_min": 0.0561364058008302,
+   "prep_time_s": 6.552347689118696,
+   "track_rate_max": 0.478943230024943,
+   "min_clear": {
+    "env": 0.12700427038597487,
+    "base": 0.22844053991789443,
+    "self": 0.006421725708687689
+   }
+  }
+ },
+ "anchor": {
+  "t": 68.85000000000001,
+  "seq": 344,
+  "t_obs": 68.8,
+  "age_s": 0.05,
+  "odom_base": [
+   1.584624652299568,
+   -1.4197721025618477,
+   1.4042918465133043
+  ],
+  "truth_base": [
+   1.5895319434172694,
+   -1.4119340641431153,
+   1.4080000150304355
+  ],
+  "map_odom": [
+   -0.0053758883964856174,
+   -0.03350886836993405,
+   -0.006578503248853544
+  ],
+  "T_base_handle": [
+   [
+    0.16437853189942106,
+    0.9863971026203382,
+    -0.0006739382708495291,
+    1.2304656534100307
+   ],
+   [
+    -0.9863889990723991,
+    0.1643799132666763,
+    0.003998327574216675,
+    1.0025659862106604
+   ],
+   [
+    0.004054720649043673,
+    7.526079717139775e-06,
+    0.9999917795581205,
+    0.8502394506761622
+   ],
+   [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  ],
+  "assoc": {
+   "dxy_m": 0.0394,
+   "dz_m": 0.0002,
+   "dang_deg": 0.512
+  },
+  "version": "fixed_reference_v1(seq 344)",
+  "note": "固定參考＝途中第一格通過關聯核對的實際影像估計；之後各格另存，不改通過線"
+ },
+ "prior": {
+  "yaw": 1.5707963267948966,
+  "d": [
+   -1.0,
+   -0.0
+  ],
+  "n": [
+   0.0,
+   -1.0
+  ],
+  "p0": [
+   0.8,
+   -0.49
+  ],
+  "handle_xy": [
+   0.8,
+   -0.04
+  ],
+  "frame": "map",
+  "source": {
+   "asset": "src/my_omnibot_description/config/door_local_v3.yaml",
+   "sha256": "6b9628c3b2ab8a00f7de1322fa8a85291bcdfc7d9e321885f68a4e12b16bb324",
+   "scene_reg": "evaluation/experiments/20261112_m8_house_scene.json",
+   "note": "名目位姿（門關閉 φ=0）；不讀把手 prim 真值"
+  }
+ },
+ "obs": {
+  "n": 193,
+  "n_valid": 151,
+  "n_assoc_rejected": 0
+ },
+ "forwarded": {
+  "NAV": 193,
+  "MERGE": 512,
+  "dropped": 761
+ },
+ "final_owner": {
+  "base": "MERGE",
+  "arm": "TRACK",
+  "stop": true
+ },
+ "no_reach": null,
+ "timeline": {
+  "t_goal": 60.6,
+  "t_visual_task": 68.85,
+  "t_plan_ready": 69.55,
+  "plan_latency_sim_s": 0.7,
+  "t_switch": 70.5,
+  "speed_at_switch": 0.198,
+  "switch": {
+   "t": 70.5,
+   "what": "base_owner_NAV_to_MERGE",
+   "along": 0.675,
+   "lat": 0.596,
+   "speed": 0.198,
+   "merge_plan": {
+    "n": 282,
+    "along0": 0.672,
+    "end_odom": [
+     0.741,
+     -0.49
+    ]
+   },
+   "released_cmd": [
+    0.2202,
+    -0.0075,
+    -0.1334
+   ],
+   "merge_candidate": [
+    0.1512,
+    -0.0002,
+    -0.0441
+   ],
+   "nav_cmd": [
+    0.2121,
+    -0.01,
+    -0.1315
+   ],
+   "candidate_checks": {
+    "candidate_fresh": true,
+    "plan_acked": true,
+    "candidate_nonzero": true,
+    "step_within_smoother_limit": true,
+    "moving": true,
+    "predicted_in_capture": true
+   },
+   "n_shadow_plans": 4,
+   "note": "影子模式下進線 GMPC 的上一命令＝實際放行命令（外包設定）；候選有效才切換"
+  }
+ },
+ "released_cmd_around_switch": {
+  "max_step_change": [
+   0.0571,
+   0.009,
+   0.0897
+  ],
+  "max_accel": [
+   1.14,
+   0.18,
+   1.79
+  ],
+  "speed_before": 0.231,
+  "speed_after_1s": 0.051
+ },
+ "line_tracking": {
+  "prep": {
+   "n": 191,
+   "lat_mm_odom": [
+    -6.78,
+    27.97
+   ],
+   "lat_mm_truth": [
+    0.73,
+    35.52
+   ],
+   "yaw_err_deg": [
+    -0.0,
+    0.01
+   ],
+   "speed": [
+    0.0361,
+    0.0514
+   ]
+  },
+  "track": {
+   "n": 168,
+   "lat_mm_odom": [
+    -0.21,
+    0.22
+   ],
+   "lat_mm_truth": [
+    4.85,
+    5.78
+   ],
+   "yaw_err_deg": [
+    0.0,
+    0.02
+   ],
+   "speed": [
+    0.0,
+    0.0506
+   ]
+  },
+  "tol": {
+   "lateral_mm": 10,
+   "yaw_deg": 1.0
+  }
+ },
+ "map_odom": {
+  "at_anchor": [
+   -0.0053758883964856174,
+   -0.03350886836993405,
+   -0.006578503248853544
+  ],
+  "final": [
+   0.1209,
+   -0.0129,
+   -0.0457
+  ],
+  "max_abs_xy_mm": 121.1,
+  "n_path_publishes": 20,
+  "note": "進線期間 map←odom 持續變動；通過線保存在里程座標，變動超過 2 mm／0.1° 就以新轉換重發路徑"
+ },
+ "stop_precheck": {
+  "prep": {
+   "n": 191,
+   "all_ok": true,
+   "min_clear": {
+    "env": 0.1182,
+    "base": 0.2175,
+    "self": 0.0063
+   },
+   "ms_p50": 11.4,
+   "ms_max": 31.3,
+   "n_eval_max": 24.0,
+   "modes": "now（本拍起送零）＋next（提交候選一拍後送零）",
+   "sample_rule": "初始：底盤 >5 mm 或關節 >0.01 rad；區間界不過則加密到逐物理步",
+   "frame": "地圖座標（當下 map←odom）",
+   "margin_lower_bound_after_interval_bound": {
+    "env": 0.0954,
+    "base": 0.181,
+    "self": 0.0
+   },
+   "n_refine_max": 0.0,
+   "coverage": "兩端淨空較小值 − L/2 ≥ 門檻（L＝逐物理步累加的路徑長上界；自碰撞逐對）；停穩＝管線排清後連續 0.2 s 靜止",
+   "settle_pred_s_max": [
+    0.96,
+    1.02
+   ]
+  },
+  "track": {
+   "n": 113,
+   "all_ok": true,
+   "min_clear": {
+    "env": 0.2943,
+    "base": 0.2226,
+    "self": 0.0063
+   },
+   "ms_p50": 15.0,
+   "ms_max": 35.7,
+   "n_eval_max": 18.0,
+   "modes": "now（本拍起送零）＋next（提交候選一拍後送零）",
+   "sample_rule": "初始：底盤 >5 mm 或關節 >0.01 rad；區間界不過則加密到逐物理步",
+   "frame": "地圖座標（當下 map←odom）",
+   "margin_lower_bound_after_interval_bound": {
+    "env": 0.2731,
+    "base": 0.1837,
+    "self": 0.0
+   },
+   "n_refine_max": 0.0,
+   "coverage": "兩端淨空較小值 − L/2 ≥ 門檻（L＝逐物理步累加的路徑長上界；自碰撞逐對）；停穩＝管線排清後連續 0.2 s 靜止",
+   "settle_pred_s_max": [
+    0.92,
+    0.97
+   ]
+  }
+ },
+ "worker": {
+  "stale_replies_dropped": 0,
+  "switch_wait_ticks": 0
+ },
+ "merge_gmpc": {
+  "n_running_after_switch": 535,
+  "xi_prev_first_tick_after_switch": [
+   0.05096937301899993,
+   -0.00169616723426056,
+   0.026675318691324956
+  ],
+  "u_first_tick_after_switch": [
+   0.04956653419263695,
+   -0.0018171159996437196,
+   0.024004524146007917
+  ],
+  "min_h_min": 0.058,
+  "states": [
+   "running"
+  ]
+ },
+ "arm": {
+  "prep_ticks": 191,
+  "track_ticks": 112,
+  "track_err_now_max": 0.0312,
+  "track_err_pred_max": 0.0265,
+  "track_err_note": "now＝現在實測對現在底盤位姿下的目標解（交接用，容許 0.01 rad）；pred＝生效時刻預測關節對生效時刻目標解",
+  "clear_min_during_arm_motion": {
+   "env": 0.1183,
+   "base": 0.2175,
+   "self": 0.0063
+  }
+ },
+ "handover_judgements": {
+  "n": 111,
+  "accepted": {
+   "fixed_reference": 0,
+   "latest_observation": 85
+  },
+  "refuse_reasons": {
+   "fixed_reference": {
+    "estimate_stale": 111,
+    "arm_not_tracking_target": 5,
+    "outside_grasp_window": 2,
+    "already_past_grasp_point": 20
+   },
+   "latest_observation": {
+    "arm_not_tracking_target": 5,
+    "outside_grasp_window": 2,
+    "already_past_grasp_point": 20
+   }
+  },
+  "first": [
+   {
+    "t": 90.55,
+    "along": 0.2266,
+    "lat_mm": -0.2,
+    "judge": {
+     "fixed_reference": [
+      "estimate_stale:21.750",
+      "arm_not_tracking_target:0.0122"
+     ],
+     "latest_observation": [
+      "arm_not_tracking_target:0.0122"
+     ]
+    }
+   }
+  ],
+  "last": [
+   {
+    "t": 96.05,
+    "along": -0.0486,
+    "lat_mm": -0.0,
+    "judge": {
+     "fixed_reference": [
+      "estimate_stale:27.250",
+      "already_past_grasp_point"
+     ],
+     "latest_observation": [
+      "already_past_grasp_point"
+     ]
+    }
+   }
+  ],
+  "note": "合成時間戳只驗接線，不算移動視覺"
+ },
+ "stop_check": {
+  "trigger": {
+   "t": 96.1,
+   "what": "pass_end_no_handover_global_stop",
+   "along": -0.0506,
+   "n_judgements": 111
+  },
+  "base_stop_time_s": 0.18,
+  "whole_robot_settle_time_s": 0.78,
+  "settle_rule": "底盤靜止且手臂各關節速率連續 0.2 s <1e-3 rad/s",
+  "distance_m": 0.009,
+  "speed_at_trigger": 0.0495,
+  "decel_max": 4.96,
+  "accel_limit_released_chain": "平滑器／GUARD 的既有上限（未改）",
+  "arm_rate_max_during_stop": 0.5406,
+  "arm_setpoint_rate_max": 0.7121,
+  "arm_rate_after_still_max": 0.3791,
+  "joints_within_limits": true,
+  "min_clear_during_stop": {
+   "env": 0.3186,
+   "base": 0.1901,
+   "self": 0.0064
+  },
+  "clear_ok": true,
+  "n_clear_samples": 24,
+  "final": {
+   "along": -0.058,
+   "lat_mm": -0.0
+  },
+  "note": "事後重算（執行時另有每拍提交前停止核對 stop_precheck）；淨空以把手估計＋已知門幾何計算"
+ }
+}
