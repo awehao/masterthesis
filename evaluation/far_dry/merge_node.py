@@ -113,7 +113,10 @@ def worker(conn):
             if op == 'anchor':                                         # 把手估計轉入連續的里程座標：T_odom_handle＝T_odom_base(擷取同刻)·T_base_handle
                 # 乾跑的量測合成：歷史影像不是在本趟起點拍的，所以用起點的真值底盤位姿把估計換成「起點同刻、相對底盤」的量測（真值只用在這一步合成量測），
                 # 再用同刻的里程位姿轉入里程座標。實機／Isaac 取像時這一步＝相機＋FK 直接給出的相對量測。
-                T_base_handle = np.linalg.inv(np.asarray(a['T_truth_base'], float)) @ T_est_W
+                if a.get('T_base_handle') is not None:                 # 取像模式：執行器給的實際量測（相對擷取同刻底盤），不用真值
+                    T_base_handle = np.asarray(a['T_base_handle'], float)
+                else:
+                    T_base_handle = np.linalg.inv(np.asarray(a['T_truth_base'], float)) @ T_est_W
                 T_est = np.asarray(a['T_odom_base'], float) @ T_base_handle
                 _Tmo_a = np.asarray(a['T_mo'], float)                     # 搜尋階段的淨空：以錨定時的 map←odom 轉入地圖座標（每拍核對另用當下轉換）
                 clear_fn = lambda x, _T=_T3(_Tmo_a) @ T_est, _m=_Tmo_a: W.clear_door(np.r_[to_map(np.asarray(x, float), _m), 0.0], _T)   # noqa: E731
@@ -169,6 +172,7 @@ def worker(conn):
 
 def main():
     out = sys.argv[1]
+    OBS_MODE = len(sys.argv) > 2 and sys.argv[2] == 'obs'            # 取像模式：把手估計來自執行器 /far/handle_obs 的實際影像（起點第一格有效估計定通過線；之後各格只記錄與更新時間戳，不改線）
     ctx = mp.get_context('fork')
     pc, cc = ctx.Pipe()
     wp = ctx.Process(target=worker, args=(cc,), daemon=False)          # 非 daemon：它要再開平行掃掠池；以 PDEATHSIG 跟著父程序結束
@@ -206,6 +210,10 @@ def main():
             self.create_subscription(Twist, '/cmd_vel', self._rel, 20)
             self.create_subscription(Float64MultiArray, '/far/truth', self._truth, 20)
             self.create_subscription(String, '/merge/gmpc/plan_ack', self._ack, 10)
+            self.create_subscription(Float64MultiArray, '/far/handle_obs', self._obs, 20)
+            self.create_subscription(String, '/far/exec_state', self._xstate, 10)
+            self.p_done = self.create_publisher(Bool, '/far/done', 10)
+            self.obs_first, self.obs_last_valid_t, self.obs_log, self.xstate, self.t_first_tick = None, None, [], None, None
             self.p_act = self.create_publisher(Bool, '/merge/active', 10)
             self.tfb = Buffer(); self.tfl = TransformListener(self.tfb, self)
             self.ver, self.stale, self.T_mo_pub, self.path_odom, self.plan_stamp, self.ack, self.t_shadow, self.mrg_t = 0, 0, None, None, None, None, None, None
@@ -227,6 +235,18 @@ def main():
 
         def _ack(self, m):
             self.ack = m.data
+
+        def _obs(self, m):
+            d = np.array(m.data, float)                               # seq, t_obs, valid, odom_base(3), T_base_handle(16), t_publish
+            valid = bool(d[2] > 0.5)
+            self.obs_log.append(dict(seq=int(d[0]), t_obs=float(d[1]), valid=valid, t_rx=round(self.now(), 3)))
+            if valid:
+                self.obs_last_valid_t = float(d[1])
+                if self.obs_first is None:
+                    self.obs_first = dict(seq=int(d[0]), t_obs=float(d[1]), odom_base=d[3:6].copy(), T_base_handle=d[6:22].reshape(4, 4).copy())
+
+        def _xstate(self, m):
+            self.xstate = m.data
 
         def tf2d(self, parent, child):
             try:
@@ -339,8 +359,23 @@ def main():
             t = self.now()
             q = np.r_[T_ob, tr['q'][3:]]                                # 控制用位姿＝里程座標（TF odom→base_footprint）；手臂＝驅動端讀回。真值底盤位姿只記錄，不進任何判斷
             self.p_act.publish(Bool(data=self.owner == 'MERGE'))
-            if self.t_goal is None:                                   # 起點＝影像擷取同刻（乾跑設定）：把手估計以同刻里程位姿轉入里程座標；粗目標立即送出；背景開始搜尋
-                tag, res = self.ask('anchor', dict(T_odom_base=_T3(T_ob).tolist(), T_truth_base=_T3(tr['q'][:3]).tolist(), T_mo=T_mo.tolist()), 10.0)
+            if self.xstate is not None and self.xstate.startswith('latched') and not self.stop:
+                self.global_stop('executor_latched_global_stop', state=self.xstate)
+            if self.t_first_tick is None:
+                self.t_first_tick = t
+            if self.t_goal is None and OBS_MODE and self.obs_first is None:
+                if t - self.t_first_tick > 8.0:                        # 起點 8 s 內沒有有效估計 ⇒ 不出發
+                    self.event('no_valid_estimate_at_start_no_motion', n_frames=len(self.obs_log))
+                    self.no_reach = 'no_valid_estimate_at_start'
+                    for _ in range(5):
+                        self.p_done.publish(Bool(data=True))
+                    raise SystemExit(0)
+                return
+            if self.t_goal is None:                                   # 把手估計以擷取同刻里程位姿轉入里程座標；粗目標立即送出；背景開始搜尋。乾跑：擷取同刻設為本趟起點、量測由真值合成；取像模式：實際量測
+                am = dict(T_odom_base=_T3(T_ob).tolist(), T_truth_base=_T3(tr['q'][:3]).tolist(), T_mo=T_mo.tolist())
+                if OBS_MODE:
+                    am.update(T_odom_base=_T3(self.obs_first['odom_base']).tolist(), T_base_handle=self.obs_first['T_base_handle'].tolist())
+                tag, res = self.ask('anchor', am, 10.0)
                 if tag != 'anchor':
                     self.global_stop('anchor_failed_global_stop', res=str(res)[:200]); raise SystemExit(1)
                 co.update(res)
@@ -428,7 +463,7 @@ def main():
                 ua_cand = np.clip((s_des - tr['s_end']) / DT, -1.0, 1.0)
             if self.arm in ('PREP', 'TRACK') and not self.stop:
                 judge = self.arm == 'TRACK' and -0.05 <= along <= 0.25
-                tag, res = self.ask('tick', dict(mode=self.arm, t=t, q=q.tolist(), pipe=tr['pipe'].tolist(), rel=self.rel.tolist(), s=tr['s'].tolist(), s_end=tr['s_end'].tolist(), judge=judge, t_img=self.t_goal, v_meas=v_meas.tolist(), ua_cand=ua_cand.tolist(), T_mo=T_mo.tolist(),
+                tag, res = self.ask('tick', dict(mode=self.arm, t=t, q=q.tolist(), pipe=tr['pipe'].tolist(), rel=self.rel.tolist(), s=tr['s'].tolist(), s_end=tr['s_end'].tolist(), judge=judge, t_img=(self.obs_last_valid_t if OBS_MODE and self.obs_last_valid_t is not None else self.t_goal), v_meas=v_meas.tolist(), ua_cand=ua_cand.tolist(), T_mo=T_mo.tolist(),
                                                   u_last=np.r_[self.rel, self.u_arm].tolist(), u_prev=np.r_[self.rel, self.u_arm_prev].tolist()), 0.045)
                 if tag != 'tick':                                     # 遲到或錯誤：本拍沒有經過核對的候選 ⇒ 不提交，走全域停止（遲到的回覆之後以版本號丟棄）
                     self.global_stop('worker_' + tag + '_global_stop', arm=self.arm, res=str(res)[:200]); res = {}
@@ -474,6 +509,8 @@ def main():
             if (self.owner == 'MERGE' or self.stop) and not moving:
                 self.t_stopcheck = self.t_stopcheck or t
                 if t - self.t_stopcheck > 2.5:
+                    for _ in range(5):
+                        self.p_done.publish(Bool(data=True))
                     self.event('finished_base_stopped', along=None if along is None else round(along, 4), lat_mm=None if lat is None else round(lat * 1e3, 2))
                     raise SystemExit(0)
             else:
@@ -483,7 +520,7 @@ def main():
             cols = ['t', 't_world'] + [f'q{i}' for i in range(9)] + [f's{i}' for i in range(6)] + ['rel_x', 'rel_y', 'rel_w'] + [f'ua{i}' for i in range(6)] + ['nav_x', 'nav_y', 'nav_w', 'mrg_x', 'mrg_y', 'mrg_w', 'base_owner(0NAV,1MERGE)', 'arm(0HOLD,1PREP,2TRACK)', 'stop',
                                                                                                            'along', 'lat', 'yaw_err_deg', 'arm_track_err', 'sigma', 'clipped', 'clear_env', 'clear_base', 'clear_self', 'vx_meas', 'vy_meas', 'truth_x', 'truth_y', 'truth_yaw', 'mo_x', 'mo_y', 'mo_yaw', 'stop_ok', 'stop_env', 'stop_base', 'stop_self', 'stop_ms', 'arm_track_err_pred', 'tf_stamp_base', 'stop_now_all_still_s', 'stop_next_all_still_s', 'stop_n_samples']
             np.savez_compressed(out + '_merge.npz', R=np.array(self.rows, float), cols=np.array(cols))
-            json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
+            json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, obs_mode=OBS_MODE, obs_first=None if self.obs_first is None else dict(seq=self.obs_first['seq'], t_obs=self.obs_first['t_obs'], odom_base=self.obs_first['odom_base'].tolist(), T_base_handle=self.obs_first['T_base_handle'].tolist()), obs_log=self.obs_log, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
 
     node = M()
     try:

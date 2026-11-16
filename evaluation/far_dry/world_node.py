@@ -85,6 +85,16 @@ class World(Node):
         self.p_truth = self.create_publisher(Float64MultiArray, '/far/truth', 10)
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 10)
         self.create_subscription(Float64MultiArray, '/far/arm_cmd', self._acmd, 10)
+        # 取像模式的接線驗證（argv[4]=='obs'）：以歷史影像的估計合成 /far/handle_obs（5 Hz，全部標 valid；只驗接線，不是移動視覺）
+        self.fake_obs = len(a) > 4 and a[4] == 'obs'
+        if self.fake_obs:
+            from std_msgs.msg import Bool, String
+            self.T_est = np.array(json.load(open(os.path.join(HERE, 'far_dry', 'handle_est_far_live.json')))['T_WH_est'], float)
+            self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
+            self.p_xs = self.create_publisher(String, '/far/exec_state', 10)
+            self._String = String
+            self.done, self.obs_seq = False, 0
+            self.create_subscription(Bool, '/far/done', lambda m: setattr(self, 'done', self.done or bool(m.data)), 10)
         self.log = []
         self.pipe = [np.zeros(9) for _ in range(D_STEPS)]              # 命令到受控對象的 8 步在途管線（同門任務控制器的延遲模型；底盤與手臂都經過）
         self.v_world, self.wz = np.zeros(2), 0.0
@@ -149,6 +159,16 @@ class World(Node):
             m.ranges = [float(x) for x in r]
             self.p_scan.publish(m)
             self.scan_min = float(np.min(r))
+        if getattr(self, 'fake_obs', False):
+            if self.n % 20 == 0:
+                c, s_ = math.cos(self.q[2]), math.sin(self.q[2])
+                Tb = np.eye(4); Tb[:2, :2] = [[c, -s_], [s_, c]]; Tb[:2, 3] = self.q[:2]
+                self.obs_seq += 1
+                self.p_obs.publish(Float64MultiArray(data=[float(self.obs_seq), self.t, 1.0, *[float(x) for x in self.q[:3]], *[float(x) for x in (np.linalg.inv(Tb) @ self.T_est).reshape(-1)], self.t]))
+                self.p_xs.publish(self._String(data='run'))
+            if self.done:
+                self.save()
+                raise SystemExit(0)
         self.log.append(np.r_[self.t, self.q, self.s, u, ua, getattr(self, 'scan_min', np.nan), u_in, ua_in])
         if self.t >= self.t_end:
             self.save()

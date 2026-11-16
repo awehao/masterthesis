@@ -1,0 +1,39 @@
+{
+ "name": "m8_house_far_capture_r1",
+ "status": "草稿：尚未核可、尚未建凍結清單（凍結最後建）",
+ "authority": "Codex reviews/20261116（遠距進線乾跑第二包回覆）：方向核可「可起跑的遠距實際取像執行器與登錄」；現版尚未核可起 Isaac",
+ "runs": [
+  {"run_id": "m8house_far_capture_static_1", "kind": "靜態取像冒煙", "env": "STATIC_S=6 START=1.5,-2.8,1.5708", "purpose": "執行器起得來、讀回相符、掃描有回波、腕部相機在遠距起點（距把手約 2.9 m）有新影格；記錄偵測有效與否及原因。機器人不動，不起導航與監督。", "pass_is": "不設通過門檻；回答『起點看不看得到、偵測給什麼』"},
+  {"run_id": "m8house_far_capture_1", "kind": "遠距移動取像（名目一趟）", "env": "START=1.5,-2.8,1.5708 SIM_LIMIT=150", "purpose": "原導航避障 → 移動中進線 → 手臂準備 → 觀察追蹤（TCP 後退 0.33 m 的觀察位）→ 持續取像 → 通過把手 0.05 m 後協同停止"}
+ ],
+ "chain": {
+  "simulator": "evaluation/isaac_m8_house_far_capture.py（住宅 m8_house_r1；只提供感測與受控對象介面）",
+  "navigation": "omni_bot_dynamic.launch.py：NO_GZ=1 BIGARENA=1 SCENE=mission_house_m8 NO_TRAFFIC=1 HEADING=1 GUARD=1 SHIELD=1 use_arm:=true（同基準）＋GMPC_CMD_TOPIC=cmd_vel_nav_raw（命令選擇器插在平滑器之前；導航參數未改）",
+  "supervisor": "evaluation/far_dry/merge_node.py obs＋gmpc_merge_wrap.py（進線 GMPC＝同一 GMPCNode＋現場參數，只覆寫任務參考）",
+  "runner": "evaluation/run_m8_house_far_capture.sh 經 run_guarded_v3.sh"
+ },
+ "stop_and_refuse": [
+  "起點 8 s 內沒有有效估計 ⇒ 不出發（照實記錄）",
+  "執行器鎖存：非預期接觸 >0.05 N、門角變化 >0.05°、手指張開量偏離模型 ⇒ 底盤歸零、手臂設定點凍結、監督節點全域停止",
+  "進線候選五項檢查不過 ⇒ 不切換；離開捕獲區仍無有效候選 ⇒ 全域停止",
+  "每拍提交前停止核對（兩種停法、地圖座標淨空＋限位）不過 ⇒ 不提交並全域停止",
+  "幾何計算遲到（45 ms）或錯誤 ⇒ 全域停止",
+  "追蹤啟動判定拒絕（側向 >10 mm、朝向 >1°、手臂未就緒）⇒ 全域停止",
+  "通過把手正前方 0.05 m ⇒ 協同停止（本趟的正常終點）",
+  "92 °C 熱中止（run_guarded_v3）"
+ ],
+ "recorded": [
+  "每格取用影像：原始深度（npz）、彩色（png）、內參、相機外參（渲染時刻 FK）、擷取同刻里程位姿／關節／設定點、最新 map←odom、偵測／估計成功或失敗原因、相對底盤的把手估計",
+  "各層底盤命令、命令權事件、進線 GMPC 診斷、每拍停止核對結果、交接判定（只記錄，不交接）",
+  "把手與門角真值：只供事後評估"
+ ],
+ "not_claims": [
+  "不閉爪、不綁定、不開門；不以交接判定全過為前提",
+  "0.33 m 觀察位不是 30 mm 預抓位",
+  "通過線由起點第一格有效估計決定；之後各格估計只記錄，不在線更新通過線（連續更新留待本趟資料回來後接）",
+  "里程＝物理位姿（理想，無滑移）；掃描無雜訊且略過機器人自身形狀；延遲＝8 步軟體管線",
+  "非即時（偵測與幾何計算期間物理不步進）",
+  "n=1；不預告能走完，失敗照實保留、不補跑"
+ ],
+ "dry_run_evidence": "第八次進度報告素材/資料/far_dry_m11_analysis.json（理想里程乾跑，n=1）；取像模式接線以合成觀察乾跑過一次（m12，只驗接線）"
+}

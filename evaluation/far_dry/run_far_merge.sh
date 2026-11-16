@@ -15,7 +15,7 @@ cleanup(){ for p in "${PIDS[@]}"; do kill -INT -- "-$p" 2>/dev/null; done; pkill
 trap cleanup EXIT
 SX=$(echo "$Q0" | cut -d, -f1); SY=$(echo "$Q0" | cut -d, -f2); SYAW=$(echo "$Q0" | cut -d, -f3)
 PYS="env -u VIRTUAL_ENV /usr/bin/python3"
-setsid $PYS -u evaluation/far_dry/world_node.py "$OUT" "$Q0" "$TEND" > "$OUT.world.log" 2>&1 < /dev/null & PIDS+=( $! ); WPID=$!
+setsid $PYS -u evaluation/far_dry/world_node.py "$OUT" "$Q0" "$TEND" ${OBS:+obs} > "$OUT.world.log" 2>&1 < /dev/null & PIDS+=( $! ); WPID=$!
 sleep 2
 NO_GZ=1 BIGARENA=1 SCENE=mission_house_m8 NO_TRAFFIC=1 HEADING=1 GUARD=1 SHIELD=1 GMPC_CMD_TOPIC=cmd_vel_nav_raw SPAWN_X="$SX" SPAWN_Y="$SY" \
   setsid ros2 launch my_omnibot_description omni_bot_dynamic.launch.py gui:=false use_arm:=true > "$OUT.launch.log" 2>&1 < /dev/null & PIDS+=( $! )
@@ -29,7 +29,7 @@ for nd in /gmpc_controller /scan_safety_shield /wheel_limit_guard /scan_obstacle
   timeout 25 ros2 param dump "$nd" > "$OUT.side/params$(echo $nd | tr '/' '_').yaml" 2> /dev/null || true
 done
 for nd in planner_server map_server amcl velocity_smoother; do echo "$nd $(timeout 6 ros2 lifecycle get /$nd 2>/dev/null | head -1)" >> "$OUT.side/lifecycle.txt"; done
-setsid $PYS -u evaluation/far_dry/merge_node.py "$OUT" > "$OUT.merge.log" 2>&1 < /dev/null & PIDS+=( $! ); MPID=$!
+setsid $PYS -u evaluation/far_dry/merge_node.py "$OUT" ${OBS:+obs} > "$OUT.merge.log" 2>&1 < /dev/null & PIDS+=( $! ); MPID=$!
 sleep 12
 setsid timeout $((TEND + 20)) ros2 topic echo /merge/gmpc/diag_v2 std_msgs/msg/String --field data > "$OUT.merge_diag_v2.txt" 2>/dev/null < /dev/null & PIDS+=( $! )
 for t in /cmd_vel /cmd_vel_smoothed /cmd_vel_pre_shield /cmd_vel_nav /cmd_vel_nav_raw /cmd_vel_merge /merge/plan /plan /goal_pose /far/arm_cmd /scan; do { echo "== $t"; timeout 10 ros2 topic info -v "$t" 2>/dev/null | grep -E "Node name|Publisher count|Subscription count|Endpoint type"; } >> "$OUT.side/topic_endpoints.txt"; done
