@@ -63,7 +63,18 @@ T_at = lambda T, s_: np.asarray(G.E.OT.object_target(T, T_HG, a_H, float(s_))['T
 frames = []
 
 
+LOCKED = os.environ.get('FAKE_LOCK') == '1'                         # r14 鎖定任務參考模式核對：估計＝單一鎖定影格（時間戳 −4.7 s，不更新）；新鮮度由鎖定預算取代
+
+
+def lock_budget(t, q9, ep, er):
+    pos = 0.00285 + 0.05 * 0.011 + float(ep)                         # 估計包絡（工程預算）＋同步＋手臂 TCP 實測；理想里程項零
+    ang = 0.885 + float(er)
+    return dict(pos_m=round(pos, 5), ang_deg=round(ang, 3), ok=bool(pos <= 0.005 and ang <= 3.0), terms=dict(est_m=0.00285, sync_m=0.00055, arm_tcp_m=round(float(ep), 5)))
+
+
 def est_at(t):
+    if LOCKED:
+        return T_true.copy(), -4.7, -4.7
     tk = math.floor(t * 30.0) / 30.0
     while not frames or frames[-1][0] < tk - 1e-9:
         tn = -1.0 if not frames else frames[-1][0] + 1.0 / 30.0
@@ -100,7 +111,7 @@ ub = np.array([cth * vw[0] + sth * vw[1], -sth * vw[0] + cth * vw[1], 0.0])
 u_ss = np.r_[ub, qd]
 q = np.r_[b0, qa.copy()]
 s0 = qa + (PHYS / al) * qd - dq(q)
-gc = G.MovingGraspCtrl(ident, est_at, d_world, V, WIN, s0, [u_ss.copy() for _ in range(D_STEPS)], u_ss, u_ss, dq(q), pool=SHARED if SHARED is not None else 6, fastkin=True, deadline_ms=50.0, fric_ff=FRIC_FF)
+gc = G.MovingGraspCtrl(ident, est_at, d_world, V, WIN, s0, [u_ss.copy() for _ in range(D_STEPS)], u_ss, u_ss, dq(q), pool=SHARED if SHARED is not None else 6, fastkin=True, deadline_ms=50.0, fric_ff=FRIC_FF, lock_budget_fn=lock_budget if LOCKED else None)
 ev, ts = [], []
 first = dict(req=None, t_avail=None, ok=False)
 

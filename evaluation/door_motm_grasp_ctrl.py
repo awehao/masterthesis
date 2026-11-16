@@ -72,7 +72,7 @@ READY_Q = dict(fresh_s=0.3, accept_max_s=0.5)                       # r2 事前�
 
 
 class MovingGraspCtrl:
-    def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None, pool=0, fastkin=False, deadline_ms=None, fric_ff=None):
+    def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None, pool=0, fastkin=False, deadline_ms=None, fric_ff=None, lock_budget_fn=None):
         self.fastkin = bool(fastkin)
         self.deadline_ms = None if deadline_ms is None else float(deadline_ms)
         self.deadline_inject, self.fb_inject = None, None
@@ -92,6 +92,9 @@ class MovingGraspCtrl:
         self.cfg.arm_model.bias = al * np.asarray(off_static, float)
         self.tau, self.va = PHYS / al, float(B.W_ARM['v_arm'])
         self.fric_ff = fric_ff                                         # r13：庫倫摩擦前饋的 τ_f（N·m；None＝不加，逐值同 r12）
+        # r14（Codex 20261116 A3）：鎖定任務參考模式。lock_budget_fn(t, q9, ep, er) → dict(pos_m, ang_deg, ok, ...)；給了就以「鎖定預算在界內」取代影像新鮮度條件——
+        #   est_fn 仍回原始時間戳的鎖定參考（不偽造新鮮度）；預算每拍重算；超界：READY 撤銷、未閉爪則拒絕閉爪（停止）、已接觸（CLOSE 之後）走既有接觸停法。相對運動、確認時間、BindGate 不變。None＝r13 行為。
+        self.lock_budget_fn, self.lock_budget, self.lock_budget_max = lock_budget_fn, None, None
         self.est_fn = est_fn                                         # 回 (T_WH 估計, 版本, 擷取時刻) 或 None
         self.d = np.asarray(d_world, float) / np.linalg.norm(d_world)
         self.v = float(v_pass)
@@ -465,7 +468,7 @@ class MovingGraspCtrl:
                         Tn = None
                 if Tn is not None:
                     self.frames[est[1]] = (float(est[2]), Tn)
-            keep = {k_: v_ for k_, v_ in self.frames.items() if v_[0] >= self.t - FUSE['win_s'] - 1e-9}
+            keep = {k_: v_ for k_, v_ in self.frames.items() if v_[0] >= self.t - FUSE['win_s'] - 1e-9} if self.lock_budget_fn is None else dict(self.frames)   # r14 鎖定模式：鎖定參考不因融合時間窗過期而被丟掉（時間戳照原樣）
             if keep:
                 Ts = [v_[1] for v_ in keep.values()]
                 Tm = np.eye(4)
@@ -543,9 +546,18 @@ class MovingGraspCtrl:
                     self._abort('violation_during_stop', viol=[v_[0] for v_ in viol])
                     return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), finger=self.finger_cmd, ready=False, stopped=True, abort=True)
             # 段別
+            if self.lock_budget_fn is not None:                        # r14：鎖定預算每拍重算（手臂項用本控制器的 TCP 相對位姿）
+                self.lock_budget = self.lock_budget_fn(self.t, q, ep, er)
+                fresh = bool(self.lock_budget.get('ok'))
+                if self.lock_budget_max is None or self.lock_budget['pos_m'] > self.lock_budget_max['pos_m']:
+                    self.lock_budget_max = dict(self.lock_budget, t=round(self.t, 3), phase=self.phase)
+                if not fresh and self.stop is None and self.phase in ('CLOSE', 'CONFIRM', 'READY') and not self.accepted:
+                    self._stop('lock_budget_exceeded_in_contact', budget={k_: self.lock_budget.get(k_) for k_ in ('pos_m', 'ang_deg')})   # 已接觸 ⇒ 既有接觸停法
             if self.stop is None:
                 h, i, cl, cf = (self.sched[k] for k in ('hold_s', 'ins_s', 'close_s', 'confirm_s'))
-                if self.phase == 'HOLD' and tr >= h:
+                if self.phase == 'INSERT' and tr >= h + i and self.lock_budget_fn is not None and not fresh:
+                    self._stop('lock_budget_exceeded_no_close', budget={k_: self.lock_budget.get(k_) for k_ in ('pos_m', 'ang_deg')})     # 超預算不閉爪
+                elif self.phase == 'HOLD' and tr >= h:
                     self._phase('INSERT')
                 elif self.phase == 'INSERT' and tr >= h + i and self.close_gate is not None and not self.close_gate(self):
                     self._stop('close_gate_not_ready')                 # r8：下游首段未就緒 ⇒ 不閉爪
@@ -557,7 +569,7 @@ class MovingGraspCtrl:
                     self._phase('CONFIRM')
                 rel_ok = ep <= CONFIRM['pos_m'] and er <= CONFIRM['rot_deg'] and lin <= CONFIRM['lin_mps'] and ang <= CONFIRM['ang_rps']
                 if self.phase == 'READY':                              # r2：READY 每拍重判（交接被接受前）
-                    why_r = [w_ for w_, ok_ in (('rel_motion', rel_ok), ('stale_estimate', fresh)) if not ok_]
+                    why_r = [w_ for w_, ok_ in (('rel_motion', rel_ok), ('stale_estimate' if self.lock_budget_fn is None else 'lock_budget', fresh)) if not ok_]
                     if why_r:
                         self.n_revoke += 1
                         self._ev('ready_revoked', why=why_r, ep_mm=round(ep * 1e3, 3), er_deg=round(er, 3), lin_mmps=round(lin * 1e3, 3), est_age_s=None if self.est_age is None else round(self.est_age, 3))
