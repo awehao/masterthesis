@@ -27,7 +27,7 @@ set +u; source /opt/ros/jazzy/setup.bash; source install/setup.bash; set -u
 PAT="[s]can_safety_shield|[w]heel_limit_guard|[v]elocity_smoother|[g]mpc_node|[g]mpc_merge_wrap|[p]lanner_server|[w]orld_node.py|[m]erge_node.py"
 n=$(pgrep -fc "$PAT" || true)
 if [ "$n" != "0" ]; then say "已有導航／乾跑節點在跑（$n 個）⇒ 拒跑"; exit 99; fi
-say "排程：SIM_CPUS=${SIM_CPUS:-1,2,9,10} FAR_CPUS=${FAR_CPUS:-3,11,4,5,6,7,12,13,14,15} FAR_POOL_N=${FAR_POOL_N:-8} SUP_MODE=${SUP_MODE:-fullho}"
+say "排程：導航鏈 CPU ${SIM_CPUS:-3,11}；監督 FAR_CPUS=${FAR_CPUS:-4,12,5,6,7,13,14,15} FAR_POOL_N=${FAR_POOL_N:-6}；交權後選擇器 ${FAR_AFTER_HO_CPUS:-3,11}；SUP_MODE=${SUP_MODE:-fullho}"
 say "=== 遠距取像：RUN_ID=$RUN_ID START=$START STATIC_S=$STATIC_S SIM_LIMIT=$SIM_LIMIT domain=$ROS_DOMAIN_ID；凍結 $FREEZE 全部相符；機器 $(hostname)／$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)／$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
 PIDS=()
 cleanup(){
@@ -43,7 +43,9 @@ trap cleanup EXIT
 # N2 排程（只改排程）：Isaac 與導航鏈在 CPU 0–3、8–11；監督節點＋幾何工作程序＋掃掠池在 4–7、14、15（12、13＝幾何工作程序與監督主程序的 SMT 同核，不分配）
 # r2 排程（far_door_5 後；只改排程與掃掠池程序數，樣本與覆蓋不變）：遠距前段執行器的掃掠池（4–7、12–15）與閉鏈停法程序（3、11）閒置 ⇒
 #   監督節點幾何程序＋主程序用 3、11；它的掃掠池 8 個程序用 4–7、12–15（原 4 個程序擠在 6、7、14、15＝兩顆實體核）。交權後監督主程序（只剩命令選擇器）移到導航鏈那組核。
-SIM_CPUS="${SIM_CPUS:-1,2,9,10}"; export FAR_CPUS="${FAR_CPUS:-3,11,4,5,6,7,12,13,14,15}" FAR_POOL_N="${FAR_POOL_N:-8}" FAR_AFTER_HO_CPUS="${FAR_AFTER_HO_CPUS:-1,2,9,10}"
+# r3 排程（far_door_7 後）：導航鏈原與 Kit／背景首段規劃程序同在 CPU 1、2、9、10——交權後首段規劃一啟動，平滑器處理輸入延後 2 個物理步以上、漏掉提案。
+#   改：導航鏈獨佔 CPU 3、11（閉鏈停法程序平時閒置）；監督節點幾何程序＋主程序 CPU 4、12；其掃掠池 6 程序 CPU 5–7、13–15；交權後監督主程序（選擇器）移到 3、11。
+SIM_CPUS="${SIM_CPUS:-3,11}"; export FAR_CPUS="${FAR_CPUS:-4,12,5,6,7,13,14,15}" FAR_POOL_N="${FAR_POOL_N:-6}" FAR_AFTER_HO_CPUS="${FAR_AFTER_HO_CPUS:-3,11}"
 setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV CPU_LAYOUT=1 "$ISAAC_PY" -u evaluation/isaac_m8_house_far_door_motm.py --out "$DIR" --start "$START" --arm="$ARM" --far-limit-s "$SIM_LIMIT" > "$DIR/sim.log" 2>&1 < /dev/null &
 SIM=$!
 sleep 1
