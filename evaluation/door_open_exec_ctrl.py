@@ -104,6 +104,13 @@ KEYS = ('env', 'base', 'self', 'shell_bar')
 START_LAT_ALIGN = True                                              # r5：參考時鐘從第一筆命令到達受控對象才起算（σ₀＝−D_STEPS·PHYS；底盤與手臂共用同一條管線延遲）
 P2_REST_WAIT_S = 8.0                                               # r12：參考盡頭等延伸的上限
 POOL_TIMEOUT_S = 0.5                                                # r9：平行掃掠收集逾時（偵測卡死用；即時性另以每拍耗時統計）
+STREAM_CHUNK = int(os.environ.get('CAND_STREAM_CHUNK', '6'))         # A1：每批取樣點數
+_POOL_LOCKS = {}                                                     # A1：同一計算池同一時間只由一個執行緒使用（現在停背景執行緒、候選串流轉送執行緒）；以池物件 id 對應（複本共用同池＝同鎖）
+
+
+def _pool_lock(pool):
+    import threading
+    return _POOL_LOCKS.setdefault(id(pool), threading.Lock())
 BASE_RAMP = True                                                    # r4：底盤命令在一個控制拍內逐物理步線性過渡（管線、預測、停止掃掠同一語意）
 
 
@@ -154,7 +161,10 @@ class DoorOpenExec:
         self._fb_ok, self._fb_info = False, None                      # r11：本拍期限備援是否可用＋依據
         self.fb_closure_inject, self.deadline_inject = None, None      # r11：測試掛鉤
         self._cand_tr, self._sn_tr = None, None
-        self.rec_cand, self._cand_out = False, None                    # 非阻塞執行（11/17）：候選核對的停止模擬一併回逐物理步輸出（＝執行器停止尾段）；只記錄，判定不變
+        self.rec_cand, self._cand_out = False, None
+        self.stream_cand = False                                       # A1：候選停法模擬分批送淨空池（非阻塞模式才開；判定不變）
+        self.tail_cert_mode = False                                    # A2（Codex 20261117_003351）：非阻塞「尾段證書」模式——晚到／失敗時執行器只執行上一段已核尾段，
+        #   故不重算從不會被執行的「現在停」軌跡；接受條件改為「本拍候選＋其完整停止尾段已核」（_cand_out 非空）。監看（力、閉鏈、門角、限位）照舊。只在非阻塞執行器明確設定時開啟。                    # 非阻塞執行（11/17）：候選核對的停止模擬一併回逐物理步輸出（＝執行器停止尾段）；只記錄，判定不變
         self._early_cb, self._hc_e = None, None                        # r17：候選核對提早派工
         self.g_inject = None                                           # r17：測試掛鉤（改寫本拍重算出的 g）
         self.cs_inject = None                                          # r17：測試掛鉤（閉鏈一致停法核對結果改為 'missing'／'infeasible'）
@@ -652,8 +662,9 @@ class DoorOpenExec:
             elif not r['ok']:
                 out.update(status='infeasible', why=r['why'])
             else:
-                h_ = self._pool.submit(self.T_WH_bind, W.FINGER_Q, W.PHI0, r['X'])
-                res, why, _ = self._pool.collect(h_, POOL_TIMEOUT_S)
+                with _pool_lock(self._pool):
+                    h_ = self._pool.submit(self.T_WH_bind, W.FINGER_Q, W.PHI0, r['X'])
+                    res, why, _ = self._pool.collect(h_, POOL_TIMEOUT_S)
                 if res is None:
                     out.update(status='missing', why='pool_' + str(why))
                 else:
@@ -722,7 +733,74 @@ class DoorOpenExec:
         原各軸減速的 (1,2) 中「同一命令再多留一拍」在閉鏈手臂下不是會發生的情形（手臂命令每拍依閉鏈重算；多留一拍即破壞閉鏈，假世界起步即 arm_rate 不可行）。"""
         self._cs_obj()
         w = 1 if self._csw.n > 1 else 0
-        return w, self._csw.submit(self._cs_state(q, pr_delta=self._pr_use(), u_first=np.asarray(u, float), hold=1, se_first=self._se_cand, rec=bool(self.rec_cand)), w=w), self._xd_ver
+        if not self.stream_cand:
+            return w, self._csw.submit(self._cs_state(q, pr_delta=self._pr_use(), u_first=np.asarray(u, float), hold=1, se_first=self._se_cand, rec=bool(self.rec_cand)), w=w), self._xd_ver
+        import threading                                               # A1（Codex 20261117_003351）：模擬分批回傳取樣點，轉送執行緒一到就送淨空池；放行仍等「整段模擬完成＋全部批次齊全」
+        ver = self._csw.submit(self._cs_state(q, pr_delta=self._pr_use(), u_first=np.asarray(u, float), hold=1, se_first=self._se_cand, rec=bool(self.rec_cand), stream=True, stream_chunk=STREAM_CHUNK), w=w)
+        box = dict(done=False, ver=ver, xv=self._xd_ver, t_tick=self.t)
+        th = threading.Thread(target=self._cand_stream_fw, args=(w, ver, box, self.T_WH_bind, W.FINGER_Q, W.PHI0), daemon=True)
+        th.start()
+        return w, ver, self._xd_ver, box, th
+
+    def _cand_stream_fw(self, w, ver, box, T_WH, fq, phi0):
+        """轉送執行緒：只寫自己的 box。批次以 (拍、參考版本、模擬版本、起始索引) 綁定；池的版本號另外保證結果不混用。工作程序分兩組輪流（不相交、可同時在途）。"""
+        try:
+            pool = self._pool
+            n = pool.n
+            groups = [list(range(0, n // 2)), list(range(n // 2, n))] if n >= 2 else [list(range(n))]
+            inflight = [None] * len(groups)                            # (i0, 個數, 池 handle)
+            got, gi, nsent = {}, [0], [0]
+            t0 = time.perf_counter()
+            fail = []
+
+            def _drain(g):
+                it = inflight[g]
+                if it is None:
+                    return
+                inflight[g] = None
+                res, why, _ = pool.collect(it[2], POOL_TIMEOUT_S)
+                if res is None or len(res) != it[1]:
+                    fail.append('pool_' + str(why))
+                else:
+                    got[it[0]] = res
+
+            lock, held = _pool_lock(pool), [False]
+
+            def _send(i0, Xc):
+                if i0 != nsent[0]:                                     # 批次須連續（起始索引＝已送數）；否則視為結果缺失
+                    fail.append('batch_gap_%d_%d' % (i0, nsent[0]))
+                    return
+                if not held[0]:                                        # 第一次要用池時才取鎖（現在停背景執行緒若仍在用池就等它；之後持有到全部收齊）
+                    lock.acquire()
+                    held[0] = True
+                g = gi[0] % len(groups)
+                gi[0] += 1
+                _drain(g)
+                inflight[g] = (int(i0), len(Xc), pool.submit(T_WH, fq, phi0, Xc, workers=groups[g]))
+                nsent[0] += len(Xc)
+
+            try:
+                r = self._csw.collect_stream(ver, 0.2, w=w, on_part=_send)
+                if r is not None and r.get('X') is not None and r['ok']:
+                    Xf = np.asarray(r['X'], float)
+                    if nsent[0] < len(Xf):
+                        _send(nsent[0], Xf[nsent[0]:])
+                for g in range(len(groups)):
+                    _drain(g)
+            finally:
+                if held[0]:
+                    lock.release()
+            res = None
+            if r is not None and r['ok'] and not fail:
+                keys = sorted(got)
+                res = [c for k in keys for c in got[k]]
+                if len(res) != len(r['X']) or keys[0] != 0:
+                    fail.append('coverage')
+                    res = None
+            box.update(r=r, res=res, fail=fail, n_batches=gi[0], fw_ms=round((time.perf_counter() - t0) * 1e3, 2))
+        except Exception as e:                                         # noqa: BLE001
+            box.update(r=None, res=None, fail=['fw_exception:' + repr(e)[:150]])
+        box['done'] = True
 
     def _solve_cand(self, q, phi_meas):
         """求解；閉鏈一致停法啟用時，本拍命令一確定（閉鏈手臂前三個節點算完）就把候選核對的模擬送出，與其餘求解工作重疊。
@@ -748,6 +826,31 @@ class DoorOpenExec:
     def _cs_cand_finish(self, hc, tag):
         """回 (status, 淨空違反或 None, 資訊)。infeasible＝提交後沒有可行的閉鏈一致停法 ⇒ 候選不得提交；missing＝結果缺失（呼叫端依「掃掠不可用」處理）。
         須在現在停的背景執行緒結束後呼叫（計算池同一時間只由一個執行緒使用）。"""
+        if len(hc) == 5:                                               # A1 串流：等轉送執行緒（模擬完成＋全部批次結果齊全）
+            w, ver, xv, box, th = hc
+            _wc = time.perf_counter()
+            th.join(0.5)
+            r = box.get('r') if box.get('done') else None
+            self._cand_diag = dict(stream=True, join_wait_ms=round((time.perf_counter() - _wc) * 1e3, 2), fw_ms=box.get('fw_ms'), n_batches=box.get('n_batches'), fail=box.get('fail'), sim_ms=None if r is None else round(float(r.get('sim_ms') or 0.0), 2), n_ticks=None if r is None else r.get('n_ticks'))
+            if self.cs_inject is not None:
+                inj = self.cs_inject(self, tag)
+                if inj is not None:
+                    return inj, None, dict(why='injected')
+            if not box.get('done') or r is None or xv != self._xd_ver or ((not r['ok']) and str(r['why']).startswith('exception')):
+                return 'missing', None, dict(why='stream_not_done' if not box.get('done') else (None if r is None else ('ref_version_mismatch' if xv != self._xd_ver else r['why'])))
+            if not r['ok']:
+                return 'infeasible', None, dict(why=r['why'])
+            if box.get('res') is None:
+                return 'missing', None, dict(why='stream_' + ','.join(box.get('fail') or ['no_result']))
+            res = box['res']
+            self.pool_ms.append(dict(stream_fw=box.get('fw_ms')))
+            bad, ok, info = self._cs_judge(r, res, tag)
+            self._cand_tr = r.get('tr')
+            self._cand_out = r.get('out') if (ok and bad is None) else None
+            if not ok and bad is None:
+                self.n_emerg_closure += 1
+                return 'infeasible', None, dict(why='closure_over_tol', closure_pos_mm=info['closure_pos_mm'], closure_rot_deg=info['closure_rot_deg'])
+            return 'ok', bad, info
         w, ver, xv = hc
         _wc = time.perf_counter()
         r = self._csw.collect(ver, 0.2, w=w)
@@ -761,7 +864,8 @@ class DoorOpenExec:
         if not r['ok']:
             return 'infeasible', None, dict(why=r['why'])
         _wp = time.perf_counter()
-        res, why, tms = self._pool.collect(self._pool.submit(self.T_WH_bind, W.FINGER_Q, W.PHI0, r['X']), POOL_TIMEOUT_S)
+        with _pool_lock(self._pool):
+            res, why, tms = self._pool.collect(self._pool.submit(self.T_WH_bind, W.FINGER_Q, W.PHI0, r['X']), POOL_TIMEOUT_S)
         self.pool_ms.append(tms)
         self._cand_diag.update(pool_wall_ms=round((time.perf_counter() - _wp) * 1e3, 2), n_samples=len(r['X']))
         if res is None:
@@ -1029,7 +1133,7 @@ class DoorOpenExec:
                 self.g = float(np.clip((LEAD_MAX - lead) / LEAD_BAND, 0.0, 1.0)) if self.sigma < self.sig_end else 0.0
                 if self.g_inject is not None:
                     self.g = float(self.g_inject(self, self.g))
-                if self._pool is not None and self._cs_on():
+                if self._pool is not None and self._cs_on() and not self.tail_cert_mode:
                     w0 = time.perf_counter()
                     self._cs_submit(q)
                     self._sn, early_sn = 'cstop', True
@@ -1058,7 +1162,7 @@ class DoorOpenExec:
                             self._stop('p2_no_extension', phi_meas_deg=round(math.degrees(phi_meas), 3))
                     elif self.t - self.t_ref_end > END['wait_s']:
                         self._stop('end_not_reached', phi_meas_deg=round(math.degrees(phi_meas), 3), rates={k: round(v, 5) for k, v in self.rate.items()})
-                if self.stop is None:
+                if self.stop is None and not self.tail_cert_mode:
                     w0 = time.perf_counter()
                     if early_sn:
                         pass                                           # 已在監看前派工
@@ -1155,7 +1259,8 @@ class DoorOpenExec:
                     self._cl_fail = None
                     hfb = None
                     cs_on = self._cs_on()
-                    if cs_on:
+                    sn_on = cs_on and not self.tail_cert_mode           # A2：尾段證書模式下路徑停止也不重算現在停（備援＝上一段已核尾段）
+                    if sn_on:
                         self._cs_submit(q)                             # r16：路徑停止中每拍重驗閉鏈一致備援（取代各軸減速預測）
                     if not cs_on and self.g2['deadline_ms'] is not None and self._pool is not None:   # r11：路徑停止中每拍重驗備援（現在停預測），與求解並行
                         itf = self._sweep_prep(q, self.u_last, (0,))
@@ -1165,7 +1270,7 @@ class DoorOpenExec:
                         _, whyf = self._pool_eval(hfb[0], hfb[1], 'fallback')
                         if whyf is not None:
                             self._fb_ok = False
-                    stp = self._cs_collect()[0] if cs_on else None
+                    stp = self._cs_collect()[0] if sn_on else None
                     if stp == 'missing':
                         self._stop('path_cstop_check_unavailable', fb=self._fb_info)
                     elif u is None:

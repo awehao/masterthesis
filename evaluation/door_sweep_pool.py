@@ -86,14 +86,16 @@ class SweepPool:
         self.stats = dict(jobs=0, samples=0, timeouts=0, dead=0, errors=0, stale_dropped=0)
         self.inject_delay = {}                                       # 測試用：{worker 索引: 秒}
 
-    def submit(self, T_WH0, fq, phi0, X, finger_bar_q=None):
+    def submit(self, T_WH0, fq, phi0, X, finger_bar_q=None, workers=None):
+        """workers＝只用這些工作程序（串流分批時讓不同批次落在不相交的工作程序上，可同時在途；None＝全部）。"""
         t0 = time.perf_counter()
         self.ver += 1
         X = np.asarray(X, float)
-        chunks = [c for c in np.array_split(np.arange(len(X)), self.n)]
+        ws = list(range(self.n)) if workers is None else [int(w) for w in workers]
+        chunks = dict(zip(ws, np.array_split(np.arange(len(X)), len(ws))))
         T = np.asarray(T_WH0, float)
         sent = []
-        for w, idx in enumerate(chunks):
+        for w, idx in chunks.items():
             if len(idx) == 0:
                 continue
             try:

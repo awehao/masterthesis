@@ -151,7 +151,7 @@ for k_ in os.environ.get('AHEAD_LATE', '').split(','):
         LATE[k_.strip() if k_.strip().startswith('o') else int(k_)] = float(os.environ.get('AHEAD_LATE_S', '0.08'))
 DL_MS = float(os.environ.get('AHEAD_DIAG_DEADLINE_MS', '50'))      # 只供診斷（量測開門段每拍耗時分布）；≠50 的結果不是通過依據。控制器內部期限＝同值（外層來回期限必含內層拍耗時，同值時內層觸發必伴隨外層拒絕）
 G2 = dict(gravity2=True, gravity3=True, ik_fc=True, pool=SHARED, prep_fc=True, deadline_ms=DL_MS, cstop=CSW, fric_ff=FRIC_FF)
-door = AO.DoorOpenPhase(X, P2, K, first, helper, BG, ident, GOAL, FQ, phi_b, H, L_LAT, G2)
+door = AO.DoorOpenPhase(X, P2, K, first, helper, BG, ident, GOAL, FQ, phi_b, H, L_LAT, G2, stream=os.environ.get('CAND_STREAM', '1') == '1', tail_cert=os.environ.get('TAIL_CERT', '0') == '1')
 pw = door.prewarm(gc, x_pred[:9].copy())
 ev.append(dict(t=-0.5, what='prewarm_before_start', **pw))
 gc.deadline_ms = DL_MS
@@ -160,7 +160,9 @@ if CPU_LAYOUT:
     CPU_PIN['ahead_worker'] = CPUL.pin(runner.proc.pid, [0, 8])     # 控制器工作程序：整個實體核心 0（邏輯 0＋8；背景執行緒可用同核另一邏輯 CPU）
     CPU_PIN['readback'] = dict(main=sorted(os.sched_getaffinity(0)), worker=sorted(os.sched_getaffinity(runner.proc.pid)), pool=[sorted(os.sched_getaffinity(p_.pid)) for p_ in SHARED.procs], cstop=[sorted(os.sched_getaffinity(p_.pid)) for p_ in CSW.procs], planner=sorted(os.sched_getaffinity(BG.proc.pid)))
 init = runner.start(q, 0.0, phi=phi_b)
-ev.append(dict(t=0.0, what='ahead_init', tail_src=init['tail_src'], phase=init['phase']))
+ev.append(dict(t=0.0, what='ahead_init', tail_src=init['tail_src'], phase=init['phase'], mode=runner.mode))
+SS = X.STOP_STILL                                                    # 停穩判準（同開門執行層：手臂、底盤、偏航、門角速率連續低於門檻 hold_s；逾時 timeout_s）
+hold = None                                                          # 尾段播完後：保持最後設定點、底盤零命令，繼續推受控對象並以停穩判準確認
 t, n, rows, overrun = 0.0, 0, [], 0
 t_ready, stopped_at, bindinfo, t_bind = None, None, None, None
 phi_now = phi_b
@@ -175,6 +177,7 @@ def phi_bound(q9):
 
 
 T_SIM = float(os.environ.get('AHEAD_TSIM', '30'))
+Tt = T_at(T_true, 0.0)                                               # 抓取目標（常數；只算一次）
 while t < T_SIM:
     if n % NPH == 0:
         rec = runner.tick_boundary(q, t + NPH * PHYS, n, phi=phi_now)
@@ -184,32 +187,45 @@ while t < T_SIM:
         if rec.get('commit') is False and not any(e['what'] == 'tail_started' for e in ev):
             ev.append(dict(t=round(t, 3), what='tail_started', rec={k_: rec.get(k_) for k_ in ('why', 'roundtrip_ms', 'compute_ms', 'steps_since_send', 'wall_since_send_ms', 'mode', 'ctrl_done', 'stop_mode')}, last=None if runner.last is None else {k_: runner.last.get(k_) for k_ in ('mode', 'done', 'stop_mode')}))
     runner.poll()
-    o = runner.output()
+    o = runner.output() if hold is None else None
     if o is None:
-        stopped_at = round(t, 3)
-        ev.append(dict(t=round(t, 3), what='tail_done'))
-        break
+        if hold is None:
+            if runner.mode == 'start_rejected':
+                ev.append(dict(t=round(t, 3), what='start_rejected')); break
+            stopped_at = round(t, 3)
+            ev.append(dict(t=round(t, 3), what='tail_done'))
+            hold = dict(t0=t, arm=np.asarray(last_arm, float).copy(), still=0, q_prev=q.copy(), phi_prev=phi_now, verified=None)
+        o = dict(arm_target=hold['arm'], base_twist=np.zeros(3), stopped=True, ready=False)
+    last_arm = np.asarray(o['arm_target'], float).copy()
     tw = o['base_twist']
     cs, sn = math.cos(q[2]), math.sin(q[2])
     q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2]])
     q[3:] = q[3:] + al * dead(o['arm_target'] - q[3:] + dq(q))
     phi_now = phi_bound(q) if bindinfo is not None else phi_b
-    Tt = T_at(T_true, 0.0)
     rows.append([t, *q, phi_now, float(np.linalg.norm(K.fk(q, 'link_tcp')[:3, 3] - Tt[:3, 3])), float(o['stopped']), runner.mode == 'nominal', bindinfo is not None])
+    if hold is not None:
+        qa_, ph_ = hold['q_prev'], hold['phi_prev']
+        st_ok = (float(np.abs(q[3:] - qa_[3:]).max()) / PHYS < SS['arm_rps'] and float(np.hypot(*(q[:2] - qa_[:2]))) / PHYS < SS['base_mps'] and abs(q[2] - qa_[2]) / PHYS < SS['yaw_rps'] and abs(phi_now - ph_) / PHYS < SS['door_rps'])
+        hold['still'] = hold['still'] + 1 if st_ok else 0
+        hold['q_prev'], hold['phi_prev'] = q.copy(), phi_now
+        if hold['still'] * PHYS >= SS['hold_s']:
+            hold['verified'] = True
+            ev.append(dict(t=round(t, 3), what='settled_verified', since_tail_done_s=round(t - hold['t0'], 3), criteria=SS)); break
+        if t - hold['t0'] >= SS['timeout_s']:
+            hold['verified'] = False
+            ev.append(dict(t=round(t, 3), what='not_settled_after_tail', criteria=SS)); break
     if o.get('ready') and t_ready is None and runner.mode == 'nominal':
         t_ready = round(t, 3)
         ev.append(dict(t=t_ready, what='first_ready', ready_ver=o.get('ready_ver')))
     n += 1
     t = n * PHYS
     lag = (w0 + t / RTF) - time.perf_counter()
-    while lag > 0.002:                                             # 定速推進期間持續收結果（不阻塞物理）
-        runner.poll()
-        time.sleep(0.001)
-        lag = (w0 + t / RTF) - time.perf_counter()
-    if lag > 0:
-        time.sleep(lag)
-    elif lag < -0.001:
+    if lag < -0.001:
         overrun += 1
+    while lag > 0:                                                 # 定速推進期間持續收結果直到步界（不阻塞物理；舊版最後 2 ms 不收 ⇒ 收到時刻最多晚 2 ms）
+        runner.poll()
+        time.sleep(min(lag, 0.0002))
+        lag = (w0 + t / RTF) - time.perf_counter()
 R_ = np.array(rows, float)
 LG = [r for r in runner.log if 'compute_ms' in r]
 
@@ -228,9 +244,9 @@ bs = np.r_[0.0, np.linalg.norm(np.diff(R_[:, 1:3], axis=0), axis=1) / PHYS] if l
 i_b = int(np.argmax(R_[:, 14] > 0.5)) if len(R_) and (R_[:, 14] > 0.5).any() else None
 p2ev = [e for e in runner.events if e.get('what') in ('p2_request', 'p2_result', 'staged')]
 ctrl_final = runner.get(['stop', 'abort', 'done', 'stop_mode', 'stop_ok', 'n_deadline_miss', 'sigma', 'sig_end'])
-res = dict(cpu_layout=CPU_PIN if CPU_LAYOUT else None, deadline_ms=DL_MS, diagnostic_only=DL_MS != 50.0, rtf_target=RTF, wall_s=round(time.perf_counter() - w0, 2), sim_s=round(t, 3), physics_overrun_steps=overrun, n_commit=runner.n_commit, late=runner.late, t_ready=t_ready, t_bind=t_bind, stopped_at=stopped_at,
+res = dict(tail_cert=door.tail_cert, stream=door.stream, stream_chunk=X.STREAM_CHUNK, pool_n=SHARED.n, settled_after_tail=None if hold is None else hold['verified'], cpu_layout=CPU_PIN if CPU_LAYOUT else None, deadline_ms=DL_MS, diagnostic_only=DL_MS != 50.0, rtf_target=RTF, wall_s=round(time.perf_counter() - w0, 2), sim_s=round(t, 3), physics_overrun_steps=overrun, n_commit=runner.n_commit, late=runner.late, t_ready=t_ready, t_bind=t_bind, stopped_at=stopped_at,
            by_mode=by, handover=[e for e in runner.events if e.get('what') == 'handover_trial_is_tick'],
-           p2=dict(n_request=sum(1 for e in p2ev if e['what'] == 'p2_request'), results=[{k_: e.get(k_) for k_ in ('k', 'result', 'wall_s', 'feasible', 'final', 'n')} for e in p2ev if e['what'] == 'p2_result'],
+           p2=dict(n_request=sum(1 for e in p2ev if e['what'] == 'p2_request'), results=[{k_: e.get(k_) for k_ in ('k', 'result', 'why', 'seam', 'wall_s', 'feasible', 'final', 'n')} for e in p2ev if e['what'] == 'p2_result'],
                    staged=[{k_: e.get(k_) for k_ in ('ver', 'ok', 'why', 'trial_is_tick', 'wall_ms', 'n')} for e in p2ev if e['what'] == 'staged']),
            last_commit=None if runner.last is None else {k_: (v_ if k_ != 'bind' else (v_ is not None)) for k_, v_ in runner.last.items()},
            phi_end_deg=round(math.degrees(float(R_[-1, 10])), 3) if len(R_) else None,
@@ -239,7 +255,7 @@ res = dict(cpu_layout=CPU_PIN if CPU_LAYOUT else None, deadline_ms=DL_MS, diagno
            events=ev, ctrl_final={k_: v_ for k_, v_ in (ctrl_final or {}).items()}, first_segment=dict(ok=first['ok'], t_avail=first['t_avail']))
 json.dump(res, open(OUT + '.json', 'w'), ensure_ascii=False, indent=1, default=str)
 np.savez(OUT + '_rows.npz', rows=R_, cols=np.array(['t', 'x', 'y', 'th', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'phi', 'tcp_err_grasp', 'stopped', 'nominal', 'bound']), log=np.array([json.dumps(r, default=str) for r in runner.log]))
-print(json.dumps({k_: res[k_] for k_ in ('sim_s', 'wall_s', 'physics_overrun_steps', 'n_commit', 't_ready', 't_bind', 'stopped_at', 'by_mode', 'handover', 'last_commit', 'phi_end_deg', 'base_speed', 'arm_rate_end', 'ctrl_final')}, ensure_ascii=False, default=str)[:4000])
+print(json.dumps({k_: res[k_] for k_ in ('settled_after_tail', 'sim_s', 'wall_s', 'physics_overrun_steps', 'n_commit', 't_ready', 't_bind', 'stopped_at', 'by_mode', 'handover', 'last_commit', 'phi_end_deg', 'base_speed', 'arm_rate_end', 'ctrl_final')}, ensure_ascii=False, default=str)[:4000])
 print('P2', json.dumps(res['p2'], ensure_ascii=False, default=str)[:2000])
 if runner.late: print('LATE', json.dumps(runner.late, default=str)[:1500])
 runner.close()

@@ -17,7 +17,9 @@ import numpy as np
 
 
 class DoorOpenPhase:
-    def __init__(self, X, P2, K, first, helper, planner, ident, goal, fq, phi_b, H, L_LAT, g2, deadline_ms=50.0):
+    def __init__(self, X, P2, K, first, helper, planner, ident, goal, fq, phi_b, H, L_LAT, g2, deadline_ms=50.0, stream=True, tail_cert=False):
+        self.stream = bool(stream)
+        self.tail_cert = bool(tail_cert)
         self.X, self.P2, self.K = X, P2, K
         self.first, self.helper, self.planner = first, helper, planner
         self.ident, self.goal, self.fq, self.phi_b, self.H, self.L_LAT = ident, float(goal), float(fq), float(phi_b), float(H), float(L_LAT)
@@ -49,6 +51,8 @@ class DoorOpenPhase:
         ex = X.DoorOpenExec(self.ident, Xd0, h0, self.first['T_plan'], self.phi_b, T_HE_act, self.goal, ho, self.fq, arm_mode='closure', g2=self.g2)
         ex.p2_open = True
         ex.rec_cand = True
+        ex.stream_cand = self.stream                                  # A1：候選停法模擬分批送淨空池（判定不變）
+        ex.tail_cert_mode = self.tail_cert                            # A2：尾段證書模式（只在非阻塞執行器）
         return ex
 
     @staticmethod
@@ -65,8 +69,9 @@ class DoorOpenPhase:
 
     def _valid(self, tmp, okx=True):
         X = self.X
+        fb = tmp._fb_ok if not getattr(tmp, 'tail_cert_mode', False) else (tmp._cand_out is not None)   # A2：尾段證書模式＝本拍候選的完整停止尾段已核（不以 _fb_ok 代替）
         return bool(okx and tmp.stop is None and tmp.abort is None and tmp._cl_fail is None and tmp.mins['stop_closure_pos'] <= X.CL_TOL['pos_m'] and tmp.mins['stop_closure_rot'] <= X.CL_TOL['rot_deg']
-                    and (tmp._pool is None or tmp._fb_ok))
+                    and (tmp._pool is None or fb))
 
     @staticmethod
     def _ho_key(gc):
@@ -121,7 +126,7 @@ class DoorOpenPhase:
         valid = self._valid(tmp)
         _ci.update({k: round(float(getattr(tmp, k)[-1]), 2) for k in ('tick_ms', 'solve_ms', 'sweep_ms', 'cl_ms', 'cand_ms', 'sn_ms', 'mon_ms', 'prep_ms') if getattr(tmp, k, None)})
         rec = dict(t=round(float(t), 3), what='handover_trial_is_tick', ok=valid, ready_ver=gc.ready_ver, build_src=src, build_ms=round((w1 - w0) * 1e3, 1), tick_ms=round((time.perf_counter() - w1) * 1e3, 1),
-                   stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok),
+                   stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok), tail_cert=tmp._cand_out is not None,
                    stop_closure_pos_mm=round(tmp.mins['stop_closure_pos'] * 1e3, 3), start_base_mm=round(float(np.linalg.norm(ex_c.Xd[0, :2] - np.asarray(q)[:2])) * 1e3, 3), parts_ms=_ci)
         if not valid:
             return None, None, rec
@@ -162,7 +167,7 @@ class DoorOpenPhase:
                 valid = self._valid(tmp, okx)
                 ex.staged = None
                 rec = dict(t=round(t, 3), what='staged', ver=st['ver'], ok=valid, why=None if valid else 'dry_run_rejected', trial_is_tick=valid, wall_ms=round((time.perf_counter() - w0) * 1e3, 1),
-                           extend_ok=okx, stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok),
+                           extend_ok=okx, stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok), tail_cert=tmp._cand_out is not None,
                            sigma=round(ex.sigma, 3), sigma_s=round(st['sigma_s'], 3))
                 if valid:
                     ex._last_ver = st['ver']
@@ -195,7 +200,7 @@ class DoorOpenPhase:
                     rec['result'] = 'staged' if okS else 'stage_rejected'
                     if not okS:
                         rec['why'] = inf.get('why')
-                out.append(dict(what='p2_result', **{k: rec[k] for k in ('k', 'result', 'wall_s', 'feasible', 'final')}))
+                out.append(dict(what='p2_result', why=rec.get('why'), seam=(inf.get('seam') or {}).get('failed') if rec.get('result') == 'stage_rejected' else None, **{k: rec[k] for k in ('k', 'result', 'wall_s', 'feasible', 'final')}))
         # 新請求
         if self.pending is None and self.planner.busy is None and ex.stop is None and ex.p2_open and self.t_next is not None and t >= self.t_next - 1e-9:
             sig_s = math.ceil((ex.sigma + self.L_LAT) / ex.h - 1e-9) * ex.h

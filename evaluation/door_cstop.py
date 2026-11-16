@@ -132,7 +132,7 @@ class CStop:
             return dict(ok=True, u=u, sigma=se1 - D * PHYS * g2, g=g2, q1=q1, zeroed=True, se_end=se1, hold=hold)
         return dict(ok=True, u=u, sigma=se1 - D * PHYS * g2, g=g2, q1=q1, zeroed=False, se_end=se1, hold=hold)
 
-    def sim(self, st, max_ticks=80):
+    def sim(self, st, max_ticks=80, emit=None, chunk=6):
         """自狀態 st（q, s, pipe, u_prev, sigma, g, seed；可含 u_first, hold）起向前模擬到停穩。
         hold>0：先提交候選命令 u_first 共 hold 拍（σ 照常前進），之後才以本停法減速（候選提交前核對用）。
         停穩（r2）＝命令與管線為零，且預測手臂／底盤／偏航／門（參考門角）速率低於 STOP_STILL、連續 hold_s——與執行層停止驗收同門檻。
@@ -152,6 +152,7 @@ class CStop:
         bh_steps = 0
         X, quiet = [np.r_[q, self.ref(sigma)[9]]], 0
         rec = [] if st.get('rec') else None                          # 非阻塞執行（11/17）：逐物理步輸出（設定點、底盤命令）＝執行器的停止尾段；只記錄，判定不變
+        sent = 0                                                     # A1（Codex 20261117_003351）：已分批送出的取樣點數（emit：每滿 chunk 個就先送淨空池；最終結果仍含完整 X，放行仍等全部批次）
         self._cl = [0.0, 0.0]
         self._tr = []                                                # 逐拍（拍、g、預測閉鏈位置偏差 mm、手臂命令最大值）：診斷用
         for n in range(max_ticks):
@@ -177,6 +178,9 @@ class CStop:
                     rec.append((s.copy(), np.asarray(ua[:3], float).copy()))
             u_prev = u
             X.append(np.r_[q, self.ref(sigma)[9]])
+            if emit is not None and len(X) - sent >= int(chunk):
+                emit(sent, np.array(X[sent:]))
+                sent = len(X)
             if n >= hold:                                            # 閉鏈偏差只計停法段（候選段由候選自己的閉鏈驗收負責）
                 Tc = self.W.FC.fk_jac(q)[0]
                 Td = self.W.Rz4(-(float(X[-1][9]) - self.phi_bind)) @ self.T_WH_bind @ self.T_HE
@@ -226,7 +230,8 @@ def _serve(conn):
                 _, ver, st = msg
                 t0 = time.perf_counter()
                 cs.set_ref(st['Xd'])
-                r = cs.sim(st)
+                emit = (lambda i0, xs, _v=ver: conn.send(('part', _v, int(i0), xs))) if st.get('stream') else None
+                r = cs.sim(st, emit=emit, chunk=int(st.get('stream_chunk', 6)))
                 conn.send((ver, r['ok'], r['why'], r['n_ticks'], r['X'], (time.perf_counter() - t0) * 1e3, list(cs._cl), list(cs._tr), r.get('out')))
         except Exception as e:                                        # noqa: BLE001
             conn.send((msg[1] if msg[0] != 'init' else 'init', False, 'exception:' + repr(e)[:200], 0, None, 0.0, None))
@@ -278,6 +283,25 @@ class CStopWorker:
                 m = conn.recv()
             except (EOFError, OSError):
                 return None
+            if m[0] == ver:
+                return dict(ok=m[1], why=m[2], n_ticks=m[3], X=m[4], sim_ms=m[5], closure=m[6] if len(m) > 6 else None, tr=m[7] if len(m) > 7 else None, out=m[8] if len(m) > 8 else None)
+
+    def collect_stream(self, ver, timeout, w=0, on_part=None):
+        """A1：同 collect，但同版本的分批取樣點（'part', ver, 起始索引, 取樣點）一到就交給 on_part；其他版本一律丟棄。回最終結果 dict 或 None。"""
+        t_end = time.perf_counter() + timeout
+        conn = self.conns[w]
+        while True:
+            rem = t_end - time.perf_counter()
+            try:
+                if rem <= 0 or not conn.poll(rem):
+                    return None
+                m = conn.recv()
+            except (EOFError, OSError):
+                return None
+            if m[0] == 'part':
+                if m[1] == ver and on_part is not None:
+                    on_part(int(m[2]), m[3])
+                continue
             if m[0] == ver:
                 return dict(ok=m[1], why=m[2], n_ticks=m[3], X=m[4], sim_ms=m[5], closure=m[6] if len(m) > 6 else None, tr=m[7] if len(m) > 7 else None, out=m[8] if len(m) > 8 else None)
 

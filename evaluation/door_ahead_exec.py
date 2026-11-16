@@ -133,6 +133,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None):
             if mode == 'open':                                        # 診斷：控制器本拍各分項（ms）與工作程序額外開銷
                 parts = {k_: round(float(getattr(ctrl, k_)[-1]), 2) for k_ in ('tick_ms', 'solve_ms', 'sweep_ms', 'cl_ms', 'cand_ms', 'mon_ms') if getattr(ctrl, k_, None)}
                 parts['cand'] = getattr(ctrl, '_cand_diag', None)
+                parts['qp'] = [round(float(x), 2) for x in ctrl.qp_log[-1]] if getattr(ctrl, 'qp_log', None) else None   # t、已停止、前置、mpc.solve、組裝、GI、OSQP、求解器(0=gi/1=osqp)
             out = dict(ver=snap['ver'], seg=seg, tail=tail, tail_src=tail_src, tail_mismatch=mism, w_start=w_start, w_done=time.perf_counter(), mode=mode, bind=bind, events=events, parts=parts, gc_n=_gc.get_count()[2] if _gc else None,
                        stop=ctrl.stop, abort=ctrl.abort, done=bool(getattr(ctrl, 'done', False)), phase=getattr(ctrl, 'phase', None), k_tick=k_tick, q_pred=qp.tolist(),
                        sigma=float(getattr(ctrl, 'sigma', float('nan'))) if mode == 'open' else None, stop_mode=getattr(ctrl, 'stop_mode', None) if mode == 'open' else None)
@@ -184,8 +185,12 @@ class AheadRunner:
         tag, out = self.conn.recv()
         if tag != 'seg':
             raise RuntimeError('ahead worker init error: ' + str(out)[:800])
-        self.seg, self.tail, self.tail_i, self.mode, self.j = out['seg'], out['tail'], 0, 'nominal', 0
         self.pending = None
+        if out.get('abort') is not None or out.get('tail') is None or out.get('seg') is None:   # 起始放行條件（Codex 20261117_003351）：首段無中止、附已核尾段才進名目
+            self.mode = 'start_rejected'
+            self.log.append(dict(kind='init', ver=out['ver'], ok=False, abort=out.get('abort'), tail_src=out.get('tail_src')))
+            return out
+        self.seg, self.tail, self.tail_i, self.mode, self.j = out['seg'], out['tail'], 0, 'nominal', 0
         self.log.append(dict(kind='init', ver=out['ver'], tail_src=out['tail_src'], compute_ms=round((out['w_done'] - out['w_start']) * 1e3, 2)))
         return out
 
@@ -237,6 +242,8 @@ class AheadRunner:
 
     def output(self):
         """本步要套用的輸出：dict(arm_target, base_twist, finger, ready, ready_ver, stopped) 或 None（尾段已執行完＝停住）。"""
+        if self.mode == 'start_rejected':
+            return None
         if self.mode == 'nominal':
             o = self.seg[self.j]
             self.j += 1
