@@ -11,7 +11,9 @@ import json, math, multiprocessing as mp, os, signal, subprocess, sys, time
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 V_PASS, DT, PHYS, NPH, D = 0.05, 0.05, 0.01, 5, 8
 DEC = (6.25, 6.25, 25.51)                                             # 平滑器既有減速上限（現場參數快照 params_velocity_smoother.yaml；未改）
-CAP_ALONG, CAP_LAT = (0.62, 1.40), 0.60                              # 捕獲區：距抓取點的沿線距離、離線側向距離
+CAP_ALONG, CAP_LAT = (0.45, 1.40), 0.60                              # r2（Codex 20261116 F3）：沿線下界 0.62→0.45；只是允許嘗試進線的範圍，不是伸臂放行（手臂準備仍須滿足既有距離條件）
+ENTER_EXTRA = 0.02                                                   # 斜向切入目標的額外沿線餘量（在途命令 0.13 s×通過速度＋切入收斂）
+_OLD_CAP = (0.62, 1.40)                                    # 捕獲區：距抓取點的沿線距離、離線側向距離
 PREP_MARGIN = 0.04
 # 近距觀察段的連續視覺更新（N3；Codex 20261116）。只在觀察追蹤（TRACK）中、已核沿線範圍內啟用；只更新把手位置（姿態沿用固定參考）。
 UPD = dict(max_age_s=0.3,          # 觀察年齡上限（同 FL.EST_MAX_AGE_S）
@@ -616,16 +618,19 @@ def main():
 
         def make_path_odom(self, q, pg):
             p0, dv = np.array(pg['p0']), np.array(pg['d'])
-            al0 = float(-((q[:2] - p0) @ dv))
+            al_now = float(-((q[:2] - p0) @ dv))
+            br_ = self.plan['br']
+            need = br_['alongs'][1] + br_['prep_time_s'] * V_PASS + PREP_MARGIN     # 手臂準備開始時須有的沿線距離（既有條件，未改）
+            al0 = max(al_now, need + ENTER_EXTRA)                      # F1：切入點＝max(目前沿線位置, 準備所需＋餘量)；沿線位置不足時斜向切到線上較遠的一點（全向底盤），仍由同一 GMPC／CBF 求解
             pts = [q[:2].copy()]
-            entry = p0 - dv * al0                                      # 垂直切入通過線（沿線位置不變），保留手臂準備所需的沿線距離
+            entry = p0 - dv * al0
             n_in = max(int(np.linalg.norm(entry - q[:2]) / 0.005), 2)     # 路徑點距 5 mm：進線 GMPC 以最近路徑點為參考起點（ref_proj=vertex），點距粗時低速下會卡在兩點之間
             for u_ in np.linspace(1.0 / n_in, 1.0, n_in):
                 pts.append(q[:2] + u_ * (entry - q[:2]))
             for al in np.arange(al0 - 0.005, -0.10 - 1e-9, -0.005):     # 路徑延伸到已核觀察範圍終點（−0.10）；受控停止由監督節點在 STOP_ALONG 發起，不靠控制器到點
                 pts.append(p0 - dv * al)
             self.path_odom, self.path_yaw = np.array(pts), float(pg['yaw'])
-            return dict(n=len(pts), along0=round(al0, 3), end_odom=[round(float(v), 3) for v in pts[-1]])
+            return dict(n=len(pts), along_now=round(al_now, 3), along_entry=round(al0, 3), need_along=round(need, 3), diagonal=bool(al0 > al_now + 1e-9), end_odom=[round(float(v), 3) for v in pts[-1]])
 
         def pub_path_map(self, T_mo):
             """通過線保存在里程座標；發布給進線 GMPC（map 座標）時用當下的 map←odom 轉換。"""
@@ -700,7 +705,7 @@ def main():
                 co.update(res)
                 self.prior = res
                 self.T_mo0 = np.zeros(3)                               # 先驗本來就在地圖座標
-                self.coarse_goal = np.array(co['p0']) - np.array(co['d']) * 0.85
+                self.coarse_goal = np.array(co['p0']) - np.array(co['d']) * float(os.environ.get('FAR_TEST_COARSE_ALONG', '0.85'))   # 0.85＝設計值；環境變數只供乾跑把導航到達位置往近端偏
                 send_coarse('粗目標來自地圖先驗（' + res['source']['asset'] + '）；通過線待途中第一格有效影像估計')
                 return
             if OBS_MODE and not self.anchored and self.obs_first is not None and self.owner == 'NAV' and not self.stop:
@@ -768,9 +773,10 @@ def main():
                 else:
                     self.sw_wait = getattr(self, 'sw_wait', 0) + 1
                     self.sw_last = chk
-            if self.owner == 'NAV' and self.no_reach is None and self.t_goal is not None and pg is not None and along < CAP_ALONG[0] - 0.05 and abs(lat) <= CAP_LAT:   # 已靠近通過線卻沒有有效候選（離線還遠時沿線座標沒有意義，不判）
-                self.no_reach = 'left_capture_zone_without_valid_candidate'
-                self.global_stop('no_reach_global_stop', why=self.no_reach, last_checks=getattr(self, 'sw_last', None))
+            # r2（F2）：刪除「離線 ≤0.6 m 且沿線不足即判離開捕獲區」（far_capture_2 誤拒：當時根本尚未進入）。候選未成立時保留 NAV，依下面的粗目標拒絕條件收尾。
+            if self.owner == 'NAV' and pg is not None and CAP_ALONG[0] <= along <= CAP_ALONG[1] and abs(lat) <= CAP_LAT and not getattr(self, 'entered_cap', False):
+                self.entered_cap = True
+                self.event('entered_capture_zone', along=round(along, 3), lat=round(lat, 3))
             # ---- 到了粗目標仍未進線：協同停止，不停車等算完再進線（不冒充連續 MotM）
             if self.owner == 'NAV' and not self.stop:
                 near = float(np.linalg.norm(to_map_xy(q[:2]) - self.coarse_goal)) < 0.35 and float(np.linalg.norm(v_meas)) < 0.02

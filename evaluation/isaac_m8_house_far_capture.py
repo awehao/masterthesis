@@ -127,6 +127,45 @@ def clean(o):
     return o
 
 
+def stop_still(R, cols, aborted):
+    """整機停穩驗收：既有 STOP_STILL（door_open_exec_ctrl.py）——手臂各關節速率 <0.002 rad/s、底盤平移速率 <0.003 m/s、偏航速率 <0.003 rad/s；
+    命令歸零且在途管線排清後連續成立 0.3 s（窗口完整）；驗收期限 4 s。平移、偏航分開算，用實際時間差。"""
+    out = dict(rule='STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s', valid=False)
+    if aborted:
+        out['why'] = '工程中止或例外：物理未繼續步進，沒有停穩可驗'
+        return out
+    if len(R) < 40:
+        out['why'] = 'record_too_short'
+        return out
+    iu = cols.index('uin_x')
+    nz = np.where(np.abs(R[:, iu:iu + 9]).max(axis=1) > 1e-9)[0]
+    k0 = int(nz[-1]) + 1 if len(nz) else 0
+    dt = np.maximum(np.diff(R[:, 0]), 1e-6)
+    v = np.linalg.norm(np.diff(R[:, 1:3], axis=0), axis=1) / dt
+    w = np.abs(np.diff(R[:, 3])) / dt
+    da = np.abs(np.diff(R[:, 4:10], axis=0)).max(axis=1) / dt
+    ix = cols.index('ux')
+    clear = np.abs(R[1:, ix:ix + 9]).max(axis=1) < 1e-12
+    ok = (da < 0.002) & (v < 0.003) & (w < 0.003) & clear
+    k_ok = None
+    for k_ in range(k0, len(ok)):
+        t_end = R[k_, 0] + 0.3
+        j = int(np.searchsorted(R[:, 0], t_end))
+        if j >= len(ok):
+            break
+        if ok[k_:j].all():
+            k_ok = k_
+            break
+    t0 = float(R[max(k0 - 1, 0), 0])
+    out.update(t_last_nonzero_input=round(t0, 3), settle_window_start_s=None if k_ok is None else round(float(R[k_ok, 0]) - t0, 3), settle_time_s=None if k_ok is None else round(float(R[k_ok, 0]) - t0 + 0.3, 3), record_after_s=round(float(R[-1, 0]) - t0, 2), deadline_s=4.0,
+               base_speed_at_last_input=round(float(v[max(k0 - 1, 0)]), 4), arm_rate_at_last_input=round(float(da[max(k0 - 1, 0)]), 4),
+               residual_after_settle=None if k_ok is None else dict(base_mm_s=round(float(v[k_ok:].max()) * 1e3, 4), yaw_mrad_s=round(float(w[k_ok:].max()) * 1e3, 4), arm_mrad_s=round(float(da[k_ok:].max()) * 1e3, 4)))
+    out['valid'] = bool(k_ok is not None and out['settle_time_s'] <= 4.0)
+    if k_ok is None:
+        out['why'] = 'not_settled_within_record'
+    return out
+
+
 class Bridge(Node):
     def __init__(self):
         super().__init__('far_capture_sim')
@@ -608,7 +647,9 @@ def main():
                       residual_arm_rate_end=round(float(da[-10:].max()), 6), record_after_s=round(float(R[-1, 0] - R[max(k0 - 1, 0), 0]), 2))
     except Exception as e_:                                           # noqa: BLE001
         sv['error'] = repr(e_)
-    res['stop_validation'] = sv
+    res['stop_validation_strict_extra'] = sv                          # 我另訂的較嚴條件（每步位移），只作補充
+    res['stop_validation'] = stop_still(R, cols, latch is not None or exc is not None)
+    sv = res['stop_validation']
     print(f'[fc] 整機停穩驗收 {sv}', flush=True)
     json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)
     print(f"[fc] 結束 sim {res['sim_s']} s wall {res['wall_s']} s 影格 取用 {cam_stat['used']} 有效 {cam_stat['valid']} 失敗 {cam_stat['fail']} 鎖存 {latch}", flush=True)

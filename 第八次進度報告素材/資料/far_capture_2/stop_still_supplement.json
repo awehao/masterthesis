@@ -1,0 +1,31 @@
+{
+ "note": "補充分析（Codex 20261116 指定既有 STOP_STILL 判準）；原判定（我另訂的每步位移 1e-6 m 條件）未過，保留；殘餘每步 9.5e-7 m 的定值位移成因未定位，不宣稱是量化",
+ "supplement": {
+  "rule": "STOP_STILL：arm <0.002 rad/s、base 平移 <0.003 m/s、偏航 <0.003 rad/s；命令歸零＋管線排清後連續 0.3 s；期限 4 s",
+  "valid": true,
+  "t_last_nonzero_input": 38.31,
+  "settle_window_start_s": 0.09,
+  "settle_time_s": 0.39,
+  "record_after_s": 3.72,
+  "deadline_s": 4.0,
+  "base_speed_at_last_input": 0.2172,
+  "arm_rate_at_last_input": 0.0,
+  "residual_after_settle": {
+   "base_mm_s": 0.1656,
+   "yaw_mrad_s": 0.0212,
+   "arm_mrad_s": 0.2507
+  }
+ },
+ "original": {
+  "rule": "最後非零輸入命令後：管線排清＋底盤每步位移 <1e-6 m／偏航 <1e-6 rad＋手臂各關節速率 <1e-3 rad/s，連續 0.2 s",
+  "valid": false,
+  "t_last_nonzero_input": 38.31,
+  "pipe_drained_s": 0.08,
+  "base_stop_time_s": 3.7,
+  "whole_robot_settle_time_s": null,
+  "arm_rate_at_last_input": 0.0,
+  "base_speed_at_last_input": 0.2172,
+  "residual_arm_rate_end": 8.9e-05,
+  "record_after_s": 3.72
+ }
+}
