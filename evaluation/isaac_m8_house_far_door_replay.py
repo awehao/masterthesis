@@ -3,7 +3,7 @@
 狀態來源＝同趟紀錄：遠距前段 far_log.npz（每物理步 底盤＋手臂關節）接交權後 log.npz（rows：底盤、手臂、兩指、門角）。
 視角：總覽（房間斜上方，看得到整台底盤、手臂與門）＋側拍（臥室內，看通過線上的底盤與手臂）。腕部視角用同趟實際影格，不在這裡算。
     ~/venvs/isaacsim-6.0.1/bin/python -u evaluation/isaac_m8_house_far_door_replay.py --run m8house_far_door_8 --out <dir>
-門扇此版不擺位（這幾趟皆未綁定、門角 0）；有開門的趟要另加門角擺位。"""
+門扇依紀錄門角擺位（far_log 有 door_deg 欄時；交權後段用 log.npz 的 door_q）。"""
 import argparse
 import json
 import math
@@ -54,7 +54,7 @@ def main():
     RD = os.path.join(HERE, 'runs', a.run)
     FLz = np.load(os.path.join(RD, 'far_log.npz')); FLc = [str(x) for x in FLz['cols']]; FA = FLz['L']
     # 統一列格式（同原工具的索引）：[t, phase, x, y, yaw, q1..q6, f1, f2, door_deg]
-    R = np.c_[FA[:, 0], np.zeros(len(FA)), FA[:, 1:4], FA[:, 4:10], np.full((len(FA), 2), FINGER_OPEN), np.zeros(len(FA))]
+    R = np.c_[FA[:, 0], np.zeros(len(FA)), FA[:, 1:4], FA[:, 4:10], np.full((len(FA), 2), FINGER_OPEN), FA[:, FLc.index('door_deg')] if 'door_deg' in FLc else np.zeros(len(FA))]   # 候選動作檔可帶門角欄
     res_ = json.load(open(os.path.join(RD, 'result.json')))
     t_ho = (res_.get('handover') or {}).get('t_far')
     if t_ho is not None and os.path.exists(os.path.join(RD, 'log.npz')):
@@ -63,7 +63,7 @@ def main():
         R2 = np.c_[float(t_ho) + g('t'), g('phase') + 1, g('bx'), g('by'), g('byaw'), *[g(f'q{k}') for k in range(1, 7)], g('f1'), g('f2'), np.degrees(g('door_q'))]
         R = np.r_[R[R[:, 0] < float(t_ho)], R2]
     mv = np.where(np.linalg.norm(np.diff(R[:, 2:4], axis=0), axis=1) > 1e-5)[0]
-    t_from = a.t_from if a.t_from >= 0 else (float(R[mv[0], 0]) - 1.0 if len(mv) else 0.0)
+    t_from = a.t_from if a.t_from >= 0 else max(0.0, (float(R[mv[0], 0]) - 1.0 if len(mv) else 0.0))
     R = R[R[:, 0] >= t_from]
     os.makedirs(a.out, exist_ok=False)
     world = World(stage_units_in_meters=1.0, physics_dt=0.01, rendering_dt=0.01)
@@ -71,7 +71,7 @@ def main():
     GroundPlane(prim_path='/World/ground', name='ground', z_position=0.0)
     for o in reg['walls'] + reg['furniture']:
         FixedCuboid(prim_path=f"/World/{o['name']}", name=o['name'], position=np.array(o['c']), scale=np.array(o['s']), color=np.array(o['rgb']))
-    DA3.build_usd(stage, DA3.load(os.path.join(WS, reg['door']['asset'])), root='/World/door')
+    dauth = DA3.build_usd(stage, DA3.load(os.path.join(WS, reg['door']['asset'])), root='/World/door')
     ob = json.load(open(os.path.join(WS, reg['obstacles']['path'])))
     for o in ob['static_unknown']:
         y2 = math.radians(o['yaw_deg']) / 2
@@ -100,6 +100,9 @@ def main():
         c.set_world_pose(position=np.array(f['eye'], float), orientation=W0.R_to_wxyz(look_R(f['eye'], f['tgt'])), camera_axes='ros')
         cams[nm] = c
     world.reset()
+    from isaacsim.core.prims import RigidPrim
+    leaf = RigidPrim(prim_paths_expr=dauth['leaf_prim'], name='leaf_replay'); leaf.initialize()
+    lp0, lq0 = [np.asarray(x, float)[0] for x in leaf.get_world_poses()]
     robot = SingleArticulation(prim_path=arts[0], name='omni_bot')
     robot.initialize()
     names = list(robot.dof_names)
@@ -123,6 +126,13 @@ def main():
         robot.set_joint_velocities(np.zeros_like(q))
         robot.set_linear_velocity(np.zeros(3, dtype=np.float32))
         robot.set_angular_velocity(np.zeros(3, dtype=np.float32))
+        ph = -math.radians(float(row[13]))                            # 門扇繞鉸鏈（原點、z 軸）轉 −φ（同執行器 door_q 的定義）
+        c_, s_ = math.cos(ph), math.sin(ph)
+        pp = np.array([c_ * lp0[0] - s_ * lp0[1], s_ * lp0[0] + c_ * lp0[1], lp0[2]])
+        w0_, x0_, y0_, z0_ = lq0; cw, sw = math.cos(ph / 2), math.sin(ph / 2)
+        qq = np.array([cw * w0_ - sw * z0_, cw * x0_ - sw * y0_, cw * y0_ + sw * x0_, cw * z0_ + sw * w0_])
+        leaf.set_world_poses(positions=pp[None, :].astype(np.float32), orientations=qq[None, :].astype(np.float32))
+        leaf.set_velocities(np.zeros((1, 6), dtype=np.float32))
     for _ in range(40):
         pose(R[0])
         world.step(render=True)
