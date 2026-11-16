@@ -659,10 +659,14 @@ def main():
             if time.perf_counter() - w_all0 > WALL_LIMIT_S:
                 ev('wall_limit')
                 break
-    except Exception:                                                  # noqa: BLE001  例外也保留已取得的部分結果
+    except Exception as e_top:                                         # noqa: BLE001  例外也保留已取得的部分結果
         import traceback
-        exc = traceback.format_exc()
-        print('[fc] 例外：' + exc, flush=True)
+        if type(e_top).__name__ == 'ExternalShutdownException' and latch is None:   # 外部 TERM（熱守護／跑法收尾）打斷 rclpy：記為外部終止（模擬工程中止類），不是程式例外
+            latch = dict(t=round(node.t, 3), why='external_term', kind='外部終止（熱守護或跑法送 TERM；物理不再步進）')
+            print('[fc] 外部終止（ExternalShutdownException）', flush=True)
+        else:
+            exc = traceback.format_exc()
+            print('[fc] 例外：' + exc, flush=True)
     wall = time.perf_counter() - w_all0
     cols = ['t'] + [f'q{i}' for i in range(9)] + [f's{i}' for i in range(6)] + ['ux', 'uy', 'uw'] + [f'ua{i}' for i in range(6)] + ['uin_x', 'uin_y', 'uin_w'] + [f'uain{i}' for i in range(6)] + ['contact_n', 'door_deg', 'scan_min', 'step_wall_s', 'latched']
     R = np.array(rows, float)
