@@ -44,6 +44,9 @@ sys.path.insert(0, os.path.join(HERE, 'far_dry'))
 import world_node as WN                                              # noqa: E402  場景方塊、射線投射、雷射參數（同遠距乾跑）
 
 PREROLL_S = float(os.environ.get('D1_PREROLL_S', '3.0'))
+EARLY = os.environ.get('D1_EARLY', '0') == '1'                       # 結果到達即提交並發布提案（待 Codex 裁定；預設關）
+PHASE_OFF = int(os.environ.get('D1_PHASE_OFFSET', '0'))              # 控制拍相位＝GUARD 取樣相位＋偏移（預設 0＝原規則 r）
+TAIL_LEAD = int(os.environ.get('D1_TAIL_LEAD', '0'))                 # 尾段提案提前發布步數（預設 0）
 LEAF = (0.0, 0.95, 0.0, 0.04)                                        # 門扇（φ＝0）在門座標：鉸鏈在原點、沿 +x（geom.json）；開向 y<0 ⇒ 門角 φ 時繞 z 轉 −φ
 W_ = P2.WB                                                           # 淨空函式（door_motm_p2 匯入時已換成 clear_door_fast）與門檻
 
@@ -111,10 +114,10 @@ class WorldAhead(Node):
         s.nanosec = int(round((self.t - int(self.t)) * 1e9))
         return s
 
-    def propose(self, u):
+    def propose(self, u, n_eff=None):
         u = np.asarray(u, float)
         if self.ca is not None:
-            self.ca.propose(self.n, u)
+            self.ca.propose(self.n, u, n_eff=n_eff)
         m = Twist()
         m.linear.x, m.linear.y, m.angular.z = (float(x) for x in u)
         self.p_grasp.publish(m)
@@ -156,7 +159,7 @@ class WorldAhead(Node):
             if self.n % NPH == (ph if ph is not None else 0):
                 self.propose(self.u_ss)                              # 安全鏈預跑：穩態拍命令（受控對象不動）
             settled_chain = len(self.rx_log) >= 10 and all(float(np.abs(np.array(r_[1:]) - self.u_ss).max()) <= 1e-6 for r_ in self.rx_log[-10:])   # 安全鏈已到穩態：最近 10 筆放行＝穩態命令
-            if self.t >= PREROLL_S and ph is not None and settled_chain and self.n % NPH == ph:
+            if self.t >= PREROLL_S and ph is not None and settled_chain and self.n % NPH == (ph + PHASE_OFF) % NPH:
                 rel = np.array(self.rx_log[-1][1:]) if self.rx_log else np.zeros(3)
                 self.ev('preroll_done', guard_phase=ph, last_release=[round(float(x), 5) for x in rel], u_ss=[round(float(x), 5) for x in self.u_ss], rx_mod=[x % NPH for x in self.rx_steps[-8:]])
                 self.t_sim0 = self.t                                 # 控制器時間＝起跑後的相對時間（同假世界：起跑時 t＝0）
@@ -165,6 +168,7 @@ class WorldAhead(Node):
                 self.ev('ahead_init', mode=runner.mode, tail_src=init.get('tail_src'), compute_ms=round((init['w_done'] - init['w_start']) * 1e3, 2))
                 if runner.mode != 'nominal':
                     self.abort('start_rejected'); return
+                runner.early = EARLY
                 self.ca = FCA.ChainAlign(D_STEPS, NPH, pre_release=rel)
                 self.n0, self.stage = self.n, 'run'
         if self.stage == 'run':
@@ -177,7 +181,8 @@ class WorldAhead(Node):
                     was = runner.mode
                     rec = runner.tick_boundary(self.q, self.t_rel() + NPH * PHYS, k, phi=self.phi)
                     if rec.get('commit'):
-                        self.propose(rec['prop'])
+                        if rec.get('commit_step', k) >= k:            # 拍首才提交 ⇒ 此時發布；early 模式已在結果到達時發布
+                            self.propose(rec['prop'])
                         if rec.get('bind') and self.bindinfo is None:
                             self.bindinfo = runner.last['bind']
                             self.ev('bind_committed')
@@ -186,8 +191,17 @@ class WorldAhead(Node):
                         self.ev('tail_started', why=rec.get('why'), roundtrip_ms=rec.get('roundtrip_ms'), steps_since_send=rec.get('steps_since_send'), ctrl_done=rec.get('ctrl_done'), n_tail_props=len(self.tail_props))
                     if runner.mode == 'tail' and self.tail_props is not None:
                         m_ = (k - self.tail_k0) // NPH
-                        if 0 <= m_ < len(self.tail_props):
+                        if 0 <= m_ < len(self.tail_props) and (m_ == 0 or TAIL_LEAD == 0):
                             self.propose(self.tail_props[m_])           # 尾段的逐拍提案同樣走安全鏈並核放行
+            else:
+                if EARLY and runner.mode == 'nominal':                # 結果到達即提交並發布（生效步仍＝下一拍首＋D）
+                    u_ = runner.poll_commit(k)
+                    if u_ is not None:
+                        self.propose(u_, n_eff=self.n0 + (k // NPH + 1) * NPH + D_STEPS)
+                if TAIL_LEAD and runner.mode == 'tail' and self.tail_props is not None:   # 尾段第 m≥1 拍的提案提前 TAIL_LEAD 步發布（已核序列的一部分）
+                    m_ = (k + TAIL_LEAD - self.tail_k0) // NPH
+                    if (k + TAIL_LEAD - self.tail_k0) % NPH == 0 and 1 <= m_ < len(self.tail_props):
+                        self.propose(self.tail_props[m_], n_eff=self.n0 + self.tail_k0 + m_ * NPH + D_STEPS)
             runner.poll()
             o = runner.output()
             if o is None:
@@ -293,13 +307,17 @@ class WorldAhead(Node):
                          settled_after_tail=None if self.hold is None else self.hold['verified'], chain_align=None if self.ca is None else self.ca.report(),
                          sim_s=round(self.t, 3), wall_s=round(wall, 3), rtf_actual=round(self.t / wall, 3) if wall > 0 else None, timer_gap_over_15ms=self.late_steps, timer_gap_max_ms=round(getattr(self, 'max_gap', 0.0) * 1e3, 2),
                          phi_end_deg=round(math.degrees(self.phi), 3), p2=[e for e in runner.events if e.get('what') in ('p2_result', 'staged')], handover=[e for e in runner.events if e.get('what') == 'handover_trial_is_tick'],
-                         config=dict(thr_readback=dict(W_.THR), pool_n=SHARED.n, stream=door.stream, stream_chunk=X.STREAM_CHUNK, tail_cert=door.tail_cert, deadline_ms=DL_MS, late_inject={str(k_): v_ for k_, v_ in LATE.items()}, preroll_s=PREROLL_S))
+                         config=dict(early=EARLY, phase_offset=PHASE_OFF, tail_lead=TAIL_LEAD, thr_plan_readback=dict(W_.THR_PLAN), thr_readback=dict(W_.THR), pool_n=SHARED.n, stream=door.stream, stream_chunk=X.STREAM_CHUNK, tail_cert=door.tail_cert, deadline_ms=DL_MS, late_inject={str(k_): v_ for k_, v_ in LATE.items()}, preroll_s=PREROLL_S))
         json.dump(self.meta, open(OUT + '_d1.json', 'w'), ensure_ascii=False, indent=1, default=str)
         np.savez_compressed(OUT + '_d1.npz', rows=R, cols=np.array(['t', 'x', 'y', 'th', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'phi', 'ux', 'uy', 'uw', 'stage', 'nominal', 'bound', 'scan_min', 'wall']),
                             rx=np.array(self.rx_log, float), log=np.array([json.dumps(r, default=str) for r in runner.log]))
 
 
 def main():
+    import gc as _gc
+    if os.environ.get('AHEAD_GC_FREEZE') == '1':                      # 執行期最佳化（不改判定）：起跑前把既有物件移到永久代，減少世界節點第二代回收停頓
+        _gc.collect()
+        _gc.freeze()
     rclpy.init()
     w = WorldAhead()
     print('[d1] world_ready', flush=True)

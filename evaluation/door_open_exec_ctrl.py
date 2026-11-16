@@ -847,6 +847,7 @@ class DoorOpenExec:
             bad, ok, info = self._cs_judge(r, res, tag)
             self._cand_tr = r.get('tr')
             self._cand_out = r.get('out') if (ok and bad is None) else None
+            self._cand_X, self._cand_props = (r.get('X'), r.get('props')) if (ok and bad is None) else (None, None)
             if not ok and bad is None:
                 self.n_emerg_closure += 1
                 return 'infeasible', None, dict(why='closure_over_tol', closure_pos_mm=info['closure_pos_mm'], closure_rot_deg=info['closure_rot_deg'])
@@ -873,6 +874,7 @@ class DoorOpenExec:
         bad, ok, info = self._cs_judge(r, res, tag)
         self._cand_tr = r.get('tr')                                    # 診斷用：候選核對的逐拍預測
         self._cand_out = r.get('out') if (ok and bad is None) else None   # 只有核過的停止模擬才可當尾段
+        self._cand_X, self._cand_props = (r.get('X'), r.get('props')) if (ok and bad is None) else (None, None)
         if not ok and bad is None:                                     # 提交後的停止預測閉鏈超限 ⇒ 提交後沒有合格備援 ⇒ 候選不得提交
             self.n_emerg_closure += 1
             return 'infeasible', None, dict(why='closure_over_tol', closure_pos_mm=info['closure_pos_mm'], closure_rot_deg=info['closure_rot_deg'])

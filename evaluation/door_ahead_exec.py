@@ -11,6 +11,7 @@
 執行器在 n_{k+1}：S_{k+1} 已到、版本相符、從送快照到收到的牆鐘 ≤ 期限 ⇒ 提交並執行；否則執行 tail_k（上一段附帶的已核停止尾段），
   控制器即作廢（它的內部狀態假設了 S_{k+1} 會被執行），照實記為任務中斷。不在晚到後插入結果、不重設管線。
 時間：送快照、工作程序開始／完成、執行器收到、提交步分別記（模擬步序號與牆鐘）；計算、通訊、8 步管線延遲分開。"""
+import math
 import multiprocessing as mp
 import os
 import time
@@ -138,6 +139,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None):
             if mode == 'open':                                        # 診斷：控制器本拍各分項（ms）與工作程序額外開銷
                 parts = {k_: round(float(getattr(ctrl, k_)[-1]), 2) for k_ in ('tick_ms', 'solve_ms', 'sweep_ms', 'cl_ms', 'cand_ms', 'mon_ms') if getattr(ctrl, k_, None)}
                 parts['cand'] = getattr(ctrl, '_cand_diag', None)
+                parts['shield_min'] = None if door is None or not math.isfinite(getattr(door, 'shield_min', float('inf'))) else round(float(door.shield_min), 4)   # 累計最小 Shield 約束殘差（m/s）
                 parts['qp'] = [round(float(x), 2) for x in ctrl.qp_log[-1]] if getattr(ctrl, 'qp_log', None) else None   # t、已停止、前置、mpc.solve、組裝、GI、OSQP、求解器(0=gi/1=osqp)
             out = dict(ver=snap['ver'], seg=seg, prop=prop, tail=tail, tail_src=tail_src, tail_mismatch=mism, w_start=w_start, w_done=time.perf_counter(), mode=mode, bind=bind, events=events, parts=parts, gc_n=_gc.get_count()[2] if _gc else None,
                        stop=ctrl.stop, abort=ctrl.abort, done=bool(getattr(ctrl, 'done', False)), phase=getattr(ctrl, 'phase', None), k_tick=k_tick, q_pred=qp.tolist(),
@@ -169,6 +171,7 @@ class AheadRunner:
         self.log, self.n_commit, self.late = [], 0, None
         self.j = 0                                                    # 目前段內步序
         self.got = None                                               # 已收到但尚未到提交步的結果（tag, out, 收到牆鐘）
+        self.early, self.accepted = False, None                       # early：結果到達即提交（預設關）；accepted＝(結果, 提交步)
         self.last = None                                              # 最近一次已提交結果的摘要（mode、bind、done、stop…）
         self.events = []
 
@@ -245,8 +248,13 @@ class AheadRunner:
         """在拍邊界 n_k（套用本步輸出之前）呼叫：決定 S_k 是否提交（第一次呼叫時 S_0 已在 start() 準備好），並送下一拍快照。"""
         rec = dict(n=int(n))
         if self.mode == 'nominal' and self.pending is not None:
-            self.poll()
-            got, self.got = self.got, None
+            n_acc = None
+            if self.accepted is not None:                             # 已在結果到達時提交（early 模式）
+                got, n_acc = self.accepted
+                self.accepted = None
+            else:
+                self.poll()
+                got, self.got = self.got, None
             p = self.pending
             if got is not None and got[0] == 'seg' and got[1]['ver'] == p['ver']:
                 o = got[1]
@@ -261,6 +269,7 @@ class AheadRunner:
                     rec['prop'] = None if o.get('prop') is None else [float(x) for x in o['prop']]
                     self.n_commit += 1
                     rec['commit'] = True
+                    rec['commit_step'] = int(n if n_acc is None else n_acc)
                     rec['bind'] = o.get('bind') is not None
                     self.last = dict(mode=o.get('mode'), bind=o.get('bind'), done=o.get('done'), stop=o.get('stop'), stop_mode=o.get('stop_mode'), n=int(n))
                 else:
@@ -281,6 +290,21 @@ class AheadRunner:
             self._send(q, t_next, n, phi=phi, finger=finger)
         self.log.append(rec)
         return rec
+
+    def poll_commit(self, n_now):
+        """early 模式（預設關）：結果一到、準時（來回 ≤ 期限）、附尾段、無中止 ⇒ 當下即提交（之後拍首必用它，只有執行器工程中止能取消），
+        回本拍提案供立刻發布；否則回 None（拍首照原規則判定）。提交判定與拍首判定同一條件。"""
+        if not self.early or self.mode != 'nominal' or self.pending is None or self.accepted is not None:
+            return None
+        self.poll()
+        g = self.got
+        if g is None or g[0] != 'seg' or g[1]['ver'] != self.pending['ver']:
+            return None
+        o, rt_ms = g[1], (g[2] - self.pending['w_send']) * 1e3
+        if rt_ms <= self.deadline_ms and o['seg'] is not None and o['abort'] is None and o['tail'] is not None:
+            self.accepted, self.got = (g, int(n_now)), None
+            return None if o.get('prop') is None else np.asarray(o['prop'], float).copy()
+        return None
 
     def output(self):
         """本步要套用的輸出：dict(arm_target, base_twist, finger, ready, ready_ver, stopped) 或 None（尾段已執行完＝停住）。"""

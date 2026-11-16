@@ -152,6 +152,7 @@ class CStop:
         bh_steps = 0
         X, quiet = [np.r_[q, self.ref(sigma)[9]]], 0
         rec = [] if st.get('rec') else None                          # 非阻塞執行（11/17）：逐物理步輸出（設定點、底盤命令）＝執行器的停止尾段；只記錄，判定不變
+        props = [] if st.get('rec') else None                        # 逐拍命令（底盤 3）：Shield 不介入條件核對用（拍 i 的命令配 X[i] 的構型與門角）
         sent = 0                                                     # A1（Codex 20261117_003351）：已分批送出的取樣點數（emit：每滿 chunk 個就先送淨空池；最終結果仍含完整 X，放行仍等全部批次）
         self._cl = [0.0, 0.0]
         self._tr = []                                                # 逐拍（拍、g、預測閉鏈位置偏差 mm、手臂命令最大值）：診斷用
@@ -169,6 +170,8 @@ class CStop:
                 u, sigma, g, seed, zeroed, se_end, bh = r['u'], r['sigma'], r['g'], r['q1'], r['zeroed'], r['se_end'], r['hold']
             uf = np.asarray(pipe[-1][:3], float).copy()
             q_a = q.copy()
+            if props is not None:
+                props.append(np.asarray(u[:3], float).copy())
             for j in range(NPH):
                 cmd = XO.ramp_cmd(uf, u, j)
                 pipe.append(cmd)
@@ -195,7 +198,7 @@ class CStop:
                      and abs(q[2] - q_a[2]) / DT < SS['yaw_rps'] and abs(float(X[-1][9] - X[-2][9])) / DT < SS['door_rps'])
             quiet = quiet + 1 if still else 0
             if quiet >= need:
-                return dict(ok=True, why=None, n_ticks=n + 1, X=np.array(X), out=rec)   # 全部拍末樣本都送淨空核對（不做近似去重）
+                return dict(ok=True, why=None, n_ticks=n + 1, X=np.array(X), out=rec, props=props)   # 全部拍末樣本都送淨空核對（不做近似去重）
         return dict(ok=False, why='not_settled', n_ticks=max_ticks, X=np.array(X))
 
 
@@ -232,7 +235,7 @@ def _serve(conn):
                 cs.set_ref(st['Xd'])
                 emit = (lambda i0, xs, _v=ver: conn.send(('part', _v, int(i0), xs))) if st.get('stream') else None
                 r = cs.sim(st, emit=emit, chunk=int(st.get('stream_chunk', 6)))
-                conn.send((ver, r['ok'], r['why'], r['n_ticks'], r['X'], (time.perf_counter() - t0) * 1e3, list(cs._cl), list(cs._tr), r.get('out')))
+                conn.send((ver, r['ok'], r['why'], r['n_ticks'], r['X'], (time.perf_counter() - t0) * 1e3, list(cs._cl), list(cs._tr), r.get('out'), r.get('props')))
         except Exception as e:                                        # noqa: BLE001
             conn.send((msg[1] if msg[0] != 'init' else 'init', False, 'exception:' + repr(e)[:200], 0, None, 0.0, None))
 
@@ -284,7 +287,7 @@ class CStopWorker:
             except (EOFError, OSError):
                 return None
             if m[0] == ver:
-                return dict(ok=m[1], why=m[2], n_ticks=m[3], X=m[4], sim_ms=m[5], closure=m[6] if len(m) > 6 else None, tr=m[7] if len(m) > 7 else None, out=m[8] if len(m) > 8 else None)
+                return dict(ok=m[1], why=m[2], n_ticks=m[3], X=m[4], sim_ms=m[5], closure=m[6] if len(m) > 6 else None, tr=m[7] if len(m) > 7 else None, out=m[8] if len(m) > 8 else None, props=m[9] if len(m) > 9 else None)
 
     def collect_stream(self, ver, timeout, w=0, on_part=None):
         """A1：同 collect，但同版本的分批取樣點（'part', ver, 起始索引, 取樣點）一到就交給 on_part；其他版本一律丟棄。回最終結果 dict 或 None。"""
@@ -303,7 +306,7 @@ class CStopWorker:
                     on_part(int(m[2]), m[3])
                 continue
             if m[0] == ver:
-                return dict(ok=m[1], why=m[2], n_ticks=m[3], X=m[4], sim_ms=m[5], closure=m[6] if len(m) > 6 else None, tr=m[7] if len(m) > 7 else None, out=m[8] if len(m) > 8 else None)
+                return dict(ok=m[1], why=m[2], n_ticks=m[3], X=m[4], sim_ms=m[5], closure=m[6] if len(m) > 6 else None, tr=m[7] if len(m) > 7 else None, out=m[8] if len(m) > 8 else None, props=m[9] if len(m) > 9 else None)
 
     def close(self):
         for c in self.conns:

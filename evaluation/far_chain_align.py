@@ -20,8 +20,9 @@ class ChainAlign:
         self.releases, self.viol, self.last_idx = [], None, -1
         self.n_ok, self.n_missing, self.n_differs, self.lag_steps, self.delta_max, self.n_pre_match = 0, 0, 0, [], 0.0, 0
 
-    def propose(self, n, u):
-        self.props.append(dict(k=len(self.props), n=int(n), u=np.asarray(u, float).copy(), confirmed=False, n_conf=None))
+    def propose(self, n, u, n_eff=None):
+        """n＝發布步（比對放行用）；n_eff＝該提案在控制器管線的生效步（預設 n＋D）。提前發布（結果到達即提交）時 n＜拍首、n_eff＝拍首＋D。"""
+        self.props.append(dict(k=len(self.props), n=int(n), u=np.asarray(u, float).copy(), confirmed=False, n_conf=None, eff=int(n) + self.D if n_eff is None else int(n_eff)))
 
     def on_release(self, n_rx, v):
         v = np.asarray(v, float)
@@ -42,7 +43,7 @@ class ChainAlign:
                 self.delta_max = max(self.delta_max, float(np.abs(v - p['u']).max()))
             self.last_idx = max(self.last_idx, min(hits))
             return
-        if self.last_idx < 0 and n_rx <= self.props[0]['n'] + self.D:
+        if self.last_idx < 0 and n_rx <= self.props[0]['eff']:
             self.n_pre_match += 1                                    # 接手後、第一筆提案被確認前（最多 D 步）：鏈內還有前擁有者的命令，值不可由本端驗證 ⇒ 只計數。
             return                                                   # 這些放行不會被執行（執行的是控制器自己的管線）；第一筆提案仍須在生效步前被確認，否則缺失
         near = min(float(np.abs(v - self.props[i]['u']).max()) for i in (cands or [j]))
@@ -54,7 +55,7 @@ class ChainAlign:
         if self.viol is not None:
             return dict(ok=False, **self.viol)
         for p in self.props[-40:]:
-            if p['n'] + self.D == n:
+            if p['eff'] == n:
                 if not (p['confirmed'] and p['n_conf'] <= n):
                     self.n_missing += 1
                     self.viol = dict(why='release_missing', k=p['k'], n_prop=p['n'], u=[float(x) for x in p['u']], last_releases=[[r[0], [float(x) for x in r[1]]] for r in self.releases[-3:]])

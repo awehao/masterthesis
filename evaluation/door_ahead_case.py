@@ -146,6 +146,9 @@ for k_ in os.environ.get('AHEAD_LATE', '').split(','):
 DL_MS = float(os.environ.get('AHEAD_DIAG_DEADLINE_MS', '50'))      # 只供診斷（量測開門段每拍耗時分布）；≠50 的結果不是通過依據。控制器內部期限＝同值（外層來回期限必含內層拍耗時，同值時內層觸發必伴隨外層拒絕）
 G2 = dict(gravity2=True, gravity3=True, ik_fc=True, pool=SHARED, prep_fc=True, deadline_ms=DL_MS, cstop=CSW, fric_ff=FRIC_FF)
 door = AO.DoorOpenPhase(X, P2, K, first, helper, BG, ident, GOAL, FQ, phi_b, H, L_LAT, G2, stream=os.environ.get('CAND_STREAM', '1') == '1', tail_cert=os.environ.get('TAIL_CERT', '0') == '1')
+if os.environ.get('AHEAD_SHIELD_CHECK', '1') == '1':                 # 開門段交付：名目拍＋尾段逐拍核原 Shield 不介入條件（Codex 20261117 裁定 A）
+    import shield_geom as SHG
+    door.shield = SHG.ShieldGeom()
 door.pre_k2 = os.environ.get('AHEAD_PRE_K2', '1') == '1'           # 第一個續段在抓持段起點即請求（D1 RTF 1：交接後才請求會晚於接縫）
 pw = door.prewarm(gc, x_pred[:9].copy())
 ev.append(dict(t=-0.5, what='prewarm_before_start', **pw))

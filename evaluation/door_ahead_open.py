@@ -19,6 +19,7 @@ import numpy as np
 class DoorOpenPhase:
     def __init__(self, X, P2, K, first, helper, planner, ident, goal, fq, phi_b, H, L_LAT, g2, deadline_ms=50.0, stream=True, tail_cert=False):
         self.stream = bool(stream)
+        self.shield = None                                            # shield_geom.ShieldGeom（啟用後名目拍與尾段逐拍核原 Shield 不介入條件）
         self.tail_cert = bool(tail_cert)
         self.X, self.P2, self.K = X, P2, K
         self.first, self.helper, self.planner = first, helper, planner
@@ -187,8 +188,11 @@ class DoorOpenPhase:
                 rec.update(t_avail=round(t, 3), wall_s=round(wall_s, 3), feasible=bool(feas), final=bool(fin), failed=failed, info=info)
                 xr = ex.ref(ex.sigma)
                 rec['track'] = dict(yaw_deg=round(abs(math.degrees(q[2] - xr[2])), 3), door_deg=round(abs(math.degrees(phi - xr[9])), 3), base_mm=round(float(np.linalg.norm(q[:2] - xr[:2])) * 1e3, 2), g=round(ex.g, 3))
+                n0_ = pend.get('n0')
                 if ex.stop is not None:
                     rec['result'] = 'exec_stopped'
+                elif pend.get('bind') is not None and (len(ex.Xd) < n0_ or self._pre_bind(ex.Xd[:n0_]) != pend['bind']):
+                    rec['result'] = 'pre_request_source_changed'               # 提前請求的來源（首段參考／把手／抓持變換／模型／限制）已變 ⇒ 作廢
                 elif Xd is None or not feas:
                     rec['result'] = 'infeasible'
                 elif ex.sigma > pend['sigma_s'] + 1e-9 and not pend['rest']:
@@ -233,6 +237,15 @@ class DoorOpenPhase:
                 out.append(dict(what='p2_request', k=self.k, sigma_s=round(sig_s, 3), rest=bool(rest)))
         return ex, o0, out
 
+    def _pre_bind(self, Xd_prefix):
+        """Codex 20261117_012237 §2：提前請求的結果綁定首段參考、把手位姿、抓持變換、模型（門角基準、手指）與規劃限制；任何一項變了就作廢。"""
+        import hashlib
+        hsh = hashlib.sha256()
+        for a_ in (np.asarray(Xd_prefix, float), np.asarray(self.first['T_plan'], float), np.asarray(self.first['T_HE_pred'], float), np.array([self.phi_b, self.fq, self.goal, self.H, self.L_LAT], float),
+                   np.array([self.X.W.THR_PLAN[k_] for k_ in sorted(self.X.W.THR_PLAN)], float)):
+            hsh.update(np.ascontiguousarray(a_).tobytes())
+        return hsh.hexdigest()[:16]
+
     # ---- 第一個續段提前請求（抓持段起點即送；輸入只取決於首段參考）
     def prerequest(self):
         """k＝2 的接縫與起點照交接後第一次請求的排程算（σ_req＝σ₀＋T_RE，σ_s＝⌈(σ_req＋L_LAT)/h⌉·h），起點狀態／速度取首段參考——這些在交接前就已確定，
@@ -251,9 +264,25 @@ class DoorOpenPhase:
         rec = dict(k=self.k, t_req='grasp_start', sigma=round(sig_req, 3), sigma_s=round(sig_s, 3), rest=False, pre=True)
         self.req_log.append(rec)
         self.planner.submit(self.k, dict(T_WH0=self.first['T_plan'], T_HE=self.first['T_HE_pred'], x0=xs, v0=vs, H=self.H, goal=self.goal, fq=self.fq, phi_model=self.phi_b, try_final=True, warm_ref=(Xd0.copy(), h0, sig_s)))
-        self.pending = dict(sigma_s=sig_s, rest=False, rec=rec)
+        self.pending = dict(sigma_s=sig_s, rest=False, rec=rec, bind=self._pre_bind(Xd0), n0=len(Xd0))
+        rec['bind_sha'] = self.pending['bind']
         self.last_sig_s = sig_s
         return rec
+
+    def _shield_check(self, X, props):
+        """Codex 20261117：名目拍（停法模擬的第 0 拍＝本拍候選）與停止尾段每拍都須在原 Shield 的不介入區：拍 i 的命令配 X[i]（拍首構型＋參考門角）。
+        回 None（通過或未啟用）或違規描述。缺逐拍資料 ⇒ 視為不通過（不放行）。"""
+        if self.shield is None:
+            return None
+        if X is None or props is None or len(props) == 0 or len(X) < len(props):
+            return 'no_tick_data'
+        worst = (np.inf, None)
+        for i, u in enumerate(props):
+            m, r = self.shield.margin(X[i][:3], u, float(X[i][9]))
+            if m < worst[0]:
+                worst = (m, i)
+        self.shield_min = min(getattr(self, 'shield_min', np.inf), worst[0])
+        return None if worst[0] >= 0.0 else 'violation_tick%d_margin%.4f' % (worst[1], worst[0])
 
     # ---- 尾段
     def tail(self, ex, seg, q_end, nph):
@@ -265,6 +294,9 @@ class DoorOpenPhase:
             if co is not None and len(co) >= nph:
                 mism = max(max(float(np.abs(co[j][0] - seg[j]['arm_target']).max()), float(np.abs(co[j][1] - seg[j]['base_twist']).max())) for j in range(nph))
                 if mism <= 1e-9:
+                    bad = self._shield_check(getattr(ex, '_cand_X', None), getattr(ex, '_cand_props', None))
+                    if bad is not None:
+                        return None, 'shield_' + bad, mism
                     return [(a.copy(), b.copy()) for a, b in co[nph:]], 'cstop_candidate_hold1', mism
                 return None, 'cstop_candidate_mismatch', mism
             return None, 'no_candidate_out', None
@@ -280,5 +312,8 @@ class DoorOpenPhase:
             mn = {k: min(float(c[k]) for c in res) for k in self.X.KEYS}
             if any(mn[k] < self.X.W.THR[k] for k in self.X.KEYS):
                 return None, 'explicit_cstop_clear_bad', None
+            bad = self._shield_check(r.get('X'), r.get('props'))
+            if bad is not None:
+                return None, 'shield_' + bad, None
             return [(a.copy(), b.copy()) for a, b in r['out']], 'explicit_cstop_e0', None
         return None, 'no_tail_mode_' + str(ex.stop_mode), None
