@@ -235,7 +235,7 @@ def worker(conn):
                 return None
             h = pool.submit(T_map, W.FINGER_Q, W.PHI0, np.array([np.r_[to_map(x, T_mo), 0.0] for x in todo]))
             sp_ = [self_pairs(x) for x in todo]                        # 與池同時進行
-            outp, why, _ = pool.collect(h, max(0.005, 0.040 - (h['t_submit'] - t0)))   # 掃掠等待上限＝本次核對起算 40 ms（collect 的期限以派工時刻起算，所以扣的是派工時刻；far_door_5 前誤扣成「現在」，實際上限只有約 36 ms）；整拍 45 ms 期限不變
+            outp, why, _ = pool.collect(h, 0.040 - (h['t_submit'] - t0))   # 掃掠截止固定為 t0＋40 ms，時間耗盡即判未驗證、不補時間（collect 的期限以派工時刻起算，所以扣的是派工時刻；far_door_5 前誤扣成「現在」，實際上限只有約 36 ms）；整拍 45 ms 期限不變
             if outp is None:
                 return 'sweep_' + str(why)
             for x, o, spx in zip(todo, outp, sp_):
