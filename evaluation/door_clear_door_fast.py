@@ -103,3 +103,58 @@ def clear_door_fast(x, T_WH0):
     # 自碰撞：原式用 FAST.clear_full(qf, T_WH, finger_q=FINGER_Q)['self']——其手指同樣沿 y 平移 finger_q
     sc = _self_clear({n: T[n] for n in names}, pts)
     return dict(env=env, base=bc, self=sc, shell_bar=shell, who=dict(env=who, base=bwho))
+
+
+def clear_door_fast_multi(x, T_WH0, fqs):
+    """CLOSE 段等多組手指開度：逐組與 clear_door_fast（FINGER_Q＝該組）同式計算後各項取最小（who 取第一組，同抓持控制器原本兩工作合併的規則）。
+    只共用與手指開度無關的部分（正向運動學、門扇／立柱／橫桿幾何、非手指連桿的世界點雲），每組的剪枝與距離計算各自獨立 ⇒ 與逐組呼叫逐值相同。"""
+    qf, phi = np.asarray(x[:9], float), float(x[9])
+    sh, leaf = WB._static()
+    Rp = WB.Rz4(-phi)[:3, :3]
+    leaf_p = (leaf[0], Rp @ leaf[1], Rp, leaf[3])
+    T_WH = WB.handle_pose(T_WH0, phi)
+    posts, bar = PG.handle_shapes(T_WH)
+    near = [s for s in sh if float(DOC.box_dist(np.array([[qf[0], qf[1], s[1][2]]]), s[1], s[2], s[3])[0]) < 1.6]
+    pairs = FAST._pairs()
+    names = sorted(set(DOC.ARM_LINKS) | {n for p in pairs for n in p})
+    T0 = fk_all(qf, names)
+    shapes = [leaf_p] + near + posts
+    bc, bwho = min((float(DOC.box_dist(np.array([[qf[0], qf[1], c[2]]]), c, R, hs)[0]) - DOC.RB, name) for name, c, R, hs in [leaf_p] + near)
+    W_sh = {}
+    out = None
+    for fq in fqs:
+        T = dict(T0)
+        for n in DOC.FINGERS:
+            fqn = (fq[0] if n.endswith('1') else fq[1]) if isinstance(fq, (tuple, list)) else fq
+            if n in T and fqn:
+                T[n] = T[n].copy()
+                T[n][:3, 3] += (1.0 if n.endswith('1') else -1.0) * fqn * T[n][:3, 1]
+        W_ = {}
+
+        def pts(n, T=T, W_=W_):
+            cache = W_ if n in DOC.FINGERS else W_sh
+            if n not in cache:
+                cache[n] = (T[n][:3, :3] @ DOC.CL[n].T).T + T[n][:3, 3]
+            return cache[n]
+        Cw = {n: T[n][:3, :3] @ _C[n] + T[n][:3, 3] for n in DOC.ARM_LINKS}
+        C = np.array([Cw[n] for n in DOC.ARM_LINKS])
+        LB = _lb_boxes(C, shapes)
+        cand = []
+        for i, n in enumerate(DOC.ARM_LINKS):
+            for j, (name, c, R, hs) in enumerate(shapes):
+                cand.append((float(LB[i, j]) - _R[n], n, name, (c, R, hs)))
+            if n not in TOOL:
+                cand.append((float(PG.bar_dist(C[i][None, :], bar)[0]) - _R[n], n, 'bar', None))
+        cand.sort(key=lambda z: z[0])
+        env, who = np.inf, None
+        for b, n, name, g in cand:
+            if b >= env:
+                break
+            d = float(PG.bar_dist(pts(n), bar).min()) if g is None else float(DOC.box_dist(pts(n), *g).min())
+            if d < env:
+                env, who = d, f'{n}|{name}'
+        shell = float(PG.bar_dist(pts('uflite_gripper_link'), bar).min())
+        sc = _self_clear({n: T[n] for n in names}, pts)
+        r = dict(env=env, base=bc, self=sc, shell_bar=shell, who=dict(env=who, base=bwho))
+        out = r if out is None else {k: (min(out[k], r[k]) if k != 'who' else out[k]) for k in out}
+    return out

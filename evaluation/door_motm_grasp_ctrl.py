@@ -364,15 +364,19 @@ class MovingGraspCtrl:
             Q, vtraj, k_dec = self._stop_traj(q, u, e, j0, u_from)
             if vtraj is not None:
                 return ('viol', dict(tag=tag, extra=e, traj=vtraj, k_decel=k_dec))
-            if tag == 'stop_now' and e == 0:
+            if (tag == 'stop_now' and e == 0) or (tag == 'candidate' and e == 1 and getattr(self, 'tail_cert_mode', False)):
                 self.stop_end_s = float((np.asarray(Q[-1][:2]) - self.b_origin[:2]) @ self.d)
             idx = list(range(0, len(Q), self.sweep_stride)) + [len(Q) - 1]
             for i in idx:
                 items.append((e, i, len(X), k_dec))
                 X.append(np.r_[Q[i], phi])
         hs = []
-        for gq in self._geoms():                                     # r12：每種手指幾何一個工作
-            hs.append(self._pool.submit(self.T_WH_model, gq, W.PHI0, np.array(X), finger_bar_q=gq))
+        gqs = self._geoms()
+        if len(gqs) > 1 and getattr(self, 'multi_geom', False):       # 非阻塞版（11/17）：多組手指幾何一個工作、各項取最小（door_clear_door_fast_multi，與逐組工作再合併逐值相同）
+            hs.append(self._pool.submit(self.T_WH_model, dict(multi=list(gqs)), W.PHI0, np.array(X), finger_bar_q=list(gqs)))
+        else:
+            for gq in gqs:                                           # r12：每種手指幾何一個工作
+                hs.append(self._pool.submit(self.T_WH_model, gq, W.PHI0, np.array(X), finger_bar_q=gq))
         W.FINGER_Q = self.finger_q
         return ('h', items, hs)
 
@@ -603,7 +607,9 @@ class MovingGraspCtrl:
             # 現在停（r11：有計算池時先派工，派工期間投機計算追蹤命令）
             exempt = 'insert' if self.phase == 'INSERT' else ('contact' if self.phase in ('CLOSE', 'CONFIRM', 'READY') else None)   # r12：段別轉換後重算（閉爪段掃掠含閉合幾何 ⇒ 兩指—橫桿為指定接觸）
             spec = None
-            if self.stop is None and self._pool is not None:
+            if self.stop is None and getattr(self, 'tail_cert_mode', False):
+                pass                                                   # 非阻塞尾段證書模式（只在非阻塞執行器明確開啟）：晚到時執行的是上一段已核的 extra＝1 尾段，現在停（e＝0）軌跡從不執行 ⇒ 不重算；停止終點檢查改用本拍候選 e＝1 的軌跡終點
+            elif self.stop is None and self._pool is not None:
                 sn = self._sweep_pool_submit(q, self.u_last, (0,), self.ramp_j, self.u_from_base, phi_meas, exempt, 'stop_now')
                 if sn[0] == 'viol':
                     self._stop('stop_now_violation', **sn[1])
@@ -640,7 +646,10 @@ class MovingGraspCtrl:
                     if bad:
                         self._stop('cmd_limit', bad=bad)
                     else:
-                        sw = self._sweep(q, u, XE.STOP_EXTRAS, 0, np.asarray(self.pipe[-1][:3], float), phi_meas, exempt, 'candidate')
+                        cert = getattr(self, 'tail_cert_mode', False)
+                        sw = self._sweep(q, u, (1,) if cert else XE.STOP_EXTRAS, 0, np.asarray(self.pipe[-1][:3], float), phi_meas, exempt, 'candidate')   # 尾段證書模式：只核實際會執行的 extra＝1（e＝2「同命令再留一拍」在非阻塞下不會發生）
+                        if cert and sw is None and self.phase == 'READY' and self.stop_end_s is not None and self.stop_end_s > self.win[1] + 1e-9:
+                            sw = dict(tag='candidate', why='window_insufficient', stop_end_s=round(self.stop_end_s, 4), window=self.win)
                         late = self.deadline_ms is not None and ((time.perf_counter() - w_t) * 1e3 > self.deadline_ms or (self.deadline_inject is not None and self.deadline_inject(self)))
                         if sw is not None:
                             self._stop('candidate_stop_violation', **sw)

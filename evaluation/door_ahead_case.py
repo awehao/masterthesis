@@ -144,6 +144,8 @@ def gate(cc):
 
 
 gc.close_gate = gate
+gc.multi_geom = os.environ.get('GRASP_MULTI_GEOM', '1') == '1'
+gc.tail_cert_mode = os.environ.get('GRASP_TAIL_CERT', '0') == '1'   # 抓持段尾段證書模式（待 Codex 核；預設關）      # CLOSE 段兩組手指幾何合成一個計算池工作（逐值相同）
 t = 0.0
 # ---- 首段請求（同原檔：接近中 t＝−1.0 送出，可用時刻＝−1.0＋牆鐘；在起跑前算——它在背景規劃程序裡，非阻塞版之後改成真的背景）
 T_LEAD = 1.0

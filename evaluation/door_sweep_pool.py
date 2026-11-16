@@ -53,8 +53,18 @@ def _worker(conn):
         try:
             if delay:
                 time.sleep(delay)                                    # 測試用：注入延遲
-            W.FINGER_Q, W.PHI0 = (tuple(float(x) for x in fq) if isinstance(fq, (tuple, list)) else float(fq)), float(phi0)   # r2：可為兩指各自開度
             res = []
+            if isinstance(fq, dict):                                  # 多組手指開度（CLOSE 段）：一次算、各項取最小（與逐組工作再合併逐值相同）
+                gs = [tuple(float(v) for v in g) if isinstance(g, (tuple, list)) else float(g) for g in fq['multi']]
+                W.PHI0 = float(phi0)
+                fbs = [_FB(T, g) for g in gs] if fb is not None else None
+                for x in X:
+                    r = F.clear_door_fast_multi(x, T, gs)
+                    fbv = None if fbs is None else min(XE.DoorExitCtrl.finger_bar(o, x[:9], float(x[9])) for o in fbs)
+                    res.append((r['env'], r['base'], r['self'], r['shell_bar'], r['who']['env'], r['who']['base'], fbv))
+                conn.send((ver, w, 'ok', res))
+                continue
+            W.FINGER_Q, W.PHI0 = (tuple(float(x) for x in fq) if isinstance(fq, (tuple, list)) else float(fq)), float(phi0)   # r2：可為兩指各自開度
             fbo = None if fb is None else _FB(T, tuple(float(x) for x in fb) if isinstance(fb, (tuple, list)) else float(fb))
             for x in X:
                 r = F.clear_door_fast(x, T)
@@ -105,7 +115,7 @@ class SweepPool:
             if len(idx) == 0:
                 continue
             try:
-                self.conns[w].send((self.ver, w, T, (tuple(float(x) for x in fq) if isinstance(fq, (tuple, list)) else float(fq)), float(phi0), X[idx], self.inject_delay.get(w, 0.0), finger_bar_q))
+                self.conns[w].send((self.ver, w, T, fq if isinstance(fq, dict) else (tuple(float(x) for x in fq) if isinstance(fq, (tuple, list)) else float(fq)), float(phi0), X[idx], self.inject_delay.get(w, 0.0), finger_bar_q))
                 sent.append(w)
             except (BrokenPipeError, OSError):
                 return dict(ver=self.ver, chunks=chunks, sent=sent, t_submit=t0, t_dispatch_ms=(time.perf_counter() - t0) * 1e3, n=len(X), send_failed=w)
