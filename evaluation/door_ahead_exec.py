@@ -66,6 +66,9 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
             try:
                 ctrl = builder(msg[1])
                 seg_prev, s_before, cfg_prev, mode, k_tick, k_open = None, None, None, 'grasp', 0, 0
+                if os.environ.get('AHEAD_GC_FREEZE') == '1':          # 起跑後才建的控制器也移到永久代（同起跑前的凍結；不改判定）
+                    _gc.collect()
+                    _gc.freeze()
                 conn.send(('built', dict(ok=True, ms=round((time.perf_counter() - w_b) * 1e3, 2), ver=msg[1].get('ver'))))
             except Exception as e:                                    # noqa: BLE001
                 import traceback
