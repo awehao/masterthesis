@@ -13,6 +13,11 @@ V_PASS, DT, PHYS, NPH, D = 0.05, 0.05, 0.01, 5, 8
 DEC = (6.25, 6.25, 25.51)                                             # 平滑器既有減速上限（現場參數快照 params_velocity_smoother.yaml；未改）
 CAP_ALONG, CAP_LAT = (0.62, 1.40), 0.60                              # 捕獲區：距抓取點的沿線距離、離線側向距離
 PREP_MARGIN = 0.04
+# 近距觀察段的連續視覺更新（N3；Codex 20261116）。只在觀察追蹤（TRACK）中、已核沿線範圍內啟用；只更新把手位置（姿態沿用固定參考）。
+UPD = dict(max_age_s=0.3,          # 觀察年齡上限（同 FL.EST_MAX_AGE_S）
+           gate_pos_m=0.020, gate_ang_deg=3.0,   # 對目前參考的粗差閘門（明顯不是同一目標或估計壞掉）
+           n_consist=3, spread_m=0.005,          # 需最近 3 格有效觀察、彼此位置差 ≤5 mm 才形成更新目標（取各軸中位數）
+           step_m=0.0001)                        # 參考每控制拍最多移動 0.1 mm（＝2 mm/s；目標與命令連續，不逐格覆寫、不清管線）。1 mm／拍在重播中使手臂命令偏離無更新版最多 0.49 rad/s，太大
 ASSOC_TOL = dict(dxy_m=0.15, dz_m=0.10, dang_deg=10.0)               # 觀察對先驗名目把手位姿的關聯容許（粗核對：是不是目標門的把手）
 STOP_ALONG = -0.05
 
@@ -299,6 +304,7 @@ def worker(conn):
                 n = (T_est[:3, :3] @ np.asarray(a_H, float)).copy(); n[2] = 0; n /= np.linalg.norm(n)
                 ax = T_est[:3, 0].copy(); ax[2] = 0; d = -ax / np.linalg.norm(ax)
                 yaw = math.atan2(-n[1], -n[0])
+                st['ref'] = dict(ver=1, t_obs=float(a.get('t_obs', 0.0)), t_obs_last=float(a.get('t_obs', 0.0)), last_seq=int(a.get('seq', -1)), hist=[], goal=None, n_step_rejected=0, T_fixed=T_est.copy())
                 assoc = None
                 if st.get('T_prior') is not None:                      # 目標關聯：估計（轉到地圖座標）對先驗名目位姿的差
                     Tm = _T3(_Tmo_a) @ T_est
@@ -313,6 +319,9 @@ def worker(conn):
                     prep_path = [np.r_[pg['p0'] - pg['d'] * (FR.L_IN - u_ * (FR.L_IN - FR.OBS_ALONG[0])), pg['yaw']] for u_ in np.linspace(0, 1, 9)]
                     br, binfo = FR.observe_branch(T_est, pg, np.asarray(a['q'], float), prep_path, T_at, a_H, clear_fn, W.THR, W.SIG_FLOOR, LO, HI, V_PASS)
                 st['pg'], st['br'] = pg, br
+                if br is not None:
+                    q_s_, _, _ = DFK.ik_closure_fc(br['T_target'], np.r_[pg['p0'] - pg['d'] * STOP_ALONG, pg['yaw']], br['q_window'][int(np.argmin(np.abs(np.asarray(br['alongs']) - STOP_ALONG)))])   # 種子＝已核分支在終點附近的解（同一連續分支）
+                    st['q_end_seed'] = q_s_
                 st['trk'] = FR.ArmPreTracker(tau, lambda q9: np.zeros(6), DT, PHYS, NPH, LO, HI)
                 if br is not None:
                     stop_check(np.r_[np.asarray(a['q'], float)[:3], br['q_start_op']], [np.zeros(9)] * D, np.zeros(3), br['q_start_op'], np.zeros(6), np.zeros(3))   # 預熱（不在控制拍內）
@@ -332,10 +341,76 @@ def worker(conn):
                     out['stop'] = stop_check(q, pipe, rel, s, np.asarray(a['ua_cand'], float), np.asarray(a['T_mo'], float))
                 if a['mode'] == 'TRACK':
                     trk = st['trk']
-                    o = trk.step(q, bp, rel, s, s_end, br['T_target'], trk.q_prev if trk.q_prev is not None else q[3:])
+                    T_mo_t = np.asarray(a['T_mo'], float)
+                    ref = st['ref']
+                    upd = dict(ver=ref['ver'], status='off' if not a.get('allow_update') else 'no_new_obs')
+                    ob = a.get('obs')
+                    if a.get('allow_update') and ob is not None and ob['seq'] > ref['last_seq']:      # ---- 更新入口：一格新觀察（位姿、時間、版本一起進來）
+                        ref['last_seq'] = ob['seq']
+                        To = np.asarray(ob['T'], float)
+                        age = float(a['t']) - float(ob['t_obs'])
+                        dR = T_est[:3, :3].T @ To[:3, :3]
+                        dang = math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR) - 1) / 2)))) if np.isfinite(To).all() else float('nan')
+                        dpos = float(np.linalg.norm(To[:3, 3] - T_est[:3, 3])) if np.isfinite(To).all() else float('nan')
+                        if not np.isfinite(To).all():
+                            upd['status'] = 'reject:non_finite'
+                        elif ob['t_obs'] <= ref['t_obs_last']:
+                            upd['status'] = 'reject:time_not_increasing'
+                        elif age > UPD['max_age_s'] or age < -1e-6:
+                            upd['status'] = 'reject:age:%.3f' % age
+                        elif dpos > UPD['gate_pos_m'] or dang > UPD['gate_ang_deg']:
+                            upd['status'] = 'reject:gate:%.4f_m,%.2f_deg' % (dpos, dang); ref['hist'] = []
+                        else:
+                            ref['t_obs_last'] = float(ob['t_obs'])
+                            ref['hist'] = (ref['hist'] + [(int(ob['seq']), float(ob['t_obs']), To[:3, 3].copy())])[-UPD['n_consist']:]
+                            P = np.array([h_[2] for h_ in ref['hist']])
+                            spread = float(max(np.linalg.norm(P[i_] - P[j_]) for i_ in range(len(P)) for j_ in range(len(P)))) if len(P) > 1 else 0.0
+                            if len(P) < UPD['n_consist']:
+                                upd['status'] = 'accumulating:%d' % len(P)
+                            elif spread > UPD['spread_m']:
+                                upd['status'] = 'reject:spread:%.4f' % spread
+                            else:
+                                ref['goal'] = dict(p=np.median(P, axis=0), seqs=[h_[0] for h_ in ref['hist']], t_obs=float(ob['t_obs']), spread=spread)
+                                upd['status'] = 'goal_set'
+                        upd.update(obs_seq=int(ob['seq']), obs_age=round(age, 3), obs_dpos_mm=round(dpos * 1e3, 2) if np.isfinite(dpos) else None)
+                    step_try = None
+                    if a.get('allow_update') and ref.get('goal') is not None:                       # ---- 參考朝更新目標移動（每拍 ≤ step_m）；先試算，全部核過才提交
+                        dv = ref['goal']['p'] - T_est[:3, 3]
+                        nd = float(np.linalg.norm(dv))
+                        if nd > 1e-5:
+                            step_try = dv * min(1.0, UPD['step_m'] / nd)
+                    o = None
+                    if step_try is not None:
+                        old = (T_est, br['T_target'], pg['p0'].copy(), None if trk.q_prev is None else trk.q_prev.copy(), trk.u_prev.copy(), trk.lag_max, trk.n_clip, trk.ready)
+                        T_new = T_est.copy(); T_new[:3, 3] += step_try
+                        T_est = T_new
+                        br['T_target'] = FR.observe_target(T_est, T_at, a_H)
+                        pg['p0'] = pg['p0'] + step_try[:2]
+                        b_end = np.r_[pg['p0'] - pg['d'] * STOP_ALONG, pg['yaw']]                     # 可達性：更新後的目標在本段終點（通過 0.05 m）仍有解、在限位內、可操作度足夠
+                        q_e, r_e, s_e = DFK.ik_closure_fc(br['T_target'], b_end, st['q_end_seed'])
+                        reach_ok = bool(r_e < 1e-6 and np.isfinite(q_e).all() and np.all(q_e >= LO) and np.all(q_e <= HI) and s_e >= W.SIG_FLOOR and float(np.abs(q_e - st['q_end_seed']).max()) < 0.5)
+                        o = trk.step(q, bp, rel, s, s_end, br['T_target'], trk.q_prev if trk.q_prev is not None else q[3:])
+                        sc_n = stop_check(q, pipe, rel, s, np.asarray(o['u'], float), T_mo_t) if (o['ok'] and reach_ok) else None
+                        if o['ok'] and reach_ok and o.get('sigma', 0.0) >= W.SIG_FLOOR and stop_disposition('tick', sc_n) == 'commit':
+                            ref['ver'] += 1
+                            ref['t_obs'] = ref['goal']['t_obs']
+                            st['q_end_seed'] = q_e
+                            upd.update(ver=ref['ver'], committed=True, step_mm=round(float(np.linalg.norm(step_try)) * 1e3, 3), from_seqs=ref['goal']['seqs'], t_obs=ref['t_obs'])
+                            out['stop'] = sc_n
+                        else:                                          # 任一不過：退回原參考（追蹤器狀態一併還原），本拍照原參考重算
+                            why_ = 'tracker' if not o['ok'] else ('reach' if not reach_ok else ('manipulability' if o.get('sigma', 0.0) < W.SIG_FLOOR else 'stop_check'))
+                            T_est, br['T_target'], pg['p0'] = old[0], old[1], old[2]
+                            trk.q_prev, trk.u_prev, trk.lag_max, trk.n_clip, trk.ready = old[3], old[4], old[5], old[6], old[7]
+                            ref['n_step_rejected'] += 1
+                            upd.update(committed=False, step_rejected=why_)
+                            o = None
+                    if o is None:
+                        o = trk.step(q, bp, rel, s, s_end, br['T_target'], trk.q_prev if trk.q_prev is not None else q[3:])
+                        if o['ok']:
+                            out['stop'] = stop_check(q, pipe, rel, s, np.asarray(o['u'], float), T_mo_t)
+                    upd.update(ref_p=[float(x) for x in T_est[:3, 3]], ref_t_obs=ref['t_obs'], pg_p0=[float(x) for x in pg['p0']], goal_dist_mm=None if ref.get('goal') is None else round(float(np.linalg.norm(ref['goal']['p'] - T_est[:3, 3])) * 1e3, 3), n_step_rejected=ref['n_step_rejected'])
+                    out['ref'] = upd
                     out['track'] = dict(ok=o['ok'], why=o.get('why'), u=[float(x) for x in o['u']], err=o.get('track_err'), err_pred=o.get('track_err_pred'), clipped=o.get('clipped'), sigma=o.get('sigma'))
-                    if o['ok']:
-                        out['stop'] = stop_check(q, pipe, rel, s, np.asarray(o['u'], float), np.asarray(a['T_mo'], float))
                     if a.get('judge'):
                         j = {}
                         for nm, Tj, tobs in a['judge_refs']:              # 每個參考各自帶「位姿、時間」：固定參考用它自己的擷取時間；逐格觀察用該格自己的位姿與時間
@@ -355,7 +430,8 @@ def worker(conn):
 
 def main():
     out = sys.argv[1]
-    OBS_MODE = len(sys.argv) > 2 and sys.argv[2] == 'obs'            # 取像模式：把手估計來自執行器 /far/handle_obs 的實際影像（起點第一格有效估計定通過線；之後各格只記錄與更新時間戳，不改線）
+    UPDATE = len(sys.argv) > 2 and sys.argv[2] == 'obsupd'           # obsupd＝取像模式＋近距觀察段連續視覺更新（N3）
+    OBS_MODE = len(sys.argv) > 2 and sys.argv[2] in ('obs', 'obsupd')            # 取像模式：把手估計來自執行器 /far/handle_obs 的實際影像（起點第一格有效估計定通過線；之後各格只記錄與更新時間戳，不改線）
     ctx = mp.get_context('fork')
     pc, cc = ctx.Pipe()
     wp = ctx.Process(target=worker, args=(cc,), daemon=False)          # 非 daemon：它要再開平行掃掠池；以 PDEATHSIG 跟著父程序結束
@@ -400,6 +476,7 @@ def main():
             self.aborted = None
             self.obs_first, self.obs_latest, self.obs_log, self.xstate, self.t_first_tick = None, None, [], None, None
             self.anchored, self.n_assoc_rej, self.t_near_goal = False, 0, None
+            self.ref_t_obs, self.ref_log, self.ref_ver, self.path_shift = 0.0, [], 1, np.zeros(2)
             self.p_act = self.create_publisher(Bool, '/merge/active', 10)
             self.tfb = Buffer(); self.tfl = TransformListener(self.tfb, self)
             self.ver, self.stale, self.T_mo_pub, self.path_odom, self.plan_stamp, self.ack, self.t_shadow, self.mrg_t = 0, 0, None, None, None, None, None, None
@@ -597,7 +674,7 @@ def main():
                 return
             if OBS_MODE and not self.anchored and self.obs_first is not None and self.owner == 'NAV' and not self.stop:
                 o_ = self.obs_first                                   # 途中第一格有效觀察：以該格擷取同刻的里程位姿轉入里程座標，核對是否對應目標門，再定線並開始搜尋
-                tag, res = self.ask('anchor', dict(T_odom_base=_T3(o_['odom_base']).tolist(), T_base_handle=o_['T_base_handle'].tolist(), T_mo=T_mo.tolist()), 0.5)
+                tag, res = self.ask('anchor', dict(T_odom_base=_T3(o_['odom_base']).tolist(), T_base_handle=o_['T_base_handle'].tolist(), T_mo=T_mo.tolist(), seq=o_['seq'], t_obs=o_['t_obs']), 0.5)
                 if tag != 'anchor':
                     self.global_stop('worker_' + tag + '_global_stop', op='anchor', res=str(res)[:200])
                 elif res['assoc'] is None or res['assoc']['dxy_m'] > ASSOC_TOL['dxy_m'] or res['assoc']['dz_m'] > ASSOC_TOL['dz_m'] or res['assoc']['dang_deg'] > ASSOC_TOL['dang_deg']:
@@ -607,7 +684,8 @@ def main():
                 else:
                     co.update({k_: res[k_] for k_ in ('yaw', 'd', 'n', 'p0', 'handle_xy')})
                     self.anchored = True
-                    self.anchor = dict(t=t, seq=o_['seq'], t_obs=o_['t_obs'], age_s=round(t - o_['t_obs'], 3), odom_base=o_['odom_base'].tolist(), truth_base=tr['q'][:3].tolist(), map_odom=T_mo.tolist(), T_base_handle=o_['T_base_handle'].tolist(), assoc=res['assoc'],
+                    self.ref_t_obs = o_['t_obs']
+                    self.anchor = dict(t=t, seq=o_['seq'], t_obs=o_['t_obs'], age_s=round(t - o_['t_obs'], 3), odom_base=o_['odom_base'].tolist(), truth_base=tr['q'][:3].tolist(), map_odom=T_mo.tolist(), T_base_handle=o_['T_base_handle'].tolist(), T_odom_handle=o_['T_odom_handle'].tolist(), assoc=res['assoc'],
                                        version='fixed_reference_v1(seq %d)' % o_['seq'], note='固定參考＝途中第一格通過關聯核對的實際影像估計；之後各格另存，不改通過線')
                     request_plan()
                     self.event('visual_task_established', seq=o_['seq'], t_obs=round(o_['t_obs'], 3), age_s=round(t - o_['t_obs'], 3), assoc=res['assoc'], dist_to_coarse_goal=round(float(np.linalg.norm(to_map_xy(q[:2]) - self.coarse_goal)), 3))
@@ -687,7 +765,8 @@ def main():
                 ua_cand = np.clip((s_des - tr['s_end']) / DT, -1.0, 1.0)
             if self.arm in ('PREP', 'TRACK') and not self.stop:
                 judge = self.arm == 'TRACK' and -0.05 <= along <= 0.25
-                tag, res = self.ask('tick', dict(mode=self.arm, t=t, q=q.tolist(), pipe=tr['pipe'].tolist(), rel=self.rel.tolist(), s=tr['s'].tolist(), s_end=tr['s_end'].tolist(), judge=judge, judge_refs=([('fixed_reference', None, self.anchor['t_obs']), ('latest_observation', self.obs_latest['T_odom_handle'].tolist(), self.obs_latest['t_obs'])] if OBS_MODE else [('real_image_at_start', None, self.t_goal), ('synthetic_fresh_stamp', None, t - 0.05)]), v_meas=v_meas.tolist(), ua_cand=ua_cand.tolist(), T_mo=T_mo.tolist(),
+                tag, res = self.ask('tick', dict(mode=self.arm, t=t, q=q.tolist(), pipe=tr['pipe'].tolist(), rel=self.rel.tolist(), s=tr['s'].tolist(), s_end=tr['s_end'].tolist(), judge=judge, obs=(None if not (UPDATE and self.obs_latest is not None) else dict(T=self.obs_latest['T_odom_handle'].tolist(), t_obs=self.obs_latest['t_obs'], seq=self.obs_latest['seq'])), allow_update=bool(UPDATE and self.arm == 'TRACK' and along is not None and STOP_ALONG <= along <= 0.25),
+                                                  judge_refs=([('fixed_reference', self.anchor['T_odom_handle'], self.anchor['t_obs']), ('latest_observation', self.obs_latest['T_odom_handle'].tolist(), self.obs_latest['t_obs'])] + ([('updated_reference', None, self.ref_t_obs)] if UPDATE else []) if OBS_MODE else [('real_image_at_start', None, self.t_goal), ('synthetic_fresh_stamp', None, t - 0.05)]), v_meas=v_meas.tolist(), ua_cand=ua_cand.tolist(), T_mo=T_mo.tolist(),
                                                   u_last=np.r_[self.rel, self.u_arm].tolist(), u_prev=np.r_[self.rel, self.u_arm_prev].tolist()), 0.045)
                 sc0 = res.get('stop') if isinstance(res, dict) else None
                 if tag == 'tick' and self.arm == 'TRACK' and (res.get('track') is None or not res['track']['ok']):
@@ -703,6 +782,18 @@ def main():
                     self.global_stop('stop_check_next_failed_stop_now_global_stop', arm=self.arm, next=sc0['next'], stop_certificate='本拍 now 停法核對通過')
                 if not isinstance(res, dict):
                     res = {}
+            rf = res.get('ref') if isinstance(res, dict) else None
+            if rf is not None:                                        # 連續視覺更新的結果：只有 worker 已提交（全部核過）的參考才生效
+                if rf.get('status') not in ('off', 'no_new_obs') or rf.get('committed') is not None:
+                    self.ref_log.append(dict(t=round(t, 3), along=None if along is None else round(along, 4), **{k_: rf.get(k_) for k_ in ('ver', 'status', 'obs_seq', 'obs_age', 'obs_dpos_mm', 'committed', 'step_mm', 'step_rejected', 'from_seqs', 'goal_dist_mm', 'ref_t_obs')}))
+                if rf.get('committed'):
+                    dp = np.array(rf['pg_p0']) - np.array(self.plan['pg']['p0'])
+                    self.plan['pg']['p0'] = rf['pg_p0']               # 通過線跟著參考平移（方向與朝向不變）
+                    self.path_odom = self.path_odom + dp
+                    self.path_shift = self.path_shift + dp
+                    self.ref_ver, self.ref_t_obs = rf['ver'], rf['ref_t_obs']
+                    if float(np.linalg.norm(self.path_shift)) > 0.001:   # 累積平移超過 1 mm 才重發路徑（位置、朝向、轉換版本一起生效）
+                        self.pub_path_map(T_mo); self.path_shift = np.zeros(2)
             sc = res.get('stop')
             if self.arm == 'PREP' and not self.stop:
                 dcs = res.get('decision')
@@ -731,7 +822,8 @@ def main():
                               np.nan if along is None else along, np.nan if lat is None else lat, yaw_e, tk.get('err') if tk.get('err') is not None else np.nan, tk.get('sigma') if tk.get('sigma') is not None else np.nan, float(bool(tk.get('clipped'))),
                               cl.get('env', np.nan), cl.get('base', np.nan), cl.get('self', np.nan), *v_meas, *tr['q'][:3], *T_mo, np.nan if sc is None else float(sc['ok']), scm.get('env', np.nan), scm.get('base', np.nan), scm.get('self', np.nan), np.nan if sc is None else sc['ms'], tk.get('err_pred') if tk.get('err_pred') is not None else np.nan, ts_b,
                               np.nan if sc is None else (sc['now']['all_still_s'] or np.nan), np.nan if sc is None else (sc['next']['all_still_s'] or np.nan), np.nan if sc is None else sc.get('n_eval', np.nan),
-                              *[np.nan if sc is None else sc['margin_after_interval_bound'][k_] for k_ in ('env', 'base', 'self')], np.nan if sc is None else sc.get('n_refine', np.nan)])
+                              *[np.nan if sc is None else sc['margin_after_interval_bound'][k_] for k_ in ('env', 'base', 'self')], np.nan if sc is None else sc.get('n_refine', np.nan),
+                              float(self.ref_ver), *([np.nan] * 3 if rf is None else rf['ref_p']), np.nan if rf is None or rf.get('goal_dist_mm') is None else rf['goal_dist_mm']])
             if res.get('judge') is not None:
                 self.sel_log.append(dict(t=round(t, 2), along=round(along, 4), lat_mm=round(lat * 1e3, 2), judge=res['judge']))
             # ---- 結束條件：進線後底盤靜止 2.5 s
@@ -748,9 +840,9 @@ def main():
 
         def save(self):
             cols = ['t', 't_world'] + [f'q{i}' for i in range(9)] + [f's{i}' for i in range(6)] + ['rel_x', 'rel_y', 'rel_w'] + [f'ua{i}' for i in range(6)] + ['nav_x', 'nav_y', 'nav_w', 'mrg_x', 'mrg_y', 'mrg_w', 'base_owner(0NAV,1MERGE)', 'arm(0HOLD,1PREP,2TRACK)', 'stop',
-                                                                                                           'along', 'lat', 'yaw_err_deg', 'arm_track_err', 'sigma', 'clipped', 'clear_env', 'clear_base', 'clear_self', 'vx_meas', 'vy_meas', 'truth_x', 'truth_y', 'truth_yaw', 'mo_x', 'mo_y', 'mo_yaw', 'stop_ok', 'stop_env', 'stop_base', 'stop_self', 'stop_ms', 'arm_track_err_pred', 'tf_stamp_base', 'stop_now_all_still_s', 'stop_next_all_still_s', 'stop_n_samples', 'stop_margin_env', 'stop_margin_base', 'stop_margin_self', 'stop_n_refine']
+                                                                                                           'along', 'lat', 'yaw_err_deg', 'arm_track_err', 'sigma', 'clipped', 'clear_env', 'clear_base', 'clear_self', 'vx_meas', 'vy_meas', 'truth_x', 'truth_y', 'truth_yaw', 'mo_x', 'mo_y', 'mo_yaw', 'stop_ok', 'stop_env', 'stop_base', 'stop_self', 'stop_ms', 'arm_track_err_pred', 'tf_stamp_base', 'stop_now_all_still_s', 'stop_next_all_still_s', 'stop_n_samples', 'stop_margin_env', 'stop_margin_base', 'stop_margin_self', 'stop_n_refine', 'ref_ver', 'ref_px', 'ref_py', 'ref_pz', 'ref_goal_dist_mm']
             np.savez_compressed(out + '_merge.npz', R=np.array(self.rows, float), cols=np.array(cols))
-            json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, obs_mode=OBS_MODE, prior=getattr(self, 'prior', None), n_assoc_rejected=self.n_assoc_rej, obs_log=self.obs_log, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, engineering_abort=self.aborted, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
+            json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, obs_mode=OBS_MODE, update_mode=UPDATE, update_params=UPD, ref_log=self.ref_log, ref_ver_final=self.ref_ver, prior=getattr(self, 'prior', None), n_assoc_rejected=self.n_assoc_rej, obs_log=self.obs_log, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, engineering_abort=self.aborted, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
 
     node = M()
     try:

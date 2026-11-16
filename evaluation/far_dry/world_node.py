@@ -166,7 +166,12 @@ class World(Node):
                 Tb = np.eye(4); Tb[:2, :2] = [[c, -s_], [s_, c]]; Tb[:2, 3] = self.q[:2]
                 self.obs_seq += 1
                 ok_ = float(np.linalg.norm(self.q[:2] - self.T_est[:2, 3])) < 1.6      # 合成假設：1.6 m 內才有有效估計（只為了讓「途中才有第一格有效觀察」的接線被走到；不是偵測距離的量測）
-                self.p_obs.publish(Float64MultiArray(data=[float(self.obs_seq), self.t, 1.0 if ok_ else 0.0, *[float(x) for x in self.q[:3]], *([float(x) for x in (np.linalg.inv(Tb) @ self.T_est).reshape(-1)] if ok_ else [float('nan')] * 16), self.t]))
+                Tp = self.T_est.copy()
+                rng_ = float(np.linalg.norm(self.q[:2] - self.T_est[:2, 3]))
+                bias = os.environ.get('OBS_FAR_BIAS_MM')                # 合成測試：遠距（>0.8 m）的觀察加固定偏差、近距不加 ⇒ 固定參考帶偏差，近距更新應把它拉回（只驗更新入口的閉迴路接線）
+                if bias and rng_ > 0.8:
+                    Tp[:2, 3] += np.array([float(x) for x in bias.split(',')]) * 1e-3
+                self.p_obs.publish(Float64MultiArray(data=[float(self.obs_seq), self.t, 1.0 if ok_ else 0.0, *[float(x) for x in self.q[:3]], *([float(x) for x in (np.linalg.inv(Tb) @ Tp).reshape(-1)] if ok_ else [float('nan')] * 16), self.t]))
                 self.p_xs.publish(self._String(data='run'))
             if self.done:
                 self.save()
