@@ -1,7 +1,7 @@
 {
  "name": "m8_house_far_door_r9",
  "run_id": "m8house_far_door_9",
- "status": "申請中",
+ "status": "Codex 核可 m8house_far_door_9 一趟（20261117）",
  "flow": "遠距起點（1.5,−2.8,90°）→ 原導航（地圖先驗粗目標）→ 途中實際影像定線 → 移動中斜向進線 → 手臂準備（沿線 ≥0.42 前完成）→ 手臂靜止觀察 → 在途前推到沿線 0.25 鎖定任務參考 → 關節直線 6.5 s 轉到門旁分支預抓位（沿線 −0.075）→ 追預抓位 → 交接判定（鎖定任務參考入口）→ /far/handover → MovingGraspCtrl r14（鎖定模式）移動中插入／閉爪／確認 → BindGate → 理想綁定 → DoorOpenExec 開門到 85° 停穩",
  "chain": {
   "executor": "evaluation/isaac_m8_house_far_door_motm.py（門旁執行器複本＋遠距前段；CPU_LAYOUT=1）",
@@ -61,7 +61,7 @@
   "judge_origin_shift_m": 0.2,
   "judge_origin_note": "handover_request 的距離窗口條件（0.005–0.25 m）以 p0 沿行進方向平移 0.20 m 為原點；實際可交接範圍以上面的 handover_range 為準"
  },
- "authority": "Codex reviews/20261117「整合趟 7 結果與 8 申請」回覆：有條件核可；閉鏈停法程序移 [4,12]、掃掠池避開；親和性讀回入紀錄；搶核仍是工作假說；成敗保留；第 7、8 趟整機視角重播一起交",
+ "authority": "Codex reviews/20261117「整合趟 8 結果與 9 申請」回覆：核可一趟；新相位是排程改善非放行保證；判準不變；若仍同型漏件，下一步改做可驗證的串鏈同步設計",
  "changes_since_far_door_1": [
   "鎖定點 0.15→0.25 m、轉移 4.5→6.5 s（m8house_far_door_1 實測：手臂靜止觀察時把手只在沿線 0.37～0.21 m 有效，0.15 已無一致觀察 ⇒ lock_failed）。離線轉移核對 a_start 0.25：關節速率 0.50、淨空 env 0.043／self 0.0063。該趟紀錄在沿線 0.250 已有三格一致（spread 1.12 mm、年齡 0.03 s）",
   "鎖定到綁定的無視覺時間 6.8→8.8 s；估計預算項不隨時間變（理想里程），其餘每拍重算"
@@ -92,5 +92,6 @@
  ],
  "changes_since_far_door_8": [
   "提案相位規則：(r＋2) mod 5 → r（＝/cmd_vel 放行到達相位＝GUARD 取樣那一步）。far_door_8 各層紀錄：平滑器與 Shield 都有把第 6 筆提案傳下去，漏掉的是最後一層 GUARD——GUARD 以固定相位 20 Hz 取樣 Shield 輸出，而平滑器在提案到達後 0–3 步才更新（逐拍漂移）；舊規則下提案到 GUARD 下一次取樣只剩 2 步，平滑器慢到 3 步就撞上。新規則提案在 GUARD 剛取樣完送出，留 4–5 步。排程修正、不是放行保證；放行流逐筆核對不變。far_door_8 的 CPU 配置（DOOR_CPU_LAYOUT=far）保留：搶核假說未被支持，但配置本身無害"
- ]
+ ],
+ "video": "整機視角（總覽＋側拍）為主，標示「同趟狀態紀錄重播」（不是原始現場錄影）；腕部實錄為輔"
 }
