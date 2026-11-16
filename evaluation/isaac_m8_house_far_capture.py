@@ -6,7 +6,7 @@
   ROS 介面（與乾跑世界節點 far_dry/world_node.py 同一組話題，導航鏈與監督節點不用改）：
     出：/clock、/odom_raw（物理位姿，frame odom；＝理想里程，照實標示）、/joint_states、/scan_raw（PhysX 射線 360 道 10 Hz，略過機器人自身形狀）、
         /far/truth（t、q9、設定點 6、在途末端設定點 6、8 步在途命令 8×9）、/far/handle_obs（每格處理過的影像的估計結果）、/far/exec_state
-    入：/cmd_vel（GUARD 放行的底盤命令）、/far/arm_cmd（六關節速率命令）、/far/done（監督節點結束）
+    入：/cmd_vel（GUARD 放行的底盤命令）、/far/arm_cmd（六關節速率命令）、/far/done（監督節點結束）、/far/abort（監督節點要求模擬工程中止）
   命令到受控對象經 8 步在途管線（同門任務控制器的延遲模型）；手臂＝速率命令積分成設定點、位置驅動追設定點。
 取像：腕部相機每個新渲染影格都核對「渲染時刻的狀態紀錄」；依 --cam-hz 取用，逐格保存原始深度、彩色、內參、
   相機外參（渲染時刻關節／底盤讀值的 FK）、擷取同刻的里程位姿／關節／最新 map←odom（訂閱 /tf）、偵測與估計的成功或失敗原因。
@@ -141,6 +141,8 @@ class Bridge(Node):
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 10)
         self.create_subscription(Float64MultiArray, '/far/arm_cmd', self._acmd, 10)
         self.create_subscription(Bool, '/far/done', self._done, 10)
+        self.create_subscription(String, '/far/abort', self._abort, 10)
+        self.abort = None
         self.create_subscription(TFMessage, '/tf', self._tf, 50)
         self.t = 0.0
         self.cmd, self.cmd_t, self.acmd, self.acmd_t, self.done = np.zeros(3), -1.0, np.zeros(6), -1.0, False
@@ -157,6 +159,10 @@ class Bridge(Node):
         if len(m.data) == 6 and np.isfinite(m.data).all():
             self.acmd, self.acmd_t = np.array(m.data, float), self.t
             self.n_acmd += 1
+
+    def _abort(self, m):
+        if self.abort is None:
+            self.abort = str(m.data)
 
     def _done(self, m):
         self.done = self.done or bool(m.data)
@@ -455,6 +461,11 @@ def main():
             # ---- ROS 收命令
             for _ in range(4):
                 rclpy.spin_once(node, timeout_sec=0.0)
+            if node.abort is not None and latch is None:              # 監督節點要求模擬工程中止：沒有核過的停法 ⇒ 不再步進物理
+                latch = dict(t=round(t, 3), why='supervisor_abort', detail=node.abort[:200], kind='模擬工程中止（保留現場資料、不再步進物理；不是受控停止）')
+                ev('latched_sim_engineering_abort', **latch)
+                rows.append([t, *q, *s, *np.zeros(9), *np.zeros(9), 0.0 if cn is None else cn, dq_deg, scan_min_log, 0.0, 1.0])
+                break
             u_in = node.cmd if (t - node.cmd_t <= CMD_TIMEOUT_S and node.cmd_t >= 0) else np.zeros(3)
             ua_in = node.acmd if (t - node.acmd_t <= ARM_CMD_TIMEOUT_S and node.acmd_t >= 0) else np.zeros(6)
             if static:

@@ -95,6 +95,7 @@ class World(Node):
             self._String = String
             self.done, self.obs_seq = False, 0
             self.create_subscription(Bool, '/far/done', lambda m: setattr(self, 'done', self.done or bool(m.data)), 10)
+            self.create_subscription(String, '/far/abort', lambda m: setattr(self, 'done', True), 10)   # 模擬工程中止：不再步進
         self.log = []
         self.pipe = [np.zeros(9) for _ in range(D_STEPS)]              # 命令到受控對象的 8 步在途管線（同門任務控制器的延遲模型；底盤與手臂都經過）
         self.v_world, self.wz = np.zeros(2), 0.0

@@ -17,6 +17,22 @@ ASSOC_TOL = dict(dxy_m=0.15, dz_m=0.10, dang_deg=10.0)               # 觀察對
 STOP_ALONG = -0.05
 
 
+def stop_disposition(tag, sc):
+    """每拍停止核對結果 → 處置（Codex 20261116）：
+      commit    ：now 與 next 都通過 ⇒ 可提交候選。
+      stop_now  ：只有 next 不過、now 已驗證 ⇒ 不提交，走「現在停」（受控停止）。
+      abort     ：now 也不過，或結果缺失／遲到／錯誤 ⇒ 模擬工程中止（禁止下一物理步；不稱受控停止）。"""
+    if tag != 'tick' or not isinstance(sc, dict) or not isinstance(sc.get('now'), dict) or not isinstance(sc.get('next'), dict):
+        return 'abort'
+    if sc.get('why'):
+        return 'abort'
+    if sc['now'].get('ok') is True and sc['next'].get('ok') is True:
+        return 'commit'
+    if sc['now'].get('ok') is True:
+        return 'stop_now'
+    return 'abort'
+
+
 def _T3(p):
     import numpy as np
     c, s = math.cos(p[2]), math.sin(p[2])
@@ -63,8 +79,20 @@ def worker(conn):
     CHAIN = dict(base_link=0, link_base=0, link1=1, link2=2, link3=3, link4=4, link5=5, link6=6, link_eef=6, uflite_gripper_link=6, uflite_finger1=6, uflite_finger2=6)
     SNAMES = sorted(set(FAST.DOC.ARM_LINKS) | {n_ for p_ in PAIRS for n_ in p_} | {f'link{k_}' for k_ in range(1, 7)})
     PAIR_CACHE = {}
-    R_ENV = 1.10                                                      # 機器人任一點到底盤原點距離的保守上界（m）：手臂基座偏移＋Lite 6 伸展＋夾爪
-    R_JNT = 0.75                                                      # 任一關節軸到其遠端任一點距離的保守上界（m）
+    # 逐對自碰撞區間界用的槓桿長上界（對所有構型成立；URDF 固定平移長度的三角不等式）：
+    #   r(k, y) ＝ Σ_{m=k}^{iy−1} |o_{m+1} − o_m| ＋ max_p |p_y − o_iy|
+    #   o_m＝關節 m 原點（＝link m 座標原點）；相鄰關節原點距離與構型無關；y 的點雲相對 o_iy 的距離：y 與 link iy 之間只有固定變換（手指另加張開量），與構型無關。
+    _T0 = _F.fk_all(np.zeros(9), SNAMES)
+    _O = {m_: _T0[f'link{m_}'][:3, 3] for m_ in range(1, 7)}
+    _SEG = {m_: float(np.linalg.norm(_O[m_ + 1] - _O[m_])) for m_ in range(1, 6)}
+    _RY = {}
+    for n_ in SNAMES:
+        if n_ in FAST.DOC.CL and CHAIN.get(n_, 0) >= 1:
+            Pn = (_T0[n_][:3, :3] @ FAST.DOC.CL[n_].T).T + _T0[n_][:3, 3]
+            _RY[n_] = float(np.linalg.norm(Pn - _O[CHAIN[n_]], axis=1).max()) + (0.012 if n_ in FAST.DOC.FINGERS else 0.0)   # 手指沿滑動軸最多張開約 9 mm，加 12 mm
+    LEVER = {(k_, n_): sum(_SEG[m_] for m_ in range(k_, CHAIN[n_])) + _RY[n_] for n_ in _RY for k_ in range(1, CHAIN[n_] + 1)}
+    R_ENV = 1.10                                                      # 機器人任一點到底盤原點距離的保守上界（m）。Codex 20261116 以碰撞點雲＋URDF 固定平移長度的三角不等式核得約 0.9936 m
+    R_JNT = 0.75                                                      # 任一手臂關節到其遠端任一點距離的保守上界（m）。同上核得最大約 0.6401 m
 
     def self_pairs(qf):
         """自碰撞逐對資料：回 (T, 各對下界 lb＝中心距−兩半徑, 中心, 需要時算精確距離的函式)。精確距離＝與 door_clear_fast.clear_full 同一算法（點雲對 KD 樹）。"""
@@ -95,7 +123,7 @@ def worker(conn):
           (3) 淨空含區間界：相鄰兩個樣本之間，任一點的位移不超過「路徑長上界」L（逐物理步累加，不是端點差）；
               區間內任一構型離較近端點的位移 ≤ L/2，所以要求 兩端淨空的較小值 − L/2 ≥ 門檻。門檻不改。
               環境／底盤：L＝底盤平移路徑長＋|偏航變化|·R_ENV＋Σ|關節變化|·R_JNT（對所有連桿取同一保守值）。
-              自碰撞逐對：L＝Σ(兩連桿之間的關節)|關節變化|·(該關節原點到遠端連桿最遠點的距離×1.05)；兩連桿之間沒有運動關節 ⇒ L＝0。
+              自碰撞逐對：L＝Σ(兩連桿之間的關節 k)|關節變化|·r(k, 遠端連桿)；r＝對所有構型成立的槓桿長上界（相鄰關節原點距離之和＋遠端連桿點雲到其關節原點的最大距離），不超過 R_JNT；兩連桿之間沒有運動關節 ⇒ L＝0。
               某區間不過且中間還有物理步 ⇒ 加密到逐物理步再核；逐步仍不過 ⇒ 不通過。
         淨空在地圖座標核（機器人構型與把手估計以當下 map←odom 轉入；靜態環境幾何本來就在地圖座標）。"""
         t0 = time.perf_counter()
@@ -135,16 +163,22 @@ def worker(conn):
         cache = {}
 
         def key(x):
-            return np.round(x, 9).tobytes()
+            return np.ascontiguousarray(x, dtype=np.float64).tobytes()
 
-        def evaluate(cfgs):
-            """回 None 或失敗原因。環境／底盤淨空走平行掃掠池；自碰撞逐對資料在本程序算。"""
+        def evaluate(cfgs, self_only=False):
+            """回 None 或失敗原因。環境／底盤淨空走平行掃掠池；自碰撞逐對資料在本程序算。
+            self_only：加密點只需自碰撞資料（環境／底盤已在初始取樣的區間界下通過時），全體最小自碰撞距離用同一精確算法在本程序算。"""
             todo = [x for x in cfgs if key(x) not in cache]
             uniq = {}
             for x in todo:
                 uniq[key(x)] = x
             todo = list(uniq.values())
             if not todo:
+                return None
+            if self_only:
+                for x in todo:
+                    spx = self_pairs(x)
+                    cache[key(x)] = dict(env=None, base=None, self_min=-1.0, sp=spx, ex={})   # self_min=-1：不提供全體最小值這個下界（逐對只用中心下界或精確值）
                 return None
             h = pool.submit(T_map, W.FINGER_Q, W.PHI0, np.array([np.r_[to_map(x, T_mo), 0.0] for x in todo]))
             sp_ = [self_pairs(x) for x in todo]                        # 與池同時進行
@@ -158,12 +192,12 @@ def worker(conn):
         def pair_d(c, pr, need, x_cfg):
             """該對的距離：下界已足夠就用下界（保守），否則算精確值。
             下界＝max(中心距−兩半徑, 該構型全體自碰撞最小距離)——後者是同一構型所有配對的精確最小值，對任一對都是有效下界。
-            精確值依「兩連桿之間的關節角」快取（相對位形只由這些關節決定），跨樣本、跨控制拍共用。"""
+            精確值依「兩連桿之間的關節角」快取（相對位形只由這些關節決定；鍵為實際位元組，只有完全相同的角度才共用）。"""
             lb = max(c['sp'][1][pr], c['self_min'])
             if lb >= need:
                 return lb
             ix, iy = sorted((CHAIN[pr[0]], CHAIN[pr[1]]))
-            kk = (pr, np.round(x_cfg[3 + ix:3 + iy], 6).tobytes())
+            kk = (pr, np.ascontiguousarray(x_cfg[3 + ix:3 + iy], dtype=np.float64).tobytes())   # 鍵＝實際角度位元組（不四捨五入：不同構型不共用距離）
             v_ = PAIR_CACHE.get(kk)
             if v_ is None:
                 v_ = c['sp'][3](*pr)
@@ -172,33 +206,33 @@ def worker(conn):
                 PAIR_CACHE[kk] = v_
             return v_
 
-        def certify(mode):
+        def certify(mode, parts=('env', 'self')):
             tr = trajs[mode]
-            Q, idx = tr['Q'], tr['idx']
+            Q, idx = tr['Q'], tr['idx_self'] if parts == ('self',) else tr['idx']
             worst, bad = dict(env=9.9, base=9.9, self=9.9), []
             for i, j in zip(idx[:-1], idx[1:]):
                 ci, cj = cache[key(Q[i])], cache[key(Q[j])]
                 tvq = tr['dQ'][i:j, 3:].sum(axis=0)
-                L_env = float(tr['dxy'][i:j].sum()) + float(tr['dQ'][i:j, 2].sum()) * R_ENV + float(tvq.sum()) * R_JNT
                 ok_ij = True
-                for k_ in ('env', 'base'):
-                    m_ = min(ci[k_], cj[k_]) - 0.5 * L_env - thr[k_]
-                    worst[k_] = min(worst[k_], m_)
-                    ok_ij = ok_ij and m_ >= 0.0
-                Ti, Cwi = ci['sp'][0], ci['sp'][2]
-                for pr in PAIRS:
-                    x, y = pr
-                    ix, iy = CHAIN[x], CHAIN[y]
-                    if ix > iy:
-                        ix, iy, y = iy, ix, x
-                    L_p = 0.0
-                    for kj in range(ix + 1, iy + 1):
-                        if tvq[kj - 1] > 0.0:
-                            L_p += float(tvq[kj - 1]) * 1.05 * (float(np.linalg.norm(Cwi[y] - Ti[f'link{kj}'][:3, 3])) + FAST._R[y])
-                    need = thr['self'] + 0.5 * L_p
-                    m_ = min(pair_d(ci, pr, need, Q[i]), pair_d(cj, pr, need, Q[j])) - need
-                    worst['self'] = min(worst['self'], m_)
-                    ok_ij = ok_ij and m_ >= 0.0
+                if 'env' in parts:
+                    L_env = float(tr['dxy'][i:j].sum()) + float(tr['dQ'][i:j, 2].sum()) * R_ENV + float(tvq.sum()) * R_JNT
+                    for k_ in ('env', 'base'):
+                        m_ = min(ci[k_], cj[k_]) - 0.5 * L_env - thr[k_]
+                        worst[k_] = min(worst[k_], m_)
+                        ok_ij = ok_ij and m_ >= 0.0
+                if 'self' in parts:
+                    for pr in PAIRS:
+                        x, y = pr
+                        ix, iy = CHAIN[x], CHAIN[y]
+                        if ix > iy:
+                            ix, iy, y = iy, ix, x
+                        L_p = 0.0
+                        for kj in range(ix + 1, iy + 1):              # 只計兩連桿之間的運動關節；槓桿長用對所有構型成立的上界 LEVER（URDF 固定長度三角不等式），不超過 R_JNT
+                            L_p += float(tvq[kj - 1]) * min(LEVER[(kj, y)], R_JNT)
+                        need = thr['self'] + 0.5 * L_p
+                        m_ = min(pair_d(ci, pr, need, Q[i]), pair_d(cj, pr, need, Q[j])) - need
+                        worst['self'] = min(worst['self'], m_)
+                        ok_ij = ok_ij and m_ >= 0.0
                 if not ok_ij:
                     bad.append((i, j))
             return worst, bad
@@ -209,17 +243,22 @@ def worker(conn):
         t2 = time.perf_counter()
         for mode in ('now', 'next'):
             tr = trajs[mode]
-            worst, bad = (dict(env=-9.9, base=-9.9, self=-9.9), []) if why else certify(mode)
-            if not why and bad and any(j - i > 1 for i, j in bad):       # 加密：不過的區間補到逐物理步
-                add = sorted({k for i, j in bad for k in range(i + 1, j)})
-                why = evaluate([tr['Q'][k] for k in add])
-                if not why:
-                    tr['idx'] = sorted(set(tr['idx']) | set(add)); n_ref += 1
-                    worst, bad = certify(mode)
-            cov = (not why) and not bad
-            mc = {k_: round(min(cache[key(tr['Q'][k])][kk] for k in tr['idx'] if key(tr['Q'][k]) in cache), 4) if not why else None for k_, kk in (('env', 'env'), ('base', 'base'), ('self', 'self_min'))}
+            tr['idx_self'] = list(tr['idx'])
+            if why:
+                worst, bad_e, bad_s = dict(env=-9.9, base=-9.9, self=-9.9), [], []
+            else:
+                w_e, bad_e = certify(mode, ('env',))                     # 環境／底盤：初始取樣＋區間界（不過 ⇒ 不通過；這兩項餘裕大，不加密）
+                w_s, bad_s = certify(mode, ('self',))
+                if bad_s and any(j - i > 1 for i, j in bad_s):          # 自碰撞：不過的區間加密到逐物理步（只算自碰撞，不走池）
+                    add = sorted({k for i, j in bad_s for k in range(i + 1, j)})
+                    evaluate([tr['Q'][k] for k in add], self_only=True)
+                    tr['idx_self'] = sorted(set(tr['idx']) | set(add)); n_ref += 1
+                    w_s, bad_s = certify(mode, ('self',))
+                worst = dict(env=w_e['env'], base=w_e['base'], self=w_s['self'])
+            cov = (not why) and not bad_e and not bad_s
+            mc = {k_: (round(min(cache[key(tr['Q'][k])][kk] for k in tr['idx']), 4) if not why else None) for k_, kk in (('env', 'env'), ('base', 'base'), ('self', 'self_min'))}
             res[mode] = dict(ok=bool(tr['lim_ok'] and tr['settled'] and cov), limits_ok=tr['lim_ok'], settled=tr['settled'], settle_s=tr['settle_s'], pipe_drained_s=tr['pipe_drained_s'], coverage_ok=bool(cov), min_clear=mc,
-                             margin_after_interval_bound={k_: round(v_, 4) for k_, v_ in worst.items()}, n_samples=len(tr['idx']), n_steps=len(tr['Q']) - 1, all_still_s=tr['settle_s'])
+                             margin_after_interval_bound={k_: round(v_, 4) for k_, v_ in worst.items()}, n_samples=len(tr['idx']), n_samples_self=len(tr['idx_self']), n_steps=len(tr['Q']) - 1, all_still_s=tr['settle_s'])
         mcc = {k_: (None if why else min(res['now']['min_clear'][k_], res['next']['min_clear'][k_])) for k_ in ('env', 'base', 'self')}
         mab = {k_: min(res['now']['margin_after_interval_bound'][k_], res['next']['margin_after_interval_bound'][k_]) for k_ in ('env', 'base', 'self')}
         return dict(ok=bool(res['now']['ok'] and res['next']['ok']), why=why, now=res['now'], next=res['next'], min_clear=mcc if not why else {}, margin_after_interval_bound=mab, n_eval=len(cache), n_refine=n_ref,
@@ -281,6 +320,8 @@ def worker(conn):
                                         pg=None if pg is None else dict(p0=pg['p0'].tolist(), d=pg['d'].tolist(), n=pg['n'].tolist(), yaw=pg['yaw'], standoff=pg['standoff'], along=pg['along']),
                                         br=None if br is None else dict(q_start_op=br['q_start_op'].tolist(), alongs=[float(br['alongs'][0]), float(br['alongs'][1]), float(br['alongs'][-1])], sigma_min=br['sigma_min'], min_clear=br['min_clear'],
                                                                          prep_time_s=br['prep_time_s'], track_rate_max=br['track_rate_max']))))
+            elif op == 'stop_check':                                   # 離線重放／測試用：直接算一次停止核對
+                conn.send(('stop_check', ver, stop_check(np.asarray(a['q'], float), [np.asarray(u, float) for u in a['pipe']], np.asarray(a['rel'], float), np.asarray(a['s'], float), np.asarray(a['ua'], float), np.asarray(a['T_mo'], float))))
             elif op == 'tick':
                 q, pipe, rel, s, s_end = np.asarray(a['q'], float), [np.asarray(u, float) for u in a['pipe']], np.asarray(a['rel'], float), np.asarray(a['s'], float), np.asarray(a['s_end'], float)
                 pg, br, out = st['pg'], st['br'], {}
@@ -355,6 +396,8 @@ def main():
             self.create_subscription(Float64MultiArray, '/far/handle_obs', self._obs, 20)
             self.create_subscription(String, '/far/exec_state', self._xstate, 10)
             self.p_done = self.create_publisher(Bool, '/far/done', 10)
+            self.p_abort = self.create_publisher(String, '/far/abort', 10)
+            self.aborted = None
             self.obs_first, self.obs_latest, self.obs_log, self.xstate, self.t_first_tick = None, None, [], None, None
             self.anchored, self.n_assoc_rej, self.t_near_goal = False, 0, None
             self.p_act = self.create_publisher(Bool, '/merge/active', 10)
@@ -489,6 +532,16 @@ def main():
                 m.poses.append(ps)
             self.p_plan.publish(m)
             self.T_mo_pub, self.plan_stamp, self.n_pub = T_mo.copy(), f'{m.header.stamp.sec}.{m.header.stamp.nanosec:09d}', getattr(self, 'n_pub', 0) + 1
+
+        def engineering_abort(self, why, **kw):
+            """模擬工程中止：通知執行器不再步進物理、保留現場資料。不是受控停止。"""
+            if self.aborted is None:
+                self.aborted = why
+                for _ in range(3):
+                    self.p_abort.publish(String(data=why))
+                self.stop = True
+                self.p_nav.publish(Twist())
+                self.event('sim_engineering_abort', why=why, **kw)
 
         def global_stop(self, what, **kw):
             if not self.stop:
@@ -636,30 +689,35 @@ def main():
                 judge = self.arm == 'TRACK' and -0.05 <= along <= 0.25
                 tag, res = self.ask('tick', dict(mode=self.arm, t=t, q=q.tolist(), pipe=tr['pipe'].tolist(), rel=self.rel.tolist(), s=tr['s'].tolist(), s_end=tr['s_end'].tolist(), judge=judge, judge_refs=([('fixed_reference', None, self.anchor['t_obs']), ('latest_observation', self.obs_latest['T_odom_handle'].tolist(), self.obs_latest['t_obs'])] if OBS_MODE else [('real_image_at_start', None, self.t_goal), ('synthetic_fresh_stamp', None, t - 0.05)]), v_meas=v_meas.tolist(), ua_cand=ua_cand.tolist(), T_mo=T_mo.tolist(),
                                                   u_last=np.r_[self.rel, self.u_arm].tolist(), u_prev=np.r_[self.rel, self.u_arm_prev].tolist()), 0.045)
-                if tag != 'tick':                                     # 遲到或錯誤：本拍沒有經過核對的候選 ⇒ 不提交，走全域停止（遲到的回覆之後以版本號丟棄）
-                    self.global_stop('worker_' + tag + '_global_stop', arm=self.arm, res=str(res)[:200]); res = {}
+                sc0 = res.get('stop') if isinstance(res, dict) else None
+                if tag == 'tick' and self.arm == 'TRACK' and (res.get('track') is None or not res['track']['ok']):
+                    # 追蹤器無解：本拍沒有候選、也沒有本拍的停止核對。現在送零＝上一拍已核過的 next 停法（上一拍提交候選、這一拍起送零）
+                    self.global_stop('tracker_fail_global_stop', why=None if res.get('track') is None else res['track']['why'], stop_certificate='上一拍的 next 停法核對')
+                    disp = 'stopped'
+                else:
+                    disp = stop_disposition(tag, sc0)
+                if disp == 'abort':                                   # now 不過／結果缺失／遲到／錯誤：沒有核過的停法 ⇒ 模擬工程中止
+                    self.engineering_abort('stop_check_' + ('now_failed' if (tag == 'tick' and isinstance(sc0, dict) and not sc0.get('why')) else ('unavailable:' + str(tag) + ':' + str((sc0 or {}).get('why')))), arm=self.arm, check=None if not isinstance(sc0, dict) else {k_: sc0.get(k_) for k_ in ('now', 'next', 'why', 'ms')}, res=None if tag == 'tick' else str(res)[:200])
+                    res = res if isinstance(res, dict) else {}
+                elif disp == 'stop_now':
+                    self.global_stop('stop_check_next_failed_stop_now_global_stop', arm=self.arm, next=sc0['next'], stop_certificate='本拍 now 停法核對通過')
+                if not isinstance(res, dict):
+                    res = {}
             sc = res.get('stop')
             if self.arm == 'PREP' and not self.stop:
                 dcs = res.get('decision')
-                if sc is None or not sc['ok']:
-                    self.global_stop('stop_check_fail_global_stop', arm='PREP', check=sc)
-                elif dcs is not None and dcs[0] == 'refuse':
-                    self.global_stop('refuse_enter_reach_zone_global_stop', **dcs[1])
+                if dcs is not None and dcs[0] == 'refuse':
+                    self.global_stop('refuse_enter_reach_zone_global_stop', stop_certificate='本拍 now 停法核對通過', **dcs[1])
                 else:
-                    ua = ua_cand                                       # 提交：停止核對通過
+                    ua = ua_cand                                       # 提交：now 與 next 停法核對都通過
                     if dcs is not None and dcs[0] == 'start':
                         self.arm = 'TRACK'; self.event('arm_track_start', **dcs[1])
             elif self.arm == 'TRACK' and not self.stop:
                 tk = res.get('track')
-                if tk is None or not tk['ok']:
-                    self.global_stop('tracker_fail_global_stop', why=None if tk is None else tk['why'])
-                elif sc is None or not sc['ok']:
-                    self.global_stop('stop_check_fail_global_stop', arm='TRACK', check=sc)
-                else:
-                    ua = np.array(tk['u'])
-                    if along <= STOP_ALONG:                           # 通過把手正前方 0.05 m（設計值，同 door_far_route.STOP_ALONG；在已核範圍 −0.10 之內）：沒有被接受的交接 ⇒ 正常協同停止
-                        self.global_stop('pass_end_no_handover_global_stop', along=round(along, 4), n_judgements=len(self.sel_log))
-                        ua = np.zeros(6)
+                ua = np.array(tk['u'])
+                if along <= STOP_ALONG:                               # 通過把手正前方 0.05 m（設計值，同 door_far_route.STOP_ALONG；在已核範圍 −0.10 之內）：沒有被接受的交接 ⇒ 正常協同停止
+                    self.global_stop('pass_end_no_handover_global_stop', along=round(along, 4), n_judgements=len(self.sel_log), stop_certificate='本拍 now 停法核對通過')
+                    ua = np.zeros(6)
             if self.stop:
                 ua = np.zeros(6); self.p_nav.publish(Twist())
             self.u_arm_prev, self.u_arm = self.u_arm, ua
@@ -692,7 +750,7 @@ def main():
             cols = ['t', 't_world'] + [f'q{i}' for i in range(9)] + [f's{i}' for i in range(6)] + ['rel_x', 'rel_y', 'rel_w'] + [f'ua{i}' for i in range(6)] + ['nav_x', 'nav_y', 'nav_w', 'mrg_x', 'mrg_y', 'mrg_w', 'base_owner(0NAV,1MERGE)', 'arm(0HOLD,1PREP,2TRACK)', 'stop',
                                                                                                            'along', 'lat', 'yaw_err_deg', 'arm_track_err', 'sigma', 'clipped', 'clear_env', 'clear_base', 'clear_self', 'vx_meas', 'vy_meas', 'truth_x', 'truth_y', 'truth_yaw', 'mo_x', 'mo_y', 'mo_yaw', 'stop_ok', 'stop_env', 'stop_base', 'stop_self', 'stop_ms', 'arm_track_err_pred', 'tf_stamp_base', 'stop_now_all_still_s', 'stop_next_all_still_s', 'stop_n_samples', 'stop_margin_env', 'stop_margin_base', 'stop_margin_self', 'stop_n_refine']
             np.savez_compressed(out + '_merge.npz', R=np.array(self.rows, float), cols=np.array(cols))
-            json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, obs_mode=OBS_MODE, prior=getattr(self, 'prior', None), n_assoc_rejected=self.n_assoc_rej, obs_log=self.obs_log, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
+            json.dump(dict(events=self.ev, plan=self.plan, judge=self.sel_log, forwarded=self.n_fwd, estimate=W0['est'], coarse=co, anchor=self.anchor, obs_mode=OBS_MODE, prior=getattr(self, 'prior', None), n_assoc_rejected=self.n_assoc_rej, obs_log=self.obs_log, stale_replies_dropped=self.stale, switch_wait_ticks=getattr(self, 'sw_wait', 0), n_path_publishes=getattr(self, 'n_pub', 0), pose_source='TF odom→base_footprint（控制用）；/far/truth 底盤位姿只記錄', no_reach=self.no_reach, engineering_abort=self.aborted, final_owner=dict(base=self.owner, arm=self.arm, stop=self.stop)), open(out + '_merge.json', 'w'), ensure_ascii=False, indent=1, default=str)
 
     node = M()
     try:
