@@ -207,6 +207,30 @@ class BPlanner:
         out['why'] = None
         return out
 
+    def stop_sweep(self, b, q, ub_body, ua, alpha, D=8, dt=0.01, a_body=(1.5, 1.0, 2.0), a_arm=19.984, every=2, max_steps=400):
+        """完整停止前推（Codex 20261117_021349：含在途管線與中間路徑，不用終點近似）。停止決定當下：在途管線＝前 D 步的穩態命令（底盤本體速度 ub_body、手臂設定點速率 ua），
+        之後進管線的命令以各軸加速度上限減速到零（底盤 a_body、手臂 a_arm）；底盤照管線輸出積分、手臂設定點照管線輸出積分、關節一階追設定點（α）。
+        每 every 步核一次淨空（規劃門檻，門關閉）；回 (ok, 步數, 失敗描述)。"""
+        al = np.asarray(alpha, float)
+        bb = np.asarray(b, float).copy(); qq = np.asarray(q, float).copy(); sp = qq.copy()
+        pipe = [np.r_[ub_body, ua] for _ in range(D)]
+        u = np.r_[ub_body, ua].astype(float)
+        da = np.r_[np.asarray(a_body, float), np.full(6, a_arm)] * dt
+        for k in range(max_steps):
+            u = u - np.clip(u, -da, da)
+            pipe.append(u.copy()); ue = pipe.pop(0)
+            c, s_ = math.cos(bb[2]), math.sin(bb[2])
+            bb = bb + dt * np.array([c * ue[0] - s_ * ue[1], s_ * ue[0] + c * ue[1], ue[2]])
+            sp = sp + dt * ue[3:]
+            qq = qq + al * (sp - qq)
+            if k % every == 0:
+                okc, _, cl = self.ok_cfg(bb, qq)
+                if not okc:
+                    return False, k, dict(step=k, who=cl['who'], clear={kk: round(float(cl[kk]), 4) for kk in ('env', 'base', 'self')})
+            if not np.any(u) and not any(np.any(x) for x in pipe) and float(np.abs(sp - qq).max()) < 1e-4:
+                return True, k, None
+        return False, max_steps, dict(why='not_settled')
+
     def _minjerk(self, qa, qb, T, a0, a1, sb, v_arm, a_arm, a_body, n=60):
         dq = qb - qa
         if float(np.abs(dq).max()) * 1.875 / T > v_arm or float(np.abs(dq).max()) * 5.7735 / T ** 2 > a_arm:
