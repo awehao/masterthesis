@@ -208,6 +208,8 @@ class DoorOpenPhase:
             still_ok = ex.rate['arm'] <= X.END['arm_rps'] and ex.rate['base'] <= X.END['base_mps'] and ex.rate['door'] <= X.END['door_rps']
             if rest and not still_ok:
                 self.t_next = t + 0.05
+            elif not rest and sig_s <= getattr(self, 'last_sig_s', -1.0) + 1e-9:
+                self.t_next = t + 0.05                                # 同一接縫已請求過（例如提前請求）⇒ 不重複請求
             else:
                 if rest:
                     sig_s = ex.sig_end
@@ -226,9 +228,32 @@ class DoorOpenPhase:
                           warm_ref=None if rest else (ex.Xd.copy(), ex.h, sig_s))
                 self.planner.submit(self.k, sn)
                 self.pending = dict(sigma_s=sig_s, rest=bool(rest), rec=rec)
+                self.last_sig_s = sig_s
                 self.t_next = t + P2.T_RE
                 out.append(dict(what='p2_request', k=self.k, sigma_s=round(sig_s, 3), rest=bool(rest)))
         return ex, o0, out
+
+    # ---- 第一個續段提前請求（抓持段起點即送；輸入只取決於首段參考）
+    def prerequest(self):
+        """k＝2 的接縫與起點照交接後第一次請求的排程算（σ_req＝σ₀＋T_RE，σ_s＝⌈(σ_req＋L_LAT)/h⌉·h），起點狀態／速度取首段參考——這些在交接前就已確定，
+        所以資料到齊即開算（規劃耗時照計：結果到達後的第一個開門拍才處理，接縫過期照拒）。D1（RTF 1）實測 k＝2 規劃牆鐘 1.2 s，交接後才請求會晚於接縫。"""
+        X, P2 = self.X, self.P2
+        Xd0, h0, _ = self.first['o'].dense_reference(4)
+        sig0 = -X.D_STEPS * X.PHYS if X.START_LAT_ALIGN else 0.0
+        sig_req = sig0 + P2.T_RE
+        sig_s = math.ceil((sig_req + self.L_LAT) / h0 - 1e-9) * h0
+        i = min(int(round(sig_s / h0)), len(Xd0) - 1)
+        xs = Xd0[i].copy()
+        vv = (Xd0[min(i + 1, len(Xd0) - 1)] - Xd0[max(i - 1, 0)]) / (2 * h0)
+        X.W.set_model(phi0=self.phi_b, finger_q=self.fq)
+        vs = np.r_[vv[:3], self.helper.closure_velocity(xs, vv[:3], vv[9]), vv[9]]
+        self.k += 1
+        rec = dict(k=self.k, t_req='grasp_start', sigma=round(sig_req, 3), sigma_s=round(sig_s, 3), rest=False, pre=True)
+        self.req_log.append(rec)
+        self.planner.submit(self.k, dict(T_WH0=self.first['T_plan'], T_HE=self.first['T_HE_pred'], x0=xs, v0=vs, H=self.H, goal=self.goal, fq=self.fq, phi_model=self.phi_b, try_final=True, warm_ref=(Xd0.copy(), h0, sig_s)))
+        self.pending = dict(sigma_s=sig_s, rest=False, rec=rec)
+        self.last_sig_s = sig_s
+        return rec
 
     # ---- 尾段
     def tail(self, ex, seg, q_end, nph):

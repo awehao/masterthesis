@@ -118,7 +118,7 @@ def margins_grad(x, T_WH0):
         if float(dd[j]) < sc:
             sc, sarg = float(dd[j]), (a, int(ii[j]), b, j)
     c_out = dict(env=env, base=bc, self=sc, shell_bar=shell, who=dict(env=who, base=bwho))
-    m = np.array([c_out[k] - WB.THR[k] for k in ('env', 'base', 'self', 'shell_bar')])
+    m = np.array([c_out[k] - getattr(WB, 'THR_PLAN', WB.THR)[k] for k in ('env', 'base', 'self', 'shell_bar')])   # 規劃用門檻（同 door_wbopt.margins；未分開時＝THR）
     G = np.zeros((4, WB.NX))
     # env
     if arg is not None:

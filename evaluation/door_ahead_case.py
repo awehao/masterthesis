@@ -18,7 +18,9 @@ import door_cstop as DCS
 CSW = DCS.CStopWorker()
 import door_p2_planner_server as PS
 BG = PS.PlannerServer()                                              # P2 續段規劃程序（真的用；不是背景負載）
-os.setpriority(os.PRIO_PROCESS, BG.proc.pid, 10)                     # 規劃不在控制拍的關鍵路徑上（結果到達後才處理）⇒ nice 10，降低與控制器／停法模擬／淨空池的 CPU 競爭
+PLAN_NICE = int(os.environ.get('AHEAD_PLAN_NICE', '0'))              # P2 規劃程序優先序（D1 RTF 1：nice 10 使續段規劃牆鐘 1.175 s、晚於接縫 ⇒ 預設 0）
+if PLAN_NICE:
+    os.setpriority(os.PRIO_PROCESS, BG.proc.pid, PLAN_NICE)
 if CPU_LAYOUT:                                                       # 非阻塞版配置（8 實體核心；邏輯 i 與 i+8 同核）：控制器工作程序獨占核心 0（0,8）；兩個停法模擬各占核心 1、2（同核 9、10 不分配）；
     CPU_PIN = dict(pool=[CPUL.pin(p_.pid, [c_]) for p_, c_ in zip(SHARED.procs, [3, 4, 5, 11, 12, 13])],   # 淨空池 6 個在核心 3–5；主迴圈核心 6；規劃程序核心 7（nice 10）
                    cstop=[CPUL.pin(p_.pid, [c_]) for p_, c_ in zip(CSW.procs, [1, 2])], planner=CPUL.pin(BG.proc.pid, [7, 15], nice=10))
@@ -144,6 +146,7 @@ for k_ in os.environ.get('AHEAD_LATE', '').split(','):
 DL_MS = float(os.environ.get('AHEAD_DIAG_DEADLINE_MS', '50'))      # 只供診斷（量測開門段每拍耗時分布）；≠50 的結果不是通過依據。控制器內部期限＝同值（外層來回期限必含內層拍耗時，同值時內層觸發必伴隨外層拒絕）
 G2 = dict(gravity2=True, gravity3=True, ik_fc=True, pool=SHARED, prep_fc=True, deadline_ms=DL_MS, cstop=CSW, fric_ff=FRIC_FF)
 door = AO.DoorOpenPhase(X, P2, K, first, helper, BG, ident, GOAL, FQ, phi_b, H, L_LAT, G2, stream=os.environ.get('CAND_STREAM', '1') == '1', tail_cert=os.environ.get('TAIL_CERT', '0') == '1')
+door.pre_k2 = os.environ.get('AHEAD_PRE_K2', '1') == '1'           # 第一個續段在抓持段起點即請求（D1 RTF 1：交接後才請求會晚於接縫）
 pw = door.prewarm(gc, x_pred[:9].copy())
 ev.append(dict(t=-0.5, what='prewarm_before_start', **pw))
 gc.deadline_ms = DL_MS

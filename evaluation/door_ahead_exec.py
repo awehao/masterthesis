@@ -73,6 +73,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None):
             if snap.get('first'):                                     # 初始化：第一段以實測狀態在 n_0 直接算（執行器尚未起跑）
                 qp = q
                 s_cur = np.asarray(ctrl.s, float).copy()
+                if door is not None and getattr(door, 'pre_k2', False):
+                    door.prerequest()                                 # 第一個續段資料已齊 ⇒ 抓持段起點即送規劃程序
             else:                                                     # 沿已提交的 S_k 預測到 n_{k+1}（用產生 S_k 的那個控制器的受控對象模型）
                 qp = q
                 s_cur = s_before.copy()

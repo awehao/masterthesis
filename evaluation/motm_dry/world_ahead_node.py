@@ -293,7 +293,7 @@ class WorldAhead(Node):
                          settled_after_tail=None if self.hold is None else self.hold['verified'], chain_align=None if self.ca is None else self.ca.report(),
                          sim_s=round(self.t, 3), wall_s=round(wall, 3), rtf_actual=round(self.t / wall, 3) if wall > 0 else None, timer_gap_over_15ms=self.late_steps, timer_gap_max_ms=round(getattr(self, 'max_gap', 0.0) * 1e3, 2),
                          phi_end_deg=round(math.degrees(self.phi), 3), p2=[e for e in runner.events if e.get('what') in ('p2_result', 'staged')], handover=[e for e in runner.events if e.get('what') == 'handover_trial_is_tick'],
-                         config=dict(pool_n=SHARED.n, stream=door.stream, stream_chunk=X.STREAM_CHUNK, tail_cert=door.tail_cert, deadline_ms=DL_MS, late_inject={str(k_): v_ for k_, v_ in LATE.items()}, preroll_s=PREROLL_S))
+                         config=dict(thr_readback=dict(W_.THR), pool_n=SHARED.n, stream=door.stream, stream_chunk=X.STREAM_CHUNK, tail_cert=door.tail_cert, deadline_ms=DL_MS, late_inject={str(k_): v_ for k_, v_ in LATE.items()}, preroll_s=PREROLL_S))
         json.dump(self.meta, open(OUT + '_d1.json', 'w'), ensure_ascii=False, indent=1, default=str)
         np.savez_compressed(OUT + '_d1.npz', rows=R, cols=np.array(['t', 'x', 'y', 'th', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'phi', 'ux', 'uy', 'uw', 'stage', 'nominal', 'bound', 'scan_min', 'wall']),
                             rx=np.array(self.rx_log, float), log=np.array([json.dumps(r, default=str) for r in runner.log]))

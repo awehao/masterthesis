@@ -56,7 +56,8 @@ WM = np.array([[0.0, 1.0, L_W], [-1.0, 0.0, L_W], [0.0, -1.0, L_W], [1.0, 0.0, L
 A_BASE = np.array([1.0, 1.0, 2.0])                                 # 世界座標二階差分上限（取本體 1.5／1.0 的較小者＝保守）
 A_BODY = np.array([1.5, 1.0, 2.0])                                 # 底盤本體加速度上限（bottle_s0b_ctrl.A_BASE；執行端同值）
 PHI_MAX, PHI_RATE = math.radians(105.0), 0.5                       # 門角上限（資產限位 110° 留 5°）、門角速率上限 rad/s（工程設定）
-THR = dict(env=R1.ENV_M, base=R1.BASE_M, self=R1.SELF_M, shell_bar=R1.ENV_M)
+THR = dict(env=R1.ENV_M, base=float(os.environ.get('DOOR_BASE_CLEAR_M', R1.BASE_M)), self=R1.SELF_M, shell_bar=R1.ENV_M)   # 核對用（控制器的停法／候選／實測監看）。DOOR_BASE_CLEAR_M：底盤淨空＝中心距−0.30；未設＝原值
+THR_PLAN = dict(THR, base=float(os.environ.get('DOOR_BASE_CLEAR_PLAN_M', THR['base'])))   # 規劃用（本檔的 margins／verify）。Codex 20261117 D1 裁定 A：規劃 0.12（中心 ≥0.42 m＝Shield 零速 0.40＋20 mm 工程餘裕）、核對 0.10（Shield 零速邊界）；未設＝同核對值
 FINGER_Q = DA.FINGER_Q                                             # 淨空模型的手指開度；綁定後由 set_model() 換成各指實測閉合開度
 PHI0 = 0.0                                                         # T_WH0 對應的門角（綁定瞬間）
 
@@ -142,7 +143,7 @@ def clear_door(x, T_WH0):
 
 def margins(x, T_WH0):
     c = clear_door(x, T_WH0)
-    return np.array([c[k] - THR[k] for k in ('env', 'base', 'self', 'shell_bar')]), c
+    return np.array([c[k] - THR_PLAN[k] for k in ('env', 'base', 'self', 'shell_bar')]), c
 
 
 class DoorWBOpt:
@@ -551,10 +552,10 @@ class DoorWBOpt:
         r = np.array([self.closure(x)[0] for x in Xd])
         # 未投影的線性內插（對照；r1 驗收器漏掉這項）
         raw = np.array([self.closure(0.5 * (self.X[k] + self.X[k + 1]))[0] for k in range(self.N)])
-        mn, who = {k: np.inf for k in THR}, {}
+        mn, who = {k: np.inf for k in THR_PLAN}, {}
         for x in Xd:
             c = clear_door(x, self.T_WH0)
-            for k in THR:
+            for k in THR_PLAN:
                 if c[k] < mn[k]:
                     mn[k] = c[k]
                     if k in c['who']:
@@ -582,7 +583,7 @@ class DoorWBOpt:
         v = dict(reference='密集投影參考（dt %.3f s；底盤與門角＝節點二次 B 樣條、手臂投影）' % h, n_dense=n + 1, proj_adjust_max_rad=round(adj, 5),
                  closure_pos_mm=round(float(np.abs(r[:, :3]).max()) * 1e3, 6), closure_rot_deg=round(math.degrees(float(np.abs(r[:, 3:]).max())), 6),
                  raw_midpoint_pos_mm=round(float(np.abs(raw[:, :3]).max()) * 1e3, 4), raw_midpoint_rot_deg=round(math.degrees(float(np.abs(raw[:, 3:]).max())), 4),
-                 min_clear_m={k: round(float(v_), 4) for k, v_ in mn.items()}, min_clear_who=who, clear_ok=bool(all(mn[k] >= THR[k] for k in THR)),
+                 min_clear_m={k: round(float(v_), 4) for k, v_ in mn.items()}, min_clear_who=who, clear_ok=bool(all(mn[k] >= THR_PLAN[k] for k in THR_PLAN)),
                  wheel_max=round(float(wheel.max()), 4), wheel_ok=bool(wheel.max() <= W_LIM + 1e-4),
                  body_v_min=[round(float(x), 4) for x in vb.min(axis=0)], body_v_max=[round(float(x), 4) for x in vb.max(axis=0)], body_v_box=[LIM.BODY_V_MIN.tolist(), LIM.BODY_V_MAX.tolist()],
                  body_v_ok=bool((vb >= LIM.BODY_V_MIN - 1e-6).all() and (vb <= LIM.BODY_V_MAX + 1e-6).all()), wheel_sat_frac=round(float((wheel.max(axis=1) >= W_LIM - 2e-3).mean()), 3),
@@ -629,7 +630,7 @@ def fixed_base_sweep(T_WH0, T_WE0, x0, phi_goal, mode='rigid', step_deg=0.5):
             break
         m, c = margins(xn, T_WH0)
         if m.min() < 0:
-            why = 'clearance:' + str({k: round(float(c[k]), 4) for k in THR})
+            why = 'clearance:' + str({k: round(float(c[k]), 4) for k in THR_PLAN})
             break
         if sigma_min(xn) < min(SIG_FLOOR, s0) - 1e-3:
             why = 'sigma_below_floor'
