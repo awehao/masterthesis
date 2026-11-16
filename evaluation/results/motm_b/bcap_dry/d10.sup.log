@@ -1,0 +1,40 @@
+#EARLY r2 {'A_LIN': 0.4, 'ALPHA': 1.0, 'margin': 0.97}
+#EARLY r2 {'A_LIN': 0.4, 'ALPHA': 1.0, 'margin': 0.97}
+#EARLY r3 {'T_LOOK': 0.5, 'EDGE': 40.0, 'D_RNG': (0.25, 1.2), 'RAY_CLR': 0.02}
+#EARLY r4 scene m8_house_r1 known 24
+#EARLY r3 {'T_LOOK': 0.5, 'EDGE': 40.0, 'D_RNG': (0.25, 1.2), 'RAY_CLR': 0.02}
+#EARLY r4 scene m8_house_r1 known 24
+[bcap] worker ready {'pool_n': 2, 'sweep_s': 0.08}
+[bcap] planner ready {'pool_n': 1, 'sweep_s': 0.08}
+[WARN] [1794861076.983674012] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1794861076.983695833] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+[bcap] {"t": 13.25, "what": "prior", "goal_xy": [0.31000000000000005, -0.49], "yaw": 1.5707963267948966, "d": [-1.0, -0.0], "n": [0.0, -1.0], "handle_xy": [0.8, -0.04], "source": {"asset": "src/my_omnibot_description/config/door_local_v3.yaml", "sha256": "6b9628c3b2ab8a00f7de1322fa8a85291bcdfc7d9e321885f68a4e12b16bb324", "note": "名目位姿（門關閉）；不讀把手 prim 真值"}}
+[bcap] {"t": 13.25, "what": "off_anchor", "ok": true, "off0": [0.0, 0.005606103655162231, -0.006395937850356706, -8.521045354880144e-05, 0.0006749204557083832, -4.0477095985447156e-06]}
+[bcap] {"t": 13.25, "what": "mode", "mode": "NAV"}
+[bcap] {"t": 13.8, "what": "estimate_set", "seqs": [67, 68, 69], "assoc": {"dxy_m": 0.0012, "dz_m": 0.0002, "dang_deg": 0.245}, "shift_mm": null, "spread_mm": 0.0, "t_obs": 13.8}
+[bcap] {"t": 13.85, "what": "plan_request", "ver": 17, "n_path": 69}
+[bcap] {"t": 17.1, "what": "plan_result", "t_req": 13.85, "t_done": 17.1, "wall_s": 8.126, "tag": "plan", "why": null, "plan": {"door_line_sb": 0.4585, "a_w": -0.08, "a_t0": 0.26, "T_tr": 3.463, "last_valid_t": 1.212, "blind_s": 4.351, "blind_def": "最後一格幾何篩選通過（非實際有效）→ READY；取像模式（抓持排程 2.05 s＋交接 1 拍；插入只在排程內）", "goal_xy": [0.3, -0.5], "v_tr": 0.1, "a_dec": 0.2, "path_source": "smac"}}
+[bcap] {"t": 17.1, "what": "mode", "mode": "PREP", "plan_ver": 1}
+[bcap] {"t": 17.1, "what": "nav_goal_entry", "entry": [1.1592, -0.5004], "a_entry": 0.36, "final": [0.3, -0.5]}
+[bcap] {"t": 23.6, "what": "nav_goal_final", "at": [1.1493, -0.826], "a": 0.351, "sb": 0.784}
+[bcap] {"t": 24.3, "what": "controlled_stop", "why": "missed_door_line_before_transition", "a": 0.2529, "sb": 0.7763, "sb_line": 0.4585}
+[bcap] saved
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/motm_b/b_capture_node.py", line 556, in <module>
+    main()
+  File "/home/howardchen/masterthesis/evaluation/motm_b/b_capture_node.py", line 543, in main
+    rclpy.spin_once(n, timeout_sec=0.01)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 226, in spin_once
+    executor.spin_once(timeout_sec=timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 757, in _wait_for_ready_callbacks
+    wait_set = _rclpy.WaitSet(
+               ^^^^^^^^^^^^^^^
+rclpy._rclpy_pybind11.RCLError: failed to initialize wait set: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/wait.c:130

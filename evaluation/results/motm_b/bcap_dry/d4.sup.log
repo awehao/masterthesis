@@ -1,0 +1,34 @@
+#EARLY r2 {'A_LIN': 0.4, 'ALPHA': 1.0, 'margin': 0.97}
+#EARLY r2 {'A_LIN': 0.4, 'ALPHA': 1.0, 'margin': 0.97}
+#EARLY r3 {'T_LOOK': 0.5, 'EDGE': 40.0, 'D_RNG': (0.25, 1.2), 'RAY_CLR': 0.02}
+#EARLY r4 scene m8_house_r1 known 24
+#EARLY r3 {'T_LOOK': 0.5, 'EDGE': 40.0, 'D_RNG': (0.25, 1.2), 'RAY_CLR': 0.02}
+#EARLY r4 scene m8_house_r1 known 24
+[bcap] worker ready {'pool_n': 2, 'sweep_s': 0.03}
+[bcap] planner ready {'pool_n': 1, 'sweep_s': 0.03}
+[WARN] [1794859626.469552737] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1794859626.469575550] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+[bcap] {"t": 31.3, "what": "prior", "goal_xy": [0.31000000000000005, -0.49], "yaw": 1.5707963267948966, "d": [-1.0, -0.0], "n": [0.0, -1.0], "handle_xy": [0.8, -0.04], "source": {"asset": "src/my_omnibot_description/config/door_local_v3.yaml", "sha256": "6b9628c3b2ab8a00f7de1322fa8a85291bcdfc7d9e321885f68a4e12b16bb324", "note": "名目位姿（門關閉）；不讀把手 prim 真值"}}
+[bcap] {"t": 31.3, "what": "off_anchor", "ok": true, "off0": [0.0, 0.005606103655162231, -0.006395937850356706, -8.521045354880144e-05, 0.0006749204557083832, -4.0477095985447156e-06]}
+[bcap] {"t": 31.3, "what": "mode", "mode": "NAV"}
+[bcap] {"t": 31.6, "what": "estimate_set", "seqs": [156, 157, 158], "assoc": {"dxy_m": 0.0002, "dz_m": 0.0002, "dang_deg": 0.245}, "shift_mm": null, "spread_mm": 0.0, "t_obs": 31.6}
+[bcap] saved
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/motm_b/b_capture_node.py", line 509, in <module>
+    main()
+  File "/home/howardchen/masterthesis/evaluation/motm_b/b_capture_node.py", line 496, in main
+    rclpy.spin_once(n, timeout_sec=0.01)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 226, in spin_once
+    executor.spin_once(timeout_sec=timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 757, in _wait_for_ready_callbacks
+    wait_set = _rclpy.WaitSet(
+               ^^^^^^^^^^^^^^^
+rclpy._rclpy_pybind11.RCLError: failed to initialize wait set: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/wait.c:130
