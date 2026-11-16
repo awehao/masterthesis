@@ -156,7 +156,7 @@ class Bridge(Node):
         self.rx_steps, self.ho_tried = [], False
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 20)
         self.create_subscription(Twist, '/cmd_vel_nav', self._nav_echo, 20)   # 選擇器輸出（平滑器輸入）：確認提案已送到平滑器前
-        self.nav_echo, self.echo_wait = None, []
+        self.nav_echo, self.echo_wait, self.n_nav_echo = None, [], 0
         self.create_subscription(Float64MultiArray, '/far/arm_cmd', self._acmd, 10)
         self.create_subscription(Bool, '/far/done', self._done, 10)
         self.create_subscription(String, '/far/abort', self._abort, 10)
@@ -175,6 +175,7 @@ class Bridge(Node):
 
     def _nav_echo(self, m):
         self.nav_echo = np.array([m.linear.x, m.linear.y, m.angular.z], float)
+        self.n_nav_echo += 1
 
     def _acmd(self, m):
         if len(m.data) == 6 and np.isfinite(m.data).all():
@@ -719,11 +720,13 @@ def main():
 
     def wait_forwarded(u_):
         """提案送出後、推進模擬時鐘前：等選擇器把它轉送到平滑器輸入（/cmd_vel_nav 回聲值相符），最多 0.2 s 牆鐘（非即時：等待期間物理不步進）。
-        far_door_4：選擇器轉送延遲使平滑器在提案到達前取樣，第 7 筆被跳過。回 (ok, 等待 ms)。"""
+        far_door_4：選擇器轉送延遲使平滑器在提案到達前取樣，第 7 筆被跳過。回 (ok, 等待 ms)。
+        只是排程改善：回聲只代表選擇器已轉送，不代表平滑器已處理；真正放行仍由 ChainAlign 核對。"""
         w0_ = time.perf_counter()
+        n0_ = node.n_echo_at_pub                                     # 發布前的回聲計數：必須是發布之後新收到的回呼且值相符（不拿舊值通過）
         while time.perf_counter() - w0_ < 0.2:
             rclpy.spin_once(node, timeout_sec=0.002)
-            if node.nav_echo is not None and float(np.abs(node.nav_echo - np.asarray(u_, float)).max()) <= 1e-6:
+            if node.n_nav_echo > n0_ and node.nav_echo is not None and float(np.abs(node.nav_echo - np.asarray(u_, float)).max()) <= 1e-6:
                 node.echo_wait.append((time.perf_counter() - w0_) * 1e3)
                 return True, (time.perf_counter() - w0_) * 1e3
         node.echo_wait.append(float('nan'))
@@ -1013,7 +1016,7 @@ def main():
         node.t = float(world.current_time) - T0
         if tick:                                                     # A2(b)：底盤提案走 選擇器→平滑器→Shield→GUARD（GUARD 唯一出口）
             node.ca.propose(node.n, gc.u_last[:3])
-            mt_ = Twist(); mt_.linear.x, mt_.linear.y, mt_.angular.z = (float(x_) for x_ in gc.u_last[:3]); node.p_grasp.publish(mt_)
+            mt_ = Twist(); mt_.linear.x, mt_.linear.y, mt_.angular.z = (float(x_) for x_ in gc.u_last[:3]); node.n_echo_at_pub = node.n_nav_echo; node.p_grasp.publish(mt_)
             okw_, _ = wait_forwarded(gc.u_last[:3])
             if not okw_:
                 log_event('grasp_proposal_not_forwarded_within_200ms', n=node.n)
@@ -1161,7 +1164,7 @@ def main():
             node.t = float(world.current_time) - T0
             if tick:
                 node.ca.propose(node.n, ex.u_last[:3])
-                mt_ = Twist(); mt_.linear.x, mt_.linear.y, mt_.angular.z = (float(x_) for x_ in ex.u_last[:3]); node.p_grasp.publish(mt_)
+                mt_ = Twist(); mt_.linear.x, mt_.linear.y, mt_.angular.z = (float(x_) for x_ in ex.u_last[:3]); node.n_echo_at_pub = node.n_nav_echo; node.p_grasp.publish(mt_)
                 okw_, _ = wait_forwarded(ex.u_last[:3])
                 if not okw_:
                     log_event('open_proposal_not_forwarded_within_200ms', n=node.n)
@@ -1293,7 +1296,7 @@ def main():
     np.savez_compressed(os.path.join(a.out, 'log.npz'), rows=np.array(rows), cols=np.array(['t', 'phase', 'door_q', 'f1', 'f2', 'bx', 'by', 'byaw', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz', 'wall']),
                         phases=np.array(PH), ts=np.array(ts), ts_cols=np.array(['t', 'wall', 'ctrl', 'phase', 'base_speed', 'door_q', 'tcp_err_grasp', 'sigma', 'phi_ref']))
     ew_ = np.array(node.echo_wait, float)
-    res['safety_chain'] = dict(node.ca.report(), forward_wait_ms=None if not len(ew_) else dict(n=int(len(ew_)), n_timeout=int(np.isnan(ew_).sum()), p50=float(np.nanmedian(ew_)) if np.isfinite(ew_).any() else None, max=float(np.nanmax(ew_)) if np.isfinite(ew_).any() else None), stop=chain['stop'], note='抓持／開門段底盤提案經 選擇器→平滑器→Shield→GUARD；每筆提案在生效步核對放行與提案一致才執行；缺失／不一致 ⇒ 生效前模擬工程中止')
+    res['safety_chain'] = dict(node.ca.report(), forward_wait_ms=None if not len(ew_) else dict(note='每筆提案等選擇器轉送回聲的牆鐘（上限 200 ms；計入總牆鐘／RTF；不屬於控制拍即時期限的計時）', total_s=float(np.nansum(ew_) / 1e3 + 0.2 * np.isnan(ew_).sum()), n=int(len(ew_)), n_timeout=int(np.isnan(ew_).sum()), p50=float(np.nanmedian(ew_)) if np.isfinite(ew_).any() else None, max=float(np.nanmax(ew_)) if np.isfinite(ew_).any() else None), stop=chain['stop'], note='抓持／開門段底盤提案經 選擇器→平滑器→Shield→GUARD；每筆提案在生效步核對放行與提案一致才執行；缺失／不一致 ⇒ 生效前模擬工程中止')
     res['lock_budget_max'] = gc.lock_budget_max
     try:
         np.savez_compressed(os.path.join(a.out, 'chain_stream.npz'), prop_n=np.array([p_['n'] for p_ in node.ca.props]), prop_u=np.array([p_['u'] for p_ in node.ca.props]), prop_conf=np.array([-1 if p_['n_conf'] is None else p_['n_conf'] for p_ in node.ca.props]), rel_n=np.array([r_[0] for r_ in node.ca.releases]), rel_v=np.array([r_[1] for r_ in node.ca.releases]))
