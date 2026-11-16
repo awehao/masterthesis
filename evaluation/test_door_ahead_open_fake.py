@@ -28,6 +28,8 @@ def _d2_builder(pk):
     return c
 
 
+if os.environ.get('AHEAD_D2_MAINBUILD') == '1':                      # 對照：同一 builder、但在主程序（fork 前）建
+    gc = _d2_builder(dict(s=s0.tolist(), pipe=[u_ss.tolist() for _ in range(D_STEPS)], u_last=u_ss.tolist(), u_prev=u_ss.tolist(), off_static=dq(q).tolist()))
 runner = AE.AheadRunner(None if D2 else gc, G.S, NPH, deadline_ms=DL_MS, phi0=phi_b, late_ticks=LATE, door=door, builder=_d2_builder if D2 else None)
 if CPU_LAYOUT:
     CPU_PIN['ahead_worker'] = CPUL.pin(runner.proc.pid, [0, 8])     # 控制器工作程序：整個實體核心 0（邏輯 0＋8；背景執行緒可用同核另一邏輯 CPU）
