@@ -45,7 +45,7 @@ WAIT = dict(omega_dps=0.02, hold_s=0.3, win_s=0.3, max_s=10.0)      # r4 條件�
 GAP_TOL = 1e-4                                                       # 兩指間隙不惡化容差（對「至今最大間隙」比，不逐拍累積）
 
 
-def stop_traj_exit(q, s, pipe, u_last, u_from_base, j0, cfg, extra_ticks=0):
+def stop_traj_exit(q, s, pipe, u_last, u_from_base, j0, cfg, extra_ticks=0, rec=None):
     """與 door_open_exec_ctrl.stop_traj_ramp 同一停法（每控制拍有界減速：底盤 A_BASE、手臂 A_ARM；底盤分量拍內逐物理步斜坡；真管線），
     另回 (取樣構型, 逐物理步送進管線的命令, 第一次減速的物理步序號)，供時序核對。j0＝目前控制拍內已過的物理步數（拍首＝NPH ⇒ 立即進入新一拍）。"""
     qp, sp = np.asarray(q, float).copy(), np.asarray(s, float).copy()
@@ -63,7 +63,10 @@ def stop_traj_exit(q, s, pipe, u_last, u_from_base, j0, cfg, extra_ticks=0):
         cmd = XO.ramp_cmd(uf, u, j)
         pp.append(cmd)
         cmds.append(cmd.copy())
-        qp, sp = S.plant_phys_step(qp, sp, pp.pop(0), cfg, 1)
+        pc_ = pp.pop(0)
+        qp, sp = S.plant_phys_step(qp, sp, pc_, cfg, 1)
+        if rec is not None:                                          # 非阻塞執行（door_ahead_exec）：逐步輸出（設定點、彈出管線的底盤命令）＝執行器可直接執行的停止尾段
+            rec.append((sp.copy(), pc_[:3].copy()))
         k += 1
         j += 1
         quiet = quiet + 1 if (not np.any(cmd) and not any(np.any(x) for x in pp)) else 0

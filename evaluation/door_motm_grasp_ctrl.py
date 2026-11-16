@@ -230,7 +230,12 @@ class MovingGraspCtrl:
             bad.append('wheel_a')
         return bad
 
-    def _contact_stop_traj(self, q, u0, extra, tr, j0, u_from):
+    def _rec_for(self, e):
+        """r15（非阻塞執行）：工作程序設 self._rec_tail＝{extra: []} 時，停止模擬逐步輸出寫進對應清單（不影響任何判定）。"""
+        rt = getattr(self, '_rec_tail', None)
+        return None if rt is None else rt.get(e)
+
+    def _contact_stop_traj(self, q, u0, extra, tr, j0, u_from, rec=None):
         """r4：接觸停法的向前模擬（真管線、拍內斜坡、每拍：底盤有界減速、手臂以預測底盤 IK 追鎖定把手）。回 (Q 取樣, 違反或 None, 減速起點)。"""
         qp, sp = np.asarray(q, float).copy(), self.s.copy()
         pp = [np.asarray(x, float).copy() for x in self.pipe]
@@ -266,7 +271,10 @@ class MovingGraspCtrl:
             nzc = bool(np.any(cmd[:3]))
             nzq.append(nzc)
             n_nz += int(nzc) - int(nzq.pop(0))
-            qp, sp = S.plant_phys_step(qp, sp, pp.pop(0), self.cfg, 1)
+            pc_ = pp.pop(0)
+            qp, sp = S.plant_phys_step(qp, sp, pc_, self.cfg, 1)
+            if rec is not None:
+                rec.append((sp.copy(), pc_[:3].copy()))
             k += 1
             j += 1
             settled = (not nzc and n_nz == 0 and float(np.abs(cmd[3:]).max()) <= CSTOP['arm_cmd'])
@@ -339,8 +347,8 @@ class MovingGraspCtrl:
     def _stop_traj(self, q, u, e, j0, u_from):
         """r4：接觸段（已鎖定）用接觸停法；其餘用原停法。回 (Q, 違反或 None, k_dec)。"""
         if self.lock is not None:
-            return self._contact_stop_traj(q, u, e, self.t - self.t0, j0, u_from)
-        Q, cmds, k_dec = XE.stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, e)
+            return self._contact_stop_traj(q, u, e, self.t - self.t0, j0, u_from, rec=self._rec_for(e))
+        Q, cmds, k_dec = XE.stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, e, rec=self._rec_for(e))
         return Q, None, k_dec
 
     def _sweep_pool(self, q, u, extras, j0, u_from, phi, exempt, tag):
