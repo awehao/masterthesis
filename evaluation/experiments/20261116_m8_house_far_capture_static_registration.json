@@ -1,0 +1,11 @@
+{
+ "name": "m8_house_far_capture_static_r1",
+ "run_id": "m8house_far_capture_static_1",
+ "authority": "Codex reviews/20261116（遠距取像執行器與 Isaac 申請回覆）：核可 m8house_far_capture_static_1 靜態取像 6 s；移動趟暫不核可，靜態有有效估計也不自動接跑",
+ "config": "STATIC_S=6 START=1.5,-2.8,1.5708 ARM=online_1 far_live 構型；不起導航與監督；機器人不接受任何運動命令",
+ "purpose": "Isaac 端程式第一次實跑；回答遠距起點（距把手約 2.9 m）腕部相機看不看得到、偵測估計是否有效",
+ "deliverables": ["原始影格（深度 npz、彩色 png）", "同步資料（渲染時刻底盤／關節／設定點、最新 map←odom——本趟無導航故為空）", "掃描回波（scans.npz、起點最近回波 prim）", "FK／渲染外參差異（逐格 fk_vs_render_m）", "API 實際增益讀回", "例外時保留 partial 結果"],
+ "decisions": {"A": "理想里程：物理位姿直接作里程", "B": "維持遠距起點；無有效估計就回報，不自行換近起點", "C": "理想自體剔除掃描：忽略自遮擋，不宣稱伸臂後真實雷射避障已驗證"},
+ "abort": "接觸 >0.05 N、門角 >0.05°、手指偏離模型、狀態非有限 ⇒ 模擬工程中止（保留資料、不再步進物理；不是受控停止）；92 °C 熱中止",
+ "not_claims": ["不設通過門檻", "靜態、n=1", "不是移動視覺、不是連續視覺回授", "非即時"]
+}
