@@ -69,13 +69,14 @@ class ChainAlign:
 
 
 def best_phase(rx_steps, nph=5, back=4):
-    """由最近的放行到達步推安全鏈的節拍相位 r（到達步 mod nph 的眾數），回建議的提案相位＝(r−(nph+1)) mod nph：
-    名目延遲約 nph＋1 步（落在 0～D 的中間，兩側各留約 2 步）。樣本不足回 None。"""
+    """由最近的放行到達步推提案相位。r＝到達步 mod nph 的眾數；安全鏈的取樣（平滑器節拍）在到達前 1–2 步（far_door_4／6r 實測到達相位 1–2、取樣相位 0）。
+    回 (r＋2) mod nph：提案在取樣後 3–4 步、下一次取樣前 1–2 步送出（執行器另等選擇器轉送回聲才推進時鐘），名目延遲 3–4 步。
+    r1（far_door_6r 前）誤用 (r−6) mod nph＝恰在取樣那一步送出，與平滑器取樣競爭，造成提案被跳過。樣本不足回 None。"""
     xs = [int(x) % nph for x in rx_steps[-12:]]
     if len(xs) < 6:
         return None
     r = max(set(xs), key=xs.count)
-    return (r - (nph + 1)) % nph
+    return (r + 2) % nph
 
 
 if __name__ == '__main__':                                           # 自我核對（含 Codex 20261117 反例）
@@ -99,4 +100,5 @@ if __name__ == '__main__':                                           # 自我核
     H = ChainAlign()                                                 # 限速：放行 0.049 對提案 0.05（差 1e-3，超過舍入容許）⇒ 拒絕
     H.propose(0, [0.05, 0, 0]); H.on_release(4, [0.049, 0, 0]); assert H.check(7)['ok'] and H.check(8)['why'] == 'release_missing'   # 首筆確認前只計數；生效步仍未確認 ⇒ 拒絕
     H2 = ChainAlign(); H2.propose(0, [0.05, 0, 0]); H2.on_release(4, [0.05, 0, 0]); H2.propose(5, [0.05, 0, 0]); H2.on_release(9, [0.049, 0, 0]); assert not H2.check(9)['ok']   # 已確認後的限速 ⇒ 立即拒絕
+    assert best_phase([1, 6, 11, 16, 21, 27, 31, 36]) == 3 and best_phase([2, 7, 12, 17, 22, 27]) == 4
     print('ChainAlign self-check ok', A.report()['n_effect_checked_ok'])
