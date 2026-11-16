@@ -435,11 +435,14 @@ def worker(conn):
                                 dpos = float(np.linalg.norm(To[:3, 3] - T_est[:3, 3]))
                                 if dpos <= UPD['gate_pos_m'] and dang <= UPD['gate_ang_deg']:
                                     ref['t_obs_last'] = float(ob['t_obs'])
-                                    ref['hist'] = (ref['hist'] + [(int(ob['seq']), float(ob['t_obs']), To[:3, 3].copy(), dang)])[-UPD['n_consist']:]
+                                    ref['hist'] = (ref['hist'] + [(int(ob['seq']), float(ob['t_obs']), To[:3, 3].copy(), dang, To[:3, :3].copy())])[-UPD['n_consist']:]
                                     P = np.array([h_[2] for h_ in ref['hist']])
                                     spread = float(max(np.linalg.norm(P[i_] - P[j_]) for i_ in range(len(P)) for j_ in range(len(P)))) if len(P) > 1 else 0.0
                                     if len(P) >= UPD['n_consist'] and spread <= UPD['spread_m']:
-                                        ref['goal'] = dict(p=np.median(P, axis=0), seqs=[h_[0] for h_ in ref['hist']], t_obs=float(ob['t_obs']), spread=spread, dang=max(h_[3] for h_ in ref['hist']))
+                                        Uq, _, Vq = np.linalg.svd(np.sum([h_[4] for h_ in ref['hist']], axis=0))      # r3：鎖定姿態＝近距三格旋轉的弦平均（far_door_2：近距姿態誤差中位 0.12°，沿用的遠處姿態 1.58°）
+                                        Rm = Uq @ np.diag([1.0, 1.0, np.linalg.det(Uq @ Vq)]) @ Vq
+                                        dspread = max(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(Rm.T @ h_[4]) - 1) / 2)))) for h_ in ref['hist'])
+                                        ref['goal'] = dict(p=np.median(P, axis=0), R=Rm, seqs=[h_[0] for h_ in ref['hist']], t_obs=float(ob['t_obs']), spread=spread, dang=dspread, dang_vs_fixed=max(h_[3] for h_ in ref['hist']))
                                     tinfo['obs'] = dict(seq=int(ob['seq']), age=round(age, 3), dpos_mm=round(dpos * 1e3, 2), n_hist=len(P), spread_mm=round(spread * 1e3, 2))
                                 else:
                                     ref['hist'], ref['goal'] = [], None
@@ -456,7 +459,7 @@ def worker(conn):
                             elif float(a['t']) - g_['t_obs'] > UPD['max_age_s']:
                                 lk['why'] = 'lock_observation_not_fresh:%.3f' % (float(a['t']) - g_['t_obs'])
                             else:
-                                T_new = T_est.copy(); T_new[:3, 3] = g_['p']
+                                T_new = T_est.copy(); T_new[:3, 3] = g_['p']; T_new[:3, :3] = g_['R']   # r3：位置與姿態都取近距三格（姿態預算項改為三格彼此的角度差）
                                 dp_ = g_['p'] - T_est[:3, 3]
                                 p0_new = pg['p0'] + dp_[:2]
                                 b_pre = np.r_[p0_new - pg['d'] * TERM['a_pre'], pg['yaw']]
@@ -499,7 +502,7 @@ def worker(conn):
                                             st['lock'] = dict(t=float(a['t']), t_obs=g_['t_obs'], age_at_lock_s=float(a['t']) - g_['t_obs'], seqs=g_['seqs'], spread=g_['spread'], dang=g_['dang'], T=T_new.copy(), base_at_lock=q[:3].copy(), ver=ref['ver'],
                                                               s0=s_end_.copy(), sp_goal=sp_goal, t0=float(a['t']), T_pre=Tp_)
                                             st['trk'].q_prev, st['trk'].u_prev = None, np.zeros(6)
-                                            lk = dict(ok=True, T=T_new.tolist(), dang=g_['dang'], spread=g_['spread'], ver=ref['ver'], t_obs=g_['t_obs'], age_at_lock_s=round(float(a['t']) - g_['t_obs'], 3), seqs=g_['seqs'], spread_mm=round(g_['spread'] * 1e3, 2), shift_mm=[round(float(x) * 1e3, 2) for x in dp_], along_at_lock=round(al_now, 4),
+                                            lk = dict(ok=True, T=T_new.tolist(), dang=g_['dang'], dang_vs_fixed_deg=round(g_['dang_vs_fixed'], 3), spread=g_['spread'], ver=ref['ver'], t_obs=g_['t_obs'], age_at_lock_s=round(float(a['t']) - g_['t_obs'], 3), seqs=g_['seqs'], spread_mm=round(g_['spread'] * 1e3, 2), shift_mm=[round(float(x) * 1e3, 2) for x in dp_], along_at_lock=round(al_now, 4),
                                                       q_pre=[float(x) for x in q_pre], sp_goal=[float(x) for x in sp_goal], s0=[float(x) for x in s_end_], pg_p0=[float(x) for x in p0_new], descent_margin={k_: round(v_, 4) for k_, v_ in worst.items()}, first_tick_stop=dict(ms=sc1['ms']))
                                             out['stop'] = sc1
                             out['lock'] = lk

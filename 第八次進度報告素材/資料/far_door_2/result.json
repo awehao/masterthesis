@@ -1,0 +1,508 @@
+{
+ "run": "m8house_far_door_2",
+ "mode": "nominal",
+ "scope": "遠距整合：把手來源＝腕部相機實際影像（凍結偵測＋幾何估計）；通過線＝途中第一格有效且通過關聯的估計；抓持與開門用鎖定任務參考（原始時間戳，不更新）；BindGate 的實際抓持條件以把手 prim 真值核（同門旁各趟）；理想抓持（FixedJoint）；理想里程；非即時；範圍：開到 85° 停穩為止（不解綁、不退出、不穿門）",
+ "init": {
+  "b_start": [
+   1.5,
+   -2.8,
+   1.5708
+  ],
+  "q_arm_start": [
+   -0.0128,
+   -0.0519,
+   0.086,
+   0.0116,
+   -1.6249,
+   -0.0018
+  ],
+  "source": "遠距起點（同 far_capture 三趟）；手臂＝online_1 far_live 構型；靜置後從靜止起步，起跑後不瞬移",
+  "v_pass": 0.05,
+  "note": "通過線不是場景初始條件：由本趟途中影像估計在線決定（見 ros_merge.json anchor）"
+ },
+ "gains": {
+  "kp": 600.0,
+  "kd": 60.0
+ },
+ "arm_backend": {
+  "model": "no_passive_arm_friction",
+  "dof": [
+   "joint1",
+   "joint2",
+   "joint3",
+   "joint4",
+   "joint5",
+   "joint6"
+  ],
+  "friction_static_dynamic_viscous": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ]
+  ],
+  "max_velocity": [
+   3.140000104904175,
+   3.140000104904175,
+   3.140000104904175,
+   3.140000104904175,
+   3.140000104904175,
+   3.140000104904175
+  ],
+  "max_force": [
+   50.0,
+   50.0,
+   32.0,
+   32.0,
+   32.0,
+   20.0
+  ],
+  "armature": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "kp": [
+   600.0,
+   600.0,
+   600.0,
+   600.0,
+   600.0,
+   600.0
+  ],
+  "kd": [
+   60.0,
+   60.0,
+   60.0,
+   60.0,
+   60.0,
+   60.0
+  ],
+  "legacy_friction_coefficients": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "units": "摩擦：static／dynamic＝N·m，viscous＝後端單位（tensor API；角度制或弧度制依後端，值為 0）；max_velocity＝後端單位（rad/s）；max_force＝N·m",
+  "usd": {
+   "joint1": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 50.0
+   },
+   "joint2": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 50.0
+   },
+   "joint3": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 32.0
+   },
+   "joint4": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 32.0
+   },
+   "joint5": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 32.0
+   },
+   "joint6": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 20.0
+   }
+  }
+ },
+ "door_readback": {
+  "hinge": {
+   "root": "/World/door",
+   "leaf_prim": "/World/door/leaf",
+   "joint_prim": "/World/door/hinge",
+   "handle_bar_prim": "/World/door/leaf/handle_bar",
+   "is_rigid_body": true,
+   "mass_kg": 8.0,
+   "center_of_mass": [
+    0.4749999940395355,
+    0.019999999552965164,
+    1.0099999904632568
+   ],
+   "diagonal_inertia": [
+    2.6677334308624268,
+    3.2683334350585938,
+    0.602733314037323
+   ],
+   "angular_damping": 2.0,
+   "joint_type": "PhysicsRevoluteJoint",
+   "joint_axis": "Z",
+   "joint_body0": [],
+   "joint_body1": [
+    "/World/door/leaf"
+   ],
+   "joint_local_pos0": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_rot0_wxyz": [
+    0.0,
+    1.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_rot1_wxyz": [
+    0.0,
+    1.0,
+    0.0,
+    0.0
+   ],
+   "limit_lower_deg": 0.0,
+   "limit_upper_deg": 110.0,
+   "joint_friction": 0.0,
+   "drive_stiffness": 0.0,
+   "drive_damping": 0.0,
+   "drive_max_force": 0.0,
+   "handle_bar": {
+    "axis": "X",
+    "radius": 0.013,
+    "length": 0.2,
+    "center_leaf_local": [
+     0.8,
+     -0.04,
+     0.85
+    ]
+   },
+   "handle_material": {
+    "bound_at": "/World/door/leaf/handle_bar",
+    "material": "/World/PhysicsMaterials/door_handle",
+    "static_friction": 1.0,
+    "dynamic_friction": 0.800000011920929,
+    "restitution": 0.0
+   },
+   "linear_damping": 0.0,
+   "collision_offsets": {
+    "wall_hinge_side": [
+     0.004000000189989805,
+     0.0
+    ],
+    "wall_latch_side": [
+     0.004000000189989805,
+     0.0
+    ],
+    "leaf_box": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post0": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post1": [
+     0.004000000189989805,
+     0.0
+    ],
+    "handle_bar": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post_in0": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post_in1": [
+     0.004000000189989805,
+     0.0
+    ],
+    "handle_bar_inner": [
+     0.004000000189989805,
+     0.0
+    ]
+   },
+   "wall_end_faces_x": {
+    "wall_hinge_side": -0.014999999999999902,
+    "wall_latch_side": 1.0
+   },
+   "collision_prims": [
+    "/World/door/frame/wall_hinge_side",
+    "/World/door/frame/wall_latch_side",
+    "/World/door/leaf/handle_bar",
+    "/World/door/leaf/handle_bar_inner",
+    "/World/door/leaf/leaf_box",
+    "/World/door/leaf/post0",
+    "/World/door/leaf/post1",
+    "/World/door/leaf/post_in0",
+    "/World/door/leaf/post_in1"
+   ],
+   "handle_bar_inner_prim": "/World/door/leaf/handle_bar_inner",
+   "handle_bar_inner": {
+    "axis": "X",
+    "radius": 0.013,
+    "length": 0.2,
+    "center_leaf_local": [
+     0.8,
+     0.08,
+     0.85
+    ]
+   },
+   "post_prims": [
+    "/World/door/leaf/post0",
+    "/World/door/leaf/post1"
+   ],
+   "post_inner_prims": [
+    "/World/door/leaf/post_in0",
+    "/World/door/leaf/post_in1"
+   ],
+   "posts": {
+    "post0": {
+     "center_leaf_local": [
+      0.7150000000000001,
+      -0.02,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    },
+    "post1": {
+     "center_leaf_local": [
+      0.885,
+      -0.02,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    },
+    "post_in0": {
+     "center_leaf_local": [
+      0.7150000000000001,
+      0.06,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    },
+    "post_in1": {
+     "center_leaf_local": [
+      0.885,
+      0.06,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    }
+   },
+   "leaf_box": {
+    "center_leaf_local": [
+     0.475,
+     0.02,
+     1.0099999999999998
+    ],
+    "half_size": [
+     0.475,
+     0.02,
+     0.9999999999999999
+    ]
+   },
+   "handle_material_by_bar": {
+    "handle_bar": {
+     "bound_at": "/World/door/leaf/handle_bar",
+     "material": "/World/PhysicsMaterials/door_handle",
+     "static_friction": 1.0,
+     "dynamic_friction": 0.800000011920929,
+     "restitution": 0.0
+    },
+    "handle_bar_inner": {
+     "bound_at": "/World/door/leaf/handle_bar_inner",
+     "material": "/World/PhysicsMaterials/door_handle",
+     "static_friction": 1.0,
+     "dynamic_friction": 0.800000011920929,
+     "restitution": 0.0
+    }
+   }
+  },
+  "leaf_rigid_body_damping": {
+   "angular": 2.0,
+   "linear": 0.0
+  }
+ },
+ "finger": {
+  "command": "CLOSE 段由張開斜降到 0（夾緊，同停車版）",
+  "geometry": "兩指各自實測開度；CLOSE 段掃掠另含預測閉合開度"
+ },
+ "settle": {
+  "hold_check": {
+   "low_speed_0p3s": true,
+   "joint_rate_abs_max_0p3s": 0.004562,
+   "r_Nm": [
+    0.175,
+    -1.275,
+    0.259,
+    -0.063,
+    -0.155,
+    0.02
+   ],
+   "limit_Nm": 1.3,
+   "v_limit": 0.01,
+   "note": "r 含重力模型與驅動近似誤差：超過不證明新舊摩擦疊加，通過也不證明摩擦已校準；1.3＝1.0＋事前工程容差 0.3",
+   "contact_read_errors": [],
+   "n_contact_read_errors": 0,
+   "n_samples": 30,
+   "n_need": 30,
+   "contact_force_max_n": 0.0,
+   "no_contact": true,
+   "finite": true,
+   "baseline": {
+    "file": "experiments/20261115_arm_hold_baseline_zero_friction.json",
+    "source_run": "m8house_arm_fric_probe_000",
+    "source_sha256": "0a20029b4f2ff888bc7c61d94e5aab24f756adad14fcf1a9c11e8146a5e0082f",
+    "r0_Nm": [
+     -0.144,
+     -1.51,
+     0.542,
+     0.51,
+     -0.038,
+     0.125
+    ]
+   },
+   "r_minus_r0_Nm": [
+    0.319,
+    0.235,
+    -0.283,
+    -0.573,
+    -0.117,
+    -0.105
+   ],
+   "limit_rel_Nm": 0.3,
+   "criterion": "|r−r0|≤0.3 N·m（工程一致性檢查）",
+   "baseline_note": "凍結基線 r0 是門旁起始構型的值；本趟起始構型不同 ⇒ r−r0 只記錄，判定改用絕對殘差 |r|≤HOLD_R_MAX（原 legacy 分支的工程判準）",
+   "ok": true
+  },
+  "base": [
+   1.5000107288360596,
+   -2.799891471862793,
+   1.5708000014931647
+  ],
+  "arm_err_vs_pregrasp": [
+   -0.00022,
+   0.00175,
+   -0.00064,
+   0.00025,
+   0.00019,
+   0.0
+  ],
+  "off_static": [
+   -0.00021632821559905945,
+   0.007355277081790332,
+   -0.00703358541953622,
+   0.00016370118947945864,
+   0.0008645990293167927,
+   -3.8111227446836066e-06
+  ],
+  "door_deg": 0.0
+ },
+ "far": {
+  "sim_s": 71.07,
+  "wall_s": 170.7,
+  "events": [
+   {
+    "t": 71.07,
+    "what": "supervisor_done_without_handover"
+   }
+  ],
+  "n_frames": 355,
+  "n_valid": 106,
+  "base_travel_m": 3.919,
+  "sources": {
+   "odom": "物理位姿直接當里程（理想）",
+   "scan": "PhysX 射線，略過機器人自身（忽略手臂自遮擋）",
+   "delay": "8 步在途管線（軟體模型）",
+   "arm_friction": "no_passive_arm_friction（自載入起）"
+  }
+ },
+ "result": "far_ended_without_handover",
+ "far_end": {
+  "result": "far_ended_without_handover",
+  "why": "supervisor_done"
+ },
+ "aborted": null
+}
