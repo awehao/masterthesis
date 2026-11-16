@@ -257,6 +257,10 @@ rep("    # ---- 理想感知影格\n", r'''    # ================= 遠距前段�
                            lock=dict(t_obs=float(HO[17]), age_at_lock_s=float(HO[18]), dang=float(HO[19]), spread=float(HO[20]), p0=HO[21:23].copy(), d=HO[23:25].copy(), yaw=float(HO[25]), ver=int(HO[26]), t_obs_rel=float(HO[17]) - node.t))
                 off_ho = off_static + (grav_far(q) - G_rest) / a.kp    # 靜態偏置：靜置實測錨＋重力隨構型（同 K2 模型）
                 snap = dict(s=s_far.copy(), pipe=[u_.copy() for u_ in pipe_far], u_last=pipe_far[-1].copy(), u_prev=pipe_far[-1 - NPH].copy(), off_static=off_ho.copy())
+                w_try = time.perf_counter()
+                # 以當下快照建立獨立的抓持控制器實例並試算首拍：不發任何命令、不動真管線（全部是複本）。通過 ⇒ 這個實例與它的首拍輸出就是接手後的第一拍（同一狀態、同一步）；不過 ⇒ 丟棄、回 nack、前段所有權不變
+                a_to = float(-((q[:2] - HOX['lock']['p0']) @ HOX['lock']['d']))   # 接手當下的沿線位置（通過線真實座標）
+                HOX.update(a_to=a_to, win=(L_LEAD, a_to - GRASP_END_ABS))      # 控制器窗口以接手位置為原點 ⇒ 換算成相對量，絕對終點固定在 GRASP_END_ABS
                 # 暖機（far_door_9：新建控制器的第一拍 58.2 ms 含冷啟動成本，前幾趟 44–49 ms）：以同一快照的複本建一個丟棄用實例空跑一拍——不發命令、不動真管線、結果不用，
                 # 只讓 IK／重力／淨空快取與計算池程序熱起來；之後正式實例照常以 50 ms 期限試跑。物理在此期間不步進（非即時）。
                 w_wu = time.perf_counter()
@@ -266,10 +270,6 @@ rep("    # ---- 理想感知影格\n", r'''    # ================= 遠距前段�
                 wu_ms = (time.perf_counter() - w_wu) * 1e3
                 wu_tick = list(gc_wu.tick_log)
                 del gc_wu
-                w_try = time.perf_counter()
-                # 以當下快照建立獨立的抓持控制器實例並試算首拍：不發任何命令、不動真管線（全部是複本）。通過 ⇒ 這個實例與它的首拍輸出就是接手後的第一拍（同一狀態、同一步）；不過 ⇒ 丟棄、回 nack、前段所有權不變
-                a_to = float(-((q[:2] - HOX['lock']['p0']) @ HOX['lock']['d']))   # 接手當下的沿線位置（通過線真實座標）
-                HOX.update(a_to=a_to, win=(L_LEAD, a_to - GRASP_END_ABS))      # 控制器窗口以接手位置為原點 ⇒ 換算成相對量，絕對終點固定在 GRASP_END_ABS
                 gc_try = G.MovingGraspCtrl(ident, est_fn_lock, HOX['lock']['d'].copy(), V, HOX['win'], snap['s'].copy(), [u_.copy() for u_ in snap['pipe']], snap['u_last'].copy(), snap['u_prev'].copy(), snap['off_static'].copy(),
                                            sched=dict(hold_s=0.3 + T_LEAD), pool=POOL, fastkin=True, deadline_ms=50.0, lock_budget_fn=lock_budget)
                 o_try = gc_try.step(0.0, q.copy(), door_q(), finger_meas=(float(jp[f1]), float(jp[f2])))
