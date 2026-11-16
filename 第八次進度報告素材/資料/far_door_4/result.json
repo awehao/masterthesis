@@ -1,0 +1,1085 @@
+{
+ "run": "m8house_far_door_4",
+ "mode": "nominal",
+ "scope": "遠距整合：把手來源＝腕部相機實際影像（凍結偵測＋幾何估計）；通過線＝途中第一格有效且通過關聯的估計；抓持與開門用鎖定任務參考（原始時間戳，不更新）；BindGate 的實際抓持條件以把手 prim 真值核（同門旁各趟）；理想抓持（FixedJoint）；理想里程；非即時；範圍：開到 85° 停穩為止（不解綁、不退出、不穿門）",
+ "init": {
+  "b_start": [
+   1.5,
+   -2.8,
+   1.5708
+  ],
+  "q_arm_start": [
+   -0.0128,
+   -0.0519,
+   0.086,
+   0.0116,
+   -1.6249,
+   -0.0018
+  ],
+  "source": "遠距起點（同 far_capture 三趟）；手臂＝online_1 far_live 構型；靜置後從靜止起步，起跑後不瞬移",
+  "v_pass": 0.05,
+  "note": "通過線不是場景初始條件：由本趟途中影像估計在線決定（見 ros_merge.json anchor）"
+ },
+ "gains": {
+  "kp": 600.0,
+  "kd": 60.0
+ },
+ "arm_backend": {
+  "model": "no_passive_arm_friction",
+  "dof": [
+   "joint1",
+   "joint2",
+   "joint3",
+   "joint4",
+   "joint5",
+   "joint6"
+  ],
+  "friction_static_dynamic_viscous": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0
+   ]
+  ],
+  "max_velocity": [
+   3.140000104904175,
+   3.140000104904175,
+   3.140000104904175,
+   3.140000104904175,
+   3.140000104904175,
+   3.140000104904175
+  ],
+  "max_force": [
+   50.0,
+   50.0,
+   32.0,
+   32.0,
+   32.0,
+   20.0
+  ],
+  "armature": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "kp": [
+   600.0,
+   600.0,
+   600.0,
+   600.0,
+   600.0,
+   600.0
+  ],
+  "kd": [
+   60.0,
+   60.0,
+   60.0,
+   60.0,
+   60.0,
+   60.0
+  ],
+  "legacy_friction_coefficients": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "units": "摩擦：static／dynamic＝N·m，viscous＝後端單位（tensor API；角度制或弧度制依後端，值為 0）；max_velocity＝後端單位（rad/s）；max_force＝N·m",
+  "usd": {
+   "joint1": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 50.0
+   },
+   "joint2": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 50.0
+   },
+   "joint3": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 32.0
+   },
+   "joint4": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 32.0
+   },
+   "joint5": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 32.0
+   },
+   "joint6": {
+    "legacy_jointFriction_unitless_imported": 1.0,
+    "legacy_jointFriction_unitless_set": 0.0,
+    "axis_static_Nm": 0.0,
+    "axis_dynamic_Nm": 0.0,
+    "axis_viscous": 0.0,
+    "maxJointVelocity_deg_s": 179.90875244140625,
+    "armature": 0.0,
+    "drive_maxForce_Nm": 20.0
+   }
+  }
+ },
+ "door_readback": {
+  "hinge": {
+   "root": "/World/door",
+   "leaf_prim": "/World/door/leaf",
+   "joint_prim": "/World/door/hinge",
+   "handle_bar_prim": "/World/door/leaf/handle_bar",
+   "is_rigid_body": true,
+   "mass_kg": 8.0,
+   "center_of_mass": [
+    0.4749999940395355,
+    0.019999999552965164,
+    1.0099999904632568
+   ],
+   "diagonal_inertia": [
+    2.6677334308624268,
+    3.2683334350585938,
+    0.602733314037323
+   ],
+   "angular_damping": 2.0,
+   "joint_type": "PhysicsRevoluteJoint",
+   "joint_axis": "Z",
+   "joint_body0": [],
+   "joint_body1": [
+    "/World/door/leaf"
+   ],
+   "joint_local_pos0": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_rot0_wxyz": [
+    0.0,
+    1.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "joint_local_rot1_wxyz": [
+    0.0,
+    1.0,
+    0.0,
+    0.0
+   ],
+   "limit_lower_deg": 0.0,
+   "limit_upper_deg": 110.0,
+   "joint_friction": 0.0,
+   "drive_stiffness": 0.0,
+   "drive_damping": 0.0,
+   "drive_max_force": 0.0,
+   "handle_bar": {
+    "axis": "X",
+    "radius": 0.013,
+    "length": 0.2,
+    "center_leaf_local": [
+     0.8,
+     -0.04,
+     0.85
+    ]
+   },
+   "handle_material": {
+    "bound_at": "/World/door/leaf/handle_bar",
+    "material": "/World/PhysicsMaterials/door_handle",
+    "static_friction": 1.0,
+    "dynamic_friction": 0.800000011920929,
+    "restitution": 0.0
+   },
+   "linear_damping": 0.0,
+   "collision_offsets": {
+    "wall_hinge_side": [
+     0.004000000189989805,
+     0.0
+    ],
+    "wall_latch_side": [
+     0.004000000189989805,
+     0.0
+    ],
+    "leaf_box": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post0": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post1": [
+     0.004000000189989805,
+     0.0
+    ],
+    "handle_bar": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post_in0": [
+     0.004000000189989805,
+     0.0
+    ],
+    "post_in1": [
+     0.004000000189989805,
+     0.0
+    ],
+    "handle_bar_inner": [
+     0.004000000189989805,
+     0.0
+    ]
+   },
+   "wall_end_faces_x": {
+    "wall_hinge_side": -0.014999999999999902,
+    "wall_latch_side": 1.0
+   },
+   "collision_prims": [
+    "/World/door/frame/wall_hinge_side",
+    "/World/door/frame/wall_latch_side",
+    "/World/door/leaf/handle_bar",
+    "/World/door/leaf/handle_bar_inner",
+    "/World/door/leaf/leaf_box",
+    "/World/door/leaf/post0",
+    "/World/door/leaf/post1",
+    "/World/door/leaf/post_in0",
+    "/World/door/leaf/post_in1"
+   ],
+   "handle_bar_inner_prim": "/World/door/leaf/handle_bar_inner",
+   "handle_bar_inner": {
+    "axis": "X",
+    "radius": 0.013,
+    "length": 0.2,
+    "center_leaf_local": [
+     0.8,
+     0.08,
+     0.85
+    ]
+   },
+   "post_prims": [
+    "/World/door/leaf/post0",
+    "/World/door/leaf/post1"
+   ],
+   "post_inner_prims": [
+    "/World/door/leaf/post_in0",
+    "/World/door/leaf/post_in1"
+   ],
+   "posts": {
+    "post0": {
+     "center_leaf_local": [
+      0.7150000000000001,
+      -0.02,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    },
+    "post1": {
+     "center_leaf_local": [
+      0.885,
+      -0.02,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    },
+    "post_in0": {
+     "center_leaf_local": [
+      0.7150000000000001,
+      0.06,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    },
+    "post_in1": {
+     "center_leaf_local": [
+      0.885,
+      0.06,
+      0.85
+     ],
+     "half_size": [
+      0.008,
+      0.02,
+      0.012
+     ]
+    }
+   },
+   "leaf_box": {
+    "center_leaf_local": [
+     0.475,
+     0.02,
+     1.0099999999999998
+    ],
+    "half_size": [
+     0.475,
+     0.02,
+     0.9999999999999999
+    ]
+   },
+   "handle_material_by_bar": {
+    "handle_bar": {
+     "bound_at": "/World/door/leaf/handle_bar",
+     "material": "/World/PhysicsMaterials/door_handle",
+     "static_friction": 1.0,
+     "dynamic_friction": 0.800000011920929,
+     "restitution": 0.0
+    },
+    "handle_bar_inner": {
+     "bound_at": "/World/door/leaf/handle_bar_inner",
+     "material": "/World/PhysicsMaterials/door_handle",
+     "static_friction": 1.0,
+     "dynamic_friction": 0.800000011920929,
+     "restitution": 0.0
+    }
+   }
+  },
+  "leaf_rigid_body_damping": {
+   "angular": 2.0,
+   "linear": 0.0
+  }
+ },
+ "finger": {
+  "command": "CLOSE 段由張開斜降到 0（夾緊，同停車版）",
+  "geometry": "兩指各自實測開度；CLOSE 段掃掠另含預測閉合開度"
+ },
+ "settle": {
+  "hold_check": {
+   "low_speed_0p3s": true,
+   "joint_rate_abs_max_0p3s": 0.004562,
+   "r_Nm": [
+    0.175,
+    -1.275,
+    0.259,
+    -0.063,
+    -0.155,
+    0.02
+   ],
+   "limit_Nm": 1.3,
+   "v_limit": 0.01,
+   "note": "r 含重力模型與驅動近似誤差：超過不證明新舊摩擦疊加，通過也不證明摩擦已校準；1.3＝1.0＋事前工程容差 0.3",
+   "contact_read_errors": [],
+   "n_contact_read_errors": 0,
+   "n_samples": 30,
+   "n_need": 30,
+   "contact_force_max_n": 0.0,
+   "no_contact": true,
+   "finite": true,
+   "baseline": {
+    "file": "experiments/20261115_arm_hold_baseline_zero_friction.json",
+    "source_run": "m8house_arm_fric_probe_000",
+    "source_sha256": "0a20029b4f2ff888bc7c61d94e5aab24f756adad14fcf1a9c11e8146a5e0082f",
+    "r0_Nm": [
+     -0.144,
+     -1.51,
+     0.542,
+     0.51,
+     -0.038,
+     0.125
+    ]
+   },
+   "r_minus_r0_Nm": [
+    0.319,
+    0.235,
+    -0.283,
+    -0.573,
+    -0.117,
+    -0.105
+   ],
+   "limit_rel_Nm": 0.3,
+   "criterion": "|r−r0|≤0.3 N·m（工程一致性檢查）",
+   "baseline_note": "凍結基線 r0 是門旁起始構型的值；本趟起始構型不同 ⇒ r−r0 只記錄，判定改用絕對殘差 |r|≤HOLD_R_MAX（原 legacy 分支的工程判準）",
+   "ok": true
+  },
+  "base": [
+   1.5000107288360596,
+   -2.799891471862793,
+   1.5708000014931647
+  ],
+  "arm_err_vs_pregrasp": [
+   -0.00022,
+   0.00175,
+   -0.00064,
+   0.00025,
+   0.00019,
+   0.0
+  ],
+  "off_static": [
+   -0.00021632821559905945,
+   0.007355277081790332,
+   -0.00703358541953622,
+   0.00016370118947945864,
+   0.0008645990293167927,
+   -3.8111227446836066e-06
+  ],
+  "door_deg": 0.0
+ },
+ "far": {
+  "sim_s": 63.7,
+  "wall_s": 150.4,
+  "events": [
+   {
+    "wall_ms": 44.8,
+    "phase": 0,
+    "first_cmd_step_max": 0.34278286710782035,
+    "budget": {
+     "pos_m": 0.0333,
+     "ang_deg": 1.317,
+     "ok": false,
+     "terms": {
+      "est_m": 0.00285,
+      "sync_m": 0.00055,
+      "odom_m": 0.0,
+      "arm_tcp_m": 0.0299
+     }
+    },
+    "t": 63.7,
+    "what": "handover_trial_passed_takeover"
+   }
+  ],
+  "n_frames": 318,
+  "n_valid": 99,
+  "base_travel_m": 3.99,
+  "sources": {
+   "odom": "物理位姿直接當里程（理想）",
+   "scan": "PhysX 射線，略過機器人自身（忽略手臂自遮擋）",
+   "delay": "8 步在途管線（軟體模型）",
+   "arm_friction": "no_passive_arm_friction（自載入起）"
+  }
+ },
+ "handover": {
+  "window_rel": [
+   0.01,
+   0.20683469425441892
+  ],
+  "along_at_takeover": -0.07816530574558107,
+  "grasp_end_abs": -0.285,
+  "t_far": 63.7,
+  "base": [
+   0.7501232624053955,
+   -0.48814570903778076,
+   1.5477299911965552
+  ],
+  "lock": {
+   "t_obs": 56.84000002391636,
+   "age_at_lock_s": 0.12,
+   "dang": 0.37147347729899766,
+   "spread": 0.002774833349961865,
+   "p0": [
+    0.8282661132932122,
+    -0.4900195914629327
+   ],
+   "d": [
+    -0.9997245767228699,
+    0.023468504346863258
+   ],
+   "yaw": 1.5473486157879923,
+   "ver": 2,
+   "t_obs_rel": -6.859998552277688
+  },
+  "T_lock": [
+   [
+    0.9999987253555498,
+    -0.0015462587507475767,
+    0.0003979587303522295,
+    0.7988276333461459
+   ],
+   [
+    0.001546259750552715,
+    0.999998804537247,
+    -2.2046720020847165e-06,
+    -0.03920454953059049
+   ],
+   [
+    -0.0003979548456140144,
+    2.8200167593218586e-06,
+    0.9999999208119912,
+    0.8498586000226825
+   ],
+   [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  ],
+  "s": [
+   -0.25762355728719943,
+   -0.27249409982910305,
+   1.2977596466644208,
+   -1.5133834129994324,
+   -0.2832046844055289,
+   -0.05941101129390133
+  ],
+  "off_static": [
+   -0.00021632821559905945,
+   0.006561751415212492,
+   -0.009539033523625128,
+   7.732968622298434e-05,
+   0.0002311965451593553,
+   2.4061940612445133e-07
+  ],
+  "u_last": [
+   -7.03152740779172e-05,
+   0.049950980768344456,
+   -0.00012927166864579124,
+   -0.25986327995510816,
+   0.07111830276509079,
+   0.05700872437342852,
+   0.005878799815377533,
+   -0.26253995838438016,
+   -0.01019424216678319
+  ],
+  "u_prev": [
+   -6.738311359113059e-05,
+   0.04993875762117189,
+   -0.00012143645292701633,
+   -0.8414149148309652,
+   0.17788923771031695,
+   0.13485142398669936,
+   -0.04881010208731329,
+   -0.8491521211615649,
+   0.03397187678577801
+  ],
+  "pipe": [
+   [
+    -6.738311359113059e-05,
+    0.04993875762117189,
+    -0.00012143645292701633,
+    -0.660106000955204,
+    0.12658647121129962,
+    0.09238231256900153,
+    -0.059212718972765366,
+    -0.6674359047840828,
+    0.046083060652576946
+   ],
+   [
+    -6.738311359113059e-05,
+    0.04993875762117189,
+    -0.00012143645292701633,
+    -0.8414149148309652,
+    0.17788923771031695,
+    0.13485142398669936,
+    -0.04881010208731329,
+    -0.8491521211615649,
+    0.03397187678577801
+   ],
+   [
+    -6.738311359113059e-05,
+    0.04993875762117189,
+    -0.00012143645292701633,
+    -0.8414149148309652,
+    0.17788923771031695,
+    0.13485142398669936,
+    -0.04881010208731329,
+    -0.8491521211615649,
+    0.03397187678577801
+   ],
+   [
+    -6.738311359113059e-05,
+    0.04993875762117189,
+    -0.00012143645292701633,
+    -0.8414149148309652,
+    0.17788923771031695,
+    0.13485142398669936,
+    -0.04881010208731329,
+    -0.8491521211615649,
+    0.03397187678577801
+   ],
+   [
+    -6.738311359113059e-05,
+    0.04993875762117189,
+    -0.00012143645292701633,
+    -0.8414149148309652,
+    0.17788923771031695,
+    0.13485142398669936,
+    -0.04881010208731329,
+    -0.8491521211615649,
+    0.03397187678577801
+   ],
+   [
+    -7.03152740779172e-05,
+    0.049950980768344456,
+    -0.00012927166864579124,
+    -0.8414149148309652,
+    0.17788923771031695,
+    0.13485142398669936,
+    -0.04881010208731329,
+    -0.8491521211615649,
+    0.03397187678577801
+   ],
+   [
+    -7.03152740779172e-05,
+    0.049950980768344456,
+    -0.00012927166864579124,
+    -0.25986327995510816,
+    0.07111830276509079,
+    0.05700872437342852,
+    0.005878799815377533,
+    -0.26253995838438016,
+    -0.01019424216678319
+   ],
+   [
+    -7.03152740779172e-05,
+    0.049950980768344456,
+    -0.00012927166864579124,
+    -0.25986327995510816,
+    0.07111830276509079,
+    0.05700872437342852,
+    0.005878799815377533,
+    -0.26253995838438016,
+    -0.01019424216678319
+   ]
+  ],
+  "trial": {
+   "along_at_takeover": -0.0782,
+   "window_rel": [
+    0.01,
+    0.20683469425441892
+   ],
+   "ok": true,
+   "stop": null,
+   "abort": null,
+   "wall_ms": 44.8,
+   "phase": 0,
+   "n": 6370,
+   "rx_mod": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2
+   ],
+   "budget": {
+    "pos_m": 0.0333,
+    "ang_deg": 1.317,
+    "ok": false,
+    "terms": {
+     "est_m": 0.00285,
+     "sync_m": 0.00055,
+     "odom_m": 0.0,
+     "arm_tcp_m": 0.0299
+    }
+   },
+   "first_cmd": [
+    2.679565382630888e-05,
+    0.04999999332076463,
+    1.4924959059303688e-05,
+    0.07163882783154496,
+    0.010547866211333412,
+    0.01275125459593518,
+    0.03464255362057411,
+    0.0802429087234402,
+    -0.03319800808742848
+   ],
+   "prev_cmd": [
+    -7.03152740779172e-05,
+    0.049950980768344456,
+    -0.00012927166864579124,
+    -0.25986327995510816,
+    0.07111830276509079,
+    0.05700872437342852,
+    0.005878799815377533,
+    -0.26253995838438016,
+    -0.01019424216678319
+   ],
+   "first_cmd_step_max": 0.34278286710782035
+  },
+  "eval_only": {
+   "lock_err_mm": 1.42
+  }
+ },
+ "grasp": {
+  "phases": [
+   [
+    "HOLD",
+    0.0
+   ]
+  ],
+  "stop": null,
+  "abort": null,
+  "stop_effect": null,
+  "ready_t_rel": null,
+  "accepted": false,
+  "accept_t_rel": null,
+  "n_ready_revoked": 0,
+  "min_clear": {
+   "env": 0.0647,
+   "base": 0.1877,
+   "self": 0.011,
+   "shell_bar": 0.037,
+   "finger_bar": 0.0193,
+   "stop_sweep": 0.0051
+  },
+  "limits": {
+   "arm_rate": 0.2731,
+   "arm_acc": 18.5879,
+   "wheel_v": 0.0501,
+   "wheel_a": 0.0026
+  },
+  "contact_lock": null,
+  "lock_inconsistency_max": {
+   "pos_mm": 0.0,
+   "deg": 0.0
+  },
+  "contact_stop": {
+   "used": false,
+   "n_ticks": 0
+  },
+  "fast_slip": {
+   "max_pos_mm": 0.0,
+   "max_deg": 0.0,
+   "n_eval": 0
+  },
+  "n_deadline_miss": 0,
+  "tick_log": [
+   [
+    0.0,
+    42.259,
+    false
+   ],
+   [
+    0.05,
+    24.062,
+    false
+   ],
+   [
+    0.1,
+    22.239,
+    false
+   ],
+   [
+    0.15,
+    20.221,
+    false
+   ],
+   [
+    0.2,
+    20.478,
+    false
+   ],
+   [
+    0.25,
+    19.031,
+    false
+   ],
+   [
+    0.3,
+    18.912,
+    false
+   ],
+   [
+    0.35,
+    21.091,
+    false
+   ],
+   [
+    0.4,
+    20.611,
+    false
+   ]
+  ]
+ },
+ "first_segment": {
+  "t_req": null,
+  "wall_req": null,
+  "t_avail": null,
+  "wall_avail": null,
+  "ok": false,
+  "t_ready_pred": null,
+  "phi_req": null,
+  "sel": null,
+  "n_req": 1,
+  "n_dropped": 0,
+  "log": [
+   {
+    "t": 0.0,
+    "what": "request",
+    "rid": 1,
+    "planner": 0,
+    "target": 2.25,
+    "why": "initial"
+   }
+  ],
+  "window": {
+   "lead_s": 0.1,
+   "tol_s": 0.05,
+   "ahead_s": 1.0,
+   "gap_s": 0.4
+  }
+ },
+ "events": [
+  {
+   "t": 0.0,
+   "wall": 0.003,
+   "what": "first_segment_request",
+   "k": 1,
+   "why": "initial",
+   "t_ready_pred": 2.25
+  },
+  {
+   "t": 0.43,
+   "wall": 0.836,
+   "what": "safety_chain_mismatch_engineering_abort",
+   "ok": false,
+   "why": "release_missing",
+   "k": 7,
+   "n_prop": 6405,
+   "u": [
+    4.899848705479772e-05,
+    0.04999997871320131,
+    -0.0003685400451134413
+   ],
+   "last_releases": [
+    [
+     6402,
+     [
+      4.512687120906858e-05,
+      0.04999998197852,
+      -0.000288127976938668
+     ]
+    ],
+    [
+     6407,
+     [
+      4.704831778996757e-05,
+      0.04999998038065094,
+      -0.000329098040597664
+     ]
+    ],
+    [
+     6412,
+     [
+      5.077387218653203e-05,
+      0.0499999771279474,
+      -0.00040516162109982545
+     ]
+    ]
+   ]
+  }
+ ],
+ "forbidden_contact": {
+  "latched": null
+ },
+ "aborted": {
+  "t": 0.43,
+  "controller": null,
+  "kind": "模擬工程中止（安全鏈放行與已核命令不一致；不再步進，不是受控停止）",
+  "chain": {
+   "ok": false,
+   "why": "release_missing",
+   "k": 7,
+   "n_prop": 6405,
+   "u": [
+    4.899848705479772e-05,
+    0.04999997871320131,
+    -0.0003685400451134413
+   ],
+   "last_releases": [
+    [
+     6402,
+     [
+      4.512687120906858e-05,
+      0.04999998197852,
+      -0.000288127976938668
+     ]
+    ],
+    [
+     6407,
+     [
+      4.704831778996757e-05,
+      0.04999998038065094,
+      -0.000329098040597664
+     ]
+    ],
+    [
+     6412,
+     [
+      5.077387218653203e-05,
+      0.0499999771279474,
+      -0.00040516162109982545
+     ]
+    ]
+   ]
+  }
+ },
+ "wall_total_s": 0.8,
+ "sim_total_s": 0.43,
+ "rtf": 0.538,
+ "result": "aborted：模擬中止（停止有效性未驗證；綁定中則未解綁）",
+ "safety_chain": {
+  "policy": "整條放行流須與提案序列一致（每筆放行＝最新或前一筆提案；單調；每筆提案生效前須被確認）；違規或缺失 ⇒ 生效前拒絕",
+  "n_proposed": 9,
+  "n_effect_checked_ok": 7,
+  "n_missing": 1,
+  "n_differs": 0,
+  "n_releases": 9,
+  "n_pre_owner_releases": 1,
+  "lag_steps": {
+   "min": 2,
+   "p50": 7.0,
+   "max": 7
+  },
+  "delta_abs_max": 0.0,
+  "d_steps": 8,
+  "tol": 1e-06,
+  "violation": {
+   "why": "release_missing",
+   "k": 7,
+   "n_prop": 6405,
+   "u": [
+    4.899848705479772e-05,
+    0.04999997871320131,
+    -0.0003685400451134413
+   ],
+   "last_releases": [
+    [
+     6402,
+     [
+      4.512687120906858e-05,
+      0.04999998197852,
+      -0.000288127976938668
+     ]
+    ],
+    [
+     6407,
+     [
+      4.704831778996757e-05,
+      0.04999998038065094,
+      -0.000329098040597664
+     ]
+    ],
+    [
+     6412,
+     [
+      5.077387218653203e-05,
+      0.0499999771279474,
+      -0.00040516162109982545
+     ]
+    ]
+   ]
+  },
+  "stop": {
+   "t": 0.43,
+   "phase": "grasp",
+   "ok": false,
+   "why": "release_missing",
+   "k": 7,
+   "n_prop": 6405,
+   "u": [
+    4.899848705479772e-05,
+    0.04999997871320131,
+    -0.0003685400451134413
+   ],
+   "last_releases": [
+    [
+     6402,
+     [
+      4.512687120906858e-05,
+      0.04999998197852,
+      -0.000288127976938668
+     ]
+    ],
+    [
+     6407,
+     [
+      4.704831778996757e-05,
+      0.04999998038065094,
+      -0.000329098040597664
+     ]
+    ],
+    [
+     6412,
+     [
+      5.077387218653203e-05,
+      0.0499999771279474,
+      -0.00040516162109982545
+     ]
+    ]
+   ]
+  },
+  "note": "抓持／開門段底盤提案經 選擇器→平滑器→Shield→GUARD；每筆提案在生效步核對放行與提案一致才執行；缺失／不一致 ⇒ 生效前模擬工程中止"
+ },
+ "lock_budget_max": {
+  "pos_m": 0.03334,
+  "ang_deg": 1.352,
+  "ok": false,
+  "terms": {
+   "est_m": 0.00285,
+   "sync_m": 0.00055,
+   "odom_m": 0.0,
+   "arm_tcp_m": 0.02994
+  },
+  "t": 0.1,
+  "phase": "HOLD"
+ }
+}

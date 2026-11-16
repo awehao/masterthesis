@@ -547,7 +547,10 @@ class MovingGraspCtrl:
                     return dict(arm_target=self.s.copy(), base_twist=np.zeros(3), finger=self.finger_cmd, ready=False, stopped=True, abort=True)
             # 段別
             if self.lock_budget_fn is not None:                        # r14：鎖定預算每拍重算（手臂項用本控制器的 TCP 相對位姿）
-                self.lock_budget = self.lock_budget_fn(self.t, q, ep, er)
+                Ts_ = self.target(tr)                                     # 手臂項＝TCP 對「當下排程目標」（HOLD／INSERT 時是後退 s(t) 的位姿，不是抓取位；far_door_4 試跑誤算成 33 mm）
+                dRs = Ts_[:3, :3].T @ Tc[:3, :3]
+                ep_s = float(np.linalg.norm(Tc[:3, 3] - Ts_[:3, 3])); er_s = math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dRs) - 1) / 2))))
+                self.lock_budget = self.lock_budget_fn(self.t, q, ep_s, er_s)
                 fresh = bool(self.lock_budget.get('ok'))
                 if self.lock_budget_max is None or self.lock_budget['pos_m'] > self.lock_budget_max['pos_m']:
                     self.lock_budget_max = dict(self.lock_budget, t=round(self.t, 3), phase=self.phase)
