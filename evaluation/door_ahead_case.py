@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import door_cpu_layout as CPUL
 CPU_LAYOUT = os.environ.get('CPU_LAYOUT') in ('1', 'laptop')
 LAPTOP = os.environ.get('CPU_LAYOUT') == 'laptop'                   # TUF A14（Ryzen AI 9 465）：快核 Zen5 邏輯 0–3／10–13，慢核 Zen5c 4–9／14–19
-LAYOUT_LAPTOP = dict(worker=[0, 10], cstop=[[1], [4]], pool=[2, 3, 12, 13, 11], main=[5, 6, 15, 16], planner=[7, 8, 17, 18])
+LAYOUT_LAPTOP = dict(worker=[0, 10], cstop=[[1], [4]], pool=[2, 5, 3, 6, 12, 7, 13, 14, 11, 15, 16, 17], main=[8, 18], planner=[9, 19])   # 池：快核 2,3,12,13,11 與慢核交錯（串流兩組各半都混到）
+FAST_CPUS = {0, 1, 2, 3, 10, 11, 12, 13}
 if CPU_LAYOUT:
     CPUL.blas_single()
 import numpy as np
@@ -24,7 +25,8 @@ PLAN_NICE = int(os.environ.get('AHEAD_PLAN_NICE', '0'))              # P2 規劃
 if PLAN_NICE:
     os.setpriority(os.PRIO_PROCESS, BG.proc.pid, PLAN_NICE)
 if LAPTOP:                                                           # 筆電：關鍵路徑（工作程序、候選停法模擬＝第 2 個停法程序、淨空池）放快核；現在停程序（尾段證書模式閒置）、主迴圈、規劃程序放慢核
-    CPU_PIN = dict(pool=[CPUL.pin(p_.pid, [LAYOUT_LAPTOP['pool'][i_ % len(LAYOUT_LAPTOP['pool'])]]) for i_, p_ in enumerate(SHARED.procs)],
+    SHARED.weights = [1.0 if LAYOUT_LAPTOP['pool'][i_ % len(LAYOUT_LAPTOP['pool'])] in FAST_CPUS else float(os.environ.get('POOL_SLOW_W', '0.65')) for i_ in range(SHARED.n)]
+    CPU_PIN = dict(pool_weights=SHARED.weights, pool=[CPUL.pin(p_.pid, [LAYOUT_LAPTOP['pool'][i_ % len(LAYOUT_LAPTOP['pool'])]]) for i_, p_ in enumerate(SHARED.procs)],
                    cstop=[CPUL.pin(CSW.procs[0].pid, LAYOUT_LAPTOP['cstop'][1]), CPUL.pin(CSW.procs[1].pid, LAYOUT_LAPTOP['cstop'][0])], planner=CPUL.pin(BG.proc.pid, LAYOUT_LAPTOP['planner']))
     CPUL.pin(os.getpid(), LAYOUT_LAPTOP['main'])
 elif CPU_LAYOUT:                                                     # 非阻塞版配置（8 實體核心；邏輯 i 與 i+8 同核）：控制器工作程序獨占核心 0（0,8）；兩個停法模擬各占核心 1、2（同核 9、10 不分配）；
@@ -36,6 +38,25 @@ import door_motm_p2 as P2
 WB = P2.WB
 import door_motm_grasp_ctrl as G
 import door_open_exec_ctrl as X
+if os.environ.get('AHEAD_PROF') == '1':                              # 診斷：抓持控制器各方法逐拍累計耗時（只計時，行為不變；fork 前包好，工作程序繼承）
+    import functools as _ft
+
+    def _prof_wrap(cls, name):
+        f = getattr(cls, name)
+
+        @_ft.wraps(f)
+        def g(self, *a, **k):
+            w = time.perf_counter()
+            try:
+                return f(self, *a, **k)
+            finally:
+                d_ = getattr(self, '_prof', None)
+                if d_ is None:
+                    d_ = self._prof = {}
+                d_[name] = d_.get(name, 0.0) + (time.perf_counter() - w) * 1e3
+        setattr(cls, name, g)
+    for _n in ('_contact_stop_traj', '_stop_traj', '_sweep_pool_submit', '_sweep_pool_finish', '_track', '_arm_track', 'clear', '_rel', '_pred'):
+        _prof_wrap(G.MovingGraspCtrl, _n)
 K, BM = G.K, G.BM
 PHYS, NPH, D_STEPS, DT = G.PHYS, G.NPH, G.D_STEPS, G.DT
 XO_D = D_STEPS * PHYS                                                # 管線延遲（s）

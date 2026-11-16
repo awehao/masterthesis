@@ -153,6 +153,9 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 tl = ctrl.tick_log[-1]
                 pm = ctrl.pool_ms[-1] if getattr(ctrl, 'pool_ms', None) else None
                 parts = dict(tick_ms=round(float(tl[1]), 2), phase=getattr(ctrl, 'phase', None), pool=pm if not isinstance(pm, dict) else {k_: round(float(v_), 2) for k_, v_ in pm.items() if isinstance(v_, (int, float))})
+                if getattr(ctrl, '_prof', None) is not None:          # AHEAD_PROF：本段（5 步）各方法累計 ms
+                    parts['prof'] = {k_: round(v_, 2) for k_, v_ in ctrl._prof.items()}
+                    ctrl._prof = {}
             if mode == 'open':                                        # 診斷：控制器本拍各分項（ms）與工作程序額外開銷
                 parts = {k_: round(float(getattr(ctrl, k_)[-1]), 2) for k_ in ('tick_ms', 'solve_ms', 'sweep_ms', 'cl_ms', 'cand_ms', 'mon_ms') if getattr(ctrl, k_, None)}
                 parts['cand'] = getattr(ctrl, '_cand_diag', None)

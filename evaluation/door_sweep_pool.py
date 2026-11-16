@@ -92,7 +92,13 @@ class SweepPool:
         self.ver += 1
         X = np.asarray(X, float)
         ws = list(range(self.n)) if workers is None else [int(w) for w in workers]
-        chunks = dict(zip(ws, np.array_split(np.arange(len(X)), len(ws))))
+        wts = getattr(self, 'weights', None)
+        if wts is None:
+            chunks = dict(zip(ws, np.array_split(np.arange(len(X)), len(ws))))
+        else:                                                        # 依工作程序所在核的相對速度分配取樣點數（樣本與結果不變，只是分法）
+            w_ = np.array([float(wts[w]) for w in ws]); cum = np.round(np.cumsum(w_) / w_.sum() * len(X)).astype(int)
+            lo = np.r_[0, cum[:-1]]
+            chunks = {w: np.arange(lo[i], cum[i]) for i, w in enumerate(ws)}
         T = np.asarray(T_WH0, float)
         sent = []
         for w, idx in chunks.items():
