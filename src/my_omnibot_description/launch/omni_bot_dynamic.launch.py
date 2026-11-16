@@ -106,6 +106,9 @@ def generate_launch_description():
     # GMPC_CMD_TOPIC（預設空＝原行為）：遠距進線模式要在平滑器之前插入命令選擇器時，把導航 GMPC 的輸出改到另一個話題；
     # 平滑器仍只吃 cmd_vel_nav，之後的 Shield／GUARD 不變。未設定時與原本逐字相同。
     _gmpc_cmd_env = os.environ.get('GMPC_CMD_TOPIC', '')
+    # GMPC_TASK=1（預設關＝原行為）：導航 GMPC 改用任務擴充執行檔 gmpc_task_node（繼承封存的 GMPCNode；同節點名、同參數；
+    # 沒有 /task/conditions 時與原節點相同）。主線 B 的操作端任務朝向／速度框由同一個導航控制器承接，不另起第二個 GMPC。
+    _gmpc_exec = 'gmpc_task_node' if os.environ.get('GMPC_TASK', '0') == '1' else 'gmpc_node'
     gmpc_cmd_topic = _gmpc_cmd_env if _gmpc_cmd_env else PythonExpression(
         ["'cmd_vel_nav' if '", use_smoother, "' == 'true' else 'cmd_vel'"])
 
@@ -478,12 +481,12 @@ def generate_launch_description():
                               os.environ.get('REPLAN', '1.0'))}]),
         # GMPC + CBF (cbf:=true) or plain GMPC (cbf:=false). Publishes to
         # cmd_vel_nav so velocity_smoother (above) can rate-limit it.
-        Node(package='ammr_wholebody_mpc', executable='gmpc_node',
+        Node(package='ammr_wholebody_mpc', executable=_gmpc_exec,
              name='gmpc_controller', output='screen',
              parameters=[gmpc_params, cbf_overrides, heading_overrides,
                          {'cmd_vel_topic': gmpc_cmd_topic}],
              condition=IfCondition(cbf)),
-        Node(package='ammr_wholebody_mpc', executable='gmpc_node',
+        Node(package='ammr_wholebody_mpc', executable=_gmpc_exec,
              name='gmpc_controller', output='screen',
              parameters=[gmpc_params, heading_overrides,
                          {'cmd_vel_topic': gmpc_cmd_topic}],

@@ -20,6 +20,7 @@ setup(
     entry_points={
         'console_scripts': [
             'gmpc_node           = ammr_wholebody_mpc.gmpc_node:main',
+            'gmpc_task_node      = ammr_wholebody_mpc.gmpc_task_node:main',
             'test_path_publisher = ammr_wholebody_mpc.test_path_publisher:main',
             'goal_to_plan_relay  = ammr_wholebody_mpc.goal_to_plan_relay:main',
             'obstacle_aggregator = ammr_wholebody_mpc.obstacle_aggregator:main',
