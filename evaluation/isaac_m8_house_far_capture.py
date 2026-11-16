@@ -582,6 +582,34 @@ def main():
                cmds_received=dict(base=node.n_cmd, arm=node.n_acmd), base_travel_m=round(float(np.abs(np.diff(R[:, 1:3], axis=0)).sum()), 3) if len(R) > 1 else 0.0,
                sources=dict(odom='物理位姿直接當里程（理想，無滑移）', scan='PhysX 射線 360 道，略過機器人自身形狀，無雜訊', pose_for_camera='渲染時刻的關節／底盤讀值 FK', delay='8 步在途管線（軟體模型）'),
                step_wall_ms_p50=round(float(np.median(step_wall)) * 1e3, 1) if step_wall else None, supervisor_done=t_done is not None)
+    # 整機停穩驗收（物理紀錄；rc 與 supervisor_done 都不能代替）：最後一筆非零輸入命令之後，在途管線排清（8 步），
+    # 底盤每步位移 <1e-6 m 且偏航 <1e-6 rad、手臂各關節速率 <1e-3 rad/s，連續 0.2 s。
+    sv = dict(rule='最後非零輸入命令後：管線排清＋底盤每步位移 <1e-6 m／偏航 <1e-6 rad＋手臂各關節速率 <1e-3 rad/s，連續 0.2 s', valid=False)
+    try:
+        if latch is not None or exc is not None:
+            sv['why'] = '工程中止或例外：物理未繼續步進，沒有停穩可驗'
+        elif len(R) > 30:
+            nz = np.where(np.abs(R[:, cols.index('uin_x'):cols.index('uin_x') + 9]).max(axis=1) > 1e-9)[0]
+            k0 = int(nz[-1]) + 1 if len(nz) else 0
+            db = np.abs(np.diff(R[:, 1:4], axis=0)).max(axis=1)
+            da = np.abs(np.diff(R[:, 4:10], axis=0)).max(axis=1) / DT
+            still = (db < 1e-6) & (da < 1e-3)
+            pipe_clear = np.abs(R[1:, cols.index('ux'):cols.index('ux') + 9]).max(axis=1) < 1e-12
+            okk = still & pipe_clear
+            run_, k_ok = 0, None
+            for k_ in range(k0, len(okk)):
+                run_ = run_ + 1 if okk[k_] else 0
+                if run_ >= 20:
+                    k_ok = k_ - 19
+                    break
+            kb = next((k_ for k_ in range(k0, len(db)) if db[k_:k_ + 20].max() < 1e-6), None)
+            sv.update(valid=k_ok is not None, t_last_nonzero_input=round(float(R[max(k0 - 1, 0), 0]), 3), pipe_drained_s=round(D_STEPS * DT, 2), base_stop_time_s=None if kb is None else round((kb - k0) * DT, 2),
+                      whole_robot_settle_time_s=None if k_ok is None else round((k_ok - k0) * DT, 2), arm_rate_at_last_input=round(float(da[max(k0 - 1, 0)]), 4), base_speed_at_last_input=round(float(np.linalg.norm(R[k0, 1:3] - R[max(k0 - 1, 0), 1:3]) / DT), 4),
+                      residual_arm_rate_end=round(float(da[-10:].max()), 6), record_after_s=round(float(R[-1, 0] - R[max(k0 - 1, 0), 0]), 2))
+    except Exception as e_:                                           # noqa: BLE001
+        sv['error'] = repr(e_)
+    res['stop_validation'] = sv
+    print(f'[fc] 整機停穩驗收 {sv}', flush=True)
     json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)
     print(f"[fc] 結束 sim {res['sim_s']} s wall {res['wall_s']} s 影格 取用 {cam_stat['used']} 有效 {cam_stat['valid']} 失敗 {cam_stat['fail']} 鎖存 {latch}", flush=True)
     try:

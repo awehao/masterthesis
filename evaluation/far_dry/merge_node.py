@@ -314,7 +314,7 @@ def worker(conn):
                 n = (T_est[:3, :3] @ np.asarray(a_H, float)).copy(); n[2] = 0; n /= np.linalg.norm(n)
                 ax = T_est[:3, 0].copy(); ax[2] = 0; d = -ax / np.linalg.norm(ax)
                 yaw = math.atan2(-n[1], -n[0])
-                st['ref'] = dict(ver=1, t_obs=float(a.get('t_obs', 0.0)), t_obs_last=float(a.get('t_obs', 0.0)), last_seq=int(a.get('seq', -1)), hist=[], goal=None, n_step_rejected=0, T_fixed=T_est.copy())
+                st['ref'] = dict(ver=1, t_obs=float(a.get('t_obs', 0.0)), t_obs_last=float(a.get('t_obs', 0.0)), last_seq=int(a.get('seq', -1)), hist=[], goal=None, n_step_rejected=0, n_goal_expired=0, T_fixed=T_est.copy())
                 assoc = None
                 if st.get('T_prior') is not None:                      # 目標關聯：估計（轉到地圖座標）對先驗名目位姿的差
                     Tm = _T3(_Tmo_a) @ T_est
@@ -355,6 +355,12 @@ def worker(conn):
                     ref = st['ref']
                     upd = dict(ver=ref['ver'], status='off' if not a.get('allow_update') else 'no_new_obs')
                     ob = a.get('obs')
+                    if ref.get('goal') is not None and float(a['t']) - ref['goal']['t_obs'] > UPD['max_age_s']:   # 每拍重查更新目標的來源年齡：過期 ⇒ 停止位置更新，保留最後已提交參考及其原始來源時間；歷史清空（中斷後重新累積）
+                        ref['goal'], ref['hist'] = None, []
+                        ref['n_goal_expired'] += 1
+                        upd['goal_expired'] = True
+                    if ref['hist'] and float(a['t']) - ref['hist'][-1][1] > UPD['max_age_s']:
+                        ref['hist'] = []
                     if a.get('allow_update') and ob is not None and ob['seq'] > ref['last_seq']:      # ---- 更新入口：一格新觀察（位姿、時間、版本一起進來）
                         ref['last_seq'] = ob['seq']
                         To = np.asarray(ob['T'], float)
@@ -418,12 +424,15 @@ def worker(conn):
                         o = trk.step(q, bp, rel, s, s_end, br['T_target'], trk.q_prev if trk.q_prev is not None else q[3:])
                         if o['ok']:
                             out['stop'] = stop_check(q, pipe, rel, s, np.asarray(o['u'], float), T_mo_t)
-                    upd.update(ref_p=[float(x) for x in T_est[:3, 3]], ref_t_obs=ref['t_obs'], pg_p0=[float(x) for x in pg['p0']], goal_dist_mm=None if ref.get('goal') is None else round(float(np.linalg.norm(ref['goal']['p'] - T_est[:3, 3])) * 1e3, 3), n_step_rejected=ref['n_step_rejected'])
+                    upd.update(ref_p=[float(x) for x in T_est[:3, 3]], ref_t_obs=ref['t_obs'], pg_p0=[float(x) for x in pg['p0']], goal_dist_mm=None if ref.get('goal') is None else round(float(np.linalg.norm(ref['goal']['p'] - T_est[:3, 3])) * 1e3, 3), n_step_rejected=ref['n_step_rejected'], n_goal_expired=ref['n_goal_expired'])
                     out['ref'] = upd
                     out['track'] = dict(ok=o['ok'], why=o.get('why'), u=[float(x) for x in o['u']], err=o.get('track_err'), err_pred=o.get('track_err_pred'), clipped=o.get('clipped'), sigma=o.get('sigma'))
                     if a.get('judge'):
                         j = {}
-                        for nm, Tj, tobs in a['judge_refs']:              # 每個參考各自帶「位姿、時間」：固定參考用它自己的擷取時間；逐格觀察用該格自己的位姿與時間
+                        for nm, Tj, tobs in a['judge_refs']:
+                            if nm == 'updated_reference':               # 用 worker 本拍實際提交的參考：位姿、來源時間、版本一起（不取監督節點傳入的上一拍時間）
+                                Tj, tobs = T_est, st['ref']['t_obs']
+                                out['judge_updated_ref'] = dict(ver=st['ref']['ver'], t_obs=tobs)              # 每個參考各自帶「位姿、時間」：固定參考用它自己的擷取時間；逐格觀察用該格自己的位姿與時間
                             sh = type('A', (), dict(owner='NAV'))()
                             _, why = FL.handover_request(a['t'], sh, pg, q, a['v_meas'], s, pipe, a['u_last'], a['u_prev'], dict(T_WH=T_est if Tj is None else np.asarray(Tj, float), t_obs=tobs), V_PASS, D, off_static=np.zeros(6), tick_phase=0,
                                                          stamps=dict(image=tobs, state=a['t'], cmd=a['t']), arm_track_err=o.get('track_err') if o['ok'] else None)
@@ -806,8 +815,8 @@ def main():
                     res = {}
             rf = res.get('ref') if isinstance(res, dict) else None
             if rf is not None:                                        # 連續視覺更新的結果：只有 worker 已提交（全部核過）的參考才生效
-                if rf.get('status') not in ('off', 'no_new_obs') or rf.get('committed') is not None:
-                    self.ref_log.append(dict(t=round(t, 3), along=None if along is None else round(along, 4), **{k_: rf.get(k_) for k_ in ('ver', 'status', 'obs_seq', 'obs_age', 'obs_dpos_mm', 'committed', 'step_mm', 'step_rejected', 'from_seqs', 'goal_dist_mm', 'ref_t_obs')}))
+                if rf.get('status') not in ('off', 'no_new_obs') or rf.get('committed') is not None or rf.get('goal_expired'):
+                    self.ref_log.append(dict(t=round(t, 3), along=None if along is None else round(along, 4), **{k_: rf.get(k_) for k_ in ('ver', 'status', 'obs_seq', 'obs_age', 'obs_dpos_mm', 'committed', 'step_mm', 'step_rejected', 'from_seqs', 'goal_dist_mm', 'ref_t_obs', 'goal_expired', 'n_goal_expired')}))
                 if rf.get('committed'):
                     dp = np.array(rf['pg_p0']) - np.array(self.plan['pg']['p0'])
                     self.plan['pg']['p0'] = rf['pg_p0']               # 通過線跟著參考平移（方向與朝向不變）
@@ -847,7 +856,7 @@ def main():
                               *[np.nan if sc is None else sc['margin_after_interval_bound'][k_] for k_ in ('env', 'base', 'self')], np.nan if sc is None else sc.get('n_refine', np.nan),
                               float(self.ref_ver), *([np.nan] * 3 if rf is None else rf['ref_p']), np.nan if rf is None or rf.get('goal_dist_mm') is None else rf['goal_dist_mm']])
             if res.get('judge') is not None:
-                self.sel_log.append(dict(t=round(t, 2), along=round(along, 4), lat_mm=round(lat * 1e3, 2), judge=res['judge']))
+                self.sel_log.append(dict(t=round(t, 2), along=round(along, 4), lat_mm=round(lat * 1e3, 2), judge=res['judge'], updated_ref=res.get('judge_updated_ref')))
             # ---- 結束條件：進線後底盤靜止 2.5 s
             moving = float(np.linalg.norm(v_meas)) > 1e-3 or float(np.abs(self.rel).max()) > 1e-4
             if (self.owner == 'MERGE' or self.stop) and not moving:
