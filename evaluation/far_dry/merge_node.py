@@ -441,7 +441,8 @@ def worker(conn):
                                     if len(P) >= UPD['n_consist'] and spread <= UPD['spread_m']:
                                         Uq, _, Vq = np.linalg.svd(np.sum([h_[4] for h_ in ref['hist']], axis=0))      # r3：鎖定姿態＝近距三格旋轉的弦平均（far_door_2：近距姿態誤差中位 0.12°，沿用的遠處姿態 1.58°）
                                         Rm = Uq @ np.diag([1.0, 1.0, np.linalg.det(Uq @ Vq)]) @ Vq
-                                        dspread = max(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(Rm.T @ h_[4]) - 1) / 2)))) for h_ in ref['hist'])
+                                        HH = [h_[4] for h_ in ref['hist']]                     # 一致性項＝三格兩兩最大角差（Codex 20261117）
+                                        dspread = max(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(HH[i_].T @ HH[j_]) - 1) / 2)))) for i_ in range(len(HH)) for j_ in range(i_ + 1, len(HH)))
                                         ref['goal'] = dict(p=np.median(P, axis=0), R=Rm, seqs=[h_[0] for h_ in ref['hist']], t_obs=float(ob['t_obs']), spread=spread, dang=dspread, dang_vs_fixed=max(h_[3] for h_ in ref['hist']))
                                     tinfo['obs'] = dict(seq=int(ob['seq']), age=round(age, 3), dpos_mm=round(dpos * 1e3, 2), n_hist=len(P), spread_mm=round(spread * 1e3, 2))
                                 else:
