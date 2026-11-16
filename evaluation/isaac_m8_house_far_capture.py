@@ -374,8 +374,14 @@ def main():
     scan_every, pub_every = max(int(round(1.0 / (a.scan_hz * DT))), 1), 2
 
     def ev(what, **kw):
-        events.append(dict(t=round(node.t, 3), what=what, **kw))
-        print(f'[fc] t={node.t:.2f} {what} {kw}', flush=True)
+        """事件時間只在這裡定義一次（kw 內若帶 t 會被改名為 t_detail，不重複）；記錄失敗不得影響呼叫端。"""
+        try:
+            kw = {('t_detail' if k_ == 't' else k_): v_ for k_, v_ in kw.items()}
+            events.append(dict(kw, t=round(node.t, 3), what=what))
+            print(f'[fc] t={node.t:.2f} {what} {kw}', flush=True)
+        except Exception as e_:                                       # noqa: BLE001
+            events.append(dict(t=round(node.t, 3), what=what, record_error=repr(e_)))
+            print(f'[fc] 事件記錄失敗 {what}: {e_!r}', flush=True)
 
     def contacts():
         mx, who = 0.0, None
@@ -454,17 +460,17 @@ def main():
                 why = ('non_finite_state', {})
             if why is not None and latch is None:
                 latch = dict(t=round(t, 3), why=why[0], kind='模擬工程中止（保留現場資料、不再步進物理；不是受控停止）', **why[1])
+                rows.append([t, *q, *s, *np.zeros(9), *np.zeros(9), 0.0 if cn is None else cn, dq_deg, scan_min_log, 0.0, 1.0])   # 中止當步的紀錄列先寫，再記事件
                 ev('latched_sim_engineering_abort', **latch)
                 node.p_state.publish(String(data='latched:' + latch['why']))
-                rows.append([t, *q, *s, *np.zeros(9), *np.zeros(9), 0.0 if cn is None else cn, dq_deg, scan_min_log, 0.0, 1.0])
                 break
             # ---- ROS 收命令
             for _ in range(4):
                 rclpy.spin_once(node, timeout_sec=0.0)
             if node.abort is not None and latch is None:              # 監督節點要求模擬工程中止：沒有核過的停法 ⇒ 不再步進物理
                 latch = dict(t=round(t, 3), why='supervisor_abort', detail=node.abort[:200], kind='模擬工程中止（保留現場資料、不再步進物理；不是受控停止）')
+                rows.append([t, *q, *s, *np.zeros(9), *np.zeros(9), 0.0 if cn is None else cn, dq_deg, scan_min_log, 0.0, 1.0])   # 中止當步的紀錄列先寫，再記事件
                 ev('latched_sim_engineering_abort', **latch)
-                rows.append([t, *q, *s, *np.zeros(9), *np.zeros(9), 0.0 if cn is None else cn, dq_deg, scan_min_log, 0.0, 1.0])
                 break
             u_in = node.cmd if (t - node.cmd_t <= CMD_TIMEOUT_S and node.cmd_t >= 0) else np.zeros(3)
             ua_in = node.acmd if (t - node.acmd_t <= ARM_CMD_TIMEOUT_S and node.acmd_t >= 0) else np.zeros(6)
@@ -591,5 +597,15 @@ if __name__ == '__main__':
     try:
         rc = main()
     finally:
+        # sim_app.close() 會直接結束行程（離開碼 0），後面的 sys.exit(rc) 走不到——m8house_far_capture_1 因此在 partial／工程中止下仍回 0。
+        # 離開碼改寫進檔案，由跑法讀取；檔案不存在＝異常結束。
+        try:
+            with open(os.path.join(a.out, 'exit_code.txt'), 'w') as fh:
+                fh.write(str(int(rc if rc is not None else 1)))
+                fh.flush()
+                os.fsync(fh.fileno())
+        except Exception as e_:                                       # noqa: BLE001
+            print(f'[fc] 離開碼寫檔失敗：{e_!r}', flush=True)
+        print(f'[fc] exit_code {rc}（0 正常；70 模擬工程中止／保護鎖存；71 例外 partial）', flush=True)
         sim_app.close()
     sys.exit(rc)

@@ -82,8 +82,11 @@ if [ "$STATIC_S" = "0" ]; then
     say "/clock 未前進 ⇒ 結束模擬"; kill -TERM "${P:-$SIM}" 2>/dev/null
   fi
 fi
-wait "$SIM"; rc=$?
-say "模擬器結束 rc=$rc"
+wait "$SIM"; prc=$?
+# Isaac 的 sim_app.close() 直接以 0 結束行程；真正的離開碼由執行器寫在 exit_code.txt（不存在＝異常結束 72）
+if [ -f "$DIR/exit_code.txt" ]; then rc=$(cat "$DIR/exit_code.txt"); else rc=72; fi
+[ "$prc" != "0" ] && [ "$rc" = "0" ] && rc="$prc"
+say "模擬器結束 行程碼=$prc 執行器離開碼=$rc（0 正常；70 模擬工程中止／保護鎖存；71 例外 partial；72 無離開碼）"
 grep -aE "^\[fc\] |拒跑|Traceback" "$DIR/sim.log" | tail -30 | cut -c1-600 | tee -a "$DIR/run.log"
 grep -a "\[far\]" "$DIR/merge.log" 2>/dev/null | sed 's/.*\[far\]/[far]/' | cut -c1-400 | tee -a "$DIR/run.log"
 exit "$rc"
