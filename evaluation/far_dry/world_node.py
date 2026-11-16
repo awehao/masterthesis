@@ -122,7 +122,7 @@ class World(Node):
         self.pipe = [np.zeros(9) for _ in range(D_STEPS)]              # 命令到受控對象的 8 步在途管線（同門任務控制器的延遲模型；底盤與手臂都經過）
         self.v_world, self.wz = np.zeros(2), 0.0
         self.meta = dict(boxes=[b[0] for b in self.boxes], lidar_z=self.lidar_z, lidar_xy=self.lidar_xy.tolist(), sources=dict(scan='合成射線投射（已知場景幾何＋關閉門扇；無雜訊）', odom='/cmd_vel 理想積分', clock='本節點', joint_states='一階設定點模型', delay='命令經 8 個物理步（0.08 s）在途管線才作用（底盤與手臂）'))
-        self.timer = self.create_timer(DT, self.step)
+        self.timer = self.create_timer(DT / float(os.environ.get('FAR_WORLD_RTF', '1.0')), self.step)   # FAR_WORLD_RTF（預設 1＝原行為）：牆鐘配速，模擬步長不變
 
     def _cmd(self, m):
         self.cmd, self.cmd_t = np.array([m.linear.x, m.linear.y, m.angular.z]), self.t
@@ -246,7 +246,7 @@ class World(Node):
                 c, s_ = math.cos(self.q[2]), math.sin(self.q[2])
                 Tb = np.eye(4); Tb[:2, :2] = [[c, -s_], [s_, c]]; Tb[:2, 3] = self.q[:2]
                 self.obs_seq += 1
-                ok_ = float(np.linalg.norm(self.q[:2] - self.T_est[:2, 3])) < 1.6      # 合成假設：1.6 m 內才有有效估計（只為了讓「途中才有第一格有效觀察」的接線被走到；不是偵測距離的量測）
+                ok_ = float(np.linalg.norm(self.q[:2] - self.T_est[:2, 3])) < float(os.environ.get('FAR_OBS_RANGE', '1.6'))      # 合成假設（FAR_OBS_RANGE 可調，預設 1.6 不變）：1.6 m 內才有有效估計（只為了讓「途中才有第一格有效觀察」的接線被走到；不是偵測距離的量測）
                 Tp = self.T_est.copy()
                 rng_ = float(np.linalg.norm(self.q[:2] - self.T_est[:2, 3]))
                 bias = os.environ.get('OBS_FAR_BIAS_MM')                # 合成測試：遠距（>0.8 m）的觀察加固定偏差、近距不加 ⇒ 固定參考帶偏差，近距更新應把它拉回（只驗更新入口的閉迴路接線）

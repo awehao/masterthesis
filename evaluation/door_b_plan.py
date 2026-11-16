@@ -187,7 +187,8 @@ class BPlanner:
         for a in A_SEQ:
             b = self.base(float(a), sb)
             best = None
-            for (rho, e, az) in OBS_P:
+            P_ORD = OBS_P if (require_cover or not fam) else sorted(OBS_P, key=lambda x: (abs(x[0] - fam[-1]['par'][0]) / 0.05 + abs(x[1] - fam[-1]['par'][1]) / 10 + abs(x[2] - fam[-1]['par'][2]) / 10))
+            for (rho, e, az) in P_ORD:
                 tgt = self.look_at(b, rho, e, az)
                 for sd in ([seed] if seed is not None else []) + [np.asarray(q_now, float), q_pre]:
                     q, sm = self.solve(b, tgt, sd)
@@ -202,6 +203,8 @@ class BPlanner:
                     if best is None or cost < best[0]:
                         best = (cost, q, (rho, e, az), fr)
                     break
+                if best is not None and not require_cover and fam:
+                    break                                                 # 取像模式：依上一格參數就近排序，第一個可行者即採用（連續性）
             if best is None:
                 if fam:
                     break
@@ -216,11 +219,23 @@ class BPlanner:
         out.update(a_w=a_w, q_pre=q_pre.tolist(), obs=[dict(a=f['a'], q=f['q'].tolist(), par=f['par'], range=f['range'], oblique=f['oblique'], covered=f['covered']) for f in fam])
         # 過渡
         best = None
+        scr = []                                                          # 兩階段：先不做停止前推篩選全部起點，依盲段排序後只對前者做停止前推
         for f in fam:
             prof = self.speed_profile(f['a'], a_w)
             if prof is None:
                 continue
             T, a_of_t = prof
+            r = self._minjerk(f['q'], q_pre, T, f['a'], a_w, sb, v_arm, a_arm, a_body, a_of_t=a_of_t, stop=False)
+            if r is None:
+                continue
+            tc_ = r['t_cov'] if r['t_cov'] is not None else (0.0 if f['covered'] else None)
+            if not require_cover:
+                tc_ = r['t_valid'] if r['t_valid'] is not None else 0.0
+            if tc_ is None:
+                continue
+            scr.append(((T - tc_), f, T, a_of_t))
+        scr.sort(key=lambda x: x[0])
+        for _, f, T, a_of_t in scr:
             r = self._minjerk(f['q'], q_pre, T, f['a'], a_w, sb, v_arm, a_arm, a_body, a_of_t=a_of_t)
             if r is None:
                 continue
@@ -232,6 +247,7 @@ class BPlanner:
             blind = (T - t_cov) + T_READY + 0.05
             if best is None or blind < best[0]:
                 best = (blind, f, T, r, t_cov)
+            break                                                         # 依篩選盲段排序的第一個通過停止前推者
         if best is None:
             out['why'] = 'no_feasible_transition_with_covered_frame'
             return out
@@ -294,7 +310,7 @@ class BPlanner:
             return a0 - (L - d_dec) - (self.v_tr * tt - 0.5 * self.a_dec * tt * tt)
         return t1 + t2, a_of_t
 
-    def _minjerk(self, qa, qb, T, a0, a1, sb, v_arm, a_arm, a_body, n=60, a_of_t=None):
+    def _minjerk(self, qa, qb, T, a0, a1, sb, v_arm, a_arm, a_body, n=60, a_of_t=None, stop=True):
         """篩選用（不是停止證書）：關節空間最小急動＋底盤沿門前線依速度剖面；逐點 σ、淨空、限位、速率／加速度、穩態管線停止前推模型；記最後有效／包絡內影格。"""
         dq = qb - qa
         if float(np.abs(dq).max()) * 1.875 / T > v_arm or float(np.abs(dq).max()) * 5.7735 / T ** 2 > a_arm:
@@ -316,6 +332,8 @@ class BPlanner:
                 t_valid = t
                 if self.covered(fr):
                     t_cov, fr_cov = t, [round(fr[0], 3), round(fr[1], 1)]
+            if not stop:
+                continue
             v_b = (a_of_t(min(t + 1e-3, T)) - a_of_t(t)) / 1e-3 if a_of_t is not None else (a1 - a0) / T
             c, s_ = math.cos(self.yaw), math.sin(self.yaw)
             vw = -self.d * abs(v_b)

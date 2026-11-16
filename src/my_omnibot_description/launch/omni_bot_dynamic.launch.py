@@ -109,6 +109,9 @@ def generate_launch_description():
     # GMPC_TASK=1（預設關＝原行為）：導航 GMPC 改用任務擴充執行檔 gmpc_task_node（繼承封存的 GMPCNode；同節點名、同參數；
     # 沒有 /task/conditions 時與原節點相同）。主線 B 的操作端任務朝向／速度框由同一個導航控制器承接，不另起第二個 GMPC。
     _gmpc_exec = 'gmpc_task_node' if os.environ.get('GMPC_TASK', '0') == '1' else 'gmpc_node'
+    # PLANNER_PLAN_TOPIC（預設空＝原行為）：planner_server 每次 ComputePathToPose 都會自己發 /plan；主線 B 由監督節點向同一 planner_server 要分段路徑
+    # （目前位置→門前線進線點→遠端目標）並自己發串好的整條 /plan 時，把 planner_server 自己的發布改到別的話題，避免 GMPC 收到單段。規劃器、參數、costmap 不變。
+    _planner_plan_topic = os.environ.get('PLANNER_PLAN_TOPIC', '')
     gmpc_cmd_topic = _gmpc_cmd_env if _gmpc_cmd_env else PythonExpression(
         ["'cmd_vel_nav' if '", use_smoother, "' == 'true' else 'cmd_vel'"])
 
@@ -379,7 +382,8 @@ def generate_launch_description():
                         '--frame-id', 'map', '--child-frame-id', 'odom'],
              condition=IfCondition(truth_pose)),
         Node(package='nav2_planner', executable='planner_server', name='planner_server',
-             output='screen', parameters=[configured_nav_params]),
+             output='screen', parameters=[configured_nav_params],
+             remappings=[('plan', _planner_plan_topic)] if _planner_plan_topic else []),
         # lifecycle manager: two variants so the smoother isn't a managed node
         # when it's disabled (otherwise the manager blocks waiting for a node
         # that never appears -> whole nav stack fails to activate).
