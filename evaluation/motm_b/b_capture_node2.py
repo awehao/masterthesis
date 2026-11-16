@@ -33,6 +33,7 @@ AW_CAND = (-0.08, -0.10, -0.12)
 RETR_LEAD, RETR_PERIOD, RETR_TRIGGER = 1.5, 1.0, 0.15
 CHECK_EVERY = 2                                                      # 候選模擬每 2 拍（0.1 s）呼叫一次完整停止核對
 V_CANDS = (0.10, 0.07, 0.05)
+OBS_RATE = 0.8                                                       # 觀察律參考每拍變化上限＝0.8×關節速率上限×拍長
 DEADLINE_MS = 45.0                                                   # 每拍牆鐘期限（原登錄；不隨 RTF 延長）                 # 過渡起點在請求後 0.8 s（模擬）；過渡中每 0.5 s 重算；觀察段在預測 a ≤ 初始 a_t0＋0.10 起請求
 REGION_A_END_MARGIN = 0.25
 ENTER_MARGIN = 0.10
@@ -135,6 +136,14 @@ def worker(conn):
             return fseed, 'fallback_family', par
         return qi, 'look_at', par
 
+    def obs_ref(bp_, fam_, b_pred, prev):
+        """觀察律：注視 IK 參考，再以 OBS_RATE×V_ARM 限制每拍變化（工作程序與候選模擬同式；避免命令夾限與參考跳動）。"""
+        q_look, how, par = look_ref(bp_, fam_, b_pred, prev)
+        if prev is None:
+            return q_look, how, par
+        prev = np.asarray(prev, float)
+        return prev + np.clip(q_look - prev, -OBS_RATE * V_ARM * DT, OBS_RATE * V_ARM * DT), how, par
+
     def twist_at(Pv, t):
         """預測底盤在時刻 t 的本體扭轉（有限差分）與地圖位姿。"""
         k = int(np.clip(np.searchsorted(Pv[:, 0], t), 1, len(Pv) - 1))
@@ -150,7 +159,7 @@ def worker(conn):
         if law['kind'] == 'observe':
             bp_ = law['bp']
             b_pred = np.r_[b_map[:2] + vw * LEAD_S, b_map[2] + wz * LEAD_S]
-            q_des, _, _ = look_ref(bp_, law['fam'], b_pred, seed)
+            q_des, _, _ = obs_ref(bp_, law['fam'], b_pred, seed)
             sp = q_des - off_fn(np.r_[q9_od[:3], q_des]); nseed = q_des
         else:                                                          # 現行設定點五次多項式（與工作程序同式：τ＝t＋在途＋一拍−t0q；替換段到起點才切換）
             cur = law['cur']
@@ -163,6 +172,7 @@ def worker(conn):
         return ua, bool(float(np.abs(ua - ua_raw).max()) > 1e-9), nseed
 
     def simulate(a, Pv, T_mo, Tmo_inv, law0, t_req, t_s, t_w, qp, bp, fam):
+        """Pv 在規劃座標（＝規劃當時 map←odom 的剛體轉換，T_ref）；Tmo_inv＝inv(T_ref) 把它換回里程；停止核對的環境淨空用請求時的當下 T_mo。"""
         """請求時實測狀態（關節、設定點、真管線、放行底盤命令）→ 以現行命令律前推到 t_s → 候選設定點五次多項式（承接 t_s 的設定點、速率、加速度）
         → 逐拍模擬到接手後 0.3 s；每拍核限位、夾限、可見；每 CHECK_EVERY 拍以同一份 b_stopcheck（實際模擬狀態）核 now／next。"""
         q9 = np.asarray(a['q'], float).copy(); s_ = np.asarray(a['s'], float).copy(); pipe = [np.asarray(u, float).copy() for u in a['pipe']]
@@ -174,7 +184,7 @@ def worker(conn):
         T_end = t_w + 0.3
         while t < T_end - 1e-9:
             b_map, ub, vw, wz = twist_at(Pv, t)
-            q9_od = np.r_[(Tmo_inv @ np.r_[b_map[:2], 0.0, 1.0])[:2], b_map[2] - T_mo[2], q9[3:]]
+            q9_od = np.r_[(Tmo_inv @ np.r_[b_map[:2], 0.0, 1.0])[:2], b_map[2] - float(a['T_ref'][2]), q9[3:]]
             s_end = s_ + PHYS * sum(p_[3:] for p_ in pipe)
             if phase == 'pre' and t >= t_s - 1e-9:                    # 切到候選：設定點五次多項式的起點＝此刻在途末端的設定點（t0q＝t_s＋在途時間）、速率＝最後已提交命令、加速度＝其差分
                 phase = 'cand'
@@ -318,7 +328,7 @@ def worker(conn):
                 t0 = time.perf_counter()
                 bp, pl, rg = st['bp_p'], st['pl_p'], st['region_p']
                 fam = sorted(pl['obs'], key=lambda f: f['a'])
-                T_mo = np.asarray(a['T_mo'], float); Tmo_inv = np.linalg.inv(_T3(T_mo))
+                T_mo = np.asarray(a['T_mo'], float); Tmo_inv = np.linalg.inv(_T3(np.asarray(a['T_ref'], float)))
                 t_req, t_s = float(a['t_req']), float(a['t_s'])
                 law0 = a['law']                                        # {'kind':'observe','seed':..} 或 {'kind':'quintic','cur':{C,t_s,T},'next':{..}|None}
                 cands, chosen = [], None
@@ -374,7 +384,7 @@ def worker(conn):
                 ua = np.zeros(6)
                 if st['T_est'] is not None and st['bp'] is not None and mode != 'NAV':
                     bp, pl = st['bp'], st['plan']
-                    qm = to_map(q, T_mo)
+                    qm = to_map(q, np.asarray(a.get('T_ref', T_mo), float))   # 手臂任務幾何：規劃座標（規劃當時的 map←odom，固定）；停止核對的環境仍用當下 T_mo
                     am, sbm = bp.to_door(qm[:2])
                     vb = np.asarray(a.get('v_world', [0.0, 0.0]), float)
                     b_pred = np.r_[qm[:2] + vb * LEAD_S, qm[2] + float(a.get('wz', 0.0)) * LEAD_S]   # 預測底盤：實測位姿＋實測平移與偏航速度（含離門方向）
@@ -400,7 +410,7 @@ def worker(conn):
                         info = dict(u=round(min(u, 1.0), 3), T=round(pr['T'], 3), a_o=round(pr['a_o'], 3))
                         out['prep_done'] = bool(u >= 1.0 and float(np.abs(q[3:] - pr['q1']).max()) < 0.02)
                     elif mode in ('OBSERVE', 'TRANSITION', 'HOLD') and (qtr is None or t < qtr['t_s'] - 1e-9):
-                        q_des, how, par = look_ref(bp, fam, b_pred, st['q_des_prev'])
+                        q_des, how, par = obs_ref(bp, fam, b_pred, st['q_des_prev'])
                         info = dict(ik=how, par=[round(x, 3) for x in par])
                     else:
                         sp_t, _, _ = qeval(qtr['C'], tau, qtr['T'])
@@ -485,7 +495,7 @@ def main():
             self.req = None; self.t_rp_try = -9.0; self.plan_pending = False
             self.goal_xy = None; self.t_goal_pub = -9.0; self.t_goal_set = 0.0
             self.qtr = None; self.qtr_next = None; self.t_retr = -9.0; self.n_retr_fail = 0; self.v_active = V_CANDS[0]; self.ua_hist = [[0.0] * 6, [0.0] * 6]; self.n_deadline = 0
-            self.still_t = None; self.n_late = 0; self.n_fwd = 0; self.b_prev = None; self.stale = []
+            self.still_t = None; self.n_late = 0; self.n_fwd = 0; self.b_prev = None; self.stale = []; self.odom_rates = (9.0, 9.0, 9.0); self.od_prev = None; self.last_cert = None
             self.create_timer(DT, self.tick)
 
         def now(self):
@@ -579,6 +589,8 @@ def main():
             self.p_task.publish(String(data=json.dumps(d_)))
 
         def box_for(self, v_along, v_norm, yaw_now, d_world):
+            if float(v_along) <= 0.0 and float(v_norm) <= 0.0:
+                return [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]              # 停止：三軸全零（e14：角速度未限使底盤持續慢轉、停穩判定不成立）
             c, s_ = math.cos(-yaw_now), math.sin(-yaw_now)
             db = np.array([c * d_world[0] - s_ * d_world[1], s_ * d_world[0] + c * d_world[1]])
             i = int(np.argmax(np.abs(db)))
@@ -605,6 +617,15 @@ def main():
                 self.p_abort.publish(String(data=why))
                 self.event('engineering_abort', why=why, **kw)
 
+        def ref_to_map(self, xy):
+            T_ = _T3(self.T_mo_now) @ np.linalg.inv(_T3(self.T_ref_now))
+            return (T_ @ np.r_[xy[0], xy[1], 0.0, 1.0])[:2].tolist()
+
+        def map_to_ref(self, x, y, th):
+            T_ = _T3(self.T_ref_now) @ np.linalg.inv(_T3(self.T_mo_now))
+            p_ = T_ @ np.r_[x, y, 0.0, 1.0]
+            return float(p_[0]), float(p_[1]), float(th + self.T_ref_now[2] - self.T_mo_now[2])
+
         def base_prediction(self, v_tr, T_max=7.5):
             """底盤預測（地圖；自現在起每 0.05 s，絕對模擬時間）：GMPC 1 s 預測（同座標、0.3 s 內）→ 之後沿走廊依候選速度剖面外推（側向誤差 0.5 s 指數收斂、朝向以 0.3 rad/s 轉到任務朝向）。只供搜尋候選，執行另以逐拍核對。"""
             rg, pl = self.region, self.plan
@@ -612,8 +633,8 @@ def main():
             nrm = np.array([-u[1], u[0]])
             pts = []
             if self.pred is not None and self.now() - self.pred['t'] <= 0.3:
-                for k, P in enumerate(self.pred['P']):
-                    pts.append((self.pred['t'] + k * self.pred['dt'], P[0], P[1], P[2]))
+                for k, P in enumerate(self.pred['P']):                    # GMPC 預測在 map（當下定位）→ 規劃座標
+                    pts.append((self.pred['t'] + k * self.pred['dt'], *self.map_to_ref(P[0], P[1], P[2])))
             else:
                 b = self.cur_map
                 pts.append((self.now(), b[0], b[1], b[2]))
@@ -654,8 +675,11 @@ def main():
             if T_mo is None or b_od is None:
                 return
             q = np.r_[b_od, self.truth['q'][3:9]]
-            c, s_ = math.cos(T_mo[2]), math.sin(T_mo[2])
-            self.cur_map = np.r_[c * b_od[0] - s_ * b_od[1] + T_mo[0], s_ * b_od[0] + c * b_od[1] + T_mo[1], b_od[2] + T_mo[2]]
+            self.T_mo_now = T_mo
+            T_ref = self.T_ref if getattr(self, 'T_ref', None) is not None else T_mo   # 手臂任務幾何的座標：採用規劃後固定為該規劃請求時的 map←odom（里程的剛體轉換；不隨 AMCL 修正跳動）
+            c, s_ = math.cos(T_ref[2]), math.sin(T_ref[2])
+            self.cur_map = np.r_[c * b_od[0] - s_ * b_od[1] + T_ref[0], s_ * b_od[0] + c * b_od[1] + T_ref[1], b_od[2] + T_ref[2]]
+            self.T_ref_now = np.asarray(T_ref, float)
             if self.mode == 'INIT':
                 tag, pay = self.ask('prior', {}, 5.0)
                 if tag != 'prior':
@@ -674,6 +698,13 @@ def main():
             else:
                 v_w, wz = np.zeros(2), 0.0
             self.b_prev = (t, self.cur_map.copy()); self.v_w_last = v_w
+            qa_ = np.asarray(self.truth['q'][3:9], float); tt_ = float(self.truth['t'])
+            if getattr(self, 'od_prev', None) is not None and tt_ > self.od_prev[0] + 1e-6:
+                dt_ = tt_ - self.od_prev[0]
+                self.odom_rates = (float(np.linalg.norm(b_od[:2] - self.od_prev[1][:2])) / max(t - self.od_prev[3], 1e-6), float(math.atan2(math.sin(b_od[2] - self.od_prev[1][2]), math.cos(b_od[2] - self.od_prev[1][2]))) / max(t - self.od_prev[3], 1e-6),
+                                   float(np.abs(qa_ - self.od_prev[2]).max()) / dt_)
+            if getattr(self, 'od_prev', None) is None or tt_ > self.od_prev[0] + 1e-6:
+                self.od_prev = (tt_, b_od.copy(), qa_, t)
             # ---- 規劃程序：可接任務狀態集合（走廊）
             src_ = 'estimate' if self.T_est is not None else 'prior'
             if self.req is None and self.mode in ('NAV', 'PREP') and (self.plan_pending or (self.plan is None and t - self.t_rp_try >= 1.0)) and (self.plan is None or src_ == 'estimate'):
@@ -681,8 +712,10 @@ def main():
                 if T_e is None:                                       # 估計未到：以地圖先驗（場景登錄的門資產名目位姿）給暫定走廊，讓導航提早收斂；估計到了再更新
                     T_e = (np.linalg.inv(_T3(T_mo)) @ np.asarray(self.prior['T_prior'], float)).tolist()
                 self.plan_pending = False; self.t_rp_try = t; self.ver += 1
-                self.req = dict(kind='region_plan', ver=self.ver, t=t, w=time.perf_counter(), src=src_)
-                pk.send(('region_plan', dict(ver=self.ver, q_arm=q[3:].tolist(), T_mo=T_mo.tolist(), T_est=T_e, robot_xy=self.cur_map[:2].tolist())))
+                self.req = dict(kind='region_plan', ver=self.ver, t=t, w=time.perf_counter(), src=src_, T_mo=T_mo.copy())
+                c0, s0 = math.cos(T_mo[2]), math.sin(T_mo[2])
+                rxy = [c0 * b_od[0] - s0 * b_od[1] + T_mo[0], s0 * b_od[0] + c0 * b_od[1] + T_mo[1]]
+                pk.send(('region_plan', dict(ver=self.ver, q_arm=q[3:].tolist(), T_mo=T_mo.tolist(), T_est=T_e, robot_xy=rxy)))
             if self.req is not None and pk.poll(0):
                 tag, v, pay = pk.recv()
                 rq, self.req = self.req, None
@@ -697,7 +730,7 @@ def main():
                         tag2, p2 = self.ask('adopt', dict(plan=pay['plan'], T_Hm=pay['T_Hm'], d=pay['d'], n=pay['n'], yaw=pay['yaw'], T_est=pay['T_est']), 5.0)
                         if tag2 == 'adopt':
                             self.plan = dict(pay['plan'], yaw=pay['yaw'], d=pay['d'], n=pay['n']); self.region = pay['region']; self.plan_ver += 1
-                            self.h_xy = np.asarray(pay['T_Hm'], float)[:2, 3]; self.plan_src = rq.get('src')
+                            self.h_xy = np.asarray(pay['T_Hm'], float)[:2, 3]; self.plan_src = rq.get('src'); self.T_ref = np.asarray(rq['T_mo'], float)
                             if rq.get('src') == 'estimate' and self.mode == 'NAV':
                                 self.mode = 'PREP'; self.event('mode', mode='PREP', plan_ver=self.plan_ver)
                             else:
@@ -720,7 +753,7 @@ def main():
                     v_al, v_n = self.v_profile(a_m), 0.05
                 else:
                     v_al, v_n = V_APPROACH, V_APPROACH
-                reg = dict(id='b%d' % self.plan_ver, line=rg['line'], half_width=rg['half_width'], extend=0.40, enter_by=rg['enter_by'])
+                reg = dict(id='b%d' % self.plan_ver, line=[self.ref_to_map(p_) for p_ in rg['line']], half_width=rg['half_width'], extend=0.40, enter_by=rg['enter_by'])   # 走廊在規劃座標 → 以當下 map←odom 交給導航
                 self.pub_task(pl['yaw'], self.box_for(v_al, v_n, float(self.cur_map[2]), np.array(pl['d'])), region=reg)
             # ---- 線上過渡重算請求（自請求時實測狀態；候選速度與接手點）
             if self.qtr_next is not None and t >= self.qtr_next['t_s'] - 1e-9:
@@ -738,39 +771,48 @@ def main():
                     self.req = dict(kind='retr', ver=self.ver, t=t, w=time.perf_counter(), t_s=t_s)
                     law = dict(kind='observe', seed=(self.ticks[-1].get('q_des') if self.ticks and self.ticks[-1].get('q_des') else q[3:].tolist())) if self.qtr is None else \
                         dict(kind='quintic', cur=self.qtr, next=self.qtr_next)
-                    pk.send(('retr', dict(ver=self.ver, t_req=t, t_s=t_s, q=q.tolist(), s=self.truth['s'].tolist(), pipe=self.truth['pipe'].tolist(), T_mo=T_mo.tolist(),
+                    pk.send(('retr', dict(ver=self.ver, t_req=t, t_s=t_s, q=q.tolist(), s=self.truth['s'].tolist(), pipe=self.truth['pipe'].tolist(), T_mo=T_mo.tolist(), T_ref=self.T_ref_now.tolist(),
                                           ua_last=self.ua_hist[0], ua_prev=self.ua_hist[1], law=law, base_preds=preds)))
             # ---- 手臂拍
             mode_w = self.mode if self.mode in ('PREP', 'OBSERVE', 'TRANSITION', 'HOLD') else 'NAV'
             w0 = time.perf_counter()
             tag, out_ = self.ask('tick', dict(t=t, mode=mode_w, q=q.tolist(), pipe=self.truth['pipe'].tolist(), rel=self.rel.tolist(), s=self.truth['s'].tolist(), s_end=self.truth['s_end'].tolist(),
-                                              T_mo=T_mo.tolist(), v_world=v_w.tolist(), wz=wz), 0.9 * DT / max(float(os.environ.get('B_RTF', '0.4')), 1e-3))
+                                              T_mo=T_mo.tolist(), T_ref=self.T_ref_now.tolist(), v_world=v_w.tolist(), wz=wz), DEADLINE_MS / 1e3)   # 等待截止＝原登錄 45 ms 牆鐘（不隨 RTF）；到期不提交、遲到結果丟棄
             rec = dict(t=round(t, 3), mode=self.mode, wall_ms=round((time.perf_counter() - w0) * 1e3, 1), tag=tag, inside=inside, rs=None if self.rs is None else {k: self.rs.get(k) for k in ('s', 'lat', 'phase')})
             if tag != 'tick':
                 self.n_late += 1
                 rec['why'] = 'late_or_error' if tag == 'late' else str(out_)[:500]
                 self.ticks.append(rec)
                 if self.mode in ('PREP', 'OBSERVE', 'TRANSITION', 'HOLD') and self.stopped is None:
-                    if tag == 'late':                                   # 本拍沒有結果：不提交，走上一拍已核的 next 停法（受控停止）
-                        self.stop_all('tick_late', detail=rec['why'])
+                    cert = self.cert_for_zero(t)
+                    rec['cert'] = cert
+                    if tag == 'late' and cert['ok']:                    # 本拍沒有結果：不提交；上一拍證書對應的已提交命令與管線成立 ⇒ 送零即該證書的停法（受控停止）
+                        self.stop_all('tick_deadline_miss', detail=rec['why'], cert=cert)
                     else:
-                        self.abort('tick_' + tag, detail=rec['why'])
+                        self.abort('tick_' + tag, detail=rec['why'], cert=cert)
                 else:
                     self.p_arm.publish(Float64MultiArray(data=[0.0] * 6))
                 return
             rec.update({k: out_.get(k) for k in ('a', 'sb', 'a_pred', 'disp', 'stop', 'info', 'ua', 'n_clip', 'vis_geom', 'prep_done', 'in_transition', 'reach_pre', 'q_des', 'sp_t', 'ms_law')})
             self.ticks.append(rec)
             disp = out_['disp']
-            if rec['wall_ms'] > DEADLINE_MS and self.stopped is None and self.mode in ('PREP', 'OBSERVE', 'TRANSITION', 'HOLD'):
-                self.n_deadline += 1                                    # 原登錄牆鐘期限（不隨 RTF 延長）：晚到 ⇒ 不提交本拍候選，走上一拍已核的 next 停法
-                self.stop_all('tick_deadline_miss', wall_ms=rec['wall_ms'], deadline_ms=DEADLINE_MS)
             if self.stopped is not None:
                 self.p_arm.publish(Float64MultiArray(data=[0.0] * 6))
             elif disp in ('commit', 'no_estimate'):
                 ua_pub = [float(x) for x in out_['ua']] if disp == 'commit' else [0.0] * 6
                 self.p_arm.publish(Float64MultiArray(data=ua_pub)); self.ua_hist = [ua_pub, self.ua_hist[0]]
+                st_ = out_.get('stop') or {}
+                self.last_cert = dict(t=t, disp=disp, ua=ua_pub, now_ok=st_.get('now'), next_ok=st_.get('next'))
             elif disp == 'stop_now':
                 self.stop_all('stop_check_next_failed', stop=out_.get('stop'))
+            elif (out_.get('stop') or {}).get('why'):                  # 本拍核對未完成（掃掠逾時等）＝沒有證書，不是驗證不過：不提交，引用上一拍證書（同逾時處置）
+                cert = self.cert_for_zero(t)
+                rec['cert'] = cert
+                if cert['ok']:
+                    self.stop_all('stop_check_unverified', why=(out_.get('stop') or {}).get('why'), cert=cert)
+                else:
+                    self.abort('stop_check_unverified_no_cert', why=(out_.get('stop') or {}).get('why'), cert=cert)
+                    return
             else:
                 self.abort('stop_check_now_failed', stop=out_.get('stop'))
                 return
@@ -787,7 +829,9 @@ def main():
                 if a_now is not None and a_now <= self.qtr['aw'] + 0.005:   # 手臂到位且底盤到接手點才進 HOLD（手臂先到就保持預抓位、底盤照剖面續走）
                     self.mode = 'HOLD'; self.event('mode', mode='HOLD', a=a_now, sb=out_.get('sb'), inside=inside, aw=self.qtr['aw'], arm_early_s=round(t - self.arm_at_pre_t, 3))
             if self.mode == 'HOLD' and not self.done_sent:
-                still = float(np.linalg.norm(v_w)) < STILL['base'] and abs(wz) < STILL['yaw'] and float(np.abs(self.truth['pipe']).max()) < 1e-9 and float(np.abs(np.asarray(out_['ua'])).max()) < 1e-3
+                # 停穩：里程座標（TF odom→base）差分速度＋同步關節讀值（/far/truth）速率，套既有門檻，連續 0.3 s；另須管線與命令歸零
+                vo, wo, ar = self.odom_rates
+                still = vo < STILL['base'] and abs(wo) < STILL['yaw'] and ar < STILL['arm'] and float(np.abs(self.truth['pipe']).max()) < 1e-9 and float(np.abs(np.asarray(out_['ua'])).max()) < 1e-9
                 if still:
                     self.still_t = self.still_t if self.still_t is not None else t
                     if t - self.still_t >= STILL['hold_s']:
@@ -795,6 +839,21 @@ def main():
                         self.event('done_normal_end', a=out_.get('a'), sb=out_.get('sb'), inside=inside, region_sb=[self.region['sb_c'] - self.region['half_width'], self.region['sb_c'] + self.region['half_width']])
                 else:
                     self.still_t = None
+
+        def cert_for_zero(self, t):
+            """本拍逾時送零時引用的證書：上一拍（t−DT）已提交命令且其 next 停法通過，並且執行器真管線最後 NPH 筆的手臂命令正是該已提交命令 ⇒ next 證書成立；
+            上一拍送零且 now 通過 ⇒ now 證書成立；否則不成立（工程中止）。"""
+            lc = getattr(self, 'last_cert', None)
+            if lc is None or abs(lc['t'] - (t - DT)) > 1e-6:
+                return dict(ok=False, why='no_previous_tick_certificate')
+            P = np.asarray(self.truth['pipe'], float)[:, 3:]
+            ua = np.asarray(lc['ua'], float)
+            in_pipe = bool(np.all(np.abs(P[-NPH:] - ua) <= 1e-9))
+            if lc['disp'] == 'commit' and lc['next_ok'] and in_pipe:
+                return dict(ok=True, kind='prev_next', t_prev=lc['t'], ua_in_pipe=in_pipe)
+            if float(np.abs(ua).max()) == 0.0 and lc['now_ok'] and in_pipe:
+                return dict(ok=True, kind='prev_now_zero', t_prev=lc['t'], ua_in_pipe=in_pipe)
+            return dict(ok=False, why='certificate_mismatch', disp=lc['disp'], next_ok=lc['next_ok'], now_ok=lc['now_ok'], ua_in_pipe=in_pipe)
 
         def on_retr(self, rq, tag, pay, t):
             rec = dict(t_req=round(rq['t'], 3), t_s=round(rq['t_s'], 3), t_done=round(t, 3), wall_s=round(time.perf_counter() - rq['w'], 3), tag=tag, mode=self.mode)
