@@ -347,6 +347,10 @@ rep("""        o = gc.step(t, q.copy(), door_q(), finger_meas=(float(jp[f1]), fl
             node.ca.propose(node.n, gc.u_last[:3])
             mt_ = Twist(); mt_.linear.x, mt_.linear.y, mt_.angular.z = (float(x_) for x_ in gc.u_last[:3]); node.p_grasp.publish(mt_)
         ros_step(q, jp, gc.s, gc.pipe, 'grasp')
+        if node.abort is not None:                                   # 全域中止貫穿交接後：收完回呼、下一次物理步之前檢查；觸發即保存資料、不再步進
+            box['aborted'] = dict(t=round(t, 3), controller=None, kind='模擬工程中止（監督節點 /far/abort；不再步進，不是受控停止）', detail=node.abort[:200])
+            log_event('supervisor_abort_engineering_abort', detail=node.abort[:200])
+            break
         ckc = node.ca.check(node.n)                                  # 本步有提案生效：放行須與控制器核過的命令一致；缺失／不一致 ⇒ 在它生效前拒絕＝模擬工程中止（控制器的停止證書以它的管線為前提，管線已不成立）
         if not ckc['ok']:
             chain['stop'] = dict(t=round(t, 3), phase='grasp', **ckc)
@@ -371,6 +375,10 @@ rep("""            out = ex.step(tr, q, phm, fn_, w_ext=w_ext_)
                 node.ca.propose(node.n, ex.u_last[:3])
                 mt_ = Twist(); mt_.linear.x, mt_.linear.y, mt_.angular.z = (float(x_) for x_ in ex.u_last[:3]); node.p_grasp.publish(mt_)
             ros_step(q, jp, ex.s, ex.pipe, 'open')
+            if node.abort is not None:                                   # 全域中止貫穿交接後：收完回呼、下一次物理步之前檢查；觸發即保存資料、不再步進
+                box['aborted'] = dict(t=round(t, 3), controller=None, kind='模擬工程中止（監督節點 /far/abort；不再步進，不是受控停止）', detail=node.abort[:200])
+                log_event('supervisor_abort_engineering_abort', detail=node.abort[:200])
+                break
             ckc = node.ca.check(node.n)
             if not ckc['ok']:
                 chain['stop'] = dict(t=round(t, 3), phase='open', **ckc)
@@ -387,7 +395,7 @@ rep("""            diag_B()
             node.n += 1
             t += DT
 """)
-rep("    json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)\n    print(f\"[motm] 完成 result=", "    res['safety_chain'] = dict(node.ca.report(), stop=chain['stop'], note='抓持／開門段底盤提案經 選擇器→平滑器→Shield→GUARD；每筆提案在生效步核對放行與提案一致才執行；缺失／不一致 ⇒ 生效前模擬工程中止')\n    res['lock_budget_max'] = gc.lock_budget_max\n    try:\n        node.p_state.publish(String(data='done')); rclpy.spin_once(node, timeout_sec=0.0)\n    except Exception:                                              # noqa: BLE001\n        pass\n    json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)\n    print(f\"[motm] 完成 result=")
+rep("    json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)\n    print(f\"[motm] 完成 result=", "    res['safety_chain'] = dict(node.ca.report(), stop=chain['stop'], note='抓持／開門段底盤提案經 選擇器→平滑器→Shield→GUARD；每筆提案在生效步核對放行與提案一致才執行；缺失／不一致 ⇒ 生效前模擬工程中止')\n    res['lock_budget_max'] = gc.lock_budget_max\n    try:\n        np.savez_compressed(os.path.join(a.out, 'chain_stream.npz'), prop_n=np.array([p_['n'] for p_ in node.ca.props]), prop_u=np.array([p_['u'] for p_ in node.ca.props]), prop_conf=np.array([-1 if p_['n_conf'] is None else p_['n_conf'] for p_ in node.ca.props]), rel_n=np.array([r_[0] for r_ in node.ca.releases]), rel_v=np.array([r_[1] for r_ in node.ca.releases]))\n    except Exception as e_:                                        # noqa: BLE001\n        print('[motm] chain_stream 存檔失敗', repr(e_), flush=True)\n    try:\n        node.p_state.publish(String(data='done')); rclpy.spin_once(node, timeout_sec=0.0)\n    except Exception:                                              # noqa: BLE001\n        pass\n    json.dump(clean(res), open(os.path.join(a.out, 'result.json'), 'w'), ensure_ascii=False, indent=1)\n    print(f\"[motm] 完成 result=")
 # ---- 離開碼寫檔（sim_app.close() 會以 0 結束行程）
 rep("    sim_app.close()\n    sys.exit(rc)", "    try:\n        with open(os.path.join(a.out, 'exit_code.txt'), 'w') as fh:\n            fh.write(str(int(rc)))\n            fh.flush(); os.fsync(fh.fileno())\n    except Exception:                                              # noqa: BLE001\n        pass\n    print(f'[motm] exit_code {rc}', flush=True)\n    sim_app.close()\n    sys.exit(rc)")
 hdr = '"""遠距整合執行器（Codex 20261116 A1／A2(b)／A3）：isaac_m8_house_door_motm.py 的複本，前面接遠距前段。\n  遠距前段：本行程只提供感測與受控對象（ROS：/clock、/odom_raw、/scan_raw、/joint_states、/far/truth、/far/handle_obs；收 /cmd_vel、/far/arm_cmd），原導航鏈與監督節點（merge_node.py fullho）在外。\n  交接：監督節點交接判定通過發 /far/handover（鎖定參考與通過線）；本行程在下一個物理步邊界建立 MovingGraspCtrl r14（鎖定任務參考模式），設定點／真管線／上一命令／偏置原樣承接。\n  交接後：MovingGraspCtrl → BindGate → 理想綁定 → DoorOpenExec（同門旁）；底盤提案發 /cmd_vel_grasp 經 選擇器→平滑器→Shield→GUARD，放行值照控制器生效時刻套用（far_chain_align）。\n  自載入起 no_passive_arm_friction（後端讀回）。以下為原檔說明。\n'

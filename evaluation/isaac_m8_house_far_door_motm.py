@@ -997,6 +997,10 @@ def main():
             node.ca.propose(node.n, gc.u_last[:3])
             mt_ = Twist(); mt_.linear.x, mt_.linear.y, mt_.angular.z = (float(x_) for x_ in gc.u_last[:3]); node.p_grasp.publish(mt_)
         ros_step(q, jp, gc.s, gc.pipe, 'grasp')
+        if node.abort is not None:                                   # 全域中止貫穿交接後：收完回呼、下一次物理步之前檢查；觸發即保存資料、不再步進
+            box['aborted'] = dict(t=round(t, 3), controller=None, kind='模擬工程中止（監督節點 /far/abort；不再步進，不是受控停止）', detail=node.abort[:200])
+            log_event('supervisor_abort_engineering_abort', detail=node.abort[:200])
+            break
         ckc = node.ca.check(node.n)                                  # 本步有提案生效：放行須與控制器核過的命令一致；缺失／不一致 ⇒ 在它生效前拒絕＝模擬工程中止（控制器的停止證書以它的管線為前提，管線已不成立）
         if not ckc['ok']:
             chain['stop'] = dict(t=round(t, 3), phase='grasp', **ckc)
@@ -1138,6 +1142,10 @@ def main():
                 node.ca.propose(node.n, ex.u_last[:3])
                 mt_ = Twist(); mt_.linear.x, mt_.linear.y, mt_.angular.z = (float(x_) for x_ in ex.u_last[:3]); node.p_grasp.publish(mt_)
             ros_step(q, jp, ex.s, ex.pipe, 'open')
+            if node.abort is not None:                                   # 全域中止貫穿交接後：收完回呼、下一次物理步之前檢查；觸發即保存資料、不再步進
+                box['aborted'] = dict(t=round(t, 3), controller=None, kind='模擬工程中止（監督節點 /far/abort；不再步進，不是受控停止）', detail=node.abort[:200])
+                log_event('supervisor_abort_engineering_abort', detail=node.abort[:200])
+                break
             ckc = node.ca.check(node.n)
             if not ckc['ok']:
                 chain['stop'] = dict(t=round(t, 3), phase='open', **ckc)
@@ -1262,6 +1270,10 @@ def main():
                         phases=np.array(PH), ts=np.array(ts), ts_cols=np.array(['t', 'wall', 'ctrl', 'phase', 'base_speed', 'door_q', 'tcp_err_grasp', 'sigma', 'phi_ref']))
     res['safety_chain'] = dict(node.ca.report(), stop=chain['stop'], note='抓持／開門段底盤提案經 選擇器→平滑器→Shield→GUARD；每筆提案在生效步核對放行與提案一致才執行；缺失／不一致 ⇒ 生效前模擬工程中止')
     res['lock_budget_max'] = gc.lock_budget_max
+    try:
+        np.savez_compressed(os.path.join(a.out, 'chain_stream.npz'), prop_n=np.array([p_['n'] for p_ in node.ca.props]), prop_u=np.array([p_['u'] for p_ in node.ca.props]), prop_conf=np.array([-1 if p_['n_conf'] is None else p_['n_conf'] for p_ in node.ca.props]), rel_n=np.array([r_[0] for r_ in node.ca.releases]), rel_v=np.array([r_[1] for r_ in node.ca.releases]))
+    except Exception as e_:                                        # noqa: BLE001
+        print('[motm] chain_stream 存檔失敗', repr(e_), flush=True)
     try:
         node.p_state.publish(String(data='done')); rclpy.spin_once(node, timeout_sec=0.0)
     except Exception:                                              # noqa: BLE001
