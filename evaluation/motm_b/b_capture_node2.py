@@ -784,12 +784,7 @@ def main():
                 rec['why'] = 'late_or_error' if tag == 'late' else str(out_)[:500]
                 self.ticks.append(rec)
                 if self.mode in ('PREP', 'OBSERVE', 'TRANSITION', 'HOLD') and self.stopped is None:
-                    cert = self.cert_for_zero(t)
-                    rec['cert'] = cert
-                    if tag == 'late' and cert['ok']:                    # 本拍沒有結果：不提交；上一拍證書對應的已提交命令與管線成立 ⇒ 送零即該證書的停法（受控停止）
-                        self.stop_all('tick_deadline_miss', detail=rec['why'], cert=cert)
-                    else:
-                        self.abort('tick_' + tag, detail=rec['why'], cert=cert)
+                    self.abort('tick_' + tag, detail=rec['why'])        # 本拍沒有結果（45 ms 逾時或錯誤）：不提交、遲到結果丟棄；本趟一律工程中止（Codex 20261117_060745：不引用歷史證書宣稱受控停止）
                 else:
                     self.p_arm.publish(Float64MultiArray(data=[0.0] * 6))
                 return
@@ -805,14 +800,9 @@ def main():
                 self.last_cert = dict(t=t, disp=disp, ua=ua_pub, now_ok=st_.get('now'), next_ok=st_.get('next'))
             elif disp == 'stop_now':
                 self.stop_all('stop_check_next_failed', stop=out_.get('stop'))
-            elif (out_.get('stop') or {}).get('why'):                  # 本拍核對未完成（掃掠逾時等）＝沒有證書，不是驗證不過：不提交，引用上一拍證書（同逾時處置）
-                cert = self.cert_for_zero(t)
-                rec['cert'] = cert
-                if cert['ok']:
-                    self.stop_all('stop_check_unverified', why=(out_.get('stop') or {}).get('why'), cert=cert)
-                else:
-                    self.abort('stop_check_unverified_no_cert', why=(out_.get('stop') or {}).get('why'), cert=cert)
-                    return
+            elif (out_.get('stop') or {}).get('why'):                  # 本拍核對未完成（掃掠逾時等）＝沒有證書：不提交；本趟一律工程中止（同逾時）
+                self.abort('stop_check_unverified', detail=(out_.get('stop') or {}).get('why'))
+                return
             else:
                 self.abort('stop_check_now_failed', stop=out_.get('stop'))
                 return
