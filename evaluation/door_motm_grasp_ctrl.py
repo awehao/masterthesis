@@ -407,8 +407,8 @@ class MovingGraspCtrl:
             Q, vtraj, k_dec = self._stop_traj(q, u, e, j0, u_from)
             if vtraj is not None:
                 return dict(tag=tag, extra=e, traj=vtraj, k_decel=k_dec)
-            if tag == 'stop_now' and e == 0:
-                self.stop_end_s = float((np.asarray(Q[-1][:2]) - self.b_origin[:2]) @ self.d)   # r2：現在停的停止終點沿 d
+            if (tag == 'stop_now' and e == 0) or (tag == 'candidate' and e == 1 and getattr(self, 'tail_cert_mode', False)):
+                self.stop_end_s = float((np.asarray(Q[-1][:2]) - self.b_origin[:2]) @ self.d)   # r2：現在停的停止終點沿 d；尾段證書模式＝本拍候選 e＝1（與計算池版本一致）
             idx = list(range(0, len(Q), self.sweep_stride)) + [len(Q) - 1]
             for i in idx:
                 c = self.clear(Q[i], phi, exempt)

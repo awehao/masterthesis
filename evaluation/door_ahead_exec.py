@@ -138,7 +138,9 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                     mism = max(max(float(np.abs(rec[j][0] - seg[j]['arm_target']).max()), float(np.abs(rec[j][1] - seg[j]['base_twist']).max())) for j in range(nph))
                     if mism <= 1e-9:
                         tail, tail_src = [(a.copy(), b.copy()) for a, b in rec[nph:]], 'candidate_extra1'
-                if tail is None and ctrl.abort is None:               # 停止模式（或候選尾段不一致）：在名目段結束處另做停止模擬
+                if tail is None and getattr(ctrl, 'tail_cert_mode', False):
+                    tail_src = 'none_cert_mode'                       # 尾段證書模式（Codex 20261117_023209）：不補生未經完整淨空掃掠的 e＝0 尾段；沒有合格新證書 ⇒ 不提交、執行器沿用上一份已核尾段
+                elif tail is None and ctrl.abort is None:             # 停止模式（或候選尾段不一致）：在名目段結束處另做停止模擬
                     rt = {0: []}
                     ctrl._rec_tail = rt
                     try:
