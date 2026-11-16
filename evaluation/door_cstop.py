@@ -151,6 +151,7 @@ class CStop:
         zeroed = False
         bh_steps = 0
         X, quiet = [np.r_[q, self.ref(sigma)[9]]], 0
+        rec = [] if st.get('rec') else None                          # 非阻塞執行（11/17）：逐物理步輸出（設定點、底盤命令）＝執行器的停止尾段；只記錄，判定不變
         self._cl = [0.0, 0.0]
         self._tr = []                                                # 逐拍（拍、g、預測閉鏈位置偏差 mm、手臂命令最大值）：診斷用
         for n in range(max_ticks):
@@ -172,6 +173,8 @@ class CStop:
                 pipe.append(cmd)
                 ua = pipe.pop(0)
                 q, s = self.S.plant_phys_step(q, s, ua, self.cfg, 1)
+                if rec is not None:
+                    rec.append((s.copy(), np.asarray(ua[:3], float).copy()))
             u_prev = u
             X.append(np.r_[q, self.ref(sigma)[9]])
             if n >= hold:                                            # 閉鏈偏差只計停法段（候選段由候選自己的閉鏈驗收負責）
@@ -188,7 +191,7 @@ class CStop:
                      and abs(q[2] - q_a[2]) / DT < SS['yaw_rps'] and abs(float(X[-1][9] - X[-2][9])) / DT < SS['door_rps'])
             quiet = quiet + 1 if still else 0
             if quiet >= need:
-                return dict(ok=True, why=None, n_ticks=n + 1, X=np.array(X))   # 全部拍末樣本都送淨空核對（不做近似去重）
+                return dict(ok=True, why=None, n_ticks=n + 1, X=np.array(X), out=rec)   # 全部拍末樣本都送淨空核對（不做近似去重）
         return dict(ok=False, why='not_settled', n_ticks=max_ticks, X=np.array(X))
 
 
@@ -224,7 +227,7 @@ def _serve(conn):
                 t0 = time.perf_counter()
                 cs.set_ref(st['Xd'])
                 r = cs.sim(st)
-                conn.send((ver, r['ok'], r['why'], r['n_ticks'], r['X'], (time.perf_counter() - t0) * 1e3, list(cs._cl), list(cs._tr)))
+                conn.send((ver, r['ok'], r['why'], r['n_ticks'], r['X'], (time.perf_counter() - t0) * 1e3, list(cs._cl), list(cs._tr), r.get('out')))
         except Exception as e:                                        # noqa: BLE001
             conn.send((msg[1] if msg[0] != 'init' else 'init', False, 'exception:' + repr(e)[:200], 0, None, 0.0, None))
 
@@ -276,7 +279,7 @@ class CStopWorker:
             except (EOFError, OSError):
                 return None
             if m[0] == ver:
-                return dict(ok=m[1], why=m[2], n_ticks=m[3], X=m[4], sim_ms=m[5], closure=m[6] if len(m) > 6 else None, tr=m[7] if len(m) > 7 else None)
+                return dict(ok=m[1], why=m[2], n_ticks=m[3], X=m[4], sim_ms=m[5], closure=m[6] if len(m) > 6 else None, tr=m[7] if len(m) > 7 else None, out=m[8] if len(m) > 8 else None)
 
     def close(self):
         for c in self.conns:

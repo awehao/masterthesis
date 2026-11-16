@@ -27,15 +27,26 @@ def _plant(S, cfg, q, s_prev, s_next, base):
     return q2
 
 
-def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks):
+def _seg_entry(o, fm=None):
+    return dict(arm_target=np.asarray(o['arm_target'], float).copy(), base_twist=np.asarray(o['base_twist'], float).copy(), finger=None if o.get('finger') is None else float(o['finger']),
+                ready=bool(o.get('ready')), ready_ver=o.get('ready_ver'), stopped=bool(o.get('stopped')), abort=bool(o.get('abort')), done=bool(o.get('done')))
+
+
+def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None):
+    """door＝door_ahead_open.DoorOpenPhase（可選）：抓持 READY 後在本程序內交接給開門執行層，之後同一套提前一拍協定。"""
     try:
         import ctypes
         import signal
         ctypes.CDLL('libc.so.6', use_errno=True).prctl(1, signal.SIGTERM)
     except Exception:                                                 # noqa: BLE001
         pass
-    seg_prev, s_before = None, None
-    k_tick = 0
+    import gc as _gc
+    if os.environ.get('AHEAD_GC_FREEZE') == '1':                      # 執行期最佳化（不改任何判定）：起跑前把既有物件移到永久代，減少第二代回收停頓
+        _gc.collect()
+        _gc.freeze()
+    seg_prev, s_before, cfg_prev = None, None, None
+    mode = 'grasp'
+    k_tick, k_open = 0, 0
     while True:
         msg = conn.recv()
         if msg is None:
@@ -44,12 +55,13 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks):
         if op == 'call':                                              # 同步呼叫控制器方法（交接核對等）；呼叫端自己決定是否在時間帳內
             _, name, args = msg
             try:
-                conn.send(('call', getattr(ctrl, name)(*args)))
+                tgt = door if name.startswith('door.') else ctrl
+                conn.send(('call', getattr(tgt, name.split('.', 1)[-1])(*args)))
             except Exception as e:                                    # noqa: BLE001
                 conn.send(('call_error', repr(e)[:300]))
             continue
         if op == 'get':
-            conn.send(('get', {k: getattr(ctrl, k, None) for k in msg[1]}))
+            conn.send(('get', dict({k: getattr(ctrl, k, None) for k in msg[1]}, _mode=mode)))
             continue
         _, snap = msg
         w_start = time.perf_counter()
@@ -61,62 +73,98 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks):
             if snap.get('first'):                                     # 初始化：第一段以實測狀態在 n_0 直接算（執行器尚未起跑）
                 qp = q
                 s_cur = np.asarray(ctrl.s, float).copy()
-            else:                                                     # 沿已提交的 S_k 預測到 n_{k+1}
+            else:                                                     # 沿已提交的 S_k 預測到 n_{k+1}（用產生 S_k 的那個控制器的受控對象模型）
                 qp = q
                 s_cur = s_before.copy()
                 for j in range(nph):
-                    qp = _plant(S, ctrl.cfg, qp, s_cur, seg_prev[j]['arm_target'], seg_prev[j]['base_twist'])
+                    qp = _plant(S, cfg_prev, qp, s_cur, seg_prev[j]['arm_target'], seg_prev[j]['base_twist'])
                     s_cur = np.asarray(seg_prev[j]['arm_target'], float)
             if k_tick in late_ticks:                                  # 核對用：注入延遲（模擬計算晚到）
                 time.sleep(late_ticks[k_tick])
-            ctrl._rec_tail = {1: []}
+            if mode == 'open' and ('o%d' % k_open) in late_ticks:      # 開門段第 k_open 拍（交接後起算）
+                time.sleep(late_ticks['o%d' % k_open])
+            events, o0, bind = [], None, None
+            if mode == 'grasp' and door is not None and ctrl.ready_now and ctrl.ready_ver is not None and ctrl.stop is None:
+                ex, o0, hrec = door.handover(ctrl, qp, t_next)        # 試跑即正式：通過 ⇒ 第一步已算完
+                events.append(hrec)
+                if ex is not None:
+                    ctrl, mode = ex, 'open'
+                    bind = dict(T_EH=ex.T_EH.copy(), ang_bind=float(ex.ang_bind), phi_bind=float(ex.phi_bind))
+            if mode == 'open' and o0 is None:
+                phi_p = ctrl.phi_of(qp)[0]                            # 綁定中：門角由預測構型反算（控制器自己的理想閉鏈模型）
+                ctrl, o0, ev_ = door.pre_tick(ctrl, t_next, qp, phi_p)
+                events += ev_
             seg, qj, sj = [], qp.copy(), s_cur.copy()
+            if mode == 'grasp':
+                ctrl._rec_tail = {1: []}
+            elif o0 is None:
+                ctrl._cand_out = None
             for j in range(nph):
-                o = ctrl.step(t_next + j * PHYS, qj.copy(), phi, finger_meas=fm)
-                seg.append(dict(arm_target=np.asarray(o['arm_target'], float).copy(), base_twist=np.asarray(o['base_twist'], float).copy(), finger=float(o['finger']),
-                                ready=bool(o.get('ready')), ready_ver=o.get('ready_ver'), stopped=bool(o.get('stopped')), abort=bool(o.get('abort'))))
+                if j == 0 and o0 is not None:
+                    o = o0
+                elif mode == 'open':
+                    o = ctrl.step(t_next + j * PHYS, qj.copy(), ctrl.phi_of(qj)[0])
+                else:
+                    o = ctrl.step(t_next + j * PHYS, qj.copy(), phi, finger_meas=fm)
+                seg.append(_seg_entry(o))
                 qj = _plant(S, ctrl.cfg, qj, sj, seg[-1]['arm_target'], seg[-1]['base_twist'])
                 sj = seg[-1]['arm_target']
-            rec = ctrl._rec_tail.get(1) or []
-            ctrl._rec_tail = None
             tail, tail_src, mism = None, None, None
-            if ctrl.stop is None and len(rec) >= nph:
-                mism = max(max(float(np.abs(rec[j][0] - seg[j]['arm_target']).max()), float(np.abs(rec[j][1] - seg[j]['base_twist']).max())) for j in range(nph))
-                if mism <= 1e-9:
-                    tail, tail_src = [(a.copy(), b.copy()) for a, b in rec[nph:]], 'candidate_extra1'
-            if tail is None and ctrl.abort is None:                   # 停止模式（或候選尾段不一致）：在名目段結束處另做停止模擬
-                rt = {0: []}
-                ctrl._rec_tail = rt
-                try:
-                    _, vtr, _ = ctrl._stop_traj(qj, ctrl.u_last, 0, ctrl.ramp_j, ctrl.u_from_base)
-                finally:
-                    ctrl._rec_tail = None
-                if vtr is None and rt[0]:
-                    tail, tail_src = [(a.copy(), b.copy()) for a, b in rt[0]], 'explicit_stop_e0'
-            seg_prev, s_before = seg, s_cur.copy()                    # 下一拍預測：由 S_{k+1} 之前的設定點沿 S_{k+1} 推
-            out = dict(ver=snap['ver'], seg=seg, tail=tail, tail_src=tail_src, tail_mismatch=mism, w_start=w_start, w_done=time.perf_counter(),
-                       stop=ctrl.stop, abort=ctrl.abort, phase=getattr(ctrl, 'phase', None), k_tick=k_tick, q_pred=qp.tolist())
+            if mode == 'open':
+                tail, tail_src, mism = door.tail(ctrl, seg, qj, nph)
+            else:
+                rec = ctrl._rec_tail.get(1) or []
+                ctrl._rec_tail = None
+                if ctrl.stop is None and len(rec) >= nph:
+                    mism = max(max(float(np.abs(rec[j][0] - seg[j]['arm_target']).max()), float(np.abs(rec[j][1] - seg[j]['base_twist']).max())) for j in range(nph))
+                    if mism <= 1e-9:
+                        tail, tail_src = [(a.copy(), b.copy()) for a, b in rec[nph:]], 'candidate_extra1'
+                if tail is None and ctrl.abort is None:               # 停止模式（或候選尾段不一致）：在名目段結束處另做停止模擬
+                    rt = {0: []}
+                    ctrl._rec_tail = rt
+                    try:
+                        _, vtr, _ = ctrl._stop_traj(qj, ctrl.u_last, 0, ctrl.ramp_j, ctrl.u_from_base)
+                    finally:
+                        ctrl._rec_tail = None
+                    if vtr is None and rt[0]:
+                        tail, tail_src = [(a.copy(), b.copy()) for a, b in rt[0]], 'explicit_stop_e0'
+            seg_prev, s_before, cfg_prev = seg, s_cur.copy(), ctrl.cfg    # 下一拍預測：由 S_{k+1} 之前的設定點沿 S_{k+1} 推
+            parts = None
+            if mode == 'open':                                        # 診斷：控制器本拍各分項（ms）與工作程序額外開銷
+                parts = {k_: round(float(getattr(ctrl, k_)[-1]), 2) for k_ in ('tick_ms', 'solve_ms', 'sweep_ms', 'cl_ms', 'cand_ms', 'mon_ms') if getattr(ctrl, k_, None)}
+                parts['cand'] = getattr(ctrl, '_cand_diag', None)
+            out = dict(ver=snap['ver'], seg=seg, tail=tail, tail_src=tail_src, tail_mismatch=mism, w_start=w_start, w_done=time.perf_counter(), mode=mode, bind=bind, events=events, parts=parts, gc_n=_gc.get_count()[2] if _gc else None,
+                       stop=ctrl.stop, abort=ctrl.abort, done=bool(getattr(ctrl, 'done', False)), phase=getattr(ctrl, 'phase', None), k_tick=k_tick, q_pred=qp.tolist(),
+                       sigma=float(getattr(ctrl, 'sigma', float('nan'))) if mode == 'open' else None, stop_mode=getattr(ctrl, 'stop_mode', None) if mode == 'open' else None)
+            if tail is not None:                                      # 尾段打包成單一陣列（每列＝設定點 6＋底盤命令 3），減少傳輸
+                out['tail'] = np.array([np.r_[a_, b_] for a_, b_ in tail], float)
             conn.send(('seg', out))
+            if mode == 'grasp' and door is not None and ctrl.ready_now and ctrl.ready_ver is not None and ctrl.stop is None and ctrl.abort is None:
+                door.prebuild(ctrl, qj)                               # 空檔預建（下一快照到達前）；交接拍再以該拍預測構型重設依賴構型的兩項
         except Exception as e:                                        # noqa: BLE001
             import traceback
             conn.send(('error', dict(ver=snap.get('ver'), err=traceback.format_exc()[-1500:])))
         k_tick += 1
+        if mode == 'open':
+            k_open += 1
 
 
 class AheadRunner:
     """執行器端：持有工作程序、已提交段、尾段、時間帳。"""
 
-    def __init__(self, ctrl, S, nph, deadline_ms=50.0, phi0=0.0, finger0=None, late_ticks=None):
+    def __init__(self, ctrl, S, nph, deadline_ms=50.0, phi0=0.0, finger0=None, late_ticks=None, door=None):
         ctx = mp.get_context('fork')
         self.conn, c2 = ctx.Pipe()
-        self.proc = ctx.Process(target=_worker, args=(c2, ctrl, S, nph, phi0, finger0, dict(late_ticks or {})), daemon=True)
+        self.proc = ctx.Process(target=_worker, args=(c2, ctrl, S, nph, phi0, finger0, dict(late_ticks or {}), door), daemon=True)
         self.proc.start()
         c2.close()
         self.nph, self.deadline_ms = nph, float(deadline_ms)
-        self.ver, self.pending, self.seg, self.tail, self.mode = 0, None, None, None, 'init'
+        self.ver, self.pending, self.seg, self.tail, self.tail_i, self.mode = 0, None, None, None, 0, 'init'
         self.log, self.n_commit, self.late = [], 0, None
         self.j = 0                                                    # 目前段內步序
         self.got = None                                               # 已收到但尚未到提交步的結果（tag, out, 收到牆鐘）
+        self.last = None                                              # 最近一次已提交結果的摘要（mode、bind、done、stop…）
+        self.events = []
 
     def _send(self, q, t_next, n_send, first=False, phi=None, finger=None):
         self.ver += 1
@@ -136,7 +184,7 @@ class AheadRunner:
         tag, out = self.conn.recv()
         if tag != 'seg':
             raise RuntimeError('ahead worker init error: ' + str(out)[:800])
-        self.seg, self.tail, self.mode, self.j = out['seg'], out['tail'], 'nominal', 0
+        self.seg, self.tail, self.tail_i, self.mode, self.j = out['seg'], out['tail'], 0, 'nominal', 0
         self.pending = None
         self.log.append(dict(kind='init', ver=out['ver'], tail_src=out['tail_src'], compute_ms=round((out['w_done'] - out['w_start']) * 1e3, 2)))
         return out
@@ -159,15 +207,19 @@ class AheadRunner:
                 rt_ms = (got[2] - p['w_send']) * 1e3
                 rec.update(ver=o['ver'], comm_in_ms=round((o['w_start'] - p['w_send']) * 1e3, 3), compute_ms=round((o['w_done'] - o['w_start']) * 1e3, 2),
                            comm_out_ms=round((got[2] - o['w_done']) * 1e3, 3), roundtrip_ms=round(rt_ms, 2), steps_since_send=int(n - p['n_send']), tail_src=o['tail_src'], tail_mismatch=o['tail_mismatch'])
-                if rt_ms <= self.deadline_ms and o['seg'] is not None and o['abort'] is None:
+                rec.update(mode=o.get('mode'), events=o.get('events') or None, sigma=o.get('sigma'), stop_mode=o.get('stop_mode'), parts=o.get('parts'))
+                self.events += [dict(e, n=int(n)) for e in (o.get('events') or [])]
+                if rt_ms <= self.deadline_ms and o['seg'] is not None and o['abort'] is None and o['tail'] is not None:
                     self.seg, self.j = o['seg'], 0
-                    if o['tail'] is not None:
-                        self.tail = o['tail']
+                    self.tail, self.tail_i = o['tail'], 0             # 每次提交都必須附本段的已核停止尾段（沒有就不提交）
                     self.n_commit += 1
                     rec['commit'] = True
+                    rec['bind'] = o.get('bind') is not None
+                    self.last = dict(mode=o.get('mode'), bind=o.get('bind'), done=o.get('done'), stop=o.get('stop'), stop_mode=o.get('stop_mode'), n=int(n))
                 else:
                     rec['commit'] = False
-                    rec['why'] = 'deadline' if rt_ms > self.deadline_ms else 'abort_or_empty'
+                    rec['why'] = 'deadline' if rt_ms > self.deadline_ms else ('abort' if o['abort'] is not None else ('no_tail:' + str(o.get('tail_src')) if o['tail'] is None else 'empty'))
+                    rec['ctrl_done'] = bool(o.get('done'))
             else:
                 rec['commit'] = False
                 rec['why'] = 'not_ready' if got is None else ('error:' + str(got[1])[:300] if got[0] == 'error' else 'version_mismatch')
@@ -189,9 +241,10 @@ class AheadRunner:
             o = self.seg[self.j]
             self.j += 1
             return o
-        if self.mode == 'tail' and self.tail:
-            a, b = self.tail.pop(0)
-            return dict(arm_target=a, base_twist=b, finger=None, ready=False, ready_ver=None, stopped=True, abort=False)
+        if self.mode == 'tail' and self.tail is not None and self.tail_i < len(self.tail):
+            r = self.tail[self.tail_i]
+            self.tail_i += 1
+            return dict(arm_target=r[:6].copy(), base_twist=r[6:9].copy(), finger=None, ready=False, ready_ver=None, stopped=True, abort=False)
         return None
 
     def call(self, name, *args, timeout=2.0):
@@ -202,9 +255,12 @@ class AheadRunner:
 
     def get(self, names, timeout=2.0):
         self.conn.send(('get', list(names)))
-        if not self.conn.poll(timeout):
-            return None
-        return self.conn.recv()[1]
+        t_end = time.perf_counter() + timeout
+        while self.conn.poll(max(t_end - time.perf_counter(), 0.0)):
+            tag, out = self.conn.recv()
+            if tag == 'get':                                          # 先到的遲到段結果（tick）丟棄
+                return out
+        return None
 
     def close(self):
         try:

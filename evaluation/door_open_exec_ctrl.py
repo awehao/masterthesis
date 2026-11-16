@@ -154,6 +154,7 @@ class DoorOpenExec:
         self._fb_ok, self._fb_info = False, None                      # r11：本拍期限備援是否可用＋依據
         self.fb_closure_inject, self.deadline_inject = None, None      # r11：測試掛鉤
         self._cand_tr, self._sn_tr = None, None
+        self.rec_cand, self._cand_out = False, None                    # 非阻塞執行（11/17）：候選核對的停止模擬一併回逐物理步輸出（＝執行器停止尾段）；只記錄，判定不變
         self._early_cb, self._hc_e = None, None                        # r17：候選核對提早派工
         self.g_inject = None                                           # r17：測試掛鉤（改寫本拍重算出的 g）
         self.cs_inject = None                                          # r17：測試掛鉤（閉鏈一致停法核對結果改為 'missing'／'infeasible'）
@@ -721,7 +722,7 @@ class DoorOpenExec:
         原各軸減速的 (1,2) 中「同一命令再多留一拍」在閉鏈手臂下不是會發生的情形（手臂命令每拍依閉鏈重算；多留一拍即破壞閉鏈，假世界起步即 arm_rate 不可行）。"""
         self._cs_obj()
         w = 1 if self._csw.n > 1 else 0
-        return w, self._csw.submit(self._cs_state(q, pr_delta=self._pr_use(), u_first=np.asarray(u, float), hold=1, se_first=self._se_cand), w=w), self._xd_ver
+        return w, self._csw.submit(self._cs_state(q, pr_delta=self._pr_use(), u_first=np.asarray(u, float), hold=1, se_first=self._se_cand, rec=bool(self.rec_cand)), w=w), self._xd_ver
 
     def _solve_cand(self, q, phi_meas):
         """求解；閉鏈一致停法啟用時，本拍命令一確定（閉鏈手臂前三個節點算完）就把候選核對的模擬送出，與其餘求解工作重疊。
@@ -748,7 +749,9 @@ class DoorOpenExec:
         """回 (status, 淨空違反或 None, 資訊)。infeasible＝提交後沒有可行的閉鏈一致停法 ⇒ 候選不得提交；missing＝結果缺失（呼叫端依「掃掠不可用」處理）。
         須在現在停的背景執行緒結束後呼叫（計算池同一時間只由一個執行緒使用）。"""
         w, ver, xv = hc
+        _wc = time.perf_counter()
         r = self._csw.collect(ver, 0.2, w=w)
+        self._cand_diag = dict(collect_wait_ms=round((time.perf_counter() - _wc) * 1e3, 2), sim_ms=None if r is None else round(float(r.get('sim_ms') or 0.0), 2), n_ticks=None if r is None else r.get('n_ticks'))   # 只記錄
         if self.cs_inject is not None:
             inj = self.cs_inject(self, tag)
             if inj is not None:
@@ -757,12 +760,15 @@ class DoorOpenExec:
             return 'missing', None, dict(why=None if r is None else ('ref_version_mismatch' if xv != self._xd_ver else r['why']))
         if not r['ok']:
             return 'infeasible', None, dict(why=r['why'])
+        _wp = time.perf_counter()
         res, why, tms = self._pool.collect(self._pool.submit(self.T_WH_bind, W.FINGER_Q, W.PHI0, r['X']), POOL_TIMEOUT_S)
         self.pool_ms.append(tms)
+        self._cand_diag.update(pool_wall_ms=round((time.perf_counter() - _wp) * 1e3, 2), n_samples=len(r['X']))
         if res is None:
             return 'missing', None, dict(why='pool_' + str(why))
         bad, ok, info = self._cs_judge(r, res, tag)
         self._cand_tr = r.get('tr')                                    # 診斷用：候選核對的逐拍預測
+        self._cand_out = r.get('out') if (ok and bad is None) else None   # 只有核過的停止模擬才可當尾段
         if not ok and bad is None:                                     # 提交後的停止預測閉鏈超限 ⇒ 提交後沒有合格備援 ⇒ 候選不得提交
             self.n_emerg_closure += 1
             return 'infeasible', None, dict(why='closure_over_tol', closure_pos_mm=info['closure_pos_mm'], closure_rot_deg=info['closure_rot_deg'])
