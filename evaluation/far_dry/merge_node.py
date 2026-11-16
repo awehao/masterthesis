@@ -433,7 +433,7 @@ def worker(conn):
                                 dR = T_est[:3, :3].T @ To[:3, :3]
                                 dang = math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR) - 1) / 2))))
                                 dpos = float(np.linalg.norm(To[:3, 3] - T_est[:3, 3]))
-                                if dpos <= UPD['gate_pos_m'] and dang <= UPD['gate_ang_deg']:
+                                if dpos <= UPD['gate_pos_m'] and dang <= ASSOC_TOL['dang_deg']:   # r4：OBSERVE 的姿態粗差閘門改用目標關聯容許 10°（far_door_3：遠處固定參考姿態偏約 3°，近距準確影格被 3° 閘門清掉）；一致性由三格兩兩角差與預算把關
                                     ref['t_obs_last'] = float(ob['t_obs'])
                                     ref['hist'] = (ref['hist'] + [(int(ob['seq']), float(ob['t_obs']), To[:3, 3].copy(), dang, To[:3, :3].copy())])[-UPD['n_consist']:]
                                     P = np.array([h_[2] for h_ in ref['hist']])
