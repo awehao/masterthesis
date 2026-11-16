@@ -3,7 +3,8 @@
   遠距前段：本行程只提供感測與受控對象（ROS：/clock、/odom_raw、/scan_raw、/joint_states、/far/truth、/far/handle_obs；收 /cmd_vel、/far/arm_cmd），原導航鏈與監督節點（merge_node.py fullho）在外。
   交接：監督節點交接判定通過發 /far/handover（鎖定參考與通過線）；本行程在下一個物理步邊界建立 MovingGraspCtrl r14（鎖定任務參考模式），設定點／真管線／上一命令／偏置原樣承接。
   交接後：MovingGraspCtrl → BindGate → 理想綁定 → DoorOpenExec（同門旁）；底盤提案發 /cmd_vel_grasp 經 選擇器→平滑器→Shield→GUARD，放行值照控制器生效時刻套用（far_chain_align）。
-  自載入起 no_passive_arm_friction（後端讀回）。以下為原檔說明。
+  自載入起 no_passive_arm_friction（後端讀回）。
+  以下為門旁原檔說明——其中「理想感知（把手 prim 真值 30 Hz）」「底盤瞬移到通過線」兩段不適用本檔：本檔把手來源是腕部相機實際影像＋鎖定任務參考，起點是遠距起點。
 住宅門 MotM 名目展示（Howard 20261113 13:49；Codex 20261113_141451）。單一 Isaac 程序；控制在主迴圈同步計算（非即時：控制計算期間物理不步進）。
 **理想感知＋理想抓持**：把手估計＝把手 prim 真值以 30 Hz 取樣（無偏差、無延遲；腕部相機在抓持距離看不到把手中心，見 Codex 裁定 (a)）；抓持成立後以 FixedJoint 理想綁定。
 起始條件（記錄於結果）：底盤瞬移到通過線（full_2 綁定底盤位姿的 y、偏航）上、可抓窗口起點前 L_LEAD＝0.01 m，手臂在預抓構型，靜置後**從靜止起步**；
@@ -340,7 +341,7 @@ def main():
     f1, f2 = names.index('finger_joint1'), names.index('finger_joint2')
     hprim = stage.GetPrimAtPath(f'{DOOR}/leaf/handle_bar')
 
-    def truth_handle():                                            # 理想感知的來源（也供評估）
+    def truth_handle():                                            # 把手 prim 真值：BindGate 實際抓持條件與事後評估用（本檔不作把手估計來源）
         M = UsdGeom.XformCache().GetLocalToWorldTransform(hprim)
         return np.array([[M[i][j] for j in range(4)] for i in range(4)]).T
     hinge = DA3.readback(stage, DOOR)
@@ -524,9 +525,9 @@ def main():
     except Exception:                                              # noqa: BLE001
         pass
     res = dict(run=os.path.basename(a.out.rstrip('/')), mode='smoke' if a.smoke else 'nominal',
-               scope='理想感知（把手 prim 真值 30 Hz）＋理想抓持（FixedJoint）；非即時（控制計算期間物理不步進）；範圍：開到 85° 停穩為止（不解綁、不退出、不穿門）',
-               init=dict(pass_line_from='full_2 綁定底盤位姿 y／偏航（場景初始條件）', b_start=b_start.tolist(), lead_m=L_LEAD, lead_s=T_LEAD, v_pass=V, q_arm_pregrasp=qa.tolist(),
-                         note='起點瞬移到通過線上窗口前 0.01 m、手臂預抓構型（抓取同側分支），靜置後從靜止起步；起跑後不瞬移。前導受 x≈0.80 m 腕部奇異限制（冒煙 2：0.15 m 前導在 1.9 s 手臂速率 1.61 rad/s 超限停止）'),
+               scope='遠距整合：把手來源＝腕部相機實際影像（凍結偵測＋幾何估計）；通過線＝途中第一格有效且通過關聯的估計；抓持與開門用鎖定任務參考（原始時間戳，不更新）；BindGate 的實際抓持條件以把手 prim 真值核（同門旁各趟）；理想抓持（FixedJoint）；理想里程；非即時；範圍：開到 85° 停穩為止（不解綁、不退出、不穿門）',
+               init=dict(b_start=b_start.tolist(), q_arm_start=qa.tolist(), source='遠距起點（同 far_capture 三趟）；手臂＝online_1 far_live 構型；靜置後從靜止起步，起跑後不瞬移', v_pass=V,
+                         note='通過線不是場景初始條件：由本趟途中影像估計在線決定（見 ros_merge.json anchor）'),
                gains=dict(kp=a.kp, kd=a.kd), arm_backend=arm_backend, door_readback=dict(hinge=hinge, leaf_rigid_body_damping=leaf_damp),
                finger=dict(command='CLOSE 段由張開斜降到 0（夾緊，同停車版）', geometry='兩指各自實測開度；CLOSE 段掃掠另含預測閉合開度'))
     # ---- 靜置
