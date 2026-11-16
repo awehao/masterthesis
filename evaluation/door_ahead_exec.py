@@ -95,6 +95,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None):
                 ctrl, o0, ev_ = door.pre_tick(ctrl, t_next, qp, phi_p)
                 events += ev_
             seg, qj, sj = [], qp.copy(), s_cur.copy()
+            prop = None
             if mode == 'grasp':
                 ctrl._rec_tail = {1: []}
             elif o0 is None:
@@ -107,6 +108,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None):
                 else:
                     o = ctrl.step(t_next + j * PHYS, qj.copy(), phi, finger_meas=fm)
                 seg.append(_seg_entry(o))
+                if j == 0:                                            # 本拍提案（進管線的拍命令）：發 /cmd_vel_grasp 供安全鏈放行核對
+                    prop = np.asarray(ctrl.u_last[:3], float).copy()
                 qj = _plant(S, ctrl.cfg, qj, sj, seg[-1]['arm_target'], seg[-1]['base_twist'])
                 sj = seg[-1]['arm_target']
             tail, tail_src, mism = None, None, None
@@ -134,7 +137,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None):
                 parts = {k_: round(float(getattr(ctrl, k_)[-1]), 2) for k_ in ('tick_ms', 'solve_ms', 'sweep_ms', 'cl_ms', 'cand_ms', 'mon_ms') if getattr(ctrl, k_, None)}
                 parts['cand'] = getattr(ctrl, '_cand_diag', None)
                 parts['qp'] = [round(float(x), 2) for x in ctrl.qp_log[-1]] if getattr(ctrl, 'qp_log', None) else None   # t、已停止、前置、mpc.solve、組裝、GI、OSQP、求解器(0=gi/1=osqp)
-            out = dict(ver=snap['ver'], seg=seg, tail=tail, tail_src=tail_src, tail_mismatch=mism, w_start=w_start, w_done=time.perf_counter(), mode=mode, bind=bind, events=events, parts=parts, gc_n=_gc.get_count()[2] if _gc else None,
+            out = dict(ver=snap['ver'], seg=seg, prop=prop, tail=tail, tail_src=tail_src, tail_mismatch=mism, w_start=w_start, w_done=time.perf_counter(), mode=mode, bind=bind, events=events, parts=parts, gc_n=_gc.get_count()[2] if _gc else None,
                        stop=ctrl.stop, abort=ctrl.abort, done=bool(getattr(ctrl, 'done', False)), phase=getattr(ctrl, 'phase', None), k_tick=k_tick, q_pred=qp.tolist(),
                        sigma=float(getattr(ctrl, 'sigma', float('nan'))) if mode == 'open' else None, stop_mode=getattr(ctrl, 'stop_mode', None) if mode == 'open' else None)
             if tail is not None:                                      # 尾段打包成單一陣列（每列＝設定點 6＋底盤命令 3），減少傳輸
@@ -167,6 +170,35 @@ class AheadRunner:
         self.last = None                                              # 最近一次已提交結果的摘要（mode、bind、done、stop…）
         self.events = []
 
+    def start_rx(self):
+        """ROS 執行器用：獨立接收執行緒，結果一到就記收到牆鐘（主迴圈只在物理步才輪詢會把收到時刻量化到步）。之後不可再用 call()/get()。"""
+        import threading
+        self._rx_lock, self._rx_stop = threading.Lock(), False
+
+        def _loop():
+            while not self._rx_stop:
+                try:
+                    if not self.conn.poll(0.02):
+                        continue
+                    tag, out = self.conn.recv()
+                except (EOFError, OSError):
+                    break
+                t_ = time.perf_counter()
+                with self._rx_lock:
+                    if tag in ('seg', 'error'):
+                        self._rx_box = (tag, out, t_)
+        self._rx_box = None
+        self._rx = threading.Thread(target=_loop, daemon=True)
+        self._rx.start()
+
+    def tail_props(self, tail, d_steps):
+        """尾段的逐拍提案：第 m 拍（尾段起點後 m·NPH 步）的拍命令在其斜坡末步（j＝NPH−1）進管線、D 步後出現在尾段輸出 ⇒ u_m＝tail[m·NPH＋NPH−1＋D] 的底盤分量。"""
+        out, m = [], 0
+        while m * self.nph + self.nph - 1 + d_steps < len(tail):
+            out.append(np.asarray(tail[m * self.nph + self.nph - 1 + d_steps][6:9], float).copy())
+            m += 1
+        return out
+
     def _send(self, q, t_next, n_send, first=False, phi=None, finger=None):
         self.ver += 1
         snap = dict(ver=self.ver, q=np.asarray(q, float).tolist(), t_next=float(t_next), first=first)
@@ -191,11 +223,18 @@ class AheadRunner:
             self.log.append(dict(kind='init', ver=out['ver'], ok=False, abort=out.get('abort'), tail_src=out.get('tail_src')))
             return out
         self.seg, self.tail, self.tail_i, self.mode, self.j = out['seg'], out['tail'], 0, 'nominal', 0
+        self.prop0 = None if out.get('prop') is None else np.asarray(out['prop'], float).copy()
         self.log.append(dict(kind='init', ver=out['ver'], tail_src=out['tail_src'], compute_ms=round((out['w_done'] - out['w_start']) * 1e3, 2)))
         return out
 
     def poll(self):
-        """每個物理步呼叫：結果一到就收下並記收到時刻（不等拍邊界）。"""
+        """每個物理步呼叫：結果一到就收下並記收到時刻（不等拍邊界）。接收執行緒模式下從其盒子取。"""
+        if getattr(self, '_rx', None) is not None:
+            if self.pending is not None and self.got is None:
+                with self._rx_lock:
+                    if self._rx_box is not None:
+                        self.got, self._rx_box = self._rx_box, None
+            return
         if self.pending is not None and self.got is None and self.conn.poll(0):
             tag, out = self.conn.recv()
             self.got = (tag, out, time.perf_counter())
@@ -217,6 +256,7 @@ class AheadRunner:
                 if rt_ms <= self.deadline_ms and o['seg'] is not None and o['abort'] is None and o['tail'] is not None:
                     self.seg, self.j = o['seg'], 0
                     self.tail, self.tail_i = o['tail'], 0             # 每次提交都必須附本段的已核停止尾段（沒有就不提交）
+                    rec['prop'] = None if o.get('prop') is None else [float(x) for x in o['prop']]
                     self.n_commit += 1
                     rec['commit'] = True
                     rec['bind'] = o.get('bind') is not None
@@ -270,6 +310,9 @@ class AheadRunner:
         return None
 
     def close(self):
+        if getattr(self, '_rx', None) is not None:
+            self._rx_stop = True
+            self._rx.join(0.2)
         try:
             self.conn.send(None)
         except Exception:                                             # noqa: BLE001
