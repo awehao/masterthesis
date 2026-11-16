@@ -7,7 +7,9 @@
 import json, math, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import door_cpu_layout as CPUL
-CPU_LAYOUT = os.environ.get('CPU_LAYOUT') == '1'
+CPU_LAYOUT = os.environ.get('CPU_LAYOUT') in ('1', 'laptop')
+LAPTOP = os.environ.get('CPU_LAYOUT') == 'laptop'                   # TUF A14（Ryzen AI 9 465）：快核 Zen5 邏輯 0–3／10–13，慢核 Zen5c 4–9／14–19
+LAYOUT_LAPTOP = dict(worker=[0, 10], cstop=[[1], [4]], pool=[2, 3, 12, 13, 11], main=[5, 6, 15, 16], planner=[7, 8, 17, 18])
 if CPU_LAYOUT:
     CPUL.blas_single()
 import numpy as np
@@ -21,7 +23,11 @@ BG = PS.PlannerServer()                                              # P2 續段
 PLAN_NICE = int(os.environ.get('AHEAD_PLAN_NICE', '0'))              # P2 規劃程序優先序（D1 RTF 1：nice 10 使續段規劃牆鐘 1.175 s、晚於接縫 ⇒ 預設 0）
 if PLAN_NICE:
     os.setpriority(os.PRIO_PROCESS, BG.proc.pid, PLAN_NICE)
-if CPU_LAYOUT:                                                       # 非阻塞版配置（8 實體核心；邏輯 i 與 i+8 同核）：控制器工作程序獨占核心 0（0,8）；兩個停法模擬各占核心 1、2（同核 9、10 不分配）；
+if LAPTOP:                                                           # 筆電：關鍵路徑（工作程序、候選停法模擬＝第 2 個停法程序、淨空池）放快核；現在停程序（尾段證書模式閒置）、主迴圈、規劃程序放慢核
+    CPU_PIN = dict(pool=[CPUL.pin(p_.pid, [LAYOUT_LAPTOP['pool'][i_ % len(LAYOUT_LAPTOP['pool'])]]) for i_, p_ in enumerate(SHARED.procs)],
+                   cstop=[CPUL.pin(CSW.procs[0].pid, LAYOUT_LAPTOP['cstop'][1]), CPUL.pin(CSW.procs[1].pid, LAYOUT_LAPTOP['cstop'][0])], planner=CPUL.pin(BG.proc.pid, LAYOUT_LAPTOP['planner']))
+    CPUL.pin(os.getpid(), LAYOUT_LAPTOP['main'])
+elif CPU_LAYOUT:                                                     # 非阻塞版配置（8 實體核心；邏輯 i 與 i+8 同核）：控制器工作程序獨占核心 0（0,8）；兩個停法模擬各占核心 1、2（同核 9、10 不分配）；
     CPU_PIN = dict(pool=[CPUL.pin(p_.pid, [c_]) for p_, c_ in zip(SHARED.procs, [3, 4, 5, 11, 12, 13])],   # 淨空池 6 個在核心 3–5；主迴圈核心 6；規劃程序核心 7（nice 10）
                    cstop=[CPUL.pin(p_.pid, [c_]) for p_, c_ in zip(CSW.procs, [1, 2])], planner=CPUL.pin(BG.proc.pid, [7, 15], nice=10))
     CPUL.pin(os.getpid(), [6, 14])

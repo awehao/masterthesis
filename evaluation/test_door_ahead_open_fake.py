@@ -32,7 +32,7 @@ if os.environ.get('AHEAD_D2_MAINBUILD') == '1':                      # 對照：
     gc = _d2_builder(dict(s=s0.tolist(), pipe=[u_ss.tolist() for _ in range(D_STEPS)], u_last=u_ss.tolist(), u_prev=u_ss.tolist(), off_static=dq(q).tolist()))
 runner = AE.AheadRunner(None if D2 else gc, G.S, NPH, deadline_ms=DL_MS, phi0=phi_b, late_ticks=LATE, door=door, builder=_d2_builder if D2 else None)
 if CPU_LAYOUT:
-    CPU_PIN['ahead_worker'] = CPUL.pin(runner.proc.pid, [0, 8])     # 控制器工作程序：整個實體核心 0（邏輯 0＋8；背景執行緒可用同核另一邏輯 CPU）
+    CPU_PIN['ahead_worker'] = CPUL.pin(runner.proc.pid, CASE.LAYOUT_LAPTOP['worker'] if CASE.LAPTOP else [0, 8])     # 控制器工作程序：整個實體核心 0（邏輯 0＋8；背景執行緒可用同核另一邏輯 CPU）
     CPU_PIN['readback'] = dict(main=sorted(os.sched_getaffinity(0)), worker=sorted(os.sched_getaffinity(runner.proc.pid)), pool=[sorted(os.sched_getaffinity(p_.pid)) for p_ in SHARED.procs], cstop=[sorted(os.sched_getaffinity(p_.pid)) for p_ in CSW.procs], planner=sorted(os.sched_getaffinity(BG.proc.pid)))
 if D2:
     runner.start_rx()

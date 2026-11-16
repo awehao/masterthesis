@@ -149,6 +149,10 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                         tail, tail_src = [(a.copy(), b.copy()) for a, b in rt[0]], 'explicit_stop_e0'
             seg_prev, s_before, cfg_prev = seg, s_cur.copy(), ctrl.cfg    # 下一拍預測：由 S_{k+1} 之前的設定點沿 S_{k+1} 推
             parts = None
+            if mode == 'grasp' and getattr(ctrl, 'tick_log', None):      # 診斷：抓持控制器本拍耗時與計算池最近一次分項
+                tl = ctrl.tick_log[-1]
+                pm = ctrl.pool_ms[-1] if getattr(ctrl, 'pool_ms', None) else None
+                parts = dict(tick_ms=round(float(tl[1]), 2), phase=getattr(ctrl, 'phase', None), pool=pm if not isinstance(pm, dict) else {k_: round(float(v_), 2) for k_, v_ in pm.items() if isinstance(v_, (int, float))})
             if mode == 'open':                                        # 診斷：控制器本拍各分項（ms）與工作程序額外開銷
                 parts = {k_: round(float(getattr(ctrl, k_)[-1]), 2) for k_ in ('tick_ms', 'solve_ms', 'sweep_ms', 'cl_ms', 'cand_ms', 'mon_ms') if getattr(ctrl, k_, None)}
                 parts['cand'] = getattr(ctrl, '_cand_diag', None)
