@@ -14,7 +14,7 @@ sys.argv_ = list(sys.argv); sys.argv = [sys.argv[0], sys.argv[1], '/dev/null']
 import numpy as np
 import door_turn_search as TS
 sys.argv = sys.argv_
-V, A_W, T_READY = 0.05, -0.10, 2.05
+V, A_W, T_READY = float(os.environ.get('V_TR', '0.05')), -0.10, 2.05   # V_TR：過渡段底盤速度（接手前另降回 0.05；窗口照 0.05 核）
 Q_NAV = np.array([-0.0128, -0.0519, 0.086, 0.0116, -1.6249, -0.0018])
 V_ARM, A_ARM = float(TS.W.V_ARM), float(TS.W.A_ARM)
 A_BODY = np.asarray(TS.W.A_BODY, float)
