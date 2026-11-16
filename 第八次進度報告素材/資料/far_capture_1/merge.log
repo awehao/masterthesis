@@ -1,0 +1,31 @@
+#EARLY r2 {'A_LIN': 0.4, 'ALPHA': 1.0, 'margin': 0.97}
+#EARLY r3 {'T_LOOK': 0.5, 'EDGE': 40.0, 'D_RNG': (0.25, 1.2), 'RAY_CLR': 0.02}
+#EARLY r4 scene m8_house_r1 known 24
+[WARN] [1794810210.476231977] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1794810210.476248417] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+[INFO] [1794810214.091112951] [far_merge]: [far] coarse_goal_sent {'goal_map': [1.65, -0.49], 'map_odom': [-0.0004, -0.0038, -0.0], 'note': '粗目標來自地圖先驗（src/my_omnibot_description/config/door_local_v3.yaml）；通過線待途中第一格有效影像估計'}
+[INFO] [1794810215.099531076] [far_merge]: [far] merge_gmpc_started {'overrides': {'plan_topic': '/merge/plan', 'cmd_vel_topic': '/cmd_vel_merge', 'v_nominal': 0.05, 'heading_fixed': 1.5707963267948966, 'goal_tolerance_xy': 0.03, 'heading_enable': True}}
+[INFO] [1794810215.858000996] [far_merge]: [far] visual_task_established {'seq': 163, 't_obs': 32.45, 'age_s': 0.06, 'assoc': {'dxy_m': 0.0018, 'dz_m': 0.0007, 'dang_deg': 0.37}, 'dist_to_coarse_goal': 2.291}
+[INFO] [1794810216.745316833] [far_merge]: [far] plan_ready {'wall_s': 0.85, 'sim_elapsed_s': 0.4, 'n_cells': 4, 'standoff': 0.45000000000000007, 'along_offset': -0.03999999999999998, 'prep_time_s': 6.55, 'sigma_min': 0.0569}
+[INFO] [1794810235.633570327] [far_merge]: [far] base_owner_NAV_to_MERGE {'along': 0.633, 'lat': 0.508, 'speed': 0.221, 'merge_plan': {'n': 250, 'along0': 0.622, 'end_odom': [0.743, -0.49]}, 'released_cmd': [0.2047, 0.024, 0.0833], 'merge_candidate': [0.1495, 0.0179, 0.2082], 'nav_cmd': [0.2346, 0.022, 0.0928], 'candidate_checks': {'candidate_fresh': True, 'plan_acked': True, 'candidate_nonzero': True, 'step_within_smoother_limit': True, 'moving': True, 'predicted_in_capture': True}, 'n_shadow_plans': 1, 'note': '影子模式下進線 GMPC 的上一命令＝實際放行命令（外包設定）；候選有效才切換'}
+[INFO] [1794810253.905948745] [far_merge]: [far] arm_owner_HOLD_to_TRACK_prep {'along': 0.622, 'need_along': 0.592}
+[INFO] [1794810273.334991663] [far_merge]: [far] arm_track_start {'along_pred': 0.2237, 'lat_pred_mm': -0.01, 'yaw_err_deg': 0.015, 'arm_err_rad': 0.0235}
+[INFO] [1794810286.753064042] [far_merge]: [far] sim_engineering_abort {'why': 'stop_check_unavailable:late:None', 'arm': 'TRACK', 'check': None, 'res': 'None'}
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/far_dry/merge_node.py", line 774, in <module>
+    main()
+  File "/home/howardchen/masterthesis/evaluation/far_dry/merge_node.py", line 757, in main
+    rclpy.spin(node)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 247, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 907, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 877, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 785, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
