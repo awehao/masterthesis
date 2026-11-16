@@ -44,9 +44,9 @@ trap cleanup EXIT
 # r2 排程（far_door_5 後；只改排程與掃掠池程序數，樣本與覆蓋不變）：遠距前段執行器的掃掠池（4–7、12–15）與閉鏈停法程序（3、11）閒置 ⇒
 #   監督節點幾何程序＋主程序用 3、11；它的掃掠池 8 個程序用 4–7、12–15（原 4 個程序擠在 6、7、14、15＝兩顆實體核）。交權後監督主程序（只剩命令選擇器）移到導航鏈那組核。
 # r3 排程（far_door_7 後）：導航鏈原與 Kit／背景首段規劃程序同在 CPU 1、2、9、10——交權後首段規劃一啟動，平滑器處理輸入延後 2 個物理步以上、漏掉提案。
-#   改：導航鏈獨佔 CPU 3、11（閉鏈停法程序平時閒置）；監督節點幾何程序＋主程序 CPU 4、12；其掃掠池 6 程序 CPU 5–7、13–15；交權後監督主程序（選擇器）移到 3、11。
+#   改：導航鏈與選擇器用 CPU 3、11；執行器的閉鏈停法程序移到 4、12、掃掠池 6 程序在 5–7、13–15（DOOR_CPU_LAYOUT=far）；監督節點幾何程序＋主程序 CPU 4、12；其掃掠池 6 程序 CPU 5–7、13–15；交權後監督主程序（選擇器）移到 3、11。
 SIM_CPUS="${SIM_CPUS:-3,11}"; export FAR_CPUS="${FAR_CPUS:-4,12,5,6,7,13,14,15}" FAR_POOL_N="${FAR_POOL_N:-6}" FAR_AFTER_HO_CPUS="${FAR_AFTER_HO_CPUS:-3,11}"
-setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV CPU_LAYOUT=1 "$ISAAC_PY" -u evaluation/isaac_m8_house_far_door_motm.py --out "$DIR" --start "$START" --arm="$ARM" --far-limit-s "$SIM_LIMIT" > "$DIR/sim.log" 2>&1 < /dev/null &
+setsid systemd-run --user --scope -q -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 env -u VIRTUAL_ENV CPU_LAYOUT=1 DOOR_CPU_LAYOUT=far DOOR_POOL_N=6 "$ISAAC_PY" -u evaluation/isaac_m8_house_far_door_motm.py --out "$DIR" --start "$START" --arm="$ARM" --far-limit-s "$SIM_LIMIT" > "$DIR/sim.log" 2>&1 < /dev/null &
 SIM=$!
 sleep 1
 P=$(pgrep -f "[i]saac_m8_house_far_door_motm.py.*runs/$RUN_ID" | head -1)
@@ -73,6 +73,7 @@ if [ "$STATIC_S" = "0" ]; then
     timeout 10 ros2 topic pub -t 3 -r 1 /initialpose geometry_msgs/msg/PoseWithCovarianceStamped "{header: {frame_id: 'map'}, pose: {pose: {position: {x: $SX, y: $SY, z: 0.0}, orientation: {z: $QZ, w: $QW}}}}" > "$DIR/initpose.log" 2>&1 || true
     sleep 6
     mkdir -p "$DIR/ros.side"
+    for pp in $(pgrep -f "[v]elocity_smoother|[s]can_safety_shield|[w]heel_limit_guard|[g]mpc_node|[p]lanner_server|[a]mcl|[e]kf_node"); do echo "$(taskset -cp $pp 2>/dev/null) $(ps -o comm= -p $pp)"; done > "$DIR/ros.side/nav_affinity.txt" 2>/dev/null
     for nd in /gmpc_controller /scan_safety_shield /wheel_limit_guard /scan_obstacle_tracker /velocity_smoother /planner_server /amcl; do
       timeout 25 ros2 param dump "$nd" > "$DIR/ros.side/params$(echo $nd | tr '/' '_').yaml" 2> /dev/null || true
     done

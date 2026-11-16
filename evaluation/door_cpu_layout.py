@@ -11,6 +11,8 @@ BLAS：模擬器 Python 的 NumPy 內附多執行緒 OpenBLAS（系統 Python �
 import os
 
 MAIN, KIT, CSTOP, POOL = [0], [1, 2, 9, 10], [3, 11], [4, 5, 6, 7, 12, 13, 14, 15]
+if os.environ.get('DOOR_CPU_LAYOUT') == 'far':                       # 遠距整合（Codex 20261117）：導航鏈與命令選擇器用 CPU 3、11 ⇒ 閉鏈停法程序移到交權後閒置的 4、12，掃掠池避開這兩組核。預設（未設）＝門旁原配置
+    CSTOP, POOL = [4, 12], [5, 6, 7, 13, 14, 15]
 BLAS_ENV = ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS')
 
 

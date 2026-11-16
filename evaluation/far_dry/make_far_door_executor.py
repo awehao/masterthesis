@@ -4,6 +4,8 @@ def rep(a, b, c=1):
     global s
     assert s.count(a) == c, (s.count(a), a[:100]); s = s.replace(a, b)
 
+# ---- H0 掃掠池程序數可由環境變數指定（樣本與覆蓋不變）
+rep("POOL = DSP.SweepPool(8)", "POOL = DSP.SweepPool(int(os.environ.get('DOOR_POOL_N', '8')))")
 # ---- H1 參數
 rep("a = ap.parse_args()\n", """ap.add_argument('--start', default='1.5,-2.8,1.5708')
 ap.add_argument('--arm', default='-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018')

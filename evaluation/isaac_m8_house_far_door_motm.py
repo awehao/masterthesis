@@ -66,7 +66,7 @@ import door_sweep_pool as DSP                                    # noqa: E402
 import door_p2_planner_server as PS                              # noqa: E402
 import door_first_seg as FSG                                     # noqa: E402
 import door_cstop as DCS                                         # noqa: E402
-POOL = DSP.SweepPool(8)
+POOL = DSP.SweepPool(int(os.environ.get('DOOR_POOL_N', '8')))
 PLANNER = PS.PlannerServer()
 PLANNER_FS = PS.PlannerServer()                                      # A1：首段滾動規劃用獨立程序（低優先權；交接時若仍在算即終止——可控取消，不停車等、不佔開門拍的核心）
 try:
