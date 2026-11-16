@@ -134,31 +134,44 @@ class WorldAhead(Node):
             self.stage = 'end'
 
     def step(self):
+        try:
+            self._step()
+        except Exception:                                             # noqa: BLE001  任何例外 ⇒ 工程中止並保存（不吞掉、不續跑）
+            import traceback
+            self.abort('exception', err=traceback.format_exc()[-1200:])
+
+    def _step(self):
         w = time.perf_counter()
         if self.w0 is None:
-            self.w0 = w
-        elif w - (self.w0 + self.t) > 0.011:
-            self.late_steps += 1                                     # 計時器晚到（物理步落後）——只記，不補步
+            self.w0, self.w_prev, self.max_gap = w, w, 0.0
+        else:
+            gap = w - self.w_prev
+            self.max_gap = max(self.max_gap, gap)
+            if gap > 0.015:
+                self.late_steps += 1                                 # 計時器相鄰兩步間隔 >15 ms（物理步落後）——只記，不補步
+            self.w_prev = w
         o = None
         if self.stage == 'preroll':
             ph = FCA.best_phase(self.rx_steps)
             if self.n % NPH == (ph if ph is not None else 0):
                 self.propose(self.u_ss)                              # 安全鏈預跑：穩態拍命令（受控對象不動）
-            if self.t >= PREROLL_S and ph is not None and self.n % NPH == ph:
+            settled_chain = len(self.rx_log) >= 10 and all(float(np.abs(np.array(r_[1:]) - self.u_ss).max()) <= 1e-6 for r_ in self.rx_log[-10:])   # 安全鏈已到穩態：最近 10 筆放行＝穩態命令
+            if self.t >= PREROLL_S and ph is not None and settled_chain and self.n % NPH == ph:
                 rel = np.array(self.rx_log[-1][1:]) if self.rx_log else np.zeros(3)
                 self.ev('preroll_done', guard_phase=ph, last_release=[round(float(x), 5) for x in rel], u_ss=[round(float(x), 5) for x in self.u_ss], rx_mod=[x % NPH for x in self.rx_steps[-8:]])
-                init = runner.start(self.q, self.t + NPH * PHYS * 0, phi=phi_b)   # 首段（起跑前同步算；受控對象此時仍靜止於起點）
+                self.t_sim0 = self.t                                 # 控制器時間＝起跑後的相對時間（同假世界：起跑時 t＝0）
+                init = runner.start(self.q, 0.0, phi=phi_b)          # 首段（起跑前同步算；受控對象此時仍靜止於起點）
                 runner.start_rx()
                 self.ev('ahead_init', mode=runner.mode, tail_src=init.get('tail_src'), compute_ms=round((init['w_done'] - init['w_start']) * 1e3, 2))
                 if runner.mode != 'nominal':
                     self.abort('start_rejected'); return
                 self.ca = FCA.ChainAlign(D_STEPS, NPH, pre_release=rel)
                 self.n0, self.stage = self.n, 'run'
-                self.t_sim0 = self.t
         if self.stage == 'run':
             k = self.n - self.n0
             if k % NPH == 0:
                 if k == 0:
+                    runner.tick_boundary(self.q, self.t_rel() + NPH * PHYS, 0, phi=self.phi)   # 送第一個快照（S₀ 已在起跑前提交）
                     self.propose(runner.prop0)
                 else:
                     was = runner.mode
@@ -278,7 +291,7 @@ class WorldAhead(Node):
         wall = float(R[-1, -1]) if len(R) else 0.0
         self.meta.update(by_mode=by, late=runner.late, last_commit=None if runner.last is None else {k_: (v_ if k_ != 'bind' else v_ is not None) for k_, v_ in runner.last.items()}, aborted=self.aborted,
                          settled_after_tail=None if self.hold is None else self.hold['verified'], chain_align=None if self.ca is None else self.ca.report(),
-                         sim_s=round(self.t, 3), wall_s=round(wall, 3), rtf_actual=round(self.t / wall, 3) if wall > 0 else None, timer_late_steps=self.late_steps,
+                         sim_s=round(self.t, 3), wall_s=round(wall, 3), rtf_actual=round(self.t / wall, 3) if wall > 0 else None, timer_gap_over_15ms=self.late_steps, timer_gap_max_ms=round(getattr(self, 'max_gap', 0.0) * 1e3, 2),
                          phi_end_deg=round(math.degrees(self.phi), 3), p2=[e for e in runner.events if e.get('what') in ('p2_result', 'staged')], handover=[e for e in runner.events if e.get('what') == 'handover_trial_is_tick'],
                          config=dict(pool_n=SHARED.n, stream=door.stream, stream_chunk=X.STREAM_CHUNK, tail_cert=door.tail_cert, deadline_ms=DL_MS, late_inject={str(k_): v_ for k_, v_ in LATE.items()}, preroll_s=PREROLL_S))
         json.dump(self.meta, open(OUT + '_d1.json', 'w'), ensure_ascii=False, indent=1, default=str)
@@ -289,6 +302,7 @@ class WorldAhead(Node):
 def main():
     rclpy.init()
     w = WorldAhead()
+    print('[d1] world_ready', flush=True)
     try:
         while rclpy.ok() and w.stage != 'end':
             rclpy.spin_once(w, timeout_sec=0.05)
