@@ -30,6 +30,10 @@ UNIFIED = os.environ.get('B_UNIFIED', '0') == '1'          # 單一控制器（C
 PASS_GOAL = [float(x) for x in os.environ.get('B_PASS_GOAL', '0.5,0.8,1.5708').split(',')]   # 穿門目標（map；門口 x∈[0,1]、y=0，客廳側）
 PASS_WP = [float(x) for x in os.environ.get('B_PASS_WP', '').split(',')] if os.environ.get('B_PASS_WP', '') else None   # 中途點：門扇外側、正對門口（開門後機器人在門扇後，LiDAR 看不到門口，關門時標的舊障礙格清不掉 ⇒ 先到看得見門口的位置）
 PASS_WP_R = float(os.environ.get('B_PASS_WP_R', '0.45'))
+PICK = os.environ.get('D2_PICK', '0') == '1'                          # 穿門後接茶几圓柱體取物＋返回
+PICK_PRIOR = [float(x) for x in os.environ.get('B_PICK_PRIOR', '0.55,2.30,0.0').split(',')]   # 茶几先驗粗目標（map；茶几西側，面向桌）
+PICK_RETURN = [float(x) for x in os.environ.get('B_PICK_RETURN', '1.5,-2.8,1.5708').split(',')]   # 返回＝起點
+PICK_APP_DIST, PICK_T_MIN = float(os.environ.get('B_PICK_APP_DIST', '0.6')), float(os.environ.get('B_PICK_T_MIN', '4.0'))
 PASS_CLEAR = os.environ.get('B_PASS_CLEAR', '1') == '1'           # Howard 11/18：不要中途點，讓全域規劃自己找出路
 PASS_CLEAR_WAIT_S = float(os.environ.get('B_PASS_CLEAR_WAIT_S', '1.2'))
 APP_TRIG = float(os.environ.get('B_APP_TRIG', '0.6'))          # 單一控制器：有效估計且離導航目標 ≤ 此距離 ⇒ 接近開始（加入 TCP 任務）
@@ -636,6 +640,19 @@ def main():
             self.create_subscription(String, '/task/region_status', self._rstat, 20)
             self.create_subscription(Float64MultiArray, '/task/gmpc_pred', self._pred, 20)
             self.create_subscription(String, '/far/exec_state', self._xs_in, 10)
+            self.create_subscription(Float64MultiArray, '/cyl/obs', self._cyl_in, 20)
+            self._CR = None
+            if PICK:                                                  # 主執行緒預先 import（背景執行緒裡 import 會與 rclpy 收訊息衝突：s29 take_message 崩潰）
+                if HERE not in sys.path:
+                    sys.path.insert(0, HERE)
+                _pre = ('rclpy', 'std_msgs', 'geometry_msgs', 'nav_msgs', 'sensor_msgs', 'tf2_msgs', 'tf2_ros', 'rosgraph_msgs', 'builtin_interfaces', 'rcl_interfaces', 'rosidl_runtime_py', 'nav2_msgs')
+                _snap = {k_: v_ for k_, v_ in sys.modules.items() if k_.split('.')[0] in _pre}   # 專案模組會裝假 std_msgs（ros_stub）⇒ 匯入後還原 ROS 模組（同 world_d2_node）
+                import cyl_reach_map as _CR_
+                for k_ in [k_ for k_ in sys.modules if k_.split('.')[0] in _pre and k_ not in _snap]:
+                    sys.modules.pop(k_, None)
+                sys.modules.update(_snap)
+                self._CR = _CR_
+            self.cyl_obs, self.pick_goal, self.pick_sel, self.pick_th, self.pick_box, self.pick_app_t, self.pick_lifted, self.pick_ret = [], None, None, None, None, None, False, False
             self.pass_seen, self.pass_t, self.t_pass_pub, self.pass_cleared = False, None, -9.0, False
             from nav2_msgs.srv import ClearEntireCostmap
             self._clr_cli = self.create_client(ClearEntireCostmap, '/global_costmap/clear_entirely_global_costmap')
@@ -745,10 +762,66 @@ def main():
             o = tr.transform.rotation
             return np.array([tr.transform.translation.x, tr.transform.translation.y, math.atan2(2 * (o.w * o.z + o.x * o.y), 1 - 2 * (o.y * o.y + o.z * o.z))])
 
+        def _cyl_in(self, m):
+            d = np.asarray(m.data, float)
+            if len(d) < 10 or d[2] < 0.5 or not np.isfinite(d[6:9]).all():
+                return
+            p_od = (_T3(d[3:6]) @ np.r_[d[6:9], 1.0])[:3]             # 擷取時刻底盤（odom）×底盤座標圓柱中心
+            self.cyl_obs.append((float(d[9]), p_od))
+            self.cyl_obs = self.cyl_obs[-30:]
+
+        def _cyl_fuse(self, t):
+            rec = [p_ for t_, p_ in self.cyl_obs if t - t_ <= 1.0][-5:]
+            if len(rec) < 5:
+                return None
+            P_ = np.array(rec)
+            if float(np.linalg.norm(P_ - P_.mean(0), axis=1).max()) > 0.010:
+                return None
+            return P_.mean(0)
+
         def _xs_in(self, m):
+            if '"what": "pick_lifted"' in m.data:
+                self.pick_lifted = True
             self.xstate = m.data
             if '"what": "pass_start"' in m.data and not self.pass_seen:   # 開門完成、同一控制器接穿門：原導航鏈送穿門目標
                 self.pass_seen = True
+
+        def pick_tick(self, t):
+            if self.pick_lifted and not self.pick_ret:              # 已抬起且證據成立 ⇒ 返回起點（經開著的門）
+                self.pick_ret, self.pick_goal, self.pass_t = True, list(PICK_RETURN), t
+                self.event('pick_return_goal', goal=PICK_RETURN)
+                return
+            if self.pick_sel is None and self.pick_th is None:
+                est = self._cyl_fuse(t)
+                if est is not None:
+                    Tm_ = _T3(self.T_mo_now) @ np.r_[est, 1.0]
+                    c_map = Tm_[:3]; b_now = self.cur_map.copy()
+                    self.pick_box = dict(c_map=c_map, est_od=est, t=t)
+                    import threading
+                    CR = self._CR
+                    def _sel(box=self.pick_box, c=c_map, b=b_now):
+                        w0 = time.perf_counter(); box['sel'] = CR.select(c[:2], b); box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
+                    self.pick_th = threading.Thread(target=_sel, daemon=True); self.pick_th.start()
+                    self.event('pick_estimate', c_map=[round(float(x), 4) for x in c_map], n_obs=len(self.cyl_obs))
+            if self.pick_th is not None and self.pick_box.get('done') and self.pick_sel is None:
+                sel = self.pick_box['sel']; self.pick_th = None
+                if sel is None:
+                    self.event('pick_unreachable', c_map=[round(float(x), 4) for x in self.pick_box['c_map']], ms=round(self.pick_box['ms'], 1))
+                    self.abort('pick_unreachable'); return
+                self.pick_sel = sel; self.pick_goal = [float(x) for x in sel['base']]; self.pass_t = t
+                self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1))
+            if self.pick_sel is not None and self.pick_app_t is None:
+                b_ = np.asarray(self.pick_sel['base'], float)
+                dist_ = float(np.hypot(*(self.cur_map[:2] - b_[:2])))
+                if dist_ <= PICK_APP_DIST:
+                    Ti = np.linalg.inv(_T3(self.T_mo_now))
+                    Tg = np.asarray(self.pick_sel['T_grasp'], float).copy(); Tg[2, 3] = float(self.pick_box['c_map'][2])   # 抓取高度＝圓柱估計中心
+                    Tg_od = Ti @ Tg; Tb_od = Ti @ _T3(b_)
+                    Tapp = max(PICK_T_MIN, dist_ / 0.12 + 2.0)
+                    app = dict(T_grasp=Tg_od.tolist(), base_goal=[float(Tb_od[0, 3]), float(Tb_od[1, 3]), math.atan2(Tb_od[1, 0], Tb_od[0, 0])], T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - 2.5))
+                    self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
+                    self.pick_app_t = t
+                    self.event('pick_app_sent', dist=round(dist_, 3), T=round(Tapp, 3))
 
         def pub_goal(self, xy, yaw):
             m = PoseStamped(); m.header.frame_id = 'map'; m.header.stamp = self.get_clock().now().to_msg()
@@ -895,6 +968,9 @@ def main():
                     self.pass_wp_done, self.pass_t = True, t
                     self.event('pass_waypoint_reached', at=[round(float(x), 3) for x in self.cur_map])
                     g_ = PASS_GOAL
+                if PICK:                                              # 取物（穿門後不停車）：粗目標＝茶几先驗 → 看到圓柱後線上選抓取底盤位 → 近距送取物封包 → 抬起後回起點
+                    self.pick_tick(t)
+                    g_ = self.pick_goal if self.pick_goal is not None else PICK_PRIOR
                 if (self.path_t is None or self.path_t < self.pass_t) and t - self.t_pass_pub >= 1.0:
                     self.pub_goal(g_[:2], g_[2]); self.t_pass_pub = t
                 if self.xstate and ('"what": "world_end"' in self.xstate or 'engineering_abort' in self.xstate):

@@ -99,6 +99,11 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 ctrl.nav_in = snap['nav_in']
             if snap.get('arm_hist') is not None and mode == 'grasp' and hasattr(ctrl, 'bias_obs_update'):   # 偏置觀測（只用實測快照；同一快照只更新一次）
                 ctrl.bias_obs_update(snap['arm_hist'])
+            if snap.get('pick_app') is not None and mode == 'pass':   # 取物：監督送取物封包 ⇒ 同一拍換取物控制器（同一 mpc、承接狀態，不停車）
+                import door_pick_ctrl as _PK
+                ctrl = _PK.TablePickCtrl(ctrl, float(t_next), snap['pick_app'])
+                mode = 'pick'
+                ctrl._ev_sent = 0
             if snap.get('unbound') and mode == 'pass':                # 穿門段：執行端解綁生效回報
                 ctrl.unbound = True
             if snap.get('app_start') is not None and ctrl is not None and mode == 'grasp':   # 接近開始（觀測觸發）：剖面自本段起點起算；估計換成融合估計（重設融合）
@@ -158,7 +163,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 events += ev_
             seg, qj, sj = [], qp.copy(), s_cur.copy()
             prop = None
-            if mode in ('grasp', 'pass'):
+            if mode in ('grasp', 'pass', 'pick'):
                 ctrl._rec_tail = {1: []}
             elif o0 is None:
                 ctrl._cand_out = None
@@ -167,6 +172,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                     o = o0
                 elif mode == 'open':
                     o = ctrl.step(t_next + j * PHYS, qj.copy(), ctrl.phi_of(qj)[0])
+                elif mode == 'pick':
+                    o = ctrl.step(t_next + j * PHYS, qj.copy(), phi, finger_meas=fm, finger_force=snap.get('finger_force'))
                 else:
                     o = ctrl.step(t_next + j * PHYS, qj.copy(), phi, finger_meas=fm)
                 seg.append(_seg_entry(o))
@@ -193,7 +200,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                     tail_src = 'none_cert_mode'                       # 尾段證書模式（Codex 20261117_023209）：不補生未經完整淨空掃掠的 e＝0 尾段；沒有合格新證書 ⇒ 不提交、執行器沿用上一份已核尾段
                 elif tail is None and mode == 'grasp' and ctrl.stop is not None and getattr(ctrl, 'stop_ok', None):
                     tail_src = 'grasp_stopped_settled'               # 抓持段受控停止且已停穩：不再提交新段 ⇒ 執行器播完已核尾段 ⇒ 停穩驗收收尾（第七趟空跑到 89 s）
-                elif tail is None and mode == 'pass' and getattr(ctrl, 'finished', False):
+                elif tail is None and mode in ('pass', 'pick') and getattr(ctrl, 'finished', False):
                     tail_src = 'pass_finished'                       # 穿門段已停穩：不再提交新段（執行器播完已核尾段後停穩驗收）
                 elif tail is None and ctrl.abort is None:             # 停止模式（或候選尾段不一致）：在名目段結束處另做停止模擬
                     rt = {0: []}
@@ -229,7 +236,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                        stop=ctrl.stop, abort=ctrl.abort, done=bool(getattr(ctrl, 'done', False)), phase=getattr(ctrl, 'phase', None), k_tick=k_tick, q_pred=qp.tolist(),
                        sigma=float(getattr(ctrl, 'sigma', float('nan'))) if mode == 'open' else None, stop_mode=getattr(ctrl, 'stop_mode', None) if mode == 'open' else None,
                        release=bool(getattr(ctrl, 'release', False)) if mode == 'pass' else False)
-            if mode == 'pass':                                        # 穿門段事件（本拍新增）
+            if mode in ('pass', 'pick'):                              # 穿門／取物段事件（本拍新增）
                 n_ev = getattr(ctrl, '_ev_sent', 0)
                 out['events'] = (out.get('events') or []) + [dict(e_) for e_ in ctrl.events[n_ev:] if e_.get('what') != 'pass_start']
                 ctrl._ev_sent = len(ctrl.events)

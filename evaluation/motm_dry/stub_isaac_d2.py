@@ -40,6 +40,18 @@ bodies = BM.arm_bodies(K); G_b = BM.arm_gravity(K, q_b, bodies)
 dq = lambda q9: Dst + (BM.arm_gravity(K, q9, bodies) - G_b) / 600.0   # noqa: E731
 Kc = np.array([[465.6028747558594, 0.0, 320.0], [0.0, 465.60284423828125, 240.0], [0.0, 0.0, 1.0]])
 rng = np.random.default_rng(20261117)
+_SC = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'experiments', '20261112_m8_house_scene.json')))
+_TAB = next(f_ for f_ in _SC['furniture'] if f_['name'] == 'coffee_table')
+CYL_R, CYL_H, CYL_MARGIN = 0.015, 0.20, 0.05                          # 瓶子代理物規格（bottle_s0.yaml）；離桌邊 ≥0.05 m
+CYL_SEED = int(os.environ.get('CYL_SEED', '0'))
+if os.environ.get('CYL_XY'):
+    CYL_XY = np.array([float(x) for x in os.environ['CYL_XY'].split(',')])
+else:                                                                 # 桌面隨機（Howard 11/17「隨機放」；seed 登錄）
+    _rc = np.random.default_rng(CYL_SEED)
+    CYL_XY = np.array([_rc.uniform(_TAB['c'][0] - _TAB['s'][0] / 2 + CYL_MARGIN, _TAB['c'][0] + _TAB['s'][0] / 2 - CYL_MARGIN),
+                       _rc.uniform(_TAB['c'][1] - _TAB['s'][1] / 2 + CYL_MARGIN, _TAB['c'][1] + _TAB['s'][1] / 2 - CYL_MARGIN)])
+CYL_Z0 = float(_TAB['s'][2]) + CYL_H / 2
+F_CONTACT = 0.0040                                                    # 替身：夾住圓柱時的手指開度（假設值；Isaac 由物理決定）
 LEAF = (0.0, 0.95, 0.0, 0.04)
 
 
@@ -92,6 +104,8 @@ class Stub(Node):
         self.p_js = self.create_publisher(JointState, '/joint_states', 10)
         self.p_truth = self.create_publisher(Float64MultiArray, '/far/truth', 10)
         self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
+        self.p_cyl = self.create_publisher(Float64MultiArray, '/cyl/obs', 10)
+        self.cyl_p, self.cyl_att, self.cyl_seq, self.t_next_cyl, self.ffor, self.fcmd_last = np.r_[CYL_XY, CYL_Z0], None, 0, 0.0, (0.0, 0.0), 0.0089
         self.p_xs = self.create_publisher(String, '/far/exec_state', 10)
         self.p_d2 = self.create_publisher(Float64MultiArray, '/d2/state', 20)
         self.p_ack = self.create_publisher(String, '/d2/ack', 10)
@@ -157,6 +171,43 @@ class Stub(Node):
         s = Time(); s.sec = int(self.t); s.nanosec = int(round((self.t - int(self.t)) * 1e9))
         return s
 
+    def cyl_obs(self):
+        """圓柱合成觀測（替身）：5 Hz；中心＋上下緣三點都在手腕相機視野內才有效；輸出圓柱中心在底盤座標（加 1 mm 雜訊）。"""
+        if self.t < self.t_next_cyl - 1e-9:
+            return
+        self.t_next_cyl = self.t + 0.2; self.cyl_seq += 1
+        Ti = np.linalg.inv(K.fk(self.q, W0.OPT)); ok = self.cyl_att is None
+        for dz in (0.0, CYL_H / 2 - 0.01, -CYL_H / 2 + 0.01):
+            pc = (Ti @ np.r_[self.cyl_p + np.array([0, 0, dz]), 1.0])[:3]
+            if pc[2] < 0.12 or pc[2] > 3.0:
+                ok = False; break
+            u, v = (Kc @ (pc / pc[2]))[:2]
+            if not (5 < u < 635 and 5 < v < 475):
+                ok = False; break
+        data = [float(self.cyl_seq), self.t, 1.0 if ok else 0.0, *[float(x) for x in self.q[:3]]]
+        if ok:
+            pw = self.cyl_p + rng.normal(0, 1e-3, 3)
+            data += [float(x) for x in (np.linalg.inv(T3(self.q[:3])) @ np.r_[pw, 1.0])[:3]]
+        else:
+            data += [float('nan')] * 3
+        data.append(self.t)
+        self.p_cyl.publish(Float64MultiArray(data=data))
+
+    def cyl_step(self):
+        """替身夾持物理（簡化）：手指命令低於夾住開度時，TCP 對圓柱軸徑向 ≤6 mm、高度 ±5 cm ⇒ 夾住（接觸力 2 N、手指停在夾住開度）；夾住後圓柱跟 TCP。"""
+        Tt = K.fk(self.q, 'link_tcp')
+        if self.cyl_att is None:
+            rad = float(np.hypot(*(Tt[:2, 3] - self.cyl_p[:2]))); dz = abs(float(Tt[2, 3] - self.cyl_p[2]))
+            if self.fing <= F_CONTACT and rad <= 0.006 and dz <= 0.05:
+                self.cyl_att = np.linalg.inv(Tt) @ np.r_[self.cyl_p, 1.0]
+                self.tail_log.append(dict(t=round(self.t, 3), what='cyl_attached', rad_mm=round(rad * 1e3, 2), dz_mm=round(dz * 1e3, 2)))
+        if self.cyl_att is not None:
+            self.cyl_p = (Tt @ self.cyl_att)[:3]
+            self.fing = max(self.fing, F_CONTACT)
+            self.ffor = (2.0, 2.0) if self.fcmd_last < F_CONTACT else (0.0, 0.0)
+        else:
+            self.ffor = (0.0, 0.0)
+
     def obs(self):
         if self.t < self.t_next_obs - 1e-9:
             return
@@ -193,7 +244,7 @@ class Stub(Node):
                 if b_ is None:
                     b_ = np.asarray(self.pipe[i_ + 1][:3], float) if i_ + 1 < len(self.pipe) else np.zeros(3)   # 替身管線先移位再取值 ⇒ 本步套用＝移位前的第 1 筆
                 kb_ += [float(x) for x in b_]
-            self.p_d2.publish(Float64MultiArray(data=[float(n), self.t, *[float(x) for x in self.q], self.phi, self.fing, self.fing, *[float(x) for x in self.s], *[float(x) for x in np.concatenate(self.pipe)], *kb_]))
+            self.p_d2.publish(Float64MultiArray(data=[float(n), self.t, *[float(x) for x in self.q], self.phi, self.fing, self.fing, *[float(x) for x in self.s], *[float(x) for x in np.concatenate(self.pipe)], *kb_, float(self.ffor[0]), float(self.ffor[1])]))
             for _ in range(4):
                 rclpy.spin_once(self, timeout_sec=0.0)
             tgt_w = self.w0 + (self.t + PHYS) / RTF
@@ -230,7 +281,7 @@ class Stub(Node):
                 if src_ == 'tail_end' and float(np.abs(tw).max()) > 1e-3:
                     self.abort = 'd2_tail_end_base_nonzero'; break
                 if np.isfinite(ent[1]) and not isinstance(self.bind, dict):   # 綁定中保持鎖存開度（同 Isaac 執行器）；解綁後照命令
-                    self.fing = float(ent[1])
+                    self.fing = float(ent[1]); self.fcmd_last = float(ent[1])
             if self.bind == 'pending':
                 p_ = K.fk(self.q, 'link_tcp')[:3, 3]; self.bind = dict(ang=math.atan2(p_[1], p_[0]), phi=self.phi, f_hold=self.fing)
                 self.tail_log.append(dict(t=round(self.t, 3), what='finger_hold_latched', finger=self.fing))
@@ -243,6 +294,8 @@ class Stub(Node):
                 self.phi = self.bind['phi'] - d_
             if self.bind == 'released' and self.n % 10 == 0:
                 self.p_ack.publish(String(data=json.dumps(dict(what='unbound', n=int(self.n), req=getattr(self, 'unbind_req', None)))))
+            self.cyl_step()
+            self.cyl_obs()
             if not isinstance(self.bind, dict):
                 self.obs()                                            # 綁定前持續合成觀察（同 Isaac 端偵測持續運作）
             self.t = round(self.t + PHYS, 10); self.n += 1
@@ -266,11 +319,11 @@ class Stub(Node):
                 m.angle_min, m.angle_max, m.angle_increment = WN.SCAN_MIN, WN.SCAN_MAX, WN.SCAN_INC
                 m.range_min, m.range_max = WN.RANGE_MIN, WN.RANGE_MAX
                 m.ranges = [float(x) for x in r]; self.p_scan.publish(m)
-            self.rows.append([self.t, *self.q, self.phi, *tw, float(post), float(isinstance(self.bind, dict)), float(self.fing)])
+            self.rows.append([self.t, *self.q, self.phi, *tw, float(post), float(isinstance(self.bind, dict)), float(self.fing), *[float(x) for x in self.cyl_p], float(self.cyl_att is not None)])
             now = time.perf_counter()
             if now < tgt_w:
                 time.sleep(tgt_w - now)
-        json.dump(dict(tail_log=self.tail_log, stat=self.stat, n0=self.n0, abort=self.abort, end=self.end, phi_end_deg=math.degrees(self.phi)), open(OUT + '_stub.json', 'w'), indent=1)
+        json.dump(dict(cyl=dict(xy0=CYL_XY.tolist(), seed=CYL_SEED, z0=CYL_Z0, end=self.cyl_p.tolist(), attached=self.cyl_att is not None), tail_log=self.tail_log, stat=self.stat, n0=self.n0, abort=self.abort, end=self.end, phi_end_deg=math.degrees(self.phi)), open(OUT + '_stub.json', 'w'), indent=1)
         np.savez_compressed(OUT + '_stub.npz', rows=np.array(self.rows, float))
 
 

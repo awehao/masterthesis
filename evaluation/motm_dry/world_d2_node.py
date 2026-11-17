@@ -200,6 +200,12 @@ class WorldD2(Node):
             d_ = json.loads(m.data)
         except Exception:                                             # noqa: BLE001
             d_ = {}
+        if d_.get('what') == 'pick_app':                              # 取物封包（監督送；odom 座標）⇒ 下一拍快照帶給工作程序換取物控制器
+            if self.stage == 'run' and getattr(self, 'pick_app_sent', None) is None:
+                self.pick_app_sent = dict(d_['app'])
+                runner.extra = dict(getattr(runner, 'extra', None) or {}, pick_app=dict(d_['app']))
+                self.ev('pick_app', app={k_: v_ for k_, v_ in d_['app'].items() if k_ != 'T_grasp'}, grasp_xyz=[round(float(x), 4) for x in np.asarray(d_['app']['T_grasp'], float)[:3, 3]])
+            return
         if d_.get('what') == 'app':                                   # 單一控制器：接近開始（觀測觸發；監督端送）
             if self.stage == 'run' and getattr(self, 'app_t0', None) is None and self.ho is not None:
                 self.app_t0 = self.t
@@ -296,6 +302,8 @@ class WorldD2(Node):
         self.pipe = [d[20 + 9 * i:29 + 9 * i].copy() for i in range(D_STEPS)]
         k0_ = 20 + 9 * D_STEPS
         self.isaac_base_known = d[k0_:k0_ + 3 * (R_REM + 1)].reshape(-1, 3).copy() if len(d) >= k0_ + 3 * (R_REM + 1) else None   # Isaac 端已確定的實際底盤（步 n…n＋R_REM）
+        k1_ = k0_ + 3 * (R_REM + 1)
+        self.ffor = (float(d[k1_]), float(d[k1_ + 1])) if len(d) >= k1_ + 2 else None   # 兩指接觸力（取物證據；訊息尾端，舊版無此欄）
         self.step()
 
     def _nav_in_cb(self, m):
@@ -436,6 +444,8 @@ class WorldD2(Node):
                     ah_ = [h_ for h_ in self.arm_hist if self.n - NPH <= h_[0] <= self.n]
                     if len(ah_) == NPH + 1 and all(ah_[i_ + 1][0] == ah_[i_][0] + 1 for i_ in range(NPH)):
                         runner.extra = dict(getattr(runner, 'extra', None) or {}, arm_hist=ah_)
+                if getattr(self, 'ffor', None) is not None:
+                    runner.extra = dict(getattr(runner, 'extra', None) or {}, finger_force=list(self.ffor))
                 if getattr(self, 'unbound_ack', None) is not None:     # 穿門段：執行端已回報解綁生效 ⇒ 快照帶給控制器
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, unbound=True)
                 if REL_EXEC and k > 0:
@@ -465,7 +475,7 @@ class WorldD2(Node):
                             self.ev('release_committed')
                             self.ctl('unbind', req_n=int(self.n))
                         for e_ in (rec.get('events') or []):
-                            if str(e_.get('what', '')).startswith('pass_'):
+                            if str(e_.get('what', '')).startswith(('pass_', 'pick_')):
                                 self.ev(e_['what'], **{('ctrl_' + k_ if k_ in ('t', 'n', 'what') else k_): v_ for k_, v_ in e_.items() if k_ != 'what'})
                     elif was == 'nominal':
                         self.tail_props, self.tail_k0 = runner.tail_props(runner.tail, D_STEPS) if runner.tail is not None else [], k

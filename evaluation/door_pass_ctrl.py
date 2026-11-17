@@ -33,6 +33,7 @@ PH_EXTRA_TO_S = 3.0                                                  # 名目時
 Q_STOW = np.array([float(x) for x in os.environ.get('PASS_Q_STOW', '-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018').split(',')])
 W_Q_STOW = float(os.environ.get('PASS_W_Q', '2.0'))
 DONE_HOLD_S = 1.0
+PICK_FOLLOW = os.environ.get('D2_PICK', '0') == '1'                 # 穿門後接取物：穿門段不自行判完成（由監督送取物封包換控制器）
 DONE_Y_MIN = float(os.environ.get('PASS_DONE_Y_MIN', '0.3'))         # 場景專用：門口在 y＝0、客廳側 y＞0
 KEYS = ('env', 'base', 'self', 'shell_bar')
 
@@ -95,6 +96,8 @@ class DoorPassCtrl:
         self.events.append(dict(t=round(self.t, 3), what=what, **kw))
 
     def _stop(self, why, **kw):
+        if 'why' in kw:
+            kw['detail_why'] = kw.pop('why')                          # 違反 dict 自帶 why（如 clearance）⇒ 改名，避免與停止原因重複
         if self.stop is None:
             self.stop = dict(why=why, t=round(self.t, 3), **kw)
             self._ev('pass_stop', why=why, **kw)
@@ -243,7 +246,7 @@ class DoorPassCtrl:
                     ni = self.nav_in
                     halted = ni is not None and not ni.get('stale') and bool(ni.get('halted'))
                     self.t_halt = (self.t_halt if self.t_halt is not None else self.t) if halted else None
-                    if self.t_halt is not None and self.t - self.t_halt >= DONE_HOLD_S and float(np.abs(cand[:3]).max()) < 0.01 and float(q[1]) > DONE_Y_MIN:
+                    if not PICK_FOLLOW and self.t_halt is not None and self.t - self.t_halt >= DONE_HOLD_S and float(np.abs(cand[:3]).max()) < 0.01 and float(q[1]) > DONE_Y_MIN:
                         self.done = True
                         self._ev('pass_done', base=[round(float(x), 4) for x in q[:3]])
                         cand = None

@@ -21,7 +21,7 @@ import door_fast_kin as DFK                                           # noqa: E4
 
 K, XO = G.K, G.XO
 LIM = XO.LITE6_SAFE
-OUT = sys.argv[1]
+OUT = sys.argv[1] if (__name__ == '__main__' and len(sys.argv) > 1) else None
 scene = json.load(open(os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json')))
 FURN = {f['name']: f for f in scene['furniture']}
 TAB = FURN['coffee_table']
@@ -30,7 +30,7 @@ TOP = SZ
 X0, X1, Y0, Y1 = TX - SX / 2, TX + SX / 2, TY - SY / 2, TY + SY / 2
 H_GRASP, PRE = TOP + 0.10, 0.06
 RB = 0.30
-D_SIDE = (0.33, 0.38, 0.43, 0.48)
+D_SIDE = tuple(float(x) for x in os.environ.get('CYL_D_SIDE', '0.43,0.48,0.53').split(','))   # 底盤中心離桌邊；淨空另以控制器同一份 clear_door_fast＋門檻核
 LAT = tuple(np.round(np.arange(-0.30, 0.301, 0.05), 3))
 SEEDS = [np.array([-0.0128, -0.0519, 0.086, 0.0116, -1.6249, -0.0018]), np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157]),
          np.array([0.0, 0.3, 1.2, 0.0, -0.9, 0.0]), np.array([0.0, 0.6, 1.6, 0.0, -1.0, 0.0])]
@@ -64,6 +64,17 @@ def ik(T, b):
     return best
 
 
+import door_clear_door_fast as CF                                     # noqa: E402
+import door_wbopt as WB                                               # noqa: E402
+_T_WH0 = np.eye(4); _T_WH0[:3, 3] = [0.8, -0.04, 0.95]                # 門把（只影響門相關項；這裡門角取開門後 85°）
+
+
+def clear_ok(b, q):
+    """控制器同一份淨空（clear_door_fast；env、base、self 用執行時門檻 WB.THR；門角 85°）。"""
+    c = CF.clear_door_fast(np.r_[b, q, math.radians(85.0)], _T_WH0)
+    return all(float(c[k]) >= WB.THR[k] for k in ('env', 'base', 'self')), c
+
+
 def arm_over_table_ok(b, q):
     x9 = np.r_[b, q]
     for n in LINKS:
@@ -88,6 +99,32 @@ def candidates(c):
     return out
 
 
+def select(c_xy, b_now, w_dist=1.0, w_sig=0.02):
+    """線上抓取底盤位選擇（監督用）：圓柱估計 c_xy（map）、目前底盤 b_now（map）。回最佳候選 dict 或 None（不可達）。
+    評分＝底盤直線距離×w_dist＋w_sig／σ_min（同可達性地圖的 IK、限位、σ、家具與桌面淨空條件）。"""
+    c = np.asarray(c_xy, float); best = None
+    for side, d, lat, b in candidates(c):
+        if not base_free(b):
+            continue
+        v = c - b[:2]; dist = float(np.linalg.norm(v))
+        if dist < 0.25 or dist > 0.80:
+            continue
+        a = v / dist
+        for fl in (False, True):
+            g = ik(grasp_T(c, a, fl), b)
+            if g is None or not arm_over_table_ok(b, g[0]) or not clear_ok(b, g[0])[0]:
+                continue
+            Tp = grasp_T(c, a, fl); Tp[:3, 3] -= PRE * np.r_[a, 0.0]
+            gp = ik(Tp, b)
+            if gp is None or not clear_ok(b, gp[0])[0]:
+                continue
+            cost = w_dist * float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + w_sig / max(float(g[2]), 1e-6)
+            if best is None or cost < best['cost']:
+                best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), flip=bool(fl), sigma_min=float(g[2]), cost=cost, q=g[0].tolist(), T_grasp=grasp_T(c, a, fl).tolist())
+            break
+    return best
+
+
 def main():
     xs = np.round(np.arange(X0 + 0.05, X1 - 0.05 + 1e-9, 0.05), 3)
     ys = np.round(np.arange(Y0 + 0.05, Y1 - 0.05 + 1e-9, 0.05), 3)
@@ -106,14 +143,14 @@ def main():
                 g, fl = None, False
                 for fl in (False, True):
                     g = ik(grasp_T(c, a, fl), b)
-                    if g is not None and arm_over_table_ok(b, g[0]):
+                    if g is not None and arm_over_table_ok(b, g[0]) and clear_ok(b, g[0])[0]:
                         break
                     g = None
                 if g is None:
                     continue
                 Tp = grasp_T(c, a, fl); Tp[:3, 3] -= PRE * np.r_[a, 0.0]
                 p = ik(Tp, b)
-                if p is None:
+                if p is None or not clear_ok(b, p[0])[0]:
                     continue
                 score = float(g[2])
                 if best is None or score > best['sigma_min']:
@@ -124,7 +161,7 @@ def main():
     summ = dict(table=dict(center=[TX, TY], size=[SX, SY], top=TOP), grid=dict(xs=xs.tolist(), ys=ys.tolist(), step=0.05, margin=0.05),
                 grasp=dict(h=H_GRASP, pre=PRE, def_='TCP z＝水平接近方向、TCP y＝水平開合（瓶子線 grasp_pose 定義推廣）'),
                 base=dict(sides=['west', 'south', 'north'], d=list(D_SIDE), lat=list(LAT), rb=RB, note='東側到沙發約 0.45 m，不列'),
-                reach_rule='抓取＋預抓 IK 殘差 ≤1e-4、LITE6_SAFE 內留 0.05 rad、σ_min ≥ 0.02；底盤圓不碰家具；手臂連桿原點在桌面投影內高度 ≥ 桌面＋0.05',
+                reach_rule='抓取＋預抓 IK 殘差 ≤1e-4、LITE6_SAFE 內留 0.05 rad、σ_min ≥ 0.02；底盤圓不碰家具；手臂連桿原點在桌面投影內高度 ≥ 桌面＋0.05；抓取與預抓構型過控制器同一份 clear_door_fast（env／base／self 執行門檻 %s）' % {k: WB.THR[k] for k in ('env', 'base', 'self')},
                 n_cells=len(cells), n_reachable=n_ok, frac_reachable=round(n_ok / max(len(cells), 1), 4), cells=cells)
     json.dump(summ, open(OUT + '.json', 'w'), ensure_ascii=False, indent=1)
     import matplotlib
