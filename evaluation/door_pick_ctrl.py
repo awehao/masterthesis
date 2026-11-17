@@ -108,8 +108,8 @@ class TablePickCtrl(P.DoorPassCtrl):
         u = XE.minjerk(min(max((t_abs - self.t_ph0) / T_CARRY, 0.0), 1.0))[0]
         A, Bm = self.T_rel_s0, self.T_rel_stow
         T = np.eye(4)
-        T[:3, 3] = (1 - u) * A[:3, 3] + u * Bm[:3, 3]
-        T[:3, :3] = A[:3, :3] @ _exp_R(u * _log_R(A[:3, :3].T @ Bm[:3, :3]))
+        T[:3, 3] = (1 - u) * A[:3, 3] + u * Bm[:3, 3]                   # 只移位置：夾爪相對底盤姿態保持抬升時（圓柱維持直立；第十四趟混到收臂姿態 ⇒ 手腕繞接近軸轉、圓柱轉橫滑落）
+        T[:3, :3] = A[:3, :3]
         return T
 
     def _held(self):
@@ -156,7 +156,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self._stop('lost_after_lift', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas], force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
         elif self.phase == 'CARRY':
             T_now = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
-            ep = float(np.linalg.norm(T_now[:3, 3] - self.T_rel_stow[:3, 3]))
+            ep = float(np.linalg.norm(T_now[:3, 3] - self._carry_target(self.t_ph0 + T_CARRY)[:3, 3]))
             if el >= T_CARRY and ep <= 0.010:
                 self._goto('RETURN', carry_err_mm=round(ep * 1e3, 2))
             elif el > T_CARRY + PH_TO_S:
@@ -193,7 +193,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         elif self.phase == 'CARRY':
             Ts = [self._carry_target(t_eff + k * DT) for k in range(XO.N + 1)]
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=C0.W_FAR,
-                       lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=True, qp_solver='gi', q_post=np.tile(P.Q_STOW, (XO.N, 1)), w_q=P.W_Q_STOW, **B.W_ARM)
+                       lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=True, qp_solver='gi', **B.W_ARM)
         mpc = self.mpc
         u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
         if math.isfinite(umin0):
