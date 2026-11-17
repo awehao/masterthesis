@@ -95,6 +95,6 @@ with writer.saving(fig, OUT, dpi=100):
         ax3.scatter([hx[0]], [hx[1]], [Th[2, 3]], color='gold', s=40)
         ax3.set_xlim(-0.6, 1.8); ax3.set_ylim(-1.6, 0.8); ax3.set_zlim(0, 2.0)
         ax3.view_init(elev=22, azim=-60); ax3.set_title('斜視')
-        fig.suptitle('D2 同鏈乾跑重播（假世界運動學＋合成觀察，非 Isaac 物理）  %s\nt=%.1f s   %s   門角 %.1f°' % (os.path.basename(PFX), t, stage_txt(t), math.degrees(phi)), fontsize=12)
+        fig.suptitle(os.environ.get('VIDEO_TITLE', 'D2 同鏈乾跑重播（假世界運動學＋合成觀察，非 Isaac 物理）') + '  %s\nt=%.1f s   %s   門角 %.1f°' % (os.path.basename(PFX), t, stage_txt(t), math.degrees(phi)), fontsize=12)
         writer.grab_frame()
 print('wrote', OUT, len(idx), 'frames')
