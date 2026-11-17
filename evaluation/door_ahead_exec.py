@@ -185,6 +185,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                         tail, tail_src = [(a.copy(), b.copy()) for a, b in rec[nph:]], 'candidate_extra1'
                 if tail is None and getattr(ctrl, 'tail_cert_mode', False):
                     tail_src = 'none_cert_mode'                       # 尾段證書模式（Codex 20261117_023209）：不補生未經完整淨空掃掠的 e＝0 尾段；沒有合格新證書 ⇒ 不提交、執行器沿用上一份已核尾段
+                elif tail is None and mode == 'grasp' and ctrl.stop is not None and getattr(ctrl, 'stop_ok', None):
+                    tail_src = 'grasp_stopped_settled'               # 抓持段受控停止且已停穩：不再提交新段 ⇒ 執行器播完已核尾段 ⇒ 停穩驗收收尾（第七趟空跑到 89 s）
                 elif tail is None and mode == 'pass' and getattr(ctrl, 'finished', False):
                     tail_src = 'pass_finished'                       # 穿門段已停穩：不再提交新段（執行器播完已核尾段後停穩驗收）
                 elif tail is None and ctrl.abort is None:             # 停止模式（或候選尾段不一致）：在名目段結束處另做停止模擬

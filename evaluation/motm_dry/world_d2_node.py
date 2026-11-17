@@ -31,6 +31,7 @@ import door_p2_planner_server as PS                                  # noqa: E40
 import wrist_v0_capture as W0                                        # noqa: E402
 FSP = PS.PlannerServer()                                             # D2 首段規劃程序（背景）
 FS_LEAD = float(os.environ.get('D2_FS_LEAD', '1.5'))
+FS_RETRY_LEAD = float(os.environ.get('D2_FS_RETRY_LEAD', '0.5'))   # 首段重送：預計結果可用所需模擬時間（RTF 0.2 下規劃約 1 s 牆鐘＝0.2 s 模擬，留餘量）
 R_REM = int(os.environ.get('D2_R_REM', str(D_STEPS - NPH)))   # 放行收到後到執行器套用的剩餘延遲（步）：總延遲 D＝安全鏈一個 GUARD 週期（NPH）＋剩餘
 REL_EXEC = os.environ.get('D2_REL_EXEC', '1') == '1'          # B（Codex 150510）：執行與預測用安全鏈實際放行值
 ISAAC = os.environ.get('D2_PLANT', 'fake') == 'isaac'   # Isaac 模式：受控對象＝Isaac 執行器（每步收 /d2/state、發 /d2/out）；本節點不積分、不發時鐘／odom／掃描／觀察
@@ -409,6 +410,13 @@ class WorldD2(Node):
                     rid, Xd, feas, failed, fin, wall, info = r
                     self.fs.update(pending=False, feasible=bool(feas), wall_s=round(wall, 3), t_done=round(self.t, 3), failed=failed, info=info)
                     self.ev('first_segment_result', feasible=bool(feas), wall_s=round(wall, 3), t_avail_rel=round(self.t - self.t_h, 3), failed=failed)
+                    if not feas and not getattr(self, 'fs_retried', False) and getattr(self, 'fs_plan', None) is not None:   # 首段不可行 ⇒ 以最新狀態重送一次（Codex 第七趟裁定）；READY 預測自重送時刻起算；sigma_ok 等條件不放寬
+                        self.fs_retried = True
+                        t_now_rel = self.t - self.t_h
+                        self.fs_plan['t_ready_rel'] = max(float(self.fs_plan['t_ready_rel']), t_now_rel + FS_RETRY_LEAD + G.SCHED['close_s'] + G.SCHED['confirm_s'] - DT)
+                        self.ev('first_segment_retry', t_ready_rel=round(self.fs_plan['t_ready_rel'], 3))
+                        self.submit_first(self.q.copy(), t_now_rel)
+                        Xd = None
                     if Xd is not None:
                         runner.extra = dict(door_rebind=dict(T_plan=self.fs['T_plan'].tolist(), T_HE_pred=self.fs['T_HE_pred'].tolist(), x_pred=self.fs['x_pred'].tolist(), Xd=np.asarray(Xd, float).tolist(),
                                                              ok=bool(feas), t_avail=self.t - self.t_h + NPH * PHYS, t_ready_pred=self.fs['t_ready_rel']))

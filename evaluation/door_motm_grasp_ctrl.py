@@ -91,6 +91,7 @@ def door_filter(obs, ap, phi):
     return out
 
 
+CLOSE_WAIT_S = float(os.environ.get('GRASP_CLOSE_WAIT_S', '1.0'))   # 插入名目時間到後閉爪準備窗口上限（模擬秒；0＝原單拍判定）
 BG_V = 0.06                                                          # 導航到點後收斂到抓取底盤位姿的參考速度上限（m/s）
 
 
@@ -107,6 +108,7 @@ class MovingGraspCtrl:
         self.deadline_inject, self.fb_inject = None, None
         self.n_deadline_miss, self.tick_log, self._fb_ok = 0, [], False
         self.close_gate = None                                       # r8
+        self.close_wait_t0, self.close_delay = None, 0.0               # 閉爪準備窗口
         self._ikc = {}                                               # r10：每拍清空
         self._pool, self._pool_owned = None, False
         if not isinstance(pool, (int, float)):                       # r9：外部共用計算池
@@ -846,17 +848,31 @@ class MovingGraspCtrl:
                     self._stop('lock_budget_exceeded_in_contact', budget={k_: self.lock_budget.get(k_) for k_ in ('pos_m', 'ang_deg')})   # 已接觸 ⇒ 既有接觸停法
             if self.stop is None:
                 h, i, cl, cf = (self.sched[k] for k in ('hold_s', 'ins_s', 'close_s', 'confirm_s'))
-                if self.phase == 'INSERT' and tr >= h + i and self.lock_budget_fn is not None and not fresh:
+                bud_bad = self.phase == 'INSERT' and tr >= h + i and self.lock_budget_fn is not None and not fresh
+                gate_bad = self.phase == 'INSERT' and tr >= h + i and self.close_gate is not None and not self.close_gate(self)
+                if (bud_bad or gate_bad) and CLOSE_WAIT_S > 0.0:      # 閉爪準備窗口（Codex 20261117 第七趟裁定）：保持 s_final、繼續閉迴路追蹤、不閉爪；總期限自第一次未過起算、不重置
+                    if self.close_wait_t0 is None:
+                        self.close_wait_t0 = self.t
+                        self._ev('close_wait_start', budget_ok=not bud_bad, gate_ok=not gate_bad, budget={k_: self.lock_budget.get(k_) for k_ in ('pos_m', 'ang_deg')} if self.lock_budget else None)
+                    if self.t - self.close_wait_t0 > CLOSE_WAIT_S + 1e-9:
+                        if bud_bad:
+                            self._stop('lock_budget_exceeded_no_close', budget={k_: self.lock_budget.get(k_) for k_ in ('pos_m', 'ang_deg')}, waited_s=round(self.t - self.close_wait_t0, 3))
+                        else:
+                            self._stop('close_gate_not_ready', waited_s=round(self.t - self.close_wait_t0, 3))
+                elif bud_bad:
                     self._stop('lock_budget_exceeded_no_close', budget={k_: self.lock_budget.get(k_) for k_ in ('pos_m', 'ang_deg')})     # 超預算不閉爪
                 elif self.phase == 'HOLD' and tr >= h:
                     self._phase('INSERT')
-                elif self.phase == 'INSERT' and tr >= h + i and self.close_gate is not None and not self.close_gate(self):
+                elif gate_bad:
                     self._stop('close_gate_not_ready')                 # r8：下游首段未就緒 ⇒ 不閉爪
                 elif self.phase == 'INSERT' and tr >= h + i:
+                    if self.close_wait_t0 is not None:
+                        self.close_delay = self.t - self.close_wait_t0  # 後續排程（CLOSE→CONFIRM）以實際閉爪開始重算
+                        self._ev('close_wait_done', waited_s=round(self.close_delay, 3))
                     self._phase('CLOSE')
                     self.lock = dict(T=self.T_est.copy(), phi=float(phi_meas), t=round(self.t, 3), est_ver=self.est_ver)   # r4：閉爪開始鎖定接觸任務參考
                     self._ev('contact_ref_locked', phi_deg=round(math.degrees(float(phi_meas)), 4), est_ver=self.est_ver)
-                elif self.phase == 'CLOSE' and tr >= h + i + cl:
+                elif self.phase == 'CLOSE' and tr >= h + i + cl + self.close_delay:
                     self._phase('CONFIRM')
                 rel_ok = ep <= CONFIRM['pos_m'] and er <= CONFIRM['rot_deg'] and lin <= CONFIRM['lin_mps'] and ang <= CONFIRM['ang_rps']
                 if self.phase == 'READY':                              # r2：READY 每拍重判（交接被接受前）
