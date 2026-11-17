@@ -815,8 +815,10 @@ def main():
                 dist_ = float(np.hypot(*(self.cur_map[:2] - b_[:2])))
                 if dist_ <= PICK_APP_DIST:
                     Ti = np.linalg.inv(_T3(self.T_mo_now))
-                    Tg = np.asarray(self.pick_sel['T_grasp'], float).copy(); Tg[2, 3] = float(self.pick_box['c_map'][2])   # 抓取高度＝圓柱估計中心
-                    Tg_od = Ti @ Tg; Tb_od = Ti @ _T3(b_)
+                    Tb_od = Ti @ _T3(b_)                               # 底盤目標：地圖→里程（給控制器的收斂目標）
+                    e_od = np.asarray(self.pick_box['est_od'], float)   # 抓取目標一律留在里程座標（不經 map 來回：AMCL 修正會讓 TCP 偏離圓柱；s32 偏約 3 cm 夾空）
+                    a_ = e_od[:2] - Tb_od[:2, 3]; a_ = a_ / max(float(np.linalg.norm(a_)), 1e-9)
+                    Tg_od = np.asarray(self._CR.grasp_T(e_od[:2], a_, bool(self.pick_sel['flip'])), float); Tg_od[2, 3] = float(e_od[2])
                     Tapp = max(PICK_T_MIN, dist_ / 0.12 + 2.0)
                     app = dict(T_grasp=Tg_od.tolist(), base_goal=[float(Tb_od[0, 3]), float(Tb_od[1, 3]), math.atan2(Tb_od[1, 0], Tb_od[0, 0])], T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - 2.5))
                     self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))

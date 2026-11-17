@@ -39,11 +39,19 @@ BASE_L, BASE_W, BASE_H = 0.50, 0.45, 0.30
 t_start = T0 if T0 is not None else (max(0.0, (t_take or 0.0) - 1.0) if t_app is not None else max(0.0, (t_take or 0.0) - 8.0))
 idx = [i for i in range(len(R)) if t_start <= R[i, 0] <= t_end + 0.5 and int(round(R[i, 0] * 100)) % 10 == 0]
 trail = []
+_SN = PFX + '_stub.npz'
+CYL = np.load(_SN)['rows'] if (os.path.exists(_SN) and np.load(_SN)['rows'].shape[1] >= 21) else None   # 替身圓柱（x,y,z,夾住）＝倒數四欄
+XL = [float(x) for x in os.environ.get('VIDEO_XLIM', '-0.9,2.1').split(',')]; YL = [float(x) for x in os.environ.get('VIDEO_YLIM', '-1.9,0.9').split(',')]
 
 
 def stage_txt(t):
+    t_pk = next((t_ for t_, w_ in ev if w_ == 'pick_start'), None); t_lf = next((t_ for t_, w_ in ev if w_ == 'pick_lifted'), None)
+    if t_lf is not None and t >= t_lf:
+        return '單一控制器：持物返回起點（經開著的門）'
+    if t_pk is not None and t >= t_pk:
+        return '單一控制器：接近→夾取茶几圓柱體→抬升確認'
     if t_rel is not None and t >= t_rel:
-        return '單一控制器：放手→退出→收臂→繞門扇穿門'
+        return '單一控制器：放手→退出→收臂→穿門→前往茶几'
     if t_app is not None:
         if t < t_app:
             return '單一控制器：導航（手臂保持）'
@@ -86,7 +94,10 @@ with writer.saving(fig, OUT, dpi=100):
         bc = corners @ np.array([[c_, s_], [-s_, c_]]) + q9[:2]
         ax.fill(bc[:, 0], bc[:, 1], color='tab:blue', alpha=0.35, zorder=2)
         ax.plot(P[:, 0], P[:, 1], '-o', color='tab:red', ms=3, lw=2, zorder=5)
-        ax.set_xlim(-0.9, 2.1); ax.set_ylim(-1.9, 0.9); ax.set_aspect('equal')
+        if CYL is not None:
+            ic = int(np.searchsorted(CYL[:, 0], t)); ic = min(ic, len(CYL) - 1); cp = CYL[ic, -4:-1]; att = CYL[ic, -1] > 0.5
+            ax.add_patch(plt.Circle((cp[0], cp[1]), 0.04, color='tab:green' if att else 'tab:purple', zorder=6))
+        ax.set_xlim(*XL); ax.set_ylim(*YL); ax.set_aspect('equal')
         ax.set_title('俯視'); ax.grid(alpha=0.3)
         ax3 = fig.add_subplot(1, 2, 2, projection='3d')
         bz = np.array([[x, y, zz] for zz in (0.0, BASE_H) for x, y in corners[:4]])
@@ -97,7 +108,10 @@ with writer.saving(fig, OUT, dpi=100):
         L = lp
         ax3.plot_surface(np.array([[L[0, 0], L[1, 0]], [L[0, 0], L[1, 0]]]), np.array([[L[0, 1], L[1, 1]], [L[0, 1], L[1, 1]]]), np.array([[0, 0], [LEAF_H, LEAF_H]]), color='peru', alpha=0.45)
         ax3.scatter([hx[0]], [hx[1]], [Th[2, 3]], color='gold', s=40)
-        ax3.set_xlim(-0.6, 1.8); ax3.set_ylim(-1.6, 0.8); ax3.set_zlim(0, 2.0)
+        if os.environ.get('VIDEO_FOLLOW') == '1':
+            ax3.set_xlim(q9[0] - 1.2, q9[0] + 1.2); ax3.set_ylim(q9[1] - 1.2, q9[1] + 1.2); ax3.set_zlim(0, 2.0)
+        else:
+            ax3.set_xlim(-0.6, 1.8); ax3.set_ylim(-1.6, 0.8); ax3.set_zlim(0, 2.0)
         ax3.view_init(elev=22, azim=-60); ax3.set_title('斜視')
         fig.suptitle(os.environ.get('VIDEO_TITLE', 'D2 同鏈乾跑重播（假世界運動學＋合成觀察，非 Isaac 物理）') + '  %s\nt=%.1f s   %s   門角 %.1f°' % (os.path.basename(PFX), t, stage_txt(t), math.degrees(phi)), fontsize=12)
         writer.grab_frame()
