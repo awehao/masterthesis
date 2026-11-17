@@ -162,8 +162,18 @@ class MovingGraspCtrl:
         return self.off0 + (self._gravity(q9) - self.G0) / self.joint_kp
 
     def s_of(self, t_rel):
-        """TCP 沿接近軸的退讓量 s（S_PRE→0）：HOLD 段 S_PRE、INSERT 段最小急動、之後 0。t_rel 自控制器起點。"""
+        """TCP 沿接近軸的退讓量 s（S_PRE→0）：HOLD 段 S_PRE、INSERT 段最小急動、之後 0。t_rel 自控制器起點。
+        D2 承接（ins_prof 有值；預設 None＝原行為）：hold_s 應為 0，插入段＝自交權當下 (s0, ṡ0, s̈0) 到 (0,0,0) 的五次多項式（時長 ins_s），承接連續接近的進度，不重播 HOLD／INSERT。"""
         h, i = self.sched['hold_s'], self.sched['ins_s']
+        ip = getattr(self, 'ins_prof', None)
+        if ip is not None:
+            u = min(max(t_rel - h, 0.0), i)
+            s0, v0, a0 = float(ip['s0']), float(ip['v0']), float(ip['a0'])
+            T2, T3, T4, T5 = i * i, i ** 3, i ** 4, i ** 5
+            c3 = (20 * (0.0 - s0) - 12 * v0 * i - 3 * a0 * T2) / (2 * T3)
+            c4 = (30 * (s0 - 0.0) + 16 * v0 * i + 3 * a0 * T2) / (2 * T4)
+            c5 = (12 * (0.0 - s0) - 6 * v0 * i - a0 * T2) / (2 * T5)
+            return s0 + v0 * u + 0.5 * a0 * u * u + c3 * u ** 3 + c4 * u ** 4 + c5 * u ** 5
         if t_rel <= h:
             return self.S_PRE
         a, _ = XE.minjerk((t_rel - h) / i)

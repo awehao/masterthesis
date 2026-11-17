@@ -32,6 +32,23 @@ class DoorOpenPhase:
         self.req_log, self.decisions = [], []
         self.warm_ms = None
 
+    # ---- D2：交權時改綁首段（首段由背景規劃程序依交權時的預測 READY 狀態算出；不在任何控制拍內）
+    class _Dense:
+        def __init__(self, Xd, h):
+            self.Xd, self.h = np.asarray(Xd, float), float(h)
+
+        def dense_reference(self, sub=4):
+            return self.Xd, self.h, 0.0
+
+    def rebind_first(self, T_plan, T_HE_pred, x_pred, Xd, ok, t_avail, t_ready_pred, h=0.05):
+        """以背景規劃程序回傳的密集參考改綁首段與輔助最佳化器（同 door_ahead_case 的建法：DoorWBOpt(T_plan, I, x_pred, goal, N=2, dt=0.2, T_HE)）。"""
+        WB = self.P2.WB
+        WB.set_model(phi0=self.phi_b, finger_q=self.fq)
+        self.helper = WB.DoorWBOpt(np.asarray(T_plan, float), np.eye(4), np.asarray(x_pred, float), self.goal, N=2, dt=0.2, T_HE=np.asarray(T_HE_pred, float), project_start=False)
+        self.first.clear()
+        self.first.update(ok=bool(ok), t_avail=float(t_avail), o=self._Dense(Xd, h), T_plan=np.asarray(T_plan, float), T_HE_pred=np.asarray(T_HE_pred, float), x_pred=np.asarray(x_pred, float), t_ready_pred=float(t_ready_pred), req=None)
+        return dict(ok=bool(ok), n_dense=len(Xd))
+
     # ---- 起跑前預熱（對應遠距接近期間的背景工作；不在任何控制拍內）
     def prewarm(self, gc, q_pred):
         """以預測 READY 構型建一個丟棄用開門執行層並空跑一拍：匯入、求解器第一次呼叫、停法工作程序的模組載入都在這裡發生。"""

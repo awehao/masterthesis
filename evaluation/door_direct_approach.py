@@ -40,6 +40,10 @@ tl = BT[-1, 0]
 ext = [(tl + k * 0.01, BT[-1, 1] + v_ext[0] * k * 0.01, BT[-1, 2] + v_ext[1] * k * 0.01, BT[-1, 3]) for k in range(1, 801)]
 BT = np.vstack([BT, np.array(ext)])
 q_arm0 = L[i0, 4:10].copy()
+SB_SET = os.environ.get('SB_SET')                                    # 診斷：把底盤軌跡沿門法向平移，使紀錄末端（門前線段）離門距離＝SB_SET（只改候選幾何）
+if SB_SET:
+    dy = (-0.04 - float(SB_SET)) - BT[-1, 2]
+    BT[:, 2] += dy
 n_ = (T_H[:3, :3] @ A_H0).copy(); n_[2] = 0; n_ /= np.linalg.norm(n_)
 ax = T_H[:3, 0].copy(); ax[2] = 0; d_ = -ax / np.linalg.norm(ax)
 yaw = math.atan2(-n_[1], -n_[0])

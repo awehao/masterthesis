@@ -82,6 +82,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
         try:
             q = np.asarray(snap['q'], float).copy()
             t_next = float(snap['t_next'])
+            if snap.get('door_rebind') is not None and door is not None:  # D2：首段結果到達後隨快照改綁（計入本拍計算時間）
+                door.rebind_first(**snap['door_rebind'])
             phi = float(snap.get('phi', phi0))
             fm = snap.get('finger', finger0)
             if snap.get('first'):                                     # 初始化：第一段以實測狀態在 n_0 直接算（執行器尚未起跑）
@@ -235,6 +237,8 @@ class AheadRunner:
             snap['phi'] = float(phi)
         if finger is not None:
             snap['finger'] = finger
+        if getattr(self, 'extra', None):                              # D2：下一拍快照附帶的資料（如首段改綁），送出即清
+            snap.update(self.extra); self.extra = None
         self.pending = dict(ver=self.ver, n_send=int(n_send), w_send=time.perf_counter())
         self.conn.send(('tick', snap))
 

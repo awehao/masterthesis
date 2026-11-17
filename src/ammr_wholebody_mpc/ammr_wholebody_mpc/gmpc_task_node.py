@@ -147,6 +147,12 @@ class GMPCTaskNode(GMPCNode):
                 self._t_region = dict(id=rg.get('id'), p0=L[0], p1=L[1], w=float(rg.get('half_width', 0.02)), ext=float(rg.get('extend', 0.40)), enter_by=float(rg.get('enter_by', 1e9)),
                                       phase=ph, n_plan=0, t_set=self._t_now())
                 self._t_reg_t = -9.0
+            else:                                                     # 同一區域：線段以最新條件為準（操作端以當下 map←odom 換算；定位修正會使地圖座標的線移動）
+                R_ = self._t_region
+                mv = max(float(np.linalg.norm(L[0] - R_['p0'])), float(np.linalg.norm(L[1] - R_['p1'])))
+                R_['p0'], R_['p1'] = L[0], L[1]
+                if mv > 0.005:
+                    self._t_reg_t = -9.0                              # 移動超過 5 mm ⇒ 下一個區域週期立即重設參考路徑
         elif self._t_region is not None and d.get('region_clear'):
             self._t_region_off('cleared')
         self._t_ack(True, 'conditions', heading=round(self._t_heading, 5), box=tgt.round(4).tolist(), need_s=round(need, 3), region=None if self._t_region is None else self._t_region['id'])
