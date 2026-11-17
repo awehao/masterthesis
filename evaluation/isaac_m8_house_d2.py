@@ -298,6 +298,8 @@ class Bridge(Node):
             self.d2_n0 = int(c['n0'])
         elif w == 'bind':
             self.d2_bind = True
+        elif w == 'attach_cyl':
+            self.d2_attach_cyl = True                                # 圓柱理想連接請求（夾住證據成立後）
         elif w == 'unbind':
             self.d2_unbind = True                                    # 穿門段：放手 ⇒ 解除 FixedJoint
             self.d2_unbind_req = c.get('req_n')
@@ -626,7 +628,7 @@ def main():
 
     exc = None
     scans = []
-    d2_stat, d2_last, bound, bind_pending, fcmd, released, f_hold = dict(late=0, on_time=0), None, False, False, FINGER_OPEN, False, None
+    d2_stat, d2_last, bound, bind_pending, fcmd, released, f_hold, cyl_attached = dict(late=0, on_time=0), None, False, False, FINGER_OPEN, False, None, False
     pace_off = 0.0
     try:
         for k in range(n_steps):
@@ -756,6 +758,22 @@ def main():
                     ev('bind_fixed_joint', door_deg=round(math.degrees(phi_now), 4), rel_pos=[round(float(v), 5) for v in Rr0[:3, 3]], note='理想抓持假設（FixedJoint）')
             if node.d2_bind and not bound and not released:
                 bind_pending = True
+            if getattr(node, 'd2_attach_cyl', False) and PICK and not cyl_attached and v_grip is not None:   # Howard 11/18「夾到就改成理想連接」：FixedJoint 以當下夾爪對圓柱的相對位姿（理想抓持假設）
+                Tg_ = T_of(*[np.asarray(x)[0] for x in v_grip.get_world_poses()])
+                Tc_ = T_of(*[np.asarray(x)[0] for x in v_cyl.get_world_poses()])
+                Rc0 = np.linalg.inv(Tc_) @ Tg_
+                jc_ = UsdPhysics.FixedJoint.Define(stage, '/World/cyl_ideal_attach')
+                jc_.CreateBody0Rel().SetTargets([Sdf.Path(str(grip_b[0]))])
+                jc_.CreateBody1Rel().SetTargets([Sdf.Path('/World/cyl')])
+                jc_.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+                jc_.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+                qc_ = W0.R_to_wxyz(Rc0[:3, :3])
+                jc_.CreateLocalPos1Attr().Set(Gf.Vec3f(*[float(v) for v in Rc0[:3, 3]]))
+                jc_.CreateLocalRot1Attr().Set(Gf.Quatf(float(qc_[0]), float(qc_[1]), float(qc_[2]), float(qc_[3])))
+                jc_.CreateJointEnabledAttr().Set(True)
+                jc_.CreateBreakForceAttr().Set(float('inf')); jc_.CreateBreakTorqueAttr().Set(float('inf'))
+                cyl_attached = True
+                ev('cyl_attach_fixed_joint', rel_pos=[round(float(v), 5) for v in Rc0[:3, 3]], cyl_z=round(float(Tc_[2, 3]), 4), note='理想抓持假設（FixedJoint）：夾住證據成立後')
             if getattr(node, 'd2_unbind', False) and bound and not released:   # 解除綁定：停用 FixedJoint（門回到被動鉸鏈）
                 stage.GetPrimAtPath(JOINT).GetAttribute('physics:jointEnabled').Set(False)
                 bound, released, bind_pending = False, True, False
@@ -908,7 +926,7 @@ def main():
                sources=dict(odom='物理位姿直接當里程（理想，無滑移）', scan='PhysX 射線 360 道，略過機器人自身形狀，無雜訊', pose_for_camera='渲染時刻的關節／底盤讀值 FK', delay='8 步在途管線（軟體模型）'),
                step_wall_ms_p50=round(float(np.median(step_wall)) * 1e3, 1) if step_wall else None, supervisor_done=t_done is not None,
                pacing=dict(pace, rtf_target=a.rtf, note='物理依牆鐘固定 RTF 推進、不等計算；behind＝迴圈本身（算圖、射線、發布）比目標慢的步數與最大落後'), detector=dict(process='獨立程序（模擬器前 fork）', pending_at_end=len(det_pend)))
-    res['cyl'] = None if cyl_info is None else dict(cyl_info, log_cols=['t', 'x', 'y', 'z', 'grip_x', 'grip_y', 'grip_z', 'f1_n', 'f2_n'], log=cyl_log, note='真值只做驗收記錄，不進控制')
+    res['cyl'] = None if cyl_info is None else dict(cyl_info, attached=cyl_attached, attach_note='夾住證據成立後 FixedJoint 理想連接（Howard 11/18）', log_cols=['t', 'x', 'y', 'z', 'grip_x', 'grip_y', 'grip_z', 'f1_n', 'f2_n'], log=cyl_log, note='真值只做驗收記錄，不進控制')
     res['d2'] = dict(stat=d2_stat, bound=bound, released=released, n0=node.d2_n0, ctl=node.d2_ctl_log, note='交權後每步命令＝/d2/out；late＝本步配速時限內沒收到、保持上一筆')
     # 整機停穩驗收（物理紀錄；rc 與 supervisor_done 都不能代替）：最後一筆非零輸入命令之後，在途管線排清（8 步），
     # 底盤每步位移 <1e-6 m 且偏航 <1e-6 rad、手臂各關節速率 <1e-3 rad/s，連續 0.2 s。

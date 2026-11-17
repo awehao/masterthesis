@@ -32,7 +32,7 @@ FINGER_EMPTY = float(os.environ.get('PICK_FINGER_EMPTY', '0.0015'))   # 手指�
 LIFT_M, T_LIFT = float(os.environ.get('PICK_LIFT_M', '0.05')), 1.2
 T_CARRY = 3.0
 PICK_CARRY = os.environ.get('PICK_CARRY', '0') == '1'
-CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.15')), float(os.environ.get('PICK_CARRY_WZ', '0.15'))   # 持物底盤速度框（m/s、rad/s）
+CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.2775')), float(os.environ.get('PICK_CARRY_WZ', '1.1327'))   # 持物底盤速度框（m/s、rad/s）；夾到後理想連接 ⇒ 預設＝硬體上限（不收緊）
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
 PH_TO_S = 4.0
 
@@ -62,7 +62,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.app_prof = dict(base_goal=list(app['base_goal']), door=None)   # nav_window：導航到點後收斂到抓取底盤位姿
         self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
         self.T_rel0, self.b_anchor, self.n_ev, self.T_lift0, self.T_rel_s0 = None, None, 0, None, None
-        self.ret_sent = False
+        self.ret_sent, self.attach = False, False
         self.phase, self.t_ph0 = 'APPROACH', float(t0)
         self._ev('pick_start', T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]], base_goal=[round(float(x), 4) for x in app['base_goal']], T=round(self.T_app, 3))
 
@@ -141,6 +141,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             self.n_ev = self.n_ev + 1 if self._held() else 0
             if self.n_ev * DT >= EVID_S - 1e-9:
                 self.T_lift0 = K.fk(q, 'link_tcp')
+                self.attach = True                                    # Howard 11/18「夾到就改成理想連接」：夾住證據成立 ⇒ 請執行端以 FixedJoint 固定圓柱（同門把理想綁定）
                 self._goto('LIFT', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas], force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
             elif el > EVID_TO_S:
                 self._stop('grasp_evidence_timeout', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas], force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])

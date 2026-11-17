@@ -235,7 +235,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
             out = dict(ver=snap['ver'], seg=seg, prop=prop, tail=tail, tail_src=tail_src, tail_mismatch=mism, w_start=w_start, w_done=time.perf_counter(), mode=mode, bind=bind, events=events, parts=parts, gc_n=_gc.get_count()[2] if _gc else None,
                        stop=ctrl.stop, abort=ctrl.abort, done=bool(getattr(ctrl, 'done', False)), phase=getattr(ctrl, 'phase', None), k_tick=k_tick, q_pred=qp.tolist(),
                        sigma=float(getattr(ctrl, 'sigma', float('nan'))) if mode == 'open' else None, stop_mode=getattr(ctrl, 'stop_mode', None) if mode == 'open' else None,
-                       release=bool(getattr(ctrl, 'release', False)) if mode == 'pass' else False)
+                       release=bool(getattr(ctrl, 'release', False)) if mode == 'pass' else False,
+                       attach=bool(getattr(ctrl, 'attach', False)) if mode == 'pick' else False)
             if mode in ('pass', 'pick'):                              # 穿門／取物段事件（本拍新增）
                 n_ev = getattr(ctrl, '_ev_sent', 0)
                 out['events'] = (out.get('events') or []) + [dict(e_) for e_ in ctrl.events[n_ev:] if e_.get('what') != 'pass_start']
@@ -436,6 +437,7 @@ class AheadRunner:
                     rec['commit_step'] = int(n if n_acc is None else n_acc)
                     rec['bind'] = o.get('bind') is not None
                     rec['release'] = bool(o.get('release'))
+                    rec['attach'] = bool(o.get('attach'))
                     self.last = dict(mode=o.get('mode'), bind=o.get('bind'), done=o.get('done'), stop=o.get('stop'), stop_mode=o.get('stop_mode'), n=int(n))
                 else:
                     rec['commit'] = False
