@@ -27,7 +27,7 @@ from isaacsim import SimulationApp                               # noqa: E402
 sim_app = SimulationApp({'headless': False, 'width': 1280, 'height': 720})
 import numpy as np                                               # noqa: E402
 from isaacsim.core.api import World                              # noqa: E402
-from isaacsim.core.api.objects import FixedCuboid, GroundPlane   # noqa: E402
+from isaacsim.core.api.objects import FixedCuboid, GroundPlane, VisualCylinder   # noqa: E402
 from isaacsim.core.prims import SingleArticulation               # noqa: E402
 from isaacsim.sensors.camera import Camera                       # noqa: E402
 from pxr import Gf, UsdGeom, UsdLux                              # noqa: E402
@@ -84,7 +84,8 @@ def main():
     eef = [b for b in bodies if str(b).rstrip('/').split('/')[-1] == 'link_eef'][0]
     views = dict(overview=dict(eye=[3.4, -3.9, 3.0], tgt=[1.0, -1.1, 0.5], hfov=math.radians(60.0), res=(1280, 720)),
                  side=dict(eye=[0.85, -2.05, 1.45], tgt=[0.85, -0.40, 0.75], hfov=math.radians(62.0), res=(960, 540)),
-                 living=dict(eye=[1.9, 2.3, 2.3], tgt=[0.3, -0.4, 0.5], hfov=math.radians(62.0), res=(960, 540)))   # 客廳側：看穿門
+                 living=dict(eye=[1.9, 2.3, 2.3], tgt=[0.3, -0.4, 0.5], hfov=math.radians(62.0), res=(960, 540)),   # 客廳側：看穿門
+                 table=dict(eye=[-0.4, 1.2, 1.7], tgt=[1.1, 2.0, 0.5], hfov=math.radians(62.0), res=(960, 540)))   # 茶几：看夾取圓柱
     cams = {}
     for nm, f in views.items():
         c = Camera(prim_path=f'/World/cams/{nm}', resolution=f['res'], frequency=30)
@@ -97,6 +98,11 @@ def main():
     world.reset()
     from isaacsim.core.prims import RigidPrim
     leaf = RigidPrim(prim_paths_expr=dauth['leaf_prim'], name='leaf_replay'); leaf.initialize()
+    CYL = None
+    res_c = json.load(open(os.path.join(RD, 'result.json'))).get('cyl')
+    if res_c and res_c.get('log'):                                    # 圓柱：依同趟真值紀錄擺位（每 10 物理步一筆，線性內插）
+        CYL = np.array(res_c['log'], float)
+        cyl_v = VisualCylinder(prim_path='/World/cyl_replay', name='cyl_replay', position=CYL[0, 1:4], radius=float(res_c.get('radius', 0.015)), height=float(res_c.get('height', 0.20)), color=np.array([0.2, 0.6, 0.9]))
     lp0, lq0 = [np.asarray(x, float)[0] for x in leaf.get_world_poses()]
     robot = SingleArticulation(prim_path=arts[0], name='omni_bot')
     robot.initialize()
@@ -128,6 +134,9 @@ def main():
         qq = np.array([cw * w0_ - sw * z0_, cw * x0_ - sw * y0_, cw * y0_ + sw * x0_, cw * z0_ + sw * w0_])
         leaf.set_world_poses(positions=pp[None, :].astype(np.float32), orientations=qq[None, :].astype(np.float32))
         leaf.set_velocities(np.zeros((1, 6), dtype=np.float32))
+        if CYL is not None:
+            pc = np.array([np.interp(row[0], CYL[:, 0], CYL[:, k]) for k in (1, 2, 3)])
+            cyl_v.set_world_pose(position=pc)
     for _ in range(40):
         pose(R[0])
         world.step(render=True)
