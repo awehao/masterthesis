@@ -895,5 +895,8 @@ if __name__ == '__main__':
         except Exception as e_:                                       # noqa: BLE001
             print(f'[fc] 離開碼寫檔失敗：{e_!r}', flush=True)
         print(f'[fc] exit_code {rc}（0 正常；70 模擬工程中止／保護鎖存；71 例外 partial）', flush=True)
-        sim_app.close()
+        import threading as _th                                         # 收尾：sim_app.close() 曾卡住不返回而握著 Isaac 互斥鎖（unified_1／_2）⇒ 背景關閉、最多等 20 s 後直接結束行程（結果檔已寫完）
+        _c = _th.Thread(target=sim_app.close, daemon=True); _c.start(); _c.join(20.0)
+        print(f'[fc] sim_app.close {"完成" if not _c.is_alive() else "逾時 20 s，直接結束行程"}', flush=True)
+        os._exit(rc)
     sys.exit(rc)
