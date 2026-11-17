@@ -198,6 +198,13 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 parts['cand'] = getattr(ctrl, '_cand_diag', None)
                 parts['shield_min'] = None if door is None or not math.isfinite(getattr(door, 'shield_min', float('inf'))) else round(float(door.shield_min), 4)   # 累計最小 Shield 約束殘差（m/s）
                 parts['qp'] = [round(float(x), 2) for x in ctrl.qp_log[-1]] if getattr(ctrl, 'qp_log', None) else None   # t、已停止、前置、mpc.solve、組裝、GI、OSQP、求解器(0=gi/1=osqp)
+                ql_ = getattr(ctrl, 'qp_log', None) or []
+                parts['qp_all'] = [[round(float(x), 2) for x in r_] for r_ in ql_[getattr(ctrl, '_qp_n0', 0):]]   # 本拍新增的全部 QP 紀錄（欄 1＝已停止旗標：0 名目求解、1 停止求解；Codex 20261117_184057）
+                ctrl._qp_n0 = len(ql_)
+                st_ = getattr(ctrl, 'stop', None)
+                if st_:
+                    parts['stop_first'] = {k_: str(v_)[:300] for k_, v_ in st_.items() if k_ != 'escalations'}   # 首個拒絕原因
+                    parts['stop_escalations'] = [{k_: str(v_)[:200] for k_, v_ in e_.items()} for e_ in (st_.get('escalations') or [])]   # 後續升級
             out = dict(ver=snap['ver'], seg=seg, prop=prop, tail=tail, tail_src=tail_src, tail_mismatch=mism, w_start=w_start, w_done=time.perf_counter(), mode=mode, bind=bind, events=events, parts=parts, gc_n=_gc.get_count()[2] if _gc else None,
                        stop=ctrl.stop, abort=ctrl.abort, done=bool(getattr(ctrl, 'done', False)), phase=getattr(ctrl, 'phase', None), k_tick=k_tick, q_pred=qp.tolist(),
                        sigma=float(getattr(ctrl, 'sigma', float('nan'))) if mode == 'open' else None, stop_mode=getattr(ctrl, 'stop_mode', None) if mode == 'open' else None)
