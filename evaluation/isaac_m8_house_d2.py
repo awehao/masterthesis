@@ -71,6 +71,14 @@ def _det_worker(conn, fdir):
             err_ = None
         except Exception as e_:                                  # noqa: BLE001
             T_est_, info_, err_ = None, dict(cls='exception', why='exception'), repr(e_)[:200]
+        cyl_ = None
+        if m_.get('table') is not None:                                # 茶几圓柱體深度偵測（同一張影格；幾何法、不讀真值）
+            try:
+                import cyl_detect as CD_
+                p_c, i_c = CD_.detect(m_['dep'], m_['K'], m_['T_cam'], m_['table'])
+                cyl_ = dict(p=None if p_c is None else np_.asarray(p_c, float), info=i_c)
+            except Exception as e_:                              # noqa: BLE001
+                cyl_ = dict(p=None, info=dict(why='exception', err=repr(e_)[:200]))
         ms_ = (time.perf_counter() - w0_) * 1e3
         try:
             np_.savez_compressed(os.path.join(fdir, m_['stem'] + '_depth_m.npz'), dep=m_['dep'])
@@ -79,7 +87,7 @@ def _det_worker(conn, fdir):
             save_ = True
         except Exception:                                        # noqa: BLE001
             save_ = False
-        conn.send(('det', dict(seq=m_['seq'], T_est=None if T_est_ is None else np_.asarray(T_est_, float), info=info_, ms=ms_, err=err_, saved=save_)))
+        conn.send(('det', dict(seq=m_['seq'], T_est=None if T_est_ is None else np_.asarray(T_est_, float), info=info_, ms=ms_, err=err_, saved=save_, cyl=cyl_)))
 
 
 os.makedirs(os.path.join(a.out, 'frames'), exist_ok=True)
@@ -114,7 +122,8 @@ import door_far_link as FL                                       # noqa: E402
 import door_motm_grasp_ctrl as G                                 # noqa: E402
 import wrist_v0_capture as W0                                    # noqa: E402
 from finger_collision import apply_split                         # noqa: E402
-from isaac_common import bind_frictionless, collision_prims, import_urdf, physics_parts   # noqa: E402
+from isaac_common import bind_friction, bind_frictionless, collision_prims, import_urdf, physics_parts   # noqa: E402
+from isaacsim.core.api.objects import DynamicCylinder           # noqa: E402
 
 # 專案控制模組（ros_stub）會無條件把 sys.modules 裡的 rclpy 與訊息套件換成替身（它們離線用）。這裡在匯入後把真正的模組放回去：
 # 專案模組已拿到的替身參照不受影響（它們不經 ROS 通訊），本程式的 ROS 節點用的是真正的 rclpy。
@@ -134,6 +143,7 @@ NO_CATCHUP = os.environ.get('D2_NO_CATCHUP', '1') == '1'          # RTF 上限�
 R_REM = int(os.environ.get('D2_R_REM', '3'))                       # 放行收到後到套用的剩餘延遲（步）
 GRIP_F_ABORT_N, DOOR_PREBIND_DEG = 40.0, 0.5                        # 交權後：夾爪合力上限（模擬工程中止值，同舊開門執行器 40 N）、綁定前門動上限（同 BindGate 0.5°）
 JOINT = '/World/door/ideal_grasp_attach'
+PICK = os.environ.get('D2_PICK', '0') == '1'                         # 茶几圓柱體取物（穿門後）
 CMD_TIMEOUT_S, ARM_CMD_TIMEOUT_S = 0.5, 0.2                       # 同乾跑世界節點
 WALL_LIMIT_S = 1500.0
 CAM = dict(res=(640, 480), hfov_deg=69.0, aperture=0.020, clip=(0.05, 10.0), hz=30)
@@ -226,6 +236,7 @@ class Bridge(Node):
         self.p_js = self.create_publisher(JointState, '/joint_states', 10)
         self.p_truth = self.create_publisher(Float64MultiArray, '/far/truth', 10)
         self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
+        self.p_cyl = self.create_publisher(Float64MultiArray, '/cyl/obs', 10)
         self.p_state = self.create_publisher(String, '/far/exec_state', 10)
         self.p_ack = self.create_publisher(String, '/d2/ack', 10)
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 10)
@@ -367,6 +378,18 @@ def main():
         FixedCuboid(prim_path=f"/World/unknown/{o['name']}", name=o['name'], position=np.array([o['x'], o['y'], o['size'][2] / 2]), scale=np.array(o['size']),
                     orientation=np.array([math.cos(y2), 0.0, 0.0, math.sin(y2)]), color=np.array([0.72, 0.52, 0.28]))
         env_paths.append(f"/World/unknown/{o['name']}")
+    cyl_info = None
+    if PICK:                                                          # 茶几圓柱體（Howard 11/17「隨機放」；規格＝瓶子代理物；位置 seed 登錄；真值只做驗收記錄）
+        tab_ = next(f_ for f_ in reg['furniture'] if f_['name'] == 'coffee_table')
+        if os.environ.get('CYL_XY'):
+            cxy = np.array([float(x) for x in os.environ['CYL_XY'].split(',')])
+        else:
+            rc_ = np.random.default_rng(int(os.environ.get('CYL_SEED', '0')))
+            cxy = np.array([rc_.uniform(tab_['c'][0] - tab_['s'][0] / 2 + 0.05, tab_['c'][0] + tab_['s'][0] / 2 - 0.05), rc_.uniform(tab_['c'][1] - tab_['s'][1] / 2 + 0.05, tab_['c'][1] + tab_['s'][1] / 2 - 0.05)])
+        DynamicCylinder(prim_path='/World/cyl', name='cyl', position=np.array([cxy[0], cxy[1], float(tab_['s'][2]) + 0.10]), radius=0.015, height=0.20, mass=0.20, color=np.array([0.2, 0.6, 0.9]))
+        n_cf = bind_friction(stage, [stage.GetPrimAtPath('/World/cyl')], 1.0, 0.8, 0.0, mat_path='/World/PhysicsMaterials/cyl')
+        n_tf = bind_friction(stage, [stage.GetPrimAtPath('/World/coffee_table')], 0.6, 0.5, 0.0, mat_path='/World/PhysicsMaterials/coffee_table')
+        cyl_info = dict(xy0=cxy.tolist(), seed=int(os.environ.get('CYL_SEED', '0')), radius=0.015, height=0.20, mass=0.20, mu_cyl=[1.0, 0.8], mu_table=[0.6, 0.5], bound=[int(n_cf), int(n_tf)], table=dict(c=tab_['c'], s=tab_['s']))
     import_urdf(a.urdf, ROBOT, fix_base=False)
     xf = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT))
     xf.ClearXformOpOrder()
@@ -395,6 +418,7 @@ def main():
     leaf_v = RigidPrim(prim_paths_expr=dauth['leaf_prim'], name='leaf_state')
     grip_b = [b for b in bodies if name_of(b) == 'uflite_gripper_link']
     v_grip = RigidPrim(prim_paths_expr=str(grip_b[0]), name='v_grip_pose') if len(grip_b) == 1 else None
+    v_cyl = RigidPrim(prim_paths_expr='/World/cyl', name='v_cyl_pose') if PICK else None
     world.reset()
     for v in v_tool + [v_base, leaf_v] + ([v_grip] if v_grip is not None else []):
         v.initialize()
@@ -547,6 +571,9 @@ def main():
             events.append(dict(t=round(node.t, 3), what=what, record_error=repr(e_)))
             print(f'[fc] 事件記錄失敗 {what}: {e_!r}', flush=True)
 
+    ffor = {'uflite_finger1': 0.0, 'uflite_finger2': 0.0}
+    cyl_log = []
+
     def contacts(split=False):
         mx, who = 0.0, None
         for v, b in zip(v_tool, tool_bodies):
@@ -554,6 +581,8 @@ def main():
                 n_ = float(np.linalg.norm(np.asarray(v.get_net_contact_forces(dt=DT), float).reshape(-1)[:3]))
             except Exception as e:                                    # noqa: BLE001
                 return (None, f'read_fail:{e!r}', None, None) if split else (None, f'read_fail:{e!r}')
+            if name_of(b) in ('uflite_finger1', 'uflite_finger2'):
+                ffor[name_of(b)] = n_                                 # 兩指各自接觸力（取物證據）
             if n_ > mx:
                 mx, who = n_, name_of(b)
         try:
@@ -621,7 +650,7 @@ def main():
                 if b_ is None:
                     b_ = np.asarray(pipe[i_][:3], float) if i_ < len(pipe) else np.full(3, np.nan)
                 kb_ += [float(x) for x in b_]
-            node.p_d2.publish(Float64MultiArray(data=[float(n_now), float(t), *[float(x) for x in q], float(phi_now), float(jp[f1]), float(jp[f2]), *[float(x) for x in s], *[float(x) for x in np.concatenate(pipe)], *kb_]))   # 控制伺服器（world_d2_node）每步狀態
+            node.p_d2.publish(Float64MultiArray(data=[float(n_now), float(t), *[float(x) for x in q], float(phi_now), float(jp[f1]), float(jp[f2]), *[float(x) for x in s], *[float(x) for x in np.concatenate(pipe)], *kb_, float(ffor['uflite_finger1']), float(ffor['uflite_finger2'])]))   # 控制伺服器（world_d2_node）每步狀態（尾端＝兩指接觸力）
             cn_t, cwho, cn_b, cwho_b = contacts(split=True)
             cn = None if cn_t is None else max(cn_t, cn_b)
             dq_deg = abs(math.degrees(phi_now - door_q0))
@@ -753,6 +782,13 @@ def main():
             ck = Clock()
             ck.clock = node.stamp()
             node.p_clock.publish(ck)
+            if v_cyl is not None and k % 10 == 0:                     # 圓柱真值（只做驗收記錄：離桌高度、相對夾爪滑移）
+                try:
+                    pc_t = np.asarray(v_cyl.get_world_poses()[0], float)[0]
+                    pg_t = np.asarray(v_grip.get_world_poses()[0], float)[0] if v_grip is not None else np.full(3, np.nan)
+                    cyl_log.append([float(t), *[float(x) for x in pc_t], *[float(x) for x in pg_t], float(ffor['uflite_finger1']), float(ffor['uflite_finger2'])])
+                except Exception:                                     # noqa: BLE001
+                    pass
             if k % pub_every == 0:
                 m = Odometry()
                 m.header.stamp = node.stamp()
@@ -791,7 +827,7 @@ def main():
                     cam_stat['used'] += 1
                     stem = f'f{seq:04d}'
                     det_pend[seq] = dict(f=dict((k_, v_) for k_, v_ in f.items() if k_ not in ('dep', 'rgb')), stem=stem, Th=truth_handle(), t_sent=t)
-                    _DET.send(dict(seq=seq, stem=stem, dep=f['dep'], rgb=f['rgb'], K=Kr, T_cam=f['T_cam'], t_obs=f['t_obs'], q=f['q'], fk_vs_render_m=f['fk_vs_render_m']))
+                    _DET.send(dict(seq=seq, stem=stem, dep=f['dep'], rgb=f['rgb'], K=Kr, T_cam=f['T_cam'], t_obs=f['t_obs'], q=f['q'], fk_vs_render_m=f['fk_vs_render_m'], table=None if cyl_info is None else cyl_info['table']))
                     det_busy = True
             if det_busy and _DET.poll(0):
                 _, rr = _DET.recv()
@@ -816,6 +852,11 @@ def main():
                                    T_base_handle=None if T_bh is None else T_bh.tolist(), rendering_frame=[int(v) if v is not None else None for v in f['rf']] if isinstance(f['rf'], tuple) else f['rf'],
                                    eval_only=dict(err_pos_mm=None if T_est is None else round(float(np.linalg.norm(np.asarray(T_est)[:3, 3] - Th[:3, 3])) * 1e3, 2), range_m=round(float(np.linalg.norm(f['T_cam'][:3, 3] - Th[:3, 3])), 3))))
                 node.p_obs.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if T_est is not None else 0.0, *[float(v) for v in f['q'][:3]], *([float(v) for v in T_bh.reshape(-1)] if T_bh is not None else [float('nan')] * 16), float(t)]))
+                if rr.get('cyl') is not None:                          # 圓柱觀測：底盤座標中心（擷取時刻底盤）
+                    pc_ = rr['cyl']['p']
+                    prel_ = None if pc_ is None else (np.linalg.inv(T3(f['q'][:3])) @ np.r_[pc_, 1.0])[:3]
+                    node.p_cyl.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if pc_ is not None else 0.0, *[float(v) for v in f['q'][:3]], *([float(v) for v in prel_] if prel_ is not None else [float('nan')] * 3), float(t)]))
+                    frames[-1]['cyl'] = dict(p=None if pc_ is None else [round(float(v), 4) for v in pc_], info=rr['cyl']['info'])
                 if seq_r <= 3 or seq_r % 25 == 0:
                     print(f"[fc] 影格 {seq_r} t_obs={f['t_obs']:.2f} valid={T_est is not None} {'' if T_est is not None else info.get('why') or info.get('cls')} 距離 {frames[-1]['eval_only']['range_m']} m 偵測 {ms:.0f} ms", flush=True)
             tgt_w = w_all0 + pace_off + (t + DT) / a.rtf                       # RTF 上限配速：早到就睡；晚到不補步（重設基準，實得 RTF ≤ 目標）——物理照牆鐘推進、不等任何計算
@@ -867,6 +908,7 @@ def main():
                sources=dict(odom='物理位姿直接當里程（理想，無滑移）', scan='PhysX 射線 360 道，略過機器人自身形狀，無雜訊', pose_for_camera='渲染時刻的關節／底盤讀值 FK', delay='8 步在途管線（軟體模型）'),
                step_wall_ms_p50=round(float(np.median(step_wall)) * 1e3, 1) if step_wall else None, supervisor_done=t_done is not None,
                pacing=dict(pace, rtf_target=a.rtf, note='物理依牆鐘固定 RTF 推進、不等計算；behind＝迴圈本身（算圖、射線、發布）比目標慢的步數與最大落後'), detector=dict(process='獨立程序（模擬器前 fork）', pending_at_end=len(det_pend)))
+    res['cyl'] = None if cyl_info is None else dict(cyl_info, log_cols=['t', 'x', 'y', 'z', 'grip_x', 'grip_y', 'grip_z', 'f1_n', 'f2_n'], log=cyl_log, note='真值只做驗收記錄，不進控制')
     res['d2'] = dict(stat=d2_stat, bound=bound, released=released, n0=node.d2_n0, ctl=node.d2_ctl_log, note='交權後每步命令＝/d2/out；late＝本步配速時限內沒收到、保持上一筆')
     # 整機停穩驗收（物理紀錄；rc 與 supervisor_done 都不能代替）：最後一筆非零輸入命令之後，在途管線排清（8 步），
     # 底盤每步位移 <1e-6 m 且偏航 <1e-6 rad、手臂各關節速率 <1e-3 rad/s，連續 0.2 s。
