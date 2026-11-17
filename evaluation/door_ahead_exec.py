@@ -97,6 +97,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 door.rebind_first(**snap['door_rebind'])
             if snap.get('nav_in') is not None and ctrl is not None:  # 單一控制器：導航前端本拍輸入（參考、障礙物、設定）
                 ctrl.nav_in = snap['nav_in']
+            if snap.get('arm_hist') is not None and mode == 'grasp' and hasattr(ctrl, 'bias_obs_update'):   # 偏置觀測（只用實測快照；同一快照只更新一次）
+                ctrl.bias_obs_update(snap['arm_hist'])
             if snap.get('unbound') and mode == 'pass':                # 穿門段：執行端解綁生效回報
                 ctrl.unbound = True
             if snap.get('app_start') is not None and ctrl is not None and mode == 'grasp':   # 接近開始（觀測觸發）：剖面自本段起點起算；估計換成融合估計（重設融合）
@@ -144,6 +146,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                         print('[worker] cstop_late w%d %s' % (_w, None if _r is None else json.dumps(dict(ok=_r['ok'], why=_r['why'], n_ticks=_r['n_ticks'], sim_ms=_r['sim_ms']), default=str)), flush=True)
                     print('[worker] first_ref n=%d h=%s' % (len(door.first['o'].Xd) if hasattr(door.first.get('o'), 'Xd') else -1, getattr(door.first.get('o'), 'h', None)), flush=True)
                 if ex is not None:
+                    ex.bias_obs = dict(log=list(getattr(ctrl, 'bias_log', None) or [])[-400:], bias_handover=np.asarray(ctrl.cfg.arm_model.bias, float).tolist())   # 偏置觀測紀錄（閉爪即凍結；承接到開門）
                     ctrl, mode = ex, 'open'
                     bind = dict(T_EH=ex.T_EH.copy(), ang_bind=float(ex.ang_bind), phi_bind=float(ex.phi_bind))
             if mode == 'open' and o0 is None:

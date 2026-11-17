@@ -69,6 +69,7 @@ class DoorPassCtrl:
         self.u_last, self.u_prev = np.zeros(9), np.asarray(getattr(src, 'u_prev', src.u_last), float).copy()
         self.lim_lo, self.lim_hi = np.asarray(src.lim_lo, float), np.asarray(src.lim_hi, float)
         self.nav_in = getattr(src, 'nav_in', None)
+        self.bias_obs = getattr(src, 'bias_obs', None)
         self.T_WH0 = np.asarray(src.T_WH_bind, float).copy()
         self.t, self.n_step = float(t0), 0
         self.phase, self.t_ph0 = 'UNBIND', float(t0)

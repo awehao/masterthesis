@@ -70,6 +70,9 @@ def leaf_cast(p, yaw, phi, rr):
     return np.minimum(rr, t)
 
 
+XBIAS = np.array([float(x) for x in os.environ['STUB_ARM_XBIAS'].split(',')]) if os.environ.get('STUB_ARM_XBIAS') else None   # rad／軸
+XBIAS_T0, XBIAS_RAMP = float(os.environ.get('STUB_ARM_XBIAS_T0', '14.0')), float(os.environ.get('STUB_ARM_XBIAS_RAMP', '4.0'))
+
 class Stub(Node):
     def __init__(self):
         super().__init__('d2_isaac_stub')
@@ -232,7 +235,8 @@ class Stub(Node):
                 p_ = K.fk(self.q, 'link_tcp')[:3, 3]; self.bind = dict(ang=math.atan2(p_[1], p_[0]), phi=self.phi)
             cs, sn = math.cos(self.q[2]), math.sin(self.q[2])
             self.q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2]])
-            self.q[3:] = self.q[3:] + al * dead(tgt - self.q[3:] + dq(self.q))
+            xb_ = XBIAS * min(max((self.t - XBIAS_T0) / XBIAS_RAMP, 0.0), 1.0) if XBIAS is not None else 0.0   # 外生偏差（替身核對用：模擬 Isaac 重力下垂比模型大；接近開始前後緩升）
+            self.q[3:] = self.q[3:] + al * dead(tgt - self.q[3:] + dq(self.q) + xb_)
             if isinstance(self.bind, dict):
                 p_ = K.fk(self.q, 'link_tcp')[:3, 3]; d_ = (math.atan2(p_[1], p_[0]) - self.bind['ang'] + math.pi) % (2 * math.pi) - math.pi
                 self.phi = self.bind['phi'] - d_

@@ -289,6 +289,10 @@ class WorldD2(Node):
         self.n, self.t = n_new, float(d[1])
         self.q, self.phi, self.fing = q_new, float(d[11]), (float(d[12]), float(d[13]))
         self.s = d[14:20].copy()
+        ah_ = self.__dict__.setdefault('arm_hist', [])               # 逐步實測（n、手臂關節、該訊息回報的設定點）：偏置觀測用（只用實測，不用前推）
+        ah_.append((n_new, q_new[3:].tolist(), self.s.tolist()))
+        if len(ah_) > 40:
+            del ah_[:-40]
         self.pipe = [d[20 + 9 * i:29 + 9 * i].copy() for i in range(D_STEPS)]
         k0_ = 20 + 9 * D_STEPS
         self.isaac_base_known = d[k0_:k0_ + 3 * (R_REM + 1)].reshape(-1, 3).copy() if len(d) >= k0_ + 3 * (R_REM + 1) else None   # Isaac 端已確定的實際底盤（步 n…n＋R_REM）
@@ -428,6 +432,10 @@ class WorldD2(Node):
                     if self.nav_cfg is not None:
                         ni_['cfg'] = self.nav_cfg
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, nav_in=ni_)
+                if ISAAC and getattr(self, 'arm_hist', None):          # 偏置觀測：本拍邊界前 NPH＋1 筆連續實測
+                    ah_ = [h_ for h_ in self.arm_hist if self.n - NPH <= h_[0] <= self.n]
+                    if len(ah_) == NPH + 1 and all(ah_[i_ + 1][0] == ah_[i_][0] + 1 for i_ in range(NPH)):
+                        runner.extra = dict(getattr(runner, 'extra', None) or {}, arm_hist=ah_)
                 if getattr(self, 'unbound_ack', None) is not None:     # 穿門段：執行端已回報解綁生效 ⇒ 快照帶給控制器
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, unbound=True)
                 if REL_EXEC and k > 0:
@@ -689,7 +697,7 @@ class WorldD2(Node):
         try:                                                         # 單一控制器：工作程序內每拍求解紀錄（時間、毫秒、TCP 誤差、狀態、參考來源、障礙數、CBF 作用數）
             if getattr(runner, '_rx', None) is not None:              # 接收執行緒先停（避免搶走 get 的回覆）
                 runner._rx_stop = True; runner._rx.join(0.5); runner._rx = None
-            g_ = runner.get(['wg_log', 'cfg_src', 'app_prof', 'phase', 'stop'], timeout=3.0)
+            g_ = runner.get(['wg_log', 'cfg_src', 'app_prof', 'phase', 'stop', 'bias_obs', 'bias_log'], timeout=3.0)
             self.meta['wg'] = {k_: (v_[-600:] if k_ == 'wg_log' and v_ else v_) for k_, v_ in (g_ or {}).items()} if isinstance(g_, dict) else str(g_)[:300]
         except Exception as e_:                                       # noqa: BLE001
             self.meta['wg'] = repr(e_)[:200]

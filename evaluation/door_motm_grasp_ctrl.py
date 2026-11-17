@@ -91,6 +91,9 @@ def door_filter(obs, ap, phi):
     return out
 
 
+BIAS_OBS = os.environ.get('GRASP_BIAS_OBS', '1') == '1'                 # 手臂等效偏置線上觀測（接近開始後、閉爪前）
+BIAS_OBS_TAU = float(os.environ.get('GRASP_BIAS_OBS_TAU', '0.5'))
+BIAS_OBS_MAX = float(os.environ.get('GRASP_BIAS_OBS_MAX', '0.02'))      # 新增殘差補償限幅（rad／軸）
 CLOSE_WAIT_S = float(os.environ.get('GRASP_CLOSE_WAIT_S', '1.0'))   # 插入名目時間到後閉爪準備窗口上限（模擬秒；0＝原單拍判定）
 BG_V = 0.06                                                          # 導航到點後收斂到抓取底盤位姿的參考速度上限（m/s）
 
@@ -715,6 +718,32 @@ class MovingGraspCtrl:
         lin = float(np.linalg.norm(Trel[:3, 3] - Trel_prev[:3, 3])) / DT
         dR = Trel_prev[:3, :3].T @ Trel[:3, :3]
         return lin, math.acos(max(-1.0, min(1.0, (np.trace(dR) - 1) / 2))) / DT
+
+    def bias_obs_update(self, hist):
+        """手臂等效偏置觀測（Codex 第八趟裁定；offset-free MPC 的擾動估測方向，不宣稱無偏保證）。
+        hist＝[(n, q_arm, s_reported)] 連續 NPH＋1 筆實測；第 n→n+1 步作用的設定點＝訊息 n+1 回報的設定點。
+        IntervalOffsetObserver（樣本外：先用更新前估計預測再更新；τ 0.5 s）；新增殘差補償 δ＝d−d0 每軸限幅 ±BIAS_OBS_MAX；
+        只在接近開始後、閉爪前更新（閉爪開始即凍結，承接到開門）；估計寫進共同模型 cfg.arm_model.bias＝α·d（QP、延遲前推、停止核對同一份）。"""
+        if not BIAS_OBS or getattr(self, 'app_prof', None) is None or self.lock is not None or self.phase in ('CLOSE', 'CONFIRM', 'READY') or self.stop is not None:
+            return
+        n1 = int(hist[-1][0])
+        if getattr(self, '_bo_last_n', None) is not None and n1 <= self._bo_last_n:
+            return                                                    # 同一快照只更新一次
+        self._bo_last_n = n1
+        al = np.asarray(self.cfg.arm_model.alpha, float)
+        if getattr(self, '_bo', None) is None:
+            import offset_interval as OI
+            self._bo_d0 = np.asarray(self.cfg.arm_model.bias, float) / al
+            self._bo = OI.IntervalOffsetObserver(al, PHYS, tau_s=BIAS_OBS_TAU, max_rad=0.3, d0=self._bo_d0)
+            self.bias_log = []
+        q0, q1 = hist[0][1], hist[-1][1]
+        s_seq = [h_[2] for h_ in hist[1:]]
+        rec = self._bo.update_setpoints(q0, s_seq, q1)
+        if rec.get('used') == 'updated':
+            dd = np.clip(self._bo.d - self._bo_d0, -BIAS_OBS_MAX, BIAS_OBS_MAX)
+            self._bo.d = self._bo_d0 + dd
+            self.cfg.arm_model.bias = al * self._bo.d
+        self.bias_log.append((round(self.t, 3), rec.get('used'), None if rec.get('pred_residual') is None else round(float(np.abs(rec['pred_residual']).max()) * 1e3, 4), [round(float(x) * 1e3, 3) for x in (self._bo.d - self._bo_d0)]))
 
     def _s_nom(self):
         """名目抓姿的接近軸深度留量（m）：接近剖面的 s_final；無剖面＝0。"""
