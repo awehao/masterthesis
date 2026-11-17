@@ -28,8 +28,10 @@ APP_HO = os.environ.get('B_APP_HO', '1') == '1'              # 進走廊即交�
 APP_DIST, APP_V, APP_T_MIN, APP_T_LINE, APP_D_LINE = float(os.environ.get('B_APP_DIST', '0.30')), 0.05, 4.0, 2.5, 0.15   # 交權離抓取點距離、抓持控制器底盤速度（door_ahead_case V）、最短時長、沿接近軸段時長、接近軸起點退讓
 UNIFIED = os.environ.get('B_UNIFIED', '0') == '1'          # 單一控制器（Codex 20261117_161844）：起點即交給同一個 W-GMPC 控制器；導航節點只當前端；導航目標＝抓取底盤位姿（Smac 決定來向）
 PASS_GOAL = [float(x) for x in os.environ.get('B_PASS_GOAL', '0.5,0.8,1.5708').split(',')]   # 穿門目標（map；門口 x∈[0,1]、y=0，客廳側）
-PASS_WP = [float(x) for x in os.environ.get('B_PASS_WP', '0.5,-1.4,1.5708').split(',')] if os.environ.get('B_PASS_WP', '0.5,-1.4,1.5708') else None   # 中途點：門扇外側、正對門口（開門後機器人在門扇後，LiDAR 看不到門口，關門時標的舊障礙格清不掉 ⇒ 先到看得見門口的位置）
+PASS_WP = [float(x) for x in os.environ.get('B_PASS_WP', '').split(',')] if os.environ.get('B_PASS_WP', '') else None   # 中途點：門扇外側、正對門口（開門後機器人在門扇後，LiDAR 看不到門口，關門時標的舊障礙格清不掉 ⇒ 先到看得見門口的位置）
 PASS_WP_R = float(os.environ.get('B_PASS_WP_R', '0.45'))
+PASS_CLEAR = os.environ.get('B_PASS_CLEAR', '1') == '1'           # Howard 11/18：不要中途點，讓全域規劃自己找出路
+PASS_CLEAR_WAIT_S = float(os.environ.get('B_PASS_CLEAR_WAIT_S', '1.2'))
 APP_TRIG = float(os.environ.get('B_APP_TRIG', '0.6'))          # 單一控制器：有效估計且離導航目標 ≤ 此距離 ⇒ 接近開始（加入 TCP 任務）
 FUSE_HO = os.environ.get('B_FUSE_HO', '1') == '1'            # 交權參考＝全部有效影格閘門內融合（c13／c22：最早 3 格估計沿接近軸誤差 2 mm 吃掉外殼—橫桿餘裕）
 CL_LINE = os.environ.get('B_CL_LINE', '1') == '1'             # 混接／直線段以實際底盤即時解 IK（c7 阻點修正）；0＝原開迴路關節參考
@@ -635,6 +637,9 @@ def main():
             self.create_subscription(Float64MultiArray, '/task/gmpc_pred', self._pred, 20)
             self.create_subscription(String, '/far/exec_state', self._xs_in, 10)
             self.pass_seen, self.pass_t, self.t_pass_pub, self.pass_cleared = False, None, -9.0, False
+            from nav2_msgs.srv import ClearEntireCostmap
+            self._clr_cli = self.create_client(ClearEntireCostmap, '/global_costmap/clear_entirely_global_costmap')
+            self._clr_req, self._clr_fut, self._clr_t = ClearEntireCostmap.Request, None, None
             self.tfb = tf2_ros.Buffer(); self.tfl = tf2_ros.TransformListener(self.tfb, self)
             self.truth = None; self.rel = np.zeros(3); self.path_t = None; self.xstate = None; self.pred = None; self.rs = None
             self.mode, self.ver, self.task_ver = 'INIT', 0, 0
@@ -877,6 +882,14 @@ def main():
                     self.pass_t = t
                     self.p_task.publish(String(data=json.dumps(dict(clear=True))))
                     self.event('pass_goal', goal=PASS_GOAL)
+                    if PASS_CLEAR:                                    # 機器人自己開的門：關門時標在門口的障礙格已確定過期 ⇒ 呼叫 Nav2 標準復原（清除全域代價圖）一次；看得到的門扇由 LiDAR 下一次更新重新標上
+                        if self._clr_cli.service_is_ready():
+                            self._clr_fut, self._clr_t = self._clr_cli.call_async(self._clr_req()), t
+                            self.event('pass_costmap_clear_called')
+                        else:
+                            self.event('pass_costmap_clear_unavailable')
+                if PASS_CLEAR and self._clr_t is not None and t - self._clr_t < PASS_CLEAR_WAIT_S:
+                    return                                            # 等障礙層重新標記（全域代價圖 1 Hz）再送目標
                 g_ = PASS_WP if (PASS_WP is not None and not getattr(self, 'pass_wp_done', False)) else PASS_GOAL
                 if g_ is PASS_WP and float(np.hypot(*(self.cur_map[:2] - np.asarray(PASS_WP[:2])))) <= PASS_WP_R:   # 中途點到了（門口已在 LiDAR 視野、舊標記已清）⇒ 改送穿門目標
                     self.pass_wp_done, self.pass_t = True, t
