@@ -31,6 +31,7 @@ CONTACT_N = float(os.environ.get('PICK_CONTACT_N', '0.5'))
 FINGER_EMPTY = float(os.environ.get('PICK_FINGER_EMPTY', '0.0015'))   # 手指開度低於此 ⇒ 判定夾空（全閉）
 LIFT_M, T_LIFT = float(os.environ.get('PICK_LIFT_M', '0.05')), 1.2
 T_CARRY = 3.0
+PICK_CARRY = os.environ.get('PICK_CARRY', '0') == '1'
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
 PH_TO_S = 4.0
 
@@ -151,7 +152,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             if self.n_ev * DT >= EVID_S - 1e-9:
                 self.T_rel_s0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
                 self._ev('pick_lifted', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas], force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
-                self._goto('CARRY')
+                self._goto('CARRY' if PICK_CARRY else 'RETURN')               # 預設不收臂：手臂相對底盤保持抬升位姿（第十五趟收臂一開始手腕重配置 ⇒ 接觸瞬斷滑落；瓶子線持瓶也是手臂不動、底盤移動）
             elif el > EVID_TO_S:
                 self._stop('lost_after_lift', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas], force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
         elif self.phase == 'CARRY':
