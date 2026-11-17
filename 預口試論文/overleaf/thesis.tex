@@ -1,0 +1,34 @@
+% !TeX program = xelatex
+% !TeX root = main.tex
+\documentclass{nthuthesis}
+\input{preamble}
+\input{nthuvars}
+
+% Keep the cover disabled until the personal metadata is supplied.
+\newif\ifincludecover
+\includecoverfalse
+
+\begin{document}
+\frontmatter
+\ifincludecover
+  \makecover
+\fi
+
+% Tsai: single-sided front matter; main matter can switch back to two sides.
+\makeatletter
+\@twosidefalse
+\@mparswitchfalse
+\makeatother
+
+\input{00_abstract}
+
+% Add the remaining thesis only when its XeLaTeX content is ready:
+% \input{00_acknowledgements}
+% \tableofcontents
+% \listoffigures
+% \listoftables
+% \mainmatter
+% \makeatletter\@twosidetrue\@mparswitchtrue\makeatother
+% \input{01_Introduction}
+
+\end{document}
