@@ -795,11 +795,11 @@ def main():
                 est = self._cyl_fuse(t)
                 if est is not None:
                     Tm_ = _T3(self.T_mo_now) @ np.r_[est, 1.0]
-                    c_map = Tm_[:3]; b_now = self.cur_map.copy()
+                    c_map = Tm_[:3]; b_now = self.b_od_now.copy()      # 選位在里程（世界）座標：家具真實位置與控制器淨空核對都在這個座標（第十三趟在 map 選位 ⇒ AMCL 偏 3 cm、底盤淨空只剩 101 mm）
                     self.pick_box = dict(c_map=c_map, est_od=est, t=t)
                     import threading
                     CR = self._CR
-                    def _sel(box=self.pick_box, c=c_map, b=b_now):
+                    def _sel(box=self.pick_box, c=est, b=b_now):
                         w0 = time.perf_counter(); box['sel'] = CR.select(c[:2], b); box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
                     self.pick_th = threading.Thread(target=_sel, daemon=True); self.pick_th.start()
                     self.event('pick_estimate', c_map=[round(float(x), 4) for x in c_map], n_obs=len(self.cyl_obs))
@@ -808,14 +808,14 @@ def main():
                 if sel is None:
                     self.event('pick_unreachable', c_map=[round(float(x), 4) for x in self.pick_box['c_map']], ms=round(self.pick_box['ms'], 1))
                     self.abort('pick_unreachable'); return
-                self.pick_sel = sel; self.pick_goal = [float(x) for x in sel['base']]; self.pass_t = t
+                Tbm_ = _T3(self.T_mo_now) @ _T3(sel['base'])            # 選位結果（里程）→ 地圖（只給 Smac）
+                self.pick_sel = sel; self.pick_goal = [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]; self.pass_t = t
                 self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1))
             if self.pick_sel is not None and self.pick_app_t is None:
-                b_ = np.asarray(self.pick_sel['base'], float)
-                dist_ = float(np.hypot(*(self.cur_map[:2] - b_[:2])))
+                b_ = np.asarray(self.pick_sel['base'], float)          # 里程座標
+                dist_ = float(np.hypot(*(self.b_od_now[:2] - b_[:2])))
                 if dist_ <= PICK_APP_DIST:
-                    Ti = np.linalg.inv(_T3(self.T_mo_now))
-                    Tb_od = Ti @ _T3(b_)                               # 底盤目標：地圖→里程（給控制器的收斂目標）
+                    Tb_od = _T3(b_)                                    # 底盤收斂目標（里程，與選位同座標）
                     e_od = np.asarray(self.pick_box['est_od'], float)   # 抓取目標一律留在里程座標（不經 map 來回：AMCL 修正會讓 TCP 偏離圓柱；s32 偏約 3 cm 夾空）
                     a_ = e_od[:2] - Tb_od[:2, 3]; a_ = a_ / max(float(np.linalg.norm(a_)), 1e-9)
                     Tg_od = np.asarray(self._CR.grasp_T(e_od[:2], a_, bool(self.pick_sel['flip'])), float); Tg_od[2, 3] = float(e_od[2])
@@ -928,6 +928,7 @@ def main():
             if T_mo is None or b_od is None:
                 return
             q = np.r_[b_od, self.truth['q'][3:9]]
+            self.b_od_now = np.asarray(b_od, float).copy()
             self.T_mo_now = T_mo
             T_ref = self.T_ref if getattr(self, 'T_ref', None) is not None else T_mo
             c, s_ = math.cos(T_ref[2]), math.sin(T_ref[2])
