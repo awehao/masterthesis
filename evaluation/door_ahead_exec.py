@@ -11,6 +11,7 @@
 執行器在 n_{k+1}：S_{k+1} 已到、版本相符、從送快照到收到的牆鐘 ≤ 期限 ⇒ 提交並執行；否則執行 tail_k（上一段附帶的已核停止尾段），
   控制器即作廢（它的內部狀態假設了 S_{k+1} 會被執行），照實記為任務中斷。不在晚到後插入結果、不重設管線。
 時間：送快照、工作程序開始／完成、執行器收到、提交步分別記（模擬步序號與牆鐘）；計算、通訊、8 步管線延遲分開。"""
+import json
 import math
 import multiprocessing as mp
 import os
@@ -105,6 +106,13 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
             if mode == 'grasp' and door is not None and ctrl.ready_now and ctrl.ready_ver is not None and ctrl.stop is None:
                 ex, o0, hrec = door.handover(ctrl, qp, t_next)        # 試跑即正式：通過 ⇒ 第一步已算完
                 events.append(hrec)
+                print('[worker] handover_rec ' + json.dumps(hrec, default=str)[:1500], flush=True)   # 診斷（晚到結果會被丟棄，事件看不到）
+                if 'unavailable' in str(hrec.get('stop')) and door.g2.get('cstop') is not None:   # 診斷：停法工作程序遲到結果的實際模擬耗時
+                    _cs = door.g2['cstop']
+                    for _w in range(_cs.n):
+                        _r = _cs.collect(_cs.ver, 10.0, w=_w)
+                        print('[worker] cstop_late w%d %s' % (_w, None if _r is None else json.dumps(dict(ok=_r['ok'], why=_r['why'], n_ticks=_r['n_ticks'], sim_ms=_r['sim_ms']), default=str)), flush=True)
+                    print('[worker] first_ref n=%d h=%s' % (len(door.first['o'].Xd) if hasattr(door.first.get('o'), 'Xd') else -1, getattr(door.first.get('o'), 'h', None)), flush=True)
                 if ex is not None:
                     ctrl, mode = ex, 'open'
                     bind = dict(T_EH=ex.T_EH.copy(), ang_bind=float(ex.ang_bind), phi_bind=float(ex.phi_bind))
@@ -172,7 +180,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 out['tail'] = np.array([np.r_[a_, b_] for a_, b_ in tail], float)
             conn.send(('seg', out))
             if mode == 'grasp' and door is not None and ctrl.ready_now and ctrl.ready_ver is not None and ctrl.stop is None and ctrl.abort is None:
-                door.prebuild(ctrl, qj)                               # 空檔預建（下一快照到達前）；交接拍再以該拍預測構型重設依賴構型的兩項
+                _pb = door.prebuild(ctrl, qj)                         # 空檔預建（下一快照到達前）；交接拍再以該拍預測構型重設依賴構型的兩項
+                print('[worker] prebuild_ms %s at k_tick %s' % (_pb, k_tick), flush=True)
         except Exception as e:                                        # noqa: BLE001
             import traceback
             conn.send(('error', dict(ver=snap.get('ver'), err=traceback.format_exc()[-1500:])))
@@ -269,13 +278,14 @@ class AheadRunner:
             o = got[1]
             comp = (o['w_done'] - o['w_start']) * 1e3
             rec.update(compute_ms=round(comp, 2), wall_since_request_ms=round((got[2] - p['w_send']) * 1e3, 2), tail_src=o['tail_src'], abort=o['abort'])
+            rec.update(stop=o.get('stop'), phase=o.get('phase'))   # 診斷：交權首拍控制器是否已進停止
             ok = bool(extra_ok and comp <= self.deadline_ms and o['seg'] is not None and o['abort'] is None and o['tail'] is not None)
             if ok:
                 self.seg, self.tail, self.tail_i, self.mode, self.j = o['seg'], o['tail'], 0, 'nominal', 0
                 self.prop0 = None if o.get('prop') is None else np.asarray(o['prop'], float).copy()
                 self.n_commit += 1
         else:
-            rec['why'] = 'not_ready' if got is None else ('error:' + str(got[1])[:300] if got[0] == 'error' else 'version_mismatch')
+            rec['why'] = 'not_ready' if got is None else ('error:' + str(got[1])[-1600:] if got[0] == 'error' else 'version_mismatch')
         if not ok:
             rec.setdefault('why', why_not or ('extra_check' if not extra_ok else 'deadline_or_tail'))
             self.mode, self.seg = 'nack', None
@@ -335,6 +345,7 @@ class AheadRunner:
                 rec.update(ver=o['ver'], comm_in_ms=round((o['w_start'] - p['w_send']) * 1e3, 3), compute_ms=round((o['w_done'] - o['w_start']) * 1e3, 2),
                            comm_out_ms=round((got[2] - o['w_done']) * 1e3, 3), roundtrip_ms=round(rt_ms, 2), steps_since_send=int(n - p['n_send']), tail_src=o['tail_src'], tail_mismatch=o['tail_mismatch'])
                 rec.update(mode=o.get('mode'), events=o.get('events') or None, sigma=o.get('sigma'), stop_mode=o.get('stop_mode'), parts=o.get('parts'))
+                rec.update(stop=o.get('stop'), phase=o.get('phase'))
                 self.events += [dict(e, n=int(n)) for e in (o.get('events') or [])]
                 if rt_ms <= self.deadline_ms and o['seg'] is not None and o['abort'] is None and o['tail'] is not None:
                     self.seg, self.j = o['seg'], 0
@@ -351,7 +362,7 @@ class AheadRunner:
                     rec['ctrl_done'] = bool(o.get('done'))
             else:
                 rec['commit'] = False
-                rec['why'] = 'not_ready' if got is None else ('error:' + str(got[1])[:300] if got[0] == 'error' else 'version_mismatch')
+                rec['why'] = 'not_ready' if got is None else ('error:' + str(got[1])[-1600:] if got[0] == 'error' else 'version_mismatch')
                 rec['steps_since_send'] = int(n - p['n_send'])
                 rec['wall_since_send_ms'] = round((time.perf_counter() - p['w_send']) * 1e3, 2)
             if not rec['commit']:                                     # 晚到／錯誤：執行上一段附帶的已核停止尾段；控制器作廢

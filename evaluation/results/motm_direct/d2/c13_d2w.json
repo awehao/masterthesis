@@ -1,0 +1,421 @@
+{
+ "scope": "D2 ROS 乾跑：近距參考更新→連續接近→D2 交權→閉爪／確認→綁定→開門；受控對象運動學替身、合成觀察（把手真值＋雜訊、幾何可見才有效）、理想綁定",
+ "events": [
+  {
+   "t": 29.9,
+   "n": 2990,
+   "what": "handover_request",
+   "n_h": 2998,
+   "ins": {
+    "s0": 0.027401665581598927,
+    "v0": -0.09603542751736409,
+    "a0": 0.1614040798611076,
+    "T": 0.700000000000017
+   },
+   "ref_ver": 1,
+   "t_obs": 9.2
+  },
+  {
+   "t": 29.9,
+   "n": 2990,
+   "what": "handover_phase_align",
+   "guard_phase": 0,
+   "n_h_req": 2998,
+   "shift": 2,
+   "n_h": 3000,
+   "ins": {
+    "s0": 0.02551348194444609,
+    "v0": -0.09277100694444748,
+    "a0": 0.1649826388888858,
+    "T": 0.680000000000017
+   }
+  },
+  {
+   "t": 29.95,
+   "n": 2995,
+   "what": "d2_prepare",
+   "n_h": 3000,
+   "t_h": 30.0,
+   "t_ready_rel": 1.43,
+   "ins": {
+    "s0": 0.02551348194444609,
+    "v0": -0.09277100694444748,
+    "a0": 0.1649826388888858,
+    "T": 0.680000000000017
+   },
+   "base_h": [
+    0.708,
+    -0.5025,
+    1.5994
+   ]
+  },
+  {
+   "t": 30.0,
+   "n": 3000,
+   "what": "d2_takeover",
+   "kind": "takeover",
+   "compute_ms": 34.61,
+   "wall_since_request_ms": 38.05,
+   "tail_src": "candidate_extra1",
+   "abort": null,
+   "stop": null,
+   "phase": "INSERT",
+   "ok": true,
+   "d_base": 0.0,
+   "d_arm": 0.0,
+   "d_s": 0.0,
+   "d_q": 0.0,
+   "guard_phase": 0,
+   "n_mod": 0,
+   "wall_prep_ms": 144.9,
+   "n_ctrl": 0
+  },
+  {
+   "t": 30.4,
+   "n": 3040,
+   "what": "first_segment_result",
+   "feasible": true,
+   "wall_s": 1.446,
+   "t_avail_rel": 0.4,
+   "failed": []
+  },
+  {
+   "t": 30.55,
+   "n": 3055,
+   "what": "tail_started",
+   "why": "error:{'ver': 12, 'err': 'Traceback (most recent call last):\\n  File \"/home/howardchen/masterthesis/evaluation/door_ahead_exec.py\", line 127, in _worker\\n    o = ctrl.step(t_next + j * PHYS, qj.copy(), phi, finger_meas=fm)\\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/home/howardchen/masterthesis/evaluation/door_motm_grasp_ctrl.py\", line 627, in step\\n    spec = self._track(q, tr)\\n           ^^^^^^^^^^^^^^^^^^\\n  File \"/home/howardchen/masterthesis/evaluation/door_motm_grasp_ctrl.py\", line 228, in _track\\n    ua_, res_, q1 = self._arm_track(qp, sp, np.asarray(self.pipe[-1][:3], float).copy(), ub, te, seed)\\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/home/howardchen/masterthesis/evaluation/door_motm_grasp_ctrl.py\", line 204, in _arm_track\\n    q1, r1 = self._ik(b, self.target(te), seed)\\n                         ^^^^^^^^^^^^^^^\\n  File \"/home/howardchen/masterthesis/evaluation/door_motm_grasp_ctrl.py\", line 190, in target\\n    return self.T_at(self.handle_ref(), self.s_of(t_rel))\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/home/howardchen/masterthesis/evaluation/door_motm_grasp_ctrl.py\", line 120, in <lambda>\\n    self.T_at = lambda T, s_: np.asarray(E.OT.object_target(T, self.T_HG, self.a_H, float(s_))[\\'T_WE\\'], float)   # noqa: E731\\n                                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^\\nKeyError: \\'T_WE\\'\\n'}",
+   "roundtrip_ms": null,
+   "ctrl_done": null,
+   "n_tail_props": 12
+  },
+  {
+   "t": 30.55,
+   "n": 3055,
+   "what": "engineering_abort",
+   "why": "measured_clearance",
+   "bad": [
+    "shell_bar"
+   ],
+   "at": {
+    "shell_bar": 0.0049
+   }
+  },
+  {
+   "t": 30.55,
+   "n": 3055,
+   "what": "world_end"
+  }
+ ],
+ "rtf_target": 0.3,
+ "obs_noise": {
+  "pos_mm": 1.0,
+  "deg": 0.2
+ },
+ "tol": {
+  "base": 0.002,
+  "arm": 1e-09
+ },
+ "meas_clear_min": {
+  "env": 0.031222790565236736,
+  "base": 0.2015946466669552,
+  "self": 0.008897444292075988,
+  "shell_bar": 0.004852766979695262
+ },
+ "d2_packet": {
+  "ver": 1,
+  "s": [
+   -0.4868600125934392,
+   -0.04631932463871222,
+   1.4852136757457455,
+   -1.4450362863883415,
+   -0.4570702867788855,
+   -0.13500361666014235
+  ],
+  "pipe": [
+   [
+    0.0019134779086632456,
+    0.05,
+    0.003282322913817819,
+    -0.07264798333404099,
+    0.4063171359708376,
+    0.39315542282959637,
+    0.018133816830809835,
+    -0.07139139447163045,
+    -0.024717503554035347
+   ],
+   [
+    0.0019134779086632456,
+    0.05,
+    0.003282322913817819,
+    -0.07264798333404099,
+    0.4063171359708376,
+    0.39315542282959637,
+    0.018133816830809835,
+    -0.07139139447163045,
+    -0.024717503554035347
+   ],
+   [
+    0.0019134779086632456,
+    0.05,
+    0.003282322913817819,
+    -0.07264798333404099,
+    0.4063171359708376,
+    0.39315542282959637,
+    0.018133816830809835,
+    -0.07139139447163045,
+    -0.024717503554035347
+   ],
+   [
+    0.0018269048037935064,
+    0.05,
+    0.003132518584666418,
+    -0.07264798333404099,
+    0.4063171359708376,
+    0.39315542282959637,
+    0.018133816830809835,
+    -0.07139139447163045,
+    -0.024717503554035347
+   ],
+   [
+    0.0018269048037935064,
+    0.05,
+    0.003132518584666418,
+    -0.07264798333404099,
+    0.4063171359708376,
+    0.39315542282959637,
+    0.018133816830809835,
+    -0.07139139447163045,
+    -0.024717503554035347
+   ],
+   [
+    0.0018269048037935064,
+    0.05,
+    0.003132518584666418,
+    -0.07264798333404099,
+    0.4063171359708376,
+    0.39315542282959637,
+    0.018133816830809835,
+    -0.07139139447163045,
+    -0.024717503554035347
+   ],
+   [
+    0.0018269048037935064,
+    0.05,
+    0.003132518584666418,
+    -0.07264798333404099,
+    0.4063171359708376,
+    0.39315542282959637,
+    0.018133816830809835,
+    -0.07139139447163045,
+    -0.024717503554035347
+   ],
+   [
+    0.0018269048037935064,
+    0.05,
+    0.003132518584666418,
+    -0.07264798333404099,
+    0.4063171359708376,
+    0.39315542282959637,
+    0.018133816830809835,
+    -0.07139139447163045,
+    -0.024717503554035347
+   ]
+  ],
+  "u_last": [
+   0.0018269048037935064,
+   0.05,
+   0.003132518584666418,
+   -0.07264798333404099,
+   0.4063171359708376,
+   0.39315542282959637,
+   0.018133816830809835,
+   -0.07139139447163045,
+   -0.024717503554035347
+  ],
+  "u_prev": [
+   0.0019134779086632456,
+   0.05,
+   0.003282322913817819,
+   -0.07264798333404099,
+   0.4063171359708376,
+   0.39315542282959637,
+   0.018133816830809835,
+   -0.07139139447163045,
+   -0.024717503554035347
+  ],
+  "off_static": [
+   0.00037,
+   0.010729032270269041,
+   -0.009805130338797154,
+   -0.0010205455010155297,
+   0.00044257164705337665,
+   -0.00024001290140965705
+  ],
+  "ins": {
+   "s0": 0.02551348194444609,
+   "v0": -0.09277100694444748,
+   "a0": 0.1649826388888858,
+   "T": 0.680000000000017
+  },
+  "T_ref": [
+   [
+    0.9999830319368062,
+    0.0047766880474574,
+    0.0033345299175903675,
+    0.8001635281904302
+   ],
+   [
+    -0.004775226440225044,
+    0.9999884990156527,
+    -0.00044614893183059223,
+    -0.03675359383689569
+   ],
+   [
+    -0.0033366226814832978,
+    0.0004302182261198828,
+    0.999994340914668,
+    0.8467404642245998
+   ],
+   [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  ],
+  "t_obs_rel": -20.8,
+  "ref_ver": 1,
+  "win": [
+   0.0,
+   0.22
+  ]
+ },
+ "takeover": {
+  "kind": "takeover",
+  "compute_ms": 34.61,
+  "wall_since_request_ms": 38.05,
+  "tail_src": "candidate_extra1",
+  "abort": null,
+  "stop": null,
+  "phase": "INSERT",
+  "ok": true,
+  "d_base": 0.0,
+  "d_arm": 0.0,
+  "d_s": 0.0,
+  "d_q": 0.0,
+  "guard_phase": 0,
+  "n_mod": 0,
+  "wall_prep_ms": 144.9,
+  "n_ctrl": 0
+ },
+ "by_mode": {
+  "grasp": {
+   "n": 10,
+   "n_commit": 10,
+   "roundtrip_ms": {
+    "p50": 28.9,
+    "p95": 32.3,
+    "max": 32.9,
+    "n_over_50": 0
+   }
+  },
+  "open": {
+   "n": 0,
+   "n_commit": 0,
+   "roundtrip_ms": null
+  }
+ },
+ "late": {
+  "n": 55,
+  "commit": false,
+  "why": "error:{'ver': 12, 'err': 'Traceback (most recent call last):\\n  File \"/home/howardchen/masterthesis/evaluation/door_ahead_exec.py\", line 127, in _worker\\n    o = ctrl.step(t_next + j * PHYS, qj.copy(), phi, finger_meas=fm)\\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/home/howardchen/masterthesis/evaluation/door_motm_grasp_ctrl.py\", line 627, in step\\n    spec = self._track(q, tr)\\n           ^^^^^^^^^^^^^^^^^^\\n  File \"/home/howardchen/masterthesis/evaluation/door_motm_grasp_ctrl.py\", line 228, in _track\\n    ua_, res_, q1 = self._arm_track(qp, sp, np.asarray(self.pipe[-1][:3], float).copy(), ub, te, seed)\\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/home/howardchen/masterthesis/evaluation/door_motm_grasp_ctrl.py\", line 204, in _arm_track\\n    q1, r1 = self._ik(b, self.target(te), seed)\\n                         ^^^^^^^^^^^^^^^\\n  File \"/home/howardchen/masterthesis/evaluation/door_motm_grasp_ctrl.py\", line 190, in target\\n    return self.T_at(self.handle_ref(), self.s_of(t_rel))\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/home/howardchen/masterthesis/evaluation/door_motm_grasp_ctrl.py\", line 120, in <lambda>\\n    self.T_at = lambda T, s_: np.asarray(E.OT.object_target(T, self.T_HG, self.a_H, float(s_))[\\'T_WE\\'], float)   # noqa: E731\\n                                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^\\nKeyError: \\'T_WE\\'\\n'}",
+  "steps_since_send": 5,
+  "wall_since_send_ms": 166.63
+ },
+ "aborted": {
+  "why": "measured_clearance",
+  "t": 30.55,
+  "n": 3055,
+  "bad": [
+   "shell_bar"
+  ],
+  "at": {
+   "shell_bar": 0.0049
+  }
+ },
+ "settled_after_tail": null,
+ "chain_align": {
+  "policy": "整條放行流須與提案序列一致（每筆放行＝最新或前一筆提案；單調；每筆提案生效前須被確認）；違規或缺失 ⇒ 生效前拒絕",
+  "n_proposed": 12,
+  "n_effect_checked_ok": 10,
+  "n_missing": 0,
+  "n_differs": 0,
+  "n_releases": 11,
+  "n_pre_owner_releases": 0,
+  "lag_steps": {
+   "min": 5,
+   "p50": 5.0,
+   "max": 5
+  },
+  "delta_abs_max": 2.168404344971009e-19,
+  "d_steps": 8,
+  "tol": 1e-06,
+  "violation": null
+ },
+ "sim_s": 30.55,
+ "wall_s": 101.804,
+ "rtf_actual": 0.3,
+ "timer_late_steps": 0,
+ "phi_end_deg": 0.071,
+ "first_segment": {
+  "pending": false,
+  "t_ready_rel": 1.430000000000017,
+  "t_req": 29.95,
+  "feasible": true,
+  "wall_s": 1.446,
+  "t_done": 30.4,
+  "failed": [],
+  "info": {
+   "warm_used": false,
+   "why": "qp_infeasible",
+   "iters": 20,
+   "phi_end_deg": 48.341,
+   "min_clear": {
+    "env": 0.0314,
+    "base": 0.123,
+    "self": 0.0109,
+    "shell_bar": 0.0072
+   }
+  }
+ },
+ "handover": [],
+ "p2": [],
+ "ctrl_events": [],
+ "t_h": 30.0,
+ "T_true": [
+  [
+   0.9999853275688272,
+   0.0045657496129054296,
+   0.0029152319869825078,
+   0.7997313430306906
+  ],
+  [
+   -0.004565760548432585,
+   0.9999895768567697,
+   -2.903994643400037e-06,
+   -0.03888736207087842
+  ],
+  [
+   -0.0029152148600143767,
+   -1.0406299160954964e-05,
+   0.9999957506979864,
+   0.847334245287471
+  ],
+  [
+   0.0,
+   0.0,
+   0.0,
+   1.0
+  ]
+ ]
+}

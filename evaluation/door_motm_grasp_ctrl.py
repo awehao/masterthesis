@@ -173,7 +173,9 @@ class MovingGraspCtrl:
             c3 = (20 * (0.0 - s0) - 12 * v0 * i - 3 * a0 * T2) / (2 * T3)
             c4 = (30 * (s0 - 0.0) + 16 * v0 * i + 3 * a0 * T2) / (2 * T4)
             c5 = (12 * (0.0 - s0) - 6 * v0 * i - a0 * T2) / (2 * T5)
-            return s0 + v0 * u + 0.5 * a0 * u * u + c3 * u ** 3 + c4 * u ** 4 + c5 * u ** 5
+            if u >= i - 1e-12:
+                return 0.0                                            # 終點精確為 0（c13：五次式在 u＝i 算出 −1e−18，被 object_target 的 s≥0 檢查拒絕）
+            return max(0.0, s0 + v0 * u + 0.5 * a0 * u * u + c3 * u ** 3 + c4 * u ** 4 + c5 * u ** 5)
         if t_rel <= h:
             return self.S_PRE
         a, _ = XE.minjerk((t_rel - h) / i)

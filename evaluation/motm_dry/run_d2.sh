@@ -14,8 +14,8 @@ cleanup(){ for p in "${PIDS[@]}"; do kill -INT -- "-$p" 2>/dev/null; done; sleep
 trap cleanup EXIT
 PYS="env -u VIRTUAL_ENV PATH=/usr/local/bin:/usr/bin:/bin /usr/bin/python3"
 export D2_RTF="${D2_RTF:-0.3}" B_RTF="${D2_RTF:-0.3}" B_SWEEP_S="${B_SWEEP_S:-0.030}" B_POOL_N="${B_POOL_N:-3}" B_POOL_N_PL="${B_POOL_N_PL:-2}" B_PLANNER_CPUS="${B_PLANNER_CPUS:-5,13,6,14}"
-export DOOR_BASE_CLEAR_M=0.10 DOOR_BASE_CLEAR_PLAN_M=0.12 GRASP_TAIL_CERT=1 TAIL_CERT=1 SHARED_POOL=1
-setsid taskset -c "${WORLD_CPUS:-0,8,1,9,7,15}" $PYS -u evaluation/motm_dry/world_d2_node.py "$OUT" "$TEND" > "$OUT.world.log" 2>&1 < /dev/null & PIDS+=( $! ); WPID=$!
+export DOOR_BASE_CLEAR_M=0.10 DOOR_BASE_CLEAR_PLAN_M=0.12 GRASP_TAIL_CERT=${GRASP_TAIL_CERT:-0} TAIL_CERT=${TAIL_CERT:-1} POOL_N=${POOL_N:-8} CAND_STREAM_CHUNK=${CAND_STREAM_CHUNK:-4} AHEAD_GC_FREEZE=${AHEAD_GC_FREEZE:-1} SHARED_POOL=1
+setsid taskset -c "${WORLD_CPUS:-0,8,1,9,7,15,5,13,6,14}" $PYS -u evaluation/motm_dry/world_d2_node.py "$OUT" "$TEND" > "$OUT.world.log" 2>&1 < /dev/null & PIDS+=( $! ); WPID=$!
 for i in $(seq 240); do grep -q "world_ready" "$OUT.world.log" 2>/dev/null && break; kill -0 "$WPID" 2>/dev/null || { echo "世界節點提前結束"; tail -20 "$OUT.world.log"; exit 3; }; sleep 1; done
 grep -q "world_ready" "$OUT.world.log" || { echo "世界節點未就緒"; exit 3; }
 NO_GZ=1 BIGARENA=1 SCENE=mission_house_m8 NO_TRAFFIC=1 HEADING=1 GUARD=1 SHIELD=1 GMPC_TASK=1 GMPC_CMD_TOPIC=cmd_vel_nav_raw SPAWN_X=1.5 SPAWN_Y=-2.8 \

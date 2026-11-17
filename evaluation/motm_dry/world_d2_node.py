@@ -30,6 +30,7 @@ import far_chain_align as FCA                                        # noqa: E40
 import door_p2_planner_server as PS                                  # noqa: E402
 import wrist_v0_capture as W0                                        # noqa: E402
 FSP = PS.PlannerServer()                                             # D2 首段規劃程序（背景）
+D2_PHASE_ALIGN = os.environ.get('D2_PHASE_ALIGN', '1') == '1'
 TOL = dict(base=float(os.environ.get('D2_TOL_BASE', '2e-3')), arm=1e-9)   # 交權時實際管線對預測的容差（底盤 m/s、rad/s；手臂命令須逐值相同）
 door.pre_k2 = False
 
@@ -143,6 +144,21 @@ class WorldD2(Node):
             try:
                 self.ho = json.loads(m.data)
                 self.ev('handover_request', n_h=self.ho['n_h'], ins=self.ho['ins'], ref_ver=self.ho['ref_ver'], t_obs=self.ho['t_obs'])
+                ph = FCA.best_phase(self.rx_steps)                   # 交權步對齊 GUARD 取樣相位（同 D1：拍首＝相位 r，提案到下一次取樣有完整 NPH 步；c11：差 2 步時平滑器慢一步即漏放行）
+                if ph is not None and D2_PHASE_ALIGN:
+                    n0_ = int(self.ho['n_h']); sh = (ph - n0_) % NPH
+                    if sh:
+                        i0 = self.ho['ins']; T0 = float(i0['T']); d_ = sh * PHYS
+                        s0, v0, a0 = float(i0['s0']), float(i0['v0']), float(i0['a0'])   # 插入剖面＝(s0,v0,a0)→(0,0,0) 的五次多項式（最小急動直線的剩餘段）；平移 d_ 取同一條曲線
+                        T2, T3, T4, T5 = T0 ** 2, T0 ** 3, T0 ** 4, T0 ** 5
+                        c3 = (20 * (0 - s0) - 12 * v0 * T0 - 3 * a0 * T2) / (2 * T3)
+                        c4 = (30 * (s0 - 0) + 16 * v0 * T0 + 3 * a0 * T2) / (2 * T4)
+                        c5 = (12 * (0 - s0) - 6 * v0 * T0 - a0 * T2) / (2 * T5)
+                        C_ = [s0, v0, a0 / 2, c3, c4, c5]
+                        s1 = sum(C_[k] * d_ ** k for k in range(6)); v1 = sum(k * C_[k] * d_ ** (k - 1) for k in range(1, 6)); a1 = sum(k * (k - 1) * C_[k] * d_ ** (k - 2) for k in range(2, 6))
+                        self.ho['n_h'] = n0_ + sh
+                        self.ho['ins'] = dict(s0=s1, v0=v1, a0=a1, T=T0 - d_)
+                    self.ev('handover_phase_align', guard_phase=ph, n_h_req=n0_, shift=sh, n_h=self.ho['n_h'], ins=self.ho['ins'])
             except Exception as e:                                    # noqa: BLE001
                 self.ev('handover_request_bad', err=repr(e)[:200])
 
@@ -352,6 +368,7 @@ class WorldD2(Node):
         t_h = n_h * PHYS
         pk = dict(ver=1, s=s.tolist(), pipe=[p_.tolist() for p_ in pipe], u_last=pipe[-1].tolist(), u_prev=pipe[-1 - NPH].tolist(), off_static=dq(q).tolist(),
                   ins=self.ho['ins'], T_ref=T_ref.tolist(), t_obs_rel=float(self.ho['t_obs']) - t_h, ref_ver=int(self.ho['ref_ver']), win=self.ho.get('win', [0.0, 0.22]))
+        self.meta['d2_packet'] = pk
         self.prep = dict(n_h=n_h, q_pred=q, s_pred=s, pipe_pred=[p_.copy() for p_ in pipe], u_hold=np.r_[u_b, u_a], w=time.perf_counter())
         runner.start_rx()
         runner.prepare_takeover(pk, q.copy(), 0.0, 0, phi=self.phi)
@@ -380,6 +397,7 @@ class WorldD2(Node):
         ph = FCA.best_phase(self.rx_steps)
         ok, rec = runner.commit_takeover(0, extra_ok=extra, why_not=None if extra else 'state_mismatch')
         rec.update(d_base=round(d_base, 6), d_arm=d_arm, d_s=d_s, d_q=d_q, guard_phase=ph, n_mod=self.n % NPH, wall_prep_ms=round((time.perf_counter() - self.prep['w']) * 1e3, 1))
+        rec['n_ctrl'] = rec.pop('n', None)
         self.meta['takeover'] = rec
         if not ok:
             self.ev('d2_nack', **rec)
@@ -426,6 +444,7 @@ def main():
             w.save()
         except Exception as e:                                        # noqa: BLE001
             print('save failed', repr(e), flush=True)
+        time.sleep(float(os.environ.get('D2_LINGER_S', '0')))           # 診斷：讓工作程序的遲到診斷輸出來得及印
         runner.close()
         for x_ in (SHARED, CSW, BG, FSP):
             try:

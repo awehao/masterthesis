@@ -24,16 +24,18 @@ DT, PHYS, NPH, D = 0.05, 0.01, 5, 8
 V_APPROACH = float(os.environ.get('B_V_APPROACH', '0.20'))
 V_ARM, A_ARM = 1.0, 10.0
 LEAD_S = D * PHYS + DT + 0.10
+CL_LINE = os.environ.get('B_CL_LINE', '1') == '1'             # 混接／直線段以實際底盤即時解 IK（c7 阻點修正）；0＝原開迴路關節參考
 EST = dict(n=3, spread_m=0.005, max_age_s=0.5, replan_shift_m=0.010)
 ASSOC_TOL = dict(dxy_m=0.15, dz_m=0.10, dang_deg=10.0)
 GOAL_A, SB_PRIOR = -0.49, 0.45
 STILL = dict(base=0.003, yaw=0.003, arm=0.002, hold_s=0.3)
-SB_CAND = [0.43, 0.44, 0.45, 0.46]                                   # 抓持窗口∩開門承接種子（假世界整鏈 0.45／0.46 可開、0.47 未綁、0.48 首拍加速度不過）
+SB_CAND = [float(x) for x in os.environ.get('B_SB_CAND', '0.43,0.44,0.45,0.46').split(',')]   # 預設＝抓持窗口∩開門承接種子（假世界整鏈 0.45／0.46 可開、0.47 未綁、0.48 首拍加速度不過）；B_SB_CAND 供真承接核對
 AW_CAND = (-0.10, -0.12)
 DP_AW = (-0.10, -0.12)
-DP_CANDS = [(4.0, 0.18, 4.0), (3.0, 0.18, 4.0), (4.0, 0.15, 4.0), (4.0, 0.18, 3.0)]   # 直線起點須避開把手正前方（門旁抓法奇異帶 a≈0）：底盤約 0.05 m/s 時直線 4 s ⇒ 起點約在把手前 0.1 m   # 直線起點須避開把手正前方（門旁抓法奇異帶 a≈0）   # sb 0.445 離線：直線起點 0.22 自碰撞，0.15／0.18 可行   # （擺動秒、直線起點 m、直線秒）本輪候選參數；正式由當下狀態重算
+DP_CANDS = [tuple(float(y) for y in x.split(':')) for x in os.environ.get('B_DP_CANDS', '4:0.18:4,3:0.18:4,4:0.15:4,4:0.18:3').split(',')]   # 直線起點須避開把手正前方（門旁抓法奇異帶 a≈0）：底盤約 0.05 m/s 時直線 4 s ⇒ 起點約在把手前 0.1 m   # 直線起點須避開把手正前方（門旁抓法奇異帶 a≈0）   # sb 0.445 離線：直線起點 0.22 自碰撞，0.15／0.18 可行   # （擺動秒、直線起點 m、直線秒）本輪候選參數；正式由當下狀態重算
 DP_BLEND = 1.0
 T_NEED_MARGIN = 1.0
+BRANCH_CONT = os.environ.get('B_BRANCH_CONT', '1') == '1'
 REGION_A_START, REGION_A_ENTER = 0.60, 0.30
 RETR_LEAD, RETR_PERIOD, RETR_TRIGGER = 1.5, 1.0, 0.15
 CHECK_EVERY = 2                                                      # 候選模擬每 2 拍（0.1 s）呼叫一次完整停止核對
@@ -203,19 +205,59 @@ def worker(conn):
         Q_ = dp['Q']
         return np.asarray(Q_[k - 1], float) + w * (np.asarray(Q_[k], float) - np.asarray(Q_[k - 1], float))
 
-    def law_ua(dp, dp_next, t, q9_od, s_end):
+    def base_lead(q9_od, pipe, lead):
+        """底盤在 t＋lead 的里程座標位姿：在途管線逐步積分（每步 PHYS），之後保持管線末筆命令（工作程序與候選模擬同式）。"""
+        b = np.asarray(q9_od[:3], float).copy()
+        us = [np.asarray(u_[:3], float) for u_ in pipe]
+        n_rest = max(int(round(lead / PHYS)) - len(us), 0)
+        for u_ in us + [us[-1]] * n_rest:
+            c_, s_ = math.cos(b[2]), math.sin(b[2])
+            b = b + PHYS * np.array([c_ * u_[0] - s_ * u_[1], s_ * u_[0] + c_ * u_[1], u_[2]])
+        return b
+
+    def cl_target(cur, tt, b_m):
+        """閉迴路混接／直線（CL_LINE）：擺動關節參考掛在實際（前推）底盤上，與世界固定的接近直線依 β 混接，以 t 時刻預測底盤解 IK。
+        回 (q 或 None, 原因)。"""
+        t_D, t_bl, t_ln, d_ln = cur['t_D'], cur['t_blend'], cur['t_line'], cur['d_line']
+        T_H = np.asarray(cur['T_H'], float)
+        C = quintic(cur['q_s'], cur['v_s'], np.zeros(6), cur['q_D'], t_D - cur['t_s'])
+        qj = qeval(C, tt - cur['t_s'], t_D - cur['t_s'])[0]
+        beta = mj_((tt - (t_D - t_bl)) / t_bl)
+        r = d_ln * (1 - mj_((min(tt, cur['t_g']) - (t_D - t_bl)) / (t_ln + t_bl)))
+        Tj = DFK.FC.fk_jac(np.r_[b_m, qj])[0]; Tl = grasp_T(T_H, r)
+        Tt = np.eye(4); Tt[:3, 3] = (1 - beta) * Tj[:3, 3] + beta * Tl[:3, 3]
+        Tt[:3, :3] = Tj[:3, :3] @ so3_exp(beta * so3_log(Tj[:3, :3].T @ Tl[:3, :3]))
+        seed = dp_ref_at(cur, tt)
+        q, res, _ = DFK.ik_closure_fc(Tt, b_m, seed)
+        if not (res < 1e-6 and np.isfinite(q).all()) or float(np.abs(q - seed).max()) > 0.5:
+            return None, 'cl_ik'
+        return q, None
+
+    def law_ua(dp, dp_next, t, q9_od, s_end, pipe=None, T_mo=None):
         """直接接近命令律（工作程序與候選模擬同式）：參考取 t＋LEAD_S 的關節目標 − 偏置 ⇒ 設定點；ua＝(設定點−在途末端設定點)/DT，夾 ±V_ARM。
-        參考未開始 ⇒ ua＝0（保持）。替換段到其 t_s 才切換。"""
+        參考未開始 ⇒ ua＝0（保持）。替換段到其 t_s 才切換。
+        CL_LINE（預設開）：混接起點之後的參考不再用規劃時的預測底盤解好的關節，而是以實際底盤（在途管線前推到 t＋LEAD_S，規劃座標）即時解 IK——
+        底盤實際走得比預測快／慢時 TCP 仍落在世界固定的接近線上（c7：開迴路參考使交權時 TCP 偏 19 mm，抓持控制器首拍手臂命令超限）。
+        閉迴路 IK 失敗 ⇒ 回報夾限（候選模擬即拒絕）。"""
         cur = dp
         if dp_next is not None and t >= dp_next['t_s'] - 1e-9:
             cur = dp_next
-        qd = dp_ref_at(cur, t + LEAD_S)
+        tt = t + LEAD_S
+        qd = dp_ref_at(cur, tt)
         if qd is None:
             return np.zeros(6), False, None
+        bad = False
+        if CL_LINE and cur.get('T_H') is not None and pipe is not None and tt > cur['t_D'] - cur['t_blend'] + 1e-9:
+            b_m = to_map(np.r_[base_lead(q9_od, pipe, LEAD_S), np.zeros(6)], np.asarray(cur.get('T_mo_plan', T_mo), float))[:3]   # 固定用規劃當時的 map←odom ⇒ 等同在里程座標追把手
+            q_cl, why_ = cl_target(cur, tt, b_m)
+            if q_cl is None:
+                bad = True
+            else:
+                qd = q_cl
         sp = qd - off_fn(np.r_[q9_od[:3], qd])
         ua_raw = (sp - s_end) / DT
         ua = np.clip(ua_raw, -V_ARM, V_ARM)
-        return ua, bool(float(np.abs(ua - ua_raw).max()) > 1e-9), qd
+        return ua, bool(bad or float(np.abs(ua - ua_raw).max()) > 1e-9), qd
 
     def build_dp(bp, T_H, Pv, t_s, q_s, v_s, aw, T_move, d_line, t_line, t_blend, sb_lim, cont=False):
         """擺動（關節五次多項式：承接 (q_s, v_s) → 直線起點構型 q_D 靜止）＋混接（任務空間權重）＋沿接近軸直線（r：d_line→0 最小急動，t_line）。
@@ -239,9 +281,20 @@ def worker(conn):
         T_D = grasp_T(T_H, d_line)
         b_D = twist_at(Pv, t_D)[0]
         best = None
-        for sd in (q_s, np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157]), np.array([-0.396, -0.118, 1.409, -1.471, -0.398, -0.102]),
+        if BRANCH_CONT:                                                # 直線起點取抓取所用門旁分支：門旁種子在 b_D 解抓取位（r＝0）→ 沿接近軸連續退到 d_line（同分支）
+            sd_, okb = np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157]), True
+            for r_ in np.linspace(0.0, d_line, 12):
+                qn_, rn_, sn_ = DFK.ik_closure_fc(grasp_T(T_H, float(r_)), b_D, sd_)
+                if not (rn_ < 1e-6 and np.isfinite(qn_).all()) or float(np.abs(qn_ - sd_).max()) > 0.5:
+                    okb = False; break
+                sd_ = qn_
+            if okb and bp.sigma6(np.r_[b_D, sd_]) >= W.SIG_FLOOR and np.all(sd_ >= LO) and np.all(sd_ <= HI) and bp.ok_cfg(b_D, sd_)[0]:
+                best = (float(np.abs(sd_ - q_s).max()), sd_)
+            else:
+                return None, 'no_line_start_on_grasp_branch'
+        for sd in (() if BRANCH_CONT else (q_s, np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157]), np.array([-0.396, -0.118, 1.409, -1.471, -0.398, -0.102]),
                    np.array([-0.0128, -0.0519, 0.086, 0.0116, -1.6249, -0.0018]), np.array([0.0, -0.3, 1.2, 0.0, -0.9, 0.0]), np.array([0.4, -0.2, 1.3, 1.4, -0.4, 0.1]),
-                   np.array([-1.249, -0.681, 1.044, -1.626, -1.229, 0.164])):   # 同 door_direct_approach 的種子組（＋其直線起點解）
+                   np.array([-1.249, -0.681, 1.044, -1.626, -1.229, 0.164]))):   # 同 door_direct_approach 的種子組（＋其直線起點解）
             qs_, rs_, ss_ = DFK.ik_closure_fc(T_D, b_D, sd)
             if rs_ < 1e-6 and np.isfinite(qs_).all() and ss_ >= W.SIG_FLOOR and np.all(qs_ >= LO) and np.all(qs_ <= HI) and bp.ok_cfg(b_D, qs_)[0]:
                 d_ = float(np.abs(qs_ - q_s).max())
@@ -282,6 +335,7 @@ def worker(conn):
         Tl_ = t_line + t_blend
         v_h = -d_line * mjd_(u_h) / Tl_; a_h = -d_line * mjdd_(u_h) / Tl_ ** 2
         return dict(t_s=t_s2, t_D=t_D, t_g=t_g, t_h=t_h, sb_g=sb_g, aw=aw, T_move=T_move, d_line=d_line, t_line=t_line, t_blend=t_blend, tq=tq, Q=[x.tolist() for x in Q],
+                    q_s=np.asarray(q_s, float).tolist(), v_s=np.asarray(v_s, float).tolist(), T_H=np.asarray(T_H, float).tolist(),
                     ins=dict(s0=float(r_of(t_h)), v0=float(v_h), a0=float(a_h), T=float(t_g - t_h)), q_D=q_D.tolist()), None
 
     def simulate_dp(a, Pv, T_mo, T_ref, dp_cur, dp_next, cand, bp, T_H):
@@ -296,9 +350,9 @@ def worker(conn):
             q9_od = np.r_[(Tinv @ np.r_[b_map[:2], 0.0, 1.0])[:2], b_map[2] - float(T_ref[2]), q9[3:]]
             s_end = s_ + PHYS * sum(p_[3:] for p_ in pipe)
             if t < cand['t_s'] - 1e-9:
-                ua, clipped, _ = law_ua(dp_cur, dp_next, t, q9_od, s_end)
+                ua, clipped, _ = law_ua(dp_cur, dp_next, t, q9_od, s_end, pipe, T_ref)
             else:
-                ua, clipped, _ = law_ua(cand, None, t, q9_od, s_end)
+                ua, clipped, _ = law_ua(cand, None, t, q9_od, s_end, pipe, T_ref)
             if clipped:
                 out['n_clip'] += 1
                 if t >= cand['t_s'] - 1e-9:
@@ -325,7 +379,17 @@ def worker(conn):
                         mm[k_] = min(mm[k_], float(mv))
                 if SC.disposition(sc) != 'commit':
                     out['why'] = 'stopcheck@%.2f:%s' % (t - float(a['t_req']), sc.get('why') or ('now' if not sc['now']['ok'] else 'next'))
-                    out['min_margin'] = {k_: round(v_, 4) for k_, v_ in mm.items()}; return out
+                    out['min_margin'] = {k_: round(v_, 4) for k_, v_ in mm.items()}
+                    try:                                               # 阻點診斷：當刻構型（規劃座標）、各項淨空與最近配對、手臂速率命令、停止核對細項
+                        cl_ = W.clear_door(np.r_[b_map, q9[3:], 0.0], T_H)
+                        out['block'] = dict(t_abs=round(t, 3), seg=('line' if t >= cand['t_D'] else ('blend' if t >= cand['t_D'] - DP_BLEND else 'swing')) if t >= cand['t_s'] else 'pre',
+                                            q9_plan=[round(float(x), 4) for x in np.r_[b_map, q9[3:]]], s=[round(float(x), 4) for x in s_], ua=[round(float(x), 4) for x in ua],
+                                            clear={k_: (round(float(v_), 4) if isinstance(v_, (int, float, np.floating)) else str(v_)[:80]) for k_, v_ in cl_.items()},
+                                            now={k_: sc['now'].get(k_) for k_ in ('ok', 'limits_ok', 'settled', 'coverage_ok', 'min_clear', 'margin_after_interval_bound', 'settle_s')} if isinstance(sc.get('now'), dict) else None,
+                                            next={k_: sc['next'].get(k_) for k_ in ('ok', 'limits_ok', 'settled', 'coverage_ok', 'min_clear', 'margin_after_interval_bound', 'settle_s')} if isinstance(sc.get('next'), dict) else None)
+                    except Exception as e_:                            # noqa: BLE001
+                        out['block'] = dict(err=repr(e_)[:200])
+                    return out
             u_base = twist_at(Pv, t + D * PHYS)[1]
             for _ in range(NPH):
                 pipe.append(np.r_[u_base, ua]); ue = pipe.pop(0)
@@ -452,10 +516,10 @@ def worker(conn):
                                 rec['why'] = why; cands.append(rec); continue
                             rec.update(t_s=round(cand['t_s'], 3), t_h=round(cand['t_h'], 3), t_g=round(cand['t_g'], 3), sb_g=round(cand['sb_g'], 4))
                             sim = simulate_dp(a, Pv, T_mo, T_ref, dp_cur, dp_next, cand, bp, T_ref_m)
-                            rec.update({k: sim.get(k) for k in ('why', 'n_check', 'n_clip', 'last_vis', 'min_margin', 'ms_check')})
+                            rec.update({k: sim.get(k) for k in ('why', 'n_check', 'n_clip', 'last_vis', 'min_margin', 'ms_check', 'block')})
                             if sim['why'] is None:
                                 rec['ok'] = True; cands.append(rec)
-                                chosen = dict(cand, v=v_, last_vis=sim['last_vis'], min_margin=sim['min_margin'], q_h_sim=sim['q_h_sim'], s_h_sim=sim['s_h_sim'])
+                                chosen = dict(cand, v=v_, cont=bool(cont), cont_from=(float(act['t_s']) if cont else None), T_mo_plan=[float(x) for x in T_ref], last_vis=sim['last_vis'], min_margin=sim['min_margin'], q_h_sim=sim['q_h_sim'], s_h_sim=sim['s_h_sim'])
                                 break
                             cands.append(rec)
                         if chosen is not None:
@@ -469,8 +533,8 @@ def worker(conn):
                 st['dp'], st['dp_next'] = None, None
                 conn.send(('adopt', ver, dict(ok=True)))
             elif op == 'adopt_dp':                                     # 工作程序：採用（或替換）直接接近參考；替換段到其 t_s 才切換
-                new = dict(t_s=float(a['dp']['t_s']), tq=a['dp']['tq'], Q=a['dp']['Q'], t_h=float(a['dp']['t_h']), aw=a['dp']['aw'])
-                if st.get('dp') is None or float(a['t_now']) < st['dp']['t_s'] - 1e-9:
+                new = dict(a['dp']); new.update(t_s=float(a['dp']['t_s']), t_h=float(a['dp']['t_h']))   # 完整參考（閉迴路直線需 t_D、T_H、q_s… 與規劃座標 T_mo_plan）
+                if a.get('slot', 'replace') == 'replace':               # 位置由主程序決定（c9：承接型被當成替換，現行段沒跑、新段起點對不上）
                     st['dp'], st['dp_next'] = new, None
                 else:
                     st['dp_next'] = new
@@ -498,7 +562,7 @@ def worker(conn):
                         st['dp'], st['dp_next'] = st['dp_next'], None
                     info = {}
                     if mode == 'APPROACH' and st.get('dp') is not None:
-                        ua, clipped, qd = law_ua(st['dp'], st.get('dp_next'), t, q, s_end)
+                        ua, clipped, qd = law_ua(st['dp'], st.get('dp_next'), t, q, s_end, pipe, np.asarray(a.get('T_ref', T_mo), float))
                         if clipped:
                             st['n_clip'] += 1; info['clipped'] = True
                         info['in_dp'] = qd is not None
@@ -848,17 +912,17 @@ def main():
                 frozen = self.dp is not None and t + RETR_LEAD >= self.dp['t_D'] - DP_BLEND
                 if not frozen:
                     self.t_retr = t; self.ver += 1
-                    order = [self.v_active] + [v_ for v_ in V_CANDS if v_ != self.v_active]
+                    order = [self.v_active]                               # 接近段速度由限速式決定（預測同式）⇒ 各速度候選預測相同，只算一組
                     preds = [(v_, self.base_prediction(v_).tolist()) for v_ in order]
                     rc = self.ref_cand
                     if rc is not None:                                    # 近距參考候選（里程座標）→ 規劃座標；與現行參考差須在閘門內（≤20 mm、3°）
                         T_od_new = np.asarray(rc['T'], float); T_m_new = _T3(self.T_ref_now) @ T_od_new
-                        dpos = float(np.linalg.norm(T_m_new[:3, 3] - self.ref['T_m'][:3, 3]))
-                        dR_ = self.ref['T_m'][:3, :3].T @ T_m_new[:3, :3]; dang = math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR_) - 1) / 2))))
+                        dpos = float(np.linalg.norm(T_od_new[:3, 3] - self.ref['T_od'][:3, 3]))   # 閘門在里程座標比（c8：舊地圖位姿含 AMCL 修正前的 map←odom）
+                        dR_ = self.ref['T_od'][:3, :3].T @ T_od_new[:3, :3]; dang = math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR_) - 1) / 2))))
                         use = dpos <= 0.020 and dang <= 3.0
                         if not use:
                             self.event('ref_candidate_gated', dpos_mm=round(dpos * 1e3, 2), dang_deg=round(dang, 3)); self.ref_cand = None; rc = None
-                    T_use_m = self.ref['T_m'] if rc is None else _T3(self.T_ref_now) @ np.asarray(rc['T'], float)
+                    T_use_m = _T3(self.T_ref_now) @ (self.ref['T_od'] if rc is None else np.asarray(rc['T'], float))   # 手臂任務錨定里程座標：每次請求以當下 map←odom 換到規劃座標（c8：沿用估計當時的地圖位姿 ⇒ AMCL 修正後 TCP 偏 22 mm）
                     T_use_od = self.ref['T_od'] if rc is None else np.asarray(rc['T'], float)
                     self.req = dict(kind='dapp', ver=self.ver, t=t, w=time.perf_counter(), ref_cand=rc, T_m=T_use_m, T_od=T_use_od)
                     pk.send(('dapp', dict(ver=self.ver, t_req=t, q=q.tolist(), s=self.truth['s'].tolist(), pipe=self.truth['pipe'].tolist(), T_mo=T_mo.tolist(), T_ref=self.T_ref_now.tolist(),
@@ -870,7 +934,7 @@ def main():
                 rf = self.ref
                 msg = dict(n_h=n_h, ins=self.dp['ins'], T_ref=rf['T_od'].tolist(), t_obs=rf['t_obs'], ref_ver=rf['ver'], win=[0.0, 0.22])   # 實際採用參考（里程座標）與其原始來源時間
                 self.p_ho.publish(String(data=json.dumps(msg)))
-                self.ho_sent = dict(t=round(t, 3), n_h=n_h, dp_t_h=round(self.dp['t_h'], 3), ins=self.dp['ins'], ref_ver=rf['ver'])
+                self.ho_sent = dict(t_sent=round(t, 3), n_h=n_h, dp_t_h=round(self.dp['t_h'], 3), ins=self.dp['ins'], ref_ver=rf['ver'])
                 self.event('handover_requested', **self.ho_sent)
                 return                                                   # 本拍起不再發手臂命令（世界節點以最後命令前推、保持到接手）
             # ---- 手臂拍
@@ -911,13 +975,24 @@ def main():
             adopted = False
             if pay['ok']:
                 ch = pay['chosen']
-                if t < ch['t_s'] - 1e-6 or (self.dp is None):
+                slot = None
+                if not (t < ch['t_s'] - 1e-6 or self.dp is None):
+                    rec['why_not'] = 't_s_passed'
+                elif not ch.get('cont'):                                  # 非承接（起點＝手臂現狀靜止）：現行段未開始才替換，否則排下一段
+                    slot = 'replace' if (self.dp is None or t < self.dp['t_s'] - 1e-9) else 'next'
+                else:                                                     # 承接型：起點＝其承接段（cont_from）在 t_s 的狀態 ⇒ 該段必須一路保留到 t_s
+                    cf = ch.get('cont_from')
+                    if self.dp is not None and cf is not None and abs(self.dp['t_s'] - cf) < 1e-6:
+                        slot = 'next'                                     # 承接現行段 ⇒ 排下一段（取代未開始的舊下一段）
+                    else:
+                        rec['why_not'] = 'cont_base_not_current'          # 承接的是尚未生效的下一段（或已被換掉）⇒ 不採用，等下次重算
+                if slot is not None:
                     st_ = dict(T_est=rq['T_od'].tolist() if rq['ref_cand'] is not None else None)
-                    tag2, p2 = self.ask('adopt_dp', dict(dp=dict(t_s=ch['t_s'], tq=ch['tq'], Q=ch['Q'], t_h=ch['t_h'], aw=ch['aw']), t_now=t, **st_), 2.0)
+                    tag2, p2 = self.ask('adopt_dp', dict(dp=ch, t_now=t, slot=slot, **st_), 2.0)
                     adopted = bool(tag2 == 'adopt_dp' and p2.get('ok'))
                     if adopted:
-                        newdp = dict(t_s=ch['t_s'], t_D=ch['t_D'], t_h=ch['t_h'], t_g=ch['t_g'], tq=ch['tq'], Q=ch['Q'], aw=ch['aw'], ins=ch['ins'])
-                        if self.dp is None or t < self.dp['t_s'] - 1e-9:
+                        newdp = dict(ch)   # 完整參考（候選模擬的現行段也要用同一條閉迴路律）
+                        if slot == 'replace':
                             self.dp, self.dp_next = newdp, None
                         else:
                             self.dp_next = newdp
@@ -928,8 +1003,6 @@ def main():
                             self.ref_log.append(dict(t=round(t, 3), ver=self.ref_ver, src='near_estimate', seqs=rq['ref_cand'].get('seqs'), t_obs=rq['ref_cand'].get('t_obs')))
                             if self.ref_cand is rq['ref_cand']:
                                 self.ref_cand = None
-                else:
-                    rec['why_not'] = 't_s_passed'
             rec['adopted'] = adopted
             self.retrs.append(rec)
             self.event('dapp', **{k: rec.get(k) for k in ('t_req', 't_done', 'wall_s', 'ok', 'adopted', 'with_ref_cand', 'chosen')}, why=[(c.get('v'), c.get('T_move'), c.get('d_line'), c.get('t_line'), c.get('aw'), c.get('why')) for c in pay['cands']][:6])
