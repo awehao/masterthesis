@@ -432,6 +432,13 @@ class WorldD2(Node):
                             self.bindinfo = runner.last['bind']
                             self.ev('bind_committed')
                             self.ctl('bind')
+                        if rec.get('release') and not getattr(self, 'released', False):   # 穿門段：放手 ⇒ 解除綁定（Isaac 移除 FixedJoint；乾跑門角不再跟手）
+                            self.released, self.bindinfo = True, None
+                            self.ev('release_committed')
+                            self.ctl('unbind')
+                        for e_ in (rec.get('events') or []):
+                            if str(e_.get('what', '')).startswith('pass_'):
+                                self.ev(e_['what'], **{('ctrl_' + k_ if k_ in ('t', 'n', 'what') else k_): v_ for k_, v_ in e_.items() if k_ != 'what'})
                     elif was == 'nominal':
                         self.tail_props, self.tail_k0 = runner.tail_props(runner.tail, D_STEPS) if runner.tail is not None else [], k
                         self.ev('tail_started', why=rec.get('why'), roundtrip_ms=rec.get('roundtrip_ms'), ctrl_done=rec.get('ctrl_done'), n_tail_props=len(self.tail_props))

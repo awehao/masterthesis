@@ -140,6 +140,8 @@ class Stub(Node):
             self.n0 = int(c['n0'])
         elif w == 'bind' and self.bind is None:
             self.bind = 'pending'
+        elif w == 'unbind':
+            self.bind = 'released'                                    # 放手：門角不再跟手（保持當下）
         elif w == 'end':
             self.end = True
         elif w == 'abort':

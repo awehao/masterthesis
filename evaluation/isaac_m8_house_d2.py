@@ -286,6 +286,8 @@ class Bridge(Node):
             self.d2_n0 = int(c['n0'])
         elif w == 'bind':
             self.d2_bind = True
+        elif w == 'unbind':
+            self.d2_unbind = True                                    # 穿門段：放手 ⇒ 解除 FixedJoint
         elif w == 'end':
             self.d2_end = True
         elif w == 'abort' and self.d2_abort is None:
@@ -593,7 +595,7 @@ def main():
 
     exc = None
     scans = []
-    d2_stat, d2_last, bound, bind_pending, fcmd = dict(late=0, on_time=0), None, False, False, FINGER_OPEN
+    d2_stat, d2_last, bound, bind_pending, fcmd, released = dict(late=0, on_time=0), None, False, False, FINGER_OPEN, False
     pace_off = 0.0
     try:
         for k in range(n_steps):
@@ -635,7 +637,7 @@ def main():
                     why = ('gripper_force_over', dict(force_n=round(cn_t, 3), who=cwho, limit_n=GRIP_F_ABORT_N))
             if why is None and not post and dq_deg > DOOR_DEG:
                 why = ('door_moved', dict(door_deg=round(dq_deg, 4)))
-            if why is None and post and not bound and dq_deg > DOOR_PREBIND_DEG:
+            if why is None and post and not bound and not released and dq_deg > DOOR_PREBIND_DEG:
                 why = ('door_moved_before_bind', dict(door_deg=round(dq_deg, 4)))
             if why is None and not post and max(abs(float(jp[f1]) - FINGER_OPEN), abs(float(jp[f2]) - FINGER_OPEN)) > FINGER_TOL_M:
                 why = ('finger_opening_out_of_model', dict(q1=float(jp[f1]), q2=float(jp[f2])))
@@ -719,8 +721,12 @@ def main():
                     j_.CreateBreakForceAttr().Set(float('inf')); j_.CreateBreakTorqueAttr().Set(float('inf'))
                     bound = True
                     ev('bind_fixed_joint', door_deg=round(math.degrees(phi_now), 4), rel_pos=[round(float(v), 5) for v in Rr0[:3, 3]], note='理想抓持假設（FixedJoint）')
-            if node.d2_bind and not bound:
+            if node.d2_bind and not bound and not released:
                 bind_pending = True
+            if getattr(node, 'd2_unbind', False) and bound and not released:   # 解除綁定：停用 FixedJoint（門回到被動鉸鏈）
+                stage.GetPrimAtPath(JOINT).GetAttribute('physics:jointEnabled').Set(False)
+                bound, released = False, True
+                ev('unbind_fixed_joint', door_deg=round(math.degrees(phi_now), 4))
             for i, j in zip(idx, range(6)):
                 tgt[i] = float(s[j])
             tgt[f1] = fcmd
@@ -844,7 +850,7 @@ def main():
                sources=dict(odom='物理位姿直接當里程（理想，無滑移）', scan='PhysX 射線 360 道，略過機器人自身形狀，無雜訊', pose_for_camera='渲染時刻的關節／底盤讀值 FK', delay='8 步在途管線（軟體模型）'),
                step_wall_ms_p50=round(float(np.median(step_wall)) * 1e3, 1) if step_wall else None, supervisor_done=t_done is not None,
                pacing=dict(pace, rtf_target=a.rtf, note='物理依牆鐘固定 RTF 推進、不等計算；behind＝迴圈本身（算圖、射線、發布）比目標慢的步數與最大落後'), detector=dict(process='獨立程序（模擬器前 fork）', pending_at_end=len(det_pend)))
-    res['d2'] = dict(stat=d2_stat, bound=bound, n0=node.d2_n0, ctl=node.d2_ctl_log, note='交權後每步命令＝/d2/out；late＝本步配速時限內沒收到、保持上一筆')
+    res['d2'] = dict(stat=d2_stat, bound=bound, released=released, n0=node.d2_n0, ctl=node.d2_ctl_log, note='交權後每步命令＝/d2/out；late＝本步配速時限內沒收到、保持上一筆')
     # 整機停穩驗收（物理紀錄；rc 與 supervisor_done 都不能代替）：最後一筆非零輸入命令之後，在途管線排清（8 步），
     # 底盤每步位移 <1e-6 m 且偏航 <1e-6 rad、手臂各關節速率 <1e-3 rad/s，連續 0.2 s。
     sv = dict(rule='最後非零輸入命令後：管線排清＋底盤每步位移 <1e-6 m／偏航 <1e-6 rad＋手臂各關節速率 <1e-3 rad/s，連續 0.2 s', valid=False)

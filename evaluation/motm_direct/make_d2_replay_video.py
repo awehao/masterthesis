@@ -29,6 +29,8 @@ ev = [(e['t'], e['what']) for e in m['events']]
 t_take = next((t for t, w in ev if w == 'd2_takeover'), None)
 t_bind = next((t for t, w in ev if w == 'bind_committed'), None)
 t_app = next((t for t, w in ev if w == 'app_start'), None)
+t_rel = next((t for t, w in ev if w == 'release_committed'), None)
+t_drv = next((t for t, w in ev if w == 'pass_phase' and False), None)
 t_end = next((t for t, w in ev if w in ('settled_verified', 'world_end')), float(R[-1, 0]))
 Th = np.asarray(m['T_true'], float)
 LEAF_W, LEAF_H = 0.95, 2.0
@@ -40,6 +42,8 @@ trail = []
 
 
 def stage_txt(t):
+    if t_rel is not None and t >= t_rel:
+        return '單一控制器：放手→退出→收臂→繞門扇穿門'
     if t_app is not None:
         if t < t_app:
             return '單一控制器：導航（手臂保持）'

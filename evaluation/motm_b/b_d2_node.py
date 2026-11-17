@@ -27,6 +27,9 @@ LEAD_S = D * PHYS + DT + 0.10
 APP_HO = os.environ.get('B_APP_HO', '1') == '1'              # 進走廊即交權給 W-GMPC 抓持控制器（主線修正）；0＝原直接接近＋r＝S_PRE 交權
 APP_DIST, APP_V, APP_T_MIN, APP_T_LINE, APP_D_LINE = float(os.environ.get('B_APP_DIST', '0.30')), 0.05, 4.0, 2.5, 0.15   # 交權離抓取點距離、抓持控制器底盤速度（door_ahead_case V）、最短時長、沿接近軸段時長、接近軸起點退讓
 UNIFIED = os.environ.get('B_UNIFIED', '0') == '1'          # 單一控制器（Codex 20261117_161844）：起點即交給同一個 W-GMPC 控制器；導航節點只當前端；導航目標＝抓取底盤位姿（Smac 決定來向）
+PASS_GOAL = [float(x) for x in os.environ.get('B_PASS_GOAL', '0.5,0.8,1.5708').split(',')]   # 穿門目標（map；門口 x∈[0,1]、y=0，客廳側）
+PASS_WP = [float(x) for x in os.environ.get('B_PASS_WP', '0.5,-1.4,1.5708').split(',')] if os.environ.get('B_PASS_WP', '0.5,-1.4,1.5708') else None   # 中途點：門扇外側、正對門口（開門後機器人在門扇後，LiDAR 看不到門口，關門時標的舊障礙格清不掉 ⇒ 先到看得見門口的位置）
+PASS_WP_R = float(os.environ.get('B_PASS_WP_R', '0.45'))
 APP_TRIG = float(os.environ.get('B_APP_TRIG', '0.6'))          # 單一控制器：有效估計且離導航目標 ≤ 此距離 ⇒ 接近開始（加入 TCP 任務）
 FUSE_HO = os.environ.get('B_FUSE_HO', '1') == '1'            # 交權參考＝全部有效影格閘門內融合（c13／c22：最早 3 格估計沿接近軸誤差 2 mm 吃掉外殼—橫桿餘裕）
 CL_LINE = os.environ.get('B_CL_LINE', '1') == '1'             # 混接／直線段以實際底盤即時解 IK（c7 阻點修正）；0＝原開迴路關節參考
@@ -630,7 +633,8 @@ def main():
             self.create_subscription(String, '/task/conditions_ack', self._ack, 20)
             self.create_subscription(String, '/task/region_status', self._rstat, 20)
             self.create_subscription(Float64MultiArray, '/task/gmpc_pred', self._pred, 20)
-            self.create_subscription(String, '/far/exec_state', lambda m: setattr(self, 'xstate', m.data), 10)
+            self.create_subscription(String, '/far/exec_state', self._xs_in, 10)
+            self.pass_seen, self.pass_t, self.t_pass_pub, self.pass_cleared = False, None, -9.0, False
             self.tfb = tf2_ros.Buffer(); self.tfl = tf2_ros.TransformListener(self.tfb, self)
             self.truth = None; self.rel = np.zeros(3); self.path_t = None; self.xstate = None; self.pred = None; self.rs = None
             self.mode, self.ver, self.task_ver = 'INIT', 0, 0
@@ -735,6 +739,11 @@ def main():
                 return None
             o = tr.transform.rotation
             return np.array([tr.transform.translation.x, tr.transform.translation.y, math.atan2(2 * (o.w * o.z + o.x * o.y), 1 - 2 * (o.y * o.y + o.z * o.z))])
+
+        def _xs_in(self, m):
+            self.xstate = m.data
+            if '"what": "pass_start"' in m.data and not self.pass_seen:   # 開門完成、同一控制器接穿門：原導航鏈送穿門目標
+                self.pass_seen = True
 
         def pub_goal(self, xy, yaw):
             m = PoseStamped(); m.header.frame_id = 'map'; m.header.stamp = self.get_clock().now().to_msg()
@@ -862,6 +871,21 @@ def main():
                     self.ho_sent = dict(t_sent=round(t, 3), n_h=n_h, unified=True)
                     self.app_sent, self.goal_ver = None, None
                     self.event('handover_requested', **self.ho_sent)
+                return
+            if self.pass_seen:                                       # 穿門段（D2_PASS）：撤銷任務條件（朝向／速度框／區域），目標＝門後客廳點；Smac 照原鏈規劃（全域代價圖含 LiDAR，門扇自然繞開）
+                if self.pass_t is None:
+                    self.pass_t = t
+                    self.p_task.publish(String(data=json.dumps(dict(clear=True))))
+                    self.event('pass_goal', goal=PASS_GOAL)
+                g_ = PASS_WP if (PASS_WP is not None and not getattr(self, 'pass_wp_done', False)) else PASS_GOAL
+                if g_ is PASS_WP and float(np.hypot(*(self.cur_map[:2] - np.asarray(PASS_WP[:2])))) <= PASS_WP_R:   # 中途點到了（門口已在 LiDAR 視野、舊標記已清）⇒ 改送穿門目標
+                    self.pass_wp_done, self.pass_t = True, t
+                    self.event('pass_waypoint_reached', at=[round(float(x), 3) for x in self.cur_map])
+                    g_ = PASS_GOAL
+                if (self.path_t is None or self.path_t < self.pass_t) and t - self.t_pass_pub >= 1.0:
+                    self.pub_goal(g_[:2], g_[2]); self.t_pass_pub = t
+                if self.xstate and ('"what": "world_end"' in self.xstate or 'engineering_abort' in self.xstate):
+                    self.done_sent = True
                 return
             if self.goal_xy is not None and (self.path_t is None or self.path_t < self.t_goal_set) and t - self.t_goal_pub >= 1.0:
                 self.pub_goal(self.goal_xy, self.prior['yaw']); self.t_goal_pub = t

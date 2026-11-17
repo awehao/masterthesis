@@ -29,6 +29,9 @@ def _plant(S, cfg, q, s_prev, s_next, base):
     return q2
 
 
+_PASS = os.environ.get('D2_PASS', '0') == '1'                     # 開門完成後接穿門段（同一求解器實例）
+
+
 def _seg_entry(o, fm=None):
     return dict(arm_target=np.asarray(o['arm_target'], float).copy(), base_twist=np.asarray(o['base_twist'], float).copy(), finger=None if o.get('finger') is None else float(o['finger']),
                 ready=bool(o.get('ready')), ready_ver=o.get('ready_ver'), stopped=bool(o.get('stopped')), abort=bool(o.get('abort')), done=bool(o.get('done')))
@@ -147,7 +150,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 events += ev_
             seg, qj, sj = [], qp.copy(), s_cur.copy()
             prop = None
-            if mode == 'grasp':
+            if mode in ('grasp', 'pass'):
                 ctrl._rec_tail = {1: []}
             elif o0 is None:
                 ctrl._cand_out = None
@@ -164,6 +167,11 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 qj = _plant(S, ctrl.cfg, qj, sj, seg[-1]['arm_target'], seg[-1]['base_twist'])
                 sj = seg[-1]['arm_target']
             tail, tail_src, mism = None, None, None
+            if mode == 'open' and _PASS and bool(getattr(ctrl, 'done', False)):   # 開門完成 ⇒ 同一求解器實例接放手→退出→收臂→穿門（Codex 193621）；本段（開門執行層最後一段）的尾段由新控制器自段末狀態產生
+                import door_pass_ctrl as _DP
+                ctrl = _DP.DoorPassCtrl(ctrl, t_next + nph * PHYS, qj.copy(), ctrl.phi_of(qj)[0])
+                mode = 'pass'
+                events += [dict(e_) for e_ in ctrl.events]
             if mode == 'open':
                 tail, tail_src, mism = door.tail(ctrl, seg, qj, nph)
             else:
@@ -175,6 +183,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                         tail, tail_src = [(a.copy(), b.copy()) for a, b in rec[nph:]], 'candidate_extra1'
                 if tail is None and getattr(ctrl, 'tail_cert_mode', False):
                     tail_src = 'none_cert_mode'                       # 尾段證書模式（Codex 20261117_023209）：不補生未經完整淨空掃掠的 e＝0 尾段；沒有合格新證書 ⇒ 不提交、執行器沿用上一份已核尾段
+                elif tail is None and mode == 'pass' and getattr(ctrl, 'finished', False):
+                    tail_src = 'pass_finished'                       # 穿門段已停穩：不再提交新段（執行器播完已核尾段後停穩驗收）
                 elif tail is None and ctrl.abort is None:             # 停止模式（或候選尾段不一致）：在名目段結束處另做停止模擬
                     rt = {0: []}
                     ctrl._rec_tail = rt
@@ -207,7 +217,12 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                     parts['stop_escalations'] = [{k_: str(v_)[:200] for k_, v_ in e_.items()} for e_ in (st_.get('escalations') or [])]   # 後續升級
             out = dict(ver=snap['ver'], seg=seg, prop=prop, tail=tail, tail_src=tail_src, tail_mismatch=mism, w_start=w_start, w_done=time.perf_counter(), mode=mode, bind=bind, events=events, parts=parts, gc_n=_gc.get_count()[2] if _gc else None,
                        stop=ctrl.stop, abort=ctrl.abort, done=bool(getattr(ctrl, 'done', False)), phase=getattr(ctrl, 'phase', None), k_tick=k_tick, q_pred=qp.tolist(),
-                       sigma=float(getattr(ctrl, 'sigma', float('nan'))) if mode == 'open' else None, stop_mode=getattr(ctrl, 'stop_mode', None) if mode == 'open' else None)
+                       sigma=float(getattr(ctrl, 'sigma', float('nan'))) if mode == 'open' else None, stop_mode=getattr(ctrl, 'stop_mode', None) if mode == 'open' else None,
+                       release=bool(getattr(ctrl, 'release', False)) if mode == 'pass' else False)
+            if mode == 'pass':                                        # 穿門段事件（本拍新增）
+                n_ev = getattr(ctrl, '_ev_sent', 0)
+                out['events'] = (out.get('events') or []) + [dict(e_) for e_ in ctrl.events[n_ev:] if e_.get('what') != 'pass_start']
+                ctrl._ev_sent = len(ctrl.events)
             if tail is not None:                                      # 尾段打包成單一陣列（每列＝設定點 6＋底盤命令 3），減少傳輸
                 out['tail'] = np.array([np.r_[a_, b_] for a_, b_ in tail], float)
             conn.send(('seg', out))
@@ -390,6 +405,7 @@ class AheadRunner:
                     rec['commit'] = True
                     rec['commit_step'] = int(n if n_acc is None else n_acc)
                     rec['bind'] = o.get('bind') is not None
+                    rec['release'] = bool(o.get('release'))
                     self.last = dict(mode=o.get('mode'), bind=o.get('bind'), done=o.get('done'), stop=o.get('stop'), stop_mode=o.get('stop_mode'), n=int(n))
                 else:
                     rec['commit'] = False
