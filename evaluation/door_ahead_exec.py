@@ -377,6 +377,19 @@ class AheadRunner:
                     if self._rx_box is not None:
                         self.got, self._rx_box = self._rx_box, None
             return
+        lp = getattr(self, 'late_pending', None)
+        if self.pending is None and lp is not None and getattr(self, '_rx', None) is None:   # 晚到回覆：只供診斷（派工→開始、計算、收回），不補提交（Codex 筆電裁定）
+            while self.conn.poll(0):
+                tag, out = self.conn.recv()
+                if tag == 'seg' and out.get('ver') == lp['ver']:
+                    w_now = time.perf_counter()
+                    diag = dict(ver=lp['ver'], n_send=lp['n_send'], dispatch_to_start_ms=round((out['w_start'] - lp['w_send']) * 1e3, 2), compute_ms=round((out['w_done'] - out['w_start']) * 1e3, 2),
+                                arrive_ms=round((w_now - lp['w_send']) * 1e3, 2), committed=False, parts=out.get('parts'), mode=out.get('mode'))
+                    if self.late is not None:
+                        self.late['late_arrival'] = diag
+                    self.late_pending = None
+                    break
+            return
         while self.pending is not None and self.got is None and self.conn.poll(0):
             tag, out = self.conn.recv()
             if tag == 'built':                                        # D2 建控制器的回報（只記錄）
@@ -423,6 +436,8 @@ class AheadRunner:
                 rec['why'] = 'not_ready' if got is None else ('error:' + str(got[1])[-1600:] if got[0] == 'error' else 'version_mismatch')
                 rec['steps_since_send'] = int(n - p['n_send'])
                 rec['wall_since_send_ms'] = round((time.perf_counter() - p['w_send']) * 1e3, 2)
+            if not rec['commit'] and rec.get('why') == 'not_ready':
+                self.late_pending = dict(p)                          # 結果之後若抵達，記診斷（不提交）
             if not rec['commit']:                                     # 晚到／錯誤：執行上一段附帶的已核停止尾段；控制器作廢
                 self.mode = 'tail' if self.tail is not None else 'no_tail'
                 self.late = dict(rec)
