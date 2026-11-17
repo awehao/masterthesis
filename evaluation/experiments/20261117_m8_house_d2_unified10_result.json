@@ -1,0 +1,31 @@
+{
+ "run_id": "m8house_d2_unified_10",
+ "machine": "筆電 ASUS TUF A14（Ryzen AI 9 465、RTX 5060 Laptop），performance",
+ "settings": "RTF 上限 0.15（實得 0.144）、展示期限 250 ms、GMPC_GI_INC=1",
+ "timeline_s": {
+  "takeover": 10.11,
+  "first_segment_infeasible": 24.55,
+  "first_segment_retry_ok": 24.71,
+  "bind": 26.81,
+  "pass_start": 36.71,
+  "unbind_ack": 36.8,
+  "fingers_open": 37.21,
+  "abort": 37.75
+ },
+ "result": "開門 85.0°（open_done）→ 放手：解綁回報、手指實測 8.54／8.52 mm → 退出開始 0.5 s 後實測底盤—門扇淨空 95.5 mm＜100 mm ⇒ 工程中止",
+ "root_cause": "Isaac 執行器 bug：FixedJoint 建立後未清 bind_pending ⇒ 解綁的下一步重建 FixedJoint（log bound 欄 0→1）⇒ 門重新綁回夾爪、退出時被拖 85.0°→87.05° ⇒ 底盤淨空 95.5 mm。解綁回報當時只看 released 旗標，未核關節屬性。",
+ "fix": "建立後清 bind_pending、已解綁不再建立；回報 unbound 前核 physics:jointEnabled 為 False",
+ "door_deg_max": 87.05,
+ "grip_contact_max_N": 5.3,
+ "meas_clear_min_mm": {
+  "env": 35.7,
+  "base": 95.5,
+  "self": 8.2,
+  "shell_bar": 9.4
+ },
+ "notes": [
+  "開門段無晚到（增量 GI）",
+  "首段第一次 sigma_ok 不可行、重送後可行",
+  "失敗保留、不補跑"
+ ]
+}

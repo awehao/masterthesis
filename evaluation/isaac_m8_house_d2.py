@@ -707,7 +707,7 @@ def main():
                 ue = np.r_[ub_, (s - s_prev) / DT]
                 if np.isfinite(ent[1]):
                     fcmd = float(ent[1])
-                if bind_pending and not bound:                         # 綁定：FixedJoint 以當下夾爪對門扇的相對位姿（理想抓持假設）
+                if bind_pending and not bound and not released:        # 綁定：FixedJoint 以當下夾爪對門扇的相對位姿（理想抓持假設）；已解綁不再建立（第十趟：旗標未清 ⇒ 解綁後下一步重建）
                     Tg_ = T_of(*[np.asarray(x)[0] for x in v_grip.get_world_poses()])
                     Tl_ = T_of(*[np.asarray(x)[0] for x in leaf_v.get_world_poses()])
                     Rr0 = np.linalg.inv(Tl_) @ Tg_
@@ -721,7 +721,7 @@ def main():
                     j_.CreateLocalRot1Attr().Set(Gf.Quatf(float(qr_[0]), float(qr_[1]), float(qr_[2]), float(qr_[3])))
                     j_.CreateJointEnabledAttr().Set(True)
                     j_.CreateBreakForceAttr().Set(float('inf')); j_.CreateBreakTorqueAttr().Set(float('inf'))
-                    bound = True
+                    bound, bind_pending = True, False
                     f_hold = float(jp[f1])                             # 綁定實際生效時鎖存手指開度（Codex 第十趟：理想綁定下載荷由 FixedJoint 承擔，手指不再朝全閉持續施力）
                     ev('finger_hold_latched', finger1=round(float(jp[f1]), 6), finger2=round(float(jp[f2]), 6))
                     ev('bind_fixed_joint', door_deg=round(math.degrees(phi_now), 4), rel_pos=[round(float(v), 5) for v in Rr0[:3, 3]], note='理想抓持假設（FixedJoint）')
@@ -729,9 +729,10 @@ def main():
                 bind_pending = True
             if getattr(node, 'd2_unbind', False) and bound and not released:   # 解除綁定：停用 FixedJoint（門回到被動鉸鏈）
                 stage.GetPrimAtPath(JOINT).GetAttribute('physics:jointEnabled').Set(False)
-                bound, released = False, True
+                bound, released, bind_pending = False, True, False
                 ev('unbind_fixed_joint', door_deg=round(math.degrees(phi_now), 4), n=int(n_now))
-            if released and k % 10 == 0:                               # 解綁生效回報（重送，直到收尾）
+            unb_ok = released and not bound and not bool(stage.GetPrimAtPath(JOINT).GetAttribute('physics:jointEnabled').Get())   # 回報前確認關節屬性確實停用
+            if unb_ok and k % 10 == 0:                                 # 解綁生效回報（重送，直到收尾）
                 node.p_ack.publish(String(data=json.dumps(dict(what='unbound', n=int(n_now), req=getattr(node, 'd2_unbind_req', None)))))
             for i, j in zip(idx, range(6)):
                 tgt[i] = float(s[j])
