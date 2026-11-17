@@ -53,6 +53,7 @@ class GMPCTaskNode(GMPCNode):
         # 預測發布（主線 B 操作端用；只讀求解結果、不改任何控制決策）：ξ_k＝ξ_ref,k＋δξ_k（夾在速度上下限），自 X_now 以 SE(2) 指數積分 N 步。
         from std_msgs.msg import Float64MultiArray
         self._t_pred_pub = self.create_publisher(Float64MultiArray, '/task/gmpc_pred', 10)
+        self._t_solve_in_pub = self.create_publisher(String, '/task/nav_solve_in', 10)
         self._t_F64 = Float64MultiArray
         # 共同核心（Howard 20261117：導航與操作都用同一個 gmpc_wb；導航內容不動）：求解器物件換成 gmpc_wb.GMPC，設定逐欄照抄原導航設定、
         #   節點與求解器共用同一個設定物件（節點暫改 u_min 的行為不變）；不傳 arm ⇒ 原底盤問題（離線 40 例含障礙與 CBF，u_opt 與封存 gmpc 逐位元相同）。
@@ -65,14 +66,61 @@ class GMPCTaskNode(GMPCNode):
             self.get_logger().info('gmpc_task_node: solver core = gmpc_wb (arm hold)')
         _orig_solve = self.mpc.solve
 
+        self._t_frontend = os.environ.get('GMPC_FRONTEND', '0') == '1'   # 單一控制器（Codex 20261117_161844）：本節點只當參考＋障礙物前端，不求解、不發命令
+        self._t_exec, self._t_n_in = np.zeros(3), 0
+        if self._t_frontend:
+            from geometry_msgs.msg import Twist as _Tw
+            self.create_subscription(_Tw, '/cmd_vel', lambda m: setattr(self, '_t_exec', np.array([m.linear.x, m.linear.y, m.angular.z], float)), 20)
+
+            class _NoPub:
+                def publish(self, *_a, **_k):
+                    pass
+            self.cmd_pub = _NoPub()                                   # 名目底盤命令不發布（命令只由單一控制器出）
+            self.get_logger().info('gmpc_task_node: FRONTEND mode (reference + obstacles only; no solve, no cmd)')
+
         def _solve_pub(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles=None, _o=_orig_solve):
+            if self._t_frontend:
+                try:
+                    self._t_pub_solve_in(np.asarray(X_now, float), np.asarray(X_ref_win, float), np.asarray(xi_ref_win, float), obstacles)
+                except Exception as e_:                               # noqa: BLE001
+                    self.get_logger().warn(f'solve_in publish failed: {e_!r}')
+                from .gmpc_wb import GMPCResult as _GR
+                N_ = len(X_ref_win) - 1
+                return _GR(u_opt=np.asarray(self._t_exec, float).copy(), delta_xi_all=np.zeros((N_, 3)), e0=np.zeros(3), solve_time_s=0.0, status='frontend')   # 上一命令＝實際執行回饋
             r = _o(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles=obstacles)
             try:
                 self._t_pub_pred(np.asarray(X_now, float), np.asarray(xi_ref_win, float), np.asarray(r.delta_xi_all, float), np.asarray(r.u_opt, float))
             except Exception:                                         # noqa: BLE001
                 pass
+            try:
+                self._t_pub_solve_in(np.asarray(X_now, float), np.asarray(X_ref_win, float), np.asarray(xi_ref_win, float), obstacles)
+            except Exception:                                         # noqa: BLE001
+                pass
             return r
         self.mpc.solve = _solve_pub
+
+    def _t_pub_solve_in(self, X_now, X_ref, xi_ref, obstacles):
+        """（唯讀；單一控制器用）本拍導航原樣算好的求解輸入：參考視窗與障礙物（含動態邊距、靜態牆點、繞行偏移後的參考），
+        以 X_now 為基準的相對座標（避開 map／odom 差異）；u_min[0]（繞行速度下限）一併附上。不改任何導航判定或命令。"""
+        Xi = np.linalg.inv(X_now)
+        cth, sth = X_now[0, 0], X_now[1, 0]
+        rel = []
+        for Xk in X_ref:
+            R_ = Xi @ Xk
+            rel += [float(R_[0, 2]), float(R_[1, 2]), math.atan2(float(R_[1, 0]), float(R_[0, 0]))]
+        obs = []
+        for o_ in (obstacles or []):
+            dx, dy = float(o_['x']) - X_now[0, 2], float(o_['y']) - X_now[1, 2]
+            vx, vy = float(o_.get('vx', 0.0)), float(o_.get('vy', 0.0))
+            obs.append([cth * dx + sth * dy, -sth * dx + cth * dy, float(o_['radius']), cth * vx + sth * vy, -sth * vx + cth * vy,
+                        float(o_.get('margin', float('nan'))), 1.0 if o_.get('static', False) else 0.0])
+        self._t_n_in += 1
+        msg = dict(t=self._t_now(), seq=self._t_n_in, frame='robot_at_t', N=len(X_ref) - 1, X_rel=rel, xi_ref=np.asarray(xi_ref, float).reshape(-1).tolist(), obs=obs, u_min0=float(self._cfg.u_min[0]))
+        if self._t_n_in % 20 == 1:                                    # 導航求解設定（CBF、權重、限制）：單一控制器以同一組設定求解
+            import dataclasses as _dc
+            msg['cfg'] = {f.name: (np.asarray(getattr(self._cfg, f.name)).tolist() if isinstance(getattr(self._cfg, f.name), np.ndarray) else getattr(self._cfg, f.name)) for f in _dc.fields(self._cfg)
+                          if isinstance(getattr(self._cfg, f.name), (int, float, bool, str, np.ndarray, type(None)))}
+        self._t_solve_in_pub.publish(String(data=json.dumps(msg)))
 
     def _t_pub_pred(self, X, xi_ref, dxi, u0):
         cfg = self._cfg

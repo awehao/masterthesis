@@ -26,6 +26,8 @@ V_ARM, A_ARM = 1.0, 10.0
 LEAD_S = D * PHYS + DT + 0.10
 APP_HO = os.environ.get('B_APP_HO', '1') == '1'              # 進走廊即交權給 W-GMPC 抓持控制器（主線修正）；0＝原直接接近＋r＝S_PRE 交權
 APP_DIST, APP_V, APP_T_MIN, APP_T_LINE, APP_D_LINE = float(os.environ.get('B_APP_DIST', '0.30')), 0.05, 4.0, 2.5, 0.15   # 交權離抓取點距離、抓持控制器底盤速度（door_ahead_case V）、最短時長、沿接近軸段時長、接近軸起點退讓
+UNIFIED = os.environ.get('B_UNIFIED', '0') == '1'          # 單一控制器（Codex 20261117_161844）：起點即交給同一個 W-GMPC 控制器；導航節點只當前端；導航目標＝抓取底盤位姿（Smac 決定來向）
+APP_TRIG = float(os.environ.get('B_APP_TRIG', '0.6'))          # 單一控制器：有效估計且離導航目標 ≤ 此距離 ⇒ 接近開始（加入 TCP 任務）
 FUSE_HO = os.environ.get('B_FUSE_HO', '1') == '1'            # 交權參考＝全部有效影格閘門內融合（c13／c22：最早 3 格估計沿接近軸誤差 2 mm 吃掉外殼—橫桿餘裕）
 CL_LINE = os.environ.get('B_CL_LINE', '1') == '1'             # 混接／直線段以實際底盤即時解 IK（c7 阻點修正）；0＝原開迴路關節參考
 EST = dict(n=3, spread_m=0.005, max_age_s=0.5, replan_shift_m=0.010)
@@ -648,6 +650,7 @@ def main():
             return self.get_clock().now().nanoseconds * 1e-9
 
         def event(self, what, **kw):
+            kw = {('t_detail' if k_ == 't' else k_): v_ for k_, v_ in kw.items()}   # 參數裡的 t 一律改名（c6、u7：撞名使監督端崩潰）
             rec = dict(t=round(self.now(), 3), what=what, **kw)
             self.events.append(rec)
             print('[bcap2] ' + json.dumps(rec, ensure_ascii=False, default=str)[:420], flush=True)
@@ -717,7 +720,7 @@ def main():
                     return
                 T_oh = _T3(d[3:6]) @ d[6:22].reshape(4, 4)
                 self.obs_T.append((rec['t_obs'], T_oh.copy()))           # 交權時的參考融合用（全部有效影格）
-                allow = self.mode in ('NAV', 'PREP', 'APPROACH') and self.ho_sent is None
+                allow = self.mode in ('NAV', 'PREP', 'APPROACH') and (self.ho_sent is None or (UNIFIED and getattr(self, 'app_sent', None) is None))
                 tag, pay = self.ask('obs', dict(seq=rec['seq'], t_obs=rec['t_obs'], t=self.now(), T_odom_handle=T_oh.tolist(), T_mo=T_mo.tolist(), allow_update=allow), 0.5)
                 rec['est'] = None if pay is None else {k: pay.get(k) for k in ('n_hist', 'spread_mm', 'assoc_ok', 'estimate_set')}
                 if tag == 'obs' and pay.get('estimate_set'):
@@ -851,6 +854,14 @@ def main():
                 pk.send(('off_anchor', dict(ver=0, q=q.tolist(), s=self.truth['s'].tolist()))); tp_ = pk.recv()
                 self.event('off_anchor', ok=tag == 'off_anchor', planner=tp_[0])
                 self.mode = 'NAV'; self.event('mode', mode='NAV')
+                if UNIFIED:                                               # 起點交權：自此命令只由單一控制器出（手臂保持、底盤追導航前端參考）
+                    n_h = int(round(t / PHYS)) + NPH + 3
+                    T_pr = np.linalg.inv(_T3(T_mo)) @ np.asarray(self.prior['T_prior'], float)
+                    msg = dict(n_h=n_h, ins=dict(s0=0.15, v0=0.0, a0=0.0, T=1e6), unified=True, T_ref=T_pr.tolist(), t_obs=t, ref_ver=0, win=[-1e9, 1e9])
+                    self.p_ho.publish(String(data=json.dumps(msg)))
+                    self.ho_sent = dict(t_sent=round(t, 3), n_h=n_h, unified=True)
+                    self.app_sent, self.goal_ver = None, None
+                    self.event('handover_requested', **self.ho_sent)
                 return
             if self.goal_xy is not None and (self.path_t is None or self.path_t < self.t_goal_set) and t - self.t_goal_pub >= 1.0:
                 self.pub_goal(self.goal_xy, self.prior['yaw']); self.t_goal_pub = t
@@ -859,7 +870,7 @@ def main():
             else:
                 v_w, wz = np.zeros(2), 0.0
             self.b_prev = (t, self.cur_map.copy()); self.v_w_last = v_w
-            if self.ho_sent is not None:                                 # 交權後：手臂與底盤命令都屬抓持／開門控制器；本節點只記錄
+            if self.ho_sent is not None and not UNIFIED:                 # 交權後：手臂與底盤命令都屬抓持／開門控制器；本節點只記錄
                 if self.xstate and ('"what": "world_end"' in self.xstate or 'engineering_abort' in self.xstate):
                     self.done_sent = True
                 return
@@ -894,6 +905,48 @@ def main():
                             self.event('adopt_failed', detail=str(p2)[:300])
                 elif rq['kind'] == 'dapp':
                     self.on_dapp(rq, tag, pay, t)
+            if UNIFIED:                                                  # 單一控制器：導航目標＝抓取底盤位姿（依當次區域規劃；Smac 決定來向，無走廊入口、無沿門直線）；接近開始依觀測觸發
+                if self.plan is not None and self.stopped is None:       # 朝向條件照原機制（車頭朝門，相機看得到把手）；速度框＝導航自身上下限（不另限速）
+                    self.pub_task(self.plan['yaw'], [[-0.2, 0.35], [-0.25, 0.25], [-0.8, 0.8]])
+                if self.plan is not None and self.goal_ver != self.plan_ver and self.stopped is None:
+                    pl, rg = self.plan, self.region
+                    d_, n_ = np.array(pl['d'], float), np.array(pl['n'], float)
+                    gxy = np.asarray(self.h_xy, float) - float(pl['a_w']) * d_ + float(rg['sb_c']) * n_
+                    self.goal_xy, self.goal_ver = gxy.tolist(), self.plan_ver
+                    self.prior['yaw'] = float(pl['yaw']); self.t_goal_set = t; self.pub_goal(self.goal_xy, self.prior['yaw']); self.t_goal_pub = t
+                    self.event('goal_grasp_pose', goal=[round(float(x), 4) for x in gxy], yaw=round(float(pl['yaw']), 4), a_w=pl['a_w'], sb_c=rg['sb_c'], plan_ver=self.plan_ver)
+                if self.mode == 'APPROACH' and self.app_sent is None and self.goal_xy is not None and self.ref is not None and self.stopped is None:
+                    dist_ = float(np.linalg.norm(self.cur_map[:2] - np.asarray(self.goal_xy, float)))
+                    if dist_ <= APP_TRIG:
+                        rf = self.ref
+                        T_send, fz = np.asarray(rf['T_od'], float), None
+                        keep = []
+                        for (to_, Tm_) in self.obs_T:
+                            dR_ = T_send[:3, :3].T @ Tm_[:3, :3]
+                            if np.linalg.norm(Tm_[:3, 3] - T_send[:3, 3]) <= 0.010 and math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR_) - 1) / 2)))) <= 3.0:
+                                keep.append(Tm_)
+                        if len(keep) >= 3:
+                            Tf = np.eye(4); Tf[:3, 3] = np.median([Tm_[:3, 3] for Tm_ in keep], axis=0)
+                            U_, _, Vt_ = np.linalg.svd(np.sum([Tm_[:3, :3] for Tm_ in keep], axis=0))
+                            Tf[:3, :3] = U_ @ np.diag([1.0, 1.0, np.linalg.det(U_ @ Vt_)]) @ Vt_
+                            fz = dict(n=len(keep), n_all=len(self.obs_T), dpos_mm=round(float(np.linalg.norm(Tf[:3, 3] - T_send[:3, 3])) * 1e3, 3), t_last=max(to_ for to_, _ in self.obs_T))
+                            T_send = Tf
+                        Tapp = max(APP_T_MIN, dist_ / 0.08)
+                        app = dict(T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - APP_T_LINE), d_line=APP_D_LINE, t_settle=1.0)
+                        Tg_od = np.linalg.inv(_T3(T_mo)) @ _T3([self.goal_xy[0], self.goal_xy[1], self.prior['yaw']])
+                        app['base_goal'] = [float(Tg_od[0, 3]), float(Tg_od[1, 3]), math.atan2(Tg_od[1, 0], Tg_od[0, 0])]   # 抓取底盤位姿（里程座標）：導航到點後由同一控制器收斂到此
+                        sreg_ = json.load(open(os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json')))
+                        ox_ = sreg_['door']['opening_x']
+                        Ti_ = np.linalg.inv(_T3(T_mo))
+                        hg_ = Ti_ @ np.array([float(ox_[0]), 0.0, 0.0, 1.0]); dr_ = Ti_[:3, :3] @ np.array([1.0, 0.0, 0.0])
+                        app['door'] = dict(hinge=[float(hg_[0]), float(hg_[1])], dir=[float(dr_[0]), float(dr_[1])], w=0.95, src='場景登錄（鉸鏈、門扇方向；往 y<0 開＝繞鉸鏈轉 −φ）')   # 操作對象：接近開始後門扇附近的障礙點不進 CBF（門的碰撞由門專屬淨空核對負責）
+                        msg = dict(what='app', app=app, T_ref=T_send.tolist(), t_obs=(rf['t_obs'] if fz is None else fz['t_last']), ref_ver=rf['ver'] + (0 if fz is None else 1), fused=fz, dist=round(dist_, 4))
+                        self.p_ho.publish(String(data=json.dumps(msg, default=lambda o_: o_.tolist() if hasattr(o_, "tolist") else str(o_))))
+                        self.app_sent = dict(t_app=round(t, 3), dist=round(dist_, 4), app=app, fused=fz)
+                        self.event('approach_started', **self.app_sent)
+                if self.xstate and ('"what": "world_end"' in self.xstate or 'engineering_abort' in self.xstate):
+                    self.done_sent = True
+                return
             # ---- 任務條件：朝向＋速度框＋區域
             inside = bool(self.rs is not None and self.rs.get('inside'))
             if self.plan is not None and self.stopped is None:

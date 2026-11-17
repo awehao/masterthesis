@@ -50,6 +50,11 @@ def d2_builder(pk):
     c = G.MovingGraspCtrl(ident, est, d_world, V, tuple(pk['win']), np.asarray(pk['s'], float), [np.asarray(u_, float) for u_ in pk['pipe']], np.asarray(pk['u_last'], float), np.asarray(pk['u_prev'], float),
                           np.asarray(pk['off_static'], float), sched=dict(hold_s=0.0, ins_s=float(pk['ins']['T'])), pool=SHARED, fastkin=True, deadline_ms=DL_MS, fric_ff=FRIC_FF, lock_budget_fn=lock_budget)
     c.ins_prof = dict(s0=pk['ins']['s0'], v0=pk['ins']['v0'], a0=pk['ins']['a0'])
+    if pk.get('unified'):                                            # 單一控制器：起點即命令擁有者；導航期（HOLD）手臂保持，接近開始由快照觸發
+        c.unified, c.ins_prof, c.app_prof = True, None, None
+        c.nav_in = pk.get('nav_in0')
+        c.sched['hold_s'] = 1e9
+        c.w_post = float(os.environ.get('D2_W_POST', '2.0'))
     if pk.get('app') is not None:                                    # 進走廊即交權：接近剖面（TCP 由交權當下的底盤相對位姿混接到抓取線；命令由 W-GMPC 解）
         c.app_prof, c.ins_prof = dict(pk['app']), None
         c.app_prof.setdefault('t_settle', float(os.environ.get('D2_T_SETTLE', '1.0')))
@@ -134,6 +139,8 @@ class WorldD2(Node):
         self.create_subscription(Twist, '/cmd_vel', self._rel, 20)
         self.create_subscription(Float64MultiArray, '/far/arm_cmd', self._acmd, 10)
         self.create_subscription(String, '/far/handover', self._ho, 10)
+        self.nav_in, self.nav_in_t, self.nav_cfg = None, -9.0, None
+        self.create_subscription(String, '/task/nav_solve_in', self._nav_in_cb, 10)
         self.create_subscription(String, '/far/abort', lambda m: self.abort('supervisor_abort', detail=m.data[:200]), 10)
         if ISAAC:
             self.p_out = self.create_publisher(Float64MultiArray, '/d2/out', 20)
@@ -186,6 +193,20 @@ class WorldD2(Node):
             self.acmd, self.acmd_t = np.array(m.data, float), self.t
 
     def _ho(self, m):
+        try:
+            d_ = json.loads(m.data)
+        except Exception:                                             # noqa: BLE001
+            d_ = {}
+        if d_.get('what') == 'app':                                   # 單一控制器：接近開始（觀測觸發；監督端送）
+            if self.stage == 'run' and getattr(self, 'app_t0', None) is None and self.ho is not None:
+                self.app_t0 = self.t
+                ap_ = dict(d_['app'])
+                runner.extra = dict(getattr(runner, 'extra', None) or {}, app_start=dict(ap_, T_ref=d_['T_ref'], ref_ver=int(d_.get('ref_ver', 1)), t_obs_rel=float(d_.get('t_obs', self.t)) - self.t_h))
+                self.ho['app'] = ap_
+                t_rdy = (self.t - self.t_h) + float(ap_['T']) + G.SCHED['close_s'] + G.SCHED['confirm_s'] - DT
+                self.fs_plan = dict(T_ref=np.asarray(d_['T_ref'], float), t_ready_rel=t_rdy, pending_submit=True)
+                self.ev('app_start', app=ap_, fused=d_.get('fused'), t_ready_rel=round(t_rdy, 3))
+            return
         if self.ho is None and self.stage == 'approach':
             try:
                 self.ho = json.loads(m.data)
@@ -263,6 +284,15 @@ class WorldD2(Node):
         self.pipe = [d[20 + 9 * i:29 + 9 * i].copy() for i in range(D_STEPS)]
         self.step()
 
+    def _nav_in_cb(self, m):
+        try:
+            d_ = json.loads(m.data)
+        except Exception:                                             # noqa: BLE001
+            return
+        if d_.get('cfg'):
+            self.nav_cfg = d_['cfg']
+        self.nav_in, self.nav_in_t = d_, self.t
+
     def ctl(self, what, **kw):
         if ISAAC:
             self.p_ctl.publish(String(data=json.dumps(dict(what=what, n=self.n, t=round(self.t, 3), **kw), default=str)))
@@ -318,7 +348,11 @@ class WorldD2(Node):
         if self.stage in ('approach', 'prep'):
             u_b = self.cmd if (self.t - self.cmd_t <= 0.5 and self.cmd_t >= 0) else np.zeros(3)
             u_a = self.acmd if (self.t - self.acmd_t <= 0.2 and self.acmd_t >= 0) else np.zeros(6)
-            if self.ho is not None and self.stage == 'approach' and self.n >= int(self.ho['n_h']) - NPH:
+            if self.ho is not None and self.stage == 'approach' and self.ho.get('unified') and self.nav_cfg is None and self.n >= int(self.ho['n_h']) - NPH:
+                ph_ = FCA.best_phase(self.rx_steps) or 0                 # 單一控制器：等導航求解設定到了才起點交權（求解器以導航設定建一次）；交權步順延並維持 GUARD 相位
+                n_ = self.n + NPH + 3
+                self.ho['n_h'] = n_ + ((ph_ - n_) % NPH)
+            elif self.ho is not None and self.stage == 'approach' and self.n >= int(self.ho['n_h']) - NPH:
                 self.begin_prep(u_b, u_a)
             if self.stage == 'prep' and self.n >= self.prep['n_h']:
                 if not self.commit():
@@ -333,7 +367,8 @@ class WorldD2(Node):
         if self.stage == 'run':
             k = self.n - self.n0
             fp_ = getattr(self, 'fs_plan', None)
-            if fp_ is not None and fp_.get('pending_submit') and self.t - self.t_h >= float(self.ho['app']['T']) - FS_LEAD:
+            t_app0_ = (getattr(self, 'app_t0', None) - self.t_h) if getattr(self, 'app_t0', None) is not None else 0.0
+            if fp_ is not None and fp_.get('pending_submit') and self.ho.get('app') is not None and self.t - self.t_h - t_app0_ >= float(self.ho['app']['T']) - FS_LEAD:
                 self.submit_first(self.q.copy(), self.t - self.t_h)
             if self.fs is not None and self.fs.get('pending'):
                 r = FSP.poll()
@@ -345,6 +380,13 @@ class WorldD2(Node):
                         runner.extra = dict(door_rebind=dict(T_plan=self.fs['T_plan'].tolist(), T_HE_pred=self.fs['T_HE_pred'].tolist(), x_pred=self.fs['x_pred'].tolist(), Xd=np.asarray(Xd, float).tolist(),
                                                              ok=bool(feas), t_avail=self.t - self.t_h + NPH * PHYS, t_ready_pred=self.fs['t_ready_rel']))
             if k % NPH == 0:
+                if self.ho is not None and self.ho.get('unified'):     # 單一控制器：導航前端本拍輸入（過期標記；附導航求解設定）
+                    ni_ = dict(self.nav_in) if self.nav_in is not None else {'stale': True}
+                    if self.t - self.nav_in_t > 0.3:
+                        ni_['stale'] = True
+                    if self.nav_cfg is not None:
+                        ni_['cfg'] = self.nav_cfg
+                    runner.extra = dict(getattr(runner, 'extra', None) or {}, nav_in=ni_)
                 if REL_EXEC and k > 0:
                     pb_ = [(self.base_at(self.n + i_).tolist() if (self.base_known(self.n + i_) and self.base_at(self.n + i_) is not None) else None) for i_ in range(NPH + D_STEPS)]
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, pipe_base=pb_)
@@ -377,7 +419,7 @@ class WorldD2(Node):
             elif self.ca is not None:
                 ck = self.ca.check(self.n)
                 if not ck['ok']:
-                    if LENIENT:                                          # 寬鬆模式（Howard 20261117 晚：先成功後驗證）：放行流不符只記錄，不中止
+                    if LENIENT or REL_EXEC:                              # 放行流不符只記錄、逐次計數：B 開啟時執行與預測都用實際放行值（Codex 20261117_150510：不再要求整形後逐值等於提案，要求執行、模型、回授一致）
                         self.warn('safety_chain_' + ck['why'], {k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); self.ca.viol = None   # 繼續核對、逐次計數（Codex 140048：不得關掉後宣稱只有一筆）
                     else:
                         self.abort('safety_chain_' + ck['why'], detail={k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); return
@@ -386,7 +428,7 @@ class WorldD2(Node):
             if self.ca is not None:
                 ck = self.ca.check(self.n)
                 if not ck['ok']:
-                    if LENIENT:                                          # 寬鬆模式（Howard 20261117 晚：先成功後驗證）：放行流不符只記錄，不中止
+                    if LENIENT or REL_EXEC:                              # 放行流不符只記錄、逐次計數：B 開啟時執行與預測都用實際放行值（Codex 20261117_150510：不再要求整形後逐值等於提案，要求執行、模型、回授一致）
                         self.warn('safety_chain_' + ck['why'], {k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); self.ca.viol = None   # 繼續核對、逐次計數（Codex 140048：不得關掉後宣稱只有一筆）
                     else:
                         self.abort('safety_chain_' + ck['why'], detail={k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); return
@@ -412,6 +454,8 @@ class WorldD2(Node):
                 self.q[3:] = self.q[3:] + al * dead(o['arm_target'] - self.q[3:] + dq(self.q))
                 if self.bindinfo is not None:
                     self.phi = self.phi_bound(self.q)
+                if self.ho is not None and self.ho.get('unified') and self.bindinfo is None:
+                    self.obs_publish()                               # 單一控制器（乾跑）：起點即交權，交權後也照常產生合成觀察（同 Isaac 端偵測持續運作）
             u_now = np.asarray(tw, float)
         if not (np.isfinite(self.q).all() and math.isfinite(self.phi)):
             self.abort('state_nonfinite'); return
@@ -479,6 +523,9 @@ class WorldD2(Node):
         if self.ho.get('app') is not None:
             T_rel0 = np.linalg.inv(T3(q[:3])) @ K.fk(q, 'link_tcp')
             pk['app'] = dict(self.ho['app'], b0=[float(x) for x in q[:3]], T_rel0=T_rel0.tolist())
+        pk['unified'] = bool(self.ho.get('unified'))
+        if pk['unified'] and self.nav_in is not None:              # 求解器第一拍就以導航設定建立（設定隨封包送）
+            pk['nav_in0'] = dict(self.nav_in, cfg=self.nav_cfg)
         self.meta['d2_packet'] = pk
         self.prep = dict(n_h=n_h, q_pred=q, s_pred=s, pipe_pred=[p_.copy() for p_ in pipe], u_hold=np.r_[u_b, u_a], w=time.perf_counter())
         runner.start_rx()
@@ -487,8 +534,10 @@ class WorldD2(Node):
         t_ready_rel = float(self.ho['ins']['T']) + G.SCHED['close_s'] + G.SCHED['confirm_s'] - DT
         self.fs = None
         self.fs_plan = dict(T_ref=T_ref, t_ready_rel=t_ready_rel, pending_submit=self.ho.get('app') is not None)
-        if self.ho.get('app') is None:
+        if self.ho.get('app') is None and not self.ho.get('unified'):
             self.submit_first(q, 0.0)
+        if self.ho.get('unified'):
+            self.fs_plan['pending_submit'] = False                    # 單一控制器：首段在接近開始後才送
         self.t_h = t_h
         self.stage = 'prep'
         self.ev('d2_prepare', n_h=n_h, t_h=round(t_h, 3), t_ready_rel=round(t_ready_rel, 3), ins=self.ho['ins'], base_h=[round(float(x), 4) for x in q[:3]])
@@ -555,6 +604,13 @@ class WorldD2(Node):
         return True
 
     def save(self):
+        try:                                                         # 單一控制器：工作程序內每拍求解紀錄（時間、毫秒、TCP 誤差、狀態、參考來源、障礙數、CBF 作用數）
+            if getattr(runner, '_rx', None) is not None:              # 接收執行緒先停（避免搶走 get 的回覆）
+                runner._rx_stop = True; runner._rx.join(0.5); runner._rx = None
+            g_ = runner.get(['wg_log', 'cfg_src', 'app_prof', 'phase', 'stop'], timeout=3.0)
+            self.meta['wg'] = {k_: (v_[-600:] if k_ == 'wg_log' and v_ else v_) for k_, v_ in (g_ or {}).items()} if isinstance(g_, dict) else str(g_)[:300]
+        except Exception as e_:                                       # noqa: BLE001
+            self.meta['wg'] = repr(e_)[:200]
         LG = [r for r in runner.log if 'compute_ms' in r]
         by = {}
         for m_ in ('grasp', 'open'):

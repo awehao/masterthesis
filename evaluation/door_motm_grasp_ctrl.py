@@ -71,6 +71,32 @@ CSTOP = dict(arm_cmd=0.005, max_steps=2000)                         # r4 事前�
 READY_Q = dict(fresh_s=0.3, accept_max_s=0.5)                       # r2 事前登錄：估計新鮮度上限（30 Hz、延遲 0.1 s 下約 0.13 s）、首次 READY 後等待下游接受的上限
 
 
+def door_filter(obs, ap, phi):
+    """接近開始後（ap 帶 door）：門扇（繞鉸鏈轉 −φ 的線段，寬 w）0.15 m 內的障礙點不進 CBF——門是操作對象，碰撞改由門專屬淨空核對（clear_door）負責；其他障礙照舊。"""
+    if not obs or ap is None or ap.get('door') is None:
+        return obs
+    dd = ap['door']; h = np.asarray(dd['hinge'], float); u = np.asarray(dd['dir'], float); u = u / np.linalg.norm(u)
+    ph = 0.0 if phi is None else float(phi)
+    c_, s_ = math.cos(-ph), math.sin(-ph)
+    ue = np.array([c_ * u[0] - s_ * u[1], s_ * u[0] + c_ * u[1]])
+    out = []
+    for o_ in obs:
+        p_ = np.array([o_['x'], o_['y']]) - h
+        a_ = float(np.clip(p_ @ ue, 0.0, float(dd['w'])))
+        if float(np.linalg.norm(p_ - a_ * ue)) - float(o_.get('radius', 0.0)) > 0.15:
+            out.append(o_)
+    return out
+
+
+BG_V = 0.06                                                          # 導航到點後收斂到抓取底盤位姿的參考速度上限（m/s）
+
+
+def _T3_(p):
+    c_, s_ = math.cos(p[2]), math.sin(p[2])
+    T = np.eye(4); T[:2, :2] = [[c_, -s_], [s_, c_]]; T[:2, 3] = p[:2]
+    return T
+
+
 class MovingGraspCtrl:
     def __init__(self, ident, est_fn, d_world, v_pass, window_s, s, pipe, u_last, u_prev, off_static, finger_open=0.0089, joint_kp=600.0, sweep_stride=3, sched=None, pool=0, fastkin=False, deadline_ms=None, fric_ff=None, lock_budget_fn=None):
         self.fastkin = bool(fastkin)
@@ -199,6 +225,8 @@ class MovingGraspCtrl:
         Tl(t)＝沿接近軸的抓取線（s：d_line 於 [t_l0, T] 最小急動降到 0，之前 d_line、之後 0）；
         Tb(t)＝交權當下 TCP 相對底盤的位姿掛在名目底盤（b0 沿 d 以 v 前進）上；
         參考＝Tb→Tl 的混接（位置線性、姿態測地線；權重 β＝minjerk(t/T_b)）。"""
+        t_abs = t
+        t = t - float(ap.get('t0', 0.0))                               # 單一控制器：剖面時間自「接近開始」起算
         T, tl0, Tb_ = float(ap['T']), float(ap['t_l0']), float(ap['T_b'])
         Te = T - float(ap.get('t_settle', 0.6))                      # 接近線提早 t_settle 到底、之後 s＝0 保持（c31：剛到底即閉爪時 TCP 落後 3.4 mm，鎖定預算 6.8 mm＞5 mm）
         u = min(max((t - tl0) / max(Te - tl0, 1e-6), 0.0), 1.0)
@@ -207,8 +235,13 @@ class MovingGraspCtrl:
         beta = XE.minjerk(min(max(t / max(Tb_, 1e-6), 0.0), 1.0))[0]
         if beta >= 1.0 - 1e-12:
             return Tl
-        b0 = np.asarray(ap['b0'], float)
-        p2 = b0[:2] + self.d * self.v * max(t, 0.0)
+        xc = getattr(self, '_xref_cache', None)
+        if ap.get('b0') is None and xc is not None:                     # 單一控制器：起點 TCP 掛在導航參考底盤上（不假設沿門直線）
+            kk = int(min(max(round((t_abs - xc[0]) / DT), 0), len(xc[1]) - 1))
+            b0 = np.asarray(xc[1][kk], float); p2 = b0[:2]
+        else:
+            b0 = np.asarray(ap['b0'], float)
+            p2 = b0[:2] + self.d * self.v * max(t, 0.0)
         c_, s2 = math.cos(b0[2]), math.sin(b0[2])
         Tb = np.eye(4); Tb[:2, :2] = [[c_, -s2], [s2, c_]]; Tb[:2, 3] = p2
         Tb = Tb @ np.asarray(ap['T_rel0'], float)
@@ -246,9 +279,132 @@ class MovingGraspCtrl:
         return (S1 - sp) / DT, max(r1, r0), q1
 
     def _track(self, q, tr):
+        if getattr(self, 'unified', False):
+            return self._track_unified(q, tr)
         if getattr(self, 'wgmpc', False):
             return self._track_wgmpc(q, tr)
         return self._track_ik(q, tr)
+
+    def init_app_rel(self, qp):
+        """接近開始的第一拍：起點 TCP 相對底盤位姿（以本拍預測構型），監看與求解共用。"""
+        ap_ = getattr(self, 'app_prof', None)
+        if ap_ is not None and ap_.get('T_rel0') is None:
+            ap_['T_rel0'] = (np.linalg.inv(_T3_(np.asarray(qp, float)[:3])) @ K.fk(np.asarray(qp, float), 'link_tcp')).tolist()
+
+    def shared_mpc(self):
+        """單一控制器的求解器實例（Codex 20261117_161844）：以導航送來的求解設定（CBF、權重、限制）建一次，抓持與開門共用；之後只換任務。"""
+        if getattr(self, 'mpc', None) is None:
+            ni = getattr(self, 'nav_in', None) or {}
+            cf = ni.get('cfg')
+            fields = {f.name for f in XO.dataclasses.fields(XO.GR.GMPCConfig)}
+            if cf:
+                kw = {k_: (np.asarray(v_, float) if isinstance(v_, list) else v_) for k_, v_ in cf.items() if k_ in fields}
+                rc = XO.GR.GMPCConfig(**kw)
+                self.cfg_src = 'nav_node'
+            else:
+                nc = B.nav_cfg()
+                rc = XO.GR.GMPCConfig(**{f.name: getattr(nc, f.name) for f in XO.dataclasses.fields(nc)})
+                self.cfg_src = 'bottle_nav_cfg（導航設定尚未收到）'
+            rc.cmd_ramp_w = (0.4, 0.6) if XO.BASE_RAMP else None
+            rc.wheel_w_max, rc.wheel_a_max = rc.wheel_w_max * XO.WHEEL_FRAC[0], rc.wheel_a_max * XO.WHEEL_FRAC[1]
+            self.mpc = XO.GR.GMPC(rc)
+            self.wg_log = []
+        return self.mpc
+
+    def nav_window(self, q, qp):
+        """導航前端本拍輸入（相對擷取當時機器人位姿）→ 世界參考視窗、障礙物、速度下限；過期 ⇒ 在預測位姿保持（零速度）。"""
+        N = XO.N
+        ni = getattr(self, 'nav_in', None)
+        if ni is not None and not ni.get('stale'):
+            X0 = np.eye(3); c0, s0 = math.cos(q[2]), math.sin(q[2]); X0[:2, :2] = [[c0, -s0], [s0, c0]]; X0[:2, 2] = q[:2]
+            rel = np.asarray(ni['X_rel'], float).reshape(-1, 3); xin = np.asarray(ni['xi_ref'], float).reshape(-1, 3)
+            sh = int(round(D_STEPS * PHYS / DT))                       # 導航視窗起點＝擷取時刻；本求解初態在管線之後 ⇒ 對齊移 sh 步
+            X, xi = [], []
+            for k in range(N + 1):
+                j = min(k + sh, len(rel) - 1)
+                cr, sr = math.cos(rel[j, 2]), math.sin(rel[j, 2])
+                Rj = np.eye(3); Rj[:2, :2] = [[cr, -sr], [sr, cr]]; Rj[:2, 2] = rel[j, :2]
+                P = X0 @ Rj
+                X.append(XO.from_xytheta(float(P[0, 2]), float(P[1, 2]), math.atan2(P[1, 0], P[0, 0])))
+                xi.append(xin[min(j, len(xin) - 1)])
+            obs = []
+            for o_ in ni.get('obs', []):
+                ox, oy = q[0] + c0 * o_[0] - s0 * o_[1], q[1] + s0 * o_[0] + c0 * o_[1]
+                d_ = dict(x=float(ox), y=float(oy), radius=float(o_[2]), vx=float(c0 * o_[3] - s0 * o_[4]), vy=float(s0 * o_[3] + c0 * o_[4]))
+                if math.isfinite(o_[5]):
+                    d_['margin'] = float(o_[5])
+                if o_[6] > 0.5:
+                    d_['static'] = True
+                obs.append(d_)
+            obs = door_filter(obs, getattr(self, 'app_prof', None), getattr(self, 'phi_now', None))
+            self._obs_last = (self.t, obs)
+            return X, xi, obs, float(ni.get('u_min0', float('nan'))), 'nav'
+        ol = getattr(self, '_obs_last', None)
+        obs = ol[1] if (ol is not None and self.t - ol[0] <= 0.5) else None
+        ap_ = getattr(self, 'app_prof', None)
+        bg = None if ap_ is None else ap_.get('base_goal')
+        if bg is not None:                                             # 導航到點（前端停止更新）後：同一控制器把底盤帶到抓取底盤位姿（慢速直線、減速收斂；不假設沿門）
+            bg = np.asarray(bg, float); X, xi = [], []
+            p = np.asarray(qp[:3], float).copy()
+            for k in range(N + 1):
+                d_ = bg[:2] - p[:2]; dist = float(np.linalg.norm(d_)); dth = (bg[2] - p[2] + math.pi) % (2 * math.pi) - math.pi
+                v = min(BG_V, 0.8 * dist / max(DT, 1e-6) * DT / 0.5)   # 約 0.5 s 時間常數減速、上限 BG_V
+                w = max(-0.3, min(0.3, dth / 0.5))
+                X.append(XO.from_xytheta(float(p[0]), float(p[1]), float(p[2])))
+                vw_ = (v * d_ / dist) if dist > 1e-6 else np.zeros(2)
+                c_, s_ = math.cos(p[2]), math.sin(p[2])
+                xi.append(np.array([c_ * vw_[0] + s_ * vw_[1], -s_ * vw_[0] + c_ * vw_[1], w]))
+                p = p + DT * np.array([vw_[0], vw_[1], w])
+            return X, xi, obs, float('nan'), 'base_goal'
+        X = [XO.from_xytheta(*qp[:3])] * (N + 1)
+        return X, [np.zeros(3)] * (N + 1), obs, float('nan'), 'hold'
+
+    def _track_unified(self, q, tr):
+        """單一控制器（Codex 20261117_161844；Howard：導航到操作同一個控制器）：每拍同一個 gmpc_wb 實例；底盤參考與障礙物＝導航前端原樣輸入，
+        CBF 全階段；手臂：導航時保持，接近開始後依剖面加入 TCP 任務（觀測觸發），閉爪後 s＝0。底盤不假設沿門直線。回 (ub, ua, 殘差或原因, None)。"""
+        mpc = self.shared_mpc()
+        w0 = time.perf_counter()
+        qp, sp = self._pred(q)
+        te0 = tr + D_STEPS * PHYS
+        X, xi, obs, umin0, src = self.nav_window(q, qp)
+        self._xref_cache = (te0, [(float(Xk[0, 2]), float(Xk[1, 2]), math.atan2(float(Xk[1, 0]), float(Xk[0, 0]))) for Xk in X])
+        ap_ = getattr(self, 'app_prof', None)
+        if ap_ is None:
+            arm = dict(mode='hold')
+            Ts = None
+        else:
+            if ap_.get('T_rel0') is None:
+                ap_['T_rel0'] = (np.linalg.inv(_T3_(qp[:3])) @ K.fk(qp, 'link_tcp')).tolist()
+            Ts = [self.target(te0 + k * DT) for k in range(XO.N + 1)]
+            in_blend = (te0 - float(ap_.get('t0', 0.0))) < float(ap_['T_b'])
+            arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=C0.W_FAR if in_blend else C0.W_NEAR,
+                       lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=False, qp_solver='gi', **B.W_ARM)
+            if in_blend and getattr(self, 'w_post', 0.0) > 0.0:       # 門旁分支姿態偏好（只引導分支）：時域末端目標在末端參考底盤上的門旁 IK
+                seed_ = self.q_post if getattr(self, 'q_post', None) is not None else np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157])
+                bN = np.array(self._xref_cache[1][-1])
+                qN, rN = self._ik(bN, Ts[-1], seed_)
+                if rN < 1e-6 and np.isfinite(qN).all() and float(np.abs(qN - seed_).max()) <= 0.5:
+                    self.q_post = np.asarray(qN, float).copy()
+                if getattr(self, 'q_post', None) is not None:
+                    arm.update(q_post=np.tile(self.q_post, (XO.N, 1)), w_q=float(self.w_post))
+        u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
+        if math.isfinite(umin0):
+            mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])   # 導航繞行速度下限（同導航節點）
+        try:
+            r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
+        finally:
+            mpc.cfg.u_min = u_min_saved
+        ck = dict(r.arm_check or {})
+        ms = (time.perf_counter() - w0) * 1e3
+        e_tcp = None if Ts is None else round(float(np.linalg.norm(K.fk(qp, 'link_tcp')[:3, 3] - Ts[0][:3, 3])) * 1e3, 3)
+        self.wg_log.append((round(self.t, 3), round(ms, 2), e_tcp, str(r.status), src, 0 if obs is None else len(obs), int(r.cbf_active)))
+        if not np.isfinite(np.asarray(r.u_opt, float)).all():
+            return np.zeros(3), None, 'wgmpc_nonfinite', None
+        if ap_ is None:
+            return np.asarray(r.u_opt, float), np.zeros(6), 0.0, None   # 導航期：手臂保持（同一求解，arm hold）
+        if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved':
+            return np.asarray(r.u_opt, float), None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed')), None
+        return np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float), 0.0, None
 
     def _track_wgmpc(self, q, tr):
         """W-GMPC 主導（Howard 20261117 主線修正）：底盤與手臂命令由同一個 gmpc_wb 全身問題解出，求解後不改。

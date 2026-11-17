@@ -919,8 +919,30 @@ class DoorOpenExec:
                 self._stop('path_deadline_miss_unverified', elapsed_ms=round(elapsed_ms, 1), tag=tag, fb=self._fb_info)
 
     # ---- 求解（同一個全身問題）
+    def _nav_obs(self, q):
+        """導航前端障礙物（相對擷取時機器人位姿）→ 世界；過期 ⇒ 0.5 s 內沿用上一份，否則 None。"""
+        ni = getattr(self, 'nav_in', None)
+        if ni is not None and not ni.get('stale'):
+            c0, s0 = math.cos(q[2]), math.sin(q[2]); out = []
+            for o_ in ni.get('obs', []):
+                d_ = dict(x=float(q[0] + c0 * o_[0] - s0 * o_[1]), y=float(q[1] + s0 * o_[0] + c0 * o_[1]), radius=float(o_[2]), vx=float(c0 * o_[3] - s0 * o_[4]), vy=float(s0 * o_[3] + c0 * o_[4]))
+                if math.isfinite(o_[5]):
+                    d_['margin'] = float(o_[5])
+                if o_[6] > 0.5:
+                    d_['static'] = True
+                out.append(d_)
+            ap_ = getattr(self, 'app_prof', None)
+            if ap_ is not None and ap_.get('door') is not None:          # 開門中：門扇（依實測門角）附近障礙點不進 CBF（同抓持段）
+                import door_motm_grasp_ctrl as _G
+                out = _G.door_filter(out, ap_, getattr(self, '_phi_meas_last', None))
+            self._obs_last = (self.t, out)
+            return out
+        ol = getattr(self, '_obs_last', None)
+        return ol[1] if (ol is not None and self.t - ol[0] <= 0.5) else None
+
     def _solve(self, q, phi_meas):
         w0 = time.perf_counter()
+        self._phi_meas_last = float(phi_meas)
         cfg = self.cfg
         qp, sp = q.copy(), self.s.copy()
         for u_in in self.pipe:
@@ -952,7 +974,8 @@ class DoorOpenExec:
         if self.arm_mode == 'qp' and CL_ROWS is not None:              # 主線修正 A：閉鏈位置＋姿態硬列進同一全身 QP（目標 T_seq＝T_WH(φ_ref)·T_HE；底盤與手臂耦合同列）
             arm['contact_tube'] = dict(CL_ROWS)
         w_pre = time.perf_counter()
-        r = self.mpc.solve(X_now=from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=None)
+        obs_ = self._nav_obs(q) if getattr(self, 'unified', False) else None   # 單一控制器：導航 CBF 障礙物進開門段同一 QP
+        r = self.mpc.solve(X_now=from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs_)
         self.solve_ms.append((time.perf_counter() - w0) * 1e3)
         qi_ = (r.arm_check or {}).get('qp') or {}
         f_ = lambda v_: float('nan') if v_ is None else float(v_)       # noqa: E731

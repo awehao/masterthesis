@@ -28,17 +28,24 @@ scene = json.load(open(os.path.join(HERE, 'experiments', '20261112_m8_house_scen
 ev = [(e['t'], e['what']) for e in m['events']]
 t_take = next((t for t, w in ev if w == 'd2_takeover'), None)
 t_bind = next((t for t, w in ev if w == 'bind_committed'), None)
+t_app = next((t for t, w in ev if w == 'app_start'), None)
 t_end = next((t for t, w in ev if w in ('settled_verified', 'world_end')), float(R[-1, 0]))
 Th = np.asarray(m['T_true'], float)
 LEAF_W, LEAF_H = 0.95, 2.0
 LINKS = ['link_base', 'link1', 'link2', 'link3', 'link4', 'link5', 'link6', 'link_eef', 'link_tcp']
 BASE_L, BASE_W, BASE_H = 0.50, 0.45, 0.30
-t_start = T0 if T0 is not None else max(0.0, (t_take or 0.0) - 8.0)
+t_start = T0 if T0 is not None else (max(0.0, (t_take or 0.0) - 1.0) if t_app is not None else max(0.0, (t_take or 0.0) - 8.0))
 idx = [i for i in range(len(R)) if t_start <= R[i, 0] <= t_end + 0.5 and int(round(R[i, 0] * 100)) % 10 == 0]
 trail = []
 
 
 def stage_txt(t):
+    if t_app is not None:
+        if t < t_app:
+            return '單一控制器：導航（手臂保持）'
+        if t_bind is None or t < t_bind:
+            return '單一控制器：接近→插入→閉爪→確認'
+        return '單一控制器：開門（閉鏈列）'
     if t_take is None or t < t_take:
         return '導航接近（共同核心 gmpc_wb，手臂保持）'
     if t_bind is None or t < t_bind:

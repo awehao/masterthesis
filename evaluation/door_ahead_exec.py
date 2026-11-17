@@ -92,6 +92,16 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
             t_next = float(snap['t_next'])
             if snap.get('door_rebind') is not None and door is not None:  # D2：首段結果到達後隨快照改綁（計入本拍計算時間）
                 door.rebind_first(**snap['door_rebind'])
+            if snap.get('nav_in') is not None and ctrl is not None:  # 單一控制器：導航前端本拍輸入（參考、障礙物、設定）
+                ctrl.nav_in = snap['nav_in']
+            if snap.get('app_start') is not None and ctrl is not None and mode == 'grasp':   # 接近開始（觀測觸發）：剖面自本段起點起算；估計換成融合估計（重設融合）
+                ap_ = dict(snap['app_start'])
+                T_ref_ = np.asarray(ap_.pop('T_ref'), float); ver_ = int(ap_.pop('ref_ver', 1)); tobs_ = float(ap_.pop('t_obs_rel', 0.0))
+                ap_.update(t0=float(t_next), T_rel0=None, b0=None)
+                ctrl.app_prof = ap_
+                ctrl.sched['hold_s'], ctrl.sched['ins_s'] = float(t_next), float(ap_['T'])
+                ctrl.est_fn = (lambda t, _T=T_ref_, _v=ver_, _r=tobs_: (_T.copy(), _v, _r))
+                ctrl.frames, ctrl.T_est, ctrl.est_ver = {}, None, None
             phi = float(snap.get('phi', phi0))
             fm = snap.get('finger', finger0)
             if snap.get('first'):                                     # 初始化：第一段以實測狀態在 n_0 直接算（執行器尚未起跑）
@@ -111,6 +121,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                     for i_ in range(min(len(ctrl.pipe), len(pb) - nph)):
                         if pb[nph + i_] is not None:
                             ctrl.pipe[i_] = np.r_[np.asarray(pb[nph + i_], float), np.asarray(ctrl.pipe[i_], float)[3:]]
+            if hasattr(ctrl, 'init_app_rel'):
+                ctrl.init_app_rel(qp)
             if k_tick in late_ticks:                                  # 核對用：注入延遲（模擬計算晚到）
                 time.sleep(late_ticks[k_tick])
             if mode == 'open' and ('o%d' % k_open) in late_ticks:      # 開門段第 k_open 拍（交接後起算）
