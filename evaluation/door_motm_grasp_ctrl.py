@@ -189,7 +189,38 @@ class MovingGraspCtrl:
         return W.Rz4(-(float(ph) - self.lock['phi'])) @ self.lock['T']
 
     def target(self, t_rel):
-        return self.T_at(self.handle_ref(), self.s_of(t_rel))
+        ap = getattr(self, 'app_prof', None)
+        if ap is None:
+            return self.T_at(self.handle_ref(), self.s_of(t_rel))
+        return self._app_target(ap, float(t_rel))
+
+    def _app_target(self, ap, t):
+        """W-GMPC 接近剖面（主線修正：交權提前到進走廊；這只是 TCP 參考，命令由 W-GMPC 解）：
+        Tl(t)＝沿接近軸的抓取線（s：d_line 於 [t_l0, T] 最小急動降到 0，之前 d_line、之後 0）；
+        Tb(t)＝交權當下 TCP 相對底盤的位姿掛在名目底盤（b0 沿 d 以 v 前進）上；
+        參考＝Tb→Tl 的混接（位置線性、姿態測地線；權重 β＝minjerk(t/T_b)）。"""
+        T, tl0, Tb_ = float(ap['T']), float(ap['t_l0']), float(ap['T_b'])
+        Te = T - float(ap.get('t_settle', 0.6))                      # 接近線提早 t_settle 到底、之後 s＝0 保持（c31：剛到底即閉爪時 TCP 落後 3.4 mm，鎖定預算 6.8 mm＞5 mm）
+        u = min(max((t - tl0) / max(Te - tl0, 1e-6), 0.0), 1.0)
+        s_ = float(ap['d_line']) * (1.0 - XE.minjerk(u)[0]) if t < Te else 0.0
+        Tl = self.T_at(self.handle_ref(), max(s_, 0.0))
+        beta = XE.minjerk(min(max(t / max(Tb_, 1e-6), 0.0), 1.0))[0]
+        if beta >= 1.0 - 1e-12:
+            return Tl
+        b0 = np.asarray(ap['b0'], float)
+        p2 = b0[:2] + self.d * self.v * max(t, 0.0)
+        c_, s2 = math.cos(b0[2]), math.sin(b0[2])
+        Tb = np.eye(4); Tb[:2, :2] = [[c_, -s2], [s2, c_]]; Tb[:2, 3] = p2
+        Tb = Tb @ np.asarray(ap['T_rel0'], float)
+        R = Tb[:3, :3].T @ Tl[:3, :3]
+        cth = max(-1.0, min(1.0, (np.trace(R) - 1.0) / 2.0)); th = math.acos(cth)
+        Rb = np.eye(3)
+        if th > 1e-9:
+            w = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]]) / (2.0 * math.sin(th))
+            Kx = np.array([[0, -w[2], w[1]], [w[2], 0, -w[0]], [-w[1], w[0], 0]]); a_ = beta * th
+            Rb = np.eye(3) + math.sin(a_) * Kx + (1 - math.cos(a_)) * Kx @ Kx
+        Tt = np.eye(4); Tt[:3, :3] = Tb[:3, :3] @ Rb; Tt[:3, 3] = (1 - beta) * Tb[:3, 3] + beta * Tl[:3, 3]
+        return Tt
 
     def _arm_track(self, qp, sp, uf, ub, te, seed):
         """命令生效後一拍末的預測底盤（qp 起、本拍底盤命令斜坡）解 IK → 設定點 → 手臂命令。回 (u_arm 或 None, 殘差, q1)。"""
@@ -228,12 +259,14 @@ class MovingGraspCtrl:
             nc = B.nav_cfg()
             rc = XO.GR.GMPCConfig(**{f.name: getattr(nc, f.name) for f in XO.dataclasses.fields(nc)})
             rc.cmd_ramp_w = (0.4, 0.6) if XO.BASE_RAMP else None
+            qb = np.asarray(getattr(self, 'base_q_diag', (100.0, 10.0, 50.0)), float)   # 本體 x（對門側向）與偏航加重、沿門（本體 y）照原值（c32／c33：原 10/10/5 時底盤被拖著補 TCP 誤差，側向偏 8 cm）
+            rc.Q = np.diag(qb); rc.Qf = np.diag(5.0 * qb)
             self.mpc = XO.GR.GMPC(rc)
             self.wg_log = []
         w0 = time.perf_counter()
         qp, sp = self._pred(q)
         te0 = tr + D_STEPS * PHYS
-        along = float((qp[:2] - self.b_origin[:2]) @ self.d)
+        along = float((qp[:2] - self.b_origin[:2]) @ self.d) if getattr(self, 'app_prof', None) is None else self.v * te0   # 接近剖面：沿門位置錨定時間計畫（與 TCP 參考的名目底盤同一時間軸；c34：未錨定時底盤被往前推、READY 超過抓取點 7.7 cm）
         th = float(self.yaw_ref)
         vw = self.v * self.d
         c_, s_ = math.cos(th), math.sin(th)
@@ -245,6 +278,18 @@ class MovingGraspCtrl:
             Ts.append(self.target(te0 + k * DT))
         arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=C0.W_NEAR,
                    lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=False, qp_solver='gi', **B.W_ARM)
+        ap_ = getattr(self, 'app_prof', None)
+        in_blend = ap_ is not None and te0 < float(ap_['T_b'])
+        if in_blend:
+            arm['w_p'] = C0.W_FAR                                    # 混接段（遠）：TCP 權重同瓶子鏈遠段 50；近段 200（c32：200 時底盤被拖著補 TCP 誤差，側向偏 9 cm）
+        if in_blend and getattr(self, 'w_post', 0.0) > 0.0:                        # 門旁分支姿態偏好（c29：從導航姿態追 TCP 收斂到另一分支，開門首段不可行）：時域末端目標在末端名目底盤上的門旁 IK（種子＝上一解或門旁構型）
+            seed_ = self.q_post if getattr(self, 'q_post', None) is not None else np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157])
+            bN = np.r_[self.b_origin[:2] + self.d * (along + self.v * XO.N * DT), th]
+            qN, rN = self._ik(bN, Ts[-1], seed_)
+            if rN < 1e-6 and np.isfinite(qN).all() and float(np.abs(qN - seed_).max()) <= 0.5:
+                self.q_post = np.asarray(qN, float).copy()
+            if getattr(self, 'q_post', None) is not None:
+                arm.update(q_post=np.tile(self.q_post, (XO.N, 1)), w_q=float(self.w_post))
         r = self.mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=None)
         ck = dict(r.arm_check or {})
         ms = (time.perf_counter() - w0) * 1e3

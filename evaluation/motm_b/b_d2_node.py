@@ -24,6 +24,8 @@ DT, PHYS, NPH, D = 0.05, 0.01, 5, 8
 V_APPROACH = float(os.environ.get('B_V_APPROACH', '0.20'))
 V_ARM, A_ARM = 1.0, 10.0
 LEAD_S = D * PHYS + DT + 0.10
+APP_HO = os.environ.get('B_APP_HO', '1') == '1'              # 進走廊即交權給 W-GMPC 抓持控制器（主線修正）；0＝原直接接近＋r＝S_PRE 交權
+APP_DIST, APP_V, APP_T_MIN, APP_T_LINE, APP_D_LINE = float(os.environ.get('B_APP_DIST', '0.30')), 0.05, 4.0, 2.5, 0.15   # 交權離抓取點距離、抓持控制器底盤速度（door_ahead_case V）、最短時長、沿接近軸段時長、接近軸起點退讓
 FUSE_HO = os.environ.get('B_FUSE_HO', '1') == '1'            # 交權參考＝全部有效影格閘門內融合（c13／c22：最早 3 格估計沿接近軸誤差 2 mm 吃掉外殼—橫桿餘裕）
 CL_LINE = os.environ.get('B_CL_LINE', '1') == '1'             # 混接／直線段以實際底盤即時解 IK（c7 阻點修正）；0＝原開迴路關節參考
 EST = dict(n=3, spread_m=0.005, max_age_s=0.5, replan_shift_m=0.010)
@@ -911,7 +913,7 @@ def main():
             # ---- 直接接近重算請求（擺動段結束前；交權前）
             if self.dp_next is not None and t >= self.dp_next['t_s'] - 1e-9:
                 self.dp, self.dp_next = self.dp_next, None
-            if self.mode == 'APPROACH' and self.req is None and self.stopped is None and t - self.t_retr >= RETR_PERIOD:
+            if self.mode == 'APPROACH' and not APP_HO and self.req is None and self.stopped is None and t - self.t_retr >= RETR_PERIOD:
                 frozen = self.dp is not None and t + RETR_LEAD >= self.dp['t_D'] - DP_BLEND
                 if not frozen:
                     self.t_retr = t; self.ver += 1
@@ -931,6 +933,33 @@ def main():
                     pk.send(('dapp', dict(ver=self.ver, t_req=t, q=q.tolist(), s=self.truth['s'].tolist(), pipe=self.truth['pipe'].tolist(), T_mo=T_mo.tolist(), T_ref=self.T_ref_now.tolist(),
                                           T_ref_m=T_use_m.tolist(), T_est=T_use_od.tolist(), dp_cur=self.dp, dp_next=self.dp_next, base_preds=preds,
                                           sb_lim=[self.region['sb_feasible'][0], self.region['sb_feasible'][1]])))
+            # ---- 進走廊即交權（APP_HO，主線修正）：離抓取點 ≤ APP_DIST 且在走廊內 ⇒ 交給 W-GMPC 抓持控制器（接近、插入、閉爪、確認同一求解）
+            if APP_HO and self.mode == 'APPROACH' and self.ho_sent is None and self.stopped is None and self.plan is not None and in_sb and inside:
+                aw_ = float(DP_AW[-1])
+                dist_ = a_m - aw_
+                if dist_ <= APP_DIST:
+                    Tapp = max(APP_T_MIN, dist_ / APP_V)
+                    app = dict(T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - APP_T_LINE), d_line=APP_D_LINE)
+                    n_h = int(round(t / PHYS)) + NPH + 3
+                    rf = self.ref
+                    T_send, fz = np.asarray(rf['T_od'], float), None
+                    keep = []
+                    for (to_, T_) in self.obs_T:
+                        dR_ = T_send[:3, :3].T @ T_[:3, :3]
+                        if np.linalg.norm(T_[:3, 3] - T_send[:3, 3]) <= 0.010 and math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR_) - 1) / 2)))) <= 3.0:
+                            keep.append(T_)
+                    if len(keep) >= 3:
+                        Tf = np.eye(4); Tf[:3, 3] = np.median([T_[:3, 3] for T_ in keep], axis=0)
+                        U_, _, Vt_ = np.linalg.svd(np.sum([T_[:3, :3] for T_ in keep], axis=0))
+                        Tf[:3, :3] = U_ @ np.diag([1.0, 1.0, np.linalg.det(U_ @ Vt_)]) @ Vt_
+                        fz = dict(n=len(keep), n_all=len(self.obs_T), dpos_mm=round(float(np.linalg.norm(Tf[:3, 3] - T_send[:3, 3])) * 1e3, 3), t_last=max(to_ for to_, _ in self.obs_T))
+                        T_send = Tf
+                    ins_ = dict(s0=APP_D_LINE, v0=0.0, a0=0.0, T=Tapp)
+                    msg = dict(n_h=n_h, ins=ins_, app=app, T_ref=T_send.tolist(), t_obs=(rf['t_obs'] if fz is None else fz['t_last']), ref_ver=rf['ver'] + (0 if fz is None else 1), win=[0.0, APP_V * Tapp + 0.22], fused=fz)
+                    self.p_ho.publish(String(data=json.dumps(msg, default=lambda o_: o_.tolist() if hasattr(o_, "tolist") else str(o_))))
+                    self.ho_sent = dict(fused=fz, t_sent=round(t, 3), n_h=n_h, app=app, a=round(a_m, 4), sb=round(sb_m, 4))
+                    self.event('handover_requested', **self.ho_sent)
+                    return
             # ---- 交權請求：直線到 r＝S_PRE 的時刻 t_h；提前一拍＋3 步送出（世界節點在 n_h−NPH 以真狀態前推建封包）
             if self.mode == 'APPROACH' and self.dp is not None and self.dp_next is None and self.ho_sent is None and self.stopped is None and t >= self.dp['t_h'] - 2 * DT + 1e-9:
                 n_h = int(round(t / PHYS)) + NPH + 3

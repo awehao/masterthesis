@@ -30,6 +30,7 @@ import far_chain_align as FCA                                        # noqa: E40
 import door_p2_planner_server as PS                                  # noqa: E402
 import wrist_v0_capture as W0                                        # noqa: E402
 FSP = PS.PlannerServer()                                             # D2 首段規劃程序（背景）
+FS_LEAD = float(os.environ.get('D2_FS_LEAD', '1.5'))
 LENIENT = os.environ.get('D2_LENIENT', '0') == '1'
 D2_PHASE_ALIGN = os.environ.get('D2_PHASE_ALIGN', '1') == '1'
 TOL = dict(base=float(os.environ.get('D2_TOL_BASE', '2e-3')), arm=1e-9)   # 交權時實際管線對預測的容差（底盤 m/s、rad/s；手臂命令須逐值相同）
@@ -45,8 +46,18 @@ def d2_builder(pk):
     c = G.MovingGraspCtrl(ident, est, d_world, V, tuple(pk['win']), np.asarray(pk['s'], float), [np.asarray(u_, float) for u_ in pk['pipe']], np.asarray(pk['u_last'], float), np.asarray(pk['u_prev'], float),
                           np.asarray(pk['off_static'], float), sched=dict(hold_s=0.0, ins_s=float(pk['ins']['T'])), pool=SHARED, fastkin=True, deadline_ms=DL_MS, fric_ff=FRIC_FF, lock_budget_fn=lock_budget)
     c.ins_prof = dict(s0=pk['ins']['s0'], v0=pk['ins']['v0'], a0=pk['ins']['a0'])
+    if pk.get('app') is not None:                                    # 進走廊即交權：接近剖面（TCP 由交權當下的底盤相對位姿混接到抓取線；命令由 W-GMPC 解）
+        c.app_prof, c.ins_prof = dict(pk['app']), None
+        c.app_prof.setdefault('t_settle', float(os.environ.get('D2_T_SETTLE', '1.0')))
+        c.w_post = float(os.environ.get('D2_W_POST', '2.0'))
     c.wgmpc = os.environ.get('D2_WGMPC', '1') == '1'                 # 抓持段命令由 gmpc_wb 全身問題產生（主線修正；0＝原 IK 律）
     c.close_gate = gate
+    if LENIENT and c.lock_budget_fn is not None:                     # 寬鬆模式：鎖定預算超界只記錄（ok_strict），不擋閉爪（c35：5.22 mm 對 5 mm）
+        _lb = c.lock_budget_fn
+        def _lb_lenient(t, q9, ep, er, _f=_lb):
+            r_ = dict(_f(t, q9, ep, er)); r_['ok_strict'] = r_['ok']; r_['ok'] = True
+            return r_
+        c.lock_budget_fn = _lb_lenient
     c.multi_geom = os.environ.get('GRASP_MULTI_GEOM', '1') == '1'
     c.tail_cert_mode = os.environ.get('GRASP_TAIL_CERT', '1') == '1'
     door.first.clear(); door.first.update(ok=False, t_avail=1e9, o=None, T_plan=T_ref, T_HE_pred=None, x_pred=None, t_ready_pred=None, req=None)
@@ -160,6 +171,9 @@ class WorldD2(Node):
                         s1 = sum(C_[k] * d_ ** k for k in range(6)); v1 = sum(k * C_[k] * d_ ** (k - 1) for k in range(1, 6)); a1 = sum(k * (k - 1) * C_[k] * d_ ** (k - 2) for k in range(2, 6))
                         self.ho['n_h'] = n0_ + sh
                         self.ho['ins'] = dict(s0=s1, v0=v1, a0=a1, T=T0 - d_)
+                        if self.ho.get('app') is not None:            # 接近剖面同一時間軸平移（交權晚 d_）
+                            ap_ = dict(self.ho['app']); ap_.update(T=ap_['T'] - d_, t_l0=ap_['t_l0'] - d_, T_b=max(ap_['T_b'] - d_, 0.5)); self.ho['app'] = ap_
+                            self.ho['ins'] = dict(self.ho['ins'], T=ap_['T'])
                     self.ev('handover_phase_align', guard_phase=ph, n_h_req=n0_, shift=sh, n_h=self.ho['n_h'], ins=self.ho['ins'])
             except Exception as e:                                    # noqa: BLE001
                 self.ev('handover_request_bad', err=repr(e)[:200])
@@ -265,6 +279,9 @@ class WorldD2(Node):
                 self.obs_publish()
         if self.stage == 'run':
             k = self.n - self.n0
+            fp_ = getattr(self, 'fs_plan', None)
+            if fp_ is not None and fp_.get('pending_submit') and self.t - self.t_h >= float(self.ho['app']['T']) - FS_LEAD:
+                self.submit_first(self.q.copy(), self.t - self.t_h)
             if self.fs is not None and self.fs.get('pending'):
                 r = FSP.poll()
                 if r is not None:
@@ -304,7 +321,7 @@ class WorldD2(Node):
                 ck = self.ca.check(self.n)
                 if not ck['ok']:
                     if LENIENT:                                          # 寬鬆模式（Howard 20261117 晚：先成功後驗證）：放行流不符只記錄，不中止
-                        self.warn('safety_chain_' + ck['why'], {k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); self.ca = None
+                        self.warn('safety_chain_' + ck['why'], {k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); self.ca.viol = None   # 繼續核對、逐次計數（Codex 140048：不得關掉後宣稱只有一筆）
                     else:
                         self.abort('safety_chain_' + ck['why'], detail={k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); return
         if self.stage == 'hold':
@@ -313,7 +330,7 @@ class WorldD2(Node):
                 ck = self.ca.check(self.n)
                 if not ck['ok']:
                     if LENIENT:                                          # 寬鬆模式（Howard 20261117 晚：先成功後驗證）：放行流不符只記錄，不中止
-                        self.warn('safety_chain_' + ck['why'], {k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); self.ca = None
+                        self.warn('safety_chain_' + ck['why'], {k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); self.ca.viol = None   # 繼續核對、逐次計數（Codex 140048：不得關掉後宣稱只有一筆）
                     else:
                         self.abort('safety_chain_' + ck['why'], detail={k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); return
         if self.stage == 'end':
@@ -385,25 +402,57 @@ class WorldD2(Node):
         t_h = n_h * PHYS
         pk = dict(ver=1, s=s.tolist(), pipe=[p_.tolist() for p_ in pipe], u_last=pipe[-1].tolist(), u_prev=pipe[-1 - NPH].tolist(), off_static=dq(q).tolist(),
                   ins=self.ho['ins'], T_ref=T_ref.tolist(), t_obs_rel=float(self.ho['t_obs']) - t_h, ref_ver=int(self.ho['ref_ver']), win=self.ho.get('win', [0.0, 0.22]))
+        if self.ho.get('app') is not None:
+            T_rel0 = np.linalg.inv(T3(q[:3])) @ K.fk(q, 'link_tcp')
+            pk['app'] = dict(self.ho['app'], b0=[float(x) for x in q[:3]], T_rel0=T_rel0.tolist())
         self.meta['d2_packet'] = pk
         self.prep = dict(n_h=n_h, q_pred=q, s_pred=s, pipe_pred=[p_.copy() for p_ in pipe], u_hold=np.r_[u_b, u_a], w=time.perf_counter())
         runner.start_rx()
         runner.prepare_takeover(pk, q.copy(), 0.0, 0, phi=self.phi)
-        # 首段：預測 READY（插入 T＋閉爪＋確認−一拍；底盤以 V 沿 d_world）
+        # 首段：預測 READY（插入 T＋閉爪＋確認−一拍；底盤以 V 沿 d_world）。進走廊即交權（app）時改在抓取前 FS_LEAD 秒以當時實際構型送（交權當下手臂仍在導航姿態，IK 種子會落到別的分支：c28 qp_infeasible）
         t_ready_rel = float(self.ho['ins']['T']) + G.SCHED['close_s'] + G.SCHED['confirm_s'] - DT
-        vw_ = V * d_world
-        b_pred = q[:3] + np.r_[vw_ * t_ready_rel, 0.0]
-        qa_pred = ik(b_pred, T_at(T_ref, 0.0), q[3:])
-        x_pred = np.r_[b_pred, qa_pred, phi_b]
-        T_HE_pred = np.linalg.inv(T_ref) @ T_at(T_ref, 0.0)
-        W_.set_model(phi0=phi_b, finger_q=FQ)
-        hp = W_.DoorWBOpt(T_ref, np.eye(4), x_pred, GOAL, N=2, dt=0.2, T_HE=T_HE_pred, project_start=False)
-        v_pred = np.r_[vw_, 0.0, hp.closure_velocity(x_pred, np.r_[vw_, 0.0], 0.0), 0.0]
-        FSP.submit(1, dict(T_WH0=T_ref, T_HE=T_HE_pred, x0=x_pred, v0=v_pred, H=H, goal=GOAL, fq=FQ, phi_model=phi_b, try_final=False))
-        self.fs = dict(pending=True, T_plan=T_ref, T_HE_pred=T_HE_pred, x_pred=x_pred, t_ready_rel=t_ready_rel, t_req=round(self.t, 3))
+        self.fs = None
+        self.fs_plan = dict(T_ref=T_ref, t_ready_rel=t_ready_rel, pending_submit=self.ho.get('app') is not None)
+        if self.ho.get('app') is None:
+            self.submit_first(q, 0.0)
         self.t_h = t_h
         self.stage = 'prep'
         self.ev('d2_prepare', n_h=n_h, t_h=round(t_h, 3), t_ready_rel=round(t_ready_rel, 3), ins=self.ho['ins'], base_h=[round(float(x), 4) for x in q[:3]])
+
+    def submit_first(self, q, t_rel_now):
+        fp = self.fs_plan
+        T_ref, t_ready_rel = fp['T_ref'], fp['t_ready_rel']
+        vw_ = V * d_world
+        if t_rel_now > 0.0:                                          # 接近中送：以目前實際底盤命令（管線末筆、轉世界）前推（W-GMPC 底盤未必等於參考速度；c31 預測位置跑過頭 IK 不可達）
+            ub_ = np.asarray(self.pipe[-1][:3], float); c_, s_ = math.cos(q[2]), math.sin(q[2])
+            vw_ = np.array([c_ * ub_[0] - s_ * ub_[1], s_ * ub_[0] + c_ * ub_[1]])
+        b_pred = q[:3] + np.r_[vw_ * (t_ready_rel - t_rel_now), 0.0]
+        Tg_ = T_at(T_ref, 0.0)
+        qa_pred, res_ = None, 9.0
+        for seed0 in (q[3:], np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157])):   # 預測底盤離目前較遠：底盤分段前推、逐步接續種子（c30：一步解殘差 3.1 cm）
+            qa_ = np.asarray(seed0, float).copy()
+            for f_ in np.linspace(0.0, 1.0, 7)[1:]:
+                qa_ = ik(q[:3] + f_ * (b_pred - q[:3]), Tg_, qa_)
+            r_ = float(np.linalg.norm(K.fk(np.r_[b_pred, qa_], 'link_tcp')[:3, 3] - Tg_[:3, 3]))
+            if r_ < res_:
+                qa_pred, res_ = qa_, r_
+            if r_ < 1e-6:
+                break
+        T_HE_pred = np.linalg.inv(T_ref) @ Tg_
+        x_pred = np.r_[b_pred, qa_pred, phi_b]
+        W_.set_model(phi0=phi_b, finger_q=FQ)
+        try:
+            hp = W_.DoorWBOpt(T_ref, np.eye(4), x_pred, GOAL, N=2, dt=0.2, T_HE=T_HE_pred, project_start=False)
+        except ValueError as e_:
+            self.fs = dict(pending=False, feasible=False, failed=['pred_ik'], info=dict(why=str(e_)[:120], ik_res_m=res_), t_req=round(self.t, 3), t_ready_rel=t_ready_rel)
+            self.fs_plan['pending_submit'] = False
+            self.ev('first_segment_pred_ik_fail', ik_res_m=round(res_, 5))
+            return
+        v_pred = np.r_[vw_, 0.0, hp.closure_velocity(x_pred, np.r_[vw_, 0.0], 0.0), 0.0]
+        FSP.submit(1, dict(T_WH0=T_ref, T_HE=T_HE_pred, x0=x_pred, v0=v_pred, H=H, goal=GOAL, fq=FQ, phi_model=phi_b, try_final=False))
+        self.fs = dict(pending=True, T_plan=T_ref, T_HE_pred=T_HE_pred, x_pred=x_pred, t_ready_rel=t_ready_rel, t_req=round(self.t, 3))
+        fp['pending_submit'] = False
+        self.ev('first_segment_request', t_rel=round(t_rel_now, 3))
 
     def commit(self):
         """n_h：實際狀態對預測（設定點、管線、關節）＋第一段準時附尾段 ⇒ 原子切換；否則 nack。"""

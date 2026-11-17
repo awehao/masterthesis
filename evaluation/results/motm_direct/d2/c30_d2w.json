@@ -1,0 +1,404 @@
+{
+ "scope": "D2 ROS 乾跑：近距參考更新→連續接近→D2 交權→閉爪／確認→綁定→開門；受控對象運動學替身、合成觀察（把手真值＋雜訊、幾何可見才有效）、理想綁定",
+ "events": [
+  {
+   "t": 24.75,
+   "n": 2475,
+   "what": "handover_request",
+   "n_h": 2483,
+   "ins": {
+    "s0": 0.15,
+    "v0": 0.0,
+    "a0": 0.0,
+    "T": 5.953514945934049
+   },
+   "ref_ver": 2,
+   "t_obs": 18.2
+  },
+  {
+   "t": 24.75,
+   "n": 2475,
+   "what": "handover_phase_align",
+   "guard_phase": 0,
+   "n_h_req": 2483,
+   "shift": 2,
+   "n_h": 2485,
+   "ins": {
+    "s0": 0.149999943419094,
+    "v0": -8.472846631335401e-06,
+    "a0": -0.000844428734831837,
+    "T": 5.933514945934049
+   }
+  },
+  {
+   "t": 24.8,
+   "n": 2480,
+   "what": "d2_prepare",
+   "n_h": 2485,
+   "t_h": 24.85,
+   "t_ready_rel": 6.684,
+   "ins": {
+    "s0": 0.149999943419094,
+    "v0": -8.472846631335401e-06,
+    "a0": -0.000844428734831837,
+    "T": 5.933514945934049
+   },
+   "base_h": [
+    0.9716,
+    -0.5083,
+    1.5759
+   ]
+  },
+  {
+   "t": 24.85,
+   "n": 2485,
+   "what": "d2_takeover",
+   "kind": "takeover",
+   "compute_ms": 33.3,
+   "wall_since_request_ms": 36.09,
+   "tail_src": "candidate_extra1",
+   "abort": null,
+   "stop": null,
+   "phase": "INSERT",
+   "ok": true,
+   "d_base": 0.0,
+   "d_arm": 0.0,
+   "d_s": 0.0,
+   "d_q": 0.0,
+   "guard_phase": 0,
+   "n_mod": 0,
+   "wall_prep_ms": 144.7,
+   "n_ctrl": 0
+  },
+  {
+   "t": 29.29,
+   "n": 2929,
+   "what": "engineering_abort",
+   "why": "exception",
+   "err": "Traceback (most recent call last):\n  File \"/home/howardchen/masterthesis/evaluation/motm_dry/world_d2_node.py\", line 208, in step\n    self._step()\n  File \"/home/howardchen/masterthesis/evaluation/motm_dry/world_d2_node.py\", line 277, in _step\n    self.submit_first(self.q.copy(), self.t - self.t_h)\n  File \"/home/howardchen/masterthesis/evaluation/motm_dry/world_d2_node.py\", line 424, in submit_first\n    hp = W_.DoorWBOpt(T_ref, np.eye(4), x_pred, GOAL, N=2, dt=0.2, T_HE=T_HE_pred, project_start=False)\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/howardchen/masterthesis/evaluation/door_wbopt.py\", line 166, in __init__\n    raise ValueError(f'start closure residual {e0:.3e} > 1e-6（實測起點與 T_HE 不一致；不投影）')\nValueError: start closure residual 3.101e-02 > 1e-6（實測起點與 T_HE 不一致；不投影）\n"
+  },
+  {
+   "t": 29.29,
+   "n": 2929,
+   "what": "world_end"
+  }
+ ],
+ "rtf_target": 0.3,
+ "obs_noise": {
+  "pos_mm": 1.0,
+  "deg": 0.2
+ },
+ "tol": {
+  "base": 0.002,
+  "arm": 1e-09
+ },
+ "meas_clear_min": {
+  "env": 0.11652671779082123,
+  "base": 0.20704310793674813,
+  "self": 0.008160245123576512,
+  "shell_bar": 0.10728506125753809
+ },
+ "d2_packet": {
+  "ver": 1,
+  "s": [
+   -0.013170000000000001,
+   -0.06046988219310169,
+   0.09321187098329363,
+   0.012375816564142285,
+   -1.6259274982884433,
+   -0.0015559515230329935
+  ],
+  "pipe": [
+   [
+    0.000992867345342543,
+    0.05,
+    0.004100819389751768,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.000992867345342543,
+    0.05,
+    0.004100819389751768,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.000992867345342543,
+    0.05,
+    0.004100819389751768,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.000954732772864007,
+    0.05,
+    0.004401320361271255,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.000954732772864007,
+    0.05,
+    0.004401320361271255,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.000954732772864007,
+    0.05,
+    0.004401320361271255,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.000954732772864007,
+    0.05,
+    0.004401320361271255,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.000954732772864007,
+    0.05,
+    0.004401320361271255,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  ],
+  "u_last": [
+   0.000954732772864007,
+   0.05,
+   0.004401320361271255,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "u_prev": [
+   0.000992867345342543,
+   0.05,
+   0.004100819389751768,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "off_static": [
+   0.00037,
+   0.00856988219310169,
+   -0.007211870983293624,
+   -0.0007758165641422863,
+   0.0010274982884433059,
+   -0.00024404847696700608
+  ],
+  "ins": {
+   "s0": 0.149999943419094,
+   "v0": -8.472846631335401e-06,
+   "a0": -0.000844428734831837,
+   "T": 5.933514945934049
+  },
+  "T_ref": [
+   [
+    0.9999827352182333,
+    0.004841685047184907,
+    0.0033297674640103015,
+    0.7993975089927585
+   ],
+   [
+    -0.00484205711963509,
+    0.9999882717969631,
+    0.00010368881893687773,
+    -0.03876420704202532
+   ],
+   [
+    -0.003329226383217261,
+    -0.00011980995302784264,
+    0.999994450933236,
+    0.8472235489348983
+   ],
+   [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  ],
+  "t_obs_rel": -6.650000000000002,
+  "ref_ver": 2,
+  "win": [
+   0.0,
+   0.5176757472967024
+  ],
+  "app": {
+   "T": 5.933514945934049,
+   "T_b": 4.433514945934049,
+   "t_l0": 3.4335149459340486,
+   "d_line": 0.15,
+   "b0": [
+    0.9715705431477354,
+    -0.5082859711262121,
+    1.5758613369545977
+   ],
+   "T_rel0": [
+    [
+     -0.19074771934881676,
+     -0.024622826912544627,
+     0.9813302318577878,
+     0.36043915583065267
+    ],
+    [
+     0.004866898593755287,
+     -0.9996967974684247,
+     -0.024137655840059856,
+     -0.00489724308626549
+    ],
+    [
+     0.9816270273690018,
+     0.00017183192352015217,
+     0.19080972095909296,
+     0.5878169530275732
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  }
+ },
+ "takeover": {
+  "kind": "takeover",
+  "compute_ms": 33.3,
+  "wall_since_request_ms": 36.09,
+  "tail_src": "candidate_extra1",
+  "abort": null,
+  "stop": null,
+  "phase": "INSERT",
+  "ok": true,
+  "d_base": 0.0,
+  "d_arm": 0.0,
+  "d_s": 0.0,
+  "d_q": 0.0,
+  "guard_phase": 0,
+  "n_mod": 0,
+  "wall_prep_ms": 144.7,
+  "n_ctrl": 0
+ },
+ "by_mode": {
+  "grasp": {
+   "n": 88,
+   "n_commit": 88,
+   "roundtrip_ms": {
+    "p50": 32.3,
+    "p95": 36.3,
+    "max": 37.9,
+    "n_over_50": 0
+   }
+  },
+  "open": {
+   "n": 0,
+   "n_commit": 0,
+   "roundtrip_ms": null
+  }
+ },
+ "late": null,
+ "aborted": {
+  "why": "exception",
+  "t": 29.29,
+  "n": 2929,
+  "err": "Traceback (most recent call last):\n  File \"/home/howardchen/masterthesis/evaluation/motm_dry/world_d2_node.py\", line 208, in step\n    self._step()\n  File \"/home/howardchen/masterthesis/evaluation/motm_dry/world_d2_node.py\", line 277, in _step\n    self.submit_first(self.q.copy(), self.t - self.t_h)\n  File \"/home/howardchen/masterthesis/evaluation/motm_dry/world_d2_node.py\", line 424, in submit_first\n    hp = W_.DoorWBOpt(T_ref, np.eye(4), x_pred, GOAL, N=2, dt=0.2, T_HE=T_HE_pred, project_start=False)\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/howardchen/masterthesis/evaluation/door_wbopt.py\", line 166, in __init__\n    raise ValueError(f'start closure residual {e0:.3e} > 1e-6（實測起點與 T_HE 不一致；不投影）')\nValueError: start closure residual 3.101e-02 > 1e-6（實測起點與 T_HE 不一致；不投影）\n"
+ },
+ "settled_after_tail": null,
+ "chain_align": {
+  "policy": "整條放行流須與提案序列一致（每筆放行＝最新或前一筆提案；單調；每筆提案生效前須被確認）；違規或缺失 ⇒ 生效前拒絕",
+  "n_proposed": 89,
+  "n_effect_checked_ok": 88,
+  "n_missing": 0,
+  "n_differs": 0,
+  "n_releases": 88,
+  "n_pre_owner_releases": 0,
+  "lag_steps": {
+   "min": 5,
+   "p50": 5.0,
+   "max": 5
+  },
+  "delta_abs_max": 1.734723475976807e-18,
+  "d_steps": 8,
+  "tol": 1e-06,
+  "violation": null
+ },
+ "sim_s": 29.29,
+ "wall_s": 97.804,
+ "rtf_actual": 0.299,
+ "timer_late_steps": 1,
+ "phi_end_deg": 0.071,
+ "first_segment": null,
+ "handover": [],
+ "p2": [],
+ "ctrl_events": [],
+ "t_h": 24.85,
+ "T_true": [
+  [
+   0.9999853275688272,
+   0.0045657496129054296,
+   0.0029152319869825078,
+   0.7997313430306906
+  ],
+  [
+   -0.004565760548432585,
+   0.9999895768567697,
+   -2.903994643400037e-06,
+   -0.03888736207087842
+  ],
+  [
+   -0.0029152148600143767,
+   -1.0406299160954964e-05,
+   0.9999957506979864,
+   0.847334245287471
+  ],
+  [
+   0.0,
+   0.0,
+   0.0,
+   1.0
+  ]
+ ]
+}

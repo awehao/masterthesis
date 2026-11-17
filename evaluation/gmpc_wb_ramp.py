@@ -1689,6 +1689,13 @@ class GMPC:
                     ct_c.append((qf.copy(), ek[:3].copy()))
                 Pzz += 2.0 * L.T @ Wt @ L
                 qz += -2.0 * L.T @ Wt @ r0
+            if arm.get('q_post') is not None and float(arm.get('w_q', 0.0)) > 0.0:   # （主線修正 11/17）關節姿態偏好：只引導分支（門旁抓取分支），權重小於 TCP 任務；None＝原檔逐值相同
+                Qp = np.asarray(arm['q_post'], float).reshape(-1, ARM_N)
+                wq_ = float(arm['w_q'])
+                for k in range(N):
+                    qpk = Qp[min(k, len(Qp) - 1)]
+                    Pzz[nz:, nz:] += 2.0 * wq_ * Mq[k].T @ Mq[k]
+                    qz[nz:] += -2.0 * wq_ * Mq[k].T @ (qpk - cq[k])
             va = float(arm['v_arm'])
             Ra = np.eye(n_arm) * (float(arm['w_a']) / va ** 2)
             D = np.eye(n_arm) - np.eye(n_arm, k=-ARM_N)

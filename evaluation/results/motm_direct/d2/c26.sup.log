@@ -1,0 +1,55 @@
+#EARLY r2 {'A_LIN': 0.4, 'ALPHA': 1.0, 'margin': 0.97}
+#EARLY r2 {'A_LIN': 0.4, 'ALPHA': 1.0, 'margin': 0.97}
+#EARLY r3 {'T_LOOK': 0.5, 'EDGE': 40.0, 'D_RNG': (0.25, 1.2), 'RAY_CLR': 0.02}
+#EARLY r4 scene m8_house_r1 known 24
+[bcap2] worker ready {'sweep_s': 0.035, 'gc': 'frozen+manual_gen0_between_ticks'}
+#EARLY r3 {'T_LOOK': 0.5, 'EDGE': 40.0, 'D_RNG': (0.25, 1.2), 'RAY_CLR': 0.02}
+#EARLY r4 scene m8_house_r1 known 24
+[bcap2] planner ready {'sweep_s': 0.25, 'gc': 'frozen+manual_gen0_between_ticks'}
+[WARN] [1794895561.920873156] [rcl]: ROS_LOCALHOST_ONLY is deprecated but still honored if it is enabled. Use ROS_AUTOMATIC_DISCOVERY_RANGE and ROS_STATIC_PEERS instead.
+[WARN] [1794895561.920885866] [rcl]: 'localhost_only' is enabled, 'automatic_discovery_range' and 'static_peers' will be ignored.
+[bcap2] {"t": 8.65, "what": "prior", "goal_xy": [0.31000000000000005, -0.49], "yaw": 1.5707963267948966, "d": [-1.0, -0.0], "n": [0.0, -1.0], "handle_xy": [0.8, -0.04], "source": {"asset": "src/my_omnibot_description/config/door_local_v3.yaml", "sha256": "6b9628c3b2ab8a00f7de1322fa8a85291bcdfc7d9e321885f68a4e12b16bb324", "note": "名目位姿（門關閉）；不讀把手 prim 真值"}}
+[bcap2] {"t": 8.65, "what": "off_anchor", "ok": true, "planner": "off_anchor"}
+[bcap2] {"t": 8.65, "what": "mode", "mode": "NAV"}
+[bcap2] {"t": 8.9, "what": "region_plan_result", "t_req": 8.7, "t_done": 8.9, "wall_s": 0.667, "src": "prior", "ok": true, "why": null, "region": {"sb_c": 0.47, "half_width": 0.04, "sb_feasible": [0.43, 0.51], "aw_feasible": -0.1, "a_start": 0.6, "a_end": -0.35, "a_enter_by": 0.3, "enter_by": 0.3, "line": [[1.4, -0.51], [0.45000000000000007, -0.51]], "heading": 1.5707963267948966, "note": "離門距離候選只取 0.43–0.46（抓持窗口∩假世界整鏈可開門的種子
+[bcap2] {"t": 8.9, "what": "region_adopted", "plan_ver": 1, "src": "prior"}
+[bcap2] {"t": 9.2, "what": "estimate_set", "seqs": [45, 46, 47], "assoc": {"dxy_m": 0.0106, "dz_m": 0.0033, "dang_deg": 0.502}, "spread_mm": 4.26, "t_obs": 9.2}
+[bcap2] {"t": 9.45, "what": "region_plan_result", "t_req": 9.25, "t_done": 9.45, "wall_s": 0.666, "src": "estimate", "ok": true, "why": null, "region": {"sb_c": 0.47, "half_width": 0.04, "sb_feasible": [0.43, 0.51], "aw_feasible": -0.1, "a_start": 0.6, "a_end": -0.35, "a_enter_by": 0.3, "enter_by": 0.3, "line": [[1.405138104688063, -0.510867212252839], [0.4551663211283239, -0.5035452971803942]], "heading": 1.5630875359803922
+[bcap2] {"t": 9.45, "what": "mode", "mode": "APPROACH", "plan_ver": 2}
+[bcap2] saved
+Traceback (most recent call last):
+  File "/home/howardchen/masterthesis/evaluation/motm_b/b_d2_node.py", line 1083, in <module>
+    main()
+  File "/home/howardchen/masterthesis/evaluation/motm_b/b_d2_node.py", line 1070, in main
+    rclpy.spin_once(n, timeout_sec=0.01)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 226, in spin_once
+    executor.spin_once(timeout_sec=timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 926, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 918, in _spin_once_impl
+    raise handler.exception()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/task.py", line 286, in _execute_coroutine_step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 592, in handler
+    await call_coroutine()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 454, in _execute
+    await await_or_execute(tmr.callback)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 115, in await_or_execute
+    return callback(*args)
+           ^^^^^^^^^^^^^^^
+  File "/home/howardchen/masterthesis/evaluation/motm_b/b_d2_node.py", line 959, in tick
+    self.p_ho.publish(String(data=json.dumps(msg)))
+                                  ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/__init__.py", line 231, in dumps
+    return _default_encoder.encode(obj)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/encoder.py", line 200, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/encoder.py", line 258, in iterencode
+    return _iterencode(o, 0)
+           ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/encoder.py", line 180, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type ndarray is not JSON serializable
