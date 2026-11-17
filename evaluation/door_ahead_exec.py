@@ -102,9 +102,15 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
             else:                                                     # 沿已提交的 S_k 預測到 n_{k+1}（用產生 S_k 的那個控制器的受控對象模型）
                 qp = q
                 s_cur = s_before.copy()
+                pb = snap.get('pipe_base')                            # B（Codex 150510）：執行器已知的實際底盤（安全鏈放行值，依提案生效步＋拍內斜坡）覆蓋預測：本拍 nph 步＋控制器在途管線
                 for j in range(nph):
-                    qp = _plant(S, cfg_prev, qp, s_cur, seg_prev[j]['arm_target'], seg_prev[j]['base_twist'])
+                    bt_ = seg_prev[j]['base_twist'] if (pb is None or pb[j] is None) else np.asarray(pb[j], float)
+                    qp = _plant(S, cfg_prev, qp, s_cur, seg_prev[j]['arm_target'], bt_)
                     s_cur = np.asarray(seg_prev[j]['arm_target'], float)
+                if pb is not None and getattr(ctrl, 'pipe', None) is not None:
+                    for i_ in range(min(len(ctrl.pipe), len(pb) - nph)):
+                        if pb[nph + i_] is not None:
+                            ctrl.pipe[i_] = np.r_[np.asarray(pb[nph + i_], float), np.asarray(ctrl.pipe[i_], float)[3:]]
             if k_tick in late_ticks:                                  # 核對用：注入延遲（模擬計算晚到）
                 time.sleep(late_ticks[k_tick])
             if mode == 'open' and ('o%d' % k_open) in late_ticks:      # 開門段第 k_open 拍（交接後起算）

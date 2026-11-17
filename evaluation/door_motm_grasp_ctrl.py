@@ -261,6 +261,7 @@ class MovingGraspCtrl:
             rc.cmd_ramp_w = (0.4, 0.6) if XO.BASE_RAMP else None
             qb = np.asarray(getattr(self, 'base_q_diag', (100.0, 10.0, 50.0)), float)   # 本體 x（對門側向）與偏航加重、沿門（本體 y）照原值（c32／c33：原 10/10/5 時底盤被拖著補 TCP 誤差，側向偏 8 cm）
             rc.Q = np.diag(qb); rc.Qf = np.diag(5.0 * qb)
+            rc.wheel_w_max, rc.wheel_a_max = rc.wheel_w_max * XO.WHEEL_FRAC[0], rc.wheel_a_max * XO.WHEEL_FRAC[1]
             self.mpc = XO.GR.GMPC(rc)
             self.wg_log = []
         w0 = time.perf_counter()

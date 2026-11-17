@@ -111,6 +111,15 @@ _POOL_LOCKS = {}                                                     # A1：同�
 def _pool_lock(pool):
     import threading
     return _POOL_LOCKS.setdefault(id(pool), threading.Lock())
+LENIENT_SHELL = os.environ.get('D2_LENIENT', '0') == '1'
+LENIENT_SHELL_FLOOR = 0.003
+def _lenient_shell_ok(b_):
+    """寬鬆展示（D2_LENIENT）：預測停止路徑只有外殼—橫桿低於門檻且 ≥3 mm ⇒ 只記錄、不擋（實測淨空與其他項照舊）。"""
+    bad_ = set((b_ or {}).get('clear_bad') or [])
+    return bool(LENIENT_SHELL and bad_ and bad_ <= {'shell_bar'} and float(((b_ or {}).get('at') or {}).get('shell_bar', 0.0)) >= LENIENT_SHELL_FLOOR)
+
+
+WHEEL_FRAC = tuple(float(x) for x in os.environ.get('DOOR_WHEEL_FRAC', '1.0,1.0').split(','))   # 控制器端輪速／輪加速度上限比例（預設 1＝原值）
 BASE_RAMP = True                                                    # r4：底盤命令在一個控制拍內逐物理步線性過渡（管線、預測、停止掃掠同一語意）
 
 
@@ -194,6 +203,7 @@ class DoorOpenExec:
         nc = B.nav_cfg()
         rc = GR.GMPCConfig(**{f.name: getattr(nc, f.name) for f in dataclasses.fields(nc)})
         rc.cmd_ramp_w = (0.4, 0.6) if BASE_RAMP else None             # r5：GMPC 底盤預測與 ramp_cmd 同語意（20…100% ⇒ 平均 0.4·u_{k−1}＋0.6·u_k）
+        rc.wheel_w_max, rc.wheel_a_max = rc.wheel_w_max * WHEEL_FRAC[0], rc.wheel_a_max * WHEEL_FRAC[1]   # 控制器端輪級餘裕（GUARD 不動；c38：GUARD 依自身收件間隔算加速度，模擬時鐘抖動下縮放命令 ⇒ 放行≠提案）
         self.mpc = GR.GMPC(rc)
         self.arm_mode = str(arm_mode)                                # r6：'qp'＝全身 QP 的手臂輸出（r5 預設）；'closure'＝A 閉鏈一致設定點（命令生效時刻的預測底盤＋預測門角解 IK）
         assert self.arm_mode in ('qp', 'closure')
@@ -696,7 +706,7 @@ class DoorOpenExec:
             cp, cr = self.fb_closure_inject(self, cp, cr)
         self.mins['stop_closure_pos'], self.mins['stop_closure_rot'] = max(self.mins['stop_closure_pos'], cp), max(self.mins['stop_closure_rot'], cr)
         bad = [k for k in KEYS if mn[k] < W.THR[k]]
-        ok = bool(not bad and cp <= CL_TOL['pos_m'] and cr <= CL_TOL['rot_deg'])
+        ok = bool((not bad or _lenient_shell_ok(dict(clear_bad=bad, at=mn))) and cp <= CL_TOL['pos_m'] and cr <= CL_TOL['rot_deg'])   # 寬鬆展示：只外殼—橫桿且 ≥3 mm 時不算失敗（記錄另見 lenient_log）
         info = dict(law='cstop', tag=tag, n_ticks=r['n_ticks'], sim_ms=round(r['sim_ms'], 1), min_clear={k: round(v, 4) for k, v in mn.items()}, closure_pos_mm=round(cp * 1e3, 3), closure_rot_deg=round(cr, 3), n_samples=len(res), xd_ver=self._xd_ver)
         return (dict(tag=tag, clear_bad=bad, at={k: round(v, 4) for k, v in mn.items()}) if bad else None), ok, info
 
@@ -851,8 +861,8 @@ class DoorOpenExec:
             self.pool_ms.append(dict(stream_fw=box.get('fw_ms')))
             bad, ok, info = self._cs_judge(r, res, tag)
             self._cand_tr = r.get('tr')
-            self._cand_out = r.get('out') if (ok and bad is None) else None
-            self._cand_X, self._cand_props = (r.get('X'), r.get('props')) if (ok and bad is None) else (None, None)
+            self._cand_out = r.get('out') if (ok and (bad is None or _lenient_shell_ok(bad))) else None
+            self._cand_X, self._cand_props = (r.get('X'), r.get('props')) if (ok and (bad is None or _lenient_shell_ok(bad))) else (None, None)
             if not ok and bad is None:
                 self.n_emerg_closure += 1
                 return 'infeasible', None, dict(why='closure_over_tol', closure_pos_mm=info['closure_pos_mm'], closure_rot_deg=info['closure_rot_deg'])
@@ -878,8 +888,8 @@ class DoorOpenExec:
             return 'missing', None, dict(why='pool_' + str(why))
         bad, ok, info = self._cs_judge(r, res, tag)
         self._cand_tr = r.get('tr')                                    # 診斷用：候選核對的逐拍預測
-        self._cand_out = r.get('out') if (ok and bad is None) else None   # 只有核過的停止模擬才可當尾段
-        self._cand_X, self._cand_props = (r.get('X'), r.get('props')) if (ok and bad is None) else (None, None)
+        self._cand_out = r.get('out') if (ok and (bad is None or _lenient_shell_ok(bad))) else None   # 只有核過的停止模擬才可當尾段
+        self._cand_X, self._cand_props = (r.get('X'), r.get('props')) if (ok and (bad is None or _lenient_shell_ok(bad))) else (None, None)
         if not ok and bad is None:                                     # 提交後的停止預測閉鏈超限 ⇒ 提交後沒有合格備援 ⇒ 候選不得提交
             self.n_emerg_closure += 1
             return 'infeasible', None, dict(why='closure_over_tol', closure_pos_mm=info['closure_pos_mm'], closure_rot_deg=info['closure_rot_deg'])
@@ -1246,7 +1256,10 @@ class DoorOpenExec:
                     if why_c is not None:
                         self._stop('candidate_sweep_unavailable', pool_why=why_c)
                     elif b_ is not None:
-                        self._stop('candidate_stop_violation', **b_)
+                        if _lenient_shell_ok(b_):
+                            self.__dict__.setdefault('lenient_log', []).append(dict(t=round(self.t, 3), why='candidate_stop_shell_bar', at=b_.get('at')))   # 寬鬆展示：預測停止路徑外殼—橫桿 ≥3 mm 只記錄（實測淨空與其他項照舊停止）
+                        else:
+                            self._stop('candidate_stop_violation', **b_)
                 if self.stop is None and self.g2['deadline_ms'] is not None and ((time.perf_counter() - w_t) * 1e3 > self.g2['deadline_ms'] or (self.deadline_inject is not None and self.deadline_inject(self))):
                     self._deadline_stop((time.perf_counter() - w_t) * 1e3, 'candidate')   # r10：晚到候選不提交
                 if self.stop is None:

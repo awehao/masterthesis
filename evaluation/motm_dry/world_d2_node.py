@@ -31,6 +31,7 @@ import door_p2_planner_server as PS                                  # noqa: E40
 import wrist_v0_capture as W0                                        # noqa: E402
 FSP = PS.PlannerServer()                                             # D2 首段規劃程序（背景）
 FS_LEAD = float(os.environ.get('D2_FS_LEAD', '1.5'))
+REL_EXEC = os.environ.get('D2_REL_EXEC', '1') == '1'          # B（Codex 150510）：執行與預測用安全鏈實際放行值
 LENIENT = os.environ.get('D2_LENIENT', '0') == '1'
 D2_PHASE_ALIGN = os.environ.get('D2_PHASE_ALIGN', '1') == '1'
 TOL = dict(base=float(os.environ.get('D2_TOL_BASE', '2e-3')), arm=1e-9)   # 交權時實際管線對預測的容差（底盤 m/s、rad/s；手臂命令須逐值相同）
@@ -109,6 +110,7 @@ class WorldD2(Node):
         self.stage = 'approach'                                      # approach → prep → run → hold → end
         self.cmd, self.cmd_t, self.acmd, self.acmd_t = np.zeros(3), -1.0, np.zeros(6), -1.0
         self.rx_steps, self.rx_log = [], []
+        self.my_props, self.bsched, self.n_rel_late, self.rel_dev_max, self.rel_dev_log = [], [], 0, 0.0, []   # B：提案（步、生效步、已放行）、放行排程（生效步、值、前值）
         self.ca, self.n0, self.bindinfo, self.hold, self.last_arm = None, None, None, None, None
         self.tail_props, self.tail_k0 = None, None
         self.ho, self.prep, self.fs = None, None, None
@@ -147,6 +149,34 @@ class WorldD2(Node):
         self.cmd, self.cmd_t = v, self.t
         if self.ca is not None:
             self.ca.on_release(self.n, v)
+        if REL_EXEC and self.stage in ('run', 'hold') and self.my_props:
+            js = [p_ for p_ in self.my_props if p_[0] <= self.n]
+            if js:
+                cands_ = js[-2:]                                     # 放行延遲可能超過一拍：在最新與前一筆提案中取值最接近者（同 ChainAlign 的 j／j−1；c40：只取最新使放行提早一拍生效）
+                p_ = min(cands_, key=lambda c_: float(np.abs(v - c_[3]).max())); p_[2] = True
+                k0 = p_[1] if p_[1] > self.n else self.n + 1
+                if p_[1] <= self.n:
+                    self.n_rel_late += 1
+                if self.bsched and self.bsched[-1][0] == k0:
+                    self.bsched[-1] = (k0, v.copy(), self.bsched[-1][2])
+                elif not self.bsched or self.bsched[-1][0] < k0:
+                    vp_ = self.base_at(k0 - 1)
+                    self.bsched.append((k0, v.copy(), vp_ if vp_ is not None else v.copy()))
+
+    def base_at(self, n):
+        """B：步 n 實際套用的底盤命令＝最近一筆已生效放行值，自生效步起拍內斜坡（同控制器 ramp_cmd 語意）；無排程 ⇒ None。"""
+        e = None
+        for e_ in reversed(self.bsched):
+            if e_[0] <= n:
+                e = e_; break
+        if e is None:
+            return None
+        a = min(n - e[0] + 1, NPH) / NPH
+        return e[2] + a * (e[1] - e[2])
+
+    def base_known(self, n):
+        """步 n 的實際底盤是否已確定（所有生效步 ≤ n 的提案都已收到放行）。"""
+        return all(p_[2] for p_ in self.my_props if p_[1] <= n)
 
     def _acmd(self, m):
         if self.stage == 'approach' and len(m.data) == 6 and np.isfinite(m.data).all():
@@ -185,6 +215,7 @@ class WorldD2(Node):
 
     def propose(self, u, n_eff=None):
         u = np.asarray(u, float)
+        self.my_props.append([self.n, (self.n + D_STEPS) if n_eff is None else int(n_eff), False, u.copy()])
         if self.ca is not None:
             self.ca.propose(self.n, u, n_eff=n_eff)
         m = Twist(); m.linear.x, m.linear.y, m.angular.z = (float(x) for x in u)
@@ -292,6 +323,9 @@ class WorldD2(Node):
                         runner.extra = dict(door_rebind=dict(T_plan=self.fs['T_plan'].tolist(), T_HE_pred=self.fs['T_HE_pred'].tolist(), x_pred=self.fs['x_pred'].tolist(), Xd=np.asarray(Xd, float).tolist(),
                                                              ok=bool(feas), t_avail=self.t - self.t_h + NPH * PHYS, t_ready_pred=self.fs['t_ready_rel']))
             if k % NPH == 0:
+                if REL_EXEC and k > 0:
+                    pb_ = [(self.base_at(self.n + i_).tolist() if (self.base_known(self.n + i_) and self.base_at(self.n + i_) is not None) else None) for i_ in range(NPH + D_STEPS)]
+                    runner.extra = dict(getattr(runner, 'extra', None) or {}, pipe_base=pb_)
                 if k == 0:
                     runner.tick_boundary(self.q, self.t - self.t_h + NPH * PHYS, 0, phi=self.phi)
                     self.propose(runner.prop0)
@@ -338,6 +372,14 @@ class WorldD2(Node):
         if self.stage in ('run', 'hold') and o is not None:
             self.last_arm = np.asarray(o['arm_target'], float).copy()
             tw = o['base_twist']
+            if REL_EXEC:                                             # B：執行安全鏈實際放行值（不是被平滑器改寫前的提案）
+                b_ = self.base_at(self.n)
+                if b_ is not None:
+                    self.rel_dev_max = max(self.rel_dev_max, float(np.abs(np.asarray(b_) - np.asarray(tw, float)).max()))
+                    dv_ = float(np.abs(np.asarray(b_) - np.asarray(tw, float)).max())
+                    if dv_ > 0.003 and len(self.rel_dev_log) < 80:
+                        self.rel_dev_log.append(dict(n=self.n, k=self.n - self.n0, stage=self.stage, mode=runner.mode, applied=[round(float(x), 4) for x in b_], ctrl=[round(float(x), 4) for x in tw], dev=round(dv_, 4)))
+                    tw = b_
             cs, sn = math.cos(self.q[2]), math.sin(self.q[2])
             self.q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2]])
             self.q[3:] = self.q[3:] + al * dead(o['arm_target'] - self.q[3:] + dq(self.q))
@@ -485,7 +527,7 @@ class WorldD2(Node):
             by[m_] = dict(n=len(L_), n_commit=sum(1 for r in L_ if r.get('commit')), roundtrip_ms=None if not len(a) else dict(p50=round(float(np.median(a)), 1), p95=round(float(np.percentile(a, 95)), 1), max=round(float(a.max()), 1), n_over_50=int((a > 50).sum())))
         R = np.array(self.rows, float)
         wall = float(R[-1, -1]) if len(R) else 0.0
-        self.meta.update(by_mode=by, late=runner.late, aborted=self.aborted, settled_after_tail=None if self.hold is None else self.hold['verified'], chain_align=None if self.ca is None else self.ca.report(),
+        self.meta.update(rel_exec=dict(on=REL_EXEC, n_sched=len(self.bsched), n_late=self.n_rel_late, dev_max_vs_proposal=round(self.rel_dev_max, 5), dev_log=self.rel_dev_log, late_props=[p_[:3] for p_ in self.my_props if not p_[2]][:20]), by_mode=by, late=runner.late, aborted=self.aborted, settled_after_tail=None if self.hold is None else self.hold['verified'], chain_align=None if self.ca is None else self.ca.report(),
                          sim_s=round(self.t, 3), wall_s=round(wall, 3), rtf_actual=round(self.t / wall, 3) if wall > 0 else None, timer_late_steps=self.late_steps,
                          phi_end_deg=round(math.degrees(self.phi), 3), first_segment=None if self.fs is None else {k_: v_ for k_, v_ in self.fs.items() if k_ not in ('T_plan', 'T_HE_pred', 'x_pred')},
                          handover=[e for e in runner.events if e.get('what') == 'handover_trial_is_tick'], p2=[e for e in runner.events if e.get('what') in ('p2_result', 'staged')],

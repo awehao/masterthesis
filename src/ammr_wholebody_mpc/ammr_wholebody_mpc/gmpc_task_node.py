@@ -18,6 +18,7 @@
   - /task/region_status：側向誤差、沿走廊位置、是否在區域內（|側向| ≤ half_width）、階段（approach／inside）。
   區域只改參考路徑；CBF、Shield、GUARD、速度限制與求解器不變。"""
 import json
+import os
 import math
 
 import numpy as np
@@ -53,6 +54,15 @@ class GMPCTaskNode(GMPCNode):
         from std_msgs.msg import Float64MultiArray
         self._t_pred_pub = self.create_publisher(Float64MultiArray, '/task/gmpc_pred', 10)
         self._t_F64 = Float64MultiArray
+        # 共同核心（Howard 20261117：導航與操作都用同一個 gmpc_wb；導航內容不動）：求解器物件換成 gmpc_wb.GMPC，設定逐欄照抄原導航設定、
+        #   節點與求解器共用同一個設定物件（節點暫改 u_min 的行為不變）；不傳 arm ⇒ 原底盤問題（離線 40 例含障礙與 CBF，u_opt 與封存 gmpc 逐位元相同）。
+        #   GMPC_WB_CORE=0 退回封存 gmpc。
+        if os.environ.get('GMPC_WB_CORE', '1') == '1':
+            import dataclasses as _dc
+            from . import gmpc_wb as _WB
+            self._cfg = _WB.GMPCConfig(**{f.name: getattr(self._cfg, f.name) for f in _dc.fields(type(self._cfg))})
+            self.mpc = _WB.GMPC(self._cfg)
+            self.get_logger().info('gmpc_task_node: solver core = gmpc_wb (arm hold)')
         _orig_solve = self.mpc.solve
 
         def _solve_pub(X_now, X_ref_win, xi_ref_win, xi_prev, obstacles=None, _o=_orig_solve):
