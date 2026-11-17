@@ -731,7 +731,17 @@ def main():
                 stage.GetPrimAtPath(JOINT).GetAttribute('physics:jointEnabled').Set(False)
                 bound, released, bind_pending = False, True, False
                 ev('unbind_fixed_joint', door_deg=round(math.degrees(phi_now), 4), n=int(n_now))
-            unb_ok = released and not bound and not bool(stage.GetPrimAtPath(JOINT).GetAttribute('physics:jointEnabled').Get())   # 回報前確認關節屬性確實停用
+            unb_ok = False
+            if released:                                               # 回報前確認：關節與屬性有效、讀回明確為 False；解綁後若讀回啟用或關節失效 ⇒ 工程中止
+                jp_ = stage.GetPrimAtPath(JOINT)
+                at_ = jp_.GetAttribute('physics:jointEnabled') if (jp_ and jp_.IsValid()) else None
+                v_ = at_.Get() if (at_ is not None and at_.IsValid()) else None
+                unb_ok = (v_ is False) and not bound
+                if v_ is not False and latch is None:
+                    latch = dict(t=round(t, 3), why='unbind_not_confirmed', value=str(v_), bound=bool(bound), kind='模擬工程中止（解綁後關節未確認停用；保留現場資料、不再步進物理）')
+                    ev('latched_sim_engineering_abort', **latch)
+                    node.p_state.publish(String(data='latched:' + latch['why']))
+                    break
             if unb_ok and k % 10 == 0:                                 # 解綁生效回報（重送，直到收尾）
                 node.p_ack.publish(String(data=json.dumps(dict(what='unbound', n=int(n_now), req=getattr(node, 'd2_unbind_req', None)))))
             for i, j in zip(idx, range(6)):
