@@ -597,7 +597,7 @@ def main():
 
     exc = None
     scans = []
-    d2_stat, d2_last, bound, bind_pending, fcmd, released = dict(late=0, on_time=0), None, False, False, FINGER_OPEN, False
+    d2_stat, d2_last, bound, bind_pending, fcmd, released, f_hold = dict(late=0, on_time=0), None, False, False, FINGER_OPEN, False, None
     pace_off = 0.0
     try:
         for k in range(n_steps):
@@ -722,6 +722,8 @@ def main():
                     j_.CreateJointEnabledAttr().Set(True)
                     j_.CreateBreakForceAttr().Set(float('inf')); j_.CreateBreakTorqueAttr().Set(float('inf'))
                     bound = True
+                    f_hold = float(jp[f1])                             # 綁定實際生效時鎖存手指開度（Codex 第十趟：理想綁定下載荷由 FixedJoint 承擔，手指不再朝全閉持續施力）
+                    ev('finger_hold_latched', finger1=round(float(jp[f1]), 6), finger2=round(float(jp[f2]), 6))
                     ev('bind_fixed_joint', door_deg=round(math.degrees(phi_now), 4), rel_pos=[round(float(v), 5) for v in Rr0[:3, 3]], note='理想抓持假設（FixedJoint）')
             if node.d2_bind and not bound and not released:
                 bind_pending = True
@@ -733,7 +735,7 @@ def main():
                 node.p_ack.publish(String(data=json.dumps(dict(what='unbound', n=int(n_now), req=getattr(node, 'd2_unbind_req', None)))))
             for i, j in zip(idx, range(6)):
                 tgt[i] = float(s[j])
-            tgt[f1] = fcmd
+            tgt[f1] = f_hold if (bound and not released and f_hold is not None) else fcmd   # 綁定中保持鎖存開度（名目段、停止尾段的閉爪命令都不覆寫）；解綁後照命令（張開）
             apply(tgt)
             base_cmd(ue[:3], float(q[2]))
             # ---- 發布

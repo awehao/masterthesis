@@ -183,10 +183,46 @@ def qp_kkt_check(P, q, A, l, u, x, y, tol_p=1e-8, tol_d=1e-6, tol_c=1e-6):
 
 
 class QPTimeBudget(Exception):
-    """整個 QP 流程（GI＋備援 OSQP）超過呼叫端給的絕對期限（Codex 第九趟裁定）：呼叫端照晚到處置，不提交、不接受未過殘差核對的解。"""
+    """整個 QP 流程（GI＋備援 OSQP）超過呼叫端給的絕對期限（Codex 第九趟裁定）：呼叫端照晚到處置，不提交、不接受未過殘差核對的解。
+    dump＝當拍矩陣（參考）與分項耗時，供呼叫端背景存檔。"""
+    def __init__(self, msg, dump=None):
+        super().__init__(msg)
+        self.dump = dump
 
 
 SLOW_QP_MS = float(os.environ.get('GMPC_SLOW_QP_MS', '100'))         # 慢成功拍存檔門檻（組裝＋GI＋OSQP 總和）
+
+
+GI_INC = os.environ.get('GMPC_GI_INC', '1') == '1'
+GI_REFRESH = 64                                                       # 每隔幾次增量更新改回直接求反（控制累積誤差）
+
+
+def _gi_inv_add(Minv, c, d, n_upd):
+    """M＝N P⁻¹ Nᵀ 加一列（c＝N P⁻¹ n、d＝n P⁻¹ n）後的反矩陣（區塊／Schur 補）；需要重算時回 None。"""
+    if Minv is None or Minv.shape[0] == 0 or c.size == 0:
+        return np.array([[1.0 / d]]) if (c.size == 0 and d > 0) else None
+    if n_upd % GI_REFRESH == GI_REFRESH - 1:
+        return None
+    u_ = Minv @ c
+    s_ = d - float(c @ u_)
+    if not (s_ > 1e-14 * max(d, 1e-300)):
+        return None
+    k = Minv.shape[0]
+    out = np.empty((k + 1, k + 1))
+    out[:k, :k] = Minv + np.outer(u_, u_) / s_
+    out[:k, k] = -u_ / s_
+    out[k, :k] = -u_ / s_
+    out[k, k] = 1.0 / s_
+    return out
+
+
+def _gi_inv_drop(Minv, j, n_upd):
+    """移除第 j 列／行後子矩陣的反矩陣：A − b bᵀ／d。"""
+    if Minv is None or Minv.shape[0] <= 1 or n_upd % GI_REFRESH == GI_REFRESH - 1:
+        return None
+    keep = np.r_[0:j, j + 1:Minv.shape[0]]
+    b_ = Minv[keep, j]
+    return Minv[np.ix_(keep, keep)] - np.outer(b_, b_) / Minv[j, j]
 
 
 def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800, deadline=None):
@@ -202,6 +238,7 @@ def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800, deadline=None):
     As = A.tocsr()
     x = -cho_solve(cf, q)
     act, sgn, Nr, PiN, mu = [], [], [], [], np.zeros(0)
+    Minv, Mm, n_upd = None, None, 0
     for step in range(max_steps):
         if deadline is not None and time.perf_counter() > deadline:
             return None, None, dict(ok=False, why='time_budget', steps=step, solver='gi')
@@ -216,7 +253,20 @@ def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800, deadline=None):
         Hn = cho_solve(cf, n)
         up = 0.0
         while True:
-            if act:
+            if act and GI_INC:                                        # 增量版（Codex 第九趟慢拍）：(N P⁻¹ Nᵀ)⁻¹ 以區塊更新維護，數學同原式；最後仍過原 KKT 核對
+                N_, Pi = np.array(Nr), np.array(PiN).T
+                if Minv is None or Minv.shape[0] != len(act) or Mm is None or Mm.shape[0] != len(act):
+                    Mm = N_ @ Pi
+                    try:
+                        Minv = np.linalg.inv(Mm)
+                    except np.linalg.LinAlgError:
+                        return None, None, dict(ok=False, why='singular', steps=step, solver='gi')
+                bb = N_ @ Hn
+                r = Minv @ bb
+                for _ in range(2):                                    # 迭代精修（殘差用維護中的 M，O(k²)）
+                    r = r + Minv @ (bb - Mm @ r)
+                zd = Hn - Pi @ r
+            elif act:
                 N_, Pi = np.array(Nr), np.array(PiN).T
                 try:
                     r = np.linalg.solve(N_ @ Pi, N_ @ Hn)
@@ -240,8 +290,25 @@ def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800, deadline=None):
             mu = mu - t * r
             up += t
             if t2 <= t1:
+                if GI_INC:
+                    c_ = np.array(Nr) @ Hn if act else np.zeros(0)
+                    d_ = float(n @ Hn)
+                    Minv = _gi_inv_add(Minv, c_, d_, n_upd)
+                    if Mm is not None and Mm.shape[0] == len(act) and len(act):
+                        Mm = np.block([[Mm, c_[:, None]], [c_[None, :], np.array([[d_]])]])
+                    else:
+                        Mm = None
+                    n_upd += 1
                 act.append(i); sgn.append(sg); Nr.append(n); PiN.append(Hn); mu = np.r_[mu, up]
                 break
+            if GI_INC:
+                Minv = _gi_inv_drop(Minv, drop, n_upd)
+                if Mm is not None and Mm.shape[0] == len(act):
+                    kp_ = np.r_[0:drop, drop + 1:Mm.shape[0]]
+                    Mm = Mm[np.ix_(kp_, kp_)]
+                else:
+                    Mm = None
+                n_upd += 1
             act.pop(drop); sgn.pop(drop); Nr.pop(drop); PiN.pop(drop); mu = np.delete(mu, drop)
     else:
         return None, None, dict(ok=False, why='steps', steps=max_steps, solver='gi')
@@ -1850,14 +1917,15 @@ class GMPC:
                 gx, gy, gi = qp_dual_active(P_sp, q_vec, A_total, lb_total, ub_total, deadline=arm.get('t_deadline'))
                 qp_info = dict(solver='gi' if gx is not None else 'osqp', gi_why=gi.get('why'), gi_ms=(time.perf_counter() - t_gi) * 1e3, osqp_ms=None, gi_steps=gi.get('steps'), asm_ms=t_asm * 1e3)
                 if gi.get('why') == 'time_budget':
-                    raise QPTimeBudget('gi time_budget at step %s (%.1f ms)' % (gi.get('steps'), qp_info['gi_ms']))
+                    raise QPTimeBudget('gi time_budget at step %s (%.1f ms)' % (gi.get('steps'), qp_info['gi_ms']),
+                                       dump=dict(P=P_sp, q=np.asarray(q_vec, float).copy(), A=A_total, l=np.asarray(lb_total, float).copy(), u=np.asarray(ub_total, float).copy(), marks=list(locals().get('_rm', [])), info=dict(qp_info)))
                 if gx is not None:
                     res = SimpleNamespace(x=gx, y=gy, info=SimpleNamespace(status='solved'))
         if res is None:
             t_os = time.perf_counter()
             tdl_ = arm.get('t_deadline') if (n_arm and arm is not None) else None
             if tdl_ is not None and tdl_ - t_os <= 0.0:
-                raise QPTimeBudget('no time left for OSQP fallback')
+                raise QPTimeBudget('no time left for OSQP fallback', dump=dict(P=P_sp, q=np.asarray(q_vec, float).copy(), A=A_total, l=np.asarray(lb_total, float).copy(), u=np.asarray(ub_total, float).copy(), marks=list(locals().get('_rm', [])), info=dict(qp_info or {})))
             prob = osqp.OSQP()
             # 耦合問題備援比照 W-GMPC：QP 容差須緊於殘差核對門檻 1e-6（eps 1e-5 實測手臂限制殘差 6.3e-6）
             prob.setup(P=P_sp, q=q_vec, A=A_total, l=lb_total, u=ub_total,
@@ -1869,7 +1937,7 @@ class GMPC:
             if n_arm:
                 qp_info['osqp_ms'] = (time.perf_counter() - t_os) * 1e3
                 if tdl_ is not None and 'time limit' in str(res.info.status).lower():
-                    raise QPTimeBudget('osqp time limit (%.1f ms)' % qp_info['osqp_ms'])
+                    raise QPTimeBudget('osqp time limit (%.1f ms)' % qp_info['osqp_ms'], dump=dict(P=P_sp, q=np.asarray(q_vec, float).copy(), A=A_total, l=np.asarray(lb_total, float).copy(), u=np.asarray(ub_total, float).copy(), marks=list(locals().get('_rm', [])), info=dict(qp_info, osqp_status=str(res.info.status), osqp_iter=int(getattr(res.info, 'iter', -1)))))
                 qp_info.update(osqp_status=str(res.info.status), osqp_iter=int(getattr(res.info, 'iter', -1)), osqp_pri_res=float(getattr(res.info, 'pri_res', float('nan'))), osqp_dua_res=float(getattr(res.info, 'dua_res', float('nan'))))
                 if str(res.info.status) != 'solved':                   # 失敗拍可重現資料（Codex 190256）：P,q,A,l,u＋約束類別
                     qp_info['dump'] = dict(P=np.asarray(P_dense, float), q=np.asarray(q_vec, float), A=A_total.toarray(), l=np.asarray(lb_total, float), u=np.asarray(ub_total, float),

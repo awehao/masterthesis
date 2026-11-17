@@ -1047,6 +1047,15 @@ class DoorOpenExec:
         except GR.QPTimeBudget as e_:
             self._qp_tb = dict(t=round(self.t, 3), why=str(e_)[:120], elapsed_ms=round((time.perf_counter() - self._w_tick) * 1e3, 1))
             self.qp_tb_log = getattr(self, 'qp_tb_log', []) + [self._qp_tb]
+            if getattr(e_, 'dump', None) is not None and os.environ.get('DOOR_QP_DUMP_DIR'):   # 逾時拍也存當拍矩陣與分項（背景寫檔）
+                import threading
+                def _wr(sd=e_.dump, mt=dict(self._qp_tb, sigma=round(float(self.sigma), 5)), d_=os.environ['DOOR_QP_DUMP_DIR']):
+                    try:
+                        os.makedirs(d_, exist_ok=True)
+                        np.savez(os.path.join(d_, 'timebudget_t%07.3f.npz' % mt['t']), P=sd['P'].toarray(), q=sd['q'], A=sd['A'].toarray(), l=sd['l'], u=sd['u'], meta=json.dumps(dict(mt, info=sd.get('info'), marks=sd.get('marks')), default=str))
+                    except Exception:                                 # noqa: BLE001
+                        pass
+                threading.Thread(target=_wr, daemon=True).start()
             return None
         except ValueError as e_:                                       # 底盤名目點在門扇箱內 ⇒ 明確不可行 ⇒ 求解失敗處置（原停止）
             if 'base_keepout' not in str(e_):

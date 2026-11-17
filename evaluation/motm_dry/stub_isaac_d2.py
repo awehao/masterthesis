@@ -229,10 +229,11 @@ class Stub(Node):
                 b_ = self.base_at(n); tw = np.asarray(b_ if b_ is not None else pe_[:3], float)
                 if src_ == 'tail_end' and float(np.abs(tw).max()) > 1e-3:
                     self.abort = 'd2_tail_end_base_nonzero'; break
-                if np.isfinite(ent[1]):
+                if np.isfinite(ent[1]) and not isinstance(self.bind, dict):   # 綁定中保持鎖存開度（同 Isaac 執行器）；解綁後照命令
                     self.fing = float(ent[1])
             if self.bind == 'pending':
-                p_ = K.fk(self.q, 'link_tcp')[:3, 3]; self.bind = dict(ang=math.atan2(p_[1], p_[0]), phi=self.phi)
+                p_ = K.fk(self.q, 'link_tcp')[:3, 3]; self.bind = dict(ang=math.atan2(p_[1], p_[0]), phi=self.phi, f_hold=self.fing)
+                self.tail_log.append(dict(t=round(self.t, 3), what='finger_hold_latched', finger=self.fing))
             cs, sn = math.cos(self.q[2]), math.sin(self.q[2])
             self.q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2]])
             xb_ = XBIAS * min(max((self.t - XBIAS_T0) / XBIAS_RAMP, 0.0), 1.0) if XBIAS is not None else 0.0   # 外生偏差（替身核對用：模擬 Isaac 重力下垂比模型大；接近開始前後緩升）
@@ -265,7 +266,7 @@ class Stub(Node):
                 m.angle_min, m.angle_max, m.angle_increment = WN.SCAN_MIN, WN.SCAN_MAX, WN.SCAN_INC
                 m.range_min, m.range_max = WN.RANGE_MIN, WN.RANGE_MAX
                 m.ranges = [float(x) for x in r]; self.p_scan.publish(m)
-            self.rows.append([self.t, *self.q, self.phi, *tw, float(post), float(isinstance(self.bind, dict))])
+            self.rows.append([self.t, *self.q, self.phi, *tw, float(post), float(isinstance(self.bind, dict)), float(self.fing)])
             now = time.perf_counter()
             if now < tgt_w:
                 time.sleep(tgt_w - now)
