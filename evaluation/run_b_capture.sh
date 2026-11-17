@@ -19,7 +19,12 @@ DIR="$WS/evaluation/runs/$RUN_ID"; mkdir -p "$DIR"
 MEM_MAX="${MEM_MAX:-24G}"
 START="${START:-1.5,-2.8,1.5708}"; ARM="${ARM:--0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018}"
 SIM_LIMIT="${SIM_LIMIT:-90}"; RTF="${RTF:-0.3}"
-ISAAC_CPUS="${ISAAC_CPUS:-0,10,4,5,14,15}"; NAV_CPUS="${NAV_CPUS:-6,7,16,17}"; SUP_CPUS="${SUP_CPUS:-1,2,3,11}"; export B_PLANNER_CPUS="${B_PLANNER_CPUS:-12,13,8,9}"
+PLATFORM="${PLATFORM:-laptop}"
+case "$PLATFORM" in                                                  # 平台排程（另登錄、凍結）：laptop＝TUF A14（快核 0–3、10–13）；desktop＝9800X3D（邏輯核 i 與 i+8 同實體核，lscpu -e 核過）
+  desktop) D_ISAAC=0,8,1,9; D_NAV=2,10,7,15; D_SUP=3,11,4,12; D_PL=5,13,6,14 ;;
+  *)       D_ISAAC=0,10,4,5,14,15; D_NAV=6,7,16,17; D_SUP=1,2,3,11; D_PL=12,13,8,9 ;;
+esac
+ISAAC_CPUS="${ISAAC_CPUS:-$D_ISAAC}"; NAV_CPUS="${NAV_CPUS:-$D_NAV}"; SUP_CPUS="${SUP_CPUS:-$D_SUP}"; export B_PLANNER_CPUS="${B_PLANNER_CPUS:-$D_PL}"
 export B_RTF="$RTF" B_SWEEP_S="${B_SWEEP_S:-0.030}" B_POOL_N="${B_POOL_N:-3}" B_POOL_N_PL="${B_POOL_N_PL:-2}"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$DIR/run.log"; }
 if ! sha256sum -c --quiet "$FREEZE" > "$DIR/freeze_check.log" 2>&1; then
@@ -31,7 +36,7 @@ PAT="[s]can_safety_shield|[w]heel_limit_guard|[v]elocity_smoother|[g]mpc_node|[g
 n=$(pgrep -fc "$PAT" || true)
 if [ "$n" != "0" ]; then say "已有導航／乾跑節點在跑（$n 個）⇒ 拒跑"; exit 99; fi
 say "=== 主線 B 取像：RUN_ID=$RUN_ID START=$START SIM_LIMIT=$SIM_LIMIT RTF=$RTF domain=$ROS_DOMAIN_ID；凍結 $FREEZE 全部相符；機器 $(hostname)／$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)／$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)；電源 $(powerprofilesctl get 2>/dev/null)"
-say "排程：Isaac $ISAAC_CPUS；導航 $NAV_CPUS；監督 $SUP_CPUS（池 $B_POOL_N）；規劃 $B_PLANNER_CPUS（池 $B_POOL_N_PL）；每拍期限 45 ms、掃掠截止 $B_SWEEP_S s"
+say "平台 $PLATFORM 排程：Isaac $ISAAC_CPUS；導航 $NAV_CPUS；監督 $SUP_CPUS（池 $B_POOL_N）；規劃 $B_PLANNER_CPUS（池 $B_POOL_N_PL）；每拍期限 45 ms、掃掠截止 $B_SWEEP_S s"
 PIDS=()
 cleanup(){
   trap - EXIT
