@@ -96,6 +96,7 @@ class Stub(Node):
         self.create_subscription(Float64MultiArray, '/d2/out', self._out, 50)
         self.create_subscription(Float64MultiArray, '/d2/seg', self._seg, 50)
         self.segs, self.bsched, self.stat = [], [], dict(seg=0, tail=0, tail_end=0, no_segment=0)
+        self.tail_log = []
         self.create_subscription(String, '/d2/ctl', self._ctl, 20)
 
     def _cmd(self, m):
@@ -214,6 +215,8 @@ class Stub(Node):
                 if ent is None:
                     self.stat['no_segment'] += 1; self.abort = 'd2_no_valid_segment'; break
                 self.stat[src_] += 1
+                if src_ == 'tail' and len(self.tail_log) < 60:
+                    self.tail_log.append(dict(n=n, t=round(self.t, 3), segs=[sg[0] for sg in self.segs], behind_ms=round((time.perf_counter() - tgt_w) * 1e3, 1)))
                 tgt = np.asarray(ent[0], float); self.s = tgt.copy()
                 self.pipe = self.pipe[1:] + [np.zeros(9)]; pe_ = self.pipe[0]
                 b_ = self.base_at(n); tw = np.asarray(b_ if b_ is not None else pe_[:3], float)
@@ -256,7 +259,7 @@ class Stub(Node):
             now = time.perf_counter()
             if now < tgt_w:
                 time.sleep(tgt_w - now)
-        json.dump(dict(stat=self.stat, n0=self.n0, abort=self.abort, end=self.end, phi_end_deg=math.degrees(self.phi)), open(OUT + '_stub.json', 'w'), indent=1)
+        json.dump(dict(tail_log=self.tail_log, stat=self.stat, n0=self.n0, abort=self.abort, end=self.end, phi_end_deg=math.degrees(self.phi)), open(OUT + '_stub.json', 'w'), indent=1)
         np.savez_compressed(OUT + '_stub.npz', rows=np.array(self.rows, float))
 
 

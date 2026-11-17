@@ -372,7 +372,8 @@ class WorldD2(Node):
             elif self.ho is not None and self.stage == 'approach' and self.n >= int(self.ho['n_h']) - NPH:
                 self.begin_prep(u_b, u_a)
             if self.stage == 'prep' and self.n >= self.prep['n_h']:
-                if not self.commit():
+                c_ = self.commit()
+                if c_ is False:
                     return
             if self.stage in ('approach', 'prep'):
                 if ISAAC:
@@ -625,7 +626,16 @@ class WorldD2(Node):
         else:
             extra = d_base <= TOL['base'] and d_arm <= TOL['arm'] and d_s <= 1e-9 and d_q <= 1e-6
         ph = FCA.best_phase(self.rx_steps)
-        ok, rec = runner.commit_takeover(0, extra_ok=extra, why_not=None if extra else 'state_mismatch')
+        static_ = bool(self.ho.get('unified')) and float(np.abs(np.asarray(self.pipe)).max()) <= 1e-9   # 起點交權前整機靜止（在途管線全零）
+        wait_ = ISAAC and static_ and (time.perf_counter() - self.prep['w']) < 1.0
+        ok, rec = runner.commit_takeover(0, extra_ok=extra, why_not=None if extra else 'state_mismatch', wait_ok=wait_)
+        if not ok and rec.get('why') == 'waiting':                    # Isaac 起點交權：第一段結果未到（c：狀態訊息成批到達，準備→交權只隔 3.9 ms 牆鐘）⇒ 順延一整拍（維持相位），交權前整機靜止、不影響物理
+            self.prep['n_h'] += NPH
+            self.prep['n_wait'] = self.prep.get('n_wait', 0) + 1
+            return None
+        if ok and self.prep.get('n_wait'):
+            self.t_h = self.n * PHYS                                   # 控制器時間零點＝實際交權步（第一段以靜止狀態算，時間平移不影響）
+            rec['n_wait'] = self.prep['n_wait']
         rec.update(d_base=round(d_base, 6), d_arm=d_arm, d_s=d_s, d_q=d_q, guard_phase=ph, n_mod=self.n % NPH, wall_prep_ms=round((time.perf_counter() - self.prep['w']) * 1e3, 1))
         rec['n_ctrl'] = rec.pop('n', None)
         self.meta['takeover'] = rec

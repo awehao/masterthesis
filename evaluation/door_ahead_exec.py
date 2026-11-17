@@ -291,11 +291,14 @@ class AheadRunner:
         self.conn.send(('tick', snap))
         return self.ver
 
-    def commit_takeover(self, n_h, extra_ok=True, why_not=None):
+    def commit_takeover(self, n_h, extra_ok=True, why_not=None, wait_ok=False):
         """在接手步 n_h（套用本步輸出之前）呼叫：第一段結果已到、計算 ≤ 期限、附尾段、無中止，且呼叫端的前綴／版本／狀態驗收（extra_ok）成立 ⇒ 原子切換為名目；
-        否則 mode＝'nack'（遲到結果之後丟棄），回 (ok, 紀錄)。"""
+        否則 mode＝'nack'（遲到結果之後丟棄），回 (ok, 紀錄)。wait_ok＝True 且結果尚未到：不判 nack、保留待收（呼叫端順延；只用於交權前整機靜止的起點交權）。"""
         rec = dict(n=int(n_h), kind='takeover')
         self.poll()
+        if wait_ok and self.got is None and self.pending is not None:
+            rec.update(ok=False, why='waiting')
+            return False, rec
         got, self.got = self.got, None
         p = self.pending
         ok = False
