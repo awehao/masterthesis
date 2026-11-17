@@ -51,6 +51,11 @@ import multiprocessing as _mp                                    # noqa: E402
 
 def _det_worker(conn, fdir):
     """偵測＋估計程序（模擬器啟動前 fork）：收影格 → FL.HandleObs.intake → 回結果；並保存原始深度與彩色。"""
+    try:                                                              # 父行程結束即跟著結束（unified_1–_4：本程序繼承 Isaac 互斥鎖描述子，父行程退出後仍等管道而握鎖）
+        import ctypes as _ct, signal as _sg
+        _ct.CDLL('libc.so.6', use_errno=True).prctl(1, _sg.SIGTERM)
+    except Exception:                                                 # noqa: BLE001
+        pass
     sys.path.insert(0, HERE)
     import numpy as np_
     import door_far_link as FL_
@@ -895,6 +900,12 @@ if __name__ == '__main__':
         except Exception as e_:                                       # noqa: BLE001
             print(f'[fc] 離開碼寫檔失敗：{e_!r}', flush=True)
         print(f'[fc] exit_code {rc}（0 正常；70 模擬工程中止／保護鎖存；71 例外 partial）', flush=True)
-        print('[fc] 結果與離開碼已落盤 ⇒ 直接結束行程（不呼叫會卡住的 sim_app.close；unified_1／_2／_3 收尾卡住握鎖）', flush=True)
+        print('[fc] 結果與離開碼已落盤 ⇒ 結束偵測子程序後直接結束行程（不呼叫會卡住的 sim_app.close）', flush=True)
+        try:
+            _DET_P.terminate(); _DET_P.join(3.0)
+            if _DET_P.is_alive():
+                _DET_P.kill()
+        except Exception:                                             # noqa: BLE001
+            pass
         os._exit(rc)
     sys.exit(rc)
