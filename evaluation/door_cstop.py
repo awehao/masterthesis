@@ -17,6 +17,7 @@ T_STOP = 0.5
 K_HOLD = 2.0                                                         # 1/s：底盤保持比例增益（管線延遲 0.08 s ⇒ 增益×延遲＝0.16）
 HOLD_V = np.array([0.02, 0.02, 0.05])                                # 保持命令上限（m/s, m/s, rad/s）
 HOLD_DEAD = 1e-5                                                     # 保持命令死區（數值零）
+ACC_BLEND = __import__('os').environ.get('CSTOP_ACC_BLEND', '0') == '1'   # 停法有界過渡（預設關＝原行為）
 ARM_CMD_SETTLE = 0.005
 
 
@@ -114,6 +115,13 @@ class CStop:
         off = self.off0 + (self.grav(np.r_[b, q1]) - self.G0) / self.kp
         S1 = q1 + self.tau * (q1 - q0) / DT - off + self.FF.ff((q1 - q0) / DT, self.fric_ff, self.kp) + self.pr_delta   # 同執行層：庫倫摩擦前饋（參考速度歸零時自動收回）
         ua = (S1 - sp) / DT
+        if ACC_BLEND:                                                  # 有界過渡（Codex 20261117_183358）：停止自候選命令連續起算——手臂命令以 A_ARM 內斜坡接回閉鏈一致命令（不跳）；
+            lim_ = self.C0.A_ARM * DT                                  #   其後各取樣構型照原閉鏈殘差（CL_TOL）、淨空、速率、設定點限位核對；不過即不可行（不是裁剪後放行）
+            da_ = ua - np.asarray(u_prev[3:], float)
+            if float(np.abs(da_).max()) > lim_ + 1e-12:
+                ua = np.asarray(u_prev[3:], float) + np.clip(da_, -lim_, lim_)
+                S1 = sp + DT * ua
+                self.n_blend = getattr(self, 'n_blend', 0) + 1
         u = np.r_[ub, ua]
         if float(np.abs(ua).max()) > self.va + 1e-9:
             return dict(ok=False, why='arm_rate', v=float(np.abs(ua).max()))
