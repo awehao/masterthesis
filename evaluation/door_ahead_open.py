@@ -13,6 +13,7 @@
 import math
 import time
 
+import os
 import numpy as np
 
 
@@ -73,7 +74,7 @@ class DoorOpenPhase:
         T_HE_act = np.linalg.inv(self.first['T_plan']) @ self.K.fk(q, 'link_tcp')
         ho = dict(s=gc.s.copy(), pipe=[u_.copy() for u_ in gc.pipe], u_last=gc.u_last.copy(), u_prev=gc.u_prev.copy(), bias=np.asarray(gc.cfg.arm_model.bias, float).copy(), moving=True,
                   off_static=gc.off(q) if getattr(gc, 'G0', None) is not None else np.asarray(q, float)[3:] - gc.s)   # 起跑前預熱時抓持控制器尚未錨定（G0 未定）⇒ 用 q−s（只供丟棄用實例）
-        ex = X.DoorOpenExec(self.ident, Xd0, h0, self.first['T_plan'], self.phi_b, T_HE_act, self.goal, ho, self.fq, arm_mode='closure', g2=self.g2)
+        ex = X.DoorOpenExec(self.ident, Xd0, h0, self.first['T_plan'], self.phi_b, T_HE_act, self.goal, ho, self.fq, arm_mode=os.environ.get('DOOR_ARM_MODE', 'closure'), g2=self.g2)   # 主線修正 A：D2 用 'qp'（手臂＝全身 QP 輸出，不再以 IK 替換）
         ex.p2_open = True
         ex.rec_cand = True
         ex.stream_cand = self.stream                                  # A1：候選停法模擬分批送淨空池（判定不變）

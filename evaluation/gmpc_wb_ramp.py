@@ -1669,7 +1669,7 @@ class GMPC:
             qz = np.zeros(nz + n_arm)
             rel_base = bool(arm.get('tcp_rel_base'))      # True：T_seq 是底盤座標目標，TCP 任務與底盤解耦（持瓶相對底盤）；世界座標代價會讓 QP 以為動底盤能消除誤差
             ct = arm.get('contact_tube')                  # （候選，預設 None）{'e': 逐軸界 m, 'n': 前幾個未來控制步}：TCP 世界位置偏差硬列，只在世界座標模式；k＝0 是 u_0 作用後的第一個未來步，目前狀態不受此列約束
-            ct_L, ct_r, ct_c = [], [], []
+            ct_L, ct_r, ct_c, ct_Lr, ct_rr = [], [], [], [], []
             for k in range(N):
                 xb = np.zeros(3) if rel_base else _pose_from_err(X_ref_win[k + 1], e_nom[k])
                 qa = Mq[k] @ U0 + cq[k]
@@ -1683,10 +1683,12 @@ class GMPC:
                     L[:, :Nm] = J[:, :3] @ Bk @ Gamma[k * n:(k + 1) * n, :]
                 L[:, nz:] = J[:, 3:] @ Mq[k]
                 r0 = ek + L[:, nz:] @ U0                                  # e_k ≈ r0 − L·z
-                if ct is not None and not rel_base and k < int(ct['n']):  # 與 TCP 代價同一線性化，只取位置三列
+                if ct is not None and not rel_base and k < int(ct['n']):  # 與 TCP 代價同一線性化：位置三列；給 e_rot 時另加姿態三列（閉鏈：T_WE≈T_WH(φ_ref)·T_HE 的位置與姿態，主線修正 A）
                     ct_L.append(L[:3].copy())
                     ct_r.append(r0[:3].copy())
                     ct_c.append((qf.copy(), ek[:3].copy()))
+                    if ct.get('e_rot') is not None:
+                        ct_Lr.append(L[3:6].copy()); ct_rr.append(r0[3:6].copy())
                 Pzz += 2.0 * L.T @ Wt @ L
                 qz += -2.0 * L.T @ Wt @ r0
             if arm.get('q_post') is not None and float(arm.get('w_q', 0.0)) > 0.0:   # （主線修正 11/17）關節姿態偏好：只引導分支（門旁抓取分支），權重小於 TCP 任務；None＝原檔逐值相同
@@ -1729,6 +1731,12 @@ class GMPC:
                 lb_total = np.concatenate([lb_total, rct - float(ct['e'])])
                 ub_total = np.concatenate([ub_total, rct + float(ct['e'])])
                 arm_info['ct'] = (Act, rct, float(ct['e']), ct_c)
+            if ct_Lr:                                           # 姿態管道：|姿態誤差 逐軸| ≤ e_rot（同一線性化，不加鬆弛）
+                Acr, rcr = np.vstack(ct_Lr), np.concatenate(ct_rr)
+                A_total = sparse.vstack([A_total, sparse.csc_matrix(Acr)], format='csc')
+                lb_total = np.concatenate([lb_total, rcr - float(ct['e_rot'])])
+                ub_total = np.concatenate([ub_total, rcr + float(ct['e_rot'])])
+                arm_info['ct_rot'] = (Acr, rcr, float(ct['e_rot']))
             bo = arm.get('body_obst')
             if bo:                                              # 三維障礙：TCP 剛連點（夾爪、持瓶）的預測距離約束，底盤與手臂都在列內，耦合問題自己分配誰讓路
                 r_ob, l_ob, planes, by_body, row_body = [], [], [], {}, []

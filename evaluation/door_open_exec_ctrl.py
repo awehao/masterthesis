@@ -111,6 +111,7 @@ _POOL_LOCKS = {}                                                     # A1：同�
 def _pool_lock(pool):
     import threading
     return _POOL_LOCKS.setdefault(id(pool), threading.Lock())
+CL_ROWS = None if os.environ.get('DOOR_CL_ROWS', '1') != '1' else dict(e=float(os.environ.get('DOOR_CL_E', '0.006')), e_rot=math.radians(float(os.environ.get('DOOR_CL_EROT_DEG', '3.0'))), n=int(os.environ.get('DOOR_CL_N', '4')))
 LENIENT_SHELL = os.environ.get('D2_LENIENT', '0') == '1'
 LENIENT_SHELL_FLOOR = 0.003
 def _lenient_shell_ok(b_):
@@ -948,6 +949,8 @@ class DoorOpenExec:
             sk_ = sk_ + DT * u
         arm = dict(u_arm_nom=np.array(u_nom), mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=cfg.arm_model, T_seq=np.array(Ts), w_p=C0.W_NEAR,
                    lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=False, qp_solver='gi', **B.W_ARM)
+        if self.arm_mode == 'qp' and CL_ROWS is not None:              # 主線修正 A：閉鏈位置＋姿態硬列進同一全身 QP（目標 T_seq＝T_WH(φ_ref)·T_HE；底盤與手臂耦合同列）
+            arm['contact_tube'] = dict(CL_ROWS)
         w_pre = time.perf_counter()
         r = self.mpc.solve(X_now=from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=None)
         self.solve_ms.append((time.perf_counter() - w0) * 1e3)

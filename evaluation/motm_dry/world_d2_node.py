@@ -31,6 +31,7 @@ import door_p2_planner_server as PS                                  # noqa: E40
 import wrist_v0_capture as W0                                        # noqa: E402
 FSP = PS.PlannerServer()                                             # D2 首段規劃程序（背景）
 FS_LEAD = float(os.environ.get('D2_FS_LEAD', '1.5'))
+R_REM = int(os.environ.get('D2_R_REM', str(D_STEPS - NPH)))   # 放行收到後到執行器套用的剩餘延遲（步）：總延遲 D＝安全鏈一個 GUARD 週期（NPH）＋剩餘
 REL_EXEC = os.environ.get('D2_REL_EXEC', '1') == '1'          # B（Codex 150510）：執行與預測用安全鏈實際放行值
 LENIENT = os.environ.get('D2_LENIENT', '0') == '1'
 D2_PHASE_ALIGN = os.environ.get('D2_PHASE_ALIGN', '1') == '1'
@@ -149,19 +150,13 @@ class WorldD2(Node):
         self.cmd, self.cmd_t = v, self.t
         if self.ca is not None:
             self.ca.on_release(self.n, v)
-        if REL_EXEC and self.stage in ('run', 'hold') and self.my_props:
-            js = [p_ for p_ in self.my_props if p_[0] <= self.n]
-            if js:
-                cands_ = js[-2:]                                     # 放行延遲可能超過一拍：在最新與前一筆提案中取值最接近者（同 ChainAlign 的 j／j−1；c40：只取最新使放行提早一拍生效）
-                p_ = min(cands_, key=lambda c_: float(np.abs(v - c_[3]).max())); p_[2] = True
-                k0 = p_[1] if p_[1] > self.n else self.n + 1
-                if p_[1] <= self.n:
-                    self.n_rel_late += 1
-                if self.bsched and self.bsched[-1][0] == k0:
-                    self.bsched[-1] = (k0, v.copy(), self.bsched[-1][2])
-                elif not self.bsched or self.bsched[-1][0] < k0:
-                    vp_ = self.base_at(k0 - 1)
-                    self.bsched.append((k0, v.copy(), vp_ if vp_ is not None else v.copy()))
+        if REL_EXEC and self.stage in ('run', 'hold'):              # B（Codex 153710）：依放行流實際收件順序＋固定剩餘執行器延遲 R_REM 生效，不以數值猜對應提案
+            k0 = self.n + R_REM
+            if self.bsched and self.bsched[-1][0] >= k0:
+                self.bsched[-1] = (self.bsched[-1][0], v.copy(), self.bsched[-1][2])   # 同一生效步多筆：取最後收到者
+            else:
+                vp_ = self.base_at(k0 - 1)
+                self.bsched.append((k0, v.copy(), vp_ if vp_ is not None else v.copy()))
 
     def base_at(self, n):
         """B：步 n 實際套用的底盤命令＝最近一筆已生效放行值，自生效步起拍內斜坡（同控制器 ramp_cmd 語意）；無排程 ⇒ None。"""
@@ -175,8 +170,8 @@ class WorldD2(Node):
         return e[2] + a * (e[1] - e[2])
 
     def base_known(self, n):
-        """步 n 的實際底盤是否已確定（所有生效步 ≤ n 的提案都已收到放行）。"""
-        return all(p_[2] for p_ in self.my_props if p_[1] <= n)
+        """步 n 的實際底盤是否已由「已收到的放行」決定：之後才收到的放行最早在 self.n＋1＋R_REM 生效。"""
+        return n < self.n + 1 + R_REM
 
     def _acmd(self, m):
         if self.stage == 'approach' and len(m.data) == 6 and np.isfinite(m.data).all():
