@@ -64,6 +64,7 @@ from types import SimpleNamespace
 from typing import Optional, Tuple
 
 import numpy as np
+import os
 import osqp
 from scipy import sparse
 
@@ -181,7 +182,14 @@ def qp_kkt_check(P, q, A, l, u, x, y, tol_p=1e-8, tol_d=1e-6, tol_c=1e-6):
     return dict(out, ok=why is None, why=why)
 
 
-def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800):
+class QPTimeBudget(Exception):
+    """整個 QP 流程（GI＋備援 OSQP）超過呼叫端給的絕對期限（Codex 第九趟裁定）：呼叫端照晚到處置，不提交、不接受未過殘差核對的解。"""
+
+
+SLOW_QP_MS = float(os.environ.get('GMPC_SLOW_QP_MS', '100'))         # 慢成功拍存檔門檻（組裝＋GI＋OSQP 總和）
+
+
+def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800, deadline=None):
     """Goldfarb–Idnani 對偶作用集法：min ½xᵀPx＋qᵀx s.t. l ≤ Ax ≤ u（P 正定）。實驗用，尚未定版。
     耦合問題的主求解器：CBF slack 懲罰使 P 對角跨 0.2–2e8，OSQP 在作用集轉變時要數千至數萬次迭代（max 381 ms、D1 到迭代上限），本實作於該批難題 max 5.1 ms。
     回傳 (x, y, info)；x 為 None 表示未得解或未過 qp_kkt_check，一律交由 OSQP 備援，不接受可疑解。回傳 infeasible 只代表本實作未找到解，不作不可行證明。"""
@@ -195,6 +203,8 @@ def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800):
     x = -cho_solve(cf, q)
     act, sgn, Nr, PiN, mu = [], [], [], [], np.zeros(0)
     for step in range(max_steps):
+        if deadline is not None and time.perf_counter() > deadline:
+            return None, None, dict(ok=False, why='time_budget', steps=step, solver='gi')
         z = As @ x
         vl, vu = l - z, z - u
         il, iu = int(np.argmax(vl)), int(np.argmax(vu))
@@ -1837,21 +1847,29 @@ class GMPC:
             t_asm = time.perf_counter() - t_arm0
             if arm.get('qp_solver', 'gi') == 'gi':
                 t_gi = time.perf_counter()
-                gx, gy, gi = qp_dual_active(P_sp, q_vec, A_total, lb_total, ub_total)
+                gx, gy, gi = qp_dual_active(P_sp, q_vec, A_total, lb_total, ub_total, deadline=arm.get('t_deadline'))
                 qp_info = dict(solver='gi' if gx is not None else 'osqp', gi_why=gi.get('why'), gi_ms=(time.perf_counter() - t_gi) * 1e3, osqp_ms=None, gi_steps=gi.get('steps'), asm_ms=t_asm * 1e3)
+                if gi.get('why') == 'time_budget':
+                    raise QPTimeBudget('gi time_budget at step %s (%.1f ms)' % (gi.get('steps'), qp_info['gi_ms']))
                 if gx is not None:
                     res = SimpleNamespace(x=gx, y=gy, info=SimpleNamespace(status='solved'))
         if res is None:
             t_os = time.perf_counter()
+            tdl_ = arm.get('t_deadline') if (n_arm and arm is not None) else None
+            if tdl_ is not None and tdl_ - t_os <= 0.0:
+                raise QPTimeBudget('no time left for OSQP fallback')
             prob = osqp.OSQP()
             # 耦合問題備援比照 W-GMPC：QP 容差須緊於殘差核對門檻 1e-6（eps 1e-5 實測手臂限制殘差 6.3e-6）
             prob.setup(P=P_sp, q=q_vec, A=A_total, l=lb_total, u=ub_total,
                        verbose=False,
                        eps_abs=1e-7 if n_arm else 1e-5, eps_rel=1e-7 if n_arm else 1e-5,        # looser tolerance for speed
-                       polish=bool(n_arm), max_iter=20000 if n_arm else 8000)        # more iter for hard cases
+                       polish=bool(n_arm), max_iter=20000 if n_arm else 8000,       # more iter for hard cases
+                       **({'time_limit': max(tdl_ - time.perf_counter(), 1e-4)} if tdl_ is not None else {}))   # 剩餘時間預算（只管 OSQP 本身）
             res = prob.solve()
             if n_arm:
                 qp_info['osqp_ms'] = (time.perf_counter() - t_os) * 1e3
+                if tdl_ is not None and 'time limit' in str(res.info.status).lower():
+                    raise QPTimeBudget('osqp time limit (%.1f ms)' % qp_info['osqp_ms'])
                 qp_info.update(osqp_status=str(res.info.status), osqp_iter=int(getattr(res.info, 'iter', -1)), osqp_pri_res=float(getattr(res.info, 'pri_res', float('nan'))), osqp_dua_res=float(getattr(res.info, 'dua_res', float('nan'))))
                 if str(res.info.status) != 'solved':                   # 失敗拍可重現資料（Codex 190256）：P,q,A,l,u＋約束類別
                     qp_info['dump'] = dict(P=np.asarray(P_dense, float), q=np.asarray(q_vec, float), A=A_total.toarray(), l=np.asarray(lb_total, float), u=np.asarray(ub_total, float),
@@ -1941,6 +1959,8 @@ class GMPC:
                     ct_info = dict(rows=int(len(rct)), bind=int(np.sum(np.abs(e_lin) >= ec_ - 1e-6)), e_lin=e_lin.tolist(),
                                    q_center=[c_[0].tolist() for c_ in cc_], e_center=[c_[1].tolist() for c_ in cc_], e_center_rows=(rct - Act[:, arm_info['nz']:] @ U0).tolist())
                 u_arm_seq = ua.reshape(N, ARM_N)
+                if qp_info is not None and 'dump' not in qp_info and sum(float(qp_info.get(k_) or 0.0) for k_ in ('asm_ms', 'gi_ms', 'osqp_ms')) > SLOW_QP_MS:   # 慢成功拍存檔（Codex 第九趟）：只放參考，寫檔由呼叫端在背景做
+                    qp_info['slow_dump'] = dict(P=P_sp, q=np.asarray(q_vec, float).copy(), A=A_total, l=np.asarray(lb_total, float).copy(), u=np.asarray(ub_total, float).copy(), marks=list(locals().get('_rm', [])))
                 arm_check = dict(max_violation=max(viol, float((qp_info or {}).get('all_rows_viol', 0.0))), finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info, ob_rows=int(len(arm_info['ob'][1])) if 'ob' in arm_info else 0, ob_planes=arm_info.get('planes'), ob_by_body=arm_info.get('by_body'), ob_bind=arm_info.get('bind'))
                 if ct_info is not None:
                     arm_check['ct'] = ct_info

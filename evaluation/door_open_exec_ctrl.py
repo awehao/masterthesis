@@ -95,6 +95,7 @@ CL_TOL = dict(pos_m=0.010, rot_deg=5.0)                            # 實測／�
 STRESS_TOL = dict(pos_m=0.030, rot_deg=8.0)                        # 設定點閉鏈殘差上限（內應力指標）
 END = dict(phi_tol=math.radians(0.5), n_ticks=10, wait_s=4.0, arm_rps=0.02, base_mps=0.005, yaw_rps=0.01, door_rps=0.01)
 T_STOP, PATH_STOP_MAX_S = 0.5, 3.0
+QP_RESERVE_MS = float(os.environ.get('DOOR_QP_RESERVE_MS', '70'))   # 整拍期限中保留給候選核對、通訊的時間；QP 流程預算＝期限−已用−保留
 G_GOV = os.environ.get('DOOR_G_GOV', '0') == '1'                  # Codex 191426：約束感知在線進度調節（只縮放 g；σ 仍只在候選＋尾段通過並提交時前進）
 G_GOV_BAND = dict(env=0.010, base=0.030, self=0.010, shell_bar=0.006)   # 各項自身單位的預警帶：餘裕 ≥ 門檻＋帶寬 ⇒ 不減速；各項先正規化到 [0,1] 再取最小
 G_GOV_MIN = float(os.environ.get('DOOR_G_GOV_MIN', '0.15'))      # 下限：避免 g→0 觸發 door_not_following；不假設越慢越安全                                # 路徑停止：g 由 1 降到 0 的時間、最長等待
@@ -1039,8 +1040,14 @@ class DoorOpenExec:
         obs_ = self._nav_obs(q) if getattr(self, 'unified', False) else None   # 單一控制器：導航 CBF 障礙物進開門段同一 QP
         if getattr(self, 'unified', False) and obs_ is None:
             return None                                                # 障礙物資料過期 ⇒ 求解失敗處置（停止），不在無障礙資料下續算
+        if self.g2.get('deadline_ms') is not None and getattr(self, '_w_tick', None) is not None:   # 整個 QP 流程共用時間預算（整拍期限扣候選核對與通訊保留；Codex 第九趟）
+            arm['t_deadline'] = self._w_tick + (float(self.g2['deadline_ms']) - QP_RESERVE_MS) / 1e3
         try:
             r = self.mpc.solve(X_now=from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs_)
+        except GR.QPTimeBudget as e_:
+            self._qp_tb = dict(t=round(self.t, 3), why=str(e_)[:120], elapsed_ms=round((time.perf_counter() - self._w_tick) * 1e3, 1))
+            self.qp_tb_log = getattr(self, 'qp_tb_log', []) + [self._qp_tb]
+            return None
         except ValueError as e_:                                       # 底盤名目點在門扇箱內 ⇒ 明確不可行 ⇒ 求解失敗處置（原停止）
             if 'base_keepout' not in str(e_):
                 raise
@@ -1048,6 +1055,20 @@ class DoorOpenExec:
             return None
         self.solve_ms.append((time.perf_counter() - w0) * 1e3)
         qi_ = (r.arm_check or {}).get('qp') or {}
+        if qi_.get('slow_dump') is not None and os.environ.get('DOOR_QP_DUMP_DIR'):   # 慢成功拍：背景執行緒寫檔（不佔本拍計時路徑）
+            import threading
+            sd_ = qi_.pop('slow_dump')
+            meta_ = dict(t=round(float(self.t), 3), sigma=round(float(self.sigma), 5), gi_ms=qi_.get('gi_ms'), gi_steps=qi_.get('gi_steps'), gi_why=qi_.get('gi_why'), osqp_ms=qi_.get('osqp_ms'), asm_ms=qi_.get('asm_ms'),
+                         osqp_status=qi_.get('osqp_status'), osqp_iter=qi_.get('osqp_iter'), solve_ms=round((time.perf_counter() - w0) * 1e3, 2), marks=sd_.get('marks'))
+            def _wr(sd=sd_, mt=meta_, d_=os.environ['DOOR_QP_DUMP_DIR']):
+                try:
+                    os.makedirs(d_, exist_ok=True)
+                    np.savez(os.path.join(d_, 'slow_t%07.3f.npz' % mt['t']), P=sd['P'].toarray(), q=sd['q'], A=sd['A'].toarray(), l=sd['l'], u=sd['u'], meta=json.dumps(mt, default=str))
+                except Exception:                                     # noqa: BLE001
+                    pass
+            threading.Thread(target=_wr, daemon=True).start()
+        elif 'slow_dump' in qi_:
+            qi_.pop('slow_dump')
         f_ = lambda v_: float('nan') if v_ is None else float(v_)       # noqa: E731
         self.qp_log.append((float(self.t), float(self.stop is not None), (w_pre - w0) * 1e3, (time.perf_counter() - w_pre) * 1e3, f_(qi_.get('asm_ms')), f_(qi_.get('gi_ms')), f_(qi_.get('osqp_ms')), 0.0 if qi_.get('solver') == 'gi' else 1.0))
         ck = dict(r.arm_check or {})
@@ -1210,6 +1231,7 @@ class DoorOpenExec:
             return dict(ab, arm_target=self.s.copy())
         tick = self.n_step % NPH == 0
         w_t = time.perf_counter()
+        self._w_tick, self._qp_tb = w_t, None                         # QP 時間預算的拍起點；本拍是否逾時
         self.force_n = None if force_n is None else float(force_n)
         self._w_ext = None if w_ext is None else (np.asarray(w_ext[0], float), np.asarray(w_ext[1], float))
         if self.force_n is not None:
@@ -1342,6 +1364,8 @@ class DoorOpenExec:
                         self._sn_verified = True
                 if self.stop is not None:
                     pass
+                elif u is None and getattr(self, '_qp_tb', None) is not None:
+                    self._deadline_stop(self._qp_tb['elapsed_ms'], 'qp_time_budget')   # QP 流程逾時 ⇒ 同晚到處置（不提交）
                 elif u is None:
                     self._stop('closure_cmd_invalid', bad=self._cl_fail) if self._cl_fail else self._stop('solver_fail')
                 else:
@@ -1404,6 +1428,8 @@ class DoorOpenExec:
                     stp = self._cs_collect()[0] if sn_on else None
                     if stp == 'missing':
                         self._stop('path_cstop_check_unavailable', fb=self._fb_info)
+                    elif u is None and getattr(self, '_qp_tb', None) is not None:
+                        self._deadline_stop(self._qp_tb['elapsed_ms'], 'path_qp_time_budget')
                     elif u is None:
                         self._stop('closure_cmd_invalid', bad=self._cl_fail) if self._cl_fail else self._stop('solver_fail')
                     else:
