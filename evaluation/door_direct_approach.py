@@ -131,6 +131,7 @@ def candidate(psi_deg, a_g):
     seed = q_arm0.copy(); Q = [q_arm0.copy()]; tt = [t0]; last_vis = None; path = 0.0; p_prev = T0[:3, 3].copy(); vis_list = []
     t = t0
     q_pre_j = None
+    HIST = []
     if MODE == 'joint_line':                                           # 關節擺動（夾爪轉向把手）→ 平滑混接 → 沿接近軸直線進入；中途不停
         t_D = t_g - T_LINE                                             # 直線段起點時刻（離把手 D_LINE）
         t_s = max(t0, t_D - T_MOVE)
@@ -178,6 +179,8 @@ def candidate(psi_deg, a_g):
                 last_vis = (round(t - t0, 2), round(vd, 3))
             path += float(np.linalg.norm(p - p_prev)); p_prev = p.copy()
             Q.append(q); tt.append(t); seed = q
+            HIST.append(dict(t=round(t - t0, 3), seg=seg, base=[float(x) for x in b], q=[float(x) for x in q], r=None if seg == 'swing' else round(float(np.linalg.norm(p - Tg[:3, 3])), 4)))
+        out['hist'] = list(HIST)
         t_end_loop = True
     if MODE == 'joint':                                                # 關節空間一次到位：插入起點構型（依 t_ins 的預測底盤）由多種子解，取離目前構型最近者
         b_ins = base_at(t_ins); best = None
