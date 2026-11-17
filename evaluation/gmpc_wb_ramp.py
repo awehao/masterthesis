@@ -1731,6 +1731,31 @@ class GMPC:
                 lb_total = np.concatenate([lb_total, rct - float(ct['e'])])
                 ub_total = np.concatenate([ub_total, rct + float(ct['e'])])
                 arm_info['ct'] = (Act, rct, float(ct['e']), ct_c)
+            bk = arm.get('base_keepout')
+            if bk:                                              # （Codex 20261117_184816）底盤—門扇淨空下界：距離同 clear_door_fast（底盤中心到門扇箱體距離 − RB），解析梯度；只含底盤變數；前 n 步、距門檻 act 內才加列
+                bk_rows, bk_lb, bk_log = [], [], []
+                for k in range(min(int(bk['n']), N)):
+                    c_, R_, hs_ = bk['boxes'][min(k, len(bk['boxes']) - 1)]
+                    c_, R_, hs_ = np.asarray(c_, float), np.asarray(R_, float), np.asarray(hs_, float)
+                    pose_ = _pose_from_err(X_ref_win[k + 1], e_nom[k])
+                    P_ = np.array([pose_[0], pose_[1], c_[2]])
+                    Lc = (P_ - c_) @ R_
+                    dv = np.abs(Lc) - hs_
+                    ov = np.maximum(dv, 0.0); on = float(np.linalg.norm(ov))
+                    if on < 1e-9:
+                        continue
+                    dist_ = on - float(bk['RB'])
+                    if dist_ - float(bk['dmin']) > float(bk.get('act', 0.30)):
+                        continue
+                    g3 = R_ @ (np.sign(Lc) * ov) / on
+                    BGk = _pose_jac(X_ref_win[k + 1], e_nom[k]) @ Gamma[k * n:(k + 1) * n, :]
+                    row = np.zeros(nz + n_arm); row[:Nm] = g3[:2] @ BGk[:2, :]
+                    bk_rows.append(row); bk_lb.append(float(bk['dmin']) - dist_); bk_log.append((k, round(dist_, 4)))
+                if bk_rows:
+                    A_total = sparse.vstack([A_total, sparse.csc_matrix(np.array(bk_rows))], format='csc')
+                    lb_total = np.concatenate([lb_total, np.array(bk_lb)])
+                    ub_total = np.concatenate([ub_total, np.full(len(bk_rows), np.inf)])
+                arm_info['base_keepout'] = bk_log
             if ct_Lr:                                           # 姿態管道：|姿態誤差 逐軸| ≤ e_rot（同一線性化，不加鬆弛）
                 Acr, rcr = np.vstack(ct_Lr), np.concatenate(ct_rr)
                 A_total = sparse.vstack([A_total, sparse.csc_matrix(Acr)], format='csc')

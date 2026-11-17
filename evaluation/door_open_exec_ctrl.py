@@ -112,6 +112,7 @@ def _pool_lock(pool):
     import threading
     return _POOL_LOCKS.setdefault(id(pool), threading.Lock())
 CL_ROWS = None if os.environ.get('DOOR_CL_ROWS', '1') != '1' else dict(e=float(os.environ.get('DOOR_CL_E', '0.006')), e_rot=math.radians(float(os.environ.get('DOOR_CL_EROT_DEG', '3.0'))), n=int(os.environ.get('DOOR_CL_N', '4')))
+BASE_KEEP = float(os.environ['DOOR_BASE_KEEP_M']) if os.environ.get('DOOR_BASE_KEEP_M') else None   # 共同 QP 內底盤—門扇淨空下界（m；None＝不加）
 LENIENT_SHELL = os.environ.get('D2_LENIENT', '0') == '1'
 LENIENT_SHELL_FLOOR = 0.003
 def _lenient_shell_ok(b_):
@@ -707,9 +708,10 @@ class DoorOpenExec:
             cp, cr = self.fb_closure_inject(self, cp, cr)
         self.mins['stop_closure_pos'], self.mins['stop_closure_rot'] = max(self.mins['stop_closure_pos'], cp), max(self.mins['stop_closure_rot'], cr)
         bad = [k for k in KEYS if mn[k] < W.THR[k]]
-        ok = bool((not bad or _lenient_shell_ok(dict(clear_bad=bad, at=mn))) and cp <= CL_TOL['pos_m'] and cr <= CL_TOL['rot_deg'])   # 寬鬆展示：只外殼—橫桿且 ≥3 mm 時不算失敗（記錄另見 lenient_log）
+        ok = bool((not bad or _lenient_shell_ok(dict(clear_bad=bad, at=mn))) and cp <= CL_TOL['pos_m'] and cr <= CL_TOL['rot_deg'])
+        self._cs_who = {k: str((min(res, key=lambda c_: float(c_[k])).get('who') or {}).get(k)) for k in bad} if bad else None   # 最近障礙名稱（Codex 184816：base 是門扇與環境的最小值）   # 寬鬆展示：只外殼—橫桿且 ≥3 mm 時不算失敗（記錄另見 lenient_log）
         info = dict(law='cstop', tag=tag, n_ticks=r['n_ticks'], sim_ms=round(r['sim_ms'], 1), min_clear={k: round(v, 4) for k, v in mn.items()}, closure_pos_mm=round(cp * 1e3, 3), closure_rot_deg=round(cr, 3), n_samples=len(res), xd_ver=self._xd_ver)
-        return (dict(tag=tag, clear_bad=bad, at={k: round(v, 4) for k, v in mn.items()}) if bad else None), ok, info
+        return (dict(tag=tag, clear_bad=bad, at={k: round(v, 4) for k, v in mn.items()}, who=self._cs_who) if bad else None), ok, info
 
     def _cs_collect(self):
         """求解後取背景結果。回 (status, 淨空違反或 None)；status＝ok／infeasible／missing。並設定本拍備援是否可用。
@@ -973,6 +975,12 @@ class DoorOpenExec:
                    lo=LITE6_SAFE.lower, hi=LITE6_SAFE.upper, tcp_rel_base=False, qp_solver='gi', **B.W_ARM)
         if self.arm_mode == 'qp' and CL_ROWS is not None:              # 主線修正 A：閉鏈位置＋姿態硬列進同一全身 QP（目標 T_seq＝T_WH(φ_ref)·T_HE；底盤與手臂耦合同列）
             arm['contact_tube'] = dict(CL_ROWS)
+        if BASE_KEEP is not None:                                      # 底盤—門扇淨空下界（Codex 184816）：門扇箱體依參考門角序列 φ_ref(σ_k)（同 clear_door_fast 的門扇幾何）
+            sh_, leaf_ = W._static(); bx_ = []
+            for k_ in range(N):
+                ph_ = float(self.ref(sig_eff + (k_ + 1) * DT * g)[9]); Rp_ = W.Rz4(-ph_)[:3, :3]
+                bx_.append((Rp_ @ np.asarray(leaf_[1], float), Rp_, np.asarray(leaf_[3], float)))
+            arm['base_keepout'] = dict(dmin=BASE_KEEP, n=N, boxes=bx_, RB=float(W.DOC.RB), act=0.30)
         w_pre = time.perf_counter()
         obs_ = self._nav_obs(q) if getattr(self, 'unified', False) else None   # 單一控制器：導航 CBF 障礙物進開門段同一 QP
         if getattr(self, 'unified', False) and obs_ is None:
