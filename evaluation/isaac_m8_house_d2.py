@@ -125,6 +125,7 @@ FINGER_OPEN = float(G.XO.FINGER_OPEN)
 FINGER_TOL_M = 0.0005
 DT, D_STEPS = 0.01, 8
 CONTACT_N, DOOR_DEG = 0.05, 0.05
+NO_CATCHUP = os.environ.get('D2_NO_CATCHUP', '1') == '1'          # RTF 上限配速（落後不補步）
 R_REM = int(os.environ.get('D2_R_REM', '3'))                       # 放行收到後到套用的剩餘延遲（步）
 GRIP_F_ABORT_N, DOOR_PREBIND_DEG = 40.0, 0.5                        # 交權後：夾爪合力上限（模擬工程中止值，同舊開門執行器 40 N）、綁定前門動上限（同 BindGate 0.5°）
 JOINT = '/World/door/ideal_grasp_attach'
@@ -588,6 +589,7 @@ def main():
     exc = None
     scans = []
     d2_stat, d2_last, bound, bind_pending, fcmd = dict(late=0, on_time=0), None, False, False, FINGER_OPEN
+    pace_off = 0.0
     try:
         for k in range(n_steps):
             w_step0 = time.perf_counter()
@@ -661,7 +663,7 @@ def main():
                 fcmd = FINGER_OPEN
             else:                                                     # 交權後：本地播放控制伺服器下發的已核段／尾段（Codex 20261117_173459）；底盤＝放行排程
                 if n_now % 5 == node.d2_n0 % 5:                       # 拍首：等新段到本步配速時限為止（物理照牆鐘，不多等）
-                    tgt_w_ = w_all0 + (t + DT) / a.rtf
+                    tgt_w_ = w_all0 + pace_off + (t + DT) / a.rtf
                     while not any(sg[0] == n_now for sg in node.d2_segs) and time.perf_counter() < tgt_w_:
                         rclpy.spin_once(node, timeout_sec=0.001)
                 ent, src_ = None, None
@@ -788,12 +790,15 @@ def main():
                 node.p_obs.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if T_est is not None else 0.0, *[float(v) for v in f['q'][:3]], *([float(v) for v in T_bh.reshape(-1)] if T_bh is not None else [float('nan')] * 16), float(t)]))
                 if seq_r <= 3 or seq_r % 25 == 0:
                     print(f"[fc] 影格 {seq_r} t_obs={f['t_obs']:.2f} valid={T_est is not None} {'' if T_est is not None else info.get('why') or info.get('cls')} 距離 {frames[-1]['eval_only']['range_m']} m 偵測 {ms:.0f} ms", flush=True)
-            tgt_w = w_all0 + (t + DT) / a.rtf                                  # 固定 RTF 配速：早到就睡、晚到記落後（不等任何計算）
+            tgt_w = w_all0 + pace_off + (t + DT) / a.rtf                       # RTF 上限配速：早到就睡；晚到不補步（重設基準，實得 RTF ≤ 目標）——物理照牆鐘推進、不等任何計算
             now_w = time.perf_counter()
             if now_w < tgt_w:
                 time.sleep(tgt_w - now_w); pace['slept_s'] += tgt_w - now_w
-            elif now_w - tgt_w > 0.05:
-                pace['behind_steps'] += 1; pace['behind_max_s'] = max(pace['behind_max_s'], now_w - tgt_w)
+            else:
+                if now_w - tgt_w > 0.05:
+                    pace['behind_steps'] += 1; pace['behind_max_s'] = max(pace['behind_max_s'], now_w - tgt_w)
+                if NO_CATCHUP:                                         # 不連續補步（m8house_d2_unified_2：補步時每步 16 ms，控制側預算被壓縮 ⇒ not_ready）
+                    pace_off += now_w - tgt_w; pace['reanchored_s'] = pace.get('reanchored_s', 0.0) + (now_w - tgt_w)
             st0 = float(world.current_time)
             world.step(render=True)
             if abs((float(world.current_time) - st0) - DT) > 1e-9:
