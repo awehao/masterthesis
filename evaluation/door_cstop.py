@@ -115,11 +115,14 @@ class CStop:
         off = self.off0 + (self.grav(np.r_[b, q1]) - self.G0) / self.kp
         S1 = q1 + self.tau * (q1 - q0) / DT - off + self.FF.ff((q1 - q0) / DT, self.fric_ff, self.kp) + self.pr_delta   # 同執行層：庫倫摩擦前饋（參考速度歸零時自動收回）
         ua = (S1 - sp) / DT
-        if ACC_BLEND:                                                  # 有界過渡（Codex 20261117_183358）：停止自候選命令連續起算——手臂命令以 A_ARM 內斜坡接回閉鏈一致命令（不跳）；
-            lim_ = self.C0.A_ARM * DT                                  #   其後各取樣構型照原閉鏈殘差（CL_TOL）、淨空、速率、設定點限位核對；不過即不可行（不是裁剪後放行）
-            da_ = ua - np.asarray(u_prev[3:], float)
-            if float(np.abs(da_).max()) > lim_ + 1e-12:
-                ua = np.asarray(u_prev[3:], float) + np.clip(da_, -lim_, lim_)
+        if ACC_BLEND:                                                  # 有界過渡（Codex 183358／185637）：停止自候選命令連續起算；逐關節取速率與加速度既有界限的交集
+            up_ = np.asarray(u_prev[3:], float); lim_ = self.C0.A_ARM * DT   #   lo＝max(−va, u_prev−A·dt)、hi＝min(+va, u_prev+A·dt)；交集為空 ⇒ 不可行；設定點同步；其後完整停止模擬、閉鏈、淨空、限位照舊核對
+            lo_ = np.maximum(-self.va, up_ - lim_); hi_ = np.minimum(self.va, up_ + lim_)
+            if np.any(lo_ > hi_ + 1e-12):
+                return dict(ok=False, why='arm_rate_acc_empty', v=float(np.max(lo_ - hi_)))
+            ua_c = np.clip(ua, lo_, hi_)
+            if float(np.abs(ua_c - ua).max()) > 1e-12:
+                ua = ua_c
                 S1 = sp + DT * ua
                 self.n_blend = getattr(self, 'n_blend', 0) + 1
         u = np.r_[ub, ua]
