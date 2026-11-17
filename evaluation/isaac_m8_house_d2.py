@@ -125,6 +125,7 @@ FINGER_OPEN = float(G.XO.FINGER_OPEN)
 FINGER_TOL_M = 0.0005
 DT, D_STEPS = 0.01, 8
 CONTACT_N, DOOR_DEG = 0.05, 0.05
+R_REM = int(os.environ.get('D2_R_REM', '3'))                       # 放行收到後到套用的剩餘延遲（步）
 GRIP_F_ABORT_N, DOOR_PREBIND_DEG = 40.0, 0.5                        # 交權後：夾爪合力上限（模擬工程中止值，同舊開門執行器 40 N）、綁定前門動上限（同 BindGate 0.5°）
 JOINT = '/World/door/ideal_grasp_attach'
 CMD_TIMEOUT_S, ARM_CMD_TIMEOUT_S = 0.5, 0.2                       # 同乾跑世界節點
@@ -232,6 +233,8 @@ class Bridge(Node):
         self.n_cmd, self.n_acmd = 0, 0
         self.p_d2 = self.create_publisher(Float64MultiArray, '/d2/state', 20)
         self.create_subscription(Float64MultiArray, '/d2/out', self._d2out, 50)
+        self.create_subscription(Float64MultiArray, '/d2/seg', self._d2seg, 50)
+        self.d2_segs, self.n_now, self.bsched = [], 0, []            # 已核段（起始步、名目手臂、手指、尾段手臂）；本步序號；放行排程（生效步、值、前值）
         self.create_subscription(String, '/d2/ctl', self._d2ctl, 20)
         self.d2_out, self.d2_n0, self.d2_bind, self.d2_end, self.d2_abort, self.d2_ctl_log = {}, None, False, False, None, []
 
@@ -242,6 +245,29 @@ class Bridge(Node):
             if len(self.d2_out) > 400:
                 for kk in sorted(self.d2_out)[:len(self.d2_out) - 400]:
                     self.d2_out.pop(kk, None)
+
+    def _d2seg(self, m):
+        d = np.asarray(m.data, float)
+        try:
+            n0, ns = int(round(d[0])), int(round(d[1])); i = 2
+            arm = d[i:i + 6 * ns].reshape(ns, 6); i += 6 * ns
+            fg = d[i:i + ns]; i += ns
+            nt = int(round(d[i])); i += 1
+            tail = d[i:i + 6 * nt].reshape(nt, 6)
+        except Exception:                                             # noqa: BLE001
+            return
+        self.d2_segs.append((n0, arm.copy(), fg.copy(), tail.copy()))
+        self.d2_segs = self.d2_segs[-6:]
+
+    def base_at(self, n):
+        e = None
+        for e_ in reversed(self.bsched):
+            if e_[0] <= n:
+                e = e_; break
+        if e is None:
+            return None
+        a = min(n - e[0] + 1, 5) / 5.0
+        return e[2] + a * (e[1] - e[2])
 
     def _d2ctl(self, m):
         try:
@@ -264,6 +290,14 @@ class Bridge(Node):
         if np.isfinite(v).all():
             self.cmd, self.cmd_t = v, self.t
             self.n_cmd += 1
+            if self.d2_n0 is not None:                                # 交權後：放行依收件順序在收件步＋R_REM 生效（拍內斜坡；同控制伺服器的因果排程）
+                k0 = self.n_now + R_REM
+                if self.bsched and self.bsched[-1][0] >= k0:
+                    self.bsched[-1] = (self.bsched[-1][0], v.copy(), self.bsched[-1][2])
+                else:
+                    vp = self.base_at(k0 - 1)
+                    self.bsched.append((k0, v.copy(), vp if vp is not None else v.copy()))
+                    self.bsched = self.bsched[-50:]
 
     def _acmd(self, m):
         if len(m.data) == 6 and np.isfinite(m.data).all():
@@ -569,7 +603,14 @@ def main():
             n_now = int(round(t / DT))
             post = node.d2_n0 is not None and n_now >= node.d2_n0
             phi_now = door_q()
-            node.p_d2.publish(Float64MultiArray(data=[float(n_now), float(t), *[float(x) for x in q], float(phi_now), float(jp[f1]), float(jp[f2]), *[float(x) for x in s], *[float(x) for x in np.concatenate(pipe)]]))   # 控制伺服器（world_d2_node）每步狀態
+            node.n_now = n_now
+            kb_ = []
+            for i_ in range(R_REM + 1):                               # 步 n…n＋R_REM 的實際底盤（已收到的放行決定；排程未生效前＝在途管線輸出）
+                b_ = node.base_at(n_now + i_) if post else None
+                if b_ is None:
+                    b_ = np.asarray(pipe[i_][:3], float) if i_ < len(pipe) else np.full(3, np.nan)
+                kb_ += [float(x) for x in b_]
+            node.p_d2.publish(Float64MultiArray(data=[float(n_now), float(t), *[float(x) for x in q], float(phi_now), float(jp[f1]), float(jp[f2]), *[float(x) for x in s], *[float(x) for x in np.concatenate(pipe)], *kb_]))   # 控制伺服器（world_d2_node）每步狀態
             cn_t, cwho, cn_b, cwho_b = contacts(split=True)
             cn = None if cn_t is None else max(cn_t, cn_b)
             dq_deg = abs(math.degrees(phi_now - door_q0))
@@ -618,22 +659,38 @@ def main():
                 ue = pipe.pop(0)
                 s = np.clip(s + DT * ue[3:], LO, HI)
                 fcmd = FINGER_OPEN
-            else:                                                     # 交權後：本步命令＝控制伺服器 /d2/out（等到本步配速時限為止；沒到 ⇒ 保持上一筆）
-                tgt_w_ = w_all0 + (t + DT) / a.rtf
-                while n_now not in node.d2_out and time.perf_counter() < tgt_w_:
-                    rclpy.spin_once(node, timeout_sec=0.001)
-                o_ = node.d2_out.get(n_now)
-                if o_ is None:
-                    d2_stat['late'] += 1
-                    o_ = d2_last if d2_last is not None else np.r_[s, np.zeros(3), np.nan]
-                else:
-                    d2_stat['on_time'] += 1
-                d2_last = o_
+            else:                                                     # 交權後：本地播放控制伺服器下發的已核段／尾段（Codex 20261117_173459）；底盤＝放行排程
+                if n_now % 5 == node.d2_n0 % 5:                       # 拍首：等新段到本步配速時限為止（物理照牆鐘，不多等）
+                    tgt_w_ = w_all0 + (t + DT) / a.rtf
+                    while not any(sg[0] == n_now for sg in node.d2_segs) and time.perf_counter() < tgt_w_:
+                        rclpy.spin_once(node, timeout_sec=0.001)
+                ent, src_ = None, None
+                for sg in reversed(node.d2_segs):
+                    n0_, arm_, fg_, tl_ = sg
+                    if n0_ > n_now:
+                        continue                                      # 提前下發、尚未開始的段
+                    if n0_ <= n_now < n0_ + len(arm_):
+                        ent, src_ = (arm_[n_now - n0_], fg_[n_now - n0_]), 'seg'; break
+                    if n0_ + len(arm_) <= n_now < n0_ + len(arm_) + len(tl_):
+                        ent, src_ = (tl_[n_now - n0_ - len(arm_)], np.nan), 'tail'; break
+                    if n_now >= n0_ + len(arm_) + len(tl_) and len(tl_):
+                        ent, src_ = (tl_[-1], np.nan), 'tail_end'; break   # 已核停止尾段播完＝已停：保持其末端
+                    break                                             # 只看最新一段（舊段不回放）
+                if ent is None:
+                    d2_stat['no_segment'] = d2_stat.get('no_segment', 0) + 1
+                    if latch is None:
+                        latch = dict(t=round(t, 3), why='d2_no_valid_segment', n=n_now, kind='模擬工程中止（無有效名目段或已核尾段；保留現場資料、不再步進物理）')
+                        ev('latched_sim_engineering_abort', **latch)
+                    break
+                d2_stat[src_] = d2_stat.get(src_, 0) + 1
                 s_prev = s.copy()
-                s = np.clip(np.asarray(o_[:6], float), LO, HI)
-                ue = np.r_[np.asarray(o_[6:9], float), (s - s_prev) / DT]
-                if np.isfinite(o_[9]):
-                    fcmd = float(o_[9])
+                s = np.clip(np.asarray(ent[0], float), LO, HI)
+                pipe.append(np.zeros(9)); pe_ = pipe.pop(0)            # 在途管線排空（交權前已送出的命令仍照原時刻生效）
+                b_ = node.base_at(n_now)
+                ub_ = np.asarray(b_ if b_ is not None else pe_[:3], float)
+                ue = np.r_[ub_, (s - s_prev) / DT]
+                if np.isfinite(ent[1]):
+                    fcmd = float(ent[1])
                 if bind_pending and not bound:                         # 綁定：FixedJoint 以當下夾爪對門扇的相對位姿（理想抓持假設）
                     Tg_ = T_of(*[np.asarray(x)[0] for x in v_grip.get_world_poses()])
                     Tl_ = T_of(*[np.asarray(x)[0] for x in leaf_v.get_world_poses()])

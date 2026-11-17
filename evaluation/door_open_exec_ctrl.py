@@ -922,7 +922,7 @@ class DoorOpenExec:
     def _nav_obs(self, q):
         """導航前端障礙物（相對擷取時機器人位姿）→ 世界；過期 ⇒ 0.5 s 內沿用上一份，否則 None。"""
         ni = getattr(self, 'nav_in', None)
-        if ni is not None and not ni.get('stale'):
+        if ni is not None and not ni.get('stale'):                    # 含導航到點後的 halted 訊息（障礙物照原規則持續提供）
             c0, s0 = math.cos(q[2]), math.sin(q[2]); out = []
             for o_ in ni.get('obs', []):
                 d_ = dict(x=float(q[0] + c0 * o_[0] - s0 * o_[1]), y=float(q[1] + s0 * o_[0] + c0 * o_[1]), radius=float(o_[2]), vx=float(c0 * o_[3] - s0 * o_[4]), vy=float(s0 * o_[3] + c0 * o_[4]))
@@ -975,6 +975,8 @@ class DoorOpenExec:
             arm['contact_tube'] = dict(CL_ROWS)
         w_pre = time.perf_counter()
         obs_ = self._nav_obs(q) if getattr(self, 'unified', False) else None   # 單一控制器：導航 CBF 障礙物進開門段同一 QP
+        if getattr(self, 'unified', False) and obs_ is None:
+            return None                                                # 障礙物資料過期 ⇒ 求解失敗處置（停止），不在無障礙資料下續算
         r = self.mpc.solve(X_now=from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs_)
         self.solve_ms.append((time.perf_counter() - w0) * 1e3)
         qi_ = (r.arm_check or {}).get('qp') or {}

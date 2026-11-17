@@ -72,19 +72,22 @@ READY_Q = dict(fresh_s=0.3, accept_max_s=0.5)                       # r2 事前�
 
 
 def door_filter(obs, ap, phi):
-    """接近開始後（ap 帶 door）：門扇（繞鉸鏈轉 −φ 的線段，寬 w）0.15 m 內的障礙點不進 CBF——門是操作對象，碰撞改由門專屬淨空核對（clear_door）負責；其他障礙照舊。"""
+    """接近開始後（ap 帶 door）：只排除「屬於門扇本體」的障礙——動態追蹤障礙且中心落在門扇（繞鉸鏈轉 −φ 的線段、寬 w）上：
+    垂直距離 ≤ 0.06 m、沿門扇 0.02 ≤ a ≤ w−0.02。靜態牆點（含門框、鄰牆）一律保留；未能關聯到門扇的障礙一律保留（Codex 20261117_173459）。"""
     if not obs or ap is None or ap.get('door') is None:
         return obs
     dd = ap['door']; h = np.asarray(dd['hinge'], float); u = np.asarray(dd['dir'], float); u = u / np.linalg.norm(u)
     ph = 0.0 if phi is None else float(phi)
     c_, s_ = math.cos(-ph), math.sin(-ph)
-    ue = np.array([c_ * u[0] - s_ * u[1], s_ * u[0] + c_ * u[1]])
-    out = []
+    ue = np.array([c_ * u[0] - s_ * u[1], s_ * u[0] + c_ * u[1]]); un = np.array([-ue[1], ue[0]])
+    out, n_drop = [], 0
     for o_ in obs:
         p_ = np.array([o_['x'], o_['y']]) - h
-        a_ = float(np.clip(p_ @ ue, 0.0, float(dd['w'])))
-        if float(np.linalg.norm(p_ - a_ * ue)) - float(o_.get('radius', 0.0)) > 0.15:
-            out.append(o_)
+        a_, d_ = float(p_ @ ue), abs(float(p_ @ un))
+        if (not o_.get('static', False)) and d_ <= 0.06 and 0.02 <= a_ <= float(dd['w']) - 0.02:
+            n_drop += 1
+            continue
+        out.append(o_)
     return out
 
 
@@ -316,6 +319,17 @@ class MovingGraspCtrl:
         """導航前端本拍輸入（相對擷取當時機器人位姿）→ 世界參考視窗、障礙物、速度下限；過期 ⇒ 在預測位姿保持（零速度）。"""
         N = XO.N
         ni = getattr(self, 'nav_in', None)
+        if ni is not None and not ni.get('stale') and ni.get('halted'):   # 導航到點／無計畫：障礙物照原規則持續提供；參考由任務端（收斂到抓取底盤位姿或原地）
+            c0, s0 = math.cos(q[2]), math.sin(q[2]); obs_h = []
+            for o_ in ni.get('obs', []):
+                d_ = dict(x=float(q[0] + c0 * o_[0] - s0 * o_[1]), y=float(q[1] + s0 * o_[0] + c0 * o_[1]), radius=float(o_[2]), vx=float(c0 * o_[3] - s0 * o_[4]), vy=float(s0 * o_[3] + c0 * o_[4]))
+                if math.isfinite(o_[5]):
+                    d_['margin'] = float(o_[5])
+                if o_[6] > 0.5:
+                    d_['static'] = True
+                obs_h.append(d_)
+            self._obs_last = (self.t, door_filter(obs_h, getattr(self, 'app_prof', None), getattr(self, 'phi_now', None)))
+            ni = None
         if ni is not None and not ni.get('stale'):
             X0 = np.eye(3); c0, s0 = math.cos(q[2]), math.sin(q[2]); X0[:2, :2] = [[c0, -s0], [s0, c0]]; X0[:2, 2] = q[:2]
             rel = np.asarray(ni['X_rel'], float).reshape(-1, 3); xin = np.asarray(ni['xi_ref'], float).reshape(-1, 3)
@@ -341,7 +355,7 @@ class MovingGraspCtrl:
             self._obs_last = (self.t, obs)
             return X, xi, obs, float(ni.get('u_min0', float('nan'))), 'nav'
         ol = getattr(self, '_obs_last', None)
-        obs = ol[1] if (ol is not None and self.t - ol[0] <= 0.5) else None
+        obs = ol[1] if (ol is not None and self.t - ol[0] <= 0.5) else None   # 過期（>0.5 s）⇒ None：呼叫端停止，不在無障礙資料下續算
         ap_ = getattr(self, 'app_prof', None)
         bg = None if ap_ is None else ap_.get('base_goal')
         if bg is not None:                                             # 導航到點（前端停止更新）後：同一控制器把底盤帶到抓取底盤位姿（慢速直線、減速收斂；不假設沿門）
@@ -368,6 +382,8 @@ class MovingGraspCtrl:
         qp, sp = self._pred(q)
         te0 = tr + D_STEPS * PHYS
         X, xi, obs, umin0, src = self.nav_window(q, qp)
+        if obs is None:
+            return np.zeros(3), None, 'nav_obstacles_stale', None             # 障礙物資料過期 ⇒ 停止（原停止處置；Codex 20261117_173459）
         self._xref_cache = (te0, [(float(Xk[0, 2]), float(Xk[1, 2]), math.atan2(float(Xk[1, 0]), float(Xk[0, 0]))) for Xk in X])
         ap_ = getattr(self, 'app_prof', None)
         if ap_ is None:

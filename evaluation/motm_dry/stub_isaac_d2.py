@@ -33,6 +33,7 @@ START = np.array([float(x) for x in os.environ.get('D2_START', '1.5,-2.8,1.5708,
 ident = json.load(open(os.path.join(HERE, 'results', 'wgmpc_arm_sp_ident_free4.json'))); al = np.asarray(ident['alpha'], float)
 RUN = os.path.join(HERE, 'runs', 'm8house_door_full_2')
 P_ = np.load(os.path.join(RUN, 'plan.npz')); T_true = P_['T_WH_bind']; phi0 = float(P_['phi_bind'])
+R_REM = int(os.environ.get('D2_R_REM', '3'))
 R_ = json.load(open(os.path.join(RUN, 'result.json'))); Dst = np.array(R_['I_insert']['d_hat'])
 Lg = np.load(os.path.join(RUN, 'log.npz'))['rows']; E4 = Lg[Lg[:, 1] == 4][-1]; q_b = np.r_[E4[5:8], E4[8:14]]   # 同 door_ahead_case
 bodies = BM.arm_bodies(K); G_b = BM.arm_gravity(K, q_b, bodies)
@@ -93,10 +94,36 @@ class Stub(Node):
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 20)
         self.create_subscription(Float64MultiArray, '/far/arm_cmd', self._acmd, 10)
         self.create_subscription(Float64MultiArray, '/d2/out', self._out, 50)
+        self.create_subscription(Float64MultiArray, '/d2/seg', self._seg, 50)
+        self.segs, self.bsched, self.stat = [], [], dict(seg=0, tail=0, tail_end=0, no_segment=0)
         self.create_subscription(String, '/d2/ctl', self._ctl, 20)
 
     def _cmd(self, m):
-        self.cmd, self.cmd_t = np.array([m.linear.x, m.linear.y, m.angular.z]), self.t
+        v = np.array([m.linear.x, m.linear.y, m.angular.z]); self.cmd, self.cmd_t = v, self.t
+        if self.n0 is not None:                                       # 同 Isaac 執行器：收件步＋R_REM 生效
+            k0 = self.n + R_REM
+            if self.bsched and self.bsched[-1][0] >= k0:
+                self.bsched[-1] = (self.bsched[-1][0], v.copy(), self.bsched[-1][2])
+            else:
+                vp = self.base_at(k0 - 1); self.bsched.append((k0, v.copy(), vp if vp is not None else v.copy()))
+
+    def base_at(self, n):
+        e = None
+        for e_ in reversed(self.bsched):
+            if e_[0] <= n:
+                e = e_; break
+        if e is None:
+            return None
+        a = min(n - e[0] + 1, 5) / 5.0
+        return e[2] + a * (e[1] - e[2])
+
+    def _seg(self, m):
+        d = np.asarray(m.data, float)
+        n0, ns = int(round(d[0])), int(round(d[1])); i = 2
+        arm = d[i:i + 6 * ns].reshape(ns, 6); i += 6 * ns
+        fg = d[i:i + ns]; i += ns
+        nt = int(round(d[i])); i += 1
+        self.segs.append((n0, arm, fg, d[i:i + 6 * nt].reshape(nt, 6))); self.segs = self.segs[-6:]
 
     def _acmd(self, m):
         if self.n0 is None and len(m.data) == 6:
@@ -151,7 +178,14 @@ class Stub(Node):
             if self.end and not hasattr(self, 't_end'):
                 self.t_end = self.t
             n = self.n
-            self.p_d2.publish(Float64MultiArray(data=[float(n), self.t, *[float(x) for x in self.q], self.phi, self.fing, self.fing, *[float(x) for x in self.s], *[float(x) for x in np.concatenate(self.pipe)]]))
+            post_ = self.n0 is not None and n >= self.n0
+            kb_ = []
+            for i_ in range(R_REM + 1):
+                b_ = self.base_at(n + i_) if post_ else None
+                if b_ is None:
+                    b_ = np.asarray(self.pipe[i_ + 1][:3], float) if i_ + 1 < len(self.pipe) else np.zeros(3)   # 替身管線先移位再取值 ⇒ 本步套用＝移位前的第 1 筆
+                kb_ += [float(x) for x in b_]
+            self.p_d2.publish(Float64MultiArray(data=[float(n), self.t, *[float(x) for x in self.q], self.phi, self.fing, self.fing, *[float(x) for x in self.s], *[float(x) for x in np.concatenate(self.pipe)], *kb_]))
             for _ in range(4):
                 rclpy.spin_once(self, timeout_sec=0.0)
             tgt_w = self.w0 + (self.t + PHYS) / RTF
@@ -161,18 +195,30 @@ class Stub(Node):
                 ua_in = self.acmd if (self.t - self.acmd_t <= 0.2 and self.acmd_t >= 0) else np.zeros(6)
                 self.pipe = self.pipe[1:] + [np.r_[u_in, ua_in]]
                 ue = self.pipe[0]; self.s = self.s + PHYS * ue[3:]; tw, tgt = ue[:3], self.s
-            else:
-                while n not in self.out and time.perf_counter() < tgt_w:
-                    rclpy.spin_once(self, timeout_sec=0.001)
-                o = self.out.get(n)
-                if o is None:
-                    self.stat['late'] += 1; o = self.last if self.last is not None else np.r_[self.s, np.zeros(3), np.nan]
-                else:
-                    self.stat['on_time'] += 1
-                self.last = o
-                tgt, tw = np.asarray(o[:6], float), np.asarray(o[6:9], float); self.s = tgt.copy()
-                if np.isfinite(o[9]):
-                    self.fing = float(o[9])
+            else:                                                     # 同 Isaac 執行器：本地播放已核段／尾段；底盤＝放行排程（排程生效前排空在途管線）
+                if n % 5 == self.n0 % 5:
+                    while not any(sg[0] == n for sg in self.segs) and time.perf_counter() < tgt_w:
+                        rclpy.spin_once(self, timeout_sec=0.001)
+                ent, src_ = None, None
+                for sg in reversed(self.segs):
+                    n0_, arm_, fg_, tl_ = sg
+                    if n0_ > n:
+                        continue                                      # 提前下發、尚未開始的段
+                    if n0_ <= n < n0_ + len(arm_):
+                        ent, src_ = (arm_[n - n0_], fg_[n - n0_]), 'seg'
+                    elif n0_ + len(arm_) <= n < n0_ + len(arm_) + len(tl_):
+                        ent, src_ = (tl_[n - n0_ - len(arm_)], np.nan), 'tail'
+                    elif n >= n0_ + len(arm_) + len(tl_) and len(tl_):
+                        ent, src_ = (tl_[-1], np.nan), 'tail_end'
+                    break
+                if ent is None:
+                    self.stat['no_segment'] += 1; self.abort = 'd2_no_valid_segment'; break
+                self.stat[src_] += 1
+                tgt = np.asarray(ent[0], float); self.s = tgt.copy()
+                self.pipe = self.pipe[1:] + [np.zeros(9)]; pe_ = self.pipe[0]
+                b_ = self.base_at(n); tw = np.asarray(b_ if b_ is not None else pe_[:3], float)
+                if np.isfinite(ent[1]):
+                    self.fing = float(ent[1])
             if self.bind == 'pending':
                 p_ = K.fk(self.q, 'link_tcp')[:3, 3]; self.bind = dict(ang=math.atan2(p_[1], p_[0]), phi=self.phi)
             cs, sn = math.cos(self.q[2]), math.sin(self.q[2])

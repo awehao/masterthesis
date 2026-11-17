@@ -99,7 +99,28 @@ class GMPCTaskNode(GMPCNode):
             return r
         self.mpc.solve = _solve_pub
 
-    def _t_pub_solve_in(self, X_now, X_ref, xi_ref, obstacles):
+    def _halt(self, state, robot_xyth=None):
+        super()._halt(state, robot_xyth=robot_xyth)
+        if getattr(self, '_t_frontend', False) and robot_xyth is not None and self.cbf_enable:   # 前端：到點／無計畫時也照原規則持續提供障礙物（Codex 20261117_173459：障礙物不能因到點而消失）；參考＝原地（標記 halted）
+            try:
+                obstacles = list(self._obstacles)
+                goal_xy = None
+                if self.latest_path is not None and len(self.latest_path.poses):
+                    gp = self.latest_path.poses[-1].pose.position; goal_xy = (float(gp.x), float(gp.y))
+                rx, ry = robot_xyth[0], robot_xyth[1]
+                dyn_near = (self.static_activate_range <= 0.0) or any(np.hypot(o['x'] - rx, o['y'] - ry) < self.static_activate_range for o in self._obstacles)
+                if dyn_near:
+                    for s_ in self._static_obstacles:
+                        if goal_xy is None or np.hypot(s_['x'] - goal_xy[0], s_['y'] - goal_xy[1]) > self.static_goal_clear:
+                            obstacles.append({**s_, 'static': True, 'margin': self.static_cbf_safe_margin})
+                from .se2 import from_xytheta as _fx
+                X_now = _fx(*robot_xyth)
+                N_ = int(self.N)
+                self._t_pub_solve_in(np.asarray(X_now, float), np.array([X_now] * (N_ + 1)), np.zeros((N_ + 1, 3)), obstacles, halted=state)
+            except Exception as e_:                                   # noqa: BLE001
+                self.get_logger().warn(f'halt solve_in publish failed: {e_!r}')
+
+    def _t_pub_solve_in(self, X_now, X_ref, xi_ref, obstacles, halted=None):
         """（唯讀；單一控制器用）本拍導航原樣算好的求解輸入：參考視窗與障礙物（含動態邊距、靜態牆點、繞行偏移後的參考），
         以 X_now 為基準的相對座標（避開 map／odom 差異）；u_min[0]（繞行速度下限）一併附上。不改任何導航判定或命令。"""
         Xi = np.linalg.inv(X_now)
@@ -115,7 +136,7 @@ class GMPCTaskNode(GMPCNode):
             obs.append([cth * dx + sth * dy, -sth * dx + cth * dy, float(o_['radius']), cth * vx + sth * vy, -sth * vx + cth * vy,
                         float(o_.get('margin', float('nan'))), 1.0 if o_.get('static', False) else 0.0])
         self._t_n_in += 1
-        msg = dict(t=self._t_now(), seq=self._t_n_in, frame='robot_at_t', N=len(X_ref) - 1, X_rel=rel, xi_ref=np.asarray(xi_ref, float).reshape(-1).tolist(), obs=obs, u_min0=float(self._cfg.u_min[0]))
+        msg = dict(t=self._t_now(), seq=self._t_n_in, frame='robot_at_t', N=len(X_ref) - 1, X_rel=rel, xi_ref=np.asarray(xi_ref, float).reshape(-1).tolist(), obs=obs, u_min0=float(self._cfg.u_min[0]), halted=halted)
         if self._t_n_in % 20 == 1:                                    # 導航求解設定（CBF、權重、限制）：單一控制器以同一組設定求解
             import dataclasses as _dc
             msg['cfg'] = {f.name: (np.asarray(getattr(self._cfg, f.name)).tolist() if isinstance(getattr(self._cfg, f.name), np.ndarray) else getattr(self._cfg, f.name)) for f in _dc.fields(self._cfg)

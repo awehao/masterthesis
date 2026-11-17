@@ -144,6 +144,7 @@ class WorldD2(Node):
         self.create_subscription(String, '/far/abort', lambda m: self.abort('supervisor_abort', detail=m.data[:200]), 10)
         if ISAAC:
             self.p_out = self.create_publisher(Float64MultiArray, '/d2/out', 20)
+            self.p_seg = self.create_publisher(Float64MultiArray, '/d2/seg', 20)
             self.p_ctl = self.create_publisher(String, '/d2/ctl', 10)
             self.create_subscription(Float64MultiArray, '/d2/state', self._isaac_state, 20)
             self.fing = None
@@ -282,6 +283,8 @@ class WorldD2(Node):
         self.q, self.phi, self.fing = d[2:11].copy(), float(d[11]), (float(d[12]), float(d[13]))
         self.s = d[14:20].copy()
         self.pipe = [d[20 + 9 * i:29 + 9 * i].copy() for i in range(D_STEPS)]
+        k0_ = 20 + 9 * D_STEPS
+        self.isaac_base_known = d[k0_:k0_ + 3 * (R_REM + 1)].reshape(-1, 3).copy() if len(d) >= k0_ + 3 * (R_REM + 1) else None   # Isaac 端已確定的實際底盤（步 n…n＋R_REM）
         self.step()
 
     def _nav_in_cb(self, m):
@@ -292,6 +295,20 @@ class WorldD2(Node):
         if d_.get('cfg'):
             self.nav_cfg = d_['cfg']
         self.nav_in, self.nav_in_t = d_, self.t
+
+    def pub_seg(self):
+        """Isaac 本地播放用：本次提交的名目段（起始步、5 步手臂設定點與手指）＋其已核停止尾段（手臂設定點）。底盤不在段內（Isaac 依放行流執行）。"""
+        if not ISAAC or runner.seg is None:
+            return
+        seg = runner.seg; tail = np.asarray(runner.tail, float) if runner.tail is not None else np.zeros((0, 9))
+        data = [float(self.n), float(len(seg))]
+        for e_ in seg:
+            data += [float(x) for x in e_['arm_target']]
+        data += [float('nan') if e_.get('finger') is None else float(e_['finger']) for e_ in seg]
+        data += [float(len(tail))]
+        for r_ in tail:
+            data += [float(x) for x in r_[:6]]
+        self.p_seg.publish(Float64MultiArray(data=data))
 
     def ctl(self, what, **kw):
         if ISAAC:
@@ -388,15 +405,21 @@ class WorldD2(Node):
                         ni_['cfg'] = self.nav_cfg
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, nav_in=ni_)
                 if REL_EXEC and k > 0:
-                    pb_ = [(self.base_at(self.n + i_).tolist() if (self.base_known(self.n + i_) and self.base_at(self.n + i_) is not None) else None) for i_ in range(NPH + D_STEPS)]
+                    if ISAAC:                                        # Isaac 端已確定的實際底盤（同一份排程，不各算各的）
+                        ib_ = getattr(self, 'isaac_base_known', None)
+                        pb_ = [(ib_[i_].tolist() if (ib_ is not None and i_ < len(ib_) and np.isfinite(ib_[i_]).all()) else None) for i_ in range(NPH + D_STEPS)]
+                    else:
+                        pb_ = [(self.base_at(self.n + i_).tolist() if (self.base_known(self.n + i_) and self.base_at(self.n + i_) is not None) else None) for i_ in range(NPH + D_STEPS)]
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, pipe_base=pb_)
                 if k == 0:
                     runner.tick_boundary(self.q, self.t - self.t_h + NPH * PHYS, 0, phi=self.phi, finger=self.fing if ISAAC else None)
+                    self.pub_seg()
                     self.propose(runner.prop0)
                 else:
                     was = runner.mode
                     rec = runner.tick_boundary(self.q, self.t - self.t_h + NPH * PHYS, k, phi=self.phi, finger=self.fing if ISAAC else None)
                     if rec.get('commit'):
+                        self.pub_seg()
                         if rec.get('commit_step', k) >= k:
                             self.propose(rec['prop'])
                         if rec.get('bind') and self.bindinfo is None:
@@ -411,6 +434,22 @@ class WorldD2(Node):
                         if 0 <= m_ < len(self.tail_props):
                             self.propose(self.tail_props[m_])
             runner.poll()
+            if ISAAC and runner.mode == 'nominal':                    # 結果一到、符合提交條件（同 tick_boundary：期限內、附尾段、無中止）⇒ 立即下發，起始步＝下一拍首；拍首前沒到 ⇒ 兩邊都走尾段（判斷一致）
+                g_, p_ = runner.got, runner.pending
+                if g_ is not None and p_ is not None and g_[0] == 'seg' and g_[1]['ver'] == p_['ver'] and getattr(self, 'seg_pub_ver', None) != p_['ver']:
+                    o_ = g_[1]; rt_ = (g_[2] - p_['w_send']) * 1e3
+                    if rt_ <= runner.deadline_ms and o_['seg'] is not None and o_['abort'] is None and o_['tail'] is not None:
+                        n_b = self.n0 + NPH * ((k // NPH) + 1)
+                        tl_ = np.asarray(o_['tail'], float)
+                        data = [float(n_b), float(len(o_['seg']))]
+                        for e_ in o_['seg']:
+                            data += [float(x) for x in e_['arm_target']]
+                        data += [float('nan') if e_.get('finger') is None else float(e_['finger']) for e_ in o_['seg']]
+                        data += [float(len(tl_))]
+                        for r_ in tl_:
+                            data += [float(x) for x in r_[:6]]
+                        self.p_seg.publish(Float64MultiArray(data=data))
+                        self.seg_pub_ver = p_['ver']
             o = runner.output()
             if o is None:
                 self.stage = 'hold'
@@ -445,9 +484,8 @@ class WorldD2(Node):
                     if dv_ > 0.003 and len(self.rel_dev_log) < 80:
                         self.rel_dev_log.append(dict(n=self.n, k=self.n - self.n0, stage=self.stage, mode=runner.mode, applied=[round(float(x), 4) for x in b_], ctrl=[round(float(x), 4) for x in tw], dev=round(dv_, 4)))
                     tw = b_
-            if ISAAC:                                                # 本步命令交 Isaac 套用（手臂設定點、實際放行底盤、手指）
-                fg_ = o.get('finger')
-                self.p_out.publish(Float64MultiArray(data=[float(self.n), *[float(x) for x in o['arm_target']], *[float(x) for x in tw], float('nan') if fg_ is None else float(fg_)]))
+            if ISAAC:                                                # Isaac 端本地播放已核段／尾段（/d2/seg），本節點不逐步發命令
+                pass
             else:
                 cs, sn = math.cos(self.q[2]), math.sin(self.q[2])
                 self.q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2]])
