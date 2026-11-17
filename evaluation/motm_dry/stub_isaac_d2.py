@@ -91,6 +91,7 @@ class Stub(Node):
         self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
         self.p_xs = self.create_publisher(String, '/far/exec_state', 10)
         self.p_d2 = self.create_publisher(Float64MultiArray, '/d2/state', 20)
+        self.p_ack = self.create_publisher(String, '/d2/ack', 10)
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 20)
         self.create_subscription(Float64MultiArray, '/far/arm_cmd', self._acmd, 10)
         self.create_subscription(Float64MultiArray, '/d2/out', self._out, 50)
@@ -142,6 +143,7 @@ class Stub(Node):
             self.bind = 'pending'
         elif w == 'unbind':
             self.bind = 'released'                                    # 放手：門角不再跟手（保持當下）
+            self.unbind_req = c.get('req_n')
         elif w == 'end':
             self.end = True
         elif w == 'abort':
@@ -234,6 +236,8 @@ class Stub(Node):
             if isinstance(self.bind, dict):
                 p_ = K.fk(self.q, 'link_tcp')[:3, 3]; d_ = (math.atan2(p_[1], p_[0]) - self.bind['ang'] + math.pi) % (2 * math.pi) - math.pi
                 self.phi = self.bind['phi'] - d_
+            if self.bind == 'released' and self.n % 10 == 0:
+                self.p_ack.publish(String(data=json.dumps(dict(what='unbound', n=int(self.n), req=getattr(self, 'unbind_req', None)))))
             if not isinstance(self.bind, dict):
                 self.obs()                                            # 綁定前持續合成觀察（同 Isaac 端偵測持續運作）
             self.t = round(self.t + PHYS, 10); self.n += 1

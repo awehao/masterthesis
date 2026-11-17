@@ -227,6 +227,7 @@ class Bridge(Node):
         self.p_truth = self.create_publisher(Float64MultiArray, '/far/truth', 10)
         self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
         self.p_state = self.create_publisher(String, '/far/exec_state', 10)
+        self.p_ack = self.create_publisher(String, '/d2/ack', 10)
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 10)
         self.create_subscription(Float64MultiArray, '/far/arm_cmd', self._acmd, 10)
         self.create_subscription(Bool, '/far/done', self._done, 10)
@@ -288,6 +289,7 @@ class Bridge(Node):
             self.d2_bind = True
         elif w == 'unbind':
             self.d2_unbind = True                                    # 穿門段：放手 ⇒ 解除 FixedJoint
+            self.d2_unbind_req = c.get('req_n')
         elif w == 'end':
             self.d2_end = True
         elif w == 'abort' and self.d2_abort is None:
@@ -726,7 +728,9 @@ def main():
             if getattr(node, 'd2_unbind', False) and bound and not released:   # 解除綁定：停用 FixedJoint（門回到被動鉸鏈）
                 stage.GetPrimAtPath(JOINT).GetAttribute('physics:jointEnabled').Set(False)
                 bound, released = False, True
-                ev('unbind_fixed_joint', door_deg=round(math.degrees(phi_now), 4))
+                ev('unbind_fixed_joint', door_deg=round(math.degrees(phi_now), 4), n=int(n_now))
+            if released and k % 10 == 0:                               # 解綁生效回報（重送，直到收尾）
+                node.p_ack.publish(String(data=json.dumps(dict(what='unbound', n=int(n_now), req=getattr(node, 'd2_unbind_req', None)))))
             for i, j in zip(idx, range(6)):
                 tgt[i] = float(s[j])
             tgt[f1] = fcmd

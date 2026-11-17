@@ -147,6 +147,7 @@ class WorldD2(Node):
             self.p_seg = self.create_publisher(Float64MultiArray, '/d2/seg', 20)
             self.p_ctl = self.create_publisher(String, '/d2/ctl', 10)
             self.create_subscription(Float64MultiArray, '/d2/state', self._isaac_state, 20)
+            self.create_subscription(String, '/d2/ack', self._d2_ack, 20)
             self.fing = None
         else:
             self.timer = self.create_timer(WN.DT / RTF, self.step)
@@ -315,6 +316,15 @@ class WorldD2(Node):
             data += [float(x) for x in r_[:6]]
         self.p_seg.publish(Float64MultiArray(data=data))
 
+    def _d2_ack(self, m):
+        try:
+            c = json.loads(m.data)
+        except Exception:                                             # noqa: BLE001
+            return
+        if c.get('what') == 'unbound' and getattr(self, 'unbound_ack', None) is None:
+            self.unbound_ack = c
+            self.ev('unbind_ack', n_applied=c.get('n'), req=c.get('req'))
+
     def ctl(self, what, **kw):
         if ISAAC:
             self.p_ctl.publish(String(data=json.dumps(dict(what=what, n=self.n, t=round(self.t, 3), **kw), default=str)))
@@ -410,6 +420,8 @@ class WorldD2(Node):
                     if self.nav_cfg is not None:
                         ni_['cfg'] = self.nav_cfg
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, nav_in=ni_)
+                if getattr(self, 'unbound_ack', None) is not None:     # 穿門段：執行端已回報解綁生效 ⇒ 快照帶給控制器
+                    runner.extra = dict(getattr(runner, 'extra', None) or {}, unbound=True)
                 if REL_EXEC and k > 0:
                     if ISAAC:                                        # Isaac 端已確定的實際底盤（同一份排程，不各算各的）
                         ib_ = getattr(self, 'isaac_base_known', None)
@@ -435,7 +447,7 @@ class WorldD2(Node):
                         if rec.get('release') and not getattr(self, 'released', False):   # 穿門段：放手 ⇒ 解除綁定（Isaac 移除 FixedJoint；乾跑門角不再跟手）
                             self.released, self.bindinfo = True, None
                             self.ev('release_committed')
-                            self.ctl('unbind')
+                            self.ctl('unbind', req_n=int(self.n))
                         for e_ in (rec.get('events') or []):
                             if str(e_.get('what', '')).startswith('pass_'):
                                 self.ev(e_['what'], **{('ctrl_' + k_ if k_ in ('t', 'n', 'what') else k_): v_ for k_, v_ in e_.items() if k_ != 'what'})

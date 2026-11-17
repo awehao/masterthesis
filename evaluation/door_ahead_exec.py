@@ -97,6 +97,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 door.rebind_first(**snap['door_rebind'])
             if snap.get('nav_in') is not None and ctrl is not None:  # 單一控制器：導航前端本拍輸入（參考、障礙物、設定）
                 ctrl.nav_in = snap['nav_in']
+            if snap.get('unbound') and mode == 'pass':                # 穿門段：執行端解綁生效回報
+                ctrl.unbound = True
             if snap.get('app_start') is not None and ctrl is not None and mode == 'grasp':   # 接近開始（觀測觸發）：剖面自本段起點起算；估計換成融合估計（重設融合）
                 ap_ = dict(snap['app_start'])
                 T_ref_ = np.asarray(ap_.pop('T_ref'), float); ver_ = int(ap_.pop('ref_ver', 1)); tobs_ = float(ap_.pop('t_obs_rel', 0.0))
