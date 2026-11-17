@@ -33,6 +33,8 @@ FSP = PS.PlannerServer()                                             # D2 首段
 FS_LEAD = float(os.environ.get('D2_FS_LEAD', '1.5'))
 R_REM = int(os.environ.get('D2_R_REM', str(D_STEPS - NPH)))   # 放行收到後到執行器套用的剩餘延遲（步）：總延遲 D＝安全鏈一個 GUARD 週期（NPH）＋剩餘
 REL_EXEC = os.environ.get('D2_REL_EXEC', '1') == '1'          # B（Codex 150510）：執行與預測用安全鏈實際放行值
+ISAAC = os.environ.get('D2_PLANT', 'fake') == 'isaac'   # Isaac 模式：受控對象＝Isaac 執行器（每步收 /d2/state、發 /d2/out）；本節點不積分、不發時鐘／odom／掃描／觀察
+ISAAC_TOL = dict(base=0.02, arm=0.05, s=1e-3, q=5e-3)          # Isaac 交權承接容差（實測對模型預測；交權後實際放行照實進管線）
 LENIENT = os.environ.get('D2_LENIENT', '0') == '1'
 D2_PHASE_ALIGN = os.environ.get('D2_PHASE_ALIGN', '1') == '1'
 TOL = dict(base=float(os.environ.get('D2_TOL_BASE', '2e-3')), arm=1e-9)   # 交權時實際管線對預測的容差（底盤 m/s、rad/s；手臂命令須逐值相同）
@@ -133,7 +135,13 @@ class WorldD2(Node):
         self.create_subscription(Float64MultiArray, '/far/arm_cmd', self._acmd, 10)
         self.create_subscription(String, '/far/handover', self._ho, 10)
         self.create_subscription(String, '/far/abort', lambda m: self.abort('supervisor_abort', detail=m.data[:200]), 10)
-        self.timer = self.create_timer(WN.DT / RTF, self.step)
+        if ISAAC:
+            self.p_out = self.create_publisher(Float64MultiArray, '/d2/out', 20)
+            self.p_ctl = self.create_publisher(String, '/d2/ctl', 10)
+            self.create_subscription(Float64MultiArray, '/d2/state', self._isaac_state, 20)
+            self.fing = None
+        else:
+            self.timer = self.create_timer(WN.DT / RTF, self.step)
 
     def ev(self, what, **kw):
         e = dict(t=round(self.t, 3), n=self.n, what=what, **kw)
@@ -235,6 +243,7 @@ class WorldD2(Node):
             self.aborted = dict(why=why, t=round(self.t, 3), n=self.n, **kw)
             self.ev('engineering_abort', why=why, **kw)
             self.stage = 'end'
+            self.ctl('abort', why=why)
 
     def step(self):
         try:
@@ -242,6 +251,21 @@ class WorldD2(Node):
         except Exception:                                             # noqa: BLE001
             import traceback
             self.abort('exception', err=traceback.format_exc()[-1500:])
+
+    def _isaac_state(self, m):
+        """Isaac 每步狀態：[n, t, q9, φ（門扇實測）, 兩指, 設定點 6, 在途管線 8×9]。收到即跑本步邏輯並發本步命令（物理不等：Isaac 在配速空檔內收不到就保持上一筆並計數）。"""
+        d = np.asarray(m.data, float)
+        if self.stage == 'end' or len(d) < 20 + 9 * D_STEPS:
+            return
+        self.n, self.t = int(round(d[0])), float(d[1])
+        self.q, self.phi, self.fing = d[2:11].copy(), float(d[11]), (float(d[12]), float(d[13]))
+        self.s = d[14:20].copy()
+        self.pipe = [d[20 + 9 * i:29 + 9 * i].copy() for i in range(D_STEPS)]
+        self.step()
+
+    def ctl(self, what, **kw):
+        if ISAAC:
+            self.p_ctl.publish(String(data=json.dumps(dict(what=what, n=self.n, t=round(self.t, 3), **kw), default=str)))
 
     def plant_ext(self, q, s, pipe, u_in):
         """外部命令期受控對象一步（同 Isaac 執行器：命令進 8 步管線；手臂設定點積分、一階關節＋偏置；底盤照管線輸出）。"""
@@ -300,9 +324,12 @@ class WorldD2(Node):
                 if not self.commit():
                     return
             if self.stage in ('approach', 'prep'):
-                self.q, self.s, self.pipe, ue = self.plant_ext(self.q, self.s, self.pipe, np.r_[u_b, u_a])
-                u_now = ue[:3]
-                self.obs_publish()
+                if ISAAC:
+                    u_now = np.asarray(self.pipe[0][:3], float)
+                else:
+                    self.q, self.s, self.pipe, ue = self.plant_ext(self.q, self.s, self.pipe, np.r_[u_b, u_a])
+                    u_now = ue[:3]
+                    self.obs_publish()
         if self.stage == 'run':
             k = self.n - self.n0
             fp_ = getattr(self, 'fs_plan', None)
@@ -322,17 +349,18 @@ class WorldD2(Node):
                     pb_ = [(self.base_at(self.n + i_).tolist() if (self.base_known(self.n + i_) and self.base_at(self.n + i_) is not None) else None) for i_ in range(NPH + D_STEPS)]
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, pipe_base=pb_)
                 if k == 0:
-                    runner.tick_boundary(self.q, self.t - self.t_h + NPH * PHYS, 0, phi=self.phi)
+                    runner.tick_boundary(self.q, self.t - self.t_h + NPH * PHYS, 0, phi=self.phi, finger=self.fing if ISAAC else None)
                     self.propose(runner.prop0)
                 else:
                     was = runner.mode
-                    rec = runner.tick_boundary(self.q, self.t - self.t_h + NPH * PHYS, k, phi=self.phi)
+                    rec = runner.tick_boundary(self.q, self.t - self.t_h + NPH * PHYS, k, phi=self.phi, finger=self.fing if ISAAC else None)
                     if rec.get('commit'):
                         if rec.get('commit_step', k) >= k:
                             self.propose(rec['prop'])
                         if rec.get('bind') and self.bindinfo is None:
                             self.bindinfo = runner.last['bind']
                             self.ev('bind_committed')
+                            self.ctl('bind')
                     elif was == 'nominal':
                         self.tail_props, self.tail_k0 = runner.tail_props(runner.tail, D_STEPS) if runner.tail is not None else [], k
                         self.ev('tail_started', why=rec.get('why'), roundtrip_ms=rec.get('roundtrip_ms'), ctrl_done=rec.get('ctrl_done'), n_tail_props=len(self.tail_props))
@@ -375,11 +403,15 @@ class WorldD2(Node):
                     if dv_ > 0.003 and len(self.rel_dev_log) < 80:
                         self.rel_dev_log.append(dict(n=self.n, k=self.n - self.n0, stage=self.stage, mode=runner.mode, applied=[round(float(x), 4) for x in b_], ctrl=[round(float(x), 4) for x in tw], dev=round(dv_, 4)))
                     tw = b_
-            cs, sn = math.cos(self.q[2]), math.sin(self.q[2])
-            self.q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2]])
-            self.q[3:] = self.q[3:] + al * dead(o['arm_target'] - self.q[3:] + dq(self.q))
-            if self.bindinfo is not None:
-                self.phi = self.phi_bound(self.q)
+            if ISAAC:                                                # 本步命令交 Isaac 套用（手臂設定點、實際放行底盤、手指）
+                fg_ = o.get('finger')
+                self.p_out.publish(Float64MultiArray(data=[float(self.n), *[float(x) for x in o['arm_target']], *[float(x) for x in tw], float('nan') if fg_ is None else float(fg_)]))
+            else:
+                cs, sn = math.cos(self.q[2]), math.sin(self.q[2])
+                self.q[:3] += PHYS * np.array([cs * tw[0] - sn * tw[1], sn * tw[0] + cs * tw[1], tw[2]])
+                self.q[3:] = self.q[3:] + al * dead(o['arm_target'] - self.q[3:] + dq(self.q))
+                if self.bindinfo is not None:
+                    self.phi = self.phi_bound(self.q)
             u_now = np.asarray(tw, float)
         if not (np.isfinite(self.q).all() and math.isfinite(self.phi)):
             self.abort('state_nonfinite'); return
@@ -404,6 +436,11 @@ class WorldD2(Node):
             elif self.t - h['t0'] >= SS['timeout_s']:
                 h['verified'] = False; self.ev('not_settled_after_tail'); self.stage = 'end'
         # ---- 發布
+        if ISAAC:                                                    # Isaac 模式：時鐘／odom／關節／真值／掃描都由 Isaac 執行器發
+            self.rows.append([self.t, *self.q, self.phi, *u_now, {'approach': 0, 'prep': 1, 'run': 2, 'hold': 3, 'end': 4}[self.stage], float(runner.mode == 'nominal'), float(self.bindinfo is not None), time.perf_counter() - self.w0])
+            if self.stage == 'end':
+                self.ctl('end')
+            return
         self.t = round(self.t + PHYS, 10)
         self.n += 1
         ck_ = Clock(); ck_.clock = self.stamp(); self.p_clock.publish(ck_)
@@ -496,7 +533,10 @@ class WorldD2(Node):
         P = np.array(self.pipe); Pp = np.array(self.prep['pipe_pred'])
         d_base = float(np.abs(P[:, :3] - Pp[:, :3]).max()); d_arm = float(np.abs(P[:, 3:] - Pp[:, 3:]).max())
         d_s = float(np.abs(self.s - self.prep['s_pred']).max()); d_q = float(np.abs(self.q - self.prep['q_pred']).max())
-        extra = d_base <= TOL['base'] and d_arm <= TOL['arm'] and d_s <= 1e-9 and d_q <= 1e-6
+        if ISAAC:                                                    # Isaac：實測物理對模型預測不會逐位元相同 ⇒ 承接容差（關節 5e-3、設定點 1e-3、底盤管線 0.02 m/s、手臂管線 0.05 rad/s）
+            extra = d_base <= ISAAC_TOL['base'] and d_arm <= ISAAC_TOL['arm'] and d_s <= ISAAC_TOL['s'] and d_q <= ISAAC_TOL['q']
+        else:
+            extra = d_base <= TOL['base'] and d_arm <= TOL['arm'] and d_s <= 1e-9 and d_q <= 1e-6
         ph = FCA.best_phase(self.rx_steps)
         ok, rec = runner.commit_takeover(0, extra_ok=extra, why_not=None if extra else 'state_mismatch')
         rec.update(d_base=round(d_base, 6), d_arm=d_arm, d_s=d_s, d_q=d_q, guard_phase=ph, n_mod=self.n % NPH, wall_prep_ms=round((time.perf_counter() - self.prep['w']) * 1e3, 1))
@@ -511,6 +551,7 @@ class WorldD2(Node):
         self.ca = FCA.ChainAlign(D_STEPS, NPH, pre_release=rel)
         self.n0, self.stage = self.n, 'run'
         self.ev('d2_takeover', **rec)
+        self.ctl('takeover', n0=self.n)
         return True
 
     def save(self):
