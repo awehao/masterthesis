@@ -203,9 +203,11 @@ def _gi_inv_add(Minv, c, d, n_upd):
         return np.array([[1.0 / d]]) if (c.size == 0 and d > 0) else None
     if n_upd % GI_REFRESH == GI_REFRESH - 1:
         return None
+    if not (np.isfinite(d) and np.isfinite(c).all()):
+        return None
     u_ = Minv @ c
     s_ = d - float(c @ u_)
-    if not (s_ > 1e-14 * max(d, 1e-300)):
+    if not (np.isfinite(s_) and s_ > 1e-14 * max(d, 1e-300)):
         return None
     k = Minv.shape[0]
     out = np.empty((k + 1, k + 1))
@@ -213,16 +215,20 @@ def _gi_inv_add(Minv, c, d, n_upd):
     out[:k, k] = -u_ / s_
     out[k, :k] = -u_ / s_
     out[k, k] = 1.0 / s_
-    return out
+    return out if np.isfinite(out).all() else None
 
 
 def _gi_inv_drop(Minv, j, n_upd):
     """移除第 j 列／行後子矩陣的反矩陣：A − b bᵀ／d。"""
     if Minv is None or Minv.shape[0] <= 1 or n_upd % GI_REFRESH == GI_REFRESH - 1:
         return None
+    d_ = float(Minv[j, j])
+    if not (np.isfinite(d_) and abs(d_) > 1e-300):
+        return None                                                   # 退化 ⇒ 丟棄快取、下一次直接重建
     keep = np.r_[0:j, j + 1:Minv.shape[0]]
     b_ = Minv[keep, j]
-    return Minv[np.ix_(keep, keep)] - np.outer(b_, b_) / Minv[j, j]
+    out = Minv[np.ix_(keep, keep)] - np.outer(b_, b_) / d_
+    return out if np.isfinite(out).all() else None
 
 
 def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800, deadline=None):
@@ -265,6 +271,12 @@ def qp_dual_active(P, q, A, l, u, tol=1e-9, max_steps=800, deadline=None):
                 r = Minv @ bb
                 for _ in range(2):                                    # 迭代精修（殘差用維護中的 M，O(k²)）
                     r = r + Minv @ (bb - Mm @ r)
+                if not np.isfinite(r).all():                         # 防呆：非有限 ⇒ 丟快取、直接解
+                    Minv = Mm = None
+                    try:
+                        r = np.linalg.solve(N_ @ Pi, bb)
+                    except np.linalg.LinAlgError:
+                        return None, None, dict(ok=False, why='singular', steps=step, solver='gi')
                 zd = Hn - Pi @ r
             elif act:
                 N_, Pi = np.array(Nr), np.array(PiN).T

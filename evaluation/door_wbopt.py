@@ -113,6 +113,9 @@ def _static():
 
 def clear_door(x, T_WH0):
     """非線性淨空：回 dict(env, base, self, shell_bar, who)。門扇、立柱、橫桿都轉到 φ。"""
+    if isinstance(FINGER_Q, (tuple, list)):                         # 兩指各自實測開度（第十趟：綁定後同步實測）⇒ 走逐值相同、支援兩指的快速版
+        import door_clear_door_fast as _CF
+        return _CF.clear_door_fast(x, T_WH0)
     qf, phi = np.asarray(x[:9], float), float(x[9])
     sh, leaf = _static()
     Rp = Rz4(-phi)[:3, :3]                                         # 門扇幾何以絕對門角轉（資產在 φ＝0 定義）
