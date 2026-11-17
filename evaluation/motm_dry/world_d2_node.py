@@ -279,8 +279,13 @@ class WorldD2(Node):
         d = np.asarray(m.data, float)
         if self.stage == 'end' or len(d) < 20 + 9 * D_STEPS:
             return
-        self.n, self.t = int(round(d[0])), float(d[1])
-        self.q, self.phi, self.fing = d[2:11].copy(), float(d[11]), (float(d[12]), float(d[13]))
+        n_new = int(round(d[0])); q_new = d[2:11].copy()
+        if getattr(self, '_q_last', None) is not None and n_new > self._q_last[0]:   # 實測速率（起點交權的靜止判準用）
+            dt_ = (n_new - self._q_last[0]) * PHYS; dq_ = (q_new - self._q_last[1]) / dt_
+            self.meas_rate = dict(base=float(np.hypot(dq_[0], dq_[1])), yaw=abs(float(dq_[2])), arm=float(np.abs(dq_[3:]).max()))
+        self._q_last = (n_new, q_new.copy())
+        self.n, self.t = n_new, float(d[1])
+        self.q, self.phi, self.fing = q_new, float(d[11]), (float(d[12]), float(d[13]))
         self.s = d[14:20].copy()
         self.pipe = [d[20 + 9 * i:29 + 9 * i].copy() for i in range(D_STEPS)]
         k0_ = 20 + 9 * D_STEPS
@@ -626,7 +631,9 @@ class WorldD2(Node):
         else:
             extra = d_base <= TOL['base'] and d_arm <= TOL['arm'] and d_s <= 1e-9 and d_q <= 1e-6
         ph = FCA.best_phase(self.rx_steps)
-        static_ = bool(self.ho.get('unified')) and float(np.abs(np.asarray(self.pipe)).max()) <= 1e-9   # 起點交權前整機靜止（在途管線全零）
+        mr_ = getattr(self, 'meas_rate', None)
+        static_ = (bool(self.ho.get('unified')) and float(np.abs(np.asarray(self.pipe)).max()) <= 1e-9
+                   and mr_ is not None and mr_['base'] < 0.003 and mr_['yaw'] < 0.003 and mr_['arm'] < 0.002)   # 起點交權前整機靜止：在途管線全零＋實測速率（既有停穩判準；Codex 20261117_181645）
         wait_ = ISAAC and static_ and (time.perf_counter() - self.prep['w']) < 1.0
         ok, rec = runner.commit_takeover(0, extra_ok=extra, why_not=None if extra else 'state_mismatch', wait_ok=wait_)
         if not ok and rec.get('why') == 'waiting':                    # Isaac 起點交權：第一段結果未到（c：狀態訊息成批到達，準備→交權只隔 3.9 ms 牆鐘）⇒ 順延一整拍（維持相位），交權前整機靜止、不影響物理

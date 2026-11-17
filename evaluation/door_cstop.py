@@ -118,7 +118,8 @@ class CStop:
         if float(np.abs(ua).max()) > self.va + 1e-9:
             return dict(ok=False, why='arm_rate', v=float(np.abs(ua).max()))
         if float(np.abs(ua - u_prev[3:]).max()) / DT > self.C0.A_ARM + 1e-9:
-            return dict(ok=False, why='arm_acc', v=float(np.abs(ua - u_prev[3:]).max()) / DT)
+            da_ = np.abs(ua - u_prev[3:]) / DT; j_ = int(np.argmax(da_))   # 取證（Codex 20261117_181645）：關節編號、加速度、上限、停止首拍命令、前一筆命令（判定不變）
+            return dict(ok=False, why='arm_acc|j=%d|v=%.3f|lim=%.3f|ua=%s|u_prev=%s' % (j_, float(da_[j_]), float(self.C0.A_ARM), [round(float(x), 4) for x in ua], [round(float(x), 4) for x in u_prev[3:]]), v=float(da_[j_]))
         if float(np.abs(self.W.WM @ ub).max()) > self.W.W_LIM + 1e-9:
             return dict(ok=False, why='wheel_v')
         if np.any(S1 < self.lim_lo) or np.any(S1 > self.lim_hi):       # r2：同閉鏈手臂命令的驗收（設定點限位、關節限位、可操作度）

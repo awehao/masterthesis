@@ -1,0 +1,41 @@
+{
+ "name": "m8_house_d2_unified_r2",
+ "run_id": "m8house_d2_unified_2",
+ "status": "Codex 20261117_181645 核可另開一趟：起點初始化修正（整機靜止＝在途管線全零＋實測速率；第一段未到順延整拍、≤1 s；只限起點）＋閉鏈列收緊 ±2 mm／±1.5°；停法、A_ARM、淨空門檻、候選停止驗收不變；arm_acc 取證欄位",
+ "purpose": "單一 W-GMPC 控制器自起點主導：導航（導航節點只當參考＋障礙物前端）→ 有效估計＋接近觸發 → 移動中伸手、插入、閉爪、確認 → 綁定（FixedJoint 理想抓持）→ 全身 QP＋閉鏈列開門到 85° → 停穩。回答 Isaac 物理下是否名目完成；允許否定結果。",
+ "config": "START=1.5,-2.8,1.5708；ARM=online_1 far_live 構型；SIM_LIMIT=90；RTF=0.3（物理依牆鐘固定 RTF 推進，不等計算）；cam 5 Hz 實際影像偵測（獨立程序）；run_guarded_v3.sh（92 °C 熱中止）；機器＝桌機 MS-7E62（Ryzen 7 9800X3D、RTX 5070）",
+ "schedule": "desktop：Isaac 0,8,1,9；導航 2,10,7,15；監督 3,11；規劃 4,12；控制伺服器（world_d2_node D2_PLANT=isaac）4,12,5,13,6,14（池 6）",
+ "chain": {
+  "simulator": "evaluation/isaac_m8_house_d2.py（b_capture 複本；交權後本地依步號播放 /d2/seg 的已核名目段與停止尾段（等待上限＝本步配速時限，物理不等）；底盤＝本端放行排程（收件步＋R_REM 3）；/d2/ctl bind ⇒ FixedJoint；門角＝門扇實測）",
+  "controller_server": "evaluation/motm_dry/world_d2_node.py（D2_PLANT=isaac）：起點交權、AheadRunner 工作程序內單一 gmpc_wb 實例（抓持控制器 _track_unified＋開門執行層共用）；結果一到且符合提交條件即下發 /d2/seg；預測用 Isaac 回報的已確定底盤；ChainAlign 逐次記錄",
+  "navigation": "omni_bot_dynamic.launch.py 同基準開關＋GMPC_TASK=1 GMPC_FRONTEND=1（gmpc_task_node 只當參考＋障礙物前端：原樣建參考視窗、障礙物、繞行；不求解、不發命令）；導航參數未改",
+  "supervisor": "evaluation/motm_b/b_d2_node.py（B_UNIFIED=1：起點交權〔重送至第一筆抓持提案〕；導航目標＝抓取底盤位姿；朝向條件照原機制；有效估計＋離目標 ≤0.6 m ⇒ 接近開始）",
+  "runner": "evaluation/run_d2_isaac.sh"
+ },
+ "control": [
+  "同一 gmpc_wb 實例（以導航求解設定建立；cmd_ramp 0.4/0.6；輪級上限 ×0.95／×0.75 控制器端餘裕，GUARD 不動）",
+  "導航期：底盤參考與 CBF 障礙物＝導航前端原樣輸入（相對擷取位姿，對齊管線 2 步）；手臂 hold",
+  "接近：TCP 參考＝接近開始時 TCP 相對底盤位姿（掛導航參考底盤）→ 沿接近軸抓取線（d_line 0.15→s_final 0.0015 m，t_settle 1.0 s）混接；混接段 w_p 50＋門旁分支姿態偏好 w_q 2，近段 w_p 200；導航到點後收斂到抓取底盤位姿（≤0.06 m/s）；接近後只排除中心落在門扇本體上的動態障礙（靜態牆點與未關聯者保留），門的碰撞由門專屬淨空核對；障礙物過期 >0.5 s ⇒ 停止",
+  "開門：DoorOpenExec arm_mode=qp（最終命令＝同一 QP 底盤＋手臂，不以 IK 覆蓋）；閉鏈列 T_WE≈T_WH(φ_ref)·T_HE 位置 ±2 mm、姿態 ±1.5°（前 4 步）；導航障礙物（去門扇）進 CBF"
+ ],
+ "protection": [
+  "D2_LENIENT=0：外殼—橫桿 5 mm、鎖定預算、候選停止核對、實測淨空照原門檻",
+  "Isaac：交權前任何接觸 >0.05 N 中止；交權後夾爪合力 >40 N、底盤接觸 >0.05 N 中止；綁定前門動 >0.5° 中止；非有限中止；92 °C 熱中止",
+  "期限：150 ms 牆鐘為非即時展示預算（RTF 0.3 一拍 167 ms；晚到不補送、物理不等）；不宣稱 50 ms 即時",
+  "本地播放：缺新段播該段已核尾段；尾段耗盡且無新段而底盤命令 >1 mm/s ⇒ 工程中止 d2_tail_end_base_nonzero；無有效段 ⇒ 工程中止 d2_no_valid_segment",
+  "起點交權：第一段未到且整機靜止（在途管線全零、實測底盤 <3 mm/s、偏航 <3 mrad/s、關節 <2 mrad/s）⇒ 順延整拍，>1 s 拒絕；其他交權照原 nack"
+ ],
+ "dry_basis": "乾跑 u10（假世界運動學＋合成觀察）名目完成；Isaac 協定介面替身 s5（非 Isaac）名目完成；u8／s4 阻點（停止路徑外殼—橫桿 4.9–5.0 mm）以抓取深度留量 1.5 mm 解除；協定替身 s11（±2 mm／±1.5°）open_done 84.988°、停穩 85.03°",
+ "not_claims": [
+  "n=1；FixedJoint 理想抓持；門角參考的機構約束追蹤（門被動）；非即時；不宣稱 50 ms",
+  "閉鏈列是線性化追蹤界，不是精確閉鏈或力學保證",
+  "名目完成（open_done）與尾段停穩分開列；門到 85° ≠ 完整驗收",
+  "失敗保留、不補跑",
+  "拍首名目段晚於 Isaac 配速時限時有 1–2 步混播（名目段／尾段），列工程限制；不宣稱停止證書完整成立"
+ ],
+ "video": "整機視角：依 Isaac 紀錄重繪（標明來源）；腕部相機影格另存",
+ "recorded": [
+  "停法 arm_acc 時記關節編號、加速度、上限、停止首拍命令、前一筆命令（判定不變）"
+ ],
+ "previous": "m8house_d2_unified_1：Isaac 初始化時序失敗（起點交權 not_ready，狀態成批到達），導航未開始；不算開門物理失敗"
+}
