@@ -985,7 +985,13 @@ class DoorOpenExec:
         obs_ = self._nav_obs(q) if getattr(self, 'unified', False) else None   # 單一控制器：導航 CBF 障礙物進開門段同一 QP
         if getattr(self, 'unified', False) and obs_ is None:
             return None                                                # 障礙物資料過期 ⇒ 求解失敗處置（停止），不在無障礙資料下續算
-        r = self.mpc.solve(X_now=from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs_)
+        try:
+            r = self.mpc.solve(X_now=from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs_)
+        except ValueError as e_:                                       # 底盤名目點在門扇箱內 ⇒ 明確不可行 ⇒ 求解失敗處置（原停止）
+            if 'base_keepout' not in str(e_):
+                raise
+            self.keepout_fail = getattr(self, 'keepout_fail', []) + [dict(t=round(self.t, 3), err=str(e_)[:120])]
+            return None
         self.solve_ms.append((time.perf_counter() - w0) * 1e3)
         qi_ = (r.arm_check or {}).get('qp') or {}
         f_ = lambda v_: float('nan') if v_ is None else float(v_)       # noqa: E731

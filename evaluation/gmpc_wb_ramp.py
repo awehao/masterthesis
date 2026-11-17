@@ -1742,8 +1742,8 @@ class GMPC:
                     Lc = (P_ - c_) @ R_
                     dv = np.abs(Lc) - hs_
                     ov = np.maximum(dv, 0.0); on = float(np.linalg.norm(ov))
-                    if on < 1e-9:
-                        continue
+                    if on < 1e-9:                               # 名目點在門扇箱內或極近邊界：不可跳過（Codex 185358）⇒ 明確不可行，交原停止處置
+                        raise ValueError('base_keepout: nominal base point inside door-leaf box at step %d' % k)
                     dist_ = on - float(bk['RB'])
                     if dist_ - float(bk['dmin']) > float(bk.get('act', 0.30)):
                         continue
