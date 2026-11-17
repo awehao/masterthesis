@@ -1725,12 +1725,14 @@ class GMPC:
             lb_total = np.concatenate([lb_total, np.concatenate(rows_l)])
             ub_total = np.concatenate([ub_total, np.concatenate(rows_u)])
             arm_info = dict(nz=nz, A=A_arm, l=np.concatenate(rows_l), u=np.concatenate(rows_u), Mq=Mq, cq=cq, U0=U0)
+            _rm = [('base_cbf_wheel', 0, len(lb_total) - arm_rows), ('arm_rate_acc_limits', len(lb_total) - arm_rows, len(lb_total))]   # 約束類別（失敗拍存檔用；Codex 190256）
             if ct_L:                                            # 接觸管道：r0 − e ≤ L·z ≤ r0 + e（等同 |e_k 位置逐軸| ≤ e，立方管道；不加鬆弛）
                 Act, rct = np.vstack(ct_L), np.concatenate(ct_r)
                 A_total = sparse.vstack([A_total, sparse.csc_matrix(Act)], format='csc')
                 lb_total = np.concatenate([lb_total, rct - float(ct['e'])])
                 ub_total = np.concatenate([ub_total, rct + float(ct['e'])])
                 arm_info['ct'] = (Act, rct, float(ct['e']), ct_c)
+                _rm.append(('closure_pos', len(lb_total) - len(rct), len(lb_total)))
             bk = arm.get('base_keepout')
             if bk:                                              # （Codex 20261117_184816）底盤—門扇淨空下界：距離同 clear_door_fast（底盤中心到門扇箱體距離 − RB），解析梯度；只含底盤變數；前 n 步、距門檻 act 內才加列
                 bk_rows, bk_lb, bk_log = [], [], []
@@ -1755,6 +1757,7 @@ class GMPC:
                     A_total = sparse.vstack([A_total, sparse.csc_matrix(np.array(bk_rows))], format='csc')
                     lb_total = np.concatenate([lb_total, np.array(bk_lb)])
                     ub_total = np.concatenate([ub_total, np.full(len(bk_rows), np.inf)])
+                    _rm.append(('base_door_keepout', len(lb_total) - len(bk_rows), len(lb_total)))
                 arm_info['base_keepout'] = bk_log
             if ct_Lr:                                           # 姿態管道：|姿態誤差 逐軸| ≤ e_rot（同一線性化，不加鬆弛）
                 Acr, rcr = np.vstack(ct_Lr), np.concatenate(ct_rr)
@@ -1762,6 +1765,7 @@ class GMPC:
                 lb_total = np.concatenate([lb_total, rcr - float(ct['e_rot'])])
                 ub_total = np.concatenate([ub_total, rcr + float(ct['e_rot'])])
                 arm_info['ct_rot'] = (Acr, rcr, float(ct['e_rot']))
+                _rm.append(('closure_rot', len(lb_total) - len(rcr), len(lb_total)))
             bo = arm.get('body_obst')
             if bo:                                              # 三維障礙：TCP 剛連點（夾爪、持瓶）的預測距離約束，底盤與手臂都在列內，耦合問題自己分配誰讓路
                 r_ob, l_ob, planes, by_body, row_body = [], [], [], {}, []
@@ -1848,6 +1852,10 @@ class GMPC:
             res = prob.solve()
             if n_arm:
                 qp_info['osqp_ms'] = (time.perf_counter() - t_os) * 1e3
+                qp_info.update(osqp_status=str(res.info.status), osqp_iter=int(getattr(res.info, 'iter', -1)), osqp_pri_res=float(getattr(res.info, 'pri_res', float('nan'))), osqp_dua_res=float(getattr(res.info, 'dua_res', float('nan'))))
+                if str(res.info.status) != 'solved':                   # 失敗拍可重現資料（Codex 190256）：P,q,A,l,u＋約束類別
+                    qp_info['dump'] = dict(P=np.asarray(P_dense, float), q=np.asarray(q_vec, float), A=A_total.toarray(), l=np.asarray(lb_total, float), u=np.asarray(ub_total, float),
+                                           marks=list(locals().get('_rm', [])), gi_why=qp_info.get('gi_why'))
             # （候選，Codex 20261103_090730、145515）只有呼叫端明確給 arm={'mode':'hold','mi_gi_fallback':True} 才啟用，觸發僅限 OSQP 迭代上限或 solved inaccurate（改用另一解法重解，不是直接接受不精確解）：
             # 對完全相同的 P,q,A,l,u 用對偶作用集求一次（內含 qp_kkt_check），通過才交回原後處理；未通過就保留原 OSQP 結果與狀態，由呼叫端照原規則停止。預設不變。
             if (not n_arm and arm is not None and arm.get('mode') == 'hold' and arm.get('mi_gi_fallback')
@@ -1886,6 +1894,12 @@ class GMPC:
         else:
             sol = np.asarray(res.x)
             delta = sol[:Nm].reshape(N, n)
+            if n_arm and qp_info is not None:                         # 接受解：全部硬列（含閉鏈位置／姿態、底盤—門扇距離）殘差核對並分類記錄（Codex 190256）
+                Ax_ = A_total @ sol
+                v_ = np.maximum(np.maximum(lb_total - Ax_, Ax_ - ub_total), 0.0)
+                v_ = np.where(np.isfinite(v_), v_, 0.0)
+                qp_info['all_rows_viol'] = float(v_.max()) if len(v_) else 0.0
+                qp_info['viol_by_class'] = {nm_: float(v_[a_:b_].max()) for nm_, a_, b_ in locals().get('_rm', []) if b_ > a_}
             # Post-solve audit of the CBF rows. h < 0 only says the robot is
             # inside the keep-out; it does NOT say the barrier condition was
             # broken, because a robot already inside but moving out still
@@ -1927,7 +1941,7 @@ class GMPC:
                     ct_info = dict(rows=int(len(rct)), bind=int(np.sum(np.abs(e_lin) >= ec_ - 1e-6)), e_lin=e_lin.tolist(),
                                    q_center=[c_[0].tolist() for c_ in cc_], e_center=[c_[1].tolist() for c_ in cc_], e_center_rows=(rct - Act[:, arm_info['nz']:] @ U0).tolist())
                 u_arm_seq = ua.reshape(N, ARM_N)
-                arm_check = dict(max_violation=viol, finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info, ob_rows=int(len(arm_info['ob'][1])) if 'ob' in arm_info else 0, ob_planes=arm_info.get('planes'), ob_by_body=arm_info.get('by_body'), ob_bind=arm_info.get('bind'))
+                arm_check = dict(max_violation=max(viol, float((qp_info or {}).get('all_rows_viol', 0.0))), finite=bool(np.isfinite(ua).all()), rows=int(arm_rows), qp=qp_info, ob_rows=int(len(arm_info['ob'][1])) if 'ob' in arm_info else 0, ob_planes=arm_info.get('planes'), ob_by_body=arm_info.get('by_body'), ob_bind=arm_info.get('bind'))
                 if ct_info is not None:
                     arm_check['ct'] = ct_info
             else:

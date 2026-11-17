@@ -62,6 +62,7 @@ r16（Codex 20261115_005224）：g2['cstop']＝door_cstop.CStopWorker ⇒ 綁定
 r14：g2['pool'] 可傳外部共用的計算池（執行器在啟動模擬器前 fork）；只關自己建立的池。
 r15：複本（_light_copy／warmup）深拷貝前暫時把 g2['pool'] 換成 0、拷貝後還原並讓複本共用同一池（池物件含程序認證字串不可拷貝；
   名目趟 m8house_door_motm_1 在交接試跑時因此例外中斷）；試跑複本不檢查控制期限（期限只對本體真實拍）。"""
+import json
 import math
 import os
 import sys
@@ -942,6 +943,26 @@ class DoorOpenExec:
         ol = getattr(self, '_obs_last', None)
         return ol[1] if (ol is not None and self.t - ol[0] <= 0.5) else None
 
+    def _dump_qp_fail(self, ck, qp, sp, sig_eff, g, X, Ts):
+        """失敗拍可重現資料（Codex 20261117_190256）：P,q,A,l,u、約束類別、GI 原因、OSQP 狀態／迭代／殘差、管線前推後狀態、σ、g、門角參考序列。寫到 DOOR_QP_DUMP_DIR。"""
+        d_ = os.environ.get('DOOR_QP_DUMP_DIR')
+        if not d_:
+            return
+        try:
+            os.makedirs(d_, exist_ok=True)
+            qi = dict(ck.get('qp') or {})
+            dump = qi.pop('dump', None) or {}
+            marks = dump.pop('marks', [])
+            phis = [float(self.ref(sig_eff + k_ * DT * g)[9]) for k_ in range(N + 1)]
+            meta = dict(t=float(self.t), fallback=str(ck.get('fallback')), coupled_status=str(ck.get('coupled_status')), qp_info={k_: (v_ if isinstance(v_, (int, float, str, type(None))) else str(v_)) for k_, v_ in qi.items()},
+                        marks=[[str(a_), int(b_), int(c_)] for a_, b_, c_ in marks], sigma_eff=float(sig_eff), g=float(g), phi_ref=phis)
+            np.savez_compressed(os.path.join(d_, 'qpfail_t%07.3f.npz' % self.t), qp=np.asarray(qp, float), sp=np.asarray(sp, float), u_prev=np.asarray(self.u_prev, float),
+                                X_ref=np.array([np.asarray(Xk, float) for Xk in X]), T_seq=np.array([np.asarray(T_, float) for T_ in Ts]), meta=np.array(json.dumps(meta, default=str)),
+                                **{k_: np.asarray(v_) for k_, v_ in dump.items() if k_ != 'gi_why'})
+            self.qp_dumps = getattr(self, 'qp_dumps', 0) + 1
+        except Exception as e_:                                       # noqa: BLE001
+            self.qp_dump_err = repr(e_)[:200]
+
     def _solve(self, q, phi_meas):
         w0 = time.perf_counter()
         self._phi_meas_last = float(phi_meas)
@@ -998,6 +1019,7 @@ class DoorOpenExec:
         self.qp_log.append((float(self.t), float(self.stop is not None), (w_pre - w0) * 1e3, (time.perf_counter() - w_pre) * 1e3, f_(qi_.get('asm_ms')), f_(qi_.get('gi_ms')), f_(qi_.get('osqp_ms')), 0.0 if qi_.get('solver') == 'gi' else 1.0))
         ck = dict(r.arm_check or {})
         if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None:
+            self._dump_qp_fail(ck, qp, sp, sig_eff, g, X, Ts)
             return None
         u = np.r_[np.asarray(r.u_opt, float), r.u_arm_seq[0]]
         if self.arm_mode == 'closure':
