@@ -470,6 +470,10 @@ class WorldD2(Node):
                             self.bindinfo = runner.last['bind']
                             self.ev('bind_committed')
                             self.ctl('bind')
+                        if rec.get('attach') and not getattr(self, 'cyl_attached', False):   # 圓柱理想連接（夾住證據成立後；同門把 FixedJoint）
+                            self.cyl_attached = True
+                            self.ev('cyl_attach_committed')
+                            self.ctl('attach_cyl', req_n=int(self.n))
                         if rec.get('release') and not getattr(self, 'released', False):   # 穿門段：放手 ⇒ 解除綁定（Isaac 移除 FixedJoint；乾跑門角不再跟手）
                             self.released, self.bindinfo = True, None
                             self.ev('release_committed')
