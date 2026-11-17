@@ -217,6 +217,8 @@ class Stub(Node):
                 tgt = np.asarray(ent[0], float); self.s = tgt.copy()
                 self.pipe = self.pipe[1:] + [np.zeros(9)]; pe_ = self.pipe[0]
                 b_ = self.base_at(n); tw = np.asarray(b_ if b_ is not None else pe_[:3], float)
+                if src_ == 'tail_end' and float(np.abs(tw).max()) > 1e-3:
+                    self.abort = 'd2_tail_end_base_nonzero'; break
                 if np.isfinite(ent[1]):
                     self.fing = float(ent[1])
             if self.bind == 'pending':

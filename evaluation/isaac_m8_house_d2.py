@@ -688,6 +688,11 @@ def main():
                 pipe.append(np.zeros(9)); pe_ = pipe.pop(0)            # 在途管線排空（交權前已送出的命令仍照原時刻生效）
                 b_ = node.base_at(n_now)
                 ub_ = np.asarray(b_ if b_ is not None else pe_[:3], float)
+                if src_ == 'tail_end' and float(np.abs(ub_).max()) > 1e-3:   # 本地尾段只含手臂：尾段播完、無新段而底盤命令未歸零 ⇒ 工程中止（Codex 20261117_175718；tail_end 不等於整機已停）
+                    if latch is None:
+                        latch = dict(t=round(t, 3), why='d2_tail_end_base_nonzero', n=n_now, base_cmd=[round(float(x), 4) for x in ub_], kind='模擬工程中止（本地尾段耗盡而底盤命令未歸零；不再步進物理）')
+                        ev('latched_sim_engineering_abort', **latch)
+                    break
                 ue = np.r_[ub_, (s - s_prev) / DT]
                 if np.isfinite(ent[1]):
                     fcmd = float(ent[1])
