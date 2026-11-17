@@ -32,6 +32,7 @@ FINGER_EMPTY = float(os.environ.get('PICK_FINGER_EMPTY', '0.0015'))   # 手指�
 LIFT_M, T_LIFT = float(os.environ.get('PICK_LIFT_M', '0.05')), 1.2
 T_CARRY = 3.0
 PICK_CARRY = os.environ.get('PICK_CARRY', '0') == '1'
+CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.15')), float(os.environ.get('PICK_CARRY_WZ', '0.15'))   # 持物底盤速度框（m/s、rad/s）
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
 PH_TO_S = 4.0
 
@@ -197,13 +198,18 @@ class TablePickCtrl(P.DoorPassCtrl):
                        lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=True, qp_solver='gi', **B.W_ARM)
         mpc = self.mpc
         u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
+        u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
+        if self.phase in ('RETURN', 'CARRY'):                          # 持物速度框（任務限制，非導航參數）：第十六趟伸臂持物時底盤原地轉 0.43 rad/s ⇒ 圓柱沿運動方向滑出
+            lim_ = np.array([CARRY_V, CARRY_V, CARRY_WZ])
+            mpc.cfg.u_max = np.minimum(u_max_saved, lim_)
+            mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         w0 = time.perf_counter()
         try:
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
-            mpc.cfg.u_min = u_min_saved
+            mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
         self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active)))
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
