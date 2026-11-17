@@ -30,6 +30,7 @@ import far_chain_align as FCA                                        # noqa: E40
 import door_p2_planner_server as PS                                  # noqa: E402
 import wrist_v0_capture as W0                                        # noqa: E402
 FSP = PS.PlannerServer()                                             # D2 首段規劃程序（背景）
+LENIENT = os.environ.get('D2_LENIENT', '0') == '1'
 D2_PHASE_ALIGN = os.environ.get('D2_PHASE_ALIGN', '1') == '1'
 TOL = dict(base=float(os.environ.get('D2_TOL_BASE', '2e-3')), arm=1e-9)   # 交權時實際管線對預測的容差（底盤 m/s、rad/s；手臂命令須逐值相同）
 door.pre_k2 = False
@@ -44,6 +45,7 @@ def d2_builder(pk):
     c = G.MovingGraspCtrl(ident, est, d_world, V, tuple(pk['win']), np.asarray(pk['s'], float), [np.asarray(u_, float) for u_ in pk['pipe']], np.asarray(pk['u_last'], float), np.asarray(pk['u_prev'], float),
                           np.asarray(pk['off_static'], float), sched=dict(hold_s=0.0, ins_s=float(pk['ins']['T'])), pool=SHARED, fastkin=True, deadline_ms=DL_MS, fric_ff=FRIC_FF, lock_budget_fn=lock_budget)
     c.ins_prof = dict(s0=pk['ins']['s0'], v0=pk['ins']['v0'], a0=pk['ins']['a0'])
+    c.wgmpc = os.environ.get('D2_WGMPC', '1') == '1'                 # 抓持段命令由 gmpc_wb 全身問題產生（主線修正；0＝原 IK 律）
     c.close_gate = gate
     c.multi_geom = os.environ.get('GRASP_MULTI_GEOM', '1') == '1'
     c.tail_cert_mode = os.environ.get('GRASP_TAIL_CERT', '1') == '1'
@@ -181,6 +183,13 @@ class WorldD2(Node):
         d = (d + math.pi) % (2 * math.pi) - math.pi
         return b['phi_bind'] - d
 
+    def warn(self, why, detail):
+        w_ = self.meta.setdefault('lenient_warnings', {})
+        if why not in w_:
+            w_[why] = dict(first_t=round(self.t, 3), detail=detail, n=0)
+            self.ev('lenient_warning', why=why, detail=detail)
+        w_[why]['n'] += 1
+
     def abort(self, why, **kw):
         if self.aborted is None:
             self.aborted = dict(why=why, t=round(self.t, 3), n=self.n, **kw)
@@ -291,16 +300,22 @@ class WorldD2(Node):
                 self.stage = 'hold'
                 self.hold = dict(t0=self.t, arm=self.last_arm.copy(), still=0, q_prev=self.q.copy(), phi_prev=self.phi, verified=None)
                 self.ev('tail_done')
-            else:
+            elif self.ca is not None:
                 ck = self.ca.check(self.n)
                 if not ck['ok']:
-                    self.abort('safety_chain_' + ck['why'], detail={k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); return
+                    if LENIENT:                                          # 寬鬆模式（Howard 20261117 晚：先成功後驗證）：放行流不符只記錄，不中止
+                        self.warn('safety_chain_' + ck['why'], {k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); self.ca = None
+                    else:
+                        self.abort('safety_chain_' + ck['why'], detail={k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); return
         if self.stage == 'hold':
             o = dict(arm_target=self.hold['arm'], base_twist=np.zeros(3), stopped=True)
             if self.ca is not None:
                 ck = self.ca.check(self.n)
                 if not ck['ok']:
-                    self.abort('safety_chain_' + ck['why'], detail={k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); return
+                    if LENIENT:                                          # 寬鬆模式（Howard 20261117 晚：先成功後驗證）：放行流不符只記錄，不中止
+                        self.warn('safety_chain_' + ck['why'], {k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); self.ca = None
+                    else:
+                        self.abort('safety_chain_' + ck['why'], detail={k_: v_ for k_, v_ in ck.items() if k_ != 'ok'}); return
         if self.stage == 'end':
             return
         if self.stage in ('run', 'hold') and o is not None:
@@ -320,7 +335,9 @@ class WorldD2(Node):
             for k_ in self.meta['meas_clear_min']:
                 self.meta['meas_clear_min'][k_] = min(self.meta['meas_clear_min'][k_], float(c[k_]))
             bad = [k_ for k_ in ('env', 'base', 'self') if c[k_] < W_.THR[k_]] + (['shell_bar'] if c['shell_bar'] < W_.THR['shell_bar'] and self.stage != 'approach' else [])
-            if bad:
+            if bad and LENIENT:
+                self.warn('measured_clearance', {k_: round(float(c[k_]), 4) for k_ in bad})
+            elif bad:
                 self.abort('measured_clearance', bad=bad, at={k_: round(float(c[k_]), 4) for k_ in bad}); return
         if self.stage == 'hold':
             h = self.hold; SS = X.STOP_STILL

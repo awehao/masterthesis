@@ -36,6 +36,13 @@ def _seg_entry(o, fm=None):
 
 def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=None):
     """door＝door_ahead_open.DoorOpenPhase（可選）：抓持 READY 後在本程序內交接給開門執行層，之後同一套提前一拍協定。"""
+    try:                                                              # fork 後重建計算池鎖：父程序 fork 當下若有執行緒（預熱的候選串流轉送）握著鎖，子程序會繼承一把永遠不會被釋放的鎖（D2 c21：stream_not_done）
+        import door_open_exec_ctrl as _XO
+        _n_locked = sum(1 for _l in _XO._POOL_LOCKS.values() if _l.locked())
+        _XO._POOL_LOCKS.clear()
+        print('[worker] pool_locks_reset locked_at_fork=%d' % _n_locked, flush=True)
+    except Exception as _e:                                            # noqa: BLE001
+        print('[worker] pool_locks_reset_failed ' + repr(_e)[:200], flush=True)
     try:
         import ctypes
         import signal
@@ -107,7 +114,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 ex, o0, hrec = door.handover(ctrl, qp, t_next)        # 試跑即正式：通過 ⇒ 第一步已算完
                 events.append(hrec)
                 print('[worker] handover_rec ' + json.dumps(hrec, default=str)[:1500], flush=True)   # 診斷（晚到結果會被丟棄，事件看不到）
-                if 'unavailable' in str(hrec.get('stop')) and door.g2.get('cstop') is not None:   # 診斷：停法工作程序遲到結果的實際模擬耗時
+                if False:   # 診斷：停法工作程序遲到結果的實際模擬耗時
                     _cs = door.g2['cstop']
                     for _w in range(_cs.n):
                         _r = _cs.collect(_cs.ver, 10.0, w=_w)

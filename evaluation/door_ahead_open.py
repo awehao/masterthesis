@@ -57,8 +57,15 @@ class DoorOpenPhase:
         ex.warmup(q_pred, self.phi_b)
         tmp = ex._light_copy()
         tmp.step(0.0, np.asarray(q_pred, float).copy(), self.phi_b)  # 經停法工作程序（init＋模擬）與計算池走一遍
+        import threading                                              # 預熱留下的背景執行緒（候選串流轉送、現在停）收完才返回：之後會 fork 執行器工作程序，
+        n_bg = 0                                                      # 執行緒若仍握池鎖或讀共用管道，子程序會繼承死鎖或被搶結果（D2 c21）
+        for th_ in threading.enumerate():
+            if th_.is_alive() and getattr(getattr(th_, '_target', None), '__name__', '') in ('_cand_stream_fw', '_cs_bg'):   # 只等本模組開的兩種執行緒（Isaac 執行器另有常駐執行緒）
+                n_bg += 1
+                th_.join(10.0)
+        self.warm_bg_joined = n_bg
         self.warm_ms = round((time.perf_counter() - w0) * 1e3, 1)
-        return dict(prewarm_ms=self.warm_ms, stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'))
+        return dict(prewarm_ms=self.warm_ms, bg_joined=n_bg, stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'))
 
     def _build(self, gc, q):
         X = self.X
@@ -144,7 +151,7 @@ class DoorOpenPhase:
         valid = self._valid(tmp)
         _ci.update({k: round(float(getattr(tmp, k)[-1]), 2) for k in ('tick_ms', 'solve_ms', 'sweep_ms', 'cl_ms', 'cand_ms', 'sn_ms', 'mon_ms', 'prep_ms') if getattr(tmp, k, None)})
         rec = dict(t=round(float(t), 3), what='handover_trial_is_tick', ok=valid, ready_ver=gc.ready_ver, build_src=src, build_ms=round((w1 - w0) * 1e3, 1), tick_ms=round((time.perf_counter() - w1) * 1e3, 1),
-                   stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok), tail_cert=tmp._cand_out is not None,
+                   stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok), tail_cert=tmp._cand_out is not None, stop_detail=None if tmp.stop is None else {k_: str(v_)[:200] for k_, v_ in tmp.stop.items()}, cand_diag=getattr(tmp, '_cand_diag', None),
                    stop_closure_pos_mm=round(tmp.mins['stop_closure_pos'] * 1e3, 3), start_base_mm=round(float(np.linalg.norm(ex_c.Xd[0, :2] - np.asarray(q)[:2])) * 1e3, 3), parts_ms=_ci)
         if not valid:
             return None, None, rec
@@ -185,7 +192,7 @@ class DoorOpenPhase:
                 valid = self._valid(tmp, okx)
                 ex.staged = None
                 rec = dict(t=round(t, 3), what='staged', ver=st['ver'], ok=valid, why=None if valid else 'dry_run_rejected', trial_is_tick=valid, wall_ms=round((time.perf_counter() - w0) * 1e3, 1),
-                           extend_ok=okx, stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok), tail_cert=tmp._cand_out is not None,
+                           extend_ok=okx, stop=None if tmp.stop is None else tmp.stop.get('why'), abort=None if tmp.abort is None else tmp.abort.get('why'), cl_fail=tmp._cl_fail, fb_ok=bool(tmp._fb_ok), tail_cert=tmp._cand_out is not None, stop_detail=None if tmp.stop is None else {k_: str(v_)[:200] for k_, v_ in tmp.stop.items()}, cand_diag=getattr(tmp, '_cand_diag', None),
                            sigma=round(ex.sigma, 3), sigma_s=round(st['sigma_s'], 3))
                 if valid:
                     ex._last_ver = st['ver']

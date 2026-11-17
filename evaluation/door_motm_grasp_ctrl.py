@@ -215,6 +215,46 @@ class MovingGraspCtrl:
         return (S1 - sp) / DT, max(r1, r0), q1
 
     def _track(self, q, tr):
+        if getattr(self, 'wgmpc', False):
+            return self._track_wgmpc(q, tr)
+        return self._track_ik(q, tr)
+
+    def _track_wgmpc(self, q, tr):
+        """W-GMPC 主導（Howard 20261117 主線修正）：底盤與手臂命令由同一個 gmpc_wb 全身問題解出，求解後不改。
+        初態＝在途管線前推後的預測狀態（命令生效時刻）；底盤參考＝沿門方向 d 的直線（過 b_origin、偏航 yaw_ref），以 v 前進；
+        TCP 序列＝當下排程目標 target(t_eff＋k·dt)（插入剖面 s(t)；閉爪後 s＝0）。手臂名目由求解器熱啟動（同瓶子鏈），不另解 IK。
+        求解失敗、回退、序列不一致 ⇒ 回 (None 手臂)，由呼叫端走原停止處置。回 (ub, ua, 殘差或原因, None)。"""
+        if getattr(self, 'mpc', None) is None:
+            nc = B.nav_cfg()
+            rc = XO.GR.GMPCConfig(**{f.name: getattr(nc, f.name) for f in XO.dataclasses.fields(nc)})
+            rc.cmd_ramp_w = (0.4, 0.6) if XO.BASE_RAMP else None
+            self.mpc = XO.GR.GMPC(rc)
+            self.wg_log = []
+        w0 = time.perf_counter()
+        qp, sp = self._pred(q)
+        te0 = tr + D_STEPS * PHYS
+        along = float((qp[:2] - self.b_origin[:2]) @ self.d)
+        th = float(self.yaw_ref)
+        vw = self.v * self.d
+        c_, s_ = math.cos(th), math.sin(th)
+        xi_b = [c_ * vw[0] + s_ * vw[1], -s_ * vw[0] + c_ * vw[1], 0.0]
+        X, xi, Ts = [], [], []
+        for k in range(XO.N + 1):
+            pos = self.b_origin[:2] + self.d * (along + self.v * k * DT)
+            X.append(XO.from_xytheta(float(pos[0]), float(pos[1]), th)); xi.append(xi_b)
+            Ts.append(self.target(te0 + k * DT))
+        arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=C0.W_NEAR,
+                   lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=False, qp_solver='gi', **B.W_ARM)
+        r = self.mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=None)
+        ck = dict(r.arm_check or {})
+        ms = (time.perf_counter() - w0) * 1e3
+        Tc = K.fk(qp, 'link_tcp')
+        self.wg_log.append((round(self.t, 3), round(ms, 2), round(float(np.linalg.norm(Tc[:3, 3] - Ts[0][:3, 3])) * 1e3, 3), str(r.status), str(ck.get('fallback'))))
+        if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved':
+            return np.asarray(r.u_opt, float), None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed')), None
+        return np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float), 0.0, None
+
+    def _track_ik(self, q, tr):
         """r11：本拍追蹤命令（純計算，不改狀態）：底盤沿 d 以 v＋側向／偏航回授（加速度限），手臂以命令生效後一拍末的預測底盤解 IK。"""
         qp, sp = self._pred(q)
         yaw_err = (self.yaw_ref - qp[2] + math.pi) % (2 * math.pi) - math.pi

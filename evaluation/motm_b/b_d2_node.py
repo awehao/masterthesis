@@ -24,6 +24,7 @@ DT, PHYS, NPH, D = 0.05, 0.01, 5, 8
 V_APPROACH = float(os.environ.get('B_V_APPROACH', '0.20'))
 V_ARM, A_ARM = 1.0, 10.0
 LEAD_S = D * PHYS + DT + 0.10
+FUSE_HO = os.environ.get('B_FUSE_HO', '1') == '1'            # 交權參考＝全部有效影格閘門內融合（c13／c22：最早 3 格估計沿接近軸誤差 2 mm 吃掉外殼—橫桿餘裕）
 CL_LINE = os.environ.get('B_CL_LINE', '1') == '1'             # 混接／直線段以實際底盤即時解 IK（c7 阻點修正）；0＝原開迴路關節參考
 EST = dict(n=3, spread_m=0.005, max_age_s=0.5, replan_shift_m=0.010)
 ASSOC_TOL = dict(dxy_m=0.15, dz_m=0.10, dang_deg=10.0)
@@ -41,7 +42,7 @@ RETR_LEAD, RETR_PERIOD, RETR_TRIGGER = 1.5, 1.0, 0.15
 CHECK_EVERY = 2                                                      # 候選模擬每 2 拍（0.1 s）呼叫一次完整停止核對
 V_CANDS = (0.10, 0.07, 0.05)
 OBS_RATE = 0.8                                                       # 觀察律參考每拍變化上限＝0.8×關節速率上限×拍長
-DEADLINE_MS = 45.0                                                   # 每拍牆鐘期限（原登錄；不隨 RTF 延長）                 # 過渡起點在請求後 0.8 s（模擬）；過渡中每 0.5 s 重算；觀察段在預測 a ≤ 初始 a_t0＋0.10 起請求
+DEADLINE_MS = float(os.environ.get('B_DEADLINE_MS', '45.0'))                                                   # 每拍牆鐘期限（原登錄；不隨 RTF 延長）                 # 過渡起點在請求後 0.8 s（模擬）；過渡中每 0.5 s 重算；觀察段在預測 a ≤ 初始 a_t0＋0.10 起請求
 REGION_A_END_MARGIN = 0.25
 ENTER_MARGIN = 0.10
 LOOK_REACH_M = 0.65                                                   # 注視 IK 前的可達預檢：TCP 目標離底盤原點水平距離上限（臂長＋掛載的寬鬆上界）
@@ -637,6 +638,7 @@ def main():
             self.qtr = None; self.qtr_next = None; self.t_retr = -9.0; self.n_retr_fail = 0; self.v_active = V_CANDS[0]; self.ua_hist = [[0.0] * 6, [0.0] * 6]; self.n_deadline = 0
             self.dp, self.dp_next, self.owner, self.ho_sent, self.n_grasp_fwd = None, None, 'NAV', None, 0
             self.ref = None; self.ref_ver = 0; self.ref_cand = None; self.ref_log = []
+            self.obs_T = []
             self.still_t = None; self.n_late = 0; self.n_fwd = 0; self.b_prev = None; self.stale = []; self.odom_rates = (9.0, 9.0, 9.0); self.od_prev = None; self.last_cert = None
             self.create_timer(DT, self.tick)
 
@@ -712,6 +714,7 @@ def main():
                 if T_mo is None:
                     return
                 T_oh = _T3(d[3:6]) @ d[6:22].reshape(4, 4)
+                self.obs_T.append((rec['t_obs'], T_oh.copy()))           # 交權時的參考融合用（全部有效影格）
                 allow = self.mode in ('NAV', 'PREP', 'APPROACH') and self.ho_sent is None
                 tag, pay = self.ask('obs', dict(seq=rec['seq'], t_obs=rec['t_obs'], t=self.now(), T_odom_handle=T_oh.tolist(), T_mo=T_mo.tolist(), allow_update=allow), 0.5)
                 rec['est'] = None if pay is None else {k: pay.get(k) for k in ('n_hist', 'spread_mm', 'assoc_ok', 'estimate_set')}
@@ -932,9 +935,22 @@ def main():
             if self.mode == 'APPROACH' and self.dp is not None and self.dp_next is None and self.ho_sent is None and self.stopped is None and t >= self.dp['t_h'] - 2 * DT + 1e-9:
                 n_h = int(round(t / PHYS)) + NPH + 3
                 rf = self.ref
-                msg = dict(n_h=n_h, ins=self.dp['ins'], T_ref=rf['T_od'].tolist(), t_obs=rf['t_obs'], ref_ver=rf['ver'], win=[0.0, 0.22])   # 實際採用參考（里程座標）與其原始來源時間
+                T_send, fz = np.asarray(rf['T_od'], float), None
+                if FUSE_HO:                                              # 全部有效影格在現行參考閘門內（10 mm、3°）的中位數位置＋弦平均姿態（靜止把手；相對擷取同刻底盤已轉里程座標）
+                    keep = []
+                    for (to_, T_) in self.obs_T:
+                        dR_ = T_send[:3, :3].T @ T_[:3, :3]
+                        if np.linalg.norm(T_[:3, 3] - T_send[:3, 3]) <= 0.010 and math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR_) - 1) / 2)))) <= 3.0:
+                            keep.append(T_)
+                    if len(keep) >= 3:
+                        Tf = np.eye(4); Tf[:3, 3] = np.median([T_[:3, 3] for T_ in keep], axis=0)
+                        U_, _, Vt_ = np.linalg.svd(np.sum([T_[:3, :3] for T_ in keep], axis=0))
+                        Tf[:3, :3] = U_ @ np.diag([1.0, 1.0, np.linalg.det(U_ @ Vt_)]) @ Vt_
+                        fz = dict(n=len(keep), n_all=len(self.obs_T), dpos_mm=round(float(np.linalg.norm(Tf[:3, 3] - T_send[:3, 3])) * 1e3, 3), t_last=max(to_ for to_, _ in self.obs_T))
+                        T_send = Tf
+                msg = dict(n_h=n_h, ins=self.dp['ins'], T_ref=T_send.tolist(), t_obs=(rf['t_obs'] if fz is None else fz['t_last']), ref_ver=rf['ver'] + (0 if fz is None else 1), win=[0.0, 0.22], fused=fz)   # 實際採用參考（里程座標）與其原始來源時間
                 self.p_ho.publish(String(data=json.dumps(msg)))
-                self.ho_sent = dict(t_sent=round(t, 3), n_h=n_h, dp_t_h=round(self.dp['t_h'], 3), ins=self.dp['ins'], ref_ver=rf['ver'])
+                self.ho_sent = dict(fused=fz, t_sent=round(t, 3), n_h=n_h, dp_t_h=round(self.dp['t_h'], 3), ins=self.dp['ins'], ref_ver=rf['ver'])
                 self.event('handover_requested', **self.ho_sent)
                 return                                                   # 本拍起不再發手臂命令（世界節點以最後命令前推、保持到接手）
             # ---- 手臂拍

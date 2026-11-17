@@ -765,14 +765,17 @@ class DoorOpenExec:
                     got[it[0]] = res
 
             lock, held = _pool_lock(pool), [False]
+            box['stage'] = [('start', round((time.perf_counter() - t0) * 1e3, 1))]   # 診斷：各階段時間（卡住時也看得到停在哪）
 
             def _send(i0, Xc):
                 if i0 != nsent[0]:                                     # 批次須連續（起始索引＝已送數）；否則視為結果缺失
                     fail.append('batch_gap_%d_%d' % (i0, nsent[0]))
                     return
                 if not held[0]:                                        # 第一次要用池時才取鎖（現在停背景執行緒若仍在用池就等它；之後持有到全部收齊）
+                    box['stage'].append(('lock_wait', round((time.perf_counter() - t0) * 1e3, 1)))
                     lock.acquire()
                     held[0] = True
+                    box['stage'].append(('lock_got', round((time.perf_counter() - t0) * 1e3, 1)))
                 g = gi[0] % len(groups)
                 gi[0] += 1
                 _drain(g)
@@ -781,12 +784,14 @@ class DoorOpenExec:
 
             try:
                 r = self._csw.collect_stream(ver, 0.2, w=w, on_part=_send)
+                box['stage'].append(('cs_done' if r is not None else 'cs_none', round((time.perf_counter() - t0) * 1e3, 1)))
                 if r is not None and r.get('X') is not None and r['ok']:
                     Xf = np.asarray(r['X'], float)
                     if nsent[0] < len(Xf):
                         _send(nsent[0], Xf[nsent[0]:])
                 for g in range(len(groups)):
                     _drain(g)
+                box['stage'].append(('drained', round((time.perf_counter() - t0) * 1e3, 1), list(fail)))
             finally:
                 if held[0]:
                     lock.release()
@@ -831,7 +836,7 @@ class DoorOpenExec:
             _wc = time.perf_counter()
             th.join(0.5)
             r = box.get('r') if box.get('done') else None
-            self._cand_diag = dict(stream=True, join_wait_ms=round((time.perf_counter() - _wc) * 1e3, 2), fw_ms=box.get('fw_ms'), n_batches=box.get('n_batches'), fail=box.get('fail'), sim_ms=None if r is None else round(float(r.get('sim_ms') or 0.0), 2), n_ticks=None if r is None else r.get('n_ticks'))
+            self._cand_diag = dict(stream=True, stage=list(box.get('stage') or []), join_wait_ms=round((time.perf_counter() - _wc) * 1e3, 2), fw_ms=box.get('fw_ms'), n_batches=box.get('n_batches'), fail=box.get('fail'), sim_ms=None if r is None else round(float(r.get('sim_ms') or 0.0), 2), n_ticks=None if r is None else r.get('n_ticks'))
             if self.cs_inject is not None:
                 inj = self.cs_inject(self, tag)
                 if inj is not None:
