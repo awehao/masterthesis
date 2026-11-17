@@ -25,6 +25,7 @@ NPH, PHYS, DT, D_STEPS = P.NPH, P.PHYS, P.DT, P.D_STEPS
 _T3, _log_R, _exp_R = P._T3, P._log_R, P._exp_R
 D_LINE = float(os.environ.get('PICK_D_LINE', '0.08'))
 T_SETTLE = float(os.environ.get('PICK_T_SETTLE', '1.0'))
+GRASP_DEPTH = float(os.environ.get('PICK_GRASP_DEPTH', '0.004'))     # 瓶子線 bottle_s0_ctrl.GRASP_DEPTH
 T_CLOSE, EVID_S, EVID_TO_S = 0.6, 0.3, 3.0
 CONTACT_N = float(os.environ.get('PICK_CONTACT_N', '0.5'))
 FINGER_EMPTY = float(os.environ.get('PICK_FINGER_EMPTY', '0.0015'))   # 手指開度低於此 ⇒ 判定夾空（全閉）
@@ -54,7 +55,8 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.clear_min = {k: 9.0 for k in P.KEYS}
         self.T_rel_stow = src.T_rel_stow
         self.t_halt, self.t_still = None, None
-        self.T_grasp = np.asarray(app['T_grasp'], float)
+        self.T_grasp = np.asarray(app['T_grasp'], float).copy()
+        self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + GRASP_DEPTH * self.T_grasp[:3, 2]   # 同瓶子線：TCP 沿工具軸越過圓柱軸 4 mm，軸心落在指片（TCP 後 1.3–21.3 mm）內（第十二趟 TCP 在軸心上 ⇒ 指尖夾弦、抬升滑落）
         self.app_prof = dict(base_goal=list(app['base_goal']), door=None)   # nav_window：導航到點後收斂到抓取底盤位姿
         self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
         self.T_rel0, self.b_anchor, self.n_ev, self.T_lift0, self.T_rel_s0 = None, None, 0, None, None
