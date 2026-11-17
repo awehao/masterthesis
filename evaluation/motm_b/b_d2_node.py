@@ -906,6 +906,11 @@ def main():
                 elif rq['kind'] == 'dapp':
                     self.on_dapp(rq, tag, pay, t)
             if UNIFIED:                                                  # 單一控制器：導航目標＝抓取底盤位姿（依當次區域規劃；Smac 決定來向，無走廊入口、無沿門直線）；接近開始依觀測觸發
+                if self.owner != 'GRASP' and self.ho_sent is not None and self.ho_sent.get('unified') and t - self.ho_sent.get('t_resend', self.ho_sent['t_sent']) >= 0.5:
+                    n_h = int(round(t / PHYS)) + NPH + 3                # 起點交權重送（ROS 探索未完成時第一筆會遺失；s3），直到第一筆抓持提案到達；控制伺服器已收過則忽略
+                    T_pr = np.linalg.inv(_T3(T_mo)) @ np.asarray(self.prior['T_prior'], float)
+                    self.p_ho.publish(String(data=json.dumps(dict(n_h=n_h, ins=dict(s0=0.15, v0=0.0, a0=0.0, T=1e6), unified=True, T_ref=T_pr.tolist(), t_obs=t, ref_ver=0, win=[-1e9, 1e9]))))
+                    self.ho_sent['t_resend'] = t; self.ho_sent['n_resend'] = self.ho_sent.get('n_resend', 0) + 1
                 if self.plan is not None and self.stopped is None:       # 朝向條件照原機制（車頭朝門，相機看得到把手）；速度框＝導航自身上下限（不另限速）
                     self.pub_task(self.plan['yaw'], [[-0.2, 0.35], [-0.25, 0.25], [-0.8, 0.8]])
                 if self.plan is not None and self.goal_ver != self.plan_ver and self.stopped is None:
@@ -932,7 +937,7 @@ def main():
                             fz = dict(n=len(keep), n_all=len(self.obs_T), dpos_mm=round(float(np.linalg.norm(Tf[:3, 3] - T_send[:3, 3])) * 1e3, 3), t_last=max(to_ for to_, _ in self.obs_T))
                             T_send = Tf
                         Tapp = max(APP_T_MIN, dist_ / 0.08)
-                        app = dict(T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - APP_T_LINE), d_line=APP_D_LINE, t_settle=1.0)
+                        app = dict(T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - APP_T_LINE), d_line=APP_D_LINE, t_settle=1.0, s_final=float(os.environ.get('B_S_FINAL', '0.0015')))
                         Tg_od = np.linalg.inv(_T3(T_mo)) @ _T3([self.goal_xy[0], self.goal_xy[1], self.prior['yaw']])
                         app['base_goal'] = [float(Tg_od[0, 3]), float(Tg_od[1, 3]), math.atan2(Tg_od[1, 0], Tg_od[0, 0])]   # 抓取底盤位姿（里程座標）：導航到點後由同一控制器收斂到此
                         sreg_ = json.load(open(os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json')))

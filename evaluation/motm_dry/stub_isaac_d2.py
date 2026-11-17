@@ -5,12 +5,6 @@
     python3 stub_isaac_d2.py OUT_PREFIX T_END"""
 import json, math, os, sys, time
 import numpy as np
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, 'far_dry'))
-import door_exit_ctrl as XE                                          # noqa: E402
-import door_body_model as BM                                         # noqa: E402
-import wrist_v0_capture as W0                                        # noqa: E402
-import world_node as WN                                              # noqa: E402
 import rclpy                                                         # noqa: E402
 from geometry_msgs.msg import Twist                                  # noqa: E402
 from nav_msgs.msg import Odometry                                    # noqa: E402
@@ -19,6 +13,17 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy                  # noqa: E40
 from rosgraph_msgs.msg import Clock                                  # noqa: E402
 from sensor_msgs.msg import JointState, LaserScan                    # noqa: E402
 from std_msgs.msg import Float64MultiArray, String                   # noqa: E402
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, 'far_dry'))
+ROS_PRE = ('rclpy', 'std_msgs', 'geometry_msgs', 'nav_msgs', 'sensor_msgs', 'tf2_msgs', 'tf2_ros', 'rosgraph_msgs', 'builtin_interfaces', 'rcl_interfaces', 'rosidl_runtime_py')
+_snap = {k_: v_ for k_, v_ in sys.modules.items() if k_.split('.')[0] in ROS_PRE}   # 同 world_d2_node：專案模組匯入後還原 ROS 模組
+import door_exit_ctrl as XE                                          # noqa: E402
+import door_body_model as BM                                         # noqa: E402
+import wrist_v0_capture as W0                                        # noqa: E402
+for k_ in [k_ for k_ in sys.modules if k_.split('.')[0] in ROS_PRE and k_ not in _snap]:
+    sys.modules.pop(k_, None)
+sys.modules.update(_snap)
+import world_node as WN                                              # noqa: E402
 
 K = XE.K
 PHYS, D = 0.01, 8
@@ -176,8 +181,8 @@ class Stub(Node):
             if isinstance(self.bind, dict):
                 p_ = K.fk(self.q, 'link_tcp')[:3, 3]; d_ = (math.atan2(p_[1], p_[0]) - self.bind['ang'] + math.pi) % (2 * math.pi) - math.pi
                 self.phi = self.bind['phi'] - d_
-            if not post:
-                self.obs()
+            if not isinstance(self.bind, dict):
+                self.obs()                                            # 綁定前持續合成觀察（同 Isaac 端偵測持續運作）
             self.t = round(self.t + PHYS, 10); self.n += 1
             ck = Clock(); ck.clock = self.stamp(); self.p_clock.publish(ck)
             if self.n % 2 == 0:

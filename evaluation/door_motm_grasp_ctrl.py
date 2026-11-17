@@ -230,7 +230,8 @@ class MovingGraspCtrl:
         T, tl0, Tb_ = float(ap['T']), float(ap['t_l0']), float(ap['T_b'])
         Te = T - float(ap.get('t_settle', 0.6))                      # 接近線提早 t_settle 到底、之後 s＝0 保持（c31：剛到底即閉爪時 TCP 落後 3.4 mm，鎖定預算 6.8 mm＞5 mm）
         u = min(max((t - tl0) / max(Te - tl0, 1e-6), 0.0), 1.0)
-        s_ = float(ap['d_line']) * (1.0 - XE.minjerk(u)[0]) if t < Te else 0.0
+        sf = float(ap.get('s_final', 0.0))                             # 最終抓取深度留量（外殼—橫桿名目 6.8 mm 太緊：開門中停止路徑吃掉約 2 mm；u8／s4）
+        s_ = sf + (float(ap['d_line']) - sf) * (1.0 - XE.minjerk(u)[0]) if t < Te else sf
         Tl = self.T_at(self.handle_ref(), max(s_, 0.0))
         beta = XE.minjerk(min(max(t / max(Tb_, 1e-6), 0.0), 1.0))[0]
         if beta >= 1.0 - 1e-12:
