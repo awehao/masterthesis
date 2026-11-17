@@ -64,7 +64,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.phase, self.t_ph0 = 'APPROACH', float(t0)
         self._ev('pick_start', T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]], base_goal=[round(float(x), 4) for x in app['base_goal']], T=round(self.T_app, 3))
 
-    def _stop(self, why, **kw):
+    def _stop(self, why, /, **kw):
         if 'why' in kw:
             kw['detail_why'] = kw.pop('why')                          # 違反 dict 自帶 why（如 clearance）⇒ 改名，避免與停止原因重複
         if self.stop is None:

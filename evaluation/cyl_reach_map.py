@@ -30,7 +30,7 @@ TOP = SZ
 X0, X1, Y0, Y1 = TX - SX / 2, TX + SX / 2, TY - SY / 2, TY + SY / 2
 H_GRASP, PRE = TOP + 0.10, 0.06
 RB = 0.30
-D_SIDE = tuple(float(x) for x in os.environ.get('CYL_D_SIDE', '0.43,0.48,0.53').split(','))   # 底盤中心離桌邊；淨空另以控制器同一份 clear_door_fast＋門檻核
+D_SIDE = tuple(float(x) for x in os.environ.get('CYL_D_SIDE', '0.43,0.46,0.48,0.51,0.53').split(','))   # 底盤中心離桌邊；淨空另以控制器同一份 clear_door_fast＋門檻核
 LAT = tuple(np.round(np.arange(-0.30, 0.301, 0.05), 3))
 SEEDS = [np.array([-0.0128, -0.0519, 0.086, 0.0116, -1.6249, -0.0018]), np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157]),
          np.array([0.0, 0.3, 1.2, 0.0, -0.9, 0.0]), np.array([0.0, 0.6, 1.6, 0.0, -1.0, 0.0])]
@@ -66,13 +66,14 @@ def ik(T, b):
 
 import door_clear_door_fast as CF                                     # noqa: E402
 import door_wbopt as WB                                               # noqa: E402
+BASE_MARGIN = float(os.environ.get('CYL_BASE_MARGIN', '0.03'))      # 底盤淨空比執行門檻多留（第十三趟只多 1 mm ⇒ 返回一開始候選尾段被拒）
 _T_WH0 = np.eye(4); _T_WH0[:3, 3] = [0.8, -0.04, 0.95]                # 門把（只影響門相關項；這裡門角取開門後 85°）
 
 
 def clear_ok(b, q):
     """控制器同一份淨空（clear_door_fast；env、base、self 用執行時門檻 WB.THR；門角 85°）。"""
     c = CF.clear_door_fast(np.r_[b, q, math.radians(85.0)], _T_WH0)
-    return all(float(c[k]) >= WB.THR[k] for k in ('env', 'base', 'self')), c
+    return all(float(c[k]) >= WB.THR[k] + (BASE_MARGIN if k == 'base' else 0.0) for k in ('env', 'base', 'self')), c
 
 
 def arm_over_table_ok(b, q):

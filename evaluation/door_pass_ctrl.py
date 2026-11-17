@@ -95,7 +95,7 @@ class DoorPassCtrl:
     def _ev(self, what, **kw):
         self.events.append(dict(t=round(self.t, 3), what=what, **kw))
 
-    def _stop(self, why, **kw):
+    def _stop(self, why, /, **kw):
         if 'why' in kw:
             kw['detail_why'] = kw.pop('why')                          # 違反 dict 自帶 why（如 clearance）⇒ 改名，避免與停止原因重複
         if self.stop is None:
