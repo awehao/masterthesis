@@ -6,8 +6,8 @@
  "config": "START=1.5,-2.8,1.5708；ARM=online_1 far_live 構型；SIM_LIMIT=90；RTF=0.3（物理依牆鐘固定 RTF 推進，不等計算）；cam 5 Hz 實際影像偵測（獨立程序）；run_guarded_v3.sh（92 °C 熱中止）；機器＝桌機 MS-7E62（Ryzen 7 9800X3D、RTX 5070）",
  "schedule": "desktop：Isaac 0,8,1,9；導航 2,10,7,15；監督 3,11；規劃 4,12；控制伺服器（world_d2_node D2_PLANT=isaac）4,12,5,13,6,14（池 6）",
  "chain": {
-  "simulator": "evaluation/isaac_m8_house_d2.py（b_capture 複本；交權後每步套用 /d2/out，等待上限＝本步配速時限，沒到保持上一筆並計數；/d2/ctl bind ⇒ FixedJoint；門角＝門扇實測）",
-  "controller_server": "evaluation/motm_dry/world_d2_node.py（D2_PLANT=isaac）：起點交權、AheadRunner 工作程序內單一 gmpc_wb 實例（抓持控制器 _track_unified＋開門執行層共用），因果放行排程（收件步＋R_REM 3）、預測覆蓋、ChainAlign 逐次記錄",
+  "simulator": "evaluation/isaac_m8_house_d2.py（b_capture 複本；交權後本地依步號播放 /d2/seg 的已核名目段與停止尾段（等待上限＝本步配速時限，物理不等）；底盤＝本端放行排程（收件步＋R_REM 3）；/d2/ctl bind ⇒ FixedJoint；門角＝門扇實測）",
+  "controller_server": "evaluation/motm_dry/world_d2_node.py（D2_PLANT=isaac）：起點交權、AheadRunner 工作程序內單一 gmpc_wb 實例（抓持控制器 _track_unified＋開門執行層共用）；結果一到且符合提交條件即下發 /d2/seg；預測用 Isaac 回報的已確定底盤；ChainAlign 逐次記錄",
   "navigation": "omni_bot_dynamic.launch.py 同基準開關＋GMPC_TASK=1 GMPC_FRONTEND=1（gmpc_task_node 只當參考＋障礙物前端：原樣建參考視窗、障礙物、繞行；不求解、不發命令）；導航參數未改",
   "supervisor": "evaluation/motm_b/b_d2_node.py（B_UNIFIED=1：起點交權〔重送至第一筆抓持提案〕；導航目標＝抓取底盤位姿；朝向條件照原機制；有效估計＋離目標 ≤0.6 m ⇒ 接近開始）",
   "runner": "evaluation/run_d2_isaac.sh"
@@ -15,7 +15,7 @@
  "control": [
   "同一 gmpc_wb 實例（以導航求解設定建立；cmd_ramp 0.4/0.6；輪級上限 ×0.95／×0.75 控制器端餘裕，GUARD 不動）",
   "導航期：底盤參考與 CBF 障礙物＝導航前端原樣輸入（相對擷取位姿，對齊管線 2 步）；手臂 hold",
-  "接近：TCP 參考＝接近開始時 TCP 相對底盤位姿（掛導航參考底盤）→ 沿接近軸抓取線（d_line 0.15→s_final 0.0015 m，t_settle 1.0 s）混接；混接段 w_p 50＋門旁分支姿態偏好 w_q 2，近段 w_p 200；導航到點後收斂到抓取底盤位姿（≤0.06 m/s）；接近後門扇 0.15 m 內障礙點交門專屬淨空核對",
+  "接近：TCP 參考＝接近開始時 TCP 相對底盤位姿（掛導航參考底盤）→ 沿接近軸抓取線（d_line 0.15→s_final 0.0015 m，t_settle 1.0 s）混接；混接段 w_p 50＋門旁分支姿態偏好 w_q 2，近段 w_p 200；導航到點後收斂到抓取底盤位姿（≤0.06 m/s）；接近後只排除中心落在門扇本體上的動態障礙（靜態牆點與未關聯者保留），門的碰撞由門專屬淨空核對；障礙物過期 >0.5 s ⇒ 停止",
   "開門：DoorOpenExec arm_mode=qp（最終命令＝同一 QP 底盤＋手臂，不以 IK 覆蓋）；閉鏈列 T_WE≈T_WH(φ_ref)·T_HE 位置 ±3 mm、姿態 ±2°（前 4 步）；導航障礙物（去門扇）進 CBF"
  ],
  "protection": [
