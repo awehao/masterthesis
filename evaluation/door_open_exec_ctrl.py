@@ -94,7 +94,10 @@ LEAD_MAX, LEAD_BAND, STALL_S = math.radians(3.0), math.radians(1.0), 2.0
 CL_TOL = dict(pos_m=0.010, rot_deg=5.0)                            # 實測／預測閉鏈殘差上限
 STRESS_TOL = dict(pos_m=0.030, rot_deg=8.0)                        # 設定點閉鏈殘差上限（內應力指標）
 END = dict(phi_tol=math.radians(0.5), n_ticks=10, wait_s=4.0, arm_rps=0.02, base_mps=0.005, yaw_rps=0.01, door_rps=0.01)
-T_STOP, PATH_STOP_MAX_S = 0.5, 3.0                                # 路徑停止：g 由 1 降到 0 的時間、最長等待
+T_STOP, PATH_STOP_MAX_S = 0.5, 3.0
+G_GOV = os.environ.get('DOOR_G_GOV', '0') == '1'                  # Codex 191426：約束感知在線進度調節（只縮放 g；σ 仍只在候選＋尾段通過並提交時前進）
+G_GOV_BAND = dict(env=0.010, base=0.030, self=0.010, shell_bar=0.006)   # 各項自身單位的預警帶：餘裕 ≥ 門檻＋帶寬 ⇒ 不減速；各項先正規化到 [0,1] 再取最小
+G_GOV_MIN = float(os.environ.get('DOOR_G_GOV_MIN', '0.15'))      # 下限：避免 g→0 觸發 door_not_following；不假設越慢越安全                                # 路徑停止：g 由 1 降到 0 的時間、最長等待
 PATH_OK = ('forced_stop', 'open_done', 'end_not_reached', 'door_not_following', 'setpoint_model_deviation', 'candidate_stop_violation', 'stop_sweep_violation')
 # 其餘原因一律 abort（模擬中止）
 FORCE_LIMIT_N = 40.0                                                # 模擬工程中止值（未校準傳遞力範數；不是安全上限）
@@ -228,6 +231,7 @@ class DoorOpenExec:
         self.lim_lo, self.lim_hi = np.asarray(LITE6_SAFE.lower, float) + 0.05, np.asarray(LITE6_SAFE.upper, float) - 0.05
         self.sig_end = (len(self.Xd) - 1) * self.h
         self.sigma, self.g, self.t, self.n_step = (-D_STEPS * PHYS if START_LAT_ALIGN else 0.0), 0.0, 0.0, 0
+        self._gov_m, self._gov_g_prev, self.gov_log, self.first_fail = None, None, [], None
         self._se_end = self.sigma + D_STEPS * PHYS                     # r17：上一個真正已提交命令的參考終點（只在提交時更新）；起始＝第一拍求解的起點
         self._se_cand = self._se_end
         self._hold = None                                             # r20（B1）：閉鏈一致停法的底盤保持錨點（世界 x, y, yaw）；None＝未啟用
@@ -943,6 +947,35 @@ class DoorOpenExec:
         ol = getattr(self, '_obs_last', None)
         return ol[1] if (ol is not None and self.t - ol[0] <= 0.5) else None
 
+    def _gov_factor(self):
+        """各淨空項以自身門檻與預警帶正規化到 [0,1]，取最小（不同單位不直接比較）。資料＝最近一次通過的候選停止路徑，與本拍現在停核對（若有）。"""
+        ms = [m for m in (self._gov_m, (self._fb_info or {}).get('min_clear') if isinstance(self._fb_info, dict) else None) if m]
+        if not ms:
+            return 1.0
+        f = 1.0
+        for m in ms:
+            for k in KEYS:
+                if k in m:
+                    f = min(f, float(np.clip((float(m[k]) - W.THR[k]) / G_GOV_BAND[k], 0.0, 1.0)))
+        return f
+
+    def _first_fail_snap(self, q, u, stc, b_, infc):
+        """第一個失敗快照（Codex 191426）：含「QP 解出、但停止尾段被拒」。分類：g 已在下限仍被拒 ⇒ 幾何／模型不相容嫌疑；否則 ⇒ 太快嫌疑。"""
+        self.first_fail = dict(t=round(float(self.t), 3), kind='qp_solved_tail_rejected', status=stc, bad=b_, info=infc, sigma=round(self.sigma, 5), g=round(self.g, 4),
+                               phi_ref_deg=round(math.degrees(float(self.ref(self.sigma)[9])), 3), phi_meas_deg=(round(math.degrees(self._phi_meas_last), 3) if getattr(self, "_phi_meas_last", None) is not None else None),
+                               gov_margins=self._gov_m, q=[round(float(x), 6) for x in q], u=[round(float(x), 6) for x in u],
+                               cls=('geometry_or_model_suspect' if self.g <= G_GOV_MIN + 1e-6 else 'too_fast_suspect'))
+        self._ev('first_fail_snapshot', **{k: v for k, v in self.first_fail.items() if k in ('kind', 'status', 'g', 'cls')}, t_snap=self.first_fail['t'])
+        d_ = os.environ.get('DOOR_QP_DUMP_DIR')
+        if d_:
+            try:
+                import json as _j
+                os.makedirs(d_, exist_ok=True)
+                with open(os.path.join(d_, 'first_fail_t%07.3f.json' % self.t), 'w') as f_:
+                    _j.dump(self.first_fail, f_, default=str, indent=1)
+            except Exception:
+                pass
+
     def _dump_qp_fail(self, ck, qp, sp, sig_eff, g, X, Ts):
         """失敗拍可重現資料（Codex 20261117_190256）：P,q,A,l,u、約束類別、GI 原因、OSQP 狀態／迭代／殘差、管線前推後狀態、σ、g、門角參考序列。寫到 DOOR_QP_DUMP_DIR。"""
         d_ = os.environ.get('DOOR_QP_DUMP_DIR')
@@ -1214,6 +1247,16 @@ class DoorOpenExec:
                 self.g = float(np.clip((LEAD_MAX - lead) / LEAD_BAND, 0.0, 1.0)) if self.sigma < self.sig_end else 0.0
                 if self.g_inject is not None:
                     self.g = float(self.g_inject(self, self.g))
+                if G_GOV and self.g > 0.0:
+                    g_door = self.g
+                    fac = self._gov_factor()
+                    g_t = g_door * max(fac, G_GOV_MIN) if fac < 1.0 else g_door
+                    g_prev = self._gov_g_prev if self._gov_g_prev is not None else g_t
+                    dg = self.cfg.dt / T_STOP                          # g 的變化率沿用路徑停止的減速率（不新增更快的加減速）
+                    self.g = float(np.clip(g_t, g_prev - dg, g_prev + dg))
+                    self.g = min(self.g, g_door)
+                    self._gov_g_prev = self.g
+                    self.gov_log.append((round(self.t, 3), round(g_door, 3), round(fac, 3), round(self.g, 3), self._gov_m))
                 if self._pool is not None and self._cs_on() and not self.tail_cert_mode:
                     w0 = time.perf_counter()
                     self._cs_submit(q)
@@ -1306,6 +1349,10 @@ class DoorOpenExec:
                     if hc_ is not None:                                 # r17：候選核對用實際停法
                         stc, b_, infc = self._cs_cand_finish(hc_, 'candidate')
                         self.cand_ms.append((time.perf_counter() - w0) * 1e3)
+                        if stc == 'ok' and b_ is None and isinstance(infc, dict) and infc.get('min_clear'):
+                            self._gov_m = dict(infc['min_clear'])
+                        elif stc in ('ok', 'infeasible') and self.first_fail is None:
+                            self._first_fail_snap(q, u, stc, b_, infc)
                         why_c = None
                         if stc == 'missing':
                             why_c = infc
@@ -1362,6 +1409,8 @@ class DoorOpenExec:
                     else:
                         if cs_on:
                             stc, b_, infc = self._cs_cand_finish(hc_, 'path_candidate')
+                            if (stc == 'infeasible' or b_ is not None) and self.first_fail is None:
+                                self._first_fail_snap(q, u, stc, b_, infc)
                             why_p = infc if stc == 'missing' else None
                             if stc == 'infeasible':
                                 b_ = dict(tag='path_candidate_cstop', infeasible=infc)
@@ -1488,4 +1537,5 @@ class DoorOpenExec:
                     base_cmd_phys=dict(acc_max=[round(float(x), 3) for x in (np.abs(np.diff(np.array(self.cmd_hist), axis=0)).max(axis=0) / PHYS if len(self.cmd_hist) > 1 else np.zeros(3))], limit=LIM.A_BODY.tolist(), ramp=BASE_RAMP, note='逐物理步命令差分（世界前的本體命令）'), limits=LIM.summary(),
                     timing=dict(solve_ms=pct(self.solve_ms), sweep_ms=pct(self.sweep_ms), whole_tick_ms=pct(self.tick_ms), monitor_ms=pct(self.mon_ms), closure_arm_ms=pct(self.cl_ms), candidate_check_ms=pct(self.cand_ms), stop_now_collect_ms=pct(self.sn_ms), prep_ms=pct(self.prep_ms),
                                 note='solve_ms＝QP（不含 closure_arm_ms）；sweep_ms 含 stop_now_collect＋candidate_check；整拍另含監看與其他'),
+                    g_gov=dict(on=G_GOV, band=G_GOV_BAND, g_min=G_GOV_MIN, n_log=len(self.gov_log), g_min_seen=(min(r_[3] for r_ in self.gov_log) if self.gov_log else None), n_scaled=sum(1 for r_ in self.gov_log if r_[2] < 1.0), tail=self.gov_log[-40:], first_fail=self.first_fail),
                     params=dict(T_STOP=T_STOP, PATH_STOP_MAX_S=PATH_STOP_MAX_S, PATH_OK=list(PATH_OK), FORCE_LIMIT_N=FORCE_LIMIT_N, LEAD_MAX_deg=3.0, LEAD_BAND_deg=1.0, STALL_S=STALL_S, CL_TOL=CL_TOL, STRESS_TOL=STRESS_TOL, END={k: (round(math.degrees(v), 3) if k == 'phi_tol' else v) for k, v in END.items()}, STOP_STILL=STOP_STILL, thresholds=W.THR, finger_q=W.FINGER_Q))

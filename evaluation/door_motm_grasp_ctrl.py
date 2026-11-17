@@ -714,9 +714,14 @@ class MovingGraspCtrl:
         dR = Trel_prev[:3, :3].T @ Trel[:3, :3]
         return lin, math.acos(max(-1.0, min(1.0, (np.trace(dR) - 1) / 2))) / DT
 
+    def _s_nom(self):
+        """名目抓姿的接近軸深度留量（m）：接近剖面的 s_final；無剖面＝0。"""
+        ap = getattr(self, 'app_prof', None)
+        return float(ap.get('s_final', 0.0)) if ap is not None else 0.0
+
     def _rel(self, q):
         """控制器視角的夾爪相對把手（估計）誤差：位置 m、姿態 °（TCP 對 T_at(估計, s＝0)）。"""
-        Tc, Tg = K.fk(q, 'link_tcp'), self.T_at(self.handle_ref(), 0.0)      # r4：鎖定後對鎖定參考
+        Tc, Tg = K.fk(q, 'link_tcp'), self.T_at(self.handle_ref(), self._s_nom())      # r4：鎖定後對鎖定參考；名目抓姿含深度留量（Codex 192427：與接近目標一致）
         dR = Tg[:3, :3].T @ Tc[:3, :3]
         return float(np.linalg.norm(Tc[:3, 3] - Tg[:3, 3])), math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(dR) - 1) / 2)))), Tc
 
@@ -813,7 +818,7 @@ class MovingGraspCtrl:
             if sd > self.win[1] + 1e-9 or (sd < self.win[0] - 1e-9 and self.phase != 'HOLD'):   # r9：HOLD（預抓保持、未接觸）可在窗口前（前導接近）
                 viol.append(('outside_window', dict(s_along=round(sd, 4), window=self.win)))
             ep, er, Tc = self._rel(q)
-            Tg_now = self.T_at(self.handle_ref(), 0.0)
+            Tg_now = self.T_at(self.handle_ref(), self._s_nom())
             Trel = np.linalg.inv(Tg_now) @ Tc                          # r6：把手參考（s＝0 抓取位）—TCP 相對變換（同一拍）
             if self.rel_prev_T is not None:
                 lin, ang = self.rel_motion(self.rel_prev_T, Trel)

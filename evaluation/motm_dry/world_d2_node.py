@@ -594,7 +594,7 @@ class WorldD2(Node):
             ub_ = np.asarray(self.pipe[-1][:3], float); c_, s_ = math.cos(q[2]), math.sin(q[2])
             vw_ = np.array([c_ * ub_[0] - s_ * ub_[1], s_ * ub_[0] + c_ * ub_[1]])
         b_pred = q[:3] + np.r_[vw_ * (t_ready_rel - t_rel_now), 0.0]
-        Tg_ = T_at(T_ref, 0.0)
+        Tg_ = T_at(T_ref, float(os.environ.get('B_S_FINAL', '0.0015')))   # Codex 192427：首段預測用與接近目標相同的名目抓姿（含深度留量）
         qa_pred, res_ = None, 9.0
         for seed0 in (q[3:], np.array([-0.354, -0.088, 1.435, -1.421, -0.358, -0.157])):   # 預測底盤離目前較遠：底盤分段前推、逐步接續種子（c30：一步解殘差 3.1 cm）
             qa_ = np.asarray(seed0, float).copy()
