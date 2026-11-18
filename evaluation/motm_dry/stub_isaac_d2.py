@@ -99,6 +99,12 @@ class Stub(Node):
         gm = json.load(open(os.path.join(HERE, 'far_dry', 'geom.json')))
         self.lidar_xy, self.lidar_z = np.array(gm['lidar_xy'], float), float(gm['lidar_z'])
         self.boxes, _, _ = WN.load_boxes(self.lidar_z)
+        self.boxes = list(self.boxes)
+        if DRAWER:                                                    # 抽屜櫃板（跨過雷射高度者）也進替身雷射（s49：地圖有櫃、掃描看不到 ⇒ AMCL 偏 28 cm ⇒ 把手底盤位落進膨脹區 no valid path；Isaac PhysX 雷射本來就看得到）
+            for n_, c_, R_, h_ in DRS.shapes(0.0):
+                if n_.startswith('drawer_cab:') and c_[2] - h_[2] <= self.lidar_z <= c_[2] + h_[2]:
+                    ex_ = np.abs(R_[:2, :2]) @ h_[:2]
+                    self.boxes.append((n_, float(c_[0] - ex_[0]), float(c_[0] + ex_[0]), float(c_[1] - ex_[1]), float(c_[1] + ex_[1])))
         self.q = START.copy(); self.s = self.q[3:] - dq(self.q); self.pipe = [np.zeros(9) for _ in range(D)]
         self.phi, self.t, self.n = phi0, 0.0, 0
         self.cmd, self.cmd_t, self.acmd, self.acmd_t = np.zeros(3), -1.0, np.zeros(6), -1.0
