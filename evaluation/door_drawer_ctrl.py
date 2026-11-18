@@ -31,6 +31,7 @@ WAIT_TO_S = float(os.environ.get('DR_WAIT_TO_S', '20.0'))             # 等監�
 OBS_TOL_M, OBS_TOL_DEG = 0.010, 5.0
 RET_LIFT = float(os.environ.get('DR_RET_LIFT', '0.18'))              # 放手退出時另抬高（越過抽屜面板頂再去俯視；s39 直接混接 ⇒ 手指掃到面板被停）
 T_RET_DR = float(os.environ.get('DR_T_RET', '2.5'))
+H_FQ, H_FQ_TOL, H_FSUM = 0.0018, 0.0006, 1.0                         # 把手夾持證據：兩指開度在 26 mm 橫桿接觸開度 1.8 mm ±0.6 mm、兩指合力 ≥1.0 N（第二十趟 Isaac：開度 1.74/1.75 mm 但力 4.8／0.22 N 不對稱 ⇒ 原「兩指各 ≥0.5 N」判逾時）
 OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視關節空間移動峰速上限（rad/s）
 W_Q_OBS = float(os.environ.get('DR_W_Q_OBS', '5.0'))
 W_Q_APP = float(os.environ.get('DR_W_Q_APP', '0.0'))                  # 把手接近的關節姿態引導權重（s52：1.0 時引導解與實際底盤位不符 ⇒ 接近誤差 110 mm 未到位；預設關）
@@ -128,6 +129,10 @@ class DrawerCtrl(PK.TablePickCtrl):
         u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_app - PK.T_SETTLE, 1e-6), 0.0), 1.0))[0]
         return (1.0 - u) * self.q_h0 + u * self.q_h
 
+    def _held_handle(self):
+        f, fm = self.finger_force, self.finger_meas
+        return f is not None and fm is not None and all(abs(float(x) - H_FQ) <= H_FQ_TOL for x in fm) and float(sum(f)) >= H_FSUM
+
     def _pull_s(self, t_abs):
         return self.open_m * XE.minjerk(min(max((t_abs - self.t_ph0) / self.T_pull, 0.0), 1.0))[0]
 
@@ -148,7 +153,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         el = self.t - self.t_ph0
         if self.task == 'handle':
             if self.phase == 'CONFIRM':
-                self.n_ev = self.n_ev + 1 if self._held() else 0
+                self.n_ev = self.n_ev + 1 if self._held_handle() else 0
                 if self.n_ev * DT >= PK.EVID_S - 1e-9:
                     self.T_p0 = K.fk(q, 'link_tcp')
                     self.b_p0 = np.asarray(q[:3], float).copy()
@@ -172,7 +177,7 @@ class DrawerCtrl(PK.TablePickCtrl):
                     self._goto('UNBIND')
                 elif el > self.T_pull + PK.PH_TO_S:
                     self._stop('pull_not_reached', err_mm=round(ep * 1e3, 2), q_open=round(self.q_open, 4))
-                if not self._held():
+                if not self._held_handle():
                     self._stop('lost_handle_during_pull')
                 return
             if self.phase == 'UNBIND':
