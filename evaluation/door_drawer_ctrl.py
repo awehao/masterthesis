@@ -35,6 +35,7 @@ OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視�
 W_Q_OBS = float(os.environ.get('DR_W_Q_OBS', '5.0'))
 OBS_BUMP = float(os.environ.get('DR_OBS_BUMP', '0.05'))              # 俯視接近路徑上拱（m）
 CARRY_POS = np.array([float(x) for x in os.environ.get('DR_CARRY_POS', '0.30,0.0,0.70').split(',')])   # 持筆收臂位（底盤座標）：原收臂點 (0.36, 0, 0.588) 在拉開的抽屜正上方、低於面板頂 0.60 ⇒ 返回後退會撞面板；改高 0.70（離線 σ 0.117）
+T_CARRY_DR = float(os.environ.get('DR_T_CARRY', '4.0'))
 LIFT_DELAY = 0.35                                                     # 抬升自退出名目時間的 35% 起（先水平離開橫桿）
 
 
@@ -99,10 +100,13 @@ class DrawerCtrl(PK.TablePickCtrl):
     def _carry_target(self, t_abs):
         if self.task != 'marker':
             return super()._carry_target(t_abs)
-        u = XE.minjerk(min(max((t_abs - self.t_ph0) / PK.T_CARRY, 0.0), 1.0))[0]
+        r = min(max((t_abs - self.t_ph0) / T_CARRY_DR, 0.0), 1.0)
+        uz = XE.minjerk(min(r / 0.6, 1.0))[0]
+        ux = XE.minjerk(min(max((r - 0.4) / 0.6, 0.0), 1.0))[0]         # 先抬高、後水平（s47 直線斜移 ⇒ link_eef 擦面板頂 5.0 mm 被停）
         A = self.T_rel_s0
         T = np.eye(4)
-        T[:3, 3] = (1 - u) * A[:3, 3] + u * CARRY_POS                  # 只移位置（同圓柱）；姿態保持朝下
+        T[:2, 3] = (1 - ux) * A[:2, 3] + ux * CARRY_POS[:2]
+        T[2, 3] = (1 - uz) * A[2, 3] + uz * CARRY_POS[2]                # 只移位置（同圓柱）；姿態保持朝下
         T[:3, :3] = A[:3, :3]
         return T
 
@@ -216,7 +220,17 @@ class DrawerCtrl(PK.TablePickCtrl):
                 if el > WAIT_TO_S:
                     self._stop('marker_app_timeout')
                 return
-        super()._advance(q)                                          # handle 的 APPROACH／CLOSE；marker 全段（同圓柱）
+        if self.task == 'marker' and self.phase == 'CARRY':          # 持筆收臂：完成判定用本段時長（兩段式剖面）
+            T_now = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
+            ep = float(np.linalg.norm(T_now[:3, 3] - self._carry_target(self.t_ph0 + T_CARRY_DR)[:3, 3]))
+            if not self._held():
+                self._stop('lost_during_carry')
+            elif el >= T_CARRY_DR and ep <= 0.010:
+                self._goto('RETURN', carry_err_mm=round(ep * 1e3, 2))
+            elif el > T_CARRY_DR + PK.PH_TO_S:
+                self._stop('carry_not_reached', carry_err_mm=round(ep * 1e3, 2))
+            return
+        super()._advance(q)                                          # handle 的 APPROACH／CLOSE；marker 其餘段（同圓柱）
 
     def _solve(self, q):
         if self.task == 'marker' or (self.task == 'handle' and self.phase in ('APPROACH', 'CLOSE')):
