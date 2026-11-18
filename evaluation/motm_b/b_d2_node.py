@@ -431,7 +431,7 @@ def worker(conn):
             if op == 'prior':
                 import hashlib
                 import door_asset_v3 as DA3, door_geom_v3 as DG
-                sreg = json.load(open(os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json')))
+                sreg = json.load(open(os.path.join(HERE, 'experiments', os.environ.get('M8_SCENE_REG', '20261112_m8_house_scene.json'))))
                 ap_ = os.path.join(os.path.dirname(HERE), sreg['door']['asset'])
                 dd = DA3.load(ap_)
                 pl = dd['placement']['pose']
@@ -1056,7 +1056,7 @@ def main():
                         app = dict(T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - APP_T_LINE), d_line=APP_D_LINE, t_settle=1.0, s_final=float(os.environ.get('B_S_FINAL', '0.0015')))
                         Tg_od = np.linalg.inv(_T3(T_mo)) @ _T3([self.goal_xy[0], self.goal_xy[1], self.prior['yaw']])
                         app['base_goal'] = [float(Tg_od[0, 3]), float(Tg_od[1, 3]), math.atan2(Tg_od[1, 0], Tg_od[0, 0])]   # 抓取底盤位姿（里程座標）：導航到點後由同一控制器收斂到此
-                        sreg_ = json.load(open(os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json')))
+                        sreg_ = json.load(open(os.path.join(HERE, 'experiments', os.environ.get('M8_SCENE_REG', '20261112_m8_house_scene.json'))))
                         ox_ = sreg_['door']['opening_x']
                         Ti_ = np.linalg.inv(_T3(T_mo))
                         hg_ = Ti_ @ np.array([float(ox_[0]), 0.0, 0.0, 1.0]); dr_ = Ti_[:3, :3] @ np.array([1.0, 0.0, 0.0])

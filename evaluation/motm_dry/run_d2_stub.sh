@@ -4,6 +4,7 @@
 set -u
 WS="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$WS"
 OUT="$1"; TEND="${2:-80}"
+SSX="$(echo "${D2_START:-1.5,-2.8}" | cut -d, -f1)"; SSY="$(echo "${D2_START:-1.5,-2.8}" | cut -d, -f2)"   # 起點（同 world／替身的 D2_START）
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-77}" ROS_LOCALHOST_ONLY=1
 set +u; source /opt/ros/jazzy/setup.bash; source install/setup.bash; set -u
 PAT="[s]tub_isaac_d2|[s]can_safety_shield|[w]heel_limit_guard|[v]elocity_smoother|[g]mpc_task_node|[g]mpc_node|[p]lanner_server|[w]orld_node.py|[w]orld_d2_node|[w]orld_ahead_node|[b]_capture_node|[b]_d2_node"
@@ -22,11 +23,11 @@ for i in $(seq 240); do grep -q "world_ready" "$OUT.world.log" 2>/dev/null && br
 grep -q "world_ready" "$OUT.world.log" || { echo "世界節點未就緒"; exit 3; }
 setsid taskset -c "${STUB_CPUS:-0,8,1,9}" $PYS -u evaluation/motm_dry/stub_isaac_d2.py "$OUT" "$TEND" > "$OUT.stub.log" 2>&1 < /dev/null & PIDS+=( $! )
 sleep 3
-NO_GZ=1 BIGARENA=1 SCENE=mission_house_m8 NO_TRAFFIC=1 HEADING=1 GUARD=1 SHIELD=1 GMPC_TASK=1 GMPC_CMD_TOPIC=cmd_vel_nav_raw SPAWN_X=1.5 SPAWN_Y=-2.8 \
+NO_GZ=1 BIGARENA=1 SCENE="${M8_MAP:-mission_house_m8}" NO_TRAFFIC=1 HEADING=1 GUARD=1 SHIELD=1 GMPC_TASK=1 GMPC_CMD_TOPIC=cmd_vel_nav_raw SPAWN_X="$SSX" SPAWN_Y="$SSY" \
   setsid taskset -c "${NAV_CPUS:-2,10,7,15}" ros2 launch my_omnibot_description omni_bot_dynamic.launch.py gui:=false use_arm:=true > "$OUT.launch.log" 2>&1 < /dev/null & PIDS+=( $! )
 sleep 15
 for i in $(seq 40); do timeout 6 ros2 lifecycle get /amcl 2>/dev/null | grep -q "^active" && break; sleep 2; done
-timeout 10 ros2 topic pub -t 3 -r 1 /initialpose geometry_msgs/msg/PoseWithCovarianceStamped "{header: {frame_id: 'map'}, pose: {pose: {position: {x: 1.5, y: -2.8, z: 0.0}, orientation: {z: 0.7071, w: 0.7071}}}}" > "$OUT.initpose.log" 2>&1 || true
+timeout 10 ros2 topic pub -t 3 -r 1 /initialpose geometry_msgs/msg/PoseWithCovarianceStamped "{header: {frame_id: 'map'}, pose: {pose: {position: {x: $SSX, y: $SSY, z: 0.0}, orientation: {z: 0.7071, w: 0.7071}}}}" > "$OUT.initpose.log" 2>&1 || true
 sleep 3
 setsid taskset -c "${SUP_CPUS:-3,11}" $PYS -u evaluation/motm_b/b_d2_node.py "$OUT" > "$OUT.sup.log" 2>&1 < /dev/null & PIDS+=( $! ); SPID=$!
 for i in $(seq $((TEND * 4 + 120))); do kill -0 "$WPID" 2>/dev/null || break; sleep 1; done
