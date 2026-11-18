@@ -902,7 +902,7 @@ def main():
                 self.event('dr_handle_goal', base=[round(float(x), 4) for x in sel['base']], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), env=round(sel['env'], 4), base_clear=round(sel['base_clear'], 4), ms=round(dr['box']['ms'] if dr['box'] else 0, 1))
             elif st == 'handle_nav':
                 if float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float)))) <= PICK_APP_DIST:
-                    self._dr_send('drawer', dr['sel']['base'], t, T_grasp=dr['sel']['T_grasp'], pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M))
+                    self._dr_send('drawer', dr['sel']['base'], t, T_grasp=dr['sel']['T_grasp'], q_grasp=dr['sel'].get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M))
                     dr['stage'] = 'wait_release'
             elif st == 'wait_release' and 'pick_dr_released' in dr:
                 dr['q_open'] = float(dr['pick_dr_released'].get('q_open', R_.OPEN_M))

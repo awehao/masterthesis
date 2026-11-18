@@ -73,7 +73,7 @@ def select_handle(b_now, w_dist=1.0, w_sig=0.02):
         sc = w_dist * float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + w_sig / min(g0['sigma'], g1['sigma'])
         if best is None or sc < best['score']:
             best = dict(base=b.tolist(), base_end=b1.tolist(), flip=bool(g0['flip']), sigma_min=min(g0['sigma'], g1['sigma']), score=sc, env=min(g0['env'], g1['env']), base_clear=min(g0['base'], g1['base']),
-                        T_grasp=D.handle_T(0.0, g0['flip']).tolist())
+                        T_grasp=D.handle_T(0.0, g0['flip']).tolist(), q_grasp=[float(x) for x in g0['q']])
     D.set_open(0.0)
     return best
 

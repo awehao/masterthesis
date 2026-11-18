@@ -193,6 +193,9 @@ class TablePickCtrl(P.DoorPassCtrl):
                 Ts = [self.T_grasp] * (XO.N + 1)
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts),
                        w_p=C0.W_NEAR if self.phase != 'APPROACH' else C0.W_FAR, lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=False, qp_solver='gi', **B.W_ARM)
+            qpf = getattr(self, 'app_qpost', None)                       # 選用：接近段關節姿態引導（抽屜把手；圓柱流程不設 ⇒ 不變）
+            if qpf is not None and self.phase == 'APPROACH':
+                arm.update(q_post=np.array([qpf(t_eff + (k + 1) * DT) for k in range(XO.N)]), w_q=float(getattr(self, 'app_w_q', 1.0)))
         elif self.phase == 'CARRY':
             Ts = [self._carry_target(t_eff + k * DT) for k in range(XO.N + 1)]
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=C0.W_FAR,
