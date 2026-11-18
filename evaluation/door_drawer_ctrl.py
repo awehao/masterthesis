@@ -233,6 +233,13 @@ class DrawerCtrl(PK.TablePickCtrl):
         super()._advance(q)                                          # handle 的 APPROACH／CLOSE；marker 其餘段（同圓柱）
 
     def _solve(self, q):
+        if self.task == 'marker' and self.phase == 'CARRY':          # 持筆收臂用近距權重（s48：W_FAR 姿態追蹤弱 ⇒ TCP 不動而夾爪傾向面板，link_eef 4.8 mm 被停）
+            w_far = C0.W_FAR
+            C0.W_FAR = C0.W_NEAR
+            try:
+                return super()._solve(q)
+            finally:
+                C0.W_FAR = w_far
         if self.task == 'marker' or (self.task == 'handle' and self.phase in ('APPROACH', 'CLOSE')):
             return super()._solve(q)
         qp, sp = self._pred(q)
