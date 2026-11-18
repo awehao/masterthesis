@@ -791,7 +791,7 @@ def main():
         def _xs_in(self, m):
             if '"what": "pick_lifted"' in m.data:
                 self.pick_lifted = True
-            if DRAWER and '"what": "pick_phase"' in m.data and '"phase": "RETURN"' in m.data:   # 抽屜：收臂完成才送返回目標（s50：抬升後立即送 ⇒ 前端障礙物 3→6、CBF 推動錨定底盤 3.8 cm ⇒ 夾爪被帶向面板）
+            if DRAWER and '"what": "pick_dr_carried"' in m.data:   # 抽屜：收臂完成才送返回目標（s50：抬升後立即送 ⇒ 前端障礙物 3→6、CBF 推動錨定底盤 3.8 cm ⇒ 夾爪被帶向面板）
                 self.dr['carried'] = True
             for k_ in ('pick_dr_released', 'pick_dr_observing'):      # 抽屜任務事件（帶開度估計）
                 if ('"what": "%s"' % k_) in m.data and k_ not in self.dr:

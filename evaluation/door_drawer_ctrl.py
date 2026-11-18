@@ -239,6 +239,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             if not self._held():
                 self._stop('lost_during_carry')
             elif el >= T_CARRY_DR and ep <= 0.010:
+                self._ev('pick_dr_carried', carry_err_mm=round(ep * 1e3, 2))   # 監督據此送返回目標（伺服器轉發只帶事件名）
                 self._goto('RETURN', carry_err_mm=round(ep * 1e3, 2))
             elif el > T_CARRY_DR + PK.PH_TO_S:
                 self._stop('carry_not_reached', carry_err_mm=round(ep * 1e3, 2))

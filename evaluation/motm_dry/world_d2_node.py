@@ -159,7 +159,7 @@ class WorldD2(Node):
         self.meta['events'].append(e)
         print('[d2w]', json.dumps(e, ensure_ascii=False, default=str)[:500], flush=True)
         try:
-            self.p_xs.publish(String(data=json.dumps(dict(what=what, t=round(self.t, 3), stage=self.stage), default=str)))
+            self.p_xs.publish(String(data=json.dumps(dict(what=what, t=round(self.t, 3), stage=self.stage, **({'q_open': kw['q_open']} if 'q_open' in kw else {})), default=str)))   # 抽屜開度估計隨事件轉發
         except Exception:                                             # noqa: BLE001
             pass
 
