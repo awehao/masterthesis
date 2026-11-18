@@ -40,7 +40,7 @@ bodies = BM.arm_bodies(K); G_b = BM.arm_gravity(K, q_b, bodies)
 dq = lambda q9: Dst + (BM.arm_gravity(K, q9, bodies) - G_b) / 600.0   # noqa: E731
 Kc = np.array([[465.6028747558594, 0.0, 320.0], [0.0, 465.60284423828125, 240.0], [0.0, 0.0, 1.0]])
 rng = np.random.default_rng(20261117)
-_SC = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'experiments', '20261112_m8_house_scene.json')))
+_SC = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'experiments', os.environ.get('M8_SCENE_REG', '20261112_m8_house_scene.json'))))
 _TAB = next(f_ for f_ in _SC['furniture'] if f_['name'] == 'coffee_table')
 CYL_R, CYL_H, CYL_MARGIN = 0.015, 0.20, 0.05                          # 瓶子代理物規格（bottle_s0.yaml）；離桌邊 ≥0.05 m
 CYL_SEED = int(os.environ.get('CYL_SEED', '0'))

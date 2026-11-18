@@ -70,7 +70,7 @@ if [ "$ok" = "1" ]; then
   say "  /clock 前進中；啟動導航鏈"
   SX=$(echo "$START" | cut -d, -f1); SY=$(echo "$START" | cut -d, -f2); SYAW=$(echo "$START" | cut -d, -f3)
   PYS="env -u VIRTUAL_ENV PATH=/usr/local/bin:/usr/bin:/bin /usr/bin/python3"
-  NO_GZ=1 BIGARENA=1 SCENE=mission_house_m8 NO_TRAFFIC=1 HEADING=1 GUARD=1 SHIELD=1 GMPC_TASK=1 GMPC_CMD_TOPIC=cmd_vel_nav_raw SPAWN_X="$SX" SPAWN_Y="$SY" \
+  NO_GZ=1 BIGARENA=1 SCENE="${M8_MAP:-mission_house_m8}" NO_TRAFFIC=1 HEADING=1 GUARD=1 SHIELD=1 GMPC_TASK=1 GMPC_CMD_TOPIC=cmd_vel_nav_raw SPAWN_X="$SX" SPAWN_Y="$SY" \
     setsid taskset -c "$NAV_CPUS" ros2 launch my_omnibot_description omni_bot_dynamic.launch.py gui:=false use_arm:=true > "$DIR/launch.log" 2>&1 < /dev/null & PIDS+=( $! )
   setsid taskset -c "$NAV_CPUS" $PYS -u evaluation/far_dry/logger_node.py "$DIR/ros" > "$DIR/logger.log" 2>&1 < /dev/null & PIDS+=( $! )
   sleep 15

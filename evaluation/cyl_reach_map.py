@@ -22,7 +22,7 @@ import door_fast_kin as DFK                                           # noqa: E4
 K, XO = G.K, G.XO
 LIM = XO.LITE6_SAFE
 OUT = sys.argv[1] if (__name__ == '__main__' and len(sys.argv) > 1) else None
-scene = json.load(open(os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json')))
+scene = json.load(open(os.path.join(HERE, 'experiments', os.environ.get('M8_SCENE_REG', '20261112_m8_house_scene.json'))))
 FURN = {f['name']: f for f in scene['furniture']}
 TAB = FURN['coffee_table']
 TX, TY, _ = TAB['c']; SX, SY, SZ = TAB['s']
@@ -87,15 +87,17 @@ def arm_over_table_ok(b, q):
 
 def candidates(c):
     out = []
-    for side in ('west', 'south', 'north'):
+    for side in ('west', 'south', 'north', 'east'):                     # r2：東側到沙發 1.35 m 可站（r1 只剩 0.45 m，由 base_free／淨空自然排除）
         for d in D_SIDE:
             for lat in LAT:
                 if side == 'west':
                     b = np.array([X0 - d, c[1] + lat, 0.0])
                 elif side == 'south':
                     b = np.array([c[0] + lat, Y0 - d, math.pi / 2])
-                else:
+                elif side == 'north':
                     b = np.array([c[0] + lat, Y1 + d, -math.pi / 2])
+                else:
+                    b = np.array([X1 + d, c[1] + lat, math.pi])
                 out.append((side, d, lat, b))
     return out
 
@@ -173,7 +175,7 @@ def main():
     for c, s in BOXES:
         if abs(c[0] - TX) < 2.5 and abs(c[1] - TY) < 2.5:
             ax.add_patch(plt.Rectangle((c[0] - s[0] / 2, c[1] - s[1] / 2), s[0], s[1], color='0.85', zorder=0))
-    col = {'west': 'tab:blue', 'south': 'tab:orange', 'north': 'tab:green'}
+    col = {'west': 'tab:blue', 'south': 'tab:orange', 'north': 'tab:green', 'east': 'tab:purple'}
     for c_ in cells:
         if c_['reachable']:
             ax.plot(*c_['c'], 'o', color=col[c_['best']['side']], ms=6)

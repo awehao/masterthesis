@@ -31,7 +31,7 @@ ARM = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
 
 
 def load_boxes(lidar_z):
-    reg = json.load(open(os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json')))
+    reg = json.load(open(os.path.join(HERE, 'experiments', os.environ.get('M8_SCENE_REG', '20261112_m8_house_scene.json'))))
     B = []
     for it in reg['walls'] + reg['furniture']:
         c, s = it['c'], it['s']

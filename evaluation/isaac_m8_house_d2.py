@@ -30,7 +30,7 @@ WS = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--reg', default=os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json'))
+ap.add_argument('--reg', default=os.path.join(HERE, 'experiments', os.environ.get('M8_SCENE_REG', '20261112_m8_house_scene.json')))
 ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_manip.urdf'))
 ap.add_argument('--out', required=True)
 ap.add_argument('--start', default='1.5,-2.8,1.5708')

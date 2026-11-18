@@ -19,7 +19,7 @@ ap.add_argument('--run', required=True)
 ap.add_argument('--out', required=True)
 ap.add_argument('--every', type=int, default=10)
 ap.add_argument('--t-from', type=float, default=-1.0, help='<0：從底盤開始移動前 1 s 起')
-ap.add_argument('--reg', default=os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json'))
+ap.add_argument('--reg', default=os.path.join(HERE, 'experiments', os.environ.get('M8_SCENE_REG', '20261112_m8_house_scene.json')))
 ap.add_argument('--urdf', default=os.path.join(WS, 'evaluation/models/omni_bot_manip.urdf'))
 a = ap.parse_args()
 

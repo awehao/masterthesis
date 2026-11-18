@@ -24,7 +24,7 @@ T0 = float(sys.argv[3]) if len(sys.argv) > 3 else None
 z = np.load(PFX + '_d2w.npz', allow_pickle=True)
 m = json.load(open(PFX + '_d2w.json'))
 R, cols = z['rows'], list(z['cols'])
-scene = json.load(open(os.path.join(HERE, 'experiments', '20261112_m8_house_scene.json')))
+scene = json.load(open(os.path.join(HERE, 'experiments', os.environ.get('M8_SCENE_REG', '20261112_m8_house_scene.json'))))
 ev = [(e['t'], e['what']) for e in m['events']]
 t_take = next((t for t, w in ev if w == 'd2_takeover'), None)
 t_bind = next((t for t, w in ev if w == 'bind_committed'), None)

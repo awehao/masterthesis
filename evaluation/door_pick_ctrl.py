@@ -31,7 +31,7 @@ CONTACT_N = float(os.environ.get('PICK_CONTACT_N', '0.5'))
 FINGER_EMPTY = float(os.environ.get('PICK_FINGER_EMPTY', '0.0015'))   # 手指開度低於此 ⇒ 判定夾空（全閉）
 LIFT_M, T_LIFT = float(os.environ.get('PICK_LIFT_M', '0.05')), 1.2
 T_CARRY = 3.0
-PICK_CARRY = os.environ.get('PICK_CARRY', '0') == '1'
+PICK_CARRY = os.environ.get('PICK_CARRY', '1') == '1'                 # Howard 11/18「夾到東西沒有收手臂，伸出來很危險」⇒ 預設收臂（理想連接後收臂不再滑落）
 CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.2775')), float(os.environ.get('PICK_CARRY_WZ', '1.1327'))   # 持物底盤速度框（m/s、rad/s）；夾到後理想連接 ⇒ 預設＝硬體上限（不收緊）
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
 PH_TO_S = 4.0
