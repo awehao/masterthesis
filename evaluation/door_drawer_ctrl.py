@@ -65,8 +65,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.q_obs0 = None
         elif kind == 'marker' and self.task == 'observe' and self.phase == 'OBSERVE':
             self.task = 'marker'
-            self.T_grasp = np.asarray(app['T_grasp'], float).copy()
-            self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + PK.GRASP_DEPTH * self.T_grasp[:3, 2]   # 同圓柱：TCP 沿工具軸越過筆軸 4 mm
+            self.T_grasp = np.asarray(app['T_grasp'], float).copy()   # 已含越過筆軸 4 mm（drawer_reach.grasp_T；s44 這裡再加一次 ⇒ TCP 在筆軸下 9.5 mm，替身判未夾到）
         else:
             self._ev('pick_dr_app_ignored', kind=kind, task=self.task, phase=self.phase)
             return
