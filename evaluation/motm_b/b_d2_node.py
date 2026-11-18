@@ -898,7 +898,7 @@ def main():
                     dr['stage'] = 'wait_release'
             elif st == 'wait_release' and 'pick_dr_released' in dr:
                 dr['q_open'] = float(dr['pick_dr_released'].get('q_open', R_.OPEN_M))
-                dr['box'] = self._dr_thread(R_.select_observe, dr['q_open'], self.b_od_now.copy())
+                dr['box'] = self._dr_thread(R_.select_observe, dr['q_open'], self.b_od_now.copy(), bool(dr['sel']['flip']))
                 dr['stage'] = 'obs_sel'
                 self.event('dr_observe_select_start', q_open=dr['q_open'])
             elif st == 'obs_sel' and dr['box']['done']:
@@ -907,7 +907,8 @@ def main():
                     self.event('dr_observe_unreachable', err=dr['box'].get('err')); self.abort('drawer_observe_unreachable'); return
                 self.pick_goal, self.pass_t = self._dr_goal(sel['base']), t
                 self.event('dr_observe_goal', base=[round(float(x), 4) for x in sel['base']], c=[round(float(x), 4) for x in sel['c']], ms=round(dr['box']['ms'], 1))
-                self._dr_send('observe', sel['base'], t, T_obs=sel['T_obs'])
+                self._dr_send('observe', sel['base'], t, T_obs=sel['T_obs'], q_obs=sel['q_obs'])
+                dr['R_obs'] = np.asarray(sel['T_obs'], float)[:3, :3]
                 dr.update(stage='wait_obs', box=None)
             elif st == 'wait_obs' and 'pick_dr_observing' in dr:
                 dr.update(stage='mk_fuse', t_obs=t)
@@ -915,7 +916,7 @@ def main():
                 est = self._mk_fuse(t, dr['t_obs'])
                 if est is not None:
                     dr['est'] = est
-                    dr['box'] = self._dr_thread(R_.select_marker, est[:3], float(est[3]), dr['q_open'], self.b_od_now.copy())
+                    dr['box'] = self._dr_thread(R_.select_marker, est[:3], float(est[3]), dr['q_open'], self.b_od_now.copy(), 1.0, 0.02, dr.get('R_obs'))
                     dr['stage'] = 'mk_sel'
                     self.event('dr_marker_estimate', c_od=[round(float(x), 4) for x in est[:3]], yaw_deg=round(math.degrees(float(est[3])), 2), n_obs=len(self.cyl_obs))
                 elif t - dr['t_obs'] > 10.0:

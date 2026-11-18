@@ -31,6 +31,8 @@ WAIT_TO_S = float(os.environ.get('DR_WAIT_TO_S', '20.0'))             # 等監�
 OBS_TOL_M, OBS_TOL_DEG = 0.010, 5.0
 RET_LIFT = float(os.environ.get('DR_RET_LIFT', '0.18'))              # 放手退出時另抬高（越過抽屜面板頂再去俯視；s39 直接混接 ⇒ 手指掃到面板被停）
 T_RET_DR = float(os.environ.get('DR_T_RET', '2.5'))
+OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視關節空間移動峰速上限（rad/s）
+W_Q_OBS = float(os.environ.get('DR_W_Q_OBS', '5.0'))
 OBS_BUMP = float(os.environ.get('DR_OBS_BUMP', '0.05'))              # 俯視接近路徑上拱（m）
 CARRY_POS = np.array([float(x) for x in os.environ.get('DR_CARRY_POS', '0.30,0.0,0.70').split(',')])   # 持筆收臂位（底盤座標）：原收臂點 (0.36, 0, 0.588) 在拉開的抽屜正上方、低於面板頂 0.60 ⇒ 返回後退會撞面板；改高 0.70（離線 σ 0.117）
 LIFT_DELAY = 0.35                                                     # 抬升自退出名目時間的 35% 起（先水平離開橫桿）
@@ -48,6 +50,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         self.T_pull = float(app.get('T_pull', T_PULL))
         self.dr_attach, self.dr_release, self.dr_unbound, self.q_open = False, False, False, 0.0
         self.T_p0, self.b_p0, self.T_hold, self.T_rel_r0, self.dvec_b, self.T_obs0 = None, None, None, None, None, None
+        self.q_obs, self.q_obs0, self.q_arm_now = None, None, None
         D.set_open(0.0)
         self._ev('pick_dr_start', T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]], pull=[round(float(x), 4) for x in self.pull[:2]], open_m=self.open_m)
 
@@ -58,6 +61,8 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.task = 'observe'
             self.T_grasp = np.asarray(app['T_obs'], float).copy()
             self.T_obs0 = None if self.T_hold is None else self.T_hold.copy()   # 起點＝退出終點（世界）
+            self.q_obs = np.asarray(app['q_obs'], float).copy() if app.get('q_obs') is not None else None   # 俯視構型（關節空間過去；s42）
+            self.q_obs0 = None
         elif kind == 'marker' and self.task == 'observe' and self.phase == 'OBSERVE':
             self.task = 'marker'
             self.T_grasp = np.asarray(app['T_grasp'], float).copy()
@@ -67,9 +72,18 @@ class DrawerCtrl(PK.TablePickCtrl):
             return
         self.app_prof = dict(base_goal=list(app['base_goal']), door=None)
         self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
+        if kind == 'observe' and self.q_obs is not None and self.q_arm_now is not None:   # 關節空間時長：最大關節位移 ÷ OBS_QD（最小急動峰速 1.875×）
+            self.T_app = max(self.T_app, 1.875 * float(np.abs(self.q_obs - self.q_arm_now).max()) / OBS_QD + PK.T_SETTLE)
         self.T_rel0 = None
         self.t = float(t0)
         self._goto('APPROACH', task=self.task, base_goal=[round(float(x), 4) for x in app['base_goal']], T=round(self.T_app, 3))
+
+    def _obs_q(self, t_abs):
+        u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_app - PK.T_SETTLE, 1e-6), 0.0), 1.0))[0]
+        return (1.0 - u) * self.q_obs0 + u * self.q_obs
+
+    def _obs_rel(self, t_abs):
+        return K.fk(np.r_[np.zeros(3), self._obs_q(t_abs)], 'link_tcp')    # 相對底盤（關節直線插值的正向運動學）
 
     def _app_target(self, t_abs, Xk):
         if self.task != 'observe':
@@ -183,9 +197,15 @@ class DrawerCtrl(PK.TablePickCtrl):
             if self.phase == 'APPROACH':
                 if self.T_rel0 is None:
                     self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
+                if self.q_obs is not None and self.q_obs0 is None:
+                    self.q_obs0 = np.asarray(q[3:], float).copy()
                 Tc = K.fk(q, 'link_tcp')
-                ep = float(np.linalg.norm(Tc[:3, 3] - self.T_grasp[:3, 3]))
-                er = math.degrees(float(np.linalg.norm(_log_R(self.T_grasp[:3, :3].T @ Tc[:3, :3]))))
+                if self.q_obs is not None:                            # 關節空間俯視：完成判定用相對底盤誤差（底盤由導航收斂）
+                    Tt = K.fk(np.r_[np.zeros(3), self.q_obs], 'link_tcp'); Tr = np.linalg.inv(_T3(q[:3])) @ Tc
+                    ep = float(np.linalg.norm(Tr[:3, 3] - Tt[:3, 3])); er = math.degrees(float(np.linalg.norm(_log_R(Tt[:3, :3].T @ Tr[:3, :3]))))
+                else:
+                    ep = float(np.linalg.norm(Tc[:3, 3] - self.T_grasp[:3, 3]))
+                    er = math.degrees(float(np.linalg.norm(_log_R(self.T_grasp[:3, :3].T @ Tc[:3, :3]))))
                 if el >= self.T_app and ep <= OBS_TOL_M and er <= OBS_TOL_DEG:
                     self.b_anchor = np.asarray(q[:3], float).copy()
                     self._ev('pick_dr_observing', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), base=[round(float(x), 4) for x in q[:3]])
@@ -208,8 +228,19 @@ class DrawerCtrl(PK.TablePickCtrl):
         if obs is None:
             return None, 'nav_obstacles_stale'
         Xp = [(float(Xk[0, 2]), float(Xk[1, 2]), math.atan2(float(Xk[1, 0]), float(Xk[0, 0]))) for Xk in X]
-        tcp_rel = False
-        if self.task == 'observe' and self.phase == 'APPROACH':
+        tcp_rel, q_post = False, None
+        if self.task == 'observe' and self.q_obs is not None and self.q_obs0 is not None and self.phase in ('APPROACH', 'OBSERVE'):
+            if self.phase == 'APPROACH':
+                Ts = [self._obs_rel(t_eff + k * DT) for k in range(XO.N + 1)]
+                q_post = np.array([self._obs_q(t_eff + (k + 1) * DT) for k in range(XO.N)])
+            else:
+                X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
+                xi = [np.zeros(3)] * (XO.N + 1)
+                Ts = [K.fk(np.r_[np.zeros(3), self.q_obs], 'link_tcp')] * (XO.N + 1)
+                q_post = np.tile(self.q_obs, (XO.N, 1))
+                umin0, src = float('nan'), 'anchor'
+            tcp_rel, w_p = True, (C0.W_FAR if self.phase == 'APPROACH' else C0.W_NEAR)
+        elif self.task == 'observe' and self.phase == 'APPROACH':
             Ts = [self._app_target(t_eff + k * DT, Xp[k]) for k in range(XO.N + 1)]
             w_p = C0.W_FAR
         else:
@@ -232,6 +263,8 @@ class DrawerCtrl(PK.TablePickCtrl):
             w_p = C0.W_NEAR if self.phase in ('CONFIRM', 'PULL', 'OBSERVE') else C0.W_FAR
         arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=w_p,
                    lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=tcp_rel, qp_solver='gi', **B.W_ARM)
+        if q_post is not None:
+            arm.update(q_post=q_post, w_q=W_Q_OBS)
         mpc = self.mpc
         u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
         if math.isfinite(umin0):
@@ -250,3 +283,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             return None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed'))
         return np.r_[np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float)], src
 
+
+    def step(self, t, q, phi_meas, finger_meas=None, finger_force=None):
+        self.q_arm_now = np.asarray(q[3:], float).copy()                  # 俯視關節空間時長用
+        return super().step(t, q, phi_meas, finger_meas=finger_meas, finger_force=finger_force)

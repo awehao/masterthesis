@@ -33,8 +33,8 @@ def _clear(b, q, q_open):
     return ok, c
 
 
-def _ik_ok(T, b, q_open, env_min=0.0):
-    for fl in (False, True):
+def _ik_ok(T, b, q_open, env_min=0.0, flips=(False, True)):
+    for fl in flips:
         Tf = T(fl) if callable(T) else T
         g = M.ik(Tf, b)
         if g is None:
@@ -84,25 +84,50 @@ def grasp_T(c, yaw, flip, s=0.0):
     return T
 
 
-def obs_T(c_xy, z_bottom, yaw_tool):
-    """相機在 c_xy 正上方：工具 z 朝下、工具 x 朝 yaw_tool；TCP＝c − R·(cam 偏移)。"""
-    T = D.marker_T(np.r_[c_xy[:2], z_bottom + OBS_H], yaw_tool + math.pi / 2)
-    T[:3, 3] = T[:3, 3] - T[:3, :2] @ CAM_OFF
+def _rotvec(w):
+    th = float(np.linalg.norm(w))
+    if th < 1e-12:
+        return np.eye(3)
+    k = w / th; Kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + math.sin(th) * Kx + (1 - math.cos(th)) * Kx @ Kx
+
+
+def obs_R(flip):
+    """俯視姿態：自抓把手姿態（退出保持）做最短轉動使工具 z 朝下（s42：任意定的繞垂直軸角 ⇒ 途中 j4 轉到 −2.886 碰限位）。"""
+    R0 = D.handle_T(0.0, flip)[:3, :3]
+    z0, zt = R0[:, 2], np.array([0.0, 0.0, -1.0])
+    ax = np.cross(z0, zt); s_ = float(np.linalg.norm(ax))
+    ang = math.atan2(s_, float(z0 @ zt))
+    return _rotvec(ax / max(s_, 1e-12) * ang) @ R0
+
+
+def obs_T(c_xy, z_bottom, R):
+    """相機在 c_xy 正上方（光軸∥工具 z 朝下）：TCP＝c − R·(cam 偏移)。"""
+    T = np.eye(4); T[:3, :3] = R; T[:3, 3] = np.r_[c_xy[:2], z_bottom + OBS_H]
+    T[:3, 3] = T[:3, 3] - R[:, :2] @ CAM_OFF
     return T
 
 
-def select_marker(c, yaw, q_open, b_now, w_dist=1.0, w_sig=0.02):
+def _rot_angle(Ra, Rb):
+    return math.acos(max(-1.0, min(1.0, (float(np.trace(Ra.T @ Rb)) - 1.0) / 2.0)))
+
+
+def select_marker(c, yaw, q_open, b_now, w_dist=1.0, w_sig=0.02, R_ref=None):
     best = None
+    flips = (False, True)
+    if R_ref is not None:                                              # 先試與俯視姿態轉角較小的夾爪方向（少轉手腕）
+        flips = tuple(sorted((False, True), key=lambda f: _rot_angle(np.asarray(R_ref, float), grasp_T(c, yaw, f)[:3, :3])))
     for b in _frame_bases(c, np.arange(0.30, 0.56, 0.025), np.arange(-0.30, 0.301, 0.05), (0.0, -20.0, 20.0)):
         if not M.base_free(b):
             continue
-        g = _ik_ok(lambda f: grasp_T(c, yaw, f), b, q_open)
+        g = _ik_ok(lambda f: grasp_T(c, yaw, f), b, q_open, flips=flips[:1])
         if g is None:
             continue
         gp = _ik_ok(grasp_T(c, yaw, g['flip'], PRE_M), b, q_open, ENV_SEL)
         if gp is None:
             continue
-        sc = w_dist * float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + w_sig / min(g['sigma'], gp['sigma']) - W_ENV * gp['env']
+        dyaw = abs((float(b[2]) - float(b_now[2]) + math.pi) % (2 * math.pi) - math.pi)
+        sc = w_dist * (float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + 0.3 * dyaw) + w_sig / min(g['sigma'], gp['sigma']) - W_ENV * gp['env']   # 偏航差折 0.3 m/rad（少轉底盤、手腕分支連續）
         if best is None or sc < best['score']:
             best = dict(base=b.tolist(), flip=bool(g['flip']), sigma_min=min(g['sigma'], gp['sigma']), score=sc, env=min(g['env'], gp['env']), base_clear=min(g['base'], gp['base']), T_grasp=grasp_T(c, yaw, g['flip']).tolist())
     return best
@@ -115,7 +140,23 @@ def exposed_center(q_open):
     return D.to_world([0.0, (y_lo + y_lo + float(q_open)) / 2.0, float(it['bottom_top_z'])], q_open, True)
 
 
-def select_observe(q_open, b_now):
+import door_fast_kin as DFK
+OBS_SEEDS = list(M.SEEDS) + [np.array([0.0, 0.3, 1.2, 0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0, 0.0, 1.2, -1.5]), np.array([0.0, 0.0, 1.0, 0.0, 1.2, 1.5]), np.array([0.3, 0.2, 1.4, 0.0, 1.2, -1.6])]
+
+
+def ik_branch(T, b, margin=0.15):
+    """俯視構型：多種子閉式 IK，留限位餘裕 margin，取 σ 最大者（s42：抓把手分支 j5<0 做正上方需 j4＝±π 超限 ⇒ 俯視改關節空間換到 j4≈0、j5>0 分支）。"""
+    lo, hi = np.asarray(M.LIM.lower, float), np.asarray(M.LIM.upper, float)
+    best = None
+    for sd in OBS_SEEDS:
+        q, r, sm = DFK.ik_closure_fc(T, b, sd)
+        q = (np.asarray(q, float) + math.pi) % (2 * math.pi) - math.pi
+        if r <= 1e-4 and np.all(q >= lo + margin) and np.all(q <= hi - margin) and sm >= 0.02 and (best is None or sm > best[1]):
+            best = (q, float(sm))
+    return best
+
+
+def select_observe(q_open, b_now, flip=False):
     c = exposed_center(q_open)
     z_b = float(D.SPEC['interior']['bottom_top_z'])
     yaw_m = math.atan2(D.PULL[0], -D.PULL[1]) if False else _yaw_face() + math.pi / 2   # 筆名目平躺方向（沿把手橫桿）只用來定夾爪開合方向，不讀筆位置
@@ -123,12 +164,20 @@ def select_observe(q_open, b_now):
     for b in _frame_bases(c, np.arange(0.30, 0.56, 0.025), np.arange(-0.20, 0.201, 0.05), (0.0, -20.0, 20.0)):
         if not M.base_free(b):
             continue
-        To = obs_T(c, z_b, _yaw_face())
-        go = _ik_ok(To, b, q_open, ENV_SEL)
+        go = None
+        for of in (False, True):                                      # 俯視繞垂直軸兩種（關節空間過去，不受抓把手姿態限制）
+            Ro_ = obs_R(of); To_ = obs_T(c, z_b, Ro_)
+            qb = ik_branch(To_, b)
+            if qb is None:
+                continue
+            ok_, c_ = _clear(b, qb[0], q_open)
+            if ok_ and float(c_['env']) >= ENV_SEL and (go is None or qb[1] > go['sigma']):
+                go, Ro, To = dict(q=qb[0], sigma=qb[1], env=float(c_['env']), base=float(c_['base'])), Ro_, To_
         if go is None:
             continue
         cg = np.r_[c[:2], z_b + 0.014]
-        g = _ik_ok(lambda f: grasp_T(cg, yaw_m, f), b, q_open)
+        fl_ = min((False, True), key=lambda f: _rot_angle(Ro, grasp_T(cg, yaw_m, f)[:3, :3]))
+        g = _ik_ok(lambda f: grasp_T(cg, yaw_m, f), b, q_open, flips=(fl_,))
         if g is None:
             continue
         gp = _ik_ok(grasp_T(cg, yaw_m, g['flip'], PRE_M), b, q_open, ENV_SEL)
@@ -136,7 +185,7 @@ def select_observe(q_open, b_now):
             continue
         sc = float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + 0.02 / min(go['sigma'], g['sigma']) - W_ENV * min(go['env'], gp['env'])
         if best is None or sc < best['score']:
-            best = dict(base=b.tolist(), sigma_min=min(go['sigma'], g['sigma']), score=sc, env=min(go['env'], g['env']), base_clear=min(go['base'], g['base']), T_obs=To.tolist(), c=c.tolist())
+            best = dict(base=b.tolist(), sigma_min=min(go['sigma'], g['sigma']), score=sc, env=min(go['env'], g['env']), base_clear=min(go['base'], g['base']), T_obs=To.tolist(), q_obs=[float(x) for x in go['q']], c=c.tolist(), flip_grasp=bool(g['flip']))
     return best
 
 
@@ -144,8 +193,8 @@ if __name__ == '__main__':
     import time
     w = time.perf_counter(); h = select_handle(np.array([0.0, 9.0, math.pi]))
     print('handle', None if h is None else dict(base=np.round(h['base'], 3).tolist(), end=np.round(h['base_end'], 3).tolist(), sig=round(h['sigma_min'], 3), env=round(h['env'], 3), bc=round(h['base_clear'], 3)), round((time.perf_counter() - w) * 1e3), 'ms')
-    w = time.perf_counter(); o = select_observe(OPEN_M, np.array(h['base_end']) if h else np.array([-3.9, 10.3, math.pi]))
+    w = time.perf_counter(); o = select_observe(OPEN_M, np.array(h['base_end']) if h else np.array([-3.9, 10.3, math.pi]), flip=h['flip'] if h else False)
     print('observe', None if o is None else dict(base=np.round(o['base'], 3).tolist(), sig=round(o['sigma_min'], 3), env=round(o['env'], 3), bc=round(o['base_clear'], 3), c=np.round(o['c'], 3).tolist()), round((time.perf_counter() - w) * 1e3), 'ms')
     mk = D.marker_nominal(OPEN_M)
-    w = time.perf_counter(); m = select_marker(mk, _yaw_face() + math.pi / 2, OPEN_M, np.array(o['base']) if o else np.array([-4.2, 10.3, math.pi]))
+    w = time.perf_counter(); m = select_marker(mk, _yaw_face() + math.pi / 2, OPEN_M, np.array(o['base']) if o else np.array([-4.2, 10.3, math.pi]), R_ref=np.array(o['T_obs'])[:3, :3] if o else None)
     print('marker', mk.round(3), None if m is None else dict(base=np.round(m['base'], 3).tolist(), sig=round(m['sigma_min'], 3), env=round(m['env'], 3), bc=round(m['base_clear'], 3)), round((time.perf_counter() - w) * 1e3), 'ms')
