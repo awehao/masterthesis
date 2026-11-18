@@ -33,7 +33,7 @@ RET_LIFT = float(os.environ.get('DR_RET_LIFT', '0.18'))              # 放手退
 T_RET_DR = float(os.environ.get('DR_T_RET', '2.5'))
 OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視關節空間移動峰速上限（rad/s）
 W_Q_OBS = float(os.environ.get('DR_W_Q_OBS', '5.0'))
-W_Q_APP = float(os.environ.get('DR_W_Q_APP', '1.0'))                  # 把手接近的關節姿態引導權重
+W_Q_APP = float(os.environ.get('DR_W_Q_APP', '0.0'))                  # 把手接近的關節姿態引導權重（s52：1.0 時引導解與實際底盤位不符 ⇒ 接近誤差 110 mm 未到位；預設關）
 OBS_BUMP = float(os.environ.get('DR_OBS_BUMP', '0.05'))              # 俯視接近路徑上拱（m）
 CARRY_POS = np.array([float(x) for x in os.environ.get('DR_CARRY_POS', '0.30,0.0,0.70').split(',')])   # 持筆收臂位（底盤座標）：原收臂點 (0.36, 0, 0.588) 在拉開的抽屜正上方、低於面板頂 0.60 ⇒ 返回後退會撞面板；改高 0.70（離線 σ 0.117）
 T_CARRY_DR = float(os.environ.get('DR_T_CARRY', '4.0'))
@@ -56,7 +56,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         D.set_open(0.0)
         self.q_h = np.asarray(app['q_grasp'], float).copy() if app.get('q_grasp') is not None else None   # 把手抓取關節解（選位時算；s51 底盤偏航差 0.47 rad 時手腕走 j5 −1.76 ⇒ 自身淨空 4.6 mm）
         self.q_h0 = None
-        if self.q_h is not None:
+        if self.q_h is not None and W_Q_APP > 0.0:
             self.app_w_q = W_Q_APP
             self.app_qpost = self._handle_qpost
         self._ev('pick_dr_start', T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]], pull=[round(float(x), 4) for x in self.pull[:2]], open_m=self.open_m)
