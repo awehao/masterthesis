@@ -32,6 +32,8 @@ OBS_TOL_M, OBS_TOL_DEG = 0.010, 5.0
 RET_LIFT = float(os.environ.get('DR_RET_LIFT', '0.18'))              # 放手退出時另抬高（越過抽屜面板頂再去俯視；s39 直接混接 ⇒ 手指掃到面板被停）
 T_RET_DR = float(os.environ.get('DR_T_RET', '2.5'))
 H_FQ, H_FQ_TOL, H_FSUM = 0.0018, 0.0006, 1.0                         # 把手夾持證據：兩指開度在 26 mm 橫桿接觸開度 1.8 mm ±0.6 mm、兩指合力 ≥1.0 N（第二十趟 Isaac：開度 1.74/1.75 mm 但力 4.8／0.22 N 不對稱 ⇒ 原「兩指各 ≥0.5 N」判逾時）
+Q_UNFOLD = np.array([float(x) for x in os.environ.get('DR_Q_UNFOLD', '-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018').split(',')])   # 抓把手前展開到原收臂構型（第二十三趟：緊湊收臂直接接近 ⇒ 自身淨空 4.9 mm）
+UNFOLD_TOL = 0.03
 OBS_QD = float(os.environ.get('DR_OBS_QD', '0.6'))                    # 俯視關節空間移動峰速上限（rad/s）
 W_Q_OBS = float(os.environ.get('DR_W_Q_OBS', '5.0'))
 W_Q_APP = float(os.environ.get('DR_W_Q_APP', '0.0'))                  # 把手接近的關節姿態引導權重（s52：1.0 時引導解與實際底盤位不符 ⇒ 接近誤差 110 mm 未到位；預設關）
@@ -55,6 +57,10 @@ class DrawerCtrl(PK.TablePickCtrl):
         self.T_p0, self.b_p0, self.T_hold, self.T_rel_r0, self.dvec_b, self.T_obs0 = None, None, None, None, None, None
         self.q_obs, self.q_obs0, self.q_arm_now = None, None, None
         D.set_open(0.0)
+        self.q_unf0 = None
+        if os.environ.get('PASS_Q_STOW') and float(np.abs(np.asarray(src.s, float) - Q_UNFOLD).max()) > UNFOLD_TOL:   # 緊湊收臂導航 ⇒ 先關節空間展開
+            self.phase, self.T_unf = 'UNFOLD', None
+            self._ev('pick_phase', phase='UNFOLD')
         self.q_h = np.asarray(app['q_grasp'], float).copy() if app.get('q_grasp') is not None else None   # 把手抓取關節解（選位時算；s51 底盤偏航差 0.47 rad 時手腕走 j5 −1.76 ⇒ 自身淨空 4.6 mm）
         self.q_h0 = None
         if self.q_h is not None and W_Q_APP > 0.0:
@@ -123,6 +129,10 @@ class DrawerCtrl(PK.TablePickCtrl):
             return self.T_grasp.copy()                                # 觀察位：不走抓取線
         return super()._T_line(s_)
 
+    def _unf_q(self, t_abs):
+        u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_unf, 1e-6), 0.0), 1.0))[0]
+        return (1.0 - u) * self.q_unf0 + u * Q_UNFOLD
+
     def _handle_qpost(self, t_abs):
         if self.q_h0 is None:
             self.q_h0 = self.q_arm_now.copy() if self.q_arm_now is not None else self.q_h.copy()
@@ -152,6 +162,16 @@ class DrawerCtrl(PK.TablePickCtrl):
     def _advance(self, q):
         el = self.t - self.t_ph0
         if self.task == 'handle':
+            if self.phase == 'UNFOLD':
+                if self.q_unf0 is None:
+                    self.q_unf0 = np.asarray(q[3:], float).copy()
+                    self.T_unf = 1.875 * float(np.abs(Q_UNFOLD - self.q_unf0).max()) / OBS_QD + 0.5
+                if el >= self.T_unf and float(np.abs(np.asarray(q[3:], float) - Q_UNFOLD).max()) <= UNFOLD_TOL:
+                    self.T_rel0 = None                                # 接近剖面自展開後的構型起算
+                    self._goto('APPROACH', unfold_s=round(el, 2))
+                elif el > self.T_unf + PK.PH_TO_S:
+                    self._stop('unfold_not_reached', err=round(float(np.abs(np.asarray(q[3:], float) - Q_UNFOLD).max()), 4))
+                return
             if self.phase == 'CONFIRM':
                 self.n_ev = self.n_ev + 1 if self._held_handle() else 0
                 if self.n_ev * DT >= PK.EVID_S - 1e-9:
@@ -268,7 +288,14 @@ class DrawerCtrl(PK.TablePickCtrl):
             return None, 'nav_obstacles_stale'
         Xp = [(float(Xk[0, 2]), float(Xk[1, 2]), math.atan2(float(Xk[1, 0]), float(Xk[0, 0]))) for Xk in X]
         tcp_rel, q_post = False, None
-        if self.task == 'observe' and self.q_obs is not None and self.q_obs0 is not None and self.phase in ('APPROACH', 'OBSERVE'):
+        if self.task == 'handle' and self.phase == 'UNFOLD':
+            if self.q_unf0 is None:
+                self.q_unf0 = np.asarray(q[3:], float).copy()
+                self.T_unf = 1.875 * float(np.abs(Q_UNFOLD - self.q_unf0).max()) / OBS_QD + 0.5
+            Ts = [K.fk(np.r_[np.zeros(3), self._unf_q(t_eff + k * DT)], 'link_tcp') for k in range(XO.N + 1)]
+            q_post = np.array([self._unf_q(t_eff + (k + 1) * DT) for k in range(XO.N)])
+            tcp_rel, w_p = True, C0.W_FAR                             # 底盤照導航前端／收斂到把手底盤位（nav_window）
+        elif self.task == 'observe' and self.q_obs is not None and self.q_obs0 is not None and self.phase in ('APPROACH', 'OBSERVE'):
             if self.phase == 'APPROACH':
                 Ts = [self._obs_rel(t_eff + k * DT) for k in range(XO.N + 1)]
                 q_post = np.array([self._obs_q(t_eff + (k + 1) * DT) for k in range(XO.N)])
