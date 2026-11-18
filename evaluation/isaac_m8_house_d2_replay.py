@@ -86,6 +86,11 @@ def main():
                  side=dict(eye=[0.85, -2.05, 1.45], tgt=[0.85, -0.40, 0.75], hfov=math.radians(62.0), res=(960, 540)),
                  living=dict(eye=[1.9, 2.3, 2.3], tgt=[0.3, -0.4, 0.5], hfov=math.radians(62.0), res=(960, 540)),   # 客廳側：看穿門
                  table=dict(eye=[-0.4, 1.2, 1.7], tgt=[1.1, 2.0, 0.5], hfov=math.radians(62.0), res=(960, 540)))   # 茶几：看夾取圓柱
+    if 'r2' in os.environ.get('M8_SCENE_REG', ''):                    # r2 大房子視角
+        views = dict(overview=dict(eye=[4.6, -7.0, 4.2], tgt=[1.0, -1.5, 0.4], hfov=math.radians(62.0), res=(1280, 720)),
+                     door=dict(eye=[0.85, -2.6, 1.6], tgt=[0.6, -0.3, 0.75], hfov=math.radians(62.0), res=(960, 540)),
+                     living=dict(eye=[4.6, 7.6, 4.0], tgt=[1.0, 1.5, 0.4], hfov=math.radians(62.0), res=(1280, 720)),
+                     table=dict(eye=[0.2, 2.6, 1.8], tgt=[2.0, 4.0, 0.5], hfov=math.radians(62.0), res=(960, 540)))
     cams = {}
     for nm, f in views.items():
         c = Camera(prim_path=f'/World/cams/{nm}', resolution=f['res'], frequency=30)
