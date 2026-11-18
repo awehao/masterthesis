@@ -72,7 +72,14 @@ def _det_worker(conn, fdir):
         except Exception as e_:                                  # noqa: BLE001
             T_est_, info_, err_ = None, dict(cls='exception', why='exception'), repr(e_)[:200]
         cyl_ = None
-        if m_.get('table') is not None:                                # 茶几圓柱體深度偵測（同一張影格；幾何法、不讀真值）
+        if m_.get('dbox') is not None:                                 # 抽屜內筆深度偵測（幾何法；範圍＝已知家具＋控制器開度估計）
+            try:
+                import marker_detect as MD_
+                p_c, y_c, i_c = MD_.detect(m_['dep'], m_['K'], m_['T_cam'], m_['dbox'])
+                cyl_ = dict(p=None if p_c is None else np_.asarray(p_c, float), yaw=y_c, info=i_c)
+            except Exception as e_:                              # noqa: BLE001
+                cyl_ = dict(p=None, yaw=None, info=dict(why='exception', err=repr(e_)[:200]))
+        elif m_.get('table') is not None:                                # 茶几圓柱體深度偵測（同一張影格；幾何法、不讀真值）
             try:
                 import cyl_detect as CD_
                 p_c, i_c = CD_.detect(m_['dep'], m_['K'], m_['T_cam'], m_['table'])
@@ -146,6 +153,8 @@ GRIP_F_ABORT_N, DOOR_PREBIND_DEG = 40.0, 0.5                        # 交權後�
 JOINT = '/World/door/ideal_grasp_attach'
 PICK = os.environ.get('D2_PICK', '0') == '1'                         # 茶几圓柱體取物（穿門後）
 WALKERS = os.environ.get('D2_WALKERS', '0') == '1'                   # 行人（動態障礙物）
+DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                     # 開抽屜→取筆（Howard 11/18）：建淺抽屜櫃＋筆代理；圓柱不建
+OBJ = '/World/marker_proxy' if DRAWER else '/World/cyl'              # 理想連接的物件剛體
 CMD_TIMEOUT_S, ARM_CMD_TIMEOUT_S = 0.5, 0.2                       # 同乾跑世界節點
 WALL_LIMIT_S = 1500.0
 CAM = dict(res=(640, 480), hfov_deg=69.0, aperture=0.020, clip=(0.05, 10.0), hz=30)
@@ -302,6 +311,10 @@ class Bridge(Node):
             self.d2_bind = True
         elif w == 'attach_cyl':
             self.d2_attach_cyl = True                                # 圓柱理想連接請求（夾住證據成立後）
+        elif w == 'attach_drawer':
+            self.d2_attach_dr = True                                 # 抽屜把手理想連接請求（夾住證據成立後）
+        elif w == 'unbind_drawer':
+            self.d2_unbind_dr, self.d2_unbind_dr_req, self.dr_q_open = True, c.get('req_n'), c.get('q_open')
         elif w == 'unbind':
             self.d2_unbind = True                                    # 穿門段：放手 ⇒ 解除 FixedJoint
             self.d2_unbind_req = c.get('req_n')
@@ -389,8 +402,20 @@ def main():
             FixedCylinder(prim_path=f"/World/walkers/{w_['name']}", name=w_['name'], position=np.array([p_[0], p_[1], w_['height'] / 2]), radius=float(w_['radius']), height=float(w_['height']), color=np.array([0.55, 0.25, 0.65]))
             env_paths.append(f"/World/walkers/{w_['name']}")
             walk_list.append(w_)
-    cyl_info = None
-    if PICK:                                                          # 茶几圓柱體（Howard 11/17「隨機放」；規格＝瓶子代理物；位置 seed 登錄；真值只做驗收記錄）
+    cyl_info, dr_info = None, None
+    if DRAWER:                                                        # 淺抽屜櫃（drawer_unit_shallow30，登錄位姿）＋筆代理（登錄中心；隨抽屜滑出）
+        import drawer_asset as DRA_
+        import house_assets as HA_
+        import marker_proxy_asset as MK_
+        import yaml as yaml_
+        dspec_ = DRA_.load(os.path.join(WS, reg['drawer']['asset']))
+        drb_ = HA_.build_drawer_yaw(stage, DRA_, dspec_, reg['drawer']['pose'])
+        mspec_ = yaml_.safe_load(open(os.path.join(WS, reg['marker']['asset'])))
+        mobj_, mmat_ = HA_.build_marker_yaw(world, MK_, mspec_, reg['marker']['center_world'], reg['marker']['axis_yaw_deg'])
+        for n_, _, _ in dspec_['cabinet']:
+            env_paths.append(f'/World/drawer_unit/cabinet/{n_}')
+        dr_info = dict(asset=reg['drawer']['asset'], pose=reg['drawer']['pose'], pull=reg['drawer']['pull_dir'], readback=drb_, marker0=reg['marker']['center_world'], marker_yaw_deg=reg['marker']['axis_yaw_deg'])
+    elif PICK:                                                        # 茶几圓柱體（Howard 11/17「隨機放」；規格＝瓶子代理物；位置 seed 登錄；真值只做驗收記錄）
         tab_ = next(f_ for f_ in reg['furniture'] if f_['name'] == 'coffee_table')
         if os.environ.get('CYL_XY'):
             cxy = np.array([float(x) for x in os.environ['CYL_XY'].split(',')])
@@ -424,15 +449,16 @@ def main():
         print(f'[fc] 剛體不符：{[name_of(b) for b in tool_bodies]}／base {b_base}／arts {arts} ⇒ 拒跑', flush=True)
         return 16
     v_tool = [RigidPrim(prim_paths_expr=str(b), name=f'v_{name_of(b)}', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True) for b in tool_bodies]
-    base_filters = env_paths + [dauth['leaf_prim']]
+    base_filters = env_paths + [dauth['leaf_prim']] + (['/World/drawer_unit/drawer'] if DRAWER else [])
     v_base = RigidPrim(prim_paths_expr=str(b_base[0]), name='v_base', track_contact_forces=True, max_contact_count=64, prepare_contact_sensors=True, contact_filter_prim_paths_expr=base_filters)
     leaf_v = RigidPrim(prim_paths_expr=dauth['leaf_prim'], name='leaf_state')
     grip_b = [b for b in bodies if name_of(b) == 'uflite_gripper_link']
     v_grip = RigidPrim(prim_paths_expr=str(grip_b[0]), name='v_grip_pose') if len(grip_b) == 1 else None
-    v_cyl = RigidPrim(prim_paths_expr='/World/cyl', name='v_cyl_pose') if PICK else None
+    v_cyl = RigidPrim(prim_paths_expr=OBJ, name='v_cyl_pose') if PICK else None
+    v_dr = RigidPrim(prim_paths_expr='/World/drawer_unit/drawer', name='v_drawer_pose') if DRAWER else None
     walk_views = [XFormPrim(prim_paths_expr=f"/World/walkers/{w_['name']}", name=f"wv_{w_['name']}") for w_ in walk_list]
     world.reset()
-    for v in v_tool + [v_base, leaf_v] + ([v_grip] if v_grip is not None else []):
+    for v in v_tool + [v_base, leaf_v] + ([v_grip] if v_grip is not None else []) + ([v_dr, v_cyl] if DRAWER else []):
         v.initialize()
     if v_grip is None:
         print('[fc] 夾爪剛體不唯一 ⇒ 拒跑', flush=True)
@@ -640,6 +666,11 @@ def main():
     exc = None
     scans = []
     d2_stat, d2_last, bound, bind_pending, fcmd, released, f_hold, cyl_attached = dict(late=0, on_time=0), None, False, False, FINGER_OPEN, False, None, False
+    dr_bound, dr_released, dr_log = False, False, []
+    if DRAWER:
+        dr_p0 = np.asarray(v_dr.get_world_poses()[0], float)[0].copy()
+        dr_pull = np.array(list(reg['drawer']['pull_dir']) + [0.0], float)
+        import drawer_scene as DRS_
     pace_off = 0.0
     try:
         for k in range(n_steps):
@@ -781,7 +812,7 @@ def main():
                 Rc0 = np.linalg.inv(Tc_) @ Tg_
                 jc_ = UsdPhysics.FixedJoint.Define(stage, '/World/cyl_ideal_attach')
                 jc_.CreateBody0Rel().SetTargets([Sdf.Path(str(grip_b[0]))])
-                jc_.CreateBody1Rel().SetTargets([Sdf.Path('/World/cyl')])
+                jc_.CreateBody1Rel().SetTargets([Sdf.Path(OBJ)])
                 jc_.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
                 jc_.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
                 qc_ = W0.R_to_wxyz(Rc0[:3, :3])
@@ -791,6 +822,37 @@ def main():
                 jc_.CreateBreakForceAttr().Set(float('inf')); jc_.CreateBreakTorqueAttr().Set(float('inf'))
                 cyl_attached = True
                 ev('cyl_attach_fixed_joint', rel_pos=[round(float(v), 5) for v in Rc0[:3, 3]], cyl_z=round(float(Tc_[2, 3]), 4), note='理想抓持假設（FixedJoint）：夾住證據成立後')
+            if DRAWER and getattr(node, 'd2_attach_dr', False) and not dr_bound and not dr_released:   # 抽屜把手理想連接：FixedJoint 夾爪↔抽屜剛體（當下相對位姿；同門把）
+                Tg_ = T_of(*[np.asarray(x)[0] for x in v_grip.get_world_poses()])
+                Td_ = T_of(*[np.asarray(x)[0] for x in v_dr.get_world_poses()])
+                Rd0 = np.linalg.inv(Td_) @ Tg_
+                jd_ = UsdPhysics.FixedJoint.Define(stage, '/World/drawer_ideal_attach')
+                jd_.CreateBody0Rel().SetTargets([Sdf.Path(str(grip_b[0]))])
+                jd_.CreateBody1Rel().SetTargets([Sdf.Path('/World/drawer_unit/drawer')])
+                jd_.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+                jd_.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+                qd_ = W0.R_to_wxyz(Rd0[:3, :3])
+                jd_.CreateLocalPos1Attr().Set(Gf.Vec3f(*[float(v) for v in Rd0[:3, 3]]))
+                jd_.CreateLocalRot1Attr().Set(Gf.Quatf(float(qd_[0]), float(qd_[1]), float(qd_[2]), float(qd_[3])))
+                jd_.CreateJointEnabledAttr().Set(True)
+                jd_.CreateBreakForceAttr().Set(float('inf')); jd_.CreateBreakTorqueAttr().Set(float('inf'))
+                dr_bound = True
+                ev('drawer_attach_fixed_joint', rel_pos=[round(float(v), 5) for v in Rd0[:3, 3]], opening_truth=round(float((Td_[:3, 3] - dr_p0) @ dr_pull), 5), note='理想抓持假設（FixedJoint）：夾住證據成立後')
+            if DRAWER and getattr(node, 'd2_unbind_dr', False) and dr_bound and not dr_released:   # 拉開完成：停用夾爪↔抽屜連接
+                stage.GetPrimAtPath('/World/drawer_ideal_attach').GetAttribute('physics:jointEnabled').Set(False)
+                dr_bound, dr_released = False, True
+                Td_ = T_of(*[np.asarray(x)[0] for x in v_dr.get_world_poses()])
+                ev('drawer_unbind_fixed_joint', n=int(n_now), q_open_ctrl=getattr(node, 'dr_q_open', None), opening_truth=round(float((Td_[:3, 3] - dr_p0) @ dr_pull), 5))
+            if DRAWER and dr_released:
+                jp_ = stage.GetPrimAtPath('/World/drawer_ideal_attach')
+                v_ = jp_.GetAttribute('physics:jointEnabled').Get() if (jp_ and jp_.IsValid()) else None
+                if v_ is not False and latch is None:
+                    latch = dict(t=round(t, 3), why='drawer_unbind_not_confirmed', value=str(v_), kind='模擬工程中止（抽屜連接解除未確認；保留現場資料、不再步進物理）')
+                    ev('latched_sim_engineering_abort', **latch)
+                    node.p_state.publish(String(data='latched:' + latch['why']))
+                    break
+                if k % 10 == 0:
+                    node.p_ack.publish(String(data=json.dumps(dict(what='drawer_unbound', n=int(n_now), req=getattr(node, 'd2_unbind_dr_req', None)))))
             if getattr(node, 'd2_unbind', False) and bound and not released:   # 解除綁定：停用 FixedJoint（門回到被動鉸鏈）
                 stage.GetPrimAtPath(JOINT).GetAttribute('physics:jointEnabled').Set(False)
                 bound, released, bind_pending = False, True, False
@@ -817,6 +879,11 @@ def main():
             ck = Clock()
             ck.clock = node.stamp()
             node.p_clock.publish(ck)
+            if DRAWER and k % 10 == 0:                                # 抽屜開度真值（只做驗收記錄）
+                try:
+                    dr_log.append([float(t), float((np.asarray(v_dr.get_world_poses()[0], float)[0] - dr_p0) @ dr_pull), float(dr_bound)])
+                except Exception:                                     # noqa: BLE001
+                    pass
             if v_cyl is not None and k % 10 == 0:                     # 圓柱真值（只做驗收記錄：離桌高度、相對夾爪滑移）
                 try:
                     pc_t = np.asarray(v_cyl.get_world_poses()[0], float)[0]
@@ -862,7 +929,8 @@ def main():
                     cam_stat['used'] += 1
                     stem = f'f{seq:04d}'
                     det_pend[seq] = dict(f=dict((k_, v_) for k_, v_ in f.items() if k_ not in ('dep', 'rgb')), stem=stem, Th=truth_handle(), t_sent=t)
-                    _DET.send(dict(seq=seq, stem=stem, dep=f['dep'], rgb=f['rgb'], K=Kr, T_cam=f['T_cam'], t_obs=f['t_obs'], q=f['q'], fk_vs_render_m=f['fk_vs_render_m'], table=None if cyl_info is None else cyl_info['table']))
+                    _DET.send(dict(seq=seq, stem=stem, dep=f['dep'], rgb=f['rgb'], K=Kr, T_cam=f['T_cam'], t_obs=f['t_obs'], q=f['q'], fk_vs_render_m=f['fk_vs_render_m'], table=None if cyl_info is None else cyl_info['table'],
+                                   dbox=(DRS_.interior_box(float(node.dr_q_open)) if (DRAWER and dr_released and getattr(node, 'dr_q_open', None) is not None and not cyl_attached) else None)))
                     det_busy = True
             if det_busy and _DET.poll(0):
                 _, rr = _DET.recv()
@@ -890,8 +958,9 @@ def main():
                 if rr.get('cyl') is not None:                          # 圓柱觀測：底盤座標中心（擷取時刻底盤）
                     pc_ = rr['cyl']['p']
                     prel_ = None if pc_ is None else (np.linalg.inv(T3(f['q'][:3])) @ np.r_[pc_, 1.0])[:3]
-                    node.p_cyl.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if pc_ is not None else 0.0, *[float(v) for v in f['q'][:3]], *([float(v) for v in prel_] if prel_ is not None else [float('nan')] * 3), float(t)]))
-                    frames[-1]['cyl'] = dict(p=None if pc_ is None else [round(float(v), 4) for v in pc_], info=rr['cyl']['info'])
+                    yrel_ = [] if not DRAWER else [float('nan') if rr['cyl'].get('yaw') is None else float(rr['cyl']['yaw']) - float(f['q'][2])]   # 抽屜筆：第 11 欄＝筆軸偏航（底盤座標）
+                    node.p_cyl.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if pc_ is not None else 0.0, *[float(v) for v in f['q'][:3]], *([float(v) for v in prel_] if prel_ is not None else [float('nan')] * 3), float(t), *yrel_]))
+                    frames[-1]['cyl'] = dict(p=None if pc_ is None else [round(float(v), 4) for v in pc_], yaw=rr['cyl'].get('yaw'), info=rr['cyl']['info'])
                 if seq_r <= 3 or seq_r % 25 == 0:
                     print(f"[fc] 影格 {seq_r} t_obs={f['t_obs']:.2f} valid={T_est is not None} {'' if T_est is not None else info.get('why') or info.get('cls')} 距離 {frames[-1]['eval_only']['range_m']} m 偵測 {ms:.0f} ms", flush=True)
             tgt_w = w_all0 + pace_off + (t + DT) / a.rtf                       # RTF 上限配速：早到就睡；晚到不補步（重設基準，實得 RTF ≤ 目標）——物理照牆鐘推進、不等任何計算
@@ -944,6 +1013,8 @@ def main():
                step_wall_ms_p50=round(float(np.median(step_wall)) * 1e3, 1) if step_wall else None, supervisor_done=t_done is not None,
                pacing=dict(pace, rtf_target=a.rtf, note='物理依牆鐘固定 RTF 推進、不等計算；behind＝迴圈本身（算圖、射線、發布）比目標慢的步數與最大落後'), detector=dict(process='獨立程序（模擬器前 fork）', pending_at_end=len(det_pend)))
     res['walkers'] = dict(names=[w_['name'] for w_ in walk_list], log=walk_log, note='每 10 步位置（模擬時間）') if walk_list else None
+    res['drawer'] = None if dr_info is None else dict(dr_info, bound_end=dr_bound, released=dr_released, log_cols=['t', 'opening_truth', 'bound'], log=dr_log, note='開度真值只做驗收記錄；控制用開度＝控制器 TCP 位移估計')
+    res['marker'] = None if not DRAWER else dict(attached=cyl_attached, log_cols=['t', 'x', 'y', 'z', 'grip_x', 'grip_y', 'grip_z', 'f1_n', 'f2_n'], log=cyl_log, note='筆真值只做驗收記錄，不進控制')
     res['cyl'] = None if cyl_info is None else dict(cyl_info, attached=cyl_attached, attach_note='夾住證據成立後 FixedJoint 理想連接（Howard 11/18）', log_cols=['t', 'x', 'y', 'z', 'grip_x', 'grip_y', 'grip_z', 'f1_n', 'f2_n'], log=cyl_log, note='真值只做驗收記錄，不進控制')
     res['d2'] = dict(stat=d2_stat, bound=bound, released=released, n0=node.d2_n0, ctl=node.d2_ctl_log, note='交權後每步命令＝/d2/out；late＝本步配速時限內沒收到、保持上一筆')
     # 整機停穩驗收（物理紀錄；rc 與 supervisor_done 都不能代替）：最後一筆非零輸入命令之後，在途管線排清（8 步），

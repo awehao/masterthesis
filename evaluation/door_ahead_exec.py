@@ -99,11 +99,21 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 ctrl.nav_in = snap['nav_in']
             if snap.get('arm_hist') is not None and mode == 'grasp' and hasattr(ctrl, 'bias_obs_update'):   # 偏置觀測（只用實測快照；同一快照只更新一次）
                 ctrl.bias_obs_update(snap['arm_hist'])
-            if snap.get('pick_app') is not None and mode == 'pass':   # 取物：監督送取物封包 ⇒ 同一拍換取物控制器（同一 mpc、承接狀態，不停車）
+            pa_ = snap.get('pick_app')
+            if pa_ is not None and mode == 'pass' and pa_.get('kind', 'cyl') == 'cyl':   # 取物：監督送取物封包 ⇒ 同一拍換取物控制器（同一 mpc、承接狀態，不停車）
                 import door_pick_ctrl as _PK
-                ctrl = _PK.TablePickCtrl(ctrl, float(t_next), snap['pick_app'])
+                ctrl = _PK.TablePickCtrl(ctrl, float(t_next), pa_)
                 mode = 'pick'
                 ctrl._ev_sent = 0
+            elif pa_ is not None and mode == 'pass' and pa_.get('kind') == 'drawer':   # 開抽屜（Howard 11/18）：同一拍換抽屜控制器（同一 mpc、承接狀態）
+                import door_drawer_ctrl as _DR
+                ctrl = _DR.DrawerCtrl(ctrl, float(t_next), pa_)
+                mode = 'pick'
+                ctrl._ev_sent = 0
+            elif pa_ is not None and mode == 'pick' and pa_.get('kind') in ('observe', 'marker') and hasattr(ctrl, 'next_app'):   # 抽屜任務下一段（觀察位／夾筆）
+                ctrl.next_app(pa_, float(t_next))
+            if snap.get('dr_unbound') and mode == 'pick' and hasattr(ctrl, 'dr_unbound'):   # 抽屜：執行端解除夾爪↔抽屜連接的回報
+                ctrl.dr_unbound = True
             if snap.get('unbound') and mode == 'pass':                # 穿門段：執行端解綁生效回報
                 ctrl.unbound = True
             if snap.get('app_start') is not None and ctrl is not None and mode == 'grasp':   # 接近開始（觀測觸發）：剖面自本段起點起算；估計換成融合估計（重設融合）
@@ -236,7 +246,10 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                        stop=ctrl.stop, abort=ctrl.abort, done=bool(getattr(ctrl, 'done', False)), phase=getattr(ctrl, 'phase', None), k_tick=k_tick, q_pred=qp.tolist(),
                        sigma=float(getattr(ctrl, 'sigma', float('nan'))) if mode == 'open' else None, stop_mode=getattr(ctrl, 'stop_mode', None) if mode == 'open' else None,
                        release=bool(getattr(ctrl, 'release', False)) if mode == 'pass' else False,
-                       attach=bool(getattr(ctrl, 'attach', False)) if mode == 'pick' else False)
+                       attach=bool(getattr(ctrl, 'attach', False)) if mode == 'pick' else False,
+                       dr_attach=bool(getattr(ctrl, 'dr_attach', False)) if mode == 'pick' else False,
+                       dr_release=bool(getattr(ctrl, 'dr_release', False)) if mode == 'pick' else False,
+                       q_open=float(getattr(ctrl, 'q_open', 0.0)) if mode == 'pick' else None)
             if mode in ('pass', 'pick'):                              # 穿門／取物段事件（本拍新增）
                 n_ev = getattr(ctrl, '_ev_sent', 0)
                 out['events'] = (out.get('events') or []) + [dict(e_) for e_ in ctrl.events[n_ev:] if e_.get('what') != 'pass_start']
@@ -438,6 +451,7 @@ class AheadRunner:
                     rec['bind'] = o.get('bind') is not None
                     rec['release'] = bool(o.get('release'))
                     rec['attach'] = bool(o.get('attach'))
+                    rec['dr_attach'], rec['dr_release'], rec['q_open'] = bool(o.get('dr_attach')), bool(o.get('dr_release')), o.get('q_open')
                     self.last = dict(mode=o.get('mode'), bind=o.get('bind'), done=o.get('done'), stop=o.get('stop'), stop_mode=o.get('stop_mode'), n=int(n))
                 else:
                     rec['commit'] = False

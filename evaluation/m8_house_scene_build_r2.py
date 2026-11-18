@@ -19,7 +19,7 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 WS = os.path.dirname(HERE)
 DOOR = 'src/my_omnibot_description/config/door_local_v3.yaml'
-DRAWER = 'src/my_omnibot_description/config/drawer_unit_bar26.yaml'
+DRAWER = 'src/my_omnibot_description/config/drawer_unit_shallow30.yaml'      # 11/18 Howard「重新設計抽屜不用那麼深」（r2 原用 bar26）
 MARKER = 'src/my_omnibot_description/config/marker_proxy_m8_hex.yaml'
 WORLD = 'src/ammr_bringup/worlds/mission_house_m8b.sdf'
 MAP = 'src/ammr_bringup/maps/mission_house_m8b'
@@ -31,7 +31,7 @@ Y_BED, Y_LIV, Y_RIGHT = (-7.0, 0.0), (0.12, 8.0), (8.12, 12.5)    # 臥室／客
 WT, WH = 0.2, 2.4           # 外牆厚、牆高（同門資產牆高）
 IT = 0.12                   # 內牆厚（同門資產牆）
 OPEN2 = (-1.0, 1.0)         # 客廳↔取物區的開口 x 範圍（淨寬 2.0 m；r1 1.6 m）
-DRAWER_POSE = (-4.755, 10.3, 90.0)                                   # 抽屜櫃中心 x, y, 偏航（度）：櫃背貼取物區上牆（x＝−3），櫃面朝 +x，抽屜沿 +x 拉出
+DRAWER_POSE = (-4.83, 10.3, 90.0)                                    # 抽屜櫃中心 x, y, 偏航（度）：櫃背離取物區上牆（x＝−5）20 mm，櫃面朝 +x，抽屜沿 +x 拉出（淺櫃深 0.30）
 START = dict(x=1.5, y=-4.5, yaw_deg=90.0, note='臥室起點／終點（面向門牆 +y；r1 y＝−2.8）')
 
 
@@ -61,10 +61,10 @@ def scene():
 
 
 def drawer_footprint():
-    """抽屜櫃外框（櫃體本地 x∈±0.30、y∈[−0.236, 0.225]）轉偏航後的世界軸對齊包圍盒。"""
+    """抽屜櫃外框（櫃體本地 x∈±0.30、y∈[−0.225, 0.150]：含關閉時的面板與把手）轉偏航後的世界軸對齊包圍盒。"""
     cx, cy, yaw = DRAWER_POSE
     c_, s_ = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
-    P = np.array([[x, y] for x in (-0.30, 0.30) for y in (-0.236, 0.225)])
+    P = np.array([[x, y] for x in (-0.30, 0.30) for y in (-0.225, 0.150)])
     Wp = np.c_[cx + c_ * P[:, 0] - s_ * P[:, 1], cy + s_ * P[:, 0] + c_ * P[:, 1]]
     return [float(Wp[:, 0].min()), float(Wp[:, 0].max()), float(Wp[:, 1].min()), float(Wp[:, 1].max())]
 
@@ -126,16 +126,17 @@ def main():
     st, wk = unknowns()
     json.dump(dict(schema='mission_obstacles/1', map=WORLD, rule='事前明示設計值；不抽樣、不依機器人結果調整；不進靜態地圖；真值不進感知或在線控制', static_unknown=st, walkers=wk), open(os.path.join(WS, OBS), 'w'), ensure_ascii=False, indent=1)
     mk = yaml.safe_load(open(os.path.join(WS, MARKER)))
+    dspec = yaml.safe_load(open(os.path.join(WS, DRAWER)))
     cx, cy, yaw = DRAWER_POSE
     c_, s_ = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
-    m = mk['placement']['center']
+    m = dspec['marker_placement']['center']                          # 淺抽屜：筆在面板後 6 cm（抽屜本地座標；關閉時的世界位置）
     reg = dict(name='m8_house_r2', created='2026-11-18（Howard：房子放大、門不動，方便加入未知動態靜態障礙物；r1＝20261112_m8_house_scene.json）', reference='第六次進度報告.pdf 第 3 頁「研究目標」',
                frame='門局部座標（door_local_v3）；簡報左→右＝世界 +y、簡報上→下＝世界 +x', dims=dict(interior_x=list(XI), bedroom_y=list(Y_BED), living_y=list(Y_LIV), right_y=list(Y_RIGHT), wall_t=WT, inner_t=IT, wall_h=WH, opening2_x=list(OPEN2)),
                rooms=dict(bedroom='左側起始房（y<0）：起點、床、書桌、矮櫃、床頭櫃、小桌', living='中央客廳／通行區：電視櫃、沙發、茶几；行人與未知物', right='右側取物區：內牆開口相連；抽屜櫃＋代理物、收納櫃、層架'),
                world=dict(path=WORLD, sha256=sha(WORLD)), door=dict(asset=DOOR, sha256=sha(DOOR), builder='evaluation/door_asset_v3.py', opening_x=[0.0, 1.0], opens_toward='臥室（y<0）'),
-               drawer=dict(asset=DRAWER, sha256=sha(DRAWER), pose=list(DRAWER_POSE), builder='evaluation/house_assets.py（drawer_asset.build_usd＋偏航）', footprint=drawer_footprint(), pull_dir=[round(s_, 6), round(-c_, 6)], travel=0.22,
-                           note='偏航 90° 版抽屜的物理（滑動、限位）只做過靜態預覽，尚未做拉動驗證'),
-               marker=dict(asset=MARKER, sha256=sha(MARKER), center_world=[round(cx + c_ * m[0] - s_ * m[1], 4), round(cy + s_ * m[0] + c_ * m[1], 4), m[2]], axis_yaw_deg=yaw, across_flats=mk['across_flats'], length=mk['length'], mass_kg=mk['mass_kg']),
+               drawer=dict(asset=DRAWER, sha256=sha(DRAWER), pose=list(DRAWER_POSE), builder='evaluation/house_assets.py（drawer_asset.build_usd＋偏航）', footprint=drawer_footprint(), pull_dir=[round(s_, 6), round(-c_, 6)], travel=float(dspec['drawer']['joint']['upper']), target_open=float(dspec['target_open_m']),
+                           note='淺版（櫃深 0.30）；偏航 90° 版抽屜的拉動只在本專案模擬內'),
+               marker=dict(asset=MARKER, sha256=sha(MARKER), center_world=[round(cx + c_ * m[0] - s_ * m[1], 4), round(cy + s_ * m[0] + c_ * m[1], 4), m[2]], center_drawer=list(m), axis_yaw_deg=yaw + float(dspec['marker_placement']['yaw_deg']), placement_from=DRAWER, across_flats=mk['across_flats'], length=mk['length'], mass_kg=mk['mass_kg']),
                obstacles=dict(path=OBS, sha256=sha(OBS), n_static_unknown=len(st), n_walkers=len(wk), walker_speed_mps=0.20), start=dict(pose=START),
                static_map=dict(yaml=MAP + '.yaml', yaml_sha256=sha(MAP + '.yaml'), pgm=MAP + '.pgm', pgm_sha256=sha(MAP + '.pgm'), **mp),
                walls=W, furniture=F, deviations=['門扇向臥室側開（簡報畫成向客廳開）：沿用既有門資產與開門流程方向', '尺寸為工程設計值，非簡報比例還原', '家具為方盒代理（無細節模型）'],

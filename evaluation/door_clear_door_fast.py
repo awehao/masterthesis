@@ -99,7 +99,7 @@ def clear_door_fast(x, T_WH0):
         if d < env:
             env, who = d, f'{n}|{name}'
     shell = float(PG.bar_dist(pts('uflite_gripper_link'), bar).min())
-    bc, bwho = min((float(DOC.box_dist(np.array([[qf[0], qf[1], c[2]]]), c, R, hs)[0]) - DOC.RB, name) for name, c, R, hs in [leaf_p] + near)
+    bc, bwho = min((float(DOC.box_dist(np.array([[qf[0], qf[1], c[2]]]), c, R, hs)[0]) - DOC.RB, name) for name, c, R, hs in [leaf_p] + near if WB.base_level(c, R, hs))
     # 自碰撞：原式用 FAST.clear_full(qf, T_WH, finger_q=FINGER_Q)['self']——其手指同樣沿 y 平移 finger_q
     sc = _self_clear({n: T[n] for n in names}, pts)
     return dict(env=env, base=bc, self=sc, shell_bar=shell, who=dict(env=who, base=bwho))
@@ -119,7 +119,7 @@ def clear_door_fast_multi(x, T_WH0, fqs):
     names = sorted(set(DOC.ARM_LINKS) | {n for p in pairs for n in p})
     T0 = fk_all(qf, names)
     shapes = [leaf_p] + near + posts
-    bc, bwho = min((float(DOC.box_dist(np.array([[qf[0], qf[1], c[2]]]), c, R, hs)[0]) - DOC.RB, name) for name, c, R, hs in [leaf_p] + near)
+    bc, bwho = min((float(DOC.box_dist(np.array([[qf[0], qf[1], c[2]]]), c, R, hs)[0]) - DOC.RB, name) for name, c, R, hs in [leaf_p] + near if WB.base_level(c, R, hs))
     W_sh = {}
     out = None
     for fq in fqs:

@@ -102,6 +102,15 @@ def handle_pose(T_WH0, phi):
 _STAT = None
 
 
+BASE_TOP_Z = 0.33                                                  # 底盤碰撞圓柱 z 0–0.28（chassis_body.xacro）＋手臂座板 0.28 ⇒ 底盤高度帶上緣（含 2026-11-18 起）
+
+
+def base_level(c, R, hs):
+    """底盤圓盤淨空只計入底緣低於 BASE_TOP_Z 的物體（11/18 淺抽屜：拉開的抽屜面板底 0.42 m 高於底盤，底盤可伸到下方；面板以上由手臂連桿點雲（含 link_base）照常核對）。
+    牆、家具、門扇都自地面起 ⇒ 既有場景結果逐值不變。"""
+    return float(c[2]) - float(np.abs(np.asarray(R, float)[2]) @ np.asarray(hs, float)) < BASE_TOP_Z
+
+
 def _static():
     global _STAT
     if _STAT is None:
@@ -139,7 +148,7 @@ def clear_door(x, T_WH0):
                 env, who = d, f'{n}|bar'
         elif n == 'uflite_gripper_link':
             shell = float(PG.bar_dist(P, bar).min())
-    bc, bwho = min((float(DOC.box_dist(np.array([[qf[0], qf[1], c[2]]]), c, R, hs)[0]) - DOC.RB, name) for name, c, R, hs in [leaf_p] + near)
+    bc, bwho = min((float(DOC.box_dist(np.array([[qf[0], qf[1], c[2]]]), c, R, hs)[0]) - DOC.RB, name) for name, c, R, hs in [leaf_p] + near if base_level(c, R, hs))
     sc = FAST.clear_full(qf, T_WH, finger_q=FINGER_Q)['self']
     return dict(env=env, base=bc, self=sc, shell_bar=shell, who=dict(env=who, base=bwho))
 

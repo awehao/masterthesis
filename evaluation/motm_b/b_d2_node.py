@@ -34,6 +34,8 @@ PICK = os.environ.get('D2_PICK', '0') == '1'                          # 穿門�
 PICK_PRIOR = [float(x) for x in os.environ.get('B_PICK_PRIOR', '0.55,2.30,0.0').split(',')]   # 茶几先驗粗目標（map；茶几西側，面向桌）
 PICK_RETURN = [float(x) for x in os.environ.get('B_PICK_RETURN', '1.5,-2.8,1.5708').split(',')]   # 返回＝起點
 PICK_APP_DIST, PICK_T_MIN = float(os.environ.get('B_PICK_APP_DIST', '0.6')), float(os.environ.get('B_PICK_T_MIN', '4.0'))
+DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 11/18：開門→開抽屜→取筆→返回（需同時 D2_PICK＝1：沿用取物管線）
+DR_PRIOR = [float(x) for x in os.environ.get('B_DR_PRIOR', '-3.5,10.3,3.1416').split(',')]   # 選位完成前的粗目標（map；抽屜櫃前）
 PASS_CLEAR = os.environ.get('B_PASS_CLEAR', '1') == '1'           # Howard 11/18：不要中途點，讓全域規劃自己找出路
 PASS_CLEAR_WAIT_S = float(os.environ.get('B_PASS_CLEAR_WAIT_S', '1.2'))
 APP_TRIG = float(os.environ.get('B_APP_TRIG', '0.6'))          # 單一控制器：有效估計且離導航目標 ≤ 此距離 ⇒ 接近開始（加入 TCP 任務）
@@ -648,11 +650,15 @@ def main():
                 _pre = ('rclpy', 'std_msgs', 'geometry_msgs', 'nav_msgs', 'sensor_msgs', 'tf2_msgs', 'tf2_ros', 'rosgraph_msgs', 'builtin_interfaces', 'rcl_interfaces', 'rosidl_runtime_py', 'nav2_msgs')
                 _snap = {k_: v_ for k_, v_ in sys.modules.items() if k_.split('.')[0] in _pre}   # 專案模組會裝假 std_msgs（ros_stub）⇒ 匯入後還原 ROS 模組（同 world_d2_node）
                 import cyl_reach_map as _CR_
+                if DRAWER:
+                    import drawer_reach as _DRR_
+                    self._DRR = _DRR_
                 for k_ in [k_ for k_ in sys.modules if k_.split('.')[0] in _pre and k_ not in _snap]:
                     sys.modules.pop(k_, None)
                 sys.modules.update(_snap)
                 self._CR = _CR_
             self.cyl_obs, self.pick_goal, self.pick_sel, self.pick_th, self.pick_box, self.pick_app_t, self.pick_lifted, self.pick_ret = [], None, None, None, None, None, False, False
+            self.dr = dict(stage='handle_sel', box=None, th=None, q_open=None, t_obs=None, sel=None)
             self.pass_seen, self.pass_t, self.t_pass_pub, self.pass_cleared = False, None, -9.0, False
             from nav2_msgs.srv import ClearEntireCostmap
             self._clr_cli = self.create_client(ClearEntireCostmap, '/global_costmap/clear_entirely_global_costmap')
@@ -767,6 +773,8 @@ def main():
             if len(d) < 10 or d[2] < 0.5 or not np.isfinite(d[6:9]).all():
                 return
             p_od = (_T3(d[3:6]) @ np.r_[d[6:9], 1.0])[:3]             # 擷取時刻底盤（odom）×底盤座標圓柱中心
+            if len(d) >= 11 and np.isfinite(d[10]):                   # 抽屜筆：第 11 欄＝筆軸偏航（底盤座標）⇒ 里程座標
+                p_od = np.r_[p_od, (float(d[10]) + float(d[5]) + math.pi / 2) % math.pi - math.pi / 2]
             self.cyl_obs.append((float(d[9]), p_od))
             self.cyl_obs = self.cyl_obs[-30:]
 
@@ -782,6 +790,12 @@ def main():
         def _xs_in(self, m):
             if '"what": "pick_lifted"' in m.data:
                 self.pick_lifted = True
+            for k_ in ('pick_dr_released', 'pick_dr_observing'):      # 抽屜任務事件（帶開度估計）
+                if ('"what": "%s"' % k_) in m.data and k_ not in self.dr:
+                    try:
+                        self.dr[k_] = json.loads(m.data)
+                    except Exception:                                  # noqa: BLE001
+                        self.dr[k_] = dict(what=k_)
             self.xstate = m.data
             if '"what": "pass_start"' in m.data and not self.pass_seen:   # 開門完成、同一控制器接穿門：原導航鏈送穿門目標
                 self.pass_seen = True
@@ -824,6 +838,96 @@ def main():
                     self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
                     self.pick_app_t = t
                     self.event('pick_app_sent', dist=round(dist_, 3), T=round(Tapp, 3))
+
+        def _dr_thread(self, fn, *args):
+            import threading
+            box = dict(done=False)
+
+            def _run(box=box):
+                w0 = time.perf_counter()
+                try:
+                    box['sel'] = fn(*args)
+                except Exception as e:                                 # noqa: BLE001
+                    box['sel'], box['err'] = None, repr(e)[:300]
+                box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
+            th = threading.Thread(target=_run, daemon=True); th.start()
+            return box
+
+        def _dr_goal(self, b_od):
+            Tbm_ = _T3(self.T_mo_now) @ _T3(np.asarray(b_od, float))   # 選位（里程）→ 地圖（只給 Smac）
+            return [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]
+
+        def _dr_send(self, kind, base, t, **kw):
+            dist_ = float(np.hypot(*(self.b_od_now[:2] - np.asarray(base[:2], float))))
+            Tapp = max(PICK_T_MIN, dist_ / 0.12 + 2.0)
+            app = dict(kind=kind, base_goal=[float(x) for x in base[:3]], T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - 2.5), **kw)
+            self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
+            self.event('dr_app_sent', kind=kind, dist=round(dist_, 3), T=round(Tapp, 3), base=[round(float(x), 4) for x in base[:3]])
+
+        def _mk_fuse(self, t, t_min):
+            rec = [p_ for t_, p_ in self.cyl_obs if t - t_ <= 1.0 and t_ >= t_min and len(p_) >= 4][-5:]
+            if len(rec) < 5:
+                return None
+            P_ = np.array(rec)
+            if float(np.linalg.norm(P_[:, :3] - P_[:, :3].mean(0), axis=1).max()) > 0.010:
+                return None
+            yw = P_[:, 3]; yw = np.arctan2(np.sin(2 * yw).mean(), np.cos(2 * yw).mean()) / 2.0   # 軸向（模 π）平均
+            return np.r_[P_[:, :3].mean(0), yw]
+
+        def drawer_tick(self, t):
+            """抽屜任務：選把手位 → 近距送抽屜封包 → 拉開放手後選觀察位 → 俯視融合筆觀測 → 選夾筆位 → 抬起後返回起點。"""
+            dr, R_ = self.dr, self._DRR
+            if self.pick_lifted and not self.pick_ret:
+                self.pick_ret, self.pick_goal, self.pass_t = True, list(PICK_RETURN), t
+                self.event('pick_return_goal', goal=PICK_RETURN)
+                return
+            st = dr['stage']
+            if st == 'handle_sel' and dr['box'] is None:
+                dr['box'] = self._dr_thread(R_.select_handle, self.b_od_now.copy())
+                self.event('dr_handle_select_start')
+            elif st == 'handle_sel' and dr['box']['done']:
+                sel = dr['box']['sel']
+                if sel is None:
+                    self.event('dr_handle_unreachable', err=dr['box'].get('err')); self.abort('drawer_handle_unreachable'); return
+                dr.update(stage='handle_nav', sel=sel, box=None)
+                self.pick_goal, self.pass_t = self._dr_goal(sel['base']), t
+                self.event('dr_handle_goal', base=[round(float(x), 4) for x in sel['base']], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), env=round(sel['env'], 4), base_clear=round(sel['base_clear'], 4), ms=round(dr['box']['ms'] if dr['box'] else 0, 1))
+            elif st == 'handle_nav':
+                if float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float)))) <= PICK_APP_DIST:
+                    self._dr_send('drawer', dr['sel']['base'], t, T_grasp=dr['sel']['T_grasp'], pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M))
+                    dr['stage'] = 'wait_release'
+            elif st == 'wait_release' and 'pick_dr_released' in dr:
+                dr['q_open'] = float(dr['pick_dr_released'].get('q_open', R_.OPEN_M))
+                dr['box'] = self._dr_thread(R_.select_observe, dr['q_open'], self.b_od_now.copy())
+                dr['stage'] = 'obs_sel'
+                self.event('dr_observe_select_start', q_open=dr['q_open'])
+            elif st == 'obs_sel' and dr['box']['done']:
+                sel = dr['box']['sel']
+                if sel is None:
+                    self.event('dr_observe_unreachable', err=dr['box'].get('err')); self.abort('drawer_observe_unreachable'); return
+                self.pick_goal, self.pass_t = self._dr_goal(sel['base']), t
+                self.event('dr_observe_goal', base=[round(float(x), 4) for x in sel['base']], c=[round(float(x), 4) for x in sel['c']], ms=round(dr['box']['ms'], 1))
+                self._dr_send('observe', sel['base'], t, T_obs=sel['T_obs'])
+                dr.update(stage='wait_obs', box=None)
+            elif st == 'wait_obs' and 'pick_dr_observing' in dr:
+                dr.update(stage='mk_fuse', t_obs=t)
+            elif st == 'mk_fuse':
+                est = self._mk_fuse(t, dr['t_obs'])
+                if est is not None:
+                    dr['est'] = est
+                    dr['box'] = self._dr_thread(R_.select_marker, est[:3], float(est[3]), dr['q_open'], self.b_od_now.copy())
+                    dr['stage'] = 'mk_sel'
+                    self.event('dr_marker_estimate', c_od=[round(float(x), 4) for x in est[:3]], yaw_deg=round(math.degrees(float(est[3])), 2), n_obs=len(self.cyl_obs))
+                elif t - dr['t_obs'] > 10.0:
+                    self.event('dr_marker_not_seen'); self.abort('drawer_marker_not_seen'); return
+            elif st == 'mk_sel' and dr['box']['done']:
+                sel = dr['box']['sel']
+                if sel is None:
+                    self.event('dr_marker_unreachable', err=dr['box'].get('err')); self.abort('drawer_marker_unreachable'); return
+                self.pick_goal, self.pass_t = self._dr_goal(sel['base']), t
+                self.event('dr_marker_goal', base=[round(float(x), 4) for x in sel['base']], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), env=round(sel['env'], 4), ms=round(dr['box']['ms'], 1))
+                self._dr_send('marker', sel['base'], t, T_grasp=sel['T_grasp'])
+                dr.update(stage='marker', box=None)
 
         def pub_goal(self, xy, yaw):
             m = PoseStamped(); m.header.frame_id = 'map'; m.header.stamp = self.get_clock().now().to_msg()
@@ -971,11 +1075,15 @@ def main():
                     self.pass_wp_done, self.pass_t = True, t
                     self.event('pass_waypoint_reached', at=[round(float(x), 3) for x in self.cur_map])
                     g_ = PASS_GOAL
-                if PICK:                                              # 取物（穿門後不停車）：粗目標＝茶几先驗 → 看到圓柱後線上選抓取底盤位 → 近距送取物封包 → 抬起後回起點
+                if PICK and DRAWER:                                   # 開抽屜→取筆→返回（Howard 11/18）
+                    self.drawer_tick(t)
+                    g_ = self.pick_goal if self.pick_goal is not None else DR_PRIOR
+                elif PICK:                                            # 取物（穿門後不停車）：粗目標＝茶几先驗 → 看到圓柱後線上選抓取底盤位 → 近距送取物封包 → 抬起後回起點
                     self.pick_tick(t)
                     g_ = self.pick_goal if self.pick_goal is not None else PICK_PRIOR
-                if (self.path_t is None or self.path_t < self.pass_t) and t - self.t_pass_pub >= 1.0:
-                    self.pub_goal(g_[:2], g_[2]); self.t_pass_pub = t
+                g_chg_ = getattr(self, '_g_last', None) is None or float(np.hypot(g_[0] - self._g_last[0], g_[1] - self._g_last[1])) > 0.01 or abs(g_[2] - self._g_last[2]) > 0.01
+                if (g_chg_ or self.path_t is None or self.path_t < self.pass_t) and t - self.t_pass_pub >= 1.0:   # 目標改變 ⇒ 立即重送（s38：選位 0.2 s 完成，舊粗目標的路徑晚到蓋過 path_t ⇒ 新目標沒送出）
+                    self.pub_goal(g_[:2], g_[2]); self.t_pass_pub = t; self._g_last = list(g_)
                 if self.xstate and ('"what": "world_end"' in self.xstate or 'engineering_abort' in self.xstate):
                     self.done_sent = True
                 return

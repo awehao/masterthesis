@@ -202,10 +202,14 @@ class WorldD2(Node):
         except Exception:                                             # noqa: BLE001
             d_ = {}
         if d_.get('what') == 'pick_app':                              # 取物封包（監督送；odom 座標）⇒ 下一拍快照帶給工作程序換取物控制器
-            if self.stage == 'run' and getattr(self, 'pick_app_sent', None) is None:
+            kind_ = d_['app'].get('kind', 'cyl')
+            sent_ = getattr(self, 'pick_app_kinds', None) or set()    # 抽屜任務：drawer → observe → marker 各一次
+            if self.stage == 'run' and kind_ not in sent_:
+                self.pick_app_kinds = sent_ | {kind_}
                 self.pick_app_sent = dict(d_['app'])
                 runner.extra = dict(getattr(runner, 'extra', None) or {}, pick_app=dict(d_['app']))
-                self.ev('pick_app', app={k_: v_ for k_, v_ in d_['app'].items() if k_ != 'T_grasp'}, grasp_xyz=[round(float(x), 4) for x in np.asarray(d_['app']['T_grasp'], float)[:3, 3]])
+                T_k_ = 'T_grasp' if 'T_grasp' in d_['app'] else 'T_obs'   # 抽屜觀察封包只有觀察位姿
+                self.ev('pick_app', app={k_: v_ for k_, v_ in d_['app'].items() if k_ not in ('T_grasp', 'T_obs')}, grasp_xyz=[round(float(x), 4) for x in np.asarray(d_['app'][T_k_], float)[:3, 3]], target=T_k_)
             return
         if d_.get('what') == 'app':                                   # 單一控制器：接近開始（觀測觸發；監督端送）
             if self.stage == 'run' and getattr(self, 'app_t0', None) is None and self.ho is not None:
@@ -338,6 +342,9 @@ class WorldD2(Node):
         if c.get('what') == 'unbound' and getattr(self, 'unbound_ack', None) is None:
             self.unbound_ack = c
             self.ev('unbind_ack', n_applied=c.get('n'), req=c.get('req'))
+        if c.get('what') == 'drawer_unbound' and getattr(self, 'dr_unbound_ack', None) is None:   # 抽屜：夾爪↔抽屜連接已解除
+            self.dr_unbound_ack = c
+            self.ev('drawer_unbind_ack', n_applied=c.get('n'), req=c.get('req'))
 
     def ctl(self, what, **kw):
         if ISAAC:
@@ -449,6 +456,8 @@ class WorldD2(Node):
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, finger_force=list(self.ffor))
                 if getattr(self, 'unbound_ack', None) is not None:     # 穿門段：執行端已回報解綁生效 ⇒ 快照帶給控制器
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, unbound=True)
+                if getattr(self, 'dr_unbound_ack', None) is not None:  # 抽屜段：同上
+                    runner.extra = dict(getattr(runner, 'extra', None) or {}, dr_unbound=True)
                 if REL_EXEC and k > 0:
                     if ISAAC:                                        # Isaac 端已確定的實際底盤（同一份排程，不各算各的）
                         ib_ = getattr(self, 'isaac_base_known', None)
@@ -475,6 +484,16 @@ class WorldD2(Node):
                             self.cyl_attached = True
                             self.ev('cyl_attach_committed')
                             self.ctl('attach_cyl', req_n=int(self.n))
+                        if rec.get('dr_attach') and not getattr(self, 'dr_attached', False):   # 抽屜把手理想連接（夾住證據成立後）
+                            self.dr_attached = True
+                            self.ev('drawer_attach_committed')
+                            self.ctl('attach_drawer', req_n=int(self.n))
+                        if rec.get('dr_release') and not getattr(self, 'dr_released', False):   # 拉開完成 ⇒ 解除夾爪↔抽屜；附開度估計（偵測用抽屜內部範圍）
+                            self.dr_released = True
+                            self.ev('drawer_release_committed', q_open=rec.get('q_open'))
+                            self.ctl('unbind_drawer', req_n=int(self.n), q_open=rec.get('q_open'))
+                            if not ISAAC:
+                                self.dr_unbound_ack = dict(what='drawer_unbound', n=int(self.n), req=int(self.n))
                         if rec.get('release') and not getattr(self, 'released', False):   # 穿門段：放手 ⇒ 解除綁定（Isaac 移除 FixedJoint；乾跑門角不再跟手）
                             self.released, self.bindinfo = True, None
                             self.ev('release_committed')

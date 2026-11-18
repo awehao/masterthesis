@@ -54,6 +54,12 @@ CYL_Z0 = float(_TAB['s'][2]) + CYL_H / 2
 WALKERS = os.environ.get('D2_WALKERS', '0') == '1'
 _OB = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', _SC['obstacles']['path']))) if WALKERS else {'walkers': []}
 F_CONTACT = 0.0040                                                    # 替身：夾住圓柱時的手指開度（假設值；Isaac 由物理決定）
+DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                       # 抽屜任務（Howard 11/18）：把手夾持＋拉動＋筆合成觀測／夾持
+if DRAWER:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import drawer_scene as DRS
+    MK0 = np.array(_SC['marker']['center_world'], float); MK_YAW = math.radians(float(_SC['marker']['axis_yaw_deg']))
+    F_CONTACT_H, F_CONTACT_M = 0.0018, 0.0038                          # 26 mm 橫桿／筆對角 30.02 mm 的接觸開度（資產檔頭的官方網格推導）
 LEAF = (0.0, 0.95, 0.0, 0.04)
 
 
@@ -108,6 +114,8 @@ class Stub(Node):
         self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
         self.p_cyl = self.create_publisher(Float64MultiArray, '/cyl/obs', 10)
         self.cyl_p, self.cyl_att, self.cyl_seq, self.t_next_cyl, self.ffor, self.fcmd_last = np.r_[CYL_XY, CYL_Z0], None, 0, 0.0, (0.0, 0.0), 0.0089
+        if DRAWER:
+            self.cyl_p, self.dr_q, self.dr_att, self.dr_contact, self.dr_unb = MK0.copy(), 0.0, None, False, False
         self.p_xs = self.create_publisher(String, '/far/exec_state', 10)
         self.p_d2 = self.create_publisher(Float64MultiArray, '/d2/state', 20)
         self.p_ack = self.create_publisher(String, '/d2/ack', 10)
@@ -163,6 +171,16 @@ class Stub(Node):
         elif w == 'unbind':
             self.bind = 'released'                                    # 放手：門角不再跟手（保持當下）
             self.unbind_req = c.get('req_n')
+        elif w == 'attach_drawer' and DRAWER:
+            if self.dr_contact:
+                self.dr_att = float(np.dot(K.fk(self.q, 'link_tcp')[:3, 3], DRS.PULL)) - self.dr_q
+                self.tail_log.append(dict(t=round(self.t, 3), what='drawer_attached', q_open=round(self.dr_q, 4)))
+            else:
+                self.abort = 'drawer_attach_without_contact'
+        elif w == 'unbind_drawer' and DRAWER:
+            self.dr_att, self.dr_unb = None, True
+            self.dr_unb_req = c.get('req_n')
+            self.tail_log.append(dict(t=round(self.t, 3), what='drawer_unbound', q_open=round(self.dr_q, 4), q_open_ctrl=c.get('q_open')))
         elif w == 'end':
             self.end = True
         elif w == 'abort':
@@ -194,6 +212,56 @@ class Stub(Node):
             data += [float('nan')] * 3
         data.append(self.t)
         self.p_cyl.publish(Float64MultiArray(data=data))
+
+    def mk_obs(self):
+        """筆合成觀測（替身）：5 Hz；筆兩端與中心都在手腕相機視野內才有效；輸出筆中心（底盤座標，1 mm 雜訊）＋筆軸偏航（底盤座標）。"""
+        if self.t < self.t_next_cyl - 1e-9:
+            return
+        self.t_next_cyl = self.t + 0.2; self.cyl_seq += 1
+        Ti = np.linalg.inv(K.fk(self.q, W0.OPT)); ok = self.cyl_att is None and self.dr_q > 0.05
+        a = np.array([math.cos(MK_YAW), math.sin(MK_YAW), 0.0])
+        for dl in (0.0, 0.065, -0.065):
+            pc = (Ti @ np.r_[self.cyl_p + dl * a, 1.0])[:3]
+            if pc[2] < 0.12 or pc[2] > 3.0:
+                ok = False; break
+            u, v = (Kc @ (pc / pc[2]))[:2]
+            if not (5 < u < 635 and 5 < v < 475):
+                ok = False; break
+        data = [float(self.cyl_seq), self.t, 1.0 if ok else 0.0, *[float(x) for x in self.q[:3]]]
+        if ok:
+            pw = self.cyl_p + rng.normal(0, 1e-3, 3)
+            data += [float(x) for x in (np.linalg.inv(T3(self.q[:3])) @ np.r_[pw, 1.0])[:3]]
+        else:
+            data += [float('nan')] * 3
+        data += [self.t, float(MK_YAW - self.q[2] + rng.normal(0, 0.01))]
+        self.p_cyl.publish(Float64MultiArray(data=data))
+
+    def dr_step(self):
+        """替身抽屜：把手接觸＝TCP 對把手抓取位 ≤6 mm 且手指命令低於接觸開度；連接後開度＝TCP 沿拉出方向位移（限位 0–0.22）；筆未被夾時隨抽屜。"""
+        Tt = K.fk(self.q, 'link_tcp')
+        if self.dr_att is not None:
+            self.dr_q = min(max(float(np.dot(Tt[:3, 3], DRS.PULL)) - self.dr_att, 0.0), 0.22)
+        near = float(np.linalg.norm(Tt[:3, 3] - DRS.handle_T(self.dr_q)[:3, 3])) <= 0.006
+        self.dr_contact = near and self.fcmd_last < F_CONTACT_H
+        if self.cyl_att is None:
+            self.cyl_p = MK0 + self.dr_q * DRS.PULL                  # 筆未被夾：隨抽屜
+            if self.dr_contact:
+                self.fing = max(self.fing, F_CONTACT_H)
+                self.ffor = (2.0, 2.0)
+            else:
+                a = np.array([math.cos(MK_YAW), math.sin(MK_YAW), 0.0])
+                d = Tt[:3, 3] - self.cyl_p; al_ = float(d @ a); pp = float(np.linalg.norm(d - al_ * a))
+                if self.fing <= F_CONTACT_M and pp <= 0.008 and abs(al_) <= 0.05:
+                    self.cyl_att = np.linalg.inv(Tt) @ np.r_[self.cyl_p, 1.0]
+                    self.tail_log.append(dict(t=round(self.t, 3), what='marker_attached', perp_mm=round(pp * 1e3, 2), along_mm=round(al_ * 1e3, 2)))
+                else:
+                    self.ffor = (0.0, 0.0)
+        if self.cyl_att is not None:
+            self.cyl_p = (Tt @ self.cyl_att)[:3]
+            self.fing = max(self.fing, F_CONTACT_M)
+            self.ffor = (2.0, 2.0) if self.fcmd_last < F_CONTACT_M else (0.0, 0.0)
+        if self.dr_unb and self.n % 10 == 0:
+            self.p_ack.publish(String(data=json.dumps(dict(what='drawer_unbound', n=int(self.n), req=getattr(self, 'dr_unb_req', None)))))
 
     def cyl_step(self):
         """替身夾持物理（簡化）：手指命令低於夾住開度時，TCP 對圓柱軸徑向 ≤6 mm、高度 ±5 cm ⇒ 夾住（接觸力 2 N、手指停在夾住開度）；夾住後圓柱跟 TCP。"""
@@ -301,8 +369,12 @@ class Stub(Node):
                 for w_ in _OB['walkers']:
                     if float(np.hypot(*(self.q[:2] - WK_.walker_pos(w_, self.t)))) < 0.30 + float(w_['radius']):
                         self.abort = 'walker_collision:' + w_['name']; self.tail_log.append(dict(t=round(self.t, 3), what='walker_collision', who=w_['name']))
-            self.cyl_step()
-            self.cyl_obs()
+            if DRAWER:
+                self.dr_step()
+                self.mk_obs()
+            else:
+                self.cyl_step()
+                self.cyl_obs()
             if not isinstance(self.bind, dict):
                 self.obs()                                            # 綁定前持續合成觀察（同 Isaac 端偵測持續運作）
             self.t = round(self.t + PHYS, 10); self.n += 1
@@ -330,11 +402,12 @@ class Stub(Node):
                 m.angle_min, m.angle_max, m.angle_increment = WN.SCAN_MIN, WN.SCAN_MAX, WN.SCAN_INC
                 m.range_min, m.range_max = WN.RANGE_MIN, WN.RANGE_MAX
                 m.ranges = [float(x) for x in r]; self.p_scan.publish(m)
-            self.rows.append([self.t, *self.q, self.phi, *tw, float(post), float(isinstance(self.bind, dict)), float(self.fing), *[float(x) for x in self.cyl_p], float(self.cyl_att is not None)])
+            self.rows.append([self.t, *self.q, self.phi, *tw, float(post), float(isinstance(self.bind, dict)), float(self.fing), *[float(x) for x in self.cyl_p], float(self.cyl_att is not None), float(self.dr_q) if DRAWER else 0.0])
             now = time.perf_counter()
             if now < tgt_w:
                 time.sleep(tgt_w - now)
-        json.dump(dict(cyl=dict(xy0=CYL_XY.tolist(), seed=CYL_SEED, z0=CYL_Z0, end=self.cyl_p.tolist(), attached=self.cyl_att is not None), tail_log=self.tail_log, stat=self.stat, n0=self.n0, abort=self.abort, end=self.end, phi_end_deg=math.degrees(self.phi)), open(OUT + '_stub.json', 'w'), indent=1)
+        json.dump(dict(cyl=dict(xy0=CYL_XY.tolist(), seed=CYL_SEED, z0=CYL_Z0, end=self.cyl_p.tolist(), attached=self.cyl_att is not None),
+                       drawer=dict(q_end=self.dr_q, marker0=MK0.tolist(), marker_end=self.cyl_p.tolist(), marker_attached=self.cyl_att is not None) if DRAWER else None, tail_log=self.tail_log, stat=self.stat, n0=self.n0, abort=self.abort, end=self.end, phi_end_deg=math.degrees(self.phi)), open(OUT + '_stub.json', 'w'), indent=1)
         np.savez_compressed(OUT + '_stub.npz', rows=np.array(self.rows, float))
 
 
