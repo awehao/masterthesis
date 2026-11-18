@@ -22,6 +22,8 @@ OBS_H = float(os.environ.get('DR_OBS_H', '0.20'))                     # 觀察�
 GRASP_DEPTH = float(os.environ.get('PICK_GRASP_DEPTH', '0.004'))
 CAM_OFF = np.array([0.0675, -0.0325])                                 # 相機光學框原點在 link_eef 的 x, y（URDF；光軸∥工具 z）
 BASE_MARGIN = M.BASE_MARGIN
+ENV_SEL = float(os.environ.get('DR_ENV_SEL', '0.03'))                 # 俯視位、預抓位的手臂淨空選位門檻（s41：俯視位只 11 mm ⇒ 接近中 link2 擦面板 4.8 mm 被停）
+W_ENV = 2.0                                                           # 評分：每多 1 cm 淨空抵 2 cm 底盤距離
 
 
 def _clear(b, q, q_open):
@@ -31,14 +33,14 @@ def _clear(b, q, q_open):
     return ok, c
 
 
-def _ik_ok(T, b, q_open):
+def _ik_ok(T, b, q_open, env_min=0.0):
     for fl in (False, True):
         Tf = T(fl) if callable(T) else T
         g = M.ik(Tf, b)
         if g is None:
             continue
         ok, c = _clear(b, g[0], q_open)
-        if ok:
+        if ok and float(c['env']) >= env_min:
             return dict(q=g[0], sigma=float(g[2]), flip=fl, env=float(c['env']), base=float(c['base']))
     return None
 
@@ -91,16 +93,16 @@ def obs_T(c_xy, z_bottom, yaw_tool):
 
 def select_marker(c, yaw, q_open, b_now, w_dist=1.0, w_sig=0.02):
     best = None
-    for b in _frame_bases(c, np.arange(0.30, 0.56, 0.025), np.arange(-0.30, 0.301, 0.05), (0.0, -25.0, 25.0)):
+    for b in _frame_bases(c, np.arange(0.30, 0.56, 0.025), np.arange(-0.30, 0.301, 0.05), (0.0, -20.0, 20.0)):
         if not M.base_free(b):
             continue
         g = _ik_ok(lambda f: grasp_T(c, yaw, f), b, q_open)
         if g is None:
             continue
-        gp = _ik_ok(grasp_T(c, yaw, g['flip'], PRE_M), b, q_open)
+        gp = _ik_ok(grasp_T(c, yaw, g['flip'], PRE_M), b, q_open, ENV_SEL)
         if gp is None:
             continue
-        sc = w_dist * float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + w_sig / min(g['sigma'], gp['sigma'])
+        sc = w_dist * float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + w_sig / min(g['sigma'], gp['sigma']) - W_ENV * gp['env']
         if best is None or sc < best['score']:
             best = dict(base=b.tolist(), flip=bool(g['flip']), sigma_min=min(g['sigma'], gp['sigma']), score=sc, env=min(g['env'], gp['env']), base_clear=min(g['base'], gp['base']), T_grasp=grasp_T(c, yaw, g['flip']).tolist())
     return best
@@ -118,18 +120,21 @@ def select_observe(q_open, b_now):
     z_b = float(D.SPEC['interior']['bottom_top_z'])
     yaw_m = math.atan2(D.PULL[0], -D.PULL[1]) if False else _yaw_face() + math.pi / 2   # 筆名目平躺方向（沿把手橫桿）只用來定夾爪開合方向，不讀筆位置
     best = None
-    for b in _frame_bases(c, np.arange(0.30, 0.56, 0.025), np.arange(-0.20, 0.201, 0.05), (0.0,)):
+    for b in _frame_bases(c, np.arange(0.30, 0.56, 0.025), np.arange(-0.20, 0.201, 0.05), (0.0, -20.0, 20.0)):
         if not M.base_free(b):
             continue
         To = obs_T(c, z_b, _yaw_face())
-        go = _ik_ok(To, b, q_open)
+        go = _ik_ok(To, b, q_open, ENV_SEL)
         if go is None:
             continue
         cg = np.r_[c[:2], z_b + 0.014]
         g = _ik_ok(lambda f: grasp_T(cg, yaw_m, f), b, q_open)
         if g is None:
             continue
-        sc = float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + 0.02 / min(go['sigma'], g['sigma'])
+        gp = _ik_ok(grasp_T(cg, yaw_m, g['flip'], PRE_M), b, q_open, ENV_SEL)
+        if gp is None:
+            continue
+        sc = float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + 0.02 / min(go['sigma'], g['sigma']) - W_ENV * min(go['env'], gp['env'])
         if best is None or sc < best['score']:
             best = dict(base=b.tolist(), sigma_min=min(go['sigma'], g['sigma']), score=sc, env=min(go['env'], g['env']), base_clear=min(go['base'], g['base']), T_obs=To.tolist(), c=c.tolist())
     return best

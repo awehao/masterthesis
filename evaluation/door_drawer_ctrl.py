@@ -31,6 +31,8 @@ WAIT_TO_S = float(os.environ.get('DR_WAIT_TO_S', '20.0'))             # 等監�
 OBS_TOL_M, OBS_TOL_DEG = 0.010, 5.0
 RET_LIFT = float(os.environ.get('DR_RET_LIFT', '0.18'))              # 放手退出時另抬高（越過抽屜面板頂再去俯視；s39 直接混接 ⇒ 手指掃到面板被停）
 T_RET_DR = float(os.environ.get('DR_T_RET', '2.5'))
+OBS_BUMP = float(os.environ.get('DR_OBS_BUMP', '0.05'))              # 俯視接近路徑上拱（m）
+CARRY_POS = np.array([float(x) for x in os.environ.get('DR_CARRY_POS', '0.30,0.0,0.70').split(',')])   # 持筆收臂位（底盤座標）：原收臂點 (0.36, 0, 0.588) 在拉開的抽屜正上方、低於面板頂 0.60 ⇒ 返回後退會撞面板；改高 0.70（離線 σ 0.117）
 LIFT_DELAY = 0.35                                                     # 抬升自退出名目時間的 35% 起（先水平離開橫桿）
 
 
@@ -45,7 +47,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         self.open_m = float(app.get('open_m', 0.20))
         self.T_pull = float(app.get('T_pull', T_PULL))
         self.dr_attach, self.dr_release, self.dr_unbound, self.q_open = False, False, False, 0.0
-        self.T_p0, self.b_p0, self.T_hold, self.T_rel_r0, self.dvec_b = None, None, None, None, None
+        self.T_p0, self.b_p0, self.T_hold, self.T_rel_r0, self.dvec_b, self.T_obs0 = None, None, None, None, None, None
         D.set_open(0.0)
         self._ev('pick_dr_start', T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]], pull=[round(float(x), 4) for x in self.pull[:2]], open_m=self.open_m)
 
@@ -55,6 +57,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         if kind == 'observe' and self.task == 'handle' and self.phase == 'WAIT':
             self.task = 'observe'
             self.T_grasp = np.asarray(app['T_obs'], float).copy()
+            self.T_obs0 = None if self.T_hold is None else self.T_hold.copy()   # 起點＝退出終點（世界）
         elif kind == 'marker' and self.task == 'observe' and self.phase == 'OBSERVE':
             self.task = 'marker'
             self.T_grasp = np.asarray(app['T_grasp'], float).copy()
@@ -67,6 +70,28 @@ class DrawerCtrl(PK.TablePickCtrl):
         self.T_rel0 = None
         self.t = float(t0)
         self._goto('APPROACH', task=self.task, base_goal=[round(float(x), 4) for x in app['base_goal']], T=round(self.T_app, 3))
+
+    def _app_target(self, t_abs, Xk):
+        if self.task != 'observe':
+            return super()._app_target(t_abs, Xk)
+        if self.T_obs0 is None:
+            return self.T_grasp
+        u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_app - PK.T_SETTLE, 1e-6), 0.0), 1.0))[0]   # 世界座標：退出終點 → 俯視位（不掛在移動底盤上；s40 掛底盤 ⇒ 底盤前進把夾爪帶向面板）
+        A, Bm = self.T_obs0, self.T_grasp
+        T = np.eye(4)
+        T[:3, 3] = (1 - u) * A[:3, 3] + u * Bm[:3, 3] + OBS_BUMP * math.sin(math.pi * u) * np.array([0.0, 0.0, 1.0])
+        T[:3, :3] = A[:3, :3] @ _exp_R(u * _log_R(A[:3, :3].T @ Bm[:3, :3]))
+        return T
+
+    def _carry_target(self, t_abs):
+        if self.task != 'marker':
+            return super()._carry_target(t_abs)
+        u = XE.minjerk(min(max((t_abs - self.t_ph0) / PK.T_CARRY, 0.0), 1.0))[0]
+        A = self.T_rel_s0
+        T = np.eye(4)
+        T[:3, 3] = (1 - u) * A[:3, 3] + u * CARRY_POS                  # 只移位置（同圓柱）；姿態保持朝下
+        T[:3, :3] = A[:3, :3]
+        return T
 
     def _T_line(self, s_):
         if self.task == 'observe':
