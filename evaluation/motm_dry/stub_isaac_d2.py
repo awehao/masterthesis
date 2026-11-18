@@ -373,8 +373,14 @@ class Stub(Node):
             if WALKERS and self.n % 5 == 0:                           # 底盤碰到行人 ⇒ 中止（同 Isaac 底盤接觸）
                 import walkers as WK_
                 for w_ in _OB['walkers']:
-                    if float(np.hypot(*(self.q[:2] - WK_.walker_pos(w_, self.t)))) < 0.30 + float(w_['radius']):
+                    pw_ = WK_.walker_pos(w_, self.t)
+                    if float(np.hypot(*(self.q[:2] - pw_))) < 0.30 + float(w_['radius']):
                         self.abort = 'walker_collision:' + w_['name']; self.tail_log.append(dict(t=round(self.t, 3), what='walker_collision', who=w_['name']))
+                    elif float(np.hypot(*(self.q[:2] - pw_))) < 0.30 + float(w_['radius']) + 0.40:   # 手臂連桿碰行人（第二十一趟 Isaac：收臂夾爪伸出底盤圓外被行人撞 43 N）
+                        for ln_ in ('link3', 'link4', 'link5', 'link6', 'link_eef', 'link_tcp'):
+                            pl_ = K.fk(self.q, ln_)[:3, 3]
+                            if float(np.hypot(*(pl_[:2] - pw_))) < float(w_['radius']) + 0.04 and pl_[2] < float(w_['height']):
+                                self.abort = 'walker_arm_contact:' + w_['name'] + ':' + ln_; self.tail_log.append(dict(t=round(self.t, 3), what='walker_arm_contact', who=w_['name'], link=ln_)); break
             if DRAWER:
                 self.dr_step()
                 self.mk_obs()
