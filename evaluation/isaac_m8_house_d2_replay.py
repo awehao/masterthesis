@@ -91,6 +91,14 @@ def main():
                      door=dict(eye=[0.85, -2.6, 1.6], tgt=[0.6, -0.3, 0.75], hfov=math.radians(62.0), res=(960, 540)),
                      living=dict(eye=[4.6, 7.6, 4.0], tgt=[1.0, 1.5, 0.4], hfov=math.radians(62.0), res=(1280, 720)),
                      table=dict(eye=[0.2, 2.6, 1.8], tgt=[2.0, 4.0, 0.5], hfov=math.radians(62.0), res=(960, 540)))
+    if os.environ.get('REPLAY_VIEWS'):                                 # 只做指定視角（如 follow,drawer）
+        keep = os.environ['REPLAY_VIEWS'].split(',')
+        if 'follow' in keep:
+            views['follow'] = dict(eye=[0.0, -6.0, 2.0], tgt=[0.0, -4.0, 0.5], hfov=math.radians(70.0), res=(1280, 720))   # 跟車：每格依底盤位姿重設
+        if 'drawer' in keep and reg.get('drawer'):
+            dp_ = reg['drawer']['pose']
+            views['drawer'] = dict(eye=[dp_[0] + 1.6, dp_[1] - 1.3, 1.5], tgt=[dp_[0] + 0.35, dp_[1], 0.5], hfov=math.radians(62.0), res=(1280, 720))
+        views = {k: v for k, v in views.items() if k in keep}
     cams = {}
     for nm, f in views.items():
         c = Camera(prim_path=f'/World/cams/{nm}', resolution=f['res'], frequency=30)
@@ -108,6 +116,33 @@ def main():
     if res_c and res_c.get('log'):                                    # 圓柱：依同趟真值紀錄擺位（每 10 物理步一筆，線性內插）
         CYL = np.array(res_c['log'], float)
         cyl_v = VisualCylinder(prim_path='/World/cyl_replay', name='cyl_replay', position=CYL[0, 1:4], radius=float(res_c.get('radius', 0.015)), height=float(res_c.get('height', 0.20)), color=np.array([0.2, 0.6, 0.9]))
+    res_all = json.load(open(os.path.join(RD, 'result.json')))
+    DRL, MKL, WKL, mk_v, wk_v = None, None, None, None, []
+    dr_cubes = []
+    if res_all.get('drawer') and res_all['drawer'].get('log'):       # 抽屜：純顯示方盒（drawer_scene 幾何），依同趟開度真值擺位
+        import drawer_scene as DRS_
+        from isaacsim.core.api.objects import VisualCuboid as _VC
+        DRL = np.array(res_all['drawer']['log'], float)
+        for j_, (nm_, c_, R_, h_) in enumerate(DRS_.shapes(0.0)):
+            yq = math.atan2(R_[1, 0], R_[0, 0]) / 2
+            col = np.array([0.80, 0.66, 0.45]) if nm_.startswith('drawer_cab') else np.array([0.70, 0.50, 0.30])
+            dr_cubes.append((nm_, _VC(prim_path=f'/World/drawer_vis/c{j_}', name=f'dv{j_}', position=c_, scale=2 * h_, orientation=np.array([math.cos(yq), 0, 0, math.sin(yq)]), color=col)))
+        hb = DRS_.SPEC['drawer']['handle']['bar']
+        hc = DRS_.to_world(hb['center'], 0.0, True)
+        dr_cubes.append(('drawer_bar', VisualCylinder(prim_path='/World/drawer_vis/bar', name='dvbar', position=hc, radius=float(hb['radius']), height=float(hb['length']),
+                                                      orientation=np.array([math.cos(math.pi / 4), math.sin(math.pi / 4), 0, 0]), color=np.array([0.6, 0.6, 0.65]))))
+    if res_all.get('marker') and res_all['marker'].get('log'):
+        MKL = np.array(res_all['marker']['log'], float)
+        from isaacsim.core.api.objects import VisualCuboid
+        y2 = math.radians(float(reg['marker']['axis_yaw_deg'])) / 2
+        mk_v = VisualCuboid(prim_path='/World/marker_replay', name='marker_replay', position=MKL[0, 1:4], scale=np.array([0.14, 0.03, 0.026]),
+                            orientation=np.array([math.cos(y2), 0.0, 0.0, math.sin(y2)]), color=np.array([0.85, 0.15, 0.15]))
+    if res_all.get('walkers') and res_all['walkers'].get('log'):
+        WKL = np.array(res_all['walkers']['log'], float)
+        for j_, nm_ in enumerate(res_all['walkers']['names']):
+            w_ = next(w for w in ob['walkers'] if w['name'] == nm_)
+            wk_v.append(VisualCylinder(prim_path=f'/World/walkers_replay/{nm_}', name=f'wr_{nm_}', position=np.array([WKL[0, 1 + 2 * j_], WKL[0, 2 + 2 * j_], w_['height'] / 2]),
+                                       radius=float(w_['radius']), height=float(w_['height']), color=np.array([0.55, 0.25, 0.65])))
     lp0, lq0 = [np.asarray(x, float)[0] for x in leaf.get_world_poses()]
     robot = SingleArticulation(prim_path=arts[0], name='omni_bot')
     robot.initialize()
@@ -142,6 +177,23 @@ def main():
         if CYL is not None:
             pc = np.array([np.interp(row[0], CYL[:, 0], CYL[:, k]) for k in (1, 2, 3)])
             cyl_v.set_world_pose(position=pc)
+        if DRL is not None:
+            op_ = float(np.interp(row[0], DRL[:, 0], DRL[:, 1]))
+            sh_ = {n_: c_ for n_, c_, _, _ in DRS_.shapes(op_)}
+            for nm_, v_ in dr_cubes:
+                if nm_ == 'drawer_bar':
+                    v_.set_world_pose(position=DRS_.to_world(hb['center'], op_, True))
+                elif not nm_.startswith('drawer_cab'):
+                    v_.set_world_pose(position=sh_[nm_])
+        if MKL is not None:
+            mk_v.set_world_pose(position=np.array([np.interp(row[0], MKL[:, 0], MKL[:, k]) for k in (1, 2, 3)]))
+        for j_, v_ in enumerate(wk_v):
+            p_ = np.array([np.interp(row[0], WKL[:, 0], WKL[:, 1 + 2 * j_]), np.interp(row[0], WKL[:, 0], WKL[:, 2 + 2 * j_])])
+            v_.set_world_pose(position=np.array([p_[0], p_[1], 0.85]))
+        if 'follow' in cams:                                         # 跟車：底盤斜後上方 2.4 m、看底盤前 0.8 m
+            yw = float(row[4]); hx, hy = math.cos(yw), math.sin(yw)
+            eye = np.array([row[2] - 2.2 * hx + 0.9 * hy, row[3] - 2.2 * hy - 0.9 * hx, 1.9]); tgt = np.array([row[2] + 0.8 * hx, row[3] + 0.8 * hy, 0.55])
+            cams['follow'].set_world_pose(position=eye, orientation=W0.R_to_wxyz(look_R(eye, tgt)), camera_axes='ros')
     for _ in range(40):
         pose(R[0])
         world.step(render=True)
