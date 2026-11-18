@@ -167,7 +167,7 @@ class DrawerCtrl(PK.TablePickCtrl):
                     self.q_unf0 = np.asarray(q[3:], float).copy()
                     self.T_unf = 1.875 * float(np.abs(Q_UNFOLD - self.q_unf0).max()) / OBS_QD + 0.5
                 if el >= self.T_unf and float(np.abs(np.asarray(q[3:], float) - Q_UNFOLD).max()) <= UNFOLD_TOL:
-                    self.T_rel0 = None                                # 接近剖面自展開後的構型起算
+                    self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')   # 接近剖面自展開後的構型起算（同拍 _solve 即用；s57 設 None ⇒ 崩潰）
                     self._goto('APPROACH', unfold_s=round(el, 2))
                 elif el > self.T_unf + PK.PH_TO_S:
                     self._stop('unfold_not_reached', err=round(float(np.abs(np.asarray(q[3:], float) - Q_UNFOLD).max()), 4))
