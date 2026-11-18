@@ -911,7 +911,9 @@ def main():
                 sel = dr['box']['sel']
                 if sel is None:
                     self.event('dr_observe_unreachable', err=dr['box'].get('err')); self.abort('drawer_observe_unreachable'); return
-                self.pick_goal, self.pass_t = self._dr_goal(sel['base']), t
+                g_new_ = self._dr_goal(sel['base'])
+                if g_new_ is not self.pick_goal:                       # 目標保留 ⇒ 不重送（s46：同一目標因 pass_t 更新被重送 ⇒ no_plan）
+                    self.pick_goal, self.pass_t = g_new_, t
                 self.event('dr_observe_goal', base=[round(float(x), 4) for x in sel['base']], c=[round(float(x), 4) for x in sel['c']], ms=round(dr['box']['ms'], 1))
                 self._dr_send('observe', sel['base'], t, T_obs=sel['T_obs'], q_obs=sel['q_obs'])
                 dr['R_obs'] = np.asarray(sel['T_obs'], float)[:3, :3]
@@ -931,7 +933,9 @@ def main():
                 sel = dr['box']['sel']
                 if sel is None:
                     self.event('dr_marker_unreachable', err=dr['box'].get('err')); self.abort('drawer_marker_unreachable'); return
-                self.pick_goal, self.pass_t = self._dr_goal(sel['base']), t
+                g_new_ = self._dr_goal(sel['base'])
+                if g_new_ is not self.pick_goal:                       # 目標保留 ⇒ 不重送（s46：同一目標因 pass_t 更新被重送 ⇒ no_plan）
+                    self.pick_goal, self.pass_t = g_new_, t
                 self.event('dr_marker_goal', base=[round(float(x), 4) for x in sel['base']], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), env=round(sel['env'], 4), ms=round(dr['box']['ms'], 1))
                 self._dr_send('marker', sel['base'], t, T_grasp=sel['T_grasp'])
                 dr.update(stage='marker', box=None)

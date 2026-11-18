@@ -41,10 +41,22 @@ idx = [i for i in range(len(R)) if t_start <= R[i, 0] <= t_end + 0.5 and int(rou
 trail = []
 _SN = PFX + '_stub.npz'
 CYL = np.load(_SN)['rows'] if (os.path.exists(_SN) and np.load(_SN)['rows'].shape[1] >= 21) else None   # 替身圓柱（x,y,z,夾住）＝倒數四欄
+DRAWER = os.environ.get('D2_DRAWER', '0') == '1'
+if DRAWER:
+    import drawer_scene as DRS                                           # noqa: E402
+WALK = json.load(open(os.path.join(os.path.dirname(HERE), scene['obstacles']['path']))) if os.environ.get('D2_WALKERS') == '1' else None
+if WALK is not None:
+    import walkers as WK                                                 # noqa: E402
 XL = [float(x) for x in os.environ.get('VIDEO_XLIM', '-0.9,2.1').split(',')]; YL = [float(x) for x in os.environ.get('VIDEO_YLIM', '-1.9,0.9').split(',')]
 
 
 def stage_txt(t):
+    if DRAWER:
+        e_ = lambda w: next((t_ for t_, w_ in ev if w_ == w), None)   # noqa: E731
+        for w, txt in (('pick_lifted', '單一控制器：夾到筆、收臂持物返回'), ('pick_dr_observing', '單一控制器：俯視偵測筆 → 移動夾筆'), ('pick_dr_released', '單一控制器：放手退出 → 關節空間轉到俯視'),
+                       ('drawer_attach_committed', '單一控制器：全身拉開抽屜 0.20 m'), ('pick_dr_start', '單一控制器：接近把手 → 閉爪'), ('release_committed', '單一控制器：放手→退出→收臂→穿門→前往抽屜')):
+            if e_(w) is not None and t >= e_(w):
+                return txt
     t_pk = next((t_ for t_, w_ in ev if w_ == 'pick_start'), None); t_lf = next((t_ for t_, w_ in ev if w_ == 'pick_lifted'), None)
     if t_lf is not None and t >= t_lf:
         return '單一控制器：持物返回起點（經開著的門）'
@@ -94,10 +106,27 @@ with writer.saving(fig, OUT, dpi=100):
         bc = corners @ np.array([[c_, s_], [-s_, c_]]) + q9[:2]
         ax.fill(bc[:, 0], bc[:, 1], color='tab:blue', alpha=0.35, zorder=2)
         ax.plot(P[:, 0], P[:, 1], '-o', color='tab:red', ms=3, lw=2, zorder=5)
-        if CYL is not None:
+        dq_ = 0.0
+        if CYL is not None and DRAWER:
+            ic = int(np.searchsorted(CYL[:, 0], t)); ic = min(ic, len(CYL) - 1); dq_ = float(CYL[ic, -1])
+        if DRAWER:
+            for nm_, c3, R3, h3 in DRS.shapes(dq_):
+                cr = np.array([[sx_ * h3[0], sy_ * h3[1]] for sx_, sy_ in ((1, 1), (-1, 1), (-1, -1), (1, -1), (1, 1))]) @ R3[:2, :2].T + c3[:2]
+                ax.fill(cr[:, 0], cr[:, 1], color='peru' if 'body' in nm_ or 'post' in nm_ else '0.55', alpha=0.8, zorder=2)
+        if WALK is not None:
+            for w_ in WALK['walkers']:
+                pw_ = WK.walker_pos(w_, t); ax.add_patch(plt.Circle((pw_[0], pw_[1]), w_['radius'], color='purple', alpha=0.6, zorder=6))
+        if CYL is not None and DRAWER:
+            cp = CYL[ic, -5:-2]; att = CYL[ic, -2] > 0.5
+            ax.add_patch(plt.Rectangle((cp[0] - 0.015, cp[1] - 0.07), 0.03, 0.14, color='tab:green' if att else 'tab:purple', zorder=6))
+        elif CYL is not None:
             ic = int(np.searchsorted(CYL[:, 0], t)); ic = min(ic, len(CYL) - 1); cp = CYL[ic, -4:-1]; att = CYL[ic, -1] > 0.5
             ax.add_patch(plt.Circle((cp[0], cp[1]), 0.04, color='tab:green' if att else 'tab:purple', zorder=6))
-        ax.set_xlim(*XL); ax.set_ylim(*YL); ax.set_aspect('equal')
+        if os.environ.get('VIDEO_TOP_FOLLOW') == '1':
+            ax.set_xlim(q9[0] - 2.5, q9[0] + 2.5); ax.set_ylim(q9[1] - 2.0, q9[1] + 2.0)
+        else:
+            ax.set_xlim(*XL); ax.set_ylim(*YL)
+        ax.set_aspect('equal')
         ax.set_title('俯視'); ax.grid(alpha=0.3)
         ax3 = fig.add_subplot(1, 2, 2, projection='3d')
         bz = np.array([[x, y, zz] for zz in (0.0, BASE_H) for x, y in corners[:4]])
@@ -105,6 +134,13 @@ with writer.saving(fig, OUT, dpi=100):
         for a_, b_ in [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)]:
             ax3.plot([bw[a_, 0], bw[b_, 0]], [bw[a_, 1], bw[b_, 1]], [bz[a_, 2], bz[b_, 2]], color='tab:blue', lw=1)
         ax3.plot(P[:, 0], P[:, 1], P[:, 2], '-o', color='tab:red', ms=3, lw=3)
+        if DRAWER:
+            for nm_, c3, R3, h3 in DRS.shapes(dq_):
+                V = np.array([[a * h3[0], b * h3[1], cc * h3[2]] for a in (-1, 1) for b in (-1, 1) for cc in (-1, 1)]) @ R3.T + c3
+                for a_, b_ in [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)]:
+                    ax3.plot(*zip(V[a_], V[b_]), color='saddlebrown' if 'body' in nm_ or 'post' in nm_ else '0.5', lw=0.8)
+            if CYL is not None:
+                ax3.plot([cp[0], cp[0]], [cp[1] - 0.07, cp[1] + 0.07], [cp[2], cp[2]], color='tab:green' if att else 'tab:purple', lw=5)
         L = lp
         ax3.plot_surface(np.array([[L[0, 0], L[1, 0]], [L[0, 0], L[1, 0]]]), np.array([[L[0, 1], L[1, 1]], [L[0, 1], L[1, 1]]]), np.array([[0, 0], [LEAF_H, LEAF_H]]), color='peru', alpha=0.45)
         ax3.scatter([hx[0]], [hx[1]], [Th[2, 3]], color='gold', s=40)
@@ -113,6 +149,6 @@ with writer.saving(fig, OUT, dpi=100):
         else:
             ax3.set_xlim(-0.6, 1.8); ax3.set_ylim(-1.6, 0.8); ax3.set_zlim(0, 2.0)
         ax3.view_init(elev=22, azim=-60); ax3.set_title('斜視')
-        fig.suptitle(os.environ.get('VIDEO_TITLE', 'D2 同鏈乾跑重播（假世界運動學＋合成觀察，非 Isaac 物理）') + '  %s\nt=%.1f s   %s   門角 %.1f°' % (os.path.basename(PFX), t, stage_txt(t), math.degrees(phi)), fontsize=12)
+        fig.suptitle(os.environ.get('VIDEO_TITLE', 'D2 同鏈乾跑重播（假世界運動學＋合成觀察，非 Isaac 物理）') + '  %s\nt=%.1f s   %s   門角 %.1f°%s' % (os.path.basename(PFX), t, stage_txt(t), math.degrees(phi), ('   抽屜開度 %.3f m' % dq_) if DRAWER else ''), fontsize=12)
         writer.grab_frame()
 print('wrote', OUT, len(idx), 'frames')
