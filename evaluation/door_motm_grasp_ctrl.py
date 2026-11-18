@@ -94,7 +94,7 @@ def door_filter(obs, ap, phi):
 BIAS_OBS = os.environ.get('GRASP_BIAS_OBS', '1') == '1'                 # 手臂等效偏置線上觀測（接近開始後、閉爪前）
 BIAS_OBS_TAU = float(os.environ.get('GRASP_BIAS_OBS_TAU', '0.5'))
 BIAS_OBS_MAX = float(os.environ.get('GRASP_BIAS_OBS_MAX', '0.02'))      # 新增殘差補償限幅（rad／軸）
-CLOSE_WAIT_S = float(os.environ.get('GRASP_CLOSE_WAIT_S', '1.0'))   # 插入名目時間到後閉爪準備窗口上限（模擬秒；0＝原單拍判定）
+CLOSE_WAIT_S = float(os.environ.get('GRASP_CLOSE_WAIT_S', '2.0'))   # 插入名目時間到後閉爪準備窗口上限（模擬秒；0＝原單拍判定）
 BG_V = 0.06                                                          # 導航到點後收斂到抓取底盤位姿的參考速度上限（m/s）
 
 
