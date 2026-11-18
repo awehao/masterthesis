@@ -855,7 +855,12 @@ def main():
 
         def _dr_goal(self, b_od):
             Tbm_ = _T3(self.T_mo_now) @ _T3(np.asarray(b_od, float))   # 選位（里程）→ 地圖（只給 Smac）
-            return [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]
+            g_ = [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]
+            pg_ = self.pick_goal
+            if pg_ is not None and float(np.hypot(g_[0] - pg_[0], g_[1] - pg_[1])) < 0.05 and abs((g_[2] - pg_[2] + math.pi) % (2 * math.pi) - math.pi) < 0.1:
+                self.event('dr_goal_kept', new=[round(x, 4) for x in g_], kept=[round(float(x), 4) for x in pg_])   # s43：新目標離現目標 1.5 cm 仍重送 ⇒ 前端重規劃 >0.3 s 無輸出 ⇒ 控制器判過期停車；近距由控制器收斂到封包底盤位
+                return pg_
+            return g_
 
         def _dr_send(self, kind, base, t, **kw):
             dist_ = float(np.hypot(*(self.b_od_now[:2] - np.asarray(base[:2], float))))
