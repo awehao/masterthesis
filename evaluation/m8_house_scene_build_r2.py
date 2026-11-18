@@ -70,13 +70,15 @@ def drawer_footprint():
 
 
 def unknowns():
-    """未知物與行人：事前明示設計值（r2：沿用 r1 的五個未知物與三個行人，移到放大後客廳／取物區中不擋主路徑（起點→門→茶几→回程）的位置；之後加入未知障礙物另行登錄）。不進靜態地圖；真值只給場景與評估。行人低速開發設定 0.20 m/s。"""
+    """未知物與行人：事前明示設計值（r2 11/18 修訂：Howard「動態障礙物路線要能影響到我的任務」⇒ 四位行人路線橫切或共用主路徑（起點→門、門→取物區開口、開口→抽屜櫃）；不看機器人、相遇由時間發生；另加客廳走道邊未知箱）。不進靜態地圖；真值只給場景與評估。行人低速開發設定 0.20 m/s。"""
     st = [dict(name='unknown_l1', kind='box', x=-2.2, y=5.6, size=[0.40, 0.30, 0.40], yaw_deg=30.0), dict(name='unknown_l2', kind='box', x=3.2, y=6.9, size=[0.35, 0.35, 0.30], yaw_deg=-20.0),
           dict(name='unknown_l3', kind='box', x=-3.4, y=2.8, size=[0.30, 0.40, 0.30], yaw_deg=10.0), dict(name='unknown_l4', kind='chair', x=-1.2, y=7.0, size=[0.45, 0.45, 0.90], yaw_deg=45.0),
+          dict(name='unknown_l5', kind='box', x=1.5, y=5.6, size=[0.45, 0.40, 0.45], yaw_deg=15.0),     # 11/18：客廳走道邊（讓門→取物區的路徑變窄、要繞）
           dict(name='unknown_r1', kind='box', x=2.4, y=10.0, size=[0.35, 0.35, 0.30], yaw_deg=15.0)]
-    wk = [dict(name='walker_l1', p0=[-3.8, 2.6], p1=[-0.6, 2.6], speed_mps=0.20, dwell_s=1.0, phase_s=6.0, radius=0.25, height=1.7),
-          dict(name='walker_l2', p0=[-1.8, 3.6], p1=[-1.8, 7.4], speed_mps=0.20, dwell_s=1.5, phase_s=14.0, radius=0.25, height=1.7),
-          dict(name='walker_r1', p0=[0.3, 8.9], p1=[0.3, 11.6], speed_mps=0.20, dwell_s=1.2, phase_s=3.0, radius=0.25, height=1.7)]
+    wk = [dict(name='walker_b1', p0=[-3.5, -2.6], p1=[3.8, -2.6], speed_mps=0.25, dwell_s=1.0, phase_s=0.0, radius=0.25, height=1.7),      # 臥室：橫切起點→門
+          dict(name='walker_l1', p0=[-3.8, 3.4], p1=[3.0, 3.4], speed_mps=0.25, dwell_s=1.0, phase_s=9.0, radius=0.25, height=1.7),       # 客廳：橫切門→取物區開口
+          dict(name='walker_l2', p0=[0.4, 1.8], p1=[0.6, 7.2], speed_mps=0.20, dwell_s=1.5, phase_s=20.0, radius=0.25, height=1.7),      # 客廳：沿走道南北向（同路徑對向／同向）
+          dict(name='walker_r1', p0=[-3.0, 9.0], p1=[3.0, 9.0], speed_mps=0.25, dwell_s=1.2, phase_s=5.0, radius=0.25, height=1.7)]       # 取物區：橫切開口→抽屜櫃
     return st, wk
 
 

@@ -51,6 +51,8 @@ else:                                                                 # 桌面�
     CYL_XY = np.array([_rc.uniform(_TAB['c'][0] - _TAB['s'][0] / 2 + CYL_MARGIN, _TAB['c'][0] + _TAB['s'][0] / 2 - CYL_MARGIN),
                        _rc.uniform(_TAB['c'][1] - _TAB['s'][1] / 2 + CYL_MARGIN, _TAB['c'][1] + _TAB['s'][1] / 2 - CYL_MARGIN)])
 CYL_Z0 = float(_TAB['s'][2]) + CYL_H / 2
+WALKERS = os.environ.get('D2_WALKERS', '0') == '1'
+_OB = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', _SC['obstacles']['path']))) if WALKERS else {'walkers': []}
 F_CONTACT = 0.0040                                                    # 替身：夾住圓柱時的手指開度（假設值；Isaac 由物理決定）
 LEAF = (0.0, 0.95, 0.0, 0.04)
 
@@ -294,6 +296,11 @@ class Stub(Node):
                 self.phi = self.bind['phi'] - d_
             if self.bind == 'released' and self.n % 10 == 0:
                 self.p_ack.publish(String(data=json.dumps(dict(what='unbound', n=int(self.n), req=getattr(self, 'unbind_req', None)))))
+            if WALKERS and self.n % 5 == 0:                           # 底盤碰到行人 ⇒ 中止（同 Isaac 底盤接觸）
+                import walkers as WK_
+                for w_ in _OB['walkers']:
+                    if float(np.hypot(*(self.q[:2] - WK_.walker_pos(w_, self.t)))) < 0.30 + float(w_['radius']):
+                        self.abort = 'walker_collision:' + w_['name']; self.tail_log.append(dict(t=round(self.t, 3), what='walker_collision', who=w_['name']))
             self.cyl_step()
             self.cyl_obs()
             if not isinstance(self.bind, dict):
@@ -315,6 +322,10 @@ class Stub(Node):
                 cy, sy = math.cos(self.q[2]), math.sin(self.q[2])
                 pl = self.q[:2] + np.array([cy * self.lidar_xy[0] - sy * self.lidar_xy[1], sy * self.lidar_xy[0] + cy * self.lidar_xy[1]])
                 r = leaf_cast(pl, self.q[2], self.phi, WN.ray_cast(pl, self.q[2], self.boxes))
+                if WALKERS:                                           # 行人（同 Isaac：共用 walkers.walker_pos）
+                    import walkers as WK_
+                    angs = [self.q[2] + WN.SCAN_MIN + i_ * WN.SCAN_INC for i_ in range(len(r))]
+                    r = WK_.cast_circles(pl, angs, r, [(WK_.walker_pos(w_, self.t), float(w_['radius'])) for w_ in _OB['walkers']])
                 m = LaserScan(); m.header.stamp = self.stamp(); m.header.frame_id = 'lidar_link'
                 m.angle_min, m.angle_max, m.angle_increment = WN.SCAN_MIN, WN.SCAN_MAX, WN.SCAN_INC
                 m.range_min, m.range_max = WN.RANGE_MIN, WN.RANGE_MAX

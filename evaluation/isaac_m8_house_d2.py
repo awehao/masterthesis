@@ -112,7 +112,7 @@ _ROS_PREFIX = ('rclpy', 'std_msgs', 'geometry_msgs', 'nav_msgs', 'sensor_msgs', 
 _ROS_SNAP = {k_: v_ for k_, v_ in sys.modules.items() if k_.split('.')[0] in _ROS_PREFIX}
 from isaacsim.core.api import World                              # noqa: E402
 from isaacsim.core.api.objects import FixedCuboid, GroundPlane   # noqa: E402
-from isaacsim.core.prims import RigidPrim, SingleArticulation    # noqa: E402
+from isaacsim.core.prims import RigidPrim, SingleArticulation, XFormPrim    # noqa: E402
 from isaacsim.core.utils.types import ArticulationAction         # noqa: E402
 from isaacsim.sensors.camera import Camera                       # noqa: E402
 from pxr import Gf, PhysxSchema, Sdf, UsdGeom, UsdLux, UsdPhysics     # noqa: E402
@@ -123,7 +123,8 @@ import door_motm_grasp_ctrl as G                                 # noqa: E402
 import wrist_v0_capture as W0                                    # noqa: E402
 from finger_collision import apply_split                         # noqa: E402
 from isaac_common import bind_friction, bind_frictionless, collision_prims, import_urdf, physics_parts   # noqa: E402
-from isaacsim.core.api.objects import DynamicCylinder           # noqa: E402
+from isaacsim.core.api.objects import DynamicCylinder, FixedCylinder   # noqa: E402
+import walkers as WK                                             # noqa: E402
 
 # 專案控制模組（ros_stub）會無條件把 sys.modules 裡的 rclpy 與訊息套件換成替身（它們離線用）。這裡在匯入後把真正的模組放回去：
 # 專案模組已拿到的替身參照不受影響（它們不經 ROS 通訊），本程式的 ROS 節點用的是真正的 rclpy。
@@ -144,6 +145,7 @@ R_REM = int(os.environ.get('D2_R_REM', '3'))                       # 放行收�
 GRIP_F_ABORT_N, DOOR_PREBIND_DEG = 40.0, 0.5                        # 交權後：夾爪合力上限（模擬工程中止值，同舊開門執行器 40 N）、綁定前門動上限（同 BindGate 0.5°）
 JOINT = '/World/door/ideal_grasp_attach'
 PICK = os.environ.get('D2_PICK', '0') == '1'                         # 茶几圓柱體取物（穿門後）
+WALKERS = os.environ.get('D2_WALKERS', '0') == '1'                   # 行人（動態障礙物）
 CMD_TIMEOUT_S, ARM_CMD_TIMEOUT_S = 0.5, 0.2                       # 同乾跑世界節點
 WALL_LIMIT_S = 1500.0
 CAM = dict(res=(640, 480), hfov_deg=69.0, aperture=0.020, clip=(0.05, 10.0), hz=30)
@@ -380,6 +382,13 @@ def main():
         FixedCuboid(prim_path=f"/World/unknown/{o['name']}", name=o['name'], position=np.array([o['x'], o['y'], o['size'][2] / 2]), scale=np.array(o['size']),
                     orientation=np.array([math.cos(y2), 0.0, 0.0, math.sin(y2)]), color=np.array([0.72, 0.52, 0.28]))
         env_paths.append(f"/World/unknown/{o['name']}")
+    walk_list, walk_prims = [], []
+    if WALKERS:                                                       # 行人（Howard 11/18：路線要影響任務）：有碰撞的圓柱，每步依 walkers.walker_pos 移動；雷射（PhysX 射線）看得到；碰到底盤 ⇒ 底盤接觸中止
+        for w_ in ob.get('walkers', []):
+            p_ = WK.walker_pos(w_, 0.0)
+            FixedCylinder(prim_path=f"/World/walkers/{w_['name']}", name=w_['name'], position=np.array([p_[0], p_[1], w_['height'] / 2]), radius=float(w_['radius']), height=float(w_['height']), color=np.array([0.55, 0.25, 0.65]))
+            env_paths.append(f"/World/walkers/{w_['name']}")
+            walk_list.append(w_)
     cyl_info = None
     if PICK:                                                          # 茶几圓柱體（Howard 11/17「隨機放」；規格＝瓶子代理物；位置 seed 登錄；真值只做驗收記錄）
         tab_ = next(f_ for f_ in reg['furniture'] if f_['name'] == 'coffee_table')
@@ -421,6 +430,7 @@ def main():
     grip_b = [b for b in bodies if name_of(b) == 'uflite_gripper_link']
     v_grip = RigidPrim(prim_paths_expr=str(grip_b[0]), name='v_grip_pose') if len(grip_b) == 1 else None
     v_cyl = RigidPrim(prim_paths_expr='/World/cyl', name='v_cyl_pose') if PICK else None
+    walk_views = [XFormPrim(prim_paths_expr=f"/World/walkers/{w_['name']}", name=f"wv_{w_['name']}") for w_ in walk_list]
     world.reset()
     for v in v_tool + [v_base, leaf_v] + ([v_grip] if v_grip is not None else []):
         v.initialize()
@@ -574,6 +584,7 @@ def main():
             print(f'[fc] 事件記錄失敗 {what}: {e_!r}', flush=True)
 
     ffor = {'uflite_finger1': 0.0, 'uflite_finger2': 0.0}
+    walk_log = []
     cyl_log = []
 
     def contacts(split=False):
@@ -682,6 +693,12 @@ def main():
                 ev('latched_sim_engineering_abort', **latch)
                 node.p_state.publish(String(data='latched:' + latch['why']))
                 break
+            if walk_views:                                            # 行人移動（模擬時間）
+                for w_, v_ in zip(walk_list, walk_views):
+                    p_ = WK.walker_pos(w_, t)
+                    v_.set_world_poses(positions=np.array([[p_[0], p_[1], w_['height'] / 2]], np.float32))
+                if k % 10 == 0:
+                    walk_log.append([float(t)] + [float(x) for w_ in walk_list for x in WK.walker_pos(w_, t)])
             # ---- ROS 收命令
             for _ in range(4):
                 rclpy.spin_once(node, timeout_sec=0.0)
@@ -926,6 +943,7 @@ def main():
                sources=dict(odom='物理位姿直接當里程（理想，無滑移）', scan='PhysX 射線 360 道，略過機器人自身形狀，無雜訊', pose_for_camera='渲染時刻的關節／底盤讀值 FK', delay='8 步在途管線（軟體模型）'),
                step_wall_ms_p50=round(float(np.median(step_wall)) * 1e3, 1) if step_wall else None, supervisor_done=t_done is not None,
                pacing=dict(pace, rtf_target=a.rtf, note='物理依牆鐘固定 RTF 推進、不等計算；behind＝迴圈本身（算圖、射線、發布）比目標慢的步數與最大落後'), detector=dict(process='獨立程序（模擬器前 fork）', pending_at_end=len(det_pend)))
+    res['walkers'] = dict(names=[w_['name'] for w_ in walk_list], log=walk_log, note='每 10 步位置（模擬時間）') if walk_list else None
     res['cyl'] = None if cyl_info is None else dict(cyl_info, attached=cyl_attached, attach_note='夾住證據成立後 FixedJoint 理想連接（Howard 11/18）', log_cols=['t', 'x', 'y', 'z', 'grip_x', 'grip_y', 'grip_z', 'f1_n', 'f2_n'], log=cyl_log, note='真值只做驗收記錄，不進控制')
     res['d2'] = dict(stat=d2_stat, bound=bound, released=released, n0=node.d2_n0, ctl=node.d2_ctl_log, note='交權後每步命令＝/d2/out；late＝本步配速時限內沒收到、保持上一筆')
     # 整機停穩驗收（物理紀錄；rc 與 supervisor_done 都不能代替）：最後一筆非零輸入命令之後，在途管線排清（8 步），
