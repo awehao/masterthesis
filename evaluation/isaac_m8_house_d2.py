@@ -156,7 +156,7 @@ WALKERS = os.environ.get('D2_WALKERS', '0') == '1'                   # 行人（
 DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                     # 開抽屜→取筆（Howard 11/18）：建淺抽屜櫃＋筆代理；圓柱不建
 OBJ = '/World/marker_proxy' if DRAWER else '/World/cyl'              # 理想連接的物件剛體
 CMD_TIMEOUT_S, ARM_CMD_TIMEOUT_S = 0.5, 0.2                       # 同乾跑世界節點
-WALL_LIMIT_S = 1500.0
+WALL_LIMIT_S = float(os.environ.get('D2_WALL_LIMIT_S', '1500'))   # 第二十四趟：筆電實際 RTF＜0.15，1500 s 牆鐘在模擬 217.8 s 切斷返回段 ⇒ 可設
 CAM = dict(res=(640, 480), hfov_deg=69.0, aperture=0.020, clip=(0.05, 10.0), hz=30)
 SCAN_N, SCAN_MIN, SCAN_MAX, RANGE_MIN, RANGE_MAX = 360, -3.14159, 3.14159, 0.12, 10.0   # 同乾跑世界節點
 SCAN_INC = (SCAN_MAX - SCAN_MIN) / (SCAN_N - 1)
@@ -1061,6 +1061,9 @@ if __name__ == '__main__':
     rc = 1
     try:
         rc = main()
+    except Exception:                                                 # 第二十四趟：牆鐘上限路徑整理結果時例外未印出 ⇒ result.json 遺失
+        import traceback
+        print('[fc] main 例外：' + traceback.format_exc()[-3000:], flush=True)
     finally:
         # sim_app.close() 會直接結束行程（離開碼 0），後面的 sys.exit(rc) 走不到——m8house_far_capture_1 因此在 partial／工程中止下仍回 0。
         # 離開碼改寫進檔案，由跑法讀取；檔案不存在＝異常結束。
