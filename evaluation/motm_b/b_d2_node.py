@@ -900,6 +900,7 @@ def main():
                     self.event('dr_handle_unreachable', err=dr['box'].get('err')); self.abort('drawer_handle_unreachable'); return
                 dr.update(stage='handle_nav', sel=sel, box=None)
                 self.pick_goal, self.pass_t = self._dr_goal(sel['base']), t
+                dr['goal_od'] = list(sel['base'])
                 self.event('dr_handle_goal', base=[round(float(x), 4) for x in sel['base']], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), env=round(sel['env'], 4), base_clear=round(sel['base_clear'], 4), ms=round(dr['box']['ms'] if dr['box'] else 0, 1))
             elif st == 'handle_nav':
                 dyaw_ = abs((float(self.b_od_now[2]) - float(dr['sel']['base'][2]) + math.pi) % (2 * math.pi) - math.pi)
@@ -918,6 +919,7 @@ def main():
                 g_new_ = self._dr_goal(sel['base'])
                 if g_new_ is not self.pick_goal:                       # 目標保留 ⇒ 不重送（s46：同一目標因 pass_t 更新被重送 ⇒ no_plan）
                     self.pick_goal, self.pass_t = g_new_, t
+                    dr['goal_od'] = list(sel['base'])
                 self.event('dr_observe_goal', base=[round(float(x), 4) for x in sel['base']], c=[round(float(x), 4) for x in sel['c']], ms=round(dr['box']['ms'], 1))
                 self._dr_send('observe', sel['base'], t, T_obs=sel['T_obs'], q_obs=sel['q_obs'])
                 dr['R_obs'] = np.asarray(sel['T_obs'], float)[:3, :3]
@@ -940,6 +942,7 @@ def main():
                 g_new_ = self._dr_goal(sel['base'])
                 if g_new_ is not self.pick_goal:                       # 目標保留 ⇒ 不重送（s46：同一目標因 pass_t 更新被重送 ⇒ no_plan）
                     self.pick_goal, self.pass_t = g_new_, t
+                    dr['goal_od'] = list(sel['base'])
                 self.event('dr_marker_goal', base=[round(float(x), 4) for x in sel['base']], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), env=round(sel['env'], 4), ms=round(dr['box']['ms'], 1))
                 self._dr_send('marker', sel['base'], t, T_grasp=sel['T_grasp'])
                 dr.update(stage='marker', box=None)
@@ -1092,6 +1095,13 @@ def main():
                     g_ = PASS_GOAL
                 if PICK and DRAWER:                                   # 開抽屜→取筆→返回（Howard 11/18）
                     self.drawer_tick(t)
+                    god_ = self.dr.get('goal_od')
+                    if god_ is not None and not self.pick_ret and self.pick_goal is not None and float(np.hypot(*(self.b_od_now[:2] - np.asarray(god_[:2], float)))) > PICK_APP_DIST:   # 近目標（接近段）不重送：避免起點≈終點 no_plan   # 第二十二趟：選位時 AMCL 偏航暫偏約 3° ⇒ 11 m 外換算差 0.6 m、目標落進櫃子膨脹區 ⇒ 每拍以當下 map↔odom 重新換算，差 >5 cm 才更新
+                        Tg_ = _T3(self.T_mo_now) @ _T3(np.asarray(god_, float))
+                        gm_ = [float(Tg_[0, 3]), float(Tg_[1, 3]), math.atan2(Tg_[1, 0], Tg_[0, 0])]
+                        if float(np.hypot(gm_[0] - self.pick_goal[0], gm_[1] - self.pick_goal[1])) > 0.05:
+                            self.event('dr_goal_reconverted', old=[round(float(x), 3) for x in self.pick_goal], new=[round(x, 3) for x in gm_])
+                            self.pick_goal = gm_
                     g_ = self.pick_goal if self.pick_goal is not None else DR_PRIOR
                 elif PICK:                                            # 取物（穿門後不停車）：粗目標＝茶几先驗 → 看到圓柱後線上選抓取底盤位 → 近距送取物封包 → 抬起後回起點
                     self.pick_tick(t)
