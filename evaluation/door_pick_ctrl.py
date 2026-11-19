@@ -43,7 +43,6 @@ DETACH_TO_S = 3.0
 if BIN:
     import rear_bin as RBIN
     import door_clear_door_fast as _CF_
-    RBIN.install(_CF_)                                                # 盒體進自碰撞淨空（候選、停止尾段、選位都經 CF.clear_door_fast）
 
 
 class TablePickCtrl(P.DoorPassCtrl):
@@ -73,6 +72,8 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.T_rel0, self.b_anchor, self.n_ev, self.T_lift0, self.T_rel_s0 = None, None, 0, None, None
         self.ret_sent, self.attach = False, False
         self.obj_release, self.obj_detached, self.binned, self.q_b0, self.T_bm, self.bin_target = False, False, False, None, None, None
+        if BIN:
+            RBIN.install(_CF_)                                        # 盒體進自碰撞淨空（取物控制器建立時才裝；開門／穿門段不變）
         self.phase, self.t_ph0 = 'APPROACH', float(t0)
         self._ev('pick_start', T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]], base_goal=[round(float(x), 4) for x in app['base_goal']], T=round(self.T_app, 3))
 
@@ -164,8 +165,11 @@ class TablePickCtrl(P.DoorPassCtrl):
             if self.n_ev * DT >= EVID_S - 1e-9:
                 self.T_rel_s0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
                 self._ev('pick_lifted', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas], force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
-                if BIN:
+                if BIN and not getattr(self, 'bin_carry_first', False):
                     self._bin_start(q, 'BIN_MOVE')
+                    return
+                if BIN:                                               # 抽屜筆：先兩段式收臂抬過面板頂再轉去放盒（s63：抬升位直接轉 ⇒ link_eef 掃抽屜面板 5 mm 被停）
+                    self._goto('CARRY')
                     return
                 self._goto('CARRY' if PICK_CARRY else 'RETURN')               # 預設不收臂：手臂相對底盤保持抬升位姿（第十五趟收臂一開始手腕重配置 ⇒ 接觸瞬斷滑落；瓶子線持瓶也是手臂不動、底盤移動）
             elif el > EVID_TO_S:

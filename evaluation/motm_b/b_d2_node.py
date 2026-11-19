@@ -37,6 +37,7 @@ PICK_APP_DIST, PICK_T_MIN = float(os.environ.get('B_PICK_APP_DIST', '0.6')), flo
 DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 11/18：開門→開抽屜→取筆→返回（需同時 D2_PICK＝1：沿用取物管線）
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
+PICK_APP_DYAW = float(os.environ['B_PICK_APP_DYAW']) if os.environ.get('B_PICK_APP_DYAW') else None   # 圓柱接近開始的偏航閘門（同抽屜 DR_APP_DYAW；s60：繞茶几角時距 0.6 m 即接近、車頭偏 1.36 rad ⇒ 收斂切桌角、底盤淨空 0.0993 被停）；未設＝原行為
 DR_APP_DYAW = float(os.environ.get('B_DR_APP_DYAW', '0.30'))         # 抓把手接近開始的底盤偏航差上限（rad）
 DR_PRIOR = [float(x) for x in os.environ.get('B_DR_PRIOR', '-3.5,10.3,3.1416').split(',')]   # 選位完成前的粗目標（map；抽屜櫃前）
 PASS_CLEAR = os.environ.get('B_PASS_CLEAR', '1') == '1'           # Howard 11/18：不要中途點，讓全域規劃自己找出路
@@ -843,7 +844,8 @@ def main():
             if self.pick_sel is not None and self.pick_app_t is None:
                 b_ = np.asarray(self.pick_sel['base'], float)          # 里程座標
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - b_[:2])))
-                if dist_ <= PICK_APP_DIST:
+                dyaw_c_ = abs((float(self.b_od_now[2]) - float(b_[2]) + math.pi) % (2 * math.pi) - math.pi)
+                if dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or dist_ <= 0.35):
                     Tb_od = _T3(b_)                                    # 底盤收斂目標（里程，與選位同座標）
                     e_od = np.asarray(self.pick_box['est_od'], float)   # 抓取目標一律留在里程座標（不經 map 來回：AMCL 修正會讓 TCP 偏離圓柱；s32 偏約 3 cm 夾空）
                     a_ = e_od[:2] - Tb_od[:2, 3]; a_ = a_ / max(float(np.linalg.norm(a_)), 1e-9)

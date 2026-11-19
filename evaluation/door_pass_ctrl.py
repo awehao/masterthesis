@@ -35,6 +35,7 @@ W_Q_STOW = float(os.environ.get('PASS_W_Q', '2.0'))
 DONE_HOLD_S = 1.0
 STOW_MOVE = os.environ.get('PASS_STOW_MOVE', '0') == '1'            # Howard 11/19「開完門為什麼停著把手臂伸成那樣，不是應該邊走邊伸」⇒ 收臂段底盤照導航前端（限速框），不錨定
 STOW_V, STOW_WZ = float(os.environ.get('PASS_STOW_V', '0.15')), float(os.environ.get('PASS_STOW_WZ', '0.5'))   # 收臂中底盤速度框（任務限制；收完進 DRIVE 即解除）
+DOOR_V = float(os.environ['PASS_DOOR_V']) if os.environ.get('PASS_DOOR_V') else None   # 門口區（底盤 y＜DONE_Y_MIN）行駛速度框（任務限制，非導航參數；s61：門扇尾端旁全速 0.27 m/s ⇒ 停止軌跡離門扇 0.0984＜0.10 被停）；未設＝原行為
 STOW_JOINT = os.environ.get('PASS_STOW_JOINT', '0') == '1'          # 收臂走關節空間直線（第二十五趟 TCP 混接 ⇒ j1 先甩到 −1.89 再回 0）
 STOW_QD = float(os.environ.get('PASS_STOW_QD', '0.6'))              # 關節空間收臂峰速上限（rad/s；最小急動峰速 1.875×）
 PICK_FOLLOW = os.environ.get('D2_PICK', '0') == '1'                 # 穿門後接取物：穿門段不自行判完成（由監督送取物封包換控制器）
@@ -186,8 +187,10 @@ class DoorPassCtrl:
         u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
-        if STOW_MOVE and self.phase == 'STOW':                       # 邊走邊收：收臂中底盤速度框
-            lim_ = np.array([STOW_V, STOW_V, STOW_WZ])
+        door_cap_ = DOOR_V is not None and self.phase in ('STOW', 'DRIVE') and float(qp[1]) < DONE_Y_MIN
+        if (STOW_MOVE and self.phase == 'STOW') or door_cap_:          # 邊走邊收：收臂中底盤速度框；門口區速度框
+            v_ = min(STOW_V if (STOW_MOVE and self.phase == 'STOW') else 9.0, DOOR_V if door_cap_ else 9.0)
+            lim_ = np.array([v_, v_, STOW_WZ])
             mpc.cfg.u_max = np.minimum(u_max_saved, lim_)
             mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         w0 = time.perf_counter()

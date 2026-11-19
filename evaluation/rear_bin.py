@@ -36,19 +36,32 @@ def box_world(b):
     return R @ C_LOC + np.array([float(b[0]), float(b[1]), 0.0]), R, HS
 
 
-def bin_dist(qf, T=None):
-    """T：可傳入已算好的連桿世界變換 dict（含手指平移）；否則用 K.fk（手指閉合位）。"""
+def bin_dist(qf, T=None, cap=np.inf):
+    """T：可傳入已算好的連桿世界變換 dict（含手指平移）；否則一次算完（door_clear_door_fast.fk_all）。
+    cap：只需知道是否小於 cap 時，包圍球下界 ≥ cap 的連桿不細算（回傳值 ≥ cap 時為下界，min(原值, 回傳) 不變）。"""
     import door_wbopt as WB
-    DOC, K = WB.DOC, WB.K
+    import door_clear_fast as FAST
+    import door_clear_door_fast as CF0
+    DOC = WB.DOC
+    qf = np.asarray(qf, float)
     c, R, hs = box_world(qf[:3])
-    m, who = np.inf, None
+    if T is None:
+        T = CF0.fk_all(qf, list(DOC.ARM_LINKS))
+    lb = []
     for n in DOC.ARM_LINKS:
-        Tn = T[n] if (T is not None and n in T) else K.fk(np.asarray(qf, float), n)
-        P = (Tn[:3, :3] @ DOC.CL[n].T).T + Tn[:3, 3]
+        cw = T[n][:3, :3] @ FAST._C[n] + T[n][:3, 3]
+        lb.append((float(DOC.box_dist(cw[None, :], c, R, hs)[0]) - FAST._R[n], n))
+    lb.sort()
+    m, who = (lb[0][0], lb[0][1]) if lb else (np.inf, None)
+    best = np.inf
+    for b, n in lb:
+        if b >= min(best, cap):
+            break
+        P = (T[n][:3, :3] @ DOC.CL[n].T).T + T[n][:3, 3]
         d = float(DOC.box_dist(P, c, R, hs).min())
-        if d < m:
-            m, who = d, n
-    return m, who
+        if d < best:
+            best, who = d, n
+    return (best if np.isfinite(best) else m), who
 
 
 def install(CF):
@@ -59,14 +72,14 @@ def install(CF):
 
     def single(x, T_WH0):
         r = _ORIG['single'](x, T_WH0)
-        d, who = bin_dist(np.asarray(x[:9], float))
+        d, who = bin_dist(np.asarray(x[:9], float), cap=float(r['self']))
         r['who'] = dict(r.get('who') or {}, bin=who)
         r['self'] = min(float(r['self']), d)
         return r
 
     def multi(x, T_WH0, fqs):
         r = _ORIG['multi'](x, T_WH0, fqs)
-        d, who = bin_dist(np.asarray(x[:9], float))
+        d, who = bin_dist(np.asarray(x[:9], float), cap=float(r['self']))
         r['who'] = dict(r.get('who') or {}, bin=who)
         r['self'] = min(float(r['self']), d)
         return r

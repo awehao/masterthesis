@@ -52,6 +52,16 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
         ctypes.CDLL('libc.so.6', use_errno=True).prctl(1, signal.SIGTERM)
     except Exception:                                                 # noqa: BLE001
         pass
+    try:                                                              # 取物／抽屜／收納盒控制器先匯入、放置構型先算（s64：第一次在控制拍內匯入＋算 IK ⇒ 往返 267 ms 超期限）
+        if os.environ.get('D2_PICK', '0') == '1' and os.environ.get('D2_BIN', '0') == '1':   # 未用收納盒 ⇒ 不預先匯入（與第二十五趟／替身 s59 相同路徑）
+            import door_pick_ctrl as _PK0
+            if os.environ.get('D2_DRAWER', '0') == '1':
+                import door_drawer_ctrl as _DR0                      # noqa: F401
+            if getattr(_PK0, 'BIN', False):
+                _qp0 = _PK0.RBIN.q_place()
+                print('[worker] bin_q_place ' + ('None' if _qp0 is None else str([round(float(x), 4) for x in _qp0[0]])), flush=True)
+    except Exception as _e:                                            # noqa: BLE001
+        print('[worker] preimport_failed ' + repr(_e)[:200], flush=True)
     import gc as _gc
     if os.environ.get('AHEAD_GC_FREEZE') == '1':                      # 執行期最佳化（不改任何判定）：起跑前把既有物件移到永久代，減少第二代回收停頓
         _gc.collect()

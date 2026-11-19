@@ -80,6 +80,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.q_obs0 = None
         elif kind == 'marker' and self.task == 'observe' and self.phase == 'OBSERVE':
             self.task = 'marker'
+            self.bin_carry_first = True                               # 收納盒：筆先兩段式收臂再放盒
             self.T_grasp = np.asarray(app['T_grasp'], float).copy()   # 已含越過筆軸 4 mm（drawer_reach.grasp_T；s44 這裡再加一次 ⇒ TCP 在筆軸下 9.5 mm，替身判未夾到）
         else:
             self._ev('pick_dr_app_ignored', kind=kind, task=self.task, phase=self.phase)
@@ -265,7 +266,10 @@ class DrawerCtrl(PK.TablePickCtrl):
                 self._stop('lost_during_carry')
             elif el >= T_CARRY_DR and ep <= 0.010:
                 self._ev('pick_dr_carried', carry_err_mm=round(ep * 1e3, 2))   # 監督據此送返回目標（伺服器轉發只帶事件名）
-                self._goto('RETURN', carry_err_mm=round(ep * 1e3, 2))
+                if PK.BIN:
+                    self._bin_start(q, 'BIN_MOVE')                    # 收納盒：已抬過面板頂 ⇒ 轉去放盒
+                else:
+                    self._goto('RETURN', carry_err_mm=round(ep * 1e3, 2))
             elif el > T_CARRY_DR + PK.PH_TO_S:
                 self._stop('carry_not_reached', carry_err_mm=round(ep * 1e3, 2))
             return

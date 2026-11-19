@@ -272,7 +272,7 @@ class Stub(Node):
         if self.dr_att is not None:
             self.dr_q = min(max(float(np.dot(Tt[:3, 3], DRS.PULL)) - self.dr_att, 0.0), 0.22)
         near = float(np.linalg.norm(Tt[:3, 3] - DRS.handle_T(self.dr_q)[:3, 3])) <= 0.006
-        self.dr_contact = near and self.fcmd_last < F_CONTACT_H
+        self.dr_contact = (near or self.dr_att is not None) and self.fcmd_last < F_CONTACT_H   # 已理想連接（同 Isaac FixedJoint）⇒ 接觸維持（s62：拉動起始 TCP 下沉 2.3 mm 超出 6 mm 球而判脫手，Isaac 不會）
         if self.in_bin:
             self.ffor = (2.0, 2.0) if self.dr_contact else (0.0, 0.0)
         elif self.cyl_att is None:
