@@ -156,19 +156,24 @@ class TablePickCtrl(P.DoorPassCtrl):
         el = self.t - self.t_ph0
         if self.T_rel0 is None:
             self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
-        if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH':   # 進線前偏航差大 ⇒ 先原地對齊（s76：靜止備用放行時差 2.9 rad，邊轉邊走擦桌角）
-            dyaw_ = abs((float(q[2]) - float(self.motm['b0'][2]) + math.pi) % (2 * math.pi) - math.pi)
-            if dyaw_ > 0.30:
-                self.b_anchor = np.array([float(q[0]), float(q[1]), float(self.motm['b0'][2])])
-                self._goto('ALIGN', dyaw=round(dyaw_, 3))
+        if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH':   # 進線前：底盤先到路線起點（位置＋偏航）再開始等速橫移
+            b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)   # （s76：偏航差 2.9 rad 邊轉邊走擦桌角；第三十一趟 Isaac：只轉不移、離線 0.31 m ⇒ 進線偏航漂、淨空 0.100）
+            s_st = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10, -float(self.motm['v_g']) * float(self.motm.get('t_arm', 4.0)))
+            b_st = np.array([b0[0] + s_st * e[0], b0[1] + s_st * e[1], float(b0[2])])
+            dyaw_ = abs((float(q[2]) - float(b0[2]) + math.pi) % (2 * math.pi) - math.pi)
+            dpos_ = float(np.hypot(*(np.asarray(q[:2], float) - b_st[:2])))
+            if dyaw_ > 0.10 or dpos_ > 0.04:
+                self.b_anchor = b_st
+                self._goto('ALIGN', dyaw=round(dyaw_, 3), dpos=round(dpos_, 3), s_start=round(s_st, 3))
                 return
         if self.phase == 'ALIGN':
-            dyaw_ = abs((float(q[2]) - float(self.motm['b0'][2]) + math.pi) % (2 * math.pi) - math.pi)
-            if dyaw_ <= 0.10:
+            dyaw_ = abs((float(q[2]) - float(self.b_anchor[2]) + math.pi) % (2 * math.pi) - math.pi)
+            dpos_ = float(np.hypot(*(np.asarray(q[:2], float) - self.b_anchor[:2])))
+            if dyaw_ <= 0.10 and dpos_ <= 0.04:
                 self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
                 self._goto('APPROACH', aligned_s=round(self.t - self.t_ph0, 2))
-            elif self.t - self.t_ph0 > 8.0:
-                self._stop('motm_align_timeout', dyaw=round(dyaw_, 3))
+            elif self.t - self.t_ph0 > 15.0:
+                self._stop('motm_align_timeout', dyaw=round(dyaw_, 3), dpos=round(dpos_, 3))
             return
         if self.motm is not None and self.m_s0 is None:               # 移動中夾取時程：自目前底盤在路線上的投影起算，名目到點＝底盤經過 s＝0
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)
@@ -343,7 +348,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             lim_ = np.array([self.app_v if hasattr(self, 'app_v') else APP_V] * 2 + [0.6])
             mpc.cfg.u_max = np.minimum(np.asarray(mpc.cfg.u_max, float), lim_)
             mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
-        nv_ = P.near_v(qp[:3]) if self.phase in ('APPROACH', 'RETURN', 'CARRY') else None
+        nv_ = P.near_v(qp[:3]) if self.phase in ('APPROACH', 'RETURN', 'CARRY', 'ALIGN') else None
         if nv_ is not None:                                           # 近家具減速（同穿門段）
             lim_ = np.array([nv_, nv_, 9.0])
             mpc.cfg.u_max = np.minimum(np.asarray(mpc.cfg.u_max, float), lim_)
