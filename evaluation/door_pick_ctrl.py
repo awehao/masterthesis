@@ -35,6 +35,7 @@ PICK_CARRY = os.environ.get('PICK_CARRY', '1') == '1'                 # Howard 1
 CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.2775')), float(os.environ.get('PICK_CARRY_WZ', '1.1327'))   # 持物底盤速度框（m/s、rad/s）；夾到後理想連接 ⇒ 預設＝硬體上限（不收緊）
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
 PH_TO_S = 4.0
+APP_TOL_Z = float(os.environ['PICK_APP_TOL_Z']) if os.environ.get('PICK_APP_TOL_Z') else None   # 圓柱（直立、側夾）接近完成：水平 ≤5 mm、沿圓柱軸（世界 z）≤ 此值；未設＝原 5 mm 球（第二十七趟 Isaac：東側伸遠，TCP 穩定低 9 mm、水平 <1 mm ⇒ approach_not_reached）
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # Howard 11/19「車子後面放一個盒子 放夾取物」：抬起確認後放進車尾收納盒（rear_bin.py）→ 收臂（相機朝前）→ 返回／下一件
 BIN_QD = float(os.environ.get('D2_BIN_QD', '0.8'))                    # 放盒關節空間移動峰速上限（rad/s；最小急動峰速 1.875×）
 BIN_MOVE = os.environ.get('D2_BIN_MOVE', '1') == '1'                  # 放盒／收臂中底盤照導航前端（限速框 BIN_V/BIN_WZ）；0＝底盤錨定
@@ -137,7 +138,13 @@ class TablePickCtrl(P.DoorPassCtrl):
             Tc = K.fk(q, 'link_tcp')
             ep = float(np.linalg.norm(Tc[:3, 3] - self.T_grasp[:3, 3]))
             er = math.degrees(float(np.linalg.norm(_log_R(self.T_grasp[:3, :3].T @ Tc[:3, :3]))))
-            if el >= self.T_app and ep <= 0.005 and er <= 3.0:
+            tz_ = getattr(self, 'app_tol_z', APP_TOL_Z)
+            if tz_ is not None:                                       # 分方向：沿圓柱軸的高度差不影響側夾
+                d_ = Tc[:3, 3] - self.T_grasp[:3, 3]
+                ep_ok = float(np.linalg.norm(d_[:2])) <= 0.005 and abs(float(d_[2])) <= tz_
+            else:
+                ep_ok = ep <= 0.005
+            if el >= self.T_app and ep_ok and er <= 3.0:
                 self.b_anchor = np.asarray(q[:3], float).copy()
                 self.finger_cmd = P.FINGER_OPEN
                 self._goto('CLOSE', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2))
