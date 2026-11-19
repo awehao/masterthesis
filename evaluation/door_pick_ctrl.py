@@ -50,6 +50,18 @@ if BIN:
     import door_clear_door_fast as _CF_
 
 
+
+def _obs_near(obs, q):
+    """（只記錄）最近的非靜態障礙物：表面距（扣半徑）、速度 vx, vy（世界）；s91d 診斷用。"""
+    best = None
+    for o in obs or []:
+        if o.get('static'):
+            continue
+        d = math.hypot(float(o['x']) - float(q[0]), float(o['y']) - float(q[1])) - float(o.get('radius', 0.0))
+        if best is None or d < best[0]:
+            best = (round(d, 3), round(float(o.get('vx', 0.0)), 3), round(float(o.get('vy', 0.0)), 3))
+    return best
+
 class TablePickCtrl(P.DoorPassCtrl):
     def __init__(self, src, t0, app):
         """src＝穿門控制器（DRIVE 中）；app＝監督送的取物封包：T_grasp（odom 4×4）、base_goal（odom x,y,yaw）、T（接近時長）、T_b、t_l0。"""
@@ -369,7 +381,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
             mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
-        self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active)))
+        self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active), _obs_near(obs, qp)))
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
         if arm['mode'] == 'hold':
@@ -412,7 +424,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
             mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
-        self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active)))
+        self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active), _obs_near(obs, qp)))
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
         ck = dict(r.arm_check or {})

@@ -80,6 +80,18 @@ def _exp_R(w):
     return np.eye(3) + math.sin(th) * Kx + (1 - math.cos(th)) * Kx @ Kx
 
 
+
+def _obs_near(obs, q):
+    """（只記錄）最近的非靜態障礙物：表面距（扣半徑）、速度 vx, vy（世界）；s91d 診斷用。"""
+    best = None
+    for o in obs or []:
+        if o.get('static'):
+            continue
+        d = math.hypot(float(o['x']) - float(q[0]), float(o['y']) - float(q[1])) - float(o.get('radius', 0.0))
+        if best is None or d < best[0]:
+            best = (round(d, 3), round(float(o.get('vx', 0.0)), 3), round(float(o.get('vy', 0.0)), 3))
+    return best
+
 class DoorPassCtrl:
     def __init__(self, src, t0, q_end, phi_end):
         self.mpc, self.cfg = src.mpc, src.cfg
@@ -215,7 +227,7 @@ class DoorPassCtrl:
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
             mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
-        self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active)))
+        self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active), _obs_near(obs, qp)))
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
         if arm['mode'] == 'hold':
