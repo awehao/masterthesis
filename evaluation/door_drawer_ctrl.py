@@ -201,10 +201,14 @@ class DrawerCtrl(PK.TablePickCtrl):
                 if self.n_ev * DT >= PK.EVID_S - 1e-9:
                     self.T_p0 = K.fk(q, 'link_tcp')
                     self.b_p0 = np.asarray(q[:3], float).copy()
+                    if self.motm is not None and self.m_s0 is not None:   # 移動中抓把手：拉開起點取路線參考位置（底盤不停，橫移速度指數衰減）
+                        b0_, e_ = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)
+                        s_c = self._motm_s(self.t)
+                        self.b_p0 = np.array([b0_[0] + s_c * e_[0], b0_[1] + s_c * e_[1], float(b0_[2])])
                     self.dr_attach = True                             # 夾住證據成立 ⇒ 執行端 FixedJoint 夾爪↔抽屜（理想抓持，同門把）
                     self._goto('PULL', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas],
                                force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
-                elif el > PK.EVID_TO_S:
+                elif el > (PK.MOTM_EVID_TO_S if self.motm is not None else PK.EVID_TO_S):   # 移動中：證據窗有限
                     self._stop('handle_grasp_evidence_timeout', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas],
                                force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
                 return
@@ -314,7 +318,7 @@ class DrawerCtrl(PK.TablePickCtrl):
                 return super()._solve(q)
             finally:
                 C0.W_FAR = w_far
-        if self.task == 'marker' or (self.task == 'handle' and self.phase in ('APPROACH', 'CLOSE')):
+        if self.task == 'marker' or (self.task == 'handle' and self.phase in ('APPROACH', 'CLOSE', 'ALIGN')):
             return super()._solve(q)
         qp, sp = self._pred(q)
         t_eff = self.t + D_STEPS * PHYS
@@ -347,7 +351,12 @@ class DrawerCtrl(PK.TablePickCtrl):
         else:
             if self.phase == 'PULL':                                 # 全身拉開：底盤參考與 TCP 參考同沿拉出方向
                 ss = [self._pull_s(t_eff + k * DT) for k in range(XO.N + 1)]
-                X = [XO.from_xytheta(self.b_p0[0] + s_ * self.pull[0], self.b_p0[1] + s_ * self.pull[1], self.b_p0[2]) for s_ in ss]
+                if self.motm is not None and self.m_s0 is not None:   # 移動中：橫移以 TAU 指數衰減（再滑 v·TAU），同時拉開 ⇒ 底盤速度不歸零
+                    e_, v_, tau_ = np.asarray(self.motm['e'], float), float(self.motm['v_g']), float(self.motm.get('tau', 1.0))
+                    lat = [v_ * tau_ * (1.0 - math.exp(-max(0.0, t_eff + k * DT - self.t_ph0) / tau_)) for k in range(XO.N + 1)]
+                    X = [XO.from_xytheta(self.b_p0[0] + s_ * self.pull[0] + l_ * e_[0], self.b_p0[1] + s_ * self.pull[1] + l_ * e_[1], self.b_p0[2]) for s_, l_ in zip(ss, lat)]
+                else:
+                    X = [XO.from_xytheta(self.b_p0[0] + s_ * self.pull[0], self.b_p0[1] + s_ * self.pull[1], self.b_p0[2]) for s_ in ss]
                 xi = [np.zeros(3)] * (XO.N + 1)
                 Ts = [self._pull_target(t_eff + k * DT) for k in range(XO.N + 1)]
             else:
@@ -360,6 +369,9 @@ class DrawerCtrl(PK.TablePickCtrl):
                     Ts = [self.T_grasp] * (XO.N + 1)
                 else:                                                 # CONFIRM（handle）、WAIT：保持
                     Ts = [self.T_hold if self.T_hold is not None else self.T_grasp] * (XO.N + 1)
+                    if self.phase == 'CONFIRM' and self.motm is not None and self.m_s0 is not None:   # 移動中確認夾住：底盤沿路線不停，TCP 世界固定在把手
+                        X, xi = self._motm_ref(t_eff)
+                        Ts = [self.T_grasp] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor' if self.phase != 'PULL' else 'pull'
             w_p = C0.W_NEAR if self.phase in ('CONFIRM', 'PULL', 'OBSERVE') else C0.W_FAR
         arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=w_p,

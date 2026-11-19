@@ -38,6 +38,7 @@ DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 1
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
 PICK_APP_DYAW = float(os.environ['B_PICK_APP_DYAW']) if os.environ.get('B_PICK_APP_DYAW') else None   # 圓柱接近開始的偏航閘門（同抽屜 DR_APP_DYAW；s60：繞茶几角時距 0.6 m 即接近、車頭偏 1.36 rad ⇒ 收斂切桌角、底盤淨空 0.0993 被停）；未設＝原行為
+DR_MOTM_V = float(os.environ['DR_MOTM_V']) if os.environ.get('DR_MOTM_V') else None   # Howard 11/19「門把、抽屜把手都要改」：抽屜把手移動中抓取的經過速度；未設＝停車抓
 DOOR_CLOSE = os.environ.get('D2_DOOR_CLOSE', '0') == '1'             # Howard 11/19 回程關門：抽屜完成後先回臥室側關門，再回起點
 DRAWER_CLOSE = os.environ.get('D2_DRAWER_CLOSE', '0') == '1'         # Howard 11/19「抽屜也要關阿」：筆放盒收臂後夾回把手推回，再返回
 HANDLE_VISION = os.environ.get('D2_HANDLE_VISION', '0') == '1'      # Howard 11/19「不要把東西寫死 要實際用到視覺」：抽屜位姿由手腕深度把手偵測融合（登錄位姿只當搜尋先驗）
@@ -667,6 +668,8 @@ def main():
                 if DRAWER:
                     import drawer_reach as _DRR_
                     self._DRR = _DRR_
+                    import drawer_motm as _DRM_
+                    self._DRM = _DRM_
                 for k_ in [k_ for k_ in sys.modules if k_.split('.')[0] in _pre and k_ not in _snap]:
                     sys.modules.pop(k_, None)
                 sys.modules.update(_snap)
@@ -1043,18 +1046,32 @@ def main():
                            reg=[float(reg_[0]), float(reg_[1]), float(reg_[2])], n_obs=len(self.hdl_obs))
                 return
             if st == 'handle_sel' and dr['box'] is None:
-                dr['box'] = self._dr_thread(R_.select_handle, self.b_od_now.copy())
+                dr['box'] = self._dr_thread(R_.select_handle, self.b_od_now.copy()) if DR_MOTM_V is None else self._dr_thread(self._DRM.select_handle_motm, self.b_od_now.copy(), DR_MOTM_V)
                 self.event('dr_handle_select_start')
             elif st == 'handle_sel' and dr['box']['done']:
                 sel = dr['box']['sel']
                 if sel is None:
                     self.event('dr_handle_unreachable', err=dr['box'].get('err')); self.abort('drawer_handle_unreachable'); return
                 dr.update(stage='handle_nav', sel=sel, box=None)
-                self.pick_goal, self.pass_t = self._dr_goal(sel['base']), t
-                dr['goal_od'] = list(sel['base'])
-                self.event('dr_handle_goal', base=[round(float(x), 4) for x in sel['base']], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), env=round(sel['env'], 4), base_clear=round(sel['base_clear'], 4), ms=round(dr['box']['ms'] if dr['box'] else 0, 1))
+                g_od_ = sel['base_start'] if DR_MOTM_V is not None else sel['base']   # 移動中：導航到經過路線起點
+                self.pick_goal, self.pass_t = self._dr_goal(g_od_), t
+                dr['goal_od'] = list(g_od_)
+                self.event('dr_handle_goal', base=[round(float(x), 4) for x in sel['base']], start=[round(float(x), 4) for x in g_od_], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4),
+                           env=round(sel.get('env', sel.get('env_min', 0.0)), 4), motm=DR_MOTM_V is not None, ms=round(dr['box']['ms'] if dr['box'] else 0, 1))
             elif st == 'handle_nav' and CHAIN and getattr(self, 'n_stowed', 0) < 1:
                 pass                                                   # 串接：圓柱放盒後收臂未完成 ⇒ 先不送抽屜封包（執行端只在收臂完成後接受）
+            elif st == 'handle_nav' and DR_MOTM_V is not None:         # 移動中抓把手：近路線起點、偏航齊（或已停 1.5 s）⇒ 送封包（控制器沿路線帶過把手）
+                bs_ = np.asarray(dr['sel']['base_start'], float)
+                dist_ = float(np.hypot(*(self.b_od_now[:2] - bs_[:2])))
+                dyaw_ = abs((float(self.b_od_now[2]) - float(bs_[2]) + math.pi) % (2 * math.pi) - math.pi)
+                mv_ = getattr(self, '_dr_still', None)
+                if mv_ is None or float(np.hypot(*(self.b_od_now[:2] - mv_[0][:2]))) > 0.005 or abs(float(self.b_od_now[2] - mv_[0][2])) > 0.01:
+                    self._dr_still = (self.b_od_now.copy(), t); mv_ = self._dr_still
+                if dist_ <= PICK_APP_DIST and (dyaw_ <= DR_APP_DYAW or (t - mv_[1] >= 1.5 and dist_ <= 0.5)):
+                    sel = dr['sel']
+                    self._dr_send('drawer', bs_, t, T_grasp=sel['T_grasp'], q_grasp=sel.get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'),
+                                  motm=dict(b0=[float(x) for x in sel['base']], e=[float(x) for x in sel['e']], v_g=float(DR_MOTM_V), s0=float(self._DRM.S0), t_arm=float(sel['t_arm']), tau=float(sel['tau']), q_grasp=sel.get('q_grasp')))
+                    dr['stage'] = 'wait_release'
             elif st == 'handle_nav':
                 dyaw_ = abs((float(self.b_od_now[2]) - float(dr['sel']['base'][2]) + math.pi) % (2 * math.pi) - math.pi)
                 if float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float)))) <= PICK_APP_DIST and (dyaw_ <= DR_APP_DYAW or float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float)))) <= 0.35):   # s51：偏航差 0.36 rad 時開始接近 ⇒ 手腕 j5 −1.76、自身淨空 4.6 mm
