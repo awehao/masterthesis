@@ -50,6 +50,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         self.T_grasp = np.asarray(app['T_grasp'], float).copy()      # 把手：不再加圓柱的 GRASP_DEPTH（越過桿心量已在資產 tcp_offset_along_tool_z）
         self.task = 'handle'
         self.app_tol_z = None                                         # 把手、筆：深度方向影響夾取 ⇒ 維持 5 mm 球
+        self.app_v = None                                             # 接近速度框只用在圓柱
         self.pull = np.r_[np.asarray(app['pull'], float)[:2], 0.0]
         self.pull = self.pull / max(float(np.linalg.norm(self.pull)), 1e-9)
         self.open_m = float(app.get('open_m', 0.20))

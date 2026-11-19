@@ -36,6 +36,7 @@ CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.2775')), float(os.en
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
 PH_TO_S = 4.0
 APP_TOL_Z = float(os.environ['PICK_APP_TOL_Z']) if os.environ.get('PICK_APP_TOL_Z') else None   # 圓柱（直立、側夾）接近完成：水平 ≤5 mm、沿圓柱軸（世界 z）≤ 此值；未設＝原 5 mm 球（第二十七趟 Isaac：東側伸遠，TCP 穩定低 9 mm、水平 <1 mm ⇒ approach_not_reached）
+APP_V = float(os.environ['PICK_APP_V']) if os.environ.get('PICK_APP_V') else None   # 接近段底盤速度框（任務限制；s60／s68／s69：沿茶几邊 0.19 m/s 接近，停止軌跡底盤淨空 0.098–0.099 被停）；未設＝原行為
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # Howard 11/19「車子後面放一個盒子 放夾取物」：抬起確認後放進車尾收納盒（rear_bin.py）→ 收臂（相機朝前）→ 返回／下一件
 BIN_QD = float(os.environ.get('D2_BIN_QD', '0.8'))                    # 放盒關節空間移動峰速上限（rad/s；最小急動峰速 1.875×）
 BIN_MOVE = os.environ.get('D2_BIN_MOVE', '1') == '1'                  # 放盒／收臂中底盤照導航前端（限速框 BIN_V/BIN_WZ）；0＝底盤錨定
@@ -277,6 +278,10 @@ class TablePickCtrl(P.DoorPassCtrl):
         u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
+        if self.phase == 'APPROACH' and getattr(self, 'app_v', APP_V) is not None:   # 接近段速度框（只圓柱；抽屜控制器設 None）
+            lim_ = np.array([self.app_v if hasattr(self, 'app_v') else APP_V] * 2 + [0.6])
+            mpc.cfg.u_max = np.minimum(np.asarray(mpc.cfg.u_max, float), lim_)
+            mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         if self.phase in ('RETURN', 'CARRY'):                          # 持物速度框（任務限制，非導航參數）：第十六趟伸臂持物時底盤原地轉 0.43 rad/s ⇒ 圓柱沿運動方向滑出
             lim_ = np.array([CARRY_V, CARRY_V, CARRY_WZ])
             mpc.cfg.u_max = np.minimum(u_max_saved, lim_)

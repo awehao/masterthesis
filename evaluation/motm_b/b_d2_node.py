@@ -847,7 +847,7 @@ def main():
                 b_ = np.asarray(self.pick_sel['base'], float)          # 里程座標
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - b_[:2])))
                 dyaw_c_ = abs((float(self.b_od_now[2]) - float(b_[2]) + math.pi) % (2 * math.pi) - math.pi)
-                if dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or dist_ <= 0.35):
+                if dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or dist_ <= 0.35):   # s70：只留 ≤0.10 會在導航以容差到點、偏航未齊時卡住 ⇒ 恢復 s62–s67 版（0.35）；s68 邊緣案例改以選位餘裕 CYL_BASE_MARGIN 處理。舊註：s68：距離 ≤0.35 的備用條件在偏航差 1.22 rad 時放行 ⇒ 轉向中收斂斜向桌角、淨空 0.0992 停 ⇒ 只用偏航條件（導航到點時車頭自然對齊目標）
                     Tb_od = _T3(b_)                                    # 底盤收斂目標（里程，與選位同座標）
                     e_od = np.asarray(self.pick_box['est_od'], float)   # 抓取目標一律留在里程座標（不經 map 來回：AMCL 修正會讓 TCP 偏離圓柱；s32 偏約 3 cm 夾空）
                     a_ = e_od[:2] - Tb_od[:2, 3]; a_ = a_ / max(float(np.linalg.norm(a_)), 1e-9)
