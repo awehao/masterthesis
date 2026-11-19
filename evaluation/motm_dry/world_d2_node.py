@@ -209,6 +209,8 @@ class WorldD2(Node):
                 self.pick_app_sent = dict(d_['app'])
                 runner.extra = dict(getattr(runner, 'extra', None) or {}, pick_app=dict(d_['app']))
                 T_k_ = 'T_grasp' if 'T_grasp' in d_['app'] else 'T_obs'   # 抽屜觀察封包只有觀察位姿
+                if d_['app'].get('drawer_pose') is not None:            # 視覺抽屜位姿 ⇒ 執行端（Isaac 筆偵測的內部範圍）同步
+                    self.ctl('drawer_pose', pose=[float(x) for x in d_['app']['drawer_pose']])
                 self.ev('pick_app', app={k_: v_ for k_, v_ in d_['app'].items() if k_ not in ('T_grasp', 'T_obs')}, grasp_xyz=[round(float(x), 4) for x in np.asarray(d_['app'][T_k_], float)[:3, 3]], target=T_k_)
             return
         if d_.get('what') == 'app':                                   # 單一控制器：接近開始（觀測觸發；監督端送）

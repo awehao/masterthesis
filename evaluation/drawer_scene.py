@@ -87,13 +87,34 @@ def install(wb):
 
     def _static():
         sh, leaf = _ORIG['static']()
-        key = round(Q_OPEN[0], 3)
+        key = (round(Q_OPEN[0], 3), POSE_VER[0])
         if key not in cache:
             cache.clear()
-            cache[key] = (list(sh) + shapes(key), leaf)
+            cache[key] = (list(sh) + shapes(key[0]), leaf)
         return cache[key]
     wb._static = _static
 
 
 def set_open(q):
     Q_OPEN[0] = max(0.0, float(q))
+
+
+POSE_VER = [0]
+
+
+def set_pose(x, y, yaw_rad):
+    """視覺估計的抽屜位姿（Howard 11/19「不要寫死 要實際用到視覺」：handle_detect 融合結果）取代場景登錄位姿；之後所有形狀、把手、內部範圍都依此。"""
+    global POSE, YAW, RZ, PULL
+    YAW = float(yaw_rad)
+    POSE = (float(x), float(y), math.degrees(YAW))
+    RZ = np.array([[math.cos(YAW), -math.sin(YAW), 0.0], [math.sin(YAW), math.cos(YAW), 0.0], [0.0, 0.0, 1.0]])
+    PULL = RZ @ np.array([0.0, -1.0, 0.0])
+    POSE_VER[0] += 1
+
+
+def offset_pose(dx_loc, dy_loc, dyaw_deg):
+    """登錄位姿＋本地偏移（真值擺放用：替身／Isaac 把真實抽屜放離登錄位置，證明靠視覺）。"""
+    yaw0 = math.radians(float(REG['drawer']['pose'][2]))
+    R0 = np.array([[math.cos(yaw0), -math.sin(yaw0)], [math.sin(yaw0), math.cos(yaw0)]])
+    t = R0 @ np.array([float(dx_loc), float(dy_loc)])
+    return float(REG['drawer']['pose'][0]) + t[0], float(REG['drawer']['pose'][1]) + t[1], yaw0 + math.radians(float(dyaw_deg))

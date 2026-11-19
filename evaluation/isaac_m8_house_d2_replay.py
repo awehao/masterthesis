@@ -95,6 +95,8 @@ def main():
         keep = os.environ['REPLAY_VIEWS'].split(',')
         if 'follow' in keep:
             views['follow'] = dict(eye=[0.0, -6.0, 2.0], tgt=[0.0, -4.0, 0.5], hfov=math.radians(70.0), res=(1280, 720))   # 跟車：每格依底盤位姿重設
+        if 'top' in keep:                                              # 俯視（Howard 11/19「成功趟都要給我影片 俯視跟跟車」）：跟著底盤的近正上方 5 m，車頭朝畫面上方
+            views['top'] = dict(eye=[0.0, -4.6, 5.0], tgt=[0.0, -4.4, 0.0], hfov=math.radians(62.0), res=(1280, 720))
         if 'drawer' in keep and reg.get('drawer'):
             dp_ = reg['drawer']['pose']
             views['drawer'] = dict(eye=[dp_[0] + 1.6, dp_[1] - 1.3, 1.5], tgt=[dp_[0] + 0.35, dp_[1], 0.5], hfov=math.radians(62.0), res=(1280, 720))
@@ -213,6 +215,10 @@ def main():
         for j_, v_ in enumerate(wk_v):
             p_ = np.array([np.interp(row[0], WKL[:, 0], WKL[:, 1 + 2 * j_]), np.interp(row[0], WKL[:, 0], WKL[:, 2 + 2 * j_])])
             v_.set_world_pose(position=np.array([p_[0], p_[1], 0.85]))
+        if 'top' in cams:                                            # 俯視：底盤後 0.25 m、高 5 m，看底盤前 0.2 m 的地面（近正上方，避開正上方視線退化）
+            yw = float(row[4]); hx, hy = math.cos(yw), math.sin(yw)
+            eye = np.array([row[2] - 0.25 * hx, row[3] - 0.25 * hy, 5.0]); tgt = np.array([row[2] + 0.2 * hx, row[3] + 0.2 * hy, 0.0])
+            cams['top'].set_world_pose(position=eye, orientation=W0.R_to_wxyz(look_R(eye, tgt)), camera_axes='ros')
         if 'follow' in cams:                                         # 跟車：底盤斜後上方 2.4 m、看底盤前 0.8 m
             yw = float(row[4]); hx, hy = math.cos(yw), math.sin(yw)
             eye = np.array([row[2] - 2.2 * hx + 0.9 * hy, row[3] - 2.2 * hy - 0.9 * hx, 1.9]); tgt = np.array([row[2] + 0.8 * hx, row[3] + 0.8 * hy, 0.55])

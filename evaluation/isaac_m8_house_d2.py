@@ -86,6 +86,17 @@ def _det_worker(conn, fdir):
                 cyl_ = dict(p=None if p_c is None else np_.asarray(p_c, float), info=i_c)
             except Exception as e_:                              # noqa: BLE001
                 cyl_ = dict(p=None, info=dict(why='exception', err=repr(e_)[:200]))
+        hdl_ = None
+        if m_.get('hprior') is not None:                               # 抽屜把手深度偵測（handle_detect；登錄位姿只當搜尋先驗）
+            try:
+                import handle_detect as HD_
+                import yaml as yaml_h_
+                if not hasattr(HD_, '_SPEC'):
+                    HD_._SPEC = yaml_h_.safe_load(open(m_['hspec']))
+                r_h, i_h = HD_.detect(m_['dep'], m_['K'], m_['T_cam'], m_['hprior'], HD_._SPEC)
+                hdl_ = dict(origin=None if r_h is None else np_.asarray(r_h['origin'], float), yaw=None if r_h is None else float(r_h['yaw']), info=i_h)
+            except Exception as e_:                              # noqa: BLE001
+                hdl_ = dict(origin=None, yaw=None, info=dict(why='exception', err=repr(e_)[:200]))
         ms_ = (time.perf_counter() - w0_) * 1e3
         try:
             np_.savez_compressed(os.path.join(fdir, m_['stem'] + '_depth_m.npz'), dep=m_['dep'])
@@ -94,7 +105,7 @@ def _det_worker(conn, fdir):
             save_ = True
         except Exception:                                        # noqa: BLE001
             save_ = False
-        conn.send(('det', dict(seq=m_['seq'], T_est=None if T_est_ is None else np_.asarray(T_est_, float), info=info_, ms=ms_, err=err_, saved=save_, cyl=cyl_)))
+        conn.send(('det', dict(seq=m_['seq'], T_est=None if T_est_ is None else np_.asarray(T_est_, float), info=info_, ms=ms_, err=err_, saved=save_, cyl=cyl_, hdl=hdl_)))
 
 
 os.makedirs(os.path.join(a.out, 'frames'), exist_ok=True)
@@ -153,6 +164,7 @@ GRIP_F_ABORT_N, DOOR_PREBIND_DEG = 40.0, 0.5                        # 交權後�
 JOINT = '/World/door/ideal_grasp_attach'
 PICK = os.environ.get('D2_PICK', '0') == '1'                         # 茶几圓柱體取物（穿門後）
 WALKERS = os.environ.get('D2_WALKERS', '0') == '1'                   # 行人（動態障礙物）
+HANDLE_VISION = os.environ.get('D2_HANDLE_VISION', '0') == '1'      # 抽屜把手視覺偵測（Howard 11/19）
 DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                     # 開抽屜→取筆（Howard 11/18）：建淺抽屜櫃＋筆代理；圓柱不建
 OBJ = '/World/marker_proxy' if DRAWER else '/World/cyl'              # 理想連接的物件剛體
 CHAIN = DRAWER and PICK and os.environ.get('D2_CHAIN', '0') == '1'   # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回（圓柱與筆都建）
@@ -251,6 +263,7 @@ class Bridge(Node):
         self.p_truth = self.create_publisher(Float64MultiArray, '/far/truth', 10)
         self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
         self.p_cyl = self.create_publisher(Float64MultiArray, '/cyl/obs', 10)
+        self.p_hdl = self.create_publisher(Float64MultiArray, '/dr/handle_obs', 10)
         self.p_state = self.create_publisher(String, '/far/exec_state', 10)
         self.p_ack = self.create_publisher(String, '/d2/ack', 10)
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 10)
@@ -314,6 +327,8 @@ class Bridge(Node):
             self.d2_bind = True
         elif w == 'attach_cyl':
             self.d2_attach_cyl = True                                # 圓柱理想連接請求（夾住證據成立後）
+        elif w == 'drawer_pose':
+            self.dr_pose_vis = c.get('pose')                         # 監督融合的視覺抽屜位姿 ⇒ 筆偵測內部範圍依此
         elif w == 'detach_obj':
             self.d2_detach_obj, self.d2_detach_req = True, c.get('req_n')   # 車尾收納盒：解除夾爪↔物體連接
         elif w == 'attach_drawer':
@@ -414,12 +429,20 @@ def main():
         import marker_proxy_asset as MK_
         import yaml as yaml_
         dspec_ = DRA_.load(os.path.join(WS, reg['drawer']['asset']))
-        drb_ = HA_.build_drawer_yaw(stage, DRA_, dspec_, reg['drawer']['pose'])
+        dr_pose_true = list(reg['drawer']['pose'])                    # 真實擺放（D2_DRAWER_TRUE：登錄＋本地偏移 dx, dy, dyaw°；Howard 11/19 要靠視覺，登錄只當搜尋先驗）
+        if os.environ.get('D2_DRAWER_TRUE'):
+            import drawer_scene as DRT_
+            _dt = [float(x) for x in os.environ['D2_DRAWER_TRUE'].split(',')]
+            _px, _py, _yw = DRT_.offset_pose(*_dt)
+            dr_pose_true = [_px, _py, math.degrees(_yw)]
+        drb_ = HA_.build_drawer_yaw(stage, DRA_, dspec_, dr_pose_true)
         mspec_ = yaml_.safe_load(open(os.path.join(WS, reg['marker']['asset'])))
-        mobj_, mmat_ = HA_.build_marker_yaw(world, MK_, mspec_, reg['marker']['center_world'], reg['marker']['axis_yaw_deg'])
+        _yr = math.radians(float(dr_pose_true[2])); _cl = dspec_['marker_placement']['center'] if isinstance(dspec_, dict) and 'marker_placement' in dspec_ else reg['marker']['center_drawer']
+        mk_c_true = [float(dr_pose_true[0]) + math.cos(_yr) * _cl[0] - math.sin(_yr) * _cl[1], float(dr_pose_true[1]) + math.sin(_yr) * _cl[0] + math.cos(_yr) * _cl[1], float(_cl[2])]
+        mobj_, mmat_ = HA_.build_marker_yaw(world, MK_, mspec_, mk_c_true, float(reg['marker']['axis_yaw_deg']) + float(dr_pose_true[2]) - float(reg['drawer']['pose'][2]))
         for n_, _, _ in dspec_['cabinet']:
             env_paths.append(f'/World/drawer_unit/cabinet/{n_}')
-        dr_info = dict(asset=reg['drawer']['asset'], pose=reg['drawer']['pose'], pull=reg['drawer']['pull_dir'], readback=drb_, marker0=reg['marker']['center_world'], marker_yaw_deg=reg['marker']['axis_yaw_deg'])
+        dr_info = dict(asset=reg['drawer']['asset'], pose=reg['drawer']['pose'], pose_true=dr_pose_true, marker_true=mk_c_true, pull=reg['drawer']['pull_dir'], readback=drb_, marker0=reg['marker']['center_world'], marker_yaw_deg=reg['marker']['axis_yaw_deg'])
     if PICK and (CHAIN or not DRAWER):                                # 茶几圓柱體（Howard 11/17「隨機放」；規格＝瓶子代理物；位置 seed 登錄；真值只做驗收記錄；串接時與抽屜同建）
         tab_ = next(f_ for f_ in reg['furniture'] if f_['name'] == 'coffee_table')
         if os.environ.get('CYL_XY'):
@@ -697,7 +720,7 @@ def main():
     dr_bound, dr_released, dr_log = False, False, []
     if DRAWER:
         dr_p0 = np.asarray(v_dr.get_world_poses()[0], float)[0].copy()
-        dr_pull = np.array(list(reg['drawer']['pull_dir']) + [0.0], float)
+        dr_pull = np.array([math.sin(math.radians(float(dr_pose_true[2]))), -math.cos(math.radians(float(dr_pose_true[2]))), 0.0])   # 真實拉出方向（開度真值記錄用）
         import drawer_scene as DRS_
     pace_off = 0.0
     try:
@@ -982,6 +1005,9 @@ def main():
                 scan_min_log = float(whom[0])
                 scans.append(np.r_[t, q[:3], r])
             # ---- 相機：持續取像（送偵測程序，不等結果）
+            if DRAWER and getattr(node, 'dr_pose_vis', None) is not None and not getattr(node, '_dr_pose_set', False):
+                DRS_.set_pose(*[float(v) for v in node.dr_pose_vis]); node._dr_pose_set = True
+                ev('drawer_pose_vision_applied', pose=[round(float(v), 4) for v in node.dr_pose_vis], pose_true=dr_pose_true)
             f = grab()
             if f is not None and f['t_obs'] >= t_next_cam - 1e-9:
                 if det_busy:
@@ -993,7 +1019,10 @@ def main():
                     stem = f'f{seq:04d}'
                     det_pend[seq] = dict(f=dict((k_, v_) for k_, v_ in f.items() if k_ not in ('dep', 'rgb')), stem=stem, Th=truth_handle(), t_sent=t)
                     _DET.send(dict(seq=seq, stem=stem, dep=f['dep'], rgb=f['rgb'], K=Kr, T_cam=f['T_cam'], t_obs=f['t_obs'], q=f['q'], fk_vs_render_m=f['fk_vs_render_m'], table=None if cyl_info is None else cyl_info['table'],
-                                   dbox=(DRS_.interior_box(float(node.dr_q_open)) if (DRAWER and dr_released and getattr(node, 'dr_q_open', None) is not None and not cyl_attached) else None)))
+                                   dbox=(DRS_.interior_box(float(node.dr_q_open)) if (DRAWER and dr_released and getattr(node, 'dr_q_open', None) is not None and not cyl_attached) else None),
+                                   hspec=os.path.join(WS, reg['drawer']['asset']) if DRAWER else None,
+                                   hprior=([float(v) for v in reg['drawer']['pose'][:2]] + [math.radians(float(reg['drawer']['pose'][2]))] if (DRAWER and HANDLE_VISION and not dr_bound and not dr_released
+                                           and float(np.hypot(f['q'][0] - reg['drawer']['pose'][0], f['q'][1] - reg['drawer']['pose'][1])) < 3.0) else None)))
                     det_busy = True
             if det_busy and _DET.poll(0):
                 _, rr = _DET.recv()
@@ -1018,6 +1047,11 @@ def main():
                                    T_base_handle=None if T_bh is None else T_bh.tolist(), rendering_frame=[int(v) if v is not None else None for v in f['rf']] if isinstance(f['rf'], tuple) else f['rf'],
                                    eval_only=dict(err_pos_mm=None if T_est is None else round(float(np.linalg.norm(np.asarray(T_est)[:3, 3] - Th[:3, 3])) * 1e3, 2), range_m=round(float(np.linalg.norm(f['T_cam'][:3, 3] - Th[:3, 3])), 3))))
                 node.p_obs.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if T_est is not None else 0.0, *[float(v) for v in f['q'][:3]], *([float(v) for v in T_bh.reshape(-1)] if T_bh is not None else [float('nan')] * 16), float(t)]))
+                if rr.get('hdl') is not None:                          # 把手觀測：抽屜原點（世界＝里程）與偏航
+                    h_ = rr['hdl']
+                    node.p_hdl.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if h_.get('origin') is not None else 0.0, *[float(v) for v in f['q'][:3]],
+                                                               *([float(h_['origin'][0]), float(h_['origin'][1]), float(h_['yaw'])] if h_.get('origin') is not None else [float('nan')] * 3)]))
+                    frames[-1]['hdl'] = dict(origin=None if h_.get('origin') is None else [round(float(v), 4) for v in h_['origin']], yaw=h_.get('yaw'), info=h_.get('info'))
                 if rr.get('cyl') is not None:                          # 圓柱觀測：底盤座標中心（擷取時刻底盤）
                     pc_ = rr['cyl']['p']
                     prel_ = None if pc_ is None else (np.linalg.inv(T3(f['q'][:3])) @ np.r_[pc_, 1.0])[:3]

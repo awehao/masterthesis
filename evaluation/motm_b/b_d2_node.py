@@ -38,6 +38,7 @@ DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 1
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
 PICK_APP_DYAW = float(os.environ['B_PICK_APP_DYAW']) if os.environ.get('B_PICK_APP_DYAW') else None   # 圓柱接近開始的偏航閘門（同抽屜 DR_APP_DYAW；s60：繞茶几角時距 0.6 m 即接近、車頭偏 1.36 rad ⇒ 收斂切桌角、底盤淨空 0.0993 被停）；未設＝原行為
+HANDLE_VISION = os.environ.get('D2_HANDLE_VISION', '0') == '1'      # Howard 11/19「不要把東西寫死 要實際用到視覺」：抽屜位姿由手腕深度把手偵測融合（登錄位姿只當搜尋先驗）
 PICK_MOTM_V = float(os.environ['PICK_MOTM_V']) if os.environ.get('PICK_MOTM_V') else None   # Howard 11/19「茶几那個要移動中夾取 我要做整體速度最佳」：經過速度（m/s）；未設＝停車夾取
 RET_CLEAR = os.environ.get('B_RET_CLEAR', '0') == '1'                # 返回目標送出前清一次全域代價圖（同穿門 PASS_CLEAR 的 Nav2 標準復原）；規劃持續失敗 RET_CLEAR_RETRY_S 再清（最多 3 次）（s66：串接路線沿途行人標記殘留 ⇒ 抽屜→起點 no valid path 582 次）
 RET_CLEAR_RETRY_S = float(os.environ.get('B_RET_CLEAR_RETRY_S', '8.0'))
@@ -650,6 +651,8 @@ def main():
             self.create_subscription(Float64MultiArray, '/task/gmpc_pred', self._pred, 20)
             self.create_subscription(String, '/far/exec_state', self._xs_in, 10)
             self.create_subscription(Float64MultiArray, '/cyl/obs', self._cyl_in, 20)
+            self.hdl_obs = []
+            self.create_subscription(Float64MultiArray, '/dr/handle_obs', self._hdl_in, 20)
             self._CR = None
             if PICK:                                                  # 主執行緒預先 import（背景執行緒裡 import 會與 rclpy 收訊息衝突：s29 take_message 崩潰）
                 if HERE not in sys.path:
@@ -784,6 +787,23 @@ def main():
                 p_od = np.r_[p_od, (float(d[10]) + float(d[5]) + math.pi / 2) % math.pi - math.pi / 2]
             self.cyl_obs.append((float(d[9]), p_od))
             self.cyl_obs = self.cyl_obs[-30:]
+
+        def _hdl_in(self, m):
+            d = np.asarray(m.data, float)
+            if len(d) < 9 or d[2] < 0.5 or not np.isfinite(d[6:9]).all():
+                return
+            self.hdl_obs.append((float(d[1]), d[6:9].copy()))
+            self.hdl_obs = self.hdl_obs[-30:]
+
+        def _hdl_fuse(self, t):
+            rec = [p_ for t_, p_ in self.hdl_obs if t - t_ <= 1.5][-5:]
+            if len(rec) < 5:
+                return None
+            P_ = np.array(rec)
+            yw = np.unwrap(P_[:, 2])
+            if float(np.linalg.norm(P_[:, :2] - P_[:, :2].mean(0), axis=1).max()) > 0.010 or float(np.ptp(yw)) > math.radians(0.5):
+                return None
+            return np.r_[P_[:, :2].mean(0), float(yw.mean())]
 
         def _cyl_fuse(self, t):
             rec = [p_ for t_, p_ in self.cyl_obs if t - t_ <= 1.0][-5:]
@@ -928,6 +948,19 @@ def main():
                 self.event('pick_return_goal', goal=PICK_RETURN)
                 return
             st = dr['stage']
+            if HANDLE_VISION and not dr.get('pose_vis'):              # 先看把手：導航到櫃前先驗點，融合把手深度偵測 ⇒ 以視覺位姿重設抽屜模型（選位、淨空、內部範圍都依此）
+                est = self._hdl_fuse(t)
+                if est is None:
+                    dr.setdefault('t_seek', t)
+                    if t - dr['t_seek'] > 60.0:
+                        self.event('dr_handle_not_seen'); self.abort('drawer_handle_not_seen')
+                    return
+                reg_ = R_.D.REG['drawer']['pose']
+                R_.D.set_pose(float(est[0]), float(est[1]), float(est[2]))
+                dr['pose_vis'] = [float(x) for x in est]
+                self.event('dr_handle_vision', pose=[round(float(est[0]), 4), round(float(est[1]), 4), round(math.degrees(float(est[2])), 3)],
+                           reg=[float(reg_[0]), float(reg_[1]), float(reg_[2])], n_obs=len(self.hdl_obs))
+                return
             if st == 'handle_sel' and dr['box'] is None:
                 dr['box'] = self._dr_thread(R_.select_handle, self.b_od_now.copy())
                 self.event('dr_handle_select_start')
@@ -944,7 +977,7 @@ def main():
             elif st == 'handle_nav':
                 dyaw_ = abs((float(self.b_od_now[2]) - float(dr['sel']['base'][2]) + math.pi) % (2 * math.pi) - math.pi)
                 if float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float)))) <= PICK_APP_DIST and (dyaw_ <= DR_APP_DYAW or float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float)))) <= 0.35):   # s51：偏航差 0.36 rad 時開始接近 ⇒ 手腕 j5 −1.76、自身淨空 4.6 mm
-                    self._dr_send('drawer', dr['sel']['base'], t, T_grasp=dr['sel']['T_grasp'], q_grasp=dr['sel'].get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M))
+                    self._dr_send('drawer', dr['sel']['base'], t, T_grasp=dr['sel']['T_grasp'], q_grasp=dr['sel'].get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'))
                     dr['stage'] = 'wait_release'
             elif st == 'wait_release' and 'pick_dr_released' in dr:
                 dr['q_open'] = float(dr['pick_dr_released'].get('q_open', R_.OPEN_M))

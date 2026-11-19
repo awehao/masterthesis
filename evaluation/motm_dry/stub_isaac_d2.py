@@ -59,6 +59,10 @@ if DRAWER:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import drawer_scene as DRS
     MK0 = np.array(_SC['marker']['center_world'], float); MK_YAW = math.radians(float(_SC['marker']['axis_yaw_deg']))
+    if os.environ.get('D2_DRAWER_TRUE'):                               # 真實抽屜放離登錄位置（本地 dx, dy, dyaw°）⇒ 控制只能靠視覺估計（Howard 11/19）
+        _dt = [float(x) for x in os.environ['D2_DRAWER_TRUE'].split(',')]
+        DRS.set_pose(*DRS.offset_pose(*_dt))
+        MK0 = DRS.marker_nominal(0.0); MK_YAW += math.radians(_dt[2])
     F_CONTACT_H, F_CONTACT_M = 0.0018, 0.0038                          # 26 mm 橫桿／筆對角 30.02 mm 的接觸開度（資產檔頭的官方網格推導）
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'
@@ -124,6 +128,8 @@ class Stub(Node):
         self.p_truth = self.create_publisher(Float64MultiArray, '/far/truth', 10)
         self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
         self.p_cyl = self.create_publisher(Float64MultiArray, '/cyl/obs', 10)
+        self.p_hdl = self.create_publisher(Float64MultiArray, '/dr/handle_obs', 10)
+        self.hdl_seq, self.t_next_hdl = 0, 0.0
         self.cyl_p, self.cyl_att, self.cyl_seq, self.t_next_cyl, self.ffor, self.fcmd_last = np.r_[CYL_XY, CYL_Z0], None, 0, 0.0, (0.0, 0.0), 0.0089
         if DRAWER:
             self.cyl_p, self.dr_q, self.dr_att, self.dr_contact, self.dr_unb = MK0.copy(), 0.0, None, False, False
@@ -313,6 +319,24 @@ class Stub(Node):
         else:
             self.ffor = (0.0, 0.0)
 
+    def hdl_obs(self):
+        """把手合成觀測（替身）：5 Hz；抽屜關著、未連接、橫桿兩端與中心都在手腕相機視野 0.4–2.5 m ⇒ 抽屜原點與偏航（真值＋2 mm／0.3° 雜訊；Isaac 端為 handle_detect 實際深度偵測）。"""
+        if self.t < self.t_next_hdl - 1e-9 or not DRAWER:
+            return
+        self.t_next_hdl = self.t + 0.2; self.hdl_seq += 1
+        Ti = np.linalg.inv(K.fk(self.q, W0.OPT)); ok = self.dr_q < 0.01 and self.dr_att is None
+        b = DRS.SPEC['drawer']['handle']['bar']
+        for dl in (0.0, -b['length'] / 2 + 0.01, b['length'] / 2 - 0.01):
+            pc = (Ti @ np.r_[DRS.to_world(np.array(b['center'], float) + np.array([dl, 0.0, 0.0])), 1.0])[:3]
+            if pc[2] < 0.4 or pc[2] > 2.5:
+                ok = False; break
+            u, v = (Kc @ (pc / pc[2]))[:2]
+            if not (5 < u < 635 and 5 < v < 475):
+                ok = False; break
+        data = [float(self.hdl_seq), self.t, 1.0 if ok else 0.0, *[float(x) for x in self.q[:3]]]
+        data += ([float(DRS.POSE[0]) + rng.normal(0, 0.002), float(DRS.POSE[1]) + rng.normal(0, 0.002), DRS.YAW + rng.normal(0, math.radians(0.3))] if ok else [float('nan')] * 3)
+        self.p_hdl.publish(Float64MultiArray(data=data))
+
     def obs(self):
         if self.t < self.t_next_obs - 1e-9:
             return
@@ -413,6 +437,7 @@ class Stub(Node):
             if DRAWER and self.stage == 'drawer':
                 self.dr_step()
                 self.mk_obs()
+                self.hdl_obs()
             else:
                 self.cyl_step()
                 self.cyl_obs()
