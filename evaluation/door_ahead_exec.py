@@ -110,8 +110,14 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 ctrl = _DR.DrawerCtrl(ctrl, float(t_next), pa_)
                 mode = 'pick'
                 ctrl._ev_sent = 0
+            elif pa_ is not None and mode == 'pick' and pa_.get('kind') == 'drawer' and getattr(ctrl, 'binned', False) and getattr(ctrl, 'phase', None) == 'RETURN':   # 串接（Howard 11/19）：圓柱已放盒、收臂完成 ⇒ 同一拍換抽屜控制器（同一 mpc、承接狀態）
+                import door_drawer_ctrl as _DR
+                ctrl = _DR.DrawerCtrl(ctrl, float(t_next), pa_)
+                ctrl._ev_sent = 0
             elif pa_ is not None and mode == 'pick' and pa_.get('kind') in ('observe', 'marker') and hasattr(ctrl, 'next_app'):   # 抽屜任務下一段（觀察位／夾筆）
                 ctrl.next_app(pa_, float(t_next))
+            if snap.get('obj_detached') and mode == 'pick' and getattr(ctrl, 'obj_release', False):   # 車尾收納盒：執行端解除夾爪↔物體連接的回報（只對發出請求的控制器）
+                ctrl.obj_detached = True
             if snap.get('dr_unbound') and mode == 'pick' and hasattr(ctrl, 'dr_unbound'):   # 抽屜：執行端解除夾爪↔抽屜連接的回報
                 ctrl.dr_unbound = True
             if snap.get('unbound') and mode == 'pass':                # 穿門段：執行端解綁生效回報
@@ -249,6 +255,7 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                        attach=bool(getattr(ctrl, 'attach', False)) if mode == 'pick' else False,
                        dr_attach=bool(getattr(ctrl, 'dr_attach', False)) if mode == 'pick' else False,
                        dr_release=bool(getattr(ctrl, 'dr_release', False)) if mode == 'pick' else False,
+                       obj_release=bool(getattr(ctrl, 'obj_release', False) and not getattr(ctrl, 'obj_detached', False)) if mode == 'pick' else False,
                        q_open=float(getattr(ctrl, 'q_open', 0.0)) if mode == 'pick' else None)
             if mode in ('pass', 'pick'):                              # 穿門／取物段事件（本拍新增）
                 n_ev = getattr(ctrl, '_ev_sent', 0)
@@ -452,6 +459,7 @@ class AheadRunner:
                     rec['release'] = bool(o.get('release'))
                     rec['attach'] = bool(o.get('attach'))
                     rec['dr_attach'], rec['dr_release'], rec['q_open'] = bool(o.get('dr_attach')), bool(o.get('dr_release')), o.get('q_open')
+                    rec['obj_release'] = bool(o.get('obj_release'))
                     self.last = dict(mode=o.get('mode'), bind=o.get('bind'), done=o.get('done'), stop=o.get('stop'), stop_mode=o.get('stop_mode'), n=int(n))
                 else:
                     rec['commit'] = False

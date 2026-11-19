@@ -35,6 +35,8 @@ PICK_PRIOR = [float(x) for x in os.environ.get('B_PICK_PRIOR', '0.55,2.30,0.0').
 PICK_RETURN = [float(x) for x in os.environ.get('B_PICK_RETURN', '1.5,-2.8,1.5708').split(',')]   # 返回＝起點
 PICK_APP_DIST, PICK_T_MIN = float(os.environ.get('B_PICK_APP_DIST', '0.6')), float(os.environ.get('B_PICK_T_MIN', '4.0'))
 DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 11/18：開門→開抽屜→取筆→返回（需同時 D2_PICK＝1：沿用取物管線）
+CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
+BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
 DR_APP_DYAW = float(os.environ.get('B_DR_APP_DYAW', '0.30'))         # 抓把手接近開始的底盤偏航差上限（rad）
 DR_PRIOR = [float(x) for x in os.environ.get('B_DR_PRIOR', '-3.5,10.3,3.1416').split(',')]   # 選位完成前的粗目標（map；抽屜櫃前）
 PASS_CLEAR = os.environ.get('B_PASS_CLEAR', '1') == '1'           # Howard 11/18：不要中途點，讓全域規劃自己找出路
@@ -791,7 +793,13 @@ def main():
         def _xs_in(self, m):
             if '"what": "pick_lifted"' in m.data:
                 self.pick_lifted = True
-            if DRAWER and '"what": "pick_dr_carried"' in m.data:   # 抽屜：收臂完成才送返回目標（s50：抬升後立即送 ⇒ 前端障礙物 3→6、CBF 推動錨定底盤 3.8 cm ⇒ 夾爪被帶向面板）
+            if '"what": "pick_binned"' in m.data:                      # 收納盒（每件一次）
+                self.n_binned = getattr(self, 'n_binned', 0) + 1
+                if DRAWER and self.dr.get('stage') == 'marker':
+                    self.dr['carried'] = True                          # 筆已放盒 ⇒ 送返回目標（收臂中底盤照導航前端）
+            if '"what": "pick_stowed"' in m.data:
+                self.n_stowed = getattr(self, 'n_stowed', 0) + 1
+            if DRAWER and not BIN and '"what": "pick_dr_carried"' in m.data:   # 抽屜：收臂完成才送返回目標（s50：抬升後立即送 ⇒ 前端障礙物 3→6、CBF 推動錨定底盤 3.8 cm ⇒ 夾爪被帶向面板）
                 self.dr['carried'] = True
             for k_ in ('pick_dr_released', 'pick_dr_observing'):      # 抽屜任務事件（帶開度估計）
                 if ('"what": "%s"' % k_) in m.data and k_ not in self.dr:
@@ -804,7 +812,11 @@ def main():
                 self.pass_seen = True
 
         def pick_tick(self, t):
-            if self.pick_lifted and not self.pick_ret:              # 已抬起且證據成立 ⇒ 返回起點（經開著的門）
+            if CHAIN and getattr(self, 'n_binned', 0) >= 1 and getattr(self, 'chain', 'cyl') == 'cyl':   # 串接：圓柱已放盒 ⇒ 換抽屜任務（導航目標換抽屜櫃粗目標；選位由 drawer_tick 接手）
+                self.chain, self.pick_goal, self.pass_t = 'drawer', None, t
+                self.event('chain_to_drawer')
+                return
+            if self.pick_lifted and not self.pick_ret and (not BIN or getattr(self, 'n_binned', 0) >= 1) and not CHAIN:   # 已抬起且證據成立（收納盒：已放盒）⇒ 返回起點（經開著的門）
                 self.pick_ret, self.pick_goal, self.pass_t = True, list(PICK_RETURN), t
                 self.event('pick_return_goal', goal=PICK_RETURN)
                 return
@@ -902,6 +914,8 @@ def main():
                 self.pick_goal, self.pass_t = self._dr_goal(sel['base']), t
                 dr['goal_od'] = list(sel['base'])
                 self.event('dr_handle_goal', base=[round(float(x), 4) for x in sel['base']], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), env=round(sel['env'], 4), base_clear=round(sel['base_clear'], 4), ms=round(dr['box']['ms'] if dr['box'] else 0, 1))
+            elif st == 'handle_nav' and CHAIN and getattr(self, 'n_stowed', 0) < 1:
+                pass                                                   # 串接：圓柱放盒後收臂未完成 ⇒ 先不送抽屜封包（執行端只在收臂完成後接受）
             elif st == 'handle_nav':
                 dyaw_ = abs((float(self.b_od_now[2]) - float(dr['sel']['base'][2]) + math.pi) % (2 * math.pi) - math.pi)
                 if float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float)))) <= PICK_APP_DIST and (dyaw_ <= DR_APP_DYAW or float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float)))) <= 0.35):   # s51：偏航差 0.36 rad 時開始接近 ⇒ 手腕 j5 −1.76、自身淨空 4.6 mm
@@ -1093,7 +1107,10 @@ def main():
                     self.pass_wp_done, self.pass_t = True, t
                     self.event('pass_waypoint_reached', at=[round(float(x), 3) for x in self.cur_map])
                     g_ = PASS_GOAL
-                if PICK and DRAWER:                                   # 開抽屜→取筆→返回（Howard 11/18）
+                if PICK and CHAIN and getattr(self, 'chain', 'cyl') == 'cyl':   # 串接第一件：茶几圓柱（同 pick_tick；放盒後換抽屜）
+                    self.pick_tick(t)
+                    g_ = self.pick_goal if self.pick_goal is not None else PICK_PRIOR
+                elif PICK and DRAWER:                                 # 開抽屜→取筆→返回（Howard 11/18）
                     self.drawer_tick(t)
                     god_ = self.dr.get('goal_od')
                     if god_ is not None and not self.pick_ret and self.pick_goal is not None and float(np.hypot(*(self.b_od_now[:2] - np.asarray(god_[:2], float)))) > PICK_APP_DIST:   # 近目標（接近段）不重送：避免起點≈終點 no_plan   # 第二十二趟：選位時 AMCL 偏航暫偏約 3° ⇒ 11 m 外換算差 0.6 m、目標落進櫃子膨脹區 ⇒ 每拍以當下 map↔odom 重新換算，差 >5 cm 才更新

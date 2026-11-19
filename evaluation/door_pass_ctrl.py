@@ -33,6 +33,10 @@ PH_EXTRA_TO_S = 3.0                                                  # 名目時
 Q_STOW = np.array([float(x) for x in os.environ.get('PASS_Q_STOW', '-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018').split(',')])
 W_Q_STOW = float(os.environ.get('PASS_W_Q', '2.0'))
 DONE_HOLD_S = 1.0
+STOW_MOVE = os.environ.get('PASS_STOW_MOVE', '0') == '1'            # Howard 11/19「開完門為什麼停著把手臂伸成那樣，不是應該邊走邊伸」⇒ 收臂段底盤照導航前端（限速框），不錨定
+STOW_V, STOW_WZ = float(os.environ.get('PASS_STOW_V', '0.15')), float(os.environ.get('PASS_STOW_WZ', '0.5'))   # 收臂中底盤速度框（任務限制；收完進 DRIVE 即解除）
+STOW_JOINT = os.environ.get('PASS_STOW_JOINT', '0') == '1'          # 收臂走關節空間直線（第二十五趟 TCP 混接 ⇒ j1 先甩到 −1.89 再回 0）
+STOW_QD = float(os.environ.get('PASS_STOW_QD', '0.6'))              # 關節空間收臂峰速上限（rad/s；最小急動峰速 1.875×）
 PICK_FOLLOW = os.environ.get('D2_PICK', '0') == '1'                 # 穿門後接取物：穿門段不自行判完成（由監督送取物封包換控制器）
 DONE_Y_MIN = float(os.environ.get('PASS_DONE_Y_MIN', '0.3'))         # 場景專用：門口在 y＝0、客廳側 y＞0
 KEYS = ('env', 'base', 'self', 'shell_bar')
@@ -88,6 +92,7 @@ class DoorPassCtrl:
         Th = src.handle_T(float(phi_end))
         self.dvec_w = T_at(Th, S_RET)[:3, 3] - T_at(Th, 0.0)[:3, 3]  # 世界座標退出位移（長 S_RET，沿接近軸遠離把手）
         self.T_rel_r0, self.T_rel_s0 = None, None
+        self.q_stow0, self.T_stow = None, T_STOW
         self.T_rel_stow = K.fk(np.r_[np.zeros(3), Q_STOW], 'link_tcp')
         self.t_halt, self.t_still = None, None
         self._ev('pass_start', phi_end_deg=round(math.degrees(float(phi_end)), 3), dvec_w=[round(float(x), 4) for x in self.dvec_w], q_stow=Q_STOW.tolist())
@@ -144,6 +149,8 @@ class DoorPassCtrl:
             T = self.T_rel_r0.copy()
             T[:3, 3] = T[:3, 3] + u * (_T3(self.b_anchor)[:3, :3].T @ self.dvec_w)
             return T
+        if STOW_JOINT:
+            return K.fk(np.r_[np.zeros(3), self._stow_q(t_abs)], 'link_tcp')
         u = XE.minjerk(min(max((t_abs - self.t_ph0) / T_STOW, 0.0), 1.0))[0]
         A, Bm = self.T_rel_s0, self.T_rel_stow
         T = np.eye(4)
@@ -151,13 +158,17 @@ class DoorPassCtrl:
         T[:3, :3] = A[:3, :3] @ _exp_R(u * _log_R(A[:3, :3].T @ Bm[:3, :3]))
         return T
 
+    def _stow_q(self, t_abs):
+        u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_stow, 1e-6), 0.0), 1.0))[0]
+        return (1.0 - u) * self.q_stow0 + u * Q_STOW
+
     def _solve(self, q):
         qp, sp = self._pred(q)
         t_eff = self.t + D_STEPS * PHYS
         X, xi, obs, umin0, src = G.MovingGraspCtrl.nav_window(self, q, qp)
         if obs is None:
             return None, 'nav_obstacles_stale'
-        if self.phase != 'DRIVE':                                      # 操作段：底盤參考＝錨定位姿，障礙物照導航前端
+        if self.phase != 'DRIVE' and not (STOW_MOVE and self.phase == 'STOW'):                                      # 操作段：底盤參考＝錨定位姿，障礙物照導航前端
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor'
@@ -166,17 +177,24 @@ class DoorPassCtrl:
             Ts = [self._rel_target(t_eff + k * DT) for k in range(XO.N + 1)]
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=C0.W_FAR,
                        lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=True, qp_solver='gi', **B.W_ARM)
-            if self.phase == 'STOW' and W_Q_STOW > 0.0:
+            if self.phase == 'STOW' and STOW_JOINT:
+                arm.update(q_post=np.array([self._stow_q(t_eff + (k + 1) * DT) for k in range(XO.N)]), w_q=5.0)
+            elif self.phase == 'STOW' and W_Q_STOW > 0.0:
                 arm.update(q_post=np.tile(Q_STOW, (XO.N, 1)), w_q=W_Q_STOW)
         mpc = self.mpc
         u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
+        u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
+        if STOW_MOVE and self.phase == 'STOW':                       # 邊走邊收：收臂中底盤速度框
+            lim_ = np.array([STOW_V, STOW_V, STOW_WZ])
+            mpc.cfg.u_max = np.minimum(u_max_saved, lim_)
+            mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         w0 = time.perf_counter()
         try:
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
-            mpc.cfg.u_min = u_min_saved
+            mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
         self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active)))
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
@@ -209,16 +227,18 @@ class DoorPassCtrl:
             moved = float(np.dot(T_now[:3, 3] - self.T_rel_r0[:3, 3], _T3(self.b_anchor)[:3, :3].T @ self.dvec_w)) / S_RET
             if el >= T_RET and moved >= 0.9 * S_RET:
                 self.T_rel_s0 = T_now
-                self._goto('STOW', retreat_m=round(moved, 4))
+                self.q_stow0 = np.asarray(q[3:], float).copy()
+                self.T_stow = max(T_STOW, 1.875 * float(np.abs(Q_STOW - self.q_stow0).max()) / STOW_QD + 0.5) if STOW_JOINT else T_STOW
+                self._goto('STOW', retreat_m=round(moved, 4), T=round(self.T_stow, 2), move=STOW_MOVE, joint=STOW_JOINT)
             elif el > T_RET + PH_EXTRA_TO_S:
                 self._stop('retreat_not_reached', retreat_m=round(moved, 4))
         elif self.phase == 'STOW':
             T_now = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
             ep = float(np.linalg.norm(T_now[:3, 3] - self.T_rel_stow[:3, 3]))
             er = math.degrees(float(np.linalg.norm(_log_R(T_now[:3, :3].T @ self.T_rel_stow[:3, :3]))))
-            if el >= T_STOW and ep <= 0.010 and er <= 3.0:
-                self._goto('DRIVE', stow_err_mm=round(ep * 1e3, 2), stow_err_deg=round(er, 2))
-            elif el > T_STOW + PH_EXTRA_TO_S:
+            if el >= self.T_stow and ep <= 0.010 and er <= 3.0:
+                self._goto('DRIVE', stow_err_mm=round(ep * 1e3, 2), stow_err_deg=round(er, 2), base=[round(float(x), 4) for x in q[:3]])
+            elif el > self.T_stow + PH_EXTRA_TO_S:
                 self._stop('stow_not_reached', stow_err_mm=round(ep * 1e3, 2), stow_err_deg=round(er, 2))
 
     def step(self, t, q, phi_meas, finger_meas=None):

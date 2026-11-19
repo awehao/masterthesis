@@ -342,6 +342,9 @@ class WorldD2(Node):
         if c.get('what') == 'unbound' and getattr(self, 'unbound_ack', None) is None:
             self.unbound_ack = c
             self.ev('unbind_ack', n_applied=c.get('n'), req=c.get('req'))
+        if c.get('what') == 'obj_detached' and getattr(self, 'obj_detach_ack', None) is None and getattr(self, 'obj_releasing', False) and c.get('req') == getattr(self, 'obj_req_n', None):   # 只收本次請求的回報（Isaac 會重送 1 s）   # 車尾收納盒：夾爪↔物體連接已解除
+            self.obj_detach_ack = c
+            self.ev('obj_detach_ack', n_applied=c.get('n'), req=c.get('req'), obj=c.get('obj'))
         if c.get('what') == 'drawer_unbound' and getattr(self, 'dr_unbound_ack', None) is None:   # 抽屜：夾爪↔抽屜連接已解除
             self.dr_unbound_ack = c
             self.ev('drawer_unbind_ack', n_applied=c.get('n'), req=c.get('req'))
@@ -458,6 +461,8 @@ class WorldD2(Node):
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, unbound=True)
                 if getattr(self, 'dr_unbound_ack', None) is not None:  # 抽屜段：同上
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, dr_unbound=True)
+                if getattr(self, 'obj_detach_ack', None) is not None:  # 收納盒：解除回報（控制器只在已發請求時採用）
+                    runner.extra = dict(getattr(runner, 'extra', None) or {}, obj_detached=True)
                 if REL_EXEC and k > 0:
                     if ISAAC:                                        # Isaac 端已確定的實際底盤（同一份排程，不各算各的）
                         ib_ = getattr(self, 'isaac_base_known', None)
@@ -484,6 +489,15 @@ class WorldD2(Node):
                             self.cyl_attached = True
                             self.ev('cyl_attach_committed')
                             self.ctl('attach_cyl', req_n=int(self.n))
+                        if rec.get('obj_release') and getattr(self, 'cyl_attached', False) and not getattr(self, 'obj_releasing', False):   # 車尾收納盒：放置構型到位 ⇒ 解除夾爪↔物體理想連接
+                            self.obj_releasing, self.obj_req_n = True, int(self.n)
+                            self.ev('obj_release_committed')
+                            self.ctl('detach_obj', req_n=int(self.n))
+                            if not ISAAC:
+                                self.obj_detach_ack = dict(what='obj_detached', n=int(self.n), req=int(self.n))
+                        if not rec.get('obj_release') and getattr(self, 'obj_releasing', False) and getattr(self, 'obj_detach_ack', None) is not None:   # 控制器已收到回報 ⇒ 重置（下一件可再連接）
+                            self.obj_releasing, self.cyl_attached, self.obj_detach_ack = False, False, None
+                            self.ev('obj_release_cleared')
                         if rec.get('dr_attach') and not getattr(self, 'dr_attached', False):   # 抽屜把手理想連接（夾住證據成立後）
                             self.dr_attached = True
                             self.ev('drawer_attach_committed')

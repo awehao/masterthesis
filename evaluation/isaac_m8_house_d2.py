@@ -155,6 +155,9 @@ PICK = os.environ.get('D2_PICK', '0') == '1'                         # 茶几圓
 WALKERS = os.environ.get('D2_WALKERS', '0') == '1'                   # 行人（動態障礙物）
 DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                     # 開抽屜→取筆（Howard 11/18）：建淺抽屜櫃＋筆代理；圓柱不建
 OBJ = '/World/marker_proxy' if DRAWER else '/World/cyl'              # 理想連接的物件剛體
+CHAIN = DRAWER and PICK and os.environ.get('D2_CHAIN', '0') == '1'   # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回（圓柱與筆都建）
+BIN = os.environ.get('D2_BIN', '0') == '1'                           # 車尾收納盒（rear_bin_v1.yaml；碰撞方盒掛在 base_link 剛體上）
+OBJS = (['/World/cyl'] if (PICK and (CHAIN or not DRAWER)) else []) + (['/World/marker_proxy'] if DRAWER else [])   # 依任務順序；理想連接／解除依序作用
 CMD_TIMEOUT_S, ARM_CMD_TIMEOUT_S = 0.5, 0.2                       # 同乾跑世界節點
 WALL_LIMIT_S = float(os.environ.get('D2_WALL_LIMIT_S', '1500'))   # 第二十四趟：筆電實際 RTF＜0.15，1500 s 牆鐘在模擬 217.8 s 切斷返回段 ⇒ 可設
 CAM = dict(res=(640, 480), hfov_deg=69.0, aperture=0.020, clip=(0.05, 10.0), hz=30)
@@ -311,6 +314,8 @@ class Bridge(Node):
             self.d2_bind = True
         elif w == 'attach_cyl':
             self.d2_attach_cyl = True                                # 圓柱理想連接請求（夾住證據成立後）
+        elif w == 'detach_obj':
+            self.d2_detach_obj, self.d2_detach_req = True, c.get('req_n')   # 車尾收納盒：解除夾爪↔物體連接
         elif w == 'attach_drawer':
             self.d2_attach_dr = True                                 # 抽屜把手理想連接請求（夾住證據成立後）
         elif w == 'unbind_drawer':
@@ -415,7 +420,7 @@ def main():
         for n_, _, _ in dspec_['cabinet']:
             env_paths.append(f'/World/drawer_unit/cabinet/{n_}')
         dr_info = dict(asset=reg['drawer']['asset'], pose=reg['drawer']['pose'], pull=reg['drawer']['pull_dir'], readback=drb_, marker0=reg['marker']['center_world'], marker_yaw_deg=reg['marker']['axis_yaw_deg'])
-    elif PICK:                                                        # 茶几圓柱體（Howard 11/17「隨機放」；規格＝瓶子代理物；位置 seed 登錄；真值只做驗收記錄）
+    if PICK and (CHAIN or not DRAWER):                                # 茶几圓柱體（Howard 11/17「隨機放」；規格＝瓶子代理物；位置 seed 登錄；真值只做驗收記錄；串接時與抽屜同建）
         tab_ = next(f_ for f_ in reg['furniture'] if f_['name'] == 'coffee_table')
         if os.environ.get('CYL_XY'):
             cxy = np.array([float(x) for x in os.environ['CYL_XY'].split(',')])
@@ -454,11 +459,32 @@ def main():
     leaf_v = RigidPrim(prim_paths_expr=dauth['leaf_prim'], name='leaf_state')
     grip_b = [b for b in bodies if name_of(b) == 'uflite_gripper_link']
     v_grip = RigidPrim(prim_paths_expr=str(grip_b[0]), name='v_grip_pose') if len(grip_b) == 1 else None
-    v_cyl = RigidPrim(prim_paths_expr=OBJ, name='v_cyl_pose') if PICK else None
+    bin_info = None
+    if BIN:                                                           # 車尾收納盒：五片碰撞方盒（底＋四壁）掛在 base_link 剛體（隨底盤；不另加質量）
+        import rear_bin as RBIN_
+        bp_ = str(b_base[0]) + '/rear_bin'
+        c_, h_, w_t, b_t = RBIN_.C_LOC.copy(), RBIN_.HS.copy(), float(RBIN_.SPEC['wall']), float(RBIN_.SPEC['bottom'])
+        c_[2] -= 0.05                                                 # base_footprint → base_link（base_joint z 0.05）
+        parts_ = dict(bottom=(c_ + np.array([0, 0, -h_[2] + b_t / 2]), np.array([h_[0], h_[1], b_t / 2])),
+                      wall_xp=(c_ + np.array([h_[0] - w_t / 2, 0, 0]), np.array([w_t / 2, h_[1], h_[2]])), wall_xn=(c_ + np.array([-h_[0] + w_t / 2, 0, 0]), np.array([w_t / 2, h_[1], h_[2]])),
+                      wall_yp=(c_ + np.array([0, h_[1] - w_t / 2, 0]), np.array([h_[0], w_t / 2, h_[2]])), wall_yn=(c_ + np.array([0, -h_[1] + w_t / 2, 0]), np.array([h_[0], w_t / 2, h_[2]])))
+        UsdGeom.Xform.Define(stage, bp_)
+        for nm_, (pc_, ph_) in parts_.items():
+            cb_ = UsdGeom.Cube.Define(stage, f'{bp_}/{nm_}')
+            cb_.CreateSizeAttr(1.0)
+            xb_ = UsdGeom.Xformable(cb_)
+            xb_.AddTranslateOp().Set(Gf.Vec3d(*[float(v) for v in pc_]))
+            xb_.AddScaleOp().Set(Gf.Vec3f(*[float(2 * v) for v in ph_]))
+            cb_.CreateDisplayColorAttr([Gf.Vec3f(0.85, 0.55, 0.2)])
+            UsdPhysics.CollisionAPI.Apply(cb_.GetPrim())
+        bin_info = dict(spec=os.path.relpath(RBIN_.SPEC_PATH, WS), prim=bp_, parts={k_: dict(c_base_link=[round(float(v), 4) for v in pc_], half=[round(float(v), 4) for v in ph_]) for k_, (pc_, ph_) in parts_.items()}, binned=[])
+    v_objs = [RigidPrim(prim_paths_expr=o_, name=f'v_obj{i_}_pose') for i_, o_ in enumerate(OBJS)] if PICK else []
+    obj_i = 0
+    v_cyl = v_objs[0] if v_objs else None
     v_dr = RigidPrim(prim_paths_expr='/World/drawer_unit/drawer', name='v_drawer_pose') if DRAWER else None
     walk_views = [XFormPrim(prim_paths_expr=f"/World/walkers/{w_['name']}", name=f"wv_{w_['name']}") for w_ in walk_list]
     world.reset()
-    for v in v_tool + [v_base, leaf_v] + ([v_grip] if v_grip is not None else []) + ([v_dr, v_cyl] if DRAWER else []):
+    for v in v_tool + [v_base, leaf_v] + ([v_grip] if v_grip is not None else []) + ([v_dr] + v_objs if DRAWER else []):
         v.initialize()
     if v_grip is None:
         print('[fc] 夾爪剛體不唯一 ⇒ 拒跑', flush=True)
@@ -612,6 +638,8 @@ def main():
     ffor = {'uflite_finger1': 0.0, 'uflite_finger2': 0.0}
     walk_log = []
     cyl_log = []
+    obj_log = []
+    det_ack_ = None
 
     def contacts(split=False):
         mx, who = 0.0, None
@@ -810,9 +838,10 @@ def main():
                 Tg_ = T_of(*[np.asarray(x)[0] for x in v_grip.get_world_poses()])
                 Tc_ = T_of(*[np.asarray(x)[0] for x in v_cyl.get_world_poses()])
                 Rc0 = np.linalg.inv(Tc_) @ Tg_
-                jc_ = UsdPhysics.FixedJoint.Define(stage, '/World/cyl_ideal_attach')
+                jc_path_ = '/World/cyl_ideal_attach' if obj_i == 0 else f'/World/obj_ideal_attach_{obj_i}'
+                jc_ = UsdPhysics.FixedJoint.Define(stage, jc_path_)
                 jc_.CreateBody0Rel().SetTargets([Sdf.Path(str(grip_b[0]))])
-                jc_.CreateBody1Rel().SetTargets([Sdf.Path(OBJ)])
+                jc_.CreateBody1Rel().SetTargets([Sdf.Path(OBJS[obj_i])])
                 jc_.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
                 jc_.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
                 qc_ = W0.R_to_wxyz(Rc0[:3, :3])
@@ -821,7 +850,32 @@ def main():
                 jc_.CreateJointEnabledAttr().Set(True)
                 jc_.CreateBreakForceAttr().Set(float('inf')); jc_.CreateBreakTorqueAttr().Set(float('inf'))
                 cyl_attached = True
-                ev('cyl_attach_fixed_joint', rel_pos=[round(float(v), 5) for v in Rc0[:3, 3]], cyl_z=round(float(Tc_[2, 3]), 4), note='理想抓持假設（FixedJoint）：夾住證據成立後')
+                node.d2_attach_cyl = False                              # 請求已執行（下一件需新請求）
+                ev('cyl_attach_fixed_joint', obj=OBJS[obj_i], rel_pos=[round(float(v), 5) for v in Rc0[:3, 3]], cyl_z=round(float(Tc_[2, 3]), 4), note='理想抓持假設（FixedJoint）：夾住證據成立後')
+            if BIN and getattr(node, 'd2_detach_obj', False):         # 車尾收納盒：解除夾爪↔物體理想連接（物體靠物理落入盒內）
+                node.d2_detach_obj = False
+                if cyl_attached:
+                    jc_path_ = '/World/cyl_ideal_attach' if obj_i == 0 else f'/World/obj_ideal_attach_{obj_i}'
+                    stage.GetPrimAtPath(jc_path_).GetAttribute('physics:jointEnabled').Set(False)
+                    v_jc_ = stage.GetPrimAtPath(jc_path_).GetAttribute('physics:jointEnabled').Get()
+                    cyl_attached = False
+                    Tb_ = T_of(*[np.asarray(x)[0] for x in v_base.get_world_poses()])
+                    po_ = np.asarray(v_objs[obj_i].get_world_poses()[0], float)[0]
+                    bin_info['binned'].append(dict(obj=OBJS[obj_i], t=round(t, 3), n=int(n_now), req=getattr(node, 'd2_detach_req', None), joint_enabled_readback=str(v_jc_), obj_in_base_link_at_release=[round(float(v), 4) for v in (np.linalg.inv(Tb_) @ np.r_[po_, 1.0])[:3]]))
+                    ev('obj_detach_fixed_joint', obj=OBJS[obj_i], n=int(n_now), readback=str(v_jc_))
+                    if v_jc_ is not False and latch is None:
+                        latch = dict(t=round(t, 3), why='obj_detach_not_confirmed', value=str(v_jc_), kind='模擬工程中止（物體連接解除未確認）')
+                        ev('latched_sim_engineering_abort', **latch)
+                        node.p_state.publish(String(data='latched:' + latch['why']))
+                        break
+                    det_ack_ = dict(what='obj_detached', n=int(n_now), req=getattr(node, 'd2_detach_req', None), obj=OBJS[obj_i], until=int(n_now) + 100)
+                    if obj_i + 1 < len(OBJS):                           # 串接：下一件
+                        obj_i += 1
+                        v_cyl = v_objs[obj_i]
+                else:
+                    ev('obj_detach_without_attach', n=int(n_now))
+            if BIN and det_ack_ is not None and k % 10 == 0 and int(n_now) <= det_ack_['until']:
+                node.p_ack.publish(String(data=json.dumps({k_: v_ for k_, v_ in det_ack_.items() if k_ != 'until'})))
             if DRAWER and getattr(node, 'd2_attach_dr', False) and not dr_bound and not dr_released:   # 抽屜把手理想連接：FixedJoint 夾爪↔抽屜剛體（當下相對位姿；同門把）
                 Tg_ = T_of(*[np.asarray(x)[0] for x in v_grip.get_world_poses()])
                 Td_ = T_of(*[np.asarray(x)[0] for x in v_dr.get_world_poses()])
@@ -882,6 +936,15 @@ def main():
             if DRAWER and k % 10 == 0:                                # 抽屜開度真值（只做驗收記錄）
                 try:
                     dr_log.append([float(t), float((np.asarray(v_dr.get_world_poses()[0], float)[0] - dr_p0) @ dr_pull), float(dr_bound)])
+                except Exception:                                     # noqa: BLE001
+                    pass
+            if BIN and v_objs and k % 10 == 0:                       # 各物體真值（只做驗收記錄：入盒判定、重播）
+                try:
+                    row_ = [float(t), *[float(x) for x in np.asarray(v_base.get_world_poses()[0], float)[0]]]
+                    for v_ in v_objs:
+                        pp_, qq_ = v_.get_world_poses()
+                        row_ += [float(x) for x in np.asarray(pp_, float)[0]] + [float(x) for x in np.asarray(qq_, float)[0]]
+                    obj_log.append(row_)
                 except Exception:                                     # noqa: BLE001
                     pass
             if v_cyl is not None and k % 10 == 0:                     # 圓柱真值（只做驗收記錄：離桌高度、相對夾爪滑移）
@@ -1016,6 +1079,20 @@ def main():
     res['drawer'] = None if dr_info is None else dict(dr_info, bound_end=dr_bound, released=dr_released, log_cols=['t', 'opening_truth', 'bound'], log=dr_log, note='開度真值只做驗收記錄；控制用開度＝控制器 TCP 位移估計')
     res['marker'] = None if not DRAWER else dict(attached=cyl_attached, log_cols=['t', 'x', 'y', 'z', 'grip_x', 'grip_y', 'grip_z', 'f1_n', 'f2_n'], log=cyl_log, note='筆真值只做驗收記錄，不進控制')
     res['cyl'] = None if cyl_info is None else dict(cyl_info, attached=cyl_attached, attach_note='夾住證據成立後 FixedJoint 理想連接（Howard 11/18）', log_cols=['t', 'x', 'y', 'z', 'grip_x', 'grip_y', 'grip_z', 'f1_n', 'f2_n'], log=cyl_log, note='真值只做驗收記錄，不進控制')
+    if bin_info is not None:                                          # 收納盒驗收（真值）：結束時各物體在 base_link 座標、是否在盒內範圍（xy 在內壁內、z 在盒高內）
+        try:
+            Tb_ = T_of(*[np.asarray(x)[0] for x in v_base.get_world_poses()])
+            inner_ = RBIN_.HS[:2] - float(RBIN_.SPEC['wall'])
+            ends_ = []
+            for o_, v_ in zip(OBJS, v_objs):
+                pl_ = (np.linalg.inv(Tb_) @ np.r_[np.asarray(v_.get_world_poses()[0], float)[0], 1.0])[:3]
+                cz_ = RBIN_.C_LOC[2] - 0.05
+                ins_ = bool(np.all(np.abs(pl_[:2] - RBIN_.C_LOC[:2]) <= inner_) and (cz_ - RBIN_.HS[2]) <= pl_[2] <= (cz_ + RBIN_.HS[2] + 0.05))
+                ends_.append(dict(obj=o_, p_base_link=[round(float(x), 4) for x in pl_], in_bin=ins_))
+            bin_info['end'] = ends_
+        except Exception as e_:                                       # noqa: BLE001
+            bin_info['end_err'] = repr(e_)[:200]
+        res['bin'] = dict(bin_info, objs=OBJS, log_cols=['t', 'base_x', 'base_y', 'base_z'] + [f'{o_.split("/")[-1]}_{c_}' for o_ in OBJS for c_ in ('x', 'y', 'z', 'qw', 'qx', 'qy', 'qz')], log=obj_log, note='真值只做驗收記錄；放入＝解除理想連接後物理落下')
     res['d2'] = dict(stat=d2_stat, bound=bound, released=released, n0=node.d2_n0, ctl=node.d2_ctl_log, note='交權後每步命令＝/d2/out；late＝本步配速時限內沒收到、保持上一筆')
     # 整機停穩驗收（物理紀錄；rc 與 supervisor_done 都不能代替）：最後一筆非零輸入命令之後，在途管線排清（8 步），
     # 底盤每步位移 <1e-6 m 且偏航 <1e-6 rad、手臂各關節速率 <1e-3 rad/s，連續 0.2 s。

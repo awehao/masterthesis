@@ -137,6 +137,21 @@ def main():
         y2 = math.radians(float(reg['marker']['axis_yaw_deg'])) / 2
         mk_v = VisualCuboid(prim_path='/World/marker_replay', name='marker_replay', position=MKL[0, 1:4], scale=np.array([0.14, 0.03, 0.026]),
                             orientation=np.array([math.cos(y2), 0.0, 0.0, math.sin(y2)]), color=np.array([0.85, 0.15, 0.15]))
+    BNL, bin_v, obj_v = None, [], []
+    if res_all.get('bin') and res_all['bin'].get('log'):            # 車尾收納盒：盒片（隨底盤）＋各物體依同趟真值位置與姿態（取代上面的單一物體擺位）
+        from isaacsim.core.api.objects import VisualCuboid as _VC2
+        BNL = np.array(res_all['bin']['log'], float)
+        for nm_, pr_ in res_all['bin']['parts'].items():
+            c_fp = np.array(pr_['c_base_link'], float) + np.array([0.0, 0.0, 0.05])
+            bin_v.append((c_fp, _VC2(prim_path=f'/World/bin_replay/{nm_}', name=f'bin_{nm_}', position=c_fp, scale=2 * np.array(pr_['half'], float), color=np.array([0.85, 0.55, 0.2]))))
+        for j_, o_ in enumerate(res_all['bin']['objs']):
+            if o_.endswith('cyl'):
+                v_ = cyl_v if CYL is not None else VisualCylinder(prim_path='/World/cyl_replay', name='cyl_replay', position=BNL[0, 4 + 7 * j_:7 + 7 * j_], radius=0.015, height=0.20, color=np.array([0.2, 0.6, 0.9]))
+            else:
+                from isaacsim.core.api.objects import VisualCuboid as _VC3
+                v_ = mk_v if mk_v is not None else _VC3(prim_path='/World/marker_replay', name='marker_replay', position=BNL[0, 4 + 7 * j_:7 + 7 * j_], scale=np.array([0.14, 0.03, 0.026]), color=np.array([0.85, 0.15, 0.15]))
+            obj_v.append(v_)
+        CYL, MKL = None, None
     if res_all.get('walkers') and res_all['walkers'].get('log'):
         WKL = np.array(res_all['walkers']['log'], float)
         for j_, nm_ in enumerate(res_all['walkers']['names']):
@@ -187,6 +202,14 @@ def main():
                     v_.set_world_pose(position=sh_[nm_])
         if MKL is not None:
             mk_v.set_world_pose(position=np.array([np.interp(row[0], MKL[:, 0], MKL[:, k]) for k in (1, 2, 3)]))
+        if BNL is not None:
+            i_ = int(np.clip(np.searchsorted(BNL[:, 0], row[0]), 0, len(BNL) - 1))
+            for j_, v_ in enumerate(obj_v):
+                pq_ = BNL[i_, 4 + 7 * j_:11 + 7 * j_]
+                v_.set_world_pose(position=np.array([np.interp(row[0], BNL[:, 0], BNL[:, 4 + 7 * j_ + k_]) for k_ in range(3)]), orientation=pq_[3:7])
+            yb = float(row[4]); cb, sb = math.cos(yb), math.sin(yb)
+            for c_fp, v_ in bin_v:
+                v_.set_world_pose(position=np.array([row[2] + cb * c_fp[0] - sb * c_fp[1], row[3] + sb * c_fp[0] + cb * c_fp[1], c_fp[2]]), orientation=np.array([math.cos(yb / 2), 0.0, 0.0, math.sin(yb / 2)]))
         for j_, v_ in enumerate(wk_v):
             p_ = np.array([np.interp(row[0], WKL[:, 0], WKL[:, 1 + 2 * j_]), np.interp(row[0], WKL[:, 0], WKL[:, 2 + 2 * j_])])
             v_.set_world_pose(position=np.array([p_[0], p_[1], 0.85]))

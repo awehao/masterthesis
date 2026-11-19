@@ -35,6 +35,15 @@ PICK_CARRY = os.environ.get('PICK_CARRY', '1') == '1'                 # Howard 1
 CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.2775')), float(os.environ.get('PICK_CARRY_WZ', '1.1327'))   # 持物底盤速度框（m/s、rad/s）；夾到後理想連接 ⇒ 預設＝硬體上限（不收緊）
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
 PH_TO_S = 4.0
+BIN = os.environ.get('D2_BIN', '0') == '1'                            # Howard 11/19「車子後面放一個盒子 放夾取物」：抬起確認後放進車尾收納盒（rear_bin.py）→ 收臂（相機朝前）→ 返回／下一件
+BIN_QD = float(os.environ.get('D2_BIN_QD', '0.8'))                    # 放盒關節空間移動峰速上限（rad/s；最小急動峰速 1.875×）
+BIN_MOVE = os.environ.get('D2_BIN_MOVE', '1') == '1'                  # 放盒／收臂中底盤照導航前端（限速框 BIN_V/BIN_WZ）；0＝底盤錨定
+BIN_V, BIN_WZ = float(os.environ.get('D2_BIN_V', '0.15')), float(os.environ.get('D2_BIN_WZ', '0.5'))
+DETACH_TO_S = 3.0
+if BIN:
+    import rear_bin as RBIN
+    import door_clear_door_fast as _CF_
+    RBIN.install(_CF_)                                                # 盒體進自碰撞淨空（候選、停止尾段、選位都經 CF.clear_door_fast）
 
 
 class TablePickCtrl(P.DoorPassCtrl):
@@ -63,6 +72,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
         self.T_rel0, self.b_anchor, self.n_ev, self.T_lift0, self.T_rel_s0 = None, None, 0, None, None
         self.ret_sent, self.attach = False, False
+        self.obj_release, self.obj_detached, self.binned, self.q_b0, self.T_bm, self.bin_target = False, False, False, None, None, None
         self.phase, self.t_ph0 = 'APPROACH', float(t0)
         self._ev('pick_start', T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]], base_goal=[round(float(x), 4) for x in app['base_goal']], T=round(self.T_app, 3))
 
@@ -154,6 +164,9 @@ class TablePickCtrl(P.DoorPassCtrl):
             if self.n_ev * DT >= EVID_S - 1e-9:
                 self.T_rel_s0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
                 self._ev('pick_lifted', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas], force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
+                if BIN:
+                    self._bin_start(q, 'BIN_MOVE')
+                    return
                 self._goto('CARRY' if PICK_CARRY else 'RETURN')               # 預設不收臂：手臂相對底盤保持抬升位姿（第十五趟收臂一開始手腕重配置 ⇒ 接觸瞬斷滑落；瓶子線持瓶也是手臂不動、底盤移動）
             elif el > EVID_TO_S:
                 self._stop('lost_after_lift', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas], force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
@@ -166,11 +179,58 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self._stop('carry_not_reached', carry_err_mm=round(ep * 1e3, 2))
             if not self._held():
                 self._stop('lost_during_carry')
+        elif self.phase in ('BIN_MOVE', 'BIN_REL', 'BIN_OPEN', 'BIN_DROP', 'BIN_STOW'):
+            self._advance_bin(q, el)
         elif self.phase == 'RETURN':
-            if not self._held():
+            if not self.binned and not self._held():
                 self._stop('lost_during_return')
 
+    # ---- 車尾收納盒（D2_BIN）
+    def _bin_start(self, q, ph):
+        self.q_b0 = np.asarray(q[3:], float).copy()
+        self.bin_target = RBIN.q_place()[0] if ph == 'BIN_MOVE' else P.Q_STOW
+        self.T_bm = 1.875 * float(np.abs(self.bin_target - self.q_b0).max()) / BIN_QD + 0.5
+        self._goto(ph, T=round(self.T_bm, 2), q_target=[round(float(x), 4) for x in self.bin_target])
+
+    def _bin_q(self, t_abs):
+        u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_bm, 1e-6), 0.0), 1.0))[0]
+        return (1.0 - u) * self.q_b0 + u * self.bin_target
+
+    def _advance_bin(self, q, el):
+        fm = self.finger_meas
+        if self.phase in ('BIN_MOVE', 'BIN_STOW'):
+            err = float(np.abs(np.asarray(q[3:], float) - self.bin_target).max())
+            if self.phase == 'BIN_MOVE' and not self._held():
+                self._stop('lost_during_bin_move', finger=None if fm is None else [round(float(x), 5) for x in fm])
+            elif el >= self.T_bm and err <= 0.03:
+                if self.phase == 'BIN_MOVE':
+                    self.obj_release = True                           # 請執行端解除夾爪↔物體理想連接（FixedJoint）
+                    self._goto('BIN_REL', err=round(err, 4))
+                else:
+                    self._ev('pick_stowed', err=round(err, 4), base=[round(float(x), 4) for x in q[:3]])   # 監督據此送下一件／返回目標
+                    self._goto('RETURN', err=round(err, 4))
+            elif el > self.T_bm + PH_TO_S:
+                self._stop('bin_move_not_reached' if self.phase == 'BIN_MOVE' else 'bin_stow_not_reached', err=round(err, 4))
+        elif self.phase == 'BIN_REL':
+            if self.obj_detached:
+                self.finger_cmd = P.FINGER_OPEN
+                self._goto('BIN_OPEN')
+            elif el > DETACH_TO_S:
+                self._stop('obj_detach_ack_timeout')
+        elif self.phase == 'BIN_OPEN':
+            if fm is not None and min(fm) >= P.FINGER_OK:
+                self._goto('BIN_DROP', finger=[round(float(x), 5) for x in fm])
+            elif el > P.FINGER_TO_S:
+                self._stop('finger_open_timeout', finger=None if fm is None else [round(float(x), 5) for x in fm])
+        elif self.phase == 'BIN_DROP':
+            if el >= RBIN.DROP_WAIT_S:
+                self.binned, self.attach = True, False
+                self._ev('pick_binned')
+                self._bin_start(q, 'BIN_STOW')
+
     def _solve(self, q):
+        if self.phase in ('BIN_MOVE', 'BIN_REL', 'BIN_OPEN', 'BIN_DROP', 'BIN_STOW'):
+            return self._solve_bin(q)
         qp, sp = self._pred(q)
         t_eff = self.t + D_STEPS * PHYS
         X, xi, obs, umin0, src = G.MovingGraspCtrl.nav_window(self, q, qp)
@@ -219,6 +279,46 @@ class TablePickCtrl(P.DoorPassCtrl):
             return None, 'wgmpc_nonfinite'
         if arm['mode'] == 'hold':
             return np.r_[np.asarray(r.u_opt, float), np.zeros(6)], src
+        ck = dict(r.arm_check or {})
+        if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved':
+            return None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed'))
+        return np.r_[np.asarray(r.u_opt, float), np.asarray(r.u_arm_seq[0], float)], src
+
+    def _solve_bin(self, q):
+        """放盒／收臂：手臂關節空間剖面（相對底盤，tcp_rel_base）；底盤照導航前端（限速框）或錨定。"""
+        qp, sp = self._pred(q)
+        t_eff = self.t + D_STEPS * PHYS
+        X, xi, obs, umin0, src = G.MovingGraspCtrl.nav_window(self, q, qp)
+        if obs is None:
+            return None, 'nav_obstacles_stale'
+        self.app_prof = None
+        if not BIN_MOVE:
+            X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
+            xi = [np.zeros(3)] * (XO.N + 1)
+            umin0, src = float('nan'), 'anchor'
+        if self.phase in ('BIN_MOVE', 'BIN_STOW'):
+            qs = [self._bin_q(t_eff + k * DT) for k in range(XO.N + 1)]
+        else:
+            qs = [self.bin_target] * (XO.N + 1)                       # 解除／張爪／落下：保持放置構型
+        Ts = [K.fk(np.r_[np.zeros(3), qk], 'link_tcp') for qk in qs]
+        arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts),
+                   w_p=C0.W_FAR, lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=True, qp_solver='gi', q_post=np.array(qs[1:]), w_q=5.0, **B.W_ARM)
+        mpc = self.mpc
+        u_min_saved = np.asarray(mpc.cfg.u_min, float).copy()
+        u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
+        if math.isfinite(umin0):
+            mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
+        lim_ = np.array([BIN_V, BIN_V, BIN_WZ])                       # 放盒中底盤速度框（任務限制）
+        mpc.cfg.u_max = np.minimum(u_max_saved, lim_)
+        mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
+        w0 = time.perf_counter()
+        try:
+            r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
+        finally:
+            mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
+        self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active)))
+        if not np.isfinite(np.asarray(r.u_opt, float)).all():
+            return None, 'wgmpc_nonfinite'
         ck = dict(r.arm_check or {})
         if ck.get('fallback') or ck.get('failed') or not ck.get('seq_consistent', False) or r.u_arm_seq is None or r.status != 'solved':
             return None, 'wgmpc:%s/%s/%s' % (r.status, ck.get('fallback'), ck.get('failed'))
