@@ -477,12 +477,12 @@ class Stub(Node):
                 self.dr_step()
                 self.mk_obs()
                 self.hdl_obs()
-            self.leaf_obs()
-            if self.door_close:
-                self.door_contact()
             else:
                 self.cyl_step()
                 self.cyl_obs()
+            self.leaf_obs()                                           # 門扇開度觀測（回程關門）
+            if self.door_close:
+                self.door_contact()
             if not isinstance(self.bind, dict):
                 self.obs()                                            # 綁定前持續合成觀察（同 Isaac 端偵測持續運作）
             self.t = round(self.t + PHYS, 10); self.n += 1
