@@ -187,10 +187,10 @@ def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=
                 b_start = np.array([b[0] + s_start * e[0], b[1] + s_start * e[1], th])
                 if not base_free(b_start):
                     continue
+                b_end = b[:2] + s1 * e
                 cost = w_dist * float(np.hypot(*(b_start[:2] - np.asarray(b_now[:2], float)))) + w_sig / max(min(fwd[0], bwd[0]), 1e-6)
-                if goal_next is not None:
-                    gn = np.asarray(goal_next[:2], float) - b[:2]
-                    cost += w_dir * (1.0 - float(np.dot(gn / max(float(np.linalg.norm(gn)), 1e-9), e)))
+                if goal_next is not None:                              # 整體路程（s75：方向偏好權重太小 ⇒ 選了背離抽屜的方向）：到起點＋終點到下一目標（直線近似）
+                    cost += w_dist * float(np.hypot(*(b_end - np.asarray(goal_next[:2], float))))
                 if best is None or cost < best['cost']:
                     best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), e=e.tolist(), flip=bool(fl), v_g=float(v_g), s_start=float(s_start),
                                 base_start=b_start.tolist(), sigma_min=float(min(fwd[0], bwd[0])), env_min=float(min(fwd[1], bwd[1])), base_clear_min=float(min(fwd[2], bwd[2])),

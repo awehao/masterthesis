@@ -155,6 +155,20 @@ class TablePickCtrl(P.DoorPassCtrl):
         el = self.t - self.t_ph0
         if self.T_rel0 is None:
             self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
+        if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH':   # 進線前偏航差大 ⇒ 先原地對齊（s76：靜止備用放行時差 2.9 rad，邊轉邊走擦桌角）
+            dyaw_ = abs((float(q[2]) - float(self.motm['b0'][2]) + math.pi) % (2 * math.pi) - math.pi)
+            if dyaw_ > 0.30:
+                self.b_anchor = np.array([float(q[0]), float(q[1]), float(self.motm['b0'][2])])
+                self._goto('ALIGN', dyaw=round(dyaw_, 3))
+                return
+        if self.phase == 'ALIGN':
+            dyaw_ = abs((float(q[2]) - float(self.motm['b0'][2]) + math.pi) % (2 * math.pi) - math.pi)
+            if dyaw_ <= 0.10:
+                self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
+                self._goto('APPROACH', aligned_s=round(self.t - self.t_ph0, 2))
+            elif self.t - self.t_ph0 > 8.0:
+                self._stop('motm_align_timeout', dyaw=round(dyaw_, 3))
+            return
         if self.motm is not None and self.m_s0 is None:               # 移動中夾取時程：自目前底盤在路線上的投影起算，名目到點＝底盤經過 s＝0
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)
             self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10,
@@ -283,7 +297,11 @@ class TablePickCtrl(P.DoorPassCtrl):
         X, xi, obs, umin0, src = G.MovingGraspCtrl.nav_window(self, q, qp)
         if obs is None:
             return None, 'nav_obstacles_stale'
-        if self.motm is not None and self.m_s0 is not None and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):   # 移動中夾取：底盤沿經過路線不停
+        if self.phase == 'ALIGN':                                     # 原地對齊：底盤位置不動、轉到路線朝向；手臂保持
+            X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
+            xi = [np.zeros(3)] * (XO.N + 1)
+            umin0, src = float('nan'), 'align'
+        elif self.motm is not None and self.m_s0 is not None and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):   # 移動中夾取：底盤沿經過路線不停
             X, xi = self._motm_ref(t_eff)
             umin0, src = float('nan'), 'motm_line'
         elif self.phase in ('CLOSE', 'CONFIRM', 'LIFT', 'VERIFY', 'CARRY'):   # 接觸／持物操作段：底盤原地

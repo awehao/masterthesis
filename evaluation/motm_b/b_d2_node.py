@@ -850,7 +850,11 @@ def main():
                 bs_ = np.asarray(self.pick_sel['base_start'], float)
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - bs_[:2])))
                 dyaw_c_ = abs((float(self.b_od_now[2]) - float(bs_[2]) + math.pi) % (2 * math.pi) - math.pi)
-                if dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or dist_ <= 0.35):
+                mv_ = getattr(self, '_m_still', None)                  # 底盤靜止計時（導航以容差到點而偏航未齊時的備用：s70 卡住）
+                if mv_ is None or float(np.hypot(*(self.b_od_now[:2] - mv_[0][:2]))) > 0.005 or abs(float(self.b_od_now[2] - mv_[0][2])) > 0.01:
+                    self._m_still = (self.b_od_now.copy(), t); mv_ = self._m_still
+                still_ = t - mv_[1] >= 1.5
+                if dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or (still_ and dist_ <= 0.5)):   # s75：距離備用在偏航差 3.3 rad 放行 ⇒ 掉頭擦桌角 ⇒ 移動中夾取只用偏航或靜止備用
                     Tg_od = np.asarray(self.pick_sel['T_grasp'], float)
                     Tg_od[2, 3] = float(self.pick_box['est_od'][2])
                     b0_ = [float(x) for x in self.pick_sel['base']]
