@@ -134,12 +134,23 @@ def _path_ok(T_from, T_to, b, q_open, q_seed, n=5):
     return True
 
 
+YAW_TIERS = ((0.0,), (-20.0, 20.0))                                    # s89d：MotM 拉開後底盤橫向漂 0.1 m，±20° 底盤位夾筆擦側板 3.4 mm ⇒ 先限正對櫃面，無解才放 ±20°
+
+
 def select_marker(c, yaw, q_open, b_now, w_dist=1.0, w_sig=0.02, R_ref=None, T_from=None):
+    for yt in YAW_TIERS:
+        r = _select_marker(c, yaw, q_open, b_now, w_dist, w_sig, R_ref, T_from, yt)
+        if r is not None:
+            return r
+    return None
+
+
+def _select_marker(c, yaw, q_open, b_now, w_dist, w_sig, R_ref, T_from, yaws):
     best = None
     flips = (False, True)
     if R_ref is not None:                                              # 先試與俯視姿態轉角較小的夾爪方向（少轉手腕）
         flips = tuple(sorted((False, True), key=lambda f: _rot_angle(np.asarray(R_ref, float), grasp_T(c, yaw, f)[:3, :3])))
-    for b in _frame_bases(c, np.arange(0.30, 0.56, 0.025), np.arange(-0.30, 0.301, 0.05), (0.0, -20.0, 20.0)):
+    for b in _frame_bases(c, np.arange(0.30, 0.56, 0.025), np.arange(-0.30, 0.301, 0.05), yaws):
         if not M.base_free(b):
             continue
         g = _ik_ok(lambda f: grasp_T(c, yaw, f), b, q_open, flips=flips[:1])
@@ -181,11 +192,19 @@ def ik_branch(T, b, margin=0.15):
 
 
 def select_observe(q_open, b_now, flip=False):
+    for yt in YAW_TIERS:
+        r = _select_observe(q_open, b_now, flip, yt)
+        if r is not None:
+            return r
+    return None
+
+
+def _select_observe(q_open, b_now, flip, yaws):
     c = exposed_center(q_open)
     z_b = float(D.SPEC['interior']['bottom_top_z'])
     yaw_m = math.atan2(D.PULL[0], -D.PULL[1]) if False else _yaw_face() + math.pi / 2   # 筆名目平躺方向（沿把手橫桿）只用來定夾爪開合方向，不讀筆位置
     best = None
-    for b in _frame_bases(c, np.arange(0.30, 0.56, 0.025), np.arange(-0.20, 0.201, 0.05), (0.0, -20.0, 20.0)):
+    for b in _frame_bases(c, np.arange(0.30, 0.56, 0.025), np.arange(-0.20, 0.201, 0.05), yaws):
         if not M.base_free(b):
             continue
         go = None
