@@ -197,6 +197,9 @@ class Stub(Node):
                 self.tail_log.append(dict(t=round(self.t, 3), what='drawer_attached', q_open=round(self.dr_q, 4)))
             else:
                 self.abort = 'drawer_attach_without_contact'
+        elif w == 'drawer_reset' and DRAWER:                          # 關抽屜：允許第二次連接／解除
+            self.dr_unb, self.dr_att = False, None
+            self.tail_log.append(dict(t=round(self.t, 3), what='drawer_reset', q_open=round(self.dr_q, 4)))
         elif w == 'unbind_drawer' and DRAWER:
             self.dr_att, self.dr_unb = None, True
             self.dr_unb_req = c.get('req_n')
@@ -279,7 +282,9 @@ class Stub(Node):
             self.dr_q = min(max(float(np.dot(Tt[:3, 3], DRS.PULL)) - self.dr_att, 0.0), 0.22)
         near = float(np.linalg.norm(Tt[:3, 3] - DRS.handle_T(self.dr_q)[:3, 3])) <= 0.006
         self.dr_contact = (near or self.dr_att is not None) and self.fcmd_last < F_CONTACT_H   # 已理想連接（同 Isaac FixedJoint）⇒ 接觸維持（s62：拉動起始 TCP 下沉 2.3 mm 超出 6 mm 球而判脫手，Isaac 不會）
-        if self.in_bin:
+        if self.in_bin:                                               # 筆已入盒：只剩把手接觸（關抽屜時第二次夾）
+            if self.dr_contact:
+                self.fing = max(self.fing, F_CONTACT_H)
             self.ffor = (2.0, 2.0) if self.dr_contact else (0.0, 0.0)
         elif self.cyl_att is None:
             self.cyl_p = MK0 + self.dr_q * DRS.PULL                  # 筆未被夾：隨抽屜

@@ -327,6 +327,8 @@ class Bridge(Node):
             self.d2_bind = True
         elif w == 'attach_cyl':
             self.d2_attach_cyl = True                                # 圓柱理想連接請求（夾住證據成立後）
+        elif w == 'drawer_reset':
+            self.dr_reset = True                                     # 關抽屜：第二次連接前重設
         elif w == 'drawer_pose':
             self.dr_pose_vis = c.get('pose')                         # 監督融合的視覺抽屜位姿 ⇒ 筆偵測內部範圍依此
         elif w == 'detach_obj':
@@ -899,6 +901,10 @@ def main():
                     ev('obj_detach_without_attach', n=int(n_now))
             if BIN and det_ack_ is not None and k % 10 == 0 and int(n_now) <= det_ack_['until']:
                 node.p_ack.publish(String(data=json.dumps({k_: v_ for k_, v_ in det_ack_.items() if k_ != 'until'})))
+            if DRAWER and getattr(node, 'dr_reset', False):         # 關抽屜：第二次連接（FixedJoint 同路徑重新定義、啟用）
+                node.dr_reset, node.d2_attach_dr, node.d2_unbind_dr = False, False, False
+                dr_bound, dr_released = False, False
+                ev('drawer_reset_for_close', n=int(n_now))
             if DRAWER and getattr(node, 'd2_attach_dr', False) and not dr_bound and not dr_released:   # 抽屜把手理想連接：FixedJoint 夾爪↔抽屜剛體（當下相對位姿；同門把）
                 Tg_ = T_of(*[np.asarray(x)[0] for x in v_grip.get_world_poses()])
                 Td_ = T_of(*[np.asarray(x)[0] for x in v_dr.get_world_poses()])

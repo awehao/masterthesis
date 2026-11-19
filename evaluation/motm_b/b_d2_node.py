@@ -38,6 +38,7 @@ DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 1
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
 PICK_APP_DYAW = float(os.environ['B_PICK_APP_DYAW']) if os.environ.get('B_PICK_APP_DYAW') else None   # 圓柱接近開始的偏航閘門（同抽屜 DR_APP_DYAW；s60：繞茶几角時距 0.6 m 即接近、車頭偏 1.36 rad ⇒ 收斂切桌角、底盤淨空 0.0993 被停）；未設＝原行為
+DRAWER_CLOSE = os.environ.get('D2_DRAWER_CLOSE', '0') == '1'         # Howard 11/19「抽屜也要關阿」：筆放盒收臂後夾回把手推回，再返回
 HANDLE_VISION = os.environ.get('D2_HANDLE_VISION', '0') == '1'      # Howard 11/19「不要把東西寫死 要實際用到視覺」：抽屜位姿由手腕深度把手偵測融合（登錄位姿只當搜尋先驗）
 PICK_MOTM_V = float(os.environ['PICK_MOTM_V']) if os.environ.get('PICK_MOTM_V') else None   # Howard 11/19「茶几那個要移動中夾取 我要做整體速度最佳」：經過速度（m/s）；未設＝停車夾取
 RET_CLEAR = os.environ.get('B_RET_CLEAR', '0') == '1'                # 返回目標送出前清一次全域代價圖（同穿門 PASS_CLEAR 的 Nav2 標準復原）；規劃持續失敗 RET_CLEAR_RETRY_S 再清（最多 3 次）（s66：串接路線沿途行人標記殘留 ⇒ 抽屜→起點 no valid path 582 次）
@@ -820,9 +821,18 @@ def main():
             if '"what": "pick_binned"' in m.data:                      # 收納盒（每件一次）
                 self.n_binned = getattr(self, 'n_binned', 0) + 1
                 if DRAWER and self.dr.get('stage') == 'marker':
-                    self.dr['carried'] = True                          # 筆已放盒 ⇒ 送返回目標（收臂中底盤照導航前端）
+                    if DRAWER_CLOSE:
+                        self.dr['stage'] = 'close_wait'                 # 關抽屜：等收臂完成再送關抽屜封包
+                    else:
+                        self.dr['carried'] = True                      # 筆已放盒 ⇒ 送返回目標（收臂中底盤照導航前端）
             if '"what": "pick_stowed"' in m.data:
                 self.n_stowed = getattr(self, 'n_stowed', 0) + 1
+                if DRAWER and self.dr.get('stage') == 'close_wait':
+                    self.dr['stage'] = 'close_send'
+                elif DRAWER and self.dr.get('stage') == 'closing' and self.dr.get('closed'):
+                    self.dr['carried'] = True                          # 抽屜已關、收臂完成 ⇒ 返回
+            if '"what": "pick_dr_closed"' in m.data:
+                self.dr['closed'] = True
             if DRAWER and not BIN and '"what": "pick_dr_carried"' in m.data:   # 抽屜：收臂完成才送返回目標（s50：抬升後立即送 ⇒ 前端障礙物 3→6、CBF 推動錨定底盤 3.8 cm ⇒ 夾爪被帶向面板）
                 self.dr['carried'] = True
             for k_ in ('pick_dr_released', 'pick_dr_observing'):      # 抽屜任務事件（帶開度估計）
@@ -979,6 +989,18 @@ def main():
                 if float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float)))) <= PICK_APP_DIST and (dyaw_ <= DR_APP_DYAW or float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float)))) <= 0.35):   # s51：偏航差 0.36 rad 時開始接近 ⇒ 手腕 j5 −1.76、自身淨空 4.6 mm
                     self._dr_send('drawer', dr['sel']['base'], t, T_grasp=dr['sel']['T_grasp'], q_grasp=dr['sel'].get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'))
                     dr['stage'] = 'wait_release'
+            elif st == 'close_send':                                   # 關抽屜封包：拉開終點底盤位、目前開度的把手位姿、推回方向
+                qo_ = float(dr.get('q_open') or R_.OPEN_M)
+                b1_ = np.asarray(dr['sel']['base'], float) + np.r_[qo_ * R_.D.PULL[:2], 0.0]
+                R_.D.set_open(qo_)
+                Tg_ = np.asarray(R_.D.handle_T(qo_, bool(dr['sel'].get('flip', False))), float)
+                if dr['sel'].get('T_grasp') is not None:               # 選位時的抓取位姿（含把手越過量）沿拉出方向平移開度
+                    Tg_ = np.asarray(dr['sel']['T_grasp'], float).copy(); Tg_[:3, 3] = Tg_[:3, 3] + qo_ * np.asarray(R_.D.PULL, float)
+                self.pick_goal, self.pass_t = self._dr_goal(b1_), t
+                dr['goal_od'] = list(b1_)
+                self._dr_send('dr_close', b1_, t, T_grasp=Tg_.tolist(), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], q_open=qo_)
+                dr['stage'] = 'closing'
+                self.event('dr_close_sent', q_open=round(qo_, 4), base=[round(float(x), 4) for x in b1_])
             elif st == 'wait_release' and 'pick_dr_released' in dr:
                 dr['q_open'] = float(dr['pick_dr_released'].get('q_open', R_.OPEN_M))
                 dr['box'] = self._dr_thread(R_.select_observe, dr['q_open'], self.b_od_now.copy(), bool(dr['sel']['flip']))

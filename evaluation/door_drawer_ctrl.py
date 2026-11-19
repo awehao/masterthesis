@@ -40,6 +40,7 @@ W_Q_APP = float(os.environ.get('DR_W_Q_APP', '0.0'))                  # 把手�
 OBS_BUMP = float(os.environ.get('DR_OBS_BUMP', '0.05'))              # 俯視接近路徑上拱（m）
 CARRY_POS = np.array([float(x) for x in os.environ.get('DR_CARRY_POS', '0.30,0.0,0.70').split(',')])   # 持筆收臂位（底盤座標）：原收臂點 (0.36, 0, 0.588) 在拉開的抽屜正上方、低於面板頂 0.60 ⇒ 返回後退會撞面板；改高 0.70（離線 σ 0.117）
 T_CARRY_DR = float(os.environ.get('DR_T_CARRY', '4.0'))
+CLOSE_LEAVE_M = float(os.environ.get('DR_CLOSE_LEAVE_M', '0.005'))
 LIFT_DELAY = 0.35                                                     # 抬升自退出名目時間的 35% 起（先水平離開橫桿）
 
 
@@ -83,6 +84,23 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.T_obs0 = None if self.T_hold is None else self.T_hold.copy()   # 起點＝退出終點（世界）
             self.q_obs = np.asarray(app['q_obs'], float).copy() if app.get('q_obs') is not None else None   # 俯視構型（關節空間過去；s42）
             self.q_obs0 = None
+        elif kind == 'dr_close' and self.task == 'marker' and self.phase == 'RETURN' and getattr(self, 'binned', False):   # Howard 11/19「抽屜也要關阿」：取筆放盒收臂後夾回把手、全身推回（拉開的反向）
+            self.task, self.close_mode = 'handle', True
+            self.open0 = float(app.get('q_open', self.q_open))
+            self.pull = -np.r_[np.asarray(app['pull'], float)[:2], 0.0]
+            self.pull = self.pull / max(float(np.linalg.norm(self.pull)), 1e-9)
+            self.open_m = max(0.0, self.open0 - CLOSE_LEAVE_M)              # 留 5 mm 不撞關閉限位（理想連接下硬推限位會拉扯手臂）
+            self.T_grasp = np.asarray(app['T_grasp'], float).copy()
+            self.dr_attach, self.dr_release, self.dr_unbound = False, False, False
+            self.T_p0, self.b_p0, self.T_rel_r0, self.dvec_b, self.n_ev = None, None, None, None, 0
+            self.finger_cmd = P.FINGER_OPEN
+            self.q_unf0 = None
+            self.app_prof = dict(base_goal=list(app['base_goal']), door=None)
+            self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
+            self.T_rel0 = None
+            self.t = float(t0)
+            self._goto('UNFOLD', task='close', open0=round(self.open0, 4))
+            return
         elif kind == 'marker' and self.task == 'observe' and self.phase == 'OBSERVE':
             self.task = 'marker'
             self.bin_carry_first = True                               # 收納盒：筆先兩段式收臂再放盒
@@ -192,14 +210,17 @@ class DrawerCtrl(PK.TablePickCtrl):
                 return
             if self.phase == 'PULL':
                 Tc = K.fk(q, 'link_tcp')
-                self.q_open = max(0.0, float(np.dot(Tc[:3, 3] - self.T_p0[:3, 3], self.pull)))
+                if getattr(self, 'close_mode', False):                # 推回：開度＝原開度 − 推入量
+                    self.q_open = max(0.0, self.open0 - max(0.0, float(np.dot(Tc[:3, 3] - self.T_p0[:3, 3], self.pull))))
+                else:
+                    self.q_open = max(0.0, float(np.dot(Tc[:3, 3] - self.T_p0[:3, 3], self.pull)))
                 D.set_open(self.q_open)
                 ep = float(np.linalg.norm(Tc[:3, 3] - self._pull_target(self.t_ph0 + self.T_pull)[:3, 3]))
                 if el >= self.T_pull and ep <= PULL_TOL:
                     self.b_anchor = np.asarray(q[:3], float).copy()
                     self.T_hold = Tc.copy()
                     self.dr_release = True
-                    self._ev('pick_dr_pulled', q_open=round(self.q_open, 4), err_mm=round(ep * 1e3, 2))
+                    self._ev('pick_dr_closed_pushed' if getattr(self, 'close_mode', False) else 'pick_dr_pulled', q_open=round(self.q_open, 4), err_mm=round(ep * 1e3, 2))
                     self._goto('UNBIND')
                 elif el > self.T_pull + PK.PH_TO_S:
                     self._stop('pull_not_reached', err_mm=round(ep * 1e3, 2), q_open=round(self.q_open, 4))
@@ -231,6 +252,11 @@ class DrawerCtrl(PK.TablePickCtrl):
                 lifted = float(d_[2])
                 if el >= T_RET_DR and moved >= 0.9 * P.S_RET and lifted >= 0.9 * RET_LIFT:
                     self.T_hold = K.fk(q, 'link_tcp')
+                    if getattr(self, 'close_mode', False):            # 關抽屜完成 ⇒ 關節收臂回導航姿勢（底盤照導航）⇒ RETURN
+                        self._ev('pick_dr_closed', q_open=round(self.q_open, 4), retreat_m=round(moved, 4))
+                        self.task = 'marker'                          # 之後 RETURN／BIN_STOW 走 TablePickCtrl 一般路徑
+                        self._bin_start(q, 'BIN_STOW')
+                        return
                     self._ev('pick_dr_released', q_open=round(self.q_open, 4), retreat_m=round(moved, 4), lift_m=round(lifted, 4))
                     self._goto('WAIT')
                 elif el > T_RET_DR + P.PH_EXTRA_TO_S:
