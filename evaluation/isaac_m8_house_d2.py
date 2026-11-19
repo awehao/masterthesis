@@ -777,12 +777,13 @@ def main():
                 ev('latched_sim_engineering_abort', **latch)
                 node.p_state.publish(String(data='latched:' + latch['why']))
                 break
-            if walk_views:                                            # 行人移動（模擬時間）
+            if walk_views:                                            # 行人移動（模擬時間；D2_WALKER_YIELD 時各自進度、遇機器人讓路）
+                WK.crowd_step(t, q[:2], walk_list)
                 for w_, v_ in zip(walk_list, walk_views):
-                    p_ = WK.walker_pos(w_, t)
+                    p_ = WK.crowd_pos(w_, t)
                     v_.set_world_poses(positions=np.array([[p_[0], p_[1], w_['height'] / 2]], np.float32))
                 if k % 10 == 0:
-                    walk_log.append([float(t)] + [float(x) for w_ in walk_list for x in WK.walker_pos(w_, t)])
+                    walk_log.append([float(t)] + [float(x) for w_ in walk_list for x in WK.crowd_pos(w_, t)])
             # ---- ROS 收命令
             for _ in range(4):
                 rclpy.spin_once(node, timeout_sec=0.0)

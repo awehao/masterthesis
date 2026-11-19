@@ -428,10 +428,12 @@ class Stub(Node):
                 self.phi = self.bind['phi'] - d_
             if self.bind == 'released' and self.n % 10 == 0:
                 self.p_ack.publish(String(data=json.dumps(dict(what='unbound', n=int(self.n), req=getattr(self, 'unbind_req', None)))))
-            if WALKERS and self.n % 5 == 0:                           # 底盤碰到行人 ⇒ 中止（同 Isaac 底盤接觸）
+            if WALKERS:
                 import walkers as WK_
+                WK_.crowd_step(self.t, self.q[:2], _OB['walkers'])          # 同 Isaac：各自進度、讓路
+            if WALKERS and self.n % 5 == 0:                           # 底盤碰到行人 ⇒ 中止（同 Isaac 底盤接觸）
                 for w_ in _OB['walkers']:
-                    pw_ = WK_.walker_pos(w_, self.t)
+                    pw_ = WK_.crowd_pos(w_, self.t)
                     if float(np.hypot(*(self.q[:2] - pw_))) < 0.30 + float(w_['radius']):
                         self.abort = 'walker_collision:' + w_['name']; self.tail_log.append(dict(t=round(self.t, 3), what='walker_collision', who=w_['name']))
                     elif float(np.hypot(*(self.q[:2] - pw_))) < 0.30 + float(w_['radius']) + 0.40:   # 手臂連桿碰行人（第二十一趟 Isaac：收臂夾爪伸出底盤圓外被行人撞 43 N）
@@ -468,7 +470,7 @@ class Stub(Node):
                 if WALKERS:                                           # 行人（同 Isaac：共用 walkers.walker_pos）
                     import walkers as WK_
                     angs = [self.q[2] + WN.SCAN_MIN + i_ * WN.SCAN_INC for i_ in range(len(r))]
-                    r = WK_.cast_circles(pl, angs, r, [(WK_.walker_pos(w_, self.t), float(w_['radius'])) for w_ in _OB['walkers']])
+                    r = WK_.cast_circles(pl, angs, r, [(WK_.crowd_pos(w_, self.t), float(w_['radius'])) for w_ in _OB['walkers']])
                 m = LaserScan(); m.header.stamp = self.stamp(); m.header.frame_id = 'lidar_link'
                 m.angle_min, m.angle_max, m.angle_increment = WN.SCAN_MIN, WN.SCAN_MAX, WN.SCAN_INC
                 m.range_min, m.range_max = WN.RANGE_MIN, WN.RANGE_MAX

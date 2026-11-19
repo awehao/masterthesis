@@ -25,6 +25,32 @@ def walker_pos(w, t):
     return p0.copy()
 
 
+YIELD = __import__('os').environ.get('D2_WALKER_YIELD', '0') == '1'   # Howard 場景＋第三十趟 Isaac（行人撞上近乎靜止的機器人）：行人讓路——前方 YIELD_GAP 內有機器人且正朝其走 ⇒ 暫停
+YIELD_GAP, ROBOT_R = 0.30, 0.30
+_TAU, _T_LAST, _PAUSED = {}, [None], {}
+
+
+def crowd_step(t, robot_xy, walkers):
+    """每個物理步呼叫一次：各行人自己的進度時間 τ；讓路時 τ 不前進（同一份給 Isaac 與替身；決定性）。未開 YIELD ⇒ τ＝t（與原模型逐值相同）。"""
+    dt = 0.0 if _T_LAST[0] is None else max(0.0, float(t) - _T_LAST[0])
+    _T_LAST[0] = float(t)
+    for w in walkers:
+        nm = w['name']
+        tau = _TAU.get(nm, float(t) - dt)
+        if not YIELD:
+            _TAU[nm] = float(t); continue
+        p = walker_pos(w, tau); v = walker_vel(w, tau)
+        d = np.asarray(robot_xy, float)[:2] - p
+        block = float(np.linalg.norm(d)) < float(w['radius']) + ROBOT_R + YIELD_GAP and float(v @ d) > 0.0
+        _PAUSED[nm] = bool(block)
+        _TAU[nm] = tau if block else tau + dt
+
+
+def crowd_pos(w, t=None):
+    tau = _TAU.get(w['name'])
+    return walker_pos(w, t if tau is None else tau)
+
+
 def walker_vel(w, t, dt=0.05):
     return (walker_pos(w, t + dt) - walker_pos(w, t - dt)) / (2 * dt)
 
