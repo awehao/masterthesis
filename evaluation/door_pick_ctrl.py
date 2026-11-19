@@ -217,6 +217,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self._stop('bin_move_not_reached' if self.phase == 'BIN_MOVE' else 'bin_stow_not_reached', err=round(err, 4))
         elif self.phase == 'BIN_REL':
             if self.obj_detached:
+                self.attach = False                                   # 連接已解除 ⇒ 同拍撤回連接請求（s66：撤回晚於伺服器重置 ⇒ 重送 attach_cyl，Isaac 會把物體焊回夾爪）
                 self.finger_cmd = P.FINGER_OPEN
                 self._goto('BIN_OPEN')
             elif el > DETACH_TO_S:

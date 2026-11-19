@@ -495,7 +495,7 @@ class WorldD2(Node):
                             self.ctl('detach_obj', req_n=int(self.n))
                             if not ISAAC:
                                 self.obj_detach_ack = dict(what='obj_detached', n=int(self.n), req=int(self.n))
-                        if not rec.get('obj_release') and getattr(self, 'obj_releasing', False) and getattr(self, 'obj_detach_ack', None) is not None:   # 控制器已收到回報 ⇒ 重置（下一件可再連接）
+                        if not rec.get('obj_release') and not rec.get('attach') and getattr(self, 'obj_releasing', False) and getattr(self, 'obj_detach_ack', None) is not None:   # 控制器已收到回報 ⇒ 重置（下一件可再連接）
                             self.obj_releasing, self.cyl_attached, self.obj_detach_ack = False, False, None
                             self.ev('obj_release_cleared')
                         if rec.get('dr_attach') and not getattr(self, 'dr_attached', False):   # 抽屜把手理想連接（夾住證據成立後）

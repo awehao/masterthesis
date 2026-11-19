@@ -38,6 +38,8 @@ DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 1
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
 PICK_APP_DYAW = float(os.environ['B_PICK_APP_DYAW']) if os.environ.get('B_PICK_APP_DYAW') else None   # 圓柱接近開始的偏航閘門（同抽屜 DR_APP_DYAW；s60：繞茶几角時距 0.6 m 即接近、車頭偏 1.36 rad ⇒ 收斂切桌角、底盤淨空 0.0993 被停）；未設＝原行為
+RET_CLEAR = os.environ.get('B_RET_CLEAR', '0') == '1'                # 返回目標送出前清一次全域代價圖（同穿門 PASS_CLEAR 的 Nav2 標準復原）；規劃持續失敗 RET_CLEAR_RETRY_S 再清（最多 3 次）（s66：串接路線沿途行人標記殘留 ⇒ 抽屜→起點 no valid path 582 次）
+RET_CLEAR_RETRY_S = float(os.environ.get('B_RET_CLEAR_RETRY_S', '8.0'))
 DR_APP_DYAW = float(os.environ.get('B_DR_APP_DYAW', '0.30'))         # 抓把手接近開始的底盤偏航差上限（rad）
 DR_PRIOR = [float(x) for x in os.environ.get('B_DR_PRIOR', '-3.5,10.3,3.1416').split(',')]   # 選位完成前的粗目標（map；抽屜櫃前）
 PASS_CLEAR = os.environ.get('B_PASS_CLEAR', '1') == '1'           # Howard 11/18：不要中途點，讓全域規劃自己找出路
@@ -1125,6 +1127,15 @@ def main():
                 elif PICK:                                            # 取物（穿門後不停車）：粗目標＝茶几先驗 → 看到圓柱後線上選抓取底盤位 → 近距送取物封包 → 抬起後回起點
                     self.pick_tick(t)
                     g_ = self.pick_goal if self.pick_goal is not None else PICK_PRIOR
+                if RET_CLEAR and self.pick_ret:                       # 返回：清全域代價圖後等障礙層重標再送；送出後久無路徑 ⇒ 再清
+                    n_rc_ = getattr(self, 'n_ret_clear', 0)
+                    no_path_ = self.path_t is None or self.path_t < self.pass_t
+                    if (n_rc_ == 0 or (n_rc_ < 4 and no_path_ and t - getattr(self, 't_ret_clear', t) >= RET_CLEAR_RETRY_S)) and self._clr_cli.service_is_ready():
+                        self._clr_fut, self._clr_t = self._clr_cli.call_async(self._clr_req()), t
+                        self.n_ret_clear, self.t_ret_clear, self.pass_t = n_rc_ + 1, t, t
+                        self.event('return_costmap_clear_called', n=n_rc_ + 1)
+                    if self._clr_t is not None and t - self._clr_t < PASS_CLEAR_WAIT_S:
+                        return
                 g_chg_ = getattr(self, '_g_last', None) is None or float(np.hypot(g_[0] - self._g_last[0], g_[1] - self._g_last[1])) > 0.01 or abs(g_[2] - self._g_last[2]) > 0.01
                 if (g_chg_ or self.path_t is None or self.path_t < self.pass_t) and t - self.t_pass_pub >= 1.0:   # 目標改變 ⇒ 立即重送（s38：選位 0.2 s 完成，舊粗目標的路徑晚到蓋過 path_t ⇒ 新目標沒送出）
                     self.pub_goal(g_[:2], g_[2]); self.t_pass_pub = t; self._g_last = list(g_)
