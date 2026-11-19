@@ -99,6 +99,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
             self.T_rel0 = None
             self.t = float(t0)
+            self.motm, self.m_s0, self.m_t0 = None, None, None          # s90d：把手移動中路線參考不可帶進後續段
             self._goto('UNFOLD', task='close', open0=round(self.open0, 4))
             return
         elif kind == 'marker' and self.task == 'observe' and self.phase == 'OBSERVE':
@@ -108,6 +109,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         else:
             self._ev('pick_dr_app_ignored', kind=kind, task=self.task, phase=self.phase)
             return
+        self.motm, self.m_s0, self.m_t0 = None, None, None              # s90d：把手 MotM 路線參考（s 隨時間增長）殘留到夾筆接近 ⇒ 底盤 0.26 m/s 往 +y 衝、link4 擦櫃側板
         self.app_prof = dict(base_goal=list(app['base_goal']), door=None)
         self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
         if kind == 'observe' and self.q_obs is not None and self.q_arm_now is not None:   # 關節空間時長：最大關節位移 ÷ OBS_QD（最小急動峰速 1.875×）
