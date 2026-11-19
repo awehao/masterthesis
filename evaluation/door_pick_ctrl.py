@@ -226,6 +226,10 @@ class TablePickCtrl(P.DoorPassCtrl):
                 ep_ok = float(np.linalg.norm(d_[:2])) <= 0.005 and abs(float(d_[2])) <= tz_
             else:
                 ep_ok = ep <= 0.005
+            fy_ = getattr(self, 'app_tol_fy', None)
+            if fy_ is not None:                                       # 固定橫桿（抽屜把手）：沿兩指開合軸（TCP y）誤差另設門檻（Isaac 33b／34b：5 mm 球內閉爪、開合軸偏 ~2 mm ⇒ 單指接觸、證據逾時）
+                ep_fy = abs(float((self.T_grasp[:3, :3].T @ (Tc[:3, 3] - self.T_grasp[:3, 3]))[1]))
+                ep_ok = ep_ok and ep_fy <= fy_
             if el >= self.T_app and ep_ok and er <= 3.0:
                 self.b_anchor = np.asarray(q[:3], float).copy()
                 self.finger_cmd = P.FINGER_OPEN

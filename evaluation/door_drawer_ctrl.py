@@ -51,6 +51,7 @@ class DrawerCtrl(PK.TablePickCtrl):
         self.T_grasp = np.asarray(app['T_grasp'], float).copy()      # 把手：不再加圓柱的 GRASP_DEPTH（越過桿心量已在資產 tcp_offset_along_tool_z）
         self.task = 'handle'
         self.app_tol_z = None                                         # 把手、筆：深度方向影響夾取 ⇒ 維持 5 mm 球
+        self.app_tol_fy = float(os.environ.get('DR_APP_TOL_FY', '0.0008'))   # 把手開合軸誤差門檻（筆另設：見 next_app）
         self.app_v = None                                             # 接近速度框只用在圓柱
         self.pull = np.r_[np.asarray(app['pull'], float)[:2], 0.0]
         self.pull = self.pull / max(float(np.linalg.norm(self.pull)), 1e-9)
@@ -86,6 +87,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.q_obs0 = None
         elif kind == 'dr_close' and self.task == 'marker' and self.phase == 'RETURN' and getattr(self, 'binned', False):   # Howard 11/19「抽屜也要關阿」：取筆放盒收臂後夾回把手、全身推回（拉開的反向）
             self.task, self.close_mode = 'handle', True
+            self.app_tol_fy = float(os.environ.get('DR_APP_TOL_FY', '0.0008'))   # 關抽屜再夾同一橫桿：恢復開合軸門檻
             self.open0 = float(app.get('q_open', self.q_open))
             self.pull = -np.r_[np.asarray(app['pull'], float)[:2], 0.0]
             self.pull = self.pull / max(float(np.linalg.norm(self.pull)), 1e-9)
@@ -104,7 +106,8 @@ class DrawerCtrl(PK.TablePickCtrl):
             return
         elif kind == 'marker' and self.task == 'observe' and self.phase == 'OBSERVE':
             self.task = 'marker'
-            self.bin_carry_first = True                               # 收納盒：筆先兩段式收臂再放盒
+            self.bin_carry_first = True
+            self.app_tol_fy = None                                    # 筆可被推正（非固定橫桿）：不另設開合軸門檻                               # 收納盒：筆先兩段式收臂再放盒
             self.T_grasp = np.asarray(app['T_grasp'], float).copy()   # 已含越過筆軸 4 mm（drawer_reach.grasp_T；s44 這裡再加一次 ⇒ TCP 在筆軸下 9.5 mm，替身判未夾到）
         else:
             self._ev('pick_dr_app_ignored', kind=kind, task=self.task, phase=self.phase)
