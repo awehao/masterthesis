@@ -198,6 +198,7 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             Ts = [self.T_rel_s] * (XO.N + 1)
             q_post = np.tile(self.q_s0, (XO.N, 1))
             umin0, src = float('nan'), 'corotate'
+            obs = [o_ for o_ in obs if not o_.get('static')]               # 綁定共轉：牆／門框由全身淨空核對（env）負責，靜態牆點不進 CBF（s99d：牆點擋住底盤繞鉸鏈的位置、只有偏航跟上 ⇒ 夾爪相對把手轉、門又被拉開）；行人等動態障礙照舊
         else:                                                         # CONFIRM、BIND、UNBIND、FINGERS、RETREAT：底盤錨定
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
@@ -224,7 +225,7 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
             mpc.cfg.u_min = u_min_saved
-        self.wg_log.append((round(self.t, 3), 'door_close:' + self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active), PK._obs_near(obs, qp)))
+        self.wg_log.append((round(self.t, 3), 'door_close:' + self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active), PK._obs_near(obs, qp), [round(float(X[0][0, 2] - qp[0]), 4), round(float(X[0][1, 2] - qp[1]), 4), round(float(math.atan2(X[0][1, 0], X[0][0, 0]) - qp[2] + math.pi) % (2 * math.pi) - math.pi, 4)]))   # 底盤參考誤差（x, y, 偏航）
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
         ck = dict(r.arm_check or {})
