@@ -193,8 +193,12 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             Ts = [K.fk(np.r_[np.zeros(3), qk], 'link_tcp') for qk in qs]
             q_post, w_p = np.array(qs[1:]), C0.W_FAR
         elif self.phase == 'SWING':
-            X = [XO.from_xytheta(*corotate_base(self.b_s0, self._phi_ref(t_eff + k * DT) - self.phi_c)) for k in range(XO.N + 1)]
-            xi = [np.zeros(3)] * (XO.N + 1)
+            X = [XO.from_xytheta(*corotate_base(self.b_s0, self._phi_ref(t_eff + k * DT) - self.phi_c)) for k in range(XO.N + 2)]
+            xi = []                                                   # 參考體速度＝相鄰參考位姿的相對運動 /DT（s102d：xi 全零 ⇒ 速度被壓、位置落後 0.2 m、偏航落後，夾爪相對把手轉）
+            for k in range(XO.N + 1):
+                T1 = np.linalg.inv(X[k]) @ X[k + 1]
+                xi.append(np.array([T1[0, 2] / DT, T1[1, 2] / DT, math.atan2(T1[1, 0], T1[0, 0]) / DT]))
+            X = X[:XO.N + 1]
             Ts = [self.T_rel_s] * (XO.N + 1)
             q_post = np.tile(self.q_s0, (XO.N, 1))
             umin0, src = float('nan'), 'corotate'
