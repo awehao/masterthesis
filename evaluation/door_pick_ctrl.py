@@ -119,6 +119,13 @@ class TablePickCtrl(P.DoorPassCtrl):
         T[:3, :3] = Tb[:3, :3] @ _exp_R(beta * _log_R(Tb[:3, :3].T @ Tl[:3, :3]))
         return T
 
+    def _motm_t_arm(self, q):
+        """手臂展開到抓取解所需時間：最大關節位移 ÷ 0.6 rad/s（最小急動峰速 1.875×）＋0.5 s，至少 t_arm（展開與底盤移動重疊、不停車）。"""
+        t_a = float(self.motm.get('t_arm', 4.0))
+        if self.motm.get('q_grasp') is not None:
+            t_a = max(t_a, 1.875 * float(np.abs(np.asarray(self.motm['q_grasp'], float) - np.asarray(q[3:], float)).max()) / 0.6 + 0.5)
+        return t_a
+
     def _motm_s(self, t_abs):
         return self.m_s0 + float(self.motm['v_g']) * (t_abs - self.m_t0)
 
@@ -158,7 +165,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
         if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH':   # 進線前：底盤先到路線起點（位置＋偏航）再開始等速橫移
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)   # （s76：偏航差 2.9 rad 邊轉邊走擦桌角；第三十一趟 Isaac：只轉不移、離線 0.31 m ⇒ 進線偏航漂、淨空 0.100）
-            s_st = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10, -float(self.motm['v_g']) * float(self.motm.get('t_arm', 4.0)))
+            s_st = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10, -float(self.motm['v_g']) * self._motm_t_arm(q))
             b_st = np.array([b0[0] + s_st * e[0], b0[1] + s_st * e[1], float(b0[2])])
             dyaw_ = abs((float(q[2]) - float(b0[2]) + math.pi) % (2 * math.pi) - math.pi)
             dpos_ = float(np.hypot(*(np.asarray(q[:2], float) - b_st[:2])))
@@ -178,7 +185,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         if self.motm is not None and self.m_s0 is None:               # 移動中夾取時程：自目前底盤在路線上的投影起算，名目到點＝底盤經過 s＝0
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)
             self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10,
-                            -float(self.motm['v_g']) * float(self.motm.get('t_arm', 4.0)))   # 手臂展開至少 t_arm（s73）
+                            -float(self.motm['v_g']) * self._motm_t_arm(q))   # 手臂展開至少 t_arm（s73）
             self.m_t0 = self.t
             self.T_app = (0.0 - self.m_s0) / float(self.motm['v_g'])
             self.T_b, self.t_l0 = max(1.0, self.T_app - 1.5), max(0.5, self.T_app - 2.5)

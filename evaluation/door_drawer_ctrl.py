@@ -64,7 +64,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             D.set_pose(*[float(x) for x in app['drawer_pose']])
             self._ev('pick_dr_pose_vision', pose=[round(float(x), 4) for x in app['drawer_pose']])
         self.q_unf0 = None
-        if os.environ.get('PASS_Q_STOW') and float(np.abs(np.asarray(src.s, float) - Q_UNFOLD).max()) > UNFOLD_TOL:   # 緊湊收臂導航 ⇒ 先關節空間展開
+        if os.environ.get('PASS_Q_STOW') and float(np.abs(np.asarray(src.s, float) - Q_UNFOLD).max()) > UNFOLD_TOL and app.get('motm') is None:   # 緊湊收臂導航 ⇒ 先關節空間展開（移動中抓取不展開：接近段直接姿態引導，展開與底盤移動重疊）
             self.phase, self.T_unf = 'UNFOLD', None
             self._ev('pick_phase', phase='UNFOLD')
         self.q_h = np.asarray(app['q_grasp'], float).copy() if app.get('q_grasp') is not None else None   # 把手抓取關節解（選位時算；s51 底盤偏航差 0.47 rad 時手腕走 j5 −1.76 ⇒ 自身淨空 4.6 mm）

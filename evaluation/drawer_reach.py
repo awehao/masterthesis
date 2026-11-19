@@ -112,7 +112,29 @@ def _rot_angle(Ra, Rb):
     return math.acos(max(-1.0, min(1.0, (float(np.trace(Ra.T @ Rb)) - 1.0) / 2.0)))
 
 
-def select_marker(c, yaw, q_open, b_now, w_dist=1.0, w_sig=0.02, R_ref=None):
+PATH_ENV = float(os.environ.get('DR_PATH_ENV', '0.008'))             # 俯視位→預抓位接近路徑的手臂淨空下限（s88d：移動中拉開後俯視底盤轉 22°，接近時夾爪殼擦抽屜側板 3.1 mm）
+
+
+def _path_ok(T_from, T_to, b, q_open, q_seed, n=5):
+    """同一底盤位、TCP 由 T_from 直線（姿態等角內插）到 T_to：逐點 IK（同分支連續）＋手臂淨空 ≥ PATH_ENV。"""
+    A, Bm = np.asarray(T_from, float), np.asarray(T_to, float)
+    from scipy.spatial.transform import Rotation as Rr, Slerp
+    sl = Slerp([0.0, 1.0], Rr.from_matrix([A[:3, :3], Bm[:3, :3]]))
+    prev = np.asarray(q_seed, float)
+    for u in np.linspace(0.0, 1.0, n)[1:-1]:
+        T = np.eye(4); T[:3, :3] = sl([u]).as_matrix()[0]; T[:3, 3] = (1 - u) * A[:3, 3] + u * Bm[:3, 3]
+        q, r, sm = DFK.ik_closure_fc(T, b, prev)
+        q = (np.asarray(q, float) + math.pi) % (2 * math.pi) - math.pi
+        if r > 1e-4 or sm < 0.02:
+            return False
+        ok, c = _clear(b, q, q_open)
+        if not ok or float(c['env']) < PATH_ENV:
+            return False
+        prev = q
+    return True
+
+
+def select_marker(c, yaw, q_open, b_now, w_dist=1.0, w_sig=0.02, R_ref=None, T_from=None):
     best = None
     flips = (False, True)
     if R_ref is not None:                                              # 先試與俯視姿態轉角較小的夾爪方向（少轉手腕）
@@ -125,6 +147,8 @@ def select_marker(c, yaw, q_open, b_now, w_dist=1.0, w_sig=0.02, R_ref=None):
             continue
         gp = _ik_ok(grasp_T(c, yaw, g['flip'], PRE_M), b, q_open, ENV_SEL)
         if gp is None:
+            continue
+        if T_from is not None and not _path_ok(T_from, grasp_T(c, yaw, g['flip'], PRE_M), b, q_open, gp['q']):
             continue
         dyaw = abs((float(b[2]) - float(b_now[2]) + math.pi) % (2 * math.pi) - math.pi)
         sc = w_dist * (float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + 0.3 * dyaw) + w_sig / min(g['sigma'], gp['sigma']) - W_ENV * gp['env']   # 偏航差折 0.3 m/rad（少轉底盤、手腕分支連續）

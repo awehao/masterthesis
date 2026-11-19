@@ -1105,6 +1105,7 @@ def main():
                 self.event('dr_observe_goal', base=[round(float(x), 4) for x in sel['base']], c=[round(float(x), 4) for x in sel['c']], ms=round(dr['box']['ms'], 1))
                 self._dr_send('observe', sel['base'], t, T_obs=sel['T_obs'], q_obs=sel['q_obs'])
                 dr['R_obs'] = np.asarray(sel['T_obs'], float)[:3, :3]
+                dr['T_obs'] = np.asarray(sel['T_obs'], float)
                 dr.update(stage='wait_obs', box=None)
             elif st == 'wait_obs' and 'pick_dr_observing' in dr:
                 dr.update(stage='mk_fuse', t_obs=t)
@@ -1112,7 +1113,7 @@ def main():
                 est = self._mk_fuse(t, dr['t_obs'])
                 if est is not None:
                     dr['est'] = est
-                    dr['box'] = self._dr_thread(R_.select_marker, est[:3], float(est[3]), dr['q_open'], self.b_od_now.copy(), 1.0, 0.02, dr.get('R_obs'))
+                    dr['box'] = self._dr_thread(R_.select_marker, est[:3], float(est[3]), dr['q_open'], self.b_od_now.copy(), 1.0, 0.02, dr.get('R_obs'), dr.get('T_obs'))   # 接近路徑檢查（s88d）
                     dr['stage'] = 'mk_sel'
                     self.event('dr_marker_estimate', c_od=[round(float(x), 4) for x in est[:3]], yaw_deg=round(math.degrees(float(est[3])), 2), n_obs=len(self.cyl_obs))
                 elif t - dr['t_obs'] > 10.0:
