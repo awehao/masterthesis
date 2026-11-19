@@ -380,7 +380,7 @@ class DrawerCtrl(PK.TablePickCtrl):
                     Ts = [Th_] * (XO.N + 1)
                     if self.phase == 'CONFIRM' and self.motm is not None and self.m_s0 is not None:   # 移動中確認夾住：底盤沿路線不停，TCP 世界固定在把手
                         X, xi = self._motm_ref(t_eff)
-                        Ts = [self.T_grasp] * (XO.N + 1)
+                        Ts = [Th_] * (XO.N + 1)                       # TCP 世界固定在把手（含凍結的瞄準補償）
             umin0, src = float('nan'), 'anchor' if self.phase != 'PULL' else 'pull'
             w_p = C0.W_NEAR if self.phase in ('CONFIRM', 'PULL', 'OBSERVE') else C0.W_FAR
         arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts), w_p=w_p,
