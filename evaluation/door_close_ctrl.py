@@ -46,12 +46,16 @@ def corotate_base(b, dphi):
 class DoorCloseCtrl(PK.TablePickCtrl):
     def __init__(self, src, t0, app):
         """app（odom）：T_grasp、base_goal、q_c（抓持構型手臂關節）、phi_c（本段門角，視覺）、T、T_b、t_l0。"""
+        de = getattr(src, 'door_end', None)
+        phi_c = float(app['phi_c'])
+        b_c = corotate_base(de['b'], phi_c - de['phi'])               # 開門結束抓持構型繞鉸鏈共轉到視覺門角
+        app = dict(app, base_goal=[float(x) for x in b_c], T_grasp=(W.handle_pose(src.T_WH0, phi_c) @ np.asarray(src.T_HE, float)).tolist())
         super().__init__(src, t0, app)
         self.motm = None
         self.app_tol_z, self.app_v = None, None
-        self.T_grasp = np.asarray(app['T_grasp'], float).copy()
-        self.phi_c = float(app['phi_c'])
-        self.q_c = np.asarray(app['q_c'], float).copy()
+        self.T_grasp = np.asarray(app['T_grasp'], float).copy()       # 不加圓柱的 GRASP_DEPTH（同一種門把抓法）
+        self.phi_c = phi_c
+        self.q_c = np.asarray(de['q'], float).copy()
         self.door_bind, self.door_bound, self.release, self.unbound = False, False, False, False
         self.q_u0, self.T_u, self.b_s0, self.q_s0, self.T_rel_s = None, None, None, None, None
         self.phase = 'UNFOLD'

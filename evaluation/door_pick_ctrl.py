@@ -69,6 +69,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.events, self.wg_log, self.tick_log, self.sweep_log = [], [], [], []
         self.clear_min = {k: 9.0 for k in P.KEYS}
         self.T_rel_stow = src.T_rel_stow
+        self.T_HE, self.door_end = getattr(src, 'T_HE', None), getattr(src, 'door_end', None)   # 回程關門用（沿控制器鏈傳遞）
         self.t_halt, self.t_still = None, None
         self.T_grasp = np.asarray(app['T_grasp'], float).copy()
         self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + GRASP_DEPTH * self.T_grasp[:3, 2]   # 同瓶子線：TCP 沿工具軸越過圓柱軸 4 mm，軸心落在指片（TCP 後 1.3–21.3 mm）內（第十二趟 TCP 在軸心上 ⇒ 指尖夾弦、抬升滑落）

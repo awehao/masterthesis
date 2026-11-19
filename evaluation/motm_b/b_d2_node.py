@@ -38,6 +38,7 @@ DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 1
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
 PICK_APP_DYAW = float(os.environ['B_PICK_APP_DYAW']) if os.environ.get('B_PICK_APP_DYAW') else None   # 圓柱接近開始的偏航閘門（同抽屜 DR_APP_DYAW；s60：繞茶几角時距 0.6 m 即接近、車頭偏 1.36 rad ⇒ 收斂切桌角、底盤淨空 0.0993 被停）；未設＝原行為
+DOOR_CLOSE = os.environ.get('D2_DOOR_CLOSE', '0') == '1'             # Howard 11/19 回程關門：抽屜完成後先回臥室側關門，再回起點
 DRAWER_CLOSE = os.environ.get('D2_DRAWER_CLOSE', '0') == '1'         # Howard 11/19「抽屜也要關阿」：筆放盒收臂後夾回把手推回，再返回
 HANDLE_VISION = os.environ.get('D2_HANDLE_VISION', '0') == '1'      # Howard 11/19「不要把東西寫死 要實際用到視覺」：抽屜位姿由手腕深度把手偵測融合（登錄位姿只當搜尋先驗）
 PICK_MOTM_V = float(os.environ['PICK_MOTM_V']) if os.environ.get('PICK_MOTM_V') else None   # Howard 11/19「茶几那個要移動中夾取 我要做整體速度最佳」：經過速度（m/s）；未設＝停車夾取
@@ -653,6 +654,8 @@ def main():
             self.create_subscription(String, '/far/exec_state', self._xs_in, 10)
             self.create_subscription(Float64MultiArray, '/cyl/obs', self._cyl_in, 20)
             self.hdl_obs = []
+            self.leaf_obs, self.door_end, self.dc = [], None, dict(stage=None)
+            self.create_subscription(Float64MultiArray, '/door/leaf_obs', self._leaf_in, 20)
             self.create_subscription(Float64MultiArray, '/dr/handle_obs', self._hdl_in, 20)
             self._CR = None
             if PICK:                                                  # 主執行緒預先 import（背景執行緒裡 import 會與 rclpy 收訊息衝突：s29 take_message 崩潰）
@@ -789,6 +792,61 @@ def main():
             self.cyl_obs.append((float(d[9]), p_od))
             self.cyl_obs = self.cyl_obs[-30:]
 
+        def _leaf_in(self, m):
+            d = np.asarray(m.data, float)
+            if len(d) < 7 or d[2] < 0.5 or not np.isfinite(d[6]):
+                return
+            self.leaf_obs.append((float(d[1]), float(d[6])))
+            self.leaf_obs = self.leaf_obs[-30:]
+
+        def _leaf_fuse(self, t):
+            rec = [p_ for t_, p_ in self.leaf_obs if t - t_ <= 1.5][-5:]
+            if len(rec) < 5 or float(np.ptp(rec)) > math.radians(0.5):
+                return None
+            return float(np.mean(rec))
+
+        def _corot(self, b, dphi):
+            c_, s_ = math.cos(-dphi), math.sin(-dphi)
+            return np.array([c_ * b[0] - s_ * b[1], s_ * b[0] + c_ * b[1], b[2] - dphi])
+
+        def door_tick(self, t):
+            """回程關門：到開門結束底盤位附近觀察門扇 ⇒ 融合門角 ⇒ 共轉抓持站位 ⇒ 近站位送關門封包 ⇒ 關好收臂後回起點。回 True＝仍在關門流程。"""
+            dc = self.dc
+            if dc['stage'] is None:
+                if self.door_end is None:
+                    self.event('door_close_no_end_state'); dc['stage'] = 'skip'; return False
+                dc.update(stage='seek', t0=t)
+                self.pick_goal, self.pass_t = self._dr_goal(self.door_end['b']), t
+                self.dr['goal_od'] = [float(x) for x in self.door_end['b']]   # 目標每拍重新換算用（否則沿用抽屜目標）
+                if PASS_CLEAR and self._clr_cli.service_is_ready():     # 回程穿門前清一次全域代價圖（同穿門、返回）
+                    self._clr_fut, self._clr_t = self._clr_cli.call_async(self._clr_req()), t
+                self.event('door_close_seek', goal=[round(float(x), 4) for x in self.door_end['b']])
+                return True
+            if dc['stage'] == 'seek':
+                ph = self._leaf_fuse(t)
+                if ph is not None:
+                    b_c = self._corot(self.door_end['b'], ph - self.door_end['phi'])
+                    dc.update(stage='nav', phi_c=ph, b_c=b_c)
+                    self.pick_goal, self.pass_t = self._dr_goal(b_c), t
+                    self.dr['goal_od'] = [float(x) for x in b_c]
+                    self.event('door_leaf_vision', phi_deg=round(math.degrees(ph), 3), b_c=[round(float(x), 4) for x in b_c], n_obs=len(self.leaf_obs))
+                elif t - dc['t0'] > 90.0:
+                    self.event('door_leaf_not_seen'); self.abort('door_leaf_not_seen')
+                return True
+            if dc['stage'] == 'nav':
+                b_c = dc['b_c']
+                dist_ = float(np.hypot(*(self.b_od_now[:2] - b_c[:2])))
+                dyaw_ = abs((float(self.b_od_now[2]) - float(b_c[2]) + math.pi) % (2 * math.pi) - math.pi)
+                if dist_ <= PICK_APP_DIST and (dyaw_ <= 0.30 or dist_ <= 0.15):
+                    ph = self._leaf_fuse(t) or dc['phi_c']                # 送封包時以最新融合門角
+                    self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=dict(kind='door_close', phi_c=float(ph), base_goal=[float(x) for x in b_c], T=max(PICK_T_MIN, dist_ / 0.12 + 2.0), T_b=2.5, t_l0=1.5)))))
+                    dc['stage'] = 'closing'
+                    self.event('door_close_app_sent', phi_deg=round(math.degrees(ph), 3), dist=round(dist_, 3))
+                return True
+            if dc['stage'] == 'closing':
+                return not dc.get('done')
+            return False
+
         def _hdl_in(self, m):
             d = np.asarray(m.data, float)
             if len(d) < 9 or d[2] < 0.5 or not np.isfinite(d[6:9]).all():
@@ -842,6 +900,17 @@ def main():
                     except Exception:                                  # noqa: BLE001
                         self.dr[k_] = dict(what=k_)
             self.xstate = m.data
+            if '"what": "pass_start"' in m.data and self.door_end is None:   # 開門結束構型（回程關門共轉起算）
+                try:
+                    d_ = json.loads(m.data)
+                    if d_.get('base_end') is not None:
+                        self.door_end = dict(b=np.asarray(d_['base_end'], float), phi=math.radians(float(d_['phi_end_deg'])))
+                except Exception:                                      # noqa: BLE001
+                    pass
+            if '"what": "pick_door_closed"' in m.data:
+                self.dc['closed'] = True
+            if '"what": "pick_stowed"' in m.data and self.dc.get('closed'):
+                self.dc['done'] = True
             if '"what": "pass_start"' in m.data and not self.pass_seen:   # 開門完成、同一控制器接穿門：原導航鏈送穿門目標
                 self.pass_seen = True
 
@@ -953,6 +1022,8 @@ def main():
         def drawer_tick(self, t):
             """抽屜任務：選把手位 → 近距送抽屜封包 → 拉開放手後選觀察位 → 俯視融合筆觀測 → 選夾筆位 → 抬起後返回起點。"""
             dr, R_ = self.dr, self._DRR
+            if dr.get('carried') and not self.pick_ret and DOOR_CLOSE and self.door_tick(t):   # 回程關門流程中（目標由 door_tick 設）
+                return
             if dr.get('carried') and not self.pick_ret:
                 self.pick_ret, self.pick_goal, self.pass_t = True, list(PICK_RETURN), t
                 self.event('pick_return_goal', goal=PICK_RETURN)

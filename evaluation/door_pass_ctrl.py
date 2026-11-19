@@ -90,6 +90,8 @@ class DoorPassCtrl:
         self.nav_in = getattr(src, 'nav_in', None)
         self.bias_obs = getattr(src, 'bias_obs', None)
         self.T_WH0 = np.asarray(src.T_WH_bind, float).copy()
+        self.T_HE = None if getattr(src, 'T_HE', None) is None else np.asarray(src.T_HE, float).copy()   # 去程抓持變換（回程關門同一種抓法）
+        self.door_end = dict(b=np.asarray(q_end[:3], float).copy(), q=np.asarray(q_end[3:9], float).copy(), phi=float(phi_end))   # 開門結束的抓持構型（回程關門共轉起算）
         self.t, self.n_step = float(t0), 0
         self.phase, self.t_ph0 = 'UNBIND', float(t0)
         self.stop, self.abort, self.done, self.finished = None, None, False, False
@@ -109,7 +111,8 @@ class DoorPassCtrl:
         self.q_stow0, self.T_stow = None, T_STOW
         self.T_rel_stow = K.fk(np.r_[np.zeros(3), Q_STOW], 'link_tcp')
         self.t_halt, self.t_still = None, None
-        self._ev('pass_start', phi_end_deg=round(math.degrees(float(phi_end)), 3), dvec_w=[round(float(x), 4) for x in self.dvec_w], q_stow=Q_STOW.tolist())
+        self._ev('pass_start', phi_end_deg=round(math.degrees(float(phi_end)), 3), dvec_w=[round(float(x), 4) for x in self.dvec_w], q_stow=Q_STOW.tolist(),
+                 base_end=[round(float(x), 5) for x in q_end[:3]], q_end=[round(float(x), 5) for x in q_end[3:9]])
 
     def _ev(self, what, **kw):
         self.events.append(dict(t=round(self.t, 3), what=what, **kw))

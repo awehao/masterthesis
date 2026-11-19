@@ -159,7 +159,7 @@ class WorldD2(Node):
         self.meta['events'].append(e)
         print('[d2w]', json.dumps(e, ensure_ascii=False, default=str)[:500], flush=True)
         try:
-            self.p_xs.publish(String(data=json.dumps(dict(what=what, t=round(self.t, 3), stage=self.stage, **({'q_open': kw['q_open']} if 'q_open' in kw else {})), default=str)))   # 抽屜開度估計隨事件轉發
+            self.p_xs.publish(String(data=json.dumps(dict(what=what, t=round(self.t, 3), stage=self.stage, **{k_: kw[k_] for k_ in ('q_open', 'base_end', 'phi_end_deg', 'phi_deg') if k_ in kw}), default=str)))   # 抽屜開度估計、開門結束構型（回程關門）隨事件轉發
         except Exception:                                             # noqa: BLE001
             pass
 
@@ -209,6 +209,10 @@ class WorldD2(Node):
                 self.pick_app_sent = dict(d_['app'])
                 runner.extra = dict(getattr(runner, 'extra', None) or {}, pick_app=dict(d_['app']))
                 T_k_ = 'T_grasp' if 'T_grasp' in d_['app'] else 'T_obs'   # 抽屜觀察封包只有觀察位姿
+                if kind_ == 'door_close':                             # 回程關門：門扇綁定／解綁旗標重設（執行端同步）
+                    self.door_close_mode, self.released, self.bindinfo, self.unbound_ack, self.door_bound_ack = True, False, None, None, None
+                    self.door_bind2_sent, self.door_releasing2 = False, False
+                    self.ctl('door_reset')
                 if kind_ == 'dr_close':                               # 關抽屜：第二次夾把手。解除回報立即清（否則快照把舊 dr_unbound 帶給新流程）；
                     self.dr_unbound_ack, self.dr_reset_pending = None, True   # 連接／解除鎖存等控制器輸出歸零後才重設（s79：舊輸出 dr_attach 被重送 ⇒ 替身判無接觸連接中止）
                     self.ctl('drawer_reset')
@@ -344,7 +348,10 @@ class WorldD2(Node):
             c = json.loads(m.data)
         except Exception:                                             # noqa: BLE001
             return
-        if c.get('what') == 'unbound' and getattr(self, 'unbound_ack', None) is None:
+        if c.get('what') == 'door_bound' and getattr(self, 'door_close_mode', False) and getattr(self, 'door_bound_ack', None) is None:   # 回程關門：門扇綁定生效
+            self.door_bound_ack = c
+            self.ev('door_bind2_ack', n_applied=c.get('n'))
+        if c.get('what') == 'unbound' and getattr(self, 'unbound_ack', None) is None and (not getattr(self, 'door_close_mode', False) or getattr(self, 'door_releasing2', False)):
             self.unbound_ack = c
             self.ev('unbind_ack', n_applied=c.get('n'), req=c.get('req'))
         if c.get('what') == 'obj_detached' and getattr(self, 'obj_detach_ack', None) is None and getattr(self, 'obj_releasing', False) and c.get('req') == getattr(self, 'obj_req_n', None):   # 只收本次請求的回報（Isaac 會重送 1 s）   # 車尾收納盒：夾爪↔物體連接已解除
@@ -466,6 +473,10 @@ class WorldD2(Node):
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, unbound=True)
                 if getattr(self, 'dr_unbound_ack', None) is not None:  # 抽屜段：同上
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, dr_unbound=True)
+                if getattr(self, 'door_bound_ack', None) is not None:
+                    runner.extra = dict(getattr(runner, 'extra', None) or {}, door_bound2=True)
+                if getattr(self, 'door_close_mode', False) and getattr(self, 'door_releasing2', False) and getattr(self, 'unbound_ack', None) is not None:
+                    runner.extra = dict(getattr(runner, 'extra', None) or {}, door_unbound2=True)
                 if getattr(self, 'obj_detach_ack', None) is not None:  # 收納盒：解除回報（控制器只在已發請求時採用）
                     runner.extra = dict(getattr(runner, 'extra', None) or {}, obj_detached=True)
                 if REL_EXEC and k > 0:
@@ -494,6 +505,18 @@ class WorldD2(Node):
                             self.cyl_attached = True
                             self.ev('cyl_attach_committed')
                             self.ctl('attach_cyl', req_n=int(self.n))
+                        if rec.get('door_bind2') and getattr(self, 'door_close_mode', False) and not getattr(self, 'door_bind2_sent', False):   # 回程關門：夾住證據成立 ⇒ 門扇理想綁定
+                            self.door_bind2_sent = True
+                            self.ev('door_bind2_committed')
+                            self.ctl('bind', req_n=int(self.n))
+                            if not ISAAC:
+                                self.door_bound_ack = dict(what='door_bound', n=int(self.n))
+                        if rec.get('door_release2') and getattr(self, 'door_close_mode', False) and not getattr(self, 'door_releasing2', False):   # 回程關門：關到位 ⇒ 解綁
+                            self.door_releasing2 = True
+                            self.ev('door_release2_committed')
+                            self.ctl('unbind', req_n=int(self.n))
+                            if not ISAAC:
+                                self.unbound_ack = dict(what='unbound', n=int(self.n))
                         if rec.get('obj_release') and getattr(self, 'cyl_attached', False) and not getattr(self, 'obj_releasing', False):   # 車尾收納盒：放置構型到位 ⇒ 解除夾爪↔物體理想連接
                             self.obj_releasing, self.obj_req_n = True, int(self.n)
                             self.ev('obj_release_committed')

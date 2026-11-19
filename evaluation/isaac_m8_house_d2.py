@@ -86,6 +86,14 @@ def _det_worker(conn, fdir):
                 cyl_ = dict(p=None if p_c is None else np_.asarray(p_c, float), info=i_c)
             except Exception as e_:                              # noqa: BLE001
                 cyl_ = dict(p=None, info=dict(why='exception', err=repr(e_)[:200]))
+        leaf_ = None
+        if m_.get('leafdet'):                                          # 門扇開度深度偵測（door_leaf_detect；門局部＝世界座標）
+            try:
+                import door_leaf_detect as DL_
+                ph_, il_ = DL_.detect(m_['dep'], m_['K'], m_['T_cam'])
+                leaf_ = dict(phi=ph_, info=il_)
+            except Exception as e_:                              # noqa: BLE001
+                leaf_ = dict(phi=None, info=dict(why='exception', err=repr(e_)[:200]))
         hdl_ = None
         if m_.get('hprior') is not None:                               # 抽屜把手深度偵測（handle_detect；登錄位姿只當搜尋先驗）
             try:
@@ -105,7 +113,7 @@ def _det_worker(conn, fdir):
             save_ = True
         except Exception:                                        # noqa: BLE001
             save_ = False
-        conn.send(('det', dict(seq=m_['seq'], T_est=None if T_est_ is None else np_.asarray(T_est_, float), info=info_, ms=ms_, err=err_, saved=save_, cyl=cyl_, hdl=hdl_)))
+        conn.send(('det', dict(seq=m_['seq'], T_est=None if T_est_ is None else np_.asarray(T_est_, float), info=info_, ms=ms_, err=err_, saved=save_, cyl=cyl_, hdl=hdl_, leaf=leaf_)))
 
 
 os.makedirs(os.path.join(a.out, 'frames'), exist_ok=True)
@@ -165,6 +173,7 @@ JOINT = '/World/door/ideal_grasp_attach'
 PICK = os.environ.get('D2_PICK', '0') == '1'                         # 茶几圓柱體取物（穿門後）
 WALKERS = os.environ.get('D2_WALKERS', '0') == '1'                   # 行人（動態障礙物）
 HANDLE_VISION = os.environ.get('D2_HANDLE_VISION', '0') == '1'      # 抽屜把手視覺偵測（Howard 11/19）
+DOOR_CLOSE = os.environ.get('D2_DOOR_CLOSE', '0') == '1'             # 回程關門（Howard 11/19）：門扇開度深度偵測
 DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                     # 開抽屜→取筆（Howard 11/18）：建淺抽屜櫃＋筆代理；圓柱不建
 OBJ = '/World/marker_proxy' if DRAWER else '/World/cyl'              # 理想連接的物件剛體
 CHAIN = DRAWER and PICK and os.environ.get('D2_CHAIN', '0') == '1'   # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回（圓柱與筆都建）
@@ -264,6 +273,7 @@ class Bridge(Node):
         self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
         self.p_cyl = self.create_publisher(Float64MultiArray, '/cyl/obs', 10)
         self.p_hdl = self.create_publisher(Float64MultiArray, '/dr/handle_obs', 10)
+        self.p_leaf = self.create_publisher(Float64MultiArray, '/door/leaf_obs', 10)
         self.p_state = self.create_publisher(String, '/far/exec_state', 10)
         self.p_ack = self.create_publisher(String, '/d2/ack', 10)
         self.create_subscription(Twist, '/cmd_vel', self._cmd, 10)
@@ -337,6 +347,8 @@ class Bridge(Node):
             self.d2_attach_dr = True                                 # 抽屜把手理想連接請求（夾住證據成立後）
         elif w == 'unbind_drawer':
             self.d2_unbind_dr, self.d2_unbind_dr_req, self.dr_q_open = True, c.get('req_n'), c.get('q_open')
+        elif w == 'door_reset':
+            self.door_reset = True                                   # 回程關門：門扇第二次綁定前重設
         elif w == 'unbind':
             self.d2_unbind = True                                    # 穿門段：放手 ⇒ 解除 FixedJoint
             self.d2_unbind_req = c.get('req_n')
@@ -665,6 +677,7 @@ def main():
     cyl_log = []
     obj_log = []
     det_ack_ = None
+    closing2 = False
 
     def contacts(split=False):
         mx, who = 0.0, None
@@ -765,7 +778,7 @@ def main():
                     why = ('gripper_force_over', dict(force_n=round(cn_t, 3), who=cwho, limit_n=GRIP_F_ABORT_N))
             if why is None and not post and dq_deg > DOOR_DEG:
                 why = ('door_moved', dict(door_deg=round(dq_deg, 4)))
-            if why is None and post and not bound and not released and dq_deg > DOOR_PREBIND_DEG:
+            if why is None and post and not bound and not released and not closing2 and dq_deg > DOOR_PREBIND_DEG:   # 回程關門重設後門本來就開著，不適用
                 why = ('door_moved_before_bind', dict(door_deg=round(dq_deg, 4)))
             if why is None and not post and max(abs(float(jp[f1]) - FINGER_OPEN), abs(float(jp[f2]) - FINGER_OPEN)) > FINGER_TOL_M:
                 why = ('finger_opening_out_of_model', dict(q1=float(jp[f1]), q2=float(jp[f2])))
@@ -902,6 +915,12 @@ def main():
                     ev('obj_detach_without_attach', n=int(n_now))
             if BIN and det_ack_ is not None and k % 10 == 0 and int(n_now) <= det_ack_['until']:
                 node.p_ack.publish(String(data=json.dumps({k_: v_ for k_, v_ in det_ack_.items() if k_ != 'until'})))
+            if getattr(node, 'door_reset', False):                   # 回程關門：門扇綁定／解綁旗標重設
+                node.door_reset, node.d2_bind, node.d2_unbind = False, False, False
+                bound, released, bind_pending, closing2 = False, False, False, True
+                ev('door_reset_for_close', n=int(n_now), door_deg=round(math.degrees(phi_now), 3))
+            if bound and k % 10 == 0:                                 # 綁定生效回報（回程關門的控制器等它；開門段伺服器不採用）
+                node.p_ack.publish(String(data=json.dumps(dict(what='door_bound', n=int(n_now)))))
             if DRAWER and getattr(node, 'dr_reset', False):         # 關抽屜：第二次連接（FixedJoint 同路徑重新定義、啟用）
                 node.dr_reset, node.d2_attach_dr, node.d2_unbind_dr = False, False, False
                 dr_bound, dr_released = False, False
@@ -1028,6 +1047,7 @@ def main():
                     _DET.send(dict(seq=seq, stem=stem, dep=f['dep'], rgb=f['rgb'], K=Kr, T_cam=f['T_cam'], t_obs=f['t_obs'], q=f['q'], fk_vs_render_m=f['fk_vs_render_m'], table=None if cyl_info is None else cyl_info['table'],
                                    dbox=(DRS_.interior_box(float(node.dr_q_open)) if (DRAWER and dr_released and getattr(node, 'dr_q_open', None) is not None and not cyl_attached) else None),
                                    hspec=os.path.join(WS, reg['drawer']['asset']) if DRAWER else None,
+                                   leafdet=bool(DOOR_CLOSE and released and not bound and float(np.hypot(f['q'][0], f['q'][1])) < 3.5),
                                    hprior=([float(v) for v in reg['drawer']['pose'][:2]] + [math.radians(float(reg['drawer']['pose'][2]))] if (DRAWER and HANDLE_VISION and not dr_bound and not dr_released
                                            and float(np.hypot(f['q'][0] - reg['drawer']['pose'][0], f['q'][1] - reg['drawer']['pose'][1])) < 3.0) else None)))
                     det_busy = True
@@ -1054,6 +1074,10 @@ def main():
                                    T_base_handle=None if T_bh is None else T_bh.tolist(), rendering_frame=[int(v) if v is not None else None for v in f['rf']] if isinstance(f['rf'], tuple) else f['rf'],
                                    eval_only=dict(err_pos_mm=None if T_est is None else round(float(np.linalg.norm(np.asarray(T_est)[:3, 3] - Th[:3, 3])) * 1e3, 2), range_m=round(float(np.linalg.norm(f['T_cam'][:3, 3] - Th[:3, 3])), 3))))
                 node.p_obs.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if T_est is not None else 0.0, *[float(v) for v in f['q'][:3]], *([float(v) for v in T_bh.reshape(-1)] if T_bh is not None else [float('nan')] * 16), float(t)]))
+                if rr.get('leaf') is not None:                         # 門扇開度觀測（rad）
+                    l_ = rr['leaf']
+                    node.p_leaf.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if l_.get('phi') is not None else 0.0, *[float(v) for v in f['q'][:3]], float('nan') if l_.get('phi') is None else float(l_['phi'])]))
+                    frames[-1]['leaf'] = dict(phi_deg=None if l_.get('phi') is None else round(math.degrees(float(l_['phi'])), 3), door_true_deg=round(math.degrees(float(phi_now)), 3), info=l_.get('info'))
                 if rr.get('hdl') is not None:                          # 把手觀測：抽屜原點（世界＝里程）與偏航
                     h_ = rr['hdl']
                     node.p_hdl.publish(Float64MultiArray(data=[float(seq_r), float(f['t_obs']), 1.0 if h_.get('origin') is not None else 0.0, *[float(v) for v in f['q'][:3]],

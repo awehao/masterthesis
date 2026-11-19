@@ -129,6 +129,8 @@ class Stub(Node):
         self.p_obs = self.create_publisher(Float64MultiArray, '/far/handle_obs', 10)
         self.p_cyl = self.create_publisher(Float64MultiArray, '/cyl/obs', 10)
         self.p_hdl = self.create_publisher(Float64MultiArray, '/dr/handle_obs', 10)
+        self.p_leaf = self.create_publisher(Float64MultiArray, '/door/leaf_obs', 10)
+        self.leaf_seq, self.t_next_leaf, self.door_close = 0, 0.0, False
         self.hdl_seq, self.t_next_hdl = 0, 0.0
         self.cyl_p, self.cyl_att, self.cyl_seq, self.t_next_cyl, self.ffor, self.fcmd_last = np.r_[CYL_XY, CYL_Z0], None, 0, 0.0, (0.0, 0.0), 0.0089
         if DRAWER:
@@ -186,6 +188,9 @@ class Stub(Node):
         c = json.loads(m.data); w = c.get('what')
         if w == 'takeover' and self.n0 is None:
             self.n0 = int(c['n0'])
+        elif w == 'door_reset':                                       # 回程關門：允許第二次綁定
+            self.bind, self.door_close = None, True
+            self.tail_log.append(dict(t=round(self.t, 3), what='door_reset', phi_deg=round(math.degrees(self.phi), 3)))
         elif w == 'bind' and self.bind is None:
             self.bind = 'pending'
         elif w == 'unbind':
@@ -342,6 +347,31 @@ class Stub(Node):
         data += ([float(DRS.POSE[0]) + rng.normal(0, 0.002), float(DRS.POSE[1]) + rng.normal(0, 0.002), DRS.YAW + rng.normal(0, math.radians(0.3))] if ok else [float('nan')] * 3)
         self.p_hdl.publish(Float64MultiArray(data=data))
 
+    def leaf_obs(self):
+        """門扇開度合成觀測（替身）：5 Hz；門扇中段兩點在手腕相機視野 0.4–3 m ⇒ 門角（真值＋0.3° 雜訊；Isaac 端為 door_leaf_detect 實際深度偵測）。"""
+        if self.t < self.t_next_leaf - 1e-9:
+            return
+        self.t_next_leaf = self.t + 0.2; self.leaf_seq += 1
+        Ti = np.linalg.inv(K.fk(self.q, W0.OPT)); ok = True
+        u_ = np.array([math.cos(-self.phi), math.sin(-self.phi)])
+        for rr in (0.35, 0.75):
+            pc = (Ti @ np.r_[rr * u_[0], rr * u_[1], 1.0, 1.0])[:3]
+            if pc[2] < 0.4 or pc[2] > 3.0:
+                ok = False; break
+            uu, vv = (Kc @ (pc / pc[2]))[:2]
+            if not (5 < uu < 635 and 5 < vv < 475):
+                ok = False; break
+        data = [float(self.leaf_seq), self.t, 1.0 if ok else 0.0, *[float(x) for x in self.q[:3]], (self.phi + rng.normal(0, math.radians(0.3))) if ok else float('nan')]
+        self.p_leaf.publish(Float64MultiArray(data=data))
+
+    def door_contact(self):
+        """回程關門把手接觸（替身）：TCP 離門把橫桿中心（T_true 繞鉸鏈轉到目前門角）≤2 cm 且手指命令低於接觸開度 ⇒ 手指停 1.8 mm、兩指 2 N。"""
+        Tt = K.fk(self.q, 'link_tcp')
+        c_, s_ = math.cos(-(self.phi - phi0)), math.sin(-(self.phi - phi0))
+        ph = np.array([[c_, -s_, 0.0], [s_, c_, 0.0], [0.0, 0.0, 1.0]]) @ T_true[:3, 3]
+        if float(np.linalg.norm(Tt[:3, 3] - ph)) <= 0.02 and self.fcmd_last < 0.0018:
+            self.fing = max(self.fing, 0.0018); self.ffor = (2.0, 2.0)
+
     def obs(self):
         if self.t < self.t_next_obs - 1e-9:
             return
@@ -426,6 +456,8 @@ class Stub(Node):
             if isinstance(self.bind, dict):
                 p_ = K.fk(self.q, 'link_tcp')[:3, 3]; d_ = (math.atan2(p_[1], p_[0]) - self.bind['ang'] + math.pi) % (2 * math.pi) - math.pi
                 self.phi = self.bind['phi'] - d_
+            if self.door_close and isinstance(self.bind, dict) and self.n % 10 == 0:
+                self.p_ack.publish(String(data=json.dumps(dict(what='door_bound', n=int(self.n)))))
             if self.bind == 'released' and self.n % 10 == 0:
                 self.p_ack.publish(String(data=json.dumps(dict(what='unbound', n=int(self.n), req=getattr(self, 'unbind_req', None)))))
             if WALKERS:
@@ -445,6 +477,9 @@ class Stub(Node):
                 self.dr_step()
                 self.mk_obs()
                 self.hdl_obs()
+            self.leaf_obs()
+            if self.door_close:
+                self.door_contact()
             else:
                 self.cyl_step()
                 self.cyl_obs()
