@@ -43,6 +43,7 @@ BIN_MOVE = os.environ.get('D2_BIN_MOVE', '1') == '1'                  # 放盒�
 BIN_V, BIN_WZ = float(os.environ.get('D2_BIN_V', '0.15')), float(os.environ.get('D2_BIN_WZ', '0.5'))
 DETACH_TO_S = 3.0
 MOTM_CLOSE_LATE_S = float(os.environ.get('MOTM_CLOSE_LATE_S', '0.5'))   # 移動中夾取：名目到點後可延後閉爪的上限（底盤仍在走；超過 ⇒ motm_window_missed）
+MOTM_W_Q = float(os.environ.get('MOTM_W_Q', '1.0'))                    # 移動中夾取接近段關節姿態引導權重（目前構型→選位抓取解 q_grasp；s74：只給 TCP 目標 ⇒ j2 滑到 −2.02、link4–link6 自身 4.5 mm）
 MOTM_EVID_TO_S = float(os.environ.get('MOTM_EVID_TO_S', '0.8'))         # 移動中夾取：閉爪後夾住證據期限（窗口有限）
 if BIN:
     import rear_bin as RBIN
@@ -128,6 +129,10 @@ class TablePickCtrl(P.DoorPassCtrl):
         X = [XO.from_xytheta(b0[0] + self._motm_s(t_eff + k * DT) * e[0], b0[1] + self._motm_s(t_eff + k * DT) * e[1], th) for k in range(XO.N + 1)]
         return X, [vb.copy() for _ in range(XO.N + 1)]
 
+    def _motm_qpost(self, t_abs):
+        u = XE.minjerk(min(max((t_abs - self.m_t0) / max(self.T_app - T_SETTLE, 1e-6), 0.0), 1.0))[0]
+        return (1.0 - u) * self.q_m0 + u * self.q_mg
+
     def _lift_target(self, t_abs):
         u = XE.minjerk(min(max((t_abs - self.t_ph0) / T_LIFT, 0.0), 1.0))[0]
         T = self.T_lift0.copy()
@@ -152,10 +157,14 @@ class TablePickCtrl(P.DoorPassCtrl):
             self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
         if self.motm is not None and self.m_s0 is None:               # 移動中夾取時程：自目前底盤在路線上的投影起算，名目到點＝底盤經過 s＝0
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)
-            self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10)
+            self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10,
+                            -float(self.motm['v_g']) * float(self.motm.get('t_arm', 4.0)))   # 手臂展開至少 t_arm（s73）
             self.m_t0 = self.t
             self.T_app = (0.0 - self.m_s0) / float(self.motm['v_g'])
             self.T_b, self.t_l0 = max(1.0, self.T_app - 1.5), max(0.5, self.T_app - 2.5)
+            if self.motm.get('q_grasp') is not None and MOTM_W_Q > 0.0:   # 底盤經過 s＝0 時恰在選位底盤位 ⇒ 選位抓取解即該時刻構型
+                self.q_m0, self.q_mg = np.asarray(q[3:], float).copy(), np.asarray(self.motm['q_grasp'], float)
+                self.app_qpost, self.app_w_q = self._motm_qpost, MOTM_W_Q
             self._ev('pick_motm_start', s0=round(self.m_s0, 4), T_app=round(self.T_app, 3), v_g=self.motm['v_g'])
         if self.phase == 'APPROACH':
             Tc = K.fk(q, 'link_tcp')

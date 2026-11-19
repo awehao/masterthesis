@@ -855,7 +855,7 @@ def main():
                     Tg_od[2, 3] = float(self.pick_box['est_od'][2])
                     b0_ = [float(x) for x in self.pick_sel['base']]
                     app = dict(T_grasp=Tg_od.tolist(), base_goal=b0_, T=4.0, T_b=2.5, t_l0=1.5,
-                               motm=dict(b0=b0_, e=[float(x) for x in self.pick_sel['e']], v_g=float(PICK_MOTM_V), s0=float(self._CR.MOTM_S0)))
+                               motm=dict(b0=b0_, e=[float(x) for x in self.pick_sel['e']], v_g=float(PICK_MOTM_V), s0=float(self._CR.MOTM_S0), t_arm=float(self._CR.MOTM_T_ARM), q_grasp=[float(x) for x in self.pick_sel['q']]))
                     self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
                     self.pick_app_t = t
                     self.event('pick_app_sent', dist=round(dist_, 3), motm=app['motm'])
