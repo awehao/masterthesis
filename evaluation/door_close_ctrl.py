@@ -148,6 +148,34 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             return
         super()._advance(q)                                           # APPROACH／CLOSE／BIN_STOW／RETURN
 
+    def _sweep(self, q, u, extra, j0, u_from, rec):
+        """綁定共轉中（SWING）：停止軌跡上門扇跟著夾爪轉（理想連接＝剛性），每個取樣點的門角由該點 TCP 繞鉸鏈（原點）的方位角換算
+        φ_s＝φ_now−(ang_s−ang_now)（同 corotate_base 的方向）；s87d／s94d：沿用固定 φ_now ⇒ 停止軌跡中夾爪相對靜止的橫桿移動，
+        隨共轉加速壓到 shell_bar 5 mm 門檻。其他段照原核對。"""
+        if self.phase != 'SWING' or not self.door_bound:
+            return super()._sweep(q, u, extra, j0, u_from, rec)
+        P_ = P
+        Q, _, _ = P_.XE.stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, extra, rec=rec)
+        if rec is not None and any(np.any(r_[0] < self.lim_lo - 1e-9) or np.any(r_[0] > self.lim_hi + 1e-9) for r_ in rec):
+            return dict(why='setpoint_limit'), 0
+        p0 = K.fk(np.asarray(q, float), 'link_tcp')[:3, 3]
+        a0 = math.atan2(float(p0[1]), float(p0[0]))
+        n, prev = 0, None
+        for qs in Q:
+            if prev is not None and float(np.abs(qs - prev).max()) < 1e-7:
+                continue
+            prev = qs
+            ps = K.fk(np.asarray(qs, float), 'link_tcp')[:3, 3]
+            da = (math.atan2(float(ps[1]), float(ps[0])) - a0 + math.pi) % (2 * math.pi) - math.pi
+            c = P_.CF.clear_door_fast(np.r_[qs, float(self.phi_now) - da], self.T_WH0)
+            n += 1
+            for k in P_.KEYS:
+                self.clear_min[k] = min(self.clear_min[k], float(c[k]))
+            bad = [k for k in P_.KEYS if c[k] < P_.W.THR[k]]
+            if bad:
+                return dict(why='clearance', bad=bad, at={k: round(float(c[k]), 4) for k in P_.KEYS}, who={k: str((c.get('who') or {}).get(k)) for k in bad}), n
+        return None, n
+
     def _solve(self, q):
         if self.phase in ('APPROACH', 'CLOSE') or self.phase.startswith('BIN_') or self.phase == 'RETURN':
             return super()._solve(q)
