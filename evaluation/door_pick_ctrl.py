@@ -335,6 +335,8 @@ class TablePickCtrl(P.DoorPassCtrl):
             umin0, src = float('nan'), 'anchor'
         if self.phase == 'RETURN':
             self.app_prof = None                                      # 返回段：照導航前端（不再收斂到抓取位）
+            if src == 'nav':                                          # 會車選邊（s92d：行人 walker_r1 正面迎來、牆側不夠 ⇒ 被推著倒退後接觸）
+                P.yield_apply(self, qp, X, obs)
         arm = dict(mode='hold')
         Xp = [(float(Xk[0, 2]), float(Xk[1, 2]), math.atan2(float(Xk[1, 0]), float(Xk[0, 0]))) for Xk in X]
         if self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):

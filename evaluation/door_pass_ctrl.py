@@ -21,6 +21,9 @@ import time
 import numpy as np
 
 import door_motm_grasp_ctrl as G
+import yield_side as YS
+if YS.ENABLE:
+    YS._load_map()                                                    # 地圖距離場在匯入時建好（不在控制拍內）
 import door_clear_door_fast as CF
 
 XO, XE, K, B, C0, S, W = G.XO, G.XE, G.K, G.B, G.C0, G.S, G.W
@@ -79,6 +82,21 @@ def _exp_R(w):
     Kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
     return np.eye(3) + math.sin(th) * Kx + (1 - math.cos(th)) * Kx @ Kx
 
+
+
+def yield_apply(ctrl, qp, X, obs):
+    """會車選邊（yield_side；D2_YIELD_SIDE=1 才作用）：只平移導航參考視窗，事件進控制器紀錄。"""
+    if not YS.ENABLE:
+        return None
+    ys = getattr(ctrl, '_ys', None)
+    if ys is None:
+        ys = ctrl._ys = YS.YieldSide()
+    c_, s_ = math.cos(float(qp[2])), math.sin(float(qp[2])); u_ = np.asarray(ctrl.u_prev[:2], float)
+    n0 = len(ys.log)
+    info = ys.apply(float(ctrl.t), np.asarray(qp[:3], float), np.array([c_ * u_[0] - s_ * u_[1], s_ * u_[0] + c_ * u_[1]]), X, obs, NPH * PHYS)
+    for e_ in ys.log[n0:]:
+        ctrl._ev(e_.pop('what'), **e_)
+    return info
 
 
 def _obs_near(obs, q):
@@ -201,6 +219,8 @@ class DoorPassCtrl:
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor'
+        if src == 'nav':                                              # 會車選邊（s92d）：行人正面迎來且側向不足 ⇒ 依地圖淨空選邊平移參考
+            yield_apply(self, qp, X, obs)
         arm = dict(mode='hold')
         if self.phase in ('RETREAT', 'STOW'):
             Ts = [self._rel_target(t_eff + k * DT) for k in range(XO.N + 1)]
