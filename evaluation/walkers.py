@@ -6,9 +6,12 @@ import math
 import numpy as np
 
 
+SPEED_SCALE = float(__import__('os').environ.get('D2_WALKER_SPEED_SCALE', '1.0'))   # Howard 11/19「行人可以慢一點點」：速度比例（路線、端點停留、起始相位不變）
+
+
 def walker_pos(w, t):
     p0, p1 = np.asarray(w['p0'], float), np.asarray(w['p1'], float)
-    L = float(np.linalg.norm(p1 - p0)); v = float(w['speed_mps']); dw = float(w.get('dwell_s', 0.0))
+    L = float(np.linalg.norm(p1 - p0)); v = float(w['speed_mps']) * SPEED_SCALE; dw = float(w.get('dwell_s', 0.0))
     if L < 1e-9 or v <= 0:
         return p0.copy()
     T_leg = L / v
