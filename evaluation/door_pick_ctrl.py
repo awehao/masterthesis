@@ -33,6 +33,7 @@ LIFT_M, T_LIFT = float(os.environ.get('PICK_LIFT_M', '0.05')), 1.2
 T_CARRY = 3.0
 PICK_CARRY = os.environ.get('PICK_CARRY', '1') == '1'                 # Howard 11/18「夾到東西沒有收手臂，伸出來很危險」⇒ 預設收臂（理想連接後收臂不再滑落）
 FACE_DR = [float(x) for x in os.environ.get('B_DR_PRIOR', '-3.5,10.3,3.1416').split(',')] if (os.environ.get('D2_CHAIN') == '1' and os.environ.get('D2_DRAWER') == '1') else None   # 抽屜櫃前粗目標（同監督 DR_PRIOR；地圖≈里程）
+AIM_K, AIM_MAX = float(os.environ.get('DR_AIM_K', '0.1')), float(os.environ.get('DR_AIM_MAX', '0.01'))   # 把手瞄準補償：每控制拍增益、上限（m）
 CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.2775')), float(os.environ.get('PICK_CARRY_WZ', '1.1327'))   # 持物底盤速度框（m/s、rad/s）；夾到後理想連接 ⇒ 預設＝硬體上限（不收緊）
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
 PH_TO_S = 4.0
@@ -132,6 +133,9 @@ class TablePickCtrl(P.DoorPassCtrl):
         s_ = D_LINE * (1.0 - XE.minjerk(u)[0]) if t < Te else 0.0
         Tl = self._T_line(max(s_, 0.0))
         beta = XE.minjerk(min(max(t / max(self.T_b, 1e-6), 0.0), 1.0))[0]
+        ao_ = getattr(self, 'aim_off', None)
+        if ao_ is not None and getattr(self, 'app_tol_fy', None) is not None and float(np.abs(ao_).max()) > 0.0:
+            Tl = Tl.copy(); Tl[:3, 3] = Tl[:3, 3] + ao_                 # 瞄準補償只加在指令目標
         if beta >= 1.0 - 1e-12:
             return Tl
         c_, s2 = math.cos(Xk[2]), math.sin(Xk[2])
@@ -227,6 +231,9 @@ class TablePickCtrl(P.DoorPassCtrl):
             else:
                 ep_ok = ep <= 0.005
             fy_ = getattr(self, 'app_tol_fy', None)
+            if fy_ is not None and el >= self.T_app - T_SETTLE:           # 瞄準補償（積分）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標
+                ao_ = getattr(self, 'aim_off', np.zeros(3))
+                self.aim_off = np.clip(ao_ + AIM_K * (self.T_grasp[:3, 3] - Tc[:3, 3]), -AIM_MAX, AIM_MAX)
             if fy_ is not None:                                       # 固定橫桿（抽屜把手）：沿兩指開合軸（TCP y）誤差另設門檻（Isaac 33b／34b：5 mm 球內閉爪、開合軸偏 ~2 mm ⇒ 單指接觸、證據逾時）
                 ep_fy = abs(float((self.T_grasp[:3, :3].T @ (Tc[:3, 3] - self.T_grasp[:3, 3]))[1]))
                 ep_ok = ep_ok and ep_fy <= fy_
@@ -366,7 +373,10 @@ class TablePickCtrl(P.DoorPassCtrl):
             elif self.phase in ('LIFT', 'VERIFY'):
                 Ts = [self._lift_target(t_eff + k * DT) if self.phase == 'LIFT' else self._lift_target(self.t_ph0 + T_LIFT + 1.0) for k in range(XO.N + 1)]
             else:
-                Ts = [self.T_grasp] * (XO.N + 1)
+                Tg_ = self.T_grasp
+                if getattr(self, 'app_tol_fy', None) is not None and getattr(self, 'aim_off', None) is not None:
+                    Tg_ = self.T_grasp.copy(); Tg_[:3, 3] = Tg_[:3, 3] + self.aim_off   # 把手閉爪：沿用瞄準補償（凍結）
+                Ts = [Tg_] * (XO.N + 1)
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts),
                        w_p=C0.W_NEAR if self.phase != 'APPROACH' else C0.W_FAR, lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper,
                        tcp_rel_base=bool(self.motm is not None and self.phase in ('LIFT', 'VERIFY')), qp_solver='gi', **B.W_ARM)

@@ -78,6 +78,7 @@ class DrawerCtrl(PK.TablePickCtrl):
     # ---- 監督送的下一段封包（observe／marker）
     def next_app(self, app, t0):
         kind = app.get('kind')
+        self.aim_off = np.zeros(3)                                    # 瞄準補償換段歸零（新目標重新收斂）
         self.app_qpost = None                                         # 把手接近的姿態引導只用在把手段
         if kind == 'observe' and self.task == 'handle' and self.phase == 'WAIT':
             self.task = 'observe'
@@ -373,7 +374,10 @@ class DrawerCtrl(PK.TablePickCtrl):
                 elif self.phase in ('OBSERVE',):
                     Ts = [self.T_grasp] * (XO.N + 1)
                 else:                                                 # CONFIRM（handle）、WAIT：保持
-                    Ts = [self.T_hold if self.T_hold is not None else self.T_grasp] * (XO.N + 1)
+                    Th_ = (self.T_hold if self.T_hold is not None else self.T_grasp).copy()
+                    if self.phase in ('CLOSE', 'CONFIRM') and getattr(self, 'app_tol_fy', None) is not None and getattr(self, 'aim_off', None) is not None:
+                        Th_[:3, 3] = Th_[:3, 3] + self.aim_off            # 閉爪／確認沿用接近段收斂的瞄準補償（凍結；否則下垂回來又單指）
+                    Ts = [Th_] * (XO.N + 1)
                     if self.phase == 'CONFIRM' and self.motm is not None and self.m_s0 is not None:   # 移動中確認夾住：底盤沿路線不停，TCP 世界固定在把手
                         X, xi = self._motm_ref(t_eff)
                         Ts = [self.T_grasp] * (XO.N + 1)
