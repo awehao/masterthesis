@@ -1050,7 +1050,7 @@ def main():
                 est = self._hdl_fuse(t)
                 if est is None:
                     dr.setdefault('t_seek', t)
-                    if t - dr['t_seek'] > 60.0:
+                    if t - dr['t_seek'] > float(os.environ.get('DR_SEEK_TO_S', '90')):   # s104d：會車繞行吃掉時間（60→90 s）
                         self.event('dr_handle_not_seen'); self.abort('drawer_handle_not_seen')
                     return
                 reg_ = R_.D.REG['drawer']['pose']

@@ -32,6 +32,7 @@ FINGER_EMPTY = float(os.environ.get('PICK_FINGER_EMPTY', '0.0015'))   # 手指�
 LIFT_M, T_LIFT = float(os.environ.get('PICK_LIFT_M', '0.05')), 1.2
 T_CARRY = 3.0
 PICK_CARRY = os.environ.get('PICK_CARRY', '1') == '1'                 # Howard 11/18「夾到東西沒有收手臂，伸出來很危險」⇒ 預設收臂（理想連接後收臂不再滑落）
+FACE_DR = [float(x) for x in os.environ.get('B_DR_PRIOR', '-3.5,10.3,3.1416').split(',')] if (os.environ.get('D2_CHAIN') == '1' and os.environ.get('D2_DRAWER') == '1') else None   # 抽屜櫃前粗目標（同監督 DR_PRIOR；地圖≈里程）
 CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.2775')), float(os.environ.get('PICK_CARRY_WZ', '1.1327'))   # 持物底盤速度框（m/s、rad/s）；夾到後理想連接 ⇒ 預設＝硬體上限（不收緊）
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
 PH_TO_S = 4.0
@@ -345,6 +346,8 @@ class TablePickCtrl(P.DoorPassCtrl):
             umin0, src = float('nan'), 'anchor'
         if self.phase == 'RETURN':
             self.app_prof = None                                      # 返回段：照導航前端（不再收斂到抓取位）
+            if FACE_DR is not None and type(self) is TablePickCtrl and float(np.hypot(qp[0] - FACE_DR[0], qp[1] - FACE_DR[1])) < 0.6:
+                self.app_prof = dict(base_goal=list(FACE_DR), door=None)   # s104d：導航到抽屜櫃前粗目標不看偏航（會車後偏 0.8 rad、相機看不到把手）⇒ 到點後同一控制器慢轉到粗目標朝向（只在前端停止更新後作用）
             if src == 'nav':                                          # 會車選邊（s92d：行人 walker_r1 正面迎來、牆側不夠 ⇒ 被推著倒退後接觸）
                 P.yield_apply(self, qp, X, obs)
         arm = dict(mode='hold')
