@@ -66,6 +66,38 @@ def _path_clear(p0, p1, need, n=8):
     return all(clearance(*(p0 + u * (p1 - p0))) >= need for u in np.linspace(0.0, 1.0, n))
 
 
+def _groups(obs):
+    """把追蹤器給 CBF 的可見表面點（每點帶同一軌跡速度、半徑≈0）依距離＜0.5 m 且速度差＜0.15 m/s 併成一個行人。"""
+    pts = [o for o in (obs or []) if not o.get('static') and math.hypot(float(o.get('vx', 0.0)), float(o.get('vy', 0.0))) >= V_MIN]
+    lab = list(range(len(pts)))
+    def f(i):
+        while lab[i] != i:
+            lab[i] = lab[lab[i]]; i = lab[i]
+        return i
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            a, b = pts[i], pts[j]
+            if math.hypot(float(a['x']) - float(b['x']), float(a['y']) - float(b['y'])) < 0.5 and \
+               math.hypot(float(a.get('vx', 0.0)) - float(b.get('vx', 0.0)), float(a.get('vy', 0.0)) - float(b.get('vy', 0.0))) < 0.15:
+                lab[f(i)] = f(j)
+    g = {}
+    for i, o in enumerate(pts):
+        g.setdefault(f(i), []).append(o)
+    out = []
+    for ps in g.values():
+        P_ = np.array([[float(o['x']), float(o['y'])] for o in ps]); V_ = np.array([[float(o.get('vx', 0.0)), float(o.get('vy', 0.0))] for o in ps])
+        r_ = max(float(o.get('radius', 0.0)) for o in ps)
+        out.append(dict(P=P_, v=V_.mean(axis=0), r=r_))
+    return out
+
+
+def _interval(gp, n):
+    """行人在法向 n 上的保守側向區間：可見表面點範圍＋背面未見部分（寬度至少 2·R_MIN）。"""
+    s = gp['P'] @ n
+    lo, hi = float(s.min()) - gp['r'], float(s.max()) + gp['r']
+    return min(lo, hi - 2.0 * R_MIN), max(hi, lo + 2.0 * R_MIN)
+
+
 class YieldSide:
     def __init__(self):
         self.lock = None                                              # dict(name_key, n, s_tgt)
@@ -73,31 +105,78 @@ class YieldSide:
         self.log = []
 
     def _conflict(self, q, v_b, obs, any_ds=False):
+        """回 (群, t*, d*, need, n, (lo, hi)) 或 None。以群的保守區間中心當圓心、半寬當半徑做最近接近預測。"""
         best = None
-        for o in obs or []:
-            if o.get('static'):
+        for gp in _groups(obs):
+            vo = gp['v']; sp = float(np.linalg.norm(vo))
+            if sp < V_MIN:
                 continue
-            vo = np.array([float(o.get('vx', 0.0)), float(o.get('vy', 0.0))])
-            if float(np.linalg.norm(vo)) < V_MIN:
-                continue
-            p = np.array([float(o['x']) - q[0], float(o['y']) - q[1]])
-            vr = vo - v_b
-            vv = float(vr @ vr)
+            u = vo / sp; n = np.array([-u[1], u[0]])
+            lo, hi = _interval(gp, n)
+            al = float((gp['P'] @ u).mean())
+            c = al * u + 0.5 * (lo + hi) * n
+            rad = 0.5 * (hi - lo)
+            p = c - q[:2]; vr = vo - v_b; vv = float(vr @ vr)
             if vv < 1e-6:
                 continue
             ts = -float(p @ vr) / vv
             if not (0.0 < ts < T_LOOK):
                 continue
             ds = float(np.linalg.norm(p + vr * ts))
-            need = R_BASE + max(float(o.get('radius', R_MIN)), R_MIN) + PAD
-            if (ds < need or (any_ds and ds < need + 0.6)) and (best is None or ts < best[1]):   # 鎖定中：仍在接近（未通過）就維持，避免側移後 d* 變大即收回而來回擺
-                best = (o, ts, ds, need, vo)
+            need = R_BASE + rad + PAD
+            if (ds < need or (any_ds and ds < need + 0.6)) and (best is None or ts < best[1]):
+                best = (gp, ts, ds, need, n, (lo, hi))
         return best
 
     def apply(self, t, q, v_b, X, obs, dt):
-        """X：參考視窗（3×3 SE2 串列，就地修改）。回傳記錄 dict 或 None。"""
+        """X：參考視窗（3×3 SE2 串列，就地修改）。側向座標＝點與 n 的內積（絕對）；目標＝保守區間外 R_BASE＋PAD。"""
         if not ENABLE:
             return None
+        q = np.asarray(q, float); v_b = np.asarray(v_b, float)[:2]
+        c = self._conflict(q, v_b, obs, any_ds=self.lock is not None)
+        if c is not None and self.lock is None:
+            gp, ts, ds, need, n, (lo, hi) = c
+            s_now = float(q[:2] @ n)
+            cands = []
+            for sg in (1.0, -1.0):
+                s_t = (hi + R_BASE + PAD) if sg > 0 else (lo - R_BASE - PAD)
+                tgt = q[:2] + (s_t - s_now) * n
+                cl = clearance(*tgt)
+                if cl >= R_BASE + WALL_PAD and _path_clear(q[:2], tgt, R_BASE + WALL_PAD * 0.5):
+                    cands.append((abs(s_t - s_now) - 0.2 * min(cl, 1.0), sg, s_t, cl))
+            if cands:
+                cands.sort()
+                _, sg, s_t, cl = cands[0]
+                self.lock = dict(n=n, sg=sg, s_t=s_t, t0=t)
+                self.off = 0.0
+                self.log.append(dict(t=round(t, 2), what='yield_lock', side=sg, s_now=round(s_now, 3), s_tgt=round(s_t, 3), lo=round(lo, 3), hi=round(hi, 3), ts=round(ts, 2), ds=round(ds, 3), n_cand=len(cands), clear=round(cl, 2)))
+            else:
+                self.log.append(dict(t=round(t, 2), what='yield_no_side', s_now=round(s_now, 3), lo=round(lo, 3), hi=round(hi, 3), ts=round(ts, 2), ds=round(ds, 3)))
+        if self.lock is not None:
+            L = self.lock
+            if c is None:                                            # 已無衝突（通過或離開預測窗）⇒ 平移量以同速率收回
+                self.off = max(0.0, self.off - RATE * dt)
+                if self.off <= 1e-4:
+                    self.log.append(dict(t=round(t, 2), what='yield_release'))
+                    self.lock = None
+                    return dict(off=0.0)
+            else:
+                gp, ts, ds, need, n, (lo, hi) = c
+                if float(n @ L['n']) < 0.0:                          # 法向翻轉（速度方向估計反向）⇒ 換到同一參考
+                    n, lo, hi = -n, -hi, -lo
+                L['s_t'] = (hi + R_BASE + PAD) if L['sg'] > 0 else (lo - R_BASE - PAD)
+                L['n'] = n
+                self.off = min(self.off + RATE * dt, 1.5)
+            n, sg = L['n'], L['sg']
+            shift = 0.0
+            for Xk in X:                                              # 各參考點側向座標至少達 s_t（鎖定側），平移量上限＝爬升量 off
+                s_k = float(np.array([Xk[0, 2], Xk[1, 2]]) @ n)
+                d_k = min(max(0.0, sg * (L['s_t'] - s_k)), self.off)
+                Xk[0, 2] += sg * d_k * n[0]
+                Xk[1, 2] += sg * d_k * n[1]
+                shift = max(shift, d_k)
+            return dict(off=round(shift, 3), side=sg)
+        return None
         q = np.asarray(q, float); v_b = np.asarray(v_b, float)[:2]
         c = self._conflict(q, v_b, obs, any_ds=self.lock is not None)
         if c is not None and self.lock is None:
