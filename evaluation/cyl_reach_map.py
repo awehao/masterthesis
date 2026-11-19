@@ -128,6 +128,76 @@ def select(c_xy, b_now, w_dist=1.0, w_sig=0.02):
     return best
 
 
+MOTM_S0 = float(os.environ.get('MOTM_S0', '-0.05'))                  # 經過路線核對範圍起點（m，沿桌邊；0＝抓取底盤位）
+MOTM_T_WIN = float(os.environ.get('MOTM_T_WIN', '1.9'))              # TCP 世界固定的時間窗（閉爪開始容許 0.5＋閉爪 0.6＋確認 0.3＋證據寬限 0.5 s）
+MOTM_DS = 0.05
+
+
+def _path_ik(T, b0, e, ss, q0):
+    """沿經過路線逐點 IK（以前一點的解當種子，保持同一分支）；任一點不可解、淨空不過或關節跳 >0.3 rad ⇒ None。回 (最小 σ, 最小 env, 最小 base, 各點解)。"""
+    qs, sig, env, bc, prev = [], 9.0, 9.0, 9.0, np.asarray(q0, float)
+    for s_ in ss:
+        b = np.array([b0[0] + s_ * e[0], b0[1] + s_ * e[1], b0[2]])
+        if not base_free(b):
+            return None
+        q, r, sm = DFK.ik_closure_fc(T, b, prev)
+        q = (np.asarray(q, float) + math.pi) % (2 * math.pi) - math.pi
+        if r > 1e-4 or np.any(q < LIM.lower + 0.05) or np.any(q > LIM.upper - 0.05) or sm < 0.02 or float(np.abs(q - prev).max()) > 0.3:
+            return None
+        ok, c = clear_ok(b, q)
+        if not ok or not arm_over_table_ok(b, q):
+            return None
+        sig, env, bc = min(sig, float(sm)), min(env, float(c['env'])), min(bc, float(c['base']))
+        qs.append(q); prev = q
+    return sig, env, bc, qs
+
+
+def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=0.5):
+    """移動中夾取（Howard 11/19「茶几那個要移動中夾取 我要做整體速度最佳」）選位：底盤朝向面桌、沿桌邊以 v_g 橫移經過抓取底盤位 b0。
+    同一個世界固定抓取位姿 T_grasp（接近軸＝b0→圓柱），沿路線 s∈[MOTM_S0, v_g·MOTM_T_WIN] 每 5 cm 都要 IK（同分支連續）＋控制器同一份淨空＋不壓桌面；
+    s＝0 另核預抓（後退 PRE）。方向 e 兩向都試；評分＝到路線起點距離＋σ 懲罰＋（有下一目標時）e 背離下一目標的懲罰。回 dict 或 None。"""
+    c = np.asarray(c_xy, float); best = None
+    s1 = float(v_g) * MOTM_T_WIN
+    ss = np.round(np.arange(MOTM_S0, s1 + 1e-9, MOTM_DS), 4)
+    for side, d, lat, b in candidates(c):
+        if not base_free(b):
+            continue
+        v = c - b[:2]; dist = float(np.linalg.norm(v))
+        if dist < 0.25 or dist > 0.80:
+            continue
+        a = v / dist
+        th = float(b[2])
+        for sg in (1.0, -1.0):
+            e = sg * np.array([-math.sin(th), math.cos(th)])          # 沿桌邊（垂直於面桌方向）
+            for fl in (False, True):
+                Tg = grasp_T(c, a, fl)
+                g = ik(Tg, b)
+                if g is None:
+                    continue
+                Tp = Tg.copy(); Tp[:3, 3] -= PRE * np.r_[a, 0.0]
+                gp = ik(Tp, b)
+                if gp is None or not clear_ok(b, gp[0])[0]:
+                    continue
+                fwd = _path_ik(Tg, b, e, [x for x in ss if x >= 0.0], g[0])
+                bwd = _path_ik(Tg, b, e, [x for x in ss[::-1] if x <= 0.0], g[0])
+                if fwd is None or bwd is None:
+                    continue
+                s_start = MOTM_S0 - 0.40                                # 路線起點（導航目標）：再往前 0.40 m 讓底盤進線加速
+                b_start = np.array([b[0] + s_start * e[0], b[1] + s_start * e[1], th])
+                if not base_free(b_start):
+                    continue
+                cost = w_dist * float(np.hypot(*(b_start[:2] - np.asarray(b_now[:2], float)))) + w_sig / max(min(fwd[0], bwd[0]), 1e-6)
+                if goal_next is not None:
+                    gn = np.asarray(goal_next[:2], float) - b[:2]
+                    cost += w_dir * (1.0 - float(np.dot(gn / max(float(np.linalg.norm(gn)), 1e-9), e)))
+                if best is None or cost < best['cost']:
+                    best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), e=e.tolist(), flip=bool(fl), v_g=float(v_g), s_start=float(s_start),
+                                base_start=b_start.tolist(), sigma_min=float(min(fwd[0], bwd[0])), env_min=float(min(fwd[1], bwd[1])), base_clear_min=float(min(fwd[2], bwd[2])),
+                                s_range=[float(ss[0]), float(ss[-1])], cost=cost, q=g[0].tolist(), T_grasp=Tg.tolist())
+                break
+    return best
+
+
 def main():
     xs = np.round(np.arange(X0 + 0.05, X1 - 0.05 + 1e-9, 0.05), 3)
     ys = np.round(np.arange(Y0 + 0.05, Y1 - 0.05 + 1e-9, 0.05), 3)

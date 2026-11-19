@@ -42,6 +42,8 @@ BIN_QD = float(os.environ.get('D2_BIN_QD', '0.8'))                    # 放盒�
 BIN_MOVE = os.environ.get('D2_BIN_MOVE', '1') == '1'                  # 放盒／收臂中底盤照導航前端（限速框 BIN_V/BIN_WZ）；0＝底盤錨定
 BIN_V, BIN_WZ = float(os.environ.get('D2_BIN_V', '0.15')), float(os.environ.get('D2_BIN_WZ', '0.5'))
 DETACH_TO_S = 3.0
+MOTM_CLOSE_LATE_S = float(os.environ.get('MOTM_CLOSE_LATE_S', '0.5'))   # 移動中夾取：名目到點後可延後閉爪的上限（底盤仍在走；超過 ⇒ motm_window_missed）
+MOTM_EVID_TO_S = float(os.environ.get('MOTM_EVID_TO_S', '0.8'))         # 移動中夾取：閉爪後夾住證據期限（窗口有限）
 if BIN:
     import rear_bin as RBIN
     import door_clear_door_fast as _CF_
@@ -77,6 +79,8 @@ class TablePickCtrl(P.DoorPassCtrl):
         if BIN:
             RBIN.install(_CF_)                                        # 盒體進自碰撞淨空（取物控制器建立時才裝；開門／穿門段不變）
         self.phase, self.t_ph0 = 'APPROACH', float(t0)
+        self.motm = app.get('motm')                                   # Howard 11/19 移動中夾取：dict(b0, e, v_g, s0)（里程）；None＝原停車夾取
+        self.m_s0, self.m_t0, self.T_rel_l0 = None, None, None
         self._ev('pick_start', T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]], base_goal=[round(float(x), 4) for x in app['base_goal']], T=round(self.T_app, 3))
 
     def _stop(self, why, /, **kw):
@@ -113,6 +117,17 @@ class TablePickCtrl(P.DoorPassCtrl):
         T[:3, :3] = Tb[:3, :3] @ _exp_R(beta * _log_R(Tb[:3, :3].T @ Tl[:3, :3]))
         return T
 
+    def _motm_s(self, t_abs):
+        return self.m_s0 + float(self.motm['v_g']) * (t_abs - self.m_t0)
+
+    def _motm_ref(self, t_eff):
+        """經過路線參考：底盤沿 e 等速 v_g、朝向固定（全向底盤橫移）；回 (X 視窗, xi 視窗)。"""
+        b0, e, v = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float), float(self.motm['v_g'])
+        th = float(b0[2]); c_, s_ = math.cos(th), math.sin(th)
+        vb = np.array([c_ * v * e[0] + s_ * v * e[1], -s_ * v * e[0] + c_ * v * e[1], 0.0])   # 世界速度轉本體
+        X = [XO.from_xytheta(b0[0] + self._motm_s(t_eff + k * DT) * e[0], b0[1] + self._motm_s(t_eff + k * DT) * e[1], th) for k in range(XO.N + 1)]
+        return X, [vb.copy() for _ in range(XO.N + 1)]
+
     def _lift_target(self, t_abs):
         u = XE.minjerk(min(max((t_abs - self.t_ph0) / T_LIFT, 0.0), 1.0))[0]
         T = self.T_lift0.copy()
@@ -135,6 +150,13 @@ class TablePickCtrl(P.DoorPassCtrl):
         el = self.t - self.t_ph0
         if self.T_rel0 is None:
             self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
+        if self.motm is not None and self.m_s0 is None:               # 移動中夾取時程：自目前底盤在路線上的投影起算，名目到點＝底盤經過 s＝0
+            b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)
+            self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10)
+            self.m_t0 = self.t
+            self.T_app = (0.0 - self.m_s0) / float(self.motm['v_g'])
+            self.T_b, self.t_l0 = max(1.0, self.T_app - 1.5), max(0.5, self.T_app - 2.5)
+            self._ev('pick_motm_start', s0=round(self.m_s0, 4), T_app=round(self.T_app, 3), v_g=self.motm['v_g'])
         if self.phase == 'APPROACH':
             Tc = K.fk(q, 'link_tcp')
             ep = float(np.linalg.norm(Tc[:3, 3] - self.T_grasp[:3, 3]))
@@ -149,6 +171,8 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self.b_anchor = np.asarray(q[:3], float).copy()
                 self.finger_cmd = P.FINGER_OPEN
                 self._goto('CLOSE', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2))
+            elif self.motm is not None and el > self.T_app + MOTM_CLOSE_LATE_S:
+                self._stop('motm_window_missed', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), s=round(self._motm_s(self.t), 4))
             elif el > self.T_app + PH_TO_S:
                 self._stop('approach_not_reached', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2))
         elif self.phase == 'CLOSE':
@@ -160,9 +184,10 @@ class TablePickCtrl(P.DoorPassCtrl):
             self.n_ev = self.n_ev + 1 if self._held() else 0
             if self.n_ev * DT >= EVID_S - 1e-9:
                 self.T_lift0 = K.fk(q, 'link_tcp')
+                self.T_rel_l0 = np.linalg.inv(_T3(q[:3])) @ self.T_lift0     # 移動中夾取：連接後抬升改相對底盤（物體已理想連接，不再受世界固定可達窗限制）
                 self.attach = True                                    # Howard 11/18「夾到就改成理想連接」：夾住證據成立 ⇒ 請執行端以 FixedJoint 固定圓柱（同門把理想綁定）
                 self._goto('LIFT', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas], force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
-            elif el > EVID_TO_S:
+            elif el > (MOTM_EVID_TO_S if self.motm is not None else EVID_TO_S):
                 self._stop('grasp_evidence_timeout', finger=None if self.finger_meas is None else [round(float(x), 5) for x in self.finger_meas], force=None if self.finger_force is None else [round(float(x), 3) for x in self.finger_force])
         elif self.phase == 'LIFT':
             if el >= T_LIFT:
@@ -249,7 +274,10 @@ class TablePickCtrl(P.DoorPassCtrl):
         X, xi, obs, umin0, src = G.MovingGraspCtrl.nav_window(self, q, qp)
         if obs is None:
             return None, 'nav_obstacles_stale'
-        if self.phase in ('CLOSE', 'CONFIRM', 'LIFT', 'VERIFY', 'CARRY'):   # 接觸／持物操作段：底盤原地
+        if self.motm is not None and self.m_s0 is not None and self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):   # 移動中夾取：底盤沿經過路線不停
+            X, xi = self._motm_ref(t_eff)
+            umin0, src = float('nan'), 'motm_line'
+        elif self.phase in ('CLOSE', 'CONFIRM', 'LIFT', 'VERIFY', 'CARRY'):   # 接觸／持物操作段：底盤原地
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor'
@@ -260,12 +288,17 @@ class TablePickCtrl(P.DoorPassCtrl):
         if self.phase in ('APPROACH', 'CLOSE', 'CONFIRM', 'LIFT', 'VERIFY'):
             if self.phase == 'APPROACH':
                 Ts = [self._app_target(t_eff + k * DT, Xp[k]) for k in range(XO.N + 1)]
+            elif self.phase in ('LIFT', 'VERIFY') and self.motm is not None:   # 相對底盤抬升
+                def _lr(tt):
+                    T_ = self.T_rel_l0.copy(); T_[2, 3] += LIFT_M * XE.minjerk(min(max((tt - self.t_ph0) / T_LIFT, 0.0), 1.0))[0]; return T_
+                Ts = [_lr(t_eff + k * DT) if self.phase == 'LIFT' else _lr(self.t_ph0 + T_LIFT + 1.0) for k in range(XO.N + 1)]
             elif self.phase in ('LIFT', 'VERIFY'):
                 Ts = [self._lift_target(t_eff + k * DT) if self.phase == 'LIFT' else self._lift_target(self.t_ph0 + T_LIFT + 1.0) for k in range(XO.N + 1)]
             else:
                 Ts = [self.T_grasp] * (XO.N + 1)
             arm = dict(mode='active', K=K, tcp='link_tcp', q_arm=qp[3:], s_arm=sp, u_arm_prev=self.u_prev[3:], model=self.cfg.arm_model, T_seq=np.array(Ts),
-                       w_p=C0.W_NEAR if self.phase != 'APPROACH' else C0.W_FAR, lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper, tcp_rel_base=False, qp_solver='gi', **B.W_ARM)
+                       w_p=C0.W_NEAR if self.phase != 'APPROACH' else C0.W_FAR, lo=XO.LITE6_SAFE.lower, hi=XO.LITE6_SAFE.upper,
+                       tcp_rel_base=bool(self.motm is not None and self.phase in ('LIFT', 'VERIFY')), qp_solver='gi', **B.W_ARM)
             qpf = getattr(self, 'app_qpost', None)                       # 選用：接近段關節姿態引導（抽屜把手；圓柱流程不設 ⇒ 不變）
             if qpf is not None and self.phase == 'APPROACH':
                 arm.update(q_post=np.array([qpf(t_eff + (k + 1) * DT) for k in range(XO.N)]), w_q=float(getattr(self, 'app_w_q', 1.0)))

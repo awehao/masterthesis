@@ -38,6 +38,7 @@ DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 1
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
 PICK_APP_DYAW = float(os.environ['B_PICK_APP_DYAW']) if os.environ.get('B_PICK_APP_DYAW') else None   # 圓柱接近開始的偏航閘門（同抽屜 DR_APP_DYAW；s60：繞茶几角時距 0.6 m 即接近、車頭偏 1.36 rad ⇒ 收斂切桌角、底盤淨空 0.0993 被停）；未設＝原行為
+PICK_MOTM_V = float(os.environ['PICK_MOTM_V']) if os.environ.get('PICK_MOTM_V') else None   # Howard 11/19「茶几那個要移動中夾取 我要做整體速度最佳」：經過速度（m/s）；未設＝停車夾取
 RET_CLEAR = os.environ.get('B_RET_CLEAR', '0') == '1'                # 返回目標送出前清一次全域代價圖（同穿門 PASS_CLEAR 的 Nav2 標準復原）；規劃持續失敗 RET_CLEAR_RETRY_S 再清（最多 3 次）（s66：串接路線沿途行人標記殘留 ⇒ 抽屜→起點 no valid path 582 次）
 RET_CLEAR_RETRY_S = float(os.environ.get('B_RET_CLEAR_RETRY_S', '8.0'))
 DR_APP_DYAW = float(os.environ.get('B_DR_APP_DYAW', '0.30'))         # 抓把手接近開始的底盤偏航差上限（rad）
@@ -815,7 +816,7 @@ def main():
                 self.pass_seen = True
 
         def pick_tick(self, t):
-            if CHAIN and getattr(self, 'n_binned', 0) >= 1 and getattr(self, 'chain', 'cyl') == 'cyl':   # 串接：圓柱已放盒 ⇒ 換抽屜任務（導航目標換抽屜櫃粗目標；選位由 drawer_tick 接手）
+            if CHAIN and getattr(self, 'chain', 'cyl') == 'cyl' and (getattr(self, 'n_binned', 0) >= 1 or (PICK_MOTM_V is not None and self.pick_lifted)):   # 移動中夾取：抬起確認即換下一目標（底盤不折回路線起點）   # 串接：圓柱已放盒 ⇒ 換抽屜任務（導航目標換抽屜櫃粗目標；選位由 drawer_tick 接手）
                 self.chain, self.pick_goal, self.pass_t = 'drawer', None, t
                 self.event('chain_to_drawer')
                 return
@@ -832,7 +833,9 @@ def main():
                     import threading
                     CR = self._CR
                     def _sel(box=self.pick_box, c=est, b=b_now):
-                        w0 = time.perf_counter(); box['sel'] = CR.select(c[:2], b); box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
+                        w0 = time.perf_counter()
+                        box['sel'] = CR.select(c[:2], b) if PICK_MOTM_V is None else CR.select_motm(c[:2], b, PICK_MOTM_V, goal_next=np.asarray(DR_PRIOR[:2], float) if CHAIN else None)
+                        box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
                     self.pick_th = threading.Thread(target=_sel, daemon=True); self.pick_th.start()
                     self.event('pick_estimate', c_map=[round(float(x), 4) for x in c_map], n_obs=len(self.cyl_obs))
             if self.pick_th is not None and self.pick_box.get('done') and self.pick_sel is None:
@@ -840,9 +843,23 @@ def main():
                 if sel is None:
                     self.event('pick_unreachable', c_map=[round(float(x), 4) for x in self.pick_box['c_map']], ms=round(self.pick_box['ms'], 1))
                     self.abort('pick_unreachable'); return
-                Tbm_ = _T3(self.T_mo_now) @ _T3(sel['base'])            # 選位結果（里程）→ 地圖（只給 Smac）
+                Tbm_ = _T3(self.T_mo_now) @ _T3(sel['base_start'] if PICK_MOTM_V is not None else sel['base'])   # 選位結果（里程）→ 地圖（只給 Smac）；移動中夾取＝路線起點
                 self.pick_sel = sel; self.pick_goal = [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]; self.pass_t = t
                 self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1))
+            if self.pick_sel is not None and self.pick_app_t is None and PICK_MOTM_V is not None:   # 移動中夾取：近路線起點即送封包（底盤由控制器沿路線帶過抓取位，不停）
+                bs_ = np.asarray(self.pick_sel['base_start'], float)
+                dist_ = float(np.hypot(*(self.b_od_now[:2] - bs_[:2])))
+                dyaw_c_ = abs((float(self.b_od_now[2]) - float(bs_[2]) + math.pi) % (2 * math.pi) - math.pi)
+                if dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or dist_ <= 0.35):
+                    Tg_od = np.asarray(self.pick_sel['T_grasp'], float)
+                    Tg_od[2, 3] = float(self.pick_box['est_od'][2])
+                    b0_ = [float(x) for x in self.pick_sel['base']]
+                    app = dict(T_grasp=Tg_od.tolist(), base_goal=b0_, T=4.0, T_b=2.5, t_l0=1.5,
+                               motm=dict(b0=b0_, e=[float(x) for x in self.pick_sel['e']], v_g=float(PICK_MOTM_V), s0=float(self._CR.MOTM_S0)))
+                    self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
+                    self.pick_app_t = t
+                    self.event('pick_app_sent', dist=round(dist_, 3), motm=app['motm'])
+                return
             if self.pick_sel is not None and self.pick_app_t is None:
                 b_ = np.asarray(self.pick_sel['base'], float)          # 里程座標
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - b_[:2])))
