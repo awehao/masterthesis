@@ -282,9 +282,14 @@ class TablePickCtrl(P.DoorPassCtrl):
             lim_ = np.array([self.app_v if hasattr(self, 'app_v') else APP_V] * 2 + [0.6])
             mpc.cfg.u_max = np.minimum(np.asarray(mpc.cfg.u_max, float), lim_)
             mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
+        nv_ = P.near_v(qp[:3]) if self.phase in ('APPROACH', 'RETURN', 'CARRY') else None
+        if nv_ is not None:                                           # 近家具減速（同穿門段）
+            lim_ = np.array([nv_, nv_, 9.0])
+            mpc.cfg.u_max = np.minimum(np.asarray(mpc.cfg.u_max, float), lim_)
+            mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         if self.phase in ('RETURN', 'CARRY'):                          # 持物速度框（任務限制，非導航參數）：第十六趟伸臂持物時底盤原地轉 0.43 rad/s ⇒ 圓柱沿運動方向滑出
             lim_ = np.array([CARRY_V, CARRY_V, CARRY_WZ])
-            mpc.cfg.u_max = np.minimum(u_max_saved, lim_)
+            mpc.cfg.u_max = np.minimum(np.asarray(mpc.cfg.u_max, float), lim_)   # 不覆蓋前面的近家具減速
             mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         w0 = time.perf_counter()
         try:
@@ -325,7 +330,8 @@ class TablePickCtrl(P.DoorPassCtrl):
         u_max_saved = np.asarray(mpc.cfg.u_max, float).copy()
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
-        lim_ = np.array([BIN_V, BIN_V, BIN_WZ])                       # 放盒中底盤速度框（任務限制）
+        nv_ = P.near_v(qp[:3])
+        lim_ = np.array([min(BIN_V, nv_ if nv_ is not None else 9.0)] * 2 + [BIN_WZ])   # 放盒中底盤速度框（任務限制）＋近家具減速
         mpc.cfg.u_max = np.minimum(u_max_saved, lim_)
         mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
         w0 = time.perf_counter()

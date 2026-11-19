@@ -36,6 +36,19 @@ DONE_HOLD_S = 1.0
 STOW_MOVE = os.environ.get('PASS_STOW_MOVE', '0') == '1'            # Howard 11/19「開完門為什麼停著把手臂伸成那樣，不是應該邊走邊伸」⇒ 收臂段底盤照導航前端（限速框），不錨定
 STOW_V, STOW_WZ = float(os.environ.get('PASS_STOW_V', '0.15')), float(os.environ.get('PASS_STOW_WZ', '0.5'))   # 收臂中底盤速度框（任務限制；收完進 DRIVE 即解除）
 DOOR_V = float(os.environ['PASS_DOOR_V']) if os.environ.get('PASS_DOOR_V') else None   # 門口區（底盤 y＜DONE_Y_MIN）行駛速度框（任務限制，非導航參數；s61：門扇尾端旁全速 0.27 m/s ⇒ 停止軌跡離門扇 0.0984＜0.10 被停）；未設＝原行為
+NEAR_V = float(os.environ['PASS_NEAR_V']) if os.environ.get('PASS_NEAR_V') else None   # 近家具減速（任務限制，非導航參數）：底盤對已知靜態物淨空 <NEAR_D ⇒ 速度框 NEAR_V（s60／s68／s69／第二十八趟：繞家具 0.24 m/s，停止軌跡底盤淨空 0.098–0.0998 被停）；未設＝原行為
+NEAR_D = float(os.environ.get('PASS_NEAR_D', '0.20'))
+
+
+def near_v(b):
+    """底盤位姿 b 對已知靜態物（牆、家具、已安裝的抽屜櫃；同 clear_door_fast 底盤項的物體與式子）淨空 <NEAR_D ⇒ 回 NEAR_V，否則 None。"""
+    if NEAR_V is None:
+        return None
+    sh, _ = W._static()
+    d = min((float(W.DOC.box_dist(np.array([[float(b[0]), float(b[1]), c[2]]]), c, R, hs)[0]) - W.DOC.RB for _, c, R, hs in sh if W.base_level(c, R, hs)), default=9.0)
+    return NEAR_V if d < NEAR_D else None
+
+
 STOW_JOINT = os.environ.get('PASS_STOW_JOINT', '0') == '1'          # 收臂走關節空間直線（第二十五趟 TCP 混接 ⇒ j1 先甩到 −1.89 再回 0）
 STOW_QD = float(os.environ.get('PASS_STOW_QD', '0.6'))              # 關節空間收臂峰速上限（rad/s；最小急動峰速 1.875×）
 PICK_FOLLOW = os.environ.get('D2_PICK', '0') == '1'                 # 穿門後接取物：穿門段不自行判完成（由監督送取物封包換控制器）
@@ -188,8 +201,9 @@ class DoorPassCtrl:
         if math.isfinite(umin0):
             mpc.cfg.u_min = np.array([umin0, u_min_saved[1], u_min_saved[2]])
         door_cap_ = DOOR_V is not None and self.phase in ('STOW', 'DRIVE') and float(qp[1]) < DONE_Y_MIN
-        if (STOW_MOVE and self.phase == 'STOW') or door_cap_:          # 邊走邊收：收臂中底盤速度框；門口區速度框
-            v_ = min(STOW_V if (STOW_MOVE and self.phase == 'STOW') else 9.0, DOOR_V if door_cap_ else 9.0)
+        nv_ = near_v(qp[:3]) if self.phase in ('STOW', 'DRIVE') else None
+        if (STOW_MOVE and self.phase == 'STOW') or door_cap_ or nv_ is not None:   # 邊走邊收：收臂中底盤速度框；門口區速度框；近家具減速
+            v_ = min(STOW_V if (STOW_MOVE and self.phase == 'STOW') else 9.0, DOOR_V if door_cap_ else 9.0, nv_ if nv_ is not None else 9.0)
             lim_ = np.array([v_, v_, STOW_WZ])
             mpc.cfg.u_max = np.minimum(u_max_saved, lim_)
             mpc.cfg.u_min = np.maximum(np.asarray(mpc.cfg.u_min, float), -lim_)
