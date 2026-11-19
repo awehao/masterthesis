@@ -20,7 +20,7 @@ ENABLE = os.environ.get('D2_YIELD_SIDE', '0') == '1'
 V_MIN = float(os.environ.get('YS_V_MIN', '0.08'))
 T_LOOK = float(os.environ.get('YS_T_LOOK', '5.0'))
 PAD = float(os.environ.get('YS_PAD', '0.25'))
-WALL_PAD = float(os.environ.get('YS_WALL_PAD', '0.10'))
+WALL_PAD = float(os.environ.get('YS_WALL_PAD', '0.14'))           # 目標點與側移路徑：底盤中心離地圖障礙 ≥0.30＋0.14（控制器底盤淨空門檻 0.10＋餘裕；Isaac 37 回程側移經床頭櫃 0.0954 被停）
 RATE = float(os.environ.get('YS_RATE', '0.25'))
 R_BASE = 0.30
 R_MIN = float(os.environ.get('YS_R_MIN', '0.25'))                     # 行人半徑下限（追蹤器回報的半徑偏小，s94d need 只有 0.45＜真實 0.55）
@@ -152,7 +152,7 @@ class YieldSide:
                 s_t = (hi + R_BASE + PAD) if sg > 0 else (lo - R_BASE - PAD)
                 tgt = q[:2] + (s_t - s_now) * n
                 cl = clearance(*tgt)
-                if cl >= R_BASE + WALL_PAD and _path_clear(q[:2], tgt, R_BASE + WALL_PAD * 0.5):
+                if cl >= R_BASE + WALL_PAD and _path_clear(q[:2], tgt, R_BASE + WALL_PAD):
                     same = (s_now - 0.5 * (lo + hi)) * sg > 0.0              # 機器人目前已在該側（不必穿越行人路線）
                     cands.append((0 if same else 1, abs(s_t - s_now), sg, s_t, cl))
             if cands:
@@ -163,6 +163,18 @@ class YieldSide:
                 self.log.append(dict(t=round(t, 2), what='yield_lock', side=sg, s_now=round(s_now, 3), s_tgt=round(s_t, 3), lo=round(lo, 3), hi=round(hi, 3), ts=round(ts, 2), ds=round(ds, 3), n_cand=len(cands), clear=round(cl, 2)))
             else:
                 self.log.append(dict(t=round(t, 2), what='yield_no_side', s_now=round(s_now, 3), lo=round(lo, 3), hi=round(hi, 3), ts=round(ts, 2), ds=round(ds, 3)))
+                if abs(s_now - 0.5 * (lo + hi)) >= 0.5 * (hi - lo) + R_BASE + 0.05:   # 兩側都沒淨空、但機器人還不在行人帶上 ⇒ 原地等行人通過（參考視窗釘在目前位置）
+                    self.lock = dict(n=n, sg=0.0, s_t=s_now, t0=t, hold=np.asarray(q[:3], float).copy())
+                    self.log.append(dict(t=round(t, 2), what='yield_hold', s_now=round(s_now, 3)))
+        if self.lock is not None and self.lock.get('hold') is not None:
+            if c is None:
+                self.log.append(dict(t=round(t, 2), what='yield_release'))
+                self.lock = None
+                return dict(off=0.0)
+            h_ = self.lock['hold']
+            for Xk in X:                                              # 等待：位置釘住、朝向照參考
+                Xk[0, 2], Xk[1, 2] = float(h_[0]), float(h_[1])
+            return dict(off=0.0, side=0.0, hold=True)
         if self.lock is not None:
             L = self.lock
             if c is None:                                            # 已無衝突（通過或離開預測窗）⇒ 平移量以同速率收回
@@ -203,7 +215,7 @@ class YieldSide:
             for sg in (1.0, -1.0):
                 s_t = sg * need
                 tgt = q[:2] + (s_t - s_now) * n
-                if clearance(*tgt) >= R_BASE + WALL_PAD and _path_clear(q[:2], tgt, R_BASE + WALL_PAD * 0.5):
+                if clearance(*tgt) >= R_BASE + WALL_PAD and _path_clear(q[:2], tgt, R_BASE + WALL_PAD):
                     cands.append((abs(s_t - s_now), sg, s_t))
             if cands:
                 cands.sort()
