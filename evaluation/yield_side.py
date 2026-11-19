@@ -19,7 +19,7 @@ import numpy as np
 ENABLE = os.environ.get('D2_YIELD_SIDE', '0') == '1'
 V_MIN = float(os.environ.get('YS_V_MIN', '0.08'))
 T_LOOK = float(os.environ.get('YS_T_LOOK', '5.0'))
-PAD = float(os.environ.get('YS_PAD', '0.15'))
+PAD = float(os.environ.get('YS_PAD', '0.25'))
 WALL_PAD = float(os.environ.get('YS_WALL_PAD', '0.10'))
 RATE = float(os.environ.get('YS_RATE', '0.25'))
 R_BASE = 0.30
@@ -91,11 +91,16 @@ def _groups(obs):
     return out
 
 
-def _interval(gp, n):
-    """行人在法向 n 上的保守側向區間：可見表面點範圍＋背面未見部分（寬度至少 2·R_MIN）。"""
-    s = gp['P'] @ n
-    lo, hi = float(s.min()) - gp['r'], float(s.max()) + gp['r']
-    return min(lo, hi - 2.0 * R_MIN), max(hi, lo + 2.0 * R_MIN)
+def _interval(gp, n, q_xy=None):
+    """行人在法向 n 上的側向區間：中心＝可見表面點平均往遠離機器人方向推一個半徑（表面點偏向感測器），半寬＝R_MIN
+    （s98d：直接用點的範圍＋背面補寬，雜點讓區間寬到 1.0 m、中心偏 0.23 m ⇒ 選到要穿越行人路線的一側）。"""
+    m = gp['P'].mean(axis=0)
+    if q_xy is not None:
+        d = m - np.asarray(q_xy, float)[:2]; nd = float(np.linalg.norm(d))
+        if nd > 1e-6:
+            m = m + R_MIN * d / nd
+    sc = float(m @ n)
+    return sc - R_MIN, sc + R_MIN
 
 
 class YieldSide:
@@ -112,7 +117,7 @@ class YieldSide:
             if sp < V_MIN:
                 continue
             u = vo / sp; n = np.array([-u[1], u[0]])
-            lo, hi = _interval(gp, n)
+            lo, hi = _interval(gp, n, q[:2])
             al = float((gp['P'] @ u).mean())
             c = al * u + 0.5 * (lo + hi) * n
             rad = 0.5 * (hi - lo)
@@ -143,10 +148,11 @@ class YieldSide:
                 tgt = q[:2] + (s_t - s_now) * n
                 cl = clearance(*tgt)
                 if cl >= R_BASE + WALL_PAD and _path_clear(q[:2], tgt, R_BASE + WALL_PAD * 0.5):
-                    cands.append((abs(s_t - s_now) - 0.2 * min(cl, 1.0), sg, s_t, cl))
+                    same = (s_now - 0.5 * (lo + hi)) * sg > 0.0              # 機器人目前已在該側（不必穿越行人路線）
+                    cands.append((0 if same else 1, abs(s_t - s_now), sg, s_t, cl))
             if cands:
                 cands.sort()
-                _, sg, s_t, cl = cands[0]
+                _, _, sg, s_t, cl = cands[0]
                 self.lock = dict(n=n, sg=sg, s_t=s_t, t0=t)
                 self.off = 0.0
                 self.log.append(dict(t=round(t, 2), what='yield_lock', side=sg, s_now=round(s_now, 3), s_tgt=round(s_t, 3), lo=round(lo, 3), hi=round(hi, 3), ts=round(ts, 2), ds=round(ds, 3), n_cand=len(cands), clear=round(cl, 2)))
