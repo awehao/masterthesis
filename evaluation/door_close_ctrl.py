@@ -52,6 +52,7 @@ class DoorCloseCtrl(PK.TablePickCtrl):
         app = dict(app, base_goal=[float(x) for x in b_c], T_grasp=(W.handle_pose(src.T_WH0, phi_c) @ np.asarray(src.T_HE, float)).tolist())
         super().__init__(src, t0, app)
         self.motm = None
+        self.door_geom = app.get('door')                               # 門幾何（里程）：綁定共轉段放進 app_prof ⇒ door_filter 排除門扇點（s97d）
         self.app_tol_z, self.app_v = None, None
         self.T_grasp = np.asarray(app['T_grasp'], float).copy()       # 不加圓柱的 GRASP_DEPTH（同一種門把抓法）
         self.phi_c = phi_c
@@ -104,6 +105,8 @@ class DoorCloseCtrl(PK.TablePickCtrl):
                 self.b_s0, self.q_s0 = np.asarray(q[:3], float).copy(), np.asarray(q[3:], float).copy()
                 self.T_rel_s = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
                 self.phi_c = float(self.phi_now)                       # 綁定瞬間實測門角起算
+                if self.door_geom is not None:
+                    self.app_prof = dict(base_goal=list(self.app_prof['base_goal']) if self.app_prof else None, door=self.door_geom)   # 綁定後門扇是操作對象：門扇點不進 CBF（門的碰撞由門專屬淨空核對負責，同去程）
                 self._goto('SWING', phi_deg=round(math.degrees(self.phi_c), 2))
             elif el > P.UNBIND_TO_S:
                 self._stop('door_bind_ack_timeout')
@@ -221,7 +224,7 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             r = mpc.solve(X_now=XO.from_xytheta(*qp[:3]), X_ref_win=np.array(X), xi_ref_win=np.array(xi), xi_prev=self.u_prev[:3], arm=arm, obstacles=obs)
         finally:
             mpc.cfg.u_min = u_min_saved
-        self.wg_log.append((round(self.t, 3), 'door_close:' + self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active)))
+        self.wg_log.append((round(self.t, 3), 'door_close:' + self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active), PK._obs_near(obs, qp)))
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
         ck = dict(r.arm_check or {})

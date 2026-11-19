@@ -802,6 +802,20 @@ def main():
             self.leaf_obs.append((float(d[1]), float(d[6])))
             self.leaf_obs = self.leaf_obs[-30:]
 
+        def _door_geom_od(self):
+            """門幾何（里程座標）：場景登錄鉸鏈＋門扇方向（同去程接近封包的 app['door']）；回程關門綁定共轉中門扇點不進 CBF（s97d：門扇被追蹤成迎面動態障礙 ⇒ CBF 把底盤往反方向推、門又被拉開）。"""
+            try:
+                T_mo = getattr(self, 'T_mo_now', None)
+                if T_mo is None:
+                    return None
+                sreg_ = json.load(open(os.path.join(HERE, 'experiments', os.environ.get('M8_SCENE_REG', '20261112_m8_house_scene.json'))))
+                ox_ = sreg_['door']['opening_x']
+                Ti_ = np.linalg.inv(_T3(np.asarray(T_mo, float)))
+                hg_ = Ti_ @ np.array([float(ox_[0]), 0.0, 0.0, 1.0]); dr_ = Ti_[:3, :3] @ np.array([1.0, 0.0, 0.0])
+                return dict(hinge=[float(hg_[0]), float(hg_[1])], dir=[float(dr_[0]), float(dr_[1])], w=0.95, src='場景登錄（同去程）')
+            except Exception:                                             # noqa: BLE001
+                return None
+
         def _leaf_fuse(self, t):
             rec = [p_ for t_, p_ in self.leaf_obs if t - t_ <= 1.5][-5:]
             if len(rec) < 5 or float(np.ptp(rec)) > math.radians(0.5):
@@ -842,7 +856,7 @@ def main():
                 dyaw_ = abs((float(self.b_od_now[2]) - float(b_c[2]) + math.pi) % (2 * math.pi) - math.pi)
                 if dist_ <= PICK_APP_DIST and (dyaw_ <= 0.30 or dist_ <= 0.15):
                     ph = self._leaf_fuse(t) or dc['phi_c']                # 送封包時以最新融合門角
-                    self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=dict(kind='door_close', phi_c=float(ph), base_goal=[float(x) for x in b_c], T=max(PICK_T_MIN, dist_ / 0.12 + 2.0), T_b=2.5, t_l0=1.5)))))
+                    self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=dict(kind='door_close', door=self._door_geom_od(), phi_c=float(ph), base_goal=[float(x) for x in b_c], T=max(PICK_T_MIN, dist_ / 0.12 + 2.0), T_b=2.5, t_l0=1.5)))))
                     dc['stage'] = 'closing'
                     self.event('door_close_app_sent', phi_deg=round(math.degrees(ph), 3), dist=round(dist_, 3))
                 return True
