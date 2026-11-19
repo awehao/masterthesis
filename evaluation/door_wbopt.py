@@ -167,6 +167,7 @@ class DoorWBOpt:
         self.mode = mode
         x0 = np.asarray(x0, float)
         self.x0, self.phi_goal, self.N, self.dt, self.mode, self.base_fixed = np.asarray(x0, float), float(phi_goal), int(N), float(dt), mode, bool(base_fixed)
+        self.closing = bool(float(phi_goal) < float(x0[9]))         # 關門（Howard 11/19「可以開始做關門」）：目標門角小於起始 ⇒ 終點、驗收、單調性全部反向；開門逐值不變
         self.w = dict(phi=4.0, v=1.0, a=1.0, lim=0.3, manip=0.5, slack=1e5, reg=1e-3, col=1e5, term=1e5)
         self.w.update(w or {})
         self.scale = np.r_[0.25, 0.25, 0.6, np.full(6, V_ARM), PHI_RATE]   # 速度正規化（各自的上限量級）
@@ -276,7 +277,7 @@ class DoorWBOpt:
         sig = np.array([sigma_min(x) for x in X[1:]])
         J = (w['phi'] * float(((X[1:, 9] - self.phi_goal) ** 2).sum()) + w['phi'] * self.term_nodes * float((X[-1, 9] - self.phi_goal) ** 2) + w['v'] * float((d1 ** 2).sum()) + w['a'] * float((d2 ** 2).sum())
              + w['lim'] * float((((X[1:, 3:9] - mid) / half) ** 2).sum()) - w['manip'] * float(np.log(np.maximum(sig, 1e-4)).sum()))
-        viol = (0.0 if self.segment else max(0.0, self.phi_goal - X[-1, 9])) + float(np.maximum(min(SIG_FLOOR, sigma_min(self.x0)) - sig, 0).sum())
+        viol = (0.0 if self.segment else max(0.0, (X[-1, 9] - self.phi_goal) if self.closing else (self.phi_goal - X[-1, 9]))) + float(np.maximum(min(SIG_FLOOR, sigma_min(self.x0)) - sig, 0).sum())
         dX = np.diff(X, axis=0) / dt
         for k in range(N):
             th = 0.5 * (X[k, 2] + X[k + 1, 2])
@@ -444,7 +445,10 @@ class DoorWBOpt:
                 add(cols, vals, -V_ARM - base, V_ARM - base)
         # 終點門角（硬性）：φ_N ≥ φ_goal
         if not self.segment:
-            add([idx(N).start + 9, nz - 1], [1.0, 1.0], self.phi_goal + 2e-4 - X[N, 9], np.inf)   # 2e-4 rad：大於 QP 容差 1e-6 與投影誤差的餘量（同輪速 0.97 的作法）   # 彈性：φ_N＋s_T ≥ φ_goal，s_T 重罰；起始猜測未達目標時 QP 不會必然無解
+            if self.closing:                                         # 關門：φ_N − s_T ≤ φ_goal
+                add([idx(N).start + 9, nz - 1], [-1.0, 1.0], X[N, 9] - self.phi_goal + 2e-4, np.inf)
+            else:
+                add([idx(N).start + 9, nz - 1], [1.0, 1.0], self.phi_goal + 2e-4 - X[N, 9], np.inf)   # 2e-4 rad：大於 QP 容差 1e-6 與投影誤差的餘量（同輪速 0.97 的作法）   # 彈性：φ_N＋s_T ≥ φ_goal，s_T 重罰；起始猜測未達目標時 QP 不會必然無解
         add([nz - 1], [1.0], 0.0, np.inf)
         # 淨空（線性化；鬆弛重罰）
         for j, (k, mg, g) in enumerate(col):
@@ -591,7 +595,7 @@ class DoorWBOpt:
         sig = np.array([sigma_min(x) for x in Xd])
         phi = Xd[:, 9]
         pd = np.abs(np.diff(phi)) / h
-        t_at = lambda th_: (lambda w_: None if not len(w_) else round(float(w_[0] * h), 2))(np.where(phi >= th_)[0])   # noqa: E731
+        t_at = lambda th_: (lambda w_: None if not len(w_) else round(float(w_[0] * h), 2))(np.where((phi <= th_) if self.closing else (phi >= th_))[0])   # noqa: E731
         v = dict(reference='密集投影參考（dt %.3f s；底盤與門角＝節點二次 B 樣條、手臂投影）' % h, n_dense=n + 1, proj_adjust_max_rad=round(adj, 5),
                  closure_pos_mm=round(float(np.abs(r[:, :3]).max()) * 1e3, 6), closure_rot_deg=round(math.degrees(float(np.abs(r[:, 3:]).max())), 6),
                  raw_midpoint_pos_mm=round(float(np.abs(raw[:, :3]).max()) * 1e3, 4), raw_midpoint_rot_deg=round(math.degrees(float(np.abs(raw[:, 3:]).max())), 4),
@@ -606,8 +610,8 @@ class DoorWBOpt:
                  joint_margin_min_rad=round(float(jm.min()), 4), joint_margin_min_joint=int(np.unravel_index(jm.argmin(), jm.shape)[1]) + 1, joint_ok=bool(jm.min() >= 0.05 - 1e-6),
                  sigma_min=round(float(sig.min()), 4), sigma_start=round(float(sig[0]), 4), sigma_floor=SIG_FLOOR, sigma_ok=bool(sig.min() >= min(SIG_FLOOR, sig[0]) - 1e-3),
                  sigma_note=None if sig[0] >= SIG_FLOOR else '起始低可操作度例外：起始值已低於下限，只保證不再降低；不得稱全程 σ_min ≥ 下限',
-                 phi_end_deg=round(math.degrees(phi[-1]), 3), phi_end_ok=bool(phi[-1] >= self.phi_goal - 1e-6), phi_range_ok=bool(phi.min() >= -1e-9 and phi.max() <= PHI_MAX + 1e-9),
-                 phi_rate_max=round(float(pd.max()), 4), phi_rate_ok=bool(pd.max() <= PHI_RATE + 1e-4), phi_monotone=bool((np.diff(phi) >= -1e-6).all()),
+                 phi_end_deg=round(math.degrees(phi[-1]), 3), phi_end_ok=bool((phi[-1] <= self.phi_goal + 1e-6) if self.closing else (phi[-1] >= self.phi_goal - 1e-6)), phi_range_ok=bool(phi.min() >= -1e-9 and phi.max() <= PHI_MAX + 1e-9),
+                 phi_rate_max=round(float(pd.max()), 4), phi_rate_ok=bool(pd.max() <= PHI_RATE + 1e-4), phi_monotone=bool((np.diff(phi) <= 1e-6).all() if self.closing else (np.diff(phi) >= -1e-6).all()),
                  t_phi_95pct_s=t_at(0.95 * self.phi_goal), t_phi_84p5deg_s=t_at(self.phi_goal - math.radians(0.5)), t_phi_first_goal_s=t_at(self.phi_goal), t_ref_end_s=round(n * h, 2),
                  time_note='各時刻為 0.05 s 取樣序列上的首次到達；參考結束≠實際停穩（後者要執行後量）',
                  base_travel_m=round(float(np.linalg.norm(np.diff(Xd[:, :2], axis=0), axis=1).sum()), 3), base_net_m=round(float(np.linalg.norm(Xd[-1, :2] - Xd[0, :2])), 3), base_yaw_change_deg=round(math.degrees(Xd[-1, 2] - Xd[0, 2]), 1))

@@ -92,7 +92,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.open_m = max(0.0, self.open0 - CLOSE_LEAVE_M)              # 留 5 mm 不撞關閉限位（理想連接下硬推限位會拉扯手臂）
             self.T_grasp = np.asarray(app['T_grasp'], float).copy()
             self.dr_attach, self.dr_release, self.dr_unbound = False, False, False
-            self.T_p0, self.b_p0, self.T_rel_r0, self.dvec_b, self.n_ev = None, None, None, None, 0
+            self.T_p0, self.b_p0, self.T_rel_r0, self.dvec_b, self.n_ev, self.T_hold = None, None, None, None, 0, None   # T_hold 必清（s80：確認段保持舊退出位姿 ⇒ 手臂抬走、證據逾時）
             self.finger_cmd = P.FINGER_OPEN
             self.q_unf0 = None
             self.app_prof = dict(base_goal=list(app['base_goal']), door=None)
