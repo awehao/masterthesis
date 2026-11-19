@@ -656,7 +656,8 @@ def main():
             self.create_subscription(Float64MultiArray, '/cyl/obs', self._cyl_in, 20)
             from sensor_msgs.msg import LaserScan as _LS
             self.last_scan = None
-            self.create_subscription(_LS, '/scan', self._scan_in, 5)   # 選位時用：地圖沒有、雷射看得到的未知障礙（Isaac 第三十二趟）
+            from rclpy.qos import qos_profile_sensor_data as _QSD
+            self.create_subscription(_LS, '/scan', self._scan_in, _QSD)   # 選位時用（best effort，同雷射發布端；s106d 預設可靠 QoS 收不到）：地圖沒有、雷射看得到的未知障礙（Isaac 第三十二趟）
             self.hdl_obs = []
             self.leaf_obs, self.door_end, self.dc = [], None, dict(stage=None)
             self.create_subscription(Float64MultiArray, '/door/leaf_obs', self._leaf_in, 20)
