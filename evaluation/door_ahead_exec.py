@@ -60,6 +60,9 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
             if getattr(_PK0, 'BIN', False):
                 _qp0 = _PK0.RBIN.q_place()
                 print('[worker] bin_q_place ' + ('None' if _qp0 is None else str([round(float(x), 4) for x in _qp0[0]])), flush=True)
+        if os.environ.get('D2_DOOR_CLOSE', '0') == '1':                # 回程關門控制器先匯入（s86d：控制拍內首次匯入 ⇒ 166 ms 超 150 ms 期限 not_ready）
+            import door_close_ctrl as _DC0                           # noqa: F401
+            import door_leaf_detect as _DL0                          # noqa: F401
     except Exception as _e:                                            # noqa: BLE001
         print('[worker] preimport_failed ' + repr(_e)[:200], flush=True)
     import gc as _gc
