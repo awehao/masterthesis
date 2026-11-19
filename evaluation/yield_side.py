@@ -23,6 +23,7 @@ PAD = float(os.environ.get('YS_PAD', '0.15'))
 WALL_PAD = float(os.environ.get('YS_WALL_PAD', '0.10'))
 RATE = float(os.environ.get('YS_RATE', '0.25'))
 R_BASE = 0.30
+R_MIN = float(os.environ.get('YS_R_MIN', '0.25'))                     # 行人半徑下限（追蹤器回報的半徑偏小，s94d need 只有 0.45＜真實 0.55）
 
 _MAP = None
 
@@ -88,7 +89,7 @@ class YieldSide:
             if not (0.0 < ts < T_LOOK):
                 continue
             ds = float(np.linalg.norm(p + vr * ts))
-            need = R_BASE + float(o.get('radius', 0.25)) + PAD
+            need = R_BASE + max(float(o.get('radius', R_MIN)), R_MIN) + PAD
             if (ds < need or (any_ds and ds < need + 0.6)) and (best is None or ts < best[1]):   # 鎖定中：仍在接近（未通過）就維持，避免側移後 d* 變大即收回而來回擺
                 best = (o, ts, ds, need, vo)
         return best
