@@ -209,8 +209,8 @@ class WorldD2(Node):
                 self.pick_app_sent = dict(d_['app'])
                 runner.extra = dict(getattr(runner, 'extra', None) or {}, pick_app=dict(d_['app']))
                 T_k_ = 'T_grasp' if 'T_grasp' in d_['app'] else 'T_obs'   # 抽屜觀察封包只有觀察位姿
-                if kind_ == 'dr_close':                               # 關抽屜：第二次夾把手 ⇒ 抽屜連接旗標重設（執行端同步）
-                    self.dr_attached, self.dr_released, self.dr_unbound_ack = False, False, None
+                if kind_ == 'dr_close':                               # 關抽屜：第二次夾把手。解除回報立即清（否則快照把舊 dr_unbound 帶給新流程）；
+                    self.dr_unbound_ack, self.dr_reset_pending = None, True   # 連接／解除鎖存等控制器輸出歸零後才重設（s79：舊輸出 dr_attach 被重送 ⇒ 替身判無接觸連接中止）
                     self.ctl('drawer_reset')
                 if d_['app'].get('drawer_pose') is not None:            # 視覺抽屜位姿 ⇒ 執行端（Isaac 筆偵測的內部範圍）同步
                     self.ctl('drawer_pose', pose=[float(x) for x in d_['app']['drawer_pose']])
@@ -503,6 +503,9 @@ class WorldD2(Node):
                         if not rec.get('obj_release') and not rec.get('attach') and getattr(self, 'obj_releasing', False) and getattr(self, 'obj_detach_ack', None) is not None:   # 控制器已收到回報 ⇒ 重置（下一件可再連接）
                             self.obj_releasing, self.cyl_attached, self.obj_detach_ack = False, False, None
                             self.ev('obj_release_cleared')
+                        if getattr(self, 'dr_reset_pending', False) and not rec.get('dr_attach') and not rec.get('dr_release'):   # 控制器已換關抽屜流程 ⇒ 重設鎖存
+                            self.dr_attached, self.dr_released, self.dr_reset_pending = False, False, False
+                            self.ev('drawer_latches_reset')
                         if rec.get('dr_attach') and not getattr(self, 'dr_attached', False):   # 抽屜把手理想連接（夾住證據成立後）
                             self.dr_attached = True
                             self.ev('drawer_attach_committed')
