@@ -53,6 +53,36 @@ def base_free(b):
     return True
 
 
+SCAN_PTS = None                                                       # 目前雷射看到、但不在場景登錄（地圖）裡的點（里程座標 N×2）；None＝只看地圖
+SCAN_CLEAR = float(os.environ.get('CYL_SCAN_CLEAR', '0.42'))
+SCAN_TAIL = float(os.environ.get('CYL_SCAN_TAIL', '0.2'))           # 閉爪窗之後沿線再核的長度（抬起後轉交導航）         # 底盤中心離未知點至少（底盤半徑 0.30＋0.15）：Isaac 第三十二趟路線起點離 unknown_l5 角 0.2 m ⇒ Shield 擋住對齊
+
+
+def set_scan_pts(P):
+    """只留地圖解釋不了的點（離所有登錄方盒 >0.08 m）；回保留數。"""
+    global SCAN_PTS
+    if P is None or len(P) == 0:
+        SCAN_PTS = None
+        return 0
+    keep = []
+    for p in np.asarray(P, float):
+        ok = True
+        for c, s in BOXES:
+            dx = max(abs(p[0] - c[0]) - s[0] / 2, 0.0); dy = max(abs(p[1] - c[1]) - s[1] / 2, 0.0)
+            if math.hypot(dx, dy) < 0.08:
+                ok = False; break
+        if ok:
+            keep.append(p)
+    SCAN_PTS = np.array(keep) if keep else None
+    return 0 if SCAN_PTS is None else len(SCAN_PTS)
+
+
+def scan_free(b):
+    if SCAN_PTS is None:
+        return True
+    return float(np.min(np.hypot(SCAN_PTS[:, 0] - b[0], SCAN_PTS[:, 1] - b[1]))) >= SCAN_CLEAR
+
+
 def ik(T, b):
     best = None
     for sd in SEEDS:
@@ -188,6 +218,8 @@ def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=
                 if not base_free(b_start):
                     continue
                 b_end = b[:2] + s1 * e
+                if not all(scan_free(b[:2] + s_ * e) for s_ in np.arange(s_start, s1 + SCAN_TAIL + 1e-9, 0.1)):   # 路線起點→經過→終點後 SCAN_TAIL 都離未知障礙點夠遠（地圖沒有、雷射看得到）
+                    continue
                 cost = w_dist * float(np.hypot(*(b_start[:2] - np.asarray(b_now[:2], float)))) + w_sig / max(min(fwd[0], bwd[0]), 1e-6)
                 if goal_next is not None:                              # 整體路程（s75：方向偏好權重太小 ⇒ 選了背離抽屜的方向）：到起點＋終點到下一目標（直線近似）
                     cost += w_dist * float(np.hypot(*(b_end - np.asarray(goal_next[:2], float))))

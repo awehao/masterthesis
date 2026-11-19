@@ -654,6 +654,9 @@ def main():
             self.create_subscription(Float64MultiArray, '/task/gmpc_pred', self._pred, 20)
             self.create_subscription(String, '/far/exec_state', self._xs_in, 10)
             self.create_subscription(Float64MultiArray, '/cyl/obs', self._cyl_in, 20)
+            from sensor_msgs.msg import LaserScan as _LS
+            self.last_scan = None
+            self.create_subscription(_LS, '/scan', self._scan_in, 5)   # 選位時用：地圖沒有、雷射看得到的未知障礙（Isaac 第三十二趟）
             self.hdl_obs = []
             self.leaf_obs, self.door_end, self.dc = [], None, dict(stage=None)
             self.create_subscription(Float64MultiArray, '/door/leaf_obs', self._leaf_in, 20)
@@ -802,6 +805,20 @@ def main():
             self.leaf_obs.append((float(d[1]), float(d[6])))
             self.leaf_obs = self.leaf_obs[-30:]
 
+        def _scan_in(self, m):
+            self.last_scan = (np.asarray(m.ranges, float), float(m.angle_min), float(m.angle_increment))
+
+        def _scan_pts_od(self, r_max=4.0):
+            """最新一筆雷射轉里程座標點（雷射在底盤中心，geom.json lidar_xy＝0）。"""
+            ls = getattr(self, 'last_scan', None)
+            if ls is None or getattr(self, 'b_od_now', None) is None:
+                return None
+            r, a0, da = ls
+            b = np.asarray(self.b_od_now, float)
+            k = np.nonzero(np.isfinite(r) & (r < r_max))[0]
+            th = b[2] + a0 + k * da
+            return np.c_[b[0] + r[k] * np.cos(th), b[1] + r[k] * np.sin(th)]
+
         def _door_geom_od(self):
             """門幾何（里程座標）：場景登錄鉸鏈＋門扇方向（同去程接近封包的 app['door']）；回程關門綁定共轉中門扇點不進 CBF（s97d：門扇被追蹤成迎面動態障礙 ⇒ CBF 把底盤往反方向推、門又被拉開）。"""
             try:
@@ -948,6 +965,8 @@ def main():
                     self.pick_box = dict(c_map=c_map, est_od=est, t=t)
                     import threading
                     CR = self._CR
+                    n_unk_ = CR.set_scan_pts(self._scan_pts_od()) if PICK_MOTM_V is not None else 0
+                    self.event('pick_scan_unknown_pts', n=int(n_unk_))
                     def _sel(box=self.pick_box, c=est, b=b_now):
                         w0 = time.perf_counter()
                         box['sel'] = CR.select(c[:2], b) if PICK_MOTM_V is None else CR.select_motm(c[:2], b, PICK_MOTM_V, goal_next=np.asarray(DR_PRIOR[:2], float) if CHAIN else None)

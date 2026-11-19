@@ -108,6 +108,11 @@ class Stub(Node):
         gm = json.load(open(os.path.join(HERE, 'far_dry', 'geom.json')))
         self.lidar_xy, self.lidar_z = np.array(gm['lidar_xy'], float), float(gm['lidar_z'])
         self.boxes, _, _ = WN.load_boxes(self.lidar_z)
+        for u_ in (_OB.get('static_unknown', []) if WALKERS else []):   # 未知障礙物（不進地圖、Isaac 有實體）：以旋轉方盒外接軸對齊框進射線（s/Isaac 32：替身原本沒有 ⇒ 茶几移動中夾取路線起點貼著 unknown_l5，替身過、Isaac 被 Shield 擋）
+            if float(u_['size'][2]) >= self.lidar_z:
+                c_, s_ = math.cos(math.radians(float(u_['yaw_deg']))), math.sin(math.radians(float(u_['yaw_deg'])))
+                hx = 0.5 * (abs(c_) * float(u_['size'][0]) + abs(s_) * float(u_['size'][1])); hy = 0.5 * (abs(s_) * float(u_['size'][0]) + abs(c_) * float(u_['size'][1]))
+                self.boxes.append((u_['name'], float(u_['x']) - hx, float(u_['x']) + hx, float(u_['y']) - hy, float(u_['y']) + hy))
         self.boxes = list(self.boxes)
         if DRAWER:                                                    # 抽屜櫃板（跨過雷射高度者）也進替身雷射（s49：地圖有櫃、掃描看不到 ⇒ AMCL 偏 28 cm ⇒ 把手底盤位落進膨脹區 no valid path；Isaac PhysX 雷射本來就看得到）
             for n_, c_, R_, h_ in DRS.shapes(0.0):
