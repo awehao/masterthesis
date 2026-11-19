@@ -95,7 +95,8 @@ def yield_apply(ctrl, qp, X, obs):
     n0 = len(ys.log)
     info = ys.apply(float(ctrl.t), np.asarray(qp[:3], float), np.array([c_ * u_[0] - s_ * u_[1], s_ * u_[0] + c_ * u_[1]]), X, obs, NPH * PHYS)
     for e_ in ys.log[n0:]:
-        ctrl._ev(e_.pop('what'), **e_)
+        e_ = dict(e_); w_ = e_.pop('what'); e_['t_ys'] = e_.pop('t', None)   # 控制器 _ev 自帶 t（s93d：重複關鍵字 ⇒ 工作程序例外）
+        ctrl._ev(w_, **e_)
     return info
 
 
