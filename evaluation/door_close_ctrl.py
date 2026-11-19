@@ -96,6 +96,11 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             return
         if self.phase == 'BIND':
             if self.door_bound:
+                Tc_ = K.fk(q, 'link_tcp')                              # 綁定瞬間以實際抓持重新對準淨空模型的把手（同開門綁定；s87d：沿用去程把手位姿 ⇒ 共轉中夾爪殼–橫桿壓在 5 mm 門檻）
+                T_WH_now = Tc_ @ np.linalg.inv(np.asarray(self.T_HE, float))
+                self.T_WH0 = W.Rz4(float(self.phi_now) - W.PHI0) @ T_WH_now
+                if self.finger_meas is not None:
+                    W.FINGER_Q = (float(self.finger_meas[0]), float(self.finger_meas[1]))
                 self.b_s0, self.q_s0 = np.asarray(q[:3], float).copy(), np.asarray(q[3:], float).copy()
                 self.T_rel_s = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
                 self.phi_c = float(self.phi_now)                       # 綁定瞬間實測門角起算
