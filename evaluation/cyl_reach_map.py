@@ -55,7 +55,7 @@ def base_free(b):
 
 SCAN_PTS = None                                                       # 目前雷射看到、但不在場景登錄（地圖）裡的點（里程座標 N×2）；None＝只看地圖
 SCAN_CLEAR = float(os.environ.get('CYL_SCAN_CLEAR', '0.42'))
-SCAN_TAIL = float(os.environ.get('CYL_SCAN_TAIL', '0.2'))           # 閉爪窗之後沿線再核的長度（抬起後轉交導航）         # 底盤中心離未知點至少（底盤半徑 0.30＋0.15）：Isaac 第三十二趟路線起點離 unknown_l5 角 0.2 m ⇒ Shield 擋住對齊
+SCAN_TAIL = float(os.environ.get('CYL_SCAN_TAIL', '0.0'))           # 閉爪窗之後沿線再核的長度（抬起後轉交導航）         # 底盤中心離未知點至少（底盤半徑 0.30＋0.15）：Isaac 第三十二趟路線起點離 unknown_l5 角 0.2 m ⇒ Shield 擋住對齊
 
 
 def set_scan_pts(P):
