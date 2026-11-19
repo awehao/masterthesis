@@ -68,7 +68,7 @@ def _path_clear(p0, p1, need, n=8):
 
 def _groups(obs):
     """把追蹤器給 CBF 的可見表面點（每點帶同一軌跡速度、半徑≈0）依距離＜0.5 m 且速度差＜0.15 m/s 併成一個行人。"""
-    pts = [o for o in (obs or []) if not o.get('static') and math.hypot(float(o.get('vx', 0.0)), float(o.get('vy', 0.0))) >= V_MIN]
+    pts = [o for o in (obs or []) if not o.get('static')]           # s100d：新出現的軌跡速度由 0 慢慢收斂，不先用速度門檻濾掉
     lab = list(range(len(pts)))
     def f(i):
         while lab[i] != i:
@@ -114,9 +114,14 @@ class YieldSide:
         best = None
         for gp in _groups(obs):
             vo = gp['v']; sp = float(np.linalg.norm(vo))
-            if sp < V_MIN:
-                continue
-            u = vo / sp; n = np.array([-u[1], u[0]])
+            if sp >= V_MIN:
+                u = vo / sp
+            else:                                                     # 速度尚未收斂（剛出遮蔽）或靜止的未知物：以相對運動方向當行進線，仍要讓開
+                vr_ = vo - v_b; nr_ = float(np.linalg.norm(vr_))
+                if nr_ < V_MIN or float(np.min(np.linalg.norm(gp['P'] - q[:2], axis=1))) > 2.0:
+                    continue
+                u = vr_ / nr_
+            n = np.array([-u[1], u[0]])
             lo, hi = _interval(gp, n, q[:2])
             al = float((gp['P'] @ u).mean())
             c = al * u + 0.5 * (lo + hi) * n
