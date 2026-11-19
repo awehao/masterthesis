@@ -173,6 +173,10 @@ class YieldSide:
                     return dict(off=0.0)
             else:
                 gp, ts, ds, need, n, (lo, hi) = c
+                if abs(float(n @ L['n'])) < math.cos(math.radians(30.0)):   # s101d：行進線估計改變（速度收斂、相對運動→行人速度）⇒ 依新行進線重新選邊
+                    self.log.append(dict(t=round(t, 2), what='yield_relock'))
+                    self.lock = None
+                    return self.apply(t, q, v_b, X, obs, dt)
                 if float(n @ L['n']) < 0.0:                          # 法向翻轉（速度方向估計反向）⇒ 換到同一參考
                     n, lo, hi = -n, -hi, -lo
                 L['s_t'] = (hi + R_BASE + PAD) if L['sg'] > 0 else (lo - R_BASE - PAD)
