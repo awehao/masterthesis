@@ -51,6 +51,16 @@ if BIN:
 
 
 
+def xi_from_X(X, dt):
+    """參考體速度＝相鄰參考位姿相對運動 /dt（最後一點沿用前一個）；移動參考不可配 xi＝0（s102d：速度被壓、追不上）。"""
+    xi = []
+    for k in range(len(X) - 1):
+        T1 = np.linalg.inv(X[k]) @ X[k + 1]
+        xi.append(np.array([T1[0, 2] / dt, T1[1, 2] / dt, math.atan2(T1[1, 0], T1[0, 0]) / dt]))
+    xi.append(xi[-1].copy() if xi else np.zeros(3))
+    return xi
+
+
 def _obs_near(obs, q):
     """（只記錄）最近的非靜態障礙物：表面距（扣半徑）、速度 vx, vy（世界）；s91d 診斷用。"""
     best = None

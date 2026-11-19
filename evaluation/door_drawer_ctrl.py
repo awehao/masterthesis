@@ -359,7 +359,7 @@ class DrawerCtrl(PK.TablePickCtrl):
                     X = [XO.from_xytheta(self.b_p0[0] + s_ * self.pull[0] + l_ * e_[0], self.b_p0[1] + s_ * self.pull[1] + l_ * e_[1], self.b_p0[2]) for s_, l_ in zip(ss, lat)]
                 else:
                     X = [XO.from_xytheta(self.b_p0[0] + s_ * self.pull[0], self.b_p0[1] + s_ * self.pull[1], self.b_p0[2]) for s_ in ss]
-                xi = [np.zeros(3)] * (XO.N + 1)
+                xi = PK.xi_from_X(X, DT)                              # 拉開參考在動（含 MotM 橫移衰減）⇒ 參考體速度跟著給（s102d 同因）
                 Ts = [self._pull_target(t_eff + k * DT) for k in range(XO.N + 1)]
             else:
                 X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
