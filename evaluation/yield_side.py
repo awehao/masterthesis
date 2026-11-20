@@ -138,11 +138,57 @@ class YieldSide:
                 best = (gp, ts, ds, need, n, (lo, hi))
         return best
 
+    def _alongside(self, q, v_b, obs):
+        """同向並行：行人在動、機器人朝同方向走、目前距離 < 安全距＋0.2 ⇒ 回 (u, n, 中心, 距離, need)。"""
+        best = None
+        for gp in _groups(obs):
+            vo = gp['v']; sp = float(np.linalg.norm(vo))
+            if sp < V_MIN or float(np.dot(v_b, vo / sp)) < 0.05:
+                continue
+            u = vo / sp; n = np.array([-u[1], u[0]])
+            lo, hi = _interval(gp, n, q[:2])
+            c = float((gp['P'] @ u).mean()) * u + 0.5 * (lo + hi) * n
+            need = R_BASE + 0.5 * (hi - lo) + PAD
+            dist = float(np.linalg.norm(c - q[:2]))
+            if dist < need + 0.2 and (best is None or dist < best[3]):
+                best = (u, n, c, dist, need)
+        return best
+
+    def _apply_along(self, t, q, X, al):
+        """讓行人先走：沿行人方向不再前進（參考沿 u 的進度釘在目前位置），側向離開行人帶到目前所在側；行人領先 > need＋0.3 才放行（之後從它後面過）。"""
+        if al is not None:
+            u, n, c, dist, need = al
+            if getattr(self, 'along', None) is None:
+                sg = 1.0 if float((q[:2] - c) @ n) >= 0.0 else -1.0
+                self.along = dict(u=u, n=n, sg=sg, need=need)
+                self.log.append(dict(t=round(t, 2), what='yield_along', dist=round(dist, 3), side=sg))
+            self.along.update(c=c)
+        L = self.along
+        if float((L['c'] - q[:2]) @ L['u']) > L['need'] + 0.3 or (al is None and float(np.linalg.norm(L['c'] - q[:2])) > L['need'] + 0.5):
+            self.log.append(dict(t=round(t, 2), what='yield_along_release'))
+            self.along = None
+            return dict(off=0.0)
+        u, n, sg, c = L['u'], L['n'], L['sg'], L['c']
+        s_c = float(c @ n)
+        for Xk in X:
+            p = np.array([Xk[0, 2], Xk[1, 2]])
+            a_ = float((p - q[:2]) @ u)
+            if a_ > 0.0:
+                p = p - a_ * u                                        # 不沿行人方向前進
+            s_k = float(p @ n)
+            if sg * (s_k - s_c) < L['need']:
+                p = p + (sg * L['need'] - (s_k - s_c)) * n            # 側向至少離行人帶 need（目前所在側）
+            Xk[0, 2], Xk[1, 2] = float(p[0]), float(p[1])
+        return dict(off=0.0, along=True)
+
     def apply(self, t, q, v_b, X, obs, dt):
         """X：參考視窗（3×3 SE2 串列，就地修改）。側向座標＝點與 n 的內積（絕對）；目標＝保守區間外 R_BASE＋PAD。"""
         if not ENABLE:
             return None
         q = np.asarray(q, float); v_b = np.asarray(v_b, float)[:2]
+        al = self._alongside(q, v_b, obs)
+        if al is not None or getattr(self, 'along', None) is not None:   # 同向並行（s113d：相對速度≈0 ⇒ 最近接近預測不觸發，被行人帶著走 30 s）
+            return self._apply_along(t, q, X, al)
         c = self._conflict(q, v_b, obs, any_ds=self.lock is not None)
         if c is not None and self.lock is None:
             gp, ts, ds, need, n, (lo, hi) = c
@@ -199,49 +245,6 @@ class YieldSide:
             for Xk in X:                                              # 各參考點側向座標至少達 s_t（鎖定側），平移量上限＝爬升量 off
                 s_k = float(np.array([Xk[0, 2], Xk[1, 2]]) @ n)
                 d_k = min(max(0.0, sg * (L['s_t'] - s_k)), self.off)
-                Xk[0, 2] += sg * d_k * n[0]
-                Xk[1, 2] += sg * d_k * n[1]
-                shift = max(shift, d_k)
-            return dict(off=round(shift, 3), side=sg)
-        return None
-        q = np.asarray(q, float); v_b = np.asarray(v_b, float)[:2]
-        c = self._conflict(q, v_b, obs, any_ds=self.lock is not None)
-        if c is not None and self.lock is None:
-            o, ts, ds, need, vo = c
-            u = vo / float(np.linalg.norm(vo)); n = np.array([-u[1], u[0]])
-            o_xy = np.array([float(o['x']), float(o['y'])])
-            s_now = float((q[:2] - o_xy) @ n)
-            cands = []
-            for sg in (1.0, -1.0):
-                s_t = sg * need
-                tgt = q[:2] + (s_t - s_now) * n
-                if clearance(*tgt) >= R_BASE + WALL_PAD and _path_clear(q[:2], tgt, R_BASE + WALL_PAD):
-                    cands.append((abs(s_t - s_now), sg, s_t))
-            if cands:
-                cands.sort()
-                _, sg, s_t = cands[0]
-                self.lock = dict(n=n, u=u, o_xy=o_xy, s_tgt=s_t, sg=sg, t0=t, need=need)
-                self.off = 0.0
-                self.log.append(dict(t=round(t, 2), what='yield_lock', side=sg, s_now=round(s_now, 3), s_tgt=round(s_t, 3), ts=round(ts, 2), ds=round(ds, 3), n_cand=len(cands)))
-            else:
-                self.log.append(dict(t=round(t, 2), what='yield_no_side', s_now=round(s_now, 3), ts=round(ts, 2), ds=round(ds, 3)))
-        if self.lock is not None:
-            L = self.lock
-            if c is None:                                            # 已無衝突（通過或離開預測窗）⇒ 平移量以同速率收回
-                self.off = max(0.0, self.off - RATE * dt)
-                if self.off <= 1e-4:
-                    self.log.append(dict(t=round(t, 2), what='yield_release'))
-                    self.lock = None
-                    return dict(off=0.0)
-            else:
-                o, ts, ds, need, vo = c
-                L['o_xy'] = np.array([float(o['x']), float(o['y'])])
-                self.off = min(self.off + RATE * dt, 1.5)
-            n, sg = L['n'], L['sg']
-            shift = 0.0
-            for Xk in X:                                              # 各參考點相對行人軌跡線的側向座標至少達 need（鎖定側），平移量上限＝爬升量 off
-                s_k = float((np.array([Xk[0, 2], Xk[1, 2]]) - L['o_xy']) @ n)
-                d_k = min(max(0.0, L['need'] - sg * s_k), self.off)
                 Xk[0, 2] += sg * d_k * n[0]
                 Xk[1, 2] += sg * d_k * n[1]
                 shift = max(shift, d_k)

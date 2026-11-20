@@ -903,8 +903,11 @@ def main():
                     self.pick_goal, self.pass_t = self._dr_goal(b_c), t
                     self.dr['goal_od'] = [float(x) for x in b_c]
                     self.event('door_leaf_vision', phi_deg=round(math.degrees(ph), 3), b_c=[round(float(x), 4) for x in b_c], n_obs=len(self.leaf_obs))
-                elif t - dc['t0'] > 90.0:
-                    self.event('door_leaf_not_seen'); self.abort('door_leaf_not_seen')
+                else:
+                    if float(np.hypot(*(self.b_od_now[:2] - np.asarray(self.door_end['b'][:2], float)))) > 2.5:
+                        dc['t0'] = t                                     # 時限由狀態決定（Howard 11/20）：離門還遠（被行人耽擱等）不計時，到門前 2.5 m 內才開始算
+                    elif t - dc['t0'] > 40.0:
+                        self.event('door_leaf_not_seen'); self.abort('door_leaf_not_seen')
                 return True
             if dc['stage'] == 'nav':
                 b_c = dc['b_c']
@@ -1135,7 +1138,9 @@ def main():
                 est = self._hdl_fuse(t)
                 if est is None:
                     dr.setdefault('t_seek', t)
-                    if t - dr['t_seek'] > float(os.environ.get('DR_SEEK_TO_S', '90')):   # s104d：會車繞行吃掉時間（60→90 s）
+                    if self.T_mo_now is not None and float(np.hypot(*((_T3(self.T_mo_now) @ np.r_[self.b_od_now[:2], 0.0, 1.0])[:2] - np.asarray(DR_PRIOR[:2], float)))) > 2.5:
+                        dr['t_seek'] = t                                 # 時限由狀態決定：離櫃前粗目標 >2.5 m（行人耽擱等）不計時
+                    if t - dr['t_seek'] > float(os.environ.get('DR_SEEK_TO_S', '40')):   # s104d：會車繞行吃掉時間（60→90 s）
                         self.event('dr_handle_not_seen'); self.abort('drawer_handle_not_seen')
                     return
                 reg_ = R_.D.REG['drawer']['pose']
