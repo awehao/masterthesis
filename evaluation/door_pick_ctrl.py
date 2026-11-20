@@ -313,6 +313,12 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self.b_anchor = np.asarray(q[:3], float).copy()
                 self.finger_cmd = P.FINGER_OPEN
                 self._goto('CLOSE', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2))
+            elif self.motm is not None and self.motm.get('path') and el > self.T_app + MOTM_CLOSE_LATE_S:   # 依導航路徑：經過窗錯過 ⇒ 退回收斂抓取（不中止；Howard 11/20 安全時限保留在收斂段）
+                self._ev('pick_path_fallback', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), s=round(self._motm_s(self.t), 4))
+                self.motm, self.m_s0, self.m_t0 = None, None, None
+                self.T_app, self.T_b, self.t_l0 = 4.0, 2.5, 1.5
+                self._reset_T_rel0 = True
+                self._goto('APPROACH', fallback=True)
             elif self.motm is not None and el > self.T_app + MOTM_CLOSE_LATE_S:
                 self._stop('motm_window_missed', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), s=round(self._motm_s(self.t), 4))
             elif el > self.T_app + PH_TO_S:

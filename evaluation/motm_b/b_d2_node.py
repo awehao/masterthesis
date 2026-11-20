@@ -983,6 +983,10 @@ def main():
                         self.door_end = dict(b=np.asarray(d_['base_end'], float), phi=math.radians(float(d_['phi_end_deg'])))
                 except Exception:                                      # noqa: BLE001
                     pass
+            if '"phase": "UNFOLD"' in m.data:
+                self._unfolding = True                                   # 抽屜：手臂邊走邊展開中（依導航路徑的經過要等展開完才算，s121d：暫存 3 s 後套用已過時）
+            elif '"phase": "APPROACH"' in m.data:
+                self._unfolding = False
             if '"phase": "SWING"' in m.data and getattr(self, 'dc', None) is not None:   # 共轉開始 ⇒ Shield 雷射遮門扇（Howard 11/20 選 b）
                 self.mask_on = True; self.event('shield_leaf_mask', on=True)
             if self.mask_on and ('"phase": "UNBIND"' in m.data or '"what": "pick_stop"' in m.data):
@@ -1187,7 +1191,7 @@ def main():
                 hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
                 dd_ = float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float))))
                 pe_ = dr.get('path_box')
-                if pe_ is None and dd_ <= PATH_EXT_R:
+                if pe_ is None and dd_ <= PATH_EXT_R and not getattr(self, '_unfolding', False):
                     dt_h = max(hist_[-1][0] - hist_[0][0], 1e-3); mvd_ = hist_[-1][1][:2] - hist_[0][1][:2]; v_now_ = float(np.linalg.norm(mvd_)) / dt_h
                     import threading
                     dr['path_box'] = box_ = dict(done=False)
