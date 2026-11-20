@@ -111,6 +111,41 @@ def _furn_obs(qp, r_near=0.8):
     return out
 
 
+FURN_REF_D = float(os.environ.get('FURN_REF_D', '0.44'))             # 參考點離家具外框的中心距下限（規劃淨空 0.12＋2 cm）
+_FURN_BOX = None
+
+
+def _furn_ref(X):
+    """Isaac 42：Smac 路徑在茶几西北角離桌面外框只有中心距 0.29（雷射只掃到桌腳，桌面角不在 costmap）⇒ 軟 CBF 被追蹤參考拉到 0.40 被停。
+    不改導航：只把導航參考視窗中離家具外框 < FURN_REF_D 的點沿外法向推到 FURN_REF_D（同 yield_side 只平移參考；朝向不動）。回傳最大平移量 m。"""
+    global _FURN_BOX
+    if _FURN_BOX is None:
+        _FURN_BOX = []
+        sh, _ = P.W._static()
+        for name, c, R, hs in sh:
+            nm = str(name)
+            if nm.startswith('scene:') and not any(k_ in nm for k_ in ('wall', 'partition', 'door')) and P.W.base_level(c, R, hs):
+                _FURN_BOX.append((np.asarray(c, float), np.asarray(R, float), np.asarray(hs, float)))
+    mx = 0.0
+    for k in range(len(X)):
+        p = np.array([float(X[k][0, 2]), float(X[k][1, 2])]); p0 = p.copy()
+        for _ in range(3):
+            best = None
+            for c, R, hs in _FURN_BOX:
+                pl = R.T @ (np.array([p[0], p[1], c[2]]) - c)
+                pw = (c + R @ np.clip(pl, -hs, hs))[:2]
+                d = float(np.hypot(*(p - pw)))
+                if 1e-6 < d < FURN_REF_D and (best is None or d < best[0]):
+                    best = (d, pw)
+            if best is None:
+                break
+            p = best[1] + (p - best[1]) / best[0] * FURN_REF_D
+        if float(np.hypot(*(p - p0))) > 1e-6:
+            Xk = np.array(X[k], float, copy=True); Xk[0, 2], Xk[1, 2] = float(p[0]), float(p[1]); X[k] = Xk
+            mx = max(mx, float(np.hypot(*(p - p0))))
+    return mx
+
+
 class TablePickCtrl(P.DoorPassCtrl):
     def __init__(self, src, t0, app):
         """src＝穿門控制器（DRIVE 中）；app＝監督送的取物封包：T_grasp（odom 4×4）、base_goal（odom x,y,yaw）、T（接近時長）、T_b、t_l0。"""
@@ -447,6 +482,12 @@ class TablePickCtrl(P.DoorPassCtrl):
             return None, 'nav_obstacles_stale'
         if FURN_CBF_PAD is not None and type(self) is TablePickCtrl:
             obs = list(obs) + _furn_obs(qp)
+            if src == 'nav':
+                X = list(X)
+                sh_ = _furn_ref(X)
+                if sh_ > 0.01 and self.t - getattr(self, '_furn_ref_t', -9.0) > 2.0:
+                    self._furn_ref_t = self.t
+                    self._ev('furn_ref_shift', shift_m=round(sh_, 3))
         if self.phase == 'ALIGN':                                     # 原地對齊：底盤位置不動、轉到路線朝向；手臂保持
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
