@@ -45,6 +45,15 @@ def grasp_T(c_xy, a, flip=False):
     return T
 
 
+def base_clear(b, margin):
+    """底盤圓（半徑 RB）離登錄方盒 ≥ margin（與控制器／世界的底盤淨空門檻 0.10 一致時用 0.12）。"""
+    for cc, s in BOXES:
+        dx = max(abs(b[0] - cc[0]) - s[0] / 2, 0.0); dy = max(abs(b[1] - cc[1]) - s[1] / 2, 0.0)
+        if math.hypot(dx, dy) < RB + margin:
+            return False
+    return True
+
+
 def base_free(b):
     for c, s in BOXES:
         dx = max(abs(b[0] - c[0]) - s[0] / 2, 0.0); dy = max(abs(b[1] - c[1]) - s[1] / 2, 0.0)
@@ -55,6 +64,7 @@ def base_free(b):
 
 SCAN_PTS = None                                                       # 目前雷射看到、但不在場景登錄（地圖）裡的點（里程座標 N×2）；None＝只看地圖
 SCAN_CLEAR = float(os.environ.get('CYL_SCAN_CLEAR', '0.42'))
+PATH_BASE_MARGIN = float(os.environ.get('PATH_BASE_MARGIN', '0.12'))   # 經過段底盤離家具（控制器門檻 0.10＋餘裕）
 SCAN_CLEAR_EXT = float(os.environ.get('CYL_SCAN_CLEAR_EXT', '0.36'))   # 經過段（機器人已在附近）：Shield 半徑 0.30＋d0 0.05＋0.01（選位用較保守的 SCAN_CLEAR；s113d 目前位置就 <0.42 ⇒ 誤判整段不可行）
 SCAN_TAIL = float(os.environ.get('CYL_SCAN_TAIL', '0.0'))           # 閉爪窗之後沿線再核的長度（抬起後轉交導航）         # 底盤中心離未知點至少（底盤半徑 0.30＋0.15）：Isaac 第三十二趟路線起點離 unknown_l5 角 0.2 m ⇒ Shield 擋住對齊
 
@@ -78,7 +88,14 @@ def set_scan_pts(P):
     return 0 if SCAN_PTS is None else len(SCAN_PTS)
 
 
-def path_ext(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=1.2, t_need=1.6, v_min=0.04, v_cap=float(os.environ.get('PATH_V_CAP', '0.15'))):
+def _poly_at(P, cum, s):
+    """折線 P（累積弧長 cum）上弧長 s 的位置與單位切向（超出兩端沿端點切向外插）。"""
+    s = float(s); i = int(np.clip(np.searchsorted(cum, s) - 1, 0, len(P) - 2))
+    seg = P[i + 1] - P[i]; L = max(float(cum[i + 1] - cum[i]), 1e-9)
+    return P[i] + seg * ((s - cum[i]) / L), seg / L
+
+
+def path_ext(T_grasp, p_now, th_now, dirv, b0_sel, v_now, extra_dirs=None, path_pts=None, ds=0.05, s_max=1.2, t_need=1.6, v_min=0.04, v_cap=float(os.environ.get('PATH_V_CAP', '0.15'))):
     """依導航路徑的移動中抓取（Howard 11/20：不要預設路線）：自目前位置沿目前行進方向（沒在往抓取位前進 ⇒ 朝抓取位）
     每 ds 取樣底盤位（目前偏航、面桌偏航兩種），核底盤淨空（登錄方盒＋雷射未知點）、抓取 IK、全身淨空；撞到就不再往前取樣。
     取第一段連續可行區 [s_a, s_b]：閉爪點 s_g＝s_a＋min(0.15, L/3)，經過速度＝(s_b−s_g)/t_need（閉爪＋確認需時），夾在 [v_min, max(v_now, 0.08), v_cap]。
@@ -90,18 +107,29 @@ def path_ext(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=1.2, t_
     if nm > 1e-3:
         dirs.append(dm / nm)                                           # 實際行進方向
     if float(np.linalg.norm(to_b)) > 1e-3:
-        dirs.append(to_b / float(np.linalg.norm(to_b)))               # 朝抓取位（s119d：路徑還在轉彎，瞬時行進方向側向偏 0.59 m 永遠進不了可達區）
+        dirs.append(to_b / float(np.linalg.norm(to_b)))
+    for xd in (extra_dirs or []):                                       # 導航路徑最後一段切向（實際會走的方向）
+        xd = np.asarray(xd, float)[:2]
+        if float(np.linalg.norm(xd)) > 1e-3:
+            dirs.append(xd / float(np.linalg.norm(xd)))               # 朝抓取位（s119d：路徑還在轉彎，瞬時行進方向側向偏 0.59 m 永遠進不了可達區）
     best = None
     ths = [float(th_now)]
     if abs((float(b0[2]) - float(th_now) + math.pi) % (2 * math.pi) - math.pi) > 0.15:
         ths.append(float(b0[2]))
     c0 = float(np.min(np.hypot(SCAN_PTS[:, 0] - p[0], SCAN_PTS[:, 1] - p[1]))) if SCAN_PTS is not None else 9.0
     clr = min(SCAN_CLEAR_EXT, max(0.33, c0 - 0.01))                    # 不比現在更靠近未知障礙（下限 0.33：Shield 半徑＋3 cm）
-    for d, th in [(d_, th_) for d_ in dirs for th_ in ths]:
+    polys = [np.array([p, p + s_max * d_]) for d_ in dirs]
+    if path_pts is not None and len(path_pts) >= 2:                      # 導航路徑折線（目前位置起）＋末段切向再延 0.6 m（Howard 11/20：配合導航實際走出的路徑）
+        Pp = np.vstack([p, np.asarray(path_pts, float)[:, :2]])
+        tg = Pp[-1] - Pp[-2]; tg = tg / max(float(np.linalg.norm(tg)), 1e-9)
+        polys.append(np.vstack([Pp, Pp[-1] + 0.6 * tg]))
+    for poly, th in [(P_, th_) for P_ in polys for th_ in ths]:
+        cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(poly, axis=0).T))]
         feas = []
-        for s_ in np.arange(0.0, s_max + 1e-9, ds):
-            b = np.array([p[0] + s_ * d[0], p[1] + s_ * d[1], th])
-            if not base_free(b) or not scan_free(b, clr):
+        for s_ in np.arange(0.0, min(float(cum[-1]), s_max + 0.6) + 1e-9, ds):
+            pp_, d = _poly_at(poly, cum, s_)
+            b = np.array([pp_[0], pp_[1], th])
+            if not base_clear(b, PATH_BASE_MARGIN) or not scan_free(b, clr):   # Isaac 39：只用 RB 會允許底盤貼桌（實測淨空 0.0997 中止）
                 break
             g = ik(np.asarray(T_grasp, float), b)
             feas.append((float(s_), g is not None and clear_ok(b, g[0])[0], g))
@@ -115,18 +143,19 @@ def path_ext(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=1.2, t_
         L = s_b - s_a
         s_g = s_a + min(0.15, L / 3.0)
         dyaw = abs((th - float(th_now) + math.pi) % (2 * math.pi) - math.pi)
-        dev = (1.0 - float(np.dot(d, dm / nm))) if nm > 1e-3 else 0.0      # 偏離實際行進方向（0＝同向）
+        pg_, dg_ = _poly_at(poly, cum, s_g)
+        dev = (1.0 - float(np.dot(dg_, dm / nm))) if nm > 1e-3 else 0.0    # 閉爪處切向偏離實際行進方向（0＝同向）
         sc = s_a - 0.5 * L + 0.3 * dyaw + 0.5 * dev
         if best is None or sc < best[0]:
             ig = min(range(i0, i1 + 1), key=lambda i: abs(feas[i][0] - s_g))
-            best = (sc, th, s_a, s_b, s_g, feas[ig][2], d.copy())
+            best = (sc, th, s_a, s_b, s_g, feas[ig][2], dg_.copy(), pg_.copy(), poly.copy())
     if best is None:
         return None
-    _, th, s_a, s_b, s_g, g, d = best
+    _, th, s_a, s_b, s_g, g, d, pg, poly = best
     v = float(np.clip((s_b - s_g) / t_need, v_min, min(v_cap, max(float(v_now), 0.08))))
-    b0l = [float(p[0] + s_g * d[0]), float(p[1] + s_g * d[1]), float(th)]
+    b0l = [float(pg[0]), float(pg[1]), float(th)]
     return dict(b0=b0l, e=[float(d[0]), float(d[1])], v_g=v, s0=-0.02, t_arm=1.0, q_grasp=[float(x) for x in g[0]], no_align=True, path=True,
-                s_feas=[round(s_a, 3), round(s_b, 3)], s_grasp=round(s_g, 3), s_end=round(s_b - s_g, 3))
+                poly=[[float(x), float(y)] for x, y in poly], s_feas=[round(s_a, 3), round(s_b, 3)], s_grasp=round(s_g, 3), s_end=round(s_b - s_g, 3))
 
 
 def seg_free(p0, p1, margin=0.10, ds=0.05):

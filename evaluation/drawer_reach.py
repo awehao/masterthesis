@@ -243,7 +243,7 @@ if __name__ == '__main__':
     print('marker', mk.round(3), None if m is None else dict(base=np.round(m['base'], 3).tolist(), sig=round(m['sigma_min'], 3), env=round(m['env'], 3), bc=round(m['base_clear'], 3)), round((time.perf_counter() - w) * 1e3), 'ms')
 
 
-def path_ext_handle(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=1.2, t_need=1.6, v_min=0.03, v_cap=float(os.environ.get('PATH_V_CAP', '0.15'))):
+def path_ext_handle(T_grasp, p_now, th_now, dirv, b0_sel, v_now, extra_dirs=None, path_pts=None, ds=0.05, s_max=1.2, t_need=1.6, v_min=0.03, v_cap=float(os.environ.get('PATH_V_CAP', '0.15'))):
     """抽屜把手依導航路徑的移動中抓取（Howard 11/20 不要預設路線）：同 cyl_reach_map.path_ext，但淨空用抽屜模型（_ik_ok＝IK＋_clear）、底盤用 M.base_free。
     來向多半垂直櫃面 ⇒ 可行段短、經過速度自然降到很低（減速→閉爪→拉回，速度連續）；拉開段不沿來向橫移（tau＝0）。"""
     p = np.asarray(p_now, float)[:2]; b0 = np.asarray(b0_sel, float)
@@ -253,17 +253,28 @@ def path_ext_handle(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=
     if nm > 1e-3:
         dirs.append(dm / nm)                                           # 實際行進方向
     if float(np.linalg.norm(to_b)) > 1e-3:
-        dirs.append(to_b / float(np.linalg.norm(to_b)))               # 朝抓取位（s119d：路徑還在轉彎，瞬時行進方向側向偏 0.59 m 永遠進不了可達區）
+        dirs.append(to_b / float(np.linalg.norm(to_b)))
+    for xd in (extra_dirs or []):                                       # 導航路徑最後一段切向（實際會走的方向）
+        xd = np.asarray(xd, float)[:2]
+        if float(np.linalg.norm(xd)) > 1e-3:
+            dirs.append(xd / float(np.linalg.norm(xd)))               # 朝抓取位（s119d：路徑還在轉彎，瞬時行進方向側向偏 0.59 m 永遠進不了可達區）
     Tg = np.asarray(T_grasp, float)
     best = None
     ths = [float(th_now)]
     if abs((float(b0[2]) - float(th_now) + math.pi) % (2 * math.pi) - math.pi) > 0.15:
         ths.append(float(b0[2]))
-    for d, th in [(d_, th_) for d_ in dirs for th_ in ths]:
+    polys = [np.array([p, p + s_max * d_]) for d_ in dirs]
+    if path_pts is not None and len(path_pts) >= 2:                      # 導航路徑折線（目前位置起）＋末段切向再延 0.6 m（Howard 11/20：配合導航實際走出的路徑）
+        Pp = np.vstack([p, np.asarray(path_pts, float)[:, :2]])
+        tg = Pp[-1] - Pp[-2]; tg = tg / max(float(np.linalg.norm(tg)), 1e-9)
+        polys.append(np.vstack([Pp, Pp[-1] + 0.6 * tg]))
+    for poly, th in [(P_, th_) for P_ in polys for th_ in ths]:
+        cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(poly, axis=0).T))]
         feas = []
-        for s_ in np.arange(0.0, s_max + 1e-9, ds):
-            b = np.array([p[0] + s_ * d[0], p[1] + s_ * d[1], th])
-            if not M.base_free(b):
+        for s_ in np.arange(0.0, min(float(cum[-1]), s_max + 0.6) + 1e-9, ds):
+            pp_, d = M._poly_at(poly, cum, s_)
+            b = np.array([pp_[0], pp_[1], th])
+            if not M.base_clear(b, M.PATH_BASE_MARGIN):
                 break
             g = _ik_ok(Tg, b, 0.0, flips=(False,))
             feas.append((float(s_), g is not None, g))
@@ -277,14 +288,15 @@ def path_ext_handle(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=
         L = s_b - s_a
         s_g = s_a + min(0.15, L / 3.0)
         dyaw = abs((th - float(th_now) + math.pi) % (2 * math.pi) - math.pi)
-        dev = (1.0 - float(np.dot(d, dm / nm))) if nm > 1e-3 else 0.0      # 偏離實際行進方向（0＝同向）
+        pg_, dg_ = M._poly_at(poly, cum, s_g)
+        dev = (1.0 - float(np.dot(dg_, dm / nm))) if nm > 1e-3 else 0.0    # 閉爪處切向偏離實際行進方向（0＝同向）
         sc = s_a - 0.5 * L + 0.3 * dyaw + 0.5 * dev
         if best is None or sc < best[0]:
             ig = min(range(i0, i1 + 1), key=lambda i: abs(feas[i][0] - s_g))
-            best = (sc, th, s_a, s_b, s_g, feas[ig][2], d.copy())
+            best = (sc, th, s_a, s_b, s_g, feas[ig][2], dg_.copy(), pg_.copy(), poly.copy())
     if best is None:
         return None
-    _, th, s_a, s_b, s_g, g, d = best
+    _, th, s_a, s_b, s_g, g, d, pg, poly = best
     v = float(np.clip((s_b - s_g) / t_need, v_min, min(v_cap, max(float(v_now), 0.08))))
-    return dict(b0=[float(p[0] + s_g * d[0]), float(p[1] + s_g * d[1]), float(th)], e=[float(d[0]), float(d[1])], v_g=v, s0=-0.02, t_arm=1.0, tau=0.0,
+    return dict(b0=[float(pg[0]), float(pg[1]), float(th)], e=[float(d[0]), float(d[1])], v_g=v, s0=-0.02, t_arm=1.0, tau=0.0, poly=[[float(x), float(y)] for x, y in poly],
                 q_grasp=[float(x) for x in g['q']], no_align=True, path=True, s_feas=[round(s_a, 3), round(s_b, 3)], s_grasp=round(s_g, 3), s_end=round(s_b - s_g, 3))

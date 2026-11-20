@@ -752,6 +752,23 @@ def main():
 
         def _plan_in(self, m):
             self.path_t = self.now()
+            try:
+                self.plan_xy = np.array([[p.pose.position.x, p.pose.position.y] for p in m.poses], float)   # 地圖座標（依導航路徑的經過方向用）
+            except Exception:                                          # noqa: BLE001
+                pass
+
+        def _plan_tangent_od(self, L=0.4):
+            """導航路徑最後 L m 的切向（里程座標）：Howard 11/20「操作配合導航實際走出的路徑」——經過方向候選之一。"""
+            P = getattr(self, 'plan_xy', None)
+            if P is None or len(P) < 2 or getattr(self, 'T_mo_now', None) is None:
+                return None
+            Ti = np.linalg.inv(_T3(self.T_mo_now))
+            Q = (Ti @ np.c_[P, np.zeros(len(P)), np.ones(len(P))].T).T[:, :2]
+            d = np.r_[0.0, np.cumsum(np.hypot(*np.diff(Q, axis=0).T))]
+            k = int(np.searchsorted(d, d[-1] - L))
+            v = Q[-1] - Q[min(k, len(Q) - 2)]
+            n = float(np.linalg.norm(v))
+            return None if n < 1e-3 else v / n
 
         def _ack(self, m):
             try:
@@ -1040,9 +1057,10 @@ def main():
                     import threading
                     self.path_box = box_ = dict(done=False)
                     CR_, Tg_, p_ = self._CR, self.pick_Tg_od.copy(), self.b_od_now.copy()
+                    xd_ = [x_ for x_ in [self._plan_tangent_od()] if x_ is not None]
                     def _pe(box=box_):
                         w0 = time.perf_counter()
-                        box['res'] = CR_.path_ext(Tg_, p_[:2], p_[2], mvd_, b0p_, v_now_)
+                        box['res'] = CR_.path_ext(Tg_, p_[:2], p_[2], mvd_, b0p_, v_now_, extra_dirs=xd_)
                         box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
                     threading.Thread(target=_pe, daemon=True).start()
                     self.event('path_ext_start', dist=round(float(np.hypot(*(self.b_od_now[:2] - b0p_[:2]))), 3), v_now=round(v_now_, 3), dir=[round(float(x), 3) for x in mvd_])
@@ -1197,9 +1215,10 @@ def main():
                     import threading
                     dr['path_box'] = box_ = dict(done=False)
                     Tg_, p_, b0_ = np.asarray(dr['sel']['T_grasp'], float), self.b_od_now.copy(), np.asarray(dr['sel']['base'], float)
+                    xd_ = [x_ for x_ in [self._plan_tangent_od()] if x_ is not None]
                     def _pe(box=box_):
                         w0 = time.perf_counter()
-                        box['res'] = R_.path_ext_handle(Tg_, p_[:2], p_[2], mvd_, b0_, v_now_)
+                        box['res'] = R_.path_ext_handle(Tg_, p_[:2], p_[2], mvd_, b0_, v_now_, extra_dirs=xd_)
                         box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
                     threading.Thread(target=_pe, daemon=True).start()
                     self.event('dr_path_ext_start', dist=round(dd_, 3), v_now=round(v_now_, 3))
