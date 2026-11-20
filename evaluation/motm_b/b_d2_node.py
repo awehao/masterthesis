@@ -1047,7 +1047,8 @@ def main():
                     self.abort('pick_unreachable'); return
                 Tbm_ = _T3(self.T_mo_now) @ _T3(sel['base_start'] if PICK_MOTM_V is not None else sel['base'])   # 選位結果（里程）→ 地圖（只給 Smac）；移動中夾取＝路線起點
                 self.pick_sel = sel; self.pick_goal = [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]; self.pass_t = t
-                self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1))
+                self.pick_via = [list(p) for p in (sel.get('via') or [])]   # 依可走路線的途經點（里程；Isaac 39–46 Smac 鑽茶几角與未知箱之間的窄縫）
+                self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1), route_len=None if sel.get('route_len') is None else round(float(sel['route_len']), 3), via=self.pick_via)
             if PICK_PATH and self.pick_sel is not None:                # 依導航路徑的移動中抓取：記錄實際行進方向；近抓取位 PATH_EXT_R 時線上算經過方向／速度送執行端
                 hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
                 pe_ = getattr(self, 'path_box', None)
@@ -1286,6 +1287,20 @@ def main():
                 self._dr_send('marker', sel['base'], t, T_grasp=sel['T_grasp'])
                 dr.update(stage='marker', box=None)
 
+        def _via_goal(self, t, g_):
+            """取物路線途經點：還有未到的途經點 ⇒ 送它（地圖座標，朝向指向下一點）；底盤到 0.35 m 內就換下一點（不停，原導航照常規劃與避障）。"""
+            via = getattr(self, 'pick_via', None)
+            if not via or self.pick_lifted or self.pick_ret or self.pick_goal is None:
+                return g_
+            while via and float(np.hypot(*(self.b_od_now[:2] - np.asarray(via[0][:2], float)))) <= 0.35:
+                self.event('pick_via_reached', at=[round(float(x), 3) for x in via[0][:2]], left=len(via) - 1); via.pop(0); self.pass_t = t
+            if not via:
+                return g_
+            nxt = np.asarray(via[1][:2], float) if len(via) > 1 else np.asarray(self.pick_sel['base'][:2], float)
+            p_ = np.asarray(via[0][:2], float); yaw_ = math.atan2(nxt[1] - p_[1], nxt[0] - p_[0])
+            Tv_ = _T3(self.T_mo_now) @ _T3([p_[0], p_[1], yaw_])
+            return [float(Tv_[0, 3]), float(Tv_[1, 3]), math.atan2(Tv_[1, 0], Tv_[0, 0])]
+
         def pub_goal(self, xy, yaw):
             m = PoseStamped(); m.header.frame_id = 'map'; m.header.stamp = self.get_clock().now().to_msg()
             m.pose.position.x, m.pose.position.y = float(xy[0]), float(xy[1]); m.pose.orientation.z, m.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
@@ -1436,7 +1451,7 @@ def main():
                     g_ = PASS_GOAL
                 if PICK and CHAIN and getattr(self, 'chain', 'cyl') == 'cyl':   # 串接第一件：茶几圓柱（同 pick_tick；放盒後換抽屜）
                     self.pick_tick(t)
-                    g_ = self.pick_goal if self.pick_goal is not None else PICK_PRIOR
+                    g_ = self._via_goal(t, self.pick_goal if self.pick_goal is not None else PICK_PRIOR)
                 elif PICK and DRAWER:                                 # 開抽屜→取筆→返回（Howard 11/18）
                     self.drawer_tick(t)
                     god_ = self.dr.get('goal_od')
@@ -1449,7 +1464,7 @@ def main():
                     g_ = self.pick_goal if self.pick_goal is not None else DR_PRIOR
                 elif PICK:                                            # 取物（穿門後不停車）：粗目標＝茶几先驗 → 看到圓柱後線上選抓取底盤位 → 近距送取物封包 → 抬起後回起點
                     self.pick_tick(t)
-                    g_ = self.pick_goal if self.pick_goal is not None else PICK_PRIOR
+                    g_ = self._via_goal(t, self.pick_goal if self.pick_goal is not None else PICK_PRIOR)
                 if RET_CLEAR and self.pick_ret:                       # 返回：清全域代價圖後等障礙層重標再送；送出後久無路徑 ⇒ 再清
                     n_rc_ = getattr(self, 'n_ret_clear', 0)
                     no_path_ = self.path_t is None or self.path_t < self.pass_t

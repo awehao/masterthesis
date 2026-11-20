@@ -230,13 +230,112 @@ def candidates(c):
     return out
 
 
+ROUTE = os.environ.get('PICK_PATH') == '1' and os.environ.get('PICK_ROUTE', '1') == '1'
+ROUTE_RES, ROUTE_FURN, ROUTE_SCAN, ROUTE_PAD = 0.05, 0.14, 0.42, 2.5    # 格點、底盤離登錄方盒（中心 ≥0.44）、離雷射未知點、範圍
+
+
+def route_field(b_now, c_xy):
+    """Isaac 39–46：雷射只掃到桌腳 ⇒ Smac 從茶几角與未知箱 unknown_l5 之間 0.73 m 的縫鑽（底盤中心離兩邊都要 ≥0.40 ⇒ 過不去）。
+    以登錄方盒（牆、家具，含桌面）＋雷射未知點建格點可行域（中心離方盒 ≥RB＋ROUTE_FURN、離未知點 ≥ROUTE_SCAN），自目前位置做 8 鄰 Dijkstra。
+    回 dict(x0, y0, res, W, H, free, dist, start) 或 None。"""
+    import heapq
+    p0 = np.asarray(b_now, float)[:2]; c = np.asarray(c_xy, float)[:2]
+    lo = np.minimum(p0, c) - ROUTE_PAD; hi = np.maximum(p0, c) + ROUTE_PAD
+    W = int(math.ceil((hi[0] - lo[0]) / ROUTE_RES)) + 1; H = int(math.ceil((hi[1] - lo[1]) / ROUTE_RES)) + 1
+    xs = lo[0] + np.arange(W) * ROUTE_RES; ys = lo[1] + np.arange(H) * ROUTE_RES
+    X, Y = np.meshgrid(xs, ys)                                          # [H, W]
+    free = np.ones((H, W), bool)
+    for cc, sz in BOXES:
+        dx = np.maximum(np.abs(X - cc[0]) - sz[0] / 2, 0.0); dy = np.maximum(np.abs(Y - cc[1]) - sz[1] / 2, 0.0)
+        free &= np.hypot(dx, dy) >= RB + ROUTE_FURN
+    if SCAN_PTS is not None and len(SCAN_PTS):
+        for P_ in np.array_split(np.asarray(SCAN_PTS, float), max(1, len(SCAN_PTS) // 64)):
+            d2 = (X[..., None] - P_[:, 0]) ** 2 + (Y[..., None] - P_[:, 1]) ** 2
+            free &= d2.min(axis=2) >= ROUTE_SCAN ** 2
+    i0, j0 = int(round((p0[1] - lo[1]) / ROUTE_RES)), int(round((p0[0] - lo[0]) / ROUTE_RES))
+    near0 = np.hypot(X - p0[0], Y - p0[1]) <= 0.20                      # 起點本身可能已在邊距內（剛繞過東西）⇒ 起點附近放行
+    free |= near0
+    dist = np.full((H, W), np.inf); dist[i0, j0] = 0.0
+    pq = [(0.0, i0, j0)]
+    nb = [(-1, -1, 1.4142), (-1, 0, 1.0), (-1, 1, 1.4142), (0, -1, 1.0), (0, 1, 1.0), (1, -1, 1.4142), (1, 0, 1.0), (1, 1, 1.4142)]
+    while pq:
+        d_, i, j = heapq.heappop(pq)
+        if d_ > dist[i, j]:
+            continue
+        for di, dj, w in nb:
+            a, b = i + di, j + dj
+            if 0 <= a < H and 0 <= b < W and free[a, b]:
+                nd = d_ + w * ROUTE_RES
+                if nd < dist[a, b]:
+                    dist[a, b] = nd; heapq.heappush(pq, (nd, a, b))
+    return dict(x0=float(lo[0]), y0=float(lo[1]), res=ROUTE_RES, W=W, H=H, free=free, dist=dist, start=(i0, j0))
+
+
+def _rf_ij(F, p):
+    return int(round((p[1] - F['y0']) / F['res'])), int(round((p[0] - F['x0']) / F['res']))
+
+
+def route_len(F, p):
+    i, j = _rf_ij(F, p)
+    if not (0 <= i < F['H'] and 0 <= j < F['W']):
+        return float('inf')
+    return float(F['dist'][i, j])
+
+
+def route_via(F, p_goal):
+    """沿 Dijkstra 場自站位回溯到起點，再拉直（格點直線全在可行域內就跳過中間點）；回途經點串列（不含起點與站位，map 座標）。"""
+    i, j = _rf_ij(F, p_goal)
+    if not (0 <= i < F['H'] and 0 <= j < F['W']) or not np.isfinite(F['dist'][i, j]):
+        return None
+    path = [(i, j)]
+    while (i, j) != F['start']:
+        best = None
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                a, b = i + di, j + dj
+                if (di or dj) and 0 <= a < F['H'] and 0 <= b < F['W'] and (best is None or F['dist'][a, b] < F['dist'][best]):
+                    best = (a, b)
+        if best is None or F['dist'][best] >= F['dist'][i, j]:
+            break
+        i, j = best; path.append(best)
+    path = path[::-1]
+
+    def vis(p, q):
+        n = max(abs(q[0] - p[0]), abs(q[1] - p[1])) * 2 + 1
+        for u in np.linspace(0.0, 1.0, n):
+            a, b = int(round(p[0] + u * (q[0] - p[0]))), int(round(p[1] + u * (q[1] - p[1])))
+            if not F['free'][a, b]:
+                return False
+        return True
+    out, k = [], 0
+    while k < len(path) - 1:
+        m = len(path) - 1
+        while m > k + 1 and not vis(path[k], path[m]):
+            m -= 1
+        out.append(path[m]); k = m
+    pts = [np.array([F['x0'] + b * F['res'], F['y0'] + a * F['res']]) for a, b in out[:-1]]
+    g_ = np.asarray(p_goal, float)[:2]; res_ = []
+    for p in pts:                                                     # 相距 <0.25 m 的連續點只留後一個；站位 0.5 m 內的點不留（最後一段直接去站位）
+        if float(np.hypot(*(p - g_))) < 0.5:
+            continue
+        if res_ and float(np.hypot(*(p - res_[-1]))) < 0.25:
+            res_[-1] = p
+        else:
+            res_.append(p)
+    return [[round(float(x), 3) for x in p] for p in res_]
+
+
 def select(c_xy, b_now, w_dist=1.0, w_sig=0.02):
     """線上抓取底盤位選擇（監督用）：圓柱估計 c_xy（map）、目前底盤 b_now（map）。回最佳候選 dict 或 None（不可達）。
     評分＝底盤直線距離×w_dist＋w_sig／σ_min（同可達性地圖的 IK、限位、σ、家具與桌面淨空條件）。"""
     c = np.asarray(c_xy, float); best = None
+    F = route_field(b_now, c) if ROUTE else None                      # 依可走路線（Howard 11/20 原則 1：操作配合實際走得到的路徑）
     for side, d, lat, b in candidates(c):
         if not base_free(b) or not scan_free(b):
             continue
+        L_ = route_len(F, b) if F is not None else None
+        if L_ is not None and not np.isfinite(L_):
+            continue                                                  # 走不到的站位不選
         v = c - b[:2]; dist = float(np.linalg.norm(v))
         if dist < 0.25 or dist > 0.80:
             continue
@@ -249,12 +348,14 @@ def select(c_xy, b_now, w_dist=1.0, w_sig=0.02):
             gp = ik(Tp, b)
             if gp is None or not clear_ok(b, gp[0])[0]:
                 continue
-            cost = w_dist * float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + w_sig / max(float(g[2]), 1e-6)
-            if APPROACH_CLEAR is not None and not seg_free(np.asarray(b_now, float), b, margin=APPROACH_CLEAR):
+            cost = w_dist * (L_ if L_ is not None else float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float))))) + w_sig / max(float(g[2]), 1e-6)
+            if L_ is None and APPROACH_CLEAR is not None and not seg_free(np.asarray(b_now, float), b, margin=APPROACH_CLEAR):
                 cost += APPROACH_PEN                                     # Isaac 40：直線到站位要繞桌角 ⇒ 導航貼角、底盤淨空觸 0.10 停 ⇒ 偏好可直接接近的站位
             if best is None or cost < best['cost']:
-                best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), flip=bool(fl), sigma_min=float(g[2]), cost=cost, q=g[0].tolist(), T_grasp=grasp_T(c, a, fl).tolist())
+                best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), flip=bool(fl), sigma_min=float(g[2]), cost=cost, q=g[0].tolist(), T_grasp=grasp_T(c, a, fl).tolist(), route_len=L_)
             break
+    if best is not None and F is not None:
+        best['via'] = route_via(F, np.asarray(best['base'], float)[:2])
     return best
 
 
