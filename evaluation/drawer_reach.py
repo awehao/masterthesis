@@ -243,6 +243,9 @@ if __name__ == '__main__':
     print('marker', mk.round(3), None if m is None else dict(base=np.round(m['base'], 3).tolist(), sig=round(m['sigma_min'], 3), env=round(m['env'], 3), bc=round(m['base_clear'], 3)), round((time.perf_counter() - w) * 1e3), 'ms')
 
 
+HANDLE_PAR_COS = math.cos(math.radians(70.0))
+
+
 def path_ext_handle(T_grasp, p_now, th_now, dirv, b0_sel, v_now, extra_dirs=None, path_pts=None, ds=0.05, s_max=1.2, t_need=1.6, v_min=0.03, v_cap=float(os.environ.get('PATH_V_CAP', '0.15'))):
     """抽屜把手依導航路徑的移動中抓取（Howard 11/20 不要預設路線）：同 cyl_reach_map.path_ext，但淨空用抽屜模型（_ik_ok＝IK＋_clear）、底盤用 M.base_free。
     來向多半垂直櫃面 ⇒ 可行段短、經過速度自然降到很低（減速→閉爪→拉回，速度連續）；拉開段不沿來向橫移（tau＝0）。"""
@@ -259,6 +262,9 @@ def path_ext_handle(T_grasp, p_now, th_now, dirv, b0_sel, v_now, extra_dirs=None
         if float(np.linalg.norm(xd)) > 1e-3:
             dirs.append(xd / float(np.linalg.norm(xd)))               # 朝抓取位（s119d：路徑還在轉彎，瞬時行進方向側向偏 0.59 m 永遠進不了可達區）
     Tg = np.asarray(T_grasp, float)
+    n_ = Tg[:2, 2] / max(float(np.linalg.norm(Tg[:2, 2])), 1e-9)       # 櫃面法向（TCP 接近軸水平分量）
+    t_ = np.array([-n_[1], n_[0]])
+    dirs += [t_, -t_]                                                   # 平行櫃面的兩向（兩指跨在橫桿上只能沿桿方向經過）
     best = None
     ths = [float(th_now)]
     if abs((float(b0[2]) - float(th_now) + math.pi) % (2 * math.pi) - math.pi) > 0.15:
@@ -289,6 +295,8 @@ def path_ext_handle(T_grasp, p_now, th_now, dirv, b0_sel, v_now, extra_dirs=None
         s_g = s_a + min(0.15, L / 3.0)
         dyaw = abs((th - float(th_now) + math.pi) % (2 * math.pi) - math.pi)
         pg_, dg_ = M._poly_at(poly, cum, s_g)
+        if any(abs(float(np.dot(M._poly_at(poly, cum, s2)[1], n_))) > HANDLE_PAR_COS for s2 in np.arange(s_g, s_b + 1e-9, ds)):
+            continue                                                    # Isaac 48：經過線斜向衝櫃面（與法向夾角 31°）⇒ 夾爪撞把手受力閂鎖；閉爪窗內行進方向須與櫃面法向夾角 ≥70°
         dev = (1.0 - float(np.dot(dg_, dm / nm))) if nm > 1e-3 else 0.0    # 閉爪處切向偏離實際行進方向（0＝同向）
         sc = s_a - 0.5 * L + 0.3 * dyaw + 0.5 * dev
         if best is None or sc < best[0]:
