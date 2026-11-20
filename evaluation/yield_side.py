@@ -23,6 +23,7 @@ PAD = float(os.environ.get('YS_PAD', '0.25'))
 WALL_PAD = float(os.environ.get('YS_WALL_PAD', '0.14'))           # 目標點與側移路徑：底盤中心離地圖障礙 ≥0.30＋0.14（控制器底盤淨空門檻 0.10＋餘裕；Isaac 37 回程側移經床頭櫃 0.0954 被停）
 RATE = float(os.environ.get('YS_RATE', '0.25'))
 R_BASE = 0.30
+ALONG_MAX_S = float(os.environ.get('YS_ALONG_MAX_S', '10.0'))         # 同向並行讓行的安全時限（s）
 R_MIN = float(os.environ.get('YS_R_MIN', '0.25'))                     # 行人半徑下限（追蹤器回報的半徑偏小，s94d need 只有 0.45＜真實 0.55）
 
 _MAP = None
@@ -150,7 +151,8 @@ class YieldSide:
             c = float((gp['P'] @ u).mean()) * u + 0.5 * (lo + hi) * n
             need = R_BASE + 0.5 * (hi - lo) + PAD
             dist = float(np.linalg.norm(c - q[:2]))
-            if dist < need + 0.2 and (best is None or dist < best[3]):
+            lat = abs(float((q[:2] - c) @ n)); alg = abs(float((q[:2] - c) @ u))
+            if lat < need and alg < need + 0.5 and (best is None or dist < best[3]):   # s115d：只在真的落在行人帶內才算（側向 0.9 m 外也鎖 ⇒ 卡 130 s）
                 best = (u, n, c, dist, need)
         return best
 
@@ -164,7 +166,9 @@ class YieldSide:
                 self.log.append(dict(t=round(t, 2), what='yield_along', dist=round(dist, 3), side=sg))
             self.along.update(c=c)
         L = self.along
-        if float((L['c'] - q[:2]) @ L['u']) > L['need'] + 0.3 or (al is None and float(np.linalg.norm(L['c'] - q[:2])) > L['need'] + 0.5):
+        L.setdefault('t0', t)
+        lat_ = abs(float((q[:2] - L['c']) @ L['n']))
+        if lat_ >= L['need'] or float((L['c'] - q[:2]) @ L['u']) > L['need'] + 0.8 or t - L['t0'] > ALONG_MAX_S:   # 已離開行人帶／行人領先夠遠（從後方過）／安全時限 ⇒ 放行
             self.log.append(dict(t=round(t, 2), what='yield_along_release'))
             self.along = None
             return dict(off=0.0)
