@@ -159,7 +159,7 @@ class WorldD2(Node):
         self.meta['events'].append(e)
         print('[d2w]', json.dumps(e, ensure_ascii=False, default=str)[:500], flush=True)
         try:
-            self.p_xs.publish(String(data=json.dumps(dict(what=what, t=round(self.t, 3), stage=self.stage, **{k_: kw[k_] for k_ in ('q_open', 'base_end', 'phi_end_deg', 'phi_deg') if k_ in kw}), default=str)))   # 抽屜開度估計、開門結束構型（回程關門）隨事件轉發
+            self.p_xs.publish(String(data=json.dumps(dict(what=what, t=round(self.t, 3), stage=self.stage, **{k_: kw[k_] for k_ in ('q_open', 'base_end', 'phi_end_deg', 'phi_deg', 'phase') if k_ in kw}), default=str)))   # 抽屜開度估計、開門結束構型（回程關門）隨事件轉發
         except Exception:                                             # noqa: BLE001
             pass
 
@@ -204,7 +204,7 @@ class WorldD2(Node):
         if d_.get('what') == 'pick_app':                              # 取物封包（監督送；odom 座標）⇒ 下一拍快照帶給工作程序換取物控制器
             kind_ = d_['app'].get('kind', 'cyl')
             sent_ = getattr(self, 'pick_app_kinds', None) or set()    # 抽屜任務：drawer → observe → marker 各一次
-            if self.stage == 'run' and kind_ not in sent_:
+            if self.stage == 'run' and (kind_ not in sent_ or kind_ == 'path_ext'):   # path_ext 每個抓取各一次（茶几、抽屜把手；s120d 第二次被擋）
                 self.pick_app_kinds = sent_ | {kind_}
                 self.pick_app_sent = dict(d_['app'])
                 runner.extra = dict(getattr(runner, 'extra', None) or {}, pick_app=dict(d_['app']))
