@@ -90,6 +90,27 @@ def _dr_handle_xy():
     return None if _DRH is False else _DRH
 
 
+FURN_CBF_PAD = float(os.environ.get('FURN_CBF_PAD', '0.12')) if os.environ.get('PICK_PATH') == '1' else None
+
+
+def _furn_obs(qp, r_near=0.8):
+    """與停止軌跡核對同一份場景家具模型（里程）：底盤附近家具的最近點當靜態 CBF 障礙（邊距＝底盤半徑 0.30＋FURN_CBF_PAD）。
+    Isaac 40／41：W-GMPC 的障礙來自導航前端（地圖、雷射），與核對用的里程家具模型差幾 cm（AMCL）⇒ 繞茶几角時最佳化以為 0.13、核對算 0.0996 被停。
+    牆、隔間、門不加（門口窄，另有門專屬淨空）。"""
+    out = []
+    sh, _ = P.W._static()
+    for name, c, R, hs in sh:
+        nm = str(name)
+        if not nm.startswith('scene:') or any(k_ in nm for k_ in ('wall', 'partition', 'door')) or not P.W.base_level(c, R, hs):
+            continue
+        c = np.asarray(c, float); R = np.asarray(R, float); hs = np.asarray(hs, float)
+        pl = R.T @ (np.array([float(qp[0]), float(qp[1]), c[2]]) - c)
+        pw = c + R @ np.clip(pl, -hs, hs)
+        if float(np.hypot(pw[0] - qp[0], pw[1] - qp[1])) < r_near:
+            out.append(dict(x=float(pw[0]), y=float(pw[1]), radius=0.0, vx=0.0, vy=0.0, margin=0.30 + FURN_CBF_PAD, static=True))
+    return out
+
+
 class TablePickCtrl(P.DoorPassCtrl):
     def __init__(self, src, t0, app):
         """src＝穿門控制器（DRIVE 中）；app＝監督送的取物封包：T_grasp（odom 4×4）、base_goal（odom x,y,yaw）、T（接近時長）、T_b、t_l0。"""
@@ -424,6 +445,8 @@ class TablePickCtrl(P.DoorPassCtrl):
         X, xi, obs, umin0, src = G.MovingGraspCtrl.nav_window(self, q, qp)
         if obs is None:
             return None, 'nav_obstacles_stale'
+        if FURN_CBF_PAD is not None and type(self) is TablePickCtrl:
+            obs = list(obs) + _furn_obs(qp)
         if self.phase == 'ALIGN':                                     # 原地對齊：底盤位置不動、轉到路線朝向；手臂保持
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
