@@ -26,7 +26,8 @@ NPH, PHYS, DT, D_STEPS = P.NPH, P.PHYS, P.DT, P.D_STEPS
 _T3, _log_R, _exp_R = P._T3, P._log_R, P._exp_R
 PHI_GOAL = math.radians(float(os.environ.get('DC_PHI_GOAL_DEG', '2.0')))
 PHI_TOL = math.radians(float(os.environ.get('DC_PHI_TOL_DEG', '1.0')))
-T_SWING = float(os.environ.get('DC_T_SWING', '14.0'))
+T_SWING_MIN = float(os.environ.get('DC_T_SWING_MIN', '3.0'))          # 共轉時長下限（s）；實際時長在綁定瞬間依輪速／輪加速度上限算（Howard 11/20：不寫死 14 s）
+SWING_V_FRAC, SWING_A_FRAC = float(os.environ.get('DC_SWING_V_FRAC', '0.8')), float(os.environ.get('DC_SWING_A_FRAC', '0.3'))   # 留給追蹤與停止軌跡的餘裕
 UNF_QD = float(os.environ.get('DC_UNF_QD', '0.6'))
 H_FQ, H_FQ_TOL, H_FSUM = 0.0018, 0.0006, 1.0                         # 門把手同 26 mm 橫桿（同抽屜判準）
 
@@ -70,8 +71,21 @@ class DoorCloseCtrl(PK.TablePickCtrl):
         u = XE.minjerk(min(max((t_abs - self.t_ph0) / max(self.T_u, 1e-6), 0.0), 1.0))[0]
         return (1.0 - u) * self.q_u0 + u * self.q_c
 
+    def _swing_T(self, q, dphi):
+        """最小急動門角剖面的最短時長：共轉時底盤體速度與門角速度 ω 成正比（位置繞鉸鏈轉、偏航 −ω），
+        輪速＝WM·體速度 ⇒ 每單位 ω 的最大輪速 w_u；峰值 ω＝1.875Δφ/T、峰值 α＝5.774Δφ/T² 分別受輪速、輪加速度上限（乘餘裕比例）限制。"""
+        LIM = P.G.LIM
+        p = np.asarray(q[:2], float); th = float(q[2])
+        vw = np.array([p[1], -p[0]])                                  # ω＝1 時世界速度（corotate_base：位置轉 −Δφ）
+        c_, s_ = math.cos(th), math.sin(th)
+        tw = np.array([c_ * vw[0] + s_ * vw[1], -s_ * vw[0] + c_ * vw[1], -1.0])
+        w_u = float(np.abs(np.asarray(LIM.WM) @ tw).max())
+        om_max, al_max = SWING_V_FRAC * float(LIM.W_LIM) / w_u, SWING_A_FRAC * float(LIM.WA_LIM) / w_u
+        d = abs(float(dphi))
+        return max(T_SWING_MIN, 1.875 * d / om_max, math.sqrt(5.774 * d / al_max))
+
     def _phi_ref(self, t_abs):
-        u = XE.minjerk(min(max((t_abs - self.t_ph0) / T_SWING, 0.0), 1.0))[0]
+        u = XE.minjerk(min(max((t_abs - self.t_ph0) / self.T_swing, 0.0), 1.0))[0]
         return self.phi_c + u * (PHI_GOAL - self.phi_c)
 
     def _advance(self, q):
@@ -105,19 +119,20 @@ class DoorCloseCtrl(PK.TablePickCtrl):
                 self.b_s0, self.q_s0 = np.asarray(q[:3], float).copy(), np.asarray(q[3:], float).copy()
                 self.T_rel_s = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
                 self.phi_c = float(self.phi_now)                       # 綁定瞬間實測門角起算
+                self.T_swing = self._swing_T(q, PHI_GOAL - self.phi_c)   # 依限制算的最短共轉時長
                 if self.door_geom is not None:
                     self.app_prof = dict(base_goal=list(self.app_prof['base_goal']) if self.app_prof else None, door=self.door_geom)   # 綁定後門扇是操作對象：門扇點不進 CBF（門的碰撞由門專屬淨空核對負責，同去程）
-                self._goto('SWING', phi_deg=round(math.degrees(self.phi_c), 2))
+                self._goto('SWING', phi_deg=round(math.degrees(self.phi_c), 2), T_swing=round(self.T_swing, 2))
             elif el > P.UNBIND_TO_S:
                 self._stop('door_bind_ack_timeout')
             return
         if self.phase == 'SWING':
-            if el >= T_SWING and float(self.phi_now) <= PHI_GOAL + PHI_TOL:
+            if el >= self.T_swing and float(self.phi_now) <= PHI_GOAL + PHI_TOL:
                 self.release = True
                 self.b_anchor = np.asarray(q[:3], float).copy()
                 self._ev('pick_door_swung', phi_deg=round(math.degrees(float(self.phi_now)), 2))
                 self._goto('UNBIND')
-            elif el > T_SWING + PK.PH_TO_S:
+            elif el > self.T_swing + PK.PH_TO_S:
                 self._stop('door_close_not_reached', phi_deg=round(math.degrees(float(self.phi_now)), 2))
             if not self._held_bar():
                 self._stop('lost_handle_during_close')
