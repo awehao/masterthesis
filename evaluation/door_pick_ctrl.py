@@ -38,6 +38,9 @@ AIM_K, AIM_MAX, AIM_START_M = float(os.environ.get('DR_AIM_K', '0.1')), float(os
 CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.2775')), float(os.environ.get('PICK_CARRY_WZ', '1.1327'))   # 持物底盤速度框（m/s、rad/s）；夾到後理想連接 ⇒ 預設＝硬體上限（不收緊）
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
 PH_TO_S = 4.0
+APP_GATE = os.environ.get('PICK_PATH') == '1' and os.environ.get('PICK_APP_GATE', '1') == '1'
+APP_GATE_D0, APP_GATE_D1 = 0.70, 0.12                                 # 收斂接近：參考底盤離抓取站位 ≤0.70 m 才開始伸手、≤0.12 m 才走最後抓取線
+APP_GATE_CAP_S = 30.0                                                 # 狀態閘門下的總安全逾時（名目時長之後）
 APP_TOL_Z = float(os.environ['PICK_APP_TOL_Z']) if os.environ.get('PICK_APP_TOL_Z') else None   # 圓柱（直立、側夾）接近完成：水平 ≤5 mm、沿圓柱軸（世界 z）≤ 此值；未設＝原 5 mm 球（第二十七趟 Isaac：東側伸遠，TCP 穩定低 9 mm、水平 <1 mm ⇒ approach_not_reached）
 APP_V = float(os.environ['PICK_APP_V']) if os.environ.get('PICK_APP_V') else None   # 接近段底盤速度框（任務限制；s60／s68／s69：沿茶几邊 0.19 m/s 接近，停止軌跡底盤淨空 0.098–0.099 被停）；未設＝原行為
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # Howard 11/19「車子後面放一個盒子 放夾取物」：抬起確認後放進車尾收納盒（rear_bin.py）→ 收臂（相機朝前）→ 返回／下一件
@@ -93,7 +96,11 @@ def _dr_handle_xy():
 FURN_CBF_PAD = float(os.environ.get('FURN_CBF_PAD', '0.12')) if os.environ.get('PICK_PATH') == '1' else None
 
 
-def _furn_obs(qp, r_near=0.8):
+FURN_CBF_PAD_FAR = float(os.environ.get('FURN_CBF_PAD_FAR', '0.16'))  # 離抓取站位 >FURN_NEAR_GOAL 時（Isaac 44：底盤命令斜坡 0.4/0.6 使實際送出速度落後 CBF 一拍，繞角 0.12 m/s 穿邊界約 2 cm；0.42 與核對界 0.40 只差 2 cm）
+FURN_NEAR_GOAL = 0.30
+
+
+def _furn_obs(qp, r_near=0.8, pad=None):
     """與停止軌跡核對同一份場景家具模型（里程）：底盤附近家具的最近點當靜態 CBF 障礙（邊距＝底盤半徑 0.30＋FURN_CBF_PAD）。
     Isaac 40／41：W-GMPC 的障礙來自導航前端（地圖、雷射），與核對用的里程家具模型差幾 cm（AMCL）⇒ 繞茶几角時最佳化以為 0.13、核對算 0.0996 被停。
     牆、隔間、門不加（門口窄，另有門專屬淨空）。"""
@@ -107,15 +114,15 @@ def _furn_obs(qp, r_near=0.8):
         pl = R.T @ (np.array([float(qp[0]), float(qp[1]), c[2]]) - c)
         pw = c + R @ np.clip(pl, -hs, hs)
         if float(np.hypot(pw[0] - qp[0], pw[1] - qp[1])) < r_near:
-            out.append(dict(x=float(pw[0]), y=float(pw[1]), radius=0.0, vx=0.0, vy=0.0, margin=0.30 + FURN_CBF_PAD, static=True))
+            out.append(dict(x=float(pw[0]), y=float(pw[1]), radius=0.0, vx=0.0, vy=0.0, margin=0.30 + (FURN_CBF_PAD if pad is None else pad), static=True))
     return out
 
 
-FURN_REF_D = float(os.environ.get('FURN_REF_D', '0.44'))             # 參考點離家具外框的中心距下限（規劃淨空 0.12＋2 cm）
+FURN_REF_D = float(os.environ.get('FURN_REF_D', '0.48'))             # 參考點離家具外框的中心距下限（遠段 CBF 0.46＋2 cm；Isaac 44 前為 0.44）
 _FURN_BOX = None
 
 
-def _furn_ref(X):
+def _furn_ref(X, bg=None):
     """Isaac 42：Smac 路徑在茶几西北角離桌面外框只有中心距 0.29（雷射只掃到桌腳，桌面角不在 costmap）⇒ 軟 CBF 被追蹤參考拉到 0.40 被停。
     不改導航：只把導航參考視窗中離家具外框 < FURN_REF_D 的點沿外法向推到 FURN_REF_D（同 yield_side 只平移參考；朝向不動）。回傳最大平移量 m。"""
     global _FURN_BOX
@@ -129,6 +136,8 @@ def _furn_ref(X):
     mx = 0.0
     for k in range(len(X)):
         p = np.array([float(X[k][0, 2]), float(X[k][1, 2])]); p0 = p.copy()
+        if bg is not None and float(np.hypot(*(p - bg))) < FURN_NEAR_GOAL:
+            continue                                                  # 抓取站位附近不推（站位本身由選位保證 ≥0.42）
         for _ in range(3):
             best = None
             for c, R, hs in _FURN_BOX:
@@ -171,6 +180,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + GRASP_DEPTH * self.T_grasp[:3, 2]   # 同瓶子線：TCP 沿工具軸越過圓柱軸 4 mm，軸心落在指片（TCP 後 1.3–21.3 mm）內（第十二趟 TCP 在軸心上 ⇒ 指尖夾弦、抬升滑落）
         self.app_prof = dict(base_goal=list(app['base_goal']), door=None)   # nav_window：導航到點後收斂到抓取底盤位姿
         self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
+        self._bg, self._t_arr = np.asarray(app['base_goal'], float)[:2].copy(), None
         self.T_rel0, self.b_anchor, self.n_ev, self.T_lift0, self.T_rel_s0 = None, None, 0, None, None
         self.ret_sent, self.attach = False, False
         self.obj_release, self.obj_detached, self.binned, self.q_b0, self.T_bm, self.bin_target = False, False, False, None, None, None
@@ -197,6 +207,9 @@ class TablePickCtrl(P.DoorPassCtrl):
         T[:3, 3] = T[:3, 3] - s_ * T[:3, 2]                            # 沿接近軸（TCP z）後退 s
         return T
 
+    def _app_gated(self):
+        return APP_GATE and type(self) is TablePickCtrl and self.motm is None and getattr(self, '_bg', None) is not None
+
     def _app_target(self, t_abs, Xk):
         """接近剖面：參考底盤上的起始相對位姿 → 抓取線（d_line→0，接近線提早 t_settle 到底）。"""
         t = t_abs - self.t_ph0
@@ -205,6 +218,12 @@ class TablePickCtrl(P.DoorPassCtrl):
         s_ = D_LINE * (1.0 - XE.minjerk(u)[0]) if t < Te else 0.0
         Tl = self._T_line(max(s_, 0.0))
         beta = XE.minjerk(min(max(t / max(self.T_b, 1e-6), 0.0), 1.0))[0]
+        if self._app_gated():                                           # Isaac 43：時間表 β 在繞茶几角時已 0.68 ⇒ TCP 追蹤把全身拉向桌子另一側的圓柱、蓋過軟 CBF。Howard 11/20「何時伸手依剩餘距離」⇒ 伸手與抓取線都由參考底盤到抓取站位的距離決定（時間表只當上限）
+            d_ = float(math.hypot(Xk[0] - self._bg[0], Xk[1] - self._bg[1]))
+            beta = min(beta, XE.minjerk(min(max((APP_GATE_D0 - d_) / (APP_GATE_D0 - APP_GATE_D1), 0.0), 1.0))[0])
+            u = min(1.0 if t >= Te else u, min(max((APP_GATE_D1 - d_) / (APP_GATE_D1 - 0.02), 0.0), 1.0))
+            s_ = D_LINE * (1.0 - XE.minjerk(u)[0])
+            Tl = self._T_line(max(s_, 0.0))
         ao_ = getattr(self, 'aim_off', None)
         if ao_ is not None and getattr(self, 'app_tol_fy', None) is not None and float(np.abs(ao_).max()) > 0.0:
             Tl = Tl.copy(); Tl[:3, 3] = Tl[:3, 3] + ao_                 # 瞄準補償只加在指令目標
@@ -366,7 +385,8 @@ class TablePickCtrl(P.DoorPassCtrl):
             v_tcp = float(np.linalg.norm(Tc[:3, 3] - self._tc_prev)) / (NPH * PHYS) if getattr(self, '_tc_prev', None) is not None else 9.0
             self._tc_prev = Tc[:3, 3].copy()
             path_ok = self.motm is not None and self.motm.get('path') and self.m_s0 is not None and v_tcp <= 0.02   # 依導航路徑：TCP 已到位且相對目標（世界固定）幾乎不動 ⇒ 即閉爪，不等名目時刻（Howard 11/20 時機由狀態決定）
-            if (el >= self.T_app or path_ok) and ep_ok and er <= 3.0:
+            gate_ok = self._app_gated() and self._t_arr is not None and v_tcp <= 0.02   # 狀態閘門：底盤已到站且 TCP 已到位、幾乎不動 ⇒ 即閉爪
+            if (el >= self.T_app or path_ok or gate_ok) and ep_ok and er <= 3.0:
                 self.b_anchor = np.asarray(q[:3], float).copy()
                 self.finger_cmd = P.FINGER_OPEN
                 self._goto('CLOSE', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2))
@@ -379,6 +399,12 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self._goto('APPROACH', fallback=True)
             elif self.motm is not None and el > self.T_app + MOTM_CLOSE_LATE_S:
                 self._stop('motm_window_missed', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), s=round(self._motm_s(self.t), 4))
+            elif self._app_gated():                                     # 狀態閘門：底盤到站後才計抓取逾時（安全總時限另保留）
+                if self._t_arr is None and float(math.hypot(q[0] - self._bg[0], q[1] - self._bg[1])) <= APP_GATE_D1:
+                    self._t_arr = self.t
+                    self._ev('pick_base_arrived', el=round(el, 2))
+                if (self._t_arr is not None and self.t - self._t_arr > PH_TO_S + T_SETTLE + 2.0) or el > self.T_app + APP_GATE_CAP_S:
+                    self._stop('approach_not_reached', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), gated=True)
             elif el > self.T_app + PH_TO_S:
                 self._stop('approach_not_reached', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2))
         elif self.phase == 'CLOSE':
@@ -481,10 +507,12 @@ class TablePickCtrl(P.DoorPassCtrl):
         if obs is None:
             return None, 'nav_obstacles_stale'
         if FURN_CBF_PAD is not None and type(self) is TablePickCtrl:
-            obs = list(obs) + _furn_obs(qp)
+            bg_ = getattr(self, '_bg', None)
+            far_ = self.motm is None and (bg_ is None or float(np.hypot(qp[0] - bg_[0], qp[1] - bg_[1])) > FURN_NEAR_GOAL)
+            obs = list(obs) + _furn_obs(qp, pad=FURN_CBF_PAD_FAR if far_ else FURN_CBF_PAD)
             if src == 'nav':
                 X = list(X)
-                sh_ = _furn_ref(X)
+                sh_ = _furn_ref(X, bg_)
                 if sh_ > 0.01 and self.t - getattr(self, '_furn_ref_t', -9.0) > 2.0:
                     self._furn_ref_t = self.t
                     self._ev('furn_ref_shift', shift_m=round(sh_, 3))
