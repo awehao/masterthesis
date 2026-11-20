@@ -77,6 +77,52 @@ def set_scan_pts(P):
     return 0 if SCAN_PTS is None else len(SCAN_PTS)
 
 
+def path_ext(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=1.2, t_need=1.6, v_min=0.04, v_cap=float(os.environ.get('PATH_V_CAP', '0.15'))):
+    """依導航路徑的移動中抓取（Howard 11/20：不要預設路線）：自目前位置沿目前行進方向（沒在往抓取位前進 ⇒ 朝抓取位）
+    每 ds 取樣底盤位（目前偏航、面桌偏航兩種），核底盤淨空（登錄方盒＋雷射未知點）、抓取 IK、全身淨空；撞到就不再往前取樣。
+    取第一段連續可行區 [s_a, s_b]：閉爪點 s_g＝s_a＋min(0.15, L/3)，經過速度＝(s_b−s_g)/t_need（閉爪＋確認需時），夾在 [v_min, max(v_now, 0.08), v_cap]。
+    回 motm dict（無對齊、自目前投影起算）或 None（沿此方向抓不到 ⇒ 呼叫端用停車抓）。"""
+    p = np.asarray(p_now, float)[:2]; b0 = np.asarray(b0_sel, float)
+    d = np.asarray(dirv, float)[:2]; nd = float(np.linalg.norm(d))
+    to_b = b0[:2] - p
+    if nd < 1e-3 or float(np.dot(to_b, d / max(nd, 1e-9))) < 0.10:
+        d = to_b; nd = float(np.linalg.norm(d))
+    d = d / max(nd, 1e-9)
+    best = None
+    ths = [float(th_now)]
+    if abs((float(b0[2]) - float(th_now) + math.pi) % (2 * math.pi) - math.pi) > 0.15:
+        ths.append(float(b0[2]))
+    for th in ths:
+        feas = []
+        for s_ in np.arange(0.0, s_max + 1e-9, ds):
+            b = np.array([p[0] + s_ * d[0], p[1] + s_ * d[1], th])
+            if not base_free(b) or not scan_free(b):
+                break
+            g = ik(np.asarray(T_grasp, float), b)
+            feas.append((float(s_), g is not None and clear_ok(b, g[0])[0], g))
+        i0 = next((i for i, f in enumerate(feas) if f[1]), None)
+        if i0 is None:
+            continue
+        i1 = i0
+        while i1 + 1 < len(feas) and feas[i1 + 1][1]:
+            i1 += 1
+        s_a, s_b = feas[i0][0], feas[i1][0]
+        L = s_b - s_a
+        s_g = s_a + min(0.15, L / 3.0)
+        dyaw = abs((th - float(th_now) + math.pi) % (2 * math.pi) - math.pi)
+        sc = s_a - 0.5 * L + 0.3 * dyaw
+        if best is None or sc < best[0]:
+            ig = min(range(i0, i1 + 1), key=lambda i: abs(feas[i][0] - s_g))
+            best = (sc, th, s_a, s_b, s_g, feas[ig][2])
+    if best is None:
+        return None
+    _, th, s_a, s_b, s_g, g = best
+    v = float(np.clip((s_b - s_g) / t_need, v_min, min(v_cap, max(float(v_now), 0.08))))
+    b0l = [float(p[0] + s_g * d[0]), float(p[1] + s_g * d[1]), float(th)]
+    return dict(b0=b0l, e=[float(d[0]), float(d[1])], v_g=v, s0=-0.02, t_arm=1.0, q_grasp=[float(x) for x in g[0]], no_align=True, path=True,
+                s_feas=[round(s_a, 3), round(s_b, 3)], s_grasp=round(s_g, 3))
+
+
 def seg_free(p0, p1, margin=0.10, ds=0.05):
     """底盤圓（半徑 RB＋margin）沿直線 p0→p1 不碰登錄方盒、也離雷射未知點 ≥SCAN_CLEAR（全向底盤原地轉不改變圓形佔據）。"""
     p0, p1 = np.asarray(p0, float)[:2], np.asarray(p1, float)[:2]
@@ -152,7 +198,7 @@ def select(c_xy, b_now, w_dist=1.0, w_sig=0.02):
     評分＝底盤直線距離×w_dist＋w_sig／σ_min（同可達性地圖的 IK、限位、σ、家具與桌面淨空條件）。"""
     c = np.asarray(c_xy, float); best = None
     for side, d, lat, b in candidates(c):
-        if not base_free(b):
+        if not base_free(b) or not scan_free(b):
             continue
         v = c - b[:2]; dist = float(np.linalg.norm(v))
         if dist < 0.25 or dist > 0.80:

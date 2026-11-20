@@ -154,6 +154,18 @@ class TablePickCtrl(P.DoorPassCtrl):
             t_a = max(t_a, 1.875 * float(np.abs(np.asarray(self.motm['q_grasp'], float) - np.asarray(q[3:], float)).max()) / 0.6 + 0.5)
         return t_a
 
+    def path_ext(self, app, t0):
+        """依導航路徑的移動中抓取（Howard 11/20）：監督依實際行進方向線上算出經過方向與速度（cyl_reach_map.path_ext）後送來；
+        自本拍起底盤沿該方向以斜坡速度經過抓取位（自目前投影起算、無對齊），其餘沿用移動中夾取的閉爪窗／確認／抬升。"""
+        if self.phase != 'APPROACH' or self.motm is not None:
+            self._ev('pick_path_ext_ignored', phase=self.phase)
+            return
+        self.motm = dict(app['motm'])
+        self.m_s0, self.m_t0 = None, None
+        self.t = float(t0)
+        self._goto('APPROACH', path_ext=dict(v_g=round(float(self.motm['v_g']), 3), s_grasp=self.motm.get('s_grasp'), e=[round(float(x), 3) for x in self.motm['e']]))
+        self.T_rel0 = None                                            # 由目前相對位姿重新混合到抓取線
+
     def _line_ready(self, q, b0, e, s_st):
         """進線條件（Howard 11/20 茶几停頓）：偏航 ≤0.15 rad、離路線側向 ≤5 cm、沿線不超過起點 5 cm（不必停在起點上）。"""
         d_ = np.asarray(q[:2], float) - np.asarray(b0[:2], float)
@@ -206,7 +218,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         el = self.t - self.t_ph0
         if self.T_rel0 is None:
             self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
-        if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH':   # 進線前：底盤先到路線起點（位置＋偏航）再開始等速橫移
+        if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH' and not self.motm.get('no_align'):   # 進線前：底盤先到路線起點（位置＋偏航）再開始等速橫移
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)   # （s76：偏航差 2.9 rad 邊轉邊走擦桌角；第三十一趟 Isaac：只轉不移、離線 0.31 m ⇒ 進線偏航漂、淨空 0.100）
             s_st = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10, -float(self.motm['v_g']) * self._motm_t_arm(q))
             b_st = np.array([b0[0] + s_st * e[0], b0[1] + s_st * e[1], float(b0[2])])
@@ -228,8 +240,11 @@ class TablePickCtrl(P.DoorPassCtrl):
             return
         if self.motm is not None and self.m_s0 is None:               # 移動中夾取時程：自目前底盤在路線上的投影起算，名目到點＝底盤經過 s＝0
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)
-            self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10,
-                            -float(self.motm['v_g']) * self._motm_t_arm(q))   # 手臂展開至少 t_arm（s73）
+            if self.motm.get('no_align'):                              # 依導航路徑（Howard 11/20 不要預設路線）：自目前投影起算、不後退、不對齊
+                self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), -0.02)
+            else:
+                self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10,
+                                -float(self.motm['v_g']) * self._motm_t_arm(q))   # 手臂展開至少 t_arm（s73）
             self.m_t0 = self.t
             cq_, sq_ = math.cos(float(q[2])), math.sin(float(q[2])); up_ = np.asarray(self.u_prev[:2], float)
             self.m_v0 = float(np.clip(np.dot(np.array([cq_ * up_[0] - sq_ * up_[1], sq_ * up_[0] + cq_ * up_[1]]), e), 0.0, float(self.motm['v_g'])))   # 進線時已有的沿線速度

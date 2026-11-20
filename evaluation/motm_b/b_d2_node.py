@@ -34,7 +34,9 @@ PICK = os.environ.get('D2_PICK', '0') == '1'                          # 穿門�
 PICK_PRIOR = [float(x) for x in os.environ.get('B_PICK_PRIOR', '0.55,2.30,0.0').split(',')]   # 茶几先驗粗目標（map；茶几西側，面向桌）
 PICK_RETURN = [float(x) for x in os.environ.get('B_PICK_RETURN', '1.5,-2.8,1.5708').split(',')]   # 返回＝起點
 PICK_APP_DIST, PICK_T_MIN = float(os.environ.get('B_PICK_APP_DIST', '0.6')), float(os.environ.get('B_PICK_T_MIN', '4.0'))
-PICK_MOTM_EARLY = float(os.environ.get('B_PICK_MOTM_EARLY', '1.0'))   # 移動中夾取提早送封包距離（直線淨空時）
+PICK_MOTM_EARLY = float(os.environ.get('B_PICK_MOTM_EARLY', '1.0'))
+PICK_PATH = os.environ.get('PICK_PATH', '0') == '1'                    # 依導航路徑的移動中抓取（Howard 11/20 不要預設路線）
+PICK_PATH_APP, PATH_EXT_R = float(os.environ.get('PICK_PATH_APP', '1.3')), float(os.environ.get('PATH_EXT_R', '0.7'))   # 移動中夾取提早送封包距離（直線淨空時）
 DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 11/18：開門→開抽屜→取筆→返回（需同時 D2_PICK＝1：沿用取物管線）
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
@@ -976,7 +978,7 @@ def main():
                 self.pass_seen = True
 
         def pick_tick(self, t):
-            if CHAIN and getattr(self, 'chain', 'cyl') == 'cyl' and (getattr(self, 'n_binned', 0) >= 1 or (PICK_MOTM_V is not None and self.pick_lifted)):   # 移動中夾取：抬起確認即換下一目標（底盤不折回路線起點）   # 串接：圓柱已放盒 ⇒ 換抽屜任務（導航目標換抽屜櫃粗目標；選位由 drawer_tick 接手）
+            if CHAIN and getattr(self, 'chain', 'cyl') == 'cyl' and (getattr(self, 'n_binned', 0) >= 1 or ((PICK_MOTM_V is not None or PICK_PATH) and self.pick_lifted)):   # 移動中夾取：抬起確認即換下一目標（底盤不折回路線起點）   # 串接：圓柱已放盒 ⇒ 換抽屜任務（導航目標換抽屜櫃粗目標；選位由 drawer_tick 接手）
                 self.chain, self.pick_goal, self.pass_t = 'drawer', None, t
                 self.event('chain_to_drawer')
                 return
@@ -992,7 +994,7 @@ def main():
                     self.pick_box = dict(c_map=c_map, est_od=est, t=t)
                     import threading
                     CR = self._CR
-                    n_unk_ = CR.set_scan_pts(self._scan_pts_od()) if PICK_MOTM_V is not None else 0
+                    n_unk_ = CR.set_scan_pts(self._scan_pts_od()) if (PICK_MOTM_V is not None or PICK_PATH) else 0
                     self.event('pick_scan_unknown_pts', n=int(n_unk_))
                     def _sel(box=self.pick_box, c=est, b=b_now):
                         w0 = time.perf_counter()
@@ -1008,6 +1010,27 @@ def main():
                 Tbm_ = _T3(self.T_mo_now) @ _T3(sel['base_start'] if PICK_MOTM_V is not None else sel['base'])   # 選位結果（里程）→ 地圖（只給 Smac）；移動中夾取＝路線起點
                 self.pick_sel = sel; self.pick_goal = [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]; self.pass_t = t
                 self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1))
+            if PICK_PATH and self.pick_sel is not None:                # 依導航路徑的移動中抓取：記錄實際行進方向；近抓取位 PATH_EXT_R 時線上算經過方向／速度送執行端
+                hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
+                pe_ = getattr(self, 'path_box', None)
+                b0p_ = np.asarray(self.pick_sel['base'], float)
+                if self.pick_app_t is not None and pe_ is None and float(np.hypot(*(self.b_od_now[:2] - b0p_[:2]))) <= PATH_EXT_R and getattr(self, 'pick_Tg_od', None) is not None:
+                    dt_h = max(hist_[-1][0] - hist_[0][0], 1e-3); mvd_ = (hist_[-1][1][:2] - hist_[0][1][:2]); v_now_ = float(np.linalg.norm(mvd_)) / dt_h
+                    import threading
+                    self.path_box = box_ = dict(done=False)
+                    CR_, Tg_, p_ = self._CR, self.pick_Tg_od.copy(), self.b_od_now.copy()
+                    def _pe(box=box_):
+                        w0 = time.perf_counter()
+                        box['res'] = CR_.path_ext(Tg_, p_[:2], p_[2], mvd_, b0p_, v_now_)
+                        box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
+                    threading.Thread(target=_pe, daemon=True).start()
+                    self.event('path_ext_start', dist=round(float(np.hypot(*(self.b_od_now[:2] - b0p_[:2]))), 3), v_now=round(v_now_, 3), dir=[round(float(x), 3) for x in mvd_])
+                elif pe_ is not None and pe_.get('done') and not pe_.get('sent'):
+                    pe_['sent'] = True
+                    r_ = pe_.get('res')
+                    if r_ is not None:
+                        self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=dict(kind='path_ext', motm=r_)))))
+                    self.event('path_ext_sent' if r_ is not None else 'path_ext_none', ms=round(pe_['ms'], 1), res=None if r_ is None else {k: r_[k] for k in ('b0', 'e', 'v_g', 's_feas', 's_grasp')})
             if self.pick_sel is not None and self.pick_app_t is None and PICK_MOTM_V is not None:   # 移動中夾取：近路線起點即送封包（底盤由控制器沿路線帶過抓取位，不停）
                 bs_ = np.asarray(self.pick_sel['base_start'], float)
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - bs_[:2])))
@@ -1031,12 +1054,13 @@ def main():
                 b_ = np.asarray(self.pick_sel['base'], float)          # 里程座標
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - b_[:2])))
                 dyaw_c_ = abs((float(self.b_od_now[2]) - float(b_[2]) + math.pi) % (2 * math.pi) - math.pi)
-                if dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or dist_ <= 0.35):   # s70：只留 ≤0.10 會在導航以容差到點、偏航未齊時卡住 ⇒ 恢復 s62–s67 版（0.35）；s68 邊緣案例改以選位餘裕 CYL_BASE_MARGIN 處理。舊註：s68：距離 ≤0.35 的備用條件在偏航差 1.22 rad 時放行 ⇒ 轉向中收斂斜向桌角、淨空 0.0992 停 ⇒ 只用偏航條件（導航到點時車頭自然對齊目標）
+                if (PICK_PATH and dist_ <= PICK_PATH_APP) or (not PICK_PATH and dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or dist_ <= 0.35)):   # PICK_PATH：近 1.3 m 即送（不等偏航、不停）；s70：只留 ≤0.10 會在導航以容差到點、偏航未齊時卡住 ⇒ 恢復 s62–s67 版（0.35）；s68 邊緣案例改以選位餘裕 CYL_BASE_MARGIN 處理。舊註：s68：距離 ≤0.35 的備用條件在偏航差 1.22 rad 時放行 ⇒ 轉向中收斂斜向桌角、淨空 0.0992 停 ⇒ 只用偏航條件（導航到點時車頭自然對齊目標）
                     Tb_od = _T3(b_)                                    # 底盤收斂目標（里程，與選位同座標）
                     e_od = np.asarray(self.pick_box['est_od'], float)   # 抓取目標一律留在里程座標（不經 map 來回：AMCL 修正會讓 TCP 偏離圓柱；s32 偏約 3 cm 夾空）
                     a_ = e_od[:2] - Tb_od[:2, 3]; a_ = a_ / max(float(np.linalg.norm(a_)), 1e-9)
                     Tg_od = np.asarray(self._CR.grasp_T(e_od[:2], a_, bool(self.pick_sel['flip'])), float); Tg_od[2, 3] = float(e_od[2])
                     Tapp = max(PICK_T_MIN, dist_ / 0.12 + 2.0)
+                    self.pick_Tg_od = Tg_od.copy()
                     app = dict(T_grasp=Tg_od.tolist(), base_goal=[float(Tb_od[0, 3]), float(Tb_od[1, 3]), math.atan2(Tb_od[1, 0], Tb_od[0, 0])], T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - 2.5))
                     self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
                     self.pick_app_t = t

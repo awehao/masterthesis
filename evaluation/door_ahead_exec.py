@@ -131,6 +131,8 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
                 import door_close_ctrl as _DC
                 ctrl = _DC.DoorCloseCtrl(ctrl, float(t_next), pa_)
                 ctrl._ev_sent = 0
+            elif pa_ is not None and mode == 'pick' and pa_.get('kind') == 'path_ext' and hasattr(ctrl, 'path_ext'):   # 依導航路徑的移動中抓取：經過方向／速度（監督線上算）
+                ctrl.path_ext(pa_, float(t_next))
             elif pa_ is not None and mode == 'pick' and pa_.get('kind') in ('observe', 'marker', 'dr_close') and hasattr(ctrl, 'next_app'):   # 抽屜任務下一段（觀察位／夾筆）
                 ctrl.next_app(pa_, float(t_next))
             if snap.get('obj_detached') and mode == 'pick' and getattr(ctrl, 'obj_release', False):   # 車尾收納盒：執行端解除夾爪↔物體連接的回報（只對發出請求的控制器）
