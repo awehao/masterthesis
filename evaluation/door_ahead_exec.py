@@ -72,8 +72,17 @@ def _worker(conn, ctrl, S, nph, phi0, finger0, late_ticks, door=None, builder=No
     seg_prev, s_before, cfg_prev = None, None, None
     mode = 'grasp'
     k_tick, k_open = 0, 0
+    _prof_path = os.environ.get('D2_PROFILE')                        # 即時化剖析（替身用；預設關）：cProfile 累積、每 1000 則訊息覆寫一次
+    _prof, _n_msg = None, 0
+    if _prof_path:
+        import cProfile
+        _prof = cProfile.Profile(); _prof.enable()
     while True:
         msg = conn.recv()
+        if _prof is not None:
+            _n_msg += 1
+            if _n_msg % 1000 == 0:
+                _prof.dump_stats(_prof_path); _prof.enable()
         if msg is None:
             break
         op = msg[0]
