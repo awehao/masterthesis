@@ -890,10 +890,14 @@ def main():
                 return None
 
         def _leaf_fuse(self, t):
-            rec = [p_ for t_, p_ in self.leaf_obs if t - t_ <= 1.5][-5:]
-            if len(rec) < 5 or float(np.ptp(rec)) > math.radians(0.5):
+            """Isaac 57：1.5 s 內 5 筆平均＝84.34°（實際約 84.97°，把手處偏 9 mm ⇒ 關門接近夾爪殼擦橫桿 5 mm 停）⇒ 3 s 內 ≥8 筆取中位數、四分位距 ≤0.3° 才採用。"""
+            rec = [p_ for t_, p_ in self.leaf_obs if t - t_ <= 3.0][-15:]
+            if len(rec) < 8:
                 return None
-            return float(np.mean(rec))
+            q25, q75 = np.percentile(rec, [25, 75])
+            if float(q75 - q25) > math.radians(0.3):
+                return None
+            return float(np.median(rec))
 
         def _corot(self, b, dphi):
             c_, s_ = math.cos(-dphi), math.sin(-dphi)
