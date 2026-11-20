@@ -143,7 +143,7 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             t_fo = getattr(self, '_t_force_ok', None)
             if t_fo is None:
                 self._t_force_ok = t_fo = self.t
-            if not pos_ok or self.t - t_fo > H_FLOSS_S:                  # Isaac 49：綁定後接觸力瞬間掉到 0（理想連接承力）⇒ 單拍力判誤判丟失；開度出界立即判，力不足須連續 H_FLOSS_S
+            if not pos_ok or (not self.door_bound and self.t - t_fo > H_FLOSS_S):   # Isaac 49／50：綁定（理想連接 FixedJoint）後由接頭承力、手指接觸力可為 0 ⇒ 綁定後只看開度（同抽屜拉開）；力判準只在綁定前（須揭露理想連接）
                 self._stop('lost_handle_during_close', pos_ok=bool(pos_ok), force_low_s=round(self.t - t_fo, 2))
             return
         if self.phase == 'UNBIND':
