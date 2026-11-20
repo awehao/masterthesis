@@ -206,7 +206,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         el = self.t - self.t_ph0
         if self.T_rel0 is None:
             self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
-        if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH':   # 進線前：底盤先到路線起點（位置＋偏航）再開始等速橫移
+        if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH' and not self.motm.get('no_align'):   # 進線前：底盤先到路線起點（位置＋偏航）再開始等速橫移
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)   # （s76：偏航差 2.9 rad 邊轉邊走擦桌角；第三十一趟 Isaac：只轉不移、離線 0.31 m ⇒ 進線偏航漂、淨空 0.100）
             s_st = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10, -float(self.motm['v_g']) * self._motm_t_arm(q))
             b_st = np.array([b0[0] + s_st * e[0], b0[1] + s_st * e[1], float(b0[2])])
@@ -228,8 +228,13 @@ class TablePickCtrl(P.DoorPassCtrl):
             return
         if self.motm is not None and self.m_s0 is None:               # 移動中夾取時程：自目前底盤在路線上的投影起算，名目到點＝底盤經過 s＝0
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)
-            self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10,
-                            -float(self.motm['v_g']) * self._motm_t_arm(q))   # 手臂展開至少 t_arm（s73）
+            if self.motm.get('no_align'):                              # 順路經過（Howard 11/20）：自目前投影起算、不後退；手臂展開時間不夠 ⇒ 降經過速度（≥0.05）而非退回起點
+                self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10)
+                v_eff = float(np.clip(-self.m_s0 / max(self._motm_t_arm(q), 1e-6), 0.05, float(self.motm['v_g'])))
+                self.motm = dict(self.motm, v_g=v_eff)
+            else:
+                self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10,
+                                -float(self.motm['v_g']) * self._motm_t_arm(q))   # 手臂展開至少 t_arm（s73）
             self.m_t0 = self.t
             cq_, sq_ = math.cos(float(q[2])), math.sin(float(q[2])); up_ = np.asarray(self.u_prev[:2], float)
             self.m_v0 = float(np.clip(np.dot(np.array([cq_ * up_[0] - sq_ * up_[1], sq_ * up_[0] + cq_ * up_[1]]), e), 0.0, float(self.motm['v_g'])))   # 進線時已有的沿線速度

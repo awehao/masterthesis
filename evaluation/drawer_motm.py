@@ -32,7 +32,7 @@ def _ik_cont(T, b, prev):
 
 
 def select_handle_motm(b_now, v_g, w_dist=1.0, w_sig=0.02):
-    best = None
+    best, by_dir = None, {}
     p = np.asarray(D.PULL[:2], float); n = np.array([-p[1], p[0]])
     h0 = D.handle_T(0.0)[:3, 3]
     s1 = float(v_g) * T_WIN
@@ -72,10 +72,15 @@ def select_handle_motm(b_now, v_g, w_dist=1.0, w_sig=0.02):
             if not M.base_free(b_st):
                 continue
             sc = w_dist * float(np.hypot(*(b_st[:2] - np.asarray(b_now[:2], float)))) + w_sig / max(min(sig, g1['sigma']), 1e-6)
+            cand_ = dict(base=b.tolist(), e=e.tolist(), base_start=b_st.tolist(), base_end=b1.tolist(), flip=flip, v_g=float(v_g), sigma_min=min(sig, g1['sigma']),
+                         env_min=min(env, g1['env']), score=sc, T_grasp=T0.tolist(), q_grasp=[float(x) for x in g0['q']], s_range=[float(ss[0]), float(ss[-1])], tau=TAU, t_arm=T_ARM)
+            if int(sg) not in by_dir or sc < by_dir[int(sg)]['score']:
+                by_dir[int(sg)] = cand_                                  # 每方向留最佳（順路經過時依來向選；Howard 11/20）
             if best is None or sc < best['score']:
-                best = dict(base=b.tolist(), e=e.tolist(), base_start=b_st.tolist(), base_end=b1.tolist(), flip=flip, v_g=float(v_g), sigma_min=min(sig, g1['sigma']),
-                            env_min=min(env, g1['env']), score=sc, T_grasp=T0.tolist(), q_grasp=[float(x) for x in g0['q']], s_range=[float(ss[0]), float(ss[-1])], tau=TAU, t_arm=T_ARM)
+                best = dict(cand_)
     D.set_open(0.0)
+    if best is not None:
+        best['alts'] = [v_ for k_, v_ in by_dir.items() if v_['e'] != best['e']]
     return best
 
 
