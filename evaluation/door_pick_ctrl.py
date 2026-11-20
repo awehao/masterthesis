@@ -19,6 +19,7 @@ import time
 import numpy as np
 
 import door_pass_ctrl as P
+import motm_merge as MM
 
 G, XO, XE, K, B, C0, S, W = P.G, P.XO, P.XE, P.K, P.B, P.C0, P.S, P.W
 NPH, PHYS, DT, D_STEPS = P.NPH, P.PHYS, P.DT, P.D_STEPS
@@ -33,6 +34,7 @@ LIFT_M, T_LIFT = float(os.environ.get('PICK_LIFT_M', '0.05')), 1.2
 T_CARRY = 3.0
 PICK_CARRY = os.environ.get('PICK_CARRY', '1') == '1'                 # Howard 11/18「夾到東西沒有收手臂，伸出來很危險」⇒ 預設收臂（理想連接後收臂不再滑落）
 FACE_DR = [float(x) for x in os.environ.get('B_DR_PRIOR', '-3.5,10.3,3.1416').split(',')] if (os.environ.get('D2_CHAIN') == '1' and os.environ.get('D2_DRAWER') == '1') else None   # 抽屜櫃前粗目標（同監督 DR_PRIOR；地圖≈里程）
+MERGE_V_HI = float(os.environ.get('PICK_MERGE_V_HI', '0.20'))       # 併線段速度上限（進來的速度更低就維持；近家具另有 near_v 限速）
 MOTM_TR = float(os.environ.get('MOTM_TR', '1.0'))                   # 進線速度斜坡時間常數（s）
 AIM_K, AIM_MAX, AIM_START_M = float(os.environ.get('DR_AIM_K', '0.1')), float(os.environ.get('DR_AIM_MAX', '0.01')), float(os.environ.get('DR_AIM_START_M', '0.01'))   # 把手瞄準補償：每控制拍增益、上限（m）
 CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.2775')), float(os.environ.get('PICK_CARRY_WZ', '1.1327'))   # 持物底盤速度框（m/s、rad/s）；夾到後理想連接 ⇒ 預設＝硬體上限（不收緊）
@@ -193,6 +195,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.phase, self.t_ph0 = 'APPROACH', float(t0)
         self.motm = app.get('motm')                                   # Howard 11/19 移動中夾取：dict(b0, e, v_g, s0)（里程）；None＝原停車夾取
         self.m_s0, self.m_t0, self.T_rel_l0 = None, None, None
+        self.m_G, self.m_ta0 = None, None
         self._ev('pick_start', T_grasp=[round(float(x), 4) for x in self.T_grasp[:3, 3]], base_goal=[round(float(x), 4) for x in app['base_goal']], T=round(self.T_app, 3))
 
     def _stop(self, why, /, **kw):
@@ -223,6 +226,9 @@ class TablePickCtrl(P.DoorPassCtrl):
         s_ = D_LINE * (1.0 - XE.minjerk(u)[0]) if t < Te else 0.0
         Tl = self._T_line(max(s_, 0.0))
         beta = XE.minjerk(min(max(t / max(self.T_b, 1e-6), 0.0), 1.0))[0]
+        if getattr(self, 'm_ta0', None) is not None:                    # 併線：偏航轉到 80% 後才伸手
+            ta_ = self.m_ta0 - self.t_ph0
+            beta = XE.minjerk(min(max((t - ta_) / max(self.T_b - ta_, 1e-6), 0.0), 1.0))[0]
         if self._app_gated():                                           # Isaac 43：時間表 β 在繞茶几角時已 0.68 ⇒ TCP 追蹤把全身拉向桌子另一側的圓柱、蓋過軟 CBF。Howard 11/20「何時伸手依剩餘距離」⇒ 伸手與抓取線都由參考底盤到抓取站位的距離決定（時間表只當上限）
             d_ = float(math.hypot(Xk[0] - self._bg[0], Xk[1] - self._bg[1]))
             p_ = min(max((APP_GATE_D0 - d_) / (APP_GATE_D0 - APP_GATE_D1), 0.0), 1.0)
@@ -269,6 +275,34 @@ class TablePickCtrl(P.DoorPassCtrl):
         self._goto('APPROACH', path_ext=dict(v_g=round(float(self.motm['v_g']), 3), s_grasp=self.motm.get('s_grasp'), e=[round(float(x), 3) for x in self.motm['e']]))
         self._reset_T_rel0 = True                                     # 下一拍 _advance 開頭由目前相對位姿重新混合到抓取線（不可設 None：同拍 _solve 要用，s119d 崩潰）
 
+    def _merge_init(self, q, b0, e):
+        v_ = float(self.motm['v_g'])
+        cq_, sq_ = math.cos(float(q[2])), math.sin(float(q[2])); up_ = np.asarray(self.u_prev[:2], float)
+        vw_ = np.array([cq_ * up_[0] - sq_ * up_[1], sq_ * up_[0] + cq_ * up_[1]])   # 目前世界速度（前一筆命令）
+        t_arm_ = self._motm_t_arm(q)
+        s_r = float(self.motm.get('s0', -0.05)) - 0.05 - v_ * t_arm_    # 偏航轉完、開始伸手的線上位置
+        G_ = MM.merge_geom(q[:2], vw_ if float(np.linalg.norm(vw_)) > 0.03 else np.zeros(2), b0, e, s_cap=s_r)
+        self.m_G, self.m_y0 = G_, float(q[2])
+        self.m_v0 = float(np.clip(np.linalg.norm(vw_), 0.0, 0.2))
+        self.m_sigrot = MM.sig_rot_for(G_, q[2], b0[2], s_r, min(max(self.m_v0, v_, 0.15), MERGE_V_HI))   # 偏航參考峰值角速度以併線段速度換算
+        self.m_t0, self.m_s0 = self.t, float(G_['s_p'])
+        self.m_law = MM.time_law(G_, self.m_v0, v_, s_r, v_hi_cap=MERGE_V_HI)   # 併線段維持進來的速度（≤MERGE_V_HI），伸手起點前減到經過速度
+        sig_g = MM.sig_of_s(G_, 0.0)
+        self.T_app = MM.t_at_sig(self.m_law, sig_g, v_)                 # 複合路徑上經過 s＝0 的時刻
+        t_rot = MM.t_at_sig(self.m_law, self.m_sigrot, v_)
+        self.m_ta0 = self.m_t0 + 0.8 * t_rot                            # 偏航轉到 80% 才開始伸手（收臂構型在底盤半徑內，轉向中不掃桌）
+        ta_rel = self.m_ta0 - self.t_ph0
+        self.T_b = max(ta_rel + 1.5, self.T_app - 1.5)
+        self.t_l0 = max(ta_rel + 1.0, self.T_app - 2.5)
+        if self.motm.get('q_grasp') is not None and MOTM_W_Q > 0.0:
+            self.q_m0, self.q_mg = np.asarray(q[3:], float).copy(), np.asarray(self.motm['q_grasp'], float)
+            self.app_qpost, self.app_w_q = self._motm_qpost, MOTM_W_Q
+        self._ev('pick_merge_start', lat=round(G_['lat'], 3), s_p=round(G_['s_p'], 3), s_m=round(G_['s_m'], 3), Lc=round(G_['Lc'], 3), sig_rot=round(self.m_sigrot, 3),
+                 dyaw=round(abs((float(b0[2]) - float(q[2]) + math.pi) % (2 * math.pi) - math.pi), 3), v0=round(self.m_v0, 3), T_app=round(self.T_app, 2), t_reach=round(ta_rel, 2), t_arm=round(t_arm_, 2))
+
+    def _m_sig(self, t_abs):
+        return MM.sig_at_t(self.m_law, max(0.0, t_abs - self.m_t0), float(self.motm['v_g']))
+
     def _line_ready(self, q, b0, e, s_st):
         """進線條件（Howard 11/20 茶几停頓）：偏航 ≤0.15 rad、離路線側向 ≤5 cm、沿線不超過起點 5 cm（不必停在起點上）。"""
         d_ = np.asarray(q[:2], float) - np.asarray(b0[:2], float)
@@ -286,6 +320,8 @@ class TablePickCtrl(P.DoorPassCtrl):
 
     def _motm_s(self, t_abs):
         """可行段終點 s_end（依導航路徑：正面接近時後面就是家具）：進入最後 v·TR 時指數減速、平滑停在 s_end。"""
+        if getattr(self, 'm_G', None) is not None and self.motm.get('merge'):
+            return MM.s_line(self.m_G, self._m_sig(t_abs))
         s_ = self._motm_s_lin(t_abs); se = self.motm.get('s_end')
         if se is None:
             return s_
@@ -302,6 +338,12 @@ class TablePickCtrl(P.DoorPassCtrl):
     def _motm_ref(self, t_eff):
         """經過路線參考：底盤沿 e 等速 v_g、朝向固定（全向底盤橫移）；回 (X 視窗, xi 視窗)。"""
         b0, e, v = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float), float(self.motm['v_g'])
+        if getattr(self, 'm_G', None) is not None and self.motm.get('merge'):   # 併線複合路徑：位置沿弧長、偏航最小急動轉到線上；體速度由相鄰參考差分
+            X = []
+            for k in range(XO.N + 1):
+                sg_ = self._m_sig(t_eff + k * DT); p_ = MM.at(self.m_G, sg_)
+                X.append(XO.from_xytheta(float(p_[0]), float(p_[1]), MM.yaw_at(self.m_G, sg_, self.m_y0, b0[2], self.m_sigrot)))
+            return X, xi_from_X(X, DT)
         th = float(b0[2]); c_, s_ = math.cos(th), math.sin(th)
         X = [XO.from_xytheta(b0[0] + self._motm_s(t_eff + k * DT) * e[0], b0[1] + self._motm_s(t_eff + k * DT) * e[1], th) for k in range(XO.N + 1)]
         xi = []
@@ -311,6 +353,9 @@ class TablePickCtrl(P.DoorPassCtrl):
         return X, xi
 
     def _motm_qpost(self, t_abs):
+        if getattr(self, 'm_ta0', None) is not None:                    # 併線：偏航轉完才開始引導
+            u = XE.minjerk(min(max((t_abs - self.m_ta0) / max(self.t_ph0 + self.T_app - T_SETTLE - self.m_ta0, 1e-6), 0.0), 1.0))[0]
+            return (1.0 - u) * self.q_m0 + u * self.q_mg
         u = XE.minjerk(min(max((t_abs - self.m_t0) / max(self.T_app - T_SETTLE, 1e-6), 0.0), 1.0))[0]
         return (1.0 - u) * self.q_m0 + u * self.q_mg
 
@@ -337,7 +382,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         if self.T_rel0 is None or getattr(self, '_reset_T_rel0', False):
             self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
             self._reset_T_rel0 = False
-        if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH' and not self.motm.get('no_align'):   # 進線前：底盤先到路線起點（位置＋偏航）再開始等速橫移
+        if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH' and not self.motm.get('no_align') and not self.motm.get('merge'):   # 進線前：底盤先到路線起點（位置＋偏航）再開始等速橫移
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)   # （s76：偏航差 2.9 rad 邊轉邊走擦桌角；第三十一趟 Isaac：只轉不移、離線 0.31 m ⇒ 進線偏航漂、淨空 0.100）
             s_st = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10, -float(self.motm['v_g']) * self._motm_t_arm(q))
             b_st = np.array([b0[0] + s_st * e[0], b0[1] + s_st * e[1], float(b0[2])])
@@ -359,6 +404,9 @@ class TablePickCtrl(P.DoorPassCtrl):
             return
         if self.motm is not None and self.m_s0 is None:               # 移動中夾取時程：自目前底盤在路線上的投影起算，名目到點＝底盤經過 s＝0
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)
+            if self.motm.get('merge'):                                  # 邊走邊併線（Howard 11/21「要真的移動中抓」）：不原地對齊；自目前位置／速度以平滑曲線併入經過線，偏航在伸手前轉完
+                self._merge_init(q, b0, e)
+                return
             if self.motm.get('no_align'):                              # 依導航路徑（Howard 11/20 不要預設路線）：自目前投影起算、不後退、不對齊
                 self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), -0.02)
             else:
@@ -411,7 +459,7 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self._goto('CLOSE', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2))
             elif self.motm is not None and self.motm.get('path') and el > self.T_app + MOTM_CLOSE_LATE_S:   # 依導航路徑：經過窗錯過 ⇒ 退回收斂抓取（不中止；Howard 11/20 安全時限保留在收斂段）
                 self._ev('pick_path_fallback', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), s=round(self._motm_s(self.t), 4))
-                self.motm, self.m_s0, self.m_t0 = None, None, None
+                self.motm, self.m_s0, self.m_t0, self.m_G, self.m_ta0 = None, None, None, None, None
                 self.app_qpost = None                                    # 移動中姿態引導依 m_t0（s122d：退回後仍用 ⇒ TypeError）
                 self.T_app, self.T_b, self.t_l0 = 4.0, 2.5, 1.5
                 self._t_arr, self._t_line0, self._bp = None, None, 0.0
@@ -544,6 +592,15 @@ class TablePickCtrl(P.DoorPassCtrl):
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
             umin0, src = float('nan'), 'anchor'
+        if self.phase in ('RETURN', 'BIN_MOVE', 'BIN_STOW'):         # 診斷（s137d 回程兩次 9 s 參考不動）：參考視窗幾乎不動 ⇒ 記來源與前端狀態（節流 1 s）
+            try:
+                mv_ = float(np.hypot(X[-1][0, 2] - X[0][0, 2], X[-1][1, 2] - X[0][1, 2]))
+                if mv_ < 0.02 and self.t - getattr(self, '_refstill_t', -9.0) > 1.0:
+                    self._refstill_t = self.t
+                    ni_ = getattr(self, 'nav_in', None) or {}
+                    self._ev('ref_still', src=src, phase=self.phase, mv=round(mv_, 4), halted=ni_.get('halted'), stale=ni_.get('stale'), n_obs=len(obs), q=[round(float(x), 3) for x in qp[:3]])
+            except Exception:                                         # noqa: BLE001
+                pass
         if self.phase == 'RETURN':
             self.app_prof = None                                      # 返回段：照導航前端（不再收斂到抓取位）
             if FACE_DR is not None and type(self) is TablePickCtrl and float(np.hypot(qp[0] - FACE_DR[0], qp[1] - FACE_DR[1])) < 0.6:

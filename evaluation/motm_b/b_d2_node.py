@@ -43,11 +43,18 @@ DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 1
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
 PICK_APP_DYAW = float(os.environ['B_PICK_APP_DYAW']) if os.environ.get('B_PICK_APP_DYAW') else None   # 圓柱接近開始的偏航閘門（同抽屜 DR_APP_DYAW；s60：繞茶几角時距 0.6 m 即接近、車頭偏 1.36 rad ⇒ 收斂切桌角、底盤淨空 0.0993 被停）；未設＝原行為
-DR_MOTM_V = float(os.environ['DR_MOTM_V']) if os.environ.get('DR_MOTM_V') else None   # Howard 11/19「門把、抽屜把手都要改」：抽屜把手移動中抓取的經過速度；未設＝停車抓
+DR_MOTM_V = float(os.environ['DR_MOTM_V']) if os.environ.get('DR_MOTM_V') else None
+HEAD_OBJ = os.environ.get('HEAD_OBJ', '0') == '1'                   # Howard 11/21「太多原地旋轉了」：穿門後各段偏航不跟路徑前視（路徑一彎就擺），改由物件決定：未看到物件前朝物件（可見性），看到後依剩餘距離平滑轉到本段終點偏航（每段只轉一次）
+HEAD_DOOR_C = [float(x) for x in os.environ.get('HEAD_DOOR_C', '0.5,0.0').split(',')]   # 門口中心（map；回程看門扇）
+HEAD_NEAR = 1.0                                                       # 離終點 ≤ 此距離時已轉完
+DR_LINE = os.environ.get('DR_LINE', '0') == '1' and os.environ.get('DR_MOTM_V') is not None   # Howard 11/21「把手要真的移動中抓」：沿櫃面經過線＋邊走邊併線（不等偏航對齊、不停）   # Howard 11/19「門把、抽屜把手都要改」：抽屜把手移動中抓取的經過速度；未設＝停車抓
 DOOR_CLOSE = os.environ.get('D2_DOOR_CLOSE', '0') == '1'             # Howard 11/19 回程關門：抽屜完成後先回臥室側關門，再回起點
 DRAWER_CLOSE = os.environ.get('D2_DRAWER_CLOSE', '0') == '1'         # Howard 11/19「抽屜也要關阿」：筆放盒收臂後夾回把手推回，再返回
 HANDLE_VISION = os.environ.get('D2_HANDLE_VISION', '0') == '1'      # Howard 11/19「不要把東西寫死 要實際用到視覺」：抽屜位姿由手腕深度把手偵測融合（登錄位姿只當搜尋先驗）
-PICK_MOTM_V = float(os.environ['PICK_MOTM_V']) if os.environ.get('PICK_MOTM_V') else None   # Howard 11/19「茶几那個要移動中夾取 我要做整體速度最佳」：經過速度（m/s）；未設＝停車夾取
+PICK_MOTM_V = float(os.environ['PICK_MOTM_V']) if os.environ.get('PICK_MOTM_V') else None
+PICK_LINE = os.environ.get('PICK_LINE', '0') == '1' and os.environ.get('PICK_MOTM_V') is not None   # Howard 11/21「茶几要真的移動中抓」：沿桌邊經過線＋邊走邊併線（控制器不原地對齊）；送出後導航目標即換下一站
+PICK_LINE_SEND = float(os.environ.get('PICK_LINE_SEND', '1.2'))     # 離路線起點這麼近且併線曲線淨空 ⇒ 送封包
+PICK_LINE_MARGIN = float(os.environ.get('PICK_LINE_MARGIN', '0.14'))   # 併線曲線底盤離家具（中心 ≥ 0.30＋此值；CBF 0.42＋2 cm）   # Howard 11/19「茶几那個要移動中夾取 我要做整體速度最佳」：經過速度（m/s）；未設＝停車夾取
 RET_CLEAR = os.environ.get('B_RET_CLEAR', '0') == '1'                # 返回目標送出前清一次全域代價圖（同穿門 PASS_CLEAR 的 Nav2 標準復原）；規劃持續失敗 RET_CLEAR_RETRY_S 再清（最多 3 次）（s66：串接路線沿途行人標記殘留 ⇒ 抽屜→起點 no valid path 582 次）
 RET_CLEAR_RETRY_S = float(os.environ.get('B_RET_CLEAR_RETRY_S', '8.0'))
 DR_APP_DYAW = float(os.environ.get('B_DR_APP_DYAW', '0.30'))         # 抓把手接近開始的底盤偏航差上限（rad）
@@ -1057,7 +1064,7 @@ def main():
                 self.pick_sel = sel; self.pick_goal = [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]; self.pass_t = t
                 self.pick_via = [list(p) for p in (sel.get('via') or [])]   # 依可走路線的途經點（里程；Isaac 39–46 Smac 鑽茶几角與未知箱之間的窄縫）
                 self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1), route_len=None if sel.get('route_len') is None else round(float(sel['route_len']), 3), via=self.pick_via)
-            if PICK_PATH and self.pick_sel is not None:                # 依導航路徑的移動中抓取：記錄實際行進方向；近抓取位 PATH_EXT_R 時線上算經過方向／速度送執行端
+            if PICK_PATH and not PICK_LINE and self.pick_sel is not None:   # 依導航路徑的移動中抓取：記錄實際行進方向；近抓取位 PATH_EXT_R 時線上算經過方向／速度送執行端
                 hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
                 pe_ = getattr(self, 'path_box', None)
                 b0p_ = np.asarray(self.pick_sel['base'], float)
@@ -1088,15 +1095,38 @@ def main():
                     self._m_still = (self.b_od_now.copy(), t); mv_ = self._m_still
                 still_ = t - mv_[1] >= 1.5
                 early_ = dist_ <= PICK_MOTM_EARLY and self._CR is not None and self._CR.seg_free(self.b_od_now, bs_)   # Howard 11/20「茶几停頓」：近 1 m 且直線到路線起點淨空 ⇒ 提早送封包，對齊段邊走邊轉（不再到點停 2 s＋原地轉 180°）
+                if PICK_LINE:                                           # 併線版：只看「目前位置＋行進方向起的併線曲線＋沿線到窗口」淨空（同控制器幾何）；不等偏航、不停
+                    early_ = False
+                    hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
+                    if dist_ <= PICK_LINE_SEND:
+                        import motm_merge as MM_
+                        mvd_ = hist_[-1][1][:2] - hist_[0][1][:2]
+                        b0l_ = np.asarray(self.pick_sel['base'], float); el_ = np.asarray(self.pick_sel['e'], float)
+                        s_r_ = float(self._CR.MOTM_S0) - 0.05 - float(PICK_MOTM_V) * float(self._CR.MOTM_T_ARM)
+                        G_ = MM_.merge_geom(self.b_od_now[:2], mvd_ if float(np.linalg.norm(mvd_)) > 0.02 else np.zeros(2), b0l_, el_, s_cap=s_r_)
+                        pts_ = MM_.poly(G_, float(self._CR.MOTM_S0))
+                        ok_ = all(self._CR.base_clear(np.r_[p_, 0.0], PICK_LINE_MARGIN) and self._CR.scan_free(p_, float(self._CR.SCAN_CLEAR_EXT)) for p_ in pts_[1:])
+                        if not ok_ and t - getattr(self, '_line_wait_ev', -9.0) > 2.0:
+                            self._line_wait_ev = t
+                            self.event('pick_line_wait', dist=round(dist_, 3), lat=round(G_['lat'], 3), s_m=round(G_['s_m'], 3))
+                        early_ = ok_
+                    if not early_:
+                        return
                 if early_ or dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or (still_ and dist_ <= 0.5)):   # s75：距離備用在偏航差 3.3 rad 放行 ⇒ 掉頭擦桌角 ⇒ 移動中夾取只用偏航或靜止備用
                     Tg_od = np.asarray(self.pick_sel['T_grasp'], float)
                     Tg_od[2, 3] = float(self.pick_box['est_od'][2])
                     b0_ = [float(x) for x in self.pick_sel['base']]
                     app = dict(T_grasp=Tg_od.tolist(), base_goal=b0_, T=4.0, T_b=2.5, t_l0=1.5,
                                motm=dict(b0=b0_, e=[float(x) for x in self.pick_sel['e']], v_g=float(PICK_MOTM_V), s0=float(self._CR.MOTM_S0), t_arm=float(self._CR.MOTM_T_ARM), q_grasp=[float(x) for x in self.pick_sel['q']]))
+                    if PICK_LINE:
+                        app['motm'].update(merge=True, path=True)            # 控制器併線（不對齊）；閉爪由狀態（TCP 到位且不動）；錯過窗口 ⇒ 收斂抓取備援
                     self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
                     self.pick_app_t = t
                     self.event('pick_app_sent', dist=round(dist_, 3), motm=app['motm'])
+                    if PICK_LINE and CHAIN:                             # 底盤由控制器沿經過線帶過；導航目標先換下一站 ⇒ 抓完（放盒中）接導航不折回
+                        self.pick_goal, self.pick_via, self.pass_t = list(DR_PRIOR), [], t
+                        self.next_via = [list(p_) for p_ in (self.pick_sel.get('via_next') or [])]   # 抓完後到下一站的格點路線途經點（s135d：Smac 自經過線終點繞回東邊）
+                        self.event('pick_line_next_goal', goal=DR_PRIOR, via_next=self.next_via)
                 return
             if self.pick_sel is not None and self.pick_app_t is None:
                 b_ = np.asarray(self.pick_sel['base'], float)          # 里程座標
@@ -1202,10 +1232,27 @@ def main():
                 mv_ = getattr(self, '_dr_still', None)
                 if mv_ is None or float(np.hypot(*(self.b_od_now[:2] - mv_[0][:2]))) > 0.005 or abs(float(self.b_od_now[2] - mv_[0][2])) > 0.01:
                     self._dr_still = (self.b_od_now.copy(), t); mv_ = self._dr_still
-                if dist_ <= PICK_APP_DIST and (dyaw_ <= DR_APP_DYAW or (t - mv_[1] >= 1.5 and dist_ <= 0.5)):
+                go_ = dist_ <= PICK_APP_DIST and (dyaw_ <= DR_APP_DYAW or (t - mv_[1] >= 1.5 and dist_ <= 0.5))
+                if DR_LINE:                                            # 併線：近路線起點且「目前位置＋行進方向的併線曲線」淨空、在伸手點之前 ⇒ 送（不等偏航）
+                    go_ = False
+                    hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
+                    if dist_ <= PICK_LINE_SEND:
+                        import motm_merge as MM_
+                        mvd_ = hist_[-1][1][:2] - hist_[0][1][:2]
+                        b0l_ = np.asarray(dr['sel']['base'], float); el_ = np.asarray(dr['sel']['e'], float)
+                        s_r_ = float(self._DRM.S0) - 0.05 - float(DR_MOTM_V) * float(dr['sel']['t_arm'])
+                        G_ = MM_.merge_geom(self.b_od_now[:2], mvd_ if float(np.linalg.norm(mvd_)) > 0.02 else np.zeros(2), b0l_, el_, s_cap=s_r_)
+                        pts_ = MM_.poly(G_, float(self._DRM.S0))
+                        go_ = G_['s_p'] <= s_r_ - 0.05 and all(self._CR.base_clear(np.r_[p_, 0.0], PICK_LINE_MARGIN) and self._CR.scan_free(p_, float(self._CR.SCAN_CLEAR_EXT)) for p_ in pts_[1:])
+                        if not go_ and t - getattr(self, '_line_wait_ev', -9.0) > 2.0:
+                            self._line_wait_ev = t
+                            self.event('dr_line_wait', dist=round(dist_, 3), lat=round(G_['lat'], 3), s_p=round(G_['s_p'], 3), s_r=round(s_r_, 3))
+                if go_:
                     sel = dr['sel']
-                    self._dr_send('drawer', bs_, t, T_grasp=sel['T_grasp'], q_grasp=sel.get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'),
-                                  motm=dict(b0=[float(x) for x in sel['base']], e=[float(x) for x in sel['e']], v_g=float(DR_MOTM_V), s0=float(self._DRM.S0), t_arm=float(sel['t_arm']), tau=float(sel['tau']), q_grasp=sel.get('q_grasp')))
+                    mo_ = dict(b0=[float(x) for x in sel['base']], e=[float(x) for x in sel['e']], v_g=float(DR_MOTM_V), s0=float(self._DRM.S0), t_arm=float(sel['t_arm']), tau=float(sel['tau']), q_grasp=sel.get('q_grasp'))
+                    if DR_LINE:
+                        mo_.update(merge=True, path=True)
+                    self._dr_send('drawer', bs_, t, T_grasp=sel['T_grasp'], q_grasp=sel.get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'), motm=mo_)
                     dr['stage'] = 'wait_release'
             elif st == 'handle_nav' and DR_PATH:                     # 依導航路徑：早送封包（邊走邊展開），近 PATH_EXT_R 時線上算經過方向／速度
                 hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
@@ -1304,8 +1351,65 @@ def main():
                 self.event('pick_via_reached', at=[round(float(x), 3) for x in via[0][:2]], left=len(via) - 1); via.pop(0); self.pass_t = t
             if not via:
                 return g_
-            nxt = np.asarray(via[1][:2], float) if len(via) > 1 else np.asarray(self.pick_sel['base'][:2], float)
+            nxt = np.asarray(via[1][:2], float) if len(via) > 1 else np.asarray(self.pick_sel.get('base_start', self.pick_sel['base'])[:2], float)
             p_ = np.asarray(via[0][:2], float); yaw_ = math.atan2(nxt[1] - p_[1], nxt[0] - p_[0])
+            Tv_ = _T3(self.T_mo_now) @ _T3([p_[0], p_[1], yaw_])
+            return [float(Tv_[0, 3]), float(Tv_[1, 3]), math.atan2(Tv_[1, 0], Tv_[0, 0])]
+
+        def _head_pub(self, t, h):
+            self.task_ver += 1
+            d_ = dict(task='heading', ver=self.task_ver, frame='map', stamp=self.now(), t_eff_s=0.5, valid_s=3.0, heading=float(h))   # 不帶速度框 ⇒ 沿用原限制；只取代偏航參考（同原節點變化率限制）
+            self.p_task.publish(String(data=json.dumps(d_)))
+            self._h_last, self._h_pub_t = float(h), t
+
+        def _head_refresh(self, t):
+            if HEAD_OBJ and getattr(self, '_h_last', None) is not None and t - getattr(self, '_h_pub_t', -9.0) >= 0.25:
+                self._head_pub(t, self._h_last)                          # 提前 return 的拍也續期（逾時 ⇒ 任務節點判 lost 停車）
+
+        def _head_update(self, t):
+            """偏航由物件決定（HEAD_OBJ）：未看到物件 ⇒ 朝物件；看到後 ⇒ 本段終點偏航（自段起點偏航依距離進度內插）。"""
+            if not HEAD_OBJ:
+                return
+            Tc_ = _T3(self.T_mo_now) @ _T3(self.b_od_now[:3])                # 目前位姿（地圖）；cur_map 只在開門前段更新，穿門後是舊值（s137d：進度永遠 0、偏航不轉）
+            cur = np.array([float(Tc_[0, 3]), float(Tc_[1, 3]), math.atan2(Tc_[1, 0], Tc_[0, 0])])
+            O = None
+            if PICK and CHAIN and getattr(self, 'chain', 'cyl') == 'cyl' and self.pick_sel is None:
+                O = [float(self._CR.TX), float(self._CR.TY)]                 # 茶几（未估到圓柱前看桌面）
+            elif DRAWER and not self.dr.get('carried') and getattr(self, 'chain', 'cyl') == 'drawer' and HANDLE_VISION and not self.dr.get('pose_vis'):
+                h_ = self._DRR.D.handle_T(0.0)[:3, 3]                       # 抽屜把手先驗（里程≈地圖）
+                O = _T3(self.T_mo_now) @ np.r_[h_[0], h_[1], 0.0, 1.0]; O = [float(O[0]), float(O[1])]
+            elif self.dr.get('carried') and DOOR_CLOSE and self.dc.get('stage') == 'seek':
+                O = list(HEAD_DOOR_C)                                    # 回程：看門扇
+            if O is not None:
+                h = math.atan2(O[1] - cur[1], O[0] - cur[0]); self._hleg = None; mode = 'obj'
+            else:
+                g = self.pick_goal if self.pick_goal is not None else (PICK_PRIOR if getattr(self, 'chain', 'cyl') == 'cyl' else DR_PRIOR)
+                if g is None:
+                    return
+                L = getattr(self, '_hleg', None)
+                d = float(np.hypot(g[0] - cur[0], g[1] - cur[1]))
+                if L is None or float(np.hypot(g[0] - L['g'][0], g[1] - L['g'][1])) > 0.3 or abs((g[2] - L['g'][2] + math.pi) % (2 * math.pi) - math.pi) > 0.3:
+                    L = self._hleg = dict(g=list(g), h0=float(cur[2]), D0=d, p=0.0)
+                    self.event('head_leg', goal=[round(float(x), 3) for x in g], h0=round(float(cur[2]), 3), D0=round(d, 3))
+                L['p'] = max(L['p'], min(max((L['D0'] - d) / max(L['D0'] - HEAD_NEAR, 0.3), 0.0), 1.0))
+                h = L['h0'] + ((float(g[2]) - L['h0'] + math.pi) % (2 * math.pi) - math.pi) * L['p']; mode = 'goal'
+            if getattr(self, '_h_mode', None) != mode:
+                self._h_mode = mode; self.event('head_mode', mode=mode, h=round(h, 3), obj=O)
+            if t - getattr(self, '_h_pub_t', -9.0) >= 0.15:
+                self._head_pub(t, h)
+
+        def _next_via_goal(self, t, g_):
+            """經過線抓取後往下一站的途經點（里程；格點路線）：到 0.35 m 內換下一點；沒了就回原目標。"""
+            via = getattr(self, 'next_via', None)
+            if not via:
+                return g_
+            while via and float(np.hypot(*(self.b_od_now[:2] - np.asarray(via[0][:2], float)))) <= 0.35:
+                self.event('next_via_reached', at=[round(float(x), 3) for x in via[0][:2]], left=len(via) - 1); via.pop(0); self.pass_t = t
+            if not via:
+                return g_
+            p_ = np.asarray(via[0][:2], float)
+            nxt = np.asarray(via[1][:2], float) if len(via) > 1 else np.asarray(g_[:2], float)
+            yaw_ = math.atan2(nxt[1] - p_[1], nxt[0] - p_[0])
             Tv_ = _T3(self.T_mo_now) @ _T3([p_[0], p_[1], yaw_])
             return [float(Tv_[0, 3]), float(Tv_[1, 3]), math.atan2(Tv_[1, 0], Tv_[0, 0])]
 
@@ -1450,6 +1554,7 @@ def main():
                             self.event('pass_costmap_clear_called')
                         else:
                             self.event('pass_costmap_clear_unavailable')
+                self._head_update(t)                                  # 每拍開頭（提前 return 的拍也續期；s137d：續期與更新搶同一計時 ⇒ 只重發第一個偏航）
                 if PASS_CLEAR and self._clr_t is not None and t - self._clr_t < PASS_CLEAR_WAIT_S:
                     return                                            # 等障礙層重新標記（全域代價圖 1 Hz）再送目標
                 g_ = PASS_WP if (PASS_WP is not None and not getattr(self, 'pass_wp_done', False)) else PASS_GOAL
@@ -1460,6 +1565,7 @@ def main():
                 if PICK and CHAIN and getattr(self, 'chain', 'cyl') == 'cyl':   # 串接第一件：茶几圓柱（同 pick_tick；放盒後換抽屜）
                     self.pick_tick(t)
                     g_ = self._via_goal(t, self.pick_goal if self.pick_goal is not None else PICK_PRIOR)
+                    g_ = self._next_via_goal(t, g_)
                 elif PICK and DRAWER:                                 # 開抽屜→取筆→返回（Howard 11/18）
                     self.drawer_tick(t)
                     god_ = self.dr.get('goal_od')
@@ -1470,6 +1576,7 @@ def main():
                             self.event('dr_goal_reconverted', old=[round(float(x), 3) for x in self.pick_goal], new=[round(x, 3) for x in gm_])
                             self.pick_goal = gm_
                     g_ = self.pick_goal if self.pick_goal is not None else DR_PRIOR
+                    g_ = self._next_via_goal(t, g_)
                 elif PICK:                                            # 取物（穿門後不停車）：粗目標＝茶几先驗 → 看到圓柱後線上選抓取底盤位 → 近距送取物封包 → 抬起後回起點
                     self.pick_tick(t)
                     g_ = self._via_goal(t, self.pick_goal if self.pick_goal is not None else PICK_PRIOR)
