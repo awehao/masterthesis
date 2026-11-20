@@ -26,6 +26,7 @@ NPH, PHYS, DT, D_STEPS = P.NPH, P.PHYS, P.DT, P.D_STEPS
 _T3, _log_R, _exp_R = P._T3, P._log_R, P._exp_R
 PHI_GOAL = math.radians(float(os.environ.get('DC_PHI_GOAL_DEG', '2.0')))
 PHI_TOL = math.radians(float(os.environ.get('DC_PHI_TOL_DEG', '1.0')))
+CL_R_TOL = float(os.environ.get('DC_CL_R_TOL', '0.008'))             # 共轉停止軌跡閉鏈半徑容差（m）
 T_SWING_MIN = float(os.environ.get('DC_T_SWING_MIN', '3.0'))          # 共轉時長下限（s）；實際時長在綁定瞬間依輪速／輪加速度上限算（Howard 11/20：不寫死 14 s）
 SWING_V_FRAC, SWING_A_FRAC = float(os.environ.get('DC_SWING_V_FRAC', '0.8')), float(os.environ.get('DC_SWING_A_FRAC', '0.3'))   # 留給追蹤與停止軌跡的餘裕
 UNF_QD = float(os.environ.get('DC_UNF_QD', '0.6'))
@@ -178,6 +179,7 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             return dict(why='setpoint_limit'), 0
         p0 = K.fk(np.asarray(q, float), 'link_tcp')[:3, 3]
         a0 = math.atan2(float(p0[1]), float(p0[0]))
+        r0 = float(np.hypot(p0[0], p0[1]))
         n, prev = 0, None
         for qs in Q:
             if prev is not None and float(np.abs(qs - prev).max()) < 1e-7:
@@ -189,7 +191,10 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             n += 1
             for k in P_.KEYS:
                 self.clear_min[k] = min(self.clear_min[k], float(c[k]))
-            bad = [k for k in P_.KEYS if c[k] < P_.W.THR[k]]
+            bad = [k for k in P_.KEYS if k != 'shell_bar' and c[k] < P_.W.THR[k]]   # 綁定中橫桿與夾爪剛性相連，殼–桿距離恆定，不核（s123d：停止軌跡平移／轉動減速率不同 ⇒ 以位置換算門角時誤報 5 mm）
+            r_dev = abs(float(np.hypot(ps[0], ps[1])) - r0)                 # 閉鏈相容：停止軌跡上夾爪離鉸鏈距離不變（否則綁定與鉸鏈互拉）
+            if r_dev > CL_R_TOL:
+                return dict(why='closure', r_dev_mm=round(r_dev * 1e3, 2)), n
             if bad:
                 return dict(why='clearance', bad=bad, at={k: round(float(c[k]), 4) for k in P_.KEYS}, who={k: str((c.get('who') or {}).get(k)) for k in bad}), n
         return None, n

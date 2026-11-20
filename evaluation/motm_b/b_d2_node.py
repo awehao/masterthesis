@@ -1183,7 +1183,8 @@ def main():
             elif st == 'handle_nav' and DR_PATH:                     # 依導航路徑：早送封包（邊走邊展開），近 PATH_EXT_R 時線上算經過方向／速度
                 hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
                 dd_ = float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float))))
-                rd_ = self._reach_dist(dr['sel'].get('q_grasp') or self.truth['q'][3:9], extra_s=2.0)[0]   # 收臂→展開（關節空間）＋接近
+                q_unf_ = [float(x) for x in os.environ.get('DR_Q_UNFOLD', '-0.0128,-0.0519,0.086,0.0116,-1.6249,-0.0018').split(',')]
+                rd_ = self._reach_dist(q_unf_, extra_s=0.0)[0] + PATH_EXT_R   # 展開（關節空間到展開構型，與控制器同式）要在進到經過計算距離前完成（s122d：展開完已離把手 0.13 m）
                 if dd_ <= rd_:
                     self._dr_send('drawer', dr['sel']['base'], t, T_grasp=dr['sel']['T_grasp'], q_grasp=dr['sel'].get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'), path=True)
                     dr['stage'] = 'path_wait'
