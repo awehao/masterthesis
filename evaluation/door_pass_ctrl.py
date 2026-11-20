@@ -22,6 +22,7 @@ import numpy as np
 
 import door_motm_grasp_ctrl as G
 import yield_side as YS
+YS_DOOR_R = float(os.environ.get('YS_DOOR_R', '1.6'))                # 會車側移不作用的門區半徑（離鉸鏈；里程原點≈鉸鏈）
 if YS.ENABLE:
     YS._load_map()                                                    # 地圖距離場在匯入時建好（不在控制拍內）
 import door_clear_door_fast as CF
@@ -87,6 +88,11 @@ def _exp_R(w):
 def yield_apply(ctrl, qp, X, obs):
     """會車選邊（yield_side；D2_YIELD_SIDE=1 才作用）：只平移導航參考視窗，事件進控制器紀錄。"""
     if not YS.ENABLE:
+        return None
+    if math.hypot(float(qp[0]), float(qp[1])) < YS_DOOR_R:              # s116d：門扇（開著、不在地圖）會被側移撞上 ⇒ 鉸鏈 1.6 m 內不做會車側移（門區有門專屬淨空，CBF 照常擋行人）
+        ys_ = getattr(ctrl, '_ys', None)
+        if ys_ is not None:
+            ys_.lock, ys_.along, ys_.off = None, None, 0.0
         return None
     ys = getattr(ctrl, '_ys', None)
     if ys is None:
