@@ -658,6 +658,16 @@ class TablePickCtrl(P.DoorPassCtrl):
         finally:
             mpc.cfg.u_min, mpc.cfg.u_max = u_min_saved, u_max_saved
         self.wg_log.append((round(self.t, 3), self.phase, round((time.perf_counter() - w0) * 1e3, 2), str(r.status), src, len(obs), int(r.cbf_active), _obs_near(obs, qp)))
+        if self.phase == 'RETURN' and int(r.cbf_active) > 0 and self.t - getattr(self, '_cbfblk_t', -9.0) > 1.0:   # 診斷（Isaac 62：門扇尖端附近被推回 30 s、無事件）：參考在走、輸出幾乎不動 ⇒ 記最近障礙
+            try:
+                vr_ = float(np.linalg.norm(np.asarray(xi[0], float)[:2])); vu_ = float(np.linalg.norm(np.asarray(r.u_opt, float)[:2]))
+                if vr_ > 0.1 and vu_ < 0.05:
+                    self._cbfblk_t = self.t
+                    nb_ = sorted(obs, key=lambda o: math.hypot(float(o['x']) - float(qp[0]), float(o['y']) - float(qp[1])))[:3]
+                    self._ev('ret_cbf_block', q=[round(float(x), 3) for x in qp[:3]], v_ref=round(vr_, 3), u=[round(float(x), 3) for x in np.asarray(r.u_opt, float)[:3]], n_cbf=int(r.cbf_active),
+                             near=[dict(x=round(float(o['x']), 3), y=round(float(o['y']), 3), r=round(float(o.get('radius', 0.0)), 3), m=o.get('margin'), st=bool(o.get('static')), vx=round(float(o.get('vx', 0.0)), 3), vy=round(float(o.get('vy', 0.0)), 3)) for o in nb_])
+            except Exception:                                         # noqa: BLE001
+                pass
         if not np.isfinite(np.asarray(r.u_opt, float)).all():
             return None, 'wgmpc_nonfinite'
         if arm['mode'] == 'hold':

@@ -47,7 +47,7 @@ DR_MOTM_V = float(os.environ['DR_MOTM_V']) if os.environ.get('DR_MOTM_V') else N
 HEAD_OBJ = os.environ.get('HEAD_OBJ', '0') == '1'                   # Howard 11/21「太多原地旋轉了」：穿門後各段偏航不跟路徑前視（路徑一彎就擺），改由物件決定：未看到物件前朝物件（可見性），看到後依剩餘距離平滑轉到本段終點偏航（每段只轉一次）
 HEAD_DOOR_C = [float(x) for x in os.environ.get('HEAD_DOOR_C', '0.5,0.0').split(',')]   # 門口中心（map；回程看門扇）
 HEAD_NEAR = 1.0                                                       # 離終點 ≤ 此距離時已轉完
-HEAD_DOOR_R = float(os.environ.get('HEAD_DOOR_R', '2.0'))            # 回程關門前：門口中心這麼近就不給偏航（原導航行為）
+HEAD_DOOR_R = float(os.environ.get('HEAD_DOOR_R', '0.0'))            # 回程關門前：門口中心這麼近就不給偏航（原導航行為）；s140d：撤了仍在門扇尖端停 6.5 s ⇒ 非偏航造成，預設關
 DR_LINE = os.environ.get('DR_LINE', '0') == '1' and os.environ.get('DR_MOTM_V') is not None   # Howard 11/21「把手要真的移動中抓」：沿櫃面經過線＋邊走邊併線（不等偏航對齊、不停）   # Howard 11/19「門把、抽屜把手都要改」：抽屜把手移動中抓取的經過速度；未設＝停車抓
 DOOR_CLOSE = os.environ.get('D2_DOOR_CLOSE', '0') == '1'             # Howard 11/19 回程關門：抽屜完成後先回臥室側關門，再回起點
 DRAWER_CLOSE = os.environ.get('D2_DRAWER_CLOSE', '0') == '1'         # Howard 11/19「抽屜也要關阿」：筆放盒收臂後夾回把手推回，再返回
