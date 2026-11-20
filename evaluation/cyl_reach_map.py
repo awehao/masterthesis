@@ -175,6 +175,15 @@ def seg_free(p0, p1, margin=0.10, ds=0.05):
     return True
 
 
+def line_scan_ok(b0, e, s_start, s1):
+    """經過線（選線與接近中重核同一式）：[s_start, s1] 離雷射未知點 ≥SCAN_CLEAR；抓後續走 (s1, s1＋LINE_TAIL] ≥SCAN_CLEAR_EXT。"""
+    b0 = np.asarray(b0, float)[:2]; e = np.asarray(e, float)[:2]
+    if not all(scan_free(b0 + s_ * e) for s_ in np.arange(s_start, s1 + 1e-9, 0.1)):
+        return False
+    tail = LINE_TAIL if LINE_MERGE else SCAN_TAIL
+    return all(scan_free(b0 + s_ * e, SCAN_CLEAR_EXT) for s_ in np.arange(s1, s1 + tail + 1e-9, 0.1))
+
+
 def scan_free(b, clear=None):
     if SCAN_PTS is None:
         return True
@@ -365,7 +374,7 @@ MOTM_DS = 0.05
 MOTM_T_ARM = float(os.environ.get('MOTM_T_ARM', '4.0'))              # 手臂自收臂展開到抓取線的最短時間（s73：只剩 2.4 s ⇒ 自身淨空 4.0 mm）
 LINE_MERGE = os.environ.get('PICK_LINE', '0') == '1'                 # 沿桌邊經過線＋邊走邊併線（不原地對齊）；路線起點經格點路線途經點
 LINE_DMIN = float(os.environ.get('PICK_LINE_DMIN', '0.46'))          # 經過線底盤中心離桌邊下限
-LINE_TAIL = float(os.environ.get('PICK_LINE_TAIL', '0.35'))          # 窗口後沿線續走（閉爪後抬升 1.2 s＋確認＋交回導航）要淨空的長度
+LINE_TAIL = float(os.environ.get('PICK_LINE_TAIL', '0.15'))          # 窗口後沿線續走（抬升 1.2 s＋確認 0.3 s 約 0.15 m，之後交導航）要淨空的長度；0.35 時 l5 全見即無線可選
 LINE_W_YAW = float(os.environ.get('PICK_LINE_W_YAW', '0.25'))        # 偏航代價（m/rad）
 
 
@@ -427,7 +436,7 @@ def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=
                 if not base_free(b_start):
                     continue
                 b_end = b[:2] + s1 * e
-                if not all(scan_free(b[:2] + s_ * e) for s_ in np.arange(s_start, s1 + SCAN_TAIL + 1e-9, 0.1)):   # 路線起點→經過→終點後 SCAN_TAIL 都離未知障礙點夠遠（地圖沒有、雷射看得到）
+                if not line_scan_ok(b, e, s_start, s1):                # 路線起點→經過→終點後都離未知障礙點夠遠（地圖沒有、雷射看得到；接近中重核同一式）
                     continue
                 via_, L_ = None, None
                 if LINE_MERGE:

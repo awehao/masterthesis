@@ -1116,9 +1116,10 @@ def main():
                         self._line_scan_t = t
                         self._CR.set_scan_pts(self._scan_pts_od())
                         b0c_ = np.asarray(self.pick_sel['base'], float); ec_ = np.asarray(self.pick_sel['e'], float)
-                        s1c_ = float(PICK_MOTM_V) * float(self._CR.MOTM_T_WIN) + float(self._CR.LINE_TAIL)
-                        blk_ = [round(float(s_), 2) for s_ in np.arange(float(self.pick_sel['s_start']), s1c_ + 1e-9, 0.1) if not self._CR.scan_free(b0c_[:2] + s_ * ec_, float(self._CR.SCAN_CLEAR))]
-                        if blk_:                                          # 經過線被新看到的未知物擋 ⇒ 以最新雷射重新選線（背景執行緒）
+                        s1c_ = float(PICK_MOTM_V) * float(self._CR.MOTM_T_WIN)
+                        blk_ = not self._CR.line_scan_ok(b0c_, ec_, float(self.pick_sel['s_start']), s1c_)   # 與選線同一式（s141d：多核尾段 ⇒ 重選出的線又判被擋、反覆重選）
+                        if blk_ and getattr(self, '_n_resel', 0) < 2:          # 經過線被新看到的未知物擋 ⇒ 以最新雷射重新選線（背景執行緒；至多 2 次）
+                            self._n_resel = getattr(self, '_n_resel', 0) + 1
                             import threading
                             box_ = self._line_resel = dict(done=False)
                             CRr_, c_, b_ = self._CR, np.asarray(self.pick_box['est_od'][:2], float), self.b_od_now.copy()
@@ -1127,7 +1128,7 @@ def main():
                                 box['sel'] = CRr_.select_motm(c_, b_, PICK_MOTM_V, goal_next=np.asarray(DR_PRIOR[:2], float) if CHAIN else None)
                                 box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
                             threading.Thread(target=_rs, daemon=True).start()
-                            self.event('pick_line_blocked', s_blocked=blk_[:6])
+                            self.event('pick_line_blocked', n=self._n_resel)
                             return
                     if dist_ <= PICK_LINE_SEND:
                         import motm_merge as MM_
