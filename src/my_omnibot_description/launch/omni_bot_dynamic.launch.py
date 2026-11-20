@@ -435,7 +435,7 @@ def generate_launch_description():
                           # RAW /scan, not /scan_filtered: the filtered stream
                           # has the confirmed movers masked out, which is
                           # exactly the set this layer must not depend on.
-                          'scan_topic': '/scan',
+                          'scan_topic': os.environ.get('SHIELD_SCAN_TOPIC', '/scan'),   # 回程關門：/scan_shield（door_leaf_scan_mask 綁定期間遮門扇；預設不變）
                           'cmd_in_topic': '/cmd_vel_pre_shield',
                           # 2026-11-12：GUARD=1 且 SHIELD=1 時改為單一串接
                           #   smoother -> /cmd_vel_pre_shield -> shield

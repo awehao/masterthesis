@@ -33,6 +33,7 @@ LIFT_M, T_LIFT = float(os.environ.get('PICK_LIFT_M', '0.05')), 1.2
 T_CARRY = 3.0
 PICK_CARRY = os.environ.get('PICK_CARRY', '1') == '1'                 # Howard 11/18「夾到東西沒有收手臂，伸出來很危險」⇒ 預設收臂（理想連接後收臂不再滑落）
 FACE_DR = [float(x) for x in os.environ.get('B_DR_PRIOR', '-3.5,10.3,3.1416').split(',')] if (os.environ.get('D2_CHAIN') == '1' and os.environ.get('D2_DRAWER') == '1') else None   # 抽屜櫃前粗目標（同監督 DR_PRIOR；地圖≈里程）
+MOTM_TR = float(os.environ.get('MOTM_TR', '1.0'))                   # 進線速度斜坡時間常數（s）
 AIM_K, AIM_MAX, AIM_START_M = float(os.environ.get('DR_AIM_K', '0.1')), float(os.environ.get('DR_AIM_MAX', '0.01')), float(os.environ.get('DR_AIM_START_M', '0.01'))   # 把手瞄準補償：每控制拍增益、上限（m）
 CARRY_V, CARRY_WZ = float(os.environ.get('PICK_CARRY_V', '0.2775')), float(os.environ.get('PICK_CARRY_WZ', '1.1327'))   # 持物底盤速度框（m/s、rad/s）；夾到後理想連接 ⇒ 預設＝硬體上限（不收緊）
 RET_Y_MAX = float(os.environ.get('PICK_RET_Y_MAX', '-2.3'))           # 場景專用：起點 (1.5, −2.8)
@@ -153,16 +154,31 @@ class TablePickCtrl(P.DoorPassCtrl):
             t_a = max(t_a, 1.875 * float(np.abs(np.asarray(self.motm['q_grasp'], float) - np.asarray(q[3:], float)).max()) / 0.6 + 0.5)
         return t_a
 
+    def _line_ready(self, q, b0, e, s_st):
+        """進線條件（Howard 11/20 茶几停頓）：偏航 ≤0.15 rad、離路線側向 ≤5 cm、沿線不超過起點 5 cm（不必停在起點上）。"""
+        d_ = np.asarray(q[:2], float) - np.asarray(b0[:2], float)
+        lat_ = abs(float(d_[0] * -e[1] + d_[1] * e[0]))
+        dyaw_ = abs((float(q[2]) - float(b0[2]) + math.pi) % (2 * math.pi) - math.pi)
+        return dyaw_ <= 0.15 and lat_ <= 0.05 and float(np.dot(d_, e)) <= s_st + 0.05
+
     def _motm_s(self, t_abs):
-        return self.m_s0 + float(self.motm['v_g']) * (t_abs - self.m_t0)
+        tau = max(0.0, t_abs - self.m_t0); v, v0 = float(self.motm['v_g']), float(getattr(self, 'm_v0', 0.0))
+        return self.m_s0 + v * tau - (v - v0) * MOTM_TR * (1.0 - math.exp(-tau / MOTM_TR))   # 速度自進線時實際沿線速度 v0 以 TR 收斂到 v_g（不再階躍 ⇒ 不先追趕後等待）
+
+    def _motm_v(self, t_abs):
+        tau = max(0.0, t_abs - self.m_t0); v, v0 = float(self.motm['v_g']), float(getattr(self, 'm_v0', 0.0))
+        return v - (v - v0) * math.exp(-tau / MOTM_TR)
 
     def _motm_ref(self, t_eff):
         """經過路線參考：底盤沿 e 等速 v_g、朝向固定（全向底盤橫移）；回 (X 視窗, xi 視窗)。"""
         b0, e, v = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float), float(self.motm['v_g'])
         th = float(b0[2]); c_, s_ = math.cos(th), math.sin(th)
-        vb = np.array([c_ * v * e[0] + s_ * v * e[1], -s_ * v * e[0] + c_ * v * e[1], 0.0])   # 世界速度轉本體
         X = [XO.from_xytheta(b0[0] + self._motm_s(t_eff + k * DT) * e[0], b0[1] + self._motm_s(t_eff + k * DT) * e[1], th) for k in range(XO.N + 1)]
-        return X, [vb.copy() for _ in range(XO.N + 1)]
+        xi = []
+        for k in range(XO.N + 1):
+            vk = self._motm_v(t_eff + k * DT)
+            xi.append(np.array([c_ * vk * e[0] + s_ * vk * e[1], -s_ * vk * e[0] + c_ * vk * e[1], 0.0]))   # 世界速度轉本體（含進線速度斜坡）
+        return X, xi
 
     def _motm_qpost(self, t_abs):
         u = XE.minjerk(min(max((t_abs - self.m_t0) / max(self.T_app - T_SETTLE, 1e-6), 0.0), 1.0))[0]
@@ -196,14 +212,15 @@ class TablePickCtrl(P.DoorPassCtrl):
             b_st = np.array([b0[0] + s_st * e[0], b0[1] + s_st * e[1], float(b0[2])])
             dyaw_ = abs((float(q[2]) - float(b0[2]) + math.pi) % (2 * math.pi) - math.pi)
             dpos_ = float(np.hypot(*(np.asarray(q[:2], float) - b_st[:2])))
-            if dyaw_ > 0.10 or dpos_ > 0.04:
+            if not self._line_ready(q, b0, e, s_st):
                 self.b_anchor = b_st
                 self._goto('ALIGN', dyaw=round(dyaw_, 3), dpos=round(dpos_, 3), s_start=round(s_st, 3))
                 return
         if self.phase == 'ALIGN':
             dyaw_ = abs((float(q[2]) - float(self.b_anchor[2]) + math.pi) % (2 * math.pi) - math.pi)
             dpos_ = float(np.hypot(*(np.asarray(q[:2], float) - self.b_anchor[:2])))
-            if dyaw_ <= 0.10 and dpos_ <= 0.04:
+            b0_, e_ = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)
+            if self._line_ready(q, b0_, e_, float(np.dot(self.b_anchor[:2] - b0_[:2], e_))):
                 self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
                 self._goto('APPROACH', aligned_s=round(self.t - self.t_ph0, 2))
             elif self.t - self.t_ph0 > 15.0:
@@ -214,7 +231,9 @@ class TablePickCtrl(P.DoorPassCtrl):
             self.m_s0 = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10,
                             -float(self.motm['v_g']) * self._motm_t_arm(q))   # 手臂展開至少 t_arm（s73）
             self.m_t0 = self.t
-            self.T_app = (0.0 - self.m_s0) / float(self.motm['v_g'])
+            cq_, sq_ = math.cos(float(q[2])), math.sin(float(q[2])); up_ = np.asarray(self.u_prev[:2], float)
+            self.m_v0 = float(np.clip(np.dot(np.array([cq_ * up_[0] - sq_ * up_[1], sq_ * up_[0] + cq_ * up_[1]]), e), 0.0, float(self.motm['v_g'])))   # 進線時已有的沿線速度
+            self.T_app = (0.0 - self.m_s0 + (float(self.motm['v_g']) - self.m_v0) * MOTM_TR) / float(self.motm['v_g'])   # 斜坡下經過 s＝0 的時刻（e^{-T/TR} 項可忽略）
             self.T_b, self.t_l0 = max(1.0, self.T_app - 1.5), max(0.5, self.T_app - 2.5)
             if self.motm.get('q_grasp') is not None and MOTM_W_Q > 0.0:   # 底盤經過 s＝0 時恰在選位底盤位 ⇒ 選位抓取解即該時刻構型
                 self.q_m0, self.q_mg = np.asarray(q[3:], float).copy(), np.asarray(self.motm['q_grasp'], float)

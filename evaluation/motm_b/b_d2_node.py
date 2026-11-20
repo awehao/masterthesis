@@ -34,6 +34,7 @@ PICK = os.environ.get('D2_PICK', '0') == '1'                          # 穿門�
 PICK_PRIOR = [float(x) for x in os.environ.get('B_PICK_PRIOR', '0.55,2.30,0.0').split(',')]   # 茶几先驗粗目標（map；茶几西側，面向桌）
 PICK_RETURN = [float(x) for x in os.environ.get('B_PICK_RETURN', '1.5,-2.8,1.5708').split(',')]   # 返回＝起點
 PICK_APP_DIST, PICK_T_MIN = float(os.environ.get('B_PICK_APP_DIST', '0.6')), float(os.environ.get('B_PICK_T_MIN', '4.0'))
+PICK_MOTM_EARLY = float(os.environ.get('B_PICK_MOTM_EARLY', '1.0'))   # 移動中夾取提早送封包距離（直線淨空時）
 DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 11/18：開門→開抽屜→取筆→返回（需同時 D2_PICK＝1：沿用取物管線）
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
@@ -645,6 +646,8 @@ def main():
             self.create_subscription(Twist, '/cmd_vel_nav_raw', self._nav_in, 20)
             self.create_subscription(Twist, '/cmd_vel_grasp', self._grasp_in, 20)
             self.p_ho = self.create_publisher(String, '/far/handover', 10)
+            self.p_mask = self.create_publisher(String, '/shield/door_mask', 10)   # 回程關門綁定共轉：給 door_leaf_scan_mask 的門扇線段（底盤座標）
+            self.mask_on = False
             self.create_subscription(Twist, '/cmd_vel', self._rel, 20)
             self.create_subscription(Float64MultiArray, '/far/truth', self._truth, 20)
             self.create_subscription(Float64MultiArray, '/far/handle_obs', self._obs, 20)
@@ -806,6 +809,25 @@ def main():
             self.leaf_obs.append((float(d[1]), float(d[6])))
             self.leaf_obs = self.leaf_obs[-30:]
 
+        def _pub_leaf_mask(self, b_od, q_arm):
+            """門扇線段（底盤座標）：鉸鏈→夾爪（綁定中夾爪在把手上）方向，長度到門扇末端（≥0.95＋0.05）。"""
+            try:
+                dg = getattr(self, '_dgeom', None) or self._door_geom_od()
+                self._dgeom = dg
+                if dg is None or self._CR is None:
+                    return
+                c_, s_ = math.cos(float(b_od[2])), math.sin(float(b_od[2]))
+                d_ = np.asarray(dg['hinge'], float) - np.asarray(b_od[:2], float)
+                h_b = np.array([c_ * d_[0] + s_ * d_[1], -s_ * d_[0] + c_ * d_[1]])
+                tcp_b = self._CR.K.fk(np.r_[np.zeros(3), np.asarray(q_arm, float)], 'link_tcp')[:2, 3]
+                u_ = tcp_b - h_b; L_ = float(np.linalg.norm(u_))
+                if L_ < 0.2:
+                    return
+                e_b = h_b + u_ / L_ * max(L_ + 0.15, 1.0)
+                self.p_mask.publish(String(data=json.dumps(dict(active=True, seg=[float(h_b[0]), float(h_b[1]), float(e_b[0]), float(e_b[1])], t=time.time()))))
+            except Exception as e_:                                   # noqa: BLE001
+                self.event('shield_leaf_mask_error', err=repr(e_)[:120])
+
         def _scan_in(self, m):
             self.last_scan = (np.asarray(m.ranges, float), float(m.angle_min), float(m.angle_increment))
 
@@ -942,6 +964,10 @@ def main():
                         self.door_end = dict(b=np.asarray(d_['base_end'], float), phi=math.radians(float(d_['phi_end_deg'])))
                 except Exception:                                      # noqa: BLE001
                     pass
+            if '"phase": "SWING"' in m.data and getattr(self, 'dc', None) is not None:   # 共轉開始 ⇒ Shield 雷射遮門扇（Howard 11/20 選 b）
+                self.mask_on = True; self.event('shield_leaf_mask', on=True)
+            if self.mask_on and ('"phase": "UNBIND"' in m.data or '"what": "pick_stop"' in m.data):
+                self.mask_on = False; self.event('shield_leaf_mask', on=False)
             if '"what": "pick_door_closed"' in m.data:
                 self.dc['closed'] = True
             if '"what": "pick_stowed"' in m.data and self.dc.get('closed'):
@@ -990,7 +1016,8 @@ def main():
                 if mv_ is None or float(np.hypot(*(self.b_od_now[:2] - mv_[0][:2]))) > 0.005 or abs(float(self.b_od_now[2] - mv_[0][2])) > 0.01:
                     self._m_still = (self.b_od_now.copy(), t); mv_ = self._m_still
                 still_ = t - mv_[1] >= 1.5
-                if dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or (still_ and dist_ <= 0.5)):   # s75：距離備用在偏航差 3.3 rad 放行 ⇒ 掉頭擦桌角 ⇒ 移動中夾取只用偏航或靜止備用
+                early_ = dist_ <= PICK_MOTM_EARLY and self._CR is not None and self._CR.seg_free(self.b_od_now, bs_)   # Howard 11/20「茶几停頓」：近 1 m 且直線到路線起點淨空 ⇒ 提早送封包，對齊段邊走邊轉（不再到點停 2 s＋原地轉 180°）
+                if early_ or dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or (still_ and dist_ <= 0.5)):   # s75：距離備用在偏航差 3.3 rad 放行 ⇒ 掉頭擦桌角 ⇒ 移動中夾取只用偏航或靜止備用
                     Tg_od = np.asarray(self.pick_sel['T_grasp'], float)
                     Tg_od[2, 3] = float(self.pick_box['est_od'][2])
                     b0_ = [float(x) for x in self.pick_sel['base']]
@@ -1269,6 +1296,8 @@ def main():
             q = np.r_[b_od, self.truth['q'][3:9]]
             self.b_od_now = np.asarray(b_od, float).copy()
             self.T_mo_now = T_mo
+            if getattr(self, 'mask_on', False):
+                self._pub_leaf_mask(b_od, self.truth['q'][3:9])
             T_ref = self.T_ref if getattr(self, 'T_ref', None) is not None else T_mo
             c, s_ = math.cos(T_ref[2]), math.sin(T_ref[2])
             self.cur_map = np.r_[c * b_od[0] - s_ * b_od[1] + T_ref[0], s_ * b_od[0] + c * b_od[1] + T_ref[1], b_od[2] + T_ref[2]]

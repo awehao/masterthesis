@@ -77,6 +77,21 @@ def set_scan_pts(P):
     return 0 if SCAN_PTS is None else len(SCAN_PTS)
 
 
+def seg_free(p0, p1, margin=0.10, ds=0.05):
+    """底盤圓（半徑 RB＋margin）沿直線 p0→p1 不碰登錄方盒、也離雷射未知點 ≥SCAN_CLEAR（全向底盤原地轉不改變圓形佔據）。"""
+    p0, p1 = np.asarray(p0, float)[:2], np.asarray(p1, float)[:2]
+    n = max(2, int(math.ceil(float(np.linalg.norm(p1 - p0)) / ds)) + 1)
+    for u in np.linspace(0.0, 1.0, n):
+        p = p0 + u * (p1 - p0)
+        for cc, s in BOXES:
+            dx = max(abs(p[0] - cc[0]) - s[0] / 2, 0.0); dy = max(abs(p[1] - cc[1]) - s[1] / 2, 0.0)
+            if math.hypot(dx, dy) < RB + margin:
+                return False
+        if not scan_free(p):
+            return False
+    return True
+
+
 def scan_free(b):
     if SCAN_PTS is None:
         return True

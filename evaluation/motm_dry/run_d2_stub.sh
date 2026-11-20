@@ -23,6 +23,10 @@ for i in $(seq 240); do grep -q "world_ready" "$OUT.world.log" 2>/dev/null && br
 grep -q "world_ready" "$OUT.world.log" || { echo "世界節點未就緒"; exit 3; }
 setsid taskset -c "${STUB_CPUS:-0,8,1,9}" $PYS -u evaluation/motm_dry/stub_isaac_d2.py "$OUT" "$TEND" > "$OUT.stub.log" 2>&1 < /dev/null & PIDS+=( $! )
 sleep 3
+if [ "${D2_DOOR_CLOSE:-0}" = "1" ]; then                      # 回程關門：Shield 改吃 /scan_shield（綁定共轉期間遮門扇；Howard 11/20 選 b）
+  export SHIELD_SCAN_TOPIC=/scan_shield
+  setsid taskset -c "${SUP_CPUS:-3,11}" $PYS -u evaluation/door_leaf_scan_mask.py > "$OUT.mask.log" 2>&1 < /dev/null & PIDS+=( $! )
+fi
 NO_GZ=1 BIGARENA=1 SCENE="${M8_MAP:-mission_house_m8}" NO_TRAFFIC=1 HEADING=1 GUARD=1 SHIELD=1 GMPC_TASK=1 GMPC_CMD_TOPIC=cmd_vel_nav_raw SPAWN_X="$SSX" SPAWN_Y="$SSY" \
   setsid taskset -c "${NAV_CPUS:-2,10,7,15}" ros2 launch my_omnibot_description omni_bot_dynamic.launch.py gui:=false use_arm:=true > "$OUT.launch.log" 2>&1 < /dev/null & PIDS+=( $! )
 sleep 15
