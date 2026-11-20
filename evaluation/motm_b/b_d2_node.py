@@ -930,11 +930,15 @@ def main():
                 b_c = dc['b_c']
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - b_c[:2])))
                 dyaw_ = abs((float(self.b_od_now[2]) - float(b_c[2]) + math.pi) % (2 * math.pi) - math.pi)
-                if dist_ <= PICK_APP_DIST and (dyaw_ <= 0.30 or dist_ <= 0.15):
+                st_ = dc.get('still')                                     # 靜止判定（2 s 內移動 <2 cm）
+                if st_ is None or float(np.hypot(*(self.b_od_now[:2] - st_[1][:2]))) > 0.02:
+                    dc['still'] = st_ = (t, self.b_od_now.copy())
+                still_ = t - st_[0] >= 2.0
+                if (dist_ <= PICK_APP_DIST and (dyaw_ <= 0.30 or dist_ <= 0.15)) or (still_ and dist_ <= 1.0):   # Isaac 51：站位緊貼開著的門扇，導航停在 PICK_APP_DIST 外不再前進 ⇒ 靜止 2 s 且 1 m 內也送（全身控制器收斂，門專屬淨空核對照舊；Howard 11/20 時機由狀態決定）
                     ph = self._leaf_fuse(t) or dc['phi_c']                # 送封包時以最新融合門角
                     self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=dict(kind='door_close', door=self._door_geom_od(), phi_c=float(ph), base_goal=[float(x) for x in b_c], T=max(PICK_T_MIN, dist_ / 0.12 + 2.0), T_b=2.5, t_l0=1.5)))))
                     dc['stage'] = 'closing'
-                    self.event('door_close_app_sent', phi_deg=round(math.degrees(ph), 3), dist=round(dist_, 3))
+                    self.event('door_close_app_sent', phi_deg=round(math.degrees(ph), 3), dist=round(dist_, 3), dyaw=round(dyaw_, 3), still=bool(still_))
                 return True
             if dc['stage'] == 'closing':
                 return not dc.get('done')
