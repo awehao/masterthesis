@@ -1127,6 +1127,17 @@ def main():
                         self.pick_goal, self.pick_via, self.pass_t = list(DR_PRIOR), [], t
                         self.next_via = [list(p_) for p_ in (self.pick_sel.get('via_next') or [])]   # 抓完後到下一站的格點路線途經點（s135d：Smac 自經過線終點繞回東邊）
                         self.event('pick_line_next_goal', goal=DR_PRIOR, via_next=self.next_via)
+                        import threading
+                        CR_, P_, be_, c_ = self._CR, self._scan_pts_od(), np.asarray(self.pick_sel.get('b_end', self.pick_sel['base'][:2]), float), np.asarray(self.pick_box['est_od'][:2], float)
+                        def _rv(self=self):                             # Isaac 61：選線時雷射被茶几擋、沒看到 unknown_l5 ⇒ 途經點貼箱 0.1 m、導航卡住 ⇒ 送封包當下（已在桌角外、看得到）以最新雷射重算
+                            try:
+                                CR_.set_scan_pts(P_)
+                                F_ = CR_.route_field(np.asarray(DR_PRIOR[:2], float), c_)
+                                v_ = CR_.route_via(F_, be_[:2])
+                                self._next_via_new = [] if v_ is None else [list(p_) for p_ in v_[::-1]]
+                            except Exception as e_:                    # noqa: BLE001
+                                self._next_via_new = None; self._next_via_err = repr(e_)[:120]
+                        threading.Thread(target=_rv, daemon=True).start()
                 return
             if self.pick_sel is not None and self.pick_app_t is None:
                 b_ = np.asarray(self.pick_sel['base'], float)          # 里程座標
@@ -1400,11 +1411,27 @@ def main():
 
         def _next_via_goal(self, t, g_):
             """經過線抓取後往下一站的途經點（里程；格點路線）：到 0.35 m 內換下一點；沒了就回原目標。"""
+            nv_ = getattr(self, '_next_via_new', 'pending')
+            if nv_ != 'pending':                                     # 送封包時以最新雷射重算的途經點到了 ⇒ 取代
+                self._next_via_new = 'pending'
+                if nv_ is not None:
+                    self.next_via = nv_; self.event('next_via_recomputed', via_next=nv_)
+                else:
+                    self.event('next_via_recompute_failed', err=getattr(self, '_next_via_err', None))
             via = getattr(self, 'next_via', None)
             if not via:
                 return g_
+            P_ = self._scan_pts_od()
+            if P_ is not None and len(P_):                           # 途經點離目前雷射點（未知物、行人、牆）<0.42 ⇒ 丟掉，交原導航自己規劃
+                Pk_ = np.asarray(P_, float)
+                while via and float(np.min(np.hypot(Pk_[:, 0] - via[0][0], Pk_[:, 1] - via[0][1]))) < 0.42:
+                    self.event('next_via_dropped', at=[round(float(x), 3) for x in via[0][:2]]); via.pop(0); self.pass_t = t
+                if not via:
+                    return g_
             while via and float(np.hypot(*(self.b_od_now[:2] - np.asarray(via[0][:2], float)))) <= 0.35:
                 self.event('next_via_reached', at=[round(float(x), 3) for x in via[0][:2]], left=len(via) - 1); via.pop(0); self.pass_t = t
+            if via and (self.path_t is None or self.path_t < self.pass_t) and t - self.pass_t > 4.0:   # Isaac 61：途經點在膨脹區內 ⇒ Smac 無路徑、導航原地等 545 s ⇒ 4 s 沒有新路徑就丟掉這個途經點
+                self.event('next_via_no_path', at=[round(float(x), 3) for x in via[0][:2]]); via.pop(0); self.pass_t = t
             if not via:
                 return g_
             p_ = np.asarray(via[0][:2], float)
