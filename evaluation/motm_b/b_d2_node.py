@@ -34,10 +34,7 @@ PICK = os.environ.get('D2_PICK', '0') == '1'                          # 穿門�
 PICK_PRIOR = [float(x) for x in os.environ.get('B_PICK_PRIOR', '0.55,2.30,0.0').split(',')]   # 茶几先驗粗目標（map；茶几西側，面向桌）
 PICK_RETURN = [float(x) for x in os.environ.get('B_PICK_RETURN', '1.5,-2.8,1.5708').split(',')]   # 返回＝起點
 PICK_APP_DIST, PICK_T_MIN = float(os.environ.get('B_PICK_APP_DIST', '0.6')), float(os.environ.get('B_PICK_T_MIN', '4.0'))
-PICK_MOTM_EARLY = float(os.environ.get('B_PICK_MOTM_EARLY', '1.0'))
-PICK_PASS = os.environ.get('PICK_PASS', '1') == '1'                   # 順路經過（無預設路線起點、無對齊）
-PICK_PASS_APP = float(os.environ.get('PICK_PASS_APP', '1.3'))         # 離抓取位多遠送封包（m）
-PASS_PRE = float(os.environ.get('PASS_PRE', '0.4'))                   # 導航目標設在抓取位前多遠（沿經過方向）   # 移動中夾取提早送封包距離（直線淨空時）
+PICK_MOTM_EARLY = float(os.environ.get('B_PICK_MOTM_EARLY', '1.0'))   # 移動中夾取提早送封包距離（直線淨空時）
 DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 11/18：開門→開抽屜→取筆→返回（需同時 D2_PICK＝1：沿用取物管線）
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
@@ -831,18 +828,6 @@ def main():
             except Exception as e_:                                   # noqa: BLE001
                 self.event('shield_leaf_mask_error', err=repr(e_)[:120])
 
-        def _pass_pick(self, cands, xy, mvd=None):
-            """順路經過（Howard 11/20 不要預設 line）：在各方向候選中選「目前位置在抓取位之前最遠／順著來向」者；回 (候選, 導航目標＝抓取位前 PASS_PRE)。"""
-            best_, bsc_ = None, None
-            for c_ in cands:
-                e_ = np.asarray(c_['e'], float); b0c_ = np.asarray(c_['base'], float)
-                proj_ = float(np.dot(np.asarray(xy, float)[:2] - b0c_[:2], e_))
-                sc_ = proj_ - (float(np.dot(mvd, e_)) if mvd is not None else 0.0)
-                if bsc_ is None or sc_ < bsc_:
-                    best_, bsc_ = c_, sc_
-            e_ = np.asarray(best_['e'], float); b0c_ = np.asarray(best_['base'], float)
-            return best_, [float(b0c_[0] - PASS_PRE * e_[0]), float(b0c_[1] - PASS_PRE * e_[1]), float(b0c_[2])]
-
         def _scan_in(self, m):
             self.last_scan = (np.asarray(m.ranges, float), float(m.angle_min), float(m.angle_increment))
 
@@ -1020,32 +1005,9 @@ def main():
                 if sel is None:
                     self.event('pick_unreachable', c_map=[round(float(x), 4) for x in self.pick_box['c_map']], ms=round(self.pick_box['ms'], 1))
                     self.abort('pick_unreachable'); return
-                g_pass_ = None
-                if PICK_MOTM_V is not None and PICK_PASS:
-                    _, g_pass_ = self._pass_pick([sel] + list(sel.get('alts', [])), self.b_od_now)
-                Tbm_ = _T3(self.T_mo_now) @ _T3(g_pass_ if g_pass_ is not None else (sel['base_start'] if PICK_MOTM_V is not None else sel['base']))   # 順路經過：導航目標＝抓取位前 0.4 m（依目前來向側），不設路線起點   # 選位結果（里程）→ 地圖（只給 Smac）；移動中夾取＝路線起點
+                Tbm_ = _T3(self.T_mo_now) @ _T3(sel['base_start'] if PICK_MOTM_V is not None else sel['base'])   # 選位結果（里程）→ 地圖（只給 Smac）；移動中夾取＝路線起點
                 self.pick_sel = sel; self.pick_goal = [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]; self.pass_t = t
                 self.event('pick_goal', base=[round(float(x), 4) for x in sel['base']], side=sel['side'], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4), ms=round(self.pick_box['ms'], 1))
-            if self.pick_sel is not None and self.pick_app_t is None and PICK_MOTM_V is not None and PICK_PASS:   # Howard 11/20「不要這個 line」：順路經過，方向由實際來向決定、不對齊不停
-                hist_ = getattr(self, '_xy_hist', [])
-                hist_.append((t, self.b_od_now[:2].copy())); hist_ = [h for h in hist_ if t - h[0] <= 1.0]; self._xy_hist = hist_
-                b0s_ = np.asarray(self.pick_sel['base'], float)
-                dist_ = float(np.hypot(*(self.b_od_now[:2] - b0s_[:2])))
-                if dist_ <= PICK_PASS_APP:
-                    mvd_ = hist_[-1][1] - hist_[0][1]
-                    if float(np.linalg.norm(mvd_)) < 0.05:
-                        mvd_ = b0s_[:2] - self.b_od_now[:2]
-                    mvd_ = mvd_ / max(float(np.linalg.norm(mvd_)), 1e-9)
-                    best_, _ = self._pass_pick([self.pick_sel] + list(self.pick_sel.get('alts', [])), self.b_od_now, mvd_)
-                    Tg_od = np.asarray(best_['T_grasp'], float)
-                    Tg_od[2, 3] = float(self.pick_box['est_od'][2])
-                    b0_ = [float(x) for x in best_['base']]
-                    app = dict(T_grasp=Tg_od.tolist(), base_goal=b0_, T=4.0, T_b=2.5, t_l0=1.5,
-                               motm=dict(b0=b0_, e=[float(x) for x in best_['e']], v_g=float(PICK_MOTM_V), s0=float(self._CR.MOTM_S0), t_arm=float(self._CR.MOTM_T_ARM), q_grasp=[float(x) for x in best_['q']], no_align=True))
-                    self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=app))))
-                    self.pick_app_t = t
-                    self.event('pick_app_sent', dist=round(dist_, 3), mode='pass', motion_dir=[round(float(x), 3) for x in mvd_], motm=app['motm'])
-                return
             if self.pick_sel is not None and self.pick_app_t is None and PICK_MOTM_V is not None:   # 移動中夾取：近路線起點即送封包（底盤由控制器沿路線帶過抓取位，不停）
                 bs_ = np.asarray(self.pick_sel['base_start'], float)
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - bs_[:2])))
@@ -1152,11 +1114,7 @@ def main():
                 if sel is None:
                     self.event('dr_handle_unreachable', err=dr['box'].get('err')); self.abort('drawer_handle_unreachable'); return
                 dr.update(stage='handle_nav', sel=sel, box=None)
-                if DR_MOTM_V is not None and PICK_PASS:
-                    sel_p_, g_od_ = self._pass_pick([sel] + list(sel.get('alts', [])), self.b_od_now)
-                    sel = dict(sel_p_, alts=sel.get('alts', []), flip=sel_p_.get('flip', sel.get('flip')), sigma_min=sel_p_.get('sigma_min', sel.get('sigma_min')))
-                else:
-                    g_od_ = sel['base_start'] if DR_MOTM_V is not None else sel['base']   # 移動中：導航到經過路線起點
+                g_od_ = sel['base_start'] if DR_MOTM_V is not None else sel['base']   # 移動中：導航到經過路線起點
                 self.pick_goal, self.pass_t = self._dr_goal(g_od_), t
                 dr['goal_od'] = list(g_od_)
                 self.event('dr_handle_goal', base=[round(float(x), 4) for x in sel['base']], start=[round(float(x), 4) for x in g_od_], flip=sel['flip'], sigma_min=round(sel['sigma_min'], 4),
@@ -1167,17 +1125,10 @@ def main():
                 bs_ = np.asarray(dr['sel']['base_start'], float)
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - bs_[:2])))
                 dyaw_ = abs((float(self.b_od_now[2]) - float(bs_[2]) + math.pi) % (2 * math.pi) - math.pi)
-                if PICK_PASS:                                            # 順路經過：近抓取位 1.3 m 即送封包，方向依來向（不對齊、不停）
-                    b0d_ = np.asarray(dr['sel']['base'], float)
-                    if float(np.hypot(*(self.b_od_now[:2] - b0d_[:2]))) <= PICK_PASS_APP:
-                        sel = dr['sel']
-                        self._dr_send('drawer', b0d_, t, T_grasp=sel['T_grasp'], q_grasp=sel.get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'),
-                                      motm=dict(b0=[float(x) for x in sel['base']], e=[float(x) for x in sel['e']], v_g=float(DR_MOTM_V), s0=float(self._DRM.S0), t_arm=float(sel['t_arm']), tau=float(sel['tau']), q_grasp=sel.get('q_grasp'), no_align=True))
-                        dr['stage'] = 'wait_release'
                 mv_ = getattr(self, '_dr_still', None)
                 if mv_ is None or float(np.hypot(*(self.b_od_now[:2] - mv_[0][:2]))) > 0.005 or abs(float(self.b_od_now[2] - mv_[0][2])) > 0.01:
                     self._dr_still = (self.b_od_now.copy(), t); mv_ = self._dr_still
-                if not PICK_PASS and dist_ <= PICK_APP_DIST and (dyaw_ <= DR_APP_DYAW or (t - mv_[1] >= 1.5 and dist_ <= 0.5)):
+                if dist_ <= PICK_APP_DIST and (dyaw_ <= DR_APP_DYAW or (t - mv_[1] >= 1.5 and dist_ <= 0.5)):
                     sel = dr['sel']
                     self._dr_send('drawer', bs_, t, T_grasp=sel['T_grasp'], q_grasp=sel.get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'),
                                   motm=dict(b0=[float(x) for x in sel['base']], e=[float(x) for x in sel['e']], v_g=float(DR_MOTM_V), s0=float(self._DRM.S0), t_arm=float(sel['t_arm']), tau=float(sel['tau']), q_grasp=sel.get('q_grasp')))

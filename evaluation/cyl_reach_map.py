@@ -202,7 +202,7 @@ def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=
     """移動中夾取（Howard 11/19「茶几那個要移動中夾取 我要做整體速度最佳」）選位：底盤朝向面桌、沿桌邊以 v_g 橫移經過抓取底盤位 b0。
     同一個世界固定抓取位姿 T_grasp（接近軸＝b0→圓柱），沿路線 s∈[MOTM_S0, v_g·MOTM_T_WIN] 每 5 cm 都要 IK（同分支連續）＋控制器同一份淨空＋不壓桌面；
     s＝0 另核預抓（後退 PRE）。方向 e 兩向都試；評分＝到路線起點距離＋σ 懲罰＋（有下一目標時）e 背離下一目標的懲罰。回 dict 或 None。"""
-    c = np.asarray(c_xy, float); best = None; by_dir = {}
+    c = np.asarray(c_xy, float); best = None
     s1 = float(v_g) * MOTM_T_WIN
     ss = np.round(np.arange(MOTM_S0, s1 + 1e-9, MOTM_DS), 4)
     for side, d, lat, b in candidates(c):
@@ -238,18 +238,11 @@ def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=
                 cost = w_dist * float(np.hypot(*(b_start[:2] - np.asarray(b_now[:2], float)))) + w_sig / max(min(fwd[0], bwd[0]), 1e-6)
                 if goal_next is not None:                              # 整體路程（s75：方向偏好權重太小 ⇒ 選了背離抽屜的方向）：到起點＋終點到下一目標（直線近似）
                     cost += w_dist * float(np.hypot(*(b_end - np.asarray(goal_next[:2], float))))
-                cand_ = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), e=e.tolist(), flip=bool(fl), v_g=float(v_g), s_start=float(s_start),
-                             base_start=b_start.tolist(), sigma_min=float(min(fwd[0], bwd[0])), cost=cost, q=g[0].tolist(), T_grasp=Tg.tolist())
-                k_ = (side, int(sg))
-                if k_ not in by_dir or cost < by_dir[k_]['cost']:
-                    by_dir[k_] = cand_                                   # 每（面桌邊、方向）留最佳：送封包時依實際來向選（Howard 11/20 不要預設路線）
                 if best is None or cost < best['cost']:
                     best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), e=e.tolist(), flip=bool(fl), v_g=float(v_g), s_start=float(s_start),
                                 base_start=b_start.tolist(), sigma_min=float(min(fwd[0], bwd[0])), env_min=float(min(fwd[1], bwd[1])), base_clear_min=float(min(fwd[2], bwd[2])),
                                 s_range=[float(ss[0]), float(ss[-1])], t_arm=MOTM_T_ARM, cost=cost, q=g[0].tolist(), T_grasp=Tg.tolist())
                 break
-    if best is not None:
-        best['alts'] = [v_ for v_ in by_dir.values() if v_['e'] != best['e'] or v_['side'] != best['side']]
     return best
 
 
