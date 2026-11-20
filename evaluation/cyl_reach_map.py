@@ -64,6 +64,8 @@ def base_free(b):
 
 SCAN_PTS = None                                                       # 目前雷射看到、但不在場景登錄（地圖）裡的點（里程座標 N×2）；None＝只看地圖
 SCAN_CLEAR = float(os.environ.get('CYL_SCAN_CLEAR', '0.42'))
+APPROACH_CLEAR = float(os.environ['CYL_APPROACH_CLEAR']) if os.environ.get('CYL_APPROACH_CLEAR') else (0.15 if os.environ.get('PICK_PATH') == '1' else None)   # 選站位：目前位置直線到站位的底盤淨空
+APPROACH_PEN = float(os.environ.get('CYL_APPROACH_PEN', '2.0'))
 PATH_BASE_MARGIN = float(os.environ.get('PATH_BASE_MARGIN', '0.12'))   # 經過段底盤離家具（控制器門檻 0.10＋餘裕）
 SCAN_CLEAR_EXT = float(os.environ.get('CYL_SCAN_CLEAR_EXT', '0.36'))   # 經過段（機器人已在附近）：Shield 半徑 0.30＋d0 0.05＋0.01（選位用較保守的 SCAN_CLEAR；s113d 目前位置就 <0.42 ⇒ 誤判整段不可行）
 SCAN_TAIL = float(os.environ.get('CYL_SCAN_TAIL', '0.0'))           # 閉爪窗之後沿線再核的長度（抬起後轉交導航）         # 底盤中心離未知點至少（底盤半徑 0.30＋0.15）：Isaac 第三十二趟路線起點離 unknown_l5 角 0.2 m ⇒ Shield 擋住對齊
@@ -248,6 +250,8 @@ def select(c_xy, b_now, w_dist=1.0, w_sig=0.02):
             if gp is None or not clear_ok(b, gp[0])[0]:
                 continue
             cost = w_dist * float(np.hypot(*(b[:2] - np.asarray(b_now[:2], float)))) + w_sig / max(float(g[2]), 1e-6)
+            if APPROACH_CLEAR is not None and not seg_free(np.asarray(b_now, float), b, margin=APPROACH_CLEAR):
+                cost += APPROACH_PEN                                     # Isaac 40：直線到站位要繞桌角 ⇒ 導航貼角、底盤淨空觸 0.10 停 ⇒ 偏好可直接接近的站位
             if best is None or cost < best['cost']:
                 best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), flip=bool(fl), sigma_min=float(g[2]), cost=cost, q=g[0].tolist(), T_grasp=grasp_T(c, a, fl).tolist())
             break
