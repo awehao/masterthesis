@@ -36,7 +36,9 @@ PICK_RETURN = [float(x) for x in os.environ.get('B_PICK_RETURN', '1.5,-2.8,1.570
 PICK_APP_DIST, PICK_T_MIN = float(os.environ.get('B_PICK_APP_DIST', '0.6')), float(os.environ.get('B_PICK_T_MIN', '4.0'))
 PICK_MOTM_EARLY = float(os.environ.get('B_PICK_MOTM_EARLY', '1.0'))
 PICK_PATH = os.environ.get('PICK_PATH', '0') == '1'                    # 依導航路徑的移動中抓取（Howard 11/20 不要預設路線）
-PICK_PATH_APP, PATH_EXT_R = float(os.environ.get('PICK_PATH_APP', '1.3')), float(os.environ.get('PATH_EXT_R', '0.7'))   # 移動中夾取提早送封包距離（直線淨空時）
+PICK_PATH_APP, PATH_EXT_R = float(os.environ.get('PICK_PATH_APP', '1.3')), float(os.environ.get('PATH_EXT_R', '0.7'))
+DR_PATH = os.environ.get('DR_PATH', '0') == '1'                        # 抽屜把手依導航路徑的移動中抓取
+DR_PATH_APP = float(os.environ.get('DR_PATH_APP', '2.5'))             # 抽屜：早送封包（收臂→展開要 ~7 s，邊走邊展開）   # 移動中夾取提早送封包距離（直線淨空時）
 DRAWER = os.environ.get('D2_DRAWER', '0') == '1'                      # Howard 11/18：開門→開抽屜→取筆→返回（需同時 D2_PICK＝1：沿用取物管線）
 CHAIN = DRAWER and os.environ.get('D2_CHAIN', '0') == '1'             # Howard 11/19：同趟 茶几圓柱 → 車尾收納盒 → 抽屜筆 → 收納盒 → 返回
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # 車尾收納盒：放盒完成（pick_binned）才換下一個導航目標；下一件封包等收臂完成（pick_stowed）
@@ -830,6 +832,18 @@ def main():
             except Exception as e_:                                   # noqa: BLE001
                 self.event('shield_leaf_mask_error', err=repr(e_)[:120])
 
+        def _reach_dist(self, q_target, extra_s=0.0):
+            """何時伸手（Howard 11/20 由狀態決定）：送封包距離＝目前底盤速度 ×（手臂由現在構型到目標構型所需時間＋extra_s）＋0.3 m，下限 0.6 m。
+            手臂時間＝最大關節位移÷0.6 rad/s×1.875（最小急動峰速）＋0.5 s；速度取近 1 s 底盤位移。"""
+            try:
+                hist_ = [h for h in getattr(self, '_xy_hist', []) if self.now() - h[0] <= 1.0]
+                v_ = float(np.linalg.norm(hist_[-1][1][:2] - hist_[0][1][:2])) / max(hist_[-1][0] - hist_[0][0], 1e-3) if len(hist_) >= 2 else 0.2
+                qa_ = np.asarray(self.truth['q'][3:9], float)
+                T_ = 1.875 * float(np.abs(np.asarray(q_target, float) - qa_).max()) / 0.6 + 0.5 + float(extra_s)
+                return max(0.6, v_ * T_ + 0.3), v_, T_
+            except Exception:                                         # noqa: BLE001
+                return PICK_PATH_APP, None, None
+
         def _scan_in(self, m):
             self.last_scan = (np.asarray(m.ranges, float), float(m.angle_min), float(m.angle_increment))
 
@@ -1054,7 +1068,7 @@ def main():
                 b_ = np.asarray(self.pick_sel['base'], float)          # 里程座標
                 dist_ = float(np.hypot(*(self.b_od_now[:2] - b_[:2])))
                 dyaw_c_ = abs((float(self.b_od_now[2]) - float(b_[2]) + math.pi) % (2 * math.pi) - math.pi)
-                if (PICK_PATH and dist_ <= PICK_PATH_APP) or (not PICK_PATH and dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or dist_ <= 0.35)):   # PICK_PATH：近 1.3 m 即送（不等偏航、不停）；s70：只留 ≤0.10 會在導航以容差到點、偏航未齊時卡住 ⇒ 恢復 s62–s67 版（0.35）；s68 邊緣案例改以選位餘裕 CYL_BASE_MARGIN 處理。舊註：s68：距離 ≤0.35 的備用條件在偏航差 1.22 rad 時放行 ⇒ 轉向中收斂斜向桌角、淨空 0.0992 停 ⇒ 只用偏航條件（導航到點時車頭自然對齊目標）
+                if (PICK_PATH and dist_ <= self._reach_dist(self.pick_sel['q'])[0]) or (not PICK_PATH and dist_ <= PICK_APP_DIST and (PICK_APP_DYAW is None or dyaw_c_ <= PICK_APP_DYAW or dist_ <= 0.35)):   # PICK_PATH：近 1.3 m 即送（不等偏航、不停）；s70：只留 ≤0.10 會在導航以容差到點、偏航未齊時卡住 ⇒ 恢復 s62–s67 版（0.35）；s68 邊緣案例改以選位餘裕 CYL_BASE_MARGIN 處理。舊註：s68：距離 ≤0.35 的備用條件在偏航差 1.22 rad 時放行 ⇒ 轉向中收斂斜向桌角、淨空 0.0992 停 ⇒ 只用偏航條件（導航到點時車頭自然對齊目標）
                     Tb_od = _T3(b_)                                    # 底盤收斂目標（里程，與選位同座標）
                     e_od = np.asarray(self.pick_box['est_od'], float)   # 抓取目標一律留在里程座標（不經 map 來回：AMCL 修正會讓 TCP 偏離圓柱；s32 偏約 3 cm 夾空）
                     a_ = e_od[:2] - Tb_od[:2, 3]; a_ = a_ / max(float(np.linalg.norm(a_)), 1e-9)
@@ -1156,6 +1170,34 @@ def main():
                     sel = dr['sel']
                     self._dr_send('drawer', bs_, t, T_grasp=sel['T_grasp'], q_grasp=sel.get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'),
                                   motm=dict(b0=[float(x) for x in sel['base']], e=[float(x) for x in sel['e']], v_g=float(DR_MOTM_V), s0=float(self._DRM.S0), t_arm=float(sel['t_arm']), tau=float(sel['tau']), q_grasp=sel.get('q_grasp')))
+                    dr['stage'] = 'wait_release'
+            elif st == 'handle_nav' and DR_PATH:                     # 依導航路徑：早送封包（邊走邊展開），近 PATH_EXT_R 時線上算經過方向／速度
+                hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
+                dd_ = float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float))))
+                rd_ = self._reach_dist(dr['sel'].get('q_grasp') or self.truth['q'][3:9], extra_s=2.0)[0]   # 收臂→展開（關節空間）＋接近
+                if dd_ <= rd_:
+                    self._dr_send('drawer', dr['sel']['base'], t, T_grasp=dr['sel']['T_grasp'], q_grasp=dr['sel'].get('q_grasp'), pull=[float(R_.D.PULL[0]), float(R_.D.PULL[1])], open_m=float(R_.OPEN_M), drawer_pose=dr.get('pose_vis'), path=True)
+                    dr['stage'] = 'path_wait'
+            elif st == 'path_wait':
+                hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
+                dd_ = float(np.hypot(*(self.b_od_now[:2] - np.asarray(dr['sel']['base'][:2], float))))
+                pe_ = dr.get('path_box')
+                if pe_ is None and dd_ <= PATH_EXT_R:
+                    dt_h = max(hist_[-1][0] - hist_[0][0], 1e-3); mvd_ = hist_[-1][1][:2] - hist_[0][1][:2]; v_now_ = float(np.linalg.norm(mvd_)) / dt_h
+                    import threading
+                    dr['path_box'] = box_ = dict(done=False)
+                    Tg_, p_, b0_ = np.asarray(dr['sel']['T_grasp'], float), self.b_od_now.copy(), np.asarray(dr['sel']['base'], float)
+                    def _pe(box=box_):
+                        w0 = time.perf_counter()
+                        box['res'] = R_.path_ext_handle(Tg_, p_[:2], p_[2], mvd_, b0_, v_now_)
+                        box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
+                    threading.Thread(target=_pe, daemon=True).start()
+                    self.event('dr_path_ext_start', dist=round(dd_, 3), v_now=round(v_now_, 3))
+                elif pe_ is not None and pe_.get('done') and not pe_.get('sent'):
+                    pe_['sent'] = True; r_ = pe_.get('res')
+                    if r_ is not None:
+                        self.p_ho.publish(String(data=json.dumps(dict(what='pick_app', app=dict(kind='path_ext', motm=r_)))))
+                    self.event('dr_path_ext_sent' if r_ is not None else 'dr_path_ext_none', ms=round(pe_['ms'], 1), res=None if r_ is None else {k: r_[k] for k in ('b0', 'e', 'v_g', 's_feas', 's_grasp')})
                     dr['stage'] = 'wait_release'
             elif st == 'handle_nav':
                 dyaw_ = abs((float(self.b_od_now[2]) - float(dr['sel']['base'][2]) + math.pi) % (2 * math.pi) - math.pi)

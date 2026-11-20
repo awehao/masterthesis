@@ -55,6 +55,7 @@ def base_free(b):
 
 SCAN_PTS = None                                                       # 目前雷射看到、但不在場景登錄（地圖）裡的點（里程座標 N×2）；None＝只看地圖
 SCAN_CLEAR = float(os.environ.get('CYL_SCAN_CLEAR', '0.42'))
+SCAN_CLEAR_EXT = float(os.environ.get('CYL_SCAN_CLEAR_EXT', '0.36'))   # 經過段（機器人已在附近）：Shield 半徑 0.30＋d0 0.05＋0.01（選位用較保守的 SCAN_CLEAR；s113d 目前位置就 <0.42 ⇒ 誤判整段不可行）
 SCAN_TAIL = float(os.environ.get('CYL_SCAN_TAIL', '0.0'))           # 閉爪窗之後沿線再核的長度（抬起後轉交導航）         # 底盤中心離未知點至少（底盤半徑 0.30＋0.15）：Isaac 第三十二趟路線起點離 unknown_l5 角 0.2 m ⇒ Shield 擋住對齊
 
 
@@ -92,11 +93,13 @@ def path_ext(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=1.2, t_
     ths = [float(th_now)]
     if abs((float(b0[2]) - float(th_now) + math.pi) % (2 * math.pi) - math.pi) > 0.15:
         ths.append(float(b0[2]))
+    c0 = float(np.min(np.hypot(SCAN_PTS[:, 0] - p[0], SCAN_PTS[:, 1] - p[1]))) if SCAN_PTS is not None else 9.0
+    clr = min(SCAN_CLEAR_EXT, max(0.33, c0 - 0.01))                    # 不比現在更靠近未知障礙（下限 0.33：Shield 半徑＋3 cm）
     for th in ths:
         feas = []
         for s_ in np.arange(0.0, s_max + 1e-9, ds):
             b = np.array([p[0] + s_ * d[0], p[1] + s_ * d[1], th])
-            if not base_free(b) or not scan_free(b):
+            if not base_free(b) or not scan_free(b, clr):
                 break
             g = ik(np.asarray(T_grasp, float), b)
             feas.append((float(s_), g is not None and clear_ok(b, g[0])[0], g))
@@ -120,7 +123,7 @@ def path_ext(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=1.2, t_
     v = float(np.clip((s_b - s_g) / t_need, v_min, min(v_cap, max(float(v_now), 0.08))))
     b0l = [float(p[0] + s_g * d[0]), float(p[1] + s_g * d[1]), float(th)]
     return dict(b0=b0l, e=[float(d[0]), float(d[1])], v_g=v, s0=-0.02, t_arm=1.0, q_grasp=[float(x) for x in g[0]], no_align=True, path=True,
-                s_feas=[round(s_a, 3), round(s_b, 3)], s_grasp=round(s_g, 3))
+                s_feas=[round(s_a, 3), round(s_b, 3)], s_grasp=round(s_g, 3), s_end=round(s_b - s_g, 3))
 
 
 def seg_free(p0, p1, margin=0.10, ds=0.05):
@@ -138,10 +141,10 @@ def seg_free(p0, p1, margin=0.10, ds=0.05):
     return True
 
 
-def scan_free(b):
+def scan_free(b, clear=None):
     if SCAN_PTS is None:
         return True
-    return float(np.min(np.hypot(SCAN_PTS[:, 0] - b[0], SCAN_PTS[:, 1] - b[1]))) >= SCAN_CLEAR
+    return float(np.min(np.hypot(SCAN_PTS[:, 0] - b[0], SCAN_PTS[:, 1] - b[1]))) >= (SCAN_CLEAR if clear is None else clear)
 
 
 def ik(T, b):

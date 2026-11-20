@@ -75,6 +75,21 @@ def _obs_near(obs, q):
             best = (round(d, 3), round(float(o.get('vx', 0.0)), 3), round(float(o.get('vy', 0.0)), 3))
     return best
 
+_DRH = None
+
+
+def _dr_handle_xy():
+    """抽屜把手估計位置（場景登錄先驗；把手視覺更新後由抽屜控制器接手，不經此處）。"""
+    global _DRH
+    if _DRH is None:
+        try:
+            import drawer_scene as _DS
+            _DRH = np.asarray(_DS.handle_T(0.0)[:2, 3], float)
+        except Exception:                                             # noqa: BLE001
+            _DRH = False
+    return None if _DRH is False else _DRH
+
+
 class TablePickCtrl(P.DoorPassCtrl):
     def __init__(self, src, t0, app):
         """src＝穿門控制器（DRIVE 中）；app＝監督送的取物封包：T_grasp（odom 4×4）、base_goal（odom x,y,yaw）、T（接近時長）、T_b、t_l0。"""
@@ -157,6 +172,10 @@ class TablePickCtrl(P.DoorPassCtrl):
     def path_ext(self, app, t0):
         """依導航路徑的移動中抓取（Howard 11/20）：監督依實際行進方向線上算出經過方向與速度（cyl_reach_map.path_ext）後送來；
         自本拍起底盤沿該方向以斜坡速度經過抓取位（自目前投影起算、無對齊），其餘沿用移動中夾取的閉爪窗／確認／抬升。"""
+        if self.phase == 'UNFOLD':                                    # 抽屜：手臂還在邊走邊展開 ⇒ 展開完進接近段時再套用
+            self.pending_ext = (app, float(t0))
+            self._ev('pick_path_ext_pending')
+            return
         if self.phase != 'APPROACH' or self.motm is not None:
             self._ev('pick_path_ext_ignored', phase=self.phase)
             return
@@ -173,13 +192,28 @@ class TablePickCtrl(P.DoorPassCtrl):
         dyaw_ = abs((float(q[2]) - float(b0[2]) + math.pi) % (2 * math.pi) - math.pi)
         return dyaw_ <= 0.15 and lat_ <= 0.05 and float(np.dot(d_, e)) <= s_st + 0.05
 
-    def _motm_s(self, t_abs):
+    def _motm_s_lin(self, t_abs):
         tau = max(0.0, t_abs - self.m_t0); v, v0 = float(self.motm['v_g']), float(getattr(self, 'm_v0', 0.0))
         return self.m_s0 + v * tau - (v - v0) * MOTM_TR * (1.0 - math.exp(-tau / MOTM_TR))   # 速度自進線時實際沿線速度 v0 以 TR 收斂到 v_g（不再階躍 ⇒ 不先追趕後等待）
 
-    def _motm_v(self, t_abs):
+    def _motm_v_lin(self, t_abs):
         tau = max(0.0, t_abs - self.m_t0); v, v0 = float(self.motm['v_g']), float(getattr(self, 'm_v0', 0.0))
         return v - (v - v0) * math.exp(-tau / MOTM_TR)
+
+    def _motm_s(self, t_abs):
+        """可行段終點 s_end（依導航路徑：正面接近時後面就是家具）：進入最後 v·TR 時指數減速、平滑停在 s_end。"""
+        s_ = self._motm_s_lin(t_abs); se = self.motm.get('s_end')
+        if se is None:
+            return s_
+        w = max(float(self.motm['v_g']) * MOTM_TR, 1e-3); s1 = float(se) - w
+        return s_ if s_ <= s1 else float(se) - w * math.exp(-(s_ - s1) / w)
+
+    def _motm_v(self, t_abs):
+        v_ = self._motm_v_lin(t_abs); se = self.motm.get('s_end')
+        if se is None:
+            return v_
+        w = max(float(self.motm['v_g']) * MOTM_TR, 1e-3); s1 = float(se) - w; s_ = self._motm_s_lin(t_abs)
+        return v_ if s_ <= s1 else v_ * math.exp(-(s_ - s1) / w)
 
     def _motm_ref(self, t_eff):
         """經過路線參考：底盤沿 e 等速 v_g、朝向固定（全向底盤橫移）；回 (X 視窗, xi 視窗)。"""
@@ -271,7 +305,10 @@ class TablePickCtrl(P.DoorPassCtrl):
             if fy_ is not None:                                       # 固定橫桿（抽屜把手）：沿兩指開合軸（TCP y）誤差另設門檻（Isaac 33b／34b：5 mm 球內閉爪、開合軸偏 ~2 mm ⇒ 單指接觸、證據逾時）
                 ep_fy = abs(float((self.T_grasp[:3, :3].T @ (Tc[:3, 3] - self.T_grasp[:3, 3]))[1]))
                 ep_ok = ep_ok and ep_fy <= fy_
-            if el >= self.T_app and ep_ok and er <= 3.0:
+            v_tcp = float(np.linalg.norm(Tc[:3, 3] - self._tc_prev)) / (NPH * PHYS) if getattr(self, '_tc_prev', None) is not None else 9.0
+            self._tc_prev = Tc[:3, 3].copy()
+            path_ok = self.motm is not None and self.motm.get('path') and self.m_s0 is not None and v_tcp <= 0.02   # 依導航路徑：TCP 已到位且相對目標（世界固定）幾乎不動 ⇒ 即閉爪，不等名目時刻（Howard 11/20 時機由狀態決定）
+            if (el >= self.T_app or path_ok) and ep_ok and er <= 3.0:
                 self.b_anchor = np.asarray(q[:3], float).copy()
                 self.finger_cmd = P.FINGER_OPEN
                 self._goto('CLOSE', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2))
@@ -392,7 +429,8 @@ class TablePickCtrl(P.DoorPassCtrl):
         if self.phase == 'RETURN':
             self.app_prof = None                                      # 返回段：照導航前端（不再收斂到抓取位）
             if FACE_DR is not None and type(self) is TablePickCtrl and float(np.hypot(qp[0] - FACE_DR[0], qp[1] - FACE_DR[1])) < 0.6:
-                self.app_prof = dict(base_goal=list(FACE_DR), door=None)   # s104d：導航到抽屜櫃前粗目標不看偏航（會車後偏 0.8 rad、相機看不到把手）⇒ 到點後同一控制器慢轉到粗目標朝向（只在前端停止更新後作用）
+                h_ = _dr_handle_xy()                                     # Howard 11/20「朝向由物件與可見性決定」：位置留在導航到點處，偏航轉向櫃體把手估計位置（手腕相機收臂時朝前 ⇒ 把手落在視野中央）
+                self.app_prof = dict(base_goal=[float(qp[0]), float(qp[1]), math.atan2(h_[1] - float(qp[1]), h_[0] - float(qp[0]))] if h_ is not None else list(FACE_DR), door=None)   # s104d：導航到抽屜櫃前粗目標不看偏航（會車後偏 0.8 rad、相機看不到把手）⇒ 到點後同一控制器慢轉到粗目標朝向（只在前端停止更新後作用）
             if src == 'nav':                                          # 會車選邊（s92d：行人 walker_r1 正面迎來、牆側不夠 ⇒ 被推著倒退後接觸）
                 P.yield_apply(self, qp, X, obs)
         arm = dict(mode='hold')

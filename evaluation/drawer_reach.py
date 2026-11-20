@@ -241,3 +241,47 @@ if __name__ == '__main__':
     mk = D.marker_nominal(OPEN_M)
     w = time.perf_counter(); m = select_marker(mk, _yaw_face() + math.pi / 2, OPEN_M, np.array(o['base']) if o else np.array([-4.2, 10.3, math.pi]), R_ref=np.array(o['T_obs'])[:3, :3] if o else None)
     print('marker', mk.round(3), None if m is None else dict(base=np.round(m['base'], 3).tolist(), sig=round(m['sigma_min'], 3), env=round(m['env'], 3), bc=round(m['base_clear'], 3)), round((time.perf_counter() - w) * 1e3), 'ms')
+
+
+def path_ext_handle(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=1.2, t_need=1.6, v_min=0.03, v_cap=float(os.environ.get('PATH_V_CAP', '0.15'))):
+    """抽屜把手依導航路徑的移動中抓取（Howard 11/20 不要預設路線）：同 cyl_reach_map.path_ext，但淨空用抽屜模型（_ik_ok＝IK＋_clear）、底盤用 M.base_free。
+    來向多半垂直櫃面 ⇒ 可行段短、經過速度自然降到很低（減速→閉爪→拉回，速度連續）；拉開段不沿來向橫移（tau＝0）。"""
+    p = np.asarray(p_now, float)[:2]; b0 = np.asarray(b0_sel, float)
+    d = np.asarray(dirv, float)[:2]; nd = float(np.linalg.norm(d))
+    to_b = b0[:2] - p
+    if nd < 1e-3 or float(np.dot(to_b, d / max(nd, 1e-9))) < 0.10:
+        d = to_b; nd = float(np.linalg.norm(d))
+    d = d / max(nd, 1e-9)
+    Tg = np.asarray(T_grasp, float)
+    best = None
+    ths = [float(th_now)]
+    if abs((float(b0[2]) - float(th_now) + math.pi) % (2 * math.pi) - math.pi) > 0.15:
+        ths.append(float(b0[2]))
+    for th in ths:
+        feas = []
+        for s_ in np.arange(0.0, s_max + 1e-9, ds):
+            b = np.array([p[0] + s_ * d[0], p[1] + s_ * d[1], th])
+            if not M.base_free(b):
+                break
+            g = _ik_ok(Tg, b, 0.0, flips=(False,))
+            feas.append((float(s_), g is not None, g))
+        i0 = next((i for i, f in enumerate(feas) if f[1]), None)
+        if i0 is None:
+            continue
+        i1 = i0
+        while i1 + 1 < len(feas) and feas[i1 + 1][1]:
+            i1 += 1
+        s_a, s_b = feas[i0][0], feas[i1][0]
+        L = s_b - s_a
+        s_g = s_a + min(0.15, L / 3.0)
+        dyaw = abs((th - float(th_now) + math.pi) % (2 * math.pi) - math.pi)
+        sc = s_a - 0.5 * L + 0.3 * dyaw
+        if best is None or sc < best[0]:
+            ig = min(range(i0, i1 + 1), key=lambda i: abs(feas[i][0] - s_g))
+            best = (sc, th, s_a, s_b, s_g, feas[ig][2])
+    if best is None:
+        return None
+    _, th, s_a, s_b, s_g, g = best
+    v = float(np.clip((s_b - s_g) / t_need, v_min, min(v_cap, max(float(v_now), 0.08))))
+    return dict(b0=[float(p[0] + s_g * d[0]), float(p[1] + s_g * d[1]), float(th)], e=[float(d[0]), float(d[1])], v_g=v, s0=-0.02, t_arm=1.0, tau=0.0,
+                q_grasp=[float(x) for x in g['q']], no_align=True, path=True, s_feas=[round(s_a, 3), round(s_b, 3)], s_grasp=round(s_g, 3), s_end=round(s_b - s_g, 3))
