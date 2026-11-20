@@ -13,6 +13,34 @@ DOC, PG, K = WB.DOC, WB.PG, WB.K
 TOOL = WB.TOOL
 _C, _R = FAST._C, FAST._R
 
+import os as _os
+SELF_REUSE = _os.environ.get('CF_SELF_REUSE', '0') == '1'
+REUSE_RHO, REUSE_TOL = 0.8, 0.001
+_SC = {}
+
+
+def reuse_bound(key, qa, fq):
+    """即時化（11/20）：自碰撞／離盒距離只跟手臂關節角與手指開度有關（與底盤無關）。手臂各點位移 ≤ REUSE_RHO·Σ|Δq|＋Σ|Δ手指|（REUSE_RHO 0.8 m ≥ 手臂最遠點到任一關節軸），
+    兩點相對距離變化 ≤ 2δ ⇒ 新值 ≥ 舊值 − 2δ。2δ ≤ REUSE_TOL 且保守值仍 ≥ 自碰撞門檻時回傳保守下界（判定與精算相同；紀錄最小值至多低 1 mm），否則回 None（照常精算）。"""
+    if not SELF_REUSE:
+        return None
+    c = _SC.get(key)
+    if c is None:
+        return None
+    fqv = np.atleast_1d(np.asarray(fq if fq is not None else 0.0, float))
+    if fqv.shape != c[1].shape:
+        return None
+    d2 = 2.0 * (REUSE_RHO * float(np.abs(qa - c[0]).sum()) + float(np.abs(fqv - c[1]).sum()))
+    if d2 > REUSE_TOL:
+        return None
+    v = c[2] - d2
+    return v if v >= float(WB.THR['self']) else None
+
+
+def reuse_store(key, qa, fq, v):
+    if SELF_REUSE:
+        _SC[key] = (np.asarray(qa, float).copy(), np.atleast_1d(np.asarray(fq if fq is not None else 0.0, float)).copy(), float(v))
+
 
 def fk_all(qf, names):
     """所有指定連桿的世界變換：沿父連桿遞迴、每個關節只算一次（與 K.fk 的連乘順序相同）。"""
@@ -55,6 +83,22 @@ def _self_clear(T, pts):
     return sc
 
 
+_NEAR = {}
+
+
+def _near(sh, qf):
+    """同 [s for s in sh if box_dist([[x, y, c_z]], c, R, hs) < 1.6]，一次向量化（即時化 11/20：原本每個靜態方盒一次呼叫）。"""
+    k = id(sh)
+    if k not in _NEAR:
+        _NEAR[k] = (np.array([s_[1] for s_ in sh]), np.array([s_[2] for s_ in sh]), np.array([s_[3] for s_ in sh]))
+    Cs, Rs, Hs = _NEAR[k]
+    P = np.stack([np.full(len(sh), float(qf[0])), np.full(len(sh), float(qf[1])), Cs[:, 2]], axis=1)
+    L = np.einsum('sj,sjk->sk', P - Cs, Rs)
+    d = np.abs(L) - Hs
+    dd = np.linalg.norm(np.maximum(d, 0), axis=1) + np.minimum(d.max(axis=1), 0)
+    return [s_ for s_, v in zip(sh, dd) if v < 1.6]
+
+
 def clear_door_fast(x, T_WH0):
     qf, phi = np.asarray(x[:9], float), float(x[9])
     fq = WB.FINGER_Q
@@ -63,7 +107,7 @@ def clear_door_fast(x, T_WH0):
     leaf_p = (leaf[0], Rp @ leaf[1], Rp, leaf[3])
     T_WH = WB.handle_pose(T_WH0, phi)
     posts, bar = PG.handle_shapes(T_WH)
-    near = [s for s in sh if float(DOC.box_dist(np.array([[qf[0], qf[1], s[1][2]]]), s[1], s[2], s[3])[0]) < 1.6]
+    near = _near(sh, qf)
     pairs = FAST._pairs()
     names = sorted(set(DOC.ARM_LINKS) | {n for p in pairs for n in p})
     T = fk_all(qf, names)
@@ -101,7 +145,10 @@ def clear_door_fast(x, T_WH0):
     shell = float(PG.bar_dist(pts('uflite_gripper_link'), bar).min())
     bc, bwho = min((float(DOC.box_dist(np.array([[qf[0], qf[1], c[2]]]), c, R, hs)[0]) - DOC.RB, name) for name, c, R, hs in [leaf_p] + near if WB.base_level(c, R, hs))
     # 自碰撞：原式用 FAST.clear_full(qf, T_WH, finger_q=FINGER_Q)['self']——其手指同樣沿 y 平移 finger_q
-    sc = _self_clear({n: T[n] for n in names}, pts)
+    sc = reuse_bound('self', qf[3:9], fq)
+    if sc is None:
+        sc = _self_clear({n: T[n] for n in names}, pts)
+        reuse_store('self', qf[3:9], fq, sc)
     return dict(env=env, base=bc, self=sc, shell_bar=shell, who=dict(env=who, base=bwho))
 
 

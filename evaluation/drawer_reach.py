@@ -293,6 +293,8 @@ def path_ext_handle(T_grasp, p_now, th_now, dirv, b0_sel, v_now, extra_dirs=None
         s_a, s_b = feas[i0][0], feas[i1][0]
         L = s_b - s_a
         s_g = s_a + min(0.15, L / 3.0)
+        if s_g < 0.2:
+            continue                                                    # s131d：已到站才算出經過線（閉爪點只剩 0.1 m 跑道）⇒ 1.75 s 後錯過退回；跑道不足就直接收斂
         dyaw = abs((th - float(th_now) + math.pi) % (2 * math.pi) - math.pi)
         pg_, dg_ = M._poly_at(poly, cum, s_g)
         if any(abs(float(np.dot(M._poly_at(poly, cum, s2)[1], n_))) > HANDLE_PAR_COS for s2 in np.arange(s_g, s_b + 1e-9, ds)):

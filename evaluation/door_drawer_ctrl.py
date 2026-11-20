@@ -100,6 +100,7 @@ class DrawerCtrl(PK.TablePickCtrl):
             self.q_unf0 = None
             self.app_prof = dict(base_goal=list(app['base_goal']), door=None)
             self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
+            self._bg, self._t_arr, self._t_line0, self._bp = np.asarray(app['base_goal'], float)[:2].copy(), None, None, 0.0   # 關抽屜把手也走狀態閘門
             self.T_rel0 = None
             self.t = float(t0)
             self.motm, self.m_s0, self.m_t0 = None, None, None          # s90d：把手移動中路線參考不可帶進後續段

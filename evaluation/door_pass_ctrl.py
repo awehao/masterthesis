@@ -16,6 +16,7 @@
   核不過 ⇒ 不給尾段 ⇒ 執行器沿用上一份已核尾段。"""
 import math
 import os
+import sys
 import time
 
 import numpy as np
@@ -58,6 +59,8 @@ STOW_QD = float(os.environ.get('PASS_STOW_QD', '0.6'))              # 關節空�
 PICK_FOLLOW = os.environ.get('D2_PICK', '0') == '1'                 # 穿門後接取物：穿門段不自行判完成（由監督送取物封包換控制器）
 DONE_Y_MIN = float(os.environ.get('PASS_DONE_Y_MIN', '0.3'))         # 場景專用：門口在 y＝0、客廳側 y＞0
 KEYS = ('env', 'base', 'self', 'shell_bar')
+PASS_POOL = os.environ.get('PASS_POOL', '0') == '1'
+POOL_TIMEOUT_S = 0.5
 
 
 def _T3(b):
@@ -127,6 +130,7 @@ class DoorPassCtrl:
         self.nav_in = getattr(src, 'nav_in', None)
         self.bias_obs = getattr(src, 'bias_obs', None)
         self.T_WH0 = np.asarray(src.T_WH_bind, float).copy()
+        self._pool = getattr(src, '_pool', None)                     # 即時化：開門段的共用淨空計算池（穿門／取物段閒置）
         self.T_HE = None if getattr(src, 'T_HE', None) is None else np.asarray(src.T_HE, float).copy()   # 去程抓持變換（回程關門同一種抓法）
         self.door_end = dict(b=np.asarray(q_end[:3], float).copy(), q=np.asarray(q_end[3:9], float).copy(), phi=float(phi_end))   # 開門結束的抓持構型（回程關門共轉起算）
         self.t, self.n_step = float(t0), 0
@@ -171,11 +175,50 @@ class DoorPassCtrl:
             qp, sp = S.plant_phys_step(qp, sp, u_in, self.cfg, 1)
         return qp, sp
 
+    def _pool_state(self):
+        import door_clear_door_fast as _CF_
+        st = dict(bin='single' in getattr(sys.modules.get('rear_bin'), '_ORIG', {}))
+        ds = sys.modules.get('drawer_scene')
+        if ds is not None and 'static' in getattr(ds, '_ORIG', {}):
+            st['drawer'] = dict(q_open=float(ds.Q_OPEN[0]), pose=tuple(float(x) for x in ds.POSE))
+        return st
+
+    def _sweep_pooled(self, Qs):
+        """即時化（11/20）：取樣點分給共用計算池（同一淨空函式，附幾何狀態快照）；依原順序找第一個違反、clear_min 只累計到該點（同逐點版）。失效回 None（呼叫端改逐點算）。"""
+        X = np.array([np.r_[qs, self.phi_now] for qs in Qs])
+        fq = W.FINGER_Q
+        try:
+            h = self._pool.submit(self.T_WH0, fq, W.PHI0, X, state=self._pool_state())
+            res, why, _ = self._pool.collect(h, POOL_TIMEOUT_S)
+        except Exception:                                             # noqa: BLE001
+            return None
+        if res is None:
+            self.pool_fail = getattr(self, 'pool_fail', 0) + 1
+            return None
+        n = 0
+        for c in res:
+            n += 1
+            for k in KEYS:
+                self.clear_min[k] = min(self.clear_min[k], float(c[k]))
+            bad = [k for k in KEYS if c[k] < W.THR[k]]
+            if bad:
+                return dict(why='clearance', bad=bad, at={k: round(float(c[k]), 4) for k in KEYS}, who={k: str((c.get('who') or {}).get(k)) for k in bad}), n
+        return None, n
+
     def _sweep(self, q, u, extra, j0, u_from, rec):
         """同一停法前推到停穩（候選 extra＝1：本拍命令一拍後減速）；逐取樣點核全身淨空與設定點限位。回 (違反 dict 或 None, 取樣數)。"""
         Q, _, _ = XE.stop_traj_exit(q, self.s, self.pipe, u, u_from, j0, self.cfg, extra, rec=rec)
         if rec is not None and any(np.any(r_[0] < self.lim_lo - 1e-9) or np.any(r_[0] > self.lim_hi + 1e-9) for r_ in rec):
             return dict(why='setpoint_limit'), 0
+        if PASS_POOL and getattr(self, '_pool', None) is not None:
+            Qs, prev = [], None
+            for qs in Q:
+                if prev is not None and float(np.abs(qs - prev).max()) < 1e-7:
+                    continue
+                prev = qs; Qs.append(qs)
+            r_ = self._sweep_pooled(Qs)
+            if r_ is not None:
+                return r_
         n, prev = 0, None
         for qs in Q:
             if prev is not None and float(np.abs(qs - prev).max()) < 1e-7:

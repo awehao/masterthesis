@@ -72,7 +72,16 @@ def install(CF):
 
     def single(x, T_WH0):
         r = _ORIG['single'](x, T_WH0)
-        d, who = bin_dist(np.asarray(x[:9], float), cap=float(r['self']))
+        import door_wbopt as _WB
+        qx = np.asarray(x[:9], float)
+        d = CF.reuse_bound('bin', qx[3:9], None) if hasattr(CF, 'reuse_bound') else None   # 即時化：離盒距離同自碰撞只跟手臂角有關（保守界重用，見 door_clear_door_fast.reuse_bound）
+        if d is not None:
+            r['who'] = dict(r.get('who') or {}, bin='reuse')
+            r['self'] = min(float(r['self']), d)
+            return r
+        d, who = bin_dist(qx, cap=np.inf if getattr(CF, 'SELF_REUSE', False) else float(r['self']))   # 重用開啟時須精算離盒值本身（cap 只給下界）才能存
+        if hasattr(CF, 'reuse_store'):
+            CF.reuse_store('bin', qx[3:9], None, d)
         r['who'] = dict(r.get('who') or {}, bin=who)
         r['self'] = min(float(r['self']), d)
         return r

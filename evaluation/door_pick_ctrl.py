@@ -41,6 +41,9 @@ PH_TO_S = 4.0
 APP_GATE = os.environ.get('PICK_PATH') == '1' and os.environ.get('PICK_APP_GATE', '1') == '1'
 APP_GATE_D0, APP_GATE_D1 = 0.70, 0.12                                 # 收斂接近：參考底盤離抓取站位 ≤0.70 m 才開始伸手、≤0.12 m 才走最後抓取線
 APP_GATE_CAP_S = 30.0                                                 # 狀態閘門下的總安全逾時（名目時長之後）
+DR_APP_GATE = APP_GATE and os.environ.get('DR_APP_GATE', '1') == '1'   # 抽屜把手（開、關）也用狀態閘門（Isaac 53：底盤 t=159 到位後照 17.6 s 時間表伸手、停 16 s）
+T_BMIN = float(os.environ.get('PICK_T_BMIN', '2.5'))                  # 伸手進度 0→1 至少這麼久（s131d：已到站時目標一步跳到把手 ⇒ 全身 QP 走貼近自身的路徑、自身淨空 4.3 mm）
+T_LINE_S = max(0.8, D_LINE / 0.06)                                    # 抓取線（預抓→抓取 D_LINE）時長：由狀態觸發後走完
 APP_TOL_Z = float(os.environ['PICK_APP_TOL_Z']) if os.environ.get('PICK_APP_TOL_Z') else None   # 圓柱（直立、側夾）接近完成：水平 ≤5 mm、沿圓柱軸（世界 z）≤ 此值；未設＝原 5 mm 球（第二十七趟 Isaac：東側伸遠，TCP 穩定低 9 mm、水平 <1 mm ⇒ approach_not_reached）
 APP_V = float(os.environ['PICK_APP_V']) if os.environ.get('PICK_APP_V') else None   # 接近段底盤速度框（任務限制；s60／s68／s69：沿茶几邊 0.19 m/s 接近，停止軌跡底盤淨空 0.098–0.099 被停）；未設＝原行為
 BIN = os.environ.get('D2_BIN', '0') == '1'                            # Howard 11/19「車子後面放一個盒子 放夾取物」：抬起確認後放進車尾收納盒（rear_bin.py）→ 收臂（相機朝前）→ 返回／下一件
@@ -165,6 +168,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.lim_lo, self.lim_hi = src.lim_lo, src.lim_hi
         self.nav_in = getattr(src, 'nav_in', None)
         self.T_WH0, self.phi_now = src.T_WH0, src.phi_now
+        self._pool = getattr(src, '_pool', None)
         self.t, self.n_step = float(t0), 0
         self.stop, self.abort, self.done, self.finished = None, None, False, False
         self.release, self.unbound, self.finger_cmd, self.finger_meas, self.finger_force = True, True, P.FINGER_OPEN, src.finger_meas, None
@@ -180,7 +184,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.T_grasp[:3, 3] = self.T_grasp[:3, 3] + GRASP_DEPTH * self.T_grasp[:3, 2]   # 同瓶子線：TCP 沿工具軸越過圓柱軸 4 mm，軸心落在指片（TCP 後 1.3–21.3 mm）內（第十二趟 TCP 在軸心上 ⇒ 指尖夾弦、抬升滑落）
         self.app_prof = dict(base_goal=list(app['base_goal']), door=None)   # nav_window：導航到點後收斂到抓取底盤位姿
         self.T_app, self.T_b, self.t_l0 = float(app['T']), float(app['T_b']), float(app['t_l0'])
-        self._bg, self._t_arr = np.asarray(app['base_goal'], float)[:2].copy(), None
+        self._bg, self._t_arr, self._t_line0, self._bp = np.asarray(app['base_goal'], float)[:2].copy(), None, None, 0.0
         self.T_rel0, self.b_anchor, self.n_ev, self.T_lift0, self.T_rel_s0 = None, None, 0, None, None
         self.ret_sent, self.attach = False, False
         self.obj_release, self.obj_detached, self.binned, self.q_b0, self.T_bm, self.bin_target = False, False, False, None, None, None
@@ -208,7 +212,8 @@ class TablePickCtrl(P.DoorPassCtrl):
         return T
 
     def _app_gated(self):
-        return APP_GATE and type(self) is TablePickCtrl and self.motm is None and getattr(self, '_bg', None) is not None
+        return (APP_GATE and self.motm is None and getattr(self, '_bg', None) is not None
+                and (type(self) is TablePickCtrl or (DR_APP_GATE and getattr(self, 'task', None) == 'handle')))
 
     def _app_target(self, t_abs, Xk):
         """接近剖面：參考底盤上的起始相對位姿 → 抓取線（d_line→0，接近線提早 t_settle 到底）。"""
@@ -220,8 +225,11 @@ class TablePickCtrl(P.DoorPassCtrl):
         beta = XE.minjerk(min(max(t / max(self.T_b, 1e-6), 0.0), 1.0))[0]
         if self._app_gated():                                           # Isaac 43：時間表 β 在繞茶几角時已 0.68 ⇒ TCP 追蹤把全身拉向桌子另一側的圓柱、蓋過軟 CBF。Howard 11/20「何時伸手依剩餘距離」⇒ 伸手與抓取線都由參考底盤到抓取站位的距離決定（時間表只當上限）
             d_ = float(math.hypot(Xk[0] - self._bg[0], Xk[1] - self._bg[1]))
-            beta = min(beta, XE.minjerk(min(max((APP_GATE_D0 - d_) / (APP_GATE_D0 - APP_GATE_D1), 0.0), 1.0))[0])
-            u = min(1.0 if t >= Te else u, min(max((APP_GATE_D1 - d_) / (APP_GATE_D1 - 0.02), 0.0), 1.0))
+            p_ = min(max((APP_GATE_D0 - d_) / (APP_GATE_D0 - APP_GATE_D1), 0.0), 1.0)
+            p_ = min(p_, getattr(self, '_bp', 0.0) + max(t_abs - self.t, 0.0) / T_BMIN)   # 進度限速（狀態觸發、不一步跳）
+            beta = XE.minjerk(p_)[0]   # 只看狀態（Isaac 53 抽屜：時間表上限使手臂在底盤到位後再慢慢伸 16 s）
+            tl0 = getattr(self, '_t_line0', None)
+            u = 0.0 if tl0 is None else min(max((t_abs - tl0) / T_LINE_S, 0.0), 1.0)   # 抓取線：底盤到站且 TCP 到預抓點後才走
             s_ = D_LINE * (1.0 - XE.minjerk(u)[0])
             Tl = self._T_line(max(s_, 0.0))
         ao_ = getattr(self, 'aim_off', None)
@@ -376,7 +384,18 @@ class TablePickCtrl(P.DoorPassCtrl):
             else:
                 ep_ok = ep <= 0.005
             fy_ = getattr(self, 'app_tol_fy', None)
-            if fy_ is not None and (el >= self.T_app - T_SETTLE or (self.motm is not None and ep < AIM_START_M)):   # 瞄準補償（積分；移動中抓取窗短 ⇒ 誤差 <1 cm 即開始累積）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標
+            gated_ = self._app_gated()
+            if gated_:                                                  # 伸手進度：實際底盤距離決定、每拍至多前進 DT/T_BMIN
+                pd_ = min(max((APP_GATE_D0 - float(math.hypot(q[0] - self._bg[0], q[1] - self._bg[1]))) / (APP_GATE_D0 - APP_GATE_D1), 0.0), 1.0)
+                self._bp = min(max(pd_, getattr(self, '_bp', 0.0)), getattr(self, '_bp', 0.0) + NPH * PHYS / T_BMIN)
+            if gated_:                                                  # 狀態閘門：底盤到站、TCP 到預抓點 ⇒ 啟動抓取線
+                if self._t_arr is None and float(math.hypot(q[0] - self._bg[0], q[1] - self._bg[1])) <= APP_GATE_D1:
+                    self._t_arr = self.t
+                    self._ev('pick_base_arrived', el=round(el, 2))
+                if self._t_arr is not None and getattr(self, '_t_line0', None) is None and float(np.linalg.norm(Tc[:3, 3] - self._T_line(D_LINE)[:3, 3])) <= 0.01:
+                    self._t_line0 = self.t
+                    self._ev('pick_line_start', el=round(el, 2))
+            if fy_ is not None and ((not gated_ and el >= self.T_app - T_SETTLE) or (gated_ and getattr(self, '_t_line0', None) is not None and ep < AIM_START_M) or (self.motm is not None and ep < AIM_START_M)):   # 瞄準補償（積分；移動中抓取窗短 ⇒ 誤差 <1 cm 即開始累積）：Isaac 手臂穩態誤差約 3 mm（第三十五趟 approach_not_reached 3.31 mm）⇒ 指令目標加上累積誤差，判定仍用真目標
                 ao_ = getattr(self, 'aim_off', np.zeros(3))
                 self.aim_off = np.clip(ao_ + AIM_K * (self.T_grasp[:3, 3] - Tc[:3, 3]), -AIM_MAX, AIM_MAX)
             if fy_ is not None:                                       # 固定橫桿（抽屜把手）：沿兩指開合軸（TCP y）誤差另設門檻（Isaac 33b／34b：5 mm 球內閉爪、開合軸偏 ~2 mm ⇒ 單指接觸、證據逾時）
@@ -385,7 +404,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             v_tcp = float(np.linalg.norm(Tc[:3, 3] - self._tc_prev)) / (NPH * PHYS) if getattr(self, '_tc_prev', None) is not None else 9.0
             self._tc_prev = Tc[:3, 3].copy()
             path_ok = self.motm is not None and self.motm.get('path') and self.m_s0 is not None and v_tcp <= 0.02   # 依導航路徑：TCP 已到位且相對目標（世界固定）幾乎不動 ⇒ 即閉爪，不等名目時刻（Howard 11/20 時機由狀態決定）
-            gate_ok = self._app_gated() and self._t_arr is not None and v_tcp <= 0.02   # 狀態閘門：底盤已到站且 TCP 已到位、幾乎不動 ⇒ 即閉爪
+            gate_ok = gated_ and self._t_arr is not None and getattr(self, '_t_line0', None) is not None and self.t - self._t_line0 >= T_LINE_S and v_tcp <= 0.02   # 狀態閘門：抓取線走完、TCP 到位幾乎不動 ⇒ 即閉爪
             if (el >= self.T_app or path_ok or gate_ok) and ep_ok and er <= 3.0:
                 self.b_anchor = np.asarray(q[:3], float).copy()
                 self.finger_cmd = P.FINGER_OPEN
@@ -395,14 +414,12 @@ class TablePickCtrl(P.DoorPassCtrl):
                 self.motm, self.m_s0, self.m_t0 = None, None, None
                 self.app_qpost = None                                    # 移動中姿態引導依 m_t0（s122d：退回後仍用 ⇒ TypeError）
                 self.T_app, self.T_b, self.t_l0 = 4.0, 2.5, 1.5
+                self._t_arr, self._t_line0, self._bp = None, None, 0.0
                 self._reset_T_rel0 = True
                 self._goto('APPROACH', fallback=True)
             elif self.motm is not None and el > self.T_app + MOTM_CLOSE_LATE_S:
                 self._stop('motm_window_missed', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), s=round(self._motm_s(self.t), 4))
-            elif self._app_gated():                                     # 狀態閘門：底盤到站後才計抓取逾時（安全總時限另保留）
-                if self._t_arr is None and float(math.hypot(q[0] - self._bg[0], q[1] - self._bg[1])) <= APP_GATE_D1:
-                    self._t_arr = self.t
-                    self._ev('pick_base_arrived', el=round(el, 2))
+            elif gated_:                                                # 狀態閘門：底盤到站後才計抓取逾時（安全總時限另保留）
                 if (self._t_arr is not None and self.t - self._t_arr > PH_TO_S + T_SETTLE + 2.0) or el > self.T_app + APP_GATE_CAP_S:
                     self._stop('approach_not_reached', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), gated=True)
             elif el > self.T_app + PH_TO_S:

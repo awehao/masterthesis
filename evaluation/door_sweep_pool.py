@@ -49,8 +49,20 @@ def _worker(conn):
             break
         if msg is None:
             break
-        ver, w, T, fq, phi0, X, delay, fb = msg
+        ver, w, T, fq, phi0, X, delay, fb = msg[:8]
+        st = msg[8] if len(msg) > 8 else None
         try:
+            if st:                                                    # 即時化（11/20，穿門／取物段派工）：主程序的可變幾何狀態快照——收納盒是否已裝、抽屜開度與位姿
+                if st.get('bin'):
+                    import rear_bin as _RB
+                    _RB.install(F)
+                dr_ = st.get('drawer')
+                if dr_ is not None:
+                    import drawer_scene as _DS
+                    _DS.install(W)
+                    if tuple(_DS.POSE) != tuple(dr_['pose']):
+                        _DS.set_pose(float(dr_['pose'][0]), float(dr_['pose'][1]), __import__('math').radians(float(dr_['pose'][2])))
+                    _DS.set_open(float(dr_['q_open']))
             if delay:
                 time.sleep(delay)                                    # 測試用：注入延遲
             res = []
@@ -96,7 +108,7 @@ class SweepPool:
         self.stats = dict(jobs=0, samples=0, timeouts=0, dead=0, errors=0, stale_dropped=0)
         self.inject_delay = {}                                       # 測試用：{worker 索引: 秒}
 
-    def submit(self, T_WH0, fq, phi0, X, finger_bar_q=None, workers=None):
+    def submit(self, T_WH0, fq, phi0, X, finger_bar_q=None, workers=None, state=None):
         """workers＝只用這些工作程序（串流分批時讓不同批次落在不相交的工作程序上，可同時在途；None＝全部）。"""
         t0 = time.perf_counter()
         self.ver += 1
@@ -115,7 +127,8 @@ class SweepPool:
             if len(idx) == 0:
                 continue
             try:
-                self.conns[w].send((self.ver, w, T, fq if isinstance(fq, dict) else (tuple(float(x) for x in fq) if isinstance(fq, (tuple, list)) else float(fq)), float(phi0), X[idx], self.inject_delay.get(w, 0.0), finger_bar_q))
+                msg_ = (self.ver, w, T, fq if isinstance(fq, dict) else (tuple(float(x) for x in fq) if isinstance(fq, (tuple, list)) else float(fq)), float(phi0), X[idx], self.inject_delay.get(w, 0.0), finger_bar_q)
+                self.conns[w].send(msg_ if state is None else msg_ + (state,))
                 sent.append(w)
             except (BrokenPipeError, OSError):
                 return dict(ver=self.ver, chunks=chunks, sent=sent, t_submit=t0, t_dispatch_ms=(time.perf_counter() - t0) * 1e3, n=len(X), send_failed=w)
