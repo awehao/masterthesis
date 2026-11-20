@@ -47,6 +47,7 @@ DR_MOTM_V = float(os.environ['DR_MOTM_V']) if os.environ.get('DR_MOTM_V') else N
 HEAD_OBJ = os.environ.get('HEAD_OBJ', '0') == '1'                   # Howard 11/21「太多原地旋轉了」：穿門後各段偏航不跟路徑前視（路徑一彎就擺），改由物件決定：未看到物件前朝物件（可見性），看到後依剩餘距離平滑轉到本段終點偏航（每段只轉一次）
 HEAD_DOOR_C = [float(x) for x in os.environ.get('HEAD_DOOR_C', '0.5,0.0').split(',')]   # 門口中心（map；回程看門扇）
 HEAD_NEAR = 1.0                                                       # 離終點 ≤ 此距離時已轉完
+HEAD_DOOR_R = float(os.environ.get('HEAD_DOOR_R', '2.0'))            # 回程關門前：門口中心這麼近就不給偏航（原導航行為）
 DR_LINE = os.environ.get('DR_LINE', '0') == '1' and os.environ.get('DR_MOTM_V') is not None   # Howard 11/21「把手要真的移動中抓」：沿櫃面經過線＋邊走邊併線（不等偏航對齊、不停）   # Howard 11/19「門把、抽屜把手都要改」：抽屜把手移動中抓取的經過速度；未設＝停車抓
 DOOR_CLOSE = os.environ.get('D2_DOOR_CLOSE', '0') == '1'             # Howard 11/19 回程關門：抽屜完成後先回臥室側關門，再回起點
 DRAWER_CLOSE = os.environ.get('D2_DRAWER_CLOSE', '0') == '1'         # Howard 11/19「抽屜也要關阿」：筆放盒收臂後夾回把手推回，再返回
@@ -1391,6 +1392,12 @@ def main():
                 O = _T3(self.T_mo_now) @ np.r_[h_[0], h_[1], 0.0, 1.0]; O = [float(O[0]), float(O[1])]
             elif self.dr.get('carried') and DOOR_CLOSE and self.dc.get('stage') == 'seek':
                 O = list(HEAD_DOOR_C)                                    # 回程：看門扇
+            if self.dr.get('carried') and float(np.hypot(cur[0] - HEAD_DOOR_C[0], cur[1] - HEAD_DOOR_C[1])) < HEAD_DOOR_R and not getattr(self, 'pick_ret', False):
+                if getattr(self, '_h_mode', None) != 'door_clear':           # 回程門區（Isaac 62／s137d／s138d：門扇尖端附近來回擺 30 s，未開 HEAD_OBJ 的趟次沒有）⇒ 撤掉偏航條件、照導航原行為
+                    self._h_mode = 'door_clear'; self._h_last = None; self._hleg = None
+                    self.p_task.publish(String(data=json.dumps(dict(clear=True))))
+                    self.event('head_mode', mode='door_clear')
+                return
             if O is not None:
                 h = math.atan2(O[1] - cur[1], O[0] - cur[0]); self._hleg = None; mode = 'obj'
             else:
