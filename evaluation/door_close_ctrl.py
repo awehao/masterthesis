@@ -231,6 +231,17 @@ class DoorCloseCtrl(PK.TablePickCtrl):
             q_post = np.tile(self.q_s0, (XO.N, 1))
             umin0, src = float('nan'), 'corotate'
             obs = [o_ for o_ in obs if not o_.get('static')]               # 綁定共轉：牆／門框由全身淨空核對（env）負責，靜態牆點不進 CBF（s99d：牆點擋住底盤繞鉸鏈的位置、只有偏航跟上 ⇒ 夾爪相對把手轉、門又被拉開）；行人等動態障礙照舊
+            if self.door_geom is not None and obs:                     # s134d：轉動中的門扇被追蹤器當成移動障礙（速度≈門扇末端 0.1 m/s、中心落後 >0.06 m）⇒ CBF 把底盤推離共轉、閉鏈偏差 8.26 mm 停；共轉中門扇帶 0.15 m 內（沿門扇 −0.05～w＋0.10）的動態障礙不進 CBF（門扇碰撞由門專屬淨空負責）
+                dd_ = self.door_geom; h_ = np.asarray(dd_['hinge'], float)[:2]; u_ = np.asarray(dd_['dir'], float)[:2]; u_ = u_ / max(float(np.linalg.norm(u_)), 1e-9)
+                c_, s_ = math.cos(-float(self.phi_now)), math.sin(-float(self.phi_now))
+                ue_ = np.array([c_ * u_[0] - s_ * u_[1], s_ * u_[0] + c_ * u_[1]]); un_ = np.array([-ue_[1], ue_[0]])
+                keep_ = []
+                for o_ in obs:
+                    p_ = np.array([float(o_['x']), float(o_['y'])]) - h_
+                    if abs(float(p_ @ un_)) <= 0.15 and -0.05 <= float(p_ @ ue_) <= float(dd_['w']) + 0.10:
+                        continue
+                    keep_.append(o_)
+                obs = keep_
         else:                                                         # CONFIRM、BIND、UNBIND、FINGERS、RETREAT：底盤錨定
             X = [XO.from_xytheta(*self.b_anchor)] * (XO.N + 1)
             xi = [np.zeros(3)] * (XO.N + 1)
