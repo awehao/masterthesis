@@ -181,6 +181,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             return
         self.motm = dict(app['motm'])
         self.m_s0, self.m_t0 = None, None
+        self.app_qpost = None
         self.t = float(t0)
         self._goto('APPROACH', path_ext=dict(v_g=round(float(self.motm['v_g']), 3), s_grasp=self.motm.get('s_grasp'), e=[round(float(x), 3) for x in self.motm['e']]))
         self._reset_T_rel0 = True                                     # 下一拍 _advance 開頭由目前相對位姿重新混合到抓取線（不可設 None：同拍 _solve 要用，s119d 崩潰）
@@ -316,6 +317,7 @@ class TablePickCtrl(P.DoorPassCtrl):
             elif self.motm is not None and self.motm.get('path') and el > self.T_app + MOTM_CLOSE_LATE_S:   # 依導航路徑：經過窗錯過 ⇒ 退回收斂抓取（不中止；Howard 11/20 安全時限保留在收斂段）
                 self._ev('pick_path_fallback', ep_mm=round(ep * 1e3, 2), er_deg=round(er, 2), s=round(self._motm_s(self.t), 4))
                 self.motm, self.m_s0, self.m_t0 = None, None, None
+                self.app_qpost = None                                    # 移動中姿態引導依 m_t0（s122d：退回後仍用 ⇒ TypeError）
                 self.T_app, self.T_b, self.t_l0 = 4.0, 2.5, 1.5
                 self._reset_T_rel0 = True
                 self._goto('APPROACH', fallback=True)
