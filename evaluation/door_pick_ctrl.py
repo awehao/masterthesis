@@ -183,7 +183,7 @@ class TablePickCtrl(P.DoorPassCtrl):
         self.m_s0, self.m_t0 = None, None
         self.t = float(t0)
         self._goto('APPROACH', path_ext=dict(v_g=round(float(self.motm['v_g']), 3), s_grasp=self.motm.get('s_grasp'), e=[round(float(x), 3) for x in self.motm['e']]))
-        self.T_rel0 = None                                            # 由目前相對位姿重新混合到抓取線
+        self._reset_T_rel0 = True                                     # 下一拍 _advance 開頭由目前相對位姿重新混合到抓取線（不可設 None：同拍 _solve 要用，s119d 崩潰）
 
     def _line_ready(self, q, b0, e, s_st):
         """進線條件（Howard 11/20 茶几停頓）：偏航 ≤0.15 rad、離路線側向 ≤5 cm、沿線不超過起點 5 cm（不必停在起點上）。"""
@@ -250,8 +250,9 @@ class TablePickCtrl(P.DoorPassCtrl):
 
     def _advance(self, q):
         el = self.t - self.t_ph0
-        if self.T_rel0 is None:
+        if self.T_rel0 is None or getattr(self, '_reset_T_rel0', False):
             self.T_rel0 = np.linalg.inv(_T3(q[:3])) @ K.fk(q, 'link_tcp')
+            self._reset_T_rel0 = False
         if self.motm is not None and self.m_s0 is None and self.phase == 'APPROACH' and not self.motm.get('no_align'):   # 進線前：底盤先到路線起點（位置＋偏航）再開始等速橫移
             b0, e = np.asarray(self.motm['b0'], float), np.asarray(self.motm['e'], float)   # （s76：偏航差 2.9 rad 邊轉邊走擦桌角；第三十一趟 Isaac：只轉不移、離線 0.31 m ⇒ 進線偏航漂、淨空 0.100）
             s_st = min(float(np.dot(np.asarray(q[:2], float) - b0[:2], e)), float(self.motm.get('s0', -0.05)) - 0.10, -float(self.motm['v_g']) * self._motm_t_arm(q))

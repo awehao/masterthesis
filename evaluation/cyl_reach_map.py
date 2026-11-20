@@ -84,18 +84,20 @@ def path_ext(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=1.2, t_
     取第一段連續可行區 [s_a, s_b]：閉爪點 s_g＝s_a＋min(0.15, L/3)，經過速度＝(s_b−s_g)/t_need（閉爪＋確認需時），夾在 [v_min, max(v_now, 0.08), v_cap]。
     回 motm dict（無對齊、自目前投影起算）或 None（沿此方向抓不到 ⇒ 呼叫端用停車抓）。"""
     p = np.asarray(p_now, float)[:2]; b0 = np.asarray(b0_sel, float)
-    d = np.asarray(dirv, float)[:2]; nd = float(np.linalg.norm(d))
     to_b = b0[:2] - p
-    if nd < 1e-3 or float(np.dot(to_b, d / max(nd, 1e-9))) < 0.10:
-        d = to_b; nd = float(np.linalg.norm(d))
-    d = d / max(nd, 1e-9)
+    dm = np.asarray(dirv, float)[:2]; nm = float(np.linalg.norm(dm))
+    dirs = []
+    if nm > 1e-3:
+        dirs.append(dm / nm)                                           # 實際行進方向
+    if float(np.linalg.norm(to_b)) > 1e-3:
+        dirs.append(to_b / float(np.linalg.norm(to_b)))               # 朝抓取位（s119d：路徑還在轉彎，瞬時行進方向側向偏 0.59 m 永遠進不了可達區）
     best = None
     ths = [float(th_now)]
     if abs((float(b0[2]) - float(th_now) + math.pi) % (2 * math.pi) - math.pi) > 0.15:
         ths.append(float(b0[2]))
     c0 = float(np.min(np.hypot(SCAN_PTS[:, 0] - p[0], SCAN_PTS[:, 1] - p[1]))) if SCAN_PTS is not None else 9.0
     clr = min(SCAN_CLEAR_EXT, max(0.33, c0 - 0.01))                    # 不比現在更靠近未知障礙（下限 0.33：Shield 半徑＋3 cm）
-    for th in ths:
+    for d, th in [(d_, th_) for d_ in dirs for th_ in ths]:
         feas = []
         for s_ in np.arange(0.0, s_max + 1e-9, ds):
             b = np.array([p[0] + s_ * d[0], p[1] + s_ * d[1], th])
@@ -113,13 +115,14 @@ def path_ext(T_grasp, p_now, th_now, dirv, b0_sel, v_now, ds=0.05, s_max=1.2, t_
         L = s_b - s_a
         s_g = s_a + min(0.15, L / 3.0)
         dyaw = abs((th - float(th_now) + math.pi) % (2 * math.pi) - math.pi)
-        sc = s_a - 0.5 * L + 0.3 * dyaw
+        dev = (1.0 - float(np.dot(d, dm / nm))) if nm > 1e-3 else 0.0      # 偏離實際行進方向（0＝同向）
+        sc = s_a - 0.5 * L + 0.3 * dyaw + 0.5 * dev
         if best is None or sc < best[0]:
             ig = min(range(i0, i1 + 1), key=lambda i: abs(feas[i][0] - s_g))
-            best = (sc, th, s_a, s_b, s_g, feas[ig][2])
+            best = (sc, th, s_a, s_b, s_g, feas[ig][2], d.copy())
     if best is None:
         return None
-    _, th, s_a, s_b, s_g, g = best
+    _, th, s_a, s_b, s_g, g, d = best
     v = float(np.clip((s_b - s_g) / t_need, v_min, min(v_cap, max(float(v_now), 0.08))))
     b0l = [float(p[0] + s_g * d[0]), float(p[1] + s_g * d[1]), float(th)]
     return dict(b0=b0l, e=[float(d[0]), float(d[1])], v_g=v, s0=-0.02, t_arm=1.0, q_grasp=[float(x) for x in g[0]], no_align=True, path=True,
