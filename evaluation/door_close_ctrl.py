@@ -31,6 +31,7 @@ T_SWING_MIN = float(os.environ.get('DC_T_SWING_MIN', '3.0'))          # 共轉�
 SWING_V_FRAC, SWING_A_FRAC = float(os.environ.get('DC_SWING_V_FRAC', '0.8')), float(os.environ.get('DC_SWING_A_FRAC', '0.3'))   # 留給追蹤與停止軌跡的餘裕
 UNF_QD = float(os.environ.get('DC_UNF_QD', '0.6'))
 H_FQ, H_FQ_TOL, H_FSUM = 0.0018, 0.0006, 1.0                         # 門把手同 26 mm 橫桿（同抽屜判準）
+H_FLOSS_S = 0.5                                                      # 共轉中合力 <H_FSUM 連續超過此時間才判丟失
 
 
 def _Rz(a):
@@ -135,8 +136,15 @@ class DoorCloseCtrl(PK.TablePickCtrl):
                 self._goto('UNBIND')
             elif el > self.T_swing + PK.PH_TO_S:
                 self._stop('door_close_not_reached', phi_deg=round(math.degrees(float(self.phi_now)), 2))
-            if not self._held_bar():
-                self._stop('lost_handle_during_close')
+            f_, fm_ = self.finger_force, self.finger_meas
+            pos_ok = fm_ is not None and all(abs(float(x) - H_FQ) <= H_FQ_TOL for x in fm_)
+            if f_ is not None and float(sum(f_)) >= H_FSUM:
+                self._t_force_ok = self.t
+            t_fo = getattr(self, '_t_force_ok', None)
+            if t_fo is None:
+                self._t_force_ok = t_fo = self.t
+            if not pos_ok or self.t - t_fo > H_FLOSS_S:                  # Isaac 49：綁定後接觸力瞬間掉到 0（理想連接承力）⇒ 單拍力判誤判丟失；開度出界立即判，力不足須連續 H_FLOSS_S
+                self._stop('lost_handle_during_close', pos_ok=bool(pos_ok), force_low_s=round(self.t - t_fo, 2))
             return
         if self.phase == 'UNBIND':
             if self.unbound:
