@@ -48,6 +48,8 @@ HEAD_OBJ = os.environ.get('HEAD_OBJ', '0') == '1'                   # Howard 11/
 HEAD_DOOR_C = [float(x) for x in os.environ.get('HEAD_DOOR_C', '0.5,0.0').split(',')]   # 門口中心（map；回程看門扇）
 HEAD_NEAR = 1.0                                                       # 離終點 ≤ 此距離時已轉完
 HEAD_DOOR_R = float(os.environ.get('HEAD_DOOR_R', '0.0'))            # 回程關門前：門口中心這麼近就不給偏航（原導航行為）；s140d：撤了仍在門扇尖端停 6.5 s ⇒ 非偏航造成，預設關
+NOPATH_RECOVER = os.environ.get('B_NOPATH_RECOVER', '1') == '1'       # 穿門後：送出目標 NOPATH_S 秒仍無新路徑 ⇒ 清全域代價圖＋丟目前途經點
+NOPATH_S = float(os.environ.get('B_NOPATH_S', '4.0'))
 HO_LEAD = int(os.environ.get('B_HO_LEAD', '3'))                      # 交權提前量（物理步，＋NPH）；Isaac 65／66：+8 步時控制伺服器準備晚到 ⇒ not_ready 啟動中止
 DR_LINE = os.environ.get('DR_LINE', '0') == '1' and os.environ.get('DR_MOTM_V') is not None   # Howard 11/21「把手要真的移動中抓」：沿櫃面經過線＋邊走邊併線（不等偏航對齊、不停）   # Howard 11/19「門把、抽屜把手都要改」：抽屜把手移動中抓取的經過速度；未設＝停車抓
 DOOR_CLOSE = os.environ.get('D2_DOOR_CLOSE', '0') == '1'             # Howard 11/19 回程關門：抽屜完成後先回臥室側關門，再回起點
@@ -1655,6 +1657,16 @@ def main():
                         self.event('return_costmap_clear_called', n=n_rc_ + 1)
                     if self._clr_t is not None and t - self._clr_t < PASS_CLEAR_WAIT_S:
                         return
+                if NOPATH_RECOVER and (self.path_t is None or self.path_t < self.pass_t) and t - self.pass_t > NOPATH_S and float(np.hypot(g_[0] - self.cur_map[0], g_[1] - self.cur_map[1])) > 0.6 and t - getattr(self, '_np_clr_t', -99.0) > NOPATH_S + 4.0 and self._clr_cli.service_is_ready():
+                    self._np_clr_t = t                                    # Isaac 68：途經點路徑被代價圖殘影擋（Smac no valid path）⇒ 原地等 300 s ⇒ 4 s 無路徑：清全域代價圖（Nav2 標準復原，同穿門／返回）＋丟目前途經點
+                    self._clr_fut, self._clr_t = self._clr_cli.call_async(self._clr_req()), t
+                    dropped_ = None
+                    for nm_ in ('pick_via', 'next_via'):
+                        vv_ = getattr(self, nm_, None)
+                        if vv_:
+                            dropped_ = (nm_, [round(float(x), 3) for x in vv_[0][:2]]); vv_.pop(0); break
+                    self.pass_t = t
+                    self.event('no_path_recover', dropped=dropped_, goal=[round(float(x), 3) for x in g_[:2]])
                 g_chg_ = getattr(self, '_g_last', None) is None or float(np.hypot(g_[0] - self._g_last[0], g_[1] - self._g_last[1])) > 0.01 or abs(g_[2] - self._g_last[2]) > 0.01
                 if (g_chg_ or self.path_t is None or self.path_t < self.pass_t) and t - self.t_pass_pub >= 1.0:   # 目標改變 ⇒ 立即重送（s38：選位 0.2 s 完成，舊粗目標的路徑晚到蓋過 path_t ⇒ 新目標沒送出）
                     self.pub_goal(g_[:2], g_[2]); self.t_pass_pub = t; self._g_last = list(g_)
