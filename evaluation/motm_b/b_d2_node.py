@@ -1099,6 +1099,36 @@ def main():
                 if PICK_LINE:                                           # 併線版：只看「目前位置＋行進方向起的併線曲線＋沿線到窗口」淨空（同控制器幾何）；不等偏航、不停
                     early_ = False
                     hist_ = [h for h in getattr(self, '_xy_hist', []) if t - h[0] <= 1.0] + [(t, self.b_od_now[:3].copy())]; self._xy_hist = hist_
+                    rs_ = getattr(self, '_line_resel', None)
+                    if rs_ is not None:                                  # 重新選線進行中／完成
+                        if not rs_.get('done'):
+                            return
+                        self._line_resel = None
+                        if rs_.get('sel') is not None:
+                            sel_ = rs_['sel']; Tbm_ = _T3(self.T_mo_now) @ _T3(sel_['base_start'])
+                            self.pick_sel = sel_; self.pick_goal = [float(Tbm_[0, 3]), float(Tbm_[1, 3]), math.atan2(Tbm_[1, 0], Tbm_[0, 0])]; self.pass_t = t
+                            self.pick_via = [list(p_) for p_ in (sel_.get('via') or [])]
+                            self.event('pick_line_reselected', base=[round(float(x), 3) for x in sel_['base']], e=[round(float(x), 3) for x in sel_['e']], start=[round(float(x), 3) for x in sel_['base_start']], ms=round(rs_['ms'], 1))
+                        else:
+                            self.event('pick_line_reselect_none')
+                        return
+                    if t - getattr(self, '_line_scan_t', -9.0) >= 1.0:     # Isaac 64：選線時雷射被茶几擋、沒看到 unknown_l5 ⇒ 經過線起點貼箱、併線鑽縫（淨空 0.100 中止）⇒ 接近中每秒以最新雷射更新未知點
+                        self._line_scan_t = t
+                        self._CR.set_scan_pts(self._scan_pts_od())
+                        b0c_ = np.asarray(self.pick_sel['base'], float); ec_ = np.asarray(self.pick_sel['e'], float)
+                        s1c_ = float(PICK_MOTM_V) * float(self._CR.MOTM_T_WIN) + float(self._CR.LINE_TAIL)
+                        blk_ = [round(float(s_), 2) for s_ in np.arange(float(self.pick_sel['s_start']), s1c_ + 1e-9, 0.1) if not self._CR.scan_free(b0c_[:2] + s_ * ec_, float(self._CR.SCAN_CLEAR))]
+                        if blk_:                                          # 經過線被新看到的未知物擋 ⇒ 以最新雷射重新選線（背景執行緒）
+                            import threading
+                            box_ = self._line_resel = dict(done=False)
+                            CRr_, c_, b_ = self._CR, np.asarray(self.pick_box['est_od'][:2], float), self.b_od_now.copy()
+                            def _rs(box=box_):
+                                w0 = time.perf_counter()
+                                box['sel'] = CRr_.select_motm(c_, b_, PICK_MOTM_V, goal_next=np.asarray(DR_PRIOR[:2], float) if CHAIN else None)
+                                box['ms'] = (time.perf_counter() - w0) * 1e3; box['done'] = True
+                            threading.Thread(target=_rs, daemon=True).start()
+                            self.event('pick_line_blocked', s_blocked=blk_[:6])
+                            return
                     if dist_ <= PICK_LINE_SEND:
                         import motm_merge as MM_
                         mvd_ = hist_[-1][1][:2] - hist_[0][1][:2]
