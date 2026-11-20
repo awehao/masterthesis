@@ -48,6 +48,7 @@ HEAD_OBJ = os.environ.get('HEAD_OBJ', '0') == '1'                   # Howard 11/
 HEAD_DOOR_C = [float(x) for x in os.environ.get('HEAD_DOOR_C', '0.5,0.0').split(',')]   # 門口中心（map；回程看門扇）
 HEAD_NEAR = 1.0                                                       # 離終點 ≤ 此距離時已轉完
 HEAD_DOOR_R = float(os.environ.get('HEAD_DOOR_R', '0.0'))            # 回程關門前：門口中心這麼近就不給偏航（原導航行為）；s140d：撤了仍在門扇尖端停 6.5 s ⇒ 非偏航造成，預設關
+HO_LEAD = int(os.environ.get('B_HO_LEAD', '3'))                      # 交權提前量（物理步，＋NPH）；Isaac 65／66：+8 步時控制伺服器準備晚到 ⇒ not_ready 啟動中止
 DR_LINE = os.environ.get('DR_LINE', '0') == '1' and os.environ.get('DR_MOTM_V') is not None   # Howard 11/21「把手要真的移動中抓」：沿櫃面經過線＋邊走邊併線（不等偏航對齊、不停）   # Howard 11/19「門把、抽屜把手都要改」：抽屜把手移動中抓取的經過速度；未設＝停車抓
 DOOR_CLOSE = os.environ.get('D2_DOOR_CLOSE', '0') == '1'             # Howard 11/19 回程關門：抽屜完成後先回臥室側關門，再回起點
 DRAWER_CLOSE = os.environ.get('D2_DRAWER_CLOSE', '0') == '1'         # Howard 11/19「抽屜也要關阿」：筆放盒收臂後夾回把手推回，再返回
@@ -1600,7 +1601,7 @@ def main():
                 self.event('off_anchor', ok=tag == 'off_anchor', planner=tp_[0])
                 self.mode = 'NAV'; self.event('mode', mode='NAV')
                 if UNIFIED:                                               # 起點交權：自此命令只由單一控制器出（手臂保持、底盤追導航前端參考）
-                    n_h = int(round(t / PHYS)) + NPH + 3
+                    n_h = int(round(t / PHYS)) + NPH + HO_LEAD
                     T_pr = np.linalg.inv(_T3(T_mo)) @ np.asarray(self.prior['T_prior'], float)
                     msg = dict(n_h=n_h, ins=dict(s0=0.15, v0=0.0, a0=0.0, T=1e6), unified=True, T_ref=T_pr.tolist(), t_obs=t, ref_ver=0, win=[-1e9, 1e9])
                     self.p_ho.publish(String(data=json.dumps(msg)))
@@ -1704,7 +1705,7 @@ def main():
                     self.on_dapp(rq, tag, pay, t)
             if UNIFIED:                                                  # 單一控制器：導航目標＝抓取底盤位姿（依當次區域規劃；Smac 決定來向，無走廊入口、無沿門直線）；接近開始依觀測觸發
                 if self.owner != 'GRASP' and self.ho_sent is not None and self.ho_sent.get('unified') and t - self.ho_sent.get('t_resend', self.ho_sent['t_sent']) >= 0.5:
-                    n_h = int(round(t / PHYS)) + NPH + 3                # 起點交權重送（ROS 探索未完成時第一筆會遺失；s3），直到第一筆抓持提案到達；控制伺服器已收過則忽略
+                    n_h = int(round(t / PHYS)) + NPH + HO_LEAD                # 起點交權重送（ROS 探索未完成時第一筆會遺失；s3），直到第一筆抓持提案到達；控制伺服器已收過則忽略
                     T_pr = np.linalg.inv(_T3(T_mo)) @ np.asarray(self.prior['T_prior'], float)
                     self.p_ho.publish(String(data=json.dumps(dict(n_h=n_h, ins=dict(s0=0.15, v0=0.0, a0=0.0, T=1e6), unified=True, T_ref=T_pr.tolist(), t_obs=t, ref_ver=0, win=[-1e9, 1e9]))))
                     self.ho_sent['t_resend'] = t; self.ho_sent['n_resend'] = self.ho_sent.get('n_resend', 0) + 1
@@ -1795,7 +1796,7 @@ def main():
                 if dist_ <= APP_DIST:
                     Tapp = max(APP_T_MIN, dist_ / APP_V)
                     app = dict(T=Tapp, T_b=max(1.5, Tapp - 1.5), t_l0=max(0.5, Tapp - APP_T_LINE), d_line=APP_D_LINE)
-                    n_h = int(round(t / PHYS)) + NPH + 3
+                    n_h = int(round(t / PHYS)) + NPH + HO_LEAD
                     rf = self.ref
                     T_send, fz = np.asarray(rf['T_od'], float), None
                     keep = []
@@ -1817,7 +1818,7 @@ def main():
                     return
             # ---- 交權請求：直線到 r＝S_PRE 的時刻 t_h；提前一拍＋3 步送出（世界節點在 n_h−NPH 以真狀態前推建封包）
             if self.mode == 'APPROACH' and self.dp is not None and self.dp_next is None and self.ho_sent is None and self.stopped is None and t >= self.dp['t_h'] - 2 * DT + 1e-9:
-                n_h = int(round(t / PHYS)) + NPH + 3
+                n_h = int(round(t / PHYS)) + NPH + HO_LEAD
                 rf = self.ref
                 T_send, fz = np.asarray(rf['T_od'], float), None
                 if FUSE_HO:                                              # 全部有效影格在現行參考閘門內（10 mm、3°）的中位數位置＋弦平均姿態（靜止把手；相對擷取同刻底盤已轉里程座標）
