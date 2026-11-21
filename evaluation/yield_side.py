@@ -115,6 +115,7 @@ CROSS_MARGIN_S = float(os.environ.get('YS_CROSS_MARGIN_S', '1.0'))  # 先過／�
 CROSS_V = float(os.environ.get('YS_CROSS_V', '0.22'))                # 機器人通過行人帶的名目速度（導航名目）
 CROSS_LOOK = float(os.environ.get('YS_CROSS_LOOK', '8.0'))
 CROSS_BEHIND_PAD = float(os.environ.get('YS_CROSS_BEHIND_PAD', '0.10'))   # 行人已過交點後從它後面過的餘裕（m）
+PIN_AHEAD = os.environ.get('YS_PIN_AHEAD', '1') == '1'
 CROSS_MAX_S = float(os.environ.get('YS_CROSS_MAX_S', '15.0'))
 
 
@@ -173,7 +174,8 @@ class YieldSide:
 
     def _crossing(self, q, e, obs, sticky=False):
         """橫越衝突：回 dict(n, c_lat, need, sg, sig_in, a, sp) 或 None。只用追蹤速度 ≥ V_MIN 的群（不用相對運動代替）。
-        機器人在行人帶外、參考走向 e 朝帶內；機器人以 CROSS_V 走完帶的時段與行人佔用交點的時段（各加餘裕）重疊 ⇒ 衝突。"""
+        機器人在行人帶外、參考走向 e 朝帶內；以 CROSS_V 直線走過帶的期間，沿行人方向的間距（線性）兩端都夠大（從後面過 need_b）或都夠負（先過 need＋餘裕）才不算衝突
+        （Isaac 85：斜向路徑與行人同向時，用中心線交點判會一直等交點被追上，改看實際間距）。"""
         best = None
         for gp in _groups(obs):
             vo = gp['v']; sp = float(np.linalg.norm(vo))
@@ -187,22 +189,23 @@ class YieldSide:
             c_lat = 0.5 * (lo + hi); need = R_BASE + 0.5 * (hi - lo) + PAD
             s_q = float(q[:2] @ n) - c_lat
             en = float(e @ n)
-            if abs(s_q) < need - 0.05 or en * s_q >= 0.0 or abs(en) < 0.2:   # 已在帶內／不朝帶走
+            if abs(s_q) < (need - 0.25 if sticky else need - 0.05) or en * s_q >= 0.0 or abs(en) < 0.2:   # 已在帶內／不朝帶走（等待中稍微滑進帶緣仍算：Isaac 85 等 2.1 s 後滑進 ⇒ 放行 ⇒ 側移被帶走）
                 continue
             sig_in = (abs(s_q) - need) / abs(en); sig_out = (abs(s_q) + need) / abs(en)
-            px = q[:2] + (abs(s_q) / abs(en)) * e                     # 參考走向與行人中心線交點
-            m_ = gp['P'].mean(axis=0); d_ = m_ - q[:2]; nd_ = float(np.linalg.norm(d_))
-            c_al = float((m_ + (R_MIN * d_ / nd_ if nd_ > 1e-6 else 0.0)) @ u)   # 可見表面點偏向機器人 ⇒ 中心往遠離機器人推一個半徑（同 _interval）
-            a = float(px @ u) - c_al                                  # 交點在行人前方的距離（負＝行人已過交點）
-            if a < -(need - PAD + CROSS_BEHIND_PAD):                   # 行人背面已過交點（從它後面過，餘裕較小）
-                continue
-            tw0, tw1 = (a - need) / sp, (a + need) / sp
             tr0, tr1 = max(sig_in, 0.0) / CROSS_V, sig_out / CROSS_V
             look_, mg_ = (CROSS_LOOK + 3.0, CROSS_MARGIN_S + 0.5) if sticky else (CROSS_LOOK, CROSS_MARGIN_S)   # 等待中放寬（s167d：預測窗邊界上 0.6–2.8 s 開關閃爍）
-            if tw0 > look_ or tr1 + mg_ < tw0 or tr0 > tw1 + mg_:
+            if tr0 > look_:
                 continue
-            if best is None or tw0 < best['tw0']:
-                best = dict(n=n, c_lat=c_lat, need=need, sg=1.0 if s_q > 0 else -1.0, sig_in=sig_in, a=a, sp=sp, tw0=tw0, tr1=tr1, u=u)
+            m_ = gp['P'].mean(axis=0); d_ = m_ - q[:2]; nd_ = float(np.linalg.norm(d_))
+            c_al = float((m_ + (R_MIN * d_ / nd_ if nd_ > 1e-6 else 0.0)) @ u)   # 可見表面點偏向機器人 ⇒ 中心往遠離機器人推一個半徑（同 _interval）
+            x_q, eu = float(q[:2] @ u), float(e @ u)
+            g0 = (c_al + sp * tr0) - (x_q + eu * CROSS_V * tr0)       # 機器人在帶內期間（等速直線）沿行人方向的間距：正＝行人在前（已過）
+            g1 = (c_al + sp * tr1) - (x_q + eu * CROSS_V * tr1)
+            need_b = need - PAD + CROSS_BEHIND_PAD
+            if min(g0, g1) >= need_b or max(g0, g1) <= -(need + sp * mg_):   # 從行人後面過／先過（間距線性 ⇒ 看兩端）
+                continue
+            if best is None or tr0 < best['tr0']:
+                best = dict(n=n, c_lat=c_lat, need=need, sg=1.0 if s_q > 0 else -1.0, sig_in=sig_in, a=g0, g1=g1, sp=sp, tw0=tr0, tr0=tr0, tr1=tr1, u=u)
         return best
 
     def _apply_cross(self, t, q, X, cr):
@@ -210,7 +213,7 @@ class YieldSide:
         if cr is not None:
             if getattr(self, 'cross', None) is None:
                 self.cross = dict(t0=t)
-                self.log.append(dict(t=round(t, 2), what='yield_cross_hold', a=round(cr['a'], 3), tw0=round(cr['tw0'], 2), tr1=round(cr['tr1'], 2), sp=round(cr['sp'], 3), sig_in=round(cr['sig_in'], 3), need=round(cr['need'], 3)))
+                self.log.append(dict(t=round(t, 2), what='yield_cross_hold', g0=round(cr['a'], 3), g1=round(cr['g1'], 3), tr0=round(cr['tr0'], 2), tr1=round(cr['tr1'], 2), sp=round(cr['sp'], 3), sig_in=round(cr['sig_in'], 3), need=round(cr['need'], 3)))
             self.cross.update(cr=cr, t_seen=t)
         C = self.cross
         if t - C['t_seen'] > 1.0 or t - C['t0'] > CROSS_MAX_S:
@@ -322,7 +325,7 @@ class YieldSide:
                 self.off = max(0.0, self.off - RATE * dt)
                 if self.off <= 1e-4:
                     self.log.append(dict(t=round(t, 2), what='yield_release'))
-                    self.lock = None
+                    self.lock, self._pin_logged = None, False
                     return dict(off=0.0)
             else:
                 gp, ts, ds, need, n, (lo, hi) = c
@@ -340,8 +343,25 @@ class YieldSide:
             s_t_ = L['s_t']
             if NO_BACK and sg * (s_t_ - s_now_) > 0.0 and sg * (s_now_ - 0.5 * (L.get('lo', s_now_) + L.get('hi', s_now_))) > 0.0:
                 s_t_ = s_now_                                         # Howard 11/21「倒退閃避」：已在選定側但比安全距離近 ⇒ 停在目前側向位置等行人過，不往回退
+            u_pin = None
+            if PIN_AHEAD and c is not None:                           # Isaac 84／85：側移鎖定時機器人在行人前方、參考又沿行人方向 ⇒ 被行人從後面追著走 3 m 撞上家具 ⇒ 在帶外時不沿行人方向前進（站在帶外讓它過）
+                vg_ = c[0]['v']; spg_ = float(np.linalg.norm(vg_))
+                if spg_ >= V_MIN:
+                    ug_ = vg_ / spg_
+                    m_ = c[0]['P'].mean(axis=0); d_ = m_ - q[:2]; nd_ = float(np.linalg.norm(d_))
+                    m_ = m_ + (R_MIN * d_ / nd_ if nd_ > 1e-6 else 0.0)
+                    lat_ = abs(s_now_ - 0.5 * (L.get('lo', s_now_) + L.get('hi', s_now_)))
+                    if float((q[:2] - m_) @ ug_) > -0.3 and lat_ >= R_BASE + 0.5 * (L.get('hi', s_now_) - L.get('lo', s_now_)) + 0.05:
+                        u_pin = ug_
+            if u_pin is not None and not getattr(self, '_pin_logged', False):
+                self._pin_logged = True
+                self.log.append(dict(t=round(t, 2), what='yield_pin_ahead'))
             shift = 0.0
             for Xk in X:                                              # 各參考點側向座標至少達 s_t（鎖定側），平移量上限＝爬升量 off
+                if u_pin is not None:
+                    p_ = np.array([Xk[0, 2], Xk[1, 2]]); a_ = float((p_ - q[:2]) @ u_pin)
+                    if a_ > 0.0:
+                        Xk[0, 2], Xk[1, 2] = float(p_[0] - a_ * u_pin[0]), float(p_[1] - a_ * u_pin[1])
                 s_k = float(np.array([Xk[0, 2], Xk[1, 2]]) @ n)
                 d_k = min(max(0.0, sg * (s_t_ - s_k)), self.off)
                 Xk[0, 2] += sg * d_k * n[0]
