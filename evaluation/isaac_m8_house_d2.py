@@ -261,7 +261,7 @@ def stop_still(R, cols, aborted):
             break
     t0 = float(R[max(k0 - 1, 0), 0])
     out.update(t_last_nonzero_input=round(t0, 3), settle_window_start_s=None if k_ok is None else round(float(R[k_ok, 0]) - t0, 3), settle_time_s=None if k_ok is None else round(float(R[k_ok, 0]) - t0 + 0.3, 3), record_after_s=round(float(R[-1, 0]) - t0, 2), deadline_s=4.0,
-               base_speed_at_last_input=round(float(v[max(k0 - 1, 0)]), 4), arm_rate_at_last_input=round(float(da[max(k0 - 1, 0)]), 4),
+               base_speed_at_last_input=round(float(v[min(max(k0 - 1, 0), len(v) - 1)]), 4), arm_rate_at_last_input=round(float(da[min(max(k0 - 1, 0), len(da) - 1)]), 4),   # 模擬上限時仍在動 ⇒ k0 可能等於長度（第七十四趟剖析趟索引越界）
                residual_after_settle=None if k_ok is None else dict(base_mm_s=round(float(v[k_ok:].max()) * 1e3, 4), yaw_mrad_s=round(float(w[k_ok:].max()) * 1e3, 4), arm_mrad_s=round(float(da[k_ok:].max()) * 1e3, 4)))
     out['valid'] = bool(k_ok is not None and out['settle_time_s'] <= 4.0)
     if k_ok is None:
