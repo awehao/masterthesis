@@ -375,7 +375,9 @@ MOTM_T_ARM = float(os.environ.get('MOTM_T_ARM', '4.0'))              # 手臂自
 LINE_MERGE = os.environ.get('PICK_LINE', '0') == '1'                 # 沿桌邊經過線＋邊走邊併線（不原地對齊）；路線起點經格點路線途經點
 LINE_DMIN = float(os.environ.get('PICK_LINE_DMIN', '0.46'))          # 經過線底盤中心離桌邊下限
 LINE_TAIL = float(os.environ.get('PICK_LINE_TAIL', '0.15'))          # 窗口後沿線續走（抬升 1.2 s＋確認 0.3 s 約 0.15 m，之後交導航）要淨空的長度；0.35 時 l5 全見即無線可選
-LINE_W_YAW = float(os.environ.get('PICK_LINE_W_YAW', '0.25'))        # 偏航代價（m/rad）
+LINE_W_YAW = float(os.environ.get('PICK_LINE_W_YAW', '0.25'))
+LINE_W_TRAV = float(os.environ.get('PICK_LINE_W_TRAV', '0.8'))       # 車頭與經過方向夾角代價（m/rad）
+HEAD_OFFS = tuple(float(x) for x in os.environ.get('PICK_LINE_HEAD_OFFS', '0,0.7854').split(','))   # 車頭自面桌往行進方向轉的候選（rad）        # 偏航代價（m/rad）
 
 
 def _path_ik(T, b0, e, ss, q0):
@@ -415,9 +417,11 @@ def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=
         if dist < 0.25 or dist > 0.80:
             continue
         a = v / dist
-        th = float(b[2])
-        for sg in (1.0, -1.0):
-            e = sg * np.array([-math.sin(th), math.cos(th)])          # 沿桌邊（垂直於面桌方向）
+        th_f, b_f = float(b[2]), b
+        for sg, kh in [(s_, k_) for s_ in (1.0, -1.0) for k_ in (HEAD_OFFS if LINE_MERGE else (0.0,))]:
+            e = sg * np.array([-math.sin(th_f), math.cos(th_f)])      # 沿桌邊（垂直於面桌方向）
+            sgn_ = 1.0 if ((math.atan2(e[1], e[0]) - th_f + math.pi) % (2 * math.pi) - math.pi) > 0 else -1.0
+            th = th_f + sgn_ * kh; b = np.array([b_f[0], b_f[1], th])   # Howard 11/21「抓完倒退走很不自然」：車頭可往行進方向轉 kh（面桌與行進方向之間，斜著往前開經過）
             for fl in (False, True):
                 Tg = grasp_T(c, a, fl)
                 g = ik(Tg, b)
@@ -461,6 +465,7 @@ def select_motm(c_xy, b_now, v_g, goal_next=None, w_dist=1.0, w_sig=0.02, w_dir=
                     if float(np.hypot(*(b_start[:2] - p_in))) > 1e-3:
                         h_in = math.atan2(b_start[1] - p_in[1], b_start[0] - p_in[0])
                         cost += LINE_W_YAW * abs((th - h_in + math.pi) % (2 * math.pi) - math.pi)
+                    cost += LINE_W_TRAV * abs((th - math.atan2(e[1], e[0]) + math.pi) % (2 * math.pi) - math.pi)   # 車頭與行進方向夾角（抓完沿線往前開，不倒退、不橫走）
                 if best is None or cost < best['cost']:
                     best = dict(side=side, d=float(d), lat=float(lat), base=b.tolist(), a=a.tolist(), e=e.tolist(), flip=bool(fl), v_g=float(v_g), s_start=float(s_start),
                                 base_start=b_start.tolist(), sigma_min=float(min(fwd[0], bwd[0])), env_min=float(min(fwd[1], bwd[1])), base_clear_min=float(min(fwd[2], bwd[2])),
